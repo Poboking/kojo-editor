@@ -58,6 +58,14 @@ export type { NewItemKind, NewItemResolution } from './new-item';
 export { deployPackage, resolveDeployTarget } from './deploy';
 export type { DeployTarget, DeployTargetOk, PendingDeploy } from './deploy';
 
+/* ---- 通用导入命令（命令面板入口；收敛注册到共享层，多 adapter 并装只落一条） ---- */
+export {
+  IMPORT_KOJO_PROJECT_COMMAND_ID,
+  IMPORT_KOJO_PROJECT_COMMAND_TITLE,
+  pickAndRequestImport,
+  registerImportCommand,
+} from './import-command';
+
 /* ---- 向导（`ui.overlay` 的组件半边；overlay id 归各 adapter） ---- */
 export { createDeployKojoWizard } from './deploy-wizard';
 export type { DeployKojoWizardDeps } from './deploy-wizard';

@@ -35,7 +35,6 @@ import {
   KernelServices,
   MARKET_SERVICE_KEY,
   WellKnownServices,
-  basename,
   combineDigests,
   foldDigest,
   join,
@@ -63,6 +62,7 @@ import {
   type PendingImport,
 } from '@kojo/kojo-project-kit';
 import { charaSearchScopeOptions, workspaceChangeOf } from '@kojo/kojo-project-kit';
+import { pickAndRequestImport, registerImportCommand } from '@kojo/kojo-project-kit';
 import { ERAAKUMA_MAID } from './constants';
 import {
   deriveCharaNoFromFileNames,
@@ -578,31 +578,13 @@ export function createErakumamaidAdapterPlugin(): Plugin {
         }),
       );
 
-      /** 系统目录对话框选定 → 发既有的导入意图（命令面板与面板按钮同一个身体） */
-      const pickAndRequestImport = async (source: string): Promise<void> => {
-        let picked: string | null;
-        try {
-          picked = await io.chooseWorkspaceRoot({ title: '选择要导入的作者包文件夹' });
-        } catch (err) {
-          ctx.log.error(`「从文件夹导入口上项目」打不开目录选择对话框：${String(err)}`);
-          return;
-        }
-        // 取消是用户自己的动作，安静返回（不补一句"已取消"当噪音）
-        if (picked === null) return;
-        const suggestedName = basename(picked);
-        ctx.bus.emit('workspace.importRequested', {
-          sourceDir: picked,
-          ...(suggestedName.length > 0 ? { suggestedName } : {}),
-          source,
-        });
-      };
-
-      ctx.slots.register('editor.command', {
-        id: 'kojo.importKojoProject',
-        title: '从文件夹导入口上项目…',
-        category: '文件',
-        run: () => pickAndRequestImport('command-palette'),
-      });
+      /**
+       * 通用导入命令**注册收敛到共享层**（`@kojo/kojo-project-kit`）：命令本身游戏无关
+       * （弹系统目录对话框 → 发既有 `workspace.importRequested` 意图），过去与 eratw
+       * 各注册同一 id ⇒ 同宿主并装时后者抛槽冲突。改由 kit 一次成型，本 adapter 只调用；
+       * 并装时若已有一条则让位，命令面板恒一条。
+       */
+      registerImportCommand(ctx, io);
 
       /* ---- 新建条目（面板右键菜单） ---- */
 
@@ -637,8 +619,14 @@ export function createErakumamaidAdapterPlugin(): Plugin {
 
       /* ---- 面板（本游戏没有内置教程 ⇒ 不传 openTutorial，教程区整块不渲染） ---- */
 
+      /**
+       * 面板 id 落本游戏命名空间（`eraakumamaid-kojo-projects`），与浮层 id 同理：
+       * 共享层只给窗口实现，两个 adapter 各注册一个**属于自己**的「我的口上项目」面板
+       * （各接自家的新建/导入/部署浮层）。若沿用裸 `kojo-projects`，并装时后者撞同槽同
+       * id ⇒ 内核抛重复贡献错误、中断本 adapter 后续注册。前缀用本游戏 gameId，一眼看出是谁家的面板。
+       */
       ctx.slots.register('ui.panel', {
-        id: 'kojo-projects',
+        id: 'eraakumamaid-kojo-projects',
         title: '我的口上项目',
         icon: 'home',
         order: 35,
@@ -659,7 +647,7 @@ export function createErakumamaidAdapterPlugin(): Plugin {
             ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eraakumamaid-adapter' }),
           openNewWizard: () =>
             ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eraakumamaid-adapter' }),
-          openImportWizard: () => pickAndRequestImport('projects-panel'),
+          openImportWizard: () => pickAndRequestImport(ctx, io, 'projects-panel'),
           status: () => actions.status(),
           dismissStatus: () => actions.dismiss(),
           exportArtifact: (absDir, displayName) => actions.exportArtifact(absDir, displayName),

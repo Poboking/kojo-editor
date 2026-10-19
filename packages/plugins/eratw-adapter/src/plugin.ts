@@ -16,7 +16,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, basename, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
+import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
 import { createEratwCounterTable, ERATW_COUNTER_ENTRIES } from './counter-table';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
@@ -57,6 +57,7 @@ import {
 import type { TutorialId } from './tutorial-content';
 import type { PendingDeploy } from './deploy';
 import { charaSearchScopeOptions } from '@kojo/kojo-project-kit';
+import { pickAndRequestImport, registerImportCommand } from '@kojo/kojo-project-kit';
 
 /**
  * 教程语义 id → 本插件注册的 overlay 贡献 id（用户反馈 8 批）。
@@ -432,53 +433,15 @@ export function createEratwAdapterPlugin(): Plugin {
       /* ---- 「从文件夹导入口上项目…」命令（命令面板入口） ---- */
 
       /**
-       * 文件树右键只覆盖"目录已经在当前树里"的情形；作者手上更多是磁盘上任意
-       * 位置的作者包文件夹。这里用系统目录对话框补上这一口：选定 → 发**既有**
-       * 的 `workspace.importRequested` 意图，导入流程（P-F 向导）零改动复用——
-       * 本函数只负责把目录递进门里，不解释怎么导。
+       * 通用导入命令**注册收敛到共享层**（`@kojo/kojo-project-kit`）：命令本身
+       * 游戏无关（弹系统目录对话框 → 发既有 `workspace.importRequested` 意图），
+       * 过去两个 adapter 各注册同一 id ⇒ 同宿主并装时后者抛槽冲突。改为由 kit
+       * 一次成型，adapter 只调用；并装时后来的 adapter 见重复即让位，命令面板恒一条。
        *
-       * 对话框通道即 `io.chooseWorkspaceRoot`（对话框即授权，铁律 6 的法定形态；
-       * 与新建向导的「项目位置」同族）——这里只借它的"选目录"形态，授权登记
-       * 由平台命令内部完成，本插件不碰授权本身。
-       *
-       * 抽成共享函数（用户反馈批）：命令面板与「我的口上项目」面板工具条的
-       * 「导入项目」按钮走同一条通道，不复制两份——两处行为必须逐字一致，
-       * 只有 `source` 标记不同（KM-13：市场来源据此读上一级 pack.json 兜底署名）。
+       * 对话框通道 `io.chooseWorkspaceRoot` 即授权（铁律 6 法定形态），登记由平台命令
+       * 内部完成，本插件不碰授权本身。
        */
-      const pickAndRequestImport = async (source: string): Promise<void> => {
-        let picked: string | null;
-        try {
-          picked = await io.chooseWorkspaceRoot({ title: '选择要导入的作者包文件夹' });
-        } catch (err) {
-          // 对话框本身起不来（如无对话框能力的环境）：人话出声，不吞——
-          // 宁可让作者知道"这条路今天走不通"，也不让他对着毫无反应的按钮发呆。
-          const reason = err instanceof Error ? err.message : String(err);
-          ctx.log.error(`「从文件夹导入口上项目」打不开目录选择对话框：${reason}`);
-          return;
-        }
-        if (picked === null) {
-          // 取消 = 用户自己的动作，安静返回是尊重，不是静默失败：
-          // 他刚刚亲手关掉了对话框，再补一句"已取消"就是噪音。
-          return;
-        }
-        // 末段名做预填建议；根目录（`/`、`C:\`）没有末段 → 不带这个键，
-        // 让导入向导按自己的回退链取名，绝不让空串混进事件载荷。
-        const suggestedName = basename(picked);
-        ctx.bus.emit('workspace.importRequested', {
-          sourceDir: picked,
-          ...(suggestedName.length > 0 ? { suggestedName } : {}),
-          source,
-        });
-      };
-
-      ctx.slots.register('editor.command', {
-        id: 'kojo.importKojoProject',
-        title: '从文件夹导入口上项目…',
-        category: '文件',
-        // 不写 when：命令不依赖活动文件也不依赖打开的项目，任何上下文都可用
-        // （宿主对缺省 when 按"恒可用"求值）——按下去必须听到响，绝不灰着不说话。
-        run: () => pickAndRequestImport('command-palette'),
-      });
+      registerImportCommand(ctx, io);
 
       /**
        * 名称解析 memo 随项目关闭清空（§5.73）。
@@ -772,8 +735,9 @@ export function createEratwAdapterPlugin(): Plugin {
             ctx.bus.emit('editor.revealLocation', { filePath: absPath, source: 'eratw-adapter' }),
           openNewWizard: () =>
             ctx.bus.emit('ui.overlay.open', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' }),
-          // 「导入项目」= 命令面板那条 `kojo.importKojoProject` 的同一具身体，只换来源标记
-          openImportWizard: () => pickAndRequestImport('projects-panel'),
+          // 「导入项目」= 命令面板那条 `kojo.importKojoProject` 的同一具身体（共享层
+          // `pickAndRequestImport`），只换来源标记
+          openImportWizard: () => pickAndRequestImport(ctx, io, 'projects-panel'),
           // 教程入口（E6；TUT-2 加全表）：三个 overlay 常驻注册（见下方），这里只发打开意图。
           // 用户反馈 8 批起映射抽成 `TUTORIAL_OVERLAY_BY_ID`，与内核事件监听共用一份。
           openTutorial: (which) =>

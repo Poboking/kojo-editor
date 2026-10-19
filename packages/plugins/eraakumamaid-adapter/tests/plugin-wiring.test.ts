@@ -107,7 +107,7 @@ describe('eraAkumaMaid · 项目面板与向导族接线', () => {
     const { registered } = activate();
 
     expect(ids(registered, 'game.adapter')).toEqual(['eraakumamaid-adapter']);
-    expect(ids(registered, 'ui.panel')).toEqual(['kojo-projects']);
+    expect(ids(registered, 'ui.panel')).toEqual(['eraakumamaid-kojo-projects']);
     expect(ids(registered, 'ui.overlay')).toEqual([
       NEW_KOJO_PROJECT_OVERLAY_ID,
       IMPORT_KOJO_OVERLAY_ID,
