@@ -443,6 +443,11 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
 /**
  * 把「取当前 `ErbIndex`」的记忆化为「函数名（已排序）提供者」。
  *
+ * 展示名取**首个定义的原拼写**（`ErbFunctionRef.name`）。`byName` 的键是归一化大写名
+ * （引擎大小写不敏感），直接拿键当候选会把作者写的 `M_Kojo_Message` 显示成
+ * `M_KOJO_MESSAGE`——读起来像"工具不认识我的写法"。排序仍按归一化键（越接近前缀越靠前
+ * 的既有语义不变），前缀匹配在装配核里本就大小写不敏感，故换显示不影响命中。
+ *
  * 失效判据 = `ErbIndex.fingerprint`（整项目指纹）：指纹不变 ⇒ 纯派生必不变 ⇒ 复用上次排好序
  * 的名字数组（不重排、不重建）；指纹 `null`（有文件取不到 stat）⇒ **一律重算**（保守失效，
  * 与 `plugin-api/erb.ts` 的指纹口径一致）。索引缺席 ⇒ 空数组（**无候选**，不猜）。
@@ -463,7 +468,9 @@ export function memoizedErbFunctionNames(getIndex: () => ErbIndex | null | undef
     if (!index) return [];
     const fp = index.fingerprint ?? null;
     if (fp !== null && hasMemo && fp === memoFingerprint) return memo;
-    memo = [...index.byName.keys()].sort();
+    memo = [...index.byName.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([normalizedName, refs]) => refs[0]?.name ?? normalizedName);
     memoFingerprint = fp;
     hasMemo = true;
     return memo;
@@ -476,7 +483,7 @@ export function memoizedErbFunctionNames(getIndex: () => ErbIndex | null | undef
 export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
   languageId: ERB_LANGUAGE_ID,
   logTag: ERB_LOG_TAG,
-  triggerCharacters: ['#', '['],
+  triggerCharacters: ['#', '[', '@', '$'],
   sources: ERB_COMPLETION_SOURCES,
   callForm: { sourceIds: ERB_CALL_FORM_SOURCE_IDS },
   locate(_monaco, model, position) {
@@ -509,7 +516,10 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
 
 /**
  * 为 `.erb` / `.erh`（`ERB_LANGUAGE_ID`）注册**一个**补全 provider。
- * `triggerCharacters` 保守：只取指令记号 `#` 与区间标记 `[`（不打扰常规输入）。
+ * `triggerCharacters` = 四个**只有补全能补**的记号：`#` 指令头、`[` 区间标记、
+ * `@` 函数定义头（函数名候选）、`$` 标签目标（`JUMP $-` / `GOTO $-` 一族）。
+ * 这些字符 Monaco 默认词法都不含（词分隔符），不弹窗就只剩手打全名一条路；
+ * 其余位置由 `locate` 的位置门挡掉（串内 / 注释内零候选），不会打扰常规输入。
  * `getTables` 每次补全时才调用（表按当前项目 adapter 实时取，同 hover 纪律）。
  * 返回可释放句柄——宿主在编辑器卸载时 `dispose()`。
  *

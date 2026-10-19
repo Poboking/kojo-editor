@@ -1,9 +1,13 @@
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation, ErbIndex, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
+import { MODEL_TOKEN_CLASS, errorText } from '@kojo/plugin-api';
+import { labelEntryAt, type ErbLabelOccurrence, type ErbLabelScope } from '@kojo/plugin-erb-parser';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
 import { reject } from './rename-rejection';
-import { errorText } from '@kojo/plugin-api';
+import { erbFactsPathOf } from './erb-completion-declared';
+import { resolveErbLabelScopeAt } from './erb-label-navigation';
+import { normalizePathKey } from './kojo-hover';
 import {
   erbOccurrences,
   findNameTokenPositions,
@@ -149,6 +153,56 @@ export function resolveRenameTarget(
     endColumn: word.end + 1,
     normalizedName,
   };
+}
+
+/* ============================== 纯逻辑：`$` 标签改名 ============================== */
+
+/** 标签名允许的字符（与解析器同一枚 Unicode 集：字母 / 数字 / 下划线） */
+const LABEL_NAME_RE = new RegExp(`^${MODEL_TOKEN_CLASS}+$`, 'u');
+/** 纯数字不认（`GOTO 123` 与行号目标有歧义） */
+const LABEL_NAME_DIGITS = /^\p{N}+$/u;
+
+/**
+ * 标签改名的新名字判定（**纯函数**；`null` = 可用，字符串 = 给作者看的拒绝理由）。
+ * 同函数标签重名按大小写不敏感比较（Emuera 标签名不区分大小写）。
+ */
+export function labelRenameRejection(scope: ErbLabelScope, newName: string): string | null {
+  if (!LABEL_NAME_RE.test(newName)) return `标签名只能用字母、数字、下划线（「${newName}」含其它字符）`;
+  if (LABEL_NAME_DIGITS.test(newName)) return `标签名不能是纯数字（「${newName}」会与行号跳转混淆）`;
+  const upper = newName.toUpperCase();
+  if (upper === scope.normalizedName) return null; // 只改大小写是合法改名
+  const clash = scope.siblingNames.find((name) => name.toUpperCase() === upper);
+  return clash === undefined ? null : `本函数里已有标签「${clash}」，不能改成「${newName}」（标签名不区分大小写）`;
+}
+
+/** 光标是否落在作用域中的某一处（含词尾后一格） */
+function occurrenceAt(scope: ErbLabelScope, line: number, column: number): ErbLabelOccurrence | undefined {
+  return scope.occurrences.find((occurrence) => occurrence.line === line && column >= occurrence.column && column <= occurrence.endColumn);
+}
+
+/**
+ * `.kojo` 源里是否有同名标签的**可证明引用面**（**纯函数**）。
+ *
+ * 只认行首写法（与糖线词法同形）：
+ * - `标签 <名>`（⇄ `$名`）；
+ * - `跳到 <名>`（可带 `$` / `*` 前缀，⇄ `GOTO`）；
+ * - 原生直通行 `$名` 与 `JUMP/GOTO/TRYJUMP/TRYGOTO <名>`（`.kojo` 允许整行透传引擎原文）。
+ *
+ * 命中 ⇔ 只改 `.erb` 会被下一次保存 `.kojo` 重新生成的产物盖回去 ⇒ 调用方整批拒绝。
+ * 名字按大小写不敏感比较；行尾 `;` 注释先剥掉。
+ */
+export function kojoLabelMentions(text: string, normalizedName: string): boolean {
+  const want = normalizedName.toUpperCase();
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const code = raw.replace(/;.*$/, '').trim();
+    if (code.length === 0) continue;
+    const sugar = /^(?:标签|跳到)\s+(\S+)/.exec(code);
+    const rawLabel = sugar === null ? /^\$(\S+)/.exec(code) : null;
+    const rawJump = sugar === null && rawLabel === null ? /^(?:JUMP|GOTO|TRYJUMP|TRYGOTO)\s+(\S+)/i.exec(code) : null;
+    const name = (sugar ?? rawLabel ?? rawJump)?.[1]?.replace(/^[$*]/, '');
+    if (name !== undefined && name.toUpperCase() === want) return true;
+  }
+  return false;
 }
 
 /* ============================== 纯逻辑：编辑收集与只读剔除 ============================== */
@@ -464,6 +518,37 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
     // 索引未建 ⇒ `undefined`（Monaco 走缺省词回退，不弹错）；名字不认 ⇒ 带理由拒绝
     resolveRenameLocation(model, position) {
       if (!handlers.canAnswer(model)) return undefined;
+      // `$` 标签腿先走（W-2）：标签是文件局部事实，不依赖项目索引
+      const labelScope = resolveErbLabelScopeAt(model, position);
+      const labelHit = labelScope === null ? undefined : occurrenceAt(labelScope, position.lineNumber, position.column);
+      if (labelHit !== undefined) {
+        return {
+          range: {
+            startLineNumber: labelHit.line,
+            startColumn: labelHit.column,
+            endLineNumber: labelHit.line,
+            endColumn: labelHit.endColumn,
+          },
+          text: model.getLineContent(labelHit.line).slice(labelHit.column - 1, labelHit.endColumn - 1),
+        };
+      }
+      // 标签入口但作用域不成立（`$` 定义名 / 跳转目标一侧）⇒ 拒绝，绝不落函数名腿
+      const labelEntry = labelEntryAt(model.getLineContent(position.lineNumber), position.column);
+      if (labelEntry !== null) {
+        return {
+          range: {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          },
+          text: '',
+          rejectReason:
+            labelEntry === 'jump'
+              ? '跳转目标在当前函数里找不到同名 `$` 标签，不按函数名重命名（不猜）'
+              : '这不是可重命名的 `$` 标签名（标签名只能是字母、数字、下划线）',
+        };
+      }
       const index = handlers.currentIndex();
       if (!index) return undefined;
       const lineText = model.getLineContent(position.lineNumber);
@@ -508,6 +593,20 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
   ): Promise<Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection> {
     if (!handlers.canAnswer(model)) {
       return reject('当前视图不参与重命名（请在原文视图内按 F2）');
+    }
+    // `$` 标签腿先走（W-2）：文件局部、无项目索引依赖，也不走 `.kojo` 函数判读通道
+    const labelScope = resolveErbLabelScopeAt(model, position);
+    const labelHit = labelScope === null ? undefined : occurrenceAt(labelScope, position.lineNumber, position.column);
+    if (labelScope !== null && labelHit !== undefined) {
+      return provideLabelEdits(model, newName, labelScope);
+    }
+    const labelEntry = labelEntryAt(model.getLineContent(position.lineNumber), position.column);
+    if (labelEntry !== null) {
+      return reject(
+        labelEntry === 'jump'
+          ? '跳转目标在当前函数里找不到同名 `$` 标签，不按函数名重命名（不猜）'
+          : '这不是可重命名的 `$` 标签名（标签名只能是字母、数字、下划线）',
+      );
     }
     const index = handlers.currentIndex();
     if (!index) return reject('ERB 函数索引未建，暂不可重命名');
@@ -619,6 +718,86 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       console.warn(
         `[erb-rename] '${target.normalizedName}'：${proseSkipped} 处 ERB 词法 mention 非调用形（名字后无 "("），按「改名不重写散文」跳过`,
       );
+    }
+    return { edits };
+  }
+
+  /**
+   * `$` 标签改名的落地（W-2）：**单文件、函数局部、全或无**。
+   *
+   * 不碰项目索引、不走闭文件 io（标签定义与跳转都在当前 model 里）；但 `.kojo` 源必须先查：
+   * 糖线用 `标签 <名>` / `跳到 <名>` 生成同名 `$` 标签，只改 `.erb` 会被下一次保存盖回去。
+   * 判据只用"行首同名标签写法"这一条可证明事实，命中即整批拒绝（请作者先改 `.kojo`）。
+   */
+  async function provideLabelEdits(
+    model: Monaco.editor.ITextModel,
+    newName: string,
+    scope: ErbLabelScope,
+  ): Promise<Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection> {
+    const rejection = labelRenameRejection(scope, newName);
+    if (rejection !== null) return reject(rejection);
+    const currentPath = erbFactsPathOf(model);
+    if (currentPath.length === 0) return reject('当前视图没有文件路径，无法判断这份文件是否可写');
+    if (!handlers.isWritable(currentPath)) return reject(readOnlyFilesReason(1, '重命名'));
+
+    // ---- `.kojo` 侧：同名标签写法（已开标签 + 宿主枚举，路径归一后去重） ----
+    const kojoTexts = new Map<string, string>();
+    try {
+      const getModels = monaco.editor?.getModels;
+      if (typeof getModels === 'function') {
+        for (const candidate of getModels.call(monaco.editor)) {
+          try {
+            if (candidate.getLanguageId() !== KOJO_LANGUAGE_ID || candidate.uri.scheme !== 'file') continue;
+            const path = candidate.uri.fsPath || candidate.uri.path;
+            if (path) kojoTexts.set(normalizePathKey(path), candidate.getValue());
+          } catch {
+            // 单枚 model 读不到不拖垮整次判断（与函数腿的逐项隔离同一纪律）
+          }
+        }
+      }
+      if (handlers.kojoSources) {
+        for (const file of await handlers.kojoSources(scope.normalizedName)) {
+          if (isKojoSourcePath(file.filePath)) kojoTexts.set(normalizePathKey(file.filePath), file.text);
+        }
+      }
+    } catch (e: unknown) {
+      return reject(`无法检查 .kojo 源里的同名标签（${errorText(e)}）——为免只改一半，整次重命名取消`);
+    }
+    const kojoHits = [...kojoTexts.values()].filter((text) => kojoLabelMentions(text, scope.normalizedName)).length;
+    if (kojoHits > 0) {
+      return reject(
+        `${kojoHits} 份 .kojo 源里也写着标签「${scope.name}」。保存 .kojo 时会按同名重新生成 .erb，` +
+          '只改这一处会留下两份不一致的标签，故整次重命名取消。请先在 .kojo 源里改名。',
+      );
+    }
+
+    // ---- 逐处现文本验证（await 期间作者可能已编辑）→ 一份 WorkspaceEdit ----
+    const edits: Monaco.languages.IWorkspaceTextEdit[] = [];
+    let stale = 0;
+    for (const occurrence of scope.occurrences) {
+      const lineText = model.getLineContent(occurrence.line);
+      const at = occurrence.column - 1;
+      const end = occurrence.endColumn - 1;
+      if (at < 0 || end > lineText.length || lineText.slice(at, end).toUpperCase() !== scope.normalizedName) {
+        stale++;
+        continue;
+      }
+      edits.push({
+        resource: model.uri,
+        versionId: undefined,
+        textEdit: {
+          range: {
+            startLineNumber: occurrence.line,
+            startColumn: occurrence.column,
+            endLineNumber: occurrence.line,
+            endColumn: occurrence.endColumn,
+          },
+          text: newName,
+        },
+      });
+    }
+    if (stale > 0) {
+      return reject(`标签「${scope.name}」有 ${stale} 处位置与当前文本不符（编辑期间文本已变），整次重命名取消`);
     }
     return { edits };
   }

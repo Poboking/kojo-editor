@@ -116,7 +116,8 @@ function fnRef(name: string): ErbFunctionRef {
 
 function fakeIndex(fingerprint: string | null, names: string[]): ErbIndex {
   const byName = new Map<string, ErbFunctionRef[]>();
-  for (const n of names) byName.set(n, [fnRef(n)]);
+  // 与解析器同口径：byName 的键是归一化大写名，ref 里保留定义处原拼写
+  for (const n of names) byName.set(n.toUpperCase(), [fnRef(n)]);
   return { files: new Map(), byName, fingerprint } as unknown as ErbIndex;
 }
 
@@ -130,6 +131,13 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
     expect(registered).toHaveLength(1);
     expect(registered[0]!.languageId).toBe(ERB_LANGUAGE_ID);
     expect(registered[0]!.languageId).not.toBe(KOJO_LANGUAGE_ID);
+    dispose.dispose();
+  });
+
+  it('触发字符含 `@`（函数定义头）与 `$`（标签目标）——它们不在 Monaco 默认词法里', () => {
+    const { monaco, registered } = stubMonaco();
+    const dispose = installErbCompletion(monaco, () => ({}));
+    expect(registered[0]!.provider.triggerCharacters).toEqual(['#', '[', '@', '$']);
     dispose.dispose();
   });
 
@@ -341,6 +349,18 @@ describe('EC-1 · memoizedErbFunctionNames（按指纹失效）', () => {
         throw new Error('parser absent');
       })(),
     ).toEqual([]);
+  });
+
+  it('展示名取定义处原拼写（byName 键是归一化大写），排序仍按归一化键', () => {
+    // 键：FOO / M_KOJO_A；展示：foo / M_Kojo_A
+    const fn = memoizedErbFunctionNames(() => fakeIndex('fp1', ['M_Kojo_A', 'foo']));
+    expect(fn()).toEqual(['foo', 'M_Kojo_A']);
+  });
+
+  it('定义列表为空 ⇒ 回退归一化键（不产出空串，不崩）', () => {
+    const byName = new Map<string, ErbFunctionRef[]>([['EMPTY', []]]);
+    const index = { files: new Map(), byName, fingerprint: 'fp1' } as unknown as ErbIndex;
+    expect(memoizedErbFunctionNames(() => index)()).toEqual(['EMPTY']);
   });
 });
 

@@ -8,6 +8,7 @@ import type {
 import { registerForKojoDialects } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { mergeSymbolLocations, resolveErbDimReferencesAt } from './erb-dim-navigation';
+import { labelReferenceLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
 import {
   explainReferenceCounts,
   isMoreSpecificKind,
@@ -217,17 +218,23 @@ export function installReferenceProvider(
       // 走同一条管线：与槽结果合并后一起进台账 / 夹取 / 未打开文件 opener——
       // 不另开 provider、不另算落点。非声明名 ⇒ 零贡献，既有行为逐字不变（fail-open）。
       const dimRefs = resolveErbDimReferencesAt(model, position);
+      // `$` 标签腿（W-2，2026-10-19）：光标在标签定义名或跳转目标上 ⇒ 本函数内全部出现。
+      // 与 `#DIM` 腿同一条合并纪律（跨腿去重保区间），同样 fail-open。
+      const labelScope = resolveErbLabelScopeAt(model, position);
+      const labelRefs = labelScope === null ? [] : labelReferenceLocations(labelScope);
       let locations: readonly ReferenceLocation[];
       try {
         locations = handlers.resolve(model, position);
       } catch (e: unknown) {
         // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 Shift+F12 崩掉编辑器；
-        // 已命中的 `#DIM` 引用照常交付（隔离粒度仍到贡献方）
-        console.warn(`[find-references] resolve 抛错${dimRefs.length > 0 ? '（#DIM 腿照常交付）' : ''}：${errorText(e)}`);
-        if (dimRefs.length === 0) return undefined;
+        // 已命中的 `#DIM` / 标签引用照常交付（隔离粒度仍到贡献方）
+        const localRefs = dimRefs.length + labelRefs.length;
+        console.warn(`[find-references] resolve 抛错${localRefs > 0 ? '（本地腿照常交付）' : ''}：${errorText(e)}`);
+        if (localRefs === 0) return undefined;
         locations = [];
       }
       if (dimRefs.length > 0) locations = mergeSymbolLocations(dimRefs, locations);
+      if (labelRefs.length > 0) locations = mergeSymbolLocations(labelRefs, locations);
       const out: Monaco.languages.Location[] = [];
       // 计数与列表同源：位置进台账（分类由供方带过来，缺席即未分类），读数与列表一次算出
       const tally = tallyReferenceOccurrences(occurrencesFromLocations(locations));

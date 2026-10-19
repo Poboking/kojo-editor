@@ -8,6 +8,7 @@ import type {
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { registerForKojoDialects } from './register-dialects';
 import { mergeSymbolLocations, resolveErbDimDefinitionAt } from './erb-dim-navigation';
+import { labelDefinitionLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
 
 /**
  * 转到定义的**宿主接线**（2026-10-15 语言服务批；D4 Peek 就地预览同文件改写；
@@ -352,7 +353,11 @@ export function installDefinitionProvider(
       // （`provideLocations` 的事件通道兜底取第一枚 ⇒ 优先权在数据层就已确定）。
       // 没有声明 ⇒ 本腿零贡献，既有函数 / 标签腿逐字不变（fail-open，不猜）。
       const dims = resolveErbDimDefinitionAt(model, position);
-      if (dims.length === 0) return provideLocations(handlers, findModel, model, position);
+      // `$` 标签腿（W-2，2026-10-19）：定义名自跳 + CJK 跳转目标（槽腿的 ASCII 记号集
+      // 认不出中文）；同一份 `labelScopeAt` 也是引用与重命名的真源。零贡献时行为不变。
+      const labelScope = resolveErbLabelScopeAt(model, position);
+      const labels = labelScope === null ? [] : labelDefinitionLocations(labelScope);
+      if (dims.length === 0 && labels.length === 0) return provideLocations(handlers, findModel, model, position);
       return provideLocations(
         {
           ...handlers,
@@ -361,10 +366,11 @@ export function installDefinitionProvider(
             try {
               rest = handlers.resolve(m, p);
             } catch (e: unknown) {
-              // 槽腿出错不能把已经命中的 `#DIM` 一起吞掉（隔离粒度仍到贡献方）
-              console.warn(`[kojo-definition] resolve 抛错（#DIM 腿照常交付）：${errorText(e)}`);
+              // 槽腿出错不能把已经命中的 `#DIM` / 标签一起吞掉（隔离粒度仍到贡献方）
+              console.warn(`[kojo-definition] resolve 抛错（本地腿照常交付）：${errorText(e)}`);
             }
-            return mergeSymbolLocations(dims, rest);
+            const withDims = dims.length > 0 ? mergeSymbolLocations(dims, rest) : rest;
+            return labels.length > 0 ? mergeSymbolLocations(labels, withDims) : withDims;
           },
         },
         findModel,

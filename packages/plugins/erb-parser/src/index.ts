@@ -24,7 +24,15 @@ export {
   type ErbStructureFix,
 } from './structure-fix';
 // 位置 → 符号（B0，2026-10-15 语言服务批；纯函数，索引为唯一真源）
-export { definitionTargetsAt, functionAt } from './symbols';
+export {
+  definitionTargetsAt,
+  functionAt,
+  labelEntryAt,
+  labelScopeAt,
+  type ErbLabelEntry,
+  type ErbLabelOccurrence,
+  type ErbLabelScope,
+} from './symbols';
 // 可搬运任务表（并行运输层；宿主与 worker 入口共用同一份，避免映射漂移）
 export {
   PARSE_FILE_TASK,

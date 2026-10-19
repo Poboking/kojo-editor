@@ -7,10 +7,6 @@
 
 ## 在办
 
-> W-2 / W-3 来自夜间自主批：先修**通**（一条链路端到端可走），再谈打磨；判据以本机实机（编辑器 + 语料）为准。
-
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
 | MK-PUB | **市场发布通道**：CF Worker 上传链——编辑器内一键上传 zip → Worker 校验（schema v1 同判据）→ R2 `pending/` → 自动开 PR 到注册表仓（merge=放行，GitHub 网页即审核后台）；Pages/CI/注册表仓保留原职（兼容源 + 第二道闸），拉取双源回退；Worker 独立仓 `<本机>\DSH\kojo-market-worker`（域名 `market.3625735381.xyz`，开发期 workers.dev）；客户端 additive：契约层 publish 意图/进度事件（照 `MarketDownloadProgress` 形态）+ Rust publish 命令（POST+token+Channel 进度）+ 上传主机闸（allowlist 扩 workers.dev 与自定义域）+ ui-market 发布面板（选 zip→本地 `parseManifest` 预校验→上传→状态行）；不动 `MARKET_DEFAULT_INDEX_URL`、不碰 ADR-0007 封闭集（仍只发声明式数据包） | 判据：Worker 侧 curl 全链可验证（签 token→上传→pending 落 R2→PR 开出）+ 本仓全量不回退 + 双 typecheck + `audit:decoupling` ✅ + cargo；新文案一律中文、拒因人话照 `PLATFORM_FAIL_TEXT` 形态 | 进行中 · 认领：claude 2026-10-16 |
-| W-2 | ERB 语言服务补齐·剩余面（用户点名「ERB 支持偏弱」） | 已交付：`#DIM` 悬停 + 转定义 + 查找引用（本文件口径，fail-open）。剩余：`$` 标签引用/重命名；补全触发字符覆盖 `@`/`$`；函数名大小写显示口径 | W 2026-10-19 |
-| W-3 | 糖投影未投影行分诊 | 语料直方图按行首 token 排序取前 3 族，逐族给「能投影 / 不该投影」判定与理由；红线（verbatim native 计数 0）一字不动 | W 2026-10-19 |
