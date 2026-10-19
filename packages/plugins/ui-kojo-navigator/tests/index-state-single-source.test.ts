@@ -175,8 +175,13 @@ describe('④ 反向对照：三态与降级的判据确实住在提供方那一
  * 覆盖面**收紧**的一寸（简报明令允许）：上一批只守函数树那条通道，本批把同一条事实接给
  * `Ctrl+T` / 改名台账 / 调用层级三条宿主通道 ⇒ 这三条也进扫描面。
  * 手法与 ① 逐字相同（按行扫源码形态、连注释一起查、处数钉死）。
+ *
+ * ST-TAIL（2026-10-20）把清单再扩两格：补全那条软腿的**装配侧** `editor-global-providers.ts`
+ * 与面包屑那条的**宿主侧** `EditorPane.tsx`——这两格本批实测**没有作者可见的文案出口** ⇒
+ * 不接（判据见第 ⑦ 组），但它们从此也在扫描面里：**任何一处形状比较、任何一次查表、
+ * 任何第二张表都算红**（扩面只增不减，把文件从清单里划掉就是放宽）。
  */
-describe('⑤ 宿主三条通道只查表（六文件 × 八把尺子，多一处即红）', () => {
+describe('⑤ 宿主通道只查表（八文件 × 八把尺子，多一处即红）', () => {
   const APP_TABLE = 'packages/app/src/ui/index-state-copy.ts';
   const APP_CONSUMERS = [
     APP_TABLE,
@@ -185,10 +190,14 @@ describe('⑤ 宿主三条通道只查表（六文件 × 八把尺子，多一�
     'packages/app/src/ui/CallHierarchyOverlay.tsx',
     'packages/app/src/ui/shell-overlays.ts',
     'packages/app/src/ui/ShellLayout.tsx',
+    // ST-TAIL 扩面（补全的装配侧 + 面包屑的宿主侧；这两格只许搬运，不许自己判形状）
+    'packages/app/src/ui/editor-global-providers.ts',
+    'packages/app/src/ui/EditorPane.tsx',
   ];
 
   it.each([...SHAPE_TESTS, { name: 'phase 的比较（三态一律走表）', re: /phase\s*(?:===|!==)/ }])(
-    '$name：宿主六个文件里 0 处',
+    // 文件数由清单本身报出（写死"六"的那句已经与本批扩面漂了一次 ⇒ 从此不许再手抄这个数）
+    `$name：宿主 ${APP_CONSUMERS.length} 枚文件里 0 处`,
     ({ re }) => {
       const offenders = APP_CONSUMERS.flatMap((rel) => hits(rel, re));
       expect(offenders, offenders.join('\n')).toEqual([]);
@@ -263,5 +272,122 @@ describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开�
 
   it('悬停这一格不查宿主那张表（它没有可查的文案面；接上 = 新开面 ⇒ 红）', () => {
     expect(hits(HOVER, /index-state-copy|indexState/)).toEqual([]);
+  });
+});
+
+/* ─────────── ⑦ 补全 / 面包屑两格：实测**没有**作者可见的文案出口（ST-TAIL 2026-10-20，记档） ─────────── */
+
+/**
+ * 手法照第 ⑥ 组：这一组**不接任何东西**，它把"为什么这两格不该出声"钉成可复跑的判据，
+ * 于是"交回"不是一个口头结论，而是一改动就红的闸。实测出处（本批写死在下面各行里）：
+ *
+ * - **补全**：索引派生那条腿 `erbFunctionNames`（装配点 `editor-global-providers.ts:233`，
+ *   提供者 `:257` 返回类型是 `() => readonly string[]`——**没有 `undefined` 这一支**），
+ *   而装配核报降级的唯一入口 `missingRequirement`（`completion-core.ts:405`）只认
+ *   `undefined` / `null` ⇒ 索引未建时**一条降级都不产生**；`erb-completion.ts:468`
+ *   更是直接 `if (!index) return []`。这条 seam 的"为什么没有候选"唯一的既有出口是
+ *   `CompletionDegrade`（`onDegrade` 回调 + 一行 `console.warn`），而宿主两枚补全安装点
+ *   （`editor-global-providers.ts:1153 / :1155`）**都不接**它——本仓已写明接它的代价
+ *   （`erb-completion.ts:394`「挂上会让每轮补全都报一次降级信号」），且 `console.warn`
+ *   在桌面壳里看不见（`editor-global-providers.ts:443` 那条折痕取证）。⇒ 没有作者读得到的
+ *   那一格 ⇒ 交回，且**不许为它新造一格**。
+ * - **面包屑**：`EditorPane.tsx:595 currentErbIndex()` 只是**快路**（②）与缓存戳；索引缺席
+ *   时走④**现解析**那条腿（`EditorPane.tsx:1933`），而供方的 documentSymbol 判的是
+ *   `request.text` 现文本（`erb-parser/src/plugin.ts:1004`）⇒ **"链空了"与索引无关**，
+ *   把 phase 文案接在这里等于把"没面包屑"污蔑成"索引的锅"。空链那一格今天整条不渲染
+ *   （`breadcrumb-bar.tsx:52`），渲染点也没有空态元素（`EditorPane.tsx:2558`）。⇒ 交回。
+ */
+describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一格 ⇒ 红）', () => {
+  const PROVIDERS = 'packages/app/src/ui/editor-global-providers.ts';
+  const PANE = 'packages/app/src/ui/EditorPane.tsx';
+  const CRUMB = 'packages/app/src/ui/breadcrumb-bar.tsx';
+  const CORE = 'packages/app/src/monaco/completion-core.ts';
+  const ERB_COMPLETION = 'packages/app/src/monaco/erb-completion.ts';
+  const PARSER_PLUGIN = 'packages/plugins/erb-parser/src/plugin.ts';
+  const TABLE = 'packages/app/src/ui/index-state-copy.ts';
+  const GUARD_SELF = 'packages/plugins/ui-kojo-navigator/tests/index-state-single-source.test.ts';
+
+  function appSources(): string[] {
+    const walk = (rel: string): string[] => {
+      const out: string[] = [];
+      for (const e of readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+        const child = `${rel}/${e.name}`;
+        if (e.isDirectory()) out.push(...walk(child));
+        else if (/\.(?:ts|tsx)$/.test(e.name)) out.push(child);
+      }
+      return out;
+    };
+    return walk('packages/app/src');
+  }
+
+  it('查那张表的文件是一张**闭集**（三枚通道各一处 import；补全 / 面包屑挤进来就红）', () => {
+    const importers = appSources().filter((rel) => hits(rel, /from '\.\/index-state-copy'/).length > 0);
+    expect(importers.sort()).toEqual(
+      [
+        'packages/app/src/ui/CallHierarchyOverlay.tsx',
+        'packages/app/src/ui/name-ledger.ts',
+        'packages/app/src/ui/workspace-symbols.ts',
+      ].sort(),
+    );
+    // 一枚文件一处 import；两处 = 有人在同一个文件里又起了一路查表
+    for (const rel of importers) expect(hits(rel, /from '\.\/index-state-copy'/), rel).toHaveLength(1);
+    expect(hits(TABLE, /from '\.\/index-state-copy'/), '表自己不许引自己').toEqual([]);
+  });
+
+  it('两格里没有任何查表 / 事实面入口的痕迹（没有文案面却接表 = 造一句没人读的话）', () => {
+    for (const rel of [PROVIDERS, PANE, CRUMB]) {
+      expect(hits(rel, /indexState|index-state-copy|INDEX_PHASE_COPY/), rel).toEqual([]);
+    }
+  });
+
+  it('补全两枚安装点仍**不接**降级落点；宿主唯一一处 `onDegrade…:` 是格式化那条（本批不许动）', () => {
+    expect(hits(PROVIDERS, /install(?:Kojo|Erb)Completion\(monaco, \(\) => editorTables\(requireKernel\(\)\)\)/)).toHaveLength(2);
+    const wired = hits(PROVIDERS, /onDegrade\w*:/);
+    expect(wired, wired.join('\n')).toHaveLength(1);
+    expect(hits(PROVIDERS, /installRangeFormatter\(monaco, \{ \.\.\.formatResolve, onDegraded: reportFormat/)).toHaveLength(1);
+  });
+
+  it('索引未建时补全**连一条降级都不产生**（提供者永不缺席 + 装配核只认 undefined/null ⇒ 这一格确实无话可改）', () => {
+    expect(hits(PROVIDERS, /function erbFunctionNamesFor\(kernel: Kernel\): \(\) => readonly string\[\] \{/)).toHaveLength(1);
+    expect(hits(ERB_COMPLETION, /if \(!index\) return \[\];/)).toHaveLength(1);
+    expect(hits(CORE, /return value === undefined \|\| value === null \? key : undefined;/)).toHaveLength(1);
+  });
+
+  it('「每轮都报一次降级」这条代价仓库里已经写死拒绝过 ⇒ 补全那格的沉默是**决定**不是漏做', () => {
+    expect(hits(ERB_COMPLETION, /不挂 `requires`/)).toHaveLength(1);
+    expect(hits(ERB_COMPLETION, /挂上会让每轮补全都报一次降级信号/)).toHaveLength(1);
+  });
+
+  it('面包屑：无索引 ≠ 无链——现解析那条腿还在，所以"链空了"不许由索引来解释', () => {
+    expect(hits(PANE, /const symbols = collectDocumentSymbols\(kernel\.slots\.query\('ui\.editor\.languageService'\), \{/)).toHaveLength(1);
+    expect(hits(PARSER_PLUGIN, /erbDocumentSymbols\(parseErbText\(request\.text, request\.path\)\)/)).toHaveLength(1);
+  });
+
+  it('面包屑空链那一格仍是**整条不渲染**（在这儿写一句"为什么没有"= 新开显示面 ⇒ 红）', () => {
+    expect(hits(CRUMB, /if \(levels\.length === 0\) return null;/)).toHaveLength(1);
+    expect(hits(CRUMB, /索引|indexState|currentIndex/)).toEqual([]);
+    expect(hits(PANE, /<CrumbBar/)).toHaveLength(1);
+  });
+
+  it('反向对照：表对象在宿主源码里只有**一枚读者**（别处再引一次 = 第二份查表真相）', () => {
+    const elsewhere = appSources()
+      .filter((rel) => rel !== TABLE)
+      .flatMap((rel) => hits(rel, /INDEX_PHASE_COPY/));
+    expect(elsewhere, elsewhere.join('\n')).toEqual([]);
+    expect(hits(TABLE, /INDEX_PHASE_COPY/)).toHaveLength(2); // 定义 1 + 查表 1
+  });
+
+  it('扫描面**只增不减**（把本批这两格从 ⑤ 的清单里划掉 ⇒ 这条红；标题那句文件数也得对得上）', () => {
+    const guard = textOf(GUARD_SELF);
+    const from = guard.indexOf('const APP_CONSUMERS = [');
+    const region = guard.slice(from, guard.indexOf('  ];', from));
+    for (const rel of [PROVIDERS, PANE]) expect(region, `${rel} 必须留在 ⑤ 的扫描面清单里`).toContain(`'${rel}'`);
+    expect(region).toContain('APP_TABLE,'); // 表本身也在扫描面上（由 ⑤ 内那枚常量引入）
+    expect(guard).toContain("const APP_TABLE = 'packages/app/src/ui/index-state-copy.ts';");
+    // 清单里的字面量条目 7 条（第 8 枚是 `APP_TABLE` 那枚常量）⇒ 与 ⑤ 标题那句文件数逐字对得上
+    expect(region.match(/^\s+'packages\/app\/src/gm)).toHaveLength(7);
+    // 标题那一行自己（拿整份文件 toMatch 会被本断言的字面量骗过去）
+    const titleLine = read(GUARD_SELF).find((l) => /^describe\('⑤ /.test(l)) ?? '';
+    expect(titleLine).toContain('（八文件 × 八把尺子，多一处即红）');
   });
 });
