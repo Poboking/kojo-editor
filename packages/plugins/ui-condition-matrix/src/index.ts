@@ -1027,11 +1027,13 @@ export function createUiConditionMatrixPlugin(): Plugin {
           on: boolean,
           onClick: () => void,
           title: string,
+          extraClass?: string,
         ): ReactNode =>
           createElement(
             'button',
             {
-              className: 'cm-toggle' + (on ? ' on' : ''),
+              className:
+                'cm-toggle' + (on ? ' on' : '') + (extraClass ? ` ${extraClass}` : ''),
               type: 'button',
               'aria-pressed': on,
               title,
@@ -1091,7 +1093,8 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 setFillMode(true);
                 setNotice(null);
               },
-              '把空缺补成工作区口上函数骨架（只写「我的口上项目」）：点红圈格 → 生成模板，时机与条件自动写好，台词由你填（Esc 退出）',
+              '把空缺补成工作区口上函数骨架（只写「我的口上项目」）：点红色打勾格 → 生成模板，时机与条件自动写好，台词由你填（Esc 退出）',
+              'cm-fill-toggle',
             ),
             props.floating ? null : floatBtn,
           ),
@@ -1313,7 +1316,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
             return;
           }
           if (fillSel.size === 0) {
-            setNotice('先在「填格子」模式下选中至少一个空缺（点矩阵里的红圈格）。');
+            setNotice('先在「填格子」模式下选中至少一个空缺（点矩阵里带红色打勾的格）。');
             return;
           }
           if (!workspaces) {
@@ -1408,7 +1411,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   'span',
                   { className: 'cm-fill-guide-steps' },
                   createElement('b', null, '①'),
-                  ' 点红圈格选中 ',
+                  ' 点红色打勾格选中 ',
                   createElement('span', { className: 'cm-fill-guide-arrow dim' }, '→'),
                   createElement('b', null, '②'),
                   ' 确认写入「我的口上项目」',

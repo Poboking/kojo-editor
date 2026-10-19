@@ -52,7 +52,7 @@ export interface MatrixRowViewProps {
   readonly cursorColumn: string | null;
   /**
    * 本行被选入填空草稿的列（无选中传同一个空集合常量，memo 才不会被每帧新 Set 打破）。
-   * 填空模式本身**不进 props**：+ 号与底色由 `.cm-scroll.cm-fill` 父级 class 驱动，
+   * 填空模式本身**不进 props**：红色打勾与底色由 `.cm-scroll.cm-fill` 父级 class 驱动，
    * 进入/退出模式时行 memo 全部跳过；只有选中集真的变了的那一行才重渲。
    */
   readonly fillColumns: ReadonlySet<string>;
@@ -94,7 +94,7 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
       const dataC = c++;
       if (!cell || !cell.present) {
         // 空白格：这个时机还没有针对该状态写过的反应（点击不导航）。
-        // 文本只保留「· / ✓」两态；填空模式的 + 与底色由父级 `.cm-fill` CSS 提供，
+        // 文本只保留「· / ✓」两态；填空模式的红色打勾与底色由父级 `.cm-fill` CSS 提供，
         // 模式开关不再触发整窗行重渲（旧实现每行都收 fillMode prop）。
         const isFillSel = fillColumns.has(col.key);
         cells.push(

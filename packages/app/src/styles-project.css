@@ -5851,6 +5851,12 @@ button.primary .hint {
   border-color: var(--accent);
   color: var(--accent-text);
 }
+/* 填格子开关：开启后与网格里的红色打勾同色，模式状态一眼可辨 */
+.cm-toggle.on.cm-fill-toggle {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  border-color: var(--red);
+  color: var(--red);
+}
 .cm-toggle-mark {
   font-size: var(--fs-0);
 }
@@ -6001,9 +6007,9 @@ button.primary .hint {
   flex-direction: column;
   gap: 5px;
   padding: 6px 8px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--red);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
+  background: color-mix(in srgb, var(--red) 7%, var(--surface-raised));
   box-shadow: var(--edge-raise);
 }
 /* 填格子首屏说明：新人第一眼要知道「这是什么、产出什么、下一步点哪」 */
@@ -6012,9 +6018,9 @@ button.primary .hint {
   flex-direction: column;
   gap: 2px;
   padding: 5px 7px 6px;
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
   font-size: var(--fs-0);
   line-height: 1.55;
 }
@@ -6094,7 +6100,7 @@ button.primary .hint {
 .cm-fillbar-title {
   font-size: var(--fs-1);
   font-weight: 600;
-  color: var(--accent-text);
+  color: var(--red);
 }
 .cm-fillbar-count {
   font-size: var(--fs-0);
@@ -6107,17 +6113,19 @@ button.primary .hint {
 .cm-fillbar-write {
   font-size: var(--fs-0);
 }
-.cm-fill-target {
+.cm-fill-target-label {
   flex: 1 1 150px;
   min-width: 0;
-  max-width: 240px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
   font-size: var(--fs-0);
-  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.cm-fill-target-label.dim {
+  color: var(--fg-dim);
 }
 .cm-fillbar-btn {
   height: 26px;
@@ -6404,32 +6412,63 @@ button.primary .hint {
   background: var(--accent);
   border-color: var(--accent-text);
 }
-/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性，
-   选中态的 .fill-sel 仍能压过）；+ 号用伪元素，进入/退出模式不重渲任何行。 */
+/* 填格子模式：空缺格给出可点外观。由网格容器 class 驱动（`:where` 保持低特异性），
+   进入/退出模式不重渲任何行。标记用**红色打勾 + 红圈**（用户反馈红圈不够醒目）：
+   未选 = 红色空心圈内一个红色 ✓；已选 = 实心红圆 + 白色 ✓ + 整格红框。 */
 .cm-scroll.cm-fill :where(.cm-cell.off) {
-  border-color: var(--border-subtle);
-  background: var(--hover-soft);
-  color: var(--fg-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--red) 48%, transparent);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  color: var(--red);
 }
 .cm-scroll.cm-fill :where(.cm-cell.off):hover {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  color: var(--accent-text);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+  color: var(--red);
 }
 .cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel)) {
   font-size: 0;
 }
 .cm-scroll.cm-fill :where(.cm-cell.off:not(.fill-sel))::before {
-  content: '+';
-  font-size: 11px;
+  content: '✓';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--red);
+  border-radius: 50%;
+  box-sizing: border-box;
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 900;
   line-height: 1;
 }
-.cm-cell.off.fill-sel {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent-text);
-  font-weight: 700;
-  box-shadow: inset 0 0 0 1px var(--accent);
+.cm-scroll.cm-fill :where(.cm-cell.off.fill-sel) {
+  background: color-mix(in srgb, var(--red) 26%, transparent);
+  border-color: var(--red);
+  box-shadow:
+    inset 0 0 0 1px var(--red),
+    0 0 0 2px color-mix(in srgb, var(--red) 22%, transparent);
+  font-size: 0;
+}
+.cm-scroll.cm-fill :where(.cm-cell.off.fill-sel)::before {
+  content: '✓';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--red);
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
 }
 .cm-cell.sel {
   box-shadow: inset 0 0 0 1px var(--fg);
