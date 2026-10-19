@@ -96,6 +96,22 @@ const HEART_LINE_RE = /^\s*CALL\s+HPH_PRINT\b/i;
  */
 const DATA_ENTRY_RE = /^\s*(DATAFORM|DATA)\b/;
 
+/**
+ * **质量线闸（本包追加，七把尺子之外的新守门）**：兜底形 `未识别语句 · <原文>` 只许
+ * 留给**真未知语句**。注释 / 空行 / `[SKIPSTART]…[SKIPEND]` 区 / `PRINT[A-Z]*` 台词族
+ * 都是**已知结构**——它们若还落在兜底里，说明规则漏了一类"正常 ERB"，不是读者该看到的
+ * "工具没读懂"。本闸逐类计数（命中即失败并打印前 10 条），同时用总量上限防规则回退：
+ * 上限 = 修完实测值 ×1.1（常数见下，带实测注释）。
+ */
+const FALLBACK_PREFIX = '未识别语句 · ';
+/**
+ * 兜底行总预算：本包修完实测 **13,770**；×1.1 = 15,147。
+ * （修前实测 77,329：注释 20,645 / SKIP 区 37,496 / PRINT 族 9,583 全部落兜底；
+ *  `@` 函数头与 `#` 声明补上中性显示形后又降 16,452。）
+ * 只给规则微调留 ≤10% 余量；超过就是"正常 ERB 又被标成错误"的回归。
+ */
+const FALLBACK_LINE_BUDGET = 15_147;
+
 interface Totals {
   files: number;
   filesWithSegments: number;
@@ -221,6 +237,16 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       let unaccounted = 0;
       let overlap = 0;
       let unreadable = 0;
+      // ---- 质量线闸的累加器（本包追加；与上面七把尺子互不读写）----
+      let fallbackLines = 0;
+      const fallbackClasses = {
+        comment: { hits: 0, samples: [] as string[] },
+        blank: { hits: 0, samples: [] as string[] },
+        skip: { hits: 0, samples: [] as string[] },
+        print: { hits: 0, samples: [] as string[] },
+        functionHead: { hits: 0, samples: [] as string[] },
+        preprocessor: { hits: 0, samples: [] as string[] },
+      };
 
       for (const path of use) {
         let source: string;
@@ -254,6 +280,50 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           for (let ln = s.fromLine; ln <= s.toLine; ln++) covered.add(ln);
         }
         const srcLines = source.split('\n');
+
+        // ---- 质量线闸：投影文本里 `未识别语句 · ` 兜底行 → 源行类别（本包追加）----
+        // 源行是否处在 `[SKIPSTART]…[SKIPEND]` 区内（含两条标记本身；1 基下标）。
+        const inSkipRegion = new Array<boolean>(srcLines.length + 2).fill(false);
+        let skipWalking = false;
+        for (let ln = 1; ln <= srcLines.length; ln++) {
+          const c = (srcLines[ln - 1] ?? '').trim();
+          if (c === '[SKIPSTART]') skipWalking = true;
+          if (skipWalking) inSkipRegion[ln] = true;
+          if (c === '[SKIPEND]') skipWalking = false;
+        }
+        const noteFallback = (kind: keyof typeof fallbackClasses, where: string, text: string): void => {
+          const rec = fallbackClasses[kind];
+          rec.hits++;
+          if (rec.samples.length < 10) rec.samples.push(`${where}  ${text.slice(0, 90)}`);
+        };
+        for (const s of r.segments) {
+          const projected = s.sugarText.split('\n');
+          const aligned = projected.length === s.toLine - s.fromLine + 1;
+          for (let i = 0; i < projected.length; i++) {
+            const stripped = (projected[i] ?? '').replace(/^[\t ]*/, '');
+            if (!stripped.startsWith(FALLBACK_PREFIX)) continue;
+            fallbackLines++;
+            // 兜底形 = 前缀 + 源行内容（`contentOf` 口径）；据此回找源行（段非 1:1 时按内容找）
+            const body = stripped.slice(FALLBACK_PREFIX.length);
+            let srcLn = s.fromLine + i;
+            if (!aligned) {
+              const found = srcLines.findIndex(
+                (raw, idx) => idx + 1 >= s.fromLine && idx + 1 <= s.toLine && raw.trim() === body,
+              );
+              if (found >= 0) srcLn = found + 1;
+            }
+            const raw = srcLines[srcLn - 1] ?? '';
+            const t = raw.trim();
+            const where = `${path}:${srcLn}`;
+            if (t.startsWith(';')) noteFallback('comment', where, t);
+            if (t.length === 0) noteFallback('blank', where, t);
+            if (inSkipRegion[srcLn]) noteFallback('skip', where, t);
+            if (/^PRINT[A-Z]*/.test(t)) noteFallback('print', where, t);
+            if (t.startsWith('@')) noteFallback('functionHead', where, t);
+            if (t.startsWith('#')) noteFallback('preprocessor', where, t);
+          }
+        }
+
         for (let ln = 1; ln <= srcLines.length; ln++) {
           if (covered.has(ln)) continue;
           const text = (srcLines[ln - 1] ?? '').trim();
@@ -440,6 +510,38 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       // 因此本尺子守的是"接线断掉"，语义保守那条由批 N 的判据单测守。
       expect(total.dataProjected / Math.max(1, total.dataLines)).toBeGreaterThan(0.5);
       expect(kojo.dataProjected / Math.max(1, kojo.dataLines)).toBeGreaterThan(0.5);
+
+      // ---- 质量线闸：兜底形只许剩"真未知语句"（本包追加；七把尺子判据零改动）----
+      // eslint-disable-next-line no-console
+      console.log(
+        [
+          '',
+          '========== 兜底行质量线（`未识别语句 · `）==========',
+          `兜底行总数：${fallbackLines}（预算 ${FALLBACK_LINE_BUDGET}）`,
+          `  注释 ${fallbackClasses.comment.hits}｜空行 ${fallbackClasses.blank.hits}` +
+            `｜SKIP 区 ${fallbackClasses.skip.hits}｜PRINT 族 ${fallbackClasses.print.hits}` +
+            `｜@函数头 ${fallbackClasses.functionHead.hits}｜#声明 ${fallbackClasses.preprocessor.hits}`,
+          ...(['comment', 'blank', 'skip', 'print', 'functionHead', 'preprocessor'] as const).flatMap((k) =>
+            fallbackClasses[k].samples.length === 0
+              ? []
+              : [
+                  `  [${k}] 前 ${fallbackClasses[k].samples.length} 条：`,
+                  ...fallbackClasses[k].samples.map((x) => `    ${x}`),
+                ],
+          ),
+          '===============================================',
+          '',
+        ].join('\n'),
+      );
+      // 四类**已知结构**一行都不许落进兜底：注释 / 空行 / SKIP 区 / PRINT 族。
+      expect(fallbackClasses.comment.hits).toBe(0);
+      expect(fallbackClasses.blank.hits).toBe(0);
+      expect(fallbackClasses.skip.hits).toBe(0);
+      expect(fallbackClasses.print.hits).toBe(0);
+      expect(fallbackClasses.functionHead.hits).toBe(0);
+      expect(fallbackClasses.preprocessor.hits).toBe(0);
+      // 总量棘轮：只许降、不许升（预算 = 修完实测 ×1.1）。
+      expect(fallbackLines).toBeLessThanOrEqual(FALLBACK_LINE_BUDGET);
 
       await kernel.stop();
     },

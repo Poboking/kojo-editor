@@ -160,13 +160,13 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
     expect(r.stats.projectedLines).toBe(6);
   });
 
-  it('无换行变体的空体 → 原样保留（既不输出也不换行，没有可显示的东西）', () => {
+  it('无换行变体的空体 → 不再兜底（已知 PRINT 族）：空体无字可打，给 `空行`', () => {
     const r = project(['PRINT', 'PRINTD', 'PRINTFORM', 'PRINTFORMD '].join('\n'));
     expect(sugarSegs(r.segments)).toHaveLength(0);
     // 不投影的 4 行以 native 段显式上屏，不再是一整行原样 ERB。pass 已活的合流注：
-    // 裸 `PRINT` 命中 ZH-S 词表 → `片段打印`；其余三行表外 → 兜底形。
+    // 裸 `PRINT` 命中 ZH-S 词表 → `片段打印`；其余三行表外 → PRINT 族显示形 `空行`。
     expect(nativeOnlySegs(r.segments).map((s) => s.sugarText.split('\n'))).toEqual([
-      ['片段打印', '未识别语句 · PRINTD', '未识别语句 · PRINTFORM', '未识别语句 · PRINTFORMD'],
+      ['片段打印', '空行', '空行', '空行'],
     ]);
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(4);
   });
@@ -185,10 +185,10 @@ describe('糖投影 · 输出家族全覆盖（批 F）', () => {
     expect(segLines(r.segments[0]!)).toEqual(['{你}', '带着温柔的笑容']);
   });
 
-  it('指令后紧跟 `;` → 原样保留（那是注释，不是要打印的字）', () => {
+  it('指令后紧跟 `;` → 空行形 + 注释原文（注释不是要打印的字）', () => {
     const r = project('PRINTFORMW ;这是注释');
     expect(sugarSegs(r.segments)).toHaveLength(0);
-    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toEqual(['未识别语句 · PRINTFORMW ;这是注释']);
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toEqual(['空行 等待 ;这是注释']);
     expect(reasonsOf(r)['unsupported-print-variant']).toBe(1);
   });
 
@@ -801,12 +801,13 @@ describe('糖投影 · 原生直通（fail-visible）', () => {
     expect(reasons['data-or-skip']).toBe(1);
   });
 
-  it('[SKIPSTART] 区内的 PRINTFORM* 不映射（兜底段≠糖段）', () => {
+  it('[SKIPSTART] 区内的 PRINTFORM* 不映射（兜底段≠糖段；区内 1:1 占位且不盖兜底前缀）', () => {
     const src = ['[SKIPSTART]', 'PRINTFORML 停用代码', '[SKIPEND]', 'PRINTFORML 正常'].join('\n');
     const r = project(src);
     expect(sugarSegs(r.segments).map((s) => [s.fromLine, s.toLine])).toEqual([[4, 4]]);
+    // 停用区是**已知结构**：首行给结构标签，其余行空串占位（每条源行仍占一条投影行）。
     expect(nativeOnlySegs(r.segments).map((s) => s.sugarText.split('\n'))).toEqual([
-      ['未识别语句 · [SKIPSTART]', '未识别语句 · PRINTFORML 停用代码', '未识别语句 · [SKIPEND]'],
+      ['停用区（引擎不执行）', '停用 · PRINTFORML 停用代码', '停用区（结束）'],
     ]);
     const reasons = Object.fromEntries(r.stats.nativeByReason.map((x) => [x.reason, x.count]));
     expect(reasons['data-or-skip']).toBe(3);
@@ -1237,11 +1238,10 @@ describe('糖投影 · 数据表块（批 N；不借用糖关键字，只给结�
   it('块内混入别的语句（`PRINTL`）→ 块头与候选一起保留原代码，不出现"半投影"的块', () => {
     const r = project(['PRINTDATA', '\tDATAFORM 一条', '\tPRINTL 混进来的', 'ENDDATA'].join('\n'));
     expect(sugarSegs(r.segments).every((s) => !s.sugarText.includes('数据表'))).toBe(true);
-    // 候选词只在兜底回显行里出现（兜底形 = `未识别语句 · <原文>`），不再以糖候选的身份上屏
+    // 候选词只在 native 回显行里出现（结构判据不变），不再以糖候选的身份上屏；
+    // 显示词形走已知结构（DATAFORM → `条目`），不再是"未识别语句"。
     expect(sugarSegs(r.segments).every((s) => !s.sugarText.includes('一条'))).toBe(true);
-    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText).join('\n')).toContain(
-      '未识别语句 · DATAFORM 一条',
-    );
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText).join('\n')).toContain('条目 一条');
   });
 
   it('没有配对 `ENDDATA` → 不动（结构异常不猜）', () => {
@@ -1286,8 +1286,8 @@ describe('糖投影 · 数据表块（批 N；不借用糖关键字，只给结�
   it('块外的 `DATAFORM` 不动——本批判据来自**结构**（在块内），不是行首正则', () => {
     const r = project(['DATAFORM 游离的', 'PRINTL 一句'].join('\n'));
     expect(sugarSegs(r.segments).every((s) => !s.sugarText.includes('游离的'))).toBe(true);
-    // 但不再是一整行原样 ERB：兜底形显式上屏
-    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toContain('未识别语句 · DATAFORM 游离的');
+    // 但不再是"未识别语句"：DATAFORM 是已知结构，回显行走 `条目` 词形（结构判据一个字没动）
+    expect(nativeOnlySegs(r.segments).map((s) => s.sugarText)).toContain('条目 游离的');
   });
 
   it('口径不静默：数据表块的四行都必须落进三类计数之一', () => {

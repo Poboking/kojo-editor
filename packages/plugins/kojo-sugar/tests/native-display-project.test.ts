@@ -71,14 +71,14 @@ function composeLikeHost(source: string, segments: ReadonlyArray<SugarProjectSeg
 
 describe('native 兜底段 · 出现与拼接口径', () => {
   it('认不出的行 → 单独 nativeOnly 段，兜底形 = `未识别语句 · <原文>`（恒非原样回显）', () => {
-    // `@` 头两条 pass 结构上都生拒（control / statement 都不认领函数头）⇒ 稳定的"全 pass miss"靶
-    const src = '@M_KOJO_K101_PLAIN_HEAD';
+    // 选一条两条 pass 都生拒、且不属于任何已知结构（注释/SKIP/PRINT/@头/#声明）的真未知语句做靶
+    const src = 'SOME_UNKNOWN_ENGINE_THING 1';
     const r = project(src);
     expect(nativeSegs(r.segments)).toHaveLength(1);
     const seg = nativeSegs(r.segments)[0]!;
     expect(seg.fromLine).toBe(1);
     expect(seg.toLine).toBe(1);
-    expect(seg.sugarText).toBe('未识别语句 · @M_KOJO_K101_PLAIN_HEAD');
+    expect(seg.sugarText).toBe('未识别语句 · SOME_UNKNOWN_ENGINE_THING 1');
     expect(isVerbatimNativeLine(seg.sugarText, src)).toBe(false);
   });
 
@@ -225,12 +225,16 @@ describe('RETURN 吸收 · 函数体内任何单独成行的 RETURN 永不上屏
     expect(composeLikeHost(src, r.segments).join('\n')).not.toContain('CALL A_1');
   });
 
-  it('`[SKIPSTART]` 停用区里的 `RETURN` 不吸收——区里的内容与标记都照常可见，"这段是停用的"如故', () => {
+  it('`[SKIPSTART]` 停用区里的 `RETURN` 不吸收——停用区显示为结构标签，正文保留为 `停用 · 原文`（1:1）', () => {
     const src = ['[SKIPSTART]', 'RETURN 1', '[SKIPEND]', 'RETURN 2'].join('\n');
     const r = project(src);
     const doc = composeLikeHost(src, r.segments);
-    expect(doc.join('\n')).toContain('未识别语句 · [SKIPSTART]'); // 停用标记显式可见（两条 pass 都生拒 `[` 头）
-    expect(doc.join('\n')).toContain('返回 1'); // 区内的 RETURN 不被吸收，照常上屏（pass 命中 → `返回 1`）
+    // 停用区是已知结构：首尾标签显式可见（不是"未识别语句"），正文保留可读但不吸成糖
+    expect(doc.join('\n')).toContain('停用区（引擎不执行）');
+    expect(doc.join('\n')).toContain('停用 · RETURN 1');
+    expect(doc.join('\n')).toContain('停用区（结束）');
+    expect(doc).not.toContain('返回 1');
+    expect(doc.join('\n')).toContain('返回 2'); // 区外 RETURN 照常上屏（pass 命中 → `返回 2`）
     expect(doc.join('\n')).not.toContain('\nRETURN 2'); // 任何形态下整行原样 ERB 都不许出现
   });
 
@@ -256,7 +260,7 @@ describe('RETURN 吸收 · 函数体内任何单独成行的 RETURN 永不上屏
     const src = ['@M_VALUE_FN', 'RETURNF ARG + 1', '\tRETURNF', 'RETURNF RESULT ; 收束也照显'].join('\n');
     const r = project(src);
     const doc = composeLikeHost(src, r.segments);
-    expect(doc[0]).toBe('未识别语句 · @M_VALUE_FN');
+    expect(doc[0]).toBe('函数 · @M_VALUE_FN');
     expect(doc[1]).toBe('返回 ARG + 1');
     expect(doc[2]?.trim()).toBe('返回');
     expect(doc[3]?.trim()).toBe('返回 RESULT');

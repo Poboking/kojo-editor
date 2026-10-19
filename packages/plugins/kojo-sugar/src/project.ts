@@ -21,6 +21,9 @@
  * | `SELECTCASE X` / `CASE v` / `CASEELSE` | `当 X：` / `是 v：` / `否则：` |
  * | `ENDSELECT` | 缩进收束（不显示） |
  * | `;注释` / 空行 | **原样透传**（`;` 注释在糖里语法完全一样） |
+ * | `[SKIPSTART]` … `[SKIPEND]` | 首尾标签 + 区内 `停用 · <原文>`（**1:1 行数**，不盖兜底前缀） |
+ * | `@函数头` / `#声明` | `函数 · @…` / `声明 · #…`（中性陈述，不冒充糖） |
+ * | 表外 `PRINT*` 台词变体 | `台词 · <原文体>`（空体 → `空行` / `空行 等待`） |
  * | `%CALLNAME:TARGET%` / `%CALLNAME:MASTER%` | `{她}` / `{你}`（**可读化**，见下） |
  * | `\@条件?A#B\@`（FORM 行内的三元输出） | `{条件 ? "A" : "B"}`（糖三元，规范 §3.4） |
  * | `SIF 条件` + 紧随的那一条语句 | `如果 条件：` + 正文 **+1 层缩进**（规范 §3.5；语料 100% 是这种两行形态） |
@@ -380,17 +383,38 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
       const content = contentOf(raw);
 
       if (content === '[SKIPSTART]') {
+        // 停用区（引擎不执行）是**已知结构**，不是"工具没读懂"：首行给结构标签，
+        // 区内每一行仍占一条投影行（宿主按区间行数对齐），但一律不盖兜底前缀。
         inSkip = true;
-        recs.push(native(ln, 'data-or-skip'));
-        continue;
-      }
-      if (content === '[SKIPEND]') {
-        inSkip = false;
-        recs.push(native(ln, 'data-or-skip'));
+        recs.push({
+          line: ln,
+          kind: 'native',
+          text: SKIP_REGION_LABEL,
+          indent: ctx.indentAt(ln, raw),
+          visible: true,
+          reason: 'data-or-skip',
+        });
         continue;
       }
       if (inSkip) {
-        recs.push(native(ln, 'data-or-skip'));
+        const ended = content === '[SKIPEND]';
+        if (ended) inSkip = false;
+        // 区内正文保留可读性（作者常把变量自文档写在停用区里），只用中性前缀，
+        // 绝不与原行逐字相等；注释按注释原样（红线尺子本就豁免 `;`），空行隐身占位。
+        const text = ended
+          ? SKIP_REGION_END_LABEL
+          : content.length === 0 || content.startsWith(';')
+            ? content
+            : `${SKIP_REGION_BODY_PREFIX}${content}`;
+        recs.push({
+          line: ln,
+          kind: 'native',
+          text,
+          indent: ctx.indentAt(ln, raw),
+          // 空行也必须 visible：段内行数 1:1 是宿主对齐的硬前提，空串自会渲染成空行。
+          visible: true,
+          reason: 'data-or-skip',
+        });
         continue;
       }
       if (content.length === 0 || content.startsWith(';')) {
@@ -603,7 +627,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
         }
         const body = trimTrailingSpace(pm[2]!);
         // 指令后紧跟 `;` → 这里是**注释**而不是要打印的字（Emuera 的 `;` 在任意位置起效）。
-        // 一行给不出"空行 + 注释"两行显示 → 原样保留（语料 1 行，判据为不误导而设）。
+        // 一行给不出"空行 + 注释"两行糖显示 → 走 native 的已知结构显示形
+        // （`空行[ 等待] + 注释原文`），不再盖"未识别语句"。
         if (bodyIsComment(body)) {
           recs.push(native(ln, 'unsupported-print-variant'));
           continue;
@@ -622,7 +647,8 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           //   ② 它不再**切断**糖段——实测中它是段数暴涨的头号原因。
           //
           // 判据边界：**只有 `newline` 的变体**才算打空行。无后缀的 `PRINT` / `PRINTFORM`
-          // 空体既不输出也不换行（是拼句片段的空段）——没有可显示的东西，原样保留。
+          // 空体既不输出也不换行（是拼句片段的空段）——结构上不进糖行；显示层仍按已知结构
+          // 给 `空行`（不谎称「续/等待」），不再盖"未识别语句"。
           //
           // 批 P 补掉这里记在案的代价（v1.5 对齐语料主流）：空行不再按 `D` 归属分，只按**等待**分——
           // 默认不等待投影为糖里能写出来的 `空行`（裸 `PRINTFORML`），`W` 系投影为 `空行 等待`
@@ -821,11 +847,68 @@ interface LineRec {
  * 1. 输出 = 前缀 + 原文 ⇒ **恒与源行逐字不等**（`isVerbatimNativeLine` 的命中数因此可归零）；
  * 2. 前缀是给作者看的**事实陈述**，不猜语义、不伪装成糖（读不懂就说读不懂）；
  * 3. 词形固定，别按成因开分支——一开分支就有 N 份"没读懂"的说法，读者学不会。
+ *
+ * 口径边界（2026-10-19）：本前缀只留给**真未知语句**。注释 / 空行（`buildRecs` 的
+ * passthrough）、`[SKIPSTART]` 区（首尾标签 + `停用 · 原文`）、`@` 函数头 / `#` 声明、
+ * `PRINT[A-Z]*` 台词族与数据表条目（`printFamilyDisplay` / `dataFamilyDisplay`）都是
+ * **已知结构**，各自有非兜底显示形——它们不是"工具没读懂"，不该把正常 ERB 标成错误。
  */
 const UNRECOGNIZED_PREFIX = '未识别语句 · ';
 
+/**
+ * `[SKIPSTART]` 行的显示形（停用区首行）。区内其余行显示空串——每一条源行仍占一条投影行
+ * （宿主靠区间行数对齐，1:1 不许破），但一律不盖兜底前缀。
+ */
+const SKIP_REGION_LABEL = '停用区（引擎不执行）';
+
+/** `[SKIPEND]` 行的结束标签（与首行标签成对，同样不是兜底形） */
+const SKIP_REGION_END_LABEL = '停用区（结束）';
+
+/** 停用区正文的中性前缀：保留作者原文，但不与源行逐字相等 */
+const SKIP_REGION_BODY_PREFIX = '停用 · ';
+
 /** PRINTDATA 系一族的行首记号（块头 / 条目 / 收束）——`makeNativeRec` 的结构优先判据用 */
 const DATA_FAMILY_LINE_RE = /^(?:PRINTDATA[A-Z]*|ENDDATA|DATAFORM(?:\s|$)|DATA(?:\s|$))/;
+
+/** 数据表条目行（`DATAFORM` / `DATA`）——只决定**显示词形**；结构判据在 `DATA_FAMILY_LINE_RE` */
+const DATA_ENTRY_LINE_RE = /^(DATAFORM|DATA)(?:[ \t　]+([\s\S]*))?$/;
+
+/**
+ * PRINT 台词族的显示形（pass 表没认领的那些变体：`PRINTD` / `PRINTLC` / `PRINTPLAIN…`）。
+ *
+ * 判据只有"行首 token"一条（`PRINT[A-Z]*`），词形按引擎语义二分：
+ * - 空体 → `空行` / `空行 等待`（等待取自 `PRINT_VARIANTS`，表外按 `W` 后缀判）；
+ * - 有体 → `台词 · <原文体>`（体逐字保留，含全角标点；**不做** FORM 反糖——非 FORM 行的
+ *   `%…%` 是被打印的字面字符）；
+ * - 指令后紧跟 `;` 是注释而不是要打印的字（`;` 在任意位置起效）→ 空行形 + 注释原文。
+ *
+ * 这是**显示词形**，不改结构判断：`DATA_FAMILY_LINE_RE` 仍先于本函数。
+ */
+function printFamilyDisplay(content: string): string | undefined {
+  const pm = PRINT_FAMILY_RE.exec(content);
+  if (!pm) return undefined;
+  const word = pm[1]!;
+  const body = trimTrailingSpace(pm[2] ?? '').trimStart();
+  const wait = PRINT_VARIANTS.get(word)?.wait ?? word.endsWith('W');
+  if (body.length === 0) return blankLineSugar(wait);
+  if (bodyIsComment(body)) return `${blankLineSugar(wait)} ${body}`;
+  return `台词 · ${body}`;
+}
+
+/**
+ * 数据表族行的显示形（结构判据已由 `DATA_FAMILY_LINE_RE` 拍板：仍是 native，不进糖段）。
+ * pass 表认领（`PRINTDATA` 系 → `数据表 …：`）就维持；`DATAFORM` / `DATA` 条目行与台词族
+ * 同一把尺子（空体 → `空行`，有体 → `台词 · <体>`）；其余（`ENDDATA` 等）交给兜底。
+ */
+function dataFamilyDisplay(content: string, localized: string | null): string | undefined {
+  if (localized !== null) return localized;
+  const dm = DATA_ENTRY_LINE_RE.exec(content);
+  if (!dm) return undefined;
+  const body = trimTrailingSpace(dm[2] ?? '').trimStart();
+  if (body.length === 0) return blankLineSugar(false);
+  if (bodyIsComment(body)) return `${blankLineSugar(false)} ${body}`;
+  return `台词 · ${body}`;
+}
 
 /** native 行的记录工厂（一份投影运行绑一份，见 `makeNativeRec`） */
 type NativeRecFactory = (line: number, reason: SugarProjectNativeReason) => LineRec;
@@ -837,8 +920,9 @@ type NativeRecFactory = (line: number, reason: SugarProjectNativeReason) => Line
  *
  * ```
  * native 行 → localizeNativeLine({ content, indent, lookup })
- *   ├─ 认得出  → pass 给的中文显示形（行内可残留英文记号）
- *   └─ 认不出  → `未识别语句 · <原文>`（兜底，同样是一条**要上屏**的可见行）
+ *   ├─ 认得出            → pass 给的中文显示形（行内可残留英文记号）
+ *   ├─ 已知结构          → `PRINT[A-Z]*` 台词族 / 数据表条目 / SKIP 区各自的显示词形
+ *   └─ 真未知            → `未识别语句 · <原文>`（兜底，同样是一条**要上屏**的可见行）
  * ```
  *
  * `visible: true` 是**必须**的：宿主（`app/src/ui/sugar-view.ts` 的 `composeSugarDoc`）只渲染
@@ -854,21 +938,29 @@ function makeNativeRec(lines: string[], ctx: ProjContext, deps: LiftDeps): Nativ
     const raw = lines[ln - 1] ?? '';
     const content = contentOf(raw);
     const indent = ctx.indentAt(ln, raw);
+    const rec = (text: string): LineRec => ({ line: ln, kind: 'native', text, indent, visible: true, reason });
+    const localized = localizeNativeLine({ content, indent, lookup });
     // 批 N 的**结构判据优先于**显示层词形判据：能走到这里的 PRINTDATA 系行都是结构没收的
     // （游离条目 / 未配对 / 块内混入别的语句），而糖的 `数据表：` 块体只收条目行——
-    // 投上去就是"读了写不回"，兜底形保持，一个字节都不动。
+    // 投上去就是"读了写不回"，故仍走 native（不改结构判断）；但它是**已知结构**，
+    // 显示词形不再盖"未识别语句"：pass 有中文形就维持，条目行给 `台词 · <体>`。
     if (DATA_FAMILY_LINE_RE.test(content)) {
-      return { line: ln, kind: 'native', text: `${UNRECOGNIZED_PREFIX}${content}`, indent, visible: true, reason };
+      return rec(dataFamilyDisplay(content, localized) ?? `${UNRECOGNIZED_PREFIX}${content}`);
     }
-    const localized = localizeNativeLine({ content, indent, lookup });
-    // 空内容行（停用区里的空行是唯一到达这里的形态）没有"语句"可标——兜底前缀
-    // 单独一行是纯噪声，还让宿主把 N 行空行折成 N 行"未识别语句"。保持隐身，
-    // 让宿主照常回显空行（空行在尺子 `isVerbatimNativeLine` 里天生不算红线）。
-    if (localized === null && content.length === 0) {
+    if (localized !== null) return rec(localized);
+    // 空内容行没有"语句"可标——兜底前缀单独一行是纯噪声，还会让宿主把 N 行空行折成
+    // N 行"未识别语句"。保持隐身，让宿主照常回显空行（空行在 `isVerbatimNativeLine`
+    // 里天生不算红线）。SKIP 区已在上游 1:1 占位，这里是防御性保留。
+    if (content.length === 0) {
       return { line: ln, kind: 'native', text: '', indent, visible: false, reason };
     }
-    const text = localized ?? `${UNRECOGNIZED_PREFIX}${content}`;
-    return { line: ln, kind: 'native', text, indent, visible: true, reason };
+    // 函数头 `@NAME(...)` / 预处理声明 `#DIM …` 都是**已知结构**：给中性陈述，
+    // 既不冒充糖、也不说"没读懂"。名字与参数逐字保留（作者要核对登记名）。
+    if (content.startsWith('@')) return rec(`函数 · ${content}`);
+    if (content.startsWith('#')) return rec(`声明 · ${content}`);
+    // PRINT 台词族（pass 表外的变体）→ `台词 · <体>` / `空行[ 等待]`；仍是**已知结构**。
+    // 真未知语句才落兜底形（前缀 + 原文），一个字节都不改。
+    return rec(printFamilyDisplay(content) ?? `${UNRECOGNIZED_PREFIX}${content}`);
   };
 }
 
