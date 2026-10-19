@@ -45,22 +45,35 @@ describe('ops maintenance · 读数口径', () => {
   it('未知 ≠ 干净：null/known=false 一律 unknown 并写明原因，不写成 0', () => {
     for (const read of [
       null,
-      { known: false, total: 0, detail: '内核未提供 maintenanceReport' },
+      { known: false, total: 0, detail: '旧内核未提供维护记录读数接口' },
     ]) {
       expect(opsMaintenanceTone(read)).toBe('unknown');
       const text = opsMaintenanceText(read);
-      expect(text).toContain('未知');
-      expect(text).not.toBe('ops journal maintenance: 0');
+      expect(text).toContain('维护记录：未知');
+      expect(text).not.toBe('维护记录：0 条');
     }
     expect(opsMaintenanceText({ known: false, total: 0, detail: '巡检失败：x' })).toContain('巡检失败：x');
   });
 
-  it('已知：total=0 是 clean、>0 是 residue（残留文案带"待人工处置"）', () => {
+  it('已知：total=0 是 clean、>0 是 residue（残留文案带"需人工处置"）', () => {
     expect(opsMaintenanceTone({ known: true, total: 0, detail: '' })).toBe('clean');
-    expect(opsMaintenanceText({ known: true, total: 0, detail: '' })).toBe('ops journal maintenance: 0');
+    expect(opsMaintenanceText({ known: true, total: 0, detail: '' })).toBe('维护记录：0 条');
     expect(opsMaintenanceTone({ known: true, total: 3, detail: '' })).toBe('residue');
-    expect(opsMaintenanceText({ known: true, total: 3, detail: '' })).toContain('3');
-    expect(opsMaintenanceText({ known: true, total: 3, detail: '' })).toContain('待人工处置');
+    expect(opsMaintenanceText({ known: true, total: 3, detail: '' })).toContain('维护记录：3 条');
+    expect(opsMaintenanceText({ known: true, total: 3, detail: '' })).toContain('需人工处置');
+  });
+
+  it('面向作者的行文案零英文内部术语（本地化钉死）', () => {
+    for (const read of [
+      null,
+      { known: true, total: 0, detail: 'd' },
+      { known: true, total: 5, detail: 'd' },
+      { known: false, total: 0, detail: '巡检失败：boom' },
+    ] as const) {
+      const text = opsMaintenanceText(read);
+      expect(text).not.toMatch(/ops journal/i);
+      expect(text).toContain('维护记录');
+    }
   });
 });
 
@@ -68,7 +81,7 @@ describe('readOpsMaintenance · 一次巡检的三条降级路', () => {
   it('旧内核无 maintenanceReport ⇒ known=false，绝不假装 0', async () => {
     const read = await readOpsMaintenance(journalWith({ list: async () => [] }));
     expect(read.known).toBe(false);
-    expect(read.detail).toContain('未提供 maintenanceReport');
+    expect(read.detail).toContain('未提供维护记录读数接口');
   });
 
   it('list() 巡检抛错 ⇒ known=false 且原因可见', async () => {

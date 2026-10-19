@@ -38,7 +38,7 @@ export interface OpsMaintenanceRead {
 const UNKNOWN_NO_METHOD: OpsMaintenanceRead = {
   known: false,
   total: 0,
-  detail: '内核未提供 maintenanceReport（旧内核），残留条数读不出',
+  detail: '旧内核未提供维护记录读数接口，条数读不出',
 };
 
 /**
@@ -51,13 +51,13 @@ export async function readOpsMaintenance(journal: OpJournal): Promise<OpsMainten
   try {
     await journal.list();
   } catch (err) {
-    return { known: false, total: 0, detail: `ops journal 巡检失败：${String(err)}` };
+    return { known: false, total: 0, detail: `巡检失败：${String(err)}` };
   }
   let report: OpsMaintenance;
   try {
     report = journal.maintenanceReport();
   } catch (err) {
-    return { known: false, total: 0, detail: `ops journal 读数失败：${String(err)}` };
+    return { known: false, total: 0, detail: `读数失败：${String(err)}` };
   }
   return { known: true, total: opsMaintenanceTotal(report), detail: opsMaintenanceDetail(report) };
 }
@@ -73,13 +73,14 @@ export function opsMaintenanceTone(read: OpsMaintenanceRead | null): OpsMaintena
 
 /**
  * 面板那一行的文字（唯一口径；单测钉死它——残留不许被写成 `0`，也不许整行消失）。
- * 明细（五项分别多少 + 巡检时间）挂 `title`，见 `opsMaintenanceDetail`。
+ * 面向普通作者一律中文人话，内部术语（ops journal 等）不再出现在这一行；
+ * 明细（五项分别多少 + 巡检时间）挂 `title` 与折叠体，见 `opsMaintenanceDetail`。
  */
 export function opsMaintenanceText(read: OpsMaintenanceRead | null): string {
   if (!read || !read.known) {
-    return `ops journal maintenance: 未知 — ${read?.detail ?? 'ops journal 巡检尚未完成'}`;
+    return `维护记录：未知 — ${read?.detail ?? '巡检尚未完成，稍后自动刷新'}`;
   }
   return read.total > 0
-    ? `ops journal maintenance: ${read.total}（崩溃 / 回滚失败残留，占盘待人工处置）`
-    : `ops journal maintenance: ${read.total}`;
+    ? `维护记录：${read.total} 条待处理（崩溃或回滚留下的文件，需人工处置）`
+    : `维护记录：${read.total} 条`;
 }
