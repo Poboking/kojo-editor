@@ -82,6 +82,7 @@ const eratwScaffold = (draft: KojoScaffoldDraft): ScaffoldFileSet =>
 
 /** 共享向导需要的游戏侧供数（脚手架 + 面数 + 剧本号 + 预览补充说明） */
 export const ERATW_SCAFFOLD_DEPS = {
+  /** 语言档声明只挂在这枚**导出对象属性**上：`scaffold` 仍旧是普通方法，`this` 不逃逸 */
   scaffold: withKojoLangDocs(eratwScaffold, KOJO_LANG_DOC_CHOICES),
   coreFaceCount: CORE_FACES.length,
   extraFields: ERATW_EXTRA_FIELDS,

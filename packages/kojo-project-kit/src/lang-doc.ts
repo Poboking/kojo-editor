@@ -3,7 +3,7 @@
  *
  * ## 这条反馈说的是什么
  *
- * 新建口上项目时只有 `.kojo` 一条路，作者想要"从原生就开始写"就没有选项。
+ * 新建口上项目时只有糖写法一条路，作者想要"从原生就开始写"就没有选项。
  * 本模块把这件事变成**作者看得见的一格**，而不改任何默认行为：
  * 默认档仍是糖档（`sugar`），选它产物与历史逐字节相同。
  *
@@ -93,7 +93,7 @@ export function kojoLangDocChoice(doc: KojoLangDoc | undefined | null): KojoLang
 
 /**
  * 落点预览那句里关于起手骨架的括注（作者看到"这些文件到底是什么"）。
- * 糖档那句与历史文案逐字相同（`（.kojo，可写 .kojo 也可写原生 ERB）`），
+ * 糖档那句与历史文案逐字相同（历史那句写的是"糖扩展名，可写糖也可写原生"），
  * 扩展名由单源插入，本函数自身不抄任何扩展名。
  */
 export function kojoLangDocPreviewParenthesis(doc: KojoLangDoc | undefined | null): string {
@@ -149,7 +149,9 @@ export function readScaffoldLangDocs(scaffold: unknown): readonly KojoLangDocCho
   const raw = (scaffold as Partial<KojoLangDocProvider> | null | undefined)?.langDocs;
   if (!Array.isArray(raw)) return [];
   if (raw.length < 2) return [];
-  return raw.every(isLangDocChoice) ? raw.filter(isLangDocChoice) : [];
+  if (!raw.every(isLangDocChoice)) return [];
+  // 项形全对 ⇒ 交回声明**本身**（不复制、不重排：向导渲染的就是 adapter 给的那一份）
+  return raw as readonly KojoLangDocChoice[];
 }
 
 /**
