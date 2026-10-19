@@ -576,10 +576,10 @@ function projectionUriKeys(shown: Monaco.editor.ITextModel): Set<string> {
  * 读同一张 `sugarLineMapRef`），这里再折一次就是折两遍。本函数只做糖面独有的三件事：
  * ① 同文件的落点若折不回预览行 ⇒ 丢弃（预览面上没有那一行，交出去等于一次原地不动的假跳转）；
  * ② 同文件的落点把列与区间抹成行首（纪律②）；
- * ③ 剔除**指向投影自己 URI** 的落点：`#DIM` / `$` 标签那两条缓冲区本地腿（住在
- *    `installDefinitionProvider` / `installReferenceProvider` 内部，不归本文件动）会把屏幕上这份
- *    model 的 uri 当文件路径交回，而那条路径上没有文件；`mergeSymbolLocations` 又把它们排在最前、
- *    `planDefinitionJump` 的事件通道兜底只取第一枚 ⇒ 不剔就是幻影把真算出来的源落点挤掉。
+ * ③ 剔除**指向投影自己 URI** 的落点：本地腿（`#DIM` / `$`）2026-10-20 起已经换算成**存档坐标**、
+ *    不再交回那条 URI，但剔除仍然要留——槽侧贡献方与迟到结果仍可能带着屏幕 model 的 uri 出来，
+ *    而 `mergeSymbolLocations` 把它们排在最前、`planDefinitionJump` 的事件通道兜底只取第一枚
+ *    ⇒ 不剔就是幻影把真算出来的源落点挤掉。
  * 跨文件的真落点原样交回——那是另一份文件，与这一面的映射无关。
  */
 function foldLocationsToPreview(
