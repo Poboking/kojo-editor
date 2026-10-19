@@ -383,7 +383,8 @@ export function createKojoProjectsPanel(
               onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, e.path),
             },
             h('span', { className: 'caret' }, dOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
-            h('span', { className: 'kp-dir-name' }, e.name),
+            // 名称行被 CSS 省略号截断时，title 让悬停能读回全名（行上的 title 是路径，不含这层语义）
+            h('span', { className: 'kp-dir-name', title: e.name }, e.name),
           ),
           dOpen ? renderDir(e.path, depth + 1) : null,
         );
@@ -397,7 +398,7 @@ export function createKojoProjectsPanel(
           title: e.path,
           onClick: () => deps.reveal(e.path),
         },
-        h('span', { className: 'kp-file-name' }, e.name),
+        h('span', { className: 'kp-file-name', title: e.name }, e.name),
       );
     }
 
@@ -478,7 +479,8 @@ export function createKojoProjectsPanel(
                   },
                 },
                 h('span', { className: 'caret' }, isOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
-                h('span', { className: 'kp-artifact-name' }, a.name),
+                // 名称可能被 CSS 省略号截断：title 给完整显示名（行按钮的 title 是目录路径，两者互补）
+                h('span', { className: 'kp-artifact-name', title: a.name }, a.name),
                 scriptNo !== null
                   ? h(
                       'span',
@@ -486,7 +488,7 @@ export function createKojoProjectsPanel(
                       `剧本${scriptNo}`,
                     )
                   : null,
-                a.name !== a.dirName ? h('span', { className: 'kp-dirname dim' }, a.dirName) : null,
+                a.name !== a.dirName ? h('span', { className: 'kp-dirname dim', title: a.dirName }, a.dirName) : null,
               ),
               // 行内动作：静息态隐去（悬停 / 键盘聚焦才显），保持口上树清爽
               h(
@@ -633,7 +635,7 @@ export function createKojoProjectsPanel(
                 onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, pDir),
               },
               h('span', { className: 'caret' }, pOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
-              h('span', { className: 'kp-project-name' }, p.name),
+              h('span', { className: 'kp-project-name', title: p.name }, p.name),
               h('span', { className: 'kp-count dim' }, `${p.artifacts.length} 包`),
             ),
             /* 项目根自己的行内新建框（UI 反馈 6 的缺陷点）：菜单把草稿指向 projectDir，
