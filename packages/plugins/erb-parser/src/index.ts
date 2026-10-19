@@ -67,3 +67,5 @@ export {
 
 // 结构化着色（B6，2026-10-16；纯函数，缓冲区文本 + 可空索引进、着色 span 出）
 export { erbSemanticTokens } from './semantic-tokens';
+// 索引扫描根的合成与签名（IDX-ROOT，2026-10-19；纯函数，零 IO）
+export { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';

@@ -10,8 +10,10 @@ import type {
   GameProject,
   LineDecoration,
   Plugin,
+  WorkspaceService,
 } from '@kojo/plugin-api';
 import { KernelServices, isErbDialectPath, projectFingerprintOf } from '@kojo/plugin-api';
+import { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
 import {
   PARSE_FILE_TASK,
   SCAN_FLOW_TASK,
@@ -74,6 +76,14 @@ import {
  * - 还原两段化（懒外壳见 `./snapshot.ts`）+ `references` 惰性聚合（首发消费才建 bySymbol）；
  * - prune 语义从"只留当前项目"改为"保留本会话工作集"（交替开项目不再互删，见
  *   `pruneStaleSnapshots` 的取舍注）。
+ *
+ * 2026-10-19 IDX-ROOT「索引根扩到作者工作区」批：
+ * 扫描根从 `project.kojoPaths` 扩成 **`kojoPaths ∪ 工作区全部根`**（`kernel.workspaces`
+ * 的 `roots()`，每次现读不缓存），作者在自己「我的口上项目」里写的定义第一次进五条
+ * 语言服务腿。根的合成/判等/签名判据全在 `./index-roots.ts`（纯函数），这里只有接线；
+ * 没有"工作区根变更"事件 ⇒ 在**既有时刻**（`ensureIndex()` / `file.changed` /
+ * `editor.activeFileChanged`）活读比对签名，变了就 `generation++` 重扫并走既有广播。
+ * 只读行为：本批不碰任何写通道，也不因扩根放宽写允许域（铁律 5/6）。
  */
 
 const IO = 'kernel.io';
@@ -143,12 +153,74 @@ export function createErbParserPlugin(): Plugin {
       let index: ErbIndex | null = null;
       /** 在途构建（并发调用 ensureIndex 时共享同一 Promise） */
       let inFlight: Promise<ErbIndex> | null = null;
-      /** 当前口上根（由 project.opened 提供） */
-      let roots: string[] = [];
+      /** 当前项目的口上根（由 project.opened 提供；**不含**工作区根——那些每次现读） */
+      let projectRoots: string[] = [];
+      /**
+       * 最近一次**起跑构建**所用的扫描根签名（`rootsSignature(planScanRoots().roots)`）。
+       * 与"当前活读出来的签名"不一致 ⇒ 根集合变了，必须重扫（判据见 `./index-roots`）。
+       */
+      let activeSignature = '';
+      /** 工作区不可用的降级只在**状态翻转**时出声一次（`file.changed` 是高频时刻，逐次刷屏即噪声） */
+      let workspaceDegradedLogged = false;
       /** 当前项目根（事件载荷用） */
       let currentRoot = '';
-      /** 代际号：项目切换时作废过期构建的结果 */
+      /** 代际号：项目切换 / 扫描根变更时作废过期构建的结果 */
       let generation = 0;
+
+      /**
+       * 作者工作区全部根（IDX-ROOT）。**每次现读、绝不缓存**：`roots()` 同步读内存数组、
+       * 零 IO，缓存一次就把"本会话刚经目录对话框授权的那个落点根"永久排除在外——
+       * 而那正是作品真正住着的地方。
+       *
+       * 不可用（无平台数据目录的浏览器开发壳 / 服务键缺席 / `roots()` 自己抛）⇒
+       * 返回 `null`，调用点**退化成只有口上根**并记一行 warn（铁律 4：不静默；
+       * 沿用本包既有的 `ctx.log` 口径，不新发明错误通道）。
+       *
+       * 刻意**不**把 `kernel.workspaces` 写进 `requires`：那条硬依赖会让工作区缺席的
+       * 环境把整个 erb-parser 打成 `inactive`（runtime 的缺依赖判据），从而**连带掐掉
+       * 五条语言服务腿与波浪线**——比"索引少扫工作区"严重一个数量级。
+       */
+      function workspaceRootsOrNothing(): string[] | null {
+        try {
+          const got = ctx.inject<WorkspaceService>(KernelServices.Workspaces).roots();
+          workspaceDegradedLogged = false;
+          return got;
+        } catch (err) {
+          if (!workspaceDegradedLogged) {
+            workspaceDegradedLogged = true;
+            ctx.log.warn(
+              `Workspace roots unavailable; the ERB index will scan only the project's kojo paths: ${String(err)}`,
+            );
+          }
+          return null;
+        }
+      }
+
+      /** 当前该扫的根（活读合成；折叠/去重判据见 `./index-roots`） */
+      function scanRootPlan(): ScanRootPlan {
+        return planScanRoots(projectRoots, workspaceRootsOrNothing() ?? []);
+      }
+
+      /**
+       * 活读比对扫描根签名：变了就**作废在途构建**（`generation++`，过期结果在收尾处
+       * 被丢弃、也不落盘）并异步重扫，收尾照常广播 `kojo.functionChanged` 让派生缓存
+       * 失效——既有机制原样复用，不新开通道、不静默。
+       *
+       * 返回是否真的起了新一轮构建（测试判据 + 调用点不必解释原因）。
+       */
+      function refreshScanRoots(): boolean {
+        // 无项目态不在本刀范围（app 无项目只渲染欢迎页，编辑器根本进不去）：
+        // `ensureIndex()` 照旧明确报"未打开项目"，这里不擅自替它建索引。
+        if (projectRoots.length === 0) return false;
+        const next = rootsSignature(scanRootPlan().roots);
+        if (next === activeSignature) return false;
+        ctx.log.info('Index scan roots changed; rebuilding the ERB index');
+        generation++;
+        void startBuild(generation).catch((err: unknown) => {
+          ctx.log.error(`Index rebuild after root change failed: ${String(err)}`);
+        });
+        return true;
+      }
 
       /**
        * 磁盘卫生：索引快照的**保留集 = 本会话工作集**（本会话构建过的各项目键）。
@@ -561,7 +633,18 @@ export function createErbParserPlugin(): Plugin {
       }
 
       function startBuild(gen: number): Promise<ErbIndex> {
-        const p = build(roots, gen, true).finally(() => {
+        // 扫描根在**起跑这一刻**定下来（含工作区根），签名必须在任何 await 之前落定：
+        // 否则在途期间的事件会拿旧签名比出"根变了"、对着同一份根再开一次全树遍历。
+        const wsRoots = workspaceRootsOrNothing();
+        const plan = planScanRoots(projectRoots, wsRoots ?? []);
+        activeSignature = rootsSignature(plan.roots);
+        const wsSide = wsRoots === null ? 'workspace unavailable' : `${wsRoots.length} workspace`;
+        ctx.log.info(
+          `Scan roots resolved: ${plan.roots.length} to walk (` +
+            `${projectRoots.length} kojo + ${wsSide}, ` +
+            `${plan.duplicated} duplicate / ${plan.nested} nested folded)`,
+        );
+        const p = build(plan.roots, gen, true).finally(() => {
           if (inFlight === p) inFlight = null;
         });
         inFlight = p;
@@ -591,10 +674,13 @@ export function createErbParserPlugin(): Plugin {
         currentIndex: () => index,
 
         async ensureIndex(): Promise<ErbIndex> {
+          // 既有时刻活读一次：会话中途经对话框授权的落点根要在这里进索引，
+          // 而不是等一条并不存在的"工作区根变更"事件（判据见 `./index-roots`）。
+          refreshScanRoots();
           if (index) return index;
           // 项目切换会立刻作废旧在途构建并替换 inFlight，因此共享 inFlight 是安全的
           if (inFlight) return inFlight;
-          if (roots.length === 0) throw new Error('No project is open; cannot build the ERB index');
+          if (projectRoots.length === 0) throw new Error('No project is open; cannot build the ERB index');
           return startBuild(generation);
         },
 
@@ -605,15 +691,16 @@ export function createErbParserPlugin(): Plugin {
         referencesTo: (name: string) => (index ? referencesOf(index, name) : []),
       };
 
-      // 响应式：项目打开 → 自动构建；项目关闭 → 清空
+      // 响应式：项目打开 → 自动构建（根 = 口上根 ∪ 工作区根，见 startBuild）；项目关闭 → 清空
       ctx.onDispose(
         ctx.bus.on('project.opened', (ev) => {
           const project: GameProject = ev.project;
           currentRoot = project.rootDir;
-          roots = [...project.kojoPaths];
+          projectRoots = [...project.kojoPaths];
           index = null;
           generation++;
-          ctx.log.info(`Project opened; indexing ${roots.length} root(s)…`);
+          activeSignature = '';
+          ctx.log.info(`Project opened; indexing (kojo roots: ${projectRoots.length})…`);
           // 不阻塞事件（构建可能数秒）；结果通过 kojo.functionChanged 广播
           void startBuild(generation).catch((err: unknown) => {
             ctx.log.error(`Index build failed: ${String(err)}`);
@@ -623,9 +710,34 @@ export function createErbParserPlugin(): Plugin {
       ctx.onDispose(
         ctx.bus.on('project.closed', () => {
           index = null;
-          roots = [];
+          projectRoots = [];
           currentRoot = '';
+          activeSignature = '';
           generation++;
+        }),
+      );
+
+      /* ---------------- 扫描根变更的"活读时刻"（IDX-ROOT，2026-10-19） ----------------
+
+       为什么不新开一条"工作区根变更"事件：授权发生在**平台命令内**（目录对话框与"写进
+       常驻可写根清单"绑成一个原子动作），JS 侧只追加写闸，压根没有可订阅的变更时刻；
+       为一条内部判据去扩契约与总线，换来的是"发起方还得记得 emit"——第二份真相。
+       于是改成在**既有时刻**活读比对签名（`refreshScanRoots`）：签名一致 ⇒ 一次同步数组
+       读 + 字符串比较就返回，绝不为"没变更"付一次全树遍历。
+
+       两个时刻各覆盖一条真实路径：
+       - `file.changed`（内核监视器）：作者刚在新授权的落点里建/存了文件；
+       - `editor.activeFileChanged`（宿主）：作者切到自己工作区那份口上文件——
+         五条语言服务腿直接读 `index` 而**不**经 `ensureIndex()`，光靠那条兜不住这一步。
+       */
+      ctx.onDispose(
+        ctx.bus.on('file.changed', () => {
+          refreshScanRoots();
+        }),
+      );
+      ctx.onDispose(
+        ctx.bus.on('editor.activeFileChanged', () => {
+          refreshScanRoots();
         }),
       );
 
