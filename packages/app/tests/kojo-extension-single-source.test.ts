@@ -61,15 +61,6 @@ const ASCII_IDENT_CLASS = /\[A-Za-z0-9_\]/;
  */
 const ASCII_IDENT_CLASS_EXEMPTIONS: ReadonlyArray<{ readonly file: string; readonly line: RegExp; readonly count: number; readonly why: string }> = [
   { file: 'packages/app/src/monaco/kojo-hover.ts', line: /^const REF_RE\b/, count: 1, why: '变量引用族名形状（本批明令不一起换）' },
-  {
-    // F12-TOKEN 2026-10-19：反查那一路的"不许放宽"从叙述升成判据——就地写明形状，
-    // 且钉住它是契约 ASCII 尺的**派生别名**（`const X = symbolTokenAt`），不是第二份字符集。
-    // 把这行换成自己手写 `/\[A-Za-z0-9_\]/`，本豁免的正则匹不上 ⇒ 上一条断言立刻红。
-    file: 'packages/app/src/monaco/kojo-hover.ts',
-    line: /^const NATIVE_ASCII_NAME_RE = symbolTokenAt;$/,
-    count: 1,
-    why: '原生名反查表路的 ASCII 尺别名（指回契约，不是抄字符集）',
-  },
   { file: 'packages/app/src/monaco/kojo-language.ts', line: /^\s*\/\[A-Za-z_\]\[A-Za-z0-9_\]\*\/,/u, count: 1, why: 'Monarch ASCII 产生式，非取词判据' },
 ];
 
@@ -296,10 +287,10 @@ describe('⑤ F12 取词判据只有一处（两条腿不许各写各的）', ()
     const token = read('packages/plugin-api/src/symbol-token.ts').join('\n');
     expect(token).toMatch(/const DEFAULT_IS_CHAR = \(ch: string\): boolean => \/\[A-Za-z0-9_\]\/\.test\(ch\);/);
     // 宿主反查那一路仍旧用这把 ASCII 尺（放宽它就会让库表回显抢掉函数索引的正文），
-    // 而且"中文原生名全是回显条目"这条判据必须**就地写明字符形状**（①组那条按行 + 处数钉住）
+    // 而且**不许**长成 Unicode 尺——把 172 行换成 `unicodeTokenAt` 时下面两条一起红。
     const hover = read('packages/app/src/monaco/kojo-hover.ts').join('\n');
-    expect(hover).toMatch(/const NATIVE_ASCII_NAME_RE = symbolTokenAt;/);
-    expect(hover).toMatch(/NATIVE_ASCII_NAME_RE\(lineText, col0 \+ 1\)/);
+    expect(hover).toMatch(/const fnToken = symbolTokenAt\(lineText, col0 \+ 1\);/);
+    expect(hover).not.toMatch(/const fnToken = unicodeTokenAt/);
     expect(hover).toMatch(/!echoYieldsToIndex\(cn, fnToken\.text, tables\)/);
   });
 });
