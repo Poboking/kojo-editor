@@ -4,15 +4,18 @@
  * 覆盖面（认得出就翻，认不出返回 `null`，**绝不原样返回**）：
  * - 赋值：`<族头>[:作用域][:索引] = 值`（`+= -= *= /=` 同形）——族头经 `lookup.familyAlias`
  *   换成中文别名（`TFLAG:193 = 1` → `时标:193 = 1`）；查不到别名就保留族头原名，**但整行仍必须
- *   是中文形**（`RESULT` / `LOCAL` 这类语言层槽位给中文显示名）；
- * - 调用：`CALL` / `CALLL` / `CALLFORM` / `TRYCALL` / `TRYCALLFORM` / `TRYJUMP` /
+ *   是中文形**（`RESULT` / `LOCAL` 这类语言层槽位给中文显示名）；左值既不是引擎族头、也不是
+ *   语言层槽位，而**形状**仍是一个引用（`服装 = 裸` / `順位 -= 1` / `CFLAG:100(%A(B)%) = 1`）时
+ *   ⇒ **载荷逐字带走，只加 `赋值` 词头**（判据与"为什么不翻"见 `isDataReference` 头注）；
+ * - 调用：`CALL` / `CALLL` / `CALLFORM` / `CALLF` / `TRYCALL` / `TRYCALLFORM` / `TRYJUMP` /
  *   `TRYGOTO` / `TRYGOTOFORM`（后两枚 = `sugar-ident` 的 `TRY_SINGLE_LINE` 单行档，
  *   **不在** ZH-C 认领的那九枚开块词里）；
  * - 位原语：`SETBIT` / `CLEARBIT` / `INVERTBIT`；
  * - 输出族：`PRINT` / `PRINTL` / `PRINTW` / `PRINTV` / `PRINTVL` / `PRINTFORM*` / `PRINTDATA*` /
  *   `PRINTSINGLE*`（已有台词投影的形态**不要重复接管**，只补 `native()` 落到的那些变体）；
- * - 排版与等待：`SETCOLOR` / `RESETCOLOR` / `FONTBOLD` / `FONTITALIC` / `FONTSIZE` / `CLEARLINE` /
- *   `FORCEWAIT` / `WAIT` / `DRAWLINE` / `BAR` / `BARL` / `REDRAW`；
+ * - 排版与等待：`SETCOLOR` / `RESETCOLOR` / `FONTBOLD` / `FONTITALIC` / `FONTSIZE` /
+ *   `FONTREGULAR` / `FONTSTYLE` / `CLEARLINE`（**带不带参数都认**）/ `HTML_PRINT` /
+ *   `FORCEWAIT` / `WAIT` / `DRAWLINE` / `BAR` / `BARL` / `REDRAW` / `VARSET`；
  * - 输入：`INPUT` / `INPUTS` / `PRINTBUTTON` / `PRINTBUTTONC`。
  *
  * 与 ZH-C 的分工：**本层只管"非块、非预处理"的行**；两条 pass 不许互相 import。
@@ -27,9 +30,14 @@
  * - 行尾节奏记号沿用投影既有语言：换行不等待 → ` 续`，等待 → ` 等待`，空体 → `空行`。
  * - 参数体（`%VAR%`、`@"…"`、函数名、数字索引）**原样照抄**——行内残留英文记号是允许的，
  *   红线只禁"整行逐字等于源行"。
+ * - **赋值不是语句**：左值查不到别名、也不是语言层槽位，但形状仍是一个引用时 ⇒ 与"数据表条目
+ *   正文逐字透传"同一档，形 = `赋值 <左值> <op> <右值>`（词头换中文、左右两侧文字一个字符不动，
+ *   只重铺运算符两侧空白；理由见 `isDataReference` 头注）。这一档**不进 `KEYWORDS`**
+ *   （显示形不承诺可写，与 `分组` / `试探` 同例）。
  * - 认不出 ⇒ `null`（`passes.ts` 负责显式兜底），宁缺勿猜。
  */
 
+import { isIdentPart, isIdentStart } from '../identifier-chars';
 import { VARIADIC_ARG_NUMERIC, VARIADIC_ARG_STRING } from '../keywords';
 import { TRY_SINGLE_LINE } from '../sugar-ident';
 import type { NativeDisplayInput, NativeDisplayLookup, NativeDisplayPass } from './types';
@@ -148,6 +156,64 @@ function renderTarget(raw: string, lookup: NativeDisplayLookup | undefined): Ren
 
 /* ==================== 赋值 ==================== */
 
+/**
+ * 「数据行左值」判据（**只看形状，不看名字**）：`服装` / `残りムシ数` / `K53_変数` /
+ * `順位` / `%MACRO%` / `CFLAG:100(%A(TARGET)%)` 这一批左值——**作者自己 `#DIM` 出来的名字、
+ * 宏名、索引里嵌了函数调用的引用**，共同点是"形状确实是给一个变量写值"。
+ *
+ * 导出只为把用例表钉死（`tests/native-display-data-line.test.ts`），**不给别处复用**——
+ * `=` 的切分仍然只有 `ASSIGN_RE` 一条、`;` 注释剥离仍然只有 `splitTrailingComment` 一条，
+ * 本函数不认运算符、不认注释，所以显示层没有长出第二份"看起来像赋值"的正则。
+ *
+ * ## 为什么不直接把 `TARGET_RE` 的族头字符类放开（这是本判据存在的唯一理由）
+ * `TARGET_RE` 的族头必须是 ASCII 标识符，因为它的产物直接喂两张**游戏层**查表：
+ * `lookup.familyAlias(族头大写)` 与 `lookup.slotCn(族头, 索引名)`。把字符类放开成任意
+ * Unicode ⇒ 作者自造名（`服装`、`残りムシ数`）会进字典查询路径去**碰运气**：查到了就翻、
+ * 查不到就原样——同一条行一会儿有中文一个叫没有，而且 `噴乳` 这类**槽位原名**与
+ * **作者变量名**在字面上再也分不开。判据换成形状而非名字，正是为了不去碰那两张表。
+ *
+ * ## 为什么不翻译（头注承诺：显示形不许承诺可写，也不许造义项）
+ * **赋值不是语句**：这一档与「数据表条目正文逐字透传」同一级——盘上那串就是作者要写进槽位的
+ * **数据**，不是本工具理解的语法。左值名由 `#DIM` / 项目约定决定，没有任何登记表能担保它的
+ * 中文义项 ⇒ **左值一个字符都不翻**；`%GET_BASESTYLE(TARGET, 表示形式)%` 这类右值是**表达式**，
+ * 反糖它就得走转译器口径（那是写侧的事，且 `keywords.ts` 的写形才承诺可写），显示层只陈述
+ * "这一行是赋值，不是工具读不懂"。词头沿用本文件已有的那条 `赋值 …`（同一把尺子、同一个叫法）：
+ * 载荷文本逐字带走，只按那条既有形重铺运算符两侧的空白（`服装=裸` → `赋值 服装 = 裸`）。
+ * 本档的右值**不再递归**：链式 `服装 = 順位 = 3` 整串留在载荷里，右值里不许长出第二个 `赋值` 词头；
+ * 翻译档（左值至少发生一次中文替换）的链式递归照旧，与本文件既有行为逐字相同。
+ */
+const MACRO_REF_RE = /^%[^%'"`\s]+%$/;
+
+export function isDataReference(raw: string): boolean {
+  const t = raw.trim();
+  if (t.length === 0) return false;
+  // `%` 起头的是**宏赋值**（`%MACRO% = 1` 同样属"给变量写值"这一档）：只认整形 `%…%`，
+  // 半截 `%` 不当宏（宁缺勿猜）。
+  if (MACRO_REF_RE.test(t)) return true;
+  // 其余引用必须从标识符起始字符开始（`identifier-chars` 单一真源：ASCII + CJK + 全角拉丁）；
+  // `$` 起头不在这里——`$` 行由 `NOT_MY_LINE_RE` 交给标签 / ZH-C 口径，本层不抢。
+  if (!isIdentStart(t[0]!)) return false;
+  let depth = 0;
+  for (const ch of t) {
+    if (ch === '(' || ch === '[') {
+      depth++; // 组内 = 索引载荷（函数调用 / 下标，可嵌套、可含空白与逗号）：逐字算，只要求配平
+      continue;
+    }
+    if (ch === ')' || ch === ']') {
+      depth--;
+      if (depth < 0) return false;
+      continue;
+    }
+    if (depth > 0) continue;
+    if (isIdentPart(ch)) continue;
+    if (ch === ':' || ch === '%' || ch === '.' || ch === '$') continue;
+    // 组外出现空白 / 引号 / 花括号 / 比较与语句分隔记号 ⇒ 不是"一个引用"
+    // （`IF A = 1` 的 `IF A`、`PRINTFORMW a = b` 的 `PRINTFORMW a` 就靠这条留在别层的口径上）
+    return false;
+  }
+  return depth === 0;
+}
+
 /** `目标[, 目标…] <op> <值>`；op ∈ `= += -= *= /=`（`==`/`<=` 这类比较不进这里） */
 const ASSIGN_RE = /^([^;=<>!]+?)\s*(\+=|-=|\*=|\/=|=)(.*)$/;
 
@@ -164,15 +230,23 @@ function renderAssignment(code: string, lookup: NativeDisplayLookup | undefined,
   let translated = false;
   for (const part of splitTopLevel(lhsRaw, ',')) {
     const t = renderTarget(part, lookup);
-    if (t === null) return null; // 左里有读不懂的目标 ⇒ 整行不认领（宁缺勿猜）
+    if (t === null) {
+      // 不是引擎族头 / 语言层槽位 ⇒ 只有在**形状**仍是数据引用时才认领（逐字带走，见 `isDataReference`）；
+      // 形状都不是引用（`IF A`、`PRINTFORMW a`…）⇒ 整行不认领（宁缺勿猜）
+      if (!isDataReference(part)) return null;
+      rendered.push(part.trim());
+      continue;
+    }
     rendered.push(t.text);
     translated ||= t.translated;
   }
 
   let rhsOut = rhs;
-  if (ASSIGN_RE.test(rhs)) {
+  // 链式 `A = B = 0` 的右值递归**只在翻译档做**：`赋值 <原文>` 那一档的载荷必须逐字，
+  // 否则右值里再长出第二个 `赋值` 词头（`赋值 服装 = 赋值 順位 = 3`）就成了谎话。
+  if (translated && ASSIGN_RE.test(rhs)) {
     const inner = renderAssignment(rhs, lookup, depth + 1);
-    if (inner !== null) rhsOut = inner; // 链式 `A = B = 0`；翻不动就原样（行内英文允许）
+    if (inner !== null) rhsOut = inner; // 翻不动就原样（行内英文允许）
   }
 
   if (translated) return `${rendered.join('，')} ${op} ${rhsOut}`;
@@ -192,11 +266,18 @@ const CALL_RE = /^(?:([A-Z][A-Z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Z][A-Z0-9_]*))$/;
  *
  * 载荷**逐字带走**（`*标签` / `$标签` / 实参串都不剥前缀）——本层所有调用形同一条口径，
  * 前缀剥离是 ZH-C 的 `GOTO` 才有的装置（它那里目标是纯标签名）。
+ *
+ * `CALLF`（盘上 245 行落兜底）按 **`按钮C` 的同一条拼法**保留区别字母：它是 `CALL` 族里
+ * 带 `F` 的那一枚（引擎内建单行语句，取证见 `packages/app/src/monaco/erb-directives.ts`
+ * 与 `tests/erb-completion-context.test.ts` 的 `CALLF FOO(1)` 实参括号形态），
+ * **我不替读者判定 `F` 改了哪一档语义**，所以既不写成 `调用` 也不写成 `调用形`，
+ * 只把词头换成 `调用F`、实参逐字带走。
  */
 const CALL_VERBS: Readonly<Record<string, { readonly verb: string; readonly tail: string }>> = {
   CALL: { verb: '调用', tail: '' },
   CALLL: { verb: '调用', tail: ' 续' },
   CALLFORM: { verb: '调用形', tail: '' },
+  CALLF: { verb: '调用F', tail: '' },
   TRYCALL: { verb: '尝试调用', tail: '' },
   TRYCALLFORM: { verb: '尝试调用形', tail: '' },
   TRYJUMP: { verb: '尝试跳转', tail: '' },
@@ -327,13 +408,24 @@ interface LayoutShape {
   readonly fixed?: string;
 }
 
+/**
+ * 登记判据（本表是**闭集**：表里没有的记号一律 `null`，与 `PRINT_SHAPES` 同一条纪律）。
+ * `CLEARLINE` 的档位从 `none` 改成 `optional`（2026-10-20 兜底归因：盘上 395 行带参数的
+ * `CLEARLINE …` 全落兜底 ⇒ 带参数的是同一条指令，参数是**载荷**、逐字带走，不是"另一条指令"）。
+ * `HTML_PRINT` / `FONTREGULAR` / `FONTSTYLE` / `VARSET` 四枚同批补登：都是引擎内建单行语句
+ * （名单与频次取证见 `packages/app/src/monaco/erb-directives.ts` 的语料词频注释），
+ * 义项只翻**词头那一枚记号**，参数一律原样照抄（`arg` 非 `none` 的档都只做"换词首"）。
+ */
 const LAYOUT_SHAPES: Readonly<Record<string, LayoutShape>> = {
   SETCOLOR: { verb: '着色', arg: 'keep' },
   RESETCOLOR: { verb: '复原颜色', arg: 'none' },
   FONTBOLD: { verb: '粗体', arg: 'onoff' },
   FONTITALIC: { verb: '斜体', arg: 'onoff' },
   FONTSIZE: { verb: '字号', arg: 'optional' },
-  CLEARLINE: { verb: '清空本行', arg: 'none' },
+  FONTREGULAR: { verb: '复原字体', arg: 'optional' },
+  FONTSTYLE: { verb: '字体样式', arg: 'optional' },
+  CLEARLINE: { verb: '清空本行', arg: 'optional' },
+  HTML_PRINT: { verb: 'HTML打印', arg: 'optional' },
   FORCEWAIT: { verb: '强制等待', arg: 'none' },
   WAIT: { verb: '等待', arg: 'none' },
   DRAWLINE: { verb: '分隔线', arg: 'optional' },
@@ -341,6 +433,7 @@ const LAYOUT_SHAPES: Readonly<Record<string, LayoutShape>> = {
   BARL: { verb: '进度条', arg: 'keep', tail: ' 续' },
   REDRAW: { verb: '重绘', arg: 'optional' },
   RETURN: { verb: '返回', arg: 'optional' },
+  VARSET: { verb: '赋值', arg: 'keep' },
   INPUT: { fixed: '输入 → 结果' },
   INPUTS: { fixed: '输入 → 结果$' },
 };
@@ -367,6 +460,14 @@ function renderLayout(code: string): string | null {
 /** 前缀即"不归本层"的整行形态：`;` 注释、`#` 预处理、`$` 标签、`[` 停用区、`@` 函数头（全在 ZH-C / 结构层） */
 const NOT_MY_LINE_RE = /^[;#$[@]/;
 
+/**
+ * `PRINT` 打头的一切行**不许进赋值档**：投影的台词形（`project.ts` 的 `printFamilyDisplay`）
+ * 是这批行的既有口径（`PRINTKONST` / `PRINTLC` / 表外变体 ⇒ `台词 · <体>`），
+ * 归因闸把 `printVariant` 钉成结构性 0 靠的就是它。表内变体在上面已由 `renderPrint` /
+ * `renderButton` 收走，这里只挡"表外 + 行里恰好有个 `=`"的漏网形状（`PRINT%s=1` 一类）。
+ */
+const PRINT_LED_RE = /^PRINT/;
+
 /** ZH-S 的入口（签名由 lead 钉死，禁止改名或加参） */
 export const renderStatementLine: NativeDisplayPass = (input: NativeDisplayInput): string | null => {
   const trimmed = input.content.trim();
@@ -379,7 +480,7 @@ export const renderStatementLine: NativeDisplayPass = (input: NativeDisplayInput
     renderPrint(code) ??
     renderButton(code) ??
     renderLayout(code) ??
-    renderAssignment(code, input.lookup, 0);
+    (PRINT_LED_RE.test(code) ? null : renderAssignment(code, input.lookup, 0));
   if (rendered === null) return null;
   const line = comment.length > 0 ? `${rendered} ${comment}` : rendered;
   return line === input.content ? null : line; // 红线自证：原样返回一律视为失败
