@@ -9,7 +9,6 @@ import type {
   EditorSaveWarning,
   ErbFile,
   ErbIndex,
-  ErbParserService,
 } from '@kojo/plugin-api';
 import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
@@ -144,6 +143,7 @@ import {
   applyTextEdits,
   disposeGlobalProviders,
   ensureGlobalProviders,
+  erbParserIndex,
   foldingCapNoticeFor,
   onFoldingCapChanged,
   releaseDirectiveWords,
@@ -591,14 +591,10 @@ export function EditorPane({
 
   /* ───────────── PS-5 面包屑：能用已索引的名录就不解析全文 ───────────── */
 
-  /** 当前项目索引（**软取**，与 hover / 函数名 / 文件事实那三条软腿同口径：未开项目、未建好、服务抛错一律当"没有"，绝不抛进光标监听） */
-  const currentErbIndex = useCallback((): ErbIndex | null => {
-    try {
-      return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-    } catch {
-      return null;
-    }
-  }, [kernel]);
+  /** 当前项目索引（**软取**）：直接吃宿主唯一那一枚 `erbParserIndex()`（与悬停 / 函数名 / 文件事实
+   *  同一份取法，ST-TAIL 2026-10-20 归一：此前这里手抄了第三份 `try + tryGet + ?? null`）。
+   *  未开项目、未建好、服务抛错一律当"没有"，绝不抛进光标监听。 */
+  const currentErbIndex = useCallback((): ErbIndex | null => erbParserIndex(kernel), [kernel]);
 
   /**
    * 从索引里取这份文件的符号表（拿不到 = null，调用方按原路解析）。

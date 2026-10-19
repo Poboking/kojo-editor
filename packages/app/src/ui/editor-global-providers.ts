@@ -125,8 +125,14 @@ const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
  * `tryGet` 与 `currentIndex` 两步都包在 try 里，调用方据此让**那一路无结果**
  * （退化可见），绝不把抛错送进悬停 / 补全 / 重命名 / 签名任何一条 seam。
  * 索引**每次现取**，不缓存（索引随项目开闭重建，缓存会把上一个项目的索引带过来）。
+ *
+ * ST-TAIL（2026-10-20）把这条腿升成**宿主唯一的 `currentIndex()` 软取**：`erbIndex`（悬停）
+ * 这一枚此前手抄了一遍同样的三行（try + tryGet + `?? null`），`EditorPane.tsx` 的面包屑那条
+ * 也抄了第三遍——一份"怎么问索引"写三处，下一次改口径就要改三处且必漏一处（同 `9bba5e6`
+ * 那批 `.kojo` 后缀手抄归一的口径）。守卫见 `ui-kojo-navigator/tests/
+ * index-state-single-source.test.ts` 第 ⑦ 组（按处数钉死，多一处即红）。
  */
-function erbParserIndex(kernel: Kernel): ErbIndex | null {
+export function erbParserIndex(kernel: Kernel): ErbIndex | null {
   try {
     return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
   } catch {
@@ -234,13 +240,7 @@ function projectSoftLegs(
     erbFileFacts: erbFileFactsFor(kernel),
     // QSUG-2：文档词开关每次补全现取（设置页一翻，下一个候选轮即生效；不用重开文件）
     wordBasedSuggestions: () => loadWordBasedSuggestionsPref(),
-    erbIndex: () => {
-      try {
-        return kernel.services.tryGet<ErbParserService>('erb.parser')?.currentIndex() ?? null;
-      } catch {
-        return null;
-      }
-    },
+    erbIndex: () => erbParserIndex(kernel),
   };
 }
 

@@ -281,7 +281,7 @@ describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开�
  * 手法照第 ⑥ 组：这一组**不接任何东西**，它把"为什么这两格不该出声"钉成可复跑的判据，
  * 于是"交回"不是一个口头结论，而是一改动就红的闸。实测出处（本批写死在下面各行里）：
  *
- * - **补全**：索引派生那条腿 `erbFunctionNames`（装配点 `editor-global-providers.ts:233`，
+ * - **补全**：索引派生那条腿 `erbFunctionNames`（装配点 `editor-global-providers.ts:239`，
  *   提供者 `:257` 返回类型是 `() => readonly string[]`——**没有 `undefined` 这一支**），
  *   而装配核报降级的唯一入口 `missingRequirement`（`completion-core.ts:405`）只认
  *   `undefined` / `null` ⇒ 索引未建时**一条降级都不产生**；`erb-completion.ts:468`
@@ -291,11 +291,12 @@ describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开�
  *   （`erb-completion.ts:394`「挂上会让每轮补全都报一次降级信号」），且 `console.warn`
  *   在桌面壳里看不见（`editor-global-providers.ts:443` 那条折痕取证）。⇒ 没有作者读得到的
  *   那一格 ⇒ 交回，且**不许为它新造一格**。
- * - **面包屑**：`EditorPane.tsx:595 currentErbIndex()` 只是**快路**（②）与缓存戳；索引缺席
- *   时走④**现解析**那条腿（`EditorPane.tsx:1933`），而供方的 documentSymbol 判的是
+ * - **面包屑**：`EditorPane.tsx:597 currentErbIndex()`（本批归一：它就是那一枚
+ *   `erbParserIndex()`）只服务**快路**（②）与缓存戳；索引缺席
+ *   时走④**现解析**那条腿（`EditorPane.tsx:1929`），而供方的 documentSymbol 判的是
  *   `request.text` 现文本（`erb-parser/src/plugin.ts:1004`）⇒ **"链空了"与索引无关**，
  *   把 phase 文案接在这里等于把"没面包屑"污蔑成"索引的锅"。空链那一格今天整条不渲染
- *   （`breadcrumb-bar.tsx:52`），渲染点也没有空态元素（`EditorPane.tsx:2558`）。⇒ 交回。
+ *   （`breadcrumb-bar.tsx:52`），渲染点也没有空态元素（`EditorPane.tsx:2554`）。⇒ 交回。
  */
 describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一格 ⇒ 红）', () => {
   const PROVIDERS = 'packages/app/src/ui/editor-global-providers.ts';
@@ -375,6 +376,25 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
       .flatMap((rel) => hits(rel, /INDEX_PHASE_COPY/));
     expect(elsewhere, elsewhere.join('\n')).toEqual([]);
     expect(hits(TABLE, /INDEX_PHASE_COPY/)).toHaveLength(2); // 定义 1 + 查表 1
+  });
+
+  it('这两格里"问索引"只有一枚软取（本批归一的手抄：`currentIndex()` 在这两文件合计 1 处，就在 `erbParserIndex` 体内；再抄一遍 try/tryGet ⇒ 红）', () => {
+    const takes = [PROVIDERS, PANE].flatMap((rel) => hits(rel, /\.currentIndex\(\)/));
+    expect(takes, takes.join('\n')).toHaveLength(1);
+    expect(hits(PROVIDERS, /export function erbParserIndex\(kernel: Kernel\): ErbIndex \| null \{/)).toHaveLength(1);
+    expect(hits(PROVIDERS, /erbIndex: \(\) => erbParserIndex\(kernel\),/)).toHaveLength(1);
+    expect(hits(PANE, /const currentErbIndex = useCallback\(\(\): ErbIndex \| null => erbParserIndex\(kernel\), \[kernel\]\);/)).toHaveLength(1);
+  });
+
+  it('那张表的**列是闭集**（既有三通道那一列宽；给补全 / 面包屑添一列 = 先把不存在的那一格写进表）', () => {
+    const cols = [
+      ...new Set(
+        hits(TABLE, /readonly [a-zA-Z]+:/)
+          .flatMap((h) => [...h.matchAll(/readonly ([a-zA-Z]+):/g)])
+          .map((m) => m[1] as string),
+      ),
+    ];
+    expect(cols.sort()).toEqual(['blocked', 'ledger', 'withError', 'ws']);
   });
 
   it('扫描面**只增不减**（把本批这两格从 ⑤ 的清单里划掉 ⇒ 这条红；标题那句文件数也得对得上）', () => {
