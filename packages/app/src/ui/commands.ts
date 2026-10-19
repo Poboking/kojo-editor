@@ -127,6 +127,17 @@ export function commandEnabled(cmd: CommandEntry, ctx: EditorCommandContext): bo
   }
 }
 
+/**
+ * 与运行环境区域设置无关的稳定序。
+ *
+ * 中文标题走 `localeCompare` 会把顺序交给宿主 ICU：装了完整 locale 的机器按拼音排，
+ * 没有的（CI、部分精简运行时）退回码点排 ⇒ 同一份命令表在两台机器两种顺序，
+ * 作者记住的位置不可靠，测试也必然只在一边绿。区域设置不参与产品判据，这里只认码点。
+ */
+export function byCodePoint(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** 命令面板的过滤（大小写不敏感子串；空串返回全部，按 category+title 稳定排序） */
 export function filterCommands(commands: readonly CommandEntry[], query: string): CommandEntry[] {
   const q = query.trim().toLowerCase();
@@ -136,8 +147,8 @@ export function filterCommands(commands: readonly CommandEntry[], query: string)
   return matched.sort((a, b) => {
     const ca = a.category ?? '';
     const cb = b.category ?? '';
-    if (ca !== cb) return ca.localeCompare(cb);
-    return a.title.localeCompare(b.title);
+    if (ca !== cb) return byCodePoint(ca, cb);
+    return byCodePoint(a.title, b.title);
   });
 }
 

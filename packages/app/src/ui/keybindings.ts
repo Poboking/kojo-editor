@@ -3,6 +3,7 @@ import {
   parseKeybinding,
   chordEquals,
   formatKeybinding,
+  byCodePoint,
   type KeyChord,
   type CommandEntry,
 } from './commands';
@@ -328,9 +329,9 @@ function compareRows(a: KeybindingRow, b: KeybindingRow): number {
   const ra = categoryRank(a.category);
   const rb = categoryRank(b.category);
   if (ra !== rb) return ra - rb;
-  // 同位次只可能是「都没登记的不同分类」，否则就是同一分类 ⇒ 按中文序
-  if (a.category !== b.category) return a.category.localeCompare(b.category, 'zh');
-  return a.title.localeCompare(b.title, 'zh');
+  // 同位次只可能是「都没登记的不同分类」，否则就是同一分类 ⇒ 按码点序（不用 localeCompare，理由见 commands.ts）
+  if (a.category !== b.category) return byCodePoint(a.category, b.category);
+  return byCodePoint(a.title, b.title);
 }
 
 /**

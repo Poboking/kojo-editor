@@ -312,13 +312,13 @@ describe('buildKeybindingRows 排序', () => {
     expect(seen).toEqual([...KEYBINDING_CATEGORY_ORDER, '归档']);
   });
 
-  it('同分类内按标题排（与比较器同一口径，不写死名字）', () => {
+  it('同分类内按码点排（与比较器同一口径，不写死名字，也不随运行环境区域设置漂移）', () => {
     for (const category of KEYBINDING_CATEGORY_ORDER) {
       const titles = buildKeybindingRows(allCommands())
         .filter((r) => r.category === category)
         .map((r) => r.title);
       for (let i = 1; i < titles.length; i++) {
-        expect(titles[i - 1]!.localeCompare(titles[i]!, 'zh')).toBeLessThanOrEqual(0);
+        expect(titles[i - 1]! <= titles[i]!).toBe(true);
       }
     }
   });

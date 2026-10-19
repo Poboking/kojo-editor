@@ -36,10 +36,10 @@ const paletteHtml = (): string =>
 describe('commandRows · 分类从主行搬到分组标签', () => {
   it('主行只剩标题、分组标签取注册表的 category（不再拼进标题文本）', () => {
     const rows = commandRows(commandItems(CMD, '', CTX), CMD);
-    // 类内次序仍是 `filterCommands` 那条（title.localeCompare），本批一行未动
-    expect(rows.map((r) => r.primary)).toEqual(['切换写作模式', '关闭全部', '全部保存']);
-    expect(rows.map((r) => r.group)).toEqual(['布局', '工作台', '工作台']);
-    expect(rows.map((r) => r.key)).toEqual(['layout.toggleZen', 'workbench.closeAll', 'workbench.saveAll']);
+    // 类内次序仍是 `filterCommands` 那条（码点序，见 commands.ts 的 byCodePoint 理由），本批一行未动
+    expect(rows.map((r) => r.primary)).toEqual(['全部保存', '关闭全部', '切换写作模式']);
+    expect(rows.map((r) => r.group)).toEqual(['工作台', '工作台', '布局']);
+    expect(rows.map((r) => r.key)).toEqual(['workbench.saveAll', 'workbench.closeAll', 'layout.toggleZen']);
   });
 
   it('无分类的命令原样通过（不硬造一个分组）', () => {
