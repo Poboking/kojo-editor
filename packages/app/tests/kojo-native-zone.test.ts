@@ -51,8 +51,10 @@ describe('classifyKojoLine · 行类判据与转译器同一份', () => {
     expect(classifyKojoLine('    @FUNC').kind).toBe('rawBlockStart');
   });
 
-  it('`#DIM` 不在行级原生判据内（预处理行只由 `@` 块携带）；糖行 / 注释 / 空白各归其类', () => {
-    expect(classifyKojoLine('#DIM X').kind).not.toBe('rawLine');
+  it('`#DIM` 族是行级原生直通行（写形即逐字节透传，不再只由 `@` 块携带）；糖行 / 注释 / 空白各归其类', () => {
+    expect(classifyKojoLine('#DIM X').kind).toBe('rawLine');
+    expect(classifyKojoLine('#DIMS X, 3').kind).toBe('rawLine');
+    expect(classifyKojoLine('#DEFINE X 1').kind).toBe('rawLine');
     expect(classifyKojoLine('#DIM X').kind).not.toBe('rawBlockStart');
     expect(classifyKojoLine('调用 某函数').kind).not.toBe('rawLine');
     expect(classifyKojoLine('; 注释').kind).toBe('comment');

@@ -129,13 +129,16 @@ function resolveRules(options: FormatRuleOptions | undefined): ResolvedRules {
  * 不做行内注释剥离、也不进缩进探测的行类。
  * 判据逐字来自 `classifyLine`：`text` / `heartText` 是台词与心形行（`;` 是要打印的字符）、
  * `rawLine` 是 ERB 原文（inline `;` 的语义在那边另有一套，判不准就不动）、
- * `comment` 整行都是注释、`blank` 无内容、`rawBlockStart` 走原生块通路。
+ * `comment` 整行都是注释、`blank` 无内容、`rawBlockStart` 走原生块通路，
+ * `skipStart` / `skipEnd` 是停用区的成对标记——块体逐字节进产物，标记行自身也在区内。
  */
 const NO_INLINE_COMMENT = new Set<LineClass['kind']>([
   'blank',
   'comment',
   'rawLine',
   'rawBlockStart',
+  'skipStart',
+  'skipEnd',
   'text',
   'heartText',
 ]);
@@ -483,7 +486,11 @@ function newContents(text: string, dialect: FormatDialect, rules: ResolvedRules)
       cls = null; // 分类抛错 = 判不准 ⇒ 这一行整条不动
     }
     if (cls?.kind === 'rawBlockStart') inRawBlock = true;
+    if (cls?.kind === 'skipStart') inRawBlock = true; // 停用区起点：区内一行都不折
     entries.push({ logical, cls, raw: inRawBlock });
+    // 与 `@` 原生块不同，停用区有成对的尾记号：落完 `skipEnd` 必须把区关掉，否则区会一路骑到
+    // 文件尾，把配对标记**之后**的正常糖行也不再排版（未配对时照 ERB 语义吃到 EOF，由 parser 报 warning）。
+    if (cls?.kind === 'skipEnd') inRawBlock = false;
   }
 
   const unit = detectIndentUnit(entries);

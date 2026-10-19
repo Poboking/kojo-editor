@@ -335,6 +335,16 @@ export function codegen(
     em.push(0, `; 常量 ${node.name} = ${node.value}（编译期展开为字面量，不占引擎全局名）`, node.loc.start.line);
   }
 
+  // ---- 文件级原生直通行（`#DIM` 族声明一类，词法层命中原生直通即落 `rawLine`）----
+  // 这批行由 `lexer.classifyLine` 判定为原生直通（`DIM_DIRECTIVE_RE` 与上游同源），
+  // `text` 是**整行原文**——这里只做一件事：按源顺序在文件头区逐字节落回产物，一个字符不改。
+  // 过去这类顶层 `rawLine` 既不进正文也不被主循环渲染 = **静默丢弃**（违内核不静默铁律 4）；
+  // 现在补上发射口，`#DIM` 的 `.kojo` 写形因此能回转成逐字节相同的 ERB。
+  for (const node of topLevel) {
+    if (node.kind !== 'rawLine') continue;
+    em.push(0, node.text, node.loc.start.line, verbatimRow(em, node));
+  }
+
   // ---- 头部：登记函数 + 开关（规范 §5.5 三件套之登记/开关）----
   emitRegistration(em, fm, charNo, familySeg, opts.faceTable, opts.sink);
 

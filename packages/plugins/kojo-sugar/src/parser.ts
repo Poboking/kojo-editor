@@ -392,6 +392,19 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       continue;
     }
 
+    // ---- 成对停用块（`[SKIPSTART]` … `[SKIPEND]`；引擎不编译的死区）----
+    // 与 `@` 原生块同一命运：整块逐字节透传，落进产物的原生块区。块里的 `@` 定义 / `#` 声明
+    // 都是死区正文，**不该**再各自开一枚原生块把后面的糖行吞掉（旧兜底走文本行更是把死区打印给玩家）。
+    if (cls.kind === 'skipStart') {
+      topLevel.push(readSkipBlock(cursor));
+      continue;
+    }
+    if (cls.kind === 'skipEnd') {
+      cursor.next();
+      topLevel.push(straySkipEnd(line));
+      continue;
+    }
+
     // ---- 顶层其它（原生行 / 意外内容）----
     if (cls.kind === 'rawLine') {
       cursor.next();
@@ -625,6 +638,62 @@ function readRawFunctionBlock(cursor: Cursor): RawFunctionBlock {
     lines: rawLines,
     loc: { start: { line: first.line, column: 1 }, end: { line: last.endLine, column: 1 } },
   };
+}
+
+/* ------------------------------ 成对停用块（`[SKIPSTART]` … `[SKIPEND]`） ------------------------------ */
+
+/**
+ * 读取成对停用块：从 `[SKIPSTART]` 行起，**逐行原文**吃到配对的 `[SKIPEND]` 或文件尾，
+ * 产一枚现成的 `rawFunctionBlock` 节点 —— 引擎把这一整段当**不编译的死区**，转译器就没有
+ * 任何资格解释它：不降糖、不剥注释、不折行、不归缩进。复用 `@` 块那条 `em.pushRaw` 通路，
+ * `codegen` / `formatter` 一侧零改动（发射手径本就"整块逐字节透传"）。
+ *
+ * 收束判定**不在此重抄记号字面量**：拿 `classifyLine` 的产物（严格等值那一支）配对，
+ * 词形唯一真源仍是 `lexer.ts`——与 `consumeEnd` 同一口径。
+ *
+ * 未配对 = 头写到文件尾（语料里合法：区段本来就是"到结尾都停用"）。**不静默**：整段照实
+ * 产出（一个字节不丢）**并且**报 `unclosed-block` warning，让作者在面板上看得到这块的尾没回来。
+ *
+ * `head` 只在调用方**已消费过头行**时传（`buildStandaloneNode` 一侧）；`buildDoc` /
+ * `parseStatement` 一侧头行还在游标上，由本函数自己取——两种消费契约在这条线上本就并存
+ * （`parseIfBlock` vs `parseIfBlockFromClass`），这里用一枚可省参数收住，不写第二份循环。
+ */
+function readSkipBlock(cursor: Cursor, head?: LogicalLine): RawFunctionBlock {
+  const first = head ?? cursor.next()!;
+  const rawLines: string[] = [first.text];
+  let last = first;
+  let closed = false;
+  while (!cursor.done) {
+    const line = cursor.peek()!;
+    rawLines.push(line.text);
+    last = line;
+    cursor.next();
+    if (classifyLine(line).kind === 'skipEnd') {
+      closed = true;
+      break;
+    }
+  }
+  if (!closed) {
+    cursor.sink.report({
+      code: 'unclosed-block',
+      severity: 'warning',
+      message: '「[SKIPSTART]」一直到文件尾都没有等到「[SKIPEND]」——整段按停用区原样透传（未丢一行）。',
+      loc: { line: first.line, column: first.rawIndent.length + 1 },
+    });
+  }
+  return {
+    kind: 'rawFunctionBlock',
+    lines: rawLines,
+    loc: { start: { line: first.line, column: 1 }, end: { line: last.endLine, column: 1 } },
+  };
+}
+
+/**
+ * 落单的 `[SKIPEND]`（无头）：不是块头、不崩、也不丢字节——按原生直通行逐字带走
+ * （判据与上游一致：尾记号自己不开区，区段归零，它只是文件里一行真实存在的 ERB 文本）。
+ */
+function straySkipEnd(line: LogicalLine): RawLine {
+  return { kind: 'rawLine', text: contentOf(line), loc: spanOf(line) } as RawLine;
 }
 
 /* ------------------------------ 时机块 ------------------------------ */
@@ -1086,6 +1155,13 @@ class BlockParser {
         );
         return null;
       }
+      case 'skipStart':
+        // 停用块写在时机正文里：与顶层同一条通路（头行未消费 ⇒ `readSkipBlock` 自己取），
+        // 块体逐字节透传，缩进在这个语境里没有含义（ERB 本就不靠缩进）。
+        return readSkipBlock(this.cursor);
+      case 'skipEnd':
+        this.cursor.next();
+        return straySkipEnd(line);
       case 'rawLine': {
         this.cursor.next();
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
@@ -1666,6 +1742,11 @@ class BlockParser {
         };
       case 'singleIfHead':
         return this.parseSingleIfStatement(line, cls);
+      case 'skipStart':
+        // 候选 / 条目体位置的停用块：调用方**已**消费头行 ⇒ 把 `line` 显式交进去（同一份循环）。
+        return readSkipBlock(this.cursor, line);
+      case 'skipEnd':
+        return straySkipEnd(line);
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'settle':
