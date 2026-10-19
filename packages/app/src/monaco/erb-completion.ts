@@ -391,7 +391,9 @@ const FAMILIES_SOURCE: ErbCompletionSource = {
 /**
  * `#DIM` 声明名补全（EC-DECL）：唯一数据来源 = `erbFileFacts` 解析器通道（内核索引事实）。
  * 刻意**不挂 `requires`**：`erbFileFacts` 缺席是"宿主未注入通道"的正常态（不是 adapter 表
- * 缺席），挂上会让每轮补全都报一次降级信号；通道缺席 / 未索引 ⇒ 零候选即正确语义（不回退）。
+ * 缺席），挂上会让每轮补全都报一次降级信号。两态口径（判据单源在 `erb-completion-declared`）：
+ * 索引**有意见**（数组，含空表）就以它为准、不与缓冲区合并；`undefined`（未索引 / 通道缺席 /
+ * `.kojo` 根本不在 ERB 索引里）才回退到当前缓冲区的 `#DIM` 扫描。
  */
 const DECLARED_SOURCE: ErbCompletionSource = {
   id: 'erb-declared',
