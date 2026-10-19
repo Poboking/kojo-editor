@@ -15,8 +15,10 @@
 
    版式：`.welcome-scroll`（flex 列 + overflow:auto）里一枚 `.welcome-stage`
    以 `margin: auto 0` 上下居中（矮窗时 auto 边距归零、滚动区上内边距给装饰标签
-   留净空，顶部永不被裁）；卡片两栏（左：品牌 / 启动 / 最近；右：教程），
-   窄窗（<900px）折成单栏。动效一律走全局 `data-motion='reduced'` /
+   留净空，顶部永不被裁）；卡片两栏（左：品牌 / 启动 / 最近；右：教程 + 写法对照
+   样例），窄窗（<900px）折成单栏。2026-10-26 首屏呼吸批：外边距与栏间距收小、
+   最近列表限高内滚（168px）、「移除」收进行 hover/focus（键盘可达）、右栏补
+   `.kojo → ERB` 静态对照样例配平留白。动效一律走全局 `data-motion='reduced'` /
    `prefers-reduced-motion` 压平规则（styles.css），本文件不另设开关；
    颜色 100% 取 token，主题可翻。
    ============================================================================ */
@@ -68,16 +70,23 @@
   flex-direction: column;
   align-items: center;
   overflow: auto;
-  padding: 48px 36px;
+  /* 首屏呼吸：默认窗口 1280×840 下让品牌 + 主 CTA +「继续上次会话」不必滚动即可见 */
+  padding: 28px 32px;
 }
 
 /* 居中单元：宽度即卡片尺寸（min(1120px, 100%)），本身不画任何东西。
    `flex: none`：列向 flex 里默认 flex-shrink:1 会试图把舞台压矮，卡片内容就会
-   溢出而不是让滚动区出滚——关掉收缩，矮窗才能正常向下滚。 */
+   溢出而不是让滚动区出滚——关掉收缩，矮窗才能正常向下滚。
+   首屏呼吸：`max-height:100%` 把卡片钉在滚动区可视高内（内容更长时由两栏
+   各自内滚，见下方 .welcome-main / .welcome-side 的 overflow-y），整卡不再撑出
+   视口；矮窄窗（<900px 断点）撤销限高，恢复整页滚动。 */
 .welcome-stage {
   position: relative;
   flex: none;
+  display: flex;
+  flex-direction: column;
   width: min(1120px, 100%);
+  max-height: 100%;
   margin: auto 0;
   animation: welcome-rise var(--dur-3) var(--ease-spring);
 }
@@ -122,6 +131,7 @@
   z-index: 1;
   width: 100%;
   max-width: none;
+  min-height: 0;
   margin: 0;
   padding: 0;
   display: grid;
@@ -145,21 +155,26 @@
 
 .welcome-main {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 30px;
-  padding: 44px 48px 40px;
+  gap: 22px;
+  padding: 36px 44px 32px;
+  /* 卡片被舞台限高后，左栏在卡内自己滚（首屏之外的内容不再是"整页滚"） */
+  overflow-y: auto;
 }
 
 .welcome-side {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: 44px 32px 40px;
+  padding: 36px 28px 32px;
   border-left: 1px solid var(--border-subtle);
   border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
   background: linear-gradient(180deg, var(--hover-soft), transparent 42%);
+  overflow-y: auto;
 }
 
 /* ------------------------------ 品牌头 ------------------------------ */
@@ -298,16 +313,19 @@
 /* ------------------------------ 最近 ------------------------------ */
 
 .welcome-screen .welcome-clear {
-  padding: 2px 0;
+  /* 命中区放大到 ≥24px 高（旧 48×20 低于可用下限）；底色只在悬停时给，保持弱化 */
+  min-height: 24px;
+  padding: 2px 10px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   color: var(--fg-dim);
   font-size: var(--fs-1);
 }
 
 .welcome-screen .welcome-clear:hover {
-  background: none;
+  background: var(--hover);
   border-color: transparent;
   color: var(--accent-text);
 }
@@ -325,7 +343,8 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 264px;
+  /* 限高内滚（首屏呼吸）：约 4 行可见，更多在列表内部滚，不把整页撑出视口 */
+  max-height: 168px;
   overflow: auto;
   border-top: 1px solid var(--border-subtle);
 }
@@ -418,21 +437,46 @@
   color: var(--warning);
 }
 
+/* 「移除」降噪（用户反馈）：常驻 6 个按钮抢主操作的焦点 ⇒ 平时收隐，只在行
+   hover / 键盘 focus-within 时显现。保留占位（只动 opacity）不引发布局抖动；
+   隐藏时 pointer-events:none 防误点，但按钮仍在 Tab 序上——焦点一到行内即因
+   :focus-within 显现，键盘可达；可访问名由 aria-label 供给，不依赖可见文本。 */
 .welcome-screen .welcome-recent-remove {
   flex: none;
-  padding: 3px 8px;
+  min-width: 40px;
+  min-height: 24px;
+  padding: 2px 8px;
   background: none;
   border-color: transparent;
   box-shadow: none;
   color: var(--fg-dim);
   font-size: var(--fs-0);
   border-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+
+.welcome-recent-row:hover .welcome-recent-remove,
+.welcome-recent-row:focus-within .welcome-recent-remove {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .welcome-screen .welcome-recent-remove:hover {
   color: var(--danger);
   border-color: var(--border);
   background: var(--hover);
+}
+
+.welcome-screen .welcome-recent-remove:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline-offset: 1px;
 }
 
 /* 最近文件行（MM-7）：左列 = 文件名（主色）+ 完整路径（dim 小字）两行叠放；
@@ -585,6 +629,78 @@
   transform: translateX(2px);
 }
 
+/* ------------------------------ 写法对照样例（右栏 · 身份感） ------------------------------ */
+
+/* 静态的「.kojo → ERB」最小对照：一眼讲清"你写中文口上、工具翻成游戏指令"。
+   不上壁纸、不做动画；配色全部取 token（kw=accent-text、ERB 指令=warning、
+   正文=fg），三套主题同一口径。窄栏内代码行允许横向滚动（overflow-x:auto）。 */
+.welcome-sample {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.welcome-sample-caption {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+}
+
+.welcome-sample-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.welcome-sample-tag {
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+}
+
+.welcome-sample-code {
+  margin: 0;
+  color: var(--fg);
+  font-family: var(--font-code);
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.welcome-sample-kw {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.welcome-sample-said {
+  color: var(--fg);
+}
+
+.welcome-sample-erb {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.welcome-sample-flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+
+.welcome-sample-flow-arrow {
+  color: var(--accent-text);
+}
+
 .welcome-side-foot {
   margin: auto 0 0;
   padding-top: var(--space-4);
@@ -658,16 +774,30 @@
   margin-top: var(--space-2);
 }
 
-/* ------------------------------ 窄窗 ------------------------------ */
+/* ------------------------------ 窄窗 / 矮窗 ------------------------------ */
+
+/* 矮窗（高 <700px）与窄窗（宽 <900px）撤销"卡片钉 viewport + 分栏内滚"：
+   折成一栏后内滚两段反而割裂，恢复旧的整页滚动行为。 */
+@media (max-height: 700px) {
+  .welcome-stage {
+    max-height: none;
+  }
+
+  .welcome-main,
+  .welcome-side {
+    overflow-y: visible;
+  }
+}
 
 @media (max-width: 900px) {
   /* 窄窗收边距：卡片可用宽 = 视口 - 32px，与旧断点同口径 */
   .welcome-scroll {
-    padding: 44px 16px;
+    padding: 24px 16px;
   }
 
   .welcome-stage {
     width: min(760px, 100%);
+    max-height: none;
   }
 
   .welcome-screen .welcome-card {
@@ -676,6 +806,7 @@
 
   .welcome-main {
     padding: 32px 28px 28px;
+    overflow-y: visible;
   }
 
   .welcome-side {
@@ -683,6 +814,7 @@
     border-left: none;
     border-top: 1px solid var(--border-subtle);
     border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    overflow-y: visible;
   }
 
   .welcome-side-foot {
@@ -692,7 +824,7 @@
 
 @media (max-width: 560px) {
   .welcome-scroll {
-    padding: 42px 16px;
+    padding: 24px 16px;
   }
 
   .welcome-screen .welcome-close {

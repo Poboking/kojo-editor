@@ -437,6 +437,7 @@ export function WelcomeView({
                             className="welcome-recent-remove"
                             onClick={() => onRemoveRecent(r.rootDir)}
                             title={`从列表移除：${r.rootDir}`}
+                            aria-label={`从列表移除：${r.rootDir}`}
                           >
                             移除
                           </button>
@@ -533,6 +534,35 @@ export function WelcomeView({
                   </button>
                 ))}
               </div>
+
+              {/* 身份感样例（静态展示，不依赖项目/内核）：一页讲清「作者写中文口上、
+                  工具翻成游戏 ERB」——这就是「结构感知」的日常收益。用词（kojo / 口上 /
+                  ERB 指令名）属跨游戏通用术语与引擎级词汇，解耦口径同 TAGLINE。 */}
+              <figure className="welcome-sample">
+                <figcaption className="welcome-sample-caption">你写中文口上，工具自动翻成游戏读的指令：</figcaption>
+                <div className="welcome-sample-pane">
+                  <span className="welcome-sample-tag">你写的 .kojo</span>
+                  <pre className="welcome-sample-code">
+                    <span className="welcome-sample-kw">如果</span>
+                    {' 她的好感度 >= 50：\n    '}
+                    <span className="welcome-sample-said">「欢迎回来。」</span>
+                  </pre>
+                </div>
+                <div className="welcome-sample-flow" aria-hidden="true">
+                  <span className="welcome-sample-flow-arrow">↓</span>
+                  <span>自动编译</span>
+                </div>
+                <div className="welcome-sample-pane">
+                  <span className="welcome-sample-tag">游戏读的 ERB</span>
+                  <pre className="welcome-sample-code">
+                    <span className="welcome-sample-erb">IF</span>
+                    {' CFLAG:TARGET:好感度 >= 50\n  '}
+                    <span className="welcome-sample-erb">PRINTFORMW</span>
+                    {' 欢迎回来。\n'}
+                    <span className="welcome-sample-erb">ENDIF</span>
+                  </pre>
+                </div>
+              </figure>
 
               <p className="welcome-side-foot">
                 教程浮层不依赖已打开的项目：按 <kbd>Esc</kbd> 或点遮罩即可关闭。同一组入口也常驻在「我的口上项目」面板底部。

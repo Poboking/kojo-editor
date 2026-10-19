@@ -98,6 +98,21 @@ describe('欢迎页 · 内容面不缩水', () => {
     expect(html).toContain('清除全部');
   });
 
+  it('移除按钮降噪仍在约：平时收隐（CSS hover/focus 显现），可访问名不依赖可见文本', () => {
+    const html = render();
+    // 按钮留在 DOM 与 Tab 序里（键盘可达），只是样式上 hover/focus-within 才显现
+    expect(html).toContain('class="welcome-recent-remove"');
+    expect(html).toContain('aria-label="从列表移除：C:\\Game\\eraTW"');
+  });
+
+  it('右栏身份感样例在：.kojo 写法与 ERB 编译产物同屏对照', () => {
+    const html = render();
+    expect(html).toContain('welcome-sample');
+    expect(html).toContain('如果');
+    expect(html).toContain('CFLAG:TARGET:好感度');
+    expect(html).toContain('ENDIF');
+  });
+
   it('无最近项目时给空态文案（不出现路径行）', () => {
     const html = render({ recent: [] });
     expect(html).toContain('welcome-empty');
