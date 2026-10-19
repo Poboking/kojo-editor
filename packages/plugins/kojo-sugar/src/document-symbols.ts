@@ -9,7 +9,8 @@ import type {
   TimingBlock,
   WhenBranch,
 } from '@kojo/plugin-api';
-import type { RulePoolBlock, RulePoolBranch } from './parser';
+import type { LoopBlock, RulePoolBlock, RulePoolBranch } from './parser';
+import type { HeartBlock } from './types';
 
 /**
  * `.kojo` 文档 → 大纲（B3）。
@@ -98,8 +99,8 @@ function childSymbol(name: string, loc: SugarSourceSpan, body: readonly SugarNod
   return finish({ name, kind: 'block', ...rangeOf(loc, body), children: symbolsOfNodes(body) });
 }
 
-/** 节点 → 大纲项（非结构节点返回 null）；`RulePoolBlock` 是转译器内部节点，同 `codegen` 的 `emitStatement` 口径并入入参类型 */
-function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock): EditorDocumentSymbol | null {
+/** 节点 → 大纲项（非结构节点返回 null）；`RulePoolBlock` / `HeartBlock` / `LoopBlock` 是转译器内部节点，同 `codegen` 的 `emitStatement` 口径并入入参类型 */
+function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock | HeartBlock | LoopBlock): EditorDocumentSymbol | null {
   switch (node.kind) {
     case 'timingBlock': {
       const detail = timingDetail(node);
@@ -173,6 +174,24 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock): EditorD
         children: node.branches.map((branch, i) =>
           childSymbol(rulePoolBranchName(branch, i), branch.loc, branch.body),
         ),
+      };
+    case 'heartBlock':
+      // `心形：` 连续块（转译器内部 AST 节点，不进契约闭集——同 `rulePoolBlock`）。块体只许文本行
+      // 与注释，两者按顶层同一判据都不进大纲 ⇒ 本族**只有一枚叶子**。块体混进语句时 parser 已报
+      // error 进 `diagnostics`（codegen 据此一条字节都不产），大纲不重复判也不跟着静默：
+      // 源码确实写了这一行块头，导航就该指得到它。
+      return { name: '心形', kind: 'block', ...rangeOf(node.loc, node.body) };
+    case 'loopBlock':
+      // `循环 …：`（转译器内部 AST 节点，不进契约闭集——同 `rulePoolBlock`）。形状照 `groupBlock`：
+      // 块本身一枚 + 块体里每族各成子项——循环体内的 `如果` / `分支：` 此前整族不可见。
+      // 区间含**收束行**（`parser.ts::parseLoopBlock` 把消费掉的 `循环结束` 记进 `loc`）：这一族
+      // 写了收束词就要连它一起折，不许把尾巴留在折叠外（`出错处理` / `数据表` 登记时照此办理）。
+      // 模态（`FOR` / `WHILE` / `REPEAT` / `DO`）不进名称：大纲按族给名，与 `随机` / `组` 同一口径。
+      return {
+        name: '循环',
+        kind: 'block',
+        ...rangeOf(node.loc, node.body),
+        children: symbolsOfNodes(node.body),
       };
     case 'ifExpr':
     case 'whenExpr': {

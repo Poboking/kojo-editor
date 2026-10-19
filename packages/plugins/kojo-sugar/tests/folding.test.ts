@@ -77,6 +77,30 @@ describe('kojo-sugar · 折叠区间（foldingRange）', () => {
     for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
   });
 
+  it('心形：与 循环：各成区间（登记进大纲即登记进折叠——同一棵树）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    心形：', // 3
+      '        「甲」', // 4
+      '        她侧过身。', // 5
+      '    循环 计数 I 从 0 到 2：', // 6
+      '        「乙」', // 7
+      '        如果 教養 > 30：', // 8
+      '            「丙」', // 9
+      '    循环结束', // 10
+      '    循环 3 次：', // 11
+      '        「丁」', // 12
+      '',
+    ].join('\n');
+    const list = ranges(src);
+    expect(has(list, 3, 5)).toBe(true); // 心形：块头行 → 文本行末行（这一族没有收束词）
+    expect(has(list, 6, 10)).toBe(true); // 循环：**含收束行** 6..10（折起来要把 `循环结束` 一起藏掉）
+    expect(has(list, 8, 9)).toBe(true); // 循环体里的 如果 也成区间（此前整族不可见）
+    expect(has(list, 11, 12)).toBe(true); // 没写收束行的那一块只到正文末行
+    for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
+  });
+
   it('区间摊平自大纲树（折叠与大纲同一棵树：顶层节点区间 ⊇ 其子孙区间）', () => {
     const src = ['时机 指令 310：', '    随机：', '        「甲」', '        「乙」', '    「丙」'].join('\n');
     const list = ranges(src);

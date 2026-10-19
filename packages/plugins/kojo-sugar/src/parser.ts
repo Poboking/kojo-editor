@@ -2116,7 +2116,8 @@ class BlockParser {
     return cls.kind === 'loopEnd' ? { line, condition: cls.condition } : { line };
   }
 
-  /** `循环 …：` → `loopBlock`（产物 `FOR` / `WHILE` / `REPEAT` / `DO` 四族之一 + 配对闭合词） */
+  /** `循环 …：` → `loopBlock`（产物 `FOR` / `WHILE` / `REPEAT` / `DO` 四族之一 + 配对闭合词）；
+   *  节点 `loc` = 块头行 → **收束行**（写了才含，没写就到正文末行） */
   private parseLoopBlock(headLine: LogicalLine, loop: LoopSpec): SugarNode {
     const bodyIndent = headLine.indent + 1;
     const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
@@ -2147,12 +2148,17 @@ class BlockParser {
       });
     }
     const spec: LoopSpec = closeCondition === undefined ? loop : { ...loop, closeCondition };
+    // 块的源区间**含收束行**：`循环结束` 是作者写下来的块骨架，大纲/折叠按「块头行 → 块尾行」给
+    // 区间 ⇒ 收束行要一起折进去，不许把尾巴留在折叠外。`body` 只到正文末行（`consumeEnd` 消费掉的
+    // 那一行不在 `body` 里），故这里显式接上；没写收束行就仍到正文末行。
+    // 产物侧零影响：`emitLoopBlock` 只取 `loc.start`（闭合词那一行 `em.push` 的源行号本来就是 `null`）。
+    const spans = body.map((n) => ({ loc: n.loc }));
     return {
       kind: 'loopBlock',
       loop: spec,
       body,
       _invalid: !paired,
-      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+      loc: mergeSpan2(headLine, close === undefined ? spans : [...spans, { loc: spanOf(close.line) }]),
     } as unknown as SugarNode;
   }
 

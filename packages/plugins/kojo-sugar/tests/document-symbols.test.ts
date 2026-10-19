@@ -190,6 +190,89 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     expect(names.filter((name) => /rulepool|branch_head|rule_tag|block\.branch/i.test(name))).toEqual([]);
   });
 
+  it('心形：成一枚叶子（块体只许文本行与注释——按顶层同一判据都不进大纲）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    心形：', // 3
+      '        「甲」', // 4
+      '        她侧过身。', // 5
+      '    「乙」', // 6
+      '',
+    ].join('\n');
+    const [timing] = symbols(src);
+    const heart = (timing!.children ?? [])[0]!;
+    expect([heart.name, heart.kind, heart.startLine, heart.endLine]).toEqual(['心形', 'block', 3, 5]);
+    // 块体没有结构节点 ⇒ 不许留空 `children`（Monaco 会画成点不开的假箭头）
+    expect(heart.children).toBeUndefined();
+    assertContained(symbols(src));
+  });
+
+  it('心形：的英文块头 `heart:` 出同一张中文大纲（族名按中文给，与 `branch:` 同一口径）', () => {
+    const src = ['角色: 12', '时机 指令 310：', '    heart:', '        「甲」', ''].join('\n');
+    const heart = (symbols(src)[0]!.children ?? [])[0]!;
+    expect([heart.name, heart.startLine, heart.endLine]).toEqual(['心形', 3, 4]);
+  });
+
+  it('循环：成块，区间含收束行，块体里的族各成子项（循环体内的 如果 此前整族不可见）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    循环 计数 I 从 0 到 2：', // 3
+      '        「甲」', // 4
+      '        如果 教養 > 30：', // 5
+      '            「乙」', // 6
+      '    循环结束', // 7
+      '    循环 3 次：', // 8
+      '        「丙」', // 9
+      '    「丁」', // 10
+      '',
+    ].join('\n');
+    const [timing] = symbols(src);
+    const loops = (timing!.children ?? []).filter((c) => c.name === '循环');
+    expect(loops.map((c) => [c.name, c.kind, c.startLine, c.endLine])).toEqual([
+      // 写了 `循环结束` ⇒ 收束行属于这一块（折叠要连它一起藏），区间 3..7
+      ['循环', 'block', 3, 7],
+      // 没写收束行（缩进收口是糖的既有纪律）⇒ 只到正文末行
+      ['循环', 'block', 8, 9],
+    ]);
+    // 块体里的结构族照 `组` / `着色` 的口径成为子项：台词行不进大纲，`如果` 要进
+    expect((loops[0]!.children ?? []).map(shape)).toEqual([['如果 教養 > 30', 5, 6]]);
+    expect(loops[1]!.children).toBeUndefined();
+    assertContained(symbols(src));
+  });
+
+  it('收束形与开块模态不配对的 循环 块仍在大纲里（报错进 diagnostics，大纲不跟着静默）', () => {
+    // `循环 计数 …：` 配的闭合词 `NEXT` 不吃条件 ⇒ parser 报 error、codegen 一条字节都不产；
+    // 但源码确实写了这一块，大纲按源码给（与 `分支：` 池级校验失败的同一口径）。
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    循环 计数 I 从 0 到 3：', // 3
+      '        「甲」', // 4
+      '    循环结束 当 1', // 5
+      '',
+    ].join('\n');
+    const loop = (symbols(src)[0]!.children ?? [])[0]!;
+    expect([loop.name, loop.kind, loop.startLine, loop.endLine]).toEqual(['循环', 'block', 3, 5]);
+  });
+
+  it('循环 块嵌在别的块里：收束行算进外层区间（区间口径一处定，两族一起对）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    着色 0xFF8080：', // 3
+      '        循环 3 次：', // 4
+      '            「甲」', // 5
+      '        循环结束', // 6
+      '',
+    ].join('\n');
+    const color = (symbols(src)[0]!.children ?? [])[0]!;
+    expect([color.name, color.startLine, color.endLine]).toEqual(['着色 0xFF8080', 3, 6]);
+    expect((color.children ?? []).map(shape)).toEqual([['循环', 4, 6]]);
+    assertContained(symbols(src));
+  });
+
   it('长条件截断带省略号（大纲一行一项，不许折行）', () => {
     const long = `角色: 12\n时机 指令 310：\n    若 ${'条'.repeat(90)}：\n        「甲」\n`;
     const name = symbols(long)[0]!.children?.[0]?.name ?? '';
