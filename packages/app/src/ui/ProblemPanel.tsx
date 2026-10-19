@@ -466,7 +466,8 @@ export function ProblemPanel({
  * **口径必须上屏**（2026-10-19 自造重叠清账批，判据②）：同排那枚「项目级约定计数」数的
  * 是整份校验报告（含未打开文件与整项目结论），这一枚只数**已打开文件面上正画着的波浪线**
  * （来自全部装饰贡献方）。两数天生不等、也不该被硬凑成相等，所以各自的 tooltip 说清自己
- * 数的是什么，不留两个裸数字并排。
+ * 数的是什么，不留两个裸数字并排。C-1a 起口径还**上屏**：这枚带可见标签「本文件」，
+ * 同排那枚「项目」标签由 styles-project.css 给 `.sb-diag` 补，两簇之间有分隔线。
  */
 const PROBLEMS_TITLE =
   '当前已打开文件的波浪线（各诊断贡献方合并；不含未打开文件与整项目结论 ≠ 项目级约定计数）· 问题面板 (Ctrl+Shift+M)';
@@ -477,6 +478,9 @@ export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactE
   if (items.length === 0) {
     return (
       <button className="sb-problems" title={PROBLEMS_TITLE} onClick={onClick}>
+        {/* 可见范围标签（C-1a）：同排左边那枚是「项目」（插件的 `.sb-diag`，标签由 CSS 补），
+            这一枚数的是**已打开文件**的波浪线——不悬停也该一眼分清，中间由 CSS 画一道分隔。 */}
+        <span className="sb-scope-tag">本文件</span>
         <span className="dim">无问题</span>
       </button>
     );
@@ -493,6 +497,7 @@ export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactE
 
   return (
     <button className="sb-problems" title={PROBLEMS_TITLE} onClick={onClick}>
+      <span className="sb-scope-tag">本文件</span>
       <span className="sb-problems-item" style={error > 0 ? { color: SEVERITY_COLOR.error } : undefined}>
         ✕ {error}
       </span>

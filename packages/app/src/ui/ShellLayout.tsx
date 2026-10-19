@@ -133,6 +133,8 @@ import {
 } from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
+// 项目名旁的「更多」菜单（C-1a）：复用全站共享 <ContextMenu>（玻璃观感 + WAI-ARIA 键盘），不另造菜单
+import { ContextMenu, type ContextMenuItem } from './context-menu';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
@@ -217,6 +219,28 @@ export function subscribeShellEditorStatus(listener: () => void): () => void {
   return () => {
     editorStatusListeners.delete(listener);
   };
+}
+
+/** 只读胶囊前的锁形小图标（描边走 currentColor，随 `.sb-writable.ro` 的琥珀档变色；14px 命中区由胶囊 flex 撑到 ≥24px） */
+function LockIcon(): ReactElement {
+  return (
+    <svg
+      className="icon sb-lock"
+      width={12}
+      height={12}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="3.5" y="7" width="9" height="6.2" rx="1.3" />
+      <path d="M5.6 7V5.1a2.4 2.4 0 0 1 4.8 0V7" />
+    </svg>
+  );
 }
 
 /** 状态栏右区那三格读数（编码·EOL·行数 ／ 选区 ／ 自动保存时刻） */
@@ -417,6 +441,12 @@ export function ShellLayout(props: Props): ReactElement {
   overlayRef.current = activeOverlay;
   const pickerRef = useRef(false);
   pickerRef.current = paletteOpen || quickOpen || symbolsOpen;
+  /**
+   * 项目名旁「更多」菜单的锚点（C-1a 工具栏分组批）：null = 关。
+   * 「关闭项目」是破坏性动作，从右侧视图开关那一排收拢到这里（菜单项 danger 危险色），
+   * 菜单本体走共享 `<ContextMenu>`（Esc/外点关闭与焦点归还它自己做，这里只记打开位置）。
+   */
+  const [projectMenuAt, setProjectMenuAt] = useState<{ x: number; y: number } | null>(null);
   // 设置 overlay（P4；壳层私有——设置项全是容器语义，不经 ui.overlay 槽）
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 打开设置时定位到哪一节：「打开设置」恒回 general（不记住上次在哪节），
@@ -1634,6 +1664,9 @@ export function ShellLayout(props: Props): ReactElement {
     </div>
   );
 
+  /** 「更多」菜单的项表（模块内常量：身份稳定，ContextMenu 不因每帧新数组重排焦点） */
+  const projectMenuItems: ContextMenuItem[] = [{ id: 'project.close', label: '关闭项目', danger: true }];
+
   const toolbar = (
     <header className="toolbar">
       <div className="toolbar-left">
@@ -1641,6 +1674,23 @@ export function ShellLayout(props: Props): ReactElement {
           <span className="tb-project" title={commandCtx.project.rootDir}>
             {commandCtx.project.adapterId}
           </span>
+        ) : null}
+        {onCloseProject ? (
+          // 破坏性动作收拢进项目名旁的「更多」菜单（C-1a）：不再与视图开关混在一排；
+          // 快捷键与命令行为不变，这里只是换了个入口。可访问名与 aria 态齐全。
+          <button
+            className="ghost small toolbar-btn tb-project-more"
+            title="项目操作（关闭项目）"
+            aria-label="项目操作"
+            aria-haspopup="menu"
+            aria-expanded={projectMenuAt !== null}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setProjectMenuAt({ x: r.left, y: r.bottom + 2 });
+            }}
+          >
+            <span aria-hidden="true">⋯</span>
+          </button>
         ) : null}
         {onReloadProject ? (
           <button className="ghost small toolbar-btn" title="重载项目" onClick={onReloadProject}>
@@ -1674,12 +1724,9 @@ export function ShellLayout(props: Props): ReactElement {
           );
         })}
       </div>
+      {/* 分组分隔（C-1a）：左簇 = 项目操作，右簇 = 纯视图开关 */}
+      <span className="toolbar-sep" aria-hidden="true" />
       <div className="toolbar-right">
-        {onCloseProject ? (
-          <button className="ghost small toolbar-btn" title="关闭项目" onClick={onCloseProject}>
-            <Icon name="close" size={14} /> 关闭项目
-          </button>
-        ) : null}
         <button
           className={`ghost small toolbar-btn ${layout.sidebar.visible ? 'on' : ''}`}
           title="切换主侧栏 (Ctrl+B)"
@@ -1701,10 +1748,22 @@ export function ShellLayout(props: Props): ReactElement {
         >
           <Icon name="layout-sidebar-right" size={15} />
         </button>
-        <button className="ghost small toolbar-btn" title="重置布局" onClick={doReset}>
-          <Icon name="reset" size={15} />
-        </button>
+        {/* 「重置布局」不再占工具条一排（与设置页/命令面板重复，C-1a）：
+            功能仍在——命令 `layout.reset`（ShellLayout 注册）与设置页 `onResetLayout={doReset}` 两个入口。 */}
       </div>
+      {projectMenuAt !== null && onCloseProject ? (
+        <ContextMenu
+          x={projectMenuAt.x}
+          y={projectMenuAt.y}
+          items={projectMenuItems}
+          ariaLabel="项目操作"
+          onSelect={(id) => {
+            setProjectMenuAt(null);
+            if (id === 'project.close') onCloseProject();
+          }}
+          onDismiss={() => setProjectMenuAt(null)}
+        />
+      ) : null}
     </header>
   );
 
@@ -1738,8 +1797,9 @@ export function ShellLayout(props: Props): ReactElement {
             可写
           </span>
         ) : (
+          // 只读态加锁形图标（C-1a）：琥珀色 + 文字之外再多一档形状线索；命中区 ≥24px 由 CSS 保证
           <button className="sb-writable ro" title={writablePillTitle} onClick={onReauth}>
-            只读
+            <LockIcon /> 只读
           </button>
         )}
         {statusbarItems
@@ -1771,11 +1831,18 @@ export function ShellLayout(props: Props): ReactElement {
         {/* PS-6：这三格读的是壳层状态 store（见 `setShellEditorStatus`），
             光标移动只重渲这一枚小叶子，不再掀整壳。没读数 ⇒ 不画（旧口径一致）。 */}
         <EditorStatusReadout />
-        <span className={`sb-dirty ${dirty ? 'on' : ''}`} title={dirty ? '有未保存修改' : '已保存'}>
+        {/* 脏读数（C-1a 语义修正）：只读态下「已保存」是误导——这份文件根本走不了保存；
+            没有改动时如实说「未修改」。有未保存改动仍显示「未保存」（那是事实）。 */}
+        <span
+          className={`sb-dirty ${dirty ? 'on' : ''}`}
+          title={dirty ? '有未保存修改' : writablePill === 'ro' ? '当前文件只读，没有改动' : '已保存'}
+        >
           {dirty ? (
             <>
               <Icon name="circle-filled" size={9} /> 未保存
             </>
+          ) : writablePill === 'ro' ? (
+            '未修改'
           ) : (
             '已保存'
           )}

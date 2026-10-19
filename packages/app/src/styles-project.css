@@ -9706,3 +9706,85 @@ button.resume-session {
 :root[data-motion='reduced'] .kb-flashed .kb-chip {
   animation: none;
 }
+
+/* ============================================================================
+ * 壳层信息设计批（Wave2 C-1a）——整批以「文件末尾覆盖块」追加。
+ * 缘由：`styles-split.equivalence` 闸 A 钉死「轻档行序列 ⊆ 重档行序列」，
+ * 重档里被轻档镜像的既有行（如 `.wizard.tutorial h3`）不许就地改——
+ * 一律追加在末尾，后到者胜，级联终态与闸 C 对拍都不受影响。
+ * 颜色/间距/字号全部走既有 token；本块零动画，reduced 偏好无需特判。
+ * ========================================================================== */
+
+/* 1) 教程浮层标题豁免 `.panel h3` 的大写口径：CJK 对 uppercase 空转，但标题里的
+   拉丁词（`.kojo`）会被顶成 `.KOJO`——那是产品名，不是 shouting。
+   特异性 (0,2,1) > `.panel h3` (0,1,1)；`.panel h3` 本体不动（其它面板依赖它）。 */
+.wizard.tutorial h3 {
+  text-transform: none;
+}
+
+/* 2) 状态栏两组诊断「分域各贴标签 + 中间一道分隔」（审阅 2）：
+   `.sb-diag` = 项目级约定计数（插件 DOM 不许碰，可见标签由 CSS ::before 就地补）；
+   `.sb-problems` = 当前已打开文件的波浪线（「本文件」标签由 ProblemPanel JSX 渲染）。
+   两枚标签各带一道 --border 竖线（左簇的右界 + 右簇的左界，相邻时合成一条），
+   不悬停也分得清谁数的是整个项目、谁数的是这一份文件。命中区一并抬到 ≥24px。 */
+.sb-diag::before {
+  content: '项目';
+  color: var(--fg-dim);
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-2);
+}
+.sb-problems {
+  min-height: 24px;
+  border-left: 1px solid var(--border);
+  padding-left: var(--space-2);
+}
+/* 「本文件」标签与整簇同色（--fg-dim），不抢计数的视觉重量 */
+.sb-scope-tag {
+  color: var(--fg-dim);
+}
+
+/* 3) 只读胶囊：锁形图标（JSX 里的描边 SVG，currentColor 随琥珀档）+ 命中区
+   19px → ≥24px（WCAG 2.2.5）；ok/ro 两档共用同一族度量。 */
+.sb-writable {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 24px;
+}
+
+/* 4) 顶部工具栏分组（审阅 4）：左簇 = 项目操作（项目名 + 更多菜单里的「关闭项目」
+   + 重载），右簇 = 纯视图开关；两簇之间一道 --border 竖线收拢。
+   「重置布局」不再占一排（与设置页重复）——命令 layout.reset 与设置页入口都还在。 */
+.toolbar-sep {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  align-self: center;
+  background: var(--border);
+}
+
+/* 5) 编辑器工具条的文件身份改呈现「项目相对口径」（审阅 5）：
+   绝对长前缀（.file-dir，pathLabelParts 的 head 段）不再上屏——屏幕上只留
+   「最深目录 / 文件名」，正是"我在哪份文件"的答案；完整绝对路径恒在
+   `.file-label` 的 title 里（EditorPane 那侧 title={filePath} 零改动，悬停即得）。
+   目录与文件名之间补「/」分隔，旧版两段裸挨（实测读出「靈夢 靈夢 …」歧义）。
+   视图控制（`.kojo 预览` 开关 + 糖摘要）用 flex order 挪过 spacer，
+   归入行右侧的信息区，不再挤在路径中段；保存键行为与 title 原样。 */
+.editor-toolbar .file-label .file-dir {
+  display: none;
+}
+.editor-toolbar .file-label .file-pkg::after {
+  content: '/';
+  margin-left: var(--space-2);
+  color: var(--fg-dim);
+}
+.editor-toolbar > .sugar-toggle,
+.editor-toolbar > .sugar-stats {
+  order: 1;
+}
+.editor-toolbar > .editor-status {
+  order: 2;
+}
+.editor-toolbar > .primary {
+  order: 3;
+}
