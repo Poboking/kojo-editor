@@ -5,7 +5,9 @@
  * - 赋值：`<族头>[:作用域][:索引] = 值`（`+= -= *= /=` 同形）——族头经 `lookup.familyAlias`
  *   换成中文别名（`TFLAG:193 = 1` → `时标:193 = 1`）；查不到别名就保留族头原名，**但整行仍必须
  *   是中文形**（`RESULT` / `LOCAL` 这类语言层槽位给中文显示名）；
- * - 调用：`CALL` / `CALLL` / `CALLFORM` / `TRYCALL` / `TRYCALLFORM` / `TRYJUMP`；
+ * - 调用：`CALL` / `CALLL` / `CALLFORM` / `TRYCALL` / `TRYCALLFORM` / `TRYJUMP` /
+ *   `TRYGOTO` / `TRYGOTOFORM`（后两枚 = `sugar-ident` 的 `TRY_SINGLE_LINE` 单行档，
+ *   **不在** ZH-C 认领的那九枚开块词里）；
  * - 位原语：`SETBIT` / `CLEARBIT` / `INVERTBIT`；
  * - 输出族：`PRINT` / `PRINTL` / `PRINTW` / `PRINTV` / `PRINTVL` / `PRINTFORM*` / `PRINTDATA*` /
  *   `PRINTSINGLE*`（已有台词投影的形态**不要重复接管**，只补 `native()` 落到的那些变体）；
@@ -14,6 +16,8 @@
  * - 输入：`INPUT` / `INPUTS` / `PRINTBUTTON` / `PRINTBUTTONC`。
  *
  * 与 ZH-C 的分工：**本层只管"非块、非预处理"的行**；两条 pass 不许互相 import。
+ * TRY 家族按**档位**分家（不是按前缀）：开块九枚归 ZH-C 的 `试探 原形 …`，
+ * 单行档（`sugar-ident` 的 `TRY_SINGLE_LINE`）归本表的动词语——名单只有一份，互斥由测试钉。
  *
  * ## 口径备忘（写死在这里，免得读代码的人猜）
  * - 语言层槽位中文名：`LOCAL→局部` `LOCALS→局部$` `LOCALSS→局部表` `RESULT→结果`
@@ -27,6 +31,7 @@
  */
 
 import { VARIADIC_ARG_NUMERIC, VARIADIC_ARG_STRING } from '../keywords';
+import { TRY_SINGLE_LINE } from '../sugar-ident';
 import type { NativeDisplayInput, NativeDisplayLookup, NativeDisplayPass } from './types';
 
 /* ==================== 词法小工具（行级，不建 token 流） ==================== */
@@ -177,6 +182,17 @@ function renderAssignment(code: string, lookup: NativeDisplayLookup | undefined,
 /* ==================== 调用 ==================== */
 
 const CALL_RE = /^(?:([A-Z][A-Z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Z][A-Z0-9_]*))$/;
+/**
+ * 语句动词表（**显示词形住本表、档位名单住 `sugar-ident`**，两件事别混）。
+ *
+ * TRY 五枚全走本表：`TRYCALL` / `TRYCALLFORM` / `TRYJUMP` 一直在；`TRYGOTO` / `TRYGOTOFORM`
+ * 是 goto 家族的单行变体（引擎 funcMatch 的"其余 TRY*"档），此前表里没有 ⇒ 落 `未识别语句 ·`
+ * 兜底。词形上 `跳到` 与 ZH-C 的 `GOTO` 显示形同字（标签目标），`…形` 与 `调用形` 同构
+ * （FORM 变体）⇒ 读者一眼看出"跳到族 + 试探"，而不是第四种叫法。
+ *
+ * 载荷**逐字带走**（`*标签` / `$标签` / 实参串都不剥前缀）——本层所有调用形同一条口径，
+ * 前缀剥离是 ZH-C 的 `GOTO` 才有的装置（它那里目标是纯标签名）。
+ */
 const CALL_VERBS: Readonly<Record<string, { readonly verb: string; readonly tail: string }>> = {
   CALL: { verb: '调用', tail: '' },
   CALLL: { verb: '调用', tail: ' 续' },
@@ -184,7 +200,21 @@ const CALL_VERBS: Readonly<Record<string, { readonly verb: string; readonly tail
   TRYCALL: { verb: '尝试调用', tail: '' },
   TRYCALLFORM: { verb: '尝试调用形', tail: '' },
   TRYJUMP: { verb: '尝试跳转', tail: '' },
+  TRYGOTO: { verb: '尝试跳到', tail: '' },
+  TRYGOTOFORM: { verb: '尝试跳到形', tail: '' },
 };
+
+/**
+ * 本层认领的 TRY 记号 = 语句动词表 ∩ 识别核的单行档（**派生，不是第二份名单**）。
+ *
+ * 为什么要导出：装配顺序（control 先、statement 后）本身就是一条判据，而"两档互斥、
+ * 单行档全被认领"这两件事只有在测试里能对着名单核——`STATEMENT_TRY_WORDS` 与
+ * `TRY_SINGLE_LINE` 一旦漂移（加了一枚没给动词、或把开块词抄进动词表），
+ * `tests/native-display-statement.test.ts` 立刻红。
+ */
+export const STATEMENT_TRY_WORDS: readonly string[] = Object.keys(CALL_VERBS)
+  .filter((k) => TRY_SINGLE_LINE.has(k))
+  .sort();
 
 function renderCall(code: string): string | null {
   const m = CALL_RE.exec(code);

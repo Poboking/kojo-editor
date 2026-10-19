@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { renderControlLine } from '../src/native-display/control';
 import { localizeNativeLine } from '../src/native-display/passes';
 import { isVerbatimNativeLine } from '../src/native-display/types';
-import { lookupKeyword } from '../src/keywords';
+import { lookupKeyword, primaryWord } from '../src/keywords';
 import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from '../src/sugar-ident';
 import { createSugarTranspileService } from '../src/service';
 import { stubDict, stubFaceTable } from './support';
@@ -146,7 +146,8 @@ const WITH_TRAILING_COMMENT: readonly Case[] = [
  * TRY 系九枚（工包 D 的中性显示形）。
  *
  * 名单 = `sugar-ident.ts` 的 `TRY_CATCH_OPEN`（六枚，配 `CATCH`）∪ `TRY_LIST_OPEN`
- * （三枚，配 `ENDFUNC`）；`keywords.ts:213` 那句"无写形、仍走兜底"说的就是这九枚。
+ * （三枚，配 `ENDFUNC`）。写形已由工包 F 落地（`试探 原形 <记号> <原文>` ⇒ 词形已登记进
+ * `KEYWORDS`，通路见 `lexer.ts` 的 `parseTryStatement`，逐字节验收见 `try-family.roundtrip.test.ts`）。
  * 钉值刻意写成 `试探 原形 <记号> <原文>`：**记号逐字回显**（义项档位不替读者下结论）、
  * 载荷逐字带走（不剥 `$`/`*`、不中文化运算符），与 `JUMP` / `DATAFORM` 同一判据。
  */
@@ -317,12 +318,14 @@ describe('ZH-C · 预处理行（#DIM / #DIMS / #GLOBAL / #LOCALSIZE / #LOCALSSI
  * 工包 D · TRY 系九枚的**中性显示形**（`试探 原形 <记号> <原文>`）。
  *
  * 三条独立判据各挡一类越界：
- * - **只读面**：显示形**不是**写形——`试探` 不进 `KEYWORDS`，把它当 `.kojo` 源喂写侧也发不出 TRY 语句；
- * - **分界**：`statement.ts` 已认领的 `TRYCALL` / `TRYCALLFORM` / `TRYJUMP`（单行语句、不在九枚内）
- *   零改动——本层的名单是 `sugar-ident` 的两张集合，不做 `startsWith('TRY')` 那种粗匹配；
+ * - **读写同串**：显示形**就是**写形（工包 F 已把通路接上）——`试探` 登记进 `KEYWORDS`，
+ *   把这串当 `.kojo` 源喂写侧，产物那一行与源 ERB 行逐字节相同（`try-family.roundtrip.test.ts` 验收本体）；
+ * - **分界**：`statement.ts` 认领的**单行档**（`sugar-ident` 的 `TRY_SINGLE_LINE`：`TRYCALL` /
+ *   `TRYCALLFORM` / `TRYJUMP` / `TRYGOTO` / `TRYGOTOFORM`，都不在九枚内）零改动——本层的名单是
+ *   `sugar-ident` 的两张**开块**集合，不做 `startsWith('TRY')` 那种粗匹配；
  * - **红线**：命中即与源行逐字不等（`停用 · 原文` 那一档的结构性自证，兜底形不再出现在这九枚上）。
  */
-describe('工包 D · TRY 系九枚的中性显示形（只读面，无写形）', () => {
+describe('工包 D · TRY 系九枚的中性显示形（显示形即写形）', () => {
   it.each(TRY_FAMILY)('%s', (src, want) => {
     const got = show(src);
     expect(got, src).not.toBeNull();
@@ -333,17 +336,19 @@ describe('工包 D · TRY 系九枚的中性显示形（只读面，无写形）
     expect(localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP }), src).not.toContain('未识别语句');
   });
 
-  it('显示形**不靠往 KEYWORDS 加词**实现（`试探` 未登记 = 承诺不了写形）', () => {
-    expect(lookupKeyword('试探'), '写形归工包 F；本批不许往词表塞只读面的词').toBeUndefined();
+  it('写形已落地 ⇒ `试探` 登记进词表，且本层的词头就是那枚中文主形（两侧同一串）', () => {
+    expect(lookupKeyword('试探'), '登记 = 承诺写得回去；工包 F 已兑现这条承诺').toBe('inline.tryStatement');
+    expect(primaryWord('inline.tryStatement'), '显示层与写侧不许各叫一个').toBe('试探');
   });
 
-  it('把显示形当 `.kojo` 源写回 ⇒ 发不出 TRY 语句（写侧通路确实不存在）', () => {
-    const shown = show('TRYCGOTO *先, LABEL:目标')!;
+  it('把显示形当 `.kojo` 源写回 ⇒ 逐字节发回那枚原生 TRY 行（读写同串的自证）', () => {
+    const src = 'TRYCGOTO *先, LABEL:目标';
+    const shown = show(src)!;
     const result = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(
       `角色: 12\n时机 绝顶：\n\t${shown}\n`,
     );
     const emitted = result.erb.split('\n').map((l) => l.trim());
-    expect(emitted.some((l) => /^TRY[A-Z0-9_]*\b/.test(l)), result.erb).toBe(false);
+    expect(emitted, `显示形「${shown}」写回去的产物：\n${result.erb}`).toContain(src);
   });
 
   /**
@@ -359,13 +364,18 @@ describe('工包 D · TRY 系九枚的中性显示形（只读面，无写形）
   });
 
   /**
-   * `TRYGOTO` / `TRYGOTOFORM`（引擎里是单行语句、**不在这九枚内**，statement 层也没有它们的动词）
-   * 仍走兜底形——本批刻意不扩大认领面：钉住"它们还在兜底里"这个事实，归因由
-   * `packages/kernel/tests/sugar-projection.corpus.test.ts` 的 `tryOther` 桶负责读数。
+   * `TRYGOTO` / `TRYGOTOFORM`（引擎里的**单行语句**、不在这九枚内）归 `statement.ts` 的语句动词表：
+   * 本层**照样弃权**（`show` 返 `null`、不给 `原形` 回显），但装配层不再走 `未识别语句` 兜底。
+   * 归因读数由 `packages/kernel/tests/sugar-projection.corpus.test.ts` 的 `tryOther` 桶负责——
+   * 该桶是**只降不升**的棘轮，本层交出认领面只会让它变薄。
    */
-  it('九枚之外的 TRY 记号本层不认领（口径不许靠前缀扩张）', () => {
+  it('九枚之外的单行 TRY 归 statement；本层弃权但装配层不落兜底', () => {
     for (const src of ['TRYGOTO *先', 'TRYGOTOFORM $GO_BACK, TARGET']) {
       expect(show(src), src).toBeNull();
+      const got = localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP });
+      expect(got, src).not.toBeNull();
+      expect(got, src).not.toContain('原形');
+      expect(got, src).not.toContain('未识别语句');
     }
   });
 
@@ -380,7 +390,8 @@ describe('工包 D · TRY 系九枚的中性显示形（只读面，无写形）
       const src = `${kind} FOO(A, 1)`;
       expect(show(src), src).toBe(`试探 原形 ${kind} FOO(A, 1)`);
     }
-    // 九枚之外、statement 层也没认领的那两枚必须**不在**名单里（防止有人图省事改成 startsWith('TRY')）
+    // 单行档（含本批新认领的 `TRYGOTO` / `TRYGOTOFORM`）必须**不在**本层名单里
+    // ——防止有人图省事把 `TRY_NEUTRAL_OPEN` 改成 startsWith('TRY') 顺手把语句层那批抢过来
     for (const kind of ['TRYGOTO', 'TRYGOTOFORM', 'TRYCALL', 'TRYCALLFORM', 'TRYJUMP']) {
       expect(nine).not.toContain(kind);
     }

@@ -8,7 +8,9 @@
  * - 跳转与出口：`GOTO` / `JUMP` / `$标签` / `BREAK` / `CONTINUE` / `RESTART` / `CATCH`；
  * - **TRY 系九枚**（`TRYC{GOTO,JUMP,CALL}` ±`FORM` 六枚 + `TRY{CALL,GOTO,JUMP}LIST` 三枚）：
  *   糖层**无写形**（写形归工包 F），本层只给**中性显示形** `试探 原形 <记号> <原文>`；
- * - 数据表：`PRINTDATA[…]` / `DATAFORM` / `DATA` / `ENDDATA`（`DATALIST` / `ENDLIST` 分组无义项出处 ⇒ 不翻）；
+ * - 数据表：`PRINTDATA[…]` / `DATAFORM` / `DATA` / `ENDDATA` / `STRDATA`（开词族同源，`数据表 原形 …`）；
+ * - 数据表**分组**记号 `DATALIST` / `ENDLIST`（糖层无写形、批 N 刻意不投影）⇒ 中性显示形
+ *   `分组 原形 <记号> [原文]：` / `分组结束 原形 <记号> [原文]`（与 TRY 系、停用区同一档先例）；
  * - 预处理行：`#DIM` / `#DIMS` / `#GLOBAL` / `#LOCALSIZE` / `#LOCALSSIZE` / `#FUNCTION` /
  *   `#FUNCTIONS` / `#SFUNCTION` / `#XFUNCTION` / `#TESTMEMORY` 等。
  *
@@ -20,7 +22,8 @@
  *    闭合行是同一套 `<块头词> + 结束`（`如果结束` / `当结束` / `循环结束` / `出错处理结束` / `数据表结束`）。
  *    本表与 `project.ts` 的 `SUGAR_CONTROL`（`如果 X：` / `当 X：` / `是 v：` / `否则：`）同一口径——
  *    预览里同一种块只会有一种中文写法。
- * 2. **本层只有两类显示词形**（`声明…` / `大小` / `预处理 <记号原文>`，以及 TRY 系的 `试探`）：
+ * 2. **本层只有两类显示词形**（`声明…` / `大小` / `预处理 <记号原文>`，以及 TRY 系的 `试探`
+ *    与分组记号的 `分组` / `分组结束`）：
  *    前者是**文件级声明**、后者是**糖层无写形的控制流**（TRY 系九枚的写形归工包 F），
  *    登记进 `KEYWORDS` = 承诺"写得回去"⇒ 覆盖率闸会要求作者用一种写不回去的写法，故留在本文件、
  *    **不进词表**（显示形靠本表的记号名单触发，与 `KEYWORDS` 无关）。
@@ -41,7 +44,7 @@
  * 这里重抄就成了第二份口径。
  */
 
-import { NOTIN_KEYWORDS, blockEndWord, operatorTable, primaryWord as word } from '../keywords';
+import { BLOCK_END_SUFFIX, NOTIN_KEYWORDS, blockEndWord, operatorTable, primaryWord as word } from '../keywords';
 import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from '../sugar-ident';
 import type { NativeDisplayInput, NativeDisplayLookup } from './types';
 
@@ -126,6 +129,25 @@ const TRY_W = '试探';
  * 因此**不受本层影响**——pass 顺序（control 先、statement 后）照旧由这张名单划界。
  */
 const TRY_NEUTRAL_OPEN: ReadonlySet<string> = new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN]);
+
+/**
+ * 数据表**分组**记号的**中性显示形**词头（`分组 原形 DATALIST：` / `分组结束 原形 ENDLIST`）。
+ *
+ * 为什么也**不进 `KEYWORDS`**（判据与 `试探` 逐字同一条）：糖层对这三枚没有写形
+ * （`DATALIST`/`STRDATA` 在 `CONTROL_SHAPES` 只有 `structural-open`、`ENDLIST` 只有
+ * `structural-close`，服务结构栈、不产出糖块）⇒ 登记 = 承诺写得回去。
+ * 收束拼法借 `BLOCK_END_SUFFIX`（`分组` + `结束`），与 `keywords.ts` 的闭合族同一词尾、不另造。
+ *
+ * 名单**逐字内联**而不从 `CONTROL_SHAPES` 现推：那张表里没有"`ENDLIST` 配 `DATALIST`"的
+ * 档位字段（`closes` 在结构栈条目上是空的），现推只能靠词形后缀猜配对——正是本层禁的姿势。
+ * 名单与 `CONTROL_SHAPES` 的同源由 `tests/native-display-datagrouping.test.ts` 逐枚钉住
+ * （角色 + 开块类别对不上立刻显形），语料词形普查（SANYOUSEI 盘，2026-10-20）：
+ * `DATALIST` 2,380 行全裸、`ENDLIST` 2,380 行全裸、`STRDATA` 199 行（197 带名 + 2 裸），
+ * 无任何数字/字母变体 ⇒ 表外词形**零认领**。
+ */
+const GROUP_W = '分组';
+const GROUP_END_W = `${GROUP_W}${BLOCK_END_SUFFIX}`;
+const DATA_GROUPING_NEUTRAL: ReadonlySet<string> = new Set(['DATALIST', 'ENDLIST', 'STRDATA']);
 
 /* --------------------------- 表达式侧（条件形） --------------------------- */
 
@@ -366,9 +388,26 @@ function renderFor(payload: string, input: NativeDisplayInput): string | null {
   return `${LOOP_W} ${LOOP_COUNT_W} ${name} ${FROM_W} ${showExpr(from, input.lookup, false)} ${TO_W} ${showExpr(to, input.lookup, false)}${stride}：`;
 }
 
-/** `PRINTDATA` / `PRINTDATADL`…：裸形只有一枚（`PRINTDATA`），余下八枚变体不猜义项 ⇒ `原形` 带走记号 */
-function renderDataOpen(kind: string): string {
-  return kind === 'PRINTDATA' ? `${DATA_W}：` : `${DATA_W} ${ECHO_W} ${kind}：`;
+/** `PRINTDATA` / `PRINTDATADL`…：裸形只有一枚（`PRINTDATA`），余下八枚变体不猜义项 ⇒ `原形` 带走记号；
+ *  `STRDATA` 走同一条回显通路，其**名段**（盘上 197/199 带名）是数据 ⇒ 逐字缀在记号后 */
+function renderDataOpen(kind: string, payload = ''): string {
+  if (kind === 'PRINTDATA' && payload.length === 0) return `${DATA_W}：`;
+  const tail = payload.length === 0 ? '' : ` ${payload}`;
+  return `${DATA_W} ${ECHO_W} ${kind}${tail}：`;
+}
+
+/**
+ * `DATALIST` / `ENDLIST` ⇒ 分组中性显示形（**只读面**，不改编译/转译产物、不新增写形）。
+ *
+ * 开/闭两形各带自己的档位（开词 `：` 结尾 = 块开词那一档，收束不带 `：` = `数据表结束`
+ * 同一档）；裸记号也给中性形而不返 `null`——这**是已知结构**（批 N 只是刻意不投影，
+ * 不是读不懂），落 `未识别语句` 就是谎报。载荷（盘上 0 例，防御性保留）逐字带走。
+ */
+function renderListGroup(kind: string, payload: string): string {
+  const tail = payload.length === 0 ? '' : ` ${payload}`;
+  return kind === 'ENDLIST'
+    ? `${GROUP_END_W} ${ECHO_W} ${kind}${tail}`
+    : `${GROUP_W} ${ECHO_W} ${kind}${tail}：`;
 }
 
 /**
@@ -431,6 +470,11 @@ function renderBody(body: string, input: NativeDisplayInput): string | null {
   const kind = (m[1] ?? '').toUpperCase();
   const payload = (m[2] ?? '').trim();
   if (PRINTDATA_TOKEN_RE.test(kind) && payload.length === 0) return renderDataOpen(kind);
+  // 数据表分组记号（`DATALIST` / `ENDLIST`）与 `STRDATA` 开词 ⇒ 中性显示形（名单判据见上）。
+  // 位置同样在两张表**之前**：这三枚与 `OPENERS` / `STANDALONE` 零交集，先拦先赢。
+  if (DATA_GROUPING_NEUTRAL.has(kind)) {
+    return kind === 'STRDATA' ? renderDataOpen(kind, payload) : renderListGroup(kind, payload);
+  }
   // TRY 系九枚：糖层无写形 ⇒ 中性显示形（名单在 `sugar-ident`，本层不抄第二份）。
   // 位置在两张表**之前**：这九枚与 `OPENERS` / `STANDALONE` 的记号零交集，先拦先赢，
   // 工包 F 哪天真给了写形，把这条分支删掉就回到 `OPENERS` 的正常轨道。

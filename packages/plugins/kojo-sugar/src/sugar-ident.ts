@@ -275,6 +275,30 @@ export const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
 ]);
 /** TRY…LIST 函数表开词 */
 export const TRY_LIST_OPEN: ReadonlySet<string> = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
+/**
+ * TRY 家族的**第三档**：引擎里既不开块也没有配对闭合的单行语句（`funcMatch` 的"其余 TRY*"）。
+ *
+ * 为什么这张名单住识别核、而不住显示层的动词表：显示面的分诊判据是**档位**——开块那九枚
+ * （`TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`）归 ZH-C 的中性形，单行这一档归 ZH-S 的语句动词语。
+ * 判据只有一份，`statement.ts` 认领的记号**由本集合派生**；两档互斥由
+ * `tests/native-display-statement.test.ts` 逐字钉死（谁也不许认领对方那批，`startsWith('TRY')`
+ * 那种前缀扩张更是结构性地不可能命中这里——本集合是**枚举**，不是模式）。
+ *
+ * 与 `pairOf()` 的关系：**故意不进结构栈**——单行语句不开块，数进嵌套就会造出幻影深度
+ * （这正是 BUG-2 / L5 收敛掉的那个根因）。
+ *
+ * 认领面按**档位**划，不按命中率划：当前语料盘（4,393 份 `.ERB` 全量 token 扫描）实测
+ * `TRYCALLFORM` 行首 1,440 / `TRYCALL` 342 / `TRYCCALLFORM` 196，而 `TRYGOTO`·`TRYGOTOFORM`·
+ * `TRYJUMP`·`TRYJUMPFORM` **各 0 处**——词形有引擎 funcMatch 与跳转族（`ERB_JUMP_KEYWORDS`）
+ * 两处理事做底，处数为 0 只说明这批盘没人写，不改变"读者撞见它时该给语句形而不是兜底"。
+ */
+export const TRY_SINGLE_LINE: ReadonlySet<string> = new Set([
+  'TRYCALL',
+  'TRYCALLFORM',
+  'TRYJUMP',
+  'TRYGOTO',
+  'TRYGOTOFORM',
+]);
 
 /** 结构栈：开块语句 → 配对类别（`null` = 不开块）。两侧共用（投影数嵌套、建议侧判块内纯度） */
 export function pairOf(kind: string): string | null {
