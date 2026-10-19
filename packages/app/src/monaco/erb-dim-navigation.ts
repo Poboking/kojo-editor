@@ -296,6 +296,28 @@ export function mergeSymbolLocations(
   return out;
 }
 
+/**
+ * 一次导航请求里**三条腿的优先序**（F12-TOKEN 2026-10-19 收口；转到定义与查找引用
+ * 共用这一枚函数，不再各自排两遍）。
+ *
+ * 序 = `$` 标签腿 → `#DIM` 声明腿 → 槽腿（项目函数索引，由各 `ui.editor.languageService`
+ * 贡献方给）。理由：前两腿是**本缓冲区可证明**的局部事实（脏缓冲也要给正确答案，而且
+ * 标签名 / 声明名的字符集比函数名那把尺更宽），槽腿是项目级名录——同一点位两条腿都答得出
+ * 时（`充填率` 既是 `#DIM` 声明名又是函数名，正是本批放宽取词尺之后**新出现**的形态），
+ * 先给证得了的那个。
+ *
+ * 为什么收成**一枚函数**而不是两条 `if`：此前 definition 与 find-references 各写了一遍
+ * "labels 盖过 dims 盖过槽"的嵌套，两处 `if` 就是两份优先序；漏改一处会让 F12 与
+ * `Shift+F12` 对同一个点位给出不同的第一落点（事件通道兜底跳的就是数组第一个）。
+ */
+export function mergeNavigationLegs(
+  labels: readonly EditorSymbolLocation[],
+  dims: readonly EditorSymbolLocation[],
+  slot: readonly EditorSymbolLocation[],
+): EditorSymbolLocation[] {
+  return mergeSymbolLocations(labels, mergeSymbolLocations(dims, slot));
+}
+
 /** Monaco model + 位置 → `#DIM` 定义落点（取文本 / 路径全程 fail-open） */
 export function resolveErbDimDefinitionAt(
   model: Monaco.editor.ITextModel,

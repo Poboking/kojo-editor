@@ -184,6 +184,72 @@ describe('ERB 函数悬停 · 含 CJK 的函数名（与 F2 / 引用面板同一
   });
 });
 
+/**
+ * F12-TOKEN（2026-10-19）③：**同一个点位既是库表中文名又是函数名时谁先答**。
+ *
+ * 优先序不再挂在"哪条腿用哪把尺"上（那是巧合，不是裁决），而是挂在
+ * `kojo-hover.ts::echoYieldsToIndex` 这一枚函数上：判据一条 ——
+ * 库表那条**只是回显**（`中文名 === 原生名`）而项目函数索引认这个名字 ⇒ 库表让位。
+ *
+ * 语料依据（`eratw-adapter` 库表 471 条，实测）：原生名含非 ASCII 的正好 13 条，
+ * 13/13 是恒等条目且 13 条全在函数索引里有 `@` 定义；原生名为 ASCII 且同时在库表与
+ * 索引里的 458 条**全部**带真翻译。⇒ "索引一律优先"会打沉那 458 条（库表 97.2%），
+ * "两把尺合成一把 Unicode"会抢掉那 13 条的正文；恒等/翻译这一条恰好把两半切开。
+ *
+ * 本组用例一律用 **ASCII 名字**跑：裁决必须与取词尺无关——把任何一把尺换掉，
+ * 这几条断言都该照原样成立（这才是"判据"而不是"副作用"）。
+ */
+describe('库表反查 × 函数索引 · 同点位优先序（一条判据一枚函数）', () => {
+  const ECHO = 'ECHO_FUNC'; // 库里只有回显（cn === 原生名）
+  const TRANSLATED = 'TRANSLATED_FUNC'; // 库里有真翻译
+  const indexWithBoth = (): ErbIndex => {
+    const a = fn(ECHO, 11, '回显函数的注释');
+    const b = fn(TRANSLATED, 22);
+    const files = new Map<string, { functions: ErbFunction[] }>([['C:/proj/ERB/BOOK.ERB', { functions: [a, b] }]]);
+    const byName = new Map<string, ErbFunctionRef[]>([[ECHO, [ref(a)]], [TRANSLATED, [ref(b)]]]);
+    return { files, byName } as unknown as ErbIndex;
+  };
+  const lib = {
+    lookupByFunction: (name: string) => (name === ECHO ? ECHO : name === TRANSLATED ? '中文显示名' : undefined),
+    lookupByName: () => undefined,
+    names: () => [],
+    hasTable: true,
+  } as unknown as KojoLibraryTable;
+
+  it('回显条目 + 索引认这个名字 ⇒ 函数索引先答（docComment / 定义位一条不丢）', () => {
+    const hit = resolveHoverName(`CALL ${ECHO}(1)`, 6, { libraryTable: lib, erbIndex: () => indexWithBoth() });
+    expect(hit?.kind).toContain('ERB 函数');
+    expect(hit?.lines?.some((l) => l.includes('回显函数的注释'))).toBe(true);
+    expect(hit?.lines?.some((l) => l.includes('C:/proj/ERB/BOOK.ERB:11'))).toBe(true);
+  });
+
+  it('真翻译条目 + 索引也认这个名字 ⇒ 库表先答（那个中文名是索引里不存在的信息）', () => {
+    const hit = resolveHoverName(`CALL ${TRANSLATED}(1)`, 6, { libraryTable: lib, erbIndex: () => indexWithBoth() });
+    expect(hit?.kind).toBe(`函数 · ${TRANSLATED}`);
+    expect(hit?.name).toBe('中文显示名');
+  });
+
+  it('回显条目但索引缺席（未开项目 / 通道抛错）⇒ 库表照旧答（fail-open，裁决不把另一条腿搞死）', () => {
+    for (const erbIndex of [undefined, () => null, () => undefined] as const) {
+      const hit = resolveHoverName(`CALL ${ECHO}(1)`, 6, { libraryTable: lib, ...(erbIndex ? { erbIndex } : {}) });
+      expect(hit?.kind).toBe(`函数 · ${ECHO}`);
+      expect(hit?.name).toBe(ECHO);
+    }
+    const thrown = resolveHoverName(`CALL ${ECHO}(1)`, 6, {
+      libraryTable: lib,
+      erbIndex: () => {
+        throw new Error('parser absent');
+      },
+    });
+    expect(thrown?.kind).toBe(`函数 · ${ECHO}`);
+  });
+
+  it('回显条目但索引里**没有**这个名字 ⇒ 库表答（回显让位的唯一条件是索引真的认领）', () => {
+    const hit = resolveHoverName(`CALL ${ECHO}(1)`, 6, { libraryTable: lib, erbIndex: () => fakeIndex() });
+    expect(hit?.kind).toBe(`函数 · ${ECHO}`);
+  });
+});
+
 describe('ERB 函数悬停 · fail-visible 负例（绝不猜）', () => {
   it('通道缺席（erbIndex 未注入）⇒ 不产结果', () => {
     expect(at('CALL |M_KOJO_EVENT', {})).toBeUndefined();

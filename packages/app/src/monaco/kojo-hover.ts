@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import type {
     ErbDim,
+    ErbFunctionRef,
     ErbIndex,
     KojoCounterTable,
     KojoFaceTable,
@@ -89,10 +90,12 @@ export interface HoverHit {
  * - **变量引用路** `族名:段`（`isRefChar` + `REF_RE`，本文件唯一保留的字面字符集，
  *   判的是"带冒号的引用形状"而不是标识符）；
  * - **反查表路**（系统函数 / 基础库 / 指令编号：查的都是**原生 ASCII 记号**）⇒ 用契约
- *   `symbolTokenAt`（`plugin-api/symbol-token`，那张表刻意只认 ASCII——"宁可漏也不跳错行"，
- *   本文件的注释不许把它写成 Unicode）；
+ *   `symbolTokenAt`（`plugin-api/symbol-token`，那张表刻意只认 ASCII——反查表的键就是 ASCII
+ *   原生名，本文件的注释不许把它写成 Unicode）；同一点位两条路都答得出时的**优先序**
+ *   不在尺子上，在 `echoYieldsToIndex` 那一枚裁决函数里（恒等回显让位给函数索引）；
  * - **函数索引路 / `#DIM` 声明路**（查的是作者自己起的名字，语料里约两成函数名含 CJK）
- *   ⇒ 用契约 `unicodeTokenAt`（`MODEL_TOKEN_CLASS` 那一把，与 F2 改名 / 引用面板同源）。
+ *   ⇒ 用契约 `unicodeTokenAt`（`MODEL_TOKEN_CLASS` 那一把，与 F2 改名 / 引用面板同源；
+ *   F12-TOKEN 2026-10-19 起转到定义与查找引用也走这一把，悬停与 F12 从此对称）。
  *
  * 改前函数索引路错用了反查表那把 ASCII 尺，症状 = 中文函数名在 `.erb` 里悬停什么都不出。
  */
@@ -161,13 +164,15 @@ export function resolveHoverName(
   }
 
   // 2) 原生函数名（ASCII 记号）：`GETBIT` → 获取标记（系统表反向优先，再查 adapter 基础库表反查）。
-  //    尺子 = 契约 `symbolTokenAt` 的缺省记号集（与转到定义 / 引用面板的"光标处是哪个原生
-  //    名字"同一把，本文件不再自己写字符集）。中文词在这一路**必然**判不出记号——那是
-  //    有意口径（反查表的键就是 ASCII 原生名），中文名字另有第 5 路与第 6 路。
+  //    尺子 = 契约 `symbolTokenAt` 的缺省记号集（**原生名字查表**那一路的尺，本文件不再自己
+  //    写字符集）。中文词在这一路**必然**判不出记号——那是有意口径（反查表的键就是 ASCII
+  //    原生名），中文名字另有第 5 路与第 6 路。
+  //    `!echoYieldsToIndex` 是本路与第 5 路的**优先序裁决**（一条判据一枚函数，见该函数）：
+  //    库里只有回显、而项目函数索引认这个名字时，本路让位——让位给带 docComment / 定义位的那条。
   const fnToken = symbolTokenAt(lineText, col0 + 1);
   if (fnToken) {
     const cn = SYSTEM_FUNCTION_REVERSE.get(fnToken.text) ?? tables.libraryTable?.lookupByFunction?.(fnToken.text);
-    if (cn !== undefined && cn.length > 0) {
+    if (cn !== undefined && cn.length > 0 && !echoYieldsToIndex(cn, fnToken.text, tables)) {
       return { name: cn, kind: `函数 · ${fnToken.text}`, startColumn: fnToken.startColumn, endColumn: fnToken.endColumn };
     }
   }
@@ -217,12 +222,60 @@ export function resolveHoverName(
 }
 
 /**
+ * 函数索引通道的**唯一**取法：通道缺席 / 索引未建 / 求值抛错 ⇒ `null`
+ * （不猜、fail-open；本文件其余地方一律不碰 `getIndex` 本身）。
+ */
+function erbIndexOf(
+  getIndex: (() => ErbIndex | null | undefined) | undefined,
+): ErbIndex | null {
+  if (typeof getIndex !== 'function') return null;
+  try {
+    return getIndex() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 「项目函数索引认不认这个名字」的**唯一**查询（第 2 路的裁决与第 5 路的取正文共用它，
+ * 两条腿各写一遍 `byName.get` 就是第二判据）。名录里没有 ⇒ `undefined` = **不认领**。
+ */
+function erbDefsOf(index: ErbIndex, upper: string): ErbFunctionRef[] | undefined {
+  const defs = index.byName.get(upper);
+  return defs === undefined || defs.length === 0 ? undefined : defs;
+}
+
+/**
+ * 两条**名字查表路**在同一位置的优先序（F12-TOKEN 2026-10-19；一条判据一枚函数，
+ * 第 2 路与第 5 路不许各写自己的 `if`）。
+ *
+ * 判据一条：库表那条**只是回显**（`中文名 === 原生名`）时让位给函数索引——回显给不出
+ * docComment、形参签名与定义位置，索引那条结果是它的严格超集；库表给的是**真翻译**
+ * （两个名字不同）时库表先答，因为那个中文名是函数索引里根本不存在的信息。
+ *
+ * 为什么这条判据必须由数据形状决定、而不是由取词尺决定（实测语料，`eratw-adapter` 库表
+ * 471 条）：原生名含 CJK 的正好 **13** 条，且 **13/13 都是恒等条目**（`充填率` → `充填率`），
+ * 且 13 条**全部**在项目函数索引里有 `@` 定义（它们本就是基础库函数）；而原生名为 ASCII
+ * 且同时在库表与索引里的 458 条**全部**带真翻译（`CURRENT_CLOTHES_SET` → 当前衣装套）。
+ * ⇒ 把两路的尺子合成一把 Unicode 尺，抢掉正文的正好是那 13 条回显；而一句"索引优先"
+ * 会打沉另外 458 条真翻译（占库表 97.2%）。恒等/翻译这一条判据把两半精确切开。
+ */
+function echoYieldsToIndex(cn: string, token: string, tables: HoverTables): boolean {
+  if (cn !== token) return false;
+  const index = erbIndexOf(tables.erbIndex);
+  return index !== null && erbDefsOf(index, token.toUpperCase()) !== undefined;
+}
+
+/**
  * ERB 函数路（**纯函数**）：光标词在 `ErbIndex.byName` 里 ⇒ 产出带正文的命中。
  *
  * - 取词尺 = 契约 `unicodeTokenAt`（字母 / 数字 / 下划线的 Unicode 记号，与 F2 改名、
  *   引用面板、结构化着色同一把）——函数索引里存的就是作者自己起的名字，**含中文的
  *   函数名是常态不是例外**，用 ASCII 尺量出的记号在 `byName` 里根本查不到（DRIFT-APP 2）；
- * - 名词查表用**归一化大写**（Emuera 函数名大小写不敏感，与 `byName` 键同口径）；
+ *   F12-TOKEN 2026-10-19 起转到定义 / 查找引用两条腿也用这一把（`erb-parser/references.ts`
+ *   的 `functionNameTokenAt` = 本尺 + 成员冒号退让），悬停与 F12 从此对称；
+ * - 名词查表用**归一化大写**（Emuera 函数名大小写不敏感，与 `byName` 键同口径），
+ *   认领判据走 `erbDefsOf`（与第 2 路的裁决同一枚函数）；
  * - 正文 = docComment（有则按行拆开）+ 形参签名（参数取自同一索引的 `files` 全量定义，
  *   文件不在索引 ⇒ 只省签名这一行，不猜）+ 定义位置（`文件路径:行号`）；
  * - 同名多处定义：显示首条的正文与位置，并追加一行注明剩余处数（重名事实不藏）。
@@ -232,18 +285,12 @@ function resolveErbFunctionHover(
   column: number,
   getIndex: (() => ErbIndex | null | undefined) | undefined,
 ): HoverHit | undefined {
-  if (typeof getIndex !== 'function') return undefined;
-  let index: ErbIndex | null | undefined;
-  try {
-    index = getIndex();
-  } catch {
-    return undefined;
-  }
-  if (!index) return undefined;
+  const index = erbIndexOf(getIndex);
+  if (index === null) return undefined;
   const span = unicodeTokenAt(lineText, column);
   if (!span) return undefined;
-  const defs = index.byName.get(span.text.toUpperCase());
-  if (!defs || defs.length === 0) return undefined;
+  const defs = erbDefsOf(index, span.text.toUpperCase());
+  if (defs === undefined) return undefined;
 
   const def = defs[0]!;
   const lines: string[] = [];
@@ -284,14 +331,10 @@ function resolveErbDimHover(
   getIndex: (() => ErbIndex | null | undefined) | undefined,
   filePath: string | null,
 ): HoverHit | undefined {
-  if (typeof getIndex !== 'function' || !filePath) return undefined;
-  let index: ErbIndex | null | undefined;
-  try {
-    index = getIndex();
-  } catch {
-    return undefined;
-  }
-  if (!index) return undefined;
+  if (!filePath) return undefined;
+  // 索引通道的取法与函数路同一枚函数（缺席 / 未建 / 抛错 ⇒ 不产结果，不各写一遍）
+  const index = erbIndexOf(getIndex);
+  if (index === null) return undefined;
   const span = spanAround(lineText, col0, isDimNameChar);
   if (!span) return undefined;
   const token = lineText.slice(span.start, span.end);

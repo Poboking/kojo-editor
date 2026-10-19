@@ -7,7 +7,7 @@ import type {
 } from '@kojo/plugin-api';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { registerForKojoDialects } from './register-dialects';
-import { mergeSymbolLocations, resolveErbDimDefinitionAt } from './erb-dim-navigation';
+import { mergeNavigationLegs, resolveErbDimDefinitionAt } from './erb-dim-navigation';
 import { labelDefinitionLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
 
 /**
@@ -397,15 +397,15 @@ export function installDefinitionProvider(
         {
           ...handlers,
           resolve: (m, p) => {
-            let rest: DefinitionLocation[] = [];
+            let slot: DefinitionLocation[] = [];
             try {
-              rest = handlers.resolve(m, p);
+              slot = handlers.resolve(m, p);
             } catch (e: unknown) {
               // 槽腿出错不能把已经命中的 `#DIM` / 标签一起吞掉（隔离粒度仍到贡献方）
               console.warn(`[kojo-definition] resolve 抛错（本地腿照常交付）：${errorText(e)}`);
             }
-            const withDims = dims.length > 0 ? mergeSymbolLocations(dims, rest) : rest;
-            return labels.length > 0 ? mergeSymbolLocations(labels, withDims) : withDims;
+            // 优先序只在这一枚函数里定（`mergeNavigationLegs`，与查找引用共用）
+            return mergeNavigationLegs(labels, dims, slot);
           },
         },
         findModel,

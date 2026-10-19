@@ -18,6 +18,7 @@ import { installDefinitionProvider } from '../src/monaco/kojo-definition';
 import { installReferenceProvider } from '../src/monaco/find-references';
 import {
   dimDeclarationOf,
+  mergeNavigationLegs,
   mergeSymbolLocations,
   resolveErbDimDefinition,
   resolveErbDimReferences,
@@ -148,8 +149,76 @@ describe('#DIM 位置合并 · 路径归一', () => {
   });
 });
 
-/* ============================== provider 接线（桩 monaco） ============================== */
+/**
+ * F12-TOKEN（2026-10-19）③：**同一位置多条腿的优先序只住在一枚函数里**。
+ *
+ * 取词尺放宽到 Unicode 之后，"中文 `#DIM` 声明名"与"中文函数名"第一次会在**同一个点位**
+ * 上各自答出一份（语料里 `充填率` / `睡眠時間` 这类名字既是基础库函数、也常被作者拿来当
+ * 声明名）。此前这条序是两条宿主腿各写两遍 `if`（definition 与 find-references 各一份
+ * 嵌套），漏改一处就会让 F12 与 `Shift+F12` 对同一个点位给出不同的第一落点。
+ * 现在序 = `mergeNavigationLegs(标签, 声明, 槽)`，两条腿共用水这一枚函数。
+ */
+describe('多条腿的优先序 · mergeNavigationLegs（标签 > 声明 > 槽）', () => {
+  const loc = (line: number, column: number, kind: 'definition' | 'call' | 'mention'): EditorSymbolLocation => ({
+    filePath: PATH,
+    line,
+    column,
+    span: { columnStart: column, columnEnd: column + 3 },
+    kind,
+  });
+  const label = loc(3, 8, 'definition');
+  const dim = loc(4, 8, 'definition');
+  const slot = [loc(3, 8, 'definition'), loc(9, 6, 'call')];
 
+  it('三腿齐给 ⇒ 标签在前、声明次之、槽腿在后（事件通道兜底跳的就是第一枚）', () => {
+    expect(mergeNavigationLegs([label], [dim], slot).map((l) => `${l.line}:${l.column}`)).toEqual([
+      '3:8',
+      '4:8',
+      '9:6',
+    ]);
+  });
+
+  it('标签与槽腿指的是同一处（路径两种写法）⇒ 折成一枚并保住区间；不同处两枚都在', () => {
+    const merged = mergeNavigationLegs(
+      [loc(3, 8, 'definition')],
+      [],
+      [
+        { filePath: 'C:/PROJ/ERB/DIM.ERB', line: 3, column: 8 },
+        { filePath: 'C:/PROJ/ERB/DIM.ERB', line: 9, column: 6 },
+      ],
+    );
+    expect(merged).toHaveLength(2);
+    expect(merged[0]!.span).toEqual({ columnStart: 8, columnEnd: 11 }); // 同处取带区间的那一枚
+    expect(merged[1]!.line).toBe(9); // 另一处不许被"优先序"折掉
+  });
+
+  it('两条本地腿都零贡献 ⇒ 槽腿原样交付（优先序不许吞掉项目索引的结果）', () => {
+    expect(mergeNavigationLegs([], [], slot)).toEqual(slot);
+    expect(mergeNavigationLegs([], [], [])).toEqual([]);
+  });
+
+  it('provider 端到端：中文声明名同点位撞上函数索引 ⇒ 声明腿排第一、函数腿仍在列表里', () => {
+    const { monaco, definitions } = stubMonaco();
+    const slotFromIndex: EditorSymbolLocation[] = [
+      { filePath: PATH, line: 12, column: 2, span: { columnStart: 2, columnEnd: 5 }, kind: 'definition' },
+    ];
+    installDefinitionProvider(monaco, {
+      resolve: () => slotFromIndex, // 槽腿（项目函数索引）答的另一个文件位
+      navigate: () => undefined,
+      openModelFor: () => fakeModel(PATH),
+    });
+    const provider = definitions.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
+    // 第 7 行 `  好感度 = 1`：本文件 `#DIM` 声明腿命中，槽腿也给一份 ⇒ 声明在前
+    const links = provider.provideDefinition(
+      fakeModel(PATH),
+      { lineNumber: 7, column: 3 } as Monaco.Position,
+      {} as Monaco.CancellationToken,
+    ) as Monaco.languages.LocationLink[];
+    expect(links.map((l) => l.targetSelectionRange?.startLineNumber)).toEqual([3, 12]);
+  });
+});
+
+/* ============================== provider 接线（桩 monaco） ============================== */
 function fakeModel(path: string | null): Monaco.editor.ITextModel {
   const lines = TEXT.split('\n');
   return {

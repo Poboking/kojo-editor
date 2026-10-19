@@ -7,7 +7,7 @@ import type {
 } from '@kojo/plugin-api';
 import { registerForKojoDialects } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
-import { mergeSymbolLocations, resolveErbDimReferencesAt } from './erb-dim-navigation';
+import { mergeNavigationLegs, resolveErbDimReferencesAt } from './erb-dim-navigation';
 import { labelReferenceLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
 import {
   explainReferenceCounts,
@@ -233,8 +233,8 @@ export function installReferenceProvider(
         if (localRefs === 0) return undefined;
         locations = [];
       }
-      if (dimRefs.length > 0) locations = mergeSymbolLocations(dimRefs, locations);
-      if (labelRefs.length > 0) locations = mergeSymbolLocations(labelRefs, locations);
+      // 优先序只在这一枚函数里定（`mergeNavigationLegs`，与转到定义共用同一份裁决）
+      locations = mergeNavigationLegs(labelRefs, dimRefs, locations);
       const out: Monaco.languages.Location[] = [];
       // 计数与列表同源：位置进台账（分类由供方带过来，缺席即未分类），读数与列表一次算出
       const tally = tallyReferenceOccurrences(occurrencesFromLocations(locations));

@@ -102,3 +102,46 @@ describe('createEratwLibraryTable · 查询与反查（纯数据，无 IO）', (
     expect(EMPTY_LIBRARY_TABLE.names?.()).toEqual([]);
   });
 });
+
+/**
+ * F12-TOKEN（2026-10-19）③ 的**数据依据**：宿主 `kojo-hover.ts::echoYieldsToIndex` 那条
+ * 优先序判据（库表只是回显时让位给项目函数索引）为什么必须按"恒等 / 真翻译"切，而不是
+ * 按"中文 / ASCII"切，也不是"索引一律优先"——答案全在这张表自身的形状里。
+ *
+ * 语料侧的两半（13 条中文原生名**全部**在函数索引里有 `@` 定义；ASCII 同现的 458 条
+ * **全部**带真翻译）钉在 `erb-parser/tests/f12-cjk.corpus.test.ts`，本文件只钉盘上表本身。
+ */
+describe('ERATW_LIBRARY_FUNCTIONS · 恒等条目与真翻译条目的切分（优先序判据的数据面）', () => {
+  const entries = [...ERATW_LIBRARY_FUNCTIONS.entries()];
+  const nonAscii = entries.filter(([, native]) => /[^\x20-\x7e]/.test(native));
+  const identity = entries.filter(([cn, native]) => cn === native);
+
+  it('原生名含非 ASCII 的条目就是那批"库本来就用中文/日文命名"的恒等条目（13 条，一条不多）', () => {
+    expect(nonAscii.length).toBe(13);
+    expect(nonAscii.every(([cn, native]) => cn === native)).toBe(true);
+    expect(new Set(identity.map(([, native]) => native)).size).toBeGreaterThanOrEqual(13);
+  });
+
+  it('恒等条目 ≡ 非 ASCII 原生名条目 ⇒ "回显"与"中文原生名"在本表里是同一批（13 条）', () => {
+    expect(identity.length).toBe(nonAscii.length);
+    expect(identity.map(([cn]) => cn).sort()).toEqual(nonAscii.map(([, native]) => native).sort());
+  });
+
+  it('恒等条目反查只是回显（`充填率` → `充填率`）：让位给函数索引不丢任何信息', () => {
+    const table = createEratwLibraryTable(ERATW_LIBRARY_FUNCTIONS);
+    for (const [, native] of nonAscii) {
+      expect(table.lookupByFunction?.(native)).toBe(native);
+      expect(table.lookupByName?.(native)).toBe(native);
+    }
+  });
+
+  it('真翻译条目（中文名 ≠ 原生名）占其余全部 ⇒ "函数索引一律优先"会打沉它们', () => {
+    const translated = entries.filter(([cn, native]) => cn !== native);
+    expect(translated.length).toBe(entries.length - 13);
+    expect(translated.length / entries.length).toBeGreaterThan(0.95);
+    // 抽样两条基线库助手：中文名与原生名两样都必须在反查里给得出
+    const table = createEratwLibraryTable(ERATW_LIBRARY_FUNCTIONS);
+    expect(table.lookupByName?.('加特殊宝珠')).toBe('JUEL_UP_SPECIAL');
+    expect(table.lookupByFunction?.('JUEL_UP_SPECIAL')).toBe('加特殊宝珠');
+  });
+});
