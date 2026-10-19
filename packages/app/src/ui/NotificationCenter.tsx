@@ -29,6 +29,13 @@ export interface NoticeInput {
    * 不许当第一眼，但一条都不许丢 ⇒ 让路点叫什么、原因原文，作者悬停就能查到。
    */
   readonly detail?: string;
+  /**
+   * 多个并列动作（additive；`action` 的语义与渲染一字未动，旧消费方零改动）。
+   *
+   * 为什么需要复数：「磁盘被外部改动」这类现场给的不是一个选择而是两个——先看差异、
+   * 还是直接放弃我的修改。只留一条按钮等于替用户做了他没同意的那个决定。
+   */
+  readonly actions?: readonly NoticeAction[];
 }
 
 export interface Notice extends NoticeInput {
@@ -114,6 +121,18 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
                   {n.action.label}
                 </button>
               ) : null}
+              {(n.actions ?? []).map((a, i) => (
+                <button
+                  key={`${n.id}:${i}`}
+                  className="small toast-action"
+                  onClick={() => {
+                    dismiss(n.id);
+                    a.run();
+                  }}
+                >
+                  {a.label}
+                </button>
+              ))}
               <button className="ghost small toast-close" title="关闭" onClick={() => dismiss(n.id)}>
                 <Icon name="close" size={13} />
               </button>
