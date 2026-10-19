@@ -21,7 +21,8 @@
  *
  * 抽成纯函数以便单测（React 组件内的分支不便在无 DOM 环境覆盖）。
  */
-import { isPathUnder, pathKey } from '@kojo/plugin-api';
+import { errorText, isPathUnder, pathKey, type FileIO, type KernelEventMap } from '@kojo/plugin-api';
+import type { DiffRequest } from './diff-core';
 
 /**
  * 三方合并判不动的规模上限（行数）：ERB 单文件的正常量级远低于此，
@@ -357,4 +358,93 @@ export function matchOpenedPath<K extends string>(keys: Iterable<K>, eventPath: 
     if (pathKey(k) === want) return k;
   }
   return null;
+}
+
+/* ------------------------------ 冲突现场 · 差异视图接线（工包 H，2026-10-19） ------------------------------ */
+
+/**
+ * 「外部改动冲突 → 通用差异视图」的**唯一接线口**（纯逻辑，node 可单测）。
+ *
+ * 症状（取证见工包 H）：`EditorPane` 检出 conflict 后只有一条 notify + 一个
+ * 「重新加载（放弃我的修改）」——`clashCount` 是裸数字，比对能力（`diff-view` /
+ * `DiffViewOverlay`）全仓零接线。作者改了半天、盘上进来别人的改动，只能"放弃"或
+ * "盲覆盖"，**看不到差异**。本函数把那套现成比对接到冲突现场。
+ *
+ * 三条口径（测试逐条钉死，`tests/external-change-diff.test.ts`）：
+ * 1. **有 clash 才开窗**：decision 非冲突（noop / reload / merge）⇒ 返回 `no-clash`
+ *    且不发任何意图——自动合并过的内容不该再逼作者比对；
+ * 2. **两侧内容只认真源**：内存侧 = 调用方在**点击时刻**传入的 `model.getValue()`
+ *    （与「重新加载」动作同款纪律：闭包不持过期文本）；盘侧 = 现读 `io.readText`
+ *    （kernel.io 单源，游戏目录读侧无写闸）。**不拿 savedBase 冒充实盘、不在 UI 层
+ *    另拼一份"差异数据"**——diff 视图看到的盘侧就是点那一刻的盘上真相；
+ * 3. **盘读失败退回 notify 口径**（铁律 4）：不空开窗、不白屏——经 `deps.notify`
+ *    上一条与「重新加载失败」同款的人话错误，返回 `read-failed`。
+ *
+ * 落地走既有 `ui.diffView.open` 总线（`bindDiffView` 校验/入栈/开 overlay 一条路，
+ * 本函数**不绕它直接推 diff-core**）——多开栈、体量闸、判等横幅这些既有行为对这个
+ * 场景零成本继承。
+ */
+export interface ExternalChangeDiffInput {
+  /** `decideExternalChange` 的本次决策（冲突判据的唯一来源，不接受外部布尔） */
+  readonly decision: ExternalChangeDecision;
+  /** 冲突文件路径（盘侧现读的靶子） */
+  readonly path: string;
+  /** 内存侧文本：调用时刻的 `model.getValue()` */
+  readonly memoryText: string;
+}
+
+export interface ExternalChangeDiffDeps {
+  /** kernel.io 的读侧（`EditorPane` 传 `kernel.io` 即可，读写闸在 io 单源里） */
+  readonly io: Pick<FileIO, 'readText'>;
+  /** 意图进总线：EditorPane 绑 `(p) => kernel.bus.emit('ui.diffView.open', p)` */
+  readonly emitDiffOpen: (p: KernelEventMap['ui.diffView.open']) => void;
+  /** 盘读失败 → 现有 notify 口径（EditorPane 绑 `notify`；error 常驻，不静默） */
+  readonly notify: (input: { readonly kind: 'error'; readonly message: string }) => void;
+}
+
+export type ExternalChangeDiffOutcome =
+  | { readonly kind: 'open'; readonly request: DiffRequest }
+  | { readonly kind: 'no-clash' }
+  | { readonly kind: 'read-failed'; readonly message: string };
+
+/** 这次决策是不是"必须交给用户看差异"的冲突（两方 conflict 与三方 merge-conflict 都算） */
+export function hasExternalChangeClash(decision: ExternalChangeDecision): boolean {
+  if (decision === 'conflict') return true;
+  return typeof decision === 'object' && decision.kind === 'merge-conflict';
+}
+
+/** 冲突处数（merge-conflict 才有逐块清单；两方 conflict 没有逐块，0——但仍是冲突） */
+export function externalChangeClashCount(decision: ExternalChangeDecision): number {
+  return typeof decision === 'object' && decision.kind === 'merge-conflict'
+    ? decision.conflicts.length
+    : 0;
+}
+
+export async function openExternalChangeDiff(
+  input: ExternalChangeDiffInput,
+  deps: ExternalChangeDiffDeps,
+): Promise<ExternalChangeDiffOutcome> {
+  if (!hasExternalChangeClash(input.decision)) return { kind: 'no-clash' };
+
+  let diskText: string;
+  try {
+    ({ text: diskText } = await deps.io.readText(input.path));
+  } catch (e: unknown) {
+    const message = `读取磁盘上的「${input.path}」失败，无法对比差异：${errorText(e)}`;
+    deps.notify({ kind: 'error', message });
+    return { kind: 'read-failed', message };
+  }
+
+  const clashCount = externalChangeClashCount(input.decision);
+  const request: DiffRequest = {
+    title:
+      clashCount > 0
+        ? `磁盘改动 ⇄ 我的未保存修改 · ${input.path}（${clashCount} 处冲突）`
+        : `磁盘改动 ⇄ 我的未保存修改 · ${input.path}`,
+    // 左 = 参照侧（盘上那份，保存就会覆盖它）；右 = 对照侧（编辑器里的我这份）
+    original: { label: `磁盘 · ${input.path}`, text: diskText },
+    modified: { label: `编辑器 · 我的未保存修改`, text: input.memoryText },
+  };
+  deps.emitDiffOpen({ ...request, source: 'host:external-change-conflict' });
+  return { kind: 'open', request };
 }
