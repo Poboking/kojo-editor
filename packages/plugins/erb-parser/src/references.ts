@@ -7,8 +7,9 @@ import type {
   ErbReferenceIndex,
   ErbReferenceKind,
   LineDecoration,
+  SymbolToken,
 } from '@kojo/plugin-api';
-import { isErbDialectPath, MODEL_TOKEN_CLASS, symbolTokenAt } from '@kojo/plugin-api';
+import { isErbDialectPath, MODEL_TOKEN_CLASS, unicodeTokenAt } from '@kojo/plugin-api';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -29,6 +30,9 @@ import { isErbDialectPath, MODEL_TOKEN_CLASS, symbolTokenAt } from '@kojo/plugin
  * `scanUndefinedCallTargets` / `erbReferenceDecorations` 与 `scanFileRefs` 共用
  * 同一条可见行遍历（`visibleCodeLines`）、同一张 `CALL_FAMILY` 表、同一个记号字符集
  * ——"哪些字符算引用"只有一把尺子。
+ * 2026-10-19 F12-TOKEN 批起，本模块还是**光标处函数名**的唯一取词判据（`functionNameTokenAt`）：
+ * 反向索引记进表的记号与光标查表用的记号必须是同一枚尺量出来的，否则会出现
+ * "引用面板查得到、F12 跳不动"（反之亦然）这类没人能解释的差值。
  */
 
 /** 行首直系调用关键字（参数位就是**函数名**的那些；FORM / GOTO / JUMP 系不在内，理由见头注） */
@@ -96,12 +100,17 @@ function codeViewOf(line: string): string {
  * 可见代码记号：Unicode 字母/数字/下划线。
  * **刻意不锁 ASCII**——真实语料 99,118 条 `@` 定义里 20,805 条（21%）名字含 CJK
  * （`M_KOJO_無個性_…` 一族，eraTW 作者手写），ASCII 字符集会静默漏掉两成定义的反向边。
- * 与 `plugin-api/symbol-token` 的 ASCII 集**不同**是有意分歧：那张表服务"光标命中"
- * （宁可窄），这张表服务"全库反向索引"（漏了就是错）。
+ * 与 `plugin-api/symbol-token` 的 ASCII 集**不同**是有意分歧：那张表服务"**原生**名字查表"
+ * （引擎/库表的键就是 ASCII 原生名，宁可窄），这张表服务"作者自己起的名字"
+ * （全库反向索引 + 光标查表两条腿，漏了就是错）。F12-TOKEN（2026-10-19）把**光标查表**
+ * 那两条腿（`definitionTargetsAt` / `erbReferenceLocationsAt`）也接到这一把尺上：
+ * 语料 25,003 条 CJK 定义名的名字点位上，ASCII 尺给得出记号的只有 45,035/50,006 个点位、
+ * 其中查得到定义的只有 61 个（0.12%），换成本尺是 49,848/50,006（99.68%）。
  *
  * 字符集**字面量只住在 `plugin-api/semantic-locate` 的 `MODEL_TOKEN_CLASS`**：着色落点
- * （`locateIdentifier`）与本条反向索引回答的是同一个事实——"什么字符算一个记号"。
- * 两处各写一遍就是第二判据，漂移表现是"引用面板说有引用、着色却不亮"（反之亦然）。
+ * （`locateIdentifier`）、本条反向索引、以及下面的 `functionNameTokenAt` 回答的是同一个
+ * 事实——"什么字符算一个记号"。两处各写一遍就是第二判据，漂移表现是
+ * "引用面板说有引用、着色却不亮"（反之亦然）。
  *
  * PS-3 提速批：遍历从"每行一次 `RegExp.exec` 循环"换成 `forEachToken` 的
  * `charCodeAt` 走位（ASCII 判据内联、其余码点仍回退到**同一个** `MODEL_TOKEN_CLASS`
@@ -114,6 +123,38 @@ const IDENT_ONE = new RegExp(MODEL_TOKEN_CLASS, 'u');
 /** 半/全角冒号的码元（成员访问判据：`FLAG:NAME` 里 NAME 引用的是 FLAG 的成员，不是函数） */
 const COLON_HALF = 0x3a;
 const COLON_FULL = 0xff1a;
+
+/**
+ * 「这一段记号是不是**变量成员访问**」的**唯一**判据（0 基半开区间）：整串紧邻半/全角
+ * 冒号 ⇒ 它属于变量世界，既不是反向索引里的引用点（`scanFileRefs`）、也不是 CALL 的
+ * 名字槽（`scanUndefinedCallTargets`）、也不是光标处的函数名（`functionNameTokenAt`）。
+ * 三处各自内联一遍就是第四份判据，漂移的表现是"引用面板里查不到、F12 却跳得过去"。
+ */
+function colonAdjacent(code: string, start: number, end: number): boolean {
+  const before = start > 0 ? code.charCodeAt(start - 1) : -1;
+  const after = end < code.length ? code.charCodeAt(end) : -1;
+  return before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL;
+}
+
+/**
+ * 光标处**函数名**记号（`byName` 查表两条腿的唯一取词判据，F12-TOKEN 2026-10-19）。
+ *
+ * = 契约 Unicode 尺（`MODEL_TOKEN_CLASS` 那一把，与 F2 改名 / 引用面板 / 结构化着色同源）
+ * 再套本模块的成员访问退让（`colonAdjacent`）。两条腿（转到定义 / 查找引用）**必须**用
+ * 同一枚函数取词：`erbReferenceLocationsAt` 查的键正是 `scanFileRefs` 记进表的那些记号，
+ * 取词尺不一致就会出现"光标处查得到定义、查引用却说没有"。
+ *
+ * 列口径与 `symbolTokenAt` 逐字一致（1 基、越界不猜、停在词尾后一格也算命中）。
+ */
+export function functionNameTokenAt(lineText: string, column: number): SymbolToken | undefined {
+  if (!Number.isFinite(column) || column < 1) return undefined;
+  // 列越界（超过行宽 + 1）视为行外：光标不可能在那儿（与 `symbolTokenAt` 同一条不猜口径）
+  if (column > lineText.length + 1) return undefined;
+  const token = unicodeTokenAt(lineText, Math.trunc(column));
+  if (!token) return undefined;
+  if (colonAdjacent(lineText, token.startColumn - 1, token.endColumn - 1)) return undefined;
+  return token;
+}
 
 /**
  * `i` 处码元是否为记号字符；返回**占用的码元数**（0 = 非记号）。
@@ -282,10 +323,8 @@ export function scanFileRefs(text: string, hasName: (normalizedName: string) => 
       const inSlot = !slotTaken && start >= keywordEnd;
       if (inSlot) slotTaken = true; // 槽位记号无论命不命中名字都被消耗
       // 变量成员访问整体不算函数引用：`CFLAG:ALPHA` 两段都是变量世界（基名紧邻冒号，
-      // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。
-      const before = start > 0 ? code.charCodeAt(start - 1) : -1;
-      const after = end < code.length ? code.charCodeAt(end) : -1;
-      if (before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL) return;
+      // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。判据单源 `colonAdjacent`。
+      if (colonAdjacent(code, start, end)) return;
       const upper = normalizedUpper(code.slice(start, end));
       if (!hasName(upper)) return;
       out.push([upper, line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
@@ -329,10 +368,8 @@ export function scanUndefinedCallTargets(text: string, hasName: (upper: string) 
       // 槽位 = 关键字后的第一个记号；与关键字之间只许空白 ⇒ 裸标识符
       if (!/^[\t \u3000]*$/.test(raw.slice(keywordEnd, start))) return false;
       const run = code.slice(start, end);
-      // 成员访问占槽：整槽不算函数名，也不向后顺延
-      const before = start > 0 ? code.charCodeAt(start - 1) : -1;
-      const after = end < code.length ? code.charCodeAt(end) : -1;
-      if (before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL) return false;
+      // 成员访问占槽：整槽不算函数名，也不向后顺延（判据单源 `colonAdjacent`）
+      if (colonAdjacent(code, start, end)) return false;
       if (!hasName(normalizedUpper(run))) out.push({ line, column: start + 1, name: run });
       return false; // 一行至多一个名字槽
     });
@@ -403,7 +440,8 @@ export function referencesOf(index: ErbIndex, name: string): ErbReference[] {
  *
  * 判据与 rename 完全同源：光标词整串在 `bySymbol` 里有记录才给（未收录 = 空数组，
  * **不猜**）；查询单一真源是 `referencesOf`，本函数只补"光标 → 名字"这一步
- * （`symbolTokenAt`，与 `definitionTargetsAt` 同一把尺子）。
+ * （`functionNameTokenAt`，与 `definitionTargetsAt` **同一个函数**，不是"同一把尺子"
+ * 的两种写法——中文函数名上两条腿要么一起跳、要么一起不跳，各用各的尺必然漂）。
  *
  * **分类随位置走**（W8 XLANG-RENAME，2026-10-17）：`kind` 原样带进契约位置
  * （`EditorSymbolLocation.kind` 是 additive 可选成员，旧消费方看不见它照常工作）。
@@ -421,7 +459,7 @@ export function erbReferenceLocationsAt(
   if (n < 1) return [];
   const lineText = text.replace(/\r\n?/g, '\n').split('\n')[n - 1];
   if (lineText === undefined) return [];
-  const token = symbolTokenAt(lineText, Math.trunc(column));
+  const token = functionNameTokenAt(lineText, Math.trunc(column));
   if (!token) return [];
   return referencesOf(index, token.text).map((ref) => ({
     filePath: ref.filePath,

@@ -1,6 +1,7 @@
 import type { EnclosingMode, ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
-import { MODEL_TOKEN_CLASS, enclosingAt, enclosingChainAt, symbolTokenAt } from '@kojo/plugin-api';
+import { MODEL_TOKEN_CLASS, enclosingAt, enclosingChainAt } from '@kojo/plugin-api';
 import { parseErbText, parseLabelDefinition } from './scanner';
+import { functionNameTokenAt } from './references';
 
 /**
  * 位置 → 符号（B0，2026-10-15 语言服务批）。
@@ -314,6 +315,14 @@ export function labelScopeAt(
  * **未收录 → 空数组**（"未定义函数"的判据就是 `byName` 缺失，不猜、不新造表）。
  * 因此本函数对"变量名 / 关键字 / 散文"一律不给答案：那些记号根本不在 `byName` 里。
  *
+ * 取词尺 = `references.ts` 的 `functionNameTokenAt`（契约 `MODEL_TOKEN_CLASS` 那把 Unicode
+ * 尺 + 成员冒号退让，**与 `erbReferenceLocationsAt` 是同一个函数**，不是"同一把尺子"的
+ * 两种写法）。F12-TOKEN 2026-10-19 起不再用 ASCII 尺：真实语料 25,003 条含 CJK 的
+ * `@` 定义名上，ASCII 尺在 50,006 个名字点位里只答得出 61 次（0.12%）——中文函数名的
+ * F12 事实上是瞎的；中文散文那一侧的代价是 1,269,664 个散文点位里新增 1,384 次可跳
+ * （0.11%），而每一次的落点都是"光标下那一整串恰好是某个函数的名字"。
+ * 优先序仍由本函数的**一条链**裁决：标签腿 →（标签入口但作用域不成立 ⇒ 不给）→ 函数腿。
+ *
  * 纯函数：只读入参索引，`text` 只用来切行与（仅标签入口命中时）parse 出标签表。
  */
 export function definitionTargetsAt(
@@ -344,7 +353,7 @@ export function definitionTargetsAt(
   // 标签入口（定义名 / 跳转目标一侧）但作用域不成立 ⇒ 空数组：`$FOO` 不是函数引用，
   // 哪怕 FOO 恰好是函数名；`GOTO NOWHERE` / `GOTO (X)` 也不落函数名那把尺子
   if (labelEntryAt(lineText, column) !== null) return [];
-  const token = symbolTokenAt(lineText, column);
+  const token = functionNameTokenAt(lineText, column);
   if (!token) return [];
   return index.byName.get(token.text.toUpperCase()) ?? [];
 }
