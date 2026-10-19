@@ -7,11 +7,17 @@
  * 2. **精确形**——每例钉死期望字符串（显示口径漂移 = 立刻红）；
  * 3. **不猜**——认不出必须 `null`（负自证表），`lookup` 缺席时语言层照常工作
  *    （无工程 / 无 adapter 的预览不瘫痪）。
+ *
+ * 第四组（TRY 系分档）钉的是**两层的配对**：开块九枚归 ZH-C、单行档归本层，
+ * 名单同源于 `sugar-ident`，谁也不许认领对方那批（`startsWith('TRY')` 那条捷径要当场显形）。
  */
 
 import { describe, expect, it } from 'vitest';
 import { FAMILY_ALIASES_REVERSE } from '@kojo/plugin-eratw-adapter';
-import { renderStatementLine } from '../src/native-display/statement';
+import { STATEMENT_TRY_WORDS, renderStatementLine } from '../src/native-display/statement';
+import { renderControlLine } from '../src/native-display/control';
+import { lookupKeyword } from '../src/keywords';
+import { TRY_CATCH_OPEN, TRY_LIST_OPEN, TRY_SINGLE_LINE } from '../src/sugar-ident';
 import { isVerbatimNativeLine } from '../src/native-display/types';
 import type { NativeDisplayInput, NativeDisplayLookup } from '../src/native-display/types';
 import { localizeNativeLine } from '../src/native-display/passes';
@@ -110,6 +116,11 @@ const CASES: readonly Case[] = [
   ['TRYCALL FOO', undefined, '尝试调用 FOO'],
   ['TRYCALLFORM KOJO_K12(RESULT)', undefined, '尝试调用形 KOJO_K12(RESULT)'],
   ['TRYJUMP 100', undefined, '尝试跳转 100'],
+  // goto 家族的单行 try 变体（`sugar-ident` 的 `TRY_SINGLE_LINE`）：目标**逐字带走**，
+  // `跳到` 与 ZH-C 的 `GOTO` 显示形同字、`…形` 与 `调用形` 同构
+  ['TRYGOTO *甲', undefined, '尝试跳到 *甲'],
+  ['TRYGOTO $GO_BACK', undefined, '尝试跳到 $GO_BACK'],
+  ['TRYGOTOFORM $GO_BACK, TARGET', undefined, '尝试跳到形 $GO_BACK, TARGET'],
 
   /* —— 位原语 —— */
   ['SETBIT LOCAL, 3', undefined, '置位 局部 第3位'],
@@ -215,6 +226,9 @@ const NULL_LINES: readonly string[] = [
   'NEXT I',
   'WHILE 1',
   'TRY', // 块开词
+  'TRYGOTO', // 裸记号无目标 = 畸形（与裸 `CALL` 同一判据）
+  'TRYCATCH FOO', // 名单外的 TRY 记号：前缀不算认领
+  'TRYNOPENAME FOO',
   'CALL', // 裸调用无目标 = 畸形
   'SETBIT LOCAL', // 缺位号 = 畸形
   'BAR', // 缺参数
@@ -252,5 +266,58 @@ describe('装配点 localiseNativeLine', () => {
   });
   it('未识别行返 null，由调用方给显式兜底（不静默透传）', () => {
     expect(localizeNativeLine({ content: 'PRINTKONST', indent: 0 })).toBeNull();
+  });
+});
+
+/* ==================== TRY 系分档：名单同源 + 两档互不认领 ==================== */
+
+/** 开块九枚（= ZH-C 的 `试探 原形 …` 认领面）；从识别核派生，本文件不抄第二份 */
+const TRY_NINE: readonly string[] = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
+
+describe('TRY 系分档 · 九枚归 ZH-C / 单行档归本层（互不认领）', () => {
+  it('本层认领的 TRY 记号 === `sugar-ident` 的单行档（动词表与名单零漂移）', () => {
+    expect(STATEMENT_TRY_WORDS).toEqual([...TRY_SINGLE_LINE].sort());
+    expect(STATEMENT_TRY_WORDS).toContain('TRYGOTO');
+    expect(STATEMENT_TRY_WORDS).toContain('TRYGOTOFORM');
+  });
+
+  it('两档名单不相交（档位是判据、前缀不是；九枚之数也钉死，防止有人往单行档塞开块词）', () => {
+    expect(TRY_NINE).toHaveLength(9);
+    expect(TRY_NINE.filter((k) => TRY_SINGLE_LINE.has(k))).toEqual([]);
+  });
+
+  it('九枚：本层弃权 ⇒ ZH-C 给中性形（装配层读不到本层的动词语）', () => {
+    for (const kind of TRY_NINE) {
+      const src = `${kind} FOO(A, 1)`;
+      expect(render(src, undefined), src).toBeNull();
+      expect(renderControlLine({ content: src, indent: 0 }), src).toBe(`试探 原形 ${kind} FOO(A, 1)`);
+      expect(localizeNativeLine({ content: src, indent: 0 }), src).toBe(`试探 原形 ${kind} FOO(A, 1)`);
+    }
+  });
+
+  it('单行档：ZH-C 弃权 ⇒ 本层给语句形（`原形` 记号回显不越界到语句层）', () => {
+    for (const kind of STATEMENT_TRY_WORDS) {
+      const src = `${kind} FOO(A, 1)`;
+      expect(renderControlLine({ content: src, indent: 0 }), src).toBeNull();
+      const shown = render(src, undefined);
+      expect(shown, src).not.toBeNull();
+      expect(shown ?? '', src).toMatch(/^尝试/);
+      expect(shown ?? '', src).not.toContain('原形');
+      expect(shown ?? '', src).not.toContain('试探');
+      expect(localizeNativeLine({ content: src, indent: 0 }), src).toBe(shown);
+      expect(isVerbatimNativeLine(shown ?? '', src), src).toBe(false);
+    }
+  });
+
+  it('名单外的 TRY 记号两层都不认领（这条就是 `startsWith(\'TRY\')` 捷径的显形位）', () => {
+    for (const src of ['TRYCATCH FOO', 'TRYNOPENAME FOO', 'TRYFOOLIST FOO']) {
+      expect(render(src, DICT), src).toBeNull();
+      expect(renderControlLine({ content: src, indent: 0 }), src).toBeNull();
+      expect(localizeNativeLine({ content: src, indent: 0 }), src).toBeNull();
+    }
+  });
+
+  it('显示词形不靠往 KEYWORDS 加词实现（写形归另一条线，本批一个词都不塞）', () => {
+    for (const w of ['尝试', '尝试跳到', '尝试跳到形', '尝试跳转']) expect(lookupKeyword(w), w).toBeUndefined();
   });
 });
