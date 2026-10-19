@@ -102,16 +102,16 @@ describe('definitionTargetsAt · 标签定义自跳与跳转目标', () => {
   it('光标在 `$NEXT` 定义名上 → 定义自跳（不再落函数名腿）', () => {
     const index = idx({ NEXT: [fnRef('NEXT')] });
     expect(definitionTargetsAt(index, PATH, TEXT, 2, 3)).toEqual([
-      { name: 'NEXT', normalizedName: 'NEXT', filePath: PATH, startLine: 2, endLine: 2 },
+      { name: 'NEXT', normalizedName: 'NEXT', filePath: PATH, startLine: 2, endLine: 2, nameColumn: 2 },
     ]);
   });
 
   it('跳转目标 → 本函数标签定义；CJK 同样命中', () => {
     expect(definitionTargetsAt(idx(), PATH, TEXT, 4, 7)).toEqual([
-      { name: 'NEXT', normalizedName: 'NEXT', filePath: PATH, startLine: 2, endLine: 2 },
+      { name: 'NEXT', normalizedName: 'NEXT', filePath: PATH, startLine: 2, endLine: 2, nameColumn: 2 },
     ]);
     expect(definitionTargetsAt(idx(), PATH, '@F\n$开始\n\tGOTO 开始\n', 3, 7)).toEqual([
-      { name: '开始', normalizedName: '开始', filePath: PATH, startLine: 2, endLine: 2 },
+      { name: '开始', normalizedName: '开始', filePath: PATH, startLine: 2, endLine: 2, nameColumn: 2 },
     ]);
   });
 

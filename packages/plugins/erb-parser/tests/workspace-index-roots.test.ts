@@ -267,7 +267,11 @@ describe('erb-parser · 索引根 = kojoPaths ∪ 工作区全部根', () => {
       column: 8,
       project: null,
     });
-    expect(res).toEqual({ kind: 'definition', locations: [{ filePath: WS_DEFAULT, line: 1 }] });
+    // W-DEF-COL：定义腿现在把名字区间一起交出去（`@WS_FOO(ARG)` ⇒ 名字从第 2 列起、6 个码元）
+    expect(res).toEqual({
+      kind: 'definition',
+      locations: [{ filePath: WS_DEFAULT, line: 1, column: 2, span: { columnStart: 2, columnEnd: 8 } }],
+    });
     h.dispose();
   });
 

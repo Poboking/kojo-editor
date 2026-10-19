@@ -91,8 +91,18 @@ import type { FileRefs, RefRun } from './references';
  * 按准入纪律第 1 条（解析器口径没变才准入），v7 及更早**全部不得入表**：升 v8 后
  * 第一轮对存量盘付一次整体冷重建（fail-closed），此后照常热。
  * 「缺溯源位 ⇒ 结构续用 + refs 补正」机制原样保留，待下个**只加位不动口径**的版本重新准入。
+ *
+ * **v8 → v9**（W-DEF-COL 批）：函数元组追加第 7 位（下标 6）`nameColumn`＝名字起点列
+ * （1 基、UTF-16 码元；见 `ErbFunction.nameColumn`）。**位是纯 additive**（前 6 位一字未动），
+ * 但本批**不把 v8 放进 `SALVAGEABLE_VERSIONS`**，判据是"这份数据能不能答上这一批要答的问题"，
+ * 不是"字段是不是新增的"：
+ * - 续用 v8 条目 = 每个**没被改过**的文件都缺第 7 位 ⇒ 定义腿继续只交行、F12 继续落行首，
+ *   而且**没有任何读数能说明为什么**（这正是本批要消灭的症状，静默保留它等于没做）；
+ * - 同一份盘整体弃用只付一次冷重建（本文件头注的 v7→v8 实测：读+扫 6.9 s ＋ refs 7.4 s /
+ *   2,325 文件），此后照常热；`v1→v2` 为 `docComment` 加字段时做的就是同一个取舍。
+ * ⇒ 升 v9 后第一轮整体冷重建（fail-closed），此后逐条目 salvage 只在 v9↔v9 之间发生。
  */
-export const SNAPSHOT_VERSION = 8;
+export const SNAPSHOT_VERSION = 9;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -102,12 +112,14 @@ export const SNAPSHOT_VERSION = 8;
  * 2. 新旧差异只能是**新条目多了位**（旧 payload 缺位 ⇒ 该位按"未知"处理，绝不猜值）；
  * 3. 缺位的"未知"必须落在**保守侧**：要么触发一次重扫，要么判该文件过期，不许静默当真。
  *
- * - `8`：同形（10 位）。
- * - `7` 及更早**一律不在表**：v8 的逗号形修复改了解析口径（旧条目名字可能带尾逗号、
- *   形参整段缺失），复用 = 索引脏数据；v5 及更早还缺 `labels`（v6 新增）。
+ * - `9`：同形（10 位）。
+ * - `8` 及更早**一律不在表**：v8 条目结构上确实只缺第 7 位（纪律 1/2 过），但那条"缺位算未知"
+ *   的未知正是本批唯一的产出——按纪律 3 的保守侧读法，缺列位的条目本来就**必须**判过期重扫，
+ *   于是"准入"与"整体弃用"付一样的钱、多一套只为少付钱而存在的分支 ⇒ 不留。
+ *   v7 及更早是解析口径变了（逗号形修复改了名字/形参的值语义），结构性不可复用。
  */
 const SALVAGEABLE_VERSIONS: ReadonlyMap<number, { readonly arity: number; readonly hasRefsFp: boolean }> = new Map([
-  [8, { arity: 10, hasRefsFp: true }],
+  [9, { arity: 10, hasRefsFp: true }],
 ]);
 
 /** 单个文件的快照条目 */
@@ -227,8 +239,17 @@ export function snapshotKeyCandidatesFor(rootDir: string): string[] {
 
 /** `[形参名, 是否有默认值(0|1)]` */
 type ParamTuple = [string, 0 | 1];
-/** `[原名, 起始行, 结束行, 形参, 位标, 注释块?]`；位标 bit0 = 表达式函数 */
-type FunctionTuple = [string, number, number, ParamTuple[], number, string?];
+/**
+ * `[原名, 起始行, 结束行, 形参, 位标, 注释块?, 名字起点列?]`；位标 bit0 = 表达式函数
+ *
+ * 第 7 位（下标 6，v9 起）= `nameColumn`（1 基、UTF-16 码元，见 `ErbFunction.nameColumn`）。
+ * 位置契约：**要落第 7 位就必须先把第 6 位写出来**（无注释块时写 `null`）——可选位只能
+ * 从前往后连着排，不能跳位。缺席（长度 5/6）＝ **这个索引没有列这个事实**，还原侧一律
+ * 留空、绝不补 `1`（补了就是假事实：真语料 230 条定义带前导缩进，最深到第 10 列）。
+ * 结束列不落盘（= `nameColumn + name.length`，与 `references.ts` 的 `endColumn` 同一条
+ * 可派生纪律，快照瘦身 v3 的原话）。
+ */
+type FunctionTuple = [string, number, number, ParamTuple[], number, (string | null)?, number?];
 /** `[变量名, 声明指令, 行号]` */
 type DimTuple = [string, string, number];
 /** `[归一化名, 行, 列, 种类旗标(0=定义 1=调用 2=提及)]` */
@@ -293,7 +314,12 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       const flags = f.isExpressionFunction ? FLAG_EXPRESSION : 0;
       const params: ParamTuple[] = f.params.map((p): ParamTuple => [p.name, p.hasDefault ? 1 : 0]);
       const fn: FunctionTuple = [f.name, f.startLine, f.endLine, params, flags];
-      if (f.docComment !== undefined) fn.push(f.docComment);
+      // 可选位从前往后排：要写第 7 位（列）就必须先把第 6 位（注释块）占住（无注释 = null）
+      if (f.nameColumn !== undefined) {
+        fn.push(f.docComment ?? null, f.nameColumn);
+      } else if (f.docComment !== undefined) {
+        fn.push(f.docComment);
+      }
       return fn;
     });
     const dims: DimTuple[] = e.file.dims.map((d): DimTuple => [d.name, d.directive, d.line]);
@@ -331,10 +357,14 @@ function isLabelTuple(t: unknown): t is LabelTuple {
 }
 
 function isFunctionTuple(t: unknown): t is FunctionTuple {
-  if (!Array.isArray(t) || (t.length !== 5 && t.length !== 6)) return false;
+  if (!Array.isArray(t) || (t.length !== 5 && t.length !== 6 && t.length !== 7)) return false;
   if (typeof t[0] !== 'string' || typeof t[1] !== 'number' || typeof t[2] !== 'number') return false;
   if (typeof t[4] !== 'number' || !Array.isArray(t[3])) return false;
+  // 第 6 位（注释块）：v8 的老形态只允许字符串；长度到 7 才允许 `null`（= 占位，为的是排第 7 位）
   if (t.length === 6 && typeof t[5] !== 'string') return false;
+  if (t.length === 7 && !(typeof t[5] === 'string' || t[5] === null)) return false;
+  // 第 7 位（名字起点列）：1 基整数码元列；缺失 = 没有这个事实，坏值 = 整条判过期（不猜、不改正）
+  if (t.length === 7 && (!Number.isInteger(t[6]) || (t[6] as number) < 1)) return false;
   return (t[3] as unknown[]).every(
     (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1),
   );
@@ -370,7 +400,7 @@ function validateEntryTuple(t: unknown, arity: number): EntryTuple | null {
   return normalized as unknown as EntryTuple;
 }
 
-function toFunction(path: string, [name, startLine, endLine, params, flags, doc]: FunctionTuple): ErbFunction {
+function toFunction(path: string, [name, startLine, endLine, params, flags, doc, nameColumn]: FunctionTuple): ErbFunction {
   return {
     name,
     normalizedName: name.toUpperCase(),
@@ -378,9 +408,12 @@ function toFunction(path: string, [name, startLine, endLine, params, flags, doc]
     startLine,
     endLine,
     filePath: path,
+    // 列缺席（v8 及更早的盘上条目 / 编码时算不出）⇒ **不留这个键**：定义腿据此退化成只给行。
+    // 这里最不该做的事是 `nameColumn ?? 1`——那会把"不知道"写成"就在行首"，假事实一旦落盘就再也查不出来。
+    ...(nameColumn === undefined || nameColumn === null ? {} : { nameColumn }),
     // scanner 对每个函数都显式写这个布尔（false 也在），还原必须同样显式，不能缺键
     isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
-    ...(doc === undefined ? {} : { docComment: doc }),
+    ...(typeof doc === 'string' ? { docComment: doc } : {}),
   };
 }
 
@@ -568,7 +601,9 @@ export function aggregateIndex(sources: Iterable<ErbFile>): {
           filePath: path,
           startLine: t[1],
           endLine: t[2],
-          ...(t[5] === undefined ? {} : { docComment: t[5] }),
+          // 第 6 位 = 注释块、第 7 位 = 名字起点列（v9 起；旧条目没有 ⇒ 留空，不补 1）
+          ...(t[6] === undefined || t[6] === null ? {} : { nameColumn: t[6] }),
+          ...(typeof t[5] === 'string' ? { docComment: t[5] } : {}),
         });
         byName.set(normalizedName, refs);
       }
@@ -582,6 +617,7 @@ export function aggregateIndex(sources: Iterable<ErbFile>): {
         filePath: fn.filePath,
         startLine: fn.startLine,
         endLine: fn.endLine,
+        ...(fn.nameColumn !== undefined ? { nameColumn: fn.nameColumn } : {}),
         ...(fn.docComment !== undefined ? { docComment: fn.docComment } : {}),
       });
       byName.set(fn.normalizedName, refs);

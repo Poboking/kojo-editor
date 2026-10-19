@@ -864,7 +864,16 @@ export function createErbParserPlugin(): Plugin {
           const refs = definitionTargetsAt(idx, request.path, request.text, request.line, request.column);
           return {
             kind: 'definition',
-            locations: refs.map((ref) => ({ filePath: ref.filePath, line: ref.startLine })),
+            // 有列才给区间（`column + 名字长度`，与 `ErbReference.endColumn` 同一条口径）；
+            // 索引里没有列这个事实 ⇒ 只交行，让宿主按它的唯一退化判据落到行首——
+            // 供方**不补 1**（补了就是假事实），宿主侧的夹取/退化也不许在插件里重抄一遍。
+            locations: refs.map((ref) => ({
+              filePath: ref.filePath,
+              line: ref.startLine,
+              ...(ref.nameColumn === undefined
+                ? {}
+                : { column: ref.nameColumn, span: { columnStart: ref.nameColumn, columnEnd: ref.nameColumn + ref.name.length } }),
+            })),
           };
         },
       });

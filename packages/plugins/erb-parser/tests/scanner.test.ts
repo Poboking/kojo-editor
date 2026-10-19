@@ -53,6 +53,7 @@ describe('parseFunctionDefinition', () => {
     expect(parseFunctionDefinition('@M_KOJO_MESSAGE_COUNTER_K1_1')).toEqual({
       name: 'M_KOJO_MESSAGE_COUNTER_K1_1',
       params: [],
+      nameOffset: 1,
     });
   });
 

@@ -57,14 +57,14 @@ describe('definitionTargetsAt · 标签腿（JUMP/GOTO 系 → 本函数标签�
   it('同函数命中：GOTO NEXT → 标签定义行', () => {
     const text = '@F\n$NEXT\n\tPRINTL A\n\tGOTO NEXT\n';
     expect(definitionTargetsAt(idx({}), '/a.ERB', text, 4, 7)).toEqual([
-      { name: 'NEXT', normalizedName: 'NEXT', filePath: '/a.ERB', startLine: 2, endLine: 2 },
+      { name: 'NEXT', normalizedName: 'NEXT', filePath: '/a.ERB', startLine: 2, endLine: 2, nameColumn: 2 },
     ]);
   });
 
   it('大小写不敏感（`goto next` 命中 `$Next`）', () => {
     const text = '@F\n$Next\n\tgoto next\n';
     expect(definitionTargetsAt(idx({}), '/a.ERB', text, 3, 7)).toEqual([
-      { name: 'Next', normalizedName: 'NEXT', filePath: '/a.ERB', startLine: 2, endLine: 2 },
+      { name: 'Next', normalizedName: 'NEXT', filePath: '/a.ERB', startLine: 2, endLine: 2, nameColumn: 2 },
     ]);
   });
 
@@ -210,7 +210,7 @@ function activate(): { services: Map<string, unknown>; languageServices: Map<str
 
 type DefinitionContribution = {
   provide(request: { kind: string; path: string; text: string; line: number; column: number; project: null }):
-    | { kind: string; locations: { filePath: string; line: number }[] }
+    | { kind: string; locations: { filePath: string; line: number; column?: number; span?: { columnStart: number; columnEnd: number } }[] }
     | undefined;
 };
 
@@ -227,7 +227,8 @@ describe('erb-parser · erb-definition 装配（标签导航）', () => {
     const c = languageServices.get('erb-definition') as unknown as DefinitionContribution;
     expect(c.provide({ kind: 'definition', path: A, text: FILES[A]!, line: 4, column: 7, project: null })).toEqual({
       kind: 'definition',
-      locations: [{ filePath: A, line: 2 }],
+      // W-DEF-COL：标签腿的定义位也带列（`$NEXT` ⇒ 名字从第 2 列起，4 个码元）
+      locations: [{ filePath: A, line: 2, column: 2, span: { columnStart: 2, columnEnd: 6 } }],
     });
   });
 });

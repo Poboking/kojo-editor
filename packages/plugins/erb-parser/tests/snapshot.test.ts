@@ -270,8 +270,19 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
         ...fn,
         isExpressionFunction: false,
         docComment: '',
+        nameColumn: 1,
       }).sort(),
-    ).toEqual(['docComment', 'endLine', 'filePath', 'isExpressionFunction', 'name', 'normalizedName', 'params', 'startLine']);
+    ).toEqual([
+      'docComment',
+      'endLine',
+      'filePath',
+      'isExpressionFunction',
+      'name',
+      'nameColumn',
+      'normalizedName',
+      'params',
+      'startLine',
+    ]);
     expect(Object.keys(parsed.dims[0] ?? { name: '', directive: '', line: 0 }).sort()).toEqual([
       'directive',
       'line',

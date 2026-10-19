@@ -77,8 +77,12 @@ export function parseParams(inner: string): ErbParam[] {
  * 名字终止符因此含 `,`——漏了它名字会带上尾逗号（`byName` 里成了 `IN_ROOM_MEMBER,`，
  * 转到定义 / 重命名 / 未定义 CALL 波浪线全部对不上），且逗号后的**声明槽**全丢。
  * 逗号后直到行内注释（`;` 起，字符串里的 `;` 不算）的段落与括号形共用同一张 `parseParams`。
+ *
+ * `nameOffset` = 名字在**入参 `trimmed` 内**的 0 基起点（UTF-16 码元），由同一条边界判据
+ * 算出的切片顺带得到——**列的唯一算式就在这里**，别处不许再判一次"什么算函数名"。
+ * `@` 与名字之间可以夹空白（真语料实测有全角空白形），故切片要 `trimStart()` 才知道名字从哪开始。
  */
-export function parseFunctionDefinition(trimmed: string): { name: string; params: ErbParam[] } | null {
+export function parseFunctionDefinition(trimmed: string): { name: string; params: ErbParam[]; nameOffset: number } | null {
   if (!trimmed.startsWith('@')) return null;
   const body = trimmed.slice(1);
   let nameEnd = body.length;
@@ -89,8 +93,11 @@ export function parseFunctionDefinition(trimmed: string): { name: string; params
       break;
     }
   }
-  const name = body.slice(0, nameEnd).trim();
+  const slice = body.slice(0, nameEnd);
+  const name = slice.trim();
   if (name.length === 0) return null;
+  // 名字起点：`@`（1 个码元）+ 切片被 trimStart 剥掉的前导空白
+  const nameOffset = 1 + (slice.length - slice.trimStart().length);
 
   let params: ErbParam[] = [];
   const rest = body.slice(nameEnd);
@@ -135,7 +142,7 @@ export function parseFunctionDefinition(trimmed: string): { name: string; params
     const inner = commentAt >= 0 ? rest.slice(1, commentAt) : rest.slice(1);
     params = parseParams(inner);
   }
-  return { name, params };
+  return { name, params, nameOffset };
 }
 
 const DIM_RE = /^#(DIMSTR|DIMCHAR|DIMS|DIM)\s+(.*)$/i;
@@ -314,6 +321,13 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
           startLine: i + 1,
           endLine: lineCount, // 稍后收紧
           filePath: path,
+          // 名字起点列（1 基、UTF-16 码元）= 行首前导空白宽度 + 名字在 trimmed 内的偏移。
+          // 前导宽度用 `raw.length - raw.trimStart().length`（与 `references.ts` 的
+          // `keywordEnd` 同一条算式）；`@` 与名字之间的空白已由 `def.nameOffset` 计过。
+          // 本趟里 `raw` 恒在 ⇒ 列恒算得出；算不出（旧盘快照）由 snapshot 侧留空，**不补 1**。
+          // 字段位次与 `snapshot.toFunction` 的还原**逐字对齐**（快照对拍比的是 JSON 串，
+          // 同一份索引里"刚解析的"与"复用条还原的"两份函数对象键序不同就会红）。
+          nameColumn: raw.length - raw.trimStart().length + def.nameOffset + 1,
           isExpressionFunction: pendingMarkerBeforeNext,
           ...(doc !== undefined ? { docComment: doc } : {}),
         });

@@ -94,7 +94,9 @@ function activate(): {
 
 type LanguageServiceContribution = {
   id: string;
-  provide(request: unknown): { kind: string; locations: { filePath: string; line: number }[] } | undefined;
+  provide(request: unknown):
+    | { kind: string; locations: { filePath: string; line: number; column?: number; span?: { columnStart: number; columnEnd: number } }[] }
+    | undefined;
 };
 
 /** 按 id 取语言服务贡献（B3 起两枚：`erb-definition` / `erb-symbols`；D2 加 `erb-workspace-symbols`；B6 加 `erb-semantic-tokens`） */
@@ -157,7 +159,11 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
       column: 8,
       project: null,
     });
-    expect(res).toEqual({ kind: 'definition', locations: [{ filePath: A, line: 2 }] });
+    // W-DEF-COL：`@ALPHA(ARG)` 的名字从第 2 列起、5 个码元 ⇒ 定义腿交区间而不是只交行
+    expect(res).toEqual({
+      kind: 'definition',
+      locations: [{ filePath: A, line: 2, column: 2, span: { columnStart: 2, columnEnd: 7 } }],
+    });
   });
 
   it('索引未建（未打开项目）→ undefined（不是本包的活，别谎报"没有定义"）', () => {

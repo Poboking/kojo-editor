@@ -335,6 +335,10 @@ export function definitionTargetsAt(
         filePath: path,
         startLine: occurrence.line,
         endLine: occurrence.line,
+        // 标签出现点本来就带列（`labelScopeAt` 算的），此前在这里被丢掉 ⇒ 同一次 F12
+        // 走函数腿有列、走标签腿没列。结束列 = column + 名字长度，与 `occurrence.endColumn`
+        // 恒等（同一把尺子的两种写法），所以这里只带起点列。
+        nameColumn: occurrence.column,
       }));
   }
   // 标签入口（定义名 / 跳转目标一侧）但作用域不成立 ⇒ 空数组：`$FOO` 不是函数引用，

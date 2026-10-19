@@ -31,6 +31,23 @@ export interface ErbFunction {
   /** 定义所在文件（绝对路径） */
   filePath: string;
   /**
+   * 名字**起点列**（**additive 可选**，W-DEF-COL 批）：`@` 之后第一个属于名字的码元所在的列。
+   *
+   * 口径与 {@link ErbReference.column} 逐字相同：**1 基、UTF-16 码元、结束列不含端点**
+   * （结束列 = `nameColumn + name.length`，Monaco 的列坐标系就是这个单位，代理对占两格）。
+   * 与 {@link ErbFile.labels} / `#DIM` 那两条腿交给宿主的 `span` 同源同形，
+   * 落点夹取单源于宿主的 `reveal-position`，**这里只出事实、不出区间对象**。
+   *
+   * 为什么值得为它付索引体积：`startLine` 只能把光标放到**行首**，而作者按 F12 想停在
+   * 名字上（接着往下改名字 / 看形参表）。真语料 113,833 条 `@` 定义里 230 条带前导缩进
+   * （210 条制表符 / 16 条空格 / 4 条其它空白），缩进最深的到第 10 列——落在行首就是
+   * "跳到了但没跳到那个词上"。
+   *
+   * **缺席 = 索引没有这个事实**（旧盘快照、或来源文本不可得），消费方必须退化成
+   * "只给行"；**绝不许用 `1` 之类的好看值补位**——那是一条假事实，比没有更糟。
+   */
+  nameColumn?: number;
+  /**
    * 表达式函数标记（`#FUNCTION` / `#FUNCTIONS` 声明，可在表达式中调用）。
    * 真实写法：标记行出现在 `@` 行**之后**的函数体内（AUTO_AEGI.ERB:60-61 实证）；
    * 宽容解析同样接受写在 `@` 行之前的形式。
@@ -103,6 +120,8 @@ export interface ErbFunctionRef {
   filePath: string;
   startLine: number;
   endLine: number;
+  /** 见 {@link ErbFunction.nameColumn}（转到定义 / 跳到实现的落点列；缺席 = 索引没这个事实） */
+  nameColumn?: number;
   /** 见 {@link ErbFunction.docComment}（导航树悬停提示消费） */
   docComment?: string;
 }
