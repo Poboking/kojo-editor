@@ -20,12 +20,22 @@
  * - 行内区间取 `[startColumn, endColumn)`，`endColumn` 是**排他**的列号（不是 Monaco 列）。
  */
 
-/** 协议版本：形状一变就抬号，worker 认不出就直接停用（而不是拿旧形状硬解） */
+/**
+ * 协议版本：形状一变就抬号，worker 认不出就直接停用（而不是拿旧形状硬解）。
+ *
+ * **2** 里同时装着这一批的**两桩形状变更**（两条线各自独立抬到 2，合并后就是同一个 v2 构建：
+ * 两侧都在 `init` 那一步比对同一个号，谁也不许再往上抬——抬号等于把对面那半边的钉版全拆掉）：
+ * - **doc 序（跨文档隔离）**：内容回复一律带 `doc`，对不上号 ⇒ 主线程整条丢弃（见下）；
+ * - **`syntax` 回话（TSIT2-D）**：新增一条腿（CST 的 ERROR / MISSING 事实）。加一条腿仍是
+ *   形状变更——旧宿主碰到新 worker 会把 `syntax` 判成违约消息并整档停用（宁可停用，
+ *   不拿看不懂的东西硬解），所以按本文件的纪律抬号，让两侧在 `init` 那一步就把不符说出来。
+ */
 export const KOJO_STRUCTURE_PROTOCOL = 2;
 
 /**
  * 跨文档隔离号：主线程给每份被跟踪的文档发一枚**全局单调自增**的序号，`parse` / `change`
- * 请求带上，worker 在三类内容回复里**原样回显**。为什么必须有：切文档瞬间旧文档的解析
+ * 请求带上，worker 在**四类内容回复里（`semantic` / `folds` / `indent` / `syntax`）原样回显**。
+ * 为什么必须有：切文档瞬间旧文档的解析
  * 回复还在路上，而 `version` 是每文档各自从 1 起的——只靠版本号判过期，旧文档的 tokens
  * 会冒充新文档的结果被缓存上屏（真实踩过）。对不上号 ⇒ 主线程整条丢弃。
  */
@@ -69,8 +79,67 @@ export interface KojoStructureIndentRules {
   readonly enterPatterns: readonly string[];
 }
 
-/** 出错时该停用的面：`all` = 整档回落到词法层；其余 = 只让这一面回落 */
-export type KojoStructureCapability = 'semantic' | 'folds' | 'indent' | 'all';
+/**
+ * CST 上的一处**结构残缺事实**（`syntax` 回话的元素；TSIT2-D）。
+ *
+ * 这里只有**事实**，没有文案、没有诊断码：worker 的依赖面只有 `web-tree-sitter`
+ * （见 `engine.ts` 头注纪律 1，它连 `@kojo/plugin-api` 都不 import），而"说人话 + 上屏码"
+ * 是表现层的取舍，住在宿主侧的 `syntax-decorations.ts`。两侧对不上时最坏是"这一面没文案"，
+ * 不该是 worker 去 import 一张 UI 表。
+ *
+ * 行号一律 0 基（本文件头注的坐标口径）；`row` = **该给作者看的那一行**：
+ * - `unclosed-block` ⇒ 块头那一行（要补收束词的是那一族，落点指块头才看得懂）；
+ * - 其余 ⇒ 出错节点自己那一行。
+ * 残缺点（MISSING 插入点 / ERROR 末行）另存 `faultRow`，供文案说"它还开着开到第几行"。
+ */
+export interface KojoStructureSyntaxFault {
+  /** 装饰落点行（0 基，见上） */
+  readonly row: number;
+  /** 落点区间的末行（0 基，含）；单行残缺 = 与 `row` 同值 */
+  readonly endRow: number;
+  /** 落点起始列（0 基 UTF-16 码元） */
+  readonly column: number;
+  /** 落点结束列（0 基，**排他**） */
+  readonly endColumn: number;
+  /** 残缺类别（闭集；宿主按它挑文案与诊断码） */
+  readonly kind: KojoStructureSyntaxKind;
+  /** 残缺点所在行（0 基）：MISSING 的插入点 / ERROR 的末行 */
+  readonly faultRow: number;
+  /** 出错的块头文本（已去行首缩进、截断到首行；`unclosed-block` 才有） */
+  readonly blockHeadText?: string;
+  /** 块头行（0 基；与 `row` 同值时省略） */
+  readonly blockHeadRow?: number;
+  /** 语法层该有的那个收束记号**名**（如 `loop_end`；不是中文、不是上屏文案） */
+  readonly expectedToken?: string;
+}
+
+/**
+ * 残缺类别的闭集（宿主侧诊断码 = `kojo.` + 这一串，拼法在 `syntax-decorations.ts`，
+ * 与 `erb-parser` 的 `erb.${kind}` 同一形态；对账闸见 `tests/diagnostic-copy.test.ts`）。
+ */
+export type KojoStructureSyntaxKind = 'unclosed-block' | 'unterminated-string' | 'unterminated-interp' | 'unexpected-token';
+
+/** 类别闭集（运行期遍历用；新增一类必须同时补文案与码表，漏一条 ⇒ 测试红） */
+export const KOJO_STRUCTURE_SYNTAX_KINDS: readonly KojoStructureSyntaxKind[] = [
+  'unclosed-block',
+  'unterminated-string',
+  'unterminated-interp',
+  'unexpected-token',
+];
+
+/**
+ * 一文档最多回传多少处残缺（超出只留最前那些 + 由宿主说一声"还有更多"）。
+ *
+ * 真实残缺文件通常 1–3 处；上百处只可能是错误恢复跑飞，那时无脑全发等于把编辑器
+ * 变成装饰刷（`deltaDecorations` 的开销与作者的阅读带宽都会先炸）。
+ */
+export const KOJO_STRUCTURE_MAX_SYNTAX_FAULTS = 64;
+
+/**
+ * 出错时该停用的面：`all` = 整档回落到词法层；其余 = 只让这一面回落
+ * （`syntax` = 结构诊断这一面，回落 = 不画这一层波浪线，词法层与转译器波浪线照旧）
+ */
+export type KojoStructureCapability = 'semantic' | 'folds' | 'indent' | 'syntax' | 'all';
 
 /** 报错的阶段（作者面文案由 `fallback.ts` 按阶段翻成人话） */
 export type KojoStructureErrorStage = 'wasm' | 'parse' | 'query' | 'worker';
@@ -97,6 +166,7 @@ export type KojoStructureReply =
   | { type: 'semantic'; doc: KojoStructureDocSeq; version: number; tokens: readonly KojoStructureToken[] }
   | { type: 'folds'; doc: KojoStructureDocSeq; version: number; folds: readonly KojoStructureFold[] }
   | { type: 'indent'; doc: KojoStructureDocSeq; version: number; rules: KojoStructureIndentRules }
+  | { type: 'syntax'; doc: KojoStructureDocSeq; version: number; faults: readonly KojoStructureSyntaxFault[]; truncated: boolean }
   | { type: 'error'; version: number; stage: KojoStructureErrorStage; capability: KojoStructureCapability; message: string };
 
 /* --------------------------- 捕获名 → 档位名 --------------------------- */
@@ -109,22 +179,49 @@ export type KojoStructureReply =
  * 语法包给的捕获名不在表里 ⇒ worker 回一条 `error`（stage `query` / capability `semantic`），
  * 这一段不着色并且**说出去**，绝不静默丢色。
  *
- * 三个映射都对着既有档位，不是新配色：
+ * 三支映射都对着既有档位，不是新配色：
  * - `@comment` → `comment`：词法层本来就是 Monaco 基线 token（主题基色在，无需另配）；
- * - `@keyword` → `keyword.erb`：「引擎指令」档（一整条还没中文化的骨架）；
+ * - `@keyword` → `sugar.keyword`：「中文关键字」档。**这一格本批改过**——wave 1 把它映射成
+ *   `keyword.erb`（引擎指令档 = "一整条还没中文化的骨架"），而查询里挂 `@keyword` 的五支节点
+ *   （`color_head` 着色 / `heart_head` 心形 / `heart_text` 心形正文 / `message_check` 隐藏情景 /
+ *   `blank_line_cmd` 空行）说的都是**已经中文化**的行，词法层在同一批格子上发
+ *   `sugar.keyword` / `sugar.speech` / `sugar.cont` ⇒ 屏上是"外来色糊住中文骨架"，
+ *   A/B 确有 ~620 格因此判异档（逐类命中分布与改后的读数见 A/B 测试头注）。
+ *   引擎指令档留给真·没中文化的 `@keyword.directive`（全大写 ERB 直通行）——那支现在表外不着色，
+ *   等语法/词表把它接上时再登记，不许借中文关键字档凑数。
  * - `@string`  → `sugar.speech`：「台词」档（作者写的正文）。
  */
 export const KOJO_STRUCTURE_CAPTURE_TIERS: Readonly<Record<string, string>> = {
   comment: 'comment',
-  keyword: 'keyword.erb',
+  keyword: 'sugar.keyword',
   string: 'sugar.speech',
+};
+
+/**
+ * **捕获名 → 节点类型级**覆盖（先查这张表里"这一支捕获下的这个节点"，落空才回上面的捕获名表）。
+ *
+ * 存在的理由只有一个：`@keyword` 是一支"整行"捕获，而同一支里混着一条不含关键字的正文
+ * `heart_text`（`心形 「还想做……舒服ー的事……HPH」 续`），按捕获名只能给一个档，量出来
+ * 161 格里 `sugar.speech` 族占 109 格、`sugar.keyword` 族只占 29 格 ⇒ 那支的判据是"台词"不是"关键字"。
+ * 这是**表现层的取舍**，语法包不该为它负责，所以留在宿主表里；并且**按捕获名分组**——
+ * 否则将来别的查询把 `heart_text` 挂在别的捕获下（例如 `@string.special`）会被这一格悄悄串色。
+ *
+ * 语法升级（节点改名 / 拆分）时这张表自然失效：查不到就回落到捕获名表，不抛错、不静默丢色，
+ * A/B 的读数会自己说出来。
+ */
+export const KOJO_STRUCTURE_NODE_TIERS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  keyword: { heart_text: 'sugar.speech' },
 };
 
 /** Monaco 基线 token 名（不必进 `KOJO_TOKEN_TIERS`，主题基线里已有色） */
 export const KOJO_STRUCTURE_BASELINE_TOKENS: readonly string[] = ['comment'];
 
-/** 捕获名 → 档位名；表里没有 = `null`（该捕获不着色，并走一次性告警） */
-export function tierForCapture(capture: string): string | null {
+/** 捕获名（+ 可选的节点类型）→ 档位名；表里没有 = `null`（该捕获不着色，并走一次性告警） */
+export function tierForCapture(capture: string, nodeType?: string): string | null {
+  if (nodeType !== undefined) {
+    const byNode = KOJO_STRUCTURE_NODE_TIERS[capture]?.[nodeType];
+    if (byNode !== undefined) return byNode;
+  }
   return KOJO_STRUCTURE_CAPTURE_TIERS[capture] ?? null;
 }
 
@@ -132,6 +229,7 @@ export function tierForCapture(capture: string): string | null {
 export function structureLegendTypes(): string[] {
   const seen = new Set<string>();
   for (const tier of Object.values(KOJO_STRUCTURE_CAPTURE_TIERS)) seen.add(tier);
+  for (const byNode of Object.values(KOJO_STRUCTURE_NODE_TIERS)) for (const tier of Object.values(byNode)) seen.add(tier);
   for (const token of KOJO_STRUCTURE_BASELINE_TOKENS) seen.add(token);
   return [...seen].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
@@ -176,8 +274,24 @@ function isRules(value: unknown): value is KojoStructureIndentRules {
   );
 }
 
+/** 残缺事实的形状闸：坐标必须是有限数、类别必须在闭集里（表外的类别一律不认——不猜文案） */
+function isSyntaxFault(value: unknown): value is KojoStructureSyntaxFault {
+  const f = value as KojoStructureSyntaxFault | null;
+  return (
+    !!f &&
+    Number.isFinite(f.row) &&
+    Number.isFinite(f.endRow) &&
+    Number.isFinite(f.column) &&
+    Number.isFinite(f.endColumn) &&
+    Number.isFinite(f.faultRow) &&
+    KOJO_STRUCTURE_SYNTAX_KINDS.includes(f.kind) &&
+    (f.blockHeadText === undefined || typeof f.blockHeadText === 'string') &&
+    (f.expectedToken === undefined || typeof f.expectedToken === 'string')
+  );
+}
+
 const STAGES: readonly string[] = ['wasm', 'parse', 'query', 'worker'];
-const CAPABILITIES: readonly string[] = ['semantic', 'folds', 'indent', 'all'];
+const CAPABILITIES: readonly string[] = ['semantic', 'folds', 'indent', 'syntax', 'all'];
 
 /**
  * worker 回传来路不明的东西时**整条丢掉**并计数（`client.ts` 把它报出去）。
@@ -195,6 +309,8 @@ export function isStructureReply(value: unknown): value is KojoStructureReply {
       return Number.isFinite(m.doc) && Array.isArray(m.folds) && m.folds.every(isFold);
     case 'indent':
       return Number.isFinite(m.doc) && isRules(m.rules);
+    case 'syntax':
+      return Number.isFinite(m.doc) && Array.isArray(m.faults) && m.faults.every(isSyntaxFault) && typeof m.truncated === 'boolean';
     case 'error':
       return typeof m.message === 'string' && STAGES.includes(m.stage) && CAPABILITIES.includes(m.capability);
     default:

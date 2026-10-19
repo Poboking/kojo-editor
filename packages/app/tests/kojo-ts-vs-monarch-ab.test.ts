@@ -2,12 +2,18 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Language, Parser, Query } from 'web-tree-sitter';
+import { Language, Parser, Query, type Node as TreeSitterNode } from 'web-tree-sitter';
 import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
 import { kojoFoldingRanges } from '../../plugins/kojo-sugar/src/folding';
 import { KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
-import { structureLegendTypes, tierForCapture, type KojoStructureToken } from '../src/monaco/tree-sitter/types';
+import {
+  KOJO_STRUCTURE_BASELINE_TOKENS,
+  KOJO_STRUCTURE_NODE_TIERS,
+  structureLegendTypes,
+  tierForCapture,
+  type KojoStructureToken,
+} from '../src/monaco/tree-sitter/types';
 import { splitStructureTokensToSpans } from '../src/monaco/tree-sitter/semantic';
 
 /**
@@ -40,14 +46,14 @@ import { splitStructureTokensToSpans } from '../src/monaco/tree-sitter/semantic'
  *   同一跨度内的深浅细分，属同一判据家族，算一致并单独报数；
  * - **异档 / 词法层未着色** = 不一致，逐条列出行号与两侧档位。
  *
- * ## 折叠（第四段，实测与"100% 线"的差距写在下方的地板注释里）
+ * ## 折叠（第四段：两侧都是真判据，读数与地板写在下方的 FOLD_* 注释里）
  *
- * `queries/folds.scm` 本批是**合法空查询**（行式语法不产跨行容器，见该文件头注）⇒ 结构层
- * 现在一个折叠区间都不产，worker 走的是"这一面回落、折叠继续由原有供给器负责"。本段因此量三件：
- * ① `folds.scm` 经 `Query` 真跑出来的区间数（实测 0，钉住"回落成立"）；
- * ② 由 CST 的**结构行节点**（块头 + 更深层正文）现推的折叠区间，与真转译器的
- *   `kojoFoldingRanges`（`.kojo` 折叠唯一真源）对照**起点**（语法层认不认得这是块头）；
- * ③ 同起点区间的**终点**一致率（行式语法没有块容器 ⇒ 止行只能按缩进推，量出来是结构事实）。
+ * `queries/folds.scm` 自第二波起有真块容器：`(block) @fold` + `(item_block) @fold`，行跨度由
+ * `src/scanner.c` 的缩进记号精确界定 ⇒ 结构层**自己供折叠**，worker 那条"查询里没捕获 ⇒ 该面回落"
+ * 的分支不再触发（`indents.scm` 仍无捕获，回落只发生在缩进那一面）。本段因此量三件事，全部按
+ * CST 真跑出的区间 vs `kojoFoldingRanges`（`.kojo` 折叠唯一真源 = 转译器符号树摊平）对照：
+ * ① **起点精确率**（语法层会不会把不是块头的行折上）；② **起点召回**（真源能折的块语法层认了多少）；
+ * ③ **同起点区间的终点一致率**（两侧的止行口径差多少行）。三率的取数与"差在哪一族"逐条见下方。
  */
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/app/tests
@@ -127,9 +133,9 @@ function emitCells(emits: readonly Emit[], lineText: string): { cells: (string |
 
 /* ==================== B 侧：tree-sitter 捕获 → 档位 → 逐行区间 ==================== */
 
-/** 捕获名 → 档位；表外（`@keyword.control` 等）= `null`，与 worker 同一条判据。 */
-function captureTier(name: string): string | null {
-  return tierForCapture(name);
+/** 捕获名（带节点类型）→ 档位；表外（`@keyword.control` 等）= `null`，与 worker 同一条判据。 */
+function captureTier(name: string, nodeType?: string): string | null {
+  return tierForCapture(name, nodeType);
 }
 
 /**
@@ -144,7 +150,7 @@ function structureTokens(query: Query, text: string, starts: number[]): KojoStru
   if (tree === null) throw new Error('解析器没有产出树');
   const out: KojoStructureToken[] = [];
   for (const capture of query.captures(tree.rootNode)) {
-    const tier = captureTier(capture.name);
+    const tier = captureTier(capture.name, capture.node.type);
     if (tier === null) continue;
     let start = capture.node.startIndex;
     const end = capture.node.endIndex;
@@ -290,7 +296,7 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
     console.log(`（表外捕获 = 结构层这一格不涂色，走 worker 的一次性告警：${query!.captureNames.filter((n) => captureTier(n) === null).length} 支）`);
   });
 
-  it('逐格一致率读数（≥98% 线）', () => {
+  it('逐格一致率读数（地板见 TOKEN_AB_FLOOR，实测 99.58%）', () => {
     const agree = cells.same + cells.family;
     const rate = cells.total === 0 ? 0 : (agree / cells.total) * 100;
     console.log(`扫描行总数            : ${totalLines}`);
@@ -329,9 +335,18 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
       const tier = captureTier(name);
       if (tier !== null) used.add(tier);
     }
+    // 节点类型级覆盖用到的档名也要一起验（漏掉就等于"legend 里没有 ⇒ 悄悄不涂色"）
+    for (const [capture, byNode] of Object.entries(KOJO_STRUCTURE_NODE_TIERS)) {
+      for (const nodeType of Object.keys(byNode)) {
+        const tier = captureTier(capture, nodeType);
+        if (tier !== null) used.add(tier);
+      }
+    }
     const tierTokens = new Set(KOJO_TOKEN_TIERS.flatMap((t) => [...t.tokens]));
+    const legend = new Set(structureLegendTypes());
     for (const tier of used) {
-      expect(tierTokens.has(tier) || tier === 'comment', `档位 ${tier} 在屏上无处取色`).toBe(true);
+      expect(tierTokens.has(tier) || KOJO_STRUCTURE_BASELINE_TOKENS.includes(tier), `档位 ${tier} 在屏上无处取色`).toBe(true);
+      expect(legend.has(tier), `档位 ${tier} 不在 legend 里 ⇒ 编码时无处落 index`).toBe(true);
     }
     console.log(`结构层实际用到的档位名: ${[...used].sort().join(', ')}`);
   });
@@ -340,182 +355,317 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
 /* ============================ 折叠对照 ============================ */
 
 /**
- * 会开块体的 **CST 节点名**（语法词，宿主侧口径）。
- * 名单对应 `kojo-sugar/enter.ts` 的 `BODY_OPEN_KINDS` 那一族"下一行该更深"的行类，
- * 但按 `grammar.js` 的规则名给出——`if_head`（无行内体的块头形）、三族收束词不开块体。
+ * 折叠两侧的**真口径**（第二波：块容器落地后重写）。
+ *
+ * - **CST 侧**：直接把 `queries/folds.scm` 经 `Query` 跑在每份语料的树上，取 `@fold` 捕获节点
+ *   （`block` / `item_block`）的行跨度——判据与 worker 那一条 `engine.ts::foldsFrom` **逐字同款**
+ *   （有 `@fold` 就只认它、`endRow <= startRow` 的单行跨度不产折叠）。这里不再"由结构行节点现推"：
+ *   第一波那种手工代理（块头 + 更深层正文 + 自写的 `for probe` 前瞻）量的是代理自己，不是语法，
+ *   所以它给出的 100% / 2.80% 那组数**描述的是代理，不是块容器**，全部作废。
+ * - **真源侧**：`kojoFoldingRanges(svc.parse(text, { filePath }))`——`.kojo` 折叠的唯一供给器
+ *   （转译器符号树摊平，`folding.ts` 只收 `endLine > startLine` 的节点），1 基 → 0 基。
+ *
+ * 三个口径各报各的，一个不许少：**起点精确率**（CST 起点落在真源起点集里）/ **起点召回**
+ * （真源起点被 CST 认出）/ **同起点区间的终点一致率**（真源同一起点可能有多个止行，故按"集合命中"计）。
+ *
+ * 为什么住本文件而不新建 `packages/kojo-syntax-tree/tests/fold-ranges.test.ts`：对照的**真源侧**要
+ * `createSugarTranspileService` + `kojoFoldingRanges`（kojo-sugar 的插件内部），语法包的纪律是
+ * "零游戏知识、只在构建期借词表单源"，不该在测试里 import 插件 src；本文件已经有这条 import 面。
+ *
+ * ## 分歧的形状（19 份语料实测：1,103 个 CST 区间 vs 1,251 个真源区间）
+ *
+ * 真源折叠的**来源只有一个**：`document-symbols.ts::rawSymbol` 的 switch 认得的 16 族结构节点
+ * （时机 / 函数 / 自定指令 / 若 / 初回 / 如果链 / 当链 / 表达式如果·当 / 随机 / 组 / 选项 / 菜单 /
+ * 着色 / 原生函数块 `@…` / 别名），区间 = 块头行 → 正文末行，且 `finish()` 会把父区间**拉长到子项末行**、
+ * `rangeOf` 的 `loc.end` 又把块后的**尾随空行**算进来。语法层的来源是 `grammar.js` 的块规则
+ * （三族带收束词 + 其余靠回缩 + `@` 族靠 `_raw_close` 前瞻 + `switch_body` / `choice_body` /
+ * `when_body` + `item_block`）。两套覆盖面不重合，三个方向的差各有名字：
+ *
+ * 1. **只在真源有（召回缺口 35 条，全部是口径差不是族缺口）**——
+ *    · `timing_head` **35 条**：空体 时机 块（`时机 …：` 光杆，下一行不是更深正文）。语法层按
+ *      "没有正文就没有可折的行跨度"的口径故意不产 `block`（见 `folds.scm` 头注），真源却把块后的尾随空行
+ *      折进区间（`start..start+1`）⇒ 折起来的只是一行空行，这是**口径差不是缺口**；`folds.scm`
+ *      那条"零行跨度不产折叠"的约定保持原样，不为这 35 条改口径。
+ *    · **已经补掉的两处族缺口**（本批语法批落地，读数从 89.05% 抬到 97.20%）：
+ *      ① `raw_block_start` **93 条**——`@函数名` 原生块此前只有单行节点、没有容器，现在 `block`
+ *        多一档 `open: raw_block_start` + `_raw_body`，范围由 `src/scanner.c` 的 `_raw_close`
+ *        前瞻"下一条 `@` 行 / 文件尾"决定（与转译器 `readRawFunctionBlock` 同判据），93 条起点
+ *        与 93 条止行**一并对齐**（含尾随空行的口径也一致：`终点一致` 随召回同步上涨）；
+ *        最差文件 `corpus-k12-lumia-climax.kojo` 的起点召回 0/51 ⇒ 51/51。
+ *      ② `"标签":` 形条目 **3 条**（`release-check.kojo:460/463/466`）——`choice_item` 词形补上
+ *        原生双引号标签支，条目因此成 `item_block`。
+ *    · `expr_head` 的**起点错位**（此前记 4 条精确率缺口 + 6 条召回缺口）已随词形修复：首字符类
+ *      `[^W=]` 不含 `\n` ⇒ 从上一行的换行起匹配、块节点早一行。现在 `[^W\r\n=]`，
+ *      `release-check.kojo:159/163`、`teaching-full.kojo:102/108` 四处起点与真源逐行对齐。
+ * 2. **只在 CST 有（精确率缺口 31 条）**——全是**转译器 AST 里存在、但 `rawSymbol` 的 switch 没登记**的族
+ *   （循环 / 出错处理 / 数据表 / 询问 / 确认 / 分支规则池 / `开关:` 头 / 表达式块的分支体）。结构层折得上，
+ *   大纲里却没有——宿主 `providers.ts` 把多枚折叠供给器的结果**并起来**（结构折叠是加法），所以这一类
+ *   不判为错；上面 `expr_head` 那 4 条错位已经不再属于这一类（`cstOnlyByOpen` 里 `expr_head` 归零）。
+ * 3. **同起点、终点不同（87 条）**——差值分布**86 条正好差 1 行**（真源把块后的尾随空行算进止行，
+ *   CST 止于最后一行正文；`folds.scm` 头注写明 `_dedent` 不跨换行就是为这个），另 1 条差 2 行。
+ *   即：**止行的口径差 = 尾随空行归谁**，与块识别本身无关。`@` 族是本批唯一按真源止行口径对齐的一族
+ *   （`_raw_close` 的 mark 落在区内最后一行），所以它 93 条止行全中、没有稀释这条比率。
  */
-const CST_BODY_OPEN_NODES: ReadonlySet<string> = new Set([
-  'timing_head',
-  'custom_command_head',
-  'when_head',
-  'case_head',
-  'random_head',
-  'random_inline',
-  'group_head',
-  'branch_head',
-  'rule_tag',
-  'section_head',
-  'once_head',
-  'choice_head',
-  'menu_head',
-  'ask_m_head',
-  'ask_yn_head',
-  'color_head',
-  'heart_head',
-  'function_head',
-  'expr_head',
-  'if_head',
-  'loop_head',
-  'catch_head',
-  'data_head',
-  'heart_text',
+
+/** 结构容器节点名（`grammar.js` 的词，宿主侧零依赖语法包 TS 入口 ⇒ 这里按名字硬编码）。 */
+const CONTAINER_NODE_NAMES: ReadonlySet<string> = new Set([
+  'source_file',
+  'block',
+  'item_block',
+  'block_body',
+  'switch_body',
+  'choice_body',
+  'when_body',
 ]);
 
-/** 该行缩进（前导水平空白长度；全角空格按 2 格算，同 `indentLevel` 的折算方向）。 */
-const indentOf = (line: string): number => {
-  let width = 0;
-  for (const ch of line) {
-    if (ch === ' ') width += 1;
-    else if (ch === '\t') width += 4;
-    else if (ch === '\u3000') width += 2;
-    else break;
+/** `folds.scm` → 折叠区间（与 worker `foldsFrom` 同一条判据）。 */
+function cstFoldRanges(
+  query: Query,
+  root: TreeSitterNode,
+): Array<{ startRow: number; endRow: number; openType: string }> {
+  const preferred = query.captureNames.includes('fold') ? 'fold' : null;
+  const out: Array<{ startRow: number; endRow: number; openType: string }> = [];
+  for (const capture of query.captures(root)) {
+    if (preferred !== null && capture.name !== preferred) continue;
+    const startRow = capture.node.startPosition.row;
+    const endRow = capture.node.endPosition.row;
+    if (endRow <= startRow) continue;
+    const open = capture.node.childForFieldName('open') ?? capture.node.firstNamedChild;
+    out.push({ startRow, endRow, openType: open?.type ?? capture.node.type });
   }
-  return width;
-};
+  return out;
+}
 
-describe('折叠：folds.scm 回落 + CST 结构区间 vs 转译器真源', () => {
-  it('folds.scm 现在产 0 个折叠区间（回落面钉住），CST 结构推导区间与 kojoFoldingRanges 对照', () => {
+/**
+ * 逐行反查该行的**最外层非容器节点名**（一次遍历建表，供"真源有、CST 没认成块"的分类用）。
+ * 名字全是语法词，不借 `classifyLine` 的内部 kind（架构铁律 1/3）。
+ */
+function lineNodeByRow(root: TreeSitterNode): Map<number, string> {
+  const found = new Map<number, string>();
+  const stack: TreeSitterNode[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    const row = node.startPosition.row;
+    if (!CONTAINER_NODE_NAMES.has(node.type) && !found.has(row)) found.set(row, node.type);
+    for (let i = node.namedChildCount - 1; i >= 0; i--) {
+      const child = node.namedChild(i);
+      if (child !== null) stack.push(child);
+    }
+  }
+  return found;
+}
+
+describe('折叠：folds.scm 块容器区间 vs kojoFoldingRanges 真源', () => {
+  it('folds.scm 真跑出块容器区间（不再回落），起点精确率 / 起点召回 / 终点一致率一并取数', () => {
     const svc = createSugarTranspileService({});
     let scmFolds = 0;
-    let cstFolds = 0;
     let baselineFolds = 0;
-    let exactAgreed = 0;
     let startAgreed = 0;
     let endAgreed = 0;
     let missedStarts = 0;
-    let totalStartsBaseline = 0;
+    const cstOnlyByOpen = new Map<string, number>();
+    const missedByLineNode = new Map<string, number>();
+    const endDiffByOpen = new Map<string, number>();
+    /** 族 → 落点点名（供组长排期用，每族最多 6 处） */
+    const spotsByFamily = new Map<string, string[]>();
+    const noteSpot = (family: string, spot: string): void => {
+      let list = spotsByFamily.get(family);
+      if (list === undefined) {
+        list = [];
+        spotsByFamily.set(family, list);
+      }
+      if (list.length < 6) list.push(spot);
+    };
+    const endDeltaHist = new Map<number, number>();
+    const thSpanHist = new Map<number, number>();
     const sampleDiffs: string[] = [];
+    const missedSamples: string[] = [];
     const endDiffs: string[] = [];
+    const perFile: Array<{ rel: string; cst: number; base: number; hit: number; miss: number; endHit: number }> = [];
+
     for (const file of fixtures) {
       const rel = relOf(file);
       const text = readFileSync(file, 'utf8');
       const tree = parser!.parse(text);
       if (tree === null) throw new Error(`没产出树：${rel}`);
-      // ① folds.scm 真跑（worker 侧同一条 `foldsFrom`：无 @fold 捕获 ⇒ 该面回落）
-      const hasFoldCapture = foldsQuery!.captureNames.includes('fold');
-      for (const capture of foldsQuery!.captures(tree.rootNode)) {
-        if (hasFoldCapture && capture.name !== 'fold') continue;
-        if (capture.node.endPosition.row > capture.node.startPosition.row) scmFolds += 1;
-      }
-      // ② CST 结构行节点现推：块头行 → 直到出现**更浅缩进**的行为止（同级分支头算在本块内）
-      //    这里只用 **CST 节点名**（语言词），不取 `NODE_TO_KIND`：宿主侧不许认识 `classifyLine`
-      //    的内部 kind（架构铁律 1/3），折叠的"这是块头"判定本来就属于语法形状。
-      const starts = lineStarts(text);
       const lines = splitLines(text);
-      const headRow = new Set<number>();
-      for (const child of tree.rootNode.namedChildren) {
-        const last = child.endIndex - 1;
-        if (last < child.startIndex) continue;
-        if (!CST_BODY_OPEN_NODES.has(child.type)) continue;
-        headRow.add(rowOf(starts, last));
-      }
-      const cstRanges: Array<[number, number]> = [];
-      for (let row = 0; row < lines.length; row++) {
-        if (!headRow.has(row)) continue;
-        const baseIndent = indentOf(lines[row] ?? '');
-        let end = row;
-        for (let next = row + 1; next < lines.length; next++) {
-          const line = lines[next]!;
-          if (line.trim().length === 0) {
-            end = next; // 空行不断块（转译器同样跨过空行）
-            continue;
-          }
-          if (indentOf(line) <= baseIndent) break;
-          end = next;
-          // 尾随空行不该把区间无限拉长：往后没有更深正文时就停在最后一行正文
-          let hasBodyAfter = false;
-          for (let probe = next + 1; probe < lines.length; probe++) {
-            if (lines[probe]!.trim().length === 0) continue;
-            hasBodyAfter = indentOf(lines[probe]!) > baseIndent;
-            break;
-          }
-          if (!hasBodyAfter) {
-            end = next - 1;
-            break;
-          }
-        }
-        if (end > row) cstRanges.push([row, end]);
-      }
-      // ③ 真源：转译器符号树摊平的折叠区间（`.kojo` 折叠唯一口径），1 基 → 0 基
+      const lineNode = lineNodeByRow(tree.rootNode);
+      // ① CST 侧：folds.scm 真跑（worker 用的同一条判据）
+      const cst = cstFoldRanges(foldsQuery!, tree.rootNode);
+      // ② 真源侧：转译器符号树摊平的折叠区间，1 基 → 0 基
       const baseline = kojoFoldingRanges(svc.parse(text, { filePath: file })).map(
         (r) => [r.startLine - 1, r.endLine - 1] as [number, number],
       );
-      const baselineKeys = new Set(baseline.map(([s, e]) => `${s}\u0000${e}`));
-      const baselineEndByStart = new Map<number, number>();
-      for (const [s, e] of baseline) baselineEndByStart.set(s, Math.max(e, baselineEndByStart.get(s) ?? -1));
-      cstFolds += cstRanges.length;
-      baselineFolds += baseline.length;
-      for (const [s, e] of cstRanges) {
-        if (baselineKeys.has(`${s}\u0000${e}`)) exactAgreed += 1;
-        const be = baselineEndByStart.get(s);
-        if (be !== undefined) {
-          startAgreed += 1;
-          if (be === e) endAgreed += 1;
-          else if (endDiffs.length < 30) endDiffs.push(`${rel} 起点 ${s + 1} 两侧都在：CST 止 ${e + 1} / 真源 止 ${be + 1}`);
-        } else if (sampleDiffs.length < 30) {
-          sampleDiffs.push(`${rel} CST 现推块头 ${s + 1}..${e + 1}：真源没有以 ${s + 1} 为起点的区间`);
+      const baselineStarts = new Map<number, Set<number>>();
+      for (const [s, e] of baseline) {
+        const set = baselineStarts.get(s) ?? new Set<number>();
+        set.add(e);
+        baselineStarts.set(s, set);
+      }
+      const cstStarts = new Set(cst.map((r) => r.startRow));
+
+      let fileHit = 0;
+      let fileEndHit = 0;
+      let fileMiss = 0;
+      for (const { startRow, endRow, openType } of cst) {
+        const ends = baselineStarts.get(startRow);
+        if (ends === undefined) {
+          cstOnlyByOpen.set(openType, (cstOnlyByOpen.get(openType) ?? 0) + 1);
+          noteSpot(`仅 CST（${openType}）`, `${rel}:${startRow + 1}..${endRow + 1}`);
+          if (sampleDiffs.length < 30) {
+            sampleDiffs.push(
+              `${rel} CST 块 ${startRow + 1}..${endRow + 1}（头形 ${openType}）：真源没有以 ${startRow + 1} 为起点的折叠｜${(lines[startRow] ?? '').trim().slice(0, 40)}`,
+            );
+          }
+          continue;
+        }
+        fileHit += 1;
+        if (ends.has(endRow)) fileEndHit += 1;
+        else {
+          endDiffByOpen.set(openType, (endDiffByOpen.get(openType) ?? 0) + 1);
+          const be = Math.max(...ends);
+          endDeltaHist.set(be - endRow, (endDeltaHist.get(be - endRow) ?? 0) + 1);
+          if (endDiffs.length < 30) {
+            endDiffs.push(
+              `${rel} 起点 ${startRow + 1}（头形 ${openType}）两侧都在：CST 止 ${endRow + 1} / 真源止行 {${[...ends].sort((x, y) => x - y).map((x) => x + 1).join(', ')}}｜${(lines[startRow] ?? '').trim().slice(0, 40)}`,
+            );
+          }
         }
       }
-      const cstStartKeys = new Set(cstRanges.map(([s]) => `${s}`));
-      for (const [s] of baseline) if (!cstStartKeys.has(`${s}`)) missedStarts += 1;
-      totalStartsBaseline += baseline.length;
+      for (const [s, e] of baseline) {
+        if (cstStarts.has(s)) continue;
+        fileMiss += 1;
+        const nodeType = lineNode.get(s) ?? '<该行无 CST 节点>';
+        missedByLineNode.set(nodeType, (missedByLineNode.get(nodeType) ?? 0) + 1);
+        noteSpot(`仅真源（该行节点 ${nodeType}）`, `${rel}:${s + 1}..${e + 1}`);
+        if (nodeType === 'timing_head') thSpanHist.set(e - s, (thSpanHist.get(e - s) ?? 0) + 1);
+        if (missedSamples.length < 30) {
+          missedSamples.push(
+            `${rel} 真源 ${s + 1}..${e + 1} 的起点没成块（该行节点 ${nodeType}）｜${(lines[s] ?? '').trim().slice(0, 40)}`,
+          );
+        }
+      }
+
+      scmFolds += cst.length;
+      baselineFolds += baseline.length;
+      startAgreed += fileHit;
+      endAgreed += fileEndHit;
+      missedStarts += fileMiss;
+      perFile.push({ rel, cst: cst.length, base: baseline.length, hit: fileHit, miss: fileMiss, endHit: fileEndHit });
       tree.delete();
     }
-    const startPrecision = cstFolds === 0 ? 0 : (startAgreed / cstFolds) * 100;
-    const startRecall = totalStartsBaseline === 0 ? 0 : ((totalStartsBaseline - missedStarts) / totalStartsBaseline) * 100;
+
+    const startPrecision = scmFolds === 0 ? 0 : (startAgreed / scmFolds) * 100;
+    const startRecall = baselineFolds === 0 ? 0 : ((baselineFolds - missedStarts) / baselineFolds) * 100;
     const endAgreement = startAgreed === 0 ? 0 : (endAgreed / startAgreed) * 100;
-    const exactPrecision = cstFolds === 0 ? 0 : (exactAgreed / cstFolds) * 100;
-    console.log(`\n===== ④ 折叠对照 =====`);
+
+    console.log(`\n===== ④ 折叠对照（CST 块容器 vs 转译器真源）=====`);
     console.log(`folds.scm 查询捕获名       : ${foldsQuery!.captureNames.join(', ') || '（无捕获）'}`);
-    console.log(`folds.scm 真跑出的区间数   : ${scmFolds}  ⇒ 结构层这一面回落到原有折叠（worker 回一条 query 阶段告警）`);
-    console.log(`CST 结构行节点现推区间数   : ${cstFolds}`);
+    console.log(`folds.scm 真跑出的区间数   : ${scmFolds} ⇒ 结构层自己供折叠，worker 的 folds 回落分支不再触发`);
     console.log(`转译器真源区间数           : ${baselineFolds}`);
-    console.log(`逐字同区间（起 + 止都等）  : ${exactAgreed}（精确率 ${exactPrecision.toFixed(2)}%）`);
-    console.log(`起点落在真源起点集里       : ${startAgreed}/${cstFolds}（起点精确率 ${startPrecision.toFixed(2)}%）`);
-    console.log(`真源起点被 CST 认出        : ${totalStartsBaseline - missedStarts}/${totalStartsBaseline}（起点召回 ${startRecall.toFixed(2)}%）`);
-    console.log(`同起点区间的终点一致       : ${endAgreed}/${startAgreed}（${endAgreement.toFixed(2)}%）`);
-    console.log('终点不一致的样本（前 30）:');
-    for (const d of endDiffs) console.log(`  · ${d}`);
-    console.log('CST 现推块头在真源里找不到起点的样本（前 30）:');
+    console.log(`起点落在真源起点集里       : ${startAgreed}/${scmFolds}（起点精确率 ${startPrecision.toFixed(2)}%）`);
+    console.log(`真源起点被 CST 认出        : ${baselineFolds - missedStarts}/${baselineFolds}（起点召回 ${startRecall.toFixed(2)}%）`);
+    console.log(`同起点区间的终点一致       : ${endAgreed}/${startAgreed}（终点一致率 ${endAgreement.toFixed(2)}%）`);
+    console.log(`CST 有、真源没有的起点（按块头形）: ${[...cstOnlyByOpen].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / ') || '—'}`);
+    console.log(`真源有、CST 没成块的起点（按该行 CST 节点名）: ${[...missedByLineNode].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / ') || '—'}`);
+    console.log(`终点不一致（按块头形）     : ${[...endDiffByOpen].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / ') || '—'}`);
+    console.log(`终点差多少行（真源最远止 − CST 止）: ${[...endDeltaHist].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} 行 × ${v}`).join(' / ') || '—'}`);
+    const ratios = perFile.map((f) => ({
+      ...f,
+      precision: f.cst === 0 ? 1 : (f.hit / f.cst) * 100,
+      recall: f.base === 0 ? 1 : ((f.base - f.miss) / f.base) * 100,
+      endRate: f.hit === 0 ? 0 : (f.endHit / f.hit) * 100,
+    }));
+    console.log('每文件读数（起点精确率最低 8 个）:');
+    for (const f of [...ratios].sort((a, b) => a.precision - b.precision).slice(0, 8)) {
+      console.log(
+        `  精确 ${f.precision.toFixed(1)}%（${f.hit}/${f.cst}）  召回 ${f.recall.toFixed(1)}%（${f.base - f.miss}/${f.base}）  终点 ${f.endRate.toFixed(1)}%（${f.endHit}/${f.hit}）  ${f.rel}`,
+      );
+    }
+    console.log('每文件读数（起点召回最低 8 个）:');
+    for (const f of [...ratios].sort((a, b) => a.recall - b.recall).slice(0, 8)) {
+      console.log(
+        `  召回 ${f.recall.toFixed(1)}%（${f.base - f.miss}/${f.base}）  精确 ${f.precision.toFixed(1)}%（${f.hit}/${f.cst}）  终点 ${f.endRate.toFixed(1)}%（${f.endHit}/${f.hit}）  ${f.rel}`,
+      );
+    }
+    console.log(`（口径核对）仅真源的 timing_head 跨度分布（止 − 起）: ${[...thSpanHist].sort((a, b) => a[0] - b[0]).map(([k, v]) => `${k} 行 × ${v}`).join(' / ') || '—'}`);
+    console.log('落点点名（每族最多 6 处，供排期）:');
+    for (const [family, spots] of spotsByFamily) console.log(`  ${family}: ${spots.join(' , ')}`);
+    console.log('CST 成块但真源无此起点的样本（前 30）:');
     for (const d of sampleDiffs) console.log(`  · ${d}`);
-    expect(scmFolds, 'folds.scm 若开始产折叠，本批"回落面钉住"的读数要一起改').toBe(0);
-    expect(cstFolds).toBeGreaterThan(0);
+    console.log('真源有起点但 CST 没成块的样本（前 30）:');
+    for (const d of missedSamples) console.log(`  · ${d}`);
+    console.log('同起点但终点不一致的样本（前 30）:');
+    for (const d of endDiffs) console.log(`  · ${d}`);
+
+    // ① 回落面已经翻篇：folds.scm 有 @fold 捕获 ⇒ `engine.ts::compileQueries` 那条
+    //    "folds 查询里没有带捕获的模式 ⇒ 折叠这一面不由结构层供"的分支不再触发。
+    expect(foldsQuery!.captureNames, 'folds.scm 必须带 @fold 捕获（worker 的 foldsFrom 按这个名字取）').toContain('fold');
+    expect(scmFolds, 'CST 块区间数跌破棘轮 ⇒ 折叠这一面又回落到原有供给器').toBeGreaterThanOrEqual(FOLD_RANGE_FLOOR);
+    expect(baselineFolds).toBeGreaterThan(0);
     expect(startPrecision, `起点精确率 ${startPrecision.toFixed(2)}% 低于地板`).toBeGreaterThanOrEqual(FOLD_START_FLOOR);
     expect(startRecall, `起点召回 ${startRecall.toFixed(2)}% 低于地板`).toBeGreaterThanOrEqual(FOLD_RECALL_FLOOR);
+    expect(endAgreement, `终点一致率 ${endAgreement.toFixed(2)}% 低于地板`).toBeGreaterThanOrEqual(FOLD_END_FLOOR);
   });
 });
 
 /**
- * Token A/B 地板：实测 **99.20%**（分母 97,143 个内容格 / 19 个语料文件；
- * 同格同名 93,788 + 同族子档 2,579 + 异档 774 + 词法层未着色 2）。任务线 98% ⇒ 地板就取 98，不放宽。
- * 剩下 0.80% 的两类分歧都是**结构层这一批的真实缺口**，逐条在上方读数里点名：
+ * Token A/B 地板。
+ *
+ * - **wave 1 实测**：99.20%（分母 97,143 个内容格 / 19 个语料文件；同格同名 93,788 + 同族子档 2,579
+ *   + 异档 774 + 词法层未着色 2）；
+ * - **本批实测（改档后）**：**99.58%**（同格同名 94,133 + 同族子档 2,598 + 异档 410 + 词法层未着色 2，
+ *   分母不变 97,143）。涨的 364 格全部来自 `types.ts` 那一格错档：`@keyword` 原本映射成
+ *   `keyword.erb`（引擎指令档），而查询里挂 `@keyword` 的五支节点说的都是**已经中文化**的行，
+ *   词法层在同样格子上发 `sugar.keyword` / `sugar.speech` / `sugar.cont`。逐类命中分布
+ *   （改动前用临时取数量出来的，留在这里当下次的对照）：
+ *   · `blank_line_cmd` 293 格 —— `sugar.keyword` 族 227 格（77.5%，含 `sugar.keyword.alias` 5）；
+ *   · `heart_text` 161 格 —— `sugar.speech` 族 109 格（67.7%） vs `sugar.keyword` 族只有 29 格
+ *     ⇒ 这一支走 `KOJO_STRUCTURE_NODE_TIERS` 的节点级覆盖；
+ *   · `message_check` 97 格 —— `sugar.keyword` 族 28 格（其余散在 `operator` / `sugar.slot` /
+ *     `identifier` / `number`，一支整行捕获给不出第二个档）；
+ *   · `color_head` 44 格 —— `number.hex` 32 格最多，但那是**参数**（`着色 0xFF8080：` 的色值），
+ *     行身份是中文关键字 ⇒ 仍按 `sugar.keyword`（8/44），没为多捞 24 格去借基线数字档。
+ *
+ * 剩下 410 格的两类**都是结构层的真实覆盖面缺口**，读数里逐条点名：
  * ① 台词串内的 `{插值}`：语法把整支 `「…」` 认成一枚 `string`（`@string` → `sugar.speech`），
- *    词法层在 `{}` 上换档到 `sugar.interp` ⇒ 结构层把插值涂成台词；
- * ② `@keyword` 三支行（`着色` / `心形` / `空行` / `隐藏情景`）经宿主表翻成 `keyword.erb`
- *    （引擎指令档，最扎眼的外来色），而词法层判它们是中文关键字 / 台词 / 名字层 ⇒
- *    **表里那一格映射选错了档**（`types.ts` 的 `keyword → keyword.erb`）。
+ *    词法层在 `{}` 上换档到 `sugar.interp` ⇒ 192 格（`sugar.speech ⇄ sugar.interp` 136 +
+ *    `⇄ sugar.interp.delimiter` 56）。修法在语法/查询那一侧（`interpolation` 单独成支并且
+ *    让它的格子在外层 `string` 之前落位），不在档位表；
+ * ② `sugar.keyword ⇄ sugar.cont` 58 格（`空行 等待` 的"等待/续"标记）、`⇄ number.hex` 32 格、
+ *    `⇄ operator/sugar.slot/identifier` 各 17–18 格：整行一支捕获 vs 逐词换档的表示法差异。
+ *
+ * 地板取 **99.4**（实测 99.58 之下留 0.18 个百分点）：**只升不降**。语法批（块嵌套）落地后
+ * 若这一格因为"块容器改变了涂色跨度"而翻线，正确动作是重跑取数、把上面的读数与地板一起改写，
+ * 而不是默默把地板调回去。
  */
-const TOKEN_AB_FLOOR = 98;
+const TOKEN_AB_FLOOR = 99.4;
 
 /**
- * 折叠地板（取数写死，只升不降）：CST 现推区间 788 条，其中 **98.35%**（775）的起点确实是真源折叠
- * 的起点（语法层认块头认得准）；真源 1,251 条起点里 **69.54%**（870）被现推认出——漏的都是嵌套 /
- * 分支层，行式语法没有块容器 ⇒ 现推只能看见"缩进更深的一段"。
- * 起点两侧的**终点**逐字一致只有 4.52%（35/775）：真源的止行按转译器配对规则走到"所属层末尾"
- * （含尾随空行），现推只能走到最后一行更深正文。
- * **这两条量不到 100% 是结构事实，不是取数没做**：`folds.scm` 本批 0 捕获 ⇒ 结构层不供折叠，
- * 宿主按 `providers.ts` 的回落面继续用原有折叠供给器。要抬到 100% 需要 `scanner.c` 产 `block`
- * 容器 + `(block) @fold`，届时把这两条地板一次抬到 100 并按"逐字同区间"断言。
+ * 折叠地板（**`@` 族容器落地 + `expr_head` 起点错位修好 + `"标签":` 条目补形后重取的数**，只升不降）。
+ *
+ * 19 份语料 / 9,102 行真跑读数（`folds.scm` 的 `@fold` vs `kojoFoldingRanges`）：
+ * - **区间数**：CST **1,103** 条（上一批 1,007 ⇒ +93 枚 `@函数名` 块 +3 枚双引号条目块）、真源 1,251 条；
+ * - **起点精确率 97.19%**（1,072/1,103）——漏的 31 条全是"转译器 AST 有节点、`rawSymbol` 没登记"的族
+ *   （循环 5 / 询问条目 8 + 询问头 2 / 规则标签 6 / 分支 2 / 数据表 1 / 出错处理 1 / 开关头 2 /
+ *   `if` 2…），属**加法折叠**不是错折；`expr_head` 那 4 条起点早一行的真缺陷已经归零。
+ *   （旧文里"排期落地后抬到 99"这条达不到：剩下的 31 条不是语法层的错，是大纲那一侧没登记族，
+ *   要抬到 99 得由 kojo-sugar 的 `rawSymbol` 补登记，不在语法批。）
+ * - **起点召回 97.20%**（1,216/1,251）——只剩 35 条，全部是空体 时机 块的**口径差**
+ *   （语法层"零行跨度不产折叠"，`folds.scm` 头注写明，不改）；上一批的三处缺口（`raw_block_start` 93、
+ *   `expr_head` 连带 6、`"标签":` 条目 3）已一并补掉；
+ * - **终点一致率 91.88%**（985/1,072）——不一致的 87 条里 **86 条正好差 1 行**（真源把块后的尾随空行算进止行，
+ *   CST 止于最后一行正文：`scanner.c` 的 `_dedent` 不跨换行，是 `folds.scm` 头注写明的口径）。
+ *   新增的 93 枚 `@` 块**止行逐行对齐**（`_raw_close` 的 mark 落在区内最后一行，与 `loc.end` 同口径），
+ *   所以召回涨了 8 个百分点而这条比率没有下跌。
+ *
+ * 地板取法（都留得出解释）：**区间数 1,100**（实测 1,103，掉了就说明 `@` 族容器或查询又退化）；
+ * **精确率 97**（实测 97.19，剩 0.19 个百分点给新语料抖动）；
+ * **召回 97**（实测 97.20；上一批是 85，那 4 个百分点的余量本来是留给 `@` 族的，族已经落地 ⇒ 余量收回）；
+ * **终点一致 91**（实测 91.88）。
+ * 还剩一件事可再抬召回：空体 时机 的 35 条属口径之争，动它要先动 `folds.scm` 那条"零行跨度不产折叠"的约定。
  */
-const FOLD_START_FLOOR = 95;
-const FOLD_RECALL_FLOOR = 60;
+const FOLD_RANGE_FLOOR = 1100;
+const FOLD_START_FLOOR = 97;
+const FOLD_RECALL_FLOOR = 97;
+const FOLD_END_FLOOR = 91;

@@ -31,6 +31,7 @@ const CAPABILITY_LABEL: Record<KojoStructureCapability, string> = {
   semantic: '结构着色',
   folds: '结构折叠',
   indent: '结构缩进',
+  syntax: '结构诊断',
   all: '结构解析',
 };
 

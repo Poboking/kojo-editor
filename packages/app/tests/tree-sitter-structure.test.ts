@@ -9,6 +9,7 @@ import {
 import {
   KOJO_STRUCTURE_BASELINE_TOKENS,
   KOJO_STRUCTURE_CAPTURE_TIERS,
+  KOJO_STRUCTURE_NODE_TIERS,
   KOJO_STRUCTURE_PROTOCOL,
   isStructureReply,
   structureLegendTypes,
@@ -61,6 +62,38 @@ describe('结构层档位映射 · 必须落在既有档位表里', () => {
     expect(tierForCapture('definitely-not-a-capture')).toBeNull();
   });
 
+  /**
+   * 错档护栏（本批改的那一格）：`@keyword` 挂的是**已经中文化**的行
+   * （着色 / 心形 / 心形正文 / 隐藏情景 / 空行），wave 1 把它们映射成 `keyword.erb`
+   * （引擎指令档 = "一整条还没中文化的骨架"）⇒ 屏上是外来色糊住中文骨架，A/B 也确有 ~620 格判异档。
+   * 这一条钉住"不许再借引擎指令档凑数"；真要接全大写 ERB 直通行，走 `@keyword.directive` 自己登记。
+   */
+  it('@keyword 落中文关键字档，不借引擎指令档', () => {
+    expect(tierForCapture('keyword')).toBe('sugar.keyword');
+    expect(Object.values(KOJO_STRUCTURE_CAPTURE_TIERS)).not.toContain('keyword.erb');
+  });
+
+  it('节点类型级覆盖只在它登记的那支捕获里生效，查不到就回落到捕获名表', () => {
+    // 心形正文是"整行 @keyword"里唯一一条不含关键字的正文 ⇒ 按台词档
+    expect(tierForCapture('keyword', 'heart_text')).toBe('sugar.speech');
+    // 语法升级（节点改名 / 拆分）时这张表自然失效：回落，不猜、不抛
+    expect(tierForCapture('keyword', 'node_that_does_not_exist_yet')).toBe('sugar.keyword');
+    // 别的捕获名下的同名节点不许被这一格串色
+    expect(tierForCapture('comment', 'heart_text')).toBe('comment');
+  });
+
+  it('legend 与两张档位表同源：表里每个档名都能反查回下标', () => {
+    const legend = structureLegendTypes();
+    const tiers = [
+      ...Object.values(KOJO_STRUCTURE_CAPTURE_TIERS),
+      ...Object.values(KOJO_STRUCTURE_NODE_TIERS).flatMap((byNode) => Object.values(byNode)),
+    ];
+    for (const tier of tiers) {
+      expect(legend.indexOf(tier), `档位 ${tier} 没进 legend ⇒ 编码时无处落 index（悄悄不涂色）`).toBeGreaterThanOrEqual(0);
+    }
+    expect(new Set(legend).size).toBe(legend.length);
+  });
+
   it('legend 稳定、无重复，且每个档位名都能反查回下标', () => {
     const legend = structureLegendTypes();
     expect(legend).toEqual([...legend].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
@@ -74,12 +107,22 @@ describe('结构层档位映射 · 必须落在既有档位表里', () => {
 /* ============================ ② 协议形状闸 ============================ */
 
 describe('isStructureReply · 主线程不信来路不明的消息', () => {
-  it('认得五种合法形状', () => {
+  it('认得六种合法形状', () => {
     expect(isStructureReply({ type: 'ready', version: 0 })).toBe(true);
     expect(isStructureReply({ type: 'semantic', doc: 1, version: 3, tokens: [] })).toBe(true);
     expect(isStructureReply({ type: 'folds', doc: 1, version: 3, folds: [{ startRow: 0, endRow: 4 }] })).toBe(true);
     expect(isStructureReply({ type: 'indent', doc: 1, version: 3, rules: EMPTY_RULES })).toBe(true);
+    expect(
+      isStructureReply({
+        type: 'syntax',
+        doc: 1,
+        version: 3,
+        truncated: false,
+        faults: [{ row: 4, endRow: 4, column: 2, endColumn: 9, faultRow: 4, kind: 'unterminated-string' }],
+      }),
+    ).toBe(true);
     expect(isStructureReply({ type: 'error', version: 0, stage: 'query', capability: 'folds', message: 'x' })).toBe(true);
+    expect(isStructureReply({ type: 'error', version: 0, stage: 'parse', capability: 'syntax', message: 'x' })).toBe(true);
   });
 
   it.each([
@@ -96,11 +139,21 @@ describe('isStructureReply · 主线程不信来路不明的消息', () => {
     ['error 的 stage 不在表里', { type: 'error', version: 1, stage: 'boom', capability: 'all', message: 'x' }],
     ['error 的 capability 不在表里', { type: 'error', version: 1, stage: 'parse', capability: 'maybe', message: 'x' }],
     ['error 缺 message', { type: 'error', version: 1, stage: 'parse', capability: 'all' }],
+    ['syntax 缺 doc（这一腿同样要过跨文档闸）', { type: 'syntax', version: 1, faults: [], truncated: false }],
+    ['syntax 缺 truncated 标记', { type: 'syntax', doc: 1, version: 1, faults: [] }],
+    ['syntax 的 faults 不是数组', { type: 'syntax', doc: 1, version: 1, faults: 'x', truncated: false }],
+    ['syntax 的 fault 缺坐标', { type: 'syntax', doc: 1, version: 1, truncated: false, faults: [{ kind: 'unclosed-block' }] }],
+    ['syntax 的 fault 类别在闭集外', { type: 'syntax', doc: 1, version: 1, truncated: false, faults: [{ row: 0, endRow: 0, column: 0, endColumn: 1, faultRow: 0, kind: 'boom' }] }],
   ])('丢掉：%s', (_name, payload) => {
     expect(isStructureReply(payload)).toBe(false);
   });
 
   it('协议版本是实数（两侧对不上时 worker 会当场停用）', () => {
+    /**
+     * 2 = 这一批合并进来的两桩形状变更（两条线各自抬到 2，合并构建仍是同一个 v2）：
+     * 跨文档隔离号 `doc` 进四条内容腿 + TSIT2-D 新增的 `syntax` 腿（新增一条腿仍是形状变更：
+     * 旧宿主碰到它会把整档判成违约）。
+     */
     expect(KOJO_STRUCTURE_PROTOCOL).toBe(2);
   });
 });

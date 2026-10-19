@@ -8,7 +8,9 @@ import { KOJO_LANGUAGE_ID } from '../kojo-language';
 import { reportStructureDegradation, resetStructureDegradationLedger } from './fallback';
 import { mergeIndentConfig } from './indent';
 import { KOJO_STRUCTURE_LEGEND, encodeStructureTokens } from './semantic';
+import { createStructureSyntaxPresenter } from './syntax-decorations';
 import type { StructureClient } from './client';
+import type { StructureSyntaxPresenter } from './syntax-decorations';
 import type { KojoStructureFold } from './types';
 
 /**
@@ -36,6 +38,10 @@ import type { KojoStructureFold } from './types';
  *   （`syntaxRangeProvider.js::collectSyntaxRanges`）⇒ 既有折叠照旧，结构折叠是增量。
  * - **缩进**：`setLanguageConfiguration` 只写 `onEnterRules` / `indentationRules` 两个属性
  *   （Monaco 按属性组合、没写的属性回落基底那份），并且只在结构层真的给出规则时才写。
+ * - **结构残缺**（TSIT2-D）：CST 上的 ERROR / MISSING 折成**行级波浪线**，走**自己的 marker
+ *   owner**（`syntax-decorations.ts` 的头注写明为什么不挤进 `ui.editor.decorator` 那一路、
+ *   以及"同一行已有 error 就不叠第二条"的去重判据）。这一面多挂一枚 marker owner，
+ *   其余注册面与上面三条完全一样。
  *
  * ## 着色开关的归属（两枚偏好共写同一个 Monaco 选项，必须有唯一的写的人）
  *
@@ -54,6 +60,8 @@ let active = false;
 /** 是否已经"接管过"着色选项（从未开过时 = false ⇒ 一个编辑器选项都不写） */
 let ownsHighlightingOption = false;
 let client: StructureClient | null = null;
+/** 结构残缺上屏器（TSIT2-D）：**只在叠层开着的那段时间存在**；建在 activate、拆在 deactivate */
+let syntax: StructureSyntaxPresenter | null = null;
 const registrations: Monaco.IDisposable[] = [];
 const optionHooks: Monaco.IDisposable[] = [];
 let appliedIndentKey: string | null = null;
@@ -238,11 +246,15 @@ async function activate(monaco: typeof Monaco): Promise<void> {
   try {
     const mod = await import('./client');
     if (!active) return; // 翻回关了（快速来回切），不再建线程
+    syntax = createStructureSyntaxPresenter(monaco);
     client = new mod.StructureClient({
       onFatal: () => {
         // 整档停用：拆 provider（回到只有词法层），偏好**不动**（作者没说要关）
         if (active) deactivate();
       },
+      // 结构残缺到货 → 行级波浪线（判据、去重、文案全在 `syntax-decorations.ts`）
+      onSyntax: (model, faults, truncated) => syntax?.show(model, faults, truncated),
+      onSyntaxClear: (model) => syntax?.clear(model),
     });
     registrations.push(monaco.languages.registerDocumentSemanticTokensProvider(KOJO_LANGUAGE_ID, structureSemanticProvider(monaco)));
     registrations.push(monaco.languages.registerFoldingRangeProvider(KOJO_LANGUAGE_ID, structureFoldingProvider(monaco)));
@@ -265,6 +277,9 @@ function deactivate(): void {
   appliedIndentKey = null;
   client?.dispose();
   client = null;
+  // 结构残缺那一层整片撤下（关 = 一条波浪线都不留；Monarch 与转译器那一路一个字没动过）
+  syntax?.dispose();
+  syntax = null;
   active = false;
   releaseHighlightingOptionOwnership();
 }

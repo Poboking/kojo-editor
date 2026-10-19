@@ -99,8 +99,30 @@ export const NATIVE_STRUCTURE_CODES = [
 /** 表达式诊断码闭集（词法错 / 语法错两类） */
 export const NATIVE_EXPR_CODES = ['erb.expr-lexical', 'erb.expr-syntax'] as const;
 
+/**
+ * `.kojo` **结构层**（CST 错误恢复）上屏的诊断码闭集（TSIT2-D）。
+ *
+ * 为什么不并进 `SugarDiagnosticCode`：那张联合是**转译器**的诊断码，每条都对应"转译器对这份
+ * 源的判定"；结构层那一层说的是"这一行的写法没成句"，两者同源不同事。并进去会有两个坏处——
+ * ① 「.kojo 校验」面板（只报转译器判定）会出现它没算过的码，② 去重判据（同一行转译器已经
+ * 说过 ⇒ 结构层不叠第二条，见 `app/src/monaco/tree-sitter/syntax-decorations.ts`）就没有
+ * 办法按来源区分两边。形态照上面 `NATIVE_STRUCTURE_CODES`：**前缀 + 生产方的 kind 逐字**，
+ * 拼法由生产方（`syntax-decorations.ts` 的 `syntaxErrorCode`）唯一决定，两侧对账钉在
+ * `app/tests/diagnostic-copy.test.ts`。
+ */
+export const KOJO_STRUCTURE_SYNTAX_CODES = [
+  'kojo.unclosed-block',
+  'kojo.unterminated-string',
+  'kojo.unterminated-interp',
+  'kojo.unexpected-token',
+] as const;
+
 /** 本表全部键的闭集（全覆盖闸用它与"码的并集"对账：既不许漏名，也不许留孤儿条目） */
-export type DiagnosticCodeKey = (typeof SUGAR_DIAGNOSTIC_CODES)[number] | (typeof NATIVE_STRUCTURE_CODES)[number] | (typeof NATIVE_EXPR_CODES)[number];
+export type DiagnosticCodeKey =
+  | (typeof SUGAR_DIAGNOSTIC_CODES)[number]
+  | (typeof NATIVE_STRUCTURE_CODES)[number]
+  | (typeof NATIVE_EXPR_CODES)[number]
+  | (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number];
 
 /**
  * 码 → 中文显示名（＋可选说明）。
@@ -162,6 +184,12 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'erb.orphan-branch': { name: '分支无人归属', detail: '这条分支语句前面没有它要归属的开块。' },
   'erb.expr-lexical': { name: '表达式有无法识别的字符', detail: '条件表达式里存在词法层面读不懂的内容。' },
   'erb.expr-syntax': { name: '表达式结构不对', detail: '条件表达式的括号、操作数或冒号写法不成立。' },
+
+  /* --- `.kojo` 结构层（CST 错误恢复）诊断（TSIT2-D；波浪线，不进问题面板） --- */
+  'kojo.unclosed-block': { name: '块没有收盘', detail: '这一行开的块一直开到后面，没等到它该有的收束语句。' },
+  'kojo.unterminated-string': { name: '台词引号没合上', detail: '这一句开了「却没等到」——右引号或行尾的续行写法缺一个。' },
+  'kojo.unterminated-interp': { name: '插值花括号没合上', detail: '插值要写在同一行内，左右花括号都得有。' },
+  'kojo.unexpected-token': { name: '这一行读不通', detail: '结构解析在这一行读不出成句的写法，通常是上一行缺了收束词、右引号或右花括号。' },
 
   /* --- 约定校验规则 id（同一张表供约定面板复用，避免第二份口径） --- */
   'erb.duplicate-function': { name: '函数重名' },

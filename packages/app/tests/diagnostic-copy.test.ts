@@ -18,12 +18,15 @@ import { describe, expect, it } from 'vitest';
 import {
   DIAGNOSTIC_CODE_EXCLUSIONS,
   DIAGNOSTIC_LABELS,
+  KOJO_STRUCTURE_SYNTAX_CODES,
   NATIVE_EXPR_CODES,
   NATIVE_STRUCTURE_CODES,
   SUGAR_DIAGNOSTIC_CODES,
   diagnosticDisplay,
 } from '@kojo/plugin-api';
 import type { ErbStructureIssue, SugarDiagnosticCode } from '@kojo/plugin-api';
+import { KOJO_STRUCTURE_SYNTAX_KINDS, type KojoStructureSyntaxKind } from '../src/monaco/tree-sitter/types';
+import { DECORATOR_MARKER_OWNER, SYNTAX_CODE_PREFIX, syntaxErrorCode } from '../src/monaco/tree-sitter/syntax-decorations';
 import {
   CONT_INSIDE_QUOTES_RULE_ID,
   DUPLICATE_FUNCTION_RULE_ID,
@@ -48,9 +51,16 @@ const _sugarBack: readonly (typeof SUGAR_DIAGNOSTIC_CODES)[number][] =
   [] as readonly SugarDiagnosticCode[];
 const _structureBack: readonly (typeof NATIVE_STRUCTURE_CODES)[number][] =
   [] as readonly `erb.${ErbStructureIssue['kind']}`[];
+/** 结构层：闭集 ⇄ 生产方的 kind 联合双向对账（改一边忘另一边 ⇒ typecheck 红） */
+const _syntaxFwd: readonly (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number][] =
+  [] as readonly `kojo.${KojoStructureSyntaxKind}`[];
+const _syntaxBack: readonly `kojo.${KojoStructureSyntaxKind}`[] =
+  [] as readonly (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number][];
 void _sugarFwd;
 void _sugarBack;
 void _structureBack;
+void _syntaxFwd;
+void _syntaxBack;
 
 /** 结构类上屏码的唯一拼法出处（`erb-parser/src/structure.ts`）；拼法一改，本守卫即红（不静默分叉） */
 const structureCodeSource = (): string => read('packages', 'plugins', 'erb-parser', 'src', 'structure.ts');
@@ -76,6 +86,7 @@ const ALL_CODES: readonly string[] = [
   ...SUGAR_DIAGNOSTIC_CODES,
   ...NATIVE_STRUCTURE_CODES,
   ...NATIVE_EXPR_CODES,
+  ...KOJO_STRUCTURE_SYNTAX_CODES,
   ...CONVENTION_RULE_IDS,
 ];
 
@@ -124,6 +135,26 @@ describe('诊断码中文显示名：全覆盖闸（二选一）', () => {
     expect(exprKindUnion()).toContain("readonly kind: 'lexical' | 'syntax'");
     expect(exprCodeSource()).toContain('`erb.expr-${diag.kind}`');
     expect([...NATIVE_EXPR_CODES].sort()).toEqual(['erb.expr-lexical', 'erb.expr-syntax']);
+  });
+
+  it('结构层（TSIT2-D）：码 = `kojo.` + kind，拼法与闭集逐一对账', () => {
+    // 生产方的拼法就一处（`syntax-decorations.ts` 的 `syntaxErrorCode`）；换了前缀 ⇒ 这两行一起红
+    expect(SYNTAX_CODE_PREFIX).toBe('kojo.');
+    for (const kind of KOJO_STRUCTURE_SYNTAX_KINDS) {
+      expect(ALL_CODES, `kind「${kind}」没有登记进码表（补 DIAGNOSTIC_LABELS 与闭集数组）`).toContain(syntaxErrorCode(kind));
+    }
+    for (const code of KOJO_STRUCTURE_SYNTAX_CODES) {
+      const bare = code.slice(SYNTAX_CODE_PREFIX.length);
+      expect(KOJO_STRUCTURE_SYNTAX_KINDS, `码表里的 ${code} 对不上任何 kind（孤儿条目）`).toContain(bare as KojoStructureSyntaxKind);
+    }
+    expect([...KOJO_STRUCTURE_SYNTAX_KINDS]).toHaveLength(KOJO_STRUCTURE_SYNTAX_CODES.length);
+  });
+
+  it('去重判据的那个 owner 与装饰通道真源一致（改了那边忘了这里 ⇒ 去重静默失效）', () => {
+    // 真源 = `ui/EditorPane.tsx` 里 `const MARKER_OWNER = 'kojo-decorators'`（组件文件的局部常量，
+    // 表现层不该反向 import 它，所以这里读源码对账，形态照上面那几条"拼法出处"闸）
+    const pane = read('packages', 'app', 'src', 'ui', 'EditorPane.tsx');
+    expect(pane).toContain(`const MARKER_OWNER = '${DECORATOR_MARKER_OWNER}'`);
   });
 });
 

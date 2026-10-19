@@ -15,9 +15,11 @@ import { reportStructureDegradation } from './fallback';
 import {
   KOJO_STRUCTURE_PROTOCOL,
   isStructureReply,
+  type KojoStructureCapability,
   type KojoStructureFold,
   type KojoStructureIndentRules,
   type KojoStructureRequest,
+  type KojoStructureSyntaxFault,
   type KojoStructureToken,
 } from './types';
 
@@ -47,12 +49,24 @@ import {
  * 缝完自检一次：缝出来的文本与模型现读的全文不等 ⇒ 立刻退回整篇重解（增量口径漂了
  * 最多贵一次，绝不能把错的树留在手上继续着色）。
  *
+ * 另一侧（worker 里的 `engine.ts`）拿到的是**同一条编辑**：先 `tree.edit()` 把旧树推到位，
+ * 再用**有界取字符回调**在新文本上重解，而不是把整篇新文本一次交出去（为什么：
+ * 传整串时 web-tree-sitter 内部每次取字都 `text.slice(index)` 复制一遍文档尾巴，
+ * 实测把整篇解的 p95 抬到 30 ms 级；口径与读数见 `tests/tree-sitter-parse.perf.test.ts`）。
+ *
  * ## 回落的两档（都不碰保存，也不碰转译）
  *
  * - 整档（wasm / 解析 / 协议不符 / 线程崩 / 装配都没完成就超时）⇒ 终止 worker +
  *   `onFatal`，装配层据此拆掉全部 provider，作者回到只有词法层的状态；
  * - 单面（例如 folds 查询没写捕获）⇒ 那一面从此不再等（`dead`），另一面照旧。
  * 两档都经 `fallback.ts` **各说一次**，不随编辑重复。
+ *
+ * ## 第四条腿：结构残缺（TSIT2-D）是**推**的，不是**问**的
+ *
+ * 着色与折叠是 Monaco 主动来问（provider），所以有"等一等 + 超时停用"那套；结构残缺没有
+ * 任何消费方在 await——worker 每解完一篇就回一条 `syntax`，代理收到就转交给上屏器
+ * （`onSyntax`），换轨 / 停用 / 整档回落时转交一次"撤"（`onSyntaxClear`）。
+ * 两个回调都在 `try/catch` 里调：上屏是呈现面的事，抛回来会把消息环打断（那是编辑链的邻居）。
  */
 
 /** 一面最多等多久（线程卡住时不许把 provider 的 promise 挂到天荒地老） */
@@ -61,6 +75,11 @@ export const STRUCTURE_REQUEST_TIMEOUT_MS = 4_000;
 export type StructureStatus = 'idle' | 'starting' | 'ready' | 'dead';
 
 type FacetName = 'semantic' | 'folds';
+
+/** 一条结果回话属于哪一面（过期丢弃时要用它说清"哪一面的一条没了"，不许再写三元表达式猜） */
+function capabilityOfReply(type: 'semantic' | 'folds' | 'indent' | 'syntax'): KojoStructureCapability {
+  return type === 'syntax' ? 'syntax' : type === 'indent' ? 'indent' : type;
+}
 
 interface FacetResult<T> {
   readonly version: number;
@@ -79,8 +98,14 @@ interface TrackedDocument {
   readonly subscription: Monaco.IDisposable;
   semantic: FacetResult<readonly KojoStructureToken[]> | null;
   folds: FacetResult<readonly KojoStructureFold[]> | null;
+  /** 结构残缺（TSIT2-D）：这一面**不等人问**——到货就推给上屏器，所以没有 `waitFor` 那一步 */
+  syntax: FacetResult<readonly KojoStructureSyntaxFault[]> | null;
+  /** 最近一次的截断标记（随每次 `syntax` 一起换） */
+  syntaxTruncated: boolean;
   /** 已经停用的一面（等也等不来，别再白等；每次换轨重新计） */
   readonly dead: Record<FacetName, boolean>;
+  /** 结构残缺这一面停用（错误恢复跑不动 / 扫描抛错 ⇒ 不再推、并把已画的撤下） */
+  syntaxDead: boolean;
 }
 
 export interface StructureClientOptions {
@@ -88,6 +113,14 @@ export interface StructureClientOptions {
   timeoutMs?: number;
   /** 整档停用时的通知（装配层在这里拆 provider） */
   onFatal?: (message: string) => void;
+  /**
+   * 结构残缺到货（TSIT2-D）。`providers.ts` 把它接给 `syntax-decorations.ts` 的上屏器；
+   * 回调**不许抛**（上屏是呈现面的事，抛回来会把 worker 的消息环打断），
+   * 装配层那边自己也 try/catch。
+   */
+  onSyntax?: (model: Monaco.editor.ITextModel, faults: readonly KojoStructureSyntaxFault[], truncated: boolean) => void;
+  /** 结构残缺这一面撤下（换轨 / 停用 / 整档回落）：撤的是**那一份 model** 的波浪线 */
+  onSyntaxClear?: (model: Monaco.editor.ITextModel) => void;
 }
 
 export class StructureClient {
@@ -100,10 +133,18 @@ export class StructureClient {
   private readonly onFatal: (message: string) => void;
   /** 文档隔离号的发生器（只增不减；worker 拿它回显，主线程拿它对号） */
   private docSeq = 0;
+  private readonly onSyntax: (
+    model: Monaco.editor.ITextModel,
+    faults: readonly KojoStructureSyntaxFault[],
+    truncated: boolean,
+  ) => void;
+  private readonly onSyntaxClear: (model: Monaco.editor.ITextModel) => void;
 
   constructor(options: StructureClientOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? STRUCTURE_REQUEST_TIMEOUT_MS;
     this.onFatal = options.onFatal ?? (() => undefined);
+    this.onSyntax = options.onSyntax ?? (() => undefined);
+    this.onSyntaxClear = options.onSyntaxClear ?? (() => undefined);
   }
 
   get state(): StructureStatus {
@@ -189,7 +230,10 @@ export class StructureClient {
       subscription: model.onDidChangeContent(() => this.onChanged()),
       semantic: null,
       folds: null,
+      syntax: null,
+      syntaxTruncated: false,
       dead: { semantic: false, folds: false },
+      syntaxDead: false,
     };
     this.doc = doc;
     if (!doc.pendingParse) this.postParse(doc);
@@ -205,7 +249,26 @@ export class StructureClient {
     const doc = this.doc;
     if (doc === null) return;
     doc.subscription.dispose();
+    // 换轨 / 停用 = 这一份文档的结构波浪线到此为止（留着就是"波浪线指着已经不在眼前的内容"）
+    this.safeSyntaxClear(doc.model);
     this.doc = null;
+  }
+
+  /** 回调不许把 worker 消息环 / 换轨流程打断（上屏是呈现面的事，失败只由台账说） */
+  private safeSyntaxClear(model: Monaco.editor.ITextModel): void {
+    try {
+      this.onSyntaxClear(model);
+    } catch {
+      /* 什么都不做：撤装饰失败绝不该让线程或编辑链断掉 */
+    }
+  }
+
+  private safeSyntax(model: Monaco.editor.ITextModel, faults: readonly KojoStructureSyntaxFault[], truncated: boolean): void {
+    try {
+      this.onSyntax(model, faults, truncated);
+    } catch {
+      /* 同上：上屏器抛回来也不许把这一条消息环打断 */
+    }
   }
 
   /** 内容变化 → 一条保守编辑；缝不回去就整篇重解（口径漂了宁可贵一次） */
@@ -322,9 +385,16 @@ export class StructureClient {
       }
       reportStructureDegradation({ capability: data.capability, stage: data.stage, message: data.message });
       const doc = this.doc;
-      if (doc !== null && (data.capability === 'semantic' || data.capability === 'folds')) {
-        doc.dead[data.capability] = true;
-        this.flush(data.capability);
+      if (doc !== null) {
+        if (data.capability === 'semantic' || data.capability === 'folds') {
+          doc.dead[data.capability] = true;
+          this.flush(data.capability);
+        } else if (data.capability === 'syntax') {
+          // 这一面停了：已经画出去的要先撤下（不许留着一层没人负责的波浪线）
+          doc.syntaxDead = true;
+          doc.syntax = null;
+          this.safeSyntaxClear(doc.model);
+        }
       }
       return;
     }
@@ -332,7 +402,7 @@ export class StructureClient {
     const doc = this.doc;
     if (doc === null || data.doc !== doc.seq) {
       reportStructureDegradation({
-        capability: data.type === 'folds' ? 'folds' : data.type === 'indent' ? 'indent' : 'semantic',
+        capability: capabilityOfReply(data.type),
         stage: 'parse',
         message: `收到文档 ${data.doc} 的结果而当前跟踪的是文档 ${doc?.seq ?? '无'} ⇒ 这条丢掉（旧文档的结构着到新文档上比不着色危险）`,
       });
@@ -340,16 +410,29 @@ export class StructureClient {
     }
     if (data.version < doc.version) {
       reportStructureDegradation({
-        capability: data.type === 'folds' ? 'folds' : data.type === 'indent' ? 'indent' : 'semantic',
+        capability: capabilityOfReply(data.type),
         stage: 'parse',
         message: `收到版本 ${data.version} 的结果而当前版本是 ${doc.version} ⇒ 这条丢掉（拿过期结构给新文本着色比不着色危险）`,
       });
       return;
     }
-    if (data.type === 'semantic') doc.semantic = { version: data.version, value: data.tokens };
-    else if (data.type === 'folds') doc.folds = { version: data.version, value: data.folds };
-    else this.latestIndent = { version: data.version, value: data.rules };
-    if (data.type === 'semantic') this.flush('semantic');
-    else if (data.type === 'folds') this.flush('folds');
+    if (data.type === 'semantic') {
+      doc.semantic = { version: data.version, value: data.tokens };
+      this.flush('semantic');
+      return;
+    }
+    if (data.type === 'folds') {
+      doc.folds = { version: data.version, value: data.folds };
+      this.flush('folds');
+      return;
+    }
+    if (data.type === 'syntax') {
+      if (doc.syntaxDead) return; // 这一面已经停过 ⇒ 不再推（台账也说过一次了）
+      doc.syntax = { version: data.version, value: data.faults };
+      doc.syntaxTruncated = data.truncated;
+      this.safeSyntax(doc.model, data.faults, data.truncated);
+      return;
+    }
+    this.latestIndent = { version: data.version, value: data.rules };
   }
 }

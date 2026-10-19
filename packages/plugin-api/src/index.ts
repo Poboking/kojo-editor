@@ -583,6 +583,7 @@ export {
   SUGAR_DIAGNOSTIC_CODES,
   NATIVE_STRUCTURE_CODES,
   NATIVE_EXPR_CODES,
+  KOJO_STRUCTURE_SYNTAX_CODES,
   diagnosticDisplay,
   type DiagnosticCodeKey,
   type DiagnosticDisplay,

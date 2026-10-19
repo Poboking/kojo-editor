@@ -163,6 +163,7 @@ function fakeMonaco(): { monaco: unknown; captured: Captured } {
     onDidChangeConfiguration: () => ({ dispose: () => undefined }),
   };
   const monaco = {
+    MarkerSeverity: { Error: 8, Warning: 4, Info: 2, Hint: 1 },
     languages: {
       IndentAction: { None: 0, Indent: 1, IndentOutdent: 2, Outdent: 3 },
       registerDocumentSemanticTokensProvider: (_id: string, provider: SemanticProvider) => {
@@ -181,6 +182,14 @@ function fakeMonaco(): { monaco: unknown; captured: Captured } {
     editor: {
       getEditors: () => [editor],
       onDidCreateEditor: () => ({ dispose: () => undefined }),
+      /**
+       * TSIT2-D 之后上屏器要用到的三件（结构残缺那一面的 marker owner）。
+       * 本文件的判据不碰这一层，给**空实现**即可——但必须给：不给就说明
+       * `activate()` 会在这一步抛 ⇒ 整档停用，那正是本文件最反对的静默失败。
+       */
+      getModelMarkers: () => [],
+      setModelMarkers: () => undefined,
+      onDidChangeMarkers: () => ({ dispose: () => undefined }),
     },
   };
   return { monaco, captured };
