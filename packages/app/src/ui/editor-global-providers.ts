@@ -114,6 +114,7 @@ import {
   owningPaneOf,
   pathForUriAcrossGroups,
   requireKernel,
+  sourceModelOf,
   sugarOwningPaneOf,
   sugarSourceOf,
   type PaneCtx,
@@ -491,19 +492,6 @@ function createPreviewFolder(lineMap: readonly number[]): (sourceLine: number) =
     const row = sourceLine > maxSourceLine ? tail : at[sourceLine] ?? 0;
     return row > 0 ? row : null;
   };
-}
-
-/** 糖投影背后那份**原文** model（`entriesRef` 的键就是 `filePathRef`，HK-7 同款 `pathKey` 兜底） */
-function sourceModelOf(ctx: PaneCtx): Monaco.editor.ITextModel | null {
-  const want = ctx.filePathRef.current;
-  if (!want) return null;
-  const direct = ctx.entriesRef.current.get(want)?.model;
-  if (direct) return direct;
-  const key = pathKey(want);
-  for (const [entryPath, entry] of ctx.entriesRef.current) {
-    if (pathKey(entryPath) === key) return entry.model;
-  }
-  return openModelAcrossGroups(want) ?? null;
 }
 
 /**

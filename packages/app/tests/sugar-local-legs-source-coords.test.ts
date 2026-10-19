@@ -1,19 +1,22 @@
 /**
  * 三条**缓冲区本地腿**（`#DIM` 定义 / `#DIM` 引用 / `$` 标签）在升糖预览面上按**存档坐标**作答
- * （2026-10-20 源坐标批）。
+ * （2026-10-20 源坐标批；同批之后 `$` 标签腿又改成**拿原文发问**，见 ⑤）。
  *
- * 本地腿读的是屏幕上那份缓冲区文本——投影面上就是 `inmemory://sugar/…` 里那串糖。文本没读错，
- * 错的是**交出去的坐标**：投影 URI 上没有文件、预览行号不属于存档，而
+ * 本地腿交出去的每一枚落点都必须属于存档——投影 URI 上没有文件、预览行号不属于存档，而
  * `mergeSymbolLocations` 把本地腿排在最前、`planDefinitionJump` 的事件通道兜底只取第一枚，
  * 于是"看着对、其实指向派生面"的那一枚把真算出来的源落点顶掉，作者按 F12 得到一次没反应的跳转。
  *
- * 钉四条：
+ * 钉五条：
  * ① **换算得出来才交**：投影行 → 存档行 + 存档路径；映射缺席 / 那一格没有源行 ⇒ 这一枚**不交**
  *    （不猜行号，也不留一枚幻影）；
- * ② **列不折算**：投影行与存档行连文本都不是同一串 ⇒ 跨面一律落到行首（`column: 1`、不给 span），
- *    与糖面读类腿（`readDefinitionTargets`）同一个形状，两条腿的去重键才认得出同一处；
+ * ② **列不折算**（`#DIM` 两腿）：投影行与存档行连文本都不是同一串 ⇒ 跨面一律落到行首
+ *    （`column: 1`、不给 span），与糖面读类腿（`readDefinitionTargets`）同一个形状，
+ *    两条腿的去重键才认得出同一处；
  * ③ **原文面逐字不变**：同一份判据在没有投影的那一面一个字段都不碰（列与区间照旧）；
- * ④ **幻影不许从缝里溜出来**：登记簿查不到归属实例的派生 model（实例已退册 / 迟到的请求）⇒ 不应答。
+ * ④ **幻影不许从缝里溜出来**：登记簿查不到归属实例的派生 model（实例已退册 / 迟到的请求）⇒ 不应答；
+ * ⑤ **`$` 标签腿问的是原文**（中文谓词批）：那份作用域整份生在存档侧，于是交出的**是真列真区间**
+ *    （与 ② 那个形状刻意不同，裁决书点名接受），而"中文谓词行也要答"归
+ *    `sugar-label-source-text.test.ts`——本夹具的标签两行是逐字透传的那一档。
  *
  * 面与映射都由 `composeSugarDoc` 真拼出来（不是手抄表）——整条换算都骑在"文本与映射同批产出"
  * 这条前提上，绕开拼装箱就是绕开它。monaco 运行时不进 node，桩 model / 桩 monaco 照
@@ -103,10 +106,14 @@ const PREVIEW_MODEL = fakeModel(PREVIEW, PROJECTION_URI, 'inmemory');
 const pos = (lineNumber: number, column: number): Monaco.Position =>
   ({ lineNumber, column }) as unknown as Monaco.Position;
 
-/** 屏上挂着投影的那个实例档案（`sugarModelRef` / `sugarLineMapRef` / `filePathRef` 全是判据来源） */
-function mountProjection(lineMap: readonly number[] = LINE_MAP): PaneCtx {
+/** 屏上挂着投影的那个实例档案（`sugarModelRef` / `sugarLineMapRef` / `filePathRef` 全是判据来源）
+ *  `sourceModel = null` = 登记表里没有那份**原文** model（派生面就此取不到归属） */
+function mountProjection(
+  lineMap: readonly number[] = LINE_MAP,
+  sourceModel: Monaco.editor.ITextModel | null = ARCHIVE_MODEL,
+): PaneCtx {
   const entries = new Map<string, { model: Monaco.editor.ITextModel }>();
-  entries.set(ARCHIVE, { model: ARCHIVE_MODEL });
+  if (sourceModel) entries.set(ARCHIVE, { model: sourceModel });
   const pane = {
     paneId: 'sugar-legs',
     filePathRef: { current: ARCHIVE },
@@ -240,23 +247,54 @@ describe('#DIM 引用腿 · 同一条换算，分类不丢', () => {
   });
 });
 
-/* ============================== 腿③：`$` 标签腿 ============================== */
+/* ============================== 腿③：`$` 标签腿（**改问原文**，2026-10-20 中文谓词批） ============================== */
 
-describe('$ 标签腿 · 作用域出口就在存档那一侧', () => {
-  it('定义落在没有源行的那一格 ⇒ 整枚丢；跳转点照折到存档行（列收到行首、零宽不发 span）', () => {
-    mountProjection();
-    const scope = resolveErbLabelScopeAt(PREVIEW_MODEL, pos(9, 8))!;
-    expect(labelDefinitionLocations(scope)).toEqual([]);
-    expect(labelReferenceLocations(scope)).toEqual([
-      { filePath: ARCHIVE, line: 10, column: 1, kind: 'mention' },
-    ]);
+describe('$ 标签腿 · 投影面拿原文发问', () => {
+  it('本夹具的标签两行在投影上是**逐字透传**的那一档（中文谓词面另有夹具）', () => {
+    // 钉住夹具本身：这里的投影段只中文化了 `IF/ENDIF`，`$NEXT` / `GOTO NEXT` 原样上屏。
+    // ⇒ 本文件测的是**换算与出口**；"中文谓词行也要答、且答存档行"归 `sugar-label-source-text.test.ts`。
+    expect(PREVIEW[6]).toBe(SOURCE[8]); // 预览第 7 行 = 存档第 9 行的文本（但那一格没有源行）
+    expect(PREVIEW[8]).toBe(SOURCE[9]); // 预览第 9 行 ⇄ 存档第 10 行
   });
 
-  it('定义行自己也没有源行 ⇒ F12 什么都不交（一次原地不动的假跳转比不跳更坏）', () => {
+  it('跳转点上 F12 ⇒ 作用域整份落在存档侧：行号是存档行，列与区间是真宽度', () => {
     mountProjection();
-    const scope = resolveErbLabelScopeAt(PREVIEW_MODEL, pos(7, 2))!;
+    const scope = resolveErbLabelScopeAt(PREVIEW_MODEL, pos(9, 8))!;
     expect(scope.normalizedName).toBe('NEXT');
-    expect(labelDefinitionLocations(scope)).toEqual([]);
+    expect(scope.functionStartLine).toBe(1); // 源侧那枚 `@MAIN`（不是"投影第一行"的意思）
+    expect(labelDefinitionLocations(scope)).toEqual([
+      { filePath: ARCHIVE, line: 9, column: 2, span: { columnStart: 2, columnEnd: 6 }, kind: 'definition' },
+    ]);
+    expect(labelReferenceLocations(scope)).toEqual([
+      { filePath: ARCHIVE, line: 9, column: 2, span: { columnStart: 2, columnEnd: 6 }, kind: 'definition' },
+      { filePath: ARCHIVE, line: 10, column: 8, span: { columnStart: 8, columnEnd: 12 }, kind: 'mention' },
+    ]);
+    expect(scope.occurrences.every((o) => o.filePath === ARCHIVE)).toBe(true);
+  });
+
+  it('光标那一格没有源行 ⇒ 不发问、整腿 `null`（**绝不**拿投影文本凑一个形状）', () => {
+    mountProjection();
+    expect(resolveErbLabelScopeAt(PREVIEW_MODEL, pos(7, 2))).toBeNull();
+  });
+
+  it('装饰行确实挂在源行上 ⇒ 问到的还是那枚标签（折到存档第 9 行的定义）', () => {
+    mountProjection();
+    const scope = resolveErbLabelScopeAt(PREVIEW_MODEL, pos(8, 2))!; // `（标签注）`那格的源行就是 `$NEXT`
+    expect(scope.normalizedName).toBe('NEXT');
+    expect(labelDefinitionLocations(scope).map((l) => [l.filePath, l.line])).toEqual([[ARCHIVE, 9]]);
+  });
+
+  it('映射缺席（空表）⇒ 不给（投影退化时宁可不答）', () => {
+    mountProjection([]);
+    expect(resolveErbLabelScopeAt(PREVIEW_MODEL, pos(9, 8))).toBeNull();
+  });
+
+  it('原文 model 取不到 ⇒ 三条腿一起不给（派生面一律取不到归属）', () => {
+    mountProjection(LINE_MAP, null);
+    expect(resolveErbLabelScopeAt(PREVIEW_MODEL, pos(9, 8))).toBeNull();
+    expect(resolveErbDimDefinitionAt(PREVIEW_MODEL, pos(5, 3))).toEqual([]);
+    expect(resolveErbDimReferencesAt(PREVIEW_MODEL, pos(4, 8))).toEqual([]);
+    expect(derivedLegSurfaceOf(PREVIEW_MODEL)).toBeNull();
   });
 
   it('原文面逐字不变：出现点的列与区间一个字节都没动', () => {
@@ -355,7 +393,7 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     expect(navigated).toEqual([{ filePath: ARCHIVE, line: 6, column: 1 }]);
   });
 
-  it('Shift+F12 的本地腿同样交存档坐标（`find-references` 一行没改，Peek 就落在原文 model 上）', () => {
+  it('Shift+F12：本地腿交存档坐标，`find-references` 在投影面上把它折回屏幕上那一行（Peek 落在投影 model）', () => {
     mountProjection();
     const { monaco, references } = stubMonaco();
     installReferenceProvider(monaco, {
@@ -370,10 +408,11 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
       {} as Monaco.languages.ReferenceContext,
       {} as Monaco.CancellationToken,
     ) as Monaco.languages.Location[];
+    // 存档 6 / 7 / 8 三处 ⇒ 预览 4 / 5 / 6 三行；列一律收到行首（`tests/peek-preview-fold.test.ts` 钉全套判据）
     expect(locations.map((l) => [l.uri.toString(), l.range.startLineNumber, l.range.startColumn])).toEqual([
-      [ARCHIVE_MODEL.uri.toString(), 6, 1],
-      [ARCHIVE_MODEL.uri.toString(), 7, 1],
-      [ARCHIVE_MODEL.uri.toString(), 8, 1],
+      [PREVIEW_MODEL.uri.toString(), 4, 1],
+      [PREVIEW_MODEL.uri.toString(), 5, 1],
+      [PREVIEW_MODEL.uri.toString(), 6, 1],
     ]);
   });
 

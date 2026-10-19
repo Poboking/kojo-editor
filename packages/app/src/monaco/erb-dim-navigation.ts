@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
-import { livePanes, sugarOwningPaneOf, sugarSourceOf, type PaneCtx } from '../ui/editor-pane-registry';
+import { livePanes, sourceModelOf, sugarOwningPaneOf, sugarSourceOf, type PaneCtx } from '../ui/editor-pane-registry';
 import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
 
 /**
@@ -18,9 +18,19 @@ import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
  *   `ErbIndex`）⇒ 一律返回空数组，**不猜、不新建索引字段**。
  * - `.kojo` 是派生文本，行号不属于原文 ⇒ 只答 ERB 方言后缀（`.erb` / `.erh` / `.erd`）。
  * - **升糖预览（`inmemory://sugar/…`）按存档坐标作答**（2026-10-20 源坐标批）：本层与
- *   `$` 标签层是"缓冲区本地腿"，读的是屏幕上那份投影文本，但交出去的每一枚落点必须落在
- *   **存档那一行、存档那份文件**上——换算判据全在 {@link derivedLegSurfaceOf} /
- *   {@link toArchiveCoords}，两条腿共用同一份（见下方"派生面 → 存档坐标"段）。
+ *   `$` 标签层是"缓冲区本地腿"，交出去的每一枚落点必须落在**存档那一行、存档那份文件**上
+ *   ——换算判据全在 {@link derivedLegSurfaceOf} / {@link toArchiveCoords}，两条腿共用同一份
+ *   （见下方"派生面 → 存档坐标"段）。
+ * - **两条腿各自问哪一份文本**（2026-10-20 中文谓词批；判据边界，照抄前先读这一段）：
+ *   ① 本层 `#DIM` 两腿问**投影文本**：变量名与声明名都是**载荷**，投影逐字带走、不中文化
+ *      （红线只禁"一整行原样 ERB"，见 `kojo-sugar/native-display/types.ts`），而光标那一列
+ *      量的本来就是屏幕上那一行 ⇒ 问投影、结果折回存档，两面同尺。行首的 `#DIM` 记号确实被
+ *      中文谓词换掉了（`声明数组 X`，`native-display/control.ts` 的 `PREPROCESSORS`）⇒
+ *      投影上扫不到声明行，那是**有意的退化**：拿"改问原文"补就是拿中文面的列去量原文那一行。
+ *   ② `$` 标签腿（`erb-label-navigation.ts`）问**原文**：`labelScopeAt` 认的是 `$` 前缀与
+ *      `JUMP/GOTO` 系的**行首原生记号**（`erb-parser/symbols.ts`），投影面上那个位置是中文谓词
+ *      （`GOTO NEXT` → `跳到 NEXT`）⇒ 拿投影文本发问**恒 `null`**（拿译稿对原稿的页码）。
+ *      派生面因此拿"原文缓冲 + 换算过的存档位点"发问，位点算术住在 {@link DerivedLegSurface}。
  * - 名字字符集与悬停**同一枚** `isDimNameChar`（中文 / 全角字母都合法，绝不用 `\w`）；
  *   路径比较与合并去重**同一枚** `normalizePathKey`（Windows 分隔符 / 大小写不敏感）。
  * - fail-open：路径缺席 / 文本为空 / 行越界 / 不是声明名 / 名字不存在 ⇒ `[]`，不抛。
@@ -152,6 +162,16 @@ export function isDerivedModelUri(model: Monaco.editor.ITextModel): boolean {
 export interface DerivedLegSurface {
   /** 存档路径 = 投影归属实例那一份文件；空串 = 实例还没挂上文件 ⇒ 这一面无处可答 */
   readonly path: string;
+  /**
+   * **原文**缓冲区文本（发问用的那一份）。只认原文形状的判据（`labelScopeAt` 的 `$` 前缀与
+   * `JUMP/GOTO` 行首记号）**必须**吃它——吃投影文本就是恒 `null`。
+   * 取原文 model 走登记簿的 `sourceModelOf`（同一条反查只此一份），空文本不当真 ⇒ 整条腿不给结果。
+   */
+  readonly sourceText: string;
+  /** 原文行数（`\r\n` 已归一）；换算出的源行越过这一界 ⇒ 不当真、不发问 */
+  readonly sourceLineCount: number;
+  /** 投影行（1 基）→ 屏幕上那一行的文本（列换算按"到行尾的距离"对齐）；越界 = `undefined` */
+  shownLineOf(previewLine: number): string | undefined;
   /** 投影行（1 基）→ 存档行（1 基）；映射缺席 / 那一格没有源行 ⇒ `null`（= 这一枚不交） */
   lineOf(previewLine: number): number | null;
 }
@@ -164,13 +184,36 @@ export interface DerivedLegSurface {
  * 那一面同样没有文件可依，不该交预览坐标。
  * 行换算只认 `sugarSourceOf` 读的那张 `sugarLineMapRef`——它与投影 model 同批换上，
  * 本层不许自建第二份映射（两张表一漂移，跳的就是隔壁一行）。
+ *
+ * 原文那一份走登记簿的 `sourceModelOf`（"哪一份 model 是这份投影的原文"这条反查只此一份，
+ * 读类腿与本地腿共用）。**为什么不住 `editor-global-providers.ts`**：那模块顶层带 Monaco 运行时，
+ * 而本层这套件跑在 node 池里——静态引它 = 当场 `ReferenceError: window is not defined`；
+ * 登记簿只 `import type` monaco，两侧都能干净地引。
+ * 取不到 / 空文本 ⇒ 回 `null`：这一面没有原文可问，交出去的每一枚都只能是猜的
+ * （`#DIM` 两腿问的是投影文本，但落点仍必须是存档行，同样不许蒙）。
  */
 export function derivedLegSurfaceOf(model: Monaco.editor.ITextModel): DerivedLegSurface | null {
   const ctx: PaneCtx | null =
     sugarOwningPaneOf(model) ?? [...livePanes.values()].find((pane) => pane.sugarModelRef.current === model) ?? null;
   if (ctx === null) return null;
+  const source = sourceModelOf(ctx);
+  if (!source) return null;
+  let sourceText = '';
+  let shownText = '';
+  try {
+    sourceText = source.getValue() ?? '';
+    shownText = model.getValue() ?? '';
+  } catch {
+    return null;
+  }
+  // 空原文 = 没有可问的缓冲区（`''.split('\n')` 还会切出一行空行，那是一枚假行号，不是一行）
+  if (sourceText.length === 0) return null;
+  const shownLines = linesOf(shownText);
   return {
     path: ctx.filePathRef.current,
+    sourceText,
+    sourceLineCount: linesOf(sourceText).length,
+    shownLineOf: (previewLine: number) => shownLines[previewLine - 1],
     lineOf: (previewLine: number) => sugarSourceOf(ctx, previewLine)?.line ?? null,
   };
 }

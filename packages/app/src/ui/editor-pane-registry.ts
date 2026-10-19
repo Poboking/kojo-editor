@@ -16,6 +16,7 @@ import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type { EditorCodeAction, EditorDocumentSymbol } from '@kojo/plugin-api';
 import { matchOpenedPath } from './external-change';
+import { sourceLineToSugar } from './sugar-view';
 
 /** 单个打开文件的 model 记录（多标签：model 随标签存续，切换不销毁） */
 export interface ModelEntry {
@@ -130,6 +131,19 @@ export function sugarSourceOf(ctx: PaneCtx, previewLine: number): { path: string
   return line === undefined || line <= 0 ? null : { path: ctx.filePathRef.current, line };
 }
 
+/**
+ * 源行（1 基）→ 屏幕上这份投影的预览行（1 基）；映射缺席 / 折不回 = `null`。
+ *
+ * 与 `sugarSourceOf` 是**同一张表**的两个方向（换算判据单源在 `sourceLineToSugar`：精确命中取
+ * 第一次出现，源行被折进糖段、没有独立成行时停在"包住它的那段糖"）。
+ * 存在的理由：落点类腿在**事件通道**上（`editor.revealLocation` → `EditorPane.applyReveal`）
+ * 由那一跳折回，所以取数腿刻意留源坐标；而 Peek 树里点同一枚走的是 Monaco 的**同 model 就地跳**，
+ * 一条事件都不发 ⇒ 不在这里折就没有任何人折（见 `monaco/find-references.ts` 的投影面段）。
+ */
+export function sugarPreviewLineOf(ctx: PaneCtx, sourceLine: number): number | null {
+  return sourceLineToSugar(ctx.sugarLineMapRef.current, sourceLine);
+}
+
 export function focusedCtx(): PaneCtx | null {
   const focused = focusedPaneId ? livePanes.get(focusedPaneId) : undefined;
   return focused ?? livePanes.values().next().value ?? null;
@@ -146,6 +160,26 @@ export function openModelAcrossGroups(filePath: string): Monaco.editor.ITextMode
     if (key) return ctx.entriesRef.current.get(key)?.model;
   }
   return undefined;
+}
+
+/**
+ * 归属实例那份**原文** model（`entriesRef` 的键就是 `filePathRef`，HK-7 同款 `pathKey` 兜底，
+ * 最后退一步跨组找）。
+ *
+ * 住登记簿而不是住某条腿的理由：**"哪一份 model 是这份投影的原文"这条反查只许有一份**。
+ * 读类腿（`ui/editor-global-providers.ts`）与三条缓冲区本地腿（`monaco/erb-dim-navigation.ts`）
+ * 都要问它；本地腿那一侧的套件跑在 node 池里，而 `editor-global-providers.ts` 顶层带 Monaco
+ * 运行时——静态引它 = 把整棵 Monaco 拖进每条本地腿的测试图（`window is not defined`）。
+ * 本模块只 `import type` monaco，所以两侧都能干净地引到这里。
+ */
+export function sourceModelOf(ctx: PaneCtx): Monaco.editor.ITextModel | null {
+  const want = ctx.filePathRef.current;
+  if (!want) return null;
+  const direct = ctx.entriesRef.current.get(want)?.model;
+  if (direct) return direct;
+  const key = matchOpenedPath(ctx.entriesRef.current.keys(), want);
+  if (key) return ctx.entriesRef.current.get(key)?.model ?? null;
+  return openModelAcrossGroups(want) ?? null;
 }
 
 /** 跨组版 URI → 宿主路径（Monaco opener 反查）：遍历全部组的打开表 */

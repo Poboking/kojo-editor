@@ -9,6 +9,8 @@ import { registerForKojoDialects } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { mergeNavigationLegs, resolveErbDimReferencesAt } from './erb-dim-navigation';
 import { labelReferenceLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
+import { normalizePathKey } from './kojo-hover';
+import { sugarOwningPaneOf, sugarPreviewLineOf, type PaneCtx } from '../ui/editor-pane-registry';
 import {
   explainReferenceCounts,
   isMoreSpecificKind,
@@ -61,6 +63,24 @@ import {
  * 跳到实现同一个函数**，Peek 树里点这行与 F12 跳到这处不可能落成两个地方；
  * 未开文件没有 model 可问，交**原样区间**（由 App→编辑器的落地腿统一夹取，
  * 夹取判据全仓只有一份，见 `reveal-position.ts` 文件头）。
+ *
+ * ## 升糖预览面上的 Peek（2026-10-20 投影折回批）
+ *
+ * 读类取数腿（`ui/editor-global-providers.ts` 的 `readReferences`）交回的是**源坐标**，那是
+ * 对的——落点类腿走 `editor.revealLocation`，源行 → 预览行那一跳住在 `EditorPane.applyReveal`。
+ * 但 **Peek 树里那一枚不经过事件通道**：本模块按 `filePath` 把同文件的引用点解到**原文那份
+ * model** 的 URI 上，于是列表与预览窗都摆在那一份上，`applyReveal` 一次都不被这条腿调用
+ * ⇒ 投影面上列出的是存档行号（用户看到"隔壁文件第 87 行"这种不属于当前屏幕的坐标），
+ * 点击只是**碰巧**被 `kojo-definition` 那枚 opener 反查回路绕回事件通道——别人的 opener 不是
+ * 本模块的契约，同文件的落点该由本模块自己交对。所以折回判据落在这里，四条：
+ * ① 与屏幕上这份投影**同一个源文件**的引用点 ⇒ 折回预览行、URI 用这份投影 model；
+ * ② 折不回的那一枚（`sugarPreviewLineOf` 回 `null`）**整条不给**，绝不给猜的行号；
+ * ③ **列一律不折算** ⇒ 收到行首（预览行与源行连文本都不是同一串，套源列就把选区盖在别的字上）；
+ * ④ **跨文件原样**——那是另一份文件，与这一面的映射无关。
+ * 原文面（`sugarOwningPaneOf` 回 null）⇒ 本段一行都不执行，逐字零改动。
+ * 判据**只有一份**：归属认 `sugarOwningPaneOf`，行换算认 `sugarPreviewLineOf`（读的就是与投影
+ * model 同批换上的那张 `sugarLineMapRef`）——本模块不许自建第二张映射表，两张表一漂移，
+ * Peek 列的就是隔壁一行。
  */
 
 /** 定义 / 引用共用的"位置事实"形状（W9 收口：契约 `EditorSymbolLocation` 已带 `span`，别名只是名字） */
@@ -172,6 +192,28 @@ export interface ReferenceHandlers {
 /** 本模块 opener 反查表容量上限（LRU；见 `rememberPath`） */
 export const KNOWN_PATHS_LIMIT = 256;
 
+/** 屏幕上这一面 = 某实例的糖投影（`null` = 原文面 ⇒ Peek 折回段一行都不执行） */
+interface ProjectionSurface {
+  readonly ctx: PaneCtx;
+  /** 投影归属实例的存档路径 = "同文件"的分界：这一份文件的引用点折回，别处的原样交付 */
+  readonly path: string;
+}
+
+/**
+ * 屏幕上挂着的那份 model 是不是某实例的**糖投影**（判据单源在登记簿的 `sugarOwningPaneOf`；
+ * 本模块不许另建映射表，见文件头"升糖预览面上的 Peek"段）。
+ */
+function projectionSurfaceOf(model: Monaco.editor.ITextModel): ProjectionSurface | null {
+  const ctx = sugarOwningPaneOf(model);
+  return ctx === null ? null : { ctx, path: ctx.filePathRef.current };
+}
+
+/** 一条要交给 Peek 的出现点（`previewLine` = 它在屏幕上这一面的那一行；缺席 = 不属于这一面，原样交付） */
+interface PeekRow {
+  readonly location: ReferenceLocation;
+  readonly previewLine?: number;
+}
+
 /**
  * `uri → 路径` 反查表，带 **LRU 上限**。
  *
@@ -236,14 +278,49 @@ export function installReferenceProvider(
       // 优先序只在这一枚函数里定（`mergeNavigationLegs`，与转到定义共用同一份裁决）
       locations = mergeNavigationLegs(labelRefs, dimRefs, locations);
       const out: Monaco.languages.Location[] = [];
+      // 投影面上**同文件**的引用点先折回屏幕上那一行（判据见文件头"升糖预览面上的 Peek"段）；
+      // 折不过去的那一枚整条不给。这一趟必须在台账之前：计数与列表同源是本模块的立身判据，
+      // Peek 表头那枚 N 必须等于树里的行数。
+      const surface = projectionSurfaceOf(model);
+      const ownKey = surface === null ? '' : normalizePathKey(surface.path);
+      const rows: PeekRow[] = [];
+      for (const location of locations) {
+        if (surface !== null && normalizePathKey(location.filePath) === ownKey) {
+          const previewLine = sugarPreviewLineOf(surface.ctx, location.line);
+          if (previewLine === null) continue; // 折不回 = 不给，绝不给一个猜的行号
+          rows.push({ location, previewLine });
+          continue;
+        }
+        rows.push({ location }); // 原文面 / 跨文件：原样，一个字段都不碰
+      }
       // 计数与列表同源：位置进台账（分类由供方带过来，缺席即未分类），读数与列表一次算出
-      const tally = tallyReferenceOccurrences(occurrencesFromLocations(locations));
+      const tally = tallyReferenceOccurrences(occurrencesFromLocations(rows.map((row) => row.location)));
       try {
         handlers.onTally?.(tally, explainReferenceCounts(tally));
       } catch (e: unknown) {
         console.warn(`[find-references] onTally 抛错（不影响列表交付）：${errorText(e)}`);
       }
-      for (const location of locations) {
+      for (const { location, previewLine } of rows) {
+        if (previewLine !== undefined) {
+          // URI 就是屏幕上挂着的那份投影 model ⇒ Monaco 走"同 model 就地跳"（一条事件都不发，
+          // 所以 `applyReveal` 那一跳在这里帮不上忙）。列一律收到行首：预览行与源行连文本都不是
+          // 同一串，把源列套过来就把选区盖在别的字上（纪律②）。
+          // 夹取仍走全仓唯一的 `clampRevealPosition`：映射与投影 model 的对应关系不许假定算准了
+          const landing = clampRevealPosition(
+            { line: previewLine, column: 1 },
+            { lineCount: model.getLineCount(), maxColumn: (n) => model.getLineMaxColumn(n) },
+          );
+          out.push({
+            uri: model.uri,
+            range: {
+              startLineNumber: landing.lineNumber,
+              startColumn: landing.column,
+              endLineNumber: landing.lineNumber,
+              endColumn: landing.columnEnd,
+            },
+          });
+          continue;
+        }
         const live = findModel(location.filePath);
         // 区间归一与退化**不在此二次实现**：一律 `revealSpanOf`（缺 span 时由裸 column
         // 折成零宽，什么都没给即 undefined ⇒ 行首），与定义 / 实现 / 面板六条腿同一判据
