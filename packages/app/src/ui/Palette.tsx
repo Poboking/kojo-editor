@@ -21,6 +21,7 @@ import {
   workspaceSymbolOverflowText,
   type WorkspaceSymbolCollection,
 } from './workspace-symbols';
+import './palette.css';
 
 /**
  * 命令面板 / 快速打开 / 工作区符号（2026-10-11 UI 重设计批 P2；D2 2026-10-15 加符号）。
@@ -35,6 +36,12 @@ import {
  * **输入法合成期一律让位**（`isComposingEvent`，同 `shell-keys` 的单源判据）：
  * 拼音候选窗用的也是 ↑↓/Enter/Esc，选择器在这里吞一次键 = 把用户正在打的字替他选了
  * 一项。写作模式的主场景就是中文输入，故这条判据对三个面板同时生效。
+ *
+ * 命令面板的两件排版事（2026-10-20 命令面板批）：**按 category 分组**（标签在换组那行上方，
+ * 可粘顶；主行不再把分类名拼进标题——`commandRows` 只在显示层搬运，过滤/排序仍是
+ * `filterCommands`）与**快捷键成一列**（有一行带键位就给整列占位，右缘对齐）。
+ * 样式住 `palette.css`（`.pk` / `.pk-mask` 前缀，特异性压过 styles-project.css 的旧 `.picker-*`，
+ * 那两个热点文件一行未改）；遮罩那档**只 F1 生效**，其它浮层的遮罩不在本批范围。
  */
 
 /** `Picker` 的一行（三个面板与快速打开四种模式共用；判据全在 `palette-search`，这里只是形状） */
@@ -61,7 +68,7 @@ interface PickerItem {
    * 下标相对**最深一层目录**（`dirLabelParts(dir).tail`）——可缩的前缀 `head` 会被中段省略改写，
    * 拿整条目录的下标去切它就是切错字符串。 */
   secondaryRanges?: HitRanges;
-  /** 小节标题（与上一行不同时，在这一行上方插一条分组标签）；目前只有「最近打开」 */
+  /** 小节标题（与上一行不同时，在这一行上方插一条分组标签）：「最近打开」与命令的 category */
   group?: string;
 }
 
@@ -80,7 +87,17 @@ interface PickerProps {
    * 与 `emptyText` 互不冲突——那是"没有结果"，这是"结果没列全"。
    */
   footnote?: string | null;
+  /**
+   * 面板形态（排版档位，不是行为档位）：
+   * - `default`：快速打开 / 符号面板的原样（本批一行样式都不碰它们）；
+   * - `commands`：命令列表（`>` 模式）——分组标签粘顶；
+   * - `palette`：F1 命令面板——再加一档**低磨砂更实的遮罩**（遮罩只这一档生效，
+   *   其它浮层的遮罩不在本批范围）。
+   */
+  variant?: PaletteVariant;
 }
+
+type PaletteVariant = 'default' | 'commands' | 'palette';
 
 /**
  * 命中区间 → 高亮片段（`<mark>` 包住命中的那几枚字符）。
@@ -106,7 +123,59 @@ function marked(text: string, ranges: HitRanges | undefined): ReactNode {
   return out;
 }
 
-function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose, footnote }: PickerProps): ReactElement {
+/**
+ * 去掉前缀后平移命中区间，并裁掉落在被切掉那截里的高亮。
+ * 整段都被裁光 ⇒ `undefined`（这行不再高亮，而不是画半枚 `<mark>`）。
+ */
+function shiftRanges(ranges: HitRanges | undefined, cut: number): HitRanges | undefined {
+  if (ranges === undefined) return undefined;
+  const out: [number, number][] = [];
+  for (const [start, end] of ranges) {
+    const s = Math.max(start, cut) - cut;
+    const e = end - cut;
+    if (e > s) out.push([s, e]);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * 命令条目的**显示层整形**：把 `commandItems` 拼在主行里的分类名挪到分组标签上
+ * （`工作台: 全部保存` → 分组「工作台」+ 主行「全部保存」）。
+ *
+ * **只动形状、不动判定**：过滤与排序仍是 `commands.filterCommands` 那一条尺子（按
+ * category + title 稳定排序 ⇒ 同类的条目必然相邻，分组标签只需在换组那一行插一条）。
+ * 分类真源取命令注册表的 `category` 字段，不去拆主行文本反推；主行去掉前缀后命中原点
+ * 左移，故命中区间跟着平移（查询只命中分类名时整行不再高亮——分组标题本身就是答案）。
+ */
+export function commandRows(items: readonly PickerItem[], commands: readonly CommandEntry[]): PickerItem[] {
+  const categoryById = new Map<string, string>();
+  for (const c of commands) if (c.category !== undefined) categoryById.set(c.id, c.category);
+  return items.map((it) => {
+    const cat = categoryById.get(it.key);
+    if (cat === undefined) return it;
+    const prefix = `${cat}: `;
+    const next: PickerItem = { ...it, group: cat };
+    if (it.primary.startsWith(prefix)) {
+      next.primary = it.primary.slice(prefix.length);
+      const shifted = shiftRanges(it.ranges, prefix.length);
+      if (shifted !== undefined) next.ranges = shifted;
+      else delete next.ranges;
+    }
+    return next;
+  });
+}
+
+function Picker({
+  placeholder,
+  emptyText,
+  query,
+  onQuery,
+  items,
+  onPick,
+  onClose,
+  footnote,
+  variant = 'default',
+}: PickerProps): ReactElement {
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -132,10 +201,25 @@ function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose
     onPick(it.key);
   };
 
+  /**
+   * 两件增强**只给命令列表**（`variant !== 'default'` ⇒ F1 与 Ctrl+P 的 `>`）：
+   * - `stickyGroupLabels`：分组标签粘顶（`.pk-group`）；
+   * - `columnizeHints`：快捷键成一列——这一屏只要有一条候选带键位就给整列预留占位，
+   *   没绑定的行画空格子，右缘不随有无键位锯齿。
+   * 快速打开的文件模式 / 符号面板走 `default` 档：既不加类名也不加空格子，
+   * 渲染与改动前逐字同形（它们复用同一个 `Picker`，动它们不是本批的授权范围）。
+   */
+  const isCommandList = variant !== 'default';
+  const stickyGroupLabels = isCommandList;
+  const columnizeHints = isCommandList && items.some((it) => it.hint !== undefined);
+
   return (
-    <div className="picker-backdrop" onMouseDown={onClose}>
+    <div
+      className={`picker-backdrop ${variant === 'palette' ? 'pk pk-mask' : ''}`}
+      onMouseDown={onClose}
+    >
       <div
-        className="picker"
+        className={`picker pk ${variant === 'default' ? '' : `pk-${variant}`}`}
         role="dialog"
         aria-modal="true"
         onMouseDown={(e) => e.stopPropagation()}
@@ -174,7 +258,10 @@ function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose
             setCursor(0);
           }}
         />
-        <div ref={listRef} className="picker-list">
+        <div
+          ref={listRef}
+          className={`picker-list ${variant === 'default' ? '' : 'pk-list'}`}
+        >
           {items.length === 0 ? (
             <div className="picker-empty dim">{emptyText}</div>
           ) : (
@@ -199,7 +286,14 @@ function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose
                       <span className="ps-tail">{marked(dirLabel.tail, it.secondaryRanges)}</span>
                     </span>
                   ) : null}
-                  {it.hint ? <span className="picker-hint dim">{it.hint}</span> : null}
+                  {columnizeHints ? (
+                    // 快捷键列：整列预留占位（无绑定的行画一个空格子），右缘因此是一条直线
+                    <span className="pk-kbd">
+                      {it.hint ? <span className="picker-hint dim">{it.hint}</span> : null}
+                    </span>
+                  ) : it.hint ? (
+                    <span className="picker-hint dim">{it.hint}</span>
+                  ) : null}
                 </button>
               );
               const prev = i > 0 ? items[i - 1] : undefined;
@@ -208,7 +302,9 @@ function Picker({ placeholder, emptyText, query, onQuery, items, onPick, onClose
               if (it.group === undefined || it.group === prev?.group) return row;
               return (
                 <Fragment key={`group-${it.group}-${it.key}`}>
-                  <div className="picker-group-label dim">{it.group}</div>
+                  <div className={`picker-group-label ${stickyGroupLabels ? 'pk-group ' : ''}dim`}>
+                    {it.group}
+                  </div>
                   {row}
                 </Fragment>
               );
@@ -232,6 +328,8 @@ export function CommandPalette({ commands, commandCtx, onClose }: CommandPalette
   const [query, setQuery] = useState('');
   // 条目构造与 Ctrl+P 的 `>` 模式共用一份（`commandItems`）：两个入口给两种高亮/顺序 = 迟早分叉
   const items = useMemo(() => commandItems(commands, query, commandCtx), [commands, query, commandCtx]);
+  // 分类从主行文本挪到分组标签（显示层；过滤/排序判据仍是 `filterCommands` 那一条尺子）
+  const rows = useMemo(() => commandRows(items, commands), [items, commands]);
 
   return (
     <Picker
@@ -239,13 +337,14 @@ export function CommandPalette({ commands, commandCtx, onClose }: CommandPalette
       emptyText="无匹配命令"
       query={query}
       onQuery={setQuery}
-      items={items}
+      items={rows}
       onPick={(id) => {
         const cmd = commands.find((c) => c.id === id);
         onClose();
         if (cmd) void cmd.run(commandCtx);
       }}
       onClose={onClose}
+      variant="palette"
     />
   );
 }
@@ -325,13 +424,15 @@ export function QuickOpen({
     [mode, files, recent, commands, commandCtx, source, activeFile],
   );
 
+  const items = useMemo(() => commandRows(view.items, commands), [view.items, commands]);
+
   return (
     <Picker
       placeholder={MODE_TEXT[mode.kind].placeholder}
       emptyText={view.emptyText}
       query={query}
       onQuery={setQuery}
-      items={view.items}
+      items={items}
       onPick={(key) => {
         if (mode.kind === 'files') {
           onClose();
@@ -358,6 +459,7 @@ export function QuickOpen({
         }
       }}
       onClose={onClose}
+      variant={mode.kind === 'commands' ? 'commands' : 'default'}
       {...(view.footnote !== null ? { footnote: view.footnote } : {})}
     />
   );

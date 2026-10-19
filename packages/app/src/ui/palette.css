@@ -1,0 +1,130 @@
+/* ============================================================================
+   命令面板（F1）· 分组 + 快捷键列 + 遮罩降档（2026-10-20 命令面板批）
+
+   本文件只服务 `ui/Palette.tsx`，由它 `import './palette.css'`。
+   `styles.css` / `styles-project.css` **一行未改**（那两个是本仓冲突热点）。
+
+   两条硬纪律（照 `search-panel.css` 的口径）：
+
+   ① **靠特异性取胜，不靠顺序**。生产构建里组件 CSS **先于** `styles.css` 注入
+      （模块求值顺序），所以旧 `.picker-*` 规则在级联里排在后面。每条接管规则至少
+      叠两层类选择器（`.picker.pk-palette` / `.pk-list .picker-item`），稳压旧的单类 (0,1,0)；
+      遮罩那几条还要压过 `themes/light.css`、`themes/mint-dark.css` 里
+      `:root[data-theme] .picker-backdrop`（0,3,0），故统一挂 `html:root`（多一个元素级 ⇒ (0,3,1)）。
+   ② **不写死颜色**。面 / 边 / 字 / 高亮 / 圆角 / 节奏全取 token；浅色与薄荷主题同步成立。
+      遮罩的**色相**照两份主题文件现有值（只做"更实"这一件事，不另起一色）。
+
+   作用域纪律：本文件的排版接管只挂在 `pk-` 修饰类上，而那两个类**只有命令列表**会挂
+   （`.pk-commands` = Ctrl+P 的 `>`、`.pk-palette` = F1）。快速打开的文件模式、符号面板
+   走 `.default` 档，一个类都不加 ⇒ 渲染与改动前逐字同形。
+   ============================================================================ */
+
+/* ------------------------------ 面板尺寸（命令列表放宽一档） ------------------------------ */
+
+/* 640px 装不下「标题 + 说明 + 右缘键位列」三段；命令列表给 680，窄窗口按比例收。
+   只作用于命令两档，快速打开仍是旧宽度（旧规则 (0,1,0) 在这里被 (0,2,0) 稳压）。 */
+.picker.pk-palette,
+.picker.pk-commands {
+  width: min(680px, 88vw);
+}
+
+/* ------------------------------ 分组标签（粘顶） ------------------------------ */
+
+/* 一屏几十条时"这一节是什么类"必须常驻，否则滚动后分组就失去意义。
+   滚容器就是 `.picker-list`，sticky 的 top 相对它的滚动端口 ⇒ 旧的 4px 上内边距要收掉，
+   不然第一行会从标签底下的缝里露出来。（`.picker .pk-list` = (0,2,0)，稳压旧 `.picker-list`
+   的 (0,1,0)——组件 CSS 在生产构建里排在前面，同分必输。） */
+.picker .pk-list {
+  padding-top: 0;
+}
+
+.picker-group-label.pk-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px var(--space-4) 4px;
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  /* 粘顶时下面的行要从它**底下**滚过去：给一条实心面（--surface-raised = 玻璃面同色档），
+     半透明会把叠字读成脏。 */
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 命令行的排布：主行文本 + 右缘键位列两段。`align-items: center` 让**空格子**与
+   有键位的行占同一份高度（基线对齐下空 flex 项的基线落在自己的底边，行高会跟着跳）。 */
+.pk-list .picker-item {
+  align-items: center;
+  min-height: 28px;
+}
+
+/* ------------------------------ 快捷键列（稳定占位） ------------------------------ */
+
+/* 通用那层只管"贴右缘"。列宽只在 `.pk-list`（= 命令两档）预留：`ch` 跟着键位芯片
+   自己的等宽字号走，11 字符 ≈ 一条 `Ctrl+Shift+S` 的宽度，有无绑定的行共用同一条
+   右缘，不随内容锯齿。芯片本体仍由旧 `.picker-hint` 画（这里只定位，不重画它的边与底）。
+   旧 `.picker-primary` 的 `flex-shrink: 0` 有意不改：命令标题都是短句，而快速打开那条
+   纪律（文件名是认文件的唯一线索）不能被顺手波及。 */
+.pk-kbd {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.pk-list .pk-kbd {
+  min-width: 11ch;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+}
+
+/* ------------------------------ 遮罩（只有 F1 这一档） ------------------------------ */
+
+/* 旧档：`blur(var(--glass-blur) × 0.5)` = 8px 配 alpha 0.35，整窗糊成一片、背后的正文
+   字迹还在抢焦点。命令面板是**高频键盘面**，作者要看的是列表本身 ⇒ 模糊收到 7px、
+   暗化加一档（0.35 → 0.5），纵深留着、糊感退掉。
+   `html:root`（(0,3,1)）稳压 `themes/*.css` 的 (0,3,0) 同族规则；色相照两份主题文件现值。 */
+html:root .picker-backdrop.pk-mask {
+  background: rgba(8, 10, 13, 0.5);
+  -webkit-backdrop-filter: blur(7px) saturate(1.05);
+  backdrop-filter: blur(7px) saturate(1.05);
+}
+html:root[data-theme='light'] .picker-backdrop.pk-mask {
+  background: rgba(40, 52, 68, 0.3);
+}
+html:root[data-theme='mint-dark'] .picker-backdrop.pk-mask {
+  background: rgba(6, 12, 9, 0.45);
+}
+
+/* 实心档（设置页「毛玻璃」拧到 0% ⇒ `data-glass='solid'`）：遮罩**一律不糊**，
+   只留暗化。这三条的 (0,4,1)/(0,5,1) 稳压 styles.css 的 (0,3,0) 与 themes 的 (0,4,0)，
+   免得"关掉磨砂"那个开关在命令面板上只关了面、没关遮罩。 */
+html:root[data-glass='solid'] .picker-backdrop.pk-mask {
+  background: rgba(8, 10, 13, 0.55);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html:root[data-theme='light'][data-glass='solid'] .picker-backdrop.pk-mask {
+  background: rgba(35, 48, 64, 0.45);
+}
+html:root[data-theme='mint-dark'][data-glass='solid'] .picker-backdrop.pk-mask {
+  background: rgba(6, 12, 9, 0.55);
+}
+
+/* 老内核不支持 backdrop-filter ⇒ 没有"背后虚化"这层纵深，暗化必须更实，
+   否则面板与正文糊在一起（与 styles.css 的 @supports 回落同一口径，只是本档自己够得着）。 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html:root .picker-backdrop.pk-mask {
+    background: rgba(0, 0, 0, 0.55);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* 动效：本文件不新增 animation / transition。面板入场（`pop-in`）与遮罩 `fade-in`
+   仍由 styles.css 的既有规则负责，而那两条已经被全局的
+   `@media (prefers-reduced-motion: reduce)` 与 `:root[data-motion='reduced']`
+   压到 0.01ms ⇒ 减弱动效的机器上这一档同样是瞬移，无需在此另写回落。 */
