@@ -61,6 +61,9 @@ import {
   type KeywordId,
 } from './keywords';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
+// TRY 系九枚的名单真源（`sugar-ident` 是零依赖叶子模块，与本模块无环；`native-display/control.ts`
+// 取的是同一张表）——本包只**派生**并集，绝不抄第二份名单。
+import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from './sugar-ident';
 import type { DiagnosticSink } from './types';
 
 /* ============================== 物理行 → 逻辑行 ============================== */
@@ -362,7 +365,7 @@ export type LineClass =
    * 开块模态判定——只有 `循环：`（`DO … LOOP <条件>`）那一形收得住条件）。
    */
   | { kind: 'loopEnd'; condition?: string }
-  /** `出错处理：` ⇄ `CATCH` … `ENDCATCH`（TRY 系九枚**无写形**，仍走兜底） */
+  /** `出错处理：` ⇄ `CATCH` … `ENDCATCH`（TRY 系九枚的写形另起一形，见 `tryStatement`） */
   | { kind: 'catchHead' }
   | { kind: 'catchEnd' }
   /** `数据表：` / `数据表 原形 PRINTDATADL：`（`engine` 恒是 `PRINTDATA[A-Z]*` 记号原文） */
@@ -379,6 +382,16 @@ export type LineClass =
    * 记号回显的口径）：不降糖、也不按标签名校验（含括号/引号/逗号/空格，`NAME_RE` 会误杀）。
    */
   | { kind: 'functionJump'; engine: string; target: string }
+  /**
+   * `试探 原形 <TRY 记号> <原文>`（⇄ 引擎 TRY 系九枚整行）。
+   *
+   * `engine` = 名单里那枚记号的**规范大写原文**；`body` = 记号之后的**逐字节余文**
+   * （自带前置空白，故发射端直接 `engine + body` 即可）——含行尾注释，一个字符不剥。
+   * 与 `dataEntry` / `functionJump` 同一族判据（载荷是数据不是条件 ⇒ 不降糖、不校验），
+   * 比它们多带走一截：那两形走 `stripInlineComment` 之后的 `code`，行尾注释今天不进产物；
+   * 本形的红线是「写形逐字节 = 产物」，所以切分吃的是 `content`（注释剥离**之前**的整行内容）。
+   */
+  | { kind: 'tryStatement'; engine: string; body: string }
   /** `标签 X` → `$X` */
   | { kind: 'labelDecl'; name: string }
   /** `跳出循环` / `跳过本轮` / `重跑本轮`（`engine` = `BREAK` / `CONTINUE` / `RESTART`） */
@@ -703,7 +716,7 @@ export function classifyLine(line: LogicalLine): LineClass {
   // `parseAssignment` 吞成左值（同 `结算` / `增减` 排在其前的理由）。
   // 词形全部来自 `keywords.ts`；认得词形但结构残缺 ⇒ `controlMalformed`（parser fail-closed 报错），
   // **不回落文本行**——回落等于把控制语句冒充台词打印出去（违铁律 4）。
-  const control = classifyControlStatement(code);
+  const control = classifyControlStatement(code, content);
   if (control) return control;
 
   // ---- 头部声明 `词: 值`（词与冒号之间无空白；`角色: 12` / `口上: 破空`）----
@@ -851,6 +864,8 @@ const LABEL_W = primaryWord('inline.label');
 const BREAK_W = primaryWord('inline.breakLoop');
 const CONTINUE_W = primaryWord('inline.continueLoop');
 const RESTART_W = primaryWord('inline.restartLoop');
+/** TRY 系九枚写形的词头（与只读面 `native-display/control.ts` 的中性显示形同一枚词形） */
+const TRY_W = primaryWord('inline.tryStatement');
 
 /** 标识符字符（ASCII + 位引用冒号段）——与 `native-display/control.ts` 的循环变量判据同一形 */
 const IDENT_CHARS = '0-9A-Za-z_';
@@ -889,6 +904,27 @@ function wordTail(code: string, wordName: string): string | null {
 /** 数据表开词与条目开词允许的引擎记号（义项差别不猜 ⇒ 只放行认得出的那批） */
 const PRINTDATA_TOKEN_RE = /^PRINTDATA[A-Z]*$/;
 const DATA_ENTRY_TOKENS: readonly string[] = ['DATAFORM', 'DATA'];
+
+/**
+ * TRY 系九枚记号（`原形` 回显只放行这九枚）。
+ *
+ * **名单从 `sugar-ident.ts` 派生**，本层不抄第二份：`TRY_CATCH_OPEN`（六枚，配 `CATCH`）∪
+ * `TRY_LIST_OPEN`（三枚，配 `ENDFUNC`）是识别核里"哪几枚开块、配哪个闭合"的唯一真源，
+ * 只读面（`native-display/control.ts`）认领的也是这九枚 ⇒ 写侧与显示侧一张名单，加一枚两侧同时长。
+ * `TRYCALL` / `TRYCALLFORM` / `TRYJUMP` / `TRYGOTO` 属引擎**单行语句**、不开块 ⇒ 不在名单内，
+ * 本形也不接（它们今天已由原生直通通道 `RAW_INSTR_RE` 逐字节透传，写侧无须再造一形）。
+ */
+const TRY_ECHO_TOKENS: ReadonlySet<string> = new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN]);
+
+/**
+ * TRY 系的合法写法（人话回执；词形全部现拼，本串零硬编码中文词形）。
+ *
+ * 记号清单**按名单排序后**列出（`Set` 的迭代序 = 插入序，换个写法就会改诊断文本），
+ * 九枚逐枚列出而不是"见引擎表"：作者手抖写错记号时，回执里查不到那枚就该知道自己写错了。
+ */
+const TRY_HEAD_HINT =
+  `「${TRY_W}」的写法只有一种：「${TRY_W} ${ECHO_W} <TRY 记号> <原文>」，` +
+  `记号只能是引擎 TRY 系九枚之一（${[...TRY_ECHO_TOKENS].sort().join(' / ')}）`;
 
 /**
  * `循环 <表达式> 次：` 的尾随量词切分（表达式段贪婪到**最后一个**空白之前，故算式里
@@ -995,10 +1031,43 @@ function parseDataHead(rest: string): LineClass {
 }
 
 /**
- * 整行语句形（不带块头冒号）的收束行（含 `循环结束 当 <条件>` 尾随形）/ 循环出口 /
- * 跳转 / 标签 / 步进 / 条目；不认 ⇒ `null` 交回主管线
+ * `试探 原形 <TRY 记号> <原文>` ⇄ 引擎 TRY 系九枚的整行（写形本体）。
+ *
+ * 三条判据：
+ * 1. **切分吃 `content`（注释剥离**之前**的整行内容），不吃 `code`**：本形的验收红线是
+ *    「写形逐字节 = 产物」。TRY 的载荷整串是**数据**（记号 + 目标 / 清单 + 行尾注释），
+ *    剥掉任何一段都改档 ⇒ 记号之后的余文原样带走。`函数跳转` / `条目` 那两形今天从 `code`
+ *    切、行尾注释不进产物，本形不跟（口径向 `#DIM` / 全大写指令的**原生直通行**看齐：注释随行）。
+ * 2. **`原形` 是必需界标**：`试探` 是日常中文动词，台词 `试探 她的底线` 绝不能被当成指令
+ *    （与 `数据表 原形 PRINTDATADL` 同一形：回显标记在前、记号在后）。写了 `试探 原形` 却
+ *    接不上名单里的记号 ⇒ `controlMalformed`（fail-closed，绝不落台词冒充「已支持」）。
+ * 3. **记号逐字大写**：名单是引擎记号原文，小写形（`trycgoto`）写侧不认——与 `parseDataHead`
+ *    的 `PRINTDATA[A-Z]*` 同一口径（放开大小写就是把没有的判据写成有）。
  */
-function classifyControlStatement(code: string): LineClass | null {
+function parseTryStatement(content: string): LineClass | null {
+  const re = memoRe(
+    wordTailReCache,
+    `try:${TRY_W}\u0000${ECHO_W}`,
+    () => new RegExp(`^${escapeRe(TRY_W)}[ \\t\\u3000]+${escapeRe(ECHO_W)}(?:[ \\t\\u3000]+(.*))?$`),
+  );
+  const m = re.exec(content);
+  if (m === null) return null;
+  const rest = (m[1] ?? '').trim();
+  if (rest.length === 0) return malformed(`${TRY_HEAD_HINT}——「${TRY_W} ${ECHO_W}」缺记号`);
+  const token = rest.split(/\s+/)[0] ?? '';
+  if (!TRY_ECHO_TOKENS.has(token)) return malformed(`${TRY_HEAD_HINT}（不是「${token}」）`);
+  // 记号之后的**逐字节**余文（自带前置空白，发射端直接 `engine + body`）
+  return { kind: 'tryStatement', engine: token, body: rest.slice(token.length) };
+}
+
+/**
+ * 整行语句形（不带块头冒号）的收束行（含 `循环结束 当 <条件>` 尾随形）/ 循环出口 /
+ * 跳转 / 标签 / 步进 / 条目 / TRY 系九枚；不认 ⇒ `null` 交回主管线
+ *
+ * `content` = **注释剥离之前**的整行内容，只有 TRY 那一支用得上（见 `parseTryStatement`）；
+ * 其余各形维持既有口径（吃 `code`，行尾注释不进产物）。
+ */
+function classifyControlStatement(code: string, content: string): LineClass | null {
   switch (code) {
     case LOOP_END_W:
       return { kind: 'loopEnd' };
@@ -1027,6 +1096,12 @@ function classifyControlStatement(code: string): LineClass | null {
     case DATA_W:
       return malformed(`块头必须以冒号结尾（「${code}：」）`);
   }
+  // TRY 系九枚写形（`试探 原形 <记号> <原文>`）排在所有词首扫描之前：它是本族里唯一吃
+  // **整行原文**（含行尾注释）的一支，判据与其余各形不同轴（见 `parseTryStatement`）。
+  // 裸 `试探`（整行只有这个词）在上面 `switch` 之后**不**给残缺回执——`试探` 是日常中文动词，
+  // 光杆一行更可能是台词；本形没有 `原形` 界标就无从确定要发哪枚记号，交回主管线按台词处理。
+  const tryStatement = parseTryStatement(content);
+  if (tryStatement !== null) return tryStatement;
   // 收束行的**尾随条件**形（`循环结束 当 <条件>` ⇄ 引擎 `LOOP <条件>`）。
   // 排在本函数末尾的词首扫描组里（与 `跳到` / `标签` 同一式：词形 + 空白 + 余文），
   // 上面 `switch (code)` 的整行等值分支已经接住裸形 `循环结束`。

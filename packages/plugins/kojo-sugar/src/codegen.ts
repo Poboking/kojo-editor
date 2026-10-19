@@ -992,7 +992,7 @@ function emitLoopBlock(em: Emitter, node: LoopBlock, ctx: BodyContext, indent: n
   em.push(indent, close, null);
 }
 
-/** `出错处理：` → `CATCH` … `ENDCATCH`（TRY 系九枚无写形 ⇒ 本块只覆盖 CATCH 本体） */
+/** `出错处理：` → `CATCH` … `ENDCATCH`（TRY 系九枚的写形是整行语句 `试探 原形 …`，不经本块） */
 function emitCatchBlock(em: Emitter, node: CatchBlock, ctx: BodyContext, indent: number): void {
   em.push(indent, 'CATCH', node.loc.start.line);
   emitBody(em, node.body, ctx, indent + 1);

@@ -103,6 +103,12 @@ export type KeywordId =
   /* 数据表条目行（`条目 <原文>`）与**记号回显**标记（`原形 <引擎记号>`：翻类不翻义，写法与产物同一 token） */
   | 'inline.dataEntry'
   | 'inline.engineEcho'
+  /**
+   * TRY 系九枚的整行写形 `试探 原形 <记号> <原文>`（⇄ 引擎 `TRYC{GOTO,JUMP,CALL}` ±`FORM` 六枚 +
+   * `TRY{CALL,GOTO,JUMP}LIST` 三枚）。词形与只读面的中性显示形**同一串**
+   * （`native-display/control.ts`），记号与余文**逐字**进产物 ⇒ 写形 ≡ 显示形，读得回就写得回去。
+   */
+  | 'inline.tryStatement'
   /* 别名右值 */
   | 'alias.char';
 /**
@@ -210,9 +216,8 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['循环', 'block.loop'],
   ['循环结束', 'block.loopEnd'],
   // 出错处理块（`出错处理：` ⇄ `CATCH` … `ENDCATCH`）——只覆盖 CATCH 本体；
-  // TRY 系九枚（`TRYCGOTO` / `TRYCALLLIST` …）**无写形**：只读面走
-  // `native-display/control.ts` 的中性显示形「试探 原形 <记号> <原文>」（词形不进本表，
-  // 因为登记进词表＝承诺写得回去），写形仍归本包。
+  // TRY 系九枚（`TRYCGOTO` / `TRYCALLLIST` …）的写形 = 只读面早已给出的中性显示形
+  // `试探 原形 <记号> <原文>`（见下方 `试探`：记号与余文逐字透传，义项档位不猜）。
   ['出错处理', 'block.catch'],
   ['出错处理结束', 'block.catchEnd'],
   // 数据表块（`数据表：` + `条目 <原文>` + `数据表结束` ⇄ `PRINTDATA` 族）。
@@ -304,6 +309,13 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // （`条目 原形 DATA <原文>` ⇄ `DATA <原文>`）——义项有别的变体不猜，原样带走那枚记号。
   ['条目', 'inline.dataEntry'],
   ['原形', 'inline.engineEcho'],
+  // TRY 系九枚写形词头 `试探 原形 <记号> <原文>` ⇄ 引擎那一整行 `TRY…`（判据见 `lexer.ts` 的
+  // `parseTryStatement`）。**词形与只读面同源**：`native-display/control.ts` 的中性显示形早就是这一串，
+  // 本批把写侧通路接上 ⇒ 登记进表（登记 = 承诺写得回去，发版覆盖率闸随即要求样例真用过，已补进
+  // `fixtures/sugar/release-check.kojo`）。不逐枚造九个中文动词：九枚的义项档位（配 `CATCH` 还是
+  // 配 `ENDFUNC`）本包没有引擎侧取证，猜一个中文叫法就是把没有的东西写成有——与 `原形` 同一判据。
+  // 英文别名不登记：`TRY` 是全大写原生记号头（`RAW_INSTR_RE` 直通），登记小写形只会让词表说谎。
+  ['试探', 'inline.tryStatement'],
   // 别名的 `角色 N` 右值形态由 `isAliasCharKeyword` 按上下文判定，
   // **不**在此表登记（否则会覆盖 `head.char`——Map 保留最后一次插入）。
 ]);
