@@ -198,44 +198,192 @@ function halfwidthInIndent(s: string): string {
  * 开词行与收束行本身是结构行（逐字节比对与语料实测都确认其空白是排版），不在块体内。
  * 停用区优先于数据表（与 scanner.ts 检查序一致）：区内的一切行都只找 `[SKIPEND]`。
  *
- * 语料实测（基线盘 3,818 个 `.ERB` / 4,115,008 行）：数据表 3,874 块 / 块体 29,518 行，
- * 停用区 2,186 对 / 区内 95,616 行；今天被逐行规则改动的 19,975 行里 **1,290 行落在块体/死区**
- * （死区全角缩进折半 103、区内注释折算 142、区内空白行清空 1,036；表体内 26）——本状态机
- * 把这些全部退回"一个字节不动"。导出只为让不变量闸复用同一判据（禁止第二份实现）。
+ * 语料实测（基线盘 ERB 索引根 3,818 份 / 4,115,008 行，2026-10-19 用**内核解码路径**
+ * `decodeWithProbe` + 本模块的 `erbBodyLineMask` 复算，探针跑完即删）：保护区段 6,060 段
+ * （数据表 3,874 / 停用区 2,186）/ 受保护行 119,074；逐行规则今天会改 19,975 行，其中
+ * **1,290 行落在块体/死区**＝停用区 1,264 · 数据表体 26，按形状分：纯空白清空 1,036 ·
+ * 注释折算 151 · 全角缩进折半 103 · 其它 0。本状态机把这 1,290 行全部退回"一个字节不动"。
+ * （全根 4,385 份的同口径读数是 1,473 = 停用区 1,447 · 数据表 26；两份差在文件集，不差判据。）
+ *
+ * **导出面**：`erbBodyLineMask` 供不变量闸复用；`erbBodyRegionAtLineEnd` 供宿主的窗口取文腿
+ * 复用（那条腿只拿到切片文本，必须问"切片起点之上有没有还没收束的区"才谈得上同判据）。
+ * 两者是 `scanErbBody` **同一趟扫描**的两个投影——这里不允许第二份块状态。
  */
+
+/** 被保护区间属于哪一族：`data` = 数据表块体，`skip` = 停用死区 */
+export type ErbBodyRegionKind = 'data' | 'skip';
+
+/**
+ * 一段连续被保护的行（**极大区段**）。`start`/`end` 是 0 基、含端点的**被保护行**下标；
+ * `open` 是**区首标记行**（开词 / `[SKIPSTART]`）自己的下标——它本身不挨保护（结构行），
+ * 但窗口腿要从它起喂才谈得上"进入状态机时状态为区外"，嵌套时这里给的是**最外层**那个标记行。
+ */
+export interface ErbBodyRegion {
+  readonly kind: ErbBodyRegionKind;
+  readonly open: number;
+  readonly start: number;
+  readonly end: number;
+}
 
 /** 数据表开词（`PRINTDATA` 九变体与 `STRDATA`；可带参数或尾注释） */
 const ERB_DATA_OPEN_RE = /^(?:PRINTDATA[A-Z]*|STRDATA)(?:[ \t;]|$)/;
 /** 数据表收束（同为 `ENDDATA`；可带尾注释） */
 const ERB_DATA_CLOSE_RE = /^ENDDATA(?:[ \t;]|$)/;
 
-/** 每行是否"正文区行"（块体或死区）；与入参等长。导出面仅测试与包内使用，不进插件公共清单 */
-export function erbBodyLineMask(lines: readonly string[]): boolean[] {
-  const mask = new Array<boolean>(lines.length).fill(false);
-  let dataDepth = 0;
-  let inSkip = false;
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i]!.trim();
-    if (inSkip) {
-      // 区内一切行都是死区正文；`[SKIPEND]` 标记行本身是结构行，不在其中
-      if (t === '[SKIPEND]') inSkip = false;
-      else mask[i] = true;
-      continue;
-    }
-    if (dataDepth > 0) {
-      mask[i] = true;
-      if (ERB_DATA_OPEN_RE.test(t)) dataDepth++;
-      else if (ERB_DATA_CLOSE_RE.test(t)) {
-        mask[i] = false; // 收束行本身是结构行
-        dataDepth--;
-      }
-      continue;
-    }
-    if (t === '[SKIPSTART]') inSkip = true; // 标记行本身是结构行
-    else if (ERB_DATA_OPEN_RE.test(t)) dataDepth = 1; // 开词行本身是结构行
-  }
-  return mask;
+/**
+ * 块状态机的状态（**只有这三个字段**：一族在区里、另一族的深度、以及当前区的区首行）。
+ * 导出给预筛与窗口探针共用；`open` = 当前所在保护区**最外层标记行**的 0 基下标，区外 = -1。
+ */
+interface ErbBodyScanState {
+  dataDepth: number;
+  inSkip: boolean;
+  open: number;
 }
+
+/**
+ * "这一行**有可能**是块标记"的预筛（不是第二份判据——它只可能放过，不可能认错）。
+ *
+ * 三族标记去缩进后必然以 `P`（`PRINTDATA*`）、`S`（`STRDATA`）、`E`（`ENDDATA`）、`[`
+ * （`[SKIPSTART]`/`[SKIPEND]`）起头，而 `String.prototype.trim()` 剥掉的正是下面这个集合
+ * （ECMA-262 `WhiteSpace` + `LineTerminator`，逐条列出：ASCII 空白、NBSP、OGHAM、EN QUAD…EM SP、
+ * NARROW NBSP、MEDIUM SP、IDEOGRAPHIC SP、ZWNBSP、全角空格）。所以"行首（跳过这段空白之后）不是
+ * 这四个字符之一"⇒ 该行 `trim()` 后也不可能是标记 ⇒ 状态机可以整行跳过。
+ * 认不全的空白字符只会让预筛**更宽**（多跑一次 `trim`），不会漏判 ⇒ 判据仍然只住在 `erbBodyStep`。
+ */
+const ERB_CANDIDATE_HEAD_RE = /^[ \t\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*[PSE[]/;
+
+/**
+ * 唯一一处块状态机：消费一行，返回"这一行是不是正文区行"与新状态。
+ *
+ * `state.open` 恒等于**当前所在保护区最外层标记行**的下标（区外 = -1）：窗口腿从它起喂文本时，
+ * 状态机进入的那一格必然与整篇一致。入参 `t` 必须是该行 `trim()` 后的文本，`index` 是它的 0 基行号。
+ *
+ * 判序（与 `erb-parser/scanner.ts` 一致）：停用区优先 ⇒ 区内只认 `[SKIPEND]`；
+ * 再看数据表深度 ⇒ 体内只认开/收；两者都在区外才允许开区。
+ */
+function erbBodyStep(state: ErbBodyScanState, t: string, index: number): boolean {
+  if (state.inSkip) {
+    // 区内一切行都是死区正文；`[SKIPEND]` 标记行本身是结构行，不在其中
+    if (t === '[SKIPEND]') {
+      state.inSkip = false;
+      state.open = -1;
+      return false;
+    }
+    return true;
+  }
+  if (state.dataDepth > 0) {
+    if (ERB_DATA_OPEN_RE.test(t)) {
+      state.dataDepth++;
+      return true;
+    }
+    if (ERB_DATA_CLOSE_RE.test(t)) {
+      // 收束行本身是结构行（**含嵌套层的收束**：深度 2→1 时这一行也照旧不掩）
+      state.dataDepth--;
+      if (state.dataDepth === 0) state.open = -1;
+      return false;
+    }
+    return true;
+  }
+  if (t === '[SKIPSTART]') {
+    state.inSkip = true;
+    state.open = index;
+  } else if (ERB_DATA_OPEN_RE.test(t)) {
+    state.dataDepth = 1;
+    state.open = index;
+  }
+  return false;
+}
+
+/** 一趟扫描的三份产物（同一台状态机，禁止第二份实现） */
+interface ErbBodyScan {
+  /** 每行是否"正文区行"（块体或死区）；与入参等长 */
+  readonly mask: boolean[];
+  /** 连续保护区的极大区段（含区首标记行下标与族别） */
+  readonly regions: ErbBodyRegion[];
+  /** 走完全部入参行之后**留在哪儿**：`open` = 最外层区首行下标（区外 = -1） */
+  readonly state: ErbBodyScanState;
+}
+
+function scanErbBody(lines: readonly string[]): ErbBodyScan {
+  const mask = new Array<boolean>(lines.length).fill(false);
+  const regions: ErbBodyRegion[] = [];
+  const state: ErbBodyScanState = { dataDepth: 0, inSkip: false, open: -1 };
+  /** 正在积累的保护区段（-1 = 段外）；`runKind` 由段内第一行决定（两族不可能混在一段里） */
+  let runStart = -1;
+  let runKind: ErbBodyRegionKind = 'data';
+  let runOpen = -1;
+  const closeRun = (endExclusive: number): void => {
+    if (runStart >= 0) regions.push({ kind: runKind, open: runOpen, start: runStart, end: endExclusive - 1 });
+    runStart = -1;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]!;
+    // 区外 + 这一行不可能是任何标记 ⇒ 状态不动、掩码恒假（预筛只可能放过，不可能认错）
+    if (state.open < 0 && !ERB_CANDIDATE_HEAD_RE.test(raw)) continue;
+    const body = erbBodyStep(state, raw.trim(), i);
+    mask[i] = body;
+    if (body) {
+      if (runStart < 0) {
+        runStart = i;
+        runKind = state.inSkip ? 'skip' : 'data';
+        runOpen = state.open;
+      }
+    } else {
+      closeRun(i);
+    }
+  }
+  closeRun(lines.length); // 未收束到 EOF ⇒ 其后全按块体（保守）
+  return { mask, regions, state };
+}
+
+/** 每行是否"正文区行"（块体或死区）；与入参等长。导出面仅测试与包内复用，不进插件公共清单 */
+export function erbBodyLineMask(lines: readonly string[]): boolean[] {
+  return scanErbBody(lines).mask;
+}
+
+/** 连续保护区段清单（同一趟扫描的另一种投影；导出面同上） */
+export function erbBodyRegions(lines: readonly string[]): ErbBodyRegion[] {
+  return scanErbBody(lines).regions;
+}
+
+/**
+ * "喂进 `prefixText` 之后状态机停在哪"——窗口取文腿唯一的补判据（宿主 `monaco/kojo-format-range.ts`）。
+ *
+ * 为什么必须有它：切片文本从窗口第一行进状态机，**起点落在块体/死区中间时切片里看不见开词**，
+ * 于是判成区外、把整篇腿明确保护的字节改了。宿主拿窗口之前的那段原文来问，才拿到与整篇同一份末态。
+ *
+ * 返回的 `openLine` 是**最外层**区首标记行（1 基，落在 `prefixText` 自己的行号坐标里）：
+ * 从它开始喂，进入状态机的状态才是"区外"，区段轨迹才与整篇逐字重合。
+ * `null` = 前缀喂完停在区外 ⇒ 切片判据与整篇腿**可证等价**，不必再取文。
+ *
+ * 行号坐标系：入参必须是**从整篇第 1 行起**的前缀（宿主那条 `resolveRange(model, 1, startLine - 1)`），
+ * 否则 `openLine` 没有意义——这一点由调用方守住，本函数不认识"整篇"这个概念。
+ *
+ * 这条腿每击键都要跑，所以它**不物化行数组**：按 `splitPhysical` 同一条行尾正则逐行走，
+ * 每行先过 {@link ERB_CANDIDATE_HEAD_RE} 预筛。预筛的收益是算得出的：基线盘 ERB 索引根
+ * 3,818 份 / 4,115,008 行里区段共 6,060 段 ⇒ 标记行最多 2×6,060 = 12,120 行（0.29%），
+ * 其余 99.7% 的行连 `trim()` 都不必做。判据本身仍只在 {@link erbBodyStep} 一处。
+ */
+export function erbBodyRegionAtLineEnd(prefixText: string): { kind: ErbBodyRegionKind; openLine: number } | null {
+  const state: ErbBodyScanState = { dataDepth: 0, inSkip: false, open: -1 };
+  const re = /\r\n|\r|\n/g;
+  let last = 0;
+  let index = 0;
+  let matched: RegExpExecArray | null;
+  const feed = (raw: string): void => {
+    if (state.open < 0 && !ERB_CANDIDATE_HEAD_RE.test(raw)) return;
+    erbBodyStep(state, raw.trim(), index);
+  };
+  while ((matched = re.exec(prefixText)) !== null) {
+    feed(prefixText.slice(last, matched.index));
+    last = matched.index + matched[0].length;
+    index++;
+  }
+  feed(prefixText.slice(last));
+  if (state.open < 0) return null;
+  return { kind: state.inSkip ? 'skip' : 'data', openLine: state.open + 1 };
+}
+
 
 /**
  * ERB 一行的新内容（`null` = 不用改）。

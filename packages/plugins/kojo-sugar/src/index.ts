@@ -1176,10 +1176,15 @@ export {
 // 转到定义（2026-10-15 语言服务批；纯函数，转译与索引由装配层注入）
 export { findGeneratedHeaderLine, resolveKojoDefinition, type KojoDefinitionDeps } from './definition';
 // E1/E2 文档格式化（Shift+Alt+F 与「保存时格式化」共用同一真源；纯函数、零 IO）
+// `erbBodyRegionAtLineEnd` = 块状态机（`erbBodyLineMask` 同一趟扫描）的**末态**投影，
+// 只多导这一条：宿主的窗口取文腿拿到的是切片文本，看不见起点之上的开词就会去改整篇腿
+// 明确保护的字节，而它必须问"喂完前缀后停在哪"才谈得上同判据——自己写一份块状态就是第二份真相。
 export {
   applyFormatEdits,
   computeFormatEdits,
+  erbBodyRegionAtLineEnd,
   formatText,
+  type ErbBodyRegionKind,
   type FormatDialect,
   type FormatEdit,
 } from './formatter';

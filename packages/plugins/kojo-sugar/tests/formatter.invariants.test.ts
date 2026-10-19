@@ -20,7 +20,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
-import { computeFormatEdits, erbBodyLineMask, formatText } from '../src/formatter';
+import { computeFormatEdits, erbBodyLineMask, erbBodyRegionAtLineEnd, erbBodyRegions, formatText } from '../src/formatter';
 import { splitLogicalLines } from '../src/lexer';
 import { createSugarTranspileService } from '../src/service';
 import { stubDict, stubFaceTable } from './support';
@@ -310,6 +310,72 @@ describe('ERB 块体/死区钉住小样（合成等价形态，判据全覆盖�
     expect(erbBodyLineMask(['PRINTDATA', 'PRINTDATA', 'DATA 甲', 'ENDDATA', 'DATA 乙', 'ENDDATA', 'PRINTL 出块'])).toEqual([
       false, true, true, false, true, false, false,
     ]);
+  });
+});
+
+/* ============ 块状态机的**另两种投影**（区段清单 / 末态）：窗口取文腿的前推锚点判据 ============ */
+
+describe('ERB 块状态机的区段投影与末态（erbBodyRegions / erbBodyRegionAtLineEnd）', () => {
+  it('区段投影与掩码投影出自同一趟扫描（逐行等价，且区段首尾都是"被保护行"）', () => {
+    const lines = [
+      'PRINTL 区外', 'PRINTDATA', 'DATA 甲', 'ENDDATA', 'ENDDATA',
+      '[SKIPSTART]', '散文', '   ', '[SKIPEND]', 'PRINTL 又区外',
+    ];
+    const mask = erbBodyLineMask(lines);
+    const regions = erbBodyRegions(lines);
+    const projected = new Array<boolean>(lines.length).fill(false);
+    for (const r of regions) for (let i = r.start; i <= r.end; i++) projected[i] = true;
+    expect(projected).toEqual(mask);
+    expect(regions).toEqual([
+      { kind: 'data', open: 1, start: 2, end: 2 },
+      { kind: 'skip', open: 5, start: 6, end: 7 },
+    ]);
+  });
+
+  it('末态说"还在区里"时给的是**最外层**区首（嵌套里层收束之后仍然如此）', () => {
+    const lines = ['PRINTDATA', 'DATA 甲', 'PRINTDATA', 'DATA 乙', 'ENDDATA', 'DATA 丙', 'ENDDATA'];
+    // 掩码在第 5 行（深度 2→1 的那枚收束）判假——末态判据**不能**拿末行掩码代替
+    expect(erbBodyLineMask(lines.slice(0, 5))[4]).toBe(false);
+    expect(erbBodyRegionAtLineEnd(lines.slice(0, 5).join('\n'))).toEqual({ kind: 'data', openLine: 1 });
+    // 配对收束之后才真的出区
+    expect(erbBodyRegionAtLineEnd(lines.slice(0, 6).join('\n'))).toEqual({ kind: 'data', openLine: 1 });
+    expect(erbBodyRegionAtLineEnd(lines.slice(0, 7).join('\n'))).toBeNull();
+  });
+
+  it('停用区优先：死区里的 `PRINTDATA` 不推动深度，末态仍是 skip 族', () => {
+    const lines = ['[SKIPSTART]', 'PRINTDATA', 'DATA 甲'];
+    expect(erbBodyRegionAtLineEnd(lines.join('\n'))).toEqual({ kind: 'skip', openLine: 1 });
+    expect(erbBodyRegionAtLineEnd(lines.slice(0, 2).join('\n'))).toEqual({ kind: 'skip', openLine: 1 });
+  });
+
+  it('未收束到文件尾 ⇒ 末态仍在区里（保守：其后全按块体）', () => {
+    expect(erbBodyRegionAtLineEnd('@FUNCTION 甲\nPRINTDATA\nDATA 乙')).toEqual({ kind: 'data', openLine: 2 });
+    expect(erbBodyRegionAtLineEnd('[SKIPSTART]\n散文')).toEqual({ kind: 'skip', openLine: 1 });
+  });
+
+  it('区外末态返回 `null`（窗口腿据此免检；含"空文本"与"游离收束"两种边界）', () => {
+    expect(erbBodyRegionAtLineEnd('')).toBeNull();
+    expect(erbBodyRegionAtLineEnd('PRINTL 甲\nENDDATA')).toBeNull(); // 游离收束不开区，也不改变末态
+    // 开词行自己是结构行，**但末态已经在区里**：紧跟其后的那一行就是块体 ⇒ 窗口腿必须前推到它
+    expect(erbBodyRegionAtLineEnd('PRINTDATA')).toEqual({ kind: 'data', openLine: 1 });
+    expect(erbBodyRegionAtLineEnd('PRINTDATA\nDATA 甲\nENDDATA')).toBeNull();
+  });
+
+  it('预筛与判据同口径：各种行首空白与带尾形态都照旧认得（预筛只可能放过，不可能认错）', () => {
+    for (const lead of [' ', '\t', `${FULLWIDTH_SPACE}${FULLWIDTH_SPACE}`, '\u00a0', '\u2003']) {
+      const lines = [`${lead}PRINTDATA`, `${lead}DATA 甲`, `${lead}ENDDATA`];
+      expect(erbBodyLineMask(lines), `行首 ${JSON.stringify(lead)} 的块体必须挨保护`).toEqual([false, true, false]);
+      expect(erbBodyRegionAtLineEnd(lines.slice(0, 2).join('\n')), `行首 ${JSON.stringify(lead)} 的末态必须在区里`).toEqual({
+        kind: 'data',
+        openLine: 1,
+      });
+    }
+    // 大小写与带别名一概不认（与 `erb-parser/scanner.ts` 的严格等值口径一致）
+    expect(erbBodyLineMask(['printdata', 'DATA 甲'])).toEqual([false, false]);
+    expect(erbBodyRegionAtLineEnd('printdata\nDATA 甲')).toBeNull();
+    expect(erbBodyLineMask(['[skipstart]', 'DATA 甲'])).toEqual([false, false]);
+    // 行中出现不等于行首：`X = PRINTDATA` 不是开词
+    expect(erbBodyRegionAtLineEnd('CALL PRINTDATA\nDATA 甲')).toBeNull();
   });
 });
 
