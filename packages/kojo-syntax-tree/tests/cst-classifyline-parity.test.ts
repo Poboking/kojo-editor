@@ -33,7 +33,7 @@ import type { Node, Parser } from 'web-tree-sitter';
  *    `interpolation`，而 `classifyLine` 只说 `text`。两侧不冲突 ⇒ 走此桶并逐条打印。
  * 3. **`context-only`（只在块上下文里成立）同样不算失配**：`choiceItem` / `switchItem` /
  *    `arrowCase` / `arrowElse` 四形在第一真源的 `LineClass` 联合里**声明了 kind，但 classifyLine
- *    从不产出**（下方 `无上下文四形零产出` 断言把这条实测钉死：9,103 逻辑行全量跑一遍，四形产出 0）。
+ *    从不产出**（下方 `无上下文四形零产出` 断言把这条实测钉死：9,120 逻辑行全量跑一遍，四形产出 0）。
  *    它们只在所属块体内合法——`选项/菜单/询问/确认` 的条目、`开关:` 的条目、`当` 的箭头分支。
  *    第一波没有块嵌套，这四形是"按形状抢跑"⇒ 记真冲突；第二波有了 scanner 的缩进记号，
  *    它们在块外**词法上就不可达**（落回 `text_line` / `string`），在块内才是本形 ⇒
@@ -51,11 +51,16 @@ const here = dirname(fileURLToPath(import.meta.url)); // packages/kojo-syntax-tr
 const pkgRoot = resolve(here, '..');
 const repoRoot = resolve(pkgRoot, '..', '..');
 const wasmPath = join(pkgRoot, 'tree-sitter-kojo.wasm');
-/** 故意残缺的 fixtures（错误恢复样本）不进取数闸——它们的行本就解不干净 */
+/**
+ * 故意残缺的 fixtures（错误恢复样本）不进取数闸——它们的行本就解不干净。
+ * 只排除这一目录（`tests/fixtures/`）：`tests/coverage-fixtures/` 下的覆盖面样本
+ * 必须**完整可解析**，因此照常计入分母——三形（heartHead / statementCall / controlMalformed）
+ * 在真实语料里原本一次都没出现过，覆盖面就靠那批文件钉。
+ */
 const BROKEN_DIR = join(pkgRoot, 'tests', 'fixtures');
 
 /**
- * 一致率地板（**取数后写死**）。本波 19 个语料 / 9,103 逻辑行实测
+ * 一致率地板（**取数后写死**）。现测 20 个语料 / 9,120 逻辑行（参与对照 9,119，折行 1）
  * 一致率 100.00%（同判 + 语法更细 + 上下文专属 = 分母），真冲突 0 行。
  * 地板留 0.1pt 余量给"新语料进来先红一条"的抖动；跌破地板 = 语法层与词法层开始分叉，
  * 必须在 grammar.js / node-types.ts 一侧修，不许回头改这里。
@@ -161,8 +166,14 @@ const cstMissing: RowStat[] = [];
 const nullKinds = new Set<string>();
 /** `classifyLine kind ⇄ CST 无 kind 节点名` 的配对计数（判断"语法更细"还是"表缺一格"的原料） */
 const cstNullPairs = new Map<string, number>();
-/** 真实语料里出现过的 kind（合成覆盖的分母基线） */
+/** 真实语料里出现过的 kind（合成覆盖的分母基线；任一侧判到即计入） */
 const kindsSeenInCorpus = new Set<string>();
+/**
+ * 真实语料里**两侧同判**（逐字同一 kind）出现过的 kind = 覆盖面的硬口径：
+ * 这一形既被第一真源判到、又被 CST 判到对应节点，才算"被对账过"。
+ * 只有 `CONTEXT_ONLY` 四形允许缺席（第一真源无上下文，永不产出它们）。
+ */
+const kindsPairedInCorpus = new Set<string>();
 /** 第一真源在全量语料里对四枚"上下文形"的产出计数（必须恒为 0，否则 context-only 桶不成立） */
 const oracleContextEmission: Record<string, number> = { choiceItem: 0, switchItem: 0, arrowCase: 0, arrowElse: 0 };
 /** 包导出面 `classifyLines()` 的自证读数 */
@@ -226,6 +237,7 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
           continue;
         }
         if (cstKind === truth.kind) {
+          kindsPairedInCorpus.add(truth.kind);
           push({ verdict: 'match', fixture: rel, line: logical.line, truth: truth.kind, cst: cstKind });
           continue;
         }
@@ -267,7 +279,12 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
     console.log(`\n===== ① CST ↔ classifyLine 逐行一致率 =====`);
     console.log(`语料文件数（分母）: ${fixtures.length}`);
     for (const file of fixtures) console.log(`  · ${relOf(file)}`);
-    expect(fixtures.length).toBeGreaterThanOrEqual(19);
+    expect(fixtures.length).toBeGreaterThanOrEqual(20);
+    // 覆盖面夹具必须在发现面里——它一被排除，三形覆盖读数就退回"从未对账"（静默失效）。
+    expect(
+      fixtures.some((f) => relOf(f).startsWith('packages/kojo-syntax-tree/tests/coverage-fixtures/')),
+      'coverage-fixtures 不在语料发现面里 ⇒ heartHead / statementCall / controlMalformed 三形又没人对账了',
+    ).toBe(true);
   });
 
   it('逐行对照读数：一致率 + 分母 + 失配清单', () => {
@@ -401,13 +418,26 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
   });
 
   it('真实语料覆盖面读数（哪些 kind 在语料里根本没出现）', () => {
-    const all = Object.keys(KIND_TO_NODE);
+    const all = Object.keys(KIND_TO_NODE) as KojoKind[];
     const missed = all.filter((k) => !kindsSeenInCorpus.has(k));
+    // 同判面缺席的 kind 只许是"上下文专属"四形（第一真源无上下文，永不产出 ⇒ 见口径 3）。
+    const unpaired = all.filter((k) => !kindsPairedInCorpus.has(k));
+    const unpairedReal = unpaired.filter((k) => !CONTEXT_ONLY.has(k));
     console.log(
-      `真实语料覆盖 kind: ${all.length - missed.length}/${all.length}` +
-        (missed.length ? `；未覆盖: ${missed.join(', ')}` : ''),
+      `真实语料覆盖 kind（任一侧判到）: ${all.length - missed.length}/${all.length}` +
+        (missed.length ? `；未覆盖: ${missed.join(', ')}` : '（56 形全覆盖）'),
     );
-    expect(all.length - missed.length).toBeGreaterThan(0);
+    console.log(
+      `真实语料同判覆盖 kind（两侧逐字同一 kind）: ${all.length - unpaired.length}/${all.length}` +
+        `；只在 CST 侧出现的上下文专属形: ${unpaired.join(', ') || '—'}`,
+    );
+    // 断言：覆盖面不留白名单——每一 kind 都必须在语料面里被判到（旧读数 53/56，
+    // heartHead / statementCall / controlMalformed 三形从未出现 ⇒ 由 `tests/coverage-fixtures/` 补上）。
+    expect(missed, `这些 kind 在全部语料里一次都没出现（缺一枚夹具）: ${missed.join(', ')}`).toEqual([]);
+    const unpairedMsg = `这些 kind 从未被两侧同判（又不是上下文专属形 ⇒ 判据没对上）: ${unpairedReal.join(', ')}`;
+    expect(unpairedReal, unpairedMsg).toEqual([]);
+    for (const k of unpaired) expect(CONTEXT_ONLY.has(k), `${k} 不在上下文专属四形里，必须补夹具`).toBe(true);
+    expect(all.length - missed.length).toBe(all.length);
   });
 });
 
@@ -431,7 +461,7 @@ function collectExportComparison(root: Node, rows: number[]) {
 /* ============================ 合成单行覆盖 ============================ */
 
 /**
- * 语料不覆盖全部 kind（如 `菜单：` / `确认 …：` / `初回 "key"：` 一类）。这里每类给一支
+ * 覆盖面夹具（`tests/coverage-fixtures/`）把语料面推到 56/56 之后，这里仍逐类给一支
  * **能构造得出**的单行样本：先让 `classifyLine` 自证判到该类（判不到就记 `未构造出`、不入分母，
  * 不硬凑），再与 CST 对照。合成样本的读数单列，不与语料混进同一条分母。
  */
