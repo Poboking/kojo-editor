@@ -14,4 +14,5 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
+| SMOKE-RECENT | 四处冒烟工具的「最近打开」选段随欢迎页重设计失配（`.recent button.link .recent-dir` 已不存在，现为 `.welcome-recent-row` / `button.welcome-recent-open` / `.welcome-recent-path`）⇒ 真壳窄门 a–e 连前置都进不去 | 判据：选择段收口进 `tools/smoke-lib.mjs` 一处、四个调用点改它；再加一把防再腐的源形状闸（WelcomeView 改类名 ⇒ 红；工具里再出现旧选段 ⇒ 红），两半各证一次红；收尾必须交回 `smoke-tauri-ipc` 的 a–e 实测读数（端口走 KOJO_SMOKE_VITE_PORT=1431，**1420 是隔壁活会话的 vite，不许杀**） | 进行中 · 认领：e19erb 2026-10-20 |
 | MK-PUB | **市场发布通道**：CF Worker 上传链——编辑器内一键上传 zip → Worker 校验（schema v1 同判据）→ R2 `pending/` → 自动开 PR 到注册表仓（merge=放行，GitHub 网页即审核后台）；Pages/CI/注册表仓保留原职（兼容源 + 第二道闸），拉取双源回退；Worker 独立仓 `<本机>\DSH\kojo-market-worker`（域名 `market.3625735381.xyz`，开发期 workers.dev）；客户端 additive：契约层 publish 意图/进度事件（照 `MarketDownloadProgress` 形态）+ Rust publish 命令（POST+token+Channel 进度）+ 上传主机闸（allowlist 扩 workers.dev 与自定义域）+ ui-market 发布面板（选 zip→本地 `parseManifest` 预校验→上传→状态行）；不动 `MARKET_DEFAULT_INDEX_URL`、不碰 ADR-0007 封闭集（仍只发声明式数据包） | 判据：Worker 侧 curl 全链可验证（签 token→上传→pending 落 R2→PR 开出）+ 本仓全量不回退 + 双 typecheck + `audit:decoupling` ✅ + cargo；新文案一律中文、拒因人话照 `PLATFORM_FAIL_TEXT` 形态 | 进行中 · 认领：claude 2026-10-16 |
