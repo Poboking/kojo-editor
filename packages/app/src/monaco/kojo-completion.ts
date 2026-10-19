@@ -1,6 +1,8 @@
 import type * as Monaco from './entry';
+import type { VariableInfo, VariableSchema } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
 import {
+  ENGINE_VARIABLE_FAMILIES,
   RESERVED_PRONOUNS,
   SUGAR_KEYWORD_ROLE_LABEL,
   SUGAR_LEXICON_OPERATORS,
@@ -12,6 +14,7 @@ import { ERB_COMPLETION_ASSEMBLY, resolveErbCompletionDetail } from './erb-compl
 import { kojoNativeZoneAt } from './kojo-native-zone';
 import { kojoCodePositionAt } from './kojo-suggest-gate';
 import { variableCompletionItems } from './kojo-completion-variables';
+import { erbDimNamesOf } from './erb-completion-declared';
 import { faceCompletionItems } from './kojo-completion-faces';
 import {
   col0Of,
@@ -24,6 +27,7 @@ import {
   lineAt,
   timingHeadParts,
   type KojoKeywordId,
+  type KojoNameField,
 } from './kojo-completion-position';
 import { kojoIndexCompletionItems } from './kojo-completion-instructions';
 import { libraryCompletionItems } from './kojo-completion-library';
@@ -76,13 +80,20 @@ import {
  * 3. **回表口径**：候选出处 → 详情（变量 / 分野 / 指令名 / 库函数 / 系统函数 / 项目函数），
  *    以及"哪些 source 的候选是调用形态、按什么键回协议表取槽"。
  *
- * 候选数据源三类（纪律：缺表即该路零候选 + 一次可见降级信号，**不猜**）：
+ * 候选数据源四类（纪律：缺表即该路零候选 + 一次可见降级信号，**不猜**）：
  * - **语言层**（跨游戏、与项目无关）：中文主形关键字 / 保留代词 / 运算符 / 系统函数名，
  *   全部**派生**自 `kojo-sugar` 的转译器词表（单一真源，不复制词形）；
  * - **文件层**（本文件内）：`别名` / `常量` 声明名——判据一律经解析器
  *   （`kojo-completion-declarations` → `sugar.transpile` 的 `parse`），**不再有第二份正则**；
+ *   同一路另挂 `#DIM` 声明名（`erb-completion-declared.ts` 的 {@link erbDimNamesOf}：索引 →
+ *   缓冲区两态，行判据仍是解析器 `parseDimDeclaration`——糖面与原生区两条路共用同一份名单）；
  * - **adapter / 项目层**：`CompletionTables`（宿主只读不解释）+ 项目函数名——后者与 `.erb`
- *   吃**同一份表**，这就是"跨语言候选打通"的那一半：`.kojo` 里写 `调用` 也补得到剧本函数名。
+ *   吃**同一份表**，这就是"跨语言候选打通"的那一半：`.kojo` 里写 `调用` 也补得到剧本函数名；
+ * - **属性名层**（`[[ … ]]` 引擎 rename 写形）：走 `kojo-variable` 那一枚 source，名字与
+ *   `{她的…}` 插值同源（`VariableSchema.names(family)` 枚举 × `ENGINE_VARIABLE_FAMILIES` 族并集）。
+ *   该名字位由装配 `locate` 的 **sourceId 白名单**（{@link KOJO_RENAME_SLOT_SOURCES}）收口：
+ *   糖册各源（词表整表 / 项目函数 / 文档词）在 `[[` 里一律不出货——同为 `Variable` kind 的
+ *   候选按 kind 收不干净，只有来源 id 分得开（口径同 `.erb` 的 `ERB_GATE_SOURCE_WHITELIST`）。
  *
  * 二段式供给：provide 只给 label / kind / 一行 detail；**中文名·说明·取值域·调用签名**等到
  * `resolveCompletionItem` 才回表算（对象身份 → 出处走装配核的 `WeakMap` 反查）；**调用形态**候选
@@ -217,13 +228,20 @@ export function kojoSlotsForCallee(
   return slotsForCallee(protocol, keys, KOJO_LOG_TAG);
 }
 
-/* ============================== 文件层：`别名` / `常量` 声明名 ============================== */
+/* ============================== 文件层：`别名` / `常量` / `#DIM` 声明名 ============================== */
 
 /**
- * 本文件声明名（`别名` / `常量`）的候选面。
+ * 本文件声明名（`别名` / `常量` / `#DIM`）的候选面。
  *
- * 判据**不在此处**：一律经 `kojo-completion-declarations` 走解析器（`sugar.transpile` 的 `parse`），
- * 本函数只把"声明类别"翻成上屏措辞；按 model 版本的记忆化也在那一侧。
+ * 判据**不在此处**：`别名` / `常量` 一律经 `kojo-completion-declarations` 走解析器
+ * （`sugar.transpile` 的 `parse`），`#DIM` 一律经 `erb-completion-declared` 的
+ * {@link erbDimNamesOf}（解析器 `parseDimDeclaration` 的行判据 + 索引/缓冲区两态取数）；
+ * 本函数只把"声明类别"翻成上屏措辞；按 model 版本的记忆化也在那两侧。
+ *
+ * `#DIM` 挂在这一路的理由：糖行的**引用侧**（`如果 LOCAL_CNT > 3：` 那一位的名字段）从来不是
+ * 原生行 ⇒ `route` 不会把它交给 ERB 册，糖册不给就永远没人给（`.kojo` 的引用行绝大多数是糖行；
+ * 声明侧那一行是否算原生行由 `kojo-sugar` 的 `classifyLine` 定，本层不赌它——两条路都接的是
+ * 同一枚 {@link erbDimNamesOf}，无论哪一册接手，名单与措辞逐字相同）。
  *
  * `filterText` = **声明名原文**（真实 Monaco 的过滤键是 `filterText ?? label`，见
  * {@link STATIC_SUGGESTION_SPECS} 头注的同一口径）：显式写出来，匹配面就钉死在原文上，
@@ -232,7 +250,10 @@ export function kojoSlotsForCallee(
 function declarationItems(ctx: CompletionSourceContext): Monaco.languages.CompletionItem[] {
   const K = ctx.monaco.languages.CompletionItemKind;
   const out: Monaco.languages.CompletionItem[] = [];
+  const seen = new Set<string>();
   for (const decl of kojoDeclarationsOf(ctx.model, ctx.tables.kojoDeclarations)) {
+    if (seen.has(decl.name)) continue;
+    seen.add(decl.name);
     out.push({
       label: decl.name,
       kind: K.Variable,
@@ -241,6 +262,19 @@ function declarationItems(ctx: CompletionSourceContext): Monaco.languages.Comple
       detail: decl.kind === 'alias' ? '别名（本文件）' : '常量（本文件）',
       range: ctx.range,
       sortText: `1_${decl.name}`,
+    });
+  }
+  for (const name of erbDimNamesOf(ctx.model, ctx.tables.erbFileFacts)) {
+    if (seen.has(name)) continue; // 同名的 `别名` / `常量` 先注册者胜（与装配核的 label 去重同向）
+    seen.add(name);
+    out.push({
+      label: name,
+      kind: K.Variable,
+      insertText: name,
+      filterText: name,
+      detail: '#DIM 声明（本文件）',
+      range: ctx.range,
+      sortText: `1_${name}`,
     });
   }
   return out;
@@ -430,13 +464,121 @@ const LEXICON_SOURCE: CompletionSource = {
 };
 
 /**
+ * `[[ … ]]`（引擎 rename 写形 / TALENT·CHARA 属性名）的**名字段**（纯函数；`col0` = 0 基列，
+ * 由 {@link col0Of} 夹进线内后传入）。命中回该名字段（0 基、左含右不含；`prefix` = 光标前
+ * 已输入部分），不命中 ⇒ `null`。
+ *
+ * 判据（一条不猜）：
+ * - 字符串 / 行内注释内 ⇒ `null`（{@link insideStringOrComment}，与词表源同一枚判据）；
+ * - 名字段左侧**必须紧贴一对 `[`**（`[[`），且这对括号自身不挂在名字或另一对括号上
+ *   （`A[[0]]` / `[[[[x` 那类下标 / 嵌套写法不是属性名位）；
+ * - 名字段不得以数字起（同 `{…}` 插值源的"编号不是名字"口径）；
+ * - 括号**未闭合也算**（作者刚敲完 `[[` 就要看名单；右侧连续名字字符吃进替换段，
+ *   故 `[[好|]]` 选中候选后残留的 `]]` 不被吞）。
+ *
+ * 导出 = 位置判据可单测的那一半（与 {@link KOJO_BLOCK_HEAD_ANCHOR} 同打法）。
+ */
+export function kojoRenameBracketSlotAt(line: string, col0: number): KojoNameField | null {
+  const at = Math.min(Math.max(col0, 0), line.length);
+  if (insideStringOrComment(line, at)) return null;
+  let start = at;
+  while (start > 0 && isNameChar(line[start - 1]!)) start--;
+  let end = at;
+  while (end < line.length && isNameChar(line[end]!)) end++;
+  if (start < 2 || line[start - 1] !== '[' || line[start - 2] !== '[') return null;
+  const before = start - 3;
+  if (before >= 0 && (isNameChar(line[before]!) || line[before] === '[')) return null;
+  if (start < end && /[0-9]/.test(line[start]!)) return null;
+  return { start, end, prefix: line.slice(start, at) };
+}
+
+/**
+ * `[[` 这一枚名字位的**候选源白名单**（装配 `locate` 的 `keep` 数据；口径同 `.erb` 的
+ * `ERB_GATE_SOURCE_WHITELIST`：按 `sourceId` 收，不按 kind——同为 `Variable` kind 的声明名 /
+ * 族头 / 属性名按 kind 分不开）。
+ *
+ * 只放 `kojo-variable` 一路：属性名候选就挂在那枚 source 上（见 {@link VARIABLE_SOURCE} 的
+ * 分支注），词表整表 / 项目函数 / 文档词在 rename 括号里都是纯噪声。
+ */
+export const KOJO_RENAME_SLOT_SOURCES: ReadonlySet<string> = new Set(['kojo-variable']);
+
+/**
+ * `[[ … ]]` 名字位的候选 = **属性名**（来源与 `{她的…}` 那一路同一枚通道，零新名单、零游戏词）：
+ * `VariableSchema.names(family)` 枚举 × `ENGINE_VARIABLE_FAMILIES` 族并集，**主表优先、追加名表
+ * 补漏**（ALS-R1 分层，逐字同 `kojo-completion-variables.ts`）——族清单也是那一枚单源，
+ * 本函数不认识任何族名以外的字面量。
+ *
+ * 缺通道 / 无 `names` 枚举能力 ⇒ `[]`（不猜）；单族 `names()` 抛错 ⇒ 跳过该族、其余族照旧
+ * （装配核对 source 抛错有整轮兜底，但一族抛不该吃掉另外十九族的事实）。
+ * `detail` 一律是 `族:编号`（不带装饰前缀）：`resolveCompletionItem` 的 `familyFromDetail`
+ * 按第一个 `:` 切族头，措辞改了详情回表就断。
+ */
+function renameAttributeItems(
+  monaco: typeof Monaco,
+  schema: VariableSchema | undefined,
+  slot: KojoNameField,
+  lineNumber: number,
+): Monaco.languages.CompletionItem[] {
+  if (schema === undefined || typeof schema.names !== 'function') return [];
+  const range: Monaco.IRange = {
+    startLineNumber: lineNumber,
+    endLineNumber: lineNumber,
+    startColumn: slot.start + 1,
+    endColumn: slot.end + 1,
+  };
+  const items: Monaco.languages.CompletionItem[] = [];
+  const seen = new Set<string>();
+  for (const tier of ['primary', 'append'] as const) {
+    for (const family of ENGINE_VARIABLE_FAMILIES) {
+      let infos: readonly VariableInfo[];
+      try {
+        infos = schema.names(family) ?? [];
+      } catch {
+        continue; // 一族查不动 ⇒ 只少这一族（不猜、不崩其余族）
+      }
+      for (const info of infos) {
+        if ((info.source ?? 'primary') !== tier) continue;
+        const name = info.name;
+        if (name.length === 0 || seen.has(name)) continue;
+        if (slot.prefix.length > 0 && !name.startsWith(slot.prefix)) continue;
+        seen.add(name);
+        const index: number | string | undefined = info.index ?? info.resolvedIndex;
+        const exact = slot.prefix.length > 0 && name === slot.prefix;
+        items.push({
+          label: name,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          insertText: name,
+          filterText: name,
+          detail: index === undefined ? family : `${family}:${index}`,
+          range,
+          sortText: `${exact ? '0' : '1'}_${name}`,
+          ...(info.description !== undefined && info.description.length > 0
+            ? { documentation: info.description }
+            : {}),
+        });
+      }
+    }
+  }
+  return items;
+}
+
+/**
  * 变量 / 属性补全（KC-1）：`{她的<前缀>}` / `{角色12的<前缀>}` 插值内弹变量名
  * （名字来自 `tables.variableSchema.names(...)` 枚举）。非该位置 / schema 缺省 → `[]`。
+ *
+ * **同一个 source 的第二枚名字位**（G 批）：`[[<前缀>` 引擎 rename 写形 ⇒ 属性名候选
+ * （{@link renameAttributeItems}，同一枚 `variableSchema` 枚举通道）。该位由装配 `locate` 的
+ * sourceId 白名单独占（{@link KOJO_RENAME_SLOT_SOURCES}），故本路先判 `[[` 再回落插值判据：
+ * `[[` 里绝不会再产出插值名（两者位置判据互斥，判一遍即走）。
  */
 const VARIABLE_SOURCE: CompletionSource = {
   id: 'kojo-variable',
   requires: 'variableSchema',
   provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    const line = lineAt(model, position.lineNumber);
+    const col0 = col0Of(line, position.column);
+    const renameSlot = col0 === null ? null : kojoRenameBracketSlotAt(line, col0);
+    if (renameSlot !== null) return renameAttributeItems(monaco, tables.variableSchema, renameSlot, position.lineNumber);
     return variableCompletionItems(monaco, model, position, tables.variableSchema);
   },
 };
@@ -562,8 +704,9 @@ export function kojoCompletionRange(model: Monaco.editor.ITextModel, position: M
 export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
   languageId: KOJO_LANGUAGE_ID,
   logTag: KOJO_LOG_TAG,
-  // `{` / `：` 是糖位触发；`#` / `[` 只为原生区（`@` 块里的 `#DIM` / `[SKIPSTART]`）——
-  // 糖位敲 `#` / `[` 时各 source 自身零候选（LEXICON 位置判据不供），不把噪声带进来。
+  // `{` / `：` 是糖位触发；`#` / `[` 既服务原生区（`@` 块里的 `#DIM` / `[SKIPSTART]`），
+  // 也服务糖位的 `[[ … ]]` rename 名位（第二枚 `[` 按下当拍即弹属性名；糖位敲单枚 `#` / `[`
+  // 时各 source 自身判据落空，不带噪声）。
   triggerCharacters: ['{', '：', '#', '['],
   sources: KOJO_COMPLETION_SOURCES,
   callForm: { sourceIds: CALL_FORM_SOURCE_IDS, keysFor: calleeKeys },
@@ -572,9 +715,12 @@ export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
    * 位置门、候选源、调用形态、resolve 全用 `ERB_COMPLETION_ASSEMBLY` 那一份；糖位返回
    * `undefined`（用自己）。合并 / 去重 / 排序 / 降级 / snippet 仍只有装配核一条实现。
    *
-   * 已知边界：`.kojo` 通常不在 ERB 解析器索引里 ⇒ `erbFileFacts.labelsAt` 返回 `undefined`，
-   * `erb-labels` 走**既定**的全文回退（`GOTO` / `JUMP` 可用）；`dimsOf` 返回 `undefined` 则
-   * 按既定语义**零候选不回退**（`#DIM` 声明名在 `.kojo` 上先不要求——不另造一套 .kojo 专用扫描）。
+   * 已知边界（G 批补齐的口径）：`.kojo` 通常不在 ERB 解析器索引里 ⇒ `erbFileFacts.labelsAt`
+   * 返回 `undefined`，`erb-labels` 走**既定**的全文回退（`GOTO` / `JUMP` 可用）；`dimsOf` 同样
+   * 返回 `undefined`，`erb-declared` 现在**照同一份纪律回退到缓冲区**（`erbDimNamesOf`）——
+   * 旧口径"未索引 ⇒ 零候选不回退"就是这条腿一直空着的原因（原生区的 `#DIM` 引用侧在 `.kojo`
+   * 里本来就只能靠缓冲区文本给事实）。糖面的 `#DIM` 引用位不经本路由（糖行不是原生行），由
+   * {@link declarationItems} 那一路给——两路同一枚 `erbDimNamesOf`，名单与措辞逐字相同。
    *
    * 派生装配若**替换了 `sources`**（外部扩展 / 测试对拍把候选册换掉），路由让路：这本装配已不是
    * 本文件声明的糖册，再路由只会把调用方的覆盖整本掀掉（路由选的是"另一本册"，不是"覆盖另一本册"）。
@@ -588,7 +734,20 @@ export const KOJO_COMPLETION_ASSEMBLY: CompletionAssembly = {
     // 整轮零候选（判据在 kojo-suggest-gate.ts；不在 Monaco 选项里靠字符白名单猜）。
     const line = lineAt(model, position.lineNumber);
     if (!kojoCodePositionAt(line, position.column)) return undefined;
-    return { range: kojoCompletionRange(model, position), prefix: model.getWordUntilPosition(position).word };
+    const col0 = col0Of(line, position.column);
+    // G 批：`[[ … ]]` 是一枚**专有名字位** ⇒ 按 sourceId 白名单收口（词表 / 项目函数 / 文档词
+    // 在 rename 括号里全是噪声）。其余位置不过滤 = 既有各源行为逐字不变（收口只新增，不收紧旧路）。
+    const renameSlot = col0 === null ? null : kojoRenameBracketSlotAt(line, col0);
+    return {
+      range: kojoCompletionRange(model, position),
+      prefix: model.getWordUntilPosition(position).word,
+      ...(renameSlot === null
+        ? {}
+        : {
+            keep: (_item: Monaco.languages.CompletionItem, sourceId: string): boolean =>
+              KOJO_RENAME_SLOT_SOURCES.has(sourceId),
+          }),
+    };
   },
   resolveDetail(item, provenance) {
     try {

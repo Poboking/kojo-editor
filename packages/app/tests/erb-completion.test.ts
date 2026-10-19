@@ -7,7 +7,8 @@
  * (b) `erb-directives` source 行首给 `#DIM` 之类、行中不给（判定经 `isLineHeadContext` 可单测）；
  * (c) 空 tables 不崩且无非表候选；`memoizedErbFunctionNames` 按指纹失效。
  * 本批扩：门白名单终态（名字位只出本路候选）、行中跳转词单源、adapter 指令词并入、
- * `erb-families` / `erb-declared` 两个新源的端到端出货。
+ * `erb-families` / `erb-declared` 两个新源的端到端出货；G 批把 `erb-declared` 的取数改成
+ * **两态**（索引有意见 ⇒ 以索引为准、不与缓冲区合并；未索引 / 通道缺席 ⇒ 回退缓冲区扫描）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,7 +26,7 @@ import {
   type ErbCompletionTables,
 } from '../src/monaco/erb-completion';
 import type { ErbFileFactsProvider } from '../src/monaco/completion-core';
-import { erbFactsPathOf } from '../src/monaco/erb-completion-declared';
+import { dimNamesOfBuffer, erbDimNamesOf, erbFactsPathOf } from '../src/monaco/erb-completion-declared';
 
 interface Registered {
   languageId: string;
@@ -493,15 +494,16 @@ function modelOfPath(text: string, fsPath: string): Monaco.editor.ITextModel {
   return { ...(modelOf(text) as unknown as Record<string, unknown>), uri: { fsPath } } as unknown as Monaco.editor.ITextModel;
 }
 
-/** 走 provider 取一轮候选（指定 model；与 `provide` 同口径） */
+/** 走 provider 取一轮候选（指定 model；与 `provide` 同口径；`lineNumber` 缺省 = 第 1 行） */
 function provideOn(
   provider: Monaco.languages.CompletionItemProvider,
   model: Monaco.editor.ITextModel,
   column: number,
+  lineNumber = 1,
 ): Monaco.languages.CompletionItem[] {
   const out = provider.provideCompletionItems(
     model,
-    { lineNumber: 1, column } as Monaco.Position,
+    { lineNumber, column } as Monaco.Position,
     {} as Monaco.languages.CompletionContext,
     {} as Monaco.CancellationToken,
   ) as unknown as Monaco.languages.CompletionList;
@@ -631,14 +633,61 @@ describe('装配收口 · erb-declared（`#DIM` 声明名，解析器事实通�
     expect(hit.kind).toBe(monaco.languages.CompletionItemKind.Variable);
   });
 
-  it('未索引（dimsOf → undefined）⇒ 零候选不回退；前缀精确优先（`IF CNT_A|` 置顶）', () => {
+  it('未索引（dimsOf → undefined）⇒ 回退缓冲区声明名；缓冲区也没有 ⇒ 零候选（不猜）', () => {
     const { monaco, registered } = stubMonaco();
     installErbCompletion(monaco, () => ({ erbFileFacts: fakeFacts(['CNT_A'], PATH) }));
     const provider = registered[0]!.provider;
+    // 缓冲区里没有 `#DIM` 声明 ⇒ 回退也拿不出名字（回退 ≠ 猜）
     const other = provideOn(provider, modelOfPath('IF CNT', 'C:/proj/other.ERB'), 7);
     expect(other.some((i) => labelText(i.label) === 'CNT_A')).toBe(false);
+    // 同一条未索引路径，缓冲区里声明过 ⇒ 声明名出货（G 批补的缺腿：索引此刻对这个文件没有意见）
+    const dirty = provideOn(provider, modelOfPath('#DIM CNT_B\nIF CNT', 'C:/proj/other.ERB'), 7, 2);
+    expect(labelText(dirty[0]!.label)).toBe('CNT_B');
+    expect(dirty[0]!.detail).toBe('#DIM 声明（本文件）');
     // `'IF CNT_A'` 列 9 = 名尾之后（前缀 `CNT_A` 精确命中 ⇒ 排名档 0 置顶）
     expect(labelText(provideOn(provider, modelOfPath('IF CNT_A', PATH), 9)[0]!.label)).toBe('CNT_A');
+  });
+
+  it('索引有意见时**不与缓冲区合并**：`[]`（已索引确无）不回退、数组以索引为准', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ erbFileFacts: fakeFacts([], PATH) }));
+    const empty = provideOn(registered[0]!.provider, modelOfPath('#DIM CNT_A\nIF CNT', PATH), 7, 2);
+    // 索引答 `[]` = "这文件确实没声明" ⇒ 一条声明名候选都不出（回退会拿出与索引不一致的第二份事实）
+    expect(empty.every((i) => i.detail !== '#DIM 声明（本文件）')).toBe(true);
+    const { monaco: m2, registered: r2 } = stubMonaco();
+    installErbCompletion(m2, () => ({ erbFileFacts: fakeFacts(['IDX_ONLY'], PATH) }));
+    const both = provideOn(r2[0]!.provider, modelOfPath('#DIM BUF_ONLY\nIF IDX', PATH), 8, 2);
+    expect(both.some((i) => labelText(i.label) === 'IDX_ONLY')).toBe(true);
+    expect(both.some((i) => labelText(i.label) === 'BUF_ONLY')).toBe(false); // 缓冲区名不并入
+  });
+
+  it('通道缺席（宿主未注入 erbFileFacts）⇒ 缓冲区就是唯一在手事实，声明名照出', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const items = provideOn(registered[0]!.provider, modelOfPath('#DIM LOCAL_CNT\nIF LOCAL', ''), 10, 2);
+    expect(labelText(items[0]!.label)).toBe('LOCAL_CNT');
+  });
+
+  it('缓冲区声明名扫描（纯函数）：修饰形 / 数组后缀 / `[SKIPSTART]` 区间 / 注释行 / 大小写去重', () => {
+    expect(
+      dimNamesOfBuffer(
+        [
+          '#DIM CONST 常量名',
+          '#DIM 数组名[10]',
+          '#DIMS 串名',
+          '[SKIPSTART]',
+          '#DIM 跳过名',
+          '[SKIPEND]',
+          '#DIM 混ABC',
+          ';#DIM 注释名',
+          'IF 常量名',
+        ].join('\n'),
+      ),
+    ).toEqual(['常量名', '数组名', '串名', '混ABC']);
+    // 大小写异写只留首个原形（与候选侧的去重同一口径；ERB 方言大小写不敏感）
+    expect(dimNamesOfBuffer('#DIM flag_a\n#DIM FLAG_A\n#dim FLAG_b')).toEqual(['flag_a', 'FLAG_b']);
+    // 桩 model / 无 getValue ⇒ 回退路自然落空，不抛
+    expect(erbDimNamesOf({} as Monaco.editor.ITextModel, undefined)).toEqual([]);
   });
 
   it('erbFactsPathOf：fsPath 回落 path 回落空串（桩 model 防御）', () => {

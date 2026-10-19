@@ -475,8 +475,8 @@ describe('CTX-SUGGEST · 「打开名字位」的字符集', () => {
 });
 
 describe('CTX-SUGGEST · 探针清单（①③⑤⑥ 触发链：宿主零抄本的名单面）', () => {
-  it('`.kojo` 六枚 / `.erb` 四枚，成分 = 候选源白名单', () => {
-    expect(KOJO_NAME_SLOTS).toHaveLength(6);
+  it('`.kojo` 七枚 / `.erb` 四枚，成分 = 候选源白名单', () => {
+    expect(KOJO_NAME_SLOTS).toHaveLength(7);
     expect(ERB_NAME_SLOTS).toHaveLength(4);
     // 命中直接挂的那几枚（身份可比对）；boolean 签名两枚已折 true/null、只做行为面断言（下一条）
     expect(KOJO_NAME_SLOTS).toContain(timingFaceSlot);
@@ -491,9 +491,10 @@ describe('CTX-SUGGEST · 探针清单（①③⑤⑥ 触发链：宿主零抄本
     for (const probe of ERB_NAME_SLOTS) expect(probe('PRINTL 你好', 10)).toBeNull();
   });
 
-  it('命中面逐枚非空（弹了有货）：`成否:` / `{她的` / `GOTO ` / `CFLAG:` / `GETBIT(HOLD,)`', () => {
+  it('命中面逐枚非空（弹了有货）：`成否:` / `{她的` / `[[她的` / `GOTO ` / `CFLAG:` / `GETBIT(HOLD,)`', () => {
     expect(KOJO_NAME_SLOTS.some((p) => p('时机 指令 310 成否:', 14) !== null)).toBe(true);
     expect(KOJO_NAME_SLOTS.some((p) => p('{她的', 4) !== null)).toBe(true);
+    expect(KOJO_NAME_SLOTS.some((p) => p('    [[她的', 9) !== null)).toBe(true);
     expect(ERB_NAME_SLOTS.some((p) => p('GOTO ', 6) !== null)).toBe(true);
     expect(ERB_NAME_SLOTS.some((p) => p('CFLAG:', 7) !== null)).toBe(true);
     expect(ERB_NAME_SLOTS.some((p) => p('GETBIT(HOLD,)', 13) !== null)).toBe(true);

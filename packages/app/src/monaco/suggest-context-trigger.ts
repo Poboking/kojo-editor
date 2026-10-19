@@ -10,6 +10,7 @@ import { caseValueSlotAt, timingNumberSlotAt } from './kojo-completion-instructi
 import { timingFaceSlot, timingNamedParamValueSlot } from './kojo-completion-faces';
 import { kojoFunctionNameSlot } from './kojo-completion-functions';
 import { kojoVariableNameSlot } from './kojo-completion-variables';
+import { kojoRenameBracketSlotAt } from './kojo-completion';
 import { kojoNativeSlotAt } from './kojo-native-zone';
 
 /**
@@ -90,7 +91,7 @@ type NameSlotProbe = (line: string, column: number) => unknown;
 /**
  * 每门语言**候选源自己认的那几处名字位**（= 弹出来一定有货的位置）：
  * - `.kojo`：分野位（KC-2）/ 编号位（KC-3）/ 分支头值位（KC-3）/ `调用`·`函数` 名槽 /
- *   插值变量名位（KC-1，`的` 转场键在这一枚） / 命名参数**取值位**（KC-2b，键冒号当拍）；
+ *   插值变量名位（KC-1，`的` 转场键在这一枚） / `[[属性名]]` 位 / 命名参数**取值位**（KC-2b，键冒号当拍）；
  * - `.erb`：`@` 定义位与 `CALL` 系调用位（`erbFunctionNameSlot`，语句清单单源在
  *   `erb-completion-context` 的 `ERB_CALL_STATEMENTS`）/ 跳转标签位（`erbLabelSlot`）/
  *   位原语第二实参坑（`erbBitSlotOpen`）/ 变量引用末段（`erbVariableSlotAt`，族冒号当拍）。
@@ -107,6 +108,8 @@ export const KOJO_NAME_SLOTS: readonly NameSlotProbe[] = [
   caseValueSlotAt,
   kojoFunctionNameSlot,
   kojoVariableNameSlot,
+  // `[[ … ]]` 属性名位：探针收 0 基列（其余探针收 Monaco 1 基列），换算口径同 `parseNameContext`
+  (line, column) => (column < 1 ? null : kojoRenameBracketSlotAt(line, Math.min(column - 1, line.length))),
   // `timingNamedParamValueSlot` 签名定死 boolean（A3 接线注）⇒ 折一道，见上注
   (line, column) => (timingNamedParamValueSlot(line, column) ? true : null),
 ];

@@ -1,24 +1,38 @@
 import type * as Monaco from './entry';
 import type { ErbFileFactsProvider } from './completion-core';
 import { erbDeclaredNameSlot } from './erb-completion-families';
+import { dimDeclarationOf } from './erb-dim-navigation';
 import { lineAt } from './kojo-completion-position';
 
 /**
- * EC-DECL · `.erb` **`#DIM` 声明名补全**（`#DIM 好感度` 声明过之后，正文里写这个名字时弹候选）。
+ * EC-DECL · **`#DIM` 声明名补全**（`#DIM 好感度` 声明过之后，正文里写这个名字时弹候选）。
  *
- * ## 数据来源（只此一条，宿主 / 解析器通道）
+ * ## 数据来源（两态，顺序严格；与 `erb-completion-labels.ts` 同一口径）
  *
- * `CompletionTables.erbFileFacts` 的 `dimsOf(path)` —— 当前 `ErbFile` 的 `#DIM*` 声明名
- * （内核索引语法事实；宿主把解析器索引通道注入补全表）。本模块**不扫全文、不写第二份 `#DIM`
- * 正则**：`undefined`（未索引 / 取不到）⇒ **零候选、不回退**——回退全文口径只会拿出与索引
- * 不一致的假事实；`[]`（已索引但确无声明）同样零候选。通道缺席（`facts === undefined`）⇒
- * 零候选。**不猜、不编**。
+ * 1. `CompletionTables.erbFileFacts` 的 `dimsOf(path)` —— 当前文件的 `#DIM*` 声明名
+ *    （内核索引语法事实；宿主把解析器索引通道注入补全表）。**数组（含 `[]`）= 索引有意见**
+ *    ⇒ 直接用它，**不与缓冲区合并**（两份事实拼一张名单，冲突时没人说得出谁赢）；
+ * 2. `undefined`（未索引 / 路径不在索引里 / 通道抛错）或**通道缺席** ⇒ 回退
+ *    {@link dimNamesOfBuffer} 扫**当前缓冲区**。回退不是"猜"：索引此刻对这个文件没有任何
+ *    意见，而缓冲区就是作者眼前那份原文（比索引更近）；`erb-completion-labels.ts` 对
+ *    `labelsAt` 的未索引态早就是这么处理的，两条名位源照同一份纪律走。**旧口径"未索引 ⇒
+ *    零候选不回退"是这条腿一直是空的那一半原因**：`.kojo` 从来不在 ERB 解析器索引里
+ *    ⇒ `dimsOf` 恒 `undefined` ⇒ 糖面（`kojo-completion.ts` 的本文件声明名一路）与原生区
+ *    （`route` 进 ERB 册的那一路）同时拿零候选。
+ *
+ * 两条路都**不写第二份 `#DIM` 正则**：逐行判据一律经 `erb-dim-navigation.ts` 的
+ * {@link dimDeclarationOf}（其名字 / 指令切分取解析器 `parseDimDeclaration`，
+ * `[SKIPSTART]…[SKIPEND]` 区间整段跳过与导航腿同一份屏蔽面）。
  *
  * ## 位置判据（单源共享）
  *
  * {@link erbDeclaredNameSlot}（自 `erb-completion-families.ts`，与变量族头源同一份裸标识符
  * 名位扫描——两个"名字位"源不各持一套）。替换范围**只覆盖名字段**；前缀按**大小写不敏感**
  * 比较（ERB 方言与 `#DIM` 引用同走引擎语义，大小写不敏感），展示保留声明原形。
+ *
+ * 名槽收口不在本模块：由装配层按**候选源 sourceId 白名单**执行（`.erb` =
+ * `erb-completion-context.ts` 的 `ERB_GATE_SOURCE_WHITELIST`；`.kojo` = `kojo-completion.ts`
+ * 的 `locate().keep`）——同为 `Variable` kind 的族头 / 属性名 / 声明名按 kind 收不干净。
  *
  * ## 路径口径
  *
@@ -28,8 +42,8 @@ import { lineAt } from './kojo-completion-position';
  *
  * ## 纪律
  *
- * 纯函数 + 薄 Monaco 翻译（位置不符 / 通道缺席 / 未索引 ⇒ `[]`）。通道求值抛错**不在此吞**：
- * 装配层对 source 抛错有逐源兜底（跳过 + 一行可见 warn），本函数不编候选顶替。
+ * 纯函数 + 薄 Monaco 翻译（位置不符 ⇒ `[]`；索引与缓冲区**都给不出**名字 ⇒ `[]`）。
+ * 通道求值抛错在本层吞成"未索引"（走回退），**不编候选顶替**。
  */
 
 /** model 的文件路径（桩 model 没有 `uri` ⇒ 空串；与 `kojo-completion-declarations.ts` 的 `filePathOf` 同形） */
@@ -41,13 +55,106 @@ export function erbFactsPathOf(model: Monaco.editor.ITextModel): string {
 }
 
 /**
+ * 缓冲区全文（桩 model / 旧运行时可能没有 `getValue` ⇒ 空串：回退路自然落空，不抛）。
+ * 与 `kojo-completion-declarations.ts` 的 `textOf` 同形（防御口径只此一份写法可抄，因为它
+ * 们的**记忆化对象**同形——见 {@link DIM_CACHE}）。
+ */
+function textOf(model: Monaco.editor.ITextModel): string {
+  const getValue = (model as { getValue?: () => string }).getValue;
+  return typeof getValue === 'function' ? getValue.call(model) ?? '' : '';
+}
+
+/**
+ * 扫一份文本里的 `#DIM*` 声明名（去重按大小写不敏感、展示保首个原形；`[SKIPSTART]…[SKIPEND]`
+ * 区间整段跳过）。
+ *
+ * 行判据一律是 {@link dimDeclarationOf}（解析器 `parseDimDeclaration` 的单源包装），本函数只
+ * 负责**遍历与屏蔽**——屏蔽面与 `erb-dim-navigation.ts` 的私有 `dimDeclarationsOf` 逐字同式，
+ * 不是第二份"什么算 `#DIM` 声明"的判据。
+ */
+export function dimNamesOfBuffer(text: string): readonly string[] {
+  if (text.length === 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let inSkipBlock = false;
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const trimmed = raw.trim();
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    const dim = dimDeclarationOf(raw);
+    if (dim === null) continue;
+    const key = dim.name.toUpperCase();
+    if (key.length === 0 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(dim.name);
+  }
+  return out;
+}
+
+/**
+ * 按 model 记忆化的缓冲区声明名（与 `kojoDeclarationsOf` / `cachedLabels` 同一纪律）。
+ *
+ * 全文扫描是每击键 `O(文件大小)`；同一版本（未编辑）下声明**必不变** ⇒ 复用上次数组（同一引用）。
+ * 版本号缺席（桩 model）⇒ 退化为按**文本身份**记忆化；两者都拿不到 ⇒ 每次重扫（正确，仅失去缓存）。
+ * `WeakMap` 按 model 身份：编辑器关闭即回收，不产生无界增长。
+ */
+const DIM_CACHE = new WeakMap<
+  Monaco.editor.ITextModel,
+  { readonly versionId: number | undefined; readonly text: string; readonly names: readonly string[] }
+>();
+
+function bufferedDimNames(model: Monaco.editor.ITextModel): readonly string[] {
+  const text = textOf(model);
+  if (text.length === 0) return [];
+  const getVersionId = (model as { getVersionId?: () => number }).getVersionId;
+  const versionId = typeof getVersionId === 'function' ? getVersionId.call(model) : undefined;
+  const cached = DIM_CACHE.get(model);
+  if (cached !== undefined) {
+    const fresh = typeof versionId === 'number' ? cached.versionId === versionId : cached.text === text;
+    if (fresh) return cached.names;
+  }
+  const names = dimNamesOfBuffer(text);
+  DIM_CACHE.set(model, { versionId, text, names });
+  return names;
+}
+
+/**
+ * 当前文件的 `#DIM` 声明名（**两态取数，两门语言共用这一份**）。
+ *
+ * 索引有意见（数组，含 `[]`）⇒ 用它；未索引 / 路径不在索引里 / 通道抛错 / 通道缺席 ⇒ 缓冲区
+ * （见模块头注的口径变更理由）。`.kojo` 侧的本文件声明名（`kojo-completion.ts` 的
+ * {@link declarationItems} 一路）经同一枚函数取数 ⇒ 糖面与原生区两条路拿到**同一份事实**。
+ */
+export function erbDimNamesOf(
+  model: Monaco.editor.ITextModel,
+  facts: ErbFileFactsProvider | undefined,
+): readonly string[] {
+  if (facts !== undefined) {
+    let dims: readonly string[] | undefined;
+    try {
+      dims = facts.dimsOf(erbFactsPathOf(model));
+    } catch {
+      dims = undefined; // 通道抛错 = 取不到 ⇒ 与未索引同语义（回退缓冲区），绝不抛进补全链
+    }
+    if (dims !== undefined) return dims;
+  }
+  return bufferedDimNames(model);
+}
+
+/**
  * 产出 `#DIM` 声明名候选（**纯函数**，供补全基座调用）。
  *
- * 行为：仅当光标落在裸标识符名位（{@link erbDeclaredNameSlot}）时产出候选；`facts` 缺席 /
- * `dimsOf` 返回 `undefined`（未索引）⇒ `[]`（**零候选、不回退**）；否则按**大小写不敏感
- * 前缀**过滤声明名，`kind` = Variable、`insertText` / `filterText` = 名字、`detail` =
- * `#DIM 声明（本文件）`、替换范围**只覆盖名字段**。排序受控（**前缀精确优先**，同别源打法；
- * 档位 `4_` / `5_` 与既有各源的 `0_` / `1_` / `2_` / `0000_` 档不撞）。名字去重按大小写不敏感。
+ * 行为：仅当光标落在裸标识符名位（{@link erbDeclaredNameSlot}）时产出候选；名单经
+ * {@link erbDimNamesOf} 两态取数（索引 → 缓冲区回退）。按**大小写不敏感前缀**过滤声明名，
+ * `kind` = Variable、`insertText` / `filterText` = 名字、`detail` = `#DIM 声明（本文件）`、
+ * 替换范围**只覆盖名字段**。排序受控（**前缀精确优先**，同别源打法；档位 `4_` / `5_` 与既有
+ * 各源的 `0_` / `1_` / `2_` / `0000_` 档不撞）。名字去重按大小写不敏感。
  */
 export function erbDeclaredCompletionItems(
   monaco: typeof Monaco,
@@ -55,11 +162,10 @@ export function erbDeclaredCompletionItems(
   position: Monaco.Position,
   facts: ErbFileFactsProvider | undefined,
 ): Monaco.languages.CompletionItem[] {
-  if (facts === undefined) return [];
   const slot = erbDeclaredNameSlot(lineAt(model, position.lineNumber), position.column);
   if (slot === null) return [];
-  const dims = facts.dimsOf(erbFactsPathOf(model));
-  if (dims === undefined) return []; // 未索引 ⇒ 零候选（不回退，不猜）
+  const dims = erbDimNamesOf(model, facts);
+  if (dims.length === 0) return [];
 
   const needle = slot.prefix.toUpperCase();
   const range: Monaco.IRange = {
