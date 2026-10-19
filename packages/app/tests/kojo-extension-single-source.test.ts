@@ -61,6 +61,15 @@ const ASCII_IDENT_CLASS = /\[A-Za-z0-9_\]/;
  */
 const ASCII_IDENT_CLASS_EXEMPTIONS: ReadonlyArray<{ readonly file: string; readonly line: RegExp; readonly count: number; readonly why: string }> = [
   { file: 'packages/app/src/monaco/kojo-hover.ts', line: /^const REF_RE\b/, count: 1, why: '变量引用族名形状（本批明令不一起换）' },
+  {
+    // F12-TOKEN 2026-10-19：反查那一路的"不许放宽"从叙述升成判据——就地写明形状，
+    // 且钉住它是契约 ASCII 尺的**派生别名**（`const X = symbolTokenAt`），不是第二份字符集。
+    // 把这行换成自己手写 `/\[A-Za-z0-9_\]/`，本豁免的正则匹不上 ⇒ 上一条断言立刻红。
+    file: 'packages/app/src/monaco/kojo-hover.ts',
+    line: /^const NATIVE_ASCII_NAME_RE = symbolTokenAt;$/,
+    count: 1,
+    why: '原生名反查表路的 ASCII 尺别名（指回契约，不是抄字符集）',
+  },
   { file: 'packages/app/src/monaco/kojo-language.ts', line: /^\s*\/\[A-Za-z_\]\[A-Za-z0-9_\]\*\/,/u, count: 1, why: 'Monarch ASCII 产生式，非取词判据' },
 ];
 
@@ -251,5 +260,46 @@ describe('④ 反向对照：清单与字符集确实住在契约层', () => {
     expect(idx).toMatch(/kojoMonacoExtensions,/);
     expect(idx).toMatch(/KOJO_SOURCE_EXTENSION,/);
     expect(typeof kojoMonacoExtensions()).toBe('object');
+  });
+});
+
+/* ─────────────────────────── ⑤ F12 两条腿共用同一枚取词函数（F12-TOKEN 2026-10-19） ─────────────────────────── */
+
+/**
+ * 本批收的是"悬停查得到、F12 跳不动"那个口的**防回潮**：判据只准住在
+ * `erb-parser/references.ts::functionNameTokenAt` 一处，两条腿（转到定义 / 查找引用）
+ * 各自 import 它——任何一方退回契约 ASCII 尺、或自己再写一次取词，都是第二份真相。
+ * 手法与本文件其余各项一致：查**源码形态**，不只查行为（行为面在
+ * `erb-parser/tests/f12-cjk-token.test.ts` 与 `f12-cjk.corpus.test.ts`）。
+ */
+describe('⑤ F12 取词判据只有一处（两条腿不许各写各的）', () => {
+  it('erb-parser 那枚唯一取词函数在，且尺子指回契约（不自己写字符集）', () => {
+    const refs = read('packages/plugins/erb-parser/src/references.ts').join('\n');
+    expect(refs).toMatch(/export function functionNameTokenAt\(\s*lineText: string,\s*column: number,?\s*\)/);
+    expect(refs).toMatch(/unicodeTokenAt\(lineText, Math\.trunc\(column\)\)/);
+    expect(refs).toMatch(/if \(colonAdjacent\(lineText, token\.startColumn - 1, token\.endColumn - 1\)\) return undefined;/);
+    // 冒号判据也只此一枚（三处消费：反向索引 / 未定义 CALL / 光标取词）
+    expect(refs.match(/colonAdjacent\(/g)?.length).toBeGreaterThanOrEqual(4);
+    // 第二份字符集不许在本模块出现：`MODEL_TOKEN_CLASS` 是唯一字面源 ⇒ 本模块不该再写 `\p{L}`
+    expect(refs).not.toContain('\\p{L}');
+  });
+
+  it('两条腿都调那一枚函数，且都不再碰 ASCII 尺', () => {
+    for (const rel of ['packages/plugins/erb-parser/src/symbols.ts', 'packages/plugins/erb-parser/src/references.ts']) {
+      const text = read(rel).join('\n');
+      expect(text, rel).toMatch(/functionNameTokenAt\(lineText, (Math\.trunc\(column\)|column)\)/);
+      expect(text, rel).not.toMatch(/\bsymbolTokenAt\(/);
+    }
+  });
+
+  it('契约的 ASCII 缺省照旧窄（它服务原生名反查表，本批没跟着放宽）', () => {
+    const token = read('packages/plugin-api/src/symbol-token.ts').join('\n');
+    expect(token).toMatch(/const DEFAULT_IS_CHAR = \(ch: string\): boolean => \/\[A-Za-z0-9_\]\/\.test\(ch\);/);
+    // 宿主反查那一路仍旧用这把 ASCII 尺（放宽它就会让库表回显抢掉函数索引的正文），
+    // 而且"中文原生名全是回显条目"这条判据必须**就地写明字符形状**（①组那条按行 + 处数钉住）
+    const hover = read('packages/app/src/monaco/kojo-hover.ts').join('\n');
+    expect(hover).toMatch(/const NATIVE_ASCII_NAME_RE = symbolTokenAt;/);
+    expect(hover).toMatch(/NATIVE_ASCII_NAME_RE\(lineText, col0 \+ 1\)/);
+    expect(hover).toMatch(/!echoYieldsToIndex\(cn, fnToken\.text, tables\)/);
   });
 });
