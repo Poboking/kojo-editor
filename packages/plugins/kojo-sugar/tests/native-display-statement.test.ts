@@ -10,6 +10,12 @@
  *
  * 第四组（TRY 系分档）钉的是**两层的配对**：开块九枚归 ZH-C、单行档归本层，
  * 名单同源于 `sugar-ident`，谁也不许认领对方那批（`startsWith('TRY')` 那条捷径要当场显形）。
+ *
+ * 第五线（2026-10-20）：本表之外还有一档「**数据行**」——左值不是引擎族头、也不是语言层槽位，
+ * 但形状仍是一个引用（`服装 = 裸` / `CFLAG:100(%A(B)%) = 1`）⇒ `赋值 <原文>`，载荷逐字。
+ * 那一档的判据（`isDataReference`）与用例表住 `tests/native-display-data-line.test.ts`；
+ * 本文件只补它改到的既有档位（`CLEARLINE` 带参数、`FONT*` / `HTML_PRINT` / `VARSET` / `CALLF` 补登）
+ * 与它划出的界（`NULL_LINES` 末组）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -106,6 +112,8 @@ const CASES: readonly Case[] = [
   ['LOCAL , LOCALS:1 = 0, "a"', undefined, '局部，局部$:1 = 0, "a"'],
   ['LOCAL = 1 ;随机开关', undefined, '局部 = 1 ;随机开关'],
   ['RESULT = CALL(1)', undefined, '结果 = CALL(1)'],
+  // 逗号式赋值（引擎 `VARSET <变量>, <值>`）：词头换本表既有的 `赋值`，载荷逐字（2026-10-20 补登）
+  ['VARSET LOCAL:1, 0', undefined, '赋值 LOCAL:1, 0'],
 
   /* —— 调用（既有中文关键字 `调用`，产物口径同 keywords.ts） —— */
   ['CALL FOO', undefined, '调用 FOO'],
@@ -113,6 +121,9 @@ const CASES: readonly Case[] = [
   ['CALL KOJO_K12, ARG', undefined, '调用 KOJO_K12, ARG'],
   ['CALLL FOO', undefined, '调用 FOO 续'],
   ['CALLFORM KOJO_K12', undefined, '调用形 KOJO_K12'],
+  // `CALLF`（引擎调用族带 `F` 的那枚，2026-10-20 补登）：区别字母照 `按钮C` 的拼法保留，
+  // 实参逐字带走——本层不替读者判定 `F` 改了哪一档语义
+  ['CALLF FOO(1)', undefined, '调用F FOO(1)'],
   ['TRYCALL FOO', undefined, '尝试调用 FOO'],
   ['TRYCALLFORM KOJO_K12(RESULT)', undefined, '尝试调用形 KOJO_K12(RESULT)'],
   ['TRYJUMP 100', undefined, '尝试跳转 100'],
@@ -159,7 +170,14 @@ const CASES: readonly Case[] = [
   ['FONTBOLD RESULT', undefined, '粗体 RESULT'],
   ['FONTITALIC 1', undefined, '斜体 开'],
   ['FONTSIZE 120', undefined, '字号 120'],
+  // 2026-10-20 兜底归因补登：这三枚都是引擎内建单行语句，此前表里没有 ⇒ 整行落 `未识别语句 ·`
+  ['FONTREGULAR', undefined, '复原字体'],
+  ['FONTREGULAR 1', undefined, '复原字体 1'],
+  ['FONTSTYLE 12, 100, ＭＳ Ｐゴシック', undefined, '字体样式 12, 100, ＭＳ Ｐゴシック'],
+  ['HTML_PRINT <b>甲</b>', undefined, 'HTML打印 <b>甲</b>'],
   ['CLEARLINE', undefined, '清空本行'],
+  // `CLEARLINE` 的档位从 `none` 改成 `optional`：带参数的是**同一条指令**，参数是载荷不是身份
+  ['CLEARLINE 1', undefined, '清空本行 1'],
   ['FORCEWAIT', undefined, '强制等待'],
   ['WAIT', undefined, '等待'],
   ['DRAWLINE', undefined, '分隔线'],
@@ -248,6 +266,13 @@ const NULL_LINES: readonly string[] = [
   'PRINTLC 文本',
   'PRINTPLAINFORM x',
   'S =',
+  // 2026-10-20 数据行档（`native-display-data-line.test.ts`）划出来的界：以下形状**仍**不归本层
+  '「服装 = 裸」', // 台词行：引号内的 `=` 不是运算符，CJK 左值判据也不许把它抢成赋值
+  'IF 服装 = 裸', // 组外有空白 ⇒ 不是"一个引用"，条件行仍归 ZH-C
+  '残りムシ数, 3', // 没有顶层 `=` 的裸引用 ⇒ 仍落兜底
+  'CFLAG：100 = 1', // 全角冒号：形状判据不认（引擎写法未取证 ⇒ 不猜）
+  'VARSET', // 缺载荷 = 畸形行
+  'callf FOO(1)', // 记号按引擎写法全大写；小写不猜
 ];
 
 describe.each(NULL_LINES)('负自证 · "%s" ⇒ null', (line) => {
