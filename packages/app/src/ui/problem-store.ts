@@ -9,9 +9,15 @@
  *
  * 键 = 文件路径。装饰器的唯一计算点在 `EditorPane.refreshMarkers`，那里逐文件整份重发；
  * 标签关闭 / 卸载即清键——避免切走的文件留下「幽灵诊断」。
+ *
+ * **本文件同时是诊断计数的唯一派生处**（工包 E，2026-10-19：「三处三个口径」收成一个真相）：
+ * 面板表头、面板组头、状态栏那颗、文件树徽标一律读 `summarizeProblems`，连状态栏的
+ * **可见范围标签**（`PROBLEM_SCOPE`）也从这里出——标签与计数分家过一次（旧标签写「本文件」、
+ * 数的却是全部已打开文件的合并值），把两样东西放进同一个数据模块才不会再分叉。
  */
 
 import type { KernelEventMap } from '@kojo/plugin-api';
+import { pkey } from './file-tree-ops';
 
 /** 落点区间（契约 `editor.revealLocation.span` 反推；面板不自立形状） */
 export type ProblemSpan = NonNullable<KernelEventMap['editor.revealLocation']['span']>;
@@ -47,6 +53,35 @@ const SEVERITY_RANK: Record<EditorProblem['severity'], number> = {
   warning: 1,
   info: 2,
 };
+
+/**
+ * 严重度 → 上屏配色（**唯一一份**）：面板行圆点、面板表头、面板组头、状态栏、文件树徽标
+ * 全读这张表。颜色也是口径的一部分——两处各定一色，迟早长成"同一档两种红"。
+ */
+export const SEVERITY_TINT: Record<EditorProblem['severity'], string> = {
+  error: '#e06c75',
+  warning: '#d19a66',
+  info: '#7f9cc0',
+};
+
+/**
+ * 这份注册表的**范围真相**，含上屏标签（工包 E 判据①：标签与计数同源同口径）。
+ *
+ * 注册表的键只在文件被编辑器打开时才上账（`EditorPane` 的 marker publish 写、关标签清），
+ * 所以这里数的一律是「已打开文件的合并值」——旧标签写「本文件」是假的（活动文件换了、
+ * 其余标签的诊断照样留在计数里）。状态栏那颗要么改成按活动文件计数（需要宿主把活动路径
+ * 送进来，本批禁区），要么让标签承认口径；这里选后者，且标签文本只有一个真源。
+ */
+export const PROBLEM_SCOPE = {
+  /** 状态栏可见标签（`.sb-scope-tag`）；与同排那枚「项目」标签对举 */
+  label: '已打开',
+  /**
+   * 同一颗的 tooltip。`不含未打开文件与整项目结论 ≠ 项目级约定计数` 这一段是
+   * `tests/shell-info-design.test.ts` 钉住的口径原文，不许顺手改写。
+   */
+  title:
+    '已打开文件的波浪线合并值（各诊断贡献方合并；不含未打开文件与整项目结论 ≠ 项目级约定计数）· 问题面板 (Ctrl+Shift+M)',
+} as const;
 
 /**
  * 扁平列表的排序口径（导出供单测钉死）：
@@ -130,3 +165,99 @@ export function subscribe(listener: () => void): () => void {
     listeners.delete(listener);
   };
 }
+
+/* ---------------- 诊断计数的唯一派生（面板 / 状态栏 / 文件树共用） ---------------- */
+
+/** 三档计数（`info` 也数——面板表头要给人看；文件树只取错误/警告两档，见 `FileTree`） */
+export interface ProblemCounts {
+  readonly error: number;
+  readonly warning: number;
+  readonly info: number;
+}
+
+/** 单个文件的计数；`path` = 注册表里的原始写法（跳源与分组都按它） */
+export interface ProblemFileCounts extends ProblemCounts {
+  readonly path: string;
+}
+
+export interface ProblemSummary {
+  readonly counts: ProblemCounts;
+  /** 有诊断的文件（序 = 入参里该文件首次出现的序，即 `snapshot()` 口径下的严重级序） */
+  readonly files: readonly ProblemFileCounts[];
+  /** 原始路径 → 该文件计数（问题面板的组头用它：键与 `groupProblems` 逐字同形） */
+  readonly byPath: ReadonlyMap<string, ProblemFileCounts>;
+  /**
+   * 归一路径（`pkey`）→ 该文件计数。
+   *
+   * 文件树的行路径来自磁盘列举，与注册表键可能差个分隔符方向 / 盘符与扩展名大小写
+   * （Windows 两种写法是同一个文件）。让消费方各自归一 = 两处各定一把尺，所以归一
+   * 在这一条派生里做完；同键的多种写法计数**合并**（同一个文件不该被数成两份）。
+   */
+  readonly byKey: ReadonlyMap<string, ProblemFileCounts>;
+}
+
+const EMPTY_SUMMARY_VALUE: ProblemSummary = {
+  counts: { error: 0, warning: 0, info: 0 },
+  files: [],
+  byPath: new Map<string, ProblemFileCounts>(),
+  byKey: new Map<string, ProblemFileCounts>(),
+};
+
+/** 空表常量（订阅方在无诊断时拿到**同一引用**，不每帧新造一份空对象） */
+export const EMPTY_PROBLEM_SUMMARY: ProblemSummary = EMPTY_SUMMARY_VALUE;
+
+/** 入参数组身份 → 派生结果（数组不可变 ⇒ 身份即内容；随入参退场一起回收） */
+const summaryCache = new WeakMap<readonly EditorProblem[], ProblemSummary>();
+
+/**
+ * 一份诊断序列 → 全局计数 + 按文件计数（**纯函数**，面板分组、状态栏、文件树徽标共用）。
+ *
+ * 为什么由它而不是由 `groupProblems` 出组头数字：`groupProblems` 自己也在数三档，
+ * 两处各数一套就是"三处三个口径"的复发形态。这里数一次，面板拿 `byPath` 填组头，
+ * 树拿 `byKey` 填徽标，状态栏拿 `counts` 填那颗——同一次遍历的同一份结果。
+ */
+export function summarizeProblems(items: readonly EditorProblem[]): ProblemSummary {
+  if (items.length === 0) return EMPTY_PROBLEM_SUMMARY;
+  const hit = summaryCache.get(items);
+  if (hit !== undefined) return hit;
+
+  interface MutableFileCounts {
+    path: string;
+    error: number;
+    warning: number;
+    info: number;
+  }
+  const counts = { error: 0, warning: 0, info: 0 };
+  const files: MutableFileCounts[] = [];
+  const byPath = new Map<string, MutableFileCounts>();
+  for (const it of items) {
+    counts[it.severity]++;
+    let f = byPath.get(it.path);
+    if (f === undefined) {
+      f = { path: it.path, error: 0, warning: 0, info: 0 };
+      byPath.set(it.path, f);
+      files.push(f);
+    }
+    f[it.severity]++;
+  }
+  const byKey = new Map<string, ProblemFileCounts>();
+  for (const f of files) {
+    const key = pkey(f.path);
+    const merged = byKey.get(key);
+    byKey.set(
+      key,
+      merged === undefined
+        ? f
+        : {
+            path: merged.path,
+            error: merged.error + f.error,
+            warning: merged.warning + f.warning,
+            info: merged.info + f.info,
+          },
+    );
+  }
+  const built: ProblemSummary = { counts, files, byPath, byKey };
+  summaryCache.set(items, built);
+  return built;
+}
+

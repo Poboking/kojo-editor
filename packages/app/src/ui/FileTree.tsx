@@ -6,11 +6,25 @@
  * `file-tree-rows`（EditRow / FileRows）、`file-tree-dir-rows`（递归目录行）、
  * `file-tree-menu`（右键菜单 JSX）。本文件只剩：状态与它的两条异步通道（冷开快照 /
  * 目录列举 + 失效重列）、展开与编辑动作、定位 effect，以及把上面几块接起来的渲染。
+ *
+ * 诊断可见性（工包 E）：本文件订阅 `problem-store` 并把计数折到**角色组 / 作者包**两层
+ * 标题行（`treeProblemMarks`）；单条文件行的徽标画不了——行渲染在 `file-tree-rows` /
+ * `file-tree-row` / `file-tree-dir-rows` 三个模块里（都不在本批独占集），接线点见批次回报。
  */
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
+import {
+  currentVersion,
+  PROBLEM_SCOPE,
+  SEVERITY_TINT,
+  snapshot as problemSnapshot,
+  subscribe as subscribeProblems,
+  summarizeProblems,
+  type ProblemFileCounts,
+  type ProblemSummary,
+} from './problem-store';
 import {
   packageKey,
   revealMenuLabel,
@@ -89,6 +103,157 @@ export async function walkDialectPaths(
  */
 export function escapeAttrValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/* ---------------- 诊断徽标（工包 E，2026-10-19：让"这个文件有诊断"在树上可见） ---------------- */
+
+/** 节点 tooltip 最多点名几个文件，其余折成「另 n 个」（展开的作者包动辄几十份文件） */
+const MARK_FILE_CAP = 6;
+
+export interface TreeProblemFile {
+  readonly name: string;
+  readonly error: number;
+  readonly warning: number;
+}
+
+/** 一个树节点（角色组 / 作者包）折到的诊断量 */
+export interface TreeProblemMark {
+  readonly error: number;
+  readonly warning: number;
+  /** 该节点下**有错误/警告**的文件（错误多的在前，超出 `MARK_FILE_CAP` 的折进 `more`） */
+  readonly files: readonly TreeProblemFile[];
+  readonly more: number;
+}
+
+export interface TreeProblemMarks {
+  /** 键 = 角色组标签（`Group.label`） */
+  readonly groups: ReadonlyMap<string, TreeProblemMark>;
+  /** 键 = 作者包键（`packageKey(组, 包)`） */
+  readonly packages: ReadonlyMap<string, TreeProblemMark>;
+}
+
+const EMPTY_MARKS: TreeProblemMarks = { groups: new Map(), packages: new Map() };
+
+/**
+ * 把「已打开文件的诊断汇总」折到树的**两层节点**上（纯函数，可单测）。
+ *
+ * 数据源是 `problem-store.summarizeProblems`——与状态栏那颗、面板表头、面板组头**同一次
+ * 遍历的同一份结果**（工包 E 判据：不许两处各算一套）。查表走 `byKey`（`pkey` 归一）：
+ * 树里这一行的路径来自索引/磁盘列举，与注册表键可能差个分隔符方向或大小写，
+ * 按字面比对就会漏标（同一个文件两种写法 ≠ 两个文件）。
+ *
+ * **为什么画在节点上而不是单条文件行上**：单条 ERB 行住在 `file-tree-row.tsx` /
+ * `file-tree-rows.tsx`（都不在本批独占集里），在那里加一条腿要么由宿主穿一个引用型 props
+ * 进来（PS-16 的 memo 前提就是行组件的 props 全稳定），要么另造一份行渲染——后者就是
+ * "同一棵树两种画法"的新分叉。这里退一层把真相折到组/包，并把**具体文件名连同各自计数**
+ * 写进节点 tooltip：谁报错仍然看得见，而且只有一份计数。
+ *
+ * 只折错误 / 警告两档：只报了 `info` 的文件不在树上说话（那一档面板表头本来就在说，
+ * 铺满一棵树就是把注意力花在噪声上）。
+ */
+export function treeProblemMarks(
+  groups: readonly Group[],
+  summary: ProblemSummary,
+): TreeProblemMarks {
+  if (summary.files.length === 0) return EMPTY_MARKS;
+  interface MutableMark {
+    error: number;
+    warning: number;
+    files: TreeProblemFile[];
+  }
+  const byGroup = new Map<string, MutableMark>();
+  const byPackage = new Map<string, MutableMark>();
+  const bump = (m: MutableMark, f: ProblemFileCounts): void => {
+    m.error += f.error;
+    m.warning += f.warning;
+    m.files.push({ name: baseName(f.path), error: f.error, warning: f.warning });
+  };
+  const slot = (
+    map: Map<string, MutableMark>,
+    key: string,
+  ): MutableMark => {
+    let m = map.get(key);
+    if (m === undefined) {
+      m = { error: 0, warning: 0, files: [] };
+      map.set(key, m);
+    }
+    return m;
+  };
+  for (const g of groups) {
+    for (const s of g.subs) {
+      const pkgKey = s.label === null ? null : packageKey(g.label, s.label);
+      for (const file of s.files) {
+        const hit = summary.byKey.get(pkey(file));
+        if (hit === undefined || hit.error + hit.warning === 0) continue;
+        bump(slot(byGroup, g.label), hit);
+        if (pkgKey !== null) bump(slot(byPackage, pkgKey), hit);
+      }
+    }
+  }
+  const freeze = (map: ReadonlyMap<string, MutableMark>): ReadonlyMap<string, TreeProblemMark> => {
+    const out = new Map<string, TreeProblemMark>();
+    for (const [key, m] of map) {
+      // 错误多 → 警告多 → 名字码位序（不用 localeCompare：CJK 分区域，钉值会变红）
+      const sorted = [...m.files].sort(
+        (a, b) => b.error - a.error || b.warning - a.warning || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      );
+      out.set(key, {
+        error: m.error,
+        warning: m.warning,
+        files: sorted.slice(0, MARK_FILE_CAP),
+        more: Math.max(0, sorted.length - MARK_FILE_CAP),
+      });
+    }
+    return out;
+  };
+  return { groups: freeze(byGroup), packages: freeze(byPackage) };
+}
+
+/** 节点 tooltip：口径（只有已打开文件上得了账）+ 总量 + 谁在报（诚实到文件名） */
+function markTooltip(scope: string, m: TreeProblemMark): string {
+  const listed = m.files
+    .map((f) => `${f.name}${f.error > 0 ? ` ✕${f.error}` : ''}${f.warning > 0 ? ` ⚠${f.warning}` : ''}`)
+    .join('、');
+  // 口径词取自 `PROBLEM_SCOPE.label`（与状态栏那颗同一个真源）；整段 tooltip 不搬那颗的
+  // 长句——树上的这一枚只该说"这一层里谁在报"，全量在面板里看。
+  return (
+    `${scope}内${PROBLEM_SCOPE.label}文件的诊断：错误 ${m.error} / 警告 ${m.warning}` +
+    `（${listed}${m.more > 0 ? `，另 ${m.more} 个` : ''}）· 详见问题面板 (Ctrl+Shift+M)`
+  );
+}
+
+/** 徽标样式：`styles*.css` 不在本批独占集里 ⇒ 按 `DirRows` 的 `pad` 先例走内联（配色仍取自 store） */
+const BADGE_STYLE = {
+  display: 'inline-flex',
+  flex: 'none',
+  gap: 4,
+  fontSize: 'var(--fs-0)',
+  fontVariantNumeric: 'tabular-nums',
+} as const;
+
+/**
+ * 组 / 包标题行末尾的两档徽标（`✕ n` 红、`⚠ n` 黄；没诊断 ⇒ 整个节点不画，零视觉扰动）。
+ */
+function TreeProblemBadge({
+  mark,
+  scope,
+}: {
+  mark: TreeProblemMark | undefined;
+  scope: string;
+}): ReactElement | null {
+  if (mark === undefined) return null;
+  return (
+    <span
+      className="tree-prob-mark"
+      role="img"
+      style={BADGE_STYLE}
+      title={markTooltip(scope, mark)}
+      aria-label={`${scope}有错误 ${mark.error}、警告 ${mark.warning}（仅${PROBLEM_SCOPE.label}文件）`}
+    >
+      {mark.error > 0 ? <span style={{ color: SEVERITY_TINT.error }}>✕ {mark.error}</span> : null}
+      {mark.warning > 0 ? <span style={{ color: SEVERITY_TINT.warning }}>⚠ {mark.warning}</span> : null}
+    </span>
+  );
 }
 
 /**
@@ -185,6 +350,29 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     if (!paths) return [];
     return buildFileGroups(paths, kojoOwners(project));
   }, [index, snapPaths, project]);
+
+  /**
+   * 诊断汇总（工包 E）：只订阅 `problem-store` 的**版本号**，派生留给 `useMemo`——
+   * 无诊断时 `summarizeProblems` 返回同一个常量对象 ⇒ 下面两层 memo 全部命中，
+   * 树不会因为"有一次空发布"就重画。
+   *
+   * 口径诚实：注册表里只有**已打开文件**的诊断（未打开文件的项目级诊断根本没有上账的腿，
+   * 接线点见回报），所以徽标说的是"这一层里已打开的文件有诊断"，tooltip 里那句范围标签
+   * 与状态栏那颗取自同一个 `PROBLEM_SCOPE`。
+   */
+  const problemVersion = useSyncExternalStore(subscribeProblems, currentVersion, currentVersion);
+  const problemSummary = useMemo(() => summarizeProblems(problemSnapshot()), [problemVersion]);
+  /**
+   * 按**完整分组**折，不按 `visible`：过滤词只是筛显示，不该让徽标跟着少报（少报 = 撒谎）。
+   *
+   * 代价说清：只有 `summary.files` 非空（= 真的有人报错）才扫一遍分组文件；空表直接退场。
+   * 也就是说这条腿的成本只在"有诊断"这段现场里付，而那段现场正是需要它的时候
+   * （`marker-pool` 的版本记忆化让同内容重发根本不产生新版本 ⇒ 编辑途中不会白扫）。
+   */
+  const probMarks = useMemo(
+    () => treeProblemMarks(groups, problemSummary),
+    [groups, problemSummary],
+  );
 
   const visible = useMemo(() => {
     if (!deferredFilter) return groups;
@@ -929,6 +1117,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                 </span>
                 <span className="group-label">{g.label}</span>
                 <span className="group-count">{g.total}</span>
+                <TreeProblemBadge mark={probMarks.groups.get(g.label)} scope="角色目录" />
               </button>
               {isOpen ? (
                 <ul className="tree-files">
@@ -980,6 +1169,10 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             </span>
                             <span className="tree-package-name">{glossOf(s.label)}</span>
                             <span className="group-count">{s.files.length}</span>
+                            <TreeProblemBadge
+                              mark={probMarks.packages.get(pkgKey)}
+                              scope={`作者包 ${label}`}
+                            />
                           </button>
                         )}
                         {/* 追加式：真实文件夹内容在上、ERB 列表原地不动（无动画、不卸载） */}

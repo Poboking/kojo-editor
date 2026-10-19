@@ -6,7 +6,8 @@
  *
  * 覆盖审阅 1–5：
  *  1. 教程浮层标题不再被 `.panel h3` 的大写口径把 `.kojo` 顶成 `.KOJO`；
- *  2. 状态栏「项目级约定计数」与「当前文件问题」两簇分域贴标签 + 分隔线；
+ *  2. 状态栏「项目级约定计数」与「已打开文件问题」两簇分域贴标签 + 分隔线（工包 E：
+ *     后一枚的标签改由 `problem-store.PROBLEM_SCOPE` 单源供给，见下面第 ② 组）；
  *  3. 只读胶囊带锁形图标、命中区 ≥24px；只读态的右侧读数说「未修改」不谎报「已保存」；
  *  4. 工具栏分组：「关闭项目」收进项目名旁的更多菜单、重复的「重置布局」退场、分隔件在位；
  *  5. 编辑器工具条路径呈项目相对口径（绝对前缀不上屏、完整路径恒在 title）、
@@ -22,6 +23,8 @@ const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, im
 const css = read('../src/styles-project.css');
 const shell = read('../src/ui/ShellLayout.tsx');
 const problems = read('../src/ui/ProblemPanel.tsx');
+/** 诊断口径的真源（工包 E 之后：状态栏那颗的标签与 tooltip 都从这里出） */
+const store = read('../src/ui/problem-store.ts');
 
 /** 取某选择器的**最后一条**规则体（C-1a 整批是文件末尾覆盖块：级联终值由最后出现者定） */
 function lastRuleBody(selector: string): string {
@@ -46,14 +49,19 @@ describe('② 状态栏两组诊断分域可辨', () => {
     expect(lastRuleBody('.sb-diag::before')).toMatch(/border-right:/);
   });
 
-  it('ProblemPanel 状态栏小件渲染可见「本文件」标签（两档计数路径都在）', () => {
-    expect(problems.match(/<span className="sb-scope-tag">本文件<\/span>/g)?.length).toBe(2);
+  it('状态栏小件的可见范围标签来自 problem-store（工包 E：标签与计数同源；两档计数路径都在）', () => {
+    // 旧断言钉的是 JSX 里那两个字面「本文件」——而那两个字恰恰是假的（计数是全部已打开文件的
+    // 合并值）。现在钉"标签只有一个真源"：JSX 两处都读 PROBLEM_SCOPE.label，字面量住在 store。
+    expect(problems.match(/<span className="sb-scope-tag">\{PROBLEM_SCOPE\.label\}<\/span>/g)?.length).toBe(2);
+    expect(problems).not.toMatch(/<span className="sb-scope-tag">[^{]/); // 不许再就地写死范围词
+    expect(store).toMatch(/label:\s*'已打开'/);
   });
 
-  it('两簇之间有分隔线、命中区 ≥24px；各自 title 口径原文一字不丢', () => {
+  it('两簇之间有分隔线、命中区 ≥24px；各自 title 口径原文一字不丢（现住在 problem-store）', () => {
     expect(lastRuleBody('.sb-problems')).toMatch(/border-left:\s*1px solid var\(--border\)/);
     expect(lastRuleBody('.sb-problems')).toMatch(/min-height:\s*24px/);
-    expect(problems).toContain('不含未打开文件与整项目结论 ≠ 项目级约定计数');
+    expect(store).toContain('不含未打开文件与整项目结论 ≠ 项目级约定计数');
+    expect(problems).toContain('title={PROBLEM_SCOPE.title}');
   });
 });
 
