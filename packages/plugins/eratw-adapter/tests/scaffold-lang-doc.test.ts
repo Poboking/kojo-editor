@@ -2,14 +2,19 @@
  * 语言档的 eraTW 侧产物判据（NEW-ERB 2026-10-20）。
  *
  * 三条硬账，一条都不许是"改前改后都过"的空测试：
- * ① **默认档逐字节不变**——sha256 逐文件钉死（取于 2026-10-20 改前的真实产物），
- *    抬默认档动任何一个字节都红；
+ * ① **默认档逐字节不变**——与**改前金样**（`tests/fixtures/default-sugar/`，见下方出处注）
+ *    逐文件比字节；抬默认档动任何一个字节都红；
  * ② **原生档不含糖记号**——判据用的是 kojo-sugar 的**真实词表** `lookupKeyword`
  *    （不是本文件自己数的关键字），糖档那几个带案例的面必须**有**命中（否则 ② 是空判据）；
  * ③ **原生档真的走通下游**——`erb-parser` 的**真实索引函数**扫得到它，
  *    制品计划 `planArtifacts` 对它**一次编译器都不叫**、字节原样携带。
+ *
+ * 哈希一律不在本文件现算：全仓 SHA-256 实现只许住 `kojo-market/src/digest.ts`
+ * （`kojo-market/tests/single-source.test.ts` 守着，测试文件也在它的扫描面内），
+ * 所以改前基线交金样文件、比对交字节。
  */
-import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import * as nodePath from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ErbIndex, ErbParserService, EventBus, FileIO, PluginContext, ScaffoldFileSet, Unsubscribe } from '@kojo/plugin-api';
 import { ERB_BODY_EXTENSIONS, isErbDialectPath, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
@@ -44,32 +49,52 @@ const BASE: Omit<KojoScaffoldOptions, 'langDoc'> = {
   license: 'none',
 };
 
-/** 改前（2026-10-20）默认档真实产物的逐文件 sha256；键序一并钉死 */
-const DEFAULT_BASELINE: Readonly<Record<string, string>> = {
-  'README.md': '81be4c5190961a10211dc268ec4b25a9fa8e0ec7ec91df7af2d8b4a96d1862ff',
-  '事件.kojo': '5d83160d672174bb7c62de7878bd3c7ea25d3d9be2a84d287748ae4a50b3b6b4',
-  '日常指令.kojo': '983c5fd60388805ace62bd32584abf7d06793ae2c5fc34093bc7ba54d4f39f4b',
-  '性交指令.kojo': 'c759a709758b6a7c6372ada9195061161f524f0b38d60a45ca88055e49a6c794',
-  '奉仕指令.kojo': '06062d6a37508d044baccc658eaf08ce8a18644ebec11c2a88e37c80e5ff200e',
-  '爱抚指令.kojo': 'c769e6a87dc09ba6ba4c5a11e8904133f057e7188768fca40192b59f87cd6d56',
-  '绝顶.kojo': '0084579966740e17804c523d8e74973389c5b5dc74991959d5c78587cc7066e7',
-  '刻印取得.kojo': 'e36c18d5fc8c0cf1adbe3ef758983ba0a674abb649472276c799d6728ea553b6',
-  '性骚扰指令.kojo': '71e2afaffb6bd49f9583400dfa18f8cb1391722bdd4e1d68f38cbd959cef7278',
-};
+/**
+ * 默认档（糖）产物的**改前逐字节金样**：`tests/fixtures/default-sugar/`。
+ *
+ * 出处（可复核，不是"跑出来的现在态"）：2026-10-20 在 `origin/dev` = `7b81e59` 的
+ * **未改动工作树**上取同一组输入的产物，逐文件 SHA-256 记在案（本文件头注那次
+ * 取证运行），落地实现后先核对九份金样与那九个摘要逐字相等，再入库为 golden。
+ * 因此这里比的是字节：`expect(bytes).toEqual(golden)`。
+ * 仓库 `.gitattributes` 是 `* text=auto eol=lf`，checkout 必得 LF ⇒ 金样与产物同为
+ * LF 字节，`sugar.test.ts` 那套 golden 靠同一条纪律成立，这里照搬。
+ */
+const GOLDEN_DIR = nodePath.join(import.meta.dirname, 'fixtures', 'default-sugar');
+const DEFAULT_KEYS = [
+  'README.md',
+  '事件.kojo',
+  '日常指令.kojo',
+  '性交指令.kojo',
+  '奉仕指令.kojo',
+  '爱抚指令.kojo',
+  '绝顶.kojo',
+  '刻印取得.kojo',
+  '性骚扰指令.kojo',
+] as const;
 
-const sha = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+/** 金样读成字节（不给任何规范化机会：行尾 / BOM / 空白都在比较范围内） */
+const goldenBytes = (rel: string): Uint8Array => new Uint8Array(readFileSync(nodePath.join(GOLDEN_DIR, rel)));
+const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 /* ───────────────────────── ① 默认档逐字节不变 ───────────────────────── */
 
 describe('① 默认档：与改前逐字节相同（抬默认行为必红）', () => {
-  it('九个文件的键序与逐文件 sha256 全等', () => {
+  it('九个文件的键序与逐文件字节全等于改前金样', () => {
     const out = scaffoldKojoProject(BASE);
-    expect(Object.keys(out.files)).toEqual(Object.keys(DEFAULT_BASELINE));
+    expect(Object.keys(out.files)).toEqual([...DEFAULT_KEYS]);
     expect(out.dirName).toBe('取证作品-影狼 v1.0');
-    const drift = Object.entries(out.files)
-      .map(([rel, text]) => (sha(text) === DEFAULT_BASELINE[rel] ? null : `${rel} 期望 ${DEFAULT_BASELINE[rel]} 实得 ${sha(text)}`))
-      .filter((x): x is string => x !== null);
-    expect(drift).toEqual([]);
+    const drift = DEFAULT_KEYS.filter((rel) => {
+      const text = out.files[rel];
+      if (text === undefined) return true;
+      const got = bytesOf(text);
+      const want = goldenBytes(rel);
+      return got.length !== want.length || !got.every((b, i) => b === want[i]);
+    });
+    expect(drift, '与改前金样不一致的文件').toEqual([]);
+  });
+
+  it('金样本体自证：糖档扩展名就是那枚单源常量（金样目录名不会自己骗自己）', () => {
+    for (const rel of DEFAULT_KEYS.slice(1)) expect(rel.endsWith(FACE_STUB_EXT)).toBe(true);
   });
 
   it('显式糖档 == 不传该字段（缺省即历史行为）', () => {
@@ -293,14 +318,19 @@ describe('④ 供数接线（这一格在 eraTW 的向导里真的会出现）',
     expect(ERATW_SCAFFOLD_DEPS.coreFaceCount).toBe(CORE_FACES.length);
   });
 
-  it('这枚供数函数认草稿里的 langDoc：原生档出原生扩展名，缺省出糖档且逐字节等于基线', () => {
+  it('这枚供数函数认草稿里的 langDoc：原生档出原生扩展名，缺省出糖档且逐字节等于改前金样', () => {
     const draft = { ...BASE, extra: { scriptNo: 1 } };
     const nativeOut = ERATW_SCAFFOLD_DEPS.scaffold({ ...draft, langDoc: 'native' });
     expect(Object.keys(nativeOut.files).filter((r) => r.endsWith(kojoLangDocExtension('native')))).toHaveLength(CORE_FACES.length);
     const sugarOut = ERATW_SCAFFOLD_DEPS.scaffold(draft);
-    expect(Object.keys(sugarOut.files)).toEqual(Object.keys(DEFAULT_BASELINE));
-    // 接线腿没夹带任何改写：与直接调 scaffoldKojoProject 的默认产物逐字节相同
-    for (const rel of Object.keys(sugarOut.files)) expect(sha(sugarOut.files[rel]!)).toBe(DEFAULT_BASELINE[rel]);
+    expect(Object.keys(sugarOut.files)).toEqual([...DEFAULT_KEYS]);
+    // 接线腿没夹带任何改写：与改前金样逐字节相同（不只是"和另一个函数一致"）
+    const drift = DEFAULT_KEYS.filter((rel) => {
+      const got = bytesOf(sugarOut.files[rel]!);
+      const want = goldenBytes(rel);
+      return got.length !== want.length || !got.every((b, i) => b === want[i]);
+    });
+    expect(drift, '接线腿与金样不一致的文件').toEqual([]);
   });
 
   it('没有声明的游戏（另一家 adapter 那形）读出来是空 ⇒ 那一行不出现、草稿也不带键', () => {
