@@ -34,9 +34,9 @@ import { WellKnownServices } from '@kojo/plugin-api';
 import { createKernel, type Kernel } from '@kojo/kernel';
 import { NodeBridge } from '../../kernel/tests/helpers/node-bridge';
 import { MemoryStorageBackend } from '../../kernel/tests/helpers/memory-storage';
-import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
+import { createErbParserPlugin, erbParserTasks, scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
-import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
+import { conditionExtractorTasks, createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createSavParserPlugin } from '@kojo/plugin-sav-parser';
 import { createStateReplayPlugin } from '@kojo/plugin-state-replay';
 import { planJumpToState } from '../src/ui/jump-to-state';
@@ -62,6 +62,18 @@ describe.skipIf(!SMOKE)('G1 跳到命中状态 · 真语料端到端', () => {
       ],
       storageBackend: new MemoryStorageBackend(),
     });
+    // 并行计算任务表：**与生产装配同源**（`app/src/compute-tasks.ts` 逐项并入同一批插件导出的表；
+    // 判据同 `packages/kernel/tests/integration-plugins.test.ts`）。PS-11 起单文件条件抽取整链
+    // 走 `condition.extractFile`，而该任务是跨插件合成（扫描器住 erb-parser、抽取住
+    // condition-extractor，审计 C 项不许 cross-import）⇒ 只有装配层能填这张表，插件自己注册不了。
+    // 本测试自建裸内核，不注册就是逐文件 "No local implementation registered"、条件索引整片归零
+    // ——下方那条 `predicatedNos` 前提会以最误导的方式红（"真语料里没有可判定函数"）。
+    for (const [kind, impl] of Object.entries({
+      ...erbParserTasks,
+      ...conditionExtractorTasks(scanControlFlow),
+    })) {
+      kernel.compute.registerTask(kind, impl as never);
+    }
     await kernel.start();
     project = await kernel.project.open(SMOKE!);
     await kernel.services.get<ErbParserService>('erb.parser').ensureIndex();
@@ -101,6 +113,10 @@ describe.skipIf(!SMOKE)('G1 跳到命中状态 · 真语料端到端', () => {
     const replay = kernel.services.get<StateReplayService>(WellKnownServices.StateReplay);
     const extractor = kernel.services.get<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
     const condIndex = await extractor.ensureIndex();
+    // 前提事实（不是放宽、是写明依赖）：条件索引**整片非空**。
+    // 它只依赖上面那张任务表——归零时该报在这里，而不是让下面的 `predicatedNos`
+    // 冒充"真语料里没有可判定函数"这条与事实相反的结论。
+    expect(condIndex.byFunction.size, '条件索引整片为空 ⇒ condition.extractFile 的本地实现没注册').toBeGreaterThan(0);
 
     const scan = await snapshots.scan();
     const archives = scan.entries.filter((e) => !e.error);
