@@ -95,13 +95,22 @@ import {
 import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
 import { pathLabelParts, splitPath } from './path-label';
 import { Icon } from './icons';
+// 糖视图阅读模式（.kojo 预览专用）的显示层样式：装饰类 + 工具条开关，组件级引入
+// （照 tab-chip.css / welcome.css 先例；只影响挂在糖 model 上的装饰，不碰普通编辑）
+import './sugar-read.css';
 import { perf } from '../perf';
 import {
   composeSugarDoc,
+  EDITOR_PADDING_DEFAULT,
+  loadSugarMarksPref,
   loadSugarViewPref,
   loadSugarViewPrompted,
+  saveSugarMarksPref,
   saveSugarViewPref,
   saveSugarViewPrompted,
+  sugarReadDecorations,
+  sugarReadTypography,
+  SUGAR_READ_MARK_MAX_LINES,
   sugarSummary,
   sugarViewAllowed,
   trimSegmentBlanks,
@@ -469,6 +478,17 @@ export function EditorPane({
   const sugarViewRef = useRef<boolean>(sugarView);
   /** 糖视图摘要（null = 未启用 / 无文件）；工具条展示 */
   const [sugarStats, setSugarStats] = useState<string | null>(null);
+  /**
+   * 阅读模式「显示语法标记」开关（偏好持久化；默认**关** = 阅读态——`续`、`空行`、
+   * `等待`、`：` 这类语法标记降到低对比，台词成为屏上主体；开 = 恢复主题高对比）。
+   * 作用面**只在糖预览 model**（按 token 区间铺装饰 + `sugar-read.css`），投影文本
+   * 一字不变；开关就近放糖视图工具条，不进设置页（预览专属的阅读态，两处状态必漂）。
+   */
+  const [sugarMarks, setSugarMarks] = useState<boolean>(() => loadSugarMarksPref());
+  /** 给只注册一次的 Monaco 偏好回调读的最新值（与 sugarViewRef 同款理由） */
+  const sugarMarksRef = useRef<boolean>(sugarMarks);
+  /** 阅读态弱化装饰集（编辑器级：`setModel` 换 model 时自动清空，撤预览不必修拆） */
+  const sugarReadCollRef = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
   /** 正在以磁盘内容重载 model（抑制由此触发的脏上报：重载不是用户编辑） */
   const reloadingRef = useRef(false);
   const [dirty, setDirty] = useState(false);
@@ -919,6 +939,10 @@ export function EditorPane({
           // 下一份小文件上，且没有第二次机会纠正（切标签那道档位只在**换文件**时发）。
           const restoreLines = restore.getLineCount();
           applySizeTier(ed, restoreLines, tierOverrides(restoreLines, isErbLike(filePathRef.current), undefined, minimapCtxForPath(filePathRef.current)));
+          // 阅读四件套里 `applySizeTier` 覆盖不到的两位（折行模式/行高/偏好折行值都在它的
+          // 补丁里，写回同源）：`wordWrapColumn`（阅读栏宽盖过缺省 80）与上下留白
+          // （create 路径那份值）——`updateOptions` 只覆写发过去的键，不写回就漂移。
+          ed.updateOptions({ wordWrapColumn: 80, padding: { ...EDITOR_PADDING_DEFAULT } });
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
@@ -934,10 +958,63 @@ export function EditorPane({
     }
     sugarModelRef.current = null;
     sugarOriginalModelRef.current = null;
+    // 装饰集是编辑器级的：`setModel` 换回原文那拍已自动清空，这里只弃引用
+    // （"被别的 setModel 顶掉"分支同理——model 一 dispose，装饰随之无主）。
+    sugarReadCollRef.current = null;
     setSugarStats(null);
     // C1 反向下行批：糖视图撤下 = derivedView 翻转（true→false），立刻透出给面板
     publishCursor();
   }, [kernel, publishCursor]);
+
+  /* ------------------------ 糖视图 · 阅读模式（标记弱化） ------------------------ */
+
+  /**
+   * 重铺阅读态的标记弱化装饰（**纯显示层**：投影文本、行号对齐、折行口径一字不变）。
+   *
+   * 判据只按 token：把当前糖 model 整篇重新分词（`monaco.editor.tokenize`，与上屏
+   * 渲染同一套 Monarch 规则）→ `sugarReadDecorations`（sugar-view.ts，口径单测钉死）
+   * 产区间 → 编辑器级装饰集铺设。「显示语法标记」开、或投影行数超过阅读上限时清空
+   * （恢复主题高对比 / 不冒同步分词卡首屏的险）。
+   */
+  const refreshSugarReadDecorations = useCallback(() => {
+    const ed = editorRef.current;
+    const model = sugarModelRef.current;
+    if (!ed || !model || model.isDisposed() || ed.getModel() !== model) return;
+    let coll = sugarReadCollRef.current;
+    if (!coll) {
+      coll = ed.createDecorationsCollection();
+      sugarReadCollRef.current = coll;
+    }
+    if (sugarMarksRef.current || model.getLineCount() > SUGAR_READ_MARK_MAX_LINES) {
+      coll.set([]);
+      return;
+    }
+    const lineCount = model.getLineCount();
+    const lineTexts: string[] = [];
+    for (let i = 1; i <= lineCount; i++) lineTexts.push(model.getLineContent(i));
+    const tokenLines = monaco.editor.tokenize(lineTexts.join('\n'), model.getLanguageId());
+    coll.set(
+      sugarReadDecorations(lineTexts, tokenLines).map((r) => ({
+        range: new monaco.Range(r.lineNumber, r.startColumn, r.lineNumber, r.endColumn),
+        options: { className: r.className },
+      })),
+    );
+  }, []);
+
+  /**
+   * 预览在屏时重发阅读排版四件套（行高 / 折行模式 / 栏宽 / 留白）。
+   *
+   * 存在的唯一理由：字号、排版、显示族三族偏好的订阅回调会把 `lineHeight` /
+   * `wordWrap` 按**正文口径**补发回来——用户在预览挂着时动设置页，稿纸行距会被
+   * 普通行距顶掉；这一位在每次偏好补发之后把阅读值盖回去（撤预览由
+   * `clearSugarView` / 切档路径按正文口径写回，不残留）。
+   */
+  const reapplySugarReadOptions = useCallback(() => {
+    const ed = editorRef.current;
+    const model = sugarModelRef.current;
+    if (!ed || !model || model.isDisposed() || ed.getModel() !== model) return;
+    ed.updateOptions(sugarReadTypography(loadFontSizePref()));
+  }, []);
 
   /**
    * 生成糖视图：整份文件投影成糖文本 → 建一份**只读内存 model** → `ed.setModel()` 换上。
@@ -1047,11 +1124,15 @@ export function EditorPane({
       quickSuggestions: false,
       quickSuggestionsDelay: loadSuggestDelayPref(),
     }, { preview: true }));
+    // 阅读排版（稿纸化）：盖在档位之后——行距 / 折行栏宽 / 上下留白只对这份投影生效，
+    // 撤下时由 `clearSugarView`（还原腿）与档位重落路径按正文口径写回。
+    ed.updateOptions(sugarReadTypography(loadFontSizePref()));
     ed.setModel(sugarModel);
     setSugarStats(sugarSummary(sugarLines, 0));
+    refreshSugarReadDecorations();
     // C1 反向下行批：糖视图挂上 = derivedView 翻转（false→true），立刻透出给面板
     publishCursor();
-  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
+  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth, publishCursor, refreshSugarReadDecorations]);
 
   // 开关变化：记住偏好（下次启动仍是你的选择）+ 就地重算视图
   useEffect(() => {
@@ -1059,6 +1140,14 @@ export function EditorPane({
     saveSugarViewPref(sugarView);
     applySugarView();
   }, [sugarView, applySugarView]);
+
+  // 阅读模式「显示语法标记」：偏好落盘 + 立即重铺装饰（只动显示层，投影零改动；
+  // 装饰集挂在当前糖 model 上，所以切档 / 重挂之后还要由 applySugarView 再铺一次）
+  useEffect(() => {
+    sugarMarksRef.current = sugarMarks;
+    saveSugarMarksPref(sugarMarks);
+    refreshSugarReadDecorations();
+  }, [sugarMarks, refreshSugarReadDecorations]);
 
   // 直连模式开关切换：重算当前文件的可编辑态（readOnly），并让糖视图让位/恢复
   useEffect(() => {
@@ -1693,6 +1782,8 @@ export function EditorPane({
     const fontSizeUnsub = subscribeFontSizePref(() => {
       applyFontSizePref(ed);
       applyFontZoomPref(monaco.editor.EditorZoom);
+      // 字号变了，阅读态行距（按字号算的倍数）跟着重发——只在预览在屏时
+      reapplySugarReadOptions();
     });
     const fontZoomSync = monaco.editor.EditorZoom.onDidChangeZoomLevel((level) => setFontZoomPref(level));
     // 补全弹出延迟（QSUG-1）：同一份偏好既喂宿主观察者（每次排程现读），也喂 Monaco 的
@@ -1719,6 +1810,9 @@ export function EditorPane({
     const layoutUnsub = subscribeLayoutPref(() => {
       const model = ed.getModel();
       ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));
+      // 预览在屏：阅读栏宽（bounded + 88 列）盖在偏好补发之后——用户显式改折行偏好，
+      // 下一次挂预览仍按正文口径走，这里只保住"此刻这份投影"的稿纸栏宽。
+      reapplySugarReadOptions();
     });
     // 显示偏好（1020 编辑器体感批，C-1b 补缩略图三态与界面字号）：行高 / 空白符 / 缩略图 /
     // 行号 / 行内提示 / 字体族。只补发这几位——`formatOnType` 由方言判据管（`tierOverrides`），
@@ -1740,6 +1834,8 @@ export function EditorPane({
       // 界面字号缩放不进 Monaco（它是外壳的 CSS 变量）：偏好一改就把那几位落到根元素。
       // 本实例是常驻挂载点，另一处写入点（设置页）在 setter 里当场应用，两条路同一个真源。
       applyUiFontScalePref();
+      // 预览在屏：设置页的 `lineHeight` 补发会把稿纸行距顶掉，按阅读口径盖回去
+      reapplySugarReadOptions();
     });
     // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
     const focusDisposer = ed.onDidFocusEditorText(() => {
@@ -2391,12 +2487,30 @@ export function EditorPane({
                   <Icon name="preview" size={13} /> .kojo 预览
                 </button>
                 {sugarView && sugarStats ? (
-                  <span
-                    className="sugar-stats dim"
-                    title="其余行按原样显示：.kojo 还没覆盖到的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释和空行。文件内容始终没有被改动。"
-                  >
-                    {sugarStats}
-                  </span>
+                  <>
+                    <span
+                      className="sugar-stats dim"
+                      title="其余行按原样显示：.kojo 还没覆盖到的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释和空行。文件内容始终没有被改动。"
+                    >
+                      {sugarStats}
+                    </span>
+                    {/* 阅读模式开关（C-2）：默认阅读态——`续`、`空行`、`等待`、`：` 这类
+                        语法标记降到低对比、台词成为主体；打开恢复主题高对比，逐字看清标记。
+                        只动显示层（token 装饰），投影文本一字不变。标签恒为「显示语法标记」，
+                        状态交给 .on + aria-pressed（C-1a 防工具条横抖的口径）。 */}
+                    <button
+                      className={`ghost small sugar-marks-toggle${sugarMarks ? ' on' : ''}`}
+                      aria-pressed={sugarMarks}
+                      onClick={() => setSugarMarks((v) => !v)}
+                      title={
+                        sugarMarks
+                          ? '语法标记当前高对比显示。点击切回阅读态：续、空行、等待这类标记降到低对比，台词成为主体。只改显示，不改动文件。'
+                          : '当前是阅读态：续、空行、等待这类语法标记已降到低对比。点击恢复高对比，逐字看清语法标记。只改显示，不改动文件。'
+                      }
+                    >
+                      显示语法标记
+                    </button>
+                  </>
                 ) : null}
               </>
             )}

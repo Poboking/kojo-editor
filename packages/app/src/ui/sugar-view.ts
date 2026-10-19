@@ -208,3 +208,183 @@ export function sugarViewAllowed(input: {
   if (input.unlocked) return false;
   return true;
 }
+
+/* ===================== 阅读模式（稿纸化）：标记弱化 · 栏宽 · 台词分层 ===================== */
+
+/**
+ * 「显示语法标记」开关偏好键（壳层私事，localStorage，与上面两键同一族）。
+ *
+ * 它**不进设置页**（`editor-display-prefs.ts` 不归本线动），就近放在糖视图工具条上：
+ * 这是预览专属的阅读态，离开预览就没有意义，摆在设置页反而是两处状态。
+ */
+const MARKS_KEY = 'kojo.ui.sugarView.marks.v1';
+
+/**
+ * 缺省**关** = 阅读态：`续` / `空行` / `等待` / `：` 这类语法标记降到低对比，
+ * 台词成为屏上唯一的高对比内容。想看逐字语法（学习对照、找投影没糖化的行）
+ * 就打开这格，恢复现在的高对比主题色。
+ */
+export const SUGAR_MARKS_DEFAULT = false;
+
+/** 读「显示语法标记」偏好（读不到回缺省，绝不抛——与糖视图开关同款纪律） */
+export function loadSugarMarksPref(): boolean {
+  const s = storage();
+  if (!s) return SUGAR_MARKS_DEFAULT;
+  try {
+    const raw = s.getItem(MARKS_KEY);
+    return raw === null ? SUGAR_MARKS_DEFAULT : raw === '1';
+  } catch {
+    return SUGAR_MARKS_DEFAULT;
+  }
+}
+
+/** 写「显示语法标记」偏好（写不进去只影响下次启动的默认值） */
+export function saveSugarMarksPref(on: boolean): void {
+  const s = storage();
+  if (!s) return;
+  try {
+    s.setItem(MARKS_KEY, on ? '1' : '0');
+  } catch {
+    /* 静默降级为"本次会话有效" */
+  }
+}
+
+/**
+ * 阅读栏宽（折行列数）。口径：Monaco 的列 = 等宽单元，一个中日文字符占 2 列
+ * ⇒ 88 列 ≈ 44 个中日文可见宽度，落在"稿纸一栏 40–50 字"的区间中央。
+ * 折行模式配 `bounded`（栏宽与视口取**较窄**者）：窄窗口不会横向滚，
+ * 宽窗口不会把一栏拉成通栏。
+ */
+export const SUGAR_READ_WRAP_COLUMN = 88;
+
+/** 阅读行距倍数（同字号下最舒展的可读节奏；等宽编辑器换不了字体，节奏靠行距） */
+export const SUGAR_READ_LINE_HEIGHT_RATIO = 1.8;
+
+/** 阅读态上下留白（首行不贴工具条、末行有退气） */
+export const SUGAR_READ_PADDING = { top: 24, bottom: 24 } as const;
+
+/**
+ * 编辑器创建路径的默认留白（`EditorPane` create options 里那一份的抄本）。
+ * 存在理由：撤下预览时要把阅读态盖掉的 `padding` **显式写回**——`updateOptions`
+ * 只覆写发过去的键，不写回 = 阅读留白骑到下一份真文件上（档位漂移同款）。
+ */
+export const EDITOR_PADDING_DEFAULT = { top: 6, bottom: 16 } as const;
+
+/**
+ * 标记弱化的**行数上限**：阅读态要把整篇重新分词一遍再铺装饰，这是同步的 O(全文)
+ * 一趟。语料投影超过一万二千行的属于"本来就不是拿来通读的"（那一档连折行都关），
+ * 超限就保持高对比原样——宁可少弱化，不可卡首屏。
+ */
+export const SUGAR_READ_MARK_MAX_LINES = 12000;
+
+/**
+ * 阅读态选项补丁（**纯函数**，不 import Monaco：返回的就是 `updateOptions` 吃的形状）。
+ *
+ * 只动阅读四件套：行距 / 折行模式 / 栏宽 / 上下留白。不动字体（等宽编辑器换比例
+ * 字体要逐 token 改宽度，会砸掉命中测试与行号对齐——做不到，见本批交付说明），
+ * 不动 `wordWrapColumn` 之外的排版偏好轴（用户显式的折行偏好在 `layoutPrefPatch`
+ * 那一层，阅读态是预览的临时盖值，撤下即还原）。
+ */
+export function sugarReadTypography(fontSize: number): {
+  lineHeight: number;
+  wordWrap: 'bounded';
+  wordWrapColumn: number;
+  padding: { top: number; bottom: number };
+} {
+  return {
+    lineHeight: Math.round(fontSize * SUGAR_READ_LINE_HEIGHT_RATIO),
+    wordWrap: 'bounded',
+    wordWrapColumn: SUGAR_READ_WRAP_COLUMN,
+    padding: { ...SUGAR_READ_PADDING },
+  };
+}
+
+/** 阅读态标记弱化装饰的类名（样式住在 `sugar-read.css`，此处是单一真源） */
+export const SUGAR_READ_CLASS_MARK = 'sugar-read-mark';
+export const SUGAR_READ_CLASS_SYNTAX = 'sugar-read-syntax';
+export const SUGAR_READ_CLASS_DELIMITER = 'sugar-read-delimiter';
+export const SUGAR_READ_CLASS_SPEECH = 'sugar-read-speech';
+
+/**
+ * token → 阅读态装饰类（**只按 token 作用**，不碰投影文本一个字符）。
+ *
+ * 分层判据（对应"会说话的稿纸"）：
+ * - `sugar.cont`（`续` / `~` / `⏎`）：行尾行为标记 ⇒ 最低一档（`MARK`）；
+ * - 关键字 / 运算符 / 系统函数（含 `空行` `等待` 这些词表关键字形）：语法骨架 ⇒
+ *   降一档但仍可辨（`SYNTAX`）；
+ * - `：` 与台词引号：结构性标点 ⇒ 退到边界感（`DELIMITER`）；
+ * - 台词正文：稿纸的主体 ⇒ 换成中性前景色（`SPEECH`），配色层级由它领衔。
+ *
+ * 没进表的 token（代词 / 插值 / 名字层 / 原生 ERB 档）阅读态**不动**：代词与插值是
+ * 内容的一部分；原生档是"这行还没中文化"的锚点，弱化反而丢信息。
+ */
+const SUGAR_READ_TOKEN_CLASSES: Readonly<Record<string, string>> = {
+  'sugar.cont': SUGAR_READ_CLASS_MARK,
+  'sugar.keyword': SUGAR_READ_CLASS_SYNTAX,
+  'sugar.keyword.alias': SUGAR_READ_CLASS_SYNTAX,
+  'sugar.operator': SUGAR_READ_CLASS_SYNTAX,
+  'sugar.system-function': SUGAR_READ_CLASS_SYNTAX,
+  'sugar.colon': SUGAR_READ_CLASS_DELIMITER,
+  'sugar.speech.delimiter': SUGAR_READ_CLASS_DELIMITER,
+  'sugar.speech': SUGAR_READ_CLASS_SPEECH,
+};
+
+/**
+ * 该 token 在阅读态归哪一档（无归属返回 undefined = 原样高对比）。
+ * 除精确匹配外还认 `a.b` 形态的父级前缀：Monarch 的 token 若叠了父 scope，
+ * 取的是最深一档的色，弱化也必须跟着走，否则规则一改分层就悄悄失效。
+ */
+export function sugarReadClassFor(tokenType: string): string | undefined {
+  const exact = SUGAR_READ_TOKEN_CLASSES[tokenType];
+  if (exact !== undefined) return exact;
+  for (const [token, cls] of Object.entries(SUGAR_READ_TOKEN_CLASSES)) {
+    if (tokenType.startsWith(`${token}.`)) return cls;
+  }
+  return undefined;
+}
+
+/** 分词行（`monaco.editor.tokenize` 的每行产物在此抽象成最小形状，零 Monaco 依赖） */
+export interface SugarReadToken {
+  readonly offset: number;
+  readonly type: string;
+}
+
+/** 阅读态装饰区间（1 基行号、1 基列，与 Monaco Range 同口径；纯数据便于单测钉死） */
+export interface SugarReadRange {
+  readonly lineNumber: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  readonly className: string;
+}
+
+/**
+ * 把逐行分词产物翻成阅读态弱化装饰（**纯函数**）。
+ *
+ * token 的区间 = 本 token offset 到下一 token offset（行尾 token 吃到行末）。
+ * 健壮性口径与 `composeSugarDoc` 一致：外部数据不能假定算准了——offset 越界夹到
+ * 行内、乱序造成区间为空就跳过，绝不抛。无归属 / 空白（type 为空串）的 token 不产区间。
+ */
+export function sugarReadDecorations(
+  lineTexts: readonly string[],
+  tokenLines: readonly (readonly SugarReadToken[])[],
+): SugarReadRange[] {
+  const out: SugarReadRange[] = [];
+  for (let li = 0; li < tokenLines.length; li++) {
+    const tokens = tokenLines[li];
+    if (!tokens) continue;
+    const lineLen = (lineTexts[li] ?? '').length;
+    for (let ti = 0; ti < tokens.length; ti++) {
+      const t = tokens[ti];
+      if (!t || t.type === '') continue;
+      const cls = sugarReadClassFor(t.type);
+      if (cls === undefined) continue;
+      const start = Math.min(Math.max(0, Math.trunc(t.offset)), lineLen);
+      const next = tokens[ti + 1];
+      const rawEnd = next ? next.offset : lineLen;
+      const end = Math.min(Math.max(start, Math.trunc(rawEnd)), lineLen);
+      if (end <= start) continue;
+      out.push({ lineNumber: li + 1, startColumn: start + 1, endColumn: end + 1, className: cls });
+    }
+  }
+  return out;
+}

@@ -1,0 +1,61 @@
+/**
+ * 糖视图阅读模式（`.kojo 预览`）的显示层样式。
+ *
+ * 三条纪律：
+ * 1. **只命中糖预览 model 上的装饰类**（类名单一真源在 `sugar-view.ts` 的
+ *    `SUGAR_READ_CLASS_*`，装饰由 `EditorPane` 按 token 区间铺设）——普通代码编辑、
+ *    `.kojo` 正文编辑一份都不沾；投影文本零改动，弱化的只是显示。
+ * 2. **不改字号**：等宽编辑器逐 token 换字号会砸掉字符网格与命中测试（点第 5 列
+ *    落到第 6 列），"小一号"这一档用**低对比**替代——降亮度同样让它退进行尾。
+ * 3. 颜色一律走主题 CSS token（`--fg` / `--accent-text`），三套主题（dark / light /
+ *    mint-dark）由 `themes/*.css` 各自给值，本文件不写死任何十六进制。
+ */
+
+/* 语法标记降档：opacity 压对比 + 抢戏的粗体收掉（如 `续` 的主题档是 bold） */
+.monaco-editor .sugar-read-mark {
+  opacity: 0.42;
+  font-weight: normal !important;
+}
+.monaco-editor .sugar-read-syntax {
+  opacity: 0.72;
+}
+.monaco-editor .sugar-read-delimiter {
+  opacity: 0.55;
+}
+/* 台词分层：正文换成中性前景（主题主前景色，对比度 AA），语法色让位给它 */
+.monaco-editor .sugar-read-speech {
+  color: var(--fg) !important;
+}
+
+/* 工具条上的「显示语法标记」开关：与 `.kojo 预览` 那颗同族控件（ghost small）。
+   `order: 1` 与预览开关/摘要同侧（`styles-project.css` 把视图控制整族挪到右侧信息区，
+   不给 order 就会掉回左侧路径区——两处控制分居两端比抖一下更糟）。
+   观感照 `.sugar-toggle` 的既有口径：幽灵底 + 描边，开态 accent 字/淡底/描边；
+   状态由 `.on` + aria-pressed 表达，标签恒定（C-1a 防工具条横抖的口径）。 */
+.editor-toolbar > .sugar-marks-toggle {
+  order: 1;
+  margin-inline-start: var(--space-1);
+  white-space: nowrap;
+}
+.sugar-marks-toggle:hover:not(:disabled) {
+  background: var(--hover);
+}
+.sugar-marks-toggle.on {
+  color: var(--accent-text);
+  background: rgb(var(--accent-rgb) / 0.12);
+  border-color: var(--accent);
+}
+.sugar-marks-toggle.on:hover:not(:disabled) {
+  background: rgb(var(--accent-rgb) / 0.18);
+}
+.sugar-marks-toggle:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 尊重系统减弱动效：这颗按钮不保留悬停/状态过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .sugar-marks-toggle {
+    transition: none;
+  }
+}
