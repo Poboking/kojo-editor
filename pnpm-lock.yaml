@@ -23,6 +23,9 @@ importers:
       iconv-lite:
         specifier: ^0.7.3
         version: 0.7.3
+      tree-sitter-cli:
+        specifier: ^0.27.1
+        version: 0.27.1
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -32,6 +35,9 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@22.20.5)(happy-dom@21.0.3)(vite@7.3.7(@types/node@22.20.5)(lightningcss@1.33.0))
+      web-tree-sitter:
+        specifier: ^0.27.1
+        version: 0.27.1
 
   packages/app:
     dependencies:
@@ -167,6 +173,16 @@ importers:
       react:
         specifier: ^19.3.0
         version: 19.3.0
+
+  packages/kojo-syntax-tree:
+    dependencies:
+      web-tree-sitter:
+        specifier: ^0.27.1
+        version: 0.27.1
+    devDependencies:
+      tree-sitter-cli:
+        specifier: ^0.27.1
+        version: 0.27.1
 
   packages/plugin-api: {}
 
@@ -1340,6 +1356,11 @@ packages:
     resolution: {integrity: sha512-LgO3D9yZJjApUiuUfl9iFAwrtaX4+lok3wJIqttGoKCHlWUqHqbQpnxCf82L8FjgKsh4iGo78hqJwgL8F6To2A==}
     engines: {node: '>=14.0.0'}
 
+  tree-sitter-cli@0.27.1:
+    resolution: {integrity: sha512-WFPEjxwscCjZP9uYj0rxT2TyGBkDcXUkGTthrMpxZFGvzXEYsbC3J0633Ps8dd2mMsdsbU8oVwmQ148lLHI7Xw==}
+    engines: {node: '>=12.0.0'}
+    hasBin: true
+
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -1434,6 +1455,9 @@ packages:
         optional: true
       jsdom:
         optional: true
+
+  web-tree-sitter@0.27.1:
+    resolution: {integrity: sha512-qtx0VyUyNRHtL3ze7+v0hCKB/sLcAmY7ZAVp/ZK/bCj0yED8ptvNrr7Vd7DwDyKDWN9baqcUx4uaD2r2ql+6IA==}
 
   whatwg-mimetype@3.0.0:
     resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
@@ -2238,6 +2262,8 @@ snapshots:
 
   tinyrainbow@3.2.0: {}
 
+  tree-sitter-cli@0.27.1: {}
+
   typescript@7.0.2:
     optionalDependencies:
       '@typescript/typescript-aix-ppc64': 7.0.2
@@ -2309,6 +2335,8 @@ snapshots:
       happy-dom: 21.0.3
     transitivePeerDependencies:
       - msw
+
+  web-tree-sitter@0.27.1: {}
 
   whatwg-mimetype@3.0.0: {}
 

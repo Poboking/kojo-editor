@@ -19,6 +19,7 @@
     "paths": {
       "@kojo/plugin-api": ["./packages/plugin-api/src/index.ts"],
       "@kojo/kojo-project-kit": ["./packages/kojo-project-kit/src/index.ts"],
+      "@kojo/kojo-syntax-tree": ["./packages/kojo-syntax-tree/src/index.ts"],
       "@kojo/kernel": ["./packages/kernel/src/index.ts"],
       "@kojo/plugin-erb-parser": ["./packages/plugins/erb-parser/src/index.ts"],
       "@kojo/plugin-eratw-adapter": ["./packages/plugins/eratw-adapter/src/index.ts"],
