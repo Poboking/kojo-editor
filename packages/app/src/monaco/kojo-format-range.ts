@@ -127,11 +127,11 @@ export interface RangeFormatHandlers extends FormatHandlers {
    * `onDegrade`——**可选注入 + 双通道**，旧调用方零改动）。
    *
    * 本模块**只负责把话说出来**（四个降级点 + 前推锚点问不到，共五处），递到屏幕上哪一格由
-   * 宿主决定：现网宿主还没接它（缺省 = 只走 `console.warn`，与改前逐字一致），
-   * 因为壳层此刻只有两枚既有的可见通道，都不属于格式化：
-   * `monaco/tree-sitter/fallback.ts` 的回落台账（`capability` 是结构 worker 的协议 union，
-   * 引它进来要改 `tree-sitter/**` 两枚别人的文件）与 `ui/editor-global-providers.ts` 的
-   * 折叠封顶徽章（那是徽章，本单明令不再开一套）。
+   * 宿主决定：现网宿主接的是 `ui/format-notice-ledger.ts` 那枚**一次性台账**（去重键 = `where` +
+   * 行区间 ⇒ 同一处让路一次会话只上一条；上屏走壳层既有的通知中心，不新开显示面），
+   * **十句人话全部住在那一枚表里**——本模块一个上屏句子都不写，出口仍是且仅是
+   * `console.warn` + 这一枚回调（静态闸见 `tests/format-notice-ledger.test.ts` 的分层守卫）。
+   * 没接它的宿主 = 只走 `console.warn`，与改前逐字一致。
    */
   onDegraded?(notice: FormatDegradationNotice): void;
 }

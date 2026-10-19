@@ -201,13 +201,10 @@ export function resetFormatNoticeLedger(): void {
   sessionLedger.clear();
 }
 
-/** 只读读数：当前台账里有多少个身份说过话（测试与排障用，不许拿它做判定分支） */
-export function formatNoticeLedgerSize(): number {
-  return sessionLedger.size;
-}
-
-/** 文案表的闭集读数（静态闸拿它对照 `where` 的联合类型，少一格即红） */
-export function formatDegradationCopyTable(): Record<FormatWhere, Record<FormatStage, string>> {
+/** 文案表的闭集读数（静态闸拿它对照 `where` 的联合类型，少一格即红；只读视图，改不动本体） */
+export function formatDegradationCopyTable(): Readonly<
+  Record<FormatWhere, Readonly<Record<FormatStage, string>>>
+> {
   return NOTICE_TEXT;
 }
 

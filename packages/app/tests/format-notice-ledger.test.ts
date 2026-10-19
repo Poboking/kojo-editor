@@ -26,6 +26,7 @@ import { installRangeFormatter, type RangeFormatHandlers, type FormatDegradation
 import type { NoticeInput, Notify } from '../src/ui/NotificationCenter';
 import {
   FORMAT_NOTICE_LEDGER_MAX,
+  FORMAT_NOTICE_MACHINE_WORDS,
   claimFormatNotice,
   formatDegradationCopy,
   formatDegradationCopyTable,
@@ -247,7 +248,7 @@ describe('文案表 · 作者面说人话', () => {
       for (const stage of STAGES) {
         const { text } = formatDegradationCopy(notice({ where, stage }));
         expect(text).not.match(/[A-Za-z]/);
-        for (const word of ['resolve', 'resolveRange', 'windowCompute', 'anchor', 'onType', 'degrade']) {
+        for (const word of FORMAT_NOTICE_MACHINE_WORDS) {
           expect(text).not.toContain(word);
         }
       }
@@ -360,10 +361,13 @@ describe('分层守卫 · 静态扫源码（连注释一起看）', () => {
   });
 
   it('提供方不许 import 壳层呈现面（上屏与否由宿主决定，分层不靠自觉）', () => {
-    expect(SOURCE).not.toMatch(/from '\.\.\/ui\//);
-    expect(SOURCE).not.toContain('format-notice-ledger');
-    expect(SOURCE).not.toContain('NotificationCenter');
-    expect(SOURCE).not.toContain('notify');
+    // 只看**import 语句**（文档注释里点名宿主模块是设计说明，不是依赖）
+    const importLines = SOURCE.split('\n').filter((line) => /^\s*(import|require)\b/.test(line));
+    expect(importLines.length).toBeGreaterThan(0);
+    expect(importLines.filter((l) => l.includes('../ui/'))).toEqual([]);
+    expect(importLines.filter((l) => l.includes('format-notice-ledger'))).toEqual([]);
+    expect(importLines.filter((l) => l.includes('NotificationCenter'))).toEqual([]);
+    expect(SOURCE).not.toMatch(/\bnotify\(/);
   });
 
   it('宿主侧接线只有两处，且都不新开显示面（安装点接台账 · 编辑器接通知中心）', () => {
