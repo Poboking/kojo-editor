@@ -25,7 +25,7 @@ import {
   GLASS_TRANSPARENCY_STEP,
   stepGlassTransparencyPref,
 } from './glass-pref';
-import { THEME_IDS, setThemePref, type ThemePref } from './theme-pref';
+import { THEME_IDS, setFollowSystem, setThemeChoice, useThemeChoice, useThemePref, type ThemePref } from './theme-pref';
 import {
   loadLayoutPref,
   saveColumnSelectionPref,
@@ -68,6 +68,9 @@ import {
 } from './editor-display-prefs';
 import { isComposingEvent } from './shell-keys';
 import '../settings-search.css';
+// 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
+// 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
+import './settings-appearance.css';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -211,7 +214,6 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     zenLimitWidth,
     dispatch,
     onResetLayout,
-    themePref,
     motionPref,
     commitMotionPref,
     panelVirtualize,
@@ -326,28 +328,10 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
         /* 动效（UI-5）：应用内的降噪开关，独立于系统级 prefers-reduced-motion */
         <div className="settings-group">
           <div role="heading" aria-level={4} className="settings-group-title">外观</div>
-          {/* 主题（2026-10-17 主题系统）：分段单选，缺省深色。翻档即写 data-theme、
-              全场 token 当场重算（与动效/毛玻璃同款即时生效），只改显示、不动文件。 */}
-          <div className="settings-row static" data-settings-key="appearance.theme">
-            <span className="theme-segment" role="radiogroup" aria-label="主题">
-              {THEME_IDS.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="radio"
-                  aria-checked={themePref === id}
-                  className={`theme-seg-btn${themePref === id ? ' on' : ''}`}
-                  onClick={() => setThemePref(id)}
-                >
-                  {THEME_LABELS[id]}
-                </button>
-              ))}
-            </span>
-            <span>
-              主题
-              <span className="settings-hint">深色为缺省（蓝灰），另有浅色、薄荷暗色；一翻即全场生效，只改显示、不动文件</span>
-            </span>
-          </div>
+          {/* 主题（主题系统 2026-10-17；2026-10 批升级为「带色板预览的选择卡 + 跟随系统」）：
+              整块走自订阅的 `ThemePickerSection`（照 `TreeSitterRow` / `LayoutPrefRows` 先例，
+              读与写就地走 theme-pref 的 localStorage 真源，不占壳层 props 镜像）。 */}
+          <ThemePickerSection />
           <label className="settings-row" data-settings-key="appearance.motion">
             <Switch
               checked={motionPref === 'reduced'}
@@ -817,6 +801,69 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     },
   ];
 };
+
+/**
+ * 外观页的主题一行（2026-10 批：预览卡 + 跟随系统，替换掉原先的纯文字段控）。
+ *
+ * 两个读数都**就地自订阅** `theme-pref.ts`（房规先例见 `TreeSitterRow` / `LayoutPrefRows`：
+ * 本线文件权限不覆盖壳层，且这里需要两枚值——落盘**选择**（含 'system'，决定卡的勾选与
+ * 开关态）与解析后的**生效档**（跟随系统时摊开"现在是深色还是浅色"），单枚 props 镜像装不下）：
+ * 写也只走偏好侧唯一入口——点卡 = 手选该档并同步更新手选备份；关开关 = 还原最近一次手选
+ * （薄荷作为手选同样能被还原，它只是不参与系统深浅的回退）。
+ * 配色分层见 `settings-appearance.css`：卡面 = 被预览档的代表色字面（跟着当前主题走就永远
+ * 只像现在这一档，预览失去意义）；卡框 / 标签 / 选中环 = 当前主题 token，三档各自 AA。
+ */
+function ThemePickerSection(): ReactElement {
+  const choice = useThemeChoice();
+  const active = useThemePref();
+  const following = choice === 'system';
+  return (
+    <div className="theme-picker" data-settings-key="appearance.theme">
+      <div className="theme-picker-head">
+        <span className="theme-picker-title">主题</span>
+        <span className="settings-hint">
+          {following
+            ? `跟随系统深浅，当前生效：${THEME_LABELS[active]}；点任意一张卡即回到手动选择`
+            : '点卡片换档，全场立即生效；只改显示、不动文件'}
+        </span>
+      </div>
+      <div className="theme-cards" role="radiogroup" aria-label="主题">
+        {THEME_IDS.map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={choice === id}
+            className={`theme-card${choice === id ? ' is-selected' : ''}`}
+            data-theme-card={id}
+            onClick={() => setThemeChoice(id)}
+          >
+            {/* 预览画面：一小块"纸面 + 两行字 + 一条高亮"——纯几何小块，读屏跳过 */}
+            <span className="theme-card-preview" aria-hidden="true">
+              <span className="theme-card-line theme-card-line-wide" />
+              <span className="theme-card-line theme-card-line-accent" />
+              <span className="theme-card-line theme-card-line-dim" />
+            </span>
+            <span className="theme-card-name">
+              {THEME_LABELS[id]}
+              {following && active === id ? <span className="theme-card-now">当前</span> : null}
+            </span>
+          </button>
+        ))}
+      </div>
+      <label className="settings-row" data-settings-key="appearance.followSystem">
+        <Switch checked={following} onChange={setFollowSystem} label="跟随系统" />
+        <span>
+          跟随系统
+          <span className="settings-hint">
+            打开后按系统的深浅自动在深色 / 浅色之间切换，你在系统里改主题，这里当场跟着换；
+            薄荷只选手动出现，不会跟着系统切过去。关掉即回到最近一次手动选的档位。只改显示、不动文件
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
 
 /**
  * 结构解析器那一行（TSIT-M1，实验特性）。
