@@ -161,6 +161,25 @@
 | **`GameAdapter.scaffold?()` 契约** | ✅ 已兑现（2026-10-19） | 该契约位（落盘态 `{createdFiles, report}`）**此前两个 adapter 都是空的**。共享 helper `writeScaffoldFiles`（逐字节写、不覆盖、可只写点名文件）+ 两 adapter 各自的落点口径：eraTW 落角色个人口上目录、eraAkumaMaid 落游戏根子树（`ERB/EVENT_K/<n>/` + `CSV/CHARA/`）——**照搬 eraTW 的落点会把文件铺错层**，这是两个游戏的真实差异。7 条契约测试钉住落点 / 不覆盖 / `faces` 筛选 / CSV 单 BOM |
 | sav 接入 | ⏳ 远期 | 本游戏无 `sav/`，不做 |
 
+**P5 落地实况（2026-10-19，用户指令「填补空缺 1~3,5」）**——P4 收口后按 eratw-adapter
+逐项对表盘出的缺口，本批清掉 1~3 与 5（教程内容另议）：
+
+| P5 子项 | 状态 | 落地形态 |
+|---|---|---|
+| `watch-scope` / `search-scope` 上移共享层 | ✅ 已交付 | 两者本就零游戏知识（只吃契约字段 `CharaInfo.kojoDir`），P4-2 被「整文件 grep 命中数」误挡在外——**命中全在注释里**。上移 `kojo-project-kit` 后 AM 侧接线：注册 `search.scope`（下拉可按角色收窄检索，此前只能在整棵树搜）+ 订阅 `file.changed`（此前**零订阅** ⇒ 外部往工作区丢文件时面板不刷新，用户感知是「面板显示不对但重开就好」） |
+| `kojoLibraryTable`（函数中文化） | ✅ 已交付 | 新 `src/library-table.ts`，**45 条**。语料普查：`ERB/EVENT_K/` 558 份口上文件；基础库（`@` 定义不在口上域）301 份 / 1,900 个定义；口上域真实调用到的基础库函数 153 条，取高频且语义可核的 45 条。**eraTW 的 138 条一条都不能平移**（本游戏是日文原版，命名体系完全不同：`TEXTR` / `COND` / `FIRSTCOM` 一族） |
+| `kojoMutatorTable`（数值增减） | ✅ 已交付（**含契约扩展**） | 5 族 `CFLAG` / `BASE` / `EXP` / `PALAM` / `ABL`。关键事实：本游戏**零个增减封装函数**（`CHANGE_CFLAG` / `BUFF_BASE` 全语料 0 处），增减一律直写 `族:对象:槽 += n` ⇒ 契约 `KojoMutatorSpec` 由单接口扩为 `form: 'call' | 'assign'` 判别联合（`assign` 只需 `template` + `slotMode`）。**硬填 `engine` 只会降出一条调不存在函数的 `CALL`**，这不是"该族没登记"而是该游戏的增减语义不经过函数。不收 `JUEL` / `SOURCE`（一维，无「对象」段）与 `TALENT`（位标志，改法是置位不是加减） |
+| face-templates 增量 12 面 | ✅ 已交付 | 10 → **22 面**：客人 / 指令后 / 问候 / 日常指令 / 日期 / 愿望 / 商店 / 交流 / 角色介绍 / 射精后 / 对方射精前 / 大喜欢。逐面复核路由后发现两处「域与文件不重合」：`愿望` 属日常域却定义在 `_SHOP` 文件、`角色介绍` 属日常域却住在主文件；另发现**第三个路由文件** `EVENT_K_COMM.ERB`（`交流` 独占）。`_ADDSELECT`（73 处）是兄弟函数不是编号尾，不声明 `indexKind` |
+| `stateLinePresets`（条件矩阵剧情线） | ✅ 已交付 | 四条：好感（`CFLAG:好感度`/`2`）、恋慕（`TALENT:恋慕`/`150`）、相愛（`TALENT:相思相愛`/`152`）、生育（`TALENT:出産経験`/`22`）。选键口径 = **语料条件位出现次数**（333 / 16,934 / 805 / 269）；特意弃掉 `片思い`（条件位 **0** 处）与 `同棲`（`EVENT_K/` **0** 处）——收进来只会得到一个永远筛不出行的按钮 |
+| 教程内容 | ⏳ 另行立批 | 结构已就绪（`openTutorial` 可选 ⇒ 不传即整块不渲染），缺的是面向中文社区的内容本身（eratw 有 7 个 `tutorial-*` 模块） |
+| sav 接入 | ⏳ 远期 | 同 P4：本游戏无 `sav/`，不做 |
+
+读数：全量 **8438 passed / 49 skipped（8487）· 0 failed · 486 文件** · root + app 双 typecheck 0 ·
+`audit:decoupling` ✅ 20 插件 A–D。新增用例 33 条（library-table 9 / mutator-table 8 /
+增减直写 11 / 接线 5）+ scope 拆分 4 条。拆两段读：本批自身 **+37 条 / +4 文件**（rebase 前于旧基
+实测，旧基读数 8245/49〔8294〕· 475 文件），rebase 带入 master `e2da2ef` 的 18 个上游提交再
+**+193 条 / +11 文件**，相加即得上行。
+
 ---
 
 ## 六、风险与对策

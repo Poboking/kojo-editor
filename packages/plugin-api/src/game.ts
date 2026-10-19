@@ -597,21 +597,45 @@ export interface KojoLibraryTable {
  * 「数值增减」族表规格（游戏知识，只住 adapter）。
  *
  * 与 `KojoLibraryTable` 同形（同一 seam：adapter 建一张**纯数据表**、糖层只查不解释）：
- * 把「变量族头」（作者写的 `族:对象:槽` 里的族头）映射到"改该族某个槽"的**目标函数 +
- * 参数序**。数值增减糖（动词 + `族:对象:槽` ± 增量）据此降成 `CALL <engine>(…)`；
- * 未登记族 / 变量槽形态不符**一律 fail-closed**（查不到即不降糖、报诊断，绝不猜）。
+ * 把「变量族头」（作者写的 `族:对象:槽` 里的族头）映射到"改该族某个槽"的**产物形态**。
+ * 数值增减糖（动词 + `族:对象:槽` ± 增量）据此降糖；未登记族 / 变量槽形态不符
+ * **一律 fail-closed**（查不到即不降糖、报诊断，绝不猜）。
+ *
+ * **两种产物形态**（`form` 判别，二选一）：
+ * - `'call'`：游戏提供了「增减封装函数」⇒ 产物 `CALL <engine>(…)`，实参序由 `argOrder` 声明；
+ * - `'assign'`：游戏把增减**直写在变量上**（如 `CFLAG:对象:槽 += n`），没有任何封装函数
+ *   可调 ⇒ 产物 `<template> <运算符> <增量>`。这不是"该族没登记"，而是该游戏的增减语义
+ *   本来就不经过函数——硬造一条 `CALL` 只会调到一个不存在的函数。
  */
-export interface KojoMutatorSpec {
-  /** 目标原生 ERB 函数名（产物形 = `CALL <engine>(…)`）。 */
+export type KojoMutatorSpec = KojoMutatorCallSpec | KojoMutatorAssignSpec;
+
+/**
+ * 变量槽（`族:对象:槽` 的第三段）的取值形态：
+ * - `'number'`：只接受数字下标（写了名 ⇒ 不降糖、报诊断，fail-closed）；
+ * - `'name-or-number'`：名或数字都**原样**透传（该族接受名，由语料实证）。
+ */
+export type MutatorSlotMode = 'number' | 'name-or-number';
+
+/** `form: 'call'`：降成一条 `CALL <engine>(…)`。 */
+export interface KojoMutatorCallSpec {
+  readonly form: 'call';
+  /** 目标原生 ERB 函数名。 */
   readonly engine: string;
   /** 三个实参各取哪一段（顺序 = 调用实参顺序）：表层 `族:对象:槽` 三段的角色 + 增量。 */
   readonly argOrder: readonly [MutatorArgRole, MutatorArgRole, MutatorArgRole];
+  readonly slotMode: MutatorSlotMode;
+}
+
+/** `form: 'assign'`：降成一条直写赋值（该游戏没有增减封装函数）。 */
+export interface KojoMutatorAssignSpec {
+  readonly form: 'assign';
   /**
-   * 变量槽（`族:对象:槽` 的第三段）取值形态：
-   * - `'number'`：只接受数字下标（写了名 ⇒ 不降糖、报诊断，fail-closed）；
-   * - `'name-or-number'`：名或数字都**原样**传（该族接受名，由语料实证）。
+   * 产物左值模板：`{family}` / `{object}` / `{slot}` 三个占位按表层三段替换，其余字符原样。
+   * 例：`'CFLAG:{object}:{slot}'`。族头别名也靠它（`'ABL:{object}:{slot}'` 可把作者写的
+   * 中文族头映射到原生族，此时 `{family}` 不出现）。
    */
-  readonly slotMode: 'number' | 'name-or-number';
+  readonly template: string;
+  readonly slotMode: MutatorSlotMode;
 }
 
 /** 增减实参角色：`对象` / `变量槽` / `增量`（与表层 `族:对象:槽` + 右值一一对应）。 */
@@ -717,7 +741,7 @@ export interface GameAdapter {
    */
   readonly kojoLibraryTable?: KojoLibraryTable;
   /**
-   * 数值增减族表（可选——变量族头 ↔ 目标函数 + 参数序）。
+   * 数值增减族表（可选——变量族头 ↔ **产物形态**：`CALL` 封装调用，或直写赋值）。
    * 静态、手工维护（不依赖 `loadProject`）；糖层只查表不解释，未登记族 / 变量槽形态
    * 不符**不降糖并报诊断**（fail-closed，绝不猜）。
    */

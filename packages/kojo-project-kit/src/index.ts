@@ -143,3 +143,10 @@ export type { WriteScaffoldInput } from './scaffold-writer';
 
 /* ---- 教程语义 id（内容由各 adapter 提供） ---- */
 export type { TutorialId } from './tutorial';
+
+/* ---- 外部改动归属（`file.changed` → 该重列哪个目录；只认路径形状） ---- */
+export { workspaceChangeOf } from './watch-scope';
+export type { WorkspaceChange } from './watch-scope';
+
+/* ---- 检索范围（`search.scope` 槽的候选投影；判据是契约字段 `kojoDir`） ---- */
+export { charaSearchScopeOptions } from './search-scope';

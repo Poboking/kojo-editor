@@ -9,9 +9,9 @@
  * 1. AM 是**后缀式命名**（`{面}_K{n}`），无 `{t}` 家族段、无 `{i}` 编号槽、
  *    无 `${com}` 上下文段 ⇒ 本文件用「全表扫描无占位残迹」钉死这三件事，
  *    而非逐面钉 `{i}` 字段值（eratw 那边是逐面钉 `indexKind`/`autoIndex`）。
- * 2. AM 首批只收 10 个面（调教主链路 9 + 日常域 1）⇒ 未收录关键字
- *    （eraTW 面 + AM 可增量面）必须在表外，保证 `timing-face-unknown`
- *    fail-closed 不产半成品。
+ * 2. AM 共收 22 个面（首批 10 = 调教主链路 9 + 日常域 1；2026-10-19 P5 增量批 12）
+ *    ⇒ 未收录关键字（eraTW 面 + AM 确实没有的面）必须在表外，保证
+ *    `timing-face-unknown` fail-closed 不产半成品。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -39,9 +39,10 @@ function renderUserFn(template: string, charNo: string, name: string): string {
 }
 
 describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () => {
-  it('首批收录面恰好 10 个（调教主链路 9 + 日常域 1），键集合逐字钉死', () => {
+  it('收录面恰好 22 个（首批 10 + 2026-10-19 增量 12），键集合逐字钉死', () => {
     expect(Object.keys(table.faces).sort()).toEqual(
       [
+        // 首批：调教主链路 9 + 日常域 1
         '指令',
         '指令前',
         '参数变动',
@@ -52,6 +53,19 @@ describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () =
         '绝顶',
         '射精与绝顶',
         '日常',
+        // 2026-10-19 P5 增量批 12
+        '客人',
+        '指令后',
+        '问候',
+        '日常指令',
+        '日期',
+        '愿望',
+        '商店',
+        '交流',
+        '角色介绍',
+        '射精后',
+        '对方射精前',
+        '大喜欢',
       ].sort(),
     );
   });
@@ -78,6 +92,31 @@ describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () =
       射精与绝顶: 'KOJO_MESSAGE_SAMEN_AND_EXTACY_K{n}',
       // EVENT_K_DAILY.ERB:56 `TRYCALLFORM KOJO_DAILY_K{NO:TARGET}, STR:イベント名`
       日常: 'KOJO_DAILY_K{n}',
+      // ---- 2026-10-19 P5 增量批（路由行号即证据）----
+      // EVENT_K.ERB:525（两条路由 `{NO:ASSI}` / `{NO:TARGET}`）
+      客人: 'KOJO_GUEST_K{n}',
+      // EVENT_K.ERB:55
+      指令后: 'KOJO_ENDCOM_K{n}',
+      // EVENT_K_DAILY.ERB:149
+      问候: 'KOJO_GREETING_K{n}',
+      // EVENT_K_DAILY.ERB:279
+      日常指令: 'KOJO_DAILYCOM_K{n}',
+      // EVENT_K_DAILY.ERB:380（另有 `_ADDSELECT` 兄弟函数，不是本面的编号尾）
+      日期: 'KOJO_DATE_K{n}',
+      // EVENT_K_DAILY.ERB:412
+      愿望: 'KOJO_WISH_K{n}',
+      // EVENT_K_DAILY.ERB:436
+      商店: 'KOJO_SHOP_K{n}',
+      // EVENT_K_COMM.ERB:36（第三个路由文件）
+      交流: 'KOJO_COMM_K{n}',
+      // EVENT_K_DAILY.ERB:15 —— 全表唯一不带 `KOJO_` 前缀的面
+      角色介绍: 'EVENT_PROFILE_K{n}',
+      // EVENT_K.ERB:399（射精箇所選択**直後**；`射精` 是直前，两面不同）
+      射精后: 'KOJO_MESSAGE_AFTERSHOOTCHANGE_K{n}',
+      // EVENT_K.ERB:417（TARGET 射精直前）
+      对方射精前: 'KOJO_MESSAGE_BEFORE_TARGETSHOOT_K{n}',
+      // EVENT_K.ERB:362（caller 只有 TRAIN/EVENT_SHOOT.ERB:1237）
+      大喜欢: 'KOJO_MESSAGE_DAISYUKI_K{n}',
     };
     for (const [face, template] of Object.entries(expectFaces)) {
       expect(table.faces[face], `分野「${face}」`).toBeDefined();
@@ -101,6 +140,9 @@ describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () =
       ['绝顶', '65', 'KOJO_MESSAGE_COMING_K65'], // EVENT_K65.ERB:630（9 实装角色之一）
       ['射精与绝顶', '1', 'KOJO_MESSAGE_SAMEN_AND_EXTACY_K1'], // EVENT_K1.ERB:3750
       ['日常', '1', 'KOJO_DAILY_K1'], // EVENT_K1_DAILY.ERB:245
+      // 增量批抽样：一个普通面 + 一个"前缀不同"的面
+      ['交流', '1', 'KOJO_COMM_K1'], // EVENT_K1_COMM.ERB:6
+      ['角色介绍', '1', 'EVENT_PROFILE_K1'], // EVENT_K1.ERB:69
     ];
     for (const [face, charNo, expected] of expectNames) {
       expect(buildName(table.faces[face]!.template, charNo), `分野「${face}」× K${charNo}`).toBe(expected);
@@ -143,9 +185,9 @@ describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () =
     }
   });
 
-  it('未收录的分野关键字不在表内（eraTW 面 + AM 可增量面 → timing-face-unknown fail-closed）', () => {
+  it('未收录的分野关键字不在表内（eraTW 独有面 → timing-face-unknown fail-closed）', () => {
     const absent: Record<string, string> = {
-      // eraTW 有、AM 首批不收（形态不同或非主链路）
+      // eraTW 有、AM 没有对应路由面（每条都经语料核对过"确实不存在"）
       初见: 'eraTW 附录 C #1（AM 无 ENCOUNTER 路由面）',
       礼物: 'eraTW A4 补面',
       触手: 'eraTW A4 补面（AM PALAMCNG 合流，无独立触手段）',
@@ -166,22 +208,10 @@ describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () =
       绝顶恶作剧: 'eraTW P-6 子面',
       调教后: 'eraTW P-6 子面',
       寸止: 'eraTW P-6 子面',
-      角色介绍: 'eraTW A4 补面',
       房间描述: 'eraTW A4 补面',
       游玩指南: 'eraTW A4 补面',
       游玩指南存在: 'eraTW A4 补面',
       游玩指南结果: 'eraTW A4 补面',
-      // AM 语料确有、按增量交付契约留待后批（证据同级，见 src 头注「可增量清单」）
-      客人: 'EVENT_K.ERB:525 KOJO_GUEST_K',
-      指令后: 'EVENT_K.ERB:55 KOJO_ENDCOM_K',
-      大喜欢: 'EVENT_K.ERB:362 KOJO_MESSAGE_DAISYUKI_K',
-      射精后: 'EVENT_K.ERB:399 KOJO_MESSAGE_AFTERSHOOTCHANGE_K',
-      对方射精前: 'EVENT_K.ERB:417 KOJO_MESSAGE_BEFORE_TARGETSHOOT_K',
-      问候: 'EVENT_K_DAILY.ERB:149 KOJO_GREETING_K',
-      日常指令: 'EVENT_K_DAILY.ERB:279 KOJO_DAILYCOM_K',
-      日期: 'EVENT_K_DAILY.ERB:380 KOJO_DATE_K',
-      愿望: 'EVENT_K_DAILY.ERB:412 KOJO_WISH_K',
-      商店: 'EVENT_K_DAILY.ERB:436 KOJO_SHOP_K',
     };
     for (const [face, why] of Object.entries(absent)) {
       expect(table.faces[face], `分野「${face}」不应收录（${why}）`).toBeUndefined();
@@ -208,9 +238,11 @@ describe('KojoFaceTable · 分野模板（eraAkumaMaid 后缀式命名）', () =
     expect(renderUserFn(tpl, '29', 'LONG_ED1')).toBe('K29_LONG_ED1'); // EVENT_K29_LONG.ERB:7
   });
 
-  it('表形态自洽：每个模板都是 `KOJO_…_K{n}` 后缀式、且 `{n}` 恰好出现一次', () => {
+  it('表形态自洽：每个模板都是 `{名}_K{n}` 后缀式、且 `{n}` 恰好出现一次', () => {
     for (const [face, spec] of Object.entries(table.faces)) {
-      expect(spec.template, `分野「${face}」的模板形态`).toMatch(/^KOJO_[A-Z0-9_]+_K\{n\}$/);
+      // 前缀只有两种：`KOJO_…`（21 面）与 `EVENT_PROFILE`（角色介绍——本表唯一不带
+      // `KOJO_` 前缀的面，语料就是这个名字，不是笔误）。
+      expect(spec.template, `分野「${face}」的模板形态`).toMatch(/^(KOJO|EVENT)_[A-Z0-9_]+_K\{n\}$/);
       expect(spec.template.split('{n}').length - 1, `分野「${face}」的 {n} 个数`).toBe(1);
     }
   });

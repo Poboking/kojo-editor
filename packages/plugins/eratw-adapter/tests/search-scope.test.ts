@@ -1,20 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  CharaInfo,
-  GameProject,
-  PluginContext,
-  SearchScopeContribution,
-  SearchScopeOption,
-} from '@kojo/plugin-api';
+import type { CharaInfo, GameProject, PluginContext, SearchScopeContribution } from '@kojo/plugin-api';
 import { createEratwAdapterPlugin } from '../src/plugin';
-import { charaSearchScopeOptions } from '../src/search-scope';
 
 /**
- * 检索范围提供方（C3 领域限定检索批）。
+ * 检索范围 · **接线面**（2026-10-19 AM-1 P5 批拆分）。
  *
- * 钉两件容易写歪的事：
- * 1. **判据只有一条**：范围 = `charaIndex[].kojoDir`，不解析文件名、不重算角色名单；
- * 2. **只认本项目**：`adapterId` 不是自己的 ⇒ 空候选（宿主据此不画选择器 = 新功能默认关）。
+ * 纯投影（角色清单 → 候选）的判据已上移到 `@kojo/kojo-project-kit`，其单测在那边；
+ * 本文件只钉本 adapter 自己那半句——**只认本项目**（`adapterId` 不是自己的 ⇒ 空候选
+ * ⇒ 宿主不画选择器 = 新功能默认关）。这一句是宿主组合根职责，不属共享层。
+ *
+ * 为什么拆：搬走判据不等于搬走接线。两个 adapter 各注册一个 `search.scope` 贡献，
+ * 谁该在什么项目下出候选，是各游戏自己的事。
  */
 
 const chara = (no: number, name: string, kojoDir?: string): CharaInfo =>
@@ -32,29 +28,6 @@ function projectWith(chars: readonly CharaInfo[], adapterId = 'eratw'): GameProj
   } as unknown as GameProject;
 }
 
-describe('检索范围 · 纯投影（角色清单 → 候选）', () => {
-  it('按编号升序出候选：标签 #编号 名字，检索根 = kojoDir 本身', () => {
-    const options = charaSearchScopeOptions([
-      chara(11, '雾雨 魔理沙', '/game/kojo/011 Marisa [魔理沙]'),
-      chara(1, '博丽 灵梦', '/game/kojo/001 Reimu [霊夢]'),
-    ]);
-    expect(options.map((o: SearchScopeOption) => o.id)).toEqual(['chara:1', 'chara:11']);
-    expect(options[0]!.label).toBe('#1 博丽 灵梦');
-    expect(options[0]!.detail).toBe('001 Reimu [霊夢]');
-    expect(options[0]!.roots).toEqual(['/game/kojo/001 Reimu [霊夢]']);
-  });
-
-  it('没有口上目录的角色不产候选（没有目录可限定，不猜一个根给他）', () => {
-    expect(charaSearchScopeOptions([chara(7, '无目录角色')])).toEqual([]);
-  });
-
-  it('空名单 → 空候选（宿主据此整行不画）', () => {
-    expect(charaSearchScopeOptions([])).toEqual([]);
-  });
-});
-
-/* ------------------- 经槽位注册的真实提供方（接线面） ------------------- */
-
 function activateScopeProvider(): SearchScopeContribution {
   const collected: SearchScopeContribution[] = [];
   const ctx = {
@@ -62,7 +35,8 @@ function activateScopeProvider(): SearchScopeContribution {
     log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
     bus: { emit: () => {}, on: () => () => {} },
     onDispose: () => {},
-    inject: <T,>(_key: string): T => ({ list: async () => [], projectDir: () => '/ws', current: () => null }) as T,
+    inject: <T,>(_key: string): T =>
+      ({ list: async () => [], projectDir: () => '/ws', current: () => null }) as T,
     slots: {
       register: (slot: string, item: SearchScopeContribution) => {
         if (slot === 'search.scope') collected.push(item);

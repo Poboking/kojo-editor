@@ -49,6 +49,8 @@ export {
   ERATW_COUNTER_ENTRIES,
   type EratwCounterEntry,
 } from './counter-table';
-// C3 批（1016 独占追加区块；勿在他处重排）：检索范围提供方——判据（角色→目录）只住本包，
-// 宿主全文检索只消费「标签 + 检索根」两样泛型事实。导出纯函数供单测直接钉判据。
-export { charaSearchScopeOptions } from './search-scope';
+// C3 批（1016 独占追加区块；勿在他处重排）：检索范围提供方——判据（角色→目录）只住
+// 共享层 `@kojo/kojo-project-kit`（2026-10-19 AM-1 P5 批上移：它只吃契约字段
+// `CharaInfo.kojoDir`，无一句游戏名词），宿主全文检索只消费「标签 + 检索根」两样
+// 泛型事实。此处仍转出，是为了本包既有公共 API 不因搬家而变。
+export { charaSearchScopeOptions } from '@kojo/kojo-project-kit';
