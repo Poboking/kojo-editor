@@ -6,8 +6,11 @@
  * - **块头** = 以全角 `：`（或等价半角 `:`）结尾的行；块体缩进必须**更深**；
  * - **缩进**：TAB 或 N 个空格（统一折算为缩进层级）；缩进异常报 `indent-mismatch`
  *   并**阻止编译**（规范 §5.3：不生成半成品 ERB）；
- * - **原生直通**：全大写指令行 / `$标签` → `RawLine`；行首 `@` → `RawFunctionBlock`
- *   （直到下一个 `@` 行或文件末尾，整块原样透传，规范 §3.10）；
+ * - **原生直通**：全大写指令行 / `$标签` / `#DIM` 族预处理声明 → `RawLine`；行首 `@` → `RawFunctionBlock`
+ *   （直到下一个 `@` 行或文件末尾，整块原样透传，规范 §3.10）。
+ * - **停用块**：整行恰为 `[SKIPSTART]` / `[SKIPEND]` → `skipStart` / `skipEnd`（严格等值，同上游
+ *   `erb-parser/scanner.ts` 判据）；词法层只认标记行，块体配对与逐行透传在 `parser.readSkipBlock`，
+ *   产物同样是一枚 `RawFunctionBlock`（引擎不编译的死区，一个字节都不解释）。
  * - **注释** `;` 起至行尾；编辑器显示灰色，不进 AST 正文（但进 `loc`）。
  */
 
@@ -45,6 +48,7 @@ import {
   blockEndWord,
   canonicalTimingParamName,
   CONT_MARKS,
+  DIM_DIRECTIVE_RE,
   HEAD_DECL_KEYS,
   FULLWIDTH_SPACE,
   FULLWIDTH_COLON,
@@ -248,6 +252,14 @@ export type LineClass =
   | { kind: 'comment' }
   | { kind: 'rawLine'; text: string }
   | { kind: 'rawBlockStart' }
+  /**
+   * `[SKIPSTART]` / `[SKIPEND]` 成对停用块的**标记行**（引擎侧死区的头与尾）。
+   * 词法层只认这两枚记号本身、不认块体——"块体属于哪个头"是配对现场的事实，归 parser
+   * （`readSkipBlock`）。判据逐字等于上游 `erb-parser/src/scanner.ts` 的
+   * `trimmed === '[SKIPSTART]'`，一字不许差（取证与不改的理由见 scanner 那段注释）。
+   */
+  | { kind: 'skipStart' }
+  | { kind: 'skipEnd' }
   | { kind: 'headDecl'; key: KeywordId; value: string }
   | {
       kind: 'aliasDecl';
@@ -618,7 +630,7 @@ export const NAME_TOKEN_CHARS = `0-9A-Za-z_${CJK_RANGES}`;
  * 行分类（纯函数；不做配对）。
  *
  * 判定顺序即优先级（照抄规范 §3.10 + §3.3）：
- * 原生直通 → 头部/别名 → 块头 → 表达式头 → 赋值 → 文本。
+ * 停用块标记 → 原生直通 → 头部/别名 → 块头 → 表达式头 → 赋值 → 文本。
  * 顺序很重要：`IF TFLAG:193 = 0` 必须走原生直通而非"如果"糖（大小写不同，
  * 天然区分；但 `CALL X` 之类的中文里不可能出现）。
  */
@@ -628,8 +640,21 @@ export function classifyLine(line: LogicalLine): LineClass {
   if (content.startsWith(';')) return { kind: 'comment' };
   if (content.startsWith('@')) return { kind: 'rawBlockStart' };
 
+  // ---- 成对停用块标记（行）----
+  // **严格等值**，先于规则池标签与文本兜底：`matchRuleTag` 已主动把纯大写方括号记号排除在标签外
+  // （`[SKIPSTART]` 不当 `[条件]`），但排除后它会一路兜底成**台词**——把作者标了"引擎不编译的死区"
+  // 打印给玩家（违铁律 4）。这里截住它，配对与逐行透传归 parser。
+  // 判据逐字取自上游 `erb-parser/src/scanner.ts:308/312` 的 `trimmed === '[SKIPSTART]'`：
+  // 大小写 / 带尾注变体取证为语料 0 行，放开只会改写"这段是不是死代码"而本仓没有引擎侧依据 ⇒ 不猜。
+  // `content` 已是 `contentOf` 的产物（去行首缩进 + 去行尾空白），与上游的 `line.trim()` 同一口径。
+  if (content === '[SKIPSTART]') return { kind: 'skipStart' };
+  if (content === '[SKIPEND]') return { kind: 'skipEnd' };
+
   // ---- 原生直通（行）----
-  if (RAW_INSTR_RE.test(content) || content.startsWith('$')) {
+  // `#DIM` 族预处理声明与全大写指令 / `$标签` 同走这一支：命中上游同源的 `DIM_DIRECTIVE_RE`
+  // 就把**整行原文**当原生直通行逐字节透传（修饰词 / 大小写 / 行尾注释一并带走，不解释、不降糖），
+  // 于是 `.kojo` 里怎么写、ERB 就怎么出。判据只此一条，见 `keywords.ts` 的 `DIM_DIRECTIVE_RE` 注释。
+  if (RAW_INSTR_RE.test(content) || content.startsWith('$') || DIM_DIRECTIVE_RE.test(content)) {
     return { kind: 'rawLine', text: content };
   }
 

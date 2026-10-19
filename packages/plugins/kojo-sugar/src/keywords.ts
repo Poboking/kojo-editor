@@ -210,7 +210,9 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   ['循环', 'block.loop'],
   ['循环结束', 'block.loopEnd'],
   // 出错处理块（`出错处理：` ⇄ `CATCH` … `ENDCATCH`）——只覆盖 CATCH 本体；
-  // TRY 系九枚（`TRYCGOTO` / `TRYCALLLIST` …）**无写形**，仍走 `未识别语句` 兜底。
+  // TRY 系九枚（`TRYCGOTO` / `TRYCALLLIST` …）**无写形**：只读面走
+  // `native-display/control.ts` 的中性显示形「试探 原形 <记号> <原文>」（词形不进本表，
+  // 因为登记进词表＝承诺写得回去），写形仍归本包。
   ['出错处理', 'block.catch'],
   ['出错处理结束', 'block.catchEnd'],
   // 数据表块（`数据表：` + `条目 <原文>` + `数据表结束` ⇄ `PRINTDATA` 族）。
@@ -527,6 +529,40 @@ export function operatorTable(): ReadonlyArray<readonly [string, string]> {
 
 /** `不在` 关键字（规范 §3.5：`X 不在 a 到 b` → `!(X >= a && X <= b)`） */
 export const NOTIN_KEYWORDS: readonly string[] = ['不在', 'notin'];
+
+/* ============ 预处理记号 `#DIM` 族：写形 = 原生记号逐字透传（判据与上游 erb-parser 同源） ============ */
+
+/**
+ * `#DIM` 族声明行的**识别谓词**（写侧唯一判据，逐字对齐上游 `erb-parser/scanner.ts` 的 `DIM_RE`
+ * 的**有效集**——即 `parseDimDeclaration` 真能取出名字的那批行）。
+ *
+ * - 成员全集 = `DIMSTR | DIMCHAR | DIMF | DIMS | DIM | DEFINE`，**长的在前**：
+ *   `DIM` 排在 `DIMF` 前时 `#DIMF x` 会被 `DIM` 分支吃掉 `F`（空白卡在 `F` 上 → 整条不匹配），
+ *   与上游注释同一条理由。
+ * - 大小写不敏感（上游 `/i`）。
+ * - 指令词后必须跟**空白 + 至少一个非空白**：`#DIM` 裸形 / 全空白正文与上游
+ *   `parseDimDeclaration`（取不到名字即 `null`）同判为"不是声明行"，不认。
+ *
+ * 本族是**文件级预处理记号**、不是作者自造的中文词形 ⇒ 只登记成识别谓词，**不进 `KEYWORDS`**
+ * （`KEYWORDS` 受发版覆盖率闸管辖，要求每个中文词形都在发版样例里真写过；`#DIM` 的写形就是
+ * 那枚原生记号本身）。写侧通路见 `lexer.classifyLine` 的原生直通分支：匹配本谓词的行按**原生
+ * 直通行逐字节透传**，`.kojo` 怎么写 ERB 就怎么出 ⇒ round-trip 天然逐字节相等；修饰词、大小写、
+ * 行尾注释一并原样带走，**不做第二种解释**（口径与上游"判据不动"一致，绝不另发明第三种）。
+ */
+export const DIM_DIRECTIVE_RE = /^#(?:DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+\S/i;
+
+/**
+ * `#DIM` 族声明行的前置修饰词（逐字对齐上游 `erb-parser/scanner.ts` 的 `DIM_MODIFIERS`）。
+ *
+ * 修饰词是声明行正文的一部分、写侧**逐字透传**、不参与产物构造；本表唯一的存在理由是把
+ * "哪些词算修饰词"钉在**上游同一处口径**——上游 `TEMP` **不在**表内（真语料 `#DIM TEMP, …` 的变量
+ * 名就叫 `TEMP`），漏记或多记都会让有人以为写形能吃掉/放过某个词。识别只用 `DIM_DIRECTIVE_RE`
+ * （整行透传），本表供跨包对账与后续需要按名剥离时用；不进 `KEYWORDS`（同 `DIM_DIRECTIVE_RE` 的理由）。
+ */
+export const DIM_MODIFIER_WORDS: readonly string[] = [
+  'CONST', 'SAVEDATA', 'GLOBAL', 'REF', 'NOINIT', 'CHARA',
+  'LOCAL', 'STATIC', 'DYNAMIC', 'OUT', 'CHARADATA',
+];
 
 /** 全角冒号（块头终止符，规范 §5.3） */
 export const FULLWIDTH_COLON = '：';
