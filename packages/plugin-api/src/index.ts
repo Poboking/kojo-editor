@@ -380,6 +380,8 @@ export {
   isVariableAlias,
   isVerifiedCandidate,
   isWritableAlias,
+  kojoMonacoExtensions,
+  KOJO_SOURCE_EXTENSION,
   FULLWIDTH_SPACE,
   fullwidthSpaceLines,
   resolveSugarTarget,

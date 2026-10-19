@@ -1,5 +1,5 @@
 import type { EditorSymbolLocation, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
-import { MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
+import { KOJO_SOURCE_EXTENSION, MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
 
 /**
  * **出现点台账**（W8 XLANG-RENAME，2026-10-17）——改名 / 查找引用 / code-lens /
@@ -39,8 +39,12 @@ import { MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
 /** 台账的语言轴（只有两值：原生方言面与语法糖源面；宿主不认识任何具体游戏方言） */
 export type ReferenceLanguage = 'erb' | 'kojo';
 
-/** `.kojo` 源扩展名（跨游戏共享术语，与 `ui/editor-model-pool` 的选语言判据同值） */
-export const KOJO_SOURCE_EXTENSION = '.kojo';
+/**
+ * `.kojo` 源扩展名——**清单住在契约层**（`plugin-api/sugar`），本行只是宿主侧的既有 import
+ * 点别名（DRIFT-APP 3，2026-10-19：Monaco 注册面的大小写派生物必须由同一份清单现算，
+ * 宿主再留一份字面量就成了第三处抄本）。
+ */
+export { KOJO_SOURCE_EXTENSION };
 
 /** 是否是 `.kojo` 源文件（宿主各处唯一判据，指回这里） */
 export function isKojoSourcePath(path: string): boolean {

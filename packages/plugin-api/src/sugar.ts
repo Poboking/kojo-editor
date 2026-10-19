@@ -1182,6 +1182,35 @@ export function resolveSugarTarget(sourcePath: string): string | null {
   return `${sourcePath.slice(0, sourcePath.length - m[0].length)}.ERB`;
 }
 
+/**
+ * 表层 DSL 的源扩展名（**契约层唯一清单**；DRIFT-APP 3，2026-10-19 上移）。
+ *
+ * `kojo` 是审计 A 钦定的跨游戏术语（不是某个游戏的领域知识），故这张清单住契约层，
+ * 与 `erb-ext.ts` 的方言清单平级。宿主侧（`app/ui/reference-utils`）指回这里，
+ * Monaco 注册面（`app/monaco/kojo-language`）指回 {@link kojoMonacoExtensions}——
+ * 改前注册处自己写着 `['.kojo']` 一份小抄，同一族文件的大写形态在编辑器与 Monaco
+ * 语言映射之间各说各话。
+ */
+export const KOJO_SOURCE_EXTENSION = '.kojo';
+
+/**
+ * Monaco 的 `extensions` 入参：把 {@link KOJO_SOURCE_EXTENSION} 展开成「原样 + 全大写」
+ * 两种写法——与 `erb-ext.erbMonacoExtensions` **同形态**（同一个理由：Monaco 的语言注册
+ * 按字面量匹配扩展名，只给小写会让盘上的大写文件落到别的语言）。
+ *
+ * 大小写形态是这里**现算的派生物**，不是第二处手抄：消费方不得在 app 里再写
+ * `['.kojo', '.KOJO']`，要加形态只改这一处。
+ *
+ * 缺省参数留给未来（同方言族那样）：传入别的清单即按同一规则展开，派生物仍只此一份。
+ */
+export function kojoMonacoExtensions(exts: readonly string[] = [KOJO_SOURCE_EXTENSION]): string[] {
+  const out: string[] = [];
+  for (const e of exts) {
+    out.push(e, e.toUpperCase());
+  }
+  return out;
+}
+
 /** 保存被阻止的原因（**闭集**；命名零游戏名词） */
 export type SugarSaveBlockReason =
   /** 源路径非 `.kojo` —— 无对应产物目标（如误对原生 `.ERB` 触发保存流程） */

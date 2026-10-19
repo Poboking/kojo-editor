@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
+import { kojoMonacoExtensions } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES, sugarEditorLexicon, SYSTEM_FUNCTION_ALIASES, sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
@@ -151,9 +152,14 @@ export const KOJO_TOKEN_TIERS: readonly KojoTokenTier[] = [
 export function registerKojoLanguage(monaco: typeof Monaco): void {
   if (monaco.languages.getLanguages().some((l) => l.id === KOJO_LANGUAGE_ID)) return;
 
+  // 扩展名映射与 ERB 侧**同一形态**（DRIFT-APP 3，2026-10-19）：清单只住在契约层那一份
+  // （`plugin-api/sugar.KOJO_SOURCE_EXTENSION`），大小写两种写法由 `kojoMonacoExtensions()`
+  // 现算派生——Monaco 按字面量匹配扩展名，盘上的大写形态也得命中。改前这里自己抄了一份
+  // 只含小写的清单，与 ERB 侧的派生形态分叉。本文件此后不得再出现任何扩展名字面量
+  // （守卫：`tests/kojo-extension-single-source.test.ts`）。
   monaco.languages.register({
     id: KOJO_LANGUAGE_ID,
-    extensions: ['.kojo'],
+    extensions: kojoMonacoExtensions(),
     aliases: ['kojo'],
   });
 
