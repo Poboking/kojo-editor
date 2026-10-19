@@ -124,8 +124,14 @@ export function fuzzLineStarts(text: string): number[] {
   return starts;
 }
 
-/** 按一步编辑把旧文本缝成新文本（父子唯一的"应用"口径） */
-export function applyFuzzEdit(text: string, edit: FuzzEdit): string {
+/**
+ * 按一步编辑把旧文本缝成新文本（父子唯一的"应用"口径）。
+ *
+ * 参数取**结构子集**（`offset/deleteCount/insert` 三格就是这条算式读的全部）：序列生成期先算出
+ * 未贴 `nextLength` 的那一枚编辑（`Omit<FuzzEdit, 'nextLength'>`），贴上长度是下一步的事；
+ * 传完整 `FuzzEdit` 照样接（子集是它的超型），判据逻辑一个字没动。
+ */
+export function applyFuzzEdit(text: string, edit: Pick<FuzzEdit, 'offset' | 'deleteCount' | 'insert'>): string {
   return text.slice(0, edit.offset) + edit.insert + text.slice(edit.offset + edit.deleteCount);
 }
 
@@ -664,7 +670,10 @@ if (process.argv[2] === FUZZ_CHILD_FLAG) {
       ),
     );
   } catch (error: unknown) {
-    result.error = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error);
+    // 字段是 readonly（回话形状与判据同源，不许谁想写就写）⇒ 出错路径照 Object.assign 的写法贴值
+    Object.assign(result, {
+      error: error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error),
+    });
   }
   // 同步写 stdout：本进程随后（见文件头）会在退出时被 V8 中止，异步 flush 指望不上。
   process.stdout.write(`${JSON.stringify(result)}\n`);

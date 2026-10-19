@@ -15,7 +15,10 @@
  *
  * ## 增量口径（实测，非推测；读数见 `tests/tree-sitter-parse.perf.test.ts`）
  *
- * `change` 做三件事：① 用宿主算好的那一条保守编辑把旧树推到位（`tree.edit`）；
+ * `change` 做三件事：① 用宿主算好的那一条保守编辑把旧树推到位（`tree.edit`）——但**报上去的起点
+ * 可以比真实编辑更早**：落在顶层边界上的改动，其前面那一段空白连同第一枚非空白顶层节点必须一起
+ * 重解，否则"块头把改动区间吞进自己身体"这一决定会被当成已经收束的成品复用掉（实测 53/1,800 步
+ * 因此漂，形状清一色 `增量 timing_head@X / 整篇 block@X..Y`；口径见 {@link reparseStart}）；
  * ② 拿**有界取字符回调**（stringer）在新文本上重解；③ **只重查改动窗口**（下一节），
  * 窗口外的结果拿缓存复用。
  *
@@ -124,6 +127,12 @@ export interface StructureParseStat {
   readonly windowNodes: number;
   /** 旧树报回来的改动段数（没问 = -1） */
   readonly changedRanges: number;
+  /**
+   * 这一趟**报给 `tree.edit` 的起点**（旧文本码元偏移；没增量解过 = -1）。
+   * additive 读数：它与 `editStart` 的差就是 {@link StructureEngine.reparseStart} 往前推了多少——
+   * "块头必须跟着后面改动一起重解"这条代价是唯一可证伪的证据（perf 池打印它）。
+   */
+  readonly reparseFrom: number;
   /** 为什么没走窗口（走窗口时为空串；同一句话一次解里只留一条） */
   readonly queryFullReason: string;
 }
@@ -272,6 +281,25 @@ export function extendFoldOverTrailingBlanks(
   return { endRow: row, endIndex };
 }
 
+/**
+ * 折叠槽的**依赖右端**（作废轴上比 `end` 更远的一段）：从吞完尾随空行后的止点起，
+ * 跳过仍然全空白的行，再把**第一枚正文行整行**算进依赖范围——那一行一旦被子弹删成空行，
+ * 止行就要继续往后伸；后面没有正文行了（到文末全是空白）则到文末。
+ *
+ * 只给"根的直接孩子"算（与 {@link foldBlankBoundRow} 的收缩纪律同一条判据）：嵌套块的止行
+ * 停在正文末行、本来就不伸，它后面写了什么与它无关。
+ */
+function foldDependencyEnd(text: string, from: number): number {
+  let i = from;
+  while (i < text.length) {
+    const newline = text.indexOf('\n', i);
+    const stop = newline < 0 ? text.length : newline + 1;
+    if (!isBlankRange(text, i, stop)) return stop;
+    i = stop;
+  }
+  return text.length;
+}
+
 /** 一次编辑之后"值得重查"的窗口（`nodes` = 新树坐标系；`from/to` = 折回旧文本坐标的作废跨度） */
 interface StructureWindow {
   readonly nodes: readonly Node[];
@@ -279,10 +307,19 @@ interface StructureWindow {
   readonly to: number;
 }
 
-/** 缓存的一槽：结果 + 它依据的那枚节点占哪一段码元（码元轴的理由见文件头第 1 条） */
+/**
+ * 缓存的一槽：结果 + 它依据的那枚节点占哪一段码元（码元轴的理由见文件头第 1 条）。
+ *
+ * `guard`（additive，只有折叠那一面会带）= 这一槽的**依赖右端**：折叠的止行由"节点之后那一段
+ * 全空白行 + 其后第一枚正文行"决定（见 {@link extendFoldOverTrailingBlanks}），那些行**不在**
+ * 槽段 `[start..end]` 里，却被这次改动改了的话，止行就会变——按 `[start..end]` 判"整枚在窗口
+ * 之前 ⇒ 原样复用"就会把过期止行留在屏上（等价闸实测：删掉一行行尾的几个码元让下一行变空，
+ * 增量一直回 `94-95` 而整篇回 `94-96`）。所以折叠槽作废判据看 `guard`，不是只看 `end`。
+ */
 interface StructureCacheSlot<T> {
   readonly start: number;
   readonly end: number;
+  readonly guard?: number;
   readonly value: T;
 }
 
@@ -300,6 +337,16 @@ interface StructureShift {
   offsetToOldRight(offset: number): number;
   offsetToNewLeft(offset: number): number;
   offsetToNewRight(offset: number): number;
+}
+
+/**
+ * 报给 `tree.edit` 的编辑起点（**只许比真实编辑更早，不许更晚**）。
+ * `index` = 旧文本的码元偏移；`row/column` 取自旧树里那一枚节点的起点（免线性扫全文）。
+ */
+interface StructureReparseStart {
+  readonly index: number;
+  readonly row: number;
+  readonly column: number;
 }
 
 const NO_CACHE: StructureFacetCache<never> = { slots: [], complete: false };
@@ -329,6 +376,8 @@ export class StructureEngine {
   private passScope: 'window' | 'full' | 'none' = 'none';
   private lastWindowNodes = 0;
   private lastRangeCount = -1;
+  /** 最近一趟报给 `tree.edit` 的起点（往前推过就不等于 `editStart`；没增量解过 = -1） */
+  private lastReparseFrom = -1;
 
   constructor(options: StructureEngineOptions) {
     this.assets = options.assets;
@@ -445,6 +494,8 @@ export class StructureEngine {
    *
    * 段取吞尾随空行之后的覆盖范围（不是节点自己的 `endIndex`）：那些空行现在也是这枚折叠的依据，
    * 改动落在其上就必须把这一槽拉进重查窗口，否则增量拼装会给出**过期止行**（与整篇重算不再逐字相等）。
+   * 最外层的块还要再带一段 `guard`（依赖右端，见 {@link StructureCacheSlot}）：止行能不能再伸
+   * 取决于"块后面还有没有空行、以及第一枚正文行还是不是正文"，那些行不在节点里。
    */
   private foldSlot(
     capture: { name: string; node: Node },
@@ -456,9 +507,12 @@ export class StructureEngine {
     const endRow = node.endPosition.row;
     if (endRow <= startRow) return null;
     const extended = extendFoldOverTrailingBlanks(this.documentText, node, endRow);
+    const parent = node.parent;
+    const guard = parent !== null && parent.parent === null ? foldDependencyEnd(this.documentText, extended.endIndex) : undefined;
     return {
       start: node.startIndex,
       end: extended.endIndex,
+      ...(guard === undefined ? {} : { guard }),
       value: { startRow, endRow: extended.endRow },
     };
   }
@@ -466,7 +520,12 @@ export class StructureEngine {
   /** 平移一槽结果（`deltaRows === 0 && deltaOffsets === 0` 时调用方根本不会走到这里） */
   private shiftSlot<T>(slot: StructureCacheSlot<T>, shift: StructureShift, shiftValue: (value: T, deltaRows: number) => T): StructureCacheSlot<T> {
     const value = shiftValue(slot.value, shift.deltaRows);
-    return { start: slot.start + shift.deltaOffsets, end: slot.end + shift.deltaOffsets, value };
+    return {
+      start: slot.start + shift.deltaOffsets,
+      end: slot.end + shift.deltaOffsets,
+      ...(slot.guard === undefined ? {} : { guard: slot.guard + shift.deltaOffsets }),
+      value,
+    };
   }
 
   private shiftToken(token: KojoStructureToken, delta: number): KojoStructureToken {
@@ -495,11 +554,14 @@ export class StructureEngine {
   /**
    * 缓存 + 窗口 → 这一面的新序列（顺序 = 文档序 = 整篇重查的顺序；三段拼：窗口前 / 窗口 / 窗口后）。
    *
-   * 边界四条（`start/end` = 槽依据的那枚节点占的码元段，`from/to` = 窗口折回旧坐标的段）：
-   * · `end <= from` ⇒ 整枚在窗口之前 ⇒ 原样复用（顶层节点铺满文档 ⇒ 相接的边界归窗口外那一枚，
-   *   窗口重查拿不到它，正好不重不漏）；
+   * 边界五条（`start/end` = 槽依据的那枚节点占的码元段，`guard` = 折叠那一面多出来的依赖右端，
+   * `from/to` = 窗口折回旧坐标的段）：
+   * · `end <= from` **并且** `guard` 也不越过 `from` ⇒ 整枚在窗口之前 ⇒ 原样复用（顶层节点铺满
+   *   文档 ⇒ 相接的边界归窗口外那一枚，窗口重查拿不到它，正好不重不漏）；
    * · `start >= to` ⇒ 整枚在窗口之后 ⇒ 平移后复用；
    * · 其余 ⇒ 落在窗口里 ⇒ 作废，由窗口重查那一段顶上；
+   * · 折叠槽的 `guard` 越过了窗口起点而这一槽本身在窗口之前 ⇒ 它的**止行依据**被改写了却没进窗口
+   *   （`widenDirtyBand` 正常会把它拉进窗口；这里是它外扩到 8 轮封顶仍没拉住的兜底）⇒ 判不出来，整篇重算；
    * · 零宽槽正好压在边界上 ⇒ **判不出来**（它既可能属于窗口里那枚节点、也可能属于边界外那枚）
    *   ⇒ 回 null 走整篇。只有 MISSING 会零宽，正常击键碰不到这条线（残缺档的流对账量过）。
    *
@@ -528,8 +590,16 @@ export class StructureEngine {
           this.noteFacet(input.facet, '有零宽结果正好压在窗口边界 ⇒ 归属判不出，整篇重算');
           return null;
         }
-        if (slot.end <= from) head.push(slot);
-        else if (slot.start >= to) tail.push(slot);
+        if (slot.end <= from) {
+          if (slot.guard !== undefined && slot.guard > from) {
+            this.noteFacet(
+              input.facet,
+              `窗口之前的折叠结果把止行依据伸进了改动窗口（槽 [${slot.start}..${slot.end}] 的依赖右端 ${slot.guard} > 窗口起点 ${from}）⇒ 整篇重算`,
+            );
+            return null;
+          }
+          head.push(slot);
+        } else if (slot.start >= to) tail.push(slot);
         else if (slot.start < from || slot.end > to) {
           this.noteFacet(
             input.facet,
@@ -905,6 +975,60 @@ export class StructureEngine {
   /* --------------------------------- 解析 --------------------------------- */
 
   /**
+   * 报给 `tree.edit` 的编辑起点：真实起点，或在"编辑落在顶层边界上"时**往前推**到最近一枚
+   * 还可能被这次改动接长的顶层节点。
+   *
+   * ## 为什么必须推（这是实测出来的解析器性质，不是保守起见）
+   *
+   * 落在改动区间**之前**的那些顶层节点，`tree.edit` 一说不改就被当成已经收束的成品复用掉，
+   * 而"块头要不要把后面的内容吞进自己身体里"恰恰是由它**后面**的文本决定的 ⇒
+   * 只报真实区间时，一枚本来该长成块的块头会永远停在"孤立块头"的形状上，
+   * 这个错还会顺着旧树一路带下去（后续每一击都以它为依据）。
+   * 等价闸实测（`tests/tree-sitter-incremental-fuzz.test.ts` 同一批编辑序列，只比 CST）：
+   * 不推 = **53/1,800 步漂**，漂的形状清一色 `增量 timing_head@X / 整篇 block@X..Y`；
+   * 按下述口径推 = **0/1,800 漂**。
+   *
+   * ## 推到哪儿（口径与代价）
+   *
+   * 只有"改动区间**之前**的那一枚节点"才有资格长成块（块头只能往前伸，不能往回缩），
+   * 而块头与它即将吞下的正文之间只隔着一串空白行——本语法每条换行都由 `blank_line` 单独认领，
+   * 空行拦不住块头。于是取：**从紧邻的那枚顶层节点起，往回吞掉连续的全空白顶层节点，
+   * 再带上第一枚非空白顶层节点**。编辑落在顶层节点**内部**时不推（那一枚本来就要重解，
+   * 它的块头判定会跟着一起重算）；推不出顶层节点（落进根节点的空白里）也不推，
+   * 由 `buildWindow` 那条判据照常退回整篇。
+   *
+   * 代价 = 多解"一段空白 + 一枚顶层节点"，与文档规模无关（实测读数见 perf 池的 `reparseFrom`）。
+   * 这正是文件头纪律"只会多算不会少算"的那一条：多算只贵，少算才错。
+   */
+  private reparseStart(
+    oldRoot: Node,
+    oldText: string,
+    request: Extract<KojoStructureRequest, { type: 'change' }>,
+  ): StructureReparseStart {
+    const exact: StructureReparseStart = {
+      index: request.start.offset,
+      row: request.start.row,
+      column: request.start.column,
+    };
+    if (request.start.offset <= 0) return exact;
+    const node = this.topLevelAncestor(oldRoot, request.start.offset - 1);
+    // 编辑落在顶层节点内部（或定位落空）⇒ 不推：那一枚节点自己会被重解，块头判定跟着重算
+    if (node === null || node.endIndex > request.start.offset) return exact;
+    let current = node;
+    for (;;) {
+      if (!isBlankRange(oldText, current.startIndex, current.endIndex)) break;
+      const previous = current.previousSibling;
+      if (previous === null) break; // 一路到文首都是空白
+      current = previous;
+    }
+    return {
+      index: current.startIndex,
+      row: current.startPosition.row,
+      column: current.startPosition.column,
+    };
+  }
+
+  /**
    * 有界取字符回调：只给 `STRUCTURE_READ_CHUNK` 码元，**不**把文档尾巴整段复制给 wasm。
    * 顺带记下取字窗口（`reads` / `readStart` / `readEnd`），这是"增量到底局部不局部"的唯一现场证据。
    */
@@ -978,13 +1102,17 @@ export class StructureEngine {
     let next: Tree | null = null;
     this.beginPass('none');
     const started = this.stamp();
+    // 报给 tree.edit 的起点可以比真实编辑更早（理由见 {@link reparseStart}）；真实编辑区间
+    // 仍然只用于缝合文本与坐标换算，两者不许混用。
+    const reparse = this.reparseStart(oldTree.rootNode, this.documentText, request);
+    this.lastReparseFrom = reparse.index;
     try {
       oldTree.edit(
         new Edit({
-          startIndex: request.start.offset,
+          startIndex: reparse.index,
           oldEndIndex: request.oldEnd.offset,
           newEndIndex: request.newEnd.offset,
-          startPosition: { row: request.start.row, column: request.start.column },
+          startPosition: { row: reparse.row, column: reparse.column },
           oldEndPosition: { row: request.oldEnd.row, column: request.oldEnd.column },
           newEndPosition: { row: request.newEnd.row, column: request.newEnd.column },
         }),
@@ -1014,7 +1142,7 @@ export class StructureEngine {
     const rangesStarted = this.stamp();
     const shift = rowShift(request);
     this.beginPass('window');
-    const window = this.buildWindow(oldTree, next, request, shift, nextText.length);
+    const window = this.buildWindow(oldTree, next, request, shift, nextText.length, reparse.index);
     this.elapsed('changedRanges', rangesStarted);
     oldTree.delete();
     this.tree = next;
@@ -1047,6 +1175,7 @@ export class StructureEngine {
       queryScope: this.passScope,
       windowNodes: this.lastWindowNodes,
       changedRanges: this.lastRangeCount,
+      reparseFrom: this.lastReparseFrom,
       queryFullReason: this.facetNotes.join(' / '),
     };
   }
@@ -1058,6 +1187,7 @@ export class StructureEngine {
     this.faultCache = NO_CACHE;
     this.lastWindowNodes = 0;
     this.lastRangeCount = -1;
+    this.lastReparseFrom = -1;
   }
 
   /**
@@ -1072,6 +1202,7 @@ export class StructureEngine {
     request: Extract<KojoStructureRequest, { type: 'change' }>,
     shift: StructureShift,
     nextLength: number,
+    reparseFrom: number,
   ): StructureWindow | null {
     this.lastRangeCount = -1;
     this.lastWindowNodes = 0;
@@ -1087,7 +1218,9 @@ export class StructureEngine {
     this.lastRangeCount = ranges.length;
     try {
       // 脏跨度（旧文本坐标系）= 旧树报的改动段 **并上** 本次编辑自己那一段（保守多算，理由见文件头）
-      let dirtyStart = request.start.offset;
+      // 再并上"报给 tree.edit 的那一段"（{@link reparseStart} 往前推的起点）：那一段确实被重解过，
+      // 落在其中的缓存条目若继续沿用，拼出来的就是新旧两版树的混血。
+      let dirtyStart = Math.min(request.start.offset, reparseFrom);
       let dirtyEnd = request.oldEnd.offset;
       for (const range of ranges) {
         dirtyStart = Math.min(dirtyStart, range.startIndex);
@@ -1119,7 +1252,12 @@ export class StructureEngine {
       return {
         nodes,
         from: clamp(shift.offsetToOldLeft(first.startIndex), 0, this.documentText.length),
-        to: clamp(shift.offsetToOldRight(last.endIndex), 0, this.documentText.length),
+        // 作废跨度的右端**不能只取窗口最后一枚节点的终点**：改动一直伸到文末时（删掉文末若干行），
+        // `seedEnd` 被 `nextLength - 1` 夹住 ⇒ 窗口只能盖到新版文档的最后一个节点，而旧文本里
+        // 落在"被删掉那一段"中的结果会满足 `start >= to` ⇒ 被当成窗口之后的条目**平移复用**，
+        // 于是删掉的着色段凭空留在屏上（等价闸实测：增量比整篇多 1–2 条并且一路挂到序列末尾）。
+        // 脏跨度的右端本来就 ≥ 本次编辑的旧区间末，取两者之大者即把那段删掉的区间盖住。
+        to: Math.max(clamp(shift.offsetToOldRight(last.endIndex), 0, this.documentText.length), dirtyEnd),
       };
     } catch (error: unknown) {
       this.noteWindowFallback(`窗口判据抛错：${reason(error)}`);
@@ -1135,6 +1273,8 @@ export class StructureEngine {
    * 压在窗口边界上（实测 12 击里 4 击如此，那几击只能整篇重算）。外扩之后要么整枚进窗口
    * （由窗口重查顶上，结果照样与整篇逐字相等），要么真的盖不住（边界判据照样回整篇）——
    * 前者才是常态，也是这一条腿的意义所在。
+   *
+   * 折叠那一面另外带一条 `guard`（止行的依赖右端）参与判碰：见下面那段"只往左拉"的注释。
    */
   private widenDirtyBand(fromIn: number, toIn: number): readonly [number, number] {
     let from = fromIn;
@@ -1149,6 +1289,12 @@ export class StructureEngine {
             if (slot.end > nextTo) nextTo = slot.end;
           }
         }
+      }
+      // 折叠槽的依赖右端（guard）只把窗口往**左**拉，把那一枚折叠拉进窗口重查（只有这样才算得出
+      // 新止行）。有意**不**往右拉：右端一路是"这一枚的正文行正是下一枚的第一行"，会级联到整篇。
+      for (const slot of this.foldCache.slots) {
+        if (slot.guard === undefined || slot.guard < from || slot.start > to) continue;
+        if (slot.start < nextFrom) nextFrom = slot.start;
       }
       if (nextFrom === from && nextTo === to) break;
       from = nextFrom;
