@@ -50,12 +50,34 @@ const BASE: Omit<KojoScaffoldOptions, 'langDoc'> = {
 };
 
 /**
- * 默认档（糖）产物的**改前逐字节金样**：`tests/fixtures/default-sugar/`。
+ * 默认档（糖）产物的**改前逐字节金样**：`tests/fixtures/default-sugar/`（README.md + 8 面 .kojo）。
  *
- * 出处（可复核，不是"跑出来的现在态"）：2026-10-20 在 `origin/dev` = `7b81e59` 的
- * **未改动工作树**上取同一组输入的产物，逐文件 SHA-256 记在案（本文件头注那次
- * 取证运行），落地实现后先核对九份金样与那九个摘要逐字相等，再入库为 golden。
- * 因此这里比的是字节：`expect(bytes).toEqual(golden)`。
+ * ## 出处（已复核，不是"跑出来的现在态"）
+ *
+ * 声称取自 `origin/dev` = **`7b81e59`** 的未改动工作树，同一组输入（本文件 `BASE`：
+ * `workName: '取证作品'` / `authorName: '取证作者'` / `version: '1.0'` / `charaNo: 63` /
+ * `charaName: '影狼'` / `scriptNo: 1` / `license: 'none'`）。
+ *
+ * ## 复核方法（2026-10-20 收口批实跑，九个摘要 9/9 全等）
+ *
+ * 1. `git worktree add <临时目录> 7b81e59 --detach` 起游离树（§六 量"改前"的规定做法）；
+ * 2. 一次性探针用例（跑完即删）直接 import **游离树**的 `src/scaffold.ts`，以 `BASE` 调
+ *    `scaffoldKojoProject`，对九份产物与 `fixtures/default-sugar/` 逐文件算 SHA-256 并比字节；
+ * 3. 依赖闭包等价性由 `git diff --stat 7b81e59..HEAD -- packages/plugin-api
+ *    packages/kojo-project-kit/src/licenses.ts packages/plugins/eratw-adapter/src/face-templates.ts`
+ *    **为空**担保（改前后同一份；kit `index.ts` 只 +17 行 re-export）。
+ * 4. 复核实得九个摘要（= 金样摘要 = 改前产物摘要；字节数一并记在案，重跑对不上就是金样被抬过）：
+ *    - `README.md`            `81be4c5190961a10211dc268ec4b25a9fa8e0ec7ec91df7af2d8b4a96d1862ff`  1997 B
+ *    - `事件.kojo`            `5d83160d672174bb7c62de7878bd3c7ea25d3d9be2a84d287748ae4a50b3b6b4`  1136 B
+ *    - `日常指令.kojo`        `983c5fd60388805ace62bd32584abf7d06793ae2c5fc34093bc7ba54d4f39f4b`  1171 B
+ *    - `性交指令.kojo`        `c759a709758b6a7c6372ada9195061161f524f0b38d60a45ca88055e49a6c794`   618 B
+ *    - `奉仕指令.kojo`        `06062d6a37508d044baccc658eaf08ce8a18644ebec11c2a88e37c80e5ff200e`   618 B
+ *    - `爱抚指令.kojo`        `c769e6a87dc09ba6ba4c5a11e8904133f057e7188768fca40192b59f87cd6d56`   618 B
+ *    - `绝顶.kojo`            `0084579966740e17804c523d8e74973389c5b5dc74991959d5c78587cc7066e7`   463 B
+ *    - `刻印取得.kojo`        `e36c18d5fc8c0cf1adbe3ef758983ba0a674abb649472276c799d6728ea553b6`  1212 B
+ *    - `性骚扰指令.kojo`      `71e2afaffb6bd49f9583400dfa18f8cb1391722bdd4e1d68f38cbd959cef7278`  1234 B
+ *
+ * 这里比的是**字节**而不是摘要：`expect(bytes).toEqual(golden)`。
  * 仓库 `.gitattributes` 是 `* text=auto eol=lf`，checkout 必得 LF ⇒ 金样与产物同为
  * LF 字节，`sugar.test.ts` 那套 golden 靠同一条纪律成立，这里照搬。
  */
