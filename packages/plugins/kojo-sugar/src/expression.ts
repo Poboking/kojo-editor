@@ -346,6 +346,74 @@ export function lowerExpression(raw: string, ctx: ExprContext): string {
   return expr.replace(COND_SLOT_RE, (_whole, digits: string) => deferred[Number(digits)] ?? '');
 }
 
+/* ======================= 全角标点检查（1019 批 P0） ======================= */
+
+/** 诊断文案里的语境词（作者视角；不提"规则/码"） */
+export type FullwidthPunctWhere = 'condition' | 'assignment' | 'expression';
+
+const FULLWIDTH_PUNCT_WHERE_LABEL: Readonly<Record<FullwidthPunctWhere, string>> = {
+  condition: '条件',
+  assignment: '赋值',
+  expression: '表达式',
+};
+
+/**
+ * 表达式源切片的**全角标点**检查：引擎只认半角 `:` / `=`。
+ *
+ * 为什么必须拦：`如果 CFLAG：1：2 == 0：` 会被原样编成 `IF CFLAG：1：2 == 0`，
+ * `CFLAG：1：2 ＝ 3` 甚至会被当台词打印（`PRINTFORMDW …`）——零诊断、坏字节落盘。
+ *
+ * 口径（只此两类字符，别扩大）：
+ * - 报全角冒号 `：` 与全角等号 `＝`；跳过双引号字面量内部（那是作者要打印/比较的文本）；
+ * - **例外**：`：` 紧跟**已登记族头别名**（`现在：噴乳`，D2 糖面）不报——`lowerFamilyAliases`
+ *   会把它归一成半角，属合法写法；查表走 `ctx.dictionary.familyAlias`（未注入 ⇒ 不豁免）。
+ * - `loc` = 表达式切片起点（列 1 基）；命中位置按码元偏移逐个后移。**error**——
+ *   `compileToBytes` / `planSave` 见 error 即整体拒绝落盘（既有闸，不另造通道）。
+ */
+export function reportFullwidthExprPunct(
+  raw: string,
+  ctx: ExprContext,
+  where: FullwidthPunctWhere = 'expression',
+): void {
+  let inString = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '：' && isFamilyAliasColon(raw, i, ctx)) continue;
+    if (ch !== '：' && ch !== '＝') continue;
+    const half = ch === '：' ? ':' : '=';
+    const loc = ctx.loc;
+    ctx.report({
+      code: 'fullwidth-expr-punct',
+      severity: 'error',
+      message: `${FULLWIDTH_PUNCT_WHERE_LABEL[where]}里用了全角「${ch}」——引擎不认，请改成半角「${half}」。`,
+      loc: loc ? { line: loc.line, column: loc.column + i } : null,
+    });
+  }
+}
+
+/**
+ * 该 `：` 是否是 D2 族头别名的合法糖面（`<已登记别名>：<槽>`）。
+ *
+ * 判据与 `lowerFamilyAliases` 逐字同源：向前扫一个完整标识符，作者同名别名优先
+ * （`ctx.aliases` 有登记 ⇒ 不豁免——那正是 `防护②` 的口径）。
+ */
+function isFamilyAliasColon(raw: string, at: number, ctx: ExprContext): boolean {
+  const alias = ctx.dictionary?.familyAlias;
+  if (!alias) return false;
+  let start = at - 1;
+  while (start >= 0 && isIdentPart(raw[start]!)) start--;
+  if (start === at - 1) return false;
+  const name = raw.slice(start + 1, at);
+  if (ctx.aliases.has(name)) return false;
+  const family = alias(name);
+  return family !== undefined && family.length > 0;
+}
+
 /**
  * 表达式主体降糖（**步骤 1–3**：中文运算符 → `不在` → 代词与属性）——不含别名替换（步骤 0b）
  * 与条件别名回填（步骤 4）。

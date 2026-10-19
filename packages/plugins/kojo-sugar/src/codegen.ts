@@ -56,7 +56,7 @@ import type {
 } from '@kojo/plugin-api';
 // IX-1：`{i}` 取值口径的契约纯函数（与悬停 / 补全同一枚；本文件不再自写 indexKind 分支）
 import { resolveKojoIndexName } from '@kojo/plugin-api';
-import { lowerExpression, expandTarget, resolveBitSlotName, type ExprContext } from './expression';
+import { lowerExpression, expandTarget, reportFullwidthExprPunct, resolveBitSlotName, type ExprContext, type FullwidthPunctWhere } from './expression';
 import {
   buildColumnRuns,
   clipAndShift,
@@ -65,7 +65,7 @@ import {
   type RunSpec,
   type SourceLineView,
 } from './column-map';
-import { checkTimingArgsDeclaration, CJK, type LoopMode, type LoopSpec, type SectionPreset } from './lexer';
+import { checkTimingArgsDeclaration, CJK, isFullwidthAssignmentText, type LoopMode, type LoopSpec, type SectionPreset } from './lexer';
 import { argPositionToken, RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
@@ -948,6 +948,12 @@ function emitLoopBlock(em: Emitter, node: LoopBlock, ctx: BodyContext, indent: n
   const ec = exprCtx(ctx, node.loc.start);
   const lower = (text: string | undefined): string => (text === undefined ? '' : lowerExpression(text, ec));
   const spec: LoopSpec = node.loop;
+  // 1019 P0：循环头的每段表达式原文先过全角标点守门（条件位 / 起止步长分别给语境词）
+  guardFullwidthExpr(em, spec.from, ctx, node.loc.start, 'expression');
+  guardFullwidthExpr(em, spec.to, ctx, node.loc.start, 'expression');
+  guardFullwidthExpr(em, spec.stride, ctx, node.loc.start, 'expression');
+  guardFullwidthExpr(em, spec.condition, ctx, node.loc.start, spec.mode === 'when' ? 'condition' : 'expression');
+  guardFullwidthExpr(em, spec.closeCondition, ctx, node.loc.start, 'condition');
   let head: string;
   switch (spec.mode) {
     case 'count':
@@ -1723,6 +1729,12 @@ function emitBody(em: Emitter, body: readonly SugarNode[], ctx: BodyContext, ind
       emitStatement(em, node, ctx, indent);
       continue;
     }
+    // 1019 P0：`你：` 开头的「保守赋值形」同样已在 parser 报 error（`parseTextLine` 覆盖
+    // 全部文本行）⇒ 不再发射换色 run / 打印行；否则坏行会借自机台词通道进产物。
+    if (isFullwidthAssignmentText(sourceTextOf(node))) {
+      closeRun();
+      continue;
+    }
     const base = rawBase(em, node);
     const parsed = textBody(node, ctx, base);
     // `你：` 前缀不进产物 ⇒ 区段整体左移其宽度；位移后为负的段（落在被剥掉的前缀里）自动丢弃
@@ -1847,6 +1859,10 @@ function emitRawLine(
     em.push(indent, node.text, node.loc.start.line, verbatimRow(em, node));
     return;
   }
+  // 1019 P0：赋值语句的左右两段**源切片**都过全角标点守门（`CFLAG：1：2 = 0` 这类
+  // 半角等号 + 全角冒号的写法同样编不出合法 ERB）。
+  guardFullwidthExpr(em, assign.target, ctx, node.loc.start, 'assignment');
+  guardFullwidthExpr(em, assign.expr, ctx, node.loc.start, 'assignment');
   const target = expandTarget(assign.target, exprCtx(ctx, node.loc.start));
   if (target === null) return; // 只读别名：已在 expandTarget 报诊断，不产出半成品
   const value = lowerExpression(assign.expr, exprCtx(ctx, node.loc.start));
@@ -2229,6 +2245,7 @@ function emitReturnStatement(em: Emitter, node: ReturnStatement, ctx: BodyContex
  */
 function emitSingleIfStatement(em: Emitter, node: SingleIfStatement, ctx: BodyContext, indent: number): void {
   const single = isSingleLineStatement(node.statement, ctx);
+  guardFullwidthExpr(em, node.condition, ctx, node.loc.start, 'condition');
   const cond = lowerExpression(node.condition, exprCtx(ctx, node.loc.start));
   em.push(indent, `${single ? 'SIF' : 'IF'} ${cond}`, node.loc.start.line, [
     ...identitySpec(viewTextOf(em, node.loc.start.line), node.condition, contentBase(node), single ? 4 : 3),
@@ -2294,6 +2311,11 @@ function emitTextLine(
   forceNonD = false,
 ): void {
   const sourceLine = node.loc.start.line;
+  // 1019 P0：分类阶段兜底成台词的「保守赋值形」（`CFLAG：1：2 ＝ 3`）已在 parser
+  // （`parseTextLine`）报 `fullwidth-expr-punct` error——这里**不再发射**打印行：坏行
+  // 不冒充台词进产物。`heart` 行不经 `parseTextLine`（没报过诊断）⇒ 不在此列，宁可打印
+  // 也不静默丢内容。
+  if (!heart && isFullwidthAssignmentText(sourceTextOf(node))) return;
   const base = rawBase(em, node);
   const view = em.viewOf(sourceLine);
 
@@ -2628,11 +2650,13 @@ function emitRulePoolBlock(em: Emitter, node: RulePoolBlock, ctx: BodyContext, i
 function emitIfBlock(em: Emitter, node: IfBlock, ctx: BodyContext, indent: number): void {
   for (const branch of node.branches) {
     if (branch.kind === 'if') {
+      guardFullwidthExpr(em, branch.condition, ctx, branch.loc.start, 'condition');
       const cond = lowerExpression(branch.condition, exprCtx(ctx, branch.loc.start));
       em.push(indent, `IF ${cond}`, branch.loc.start.line, [
         ...identitySpec(viewTextOf(em, branch.loc.start.line), branch.condition, contentBase(branch), 3),
       ]);
     } else if (branch.kind === 'elseif') {
+      guardFullwidthExpr(em, branch.condition, ctx, branch.loc.start, 'condition');
       const cond = lowerExpression(branch.condition, exprCtx(ctx, branch.loc.start));
       em.push(indent, `ELSEIF ${cond}`, branch.loc.start.line, [
         ...identitySpec(viewTextOf(em, branch.loc.start.line), branch.condition, contentBase(branch), 7),
@@ -3110,6 +3134,7 @@ function emitIfExpr(em: Emitter, node: IfExpr, ctx: BodyContext, indent: number)
     if (branch.kind === 'else') {
       em.push(indent, `ELSE`, branch.loc.start.line);
     } else {
+      guardFullwidthExpr(em, branch.condition, ctx, branch.loc.start, 'condition');
       const cond = lowerExpression(branch.condition, exprCtx(ctx, branch.loc.start));
       em.push(indent, branch.kind === 'if' ? `IF ${cond}` : `ELSEIF ${cond}`, branch.loc.start.line, [
         ...identitySpec(
@@ -3186,6 +3211,37 @@ function exprCtx(ctx: BodyContext, loc: { line: number; column: number }): ExprC
     charNo: ctx.frontMatter.charNo,
     argSlotCount: ctx.argSlotCount,
   };
+}
+
+/* ------------------------------ 全角标点守门（1019 批 P0） ------------------------------ */
+
+/**
+ * 表达式源切片的**全角标点**守门：在 `lowerExpression` 之前跑（1019 批 P0）。
+ *
+ * 只扫**源切片**：块头末尾的全角 `：` 是分隔符，lexer 早已剥掉，不在切片里；
+ * 双引号字面量内部由 `reportFullwidthExprPunct` 跳过。命中报 error 后，
+ * 既有 `compileToBytes` / `planSave` 闸会整体拒绝落盘——这里**不另造拒绝通道**。
+ */
+function guardFullwidthExpr(
+  em: Emitter,
+  raw: string | undefined,
+  ctx: BodyContext,
+  fallback: { line: number; column: number },
+  where: FullwidthPunctWhere,
+): void {
+  if (raw === undefined || raw.length === 0) return;
+  reportFullwidthExprPunct(raw, exprCtx(ctx, locateExprStart(em, fallback, raw)), where);
+}
+
+/** 表达式切片在源行里的起点（1 基列）：用源侧逻辑行视图定位；定位不到退回节点起点 */
+function locateExprStart(
+  em: Emitter,
+  fallback: { line: number; column: number },
+  raw: string,
+): { line: number; column: number } {
+  const view = em.viewOf(fallback.line);
+  const at = view ? view.text.indexOf(raw, Math.max(0, fallback.column - 1)) : -1;
+  return at >= 0 ? { line: fallback.line, column: at + 1 } : fallback;
 }
 
 /** 需要的最小节点类型（避免宽泛 import） */

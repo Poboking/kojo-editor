@@ -1625,19 +1625,60 @@ function zeroSpan(): SugarSourceSpan {
 /* ============================== 文本行 / 插值解析 ============================== */
 
 /**
+ * 「保守赋值形」：行首一个非空白令牌（标识符 / 变量族头 / 中文标识符；排除台词引号与
+ * 圆括号开头），后接（可选的 `：索引` / `:索引`）空白再**全角等号** `＝`。
+ *
+ * 用途**只有一个**：一行在分类阶段会落成台词时，若匹配本形说明作者想写赋值却用了全角
+ * `＝`——`parseAssignment` 只认半角 `=`，不拦就会把 `CFLAG：1：2 ＝ 3` 原样打印成台词
+ * （1019 批 P0：零诊断、坏字节落盘）。正则刻意保守：只认"令牌 + 可选索引 + 空白 + ＝"
+ * 这一确定形态，引号开头的台词行天然避让。
+ */
+const FULLWIDTH_ASSIGN_RE = /^[ \t]*[^\s「『（(]+(?:[：:][^\s＝]+[ \t]*＝|[ \t]+＝)/;
+
+/** 命中「保守赋值形」时返回 `＝` 在 content 里的 0 基码元下标；未命中 → null */
+export function matchFullwidthAssignment(content: string): { index: number } | null {
+  const m = FULLWIDTH_ASSIGN_RE.exec(content);
+  return m === null ? null : { index: m[0].length - 1 };
+}
+
+/**
+ * 文本是否整体构成「保守赋值形」（codegen 据此**不发射**打印行）。
+ * 诊断已在 `parseTextLine` 报出——两处共用 `FULLWIDTH_ASSIGN_RE`，判据只有一份。
+ */
+export function isFullwidthAssignmentText(content: string): boolean {
+  return FULLWIDTH_ASSIGN_RE.test(content);
+}
+
+/**
  * 解析文本行为 `TextLine` / `HeartLine`（规范 §3.3 / §3.4 / §3.9）。
  *
- * 步骤：剥 `续` 标记 → 判定 speech → 扫插值 → 生成节点。
+ * 步骤：全角赋值形拦截 → 剥 `续` 标记 → 判定 speech → 扫插值 → 生成节点。
  */
 export function parseTextLine(
   line: LogicalLine,
   sink: DiagnosticSink,
 ): { speech: boolean; wait: boolean; interpolations: Interpolation[]; body: string } {
   const content = contentOf(line);
+  reportFullwidthAssignmentLine(content, line, sink);
   const { text, wait } = stripCont(content, sink, line);
   const interpolations = scanInterpolations(text, line.line, sink);
   const speech = detectSpeechOf(text, interpolations);
   return { speech, wait, interpolations, body: text };
+}
+
+/**
+ * 分类兜底成台词的「保守赋值形」→ `fullwidth-expr-punct` **error**（定位到 `＝`）。
+ * 折行按**逻辑偏移**折回物理行列（`logicalPosition`），不拿首行硬套。
+ */
+function reportFullwidthAssignmentLine(content: string, line: LogicalLine, sink: DiagnosticSink): void {
+  const hit = matchFullwidthAssignment(content);
+  if (!hit) return;
+  sink.report({
+    code: 'fullwidth-expr-punct',
+    severity: 'error',
+    message: '赋值里用了全角「＝」——引擎不认，请改成半角「=」。',
+    loc: logicalPosition(line.segments, line.rawIndent.length + hit.index),
+  });
 }
 
 /** 剥 `续` 标记（导出供 `心形` 行复用；规则与文本行完全一致） */

@@ -76,6 +76,7 @@ export const SUGAR_DIAGNOSTIC_CODES = [
   'function-name-unknown',
   'function-name-typo',
   'notin-complex-operand',
+  'fullwidth-expr-punct',
   /* --- 原生直通 --- */
   'raw-block-inline',
   /* --- 兜底 --- */
@@ -151,6 +152,7 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'function-name-unknown': { name: '函数名未收录', detail: '这个名字既不在系统函数表也不在本游戏函数表里。' },
   'function-name-typo': { name: '函数名疑似拼错', detail: '表外名字对应到唯一一个已收录的近名，请按提示改法。' },
   'notin-complex-operand': { name: '区间判断的操作数过于复杂', detail: '含加减或函数调用时会被整体求值两次。' },
+  'fullwidth-expr-punct': { name: '表达式里有全角标点', detail: '条件或赋值里用了全角冒号/等号，引擎不认。' },
   'raw-block-inline': { name: '原生直通块位置不对', detail: '原生块只能写在顶层。' },
   internal: { name: '内部异常', detail: '转译器自身出错，请带上原始码反馈。' },
 
