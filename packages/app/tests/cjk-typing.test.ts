@@ -115,7 +115,9 @@ describe('unicodeHighlight（中文标点零标红 + 同形异义告警保留）
   it('行为（真 UnicodeTextModelHighlighter）：本批配置下全角标点 / 汉字均不标红', async () => {
     const { UnicodeTextModelHighlighter } = await monacoInternal('services/unicodeTextModelHighlighter.js');
     const opts = internalOptions(['zh-hans', 'zh-hant'], true);
-    for (const ch of [...FULLWIDTH_PUNCT, '“', '”', '～', '你', '説']) {
+    // 末尾五枚（‘ ’ … ・ ·）正是着色层 ③′ 反查出来的"块区间外"标点：
+    // 它们既进分词表、又归 operator，若这里被标红就是"标点却报歧义"的第三种噪声
+    for (const ch of [...FULLWIDTH_PUNCT, '“', '”', '‘', '’', '…', '・', '·', '～', '你', '説']) {
       expect(UnicodeTextModelHighlighter.computeUnicodeHighlightReason(ch, opts), ch).toBeNull();
     }
   });
