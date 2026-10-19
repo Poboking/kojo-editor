@@ -15,6 +15,7 @@ import {
   type KojoStructureToken,
 } from '../src/monaco/tree-sitter/types';
 import { splitStructureTokensToSpans } from '../src/monaco/tree-sitter/semantic';
+import { extendFoldOverTrailingBlanks } from '../src/monaco/tree-sitter/engine';
 
 /**
  * 结构层 vs Monarch 的 **A/B 取数**（TSIT-M2 ②）：同一批语料、同一套档位名，两份判据各跑一遍。
@@ -358,8 +359,10 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
  * 折叠两侧的**真口径**（第二波：块容器落地后重写）。
  *
  * - **CST 侧**：直接把 `queries/folds.scm` 经 `Query` 跑在每份语料的树上，取 `@fold` 捕获节点
- *   （`block` / `item_block`）的行跨度——判据与 worker 那一条 `engine.ts::foldsFrom` **逐字同款**
- *   （有 `@fold` 就只认它、`endRow <= startRow` 的单行跨度不产折叠）。这里不再"由结构行节点现推"：
+ *   （`block` / `item_block`）的行跨度——止行口径**调用 worker 那一条**
+ *   `engine.ts::extendFoldOverTrailingBlanks`（本批起不再抄一份"看起来一样的"判据：抄来的判据量不出
+ *   引擎的行为）。`@fold` 之外的捕获不产折叠、`endRow <= startRow` 的单行跨度不产折叠，两条都照旧。
+ *   这里不再"由结构行节点现推"：
  *   第一波那种手工代理（块头 + 更深层正文 + 自写的 `for probe` 前瞻）量的是代理自己，不是语法，
  *   所以它给出的 100% / 2.80% 那组数**描述的是代理，不是块容器**，全部作废。
  * - **真源侧**：`kojoFoldingRanges(svc.parse(text, { filePath }))`——`.kojo` 折叠的唯一供给器
@@ -401,10 +404,15 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
  *   （循环 / 出错处理 / 数据表 / 询问 / 确认 / 分支规则池 / `开关:` 头 / 表达式块的分支体）。结构层折得上，
  *   大纲里却没有——宿主 `providers.ts` 把多枚折叠供给器的结果**并起来**（结构折叠是加法），所以这一类
  *   不判为错；上面 `expr_head` 那 4 条错位已经不再属于这一类（`cstOnlyByOpen` 里 `expr_head` 归零）。
- * 3. **同起点、终点不同（87 条）**——差值分布**86 条正好差 1 行**（真源把块后的尾随空行算进止行，
- *   CST 止于最后一行正文；`folds.scm` 头注写明 `_dedent` 不跨换行就是为这个），另 1 条差 2 行。
- *   即：**止行的口径差 = 尾随空行归谁**，与块识别本身无关。`@` 族是本批唯一按真源止行口径对齐的一族
- *   （`_raw_close` 的 mark 落在区内最后一行），所以它 93 条止行全中、没有稀释这条比率。
+ * 3. **同起点、终点不同（上一批 87 条）——本批已收口到 0**。差值分布曾经是 **86 条正好差 1 行**
+ *   （真源把块后的尾随空行算进止行，CST 止于最后一行正文；`folds.scm` 头注写明 `_dedent` 不跨换行
+ *   就是为这个），另 1 条差 2 行。即：**止行的口径差 = 尾随空行归谁**，与块识别本身无关。
+ *   收口方式在结构层一侧：折叠终点向真源伸过去吞掉尾随空行（`engine.ts::extendFoldOverTrailingBlanks`，
+ *   本文件的 CST 侧直接调这同一枚函数，不抄第二遍）。三条界一条不满足就不伸：
+ *   ① 只伸**最外层块**（父节点即根；真源里只有"外层循环收尾"的那几族会吞空行，嵌套分支停在正文末行
+ *   ——把嵌套块也伸过去实测过伸 6 条）；② 只吞**整行空白**的行，不许越过下一个带内容兄弟的起点行；
+ *   ③ 最多吞到**文件末行**（`"x\n"` 之后 Monaco 那行空的算数，再往后没有行）。
+ *   实测余下 0 条 ⇒ `FOLD_END_FLOOR` 从 91 抬到 97。
  */
 
 /** 结构容器节点名（`grammar.js` 的词，宿主侧零依赖语法包 TS 入口 ⇒ 这里按名字硬编码）。 */
@@ -418,10 +426,11 @@ const CONTAINER_NODE_NAMES: ReadonlySet<string> = new Set([
   'when_body',
 ]);
 
-/** `folds.scm` → 折叠区间（与 worker `foldsFrom` 同一条判据）。 */
+/** `folds.scm` → 折叠区间（终点口径直接调引擎的 `extendFoldOverTrailingBlanks`，不抄第二遍）。 */
 function cstFoldRanges(
   query: Query,
   root: TreeSitterNode,
+  text: string,
 ): Array<{ startRow: number; endRow: number; openType: string }> {
   const preferred = query.captureNames.includes('fold') ? 'fold' : null;
   const out: Array<{ startRow: number; endRow: number; openType: string }> = [];
@@ -431,7 +440,9 @@ function cstFoldRanges(
     const endRow = capture.node.endPosition.row;
     if (endRow <= startRow) continue;
     const open = capture.node.childForFieldName('open') ?? capture.node.firstNamedChild;
-    out.push({ startRow, endRow, openType: open?.type ?? capture.node.type });
+    // 止行吞掉尾随空行——引擎 `foldSlot()` 用的就是这同一枚函数
+    const extendedRow = extendFoldOverTrailingBlanks(text, capture.node, endRow).endRow;
+    out.push({ startRow, endRow: extendedRow, openType: open?.type ?? capture.node.type });
   }
   return out;
 }
@@ -491,7 +502,7 @@ describe('折叠：folds.scm 块容器区间 vs kojoFoldingRanges 真源', () =>
       const lines = splitLines(text);
       const lineNode = lineNodeByRow(tree.rootNode);
       // ① CST 侧：folds.scm 真跑（worker 用的同一条判据）
-      const cst = cstFoldRanges(foldsQuery!, tree.rootNode);
+      const cst = cstFoldRanges(foldsQuery!, tree.rootNode, text);
       // ② 真源侧：转译器符号树摊平的折叠区间，1 基 → 0 基
       const baseline = kojoFoldingRanges(svc.parse(text, { filePath: file })).map(
         (r) => [r.startLine - 1, r.endLine - 1] as [number, number],
@@ -654,18 +665,20 @@ const TOKEN_AB_FLOOR = 99.4;
  * - **起点召回 97.20%**（1,216/1,251）——只剩 35 条，全部是空体 时机 块的**口径差**
  *   （语法层"零行跨度不产折叠"，`folds.scm` 头注写明，不改）；上一批的三处缺口（`raw_block_start` 93、
  *   `expr_head` 连带 6、`"标签":` 条目 3）已一并补掉；
- * - **终点一致率 91.88%**（985/1,072）——不一致的 87 条里 **86 条正好差 1 行**（真源把块后的尾随空行算进止行，
- *   CST 止于最后一行正文：`scanner.c` 的 `_dedent` 不跨换行，是 `folds.scm` 头注写明的口径）。
- *   新增的 93 枚 `@` 块**止行逐行对齐**（`_raw_close` 的 mark 落在区内最后一行，与 `loc.end` 同口径），
- *   所以召回涨了 8 个百分点而这条比率没有下跌。
+ * - **终点一致率 100.00%**（1,072/1,072；上一批 91.88%，不一致的 87 条里 86 条差 1 行）——那 1 行的差
+ *   就是"块后的尾随空行归谁"（真源算进止行，CST 止于最后一行正文：`scanner.c` 的 `_dedent` 不跨换行，
+ *   `folds.scm` 头注写明的口径）。本批由结构层伸过去吞掉尾随空行收口（判据与三条界见上方"分歧的形状"第 3 条）；
+ *   新增的 93 枚 `@` 块**止行本来就逐行对齐**（`_raw_close` 的 mark 落在区内最后一行，与 `loc.end` 同口径），
+ *   所以这条比率上涨与召回互不稀释。
  *
  * 地板取法（都留得出解释）：**区间数 1,100**（实测 1,103，掉了就说明 `@` 族容器或查询又退化）；
  * **精确率 97**（实测 97.19，剩 0.19 个百分点给新语料抖动）；
  * **召回 97**（实测 97.20；上一批是 85，那 4 个百分点的余量本来是留给 `@` 族的，族已经落地 ⇒ 余量收回）；
- * **终点一致 91**（实测 91.88）。
+ * **终点一致 97**（实测 100.00；留 3 个百分点给新语料——止行口径刚改完，新族/新形状一旦复现"尾随空行
+ * 归谁"之外的差，线要能说出事，不许贴着实测放）。
  * 还剩一件事可再抬召回：空体 时机 的 35 条属口径之争，动它要先动 `folds.scm` 那条"零行跨度不产折叠"的约定。
  */
 const FOLD_RANGE_FLOOR = 1100;
 const FOLD_START_FLOOR = 97;
 const FOLD_RECALL_FLOOR = 97;
-const FOLD_END_FLOOR = 91;
+const FOLD_END_FLOOR = 97;

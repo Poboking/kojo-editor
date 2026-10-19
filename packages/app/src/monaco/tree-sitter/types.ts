@@ -59,7 +59,13 @@ export interface KojoStructureToken {
   readonly tier: string;
 }
 
-/** 一枚折叠区间（0 基行号；`kind` / `placeholder` 与 Monaco 的 FoldingRange 同义） */
+/**
+ * 一枚折叠区间（0 基行号；`kind` / `placeholder` 与 Monaco 的 FoldingRange 同义）
+ *
+ * `endRow` 的口径（本批起，additive：形状与协议号都不动）：**含**块后面整行空白的尾随行，
+ * 与真源 `kojoFoldingRanges` 的止行逐行对齐（判据在 `engine.ts::extendFoldOverTrailingBlanks`：
+ * 只伸最外层块、不越过下一个带内容兄弟的起点行、最多到文件末行）。
+ */
 export interface KojoStructureFold {
   readonly startRow: number;
   readonly endRow: number;

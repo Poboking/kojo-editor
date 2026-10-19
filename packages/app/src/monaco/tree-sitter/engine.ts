@@ -36,7 +36,9 @@
  *    那枚节点占哪一段码元"。缓存里不存任何 wasm 句柄（不留树、不留 Node ⇒ 不会把原生内存
  *    钉在手上）。**作废轴一律取码元而不是行号**：同一行上能并排站着好几枚顶层节点，按行判
  *    会把窗口外的条目也算进作废范围 ⇒ 重复计数（实测踩到：删一行之后顶层节点从 3,915 涨到
- *    3,921，行号与顶层节点不再一一对应）。
+ *    3,921，行号与顶层节点不再一一对应）。折叠那一面的槽段还要**算上被吞掉的尾随空行**
+ *    （止行口径见 {@link extendFoldOverTrailingBlanks}）：那些空行现在是止行的依据，
+ *    改动落在其上必须重查这一槽，否则平移回来的是一份过期止行。
  * 2. 重解之后问一次旧树 `oldTree.getChangedRanges(next)`（0.27 的口径：**以旧树为调用者**，
  *    回的是旧文本坐标的段；反过来问恒空，实测踩过），并上本次编辑自己那一段 ⇒ 脏跨度。
  *    并上编辑是保守多算：实测本语法有"删掉一行而旧树报零段"的形状（缩进记号把前后行读成
@@ -160,6 +162,114 @@ export const STRUCTURE_MAX_WINDOW_NODES = 256;
 /** 抛错原因（本地一份，不为一条日志把 `@kojo/plugin-api` 拖进 worker 依赖图） */
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 行内空白（半角/全角空格、制表、换页、CR；与词法层"空白一律不算内容"的口径一致） */
+function isBlankChar(ch: string): boolean {
+  return ch === ' ' || ch === '\t' || ch === '\u3000' || ch === '\f' || ch === '\r';
+}
+
+/**
+ * `[from, to)` 这一段码元是不是**全空白**（不认领任何内容的兄弟：空行记号 / 缩进）。
+ * 换行算空白——本语法每条换行都由 `blank_line` 记号单独认领，它不是正文。
+ */
+function isBlankRange(text: string, from: number, to: number): boolean {
+  for (let i = from; i < to; i++) {
+    const ch = text[i]!;
+    if (ch === '\n') continue;
+    if (!isBlankChar(ch)) return false;
+  }
+  return true;
+}
+
+/**
+ * 尾随空行的**可达末行**（0 基）；`<= endRow` 即"这枚不许伸"。两道界：
+ *
+ * 1. **只有根的直接孩子（最外层块）才吞**。真源里会吞尾随空行的正是"由外层循环收尾"的那几族：
+ *    它们的 `loc.end` 取**游标消费到的最后一行**，而块体循环见空行就消费、只在更浅的**非空行**前停；
+ *    写在块体内部的嵌套块，止行停在**正文末行**——A/B 实测把它们也吞进来是过伸（6 条）。
+ *    结构层零语法词 ⇒ 能用的对应判据只有树形：**父节点就是根**。
+ * 2. 同父之后第一枚**认领了内容**的兄弟：不许越过它的起点行；后面没有带内容的兄弟
+ *    （自己就是父节点的最后一段正文）时，最多伸到父节点的末行。
+ */
+function foldBlankBoundRow(text: string, node: Node, endRow: number): number {
+  const parent = node.parent;
+  if (parent === null) return endRow; // 没有父 = 这枚就是根 ⇒ 不伸（根不产折叠，走到这里说明形状变了）
+  if (parent.parent !== null) return endRow; // 嵌套块：真源的止行停在正文末行 ⇒ 不伸
+  let sibling: Node | null = node.nextSibling;
+  while (sibling !== null) {
+    if (!isBlankRange(text, sibling.startIndex, sibling.endIndex)) {
+      return Math.max(endRow, sibling.startPosition.row - 1);
+    }
+    sibling = sibling.nextSibling;
+  }
+  return Math.max(endRow, parent.endPosition.row);
+}
+
+/** 吞尾随空行后的折叠终点 + 这枚折叠（含吞掉的空行）覆盖到的码元右端（不含） */
+export interface FoldTrailingBlankExtension {
+  readonly endRow: number;
+  /** 缓存槽的作废轴：吞掉的每一行空行都算这枚折叠的**依据**，改动落在其上就必须重查这一面 */
+  readonly endIndex: number;
+}
+
+/**
+ * 折叠终点**吞掉尾随空行**（向真源 `kojoFoldingRanges` 的止行口径靠）。
+ *
+ * 为什么需要这一步：本语法每条换行都由 `blank_line` 记号单独认领（见 `folds.scm` 头注），
+ * 块节点因此**不吃**自己后面的空行；而真源的块 `loc.end` 是"游标消费到的最后一行"，
+ * 块体解析把尾随空行也消费掉了 ⇒ 两侧同一起点的止行差 1 行（A/B 实测 86/87 条失配全是这个形状）。
+ * 吞尾随空行是用户已经在用的既有行为，所以对齐方向只有一个：结构层伸过去。
+ *
+ * 收缩纪律（一条不满足就不伸，宁少不多）：
+ * 1. **只在最外层块、同一父节点内**越过（可达末行见 {@link foldBlankBoundRow}，不许越过下一个
+ *    带内容兄弟的起点行）；
+ * 2. **整行空白才算尾随**：候选行里出现任何非空白字符就停，夹着正文的行绝不吞；
+ * 3. **不越过文件末行**：候选行必须真实存在。文末换行之后那一行 Monaco 里确实是一行（空的），
+ *    所以允许吞到它，并且**只**能吞到它（`"x\n"` 的末行 = 空行；再往后没有行）。
+ *
+ * 另外保守一条：节点末位到**本行行尾**必须只剩空白，否则整枚不伸（那一行还有别人认领的东西）。
+ * 纯函数（只读 `text` 与树形），A/B 对账测试直接调它，判据与 worker 同一份，不抄第二遍。
+ */
+export function extendFoldOverTrailingBlanks(
+  text: string,
+  node: Node,
+  endRow: number,
+): FoldTrailingBlankExtension {
+  const untouched: FoldTrailingBlankExtension = { endRow, endIndex: node.endIndex };
+  const bound = foldBlankBoundRow(text, node, endRow);
+  if (bound <= endRow) return untouched;
+  let i = node.endIndex;
+  while (i < text.length && text[i] !== '\n') {
+    if (!isBlankChar(text[i]!)) return untouched;
+    i++;
+  }
+  if (i >= text.length) return untouched; // 节点结束于文末，后面没有行
+  i++; // 越过换行 ⇒ i 是 `endRow + 1` 行的行首
+  let row = endRow;
+  let endIndex = i; // 已吞到的位置 = 下一候选行的行首
+  while (row < bound) {
+    if (i === text.length) {
+      // 行首正好落在文末 = 最后一个换行之后的那一行（Monaco 里真实存在的空末行），吞掉它并且到此为止
+      row++;
+      endIndex = text.length;
+      break;
+    }
+    let j = i;
+    let blank = true;
+    while (j < text.length && text[j] !== '\n') {
+      if (!isBlankChar(text[j]!)) {
+        blank = false;
+        break;
+      }
+      j++;
+    }
+    if (!blank) break;
+    row++;
+    endIndex = j >= text.length ? text.length : j + 1;
+    i = endIndex;
+  }
+  return { endRow: row, endIndex };
 }
 
 /** 一次编辑之后"值得重查"的窗口（`nodes` = 新树坐标系；`from/to` = 折回旧文本坐标的作废跨度） */
@@ -328,13 +438,29 @@ export class StructureEngine {
     };
   }
 
-  /** 折叠捕获 → 折叠区间（`@fold` 之外的捕获不产折叠；单行跨度没有可折的东西 ⇒ 丢掉） */
-  private foldValue(capture: { name: string; node: Node }, foldPreferred: boolean): KojoStructureFold | null {
+  /**
+   * 折叠捕获 → 一槽折叠结果 + 它**实际依据**的码元段。
+   * （`@fold` 之外的捕获不产折叠；单行跨度没有可折的东西 ⇒ 丢掉 —— 这条口径不动，
+   *  空体块头仍然不产折叠，吞尾随空行只发生在**已经成块**的区间末尾。）
+   *
+   * 段取吞尾随空行之后的覆盖范围（不是节点自己的 `endIndex`）：那些空行现在也是这枚折叠的依据，
+   * 改动落在其上就必须把这一槽拉进重查窗口，否则增量拼装会给出**过期止行**（与整篇重算不再逐字相等）。
+   */
+  private foldSlot(
+    capture: { name: string; node: Node },
+    foldPreferred: boolean,
+  ): StructureCacheSlot<KojoStructureFold> | null {
     if (foldPreferred && capture.name !== 'fold') return null;
-    const startRow = capture.node.startPosition.row;
-    const endRow = capture.node.endPosition.row;
+    const node = capture.node;
+    const startRow = node.startPosition.row;
+    const endRow = node.endPosition.row;
     if (endRow <= startRow) return null;
-    return { startRow, endRow };
+    const extended = extendFoldOverTrailingBlanks(this.documentText, node, endRow);
+    return {
+      start: node.startIndex,
+      end: extended.endIndex,
+      value: { startRow, endRow: extended.endRow },
+    };
   }
 
   /** 平移一槽结果（`deltaRows === 0 && deltaOffsets === 0` 时调用方根本不会走到这里） */
@@ -580,9 +706,8 @@ export class StructureEngine {
         shift: scoped.shift,
         produce: (node, sink) => {
           for (const capture of query.captures(node)) {
-            const value = this.foldValue(capture, preferred);
-            if (value === null) continue;
-            sink.push({ start: capture.node.startIndex, end: capture.node.endIndex, value });
+            const slot = this.foldSlot(capture, preferred);
+            if (slot !== null) sink.push(slot);
           }
         },
         shiftValue: (value, delta) => this.shiftFold(value, delta),
@@ -595,9 +720,9 @@ export class StructureEngine {
     }
     const slots: StructureCacheSlot<KojoStructureFold>[] = [];
     for (const capture of query.captures(root)) {
-      const value = this.foldValue(capture, preferred);
-      if (value === null) continue;
-      slots.push({ start: capture.node.startIndex, end: capture.node.endIndex, value });
+      const slot = this.foldSlot(capture, preferred);
+      if (slot === null) continue;
+      slots.push(slot);
       if (slots.length > KOJO_STRUCTURE_MAX_TOKENS) break;
     }
     this.foldCache = slots.length > KOJO_STRUCTURE_MAX_TOKENS ? NO_CACHE : { slots, complete: true };
