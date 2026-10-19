@@ -149,6 +149,32 @@ export const KOJO_TOKEN_TIERS: readonly KojoTokenTier[] = [
   { tier: '整行原生直通', tokens: ['keyword.raw'], why: '围栏 / `$标签` / `@函数` = 不透明整块，与行内指令分档' },
 ];
 
+/**
+ * `.kojo` 打字期的**成对记号**（一处登记、三格消费：`brackets` = 配对高亮 / 对着色 / 跳到配对，
+ * `autoClosingPairs` = 敲开括号补闭括号，`surroundingPairs` = 选中文本敲括号包住它）。
+ *
+ * 每一对都要有语法事实背书，事实住在 `kojo-sugar`，本表只做 Monaco 形态的翻译：
+ * - `{}` 插值 `{表达式}`（本文件 tokenizer 的 `interp` 态 ⇄ `codegen.ts` 的 `classifyInterpolation`）；
+ * - `[]` 规则池标签 `[条件]`（`lexer.ts` 的 `RULE_TAG_RE`）与 `[[属性名]]` 名字段；
+ * - `「」` 台词标记（`lexer.ts` / `codegen.ts` 的台词引号判据）；
+ * - `（）` / `()` 条件与实参的括注；
+ * - `""` 字符串值（`初回 "key"：`；`lexer.ts` 的 `inlineCommentIndex` 认 `"` 为串界，
+ *   与它同一条判据的 ERB 侧早就配了这一对，`.kojo` 此前漏了一格）。
+ *
+ * **不许进这张表的**：全角 `：` / `，`（块头终止符与分隔符，`keywords.ts` 的 `FULLWIDTH_COLON`
+ * 只作行尾判据，从来不是括号对）；台词标记的**异体形** `｢｣` / `『』`——糖包目前没导出成对标记
+ * 清单（那两份引号表是 `codegen.ts` 里的私有常量），在本层另抄一串括号就是第二个真源，
+ * 要收这一格得先在糖包导出。钉测：`packages/app/tests/kojo-language-config.test.ts`。
+ */
+const KOJO_PAIRS: readonly (readonly [open: string, close: string])[] = [
+  ['{', '}'],
+  ['[', ']'],
+  ['「', '」'],
+  ['（', '）'],
+  ['(', ')'],
+  ['"', '"'],
+];
+
 export function registerKojoLanguage(monaco: typeof Monaco): void {
   if (monaco.languages.getLanguages().some((l) => l.id === KOJO_LANGUAGE_ID)) return;
 
@@ -290,22 +316,12 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
       increaseIndentPattern: enterPatterns.increaseIndentPattern,
       decreaseIndentPattern: enterPatterns.decreaseIndentPattern,
     },
-    brackets: [
-      ['{', '}'],
-      ['「', '」'],
-      ['（', '）'],
-      ['(', ')'],
-    ],
-    autoClosingPairs: [
-      { open: '{', close: '}' },
-      { open: '「', close: '」' },
-      { open: '（', close: '）' },
-      { open: '(', close: ')' },
-    ],
-    surroundingPairs: [
-      { open: '{', close: '}' },
-      { open: '「', close: '」' },
-    ],
+    // 三格同一张表派生；`open === close` 的那一对（`"`）不是括号，只进闭合与包裹两格
+    brackets: KOJO_PAIRS.filter(([open, close]) => open !== close).map(
+      ([open, close]) => [open, close] as [string, string],
+    ),
+    autoClosingPairs: KOJO_PAIRS.map(([open, close]) => ({ open, close })),
+    surroundingPairs: KOJO_PAIRS.map(([open, close]) => ({ open, close })),
   });
 }
 
