@@ -1,9 +1,8 @@
 import type { DiffViewSide, KernelEventMap } from '@kojo/plugin-api';
 import { compareContent, type ContentEquality } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
-import { ERB_LANGUAGE_ID } from '../monaco/erb-language';
-import { KOJO_LANGUAGE_ID } from '../monaco/kojo-language';
 import { diffPaneKeyOf, pushDiff, type DiffRequest } from './diff-core';
+import { languageFor } from './editor-model-pool';
 
 /**
  * 通用 diff 视图的宿主接线（2026-10-15 比对/历史批；W10 第 2 点改多开栈）。
@@ -48,12 +47,25 @@ export function validateDiffRequest(r: DiffRequest): string | null {
   return bad(r.original, '左') ?? bad(r.modified, '右') ?? null;
 }
 
-/** 从标签/路径尾推断 Monaco 语言 id（未知即 plaintext——高亮是锦上添花，不能猜错） */
+/**
+ * 一侧的 Monaco 语言 id（DRIFT-APP 1，2026-10-19：**判据不在此另立**）。
+ *
+ * 此前这里自写一份尾正则当方言清单，比编辑器侧少了一整个正文扩展名——症状是同一份
+ * 大写正文文件在编辑器里是 ERB 高亮、在差异视图里是纯文本。差异视图回答的问题与
+ * 编辑器一模一样（"这个路径该用哪门语言显示"），所以**直接复用
+ * `editor-model-pool.languageFor`**：那份函数自己指回契约层的方言谓词，契约清单一动
+ * 两侧同时跟着动，第二处抄本从根上没有了。
+ *
+ * 复用带来的两处口径对齐（都是"向编辑器看齐"，不是新判据）：
+ * - JSON 侧走 JSON 语言（此前落纯文本）；
+ * - 判据取 `extname(basename)` 最后一段，多点名与点文件两侧一致判否（旧尾正则会把
+ *   点文件误判成方言）。
+ *
+ * 对拍判据见 `tests/diff-view.test.ts`：同一份路径在编辑器侧与差异视图侧必须给出
+ * **同一个** language id——这条断言不依赖本文件写没写对，回退即红。
+ */
 export function languageIdForSide(side: DiffViewSide): string {
-  const probe = (side.path ?? side.label).toLowerCase();
-  if (/\.kojo$/.test(probe)) return KOJO_LANGUAGE_ID;
-  if (/\.(erb|erh)$/.test(probe)) return ERB_LANGUAGE_ID;
-  return 'plaintext';
+  return languageFor(side.path ?? side.label);
 }
 
 /* ------------------------------ 判等（W17 DIFF-EQ） ------------------------------ */

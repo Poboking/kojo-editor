@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { KernelEventMap } from '@kojo/plugin-api';
+import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { languageFor } from '../src/ui/editor-model-pool';
 import {
   bindDiffView,
   clearDiff,
@@ -61,6 +63,51 @@ describe('languageIdForSide', () => {
   it('认不出的一律 plaintext（高亮是锦上添花，不许猜错）', () => {
     expect(languageIdForSide({ label: '历史版本 2026-10-15', path: 'C:/appdata/backup/x.123.bak' })).toBe('plaintext');
     expect(languageIdForSide({ label: '读不出的路径' })).toBe('plaintext');
+  });
+});
+
+/**
+ * DRIFT-APP 1 对拍（2026-10-19）：**同一份路径在编辑器侧与差异视图侧必须给出同一个
+ * language id**。
+ *
+ * 为什么写成对拍而不是"断言我新写的正则"：差异视图此前自己抄了一份方言尾正则，少一
+ * 整个正文扩展名（症状 = 同一份大写正文文件编辑器里是 ERB 高亮、差异视图里是纯文本）。
+ * 只断言新代码的用例，回退成旧正则照样过——那种测试不守住任何东西。对拍断言的是
+ * "两处不许分叉"这件事本身：把 `languageIdForSide` 换回旧的自写尾正则，`.erm` 那一行
+ * 与点文件那一行立刻红。
+ */
+describe('languageIdForSide ⇄ 编辑器侧 languageFor 对拍（同一份路径只许一个答案）', () => {
+  const PLAINTEXT = 'plaintext';
+  const cases: [string, string][] = [
+    ['C:\\game\\ERB\\口上\\M_KOJO_K11.erb', ERB_LANGUAGE_ID],
+    ['C:\\game\\ERB\\口上\\M_KOJO_K11.ERB', ERB_LANGUAGE_ID],
+    ['C:\\game\\ERB\\口上\\正文.erm', ERB_LANGUAGE_ID],
+    ['C:\\game\\ERB\\口上\\MARKS_OF_SUIKA.ERM', ERB_LANGUAGE_ID],
+    ['C:\\game\\ERB\\口上\\变量定义.erh', ERB_LANGUAGE_ID],
+    ['D:\\作者工作区\\事件.kojo', KOJO_LANGUAGE_ID],
+    ['D:\\x\\说明.txt', PLAINTEXT],
+  ];
+
+  it.each(cases)('%s ⇒ 两侧同一个 id（且确为 %s）', (p, expected) => {
+    expect(languageFor(p), `编辑器侧 ${p}`).toBe(expected);
+    expect(languageIdForSide({ label: p, path: p }), `差异视图·路径侧 ${p}`).toBe(expected);
+    expect(languageIdForSide({ label: p }), `差异视图·仅标签侧 ${p}`).toBe(expected);
+  });
+
+  it('契约方言清单的每个扩展名两种写法都零漂移（清单日后加一项，本条自动覆盖）', () => {
+    for (const ext of ERB_DIALECT_EXTENSIONS) {
+      for (const form of [ext, ext.toUpperCase()]) {
+        const p = `C:\\game\\ERB\\口上\\文件${form}`;
+        expect(languageIdForSide({ label: p, path: p }), `对拍 ${form}`).toBe(languageFor(p));
+      }
+    }
+  });
+
+  it('多点名与点文件两侧一致判否（口径 = extname(basename)，不是整条路径尾巴）', () => {
+    for (const p of ['C:\\x\\事件.kojo.bak', 'C:\\x\\.erb', 'C:\\dir.ERB\\说明.txt']) {
+      expect(languageIdForSide({ label: p, path: p }), `对拍 ${p}`).toBe(languageFor(p));
+    }
+    expect(languageFor('C:\\x\\.erb')).toBe(PLAINTEXT);
   });
 });
 
