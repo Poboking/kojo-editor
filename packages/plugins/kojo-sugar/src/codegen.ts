@@ -1861,17 +1861,22 @@ function emitRawLine(
 /* ------------------------------ 数值增减行（1016 批） ------------------------------ */
 
 /**
- * 「数值增减」行降糖：`增减 <族>:<对象>:<槽> <op> <增量>` → 一行 `CALL <engine>(…)`。
+ * 「数值增减」行降糖：`增减 <族>:<对象>:<槽> <op> <增量>` → 一行产物（两种形态）。
  *
- * - **族 → 目标函数（`engine`）+ 参数序（`argOrder`）+ 变量槽形态（`slotMode`）** 由 adapter 的
- *   增减族表声明（游戏知识只住 adapter）；糖层**只查表**、按 `argOrder` 排实参。对象与变量槽
- *   **原样**透传（变量槽是引擎变量下标 / 名，走 `lowerExpression` 会误报 `unknown-identifier`），
- *   只有增量交表达式降糖（`lowerExpression`）。
+ * - **族 → 产物形态 + 参数序 + 变量槽形态** 由 adapter 的增减族表声明（游戏知识只住 adapter）；
+ *   糖层**只查表**。对象与变量槽**原样**透传（变量槽是引擎变量下标 / 名，走 `lowerExpression`
+ *   会误报 `unknown-identifier`），只有增量交表达式降糖（`lowerExpression`）。
+ * - 形态一 `'call'`（有增减封装函数的游戏）→ `CALL <engine>(…)`，实参按 `argOrder` 排；
+ *   形态二 `'assign'`（增减直写在变量上的游戏）→ `<template> <运算符> <增量>`。
  * - **fail-closed（两成因互斥文案，零新诊断码，复用既有码 `unknown-identifier` error）**：
  *   ①族头未登记（查表 `undefined`，含空表 / 拼错）→ 不降糖；
  *   ②变量槽形态不符（引用非三段 / 对象或槽为空 / 该族要求数字下标却写了名字）→ 不降糖。
  *   两处都**不产半成品**（不往 `em` 落任何行），与 `_statementFn` 空位槽同一口径。
- * - `-=` 的增量取负：单原子（`100` / `好感度`）直接前置 `-`；含顶层运算符时加括号 `-(…)` 防优先级错。
+ * - `-=` 的增量取负（**仅 call 形态**）：单原子（`100` / `好感度`）直接前置 `-`；含顶层
+ *   运算符时加括号 `-(…)` 防优先级错。assign 形态直接用 `-=`，不取负。
+ * - `=` 的两种口径（不对称，各有理由）：call 形态沿用 1016 批既定口径"`=` 视为变动值"
+ *   （封装函数表达不了"设为"）；assign 形态按字面降成**赋值**（直写形态表达得了，且作者
+ *   写 `=` 就是想要赋值）。
  */
 function emitMutator(
   em: Emitter,
@@ -1925,6 +1930,23 @@ function emitMutator(
     return;
   }
   const lowered = lowerExpression(m.delta, exprCtx(ctx, node.loc.start));
+
+  // ---- assign 形态（2026-10-19 AM-1 P5）：游戏把增减直写在变量上，没有封装函数可调 ----
+  // 产物 = `<左值> <运算符> <增量>`。两处与 call 形态**故意不同**：
+  // ① `-=` 不取负：ERB 的复合赋值本身就是"左值 减 (右值)"，再前置负号会变成加；
+  // ② `=` 按字面降成**赋值**（call 形态表达不了"设为"，故那边沿用 1016 批既定口径
+  //    "`=` 视为变动值"——见 `geek-numchange.test.ts` 的钉法）。直写形态天然表达得了赋值，
+  //    再把它当 `+=` 才是真的错。
+  if (spec.form === 'assign') {
+    const target = spec.template
+      .replaceAll('{family}', parts[0]!)
+      .replaceAll('{object}', object)
+      .replaceAll('{slot}', slot);
+    const op = m.op === '=' ? '=' : `${m.op}=`;
+    em.push(indent, `${target} ${op} ${lowered}`, node.loc.start.line);
+    return;
+  }
+
   const delta = m.op === '-' ? (isSimpleMutatorOperand(m.delta) ? `-${lowered}` : `-(${lowered})`) : lowered;
   const byRole: Record<MutatorArgRole, string> = { object, slot, delta };
   const args = spec.argOrder.map((role) => byRole[role]);

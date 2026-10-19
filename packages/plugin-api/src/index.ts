@@ -531,7 +531,17 @@ export {
 export type { SugarColumnRun } from './sugar';
 
 /* ---- 数值增减族表（1016 独占追加区块；勿在他处重排） ---- */
-export type { KojoMutatorSpec, KojoMutatorTable, MutatorArgRole } from './game';
+// 2026-10-19（AM-1 P5）：`KojoMutatorSpec` 由单接口改为 **call / assign 二形态判别联合**
+// （有封装函数的游戏降 `CALL`，把增减直写在变量上的游戏降赋值）。新增两个成员接口与
+// `MutatorSlotMode` 别名；`MutatorArgRole` 仅 call 形态消费。
+export type {
+  KojoMutatorAssignSpec,
+  KojoMutatorCallSpec,
+  KojoMutatorSpec,
+  KojoMutatorTable,
+  MutatorArgRole,
+  MutatorSlotMode,
+} from './game';
 
 /* ---- 计数器值域表（1016 独占追加区块；勿在他处重排） ---- */
 export type { KojoCounterTable } from './game';

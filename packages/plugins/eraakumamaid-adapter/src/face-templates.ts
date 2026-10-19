@@ -32,13 +32,15 @@
  *    （路由拼名 `KOJO_EVENT_K{NO:TARGET}` 对 15 号解析为 `KOJO_EVENT_K15`），
  *    **不是** eraTW 式的事件编号槽（`KOJO_EVENT_K1_12` 形态全语料 0 处）。
  *
- * 收录范围（首批 = 调教主链路 9 面 + 日常域 1 面，对齐实施计划 P3
- * 「主链路 8–10 面」；糖语言只服务中文社区，首批按 eratw 既有首批平移）：
- * 指令 / 指令前 / 参数变动 / 标记 / 计数器 / 事件 / 射精 / 绝顶 /
- * 射精与绝顶 / 日常。已实测但**未进首批**的面（客人 / 指令后 / 问候 /
- * 日常指令 / 日期 / 愿望 / 商店 / 交流 / 角色介绍 / 射精后 / 对方射精前 /
- * 大喜欢…）罗列在交付报告的「可增量清单」，证据同级，按增量交付契约
- * （缺面 `face-table-missing` fail-closed）随时可补。
+ * 收录范围 = **22 面**：首批 10 面（调教主链路 9 面 + 日常域 1 面，对齐实施计划 P3
+ * 「主链路 8–10 面」）+ 2026-10-19 P5 增量批 12 面（客人 / 指令后 / 问候 / 日常指令 /
+ * 日期 / 愿望 / 商店 / 交流 / 角色介绍 / 射精后 / 对方射精前 / 最爱）。增量批与首批
+ * **证据同级**（同一路由文件、同一 `_K{n}` 模板形），只是当时按"主链路先上"分批交付。
+ * 缺面仍是 `face-table-missing` fail-closed——作者写到未登记的面会报错，**不会静默出错**。
+ *
+ * 路由共有**三个**文件（首批只用到前两个，增量批补齐第三个）：
+ * `ERB/EVENT_K/EVENT_K.ERB`（调教主链）、`ERB/EVENT_K/EVENT_K_DAILY.ERB`（日常域）、
+ * `ERB/EVENT_K/EVENT_K_COMM.ERB`（交流域，仅 `交流` 一面）。
  *
  * 证据计数口径（实测，`grep -E "^@<面>K[0-9]+( *,.*)?$"`）：
  * 主链路 9 面各 74 个角色实装（`ERB/EVENT_K/{no} {名前}/`，编号 1–71 /
@@ -168,6 +170,82 @@ export function createErakumamaidFaceTable(): KojoFaceTable {
       // 与 eratw 首批的 `日常`（`M_KOJO{t}_DAILY_EVENT_K{n}_{i}`，编号 = 日常事件号）
       // 概念对齐但形态不同：本游戏日常事件名同样走 ARGS，函数名无编号尾。
       日常: { template: 'KOJO_DAILY_K{n}' },
+
+      /* ================== 2026-10-19 P5 增量批（12 面） ==================
+       * 与首批同一模板形（`{名}_K{n}`，无 `{i}` / 无上下文段），证据 = 路由行 + 域内定义数。
+       * 定义数口径：`grep -E "^@<面>_K[0-9]+" ERB/EVENT_K --include=*.ERB | sort -u`。
+       */
+
+      // 客人口上：`EVENT_K.ERB:525`。**本面有两条路由**——`{NO:ASSI}`（客人是助手）与
+      //   `{NO:TARGET}`（客人是目标），同一角色两种身份都可能被叫到；模板只有一个，
+      //   因为两条路由拼的是同一个函数名族。
+      // 定义 73 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1.ERB:4587`。
+      客人: { template: 'KOJO_GUEST_K{n}' },
+
+      // 指令后口上（一条指令执行完毕）：`EVENT_K.ERB:55` `TRYCALLFORM KOJO_ENDCOM_K{NO:TARGET}`。
+      // 与 `指令` 的分工：`指令` 是**执行前**的台词（:25），本面是**执行后**的收尾台词。
+      // 定义 63 处，例：`ERB/EVENT_K/10 メリィエーナ/EVENT_K10.ERB:6480`。
+      指令后: { template: 'KOJO_ENDCOM_K{n}' },
+
+      // 问候口上：`EVENT_K_DAILY.ERB:149` `TRYCALLFORM KOJO_GREETING_K{NO:TARGET}`。
+      // 定义 74 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1_DAILY.ERB:4`。
+      问候: { template: 'KOJO_GREETING_K{n}' },
+
+      // 日常指令口上：`EVENT_K_DAILY.ERB:279` `TRYCALLFORM KOJO_DAILYCOM_K{NO:TARGET}`。
+      // 与 `日常` 的分工：`日常` 是 SHOP 画面下的**事件**台词（ARGS 带事件名），本面是
+      //   **日常指令**（打工/学习一类）执行时的台词。两者都在日常域路由，不是同一面。
+      // 定义 74 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1_DAILY.ERB:559`。
+      日常指令: { template: 'KOJO_DAILYCOM_K{n}' },
+
+      // 约会口上：`EVENT_K_DAILY.ERB:380` `TRYCALLFORM KOJO_DATE_K{NO:TARGET}`。
+      // ⚠ 同族另有 `KOJO_DATE_K{n}_ADDSELECT` 兄弟函数（追加选择肢，`DATE`+`WISH` 合计
+      //   73 处）——那是**独立函数**而非本面的编号尾（`_ADDSELECT` 是单词后缀，不是数字），
+      //   主路由从不以 `_ADDSELECT` 拼名，故**不**声明 `indexKind`、不收为独立面。
+      // 定义 60 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1_DAILY.ERB:1891`。
+      日期: { template: 'KOJO_DATE_K{n}' },
+
+      // 愿望口上：`EVENT_K_DAILY.ERB:412` `TRYCALLFORM KOJO_WISH_K{NO:TARGET}`。
+      // 同样有 `_ADDSELECT` 兄弟函数（见上条）。
+      // 定义 74 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1_SHOP.ERB:6`（愿望面住在
+      //   `_SHOP` 文件里，不在 `_DAILY`——按文件找面会漏，这是实测结论）。
+      愿望: { template: 'KOJO_WISH_K{n}' },
+
+      // 商店口上：`EVENT_K_DAILY.ERB:436` `TRYCALLFORM KOJO_SHOP_K{NO:TARGET}`。
+      // 定义 65 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1_SHOP.ERB:425`。
+      商店: { template: 'KOJO_SHOP_K{n}' },
+
+      // 交流口上：**第三个路由文件** `EVENT_K_COMM.ERB:36`
+      //   `TRYCALLFORM KOJO_COMM_K{NO:TARGET}, ARGS`（带 ARGS，与日常域同形）。
+      // 定义 37 处（本游戏里实装这一面的角色最少），例：
+      //   `ERB/EVENT_K/01 フェリシエル/EVENT_K1_COMM.ERB:6`。
+      交流: { template: 'KOJO_COMM_K{n}' },
+
+      // 角色介绍：`EVENT_K_DAILY.ERB:15`，**本表唯一不带 `KOJO_` 前缀**的面
+      //   （函数名族是 `EVENT_PROFILE_K{n}`）。两条路由：`{NO:ARG}` 与 `{NO:TARGET}`。
+      // 定义 74 处，例：`ERB/EVENT_K/01 フェリシエル/EVENT_K1.ERB:69`（住在主文件里，
+      //   路由却属日常域——同 `愿望` 的"文件与域不重合"）。
+      角色介绍: { template: 'EVENT_PROFILE_K{n}' },
+
+      // 射精后口上（PLAYER 射精箇所選択**直後**）：`EVENT_K.ERB:399`，路由注释
+      //   「PLAYERの射精箇所選択直後の口上」。守卫 `PENIS(PLAYER) == 0` 直接跳过；
+      //   说完若 `LINECOUNT` 变了则补一行空行（:406）。
+      // 与 `射精`（:379，选择**直前**）是前后两面，不是同一面的两种写法。
+      // 定义 27 处，例：`ERB/EVENT_K/15 槞彁/基本/EVENT_K15.ERB:4294`。
+      射精后: { template: 'KOJO_MESSAGE_AFTERSHOOTCHANGE_K{n}' },
+
+      // 对方射精前口上（TARGET 射精直前）：`EVENT_K.ERB:417`，路由注释
+      //   「TARGETの射精直前の口上」。调用前后各 `CALL BLANKLINE`（:416 / :418）——
+      //   本面自带版面留白，作者不用自己补。
+      // 定义 25 处，例：`ERB/EVENT_K/15 槞彁/基本/EVENT_K15.ERB:4272`。
+      对方射精前: { template: 'KOJO_MESSAGE_BEFORE_TARGETSHOOT_K{n}' },
+
+      // 大喜欢口上（「大好き」）：`EVENT_K.ERB:362`；唯一 caller 是
+      //   `ERB/TRAIN/EVENT_SHOOT.ERB:1237`（特定场景内，说完即 `CHOICE = 0`）。
+      // 中文名沿用 `family-index.ts` 已定的译法（`MESSAGE_DAISYUKI: '大喜欢'`），
+      //   两个面之间不另造同义词。
+      // 定义**仅 2 处**（54 / 70 号角色）——全语料最少人实装的面，收了是因为它与其他面
+      //   完全同形（`_K{n}`、无编号尾），不收只会让这两个角色的作者写不了这一面。
+      大喜欢: { template: 'KOJO_MESSAGE_DAISYUKI_K{n}' },
     },
 
     /**

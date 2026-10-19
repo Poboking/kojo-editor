@@ -34,7 +34,7 @@ import { createKojoProjectsPanel, type DirListState } from '@kojo/kojo-project-k
 import { readPackageAttribution, readSourceAttribution, type AttributionState as AttrState } from '@kojo/kojo-project-kit';
 import { createPackageActions } from '@kojo/kojo-project-kit';
 import { resolveNewItemPath, type NewItemKind } from '@kojo/kojo-project-kit';
-import { workspaceChangeOf } from './watch-scope';
+import { workspaceChangeOf } from '@kojo/kojo-project-kit';
 import type { KojoCompiler } from '@kojo/kojo-project-kit';
 import { writeScaffoldFiles } from '@kojo/kojo-project-kit';
 import {
@@ -56,7 +56,7 @@ import {
 } from './tutorial-lazy';
 import type { TutorialId } from './tutorial-content';
 import type { PendingDeploy } from './deploy';
-import { charaSearchScopeOptions } from './search-scope';
+import { charaSearchScopeOptions } from '@kojo/kojo-project-kit';
 
 /**
  * 教程语义 id → 本插件注册的 overlay 贡献 id（用户反馈 8 批）。

@@ -39,6 +39,7 @@ import {
   combineDigests,
   foldDigest,
   join,
+  pathKey,
 } from '@kojo/plugin-api';
 import {
   createDeployKojoWizard,
@@ -61,6 +62,7 @@ import {
   type PendingDeploy,
   type PendingImport,
 } from '@kojo/kojo-project-kit';
+import { charaSearchScopeOptions, workspaceChangeOf } from '@kojo/kojo-project-kit';
 import { ERAAKUMA_MAID } from './constants';
 import {
   deriveCharaNoFromFileNames,
@@ -74,6 +76,8 @@ import { loadErakumamaidVariableSchema } from './variable-schema';
 import { loadErakumamaidCallProtocol, type ErakumamaidCallProtocol } from './call-protocol';
 import { EMPTY_INSTRUCTION_TABLE, loadErakumamaidInstructionTable } from './instruction-table';
 import { createErakumamaidFaceTable } from './face-templates';
+import { AM_LIBRARY_FUNCTIONS, createErakumamaidLibraryTable } from './library-table';
+import { AM_MUTATOR_FAMILIES, createErakumamaidMutatorTable } from './mutator-table';
 import { ERAAKUMA_MAID_NAME_GLOSSARY } from './name-glossary';
 import { scaffoldErakumamaidProject } from './scaffold';
 import { withAmScaffold } from './new-project-wizard';
@@ -139,6 +143,47 @@ export function createErakumamaidAdapterPlugin(): Plugin {
         kojoFaceTemplates: createErakumamaidFaceTable(),
         // 日文名 → 中文名对照词典（只加显示备注，不改任何实际目录/文件名）
         nameGlossary: ERAAKUMA_MAID_NAME_GLOSSARY,
+        // 函数中文化表（2026-10-19 P5）——纯数据、无 IO（手工维护的静态表）：
+        // 糖层把「中文函数名」降成本游戏的原生 ERB 函数名；查不到 fail-visible。
+        kojoLibraryTable: createErakumamaidLibraryTable(AM_LIBRARY_FUNCTIONS),
+        // 数值增减族表（2026-10-19 P5）——**直写形态**（`form: 'assign'`）：
+        // 本游戏没有增减封装函数，产物是 `族:对象:槽 += n` 而不是 `CALL …(…)`。
+        kojoMutatorTable: createErakumamaidMutatorTable(AM_MUTATOR_FAMILIES),
+        // 条件矩阵剧情线预设（2026-10-19 P5）：状态键口径取自本游戏 `CSV/CFLAG.csv`
+        // 与 `CSV/Talent.csv` 的名称列——同一条线给「具名 / 编号」两形态，面板只做精确匹配。
+        //
+        // 选键判据 = **在口上域真有条件行**（`ERB/EVENT_K/` 内条件位出现次数）：
+        // 好感度 333 · 恋慕 16,934 · 相思相愛 805 · 出産経験 269。
+        // ⚠ 特意**不**收两条看起来更像"剧情线"的键，因为它们在口上域几乎没有行：
+        //   `TALENT:片思い`（表白前状态）全语料条件位 **0** 处（仅 `DAILY_CMD_LIST.ERB:904`
+        //   一处是代码引用）；`CFLAG:同棲`（按位管理）在 `EVENT_K/` **0** 处。
+        //   收进来只会得到一个点不动、永远筛不出行的按钮——宁可少一条线。
+        stateLinePresets: [
+          {
+            id: 'affection',
+            label: '好感线',
+            description: '以好感度（`CSV/CFLAG.csv:2`）为轴的状态线。',
+            keys: ['CFLAG:好感度', 'CFLAG:2'],
+          },
+          {
+            id: 'love',
+            label: '恋慕线',
+            description: '以恋慕（`CSV/Talent.csv:150`）为轴的状态线；本游戏的"关系"只把恋慕列为本格。',
+            keys: ['TALENT:恋慕', 'TALENT:150'],
+          },
+          {
+            id: 'mutual',
+            label: '相愛线',
+            description: '以相思相愛（`CSV/Talent.csv:152`，"両思い"）为轴的状态线：恋慕走完之后的阶段。',
+            keys: ['TALENT:相思相愛', 'TALENT:152'],
+          },
+          {
+            id: 'birth',
+            label: '生育线',
+            description: '以出産経験（`CSV/Talent.csv:22`）为轴的状态线。',
+            keys: ['TALENT:出産経験', 'TALENT:22'],
+          },
+        ],
 
         /**
          * 生成新角色口上骨架并**直接落盘**（契约 v0.3 的 `scaffold` 位）。
@@ -402,6 +447,44 @@ export function createErakumamaidAdapterPlugin(): Plugin {
         wsDirCache.delete(absDir);
         ensureWsDir(absDir);
       };
+
+      /**
+       * 外部改动落在工作区的哪一层（AM-1 P5 批接线；判据本身在共享包）。
+       *
+       * 之前 `wsDirCache` 只被**本插件自己的动作**失效（`createItem → refreshDir` /
+       * `invalidateWs`），于是作者用资源管理器往包里丢文件、或直接在磁盘上改包名时，
+       * 面板一直显示旧内容——用户感知是"面板卡住"，但重开就好，这类问题最难被报上来。
+       * 期望是那一批制造的，收口也该是它：订阅 `file.changed`，按共享层算出的目标重列。
+       */
+      const workspaceRoots = (): string[] => {
+        try {
+          return workspaces.roots();
+        } catch {
+          return [];
+        }
+      };
+
+      ctx.onDispose(
+        ctx.bus.on('file.changed', (ev) => {
+          const target = workspaceChangeOf(ev.path, workspaceRoots());
+          if (target.projectListChanged) {
+            refreshWsProjects();
+            return;
+          }
+          if (target.dirToRefresh === null) return;
+          // **按统一形态找缓存键**，不直接 `has(dirToRefresh)`：事件里的路径是平台原样
+          // （Rust notify 给什么就是什么），而缓存键是 `join()` 出来的形态——两者在
+          // Windows 上分隔符与大小写都不保证一致，直接 has 会"看着对、永远不命中"。
+          const want = pathKey(target.dirToRefresh);
+          for (const cached of wsDirCache.keys()) {
+            // 只重列**已经在缓存里**的目录 = 作者看过的那些；没缓存的等展开时惰性取到新数据
+            if (pathKey(cached) === want) {
+              refreshDir(cached);
+              break;
+            }
+          }
+        }),
+      );
 
       const ensureWsAttribution = (absDir: string): void => {
         if (wsAttrCache.has(absDir)) return;
@@ -668,6 +751,25 @@ export function createErakumamaidAdapterPlugin(): Plugin {
           // 外链只发意图：宿主落地（闸的唯一执法点在 Rust，插件不开窗）
           openExternal: (url) => ctx.bus.emit('ui.openExternal', { url }),
         }),
+      });
+
+      /**
+       * 检索范围：角色级收窄（AM-1 P5 批）。
+       *
+       * 判据（`CharaInfo.kojoDir` → 该角色的检索根）住在共享包 `charaSearchScopeOptions`：
+       * 它只吃契约字段，两个 adapter 共用同一份投影。宿主全文检索只认 `label` + `roots`
+       * 两样泛型事实——对它而言"只看某个角色"与"用户少选了几个目录"没有区别。
+       *
+       * 只认本项目：`adapterId` 不是自己的 ⇒ 空候选 ⇒ 宿主不画选择器（默认关）。
+       * `order: 10` 与 eratw 同值：两个 adapter 同时在场时按项目归属过滤，不靠 order 分胜负。
+       */
+      ctx.slots.register('search.scope', {
+        id: `${ERAAKUMA_MAID.gameId}-chara-scope`,
+        order: 10,
+        provide: (project) =>
+          project !== null && project.adapterId === ERAAKUMA_MAID.gameId
+            ? charaSearchScopeOptions(project.charaIndex.values())
+            : [],
       });
 
       refreshWsProjects();

@@ -21,6 +21,8 @@ export {
 } from './family-index';
 export { createErakumamaidConventions } from './conventions';
 export { createErakumamaidFaceTable } from './face-templates';
+export { AM_LIBRARY_FUNCTIONS, createErakumamaidLibraryTable } from './library-table';
+export { AM_MUTATOR_FAMILIES, createErakumamaidMutatorTable } from './mutator-table';
 export { ERAAKUMA_MAID_NAME_GLOSSARY, glossName } from './name-glossary';
 export { loadErakumamaidCallProtocol, type ErakumamaidCallProtocol } from './call-protocol';
 export {

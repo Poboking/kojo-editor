@@ -23,9 +23,9 @@ import type { KojoMutatorSpec, KojoMutatorTable } from '@kojo/plugin-api';
 /** 族头 → 增减规格（单一真源；手工维护，随实测增补）。 */
 export const ERATW_MUTATOR_FAMILIES: ReadonlyMap<string, KojoMutatorSpec> = new Map<string, KojoMutatorSpec>([
   // CFLAG 族：`CALL CHANGE_CFLAG(<槽>, <对象>, <增量>)`；槽 = CFLAG 下标（数字）。
-  ['CFLAG', { engine: 'CHANGE_CFLAG', argOrder: ['slot', 'object', 'delta'], slotMode: 'number' }],
+  ['CFLAG', { form: 'call', engine: 'CHANGE_CFLAG', argOrder: ['slot', 'object', 'delta'], slotMode: 'number' }],
   // BASE 族：`CALL BUFF_BASE(<对象>, <槽>, <增量>)`；槽 = BASE 下标（名或数字，原样传）。
-  ['BASE', { engine: 'BUFF_BASE', argOrder: ['object', 'slot', 'delta'], slotMode: 'name-or-number' }],
+  ['BASE', { form: 'call', engine: 'BUFF_BASE', argOrder: ['object', 'slot', 'delta'], slotMode: 'name-or-number' }],
 ]);
 
 /** 由「族头 → 规格」映射构建查询面（纯数据，无 IO）。 */

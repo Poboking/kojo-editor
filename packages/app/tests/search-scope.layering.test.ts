@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
  * 这个文件守的是**边界本身**，不是某一行实现——所以它比单元测试更该长存。
  *
  * 反向对照同样钉住：判据不是"哪里都没有"，而是**只准住在提供方**
- * （`packages/plugins/eratw-adapter/src/search-scope.ts` 必须认得 `kojoDir`）。
+ * （`packages/kojo-project-kit/src/search-scope.ts` 必须认得 `kojoDir`）。
  */
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
@@ -45,7 +45,10 @@ const DOMAIN_TOKENS = [
 ];
 
 /** 提供方侧必须出现的判据（少一个就是判据被搬走或整条腿没接上） */
-const PROVIDER_FILE = 'packages/plugins/eratw-adapter/src/search-scope.ts';
+// 2026-10-19 AM-1 P5 批：提供方从 `eratw-adapter` 上移到共享包 `kojo-project-kit`
+// （它只吃契约字段 `CharaInfo.kojoDir`，零游戏名词）。**守卫本身不变**——判据仍必须
+// 住在"提供方"，只是提供方换了包；两个 adapter 现在共用同一份实现。
+const PROVIDER_FILE = 'packages/kojo-project-kit/src/search-scope.ts';
 const PROVIDER_TOKENS = ['kojoDir', 'charaIndex'];
 
 describe('检索范围的分层边界', () => {
