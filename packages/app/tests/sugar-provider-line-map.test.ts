@@ -63,6 +63,7 @@ vi.mock('../src/monaco/entry', () => ({
 const seam = await import('../src/ui/editor-global-providers');
 const {
   readDefinitionTargets,
+  readReferences,
   readDocumentSymbols,
   readFoldingRanges,
   readCodeLenses,
@@ -71,6 +72,7 @@ const {
   signatureHelpAt,
   formatRequestWindowFor,
   applyQuickFixEdits,
+  previewSourcePathOf,
   ensureGlobalProviders,
   disposeGlobalProviders,
 } = seam;
@@ -252,6 +254,17 @@ const symbolPerLine = (request: EditorLanguageServiceRequest) => ({
     kind: 'declaration' as const,
     startLine: line,
     endLine: line,
+  })),
+});
+
+/** 引用腿的自证答复：把**原文每一源行**都当引用点交回（带列与区间，折回后才能看穿"折几遍"） */
+const referencesPerSourceLine = (request: EditorLanguageServiceRequest) => ({
+  kind: 'references',
+  locations: sourceLineNumbers(request).map((line) => ({
+    filePath: pathOf(request),
+    line,
+    column: 9,
+    span: { columnStart: 9, columnEnd: 14 },
   })),
 });
 
@@ -562,6 +575,125 @@ describe('糖面读类腿 · ③列与④落点', () => {
     expect(tree.map((s) => s.name)).toEqual(['留下的父']);
     expect(tree[0]).toMatchObject({ startLine: 2, endLine: 5, detail: '两段之间' });
     expect(tree[0]!.children?.[0]).toMatchObject({ name: '孩子', startLine: 3 });
+  });
+});
+
+describe('糖面引用腿 · 位点换算问原文，列表留**源坐标**', () => {
+  it('预览行换算到原文问一次：交回的 `path` 是源路径，列表行号一格不折', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mount(surface);
+    const asks: EditorLanguageServiceRequest[] = [];
+    const kernel = fakeKernel([serviceStub('references', referencesPerSourceLine, asks)]);
+    // 预览第 6 行 = 源第 5 行；列一律收到行首（纪律②）
+    const read = readReferences(surface.preview.model, position(6, 11), kernel);
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({
+      kind: 'references',
+      path: A_PATH,
+      text: A_SOURCE.join('\n'),
+      line: 5,
+      column: 1,
+      lineCount: A_SOURCE.length,
+    });
+    expect(surface.preview.getValueCalls()).toBe(0);
+    // 列表留在**源坐标**：面板列的是存档里的位置，回到预览面那一跳住在 `applyReveal`（④号判据）
+    expect(read!.path).toBe(A_PATH);
+    expect(read!.locations.map((l) => l.line)).toEqual(A_SOURCE.map((_, i) => i + 1));
+    for (const location of read!.locations) {
+      expect(location.filePath).toBe(A_PATH);
+      expect(location.column).toBe(1);
+      expect(location.span).toBeUndefined();
+      expect(sourceLineToSugar(surface.lineMap, location.line)).not.toBeNull();
+    }
+  });
+
+  it('四类落点各归各：幻影剔除 / 折不回丢弃 / 同文件抹列 / 跨文件原样', () => {
+    const surface = makeSurface(B_PATH, B_SOURCE, B_SEGMENTS);
+    mount(surface);
+    const kernel = fakeKernel([
+      serviceStub('references', () => ({
+        kind: 'references',
+        locations: [
+          // 本地腿交回的投影自身 URI：那条路径上没有文件，留着就是"按了没反应"顶替一次正确跳转
+          { filePath: surface.projectionUri, line: 2, column: 6 },
+          // 面乙的段首糖行没有源 ⇒ 源前两行折不回预览面，这一条整枚不给
+          { filePath: B_PATH, line: 1, column: 3 },
+          { filePath: B_PATH, line: 4, column: 3, span: { columnStart: 3, columnEnd: 8 } },
+          { filePath: 'C:/game/别处.ERB', line: 1, column: 5, span: { columnStart: 5, columnEnd: 9 } },
+        ],
+      }), []),
+    ]);
+    const read = readReferences(surface.preview.model, position(3), kernel);
+    expect(read!.path).toBe(B_PATH);
+    expect(read!.locations).toEqual([
+      { filePath: B_PATH, line: 4, column: 1 },
+      { filePath: 'C:/game/别处.ERB', line: 1, column: 5, span: { columnStart: 5, columnEnd: 9 } },
+    ]);
+  });
+
+  it('映射缺席（空表）⇒ `null`：一次都不问供方、一次都不 copy 原文', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mount(surface, 1, []);
+    const asks: EditorLanguageServiceRequest[] = [];
+    const kernel = fakeKernel([serviceStub('references', referencesPerSourceLine, asks)]);
+    expect(readReferences(surface.preview.model, position(2), kernel)).toBeNull();
+    expect(asks).toHaveLength(0);
+    expect(surface.source.getValueCalls()).toBe(0);
+  });
+
+  it('这一行压根没有源行 ⇒ `null`（不猜一个"最像"的源位点去问引用）', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mount(surface);
+    expect(surface.lineMap[4]).toBe(0);
+    const asks: EditorLanguageServiceRequest[] = [];
+    const kernel = fakeKernel([serviceStub('references', referencesPerSourceLine, asks)]);
+    expect(readReferences(surface.preview.model, position(5, 3), kernel)).toBeNull();
+    expect(asks).toHaveLength(0);
+  });
+
+  it('无主的投影（不在登记簿上）⇒ `null`', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    const kernel = fakeKernel([serviceStub('references', referencesPerSourceLine, [])]);
+    expect(readReferences(surface.preview.model, position(2), kernel)).toBeNull();
+  });
+
+  it('原文面逐字照旧：列与区间原样交回，`path` = 那份 model 自己的路径', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mountPlain(surface);
+    const asks: EditorLanguageServiceRequest[] = [];
+    const kernel = fakeKernel([serviceStub('references', referencesPerSourceLine, asks)]);
+    const read = readReferences(surface.source.model, position(3, 8), kernel);
+    expect(askedLineOf(asks[0]!)).toBe(3);
+    expect((asks[0] as unknown as { column: number }).column).toBe(8);
+    expect(read!.path).toBe(A_PATH);
+    expect(read!.locations[2]).toEqual({ filePath: A_PATH, line: 3, column: 9, span: { columnStart: 9, columnEnd: 14 } });
+  });
+});
+
+describe('悬停身份腿 `previewSourcePathOf` · 只换算归属', () => {
+  it('投影面 ⇒ 背后那份**源文件路径**（索引查的是文件，不是 `inmemory://sugar/…`）', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mount(surface);
+    expect(previewSourcePathOf(surface.preview.model)).toBe(A_PATH);
+  });
+
+  it('投影面但档案没有路径（新建未落盘的糖视图）⇒ `null` = 不改判据', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    const pane = mount(surface);
+    pane.filePathRef.current = '';
+    expect(previewSourcePathOf(surface.preview.model)).toBeNull();
+  });
+
+  it('原文面 ⇒ `null`（沿用 `model.uri`，本批对原文悬停零改动）', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mountPlain(surface);
+    expect(previewSourcePathOf(surface.source.model)).toBeNull();
+  });
+
+  it('身份换算不要求映射已装配：投影退化成空表时声明行悬停照样是真话', () => {
+    const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
+    mount(surface, 1, []);
+    expect(previewSourcePathOf(surface.preview.model)).toBe(A_PATH);
   });
 });
 

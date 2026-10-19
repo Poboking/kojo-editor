@@ -25,6 +25,7 @@ import type {
   EditorFoldingRange,
   EditorInlayHint,
   EditorCodeLens,
+  EditorSymbolLocation,
   EditorTextEdit,
   ErbFile,
   ErbIndex,
@@ -389,11 +390,14 @@ function owningPanePathOf(model: Monaco.editor.ITextModel): string | null {
 }
 
 /* ========================================================================================
- * 升糖预览面上的**读类**腿（definition / documentSymbol / 签名 / folding / codeLens /
- * inlayHints / 跳转探针）：位点先 `sugarSourceOf` 换成源位点，按源 path+line 走既有实现，
- * 再把结果里的源行号折回预览行。
+ * 升糖预览面上的**读类**腿（definition / references / documentSymbol / 签名 / folding /
+ * codeLens / inlayHints / 跳转探针）：位点先 `sugarSourceOf` 换成源位点，按源 path+line 走
+ * 既有实现，再把结果里的源行号折回预览行。
  *
- * 旧口径是"糖 model ⇒ 整条早退"，代价不是"慢一点"而是**八条腿在预览面上集体静默**：
+ * **落点类腿（definition / references）不折行号**：交回的是源坐标，源行 → 预览行那一跳住在
+ * 落点通道（`EditorPane` 的 `applyReveal` 读同一张 `sugarLineMapRef`），这里折就是折两遍。
+ *
+ * 旧口径是"糖 model ⇒ 整条早退"，代价不是"慢一点"而是**这批腿在预览面上集体静默**：
  * 用户在投影里点一行按 F12 什么也不发生。预览的每一行都来自某个源行（`sugarLineMapRef`），
  * 所以"问源、答预览"是有确定映射的；只有映射缺席（空表 / 这一行压根没有源行）才不给结果。
  *
@@ -561,30 +565,30 @@ function projectionUriKeys(shown: Monaco.editor.ITextModel): Set<string> {
 }
 
 /**
- * 定义落点折回预览面。
+ * 符号落点（转到定义 / 跳到实现 / 查找引用**三条腿共用**，形状同为 `EditorSymbolLocation`）。
  *
  * **行号在这里不折**（与其余几条读类腿刻意不同）：落点那一侧的 model 是**原文**——Monaco 按
  * `filePath` 找的是原文那份 model，`clampRevealPosition` 也按原文行数夹取，把预览行号交给它
  * 就是跳到源文件的另一行。源行 → 预览行的那一跳早就在落点通道里做（`EditorPane` 的 `applyReveal`
  * 读同一张 `sugarLineMapRef`），这里再折一次就是折两遍。本函数只做糖面独有的三件事：
- * ① 同文件的落点若折不回预览行 ⇒ 丢弃（预览面上没有那一行，交出去等于一次原地不动的假 F12）；
+ * ① 同文件的落点若折不回预览行 ⇒ 丢弃（预览面上没有那一行，交出去等于一次原地不动的假跳转）；
  * ② 同文件的落点把列与区间抹成行首（纪律②）；
  * ③ 剔除**指向投影自己 URI** 的落点：`#DIM` / `$` 标签那两条缓冲区本地腿（住在
- *    `installDefinitionProvider` 内部，不归本文件动）会把屏幕上这份 model 的 uri 当文件路径交回，
- *    而那条路径上没有文件；`mergeSymbolLocations` 又把它们排在最前、`planDefinitionJump` 的事件
- *    通道兜底只取第一枚 ⇒ 不剔就是幻影把真算出来的源落点挤掉。
+ *    `installDefinitionProvider` / `installReferenceProvider` 内部，不归本文件动）会把屏幕上这份
+ *    model 的 uri 当文件路径交回，而那条路径上没有文件；`mergeSymbolLocations` 又把它们排在最前、
+ *    `planDefinitionJump` 的事件通道兜底只取第一枚 ⇒ 不剔就是幻影把真算出来的源落点挤掉。
  * 跨文件的真落点原样交回——那是另一份文件，与这一面的映射无关。
  */
-function foldDefinitionTargetsToPreview(
+function foldLocationsToPreview(
   shown: Monaco.editor.ITextModel,
   target: ReadTarget,
-  locations: readonly DefinitionLocation[],
-): DefinitionLocation[] {
+  locations: readonly EditorSymbolLocation[],
+): EditorSymbolLocation[] {
   const sugar = target.sugar;
   if (!sugar) return [...locations];
   const sameFile = pathKey(target.path);
   const phantom = projectionUriKeys(shown);
-  const out: DefinitionLocation[] = [];
+  const out: EditorSymbolLocation[] = [];
   for (const location of locations) {
     const key = pathKey(location.filePath);
     if (phantom.has(key)) continue;
@@ -601,6 +605,13 @@ function foldDefinitionTargetsToPreview(
     });
   }
   return out;
+}
+
+/** 屏幕上这份 model 的**悬停路径**（`installHover` 的注入位；原文面回 `null` = 沿用 `model.uri`） */
+export function previewSourcePathOf(model: Monaco.editor.ITextModel): string | null {
+  const ctx = sugarOwningPaneOf(model);
+  // 只换算**身份**，不涉及行号 ⇒ 不要求映射已装配（投影退化时声明行悬停照样是真话）
+  return ctx ? ctx.filePathRef.current || null : null;
 }
 
 /** 转到定义 / 跳到实现共用的读类腿（换算 → 问槽 → 折回） */
@@ -622,7 +633,38 @@ export function readDefinitionTargets(
     project: kernel.project.current(),
     lineCount: target.model.getLineCount(),
   });
-  return target.sugar ? foldDefinitionTargetsToPreview(model, target, locations) : locations;
+  return target.sugar ? foldLocationsToPreview(model, target, locations) : locations;
+}
+
+/**
+ * 引用腿（读类，与 `readDefinitionTargets` 同形状）：糖面换算到原文问一次，交回**源坐标**。
+ *
+ * `path` 一起交回是必要的而非顺手：引用计数读数（`onTally` → 台账 → 「被调用」面板）要知道
+ * 这批读数是谁家的，糖面上那一位必须是**源路径**——投影不是文件，拿它的 URI 去对文件就是猜。
+ * 返回 `null` = 无主 / 没有可问的原文 / 映射缺席 / 这一行没有源行（调用方据此给空列表）。
+ */
+export function readReferences(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  kernel: Kernel,
+): { readonly path: string; readonly locations: readonly EditorSymbolLocation[] } | null {
+  const target = readTargetOf(model);
+  if (!target) return null;
+  const at = sourcePointOf(target, position);
+  if (at === null) return null;
+  const locations = collectReferenceLocations(kernel.slots.query('ui.editor.languageService'), {
+    kind: 'references',
+    path: target.path,
+    text: target.model.getValue(),
+    line: at.line,
+    column: at.column,
+    project: kernel.project.current(),
+    lineCount: target.model.getLineCount(),
+  });
+  return {
+    path: target.path,
+    locations: target.sugar ? foldLocationsToPreview(model, target, locations) : locations,
+  };
 }
 
 /** 文档大纲腿（吸顶与"转到符号"的数据源；糖面上折回预览行，两层消费方同一棵坐标一致的树） */
@@ -1340,7 +1382,9 @@ export function ensureGlobalProviders(): void {
     ));
     // 悬停中文名（ZH-F2）：只读显示，光标下的原生记号 → 中文名。表按当前项目 adapterId
     // **运行时**现取（`editorTables`），查不到即不显示（**不猜**）。与 CodeAction 同款隔离。
-    globalDisposers.push(installHover(monaco, () => editorTables(requireKernel())));
+    // 第三参 = 本文件身份的换算：投影那份 `inmemory://sugar/…` 的 URI 在索引里对不到任何文件，
+    // `#DIM` 声明那一路于是在预览面上静默；原文面回 `null` ⇒ 沿用 `model.uri`，逐字不变。
+    globalDisposers.push(installHover(monaco, () => editorTables(requireKernel()), previewSourcePathOf));
     // 转到定义（2026-10-15 语言服务批）：宿主只做 Monaco 协议翻译——光标位置进、目标位置出；
     // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
     // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，
@@ -1529,23 +1573,18 @@ export function ensureGlobalProviders(): void {
     // 成员。宿主只做协议翻译——认活动标签的真 model（与转到定义逐字同判据）、问槽、
     // 把"未打开文件"那条腿的点击落回 `editor.revealLocation`（与转到定义同通道）。
     // 引用什么算、谁在索引外，全在贡献方（ERB 由解析器答、`.kojo` 由糖线答）。
+    // 读类换算批（2026-10-20）：糖面不再是整条静默——位点换算到原文问一次，交回的**引用列表
+    // 留在源坐标**（面板列的就是源位置，落点侧 `applyReveal` 按同一张表折回预览行，折两遍就跳
+    // 到隔壁）。写类那三条闸（改名 / quickfix / 格式化）一字未动。
     // 引用腿的"读数是谁家的"随 `resolve` 记录（Monaco 的 provideReferences 同步问一次、
     // 同步出一读数 ⇒ 这一变量就是那一次请求的路径，不另开第二条通道）
     let tallySourcePath = '';
     globalDisposers.push(installReferenceProvider(monaco, {
       resolve: (model, position) => {
-        const path = owningPanePathOf(model);
-        if (path === null) return [];
-        tallySourcePath = path;
-        return collectReferenceLocations(requireKernel().slots.query('ui.editor.languageService'), {
-          kind: 'references',
-          path,
-          text: model.getValue(),
-          line: position.lineNumber,
-          column: position.column,
-          project: requireKernel().project.current(),
-          lineCount: model.getLineCount(),
-        });
+        const read = readReferences(model, position, requireKernel());
+        if (read === null) return [];
+        tallySourcePath = read.path;
+        return read.locations;
       },
       navigate: (location) => {
         // W9 判据①：与转到定义同一个载荷出口
