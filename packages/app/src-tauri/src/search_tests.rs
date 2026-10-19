@@ -825,6 +825,7 @@ fn streamed_batches_never_exceed_the_final_result_when_truncated() {
         "事件流不许出现完成态没有的文件"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
 
 /* ------------------------------ glob 文件过滤（P2-15） ------------------------------ */
 //
