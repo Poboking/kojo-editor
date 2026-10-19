@@ -141,11 +141,11 @@
 
 | 期 | 内容 | 验收判据 | 估时 |
 |---|---|---|---|
-| **P0 布线** | 建包（package.json / tsconfig 同构）；`bootstrap.ts` 注册；`audit-decoupling.mjs` 豁免登记；`BOARD.md` 认领一行；建批次分支 `b/<agent>/<MMDD>-akuma-adapter`（从 origin/master） | `pnpm install` + 双 typecheck + `audit:decoupling` ✅（插件可先只注册空壳）；测试数不回退 | 0.5 天 |
+| **P0 布线** | 建包（package.json / tsconfig 同构）；`bootstrap.ts` 注册；`audit-decoupling.mjs` 豁免登记；`BOARD.md` 认领一行；建批次分支 `b/<agent>/<MMDD>-akuma-adapter`（从 origin/dev） | `pnpm install` + 双 typecheck + `audit:decoupling` ✅（插件可先只注册空壳）；测试数不回退 | 0.5 天 |
 | **P1 识别与导航** | detect/loadProject/chara-csv/family-index + 插件单测（对照 eratw-adapter 测试形态） | 桌面壳打开 `C:\game\eraAkumaMaid`：角色索引、函数树导航（角色→家族→面→函数）、文件树、全文检索可用；家族解析覆盖率实测读数；同名多定义（EVENTTRAIN）在导航/索引中不静默；**内核/parser diff 为空** | 2–3 天 |
 | **P2 语义层** | variable-schema（CSV 主表 + `.als` + `.ERH`）、instruction-table、call-protocol | 条件抽取带变量中文标签；糖指令名可解析；派生缓存 inputDigest 口径不破坏 eraTW 侧（快照版本/判据 additive） | 2 天 |
 | **P3 校验与糖** | conventions 首批（`_KX\d+` 占位符 / 缺族提示 / FORM 三连符号）+ face-templates 首批（主链路 8–10 面） | 校验面板对真实语料跑出可操作清单（零误报门槛）；`.kojo` 主链路可转译、缺面 fail-closed 报错不静默 | 3–4 天 |
-| **P4 周边与收尾** | scaffold（模板包）、nameGlossary 评估、WelcomeView 文案评估、向导共享化决策、（远期）sav 接入验证 | 全量验证矩阵绿（见 §七）；落地窄门过 master | 2 天+ |
+| **P4 周边与收尾** | scaffold（模板包）、nameGlossary 评估、WelcomeView 文案评估、向导共享化决策、（远期）sav 接入验证 | 全量验证矩阵绿（见 §七）；落地窄门过 dev | 2 天+ |
 
 > 每期独立可交付、可回滚；P1 是「编辑器真正可用于该游戏」的最小回路。
 
@@ -220,7 +220,7 @@ KOJO_CORPUS_DIR="C:/game/eratw-画蛇添足版eratw4.980" \
 ## 八、立即行动项
 
 1. `docs/BOARD.md` 写认领行（`eraAkumaMaid 适配：<主机> <日期>`）；
-2. 建批次分支 `b/<agent>/<MMDD>-akuma-adapter`（从 `origin/master`，不在本地 master 直接提交）；
+2. 建批次分支 `b/<agent>/<MMDD>-akuma-adapter`（从 `origin/dev`，不在本地 dev 直接提交）；
 3. 开工 P0 布线；
 4. （已完成 2026-10-18）两个决策点已获用户批复：**糖语言只服务中文社区**（不为日文社区兼容性追加设计）；**向导族抽取共享骨架**（尽可能解耦，不复制 eratw 向导代码）；
 5. 风险 #1（corpus.mjs 劫持）通报全组——**任何 agent 在本机跑语料门命令前先设 `KOJO_CORPUS_DIR`**。

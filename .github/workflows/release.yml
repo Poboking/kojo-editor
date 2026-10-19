@@ -80,7 +80,7 @@ jobs:
             - 绿色版依赖系统 WebView2（Windows 11 自带；Windows 10 可能需安装 Evergreen 运行时）；
             - 遇到问题欢迎[提交 Issue](https://github.com/Poboking/kojo-editor/issues)。
 
-            开发者：[Poboking](https://github.com/Poboking) ｜ 许可证：[GPL-3.0-or-later](https://github.com/Poboking/kojo-editor/blob/master/LICENSE)
+            开发者：[Poboking](https://github.com/Poboking) ｜ 许可证：[GPL-3.0-or-later](https://github.com/Poboking/kojo-editor/blob/main/LICENSE)
           releaseDraft: false
           # 预发布判定：标签名含 '-'（如 v0.4.2-beta.1）即 prerelease，
           # 避免 beta 抢占 releases/latest 的稳定自动更新通道；正式版（如 v0.4.2）仍为稳定发布。

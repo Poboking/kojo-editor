@@ -42,14 +42,19 @@ node tools/smoke-tauri-ipc.mjs   # 真实 IPC 双闸 a–e（不传参即按内�
 带环境变量跑 vitest 一律 `node node_modules/vitest/vitest.mjs run <file>`——`npx vitest` 会吞环境变量（详 PITFALLS）。
 **验收口径：任何"改好了"必须带数**——测试数（不许回退）/ 双 typecheck / 审计 / 真实壳读数。
 
-## 四、Git 纪律（2026-10-13 定，多 agent 并行必守）
+## 四、Git 纪律（2026-10-13 定 · 2026-10-19 二改分支模型，多 agent 并行必守）
 
-- **一个 agent 一个工作树；一个批次一条短命分支**：`b/<agent>/<MMDD>-<slug>`，从 `origin/master` 起，**不在本地 master 上直接提交**。
+- **分支模型（2026-10-19 起，`master` 已停用删除，远端默认分支＝`main`）**：
+  - `dev`＝**日常落地分支**，一切一般更新（功能 / 修复 / 文档批）的窄门出口；
+  - `main`＝**发行版分支**，只在发版时更新（把已判可发的 dev 提交并入 → 打 tag `v*` 触发 release 工作流）；
+  - 日常批次**一律不推 `main`**，也不再推 `master`（该分支已不存在）。
+- **一个 agent 一个工作树；一个批次一条短命分支**：`b/<agent>/<MMDD>-<slug>`，从 `origin/dev` 起，**不在本地 `dev` / `main` 上直接提交**。
 - 中途备份：`git push -u origin <branch>`（自己的分支 rebase 后可 `--force-with-lease` 只 force 它）。
-- **落地 = 过 master 窄门**：`git fetch origin` → `git rebase origin/master` → 门槛全绿（见 §三；纯文档批豁免测试面）→ `git push origin HEAD:master`。
-  非快进被拒**就是并发协议本身**——重跑 fetch + rebase 再推；**永不** force 到 master。落地后删远端批次分支。
-- `git fetch` 单独成句，看 `rc=$?`（`git fetch | tail` 是假兜底：管道吞失败码）。github 直连时通时断 ⇒ 本 clone 已配 repo 本地代理（`git config http.proxy <本机代理>`；新 clone 配一次，**永不改全局配置**）；推送反复失败时兜底 `node tools/git-push.mjs`（交替直连/代理重试）。
-- 禁用：`git add -A`（逐文件 add）、共享树里 `stash`、改写已公开历史、对 master force。
+- **落地 = 过 dev 窄门**：`git fetch origin --prune` → `git rebase origin/dev` → 门槛全绿（见 §三；纯文档批豁免测试面）→ `git push origin HEAD:dev`。
+  非快进被拒**就是并发协议本身**——重跑 fetch + rebase 再推；**永不** force 到 `dev` / `main`。落地后删远端批次分支。
+- **发版 = 单独一条路**：用户点头发版时，才把既定 dev 提交 fast-forward 或合并进 `main` 并打 tag；版本号三处同步（§七）照旧在发版提交里过。
+- `git fetch` 单独成句，看 `rc=$?`（`git fetch | tail` 是假兜底：管道吞失败码）。github 直连时通时断 ⇒ 本 clone 已配 repo 本地代理（`git config http.proxy <本机代理>`；新 clone 配一次，**永不改全局配置**）；推送反复失败时兜底 `node tools/git-push.mjs`（默认目标已是 `dev`；交替直连/代理重试）。
+- 禁用：`git add -A`（逐文件 add）、共享树里 `stash`、改写已公开历史、对 `dev` / `main` force。
 - rebase 解冲突逐文件 add + `git diff --cached` 过目（`add -A` 会把冲突标记提交进历史）；提交后全仓扫 `^(<<<<<<<|=======|>>>>>>>)( |$)`。
 - 提交信息：Conventional Commits **中文标题**。
 

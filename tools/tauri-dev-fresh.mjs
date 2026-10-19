@@ -7,7 +7,7 @@
  *     新一轮窗口看起来还是旧 UI；
  *   - 跨 merge 的 node_modules/.vite 预打包缓存过期，壳起来白屏或样式不更新；
  *   - agent 只把提交推到了远端，本地工作树还是旧提交；
- *   - 本地是游离 HEAD / 落后 origin/master，不能直接 pull；
+ *   - 本地是游离 HEAD / 落后 origin/dev，不能直接 pull；
  *   - 运行时热更新不会帮你换掉已加载的旧 CSS，必须真的重启壳。
  *
  * 安全边界：
@@ -62,7 +62,7 @@ try {
       'no-kill': { type: 'boolean' },
       yes: { type: 'boolean', short: 'y' },
       'no-launch': { type: 'boolean' },
-      ref: { type: 'string', default: 'origin/master' },
+      ref: { type: 'string', default: 'origin/dev' },
       verbose: { type: 'boolean', short: 'v' },
     },
     strict: true,
@@ -1325,7 +1325,7 @@ function printHelp() {
       '  node tools/tauri-dev-fresh.mjs [选项]',
       '',
       '默认流程：',
-      '  1. git fetch origin；本地是 origin/master 的祖先且工作树干净时，ff-only 快进；',
+      '  1. git fetch origin；本地是 origin/dev 的祖先且工作树干净时，ff-only 快进；',
       '     脏树、分叉、rebase/merge 未完成、detached HEAD 下的本地提交都不会被强改。',
       '  2. 清理本工作树上一轮的 vite/tauri/cargo 残留；桌面实例与别的工作树进程先确认；',
       '     tools/smoke-*、boot-*、ui-measure 探针在跑时直接退出，不抢 1420。',
@@ -1335,7 +1335,7 @@ function printHelp() {
       '',
       '选项：',
       '  --clean          清 Vite 缓存、dist、target/debug 下的 exe/pdb（顽固旧 UI 用）',
-      '  --no-fetch       不联系远端（同时不自动快进；仍显示本地 origin/master 的落后量）',
+      '  --no-fetch       不联系远端（同时不自动快进；仍显示本地 origin/dev 的落后量）',
       '  --no-pull        只 fetch 不自动快进，测试当前 HEAD',
       '  --no-install     依赖缺失/锁文件变化时不安装，直接失败',
       '  --install        即使已安装也重跑 pnpm install --frozen-lockfile',
@@ -1343,7 +1343,7 @@ function printHelp() {
       '  -y, --yes        自动确认关闭桌面实例/其它工作树进程（未保存内容可能丢失）',
       '  --no-launch      完成同步、清场、缓存和依赖检查后停在启动前',
       '  --dry-run        只预检并打印计划，不删除、不安装、不终止、不启动',
-      '  --ref <ref>      主线 ref，默认 origin/master',
+      '  --ref <ref>      日常落地 ref，默认 origin/dev（发版检查传 origin/main）',
       '  -v, --verbose    打印进程快照数量',
       '  -h, --help       显示本帮助',
       '',

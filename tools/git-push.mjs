@@ -9,7 +9,7 @@
  * 而带本地代理（地址经 `KOJO_GIT_PROXY` 提供）**一次就通**。
  * ⇒ 现在**交替试**：奇数趟直连、偶数趟走代理，两边都可能赢，不赌单一姿势。
  *
- * 用法：node tools/git-push.mjs [remote] [branch]   （默认 origin master）
+ * 用法：node tools/git-push.mjs [remote] [branch]   （默认 origin dev；日常落地分支＝dev，main 只在发版时动）
  *      代理地址经环境变量 `KOJO_GIT_PROXY` 提供（未设置 = 只试直连）。
  * 退出码：0 = 推送成功；1 = 全部重试失败。
  */
@@ -18,7 +18,7 @@ import * as path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const remote = process.argv[2] ?? 'origin';
-const branch = process.argv[3] ?? 'master';
+const branch = process.argv[3] ?? 'dev';
 const MAX_TRIES = 6;
 const DELAY_MS = 5000;
 /** 本地代理；`KOJO_GIT_PROXY=""` 或未设置 = 纯直连（不试代理趟） */
