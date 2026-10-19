@@ -11,11 +11,15 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  SUGAR_TOGGLE_TITLE_EMPTY,
+  SUGAR_TOGGLE_TITLE_OFF,
+  SUGAR_TOGGLE_TITLE_ON,
   SUGAR_VIEW_DEFAULT,
   composeSugarDoc,
   loadSugarViewPref,
   saveSugarViewPref,
   sugarSummary,
+  sugarToggleTitle,
   sugarViewAllowed,
   trimSegmentBlanks,
 } from '../src/ui/sugar-view';
@@ -243,5 +247,54 @@ describe('composeSugarDoc · 把糖段拼进整份原文', () => {
 
   it('糖段内空行原样输出（本函数不做首尾修剪，那是 trimSegmentBlanks 的职责）', () => {
     expect(composeSugarDoc(['a', 'b', 'c'], [{ fromLine: 2, toLine: 2, sugarText: '\nX\n' }])).toBe('a\n\nX\n\nc');
+  });
+});
+
+/* ===================== 那颗「.kojo 预览」开关的悬停文案（NATIVE-UX 2026-10-20） ===================== */
+
+/**
+ * 取证在前（`ui-sugar-lift/tests/integration.test.ts` 第三组）：`langDoc: native` 起手包的
+ * 8 份 `.ERB` **每份都投出零段**，宿主那一拍（`EditorPane` 的 `applySugarView`）拿到零段就
+ * return，糖 model 不挂、屏幕上就是原文。改前那颗开关只要偏好是开着的就说
+ * 「已开启：当前显示的是 .kojo 写法」——那是**假话**，且是原生起手作者 100% 撞上的第一寸体验债。
+ *
+ * 修法只动**既有那一格**的文案（不新开 toast / 徽章 / 状态栏 / 面板，不加契约字段）。
+ */
+describe('糖视图 / 开关悬停的三档（第一眼必须是人话，原始读数逐字进悬停）', () => {
+  it('关着：与改前那句逐字相同（纯 Promise，既有观感零改动）', () => {
+    expect(sugarToggleTitle({ on: false, segments: null })).toBe(
+      '把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。',
+    );
+    expect(SUGAR_TOGGLE_TITLE_OFF).toBe(sugarToggleTitle({ on: false, segments: 0 }));
+    // 开关关着时零段读数不许抢话（还没发生任何事）
+    expect(sugarToggleTitle({ on: false, segments: 0 })).toBe(sugarToggleTitle({ on: false, segments: null }));
+  });
+
+  it('开着且真投出东西：与改前那句逐字相同', () => {
+    expect(sugarToggleTitle({ on: true, segments: 17623 })).toBe(
+      '已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。',
+    );
+    expect(sugarToggleTitle({ on: true, segments: 3 })).toBe(SUGAR_TOGGLE_TITLE_ON);
+    // 还没算过（点击那一拍到落算之间）⇒ 保持改前那句，不另造第四档
+    expect(sugarToggleTitle({ on: true, segments: null })).toBe(SUGAR_TOGGLE_TITLE_ON);
+  });
+
+  it('开着但这份文件零段：不许再说"当前显示的是 .kojo 写法"，要说屏幕上就是原文', () => {
+    const copy = sugarToggleTitle({ on: true, segments: 0 });
+    expect(copy).toBe(SUGAR_TOGGLE_TITLE_EMPTY);
+    expect(copy).not.toContain('当前显示的是');
+    expect(copy).toContain('屏幕上仍是原文');
+    expect(copy).toContain('文件内容一字未动');
+    expect(copy).toContain('0'); // 原始读数逐字进悬停（宿主真实持有的那一件：投影段数 0）
+  });
+
+  it('三档互不相同（防空判据：恒返回一句就等于没有这一格）', () => {
+    const three = new Set([
+      sugarToggleTitle({ on: false, segments: null }),
+      sugarToggleTitle({ on: true, segments: 5 }),
+      sugarToggleTitle({ on: true, segments: 0 }),
+    ]);
+    expect(three.size).toBe(3);
+    for (const s of three) expect(s.length).toBeGreaterThan(10);
   });
 });

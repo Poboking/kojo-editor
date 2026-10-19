@@ -113,6 +113,7 @@ import {
   sugarReadTypography,
   SUGAR_READ_MARK_MAX_LINES,
   sugarSummary,
+  sugarToggleTitle,
   sugarViewAllowed,
   trimSegmentBlanks,
 } from './sugar-view';
@@ -260,6 +261,8 @@ interface SugarCacheEntry {
   lineCount: number;
   doc: string;
   sugarLines: number;
+  /** 投影段数（NATIVE-UX：命中缓存那一拍也要能报出"这一份投出了几段"，否则零段那格会说谎） */
+  segmentCount: number;
 }
 
 /**
@@ -488,6 +491,17 @@ export function EditorPane({
   const sugarViewRef = useRef<boolean>(sugarView);
   /** 糖视图摘要（null = 未启用 / 无文件）；工具条展示 */
   const [sugarStats, setSugarStats] = useState<string | null>(null);
+  /**
+   * **这一份文件**到底投出了几段（按路径存 ⇒ 换文件不拿旧读数说话；null = 还没算过）。
+   *
+   * 存在理由（NATIVE-UX 实测）：`langDoc: native` 起手包的 8 份 `.ERB` 每份都投出**零段**
+   * （整份透传），`applySugarView` 那一拍直接 return、糖 model 根本不挂；那颗开关若只看
+   * 偏好状态就说「当前显示的是 .kojo 写法」，作者读到的是假话。读数只服务于**既有那一格**
+   * 的悬停文案（`sugarToggleTitle`），不新开显示面。
+   */
+  const [sugarSegments, setSugarSegments] = useState<{ path: string; segments: number } | null>(
+    null,
+  );
   /**
    * 阅读模式「显示语法标记」开关（偏好持久化；默认**关** = 阅读态——`续`、`空行`、
    * `等待`、`：` 这类语法标记降到低对比，台词成为屏上主体；开 = 恢复主题高对比）。
@@ -1069,9 +1083,12 @@ export function EditorPane({
     const hit = sugarCacheRef.current;
     let doc: string;
     let sugarLines: number;
+    /** 本文件的投影段数（命中缓存也要报得出——见 `sugarSegments` 的存在理由） */
+    let segCount: number;
     if (hit && hit.path === path && hit.versionId === versionId && hit.stamp === stamp && hit.lineCount === maxLine) {
       doc = hit.doc;
       sugarLines = hit.sugarLines;
+      segCount = hit.segmentCount;
     } else {
       const text = model.getValue();
       // 段清点：单个贡献抛错不影响其余（与装饰器 / codeAction 同款隔离）
@@ -1094,7 +1111,13 @@ export function EditorPane({
           );
         }
       }
-      if (segments.length === 0) return; // 无段可铺：保持原文（clear 已在函数开头做过；不进缓存——没有可复用的产物）
+      if (segments.length === 0) {
+        // 无段可铺：保持原文（clear 已在函数开头做过；不进缓存——没有可复用的产物）。
+        // NATIVE-UX：这一拍必须把"零段"记下来——那颗开关的悬停否则会说"当前显示的是 .kojo
+        // 写法"，而屏上正是原文（`langDoc: native` 的起手文件 8/8 都走这一条）。
+        setSugarSegments({ path, segments: 0 });
+        return;
+      }
 
       // 取原文逐行内容，拼装整份糖文本（纯函数，口径单测钉死在 sugar-view.test.ts）
       const originalLines: string[] = [];
@@ -1103,8 +1126,10 @@ export function EditorPane({
 
       sugarLines = 0;
       for (const seg of segments) sugarLines += seg.sugarText.split('\n').length;
-      sugarCacheRef.current = { path, versionId, stamp, lineCount: maxLine, doc, sugarLines };
+      segCount = segments.length;
+      sugarCacheRef.current = { path, versionId, stamp, lineCount: maxLine, doc, sugarLines, segmentCount: segCount };
     }
+    setSugarSegments({ path, segments: segCount });
 
     // 只读内存 model：`inmemory://` scheme（**非** `file:`，避免与真文件 model 冲突被复用）。
     // URI 按组隔离（SPLIT-1）：同文件可在两组同时开糖视图——同 URI 的 createModel 会撞车。
@@ -2479,16 +2504,20 @@ export function EditorPane({
                     **默认关**（选择会被记住），发现路径 = 首次打开游戏目录 ERB 时的那一次询问。
                     图标走 HK-4 UI-3 的单色 `Icon` 通道（`currentColor`，跟 `.on` 的文字色一起变）。
                     标签**恒为「.kojo 预览」**，开关状态交给 .on 配色 + aria-pressed 表达：
-                    按状态换字时两档字数不同，每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。 */}
+                    按状态换字时两档字数不同，每点一次工具条就横向抖一下（与 T3 根除的树抖动同类缺陷）。
+                    悬停那一格说的是什么由 `sugar-view.ts` 的 `sugarToggleTitle` 单源给出——
+                    它多知道一件事：**这一份文件到底投出了几段**（零段 = 屏上还是原文，
+                    `langDoc: native` 的起手文件全是这种），那一拍不许再讲"当前显示的是"。 */}
                 <button
                   className={`ghost small sugar-toggle${sugarView ? ' on' : ''}`}
                   aria-pressed={sugarView}
                   onClick={() => setSugarView((v) => !v)}
-                  title={
-                    sugarView
-                      ? '已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'
-                      : '把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'
-                  }
+                  title={sugarToggleTitle({
+                    on: sugarView,
+                    // 读数只认**这一份文件**的（换文件后旧读数不许说话）；没算过 = null
+                    segments:
+                      sugarSegments && sugarSegments.path === filePath ? sugarSegments.segments : null,
+                  })}
                 >
                   <Icon name="preview" size={13} /> .kojo 预览
                 </button>

@@ -181,6 +181,38 @@ export function sugarSummary(projectedLines: number, hiddenLines = 0): string {
 }
 
 /**
+ * 工具条那颗「.kojo 预览」开关的悬停文案——**三档同一源**（NATIVE-UX 2026-10-20）。
+ *
+ * 存在理由（实测，不是猜想）：`langDoc: native` 的起手包 8 份 `.ERB` **每一份都投出零段**
+ * （整份都是透传行 ⇒ `EditorPane` 拿到零段直接 return，糖 model 根本不挂），而改前那颗
+ * 开关只要偏好是开着的就说「已开启：当前显示的是 .kojo 写法」——屏上正是原文，
+ * 那句话是假话。口径照 `ui-kojo-navigator/src/panel-copy.ts`：**第一眼人话，
+ * 原始读数逐字进悬停**（这里宿主真正持有的读数就是投影段数，不编造别的数字）。
+ *
+ * - `on = false`：与改前那句逐字相同（纯 Promise，不承诺已经发生的事）；
+ * - `on = true ∧ segments = null`：还没算过（点击那一拍到 `applySugarView` 落算之间）
+ *   ⇒ 保持改前那句，既有观感零改动；
+ * - `on = true ∧ segments = 0`：这一档是本笔新增，只说"这份文件没投出东西"这个事实。
+ */
+export const SUGAR_TOGGLE_TITLE_OFF =
+  '把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。';
+export const SUGAR_TOGGLE_TITLE_ON =
+  '已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。';
+export const SUGAR_TOGGLE_TITLE_EMPTY =
+  '这份文件里没有能显示成 .kojo 写法的句子——屏幕上仍是原文（投影段数 0），文件内容一字未动。点击可关掉这一格。';
+
+/** 该说哪一句（纯函数 ⇒ 可单测；渲染层只做拼装，不另立文案） */
+export function sugarToggleTitle(input: {
+  readonly on: boolean;
+  /** 本文件交回的投影段数；`null` = 还没有读数（开关关着时不去算，`null` 不是 0） */
+  readonly segments: number | null;
+}): string {
+  if (!input.on) return SUGAR_TOGGLE_TITLE_OFF;
+  if (input.segments === 0) return SUGAR_TOGGLE_TITLE_EMPTY;
+  return SUGAR_TOGGLE_TITLE_ON;
+}
+
+/**
  * **预览可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定）。
  *
  * 铁律只有一条：**同一份文件不能一边被改、一边被投影**——预览靠"整份文件换成只读

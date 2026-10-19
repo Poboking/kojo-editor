@@ -151,6 +151,31 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
     expect(SOURCE).toContain("if (sugarCacheRef.current?.path === path) sugarCacheRef.current = null;");
     expect(SOURCE).toContain("if (crumbTreeCacheRef.current?.path === path) crumbTreeCacheRef.current = null;");
   });
+
+  /**
+   * NATIVE-UX（2026-10-20）：那颗「.kojo 预览」开关的悬停**只许问单源**。
+   *
+   * 实测：`langDoc: native` 起手包的 8 份 `.ERB` 每份都投出零段，`applySugarView` 那一拍
+   * 直接 return（糖 model 不挂、屏上就是原文）；而那颗开关当时仍按偏好状态讲
+   * 「已开启：当前显示的是 .kojo 写法」。这一组把两件事钉死：①零段必须被**记下来**
+   * （不许悄悄 return）；②那两句改前文案不许再以字面量住在 JSX 里（回到内联三元 = 红）。
+   */
+  it('零段那一拍要出声：读数落进 state，悬停只经 sugarToggleTitle 单源', () => {
+    const apply = SOURCE.slice(SOURCE.indexOf('const applySugarView ='), SOURCE.indexOf('// 开关变化：记住偏好'));
+    expect(apply).toContain('setSugarSegments({ path, segments: 0 });'); // 零段：记下"这份没投出东西"
+    expect(apply).toContain('setSugarSegments({ path, segments: segCount });'); // 命中缓存那一拍同样有读数
+    expect(apply).toContain('segmentCount: segCount'); // 缓存条目带段数（否则切回来就没数）
+
+    const toggle = SOURCE.slice(
+      SOURCE.indexOf('className={`ghost small sugar-toggle'),
+      SOURCE.indexOf('<Icon name="preview" size={13} />'),
+    );
+    expect(toggle).toContain('sugarToggleTitle({');
+    expect(toggle).not.toContain('已开启：当前显示的是');
+    // 全文件都不许再留那两句字面量（文案单源在 sugar-view.ts）
+    expect(SOURCE).not.toContain("'已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'");
+    expect(SOURCE).not.toContain("'把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'");
+  });
 });
 
 describe('PS-5 · props 面零改动（隔壁线靠这份签名稳定调用点）', () => {
