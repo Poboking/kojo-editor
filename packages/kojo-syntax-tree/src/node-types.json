@@ -1,15 +1,5 @@
 [
   {
-    "type": "comment_line",
-    "named": true,
-    "fields": {}
-  },
-  {
-    "type": "raw_block_start",
-    "named": true,
-    "fields": {}
-  },
-  {
     "type": "source_file",
     "named": true,
     "root": true,
@@ -19,7 +9,67 @@
       "required": false,
       "types": [
         {
+          "type": "alias_decl",
+          "named": true
+        },
+        {
+          "type": "arrow_case",
+          "named": true
+        },
+        {
+          "type": "arrow_else",
+          "named": true
+        },
+        {
+          "type": "ask_m_head",
+          "named": true
+        },
+        {
+          "type": "ask_yn_head",
+          "named": true
+        },
+        {
+          "type": "assign",
+          "named": true
+        },
+        {
           "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "blank_line_cmd",
+          "named": true
+        },
+        {
+          "type": "branch_head",
+          "named": true
+        },
+        {
+          "type": "call_statement",
+          "named": true
+        },
+        {
+          "type": "case_head",
+          "named": true
+        },
+        {
+          "type": "catch_end",
+          "named": true
+        },
+        {
+          "type": "catch_head",
+          "named": true
+        },
+        {
+          "type": "choice_head",
+          "named": true
+        },
+        {
+          "type": "choice_item",
+          "named": true
+        },
+        {
+          "type": "color_head",
           "named": true
         },
         {
@@ -27,7 +77,119 @@
           "named": true
         },
         {
+          "type": "const_decl",
+          "named": true
+        },
+        {
+          "type": "control_malformed",
+          "named": true
+        },
+        {
+          "type": "custom_command_head",
+          "named": true
+        },
+        {
+          "type": "data_end",
+          "named": true
+        },
+        {
+          "type": "data_entry",
+          "named": true
+        },
+        {
+          "type": "data_head",
+          "named": true
+        },
+        {
+          "type": "expr_head",
+          "named": true
+        },
+        {
+          "type": "function_head",
+          "named": true
+        },
+        {
+          "type": "function_jump",
+          "named": true
+        },
+        {
+          "type": "group_head",
+          "named": true
+        },
+        {
+          "type": "head_decl",
+          "named": true
+        },
+        {
+          "type": "heart_head",
+          "named": true
+        },
+        {
+          "type": "heart_text",
+          "named": true
+        },
+        {
+          "type": "if_head",
+          "named": true
+        },
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "jump_statement",
+          "named": true
+        },
+        {
+          "type": "label_decl",
+          "named": true
+        },
+        {
+          "type": "loop_end",
+          "named": true
+        },
+        {
+          "type": "loop_flow",
+          "named": true
+        },
+        {
+          "type": "loop_head",
+          "named": true
+        },
+        {
+          "type": "loop_step",
+          "named": true
+        },
+        {
+          "type": "menu_head",
+          "named": true
+        },
+        {
+          "type": "message_check",
+          "named": true
+        },
+        {
+          "type": "mutator",
+          "named": true
+        },
+        {
           "type": "native_line",
+          "named": true
+        },
+        {
+          "type": "once_head",
+          "named": true
+        },
+        {
+          "type": "random_head",
+          "named": true
+        },
+        {
+          "type": "random_inline",
+          "named": true
+        },
+        {
+          "type": "random_shape_decl",
           "named": true
         },
         {
@@ -35,22 +197,214 @@
           "named": true
         },
         {
+          "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "rule_tag",
+          "named": true
+        },
+        {
+          "type": "section_head",
+          "named": true
+        },
+        {
+          "type": "settle",
+          "named": true
+        },
+        {
+          "type": "single_if_head",
+          "named": true
+        },
+        {
+          "type": "statement_call",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        },
+        {
+          "type": "switch_item",
+          "named": true
+        },
+        {
           "type": "text_line",
+          "named": true
+        },
+        {
+          "type": "timing_head",
+          "named": true
+        },
+        {
+          "type": "when_head",
           "named": true
         }
       ]
     }
   },
   {
-    "type": ";",
-    "named": false
+    "type": "alias_decl",
+    "named": true
   },
   {
-    "type": "@",
-    "named": false
+    "type": "arrow_case",
+    "named": true
+  },
+  {
+    "type": "arrow_else",
+    "named": true
+  },
+  {
+    "type": "ask_m_head",
+    "named": true
+  },
+  {
+    "type": "ask_yn_head",
+    "named": true
+  },
+  {
+    "type": "assign",
+    "named": true
   },
   {
     "type": "blank_line",
+    "named": true
+  },
+  {
+    "type": "blank_line_cmd",
+    "named": true
+  },
+  {
+    "type": "branch_head",
+    "named": true
+  },
+  {
+    "type": "call_statement",
+    "named": true
+  },
+  {
+    "type": "case_head",
+    "named": true
+  },
+  {
+    "type": "catch_end",
+    "named": true
+  },
+  {
+    "type": "catch_head",
+    "named": true
+  },
+  {
+    "type": "choice_head",
+    "named": true
+  },
+  {
+    "type": "choice_item",
+    "named": true
+  },
+  {
+    "type": "color_head",
+    "named": true
+  },
+  {
+    "type": "comment_line",
+    "named": true
+  },
+  {
+    "type": "const_decl",
+    "named": true
+  },
+  {
+    "type": "control_malformed",
+    "named": true
+  },
+  {
+    "type": "custom_command_head",
+    "named": true
+  },
+  {
+    "type": "data_end",
+    "named": true
+  },
+  {
+    "type": "data_entry",
+    "named": true
+  },
+  {
+    "type": "data_head",
+    "named": true
+  },
+  {
+    "type": "expr_head",
+    "named": true
+  },
+  {
+    "type": "function_head",
+    "named": true
+  },
+  {
+    "type": "function_jump",
+    "named": true
+  },
+  {
+    "type": "group_head",
+    "named": true
+  },
+  {
+    "type": "head_decl",
+    "named": true
+  },
+  {
+    "type": "heart_head",
+    "named": true
+  },
+  {
+    "type": "heart_text",
+    "named": true
+  },
+  {
+    "type": "if_head",
+    "named": true
+  },
+  {
+    "type": "interpolation",
+    "named": true
+  },
+  {
+    "type": "jump_statement",
+    "named": true
+  },
+  {
+    "type": "label_decl",
+    "named": true
+  },
+  {
+    "type": "loop_end",
+    "named": true
+  },
+  {
+    "type": "loop_flow",
+    "named": true
+  },
+  {
+    "type": "loop_head",
+    "named": true
+  },
+  {
+    "type": "loop_step",
+    "named": true
+  },
+  {
+    "type": "menu_head",
+    "named": true
+  },
+  {
+    "type": "message_check",
+    "named": true
+  },
+  {
+    "type": "mutator",
     "named": true
   },
   {
@@ -58,7 +412,67 @@
     "named": true
   },
   {
+    "type": "once_head",
+    "named": true
+  },
+  {
+    "type": "random_head",
+    "named": true
+  },
+  {
+    "type": "random_inline",
+    "named": true
+  },
+  {
+    "type": "random_shape_decl",
+    "named": true
+  },
+  {
+    "type": "raw_block_start",
+    "named": true
+  },
+  {
+    "type": "return_statement",
+    "named": true
+  },
+  {
+    "type": "rule_tag",
+    "named": true
+  },
+  {
+    "type": "section_head",
+    "named": true
+  },
+  {
+    "type": "settle",
+    "named": true
+  },
+  {
+    "type": "single_if_head",
+    "named": true
+  },
+  {
+    "type": "statement_call",
+    "named": true
+  },
+  {
+    "type": "string",
+    "named": true
+  },
+  {
+    "type": "switch_item",
+    "named": true
+  },
+  {
     "type": "text_line",
+    "named": true
+  },
+  {
+    "type": "timing_head",
+    "named": true
+  },
+  {
+    "type": "when_head",
     "named": true
   }
 ]

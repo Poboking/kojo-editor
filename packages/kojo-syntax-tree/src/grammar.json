@@ -14,7 +14,11 @@
       "members": [
         {
           "type": "SYMBOL",
-          "name": "blank_line"
+          "name": "string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "interpolation"
         },
         {
           "type": "SYMBOL",
@@ -22,11 +26,219 @@
         },
         {
           "type": "SYMBOL",
+          "name": "raw_block_start"
+        },
+        {
+          "type": "SYMBOL",
           "name": "native_line"
         },
         {
           "type": "SYMBOL",
-          "name": "raw_block_start"
+          "name": "label_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "head_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "random_shape_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "alias_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "const_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "switch_item"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "timing_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "custom_command_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "function_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "single_if_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "if_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "when_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "arrow_case"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "case_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "arrow_else"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "random_inline"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "random_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "group_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "branch_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "rule_tag"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "section_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "once_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "choice_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "menu_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ask_m_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ask_yn_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "choice_item"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "color_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "heart_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "heart_text"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "message_check"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "expr_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "loop_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "loop_end"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "catch_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "catch_end"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "data_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "data_end"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "data_entry"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "jump_statement"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "function_jump"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "loop_flow"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "loop_step"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "settle"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "mutator"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "statement_call"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "call_statement"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "return_statement"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assign"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "blank_line_cmd"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "control_malformed"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "blank_line"
         },
         {
           "type": "SYMBOL",
@@ -35,48 +247,648 @@
       ]
     },
     "blank_line": {
-      "type": "PATTERN",
-      "value": "\\n"
-    },
-    "comment_line": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": ";"
-        },
-        {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": -100,
+        "content": {
           "type": "PATTERN",
-          "value": "[^\\n]*"
+          "value": "\\n"
         }
-      ]
-    },
-    "native_line": {
-      "type": "PATTERN",
-      "value": "[A-Z][A-Z0-9_]*[^\\n]*"
-    },
-    "raw_block_start": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "@"
-        },
-        {
-          "type": "PATTERN",
-          "value": "[^\\n]*"
-        }
-      ]
+      }
     },
     "text_line": {
-      "type": "PATTERN",
-      "value": "[^\\n]+"
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 0,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^ \\t\\r\\n;「{@\\u3000][^\\n]*"
+        }
+      }
+    },
+    "string": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 5,
+        "content": {
+          "type": "PATTERN",
+          "value": "「[^\\n]*[」\\\\]"
+        }
+      }
+    },
+    "interpolation": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 5,
+        "content": {
+          "type": "PATTERN",
+          "value": "\\{[^\\n]*\\}"
+        }
+      }
+    },
+    "comment_line": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 4,
+        "content": {
+          "type": "PATTERN",
+          "value": ";[^\\n]*"
+        }
+      }
+    },
+    "raw_block_start": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 4,
+        "content": {
+          "type": "PATTERN",
+          "value": "@[^\\n]*"
+        }
+      }
+    },
+    "native_line": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 4,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:[A-Z][A-Z0-9_.]*(?::[^\\n]*)?|\\$)[^\\n]*"
+        }
+      }
+    },
+    "label_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 7,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:标签)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "head_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 8,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:角色|char|口上|family|显示名|title|简介|desc|口上色|color|自机色|player-color|旁白色|narration-color|开关|switch|函数前缀|function-prefix)[ \\t\\u3000]*[:\\uFF1A][^\\n]*"
+        }
+      }
+    },
+    "random_shape_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 8,
+        "content": {
+          "type": "PATTERN",
+          "value": "随机形[ \\t]*[:：][^\\n]*"
+        }
+      }
+    },
+    "alias_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 9,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:别名|alias)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "const_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 9,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:常量|const)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "switch_item": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 6,
+        "content": {
+          "type": "PATTERN",
+          "value": "[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$]*(?::[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$]*)*[ \\t\\u3000]*[:\\uFF1A][ \\t\\u3000]+[^\\n]+"
+        }
+      }
+    },
+    "timing_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:时机|timing)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "custom_command_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:自定指令)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "function_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:函数|function)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "single_if_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 14,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:如果|if)[ \\t\\u3000]+[^\\n]*[ \\t\\u3000]+(?:则|then)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "if_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:如果|否则如果|否则|elif|elseif|else)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "when_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:当|when)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "arrow_case": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 13,
+        "content": {
+          "type": "PATTERN",
+          "value": "是[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*(?:->|→)[^\\n]*"
+        }
+      }
+    },
+    "arrow_else": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 13,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:否则|else)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?(?:->|→)[^\\n]*"
+        }
+      }
+    },
+    "case_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:是)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "random_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:随机|random)[ \\t\\u3000]*[:\\uFF1A][^\\n]*"
+        }
+      }
+    },
+    "random_inline": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 13,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:随机|random)[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*[,，][^\\n]*"
+        }
+      }
+    },
+    "group_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:组|group)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "branch_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:分支|branch)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "rule_tag": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "\\[[^A-Z0-9_\\]\\n][^\\]\\n]*\\]"
+        }
+      }
+    },
+    "section_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:若)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "once_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:初回)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "choice_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:选项|choice)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "menu_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:菜单|menu)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "ask_m_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:询问|ask)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "ask_yn_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:确认|confirm)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "choice_item": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "「[^」\\n]*」[^\\n]*[:：][ \\t]*\\r?\\n"
+        }
+      }
+    },
+    "color_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:着色)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "heart_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:心形|heart)[ \\t\\u3000]*[:\\uFF1A][^\\n]*"
+        }
+      }
+    },
+    "heart_text": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:心形|heart)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "message_check": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 9,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:隐藏情景|隐藏口上|skip-scene|skip-kojo)[^\\n]*"
+        }
+      }
+    },
+    "expr_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 12,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^ \\t\\u3000=][^\\n]*=[ \\t\\u3000]+(?:如果|if|当|when)[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^:：\\n]*[:：]"
+        }
+      }
+    },
+    "loop_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:循环)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "loop_end": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:循环结束)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "catch_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:出错处理)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "catch_end": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:出错处理结束)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "data_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:数据表)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "data_end": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:数据表结束)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "data_entry": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:条目)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "jump_statement": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:跳到)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "function_jump": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:函数跳转)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "loop_flow": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:跳出循环|跳过本轮|重跑本轮)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "loop_step": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:步进)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "settle": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:结算|settle)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "mutator": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:增减|adjust)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "statement_call": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:设置标记|清除标记|翻转标记)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "call_statement": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:调用|call)[ \\t\\u3000]+[^\\n]*"
+        }
+      }
+    },
+    "return_statement": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 11,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:返回|return)(?:[^A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9\\$\\n][^\\n]*)?"
+        }
+      }
+    },
+    "blank_line_cmd": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 9,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:空行|blank)(?:[ \\t\\u3000]+\\S+)?"
+        }
+      }
+    },
+    "assign": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^=\\n]+=[^\\n]*"
+        }
+      }
+    },
+    "control_malformed": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 2,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:跳到|函数跳转|标签|步进|条目|循环|出错处理|数据表)"
+        }
+      }
     }
   },
   "extras": [
     {
       "type": "PATTERN",
-      "value": "[\\s]"
+      "value": "[ \\t\\r\\n\\f\\u3000]+"
     }
   ],
   "conflicts": [],

@@ -56,10 +56,10 @@ export async function classifyLines(parser: Parser, text: string): Promise<KojoL
     const line = lineNodeOf(child);
     const kind = (NODE_TO_KIND as Record<string, KojoKind>)[line.type] ?? null;
     out.push({
-      row: child.startRow,
+      row: child.startPosition.row,
       nodeType: line.type,
       kind,
-      range: [child.startRow, child.startColumn, child.endRow, child.endColumn],
+      range: [child.startPosition.row, child.startPosition.column, child.endPosition.row, child.endPosition.column],
     });
   }
   return out;
