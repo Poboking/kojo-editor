@@ -7,9 +7,10 @@
  * `file-tree-menu`（右键菜单 JSX）。本文件只剩：状态与它的两条异步通道（冷开快照 /
  * 目录列举 + 失效重列）、展开与编辑动作、定位 effect，以及把上面几块接起来的渲染。
  *
- * 诊断可见性（工包 E）：本文件订阅 `problem-store` 并把计数折到**角色组 / 作者包**两层
- * 标题行（`treeProblemMarks`）；单条文件行的徽标画不了——行渲染在 `file-tree-rows` /
- * `file-tree-row` / `file-tree-dir-rows` 三个模块里（都不在本批独占集），接线点见批次回报。
+ * 诊断可见性（工包 E + 本批）：本文件订阅 `problem-store` 并把计数折到**角色组 / 作者包**两层
+ * 标题行（`treeProblemMarks`），单条文件行那一枚由 `file-tree-row.tsx` / `file-tree-dir-rows.tsx`
+ * 自己画——宿主只**传值**（`probs` = `summarizeProblems().byKey`，pkey 键），画法与配色留在行
+ * 模块（`TreeProbMark`）。三层共用同一派生、同一把尺：树里不存在第二份计数。
  */
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
@@ -17,8 +18,6 @@ import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
   currentVersion,
-  PROBLEM_SCOPE,
-  SEVERITY_TINT,
   snapshot as problemSnapshot,
   subscribe as subscribeProblems,
   summarizeProblems,
@@ -49,6 +48,7 @@ import {
 import { baseName, buildFileGroups, dirsToRelist, kojoOwners, rowKeyOf } from './file-tree-model';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import { EditRow, FileRows } from './file-tree-rows';
+import { TreeProbMark, type ProbFile } from './file-tree-row';
 import { DirRows } from './file-tree-dir-rows';
 import { FileTreeContextMenu } from './file-tree-menu';
 import type { DirState, EditState, Group, MenuScope, PackageGroup, Props } from './file-tree-types';
@@ -105,16 +105,13 @@ export function escapeAttrValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/* ---------------- 诊断徽标（工包 E，2026-10-19：让"这个文件有诊断"在树上可见） ---------------- */
+/* ---------------- 诊断徽标（工包 E + 本批：树三层都开口，画法只有一枚） ---------------- */
 
 /** 节点 tooltip 最多点名几个文件，其余折成「另 n 个」（展开的作者包动辄几十份文件） */
 const MARK_FILE_CAP = 6;
 
-export interface TreeProblemFile {
-  readonly name: string;
-  readonly error: number;
-  readonly warning: number;
-}
+/** 组 / 包 tooltip 里点名的一个文件（形状即 `TreeProbMark` 的输入，不另造第二份） */
+export type TreeProblemFile = ProbFile;
 
 /** 一个树节点（角色组 / 作者包）折到的诊断量 */
 export interface TreeProblemMark {
@@ -135,18 +132,16 @@ export interface TreeProblemMarks {
 const EMPTY_MARKS: TreeProblemMarks = { groups: new Map(), packages: new Map() };
 
 /**
- * 把「已打开文件的诊断汇总」折到树的**两层节点**上（纯函数，可单测）。
+ * 把「已打开文件的诊断汇总」折到树的**两层节点标题**上（纯函数，可单测）。
  *
- * 数据源是 `problem-store.summarizeProblems`——与状态栏那颗、面板表头、面板组头**同一次
- * 遍历的同一份结果**（工包 E 判据：不许两处各算一套）。查表走 `byKey`（`pkey` 归一）：
+ * 数据源是 `problem-store.summarizeProblems`——与状态栏那颗、面板表头、面板组头、**单条文件行**
+ * 徽标**同一次遍历的同一份结果**（工包 E 判据：不许两处各算一套）。查表走 `byKey`（`pkey` 归一）：
  * 树里这一行的路径来自索引/磁盘列举，与注册表键可能差个分隔符方向或大小写，
  * 按字面比对就会漏标（同一个文件两种写法 ≠ 两个文件）。
  *
- * **为什么画在节点上而不是单条文件行上**：单条 ERB 行住在 `file-tree-row.tsx` /
- * `file-tree-rows.tsx`（都不在本批独占集里），在那里加一条腿要么由宿主穿一个引用型 props
- * 进来（PS-16 的 memo 前提就是行组件的 props 全稳定），要么另造一份行渲染——后者就是
- * "同一棵树两种画法"的新分叉。这里退一层把真相折到组/包，并把**具体文件名连同各自计数**
- * 写进节点 tooltip：谁报错仍然看得见，而且只有一份计数。
+ * 这一层只管**标题行**（组 / 包）的聚合；单条文件行不吃这份聚合——宿主直接把 `byKey` 那张表
+ * 传给行组件（`probs`），行按自己的路径查一格。折两层是"一眼看见哪块脏了"，行那一枚是
+ * "脏的是哪一份"，两者读的都是同一份计数，所以谁也不会跟谁对不上。
  *
  * 只折错误 / 警告两档：只报了 `info` 的文件不在树上说话（那一档面板表头本来就在说，
  * 铺满一棵树就是把注意力花在噪声上）。
@@ -209,30 +204,13 @@ export function treeProblemMarks(
   return { groups: freeze(byGroup), packages: freeze(byPackage) };
 }
 
-/** 节点 tooltip：口径（只有已打开文件上得了账）+ 总量 + 谁在报（诚实到文件名） */
-function markTooltip(scope: string, m: TreeProblemMark): string {
-  const listed = m.files
-    .map((f) => `${f.name}${f.error > 0 ? ` ✕${f.error}` : ''}${f.warning > 0 ? ` ⚠${f.warning}` : ''}`)
-    .join('、');
-  // 口径词取自 `PROBLEM_SCOPE.label`（与状态栏那颗同一个真源）；整段 tooltip 不搬那颗的
-  // 长句——树上的这一枚只该说"这一层里谁在报"，全量在面板里看。
-  return (
-    `${scope}内${PROBLEM_SCOPE.label}文件的诊断：错误 ${m.error} / 警告 ${m.warning}` +
-    `（${listed}${m.more > 0 ? `，另 ${m.more} 个` : ''}）· 详见问题面板 (Ctrl+Shift+M)`
-  );
-}
-
-/** 徽标样式：`styles*.css` 不在本批独占集里 ⇒ 按 `DirRows` 的 `pad` 先例走内联（配色仍取自 store） */
-const BADGE_STYLE = {
-  display: 'inline-flex',
-  flex: 'none',
-  gap: 4,
-  fontSize: 'var(--fs-0)',
-  fontVariantNumeric: 'tabular-nums',
-} as const;
-
 /**
- * 组 / 包标题行末尾的两档徽标（`✕ n` 红、`⚠ n` 黄；没诊断 ⇒ 整个节点不画，零视觉扰动）。
+ * 组 / 包标题行末尾的两档徽标。
+ *
+ * 画法不在这里：`✕ n` / `⚠ n` 的字面、`SEVERITY_TINT` 那三个色、tooltip 与 aria 的措辞
+ * 全住 `file-tree-row.tsx` 的 `TreeProbMark`（单条文件行用的就是同一枚）。宿主这一层只
+ * 负责把聚合结果换成它的入参——配色与句式一旦在两个模块各写一遍，就迟早长成
+ * "同一档两种红"或"同一个数两种说法"。
  */
 function TreeProblemBadge({
   mark,
@@ -243,16 +221,13 @@ function TreeProblemBadge({
 }): ReactElement | null {
   if (mark === undefined) return null;
   return (
-    <span
-      className="tree-prob-mark"
-      role="img"
-      style={BADGE_STYLE}
-      title={markTooltip(scope, mark)}
-      aria-label={`${scope}有错误 ${mark.error}、警告 ${mark.warning}（仅${PROBLEM_SCOPE.label}文件）`}
-    >
-      {mark.error > 0 ? <span style={{ color: SEVERITY_TINT.error }}>✕ {mark.error}</span> : null}
-      {mark.warning > 0 ? <span style={{ color: SEVERITY_TINT.warning }}>⚠ {mark.warning}</span> : null}
-    </span>
+    <TreeProbMark
+      scope={scope}
+      error={mark.error}
+      warning={mark.warning}
+      files={mark.files}
+      more={mark.more}
+    />
   );
 }
 
@@ -353,12 +328,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
 
   /**
    * 诊断汇总（工包 E）：只订阅 `problem-store` 的**版本号**，派生留给 `useMemo`——
-   * 无诊断时 `summarizeProblems` 返回同一个常量对象 ⇒ 下面两层 memo 全部命中，
-   * 树不会因为"有一次空发布"就重画。
+   * 无诊断时 `summarizeProblems` 返回同一个常量对象 ⇒ 标题行聚合与行徽标那两条 memo
+   * 全部命中，树不会因为"有一次空发布"就重画。
    *
    * 口径诚实：注册表里只有**已打开文件**的诊断（未打开文件的项目级诊断根本没有上账的腿，
-   * 接线点见回报），所以徽标说的是"这一层里已打开的文件有诊断"，tooltip 里那句范围标签
-   * 与状态栏那颗取自同一个 `PROBLEM_SCOPE`。
+   * 接线点见回报），所以徽标说的是"这一层/这一行里已打开的文件有诊断"，tooltip 里那句范围标签
+   * 与状态栏那颗取自同一个 `PROBLEM_SCOPE`（句式住在 `TreeProbMark`）。
    */
   const problemVersion = useSyncExternalStore(subscribeProblems, currentVersion, currentVersion);
   const problemSummary = useMemo(() => summarizeProblems(problemSnapshot()), [problemVersion]);
@@ -373,6 +348,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     () => treeProblemMarks(groups, problemSummary),
     [groups, problemSummary],
   );
+  /**
+   * 单条文件行徽标的入参 = `byKey` **那一格本身**（宿主不再造第二张表、不再抄第二个数）。
+   * `summarizeProblems` 按入参数组身份缓存 ⇒ 同一诊断版本内这张表（以及它的每个值）引用恒定，
+   * PS-16 的行级/层级 memo 因此照旧挡得住无关帧；诊断一换版本引用必换 ⇒ 徽标跟着真相走。
+   */
+  const rowProbs = problemSummary.byKey;
 
   const visible = useMemo(() => {
     if (!deferredFilter) return groups;
@@ -978,7 +959,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   /**
    * `DirRows` 的宿主侧接线（口上视图的包层与文件系统视图的根层复用同一套行渲染）。
    *
-   * 目录缓存、展开集合、行内编辑态全部由本组件持有——行渲染只是被画出来的那一层，
+   * 目录缓存、展开集合、行内编辑态、诊断表全部由本组件持有——行渲染只是被画出来的那一层，
    * 现场仍在树里（切视图/重渲染不丢展开态）。dir / depth / skip 在调用点各自覆盖。
    */
   const dirRowsBase = {
@@ -988,6 +969,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     editValue,
     glossOf,
     activeFile,
+    probs: rowProbs,
     setEditValue,
     commitEdit,
     cancelEdit,
@@ -1130,6 +1112,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                           files={s.files}
                           limit={renderLimitOf(g, s)}
                           activeFile={activeFile}
+                          probs={rowProbs}
                           onOpenFile={onOpenFile}
                           edit={fileEdit}
                           onFileContext={onFileContext}
@@ -1186,6 +1169,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             files={s.files}
                             limit={renderLimitOf(g, s)}
                             activeFile={activeFile}
+                            probs={rowProbs}
                             onOpenFile={onOpenFile}
                             edit={fileEdit}
                             onFileContext={onFileContext}

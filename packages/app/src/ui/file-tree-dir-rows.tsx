@@ -2,8 +2,8 @@
  * 目录真实内容行（递归渲染）——文件树唯一的"一行行怎么画"出口
  * （FE-REF ⑤ 自 `FileTree.tsx` 的 `dirRows` 逐字搬出，闭包变量改为显式 props）。
  *
- * 本组件**无状态**：目录缓存、展开集合、行内编辑态一律由宿主传入，因此口上视图的
- * 包层与文件系统视图的根层复用**同一套**渲染（两条视图线的行样式/权限标记/右键口径
+ * 本组件**无状态**：目录缓存、展开集合、行内编辑态、诊断表一律由宿主传入，因此口上视图的
+ * 包层与文件系统视图的根层复用**同一套**渲染（两条视图线的行样式/权限标记/诊断徽标/右键口径
  * 不可能再分叉）。递归没有深度上限（语料里有五层深的包内目录），`depth === 0` 的
  * 去重规则必须与 `visibleEntries` 同一口径。
  */
@@ -12,7 +12,9 @@ import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { BINARY_EXT, erbExt } from './file-tree-model';
 import { pkey } from './file-tree-ops';
+import { ROW_PROB_SCOPE, TreeProbMark } from './file-tree-row';
 import { EditRow } from './file-tree-rows';
+import type { ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
 import type { DirState, EditState, MenuScope } from './file-tree-types';
 
@@ -36,6 +38,15 @@ export interface DirRowsProps {
   readonly toggleSub: (dir: string) => void;
   readonly openMenu: (e: ReactMouseEvent, scope: MenuScope) => void;
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
+  /**
+   * 文件行诊断表（工包：文件行徽标；与 `FileRowsProps.probs` 同一份表、同一把尺）。
+   * 键 = `pkey(路径)`，值 = `problem-store` 那一格；引用由宿主 `useMemo` 持有 ⇒ 本层 memo
+   * 不因它放行。缺省 → 这条腿不标（旧行为）。
+   *
+   * 压缩包/资源那类附加文件行（`BINARY_EXT` 命中）不画徽标：它们在编辑器里根本打不开，
+   * 注册表里就没有键——给没有数据的地方留一枚徽章位就是造假（铁律 4 的反面）。
+   */
+  readonly probs?: ReadonlyMap<string, ProblemFileCounts>;
 }
 
 /**
@@ -94,6 +105,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     toggleSub,
     openMenu,
     onOpenFile,
+    probs,
   } = props;
   const state = dirCache.get(dir);
   if (state === undefined) return [];
@@ -168,6 +180,8 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     }),
     ...files.map((d) => {
       const renaming = edit?.mode === 'rename' && !edit.isDir && edit.path === d.path;
+      // 一次归一查表（`pkey` 与 `skip` 那把尺同源）；徽标要不要画由 `TreeProbMark` 判
+      const prob = probs?.get(pkey(d.path));
       if (renaming) {
         return (
           <li key={d.path} style={pad}>
@@ -195,6 +209,9 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             onContextMenu={(e) => openMenu(e, { kind: 'file', path: d.path })}
           >
             {glossOf(d.name)}
+            {prob ? (
+              <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} />
+            ) : null}
           </button>
         </li>
       );

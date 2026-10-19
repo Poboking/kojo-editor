@@ -7,12 +7,16 @@
  * `problem|diagnostic|marker` 是 0 ⇒ 某个文件整体报错，树上一点痕迹没有）。
  * 收口之后只有一条派生腿：`problem-store.summarizeProblems`。
  *
- * 本文件钉两件事：
+ * 本文件钉三件事：
  *  1. **同源同口径**（判据①）——同一份 store 状态下，状态栏那颗 / 面板表头 / 面板组头合计 /
  *     文件树徽标读到的数字必须彼此相等；状态栏的可见范围标签只能是 store 里那一个真源。
  *     这是"以后有人改标签或改计数、又把它俩拆开"的唯一自动化拦点。
- *  2. **不造假**（判据②）——注册表里只有已打开文件的诊断（未打开文件没有上账的腿），
- *     所以树只能标出已打开的那些；info-only 的文件在树上不开口；路径写法差异必须认得。
+ *  2. **不造假**（判据②）——树上只标**账上真有**的那些（info-only 不开口、没上账的文件不开口）；
+ *     路径写法差异必须认得。
+ *  3. **补齐缺腿后两头都不冒充**（工包「未打开文件永不上账」，2026-10-20）——诊断按 `origin`
+ *     分两簇（编辑器实时 / 整项目扫描）：清账入口只认自己那一簇（关标签抹不掉项目级结论）、
+ *     同一文件两簇并存只数一遍（不翻倍）、范围标签跟着"屏幕上真有几簇"走；扫描没跑完 /
+ *     只覆盖部分目录 / 有文件被跳过时，那句话里必须当场看得出来（铁律 4）。
  *
  * 观测口径沿用仓里两族做法：markup 数类名与数字（`ps6-rows` / `ps6-panel-bridge`）、
  * 结构约定扫源码（`shell-info-design` / `readonly-pill`）；展开作者包那一层需要点一下，
@@ -31,12 +35,22 @@ import { ProblemPanel, ProblemsStatusItem } from '../src/ui/ProblemPanel';
 import { buildFileGroups, kojoOwners } from '../src/ui/file-tree-model';
 import {
   clearAllProblems,
+  clearProjectScan,
+  clearProblems,
+  setProjectScanCoverage,
+  setProjectScanProblems,
   setProblems,
   snapshot,
+  subscribe,
   summarizeProblems,
+  takeRescanPaths,
+  projectScanCoverage,
+  projectScanFileCount,
+  IDLE_SCAN_COVERAGE,
   EMPTY_PROBLEM_SUMMARY,
   PROBLEM_SCOPE,
   type EditorProblem,
+  type ProjectScanCoverage,
 } from '../src/ui/problem-store';
 
 const read = (rel: string): string =>
@@ -122,7 +136,12 @@ function treeTotals(): Counts3 & { readonly badges: number } {
   return { error, warning, info: 0, badges };
 }
 
-afterEach(() => clearAllProblems());
+afterEach(() => {
+  clearAllProblems();
+  clearProjectScan();
+  setProjectScanCoverage(IDLE_SCAN_COVERAGE);
+  takeRescanPaths(10_000); // 复核队列排空：上一案的队列不许串进下一案的读数
+});
 
 describe('summarizeProblems · 唯一一次遍历的产物', () => {
   it('全局计数 + 按文件计数 + 按归一路径计数一次算全', () => {
@@ -209,7 +228,7 @@ describe('文件树徽标 · SSR 实际画出来', () => {
     expect(markup).toContain(`内${PROBLEM_SCOPE.label}文件的诊断`);
   });
 
-  it('未打开的文件（树上在、store 里没有）⇒ 树上不给它标——数据源缺的那条腿不许造假', () => {
+  it('未打开也没扫到的文件（树上在、store 里没有）⇒ 树上不给它标——账上没有就不许画（采集腿接上后仍未覆盖的文件同一条判据）', () => {
     setProblems(F1, [mk(F1, 1, 'error')]);
     const markup = treeMarkup();
     // 折叠态里 markup 出现的文件名只可能来自徽标 tooltip：只许点名真正有诊断的那一份
@@ -229,7 +248,10 @@ describe('文件树徽标 · SSR 实际画出来', () => {
       container.querySelector<HTMLButtonElement>('.tree-group-btn')?.click();
     });
     const badges = [...container.querySelectorAll('.tree-prob-mark')];
-    expect(badges).toHaveLength(2);
+    // 展开作者包后上屏的是**三枚**：角色组标题行、作者包标题行、单条文件行
+    // （文件行那一枚由 `file-tree-row` 那一路接上，2026-10-20 那条线加的）。
+    // 判据不变：三枚全读同一次派生的同一个值 —— 谁也不许自己再数一遍。
+    expect(badges).toHaveLength(3);
     for (const b of badges) {
       expect(b.textContent).toContain('✕ 1');
       expect(b.textContent).toContain('⚠ 1');
@@ -305,6 +327,155 @@ describe('四张面孔一个真相（判据①的自动化拦点）', () => {
   });
 });
 
+/* ---------------- 工包「缺腿」（2026-10-20）：origin 两簇 ---------------- */
+
+/** 覆盖读数造一条（默认 = 一整轮跑完：12/12、允许根就是那个口上目录） */
+const scanCoverage = (over: Partial<ProjectScanCoverage> = {}): ProjectScanCoverage => ({
+  ...IDLE_SCAN_COVERAGE,
+  status: 'complete',
+  roots: [PKG_DIR],
+  scanned: 12,
+  total: 12,
+  ...over,
+});
+
+describe('origin 两簇 · 未打开的文件也能上账，且关标签抹不掉项目级结论', () => {
+  it('同一文件两簇并存 ⇒ 只出示编辑器那份（同一个问题数两遍就是造假账）', () => {
+    setProblems(F1, [mk(F1, 1, 'error')]);
+    setProjectScanProblems(F1, [mk(F1, 1, 'error'), mk(F1, 5, 'warning')]);
+    expect(snapshot().map((p) => `${p.line}/${p.severity}/${p.origin}`)).toEqual(['1/error/open-file']);
+    expect(summarizeProblems(snapshot()).counts).toEqual({ error: 1, warning: 0, info: 0 });
+  });
+
+  it('clearProblems（关标签）只清编辑器那一簇 ⇒ 项目级那条回到台前，并排进复核队列', () => {
+    setProjectScanProblems(F3, [mk(F3, 2, 'warning')]);
+    setProblems(F3, [mk(F3, 2, 'warning')]);
+    setProjectScanCoverage(scanCoverage());
+    clearProblems(F3);
+    expect(snapshot().map((p) => p.origin)).toEqual(['project-scan']);
+    expect(summarizeProblems(snapshot()).counts.warning).toBe(1);
+    expect(takeRescanPaths()).toEqual([F3]); // 内存结论作废 ⇒ 盘上那份要复核，不许当新真相
+    expect(takeRescanPaths()).toEqual([]);
+  });
+
+  it('clearAllProblems（编辑器卸载）也只清自己那一簇；只有 clearProjectScan 才动项目级', () => {
+    setProblems(F1, [mk(F1, 1, 'error')]);
+    setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
+    setProjectScanCoverage(scanCoverage());
+    clearAllProblems();
+    expect(summarizeProblems(snapshot()).counts).toEqual({ error: 1, warning: 0, info: 0 });
+    clearProjectScan();
+    expect(snapshot()).toHaveLength(0);
+    expect(projectScanFileCount()).toBe(0);
+  });
+
+  it('打开且干净 ⇒ 压住旧扫描（刚发布"这份没问题"的文件不能凭空长出红线）', () => {
+    setProjectScanProblems(F2, [mk(F2, 4, 'error')]);
+    setProblems(F2, []);
+    expect(snapshot()).toHaveLength(0);
+    expect(summarizeProblems(snapshot())).toBe(EMPTY_PROBLEM_SUMMARY);
+    clearProblems(F2);
+    expect(snapshot().map((p) => `${p.line}/${p.origin}`)).toEqual(['4/project-scan']);
+  });
+
+  it('旧形状一格没动（另一条线按原样消费），分簇计数是新增那一格', () => {
+    setProblems(F1, [mk(F1, 3, 'error'), mk(F1, 9, 'warning')]);
+    setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
+    const s = summarizeProblems(snapshot());
+    expect(Object.keys(s).sort()).toEqual(['byKey', 'byPath', 'counts', 'countsByOrigin', 'files']);
+    expect(Object.keys(s.byPath.get(F1)!).sort()).toEqual(['error', 'info', 'path', 'warning']);
+    expect(s.counts).toEqual({ error: 2, warning: 1, info: 0 });
+    expect(s.countsByOrigin['open-file']).toEqual({ error: 1, warning: 1, info: 0 });
+    expect(s.countsByOrigin['project-scan']).toEqual({ error: 1, warning: 0, info: 0 });
+  });
+
+  it('不带 origin 的入参按编辑器那一簇记账（旧调用零改动、旧数字零变化）', () => {
+    const s = summarizeProblems([mk(F1, 1, 'error'), mk(F2, 1, 'warning')]);
+    expect(s.countsByOrigin['open-file']).toEqual({ error: 1, warning: 1, info: 0 });
+    expect(s.countsByOrigin['project-scan']).toEqual({ error: 0, warning: 0, info: 0 });
+  });
+});
+
+describe('PROBLEM_SCOPE · 合并之后的说法必须两头都不冒充', () => {
+  it('只有编辑器那一簇 ⇒ 原文一字不改（"不含未打开文件"这句此刻仍然是真的）', () => {
+    setProblems(F1, [mk(F1, 1, 'error')]);
+    expect(PROBLEM_SCOPE.label).toBe('已打开');
+    expect(PROBLEM_SCOPE.title).toContain('不含未打开文件与整项目结论 ≠ 项目级约定计数');
+  });
+
+  it('项目级进了账 ⇒ 不许再说"只有已打开文件"，并说得出覆盖了几个、哪些目录', () => {
+    setProblems(F1, [mk(F1, 1, 'error')]);
+    setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
+    setProjectScanCoverage(scanCoverage({ roots: [PKG_DIR], scanned: 12, total: 12 }));
+    expect(PROBLEM_SCOPE.label).toBe('已打开+已扫描');
+    expect(PROBLEM_SCOPE.title).toContain('覆盖 12/12');
+    expect(PROBLEM_SCOPE.title).toContain(PKG_DIR);
+    expect(PROBLEM_SCOPE.title).not.toContain('不含未打开文件');
+  });
+
+  it('扫过的文件全都开着 ⇒ 屏幕上根本没有项目级那一簇，标签仍说「已打开」', () => {
+    setProjectScanProblems(F1, [mk(F1, 7, 'warning')]);
+    setProblems(F1, [mk(F1, 1, 'error')]);
+    setProjectScanCoverage(scanCoverage());
+    expect(PROBLEM_SCOPE.label).toBe('已打开');
+  });
+
+  it('扫描没跑完（上限 / 取消 / 部分目录）⇒ 措辞里必须留得出来', () => {
+    setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
+    setProjectScanCoverage(scanCoverage({ scanned: 40, total: 320, capped: true }));
+    expect(PROBLEM_SCOPE.label).toBe('部分扫描');
+    expect(PROBLEM_SCOPE.title).toContain('覆盖 40/320');
+    expect(PROBLEM_SCOPE.title).toContain('到批量上限即停');
+    setProjectScanCoverage(scanCoverage({ status: 'cancelled', scanned: 3, total: 320, capped: false }));
+    expect(PROBLEM_SCOPE.label).toBe('部分扫描');
+    expect(PROBLEM_SCOPE.title).toContain('已取消');
+    setProjectScanCoverage(scanCoverage({ status: 'running', scanned: 1, total: 12, capped: false }));
+    expect(PROBLEM_SCOPE.label).toBe('扫描中');
+  });
+
+  it('降级也在这句话里：读不动的、越界拒读的、待复核的，都点名到数字', () => {
+    setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
+    setProjectScanCoverage(scanCoverage({ skipped: 3, outOfRoots: 2, degraded: 1 }));
+    clearProblems(F3); // 排进一个待复核
+    const t = PROBLEM_SCOPE.title;
+    for (const phrase of [
+      '3 个文件读不动已跳过',
+      '2 个越界路径已拒读',
+      '1 个文件的某路诊断方抛错已跳过',
+      '1 个文件关标签后待复核',
+    ]) {
+      expect(t).toContain(phrase);
+    }
+    expect(projectScanCoverage().skipped).toBe(3);
+  });
+
+  it('合并态仍是"一个真相"：状态栏 = 面板表头 = 组头 = 树', () => {
+    setProblems(F1, [mk(F1, 1, 'error'), mk(F1, 2, 'warning')]);
+    setProjectScanProblems(F2, [mk(F2, 3, 'error')]);
+    setProjectScanProblems(F3, [mk(F3, 1, 'warning'), mk(F3, 2, 'warning')]);
+    setProjectScanCoverage(scanCoverage());
+    const status = statusCounts(renderToStaticMarkup(h(ProblemsStatusItem, { onClick: () => {} })));
+    const panel = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));
+    expect(status).toEqual({ error: 2, warning: 3, info: 0 });
+    expect(headerCounts(panel)).toEqual(status);
+    expect(groupHeadCounts(panel)).toEqual(status);
+    expect(treeTotals()).toEqual({ error: 2, warning: 3, info: 0, badges: 1 });
+  });
+
+  it('覆盖读数逐字段比对后才通知（每批一次的写入不该炸渲染）', () => {
+    let fired = 0;
+    const un = subscribe(() => {
+      fired++;
+    });
+    setProjectScanCoverage(scanCoverage());
+    setProjectScanCoverage(scanCoverage());
+    expect(fired).toBe(1);
+    setProjectScanCoverage(scanCoverage({ scanned: 5 }));
+    expect(fired).toBe(2);
+    un();
+  });
+});
+
 describe('静态闸：计数与配色都不许有第二条腿', () => {
   const panel = read('../src/ui/ProblemPanel.tsx');
   const tree = read('../src/ui/FileTree.tsx');
@@ -341,5 +512,23 @@ describe('静态闸：计数与配色都不许有第二条腿', () => {
       panel.match(/<span className="sb-scope-tag">\{PROBLEM_SCOPE\.label\}<\/span>/g) ?? [],
     ).toHaveLength(2);
     expect((panel.match(/title=\{PROBLEM_SCOPE\.title\}/g) ?? []).length).toBe(2);
+  });
+
+  it('上账只有一条腿：项目级那一簇的写入原语住在 store，采集器只交类型、不碰写盘', () => {
+    const scanner = read('../src/ui/project-diagnostics.ts');
+    expect(store).toContain('export function setProjectScanProblems');
+    expect(store).toContain("export type ProblemOrigin = 'open-file' | 'project-scan'");
+    expect(scanner).toContain("from './problem-store'");
+    // 采集器不自己记账：上哪一簇由宿主注入的 publish 决定（账本仍只有 store 那一个）
+    expect(scanner).not.toMatch(/setProjectScanProblems\(|setProblems\(/);
+    // 只读诊断：一个写文件的口子都不许有
+    expect(scanner).not.toMatch(/writeFile|saveFile|exportFile|invoke\(/);
+  });
+
+  it('采集器的迟到防护有判据本体（每个 await 之后先认世代，才许有外部效果）', () => {
+    const scanner = read('../src/ui/project-diagnostics.ts');
+    expect(scanner).toContain('const stale = ()');
+    expect((scanner.match(/if \(stale\(\)\)/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect(scanner).toContain('outcome.discarded++');
   });
 });

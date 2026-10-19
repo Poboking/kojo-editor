@@ -7,10 +7,12 @@
  * PS-16 memo 化：`EditRow` / `FileRows` 组件级 memo（树内无关 state——菜单、批注、定位——
  * 翻动时整组行不再重画）；单行 `FileRow` 行级 memo 在 `file-tree-row.tsx`（拆模块 ⇒
  * 行级计数可观测）。生效前提在宿主：`FileTree.tsx` 把穿进行组件的回调 useCallback 化、
- * `skip`/`edit` 等引用型 props 稳定化，否则每帧新引用 ⇒ memo 形同虚设。
+ * `skip`/`edit`/`probs` 等引用型 props 稳定化，否则每帧新引用 ⇒ memo 形同虚设。
  */
 import { memo, useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { FileRow } from './file-tree-row';
+import { pkey } from './file-tree-ops';
+import type { ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
 
 
@@ -68,9 +70,18 @@ export interface FileRowsProps {
   readonly edit?: { readonly path: string; readonly node: ReactElement } | null;
   /** 文件行右键（B1；缺省 → 文件行无右键，旧行为） */
   readonly onFileContext?: (e: ReactMouseEvent, path: string) => void;
+  /**
+   * 文件行诊断表（工包：文件行徽标）。**键 = `pkey(路径)`**，值 = `problem-store` 里那一格。
+   *
+   * 传表而不是逐行传 ReactElement：表由宿主的 `useMemo` 持有（同一份 summary 版本 = 同一个
+   * 引用），所以这一位穿进来不碰 PS-16 的 memo 前提；而查表必须按归一键——行路径来自索引，
+   * 注册表键来自编辑器，Windows 两种写法是同一个文件，字面比对就会漏标。
+   * 缺省 → 整组不标（旧行为）。
+   */
+  readonly probs?: ReadonlyMap<string, ProblemFileCounts>;
 }
 
-export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileContext }: FileRowsProps): ReactElement {
+export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileContext, probs }: FileRowsProps): ReactElement {
   const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
   return (
     <>
@@ -79,7 +90,13 @@ export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpe
           {edit && edit.path === f ? (
             edit.node
           ) : (
-            <FileRow f={f} active={f === activeFile} onOpenFile={onOpenFile} onFileContext={onFileContext} />
+            <FileRow
+              f={f}
+              active={f === activeFile}
+              onOpenFile={onOpenFile}
+              onFileContext={onFileContext}
+              prob={probs?.get(pkey(f))}
+            />
           )}
         </li>
       ))}
