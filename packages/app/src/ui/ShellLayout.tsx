@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCommandContext, EditorWorkspaceSymbol, MarketService, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorWorkspaceSymbol, ErbParserService, MarketService, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
@@ -970,8 +970,17 @@ export function ShellLayout(props: Props): ReactElement {
         indexError: stats.indexError,
         fileCount: stats.fileCount,
         query,
+        // ST-CONSUMERS：把提供方那一轮的**可查事实**原样转述给文案层（宿主不代判形状，
+        // 三态与覆盖的判据只住 `erb-parser/index-state.ts`；服务缺席 / 抛错 ⇒ null = 退回旧读数）
+        indexState: (() => {
+          try {
+            return kernel.services.tryGet<ErbParserService>('erb.parser')?.indexState?.() ?? null;
+          } catch {
+            return null;
+          }
+        })(),
       }),
-    [commandCtx.project, stats.indexing, stats.indexError, stats.fileCount],
+    [commandCtx.project, stats.indexing, stats.indexError, stats.fileCount, kernel],
   );
 
   /** 选中 ⇒ 发既有 `editor.revealLocation`（开文件 + 定位由 App 落地，不新造跳转机制） */

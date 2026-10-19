@@ -2,6 +2,7 @@ import type {
   EditorLanguageServiceContribution,
   EditorWorkspaceSymbol,
   GameProject,
+  ErbIndexState,
   ErbScopeStamp,
 } from '@kojo/plugin-api';
 import {
@@ -16,6 +17,7 @@ import {
 } from '@kojo/plugin-api';
 import { splitPath } from './path-label';
 import { activeNavScope } from './search-scope';
+import { workspaceSymbolIndexCopy } from './index-state-copy';
 
 /**
  * 工作区符号搜索（D2，2026-10-15）的**宿主侧纯逻辑**——对标 VSCode 的 `Ctrl+T`。
@@ -281,10 +283,19 @@ export interface WorkspaceSymbolAvailability {
   readonly indexing: boolean;
   /** 索引构建失败的原因（状态栏同源） */
   readonly indexError: string | null;
-  /** 已索引文件数（0 = 名录还是空的） */
+  /** 已索引文件数（**旧读数**：只在 `indexState` 缺席时当"有没有索引"的兜底判据） */
   readonly fileCount: number;
   /** 当前查询串 */
   readonly query: string;
+  /**
+   * 索引这一轮的**可查事实**（ST-CONSUMERS，**additive 可选**）：`erb.parser` 的
+   * `indexState()` 原样转述，宿主不替提供方判形状（判据单源见 `erb-parser/index-state.ts`）。
+   *
+   * 为什么非它不可：`fileCount` 只答"有没有索引"，答不出**为什么没有**——
+   * "一个可扫的位置都没走到"与"位置走到了、名录确实为空"在 `fileCount` 上是同一个 0，
+   * 却是两句不同的话。缺席（旧实现没交事实）⇒ 逐字退回下面那三条旧读数，旧行为零改动。
+   */
+  readonly indexState?: ErbIndexState | null;
 }
 
 /**
@@ -293,10 +304,17 @@ export interface WorkspaceSymbolAvailability {
  * 判据次序是有意的：**先说环境、再说查询**。没开项目时回答"无匹配符号"等于把
  * "根本没有名录"伪装成"你的名字起错了"；作者按了快捷键却看见一句和查询无关的话，
  * 才不会以为功能坏了。
+ *
+ * ST-CONSUMERS 改的那一寸：`fileCount === 0` 那一句此前把"没地方可扫"与"扫了什么都没有"
+ * 糊成同一句假话。现在这一格**按 phase 查表**（表与另两条通道同一张，见
+ * `ui/index-state-copy.ts`），并把"走了几个位置、扫了几个文件"的原始读数带在括号里；
+ * 索引那一侧就绪（`ready`）时查表交回 `null` ⇒ 后面的查询层判据照常生效。
  */
 export function workspaceSymbolNotice(a: WorkspaceSymbolAvailability): string {
   if (!a.hasProject) return '未打开项目，没有可搜索的工作区符号';
   if (a.indexError) return `索引不可用：${a.indexError}`;
+  const why = workspaceSymbolIndexCopy(a.indexState ?? null);
+  if (why !== null) return why;
   if (a.indexing) return '索引构建中，稍候即可搜索函数名';
   if (a.fileCount === 0) return '当前项目还没有可用的函数索引';
   if (a.query.trim().length === 0) return '输入函数名以搜索（中文名与原生大写名都可）';

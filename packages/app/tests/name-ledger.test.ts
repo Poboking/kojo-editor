@@ -16,6 +16,7 @@ import type {
   EditorLanguageServiceContribution,
   EditorSymbolLocation,
   ErbIndex,
+  ErbIndexState,
   ErbParserService,
   ErbReference,
 } from '@kojo/plugin-api';
@@ -31,7 +32,7 @@ const refsOf = (path: string): ErbReference[] => [
 ];
 
 interface Stub {
-  parser?: Pick<ErbParserService, 'referencesTo' | 'currentIndex'> | null;
+  parser?: Pick<ErbParserService, 'referencesTo' | 'currentIndex' | 'indexState'> | null;
   sources?: Array<{ path: string; text: string }>;
   locations?: EditorSymbolLocation[] | 'throw';
   walked?: string[];
@@ -160,6 +161,53 @@ describe('createProjectNameLedger（与 F2 同一份判据）', () => {
       locations: 'throw',
     });
     await expect(createProjectNameLedger(kernel)(NAME)).rejects.toThrow(/判读器炸了/);
+  });
+
+  /* ── ST-CONSUMERS：同一格改成按 phase 查表（不再对"没地方可扫"承诺"稍后再试"） ── */
+
+  /** 抛错消息（台账这一腿是**只读回执**，说清"为什么核对不了"就是它的文案面） */
+  async function ledgerErrorWith(indexState: ErbParserService['indexState']): Promise<string> {
+    const kernel = fakeKernel({ parser: { currentIndex: () => null, referencesTo: () => [], indexState } });
+    try {
+      await createProjectNameLedger(kernel)(NAME);
+    } catch (e: unknown) {
+      return (e as Error).message;
+    }
+    throw new Error('测试前提：索引缺席时台账必须抛（不装成"没有出现点"）');
+  }
+
+  const fact = (over: Partial<ErbIndexState>): ErbIndexState => ({
+    phase: 'ready',
+    sources: [{ source: 'project', offered: 1, available: true }],
+    rootsWalked: 1,
+    filesScanned: 10,
+    functions: 20,
+    coverage: 'full',
+    ...over,
+  });
+
+  it('没地方可扫 ⇒ 说的是"没有可扫描的位置"，不再让作者干等', async () => {
+    const msg = await ledgerErrorWith(() => fact({ phase: 'nothing-to-scan', rootsWalked: 0, functions: 0, coverage: 'none' }));
+    expect(msg).toContain('没有可扫描的位置');
+    expect(msg).toContain('无法核对同名记号');
+    expect(msg).not.toContain('仍在构建');
+  });
+
+  it('扫了什么都没有 ⇒ 另一句；两者不同句（旧形态一句糊两态）', async () => {
+    const empty = await ledgerErrorWith(() => fact({ phase: 'empty', functions: 0 }));
+    expect(empty).toContain('名录里一个函数都没有');
+    expect(empty).not.toBe(await ledgerErrorWith(() => fact({ phase: 'nothing-to-scan', rootsWalked: 0, functions: 0, coverage: 'none' })));
+  });
+
+  it('失败 ⇒ 逐字带上原始错误；正在构建 ⇒ 说"正在构建"', async () => {
+    expect(await ledgerErrorWith(() => fact({ phase: 'failed', error: 'EPERM: /erb' }))).toContain('原始错误：EPERM: /erb');
+    expect(await ledgerErrorWith(() => fact({ phase: 'scanning' }))).toContain('正在构建');
+  });
+
+  it('提供方没交事实 / 事实面自己抛错 ⇒ 逐字退回原句（旧行为零改动）', async () => {
+    expect(await ledgerErrorWith(undefined)).toBe('ERB 函数索引未建（打开项目后仍在构建），无法核对同名记号');
+    expect(await ledgerErrorWith(() => fact({ phase: 'ready' }))).toContain('索引未建');
+    expect(await ledgerErrorWith(() => { throw new Error('事实面炸了'); })).toContain('索引未建（打开项目后仍在构建）');
   });
 });
 

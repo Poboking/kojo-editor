@@ -122,6 +122,14 @@ export function useShellOverlays(kernel: Kernel | null): void {
             return null;
           }
         },
+        // ST-CONSUMERS：索引这一轮的可查事实（原样转述，宿主不代判形状；缺席 ⇒ 旧句）
+        indexState: () => {
+          try {
+            return parser()?.indexState?.() ?? null;
+          } catch {
+            return null;
+          }
+        },
         reveal: (path, line, column) =>
           kernel.bus.emit('editor.revealLocation', {
             filePath: path,

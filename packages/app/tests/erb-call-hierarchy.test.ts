@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ErbFile, ErbFunction, ErbFunctionRef, ErbIndex, ErbReference } from '@kojo/plugin-api';
+import type { ErbFile, ErbFunction, ErbFunctionRef, ErbIndex, ErbIndexState, ErbReference } from '@kojo/plugin-api';
 import {
   incomingCalls,
   outgoingCalls,
@@ -366,6 +366,89 @@ describe('CallHierarchyOverlay 渲染', () => {
     setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 999 } });
     const offBody = render();
     expect(offBody).toContain('不在任何 ERB 函数体内');
+  });
+
+  /* ── ST-CONSUMERS：这一格也改成按 phase 查表（旧形态对"没地方可扫"承诺"稍后再试"） ── */
+
+  const fact = (over: Partial<ErbIndexState>): ErbIndexState => ({
+    phase: 'ready',
+    sources: [
+      { source: 'project', offered: 0, available: false, reason: 'roots() 抛错：EPERM' },
+      { source: 'workspace', offered: 0, available: true },
+    ],
+    rootsWalked: 0,
+    filesScanned: 0,
+    functions: 0,
+    coverage: 'none',
+    ...over,
+  });
+
+  /** 带事实面的 deps（空索引 = 本轮产出了索引对象但什么都没有） */
+  const emptyIndexDeps = (indexState: ErbIndexState | null) => ({
+    ...deps,
+    currentIndex: () => (indexState === null ? index : makeIndex({ files: [], byName: [], bySymbol: [] })),
+    indexState: () => indexState,
+  });
+
+  function renderWith(d: unknown): string {
+    setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 999 } });
+    return renderToStaticMarkup(createElement(d as () => ReactElement));
+  }
+
+  it('没地方可扫 ⇒ 说"没有可扫描的位置"并带原始读数，不再把锅甩给光标', () => {
+    const html = renderWith(
+      createCallHierarchyOverlay(emptyIndexDeps(fact({ phase: 'nothing-to-scan' }))) as () => ReactElement,
+    );
+    expect(html).toContain('没有可扫描的位置');
+    expect(html).toContain('走了 0 个位置 · 扫了 0 个文件 · 名录 0 名');
+    expect(html).not.toContain('不在任何 ERB 函数体内');
+    // 悬停里逐来源读数一条不丢（读不到的那一类位置连原因一起给）
+    expect(html).toContain('project 交出 0 个根');
+    expect(html).toContain('roots() 抛错：EPERM');
+  });
+
+  it('扫了什么都没有 ⇒ 另一句（与"没地方可扫"不同句）', () => {
+    const html = renderWith(
+      createCallHierarchyOverlay(
+        emptyIndexDeps(fact({ phase: 'empty', rootsWalked: 2, filesScanned: 40, functions: 0, coverage: 'full' })),
+      ) as () => ReactElement,
+    );
+    expect(html).toContain('确实一条都没有');
+    expect(html).not.toContain('没有可扫描的位置');
+  });
+
+  it('失败 ⇒ 说"构建失败"并逐字带上原始错误', () => {
+    const html = renderWith(
+      createCallHierarchyOverlay(
+        { ...deps, currentIndex: () => null, indexState: () => fact({ phase: 'failed', error: 'boom' }) },
+      ) as () => ReactElement,
+    );
+    expect(html).toContain('构建失败');
+    expect(html).toContain('原始错误：boom');
+    expect(html).not.toContain('稍后再试');
+  });
+
+  it('就绪 / 正在构建 / 提供方没交事实 ⇒ 三格逐字用回改前的句子（旧行为零改动）', () => {
+    const ready = renderWith(
+      createCallHierarchyOverlay(
+        emptyIndexDeps(fact({ phase: 'ready', rootsWalked: 2, filesScanned: 40, functions: 9, coverage: 'full' })),
+      ) as () => ReactElement,
+    );
+    expect(ready).toContain('不在任何 ERB 函数体内');
+    const scanning = renderToStaticMarkup(
+      createElement(
+        createCallHierarchyOverlay({
+          ...deps,
+          currentIndex: () => null,
+          indexState: () => fact({ phase: 'scanning', rootsWalked: 2, functions: 9, coverage: 'full' }),
+        }) as () => ReactElement,
+      ),
+    );
+    expect(scanning).toContain('ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。');
+    const legacy = renderToStaticMarkup(
+      createElement(createCallHierarchyOverlay({ ...deps, currentIndex: () => null }) as () => ReactElement),
+    );
+    expect(legacy).toContain('索引未建');
   });
 
   it('PS-15 行清单窗口化：首帧 120 行 + 哨兵说得出差额（RENDER_CAP=300 死顶已除）', () => {

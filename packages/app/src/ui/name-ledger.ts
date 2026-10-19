@@ -1,7 +1,8 @@
 import type { Kernel } from '@kojo/kernel';
-import type { ErbParserService } from '@kojo/plugin-api';
+import type { ErbIndexState, ErbParserService } from '@kojo/plugin-api';
 import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
+import { nameLedgerIndexCopy } from './index-state-copy';
 import {
   erbOccurrences,
   findNameTokenPositions,
@@ -58,8 +59,18 @@ function erbSide(kernel: Kernel, normalizedName: string): readonly ReferenceOccu
   if (!parser?.referencesTo || !parser.currentIndex) {
     throw new Error('ERB 引用判据缺席（erb.parser 未提供 referencesTo），无法核对同名记号');
   }
+  // 索引这一轮的**可查事实**（ST-CONSUMERS）：原来这一格只会说"未建（仍在构建）"，
+  // 于是"一个可扫的位置都没走到"与"扫了什么都没有"都被说成"稍后再试"——作者会一直等。
+  // 现在按 phase 查表（判据单源 `erb-parser/index-state.ts`，表见 `ui/index-state-copy.ts`）；
+  // 提供方没交事实（旧实现）⇒ 逐字退回原句。
   if (!parser.currentIndex()) {
-    throw new Error('ERB 函数索引未建（打开项目后仍在构建），无法核对同名记号');
+    let indexState: ErbIndexState | null = null;
+    try {
+      indexState = parser.indexState?.() ?? null;
+    } catch {
+      indexState = null; // 事实面自己抛错 ⇒ 退回旧读数（台账这一腿不该因文案层失联）
+    }
+    throw new Error(`${nameLedgerIndexCopy(indexState)}，无法核对同名记号`);
   }
   return erbOccurrences(parser.referencesTo(normalizedName) ?? []);
 }

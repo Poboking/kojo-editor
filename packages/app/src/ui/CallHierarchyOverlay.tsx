@@ -1,6 +1,10 @@
 import { createElement as h, useEffect, useState, type ReactElement } from 'react';
 import { basename, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
-import type { ErbFunction, ErbIndex } from '@kojo/plugin-api';
+import type { ErbFunction, ErbIndex, ErbIndexState } from '@kojo/plugin-api';
+import {
+  callHierarchyIndexCopy,
+  callHierarchyIndexTitle,
+} from './index-state-copy';
 import {
   incomingCalls,
   outgoingCalls,
@@ -37,6 +41,12 @@ import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-st
 export interface CallHierarchyDeps {
   /** 当前 ERB 索引（`null` = 未建 / 服务缺席；软取不抛） */
   currentIndex(): ErbIndex | null;
+  /**
+   * 索引这一轮的**可查事实**（ST-CONSUMERS，**additive 可选**）：`erb.parser` 的
+   * `indexState()` 原样转述，宿主不代判形状（判据单源 `erb-parser/index-state.ts`）。
+   * 缺席 = 提供方是旧实现 ⇒ 那一格逐字退回原句。
+   */
+  indexState?(): ErbIndexState | null;
   /**
    * 位置 → 包围函数（三态语义见 `FunctionAtResolver`：命中 / `undefined` 权威答否 /
    * `null` 通道缺席 ⇒ 数据层退化索引自扫）。
@@ -164,25 +174,43 @@ function renderRequest(
   closeBtn: ReactElement,
   sectionWindow: SectionWindow,
 ): ReactElement {
+  // 索引这一轮的事实（ST-CONSUMERS）：查表得到的那一句**只在既有文案面**上替换原文，
+  // 不给本面板新开显示面；查表交回 `null` ⇒ 逐字用回改前那两句。
+  const indexState = deps.indexState?.() ?? null;
+  const blockedCopy = callHierarchyIndexCopy(indexState);
+  const blockedTitle = callHierarchyIndexTitle(indexState);
+  /** 那一格 `p.dim`（两个面共用一枚构造函数，字符串只有一处） */
+  const notice = (text: string): ReactElement =>
+    h('p', blockedTitle === undefined ? { className: 'dim' } : { className: 'dim', title: blockedTitle }, text);
+
   const index = deps.currentIndex();
   if (!index) {
     return h(
       'div',
       { className: 'wizard kd-host' },
       h('h3', null, '调用层级'),
-      h('p', { className: 'dim' }, 'ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。'),
+      notice(blockedCopy ?? 'ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。'),
       closeBtn,
     );
   }
   const target = resolveEnclosingFunction(index, deps.functionAt, request.filePath, request.line);
   if (!target) {
+    // 「第 N 行不在任何函数体内」只在**本轮确实扫出了东西**时才成立：一个位置都没走到 /
+    // 扫过但名录为空时，那句是把"索引没内容"污蔑成"你把光标放错了"（同一张表判的相位）
+    if (blockedCopy !== null) {
+      return h(
+        'div',
+        { className: 'wizard kd-host' },
+        h('h3', null, '调用层级'),
+        notice(blockedCopy),
+        closeBtn,
+      );
+    }
     return h(
       'div',
       { className: 'wizard kd-host' },
       h('h3', null, '调用层级'),
-      h(
-        'p',
-        { className: 'dim' },
+      notice(
         `第 ${request.line} 行不在任何 ERB 函数体内（或该文件不在函数索引里）——把光标放到某个 @ 函数的正文中再试。`,
       ),
       closeBtn,

@@ -168,3 +168,100 @@ describe('④ 反向对照：三态与降级的判据确实住在提供方那一
     expect(erb).toMatch(/export type ErbIndexPhase = 'idle' \| 'scanning' \| 'ready' \| 'nothing-to-scan' \| 'empty' \| 'failed';/);
   });
 });
+
+/* ─────────── ⑤ 宿主三条通道（ST-CONSUMERS 2026-10-20）：同一张表，一字判据都不写 ─────────── */
+
+/**
+ * 覆盖面**收紧**的一寸（简报明令允许）：上一批只守函数树那条通道，本批把同一条事实接给
+ * `Ctrl+T` / 改名台账 / 调用层级三条宿主通道 ⇒ 这三条也进扫描面。
+ * 手法与 ① 逐字相同（按行扫源码形态、连注释一起查、处数钉死）。
+ */
+describe('⑤ 宿主三条通道只查表（六文件 × 八把尺子，多一处即红）', () => {
+  const APP_TABLE = 'packages/app/src/ui/index-state-copy.ts';
+  const APP_CONSUMERS = [
+    APP_TABLE,
+    'packages/app/src/ui/workspace-symbols.ts',
+    'packages/app/src/ui/name-ledger.ts',
+    'packages/app/src/ui/CallHierarchyOverlay.tsx',
+    'packages/app/src/ui/shell-overlays.ts',
+    'packages/app/src/ui/ShellLayout.tsx',
+  ];
+
+  it.each([...SHAPE_TESTS, { name: 'phase 的比较（三态一律走表）', re: /phase\s*(?:===|!==)/ }])(
+    '$name：宿主六个文件里 0 处',
+    ({ re }) => {
+      const offenders = APP_CONSUMERS.flatMap((rel) => hits(rel, re));
+      expect(offenders, offenders.join('\n')).toEqual([]);
+    },
+  );
+
+  it('原始读数与来源清单只许在表那一枚文件里被转录（别处出现 = 有人在重算）', () => {
+    const offenders = APP_CONSUMERS.filter((rel) => rel !== APP_TABLE).flatMap((rel) =>
+      hits(rel, /\b(?:rootsWalked|filesScanned|offered|coverage|available)\b/),
+    );
+    expect(offenders, offenders.join('\n')).toEqual([]);
+  });
+
+  it('两枚"空"态只许作为**表键**出现在宿主那一张表里（各 1 处，别处 0 处）', () => {
+    expect(hits(APP_TABLE, /^\s+'nothing-to-scan':/)).toHaveLength(1);
+    expect(hits(APP_TABLE, /^\s+empty:/)).toHaveLength(1);
+    for (const rel of APP_CONSUMERS.filter((r) => r !== APP_TABLE)) {
+      expect(hits(rel, /'nothing-to-scan'|'empty'/), `${rel} 不许出现 phase 字面量`).toEqual([]);
+    }
+  });
+
+  it('宿主只有一张表（第二张 phase→文案表 = 第二份真相）', () => {
+    // 表那一枚文件的列名（`ws` / `ledger` / `blocked`）在别的宿主文件里出现 = 有人又起了一张表
+    const owners = APP_CONSUMERS.filter((rel) => hits(rel, /readonly (?:ws|ledger|blocked):/).length > 0);
+    expect(owners).toEqual([APP_TABLE]);
+    expect(hits(APP_TABLE, /^\s+idle:/)).toHaveLength(1);
+    expect(hits(APP_TABLE, /^\s+scanning:/)).toHaveLength(1);
+    expect(hits(APP_TABLE, /^\s+failed:/)).toHaveLength(1);
+    expect(hits(APP_TABLE, /^\s+ready:/)).toHaveLength(1);
+  });
+
+  it('事实面的入口按处数钉死：四个接线点各读一次 provider.indexState()，文案层一次都不读', () => {
+    for (const rel of ['packages/app/src/ui/ShellLayout.tsx', 'packages/app/src/ui/shell-overlays.ts', 'packages/app/src/ui/name-ledger.ts', 'packages/app/src/ui/CallHierarchyOverlay.tsx']) {
+      expect(hits(rel, /indexState\?\.\(\)/), rel).toHaveLength(1);
+    }
+    expect(hits(APP_TABLE, /indexState\?\.\(\)/)).toEqual([]);
+    expect(hits('packages/app/src/ui/workspace-symbols.ts', /indexState\?\.\(\)/)).toEqual([]);
+  });
+
+  it('三条通道都真的调那张表（改回各自判形状 ⇒ 这几行消失就红）', () => {
+    expect(textOf('packages/app/src/ui/workspace-symbols.ts')).toMatch(/workspaceSymbolIndexCopy\(a\.indexState \?\? null\)/);
+    expect(textOf('packages/app/src/ui/name-ledger.ts')).toMatch(/nameLedgerIndexCopy\(indexState\)/);
+    expect(textOf('packages/app/src/ui/CallHierarchyOverlay.tsx')).toMatch(/callHierarchyIndexCopy\(indexState\)/);
+    expect(textOf('packages/app/src/ui/CallHierarchyOverlay.tsx')).toMatch(/callHierarchyIndexTitle\(indexState\)/);
+  });
+
+  it('恒显占位那句「当前项目还没有可用的函数索引」不许再当唯一答案（表没接上就复活）', () => {
+    const ws = textOf('packages/app/src/ui/workspace-symbols.ts');
+    expect(ws.split('当前项目还没有可用的函数索引').length - 1).toBe(1);
+    expect(ws).toMatch(/const why = workspaceSymbolIndexCopy\(a\.indexState \?\? null\);\n\s*if \(why !== null\) return why;/);
+  });
+
+  it('反向对照：宿主那张表确实给三态各写了一句不同的话，而且这些话只住在那一枚文件里', () => {
+    for (const phrase of [/没有可扫描的位置/, /确实一条都没有/, /这一轮构建失败/]) {
+      expect(hits(APP_TABLE, phrase).length, `表里要有 ${String(phrase)} 那一句`).toBeGreaterThanOrEqual(1);
+      const elsewhere = APP_CONSUMERS.filter((rel) => rel !== APP_TABLE).flatMap((rel) => hits(rel, phrase));
+      expect(elsewhere, elsewhere.join('\n')).toEqual([]);
+    }
+  });
+});
+
+/* ─────────── ⑥ 悬停通道：实测**没有**"为什么没有"这一格（记档，不新开显示面） ─────────── */
+
+describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开显示面"）', () => {
+  const HOVER = 'packages/app/src/monaco/kojo-hover.ts';
+
+  it('索引缺席时悬停**只许不产结果**（`return undefined`），不许 pop 一句解释（那是新显示面）', () => {
+    // 两处取索引的腿各有一枚"缺席 ⇒ 不产结果"，多一处说明有人在这里加了文案
+    expect(hits(HOVER, /if \(index === null\) return undefined;/)).toHaveLength(2);
+    expect(hits(HOVER, /return undefined/).length).toBeGreaterThan(2);
+  });
+
+  it('悬停这一格不查宿主那张表（它没有可查的文案面；接上 = 新开面 ⇒ 红）', () => {
+    expect(hits(HOVER, /index-state-copy|indexState/)).toEqual([]);
+  });
+});

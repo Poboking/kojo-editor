@@ -8,6 +8,7 @@ import type {
   EditorLanguageServiceRequest,
   EditorWorkspaceSymbol,
   EditorWorkspaceSymbolResult,
+  ErbIndexState,
 } from '@kojo/plugin-api';
 import { WorkspaceSymbols } from '../src/ui/Palette';
 import {
@@ -321,6 +322,73 @@ describe('workspaceSymbolNotice · 为什么没有结果（不静默）', () => 
     expect(workspaceSymbolNotice({ ...base, indexing: true, query: '' })).toBe(
       '索引构建中，稍候即可搜索函数名',
     );
+  });
+
+  /* ── ST-CONSUMERS：同一格改成按 phase 查表（`fileCount === 0` 那一句假话的主靶） ── */
+
+  /** 提供方交出的事实（phase 由 provider 判；本文件只喂给它，宿主不再算形状） */
+  const idx = (over: Partial<ErbIndexState>): ErbIndexState => ({
+    phase: 'ready',
+    sources: [
+      { source: 'project', offered: 2, available: true },
+      { source: 'workspace', offered: 1, available: true },
+    ],
+    rootsWalked: 3,
+    filesScanned: 2316,
+    functions: 99104,
+    coverage: 'full',
+    ...over,
+  });
+
+  it('没地方可扫 ⇒ 说的是"没有可扫描的位置"，不再是"还没有可用的函数索引"', () => {
+    const text = workspaceSymbolNotice({
+      ...base,
+      fileCount: 0,
+      indexState: idx({ phase: 'nothing-to-scan', sources: [], rootsWalked: 0, filesScanned: 0, functions: 0, coverage: 'none' }),
+    });
+    expect(text).toContain('没有可扫描的位置');
+    expect(text).not.toBe('当前项目还没有可用的函数索引');
+  });
+
+  it('扫了什么都没有 ⇒ 与上一句**不同句**（旧形态把两者糊成同一句假话）', () => {
+    const nowhere = workspaceSymbolNotice({ ...base, fileCount: 0, indexState: idx({ phase: 'nothing-to-scan', rootsWalked: 0, filesScanned: 0, functions: 0, coverage: 'none' }) });
+    const empty = workspaceSymbolNotice({ ...base, fileCount: 0, indexState: idx({ phase: 'empty', rootsWalked: 1, filesScanned: 0, functions: 0, coverage: 'full' }) });
+    expect(nowhere).not.toBe(empty);
+    expect(empty).toContain('确实一条都没有');
+  });
+
+  it('原始读数可查：两句都带得出"走了几个位置 · 扫了几个文件"', () => {
+    expect(
+      workspaceSymbolNotice({ ...base, fileCount: 0, indexState: idx({ phase: 'empty', rootsWalked: 4, filesScanned: 512, functions: 0 }) }),
+    ).toContain('走了 4 个位置 · 扫了 512 个文件 · 名录 0 名');
+    expect(
+      workspaceSymbolNotice({ ...base, fileCount: 0, indexState: idx({ phase: 'nothing-to-scan', rootsWalked: 0, filesScanned: 0, functions: 0, coverage: 'none' }) }),
+    ).toContain('走了 0 个位置 · 扫了 0 个文件 · 名录 0 名');
+  });
+
+  it('还没开扫 / 正在扫 ⇒ 仍说"稍候"，但把本轮读数一并给出', () => {
+    for (const phase of ['idle', 'scanning'] as const) {
+      expect(
+        workspaceSymbolNotice({ ...base, indexState: idx({ phase }) }).startsWith('索引构建中，稍候即可搜索函数名（'),
+      ).toBe(true);
+    }
+  });
+
+  it('失败态 ⇒ 说"构建失败"并带原始错误（与状态栏同一读数不冲突：状态栏那条优先）', () => {
+    const text = workspaceSymbolNotice({ ...base, indexState: idx({ phase: 'failed', error: 'EPERM' }) });
+    expect(text).toContain('构建失败');
+    expect(text).toContain('原始错误：EPERM');
+    expect(workspaceSymbolNotice({ ...base, indexError: '读取目录被拒绝', indexState: idx({ phase: 'failed', error: 'EPERM' }) })).toBe(
+      '索引不可用：读取目录被拒绝',
+    );
+  });
+
+  it('就绪 ⇒ 交回查询层（"无匹配符号" / "先打字"两句零改动）；提供方没交事实 ⇒ 旧读数逐字保留', () => {
+    expect(workspaceSymbolNotice(base)).toBe('无匹配符号');
+    expect(workspaceSymbolNotice({ ...base, query: '', indexState: idx({}) })).toBe(
+      '输入函数名以搜索（中文名与原生大写名都可）',
+    );
+    expect(workspaceSymbolNotice({ ...base, fileCount: 0 })).toBe('当前项目还没有可用的函数索引');
   });
 });
 
