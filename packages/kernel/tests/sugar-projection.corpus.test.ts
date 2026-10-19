@@ -102,6 +102,12 @@ const DATA_ENTRY_RE = /^\s*(DATAFORM|DATA)\b/;
  * 都是**已知结构**——它们若还落在兜底里，说明规则漏了一类"正常 ERB"，不是读者该看到的
  * "工具没读懂"。本闸逐类计数（命中即失败并打印前 10 条），同时用总量上限防规则回退：
  * 上限 = 修完实测值 ×1.1（常数见下，带实测注释）。
+ *
+ * **工包 D 追加的第二层**：总量之下还要**成因归因**——`FALLBACK_ATTRIBUTION_KEYS` 六格按行首
+ * 记号把兜底行恰分一次（`attributed === fallbackLines`），每格一条棘轮上限（`FALLBACK_CLASS_BUDGET`，
+ * 只降不升），并打印每格的记号直方图与前几条样例行（**样例行只带文件名 + 行号，不带语料绝对路径**）。
+ * 有了这一层，"兜底还剩 1.3 万行"才从一句总数变成"TRY 系 0 行 / 数据分组 N 行 / 控制流 N 行 /
+ * 真未知 N 行"这种可以继续往下砍的形状。
  */
 const FALLBACK_PREFIX = '未识别语句 · ';
 /**
@@ -111,6 +117,145 @@ const FALLBACK_PREFIX = '未识别语句 · ';
  * 只给规则微调留 ≤10% 余量；超过就是"正常 ERB 又被标成错误"的回归。
  */
 const FALLBACK_LINE_BUDGET = 15_147;
+
+/* ---------------- 兜底行的**成因归因**（工包 D：总量之外还要问"到底是什么"） ---------------- */
+
+/**
+ * 兜底行的成因桶（**闭集**，按行首 token 分派，一行恰进一格）。
+ *
+ * 为什么按 token 而不是按 `stats.nativeByReason`：那份分因是**行级**的"为什么留原生"，
+ * 而兜底只发生在"留原生 **且** 显示层也认不出"的交集上，段（`sugarText`）里不回带成因，
+ * 所以只能在测试侧按行首记号自己量。口径与下面的 `leadingTokenOf` 同一条正则——
+ * 与本文件既有的 `nativeTokens` 直方图共用一把尺子，两处读数才能对得上。
+ */
+type FallbackAttributionKey =
+  /** TRY 系九枚（`sugar-ident` 的 `TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`）⇒ 本批给了中性显示形 */
+  | 'tryNine'
+  /** 其余 `TRY*` 记号（`TRYGOTO` / `TRYGOTOFORM` 这类**单行语句**，九枚之外，statement 层也没认领） */
+  | 'tryOther'
+  /** 数据表**分组**记号（`DATALIST` / `ENDLIST` / `STRDATA`）：批 N 刻意不投影 ⇒ 已知结构、尚无显示形 */
+  | 'dataGrouping'
+  /** `PRINT*` 表外变体（与上面 `print` 类同一判据，结构性恒 0，留作对照桶） */
+  | 'printVariant'
+  /** 其它控制流记号（判据不满足的 `SIF` / `FOR` 异形 / 裸 `GOTO` / `$标签` 变形 …） */
+  | 'controlFlow'
+  /** 剩下的一切：真未知 */
+  | 'other';
+
+const FALLBACK_ATTRIBUTION_KEYS: readonly FallbackAttributionKey[] = [
+  'tryNine',
+  'tryOther',
+  'dataGrouping',
+  'printVariant',
+  'controlFlow',
+  'other',
+];
+
+/**
+ * 每类上限（**只降不升**的棘轮）。
+ *
+ * 两格是**结构性 0**（判据可证，不依赖实测）：
+ * - `tryNine` = 0：本批在 `native-display/control.ts` 给了 `试探 原形 <记号> <原文>` 中性显示形；
+ * - `printVariant` = 0：`PRINT` 打头那条判据已由上面的 `print` 类钉成 0，本桶同判据 ⇒ 同 0。
+ *
+ * 其余四格的**首轮上界按池份额给**（0.5 / 0.75 × 预算）：本批不挂语料跑，拿不到分格读数，
+ * 故先钉"一家不得独大"——超过份额就是"有一类已知结构没给显示形"，该补显示形或把该桶拆细；
+ * **集成轮跑出真实分格读数后，把这几格逐字下调成实测值**（预算本身不许放宽）。
+ * 派生依据写在行尾：批 N 已实测 `DATALIST/ENDLIST` = 2,380 对 = 4,760 行。
+ */
+const FALLBACK_CLASS_BUDGET: Readonly<Record<FallbackAttributionKey, number>> = {
+  tryNine: 0, // 结构性：本批交付中性显示形
+  tryOther: 7_574, // = 预算 × 0.5（未实测；九枚之外只有 `TRYGOTO±FORM` 这类单行语句，量级理论很小）
+  dataGrouping: 7_574, // = 预算 × 0.5（批 N 实测 4,760 行做底，×1.6 余量）
+  printVariant: 0, // 结构性：与 `print` 类同一判据
+  controlFlow: 11_360, // = 预算 × 0.75（未实测 ⇒ 首轮只挡"整池一类独大"）
+  other: 11_360, // = 预算 × 0.75（同上）
+};
+
+/**
+ * TRY 系九枚（= `packages/plugins/kojo-sugar/src/sugar-ident.ts` 的
+ * `TRY_CATCH_OPEN`（六枚，配 `CATCH`）∪ `TRY_LIST_OPEN`（三枚，配 `ENDFUNC`））。
+ *
+ * **测试里逐字内联而不 import**：kernel 测试跨包只走 `@kojo/*` 的公开入口，`sugar-ident`
+ * 不在 `@kojo/plugin-kojo-sugar` 的导出面上（为一条名单开导出 = 把内部识别核变成契约）。
+ * 名单本身的同源闸在 `packages/plugins/kojo-sugar/tests/native-display-control.test.ts`
+ * ——那里直接 import 两张集合；本文件这份内联值红了就是"显示面漏了记号"。
+ */
+const TRY_NINE: ReadonlySet<string> = new Set([
+  'TRYCGOTO',
+  'TRYCJUMP',
+  'TRYCCALL',
+  'TRYCGOTOFORM',
+  'TRYCJUMPFORM',
+  'TRYCCALLFORM',
+  'TRYCALLLIST',
+  'TRYGOTOLIST',
+  'TRYJUMPLIST',
+]);
+
+/** 数据表**分组**记号（批 N 刻意不投影的那些；条目 / 块头 / 收束都有显示形，不落这里） */
+const DATA_GROUPING_TOKENS: ReadonlySet<string> = new Set(['DATALIST', 'ENDLIST', 'STRDATA']);
+
+/** 控制流记号（`$` = 标签定义行的行首 token；与 `OPENERS` / `STANDALONE` 覆盖的那批同名） */
+const CONTROL_FLOW_TOKENS: ReadonlySet<string> = new Set([
+  '$',
+  'IF',
+  'ELSE',
+  'ELSEIF',
+  'ENDIF',
+  'SIF',
+  'SELECTCASE',
+  'CASE',
+  'CASEELSE',
+  'ENDSELECT',
+  'FOR',
+  'NEXT',
+  'WHILE',
+  'WEND',
+  'REPEAT',
+  'REND',
+  'DO',
+  'LOOP',
+  'GOTO',
+  'JUMP',
+  'BREAK',
+  'CONTINUE',
+  'RESTART',
+  'CATCH',
+  'ENDCATCH',
+  'ENDFUNC',
+  'RETURN',
+  'RETURNF',
+]);
+
+/** 一行（已 trim）⇒ 成因桶。**判据只看行首记号**，不看载荷。 */
+function classifyFallbackLine(token: string): FallbackAttributionKey {
+  if (TRY_NINE.has(token)) return 'tryNine';
+  if (token.startsWith('TRY')) return 'tryOther';
+  if (token.startsWith('PRINT')) return 'printVariant';
+  if (DATA_GROUPING_TOKENS.has(token)) return 'dataGrouping';
+  if (CONTROL_FLOW_TOKENS.has(token)) return 'controlFlow';
+  return 'other';
+}
+
+/**
+ * 行首记号（**与 `nativeTokens` 直方图共用**：同一把正则、同样大写归一）。
+ * 标识符形 `[A-Za-z_$@#][A-Za-z0-9_$]*` 之外才退到"第一个非空白串"。
+ */
+const LEAD_TOKEN_RE = /^([A-Za-z_$@#][A-Za-z0-9_$]*|[$@#]|\S+)/;
+function leadingTokenOf(text: string): string {
+  const m = LEAD_TOKEN_RE.exec(text);
+  return m ? m[1]!.toUpperCase() : '?';
+}
+
+/**
+ * 样例行里的**文件名**——语料是玩家机器上的真实工程目录，绝对路径不进日志
+ * （`tools/corpus.mjs` 的口径：认内容不认名，路径也不许抄进读数）。
+ */
+function baseName(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return i >= 0 ? path.slice(i + 1) : path;
+}
 
 interface Totals {
   files: number;
@@ -247,6 +392,13 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
         functionHead: { hits: 0, samples: [] as string[] },
         preprocessor: { hits: 0, samples: [] as string[] },
       };
+      /**
+       * 兜底行的**成因归因**（工包 D）：上面六格管"已知结构不许落兜底"，这一组管
+       * "剩下的到底是谁"——每格带样例行与前若干行首记号，读数直接对着 `FALLBACK_CLASS_BUDGET` 收。
+       */
+      const attribution = new Map<FallbackAttributionKey, { hits: number; samples: string[]; tokens: Map<string, number> }>(
+        FALLBACK_ATTRIBUTION_KEYS.map((k) => [k, { hits: 0, samples: [], tokens: new Map<string, number>() }]),
+      );
 
       for (const path of use) {
         let source: string;
@@ -296,6 +448,13 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           rec.hits++;
           if (rec.samples.length < 10) rec.samples.push(`${where}  ${text.slice(0, 90)}`);
         };
+        /** 成因桶：一行**恰进一格**（`classifyFallbackLine` 是闭集，最后落 `other`），并记行首记号 */
+        const noteAttribution = (token: string, where: string, text: string): void => {
+          const rec = attribution.get(classifyFallbackLine(token))!;
+          rec.hits++;
+          rec.tokens.set(token, (rec.tokens.get(token) ?? 0) + 1);
+          if (rec.samples.length < 10) rec.samples.push(`${where}  ${text.slice(0, 90)}`);
+        };
         for (const s of r.segments) {
           const projected = s.sugarText.split('\n');
           const aligned = projected.length === s.toLine - s.fromLine + 1;
@@ -314,13 +473,14 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
             }
             const raw = srcLines[srcLn - 1] ?? '';
             const t = raw.trim();
-            const where = `${path}:${srcLn}`;
+            const where = `${baseName(path)}:${srcLn}`; // **不带语料绝对路径**（真实工程目录不进日志）
             if (t.startsWith(';')) noteFallback('comment', where, t);
             if (t.length === 0) noteFallback('blank', where, t);
             if (inSkipRegion[srcLn]) noteFallback('skip', where, t);
             if (/^PRINT[A-Z]*/.test(t)) noteFallback('print', where, t);
             if (t.startsWith('@')) noteFallback('functionHead', where, t);
             if (t.startsWith('#')) noteFallback('preprocessor', where, t);
+            noteAttribution(leadingTokenOf(t), where, t);
           }
         }
 
@@ -328,8 +488,7 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
           if (covered.has(ln)) continue;
           const text = (srcLines[ln - 1] ?? '').trim();
           if (text.length === 0 || text.startsWith(';')) continue; // 注释与空行本来就是"透传"
-          const m = /^([A-Za-z_$@#][A-Za-z0-9_$]*|[$@#]|\S+)/.exec(text);
-          const token = m ? m[1]!.toUpperCase() : '?';
+          const token = leadingTokenOf(text);
           const rec = nativeTokens.get(token) ?? { count: 0, sample: text.slice(0, 80) };
           rec.count++;
           nativeTokens.set(token, rec);
@@ -512,6 +671,16 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       expect(kojo.dataProjected / Math.max(1, kojo.dataLines)).toBeGreaterThan(0.5);
 
       // ---- 质量线闸：兜底形只许剩"真未知语句"（本包追加；七把尺子判据零改动）----
+      // 上面那句"只许剩真未知语句"到这里才**可核查**：下面的成因归因把剩下的每一行分进一格，
+      // 分不完（`attributed !== fallbackLines`）或某格吃掉整池就是规则漏了一类结构。
+      /** 成因桶的全池记号直方图（跨桶合并；一行一个记号，与 `attribution` 同一份计数） */
+      const fallbackTokens = new Map<string, number>();
+      let attributed = 0;
+      for (const k of FALLBACK_ATTRIBUTION_KEYS) {
+        const rec = attribution.get(k)!;
+        attributed += rec.hits;
+        for (const [tok, n] of rec.tokens) fallbackTokens.set(tok, (fallbackTokens.get(tok) ?? 0) + n);
+      }
       // eslint-disable-next-line no-console
       console.log(
         [
@@ -529,10 +698,40 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
                   ...fallbackClasses[k].samples.map((x) => `    ${x}`),
                 ],
           ),
+          // ---- 成因归因（工包 D）：总数之外还要回答"剩下的 1.3 万行到底是什么" ----
+          `  成因归因（读数 ≤ 上限；上限见 FALLBACK_CLASS_BUDGET，只降不升）：`,
+          ...FALLBACK_ATTRIBUTION_KEYS.flatMap((k) => {
+            const rec = attribution.get(k)!;
+            const top = [...rec.tokens.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 8)
+              .map(([tok, n]) => `${tok}=${n}`)
+              .join(' ');
+            const head = `    ${k.padEnd(14)} ${String(rec.hits).padStart(7)} ≤ ${String(
+              FALLBACK_CLASS_BUDGET[k],
+            ).padStart(7)}｜${top || '—'}`;
+            const samples = rec.samples.slice(0, 3).map((x) => `      ${x}`);
+            return [head, ...samples];
+          }),
+          `  兜底行按行首记号（全池前 25）：`,
+          ...[...fallbackTokens.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 25)
+            .map(([tok, n]) => `    ${tok.padEnd(18)} ${String(n).padStart(7)}`),
           '===============================================',
           '',
         ].join('\n'),
       );
+      // 归因必须**恰覆盖**每一条兜底行（一行一格；多了漏了都是分类器坏了，不是语料坏了）。
+      expect(attributed, '成因归因计数与兜底行总数不平').toBe(fallbackLines);
+      // 逐类棘轮：`tryNine` / `printVariant` 是**结构性 0**（判据可证），其余四格首轮按池份额钉，
+      // 集成轮拿实测分格读数逐格下调（`FALLBACK_CLASS_BUDGET` 只许改小）。
+      for (const k of FALLBACK_ATTRIBUTION_KEYS) {
+        expect(
+          attribution.get(k)!.hits,
+          `兜底成因「${k}」超上限 ${FALLBACK_CLASS_BUDGET[k]}——一类已知结构没给显示形，或该桶需要拆细`,
+        ).toBeLessThanOrEqual(FALLBACK_CLASS_BUDGET[k]);
+      }
       // 四类**已知结构**一行都不许落进兜底：注释 / 空行 / SKIP 区 / PRINT 族。
       expect(fallbackClasses.comment.hits).toBe(0);
       expect(fallbackClasses.blank.hits).toBe(0);

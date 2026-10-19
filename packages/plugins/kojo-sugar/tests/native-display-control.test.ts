@@ -21,6 +21,8 @@ import { describe, expect, it } from 'vitest';
 import { renderControlLine } from '../src/native-display/control';
 import { localizeNativeLine } from '../src/native-display/passes';
 import { isVerbatimNativeLine } from '../src/native-display/types';
+import { lookupKeyword } from '../src/keywords';
+import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from '../src/sugar-ident';
 import { createSugarTranspileService } from '../src/service';
 import { stubDict, stubFaceTable } from './support';
 import type { NativeDisplayLookup } from '../src/native-display/types';
@@ -140,8 +142,40 @@ const WITH_TRAILING_COMMENT: readonly Case[] = [
   ['JUMP GET_TARGET(A) ; 跳函数', '函数跳转 GET_TARGET(A) ; 跳函数'], // 逐字透传：括号实参原样留着，注释另挂行尾
 ];
 
+/**
+ * TRY 系九枚（工包 D 的中性显示形）。
+ *
+ * 名单 = `sugar-ident.ts` 的 `TRY_CATCH_OPEN`（六枚，配 `CATCH`）∪ `TRY_LIST_OPEN`
+ * （三枚，配 `ENDFUNC`）；`keywords.ts:213` 那句"无写形、仍走兜底"说的就是这九枚。
+ * 钉值刻意写成 `试探 原形 <记号> <原文>`：**记号逐字回显**（义项档位不替读者下结论）、
+ * 载荷逐字带走（不剥 `$`/`*`、不中文化运算符），与 `JUMP` / `DATAFORM` 同一判据。
+ */
+const TRY_FAMILY: readonly Case[] = [
+  // 六枚：配 `出错处理`（CATCH）
+  ['TRYCGOTO *先, LABEL:目标', '试探 原形 TRYCGOTO *先, LABEL:目标'],
+  ['TRYCJUMP *退路, LABEL:2', '试探 原形 TRYCJUMP *退路, LABEL:2'],
+  ['TRYCCALL FOO(A, 1)', '试探 原形 TRYCCALL FOO(A, 1)'],
+  ['TRYCGOTOFORM $GO_BACK, TARGET', '试探 原形 TRYCGOTOFORM $GO_BACK, TARGET'],
+  ['TRYCJUMPFORM F_NAME(ARG)', '试探 原形 TRYCJUMPFORM F_NAME(ARG)'],
+  ['TRYCCALLFORM GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)', '试探 原形 TRYCCALLFORM GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)'],
+  // 三枚：配 `函数结束`（ENDFUNC）
+  ['TRYCALLLIST F1, F2', '试探 原形 TRYCALLLIST F1, F2'],
+  ['TRYGOTOLIST *A, *B', '试探 原形 TRYGOTOLIST *A, *B'],
+  ['TRYJUMPLIST FUNC(A)', '试探 原形 TRYJUMPLIST FUNC(A)'],
+  // 裸记号（无载荷）也给中性形：这九枚是**已知结构**，落兜底就是谎报"没读懂"
+  ['TRYCGOTO', '试探 原形 TRYCGOTO'],
+  ['TRYCALLLIST', '试探 原形 TRYCALLLIST'],
+  // 变形：小写记号（名单按归一大写命中，回显用规范大写）
+  ['trycgotoform FOO(A)', '试探 原形 TRYCGOTOFORM FOO(A)'],
+  ['trygotolist *A, *B', '试探 原形 TRYGOTOLIST *A, *B'],
+  // 变形：载荷里的 `=` / `<` 不折成中文运算符（那是数据不是条件）
+  ['TRYCCALL FOO(A = 1, B < 2)', '试探 原形 TRYCCALL FOO(A = 1, B < 2)'],
+  // 变形：行尾注释照旧挂回行尾
+  ['TRYCALLLIST F1, F2 ; 缺函数就整批跳过', '试探 原形 TRYCALLLIST F1, F2 ; 缺函数就整批跳过'],
+];
+
 /** 全表（红线自证与条数下限都对着这一份，别只测其中一族） */
-const ALL: readonly Case[] = [...BLOCKS, ...LOOPS, ...JUMPS, ...PREPROCESSOR, ...WITH_TRAILING_COMMENT];
+const ALL: readonly Case[] = [...BLOCKS, ...LOOPS, ...JUMPS, ...PREPROCESSOR, ...WITH_TRAILING_COMMENT, ...TRY_FAMILY];
 
 /** 本层的成套词形（块头 = keywords.ts 主形；闭合 = `<块头词> + 结束`；循环/跳转/声明是本层新增族） */
 const KEYWORD_SHAPES: readonly Case[] = [
@@ -276,6 +310,80 @@ describe('ZH-C · 预处理行（#DIM / #DIMS / #GLOBAL / #LOCALSIZE / #LOCALSSI
   it('认得记号但不担保义项的指令 ⇒ 只翻「预处理」这一层，记号原样保留（翻类不翻义）', () => {
     expect(show('#SFUNCTION A()')).toBe('预处理 SFUNCTION A()');
     expect(show('#XFUNCTION')).toBe('预处理 XFUNCTION');
+  });
+});
+
+/**
+ * 工包 D · TRY 系九枚的**中性显示形**（`试探 原形 <记号> <原文>`）。
+ *
+ * 三条独立判据各挡一类越界：
+ * - **只读面**：显示形**不是**写形——`试探` 不进 `KEYWORDS`，把它当 `.kojo` 源喂写侧也发不出 TRY 语句；
+ * - **分界**：`statement.ts` 已认领的 `TRYCALL` / `TRYCALLFORM` / `TRYJUMP`（单行语句、不在九枚内）
+ *   零改动——本层的名单是 `sugar-ident` 的两张集合，不做 `startsWith('TRY')` 那种粗匹配；
+ * - **红线**：命中即与源行逐字不等（`停用 · 原文` 那一档的结构性自证，兜底形不再出现在这九枚上）。
+ */
+describe('工包 D · TRY 系九枚的中性显示形（只读面，无写形）', () => {
+  it.each(TRY_FAMILY)('%s', (src, want) => {
+    const got = show(src);
+    expect(got, src).not.toBeNull();
+    expect(got, src).not.toBe(src);
+    expect(isVerbatimNativeLine(got ?? '', src), src).toBe(false);
+    expect(got, src).toBe(want);
+    // 兜底形不再出现在这九枚上（装配层拿得到中文显示形就不会走 `未识别语句`）
+    expect(localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP }), src).not.toContain('未识别语句');
+  });
+
+  it('显示形**不靠往 KEYWORDS 加词**实现（`试探` 未登记 = 承诺不了写形）', () => {
+    expect(lookupKeyword('试探'), '写形归工包 F；本批不许往词表塞只读面的词').toBeUndefined();
+  });
+
+  it('把显示形当 `.kojo` 源写回 ⇒ 发不出 TRY 语句（写侧通路确实不存在）', () => {
+    const shown = show('TRYCGOTO *先, LABEL:目标')!;
+    const result = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(
+      `角色: 12\n时机 绝顶：\n\t${shown}\n`,
+    );
+    const emitted = result.erb.split('\n').map((l) => l.trim());
+    expect(emitted.some((l) => /^TRY[A-Z0-9_]*\b/.test(l)), result.erb).toBe(false);
+  });
+
+  /**
+   * `statement.ts` 的 `CALL_VERBS` 认领了这三枚（单行语句、不开块）⇒ 本层**不抢**，
+   * 装配层读到的仍是 `'尝试调用 …'` 那一形（pass 顺序 = 优先级，工包 D 零改动）。
+   */
+  it('TRYCALL / TRYCALLFORM / TRYJUMP 归 statement 层，本层弃权', () => {
+    for (const src of ['TRYCALL FOO', 'TRYCALLFORM FOO(A)', 'TRYJUMP FOO']) {
+      expect(show(src), src).toBeNull();
+      expect(localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP }), src).not.toContain('原形');
+      expect(localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP }), src).not.toContain('未识别语句');
+    }
+  });
+
+  /**
+   * `TRYGOTO` / `TRYGOTOFORM`（引擎里是单行语句、**不在这九枚内**，statement 层也没有它们的动词）
+   * 仍走兜底形——本批刻意不扩大认领面：钉住"它们还在兜底里"这个事实，归因由
+   * `packages/kernel/tests/sugar-projection.corpus.test.ts` 的 `tryOther` 桶负责读数。
+   */
+  it('九枚之外的 TRY 记号本层不认领（口径不许靠前缀扩张）', () => {
+    for (const src of ['TRYGOTO *先', 'TRYGOTOFORM $GO_BACK, TARGET']) {
+      expect(show(src), src).toBeNull();
+    }
+  });
+
+  /**
+   * **名单同源**：显示面认领的记号 = `sugar-ident` 的 `TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`（九枚），
+   * 一张不多一张不少——真源加了第十枚而本层没跟上，这条立刻显形（而不是让兜底悄悄变厚）。
+   */
+  it('认领的记号恰为 sugar-ident 那九枚（名单同源，不多抄一枚也不漏一枚）', () => {
+    const nine = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
+    expect(nine).toHaveLength(9);
+    for (const kind of nine) {
+      const src = `${kind} FOO(A, 1)`;
+      expect(show(src), src).toBe(`试探 原形 ${kind} FOO(A, 1)`);
+    }
+    // 九枚之外、statement 层也没认领的那两枚必须**不在**名单里（防止有人图省事改成 startsWith('TRY')）
+    for (const kind of ['TRYGOTO', 'TRYGOTOFORM', 'TRYCALL', 'TRYCALLFORM', 'TRYJUMP']) {
+      expect(nine).not.toContain(kind);
+    }
   });
 });
 
