@@ -27,8 +27,18 @@ import {
  * ## 一份文档、一条线程
  *
  * worker 里只有一棵 `Tree`，所以代理只跟踪**当前被问到的那一份**文档：
- * 问到别的文档就换轨（旧文档退订、新文档整篇重解）。左右分屏同时开两份 `.kojo` 时
- * 会来回重解——正确性不受影响，代价是多解一次，这条边界写明而不是藏着。
+ * 问到别的文档就换轨（旧文档退订、新文档整篇重解）。每份文档带一枚全局单调自增的
+ * `seq`，worker 在内容回复里原样回显，对不上号的迟到回复一律丢弃——换轨瞬间旧文档
+ * 的在途结果不许污染新文档（真实踩过：A 的 tokens 冒充 B 的结果被缓存上屏并滞留）。
+ * 左右分屏同时开两份 `.kojo` 时会来回重解，代价是多解一次，这条边界写明而不是藏着。
+ *
+ * ## 装配期的门控
+ *
+ * `start()` 只发 `init`，**不发 parse**——worker 要 await 两枚 wasm 才算装配完成，
+ * 装配前收到的解析请求会被它拒掉（曾经直接因此整档自杀）。故跟踪文档时若线程还没
+ * `ready`，只记下 `pendingParse`，期间的内容变化也只更新本地快照；`ready` 一到就把
+ * 暂存的 parse 带着最新全文补发出去。真失败类（协议形状不符 / wasm 载入失败 / 线程崩 /
+ * 截断超限）的整档停用语义一个不动。
  *
  * ## 增量的口径
  *
@@ -59,9 +69,13 @@ interface FacetResult<T> {
 
 interface TrackedDocument {
   readonly model: Monaco.editor.ITextModel;
+  /** 跨文档隔离号（全局单调自增）：worker 内容回复原样回显，对不上号的回复整条丢 */
+  readonly seq: number;
   /** 代理这一侧的文本快照（与 worker 那一侧逐字相等，靠同一条编辑维持） */
   text: string;
   version: number;
+  /** 装配还没完成（status 非 ready）：不发 parse 也不发 change，等 ready 后补发最新全文 */
+  pendingParse: boolean;
   readonly subscription: Monaco.IDisposable;
   semantic: FacetResult<readonly KojoStructureToken[]> | null;
   folds: FacetResult<readonly KojoStructureFold[]> | null;
@@ -84,6 +98,8 @@ export class StructureClient {
   private readonly waiters = new Map<FacetName, Set<() => void>>();
   private readonly timeoutMs: number;
   private readonly onFatal: (message: string) => void;
+  /** 文档隔离号的发生器（只增不减；worker 拿它回显，主线程拿它对号） */
+  private docSeq = 0;
 
   constructor(options: StructureClientOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? STRUCTURE_REQUEST_TIMEOUT_MS;
@@ -165,16 +181,24 @@ export class StructureClient {
     const text = model.getValue();
     const doc: TrackedDocument = {
       model,
+      seq: ++this.docSeq,
       text,
       version: 1,
+      // 装配没完成就先不发 parse（发了注定被 worker 拒）：等 ready 后补发，自然带上最新全文
+      pendingParse: this.status !== 'ready',
       subscription: model.onDidChangeContent(() => this.onChanged()),
       semantic: null,
       folds: null,
       dead: { semantic: false, folds: false },
     };
     this.doc = doc;
-    this.post({ type: 'parse', version: doc.version, text });
+    if (!doc.pendingParse) this.postParse(doc);
     return doc;
+  }
+
+  /** 整篇重解请求（doc 号 + 当前版本 + 当前快照全文） */
+  private postParse(doc: TrackedDocument): void {
+    this.post({ type: 'parse', doc: doc.seq, version: doc.version, text: doc.text });
   }
 
   private releaseDoc(): void {
@@ -192,15 +216,19 @@ export class StructureClient {
     if (next === doc.text) return;
     const version = doc.version + 1;
     doc.version = version;
-    const edit = commonEdit(doc.text, next);
     const previous = doc.text;
     doc.text = next;
+    // 装配没完成：只留最新文本与版本，不发 change（worker 那侧的契约是 parse 必然先于
+    // change）；ready 后补发的 parse 自带这份快照，中途的编辑自然并入
+    if (doc.pendingParse) return;
+    const edit = commonEdit(previous, next);
     if (applyEdit(previous, edit) !== next) {
-      this.post({ type: 'parse', version, text: next });
+      this.post({ type: 'parse', doc: doc.seq, version, text: next });
       return;
     }
     this.post({
       type: 'change',
+      doc: doc.seq,
       version,
       start: edit.start,
       oldEnd: edit.oldEnd,
@@ -268,13 +296,23 @@ export class StructureClient {
     this.onFatal(message);
   }
 
+  /** 装配完成那一刻：抬状态，并把暂存中的首解补发出去（此刻才带最新全文与版本） */
+  private promoteToReady(): void {
+    if (this.status !== 'starting') return;
+    this.status = 'ready';
+    const doc = this.doc;
+    if (doc === null || !doc.pendingParse) return;
+    doc.pendingParse = false;
+    this.postParse(doc);
+  }
+
   private receive(data: unknown): void {
     if (!isStructureReply(data)) {
       this.fatal('worker 回传的消息形状不符协议 ⇒ 整档停用（不是解析慢，是两侧版本对不上）');
       return;
     }
     if (data.type === 'ready') {
-      if (this.status === 'starting') this.status = 'ready';
+      this.promoteToReady();
       return;
     }
     if (data.type === 'error') {
@@ -290,13 +328,21 @@ export class StructureClient {
       }
       return;
     }
-    if (this.status === 'starting') this.status = 'ready';
+    this.promoteToReady();
     const doc = this.doc;
-    if (doc === null || data.version < doc.version) {
+    if (doc === null || data.doc !== doc.seq) {
       reportStructureDegradation({
-        capability: data.type === 'folds' ? 'folds' : 'semantic',
+        capability: data.type === 'folds' ? 'folds' : data.type === 'indent' ? 'indent' : 'semantic',
         stage: 'parse',
-        message: `收到版本 ${data.version} 的结果而当前版本是 ${doc?.version ?? 0} ⇒ 这条丢掉（拿过期结构给新文本着色比不着色危险）`,
+        message: `收到文档 ${data.doc} 的结果而当前跟踪的是文档 ${doc?.seq ?? '无'} ⇒ 这条丢掉（旧文档的结构着到新文档上比不着色危险）`,
+      });
+      return;
+    }
+    if (data.version < doc.version) {
+      reportStructureDegradation({
+        capability: data.type === 'folds' ? 'folds' : data.type === 'indent' ? 'indent' : 'semantic',
+        stage: 'parse',
+        message: `收到版本 ${data.version} 的结果而当前版本是 ${doc.version} ⇒ 这条丢掉（拿过期结构给新文本着色比不着色危险）`,
       });
       return;
     }

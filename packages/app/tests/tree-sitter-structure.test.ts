@@ -76,9 +76,9 @@ describe('结构层档位映射 · 必须落在既有档位表里', () => {
 describe('isStructureReply · 主线程不信来路不明的消息', () => {
   it('认得五种合法形状', () => {
     expect(isStructureReply({ type: 'ready', version: 0 })).toBe(true);
-    expect(isStructureReply({ type: 'semantic', version: 3, tokens: [] })).toBe(true);
-    expect(isStructureReply({ type: 'folds', version: 3, folds: [{ startRow: 0, endRow: 4 }] })).toBe(true);
-    expect(isStructureReply({ type: 'indent', version: 3, rules: EMPTY_RULES })).toBe(true);
+    expect(isStructureReply({ type: 'semantic', doc: 1, version: 3, tokens: [] })).toBe(true);
+    expect(isStructureReply({ type: 'folds', doc: 1, version: 3, folds: [{ startRow: 0, endRow: 4 }] })).toBe(true);
+    expect(isStructureReply({ type: 'indent', doc: 1, version: 3, rules: EMPTY_RULES })).toBe(true);
     expect(isStructureReply({ type: 'error', version: 0, stage: 'query', capability: 'folds', message: 'x' })).toBe(true);
   });
 
@@ -86,11 +86,13 @@ describe('isStructureReply · 主线程不信来路不明的消息', () => {
     ['null', null],
     ['缺 version', { type: 'ready' }],
     ['未知 type', { type: 'nope', version: 1 }],
-    ['tokens 不是数组', { type: 'semantic', version: 1, tokens: 'x' }],
-    ['token 缺行列', { type: 'semantic', version: 1, tokens: [{ tier: 'comment' }] }],
-    ['token 坐标是 NaN', { type: 'semantic', version: 1, tokens: [{ startRow: NaN, startCol: 0, endRow: 1, endCol: 2, tier: 'comment' }] }],
-    ['fold 行号缺', { type: 'folds', version: 1, folds: [{ startRow: 0 }] }],
-    ['rules 缺三条腿', { type: 'indent', version: 1, rules: {} }],
+    ['tokens 不是数组', { type: 'semantic', doc: 1, version: 1, tokens: 'x' }],
+    ['token 缺行列', { type: 'semantic', doc: 1, version: 1, tokens: [{ tier: 'comment' }] }],
+    ['token 坐标是 NaN', { type: 'semantic', doc: 1, version: 1, tokens: [{ startRow: NaN, startCol: 0, endRow: 1, endCol: 2, tier: 'comment' }] }],
+    ['缺 doc（跨文档对不上号就是废消息）', { type: 'semantic', version: 1, tokens: [] }],
+    ['doc 是 NaN', { type: 'semantic', doc: NaN, version: 1, tokens: [] }],
+    ['fold 行号缺', { type: 'folds', doc: 1, version: 1, folds: [{ startRow: 0 }] }],
+    ['rules 缺三条腿', { type: 'indent', doc: 1, version: 1, rules: {} }],
     ['error 的 stage 不在表里', { type: 'error', version: 1, stage: 'boom', capability: 'all', message: 'x' }],
     ['error 的 capability 不在表里', { type: 'error', version: 1, stage: 'parse', capability: 'maybe', message: 'x' }],
     ['error 缺 message', { type: 'error', version: 1, stage: 'parse', capability: 'all' }],
@@ -99,7 +101,7 @@ describe('isStructureReply · 主线程不信来路不明的消息', () => {
   });
 
   it('协议版本是实数（两侧对不上时 worker 会当场停用）', () => {
-    expect(KOJO_STRUCTURE_PROTOCOL).toBe(1);
+    expect(KOJO_STRUCTURE_PROTOCOL).toBe(2);
   });
 });
 

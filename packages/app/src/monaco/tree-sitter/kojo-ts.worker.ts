@@ -61,6 +61,8 @@ let tree: Tree | null = null;
 /** worker 自己那一版文本（与主线程的缝合口径逐字相同 ⇒ 两侧永远对齐，无需回传全文） */
 let documentText = '';
 let initialized = false;
+/** 装配完成前收到的首解请求（只留最新一条；见 onmessage 里的纵深说明） */
+let stagedParse: Extract<KojoStructureRequest, { type: 'parse' }> | null = null;
 let highlightsQuery: Query | null = null;
 let foldsQuery: Query | null = null;
 let indentsQuery: Query | null = null;
@@ -167,7 +169,7 @@ function anchoredPattern(line: string): string {
 }
 
 /** 解完后把三面都发一遍（三面各自独立可用/可回落，见 `compiled` 的三枚判据） */
-function emit(version: number): void {
+function emit(doc: number, version: number): void {
   if (tree === null) return;
   const root = tree.rootNode;
   if (highlightsQuery) {
@@ -176,10 +178,10 @@ function emit(version: number): void {
       fail(version, 'parse', 'all', `单文档结构段数超过 ${KOJO_STRUCTURE_MAX_TOKENS} ⇒ 结构解析整档停用（这通常意味着语法层的错误恢复在长文件上跑飞了）`);
       return;
     }
-    post({ type: 'semantic', version, tokens });
+    post({ type: 'semantic', doc, version, tokens });
   }
-  if (foldsQuery) post({ type: 'folds', version, folds: foldsFrom(foldsQuery, root) });
-  if (indentsQuery) post({ type: 'indent', version, rules: indentRulesFrom(indentsQuery, root) });
+  if (foldsQuery) post({ type: 'folds', doc, version, folds: foldsFrom(foldsQuery, root) });
+  if (indentsQuery) post({ type: 'indent', doc, version, rules: indentRulesFrom(indentsQuery, root) });
 }
 
 /* --------------------------------- 装配 --------------------------------- */
@@ -243,10 +245,15 @@ async function handleInit(request: Extract<KojoStructureRequest, { type: 'init' 
   }
   initialized = true;
   post({ type: 'ready', version: 0 });
+  // 装配期间暂存过的首解在这里补上（纵深：正常流里主线程门控会等 ready 才发 parse，
+  // 这条只接住"没等 ready 就发"的调用方，别让它白等）
+  const staged1 = stagedParse;
+  stagedParse = null;
+  if (staged1) handleParse(staged1.doc, staged1.version, staged1.text);
 }
 
 /** 整篇重解（首份文档 / 切文档 / 增量失败后的重新对齐） */
-function handleParse(version: number, text: string): void {
+function handleParse(doc: number, version: number, text: string): void {
   if (parser === null) return;
   tree?.delete();
   tree = null;
@@ -262,7 +269,7 @@ function handleParse(version: number, text: string): void {
     fail(version, 'parse', 'all', `整篇解析抛错：${reason(error)}`);
     return;
   }
-  emit(version);
+  emit(doc, version);
 }
 
 /**
@@ -274,7 +281,7 @@ function handleChange(request: Extract<KojoStructureRequest, { type: 'change' }>
   if (parser === null) return;
   const nextText = documentText.slice(0, request.start.offset) + request.newText + documentText.slice(request.oldEnd.offset);
   if (tree === null) {
-    handleParse(request.version, nextText);
+    handleParse(request.doc, request.version, nextText);
     return;
   }
   try {
@@ -293,7 +300,7 @@ function handleChange(request: Extract<KojoStructureRequest, { type: 'change' }>
     old.delete();
     if (next === null) {
       tree = null;
-      handleParse(request.version, nextText);
+      handleParse(request.doc, request.version, nextText);
       return;
     }
     tree = next;
@@ -301,10 +308,10 @@ function handleChange(request: Extract<KojoStructureRequest, { type: 'change' }>
   } catch (error: unknown) {
     tree = null;
     fail(request.version, 'parse', 'all', `增量解析抛错，已退回整篇重解：${reason(error)}`);
-    handleParse(request.version, nextText);
+    handleParse(request.doc, request.version, nextText);
     return;
   }
-  emit(request.version);
+  emit(request.doc, request.version);
 }
 
 scope.onmessage = (event: MessageEvent<KojoStructureRequest>) => {
@@ -316,11 +323,13 @@ scope.onmessage = (event: MessageEvent<KojoStructureRequest>) => {
     return;
   }
   if (!initialized) {
-    // 没装配成功就来活：说一次，别让主线程把"没有任何回复"当成"worker 还在忙"
-    fail(request.version, 'worker', 'all', 'worker 尚未完成装配就收到解析请求 ⇒ 结构解析整档停用');
+    // 装配没完成**不再自杀**（主线程那侧已门控：init → ready → parse 次序由它保证，
+    // 这里只是纵深）。parse 存最新一条（后来者覆盖），装配完成后补解；change 直接丢——
+    // 客户端契约是 parse 必然先于 change，没解过就来的 change 缝不出有意义的树。
+    if (request.type === 'parse') stagedParse = request;
     return;
   }
-  if (request.type === 'parse') handleParse(request.version, request.text);
+  if (request.type === 'parse') handleParse(request.doc, request.version, request.text);
   else if (request.type === 'change') handleChange(request);
 };
 

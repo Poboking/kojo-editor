@@ -21,7 +21,15 @@
  */
 
 /** 协议版本：形状一变就抬号，worker 认不出就直接停用（而不是拿旧形状硬解） */
-export const KOJO_STRUCTURE_PROTOCOL = 1;
+export const KOJO_STRUCTURE_PROTOCOL = 2;
+
+/**
+ * 跨文档隔离号：主线程给每份被跟踪的文档发一枚**全局单调自增**的序号，`parse` / `change`
+ * 请求带上，worker 在三类内容回复里**原样回显**。为什么必须有：切文档瞬间旧文档的解析
+ * 回复还在路上，而 `version` 是每文档各自从 1 起的——只靠版本号判过期，旧文档的 tokens
+ * 会冒充新文档的结果被缓存上屏（真实踩过）。对不上号 ⇒ 主线程整条丢弃。
+ */
+export type KojoStructureDocSeq = number;
 
 /** 一个点（行 / UTF-16 列 / UTF-16 偏移），三件套必须同时给：tree-sitter 的 Edit 两个轴都要 */
 export interface KojoStructurePoint {
@@ -73,22 +81,22 @@ export type KojoStructureRequest =
   /** 装配 worker：两枚 wasm 的 URL 由宿主注入（Vite `?url` 解析结果，worker 里不许硬编码路径） */
   | { type: 'init'; protocol: number; wasmUrl: string; runtimeWasmUrl: string }
   /** 整篇重解（首份文档 / 切换文档 / 增量失败后的重新对齐） */
-  | { type: 'parse'; version: number; text: string }
+  | { type: 'parse'; doc: KojoStructureDocSeq; version: number; text: string }
   /**
    * 增量重解：worker 自己留着上一版文本，按这一条编辑缝合后再解。
    * 主线程把一次 content change 里可能有多段的编辑**并成一条**保守区间
    * （`commonEdit()`），`newText` 就是新区间里的新内容；两侧对同一个字符串做同一步缝合 ⇒
    * 文本恒等，无需回传全文。
    */
-  | { type: 'change'; version: number; start: KojoStructurePoint; oldEnd: KojoStructurePoint; newEnd: KojoStructurePoint; newText: string };
+  | { type: 'change'; doc: KojoStructureDocSeq; version: number; start: KojoStructurePoint; oldEnd: KojoStructurePoint; newEnd: KojoStructurePoint; newText: string };
 
 /* ------------------------------- → main ------------------------------- */
 
 export type KojoStructureReply =
   | { type: 'ready'; version: number }
-  | { type: 'semantic'; version: number; tokens: readonly KojoStructureToken[] }
-  | { type: 'folds'; version: number; folds: readonly KojoStructureFold[] }
-  | { type: 'indent'; version: number; rules: KojoStructureIndentRules }
+  | { type: 'semantic'; doc: KojoStructureDocSeq; version: number; tokens: readonly KojoStructureToken[] }
+  | { type: 'folds'; doc: KojoStructureDocSeq; version: number; folds: readonly KojoStructureFold[] }
+  | { type: 'indent'; doc: KojoStructureDocSeq; version: number; rules: KojoStructureIndentRules }
   | { type: 'error'; version: number; stage: KojoStructureErrorStage; capability: KojoStructureCapability; message: string };
 
 /* --------------------------- 捕获名 → 档位名 --------------------------- */
@@ -182,11 +190,11 @@ export function isStructureReply(value: unknown): value is KojoStructureReply {
     case 'ready':
       return true;
     case 'semantic':
-      return Array.isArray(m.tokens) && m.tokens.every(isToken);
+      return Number.isFinite(m.doc) && Array.isArray(m.tokens) && m.tokens.every(isToken);
     case 'folds':
-      return Array.isArray(m.folds) && m.folds.every(isFold);
+      return Number.isFinite(m.doc) && Array.isArray(m.folds) && m.folds.every(isFold);
     case 'indent':
-      return isRules(m.rules);
+      return Number.isFinite(m.doc) && isRules(m.rules);
     case 'error':
       return typeof m.message === 'string' && STAGES.includes(m.stage) && CAPABILITIES.includes(m.capability);
     default:
