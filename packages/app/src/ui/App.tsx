@@ -118,6 +118,8 @@ import {
 } from './disk-reconcile';
 import type { EditorPaneActions } from './EditorPane';
 import { openModelAcrossGroups } from './editor-pane-registry';
+// 整项目诊断扫描的装配与调度（判据一份，全住在那模块里；这里只递宿主事实）
+import { mountProjectScan } from './project-scan-schedule';
 
 /**
  * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
@@ -454,6 +456,24 @@ export function App(): ReactElement {
       un();
     };
   }, [kernel]);
+
+  /**
+   * 整项目诊断扫描的装配（唯一一处；触发、节流、清账判据全在 `project-scan-schedule.ts`，
+   * 这里只递两条宿主事实：会话附加根与那句人话的通道）。
+   * 依赖只有 kernel：换项目 / 关项目由模块自己订阅 `project.opened` / `project.closed`，
+   * 挂在这条 effect 上重装配会把刚扫完的账反复抹掉。
+   */
+  const extraRootsRef = useRef(extraRoots);
+  extraRootsRef.current = extraRoots;
+  useEffect(() => {
+    if (!kernel) return;
+    const handle = mountProjectScan({
+      kernel,
+      extraRoots: () => extraRootsRef.current,
+      onNotice: (message) => notify({ kind: 'info', message }),
+    });
+    return () => handle.dispose();
+  }, [kernel, notify]);
 
   // 覆盖层 / 命令槽位的主机接线（diff · 文件历史 · 调用层级 · 操作历史）：整段只吃 kernel、
   // 依赖数组仍是 [kernel]——抽到 shell-overlays.ts 的自定义钩子，在同一位置无条件调用，
