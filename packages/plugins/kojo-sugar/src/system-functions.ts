@@ -111,6 +111,33 @@ export const SYSTEM_FUNCTION_ALIASES: ReadonlyMap<string, string> = new Map<stri
   ['取背景色', 'GETBGCOLOR'], // 引擎当前背景色 (11)
   ['取默认色', 'GETDEFCOLOR'], // 引擎默认文字色 (8)
   ['取当前字体', 'GETFONT'], // 引擎当前字体名（`检查字体` 的同伴）(15)
+
+  // ================== ADICT-1 扩容批（引擎内建长尾清扫，2026-10-19） ==================
+  // 同一判据（语料 `ERB/**` 全树无 `@` 定义）下把剩余 23 个引擎内建名字收完；
+  // 覆盖率读数见 `eratw-adapter/tests/library-coverage.corpus.test.ts`。
+  ['转义', 'ESCAPE'], // HTML / 控制字符转义 (58)
+  ['色彩匹配', 'CMATCH'], // 颜色名匹配 (53)
+  ['字符数', 'STRLENSU'], // Unicode 字符长度 (49)
+  ['取表格字符串', 'CSVCSTR'], // CSV 字符串常量 (44)
+  ['当前重绘', 'CURRENTREDRAW'], // 绘制缓冲开关 (22)
+  ['取称呼表', 'CSVCALLNAME'], // CSV 称呼 (21)
+  ['取参数等级', 'GETPALAMLV'], // PALAM 等级 (21)
+  ['取按键', 'GETKEY'], // 键盘输入 (16)
+  ['行是否空', 'LINEISEMPTY'], // 空行判定 (6)
+  ['跳过消息', 'MESSKIP'], // 消息跳过 (4)
+  ['图形已建', 'GCREATED'], // 立绘资源已生成 (4)
+  ['设置口上色', 'SET_KOJOCOLOR'], // 口上文字色 (4)
+  ['全部相同', 'ALLSAMES'], // 数组全等判定 (3)
+  ['查找角色', 'FINDCHARA'], // 角色查找 (3)
+  ['转换', 'CONVERT'], // 进制转换 (2)
+  ['字符数组求和', 'SUMCARRAY'], // 字符串数组归约 (1)
+  ['取素质表', 'CSVTALENT'], // CSV 素质名 (1)
+  ['取经验表', 'CSVEXP'], // CSV 经验名 (1)
+  ['添加强制日期', 'ADD_FORCED_DATE'], // 强制日期追加 (1)
+  ['按码点取子串', 'SUBSTRINGU'], // Unicode 子串 (1)
+  ['取能力表', 'CSVABL'], // CSV 能力名 (1)
+  ['取标记表', 'CSVCFLAG'], // CSV 标记名 (1)
+  ['取显示样式', 'GETSTYLE'], // 引擎当前显示样式 (1)
 ]);
 
 /**

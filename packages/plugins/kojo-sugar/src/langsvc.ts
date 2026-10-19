@@ -287,7 +287,6 @@ export function kojoWorkspaceSymbol(
 function countLines(text: string): number {
   if (text.length === 0) return 0;
   // PS-8：O(1) 内存计数（码元扫数 `\n`），不再为拿一个数 split 整篇产物
-  //（与 `ui-sugar-lift/large-file.ts` 同款做法——插件间禁 import，故本地实现一份）
   let n = 1;
   for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
   return n;

@@ -204,10 +204,11 @@ export function createUiSugarEditorPlugin(): Plugin {
       /* -------------------- 贡献 1b：波浪线的快速修复（W3） -------------------- */
 
       /**
-       * `Ctrl+.` 与「全部修复」此前在 `.kojo` 上**恒为 0 个可修项**：面上唯一的 codeAction
-       * 供方是 `ui-sugar-lift`，它给的是 `kind:'refactor'`（改写法不是消诊断），而宿主
-       * `kojo-fix-all.ts` 把 refactor 排除在"唯一解"判据外。本贡献补的就是 `kind:'quickfix'`
-       * 那一格，并把**宿主递进来的那条 LineDecoration 原样**填进 `diagnostics`（B9）。
+       * `Ctrl+.` 与「全部修复」此前在 `.kojo` 上**恒为 0 个可修项**：当时唯一的 codeAction
+       * 供方 `ui-sugar-lift` 给的是 `kind:'refactor'`（改写法不是消诊断），而宿主
+       * `kojo-fix-all.ts` 把 refactor 排除在"唯一解"判据外。本贡献补 `kind:'quickfix'`
+       * 那一格（LIFT-2 后它已是 `.kojo` 唯一的供方），并把**宿主递进来的那条
+       * LineDecoration 原样**填进 `diagnostics`（B9）。
        *
        * 收敛的码是闭集、且每条动作都经过"代回转译器再跑一遍波浪线"的自证——判据与理由
        * 全在 `kojo-quickfix.ts` 头注。这里只接线：**零写盘**（产物是 `EditorTextEdit`，

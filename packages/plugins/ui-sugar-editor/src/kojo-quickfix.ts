@@ -4,11 +4,11 @@
  * ## 这个模块为什么存在
  *
  * `.kojo` 面上的转译诊断（`SugarDiagnosticCode` 闭集 37 码，`internal` 之外 36 条）此前
- * **一条都没有 quickfix**：`ui-sugar-editor` 只注册 decorator + saveHandler，本槽位的唯一
- * `.kojo` 供方是 `ui-sugar-lift`，而它给的是 `kind:'refactor'`（「改为 .kojo 写法」不是
+ * **一条都没有 quickfix**：`ui-sugar-editor` 只注册 decorator + saveHandler，当时本槽位的
+ * 唯一 `.kojo` 供方 `ui-sugar-lift` 给的是 `kind:'refactor'`（「改为 .kojo 写法」不是
  * "某条红线的解"）。宿主 `kojo-fix-all.ts` 明确把 refactor 排除在"唯一解"判据外 ⇒
  * `fixAllSummary` 永远只能说"目前没有可自动补的改法"。本模块补的就是这一格：
- * **消解诊断**的 `kind:'quickfix'`。
+ * **消解诊断**的 `kind:'quickfix'`（LIFT-2 后它已是 `.kojo` 唯一的 codeAction 供方）。
  *
  * ## 三条不可让步的纪律
  *
@@ -33,8 +33,8 @@
  *
  * 产出的是 `EditorTextEdit`（整行替换 / 整行插入语义，`newText` 可含换行）——宿主经 Monaco
  * `executeEdits` 落地 = **一次可撤销的模型编辑**，`Ctrl+Z` 撤回，落盘仍由作者自己按 Ctrl+S
- * 走既有 `sugar-save` 链路（与 `ui-sugar-lift` 的 `lift-action.ts` 同一口径；跨插件不许
- * import，故这里自带行级改写器，只消费 `sugar.transpile` / `sugar.parse` 这两枚**既有服务槽**）。
+ * 走既有 `sugar-save` 链路（跨插件不许 import，故这里自带行级改写器，只消费
+ * `sugar.transpile` / `sugar.parse` 这两枚**既有服务槽**）。
  *
  * ## 身份键（B9 的成败就在这）
  *
@@ -347,8 +347,8 @@ type Candidate =
 /**
  * 产出 `.kojo` 转译诊断的快速修复动作（**纯函数**：不读盘、不写盘、不发事件）。
  *
- * 每条动作都**自带 `edits` + 关联诊断**（`kind:'quickfix'`）；同一请求里 refactor 类动作
- * 由别的贡献方（`ui-sugar-lift`）各归各类地共存——本函数只产自己那一类，不去重、不顶替、
+ * 每条动作都**自带 `edits` + 关联诊断**（`kind:'quickfix'`）；同一请求里若还有 refactor
+ * 类动作（别的贡献方），各归各类地共存——本函数只产自己那一类，不去重、不顶替、
  * 不替宿主解释别人的动作（宿主 `quickFixOwnership` 只把 quickfix 计成"某条红线的解"）。
  */
 export function buildSugarQuickFixes(request: SugarQuickFixRequest): EditorCodeAction[] {

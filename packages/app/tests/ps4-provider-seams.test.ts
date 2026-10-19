@@ -490,18 +490,6 @@ function structureLikeContribution(asks: { text: string; diagnostics: unknown[];
   } as unknown as EditorCodeActionContribution;
 }
 
-/** 一张"不看诊断、只看行号"的贡献方桩（`.kojo` 改写动作的形状） */
-function rewriteLikeContribution(asks: number[]): EditorCodeActionContribution {
-  return {
-    id: 'ps4-rewrite',
-    order: 40,
-    provideActions: (file: CodeActionFile) => {
-      asks.push(file.line ?? 0);
-      return [{ title: '改为语法糖写法', kind: 'refactor' as const, run: () => undefined }];
-    },
-  } as unknown as EditorCodeActionContribution;
-}
-
 describe('provideCodeActionsFor · 零波浪线那道闸', () => {
   it('ERB + 零波浪线 ⇒ 一条都不问、整篇一次都不 copy（改前改后都是零条动作，不减能力）', () => {
     const asks: { text: string; diagnostics: unknown[]; line?: number }[] = [];
@@ -514,15 +502,15 @@ describe('provideCodeActionsFor · 零波浪线那道闸', () => {
     expect(doc.getValueCalls()).toBe(0);
   });
 
-  it('`.kojo` + 零波浪线 ⇒ **照旧问**（「改为语法糖写法」天生不依赖诊断，闸掉它就是削功能）', () => {
-    const asked: number[] = [];
-    const { kernel } = fakeKernel({ codeAction: [rewriteLikeContribution(asked)] });
+  it('`.kojo` + 零波浪线 ⇒ 同样一条都不问（LIFT-2 后 `.kojo` 上不再有不依赖诊断的动作）', () => {
+    const asks: { text: string; diagnostics: unknown[]; line?: number }[] = [];
+    const { kernel } = fakeKernel({ codeAction: [structureLikeContribution(asks)] });
     const doc = fakeModel(['函数 甲', '  若 X'], { languageId: KOJO_LANGUAGE_ID });
-    const pane = fakePane('C:/kojo/ps4-改写.ERB');
+    const pane = fakePane('C:/kojo/ps4-零波浪线.kojo');
     const out = provideCodeActionsFor(doc.model, rangeAt(2), context([]), pane, kernel);
-    expect(out.actions).toHaveLength(1);
-    expect(asked).toEqual([2]);
-    expect(doc.getValueCalls()).toBe(1);
+    expect(out.actions).toEqual([]);
+    expect(asks).toHaveLength(0);
+    expect(doc.getValueCalls()).toBe(0);
   });
 
   it('有波浪线时逐字照旧：marker 翻成诊断递给贡献方，动作带 command 反查 id', () => {

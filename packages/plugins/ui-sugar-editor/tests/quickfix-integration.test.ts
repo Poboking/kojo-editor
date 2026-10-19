@@ -1,15 +1,14 @@
 /**
  * W3「`.kojo` 的波浪线真的有修法」端到端验收：真转译器 + 真槽位接线。
  *
- * 本文件是**测试**（解耦审计规则 C 对 `tests/` 豁免），故可直接 import `ui-sugar-lift`
- * 来验"quickfix 与升糖 refactor 在同一份文档里各归各类"——生产代码里两者只通过
- * 槽 `ui.editor.codeAction` 与宿主相见，互相不 import。
+ * 本文件是**测试**（解耦审计规则 C 对 `tests/` 豁免），故直接装真转译器 + 本插件，
+ * 用一枚受控的 refactor 供方验"quickfix 与其他 refactor 类动作在同一份文档里各归各类"。
  *
  * 钉住的五件事：
  * 1. 真转译器的 `stray-percent` / `function-name-typo` 波浪线**确实**换来 `kind:'quickfix'`；
  * 2. 动作关联的诊断与面上那条装饰**同一个对象**（B9 身份键：同行同 code 同 message）；
  * 3. 不在闭集里的码（`cont-inside-quotes`）**不产**动作——不猜；
- * 4. 与升糖的 refactor **共存**：类别不串、只有 quickfix 认领波浪线（不顶替、不重复计数）；
+ * 4. 与 refactor 类动作**共存**：类别不串、只有 quickfix 认领波浪线（不顶替、不重复计数）；
  * 5. 全程**零写盘、零事件**、不越界，且**没有可修红线时一次整篇转译都不多跑**。
  */
 
@@ -29,7 +28,6 @@ import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
 import { scanControlFlow } from '@kojo/plugin-erb-parser';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
-import { createUiSugarLiftPlugin } from '@kojo/plugin-ui-sugar-lift';
 import { createUiSugarEditorPlugin } from '../src/index';
 import { decorationKey } from '../src/kojo-quickfix';
 
@@ -197,7 +195,7 @@ interface Harness {
   events: Array<{ type: string; payload: unknown }>;
 }
 
-/** 装真转译器 + 激活 ui-sugar-editor（本批主角）+ ui-sugar-lift（共存对照组） */
+/** 装真转译器 + 激活 ui-sugar-editor（本批主角） */
 function boot(source: string, options: { writable?: boolean } = {}): Harness {
   const writable = options.writable ?? true;
   const files: Record<string, Uint8Array> = { [PATH]: enc(source) };
@@ -268,26 +266,6 @@ function boot(source: string, options: { writable?: boolean } = {}): Harness {
   };
   createUiSugarEditorPlugin().activate(editorCtx as never);
 
-  // 升糖那枚 refactor 供方（共存对照组）：只需要 sugar.lift + 只读 io
-  const liftCtx = {
-    pluginId: 'ui-sugar-lift',
-    log,
-    inject: (key: string): never => {
-      if (key === KernelServices.IO) return io as never;
-      const v = provided.get(key);
-      if (v === undefined) throw new Error(`未注册的服务：${key}`);
-      return v as never;
-    },
-    slots: {
-      register: (slot: string, contribution: unknown) => {
-        if (slot === 'ui.editor.codeAction') codeActions.push(contribution as EditorCodeActionContribution);
-      },
-    },
-    bus,
-    onDispose: (fn: unknown) => fn,
-  };
-  createUiSugarLiftPlugin().activate(liftCtx as never);
-
   return { sugar, codeActions, decorators, files, writes, events };
 }
 
@@ -332,11 +310,10 @@ const SRC_TYPO = ['角色: 1', '时机 指令 310：', '    调用 最大直(1, 
 const SRC_QUOTES = ['角色: 1', '时机 指令 310：', '    「你好。续」', ''].join('\n');
 
 describe('W3 / 真转译器：`.kojo` 波浪线换来 quickfix', () => {
-  it('注册了 `ui.editor.codeAction`（id sugar-quickfix）——此前本插件一枚都不注册', () => {
+  it('注册了 `ui.editor.codeAction`（id sugar-quickfix）', () => {
     const h = boot(SRC_STRAY);
     const ids = h.codeActions.map((c) => c.id);
     expect(ids).toContain('sugar-quickfix');
-    expect(ids.filter((i) => i === 'sugar-lift.rewrite-action')).toHaveLength(1);
   });
 
   it('stray-percent：产 kind:quickfix，edits 落地后整篇再转译那条红线消失', () => {
@@ -457,11 +434,10 @@ describe('W3 / B9 身份键：动作关联的就是面上那一条', () => {
   });
 });
 
-describe('W3 / 与升糖 refactor 共存：各归各类、不互相顶替', () => {
+describe('W3 / 与 refactor 类动作共存：各归各类、不互相顶替', () => {
   /**
-   * 一枚**受控**的 refactor 供方（形状 = 生产里 `sugar-lift.rewrite-action` 交出来的那份）。
-   * 刻意不把断言绑到升糖那批的候选判据上（它正被别的批次改动，产量会变），
-   * 这里绑的是本批唯一相关的两件事：**类别**与**认领**。
+   * 一枚**受控**的 refactor 供方（形状 = 任何宿主侧改写动作）。
+   * 断言只绑本批唯一相关的两件事：**类别**与**认领**，不依赖别线产量。
    */
   const refactorStub = (line: number): EditorCodeActionContribution => ({
     id: 'stub.rewrite-action',
@@ -485,7 +461,7 @@ describe('W3 / 与升糖 refactor 共存：各归各类、不互相顶替', () =
     const { out } = provideAll(h, SRC_STRAY, { line: rawLine });
     const quick = out.filter((x) => x.action.kind === 'quickfix');
     const refactor = out.filter((x) => x.action.kind === 'refactor');
-    // 认领波浪线的那一类只有本批这一枚（`sugar-lift` 的候选产量归它那一批判，本测试不绑数字）
+    // 认领波浪线的只有 quickfix 这一类
     expect(quick.map((x) => x.contributionId)).toEqual(['sugar-quickfix']);
     expect(refactor.map((x) => x.contributionId)).toContain('stub.rewrite-action');
     const stubAction = refactor.find((x) => x.contributionId === 'stub.rewrite-action')!.action;
@@ -500,21 +476,9 @@ describe('W3 / 与升糖 refactor 共存：各归各类、不互相顶替', () =
     expect(stubAction.edits![0]!.fromLine).toBe(rawLine);
   });
 
-  it('真实的升糖供方照旧被问到：它只交 refactor 类、从不认领波浪线（本批没替它改口径）', () => {
+  it('本批供方只交 quickfix 类：宿主按类别分工，不会冒出 refactor', () => {
     const h = boot(SRC_STRAY);
     const rawLine = SRC_STRAY.split('\n').findIndex((l) => l.includes('PRINTFORMDW')) + 1;
-    const lift = h.codeActions.find((c) => c.id === 'sugar-lift.rewrite-action')!;
-    const theirs = lift.provideActions({
-      path: PATH,
-      text: SRC_STRAY,
-      project: null,
-      line: rawLine,
-      diagnostics: markers(h, SRC_STRAY),
-    });
-    // 类别恒为 refactor（产量由那一批的候选判据决定，本批不绑数字）；且**从不**挂诊断
-    expect(theirs.every((a) => a.kind === 'refactor')).toBe(true);
-    expect(theirs.every((a) => a.diagnostics === undefined)).toBe(true);
-    // 反过来：本批这枚供方**从不**冒 refactor（宿主按类别分工，两边不会互相冒充）
     const quick = h.codeActions.find((c) => c.id === 'sugar-quickfix')!;
     const mine = quick.provideActions({
       path: PATH,
@@ -525,19 +489,6 @@ describe('W3 / 与升糖 refactor 共存：各归各类、不互相顶替', () =
     });
     expect(mine).toHaveLength(1);
     expect(mine.every((a) => a.kind === 'quickfix')).toBe(true);
-  });
-
-  it('批量请求（scope:document）时升糖那枚照契约返回空，快速修复照全篇供', () => {
-    const h = boot(SRC_STRAY);
-    const lift = h.codeActions.find((c) => c.id === 'sugar-lift.rewrite-action')!;
-    const quick = h.codeActions.find((c) => c.id === 'sugar-quickfix')!;
-    const diagnostics = markers(h, SRC_STRAY);
-    expect(
-      lift.provideActions({ path: PATH, text: SRC_STRAY, project: null, diagnostics, scope: 'document' }),
-    ).toEqual([]);
-    expect(
-      quick.provideActions({ path: PATH, text: SRC_STRAY, project: null, diagnostics, scope: 'document' }),
-    ).toHaveLength(1);
   });
 });
 

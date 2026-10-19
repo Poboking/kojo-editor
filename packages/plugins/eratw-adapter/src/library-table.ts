@@ -26,6 +26,11 @@
  * 约 5.3 万（基础库 4.6 万 + 引擎内建 0.7 万），本批按同一证据形态（各函数在基础库里的
  * `;概　要` 注释）补 83 条（表 55 → 138），覆盖率读数与闸阈值见该测试文件头注。
  *
+ * **ADICT-1 全覆盖批**（2026-10-19）= 把同一普查口径下**剩余的全部基础库档名字**收完
+ * （320 名 / 1,563 调用点）：基础库档覆盖 100%，合并覆盖 99.98%（引擎档只剩 6 个
+ * 无法可靠判义的名字，未收录）。长尾条目命名以定义处注释为证据，见各条行尾；
+ * 阈值随之抬到 `library-coverage.corpus.test.ts` 头注的新读数。
+ *
  * 查不到的名字一律 `undefined`（**绝不猜**，规范 §5.3 精神）；未收录的中文调用形态
  * 由糖层**原样保留**并报诊断（fail-visible）。
  */
@@ -225,6 +230,349 @@ export const ERATW_LIBRARY_FUNCTIONS: ReadonlyMap<string, string> = new Map<stri
   ['SHOW_上半身内衣', 'SHOW_上半身内衣'], // ERB/衣服/CLOTHES.ERB (11)
   ['仕事日チェック', '仕事日チェック'], // ERB/MOVEMENTS/MOVEMENT_SUB.ERB (1)
   ['金额表示', '金额表示'], // ERB/COMMON.ERB（与 `金額表示` 是**两枚**不同函数）(1)
+
+  // ================== ADICT-1 全覆盖批（2026-10-19） ==================
+  // 判据不变（基础库 `@` 定义的高频助手）；本批把语料普查里**全部剩余的基础库档调用点**
+  // 一次收完：320 个名字、1,563 处调用（`tests/library-coverage.corpus.test.ts` 同一口径）。
+  // 命名以定义处的 `;概　要` / 函数体为准（证据见各条行尾注释）；数字后缀函数（SPEVENT /
+  // MAP_SEARCH_REPLACEMENT / KOJO_*）按序数直译。收录后基础库档覆盖 100%，长尾里只剩
+  // 引擎内建档的个别名字（后者住 kojo-sugar 的系统表）。
+
+  // ---- 演出 / 打印 / 文本族 ----
+  ['着色打印宽', 'PRINTCOLORW'], // PRINTCOLOR 的 W 变体（CALL PRINTCOLOR(..., 2)）
+  ['三点省略', 'TRIPLEDOT'], // 逐点打印"..."（可反向 / 带等待）
+  ['彩虹打印宽', 'PRINT_RAINBOW2W'], // RAINBOW2 的 W 变体
+  ['网页打印行', 'HTMLPRINTL'], // HTML 系打印 + 换行
+  ['成组打印', 'PRINT_GROUP'], // 数组元素顺序显示
+  ['彩色片段', 'PRINT_COLOR'], // 同一行内分段着色
+  ['逐字键入', 'KEYTYPING'], // 逐字显示（可检测按键跳过）
+  ['震动屏幕', 'QUAKE'], // 屏幕上下抖动
+  ['全屏切入', 'FULLCUTIN'], // 清屏后全屏切入图
+  ['淡出', 'FADEOUT'], // 文字淡出到背景色
+  ['淡入淡出', 'FADE'], // FADE 系公共流程
+  ['淡出删行', 'FADE_CLINE'], // FADE 后删除若干行
+  ['动画背景过渡', 'ANIMATION_BGCOLOR_TRANSITION'], // 背景色平滑过渡
+  ['覆盖显示图', 'PRINT_IMAGE_OVERRAP'], // 覆盖式图片显示
+  ['过渡动画图', 'PRINT_IMAGE_TRANSANIMATION'], // 多帧过渡动画
+  ['显示自慰图', 'PRINTONANISMIMAGE'], // AFTERTRA 自慰图
+  ['图文对话', 'IMG_TALK'], // SPTALK 与立绘融合
+  ['单空行', 'SINGLE_EMPTY_LINE'], // 末尾只留一个空行
+  ['最大宽度', 'MAXWIDTH'], // 行宽定义
+  ['首字母大写', 'CAPITALIZE'], // 首字母大写化
+  ['首字母处理', 'CAP_PROCESS'], // handle capitalization
+  ['序数', 'ORDINAL'], // 1st/2nd/3rd…
+  ['文本转网页', 'CONVERT_STR_TO_HTML'], // @PRINT_STR 语法转 HTML
+
+  // ---- 判定 / 查询族 ----
+  ['显示上装', 'SHOW_TOP'], // TEQUIP:1 对应最上层衣装名
+  ['显示厘米尺', 'SHOWSCALEINCM'], // 厘米刻度显示
+  ['是处女', 'IS_VIRGIN'], // 处女判定
+  ['是童贞', 'IS_DOUTEI'], // 童贞判定
+  ['主角是处女', 'MASTER_IS_VIRGIN'], // 主角适用处女判定
+  ['是同性', 'IS_SAMESEX'], // 两角色同性判定
+  ['是儿童', 'IS_CHILD'], // 身心幼小判定
+  ['是智者', 'IS_WISEMAN'], // 学习系判定
+  ['是愤怒', 'IS_ANGRY'], // 愤怒 / 憎恶标记
+  ['是兔女郎', 'IS_BUNNY'], // 兔耳装扮判定
+  ['是吸血鬼', 'IS_VAMPIRE'], // 种族素质判定
+  ['是双性', 'IS_FUTA'], // 双性判定
+  ['是勃起', 'IS_ERECT'], // 勃起度判定
+  ['是平日', 'IS_WEEKDAY'], // 周一至周五
+  ['是周末', 'IS_WEEKEND'], // 周六日
+  ['是发情期', 'IsHeat'], // TCVAR 发情 / 发情周期
+  ['是花园有效', 'IsGardenValid'], // 花园设置有效判定
+  ['是香有效', 'IsInsenceValid'], // 香的有效判定
+  ['无雨', 'IS_NO_RAIN'], // 区域无雨判定
+  ['是活动时段', 'VISIT'], // 活动时间带判定
+  ['在工作时段', 'WORKING'], // 工作时段判定
+  ['在建筑内', 'IS_IN_BUILDING'], // 建筑内判定
+  ['在厕所', 'IN_TOILET'], // 厕所有无判定
+  ['在区域', 'AT_AREA'], // 角色所在区域
+  ['可见', 'CAN_SEE'], // 角色是否在视野内
+  ['可移动', 'CAN_MOVE'], // 移动可行性
+  ['可演奏', 'MUSIC_ABLE'], // 乐器 / 地点可演奏
+  ['可伴奏', 'ACCOMPANY_ABLE'], // 伴奏可行性
+  ['可搭讪', 'CAN_NANPA'], // 搭讪可行性
+  ['他人在场', 'HITOKE'], // 其他房间 / 同室人数判定
+  ['目击判定', 'EYEWITNESS'], // 有人看着 / 路人看着
+  ['忍耐判定', 'ENDURE'], // 忍耐系判定
+
+  // ---- 时间 / 地点 / 天气族 ----
+  ['时段判定', 'BETWEENTIME'], // TIME 是否落在区间
+  ['所需时间', 'TIME_REQUIRED'], // 出挂地所需时间
+  ['取天气', 'GET_WEATHER'], // 当前天气
+  ['取星期', 'GET_DAY'], // 日/月/火…字符串
+  ['星期中文', 'GET_DAY_CN'], // 星期中文名
+  ['取地点名', 'GET_PLACENAME'], // PLACE_ID → 名称
+  ['取地图区域', 'MAP_AREASELECT'], // MAPID → 区域号
+  ['取出入口', 'GET_ENTRANCE'], // 据点出入口地点
+  ['地图替换零', 'MAP_SEARCH_REPLACEMENT_0'],
+  ['地图替换一', 'MAP_SEARCH_REPLACEMENT_1'],
+  ['地图替换二', 'MAP_SEARCH_REPLACEMENT_2'],
+  ['地图替换三', 'MAP_SEARCH_REPLACEMENT_3'],
+  ['地图替换四', 'MAP_SEARCH_REPLACEMENT_4'],
+  ['地图替换五', 'MAP_SEARCH_REPLACEMENT_5'],
+  ['地图替换六', 'MAP_SEARCH_REPLACEMENT_6'],
+  ['地图替换七', 'MAP_SEARCH_REPLACEMENT_7'],
+  ['地图替换八', 'MAP_SEARCH_REPLACEMENT_8'],
+  ['地图替换九', 'MAP_SEARCH_REPLACEMENT_9'],
+  ['地图替换十', 'MAP_SEARCH_REPLACEMENT_10'],
+  ['隙间', 'SUKIMA'], // 无处可去角色的收容地点
+  ['进入待客室', 'OMANEKI_ENTER'], // 外泊 / 待客室处理
+  ['钱汤地点', 'PLACE_SENTO'], // 钱汤房间号
+  ['房间人数', 'IN_ROOM_NUMBER'], // 房内人数
+  ['房间成员', 'IN_ROOM_MEMBER'], // 房内变量成员
+  ['妖怪历日期', 'PRINT_DATE_F_YOUKAI'], // 妖怪历日期打印
+  ['妖怪历季节', 'PRINT_DATE_F_YOUKAI_SEASON'], // 妖怪历季节打印
+  ['西方年份', 'EHOU_DIRECTION'], // TW 内西历换算
+  ['季节事件', 'SEASONAL'], // 祭日 / 季节事件
+  ['热雷判定', 'GET_HEAT_THUNDERSTORM'], // 热雷发生
+  ['界雷判定', 'GET_FRONTAL_THUNDERSTORM'], // 界雷发生
+
+  // ---- 衣服 / 装备族 ----
+  ['取衣装编号', 'CLOTHES_ID'], // 部位 + 名 → 类内 ID
+  ['衣装名', 'CLOTHNAME'], // EQUIP 衣装名
+  ['衣装翻译', 'CLOTHES_TR'], // 衣装名 CSV 翻译
+  ['衣装调教设置', 'CLOTHES_SETTING_TRAIN'], // EQUIP → TEQUIP
+  ['控制衣装套', 'CTRL_CLOTHES_SET'], // 衣装套保存 / 复原
+  ['临时换装', 'OKIGAE'], // 临时更衣
+  ['取得内裤', 'PANTS_GET'], // 脱下 / 收取内裤
+  ['内裤已收集', 'PANTS_ALREADY_COLLECTED'], // 收藏状态
+  ['透隙内裤', 'PANTS_SUKIMA'], // 隙间透出判定
+  ['脱裤', 'DATUI_BOTTOM'], // 下半身脱衣
+  ['脱裤后', 'DATUI_BOTTOM_LATE'], // 下半身脱衣后处理
+  ['对象脱裤', 'DATUI_BOTTOM_T'], // 对象下半身脱衣
+  ['脱上衣后', 'DATUI_TOP_LATE'], // 上半身脱衣后处理
+  ['对象脱上衣后', 'DATUI_TOP_T_LATE'], // 对象上半身脱衣后处理
+  ['脱鞋', 'DATUI_SHOES'], // 靴 / 袜子
+  ['装备检查', 'EQUIP_CHECK'], // 常驻道具检查
+  ['吸乳装备处理', 'EQUIP_COM11'], // 指令 11 装备延续
+  ['揉胸装备处理', 'EQUIP_COM12'], // 指令 12 装备延续
+  ['接吻装备处理', 'EQUIP_COM19'], // 指令 19 装备延续
+  ['裸体检查', 'NUDITYCHECK'], // 差分图像用
+  ['检查汗', 'CHECK_SWEAT'], // 汗差分条件
+  ['影狼水手服', 'K63_WEAR_SAILOR'], // K63 角色专用
+  ['取胸围档', 'GET_BUSTSIZE'], // 胸围数值档
+  ['胸围转文本', 'TOSTR_BUSTSIZE_ATW'], // 胸围描述文本
+  ['取基础样式', 'GET_BASESTYLE'], // 表示形式
+  ['取基础样式译', 'GET_BASESTYLE_TRANS'], // 表示形式（翻译版）
+  ['取基础资源', 'GET_BASE_RESOURCE'], // 立绘资源选择
+  ['取基础资源译', 'GET_BASE_RESOURCE_TRANS'], // 资源选择（翻译版）
+  ['取特效资源', 'GET_EFFECT_RESOURCE'], // 特效资源数量
+  ['角色图覆盖', 'IMAGE_CHARA_OVERRIDE'], // 立绘覆盖
+  ['资源索引检查', 'RM_RESOURCECHECK'], // 精灵索引存在性
+  ['精灵宽度', 'RM_SPRITEWIDTH'], // 精灵宽度
+
+  // ---- 状态 / 数值 / 事件族 ----
+  ['加经验编号', 'ADDEXP_D'], // AddEXP 的编号参数版
+  ['有序加经验', 'ADDEXPORDERED'], // 带排序 / 消息形态
+  ['加百合经验', 'ADD_EXP_LESNIAN'], // 同性经验追加
+  ['经验获得检查', 'EXP_GOT_CHECK'], // 经验获得后处理
+  ['经验翻译', 'EXP_TR'], // 经验名 CSV 翻译
+  ['设置能力与经验', 'SET_ABL_AND_XP'], // ABL + 最低经验
+  ['变动能力', 'CHANGEABL'], // ABL 增减
+  ['快感经验值', 'SOURCE_EXP'], // SOURCE 经验处理
+  ['快感修正一', 'SOURCE_REVISION1'], // 快感 ABL 补正 /10
+  ['快感修正二', 'SOURCE_REVISION2'], // 欲望 ABL 补正 /100
+  ['快感额外', 'SOURCE_EXTRA'], // SOURCE 额外处理
+  ['快感额外修正', 'SOURCE_CVAB_EXTRA'], // CVAB 额外修正
+  ['快感基础下降', 'SOURCE_DOWNBASE'], // BASE 下降
+  ['性交源检查', 'SOURCE_SEX_CHECK'], // SOURCE 性交判定
+  ['绝顶追加', 'ORGASM_ADD'], // 绝顶处理
+  ['绝顶计数', 'ORGASM_COUNT'], // 本次性交绝顶次数
+  ['同时绝顶', 'SYNCED_ORGASM'], // 同时绝顶判定
+  ['对象喷乳检查', 'TARGET_MILK_CHECK'], // 喷乳处理
+  ['送入子宫', 'SAMEN_SHOOT3'], // 精子送入
+  ['射精阴道处理', 'ADD_SAMEN_V'], // 指令外 V 射精
+  ['射精肛门处理', 'ADD_SAMEN_A'], // 指令外 A 射精
+  ['失去处女', 'LOST_VIRGIN'], // 丧失处女处理
+  ['记录阴道丧失', 'SET_HISTORY_LOST_V'], // 历史记录（V）
+  ['记录肛门丧失', 'SET_HISTORY_LOST_A'], // 历史记录（A）
+  ['记录角色事件', 'SET_CEVENT'], // cEvent 记录
+  ['当前魅力', 'CHARISMA_NOW'], // 当前魅力值
+  ['取渐近值', 'GET_REVISION'], // 渐近上限换算
+  ['按百分比乘', 'MULTIPLY'], // A * B / 100
+  ['按百分比除', 'DIVIDE'], // A * 100 / B
+  ['取百分比', 'GETPERCENT'], // GvT 百分比
+  ['百分比判定', 'PERCENT'], // 概率判定
+  ['取成功率', 'GET_SUCCESS_RATE'], // 成功率
+  ['三噪声', 'NOISE3'], // 三噪声平均（正态近似）
+  ['数组抽取', 'ARRAY_HIT'], // 配列抽選
+  ['表现变体', 'EXPR_VAR'], // 表现变体用式中函数
+  ['取方法整数', 'GETMETH_INT'], // qol OBJ 方法取整数
+  ['费雪耶茨洗牌', 'FUNC_FISHER_YATES_SHAFFLE'], // Fisher-Yates 洗牌
+  ['设置睡眠', 'SET_SLEEP'], // 睡眠中标记
+  ['设置同寝', 'SET_TOGETHER'], // 添寝标记
+  ['设置避孕', 'SET_HININ'], // 避妊设置
+  ['设置双性', 'SET_FUTANARI'], // 双性设置
+  ['醉态', 'DRUNKEN'], // 醉酒状态
+  ['醉度判定', 'IS_DRUNK'], // 0–3 醉度
+  ['醉复前处理', 'DRUNK_RECOVER_BEFORE'], // 烂醉复活前处理
+  ['心情变化', 'KIGEN_CHANGE'], // 機嫌 变动
+  ['吃菜反应', 'MESSAGE_EAT_DISH_DRG'], // 仕込み料理反应
+  ['多胎意识', 'BABYMULTIAWARE'], // 多胎妊娠意识
+  ['总受孕数', 'TOTAL_CONCEPTION_COUNT'], // 受孕总数
+  ['发情分类', 'ESTRUS_CATEGORY'], // 生理周期文字
+  ['拜倒事件', 'OGAMITAOSHI'], // 拝み倒し 怀孕事件
+  ['显示爱意', 'SHOW_LOVEPOWER'], // 爱意显示
+  ['情事暴露', 'AFFAIR_DISCLOSURE'], // 情事発覚
+  ['宣示妖怪', 'REVEAL_YOUKAI'], // 妖怪现身
+  ['静默调试', 'CALMME'], // debug 静默
+  ['进入约会', 'DATEME'], // debug 强制约会
+  ['格式版本', 'FORMAT_VERSION'], // major.minor.patch
+  ['变量或默认', 'VAR_OR_DEFAULT'], // 变量为空取默认
+  ['单段分割', 'SPLIT_SINGLE'], // 取分割后的指定段
+  ['分割带尾', 'SPLIT_M'], // 带占位符的分割
+  ['串重复计数', 'STR_MULTI_COUNT'], // 子串重复次数
+  ['字典写入', 'DIC_SET'], // 连想数组写入
+  ['字典读取', 'DIC_GET'], // 连想数组读取
+  ['跑开', 'RUNOFF'], // K97 离场处理
+  ['收尾处理', 'OAZUKE'], // SOURCE 收尾
+  ['加疲劳', 'ADD_TIRED'], // TCVAR 疲劳加算
+  ['诶嘿嘿重置', 'ENDUFUFU'], // 诶嘿嘿结束复位
+  ['重置陷阱变量', 'TRAP_V_RESET'], // 陷阱变量全清
+  ['鲜度加成', 'SPOIL_ENHANCEMENT'], // 捕获物鲜度
+  ['鲜度文本', 'SPOIL_TEXT'], // 鲜度文本
+  ['评价料理', 'REVIEW_DISH'], // 料理评价
+  ['调合等级', 'PHARMACY_RANK'], // 调合难度 / 可否
+  ['道具数据', 'ITEMDATA'], // 商店道具数据
+  ['道具种类', 'ITEMTYPE'], // 道具种类
+  ['整箱购买', 'ITEM_CARTON'], // 超额购买处理
+  ['物品说明', 'ITEM_EXPLANATION'], // 道具解说
+  ['打印物品说明', 'PRINT_ITEM_EXPLANATION'], // 道具解说打印
+  ['丢失物品', 'LOST_ITEM'], // 失去道具消息
+  ['丢失日元', 'LOST_MONEY_YEN'], // 失去金钱消息
+  ['取所持日元', 'GET_MONEY_YEN'], // 所持金
+  ['支付日元', 'PAY_MONEY_YEN'], // 支付现金
+  ['支付筹码', 'PAY_MONEY_CM'], // 支付筹码
+  ['付钱或筹码', 'PAY_YEN_OR_CM'], // 现金 / 筹码二择
+  ['礼物数据主体', 'GIFTDATA_MAIN'], // 礼物本体数据
+  ['礼物形容数据', 'GIFTDATA_ADJECT'], // 礼物形容词数据
+  ['由角色生成礼物', 'CREATE_GIFT_FROM_CHARA'], // 角色依存礼物
+  ['角色定制礼物', 'GIFT_ORDER_MADE_FROM_CHARA'], // 角色特注品
+  ['主角定制礼物', 'GIFT_ORDER_MADE_FROM_MASTER'], // 主角特注品
+  ['礼物事件', 'GIFT_EVENT'], // 赠礼事件
+  ['特产店名', 'GIFTSHOP_NAME'], // 土产屋名
+  ['检查收藏', 'CHECK_COLLECTION'], // 收藏 / 手持统计
+  ['小生物数据', 'CRITTER_DATA'], // critter 数据
+  ['采集地点', 'GATHERING_SPOT'], // 采集点
+  ['采集产物', 'GATHERING_PRODUCT'], // 采集产物出现
+  ['钓鱼说明', 'FISHING_EXPLANATION'], // 钓果说明
+  ['钓鱼尺寸', 'FISHING_SIZE'], // 鱼尺寸
+  ['全局指令可用', 'GLOBAL_COMABLE'], // COMABLE 一括管理
+  ['指令顺序元素', 'QOL_COM_ORDER_ELEMENT'], // QoL 指令排序
+  ['指令拒绝检查', 'REJECT_CHECK'], // 指令拒否判定
+  ['口上强制失败', 'KOJO_FORCED_FAILURE'], // 强制失败分支
+
+  // ---- 口上 / 角色 / 调教族 ----
+  ['特殊事件消息一', 'SPEVENT_MESSAGE_1'], // SP 事件口上
+  ['特殊事件消息二', 'SPEVENT_MESSAGE_2'], // 约会告白共通
+  ['特殊事件消息三', 'SPEVENT_MESSAGE_3'], // 约会反感刻印消去
+  ['口上消息发送', 'KOJO_MESSAGE_SEND'], // KOJO_MESSAGE 通用发送
+  ['口上设置', 'KOJO_SETTING'], // 口上设置入口
+  ['口上配置', 'KOJO_CONFIGURE'], // 口上配置
+  ['口上设置性别', 'KOJO_SETTING_SEX'],
+  ['口上设置体型', 'KOJO_SETTING_SIZE'],
+  ['口上设置胸部', 'KOJO_SETTING_BREASTS'],
+  ['口上设置纯洁', 'KOJO_SETTING_PURITY'],
+  ['口上提交性别', 'KOJO_SUBMIT_SEX'],
+  ['口上提交体型', 'KOJO_SUBMIT_SIZE'],
+  ['口上提交胸部', 'KOJO_SUBMIT_BREASTS'],
+  ['口上提交纯洁', 'KOJO_SUBMIT_PURITY'],
+  ['口上选项攻略', 'KOJO_OPTION_WALKTHROUGH'], // KOJO_OPTION_ITEM 封装
+  ['取口上色', 'GET_CN_WORD_COLOR'], // 路人子口上色
+  ['口交指令', 'CCOMF51'], // CCOMF51 本体
+  ['骑乘位指令', 'CCOMF85'],
+  ['骑乘肛门指令', 'CCOMF87'],
+  ['口交可用', 'CCOM_ABLE51'], // CCOMF51 可否
+  ['骑乘位可用', 'CCOM_ABLE85'],
+  ['骑乘肛门可用', 'CCOM_ABLE87'],
+  ['六九式转移', 'EVENT_COUNTER_POSE_69'], // 69 式共通迁移
+  ['更新口上对象', 'DOKU_KM_RENEW_TARGET'], // 口上 TARGET 更新
+  ['条件随机结果', 'DOKU_RAND_RESULT_WC'], // WithCondition 随机
+  ['重置口上角色', 'RESET_KOJO_CHARA'], // 口上角色重置
+  ['设定接触部位', 'TOUCH_SET'], // MASTER / TARGET 接触
+  ['重置对象接触', 'TOUCH_RESET_T'], // TARGET 接触复位
+  ['重置主角接触', 'TOUCH_RESET_M'], // MASTER 接触复位
+  ['检查角色', 'CHECK_CHARA'], // 角色条件合致
+  ['查找恋人', 'FIND_LOVER'], // 恋人所在
+  ['查找周围', 'FIND_AROUND'], // 周围角色抽取
+  ['取角色名', 'TNAME'], // 角色名（英文形态）
+  ['取种族名', 'GET_TRIBENAME'], // 种族素质名
+  ['素质翻译', 'TALENT_TR'], // 素质名 CSV
+  ['名称翻译', 'NAME_TR'], // 名称 CSV
+  ['字符串翻译', 'STR_TR'], // 字符串 CSV
+  ['节日翻译', 'FESTIVAL_TR'], // 节日名 CSV
+  ['好高度高阶', 'K77_RANK_FAVOR_INHIGH'], // K77 好感档
+  ['主人好感检查', 'MASTER_FAVOR_CHECK'], // 好感加成
+  ['技巧加成', 'TECHNIQUE_CHECK'], // 技巧加成
+  ['情绪加成', 'MOOD_CHECK'], // 情绪加成
+  ['理性加成', 'REASON_CHECK'], // 理性加成
+  ['主角技巧检查', 'PLAYER_SKILL_CHECK'], // 主角技巧
+  ['痛苦检查甲', 'PAIN_CHECK_A'], // 痛苦处理后
+  ['取工作名', 'GET_JOBNAME'], // 工作名
+  ['角色工作结束', 'CHARA_JOBEND'], // 工作结束处理
+  ['去上学', 'GO_SCHOOL'], // 子女通学
+  ['接受委托', 'IRAI_START'], // 委托受诺
+  ['委托可同行', 'CAN_IRAI_CHARA_GO_TOGATHER'], // 委托连出可否
+  ['委托进展', 'IRAI_CHARA_TO_PROGRESS'], // 委托状况文本
+  ['查找委托槽', 'SEARCH_IRAI_SLOT'], // 依頼ID → 槽
+  ['查找空委托槽', 'SEARCH_IRAI_EMPTY'], // 空槽检索
+  ['委托槽转人物', 'IRAI_SLOT_TO_PERSON'], // 槽 → 要求人物
+  ['连出条件', 'COM_351_CONDITION'], // 连出可行性
+  ['约会宴会', 'DATE_PARTY'], // 约会吃饭地点
+  ['路人种类', 'DATE_HITOGOMI_SYUBETU'], // 外出路人名种类
+  ['特殊初吻', 'SPECIAL_FIRSTKISS'], // 初吻共通
+  ['特殊初吻中文', 'SPECIAL_FIRSTKISS_CN'], // 初吻中文版
+  ['增加接吻经验', 'ADD_KISS'], // 接吻经验 / 初吻
+  ['接吻', 'KISS'], // 同义随机
+  ['接吻中文', 'KISS_CN'], // 中文版
+  ['随机接吻', 'RANDKISS'], // 随机同义
+  ['随机吻描', 'RANDKISS_CN'], // 中文随机吻描
+  ['随机唇', 'RANDLIPS'], // 随机唇部描写
+  ['随机唇描', 'RANDLIPS_CN'], // 中文随机唇描
+  ['痛吟中文', 'GROAN_CN'], // 中文痛吟
+  ['厌男判定', 'OTOKOGIRAI'], // 讨厌男 / 女
+  ['是性交指令', 'IS_COM_SEX'], // 指令判定
+  ['是阴道插入指令', 'IS_V_INSERT_COM'], // V 插入指令
+  ['是肛门插入指令', 'IS_A_INSERT_COM'], // A 插入指令
+  ['性对话', 'DIALOGUE_SEX'], // 性行为对话
+  ['毒体消息', 'POISONBODY_MESSAGE'], // 毒体绝顶消息
+
+  // ---- 英文语法 / 翻译族 ----
+  ['英文他她', 'HE_SHE'], // 主格 / 所有格
+  ['英文他她宾', 'HIM_HER'], // 宾格 / 所有格
+  ['英文他她属', 'HES_SHES'], // 所有格形态
+  ['英文尊称', 'CHAN_KUN'], // -chan / -kun
+  ['冠词判定', 'ARTICLE'], // a / an
+  ['内裤冠词', 'ARTICLE_PANTIES'], // 内裤冠词
+  ['内裤英文代词', 'IT_THEM_PANTIES'], // it / them
+  ['名词复数', 'PLNOUN'], // 名词复数化
+  ['动词复数', 'PLVERB'], // 动词第三人称单数
+  ['复数打印', 'PRINT_PLUR'], // 数值 + 词同时输出
+  ['解析称呼', 'PARSE'], // 称呼 / 行为者替换
+  ['打印男性称谓', 'PRINT_MALE'], // 男性称谓表
+  ['打印阴核', 'PRINT_CLIT'], // 阴核打印
+  ['阴核简描', 'TINKO_SIMPLE'], // 简略描写
+  ['数值转汉字', 'TOKANJIT'], // 数值 → 汉字（带数词）
+  ['数值转汉字数字', 'TOKANJI'], // 数值 → 汉字数字
+  ['色彩空间转换', 'HSV_TO_RGB'], // 色彩换算
+  ['条色设置', 'BARCOLORSET'], // 自定义条颜色
+  ['着色条打印', 'PRINT_COLORBAR'], // 颜色条
+  ['打印指定日', 'PRINT_DATE'], // 指定 DAY → 年月日（曜日）
+  ['打印室外', 'PRINT_OUTSIDE'], // inside / outside 文本
+
+  // ---- 杂项 / 调试 ----
+  ['取酒编号', 'ALC_ID'], // 名称 → 酒番号
+  ['取酒名', 'ALC_NAME'], // 酒番号 → 名称
+  ['关键字随机', 'RANDNR'], // 字符串关键字随机
+  ['简单选择', 'CHOICE'], // 简易选择肢
+  ['显示理性壁', 'SHOW_REASONWALL'], // 理性壁显示
+  ['日常消息二', 'DAILY_MESSAGE_2'], // 日常事件口上 2
+  ['日常消息四', 'DAILY_MESSAGE_4'], // 日常事件口上 4
+  ['日常消息十二', 'DAILY_MESSAGE_12'], // 日常事件口上 12
+  ['潜伏地点名', 'NAME_HIDING_PLACE'], // 潜伏地点字符串
+  ['逆推丧失', 'LOST_GYAKURE'], // 逆推事件丧失记录
 ]);
 
 /**

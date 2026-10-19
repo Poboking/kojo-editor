@@ -776,9 +776,9 @@ function markersDigest(diagnostics: readonly LineDecoration[]): string {
  *   求交，空诊断集必然空结果），而判据之前那次 `getValue()` 与插件里那次整篇
  *   `split('\n')` + 结构体检（`structure-fix.ts` 的 `buildStructureFixes`）是白付的。
  *   这一档**不减能力**：没有可修的红线时，改前改后都是零条动作。
- *   `.kojo` 不走这道闸——「改为语法糖写法」那条动作**天生不依赖诊断**
- *   （`ui-sugar-lift` 的 `rewrite-action` 只认行号），挡掉它就是把 💡 里的动作弄没了。
- *   ⚠ 将来若给 ERB 加**不依赖波浪线**的动作（重构族），这道闸要按语言/类别放行，别照抄本行。
+ *   `.kojo` 现在走同一道闸：唯一的 `.kojo` 供方 `sugar-quickfix` 在零诊断时本就返回空
+ *   （LIFT-2 删掉「改为语法糖写法」后，`.kojo` 上不再有不依赖波浪线的动作）。
+ *   ⚠ 将来若给 ERB / `.kojo` 加**不依赖波浪线**的动作（重构族），这道闸要按语言/类别放行，别照抄本行。
  * - **同一篇没改过 + 同一行 + 同一组波浪线 ⇒ 结果照抄**：Monaco 的 💡 在每次光标移动
  *   与每次 marker 重发布后都会重新问（vendor `codeActionModel.js:30-31,44`，防抖 250ms），
  *   两次问之间文本没动过，答案必然逐字相同。缓存命中时把 `id → 动作` **重新挂回**
@@ -803,7 +803,10 @@ export function provideCodeActionsFor(
   const path = ctx.filePathRef.current;
   if (!path) return { actions: [], dispose: () => undefined };
   const diagnostics = markersToDecorations(monaco, context.markers ?? []);
-  if (diagnostics.length === 0 && model.getLanguageId() === ERB_LANGUAGE_ID) {
+  if (
+    diagnostics.length === 0 &&
+    (model.getLanguageId() === ERB_LANGUAGE_ID || model.getLanguageId() === KOJO_LANGUAGE_ID)
+  ) {
     return { actions: [], dispose: () => undefined };
   }
   const pending = ctx.pendingActionsRef.current;
@@ -891,7 +894,7 @@ export function ensureGlobalProviders(): void {
       if (!action) return;
       const ed = ctx?.editorRef.current ?? null;
       // 有 `edits` 的动作 = **改文本本身**（可撤销）：宿主直接落地，不再走 `run`
-      //（两者语义不同，见 `EditorTextEdit` 契约；💡「改为语法糖写法」走这条）。
+      //（两者语义不同，见 `EditorTextEdit` 契约；`.kojo` 快速修复走这条）。
       // 糖视图下 `ed.getModel()` 是只读糖 model：编辑无处可落（applyTextEdits 会改到派生物
       // 而非原文），直接跳过，避免"改了却不在真文件里"。
       //
