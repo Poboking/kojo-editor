@@ -9,7 +9,9 @@ import { CJK_WORD_PATTERN } from './word-separators';
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。
  *
  * 依据（逆向文档《词法与表达式》《口上机制深挖》）：
- * - 行首 `;` 注释、`@` 函数定义、`#` 预处理指令、`$` 跳转标签；
+ * - 行首 `;` 注释、引号外行尾 `;` 起注释到行末、`@` 函数定义、`#` 预处理指令、`$` 跳转标签
+ *   （注释/字符串两判据与语义层 `erb-parser/references.ts` 的 `codeViewOf` **同口径**——
+ *   同一份"什么是注释/什么是串"不许有两个真相：串里的 `;` 不是注释、未闭合引号只到行尾）；
  * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；高亮另吃补集
  *   `erb-highlight-words.ts`（控制流语句 + 引擎内建单行语句，补全不消费）；
  * - 变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
@@ -101,6 +103,9 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
       root: [
         // 行首注释（Emuera 语义：行首 ; 整行注释）
         [/^\s*;.*$/, 'comment'],
+        // 行内尾注释：引号外的 `;` 起注释到行末。`str` 态是另一状态、串里进不了 root，
+        // 所以这条不会把 PRINTL "a;b" 的 `;` 当注释；语义层 codeViewOf 同一判据。
+        [/;.*$/, 'comment'],
         // 行首函数定义 @NAME / @NAME(...)
         [/^(\s*)(@)([^\s(;]+)/, ['', 'keyword', 'entity.name.function']],
         // 行首跳转标签 $LABEL
@@ -115,7 +120,8 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // 变量族头，只靠后面的 cases 会让大写形态吃 variable 色（SUGGEST-2C 的 second root）
         ...(standaloneKeyword ? [[standaloneKeyword, 'keyword'] as [RegExp, string]] : []),
         // 变量多段引用：CFLAG:ARG:口上セレクタ / TCVAR:50 / ARG:1 / RESULTS:2 / LOCALS:1
-        [/\b(?:CFLAG|CDFLAG|CSTR|TCVAR|TSTR|TFLAG|TALENT|MARK|EXP|BASE|MAXBASE|ABL|TALENT|RELATION|RESULTS|LOCALS|LOCAL|ARGS|ARG|FLAG|DAY|TIME|MONEY|NAME|CALLNAME|MASTER|TARGET|ASSI|NO|RAND|SELECTCOM|TFLAG|PALAM|JUEL|GOTJUEL|UP|DOWN|LOSEBASE|CUP|CDOWN|DOWNBASE|SOURCE|NOWEX|EQUIP|TEQUIP|EX|PALAMLV|STAIN|STAIN_1|STAIN_2)\b(?::[^\s,()\[\]{}'"+\-*/%<>=!&|]+)*/, 'variable'],
+        // （段尾字符集排除 `;`——否则 `CFLAG:ARG;说明` 把行尾注释整段吞成 variable，与语义层分叉）
+        [/\b(?:CFLAG|CDFLAG|CSTR|TCVAR|TSTR|TFLAG|TALENT|MARK|EXP|BASE|MAXBASE|ABL|TALENT|RELATION|RESULTS|LOCALS|LOCAL|ARGS|ARG|FLAG|DAY|TIME|MONEY|NAME|CALLNAME|MASTER|TARGET|ASSI|NO|RAND|SELECTCOM|TFLAG|PALAM|JUEL|GOTJUEL|UP|DOWN|LOSEBASE|CUP|CDOWN|DOWNBASE|SOURCE|NOWEX|EQUIP|TEQUIP|EX|PALAMLV|STAIN|STAIN_1|STAIN_2)\b(?::[^\s,()\[\]{}'"+\-*/%<>=!&|;]+)*/, 'variable'],
         // 数值常量
         [/\b\d+\b/, 'number'],
         // 运算符
@@ -143,18 +149,42 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
             },
           },
         ],
+        // 全角字母数字（Ａ-Ｚ/ａ-ｚ/０-９/々）：Emuera 视同半角同族记号，反向索引侧
+        // `normalizedUpper` 的 `ａ-ｚ`、`MODEL_TOKEN_CLASS` 的 `\p{L}\p{N}` 都是这个口径——
+        // 着色层跟着进词表判定，缺省 identifier，不落空 token
+        [
+          /[\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\u3005]+/,
+          {
+            cases: {
+              '@directives': 'keyword',
+              '@highlightWords': 'keyword',
+              '@default': 'identifier',
+            },
+          },
+        ],
+        // 全角/CJK 标点（U+3001-\u303F ∪ \uff01-\uff65 残部：`：，。（）「」《》、；！？＿…` 等）：
+        // 语义层判"非记号字符"（MODEL_TOKEN_CLASS 不含标点），.kojo 侧同类字符是关键字标点——
+        // 归 operator，不再坠 defaultToken 空色。全角 `；` 只是标点：语义层 codeViewOf 只认
+        // 半角 0x3B，注释判据不许在这 widening
+        [/[\u3001-\u303f\uff01-\uff65]+/, 'operator'],
       ],
+      // 行尾出栈三条（`…$` + `@popall`）：语义层 codeViewOf 逐行独立——未闭合引号只到本行
+      // 行尾，绝不把串态带过行界染红后续所有行。`$` 规则须排在无锚 catch-all 之前，
+      // 命中条件"剩余段一路吃到行尾都不撞闭合符"正是"本行没闭合"。
       str: [
+        [/[^"%\\]+$/, { token: 'string', next: '@popall' }],
         [/[^"%\\]+/, 'string'],
         [/\{/, { token: 'string.escape', next: '@strExpr' }],
         [/%/, { token: 'string.escape', next: '@strStr' }],
         [/"/, { token: 'string.quote', bracket: '@close', next: '@pop' }],
       ],
       strExpr: [
+        [/[^}]+$/, { token: 'variable', next: '@popall' }],
         [/\}/, { token: 'string.escape', next: '@pop' }],
         [/[^}]+/, 'variable'],
       ],
       strStr: [
+        [/[^%]+$/, { token: 'variable', next: '@popall' }],
         [/%/, { token: 'string.escape', next: '@pop' }],
         [/[^%]+/, 'variable'],
       ],

@@ -9,7 +9,7 @@ import {
 import { ERB_COMMANDS, ERB_FAMILY_HEADS, ERB_HIGHLIGHT_COMMANDS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { registerErbLanguage, setErbDirectiveWords } from '../src/monaco/erb-language';
 import { ERB_CONTROL_STATEMENTS, classifyControlFlow } from '@kojo/plugin-erb-parser';
-import { compileMonarch, driveLexer, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
+import { compileMonarch, driveLexer, driveLine, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**
  * `.ERB` 关键字高亮验收（SUGGEST-2C）——**真 Monarch 编译 + 逐词发射**，不手搓解析器。
@@ -302,5 +302,72 @@ describe('setErbDirectiveWords 的公开语义不变，补集不随项目词表�
     setErbDirectiveWords(monaco, null); // 收尾：回基底（不把测试词表留给同进程后续用例）
     const { emitted: restored } = await emitErb('ENDCATCH');
     expect(tokenOfWord(restored, 'ENDCATCH').startsWith('keyword.')).toBe(true);
+  });
+});
+
+/* ============================== ⑦ 工包 C：着色层与语义层同口径（尾注释 / 串态 / 全角标点） ============================== */
+
+describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf 是唯一真相，正反面各钉）', () => {
+  it('① 行尾 `;` 之后整段 comment：PRINTL 台词 ;说明 的「说明」不再是 identifier', async () => {
+    const { emitted } = await emitErb('PRINTL 台词 ;说明');
+    expect(emitted.find((e) => e.text === '台词')?.token.startsWith('identifier.')).toBe(true);
+    expect(emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';说明');
+    expect(emitted.find((e) => e.text === '说明'), '注释尾巴不许有第二处发射').toBeUndefined();
+  });
+
+  it('①b 反面：串里的 `;` 不当注释；串闭合后的行尾 `;` 恢复注释', async () => {
+    const inside = await emitErb('PRINTL "台词;说明"');
+    expect(inside.emitted.some((e) => e.token.startsWith('comment.'))).toBe(false);
+    expect(inside.emitted.filter((e) => e.token.startsWith('string')).map((e) => e.text).join('')).toContain('台词;说明');
+    const after = await emitErb('PRINTL "台词" ;说明');
+    expect(after.emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';说明');
+  });
+
+  it('①c 变量段不许吞尾注释：CFLAG:ARG;说明 ⇒ variable 止于 `;`、其后 comment', async () => {
+    const { emitted } = await emitErb('CFLAG:ARG;说明');
+    expect(emitted.find((e) => e.text === 'CFLAG:ARG')?.token.startsWith('variable.')).toBe(true);
+    expect(emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';说明');
+  });
+
+  it('② 未闭合引号只染到本行行尾、下一行恢复正常；闭合串回根态（codeViewOf 逐行刷白的口径）', async () => {
+    const lexer = await erbLexer();
+    const closed = driveLine(lexer, 'PRINTL "闭合"');
+    expect(closed.stack).toEqual(['root']);
+    const open = driveLine(lexer, 'PRINTL "尾未闭合');
+    expect(open.emitted.find((e) => e.text === '尾未闭合')?.token.startsWith('string.')).toBe(true);
+    expect(open.stack, '串态绝不带过行界').toEqual(['root']);
+    const next = driveLine(lexer, 'PRINTL 正常', open.stack);
+    expect(next.emitted.some((e) => e.token.startsWith('string.'))).toBe(false);
+    expect(next.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith('keyword.')).toBe(true);
+  });
+
+  it('②b 串内 % FORM 层同样行尾出栈（嵌套态不留到下一行）', async () => {
+    const lexer = await erbLexer();
+    const open = driveLine(lexer, 'PRINTL "前段%ＦＯＲＭ');
+    expect(open.stack).toEqual(['root']);
+    const next = driveLine(lexer, 'PRINTL 正常', open.stack);
+    expect(next.emitted.some((e) => e.token.startsWith('string.'))).toBe(false);
+  });
+
+  it('③ 全角标点有确定归属（operator，非空 token）；全角 `；` 不当行尾注释（语义层只认半角 0x3B）', async () => {
+    for (const ch of ['：', '，', '。', '（', '）', '、', '；', '！', '？', '「', '」', '『', '』', '《', '》', '【', '】', '｛', '｝', '＿', '＄']) {
+      const { emitted } = await emitErb(`PRINTL 台词${ch}说明`);
+      const hit = emitted.find((e) => e.text.includes(ch));
+      expect(hit, `「${ch}」坠进空 defaultToken`).toBeDefined();
+      expect(hit!.token.startsWith('operator.'), `「${ch}」应归 operator，实发 ${hit!.token}`).toBe(true);
+      expect(emitted.some((e) => e.token.startsWith('comment.')), `全角「${ch}」不许触发注释`).toBe(false);
+    }
+  });
+
+  it('③b 全角字母数字进标识符族（反向索引 ａ-ｚ 与 MODEL_TOKEN_CLASS 的记号口径同向），不落空 token', async () => {
+    const { emitted } = await emitErb('ＲＡＮＤ １２３');
+    expect(emitted.find((e) => e.text === 'ＲＡＮＤ')?.token.startsWith('identifier.')).toBe(true);
+    expect(emitted.find((e) => e.text === '１２３')?.token.startsWith('identifier.')).toBe(true);
+  });
+
+  it('④ 行首注释口径不回退：整行仍一段 comment（首个规则吃下，不产生二次发射）', async () => {
+    const { emitted } = await emitErb('; PRINTL 台词 ; 说明');
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]!.token.startsWith('comment.')).toBe(true);
   });
 });
