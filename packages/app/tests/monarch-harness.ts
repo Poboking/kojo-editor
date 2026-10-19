@@ -144,14 +144,31 @@ function resolveAction(action: MonarchAction, matched: string, exec: RegExpExecA
 }
 
 /**
- * 根状态驱动器：把一行交给编译产物逐条规则匹配并发射 token。
- * 语义锚点：`String.match`/`exec` 在 `^(?:…)` 锚定正则上等价于"从当前 pos 起步匹配"；
- * 规则列表序 = 匹配优先序；群组逐子段、空子段免发射（monarchLexer 691-694）；逐次推进。
- * 判据行不依赖跨状态深度（未进台词 / 插值 / 围栏态的任务留给真机壳冒烟）。
+ * 驱动器**单行入口**（既有消费方逐字零改动）：从根状态起步吃一行，返回发射序列。
+ * 跨行态判据（未闭合引号行尾出栈）走 `driveLine`——真实 monarchLexer 把栈带过行界，
+ * 单进单出的 driveLexer 看不见那一层，缺口就只能永远留给"真机壳冒烟"。
  */
 export function driveLexer(lexer: CompiledLexer, line: string): Emit[] {
-  const rules = lexer.tokenizer[lexer.start ?? 'root'];
-  if (!rules) throw new Error(`Monarch def 没有根状态 ${lexer.start ?? 'root'}`);
+  return driveLine(lexer, line).emitted;
+}
+
+/** 跨行态驱动的单行结果：发射序列 + 出栈态（回传给下一行的 `stackIn` 即续行） */
+export interface LineDrive {
+  readonly emitted: Emit[];
+  readonly stack: readonly string[];
+}
+
+/**
+ * 根状态驱动器（跨行态版）：把一行交给编译产物逐条规则匹配并发射 token，栈可从上一行
+ * 带来、原样带出。语义锚点：`String.match`/`exec` 在 `^(?:…)` 锚定正则上等价于"从当前
+ * pos 起步匹配"；规则列表序 = 匹配优先序；群组逐子段、空子段免发射（monarchLexer
+ * 691-694）；逐次推进；`@popall` 退到栈底（monarchLexer 的 popall 分支）。
+ */
+export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly string[]): LineDrive {
+  const stack: string[] = stackIn && stackIn.length > 0 ? [...stackIn] : [lexer.start ?? 'root'];
+  if (!lexer.tokenizer[stack[stack.length - 1]!]) {
+    throw new Error(`Monarch def 没有根状态 ${stack[stack.length - 1]}`);
+  }
   const out: Emit[] = [];
   // Monaco 屏上真发的是 token 名 + tokenPostfix（编译器按语言 id 默认补 `.kojo-sugar`），
   // 主题规则按点分段前缀匹配 —— 驱动器同样补上，断言走完整前缀口径
@@ -160,7 +177,6 @@ export function driveLexer(lexer: CompiledLexer, line: string): Emit[] {
     for (const t of tokens) out.push({ text: t.text, token: t.token === '' ? '' : `${t.token}${lexerPostfix}` });
   };
   let pos = 0;
-  let stack: string[] = [lexer.start ?? 'root'];
   let pending: readonly Piece[] = [];
   let steps = 0;
 
@@ -213,10 +229,13 @@ export function driveLexer(lexer: CompiledLexer, line: string): Emit[] {
     if (r.next !== undefined) {
       if (r.next === '@pop') stack.pop();
       else if (r.next === '@push') stack.push(state);
-      else stack.push(r.next.startsWith('@') ? r.next.slice(1) : r.next);
+      else if (r.next === '@popall') {
+        // monarchLexer 的 popall：退到栈底（初始 root 态），行尾出栈类规则用它一次清干净嵌套态
+        while (stack.length > 1) stack.pop();
+      } else stack.push(r.next.startsWith('@') ? r.next.slice(1) : r.next);
     }
   }
-  return out;
+  return { emitted: out, stack };
 
   function executeMissing(state: string): never {
     throw new Error(`状态 ${state} 在 Monarch def 里没有规则表`);
