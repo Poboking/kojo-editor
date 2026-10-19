@@ -225,6 +225,22 @@ IF LOCAL
 	IF !(ABL:TARGET:欲望 >= 8 && ABL:TARGET:欲望 <= 12)
 		PRINTFORMW 「还不够呢。」
 	ENDIF
+	; §3.11 分支：规则池（条件即注解）——条件走与 `如果` **完全相同**的降糖管线
+	; （属性 `她的X` / 中文运算符 `且`·`超过` / 别名与常量阈值都可直接写），块体第一层是
+	; `[条件]` 标签行、标签下缩进更深的是该分支正文，产物 = 一条 IF / ELSEIF / ELSE / ENDIF 链。
+	; 本池刻意混形（`且` + 不同主语 + 中文运算符）⇒ 按规范**不排序、保持书写顺序**；
+	; `[其他]` 是兜底（与 `[否则]` / `[else]` 等价）**必须写在最末**——缺兜底 = `rule-pool-no-fallback`、
+	; 兜底不在末尾 = `rule-pool-fallback-not-last`，两者都是 error 且**该块一条字节都不产**。
+	; 英文别名 `branch:` 的等价形在「时机七 · 英文别名等价块」里另走一遍（那一池是同主语数值比较，
+	; 触发 §3.11 的自动排序：阈值从窄到宽）。
+	IF TALENT:TARGET:恋慕 && CFLAG:TARGET:好感度 >= 500
+		PRINTFORMW 「……那、那里……！」
+		PRINTFORMW 她红着脸缩了一下身子。
+	ELSEIF MARK:TARGET:反発刻印 > 1
+		PRINTFORMW 「……请不要乱摸。」
+	ELSE
+		PRINTFORMW 她只是歪了歪头，像是没发生过任何事。
+	ENDIF
 	; §3.6 选择块：单值 / 多值 / 范围 / 兜底，四形态各一个
 	SELECTCASE TFLAG:193
 		CASE 1
@@ -1119,6 +1135,20 @@ IF LOCAL
 		CASEELSE
 			GOTO INPUT_LOOP
 	ENDSELECT
+	; §3.11 英文别名块头 `branch:`（与中文 `分支：` 逐字节等价）+ 英文兜底标签 `[else]`
+	; （与 `[其他]` / `[否则]` 等价）。本池三条条件全是「同一主语 + 同一运算符 `>=` +
+	; 十进制整数字面量阈值」⇒ 恰好满足 §3.11 自动排序的全部四条，产物按**阈值从窄到宽**
+	; 发射（500 → 100 → 0），兜底恒在末尾。书写顺序刻意是宽在前——就是要在这枚长跑样例里
+	; 看到 ELSEIF 被重排，而不只在单测里。
+	IF CFLAG:TARGET:好感度 >= 500
+		PRINTFORMW 「（池·500）」
+	ELSEIF CFLAG:TARGET:好感度 >= 100
+		PRINTFORMW 「（池·100）」
+	ELSEIF CFLAG:TARGET:好感度 >= 0
+		PRINTFORMW 「（池·0）」
+	ELSE
+		PRINTFORMW 「（池·兜底）」
+	ENDIF
 ENDIF
 RETURN 1
 
