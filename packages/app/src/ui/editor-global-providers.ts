@@ -18,7 +18,7 @@
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
-import { errorText, pathKey } from '@kojo/plugin-api';
+import { errorText, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
 import type {
   EditorCodeAction,
   EditorDocumentSymbol,
@@ -1102,7 +1102,7 @@ export function ensureGlobalProviders(): void {
         if (!ctx) return [];
         const realPath = ctx.filePathRef.current;
         if (!realPath) return [];
-        const path = isSugarModel ? realPath.replace(/\.[A-Za-z0-9]+$/, '.kojo') : realPath;
+        const path = isSugarModel ? realPath.replace(/\.[A-Za-z0-9]+$/, KOJO_SOURCE_EXTENSION) : realPath;
         const lineCount = model.getLineCount();
         if (!shouldComputeSemanticTokens(lineCount)) return [];
         return collectSemanticTokenSpans(requireKernel().slots.query('ui.editor.languageService'), {

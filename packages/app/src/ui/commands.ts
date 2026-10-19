@@ -7,7 +7,7 @@
  */
 
 import type { EditorCommandContext, EditorCommandContribution } from '@kojo/plugin-api';
-import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
+import { ERB_DIALECT_EXTENSIONS, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 
 /** 归一化后的按键描述 */
 export interface KeyChord {
@@ -159,13 +159,6 @@ export function mergeCandidatePaths(groups: readonly (readonly string[])[]): str
   }
   return [...seen].sort();
 }
-
-/**
- * 表层 DSL（`.kojo`）源文件后缀。宿主级**编辑器事实**：同一字面量在
- * `monaco/kojo-language.ts` 注册语言时写了一次（那份是 Monaco 的注册形状，
- * 不是一份可读清单），这里要的是"哪些后缀算源文件"，故显式声明并挂进下面的清单。
- */
-export const KOJO_SOURCE_EXTENSION = '.kojo';
 
 /**
  * 快速打开认得的**源文件**后缀：ERB 方言全集（契约 `ERB_DIALECT_EXTENSIONS`）

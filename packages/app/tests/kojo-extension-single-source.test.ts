@@ -147,15 +147,11 @@ describe('② 全仓守门：`.kojo` 的大小写清单只由契约那一份派�
     expect(hits).toEqual([]);
   });
 
-  it('小写形态的既有抄本钉死为既有三处（新增一处即红；谁收掉一处也要跟着改这里）', () => {
+  it('app 侧手写的 `.kojo` 字面量 = 0 处（DRIFT-APP 立闸时先钉三处既有抄本，本批收干净后压到零；新增一处即红）', () => {
     const withLiteral = appSourceFiles()
       .filter((rel) => KOJO_EXT_LITERAL.test(readFileSync(path.join(ROOT, rel), 'utf8')))
       .sort();
-    expect(withLiteral).toEqual([
-      'packages/app/src/ui/commands.ts',
-      'packages/app/src/ui/drag-drop.ts',
-      'packages/app/src/ui/editor-global-providers.ts',
-    ]);
+    expect(withLiteral).toEqual([]);
   });
 
   it('两处注册面同形态：ERB 与 kojo 都调契约派生函数，没有一处自己列大小写', () => {
