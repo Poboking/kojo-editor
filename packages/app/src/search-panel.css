@@ -65,8 +65,10 @@
   min-width: 0;
 }
 
-/* 图标小钮（替换 chevron）：静息无框，hover / 键盘焦点才有面 */
+/* 图标小钮（替换 chevron）：静息无框，hover / 键盘焦点才有面。
+   P3-2 命中区：视觉 22×22 不动，热区由文末 `::before` 段扩到 24×24（WCAG 2.5.8）。 */
 .panel-search.ksp .ksp-icon-btn {
+  position: relative;
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -116,7 +118,9 @@
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
-  min-height: 22px;
+  /* P3-2 命中区：井内净高恰为 24（井 26 − 两条 1px 边），22→24 撑满井口不涨行高，
+     观感零变化，可点高度补到 WCAG 2.5.8 的 24px 门槛 */
+  min-height: 24px;
   padding: 0;
   border: none;
   border-radius: 0;
@@ -142,6 +146,8 @@
   gap: 1px;
 }
 .panel-search.ksp .ksp-toggle {
+  /* P3-2 命中区：视觉 20px 见方不动，热区由文末 `::before` 段扩到 ≥24×24 */
+  position: relative;
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -244,6 +250,8 @@
   min-width: 0;
 }
 .panel-search.ksp .ksp-options-toggle {
+  /* P3-2 命中区：热区由文末 `::before` 段纵向扩到 24px（整行宽度本就够） */
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -323,8 +331,8 @@
 .panel-search.ksp .ksp-opt-select {
   flex: 1 1 auto;
   min-width: 0;
-  height: 22px;
-  min-height: 22px;
+  /* P3-2 命中区：22→24 补到 WCAG 2.5.8 最小目标（行只涨 2px，其余口径不变） */
+  min-height: 24px;
   padding: 0 5px;
   background: var(--surface-sunken);
   color: var(--fg);
@@ -516,7 +524,9 @@
 }
 /* 文件头 = 折叠开关（真 button，键盘可达；aria-expanded 见组件） */
 .panel-search.ksp .search-file {
-  position: static; /* 旧规则把它钉在滚动口顶部，会与 sticky 控制区打架 */
+  /* 旧规则把它钉在滚动口顶部，会与 sticky 控制区打架；P3-2 起 relative 同样豁免 sticky，
+     并为文末 `::before` 热区段做定位锚（纵向扩到 24px，整行宽度本就够） */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -646,6 +656,8 @@
 }
 
 .panel-search.ksp .ksp-row-replace {
+  /* P3-2 命中区：18px 视觉行高不动，热区由文末 `::before` 段扩到 24px */
+  position: relative;
   flex: none;
   width: 32px;
   align-self: center;
@@ -724,4 +736,50 @@
   min-width: 0;
   font-size: var(--fs-0);
   overflow-wrap: anywhere;
+}
+
+/* ============================================================================
+   P3-2 · 命中区补齐 ≥24×24（WCAG 2.5.8 最小目标；2026-10 可点性审计批）
+
+   小控件（toggle 20 见方、chevron 钮 22 见方、单条替换钮 18 高、选项行钮 20 高、
+   文件头钮 22 高）实测可点面低于 24px。这里**不动任何视觉尺寸**：各钮本体保持
+   原盒，靠一层透明的 `::before` 绝对定位热区向外扩边（锚 = 各钮自己新增的
+   `position: relative`）。热区跟着按钮的 hover/active/禁用态走——它就是一个
+   伪元素，不画颜色、不带过渡，三主题与 reduced-motion 自然无涉。
+   `min-width: 24px` 一类直接改盒的规则不在这里（输入井/选项行的 22→24 写在
+   各自原规则里，井内净高恰好容得下，行高零变化）。
+   ============================================================================ */
+
+.panel-search.ksp .ksp-icon-btn::before,
+.panel-search.ksp .ksp-toggle::before,
+.panel-search.ksp .ksp-options-toggle::before,
+.panel-search.ksp .ksp-row-replace::before,
+.panel-search.ksp .search-file::before {
+  content: '';
+  position: absolute;
+  /* 透明热区：只扩大命中测试，不参与绘制（无背景/边框 ⇒ 观感零变化） */
+  background: transparent;
+}
+
+/* 22 见方 → 24：向四周各扩 1px 已够，且不会碰到 1px 邻距的输入井 */
+.panel-search.ksp .ksp-icon-btn::before {
+  inset: -1px;
+}
+/* 20 见方 → 24：框内 toggle（含 SearchFilterBar 的「保留大小写」，同挂 .ksp-toggle）；
+   相邻两钮之间热区有约 1px 交叠，边界按 DOM 序取后画者——都落在对方可见盒的 1px 边缘内，
+   正常瞄准钮面中心不受影响 */
+.panel-search.ksp .ksp-toggle::before {
+  inset: -2px;
+}
+/* 整行宽的折叠钮：横向已是热区，纵向 20 → 24 */
+.panel-search.ksp .ksp-options-toggle::before {
+  inset: -2px 0;
+}
+/* 单条替换钮：18 高 → 24，横向 32px 不动；热区仍限于本行上下各 3px */
+.panel-search.ksp .ksp-row-replace::before {
+  inset: -3px 0;
+}
+/* 文件头钮：整行宽，纵向 22 → 24（上下各 1px，落在分组间隙内） */
+.panel-search.ksp .search-file::before {
+  inset: -1px 0;
 }
