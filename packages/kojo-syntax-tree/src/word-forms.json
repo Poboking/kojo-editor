@@ -1,0 +1,335 @@
+{
+  "schema": 1,
+  "note": "生成文件，禁手改——由 packages/kojo-syntax-tree/tools/gen-word-forms.mjs 从 kojo-sugar 词表真源投影；重生成走本包 build 链。",
+  "sources": [
+    "packages/plugins/kojo-sugar/src/keywords.ts",
+    "packages/plugins/kojo-sugar/src/statement-functions.ts"
+  ],
+  "wordsById": {
+    "head.char": [
+      "char",
+      "角色"
+    ],
+    "head.family": [
+      "family",
+      "口上"
+    ],
+    "head.title": [
+      "title",
+      "显示名"
+    ],
+    "head.desc": [
+      "desc",
+      "简介"
+    ],
+    "head.color": [
+      "color",
+      "口上色"
+    ],
+    "head.playerColor": [
+      "player-color",
+      "自机色"
+    ],
+    "head.narrationColor": [
+      "narration-color",
+      "旁白色"
+    ],
+    "head.switch": [
+      "switch",
+      "开关"
+    ],
+    "head.alias": [
+      "alias",
+      "别名"
+    ],
+    "head.const": [
+      "const",
+      "常量"
+    ],
+    "head.functionPrefix": [
+      "function-prefix",
+      "函数前缀"
+    ],
+    "head.randomShape": [
+      "随机形"
+    ],
+    "head.randomShapeValue": [
+      "直出"
+    ],
+    "head.selector": [
+      "选择器"
+    ],
+    "block.timing": [
+      "timing",
+      "时机"
+    ],
+    "block.if": [
+      "if",
+      "如果"
+    ],
+    "block.elif": [
+      "elif",
+      "elseif",
+      "否则如果"
+    ],
+    "block.else": [
+      "else",
+      "否则"
+    ],
+    "block.when": [
+      "when",
+      "当"
+    ],
+    "block.is": [
+      "is",
+      "是"
+    ],
+    "block.random": [
+      "random",
+      "随机"
+    ],
+    "block.group": [
+      "group",
+      "组"
+    ],
+    "block.branch": [
+      "branch",
+      "分支"
+    ],
+    "block.section": [
+      "若"
+    ],
+    "block.choice": [
+      "choice",
+      "选项"
+    ],
+    "block.menu": [
+      "menu",
+      "菜单"
+    ],
+    "block.color": [
+      "着色"
+    ],
+    "block.customCommand": [
+      "自定指令"
+    ],
+    "block.function": [
+      "function",
+      "函数"
+    ],
+    "block.once": [
+      "初回"
+    ],
+    "block.loop": [
+      "循环"
+    ],
+    "block.loopEnd": [
+      "循环结束"
+    ],
+    "block.catch": [
+      "出错处理"
+    ],
+    "block.catchEnd": [
+      "出错处理结束"
+    ],
+    "block.dataTable": [
+      "数据表"
+    ],
+    "block.dataTableEnd": [
+      "数据表结束"
+    ],
+    "block.askM": [
+      "ask",
+      "询问"
+    ],
+    "block.askYN": [
+      "confirm",
+      "确认"
+    ],
+    "inline.cont": [
+      "cont",
+      "continue",
+      "续"
+    ],
+    "inline.heart": [
+      "heart",
+      "心形"
+    ],
+    "inline.blank": [
+      "blank",
+      "空行"
+    ],
+    "inline.wait": [
+      "等待"
+    ],
+    "inline.to": [
+      "to",
+      "到"
+    ],
+    "inline.call": [
+      "call",
+      "调用"
+    ],
+    "inline.return": [
+      "return",
+      "返回"
+    ],
+    "inline.hideScene": [
+      "skip-scene",
+      "隐藏情景"
+    ],
+    "inline.hideKojo": [
+      "skip-kojo",
+      "隐藏口上"
+    ],
+    "inline.settle": [
+      "settle",
+      "结算"
+    ],
+    "inline.mutator": [
+      "adjust",
+      "增减"
+    ],
+    "inline.then": [
+      "then",
+      "则"
+    ],
+    "inline.loopCount": [
+      "计数"
+    ],
+    "inline.loopTimes": [
+      "次"
+    ],
+    "inline.loopForever": [
+      "无限"
+    ],
+    "inline.loopFrom": [
+      "从"
+    ],
+    "inline.loopStride": [
+      "步长"
+    ],
+    "inline.loopStep": [
+      "步进"
+    ],
+    "inline.plus": [
+      "加"
+    ],
+    "inline.minus": [
+      "减"
+    ],
+    "inline.jump": [
+      "跳到"
+    ],
+    "inline.functionJump": [
+      "函数跳转"
+    ],
+    "inline.label": [
+      "标签"
+    ],
+    "inline.breakLoop": [
+      "跳出循环"
+    ],
+    "inline.continueLoop": [
+      "跳过本轮"
+    ],
+    "inline.restartLoop": [
+      "重跑本轮"
+    ],
+    "inline.dataEntry": [
+      "条目"
+    ],
+    "inline.engineEcho": [
+      "原形"
+    ]
+  },
+  "primaryById": {
+    "head.char": "角色",
+    "head.family": "口上",
+    "head.title": "显示名",
+    "head.desc": "简介",
+    "head.color": "口上色",
+    "head.playerColor": "自机色",
+    "head.narrationColor": "旁白色",
+    "head.switch": "开关",
+    "head.alias": "别名",
+    "head.const": "常量",
+    "head.functionPrefix": "函数前缀",
+    "head.randomShape": "随机形",
+    "head.randomShapeValue": "直出",
+    "head.selector": "选择器",
+    "block.timing": "时机",
+    "block.if": "如果",
+    "block.elif": "否则如果",
+    "block.else": "否则",
+    "block.when": "当",
+    "block.is": "是",
+    "block.random": "随机",
+    "block.group": "组",
+    "block.branch": "分支",
+    "block.section": "若",
+    "block.choice": "选项",
+    "block.menu": "菜单",
+    "block.color": "着色",
+    "block.customCommand": "自定指令",
+    "block.function": "函数",
+    "block.once": "初回",
+    "block.loop": "循环",
+    "block.loopEnd": "循环结束",
+    "block.catch": "出错处理",
+    "block.catchEnd": "出错处理结束",
+    "block.dataTable": "数据表",
+    "block.dataTableEnd": "数据表结束",
+    "block.askM": "询问",
+    "block.askYN": "确认",
+    "inline.cont": "续",
+    "inline.heart": "心形",
+    "inline.blank": "空行",
+    "inline.wait": "等待",
+    "inline.to": "到",
+    "inline.call": "调用",
+    "inline.return": "返回",
+    "inline.hideScene": "隐藏情景",
+    "inline.hideKojo": "隐藏口上",
+    "inline.settle": "结算",
+    "inline.mutator": "增减",
+    "inline.then": "则",
+    "inline.loopCount": "计数",
+    "inline.loopTimes": "次",
+    "inline.loopForever": "无限",
+    "inline.loopFrom": "从",
+    "inline.loopStride": "步长",
+    "inline.loopStep": "步进",
+    "inline.plus": "加",
+    "inline.minus": "减",
+    "inline.jump": "跳到",
+    "inline.functionJump": "函数跳转",
+    "inline.label": "标签",
+    "inline.breakLoop": "跳出循环",
+    "inline.continueLoop": "跳过本轮",
+    "inline.restartLoop": "重跑本轮",
+    "inline.dataEntry": "条目",
+    "inline.engineEcho": "原形"
+  },
+  "endWordOfId": {
+    "block.loop": "循环结束",
+    "block.catch": "出错处理结束",
+    "block.dataTable": "数据表结束"
+  },
+  "headDeclIds": [
+    "head.char",
+    "head.family",
+    "head.title",
+    "head.desc",
+    "head.color",
+    "head.playerColor",
+    "head.narrationColor",
+    "head.switch",
+    "head.functionPrefix"
+  ],
+  "statementWords": [
+    "反转标记",
+    "清除标记",
+    "设置标记"
+  ]
+}

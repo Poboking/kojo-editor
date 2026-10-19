@@ -11,9 +11,10 @@
     "./wasm": "./tree-sitter-kojo.wasm"
   },
   "scripts": {
+    "gen-word-forms": "node tools/gen-word-forms.mjs",
     "parser": "tree-sitter generate grammar.js",
     "wasm": "tree-sitter build --wasm -o tree-sitter-kojo.wasm",
-    "build": "npm run parser && npm run wasm"
+    "build": "npm run gen-word-forms && npm run parser && npm run wasm"
   },
   "dependencies": {
     "web-tree-sitter": "^0.27.1"

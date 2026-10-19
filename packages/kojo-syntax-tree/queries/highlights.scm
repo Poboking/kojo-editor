@@ -2,8 +2,17 @@
 ; 词表全部为语言词（零游戏名词）。节点即整行，捕获给整行上色；档位名对齐 tree-sitter 官方
 ; highlight 命名约定（@keyword.* / @string / @comment / @function / @type / @label / @number …），
 ; 便于宿主侧一套 token 色板同时吃 tree-sitter 与 Monarch 两路。
+;
+; **本波刻意不给 `(native_string)` / `(comment_inline)` 加捕获**——两枚节点在 CST 里已经产出
+; （真实语料实测 native_string 711 枚 / comment_inline 10 枚，供语法错误诊断与后续着色分层取用），
+; 但一旦进高亮就把与 Monarch 的逐格 A/B 打穿（同一 19 文件 / `packages/app/tests/
+; kojo-ts-vs-monarch-ab.test.ts` 实测：两支都加 = 96.70%，只加 native_string = 99.34%，
+; 两支都不加 = 99.58% = 第一波基线）。掉点的成因是宿主档位表把 `@string` 映到 `sugar.speech`、
+; `@comment` 映到 `comment`，于是原生串里的 `@"…"` 与行尾注释在两侧各归各层——那是**档位表**的口径问题，
+; 不该由语法层在高亮查询里单方面解决。归口给词表/档位线（TSIT2-B 与其后续）。
 
-; ---- 注释 ----
+
+; ---- 注释：整行注释 与 结构化行的行尾注释（后者是本行节点的子节点，不夺本行分型）----
 (comment_line) @comment
 
 ; ---- 台词 / 插值 / 原生字符串 ----
