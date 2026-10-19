@@ -938,10 +938,16 @@ async function main() {
     console.log(`[feat][读数] 打开编辑器后资源数 total=${resEditor.total} · 含 monaco 的请求=${resEditor.monaco}`);
 
     /* 4) 关闭项目（别把合成项目留在会话里） */
-    const closeClick = await cdp.evalJs(`(() => {
-      const b = [...document.querySelectorAll('.toolbar button')].find((e) => e.textContent.includes('关闭项目'));
-      if (b) { b.click(); return 'closed-click'; }
-      return 'no-close-button';
+    // C-1a 起「关闭项目」收进项目名旁「更多」⋯ 菜单（共享 ContextMenu）：先点触发器，
+    // 等一帧渲染出菜单项，再点 role=menuitem 的「关闭项目」。
+    const closeClick = await cdp.evalJs(`(async () => {
+      const trigger = document.querySelector('.toolbar button[title="项目操作（关闭项目）"]');
+      if (!trigger) return 'no-menu-trigger';
+      trigger.click();
+      await new Promise((r) => setTimeout(r, 200));
+      const item = [...document.querySelectorAll('button[role="menuitem"]')].find((e) => e.textContent.includes('关闭项目'));
+      if (!item) return 'no-close-menuitem';
+      item.click(); return 'closed-click';
     })()`);
     if (closeClick === 'closed-click') await tryWaitFor(cdp, `!!document.querySelector('.welcome')`, 15000);
     console.log(`[feat] 关闭项目：${closeClick}`);

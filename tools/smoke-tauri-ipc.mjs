@@ -759,12 +759,17 @@ async function main() {
     else F('e', 'appDataDir 写正常', `invoke=${JSON.stringify(eResult)} onDisk=${eOnDisk}`);
 
     /* -------- d) 关闭项目后再写游戏目录 → 被拒 -------- */
-    // ⚠ 「关闭项目」在 UI 重设计后从项目头搬到**工具栏右区**（`.toolbar`），
-    //   且这里必须**断言点到了**：静默 no-op 会让本项在没有关闭动作的情况下"通过"。
-    const closeClick = await cdp.evalJs(`(() => {
-      const b = [...document.querySelectorAll('.toolbar button')].find(e=>e.textContent.includes('关闭项目'));
-      if (b) { b.click(); return 'closed-click'; }
-      return 'no-close-button';
+    // ⚠ C-1a 起「关闭项目」从工具栏右区收进项目名旁「更多」⋯ 菜单（共享 ContextMenu）：
+    //   先点触发器、等一帧渲染出菜单项，再点 role=menuitem 的「关闭项目」。
+    //   这里必须**断言点到了**：静默 no-op 会让本项在没有关闭动作的情况下"通过"。
+    const closeClick = await cdp.evalJs(`(async () => {
+      const trigger = document.querySelector('.toolbar button[title="项目操作（关闭项目）"]');
+      if (!trigger) return 'no-menu-trigger';
+      trigger.click();
+      await new Promise((r) => setTimeout(r, 200));
+      const item = [...document.querySelectorAll('button[role="menuitem"]')].find(e=>e.textContent.includes('关闭项目'));
+      if (!item) return 'no-close-menuitem';
+      item.click(); return 'closed-click';
     })()`);
     if (closeClick !== 'closed-click') throw new Error(`close-project click failed: ${closeClick}`);
     await waitFor(cdp, `!!document.querySelector('.welcome')`, 30000);
