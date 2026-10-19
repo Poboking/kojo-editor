@@ -720,15 +720,32 @@ export function liftProject(deps: LiftDeps, request: SugarProjectRequest): Sugar
           // ——那才是可写形的真实声明（`口上:` 的取值规则见规范 §3.1）。只发一次；
           // 源文本里已有 `口上:` 声明时一个都不发（不重复）。选择器（有则）随行带出。
           const family = headIndex.family(fnName);
-          const withHeader =
+          const decl =
             family !== undefined && !familyHeaderEmitted && !sourceDeclaresFamily
-              ? ((familyHeaderEmitted = true),
-                `口上: ${family}${pendingSelector !== undefined ? ` 选择器: ${pendingSelector}` : ''}\n${label}`)
-              : label;
+              ? `口上: ${family}${pendingSelector !== undefined ? ` 选择器: ${pendingSelector}` : ''}`
+              : undefined;
+          if (decl === undefined) {
+            recs.push({
+              line: ln,
+              kind: 'control',
+              text: label,
+              indent: ctx.indentAt(ln, raw),
+              visible: true,
+              reason: null,
+            });
+            continue;
+          }
+          familyHeaderEmitted = true;
+          // 这条记录**一行源出两行糖**，故必须逐行点名源行（契约 `sourceLines` 的分叉起点就在这）。
+          // 两行都回指 `ln`，理由不是"懒得区分"：`口上: <家族名>` 的家族名与选择器是从**这一行**
+          // 登记名 `@…` 里解出来的（`headIndex.family` / `headIndex.selector` 只吃 `fnName`），
+          // 源文件里那一行确实存在、也确实是被读的那一行——指别的行（0 或邻行）才是撒谎。
+          // 于是预览里点这两行中的任意一行都落在同一个 `@` 头，语义正确（块头与其署名同源）。
           recs.push({
             line: ln,
             kind: 'control',
-            text: withHeader,
+            text: `${decl}\n${label}`,
+            lineSources: [ln, ln],
             indent: ctx.indentAt(ln, raw),
             visible: true,
             reason: null,
@@ -838,6 +855,15 @@ interface LineRec {
   /** 是否产出可见行 */
   visible: boolean;
   reason: SugarProjectNativeReason | null;
+  /**
+   * `text` 逐行各自的源行号（1 基；`0` = 该行没有源行可回指）。
+   *
+   * 只在**一条记录产出多行糖文本**时必须给（当前产线仅一处：E13-1② 的函数头 =
+   * 合成 `口上:` 声明 + 块头标签两行）。省略 = 该记录只产出一行，映射即 `line` 自身
+   * （段里绝大多数记录走这条）。`toSegment` 据此产契约的 `sourceLines`，
+   * 行数尺子与 `lineCount` 共用 `recLineCount`。
+   */
+  readonly lineSources?: readonly number[];
 }
 
 /**
@@ -1110,6 +1136,11 @@ function toSegment(run: LineRec[], nativeOnly: boolean): SugarProjectSegment {
   const text = visible
     .map((r) => '\t'.repeat(Math.max(0, r.indent - baseIndent)) + r.text)
     .join('\n');
+  // 糖行 ↔ 源行的逐行对账：与 `text` **同一次遍历**产出，二者行数天生相等
+  // （尺子只有一把 = `recLineCount`）。隐身记录（`ENDIF` / 被吸收的信封）在这里
+  // 根本不产生条目 ⇒ 段区间里的源行可以比糖行多，但每一行糖都知道自己来自哪一行。
+  const sourceLines: number[] = [];
+  for (const r of visible) recSourceLines(r).forEach((ln) => sourceLines.push(ln));
   const segment: SugarProjectSegment = {
     fromLine: run[0]!.line,
     toLine: run[run.length - 1]!.line,
@@ -1117,10 +1148,41 @@ function toSegment(run: LineRec[], nativeOnly: boolean): SugarProjectSegment {
     // 行数按**实际产出的行**数（`sugarText` 的行数）：一条记录可能带多行文本
     // （E13-1② 的函数头记录 = `口上: <家族名>` + `时机 …：` 两行），
     // 直接数记录条数会让宿主的 ViewZone 高度少一行。
-    lineCount: visible.reduce((n, r) => n + (r.text.length === 0 ? 1 : r.text.split('\n').length), 0),
+    lineCount: sourceLines.length,
+    sourceLines,
   };
   if (nativeOnly) segment.nativeOnly = true;
   return segment;
+}
+
+/** 一条记录产出的糖行数（`lineCount` 与 `sourceLines` **共用的唯一尺子**） */
+function recLineCount(r: LineRec): number {
+  return r.text.length === 0 ? 1 : r.text.split('\n').length;
+}
+
+/**
+ * 一条记录 → 它每一行糖文本各自回指的源行号（1 基；`0` = 无源行可回指）。
+ *
+ * 三种情形，按"宁缺毋造"排序：
+ * 1. 记录自带 `lineSources` 且长度对得上 ⇒ 原样用它（产线里唯一的多行记录：E13-1② 函数头）；
+ * 2. 单行记录 ⇒ 就是 `r.line`（段里绝大多数记录走这条）；
+ * 3. 多行记录**却没给**映射 ⇒ 只承认首行来自 `r.line`，其余记 `0`。长度不合的映射同理截断
+ *    /补 `0`。这里绝不拿 `fromLine + k` 之类的区间算术去"猜"一个源行——猜出来的错位在
+ *    预览上不可见，正是本字段要消灭的那类 bug。
+ */
+function recSourceLines(r: LineRec): readonly number[] {
+  const n = recLineCount(r);
+  const given = r.lineSources;
+  if (given !== undefined) {
+    if (given.length === n) return given;
+    const fixed: number[] = [];
+    for (let k = 0; k < n; k++) fixed.push(k < given.length ? given[k]! : 0);
+    return fixed;
+  }
+  if (n <= 1) return [r.line];
+  const fixed: number[] = [r.line];
+  for (let k = 1; k < n; k++) fixed.push(0);
+  return fixed;
 }
 
 /* ============================== 函数骨架合并 ============================== */

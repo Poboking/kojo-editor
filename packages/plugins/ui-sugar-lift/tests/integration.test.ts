@@ -272,6 +272,29 @@ describe('`.erb` / 整文件糖视图供给（只用于看，零写盘）', () =
     expect(items[1]!.nativeOnly).toBe(true);
   });
 
+  it('段内糖行 ↔ 源行号映射**逐字透传**（宿主定位只认这一张表）', () => {
+    const k = boot({ [ERB_PATH]: enc(ERB_FULL) });
+    const items = previewsOf(k)[0]!.provideLiftProject!({
+      path: ERB_PATH,
+      text: ERB_FULL,
+      project: null,
+    });
+    // 源 5 行 → 糖 4 行：`ENDIF`（源第 5 行）被收束吸收、不产糖行，其后无行可顺延——
+    // 若宿主按 `fromLine + k` 自己算，第 4 行糖会指回 `ENDIF` 那一行（预览里跳错且不报错）。
+    expect([...items[0]!.sourceLines!]).toEqual([1, 2, 3, 4]);
+    expect(items[0]!.sourceLines!.length).toBe(items[0]!.sugarText.split('\n').length);
+    // 兜底段同样带映射（`@FUNC` / `#DIM` 各自回指自己那一行）
+    expect([...items[1]!.sourceLines!]).toEqual([6, 7]);
+  });
+
+  it('一行源出两行糖（函数头合成 `口上:` 署名行）：两行都点名同一个源行，透传不改写', () => {
+    const src = ['@M_KOJO_少女之梦_EVENT_K1_2', 'PRINTFORMW 甲'].join('\n');
+    const k = boot({ [ERB_PATH]: enc(src) });
+    const items = previewsOf(k)[0]!.provideLiftProject!({ path: ERB_PATH, text: src, project: null });
+    expect(items[0]!.sugarText.split('\n')).toEqual(['口上: 少女之梦', '时机 事件 2：', '\t甲']);
+    expect([...items[0]!.sourceLines!]).toEqual([1, 1, 2]);
+  });
+
   it('`.kojo` 不供给投影（它本身就是糖）', () => {
     const k = boot({ [KOJO_PATH]: enc(KOJO) });
     expect(previewsOf(k)[0]!.provideLiftProject!({ path: KOJO_PATH, text: KOJO, project: null })).toEqual(

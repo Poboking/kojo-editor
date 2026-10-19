@@ -70,6 +70,9 @@ describe('已知结构 · SKIP 停用区（1:1 占位，不盖兜底）', () => 
     ]);
     const skip = r.segments[0]!;
     expectOneToOne(skip);
+    // 1:1 段的行映射就是逐行连续（这一条与上面的行数是同一件事的两面：文本对齐了、
+    // 映射还必须指对，否则宿主跳回源文件会指到隔壁行——见 `project-source-lines.test.ts`）
+    expect([...skip.sourceLines!]).toEqual([1, 2, 3, 4, 5]);
     expect(segLines(skip)).toEqual([
       '停用区（引擎不执行）',
       ';停用区注释',

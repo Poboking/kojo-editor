@@ -257,6 +257,14 @@ export interface EditorLiftPreviewItem {
    * 一位区分，缺省 = 真糖段（旧消费方零改动）。
    */
   readonly nativeOnly?: boolean;
+  /**
+   * 段内每一行糖文本对应的**源行号**（1 基；additive，契约口径住 `SugarProjectSegment.sourceLines`）。
+   *
+   * `sourceLines[k]` ↔ `sugarText.split('\n')[k]`，长度必须等于糖行数；没有源行的行（纯收束/装饰）
+   * 填 0。宿主只有拿到它才能在预览面上把"点的那一行"换算回源文件的行——糖段是 N 源行 ⇄ M 糖行，
+   * 第一段多行糖一出现，预览行号就和源行号分叉；缺这一位时宿主按 `min(fromLine + k, toLine)` 退化。
+   */
+  readonly sourceLines?: readonly number[];
 }
 
 export interface EditorLiftPreviewContribution extends ContributionBase {

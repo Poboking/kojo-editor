@@ -72,6 +72,11 @@ export function createUiSugarLiftPlugin(): Plugin {
           title: s.fromLine === s.toLine ? `第 ${s.fromLine} 行` : `第 ${s.fromLine}–${s.toLine} 行`,
           reason: '.kojo 投影：只读显示，不改动原文件',
           nativeOnly: s.nativeOnly, // 兜底段标记原样透传（additive；真糖段 = undefined）
+          // 段内糖行 ↔ 源行号的映射**逐字透传**，不在这里重算也不在这里补默认值：
+          // 投影侧（`kojo-sugar/project.ts` 的 `toSegment`）是唯一尺子，宿主按 `sugarText` 剪
+          // 首尾空行时要用同一张表剪映射（`sugar-view.ts` 的 `trimSegmentBlanksWithMap`）；
+          // 这里一旦"替它算一个"，两处就会各自分叉且错得静默。
+          sourceLines: s.sourceLines,
         }));
       };
 

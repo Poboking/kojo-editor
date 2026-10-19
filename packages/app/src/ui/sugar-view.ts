@@ -114,6 +114,53 @@ export function trimSegmentBlanks(sugarText: string): string {
 }
 
 /**
+ * 与 `trimSegmentBlanks` **同一次剪**行文本与行映射。
+ *
+ * 必须成对：剪掉两行段首空行却留着映射表，预览行号就整体错位——而错位是静默的
+ * （跳到隔壁那一行也是"跳了"）。没有映射表时退化成 `trimSegmentBlanks` 的结果。
+ */
+export function trimSegmentBlanksWithMap(
+  sugarText: string,
+  sourceLines: readonly number[] | undefined,
+): { sugarText: string; sourceLines?: number[] } {
+  const lines = sugarText.split('\n');
+  if (sourceLines === undefined || sourceLines.length !== lines.length) {
+    return { sugarText: trimSegmentBlanks(sugarText) };
+  }
+  let from = 0;
+  let to = lines.length;
+  while (from < to && lines[from]!.trim() === '') from++;
+  while (to > from && lines[to - 1]!.trim() === '') to--;
+  if (from >= to) return { sugarText, sourceLines: [...sourceLines] }; // 全空段原样返回
+  return { sugarText: lines.slice(from, to).join('\n'), sourceLines: sourceLines.slice(from, to) };
+}
+
+/** 拼装输入：投影段（外部数据，形状由契约 `SugarProjectSegment` 收窄而来） */
+export interface SugarSegmentInput {
+  readonly fromLine: number;
+  readonly toLine: number;
+  readonly sugarText: string;
+  /**
+   * 段内第 k 行（0 基）糖文本对应的**源行号**（1 基）；`0` = 这一行没有源行（纯收束/装饰）。
+   * 缺省时按 `min(fromLine + k, toLine)` 退化——宁可指回段首，也不给一个不存在的行号。
+   */
+  readonly sourceLines?: readonly number[];
+}
+
+/** 拼装箱：糖文本 + 「预览行 → 源行」的行映射 */
+export interface SugarDoc {
+  readonly text: string;
+  /**
+   * `lineMap[i]` = 预览第 `i + 1` 行对应的源行号（1 基），`0` = 无源行。
+   *
+   * 为什么必须与 `text` 同批产出：糖段是 N 源行 ⇄ M 糖行，第一段多行糖一出现，预览行号就
+   * 与源行号分叉。预览面上的定位（点行、F12、错误跳转）只有拿这张表才回得到源文件；
+   * 让每个消费方各自 `split('\n')` 重算行数，就是第二次分叉的开始。
+   */
+  readonly lineMap: readonly number[];
+}
+
+/**
  * 把投影出的糖段**拼进整份文档**：逐行 1..N 走，第 i 行落在某糖段区间内 → 输出该段的
  * `sugarText`（整段文本按 `\n` 拆成多行一并输出），并跳到 `toLine + 1`；否则输出第 i 行原文。
  *
@@ -127,15 +174,16 @@ export function trimSegmentBlanks(sugarText: string): string {
  * - **夹取**：部分越界的段夹到 `[1, N]`（如 `fromLine 0` → 1），不报错；
  * - **重叠**：以**先到者优先**——已被前一段覆盖到的后到段整段丢弃（投影正常不产生重叠，
  *   这条只是防"下游意外重叠"时既不崩、也不重复铺内容）；
- * - 本函数**不做首尾空行修剪**（那是 `trimSegmentBlanks` 的职责，留在调用点做）。
+ * - 本函数**不做首尾空行修剪**（那是 `trimSegmentBlanks` 的职责，留在调用点做）；
+ * - `sourceLines` 长度与糖行数不等时按缺省处理（外部数据不许假定它算准了）。
  */
 export function composeSugarDoc(
   originalLines: string[],
-  segments: { fromLine: number; toLine: number; sugarText: string }[],
-): string {
+  segments: readonly SugarSegmentInput[],
+): SugarDoc {
   const n = originalLines.length;
   // 归一：排序 → 丢弃反向/完全越界 → 夹取到 [1, N] → 丢弃与前段重叠者（先到者优先）
-  const applied: { fromLine: number; toLine: number; sugarText: string }[] = [];
+  const applied: SugarSegmentInput[] = [];
   let coveredTo = 0; // 已被糖覆盖到的最大原文行（0 = 尚未覆盖）
   for (const seg of [...segments].sort((a, b) => a.fromLine - b.fromLine)) {
     if (!Number.isFinite(seg.fromLine) || !Number.isFinite(seg.toLine)) continue;
@@ -143,24 +191,59 @@ export function composeSugarDoc(
     const from = Math.max(1, Math.trunc(seg.fromLine));
     const to = Math.min(n, Math.trunc(seg.toLine));
     if (from > to) continue; // 完全落在 [1, N] 之外：丢弃
-    if (from <= coveredTo) continue; // 重叠：先到者优先，后到者整段丢弃
-    applied.push({ fromLine: from, toLine: to, sugarText: seg.sugarText });
+    if (from <= coveredTo) continue; // 重叠：先到者优先，后到段整段丢弃
+    applied.push({ ...seg, fromLine: from, toLine: to });
     coveredTo = to;
   }
   // 逐行拼装：落在某个已应用段内 → 输出整段糖文本并跳过被覆盖的原文行
   const out: string[] = [];
+  const lineMap: number[] = [];
   let ai = 0;
   for (let i = 1; i <= n; i++) {
     const seg = ai < applied.length ? applied[ai] : undefined;
     if (seg && seg.fromLine <= i && i <= seg.toLine) {
-      for (const l of seg.sugarText.split('\n')) out.push(l);
+      const sugarLines = seg.sugarText.split('\n');
+      const declared = seg.sourceLines;
+      const usable = declared !== undefined && declared.length === sugarLines.length;
+      for (let k = 0; k < sugarLines.length; k++) {
+        out.push(sugarLines[k]!);
+        lineMap.push(usable ? declared![k]! : Math.min(seg.fromLine + k, seg.toLine));
+      }
       i = seg.toLine; // 跳过整段覆盖的原文行（循环末尾 i++ → toLine + 1）
       ai++;
     } else {
       out.push(originalLines[i - 1] ?? '');
+      lineMap.push(i); // 透传行：预览这一行就是源的那一行
     }
   }
-  return out.join('\n');
+  return { text: out.join('\n'), lineMap };
+}
+
+/** 预览行（1 基）→ 源行（1 基）；越界或该行没有源行（收束/装饰行）= `null` */
+export function sugarLineToSource(lineMap: readonly number[], previewLine: number): number | null {
+  const src = lineMap[previewLine - 1];
+  return src === undefined || src <= 0 ? null : src;
+}
+
+/**
+ * 源行（1 基）→ 预览行（1 基）；表空 = `null`。
+ *
+ * `lineMap` 单调不减（逐行拼装按源行顺序产出），所以：
+ * - 精确命中优先，且取**第一次**出现——一个源行被多行糖覆盖时跳到这段糖的开头；
+ * - 源行被折进糖里没有独立成行（N 源行 → M 糖行，M < N）时，退化成**它前面最近的那一行**，
+ *   即"停在包住它的那段糖上"。退化是有意的：跳到隔壁一行远比什么都不做有用，
+ *   而"宁可不动"的旧口径让预览面上的每一条定位请求都静默失效。
+ */
+export function sourceLineToSugar(lineMap: readonly number[], sourceLine: number): number | null {
+  if (sourceLine <= 0) return null;
+  let best: number | null = null;
+  for (let i = 0; i < lineMap.length; i++) {
+    const src = lineMap[i]!;
+    if (src <= 0) continue;
+    if (src === sourceLine) return i + 1;
+    if (src < sourceLine) best = i + 1;
+  }
+  return best;
 }
 
 /**

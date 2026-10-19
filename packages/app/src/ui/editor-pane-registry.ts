@@ -39,6 +39,11 @@ export interface PaneCtx {
   entriesRef: { current: Map<string, ModelEntry> };
   filePathRef: { current: string };
   sugarModelRef: { current: Monaco.editor.ITextModel | null };
+  /**
+   * 屏幕上这份糖投影的「预览行 → 源行」表（`[i]` = 预览第 i+1 行的源行号，1 基；0 = 无源行）。
+   * 与 `sugarModelRef` 同批换上 / 同批清空；空数组 = 还没装配出来，只读动作据此退化而不是猜。
+   */
+  sugarLineMapRef: { current: readonly number[] };
   pendingActionsRef: { current: Map<string, EditorCodeAction> };
   actionSeqRef: { current: number };
   crumbTreeCacheRef: { current: { path: string; versionId: number; symbols: EditorDocumentSymbol[] } | null };
@@ -100,6 +105,29 @@ export function owningPaneOf(model: Monaco.editor.ITextModel): PaneCtx | null {
     return ctx.sugarModelRef.current === model ? null : ctx;
   }
   return null;
+}
+
+/**
+ * 这份 model 是不是某实例**正在显示**的糖投影。
+ *
+ * 与 `owningPaneOf` 是两条相反的判据，别合一条：那条问"这 model 有没有可写的原文主人"
+ * （派生物答无），这条问"它是不是投影面"（派生物答有）。**写**类动作只认前者（糖上改一个
+ * 字节都是事故）；**读**类动作（跳转、符号、折叠、诊断落点）该认这条——拿着 `sugarLineMapRef`
+ * 换算回源就有意义，整条早退才是缺陷。
+ */
+export function sugarOwningPaneOf(model: Monaco.editor.ITextModel): PaneCtx | null {
+  for (const ctx of livePanes.values()) {
+    const ed = ctx.editorRef.current;
+    if (!ed || ed.getModel() !== model) continue;
+    return ctx.sugarModelRef.current === model ? ctx : null;
+  }
+  return null;
+}
+
+/** 预览行（1 基）→ 源侧路径 + 行号；映射缺席 = `null`（宁可不出结果，不给一个猜的行号） */
+export function sugarSourceOf(ctx: PaneCtx, previewLine: number): { path: string; line: number } | null {
+  const line = ctx.sugarLineMapRef.current[previewLine - 1];
+  return line === undefined || line <= 0 ? null : { path: ctx.filePathRef.current, line };
 }
 
 export function focusedCtx(): PaneCtx | null {
