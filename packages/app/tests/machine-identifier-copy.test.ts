@@ -33,6 +33,8 @@ const COPY_FILES = [
   'packages/app/src/ui/use-project-session.ts',
   'packages/app/src/ui/project-close.ts',
   'packages/app/src/ui/project-error-notice.tsx',
+  // WRITE-ADMIT-SPLIT 出路①：宿主写域事实与那颗出路按钮的上屏句子都住这里
+  'packages/app/src/ui/write-domain.ts',
   'packages/app/src/ui/error-boundary.tsx',
   'packages/app/src/ui/CallHierarchyOverlay.tsx',
   'packages/app/src/ui/FileHistoryOverlay.tsx',
@@ -170,10 +172,28 @@ const PINNED_COPY: readonly {
   readonly why: string;
 }[] = [
   {
-    file: 'packages/app/src/ui/use-project-session.ts',
+    file: 'packages/app/src/ui/write-domain.ts',
     phrase: '这个项目文件夹眼下不能写入',
     count: 1,
-    why: 'fail-closed 的后果说人话：机制名「写允许域」与宿主路径 API 名都不上屏，落点改说「编辑器自己的文件夹」；句首不写「可写范围登记失败」——尾接的 Rust 原句自带「可写范围…」，同一个词在一句里出现两遍就是叠话（REF-FRONT-PERF 后这句随 openProject 搬进 hook）',
+    why: 'fail-closed 的后果说人话：机制名「写允许域」与宿主路径 API 名都不上屏，落点改说「编辑器自己的文件夹」；句首不写「可写范围登记失败」——尾接的 Rust 原句自带「可写范围…」，同一个词在一句里出现两遍就是叠话（REF-FRONT-PERF 后这句随 openProject 搬进 hook；WRITE-ADMIT-SPLIT 出路①再搬进本文件——第一次登记与点按钮重交付共用这一份文案，不许两处各抄）',
+  },
+  {
+    file: 'packages/app/src/ui/write-domain.ts',
+    phrase: '重新选择这个文件夹',
+    count: 1,
+    why: '出路那颗按钮的中文名，与原生选目录框标题同源（同一个 const ⇒ 屏幕上不会出现两种叫法；作者面不写「重新交付」「准入门」这类机制词）',
+  },
+  {
+    file: 'packages/app/src/ui/write-domain.ts',
+    phrase: '在弹出的系统选目录框里选回这个项目文件夹，编辑器才会允许写入',
+    count: 1,
+    why: '按钮 title：那几个字说不清的"点下去会发生什么"放悬停里（说的是系统框与写入许可，不出现对话框命令名）',
+  },
+  {
+    file: 'packages/app/src/ui/write-domain.ts',
+    phrase: '宿主没有说明原因',
+    count: 1,
+    why: '原因缺省也要成句：屏上绝不出现 undefined',
   },
   {
     file: 'packages/app/src/ui/CallHierarchyOverlay.tsx',

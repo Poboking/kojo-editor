@@ -109,7 +109,7 @@ import { mountProjectScan } from './project-scan-schedule';
 // App 只留 UI state 与渲染。项目子树另加错误边界 + 项目态错误条。
 import { useProjectSession, useSessionFlush, useSessionStore } from './use-project-session';
 import { ProjectErrorBoundary } from './error-boundary';
-import { ProjectErrorNotice, raiseProjectError, visibleProjectError } from './project-error-notice';
+import { ProjectErrorNotice, raiseProjectErrorBar, visibleProjectError, type ProjectErrorAction, type ProjectErrorBar } from './project-error-notice';
 import { crashExitDecision } from './project-close';
 import { discardRecoveryJournal } from './crash-recovery';
 
@@ -215,7 +215,12 @@ export function App(): ReactElement {
    * ✕ / 两个按钮）写 seen 标记；只活在本会话，不参与 phase 判定。
    */
   const [devNoteOpen, setDevNoteOpen] = useState(() => !loadDevNoteSeen());
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * 项目生命周期错误（欢迎页错误区 + 项目态错误条共用的一条 state）。
+   * WRITE-ADMIT-SPLIT 出路①：从「一句文案」升级为「文案 + 它自带的那条出路」——
+   * 出路只在真有出路时出现，与文案同生同灭，不会各说各话。
+   */
+  const [errorBar, setErrorBar] = useState<ProjectErrorBar | null>(null);
   const [project, setProject] = useState<GameProject | null>(null);
   const [index, setIndex] = useState<ErbIndex | null>(null);
   const [indexing, setIndexing] = useState(false);
@@ -335,11 +340,20 @@ export function App(): ReactElement {
   dirtyRef.current = dirtyPaths;
 
   /**
+   * 纯文案上报（欢迎页错误区 / 项目态错误条的旧入口，签名照 `useState` 那份保持不变）：
+   * 这类错误没有出路可给 ⇒ 动作恒为 null，屏上只有文案与关闭叉。
+   */
+  const setError = useCallback((message: string | null) => {
+    setErrorBar(message === null ? null : { message, action: null });
+  }, []);
+
+  /**
    * 项目生命周期错误的统一上报口（REF-FRONT-PERF）：同一条文案保持原引用，
    * React 直接 bail out——重复失败不会把错误条重挂一遍（同屏始终只有一条）。
+   * `action`（WRITE-ADMIT-SPLIT 出路①）：这条错误能走哪条路回去，随文案同生同灭。
    */
-  const raiseError = useCallback((message: string) => {
-    setError((prev) => raiseProjectError(prev, message));
+  const raiseError = useCallback((message: string, action: ProjectErrorAction | null = null) => {
+    setErrorBar((prev) => raiseProjectErrorBar(prev, { message, action }));
   }, []);
 
   useEffect(() => {
@@ -1571,7 +1585,7 @@ export function App(): ReactElement {
   }, [closeProject, dirtyPaths, notify]);
   const dismissProjectError = useCallback(() => setError(null), []);
   /** 项目态错误（welcome/opening 由 WelcomeView 自己的错误区承担，不重复上屏） */
-  const projectError = visibleProjectError(phase, error);
+  const projectError = visibleProjectError(phase, errorBar?.message ?? null);
 
   const body =
     phase === 'project' && kernel && project ? (
@@ -1632,7 +1646,7 @@ export function App(): ReactElement {
       <>
         <WelcomeView
           phase={phase}
-          error={error}
+          error={errorBar?.message ?? null}
           recent={recent}
           tauri={isTauri()}
           kernelReady={kernel !== null}
@@ -1668,8 +1682,15 @@ export function App(): ReactElement {
       <div className="app-frame-body">
         {body}
         {/* 项目态错误条（REF-FRONT-PERF）：写允许域注册/清除、授权失败的 error state
-            原先只在欢迎页可见；这里固定左下显示、可关闭、同文案不重复刷屏。 */}
-        {projectError ? <ProjectErrorNotice message={projectError} onDismiss={dismissProjectError} /> : null}
+            原先只在欢迎页可见；这里固定左下显示、可关闭、同文案不重复刷屏。
+            出路按钮（WRITE-ADMIT-SPLIT 出路①）与文案同一条 state：能走回去的错误才有按钮。 */}
+        {projectError ? (
+          <ProjectErrorNotice
+            message={projectError}
+            action={errorBar?.action ?? null}
+            onDismiss={dismissProjectError}
+          />
+        ) : null}
         {/* 首启动纸条（用户反馈 2）：只在欢迎页弹（进了项目就不打扰），且只在从未看过时。
             「去绑定游戏根目录」先收纸条再走欢迎页那个同一个目录选择入口。 */}
         {devNoteOpen && phase === 'welcome' ? (

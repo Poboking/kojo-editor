@@ -513,6 +513,42 @@ async function main() {
     if (projDir === GAME_DIR) P('a', '打开真实游戏目录', `工具栏项目标签 rootDir=${projDir}`);
     else F('a', '打开真实游戏目录', `期望 ${GAME_DIR}，实际 ${projDir}`);
 
+    /* -------- a3) 未交付目录必须给出"出路"错误条（WRITE-ADMIT-SPLIT 出路①，2026-10-21） -------- */
+    /**
+     * 这一门只在**语料目录从未被宿主交付过**的主机上成立（`gameDirAdmitted=false`，读 node 侧
+     * `approved_roots.txt` 得出）。那种情况下宿主准入门会拒掉登记 ⇒ 屏上必须同时出现：
+     * ① 常驻的项目态错误条（`.project-session-error`，不是会消失的通知中心）；
+     * ② 那句作者话「这个项目文件夹眼下不能写入…」；③ 一颗能走回授权的按钮。
+     * 在册的主机上这一门不适用 ⇒ **报 SKIP 带读数**，不许假装验过（也别为了凑绿去改 seed）。
+     */
+    {
+      const pre = storePrecheck();
+      if (pre.gameDirAdmitted) {
+        S('a3', '未交付目录的出路',
+          `本机准入门已在册（approved_roots.txt 含该语料目录，gameDirAdmitted=true）⇒ 这一门不适用，` +
+          `请在**未交付过该目录**的主机上跑`);
+      } else {
+        let bar = null;
+        try {
+          await waitFor(cdp, `!!document.querySelector('.project-session-error')`, 20000, 400);
+        } catch {
+          bar = null; // 拿不到就走下面的 FAIL 读数，别静默
+        }
+        bar = await cdp.evalJs(`(() => {
+          const el = document.querySelector('.project-session-error');
+          return el ? { 文案: el.innerText, 按钮: [...el.querySelectorAll('button.toast-action')].map((b) => b.textContent.trim()) } : null;
+        })()`);
+        const msg = String(bar?.文案 ?? '');
+        const btns = bar?.按钮 ?? [];
+        if (msg.includes('这个项目文件夹眼下不能写入') && btns.includes('重新选择这个文件夹')) {
+          P('a3', '未交付目录的出路',
+            `错误条常驻且带按钮：「${msg.slice(0, 40)}…」／按钮=${JSON.stringify(btns)}（可写态已由项目徽章收口，见 b0）`);
+        } else {
+          F('a3', '未交付目录的出路', `gameDirAdmitted=false 但屏上不完整：${JSON.stringify(bar)}`);
+        }
+      }
+    }
+
     /* -------- 批准写权限（若弹窗）+ 同屏其它首次引导 -------- */
     // 弹窗在 openProject 末尾异步 setState，稍等再判定。
     // 开项目后不止「写权限确认」一种模态：会话恢复带 ERB 标签会先弹「.kojo 预览」首次引导

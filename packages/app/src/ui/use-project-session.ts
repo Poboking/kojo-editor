@@ -36,6 +36,17 @@ import {
   type SessionRecord,
 } from './session-store';
 import { workspaceRootsOf } from './workspace-roots';
+import type { ProjectErrorAction } from './project-error-notice';
+import {
+  admitProjectWriteDomain,
+  initialWriteDomainFact,
+  isProjectWritableOf,
+  redeliverProjectWriteDomain,
+  writeDomainFixAction,
+  writeDomainRefusedMessage,
+  type WriteDomainAdmission,
+  type WriteDomainFact,
+} from './write-domain';
 
 /**
  * 项目会话生命周期（REF-FRONT-PERF，2026-10-20）。
@@ -57,6 +68,19 @@ import { workspaceRootsOf } from './workspace-roots';
 /** React ref 的最小形状（避免把 React 类型扩散到参数面） */
 export interface RefLike<T> {
   current: T;
+}
+
+/**
+ * 把项目根交给宿主登记（准入门在 Rust 侧：只有对话框 / 拖放亲自交付过的目录才放行）。
+ * 拒 = reject ⇒ 由 `write-domain.ts` 折成「这一趟没交付成功」的事实，绝不当成"能写"。
+ */
+function registerWriteDomainRoot(root: string): Promise<void> {
+  return invoke('register_write_domain', { root }).then(() => undefined);
+}
+
+/** 原生选目录框（对话框即授权，铁律 6 的既有通道；这里不新增任何接受路径参数的命令） */
+function chooseDirectoryFor(title: string): Promise<string | null> {
+  return invoke<string | null>('choose_directory', { title });
 }
 
 export interface OpenProjectOptions {
@@ -87,8 +111,12 @@ export interface ProjectSessionHost {
 
   readonly setPhase: (phase: AppPhase) => void;
   readonly setError: (error: string | null) => void;
-  /** 上报一条项目态错误（同文案不重复刷屏） */
-  readonly raiseError: (message: string) => void;
+  /**
+   * 上报一条项目态错误（同文案不重复刷屏）。
+   * 第二枚 `action` 是 additive 的出路（WRITE-ADMIT-SPLIT 出路①）：这条错误能走哪条路回去
+   * 与文案同生同灭；旧调用方只递 message，照旧是一条没有按钮的错误条。
+   */
+  readonly raiseError: (message: string, action?: ProjectErrorAction | null) => void;
   readonly setProject: (project: GameProject | null) => void;
   readonly setIndex: (index: ErbIndex | null) => void;
   readonly setIndexing: (indexing: boolean) => void;
@@ -175,6 +203,53 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
 
   const restoreSessionTabs = useRestoreSessionTabs(sessionRecordRef, setEditorGroups, setPinnedPaths);
 
+  /**
+   * 宿主这一半边的写域事实（WRITE-ADMIT-SPLIT 出路①）：`{dir, grant, reason}`。
+   * 「这个项目能不能直接编辑」从此要**同时**吃 TS 批准记录与这一份——以前只看前者，
+   * 于是注册被准入门拒了、下面那行 `setWritable(approved !== null)` 仍把 UI 翻成"能编辑"。
+   * 这份事实只由 `applyWriteDomainAdmission` 写、只由本 hook 读（关项目 / 换项目即复位）。
+   */
+  const writeDomainRef = useRef<WriteDomainFact>(initialWriteDomainFact);
+  /** 出路动作可能长期挂在错误条上：run 走 ref，按钮永远叫得响当前这份实现（同 App 的 onReauthRef 手法） */
+  const redeliverRef = useRef<() => void>(() => undefined);
+
+  /** 一次写域交付的落地：会话事实 + 错误条（含出路）+ 可写态，三者只从这一处写 */
+  const applyWriteDomainAdmission = useCallback(
+    (admission: WriteDomainAdmission) => {
+      writeDomainRef.current = admission.fact;
+      if (admission.error === null) setError(null);
+      else raiseError(admission.error.message, admission.error.action);
+      setWritable(admission.writable);
+    },
+    [raiseError, setError, setWritable],
+  );
+
+  /**
+   * 错误条上那颗「重新选择这个文件夹」的执行体：走一次原生选目录框把这个项目文件夹
+   * **重新交付**给宿主（对话框即授权，铁律 6 的既有形态——不新造授权路、不放宽写域），
+   * 成功后错误条消失、可写态按两份事实重新对齐；取消则什么都不变。
+   */
+  const redeliverWriteDomain = useCallback(async () => {
+    const dir = writeDomainRef.current.dir;
+    if (!kernel || dir === null || !isTauri()) return;
+    const admission = await redeliverProjectWriteDomain({
+      dir,
+      chooseDirectory: chooseDirectoryFor,
+      register: registerWriteDomainRoot,
+      hasApprovalRecord: async () => (await kernel.project.approvedWritableFor(dir)) !== null,
+      // 不一致事件只在 open() 期间同步发出，这一趟没有新事件可吃 ⇒ 按无冲突算
+      approvalMismatch: false,
+      redeliver: () => redeliverRef.current(),
+    });
+    if (admission === null) return; // 作者取消：现场一切不变
+    applyWriteDomainAdmission(admission);
+    if (admission.needsApproval) {
+      const current = kernel.project.current();
+      if (current) setPendingApproval(current);
+    }
+  }, [applyWriteDomainAdmission, kernel, setPendingApproval]);
+  redeliverRef.current = () => void redeliverWriteDomain();
+
   const openProject = useCallback(
     async (dir: string, opts?: OpenProjectOptions) => {
       if (!kernel) return;
@@ -193,6 +268,8 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
       // 重载项目（同目录重开）不切回欢迎页：避免「项目被关掉」的错觉
       if (!opts?.keepView) setPhase('opening');
       setError(null);
+      // 换项目 / 重开都从"宿主还没表态"起算：上一次交付结果不许踩进这一趟
+      writeDomainRef.current = initialWriteDomainFact;
       // 静默只读修复（P0）：不一致事件只在 open() 期间同步发出——局部订阅，
       // 避免常驻监听与 openProject 状态写入之间的竞态
       let approvalMismatch = false;
@@ -236,14 +313,19 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         setRecent(await kernel.project.recent());
 
         // Rust 侧写允许域注册（M3 纵深防御第二道闸）：
-        // 允许域 = 项目根目录 + appDataDir；失败 fail-closed（仅 appDataDir 可写）并显式报错
-        if (isTauri()) {
-          try {
-            await invoke('register_write_domain', { root: dir });
-          } catch (e: unknown) {
-            raiseError(`这个项目文件夹眼下不能写入，只有编辑器自己的文件夹能写（备份、作者工作区、未保存快照都在那里）：${errorText(e)}`);
-          }
-        }
+        // 允许域 = 项目根目录 + appDataDir；失败 fail-closed（仅 appDataDir 可写）并显式报错。
+        // WRITE-ADMIT-SPLIT 出路①：这一趟的结果是一份**独立事实**（宿主到底把写域交出来了
+        // 没有），下面那行可写态必须吃它——只看着 TS 批准记录解锁 = UI 表演"能编辑"。
+        // 被拒时错误条自带那颗「重新选择这个文件夹」，点了才重新交付一次。
+        const admission = await admitProjectWriteDomain({
+          dir,
+          hosted: isTauri(),
+          register: registerWriteDomainRoot,
+          hasApprovalRecord: async () => (await kernel.project.approvedWritableFor(dir)) !== null,
+          approvalMismatch,
+          redeliver: () => redeliverRef.current(),
+        });
+        applyWriteDomainAdmission(admission);
 
         // BUG-5：起文件监视。根集合 = 项目根 ∪ 口上域 ∪ 存档目录 ∪ 会话级附加根（D1）
         //        ∪ 作者工作区全部根——组装与启动收在下方的专用 effect 里（extraRoots
@@ -251,9 +333,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
 
         // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）；
         // 批准记录与新提议不一致（approvalMismatch）同样重弹确认（F1/F2 修复）
-        const approved = await kernel.project.approvedWritableFor(dir);
-        if (!approved || approvalMismatch) setPendingApproval(p);
-        setWritable(approved !== null && !approvalMismatch);
+        if (admission.needsApproval) setPendingApproval(p);
 
         // 口上域全量索引：解析器在 project.opened 已自动开建，这里等待其完成。
         // 索引失败**不**回退欢迎页：项目仍可浏览，失败原因走状态栏 + 通知显式呈现
@@ -333,6 +413,11 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         setPendingApproval(null);
         setWritable(null);
         setIndexError(null);
+        // WRITE-ADMIT-SPLIT 出路①：宿主写域事实与那条带出路的错误条都只属于这个项目——
+        // 项目一关，Rust 侧回到「仅应用数据目录可写」，屏上不许留着"这个项目不能写"的话
+        // 和一颗对着空现场按得下去的按钮（clear_write_domain 真失败仍会另报一条）。
+        writeDomainRef.current = initialWriteDomainFact;
+        setError(null);
         // 检索结果按项目根算出来的：项目一关，旧结果里的路径全部失去意义（留着只会误导）
         resetSearch();
         setPhase('welcome');
@@ -363,7 +448,17 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
       }
       try {
         await kernel.project.approveWritablePaths(p, p.writablePaths);
-        setWritable(true);
+        // WRITE-ADMIT-SPLIT 出路①：批的是 TS 那半边记录。宿主没把写域交出来时（准入门拒过），
+        // 这里照同一份事实判 ⇒ 仍是只读，并把那条带出路的错误重新挂上屏，别让徽章说谎。
+        const writableNow = isProjectWritableOf({
+          hasApprovalRecord: true,
+          approvalMismatch: false,
+          hostGrant: writeDomainRef.current.grant,
+        });
+        setWritable(writableNow);
+        if (!writableNow && writeDomainRef.current.grant === 'refused') {
+          raiseError(writeDomainRefusedMessage(writeDomainRef.current), writeDomainFixAction(() => redeliverRef.current()));
+        }
       } catch (e: unknown) {
         // 授权失败必须显式可见（P0 实机反馈）：否则对话框一关、徽章仍是「只读」，
         // 用户以为点了没反应（=「无法重新选择权限」）
