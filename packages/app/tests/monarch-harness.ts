@@ -241,3 +241,17 @@ export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly
     throw new Error(`状态 ${state} 在 Monarch def 里没有规则表`);
   }
 }
+
+/**
+ * 多行驱动器：**状态栈跨行保留**（Monaco 的 line state 本来就会延续到下一行——
+ * `@skip` / `@str` 这类跨行状态在单行驱动器里永远测不到）。空行不触发规则
+ * （与 `driveLexer` 同口径；Monaco 对空行会强评一次，但空行没有可发射文本）。
+ */
+export function driveLines(lexer: CompiledLexer, lines: readonly string[]): Emit[][] {
+  let stack: readonly string[] = [lexer.start ?? 'root'];
+  return lines.map((line) => {
+    const drive = driveLine(lexer, line, stack);
+    stack = drive.stack;
+    return drive.emitted;
+  });
+}

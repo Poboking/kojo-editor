@@ -114,8 +114,19 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         [/^(\s*)(\$)([^\s;]+)/, ['', 'keyword', 'label']],
         // 预处理指令 #DIM / #FUNCTION 等（含修饰词）
         [/^(\s*)(#\w+)/, ['', 'keyword.preprocessor']],
-        // 预处理区间标记
-        [/\[SKIPSTART\]|\[SKIPEND\]/, 'keyword.preprocessor'],
+        // 预处理停用区 `[SKIPSTART] … [SKIPEND]`（引擎原样输出，块内不是 ERB 代码）。
+        //
+        // 判据 = 真源 lexer 的**整行等值**（`erb-parser/src/scanner.ts`：
+        // `line.trim() === '[SKIPSTART]' / '[SKIPEND]'`），不是"行内出现即生效"——
+        // 字符串 / 行首注释 / 行尾残留里的同形文本不改变块状态（所以两条规则都带
+        // `^\s*…\s*$` 锚）。`ignoreCase: true` 是 ERB 全语言的大小写口径（Emuera 关键字
+        // 大小写不敏感），这里不另开例外：小写形态同样进块，属高亮层的宽松超集。
+        //
+        // 标记另发 `keyword.preprocessor.skip.*`（前缀落在既有预处理标记色上），
+        // 块内逐行发 `keyword.raw`（与 `.kojo` 原生围栏同档的"不透明"色）——
+        // 两档分开，作者一眼能看出"这是停用块"而不是"活代码里混进了关键字"。
+        [/^\s*\[SKIPSTART\]\s*$/, { token: 'keyword.preprocessor.skip.start', next: '@skip' }],
+        [/^\s*\[SKIPEND\]\s*$/, 'keyword.preprocessor.skip.end'],
         // 字符串（含 FORM 串转义）：进 `str` 态，串内 `{…}` / `%…%` 两层在那里解析
         [/"/, { token: 'string.quote', bracket: '@open', next: '@str' }],
         // 整词指令（含高亮补集）：必须排在变量族之前——CFLAG/EQUIP/RAND/DOWNBASE 同时是
@@ -240,6 +251,15 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         [/[^%]+$/, { token: 'variable', next: '@popall' }],
         [/%/, { token: 'string.escape', next: '@pop' }],
         [/[^%]+/, 'variable'],
+      ],
+      /**
+       * `[SKIPSTART]` 后的原样块：逐行整块吃成 `keyword.raw`，只有**整行等值**的
+       * `[SKIPEND]` 退栈（与开头进入判据同一把尺子）。块内 `IF` / `;` / `"…"` /
+       * 嵌套 `[SKIPSTART]` 一律不解析——引擎既不编译也不执行这些行。
+       */
+      skip: [
+        [/^\s*\[SKIPEND\]\s*$/, { token: 'keyword.preprocessor.skip.end', next: '@pop' }],
+        [/.*$/, 'keyword.raw'],
       ],
     },
   };

@@ -263,6 +263,11 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
         // 行尾 `;` 注释（非锚定，`;` 起至行末）：对位 `lexer.ts::stripInlineComment`。
         // `"…"` 内的 `;` 由下面的 `dquote` 先吃掉，`「…」` 内的 `;` 由 speech 态先吃掉。
         [/;.*$/, 'comment'],
+        // 停用块 `[SKIPSTART] … [SKIPEND]`：引擎原样输出（真源 `classifyLine` 的
+        // `skipStart` / `skipEnd`，**整行严格等值**）。块内不是 `.kojo` 代码 ⇒ 与
+        // ```erb 围栏同档：标记与内容一律 `keyword.raw`，作者一眼看出这是不透明区。
+        [/^\s*\[SKIPSTART\]\s*$/, { token: 'keyword.raw', next: '@skipBlock' }],
+        [/^\s*\[SKIPEND\]\s*$/, 'keyword.raw'],
         // 原生 ERB 围栏（```erb … ```）：整块不透明，逐行着色为原生
         [/^\s*```\s*erb\b.*$/i, { token: 'keyword.raw', next: '@rawFence' }],
         // 行首 `@erb` 逃生舱（规范 §3.10）
@@ -305,6 +310,11 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
       /** ```erb 围栏内部：逐行原生，遇闭合围栏退出 */
       rawFence: [
         [/^\s*```\s*$/, { token: 'keyword.raw', next: '@pop' }],
+        [/.*$/, 'keyword.raw'],
+      ],
+      /** `[SKIPSTART] … [SKIPEND]` 停用区内部：逐行原生，遇整行等值标记退出 */
+      skipBlock: [
+        [/^\s*\[SKIPEND\]\s*$/, { token: 'keyword.raw', next: '@pop' }],
         [/.*$/, 'keyword.raw'],
       ],
       speech: [
