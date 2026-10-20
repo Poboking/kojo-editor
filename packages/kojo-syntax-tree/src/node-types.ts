@@ -92,6 +92,11 @@ export const NON_LINE_NODES: ReadonlySet<string> = new Set([
   'native_string',
   'interpolation',
   'comment_inline',
+  // TSIT5：台词行拆出内层结构后新增的那枚**行内收束记号**（`interpolation` 本来就在表里，
+  // 现在它多了一个"台词行内"的出处）。行内节点都不是行分型 ⇒ 逐行反查不下钻到它们。
+  // `speech_close` 必须是具名节点——未闭合 `「` 的错误恢复会补一枚 `MISSING speech_close`，
+  // 隐藏名（`_` 前缀）的 MISSING 在 `node.children` / `firstChild` 遍历里不可见 ⇒ 故障会静默消失。
+  'speech_close',
   'number',
   'variable',
   'ERROR',

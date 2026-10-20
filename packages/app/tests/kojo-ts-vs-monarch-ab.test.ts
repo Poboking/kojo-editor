@@ -186,6 +186,8 @@ interface Diff {
 
 const diffs: Diff[] = [];
 const cells = { total: 0, same: 0, family: 0, otherTier: 0, monarchBlank: 0, spaceSkipped: 0 };
+/** 按**结构层档位族**各自记一格（总比率随覆盖面扩大而变，分族比率才是防回归的那把尺） */
+const perTier = new Map<string, { total: number; agree: number }>();
 const monarchOnlyCells = { total: 0 };
 let rebuildFailed = 0;
 let paintedLines = 0;
@@ -268,6 +270,10 @@ beforeAll(async () => {
         } else {
           cells.otherTier += 1;
         }
+        const tierAgg = perTier.get(tier) ?? { total: 0, agree: 0 };
+        tierAgg.total += 1;
+        if (stripped !== null && (stripped === tier || stripped.startsWith(`${tier}.`))) tierAgg.agree += 1;
+        perTier.set(tier, tierAgg);
         if (diffs.length < 400 && (stripped === null || (stripped !== tier && !stripped.startsWith(`${tier}.`)))) {
           diffs.push({
             fixture: rel,
@@ -293,8 +299,8 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
     expect(fixtures.length).toBeGreaterThanOrEqual(19);
     expect(query).not.toBeNull();
     expect(lexer).not.toBeNull();
-    console.log(`highlights.scm 捕获名 ${query!.captureNames.length} 支，其中在宿主档位表里有档的: ${query!.captureNames.filter((n) => captureTier(n) !== null).join(', ') || '—'}`);
-    console.log(`（表外捕获 = 结构层这一格不涂色，走 worker 的一次性告警：${query!.captureNames.filter((n) => captureTier(n) === null).length} 支）`);
+    console.log(`highlights.scm 捕获名 ${query!.captureNames.length} 支，其中**捕获级**有档的: ${query!.captureNames.filter((n) => captureTier(n) !== null).join(', ') || '—'}`);
+    console.log(`（捕获级表外 ${query!.captureNames.filter((n) => captureTier(n) === null).length} 支；另有**节点级**覆盖按节点类型再分档 ⇒ 有效有档/表外与覆盖面读数见 kojo-ts-capture-coverage.test.ts，别拿这一行当覆盖面）`);
   });
 
   it('逐格一致率读数（地板见 TOKEN_AB_FLOOR，实测 99.58%）', () => {
@@ -311,6 +317,17 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
     console.log(`  剔出的分隔格        : ${cells.spaceSkipped}（空白：词法层不发 token、结构层整段涂 ⇒ 不计入判据）`);
     console.log(`  词法层涂色格子总数（覆盖面参照，不进分母）: ${monarchOnlyCells.total}`);
     console.log(`==> 逐格一致率 ${rate.toFixed(2)}%（分母 ${cells.total} 格 / ${fixtures.length} 个语料文件）`);
+    console.log('分族一致率（总比率随覆盖面扩大而变 ⇒ 防回归看分族）:');
+    for (const [tierName, agg] of [...perTier].sort((a, b) => b[1].total - a[1].total)) {
+      console.log(`  ${((agg.agree / agg.total) * 100).toFixed(2)}%  ${agg.agree}/${agg.total}  ${tierName}`);
+    }
+    for (const [tierName, floor] of Object.entries(TOKEN_AB_TIER_FLOORS)) {
+      const agg = perTier.get(tierName);
+      expect(agg, `分族地板点了 ${tierName}，但这次一面都没涂到它`).toBeDefined();
+      const tierRate = ((agg as { total: number; agree: number }).agree / (agg as { total: number; agree: number }).total) * 100;
+      expect(tierRate, `${tierName} 分族一致率 ${tierRate.toFixed(2)}% 低于地板 ${floor}%`).toBeGreaterThanOrEqual(floor);
+    }
+    expect(cells.total, '分母缩小＝覆盖面被偷（只许扩不许缩）').toBeGreaterThanOrEqual(TOKEN_AB_MIN_CELLS);
     const worst = [...perFile]
       .filter((f) => f.total > 0)
       .map((f) => ({ ...f, rate: (f.agree / f.total) * 100 }))
@@ -650,7 +667,32 @@ describe('折叠：folds.scm 块容器区间 vs kojoFoldingRanges 真源', () =>
  * 若这一格因为"块容器改变了涂色跨度"而翻线，正确动作是重跑取数、把上面的读数与地板一起改写，
  * 而不是默默把地板调回去。
  */
-const TOKEN_AB_FLOOR = 99.4;
+/**
+ * 总比率地板：**2026-10-20 口径变更后重标**。上一版 99.4 量在"结构层只涂 3 族"的窄面上（分母 100,462 格）；
+ * 本波把 `keyword.control` 光杆形与 `raw_block_start` 两族登记进真表后，涂色面扩到 5 族、分母涨到 104,215 格，
+ * 总比率随之从 99.59% 落到 99.29% —— **这不是判据变差，是以前不进分母的格子进来了**。
+ * ⇒ 防回归改由三把尺承担：①**分族地板**（每族只降不升，见下）②**分母只增不减** ③有档/表外捕获数绝对值。
+ * 总比率继续打印，地板按实测重标留余量；任何"面变了"的批次都不许拿总比率当唯一依据（PITFALLS 141）。
+ */
+const TOKEN_AB_FLOOR = 99.2;
+/**
+ * 分族地板：只降不升（2026-10-20 按本波实测重标；新登记的族取首测值）。
+ *
+ * 读数要跟着看：`comment` 100.00% 是基线档；`sugar.speech` 98.79% 是老面；
+ * `keyword.raw` 94.04% 与 **`sugar.keyword` 66.27%** 是新登记两族的**首测代价**——
+ * 后者低是因为 `keyword.control` 只登记了 12 枚**光杆块头**（跨度里 34% 是冒号/间隔，
+ * 词法层给 `sugar.colon` 一类子档），整段一档涂必然对不齐。这是"覆盖面 vs 逐格精度"的
+ * 取舍：不登记＝那些格子干脆不涂（覆盖率 58.7%），登记＝涂对主体、冒号跟着整段走。
+ * ⇒ 两个方向都记在账上，**不许**为了抬高总比率把不一致的族偷偷摘掉。
+ */
+const TOKEN_AB_TIER_FLOORS: Readonly<Record<string, number>> = {
+  comment: 100,
+  'sugar.speech': 98.7,
+  'keyword.raw': 94.0,
+  'sugar.keyword': 66.2,
+};
+/** 分母只增不减（本波实测 104,177；缩了就是覆盖面被偷） */
+const TOKEN_AB_MIN_CELLS = 104177;
 
 /**
  * 折叠地板（**`@` 族容器落地 + `expr_head` 起点错位修好 + `"标签":` 条目补形后重取的数**，只升不降）。

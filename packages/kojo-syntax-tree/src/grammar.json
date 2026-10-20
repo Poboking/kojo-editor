@@ -427,13 +427,76 @@
       ]
     },
     "string": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "TOKEN",
+          "content": {
+            "type": "PREC",
+            "value": 5,
+            "content": {
+              "type": "PATTERN",
+              "value": "「"
+            }
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "_speech_text"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_speech_interpolation"
+                },
+                "named": true,
+                "value": "interpolation"
+              }
+            ]
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "speech_close"
+        }
+      ]
+    },
+    "_speech_text": {
       "type": "TOKEN",
       "content": {
         "type": "PREC",
-        "value": 5,
+        "value": 6,
         "content": {
           "type": "PATTERN",
-          "value": "「[^\\n]*[」\\\\]"
+          "value": "[{}]|[^{}」\\n\\\\]+"
+        }
+      }
+    },
+    "_speech_interpolation": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 7,
+        "content": {
+          "type": "PATTERN",
+          "value": "\\{[^{}」\\n\\\\]*\\}"
+        }
+      }
+    },
+    "speech_close": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 8,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^{\\n]*[」\\\\]"
         }
       }
     },
@@ -2086,7 +2149,7 @@
             "value": 1,
             "content": {
               "type": "PATTERN",
-              "value": "[^=\"\\n;]+=[^\"\\n;]*"
+              "value": "[^=\" \\t\\u3000\\n;「][^=\"\\n;]*=[^\"\\n;]*"
             }
           }
         },

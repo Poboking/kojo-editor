@@ -193,9 +193,39 @@ export type KojoStructureReply =
  *   `blank_line_cmd` 空行）说的都是**已经中文化**的行，词法层在同一批格子上发
  *   `sugar.keyword` / `sugar.speech` / `sugar.cont` ⇒ 屏上是"外来色糊住中文骨架"，
  *   A/B 确有 ~620 格因此判异档（逐类命中分布与改后的读数见 A/B 测试头注）。
- *   引擎指令档留给真·没中文化的 `@keyword.directive`（全大写 ERB 直通行）——那支现在表外不着色，
- *   等语法/词表把它接上时再登记，不许借中文关键字档凑数。
+ *   引擎指令档**不借给中文行**；原生那一族（`@keyword.directive`）另按下面的节点级表处理，
+ *   `native_line` 至今仍未登记（理由见那张表的头注），不许拿中文关键字档凑数。`keyword.erb`
+ *   那一档**仍然空着等它**——本批登记的 `raw_block_start` 取的是「整行原生直通」档 `keyword.raw`
+ *   （那一档的 `why` 写的就是 `@函数` = 不透明整块），不是指令档。
  * - `@string`  → `sugar.speech`：「台词」档（作者写的正文）。
+ *
+ * ## TSIT5：表外那 12 支的**覆盖面真账**（PITFALLS 141 欠的三个数）
+ *
+ * 查询 15 支捕获，本节两张表加上面三支 = **有档 5 支**（`comment` / `string` / `keyword` /
+ * `keyword.control`（仅节点级）/ `keyword.directive`（仅节点级）），**表外 10 支**。逐支结论与
+ * 实测格数（28 份夹具、`tests/kojo-ts-capture-coverage.test.ts` 打印的 solo 账；取数 2026-10-20，
+ * **同波语法批正在重编 wasm，下面这些格数会漂**，一切以探针当轮打印为准——漂的方向不是本批判据）：
+ *
+ * | 捕获 | 内容格 | 结论 | 一句理由 |
+ * | --- | --- | --- | --- |
+ * | `keyword.control` | 7,652 | **部分登记**（只登光杆形，见下表） | 收束/流转/裸头行的跨度里除了关键字与冒号没有别族内容；带条件/值/台词的头行反过来——一半以上的位置由**内容**占着 |
+ * | `keyword.directive` | 53,889 | **只登 `raw_block_start`** | `native_line` 一枚节点混两形（全大写指令行 / `$标签`，35% `keyword.erb` + 21% `sugar.speech` + 16% `identifier`，12 个档族），一档必抹两档 ⇒ 等查询侧给子记号捕获再登记 |
+ * | `none` | 3,647 | **不登记** | 哨兵：这两枚节点的意思就是"这些行不该被结构层涂色"；登记等于把旁白整行糊成一档（48% 是名字层） |
+ * | `type`（时机头） | 2,502 | **不登记** | 时机名与参数占掉跨度 55%（`sugar.slot` 36% + `number` 19%），行身份要让位给内容 |
+ * | `keyword.head` | 738 | **不登记** | 声明行 = 关键字 + **作者自定名/值**（slot 29–43%）；名字层正是这一行要让人看见的东西 |
+ * | `operator` | 327 | **不登记** | `assign`/`mutator`/`settle` 的信息在目标名与右值（含行内插值）上，没有"整行一档"可给 |
+ * | `function` | 63 | **不登记** | 函数/自定指令头携带名字（slot 30–58%），同上 |
+ * | `function.call` | 38 | **不登记** | 调用行 = 关键字 + 被调名（slot 42% + `sugar.system-function` 21%），一档会抹掉调用位 |
+ * | `property` | 32 | **不登记** | 开关条目 81% 是作者自定名；"这是一条条目"对作者没有信息量 |
+ * | `label` | 18 | **不登记** | `标签 <名>` 89% 是名字（identifier），涂关键字等于抹名字 |
+ * | `error` | 2 | **不登记** | 残缺属**诊断面**（`syntax` 腿 + 波浪线 + `kojo.*` 码），不许拿前景色表达错误 |
+ * | `string.special` | 201 | **本批不动**（留给同波语法批） | 它正在让台词行内插值出节点（本批两次取数间 44 → 201 格）；实测这一支跨度 100% 落在 `sugar.interp` 一族（72% + 28% 深浅子档）⇒ 节点齐了以后的登记目标就是 `sugar.interp`，但**不许现在抢登记**去归零归因尺那 189 格"说不清" |
+ *
+ * 判据只有一条（**不看读数涨跌**，也不给"过半就行"的数尺）：**登记一档 = 承诺"这一跨度的作者面
+ * 语义由这一档说完"**。跨度里若还有**别族在承担内容**（台词、名字层、参数、调用位、插值），涂一档
+ * 就是把词法层已经分好的那几层抹平——那既不是"结构层更对"，也不是覆盖面，是**降维**。反过来说，
+ * 表外那些格数是**覆盖面的真账缺口**，要补得先由查询侧给出**子记号级捕获**（`(if_head keyword: …)`
+ * 那一类），不是由宿主猜一个档。逐支账由 `tests/kojo-ts-capture-coverage.test.ts` 每次复跑打印。
  */
 export const KOJO_STRUCTURE_CAPTURE_TIERS: Readonly<Record<string, string>> = {
   comment: 'comment',
@@ -206,17 +236,47 @@ export const KOJO_STRUCTURE_CAPTURE_TIERS: Readonly<Record<string, string>> = {
 /**
  * **捕获名 → 节点类型级**覆盖（先查这张表里"这一支捕获下的这个节点"，落空才回上面的捕获名表）。
  *
- * 存在的理由只有一个：`@keyword` 是一支"整行"捕获，而同一支里混着一条不含关键字的正文
- * `heart_text`（`心形 「还想做……舒服ー的事……HPH」 续`），按捕获名只能给一个档，量出来
- * 161 格里 `sugar.speech` 族占 109 格、`sugar.keyword` 族只占 29 格 ⇒ 那支的判据是"台词"不是"关键字"。
- * 这是**表现层的取舍**，语法包不该为它负责，所以留在宿主表里；并且**按捕获名分组**——
- * 否则将来别的查询把 `heart_text` 挂在别的捕获下（例如 `@string.special`）会被这一格悄悄串色。
+ * 存在的理由只有一个：同一支"整行"捕获里混着**跨度内容并不齐**的节点，按捕获名只能给一个档就必然
+ * 有一半涂错。上面 TSIT5 那条判据（一档要说得完这一跨度）落不到捕获级时，**只许落到这张表里按节点
+ * 登记**——这也是本批唯一的新增通道：捕获级表 `KOJO_STRUCTURE_CAPTURE_TIERS` 三支一毫米不动，
+ * 新登记的每一格都是"跨度里除了行身份档没有别族承担内容"的节点。
+ *
+ * - `keyword / heart_text`：整行 `@keyword` 里唯一一条不含关键字的正文（`心形 「还想做……舒服ー的事……HPH」 续`），
+ *   161 格里 `sugar.speech` 族占 109 格 ⇒ 这一支的判据是"台词"不是"关键字"。
+ * - `keyword.control /（光杆收束·流转·裸头 12 枚节点）`：`循环结束` / `出错结束` / `数据表结束` /
+ *   `出错处理` / `数据表` / `循环流转` / `返回` / `随机` / `组` / `分支` / `选项` / `菜单` 这些行**整行
+ *   就是那个中文关键字**（28 份夹具实测：同族的词法格占这一跨度 67–100%，`loop_flow` / `catch_end` /
+ *   `data_end` 三形 100%），剩下的只有 `sugar.colon` 那一格冒号边界与个别运算符格——与已经登记的
+ *   `heart_head` / `color_head` 同一形态。带条件、带值、带台词的其余 19 枚节点形
+ *   （`if_head` 5,466 格 / `case_head` 710 / `when_head` 424 / `choice_item` 150 …）**不在这里**，
+ *   理由见上面那张账。
+ * - `keyword.directive / raw_block_start`：`@函数名` 块起始行 = 不透明整块，词法层 3,239 格里 94% 发的
+ *   正是「整行原生直通」档 `keyword.raw`（`kojo-language.ts` 那一档的 `why` 写的就是"`@函数` = 不透明整块"）；
+ *   这是**外来族**，不是中文关键字档。同一支捕获下的 `native_line`（50,650 格）**不登记**：一枚节点两形混
+ *   涂，`keyword.erb` 只认领 35%，台词引号与名字各占 21% / 16%，登记等于把 3/4 的格子糊成外来色。
  *
  * 语法升级（节点改名 / 拆分）时这张表自然失效：查不到就回落到捕获名表，不抛错、不静默丢色，
- * A/B 的读数会自己说出来。
+ * A/B 与覆盖面账会自己说出来。
  */
 export const KOJO_STRUCTURE_NODE_TIERS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   keyword: { heart_text: 'sugar.speech' },
+  // TSIT5：光杆收束 / 流转 / 裸块头——整行就是那个中文关键字，跨度里没有别族承担内容
+  'keyword.control': {
+    loop_end: 'sugar.keyword',
+    loop_flow: 'sugar.keyword',
+    catch_head: 'sugar.keyword',
+    catch_end: 'sugar.keyword',
+    data_head: 'sugar.keyword',
+    data_end: 'sugar.keyword',
+    return_statement: 'sugar.keyword',
+    random_head: 'sugar.keyword',
+    group_head: 'sugar.keyword',
+    branch_head: 'sugar.keyword',
+    choice_head: 'sugar.keyword',
+    menu_head: 'sugar.keyword',
+  },
+  // TSIT5：`@函数名` 块起始 = 不透明整块（`native_line` 依上面那条理由留在表外）
+  'keyword.directive': { raw_block_start: 'keyword.raw' },
 };
 
 /** Monaco 基线 token 名（不必进 `KOJO_TOKEN_TIERS`，主题基线里已有色） */

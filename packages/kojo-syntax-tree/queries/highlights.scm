@@ -16,6 +16,11 @@
 (comment_line) @comment
 
 ; ---- 台词 / 插值 / 原生字符串 ----
+; TSIT5 说明（只加注释，捕获名与顺序一条没动）：`string` 已不是原子记号，行内 `{…}` 现在是真的
+; 子节点、节点名仍是 `interpolation` ⇒ 下面这两支捕获**零改动就同时覆盖**"行首整行 `{…}`"与
+; "台词行内 `{…}`"两种出处（28 份语料实测行内 27 枚）。宿主侧登记与重叠优先级不归本查询管：
+; 父 `string` 的跨度先落位，内层跨度要生效得由宿主让"更窄的那一枚"赢（实测见
+; `packages/app/tests/kojo-ts-ab-attribution.test.ts` 的取证用例）。
 (string) @string
 (interpolation) @string.special
 

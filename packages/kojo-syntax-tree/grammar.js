@@ -35,6 +35,12 @@
  *   `(comment_inline)` 成为**行节点的子节点**，行自身的 kind 不变（`node-types.ts` 把两者登记为
  *   NON_LINE_NODES，宿主按行反查时取的是外层行节点）。
  *   `comment_inline` 的"引号内分号不算注释"由此口径天然成立：串先被 `native_string` 吃掉。
+ * - **台词行 `「…」` 自 TSIT5 起不再是原子记号**：`string` 升级为
+ *   `「` + （正文段 / 行内 `interpolation`）* + 收束段 的**规则**，行内 `{…}` 因此成为可被子节点
+ *   （`highlights.scm` 既有捕获 `(interpolation) @string.special` 直接捕到，零新增捕获）。
+ *   跨度由 `speech_close` 的贪婪 `[^{\n]*[」\\]` 钉在"本行最后一枚 `」` 或 `\`"，与旧的
+ *   `token(prec(5, /「[^\n]*[」\\]/))` **逐格相同** ⇒ 行节点起止、涂色面、折叠跨度一概不变，
+ *   `string` 也仍是整行的分型节点（`index.ts` 的 CONTAINER_NODES 不含它 ⇒ 逐行反查不下钻内部）。
  * - 换行**不在 extras** 里：由 `blank_line` 记号逐条认领。理由——extras 被吞进后继节点的 span，
  *   会让 `block` 的 start 行指到上一行（第一波实测 `timing_head` 的 span 是 `"\n\n时机 事件 22："`），
  *   折叠区间随之错位。换行有主之后，行节点起始即正文，块跨度精确。
@@ -135,6 +141,11 @@ const P = {
   raw_block_start: 4,
   string: 5,
   interpolation: 5,
+  // 台词行内部三枚（只在 `string` 已开局的状态里合法，与行首分派互不相干）：
+  // 收束 > 插值 > 正文，保证 `「甲{乙}」` 里 `{乙}` 抢在正文段之后、`」` 抢在收尾那一格。
+  speech_close: 8,
+  speech_interpolation: 7,
+  speech_text: 6,
   switch_item: 6,
   label_decl: 7,
   head_decl: 8,
@@ -309,9 +320,49 @@ module.exports = grammar({
     // 那几个各有专路（未闭合的串/插值因此能落 ERROR 而非被静默吞成旁白）。
     text_line: lineRule(P.text_line, `[^ ${W}\\n;「{@]${C}*`),
 
-    // 台词行 `「…」`：行首 `「`，同一物理行内以 `」` 收尾，或以 `\` 折行收尾。
-    // `[^\n]*` 保证不跨行——未闭合的 `「` 因此落 ERROR（本批错误恢复的可定位点）。
-    string: atomicLine(P.string, /「[^\n]*[」\\]/),
+    // 台词行 `「…」` = **行首 `「` + （正文段 / 行内插值）*  + 收束段**。
+    // 跨度与旧的原子记号 `「[^\n]*[」\\]` **逐格相同**：收束段用贪婪 `[^{\n]*` 复现"终点 = 本行
+    // 最后一枚 `」` 或 `\`"，于是拆内层不改行节点的起止（A/B 的涂色格、折叠跨度一概不动）。
+    // 唯一新增：行内的 `{…}` 成为**可被子节点** `interpolation`（与行首整行形同一节点名 ⇒
+    // `highlights.scm` 里那条既有捕获 `(interpolation) @string.special` 零改动就捕得到它）。
+    // 行级 kind 一字未动：`string` 仍是整行的分型节点，`src/index.ts` 的 CONTAINER_NODES 不含它
+    // ⇒ 逐行反查与对照闸都不下钻台词内部。未闭合的 `「`（同行既无 `」` 也无行尾 `\`）**仍可定位**，
+    // 只是载体从"整枚记号不匹配 ⇒ ERROR"换成"行末一枚 `MISSING:speech_close`"（形状变了、没变哑）。
+    string: ($) =>
+      seq(
+        tk(P.string, '「'),
+        repeat(choice($._speech_text, alias($._speech_interpolation, $.interpolation))),
+        $.speech_close,
+      ),
+
+    /**
+     * 台词正文段：不吃 `{` `}` `」` `\` 与换行；**单枚散括号自成一格**（`「甲{」` / `「甲}}」` 这类
+     * 写坏的括号因此仍留在台词跨度内，不新增 ERROR——旧原子记号也是这么处理它们的）。
+     */
+    _speech_text: () => token(prec(P.speech_text, /[{}]|[^{}」\n\\]+/)),
+
+    /**
+     * 行内插值 `{…}`：与真源 `kojo-sugar/lexer.ts::scanInterpolations` 同判据——**不嵌套**（体内不再
+     * 收 `{`）、**同一物理行内闭合**（不收 `\n`）、体不吃 `」`/`\`（终点必在台词收束之前）。
+     * 写形只有 ASCII 括号、没有任何中文词形 ⇒ 不进 `word-forms.json` 投影面（那张表只投影词形），
+     * 对齐改由 `tests/speech-interpolation-inline.test.ts` 拿真源列区间逐段对账。
+     */
+    _speech_interpolation: () => token(prec(P.speech_interpolation, /\{[^{}」\n\\]*\}/)),
+
+    /**
+     * 台词收束段：`[^{\n]*` 之后紧跟 `」` 或 `\` ⇒ 贪到本行（下一个 `{` 之前）最后一枚收束字符，
+     * 与旧原子记号 `「[^\n]*[」\\]` 的终点**逐格相同**。
+     * **必须是具名记号**：拆内层之后，未闭合的 `「` 行不再"词法上没人认领"（旧形是整个记号不匹配 ⇒
+     * 落 ERROR），而是走 parser 的错误恢复、在行末插一枚零宽 MISSING。隐藏名（`_` 前缀）的 MISSING
+     * 子节点在 `node.children` / `firstChild` 遍历里**不可见** ⇒ 故障会静默消失（违反铁律 4
+     * "内核不静默"，`error-recovery` 与宿主 `syntax` 腿都量不到）。具名 ⇒ `MISSING:speech_close`
+     * 可定位、落点就在作者那一行。
+     * ⚠ 连带一条宿主侧待接（本包不许动 `engine.ts`）：`missingFault()` 现在把"没有 open 字段的
+     * MISSING"判成 `unexpected-token`，而这条形状的作者文案是 **`unterminated-string`**
+     * （判据一行：`node.parent.type === 'string'` 或 `expectedToken === 'speech_close'`）。
+     * 拆内层前它由 `kindOfErrorLine(ERROR 首行)` 给出；现在故障换了载体、类别需要跟着接一次。
+     */
+    speech_close: () => token(prec(P.speech_close, /[^{\n]*[」\\]/)),
 
     // 插值整行 `{…}`：行首 `{`，同一物理行内以 `}` 收尾。未闭合即 ERROR。
     interpolation: atomicLine(P.interpolation, /\{[^\n]*\}/),
@@ -496,7 +547,17 @@ module.exports = grammar({
     blank_line_cmd: lineRule(P.blank_line_cmd, `(?:${alt('inline.blank')})(?:[${W}]+\\S+)?`),
 
     // 赋值 `目标 = 表达式`（assign；优先级低于所有专有关键词头）。
-    assign: lineRule(P.assign, `[^="\\n;]+=[^"\\n;]*`),
+    // **首字符单独一档并排掉 `「`**（与 `text_line` 同一口径："行首 `「` 必须走台词专路"）：
+    // 台词里带 `=` / `:` 的写法很常见（`「{她的好感度 >= 500 ? "…" : "…"}」`），旧原子记号靠
+    // "整行更长"抢下这一行；拆内层后行首只剩一枚 `「`（1 格），词法上必然输给 17 格的 assign
+    // ⇒ 行 kind 从 `string`（grammar-finer）变成 `assign`（真冲突）。
+    // 只排**首位**而不排整段：`甲「乙」 = 3` 这类"左值里含引号"的写法照旧归 assign（零行为变化）。
+    // 首位还得排掉**水平空白**（口径同 `text_line`）：记号可以从缩进那一格起算，`「` 就挡不住——
+    // `    「{她的好感度 >= 500 ? "…" : "…"}」` 的旧胜者是"整行更长"的 `string`，拆内层后行首只有
+    // 一枚 `「`，assign 若从空白起手（`[^="\n;「]` 里空白合法）就以 18 格吃掉这一行 ⇒ 真冲突。
+    // 体积口径实测：把 `「` 排进整段首类（`[^="\n;「]+`）要多付 67,617 B wasm（U+300C 在字符表里
+    // 切出新 range、每枚行首状态跟着分裂）⇒ 首位排、后段不排。
+    assign: lineRule(P.assign, `[^="${W}\\n;「][^="\\n;]*=[^"\\n;]*`),
 
     // 三族里认得词形但结构残缺（controlMalformed）：只认**光杆控制词**（其后无正文）。
     // 词表限定为"裸写即非法"的词；合法写法（带冒号/内容）由各专有关键词头以**更长匹配**胜出：
@@ -523,7 +584,8 @@ module.exports = grammar({
 
     _line: ($) =>
       choice(
-        // ---- 台词 / 插值（原子行 token：要求同行闭合，是错误恢复的可定位点）----
+        // ---- 台词（有内层结构的行规则：`「` + 正文段/行内插值 + 收束段）/ 插值整行（原子记号）----
+        // 两者都要求同行闭合，是错误恢复的可定位点
         $.string,
         $.interpolation,
         // ---- 注释 / 原生直通 / 标签 ----

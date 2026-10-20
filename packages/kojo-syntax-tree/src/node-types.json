@@ -2030,6 +2030,25 @@
     }
   },
   {
+    "type": "string",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "speech_close",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "switch_body",
     "named": true,
     "fields": {},
@@ -2592,7 +2611,7 @@
     "named": true
   },
   {
-    "type": "string",
+    "type": "speech_close",
     "named": true
   }
 ]
