@@ -260,15 +260,19 @@ function writeFixtures() {
   fs.writeFileSync(LONG_PATH, long.join('\n'), 'utf-8');
 
   // .kojo（打字类断言的主战场——非方言文件，编辑器可编辑）：
-  // - 第 3/4 行是原生 ERB 直通行 = 💡「改为语法糖写法」的候选（sugar-lift 只对 .kojo 供）
-  // - 末行注释里的 Cyrillic `а`/`е`（\u0430/\u0435）= Unicode 高亮（ambiguous）断言对象；
-  //   该混淆对在 _default 与 ja/zh 各 locale 表里都标为 ambiguous（base/common/strings.js）
+  // - 末行是**正文行（非注释）**：Cyrillic `а`/`е`（\u0430/\u0435）= Unicode 高亮（ambiguous）
+  //   断言对象；该混淆对在 _default 与 ja/zh 各 locale 表里都标为 ambiguous（base/common/strings.js）。
+  //   **不能放注释**：Monaco 的 `unicodeHighlight.includeComments` 缺省 false（standalone 的
+  //   workspace trust 恒 true ⇒ resolve 成 false），注释 token 内的歧义字符按设计不画；
+  //   本仓 `CJK_TYPING_BASELINE` 也未覆写这一位。正文 token（Other）才会出 `.unicode-highlight`。
+  // - 这一行同时是 f3 补全的落点：QSUG-1 起 `.kojo` **注释行**整轮零候选（`kojo-suggest-gate`
+  //   的代码位门），行首补全（块骨架 snippet）只在正文/代码位出货。
   const kojo = [
     '角色: 1',
     '时机 指令 310：',
     '\tPRINTFORMDW 甲。',
     '\tPRINTFORMDL 乙。',
-    '; 注釈 unicode l\u0430t\u0435st probe',
+    '注釈 unicode l\u0430t\u0435st probe',
     '',
   ].join('\n');
   fs.mkdirSync(path.dirname(KOJO_PATH), { recursive: true });
@@ -789,10 +793,10 @@ async function main() {
       }
     }
 
-    /* 打字测试前：在末行（注释行）末尾落光标 */
+    /* 打字测试前：在末行（正文行）末尾落光标 */
     const cursorToEnd = async () => {
       const rect = await lineRect(cdp, 'unicode');
-      if (!rect) throw new Error('找不到 unicode 注释行');
+      if (!rect) throw new Error('找不到 unicode 行');
       await cdp.click(rect.xEnd, rect.y);
       await sleep(250);
       return rect;
@@ -802,10 +806,12 @@ async function main() {
        旧夹具打「PR」指望词法候选——但 `wordBasedSuggestions` 是 1012 批的产品级关闭项
        （ERB/中文口上上无语义价值），`.kojo` 的静态候选也不以拉丁前缀命中 ⇒ 恒 0 行是探针口径错，不是管道断。 */
     {
-      // 落点=注释行**行首**（';' 之前）：那里 word 为空 ⇒ 不过滤，静态候选全量可见。
-      // 行末尾会把「probe」当过滤词，中文关键字/保留代词全被滤掉 = 0 行（产品正确、探针落点错）。
+      // 落点=**正文行行首**（不是注释行）：QSUG-1 起 `.kojo` 注释行整轮零候选
+      // （`kojo-suggest-gate` 的代码位门），行首补全只在正文/代码位出货。
+      // 行首 word 为空 ⇒ 不过滤，块骨架 snippet 全量可见；行末尾会把「probe」当过滤词 = 0 行
+      // （产品正确、探针落点错）。
       const startRect = await lineRect(cdp, 'unicode');
-      if (!startRect) throw new Error('找不到 unicode 注释行');
+      if (!startRect) throw new Error('找不到 unicode 行');
       await cdp.click(startRect.xIn, startRect.y);
       await cdp.press('Home', 'Home', 36); // 落到行首：word 为空 ⇒ 不过滤，静态候选全量可见
       await sleep(300);
@@ -897,7 +903,9 @@ async function main() {
       await sleep(300);
     }
 
-    /* f10 Unicode 高亮：末行注释含 Cyrillic а/е（ambiguous）→ .unicode-highlight 装饰 */
+    /* f10 Unicode 高亮：末行正文含 Cyrillic а/е（ambiguous）→ .unicode-highlight 装饰。
+       注释行不出装饰是产品口径（Monaco `includeComments` 缺省 false，见夹具注释）——
+       探针要断的是「unicodeHighlighter 通路活着」，故夹具用正文行承载同一对字符。 */
     {
       const uni = await tryWaitFor(cdp, `document.querySelectorAll('.editor-body .unicode-highlight').length > 0`, 8000);
       const uniCount = await cdp.evalJs(`document.querySelectorAll('.editor-body .unicode-highlight').length`);
