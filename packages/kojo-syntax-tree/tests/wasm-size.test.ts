@@ -29,22 +29,21 @@ const wasmPath = join(pkgRoot, 'tree-sitter-kojo.wasm');
 /**
  * 棘轮阈值：出货 wasm 允许的最大原始字节数（只降不升；抬它 = 体积回退，要组长点头）。
  *
- * 747,772 → **824,819**（+77,047 B，2026-10-20 预览面批收口时点头，涨幅逐笔对账）：
- * - **+19,910 B** = `grammar.js` 的 `native_line` 第三支与两支等值标记（`[SKIPSTART]` / `[SKIPEND]`
- *   严格等值 + `#DIM` 记号正则），由 `cst-classifyline-parity` 那 18 行真冲突逼出来的——判据必须跟
- *   转译器同源，否则语法层把真语句判成旁白；
- * - **+57,137 B** = `try_statement`（TRY 系九枚写形的 CST 节点）+ 残缺档并进 `control_malformed`
- *   那一条吃到行尾的分支。这一笔**已经实测拆过账、瘦不动**（同链连跑两次产物逐字节相同）：
- *   ① 九枚名单本来就是**一枚正则记号**（`token(prec(11, pattern))`，与 `#DIM` 同一手法），
- *      把 anchored alternation 换成 trie 正则只退 **471 B**（0.8%）；
- *   ② 名单宽度值 **7,761 B**（换成 `[A-Z]+` 的天花板共退 9,768 B——那等于不认 TRY，判据不许）；
- *   ③ `control_malformed` 的 TRY 支值 **4,322 B**（parity 承重，摘了就判不回残缺形）；
- *   ④ 剩下的 **≈41,800 B 是"多一个行族节点"在 LR 表里的固定价**——要退它只能把 `try_statement`
- *      降级成 `native_line`，那等于取消这枚节点、宿主按 kind 取色与折叠就没有了。
- *   ⇒ 结论：这一档体积是"TRY 系写形有 CST 节点"这件事的**结构性代价**，不是实现浪费。
- * 阈值取实测原样，不放余量：任何新增体积都必须重新对账。
+ * 沿革与拆账（**2026-10-20 合流后重测**：上游台词行内插值改规则 + 本批 TRY 写形同时在场）：
+ * - 747,772 B（TSIT3-C 出版基线）→ **742,108 B**＝上游把台词串从原子 token 改成带子节点的规则
+ *   （`e590c43`），净退 **−5,664 B**；
+ * - 742,108 → **821,724 B**＝本批两笔：`native_line` 第三支与等值标记（`[SKIPSTART]` / `[SKIPEND]`
+ *   严格等值 + `#DIM` 记号正则，由 `cst-classifyline-parity` 的 18 行真冲突逼出来）＋ `try_statement`
+ *   与 `control_malformed` 的 TRY 支，合计 **+79,616 B**；相对上一出版基线净 **+73,952 B**。
+ * - 上一轮逐笔拆账（19,910 / 57,137）是在**改规则前**的 grammar 上量的，节点表变了以后逐笔数不再
+ *   逐字复现，能站得住的结构性结论保留：九枚名单换成 trie 只退 **471 B**（0.8%）；名单宽度的天花板
+ *   （换 `[A-Z]+`）退 9,768 B——那等于不认 TRY，判据不许；`control_malformed` 的 TRY 支值 4,322 B
+ *   （parity 承重）；剩下的大头是"多一个行族节点"在 LR 表里的固定价（≈41,800 B 量级）——
+ *   要退它只能把 `try_statement` 降级成 `native_line`，那等于取消这枚节点、宿主按 kind 取色与折叠就没有了。
+ *   ⇒ 结论不变：这一档体积是"TRY 系写形有 CST 节点"这件事的**结构性代价**，不是实现浪费。
+ * 阈值取实测原样（821,724 B / gzip 101,487 B），不放余量：任何新增体积都必须重新对账。
  */
-const MAX_WASM_BYTES = 824_819;
+const MAX_WASM_BYTES = 821_724;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo.wasm）', () => {
   const bytes = readFileSync(wasmPath);
