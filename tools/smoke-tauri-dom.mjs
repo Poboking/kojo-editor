@@ -16,10 +16,19 @@
  * 因此覆盖端口时 devUrl 固定写 `127.0.0.1:<port>`，并且**起壳后先钉页面 origin** 才判绿。
  * CDP 端口固定 9222（本工具自己拉起的 WebView2 专用调试口）。
  *
- * `KOJO_SMOKE_ISOLATE_APPDATA=1`（可选）：用 `<identifier>.smoke` 这份独立身份起壳，
- * appDataDir 随之独立。理由见 `devTarget` 的 `isolateAppData`：**别人的崩溃恢复横幅也带
- * `.notice`**，共用 appData 时会被本工具的结构判据当成"内核装配中"而整轮判红——那是用户数据
- * 的在场，不是 app 的毛病，隔离后结构断言只看结构。（结构判据本身一个字没改。）
+ * **崩溃恢复横幅不算"装配中"（2026-10-21，BOARD SMOKE-NOTICE）**：`.notice` 里有一条是
+ * `WelcomeView` 的**崩溃恢复横幅**（`.notice.crash-recovery`：%APPDATA% 下有未保存快照时才出现，
+ * 是"用户数据在场"而不是"内核没装好"）。共用 appData 时它会被当成"内核装配中"⇒ 整轮判红，
+ * 而屏上其实渲染得好好的（`checks.domText` 里欢迎页内容一应俱全）。故判据收窄成
+ * {@link MOUNTING_NOTICE_SEL} = `.notice:not(.crash-recovery)`：**仍按 `.notice` 默认开放**
+ * （未来任何新 `.notice` 照旧算装配中，宁红勿漏），只把这**一条已知合法横幅**放行。
+ * 「内核装配中…」那条本身是 `className="notice welcome-notice" role="status"`（无修饰类），
+ * 不带 `crash-recovery` ⇒ 本选择段**不可能**把它一并放过（`tools/tests/` 的源形状守卫钉住）。
+ *
+ * `KOJO_SMOKE_ISOLATE_APPDATA=1`（可选）：仍保留——用 `<identifier>.smoke` 这份独立身份起壳，
+ * appDataDir 随之独立（干净首启面的读数，且与任何人的快照彻底解耦）。机制见 `devTarget` 的
+ * `isolateAppData`；它**不再是**绕开崩溃横幅的必需品（判据已按上面收窄）。代价：`TAURI_CONFIG`
+ * 变了会触发 cargo 重编 app crate。
  *
  * 进程级：vite 端口 / tauri 进程 / 不闪退（同 smoke-tauri-dev.mjs）；
  * DOM 级：通过 WebView2 远程调试端口（CDP）连接，执行 JS 检查 React 是否真正渲染
@@ -47,7 +56,7 @@
  *
  * 用法：node tools/smoke-tauri-dom.mjs [监测秒数，默认 100]
  *       KOJO_SMOKE_VITE_PORT=1432 node tools/smoke-tauri-dom.mjs 110   （换 vite 端口，CDP 仍是 9222）
- *       KOJO_SMOKE_ISOLATE_APPDATA=1 …                                   （独立 appDataDir，避开别人的恢复横幅）
+ *       KOJO_SMOKE_ISOLATE_APPDATA=1 …                                   （独立 appDataDir，干净首启面；可选）
  * 退出码：0 = 通过；1 = 失败；2 = 前置不满足（端口被占 / 配置自相矛盾 / 断言①底色真源读不到）。
  * 注意：会短暂弹出应用窗口（结束后自动关闭）。
  */
@@ -67,6 +76,20 @@ import {
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WATCH_SECONDS = Number(process.argv[2] ?? 100);
+/**
+ * 「内核装配中…」（=DOM 还没挂好）的**结构判据**：屏上任一 `.notice` 且不是崩溃恢复横幅。
+ *
+ * 为什么不是裸 `.notice`：崩溃恢复横幅 `.notice.crash-recovery` 是**合法欢迎页内容**
+ * （%APPDATA% 里有未保存快照就渲染），把它算成"装配中"会让一个渲染正常的 app 整轮判红
+ * （2026-10-21 实测，用户快照在场时必红）。
+ * 为什么不是 `:not(.crash-recovery):not(.warn):not(.error)`：那会把「浏览器环境」/「打开失败」
+ * 这两条 `.notice` 也放过 ⇒ 判据对未知/出错态从"宁红勿漏"变成"宁绿勿漏"。**只放行这一条已知合法横幅**。
+ * 「内核装配中…」那条是 `className="notice welcome-notice" role="status"`（无修饰类）⇒ 本选择段
+ * 匹配得到它，收窄不会连它一起放过（`tools/tests/welcome-crash-notice-selector.test.ts` 钉住）。
+ * **仍只认结构，不匹配任何界面文案**（本判据一个字面文案都没沾）。
+ */
+const MOUNTING_NOTICE_SEL = '.notice:not(.crash-recovery)';
+
 /** 断言②的 Network 域取证轮（Page.reload 重跑一轮开机）最多等多久 */
 const NETWORK_WAIT_MS = Number(process.env.KOJO_BOOT_NETWORK_WAIT_MS ?? 90000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -233,6 +256,8 @@ const checks = {
   cdpUp: false,
   domRendered: false,
   domText: '',
+  /** 崩溃恢复横幅是否在场（**不参与判绿**；只让"屏上是什么"在读数里说得清） */
+  crashBanner: false,
   rootChildren: 0,
   // 页面 origin 必须落在本次 dev 地址上（dev.origin）：端口被别的树占着时 localhost 可能把壳带偏，
   // 那种绿不算数——与 IPC / market 冒烟同一道假绿闸（smoke-lib.assertPageOrigin）。
@@ -281,7 +306,8 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
           `JSON.stringify({
              welcome: !!document.querySelector('.welcome'),
              card: !!document.querySelector('.welcome-card'),
-             mounting: !!document.querySelector('.notice'),
+             mounting: !!document.querySelector(${JSON.stringify(MOUNTING_NOTICE_SEL)}),
+             crashBanner: !!document.querySelector('.crash-recovery'),
              rootChildren: (document.getElementById('root') || document.body.firstElementChild || {childElementCount:0}).childElementCount,
              text: document.body ? document.body.innerText.slice(0, 600) : '(no body)',
            })`,
@@ -292,14 +318,17 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
         // （这句原先硬编码 `选择 eraTW 游戏目录`，文案一旦改成 `选择游戏目录`
         //  探针就把一个渲染正常的 app 判成红——§5.117）。
         // 结构判据：欢迎页根 + 卡片都在；"内核装配中…"的 `.notice` 态**不算过**（那正是白屏的近亲）。
+        // 「装配中」的 `.notice` 已按 MOUNTING_NOTICE_SEL 收窄：崩溃恢复横幅（`.crash-recovery`）
+        // 是合法内容，不算装配中；其余 `.notice`（含装配中那条）照旧不算过。
         checks.domRendered = dom.welcome === true && dom.card === true && dom.mounting !== true;
+        checks.crashBanner = dom.crashBanner === true;
         checks.rootChildren = dom.rootChildren;
         if (/Error|错误|失败/.test(checks.domText)) {
           console.log('[smoke] ⚠ error text on page:', checks.domText.slice(0, 300));
         }
         console.log(
-          `[smoke] DOM 结构: welcome=${dom.welcome} card=${dom.card} notice=${dom.mounting} ` +
-            `rootChildren=${dom.rootChildren}`,
+          `[smoke] DOM 结构: welcome=${dom.welcome} card=${dom.card} notice=${dom.mounting}` +
+            ` crashBanner=${dom.crashBanner} rootChildren=${dom.rootChildren}（装配中判据 ${MOUNTING_NOTICE_SEL}）`,
         );
         console.log('[smoke] DOM text captured:', JSON.stringify(checks.domText.slice(0, 160)));
       }
@@ -462,7 +491,8 @@ if (!passed) {
         !checks.viteUp && `vite ${dev.port} 未监听（IPv4/IPv6 都试过）`,
         !checks.hostLaunched && '未看到 `Running target\\debug\\kojo-editor`',
         !checks.cdpUp && `CDP ${CDP_PORT} 未监听`,
-        !checks.domRendered && 'DOM 未挂载（要求 .welcome + .welcome-card 且无 .notice；rootChildren 见 checks）',
+        !checks.domRendered && `DOM 未挂载（要求 .welcome + .welcome-card 且无「${MOUNTING_NOTICE_SEL}」；` +
+          `crashBanner=${checks.crashBanner}，rootChildren 见 checks）`,
         !checks.originChecked && checks.cdpUp && '未能校验页面 origin',
         checks.originChecked && checks.originOk === false &&
           `页面 origin 不在本次 dev 地址上（见上方打印行；期望 ${dev.origin}）`,
