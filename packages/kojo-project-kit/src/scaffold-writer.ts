@@ -10,12 +10,15 @@
  * - **不猜目录**：`targetDir` 必填，由调用方按本游戏的布局决定（共享层不认识游戏目录结构）；
  * - **不转码**：逐字节写（`writeBytes`）。脚手架文本自己就带 BOM / CRLF（角色表 CSV
  *   必须是 UTF-8-BOM + CRLF），交给 `writeText` 会被按文件编码策略重排一遍——
- *   首次写入默认补 BOM，于是自带 BOM 的 CSV 变双 BOM。
+ *   首次写入默认补 BOM，于是自带 BOM 的 CSV 变双 BOM。编码口径的**唯一陈述处**
+ *   是 `encoding-policy.ts` 的 `scaffold-text` / `scaffold-csv` 两行；
+ *   本文件只调 `encodeScaffoldText`（= 原样 UTF-8，不增不减 BOM）。
  * - **报告逐条**：一行一个文件，失败时说清是哪个、为什么。
  */
 
 import type { FileIO, ScaffoldResult } from '@kojo/plugin-api';
 import { dirname, join } from '@kojo/plugin-api';
+import { encodeScaffoldText } from './encoding-policy';
 
 /** 落盘入参 */
 export interface WriteScaffoldInput {
@@ -47,7 +50,7 @@ export async function writeScaffoldFiles(input: WriteScaffoldInput): Promise<Sca
       throw new Error(`目标文件已存在，未覆盖：${abs}`);
     }
     await io.ensureDir(dirname(abs));
-    await io.writeBytes(abs, new TextEncoder().encode(text));
+    await io.writeBytes(abs, encodeScaffoldText(text));
     createdFiles.push(abs);
     report.push(`${relPath}（${text.length} 字符）`);
   }

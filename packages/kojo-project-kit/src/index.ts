@@ -46,6 +46,16 @@ export type {
   KojoCompiler,
 } from './artifact';
 
+/* ---- 落盘编码策略（三条写路的 BOM / 换行 / 末尾换行的**唯一陈述处**） ---- */
+export { encodeScaffoldText, PRODUCT_ENCODING, WRITE_ENCODING_POLICY } from './encoding-policy';
+export type {
+  BomPolicy,
+  EolPolicy,
+  TrailingNewlinePolicy,
+  WritePathEncoding,
+  WritePathId,
+} from './encoding-policy';
+
 /* ---- 许可条款（era 社区通行的几份；纯数据 + 渲染） ---- */
 export { buildLicenseText, LICENSE_CHOICES, LICENSE_FILE_NAME, licenseProducesFile } from './licenses';
 export type { LicenseFields, LicenseKind } from './licenses';
