@@ -110,6 +110,7 @@ import { mountProjectScan } from './project-scan-schedule';
 import { useProjectSession, useSessionFlush, useSessionStore } from './use-project-session';
 import { ProjectErrorBoundary } from './error-boundary';
 import { ProjectErrorNotice, raiseProjectError, visibleProjectError } from './project-error-notice';
+import { crashExitDecision } from './project-close';
 
 /**
  * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
@@ -1533,8 +1534,33 @@ export function App(): ReactElement {
     setProjectViewComponent(createProjectView());
   }, []);
   const exitProjectOnCrash = useCallback(() => {
-    void closeProject();
-  }, [closeProject]);
+    if (crashExitDecision(dirtyPaths.size) === 'close') {
+      void closeProject();
+      return;
+    }
+    // 崩溃后 EditorPane 已卸载，保存链路是空操作；直接 close 会经 dirtyPaths 清空
+    // 触发 autosave journal 的 clear，把恢复件静默抹掉。这里只给「明确丢弃」出口，
+    // 关闭通知或点「重试」都等于取消。
+    notify({
+      kind: 'error',
+      message:
+        `项目界面崩溃，当前有 ${dirtyPaths.size} 个文件未保存。回到欢迎页会丢弃这些未保存改动；` +
+        '可以先点「重试」或关闭本条提示，留在崩溃页继续处理。',
+      action: {
+        label: '丢弃未保存改动并回到欢迎页',
+        run: () => {
+          void (async () => {
+            try {
+              await autosaveRef.current?.discard();
+            } catch {
+              // 清理失败不影响关项目；用户已明确丢弃
+            }
+            await closeProject();
+          })();
+        },
+      },
+    });
+  }, [closeProject, dirtyPaths, notify]);
   const dismissProjectError = useCallback(() => setError(null), []);
   /** 项目态错误（welcome/opening 由 WelcomeView 自己的错误区承担，不重复上屏） */
   const projectError = visibleProjectError(phase, error);

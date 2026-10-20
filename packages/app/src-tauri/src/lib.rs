@@ -505,14 +505,24 @@ fn canonical_root_cached_short(
     }
     let canon = canonicalize_deep(root).map_err(|e| root_unresolved_message(op, root, &e.to_string()))?;
     if root.is_dir() {
-        if let Ok(mut memo) = state.canon_roots.lock() {
-            // 计算期间发生变更 ⇒ 不把变更前的旧结果插回表里（见 `invalidate_canon_roots`）。
-            if state.canon_epoch.load(Ordering::SeqCst) == epoch {
-                memo.insert(root.to_path_buf(), canon.clone());
-            }
-        }
+        memo_insert_canon_if_current(state, root, &canon, epoch);
     }
     Ok(canon)
+}
+
+/// 仅当备忘录代际未变时才落表（REF-FRONT-PERF 复核）：把"计算期间发生过
+/// invalidate"的旧结果挡在表外；调用方在锁外算 canon，不能只看"root 仍是目录"。
+fn memo_insert_canon_if_current(
+    state: &WriteDomainState,
+    root: &Path,
+    canon: &Path,
+    epoch: u64,
+) {
+    if let Ok(mut memo) = state.canon_roots.lock() {
+        if state.canon_epoch.load(Ordering::SeqCst) == epoch {
+            memo.insert(root.to_path_buf(), canon.to_path_buf());
+        }
+    }
 }
 
 /// 命令侧包装：取 appDataDir + 当前注册的项目根 + 常驻授权根，执行判定（走备忘录）。
@@ -1792,43 +1802,10 @@ fn normalize_event_kind(kind: &EventKind) -> Option<&'static str> {
 #[derive(Default)]
 struct WatchState {
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
-    /// **监视会话变更序号**（REF-FRONT-PERF）：`start_watch` 改 async 后建监视器在阻塞线程池上，
-    /// 期间 `stop_watch`（项目关闭）或另一次 start 可能插进来（旧实现全在主线程串行）。
-    /// start 取号 → 建好 → 落定前复核：序号不等 ⇒ 本次启动作废（watcher 直接 Drop），
-    /// 与"后发生的 stop/start 恒胜"的串行语义一致。
-    epoch: AtomicU64,
-}
-
-/// 取一个「监视会话变更」序号（start 在建设之前取号）。
-fn begin_watch_change(state: &WatchState) -> u64 {
-    state.epoch.fetch_add(1, Ordering::SeqCst) + 1
-}
-
-/// 监视器落定：期间发生过 stop / 后发 start ⇒ 丢弃本次建好的 watcher（Drop 即注销句柄）。
-fn commit_watcher(
-    state: &WatchState,
-    watcher: notify::RecommendedWatcher,
-    epoch: u64,
-) -> Result<(), String> {
-    let mut guard = state
-        .watcher
-        .lock()
-        .map_err(|_| "watch state poisoned".to_string())?;
-    if state.epoch.load(Ordering::SeqCst) == epoch {
-        *guard = Some(watcher);
-    }
-    Ok(())
-}
-
-/// 停止的同步核心（命令侧只是包装）：取新号（在途 start 一律作废）+ 丢弃 watcher。
-fn clear_watcher(state: &WatchState) -> Result<(), String> {
-    let mut guard = state
-        .watcher
-        .lock()
-        .map_err(|_| "watch state poisoned".to_string())?;
-    state.epoch.fetch_add(1, Ordering::SeqCst);
-    *guard = None;
-    Ok(())
+    // 刻意保持同步命令（REF-FRONT-PERF 复核）：监视会话没有 token，stop 只认"当前
+    // watcher"。若把 start 挪到阻塞线程池，两次 start 重叠时旧 start 的返回值会让
+    // 内核的 stale-session un() 调到同一个 stop_watch —— 旧会话会把新会话的句柄停掉。
+    // 要异步化必须先给 start/stop 加会话 token；这条是低频路径，不值得在本批引入。
 }
 
 /// notify 回调 → WebView 事件。零判断，逐条透传。
@@ -1874,7 +1851,7 @@ impl notify::EventHandler for WebviewForwarder {
 
 /// 起（或换）监视会话：递归监视 `paths`，原始事件转发到 WebView。
 #[tauri::command]
-async fn start_watch(
+fn start_watch(
     app: tauri::AppHandle,
     state: tauri::State<'_, WatchState>,
     paths: Vec<String>,
@@ -1890,37 +1867,40 @@ async fn start_watch(
     //    `FS_WATCH_ERROR_EVENT` → 前端重连状态机接管重建（P0-5 的 TS 半边），
     //    这就是"缓冲溢出不丢事件、变成一次可见的失效-自愈"的闭环。
     let config = notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
-    // 建监视器 + 逐根登记（ReadDirectoryChangesW 要开目录句柄）是盘上活 ⇒ 阻塞线程池；
-    // watcher 建好再交回命令侧存进托管状态（与旧实现同一生命周期）。
-    // 取号在建设之前：建设期间 stop / 后发 start ⇒ 落定前复核会丢弃本次 watcher。
-    let epoch = begin_watch_change(&state);
-    let (watcher, report) = run_blocking("start_watch", move || {
-        let mut watcher = notify::RecommendedWatcher::new(WebviewForwarder { app }, config)
-            .map_err(|e| format!("创建文件监视器失败: {e}"))?;
+    // 同步建监视器 + 逐根登记：与 stop_watch 在同一条 IPC 串行语义里，避免
+    // "旧 start 的 stop 杀掉新 watcher"（见 WatchState 的说明）。
+    let mut watcher = notify::RecommendedWatcher::new(WebviewForwarder { app }, config)
+        .map_err(|e| format!("创建文件监视器失败: {e}"))?;
 
-        let mut watched = Vec::new();
-        let mut failed = Vec::new();
-        for p in paths {
-            match watcher.watch(Path::new(&p), notify::RecursiveMode::Recursive) {
-                Ok(()) => watched.push(p),
-                Err(e) => failed.push(FailedRoot {
-                    path: p,
-                    error: e.to_string(),
-                }),
-            }
+    let mut watched = Vec::new();
+    let mut failed = Vec::new();
+    for p in paths {
+        match watcher.watch(Path::new(&p), notify::RecursiveMode::Recursive) {
+            Ok(()) => watched.push(p),
+            Err(e) => failed.push(FailedRoot {
+                path: p,
+                error: e.to_string(),
+            }),
         }
-        Ok::<_, String>((watcher, WatchReport { watched, failed }))
-    })
-    .await?;
+    }
 
-    commit_watcher(&state, watcher, epoch)?;
-    Ok(report)
+    let mut guard = state
+        .watcher
+        .lock()
+        .map_err(|_| "watch state poisoned".to_string())?;
+    *guard = Some(watcher);
+    Ok(WatchReport { watched, failed })
 }
 
 /// 停监视（project.closed / 桥卸载）。丢弃 watcher 即注销句柄。
 #[tauri::command]
 fn stop_watch(state: tauri::State<'_, WatchState>) -> Result<(), String> {
-    clear_watcher(&state)
+    let mut guard = state
+        .watcher
+        .lock()
+        .map_err(|_| "watch state poisoned".to_string())?;
+    *guard = None;
+    Ok(())
 }
 
 /* ------------------------- 外部文件拖放（drag-drop 批） ------------------------- */
@@ -3286,9 +3266,9 @@ mod write_domain_tests {
     use super::{
         begin_domain_change, canonical_root_cached, canonical_root_cached_short, canonicalize_deep,
         clear_domain_core, commit_project_root, ensure_in_domain_with, ensure_in_write_domain,
-        is_root_approved, is_same_path, is_within, merge_workspace_roots, push_approved_root,
-        push_extra_root, read_approved_roots, read_workspace_roots, write_approved_roots,
-        write_workspace_roots, WriteDomainState,
+        invalidate_canon_roots, is_root_approved, is_same_path, is_within, memo_insert_canon_if_current,
+        merge_workspace_roots, push_approved_root, push_extra_root, read_approved_roots,
+        read_workspace_roots, write_approved_roots, write_workspace_roots, WriteDomainState,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -3785,14 +3765,36 @@ mod write_domain_tests {
         );
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// REF-FRONT-PERF 复核补：短锁版在锁外算 canon，invalidate 可能发生在计算中途。
+    /// 代际闸必须让"旧代际的结果"进不了表，否则清表之后会被在途线程写回陈旧根。
+    #[test]
+    fn canon_epoch_guard_refuses_stale_insert_and_invalidate_bumps() {
+        let state = WriteDomainState::default();
+        let root = PathBuf::from(r"C:\kojo-epoch-root");
+        let canon = PathBuf::from(r"C:\kojo-epoch-root\canon");
+        let stale_epoch = state.canon_epoch.load(Ordering::SeqCst);
+
+        invalidate_canon_roots(&state);
+        memo_insert_canon_if_current(&state, &root, &canon, stale_epoch);
+        assert!(
+            state.canon_roots.lock().unwrap().is_empty(),
+            "变更前算出的根不许在清表后复活"
+        );
+
+        let fresh_epoch = state.canon_epoch.load(Ordering::SeqCst);
+        memo_insert_canon_if_current(&state, &root, &canon, fresh_epoch);
+        assert_eq!(
+            state.canon_roots.lock().unwrap().get(&root),
+            Some(&canon),
+            "当代际的结果应正常落表"
+        );
+    }
 }
 
 #[cfg(test)]
 mod watch_tests {
-    use super::{
-        begin_watch_change, clear_watcher, commit_watcher, is_atomic_write_temp, is_watch_ignored,
-        normalize_event_kind, WatchState,
-    };
+    use super::{is_atomic_write_temp, is_watch_ignored, normalize_event_kind};
     use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
     use notify::Watcher;
     use std::path::Path;
@@ -3932,34 +3934,6 @@ mod watch_tests {
         assert!(!is_watch_ignored(Path::new(r"C:\repo")));
     }
 
-    /// 监视会话变更序号（REF-FRONT-PERF）：`start_watch` 的"建监视器"挪到阻塞线程池之后，
-    /// 期间 `stop_watch` 必须让在途启动作废——旧实现全在主线程、天然串行；丢掉这个复核，
-    /// 项目关闭后 watcher 会被"迟到的启动"复活（句柄泄漏 + 旧根事件继续转发）。
-    #[test]
-    fn pending_watch_start_is_cancelled_by_stop() {
-        let state = WatchState::default();
-        let make = || {
-            notify::RecommendedWatcher::new(|_res| {}, notify::Config::default())
-                .expect("RecommendedWatcher 应能创建")
-        };
-
-        let pending = make();
-        let epoch = begin_watch_change(&state);
-        clear_watcher(&state).unwrap();
-        commit_watcher(&state, pending, epoch).unwrap();
-        assert!(
-            state.watcher.lock().unwrap().is_none(),
-            "停止之后，在途启动不许复活 watcher"
-        );
-
-        let fresh = make();
-        let epoch = begin_watch_change(&state);
-        commit_watcher(&state, fresh, epoch).unwrap();
-        assert!(
-            state.watcher.lock().unwrap().is_some(),
-            "最新序号的启动应照常落定"
-        );
-    }
 }
 
 #[cfg(test)]

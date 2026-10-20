@@ -20,6 +20,18 @@ import { errorText } from '@kojo/plugin-api';
  * 「close 抛错仍清理」这条行为，不需要起壳。
  */
 
+/**
+ * 崩溃退出的决策（REF-FRONT-PERF 复核对抗审阅）。
+ *
+ * 项目子树崩溃时 EditorPane 已卸载，`saveAll()` 此时是空操作；若直接走
+ * `closeProject()`，随后 dirtyPaths 清空会触发 autosave journal 的 clear，
+ * 未落盘的恢复件被静默抹掉。有脏文件 ⇒ 必须先让用户明确「丢弃」，
+ * 不允许把崩溃退出当成一次普通关项目。
+ */
+export function crashExitDecision(dirtyCount: number): 'close' | 'confirm-discard' {
+  return dirtyCount > 0 ? 'confirm-discard' : 'close';
+}
+
 export interface CloseProjectSessionDeps {
   readonly kernel: Kernel;
   /**

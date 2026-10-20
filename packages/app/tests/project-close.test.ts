@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
 import type { RecentProject } from '@kojo/plugin-api';
-import { closeProjectSession, type CloseProjectSessionDeps } from '../src/ui/project-close';
+import {
+  closeProjectSession,
+  crashExitDecision,
+  type CloseProjectSessionDeps,
+} from '../src/ui/project-close';
 
 /**
  * 关项目拆除序的行为判据（REF-FRONT-PERF，2026-10-20）。
@@ -178,5 +182,16 @@ describe('closeProjectSession：拆除序的每一步互不阻断', () => {
     expect(calls).toEqual(['close', 'stop', 'clear', 'reset', 'recent', 'set-recent:0']);
     expect(setRecent).toHaveBeenCalledTimes(1);
     expect(String(reportError.mock.calls[0]?.[0])).toContain('项目状态复位失败：复位坏了');
+  });
+});
+
+describe('crashExitDecision：崩溃退出不许绕过未保存确认', () => {
+  it('没有脏文件才允许直接关项目', () => {
+    expect(crashExitDecision(0)).toBe('close');
+  });
+
+  it('有脏文件 ⇒ 必须走「明确丢弃」确认（EditorPane 已卸载，saveAll 是空操作）', () => {
+    expect(crashExitDecision(1)).toBe('confirm-discard');
+    expect(crashExitDecision(12)).toBe('confirm-discard');
   });
 });
