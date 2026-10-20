@@ -1123,8 +1123,12 @@ describe('§5.2 / §8 杂项诊断', () => {
     expect(codes('角色: 12\n时机 指令 310：\n    如果 未定义变量：\n        「呀。」\n')).toContain('unknown-identifier');
   });
 
-  it('`续` 写在引号内 → cont-inside-quotes', () => {
-    expect(codes('角色: 12\n时机 指令 310：\n    「这是续续台词」\n')).toContain('cont-inside-quotes');
+  it('`续` 标记写在引号内 → cont-inside-quotes；词内字不误报（与 stripCont 同一把尺）', () => {
+    expect(codes('角色: 12\n时机 指令 310：\n    「这是台词 续」\n')).toContain('cont-inside-quotes');
+    // 词内字（继续 / 连续）不是标记形：解析侧 stripCont 从不吃它，lint 也不许判错
+    for (const text of ['「请继续吧。」', '「连续三次。」', '「续」']) {
+      expect(codes(`角色: 12\n时机 指令 310：\n    ${text}\n`)).not.toContain('cont-inside-quotes');
+    }
   });
 
   it('无字典时属性访问 → unknown-identifier（宽容但不静默）', () => {

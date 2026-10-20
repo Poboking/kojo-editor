@@ -336,7 +336,7 @@ describe('内置规则：语法糖侧约定（sugar.static-conventions = 转译�
   });
 
   it('§3.3：`续` 写在引号内 → 面板条目逐条等于转译器诊断', async () => {
-    const src = '角色: 12\n时机 指令 310：\n    「……续」\n';
+    const src = '角色: 12\n时机 指令 310：\n    「…… 续」\n';
     setSugarTranspileProvider(() => sugar);
     const { engine } = kojoHarness(src);
     const rep = await engine.run();

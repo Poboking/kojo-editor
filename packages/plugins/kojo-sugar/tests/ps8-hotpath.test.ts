@@ -39,12 +39,12 @@ function makeSink(): { sink: DiagnosticSink; diags: SugarDiagnostic[] } {
 describe('PS-8 · lexer 动态正则记忆化：状态卫生', () => {
   it('`续` 引号检测共享带 `g` 旗标的实例：诊断逐列正确、跨调用不留 lastIndex 残态', () => {
     const { sink, diags } = makeSink();
-    const lines = splitLogicalLines('「第一续出现」与「第二续出现」\n正常台词一行\n「再来一处续」');
+    const lines = splitLogicalLines('「第一 续」与「第二 续」\n正常台词一行\n「再来一处 续」');
     stripCont(lines[0]!.text, sink, lines[0]!);
     stripCont(lines[1]!.text, sink, lines[1]!); // 中间夹一行**无命中**——复位缺失时后一行会被残 lastIndex 吃掉
     stripCont(lines[2]!.text, sink, lines[2]!);
     const hits = diags.filter((d) => d.code === 'cont-inside-quotes');
-    expect(hits.map((d) => `${d.loc?.line}:${d.loc?.column}`)).toEqual(['1:1', '1:9', '3:1']);
+    expect(hits.map((d) => `${d.loc?.line}:${d.loc?.column}`)).toEqual(['1:1', '1:8', '3:1']);
   });
 
   it('wordTail / 循环头 / 步进 / 条目正则记忆后逐调稳定（同料三连打输出全等 + 判据抽样钉住）', () => {

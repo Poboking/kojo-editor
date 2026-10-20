@@ -41,7 +41,7 @@ const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, err
 const DUP_ERB = 'C:/game/data/erbkoujo/a.erb';
 const SUGAR_KOJO = 'C:/game/data/kojo/a.kojo';
 const DUP_TEXT = '@AAA\nPRINTDATA\nEND\n@AAA\nPRINTDATA\nEND\n';
-const KOJO_TEXT = '时机 对话：\n  「你好续」\n';
+const KOJO_TEXT = '时机 对话：\n  「你好 续」\n';
 
 function indexWith(files: Record<string, string>): ErbIndex {
   const map = new Map<string, ErbFile>();

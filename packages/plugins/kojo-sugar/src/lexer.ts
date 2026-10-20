@@ -1812,11 +1812,23 @@ export function detectSpeechOf(text: string, interpolations: Interpolation[]): b
   return first === '「' || first === '｢';
 }
 
-/** 引号内出现 `续` → 诊断（规范 §8 lint 清单） */
-// PS-8：标记串是**固定字面量表** ⇒ 整组正则模块级预编译（每行 3 次动态建形是全词法
-// 最贵的单项之一）。带 `g` 旗标 ⇒ 共享实例有 lastIndex 态，**每轮扫描前显式复位**。
+/**
+ * 引号内出现**标记形**的 `续` → 诊断（规范 §8 lint 清单）。
+ *
+ * 判据必须与解析侧 {@link stripCont} **同一把尺**（`(?:^|\s)mark\s*$`）：标记形 = 前面有空白、
+ * 后面只剩空白。旧形 `[「][^」]*续[^」]*[」]` 把引号内**任一处**出现该字都判成标记，于是
+ * `「请继续吧。」` / `「连续三次。」` 这类日常中文词被当成 error，而 `compileToFile` 见 error
+ * 即拒绝编译（2026-10-20 三盘实测：基线 4.980 口上域 2,882 行、魔王改版 3,020 行、官方 4.842
+ * 926 行；`sugar.lift` 连带把含这类台词的区间判 `transpile-error` 丢弃）。两条尺子对同一行
+ * 给相反结论，这不是 lint 严，是 lint 判错。
+ *
+ * 仍保留的正是**真正的错法**：`「…… 续」`（标记写进了引号里，引擎不会替你续行）。
+ *
+ * PS-8：标记串是**固定字面量表** ⇒ 整组正则模块级预编译（每行 3 次动态建形是全词法
+ * 最贵的单项之一）。带 `g` 旗标 ⇒ 共享实例有 lastIndex 态，**每轮扫描前显式复位**。
+ */
 const CONT_QUOTE_RES: readonly RegExp[] = (['续', 'cont', 'continue'] as const).map(
-  (mark) => new RegExp(`[「｢][^」｣]*${escapeRe(mark)}[^」｣]*[」｣]`, 'g'),
+  (mark) => new RegExp(`[「｢][^」｣]*?\\s${escapeRe(mark)}\\s*[」｣]`, 'g'),
 );
 
 function detectContInsideQuotes(content: string, sink: DiagnosticSink, line: LogicalLine): void {

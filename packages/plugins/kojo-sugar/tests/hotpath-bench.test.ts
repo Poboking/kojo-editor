@@ -321,7 +321,7 @@ function legacyRegexLayer(code: string): number {
     if (new RegExp(`(?:^|\\s)${escapeReB(mark)}\\s*$`).test(code)) hits++;
   }
   for (const mark of PS8_QUOTE_MARKS) {
-    const re = new RegExp(`[「｢][^」｣]*${escapeReB(mark)}[^」｣]*[」｣]`, 'g');
+    const re = new RegExp(`[「｢][^」｣]*?\\s${escapeReB(mark)}\\s*[」｣]`, 'g');
     if (re.exec(code)) hits++;
   }
   return hits;
@@ -339,7 +339,7 @@ function memoRegexLayer(code: string): number {
     if (memoGet(cache, `c:${mark}`, () => new RegExp(`(?:^|\\s)${escapeReB(mark)}\\s*$`)).test(code)) hits++;
   }
   for (const mark of PS8_QUOTE_MARKS) {
-    const re = memoGet(cache, `q:${mark}`, () => new RegExp(`[「｢][^」｣]*${escapeReB(mark)}[^」｣]*[」｣]`, 'g'));
+    const re = memoGet(cache, `q:${mark}`, () => new RegExp(`[「｢][^」｣]*?\\s${escapeReB(mark)}\\s*[」｣]`, 'g'));
     re.lastIndex = 0;
     if (re.exec(code)) hits++;
   }

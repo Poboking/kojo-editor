@@ -27,9 +27,9 @@
  * 只取**词汇义不可能当标记**的样本：`续` 在引号内但**不是末字**（如「请继续吧。」）。
  * 这类行按解析器 `stripCont` 的尺子完全合法 ⇒ 转译不得报 `cont-inside-quotes`。
  *
- * **本用例在汉化语料上是红的**——红即欠账（修法方向：把 lint 的尺子对齐 `stripCont`，
- * 只认空白后的行尾 `续`）。第二个 `describe` 是**防塌闸**：真标记写进引号（`「…… 续」`）
- * 必须仍然报错，不许为了让上面那条转绿就把规则删掉。
+ * **修复已落地（2026-10-20，同一批）**：`detectContInsideQuotes` 换成与 `stripCont` 同一把尺
+ * ——只认空白后、引号内行尾的标记形；汉化三盘由此转绿。第二个 `describe` 是**防塌闸**：
+ * 真标记写进引号（`「…… 续」`）必须仍然报错，不许为了让上面那条转绿就把规则删掉。
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -113,7 +113,7 @@ const contDiagnostics = (tr: SugarTranspileResult): string[] =>
   tr.diagnostics.filter((d) => d.code === 'cont-inside-quotes').map((d) => `L${d.loc?.line}: ${d.message}`);
 
 describe.skipIf(!SMOKE || SAMPLES.length === 0)(
-  '「续」判据 · 真实语料：引号内的词内字不得被当成行尾标记（汉化语料上本条为红）',
+  '「续」判据 · 真实语料：引号内的词内字不得被当成行尾标记',
   () => {
     it('词内 `续`（引号内非末字）→ 不得报 cont-inside-quotes', () => {
       expect(SAMPLES.length, '没取到样本 ⇒ 本闸无证明力（语料布局变了？）').toBeGreaterThan(0);

@@ -78,7 +78,10 @@ function relocateContMark(lineText: string, issueLine: number): readonly Convent
   const body = lineText
     .slice(hit.open + 1, hit.close)
     .replace(/\s+$/u, '')
-    .slice(0, -hit.mark.length);
+    .slice(0, -hit.mark.length)
+    // 标记形要求"前有空白"（与 `lexer.stripCont` 同一把尺）⇒ 搬走后那格空白也要收掉，
+    // 否则 `「台词 续」` 会被修成 `「台词 」 续`（引号里多一个空格，台词变了）。
+    .replace(/\s+$/u, '');
   const newText = `${lineText.slice(0, hit.open)}${hit.openChar}${body}${hit.closeChar} ${hit.mark}${lineText.slice(hit.close + hit.closeChar.length)}`;
   if (newText === lineText) return [];
   return [{ description: `把「${hit.mark}」移到引号外（规范 §3.3）`, loc: { line: issueLine, column: 0 }, newText }];
