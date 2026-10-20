@@ -452,8 +452,15 @@ export function SearchPanel({
    * 单飞策略 = **运行中不重发**（"不重发 / 取消旧检索再发新的"二选一里选前者，
    * 与 store 的 `runSearch` 单飞同口径）：语料全量重读是秒级 IO，"取消旧检索
    * 再发新的"在最坏情况下（持续打字）永远出不了结果——每次都从头扫、每次都被
-   * 打断。运行中输入新词只是不触发，在途结果照常随扫随到；想立刻用新词重搜，
-   * 回车或点搜索钮（老路数原样保留）。
+   * 打断。运行中输入新词只是不触发，在途结果照常随扫随到。
+   *
+   * **落定补搜（2026-10-20 修复用户反馈"第二次打字搜不出来"）**：单飞有个被忽略
+   * 的尾巴——结果随到随画（`phase` 仍是 running 时就已经在画首批命中），作者看到
+   * 命中就改词时，那一次防抖正撞在 running 上被 `runSearch` 静默丢掉，而这一丢
+   * **永不补发**：屏幕停在旧词的结果（看着像"一条都搜不出来"），只有再点搜索钮
+   * （那时早已 done）才动。修法＝把 `s.phase` / `s.resultQuery` 放进依赖：这一轮
+   * 跑完（相位落定）effect 会再跑一次，若输入框的词已不是这份结果用的词，
+   * 就补一次防抖检索——不取消在跑的（保住单飞），但也不再吞掉新词。
    *
    * `startRef`：防抖回调 300ms 后才执行，必须拿得到**当时的**根目录 / 范围，
    * 不能拿调度那一刻的闭包（store 的进度 tick 会让面板频繁重渲染，闭包会过期）。
@@ -471,11 +478,17 @@ export function SearchPanel({
     if (!liveSearch) return;
     if (!isValidSearchQuery(s.query)) return;
     if (s.query === mountedQueryRef.current) return;
+    // 单飞：正在跑就不发（取消在跑的再发新的在最坏情况下永远出不了结果）。
+    // 但不吞词：跑完相位一变本 effect 会重跑，届时按下面两条判据补搜。
+    if (s.phase === 'running') return;
+    // 这一屏结果已经就是当前词的 ⇒ 无事可做。它同时是"补搜不自我循环"的闸：
+    // 补搜跑完后 `resultQuery` 追上 `query`，effect 哪怕因相位变化重跑也会被这条挡住。
+    if (s.phase === 'done' && s.resultQuery === s.query) return;
     const timer = setTimeout(() => {
       startRef.current();
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [s.query, liveSearch]);
+  }, [s.query, liveSearch, s.phase, s.resultQuery]);
 
   /** 全部替换 → 盘上事实变了 ⇒ 用同一组条件重跑检索，结果行/计数当场说新真相 */
   const replaceAll = (): void => {
