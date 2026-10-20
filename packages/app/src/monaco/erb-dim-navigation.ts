@@ -19,18 +19,19 @@ import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
  * - `.kojo` 是派生文本，行号不属于原文 ⇒ 只答 ERB 方言后缀（`.erb` / `.erh` / `.erd`）。
  * - **升糖预览（`inmemory://sugar/…`）按存档坐标作答**（2026-10-20 源坐标批）：本层与
  *   `$` 标签层是"缓冲区本地腿"，交出去的每一枚落点必须落在**存档那一行、存档那份文件**上
- *   ——换算判据全在 {@link derivedLegSurfaceOf} / {@link toArchiveCoords}，两条腿共用同一份
- *   （见下方"派生面 → 存档坐标"段）。
- * - **两条腿各自问哪一份文本**（2026-10-20 中文谓词批；判据边界，照抄前先读这一段）：
- *   ① 本层 `#DIM` 两腿问**投影文本**：变量名与声明名都是**载荷**，投影逐字带走、不中文化
- *      （红线只禁"一整行原样 ERB"，见 `kojo-sugar/native-display/types.ts`），而光标那一列
- *      量的本来就是屏幕上那一行 ⇒ 问投影、结果折回存档，两面同尺。行首的 `#DIM` 记号确实被
- *      中文谓词换掉了（`声明数组 X`，`native-display/control.ts` 的 `PREPROCESSORS`）⇒
- *      投影上扫不到声明行，那是**有意的退化**：拿"改问原文"补就是拿中文面的列去量原文那一行。
- *   ② `$` 标签腿（`erb-label-navigation.ts`）问**原文**：`labelScopeAt` 认的是 `$` 前缀与
+ *   ——换算判据全在 {@link derivedLegSurfaceOf}，两条腿共用同一份（见下方"派生面 → 存档坐标"段）。
+ * - **两条本地腿都问原文缓冲**（2026-10-20 中文谓词批 + DIM-1 收口；判据边界，照抄前先读这一段）：
+ *   ① 本层 `#DIM` 两腿问**原文**：行首的 `#DIM` 记号在投影上被中文谓词换掉了（`#DIM X` →
+ *      `声明数组 X`，`native-display/control.ts` 的 `PREPROCESSORS`）⇒ 拿投影文本扫声明行
+ *      **恒 0 命中**；而投影列与原列不同源，投影列不能直接套到原文那一行。派生面因此只拿
+ *      "这个位置对应哪一条源行"（`sugarLineMapRef`）+ 行尾对齐换算出一个**存档位点**，发问与
+ *      取词全部落在原文缓冲（`sourceText`）上；出口就是源坐标（真行、真列、真区间），
+ *      **不再折回行首**——与下面 `$` 标签腿同一判据（{@link resolveErbDimDefinitionAt} /
+ *      {@link resolveErbDimReferencesAt}）。
+ *   ② `$` 标签腿（`erb-label-navigation.ts`）同一条判据：`labelScopeAt` 认的是 `$` 前缀与
  *      `JUMP/GOTO` 系的**行首原生记号**（`erb-parser/symbols.ts`），投影面上那个位置是中文谓词
  *      （`GOTO NEXT` → `跳到 NEXT`）⇒ 拿投影文本发问**恒 `null`**（拿译稿对原稿的页码）。
- *      派生面因此拿"原文缓冲 + 换算过的存档位点"发问，位点算术住在 {@link DerivedLegSurface}。
+ *      派生面拿"原文缓冲 + 换算过的存档位点"发问，位点算术与 `#DIM` 腿同形。
  * - 名字字符集与悬停**同一枚** `isDimNameChar`（中文 / 全角字母都合法，绝不用 `\w`）；
  *   路径比较与合并去重**同一枚** `normalizePathKey`（Windows 分隔符 / 大小写不敏感）。
  * - fail-open：路径缺席 / 文本为空 / 行越界 / 不是声明名 / 名字不存在 ⇒ `[]`，不抛。
@@ -163,8 +164,8 @@ export interface DerivedLegSurface {
   /** 存档路径 = 投影归属实例那一份文件；空串 = 实例还没挂上文件 ⇒ 这一面无处可答 */
   readonly path: string;
   /**
-   * **原文**缓冲区文本（发问用的那一份）。只认原文形状的判据（`labelScopeAt` 的 `$` 前缀与
-   * `JUMP/GOTO` 行首记号）**必须**吃它——吃投影文本就是恒 `null`。
+   * **原文**缓冲区文本（发问用的那一份）。两条本地腿都只认原文形状：`#DIM` 声明行被投影换成
+   * 中文谓词、`labelScopeAt` 认 `$` 前缀与 `JUMP/GOTO` 行首记号——吃投影文本就是 0 命中 / 恒 `null`。
    * 取原文 model 走登记簿的 `sourceModelOf`（同一条反查只此一份），空文本不当真 ⇒ 整条腿不给结果。
    */
   readonly sourceText: string;
@@ -190,7 +191,7 @@ export interface DerivedLegSurface {
  * 而本层这套件跑在 node 池里——静态引它 = 当场 `ReferenceError: window is not defined`；
  * 登记簿只 `import type` monaco，两侧都能干净地引。
  * 取不到 / 空文本 ⇒ 回 `null`：这一面没有原文可问，交出去的每一枚都只能是猜的
- * （`#DIM` 两腿问的是投影文本，但落点仍必须是存档行，同样不许蒙）。
+ * （两条本地腿都改问原文，没有原文就没有答案，同样不许蒙）。
  */
 export function derivedLegSurfaceOf(model: Monaco.editor.ITextModel): DerivedLegSurface | null {
   const ctx: PaneCtx | null =
@@ -219,13 +220,51 @@ export function derivedLegSurfaceOf(model: Monaco.editor.ITextModel): DerivedLeg
 }
 
 /**
- * 本地腿的结果 → 存档坐标（原文面原样交回，一个字段都不碰）。
+ * 源行文本（`\r\n` 归一后按 `\n` 切；与 {@link linesOf}、解析器 `labelScopeAt` 内部的切法
+ * 逐字同一条）。派生面只交 `sourceText` + 行数，本层不自建第二张行表——切同一份文本两次
+ * 得到的必然是同一批行。
+ */
+function sourceRowOf(sourceText: string, line: number): string | undefined {
+  return linesOf(sourceText)[line - 1];
+}
+
+/**
+ * 投影面上的光标 → **发问用的存档位点**（`null` = 位点越界 / 那一格根本没有源行）。
  *
- * 三条纪律，与糖面读类腿（`ui/editor-global-providers.ts` 的 `foldDefinitionTargetsToPreview`）
- * 逐字同源，两条腿不可能对同一处给出两个答案：
+ * 与 `$` 标签腿（`erb-label-navigation.ts` 的 `archivePointOf`）同一形状、同一判据：
+ * - 行：{@link DerivedLegSurface.lineOf}（认的就是与投影 model 同批换上的那张 `sugarLineMapRef`，
+ *   本层不许自建第二份映射），再夹一道 `sourceLineCount` 界；
+ * - 列：**源行与投影行按行尾对齐**（`column` 相对行尾的距离在两面上同一把尺子），两头各夹一次。
+ *   为什么列不能照抄：投影把**行首那串原生记号**换成中文谓词（`#DIM X` → `声明数组 X`），
+ *   谓词几字长随词形变；而载荷（声明名 / 变量名）**逐字带走并停在行尾**
+ *   （`kojo-sugar/native-display/control.ts` 的 `renderPreprocessor` / `showExpr`）⇒
+ *   只剩"离行尾多远"在两面上等价。投影面只负责把**位置**对到源行上，取词一律回到原文。
+ * 落不到名字上就是落不到 ⇒ **不再试别的列**（多试一格 = 光标停在谓词上也答，原文面没这规矩），
+ * 宁可不给也不给假。
+ */
+function archivePointOf(
+  surface: DerivedLegSurface,
+  position: Monaco.Position,
+): { readonly line: number; readonly column: number } | null {
+  const line = surface.lineOf(position.lineNumber);
+  if (line === null || line < 1 || line > surface.sourceLineCount) return null;
+  const shown = surface.shownLineOf(position.lineNumber);
+  if (shown === undefined) return null;
+  const row = sourceRowOf(surface.sourceText, line);
+  if (row === undefined) return null;
+  const column = Math.min(Math.max(row.length - shown.length + position.column, 1), row.length + 1);
+  return { line, column };
+}
+
+/**
+ * 旧口径（2026-10-20 源坐标批）：本地腿在**投影文本**上取词后，把结果按行折回存档坐标
+ * （列一律收到行首、不给区间）。
+ *
+ * DIM-1 起 `#DIM` 两腿也改问原文缓冲（见文件头），本函数不再被两条腿调用；保留导出是因为
+ * "投影行 → 存档行"这条换算本身仍有消费方（用例 / 后续腿），且它的三条纪律仍是投影折回的
+ * 同一口径，不许另写一份：
  * ① 换算不出的那一枚**直接丢**——不猜行号，也不留一枚 `inmemory` 上的幻影；
  * ② **列不折算**：投影行与存档行连文本都不是同一串，跨面一律落到行首（`column: 1`、不给 span）；
- *    两条腿都交列 1，`mergeSymbolLocations` 的去重键才认得出"这是同一处"；
  * ③ 行号**留存档侧**：源行 → 投影行的那一跳住在 `EditorPane` 的 `applyReveal`（读同一张表），
  *    在这里折一遍就是折两遍。
  */
@@ -438,36 +477,65 @@ export function mergeNavigationLegs(
   return mergeSymbolLocations(labels, mergeSymbolLocations(dims, slot));
 }
 
-/** Monaco model + 位置 → `#DIM` 定义落点（取文本 / 路径全程 fail-open；投影面按存档坐标交回） */
+/**
+ * Monaco model + 位置 → `#DIM` 定义落点（取文本 / 路径全程 fail-open）。
+ *
+ * **原文面**（`derivedLegSurfaceOf` 回 `null` 且不是派生 URI）：屏幕上那份 model 就是原文，
+ * 判据、文本、行列一个字节都不碰。
+ *
+ * **投影面**：发问吃**原文缓冲 + 换算过的存档位点**（DIM-1 收口）。为什么必须换文本：
+ * 投影把 `#DIM X` 显示成 `声明数组 X`（`native-display/control.ts` 的 `PREPROCESSORS`），
+ * 在投影文本里扫声明行**恒 0 命中**；而投影列与原列不同源，不能把投影列套到原文那一行。
+ * 出口**不折行号、不收列**：命中与取词都生在存档侧，交出的就是源坐标（真行真列真区间）。
+ * 原文 model 取不到 / 位点越界 / 那一格没有源行 ⇒ 本腿**不给结果**，
+ * 绝不退回投影文本凑一个形状。
+ */
 export function resolveErbDimDefinitionAt(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
 ): EditorSymbolLocation[] {
   try {
-    // 投影面上问的就是那份存档路径（`ERB_PATH_RE` 那一道方言闸也因此落在真文件的后缀上）
     const surface = derivedLegSurfaceOf(model);
-    const path = surface === null ? modelPathOf(model) : surface.path;
-    if (path === null || path.length === 0) return [];
+    if (surface !== null) {
+      // 方言闸走**存档路径**的后缀（投影 URI 只是编码过的字符串，拿它的尾巴当判据是巧合不是判据）
+      if (surface.path.length === 0 || !ERB_PATH_RE.test(surface.path)) return [];
+      if (surface.sourceText.length === 0 || surface.sourceLineCount === 0) return [];
+      const at = archivePointOf(surface, position);
+      if (at === null) return [];
+      return resolveErbDimDefinition(surface.sourceText, at.line, at.column, surface.path);
+    }
+    // 登记簿认不出归属实例的派生面：没有原文可依，交回的每一枚都是猜的 ⇒ 不应答
+    if (isDerivedModelUri(model)) return [];
+    const path = modelPathOf(model);
+    if (path === null) return [];
     const text = model.getValue();
     if (text.length === 0) return [];
-    return toArchiveCoords(resolveErbDimDefinition(text, position.lineNumber, position.column, path), surface);
+    return resolveErbDimDefinition(text, position.lineNumber, position.column, path);
   } catch {
     return [];
   }
 }
 
-/** Monaco model + 位置 → `#DIM` 引用点（取文本 / 路径全程 fail-open；投影面按存档坐标交回） */
+/** Monaco model + 位置 → `#DIM` 引用点（与定义腿同一判据：投影面问原文、交源坐标；fail-open） */
 export function resolveErbDimReferencesAt(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
 ): EditorSymbolLocation[] {
   try {
     const surface = derivedLegSurfaceOf(model);
-    const path = surface === null ? modelPathOf(model) : surface.path;
-    if (path === null || path.length === 0) return [];
+    if (surface !== null) {
+      if (surface.path.length === 0 || !ERB_PATH_RE.test(surface.path)) return [];
+      if (surface.sourceText.length === 0 || surface.sourceLineCount === 0) return [];
+      const at = archivePointOf(surface, position);
+      if (at === null) return [];
+      return resolveErbDimReferences(surface.sourceText, at.line, at.column, surface.path);
+    }
+    if (isDerivedModelUri(model)) return [];
+    const path = modelPathOf(model);
+    if (path === null) return [];
     const text = model.getValue();
     if (text.length === 0) return [];
-    return toArchiveCoords(resolveErbDimReferences(text, position.lineNumber, position.column, path), surface);
+    return resolveErbDimReferences(text, position.lineNumber, position.column, path);
   } catch {
     return [];
   }

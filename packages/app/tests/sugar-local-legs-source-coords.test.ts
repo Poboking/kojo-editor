@@ -1,22 +1,20 @@
 /**
  * 三条**缓冲区本地腿**（`#DIM` 定义 / `#DIM` 引用 / `$` 标签）在升糖预览面上按**存档坐标**作答
- * （2026-10-20 源坐标批；同批之后 `$` 标签腿又改成**拿原文发问**，见 ⑤）。
+ * （2026-10-20 源坐标批；同批之后 `$` 标签腿改成**拿原文发问**，DIM-1 批 `#DIM` 两腿跟进，见 ④）。
  *
  * 本地腿交出去的每一枚落点都必须属于存档——投影 URI 上没有文件、预览行号不属于存档，而
  * `mergeSymbolLocations` 把本地腿排在最前、`planDefinitionJump` 的事件通道兜底只取第一枚，
  * 于是"看着对、其实指向派生面"的那一枚把真算出来的源落点顶掉，作者按 F12 得到一次没反应的跳转。
  *
- * 钉五条：
+ * 钉六条：
  * ① **换算得出来才交**：投影行 → 存档行 + 存档路径；映射缺席 / 那一格没有源行 ⇒ 这一枚**不交**
  *    （不猜行号，也不留一枚幻影）；
- * ② **列不折算**（`#DIM` 两腿）：投影行与存档行连文本都不是同一串 ⇒ 跨面一律落到行首
- *    （`column: 1`、不给 span），与糖面读类腿（`readDefinitionTargets`）同一个形状，
- *    两条腿的去重键才认得出同一处；
- * ③ **原文面逐字不变**：同一份判据在没有投影的那一面一个字段都不碰（列与区间照旧）；
- * ④ **幻影不许从缝里溜出来**：登记簿查不到归属实例的派生 model（实例已退册 / 迟到的请求）⇒ 不应答；
- * ⑤ **`$` 标签腿问的是原文**（中文谓词批）：那份作用域整份生在存档侧，于是交出的**是真列真区间**
- *    （与 ② 那个形状刻意不同，裁决书点名接受），而"中文谓词行也要答"归
- *    `sugar-label-source-text.test.ts`——本夹具的标签两行是逐字透传的那一档。
+ * ② **原文面逐字不变**：同一份判据在没有投影的那一面一个字段都不碰（列与区间照旧）；
+ * ③ **幻影不许从缝里溜出来**：登记簿查不到归属实例的派生 model（实例已退册 / 迟到的请求）⇒ 不应答；
+ * ④ **两条腿问哪一份文本**：`$` 标签腿与 `#DIM` 两腿都问**原文**（中文谓词批 / DIM-1 批），
+ *    交出的**是真列真区间**（投影面只负责把位置对到源行上，取词回到原文）；"中文谓词行也要答"
+ *    归 `sugar-label-source-text.test.ts` / `erb-dim-source-text.test.ts`——本夹具的标签两行与
+ *    声明行是逐字透传的那一档，这里测的是"不再拿投影文本取词"本身；
  *
  * 面与映射都由 `composeSugarDoc` 真拼出来（不是手抄表）——整条换算都骑在"文本与映射同批产出"
  * 这条前提上，绕开拼装箱就是绕开它。monaco 运行时不进 node，桩 model / 桩 monaco 照
@@ -193,11 +191,11 @@ describe('derivedLegSurfaceOf / toArchiveCoords · 判据只有一份', () => {
 
 /* ============================== 腿①：`#DIM` 声明名的定义腿 ============================== */
 
-describe('#DIM 定义腿 · 投影面按存档坐标作答', () => {
-  it('读投影文本、交存档坐标：路径 + 行 + 行首列，没有 span', () => {
+describe('#DIM 定义腿 · 投影面问原文、交源坐标', () => {
+  it('读原文、交源坐标：路径 + 源行 + 声明名自己的列与区间', () => {
     mountProjection();
     expect(resolveErbDimDefinitionAt(PREVIEW_MODEL, pos(5, 3))).toEqual([
-      { filePath: ARCHIVE, line: 6, column: 1 },
+      { filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 } },
     ]);
   });
 
@@ -226,13 +224,13 @@ describe('#DIM 定义腿 · 投影面按存档坐标作答', () => {
 
 /* ============================== 腿②：`#DIM` 引用腿 ============================== */
 
-describe('#DIM 引用腿 · 同一条换算，分类不丢', () => {
-  it('声明 + 两处引用全折到存档行，`definition` / `mention` 各自跟着过桥', () => {
+describe('#DIM 引用腿 · 同一条判据，分类与真列都不丢', () => {
+  it('声明 + 两处引用全在源坐标上，`definition` / `mention` 各自跟着过桥', () => {
     mountProjection();
     expect(resolveErbDimReferencesAt(PREVIEW_MODEL, pos(4, 8))).toEqual([
-      { filePath: ARCHIVE, line: 6, column: 1, kind: 'definition' },
-      { filePath: ARCHIVE, line: 7, column: 1, kind: 'mention' },
-      { filePath: ARCHIVE, line: 8, column: 1, kind: 'mention' },
+      { filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 }, kind: 'definition' },
+      { filePath: ARCHIVE, line: 7, column: 3, span: { columnStart: 3, columnEnd: 6 }, kind: 'mention' },
+      { filePath: ARCHIVE, line: 8, column: 3, span: { columnStart: 3, columnEnd: 6 }, kind: 'mention' },
     ]);
   });
 
@@ -355,17 +353,17 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     expect(links[0]!.uri.toString()).not.toContain('sugar');
     expect(links[0]!.targetSelectionRange).toEqual({
       startLineNumber: 6,
-      startColumn: 1,
+      startColumn: 8,
       endLineNumber: 6,
-      endColumn: 1,
+      endColumn: 11,
     });
   });
 
-  it('两条腿在存档坐标上合流：槽腿与本地腿指同一处 ⇒ 去重成一枚（去重键都落在列 1）', () => {
+  it('两条腿在存档坐标上合流：槽腿与本地腿指同一处 ⇒ 去重成一枚（去重键同落真列）', () => {
     mountProjection();
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [{ filePath: ARCHIVE, line: 6, column: 1 }],
+      resolve: () => [{ filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 } }],
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });
@@ -390,7 +388,9 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     expect(
       provider.provideDefinition(PREVIEW_MODEL, pos(5, 3), {} as Monaco.CancellationToken),
     ).toBeUndefined();
-    expect(navigated).toEqual([{ filePath: ARCHIVE, line: 6, column: 1 }]);
+    expect(navigated).toEqual([
+      { filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 } },
+    ]);
   });
 
   it('Shift+F12：本地腿交存档坐标，`find-references` 在投影面上把它折回屏幕上那一行（Peek 落在投影 model）', () => {
