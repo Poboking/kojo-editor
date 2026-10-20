@@ -46,7 +46,7 @@ const enc = (s: string) => new TextEncoder().encode(s);
 /** 良构糖源（无 error；`「你好。」` 的 `续` 在引号外，故不触发 cont-inside-quotes） */
 const KOJO_OK = ['角色: 1', '时机 初见：', '    「你好。」', '    她笑了。 续', ''].join('\n');
 /** 坏糖源：`续` 写在引号内 → error 诊断 `cont-inside-quotes`（带行列） */
-const KOJO_BAD = ['角色: 1', '时机 初见：', '    「你好。续」', ''].join('\n');
+const KOJO_BAD = ['角色: 1', '时机 初见：', '    「你好。 续」', ''].join('\n');
 const PATH_KOJO = '/proj/口上/x.kojo';
 const PATH_ERB = '/proj/口上/x.ERB';
 /** 声明文件（FT-2 进面的 `.ERH`）：糖线一律不接管，保存原样写盘 */

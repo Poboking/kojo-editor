@@ -256,7 +256,7 @@ const REAL_SRC = [
   '时机 指令 310：',
   '    如果 未定义变量甲：',
   '        「呀。」',
-  '    「你好。续」',
+  '    「你好。 续」',
   '',
 ].join('\n');
 const realDiags: readonly SugarDiagnostic[] = transpile.transpile(REAL_SRC, {

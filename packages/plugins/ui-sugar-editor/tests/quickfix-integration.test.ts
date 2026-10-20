@@ -307,7 +307,7 @@ const STRAY_FIXED_LINE = '    旁白 50％ 吧。';
 const SRC_TYPO = ['角色: 1', '时机 指令 310：', '    调用 最大直(1, 2)', ''].join('\n');
 
 /* 非闭集码：`续` 写在引号内（error，但文案给了两条出路 ⇒ 本批不动手） */
-const SRC_QUOTES = ['角色: 1', '时机 指令 310：', '    「你好。续」', ''].join('\n');
+const SRC_QUOTES = ['角色: 1', '时机 指令 310：', '    「你好。 续」', ''].join('\n');
 
 describe('W3 / 真转译器：`.kojo` 波浪线换来 quickfix', () => {
   it('注册了 `ui.editor.codeAction`（id sugar-quickfix）', () => {
