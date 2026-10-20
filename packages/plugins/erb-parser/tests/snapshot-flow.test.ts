@@ -457,6 +457,82 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     expect([...map.keys()].sort()).toEqual([snapshotKeyFor(rootA), snapshotKeyFor(rootB)].sort());
   });
 
+  /**
+   * W8-D 归因批：**跨会话 prune**（`pruneSnapshotKeys` 的"保留 = 本会话工作集"语义，
+   * 见 `snapshot.ts` 的头注与 `plugin.ts:pruneStaleSnapshots`）。会话 1 把 A/B 两份快照
+   * 都落了盘；会话 2 只开 A ⇒ B 的键不在本会话工作集里，被 A 的落盘收口顺手收走 ⇒
+   * 会话 2 再开 B = **一次全冷**。这是被明码标价的取舍（不是 bug）——但它是"用户某次
+   * 首开变十几秒"的合法触发面之一，必须有用例钉住，防后续改 prune 语义时无感漂移。
+   */
+  it('跨会话 prune：会话 1 存下 A/B，会话 2 只开 A ⇒ B 的键被收走，再开 B = 全冷一次', async () => {
+    const rootA = 'D:/proj/w8d-a';
+    const rootB = 'D:/proj/w8d-b';
+    const N_FILES = 40;
+    const src = (tag: string, i: number): string => {
+      const lines: string[] = [];
+      for (let k = 0; k < 25; k++) {
+        lines.push(`; ${tag} 第 ${i} 卷 · 函数 ${k}`, `@F_${tag}_${i}_${k}`, '\tRETURN 1', 'END', '');
+      }
+      return lines.join('\n');
+    };
+    const files = new Map<string, FakeFile>();
+    for (let i = 0; i < N_FILES; i++) {
+      files.set(`${rootA}/ERB/f${String(i).padStart(3, '0')}.ERB`, { text: src('A', i), mtimeMs: 100 + i });
+      files.set(`${rootB}/ERB/f${String(i).padStart(3, '0')}.ERB`, { text: src('B', i), mtimeMs: 200 + i });
+    }
+    const { io } = makeIO(files);
+    const { storage, map } = makeStorage();
+
+    const open = (instance: { bus: { emit: (t: string, p: unknown) => void } }, root: string): void =>
+      instance.bus.emit('project.opened', {
+        project: {
+          rootDir: root,
+          adapterId: 'eratw',
+          kojoPaths: [`${root}/ERB`],
+          writablePaths: [],
+          charaIndex: new Map(),
+        } as GameProject,
+      });
+    const waitKey = async (key: string, present: boolean, timeoutMs = 5000): Promise<void> => {
+      for (let i = 0; i < timeoutMs / 5; i++) {
+        if (map.has(key) === present) return;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      throw new Error(`等待键${present ? '出现' : '消失'}超时：${key}（盘上：${[...map.keys()].join(', ') || '(空)'}）`);
+    };
+
+    // 会话 1：A、B 各开一次 ⇒ 两份快照并存（本会话工作集）
+    const session1 = activate(io, storage);
+    open(session1, rootA);
+    await session1.waitIndexed(20_000);
+    open(session1, rootB);
+    await session1.waitIndexed(20_000);
+    await waitKey(snapshotKeyFor(rootA), true);
+    await waitKey(snapshotKeyFor(rootB), true);
+
+    // 会话 2：新 activate = 新工作集（sessionSnapshotKeys 从零起）。只开 A ⇒
+    // A 落盘收口后的 prune 把不在工作集里的 B 键收走。
+    const logs2: string[] = [];
+    const session2 = activate(io, storage, logs2);
+    open(session2, rootA);
+    await session2.waitIndexed(20_000);
+    await waitKey(snapshotKeyFor(rootA), true);
+    await waitKey(snapshotKeyFor(rootB), false);
+    expect(logs2.some((m) => m.includes('Index snapshot store pruned (1 stale key(s))'))).toBe(true);
+
+    // 会话 2 再开 B：键已没 ⇒ 全量重建（reused 0/N），索引仍正确
+    const mark = logs2.length;
+    open(session2, rootB);
+    await session2.waitIndexed(20_000);
+    const line = logs2.slice(mark).find((m) => m.includes('index breakdown')) ?? '';
+    const m = /reused (\d+)\/(\d+)/.exec(line);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBe(0);
+    expect(Number(m![2])).toBe(N_FILES);
+    expect(session2.service.currentIndex()!.files.size).toBe(N_FILES);
+    expect(session2.service.currentIndex()!.byName.has('F_B_39_24')).toBe(true);
+  });
+
   it('消失的文件被收尸（快照不越攒越大）', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],
