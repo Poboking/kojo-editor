@@ -278,6 +278,47 @@ export function effectiveLocation(
 }
 
 /**
+ * 游戏域面板闸的映射来源（2026-10-20 UI 修复批）：`game.adapter` 槽的贡献 → 
+ * 「贡献方插件 id → 它认的游戏 id」。宿主现取槽位后原样喂给 `filterGameScopedPanels`。
+ */
+export function gameScopeByPlugin(
+  adapters: readonly { pluginId?: string; adapter: { gameId: string } }[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const c of adapters) {
+    if (c.pluginId) map.set(c.pluginId, c.adapter.gameId);
+  }
+  return map;
+}
+
+/**
+ * 游戏域面板闸（2026-10-20 UI 修复批：活动栏出现两枚「工作区」图标）。
+ *
+ * 现象：`ui.panel` 面板按**贡献方插件**带游戏归属——两个 adapter 各注册一枚
+ * 「我的口上项目」（共享层只给窗口实现，落点/向导归各游戏），并装后它们无 `group`
+ * ⇒ 各自独占一枚活动栏图标，而两者 icon / title 逐字相同 ⇒ 用户看到两枚同样的图标。
+ * 另一游戏的面板在本项目上不只是多余：落点不同（eraTW 铺角色个人口上目录、
+ * 另一个游戏铺游戏根子树）⇒ 拿错那枚去部署会把文件铺错层。
+ *
+ * 判据是 **pluginId → gameId 的映射**（宿主现取 `game.adapter` 槽），不是游戏名：
+ * 本函数零游戏知识。`activeGameId` 为 null（未知/无项目）时不过闸，行为与改动前逐字一致。
+ */
+export function filterGameScopedPanels<T extends { pluginId?: string }>(
+  panels: readonly T[],
+  gameByPlugin: ReadonlyMap<string, string>,
+  activeGameId: string | null,
+): T[] {
+  if (activeGameId === null) return [...panels];
+  return panels.filter((p) => {
+    const owner = p.pluginId;
+    if (!owner) return true;
+    const gameId = gameByPlugin.get(owner);
+    // 没有 gameId ⇒ 贡献方不是 adapter（游戏无关插件 / 壳层内建视图）：照旧可见
+    return gameId === undefined || gameId === activeGameId;
+  });
+}
+
+/**
  * 面板编排：把 `ui.panel` 贡献按 location 分到三容器；sidebar 内按 group 合并
  * 为视图（同组共享一枚活动栏图标，图标/标题取组内 order 最小者——定稿 §三）。
  * 未迁移面板（无 location）按缺省进 sidebar 独占视图——任何中间态都可运行。

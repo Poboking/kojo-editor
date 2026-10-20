@@ -23,6 +23,8 @@ import {
   beginLiveResize,
   beginSplitResize,
   defaultLayout,
+  filterGameScopedPanels,
+  gameScopeByPlugin,
   loadLayout,
   organizePanels,
   reducer,
@@ -423,6 +425,17 @@ interface Props {
    * 表里没有的面板（插件面板）拿 `undefined` ⇒ 比较按 0 走，行为与改动前逐字一致。
    */
   panelHostVersions?: Readonly<Record<string, number>>;
+  /**
+   * 当前项目所属的游戏 id（`GameProject.adapterId`；2026-10-20 游戏域面板闸）。
+   *
+   * 壳层拿它跟 `game.adapter` 槽的贡献方插件 id 对表，**只编排本游戏 adapter 的面板**：
+   * 两个 adapter 各贡献一枚「我的口上项目」（同图标同标题），并装时活动栏会出现两枚
+   * 一模一样的「工作区」图标，而另一游戏的面板在本项目上落点不同（部署会把口上文件
+   * 铺错层）。判据是 id 相等、不是游戏名——壳层仍零游戏知识。
+   *
+   * 缺省 / null（无项目、旧消费方）不过闸，编排结果与改动前逐字一致。
+   */
+  activeAdapterId?: string | null;
 }
 
 /** 视图在活动栏的位置：组成员全为低频（defaultActive:false）→ 底部区（定稿 §四插件状态齿轮位） */
@@ -461,6 +474,7 @@ export function ShellLayout(props: Props): ReactElement {
     extraCommands,
     onRegisterWorkbench,
     panelHostVersions,
+    activeAdapterId = null,
   } = props;
 
   /** 封存总闸（`sealed.ts`；默认封存）：封存态下 `SEALED_PANEL_IDS` 清单里的插件面板整只不进编排 */
@@ -477,10 +491,16 @@ export function ShellLayout(props: Props): ReactElement {
   const panelVirtualize = usePanelVirtualize();
   /** 下传给面板的偏好投影（对象身份随开关稳定，开关不变则面板不因它白重渲染） */
   const uiPrefs = useMemo(() => ({ panelVirtualize }), [panelVirtualize]);
-  const allPanels = useMemo(
-    () => filterSealedPanels([...builtinViews, ...kernel.slots.query('ui.panel')], sealed),
-    [kernel, builtinViews, sealed],
-  );
+  const allPanels = useMemo(() => {
+    // 游戏域面板闸：`game.adapter` 槽现取「贡献方插件 id → 游戏 id」映射，
+    // 只编排本游戏 adapter 的面板（否则活动栏出现两枚同图标的「工作区」）
+    const scoped = filterGameScopedPanels(
+      [...builtinViews, ...kernel.slots.query('ui.panel')],
+      gameScopeByPlugin(kernel.slots.query('game.adapter')),
+      activeAdapterId,
+    );
+    return filterSealedPanels(scoped, sealed);
+  }, [kernel, builtinViews, sealed, activeAdapterId]);
   const toolbarItems = useMemo(() => kernel.slots.query('ui.toolbar'), [kernel]);
   const statusbarItems = useMemo(() => kernel.slots.query('ui.statusbar'), [kernel]);
   const slotCommands = useMemo(() => kernel.slots.query('editor.command'), [kernel]);
@@ -506,15 +526,16 @@ export function ShellLayout(props: Props): ReactElement {
   );
   const fullOrgRef = useRef(fullOrg);
   fullOrgRef.current = fullOrg;
-  // 总闸切换后面板集合增删，active/override 可能失效——重跑一次清洗器（首跑跳过，挂载时已清洗过）
-  const sealSkipFirstRef = useRef(true);
+  // 总闸切换 / 换项目（游戏域面板闸换了一批可见面板）后面板集合增删，active/override
+  // 可能失效——重跑一次清洗器（首跑跳过，挂载时已清洗过）
+  const panelSetSkipFirstRef = useRef(true);
   useEffect(() => {
-    if (sealSkipFirstRef.current) {
-      sealSkipFirstRef.current = false;
+    if (panelSetSkipFirstRef.current) {
+      panelSetSkipFirstRef.current = false;
       return;
     }
     dispatch({ type: 'reconcile', org: fullOrgRef.current });
-  }, [sealed]);
+  }, [sealed, activeAdapterId]);
 
   // 持久化（壳层私事，localStorage；变更即存，体量小无需去抖）
   useEffect(() => saveLayout(layout), [layout]);

@@ -1135,6 +1135,7 @@ export function ProjectView({
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
       panelHostVersions={panelHostVersions}
+      activeAdapterId={project.adapterId}
     >
       {/* 只读横幅（P0 实机反馈修复）：项目级一条，重授权入口常驻可见可点 */}
       {!writable ? (

@@ -8,6 +8,8 @@ import {
   DEFAULT_SIDEBAR_SIZE,
   defaultLayout,
   effectiveLocation,
+  filterGameScopedPanels,
+  gameScopeByPlugin,
   loadLayout,
   organizePanels,
   reconcileLayout,
@@ -113,6 +115,89 @@ describe('面板编排', () => {
     const after = organizePanels(panels, { a: 'aux' });
     expect(after.views.map((v) => v.key)).toEqual(['panel:b']);
     expect(after.aux.map((p) => p.id)).toEqual(['a']);
+  });
+});
+
+describe('游戏域面板闸（活动栏两枚「工作区」图标修复）', () => {
+  /**
+   * 实测形态：两个 adapter 各注册一枚「我的口上项目」（icon / title 逐字相同、无 group）。
+   * `gameByPlugin` 由宿主从 `game.adapter` 槽现取（pluginId → gameId）。
+   */
+  const twins = (): UIPanelContribution[] => [
+    panel('kojo-projects', { title: '我的口上项目', icon: 'home', order: 35, pluginId: 'eratw-adapter' }),
+    panel('eraakumamaid-kojo-projects', {
+      title: '我的口上项目',
+      icon: 'home',
+      order: 35,
+      pluginId: 'eraakumamaid-adapter',
+    }),
+    // 游戏无关插件面板（无 game.adapter 贡献）
+    panel('state-replay', { title: '状态回放', order: 45, pluginId: 'ui-state-replay' }),
+    // 壳层内建视图（内核不知道贡献方是谁）
+    panel('kojo.files', { title: '口上文件', icon: 'files', order: 30 }),
+  ];
+  const games = new Map([
+    ['eratw-adapter', 'eratw'],
+    ['eraakumamaid-adapter', 'eraakumamaid'],
+  ]);
+
+  it('eraTW 项目（adapterId=eratw）下只剩本游戏 adapter 那枚：活动栏「工作区」图标从两枚降到一枚', () => {
+    const scoped = filterGameScopedPanels(twins(), games, 'eratw');
+    expect(scoped.map((p) => p.id)).toEqual(['kojo-projects', 'state-replay', 'kojo.files']);
+    // 编排后 sidebar 视图数 = 活动栏图标数：同图标那一枚不再出现
+    expect(organizePanels(scoped, {}).views.map((v) => v.key)).toEqual([
+      'panel:kojo.files',
+      'panel:kojo-projects',
+      'panel:state-replay',
+    ]);
+    // 对照：不过闸时确实有两枚同图标（这就是用户看到的现象）
+    expect(organizePanels(twins(), {}).views).toHaveLength(4);
+  });
+
+  it('换成另一个游戏的项目 ⇒ 换成另一枚，仍然只有一枚', () => {
+    const scoped = filterGameScopedPanels(twins(), games, 'eraakumamaid');
+    expect(scoped.map((p) => p.id)).toEqual([
+      'eraakumamaid-kojo-projects',
+      'state-replay',
+      'kojo.files',
+    ]);
+  });
+
+  it('游戏无关面板与内建视图不受闸影响（无映射 / 无 pluginId 一律放行）', () => {
+    const scoped = filterGameScopedPanels(twins(), games, 'eratw');
+    expect(scoped.some((p) => p.id === 'state-replay')).toBe(true);
+    expect(scoped.some((p) => p.id === 'kojo.files')).toBe(true);
+  });
+
+  it('activeGameId 为 null（无项目 / 旧消费方）⇒ 不过闸，行为与改动前逐字一致', () => {
+    expect(filterGameScopedPanels(twins(), games, null).map((p) => p.id)).toEqual([
+      'kojo-projects',
+      'eraakumamaid-kojo-projects',
+      'state-replay',
+      'kojo.files',
+    ]);
+  });
+
+  it('adapter 插件贡献但其 gameId 未登记（映射缺失）⇒ 不误杀', () => {
+    const scoped = filterGameScopedPanels(twins(), new Map(), 'eratw');
+    expect(scoped.map((p) => p.id)).toEqual([
+      'kojo-projects',
+      'eraakumamaid-kojo-projects',
+      'state-replay',
+      'kojo.files',
+    ]);
+  });
+
+  it('映射来自 `game.adapter` 槽：贡献方插件 id → 它认的游戏 id（无 pluginId 的贡献不入表）', () => {
+    const m = gameScopeByPlugin([
+      { pluginId: 'eratw-adapter', adapter: { gameId: 'eratw' } },
+      { pluginId: 'eraakumamaid-adapter', adapter: { gameId: 'eraakumamaid' } },
+      { adapter: { gameId: 'orphan' } },
+    ]);
+    expect([...m.entries()]).toEqual([
+      ['eratw-adapter', 'eratw'],
+      ['eraakumamaid-adapter', 'eraakumamaid'],
+    ]);
   });
 });
 
