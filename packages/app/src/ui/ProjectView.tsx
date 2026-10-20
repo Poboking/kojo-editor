@@ -295,6 +295,12 @@ export function ProjectView({
    */
   const registerActionsRef = useRef(registerActions);
   registerActionsRef.current = registerActions;
+  /**
+   * 各组编辑器动作句柄的本地副本（W7-H）：状态栏 EOL 菜单要把"切换行"落到**焦点组**，
+   * 而宿主注册口只转发给 App —— 这里留一份同源引用（与宿主同一条注册拍，不另开协议）。
+   * 组关闭时随回调表一起回收（有界）。
+   */
+  const paneActionsRef = useRef(new Map<string, EditorPaneActions>());
   const onActivateGroupRef = useRef(onActivateGroup);
   onActivateGroupRef.current = onActivateGroup;
   /** 标签栏宿主回调的 ref 镜像（PS-16）：闭包恒定、取值最新，与上面两条同款腰带 */
@@ -319,7 +325,11 @@ export function ProjectView({
       cb = {
         onStatusInfo: (info) => handleStatusInfo(gid, info),
         onFocused: () => onActivateGroupRef.current(gid),
-        register: (actions) => registerActionsRef.current?.(gid, actions),
+        register: (actions) => {
+          if (actions) paneActionsRef.current.set(gid, actions);
+          else paneActionsRef.current.delete(gid);
+          registerActionsRef.current?.(gid, actions);
+        },
         onActivateTab: (p) => tabHostRef.current.onActivateTabInGroup(gid, p),
         onRequestCloseTab: (p) => tabHostRef.current.onRequestCloseTabInGroup(gid, p),
         onReorderTab: (p, to) => tabHostRef.current.onReorderTabInGroup(gid, p, to),
@@ -334,7 +344,17 @@ export function ProjectView({
   useEffect(() => {
     const alive = new Set(groups.map((g) => g.id));
     for (const id of [...groupCbRef.current.keys()]) if (!alive.has(id)) groupCbRef.current.delete(id);
+    for (const id of [...paneActionsRef.current.keys()]) if (!alive.has(id)) paneActionsRef.current.delete(id);
   }, [groups]);
+  /**
+   * 状态栏 EOL 菜单 → **焦点组**的编辑器动作（W7-H）。
+   * 入口是否出现由 EditorPane 上报的 `eolSwitchable` 决定（只读 / 预览面不画）；
+   * 这里只做转发，不复制第二份可切换判据。组没注册句柄 ⇒ 静默无操作（不会发生：
+   * 有读数就说明该组的 EditorPane 正挂在屏幕上并已注册）。
+   */
+  const switchEolInActiveGroup = useCallback((eol: 'LF' | 'CRLF'): void => {
+    paneActionsRef.current.get(activeGroupIdRef.current)?.switchEol(eol);
+  }, []);
   /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
   const notify = useNotify();
   /** 壳层工作台 API（空态动作按钮：快速打开 / 命令面板 / 新建口上文件） */
@@ -1103,6 +1123,7 @@ export function ProjectView({
       activeFile={activeFile}
       onReauth={onReauth}
       dirty={activeFile !== null && dirtyPaths.has(activeFile)}
+      onSwitchEol={switchEolInActiveGroup}
       stats={{ fileCount, fnCount, indexing, indexError }}
       commandCtx={{ project, ...(activeFile ? { activeFile } : {}) }}
       onCloseProject={onClose}
