@@ -185,6 +185,13 @@ function erbFileInIndex(index: ErbIndex | null, path: string): ErbFile | null {
 const MARKER_DEBOUNCE_MS = 250;
 
 /**
+ * 预览面**写类动作**的统一否决文案（VETO-1）：F2 改名 / Shift+Alt+F 格式化 / 壳层的
+ * `editor.action.request` 三处共用一句。文案里显式给出路的名字（「切回原文」），
+ * 与通知上那颗按钮同口径——作者读完这句话就知道该点哪里。
+ */
+const PREVIEW_WRITE_VETO = '.kojo 预览是只读显示，动作改的是派生文本——先切回原文再执行。';
+
+/**
  * 只读态与快建议**同拍**落 Monaco 选项。
  *
  * `readOnly` 只拦编辑，不拦 suggest；provider 又拿不到 editor 的可写状态 ⇒ 只读文件 /
@@ -427,6 +434,40 @@ export function EditorPane({
   /** 编辑器状态上抛 ref（重载时读最新，避免把不稳定 prop 拖进回调依赖） */
   const onStatusInfoRef = useRef(onStatusInfo);
   const notify = useNotify();
+  /**
+   * 预览面写类否决的统一出口（VETO-1，2026-10-20）——**否决必须给出路**（铁律 4）：
+   * 预览挂的是只读派生 model，F2 改名 / Shift+Alt+F 格式化 / 壳层动作请求 / 整文件修法
+   * 在它上面都改不到真文件。过去这里只弹一句"先关掉预览"，作者还得自己去找那颗开关；
+   * 现在每条否决都挂「切回原文」按钮，点击走**工具条那颗开关同一条通道**
+   * （`editor.sugarView.set`，宿主是糖视图状态所有者，壳层不持有第二份真源）。
+   * 通知中心先关 toast 再执行 action（`NotificationCenter` 既有语义）⇒ 点完即消失。
+   *
+   * 调用点全部在 `if (sugarModelRef.current)` 里：**原文面一条都不新增**——同一个动作
+   * 在原文面上要么照常执行，要么沿用该动作自己既有的提示。
+   */
+  const notifyPreviewWriteVeto = useCallback(
+    (message: string): void => {
+      // 目标文件在**弹通知那一刻**定下来：切走标签后旧通知仍在屏上，点它不该误关
+      // 另一个文件的预览（监听端会按 filePath 对不上直接忽略，安全 no-op）。
+      const target = filePathRef.current;
+      notify({
+        kind: 'info',
+        message,
+        actions: [
+          {
+            label: '切回原文',
+            run: () => {
+              kernel.bus.emit('editor.sugarView.set', {
+                on: false,
+                ...(target ? { filePath: target } : {}),
+              });
+            },
+          },
+        ],
+      });
+    },
+    [kernel, notify],
+  );
   /**
    * 格式化让路必须可见（铁律 4；FMT-TOAST）：`Shift+Alt+F` / 选区格式化 / 打字规范化
    * 这五处"这次不格式化"由 `monaco/kojo-format-range.ts` 递出 `notice`，台账
@@ -1853,6 +1894,27 @@ export function EditorPane({
       if (!action) return;
       void action.run({ searchString: model.getValueInRange(selection), findInSelection: true });
     });
+    /**
+     * VETO-1：预览面上 F2 改名 / Shift+Alt+F 格式化同样是**写类**动作——派生文本上没有
+     * 可落点，Monaco 内建动作在糖 model 上要么被 provider 静默拒绝、要么什么都不发生。
+     * 键位表不碰（`keybindings.ts` 明说不劫持 Monaco 内建键），只在本实例 `addCommand`
+     * 拦一拍：**预览面** ⇒ 与两条总线否决同一条带「切回原文」按钮的通知；
+     * **原文面** ⇒ 原样交回 Monaco 内建动作，零新增通知（同一条命令逐字照旧）。
+     */
+    ed.addCommand(monaco.KeyCode.F2, () => {
+      if (sugarModelRef.current) {
+        notifyPreviewWriteVeto(PREVIEW_WRITE_VETO);
+        return;
+      }
+      void ed.getAction('editor.action.rename')?.run();
+    });
+    ed.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {
+      if (sugarModelRef.current) {
+        notifyPreviewWriteVeto(PREVIEW_WRITE_VETO);
+        return;
+      }
+      void ed.getAction('editor.action.formatDocument')?.run();
+    });
     // 偏好落盘只在设置页，生效走 Monaco 配置项：开 ⇒ 逐 model 挂上着色器，关 ⇒ 卸掉，
     // 不用重开文件（standalone 的 DocumentSemanticTokensFeature 自己监听这条配置）。
     applyNameColorPref(ed);
@@ -2410,7 +2472,8 @@ export function EditorPane({
         return;
       }
       if (sugarModelRef.current) {
-        notify({ kind: 'info', message: '.kojo 预览是只读显示，动作改的是派生文本——先关掉预览再执行。' });
+        // VETO-1：否决必须给出路——按钮走工具条那颗开关同一条通道（原文面不经过这里）
+        notifyPreviewWriteVeto(PREVIEW_WRITE_VETO);
         return;
       }
       const action = ed.getAction(ACTION_IDS[p.action]);
@@ -2421,11 +2484,11 @@ export function EditorPane({
       void action.run();
     });
     return un;
-  }, [kernel, notify]);
+  }, [kernel, notify, notifyPreviewWriteVeto]);
 
   /**
-   * E3「全部修复」：把**当前文档**里每一条"只有唯一改法"的问题一次补好
-   * （2026-10-16 批量修复批）。
+   * E3「全部修复」的落地入口——`editor.fixAll.request` 的唯一实现（2026-10-16 批量修复批；
+   * VETO-1 把"没落"的三种原因拆开说）。
    *
    * 宿主在这里只做三件事，**零批量判据**（判据全在 `kojo-fix-all.ts` 的纯函数里）：
    * ① 按既有的那道闸判"这份文件能不能改"（目录分野 + 逐份解锁，与 `setModel` 时
@@ -2436,40 +2499,70 @@ export function EditorPane({
    * ③ 结果如实说一句（补了几处 / 剩下几处为什么要逐处选），绝不静默返回"按了没反应"
    *    （铁律 4）。命令恒可按下 = 就是这个道理：灰掉的命令要按得下去才知道为什么没修。
    *
+   * 三种"没落"各说各话，绝不混成一条（VETO-1）：
+   * - **预览面只读**：派生 model 上改不到真文件 ⇒ 带「切回原文」出路的否决；
+   * - **文件被外部改动**（保存冲突未决）：先让作者决定保留哪边，别把旧缓冲区上的修法
+   *   写回去再保存——那会把两边的改动搅在一起；
+   * - **无可用修法**：明说"不必再按"，不拿一句"按了没反应"糊过去。
+   *
+   * 与 `editor-global-providers.ts` 里预览 overlay 那一枚**同名函数**不是同一条路：
+   * 那枚管 💡 单条改写的布尔回执（在允许的文件边界之外），本枚管壳层「一键修复」意图。
+   *
    * 只改缓冲区、**不碰磁盘**：保存仍由作者 Ctrl+S 决定（与 💡 完全同级，批量只是次数）。
    */
-  useEffect(() => {
-    const un = kernel.bus.on('editor.fixAll.request', () => {
-      const ed = editorRef.current;
-      const model = ed?.getModel();
-      const path = filePathRef.current;
-      if (!ed || !model || !path) {
-        notify({ kind: 'info', message: '先打开一份口上文件，再用一键修复。' });
-        return;
-      }
-      // .kojo 预览挂的是**只读派生 model**：在它上面改 = 改不到任何真文件 ⇒ 可见拒绝
-      if (sugarModelRef.current) {
-        notify({ kind: 'info', message: '.kojo 预览是只读显示，改不到原文件——先关掉预览再一键修复。' });
-        return;
-      }
-      const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
-      if (erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit })) {
-        notify({ kind: 'info', message: '这份文件当前只读，一键修复不动它——先按提示允许编辑这份文件。' });
-        return;
-      }
-      const report = runFixAll({
-        decorators: kernel.slots.query('ui.editor.decorator'),
-        codeActions: kernel.slots.query('ui.editor.codeAction'),
-        path,
-        project: kernel.project.current(),
-        readText: () => model.getValue(),
-        lineCount: () => model.getLineCount(),
-        apply: (edits) => applyTextEdits(ed, edits),
+  const applyQuickFixEdits = useCallback((): void => {
+    const ed = editorRef.current;
+    const model = ed?.getModel();
+    const path = filePathRef.current;
+    if (!ed || !model || !path) {
+      notify({ kind: 'info', message: '先打开一份口上文件，再用一键修复。' });
+      return;
+    }
+    // ① 预览面只读（派生 model）——否决带出路，与另外两条总线否决同一枚按钮
+    if (sugarModelRef.current) {
+      notifyPreviewWriteVeto('.kojo 预览是只读显示，改不到原文件——先切回原文再一键修复。');
+      return;
+    }
+    // ② 文件被外部改动、保存冲突还没处置（与 A6 自动保存护栏读同一个信号）
+    if (externalConflictRef.current.has(path)) {
+      notify({
+        kind: 'info',
+        message: `「${path}」在磁盘上已被外部改动，保存冲突还没处置——先决定保留哪边，再一键修复。`,
       });
-      notify({ kind: 'info', message: fixAllSummary(report) });
+      return;
+    }
+    const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
+    if (erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit })) {
+      notify({ kind: 'info', message: '这份文件当前只读，一键修复不动它——先按提示允许编辑这份文件。' });
+      return;
+    }
+    const report = runFixAll({
+      decorators: kernel.slots.query('ui.editor.decorator'),
+      codeActions: kernel.slots.query('ui.editor.codeAction'),
+      path,
+      project: kernel.project.current(),
+      readText: () => model.getValue(),
+      lineCount: () => model.getLineCount(),
+      apply: (edits) => applyTextEdits(ed, edits),
     });
-    return un;
-  }, [kernel, notify]);
+    // ③ 无可用修法：一句独立的"不必再按"，不借用 ①② 的措辞
+    const nothingToFix =
+      report.fixed === 0 &&
+      report.ambiguous === 0 &&
+      report.bundled === 0 &&
+      report.manual === 0 &&
+      report.conflicted === 0 &&
+      report.unclaimed === 0;
+    if (nothingToFix) {
+      notify({ kind: 'info', message: '这一份没有可自动补好的修法——不必再按了。' });
+      return;
+    }
+    notify({ kind: 'info', message: fixAllSummary(report) });
+  }, [kernel, notify, notifyPreviewWriteVeto]);
+
+  useEffect(() => {
+    return kernel.bus.on('editor.fixAll.request', () => applyQuickFixEdits());
+  }, [kernel, applyQuickFixEdits]);
 
   const labelParts = pathLabelParts(filePath);
 
