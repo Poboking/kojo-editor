@@ -7,12 +7,14 @@ import {
   clearSearchResult,
   runReplace,
   runSearch,
+  selectSearchMatch,
   setExtensionText,
   setQuery,
   setReplaceText,
   setSearchScope,
   setSearchSortMode,
   snapshot,
+  stepSearchMatch,
   stopSearch,
   subscribe,
   toggleOption,
@@ -26,6 +28,7 @@ import {
   matchLocationLabel,
   parseExtensions,
   previewParts,
+  searchMatchCounterText,
   searchNoticeText,
   searchProgressText,
   searchSummaryText,
@@ -279,7 +282,12 @@ function SearchMatchRow({
         className="search-match ksp-row-main"
         data-panel-row=""
         title={`${path}:${match.line}`}
-        onClick={() => onReveal(path, match.line, searchMatchSpan(match))}
+        onClick={() => {
+          // F4 的行导航也是敲这枚按钮（`panel-row-nav`）⇒ 鼠标与键盘同一条
+          // 「当前项」判据，计数文案不会只在回车时跟手
+          selectSearchMatch(path, match.line, match.column);
+          onReveal(path, match.line, searchMatchSpan(match));
+        }}
       >
         <span className="search-loc ksp-loc">{matchLocationLabel(match)}</span>
         <MatchPreview match={match} />
@@ -402,6 +410,11 @@ export function SearchPanel({
   const groups = useMemo(() => groupSearchRows(rows), [rows]);
   const gutterCh = useMemo(() => locationGutterCh(rows), [rows]);
   const progressPercent = searchProgressPercent(s.progress);
+  /**
+   * 「第 X 项 / 共 Y 项」的 Y 取后端 `totalMatches`（与摘要「N 条结果」同一个数，
+   * 两处读数不许对不上）；X 是 `matchCursor`（0 基显示序，-1 = 还没导航）。
+   */
+  const matchCounter = result !== null ? searchMatchCounterText(s.matchCursor, result.totalMatches) : null;
 
   /** 选择器**现在**显示的范围（陈旧 key 归一成 `''`）；与 `appliedScope`（结果的范围）不是一回事 */
   const selectedScope = findSearchScope(scopes, s.scopeKey);
@@ -413,6 +426,18 @@ export function SearchPanel({
     // 范围收窄发生在发请求**之前**：扫描代价在原生侧，少扫就是少扫（不是全扫再挑）。
     const narrowing = narrowRoots(roots, selectedScope);
     void runSearch(narrowing.roots, describeAppliedScope(selectedScope, narrowing));
+  };
+
+  /**
+   * 结果间逐项跳（回车 = 下一项 / Shift+回车 = 上一项；与 F4 / Shift+F4 同一条数据面）。
+   * 返回 `false` = 没有可导航的结果（没搜过 / 查询改过 / 零命中）——调用方退回"开始检索"，
+   * 这样"打完词按回车"的老路一步不少（判据在 `search-store.stepSearchMatch`）。
+   */
+  const stepMatch = (delta: 1 | -1): boolean => {
+    const target = stepSearchMatch(delta);
+    if (target === null) return false;
+    onReveal(target.path, target.match.line, searchMatchSpan(target.match));
+    return true;
   };
 
   /**
@@ -502,17 +527,21 @@ export function SearchPanel({
               ref={inputRef}
               className="search-input ksp-input"
               placeholder="在文件中搜索…"
-              title="回车开始检索（Ctrl+Shift+F）"
+              title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）"
               aria-label="在文件中搜索"
               autoComplete="off"
               spellCheck={false}
               value={s.query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  start();
-                }
+                // 输入法组词中的回车只是在确认候选词，不是"跳下一项 / 开始检索"
+                // （中文作者的主路径；不挡会把一次组词变成一次跳转）
+                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                // 有结果优先逐项跳（VSCode 查找控件的 Enter 手感）；查询改过 / 没结果
+                // ⇒ `stepSearchMatch` 返回 null，退回"回车开始检索"
+                if (stepMatch(e.shiftKey ? -1 : 1)) return;
+                start();
               }}
             />
             <div className="ksp-toggles" role="group" aria-label="检索选项">
@@ -761,6 +790,16 @@ export function SearchPanel({
                 >
                   {searchSummaryText(result)}
                 </span>
+                {matchCounter !== null ? (
+                  // 「第 X 项 / 共 Y 项」：与查找控件同语义；X 由回车 / Shift+回车 /
+                  // F4 / 点行同一条游标给出（`search-store.stepSearchMatch`）
+                  <span
+                    className="search-status ksp-match-counter"
+                    title="回车 = 下一项，Shift+回车 = 上一项（F4 / Shift+F4 同效）"
+                  >
+                    {matchCounter}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   className="ghost small ksp-clear"
@@ -813,7 +852,7 @@ export function SearchPanel({
             </>
           ) : (
             <div className="search-status dim ksp-hint">
-              输入检索词后回车；点结果行跳转到该位置（↑↓ 逐行看，F4 跳到下一条并打开）。
+              输入检索词后回车；点结果行跳转到该位置（回车 / Shift+回车逐项跳，↑↓ 逐行看，F4 跳到下一条并打开）。
             </div>
           )}
         </div>

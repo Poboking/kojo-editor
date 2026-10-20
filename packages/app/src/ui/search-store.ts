@@ -14,6 +14,7 @@ import {
   acceptFilesBatch,
   DEFAULT_SEARCH_SORT,
   reconcileStreamFiles,
+  sortSearchFiles,
   type SearchSortMode,
 } from './search-stream';
 import { scopeUnreachableText, type AppliedSearchScope } from './search-scope';
@@ -41,6 +42,14 @@ export interface SearchOptionsState {
 export interface SearchState {
   query: string;
   options: SearchOptionsState;
+  /**
+   * 出结果那次检索的查询原文（`null` = 还没有完成态结果）。
+   * 逐项导航只在"查询没改过"时成立：作者改了查询却按回车，应该重搜而不是
+   * 拿着旧结果跳——屏幕上的结果与查询对不上时，跳转就是另一种撒谎。
+   */
+  resultQuery: string | null;
+  /** 当前命中游标（0 基，按**显示序**数；`-1` = 还没导航过。计数文案见 `searchMatchCounterText`） */
+  matchCursor: number;
   /** 类型过滤框的原始文本（解析成扩展名列表在发请求那一刻做） */
   extensionText: string;
   phase: SearchPhase;
@@ -100,6 +109,12 @@ export interface MatchTarget {
   readonly column: number;
 }
 
+/** 逐项导航的目标：文件路径 + 那一条命中（区间/预览都在 `match` 里，面板不必再查） */
+export interface SearchMatchTarget {
+  readonly path: string;
+  readonly match: SearchMatch;
+}
+
 /** 替换模式：全部替换 = 结果里每个文件逐个落；单条 = 只落点中的那一处 */
 export type ReplaceMode = { readonly kind: 'all' } | { readonly kind: 'one'; readonly target: MatchTarget };
 
@@ -124,9 +139,85 @@ export interface ReplaceRequest {
   readonly files: readonly { readonly path: string; readonly matches: readonly SearchMatch[] }[];
 }
 
+/* ---------------------- 三个检索开关的跨会话保留（查找替换体验批） ---------------------- */
+
+/**
+ * 全字 / 大小写 / 正则三开关住 localStorage（与 `search-query.ts` 的
+ * 「替换保留大小写」同一存法，不新造第二套偏好机制）。
+ *
+ * 为什么必须跨会话：这三个开关改变的是**命中判据**。作者上一轮用正则找完
+ * `^口上`，关掉程序再打开，面板悄悄回到"全关"——下一次检索结果与上一轮
+ * 完全不同，而屏幕上没有任何一处说条件变了（铁律 4）。
+ *
+ * 失败方向：读写异常（隐私模式 / 配额 / 手改坏 JSON）一律回"三关"——
+ * 与缺省同形，不猜、不半开。开关本身照常可切（存储只影响下次启动）。
+ */
+const SEARCH_OPTIONS_PREF_KEY = 'kojo.ui.search.options.v1';
+
+/** 缺省三关（与 `INITIAL` 的旧口径逐字一致） */
+function defaultSearchOptions(): SearchOptionsState {
+  return { isRegex: false, caseSensitive: false, wholeWord: false };
+}
+
+/** localStorage 访问器（node 测试环境无 localStorage；隐私模式可能抛错——都不该影响检索） */
+function searchOptionsStorage(): Storage | null {
+  try {
+    return (globalThis as { localStorage?: Storage }).localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 读开关（坏值 / 缺键 / 非布尔一律当关；只认显式的 `true`） */
+function loadSearchOptionsPref(): SearchOptionsState {
+  const storage = searchOptionsStorage();
+  if (storage === null) return defaultSearchOptions();
+  let raw: string | null;
+  try {
+    raw = storage.getItem(SEARCH_OPTIONS_PREF_KEY);
+  } catch {
+    return defaultSearchOptions();
+  }
+  if (raw === null) return defaultSearchOptions();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return defaultSearchOptions();
+    const rec = parsed as Record<string, unknown>;
+    return {
+      isRegex: rec.isRegex === true,
+      caseSensitive: rec.caseSensitive === true,
+      wholeWord: rec.wholeWord === true,
+    };
+  } catch {
+    return defaultSearchOptions();
+  }
+}
+
+/** 写开关（写不进去不算错：只影响下次启动，不影响本次） */
+function saveSearchOptionsPref(options: SearchOptionsState): void {
+  const storage = searchOptionsStorage();
+  if (storage === null) return;
+  try {
+    storage.setItem(SEARCH_OPTIONS_PREF_KEY, JSON.stringify(options));
+  } catch {
+    /* 隐私模式 / 配额满：本次会话照常 */
+  }
+}
+
+/** 结果的**显示序**摊平（与面板的 `sortSearchFiles` 同一条排序真源，导航与所见不漂） */
+function searchMatchTargets(files: readonly SearchFileResult[], mode: SearchSortMode): SearchMatchTarget[] {
+  const out: SearchMatchTarget[] = [];
+  for (const file of sortSearchFiles(files, mode)) {
+    for (const match of file.matches) out.push({ path: file.path, match });
+  }
+  return out;
+}
+
 const INITIAL: SearchState = {
   query: '',
-  options: { isRegex: false, caseSensitive: false, wholeWord: false },
+  options: loadSearchOptionsPref(),
+  resultQuery: null,
+  matchCursor: -1,
   extensionText: DEFAULT_EXTENSION_TEXT,
   phase: 'idle',
   progress: null,
@@ -212,9 +303,11 @@ export function setSearchScope(key: string): void {
   set({ scopeKey: key });
 }
 
-/** 三个开关（正则 / 大小写 / 全词）——切换不改结果，下次检索才生效 */
+/** 三个开关（正则 / 大小写 / 全词）——切换不改结果，下次检索才生效；同时落 localStorage 跨会话保留 */
 export function toggleOption(key: keyof SearchOptionsState): void {
-  set({ options: { ...state.options, [key]: !state.options[key] } });
+  const options = { ...state.options, [key]: !state.options[key] };
+  saveSearchOptionsPref(options);
+  set({ options });
 }
 
 /** 快捷键 / 命令入口：请求面板聚焦（面板订阅 `focusNonce` 落地） */
@@ -226,15 +319,27 @@ export function requestSearchFocus(): void {
  * 切换结果排序（P2-11：路径 / 命中数 / 文件名）。与三个开关、范围选择同语义：
  * 只改投影序，**不重发检索**——在途流式结果也当场重排（排序是纯函数，
  * 见 `search-stream.sortSearchFiles`）。
+ *
+ * 当前项游标跟着排序一起复位：0 基游标说的是**旧显示序**里的第几个，
+ * 换了序还留着它就是指向另一条命中（"第 3 项"突然变成别处，读数撒谎）。
  */
 export function setSearchSortMode(mode: SearchSortMode): void {
-  set({ sortMode: mode });
+  set({ sortMode: mode, matchCursor: -1 });
 }
 
 /** 清空结果与错误（保留查询条件与开关——"清空结果"不是"重置面板"） */
 export function clearSearchResult(): void {
   if (state.phase === 'running') return;
-  set({ result: null, error: null, phase: 'idle', progress: null, appliedScope: null, replaceSummary: null });
+  set({
+    result: null,
+    error: null,
+    phase: 'idle',
+    progress: null,
+    appliedScope: null,
+    replaceSummary: null,
+    resultQuery: null,
+    matchCursor: -1,
+  });
 }
 
 /**
@@ -258,7 +363,15 @@ export async function runSearch(
   applied?: AppliedSearchScope | null,
 ): Promise<void> {
   if (!isValidSearchQuery(state.query)) {
-    set({ phase: 'error', error: '请输入检索词', result: null, progress: null, appliedScope: null });
+    set({
+      phase: 'error',
+      error: '请输入检索词',
+      result: null,
+      progress: null,
+      appliedScope: null,
+      resultQuery: null,
+      matchCursor: -1,
+    });
     return;
   }
   if (roots.length === 0) {
@@ -268,6 +381,8 @@ export async function runSearch(
       result: null,
       progress: null,
       appliedScope: null,
+      resultQuery: null,
+      matchCursor: -1,
     });
     return;
   }
@@ -288,6 +403,8 @@ export async function runSearch(
     progress: null,
     appliedScope: applied ?? null,
     streamFiles: [],
+    resultQuery: null,
+    matchCursor: -1,
   });
 
   try {
@@ -313,6 +430,10 @@ export async function runSearch(
       result: { ...result, files: reconcileStreamFiles(result) },
       progress: null,
       streamFiles: null,
+      // 查询快照取**发请求那一刻**的 `request.query`（= 这份结果的判据）；
+      // 完成前作者又改过输入框时，Enter 应重搜而不是拿旧结果跳（见 `stepSearchMatch`）
+      resultQuery: request.query,
+      matchCursor: -1,
     });
   } catch (e: unknown) {
     if (state.searchId !== searchId) return;
@@ -323,6 +444,8 @@ export async function runSearch(
       progress: null,
       appliedScope: null,
       streamFiles: null,
+      resultQuery: null,
+      matchCursor: -1,
     });
   }
 }
@@ -390,8 +513,55 @@ export async function stopSearch(): Promise<void> {
   }
 }
 
+/**
+ * 逐项导航（回车 / Shift+回车、F4 / Shift+F4 的数据面；`delta` = +1 下一项 / -1 上一项）。
+ *
+ * 顺序 = **面板显示序**（`sortSearchFiles` 同一把尺子），首尾回绕（与行导航
+ * `rowNavDecision` 的 `nextRovingIndex` 同一条回绕口径）。
+ *
+ * 返回 `null` 的三种情形都由调用方转成"重搜"：
+ * - 没有完成态结果（还在搜 / 从未搜过）；
+ * - 查询改过（结果不是当前查询的，跳过去 = 拿旧读数骗人）；
+ * - 结果里一条命中都没有。
+ *
+ * 游标只在**真的导航**时写：面板首次出结果不自动跳第一处（全项目检索不抢编辑器焦点），
+ * 此时计数文案把第 1 项当"下一站"（见 `search-query.searchMatchCounterText`）。
+ */
+export function stepSearchMatch(delta: 1 | -1): SearchMatchTarget | null {
+  if (state.phase !== 'done' || state.result === null) return null;
+  if (state.query !== state.resultQuery) return null;
+  const targets = searchMatchTargets(state.result.files, state.sortMode);
+  if (targets.length === 0) return null;
+  const current = state.matchCursor >= 0 && state.matchCursor < targets.length ? state.matchCursor : -1;
+  const next =
+    current < 0 ? (delta > 0 ? 0 : targets.length - 1) : (current + delta + targets.length) % targets.length;
+  set({ matchCursor: next });
+  return targets[next]!;
+}
+
+/**
+ * 点中结果行（鼠标或 F4 的 `click()` 同一条路）⇒ 当前项落在那一行。
+ * 按 `path + 行 + 列` 在**显示序**里找；找不到（结果已换 / 行列陈旧）就不动游标——
+ * 不猜"大概是第几个"。
+ */
+export function selectSearchMatch(path: string, line: number, column: number): void {
+  if (state.result === null) return;
+  const targets = searchMatchTargets(state.result.files, state.sortMode);
+  const index = targets.findIndex(
+    (t) => t.path === path && t.match.line === line && t.match.column === column,
+  );
+  if (index >= 0 && index !== state.matchCursor) set({ matchCursor: index });
+}
+
 /** 整体回到初始态（项目关闭时调：检索根没了，旧结果留着只会误导） */
 export function resetSearch(): void {
-  state = { ...INITIAL, focusNonce: state.focusNonce, replaceFocusNonce: state.replaceFocusNonce };
+  state = {
+    ...INITIAL,
+    // 开关跨会话：现读一次存储（不是复用模块载入时的快照）——项目关开不该把
+    // 作者刚切的判据悄悄翻回全关
+    options: loadSearchOptionsPref(),
+    focusNonce: state.focusNonce,
+    replaceFocusNonce: state.replaceFocusNonce,
+  };
   notify();
 }

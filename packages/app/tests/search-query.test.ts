@@ -9,6 +9,7 @@ import {
   matchLocationLabel,
   parseExtensions,
   previewParts,
+  searchMatchCounterText,
   searchNoticeText,
   searchProgressText,
   searchSummaryText,
@@ -122,6 +123,24 @@ describe('search-query · 结果扁平化', () => {
     const { rows, hidden } = flattenSearchResults(files, 3);
     expect(rows).toHaveLength(3);
     expect(hidden).toBe(2);
+  });
+});
+
+describe('search-query · 第 X 项 / 共 Y 项', () => {
+  it('没有命中就不编读数', () => {
+    expect(searchMatchCounterText(-1, 0)).toBeNull();
+    expect(searchMatchCounterText(0, 0)).toBeNull();
+    expect(searchMatchCounterText(0, -3)).toBeNull();
+  });
+
+  it('未导航时把第 1 项当作下一站；0 基游标转 1 基文案', () => {
+    expect(searchMatchCounterText(-1, 3)).toBe('第 1 项 / 共 3 项');
+    expect(searchMatchCounterText(0, 3)).toBe('第 1 项 / 共 3 项');
+    expect(searchMatchCounterText(2, 3)).toBe('第 3 项 / 共 3 项');
+  });
+
+  it('游标越界夹回总数（坏载荷不许把读数撑出范围）', () => {
+    expect(searchMatchCounterText(99, 3)).toBe('第 3 项 / 共 3 项');
   });
 });
 

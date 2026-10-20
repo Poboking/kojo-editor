@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { SearchResult } from '../src/bridge/search';
 import { SearchPanel } from '../src/ui/SearchPanel';
-import { resetSearch, runSearch, setQuery, setSearchRunner } from '../src/ui/search-store';
+import { resetSearch, runSearch, setQuery, setSearchRunner, stepSearchMatch } from '../src/ui/search-store';
 
 /**
  * 检索面板的**静态渲染**判据（2026-10-15 检索批）。
@@ -92,6 +92,30 @@ describe('SearchPanel 渲染', () => {
     expect(html).toContain('2 个二进制文件');
     expect(html).toContain('1 个文件读取失败');
     expect(html).toContain('30 个文件被类型过滤挡下');
+  });
+
+  it('结果读数带「第 X 项 / 共 Y 项」，逐项导航后跟着走（回车 / F4 同一条数据面）', async () => {
+    await prime(
+      result({
+        totalMatches: 2,
+        files: [
+          {
+            path: 'C:\\game\\ERB\\事件.ERB',
+            matches: [
+              { line: 2, column: 5, preview: '二行目にABC', start: 4, end: 7 },
+              { line: 9, column: 1, preview: 'ABC 开头', start: 0, end: 3 },
+            ],
+          },
+        ],
+      }),
+    );
+    const render = (): string =>
+      renderToStaticMarkup(createElement(SearchPanel, { roots: ['C:\\game'], ...ANY_REVEAL }));
+    expect(render()).toContain('第 1 项 / 共 2 项');
+    expect(stepSearchMatch(1)).not.toBeNull();
+    expect(render()).toContain('第 1 项 / 共 2 项');
+    expect(stepSearchMatch(1)).not.toBeNull();
+    expect(render()).toContain('第 2 项 / 共 2 项');
   });
 
   it('错误态画在面板里（不抛穿渲染路径）', async () => {

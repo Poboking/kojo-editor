@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SearchRequest, SearchResult } from '../src/bridge/search';
+import type { SearchMatch, SearchRequest, SearchResult } from '../src/bridge/search';
 import {
   clearSearchResult,
   requestReplaceFocus,
@@ -7,13 +7,16 @@ import {
   resetSearch,
   runReplace,
   runSearch,
+  selectSearchMatch,
   setExtensionText,
   setQuery,
   setReplaceRunner,
   setReplaceText,
   setSearchCanceller,
   setSearchRunner,
+  setSearchSortMode,
   snapshot,
+  stepSearchMatch,
   stopSearch,
   subscribe,
   toggleOption,
@@ -40,6 +43,14 @@ const result = (over: Partial<SearchResult> = {}): SearchResult => ({
   skipped: { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0 },
   elapsedMs: 0,
   ...over,
+});
+
+const hit = (line: number, column = 1): SearchMatch => ({
+  line,
+  column,
+  preview: 'ABC',
+  start: 0,
+  end: 3,
 });
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
@@ -234,6 +245,155 @@ describe('search-store', () => {
     expect(snapshot().options.caseSensitive).toBe(false);
     expect(snapshot().phase).toBe('idle');
     expect(snapshot().focusNonce).toBe(nonce);
+  });
+});
+
+describe('search-store 检索开关跨会话（VS Code 同款：选项不是一次性的）', () => {
+  /** 内存版 Storage：node 测试环境没有 localStorage，stub 一份即可验证读写与坏值回落 */
+  function fakeStorage(): Storage {
+    const map = new Map<string, string>();
+    return {
+      get length() {
+        return map.size;
+      },
+      clear: () => map.clear(),
+      getItem: (key: string) => map.get(key) ?? null,
+      key: (index: number) => [...map.keys()][index] ?? null,
+      removeItem: (key: string) => {
+        map.delete(key);
+      },
+      setItem: (key: string, value: string) => {
+        map.set(key, value);
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    resetSearch();
+    setSearchRunner(null);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setSearchRunner(null);
+    resetSearch();
+  });
+
+  it('三个开关写入 localStorage，重开后读回（大小写 / 全词 / 正则）', () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    toggleOption('caseSensitive');
+    toggleOption('wholeWord');
+    // 真源是一份逐字可读的 JSON；关掉的开关也写 false，坏值不会凭"缺键"猜成开
+    expect(JSON.parse(storage.getItem('kojo.ui.search.options.v1')!)).toEqual({
+      isRegex: false,
+      caseSensitive: true,
+      wholeWord: true,
+    });
+    // 模拟下次启动：模块级 INITIAL 不在测试里重跑，走 resetSearch 的现读路径
+    resetSearch();
+    expect(snapshot().options).toEqual({ isRegex: false, caseSensitive: true, wholeWord: true });
+  });
+
+  it('存储值坏掉 / 形状不对 ⇒ 回默认全关（不静默把开关留在半开）', () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    storage.setItem('kojo.ui.search.options.v1', '{bad json');
+    resetSearch();
+    expect(snapshot().options).toEqual({ isRegex: false, caseSensitive: false, wholeWord: false });
+    storage.setItem('kojo.ui.search.options.v1', JSON.stringify({ isRegex: 'yes', caseSensitive: 1 }));
+    resetSearch();
+    expect(snapshot().options).toEqual({ isRegex: false, caseSensitive: false, wholeWord: false });
+  });
+
+  it('localStorage 不可用（隐私模式 / 抛错）⇒ 开关照常工作，只是不落盘', () => {
+    vi.stubGlobal('localStorage', {
+      getItem(): string | null {
+        throw new Error('SecurityError');
+      },
+      setItem(): void {
+        throw new Error('SecurityError');
+      },
+    });
+    resetSearch();
+    expect(() => toggleOption('isRegex')).not.toThrow();
+    expect(snapshot().options.isRegex).toBe(true);
+  });
+});
+
+describe('search-store 结果逐项导航（第 X 项 / 共 Y 项 的数据面）', () => {
+  beforeEach(() => {
+    resetSearch();
+    setSearchRunner(null);
+  });
+  afterEach(() => {
+    setSearchRunner(null);
+    resetSearch();
+  });
+
+  /** 两个文件按显示序（默认路径序）排：a.erb 两条、b.erb 一条 */
+  async function primeThree(): Promise<void> {
+    setSearchRunner(async () =>
+      result({
+        totalMatches: 3,
+        files: [
+          { path: 'C:\\game\\b.erb', matches: [hit(7)] },
+          { path: 'C:\\game\\a.erb', matches: [hit(2), hit(5)] },
+        ],
+      }),
+    );
+    setQuery('ABC');
+    await runSearch(ROOTS);
+  }
+
+  it('回车前进 / Shift+回车后退，按显示序且首尾回绕', async () => {
+    await primeThree();
+    // 还没导航：第一个 Enter 落在显示序第一项
+    expect(stepSearchMatch(1)).toMatchObject({ path: 'C:\\game\\a.erb', match: { line: 2 } });
+    expect(snapshot().matchCursor).toBe(0);
+    expect(stepSearchMatch(1)).toMatchObject({ path: 'C:\\game\\a.erb', match: { line: 5 } });
+    expect(stepSearchMatch(1)).toMatchObject({ path: 'C:\\game\\b.erb', match: { line: 7 } });
+    // 末项再前进 ⇒ 回第一项；第一项后退 ⇒ 回末项
+    expect(stepSearchMatch(1)).toMatchObject({ path: 'C:\\game\\a.erb', match: { line: 2 } });
+    expect(stepSearchMatch(-1)).toMatchObject({ path: 'C:\\game\\b.erb', match: { line: 7 } });
+  });
+
+  it('首次 Shift+回车从末项开始（与行导航的 ↑ 同一条回绕尺子）', async () => {
+    await primeThree();
+    expect(stepSearchMatch(-1)).toMatchObject({ path: 'C:\\game\\b.erb', match: { line: 7 } });
+    expect(snapshot().matchCursor).toBe(2);
+  });
+
+  it('查询改过 / 没有完成态结果 ⇒ 不拿陈旧结果导航（交给重搜）', async () => {
+    await primeThree();
+    setQuery('ABCD');
+    expect(stepSearchMatch(1)).toBeNull();
+    clearSearchResult();
+    setQuery('ABC');
+    expect(stepSearchMatch(1)).toBeNull();
+  });
+
+  it('重新检索与切换排序都复位当前项（旧游标不套到新序上）', async () => {
+    await primeThree();
+    stepSearchMatch(1);
+    stepSearchMatch(1);
+    expect(snapshot().matchCursor).toBe(1);
+    setSearchSortMode('matches');
+    expect(snapshot().matchCursor).toBe(-1);
+    await runSearch(ROOTS);
+    expect(snapshot().matchCursor).toBe(-1);
+  });
+
+  it('点中某一行（F4 / 鼠标同一条路）⇒ 当前项落在那一行', async () => {
+    await primeThree();
+    selectSearchMatch('C:\\game\\b.erb', 7, 1);
+    expect(snapshot().matchCursor).toBe(2);
+    selectSearchMatch('C:\\game\\a.erb', 5, 1);
+    expect(snapshot().matchCursor).toBe(1);
+    // 结果里没有的位置不猜
+    selectSearchMatch('C:\\game\\a.erb', 99, 1);
+    expect(snapshot().matchCursor).toBe(1);
   });
 });
 

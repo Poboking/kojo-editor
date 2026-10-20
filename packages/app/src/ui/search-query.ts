@@ -224,6 +224,21 @@ export function searchSummaryText(r: SearchResult): string {
   return `${prefix}${r.totalMatches} 条结果 · ${r.files.length} 个文件 · 扫描 ${r.filesScanned} 个文件 · ${seconds}s`;
 }
 
+/**
+ * 结果里的「第 X 项 / 共 Y 项」（与 VSCode 查找控件的 `{0} of {1}` 同语义）。
+ *
+ * `cursor` 是 0 基游标，`-1` = 还没导航——此时把第 1 项当作**下一站**上屏：
+ * 面板出结果时不自动跳第一处（全项目检索不抢编辑器焦点），但作者按回车就该知道
+ * 会落在哪里；这与行导航"焦点不在列表时 ↓ 进第一行"是同一把尺子。
+ * 越界一律夹回总数：游标是显示量，坏载荷不许把读数撑出范围（同 `previewParts`）。
+ */
+export function searchMatchCounterText(cursor: number, total: number): string | null {
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const count = Math.max(1, Math.trunc(total));
+  const index = Number.isFinite(cursor) ? Math.max(0, Math.trunc(cursor)) : 0;
+  return `第 ${Math.min(index + 1, count)} 项 / 共 ${count} 项`;
+}
+
 /** 需要显式说明的边角（截断 / 各类跳过）；无则 null */
 export function searchNoticeText(r: SearchResult): string | null {
   const notes: string[] = [];
