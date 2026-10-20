@@ -98,11 +98,11 @@ fn invalid_regex_is_reported_not_swallowed() {
 /// 拿 UTF-8 的查询字节去筛它们就会**漏报**，那种省法一律不许。
 #[test]
 fn byte_prefilter_holds_for_case_sensitive_literals_and_reports_its_reach() {
-    let ascii = byte_prefilter("abc", false, true).expect("ASCII 字面量该有预筛");
+    let ascii = byte_prefilter("abc", false, true, false).expect("ASCII 字面量该有预筛");
     assert!(ascii.ascii_safe, "纯 ASCII 字面量对遗留族也逐字节同形 ⇒ 半径 = 全部文件");
     assert!(ascii.re.is_match(b"xxABCxx") == false, "大小写敏感的预筛不许折叠大小写");
 
-    let zh = byte_prefilter("口上", false, true).expect("中文查询也该有预筛");
+    let zh = byte_prefilter("口上", false, true, false).expect("中文查询也该有预筛");
     assert!(!zh.ascii_safe, "非 ASCII 查询对遗留族不成立 ⇒ 只许筛合法 UTF-8 的文件");
     assert!(zh.re.is_match("这里有口上这个词".as_bytes()), "UTF-8 字节形要筛得出");
     assert!(!zh.re.is_match("没有这个词".as_bytes()), "没有就该筛掉");
@@ -113,10 +113,14 @@ fn byte_prefilter_holds_for_case_sensitive_literals_and_reports_its_reach() {
         "夹具：GBK 字节形本就与 UTF-8 不同（这条断言反过来才说明半径标记是必要的）"
     );
 
-    // 正则 / 大小写不敏感 / 空查询：一条都不预筛
-    assert!(byte_prefilter("a.c", true, true).is_none(), "正则可能匹配到字节里没有的原样片段");
-    assert!(byte_prefilter("abc", false, false).is_none(), "大小写折叠让'字节里有'≠'文本能匹配'");
-    assert!(byte_prefilter("", false, true).is_none());
+    // 正则 / 大小写不敏感 / 全词 / 空查询：一条都不预筛
+    assert!(byte_prefilter("a.c", true, true, false).is_none(), "正则可能匹配到字节里没有的原样片段");
+    assert!(byte_prefilter("abc", false, false, false).is_none(), "大小写折叠让'字节里有'≠'文本能匹配'");
+    assert!(
+        byte_prefilter("abc", false, true, true).is_none(),
+        "全词边界在解码后的字符上，字节级无法等价复刻 ⇒ 不预筛（宁可多解码，不可漏报）"
+    );
+    assert!(byte_prefilter("", false, true, false).is_none());
 }
 
 /// **中文查询打到遗留族文件上不许漏**（预筛放宽 + 三族裁决接线两条一起的端到端判据）。
@@ -959,4 +963,129 @@ fn request_dto_globs_default_to_none_when_absent() {
     let without: SearchRequestDto =
         serde_json::from_str(r#"{"searchId":1,"roots":["C://game"],"query":"a"}"#).unwrap();
     assert_eq!(without.options.globs, None);
+}
+
+/* ------------------------- 全词判据跨语言对账（WW-1） ------------------------- */
+//
+// ## 尺子
+// 全词 = 命中区间两侧的相邻一格都**不是**标识字符 `[\p{L}\p{N}_]`（行首/行尾 = 没有相邻字符）。
+// 唯一真源住 TS（`packages/app/src/ui/search-replace.ts` 的 `wholeWordOk`，与 `erb-rename.ts`
+// 的 `IDENT_RE` 同口径）——替换是写盘操作；检索必须与它同判，否则同一个「全词」勾选项
+// 在面板（本层）与真实替换（TS 层）里给出不同结果。
+//
+// ## 改前 / 改后（同一批 38 例，两侧真实调用取证；完整对照表见
+// `packages/app/tests/search-whole-word.test.ts` 的文件头）
+// 改前 Rust = `\b(?:…)\b`，改前 TS = `wholeWordOk`（即改后的尺）。38 例里 31 例两侧同判，
+// 分歧只在两类（改后全部对齐）：
+//   ① 模式首尾是非词字符（`（测试）`，5 例）：`\b` 要求两侧是"词符↔非词符"过渡 ⇒ 行首/行尾
+//      与空格旁**没有**边界（Rust 0 命中），而行内贴着 CJK 反而**有**边界（Rust 1 命中）——
+//      与相邻格判据正好相反（TS 分别为 1 / 0）；
+//   ② 词符集合不同（2 例）：`\w` 含组合记号（`C_FLAG` + U+0301 ⇒ Rust 0 / TS 1）、
+//      但不含 `No` 类数字（`C_FLAG²` ⇒ Rust 1 / TS 0），而 `\p{L}\p{N}` 相反。
+//
+// ## 样例清单是跨语言契约的两端
+// `WHOLE_WORD_CASES` 与 `packages/app/tests/search-whole-word.test.ts` 的 `CASES`
+// **逐字同源**（查询 / 行文本 / 期望命中数三项一字不差）。为什么各写一份、
+// 不引共享 JSON：两套测试各有自己的加载面（Rust 单测不读 node 侧文件，vitest 也不读
+// Rust 源码），两份字面量就是两端的契约文本。**改一处必须改两处**——漂一个字符，
+// 那一侧的对账就会红（两侧都不读对方，靠这份约定 + 双跑兜住）。
+
+/// 交叉对账样例：(查询, 行文本, 全词命中数)。与 TS 侧 `CASES` 逐字同源（见上）。
+const WHOLE_WORD_CASES: &[(&str, &str, usize)] = &[
+    ("测试", "测试", 1),
+    ("测试", "这是测试文本", 0),
+    ("测试", "这是 测试 文本", 1),
+    ("测试", "测试2", 0),
+    ("测试", "A测试", 0),
+    ("测试", "「测试」", 1),
+    ("测试", "测试 测试", 2),
+    ("（测试）", "（测试）", 1),
+    ("（测试）", "这是（测试）文本", 0),
+    ("（测试）", "这是 （测试） 文本", 1),
+    ("（测试）", "（测试）。", 1),
+    ("（测试）", "a（测试）b", 0),
+    ("test-case", "test-case", 1),
+    ("test-case", "a test-case b", 1),
+    ("test-case", "mytest-case", 0),
+    ("test-case", "test-cases", 0),
+    ("test-case", "test-case2", 0),
+    ("test-case", "test_case", 0),
+    ("test-case", "test-case, test-case", 2),
+    ("好感度", "好感度", 1),
+    ("好感度", "好感度上升", 0),
+    ("好感度", "提升好感度", 0),
+    ("好感度", "好感度+1", 1),
+    ("好感度", "「好感度」", 1),
+    ("C_FLAG", "C_FLAG", 1),
+    ("C_FLAG", "if C_FLAG then", 1),
+    ("C_FLAG", "C_FLAG_X", 0),
+    ("C_FLAG", "MYC_FLAG", 0),
+    ("C_FLAG", "C_FLAG1", 0),
+    ("C_FLAG", "(C_FLAG)", 1),
+    ("C_FLAG", "C_FLAG²", 0),
+    ("C_FLAG", "C_FLAG\u{0301}", 1),
+    ("_x", "_x", 1),
+    ("_x", "a_x", 0),
+    ("_x", "( _x )", 1),
+    ("_x", "_x2", 0),
+    ("_x", "x_x", 0),
+    ("_x", "_x _x", 2),
+];
+
+/// 逐例对账：逐行扫描与单趟快道都必须给出 TS 替换侧的裁决（命中数 + 命中文本）。
+#[test]
+fn whole_word_matches_the_ts_replacement_oracle_case_by_case() {
+    for &(query, line, want) in WHOLE_WORD_CASES {
+        let m = build_matcher(query, false, true, true).unwrap();
+        let (per_line, _) = scan_text(line, &m, 100);
+        let (flat, _) = scan_text_flat(line, &m, 100);
+        assert_eq!(per_line.len(), want, "逐行扫描：查询 {query:?} / 行 {line:?}");
+        assert_eq!(flat, per_line, "两条扫描路径不同判：查询 {query:?} / 行 {line:?}");
+        for h in &per_line {
+            assert_eq!(hit_text(h), query, "命中文本必须是查询本身：查询 {query:?}");
+        }
+    }
+}
+
+/// 端到端（真文件 + 预筛 + 流式之前的收口路径）：每个查询一份文件，文件内是该查询的
+/// 全部样例行（`\n` 连接——行边界对全词判据等价于"没有相邻字符"）。
+#[test]
+fn whole_word_end_to_end_agrees_with_the_same_cases() {
+    let dir = temp_dir("whole-word-e2e");
+    let mut by_query: Vec<(&str, Vec<&str>, usize)> = Vec::new();
+    for &(query, line, want) in WHOLE_WORD_CASES {
+        match by_query.iter_mut().find(|(qq, _, _)| *qq == query) {
+            Some((_, lines, total)) => {
+                lines.push(line);
+                *total += want;
+            }
+            None => by_query.push((query, vec![line], want)),
+        }
+    }
+    for (i, (query, lines, want)) in by_query.iter().enumerate() {
+        std::fs::write(dir.join(format!("q{i}.erb")), lines.join("\n")).unwrap();
+        let mut req = request(&dir, query);
+        req.options.whole_word = Some(true);
+        req.options.extensions = Some(vec!["erb".to_string()]);
+        let out = run(&req);
+        assert_eq!(out.total_matches as usize, *want, "端到端：查询 {query:?}");
+        assert_eq!(out.files.len(), 1, "只该命中自己那份文件：查询 {query:?}");
+        assert!(
+            out.files[0].path.ends_with(&format!("q{i}.erb")),
+            "命中文件错位：查询 {query:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 正则模式同样走相邻格判据（全词不是"字面量专用"开关）。
+#[test]
+fn whole_word_applies_to_regex_mode_too() {
+    let m = build_matcher(r"\d+", true, true, true).unwrap();
+    assert!(m.is_match("12"), "整行都是数字 ⇒ 两侧无相邻字符");
+    assert!(!m.is_match("a12"), "贴着标识字符不算全词");
+    let (hits, _) = scan_text("12 a12 34", &m, 10);
+    assert_eq!(hits.len(), 2, "只认 12 与 34；a12 该被全词判据拒掉");
+    assert_eq!(hit_text(&hits[0]), "12");
+    assert_eq!(hit_text(&hits[1]), "34");
 }

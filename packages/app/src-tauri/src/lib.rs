@@ -1946,32 +1946,86 @@ fn preview_window<'a>(
     )
 }
 
+/// 标识字符（与前端 `search-replace.ts` 的 `IDENT_RE = /[\p{L}\p{N}_]/u` 同一字符集）。
+///
+/// **不用 `\b`**：regex crate 的 Unicode `\b` 以 `\w` 为词符（含组合记号与 Join_Control），
+/// 而且要求模式首尾两侧是"词符↔非词符"的过渡——模式自身首尾是非词字符（如 `（测试）`）
+/// 时，它在行首/行尾永远等不到边界，与替换侧（逐格看相邻字符）对同一份样例给出相反裁决。
+///
+/// **非 BMP 字符按"非标识"处理**：前端取相邻的是**一个 UTF-16 单元**（`line[start - 1]`），
+/// 代理对的一半永远匹配不上 `\p{L}\p{N}` ⇒ 前端把任何非 BMP 字符当非标识字符。
+/// 这里保持同一判据（`len_utf16() == 1`），跨语言对账才逐字同判。
+fn is_ident_char(ch: char) -> bool {
+    static IDENT: OnceLock<Regex> = OnceLock::new();
+    // ASCII 快道：与 `[\p{L}\p{N}_]` 的 ASCII 子集逐字相同（英文字母 / 数字 / 下划线）
+    if ch.is_ascii() {
+        return ch.is_ascii_alphanumeric() || ch == '_';
+    }
+    if ch.len_utf16() != 1 {
+        return false;
+    }
+    let re = IDENT.get_or_init(|| Regex::new(r"^[\p{L}\p{N}_]$").expect("IDENT 字符类必须可编译"));
+    let mut buf = [0u8; 4];
+    re.is_match(ch.encode_utf8(&mut buf))
+}
+
+/// 全词匹配器：`re` 只装模式本身，全词边界在命中后**逐侧看一格字符**
+/// （与 TS 侧 `wholeWordOk` 同一判据；行首/行尾 = 该侧没有相邻字符）。
+#[derive(Debug)]
+struct SearchMatcher {
+    re: Regex,
+    whole_word: bool,
+}
+
+impl SearchMatcher {
+    /// 命中区间两侧都不是标识字符（或没有相邻字符）才算全词。
+    fn whole_word_ok(&self, text: &str, start: usize, end: usize) -> bool {
+        if !self.whole_word {
+            return true;
+        }
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
+    }
+
+    /// 命中迭代（全词在此过滤）。`find_iter` 的不重叠推进与 TS 侧 `g` 正则一致：
+    /// 被全词判据拒掉的命中不会让引擎回头寻找"重叠"的下一处。
+    fn find_iter<'t>(&'t self, text: &'t str) -> impl Iterator<Item = regex::Match<'t>> + 't {
+        let whole_word = self.whole_word;
+        self.re
+            .find_iter(text)
+            .filter(move |m| !whole_word || self.whole_word_ok(text, m.start(), m.end()))
+    }
+
+    /// 单测直读用（生产路径只经 `find_iter`）。
+    #[cfg(test)]
+    fn is_match(&self, text: &str) -> bool {
+        self.find_iter(text).next().is_some()
+    }
+}
+
 /// 模式 + 三个开关 → 匹配器。口径 = **逐行匹配**（grep 语义：`^`/`$` 落在行首行尾，
 /// 跨行模式不参与；这与"点开能看到行号"的宿主呈现是一致的）。
-/// 全词 = `\b` 包夹，与主流编辑器同口径：首尾是非词字符的模式在全词模式下匹配不到，
-/// 那是 `\b` 的语义本身，不另发明一套"相邻字符判定"。
+/// 全词判据见 [`is_ident_char`] / [`SearchMatcher::whole_word_ok`]（与替换侧同一把尺）。
 fn build_matcher(
     query: &str,
     is_regex: bool,
     case_sensitive: bool,
     whole_word: bool,
-) -> Result<Regex, String> {
+) -> Result<SearchMatcher, String> {
     let body = if is_regex {
         query.to_string()
     } else {
         regex::escape(query)
-    };
-    let body = if whole_word {
-        format!(r"\b(?:{body})\b")
-    } else {
-        body
     };
     let pattern = if case_sensitive {
         body
     } else {
         format!("(?i){body}")
     };
-    Regex::new(&pattern).map_err(|e| format!("正则无效：{e}"))
+    Regex::new(&pattern)
+        .map(|re| SearchMatcher { re, whole_word })
+        .map_err(|e| format!("正则无效：{e}"))
 }
 
 /// 字节级预筛的产物：匹配器 + 一条"这份预筛对哪些文件成立"的强度标记（PS-1 §3）。
@@ -1994,8 +2048,19 @@ struct BytePrefilter {
 ///
 /// 大小写不敏感一律不预筛：Unicode 简单大小写折叠（如 U+212A KELVIN ↔ 'k'）会让
 /// "字节里有"与"文本里能匹配"不再等价——省下的解码不值一次漏报。
-fn byte_prefilter(query: &str, is_regex: bool, case_sensitive: bool) -> Option<BytePrefilter> {
-    if is_regex || !case_sensitive || query.is_empty() {
+///
+/// **全词模式一律不预筛**：全词判据在**解码后的字符**上（相邻一格是不是 `[\p{L}\p{N}_]`）。
+/// 把这条判据下推到字节层不可能保持等价——遗留族（shift_jis / gbk / big5）的尾字节
+/// 可以落在 ASCII 标识字符区间（反之亦然），按字节判"边界"会筛掉解码后其实是全词命中的
+/// 文件 = 漏报。预筛只许过近似、不许漏杀；而"裸字面量"预筛虽不漏，却完全不体现
+/// whole_word。本层选择：全词模式不建预筛（宁可多解码，不可少结果），把该开关显式纳入判据。
+fn byte_prefilter(
+    query: &str,
+    is_regex: bool,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> Option<BytePrefilter> {
+    if is_regex || !case_sensitive || whole_word || query.is_empty() {
         return None;
     }
     regex::bytes::Regex::new(&regex::escape(query))
@@ -2105,7 +2170,7 @@ fn decode_for_search(bytes: &[u8]) -> Cow<'_, str> {
 ///
 /// 截断判定 = **真的又出现了一个装不下的命中**（不是"恰好装满就算截断"）：
 /// 恰好装满时结果其实是完整的，报截断会让作者去调上限，白折腾。
-fn scan_text(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDto>, bool) {
+fn scan_text(text: &str, matcher: &SearchMatcher, cap: usize) -> (Vec<SearchMatchDto>, bool) {
     let cap = cap.max(1);
     let mut out: Vec<SearchMatchDto> = Vec::new();
     for (idx, raw) in text.split('\n').enumerate() {
@@ -2140,9 +2205,9 @@ fn scan_text(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDto>, b
 /// `scan_text_flat_matches_line_by_line`）：
 /// - 字面量 pattern 里没有 `^`/`$`，锚点语义无从改变（正则查询因此**不走**这条，
 ///   整篇扫会把 `^` 缩成"仅文件首"、把 CRLF 文件的 `$` 落到 `\r` 之后）；
-/// - 不含换行的字面量不可能跨行命中；`\b`（全词开关）在行边界两侧同判——
-///   `\n`/`\r` 都是非词字符，与"行首/行尾"给出的边界一致。
-fn scan_text_flat(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDto>, bool) {
+/// - 不含换行的字面量不可能跨行命中；全词判据（相邻一格是不是标识字符）在行边界
+///   两侧同判——`\n`/`\r` 都不是标识字符，与"行首/行尾 = 没有相邻字符"一致。
+fn scan_text_flat(text: &str, matcher: &SearchMatcher, cap: usize) -> (Vec<SearchMatchDto>, bool) {
     let cap = cap.max(1);
     let mut out: Vec<SearchMatchDto> = Vec::new();
     // 行游标：当前行的字节范围是 line_start..line_end（line_end 指向 '\n' 或文本尾）
@@ -2205,7 +2270,7 @@ fn scan_text_flat(text: &str, matcher: &Regex, cap: usize) -> (Vec<SearchMatchDt
 /// 两条扫描路径的分流点（口径见 [`scan_text_flat`] 的准入条件）。
 fn scan_hits(
     text: &str,
-    matcher: &Regex,
+    matcher: &SearchMatcher,
     cap: usize,
     literal_single_pass: bool,
 ) -> (Vec<SearchMatchDto>, bool) {
@@ -2233,7 +2298,7 @@ enum FileOutcome {
 fn scan_file(
     path: &Path,
     size_hint: Option<u64>,
-    matcher: &Regex,
+    matcher: &SearchMatcher,
     prefilter: Option<&BytePrefilter>,
     cap: usize,
     policy: &DecodeProbePolicyDto,
@@ -2530,7 +2595,7 @@ fn run_search_with_files(
     let case_sensitive = o.case_sensitive.unwrap_or(false);
     let whole_word = o.whole_word.unwrap_or(false);
     let matcher = build_matcher(&req.query, is_regex, case_sensitive, whole_word)?;
-    let prefilter = byte_prefilter(&req.query, is_regex, case_sensitive);
+    let prefilter = byte_prefilter(&req.query, is_regex, case_sensitive, whole_word);
     // 字面量单趟快道的准入（口径与"为什么等价"见 `scan_text_flat`）：正则查询一律走逐行原口径
     let literal_single_pass = !is_regex && !req.query.contains(['\n', '\r']);
     let max_results = o.max_results.unwrap_or(2000).clamp(1, SEARCH_HARD_CAP);
