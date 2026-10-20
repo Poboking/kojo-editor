@@ -1,5 +1,4 @@
 import type {
-  ChoiceItem,
   EditorDocumentSymbol,
   IfBranch,
   SugarDoc,
@@ -19,18 +18,45 @@ import type { HeartBlock } from './types';
  * **缓冲区文本**——糖 AST 每个节点自带 `loc`（源映射地基），大纲因此天然与作者正在编辑的
  * 那份内容逐行对齐，不存在"索引过期"这回事，也不需要第二份表。
  *
- * 只收**结构节点**（时机 / 段 / 分支 / 选项…），台词行与注释不进大纲：大纲是"现在在哪一层"
- * 的导航，把每句台词列出来只会得到第二份正文。
+ * 只收**结构节点**（时机 / 若 / 分支 / 选项 / 循环 / 出错处理…），台词行与注释不进大纲：
+ * 大纲是"现在在哪一层"的导航，把每句台词列出来只会得到第二份正文。
  */
 
 /** 名称 / 副标题上限（大纲一行一项；长条件截断而不是折行） */
 const NAME_MAX = 70;
 const DETAIL_MAX = 60;
 
-const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+/**
+ * 截断到 `max` 码元（含尾省略号）。
+ *
+ * 截断点若正落在代理对中间（高位留下、低位被切走），再退一码元——孤立代理在
+ * Monaco 里显示成 `�`，等于静默丢字（星外汉字 / 表情名都会踩到）。
+ */
+const clip = (text: string, max: number): string => {
+  if (text.length <= max) return text;
+  let cut = max - 1;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return `${text.slice(0, cut)}…`;
+};
+
+/**
+ * 转译器**内部** AST 块（循环 / 出错处理 / 数据表 / 规则池 / 心形连续块）。
+ *
+ * 这些形状沿用 `HeartBlock` 的既有先例：不出转译器、不进契约闭集（见 `parser.ts` 头注）。
+ * 大纲必须看见它们——否则块里的 `如果` / `选项` 会整段失踪，结构感在这里断档；
+ * 类型按同包 parser / types 的导出入账，不另抄一份形状、更不扫第二遍源文本。
+ */
+type InternalBlock = LoopBlock | CatchBlock | DataBlock | RulePoolBlock | HeartBlock;
+
+/** 大纲遍历的节点面：契约节点 + 转译器内部块 */
+type SymbolNode = SugarNode | SugarTopLevelNode | InternalBlock;
 
 /** 块头行的区间（1 基、闭区间）；`cover` 里的子节点要算进来（分支头只覆盖自己那一行） */
-function rangeOf(loc: SugarSourceSpan, cover?: readonly SugarNode[]): { startLine: number; endLine: number } {
+function rangeOf(
+  loc: SugarSourceSpan,
+  cover?: readonly { readonly loc: SugarSourceSpan }[],
+): { startLine: number; endLine: number } {
   const startLine = loc.start.line;
   let endLine = loc.end.line >= startLine ? loc.end.line : startLine;
   for (const child of cover ?? []) endLine = Math.max(endLine, child.loc.end.line);
@@ -84,7 +110,14 @@ function caseBranchName(branch: WhenBranch): string {
   ]);
 }
 
-const itemSymbols = (items: readonly ChoiceItem[]): EditorDocumentSymbol[] =>
+/** 条目类子项（选项 / 菜单 / 询问 / 确认共用：`「标签」` + 自身体） */
+interface LabeledItem {
+  readonly label: string;
+  readonly body: readonly SugarNode[];
+  readonly loc: SugarSourceSpan;
+}
+
+const labeledItemSymbols = (items: readonly LabeledItem[]): EditorDocumentSymbol[] =>
   items.map((item) =>
     finish({
       name: clip(`「${item.label}」`, NAME_MAX),
@@ -95,7 +128,7 @@ const itemSymbols = (items: readonly ChoiceItem[]): EditorDocumentSymbol[] =>
   );
 
 /** 一条子项（分支 / 候选 / 条目都由块头行 + 自身体决定区间）；与顶层项走同一收尾（含摘空箭头） */
-function childSymbol(name: string, loc: SugarSourceSpan, body: readonly SugarNode[]): EditorDocumentSymbol {
+function childSymbol(name: string, loc: SugarSourceSpan, body: readonly SymbolNode[]): EditorDocumentSymbol {
   return finish({ name, kind: 'block', ...rangeOf(loc, body), children: symbolsOfNodes(body) });
 }
 
@@ -234,19 +267,19 @@ function rawSymbol(
         children: symbolsOfNodes(node.body),
       };
     case 'choiceBlock':
-      return { name: '选项', kind: 'block', ...rangeOf(node.loc), children: itemSymbols(node.items) };
+      return { name: '选项', kind: 'block', ...rangeOf(node.loc), children: labeledItemSymbols(node.items) };
     case 'menuBlock':
-      return { name: '菜单', kind: 'block', ...rangeOf(node.loc), children: itemSymbols(node.items) };
+      return { name: '菜单', kind: 'block', ...rangeOf(node.loc), children: labeledItemSymbols(node.items) };
     case 'askMBlock':
     case 'askYNBlock':
       // `询问：` / `确认：`（契约节点）与 `选项` / `菜单` **同构**：块一枚 + 每条 `「标签」：` 一个子项
-      // ——条目的 `label` / `loc` / `body` 与 `ChoiceItem` 同形，故直接复用 `itemSymbols`，不另造命名。
+      // ——条目的 `label` / `loc` / `body` 与 `ChoiceItem` 同形，故直接复用 `labeledItemSymbols`，不另造命名。
       // 族名按**族**给（`询问` / `确认`），模态与提示文案不进名称（同 `随机` / `组` 的口径）。
       return {
         name: node.kind === 'askMBlock' ? '询问' : '确认',
         kind: 'block',
         ...rangeOf(node.loc),
-        children: itemSymbols(node.items),
+        children: labeledItemSymbols(node.items),
       };
     case 'colorBlock':
       return {
@@ -266,6 +299,8 @@ function rawSymbol(
       return { name: '开关', kind: 'block', ...rangeOf(node.loc) };
     case 'aliasDecl':
       return { name: joinParts(['别名', node.name]), kind: 'declaration', ...rangeOf(node.loc) };
+    case 'constDecl':
+      return { name: joinParts(['常量', node.name]), kind: 'declaration', ...rangeOf(node.loc) };
     default:
       return null;
   }
@@ -288,12 +323,12 @@ function finish(symbol: EditorDocumentSymbol): EditorDocumentSymbol {
   return { ...symbol, endLine, children };
 }
 
-function symbolOf(node: SugarNode | SugarTopLevelNode): EditorDocumentSymbol | null {
+function symbolOf(node: SymbolNode): EditorDocumentSymbol | null {
   const symbol = rawSymbol(node);
   return symbol === null ? null : finish(symbol);
 }
 
-function symbolsOfNodes(nodes: readonly (SugarNode | SugarTopLevelNode)[]): EditorDocumentSymbol[] {
+function symbolsOfNodes(nodes: readonly SymbolNode[]): EditorDocumentSymbol[] {
   const out: EditorDocumentSymbol[] = [];
   for (const node of nodes) {
     const symbol = symbolOf(node);

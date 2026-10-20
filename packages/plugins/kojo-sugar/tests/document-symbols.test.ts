@@ -391,4 +391,129 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     expect(name.length).toBeLessThanOrEqual(70);
     expect(name.endsWith('…')).toBe(true);
   });
+
+  it('顶层按源序（不按名字排序），同名块按行号各自成项、不合并', () => {
+    const src = [
+      '角色: 12',
+      '时机 事件 摸屁股：', // 2
+      '    「一」', // 3
+      '别名 她的态度 = CALLNAME:12', // 4
+      '时机 事件 摸屁股：', // 5（同名）
+      '    「二」', // 6
+      '常量 上限 = 5', // 7
+      '函数 检查(值)：', // 8
+      '    返回 值', // 9
+      '时机 指令 310：', // 10
+      '    「三」', // 11
+      '',
+    ].join('\n');
+    expect(symbols(src).map(shape)).toEqual([
+      ['时机 事件 摸屁股', 2, 3],
+      ['别名 她的态度', 4, 4],
+      ['时机 事件 摸屁股', 5, 6],
+      ['常量 上限', 7, 7],
+      ['函数 检查', 8, 9],
+      // 末行换行后那一线空行也算在块尾（既有口径，见上方「一个时机块」用例）
+      ['时机 指令 310', 10, 12],
+    ]);
+    expect(symbols(src)[3]!.kind).toBe('declaration');
+  });
+
+  it('控制流块成子项：循环 / 出错处理（TRY 系）/ 数据表 / 分支 / 询问 / 确认', () => {
+    const src = [
+      '角色: 12',
+      '时机 指令 310：', // 2
+      '    循环 计数 I 从 1 到 3：', // 3
+      '        「循环体」', // 4
+      '        如果 TFLAG:192：', // 5
+      '            「内」', // 6
+      '    循环结束', // 7
+      '    出错处理：', // 8
+      '        「兜底」', // 9
+      '    出错处理结束', // 10
+      '    数据表：', // 11
+      '        条目 1', // 12
+      '    数据表结束', // 13
+      '    分支：', // 14
+      '        [TFLAG:192]', // 15
+      '            「r1」', // 16
+      '        [其他]', // 17
+      '            「r2」', // 18
+      '    询问：', // 19
+      '        「甲」：', // 20
+      '            「反馈甲」', // 21
+      '    确认：', // 22
+      '        「乙」：', // 23
+      '            「反馈乙」', // 24
+      '        「丙」：', // 25
+      '            「反馈丙」', // 26
+      '    心形：', // 27
+      '        「心」', // 28
+      '',
+    ].join('\n');
+    const [timing] = symbols(src);
+    // 族名口径与既有 随机 / 组 一致（模态不进名称）；写了收束词的块把收束行算进区间
+    expect(timing!.children!.map((c) => [c.name, c.startLine, c.endLine])).toEqual([
+      ['循环', 3, 7],
+      ['出错处理', 8, 10],
+      ['数据表', 11, 13],
+      ['分支', 14, 18],
+      ['询问', 19, 21],
+      ['确认', 22, 26],
+      ['心形', 27, 28],
+    ]);
+    expect((timing!.children![0]!.children ?? []).map(shape)).toEqual([['如果 TFLAG:192', 5, 6]]);
+    expect((timing!.children![3]!.children ?? []).map(shape)).toEqual([
+      ['如果 TFLAG:192', 15, 16],
+      ['否则', 17, 18],
+    ]);
+    expect((timing!.children![4]!.children ?? []).map(shape)).toEqual([['「甲」', 20, 21]]);
+    expect((timing!.children![5]!.children ?? []).map(shape)).toEqual([
+      ['「乙」', 23, 24],
+      ['「丙」', 25, 26],
+    ]);
+    assertContained(symbols(src));
+  });
+
+  it('循环五种模态的块头名字（名字取自解析出的 LoopSpec，不是第二套扫描）', () => {
+    const src = [
+      '角色: 12',
+      '时机 指令 310：', // 2
+      '    循环 3 次：', // 3
+      '        「a」', // 4
+      '    循环结束', // 5
+      '    循环 当 TFLAG:192：', // 6
+      '        「b」', // 7
+      '    循环结束', // 8
+      '    循环 无限：', // 9
+      '        「c」', // 10
+      '    循环结束', // 11
+      '    循环：', // 12
+      '        「d」', // 13
+      '    循环结束', // 14
+      '',
+    ].join('\n');
+    const [timing] = symbols(src);
+    // 五种模态都按族给名（既有口径）；收束行 5/8/11/14 各算进所在块
+    expect(timing!.children!.map((c) => [c.name, c.startLine, c.endLine])).toEqual([
+      ['循环', 3, 5],
+      ['循环', 6, 8],
+      ['循环', 9, 11],
+      ['循环', 12, 14],
+    ]);
+  });
+
+  it('长名截断不劈开代理对（全角/星外汉字不许丢成半个字符）', () => {
+    const wide = 'あ'.repeat(80);
+    const pair = `${'あ'.repeat(65)}😀い`; // 截断点正好落在 😀 的两枚代理码元之间
+    const src = ['角色: 12', `函数 ${wide}()：`, '    返回 1', `函数 ${pair}()：`, '    返回 1', ''].join('\n');
+    const [clipped, split] = symbols(src);
+    expect(clipped!.name.length).toBe(70);
+    expect(clipped!.name.endsWith('…')).toBe(true);
+    expect(clipped!.name).toBe(`函数 ${'あ'.repeat(66)}…`);
+    // 退一码元保住整枚字符：'函数 ' + 65 个あ + '…'（69 码元），不许出现孤立高位代理
+    expect(split!.name).toBe(`函数 ${'あ'.repeat(65)}…`);
+    expect(split!.name).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(split!.name).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
 });
