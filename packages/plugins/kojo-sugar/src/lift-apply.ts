@@ -43,39 +43,25 @@ import type {
   SugarLiftDiffHunk,
 } from '@kojo/plugin-api';
 import { SugarApplyError } from '@kojo/plugin-api';
+import { indentLevelOf, isAllBlank, leadingBlank } from './blank-charset';
 import { encodeErbBytes, bytesEqual } from './compile';
 
 /* ============================== 行工具 ============================== */
 
+/**
+ * 空白 / 缩进 / "整行是否空白"三件判定**全部**转调 `blank-charset.ts`（CHARSET-SS
+ * 收口的第四处）：集合是 `[ \t\u3000]`，NBSP / EM SPACE 一类是**内容不是排版**。
+ * 本模块只留写回链路特有的东西（切行、缩进单位、糖片段平移），不再自持字符集。
+ *
+ * 历史：本文件曾手抄 `leadOf`（同集合）/ `indentOf`（同折算）/ `isBlank(trim)`
+ * （**JS 宽集**）。前两件与单源逐例同值，换手无损；`isBlank` 收窄到单源后，
+ * NBSP / EM SPACE 独占行不再被当成文件头里的空白行——差异由
+ * `tests/lift-apply-blank-charset.test.ts` 先红钉住。
+ */
+
 /** 切行（去行尾换行；EOL 归一为 `\n`）——与 `lift.ts` 同口径 */
 function splitLines(source: string): string[] {
   return source.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-}
-
-/**
- * 前导空白宽度——数的是**层级**（TAB=1、4 空格=1、全角空格每 2 宽按 4 折算），
- * 与 `lift.ts` / lexer 的 `indentOf` 同口径。
- *
- * 不能数**字符**：4 空格缩进的 `.kojo` 会被当成 4 级，写回时压上 4 个 TAB，
- * 文件从此变成"空格 + TAB 混排、正文整体多缩进 3 级"的样子（所有候选都错位）。
- */
-function indentOf(line: string): number {
-  const m = /^[ \t\u3000]*/.exec(line);
-  const prefix = m ? m[0] : '';
-  let tabs = 0;
-  let spaces = 0;
-  for (const ch of prefix) {
-    if (ch === '\t') tabs++;
-    else if (ch === '\u3000') spaces += 2;
-    else if (ch === ' ') spaces += 1;
-  }
-  return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
-}
-
-/** 行首空白原文（写回时按**源文件自己的单位**平移，绝不把 space 文件改成 TAB 文件） */
-function leadOf(line: string): string {
-  const m = /^[ \t\u3000]*/.exec(line);
-  return m ? m[0] : '';
 }
 
 /**
@@ -93,13 +79,10 @@ function indentUnitOf(prefix: string): string | null {
 
 /** 行内容（去前导空白） */
 function contentOf(line: string): string {
-  return line.slice(indentOf(line));
-}
-
-/** 是否空白行（空串或纯注释——注释行不参与缩进推导） */
-function isBlank(line: string): boolean {
-  const t = line.trim();
-  return t.length === 0;
+  // 沿用历史口径：这里把**层级数**当字符数切。只用于"候选原文 ⇄ 源文本"的逐行
+  // 比对（两侧同一个函数），不改产物；换成 `leadingBlank(line).length` 会放松
+  // "同文不同缩进"的行号漂移判据，故保持原样。
+  return line.slice(indentLevelOf(line));
 }
 
 /* ============================== 文件头 ============================== */
@@ -119,7 +102,7 @@ const DECL_LINE_RE = /^\s*\S+\s*[:：]\s*\S.*$/;
 
 /** 该行是否文件头声明区的一部分（空白 / 头注横幅 / `键: 值`） */
 function isFrontMatterLine(line: string): boolean {
-  if (isBlank(line)) return true;
+  if (isAllBlank(line)) return true;
   if (line.trim().startsWith('//')) return true;
   return DECL_LINE_RE.test(line);
 }
@@ -147,7 +130,7 @@ function frontMatterInsertIndex(lines: readonly string[]): number {
   // 有声明 → 紧跟最后一个声明；无声明（只有横幅/空行）→ 首个非头注区之前
   if (lastDecl >= 0) return lastDecl + 1;
   let j = 0;
-  while (j < lines.length && (isBlank(lines[j]!) || lines[j]!.trim().startsWith('//'))) j++;
+  while (j < lines.length && (isAllBlank(lines[j]!) || lines[j]!.trim().startsWith('//'))) j++;
   return j;
 }
 
@@ -172,8 +155,8 @@ function indentSugar(
   return sugarSource.split('\n').map((l) => {
     if (l.length === 0) return l;
     if (unit === null) return `${basePrefix}${l}`;
-    const relPrefix = leadOf(l);
-    const level = baseLevel + indentOf(relPrefix);
+    const relPrefix = leadingBlank(l);
+    const level = baseLevel + indentLevelOf(relPrefix);
     return `${unit.repeat(level)}${l.slice(relPrefix.length)}`;
   });
 }
@@ -256,8 +239,8 @@ export function applyLift(request: SugarLiftApplyRequest): SugarLiftApplyPreview
       basePrefix = '\t'.repeat(baseLevel);
       unit = '\t';
     } else {
-      basePrefix = leadOf(sourceLine);
-      baseLevel = indentOf(sourceLine);
+      basePrefix = leadingBlank(sourceLine);
+      baseLevel = indentLevelOf(sourceLine);
       unit = indentUnitOf(basePrefix);
     }
     const added = indentSugar(c.sugarSource, basePrefix, baseLevel, unit);
