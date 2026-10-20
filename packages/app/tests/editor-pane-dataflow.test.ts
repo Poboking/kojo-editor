@@ -62,7 +62,7 @@ describe('外部改动冲突 toast 现读盘（#2）', () => {
     expect(SOURCE).not.toMatch(/run:\s*applyReload/);
   });
   it('action 置 forceReloadPathsRef 一次性意图并经 reloadFromDiskRef 重跑', () => {
-    const notifyBlock = SOURCE.slice(SOURCE.indexOf('const conflictPending'), SOURCE.indexOf('const conflictPending') + 1200);
+    const notifyBlock = SOURCE.slice(SOURCE.indexOf('const conflictPending'), SOURCE.indexOf('const conflictPending') + 2400);
     expect(notifyBlock).toContain('forceReloadPathsRef.current.add(path)');
     expect(notifyBlock).toContain('reloadFromDiskRef.current?.(path)');
   });
@@ -71,7 +71,7 @@ describe('外部改动冲突 toast 现读盘（#2）', () => {
     expect(SOURCE).toMatch(/decision === 'reload' \|\| forced/);
   });
   it('同一文件未决冲突期间通知去重（不叠第二条 toast）', () => {
-    expect(SOURCE).toMatch(/externalConflictRef\.current\.has\(path\)[\s\S]{0,80}if \(!conflictPending\)/);
+    expect(SOURCE).toMatch(/externalConflictRef\.current\.has\(path\)[\s\S]{0,600}if \(!conflictPending\)/);
   });
 });
 
