@@ -5,6 +5,7 @@ import { applyNameColorPref, loadNameColorPref, subscribeNameColorPref } from '.
 import { loadTreeSitterPref, subscribeTreeSitterPref } from '../../ui/tree-sitter-pref';
 import { toMonacoFoldingRanges } from '../kojo-folding';
 import { KOJO_LANGUAGE_ID } from '../kojo-language';
+import { toMonacoLine } from '../positions';
 import { reportStructureDegradation, resetStructureDegradationLedger } from './fallback';
 import { mergeIndentConfig } from './indent';
 import { KOJO_STRUCTURE_LEGEND, encodeStructureTokens } from './semantic';
@@ -195,7 +196,10 @@ function structureFoldingProvider(monaco: typeof Monaco): Monaco.languages.Foldi
       // 0 基行号 → 模型坐标（1 基闭区间），夹取与去重复用 `kojo-folding` 那份（口径只有一处）
       return toMonacoFoldingRanges(
         model,
-        folds.map((fold) => ({ startLine: fold.startRow + 1, endLine: fold.endRow + 1 })),
+        folds.map((fold) => ({
+          startLine: toMonacoLine(fold.startRow),
+          endLine: toMonacoLine(fold.endRow),
+        })),
       );
     },
   };

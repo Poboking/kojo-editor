@@ -5,6 +5,7 @@ import type {
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
+import { clampMonacoLine } from './positions';
 import { registerForKojoDialects } from './register-dialects';
 
 /**
@@ -63,12 +64,11 @@ export function toMonacoFoldingRanges(
   ranges: readonly EditorFoldingRange[],
 ): Monaco.languages.FoldingRange[] {
   const lineCount = model.getLineCount();
-  const clampLine = (line: number): number => Math.min(Math.max(1, Math.trunc(line) || 1), lineCount);
   const out: Monaco.languages.FoldingRange[] = [];
   const seen = new Set<string>();
   for (const range of ranges) {
-    const start = clampLine(range.startLine);
-    const end = clampLine(range.endLine);
+    const start = clampMonacoLine(range.startLine, lineCount);
+    const end = clampMonacoLine(range.endLine, lineCount);
     if (end <= start) continue;
     const key = `${start}\u0000${end}`;
     if (seen.has(key)) continue;

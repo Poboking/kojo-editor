@@ -1,5 +1,6 @@
 import type * as Monaco from '../entry';
 import { KOJO_TOKEN_TIERS } from '../kojo-language';
+import { toMonacoColumn, toMonacoLine } from '../positions';
 import {
   KOJO_STRUCTURE_BASELINE_TOKENS,
   KOJO_STRUCTURE_MAX_TOKENS,
@@ -117,8 +118,8 @@ export function splitStructureTokensToSpans(
     if (!isKnownStructureTier(token.tier)) continue;
     const typeIndex = TYPE_INDEX.get(token.tier);
     if (typeIndex === undefined) continue; // legend 里没有（`structureLegendTypes` 与映射同源，理论到不了这里）
-    const startLine = token.startRow + 1;
-    const endLine = token.endRow + 1;
+    const startLine = toMonacoLine(token.startRow);
+    const endLine = toMonacoLine(token.endRow);
     if (
       !Number.isFinite(startLine) ||
       !Number.isFinite(endLine) ||
@@ -135,8 +136,8 @@ export function splitStructureTokensToSpans(
     }
     for (let line = startLine; line <= endLine; line++) {
       const cap = geometry.maxColumn(line);
-      const from = line === startLine ? token.startCol + 1 : 1;
-      const to = line === endLine ? token.endCol + 1 : cap;
+      const from = line === startLine ? toMonacoColumn(token.startCol) : 1;
+      const to = line === endLine ? toMonacoColumn(token.endCol) : cap;
       const startColumn = Math.min(Math.max(1, Math.trunc(from) || 1), cap);
       const endColumn = Math.min(Math.max(startColumn, Math.trunc(to) || startColumn), cap);
       if (endColumn <= startColumn) {

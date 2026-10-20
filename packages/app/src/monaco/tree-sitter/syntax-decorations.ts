@@ -2,6 +2,7 @@ import type * as Monaco from '../entry';
 import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/plugin-kojo-sugar';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers } from '../kojo-language';
+import { toMonacoColumn, toMonacoLine } from '../positions';
 import { reportStructureDegradation } from './fallback';
 import { KOJO_STRUCTURE_MAX_SYNTAX_FAULTS, type KojoStructureSyntaxFault, type KojoStructureSyntaxKind } from './types';
 
@@ -176,8 +177,8 @@ const FAULT_MESSAGE_BUILDERS: Readonly<Record<KojoStructureSyntaxKind, (ctx: Fau
 /** 一处残缺 → 作者看得见的那句话（行号 1 基；文案里必须带位置与"期望什么"） */
 export function syntaxFaultMessage(fault: KojoStructureSyntaxFault): string {
   return FAULT_MESSAGE_BUILDERS[fault.kind]({
-    line: fault.row + 1,
-    faultLine: fault.faultRow + 1,
+    line: toMonacoLine(fault.row),
+    faultLine: toMonacoLine(fault.faultRow),
     blockWord: blockHeadWord(fault.blockHeadText),
     missing: missingStructureName(fault.expectedToken),
   });
@@ -197,16 +198,17 @@ export function syntaxFaultDecorations(faults: readonly KojoStructureSyntaxFault
   const byLine = new Map<number, LineDecoration>();
   for (const fault of faults) {
     if (!Number.isFinite(fault.row) || fault.row < 0) continue;
-    const line = fault.row + 1;
+    const line = toMonacoLine(fault.row);
     if (byLine.has(line)) continue;
+    const startColumn = Math.max(1, toMonacoColumn(fault.column));
     byLine.set(line, {
       line,
       severity: 'error',
       message: syntaxFaultMessage(fault),
       code: syntaxErrorCode(fault.kind),
       source: STRUCTURE_SYNTAX_SOURCE,
-      startColumn: Math.max(1, fault.column + 1),
-      endColumn: Math.max(fault.column + 2, fault.endColumn + 1),
+      startColumn,
+      endColumn: Math.max(startColumn + 1, toMonacoColumn(fault.endColumn)),
     });
   }
   return [...byLine.values()].sort((a, b) => a.line - b.line);
