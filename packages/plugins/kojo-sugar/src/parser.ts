@@ -2258,7 +2258,7 @@ class BlockParser {
     const bodyIndent = headLine.indent + 1;
     const sub = new BlockParser(this.cursor, bodyIndent, this.sink, this.randomShape);
     const body = sub.parseBody();
-    this.consumeEnd(headLine, 'catchEnd');
+    const close = this.consumeEnd(headLine, 'catchEnd');
     if (body.length === 0) {
       this.sink.report({
         code: 'block-empty',
@@ -2267,7 +2267,14 @@ class BlockParser {
         loc: posOf(headLine),
       });
     }
-    return { kind: 'catchBlock', body, loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))) } as unknown as SugarNode;
+    // 块源区间**含收束行**（口径同 `parseLoopBlock`：写了 `出错处理结束` 就连它一起折）。
+    // 产物侧零影响：`emitCatchBlock` 只取 `loc.start`，闭合词那一行 `em.push` 的源行号本就是 `null`。
+    const spans = body.map((n) => ({ loc: n.loc }));
+    return {
+      kind: 'catchBlock',
+      body,
+      loc: mergeSpan2(headLine, close === undefined ? spans : [...spans, { loc: spanOf(close.line) }]),
+    } as unknown as SugarNode;
   }
 
   /**
@@ -2313,7 +2320,7 @@ class BlockParser {
       }
       this.cursor.next();
     }
-    this.consumeEnd(headLine, 'dataEnd');
+    const close = this.consumeEnd(headLine, 'dataEnd');
     if (body.length === 0 && !invalid) {
       this.sink.report({
         code: 'block-empty',
@@ -2322,12 +2329,16 @@ class BlockParser {
         loc: posOf(headLine),
       });
     }
+    // 块源区间**含收束行**（口径同 `parseLoopBlock` / `parseCatchBlock`：写了 `数据表结束`
+    // 就连它一起折）。产物侧零影响：`emitDataBlock` 只取 `loc.start`，闭合词那一行本就以
+    // `null` 源行号入产物。
+    const spans = body.map((n) => ({ loc: n.loc }));
     return {
       kind: 'dataBlock',
       engine,
       body,
       _invalid: invalid,
-      loc: mergeSpan2(headLine, body.map((n) => ({ loc: n.loc }))),
+      loc: mergeSpan2(headLine, close === undefined ? spans : [...spans, { loc: spanOf(close.line) }]),
     } as unknown as SugarNode;
   }
 

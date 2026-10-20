@@ -9,7 +9,7 @@ import type {
   TimingBlock,
   WhenBranch,
 } from '@kojo/plugin-api';
-import type { LoopBlock, RulePoolBlock, RulePoolBranch } from './parser';
+import type { CatchBlock, DataBlock, LoopBlock, RulePoolBlock, RulePoolBranch } from './parser';
 import type { HeartBlock } from './types';
 
 /**
@@ -99,8 +99,10 @@ function childSymbol(name: string, loc: SugarSourceSpan, body: readonly SugarNod
   return finish({ name, kind: 'block', ...rangeOf(loc, body), children: symbolsOfNodes(body) });
 }
 
-/** 节点 → 大纲项（非结构节点返回 null）；`RulePoolBlock` / `HeartBlock` / `LoopBlock` 是转译器内部节点，同 `codegen` 的 `emitStatement` 口径并入入参类型 */
-function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock | HeartBlock | LoopBlock): EditorDocumentSymbol | null {
+/** 节点 → 大纲项（非结构节点返回 null）；`RulePoolBlock` / `HeartBlock` / `LoopBlock` / `CatchBlock` / `DataBlock` 是转译器内部节点，同 `codegen` 的 `emitStatement` 口径并入入参类型 */
+function rawSymbol(
+  node: SugarNode | SugarTopLevelNode | RulePoolBlock | HeartBlock | LoopBlock | CatchBlock | DataBlock,
+): EditorDocumentSymbol | null {
   switch (node.kind) {
     case 'timingBlock': {
       const detail = timingDetail(node);
@@ -193,6 +195,23 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock | HeartBl
         ...rangeOf(node.loc, node.body),
         children: symbolsOfNodes(node.body),
       };
+    case 'catchBlock':
+      // `出错处理：`（转译器内部 AST 节点，不进契约闭集——同 `loopBlock`）。形状照 `groupBlock`：
+      // 块本身一枚 + 块体里每族各成子项。区间含**收束行**（`parser.ts::parseCatchBlock` 把消费掉的
+      // `出错处理结束` 记进 `loc`）——与 `循环` 同一条区间口径，折起来把收束词一起藏掉。
+      return {
+        name: '出错处理',
+        kind: 'block',
+        ...rangeOf(node.loc, node.body),
+        children: symbolsOfNodes(node.body),
+      };
+    case 'dataBlock':
+      // `数据表：`（转译器内部 AST 节点，不进契约闭集——同 `loopBlock`）。块体只许条目行与注释
+      // （两者按顶层同一判据都不进大纲）⇒ 本族**只有一枚叶子**，形状照 `heartBlock`。
+      // 区间含**收束行**（`parser.ts::parseDataBlock` 把消费掉的 `数据表结束` 记进 `loc`）。
+      // 条目行混进语句时 parser 已报 error 进 `diagnostics`（codegen 据此一条字节都不产），
+      // 大纲不重复判——源码写了这一块，导航就该指得到它（与 `心形` 的同一口径）。
+      return { name: '数据表', kind: 'block', ...rangeOf(node.loc, node.body) };
     case 'ifExpr':
     case 'whenExpr': {
       // 表达式位置的 `如果` / `当`：结构同块，但要说清"赋给谁"——大纲里看不出左值就是误导
@@ -218,6 +237,17 @@ function rawSymbol(node: SugarNode | SugarTopLevelNode | RulePoolBlock | HeartBl
       return { name: '选项', kind: 'block', ...rangeOf(node.loc), children: itemSymbols(node.items) };
     case 'menuBlock':
       return { name: '菜单', kind: 'block', ...rangeOf(node.loc), children: itemSymbols(node.items) };
+    case 'askMBlock':
+    case 'askYNBlock':
+      // `询问：` / `确认：`（契约节点）与 `选项` / `菜单` **同构**：块一枚 + 每条 `「标签」：` 一个子项
+      // ——条目的 `label` / `loc` / `body` 与 `ChoiceItem` 同形，故直接复用 `itemSymbols`，不另造命名。
+      // 族名按**族**给（`询问` / `确认`），模态与提示文案不进名称（同 `随机` / `组` 的口径）。
+      return {
+        name: node.kind === 'askMBlock' ? '询问' : '确认',
+        kind: 'block',
+        ...rangeOf(node.loc),
+        children: itemSymbols(node.items),
+      };
     case 'colorBlock':
       return {
         name: joinParts(['着色', node.color]),

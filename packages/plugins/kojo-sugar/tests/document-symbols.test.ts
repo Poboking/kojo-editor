@@ -273,6 +273,98 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     assertContained(symbols(src));
   });
 
+  it('数据表：成一枚叶子、区间含收束行；出错处理：成块且块体里的族各成子项', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    数据表：', // 3
+      '        条目 「甲」', // 4
+      '        条目 原形 PRINTDATADL 「乙」', // 5
+      '    数据表结束', // 6
+      '    出错处理：', // 7
+      '        「丙」', // 8
+      '        如果 教養 > 30：', // 9
+      '            「丁」', // 10
+      '    出错处理结束', // 11
+      '    「戊」', // 12
+      '',
+    ].join('\n');
+    const children = symbols(src)[0]!.children ?? [];
+    expect(children.map((c) => [c.name, c.kind, c.startLine, c.endLine])).toEqual([
+      // 条目行（数据）按顶层同一判据不进大纲 ⇒ 叶子；收束行 `数据表结束` 属于这一块
+      ['数据表', 'block', 3, 6],
+      // 出错处理的块体是语句 ⇒ 形状照 `组`：块一枚 + 块体里的族各成子项
+      ['出错处理', 'block', 7, 11],
+    ]);
+    expect(children[0]!.children).toBeUndefined();
+    expect((children[1]!.children ?? []).map(shape)).toEqual([['如果 教養 > 30', 9, 10]]);
+    assertContained(symbols(src));
+  });
+
+  it('没写收束行的 数据表 / 出错处理 只到正文末行（收束行可选，与 循环 同口径）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    数据表：', // 3
+      '        条目 「甲」', // 4
+      '    出错处理：', // 5
+      '        「乙」', // 6
+      '',
+    ].join('\n');
+    const children = symbols(src)[0]!.children ?? [];
+    expect(children.map(shape)).toEqual([
+      ['数据表', 3, 4],
+      ['出错处理', 5, 6],
+    ]);
+  });
+
+  it('询问： / 确认：成块，每条「标签」一个子项（与 选项 / 菜单 同构）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    询问 "要不要一起？"：', // 3
+      '        「好呀」 1：', // 4
+      '            「嗯！」', // 5
+      '        「下次吧」 0：', // 6
+      '            「……算了。」', // 7
+      '    ask "英文别名："：', // 8
+      '        「要」 1：', // 9
+      '            「那就开始吧。」', // 10
+      '    确认 "要开启了吗？"：', // 11
+      '        「开启」：', // 12
+      '            「好。」', // 13
+      '    confirm "英文别名："：', // 14
+      '        「是」：', // 15
+      '            「嗯。」', // 16
+      '',
+    ].join('\n');
+    const children = symbols(src)[0]!.children ?? [];
+    expect(children.map((c) => [c.name, c.kind, c.startLine, c.endLine])).toEqual([
+      ['询问', 'block', 3, 7],
+      ['询问', 'block', 8, 10],
+      ['确认', 'block', 11, 13],
+      ['确认', 'block', 14, 16],
+    ]);
+    expect((children[0]!.children ?? []).map(shape)).toEqual([
+      ['「好呀」', 4, 5],
+      ['「下次吧」', 6, 7],
+    ]);
+    expect((children[1]!.children ?? []).map(shape)).toEqual([['「要」', 9, 10]]);
+    expect((children[2]!.children ?? []).map(shape)).toEqual([['「开启」', 12, 13]]);
+    expect((children[3]!.children ?? []).map(shape)).toEqual([['「是」', 15, 16]]);
+    // 作者面（每一枚大纲名）不许出现英文块头 / 契约机器名：中文族名按族给
+    const names: string[] = [];
+    const walk = (list: readonly EditorDocumentSymbol[]): void => {
+      for (const s of list) {
+        names.push(s.name);
+        walk(s.children ?? []);
+      }
+    };
+    walk(symbols(src));
+    expect(names.filter((name) => /ask|confirm|Block/.test(name))).toEqual([]);
+    assertContained(symbols(src));
+  });
+
   it('长条件截断带省略号（大纲一行一项，不许折行）', () => {
     const long = `角色: 12\n时机 指令 310：\n    若 ${'条'.repeat(90)}：\n        「甲」\n`;
     const name = symbols(long)[0]!.children?.[0]?.name ?? '';

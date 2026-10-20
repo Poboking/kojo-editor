@@ -101,6 +101,55 @@ describe('kojo-sugar · 折叠区间（foldingRange）', () => {
     for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
   });
 
+  it('数据表 / 出错处理各成区间，含收束行（与 循环 同一条区间口径）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    数据表：', // 3
+      '        条目 「甲」', // 4
+      '        条目 原形 PRINTDATADL 「乙」', // 5
+      '    数据表结束', // 6
+      '    出错处理：', // 7
+      '        「丙」', // 8
+      '        如果 教養 > 30：', // 9
+      '            「丁」', // 10
+      '    出错处理结束', // 11
+      '    「戊」', // 12
+      '',
+    ].join('\n');
+    const list = ranges(src);
+    expect(has(list, 3, 6)).toBe(true); // 数据表：**含收束行**（折起来把 `数据表结束` 一起藏掉）
+    expect(has(list, 7, 11)).toBe(true); // 出错处理：含收束行
+    expect(has(list, 9, 10)).toBe(true); // 出错处理体里的 如果 也成区间
+    for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
+  });
+
+  it('询问 / 确认 的块与条目各成区间（登记进大纲即登记进折叠——同一棵树）', () => {
+    const src = [
+      '角色: 12', // 1
+      '时机 指令 310：', // 2
+      '    询问 "要不要一起？"：', // 3
+      '        「好呀」 1：', // 4
+      '            「嗯！」', // 5
+      '        「下次吧」 0：', // 6
+      '            「……算了。」', // 7
+      '    确认 "要开启了吗？"：', // 8
+      '        「开启」：', // 9
+      '            「好。」', // 10
+      '        「关闭」：', // 11
+      '            「……嗯。」', // 12
+      '',
+    ].join('\n');
+    const list = ranges(src);
+    expect(has(list, 3, 7)).toBe(true); // 询问块到末条条目正文末行
+    expect(has(list, 4, 5)).toBe(true); // 条目也成区间（与 选项 / 菜单 条目同构）
+    expect(has(list, 6, 7)).toBe(true);
+    expect(has(list, 8, 12)).toBe(true); // 确认块
+    expect(has(list, 9, 10)).toBe(true);
+    expect(has(list, 11, 12)).toBe(true);
+    for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
+  });
+
   it('区间摊平自大纲树（折叠与大纲同一棵树：顶层节点区间 ⊇ 其子孙区间）', () => {
     const src = ['时机 指令 310：', '    随机：', '        「甲」', '        「乙」', '    「丙」'].join('\n');
     const list = ranges(src);
