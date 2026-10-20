@@ -66,13 +66,14 @@ export function collectSearchScopes(
     try {
       options = contribution.provide(project);
     } catch (e: unknown) {
-      notices.push(`范围提供方「${owner}」没能给出候选：${errorText(e)}`);
+      notices.push(`有一处范围提供方没能给出候选：${errorText(e)}`);
       continue;
     }
     const seen = new Set<string>();
     for (const option of options) {
       if (option.id === '' || seen.has(option.id)) {
-        notices.push(`范围提供方「${owner}」给出了重复或空的候选编号，已忽略：${option.id || '(空)'}`);
+        // 提供方 id / 候选编号都是插件内部标识，不上屏；能指名的只有候选自己的中文标签
+        notices.push(`范围「${option.label}」的候选编号重复或为空，已忽略`);
         continue;
       }
       seen.add(option.id);

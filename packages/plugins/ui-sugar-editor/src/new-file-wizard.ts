@@ -152,7 +152,9 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
       return h('div', { className: 'wizard' },
         h('h3', null, '新建口上文件'),
         h('p', { className: 'dim' },
-          '当前适配器未提供命名模板（kojoFaceTemplates.registration.declare），无法推导新文件名。'),
+          // 说清缺的是哪张模板：文件名由「登记函数」的名字模板代入角色号推导
+          //（`registration.declare`），不是「时机 → 函数名」那张分野表——两张表缺一张都到不了这里。
+          '当前适配器未提供命名模板（新文件名由登记函数的名字模板代入角色号推导），无法推导新文件名。'),
         h('div', { className: 'wizard-actions' },
           h('button', { className: 'ghost small', onClick: deps.close }, '关闭')));
     }

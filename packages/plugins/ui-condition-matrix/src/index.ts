@@ -825,7 +825,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
               createElement(
                 'div',
                 { className: 'cm-state-text dim' },
-                '条件矩阵需要把函数名解析成「角色 × 时机」。当前游戏的适配器没有提供 functionFamilyIndex，无法按角色聚合；不是项目坏了。',
+                '条件矩阵需要把函数名解析成「角色 × 时机」，这张归属表由适配器提供。当前适配器没给出它，无法按角色聚合；不是项目坏了。',
               ),
             ),
           );
@@ -1202,14 +1202,14 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   'span',
                   {
                     className: 'cm-stat cm-stat-mine',
-                    title: '工作区 artifact：可按角色号 / 导入来源 / 目录名归属当前角色；选它即可用条件矩阵查看',
+                    title: '我的口上项目：可按角色号 / 导入来源 / 目录名归属当前角色；选它即可用条件矩阵查看',
                   },
                   `我的口上项目 ${workspacePacks.length}`,
                 )
               : minePacks.length > 0
                 ? createElement(
                     'span',
-                    { className: 'cm-stat cm-stat-mine', title: '工作区 artifact 目录名与本项目包目录同名' },
+                    { className: 'cm-stat cm-stat-mine', title: '我的口上项目的目录名与本项目包目录同名' },
                     `我的口上项目 ${minePacks.length}`,
                   )
                 : null,

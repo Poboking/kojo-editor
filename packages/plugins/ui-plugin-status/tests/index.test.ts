@@ -46,7 +46,7 @@ function findByClass(root: unknown, cls: string): ElLike | undefined {
 }
 
 describe('opsMaintenanceRow · 本地化 + 折叠详情', () => {
-  const known: OpsMaintenanceRead = { known: true, total: 3, detail: 'open 残留 1 · 巡检于 2026-10-17' };
+  const known: OpsMaintenanceRead = { known: true, total: 3, detail: '未收尾残留 1 · 巡检于 2026-10-17' };
 
   it('根节点是 details（默认折叠），title 挂明细全文', () => {
     const row = opsMaintenanceRow(known);

@@ -1820,8 +1820,11 @@ export function ShellLayout(props: Props): ReactElement {
         <ProblemsStatusItem onClick={() => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' })} />
         {!layout.zen &&
           (stats.indexError ? (
-            <span className="sb-idx err" title={stats.indexError}>
-              索引失败：{stats.indexError}
+            // 第一眼只说状态（原文已由打开项目那条通知说过一遍——一处状态只占一格）；
+            // 原始错误（路径 + 英文栈式片段）逐字留在悬停里，技术信息一条不丢
+            //（口径同 `ui-kojo-navigator` 的 `panel-copy.ts`：首句人话，原文进 title）。
+            <span className="sb-idx err" title={`索引失败：${stats.indexError}`}>
+              索引失败
             </span>
           ) : stats.indexing ? (
             <span className="sb-idx">索引构建中…</span>

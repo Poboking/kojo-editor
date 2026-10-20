@@ -316,7 +316,7 @@ function renderRequest(
         : h('p', { className: 'dim', key: 'tally' }, incomingTally.explanation)
       : null,
     !referencesAvailable
-      ? h('p', { className: 'dim', key: 'no-refs' }, '反向引用索引缺席（解析器未构建 references），出入边不可用。')
+      ? h('p', { className: 'dim', key: 'no-refs' }, '反向引用索引缺席（解析器还没交出引用台账），出入边不可用。')
       : null,
     closeBtn,
   );

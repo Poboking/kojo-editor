@@ -35,7 +35,7 @@ describe('ops maintenance · 读数口径', () => {
 
   it('detail 五项逐项 + 巡检时间都在', () => {
     const d = opsMaintenanceDetail(report());
-    expect(d).toContain('open 残留 1');
+    expect(d).toContain('未收尾残留 1');
     expect(d).toContain('回滚失败 2');
     expect(d).toContain('孤儿快照目录 4');
     expect(d).toContain('清理失败 5');

@@ -154,12 +154,14 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
 
     const runUndo = async (item: TimelineItem): Promise<void> => {
       const rec = state.records.find((r) => r.id === item.id);
+      // 说的是哪一批：账本 label（人话）优先，类别名兜底；op id（`op-<时间戳>-<随机>`）是机器标识，不上屏
+      const label = rec === undefined ? '这一批操作' : rec.label || opKindLabel(rec.kind);
       setBusy(true);
       try {
         await deps.ops.undo(item.id);
         report(
           'ok',
-          `已撤销「${rec === undefined ? item.id : opKindLabel(rec.kind)}」。游戏目录中的文件会按外部改动口径自动重载；工作区里的文件（如 .kojo 源）请重新打开该标签查看回滚后的内容。`,
+          `已撤销「${label}」。游戏目录中的文件会按外部改动口径自动重载；工作区里的文件（如 .kojo 源）请重新打开该标签查看回滚后的内容。`,
         );
       } catch (err: unknown) {
         report('err', errorText(err));
@@ -172,7 +174,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
     const runPurge = async (item: TimelineItem): Promise<void> => {
       const io = getHistoryIo();
       if (io === null) {
-        report('err', '回收站句柄不在位（kernel.io 未注册），无法彻底删除。');
+        report('err', '回收站暂时不可用（没有接上文件读写通道），无法彻底删除。');
         return;
       }
       setBusy(true);
@@ -190,7 +192,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
     const runRestoreTrash = async (item: TimelineItem): Promise<void> => {
       const io = getHistoryIo();
       if (io === null) {
-        report('err', '回收站句柄不在位（kernel.io 未注册），无法放回原位。');
+        report('err', '回收站暂时不可用（没有接上文件读写通道），无法放回原位。');
         return;
       }
       setBusy(true);
@@ -447,7 +449,7 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
       h(
         'p',
         { className: 'dim oh-path' },
-        '磁盘侧批操作（脚手架 / .kojo 双文件保存 / 存档注入 / 跨文件全部替换 / 部署 / 市场装卸）与回收站条目按时刻并成一条线。编辑器内的普通编辑走 Monaco 自己的 Ctrl+Z，不出现在这里；跨文件替换撤销后，已打开标签里的那部分请用编辑器内 Ctrl+Z；某个文件的完整四本账请看「显示当前文件的历史版本」。',
+        '磁盘侧批操作（脚手架 / .kojo 双文件保存 / 存档注入 / 跨文件全部替换 / 部署 / 市场装卸）与回收站条目按时刻并成一条线。编辑器内的普通编辑走编辑器自己的 Ctrl+Z，不出现在这里；跨文件替换撤销后，已打开标签里的那部分请用编辑器内 Ctrl+Z；某个文件的完整四本账请看「显示当前文件的历史版本」。',
       ),
       state.notes.length > 0
         ? h(

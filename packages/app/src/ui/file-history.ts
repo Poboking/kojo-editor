@@ -296,7 +296,7 @@ export function buildFileTimeline(input: FileTimelineInput): FileTimeline {
     if (shadow !== undefined) warnings.push(shadowNote(shadow));
     if (o.fileCount > 1) warnings.push(`撤销是整批动作：那一批共涉及 ${o.fileCount} 个文件，不只本文件。`);
     warnings.push(
-      '回滚不动 Monaco 撤销栈：游戏目录里的文件按外部改动口径自动重载，工作区里的文件（如 .kojo 源）请重新打开该标签查看。',
+      '回滚不动编辑器的撤销栈：游戏目录里的文件按外部改动口径自动重载，工作区里的文件（如 .kojo 源）请重新打开该标签查看。',
     );
     if (!input.writable) warnings.push(NOT_WRITABLE_NOTE);
     items.push({
@@ -442,7 +442,7 @@ export function orderDiffPair(
  * 前两条不一定是作者想比的那两版；替作者做选择比让他多取消一次更危险。
  */
 export function diffPairButtonState(selectedCount: number): { enabled: boolean; reason: string } {
-  if (selectedCount === 2) return { enabled: true, reason: '在 diff 视图里逐行对比选中的这两版（旧版在左、新版在右）' };
+  if (selectedCount === 2) return { enabled: true, reason: '在对比视图里逐行对比选中的这两版（旧版在左、新版在右）' };
   if (selectedCount === 0) return { enabled: false, reason: '先勾选两个版本（每行前面的框）' };
   if (selectedCount === 1) return { enabled: false, reason: '再勾选一个版本：两版互比需要恰好两条' };
   return { enabled: false, reason: `只能两版互比：请取消到只剩两条（当前选了 ${selectedCount} 条）` };
@@ -623,7 +623,7 @@ export async function collectFileTimeline(
 
   let opSnapshots: OpFileSnapshot[] = [];
   if (ops === null) {
-    notes.push('批操作账未接入这条时间线（内核 kernel.ops 不在位）：这里没有批操作那本账。');
+    notes.push('批操作账未接入这条时间线（内核没有交出批操作记录）：这里没有批操作那本账。');
   } else {
     try {
       const scan = await scanOpsForPath(ops, path);
@@ -808,8 +808,8 @@ export async function collectGlobalTimeline(
   const notes: string[] = [];
   const records: OpRecord[] = [];
   const trash: TrashEntry[] = [];
-  if (ops === null) notes.push('批操作账未接入（内核 kernel.ops 不在位）：这条线上没有批操作。');
-  if (io === null) notes.push('回收站账未接入（宿主 kernel.io 句柄不在位）：这条线上没有回收站条目。');
+  if (ops === null) notes.push('批操作账未接入（内核没有交出批操作记录）：这条线上没有批操作。');
+  if (io === null) notes.push('回收站账未接入（宿主没有交出文件读写通道）：这条线上没有回收站条目。');
   if (ops !== null) {
     try {
       records.push(...(await ops.list()));

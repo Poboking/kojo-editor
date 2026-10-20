@@ -26,9 +26,15 @@ const KIND_LABELS: Record<string, string> = {
   'market-uninstall': '卸载市场包',
 };
 
+/**
+ * 未登记的类别在作者面叫什么：原 kind（`sugar-save` 这类内部标识）不上屏。
+ * 账本自己的 `label` 通常是人话，调用方优先用它；这张表只补"连 label 都没有"的兜底。
+ */
+const UNKNOWN_KIND_LABEL = '其它操作';
+
 export function opKindLabel(kind: string): string {
-  if (kind.startsWith('undo:')) return `撤销 · ${KIND_LABELS[kind.slice(5)] ?? kind.slice(5)}`;
-  return KIND_LABELS[kind] ?? kind;
+  if (kind.startsWith('undo:')) return `撤销 · ${KIND_LABELS[kind.slice(5)] ?? UNKNOWN_KIND_LABEL}`;
+  return KIND_LABELS[kind] ?? UNKNOWN_KIND_LABEL;
 }
 
 /** 操作时刻的人读文本（startedAt；与本地时间线 formatVersionTime 同口径） */

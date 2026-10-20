@@ -203,7 +203,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
           }
           case 'undoOp': {
             const ops = getOpsJournal();
-            if (ops === null) throw new Error('批操作账不在位（kernel.ops 未注册），这一条恢复不了。');
+            if (ops === null) throw new Error('批操作账暂时不可用（内核没有交出批操作记录），这一条恢复不了。');
             await ops.undo(action.id);
             report(
               'ok',
@@ -257,7 +257,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
             {
               key: 'diff',
               className: 'ghost small',
-              title: '在 diff 视图里对比这一条与磁盘当前内容（行级差异由 Monaco 呈现）',
+              title: '在对比视图里看这一条与磁盘当前内容的逐行差异',
               onClick: () =>
                 deps.requestDiff({
                   title: `${basename(target)} · ${TIMELINE_ACCOUNT_LABEL[item.account]} ${timeText(item)}`,

@@ -719,7 +719,7 @@ export function App(): ReactElement {
           try {
             await invoke('register_write_domain', { root: dir });
           } catch (e: unknown) {
-            setError(`写允许域注册失败（将只允许 appDataDir 写入）: ${errorText(e)}`);
+            setError(`写允许域注册失败（本项目将只能写入应用数据目录）：${errorText(e)}`);
           }
         }
 

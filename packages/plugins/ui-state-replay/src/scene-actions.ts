@@ -82,7 +82,9 @@ export function createSceneActions(deps: SceneActionDeps): SceneActions {
         setSlotEdited(app.edited); // 场景覆盖的槽 → manual（作者假设，非引擎事实）
         const parts: string[] = [
           selectedScene.id === DEFAULT_SCENE_ID
-            ? '已应用默认场景（int 全 0 = 假设 / str 空 = 未提供）'
+            // 两种槽位的默认各有含义（与 `defaultSlotText` 同口径）：数值槽填 0 是假设，
+            // 文字槽留空 = 未提供。别合并成一句"全 0"，那会把"未提供"说成"已给值"。
+            ? '已应用默认场景（数值槽填 0＝假设、文字槽留空＝未提供；假设不是引擎事实）'
             : `已应用「${selectedScene.name}」（${app.applied.length} 槽；场景值按作者假设对待，非引擎事实）`,
         ];
         if (app.dropped.length > 0) parts.push(`${app.dropped.length} 个场景槽位不在当前函数签名内，已忽略`);

@@ -21,7 +21,7 @@ export function opsMaintenanceTotal(m: OpsMaintenance): number {
 /** 明细（面板挂到 title 上；顺序与总账一致，别在这里发明新词） */
 export function opsMaintenanceDetail(m: OpsMaintenance): string {
   return (
-    `open 残留 ${m.openOrphanDocs} · 回滚失败 ${m.rollbackFailedDocs} · ` +
+    `未收尾残留 ${m.openOrphanDocs} · 回滚失败 ${m.rollbackFailedDocs} · ` +
     `不可读文档 ${m.unreadableDocs} · 孤儿快照目录 ${m.orphanSnapshotDirs} · ` +
     `清理失败 ${m.cleanupFailures} · 巡检于 ${new Date(m.checkedAt).toISOString()}`
   );

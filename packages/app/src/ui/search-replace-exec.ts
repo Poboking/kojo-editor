@@ -331,7 +331,7 @@ export function createFileReplaceRunner(
           applied: 0,
           changed: false,
           readOnly: false,
-          error: `无法确认「${f.path}」是否已打开（Monaco 注册表未就绪），未替换`,
+          error: `无法确认「${f.path}」是否已打开（编辑器的标签登记还没就绪），未替换`,
         });
         continue;
       }
