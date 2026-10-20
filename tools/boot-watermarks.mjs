@@ -16,7 +16,9 @@
  * 用法：node tools/boot-watermarks.mjs [项目目录]
  *   项目目录缺省走 `tools/corpus.mjs` 的解析链（`--corpus` > `KOJO_CORPUS_DIR` > 扫盘）；
  *   语料不在默认扫描根时设 `KOJO_CORPUS_SCAN_DIRS=<扫描根>`。冷/热各一轮（第二轮 = reload 后重开）。
- * 前置：1420/9222 空闲（被占 ⇒ **exit 2**，别去抢清端口，§70）；机器空闲（与全量测试 / cargo
+ * 前置：**目标 vite 端口**与 9222 空闲（目标端口由 `smoke-lib.mjs` 的 `devTarget` 解析：
+ *   `tauri.conf.json` devUrl ⇔ `vite.config.ts` port，当前配置 1420；`KOJO_SMOKE_VITE_PORT`
+ *   可换端口。被占 ⇒ **exit 2**，别去抢清端口，§70）；机器空闲（与全量测试 / cargo
  *   构建并发时页内长任务被抢 CPU，量出来的等待会虚高）。
  * 纪律：`recent-projects.json` 先备份后还原；WebView2 用本工具自有的新鲜隔离画像（跑完删）；
  *   **只杀自己 spawn 的进程树与自己的 9222 持有者，绝不按镜像名 taskkill**。
@@ -28,10 +30,18 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recentRowFinderSrc, recentRowWaitSrc } from './smoke-lib.mjs';
+import { devTarget, portBusy, recentRowFinderSrc, recentRowWaitSrc } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CDP = 9222;
+/** 本次起的 dev 端口（`devTarget` 只读配置 + 可选临时 JSON，不起任何进程）；解析失败 ⇒ 退避 */
+let dev;
+try {
+  dev = devTarget(ROOT);
+} catch (e) {
+  console.log('[wm] dev 地址解析失败：' + (e && e.message ? e.message : e));
+  process.exit(2);
+}
 const WV2 = path.join(os.tmpdir(), `kojo-boot-wm-${Date.now()}-webview2`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const strip = (s) => s.replace(/\u001b\[[0-9;]*m/g, '');
@@ -94,10 +104,13 @@ const recentBackup = fs.existsSync(recentFile) ? fs.readFileSync(recentFile) : n
   fs.mkdirSync(storeDir, { recursive: true });
   fs.writeFileSync(recentFile, JSON.stringify(list));
 }
-if (await portOpen(CDP) || await portOpen(1420)) { console.log('[wm] 1420/9222 被占'); try { if (recentBackup === null) fs.rmSync(recentFile, { force: true }); else fs.writeFileSync(recentFile, recentBackup); } catch {} process.exit(2); }
+/* 前置闸：**目标** vite 端口与 9222 都试两个地址族（只挂 `[::1]` 的 vite 本机实测存在；
+   devUrl 写 localhost 时 WebView2 会 IPv6 优先 ⇒ 只看 127.0.0.1 会放行并量到别人的 dev server） */
+if (await portBusy(CDP) || await portBusy(dev.port)) { console.log(`[wm] ${dev.port}/${CDP} 被占`); try { if (recentBackup === null) fs.rmSync(recentFile, { force: true }); else fs.writeFileSync(recentFile, recentBackup); } catch {} process.exit(2); }
 try { fs.rmSync(WV2, { recursive: true, force: true }); } catch {}
 
-const child = spawn('pnpm --filter @kojo/app tauri dev', {
+const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+const child = spawn(devCmd, {
   cwd: ROOT, shell: true,
   env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, WEBVIEW2_USER_DATA_FOLDER: WV2 },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -105,6 +118,7 @@ const child = spawn('pnpm --filter @kojo/app tauri dev', {
 let out = ''; child.stdout.on('data', (d) => (out += d)); child.stderr.on('data', (d) => (out += d));
 let exited = false; child.on('exit', () => { exited = true; });
 function cleanup() {
+  try { dev.cleanup(); } catch {}
   try { if (child.pid) spawnSync(`taskkill /PID ${child.pid} /T /F`, { shell: true, stdio: 'ignore' }); } catch {}
   try {
     const ns = spawnSync('netstat -ano', { shell: true, encoding: 'utf8' }).stdout ?? '';

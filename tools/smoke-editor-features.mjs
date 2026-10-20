@@ -23,6 +23,8 @@
  * - store 的 recent-projects.json / approved-writable.json 先备份、终态原样还原。
  *
  * 用法：node tools/smoke-editor-features.mjs
+ *   vite 端口取 `smoke-lib.mjs` 的 `devTarget`（`tauri.conf.json` devUrl ⇔ `vite.config.ts` port）；
+ *   `KOJO_SMOKE_VITE_PORT=<空闲端口>` 可绕开别人占着的端口（临时 `--config`，不碰仓库配置）。
  * 退出码：0 = 无 FAIL；1 = 有 FAIL；2 = 环境不满足（端口占用等）。
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -31,11 +33,10 @@ import * as net from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { recentRowClickSrc, recentRowWaitSrc } from './smoke-lib.mjs';
+import { devTarget, portBusy, recentRowClickSrc, recentRowWaitSrc } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CDP_PORT = 9222;
-const VITE_PORT = 1420;
 /** 临时根：Git-Bash 下 TMP 可能是 POSIX 风格 /tmp（见 PITFALLS），Windows 一律落真 Temp 目录 */
 const TEMP_ROOT = (() => {
   const t = os.tmpdir();
@@ -60,6 +61,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;]*m/g, '');
 const norm = (s) => String(s ?? '').replace(/\u00a0/g, ' '); // Monaco 把空格渲成 NBSP（PITFALLS §三-44）
 
+/** 连上即算占用（CDP 就绪轮询用；端口占用判定走 smoke-lib 的 portBusy，两个地址族都试） */
 function portOpen(port) {
   return new Promise((resolve) => {
     const s = net.connect(port, '127.0.0.1');
@@ -457,30 +459,42 @@ async function dismissIntroIfAny(cdp) {
 
 /* ------------------------------ 主流程 ------------------------------ */
 
-async function waitPortsFree(timeoutMs = 120000) {
+async function waitPortsFree(vitePort, timeoutMs = 120000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const busy = (await portOpen(VITE_PORT)) || (await portOpen(CDP_PORT));
+    const busy = (await portBusy(vitePort)) || (await portBusy(CDP_PORT));
     if (!busy) return true;
-    console.log('[feat] 端口占用（1420/9222），等待上一轮释放 …');
+    console.log(`[feat] 端口占用（${vitePort}/${CDP_PORT}），等待上一轮释放 …`);
     await sleep(4000);
   }
   return false;
 }
 
 async function main() {
+  /* dev 地址口径住在 smoke-lib 的 devTarget（tauri.conf.json devUrl ⇔ vite.config.ts port；
+     `KOJO_SMOKE_VITE_PORT` 覆盖走临时 --config）。本工具自己起壳 ⇒ 覆盖必须传给它。 */
+  let dev;
+  try {
+    dev = devTarget(ROOT);
+  } catch (e) {
+    console.error(`❌ dev 地址解析失败：${e && e.message ? e.message : e}`);
+    process.exit(2);
+  }
   writeFixtures();
   seedRecent();
-  if (!(await waitPortsFree())) {
-    console.error(`❌ 端口 ${VITE_PORT}/${CDP_PORT} 被占（另一实例在跑？）——等它释放或换机再跑`);
+  if (!(await waitPortsFree(dev.port))) {
+    console.error(`❌ 端口 ${dev.port}/${CDP_PORT} 被占（另一实例在跑？）——等它释放或换机再跑`);
+    restoreStore(); // 已注入 recent：退避前先还原，别把合成项目留在会话里
+    dev.cleanup();
     process.exit(2);
   }
   try {
     fs.rmSync(WEBVIEW2_DIR, { recursive: true, force: true });
   } catch {}
 
-  console.log('[feat] 启动 tauri dev（CDP %d，WebView2 隔离目录 %s）…', CDP_PORT, WEBVIEW2_DIR);
-  const child = spawn('pnpm --filter @kojo/app tauri dev', {
+  console.log('[feat] 启动 tauri dev（Vite %d，CDP %d，WebView2 隔离目录 %s）…', dev.port, CDP_PORT, WEBVIEW2_DIR);
+  const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+  const child = spawn(devCmd, {
     shell: true,
     cwd: ROOT,
     env: {
@@ -945,6 +959,7 @@ async function main() {
     rec('!!', '未捕获异常', 'FAIL', String(e).slice(0, 600));
   } finally {
     killTree();
+    dev.cleanup(); // 端口覆盖时的临时 --config 文件（默认档是空操作）
     restoreStore();
     await sleep(1500);
     await cleanupTemp();

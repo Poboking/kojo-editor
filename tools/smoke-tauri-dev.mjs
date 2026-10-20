@@ -6,36 +6,33 @@
  * vite dev server 起监听、Tauri 宿主进程存活、前端无致命报错、窗口进程不闪退。
  *
  * 用法：node tools/smoke-tauri-dev.mjs [监测秒数，默认 75]
+ *   端口取 `smoke-lib.mjs` 的 `devTarget`（`tauri.conf.json` devUrl ⇔ `vite.config.ts` port）；
+ *   `KOJO_SMOKE_VITE_PORT=<空闲端口>` 可绕开别人占着的端口（临时 `--config`）。
  * 退出码：0 = 冒烟通过；1 = 失败（输出诊断）。
  * 注意：会短暂弹出应用窗口（结束后自动关闭）。
  */
 import { spawn, spawnSync } from 'node:child_process';
-import * as net from 'node:net';
 import * as path from 'node:path';
+import { devTarget, portBusy } from './smoke-lib.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WATCH_SECONDS = Number(process.argv[2] ?? 75);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function portOpen(port) {
-  return new Promise((resolve) => {
-    const s = net.connect(port, '127.0.0.1');
-    s.setTimeout(1500);
-    s.on('connect', () => {
-      resolve(true);
-      s.destroy();
-    });
-    s.on('error', () => resolve(false));
-    s.on('timeout', () => {
-      resolve(false);
-      s.destroy();
-    });
-  });
+/* dev 端口口径住在 smoke-lib 的 devTarget（`tauri.conf.json` devUrl ⇔ `vite.config.ts` port，
+   `KOJO_SMOKE_VITE_PORT` 可换）——checks.viteUp 判的就是这个端口，起壳也必须用同一份覆盖。 */
+let dev;
+try {
+  dev = devTarget(ROOT);
+} catch (e) {
+  console.log(`[smoke] dev 地址解析失败：${e && e.message ? e.message : e}`);
+  process.exit(1);
 }
 
-console.log('[smoke] launching tauri dev …');
-const child = spawn('pnpm --filter @kojo/app tauri dev', {
+console.log(`[smoke] launching tauri dev (Vite ${dev.port}) …`);
+const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+const child = spawn(devCmd, {
   shell: true,
   cwd: ROOT,
   env: { ...process.env },
@@ -65,11 +62,12 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
   await sleep(2000);
   if (exited) {
     console.log(`[smoke] child exited early (${exitInfo}); output tail:\n${output.slice(-2500)}`);
+    dev.cleanup();
     process.exit(1);
   }
-  if (!checks.viteUp && (await portOpen(1420))) {
+  if (!checks.viteUp && (await portBusy(dev.port))) {
     checks.viteUp = true;
-    console.log('[smoke] vite dev server is listening on 1420 ✓');
+    console.log(`[smoke] vite dev server is listening on ${dev.port} ✓`);
   }
   // 窗口进程：tauri 编译完成并启动后，输出中会出现 Running / kojo-editor.exe
   if (!checks.windowProcess && /Running `target\\debug\\kojo-editor|target\\debug\\kojo-editor\.exe/.test(stripAnsi(output))) {
@@ -99,6 +97,8 @@ if (!exited && child.pid) {
   console.log('[smoke] terminating process tree pid=' + child.pid);
   spawnSync(`taskkill /PID ${child.pid} /T /F`, { shell: true, stdio: 'ignore' });
 }
+
+dev.cleanup(); // 端口覆盖时的临时 --config（默认档是空操作）
 
 if (passed) {
   console.log('✅ tauri dev smoke passed');
