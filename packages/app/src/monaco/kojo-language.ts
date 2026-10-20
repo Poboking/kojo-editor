@@ -175,6 +175,61 @@ const KOJO_PAIRS: readonly (readonly [open: string, close: string])[] = [
   ['"', '"'],
 ];
 
+/**
+ * 行内内容规则（root 与 `@dquote` 串态**共用同一批规则对象**）。
+ *
+ * 为什么串态要复用这一批：Monarch 的行尾 `;` 注释规则是非锚定的，`"…"` 里的 `;`
+ * 若也交给它就会把字符串值涂成注释（作者写 `初回 "key;说明"：` 被切成两段）。真源
+ * `kojo-sugar/lexer.ts::inlineCommentIndex` 只把 `"` 当串界、串里的 `;` 不剥，故串态
+ * 的唯一职责是**把串内的 `;` 从注释规则手里藏起来**：串内内容仍走同一批词法（不复制
+ * 第二套词表/规则），`;` 在该状态没有规则可命中 ⇒ 不发 comment（与旧版串外 `;` 落空
+ * token 同相）。台词 `「」` 另由 speech 系列状态保护，不经过这里。
+ */
+const KOJO_CONTENT_RULES: Monaco.languages.IMonarchLanguageRule[] = [
+  // 台词引号（「」/｢｣/『』）——台词 = 作者色（规范 §1.3 的 99% 相关律）
+  [/「/, { token: 'sugar.speech.delimiter', next: '@speech' }],
+  [/｢/, { token: 'sugar.speech.delimiter', next: '@speechAlt' }],
+  [/『/, { token: 'sugar.speech.delimiter', next: '@speechIn' }],
+  // 插值 `{…}`（旁白行/台词行皆可出现）
+  [/\{/, { token: 'sugar.interp.delimiter', next: '@interp' }],
+  // 标记的**符号形**（`~` / `⏎`，词表派生）：词支命中不到的那一批，单独一条规则给 `sugar.cont`
+  [charClassPattern(CONT_SYMBOLS), 'sugar.cont'],
+  // 中文词形：运算符 → 不等待标记 → 保留代词 → 关键字 → 系统函数 → 名字层
+  [
+    /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
+    {
+      cases: {
+        '@contMarks': 'sugar.cont',
+        '@operators': 'sugar.operator',
+        '@pronouns': 'sugar.pronoun',
+        '@primaryWords': 'sugar.keyword',
+        '@systemFunctions': 'sugar.system-function',
+        // 词表里没有的中文/日文名字 = 槽位原名或作者自定名（既不是语法词也不是英文残留）
+        '@default': 'sugar.slot',
+      },
+    },
+  ],
+  // 英文隐藏别名（小写）/ ERB 指令（全大写，行首已分档，此处兜底）
+  [
+    /[A-Za-z_][A-Za-z0-9_]*/,
+    {
+      cases: {
+        '@contMarks': 'sugar.cont',
+        '@englishAliases': 'sugar.keyword.alias',
+        // 运算符组的 ASCII 形（`不在` 的别名 `notin`）也要落档——此前漏 cases 会掉 identifier
+        '@operators': 'sugar.operator',
+        '@erbFamilyHeads': 'keyword.erb.family',
+        '@erbCommands': 'keyword.erb',
+        '@default': 'identifier',
+      },
+    },
+  ],
+  [/\b0x[0-9a-fA-F]+\b/, 'number.hex'],
+  [/\b\d+\b/, 'number'],
+  [/：/, 'sugar.colon'],
+  [/[+\-*/%<>!=&|^~?:.,()\[\]]/, 'operator'],
+];
+
 export function registerKojoLanguage(monaco: typeof Monaco): void {
   if (monaco.languages.getLanguages().some((l) => l.id === KOJO_LANGUAGE_ID)) return;
 
@@ -202,9 +257,12 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
     systemFunctions: SYSTEM_FUNCTION_WORDS,
     tokenizer: {
       root: [
-        // 空行 / 注释（表层同时接受 `;` 与 `//`，规范 §3.10）
-        [/^\s*[;].*$/, 'comment'],
-        [/^\s*\/\/.*$/, 'comment'],
+        // 行首 `;` = 整行注释（真源 `lexer.ts::classifyLine` 的 `content.startsWith(';')`）。
+        // 旧版还把 `^\s*//` 一并涂成 comment——`//` 在转译器里**不是**注释，本批删掉那一形。
+        [/^\s*;.*$/, 'comment'],
+        // 行尾 `;` 注释（非锚定，`;` 起至行末）：对位 `lexer.ts::stripInlineComment`。
+        // `"…"` 内的 `;` 由下面的 `dquote` 先吃掉，`「…」` 内的 `;` 由 speech 态先吃掉。
+        [/;.*$/, 'comment'],
         // 原生 ERB 围栏（```erb … ```）：整块不透明，逐行着色为原生
         [/^\s*```\s*erb\b.*$/i, { token: 'keyword.raw', next: '@rawFence' }],
         // 行首 `@erb` 逃生舱（规范 §3.10）
@@ -226,48 +284,23 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
             },
           ],
         ],
-        // 台词引号（「」/｢｣/『』）——台词 = 作者色（规范 §1.3 的 99% 相关律）
-        [/「/, { token: 'sugar.speech.delimiter', next: '@speech' }],
-        [/｢/, { token: 'sugar.speech.delimiter', next: '@speechAlt' }],
-        [/『/, { token: 'sugar.speech.delimiter', next: '@speechIn' }],
-        // 插值 `{…}`（旁白行/台词行皆可出现）
-        [/\{/, { token: 'sugar.interp.delimiter', next: '@interp' }],
-        // 标记的**符号形**（`~` / `⏎`，词表派生）：词支命中不到的那一批，单独一条规则给 `sugar.cont`
-        [charClassPattern(CONT_SYMBOLS), 'sugar.cont'],
-        // 中文词形：运算符 → 不等待标记 → 保留代词 → 关键字 → 系统函数 → 名字层
-        [
-          /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
-          {
-            cases: {
-              '@contMarks': 'sugar.cont',
-              '@operators': 'sugar.operator',
-              '@pronouns': 'sugar.pronoun',
-              '@primaryWords': 'sugar.keyword',
-              '@systemFunctions': 'sugar.system-function',
-              // 词表里没有的中文/日文名字 = 槽位原名或作者自定名（既不是语法词也不是英文残留）
-              '@default': 'sugar.slot',
-            },
-          },
-        ],
-        // 英文隐藏别名（小写）/ ERB 指令（全大写，行首已分档，此处兜底）
-        [
-          /[A-Za-z_][A-Za-z0-9_]*/,
-          {
-            cases: {
-              '@contMarks': 'sugar.cont',
-              '@englishAliases': 'sugar.keyword.alias',
-              // 运算符组的 ASCII 形（`不在` 的别名 `notin`）也要落档——此前漏 cases 会掉 identifier
-              '@operators': 'sugar.operator',
-              '@erbFamilyHeads': 'keyword.erb.family',
-              '@erbCommands': 'keyword.erb',
-              '@default': 'identifier',
-            },
-          },
-        ],
-        [/\b0x[0-9a-fA-F]+\b/, 'number.hex'],
-        [/\b\d+\b/, 'number'],
-        [/：/, 'sugar.colon'],
-        [/[+\-*/%<>!=&|^~?:.,()\[\]]/, 'operator'],
+        // 双引号串：只为隔离行尾注释（真源 `inlineCommentIndex` 把 `"` 当串界）。
+        // 开引号要求**本行**还有闭合引号（`(?=[^"]*")`）⇒ 串态天然不跨行，压在行尾的
+        // 落单 `"` 不会让下一行的行首 `;` 注释失明；落单引号按普通标点走（旧版同相）。
+        // 与串外共用同一批内容规则；引号本身给 `string.quote`（基线串色），内容各归原档。
+        [/"(?=[^"]*")/, { token: 'string.quote', next: '@dquote' }],
+        // 其余行内词法（台词 / 插值 / 中文词形 / 英文别名 / 数字 / 标点）——
+        // 与 `dquote` 串态**同一批规则对象**，见 KOJO_CONTENT_RULES 头注。
+        ...KOJO_CONTENT_RULES,
+      ],
+      /**
+       * 双引号串内：内容走同一批规则；`;` 在此状态没有规则可命中 ⇒ 不发 comment，
+       * 与真源「只剥引号外 `;`」同判。闭合引号必在同一行（开引号的前瞻已保证），
+       * 故本状态没有 `$` 兜底、也绝不带过行界。
+       */
+      dquote: [
+        [/"/, { token: 'string.quote', next: '@pop' }],
+        ...KOJO_CONTENT_RULES,
       ],
       /** ```erb 围栏内部：逐行原生，遇闭合围栏退出 */
       rawFence: [

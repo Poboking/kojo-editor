@@ -5,7 +5,7 @@ import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { CJK_WORD_PATTERN, CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
 import { editorOptionsForLineCount } from '../src/ui/editor-options';
-import { stubMonaco } from './monarch-harness';
+import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
 
 /**
  * `.kojo` **语言配置层**（`ILanguageConfiguration`）钉测 —— 打字手感那一层，与语义面
@@ -35,6 +35,27 @@ function kojoConfig(): Monaco.languages.LanguageConfiguration {
   };
   return entry.config;
 }
+
+/** Monarch def：与 `kojoConfig` 同一装配入口捕获，再交给 monarch-harness 真编译 */
+function kojoMonarch(): Monaco.languages.IMonarchLanguage {
+  const { monaco, captured } = stubMonaco();
+  registerKojoLanguage(monaco);
+  const def = captured.monarchs.get(KOJO_LANGUAGE_ID);
+  if (!def) throw new Error('没捕获到 kojo-sugar 的 Monarch def（装配面漂 = 注释判据整段失明）');
+  return def;
+}
+
+const KOJO_MONARCH = kojoMonarch();
+const kojoLexerP = compileMonarch(KOJO_LANGUAGE_ID, KOJO_MONARCH);
+
+/** 一行样例 → 真编译产物驱动出的发射序列（token 名带 `.kojo-sugar` 后缀） */
+async function driveKojo(line: string): Promise<Emit[]> {
+  return driveLexer(await kojoLexerP, line);
+}
+
+/** 注释档的发射文本拼起来（判据只看 `comment` 从哪开始、到哪结束） */
+const commentText = (emits: readonly Emit[]): string =>
+  emits.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('');
 
 /** monaco 深层 common 模块无 subpath 类型 ⇒ 变量路径动态 import（cjk-typing 同款手法） */
 async function monacoInternal(sub: string): Promise<Record<string, any>> {
@@ -173,10 +194,20 @@ describe('成对记号：brackets / autoClosingPairs / surroundingPairs 同源�
   });
 });
 
-/* ============================ 二、注释格 ============================ */
+/* ============================ 二、注释格（配置 + Monarch 词法） ============================ */
 
-describe('comments 格 = 词法真源', () => {
-  it('只认 `;` 一行注释，糖词法也真认它；`//` 在转译器里不是注释 ⇒ 本格不许长第二形', () => {
+/**
+ * 旧 → 新（CM-1，2026-10-20）：
+ * - 旧：Monarch 把 `^\s*;` 与 `^\s*\/\/` **都**涂成 comment，行尾 `;` 却没有任何规则
+ *   （`;` 落空 token）⇒ `// 说明` 被误涂成注释、`A = 1 ; 尾注释` 的注释不着色；
+ *   配置格的 `comments` 早已只认 `;`，两套判据因此分叉。
+ * - 新：`;` 是**唯一**行注释记号（对位 `kojo-sugar/lexer.ts` 的 `classifyLine` +
+ *   `stripInlineComment`）；`//` 只是两枚 `/` 运算符；行尾 `;` 起整段 comment（非锚定）。
+ *   串里的 `;` 与真源同判：`"…"`（`inlineCommentIndex` 的 `"` 串界）与台词 `「…」`
+ *   都不进注释，`[SKIPSTART]` / `[SKIPEND]` 标记行照旧不是注释。
+ */
+describe('comments 格 = 词法真源（Monarch 注释判据同源）', () => {
+  it('语言配置只认 `;` 一行注释，糖词法也真认它；`//` 在转译器里不是注释 ⇒ 本格不许长第二形', () => {
     const config = kojoConfig();
     expect(config.comments).toEqual({ lineComment: ';' });
     expect(config.comments!.blockComment).toBeUndefined();
@@ -184,6 +215,54 @@ describe('comments 格 = 词法真源', () => {
     expect(classifyLine(splitLogicalLines('// 说明')[0]!).kind).not.toBe('comment');
     // 同一枚 `;` 在两格里口径一致：既是注释符也是词分隔符
     expect(CJK_WORD_PATTERN.source).toContain(';');
+  });
+
+  it('Monarch：行首 `;` 整行 comment（缩进一并入注释，与 classifyLine 同判）', async () => {
+    const emitted = await driveKojo('  ; 说明');
+    expect(emitted).toEqual([{ text: '  ; 说明', token: 'comment.kojo-sugar' }]);
+  });
+
+  it('Monarch：行尾 `;` 起整段 comment，`A = 1` 仍是原档；注释尾巴不许二次发射', async () => {
+    const emitted = await driveKojo('A = 1 ; 尾注释');
+    const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
+    expect(emitted.find((e) => e.text === 'A')?.token.startsWith('identifier.'), joined).toBe(true);
+    expect(emitted.find((e) => e.text === '=')?.token.startsWith('operator.'), joined).toBe(true);
+    expect(emitted.find((e) => e.text === '1')?.token.startsWith('number.'), joined).toBe(true);
+    expect(commentText(emitted), joined).toBe('; 尾注释');
+    expect(emitted.find((e) => e.text === '尾注释'), '注释尾巴不许有第二处发射').toBeUndefined();
+  });
+
+  it('Monarch：`// 说明` 不是 comment（旧形退场）——两枚 `/` 落 operator、正文照常着色', async () => {
+    const emitted = await driveKojo('// 说明');
+    const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
+    expect(emitted.some((e) => e.token.startsWith('comment.')), joined).toBe(false);
+    expect(emitted.filter((e) => e.text === '/'), joined).toHaveLength(2);
+    expect(emitted.some((e) => e.token.startsWith('operator.')), joined).toBe(true);
+  });
+
+  it('Monarch：台词 `「」` 里的 `;` 不被切（speech 态先吃），行尾注释仍从 `」` 之后起', async () => {
+    const inside = await driveKojo('「台词;不是注释」');
+    expect(inside.some((e) => e.token.startsWith('comment.'))).toBe(false);
+    expect(inside.find((e) => e.text === '台词;不是注释')?.token.startsWith('sugar.speech.')).toBe(true);
+    const tail = await driveKojo('「台词」 ; 尾注释');
+    expect(commentText(tail)).toBe('; 尾注释');
+  });
+
+  it('Monarch：字符串 `"…"` 里的 `;` 不被切（真源 inlineCommentIndex 认 `"` 串界）', async () => {
+    const emitted = await driveKojo('别名 X = "a;b" ; 尾注释');
+    const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
+    expect(commentText(emitted), joined).toBe('; 尾注释');
+    expect(emitted.find((e) => e.text === 'a')?.token.startsWith('identifier.'), joined).toBe(true);
+    expect(emitted.find((e) => e.text === 'b')?.token.startsWith('identifier.'), joined).toBe(true);
+  });
+
+  it('Monarch：`[SKIPSTART]` / `[SKIPEND]` 标记行不进 comment，块内原生行照旧走指令档', async () => {
+    for (const marker of ['[SKIPSTART]', '[SKIPEND]']) {
+      const emitted = await driveKojo(marker);
+      expect(emitted.some((e) => e.token.startsWith('comment.')), marker).toBe(false);
+    }
+    const inside = await driveKojo('IF TFLAG:193 = 0');
+    expect(inside.find((e) => e.text === 'IF')?.token.startsWith('keyword.erb.'), '块内原生行仍是原档').toBe(true);
   });
 });
 
