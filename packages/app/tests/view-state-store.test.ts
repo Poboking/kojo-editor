@@ -3,16 +3,20 @@ import {
   clampSlice,
   clearViewStates,
   extractViewSlice,
+  foldRestoreState,
   flushViewStates,
   getViewState,
   MAX_ENTRIES,
+  MAX_FOLDS_PER_FILE,
+  MAX_TOTAL_FOLDS,
   setViewState,
   viewStateKey,
+  type SerializedFold,
   type ViewSlice,
 } from '../src/ui/view-state-store';
 
 /**
- * 视图状态持久层单测：round-trip、路径键归一化、损坏清洗、LRU 上限、钳制、防抖。
+ * 视图状态持久层单测：round-trip、路径键归一化、损坏清洗、LRU 上限、钳制、防抖、折叠预算。
  * localStorage 在 node 环境不可用 ⇒ 照 layout.test.ts 的桩风格注入替身。
  */
 
@@ -24,6 +28,20 @@ const sliceOf = (line: number, scrollTop = 100): ViewSlice => ({
   selections: [{ startLineNumber: line, startColumn: 2, endLineNumber: line, endColumn: 9 }],
   scrollTop,
   scrollLeft: 0,
+  folds: [],
+});
+
+const foldOf = (start: number, end: number, extra: Partial<SerializedFold> = {}): SerializedFold => ({
+  startLineNumber: start,
+  endLineNumber: end,
+  ...extra,
+});
+
+const selectionOf = (line: number): ViewSlice['selections'][number] => ({
+  startLineNumber: line,
+  startColumn: 2,
+  endLineNumber: line,
+  endColumn: 9,
 });
 
 function fakeStorage(): Storage {
@@ -94,6 +112,7 @@ describe('round-trip', () => {
       selections: [{ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 }],
       scrollTop: 0,
       scrollLeft: 0,
+      folds: [],
     });
   });
 
@@ -102,6 +121,102 @@ describe('round-trip', () => {
     setViewState(ROOT, FILE, { selections: [], scrollTop: 5, scrollLeft: 5 });
     flushViewStates();
     expect(getViewState(ROOT, FILE)).toBeNull();
+  });
+});
+
+describe('折叠存取（folds）', () => {
+  it('存取往返：折叠数组逐字相等（顺序 + type/isCollapsed/source/checksum）', () => {
+    installStorage(fakeStorage());
+    const folds: SerializedFold[] = [
+      { startLineNumber: 3, endLineNumber: 12, type: 'region', isCollapsed: true, source: 0, checksum: 123456 },
+      { startLineNumber: 20, endLineNumber: 31, isCollapsed: true, source: 2 },
+    ];
+    setViewState(ROOT, FILE, { ...sliceOf(5), folds });
+    flushViewStates();
+    installStorage(cloneCurrentStorage()); // 真·序列化往返
+    expect(getViewState(ROOT, FILE)?.folds).toEqual(folds);
+  });
+
+  it('旧 v1 条目没有 folds ⇒ 读入补 []（不迁移、不炸、光标照旧）', () => {
+    const s = fakeStorage();
+    s.setItem(
+      KEY,
+      JSON.stringify({
+        v: 1,
+        entries: {
+          [viewStateKey(ROOT, 'C:\\Projects\\era\\legacy.erb')]: {
+            selections: [selectionOf(6)],
+            scrollTop: 1,
+            scrollLeft: 2,
+          },
+        },
+      }),
+    );
+    installStorage(s);
+    expect(getViewState(ROOT, 'C:\\Projects\\era\\legacy.erb')).toEqual({
+      selections: [selectionOf(6)],
+      scrollTop: 1,
+      scrollLeft: 2,
+      folds: [],
+    });
+  });
+
+  it('条目内 folds 损坏：只清折叠、不丢光标；坏条摘除、好条存活', () => {
+    const s = fakeStorage();
+    s.setItem(
+      KEY,
+      JSON.stringify({
+        v: 1,
+        entries: {
+          [viewStateKey(ROOT, 'C:\\Projects\\era\\badfolds.erb')]: {
+            selections: [selectionOf(4)],
+            scrollTop: 0,
+            scrollLeft: 0,
+            folds: { nope: 1 },
+          },
+          [viewStateKey(ROOT, 'C:\\Projects\\era\\mixedfolds.erb')]: {
+            selections: [selectionOf(8)],
+            scrollTop: 0,
+            scrollLeft: 0,
+            folds: [foldOf(1, 3), { startLineNumber: 5, endLineNumber: 5 }, null, foldOf(7, 9)],
+          },
+        },
+      }),
+    );
+    installStorage(s);
+    const bad = getViewState(ROOT, 'C:\\Projects\\era\\badfolds.erb');
+    expect(bad?.folds).toEqual([]);
+    expect(bad?.selections).toEqual([selectionOf(4)]);
+    expect(getViewState(ROOT, 'C:\\Projects\\era\\mixedfolds.erb')?.folds).toEqual([foldOf(1, 3), foldOf(7, 9)]);
+  });
+
+  it('单文件预算：超过 MAX_FOLDS_PER_FILE 截断，保留靠前折叠', () => {
+    installStorage(fakeStorage());
+    const many = Array.from({ length: MAX_FOLDS_PER_FILE + 25 }, (_, i) => foldOf(i * 2 + 1, i * 2 + 2));
+    setViewState(ROOT, FILE, { ...sliceOf(1), folds: many });
+    const got = getViewState(ROOT, FILE)?.folds ?? [];
+    expect(got.length).toBe(MAX_FOLDS_PER_FILE);
+    expect(got[0]).toEqual(many[0]);
+    expect(got[MAX_FOLDS_PER_FILE - 1]).toEqual(many[MAX_FOLDS_PER_FILE - 1]);
+  });
+
+  it('全库预算：超了从最久未用条目起清空 folds、光标保留；新条目折叠优先保', () => {
+    installStorage(fakeStorage());
+    const perFile = 30;
+    const fileCount = Math.ceil(MAX_TOTAL_FOLDS / perFile) + 5; // 总折叠 > 预算
+    const foldsOf = (): SerializedFold[] => Array.from({ length: perFile }, (_, j) => foldOf(j * 2 + 1, j * 2 + 2));
+    for (let i = 0; i < fileCount; i++) setViewState(ROOT, `C:\\P\\fold${i}.erb`, { ...sliceOf(i + 1), folds: foldsOf() });
+    flushViewStates();
+    installStorage(cloneCurrentStorage()); // 超预算约束在落盘重载后也必须成立
+
+    let total = 0;
+    for (let i = 0; i < fileCount; i++) total += getViewState(ROOT, `C:\\P\\fold${i}.erb`)?.folds?.length ?? 0;
+    expect(total).toBeLessThanOrEqual(MAX_TOTAL_FOLDS);
+
+    const oldest = getViewState(ROOT, 'C:\\P\\fold0.erb');
+    expect(oldest?.folds).toEqual([]); // 最久未用：折叠让位
+    expect(oldest?.selections).toEqual([selectionOf(1)]); // 光标绝不被折叠挤掉
+    expect(getViewState(ROOT, `C:\\P\\fold${fileCount - 1}.erb`)?.folds?.length).toBe(perFile);
   });
 });
 
@@ -211,6 +326,31 @@ describe('越界钳制（clampSlice）', () => {
     const out = clampSlice(slice, 0, () => 4);
     expect(out.selections[0]).toEqual({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 });
   });
+
+  it('折叠随文件变短钳制：越尾两行折不掉就丢；位移过则丢 checksum；不抛', () => {
+    const slice: ViewSlice = {
+      selections: [{ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }],
+      scrollTop: 0,
+      scrollLeft: 0,
+      folds: [
+        foldOf(5, 15, { type: 'region', isCollapsed: true, source: 0, checksum: 99 }), // 5-15 → 5-10（位移）
+        foldOf(40, 50), // 起点越过文件尾 ⇒ 钳成 10-10 ⇒ 丢
+        foldOf(20, 30), // 整段越过文件尾 ⇒ 丢
+        foldOf(8, 9, { checksum: 7 }), // 几何未变 ⇒ checksum 原样保留
+      ],
+    };
+    const out = clampSlice(slice, 10, () => 80);
+    expect(out.folds).toEqual([
+      { startLineNumber: 5, endLineNumber: 10, type: 'region', isCollapsed: true, source: 0 },
+      { startLineNumber: 8, endLineNumber: 9, checksum: 7 },
+    ]);
+    expect(out.selections).toEqual(slice.selections); // 折叠钳制不影响光标钳制
+  });
+
+  it('文件只有 1 行：所有折叠丢弃且不抛', () => {
+    const out = clampSlice({ ...sliceOf(1), folds: [foldOf(1, 2), foldOf(3, 9)] }, 1, () => 1);
+    expect(out.folds).toEqual([]);
+  });
 });
 
 describe('extractViewSlice（Monaco 视图状态 → 子集）', () => {
@@ -233,6 +373,7 @@ describe('extractViewSlice（Monaco 视图状态 → 子集）', () => {
       selections: [{ startLineNumber: 7, startColumn: 2, endLineNumber: 7, endColumn: 15 }],
       scrollTop: 1234,
       scrollLeft: 56,
+      folds: [],
     });
   });
 
@@ -260,7 +401,60 @@ describe('extractViewSlice（Monaco 视图状态 → 子集）', () => {
       selections: [{ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }],
       scrollTop: 0,
       scrollLeft: 0,
+      folds: [],
     });
+  });
+
+  it('Monaco 0.57 现形：折叠在 contributionsState[editor.contrib.folding].collapsedRegions', () => {
+    const monacoLike = {
+      cursorState: [{ modelState: { position: { lineNumber: 7, column: 2 } } }],
+      contributionsState: {
+        'editor.contrib.folding': {
+          collapsedRegions: [
+            { startLineNumber: 2, endLineNumber: 9, isCollapsed: true, source: 0, checksum: 42 },
+            { startLineNumber: 2, endLineNumber: 9 }, // 同区间去重
+            { startLineNumber: 10, endLineNumber: 10 }, // 单行：不是折叠
+            { startLineNumber: 12, endLineNumber: 8 }, // 倒序
+            { startLineNumber: 'x', endLineNumber: 5 }, // 坏行号
+            { startLineNumber: 20, endLineNumber: 30, checksum: -1, isCollapsed: 'yes', type: 42, junk: 'drop' }, // 坏字段丢字段、不丢条目
+          ],
+          lineCount: 100,
+        },
+        'editor.contrib.other': { whatever: true },
+      },
+      viewState: {},
+    };
+    expect(extractViewSlice(monacoLike, 10, 20)?.folds).toEqual([
+      { startLineNumber: 2, endLineNumber: 9, isCollapsed: true, source: 0, checksum: 42 },
+      { startLineNumber: 20, endLineNumber: 30 },
+    ]);
+  });
+
+  it('兼容 viewState.folds 直挂形与旧版贡献直返数组形；缺失/非数组 ⇒ []', () => {
+    const cursorState = [{ modelState: { position: { lineNumber: 1, column: 1 } } }];
+    expect(extractViewSlice({ cursorState, folds: [foldOf(1, 4)] }, 0, 0)?.folds).toEqual([foldOf(1, 4)]);
+    expect(
+      extractViewSlice({ cursorState, contributionsState: { 'editor.contrib.folding': [foldOf(3, 8)] } }, 0, 0)?.folds,
+    ).toEqual([foldOf(3, 8)]);
+    expect(extractViewSlice({ cursorState }, 0, 0)?.folds).toEqual([]);
+    expect(extractViewSlice({ cursorState, folds: 'nope' }, 0, 0)?.folds).toEqual([]);
+  });
+
+  it('折叠数量在抽取阶段就按文件预算截断', () => {
+    const cursorState = [{ modelState: { position: { lineNumber: 1, column: 1 } } }];
+    const folds = Array.from({ length: MAX_FOLDS_PER_FILE + 10 }, (_, i) => foldOf(i * 2 + 1, i * 2 + 2));
+    expect(extractViewSlice({ cursorState, folds }, 0, 0)?.folds?.length).toBe(MAX_FOLDS_PER_FILE);
+  });
+});
+
+describe('foldRestoreState（喂回 folding contribution）', () => {
+  it('空/缺省 ⇒ null；非空 ⇒ { collapsedRegions } 深拷贝', () => {
+    expect(foldRestoreState(undefined)).toBeNull();
+    expect(foldRestoreState([])).toBeNull();
+    const folds = [foldOf(1, 5, { isCollapsed: true, source: 0, checksum: 10 })];
+    const state = foldRestoreState(folds);
+    expect(state).toEqual({ collapsedRegions: folds });
+    expect(state?.collapsedRegions).not.toBe(folds); // 不复用内部引用
   });
 });
 
