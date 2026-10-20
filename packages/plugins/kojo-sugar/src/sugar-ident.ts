@@ -33,6 +33,10 @@
  * **回调**（`TernaryRender` 一类）传入，而不是通过第二份规则表。
  */
 
+// 行首 / 行尾 / 缩进折算的唯一真源（CHARSET-SS 批）：本文件此前手写 `[ \t　]` 两份与一份
+// 折算算法，与 lexer / formatter 各自漂移。`blank-charset.ts` 是零依赖叶子，不造环。
+import { indentLevelOf as sharedIndentLevelOf, leadingBlank, trimTrailingBlank } from './blank-charset';
+
 /* ============================== 行工具（两侧共用一份） ============================== */
 
 /** 切源行（EOL 归一为 `\n`；去掉末尾空尾行） */
@@ -43,28 +47,19 @@ export function splitSourceLines(source: string): string[] {
   return lines;
 }
 
-/** 去行首缩进 + 行尾空白 */
+/** 去行首缩进 + 行尾空白（字符集 / 折算全走 `blank-charset.ts` 的唯一真源，此处不写第二份） */
 export function contentOf(line: string): string {
-  return line.replace(/^[ \t　]*/, '').replace(/[ \t　]+$/, '');
+  return trimTrailingBlank(line.slice(leadingBlank(line).length));
 }
 
 /** 去行尾空白（TAB / 空格 / 全角空格；PRINT 行"空体 vs 有体"的判据靠它，两侧同口径） */
 export function trimTrailingSpace(text: string): string {
-  return text.replace(/[ \t　]+$/, '');
+  return trimTrailingBlank(text);
 }
 
-/** 缩进层级（TAB =1、全角空格 =2、空格按 4 折算；与 lexer 的 `indentLevel` 同口径） */
+/** 缩进层级（TAB =1、全角空格 =2、空格按 4 折算；与 lexer 同**一份**实现，不是同算法抄两份） */
 export function indentLevelOf(line: string): number {
-  const m = /^[ \t　]*/.exec(line);
-  const prefix = m ? m[0] : '';
-  let tabs = 0;
-  let spaces = 0;
-  for (const ch of prefix) {
-    if (ch === '\t') tabs++;
-    else if (ch === '　') spaces += 2;
-    else if (ch === ' ') spaces += 1;
-  }
-  return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
+  return sharedIndentLevelOf(line);
 }
 
 /** 行首指令词（大写） */

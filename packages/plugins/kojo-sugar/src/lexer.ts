@@ -50,7 +50,6 @@ import {
   CONT_MARKS,
   DIM_DIRECTIVE_RE,
   HEAD_DECL_KEYS,
-  FULLWIDTH_SPACE,
   FULLWIDTH_COLON,
   endsWithBlockColon,
   lookupKeyword,
@@ -64,6 +63,9 @@ import { STATEMENT_FUNCTIONS } from './statement-functions';
 // TRY 系九枚的名单真源（`sugar-ident` 是零依赖叶子模块，与本模块无环；`native-display/control.ts`
 // 取的是同一张表）——本包只**派生**并集，绝不抄第二份名单。
 import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from './sugar-ident';
+// 空白 / 缩进字符集的唯一真源（CHARSET-SS 批）：行首、缩进折算、行尾去空白全走同一张表，
+// 此处不再自持 `[ \t\u3000]` 正则或第二份折算算法。
+import { indentLevelOf, leadingBlank, trimTrailingBlank } from './blank-charset';
 import type { DiagnosticSink } from './types';
 
 /* ============================== 物理行 → 逻辑行 ============================== */
@@ -127,13 +129,12 @@ export function splitLogicalLines(source: string): LogicalLine[] {
       segments.push({ offset: text.length, line: endLine, column: head + 1 });
       text += next.trimStart();
     }
-    const rawIndentMatch = /^[ \t\u3000]*/.exec(text)!;
-    const rawIndent = rawIndentMatch[0];
+    const rawIndent = leadingBlank(text);
     out.push({
       line: startLine,
       endLine,
       text,
-      indent: indentLevel(rawIndent),
+      indent: indentLevelOf(rawIndent),
       rawIndent,
       segments,
     });
@@ -175,21 +176,15 @@ export function logicalPosition(segments: readonly FoldSegment[], offset: number
   return { line: seg.line, column: seg.column + Math.max(0, offset - seg.offset) };
 }
 
-/** 缩进折算：TAB = 1 级；空格每 4 个 = 1 级（余数按 1 级算，避免半级丢失）；全角空格同理 */
-function indentLevel(rawIndent: string): number {
-  let tabs = 0;
-  let spaces = 0;
-  for (const ch of rawIndent) {
-    if (ch === '\t') tabs++;
-    else if (ch === FULLWIDTH_SPACE) spaces += 2;
-    else if (ch === ' ') spaces += 1;
-  }
-  return tabs + (spaces > 0 ? Math.ceil(spaces / 4) : 0);
-}
+/** 缩进折算的真源在 `blank-charset.ts::indentLevelOf`（CHARSET-SS 批：此前本文件与 `sugar-ident`
+ * 各有一份同算法实现，改一处忘一处就分叉）。 */
 
 /** 去掉行首缩进与行尾空白（保留内部空白） */
 export function contentOf(line: LogicalLine): string {
-  return line.text.slice(line.rawIndent.length).replace(/\s+$/, '');
+  // 行尾只剥**空白字符集**（空格 / TAB / 全角空格）：NBSP 一类不是缩进也不是排版空白，
+  // 是作者写下的内容（口径见 `blank-charset.ts` 文件头）——此前这里用 JS 的 `\s+`，
+  // 会把 NBSP 剥掉，同一行因而被 `classifyLine` 判成 `blank`，与 `sugar-ident` / 格式化器分叉。
+  return trimTrailingBlank(line.text.slice(line.rawIndent.length));
 }
 
 /**
@@ -213,7 +208,7 @@ export function inlineCommentIndex(content: string): number {
  */
 export function stripInlineComment(content: string): string {
   const i = inlineCommentIndex(content);
-  return i < 0 ? content : content.slice(0, i).replace(/\s+$/, '');
+  return i < 0 ? content : trimTrailingBlank(content.slice(0, i));
 }
 
 /* ============================== 行分类（词法决策） ============================== */
@@ -1799,7 +1794,7 @@ export function stripCont(
     );
     if (re.test(content)) {
       const stripped = content.replace(re, (m0) => (m0.startsWith(' ') ? '' : ''));
-      return { text: stripped.replace(/\s+$/, ''), wait: false };
+      return { text: trimTrailingBlank(stripped), wait: false };
     }
   }
   return { text: content, wait: true };

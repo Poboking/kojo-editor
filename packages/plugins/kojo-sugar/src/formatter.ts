@@ -70,6 +70,9 @@ import {
   type LineClass,
   type LogicalLine,
 } from './lexer';
+// 行首缩进 / 纯空白行的字符集唯一真源（CHARSET-SS 批）：此前这里是 `isIndentChar` 的第三份
+// 手写字符比较；现在与 lexer / sugar-ident 同一张表，同一行在三处必然同判。
+import { isAllBlank, leadingBlank } from './blank-charset';
 
 /** 方言：`kojo` = 表层 DSL（缩进是语法）；`erb` = 原生脚本（缩进只是排版） */
 export type FormatDialect = 'erb' | 'kojo';
@@ -162,21 +165,9 @@ function splitPhysical(text: string): PhysicalLine[] {
   return out;
 }
 
-function isIndentChar(ch: string): boolean {
-  return ch === ' ' || ch === '\t' || ch === FULLWIDTH_SPACE;
-}
-
-/** 行首空白串（口径同 lexer 的 `rawIndent`：空格 / TAB / 全角空格，只是这里不写第二份正则） */
-function leadingIndent(content: string): string {
-  let i = 0;
-  while (i < content.length && isIndentChar(content[i]!)) i++;
-  return content.slice(0, i);
-}
-
-/** 整行都是空白（含全角）——`U+3000` 独占行与 `' '` 独占行同判 */
+/** 整行都是空白（含全角）——`U+3000` 独占行与 `' '` 独占行同判；字符集见 `blank-charset.ts` */
 function isAllIndent(content: string): boolean {
-  for (const ch of content) if (!isIndentChar(ch)) return false;
-  return true;
+  return isAllBlank(content);
 }
 
 /** 注释 / 文本区：全角空格 → 一个半角空格（与 `EditorPane` 既有的「替换为半角并保存」同口径） */
@@ -403,7 +394,7 @@ function erbNewContent(content: string, rules: ResolvedRules): string | null {
     if (!rules.fullWidthSpace && content.includes(FULLWIDTH_SPACE)) return null;
     return '';
   }
-  const indent = leadingIndent(content);
+  const indent = leadingBlank(content);
   const rest = content.slice(indent.length);
   // 折算关 ⇒ 缩进与注释区都原样（返回与原串相等 ⇒ 上层记 null）
   const newIndent = rules.fullWidthSpace ? halfwidthInIndent(indent) : indent;
