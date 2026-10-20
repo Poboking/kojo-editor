@@ -179,9 +179,11 @@ function expectEquivalent(step: StepRecord, invariant: string): void {
 
 describe('结构叠层 · 窗口/缓存三条不变量（每一步增量都必须与整篇逐字节相等，并且确实走了那条路）', () => {
   it('①删掉一直伸到文末的区间：落在被删区间里的结果要作废，不许当成"窗口之后"平移复用', async () => {
-    // 文末两行各带一条会着色/折叠的内容（注释 + 台词）。整段删到 EOF 时，窗口只能盖到新版文档
+    // 文末两行各带一条会着色的内容（注释 + 赋值头）。整段删到 EOF 时，窗口只能盖到新版文档
     // 末尾那一枚节点 ⇒ 被删区间里那两条若按"整枚在窗口之后"平移复用，屏上就是删掉的行还在着色。
-    const tail = ';收尾注释\n「收尾台词」\n';
+    // 尾行**刻意不用台词**：2026-10-20 起"编辑碰了 「」⇒ 这一趟整篇重查"是硬规则（两枚台词串
+    // 会被并成一枚、合并跨度起点落在窗口外），用台词做夹具会让这条用例走 full 而钉不住窗口那条腿。
+    const tail = ';收尾注释\n变量甲 = 1\n';
     const doc = `${filler(PREFIX_LINES)}\n${tail}`;
     const { base, steps } = await replay(doc, [{ row: PREFIX_LINES, del: tail.length, ins: '' }]);
     const step = steps[0]!;

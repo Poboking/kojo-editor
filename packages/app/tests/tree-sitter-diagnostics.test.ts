@@ -159,10 +159,34 @@ describe('结构残缺事实（真 wasm 折出来的那些行）', () => {
   }, 180_000);
 
   it('残缺过多时截断并如实带 truncated（不把编辑器变成装饰刷）', async () => {
-    const text = Array.from({ length: KOJO_STRUCTURE_MAX_SYNTAX_FAULTS + 20 }, (_unused, i) => `「第 ${i} 句没写完`).join('\n');
+    // 形状：200 条**各自独立**的未收盘循环，每条都带正文与台词体 ⇒ 实测 64 条（= MAX）残缺 + truncated。
+    // 为什么换形状：上一版用"1040 行连续未闭合的「"；台词串改成带子节点的规则之后，恢复器把它们
+    // **并成 2 枚**（一枚没合上的引号不该画 1040 条波浪线，这是改进）⇒ 旧形状再也够不上截断门槛。
+    const body = Array.from(
+      { length: 200 },
+      (_unused, i) => `    循环：\n        变量${i} = ${i}\n        「句 ${i}。」`,
+    ).join('\n');
+    const text = ['角色: 12', '时机 指令 900：', body].join('\n');
     const { faults, truncated } = await faultsOf(text);
     expect(truncated).toBe(true);
     expect(faults.length).toBeLessThanOrEqual(KOJO_STRUCTURE_MAX_SYNTAX_FAULTS);
+  }, 180_000);
+
+  it('1040 行连续未闭合的「：恢复器并成少数几枚，上屏条数有界且落点自洽', async () => {
+    const text = Array.from({ length: 1040 }, (_unused, i) => `「第 ${i} 句没写完`).join('\n');
+    const { faults, truncated } = await faultsOf(text);
+    const lineCount = text.split('\n').length;
+    // 并成 2 枚 ⇒ 够不上截断门槛；但"上屏条数有界 + 每条都指得回作者那一行"这条不变量照旧成立。
+    expect(truncated).toBe(false);
+    expect(faults.length).toBeLessThanOrEqual(2);
+    for (const fault of faults) {
+      expect(fault.kind).toBe('unterminated-string');
+      expect(fault.row).toBeGreaterThanOrEqual(0);
+      expect(fault.row).toBeLessThan(lineCount);
+      expect(fault.faultRow).toBeLessThan(lineCount);
+      expect(fault.row).toBeLessThanOrEqual(fault.faultRow);
+      expect(fault.endColumn).toBeGreaterThan(fault.column);
+    }
   }, 180_000);
 });
 

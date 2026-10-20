@@ -869,13 +869,19 @@ export class StructureEngine {
     const head = parent ? parent.childForFieldName('open') : null;
     const faultRow = node.startPosition.row;
     if (!head) {
-      // 认不出块头（语法换了形状）：仍然报"这里有东西没等到"，但不编块头文案
+      // 认不出块头（语法换了形状）：仍然报"这里有东西没等到"，但不编块头文案。
+      // 类别沿用 {@link kindOfErrorLine} 那条**行面记号**判据（与 `errorFault` 同一个口径，
+      // 不是新造判据）：本波之后没合上的台词引号 / 没闭合的插值由 ERROR 改产 MISSING
+      // （`speech_close` 一类），这一支要是写死 `unexpected-token`，作者看到的就只剩"这行读不通"。
+      // 输入取 parent 的首行文本——parent 为空或该行既无 `「` 也无 `{` 时它自然回
+      // `unexpected-token`，零行为变化。**不许**改成读子节点类型判类别（理由见该函数头注）。
+      // 落点口径一个都不动：仍是残缺点自己那一行，只是类别说得更准。
       return {
         row: faultRow,
         endRow: faultRow,
         column: node.startPosition.column,
         endColumn: node.startPosition.column + 1,
-        kind: 'unexpected-token',
+        kind: kindOfErrorLine(firstLine(parent ? parent.text : '')),
         faultRow,
         expectedToken: node.type,
       };
@@ -1142,7 +1148,17 @@ export class StructureEngine {
     const rangesStarted = this.stamp();
     const shift = rowShift(request);
     this.beginPass('window');
-    const window = this.buildWindow(oldTree, next, request, shift, nextText.length, reparse.index);
+    // 编辑碰了台词引号 ⇒ 这一趟**整篇**重查（`window = null` 就是既有那条"退回整篇"通道）。
+    // 理由（2026-10-20 等价闸实测 7 步漂，全在行分类面）：`string` 现在是带子节点的规则，
+    // 删掉一枚 `「` 会把两枚台词串**并成一枚**——合并后的跨度起点落在改动窗口**之外**，
+    // 缓存里那条旧槽会被"整枚在窗口之后"平移复用 ⇒ 增量比整篇多出一条且永不自愈。
+    // 引号编辑是低频动作，整篇代价只在这一次击键上付；换来的是"增量 == 整篇"这条硬等价。
+    const quoteTouched =
+      /[「」]/.test(request.newText) ||
+      /[「」]/.test(this.documentText.slice(request.start.offset, request.oldEnd.offset));
+    const window = quoteTouched
+      ? null
+      : this.buildWindow(oldTree, next, request, shift, nextText.length, reparse.index);
     this.elapsed('changedRanges', rangesStarted);
     oldTree.delete();
     this.tree = next;
