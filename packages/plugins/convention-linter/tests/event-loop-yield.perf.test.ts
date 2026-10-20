@@ -28,7 +28,13 @@ import { setSugarTranspileProvider } from '../src/rules/sugar-conventions';
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
-const KOJO_COUNT = 600;
+/**
+ * 600 → **1200**（2026-10-20 CI 实测后抬）：`totalMs > 200` 是「体感尺成立」的**规模前置**
+ * （整轮才 200 ms 时，`blockMs < total×0.6` 与 `< 300` 两条没有意义），不是性能指标。
+ * 600 在最快的 CI runner 上整轮落在 **199.82 ms**（run 39367625820；上一跑 198.62 ms），
+ * 恰好压在线上、偶发跑红 ⇒ 抬规模让最快 runner 也有 ≈2× 余量；**下限 200 一字不动**。
+ */
+const KOJO_COUNT = 1200;
 
 /** 一棵中等分量的 `.kojo`（多个时机块 + 会出诊断的写法 ⇒ 转译器真在算，不是空跑循环） */
 function kojoSource(index: number): string {
