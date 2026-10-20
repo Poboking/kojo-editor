@@ -14,7 +14,6 @@
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
-| SMOKE-FEATURES-RED | `tools/smoke-editor-features.mjs` 在 daemon-free 端口上三项功能断言红：`KOJO_SMOKE_VITE_PORT=1445 node tools/smoke-editor-features.mjs` ⇒ 15 PASS / 3 FAIL / 1 SKIP，屏上原样：`❌ f4 💡 灯…未见 lightbulb`、`❌ f3 补全弹窗…未见补全弹窗`、`❌ f10 Unicode 高亮…8s 内未见 .unicode-highlight`（f4b/f3c 连带 SKIP）。期望三项 PASS | 判据：先在**基线树**（同 commit 不带宽端口收口）跑同一命令复现 ⇒ 分清「既有红 / 本批回归」；本批只改端口解析与 store 还原，未动任何断言。1420 属另一活会话，未触碰 | 待认领（发现：e19erb 2026-10-20） |
 | COND-MULTILINE-OPAQUE | 条件抽取对 `{`…`}` + 行尾 `&&` 的**多行 IF 表达式**判 opaque、不进谓词：魔王改版 18 函数 / 36 谓词、官方 4.842 7 函数 / 19 谓词；三盘未解析谓词 36 / 19 / 41（样例 `K17_性交系コマンド.ERB` 多行 IF、`EVENT_K2_DAILY.ERB:224` 的 `DEVENT(@"%TEXTS("…")%…")` 嵌套引号） | 判据：修后 `unresolved` 计数下降且不新增假谓词；opaque 仍必须可查（现状不静默）；不许放宽既有谓词判据 | 待认领（发现：e19erb 2026-10-20） |
 | SEARCH-GLOB-WIRE | 检索面板的 glob 过滤**假生效**：`SearchFilterBar` 显示「glob 生效」、Rust `SearchOptionsDto.globs` 也已支持，但 `search-store.runSearch` 只发 `extensions`，`parseFileFilter(getGlobFilterText()).globs` 从未进入请求 | 复现：在检索框输入 `*.ERB` 类 glob 再检索，结果不被过滤。修法（W6-G 已给一行草案）：`options: { ...state.options, extensions, ...(globs.length ? { globs } : {}) }`；补一条「请求里带 globs」的用例；不得放宽既有 extensions 判据 | 待认领 · 发现：W6-G 2026-10-20 |
 | SEARCH-REVEAL-NOFOCUS | 检索面板**连续回车逐项跳失焦**：`editor.revealLocation` 的落点腿会 `ed.focus()`（`EditorPane.applyReveal`），从检索框按第二次回车时焦点已在编辑器 ⇒ 只能跳一项 | 期望：键盘导航在检索框内连续跳（VS Code 行为）。修法：契约 `editor.revealLocation` 加 additive `focus?: boolean`（缺省 true），SearchPanel 键盘导航传 false，`applyReveal` 据此决定是否 `ed.focus()`；补两条用例（同文件 / 跨文件） | 待认领 · 发现：W6-G 2026-10-20 |

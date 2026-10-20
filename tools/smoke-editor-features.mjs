@@ -4,15 +4,17 @@
  *
  * 为什么要有它：体积读数（入口块变小）**证明不了功能还在**。本探针用合成小项目 +
  * 真实桌面壳 + CDP，把「日常写作真正会用的 Monaco 功能」逐条钉成可复跑断言：
- * 挂载 / 词法高亮（tokenize）/ marker 波浪线 / 补全弹窗 / 💡 / 查找 / 撤销重做 /
+ * 挂载 / 词法高亮（tokenize）/ marker 波浪线 / 补全弹窗 / 查找 / 撤销重做 /
  * 括号匹配 / 行注释 / 折叠 / Unicode 高亮 / 主题 / 粘滞滚动；另附 dev 形态
  * monaco 模块请求数读数（瘦身前后对比用，不设 PASS 判据——那是读数不是判据）。
+ * （💡 已退役：本探针走「只读浏览」，而现存供方都要求可写文件；旧期望来自 LIFT-2 已删的
+ *  `ui-sugar-lift` 写回建议，详见文件内退役注。）
  *
  * 形态照 `tools/smoke-tauri-ipc.mjs`：起 tauri dev（CDP 9222）+ store 备份/还原。
  * 合成项目（临时目录，跑完删）：
  *   ERB/口上・メッセージ関連/個人口上/001 Reimu [霊夢]/M_KOJO_K1_口上.ERB  ← 缺 ENDIF（波浪线）
  *   ERB/口上・メッセージ関連/個人口上/001 Reimu [霊夢]/長文.ERB          ← 120 行（粘滞滚动）
- *   ERB/口上・メッセージ関連/個人口上/001 Reimu [霊夢]/lift-demo.kojo   ← 💡 + 打字类断言
+ *   ERB/口上・メッセージ関連/個人口上/001 Reimu [霊夢]/lift-demo.kojo   ← 补全 / Unicode / 打字类断言
  *   CSV/Chara/Chara1 霊夢.csv（detect/loadProject 的最小合法输入，参照 adapter 测试夹具）
  *   sav/（空目录，避免 watcher 噪声）
  *
@@ -261,14 +263,18 @@ function writeFixtures() {
 
   // .kojo（打字类断言的主战场——非方言文件，编辑器可编辑）：
   // - 第 3/4 行是原生 ERB 直通行 = 💡「改为语法糖写法」的候选（sugar-lift 只对 .kojo 供）
-  // - 末行注释里的 Cyrillic `а`/`е`（\u0430/\u0435）= Unicode 高亮（ambiguous）断言对象；
-  //   该混淆对在 _default 与 ja/zh 各 locale 表里都标为 ambiguous（base/common/strings.js）
+  // - 倒数第二行是**正文行**（不是注释）：Monaco 的 `unicodeHighlight.includeComments`
+  //   在受信工作区默认 false ⇒ 字符放注释里永远看不到高亮（旧夹具就是放注释里，探针假红）；
+  //   该混淆对（Cyrillic а/е）在 _default 与 ja/zh 各 locale 表里都标为 ambiguous。
+  // - `\t如` 是补全探针的落点：行首 token 已输入（非空白、非注释）⇒ 词表位置门放行，
+  //   Ctrl+Space 的空词请求才拿得到候选（注释行 / 空行按设计不供）。
   const kojo = [
     '角色: 1',
     '时机 指令 310：',
     '\tPRINTFORMDW 甲。',
     '\tPRINTFORMDL 乙。',
-    '; 注釈 unicode l\u0430t\u0435st probe',
+    '\t注釈 unicode l\u0430t\u0435st probe',
+    '\t如',
     '',
   ].join('\n');
   fs.mkdirSync(path.dirname(KOJO_PATH), { recursive: true });
@@ -730,66 +736,15 @@ async function main() {
     // 先等标记与装饰链热起来（同一编辑器复用，稳妥）
     await sleep(600);
 
-    /* f4 💡：光标停在原生 ERB 直通行（PRINTFORMDW 甲。）→ lightbulb（内容位或 gutter 位） */
-    {
-      const rect = await lineRect(cdp, 'PRINTFORMDW');
-      if (!rect) throw new Error('找不到 PRINTFORMDW 行');
-      await cdp.click(rect.xIn, rect.y);
-      await sleep(500);
-      const bulb = await tryWaitFor(cdp, `(() => {
-        const content = document.querySelector('.editor-body .lightBulbWidget');
-        const contentVisible = content && content.getBoundingClientRect().width > 0 && content.getBoundingClientRect().height > 0;
-        const gutter = document.querySelector('.editor-body .glyph-margin-widgets .cgmr[class*="gutter-lightbulb"]');
-        return Boolean(contentVisible || gutter);
-      })()`, 8000);
-      const bulbInfo = await cdp.evalJs(`(() => {
-        const content = document.querySelector('.editor-body .lightBulbWidget');
-        const gutter = document.querySelector('.editor-body .glyph-margin-widgets .cgmr[class*="gutter-lightbulb"]');
-        return {
-          content: content ? { w: Math.round(content.getBoundingClientRect().width), h: Math.round(content.getBoundingClientRect().height), cls: content.className } : null,
-          gutter: gutter ? gutter.className : null,
-        };
-      })()`);
-      if (bulb) P('f4', '💡 灯（kojo-code-action / sugar-lift）', JSON.stringify(bulbInfo));
-      else F('f4', '💡 灯（kojo-code-action / sugar-lift）', `未见 lightbulb：${JSON.stringify(bulbInfo)}`);
+    /* f4/f4b 💡 已退役（2026-10-20，SMOKE-FEATURES-RED 定责）：
+       本工具 a1 选择「只读浏览」⇒ 合成工程没有任何可写路径，而现存三家供方
+       （`erb-structure-fix` / `sugar-quickfix` / `convention-quickfix`）**都**以
+       `io.isWritable(path)` 为门槛（只读文件不给动作，免得把缓冲改脏却存不下去）。
+       旧探针期望的灯泡来自 `ui-sugar-lift` 的「转成 .kojo 写法」，该动作已在 LIFT-2
+       （315cdd2，2026-10-19）删除 ⇒ 在这套只读场景里灯泡**按设计**不会出现。
+       要正向验灯泡，需要「可写作者工作区」这一另一种场景，不属本冒烟；此处不留假断言。 */
 
-      // f4b 点开 💡 菜单（PITFALLS §三-48：先 hover 再点；菜单行 .context-view .monaco-list-row.action）
-      if (bulb) {
-        const bulbRect = await cdp.evalJs(`(() => {
-          const content = document.querySelector('.editor-body .lightBulbWidget');
-          const r0 = content && content.getBoundingClientRect();
-          if (r0 && r0.width > 0) return { x: Math.round(r0.left + r0.width / 2), y: Math.round(r0.top + r0.height / 2) };
-          const gutter = document.querySelector('.editor-body .glyph-margin-widgets .cgmr[class*="gutter-lightbulb"]');
-          const r1 = gutter && gutter.getBoundingClientRect();
-          if (r1) return { x: Math.round(r1.left + r1.width / 2), y: Math.round(r1.top + r1.height / 2) };
-          return null;
-        })()`);
-        let menuOpened = false;
-        if (bulbRect) {
-          await cdp.move(bulbRect.x, bulbRect.y);
-          await sleep(400);
-          await cdp.click(bulbRect.x, bulbRect.y);
-          menuOpened = await tryWaitFor(cdp, `(() => {
-            const rows = [...document.querySelectorAll('.context-view .monaco-list-row.action')];
-            return rows.some((r) => { const b = r.getBoundingClientRect(); return b.width > 150 && b.height > 0; });
-          })()`, 6000);
-          const menuInfo = await cdp.evalJs(`(() => {
-            const rows = [...document.querySelectorAll('.context-view .monaco-list-row.action')];
-            return rows.map((r) => (r.innerText || '').trim()).slice(0, 5);
-          })()`);
-          if (menuOpened) P('f4b', '💡 菜单展开（动作行可见）', `动作行：${JSON.stringify(menuInfo)}`);
-          else F('f4b', '💡 菜单展开（动作行可见）', `点击后菜单未出：rows=${JSON.stringify(menuInfo)}`);
-          await cdp.press('Escape', 'Escape', 27);
-          await sleep(300);
-        } else {
-          S('f4b', '💡 菜单展开（动作行可见）', 'lightbulb 无几何（不可点）——未自动化点开');
-        }
-      } else {
-        S('f4b', '💡 菜单展开（动作行可见）', 'f4 已红，跳过点开');
-      }
-    }
-
-    /* 打字测试前：在末行（注释行）末尾落光标 */
+    /* 打字测试前：在正文行末尾落光标 */
     const cursorToEnd = async () => {
       const rect = await lineRect(cdp, 'unicode');
       if (!rect) throw new Error('找不到 unicode 注释行');
@@ -798,16 +753,14 @@ async function main() {
       return rect;
     };
 
-    /* f3 补全弹窗：**不输入任何字符**直接 Ctrl+Space（空词 = 全部候选不被过滤掉）。
-       旧夹具打「PR」指望词法候选——但 `wordBasedSuggestions` 是 1012 批的产品级关闭项
-       （ERB/中文口上上无语义价值），`.kojo` 的静态候选也不以拉丁前缀命中 ⇒ 恒 0 行是探针口径错，不是管道断。 */
+    /* f3 补全弹窗：在**正文行**的行首 token 末尾（`\t如`）按 Ctrl+Space。
+       位置门（`kojoLexiconAvailableAt`）的 a/b 两支：空行、注释行**按设计不供**候选——
+       旧探针落在注释行行首（`Home` 到 `;` 之前）必得 0 行：弹窗开了、0 行 = 产品正确、探针落点错。
+       f 支：行首 token 已有输入且其前全空白 ⇒ 词表整表照供，空词请求不被前缀过滤。 */
     {
-      // 落点=注释行**行首**（';' 之前）：那里 word 为空 ⇒ 不过滤，静态候选全量可见。
-      // 行末尾会把「probe」当过滤词，中文关键字/保留代词全被滤掉 = 0 行（产品正确、探针落点错）。
-      const startRect = await lineRect(cdp, 'unicode');
-      if (!startRect) throw new Error('找不到 unicode 注释行');
-      await cdp.click(startRect.xIn, startRect.y);
-      await cdp.press('Home', 'Home', 36); // 落到行首：word 为空 ⇒ 不过滤，静态候选全量可见
+      const startRect = await lineRect(cdp, '如');
+      if (!startRect) throw new Error('找不到补全探针行（正文 `如`）');
+      await cdp.click(startRect.xEnd, startRect.y);
       await sleep(300);
       await cdp.press(' ', 'Space', 32, 2); // Ctrl+Space
       const shown = await tryWaitFor(cdp, `!!document.querySelector('.editor-body .suggest-widget.visible')`, 8000);
