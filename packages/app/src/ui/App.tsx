@@ -551,6 +551,33 @@ export function App(): ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kernel]);
 
+  // PEEK-STACK：同文件就地跳转（不经过 revealLocation）也要进导航历史——插件侧只记账、
+  // 宿主在这里**只**pushNav，绝不 requestOpenFile（那会导致跳两次）。
+  useEffect(() => {
+    if (!kernel) return;
+    const un = kernel.bus.on('editor.navigated', (ev) => {
+      const t = revealTargetOf({ line: ev.line, column: ev.column, span: ev.span }, Date.now());
+      const endCol =
+        t.column !== undefined && t.span !== undefined && t.span.columnEnd > t.column
+          ? t.span.columnEnd
+          : undefined;
+      navRef.current = pushNav(
+        navRef.current,
+        {
+          path: ev.filePath,
+          line: t.line,
+          ...(t.column !== undefined ? { column: t.column } : {}),
+          ...(endCol !== undefined ? { endColumn: endCol } : {}),
+        },
+        rootDirRef.current,
+      );
+    });
+    return () => {
+      un();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kernel]);
+
   // 外链打开意图：插件够不着平台，跨层走总线（与 editor.revealLocation 同款分工）。
   // 闸（https + 主机白名单）的唯一执法点在 Rust，这里不复制白名单；被拒时 toast 一句
   // ——主机闸让失败面只剩"非白名单 URL"这种发起方就不该发出的输入，log 级静默不可接受
