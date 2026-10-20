@@ -157,10 +157,36 @@ export function functionNameTokenAt(lineText: string, column: number): SymbolTok
 }
 
 /**
+ * 码元/码点的记号分类缓存（W7-G，2026-10-20 着色腿归因）。
+ *
+ * **为什么要有**：5,000 行合成 ERB 的单次 `scanFileRefs` 读数 median 31.6 ms，
+ * 其中 25.7 ms 花在 `IDENT_ONE.test` 上——Unicode 字母/数字属性类的 `/u` 正则对
+ * 每个**非 ASCII 码元**各跑一次，而语料里 CJK 正文有 13.7 万个字符（真语料口上台词同理）。
+ * 分类只取决于码点本身，与上下文无关，所以按码元（BMP，含落单代理项）与码点
+ * （代理对合成的增平面字符）各缓存一次：同一进程里同一字符只问正则一遍。
+ *
+ * **判据没换**：命中的那个 `2 / 1 / 0` 仍是 `IDENT_ONE` 现算出来的值，缓存只是
+ * 记住它（字符集字面量仍只有 `MODEL_TOKEN_CLASS` 一处）。逐条等价由
+ * `refs-charclass-cache-equiv.test.ts` 与 `refs-fastpath-equiv.test.ts` 对拍钉死。
+ */
+const BMP_TOKEN_CLASS = new Uint8Array(0x10000); // 0 = 未算，1 = 记号，2 = 非记号
+const ASTRAL_TOKEN_CLASS = new Map<number, boolean>();
+
+/** BMP 码元的记号分类（惰性填表；含落单代理项——`/u` 下它们本就不落进记号类） */
+function bmpTokenChar(s: string, i: number, code: number): 0 | 1 {
+  const cached = BMP_TOKEN_CLASS[code]!;
+  if (cached !== 0) return cached === 1 ? 1 : 0;
+  const isToken = IDENT_ONE.test(s[i]!);
+  BMP_TOKEN_CLASS[code] = isToken ? 1 : 2;
+  return isToken ? 1 : 0;
+}
+
+/**
  * `i` 处码元是否为记号字符；返回**占用的码元数**（0 = 非记号）。
  * ASCII（`[A-Za-z0-9_]`）走内联快路径；**代理对**（增平面字母/数字）以两个码元
  * 为一个整体问 `IDENT_ONE`——与 `TOKEN_RE` 在 `/u` 模式下的走位逐字符一致；
  * 落单代理项在 `/u` 下永不落进记号类，这里同样判非记号。
+ * W7-G：非 ASCII 的分类结果进缓存（见 `BMP_TOKEN_CLASS`），判据仍是同一个正则。
  */
 function tokenCharLen(s: string, i: number, code: number): 0 | 1 | 2 {
   if (code < 0x80) {
@@ -168,34 +194,56 @@ function tokenCharLen(s: string, i: number, code: number): 0 | 1 | 2 {
   }
   if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
     const low = s.charCodeAt(i + 1);
-    if (low >= 0xdc00 && low <= 0xdfff) return IDENT_ONE.test(s.slice(i, i + 2)) ? 2 : 0;
+    if (low >= 0xdc00 && low <= 0xdfff) {
+      const cp = ((code - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+      const cached = ASTRAL_TOKEN_CLASS.get(cp);
+      if (cached !== undefined) return cached ? 2 : 0;
+      const isToken = IDENT_ONE.test(s.slice(i, i + 2));
+      ASTRAL_TOKEN_CLASS.set(cp, isToken);
+      return isToken ? 2 : 0;
+    }
   }
-  return IDENT_ONE.test(s[i]!) ? 1 : 0;
+  return bmpTokenChar(s, i, code);
+}
+
+/** `normalizedUpper` 的判据范围（ASCII 小写 + 全角小写；与它的正则逐字符同区间） */
+function hasLowerCodeUnit(code: number): boolean {
+  return (code >= 0x61 && code <= 0x7a) || (code >= 0xff41 && code <= 0xff5a);
 }
 
 /**
  * 逐记号遍历（`scanFileRefs` / `scanUndefinedCallTargets` 共用，单一真源）：
- * 对每段连续记号回调 `(start, end)`（UTF-16 半开区间，与旧 `TOKEN_RE.exec` 的
+ * 对每段连续记号回调 `(start, end, hasLower)`（UTF-16 半开区间，与旧 `TOKEN_RE.exec` 的
  * `m.index` / `m.index + m[0].length` 同位）；回调返回 `false` 中止遍历
  * （对应旧循环的 `break`）。
+ *
+ * W7-G：`hasLower` 是遍历时**顺带**记下的"这段记号含不含 `[a-zａ-ｚ]`"——它正好是
+ * `normalizedUpper` 里那条正则的同一判据（区间见 `hasLowerCodeUnit`），于是调用方
+ * 能省掉"无小写就整段 toUpperCase"的那一遍全文扫描。判据仍只有 `normalizedUpper`
+ * 一条（`hasLower === false` 时它的结果按定义就是原串；`true` 时仍交给它算），
+ * 等长/逐条等价由差分用例钉死。
  */
-function forEachToken(s: string, visit: (start: number, end: number) => boolean | void): void {
+function forEachToken(s: string, visit: (start: number, end: number, hasLower: boolean) => boolean | void): void {
   const n = s.length;
   let i = 0;
   while (i < n) {
-    const len = tokenCharLen(s, i, s.charCodeAt(i));
+    const startCode = s.charCodeAt(i);
+    const len = tokenCharLen(s, i, startCode);
     if (len === 0) {
       i++;
       continue;
     }
     const start = i;
+    let hasLower = hasLowerCodeUnit(startCode);
     i += len;
     while (i < n) {
-      const next = tokenCharLen(s, i, s.charCodeAt(i));
+      const code = s.charCodeAt(i);
+      const next = tokenCharLen(s, i, code);
       if (next === 0) break;
+      if (!hasLower && hasLowerCodeUnit(code)) hasLower = true;
       i += next;
     }
-    if (visit(start, i) === false) return;
+    if (visit(start, i, hasLower) === false) return;
   }
 }
 
@@ -319,13 +367,16 @@ export function scanFileRefs(text: string, hasName: (normalizedName: string) => 
     let slotTaken = !isCallLine; // 非调用行没有槽位概念，全部走 mention
 
     const code = codeView();
-    forEachToken(code, (start, end) => {
+    forEachToken(code, (start, end, hasLower) => {
       const inSlot = !slotTaken && start >= keywordEnd;
       if (inSlot) slotTaken = true; // 槽位记号无论命不命中名字都被消耗
       // 变量成员访问整体不算函数引用：`CFLAG:ALPHA` 两段都是变量世界（基名紧邻冒号，
       // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。判据单源 `colonAdjacent`。
       if (colonAdjacent(code, start, end)) return;
-      const upper = normalizedUpper(code.slice(start, end));
+      const run = code.slice(start, end);
+      // 无小写 ⇒ `normalizedUpper` 按定义返回原串（省掉一次 toUpperCase 全文扫描）；
+      // 有小写仍交给 `normalizedUpper` 算，归一判据不在本函数里复述。
+      const upper = hasLower ? normalizedUpper(run) : run;
       if (!hasName(upper)) return;
       out.push([upper, line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
     });
@@ -363,14 +414,15 @@ export function scanUndefinedCallTargets(text: string, hasName: (upper: string) 
   for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (!isCallLine) continue;
     const code = codeView();
-    forEachToken(code, (start, end) => {
+    forEachToken(code, (start, end, hasLower) => {
       if (start < keywordEnd) return; // 关键字自身
       // 槽位 = 关键字后的第一个记号；与关键字之间只许空白 ⇒ 裸标识符
       if (!/^[\t \u3000]*$/.test(raw.slice(keywordEnd, start))) return false;
       const run = code.slice(start, end);
       // 成员访问占槽：整槽不算函数名，也不向后顺延（判据单源 `colonAdjacent`）
       if (colonAdjacent(code, start, end)) return false;
-      if (!hasName(normalizedUpper(run))) out.push({ line, column: start + 1, name: run });
+      const upper = hasLower ? normalizedUpper(run) : run;
+      if (!hasName(upper)) out.push({ line, column: start + 1, name: run });
       return false; // 一行至多一个名字槽
     });
   }
