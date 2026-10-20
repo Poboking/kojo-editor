@@ -28,6 +28,11 @@ export function navLoadErrorCopy(loadError: string): { readonly text: string; re
  *
  * 只**转录**提供方交出的数字与 tag，本文件一律不重新判形状（判据单源见
  * `erb-parser/index-state.ts`）：`coverage` 那三个字面值在这里只做"tag → 中文"的翻译。
+ *
+ * IDX-SILENT 追加最后那一行（`filesFailed` > 0 时）：走到的文件里有几个没读进来/没解析出来。
+ * 这一行**不是**从 `filesScanned − 文件数` 算的——那一对读数在全成功与被快照顶替的失败轮
+ * **同形**（差值都是 0），只有提供方的 `filesFailed` 答得出"这一轮到底有没有走岔"。
+ * 提供方没陈述（旧实现，字段缺席）⇒ 这一行不出现，与改前逐字一致。
  */
 export function navScanReadout(state: ErbIndexState): string {
   const perSource =
@@ -41,6 +46,15 @@ export function navScanReadout(state: ErbIndexState): string {
     `实际走到的根：${state.rootsWalked} 个 · 已扫文件 ${state.filesScanned} · 名录 ${state.functions} 名`,
     `阶段：${state.phase} · 覆盖：${state.coverage}`,
   ];
+  // 缺席（旧实现没陈述）与 0 都不是"有失败"，但也**不许**把缺席写进文案冒充"零失败"：
+  // 那一行只由提供方亲口给出的非零条数触发（`filesFailed` 的缺席语义见契约注释）。
+  const failed = state.filesFailed;
+  if (failed !== undefined && failed > 0) {
+    const samples = (state.failures ?? [])
+      .map((f) => `${f.path}（${f.reason === 'read' ? '读不到' : '解析失败'}）`)
+      .join('；');
+    lines.push(`未读入：${failed} 个文件${samples === '' ? '' : `（${samples}）`}`);
+  }
   if (state.error !== undefined) lines.push(`错误：${state.error}`);
   return lines.join('\n');
 }

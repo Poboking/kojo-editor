@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { ErbScanSourceFact } from '@kojo/plugin-api';
-import { coverageOf, indexStateOf, phaseOf, sourceFactsOf } from '../src/index-state';
+import { coverageOf, indexStateOf, phaseOf, sourceFactsOf, INDEX_FAILURE_SAMPLES } from '../src/index-state';
 
 /** 造一条来源事实（缺省 = 读得到且给了根） */
 const fact = (
@@ -125,8 +125,10 @@ describe('indexStateOf：唯一构造出口，同输入必同输出', () => {
       filesScanned: 42,
       functions: 7,
       coverage: 'partial',
+      filesFailed: 0,
     });
     expect('error' in s).toBe(false);
+    expect('failures' in s).toBe(false); // 没有失败 ⇒ 不写空数组（同 error 的缺省纪律）
   });
 
   it('失败那一轮：phase=failed 且原始原因留在 error（不静默吞掉）', () => {
@@ -150,5 +152,46 @@ describe('indexStateOf：唯一构造出口，同输入必同输出', () => {
   it('未收尾时 functions=0 也**不会**被判成 empty（只有 settled 那一轮才裁"空"）', () => {
     const s = indexStateOf({ outcome: 'scanning', sources: WHOLE, rootsWalked: 3, filesScanned: 0, functions: 0 });
     expect(s.phase).toBe('scanning');
+  });
+});
+
+/* ---------------- 失败面（IDX-SILENT，2026-10-20） ---------------- */
+
+describe('indexStateOf：失败文件面与读数同源（IDX-SILENT）', () => {
+  const failed = (path: string, reason: 'read' | 'parse' = 'read') => ({ path, reason });
+
+  it('条数从失败全表派生，样本只切前若干条（不许"说 7 个、列 2 条"）', () => {
+    const all = Array.from({ length: INDEX_FAILURE_SAMPLES + 2 }, (_, i) => failed(`/game/kojo/f${i}.ERB`));
+    const s = indexStateOf({ outcome: 'settled', sources: WHOLE, rootsWalked: 1, filesScanned: 9, functions: 3, failures: all });
+    expect(s.filesFailed).toBe(all.length);
+    expect(s.failures).toHaveLength(INDEX_FAILURE_SAMPLES);
+    expect(s.failures?.[0]).toEqual(all[0]);
+  });
+
+  it('失败与读数**不同形**：文件全进了索引（filesScanned 与名录照旧）也照样读得出失败', () => {
+    const s = indexStateOf({
+      outcome: 'settled',
+      sources: WHOLE,
+      rootsWalked: 1,
+      filesScanned: 2,
+      functions: 2,
+      failures: [failed('/game/kojo/a.ERB')],
+    });
+    expect(s.phase).toBe('ready'); // 失败不改阶段（既有三态判据一字未动）
+    expect(s.filesScanned).toBe(2); // 与"全成功"那一轮可以是同一组读数……
+    expect(s.filesFailed).toBe(1); // ……而这一格把它分开了
+    expect(s.failures).toEqual([{ path: '/game/kojo/a.ERB', reason: 'read' }]);
+  });
+
+  it('读失败与解析失败并存时两条都在（原因不许被糊成一个数）', () => {
+    const s = indexStateOf({
+      outcome: 'settled',
+      sources: WHOLE,
+      rootsWalked: 1,
+      filesScanned: 3,
+      functions: 1,
+      failures: [failed('/a.ERB', 'read'), failed('/b.ERB', 'parse')],
+    });
+    expect(s.failures).toEqual([failed('/a.ERB', 'read'), failed('/b.ERB', 'parse')]);
   });
 });

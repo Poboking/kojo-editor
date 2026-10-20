@@ -90,6 +90,30 @@ describe('函数树三态短句（IDX-STATE）', () => {
     expect(navIndexPendingCopy(null).title).toContain('提供方未给出索引状态');
   });
 
+  it('逐文件失败面（IDX-SILENT）：读数里有一行"未读入 N 个"与首批路径，且不靠差值推断', () => {
+    const s = state('ready', {
+      functions: 99,
+      coverage: 'full',
+      filesScanned: 2,
+      filesFailed: 1,
+      failures: [{ path: '/game/kojo/broken.ERB', reason: 'read' }],
+    });
+    const title = navScanReadout(s);
+    expect(title).toContain('未读入：1 个文件');
+    expect(title).toContain('/game/kojo/broken.ERB（读不到）');
+    // 同一组读数在"全成功"那一轮也成立（filesScanned 与名录一字不差）⇒ 只有这一行分得开
+    expect(navScanReadout({ ...s, filesFailed: 0, failures: undefined })).not.toContain('未读入');
+  });
+
+  it('失败面缺席（旧实现）或 0 个失败 ⇒ 读数逐字与改前一致（additive 纪律）', () => {
+    const legacy = state('scanning');
+    expect('filesFailed' in legacy).toBe(false);
+    expect(navScanReadout(legacy)).not.toContain('未读入');
+    expect(navScanReadout(state('scanning', { filesFailed: 0 }))).not.toContain('未读入');
+    // 没有样本（只交了条数）时那句仍然成立——条数是事实，路径只是定位样本
+    expect(navScanReadout(state('ready', { filesFailed: 3 }))).toContain('未读入：3 个文件');
+  });
+
   it('失败态复用那一条既有失败文案（不另立第二套），原始原因仍逐字进悬停', () => {
     const failed = state('failed', { error: 'Error: EACCES denied', filesScanned: 40, functions: 0 });
     const copy = navIndexPendingCopy(failed);
@@ -142,6 +166,16 @@ describe('状态行的降级标记（铁律 4：只扫了一类位置的树必�
     expect(withState.startsWith(old)).toBe(true);
     expect(withState).toContain('位置覆盖：至少一类位置本轮读不到');
     expect(withState).toContain('workspace 交出 0 个根');
+  });
+
+  it('ready 态的状态行悬停也带得上失败那一行（降级不许只在"没就绪"时看得见）', () => {
+    const tree = { scopeKey: '', filesScanned: 0, attribution: 'dir' } as never;
+    const title = navigatorScopeTitle(
+      tree,
+      state('ready', { functions: 9, coverage: 'full', filesFailed: 2, failures: [{ path: '/x.ERB', reason: 'parse' }] }),
+    );
+    expect(title).toContain('未读入：2 个文件');
+    expect(title).toContain('/x.ERB（解析失败）');
   });
 });
 

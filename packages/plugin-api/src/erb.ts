@@ -466,6 +466,22 @@ export interface ErbScanSourceFact {
 }
 
 /**
+ * 一个**走到、但没进索引**的方言文件的失败事实（IDX-SILENT，2026-10-20，additive）。
+ *
+ * 与 `ErbIndex.fileMtimes` 的 `null` 位分工：那里说"这个文件取不到 stat"（下游复用判据），
+ * 这里说"这个文件这一轮没有可用的解析结果"（作者面的失败事实）。
+ */
+export interface ErbIndexFileFailure {
+  /** walk 交出的原样路径（与 `filesScanned` 数的是同一批文件） */
+  readonly path: string;
+  /**
+   * - `read`：正文没读到（打开 / 解码失败，或批量读交回的缺席位）；
+   * - `parse`：正文读到了、解析抛错。
+   */
+  readonly reason: 'read' | 'parse';
+}
+
+/**
  * 索引这一轮走到哪一步（**可查的裁决**，取代"永远不变的占位文案"）：
  * - `idle`：还没扫（没有项目 / 从未起跑过构建）；
  * - `scanning`：正在扫（`filesScanned` 是已扫文件数的进度读数）；
@@ -510,6 +526,32 @@ export interface ErbIndexState {
   readonly functions: number;
   /** 覆盖形状（判据见 {@link ErbIndexCoverage}） */
   readonly coverage: ErbIndexCoverage;
+  /**
+   * 本轮**走到、但没读进来 / 没解析出来**的文件数（IDX-SILENT，2026-10-20，**additive 可选**）。
+   *
+   * 为什么需要它：这类文件通常既不进 `index.files`、也不进 `byName`，此前只有一声 console `warn`；
+   * 唯一能推断的信号是 `filesScanned − index.files.size`，而那条差**答不出"是哪个文件"**，
+   * 也**看不全**：上一轮快照顶替过的文件这一轮同样没读成，但旧内容补进了 `index.files`
+   * ⇒ 差仍是 0，与全成功**同形**（铁律 4 的静默降级）。
+   *
+   * 口径三条：
+   * - 分母是 **walk 交出的方言文件**（与 {@link filesScanned} 同一批）；读失败与解析抛错都算，
+   *   每个文件至多计一次（读都没成，谈不上解析）。
+   * - 被快照旧内容顶替的**也计**：它这一轮确实没读成，索引里那份是旧事实。
+   * - **失败 ≠ 没有这个文件**：某个名字在索引里查不到时，"这一轮读/解析失败"与
+   *   "这个来源的根下根本没有它"必须分得开——前者从本字段读得出来，不许被当成后者。
+   *   反向引用那一段的重读失败（`Refs scan skipped`）**不算**在这里：那些文件解析成功、
+   *   只是引用表少边，属于另一张事实面。
+   *
+   * **缺席 = 提供方没陈述**（旧实现 / 手写的测试字面量），消费方**不许**把缺席读成 0。
+   */
+  readonly filesFailed?: number;
+  /**
+   * 失败文件的**前若干条**路径与原因（完整条数见 {@link filesFailed}；两处同一份来源，
+   * 条数只从列表长度派生）。只给样本：磁盘级故障会让全树失败，契约面不该为此搬一整张路径表。
+   * 本轮没有失败 ⇒ **不写空数组**（同 `docComment` / `error` 的缺省纪律）。
+   */
+  readonly failures?: readonly ErbIndexFileFailure[];
   /** 构建失败的原始原因（只进悬停，一条技术信息都不丢） */
   readonly error?: string;
 }

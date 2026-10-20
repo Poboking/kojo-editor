@@ -18,7 +18,14 @@
  * 零游戏名词（铁律 1）：这里只有泛型来源与计数。
  */
 
-import type { ErbIndexCoverage, ErbIndexPhase, ErbIndexState, ErbScanSourceFact, ErbScanSourceKind } from '@kojo/plugin-api';
+import type {
+  ErbIndexCoverage,
+  ErbIndexFileFailure,
+  ErbIndexPhase,
+  ErbIndexState,
+  ErbScanSourceFact,
+  ErbScanSourceKind,
+} from '@kojo/plugin-api';
 
 /** 构建这一轮到了哪一步（**生命周期时刻**，不含形状判断——形状一律问 `coverageOf()`） */
 export type IndexOutcome = 'idle' | 'scanning' | 'settled' | 'failed';
@@ -66,8 +73,22 @@ export interface IndexStateSeed {
   readonly rootsWalked: number;
   readonly filesScanned: number;
   readonly functions: number;
+  /**
+   * 本轮**走到、但没读进来/没解析出来**的文件全表（IDX-SILENT）。
+   * 对外事实的**条数与样本都从这一份派生**（`filesFailed` = 长度，`failures` = 前若干条）——
+   * 分两处各记一个数就会漂移成"说 3 个失败、列出 2 条"的假账。
+   * 缺省 = 本轮没有失败（在途/未起扫的笔数不该继承上一轮）。
+   */
+  readonly failures?: readonly ErbIndexFileFailure[];
   readonly error?: string;
 }
+
+/**
+ * 对外事实里失败样本的**上限**（`ErbIndexState.failures`）。
+ * 磁盘级故障会让全树失败（真语料 2,300+ 文件），契约面只带前几条路径供作者定位，
+ * 完整条数由 `filesFailed` 承担——这不违铁律 4：**条数一个不少，路径是定位样本**。
+ */
+export const INDEX_FAILURE_SAMPLES = 5;
 
 /**
  * 裁决（**三态判据的唯一出处**，与 {@link coverageOf} 一道住在本模块）：
@@ -91,6 +112,7 @@ export function phaseOf(outcome: IndexOutcome, coverage: ErbIndexCoverage, funct
  */
 export function indexStateOf(seed: IndexStateSeed): ErbIndexState {
   const coverage = coverageOf(seed.sources, seed.rootsWalked);
+  const failures = seed.failures ?? [];
   return {
     phase: phaseOf(seed.outcome, coverage, seed.functions),
     sources: seed.sources,
@@ -98,6 +120,9 @@ export function indexStateOf(seed: IndexStateSeed): ErbIndexState {
     filesScanned: seed.filesScanned,
     functions: seed.functions,
     coverage,
+    // 失败面（IDX-SILENT）：条数从全表派生，样本只切前几条——两处同源，不许各记一份
+    filesFailed: failures.length,
+    ...(failures.length === 0 ? {} : { failures: failures.slice(0, INDEX_FAILURE_SAMPLES) }),
     ...(seed.error === undefined ? {} : { error: seed.error }),
   };
 }

@@ -69,23 +69,31 @@ function makeGate(): Gate {
   };
 }
 
-function makeIO(files: Record<string, string>, walks: string[], gate: Gate, failWalk: () => string | null): FileIO {
+function makeIO(
+  files: Record<string, string>,
+  walks: string[],
+  gate: Gate,
+  failWalk: () => string | null,
+  broken: ReadonlySet<string>,
+): FileIO {
+  /** 读不到 ≠ 走不到：`broken` 里的路径**照旧被 walk 交出来**，只是读/stat 这一轮失败 */
+  const readable = (path: string): boolean => broken.has(path) === false;
   return {
     async readText(path: string) {
-      const text = files[path];
+      const text = readable(path) ? files[path] : undefined;
       if (text === undefined) throw new Error(`not found: ${path}`);
       return { path, text, encoding: 'utf-8', eol: 'lf', mtimeMs: 1 };
     },
     async readTexts(paths: readonly string[]) {
       return paths.map((path) => {
-        const text = files[path];
+        const text = readable(path) ? files[path] : undefined;
         return text === undefined
           ? null
           : { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: 1 };
       });
     },
     async stat(path: string) {
-      const text = files[path];
+      const text = readable(path) ? files[path] : undefined;
       return text === undefined ? null : { size: text.length, mtimeMs: 1, isDirectory: false };
     },
     async isWritable() {
@@ -97,7 +105,8 @@ function makeIO(files: Record<string, string>, walks: string[], gate: Gate, fail
       const boom = failWalk();
       if (boom !== null) throw new Error(boom);
       await gate.waitBefore(walks.length);
-      return Object.keys(files)
+      // 目录清单包含 `broken` 里的路径（它们仍在盘上，只是这一轮打不开）
+      return [...new Set([...Object.keys(files), ...broken])]
         .filter((p) => isPathUnder(root, p))
         .map((p) => ({ name: p.split(/[\\/]/).pop() ?? p, path: p, isDirectory: false }));
     },
@@ -115,6 +124,10 @@ interface Harness {
   /** 置为非 null ⇒ 下一趟 walkDir 抛这个原因（用 `armWalkFail` 设/清） */
   failWalk: () => string | null;
   armWalkFail(msg: string | null): void;
+  /** 让这条路径**这一轮读不到**（walk 照旧走到它；与"盘上没有这个文件"是两回事） */
+  breakPath(path: string): void;
+  /** 撤销 `breakPath`（下一轮读得回来） */
+  healPath(path: string): void;
   emit(type: string, payload: unknown): void;
   parser(): ErbParserService;
   state(): ErbIndexState;
@@ -131,6 +144,8 @@ function activateWith(files: Record<string, string>, workspaceRoots: string[]): 
   const ws = { roots: [...workspaceRoots], fail: null as 'service-roots' | 'inject' | null };
   let walkFailMsg: string | null = null;
   const failWalk = () => walkFailMsg;
+  /** 本轮读不到的路径（IDX-SILENT 用例用：walk 交得出、读盘读不到） */
+  const broken = new Set<string>();
 
   const handlers = new Map<string, Set<(p: unknown) => void>>();
   const on = (type: string, handler: (p: unknown) => void): Unsubscribe => {
@@ -155,7 +170,7 @@ function activateWith(files: Record<string, string>, workspaceRoots: string[]): 
     },
     bus,
     inject: <T,>(key: string): T => {
-      if (key === 'kernel.io') return makeIO(files, walks, gate, failWalk) as unknown as T;
+      if (key === 'kernel.io') return makeIO(files, walks, gate, failWalk, broken) as unknown as T;
       if (key === 'kernel.compute') return makeComputeStub() as unknown as T;
       if (key === KernelServices.Workspaces) {
         if (ws.fail === 'inject') throw new Error(`Service '${key}' is not available (required by 'erb-parser')`);
@@ -202,6 +217,12 @@ function activateWith(files: Record<string, string>, workspaceRoots: string[]): 
     failWalk,
     armWalkFail: (msg) => {
       walkFailMsg = msg;
+    },
+    breakPath: (path) => {
+      broken.add(path);
+    },
+    healPath: (path) => {
+      broken.delete(path);
     },
     emit,
     parser: () => services.get('erb.parser') as ErbParserService,
@@ -441,6 +462,73 @@ describe('erb-parser · 工作区降级读得出"少了哪一类位置"（不断
     const s = h.state();
     expect(wsFact(s)).toEqual({ source: 'workspace', offered: 0, available: true });
     expect(s.coverage).toBe('full');
+    h.dispose();
+  });
+});
+
+/* ============================ 逐文件失败面（IDX-SILENT，2026-10-20） ============================ */
+
+/**
+ * 本刀要补的洞：走到、但没读成/没解析成的文件此前只有一声 console `warn`，
+ * 事实面上**与"盘上没有这个文件"同形**；唯一可推的信号 `filesScanned − index.files.size`
+ * 在"上一轮快照顶替"那一类降级上仍然是 0（旧内容补进了索引）⇒ 与全成功完全同形。
+ *
+ * 夹具用 `breakPath()`：路径**照旧被 walk 交出来**（盘上有它），只是这一轮读/stat 失败。
+ */
+describe('erb-parser · 逐文件失败面：失败 ≠ 没有这个文件（IDX-SILENT）', () => {
+  it('被快照顶替的那一类也计成失败，而 filesScanned === index.files.size 照旧成立（改前与全成功同形）', async () => {
+    const h = activateWith(baseFiles(), ['/ws/default']);
+    openProject(h, '/game', ['/game/kojo']);
+    const first = await h.parser().ensureIndex();
+    expect(h.state().filesFailed).toBe(0); // 全成功那一轮：零失败、差值也是 0
+
+    // 第二轮：WS_FILE 读不到，但快照里那份旧解析结果还在 ⇒ 它会补进 index.files。
+    // 不重新走"起跑"的话根签名没变、不会重扫（既有判据），故用 project.opened 起新一轮。
+    h.breakPath(WS_FILE);
+    openProject(h, '/game', ['/game/kojo']);
+    const second = await h.parser().ensureIndex();
+
+    const s = h.state();
+    expect(s.filesFailed).toBe(1);
+    expect(s.failures).toEqual([{ path: WS_FILE, reason: 'read' }]);
+    // ↓ 这就是"今天看不出降级"的那组读数：走到的文件数与索引里的文件数**完全相等**
+    expect(s.filesScanned).toBe(2);
+    expect(second.files.size).toBe(2);
+    expect(s.filesScanned).toBe(second.files.size);
+    expect(second.files.has(WS_FILE)).toBe(true); // 旧内容顶替：文件仍在名录里
+    expect(second.files.get(WS_FILE)!.functions[0]!.name).toBe(first.files.get(WS_FILE)!.functions[0]!.name);
+    expect(s.phase).toBe('ready'); // 失败不改三态判据（不拿"有失败"冒充"索引坏了"）
+    h.dispose();
+  });
+
+  it('没被快照顶替的那一类同样读得出失败（走到的比索引里的多时，是谁走岔了）', async () => {
+    const h = activateWith(baseFiles(), ['/ws/default']);
+    h.breakPath(WS_FILE); // 首轮就没有可用快照 ⇒ 这一份缺失没有旧内容可顶替
+    openProject(h, '/game', ['/game/kojo']);
+    const idx = await h.parser().ensureIndex();
+
+    const s = h.state();
+    expect(s.filesScanned).toBe(2);
+    expect(idx.files.size).toBe(1);
+    expect(s.filesFailed).toBe(1);
+    expect(s.failures?.[0]).toEqual({ path: WS_FILE, reason: 'read' });
+    expect(idx.byName.has('WS_FOO')).toBe(false); // 与"盘上没有这个函数"仍然不同：失败面说出了原因
+    h.dispose();
+  });
+
+  it('失败面不跨轮粘连：下一轮读得回来 ⇒ 计数归零、样本键不出现', async () => {
+    const h = activateWith(baseFiles(), ['/ws/default']);
+    h.breakPath(WS_FILE);
+    openProject(h, '/game', ['/game/kojo']);
+    await h.parser().ensureIndex();
+    expect(h.state().filesFailed).toBe(1);
+
+    h.healPath(WS_FILE);
+    openProject(h, '/game', ['/game/kojo']);
+    await h.parser().ensureIndex();
+    const s = h.state();
+    expect(s.filesFailed).toBe(0);
+    expect('failures' in s).toBe(false);
     h.dispose();
   });
 });

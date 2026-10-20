@@ -67,13 +67,15 @@ describe.skipIf(!SMOKE)('索引状态事实 · 真实语料自证', () => {
     console.log(
       `[idx-state] 项目根=${project.rootDir} 口上根 ${project.kojoPaths.length} 条；` +
         `本轮实走 ${s.rootsWalked} 个根 / 扫到 ${s.filesScanned} 个方言文件 / 名录 ${s.functions} 名` +
-        `（索引侧 byName ${idx.byName.size}、files ${idx.files.size}）；` +
+        `（索引侧 byName ${idx.byName.size}、files ${idx.files.size}、未读入 ${s.filesFailed ?? '-'} 个）；` +
         `phase=${s.phase} coverage=${s.coverage}；来源：` +
         s.sources.map((f) => `${f.source}=${f.offered}${f.available ? '' : '(读不到)'}`).join(' + '),
     );
     expect(s.phase).toBe('ready');
     expect(s.rootsWalked, '真语料至少走得到一个口上根').toBeGreaterThanOrEqual(1);
     expect(s.filesScanned).toBe(idx.files.size);
+    // 失败面（IDX-SILENT）：真盘这一轮确实零失败——新字段在健康盘上不许自说自话地报警
+    expect(s.filesFailed, '真实语料本轮零失败').toBe(0);
     expect(s.functions).toBe(idx.byName.size);
     expect(s.functions, '名录条数（历史读数 99,028，本批一个字节没动解析面）').toBeGreaterThanOrEqual(90_000);
     // 逐来源事实是**两条**（提供方陈述 project + workspace 两类位置），顺序固定

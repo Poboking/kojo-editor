@@ -3,6 +3,7 @@ import type {
   ControlFlowStatement,
   ErbFile,
   ErbIndex,
+  ErbIndexFileFailure,
   ErbIndexState,
   ErbParserService,
   ErbReferenceIndex,
@@ -183,6 +184,12 @@ export function createErbParserPlugin(): Plugin {
       /** 进度读数沿用位：事实面的每一笔都写"截至这一笔的最新已知读数"，绝不回退成 0 */
       let lastFilesScanned = 0;
       let lastFunctions = 0;
+      /**
+       * 本轮失败文件全表（IDX-SILENT）：只在这里攒，对外条数与样本由 `indexStateOf()` 派生。
+       * 这一笔补的正是 `filesScanned − index.files.size` 看不见的那类降级——被上一轮快照
+       * 顶替的文件这一轮同样没读成，但索引里仍有旧内容，差值照旧是 0。
+       */
+      let lastFailures: readonly ErbIndexFileFailure[] = [];
       /** 当前项目根（事件载荷用） */
       let currentRoot = '';
       /** 代际号：项目切换 / 扫描根变更时作废过期构建的结果 */
@@ -236,7 +243,8 @@ export function createErbParserPlugin(): Plugin {
       /**
        * 记一笔对外事实。`gen` 不是当前代际 ⇒ **一律不记**（过期构建的进度/结果不是
        * 当前状态；写进去就是拿上一棵树的数据回答"这一轮怎么样了"）。
-       * 后两个读数缺省时沿用上一次的值——失败那一笔不该把"已经扫到 1,234 个文件"抹成 0。
+       * 后三个读数缺省时沿用上一次的值——失败那一笔不该把"已经扫到 1,234 个文件"抹成 0。
+       * `failures` 是**逐文件失败全表**（IDX-SILENT）：条数与样本都在 `indexStateOf()` 里派生。
        */
       function noteState(
         gen: number,
@@ -244,16 +252,19 @@ export function createErbParserPlugin(): Plugin {
         filesScanned: number = lastFilesScanned,
         functions: number = lastFunctions,
         error?: string,
+        failures: readonly ErbIndexFileFailure[] = lastFailures,
       ): void {
         if (gen !== generation) return;
         lastFilesScanned = filesScanned;
         lastFunctions = functions;
+        lastFailures = failures;
         lastIndexState = indexStateOf({
           outcome,
           sources: lastSources,
           rootsWalked: lastRootsWalked,
           filesScanned,
           functions,
+          failures,
           ...(error === undefined ? {} : { error }),
         });
       }
@@ -339,7 +350,9 @@ export function createErbParserPlugin(): Plugin {
         // 每段单独计时——上一轮"热启动 stat 872ms"的疑点就是因为快照读盘被并进了 stat 区间。
         const buildStartedAt = Date.now();
         const allFiles: string[] = [];
-        noteState(gen, 'scanning', 0, 0);
+        // 失败面（IDX-SILENT）从这一轮的**零**起算：进度/收尾每一笔都带它，绝不继承上一轮
+        const failures: ErbIndexFileFailure[] = [];
+        noteState(gen, 'scanning', 0, 0, undefined, failures);
         /**
          * `walkDir({withMetadata})` 顺带带回的元数据（IMPLEMENTATION-LOG §5.117）：
          * 热开段实测 `stat` 独占 2,038ms / index 2,657ms，全部是 2,285 次逐文件 IPC 往返；
@@ -511,6 +524,9 @@ export function createErbParserPlugin(): Plugin {
             async (path, k) => {
               const tf = texts[k];
               if (!tf) {
+                // 事实面同步记一笔（IDX-SILENT）：只发一声 warn 的话，作者侧读起来与"盘上没这个文件"
+                // 一模一样。被快照旧内容顶替的情形尤其要记——那一类差值仍是 0。
+                failures.push({ path, reason: 'read' });
                 ctx.log.warn(`Parse skipped (read failed): ${path}`);
                 return;
               }
@@ -527,6 +543,7 @@ export function createErbParserPlugin(): Plugin {
                   file,
                 });
               } catch (err) {
+                failures.push({ path, reason: 'parse' });
                 ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
               }
             },
@@ -718,7 +735,9 @@ export function createErbParserPlugin(): Plugin {
         index = built;
         // 收尾事实（IDX-STATE）：`ready` 与 `nothing-to-scan` 的分界由 `coverageOf()` 判，
         // 这里只交读数——一个根都没走到的那一轮永远不会被写成"扫完了"。
-        noteState(gen, 'settled', allFiles.length, built.byName.size);
+        // 失败文件表（IDX-SILENT）随收尾一起交出：`filesScanned` 与 `filesFailed` 是同一批 walk
+        // 的两个面，"走了 N 个、其中 M 个没读成"必须一句话读得出来。
+        noteState(gen, 'settled', allFiles.length, built.byName.size, undefined, failures);
         ctx.bus.emit('kojo.functionChanged', {
           projectRoot: currentRoot,
           files: [...files.keys()],
@@ -818,6 +837,7 @@ export function createErbParserPlugin(): Plugin {
           lastRootsWalked = 0;
           lastFilesScanned = 0;
           lastFunctions = 0;
+          lastFailures = [];
           lastIndexState = idleIndexState();
         }),
       );
