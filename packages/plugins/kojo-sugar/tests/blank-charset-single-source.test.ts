@@ -48,9 +48,9 @@
  *   前两处同判；下表用"行尾 run 原样保留"逐例钉住这条。
  * - **formatter 的 `ERB_CANDIDATE_HEAD_RE`** 用 ECMA-262 `trim()` 宽集：它是块标记**预筛**，
  *   宽集只多放过、不可能认错，判据仍只在 `erbBodyStep`（见该常量注释）。
- * - 另有第四份手抄（`src/lift-apply.ts` 的 `leadOf` / `indentOf` / `isBlank(trim)`）——写回链路
- *   自有的行工具，**不在本批可动边界内**，已在交付说明里单列；它的 `isBlank` 用 `trim()` 是
- *   现存口径差异，待该链路自己的批次收口。
+ * - 写回链路（`src/lift-apply.ts` 的 `leadOf` / `indentOf` / `isBlank`）已在
+ *   W6-A 批收口到本模块：`isBlank(trim)` 的宽集同步收窄——NBSP / `U+2003` 独占行是**正文**，
+ *   该批用 `lift-apply-blank-charset.test.ts` 钉住（真实 fixtures 零 NBSP，round-trip 不受影响）。
  */
 
 import { describe, expect, it } from 'vitest';
