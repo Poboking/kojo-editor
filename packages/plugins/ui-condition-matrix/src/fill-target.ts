@@ -180,7 +180,7 @@ export async function writeFill(req: FillWriteRequest): Promise<FillWriteResult>
     if (!io.isWritable(target)) {
       return {
         ok: false,
-        reason: '目标不在写允许域内：请先批准游戏目录的写权限，或改写到「我的口上项目」。',
+        reason: '目标不在可写范围内：请先批准游戏目录的写权限，或改写到「我的口上项目」。',
       };
     }
     if (await io.exists(target)) {
@@ -199,7 +199,7 @@ export async function writeFill(req: FillWriteRequest): Promise<FillWriteResult>
   if (!io.isWritable(file.absPath)) {
     return {
       ok: false,
-      reason: '目标文件不在写允许域内：请先批准游戏目录的写权限，或改写到「我的口上项目」。',
+      reason: '目标文件不在可写范围内：请先批准游戏目录的写权限，或改写到「我的口上项目」。',
     };
   }
   try {

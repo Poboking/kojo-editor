@@ -177,7 +177,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 写允许域已收回时的整屏说明（条目级复用同一句话，别处不再写一遍） */
 export const NOT_WRITABLE_NOTE =
-  '这个路径此刻不在写允许域内（项目未打开 / 授权已收回；游戏目录整体只读）：四本账都读得到，恢复一个也做不了。先打开对应项目或授权工作区再回来。';
+  '这个路径此刻不在可写范围内（项目未打开 / 授权已收回；游戏目录整体只读）：四本账都读得到，恢复一个也做不了。先打开对应项目或授权工作区再回来。';
 
 /** 排序：时刻新在前（null 沉底）→ 同刻按账本优先级 → 同账同刻按 id（全序，杜绝抖动） */
 export function compareTimelineItems(a: TimelineItem, b: TimelineItem): number {
@@ -450,7 +450,7 @@ export function diffPairButtonState(selectedCount: number): { enabled: boolean; 
 
 /** 某个具体落点不在写允许域时的条目级说明（逐条给出落点——全局那一屏每条的去向都不同） */
 export function writableNote(target: string): string {
-  return `${target} 此刻不在写允许域内（项目未打开 / 授权已收回；游戏目录整体只读）：这一条只能看，放回原位会被内核拒绝。`;
+  return `${target} 此刻不在可写范围内（项目未打开 / 授权已收回；游戏目录整体只读）：这一条只能看，放回原位会被内核拒绝。`;
 }
 
 /**

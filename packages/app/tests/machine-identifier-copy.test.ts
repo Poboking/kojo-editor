@@ -171,9 +171,9 @@ const PINNED_COPY: readonly {
 }[] = [
   {
     file: 'packages/app/src/ui/use-project-session.ts',
-    phrase: '写允许域注册失败（本项目将只能写入应用数据目录）',
+    phrase: '这个项目文件夹眼下不能写入',
     count: 1,
-    why: 'fail-closed 的后果说人话，不点名 appDataDir（REF-FRONT-PERF 后这句随 openProject 搬进 hook）',
+    why: 'fail-closed 的后果说人话：机制名「写允许域」与宿主路径 API 名都不上屏，落点改说「编辑器自己的文件夹」；句首不写「可写范围登记失败」——尾接的 Rust 原句自带「可写范围…」，同一个词在一句里出现两遍就是叠话（REF-FRONT-PERF 后这句随 openProject 搬进 hook）',
   },
   {
     file: 'packages/app/src/ui/CallHierarchyOverlay.tsx',
@@ -273,19 +273,19 @@ const PINNED_COPY: readonly {
   },
   {
     file: 'packages/plugins/state-replay/src/evaluate.ts',
-    phrase: '重命名词无法求值',
+    phrase: '改名记号无法求值',
     count: 1,
-    why: 'rename 类别码换成人话',
+    why: 'rename 类别码换成人话（名字也不与编辑器 F2「重命名」撞同一个"词"字）',
   },
   {
     file: 'packages/plugins/state-replay/src/state-view.ts',
-    phrase: '重命名词无法求值',
+    phrase: '改名记号无法求值',
     count: 2,
     why: '角色参数 / 索引段两条路各一句',
   },
   {
     file: 'packages/plugins/ui-state-replay/src/preview.ts',
-    phrase: "rename: '重命名词'",
+    phrase: "rename: '改名记号'",
     count: 1,
     why: '未知类别提示与求值侧同口径',
   },

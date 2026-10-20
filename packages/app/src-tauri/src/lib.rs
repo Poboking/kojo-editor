@@ -108,7 +108,7 @@ fn commit_project_root(
         .map_err(|_| "write domain state poisoned".to_string())?;
     if state.domain_epoch.load(Ordering::SeqCst) != observed {
         return Err(
-            "写允许域注册被并发变更取消（判定期间项目被关闭或换开）：请重新打开项目".to_string(),
+            "可写范围注册被并发变更取消（判定期间项目被关闭或换开）：请重新打开项目".to_string(),
         );
     }
     state.domain_epoch.fetch_add(1, Ordering::SeqCst);
@@ -375,7 +375,7 @@ fn record_approved_root(
 /// 放在取锁**之前**做：写域的锁只保护三份状态，不该把一次系统调用圈在锁里。
 fn canonicalize_target_for_domain(path: &Path, op: &str) -> Result<PathBuf, String> {
     canonicalize_deep(path)
-        .map_err(|e| format!("写允许域（{op}）：路径解析失败 {path_display}: {e}", path_display = path.display()))
+        .map_err(|e| format!("可写范围（{op}）：路径解析失败 {path_display}: {e}", path_display = path.display()))
 }
 
 /// 允许域判定的**唯一实现**：`resolve_root` 只换"根怎么规范化"这一步（每次直算 / 走备忘录），
@@ -409,7 +409,7 @@ where
         }
     }
     Err(format!(
-        "写允许域拒绝（{op}）：{} 不在允许域内（允许 = 项目根目录 / appDataDir / 自选项目位置；未打开项目时仅 appDataDir + 自选项目位置）",
+        "可写范围拒绝（{op}）：{} 不在可写范围内（允许 = 项目根目录 / appDataDir / 自选项目位置；未打开项目时仅 appDataDir + 自选项目位置）",
         path.display()
     ))
 }
@@ -442,7 +442,7 @@ where
 /// 允许域根解析失败的文案（**只有一份**：直算与备忘录两条路共用 ⇒ 逐字相同）。
 fn root_unresolved_message(op: &str, root: &Path, reason: &str) -> String {
     format!(
-        "写允许域（{op}）：允许域根目录解析失败 {}: {reason}",
+        "可写范围（{op}）：根目录解析失败 {}: {reason}",
         root.display()
     )
 }
@@ -609,7 +609,7 @@ async fn register_write_domain(
 ) -> Result<(), String> {
     use tauri::Manager;
     if root.starts_with(r"\\") {
-        return Err("写允许域注册拒绝：不接受网络路径（UNC）作为项目根".to_string());
+        return Err("可写范围注册拒绝：不接受网络路径（UNC）作为项目根".to_string());
     }
     let app_dir = app
         .path()
@@ -633,10 +633,10 @@ async fn register_write_domain(
     let root_for_check = root.clone();
     run_blocking("register_write_domain", move || {
         let canon_root = canonicalize_deep(Path::new(&root_for_check))
-            .map_err(|e| format!("写允许域注册失败：路径解析失败 {root_for_check}: {e}"))?;
+            .map_err(|e| format!("可写范围注册失败：路径解析失败 {root_for_check}: {e}"))?;
         if !is_root_approved(&app_dir, &approved, &extras, &canon_root) {
             return Err(format!(
-                "写允许域注册拒绝：{root_for_check} 未经系统目录对话框或拖放由宿主交付，不在准入清单内"
+                "可写范围注册拒绝：{root_for_check} 未经系统目录对话框或拖放由宿主交付，不在准入清单内"
             ));
         }
         Ok(())
@@ -3350,7 +3350,7 @@ mod write_domain_tests {
             "write",
         )
         .unwrap_err();
-        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        assert!(err.contains("可写范围拒绝"), "unexpected: {err}");
         let _ = std::fs::remove_dir_all(&project);
         let _ = std::fs::remove_dir_all(&other);
     }
@@ -3362,7 +3362,7 @@ mod write_domain_tests {
         // 未注册项目（None）：域外路径一律拒绝
         let err =
             ensure_in_write_domain(None, &appdata, &[], &other.join("x.erb"), "write").unwrap_err();
-        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        assert!(err.contains("可写范围拒绝"), "unexpected: {err}");
         // appDataDir 仍可写（备份 / 配置）
         ensure_in_write_domain(None, &appdata, &[], &appdata.join("config.json"), "write").unwrap();
         let _ = std::fs::remove_dir_all(&other);
@@ -3384,7 +3384,7 @@ mod write_domain_tests {
             "write",
         )
         .unwrap_err();
-        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        assert!(err.contains("可写范围拒绝"), "unexpected: {err}");
         let _ = outside; // 保持存在
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3425,7 +3425,7 @@ mod write_domain_tests {
             "write",
         )
         .unwrap_err();
-        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        assert!(err.contains("可写范围拒绝"), "unexpected: {err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -3484,7 +3484,7 @@ mod write_domain_tests {
             "write",
         )
         .unwrap_err();
-        assert!(err.contains("写允许域拒绝"), "unexpected: {err}");
+        assert!(err.contains("可写范围拒绝"), "unexpected: {err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -3783,7 +3783,7 @@ mod write_domain_tests {
         assert_eq!(
             cached.unwrap_err(),
             direct.unwrap_err(),
-            "'允许域根目录解析失败' 这一支两条路径文案不一致"
+            "'根目录解析失败' 这一支两条路径文案不一致"
         );
         assert!(
             !memo2.contains_key(&gone),

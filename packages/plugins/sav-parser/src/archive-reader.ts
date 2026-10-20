@@ -121,7 +121,7 @@ export class ArchiveReaderEngine implements ArchiveReaderService {
       throw new ArchiveExtractError(
         'landing-domain',
         landing,
-        `落点不在写允许域内（游戏目录整体只读，只写常驻可写根），已拒绝写入：${landing}`,
+        `落点不在可写范围内（游戏目录整体只读，只写常驻可写根），已拒绝写入：${landing}`,
       );
     }
 

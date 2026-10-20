@@ -38,9 +38,9 @@ node tools/smoke-tauri-ipc.mjs
 | a | 欢迎页点「最近打开」中的游戏目录 | 项目头 rootDir = 游戏目录 |
 | a2 | 首次弹出「写权限确认」→ 点「允许写入」 | 弹窗关闭 |
 | b | 展开文件树 → 点 ERB → Monaco 插入标记 → 保存 | 磁盘含标记 **且** `{appData}/backup/**` 新增 `.bak` |
-| c | `invoke('write_file_bytes', {path:'C:\Windows\Temp\…'})` | 抛错且文案含「写允许域拒绝」 |
+| c | `invoke('write_file_bytes', {path:'C:\Windows\Temp\…'})` | 抛错且文案含「可写范围拒绝」 |
 | e | `invoke('app_data_dir')` → 写该目录 | 成功且可读回 |
-| d | 点「关闭项目」→ 再写游戏目录文件 | 抛错且文案含「写允许域拒绝」 |
+| d | 点「关闭项目」→ 再写游戏目录文件 | 抛错且文案含「可写范围拒绝」 |
 
 探针会自动还原：store（recent + approved-writable）、被测文件原字节、本次新增的 `.bak` 与临时文件。
 
@@ -62,12 +62,12 @@ node tools/smoke-tauri-ipc.mjs
   await window.__TAURI_INTERNALS__.invoke('write_file_bytes',
     { path: 'C:\\Windows\\Temp\\kojo-smoke-outside.txt', data: btoa('evil') })
   ```
-- **预期**：**抛错**，文案含「写允许域拒绝（write）：… 不在允许域内（允许 = 项目根目录 / appDataDir）」
+- **预期**：**抛错**，文案含「可写范围拒绝（write）：… 不在可写范围内（允许 = 项目根目录 / appDataDir）」
 
 ### d. 关闭项目后再写游戏目录 → 被拒
 - [ ] 点「关闭项目」→ 回到欢迎页
 - [ ] console 调 `invoke('write_file_bytes', { path: '<游戏目录>\\_probe.txt', data: btoa('x') })`
-- **预期**：抛错含「写允许域拒绝」；此时 `project_root` 已清（回到仅 appDataDir）
+- **预期**：抛错含「可写范围拒绝」；此时 `project_root` 已清（回到仅 appDataDir）
 
 ### e. appDataDir 写正常（配置/备份链路不受影响）
 - [ ] console：`const d = await invoke('app_data_dir')` → 再 `invoke('ensure_dir',{path:d+'\\_probe'})`、`write_file_bytes` 写入
@@ -88,7 +88,7 @@ node tools/smoke-tauri-ipc.mjs
 | a2 写权限确认弹窗 | **PASS** | 首次弹窗 → 点「允许写入」→ 关闭，批准持久化（下次自动放行；探针结束时还原 store） |
 | b 域内写正常 | **PASS** | 改 `…\個人口上\001 Reimu [霊夢]\of_new_kojo_api_TEST.ERB` → 落盘含 marker ✓；备份新增 1 个 `.bak`（`{appData}\backup\of_new_kojo_api_TEST.ERB-dafcdd60\…bak`）；原字节已还原 |
 | c 域外写被拒 | **PASS** | `C:\Windows\Temp\kojo-smoke-outside.txt` → 抛「写允许域拒绝（write）：… 不在允许域内」 |
-| d 关项目后写游戏目录被拒 | **PASS** | 关闭后写 `<游戏目录>\_kojo_smoke_after_close.txt` → 同样抛「写允许域拒绝」 |
+| d 关项目后写游戏目录被拒 | **PASS** | 关闭后写 `<游戏目录>\_kojo_smoke_after_close.txt` → 同样抛「可写范围拒绝」 |
 | e appDataDir 写正常 | **PASS** | `appData_dir` → `ensure_dir` + `write_file_bytes` 成功并可读回 |
 | f 第一道闸（kernel 子集） | 未跑 | 需 devtools 直取 kernel 句柄；kernel io 单测已覆盖，留人工抽验 |
 

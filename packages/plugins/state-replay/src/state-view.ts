@@ -384,7 +384,7 @@ class StateView implements ReplayStateView {
       }
       return v; // unknown 直接透传
     }
-    if (seg.startsWith('[[')) return unknownPair('rename', `重命名词无法求值：${seg}`);
+    if (seg.startsWith('[[')) return unknownPair('rename', `改名记号无法求值：${seg}`);
     if (seg.startsWith('(')) return unknownPair('dynamic-index', `动态角色参数无法求值：${seg}`);
     return unknownPair('other', `无法解析角色参数：${seg}`);
   }
@@ -396,7 +396,7 @@ class StateView implements ReplayStateView {
       // 罕见的索引位指针（如 CFLAG:MASTER → 索引 = MASTER 值）
       return this.resolveCharaArg(seg);
     }
-    if (seg.startsWith('[[')) return unknownPair('rename', `重命名词无法求值：${seg}`);
+    if (seg.startsWith('[[')) return unknownPair('rename', `改名记号无法求值：${seg}`);
     if (seg.startsWith('(')) return unknownPair('dynamic-index', `动态索引段无法求值：${seg}`);
     // 具名索引：经 adapter variableSchema 字典转编号（引擎 VariableStrArgTerm 语义）
     if (this.lookup) {

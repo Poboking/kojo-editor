@@ -239,14 +239,14 @@ describe('四本账合并 · 跨账互斥说人话', () => {
     );
     expect(tl.items).toHaveLength(4);
     for (const item of tl.items) expect(item.action).toBeNull();
-    expect(tl.notes.join('\n')).toMatch(/不在写允许域内/);
+    expect(tl.notes.join('\n')).toMatch(/不在可写范围内/);
   });
 
   it('批操作行自己也要说清"原位不在写允许域"是哪一条路径（逐条给落点）', () => {
     const { items } = buildFileTimeline(
       baseInput({ writable: false, trash: [trashItem('20261020-100000-000-abcd1234', 'C:/other/一处.kojo', 'file', T)] }),
     );
-    expect(items[0]!.warnings.join('\n')).toMatch(/C:\/other\/一处\.kojo 此刻不在写允许域内/);
+    expect(items[0]!.warnings.join('\n')).toMatch(/C:\/other\/一处\.kojo 此刻不在可写范围内/);
   });
 });
 
@@ -360,7 +360,7 @@ describe('全局那一屏（批操作 + 回收站）', () => {
       nowMs: T,
     });
     expect(tl.items[0]!.action).toBeNull();
-    expect(tl.items[0]!.warnings.join('\n')).toMatch(/C:\/game\/旧包 此刻不在写允许域内/);
+    expect(tl.items[0]!.warnings.join('\n')).toMatch(/C:\/game\/旧包 此刻不在可写范围内/);
   });
 });
 

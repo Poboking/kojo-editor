@@ -215,7 +215,7 @@ describe('archive.reader · 落点越界如实拒绝', () => {
     expect(err).toBeInstanceOf(ArchiveExtractError);
     const ae = err as ArchiveExtractError;
     expect(ae.code).toBe('landing-domain');
-    expect(ae.message).toContain('写允许域');
+    expect(ae.message).toContain('可写范围');
     expect(ae.message).toContain(join(ROOT, ARCHIVE_EXTRACT_DIR, basename(ENTRY)));
     expect(h.writes).toEqual([]);
     expect(h.dirs).toEqual([]);

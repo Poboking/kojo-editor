@@ -330,7 +330,7 @@ const UNKNOWN_HINT: Record<string, string> = {
   opaque: '表达式未解析',
   call: '函数调用不可求值',
   builtin: '内置函数无法求值',
-  rename: '重命名词',
+  rename: '改名记号',
   pseudo: '伪变量/运行期值',
   'local-no-write': '本地量无可见赋值',
   'call-context': '调用上下文未提供',

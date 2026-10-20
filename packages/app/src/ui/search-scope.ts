@@ -66,6 +66,8 @@ export function collectSearchScopes(
     try {
       options = contribution.provide(project);
     } catch (e: unknown) {
+      // 刻意不点名是哪家提供方失败：作者面前没有插件 id 这个概念，插件中文显示名登记表还没建。
+      // 要给归因，正解在那张登记表上（先把 pluginId 映射成人话），**不许把 plugin id 放回这句里**。
       notices.push(`有一处范围提供方没能给出候选：${errorText(e)}`);
       continue;
     }
@@ -73,6 +75,7 @@ export function collectSearchScopes(
     for (const option of options) {
       if (option.id === '' || seen.has(option.id)) {
         // 提供方 id / 候选编号都是插件内部标识，不上屏；能指名的只有候选自己的中文标签
+        // （同上一条：归因要走插件中文显示名登记表，这张表建好之前这句保持不点名）
         notices.push(`范围「${option.label}」的候选编号重复或为空，已忽略`);
         continue;
       }

@@ -120,7 +120,7 @@ describe('closeProjectSession：close 抛错仍清理（本批核心判据）', 
     expect(reset).toHaveBeenCalledTimes(1);
     const message = String(reportError.mock.calls[0]?.[0]);
     expect(message).toContain('关闭项目失败：关不掉');
-    expect(message).toContain('写允许域清除失败: IPC 拒绝');
+    expect(message).toContain('关闭项目时可写范围没能清空：IPC 拒绝');
     expect(message.split('\n')).toHaveLength(2);
   });
 });
@@ -154,7 +154,7 @@ describe('closeProjectSession：拆除序的每一步互不阻断', () => {
 
     expect(calls).toEqual(['close', 'stop', 'clear', 'reset', 'recent', 'set-recent:0']);
     expect(reset).toHaveBeenCalledTimes(1);
-    expect(String(reportError.mock.calls[0]?.[0])).toBe('写允许域清除失败: IPC 拒绝');
+    expect(String(reportError.mock.calls[0]?.[0])).toBe('关闭项目时可写范围没能清空：IPC 拒绝');
   });
 
   it('recent() 抛错：状态复位已完成，只多一条显式错误（关关闭路径不 reject）', async () => {

@@ -75,7 +75,7 @@ export function evaluateExpr(expr: ConditionExpr, ctx: EvalContext): ReplayValue
       return unknown('opaque', `未解析表达式：${expr.text}`);
 
     case 'nameValue':
-      return unknown('rename', `重命名词无法求值：${expr.text}`);
+      return unknown('rename', `改名记号无法求值：${expr.text}`);
 
     case 'call': {
       // v0.2 第六批：内置纯函数子集（GETBIT / GROUPMATCH / MAX / MIN / ABS /

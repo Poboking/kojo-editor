@@ -13,7 +13,7 @@ import { errorText } from '@kojo/plugin-api';
  * 判据：
  * - 拆除序与成功路径**逐字同序**：stop → clear_write_domain → 状态复位 → recent；
  * - 每一步的失败都不阻断后一步（每一步都有机会把话说出来，最后合成一条错误）；
- * - 错误文案原样保留既有那句 `写允许域清除失败: …`，新增的关闭失败一句另起一行；
+ * - 写允许域清除失败这句上屏为「关闭项目时可写范围没能清空：…」，新增的关闭失败一句另起一行；
  * - 不判断 Tauri：`clearWriteDomain` 为 null（浏览器壳）时整步跳过。
  *
  * 纯函数、零 React：`packages/app/tests/project-close.test.ts` 用最小 fake kernel 钉住
@@ -66,8 +66,8 @@ export async function closeProjectSession(deps: CloseProjectSessionDeps): Promis
       try {
         await deps.clearWriteDomain();
       } catch (e: unknown) {
-        // 既有文案逐字保留（含半角冒号），新的错误条不另造一套口径
-        errors.push(`写允许域清除失败: ${errorText(e)}`);
+        // 写允许域清除失败这句上屏时说成人话（机制名只留在注释里）；新的错误条不另造一套口径
+        errors.push(`关闭项目时可写范围没能清空：${errorText(e)}`);
       }
     }
 

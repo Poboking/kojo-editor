@@ -344,7 +344,7 @@ describe('writeFill：游戏目录', () => {
       pack: packOf(dirPath),
       fileName: '填空',
     });
-    expect(reasonOf(denied)).toContain('写允许域');
+    expect(reasonOf(denied)).toContain('可写范围');
 
     const existsIo = fakeIo({ existing: [target], writable: [target] }).io;
     const exists = await writeFill({
@@ -386,7 +386,7 @@ describe('writeFill：游戏目录', () => {
       fileName: 'x',
       file,
     });
-    expect(reasonOf(denied)).toContain('写允许域');
+    expect(reasonOf(denied)).toContain('可写范围');
 
     const { io, writes } = fakeIo({ writable: [absPath], files: { [absPath]: 'A\n' } });
     const ok = await writeFill({

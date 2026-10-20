@@ -725,8 +725,8 @@ async function main() {
         return { ok: true, err: null };
       } catch (e) { return { ok: false, err: String(e) }; }
     })()`);
-    if (!cResult.ok && /写允许域拒绝/.test(cResult.err)) {
-      P('c', '域外写被拒', `拒绝且文案含「写允许域拒绝」: ${cResult.err.slice(0, 90)}`);
+    if (!cResult.ok && /可写范围拒绝/.test(cResult.err)) {
+      P('c', '域外写被拒', `拒绝且文案含「可写范围拒绝」: ${cResult.err.slice(0, 90)}`);
     } else if (!cResult.ok) {
       F('c', '域外写被拒', `被拒但文案不含预期关键字: ${cResult.err}`);
     } else {
@@ -770,8 +770,8 @@ async function main() {
         return { ok: true, err: null };
       } catch (e) { return { ok: false, err: String(e) }; }
     })()`);
-    if (!dResult.ok && /写允许域拒绝/.test(dResult.err)) {
-      P('d', '关闭项目后写游戏目录被拒', `拒绝且文案含「写允许域拒绝」: ${dResult.err.slice(0, 90)}`);
+    if (!dResult.ok && /可写范围拒绝/.test(dResult.err)) {
+      P('d', '关闭项目后写游戏目录被拒', `拒绝且文案含「可写范围拒绝」: ${dResult.err.slice(0, 90)}`);
     } else if (!dResult.ok) {
       F('d', '关闭项目后写游戏目录被拒', `被拒但文案不含预期关键字: ${dResult.err}`);
     } else {

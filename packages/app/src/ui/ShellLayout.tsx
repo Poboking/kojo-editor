@@ -1941,6 +1941,8 @@ export function ShellLayout(props: Props): ReactElement {
             // 第一眼只说状态（原文已由打开项目那条通知说过一遍——一处状态只占一格）；
             // 原始错误（路径 + 英文栈式片段）逐字留在悬停里，技术信息一条不丢
             //（口径同 `ui-kojo-navigator` 的 `panel-copy.ts`：首句人话，原文进 title）。
+            // 2026-10-20 复核：常驻 chrome 只有四个字 + 悬停看原因是**刻意的**（用户认可维持现状），
+            // 别把它当成"状态栏信息不足"来补长——同一状态只在通知那一处占格。
             <span className="sb-idx err" title={`索引失败：${stats.indexError}`}>
               索引失败
             </span>

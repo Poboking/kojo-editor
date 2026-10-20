@@ -241,7 +241,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
           try {
             await invoke('register_write_domain', { root: dir });
           } catch (e: unknown) {
-            raiseError(`写允许域注册失败（本项目将只能写入应用数据目录）：${errorText(e)}`);
+            raiseError(`这个项目文件夹眼下不能写入，只有编辑器自己的文件夹能写（备份、作者工作区、未保存快照都在那里）：${errorText(e)}`);
           }
         }
 
