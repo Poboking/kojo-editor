@@ -11,10 +11,10 @@
  * 本文件钉住三件事：
  * 1. NBSP / EM SPACE 独占行是**正文**——文件头到此为止，补声明插在它之前；
  * 2. 这类行在写回时**逐字节保留**（不被清空、不被当成缩进）；
- * 3. 三种源缩进写法（TAB / 4 空格 / 全角空格）的写回逐字节不变——换手不改产物。
+ * 3. 全角空格缩进的写回仍是全角单位（换手不改产物；TAB / 4 空格由
+ *    `lift-apply.test.ts` 的逐条 `toBe` 覆盖）。
  *
- * 既有 lift fixtures 全是 TAB / 半角空格 / 全角缩进、零 NBSP（见 `lift-apply.test.ts`
- * 的逐条 `toBe` 断言），本文件的第 2 组补上 NBSP / EM SPACE 行的逐字节证据。
+ * 既有 lift fixtures 零 NBSP，本文件的第 2 组补上 NBSP / EM SPACE 行的逐字节证据。
  */
 
 import { describe, expect, it } from 'vitest';
