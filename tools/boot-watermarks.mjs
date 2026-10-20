@@ -196,6 +196,18 @@ async function round(label) {
   const s = Date.now();
   while (Date.now() - s < 150000) { if (await cdp.ev(done).catch(() => false)) break; await sleep(1200); }
   await sleep(3000);
+  // W8-D 归因批：冷轮落盘观察窗。save 是 build 尾部的 `void storage.set(...)`——19MB 信封
+  // stringify + 25MB base64 过 IPC + Rust 阻塞线程落盘，整链可长于上面那 3s 观察窗；不等到
+  // settle 就 reload / taskkill ⇒ promise 永不 settle ⇒ saved 与 save failed 两类日志都不会
+  // 出现，落盘静默丢失（本工具前几批 6 次冷轮 3 次没落盘的成因判别）。冷轮最多再等 20s 收
+  // settled 证据；热轮不存盘，不加窗。
+  if (/冷/.test(label)) {
+    const saveMark = cdp.logs.length;
+    for (let i = 0; i < 40; i++) {
+      if (cdp.logs.slice(saveMark).some((l) => /Index snapshot (saved|save failed)/.test(l.t))) break;
+      await sleep(500);
+    }
+  }
   const dump = await cdp.ev(`(() => { const T=window.__kojoTrace; T && T.stop && T.stop(); return JSON.stringify({milestones:T.milestones, perf:T.perf}); })()`);
   const parsed = JSON.parse(String(dump ?? '{}'));
   console.log(`\n===== [wm][${label}] 页内里程碑（ms） =====`);
@@ -205,8 +217,10 @@ async function round(label) {
   console.log(`----- [${label}] 加载期日志（产品自带 log.info，本工具不注入任何探针） ----`);
   // 过滤词含 `lint breakdown`/`lint reuse`（12b 的分区复用读数）与 `lint units`（12c 的
   // 懒取/投机候选读数，单独成行——壳侧单行 170 字符，行尾字段会被切没，PITFALLS 86）；
+  // `Index`（大写）＝ 索引落盘/收尸/换代自愈一行（`Index snapshot saved/pruned/…`，
+  // W8-D 归因批补：小写 `index` 滤词匹配不到大写开头的产品日志，save 失败证据因此整段失踪）；
   // 截断长度取 400。
-  for (const l of cdp.logs.slice(mark)) if (/自定名表|追加名表|汉化词典|工程加载完成|Project opened|index|索引|lint breakdown|lint reuse|lint units|Condition index/.test(l.t)) console.log('   ' + l.t.slice(0, 400));
+  for (const l of cdp.logs.slice(mark)) if (/自定名表|追加名表|汉化词典|工程加载完成|Project opened|index|Index|索引|lint breakdown|lint reuse|lint units|Condition index/.test(l.t)) console.log('   ' + l.t.slice(0, 400));
   return !!(parsed.milestones['水位-校验有结果'] !== undefined && parsed.milestones['Monaco 挂载（自点文件）'] !== undefined);
 }
 

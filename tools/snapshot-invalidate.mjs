@@ -6,9 +6,9 @@
  * 把盘上那份快照改成四条作废触发面之一，再交给 `tools/boot-watermarks.mjs` 量「作废后首开」。
  * **不碰语料盘**（语料整体只读），不改任何等待上限，也不给快照判据开后门。
  *
- * 用法（`--root` 必须显式给：项目根不落进仓库任何文件）：
+ * 用法（`--root` 必须显式给：项目根不落进仓库任何文件；版本号从源码 `SNAPSHOT_VERSION` 自解析）：
  *   node tools/snapshot-invalidate.mjs status                 --root "D:/path/to/语料"
- *   node tools/snapshot-invalidate.mjs to-legacy              --root ...   # 换代：v7 → v6 形态 + v6 键
+ *   node tools/snapshot-invalidate.mjs to-legacy              --root ...   # 换代：当前版 → 落后代形态 + 落后代键
  *   node tools/snapshot-invalidate.mjs damage <N>             --root ...   # 单条目损坏：前 N 条改坏（元数不符）
  *   node tools/snapshot-invalidate.mjs retarget                --root ...   # rootDir 写法不符（反斜杠形态）
  *   node tools/snapshot-invalidate.mjs drop                    --root ...   # 真·冷（当前键那份删掉）
@@ -17,6 +17,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const MODE = argv[0];
@@ -25,6 +26,19 @@ const ROOT = rootIdx >= 0 ? argv[rootIdx + 1] : null;
 const EXTRA = Number(argv[1]);
 
 const SCOPE_DIR = path.join(os.homedir(), 'AppData', 'Roaming', 'dev.kojo.editor', 'store', 'erb-parser');
+
+/**
+ * 当前快照版本**从源码读**（W8-D 批：工具原先硬编码 v7/v6，SNAPSHOT_VERSION 已换代到 10，
+ * 旧键号全部打空）。解析 `snapshot.ts` 的 `export const SNAPSHOT_VERSION = <n>;`，
+ * 落后代 = `CUR - 1`（与 `snapshot-salvage.test.ts` 的 legacy 键同口径）。
+ */
+const SNAPSHOT_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'packages', 'plugins', 'erb-parser', 'src', 'snapshot.ts');
+const CUR = Number(fs.readFileSync(SNAPSHOT_SRC, 'utf-8').match(/export const SNAPSHOT_VERSION = (\d+)/)?.[1]);
+if (!Number.isInteger(CUR) || CUR < 1) {
+  console.error(`[inv] 无法从 ${SNAPSHOT_SRC} 解析 SNAPSHOT_VERSION`);
+  process.exit(2);
+}
+const PREV = CUR - 1;
 
 /** 与 `snapshot.ts:snapshotKeyFor` 同一条 FNV-1a（32 位 → 8 位十六进制） */
 function keyFor(rootDir, version) {
@@ -74,7 +88,7 @@ function report(tag) {
 
 if (!MODE || MODE === 'status') {
   report('status');
-  if (ROOT) console.log(`  当前键（v7）= ${keyFor(ROOT, 7)} ／ 旧键（v6）= ${keyFor(ROOT, 6)}`);
+  if (ROOT) console.log(`  当前键（v${CUR}）= ${keyFor(ROOT, CUR)} ／ 旧键（v${PREV}）= ${keyFor(ROOT, PREV)}`);
   process.exit(0);
 }
 if (!ROOT) {
@@ -82,7 +96,7 @@ if (!ROOT) {
   process.exit(2);
 }
 
-const v7key = keyFor(ROOT, 7);
+const v7key = keyFor(ROOT, CUR);
 const file7 = path.join(SCOPE_DIR, `${v7key}.json`);
 report('改前');
 if (!fs.existsSync(file7)) {
@@ -94,13 +108,18 @@ const entries = payload.entries ?? {};
 const paths = Object.keys(entries);
 
 if (MODE === 'to-legacy') {
-  // v6 形态：前 9 位逐字同义、只缺第 10 位（refs 名录摘要）；键也换成 v6
+  // 落后代形态（v10 → v9 口径）：键换成 PREV、信封 version 同步。
+  // 条目内容对"未命中"不敏感——`salvageSnapshot` 在信封版本闸（SALVAGEABLE_VERSIONS）
+  // 就整份拒绝 v9，根本读不到 entries；此处仍把函数元组第 7 位（nameColumn，v9 起才有）剥掉，
+  // 只为让盘上形态与真 v9 语义尽量同形（dims 的值语义差异无法合成，注释为证）。
   const out = {};
-  for (const p of paths) out[p] = entries[p].slice(0, 9);
-  const legacyKey = keyFor(ROOT, 6);
-  fs.writeFileSync(path.join(SCOPE_DIR, `${legacyKey}.json`), JSON.stringify({ ...payload, version: 6, entries: out }));
+  for (const [p, t] of Object.entries(entries)) {
+    out[p] = Array.isArray(t) && Array.isArray(t[5]) ? [...t.slice(0, 5), t[5].map((f) => (Array.isArray(f) && f.length > 6 ? f.slice(0, 6) : f)), ...t.slice(6)] : t;
+  }
+  const legacyKey = keyFor(ROOT, PREV);
+  fs.writeFileSync(path.join(SCOPE_DIR, `${legacyKey}.json`), JSON.stringify({ ...payload, version: PREV, entries: out }));
   fs.rmSync(file7);
-  console.log(`[inv] to-legacy：${paths.length} 条降到 v6 形态并搬进 ${legacyKey}（当前键已删）`);
+  console.log(`[inv] to-legacy：${paths.length} 条降到 v${PREV} 形态并搬进 ${legacyKey}（当前键已删）`);
 } else if (MODE === 'damage') {
   if (!Number.isInteger(EXTRA) || EXTRA <= 0) {
     console.error('[inv] damage 要给正整数 N');
@@ -115,13 +134,13 @@ if (MODE === 'to-legacy') {
   // 真壳的 rootDir 常是反斜杠形态，所以变体必须"往反方向换"，否则换完全等于是同一个键。
   const altSep = ROOT.includes('\\') ? '/' : '\\';
   const backRoot = ROOT.replace(/[\\/]/g, altSep);
-  if (keyFor(backRoot, 7) === v7key) {
+  if (keyFor(backRoot, CUR) === v7key) {
     console.error('[inv] retarget：换完写法与当前键相同（无变体可造），什么都不改');
     process.exit(2);
   }
   const out = {};
   for (const p of paths) out[p.replace(/[\\/]/g, altSep)] = entries[p];
-  const backKey = keyFor(backRoot, 7);
+  const backKey = keyFor(backRoot, CUR);
   fs.writeFileSync(path.join(SCOPE_DIR, `${backKey}.json`), JSON.stringify({ ...payload, rootDir: backRoot, entries: out }));
   fs.rmSync(file7);
   console.log(`[inv] retarget：写入 ${backKey}（rootDir=${backRoot}），当前键已删`);
