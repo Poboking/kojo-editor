@@ -8,6 +8,19 @@
  * （本工具原先要求屏上出现 `选择 eraTW 游戏目录`，而实际文案是 `选择游戏目录`）。
  * 同理端口探测两个协议栈都试（vite 7 在本机只绑 `::1`）。
  *
+ * **端口 / 页面 origin（2026-10-20 补，与 IPC / market 冒烟同口径）**：vite 端口默认按仓库配置
+ * （`tauri.conf.json` 的 `build.devUrl` 与 `vite.config.ts` 的 `server.port`，当前 1420）；
+ * `KOJO_SMOKE_VITE_PORT=<port>` 可换（临时合并配置走 `tauri dev --config`，机制与理由见
+ * `tools/smoke-lib.mjs` 的 `devTarget`）。别的树只挂 `[::1]:1420` 而 devUrl 写 `localhost` 时，
+ * WebView2 的 IPv6 优先会把壳驱动到**别人的 dev server** 上（测出来的绿与本次改动无关）；
+ * 因此覆盖端口时 devUrl 固定写 `127.0.0.1:<port>`，并且**起壳后先钉页面 origin** 才判绿。
+ * CDP 端口固定 9222（本工具自己拉起的 WebView2 专用调试口）。
+ *
+ * `KOJO_SMOKE_ISOLATE_APPDATA=1`（可选）：用 `<identifier>.smoke` 这份独立身份起壳，
+ * appDataDir 随之独立。理由见 `devTarget` 的 `isolateAppData`：**别人的崩溃恢复横幅也带
+ * `.notice`**，共用 appData 时会被本工具的结构判据当成"内核装配中"而整轮判红——那是用户数据
+ * 的在场，不是 app 的毛病，隔离后结构断言只看结构。（结构判据本身一个字没改。）
+ *
  * 进程级：vite 端口 / tauri 进程 / 不闪退（同 smoke-tauri-dev.mjs）；
  * DOM 级：通过 WebView2 远程调试端口（CDP）连接，执行 JS 检查 React 是否真正渲染
  *        （欢迎页/内核 bootstrap 状态），排除"窗口起来但白屏"的情况。
@@ -33,12 +46,15 @@
  *    口径依赖，别调换顺序）。
  *
  * 用法：node tools/smoke-tauri-dom.mjs [监测秒数，默认 100]
- * 退出码：0 = 通过；1 = 失败；2 = 前置不满足（端口被占 / 断言①底色真源读不到）。
+ *       KOJO_SMOKE_VITE_PORT=1432 node tools/smoke-tauri-dom.mjs 110   （换 vite 端口，CDP 仍是 9222）
+ *       KOJO_SMOKE_ISOLATE_APPDATA=1 …                                   （独立 appDataDir，避开别人的恢复横幅）
+ * 退出码：0 = 通过；1 = 失败；2 = 前置不满足（端口被占 / 配置自相矛盾 / 断言①底色真源读不到）。
  * 注意：会短暂弹出应用窗口（结束后自动关闭）。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import { assertPageOrigin, devTarget } from './smoke-lib.mjs';
 import {
   collectBoot,
   judgeBoot,
@@ -124,14 +140,29 @@ async function cdpEval(wsUrl, expression, timeoutMs = 15000) {
  * 不检查的代价实测过一次：上一轮残留的 vite 占着 1420 ⇒ 本轮 `tauri dev` 的
  * BeforeDevCommand 直接失败，而探针最后报的是"DOM 未挂载"——**一个与会话无关的假诊断**，
  * 白白多跑一轮才看清（§5.117）。红要红在真正的原因上。
+ *
+ * 端口取自 `devTarget`（与 IPC / market 冒烟同一份机制）：`KOJO_SMOKE_VITE_PORT` 可换，
+ * 这样别的树占着 1420 时本工具也能跑；**被占时仍旧 exit 2 退避**，不抢清端口——
+ * 占 1420 的可能是别人正在看的会话（PITFALLS 142，先按 PID 认属主再谈清不清）。
  */
+let dev;
+try {
+  dev = devTarget(ROOT, { isolateAppData: process.env.KOJO_SMOKE_ISOLATE_APPDATA === '1' });
+} catch (e) {
+  console.log(`[smoke] dev 地址解析失败：${String(e && e.message ? e.message : e)}`);
+  process.exit(2);
+}
+const CDP_PORT = 9222;
+
 const busy = [];
-for (const p of [1420, 9222]) if (await portOpen(p)) busy.push(p);
+for (const p of [dev.port, CDP_PORT]) if (await portOpen(p)) busy.push(p);
 if (busy.length > 0) {
   console.log(
-    `[smoke] 端口已被占用：${busy.join(' / ')} —— 多半是上一轮 tauri dev / WebView2 残留。\n` +
-      '        先清掉再跑：netstat -ano | findstr 端口  取 PID 后 taskkill /PID <pid> /T /F',
+    `[smoke] 端口已被占用：${busy.join(' / ')} —— 先按 PID 认属主再清（netstat -ano | findstr 端口），` +
+      '别杀别人的 dev server。\n' +
+      `        或者换端口绕开：KOJO_SMOKE_VITE_PORT=<空闲端口> 再跑（CDP 固定 ${CDP_PORT}）。`,
   );
+  dev.cleanup();
   process.exit(2);
 }
 
@@ -139,7 +170,8 @@ if (busy.length > 0) {
  * 收尸要按**端口持有者**收，不能只杀 `child.pid` 那一棵树：
  * WebView2 与 vite 都会挂到树外（实测本工具跑完留下 `msedgewebview2` 占 9222、
  * `node` 占 `[::1]:1420`），下一轮就撞上"端口被占用"或更糟——一个假的 "DOM 未挂载"（§5.117）。
- * 这两个端口是我们的专用调试口：真被别人占着的话，前置检查早就拦下了。
+ * 这两个端口是我们的专用调试口：起壳前的前置检查已经确认它们是空的（而且只收**本次实际用的**
+ * vite 端口 + 9222，绝不会去碰别人的 1420）。
  */
 function killPortOwners(ports) {
   const ns = spawnSync('netstat -ano', { shell: true, encoding: 'utf8' }).stdout ?? '';
@@ -156,23 +188,31 @@ function killPortOwners(ports) {
 
 /**
  * 断言①的**底色真源**在起壳之前先过一遍（三档各现读一次 `--bg`）：真源塌了必须在这里响——
- * 抛在采样循环里会被当成「boot 采样重试」，抛在后面又会把已起的壳和 1420/9222 端口留成孤儿。
+ * 抛在采样循环里会被当成「boot 采样重试」，抛在后面又会把已起的壳和 vite/CDP 端口留成孤儿。
  * 这一趟只读三个小文件，比白烧一轮 ~100s 桌面预算便宜得多（前置条件由工具自己把关，同上面的端口检查）。
  */
 try {
   for (const t of ['dark', 'light', 'mint-dark']) expectedBootBg(t);
 } catch (e) {
   console.log(`[smoke] 断言①底色真源塌了：${String(e && e.message ? e.message : e)}`);
+  dev.cleanup();
   process.exit(2);
 }
 
-console.log('[smoke] launching tauri dev (with CDP 9222) …');
-const child = spawn('pnpm --filter @kojo/app tauri dev', {
+const devNotes = [
+  process.env.KOJO_SMOKE_VITE_PORT ? '端口来自 KOJO_SMOKE_VITE_PORT' : '',
+  process.env.KOJO_SMOKE_ISOLATE_APPDATA === '1' ? 'appDataDir 隔离（.smoke 身份）' : '',
+].filter(Boolean).join('，');
+console.log(
+  `[smoke] launching tauri dev (Vite ${dev.port}, CDP ${CDP_PORT}${devNotes ? '；' + devNotes : ''}) …`,
+);
+const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+const child = spawn(devCmd, {
   shell: true,
   cwd: ROOT,
   env: {
     ...process.env,
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222',
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -194,6 +234,12 @@ const checks = {
   domRendered: false,
   domText: '',
   rootChildren: 0,
+  // 页面 origin 必须落在本次 dev 地址上（dev.origin）：端口被别的树占着时 localhost 可能把壳带偏，
+  // 那种绿不算数——与 IPC / market 冒烟同一道假绿闸（smoke-lib.assertPageOrigin）。
+  originChecked: false,
+  originOk: null,
+  pageHref: '',
+  originReason: '',
   // L1-0（见文件头）：boot = collectBoot 的原始采样；a1/a2 = 两条硬断言；splashGone = 引导层已撤
   // a2 判定口径写在 a2Caliber（Network 域优先，取不到才退回页内资源时间线）
   bootChecked: false,
@@ -213,21 +259,21 @@ const started = Date.now();
 while (Date.now() - started < WATCH_SECONDS * 1000) {
   await sleep(2000);
   if (exited) break;
-  if (!checks.viteUp && (await portOpen(1420))) {
+  if (!checks.viteUp && (await portOpen(dev.port))) {
     checks.viteUp = true;
-    console.log('[smoke] vite 1420 ✓');
+    console.log(`[smoke] vite ${dev.port} ✓`);
   }
   if (!checks.hostLaunched && /Running `target\\debug\\kojo-editor/.test(stripAnsi(output))) {
     checks.hostLaunched = true;
     console.log('[smoke] host binary launched ✓');
   }
-  if (checks.hostLaunched && !checks.cdpUp && (await portOpen(9222))) {
+  if (checks.hostLaunched && !checks.cdpUp && (await portOpen(CDP_PORT))) {
     checks.cdpUp = true;
-    console.log('[smoke] CDP 9222 ✓');
+    console.log(`[smoke] CDP ${CDP_PORT} ✓`);
   }
   if (checks.cdpUp && !checks.domRendered) {
     try {
-      const list = await (await fetch('http://127.0.0.1:9222/json')).json();
+      const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
       const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
       if (page) {
         const raw = await cdpEval(
@@ -261,10 +307,43 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
       console.log('[smoke] CDP eval retry:', String(e).slice(0, 120));
     }
   }
+  // 页面 origin 只认本次 dev 地址（默认档 = 仓库配置的 origin；覆盖档 = 127.0.0.1:<port>）。
+  // 只要页面已导航到 http(s) 就钉，**不等结构判据**：结构红了也要知道这屏是从哪个 dev server 来的
+  // （"假绿"与"假红"都要同一个地址锚）。判据与 IPC / market 冒烟共用 `smoke-lib.assertPageOrigin`；
+  // 采样本身的故障（取页表 / ws 掉线 / 还在 about:blank）只记重试，不冒充"origin 不对"。
+  if (checks.cdpUp && !checks.originChecked) {
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
+      const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      if (page) {
+        const href = await cdpEval(page.webSocketDebuggerUrl, 'location.href');
+        // 非 http(s)（about:blank 之类）不算"采样到位"，重试；只有真站在 dev 地址上才交给共享闸判
+        const proto = (() => { try { return new URL(String(href)).protocol; } catch { return ''; } })();
+        if (!/^https?:$/.test(proto)) throw new Error(`页面尚未导航到 http(s)：${String(href)}`);
+        checks.pageHref = await assertPageOrigin(
+          { evalJs: (expression) => cdpEval(page.webSocketDebuggerUrl, expression) },
+          dev.origin,
+        );
+        checks.originOk = true;
+        checks.originChecked = true;
+        console.log(`[smoke] 页面 origin ✓（${checks.pageHref}）`);
+      }
+    } catch (e) {
+      const message = String(e && e.message ? e.message : e);
+      if (message.includes('页面 origin 不是预期的 dev 地址')) {
+        checks.originOk = false;
+        checks.originChecked = true;
+        checks.originReason = message;
+        console.log(`[smoke] ❌ ${message}`);
+      } else {
+        console.log('[smoke] origin 采样重试:', message.slice(0, 120));
+      }
+    }
+  }
   if (checks.domRendered && !checks.bootChecked) {
     // 冷开机这一轮的读数（四标记 + 断言①）。判定在 boot-probe.judgeBoot，本文件不再自写口径。
     try {
-      const list = await (await fetch('http://127.0.0.1:9222/json')).json();
+      const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
       const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
       if (page) {
         const raw = await cdpEval(page.webSocketDebuggerUrl, `(${collectBoot.toString()})()`);
@@ -301,6 +380,8 @@ while (Date.now() - started < WATCH_SECONDS * 1000) {
       console.log('[smoke] boot 采样重试:', String(e).slice(0, 120));
     }
   }
+  // origin 不匹配 = 页面根本不在本次 dev 地址上，后续读数（结构 / boot）都没有意义：立即收工判红
+  if (checks.originChecked && checks.originOk === false) break;
   if (checks.domRendered && checks.bootChecked) break;
 }
 
@@ -352,6 +433,7 @@ const passed =
   checks.hostLaunched &&
   checks.cdpUp &&
   checks.domRendered &&
+  checks.originOk === true &&
   checks.bootChecked &&
   checks.a1 &&
   checks.a2 &&
@@ -364,9 +446,12 @@ if (!exited && child.pid) {
   console.log('[smoke] terminating pid=' + child.pid);
   spawnSync(`taskkill /PID ${child.pid} /T /F`, { shell: true, stdio: 'ignore' });
 }
-// 树外残留（WebView2 / vite）单独收，否则端口留给下一轮
-const orphans = killPortOwners([1420, 9222]);
+// 树外残留（WebView2 / vite）单独收，否则端口留给下一轮。
+// **只收本次实际用的 vite 端口 + 9222**（默认档下就是 1420；覆盖档下是 dev.port）——
+// 绝不碰别人的 1420（PITFALLS 142：那可能是别人正在看的会话）。
+const orphans = killPortOwners([dev.port, CDP_PORT]);
 if (orphans.length > 0) console.log('[smoke] 已清掉树外残留进程 pid=' + orphans.join(' / '));
+dev.cleanup();
 
 console.log(passed ? '✅ tauri DOM smoke passed' : '❌ tauri DOM smoke failed');
 if (!passed) {
@@ -374,10 +459,13 @@ if (!passed) {
   console.log(
     '[smoke] 未满足：' +
       [
-        !checks.viteUp && 'vite 1420 未监听（IPv4/IPv6 都试过）',
+        !checks.viteUp && `vite ${dev.port} 未监听（IPv4/IPv6 都试过）`,
         !checks.hostLaunched && '未看到 `Running target\\debug\\kojo-editor`',
-        !checks.cdpUp && 'CDP 9222 未监听',
+        !checks.cdpUp && `CDP ${CDP_PORT} 未监听`,
         !checks.domRendered && 'DOM 未挂载（要求 .welcome + .welcome-card 且无 .notice；rootChildren 见 checks）',
+        !checks.originChecked && checks.cdpUp && '未能校验页面 origin',
+        checks.originChecked && checks.originOk === false &&
+          `页面 origin 不在本次 dev 地址上（见上方打印行；期望 ${dev.origin}）`,
         !checks.bootChecked && '未采到 L1-0 boot 标记（boot.welcomeInteractive 一直未上报）',
         checks.bootChecked && !checks.a1 && 'L1-0 断言①未过（≤500ms 内底色未落到该 data-theme 档应有的 --bg、也未见 #root 非空，' +
           '或 内联底色 / 挂载后计算底色 != 该档源码的 --bg；档位与三方读数见上方打印行）',

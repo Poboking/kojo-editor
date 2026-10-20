@@ -46,8 +46,15 @@ export async function portBusy(port) {
  * 都会生效）。代价写在返回的注释里：`TAURI_CONFIG` 变了会触发 cargo 重编 app crate（~30s）。
  *
  * 返回 `{ port, origin, tauriArgs, cleanup }`；`tauriArgs` 直接拼在 `tauri dev` 后面。
+ *
+ * `opts.isolateAppData`（可选，DOM 冒烟用）：在合并配置里把 `identifier` 换成
+ * `<原 identifier>.smoke` ⇒ 这一轮的 `appDataDir` 落在一份独立身份下。为什么需要：
+ * **别人的崩溃恢复横幅也带 `.notice`**，共用 `%APPDATA%` 时 DOM 冒烟的结构判据会把它当成
+ * "内核装配中"而整轮判红（2026-10-20 实测：快照是一名 sibling 会话的未保存编辑，不能替它丢）；
+ * 隔离后结构断言与用户数据彻底解耦，也不碰任何人的快照。代价同端口覆盖：
+ * `TAURI_CONFIG` 变了会触发 cargo 重编 app crate。
  */
-export function devTarget(root) {
+export function devTarget(root, opts = {}) {
   const confFile = path.join(root, 'packages', 'app', 'src-tauri', 'tauri.conf.json');
   const viteFile = path.join(root, 'packages', 'app', 'vite.config.ts');
   const conf = JSON.parse(fs.readFileSync(confFile, 'utf8'));
@@ -62,28 +69,32 @@ export function devTarget(root) {
   }
 
   const wanted = Number(process.env.KOJO_SMOKE_VITE_PORT ?? '') || 0;
-  if (wanted === 0 || wanted === vitePort) {
+  const overridePort = wanted !== 0 && wanted !== vitePort;
+  const isolateAppData = opts.isolateAppData === true;
+  if (!overridePort && !isolateAppData) {
     return { port: vitePort, origin: devUrl.origin, tauriArgs: [], cleanup: () => {} };
   }
 
   /* 端口覆盖：devUrl 这里**不写 localhost**——壳只认一个确定地址，页面 origin 才好钉 */
-  const file = path.join(os.tmpdir(), `kojo-smoke-dev-${wanted}.json`);
-  fs.writeFileSync(
-    file,
-    JSON.stringify(
-      {
-        build: {
-          devUrl: `http://127.0.0.1:${wanted}`,
-          beforeDevCommand: `pnpm dev --port ${wanted} --host 127.0.0.1 --strictPort`,
-        },
-      },
-      null,
-      2,
-    ),
-  );
+  const port = overridePort ? wanted : vitePort;
+  const overrides = {};
+  if (overridePort) {
+    overrides.build = {
+      devUrl: `http://127.0.0.1:${wanted}`,
+      beforeDevCommand: `pnpm dev --port ${wanted} --host 127.0.0.1 --strictPort`,
+    };
+  }
+  if (isolateAppData) {
+    if (typeof conf.identifier !== 'string' || conf.identifier === '') {
+      throw new Error('tauri.conf.json 没有 identifier，无法用隔离身份跑（appDataDir 无处落脚）');
+    }
+    overrides.identifier = `${conf.identifier}.smoke`;
+  }
+  const file = path.join(os.tmpdir(), `kojo-smoke-dev-${port}${isolateAppData ? '-iso' : ''}.json`);
+  fs.writeFileSync(file, JSON.stringify(overrides, null, 2));
   return {
-    port: wanted,
-    origin: `http://127.0.0.1:${wanted}`,
+    port,
+    origin: overridePort ? `http://127.0.0.1:${wanted}` : devUrl.origin,
     tauriArgs: ['--config', file],
     cleanup: () => { try { fs.rmSync(file, { force: true }); } catch {} },
   };
