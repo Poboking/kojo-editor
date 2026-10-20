@@ -1751,7 +1751,15 @@ fn map_drag_drop(event: tauri::DragDropEvent) -> Option<DragDropPayload> {
 // 理由：混编码语料里 utf-16 文件按字节永远匹配不到，字节路径必须特判；而"正则 /
 // 全词 / 大小写"三个开关在两条路径上会各有一套语义（正则根本无法按字节解释非 ASCII）。
 // 统一解码只有一套语义，代价是每文件多一趟解码——`byte_prefilter` 把大多数文件挡在
-// 解码之前（字面量 + 纯 ASCII + 大小写敏感时，命中必然在原始字节里出现）。
+// 解码之前（字面量 + 大小写敏感时，查询的**宽度等价形**仍以原字节出现在合法 UTF-8
+// 文件里；遗留族不预筛，见 `byte_prefilter` 的半径说明）。
+//
+// 宽度折叠（2026-10-20）：字面量查询在匹配前做**全角/半角折叠**（U+FF01–U+FF5E ↔
+// U+0021–U+007E、U+3000 ↔ 空格；只折宽度，不折繁简/假名/大小写）。实现不是改写查询与
+// 正文，而是把查询逐字符展开成"宽度等价类"（一个同时含 `(` 与 `（` 的字符类）——
+// 命中偏移仍落在原文上，预览/高亮/替换坐标无需二次换算。恒开，无开关；需要精确宽度时
+// 用正则模式（作者拥有 pattern，本层不折）。与 TS 替换侧同表同样例，见
+// `search_tests.rs` 的 `WIDTH_FOLD_CASES`。
 
 /// 命中条数硬顶（前端上限之上再兜一层：IPC 载荷不许失控）
 const SEARCH_HARD_CAP: usize = 5000;
@@ -1946,11 +1954,73 @@ fn preview_window<'a>(
     )
 }
 
+/// 宽度折叠的**规范形**（半角）：全角 ASCII 区 U+FF01–U+FF5E 折回 U+0021–U+007E，
+/// U+3000（全角空格）折成 U+0020，其余字符原样。**只折宽度**——不折繁简（`髙`≠`高`）、
+/// 不折假名（`ｱ` 在 U+FF71，表外）、不折大小写（那是 `case_sensitive` 开关的事）。
+///
+/// 跨语言契约：与 TS `packages/app/src/ui/search-replace.ts` 的 `foldWidth` **同一张表**
+/// （同一组码点区间与位移 0xFEE0）；两侧样例数组 `WIDTH_FOLD_CASES` 逐字同源——
+/// **改一处必须改两处**（两套测试各有自己的加载面，不引共享数据文件）。
+fn fold_width(ch: char) -> char {
+    let cp = ch as u32;
+    if (0xFF01..=0xFF5E).contains(&cp) {
+        char::from_u32(cp - 0xFEE0).unwrap_or(ch)
+    } else if cp == 0x3000 {
+        ' '
+    } else {
+        ch
+    }
+}
+
+/// 规范半角形 → 另一半（全角形）：U+0021–U+007E → U+FF01–U+FF5E，空格 → U+3000，
+/// 其余原样。与 [`fold_width`] 合成一个宽度等价类（两种形态）。
+fn unfold_width(ch: char) -> char {
+    let cp = ch as u32;
+    if (0x0021..=0x007E).contains(&cp) {
+        char::from_u32(cp + 0xFEE0).unwrap_or(ch)
+    } else if cp == 0x0020 {
+        '\u{3000}'
+    } else {
+        ch
+    }
+}
+
+/// 字面量查询 → **宽度折叠等价**的正则源码：每个字符展开成它的宽度等价类
+/// （`（` 展开成一个同时含 `(` 与 `（` 的字符类；`Ａ` 展开成含 `A` 与 `Ａ` 的类；
+/// U+3000 展开成含空格与全角空格的类；单形字符照常转义）。
+/// 逐字符一一展开、长度不变 ⇒ 命中偏移仍落在原文上，预览与替换坐标不用二次换算。
+///
+/// **只用于非正则查询**：正则模式下作者拥有 pattern 的解释权，折叠字符会改写转义 /
+/// 字符类 / 量词的语义（如 `\x{FF08}`），故原样编译、不折——这也正是"需要精确宽度
+/// 匹配"时的逃生口。
+fn literal_width_pattern(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() * 4);
+    for ch in query.chars() {
+        let half = fold_width(ch);
+        let full = unfold_width(half);
+        if half == full {
+            out.push_str(&regex::escape(&half.to_string()));
+        } else {
+            // 字符类内只需防 `\` / `]` / `^` / `-`；`regex::escape` 转义得更宽（`(` 等
+            // 也带反斜杠），但那些转义在类内同样合法，预览不会因此变化
+            out.push('[');
+            out.push_str(&regex::escape(&half.to_string()));
+            out.push_str(&regex::escape(&full.to_string()));
+            out.push(']');
+        }
+    }
+    out
+}
+
 /// 标识字符（与前端 `search-replace.ts` 的 `IDENT_RE = /[\p{L}\p{N}_]/u` 同一字符集）。
 ///
 /// **不用 `\b`**：regex crate 的 Unicode `\b` 以 `\w` 为词符（含组合记号与 Join_Control），
 /// 而且要求模式首尾两侧是"词符↔非词符"的过渡——模式自身首尾是非词字符（如 `（测试）`）
 /// 时，它在行首/行尾永远等不到边界，与替换侧（逐格看相邻字符）对同一份样例给出相反裁决。
+///
+/// **先折宽度再判**：`＿`（U+FF3F）折成 `_` 后是标识字符，与半角写法同判；其余全角
+/// 标点/字母折成 ASCII 后与半角同判。调用方传入的应是 [`fold_width`] 之后的形式
+/// （见 [`SearchMatcher::whole_word_ok`]）。
 ///
 /// **非 BMP 字符按"非标识"处理**：前端取相邻的是**一个 UTF-16 单元**（`line[start - 1]`），
 /// 代理对的一半永远匹配不上 `\p{L}\p{N}` ⇒ 前端把任何非 BMP 字符当非标识字符。
@@ -1979,12 +2049,13 @@ struct SearchMatcher {
 
 impl SearchMatcher {
     /// 命中区间两侧都不是标识字符（或没有相邻字符）才算全词。
+    /// 相邻格先做宽度折叠（`＿` → `_` 等），与 TS 侧 `wholeWordOk` 同判。
     fn whole_word_ok(&self, text: &str, start: usize, end: usize) -> bool {
         if !self.whole_word {
             return true;
         }
-        let before = text[..start].chars().next_back();
-        let after = text[end..].chars().next();
+        let before = text[..start].chars().next_back().map(fold_width);
+        let after = text[end..].chars().next().map(fold_width);
         !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
     }
 
@@ -2007,6 +2078,9 @@ impl SearchMatcher {
 /// 模式 + 三个开关 → 匹配器。口径 = **逐行匹配**（grep 语义：`^`/`$` 落在行首行尾，
 /// 跨行模式不参与；这与"点开能看到行号"的宿主呈现是一致的）。
 /// 全词判据见 [`is_ident_char`] / [`SearchMatcher::whole_word_ok`]（与替换侧同一把尺）。
+///
+/// 字面量查询先做宽度折叠（[`literal_width_pattern`]）；正则查询原样编译（不折，
+/// 作者拥有 pattern）。大小写开关仍由 `(?i)` 统一施加——宽度与大小写是两个维度。
 fn build_matcher(
     query: &str,
     is_regex: bool,
@@ -2016,7 +2090,7 @@ fn build_matcher(
     let body = if is_regex {
         query.to_string()
     } else {
-        regex::escape(query)
+        literal_width_pattern(query)
     };
     let pattern = if case_sensitive {
         body
@@ -2030,10 +2104,13 @@ fn build_matcher(
 
 /// 字节级预筛的产物：匹配器 + 一条"这份预筛对哪些文件成立"的强度标记（PS-1 §3）。
 struct BytePrefilter {
+    /// 按**宽度折叠等价类**编译的字节正则（`abc` → `[aａ][bｂ][cｃ]`）。
     re: regex::bytes::Regex,
-    /// true ⇒ 查询是纯 ASCII 字面量：**所有** ASCII 兼容族（utf-8 / shift_jis / gbk / big5）
-    /// 都把它逐字节透传，字节里没有就等于文本里没有（legacy 族的双字节尾字节可能撞出
-    /// 误报，但误报只是多做一次解码，不漏报）。
+    /// true ⇒ 查询是纯 ASCII 且**没有任何可折字符**（控制字符一类）：**所有** ASCII 兼容族
+    /// （utf-8 / shift_jis / gbk / big5）都把它逐字节透传，字节里没有就等于文本里没有
+    /// （legacy 族的双字节尾字节可能撞出误报，但误报只是多做一次解码，不漏报）。
+    /// 一旦查询含可折字符（正常查询几乎都含），全角形的遗留族编码与 UTF-8 不同 ⇒
+    /// 这条通道关闭，只对"整份字节是合法 UTF-8"的文件预筛。
     ascii_safe: bool,
 }
 
@@ -2045,6 +2122,11 @@ struct BytePrefilter {
 /// （BOM 也只是剥前缀、命中文本仍在剩余字节里），字面量要命中就必然以同一串 UTF-8
 /// 字节原样出现 ⇒ 非 ASCII 查询对 99.5% 的语料（utf-8 + utf-8-bom 6,690 + 5,907 份）同样能预筛。
 /// 遗留族（shift_jis/gbk/big5，字节形不同）只在 `ascii_safe` 那条通道下被筛，否则照常解码匹配。
+///
+/// **宽度折叠（2026-10-20）**：预筛正则与匹配器用**同一份**宽度等价类（[`literal_width_pattern`]），
+/// 否则半角查询会被字节层误杀全角正文（`A` 与 `Ａ` 的 UTF-8 字节不同）。折叠让
+/// `ascii_safe` 通道对正常查询关闭：遗留族里全角形的字节与 UTF-8 不同，按 UTF-8 字节筛
+/// 会漏杀。剩下 60 余份遗留族文件退回解码后匹配——只多一趟解码，绝不多一条漏报。
 ///
 /// 大小写不敏感一律不预筛：Unicode 简单大小写折叠（如 U+212A KELVIN ↔ 'k'）会让
 /// "字节里有"与"文本里能匹配"不再等价——省下的解码不值一次漏报。
@@ -2063,10 +2145,16 @@ fn byte_prefilter(
     if is_regex || !case_sensitive || whole_word || query.is_empty() {
         return None;
     }
-    regex::bytes::Regex::new(&regex::escape(query))
+    regex::bytes::Regex::new(&literal_width_pattern(query))
         .ok()
         .map(|re| BytePrefilter {
-            ascii_safe: query.is_ascii(),
+            // 纯 ASCII 且无可折字符 ⇒ 旧通道仍成立；含可折字符（正常查询几乎都含）
+            // ⇒ 只能对合法 UTF-8 文件预筛（见上）
+            ascii_safe: query.is_ascii()
+                && query.chars().all(|c| {
+                    let half = fold_width(c);
+                    half == c && unfold_width(half) == c
+                }),
             re,
         })
 }
@@ -2326,8 +2414,9 @@ fn scan_file(
         return FileOutcome::Binary;
     }
     // 字节级预筛：不命中的文件整个跳过解码。成立条件两条（口径见 `byte_prefilter`）：
-    // ASCII 字面量对所有 ASCII 兼容族成立，或**这份字节本身就是合法 UTF-8**
-    // （解码不改字节 ⇒ 字面量命中必然以同一串字节出现）。utf-16 的字节被 0 隔开，预筛对它不成立。
+    // 无可折字符的 ASCII 字面量对所有 ASCII 兼容族成立，或**这份字节本身就是合法 UTF-8**
+    // （解码不改字节 ⇒ 字面量命中必然以同一串字节出现；折叠后的两种宽度形态都已编进
+    // 预筛正则）。utf-16 的字节被 0 隔开，预筛对它不成立。
     if !utf16ish {
         if let Some(pre) = prefilter {
             let applies = pre.ascii_safe || std::str::from_utf8(&bytes).is_ok();

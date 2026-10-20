@@ -17,13 +17,78 @@ import type { SearchOptionsState } from './search-store';
  * JS 的 `\b` 是 ASCII 口径，CJK 不是 `\w`——真语料 21% 的函数名含 CJK，`\b` 会静默
  * 漏配。这里不用 `\b`，命中后**逐侧看一格字符**（Unicode 字母/数字/下划线即非边界），
  * 行内判定（与 Rust 侧逐行检索的口径一致：跨行的"词边界"不是这条检索的语义）。
+ *
+ * ## 宽度折叠（2026-10-20，与检索侧同表）
+ *
+ * 中文作者常把 `（` 打成 `(`、把 `Ａ` 打成 `A`。检索与替换两侧都做**全角/半角折叠**
+ * （U+FF01–U+FF5E ↔ U+0021–U+007E、U+3000 ↔ 空格），否则"搜得到、替换不到"会分叉：
+ * 字面量查询逐字符展开成"宽度等价类"（一个同时含 `(` 与 `（` 的字符类），命中偏移
+ * 仍落在原文上；全词边界先折相邻一格再判标识字符（`＿` 折成 `_` ⇒ 标识字符）。
+ *
+ * **只折宽度**：不折繁简（`髙`≠`高`）、不折假名、不折大小写（大小写仍由 `i` 标志 /
+ * `caseSensitive` 管）。正则模式**不折**——作者拥有 pattern 的解释权，折叠会改写
+ * 转义/字符类/量词语义；需要精确宽度匹配时，正则模式就是逃生口。
+ *
+ * 恒开、无开关。影响面（与 Rust 侧同步记录）：搜 `Ａ` 也会命中 `A`、搜 `(` 也会命中
+ * `（`——这正是本功能的目的；代价是字面量检索不再"逐字节精确"，精确需求走正则模式。
+ *
+ * 跨语言契约：折叠表与 Rust `src-tauri/src/lib.rs` 的 `fold_width` / `literal_width_pattern`
+ * **同一张表**；样例数组 `WIDTH_FOLD_CASES` 与 `search_tests.rs` 的同名常量逐字同源。
+ * **改一处必须改两处**。
  */
 
 /** 标识字符（与 `erb-rename.ts` 的 IDENT_RE 同一字符集，单字符判定） */
 const IDENT_RE = /[\p{L}\p{N}_]/u;
 
+/**
+ * 宽度折叠的**规范形**（半角）：全角 ASCII 区 U+FF01–U+FF5E 折回 U+0021–U+007E，
+ * U+3000（全角空格）折成 U+0020，其余字符原样。**只折宽度**——不折繁简、不折假名、
+ * 不折大小写（那是 `caseSensitive` 开关的事）。
+ *
+ * 与 Rust `lib.rs` 的 `fold_width` **同一张表**（同一组码点区间与位移 0xFEE0）；
+ * **改一处必须改两处**。
+ */
+function foldWidth(ch: string): string {
+  const cp = ch.charCodeAt(0);
+  if (cp >= 0xff01 && cp <= 0xff5e) return String.fromCharCode(cp - 0xfee0);
+  if (cp === 0x3000) return ' ';
+  return ch;
+}
+
+/** 规范半角形 → 另一半（全角形）：U+0021–U+007E → U+FF01–U+FF5E，空格 → U+3000。 */
+function unfoldWidth(ch: string): string {
+  const cp = ch.charCodeAt(0);
+  if (cp >= 0x21 && cp <= 0x7e) return String.fromCharCode(cp + 0xfee0);
+  if (cp === 0x20) return '\u3000';
+  return ch;
+}
+
+/** 字符类内需要转义的四个字符（其余正则元字符在类内本就是字面）。 */
+const CLASS_SPECIAL = new Set(['\\', ']', '^', '-']);
+
+function escapeClassChar(ch: string): string {
+  return CLASS_SPECIAL.has(ch) ? `\\${ch}` : ch;
+}
+
+/**
+ * 字面量查询 → **宽度折叠等价**的正则源码：每个字符展开成它的宽度等价类。
+ * 逐字符一一展开、长度不变 ⇒ 命中偏移仍落在原文上（与 Rust `literal_width_pattern` 同形）。
+ */
+function foldLiteralSource(query: string): string {
+  let out = '';
+  for (let i = 0; i < query.length; i++) {
+    const ch = query[i]!;
+    const half = foldWidth(ch);
+    const full = unfoldWidth(half);
+    if (half === full) out += escapeRegExp(half);
+    else out += `[${escapeClassChar(half)}${escapeClassChar(full)}]`;
+  }
+  return out;
+}
+
 function isIdentChar(ch: string | undefined): boolean {
-  return ch !== undefined && IDENT_RE.test(ch);
+  // 先折宽度再判：`＿`（U+FF3F）折成 `_` 后是标识字符，与半角写法同判
+  return ch !== undefined && IDENT_RE.test(foldWidth(ch));
 }
 
 export function escapeRegExp(text: string): string {
@@ -51,9 +116,11 @@ export interface ReplaceMatcher {
 /**
  * 编译替换匹配器（**纯函数**）。
  *
- * - 非正则模式：整词转义后按字面匹配；
- * - 正则模式：作者的正则原样进引擎（非法正则抛错，由调用方明示，不静默吞）；
- * - 大小写不敏感 = `i` 标志（与检索开关同语义）。
+ * - 非正则模式：整词转义后按字面匹配，并做**宽度折叠**（`（` 与 `(` 同一类，见
+ *   `foldLiteralSource` 与模块头的折叠表）；
+ * - 正则模式：作者的正则原样进引擎（**不折宽度**——作者拥有 pattern 的解释权；
+ *   非法正则抛错，由调用方明示，不静默吞）；
+ * - 大小写不敏感 = `i` 标志（与检索开关同语义；宽度与大小写是两个维度）。
  *
  * 空查询返回 `null`（空串匹配每一处 = 灾难，前置挡下）。
  */
@@ -61,7 +128,7 @@ export function compileReplaceMatcher(
   query: string,
   opts: Pick<SearchOptionsState, 'isRegex' | 'caseSensitive' | 'wholeWord'>,
 ): ReplaceMatcher | null {
-  const source = query === '' ? null : opts.isRegex ? query : escapeRegExp(query);
+  const source = query === '' ? null : opts.isRegex ? query : foldLiteralSource(query);
   if (source === null) return null;
   const flags = opts.caseSensitive ? '' : 'i';
   new RegExp(source, flags); // 合法性当场验证：非法正则在这里抛，执行层明示给作者

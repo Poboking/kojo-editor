@@ -9,10 +9,11 @@
 
 use super::decode_for_search;
 use crate::{
-    build_matcher, byte_prefilter, decode_policy, decode_with_policy, is_utf16_bom_hit, looks_binary,
-    preview_window, run_search, scan_text, scan_text_flat, scan_hits, utf16_len, SearchFileDto,
-    SearchMatchDto, SearchOptionsDto, SearchProgressPayload, SearchRequestDto, SearchResultDto,
-    ELLIPSIS_UNIT, SEARCH_PER_FILE_CAP,
+    build_matcher, byte_prefilter, decode_policy, decode_with_policy, fold_width,
+    is_utf16_bom_hit, literal_width_pattern, looks_binary, preview_window, run_search, scan_hits,
+    scan_text, scan_text_flat, unfold_width, utf16_len, SearchFileDto, SearchMatchDto,
+    SearchOptionsDto, SearchProgressPayload, SearchRequestDto, SearchResultDto, ELLIPSIS_UNIT,
+    SEARCH_PER_FILE_CAP,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -92,15 +93,27 @@ fn invalid_regex_is_reported_not_swallowed() {
 
 /* --------------------------- 字节级预筛 --------------------------- */
 
-/// 预筛的成立条件与**作用半径**（PS-1 §3）：
-/// 字面量 + 大小写敏感就建预筛，但非 ASCII 查询只许对"整份字节就是合法 UTF-8"的文件生效
-/// （`ascii_safe` 这条标记就是那个半径）——遗留族（shift_jis/gbk/big5）的字节形与 UTF-8 不同，
-/// 拿 UTF-8 的查询字节去筛它们就会**漏报**，那种省法一律不许。
+/// 预筛的成立条件与**作用半径**（PS-1 §3 + 2026-10-20 宽度折叠）：
+/// 字面量 + 大小写敏感就建预筛，但预筛正则必须与匹配器用**同一份宽度等价类**；
+/// 含可折字符的查询（正常查询几乎都含）只许对"整份字节就是合法 UTF-8"的文件生效
+/// ——遗留族（shift_jis/gbk/big5）里全角形的字节与 UTF-8 不同，拿 UTF-8 的查询字节
+/// 去筛它们就会**漏报**。
 #[test]
 fn byte_prefilter_holds_for_case_sensitive_literals_and_reports_its_reach() {
     let ascii = byte_prefilter("abc", false, true, false).expect("ASCII 字面量该有预筛");
-    assert!(ascii.ascii_safe, "纯 ASCII 字面量对遗留族也逐字节同形 ⇒ 半径 = 全部文件");
-    assert!(ascii.re.is_match(b"xxABCxx") == false, "大小写敏感的预筛不许折叠大小写");
+    assert!(
+        !ascii.ascii_safe,
+        "含可折字符（半角 a 可折成全角 ａ）⇒ 遗留族编码不同，只许筛合法 UTF-8 文件"
+    );
+    assert!(ascii.re.is_match(b"xxabcxx"), "半角原样要筛得出");
+    assert!(
+        ascii.re.is_match("xxａｂｃxx".as_bytes()),
+        "全角形（UTF-8）也要筛得出——否则半角查询会被字节层误杀全角正文"
+    );
+    assert!(
+        !ascii.re.is_match(b"xxABCxx"),
+        "大小写敏感的预筛不许折叠大小写（宽度与大小写是两个维度）"
+    );
 
     let zh = byte_prefilter("口上", false, true, false).expect("中文查询也该有预筛");
     assert!(!zh.ascii_safe, "非 ASCII 查询对遗留族不成立 ⇒ 只许筛合法 UTF-8 的文件");
@@ -1088,4 +1101,202 @@ fn whole_word_applies_to_regex_mode_too() {
     assert_eq!(hits.len(), 2, "只认 12 与 34；a12 该被全词判据拒掉");
     assert_eq!(hit_text(&hits[0]), "12");
     assert_eq!(hit_text(&hits[1]), "34");
+}
+
+/* ------------------------- 宽度折叠跨语言对账（WF-1） ------------------------- */
+//
+// ## 表（只折宽度）
+// 全角 ASCII 区 U+FF01–U+FF5E ↔ 半角 U+0021–U+007E（位移 0xFEE0），
+// U+3000（全角空格）↔ U+0020。**不折**繁简（`髙`≠`高`）、不折假名（`ア`≠`ｱ`）、
+// 不折大小写（大小写是 `caseSensitive` 开关的事）。折叠只作用于**字面量**查询：
+// 正则模式下作者拥有 pattern 的解释权，本层原样编译（需要精确宽度时这是逃生口）。
+//
+// ## 实现形态（Rust）
+// 不改写查询/正文，而是把查询逐字符展开成"宽度等价类"（`（` → `[（(]`）——命中偏移
+// 仍落在原文上，预览 / 高亮 / 替换坐标不用二次换算。全词边界也先折相邻一格再判标识字符
+// （`＿` 折成 `_` ⇒ 是标识字符）。
+//
+// ## 样例清单是跨语言契约的两端
+// `WIDTH_FOLD_CASES` 与 `packages/app/tests/search-width-fold.test.ts` 的
+// `WIDTH_FOLD_CASES` **逐字同源**（查询 / 行文本 / 命中数 / 首个命中文本四项一字不差）。
+// 为什么各写一份、不引共享数据文件：两套测试各有自己的加载面（Rust 单测不读 node 侧
+// 文件，vitest 也不读 Rust 源码），两份字面量就是契约文本。**改一处必须改两处**——
+// 漂一个字符，两侧对账必有一边红（两侧都不读对方，靠这条约定 + 双跑兜住）。
+//
+// 样例均按 `字面量 + 大小写敏感 + 全词` 取值（与 TS 侧 `matcherFor` 同一组开关）。
+
+const WIDTH_FOLD_CASES: &[(&str, &str, usize, &str)] = &[
+    // 全角 ↔ 半角：括号 / 字母 / 标点
+    ("（测试）", "(测试)", 1, "(测试)"),
+    ("(测试)", "（测试）", 1, "（测试）"),
+    ("（测试）", "（测试）", 1, "（测试）"),
+    ("（测试）", "这是 (测试) 文本", 1, "(测试)"),
+    ("（测试）", "这是（测试）文本", 0, ""),
+    ("测试", "（测试）", 1, "测试"),
+    ("ＡＢＣ", "ABC", 1, "ABC"),
+    ("ABC", "ＡＢＣ", 1, "ＡＢＣ"),
+    ("ＡＢＣ", "x ABC y", 1, "ABC"),
+    ("ＡＢＣ", "xABCy", 0, ""),
+    ("ＡＢＣ", "xＡＢＣy", 0, ""),
+    ("ＡＢＣ", "ABC ABC", 2, "ABC"),
+    ("abc", "ＡＢＣ", 0, ""), // 宽度折、大小写不折（caseSensitive）
+    ("！", "!", 1, "!"),
+    ("～", "~", 1, "~"),
+    ("＿", "_", 1, "_"),
+    ("_", "＿", 1, "＿"),
+    ("x", "＿x", 0, ""), // 全角下划线折成 `_` = 标识字符
+    ("x", "x＿", 0, ""),
+    ("x", "（x）", 1, "x"),
+    ("（x）", "(x)", 1, "(x)"),
+    ("Ｃ_FLAG", "C_FLAG", 1, "C_FLAG"),
+    ("C_FLAG", "Ｃ＿ＦＬＡＧ", 1, "Ｃ＿ＦＬＡＧ"),
+    ("（Ａ）", "(A)", 1, "(A)"),
+    ("，", ",", 1, ","),
+    // U+3000 ↔ 半角空格（整词判据下，空格贴着标识字符不算命中）
+    ("\u{3000}", "\u{3000}", 1, "\u{3000}"),
+    (" ", "\u{3000}", 1, "\u{3000}"),
+    ("\u{3000}", "（ ）", 1, " "),
+    (" ", "（\u{3000}）", 1, "\u{3000}"),
+    ("\u{3000}", ". . .", 2, " "),
+    ("\u{3000}", "a b", 0, ""),
+    ("a b", "a\u{3000}b", 1, "a\u{3000}b"),
+    ("\u{3000}", "a\u{3000}b", 0, ""),
+    // 负例：表外字符一律不折
+    ("①", "①", 1, "①"),
+    ("①", "1", 0, ""),
+    ("①", "１", 0, ""), // `１` 折成 `1`，但 `①` 不折
+    ("髙", "高", 0, ""),
+    ("髙", "髙", 1, "髙"),
+    ("、", ",", 0, ""),
+    (",", "、", 0, ""),
+    ("ア", "ｱ", 0, ""), // 半角片假名 U+FF71 在 U+FF5E 之外
+];
+
+#[test]
+fn width_fold_table_covers_only_the_two_ranges_and_the_ideographic_space() {
+    assert_eq!(fold_width('Ａ'), 'A', "U+FF21 → U+0041");
+    assert_eq!(fold_width('！'), '!', "U+FF01 下界");
+    assert_eq!(fold_width('～'), '~', "U+FF5E 上界");
+    assert_eq!(fold_width('\u{3000}'), ' ', "全角空格 → 半角空格");
+    assert_eq!(fold_width('A'), 'A', "半角已是规范形");
+    assert_eq!(fold_width(' '), ' ');
+    // 表外：一律原样（不折繁简 / 假名 / 圈号 / 其余 CJK 标点）
+    assert_eq!(fold_width('①'), '①');
+    assert_eq!(fold_width('髙'), '髙');
+    assert_eq!(fold_width('ア'), 'ア');
+    assert_eq!(fold_width('ｱ'), 'ｱ', "半角片假名 U+FF71 在 U+FF5E 之外");
+    assert_eq!(fold_width('、'), '、', "只折 U+3000，不是整个 CJK 标点区");
+    // 反向：规范半角 → 全角
+    assert_eq!(unfold_width('A'), 'Ａ');
+    assert_eq!(unfold_width(' '), '\u{3000}');
+    assert_eq!(unfold_width('①'), '①');
+    assert_eq!(unfold_width('\u{3000}'), '\u{3000}');
+}
+
+#[test]
+fn literal_width_pattern_expands_each_char_into_its_width_class() {
+    let re = regex::Regex::new(&literal_width_pattern("（Ａ)")).unwrap();
+    assert!(re.is_match("(A)"), "半角全形都要命中");
+    assert!(re.is_match("（Ａ）"), "全角形同一类");
+    assert!(!re.is_match("(B)"));
+
+    let space = regex::Regex::new(&literal_width_pattern("\u{3000}")).unwrap();
+    assert!(space.is_match(" "));
+    assert!(space.is_match("\u{3000}"));
+
+    // 字符类元字符（`]`）两形都得转义后仍可编译
+    let bracket = regex::Regex::new(&literal_width_pattern("]")).unwrap();
+    assert!(bracket.is_match("]"));
+    assert!(bracket.is_match("］"));
+
+    // 全部可打印 ASCII 的等价类都必须可编译（类内转义无死角）
+    for cp in 0x21u32..=0x7E {
+        let ch = char::from_u32(cp).unwrap();
+        let src = literal_width_pattern(&ch.to_string());
+        assert!(regex::Regex::new(&src).is_ok(), "字符 {ch:?} 的等价类编译失败：{src}");
+    }
+}
+
+/// 逐例对账：逐行扫描与单趟快道都必须给出 TS 替换侧的裁决（命中数 + 首个命中文本）。
+#[test]
+fn width_fold_matches_the_ts_replacement_oracle_case_by_case() {
+    for &(query, line, want, first) in WIDTH_FOLD_CASES {
+        let m = build_matcher(query, false, true, true).unwrap();
+        let (per_line, _) = scan_text(line, &m, 100);
+        let (flat, _) = scan_text_flat(line, &m, 100);
+        assert_eq!(per_line.len(), want, "逐行扫描：查询 {query:?} / 行 {line:?}");
+        assert_eq!(flat, per_line, "两条扫描路径不同判：查询 {query:?} / 行 {line:?}");
+        if want > 0 {
+            assert_eq!(
+                hit_text(&per_line[0]),
+                first,
+                "首个命中文本：查询 {query:?} / 行 {line:?}"
+            );
+        }
+    }
+}
+
+/// 宽度与大小写是两个维度：折叠后大小写开关照旧生效。
+#[test]
+fn width_fold_does_not_fold_case() {
+    let sensitive = build_matcher("ＡＢＣ", false, true, false).unwrap();
+    assert!(sensitive.is_match("ABC"));
+    assert!(!sensitive.is_match("abc"), "宽度折、大小写不折");
+    let loose = build_matcher("ＡＢＣ", false, false, false).unwrap();
+    assert!(loose.is_match("abc"));
+    assert!(loose.is_match("ａｂｃ"));
+}
+
+/// 正则模式不折宽度（作者拥有 pattern）；需要精确宽度匹配时这是逃生口。
+#[test]
+fn width_fold_is_literal_only_and_regex_mode_stays_verbatim() {
+    let re = build_matcher("（测试）", true, true, false).unwrap();
+    assert!(re.is_match("（测试）"));
+    assert!(!re.is_match("(测试)"), "正则模式不折：作者拥有 pattern");
+    let re2 = build_matcher("Ａ", true, true, false).unwrap();
+    assert!(re2.is_match("Ａ"));
+    assert!(!re2.is_match("A"));
+}
+
+/// 全词边界先折宽度再判标识字符（`＿` → `_`）。
+#[test]
+fn whole_word_boundary_folds_width_before_ident_check() {
+    let m = build_matcher("x", false, true, true).unwrap();
+    assert!(m.is_match("（x）"));
+    assert!(!m.is_match("＿x"), "全角下划线折成 `_` 后是标识字符");
+    assert!(!m.is_match("x＿"));
+}
+
+/// 端到端：预筛 + 解码 + 匹配一起走。两个方向都不能漏：
+/// ① UTF-8 全角正文 ← 半角查询（预筛正则必须含折叠后的 UTF-8 字节形）；
+/// ② 遗留族（shift_jis）全角正文 ← 半角查询（预筛对非 UTF-8 不成立 ⇒ 退回解码后匹配）。
+#[test]
+fn width_fold_survives_the_byte_prefilter_and_legacy_decoding() {
+    let dir = temp_dir("width-e2e");
+    std::fs::write(dir.join("full.erb"), "口上：（测试）\nＡＢＣ\n").unwrap();
+    std::fs::write(dir.join("miss.erb"), "无关内容\n").unwrap();
+
+    let out = run(&request(&dir, "（测试）"));
+    assert_eq!(out.total_matches, 1, "全角查询打到全角正文");
+    assert_eq!(out.files.len(), 1);
+    assert!(out.files[0].path.ends_with("full.erb"));
+    assert_eq!(hit_text(&out.files[0].matches[0]), "（测试）");
+    assert_eq!(out.files[0].matches[0].column, 4, "「口上：」= 3 单元 ⇒ 1 基列 4");
+
+    // 遗留族（shift_jis）里的全角 ＡＢＣ：半角查询也要命中
+    let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("ＡＢＣ\n");
+    std::fs::write(dir.join("sjis.erb"), &sjis[..]).unwrap();
+    let mut req = request(&dir, "ABC");
+    req.options.extensions = Some(vec!["erb".to_string()]);
+    let out2 = run(&req);
+    let names: Vec<&str> = out2
+        .files
+        .iter()
+        .map(|f| f.path.rsplit(['\\', '/']).next().unwrap_or(""))
+        .collect();
+    assert!(names.contains(&"full.erb"), "UTF-8 全角正文该命中：{names:?}");
+    assert!(names.contains(&"sjis.erb"), "shift_jis 全角正文该命中：{names:?}");
+    assert!(!names.contains(&"miss.erb"), "不含词的文件不该出现：{names:?}");
+    assert_eq!(out2.total_matches, 2);
+    let _ = std::fs::remove_dir_all(&dir);
 }
