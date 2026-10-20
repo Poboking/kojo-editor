@@ -529,6 +529,17 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     expect(marker.message).toContain('「');
   });
 
+  it('派生预览 model（inmemory://sugar/…）不画结构残缺——诊断属于源文件，不跟着投影走', () => {
+    const { monaco, published } = fakeMonaco();
+    presenter = createStructureSyntaxPresenter(monaco);
+    const model = {
+      ...fakeModel(lines),
+      uri: { scheme: 'inmemory', authority: 'sugar', toString: () => 'inmemory://sugar/g/事件.ERB' },
+    } as unknown as Monaco.editor.ITextModel;
+    presenter.show(model, [fault({ row: 4, kind: 'unterminated-string' })], false);
+    expect(published, '预览面被结构诊断画了红线（正常 ERB 会被误报成错）').toHaveLength(0);
+  });
+
   it('同一行已有 error 级装饰 ⇒ 一条都不发（发的是空数组，不是"没发"）', () => {
     const { monaco, published } = fakeMonaco([
       { startLineNumber: 5, severity: 8, message: '', owner: DECORATOR_MARKER_OWNER } as unknown as Monaco.editor.IMarker,

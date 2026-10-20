@@ -284,6 +284,18 @@ export interface StructureSyntaxPresenter {
 }
 
 /**
+ * 派生预览 model（`EditorPane.applySugarView` 建的 `inmemory://sugar/<组>/<路径>`）。
+ *
+ * 预览是**只读投影**：结构层仍为它提供着色 / 折叠（语言 id 同为 `kojo-sugar`），但
+ * **结构残缺不能画在派生文本上**——投影的一处不完美会变成“正常 ERB 文件报错”，
+ * 这正是用户报告的那类假阳性。诊断属于源文件 model（装饰通道与结构层都按源文件路径发布）。
+ */
+function isDerivedPreviewModel(model: Monaco.editor.ITextModel): boolean {
+  const uri = model.uri;
+  return uri.scheme === 'inmemory' && uri.authority === 'sugar';
+}
+
+/**
  * 建一个上屏器（`providers.ts` 在 `activate()` 里建、`deactivate()` 里 `dispose()`）。
  *
  * 只碰三件 Monaco API：`getModelMarkers`（读装饰通道那一路）、`setModelMarkers`
@@ -330,6 +342,7 @@ export function createStructureSyntaxPresenter(monaco: typeof Monaco): Structure
   return {
     show(model, faults, truncated) {
       if (model.isDisposed() || model.getLanguageId() !== KOJO_LANGUAGE_ID) return;
+      if (isDerivedPreviewModel(model)) return; // 派生投影不吃结构诊断（见 isDerivedPreviewModel）
       tracked.set(model, faults);
       if (truncated) {
         reportStructureDegradation({
