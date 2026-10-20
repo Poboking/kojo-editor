@@ -9,7 +9,7 @@
  * - 项目根（resetKey）变化 → 旧项目的崩溃卡立刻消失，新子树正常渲染。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, createElement as h, type ReactNode } from 'react';
+import { act, createElement as h, lazy, Suspense, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { FrontendErrorRecord } from '../src/frontend-log';
 import { ProjectErrorBoundary, projectCrashRecord } from '../src/ui/error-boundary';
@@ -95,6 +95,30 @@ describe('ProjectErrorBoundary：恢复卡与取证', () => {
     const record = projectCrashRecord(new Error('没有组件栈'));
     expect(record.detail).not.toContain('Component stack:');
     expect(record.message).toContain('没有组件栈');
+  });
+
+  it('懒块加载失败（rejected lazy）也接得住：恢复卡上屏且取证可见', async () => {
+    const onError = vi.fn();
+    const Rejected = lazy(() => Promise.reject(new Error('块加载失败')));
+    await mount({
+      resetKey: 'D:/项目',
+      children: h(Suspense, { fallback: h('div', { className: 'loading' }, '加载中') }, h(Rejected)),
+      onExit: () => {},
+      onError,
+    });
+    // lazy 的拒绝在微任务里兑现；边界要等 React 重试渲染后才会拿到异常
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.loading')).toBeNull();
+    expect(container.querySelector('.project-crash')).not.toBeNull();
+    expect(container.textContent).toContain('项目界面出了点问题');
+    expect(onError).toHaveBeenCalledTimes(1);
+    const record = onError.mock.calls[0]?.[0] as FrontendErrorRecord;
+    expect(record.message).toContain('项目视图渲染失败');
+    expect(record.message).toContain('块加载失败');
   });
 
   it('「回到欢迎页」把动作交给 App 的关项目通道', async () => {

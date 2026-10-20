@@ -77,33 +77,37 @@ struct WriteDomainState {
     canon_epoch: AtomicU64,
     /// **允许域变更序号**（REF-FRONT-PERF，2026-10-20）：`register_write_domain` 改 async 后，
     /// 它的"规范化 + 准入门判定"在阻塞线程池上跑，期间 `clear_write_domain`（项目关闭）或另一次
-    /// 注册可能插进来——旧实现全在主线程、天然串行。取号 + 落定前复核把顺序找回来：
-    /// 落定与清除共用 `project_root` 锁，序号不等 = 期间发生过清除/后发注册 ⇒ 本次作废
+    /// 注册可能插进来——旧实现全在主线程、天然串行。判定前取快照 + 落定前复核把顺序找回来：
+    /// 落定与清除共用 `project_root` 锁，序号不等 = 期间发生过清除/成功落定 ⇒ 本次作废
     /// （fail-closed 报错，决不把已关闭的项目根复活）。
+    /// **只有成功落定才抬代际**：判定失败本身不是一次允许域变更，不许作废另一个在途的成功注册。
     domain_epoch: AtomicU64,
 }
 
-/// 取一个「允许域变更」序号（register 在耗时判定前取号；落定前复核）。
-fn begin_domain_change(state: &WriteDomainState) -> u64 {
-    state.domain_epoch.fetch_add(1, Ordering::SeqCst) + 1
+/// 观察当前「允许域变更」序号（register 在耗时判定前取快照；落定前复核）。
+/// **不抬代际**：判定失败不得取消在途的成功注册。
+fn domain_change_snapshot(state: &WriteDomainState) -> u64 {
+    state.domain_epoch.load(Ordering::SeqCst)
 }
 
-/// 注册落定：复核取号后允许域没被并发变更，再写入项目根。
-/// 与清除共用 `project_root` 锁 ⇒ "检查—落定"与清除线性化（后发生的清除恒胜）。
+/// 注册落定：复核取快照后允许域没被并发变更，再写入项目根并抬代际。
+/// 与清除共用 `project_root` 锁 ⇒ "检查—落定"与清除线性化（后发生的清除恒胜）；
+/// 两个同时通过判定的注册也由此串行，先落定者胜、后者的快照已过期 ⇒ fail-closed。
 fn commit_project_root(
     state: &WriteDomainState,
     root: PathBuf,
-    epoch: u64,
+    observed: u64,
 ) -> Result<(), String> {
     let mut guard = state
         .project_root
         .lock()
         .map_err(|_| "write domain state poisoned".to_string())?;
-    if state.domain_epoch.load(Ordering::SeqCst) != epoch {
+    if state.domain_epoch.load(Ordering::SeqCst) != observed {
         return Err(
             "写允许域注册被并发变更取消（判定期间项目被关闭或换开）：请重新打开项目".to_string(),
         );
     }
+    state.domain_epoch.fetch_add(1, Ordering::SeqCst);
     *guard = Some(root);
     drop(guard);
     // 允许域变了 ⇒ 规范化备忘录整体作废（见 `canonical_root_cached`）
@@ -111,7 +115,7 @@ fn commit_project_root(
     Ok(())
 }
 
-/// 清除的同步核心（命令侧只是包装；单测直接打这一层）：取新号（在途注册一律作废）+ 清根。
+/// 清除的同步核心（命令侧只是包装；单测直接打这一层）：抬代际（在途注册一律作废）+ 清根。
 fn clear_domain_core(state: &WriteDomainState) -> Result<(), String> {
     let mut guard = state
         .project_root
@@ -619,8 +623,9 @@ async fn register_write_domain(
         .clone();
     // 准入门判定要 canonicalize 目标根（慢盘 / 网络盘上可阻塞）：上阻塞线程池。
     // 判定用的两份清单是取锁快照——准入根与常驻根只增不减，快照不会把"该放的"判成"不该放"。
-    // 取号在判定之前：判定期间项目被关闭 / 换开 ⇒ 落定前复核会发现序号已变（fail-closed）。
-    let epoch = begin_domain_change(&state);
+    // 快照在判定之前：判定期间项目被关闭 / 换开 ⇒ 落定前复核会发现序号已变（fail-closed）。
+    // 判定失败不会抬代际 ⇒ 另一个在途的成功注册仍能照常落定。
+    let observed = domain_change_snapshot(&state);
     let root_for_check = root.clone();
     run_blocking("register_write_domain", move || {
         let canon_root = canonicalize_deep(Path::new(&root_for_check))
@@ -633,7 +638,7 @@ async fn register_write_domain(
         Ok(())
     })
     .await?;
-    commit_project_root(&state, PathBuf::from(root), epoch)
+    commit_project_root(&state, PathBuf::from(root), observed)
 }
 
 /// project.closed：清除项目根（回到仅 appDataDir 可写）。
@@ -3266,8 +3271,9 @@ mod diagnostics_tests;
 #[cfg(test)]
 mod write_domain_tests {
     use super::{
-        begin_domain_change, canonical_root_cached, canonical_root_cached_short, canonicalize_deep,
-        clear_domain_core, commit_project_root, ensure_in_domain_with, ensure_in_write_domain,
+        canonical_root_cached, canonical_root_cached_short, canonicalize_deep,
+        clear_domain_core, commit_project_root, domain_change_snapshot, ensure_in_domain_with,
+        ensure_in_write_domain,
         invalidate_canon_roots, is_root_approved, is_same_path, is_within, memo_insert_canon_if_current,
         merge_workspace_roots, push_approved_root, push_extra_root, read_approved_roots,
         read_workspace_roots, write_approved_roots, write_workspace_roots, WriteDomainState,
@@ -3608,8 +3614,9 @@ mod write_domain_tests {
     /* -------- 允许域变更序号（REF-FRONT-PERF：register 异步化后的顺序找回） -------- */
 
     /// `register_write_domain` 的判定挪到阻塞线程池之后，"判定 → 落定"之间可能插进
-    /// `clear_write_domain`（项目关闭）或后发注册。序号复核必须让**后发生的变更恒胜**：
+    /// `clear_write_domain`（项目关闭）或另一次成功落定。快照复核必须让**后发生的变更恒胜**：
     /// 清除之后，任何在途注册都不许把已关闭的项目根复活（fail-closed + 可见报错）。
+    /// 判定失败**不抬代际** ⇒ 不取消另一个在途的成功注册（它没改变允许域）。
     #[test]
     fn pending_registration_is_cancelled_by_clear_or_newer_registration() {
         let state = WriteDomainState::default();
@@ -3617,7 +3624,7 @@ mod write_domain_tests {
         let b = PathBuf::from(r"C:\projects\b");
 
         // 场景 1：判定期间项目被关闭 ⇒ 落定被拒，根保持空（不复活）
-        let epoch = begin_domain_change(&state);
+        let epoch = domain_change_snapshot(&state);
         clear_domain_core(&state).unwrap();
         let err = commit_project_root(&state, a.clone(), epoch).unwrap_err();
         assert!(err.contains("并发变更"), "拒因应说清并发变更：{err}");
@@ -3626,22 +3633,34 @@ mod write_domain_tests {
             "清除之后的在途注册不许落下"
         );
 
-        // 场景 2：后发注册先落定 ⇒ 先发那次（序号更小）作废，根 = 后发的
-        let first = begin_domain_change(&state);
-        let second = begin_domain_change(&state);
+        // 场景 2：两个在途注册都通过判定，先落定者胜 ⇒ 后者快照过期作废
+        let first = domain_change_snapshot(&state);
+        let second = domain_change_snapshot(&state);
         commit_project_root(&state, b.clone(), second).unwrap();
-        assert!(commit_project_root(&state, a, first).is_err(), "先发的那次必须作废");
+        assert!(commit_project_root(&state, a, first).is_err(), "先落定之后的第二笔必须作废");
         assert_eq!(
             state.project_root.lock().unwrap().as_deref(),
             Some(b.as_path()),
-            "后发注册恒胜"
+            "先落定者胜，后落定者的快照已过期"
         );
 
-        // 场景 3：正常路径（序号最新）照常落定
+        // 场景 3：正常路径（快照未被并发变更）照常落定
         clear_domain_core(&state).unwrap();
-        let epoch = begin_domain_change(&state);
+        let epoch = domain_change_snapshot(&state);
         commit_project_root(&state, b.clone(), epoch).unwrap();
         assert_eq!(state.project_root.lock().unwrap().as_deref(), Some(b.as_path()));
+
+        // 场景 4：另一笔注册**判定失败**（只取快照、不落定）不得取消在途的成功注册
+        clear_domain_core(&state).unwrap();
+        let healthy = domain_change_snapshot(&state);
+        let failed = domain_change_snapshot(&state);
+        assert_eq!(healthy, failed, "判定失败不改变代际");
+        commit_project_root(&state, b.clone(), healthy).unwrap();
+        assert_eq!(
+            state.project_root.lock().unwrap().as_deref(),
+            Some(b.as_path()),
+            "失败的那笔不应让成功的那笔吃并发变更错误"
+        );
     }
 
     /* -------- 允许域根的规范化备忘录（PS-1 §8：安全闸的加速层） -------- */

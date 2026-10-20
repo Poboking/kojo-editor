@@ -111,6 +111,7 @@ import { useProjectSession, useSessionFlush, useSessionStore } from './use-proje
 import { ProjectErrorBoundary } from './error-boundary';
 import { ProjectErrorNotice, raiseProjectError, visibleProjectError } from './project-error-notice';
 import { crashExitDecision } from './project-close';
+import { discardRecoveryJournal } from './crash-recovery';
 
 /**
  * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
@@ -371,8 +372,13 @@ export function App(): ReactElement {
               setRecoveredContents(found.records);
               setCrashRecovery({ root: found.manifest.root, files: found.records.length });
             }
-          } catch {
-            // autosave 通道坏了不挡启动：编辑照常，只是这次没有崩溃兜底
+          } catch (e: unknown) {
+            // autosave 通道坏了不挡启动：编辑照常，但这次没有崩溃兜底必须让作者知道
+            notify({
+              kind: 'error',
+              message: '崩溃恢复检查失败：本次会话没有自动恢复兜底（编辑与保存不受影响）。',
+              detail: errorText(e),
+            });
           }
         }
         setPhase('welcome');
@@ -1501,8 +1507,10 @@ export function App(): ReactElement {
   const discardCrash = useCallback(() => {
     setCrashRecovery(null);
     clearRecoveredContents();
-    void autosaveRef.current?.discard().catch(() => undefined);
-  }, []);
+    void discardRecoveryJournal(autosaveRef.current).then((notice) => {
+      if (notice) notify(notice);
+    });
+  }, [notify]);
 
   /** 继续上次会话：目标根 = 最近一次打开的项目（标签集由 openProject 的会话恢复装回） */
   const resumeSession = useCallback(() => {
@@ -1553,12 +1561,9 @@ export function App(): ReactElement {
         label: '丢弃未保存改动并回到欢迎页',
         run: () => {
           void (async () => {
-            try {
-              await autosaveRef.current?.discard();
-            } catch {
-              // 清理失败不影响关项目；用户已明确丢弃
-            }
+            const notice = await discardRecoveryJournal(autosaveRef.current);
             await closeProject();
+            if (notice) notify(notice);
           })();
         },
       },

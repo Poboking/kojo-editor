@@ -46,6 +46,21 @@ function sliceFn(name: string): string {
   return rest.slice(0, end === -1 ? rest.length : end);
 }
 
+/** 取锚点并自证存在（indexOf 缺省 -1 会让后续 slice 截出怪子串，静默假绿） */
+function anchor(source: string, needle: string): number {
+  const i = source.indexOf(needle);
+  expect(i, `锚点缺失：「${needle}」`).toBeGreaterThanOrEqual(0);
+  return i;
+}
+
+/** 截两个锚点之间的源码：两端都先自证存在，且终点必须在起点之后 */
+function between(source: string, from: string, to: string): string {
+  const start = anchor(source, from);
+  const end = source.indexOf(to, start + from.length);
+  expect(end, `结束锚点缺失或早于起点：「${to}」`).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 describe('PS-5 ① 校验暂停闸的宿主两条腿', () => {
   const runner = sliceFn('markerRunner');
 
@@ -70,7 +85,9 @@ describe('PS-5 ① 校验暂停闸的宿主两条腿', () => {
   it('作者文案禁词：那句话与它的悬停里不许出现内部术语', () => {
     const i0 = SOURCE.indexOf('{markerPaused[filePath] === true ? (');
     expect(i0).toBeGreaterThan(0);
-    const block = SOURCE.slice(i0, SOURCE.indexOf('</span>', i0));
+    const blockEnd = SOURCE.indexOf('</span>', i0);
+    expect(blockEnd, '结束锚点缺失：「</span>」').toBeGreaterThan(i0);
+    const block = SOURCE.slice(i0, blockEnd);
     // 只看**作者读得到的字**：字符串字面量（title 的两段）+ 标签之间的 JSX 文本。
     // 整块源码里有 `markerPaused` 这类标识符，那是代码不是文案，禁词表扫它等于自证不清。
     const literals = (block.match(/'([^']*)'/g) ?? []).map((s) => s.slice(1, -1)).join('');
@@ -87,19 +104,17 @@ describe('PS-5 ① 校验暂停闸的宿主两条腿', () => {
 
 describe('PS-5 ② 面包屑不再每击键解析全文', () => {
   it('三条腿按代价从低到高排：同版本缓存 → 索引派生 → 防抖重算 → 才解析', () => {
-    const idx = BREADCRUMB.indexOf('crumbRefreshRef.current = (forceParse');
-    expect(idx, 'crumbRefresh 必须带 forceParse 形参（防抖那一拍要绕过沿用旧树的分支）').toBeGreaterThan(0);
-    const body = BREADCRUMB.slice(idx, BREADCRUMB.indexOf('// A9 选区读数搭同一条光标监听', idx));
+    const body = between(BREADCRUMB, 'crumbRefreshRef.current = (forceParse', '// A9 选区读数搭同一条光标监听');
     expect(body).toContain('symbolsFromIndex(path');
     expect(body).toContain('scheduleCrumbRebuild()');
     expect(body).toContain('collectDocumentSymbols(');
     // 顺序判据：索引派生必须排在全文解析**之前**
-    expect(body.indexOf('symbolsFromIndex(path')).toBeLessThan(body.indexOf('collectDocumentSymbols('));
-    expect(body.indexOf('scheduleCrumbRebuild()')).toBeLessThan(body.indexOf('collectDocumentSymbols('));
+    expect(anchor(body, 'symbolsFromIndex(path')).toBeLessThan(anchor(body, 'collectDocumentSymbols('));
+    expect(anchor(body, 'scheduleCrumbRebuild()')).toBeLessThan(anchor(body, 'collectDocumentSymbols('));
   });
 
   it('索引派生有三条护栏：只认 ERB 方言 / 缓冲区必须干净 / 行数必须相等（判据不全就不猜）', () => {
-    const fn = BREADCRUMB.slice(BREADCRUMB.indexOf('const symbolsFromIndex ='), BREADCRUMB.indexOf('const scheduleCrumbRebuild ='));
+    const fn = between(BREADCRUMB, 'const symbolsFromIndex =', 'const scheduleCrumbRebuild =');
     expect(fn).toContain('isErbLike(path)');
     expect(fn).toContain('computeDirty(path)');
     expect(fn).toContain('file.lineCount !== lineCount');
@@ -109,37 +124,36 @@ describe('PS-5 ② 面包屑不再每击键解析全文', () => {
   it('索引条目额外认**指纹**：保存之后盘上补扫会让树变，而干净缓冲区的版本号不变', () => {
     expect(BREADCRUMB).toContain('fromIndex: true');
     expect(BREADCRUMB).toContain('indexStamp');
-    const refresh = BREADCRUMB.slice(BREADCRUMB.indexOf('crumbRefreshRef.current = (forceParse'));
+    const refresh = BREADCRUMB.slice(anchor(BREADCRUMB, 'crumbRefreshRef.current = (forceParse'));
     expect(refresh).toContain('cache.indexStamp === (currentErbIndex()?.fingerprint ?? null)');
   });
 
   it('路径归一走 pathKey（HK-7 口径；裸比会静默判不上，症状是"面包屑永远在解析"）', () => {
-    const fn = HELPERS.slice(HELPERS.indexOf('function erbFileInIndex'), HELPERS.indexOf('const MARKER_DEBOUNCE_MS'));
+    const fn = between(HELPERS, 'function erbFileInIndex', 'const MARKER_DEBOUNCE_MS');
     expect(fn).toContain('pathKey(');
   });
 
   it('防抖定时器随实例退场作废 + 在途那一次清空 crumbLastRef（不清就是 self-skip 自己约的重算）', () => {
     expect(BREADCRUMB).toContain('if (crumbTimerRef.current !== null) {');
-    const sched = BREADCRUMB.slice(BREADCRUMB.indexOf('const scheduleCrumbRebuild ='), BREADCRUMB.indexOf('const install = useCallback'));
+    const sched = between(BREADCRUMB, 'const scheduleCrumbRebuild =', 'const install = useCallback');
     expect(sched).toContain('crumbLastRef.current = null');
     expect(sched).toContain('crumbRefreshRef.current?.(true)');
   });
 
   it('大文件档清链那条既有红线没被动（旧链残留会把别的文件的行号 reveal 进当前文件），但**闸的位置在索引快路之后**', () => {
-    const refresh = BREADCRUMB.slice(BREADCRUMB.indexOf('crumbRefreshRef.current = (forceParse'));
-    const body = refresh.slice(0, refresh.indexOf('// A9 选区读数搭同一条光标监听'));
+    const body = between(BREADCRUMB, 'crumbRefreshRef.current = (forceParse', '// A9 选区读数搭同一条光标监听');
     expect(body).toContain('cursor.lineCount >= LARGE_FILE_LINES');
     expect(body).toContain('apply([])');
     // 1020 编辑器体感批：这条闸原先在最前面按行数一刀切，把"零解析的索引快路"一起挡死
     // ⇒ 5,000 行以上的文件连面包屑都没有。现在它只拦"缓存与索引都给不出、必须现解析"那一拍。
-    expect(body.indexOf('symbolsFromIndex(path')).toBeLessThan(body.indexOf('cursor.lineCount >= LARGE_FILE_LINES'));
-    expect(body.indexOf('cache.symbols')).toBeLessThan(body.indexOf('cursor.lineCount >= LARGE_FILE_LINES'));
+    expect(anchor(body, 'symbolsFromIndex(path')).toBeLessThan(anchor(body, 'cursor.lineCount >= LARGE_FILE_LINES'));
+    expect(anchor(body, 'cache.symbols')).toBeLessThan(anchor(body, 'cursor.lineCount >= LARGE_FILE_LINES'));
   });
 });
 
 describe('PS-5 ③ .kojo 预览的装配缓存', () => {
   it('命中判据四维齐全：路径 / 内容版本号 / 项目摘要 / 行数', () => {
-    const apply = SOURCE.slice(SOURCE.indexOf('const applySugarView ='), SOURCE.indexOf('// 开关变化：记住偏好'));
+    const apply = between(SOURCE, 'const applySugarView =', '// 开关变化：记住偏好');
     expect(apply).toContain('hit.path === path');
     expect(apply).toContain('hit.versionId === versionId');
     expect(apply).toContain('hit.stamp === stamp');
@@ -148,10 +162,12 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
   });
 
   it('未命中才付那三条 O(行数) 的腿（getValue / 逐行 getLineContent / 段扫描都在 else 分支里）', () => {
-    const apply = SOURCE.slice(SOURCE.indexOf('const applySugarView ='), SOURCE.indexOf('// 开关变化：记住偏好'));
+    const apply = between(SOURCE, 'const applySugarView =', '// 开关变化：记住偏好');
     const elseStart = apply.indexOf('} else {');
     expect(elseStart).toBeGreaterThan(0);
-    const build = apply.slice(elseStart, apply.indexOf('const sugarModel = monaco.editor.createModel', elseStart));
+    const buildEnd = apply.indexOf('const sugarModel = monaco.editor.createModel', elseStart);
+    expect(buildEnd, '结束锚点缺失：「const sugarModel …」').toBeGreaterThan(elseStart);
+    const build = apply.slice(elseStart, buildEnd);
     expect(build).toContain('model.getValue()');
     expect(build).toContain('model.getLineContent(i)');
     expect(build).toContain("query('ui.editor.liftPreview')");
@@ -159,7 +175,7 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
   });
 
   it('项目摘要缺 inputDigest ⇒ 判据不全 ⇒ 不缓存（同抽取快照纪律，不许猜）', () => {
-    const stamp = HELPERS.slice(HELPERS.indexOf('function sugarStampOf'), HELPERS.indexOf('interface SugarCacheEntry'));
+    const stamp = between(HELPERS, 'function sugarStampOf', 'interface SugarCacheEntry');
     expect(stamp).toContain('if (!project.inputDigest)');
     expect(stamp).toContain('no-digest');
   });
@@ -180,14 +196,15 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
    * （不许悄悄 return）；②那两句改前文案不许再以字面量住在 JSX 里（回到内联三元 = 红）。
    */
   it('零段那一拍要出声：读数落进 state，悬停只经 sugarToggleTitle 单源', () => {
-    const apply = SOURCE.slice(SOURCE.indexOf('const applySugarView ='), SOURCE.indexOf('// 开关变化：记住偏好'));
+    const apply = between(SOURCE, 'const applySugarView =', '// 开关变化：记住偏好');
     expect(apply).toContain('setSugarSegments({ path, segments: 0 });'); // 零段：记下"这份没投出东西"
     expect(apply).toContain('setSugarSegments({ path, segments: segCount });'); // 命中缓存那一拍同样有读数
     expect(apply).toContain('segmentCount: segCount'); // 缓存条目带段数（否则切回来就没数）
 
-    const toggle = SOURCE.slice(
-      SOURCE.indexOf('className={`ghost small sugar-toggle'),
-      SOURCE.indexOf('<Icon name="preview" size={13} />'),
+    const toggle = between(
+      SOURCE,
+      'className={`ghost small sugar-toggle',
+      '<Icon name="preview" size={13} />',
     );
     expect(toggle).toContain('sugarToggleTitle({');
     expect(toggle).not.toContain('已开启：当前显示的是');
@@ -242,12 +259,16 @@ describe('REF-FRONT-PERF · hook 组合的执行次序', () => {
     expect(instance).toBeGreaterThan(0);
     expect(codeLens).toBeGreaterThan(instance);
     // 安装器本身在组件里先建好（无 effect），真正接线仍由实例 hook 那一拍执行
-    expect(SOURCE.indexOf('const installPreferences = useEditorPreferences(')).toBeLessThan(instance);
+    expect(anchor(SOURCE, 'const installPreferences = useEditorPreferences(')).toBeLessThan(instance);
   });
 });
 
 describe('PS-5 · props 面零改动（隔壁线靠这份签名稳定调用点）', () => {
-  const props = SOURCE.slice(SOURCE.indexOf('interface Props {'), SOURCE.indexOf('}', SOURCE.indexOf('onFocused?: () => void;')));
+  const propsStart = anchor(SOURCE, 'interface Props {');
+  const onFocused = anchor(SOURCE, 'onFocused?: () => void;');
+  const propsEnd = SOURCE.indexOf('}', onFocused);
+  expect(propsEnd, '结束锚点缺失：Props 的收尾 }').toBeGreaterThan(onFocused);
+  const props = SOURCE.slice(propsStart, propsEnd);
 
   it('Props 的键与类型一个字都没动（含 onStatusInfo 那条上报形状）', () => {
     for (const line of [
