@@ -18,6 +18,7 @@ import type { EditorCommandContext, EditorWorkspaceSymbol, ErbParserService, Mar
 import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
+import { invoke } from '@tauri-apps/api/core';
 import {
   beginLiveResize,
   beginSplitResize,
@@ -710,7 +711,11 @@ export function ShellLayout(props: Props): ReactElement {
       releaseFoundUpdate();
       setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkStart' }));
       try {
-        const found = await check();
+        // 更新检查跟随环境代理（REL-1 收尾）：Rust 侧读标准环境变量（HTTPS > HTTP > ALL，
+        // 畸形值忽略），有的话透传进 check({ proxy })；取不到（含非 Tauri 环境）= None，
+        // check() 与不传参时一字不差。取代理失败也按 None 走，绝不因它让检查失败。
+        const envProxy = await invoke<string | null>('updater_env_proxy').catch(() => null);
+        const found = await check(envProxy === null ? undefined : { proxy: envProxy });
         if (!updateAliveRef.current) {
           // 关项目时这次 check 才回来：树已卸载，别把 Update 的宿主资源留在那儿
           if (found !== null) void found.close().catch(() => {});

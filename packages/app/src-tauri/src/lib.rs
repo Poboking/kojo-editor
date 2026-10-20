@@ -31,6 +31,10 @@ mod shell;
 /// 独立成文件，照 `market` / `shell` 同形态。
 mod diagnostics;
 
+/// 更新检查的环境代理（REL-1 收尾）：读标准环境变量交前端透传进 updater 的
+/// `check({ proxy })`；独立成文件，照 `market` / `shell` 同形态。
+mod updater_proxy;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
@@ -3243,7 +3247,8 @@ pub fn run() {
             market::market_device_token,
             shell::show_in_folder,
             shell::open_url_external,
-            diagnostics::append_frontend_log
+            diagnostics::append_frontend_log,
+            updater_proxy::updater_env_proxy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
