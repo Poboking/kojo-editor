@@ -2,11 +2,16 @@
  * 赋值 / 调用 / 输出行的中文显示形（**任务线 ZH-S**）。
  *
  * 覆盖面（认得出就翻，认不出返回 `null`，**绝不原样返回**）：
- * - 赋值：`<族头>[:作用域][:索引] = 值`（`+= -= *= /=` 同形）——族头经 `lookup.familyAlias`
+ * - 赋值：`<族头>[:作用域][:索引] = 值`（`+= -= *= /= |= '=` 同形）——族头经 `lookup.familyAlias`
  *   换成中文别名（`TFLAG:193 = 1` → `时标:193 = 1`）；查不到别名就保留族头原名，**但整行仍必须
  *   是中文形**（`RESULT` / `LOCAL` 这类语言层槽位给中文显示名）；左值既不是引擎族头、也不是
  *   语言层槽位，而**形状**仍是一个引用（`服装 = 裸` / `順位 -= 1` / `CFLAG:100(%A(B)%) = 1`）时
  *   ⇒ **载荷逐字带走，只加 `赋值` 词头**（判据与"为什么不翻"见 `isDataReference` 头注）；
+ *   `'=`（ver1813 起的字符串赋值运算符）与 `|=`（按位或赋值）只补进既有运算符表，
+ *   显示形原样保留运算符记号——两者与 `+=` 同一档，**不另造动词、不改写语义**；
+ * - `TIMES <引用>, <数值>`：Emuera 的**小数乘算赋值**（文档口径 `TIMES A, 1.5` ⇔
+ *   `A = A × 1.5`，结果取整）⇒ `乘算 <目标> × <数值>`。真语料 3,143 行**全部**是
+ *   "恰好一个逗号 + 右值是数值字面量"（取证见 `renderTimes` 头注），其余形状一律 `null`；
  * - 裸自增 / 自减：`<引用> ++` / `<引用>--`（后缀）与 `++<引用>` / `-- <引用>`（前缀）——
  *   `自增 <目标>` / `自减 <目标>`；目标与赋值左值**同一把尺子**（`renderTarget` 的族头别名 /
  *   语言层槽位，查不到时 `isDataReference` 判形状、载荷逐字）。后缀形是语料大盘
@@ -218,8 +223,17 @@ export function isDataReference(raw: string): boolean {
   return depth === 0;
 }
 
-/** `目标[, 目标…] <op> <值>`；op ∈ `= += -= *= /=`（`==`/`<=` 这类比较不进这里） */
-const ASSIGN_RE = /^([^;=<>!]+?)\s*(\+=|-=|\*=|\/=|=)(.*)$/;
+/**
+ * `目标[, 目标…] <op> <值>`；op ∈ `= += -= *= /= |= '=`（`==`/`<=` 这类比较不进这里）。
+ *
+ * `'=` / `|=` 是 2026-10-20 兜底长尾补登的两枚**同档运算符**（不是新语句）：
+ * - `'=`：Emuera ver1813 起的**字符串赋值运算符**（`STR '= "あいう"` 与 `STR = あいう` 同义，
+ *   区别只是右值允许字符串表达式）。显示形保留 `'=` 记号，避免读者把"只认字符串表达式的写法"
+ *   读成普通 `=`（两者在写侧不是同一个运算符）；
+ * - `|=`：**按位或赋值**（`ROOMDATA:ROOM |= 場所_広場` 一族）。同样只保留记号，
+ *   不替读者改写成 `赋值 …` 之外的任何说法——运算语义由运算符本身陈述。
+ */
+const ASSIGN_RE = /^([^;=<>!]+?)\s*(\+=|-=|\*=|\/=|\|=|'=|=)(.*)$/;
 
 function renderAssignment(code: string, lookup: NativeDisplayLookup | undefined, depth: number): string | null {
   if (depth > 3) return null;
@@ -316,6 +330,43 @@ function renderIncrement(code: string, lookup: NativeDisplayLookup | undefined):
   if (rendered === null && !isDataReference(targetRaw)) return null;
   const target = rendered === null ? targetRaw : rendered.text;
   return `${INC_VERBS[op]!} ${target}`;
+}
+
+/* ==================== TIMES（小数乘算赋值） ==================== */
+
+/**
+ * `TIMES <引用>, <数值>` ⇒ `乘算 <目标> × <数值>`。
+ *
+ * ## 取证结论（2026-10-20 挂盘，全语料 3,143 行）
+ * - **形状唯一**：3,143 / 3,143 行都恰好有**一个**顶层逗号，右值是数值字面量
+ *   （整数 / 小数 / 尾点 `1.`；无一例表达式、变量或缺失）；左值全部是引用
+ *   （`LOCAL` / `SOURCE:…` / `CUP:…` / 作者自造名 / 带函数调用索引的引用）。
+ * - **语义有权威出处**：Emuera 文档（ERB 構文講座「小数の乗算」）原文口径
+ *   `A = 1000` + `TIMES A, 1.5` ⇒ A 为 `1000×1.5`；结果是小数时取整。
+ *   故显示词头用 `乘算`、运算符用 `×`——只陈述这一条被文档与语料同时钉住的语义。
+ * - **不猜的形状**：无逗号 / 多个顶层逗号 / 右值不是数值字面量（变量、函数调用）
+ *   一律 `null`（语料零样本，宁缺勿猜；显示层不替读者决定"那是不是乘法"）。
+ *
+ * 目标与赋值左值**同一把尺子**（`renderTarget`）：语言层槽位 / 族头别名中文化，
+ * 查不到就按 `isDataReference` 的形状判据逐字带走。右值逐字照抄，不改写数值写法。
+ */
+const TIMES_RE = /^TIMES[ \t]+(\S[\s\S]*)$/;
+/** 数值字面量：整数 / 小数 / 尾点（`1.` 盘上真形）；正负号可有 */
+const TIMES_FACTOR_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+
+function renderTimes(code: string, lookup: NativeDisplayLookup | undefined): string | null {
+  const m = TIMES_RE.exec(code);
+  if (m === null) return null;
+  const parts = splitTopLevel(m[1]!, ',');
+  if (parts.length !== 2) return null;
+  const targetRaw = parts[0]!.trim();
+  const factor = parts[1]!.trim();
+  if (targetRaw.length === 0 || !TIMES_FACTOR_RE.test(factor)) return null;
+
+  const rendered = renderTarget(targetRaw, lookup);
+  if (rendered === null && !isDataReference(targetRaw)) return null;
+  const target = rendered === null ? targetRaw : rendered.text;
+  return `乘算 ${target} × ${factor}`;
 }
 
 /* ==================== 调用 ==================== */
@@ -549,7 +600,9 @@ export const renderStatementLine: NativeDisplayPass = (input: NativeDisplayInput
     // 这里只防"行里恰好以 `++` 结尾"的漏网形状（`PRINTFORM ++`）被读成自增。
     (PRINT_LED_RE.test(code)
       ? null
-      : renderAssignment(code, input.lookup, 0) ?? renderIncrement(code, input.lookup));
+      : renderTimes(code, input.lookup) ??
+        renderAssignment(code, input.lookup, 0) ??
+        renderIncrement(code, input.lookup));
   if (rendered === null) return null;
   const line = comment.length > 0 ? `${rendered} ${comment}` : rendered;
   return line === input.content ? null : line; // 红线自证：原样返回一律视为失败
