@@ -20,7 +20,4 @@
 | ENCODE-SS | 落盘编码口径单源：编译产物 / 脚手架 `writeBytes` / `exportFile` 三条路径各自写什么 BOM/EOL，把判据收口到一处并加守卫 | 判据：先用真实字节取证（现成测试里的 golden 与 `artifact.ts` 跳过逻辑）再决定要不要改；默认档金样逐字节不许变；**不写游戏目录**（MemoryStorage / 临时目录） | 进行中 · 认领：e19erb 2026-10-20 |
 | UI-COPY | 宿主 UI 文案里机器名泄漏扫描：`erb.` / `sugar.` / `compute.` 一类 kind 串、camelCase 英文标识符是否直接上屏；只做客观泄漏的机械修正 | 判据：逐条列出「文件:行 + 屏上原文 + 应改成什么」，不确定语气的一律不动（产品语气归用户）；修一处留一处对照；豁免表按 文件+处数 钉死 | 进行中 · 认领：e19erb 2026-10-20 |
 | EMUERA-CLI | 真引擎 CLI 取证（#19）：用 `tools/engine-loadtest.mjs` / `C:/DSH/vendor/clidbg-probe` 的 `--CliDebug`，在 `%TEMP%` 硬链接镜像里加载**无 BOM UTF-8** 的原生起手包与中文打印样例，判引擎到底解码对不对 | 判据：游戏目录**只读**（镜像走 `%TEMP%`、跑完删）；必须给出引擎 stdout 原文（中文是否乱码）与警告集读数；不得以「看起来正常」结案；跑不了就交清缺哪个前置 | 进行中 · 认领：e19erb 2026-10-20 |
-<<<<<<< HEAD
-=======
->>>>>>> 34e5fec (docs(state,pitfalls,board): TSIT-5 落账（9218/60·9278）+ PITFALLS 142 记"台词串成规则牵动四条口径" + 看板删两行)
 | MK-PUB | **市场发布通道**：CF Worker 上传链——编辑器内一键上传 zip → Worker 校验（schema v1 同判据）→ R2 `pending/` → 自动开 PR 到注册表仓（merge=放行，GitHub 网页即审核后台）；Pages/CI/注册表仓保留原职（兼容源 + 第二道闸），拉取双源回退；Worker 独立仓 `<本机>\DSH\kojo-market-worker`（域名 `market.3625735381.xyz`，开发期 workers.dev）；客户端 additive：契约层 publish 意图/进度事件（照 `MarketDownloadProgress` 形态）+ Rust publish 命令（POST+token+Channel 进度）+ 上传主机闸（allowlist 扩 workers.dev 与自定义域）+ ui-market 发布面板（选 zip→本地 `parseManifest` 预校验→上传→状态行）；不动 `MARKET_DEFAULT_INDEX_URL`、不碰 ADR-0007 封闭集（仍只发声明式数据包） | 判据：Worker 侧 curl 全链可验证（签 token→上传→pending 落 R2→PR 开出）+ 本仓全量不回退 + 双 typecheck + `audit:decoupling` ✅ + cargo；新文案一律中文、拒因人话照 `PLATFORM_FAIL_TEXT` 形态 | 进行中 · 认领：claude 2026-10-16 |
