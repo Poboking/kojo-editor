@@ -29,6 +29,11 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
 /** 本批审计过的文案文件：app 侧的宿主 copy + 各插件的上屏文案宿主 */
 const COPY_FILES = [
   'packages/app/src/ui/App.tsx',
+  // REF-FRONT-PERF：项目生命周期 / 错误条 / 错误边界的新文案面
+  'packages/app/src/ui/use-project-session.ts',
+  'packages/app/src/ui/project-close.ts',
+  'packages/app/src/ui/project-error-notice.tsx',
+  'packages/app/src/ui/error-boundary.tsx',
   'packages/app/src/ui/CallHierarchyOverlay.tsx',
   'packages/app/src/ui/FileHistoryOverlay.tsx',
   'packages/app/src/ui/OpsHistoryOverlay.tsx',
@@ -165,10 +170,10 @@ const PINNED_COPY: readonly {
   readonly why: string;
 }[] = [
   {
-    file: 'packages/app/src/ui/App.tsx',
+    file: 'packages/app/src/ui/use-project-session.ts',
     phrase: '写允许域注册失败（本项目将只能写入应用数据目录）',
     count: 1,
-    why: 'fail-closed 的后果说人话，不点名 appDataDir',
+    why: 'fail-closed 的后果说人话，不点名 appDataDir（REF-FRONT-PERF 后这句随 openProject 搬进 hook）',
   },
   {
     file: 'packages/app/src/ui/CallHierarchyOverlay.tsx',

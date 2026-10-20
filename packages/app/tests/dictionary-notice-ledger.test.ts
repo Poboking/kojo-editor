@@ -210,11 +210,14 @@ describe('匹配口径 · variableSchemaFor 按 adapterId 精确取表', () => {
 describe('分层守卫 · 静态扫源码（连注释一起看）', () => {
   const LEDGER = read('packages', 'app', 'src', 'ui', 'dictionary-notice-ledger.ts');
   const APP = read('packages', 'app', 'src', 'ui', 'App.tsx');
+  // REF-FRONT-PERF 起 openProject 搬进 use-project-session；宿主接线两处同扫、处数仍只许 1
+  const SESSION = read('packages', 'app', 'src', 'ui', 'use-project-session.ts');
   const ADAPTER = read('packages', 'plugins', 'eratw-adapter', 'src', 'variable-schema.ts');
 
   it('句子只住台账：两格文案在宿主接线与适配器里逐字反查，命中一处即红', () => {
     for (const text of Object.values(dictionaryNoticeTextTable())) {
       expect(APP.includes(text), `正文句子写进了 App.tsx：${text}`).toBe(false);
+      expect(SESSION.includes(text), `正文句子写进了 use-project-session.ts：${text}`).toBe(false);
       expect(ADAPTER.includes(text), `正文句子写进了适配器：${text}`).toBe(false);
     }
     // 作者面句式也不许在适配器冒出（哪怕换了措辞）
@@ -234,10 +237,11 @@ describe('分层守卫 · 静态扫源码（连注释一起看）', () => {
   });
 
   it('宿主接线只有一处：openProject 里调真入口，且不另立显示面', () => {
-    expect(APP.match(/reportDictionaryStatus\(notify,/g) ?? []).toHaveLength(1);
-    expect(APP).toContain("from './dictionary-notice-ledger'");
-    // 不许在 App 里自造文案 / 第二套 toast 模板
-    expect(APP).not.toMatch(/notify\(\{[^}]*变量名汉化词典/);
+    const host = `${APP}\n${SESSION}`;
+    expect(host.match(/reportDictionaryStatus\(notify,/g) ?? []).toHaveLength(1);
+    expect(SESSION).toContain("from './dictionary-notice-ledger'");
+    // 不许在宿主接线里自造文案 / 第二套 toast 模板
+    expect(host).not.toMatch(/notify\(\{[^}]*变量名汉化词典/);
     expect(LEDGER).not.toMatch(/statusBar|badge/i);
   });
 });

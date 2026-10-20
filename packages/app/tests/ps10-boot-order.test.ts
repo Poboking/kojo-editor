@@ -24,6 +24,9 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const read = (rel: string): string => readFileSync(path.join(repoRoot, rel), 'utf8');
 const appSrc = read('packages/app/src/ui/App.tsx');
+// REF-FRONT-PERF：openProject 整体搬进 use-project-session.ts。判据不搬家就失效——
+// 这里把「注册 / 撤预取 / open 的相对次序」追到新文件，App 侧改钉「确实委托给该 hook」。
+const sessionSrc = read('packages/app/src/ui/use-project-session.ts');
 const bootstrapSrc = read('packages/app/src/bootstrap.ts');
 
 /** 第 n 次出现的位置（找不到就抛，免得 -1 参与比较变成假绿） */
@@ -38,14 +41,21 @@ function nthIndex(src: string, needle: string, n = 1): number {
 
 describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', () => {
   it('openProject：先注册项目级插件，再 open()，且开项目入口先撤预取防', () => {
-    const cancel = nthIndex(appSrc, 'cancelPrefetchRef.current?.()');
-    const ensure = nthIndex(appSrc, 'await ensureProjectPlugins(kernel)');
-    const open = nthIndex(appSrc, 'await kernel.project.open(dir)');
+    const cancel = nthIndex(sessionSrc, 'cancelPrefetchRef.current?.()');
+    const ensure = nthIndex(sessionSrc, 'await ensureProjectPlugins(kernel)');
+    const open = nthIndex(sessionSrc, 'await kernel.project.open(dir)');
     expect(cancel).toBeLessThan(ensure);
     expect(ensure).toBeLessThan(open);
-    // 只有 App 的开项目链路会注册项目级插件（别的入口不许另起一套时机）
-    expect(appSrc.match(/await ensureProjectPlugins\(kernel\)/g)?.length).toBe(1);
-    expect(appSrc).toContain("import { bootstrapKernel, ensureProjectPlugins, prefetchProjectPlugins } from '../bootstrap';");
+    // 只有项目生命周期 hook 会注册项目级插件（别的入口不许另起一套时机）
+    expect(sessionSrc.match(/await ensureProjectPlugins\(kernel\)/g)?.length).toBe(1);
+    expect(appSrc.match(/await ensureProjectPlugins\(kernel\)/g)).toBeNull();
+    // App 只保留开机预取这一个 bootstrap 进口；项目级注册的进口在 hook 里
+    expect(appSrc).toContain("import { bootstrapKernel, prefetchProjectPlugins } from '../bootstrap';");
+    expect(sessionSrc).toContain("import { ensureProjectPlugins } from '../bootstrap';");
+    // App 确实委托给 hook（而不是偷偷留了第二份 openProject）
+    expect(appSrc).toContain('useProjectSession({');
+    expect(appSrc).not.toContain('await kernel.project.open(dir)');
+    expect(appSrc).not.toContain('cancelPrefetchRef.current?.()');
   });
 
   it('欢迎页：boot.welcomeInteractive 早于任何编辑器图预取', () => {

@@ -84,6 +84,17 @@ async function sendRecord(rec: FrontendErrorRecord): Promise<void> {
 
 export type FrontendLogSender = (rec: FrontendErrorRecord) => Promise<void>;
 
+/**
+ * 直接落盘一条已知错误记录（additive，2026-10-20 REF-FRONT-PERF）：
+ * React 错误边界手里已经握着 Error + componentStack，不必伪造 DOM 事件再让
+ * `window` 监听器捞一遍。发送失败自吞的口径与事件通道逐字一致。
+ */
+export function logFrontendError(rec: FrontendErrorRecord, send: FrontendLogSender = sendRecord): void {
+  Promise.resolve(send(rec)).catch((err: unknown) => {
+    console.warn('[前端错误落盘] 发送失败，仅 console 留痕：', err);
+  });
+}
+
 /** 已装配标志：HMR / 重复装配不再多挂（多挂 = 同一错误写两份日志） */
 let installed = false;
 
@@ -100,9 +111,7 @@ export function installFrontendErrorLog(send: FrontendLogSender = sendRecord): (
   const dispatch = (rec: FrontendErrorRecord | null) => {
     if (!rec) return;
     // 发送失败必须自吞：这是兜底通道，它自己再抛就是 unhandledrejection 死循环
-    Promise.resolve(send(rec)).catch((err: unknown) => {
-      console.warn('[前端错误落盘] 发送失败，仅 console 留痕：', err);
-    });
+    logFrontendError(rec, send);
   };
   const onError = (ev: unknown) => dispatch(recordFromErrorEvent(ev));
   const onRejection = (ev: unknown) => dispatch(recordFromRejectionEvent(ev));

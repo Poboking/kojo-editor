@@ -17,16 +17,7 @@ import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
 import { AutosaveJournal, HEARTBEAT_INTERVAL_MS, SNAPSHOT_DEBOUNCE_MS } from './autosave-journal';
 import { journalIo } from './autosave-journal-io';
-import {
-  createSessionFlushScheduler,
-  emptySessionRecord,
-  loadSessionRecord,
-  saveSessionRecord,
-  sessionProjectOf,
-  upsertSessionProject,
-  type SessionFlushScheduler,
-  type SessionRecord,
-} from './session-store';
+import { loadSessionRecord } from './session-store';
 // 最近文件列表（MM-7）：欢迎页「最近文件」区的持久层与纯逻辑
 import {
   loadRecentFiles,
@@ -35,9 +26,9 @@ import {
   upsertRecentFile,
   type RecentFileRecord,
 } from './recent-files';
-import { clearRecoveredContents, recoveredPaths, setRecoveredContents } from './recovery-store';
-import { planProjectSwitch, resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
-import { bootstrapKernel, ensureProjectPlugins, prefetchProjectPlugins } from '../bootstrap';
+import { clearRecoveredContents, setRecoveredContents } from './recovery-store';
+import { resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
+import { bootstrapKernel, prefetchProjectPlugins } from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
 import { degradationNoticeText, onStructureDegradation } from '../monaco/tree-sitter/fallback';
@@ -45,13 +36,9 @@ import {
   NOT_READY_MESSAGE,
   clearDropHover,
   copyDroppedFiles,
-  dragDropImportHintMessage,
   dropTargetDirAt,
   dropHintText,
-  importRequestedPayload,
-  isProjectDetectionError,
   nextDropOverlay,
-  notGameDirMessage,
   planDropAt,
   routeDroppedPaths,
   subscribeDragDrop,
@@ -59,8 +46,6 @@ import {
   type DropOverlayState,
 } from './drag-drop';
 import { useNotify } from './NotificationCenter';
-// 变量名词典缺失/读失败必须让作者看见（TW-DICT-VISIBLE）：陈述来自契约、一次会话同一项目只说一遍
-import { reportDictionaryStatus, variableSchemaFor } from './dictionary-notice-ledger';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
 import { installWindowCloseGuard } from './window-close-guard';
@@ -72,8 +57,7 @@ import { DevNoteDialog } from './DevNoteDialog';
 import { loadDevNoteSeen, markDevNoteSeen } from './dev-note-pref';
 import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
-import { workspaceRootsOf, planAddExtraRoot } from './workspace-roots';
-import { resetSearch } from './search-store';
+import { planAddExtraRoot } from './workspace-roots';
 import {
   applyPin,
   batchCloseEmptyReason,
@@ -89,8 +73,6 @@ import {
   activateTab as activateTabInGroupState,
   openInActiveGroup,
   openPreviewInActiveGroup,
-  restoreGroups,
-  serializeGroups,
   setActiveGroup as setFocusedGroup,
   setGroupsOrientation,
   splitActiveDown,
@@ -123,6 +105,11 @@ import type { EditorPaneActions } from './EditorPane';
 import { openModelAcrossGroups } from './editor-pane-registry';
 // 整项目诊断扫描的装配与调度（判据一份，全住在那模块里；这里只递宿主事实）
 import { mountProjectScan } from './project-scan-schedule';
+// REF-FRONT-PERF：项目生命周期（开/关/写允许域/审批/会话 flush）收在专用 hook；
+// App 只留 UI state 与渲染。项目子树另加错误边界 + 项目态错误条。
+import { useProjectSession, useSessionFlush, useSessionStore } from './use-project-session';
+import { ProjectErrorBoundary } from './error-boundary';
+import { ProjectErrorNotice, raiseProjectError, visibleProjectError } from './project-error-notice';
 
 /**
  * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
@@ -142,7 +129,17 @@ const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['P
     .then(() => import('../market.css'))
     .then(() => import('./ProjectView'))
     .then((m) => ({ default: m.ProjectView }));
-const ProjectView = lazy(loadProjectView);
+
+/**
+ * 可重建的 lazy 实例（REF-FRONT-PERF 错误边界）。
+ *
+ * 不用模块级单例：React.lazy 会把 **rejected promise 缓存在组件类型上**，块加载失败后
+ * 只清错误边界的 state 仍会撞同一份拒绝——「重试」必须换一个 lazy 实例。
+ * `loadProjectView` 本身可重复调用；成功的模块由浏览器模块缓存去重，不会重复求值。
+ */
+function createProjectView() {
+  return lazy(loadProjectView);
+}
 
 /**
  * 欢迎页上"我要开项目"的两处意图面（PS-10 ③ 的预取闸门）：最近项目区（含每一行）与
@@ -199,6 +196,12 @@ function omitPaths(prev: ReadonlySet<string>, gone: ReadonlySet<string>): Readon
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
   const [phase, setPhase] = useState<AppPhase>('boot');
+  /**
+   * 项目视图的懒加载实例（REF-FRONT-PERF 错误边界）：**不是模块级单例**。
+   * React.lazy 会把 rejected promise 缓存在组件类型上；「重试」必须换一个实例，
+   * 否则错误边界清完 state 重渲染仍会撞同一份拒绝。成功块由浏览器模块缓存去重。
+   */
+  const [ProjectViewComponent, setProjectViewComponent] = useState(createProjectView);
   /**
    * 欢迎页是否被「×」关掉（用户反馈 8 批；只活在本会话）。关闭不改变 phase：
    * 有项目时本来就不渲染欢迎页，这里只管无项目分支显示欢迎页还是空态。
@@ -295,29 +298,16 @@ export function App(): ReactElement {
   const [crashRecovery, setCrashRecovery] = useState<{ root: string; files: number } | null>(null);
   /** 欢迎页「继续上次会话」的目标根（最近一次打开的项目；随会话落盘更新） */
   const [resumeRoot, setResumeRoot] = useState<string | null>(null);
-  /** 会话标签集的内存权威（落盘数据的投影；开项目时从它恢复） */
-  const sessionRecordRef = useRef<SessionRecord>(emptySessionRecord());
   /**
-   * 会话落盘防抖调度器（S2 #4）：稳态变更只 schedule（600ms 合并写盘），
-   * 关项目 / kernel 更替 / 卸载收尾走 flushNow 同步落盘——防抖窗口里的
-   * 最后一拍不再被清定时器丢掉了。write 面读写内存权威 ref，幂等由调度器保证。
+   * 会话记录的内存权威 + 落盘调度器（S2 #4）：稳态变更只 schedule（600ms 合并写盘），
+   * 关项目 / kernel 更替 / 卸载收尾走 flushNow 同步落盘——防抖窗口里的最后一拍
+   * 不再被清定时器丢掉。实现整体搬进 `use-project-session.ts`，这里只在该 hook 的
+   * 原来位置调用 `useSessionFlush`，effect 次序不变。
    */
-  const sessionFlushRef = useRef<SessionFlushScheduler | null>(null);
-  if (sessionFlushRef.current === null) {
-    sessionFlushRef.current = createSessionFlushScheduler({
-      write: (p) => {
-        // MM-9：编辑器组态随会话一起落盘（serializeGroups 的纯数据快照；restoreGroups
-        // 判非法不存——editorGroupsRef 读最新组态，不吃陈旧闭包，同 openTabsRef 纪律）
-        const next = upsertSessionProject(sessionRecordRef.current, p.root, {
-          ...p,
-          groups: serializeGroups(editorGroupsRef.current),
-        });
-        sessionRecordRef.current = next;
-        setResumeRoot(next.lastRoot);
-        void saveSessionRecord(p.kv, next).catch(() => undefined);
-      },
-    });
-  }
+  const { sessionRecordRef, sessionFlushRef, adoptSessionRecord } = useSessionStore({
+    editorGroupsRef,
+    onLastRoot: setResumeRoot,
+  });
   /** autosave 引擎（仅 Tauri 壳装配；浏览器壳恒 null，全部相关链路自然空转） */
   const autosaveRef = useRef<AutosaveJournal | null>(null);
   /** 恢复意图：欢迎页点了「恢复」→ 下一次 openProject 把恢复件合并进标签集 */
@@ -342,6 +332,14 @@ export function App(): ReactElement {
   const dirtyRef = useRef(dirtyPaths);
   dirtyRef.current = dirtyPaths;
 
+  /**
+   * 项目生命周期错误的统一上报口（REF-FRONT-PERF）：同一条文案保持原引用，
+   * React 直接 bail out——重复失败不会把错误条重挂一遍（同屏始终只有一条）。
+   */
+  const raiseError = useCallback((message: string) => {
+    setError((prev) => raiseProjectError(prev, message));
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     bootstrapKernel()
@@ -353,8 +351,7 @@ export function App(): ReactElement {
         // 读不到就算了——会话数据是锦上添花，绝不挡启动
         try {
           const rec = await loadSessionRecord(k.storage.global());
-          sessionRecordRef.current = rec;
-          setResumeRoot(rec.lastRoot);
+          adoptSessionRecord(rec);
         } catch {
           // 静默：空记录即无会话可恢复
         }
@@ -401,6 +398,11 @@ export function App(): ReactElement {
   const prefetched = useRef(false);
   /** 开项目时的撤防口（`openProject` 入口调用：真加载由 lazy / ensureProjectPlugins 自己拉） */
   const cancelPrefetchRef = useRef<(() => void) | null>(null);
+  /**
+   * `requestOpenFile` 在本组件更晚处声明；项目生命周期 hook 经它取最新引用。
+   * 该回调的依赖链全空、引用恒稳定（见它自己的注释），ref 只是绕开声明次序。
+   */
+  const requestOpenFileRef = useRef<((path: string) => void) | null>(null);
   useLayoutEffect(() => {
     if (!kernel || prefetched.current) return;
     prefetched.current = true;
@@ -649,194 +651,41 @@ export function App(): ReactElement {
   }, []);
 
   /**
-   * 会话标签集装回（退出/崩溃守护批 + MM-9 组态持久化）：换项目（欢迎页首开 /
-   * 切回 / 重启后重开）时按根目录恢复。恢复件（崩溃快照）追加在尾部、激活落
-   * 第一个恢复件——用户第一眼看到的就是没保存成的那份。pinned 与 tabs 取交集
-   * （记录可能比盘上事实旧）。无记录且无恢复件 = 保持空，绝不凭空造标签。
+   * 项目生命周期整体交给 `use-project-session.ts`（REF-FRONT-PERF）：
+   * openProject（换根守卫 / 插件注册 / 写允许域 / 审批 / 索引 / 会话恢复）+
+   * closeProject（try/finally 拆除序）+ 审批。函数体与 effect 顺序逐字搬迁，
+   * 依赖数组不变；唯一的结构差别是「谁来调用」改为本组件注入。
    *
-   * MM-9：记录带**合法** groups 快照 ⇒ 整态换成恢复出的组态（分组与排列方向
-   * 一起回），再把标签集（记录 tabs = flush 时焦点组的投影 + recovered 追加）
-   * 贴到**恢复态的 activeGroupId 组**——recovered 仍 append 到该组尾部、激活
-   * 仍落第一个恢复件，崩溃恢复语义不因分组恢复而丢。快照损坏 / 缺字段 ⇒
-   * restoreGroups 回 null，回落到旧路径（贴到当前焦点组），行为与加 groups
-   * 之前逐字一致。
+   * 刻意留在 App 的：decideProjectClose / decideProjectSwitch（保存确认与退出放行编排）、
+   * 欢迎页恢复入口、会话 flush 的**触发位置**（见下方 useSessionFlush，effect 次序不变）。
    */
-  const restoreSessionTabs = useCallback((dir: string, recovered: readonly string[]) => {
-    const rec = sessionProjectOf(sessionRecordRef.current, dir);
-    const restored = rec?.groups !== undefined ? restoreGroups(rec.groups) : null;
-    const tabs = [...(rec?.tabs ?? [])];
-    for (const p of recovered) if (!tabs.includes(p)) tabs.push(p);
-    if (tabs.length === 0) return;
-    const pinned = new Set((rec?.pinned ?? []).filter((p) => tabs.includes(p)));
-    const active = recovered[0] ?? (rec?.active && tabs.includes(rec.active) ? rec.active : tabs[0] ?? null);
-    setEditorGroups((prev) => {
-      // 有合法快照 ⇒ 以恢复态为底（prev 是 resetProjectUiState 刚重置的单组空栈，
-      // 整态替换）；没有 ⇒ 维持旧行为：只贴到当前焦点组
-      const base = restored ?? prev;
-      return {
-        ...base,
-        groups: base.groups.map((g) => (g.id === base.activeGroupId ? { ...g, tabs, active } : g)),
-      };
-    });
-    setPinnedPaths(pinned);
-  }, []);
-
-  const openProject = useCallback(
-    async (
-      dir: string,
-      opts?: {
-        keepView?: boolean;
-        skipDirtyConfirm?: boolean;
-        routeDetectionFailToImport?: boolean;
-        /** MM-7：欢迎页「最近文件」跨项目点开——项目打开成功后接着开它（失败分支绝不打开） */
-        pendingOpenFile?: string;
-      },
-    ) => {
-      if (!kernel) return;
-      // SAFE-1（2026-10-16）：换根开项目前先过脏确认——旧项目有未保存修改时，
-      // recent 点击 / chooseAndOpen / 拖入新目录三条路收在这同一个决策口
-      // （与 requestCloseProject 同款三选一），绝不随 EditorPane 卸载静默 dispose。
-      // 确认回调续跑时带 skipDirtyConfirm 直进，不再二次弹框。
-      const plan = planProjectSwitch(project?.rootDir ?? null, dir, dirtyRef.current, opts);
-      if (plan.kind === 'confirm') {
-        setPendingProjectSwitch({ dir, paths: plan.paths });
-        return;
-      }
-      // 崩溃恢复意图只对"下一次开项目"生效一次（打开失败也不悬挂到更晚的打开）
-      const wantRecovery = pendingRecoverRef.current;
-      pendingRecoverRef.current = false;
-      // 重载项目（同目录重开）不切回欢迎页：避免「项目被关掉」的错觉
-      if (!opts?.keepView) setPhase('opening');
-      setError(null);
-      // 静默只读修复（P0）：不一致事件只在 open() 期间同步发出——局部订阅，
-      // 避免常驻监听与 openProject 状态写入之间的竞态
-      let approvalMismatch = false;
-      const unMismatch = kernel.bus.on('project.writableApprovalMismatch', () => {
-        approvalMismatch = true;
-      });
-      try {
-        // PS-10 ②：18 个项目级插件在开项目这一刻才注册（欢迎页不需要它们的面板 / 命令 /
-        // 状态栏贡献）。**必须赶在 open() 之前**：插件们挂在 `project.opened` 那一拍上，
-        // 漏拍就是级联与快照少一家。指针意图已把这块预热过，这里通常只剩注册。
-        // 顺带撤防预取（PS-10 ③）：真加载由下面的 lazy 与这里共同负责，抢跑没有意义。
-        cancelPrefetchRef.current?.();
-        await ensureProjectPlugins(kernel);
-        const p = await kernel.project.open(dir);
-        /**
-         * TW-DICT-VISIBLE：`project.open()` 返回即 `loadProject` 已把变量字典填好（`project.opened`
-         * 就在返回前发出）⇒ 这里是"schema 就绪"的确定时机。词典缺席 / 读失败 ⇒ 一条中文 toast，
-         * 同会话同项目同一种失败只说一遍（台账在 `dictionary-notice-ledger.ts`，文案也只住那一侧）。
-         * `dictionary` 缺省（实现没陈述）⇒ 不出声——不得把"没陈述"当失败。
-         */
-        reportDictionaryStatus(notify, p.rootDir, variableSchemaFor(kernel, p.adapterId));
-        setProject(p);
-        // 换项目（欢迎页首开 / 拖入新目录）：旧项目的整套 UI 态整体带走；
-        // 同目录 reload 靠 keepView 保住标签，只清激活与定位（原行为）。
-        // 换项目即恢复该项目的会话标签集（退出/崩溃守护批）：重启后重开、同会话
-        // 切回、崩溃恢复合并，走的是同一条路
-        if (project?.rootDir !== dir) {
-          resetProjectUiState();
-          restoreSessionTabs(dir, wantRecovery ? recoveredPaths() : []);
-        } else {
-          // 同目录重开：标签保住（keepView），激活与定位清掉——清的是**每组**的激活
-          // （多组都还在，激活态一并回空态，与单组时代语义一致）
-          setEditorGroups((prev) => ({
-            ...prev,
-            groups: prev.groups.map((g) => ({ ...g, active: null })),
-          }));
-          setReveal(null);
-        }
-        setIndex(null);
-        setPhase('project');
-        setRecent(await kernel.project.recent());
-
-        // Rust 侧写允许域注册（M3 纵深防御第二道闸）：
-        // 允许域 = 项目根目录 + appDataDir；失败 fail-closed（仅 appDataDir 可写）并显式报错
-        if (isTauri()) {
-          try {
-            await invoke('register_write_domain', { root: dir });
-          } catch (e: unknown) {
-            setError(`写允许域注册失败（本项目将只能写入应用数据目录）：${errorText(e)}`);
-          }
-        }
-
-        // BUG-5：起文件监视。根集合 = 项目根 ∪ 口上域 ∪ 存档目录 ∪ 会话级附加根（D1）
-        //        ∪ 作者工作区全部根——组装与启动收在下方的专用 effect 里（extraRoots
-        //        变化 = 换根，与首开共用同一条路），这里只负责把项目挂上状态。
-
-        // 可写路径批准（首次打开必须由用户显式确认；未批准 = 只读浏览）；
-        // 批准记录与新提议不一致（approvalMismatch）同样重弹确认（F1/F2 修复）
-        const approved = await kernel.project.approvedWritableFor(dir);
-        if (!approved || approvalMismatch) setPendingApproval(p);
-        setWritable(approved !== null && !approvalMismatch);
-
-        // 口上域全量索引：解析器在 project.opened 已自动开建，这里等待其完成。
-        // 索引失败**不**回退欢迎页：项目仍可浏览，失败原因走状态栏 + 通知显式呈现
-        // （原先会走外层 catch → 用户只见「项目打不开」，无从判断是索引的问题）
-        setIndexing(true);
-        setIndexError(null);
-        const parser = kernel.services.get<ErbParserService>('erb.parser');
-        try {
-          const idx = await parser.ensureIndex();
-          setIndex(idx);
-        } catch (e: unknown) {
-          const msg = errorText(e);
-          setIndexError(msg);
-          notify({ kind: 'error', message: `口上域索引构建失败：${msg}` });
-        }
-        // MM-7：欢迎页「最近文件」跨项目点开的待开文件——项目完全就绪后才落进焦点组
-        // （放在成功路径末尾：打开失败走下面的 catch，绝不顺带打开文件）
-        if (opts?.pendingOpenFile) requestOpenFile(opts.pendingOpenFile);
-      } catch (e: unknown) {
-        if (isProjectDetectionError(e)) {
-          // 检测失败（拖进来 / 打开的目录不是可识别的游戏目录）：内部英文术语绝不上屏。
-          // 拖拽这条路径顺势引导去「导入项目」向导（emit 意图，adapter 消费后弹窗，
-          // 用户选目标/改名才真正字节复制，不静默写盘）；其它入口只做人话化报错。
-          const toImport = opts?.routeDetectionFailToImport === true;
-          notify({
-            kind: toImport ? 'info' : 'error',
-            message: toImport ? dragDropImportHintMessage(dir) : notGameDirMessage(dir),
-          });
-          if (toImport) kernel.bus.emit('workspace.importRequested', importRequestedPayload(dir));
-          setError(null);
-        } else {
-          const msg = errorText(e);
-          setError(msg);
-          // 打开失败必须显式可见：只落在 welcome 错误区容易被误读成「项目读不了」而无从下手
-          notify({ kind: 'error', message: `打开项目失败：${msg}` });
-        }
-        // 内核 open() 失败不会关掉还活着的旧项目——留在项目态，别把用户踢回欢迎页
-        setPhase(kernel.project.current() !== null ? 'project' : 'welcome');
-      } finally {
-        unMismatch();
-        setIndexing(false);
-      }
-    },
-    // requestOpenFile 不进依赖：它的 deps 链全空（commitOpenFile → []），引用恒稳定，
-    // 闭包捕获不会 stale（且它声明在本函数之后，同步求值的依赖数组写不了它）
-    [kernel, notify, project, resetProjectUiState, restoreSessionTabs],
-  );
-
-  /**
-   * 文件监视的根集合收口（D1）：**首开与"加了文件夹"共用同一条路**。
-   *
-   * 契约取舍：`fileWatch.start(roots)` 没有动态加根（plugin-api 的 FileWatchController
-   * 只有 start/stop/state），但 `start` 的语义本就是「用新的一组根替换旧的」（内核
-   * watcher 自带 teardown + 嵌套根折叠）——所以"加根" = 用**完整根集合**再 start 一次，
-   * 不需要先 stop。代价是附加根一变就重挂全部句柄：会话里加根是低频动作（一次对话
-   * 至多几次），而动态加根要动内核契约，违背本段纪律。
-   */
-  useEffect(() => {
-    if (!kernel || !project) return;
-    void kernel.fileWatch.start([
-      project.rootDir,
-      ...project.kojoPaths,
-      ...(project.savDir ? [project.savDir] : []),
-      ...extraRoots,
-      // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，workspaceRootsOf 吞成空列表
-      ...workspaceRootsOf(kernel),
-    ]);
-  }, [kernel, project, extraRoots]);
+  const { openProject, closeProject, decideApproval, requestReauth } = useProjectSession({
+    kernel,
+    project,
+    dirtyRef,
+    extraRoots,
+    notify,
+    cancelPrefetchRef,
+    requestOpenFileRef,
+    resetProjectUiState,
+    sessionRecordRef,
+    pendingRecoverRef,
+    setPhase,
+    setError,
+    raiseError,
+    setProject,
+    setIndex,
+    setIndexing,
+    setIndexError,
+    setWritable,
+    setRecent,
+    setPendingApproval,
+    setPendingProjectSwitch,
+    setEditorGroups,
+    setPinnedPaths,
+    setReveal,
+    pendingApproval,
+  });
 
   /**
    * 「添加文件夹到工作区」（D1）：系统目录对话框 → 去重计划 → 落会话态。
@@ -984,6 +833,8 @@ export function App(): ReactElement {
     },
     [commitOpenFile],
   );
+  // 项目生命周期 hook 早于本行声明调用；它经 ref 取最新引用（本回调 deps 空、引用恒定）
+  requestOpenFileRef.current = requestOpenFile;
 
   /**
    * 最近文件记录（MM-7）：打开/跳转落地即记——欢迎页「最近文件」区的数据源。
@@ -1468,30 +1319,20 @@ export function App(): ReactElement {
   const pinnedRef = useRef(pinnedPaths);
   pinnedRef.current = pinnedPaths;
 
-  // 会话标签集落盘（退出/崩溃守护批）：debounce 600ms，写 kernel 全局存储。
-  // 关项目不清记录（重启后「继续上次会话」靠它）；欢迎页（project null）不写——
-  // lastRoot 只指向最近一次打开过的项目。恢复用的读值经 ref 取最新，不吃陈旧闭包。
-  // S2 #4：schedule 即快照（此刻读 ref 拿最新），计时器到点与关项目强刷都只吃快照，
-  // 不再回读被 resetProjectUiState 清空的现场标签态。
-  useEffect(() => {
-    if (!kernel || !project) return;
-    sessionFlushRef.current?.schedule({
-      root: project.rootDir,
-      kv: kernel.storage.global(),
-      tabs: openTabsRef.current,
-      active: activeFileRef.current,
-      pinned: [...pinnedRef.current],
-    });
-  }, [kernel, project, openTabs, activeFile, pinnedPaths]);
-
-  // 项目拆除（project→null / 换项目 / kernel 更替 / 组件卸载）：防抖窗口里还没
-  // 到点的待写必须同步落盘，只清定时器会把最后一拍（首开时甚至整条记录）丢掉。
-  // layout 相保证这步在 commit 内同步发生；无待写时 flushNow 是 no-op，绝不双写。
-  useLayoutEffect(() => {
-    return () => {
-      sessionFlushRef.current?.flushNow();
-    };
-  }, [kernel, project]);
+  // 会话标签集落盘 + 项目拆除强刷（REF-FRONT-PERF：实现搬进 use-project-session.ts）。
+  // **调用位置就是原来的两个 effect 位置**：debounce schedule 与 layout 相 flushNow 的
+  // 注册次序、依赖数组（kernel/project/openTabs/activeFile/pinnedPaths）一字未改。
+  useSessionFlush({
+    kernel,
+    project,
+    sessionFlushRef,
+    openTabsRef,
+    activeFileRef,
+    pinnedRef,
+    openTabs,
+    activeFile,
+    pinnedPaths,
+  });
 
   /** 固定 / 取消固定标签（C2）：pinned 会话态 + 顺序重排（固定区在前，见 applyPin） */
   const togglePinInGroup = useCallback((groupId: string, path: string) => {
@@ -1561,53 +1402,11 @@ export function App(): ReactElement {
     [kernel],
   );
 
-  const closeProject = useCallback(async () => {
-    if (!kernel) return;
-    await kernel.project.close();
-    kernel.fileWatch.stop(); // BUG-5：监视随项目生命周期收（与写允许域同相位）
-    // Rust 侧允许域回到「仅 appDataDir」（与 kernel 的 writablePaths 清理同相位）
-    if (isTauri()) {
-      try {
-        await invoke('clear_write_domain');
-      } catch (e: unknown) {
-        setError(`写允许域清除失败: ${errorText(e)}`);
-      }
-    }
-    setProject(null);
-    setIndex(null);
-    resetProjectUiState();
-    setPendingApproval(null);
-    setWritable(null);
-    setIndexError(null);
-    // 检索结果按项目根算出来的：项目一关，旧结果里的路径全部失去意义（留着只会误导）
-    resetSearch();
-    setPhase('welcome');
-    setRecent(await kernel.project.recent());
-  }, [kernel, resetProjectUiState]);
-
-  const decideApproval = useCallback(
-    async (allow: boolean) => {
-      const p = pendingApproval;
-      setPendingApproval(null);
-      if (!p || !kernel) return;
-      if (!allow) {
-        setWritable(false);
-        return;
-      }
-      try {
-        await kernel.project.approveWritablePaths(p, p.writablePaths);
-        setWritable(true);
-      } catch (e: unknown) {
-        // 授权失败必须显式可见（P0 实机反馈）：否则对话框一关、徽章仍是「只读」，
-        // 用户以为点了没反应（=「无法重新选择权限」）
-        const msg = errorText(e);
-        setError(msg);
-        setWritable(false);
-        notify({ kind: 'error', message: `写权限授权失败：${msg}` });
-      }
-    },
-    [kernel, pendingApproval, notify],
-  );
+  /**
+   * closeProject / decideApproval 已在 `useProjectSession` 里（REF-FRONT-PERF）：
+   * 拆除序改由 `project-close.ts` 的 try/finally 保证——close 抛错也照样
+   * fileWatch.stop / 清写允许域 / 状态复位，并显式报错。
+   */
 
   /** 关项目入口（深审 A2）：有脏文件先弹全项目确认，绝不静默 dispose 全部 model */
   const requestCloseProject = useCallback(() => {
@@ -1683,11 +1482,6 @@ export function App(): ReactElement {
     [pendingProjectSwitch, openProject, saveAll],
   );
 
-  /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
-  const requestReauth = useCallback(() => {
-    if (project) setPendingApproval(project);
-  }, [project]);
-
   /* --------- 欢迎页的两个会话入口（退出/崩溃守护批） --------- */
 
   /** 崩溃恢复：开上次的项目 + 把快照内容装回 model 当未保存脏内容（存不存用户定） */
@@ -1730,53 +1524,76 @@ export function App(): ReactElement {
     setDevNoteOpen(false);
   }, []);
 
+  /**
+   * 错误边界的两个出口（REF-FRONT-PERF）：
+   * - 重试 = 换一个 lazy 实例（rejected promise 缓存在旧实例上）+ 边界清错重渲染；
+   * - 回到欢迎页 = 走 closeProject（try/finally 保证监视/写域/状态都收干净）。
+   */
+  const retryProjectView = useCallback(() => {
+    setProjectViewComponent(createProjectView());
+  }, []);
+  const exitProjectOnCrash = useCallback(() => {
+    void closeProject();
+  }, [closeProject]);
+  const dismissProjectError = useCallback(() => setError(null), []);
+  /** 项目态错误（welcome/opening 由 WelcomeView 自己的错误区承担，不重复上屏） */
+  const projectError = visibleProjectError(phase, error);
+
   const body =
     phase === 'project' && kernel && project ? (
-      <Suspense fallback={<ProjectViewSkeleton />}>
-        <ProjectView
-          kernel={kernel}
-          project={project}
-          index={index}
-          indexing={indexing}
-          indexError={indexError}
-          activeFile={activeFile}
-          openTabs={openTabs}
-          groups={editorGroups.groups}
-          activeGroupId={editorGroups.activeGroupId}
-          orientation={editorGroups.orientation}
-          dirtyPaths={dirtyPaths}
-          pinnedPaths={pinnedPaths}
-          reveal={reveal}
-          onOpenFile={openFile}
-          recentFiles={recentOpenPaths}
-          onRequestCloseTab={requestCloseTab}
-          onActivateGroup={activateGroup}
-          onActivateTabInGroup={activateTabInGroup}
-          onRequestCloseTabInGroup={closeTabInGroup}
-          onReorderTabInGroup={reorderTabInGroup}
-          onTogglePinInGroup={togglePinInGroup}
-          onBatchCloseTabInGroup={batchCloseInGroup}
-          onSplitEditor={splitEditor}
-          onSplitEditorDown={splitEditorDown}
-          onSetGroupsOrientation={setGroupsOrientationDir}
-          onCloseGroup={closeGroupById}
-          onNavBack={navBack}
-          onNavForward={navForward}
-          onReopenClosedTab={reopenClosedTab}
-          onSaveAll={saveAll}
-          onDirtyChange={onDirtyChange}
-          registerActions={registerActions}
-          onClose={requestCloseProject}
-          onReload={() => void openProject(project.rootDir, { keepView: true })}
-          writable={writable ?? false}
-          onReauth={requestReauth}
-          guardFileOp={guardFileOp}
-          onFilesGone={onFilesGone}
-          registerTreeRefresh={registerTreeRefresh}
-          extraRoots={extraRoots}
-          onAddExtraRoot={() => void addExtraRoot()}
-        />
-      </Suspense>
+      <ProjectErrorBoundary
+        resetKey={project.rootDir}
+        onRetry={retryProjectView}
+        onExit={exitProjectOnCrash}
+      >
+        {/* 边界必须在 Suspense **外面**：lazy 的模块加载失败是渲染期异常，
+            Suspense 只接挂起，接不住它 */}
+        <Suspense fallback={<ProjectViewSkeleton />}>
+          <ProjectViewComponent
+            kernel={kernel}
+            project={project}
+            index={index}
+            indexing={indexing}
+            indexError={indexError}
+            activeFile={activeFile}
+            openTabs={openTabs}
+            groups={editorGroups.groups}
+            activeGroupId={editorGroups.activeGroupId}
+            orientation={editorGroups.orientation}
+            dirtyPaths={dirtyPaths}
+            pinnedPaths={pinnedPaths}
+            reveal={reveal}
+            onOpenFile={openFile}
+            recentFiles={recentOpenPaths}
+            onRequestCloseTab={requestCloseTab}
+            onActivateGroup={activateGroup}
+            onActivateTabInGroup={activateTabInGroup}
+            onRequestCloseTabInGroup={closeTabInGroup}
+            onReorderTabInGroup={reorderTabInGroup}
+            onTogglePinInGroup={togglePinInGroup}
+            onBatchCloseTabInGroup={batchCloseInGroup}
+            onSplitEditor={splitEditor}
+            onSplitEditorDown={splitEditorDown}
+            onSetGroupsOrientation={setGroupsOrientationDir}
+            onCloseGroup={closeGroupById}
+            onNavBack={navBack}
+            onNavForward={navForward}
+            onReopenClosedTab={reopenClosedTab}
+            onSaveAll={saveAll}
+            onDirtyChange={onDirtyChange}
+            registerActions={registerActions}
+            onClose={requestCloseProject}
+            onReload={() => void openProject(project.rootDir, { keepView: true })}
+            writable={writable ?? false}
+            onReauth={requestReauth}
+            guardFileOp={guardFileOp}
+            onFilesGone={onFilesGone}
+            registerTreeRefresh={registerTreeRefresh}
+            extraRoots={extraRoots}
+            onAddExtraRoot={() => void addExtraRoot()}
+          />
+        </Suspense>
+      </ProjectErrorBoundary>
     ) : (
       <>
         <WelcomeView
@@ -1816,6 +1633,9 @@ export function App(): ReactElement {
       <WindowChrome />
       <div className="app-frame-body">
         {body}
+        {/* 项目态错误条（REF-FRONT-PERF）：写允许域注册/清除、授权失败的 error state
+            原先只在欢迎页可见；这里固定左下显示、可关闭、同文案不重复刷屏。 */}
+        {projectError ? <ProjectErrorNotice message={projectError} onDismiss={dismissProjectError} /> : null}
         {/* 首启动纸条（用户反馈 2）：只在欢迎页弹（进了项目就不打扰），且只在从未看过时。
             「去绑定游戏根目录」先收纸条再走欢迎页那个同一个目录选择入口。 */}
         {devNoteOpen && phase === 'welcome' ? (

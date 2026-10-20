@@ -9814,3 +9814,62 @@ button.resume-session {
 .editor-toolbar > .primary {
   order: 3;
 }
+
+
+/* ---------- REF-FRONT-PERF：项目态错误条 + 错误边界恢复卡（本批唯一新增样式） ---------- */
+/* 错误条：固定左下（右下是通知中心），不占项目布局；正文继承 .notice.error 的 pre-wrap。 */
+.project-session-error {
+  position: absolute;
+  left: 16px;
+  bottom: 36px;
+  z-index: 1200;
+  max-width: 420px;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  box-shadow: var(--shadow-1);
+}
+.project-session-error-message {
+  flex: 1;
+  line-height: 1.6;
+}
+/* 恢复卡：边界接管整个项目子树时占满正文舞台；不依赖 shell 布局类。 */
+.project-crash {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.project-crash-card {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.project-crash-card h2 {
+  margin: 0;
+  font-size: var(--fs-4);
+}
+.project-crash-card p {
+  margin: 0;
+  line-height: 1.7;
+}
+.project-crash-details summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+}
+.project-crash-detail {
+  max-height: 140px;
+  margin: var(--space-2) 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+.project-crash-actions {
+  display: flex;
+  gap: var(--space-2);
+}
