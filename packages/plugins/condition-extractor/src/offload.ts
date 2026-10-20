@@ -131,6 +131,8 @@ export function extractFileBucket(
   const e0 = nowMs();
   const st: FileStats = { functions: 0, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 };
   const conds: FunctionConditions[] = [];
+  // `{`…`}` 多行条件需要原始行补全（骨架扫描只有单行视野）；EOL 归一与扫描器同口径
+  const lines = payload.text.replace(/\r\n?/g, '\n').split('\n');
   // 两指针切片：stmts 与 functions 均按行号升序；stmts 为空时循环自然不执行，
   // 但仍要留一个空桶 —— 否则这个文件每次开项目都被判"没缓存"而白读白扫一遍
   let cursor = 0;
@@ -144,6 +146,7 @@ export function extractFileBucket(
     const cond = extractFunctionConditions(
       { normalizedName: fn.normalizedName, filePath: payload.path, startLine: fn.startLine },
       slice,
+      { lines },
     );
     if (cond) {
       conds.push(cond);

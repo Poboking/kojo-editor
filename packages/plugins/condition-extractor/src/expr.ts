@@ -12,7 +12,8 @@
  * 宏展开——遇到即整体 opaque（保留原文，不猜测）。
  *
  * 2026-10-19 真语料收口批（表达式波浪线 98% 误报的直面修）：
- * - `@"…"` 逐字串（`@` 起、下一枚 `"` 止；不处理转义，`{}` 原样算内容）；
+ * - `@"…"` 逐字串（`@` 起、下一枚引号止；`%…%` / `{…}` 插值里的引号不关闭外层串，
+ *   例 `@"%TEXTS("…")%…"`；插值感知失败时回退旧单层口径）；
  * - 三元真形 `A ? B # C`（`#` 作 else 分隔；`:` 保留）；
  * - 实参空槽 / 尾逗号、下标接调用（`NAME:TOINT(x)`）、后缀 `++`/`--`；
  * - `0b` 二进制与十进制指数 `2e3` / `1.5e-2`（裸小数仍不认）；
@@ -92,6 +93,114 @@ function scanDecimalExponent(s: string, from: number): number {
   return k;
 }
 
+/**
+ * 普通字符串 `"…"` 的结束位置（返回闭合引号之后；找不到 -1）。`\` 转义一个字符。
+ */
+function scanQuotedEnd(s: string, from: number): number {
+  let i = from + 1;
+  while (i < s.length) {
+    if (s[i] === '\\') {
+      i += 2;
+      continue;
+    }
+    if (s[i] === '"') return i + 1;
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * `%…%` 插值段的结束位置（返回闭合 `%` 之后；找不到 -1）。
+ * 插值里可再出现普通字符串 / 嵌套 `@"…"`；`%` 本身即结束符
+ * （引擎 `LexicalAnalyzer.Analyse` 的 `LexEndWith.Percent` 同口径）。
+ */
+function scanPercentEnd(s: string, from: number): number {
+  let i = from;
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === '%') return i + 1;
+    if (ch === '"') {
+      i = scanQuotedEnd(s, i);
+      if (i < 0) return -1;
+      continue;
+    }
+    if (ch === '@' && s[i + 1] === '"') {
+      i = scanVerbatimEnd(s, i + 2);
+      if (i < 0) return -1;
+      continue;
+    }
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** `{…}` 插值段的结束位置（返回闭合 `}` 之后；找不到 -1） */
+function scanCurlyEnd(s: string, from: number): number {
+  let i = from;
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === '}') return i + 1;
+    if (ch === '"') {
+      i = scanQuotedEnd(s, i);
+      if (i < 0) return -1;
+      continue;
+    }
+    if (ch === '@' && s[i + 1] === '"') {
+      i = scanVerbatimEnd(s, i + 2);
+      if (i < 0) return -1;
+      continue;
+    }
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * `@"…"` 逐字串的结束位置（返回闭合引号之后；找不到 -1）。
+ *
+ * 引擎语义（`LexicalAnalyzer.AnalyseFormattedString`）：`%…%` / `{…}` 插值里的
+ * 引号属于**内层表达式**，不关闭外层串（`@"%TEXTS("…")%…"` 是合法字面量）；
+ * `\` 转义一个字符。找不到闭合时调用方回退到"下一枚引号即结束"的旧口径，
+ * 保证 `@"50% OFF"` 这类孤立 `%` 不被误判。
+ */
+function scanVerbatimEnd(s: string, from: number): number {
+  let i = from;
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === '"') return i + 1;
+    if (ch === '%') {
+      i = scanPercentEnd(s, i + 1);
+      if (i < 0) return -1;
+      continue;
+    }
+    if (ch === '{') {
+      i = scanCurlyEnd(s, i + 1);
+      if (i < 0) return -1;
+      continue;
+    }
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** 旧的单层口径（`@"` 后下一枚引号即结束）；插值感知扫描失败时兜底 */
+function scanVerbatimEndSimple(s: string, from: number): number {
+  const at = s.indexOf('"', from);
+  return at < 0 ? -1 : at + 1;
+}
+
 function tokenize(input: string): Token[] {
   const out: Token[] = [];
   let i = 0;
@@ -135,23 +244,14 @@ function tokenize(input: string): Token[] {
       out.push({ kind: 'num', text, value, pos: start });
       continue;
     }
-    // 逐字串 `@"…"`：`@"` 起、下一枚 `"` 止；不处理转义，`{}` / `%` 原样算内容
+    // 逐字串 `@"…"`：`@"` 起；`%…%` / `{…}` 插值里的引号不关闭外层串（引擎同口径，
+    // 例 `@"%TEXTS("…")%…"`）；插值感知扫描失败时回退"下一枚引号即结束"（旧行为）。
     if (c === '@' && input[i + 1] === '"') {
-      i += 2;
-      let raw = '';
-      let closed = false;
-      while (i < input.length) {
-        const ch = input[i]!;
-        if (ch === '"') {
-          closed = true;
-          i++;
-          break;
-        }
-        raw += ch;
-        i++;
-      }
-      if (!closed) throw new ExprSyntaxError('逐字字符串的引号没有闭合', 'lexical', start);
-      out.push({ kind: 'str', text: input.slice(start, i), value: raw, pos: start });
+      let end = scanVerbatimEnd(input, i + 2);
+      if (end < 0) end = scanVerbatimEndSimple(input, i + 2);
+      if (end < 0) throw new ExprSyntaxError('逐字字符串的引号没有闭合', 'lexical', start);
+      out.push({ kind: 'str', text: input.slice(start, end), value: input.slice(i + 2, end - 1), pos: start });
+      i = end;
       continue;
     }
     // 字符串（`\` 转义一个字符）

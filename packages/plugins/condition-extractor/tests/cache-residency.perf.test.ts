@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import type { ComputePool, ControlFlowStatement, ErbFile, ErbIndex, GameProject, Logger, StateDependency } from '@kojo/plugin-api';
 import { dependencyKey } from '@kojo/plugin-api';
 import { ConditionEngine } from '../src/engine';
-import { decodeBuckets, encodeBuckets, extractExpect, type ExtractExpect, type FileBucket } from '../src/snapshot';
+import { EXTRACT_SNAPSHOT_FORMAT, decodeBuckets, encodeBuckets, extractExpect, type ExtractExpect, type FileBucket } from '../src/snapshot';
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 const HEAVY = process.env.KOJO_PERF_HEAVY === '1';
@@ -134,7 +134,7 @@ function encodeOldShape(buckets: ReadonlyMap<string, FileBucket>): unknown {
     ]);
     out[path] = [b.mtimeMs, b.size, [b.stats.functions, b.stats.functionsWithDeps, b.stats.predicates, b.stats.unparsed, b.stats.dependencies], conds];
   }
-  return { format: 5, projectRoot: EXPECT.projectRoot, adapterId: EXPECT.adapterId, inputDigest: EXPECT.inputDigest, savedAt: 0, schemas, names, buckets: out };
+  return { format: EXTRACT_SNAPSHOT_FORMAT, projectRoot: EXPECT.projectRoot, adapterId: EXPECT.adapterId, inputDigest: EXPECT.inputDigest, savedAt: 0, schemas, names, buckets: out };
 }
 
 describe('抽取快照落盘编码：新旧判等口径同窗交替', () => {

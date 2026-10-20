@@ -341,6 +341,8 @@ export function collectAssignments(
 export interface ExtractFunctionOptions {
   /** 语义标注（可选）：给依赖打上人类可读标签 */
   lookup?: SchemaLookup;
+  /** 原始行（additive）：提供时把 `{`…`}` 多行条件拼接后再解析；缺省行为不变 */
+  lines?: readonly string[];
 }
 
 export interface FunctionIdentity {
@@ -385,17 +387,65 @@ export function collectReturns(
 }
 
 /**
+ * `{` … `}` 行连接（Emuera `EraStreamReader.ReadEnabledLine` 语义）：
+ * 孤行 `{` 起、孤行 `}` 止，块内物理行**按一个空格**拼成一条逻辑行。
+ *
+ * 骨架扫描只有单行视野，`IF A &&` 折行时只拿到半句 ⇒ 解析整体降级 opaque。
+ * 这里在**既有语句边界**（孤行 `{` / `}`）内补全原文，再交给同一个表达式解析器。
+ *
+ * @returns 拼接后的表达式；语句不在块内 / 块未闭合 ⇒ null（调用方保留原样：
+ *          残句继续 opaque，opaque 仍可查，绝不猜）。
+ */
+export function joinBracedExpression(
+  stmtLine: number,
+  expression: string,
+  lines: readonly string[],
+): string | null {
+  // 语句前最近的非空 / 非注释行必须是孤立的 `{`（Emuera 要求 `{` 行只含 `{`）
+  let open = stmtLine - 2;
+  while (open >= 0) {
+    const probe = (lines[open] ?? '').trim();
+    if (probe === '' || probe.startsWith(';')) {
+      open--;
+      continue;
+    }
+    break;
+  }
+  if (open < 0 || (lines[open] ?? '').trim() !== '{') return null;
+
+  const parts: string[] = [];
+  const head = expression.trim();
+  if (head.length > 0) parts.push(head);
+  for (let i = stmtLine; i < lines.length; i++) {
+    const probe = (lines[i] ?? '').trim();
+    if (probe === '}') return parts.join(' ');
+    if (probe.length > 0) parts.push(probe);
+  }
+  return null; // 未闭合的块：不拼接（Emuera 会报错；这里保守回退到原样 opaque）
+}
+
+/**
  * 从控制流骨架收集逐条谓词（含来源类别 / 原文 / 行号 / 深度）。
  * 聚合视图（`extractFunctionConditions`）与明细视图（`extractFunctionPredicates`）共用。
  * @param opts.contextOf 提供时为每条谓词填充分支上下文路径（明细视图用）
+ * @param opts.lines 提供时把 `{`…`}` 多行条件拼接后再解析（additive；缺省行为不变）
  */
 export function collectPredicates(
   stmts: readonly ControlFlowStatement[],
-  opts: { contextOf?: (line: number) => string[] } = {},
+  opts: { contextOf?: (line: number) => string[]; lines?: readonly string[] } = {},
 ): FunctionPredicate[] {
   const preds: FunctionPredicate[] = [];
   /** SELECTCASE subject 栈（按 depth 配平；仅用于 CASE 展开） */
   const selectStack: { subject: ConditionExpr | null; depth: number }[] = [];
+  /**
+   * 多行条件的拼接原文；无行资料 / 不在 `{`…`}` 块内 ⇒ 原样（不猜）。
+   *
+   * 只收 IF / ELSEIF / SIF（本批判据就是"多行 IF 条件不进谓词"）：
+   * CASE 的多行值列表在现状下**不是 opaque**（`CASE 1, 2,` 的尾逗号只是少展开后续行），
+   * 拼它会凭空抬高谓词总数（真语料 +311，全是补全的 CASE 值）⇒ 收窄，留作后续单。
+   */
+  const exprTextOf = (s: ControlFlowStatement): string =>
+    opts.lines ? (joinBracedExpression(s.line, s.expression, opts.lines) ?? s.expression) : s.expression;
 
   for (const s of stmts) {
     // 更浅的语句出现 → 弹出已越过的 SELECTCASE（深度跟踪，容忍不配平）
@@ -406,14 +456,17 @@ export function collectPredicates(
       case 'IF':
       case 'ELSEIF':
       case 'SIF':
-        preds.push({
-          kind: s.kind as PredicateSourceKind,
-          text: s.expression,
-          expr: parseExpression(s.expression),
-          line: s.line,
-          depth: s.depth,
-          ...(opts.contextOf ? { context: opts.contextOf(s.line) } : {}),
-        });
+        {
+          const text = exprTextOf(s);
+          preds.push({
+            kind: s.kind as PredicateSourceKind,
+            text,
+            expr: parseExpression(text),
+            line: s.line,
+            depth: s.depth,
+            ...(opts.contextOf ? { context: opts.contextOf(s.line) } : {}),
+          });
+        }
         break;
       case 'SELECTCASE': {
         const subject = s.expression.length > 0 ? parseExpression(s.expression) : null;
@@ -469,7 +522,10 @@ export function extractFunctionPredicates(
     startLine: fn.startLine,
     endLine: source?.endLine ?? fn.startLine,
     statements: [...stmts],
-    predicates: collectPredicates(stmts, contextOf ? { contextOf } : {}),
+    predicates: collectPredicates(stmts, {
+      ...(contextOf ? { contextOf } : {}),
+      ...(source ? { lines: source.lines } : {}),
+    }),
     assignments: source
       ? collectAssignments(source.lines, fn.startLine + 1, source.endLine, contextOf!)
       : [],
@@ -503,7 +559,7 @@ export function extractFunctionConditions(
   stmts: readonly ControlFlowStatement[],
   opts: ExtractFunctionOptions = {},
 ): FunctionConditions | null {
-  const preds = collectPredicates(stmts);
+  const preds = collectPredicates(stmts, opts.lines ? { lines: opts.lines } : {});
 
   if (preds.length === 0) return null;
 
