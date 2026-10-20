@@ -9,6 +9,8 @@
  * 覆盖：打字进槽（半角/全角空格、`@`、`CALL `、`调用 `）必弹；无空白的块头、名字字符本身、
  * 字符串、注释、只读、派生视图、widget 已开、多光标、粘贴/IME 成串上字、纯移动光标、
  * 撤销、卸载 —— 一律不弹；同一位置签名重复只弹一次。
+ * 输入法合成期（IME 批）：合成会话内 typed / compositionend 提交内容一律不弹；Enter/Tab/Esc
+ * 只 stopPropagation、不 preventDefault；非合成期三枚键原样放行。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -20,8 +22,11 @@ import {
   ERB_NAME_SLOTS,
   KOJO_NAME_SLOTS,
   SUGGEST_ACTION_ID,
+  SUGGEST_WIDGET_KEYS,
   installSuggestContextTrigger,
+  isImeOwnedSuggestKey,
   isSlotOpeningChar,
+  isSuggestWidgetKey,
   shouldTriggerContextSuggest,
 } from '../src/monaco/suggest-context-trigger';
 import { kojoVariableNameSlot } from '../src/monaco/kojo-completion-variables';
@@ -57,9 +62,68 @@ interface StubEnv {
   getDebounceMs?: () => number;
 }
 
+/** 一次按键的替身结果（观察者的护栏只应 stopPropagation，永远不该 preventDefault） */
+interface StubKeyResult {
+  stopped: boolean;
+  prevented: boolean;
+}
+
+/**
+ * 编辑器容器的替身：观察者在 **capture** 段挂 keydown（要赶在 Monaco textarea 的
+ * `preventDefault` 之前），所以这里只记录 capture 监听；`stopped` 之后不再往下送。
+ */
+interface StubDomNode {
+  readonly captureCount: number;
+  addEventListener(type: string, cb: (e: unknown) => void, capture?: boolean): void;
+  removeEventListener(type: string, cb: (e: unknown) => void, capture?: boolean): void;
+  dispatchKeydown(input: { key: string; keyCode: number; isComposing?: boolean }): StubKeyResult;
+}
+
+function stubDomNode(): StubDomNode {
+  const keydownCapture: ((e: unknown) => void)[] = [];
+  return {
+    get captureCount() {
+      return keydownCapture.length;
+    },
+    addEventListener(type, cb, capture) {
+      if (type === 'keydown' && capture === true) keydownCapture.push(cb);
+    },
+    removeEventListener(type, cb, capture) {
+      if (type !== 'keydown' || capture !== true) return;
+      const i = keydownCapture.indexOf(cb);
+      if (i >= 0) keydownCapture.splice(i, 1);
+    },
+    dispatchKeydown(input) {
+      const result: StubKeyResult = { stopped: false, prevented: false };
+      const event = {
+        key: input.key,
+        keyCode: input.keyCode,
+        isComposing: input.isComposing ?? false,
+        stopPropagation: () => {
+          result.stopped = true;
+        },
+        preventDefault: () => {
+          result.prevented = true;
+        },
+      };
+      for (const cb of [...keydownCapture]) {
+        cb(event);
+        if (result.stopped) break; // capture 段已截住 ⇒ 事件到不了 textarea / 容器 bubble
+      }
+      // 模拟 Monaco textarea 的 target 段：Escape **无条件** preventDefault（防 IE 的 keypress，
+      // vendor `textAreaEditContextInput.js`）。capture 截住 ⇒ target 不跑——这正是"Esc 先取消
+      // 合成"必须走 capture 的理由：否则输入法的取消动作会和 widget 关闭一起被吞。
+      if (!result.stopped && input.key === 'Escape') result.prevented = true;
+      return result;
+    },
+  };
+}
+
 interface StubEditor {
   editor: Monaco.editor.IStandaloneCodeEditor;
   state: StubState;
+  /** 编辑器容器替身（capture 键护栏挂在这里） */
+  dom: StubDomNode;
   /** 观察者实际按下的触发（source + 动作 id） */
   triggers: { source: string; id: string }[];
   /** 打一枚字符：内容事件（单字符纯插入）+ reason=NotSet 的光标事件，与 Monaco 同序 */
@@ -72,6 +136,11 @@ interface StubEditor {
   undo(line: string, column: number): void;
   /** 纯移动光标（reason=Explicit=3：点击 / 方向键） */
   moveTo(column: number): void;
+  /** 输入法合成开始 / 结束（Monaco 的 public composition 事件） */
+  compositionStart(): void;
+  compositionEnd(): void;
+  /** 按下一枚键（走容器 capture 段；记录 stopPropagation / preventDefault） */
+  keydown(input: { key: string; keyCode: number; isComposing?: boolean }): StubKeyResult;
   /** 等 debounce 跑完（缺省等一拍宏任务；可加长以验证非零延迟） */
   settle(ms?: number): Promise<void>;
   dispose(): void;
@@ -109,6 +178,9 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
   const contentCbs: ((e: unknown) => void)[] = [];
   const cursorCbs: ((e: unknown) => void)[] = [];
   const modelCbs: ((e: unknown) => void)[] = [];
+  const compositionStartCbs: (() => void)[] = [];
+  const compositionEndCbs: (() => void)[] = [];
+  const dom = stubDomNode();
   let version = 1;
 
   const fireContent = (change: { rangeLength: number; text: string }, flags: Partial<{ isUndoing: boolean; isRedoing: boolean; isFlush: boolean }> = {}) => {
@@ -169,11 +241,23 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
       modelCbs.push(cb);
       return disposablesOf(modelCbs, cb);
     },
+    // 键护栏挂在容器 DOM 的 capture 段（真实 Monaco 的 `getContainerDomNode()` 是同一节点）
+    getContainerDomNode: () => dom as unknown as HTMLElement,
+    // 真实 Monaco 的两条 public composition 事件（观察者的合成会话就挂在这里）
+    onDidCompositionStart: (cb: () => void) => {
+      compositionStartCbs.push(cb);
+      return disposablesOf(compositionStartCbs, cb);
+    },
+    onDidCompositionEnd: (cb: () => void) => {
+      compositionEndCbs.push(cb);
+      return disposablesOf(compositionEndCbs, cb);
+    },
   };
 
   const api: StubEditor = {
     editor: editor as unknown as Monaco.editor.IStandaloneCodeEditor,
     state,
+    dom,
     triggers,
     type(ch: string) {
       const col0 = state.column - 1;
@@ -205,6 +289,15 @@ function stubEditor(init: Partial<StubState> & Partial<StubEnv> = {}): StubEdito
     moveTo(column: number) {
       state.column = column;
       fireCursor(3, 'mouse'); // CursorChangeReason.Explicit = 3
+    },
+    compositionStart() {
+      for (const cb of [...compositionStartCbs]) cb();
+    },
+    compositionEnd() {
+      for (const cb of [...compositionEndCbs]) cb();
+    },
+    keydown(input) {
+      return dom.dispatchKeydown(input);
     },
     async settle(ms = 5) {
       await new Promise((resolve) => setTimeout(resolve, ms));
@@ -857,5 +950,133 @@ describe('CTX-SUGGEST · .kojo 原生区名字位 ⇒ 主动弹', () => {
     const atGoto = { ...base, languageId: KOJO_LANGUAGE_ID, line: 'GOTO ', column: 6 };
     expect(shouldTriggerContextSuggest({ ...atGoto, nativeSlot: true })).toBe(true);
     expect(shouldTriggerContextSuggest({ ...atGoto, nativeSlot: false })).toBe(false);
+  });
+});
+
+/* ============================== IME · 合成期与补全互斥 ============================== */
+
+describe('CTX-SUGGEST · 输入法合成期：纯判据（复用 shell-keys 单源）', () => {
+  const base = {
+    languageId: KOJO_LANGUAGE_ID,
+    line: '调用 ',
+    column: 4,
+    typedChar: ' ' as string | null,
+    hasPath: true,
+    readOnly: false,
+    derivedView: false,
+    focused: true,
+    multiCursor: false,
+    selectionActive: false,
+    widgetVisible: false,
+    quickSuggestionsEnabled: true,
+  };
+
+  it('gate ⑫：composing=true 一律不弹；false / 缺省与既有路径逐字一致', () => {
+    expect(shouldTriggerContextSuggest(base)).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...base, composing: false })).toBe(true);
+    expect(shouldTriggerContextSuggest({ ...base, composing: true })).toBe(false);
+  });
+
+  it('补全动作键清单 = Enter / Tab / Escape（`key` 缺席时 13 / 9 / 27 兜底）', () => {
+    expect(SUGGEST_WIDGET_KEYS).toEqual(['Enter', 'Tab', 'Escape']);
+    for (const key of SUGGEST_WIDGET_KEYS) expect(isSuggestWidgetKey({ key }), key).toBe(true);
+    expect(isSuggestWidgetKey({ key: 'Esc' })).toBe(true);
+    for (const keyCode of [13, 9, 27]) expect(isSuggestWidgetKey({ keyCode }), String(keyCode)).toBe(true);
+    // `Process` / 229 不是"接受 / 关闭"动作键；Monaco 自己对它整拍不派发
+    expect(isSuggestWidgetKey({ key: 'Process', keyCode: 229 })).toBe(false);
+    expect(isSuggestWidgetKey({ key: 'a', keyCode: 65 })).toBe(false);
+  });
+
+  it.each([['Enter'], ['Tab'], ['Escape']])(
+    '%s：三证（isComposing / keyCode 229 / 会话标志）任一成立 ⇒ 归输入法；全无 ⇒ 归编辑器',
+    (key) => {
+      expect(isImeOwnedSuggestKey({ key, isComposing: true }, false)).toBe(true);
+      expect(isImeOwnedSuggestKey({ key, keyCode: 229, isComposing: false }, false)).toBe(true);
+      expect(isImeOwnedSuggestKey({ key, isComposing: false }, true)).toBe(true);
+      // 非合成期：作者真的在按这一枚键，补全行为逐字不变
+      expect(isImeOwnedSuggestKey({ key, isComposing: false }, false)).toBe(false);
+    },
+  );
+
+  it('非补全动作键不越权：合成期也不归本门管（Composition 命令面由 Monaco 自己整拍忽略）', () => {
+    expect(isImeOwnedSuggestKey({ key: 'a', keyCode: 65, isComposing: true }, true)).toBe(false);
+    expect(isImeOwnedSuggestKey({ key: 'ArrowDown', keyCode: 40 }, true)).toBe(false);
+  });
+});
+
+describe('CTX-SUGGEST · 输入法合成期：观察者不弹、不接建议、不吞非合成键', () => {
+  it('合成期键入（拼音逐字落进 model）⇒ 0 次触发；compositionend 后继续敲名字恢复', async () => {
+    const s = stubEditor({ line: '调用 ' });
+    s.compositionStart();
+    s.type('n'); // 真 Monaco：compositionupdate 会把拼音写进 model
+    await s.settle();
+    s.type('i');
+    await s.settle();
+    expect(fired(s)).toBe(0);
+    s.compositionEnd();
+    await s.settle();
+    expect(fired(s)).toBe(0); // 提交那一笔内容事件在 compositionend 之前到达，按合成期吞掉
+    s.type('好'); // 合成结束后的真实击键：既有路径原样恢复
+    await s.settle();
+    expect(fired(s)).toBe(1);
+  });
+
+  it('排程后立刻进入合成 ⇒ 待发的一拍作废（合成期不许补弹）', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = stubEditor({ line: '调用 ', getDebounceMs: () => 40 });
+      s.type(' ');
+      s.compositionStart(); // compositionstart 早于定时器到点
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fired(s)).toBe(0);
+      s.compositionEnd();
+      s.type('好');
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fired(s)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('合成期 Enter / Tab / Escape 在 capture 段截住；护栏自身不调 preventDefault（Esc 的取消留给输入法）', () => {
+    const s = stubEditor({ line: '调用 ' });
+    s.compositionStart();
+    for (const [key, keyCode] of [
+      ['Enter', 13],
+      ['Tab', 9],
+      ['Escape', 27],
+    ] as const) {
+      const r = s.keydown({ key, keyCode });
+      expect(r.stopped, key).toBe(true);
+      expect(r.prevented, key).toBe(false);
+    }
+    s.compositionEnd();
+    // 非合成期：三枚键原样放行（接受建议 / 关闭 widget 仍由 Monaco 自己处理）。
+    // Escape 的 preventDefault 是 Monaco textarea 的既有行为（靶段模拟），不是本护栏加的。
+    for (const [key, keyCode] of [
+      ['Enter', 13],
+      ['Tab', 9],
+      ['Escape', 27],
+    ] as const) {
+      const r = s.keydown({ key, keyCode });
+      expect(r.stopped, key).toBe(false);
+      expect(r.prevented, key).toBe(key === 'Escape');
+    }
+  });
+
+  it('单拍证据（isComposing / keyCode 229）即使会话标志未建立也挡；非动作键不越权', () => {
+    const s = stubEditor({ line: '调用 ' });
+    expect(s.keydown({ key: 'Enter', keyCode: 13, isComposing: true }).stopped).toBe(true);
+    expect(s.keydown({ key: 'Tab', keyCode: 229 }).stopped).toBe(true);
+    expect(s.keydown({ key: 'a', keyCode: 65, isComposing: true }).stopped).toBe(false);
+  });
+
+  it('卸载后合成 / 按键监听一并释放（capture 监听器清零，不再 stopPropagation）', () => {
+    const s = stubEditor({ line: '调用 ' });
+    expect(s.dom.captureCount).toBe(1); // 安装即挂上容器 capture 护栏
+    s.compositionStart();
+    s.dispose();
+    expect(s.dom.captureCount).toBe(0);
+    expect(s.keydown({ key: 'Enter', keyCode: 13 }).stopped).toBe(false);
   });
 });

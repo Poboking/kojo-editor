@@ -12,6 +12,7 @@ import { kojoFunctionNameSlot } from './kojo-completion-functions';
 import { kojoVariableNameSlot } from './kojo-completion-variables';
 import { kojoRenameBracketSlotAt } from './kojo-completion';
 import { kojoNativeSlotAt } from './kojo-native-zone';
+import { isComposingEvent } from '../ui/shell-keys';
 
 /**
  * CTX-SUGGEST · 「光标刚落到名字位 ⇒ 主动弹一次补全」的**宿主侧观察者**。
@@ -33,6 +34,22 @@ import { kojoNativeSlotAt } from './kojo-native-zone';
  * 一律抑制；判据一律复用候选源那几枚（见 {@link nameSlotProbesOf}），宿主侧零抄本。
  * 设置页关掉「输入时自动弹出补全」时本观察者同步沉默（gate ⑪）——"关"必须是真的不弹，
  * 而不是只关 Monaco 那一半。
+ *
+ * ## 输入法合成期（IME ↔ 补全互斥，2026-10-20）
+ *
+ * 中文作者在名字位用 IME 时，`compositionstart`→`compositionend` 之间 Enter / Tab / Esc
+ * 是输入法的：Enter 提交候选、Tab 选词、Esc 取消合成。这两件事必须与补全互斥，否则
+ * "上字"会变成"接受建议"或"关掉 widget"。观察者因此在这段时间整轮沉默：
+ * - 内容腿 / 光标腿看到 `composing` 一律不排程（`compositionupdate` 会把拼音逐字写进 model，
+ *   那不是"作者敲下的一枚字符"）；`evaluate` 的 gate ⑫ 再兜一层；
+ * - Enter / Tab / Esc 的 keydown 在编辑器容器 **capture** 段只做 `stopPropagation`，把这一拍
+ *   从 Monaco 的键位命令面摘掉，**不 `preventDefault`**（候选窗的提交 / 取消靠默认行为，
+ *   一旦 preventDefault 就是吞键）；capture 还赶在 Monaco textarea 对 Escape 的无条件
+ *   preventDefault 之前，否则"先取消合成"也会被一并吞掉。
+ *
+ * 判据**复用** `shell-keys` 的 `isComposingEvent` 单源（`isComposing` / `keyCode 229` /
+ * 会话标志三证）。Monaco 0.57 的键位服务已按 `KEY_IN_COMPOSITION` 归一前两证，但第三方
+ * 输入法两者都不带、只剩会话标志时它不认——本观察者补的就是这一层。
  *
  * ## 为什么不会骚扰作者
  *
@@ -82,6 +99,53 @@ const CURSOR_REASON_NOT_TYPING: readonly number[] = [1, 3, 4, 5, 6];
 const SUGGEST_CONTROLLER_ID = 'editor.contrib.suggestController';
 /** `SuggestModel.state` 的 `State.Idle`（vendor `suggestModel.js:229-239`：`_triggerState === undefined`） */
 const SUGGEST_STATE_IDLE = 0;
+
+/* ============================== 输入法合成期门（IME ↔ 补全） ============================== */
+
+/**
+ * 补全 widget 会消费的三枚键：Enter / Tab 接受当前项，Esc 关闭 widget（vendor
+ * `suggestController.js` 的 `acceptSelectedSuggestion` / `hideSuggestWidget`）。
+ */
+export const SUGGEST_WIDGET_KEYS: readonly string[] = ['Enter', 'Tab', 'Escape'];
+
+/** 合成期按键证据（`KeyboardEvent` 的最小结构面；测试替身按同一形状构造） */
+export interface SuggestKeyEvidence {
+  readonly key?: string;
+  readonly keyCode?: number;
+  readonly isComposing?: boolean;
+}
+
+/**
+ * 这一枚按键是不是补全 widget 会消费的键（Enter / Tab / Esc）。
+ *
+ * `key` 在合成期可能缺席或为 `Process`，此时按 legacy `keyCode` 兜底（13 / 9 / 27）。
+ * `keyCode 229`（IME Process）**刻意不算**补全动作键：它不是"接受 / 关闭"，而且 Monaco
+ * 的键位服务对 `KEY_IN_COMPOSITION` 整拍不派发，轮不到本门处理。
+ */
+export function isSuggestWidgetKey(event: SuggestKeyEvidence): boolean {
+  if (event.key === 'Enter' || event.key === 'Tab' || event.key === 'Escape' || event.key === 'Esc') {
+    return true;
+  }
+  return event.keyCode === 13 || event.keyCode === 9 || event.keyCode === 27;
+}
+
+/**
+ * 输入法合成期里，这一拍 Enter / Tab / Esc 是否该由输入法独占（补全命令必须让位）。
+ *
+ * 判据**只复用** `shell-keys` 的 `isComposingEvent`（`isComposing` / `keyCode 229` / 会话标志
+ * 三证），本文件不另写第二份：
+ * - 非补全动作键 ⇒ `false`（本门不越权处理其它键）；
+ * - 补全动作键 + 非合成期 ⇒ `false`（作者真的在按 Enter / Tab / Esc，行为逐字不变）；
+ * - 补全动作键 + 合成期 ⇒ `true`：Enter 只提交候选、Tab 只选词、Esc 先取消合成。
+ *
+ * Monaco 0.57 的键位服务已按 `KeyCode.KEY_IN_COMPOSITION` 整拍不派发，但它只认
+ * `isComposing` 与 `keyCode 229` 归一出来的证据（`base/browser/keyboardEvent.js:76`）；
+ * 第三方输入法两者都不带、只剩 `compositionstart`→`compositionend` 会话标志时，
+ * 需要本判据补上那一层（见 `installSuggestContextTrigger` 的 keydown 护栏）。
+ */
+export function isImeOwnedSuggestKey(event: SuggestKeyEvidence, sessionComposing: boolean): boolean {
+  return isSuggestWidgetKey(event) && isComposingEvent(event, sessionComposing);
+}
 
 /* ============================== 名字位判据（全部复用候选源，宿主零抄本） ============================== */
 
@@ -200,16 +264,24 @@ export interface SuggestOpenContext {
    * 可选：旧调用方不传 = `true`（保持既有行为）。
    */
   readonly quickSuggestionsEnabled?: boolean;
+  /**
+   * 输入法合成期（`compositionstart`→`compositionend` 的会话态）。`true` ⇒ 本轮自动弹出
+   * 整轮沉默：拼音 / 候选还没上字，弹出来只会被下一次 `compositionupdate` 过滤掉，或者
+   * 诱使 Enter / Tab 去"接受建议"而不是提交候选。可选：旧调用方不传 = `false`。
+   */
+  readonly composing?: boolean;
 }
 
 /**
  * 主动触发的**全部闸门**（纯函数；观察者只负责把 Monaco 事件折成 {@link SuggestOpenContext}）。
- * ⑪ 总开关**最先判**（关掉时其余判据都不必算），其后 ①–⑩ 按编号顺序，逐条可测：
+ * ⑪ 总开关**最先判**（关掉时其余判据都不必算），⑫ 输入法合成期紧随其后（合成期一律不弹），
+ * 其后 ①–⑩ 按编号顺序，逐条可测：
  * ①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标/有选区 ⑥widget 已开 ⑦不是"刚敲下的一枚字符"
  * ⑧这门语言没有名字位判据 ⑨串/注释内 ⑩候选源自己不信这一位。
  */
 export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
   if (c.quickSuggestionsEnabled === false) return false; // ⑪（总开关，先判）
+  if (c.composing === true) return false; // ⑫ 合成期：输入法还没上字，不许替作者弹
   if (!c.hasPath) return false; // ①
   if (c.readOnly) return false; // ②
   if (c.derivedView) return false; // ③
@@ -292,6 +364,29 @@ interface SuggestControllerLike {
   readonly model?: { readonly state?: number };
 }
 
+/**
+ * 编辑器容器（`getContainerDomNode()` 就是 Monaco 键位服务挂 keydown 的同一节点；
+ * 测试替身按同一最小面构造）。容器拿不到时退到 `getDomNode()`；两者都没有 ⇒ 不做键护栏。
+ */
+function editorKeyShieldNodeOf(editor: Monaco.editor.IStandaloneCodeEditor): HTMLElement | null {
+  const containerOf = (editor as { getContainerDomNode?: () => HTMLElement | null }).getContainerDomNode;
+  if (typeof containerOf === 'function') {
+    try {
+      const node = containerOf.call(editor);
+      if (node) return node;
+    } catch {
+      /* 旧编辑器 / 测试桩没有这一面 ⇒ 退到 getDomNode */
+    }
+  }
+  const domOf = (editor as { getDomNode?: () => HTMLElement | null }).getDomNode;
+  if (typeof domOf !== 'function') return null;
+  try {
+    return domOf.call(editor) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** 「单字符纯插入」= 打字（删除 / 替换 / 粘贴 / 整篇 setValue 都不是）；返回插入的那一枚字符 */
 function singleInsertedChar(e: Monaco.editor.IModelContentChangedEvent): string | null {
   if (e.isFlush === true) return null;
@@ -341,6 +436,11 @@ export function installSuggestContextTrigger(
 ): Monaco.IDisposable {
   /** 刚敲下的那一枚字符；一次评估后清空 ⇒ "一次打字只弹一次" */
   let typedChar: string | null = null;
+  /**
+   * 输入法合成会话（`onDidCompositionStart` → `onDidCompositionEnd`）。
+   * 合成期的事件腿一律不排程，`evaluate` 里的 gate ⑫ 再兜一层。
+   */
+  let composing = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let lastSignature: string | null = null;
   let disposed = false;
@@ -359,6 +459,7 @@ export function installSuggestContextTrigger(
     const ch = typedChar;
     typedChar = null; // 消费：之后再来光标事件也不再评估同一拍
     if (ch === null) return;
+    if (composing) return; // ⑫ 排程后立刻进入合成：这一拍作废（事件腿通常已先拦下）
     const model = editor.getModel();
     if (!model) return;
     const position = editor.getPosition();
@@ -389,6 +490,7 @@ export function installSuggestContextTrigger(
           ? selections.some((s) => !!s && !s.isEmpty())
           : !!primary && !primary.isEmpty(),
       widgetVisible: isSuggestWidgetVisible(editor),
+      composing,
       // 只有 `.kojo` 需要多问一次原生区（跨装配路由的位置面）；其余语言不付这笔扫描
       nativeSlot: languageId === KOJO_LANGUAGE_ID ? kojoNativeSlotAt(model, position) : false,
     });
@@ -430,6 +532,12 @@ export function installSuggestContextTrigger(
   // 撤掉待发的一拍。落点由 evaluate 里的 gate ⑩ 决定 ⇒ 台词行 / 普通文本不会因此多弹。
   const contentSub = editor.onDidChangeModelContent((e) => {
     if (disposed) return;
+    if (composing) {
+      // 合成期模型也会随 compositionupdate 变化（拼音 / 候选预览）：这不是"作者敲下的一枚字符"
+      typedChar = null;
+      cancelTimer();
+      return;
+    }
     if (e.isUndoing === true || e.isRedoing === true) {
       typedChar = null;
       cancelTimer();
@@ -444,6 +552,11 @@ export function installSuggestContextTrigger(
   // 光标腿：打字带动的那次（NotSet）与内容事件同拍合并；移动类一律撤销
   const cursorSub = editor.onDidChangeCursorPosition((e) => {
     if (disposed) return;
+    if (composing) {
+      typedChar = null;
+      cancelTimer();
+      return;
+    }
     const reason = typeof e.reason === 'number' ? e.reason : CURSOR_REASON_NOT_SET;
     if (CURSOR_REASON_NOT_TYPING.includes(reason)) {
       typedChar = null;
@@ -460,16 +573,55 @@ export function installSuggestContextTrigger(
     cancelTimer();
   });
 
+  // 输入法合成会话：走 Monaco 的 public composition 事件（与 `SuggestModel` 同一对判据）。
+  // 事件序（vendor `textAreaEditContextInput.js` 的 compositionend 分支）：先 fire `_onType`
+  // 把提交的那一笔落进 model（宿主 content 腿此时仍在 `composing=true` 里 ⇒ 不会把"上字"
+  // 当击键去弹补全），随后才 fire `onDidCompositionEnd` ⇒ 这里清会话。Esc 取消合成没有内容
+  // 事件，清会话同样只是"恢复作者原本的键盘行为"。
+  const compositionStartSub =
+    typeof editor.onDidCompositionStart === 'function'
+      ? editor.onDidCompositionStart(() => {
+          composing = true;
+          typedChar = null;
+          cancelTimer();
+        })
+      : null;
+  const compositionEndSub =
+    typeof editor.onDidCompositionEnd === 'function'
+      ? editor.onDidCompositionEnd(() => {
+          composing = false;
+          typedChar = null;
+          cancelTimer();
+        })
+      : null;
+
+  // 合成期的 Enter / Tab / Esc 归输入法。护栏挂在编辑器容器的 **capture** 段，必须赶在
+  // Monaco 的 textarea 处理之前：vendor `textAreaEditContextInput.js` 对 Escape **无条件**
+  // `preventDefault()`（防 IE 的 keypress），合成期若让它跑到，输入法的"取消合成"也会被吞。
+  // 这里只 `stopPropagation`、**不 preventDefault**：Enter 提交候选 / Esc 取消合成 / Tab 选词
+  // 靠的都是输入法默认行为；事件不进 Monaco 的命令面，但默认动作照常发生。
+  // 非合成期一律原样放行（接受建议 / 关闭 widget 仍是 Monaco 自己的键位）。
+  const shieldNode = editorKeyShieldNodeOf(editor);
+  const onComposingKeyDown = (event: KeyboardEvent): void => {
+    if (!isImeOwnedSuggestKey(event, composing)) return;
+    event.stopPropagation();
+  };
+  if (shieldNode) shieldNode.addEventListener('keydown', onComposingKeyDown, true);
+
   return {
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      composing = false;
       cancelTimer();
       typedChar = null;
       lastSignature = null;
       contentSub.dispose();
       cursorSub.dispose();
       modelSub.dispose();
+      compositionStartSub?.dispose();
+      compositionEndSub?.dispose();
+      shieldNode?.removeEventListener('keydown', onComposingKeyDown, true);
     },
   };
 }
