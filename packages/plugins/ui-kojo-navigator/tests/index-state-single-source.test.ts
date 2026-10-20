@@ -177,11 +177,12 @@ describe('④ 反向对照：三态与降级的判据确实住在提供方那一
  * 手法与 ① 逐字相同（按行扫源码形态、连注释一起查、处数钉死）。
  *
  * ST-TAIL（2026-10-20）把清单再扩两格：补全那条软腿的**装配侧** `editor-global-providers.ts`
- * 与面包屑那条的**宿主侧** `EditorPane.tsx`——这两格本批实测**没有作者可见的文案出口** ⇒
+ * 与面包屑那条的**宿主侧** `EditorPane.tsx`（F2 起主逻辑在 `editor-pane/use-breadcrumb.ts`，
+ * 两处同扫）——这两格本批实测**没有作者可见的文案出口** ⇒
  * 不接（判据见第 ⑦ 组），但它们从此也在扫描面里：**任何一处形状比较、任何一次查表、
  * 任何第二张表都算红**（扩面只增不减，把文件从清单里划掉就是放宽）。
  */
-describe('⑤ 宿主通道只查表（八文件 × 八把尺子，多一处即红）', () => {
+describe('⑤ 宿主通道只查表（九文件 × 八把尺子，多一处即红）', () => {
   const APP_TABLE = 'packages/app/src/ui/index-state-copy.ts';
   const APP_CONSUMERS = [
     APP_TABLE,
@@ -193,6 +194,8 @@ describe('⑤ 宿主通道只查表（八文件 × 八把尺子，多一处即�
     // ST-TAIL 扩面（补全的装配侧 + 面包屑的宿主侧；这两格只许搬运，不许自己判形状）
     'packages/app/src/ui/editor-global-providers.ts',
     'packages/app/src/ui/EditorPane.tsx',
+    // F2 搬运（2026-10-20）：面包屑主逻辑从 EditorPane 抽进 hook，扫描面跟着搬、不缩回
+    'packages/app/src/ui/editor-pane/use-breadcrumb.ts',
   ];
 
   it.each([...SHAPE_TESTS, { name: 'phase 的比较（三态一律走表）', re: /phase\s*(?:===|!==)/ }])(
@@ -291,9 +294,9 @@ describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开�
  *   （`erb-completion.ts:394`「挂上会让每轮补全都报一次降级信号」），且 `console.warn`
  *   在桌面壳里看不见（`editor-global-providers.ts:443` 那条折痕取证）。⇒ 没有作者读得到的
  *   那一格 ⇒ 交回，且**不许为它新造一格**。
- * - **面包屑**：`EditorPane.tsx:597 currentErbIndex()`（本批归一：它就是那一枚
+ * - **面包屑**：`editor-pane/use-breadcrumb.ts` 的 `currentErbIndex()`（本批归一：它就是那一枚
  *   `erbParserIndex()`）只服务**快路**（②）与缓存戳；索引缺席
- *   时走④**现解析**那条腿（`EditorPane.tsx:1929`），而供方的 documentSymbol 判的是
+ *   时走④**现解析**那条腿（同文件 `collectDocumentSymbols`），而供方的 documentSymbol 判的是
  *   `request.text` 现文本（`erb-parser/src/plugin.ts:1004`）⇒ **"链空了"与索引无关**，
  *   把 phase 文案接在这里等于把"没面包屑"污蔑成"索引的锅"。空链那一格今天整条不渲染
  *   （`breadcrumb-bar.tsx:52`），渲染点也没有空态元素（`EditorPane.tsx:2554`）。⇒ 交回。
@@ -301,6 +304,7 @@ describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开�
 describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一格 ⇒ 红）', () => {
   const PROVIDERS = 'packages/app/src/ui/editor-global-providers.ts';
   const PANE = 'packages/app/src/ui/EditorPane.tsx';
+  const BREADCRUMB_HOOK = 'packages/app/src/ui/editor-pane/use-breadcrumb.ts';
   const CRUMB = 'packages/app/src/ui/breadcrumb-bar.tsx';
   const CORE = 'packages/app/src/monaco/completion-core.ts';
   const ERB_COMPLETION = 'packages/app/src/monaco/erb-completion.ts';
@@ -336,7 +340,7 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
   });
 
   it('两格里没有任何查表 / 事实面入口的痕迹（没有文案面却接表 = 造一句没人读的话）', () => {
-    for (const rel of [PROVIDERS, PANE, CRUMB]) {
+    for (const rel of [PROVIDERS, PANE, CRUMB, BREADCRUMB_HOOK]) {
       expect(hits(rel, /indexState|index-state-copy|INDEX_PHASE_COPY/), rel).toEqual([]);
     }
   });
@@ -360,7 +364,7 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
   });
 
   it('面包屑：无索引 ≠ 无链——现解析那条腿还在，所以"链空了"不许由索引来解释', () => {
-    expect(hits(PANE, /const symbols = collectDocumentSymbols\(kernel\.slots\.query\('ui\.editor\.languageService'\), \{/)).toHaveLength(1);
+    expect(hits(BREADCRUMB_HOOK, /const symbols = collectDocumentSymbols\(kernel\.slots\.query\('ui\.editor\.languageService'\), \{/)).toHaveLength(1);
     expect(hits(PARSER_PLUGIN, /erbDocumentSymbols\(parseErbText\(request\.text, request\.path\)\)/)).toHaveLength(1);
   });
 
@@ -379,11 +383,11 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
   });
 
   it('这两格里"问索引"只有一枚软取（本批归一的手抄：`currentIndex()` 在这两文件合计 1 处，就在 `erbParserIndex` 体内；再抄一遍 try/tryGet ⇒ 红）', () => {
-    const takes = [PROVIDERS, PANE].flatMap((rel) => hits(rel, /\.currentIndex\(\)/));
+    const takes = [PROVIDERS, BREADCRUMB_HOOK].flatMap((rel) => hits(rel, /\.currentIndex\(\)/));
     expect(takes, takes.join('\n')).toHaveLength(1);
     expect(hits(PROVIDERS, /export function erbParserIndex\(kernel: Kernel\): ErbIndex \| null \{/)).toHaveLength(1);
     expect(hits(PROVIDERS, /erbIndex: \(\) => erbParserIndex\(kernel\),/)).toHaveLength(1);
-    expect(hits(PANE, /const currentErbIndex = useCallback\(\(\): ErbIndex \| null => erbParserIndex\(kernel\), \[kernel\]\);/)).toHaveLength(1);
+    expect(hits(BREADCRUMB_HOOK, /const currentErbIndex = useCallback\(\(\): ErbIndex \| null => erbParserIndex\(kernel\), \[kernel\]\);/)).toHaveLength(1);
   });
 
   it('那张表的**列是闭集**（既有三通道那一列宽；给补全 / 面包屑添一列 = 先把不存在的那一格写进表）', () => {
@@ -401,13 +405,13 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
     const guard = textOf(GUARD_SELF);
     const from = guard.indexOf('const APP_CONSUMERS = [');
     const region = guard.slice(from, guard.indexOf('  ];', from));
-    for (const rel of [PROVIDERS, PANE]) expect(region, `${rel} 必须留在 ⑤ 的扫描面清单里`).toContain(`'${rel}'`);
+    for (const rel of [PROVIDERS, PANE, BREADCRUMB_HOOK]) expect(region, `${rel} 必须留在 ⑤ 的扫描面清单里`).toContain(`'${rel}'`);
     expect(region).toContain('APP_TABLE,'); // 表本身也在扫描面上（由 ⑤ 内那枚常量引入）
     expect(guard).toContain("const APP_TABLE = 'packages/app/src/ui/index-state-copy.ts';");
-    // 清单里的字面量条目 7 条（第 8 枚是 `APP_TABLE` 那枚常量）⇒ 与 ⑤ 标题那句文件数逐字对得上
-    expect(region.match(/^\s+'packages\/app\/src/gm)).toHaveLength(7);
+    // 清单里的字面量条目 8 条（第 9 枚是 `APP_TABLE` 那枚常量）⇒ 与 ⑤ 标题那句文件数逐字对得上
+    expect(region.match(/^\s+'packages\/app\/src/gm)).toHaveLength(8);
     // 标题那一行自己（拿整份文件 toMatch 会被本断言的字面量骗过去）
     const titleLine = read(GUARD_SELF).find((l) => /^describe\('⑤ /.test(l)) ?? '';
-    expect(titleLine).toContain('（八文件 × 八把尺子，多一处即红）');
+    expect(titleLine).toContain('（九文件 × 八把尺子，多一处即红）');
   });
 });

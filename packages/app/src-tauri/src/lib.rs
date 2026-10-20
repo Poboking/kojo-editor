@@ -3796,7 +3796,6 @@ mod write_domain_tests {
 mod watch_tests {
     use super::{is_atomic_write_temp, is_watch_ignored, normalize_event_kind};
     use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
-    use notify::Watcher;
     use std::path::Path;
 
     #[test]
