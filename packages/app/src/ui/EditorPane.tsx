@@ -115,6 +115,7 @@ import {
   baseNameOf,
   minimapCtxForPath,
   pickSaveHandler,
+  resolveSaveEolOverride,
   sugarStampOf,
   tierOverrides,
   type SugarCacheEntry,
@@ -143,10 +144,11 @@ const MARKER_OWNER = 'kojo-decorators';
  * 立刻成立，撤销栈也如实留一条（可直接 Ctrl+Z 撤回换行切换）；`getValue()` 随之
  * 改用新换行。已是目标风格 ⇒ 不动（不制造无意义的脏）。
  *
- * **保存面边界（本批取证结论，勿误读为闭环）**：缺省保存走
- * `kernel.io.writeText(path, text)` 的"逐行保换行"模式——未改动行保留盘上原换行、
- * 改动行按原多数派，纯换行切换会被原样归一回去。保存闭环需要给 writeText 显式
- * `{ eol }`（内核既有参数）+ 受控的按文件覆盖位，属盘链改动，本批不做。
+ * **保存面闭环（EOL-OVERRIDE-SAVE 批）**：显式切换由调用方（`switchEol`）在
+ * `ModelEntry.eolOverride` 置位；保存链路（`savePathDetailed`）仅当覆盖位在场时
+ * 给 `kernel.io.writeText` 递显式 `{ eol }`（内核语义 = 整段统一，绕开"逐行保换行"
+ * 的归一），落盘成功即清位；重载 / 外部冲突 / 放弃修改时复位。缺省保存
+ * （无覆盖位）仍走 `writeText(path, text)` 的"逐行保换行"，未触碰的面零变化。
  */
 export function applyEolToModel(model: Monaco.editor.ITextModel, eol: 'LF' | 'CRLF'): boolean {
   if (model.isDisposed()) return false;
@@ -1132,6 +1134,11 @@ export function EditorPane({
    * - 先就近征询**保存接管者**（槽 `ui.editor.saveHandler`）：命中（如 `.kojo`）
    *   则由接管者完成"保存源 + 编译产物"，宿主只消费其 `outcome`；
    * - 未命中 → 缺省路径：内核 io `writeText`（保编码保换行，受写白名单约束）；
+   * - **EOL 覆盖位**（EOL-OVERRIDE-SAVE 批）：`ModelEntry.eolOverride` 在场
+   *   （作者显式切过换行档）⇒ 两条路径都给显式 `{ eol }`（内核语义 = 整段统一，
+   *   绕开"逐行保换行"对纯切换的归一；接管者经 `EditorSaveRequest.eol` 透传给
+   *   源文件落盘）。落盘成功即清位；位在场但 model 已被撤销回原档 ⇒ 位作废
+   *   （`resolveSaveEolOverride` 复核），保存退回缺省；
    * - `needs-choice`（全角空格告警）→ 活动标签弹确认框、**本次不落盘**；后台标签
    *   跳过并计入回执（`quiet` 模式逐条通知收进一条合成回执，跳过必须可见、不静默吞）。
    */
@@ -1140,6 +1147,10 @@ export function EditorPane({
       const entry = entriesRef.current.get(path);
       if (!entry) return { path, status: 'failed', message: '标签已不在编辑器中' };
       saveRacedRef.current = false; // 每次保存尝试重记竞态（A6 失败守卫读这一位）
+      // EOL 覆盖位在**保存时点**复核（不早缓存）：切了又撤销（Ctrl+Z 回基线）时
+      // model 行尾已回原档，覆盖位就地作废——保存退回缺省，不把旧意图强行落盘
+      const saveEol = resolveSaveEolOverride(entry.eolOverride, entry.model.getEOL());
+      if (entry.eolOverride !== undefined && saveEol === undefined) entry.eolOverride = undefined;
       return withPathLock(
         sharedSaveLock,
         path,
@@ -1203,6 +1214,9 @@ export function EditorPane({
                 text,
                 project: kernel.project.current(),
                 ...(choices ? { choices } : {}),
+                // EOL 覆盖位在场 ⇒ 随请求递给接管者（源文件落盘整段统一到该档；
+                // 产物行尾归接管者自己的管线，契约里已写明）。缺席 = 旧请求形状逐字不变
+                ...(saveEol ? { eol: saveEol } : {}),
               });
               if (outcome.status === 'needs-choice') {
                 if (isActive) {
@@ -1224,6 +1238,7 @@ export function EditorPane({
               if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
                 return racedAfterWrite();
               }
+              entry.eolOverride = undefined; // 落盘成功（覆盖档已如实写入）⇒ 覆盖位使命完成
               markSaved(path, entry);
               if (isActive) {
                 setError(null);
@@ -1231,11 +1246,13 @@ export function EditorPane({
               }
               return { path, status: 'saved' };
             }
-            // 缺省保存（无接管者 / 提供者未激活 → 优雅降级）
-            await kernel.io.writeText(path, text);
+            // 缺省保存（无接管者 / 提供者未激活 → 优雅降级）；EOL 覆盖位在场 ⇒
+            // 显式 `{ eol }`：内核走"整段统一"，纯切换不再被逐行保换行归一回原档
+            await kernel.io.writeText(path, text, saveEol ? { eol: saveEol } : undefined);
             if (classifySaveRace(versionAtFinalize, entry.model.getAlternativeVersionId()) !== 'unchanged') {
               return racedAfterWrite();
             }
+            entry.eolOverride = undefined; // 落盘成功（覆盖档已如实写入）⇒ 覆盖位使命完成
             markSaved(path, entry);
             if (isActive) {
               setError(null);
@@ -1311,8 +1328,10 @@ export function EditorPane({
    * 切换当前活动标签的换行符（W7-H：状态栏 EOL 读数的 LF / CRLF 菜单）。
    *
    * 只改内存 model：`applyEolToModel` 的 `setEOL` 改版本号 ⇒ 既有脏判定立刻成立，
-   * 保存仍走既有链路。**保存面未闭环**——缺省 `kernel.io.writeText` 逐行保留盘上
-   * 原换行，纯换行切换会在保存时被归一回去（取证与改动方案见 `applyEolToModel` 头注）。
+   * 保存仍走既有链路。**保存面已闭环**（EOL-OVERRIDE-SAVE 批）：显式切换在
+   * `ModelEntry.eolOverride` 置位，`savePathDetailed` 仅当位在场时给内核
+   * `writeText` 递显式 `{ eol }`（整段统一，绕开逐行保换行的归一），落盘成功清位、
+   * 重载 / 外部冲突 / 放弃修改复位（见 savePathDetailed / reloadFromDisk）。
    * 只读 / 预览面拒绝（入口本就不画，这里再守一道，防动作通道被别处直调）。
    */
   const switchEol = useCallback(
@@ -1327,6 +1346,9 @@ export function EditorPane({
       // 不产生脏，也不谎报读数 —— 当作没发生
       if (!applyEolToModel(entry.model, eol)) return false;
       entry.eol = eol;
+      // 覆盖位**只在显式切换这一刻置位**：保存链据此知道"这份文件的换行是作者
+      // 改的，落盘要整段统一"，而不是把打开时读到的档位误当覆盖（EOL-OVERRIDE-SAVE）
+      entry.eolOverride = eol;
       if (filePathRef.current === path) {
         setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
         // 状态栏读数立刻换档（并顺带重算 eolSwitchable；脏标记由 model 监听上报）
@@ -1360,8 +1382,11 @@ export function EditorPane({
       if (!entry) return; // 该文件未打开 → 与编辑器无关
       const forced = forceReloadPathsRef.current.delete(path);
       let text: string;
+      let diskEol: 'CRLF' | 'LF' = 'LF';
       try {
-        ({ text } = await kernel.io.readText(path));
+        const tf = await kernel.io.readText(path);
+        text = tf.text;
+        diskEol = tf.eol.toUpperCase() as 'CRLF' | 'LF';
       } catch (e: unknown) {
         notify({
           kind: 'error',
@@ -1385,6 +1410,10 @@ export function EditorPane({
         const live = entriesRef.current.get(path);
         if (!live || live.model.isDisposed()) return;
         externalConflictRef.current.delete(path); // 用户已处置（放弃我的修改）：A6 护栏放行
+        // EOL 覆盖位随重载复位（EOL-OVERRIDE-SAVE）：盘面真相已换，旧切换意图不再
+        // 有效；读数同步成盘上多数派（`readText` 探测口径，与首开同源）
+        live.eolOverride = undefined;
+        live.eol = diskEol;
         const ed = editorRef.current;
         const isActive = filePathRef.current === path;
         const vs = isActive && ed ? ed.saveViewState() : null;
@@ -1418,6 +1447,7 @@ export function EditorPane({
         // 合并窗口内又敲了字 ⇒ 这次不合，等下一个 file.changed（别拿过期 memoryText 覆盖新输入）
         if (!live || live.model.isDisposed() || live.model.getValue() !== memoryText) return;
         externalConflictRef.current.delete(path);
+        live.eolOverride = undefined; // 外部冲突以合并收场：旧切换意图一并复位（EOL-OVERRIDE-SAVE）
         editorModelPool.setSavedBase(path, text);
         live.model.setValue(decision.text); // 版本号变了 ⇒ 监听如实上报"仍未保存"
         if (filePathRef.current === path) setStatus('已合并磁盘改动与你的未保存改动（还没写入磁盘）');
@@ -1435,6 +1465,12 @@ export function EditorPane({
       // 同一文件已有未决冲突时不再叠第二条通知（去重；现存通知的 action 现读盘，同样覆盖新改动）。
       const conflictPending = externalConflictRef.current.has(path);
       externalConflictRef.current.add(path);
+      // 外部冲突挂起 ⇒ EOL 覆盖位复位（EOL-OVERRIDE-SAVE）：盘面已出现新真相，
+      // 旧切换意图不再自动延续；作者重新处置（重载 / 再切一次）后意图重新成立
+      {
+        const live = entriesRef.current.get(path);
+        if (live && !live.model.isDisposed()) live.eolOverride = undefined;
+      }
       if (!conflictPending) {
         notify({
           kind: 'error',

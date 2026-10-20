@@ -170,3 +170,22 @@ export function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandler
 export function baseNameOf(path: string): string {
   return splitPath(path).base;
 }
+
+/**
+ * 保存时点的 **EOL 覆盖位复核**（EOL-OVERRIDE-SAVE 批，纯函数可单测）：
+ *
+ * 覆盖位在场 **且** model 当前行尾档仍与覆盖档一致 ⇒ 给出要递给
+ * `io.writeText` 的显式 `{ eol }`（内核语义 = 整段统一到该档）；否则
+ * `undefined` = 走缺省"保编码保换行"。第二道判据兜的是"切了又撤销"：
+ * `setEOL` 进了撤销栈，Ctrl+Z 回到基线时 model 行尾回到原档而覆盖位还在——
+ * 此刻保存不该把用户的旧切换意图强行落盘（位由调用方随即作废）。
+ */
+export function resolveSaveEolOverride(
+  eolOverride: 'LF' | 'CRLF' | undefined,
+  modelEol: string,
+): 'crlf' | 'lf' | undefined {
+  if (eolOverride === undefined) return undefined;
+  const current: 'LF' | 'CRLF' = modelEol === '\r\n' ? 'CRLF' : 'LF';
+  if (current !== eolOverride) return undefined;
+  return eolOverride === 'CRLF' ? 'crlf' : 'lf';
+}
