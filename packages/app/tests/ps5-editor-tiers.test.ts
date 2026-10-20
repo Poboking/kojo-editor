@@ -38,6 +38,17 @@ const vendor = (rel: string) =>
 const paneSource = () =>
   readFileSync(fileURLToPath(new URL('../src/ui/EditorPane.tsx', import.meta.url)), 'utf8');
 
+/**
+ * REF-FRONT-PERF（2026-10-20）：create 选项搬进 `use-monaco-instance.ts`、偏好订阅搬进
+ * `use-editor-preferences.ts`、纯函数搬进 `pane-helpers.ts`。判据逐条不动，只换读哪份源码。
+ */
+const instanceSource = () =>
+  readFileSync(fileURLToPath(new URL('../src/ui/editor-pane/use-monaco-instance.ts', import.meta.url)), 'utf8');
+const prefsSource = () =>
+  readFileSync(fileURLToPath(new URL('../src/ui/editor-pane/use-editor-preferences.ts', import.meta.url)), 'utf8');
+const helpersSource = () =>
+  readFileSync(fileURLToPath(new URL('../src/ui/editor-pane/pane-helpers.ts', import.meta.url)), 'utf8');
+
 const tierSamples = [1, 4_999, LARGE_FILE_LINES, HUGE_FILE_LINES, 990_000];
 
 describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清单从表里取**）', () => {
@@ -159,7 +170,7 @@ describe('档位写入口只有 applySizeTier 一个（EditorPane.tsx 静态取�
   });
 
   it('创建时那一格 formatOnType 仍然开着（ZH-D4 回车缩进的兜底腿靠 on-type provider 派发）', () => {
-    expect(paneSource()).toContain('formatOnType: true,');
+    expect(instanceSource()).toContain('formatOnType: true,');
   });
 
   /**
@@ -192,7 +203,8 @@ describe('档位写入口只有 applySizeTier 一个（EditorPane.tsx 静态取�
     );
     expect(src).toContain('tierOverrides(tierLines, isErbLike(filePath)');
     expect(src).toContain('tierOverrides(sugarTierLines, false');
-    expect((src.match(/minimapCtxForPath\(/g) ?? []).length, '两个"原文在屏上"的写入点都要给缩略图上下文').toBe(3); // 定义一处 + 调用两处
+    expect((src.match(/minimapCtxForPath\(/g) ?? []).length, '两个"原文在屏上"的写入点都要给缩略图上下文').toBe(2); // 定义一处已迁 helpers，本文件只剩两个调用点
+    expect(helpersSource()).toContain('export function minimapCtxForPath('); // 定义仍只有一份
   });
 
   it('折叠超额那句人话真在渲染里，且不含内部术语（铁律 4：少给了必须说）', () => {
@@ -251,16 +263,18 @@ describe('P2-16 排版偏好：create 路径与三个写入点同源', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('EditorPane create options spread 同一份偏好补丁；create 那格不再另写 wordWrap', () => {
-    const src = paneSource();
+    const src = instanceSource();
     expect(src).toContain('...layoutPrefPatch(),');
     // 读了偏好就不能再留一条硬编码路径（create 时按 small 档取值由补丁给）
     expect(src).not.toContain("wordWrap: 'on',");
   });
 
   it('偏好订阅接在创建 effect 上：设置页一翻，编辑器即时重发这三个键', () => {
-    const src = paneSource();
+    const src = prefsSource();
     expect(src).toContain('subscribeLayoutPref(');
     expect(src).toContain('ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));');
+    // 安装器仍在实例创建 effect 的原来那一行被调用（REF-FRONT-PERF：只搬家，不挪时序）
+    expect(instanceSource()).toContain('const disposePreferences = installPreferences(ed);');
   });
 
   it('档位表不变式保持：偏好是叠层，不是新档位键（sizeTierKeys 枚举口径不变）', () => {

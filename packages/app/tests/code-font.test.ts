@@ -102,7 +102,8 @@ describe('CODE_FONT_BASELINE 的边界（不碰 A1、不进降级集）', () => 
   });
 
   it('两条实例创建路径都 spread 同一份基线（少一条就是"那面没设计过"）', () => {
-    expect(read('../src/ui/EditorPane.tsx')).toContain('...CODE_FONT_BASELINE,');
+    // REF-FRONT-PERF：EditorPane 的 create 选项搬进实例 hook，读那份仍是同一条验收线
+    expect(read('../src/ui/editor-pane/use-monaco-instance.ts')).toContain('...CODE_FONT_BASELINE,');
     expect(read('../src/ui/DiffViewOverlay.tsx')).toContain('...CODE_FONT_BASELINE,');
   });
 });

@@ -28,13 +28,19 @@ const SOURCE = readFileSync(
   'utf8',
 );
 
+/** REF-FRONT-PERF：实例级 4 个命令（含 F2 / Shift+Alt+F 两条键位）搬进实例 hook */
+const INSTANCE = readFileSync(
+  path.resolve(import.meta.dirname, '..', 'src', 'ui', 'editor-pane', 'use-monaco-instance.ts'),
+  'utf8',
+);
+
 /** 截 `start` 到其后第一次出现的 `end`（找不到即测试失败，绝不静默给空串） */
-function sliceBetween(start: string, end: string): string {
-  const from = SOURCE.indexOf(start);
+function sliceBetween(start: string, end: string, source = SOURCE): string {
+  const from = source.indexOf(start);
   expect(from, `找不到起点：${start}`).toBeGreaterThanOrEqual(0);
-  const to = SOURCE.indexOf(end, from + start.length);
+  const to = source.indexOf(end, from + start.length);
   expect(to, `找不到终点：${end}`).toBeGreaterThan(from);
-  return SOURCE.slice(from, to);
+  return source.slice(from, to);
 }
 
 /** 截一个总线 effect（从 `kernel.bus.on('事件')` 到该 effect 的依赖数组行） */
@@ -56,10 +62,12 @@ const APPLY = sliceBetween(
 const F2 = sliceBetween(
   'ed.addCommand(monaco.KeyCode.F2',
   'ed.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF',
+  INSTANCE,
 );
 const FORMAT = sliceBetween(
   'ed.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF',
-  'applyNameColorPref(ed);',
+  'const disposePreferences = installPreferences(ed);',
+  INSTANCE,
 );
 
 const PREVIEW_FIX_ALL_MSG = '.kojo 预览是只读显示，改不到原文件——先切回原文再一键修复。';

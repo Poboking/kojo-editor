@@ -20,6 +20,23 @@ const SOURCE = readFileSync(
   'utf8',
 );
 
+/**
+ * REF-FRONT-PERF（2026-10-20）：纯函数 / 面包屑刷新链从 2,700 行组件搬进独立模块。
+ * 判据逐条不动，只把「读哪份源码」跟着搬家——这三份仍是同一批行为红线的真源。
+ */
+const HELPERS = readFileSync(
+  fileURLToPath(new URL('../src/ui/editor-pane/pane-helpers.ts', import.meta.url)),
+  'utf8',
+);
+const BREADCRUMB = readFileSync(
+  fileURLToPath(new URL('../src/ui/editor-pane/use-breadcrumb.ts', import.meta.url)),
+  'utf8',
+);
+const INSTANCE = readFileSync(
+  fileURLToPath(new URL('../src/ui/editor-pane/use-monaco-instance.ts', import.meta.url)),
+  'utf8',
+);
+
 /** 截 `const NAME = ...` 到下一个顶层两空格缩进 `const` 之间的函数体（粗略但足够钉形状） */
 function sliceFn(name: string): string {
   const start = SOURCE.indexOf(`const ${name} =`);
@@ -70,9 +87,9 @@ describe('PS-5 ① 校验暂停闸的宿主两条腿', () => {
 
 describe('PS-5 ② 面包屑不再每击键解析全文', () => {
   it('三条腿按代价从低到高排：同版本缓存 → 索引派生 → 防抖重算 → 才解析', () => {
-    const idx = SOURCE.indexOf('crumbRefreshRef.current = (forceParse');
+    const idx = BREADCRUMB.indexOf('crumbRefreshRef.current = (forceParse');
     expect(idx, 'crumbRefresh 必须带 forceParse 形参（防抖那一拍要绕过沿用旧树的分支）').toBeGreaterThan(0);
-    const body = SOURCE.slice(idx, SOURCE.indexOf('// A9 选区读数搭同一条光标监听', idx));
+    const body = BREADCRUMB.slice(idx, BREADCRUMB.indexOf('// A9 选区读数搭同一条光标监听', idx));
     expect(body).toContain('symbolsFromIndex(path');
     expect(body).toContain('scheduleCrumbRebuild()');
     expect(body).toContain('collectDocumentSymbols(');
@@ -82,7 +99,7 @@ describe('PS-5 ② 面包屑不再每击键解析全文', () => {
   });
 
   it('索引派生有三条护栏：只认 ERB 方言 / 缓冲区必须干净 / 行数必须相等（判据不全就不猜）', () => {
-    const fn = SOURCE.slice(SOURCE.indexOf('const symbolsFromIndex ='), SOURCE.indexOf('const scheduleCrumbRebuild ='));
+    const fn = BREADCRUMB.slice(BREADCRUMB.indexOf('const symbolsFromIndex ='), BREADCRUMB.indexOf('const scheduleCrumbRebuild ='));
     expect(fn).toContain('isErbLike(path)');
     expect(fn).toContain('computeDirty(path)');
     expect(fn).toContain('file.lineCount !== lineCount');
@@ -90,26 +107,26 @@ describe('PS-5 ② 面包屑不再每击键解析全文', () => {
   });
 
   it('索引条目额外认**指纹**：保存之后盘上补扫会让树变，而干净缓冲区的版本号不变', () => {
-    expect(SOURCE).toContain('fromIndex: true');
-    expect(SOURCE).toContain('indexStamp');
-    const refresh = SOURCE.slice(SOURCE.indexOf('crumbRefreshRef.current = (forceParse'));
+    expect(BREADCRUMB).toContain('fromIndex: true');
+    expect(BREADCRUMB).toContain('indexStamp');
+    const refresh = BREADCRUMB.slice(BREADCRUMB.indexOf('crumbRefreshRef.current = (forceParse'));
     expect(refresh).toContain('cache.indexStamp === (currentErbIndex()?.fingerprint ?? null)');
   });
 
   it('路径归一走 pathKey（HK-7 口径；裸比会静默判不上，症状是"面包屑永远在解析"）', () => {
-    const fn = SOURCE.slice(SOURCE.indexOf('function erbFileInIndex'), SOURCE.indexOf('const MARKER_DEBOUNCE_MS'));
+    const fn = HELPERS.slice(HELPERS.indexOf('function erbFileInIndex'), HELPERS.indexOf('const MARKER_DEBOUNCE_MS'));
     expect(fn).toContain('pathKey(');
   });
 
   it('防抖定时器随实例退场作废 + 在途那一次清空 crumbLastRef（不清就是 self-skip 自己约的重算）', () => {
-    expect(SOURCE).toContain('if (crumbTimerRef.current !== null) {');
-    const sched = SOURCE.slice(SOURCE.indexOf('const scheduleCrumbRebuild ='), SOURCE.indexOf('const selStatusRef'));
+    expect(BREADCRUMB).toContain('if (crumbTimerRef.current !== null) {');
+    const sched = BREADCRUMB.slice(BREADCRUMB.indexOf('const scheduleCrumbRebuild ='), BREADCRUMB.indexOf('const install = useCallback'));
     expect(sched).toContain('crumbLastRef.current = null');
     expect(sched).toContain('crumbRefreshRef.current?.(true)');
   });
 
   it('大文件档清链那条既有红线没被动（旧链残留会把别的文件的行号 reveal 进当前文件），但**闸的位置在索引快路之后**', () => {
-    const refresh = SOURCE.slice(SOURCE.indexOf('crumbRefreshRef.current = (forceParse'));
+    const refresh = BREADCRUMB.slice(BREADCRUMB.indexOf('crumbRefreshRef.current = (forceParse'));
     const body = refresh.slice(0, refresh.indexOf('// A9 选区读数搭同一条光标监听'));
     expect(body).toContain('cursor.lineCount >= LARGE_FILE_LINES');
     expect(body).toContain('apply([])');
@@ -142,14 +159,16 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
   });
 
   it('项目摘要缺 inputDigest ⇒ 判据不全 ⇒ 不缓存（同抽取快照纪律，不许猜）', () => {
-    const stamp = SOURCE.slice(SOURCE.indexOf('function sugarStampOf'), SOURCE.indexOf('interface SugarCacheEntry'));
+    const stamp = HELPERS.slice(HELPERS.indexOf('function sugarStampOf'), HELPERS.indexOf('interface SugarCacheEntry'));
     expect(stamp).toContain('if (!project.inputDigest)');
     expect(stamp).toContain('no-digest');
   });
 
   it('关标签时缓存与面包屑树一起作废（model 版本号会从 1 重新数 ⇒ 旧条目不许命中新内容，#F6 同款）', () => {
     expect(SOURCE).toContain("if (sugarCacheRef.current?.path === path) sugarCacheRef.current = null;");
-    expect(SOURCE).toContain("if (crumbTreeCacheRef.current?.path === path) crumbTreeCacheRef.current = null;");
+    expect(SOURCE).toContain(
+      'if (breadcrumb.crumbTreeCacheRef.current?.path === path) breadcrumb.crumbTreeCacheRef.current = null;',
+    );
   });
 
   /**
@@ -175,6 +194,55 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
     // 全文件都不许再留那两句字面量（文案单源在 sugar-view.ts）
     expect(SOURCE).not.toContain("'已开启：当前显示的是 .kojo 写法。点击切回原生代码（这是显示偏好，文件内容一字未动）。'");
     expect(SOURCE).not.toContain("'把这份文件显示成 .kojo 写法——台词读起来像剧本、条件变成「如果 …：」。只改显示，不改动文件。'");
+  });
+});
+
+/**
+ * REF-FRONT-PERF 的**时序守卫**（2026-10-20）：拆 hook 只能搬家，不能挪拍。
+ *
+ * 这一组不测细节行为，只钉"谁先谁后"——这几条顺序一旦颠倒，症状都不是报错而是
+ * 首个 commit 里偏好丢一拍 / 卸载时订阅回调摸到已 dispose 的编辑器（静默、难复现）。
+ */
+describe('REF-FRONT-PERF · hook 组合的执行次序', () => {
+  it('偏好安装器在实例创建 effect 之内：create → 偏好 → 焦点 → 面包屑 → 视图监听', () => {
+    const at = (needle: string): number => {
+      const i = INSTANCE.indexOf(needle);
+      expect(i, `实例 hook 里找不到「${needle}」`).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const create = at('monaco.editor.create(host,');
+    const prefs = at('const disposePreferences = installPreferences(ed);');
+    const focus = at('const focusDisposer = ed.onDidFocusEditorText(');
+    const crumb = at('const disposeBreadcrumb = installBreadcrumb(ed, pushSelStatus);');
+    const view = at('const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);');
+    expect(create).toBeLessThan(prefs);
+    expect(prefs).toBeLessThan(focus);
+    expect(focus).toBeLessThan(crumb);
+    expect(crumb).toBeLessThan(view);
+  });
+
+  it('卸载清账次序不动：偏好 → 焦点 → 面包屑 → 实例监听', () => {
+    const at = (needle: string): number => {
+      const i = INSTANCE.indexOf(needle);
+      expect(i, `实例 hook 里找不到「${needle}」`).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const prefs = at('disposePreferences();');
+    const focus = at('focusDisposer.dispose();');
+    const crumb = at('disposeBreadcrumb();');
+    const view = at('viewCurSub.dispose();');
+    expect(prefs).toBeLessThan(focus);
+    expect(focus).toBeLessThan(crumb);
+    expect(crumb).toBeLessThan(view);
+  });
+
+  it('codeLens 偏好 effect 仍在实例创建之后（create 先落默认关，再由它覆盖）', () => {
+    const instance = SOURCE.indexOf('useMonacoInstance({');
+    const codeLens = SOURCE.indexOf('useCodeLensPreference(editorRef, kernel);');
+    expect(instance).toBeGreaterThan(0);
+    expect(codeLens).toBeGreaterThan(instance);
+    // 安装器本身在组件里先建好（无 effect），真正接线仍由实例 hook 那一拍执行
+    expect(SOURCE.indexOf('const installPreferences = useEditorPreferences(')).toBeLessThan(instance);
   });
 });
 

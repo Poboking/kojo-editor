@@ -3,26 +3,20 @@ import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type {
   EditorCodeAction,
-  EditorDocumentSymbol,
   EditorSaveChoices,
-  EditorSaveHandlerContribution,
   EditorSaveWarning,
-  ErbFile,
-  ErbIndex,
 } from '@kojo/plugin-api';
-import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
-import { ERB_LANGUAGE_ID, registerErbLanguage } from '../monaco/erb-language';
+import { registerErbLanguage } from '../monaco/erb-language';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
 import { monacoThemeIdFor } from '../monaco/theme';
-import { loadThemePref, useThemePref } from './theme-pref';
-import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
+import { useThemePref } from './theme-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import { clampRevealPosition, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
-import { installSuggestContextTrigger } from '../monaco/suggest-context-trigger';
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatRulesPref } from './format-pref';
 import { classifySaveRace } from './save-race';
@@ -34,54 +28,15 @@ import {
   type SaveFileOutcome,
 } from './save-coordinator';
 import { loadFormatOnSavePref } from './format-pref';
-import { applyNameColorPref, subscribeNameColorPref } from './semantic-color-pref';
-import {
-  loadQuickSuggestionsPref,
-  loadSuggestDelayPref,
-  subscribeQuickSuggestionsPref,
-  subscribeSuggestDelayPref,
-} from './suggest-pref';
-import {
-  applyFontSizePref,
-  applyFontZoomPref,
-  loadFontSizePref,
-  setFontZoomPref,
-  subscribeFontSizePref,
-} from './font-size-pref';
-import { collectDocumentSymbols } from '../monaco/kojo-symbols';
-import { setJumpProbe } from './jump-to-state';
+import { loadQuickSuggestionsPref, loadSuggestDelayPref } from './suggest-pref';
+import { loadFontSizePref } from './font-size-pref';
 import { dropRecoveredContent, peekRecoveredContent } from './recovery-store';
-import {
-  crumbsKey,
-  crumbsNeedRefresh,
-  crumbLevelsAt,
-  type CrumbCursor,
-  type CrumbLevel,
-} from './breadcrumb-path';
 import { CrumbBar } from './breadcrumb-bar';
 import { useNotify } from './NotificationCenter';
 // FMT-TOAST：格式化让路 → 通知中心的那一条订阅（去重与文案都在台账侧，见该文件头注）
 import { subscribeFormatNotices } from './format-notice-ledger';
 import { SaveWarningDialog } from './SaveWarningDialog';
-import {
-  CJK_TYPING_BASELINE,
-  FIND_BASELINE,
-  LARGE_FILE_LINES,
-  applySizeTier,
-  formatOnTypeForDocument,
-  layoutPrefPatch,
-  quickSuggestionsFor,
-  type EditorOptionPatch,
-} from './editor-options';
-import { subscribeLayoutPref } from './layout-pref';
-import {
-  applyUiFontScalePref,
-  editorDisplayFontPatch,
-  editorDisplayOptionPatch,
-  subscribeEditorDisplayPrefs,
-  type MinimapViewContext,
-} from './editor-display-prefs';
-import { CODE_FONT_BASELINE } from './code-font'; // 编程字体单一真源（与 styles.css 的 --font-code 逐字同一条栈）
+import { applySizeTier, quickSuggestionsFor } from './editor-options';
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath, openExternalChangeDiff } from './external-change';
@@ -90,13 +45,12 @@ import {
   clampSlice,
   extractViewSlice,
   FOLDING_CONTRIBUTION_ID,
-  flushViewStates,
   foldRestoreState,
   getViewState,
   setViewState,
 } from './view-state-store';
 import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
-import { pathLabelParts, splitPath } from './path-label';
+import { pathLabelParts } from './path-label';
 import { Icon } from './icons';
 // 糖视图阅读模式（.kojo 预览专用）的显示层样式：装饰类 + 工具条开关，组件级引入
 // （照 tab-chip.css / welcome.css 先例；只影响挂在糖 model 上的装饰，不碰普通编辑）
@@ -112,7 +66,6 @@ import {
   saveSugarViewPref,
   saveSugarViewPrompted,
   sourceLineToSugar,
-  sugarLineToSource,
   sugarReadDecorations,
   sugarReadTypography,
   SUGAR_READ_MARK_MAX_LINES,
@@ -128,28 +81,19 @@ import { isInWorkspaceFile } from './file-area';
 // C1 反向下行批：光标位点广播的载荷构造 + 连续相同载荷去重（纯逻辑，单测在 app/tests）
 import { createCursorBroadcaster, cursorMovedPayload } from './cursor-broadcast';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
-import { clearAllProblems, clearProblems, setProblems } from './problem-store';
+import { clearProblems, setProblems } from './problem-store';
 // 装饰热路径（PERF-4）：同步/异步分层、(path, versionId) LRU、陈旧结果落地前作废
 import { createMarkerRunner, type MarkerContributor } from './marker-pool';
 // model 池（SPLIT-1 分屏）：纯逻辑工厂 + 真身单例（单例单独成模块，monaco 不进工厂的测试链）
 import { languageFor } from './editor-model-pool';
 import { editorModelPool } from './editor-model-pool-instance';
-// SPLIT-1 拆出的两层（1017 前端重构批）：多实例登记簿（本组件持有 ref，登记时交出同一批 ref 壳）
-// + 全局 provider 的一次性接线（注册门只有一道：globalsInstalled）
-import {
-  registerPane,
-  setGlobalKernel,
-  setPaneFocused,
-  unregisterPane,
-  type ModelEntry,
-} from './editor-pane-registry';
+// SPLIT-1 拆出的多实例登记簿：本文件只留 ModelEntry 型（实例/偏好/面包屑三条线
+// 已再拆一层，见下方 ./editor-pane/*，REF-FRONT-PERF 2026-10-20）
+import type { ModelEntry } from './editor-pane-registry';
 import {
   acquireDirectiveWords,
   applyDirectiveWords,
   applyTextEdits,
-  disposeGlobalProviders,
-  ensureGlobalProviders,
-  erbParserIndex,
   foldingCapNoticeFor,
   onFoldingCapChanged,
   releaseDirectiveWords,
@@ -158,6 +102,24 @@ import {
 } from './editor-global-providers';
 // worker 侧有没有这条 kind，判据只有一处：装配层那张两侧共用的任务表
 import { hasWorkerTask } from '../compute-tasks';
+// REF-FRONT-PERF：纯函数 / 三个 hook 从本文件搬出（调用点与时序不变）
+import {
+  MARKER_DEBOUNCE_MS,
+  PREVIEW_WRITE_VETO,
+  applyEditabilityAndSuggest,
+  baseNameOf,
+  minimapCtxForPath,
+  pickSaveHandler,
+  sugarStampOf,
+  tierOverrides,
+  type SugarCacheEntry,
+} from './editor-pane/pane-helpers';
+import { useBreadcrumb } from './editor-pane/use-breadcrumb';
+import {
+  useCodeLensPreference,
+  useEditorPreferences,
+} from './editor-pane/use-editor-preferences';
+import { useMonacoInstance } from './editor-pane/use-monaco-instance';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -170,83 +132,6 @@ registerKojoLanguage(monaco);
 const MARKER_OWNER = 'kojo-decorators';
 
 /**
- * 在项目索引里按 `pathKey` 归一找 `path` 对应的那一份文件（PS-5 面包屑索引用法的第一条腿）。
- *
- * 路径归一**必须由宿主做**（HK-7 同款坑）：索引的键是扫描侧给的绝对路径，编辑器这条路
- * 是 `filePath` prop 给的，Windows 上分隔符与大小写可以不一致——裸字符串比会**静默判不上**，
- * 症状是"面包屑永远在解析全文"，看不出哪里错了。索引缺席 / 找不到 ⇒ null（调用方退回解析）。
- */
-function erbFileInIndex(index: ErbIndex | null, path: string): ErbFile | null {
-  if (!index) return null;
-  const want = pathKey(path);
-  for (const [key, file] of index.files) if (pathKey(key) === want) return file;
-  return null;
-}
-
-/** 编辑停顿多久后重算装饰（避免每击键跑一遍转译） */
-const MARKER_DEBOUNCE_MS = 250;
-
-/**
- * 预览面**写类动作**的统一否决文案（VETO-1）：F2 改名 / Shift+Alt+F 格式化 / 壳层的
- * `editor.action.request` 三处共用一句。文案里显式给出路的名字（「切回原文」），
- * 与通知上那颗按钮同口径——作者读完这句话就知道该点哪里。
- */
-const PREVIEW_WRITE_VETO = '.kojo 预览是只读显示，动作改的是派生文本——先切回原文再执行。';
-
-/**
- * 只读态与快建议**同拍**落 Monaco 选项。
- *
- * `readOnly` 只拦编辑，不拦 suggest；provider 又拿不到 editor 的可写状态 ⇒ 只读文件 /
- * 糖预览若不在这里把 `quickSuggestions` 关掉，全局快建议照样会弹。可写态下还叠一层
- * 设置页总开关（`loadQuickSuggestionsPref`）；延迟同源，保证「补全弹出延迟」对 Monaco
- * 快建议与宿主主动触发同时生效。
- */
-function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, readOnly: boolean): void {
-  ed.updateOptions({
-    readOnly,
-    quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
-    quickSuggestionsDelay: loadSuggestDelayPref(),
-  });
-}
-
-/**
- * 落档时叠在档位表之后的那一层补丁（1020 编辑器体感批）：**只有这一处**把
- * 语言感知的 `formatOnType` 与显示偏好折进 overrides，三个写入点（切标签 / 挂预览 /
- * 撤预览）与偏好订阅回调都经过它——写四份必然漂一份。
- *
- * `isErb` 由调用方按**此刻屏幕上的那份文档**给：糖预览是 `.kojo` 投影 ⇒ false
- * （它的缩进单位与 `@` 块状态是文档级判据，窗口取文会数错，大档继续关打字规范化）。
- * 字体族刻意不在这里：它与体量正交、且 `code-font.ts` 钉着"降级集永不含字体键"，
- * 只在 create 与偏好变更两条路上发。
- *
- * `minimapCtx`（C-1b）同样按**此刻屏幕上那份文档**给：缩略图的「跟随」档要知道
- * 现在显示的是原文代码、`.kojo` 正文，还是预览投影。不在这里给 = 投影与正文也画纵览
- * （台词正文里那是一条彩色噪点）。调用点只有四处，一处都不许自己算第二遍。
- */
-function tierOverrides(
-  lineCount: number,
-  isErb: boolean,
-  extra?: EditorOptionPatch,
-  minimapCtx?: MinimapViewContext,
-): EditorOptionPatch {
-  return {
-    ...editorDisplayOptionPatch(lineCount, undefined, minimapCtx),
-    formatOnType: formatOnTypeForDocument(lineCount, isErb),
-    ...(extra ?? {}),
-  };
-}
-
-/**
- * 缩略图「跟随」档的**文件侧**判据：这份文件本身是不是 `.kojo` 口上正文。
- *
- * 判据取语言而非扩展名（`languageFor` 是唯一的"哪类文件归哪种语言"真源）：
- * 台词型文档在缩略图里没有可导航的结构，一竖条色块只是噪声。
- */
-function minimapCtxForPath(path: string): MinimapViewContext {
-  return { kojoText: languageFor(path) === KOJO_LANGUAGE_ID };
-}
-
-/**
  * `.kojo` 预览装配判据的项目侧摘要（PS-5 缓存键的一部分）。
  *
  * 段由 `ui.editor.liftPreview` 按 `{path, text, project}` 现算 ⇒ 决定产物的只有
@@ -256,63 +141,6 @@ function minimapCtxForPath(path: string): MinimapViewContext {
  * 非 ERB 输入摘要，与 `marker-pool` 的缓存判据同一条尺子）。取不到 digest 就不给摘要
  * （判据不全 ⇒ 不缓存，同抽取快照纪律）。
  */
-function sugarStampOf(project: { adapterId: string; rootDir: string; inputDigest?: string } | null): string {
-  if (project === null) return '\u0000no-project';
-  if (!project.inputDigest) return '\u0000no-digest'; // 不缓存：返回一个永不与任何"可缓存条目"相等的键
-  return `${project.adapterId}\u0000${project.rootDir}\u0000${project.inputDigest}`;
-}
-
-/**
- * 糖视图摘要文本（sugarStats）之外的那份投影产物缓存条目（PS-5）。
- * 容量恒 1：切标签 / 解锁 / 直连开关反复重算是这条路径的**常态**（改前每次都全量重做）。
- */
-interface SugarCacheEntry {
-  path: string;
-  versionId: number;
-  stamp: string;
-  lineCount: number;
-  doc: string;
-  /** 预览行 → 源行（1 基）映射；与 `doc` 同批产出，缓存命中必须连它一起复用 */
-  lineMap: readonly number[];
-  sugarLines: number;
-  /** 投影段数（NATIVE-UX：命中缓存那一拍也要能报出"这一份投出了几段"，否则零段那格会说谎） */
-  segmentCount: number;
-}
-
-/**
- * 就近征询**保存接管者**（槽 `ui.editor.saveHandler`，2026-10-12 批）：返回
- * `order` 最小的命中贡献（唯一接管，不做链式级联）；无命中 → undefined（宿主
- * 退回内核 io `writeText` 缺省保存）。单个贡献抛错不影响其余（与装饰器同款
- * 隔离——能力出错要"退化可见"，不让整条保存链断掉）。
- */
-function pickSaveHandler(kernel: Kernel, path: string): EditorSaveHandlerContribution | undefined {
-  const matches: EditorSaveHandlerContribution[] = [];
-  for (const contribution of kernel.slots.query('ui.editor.saveHandler')) {
-    try {
-      if (contribution.matches(path)) matches.push(contribution);
-    } catch (e: unknown) {
-      // 贡献抛错不静默（与 plugin-api「绝不静默」约定一致）：
-      // 记录后仍降级为缺省保存，避免单个坏贡献阻断整条保存链路。
-      console.warn(
-        `[EditorPane] save handler '${contribution.id}' matches('${path}') 抛错：${
-          errorText(e)
-        }`,
-      );
-    }
-  }
-  if (matches.length === 0) return undefined;
-  matches.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)); // 稳定排序：同 order 保持注册顺序
-  return matches[0];
-}
-
-/**
- * 路径末段（弹窗里给文件名而不是整条路径：用户认文件，不认目录树）。
- * 拆分口径与工具条共用 `path-label.splitPath`，一处规矩。
- */
-function baseNameOf(path: string): string {
-  return splitPath(path).base;
-}
-
 /** autosave 快照句柄吐出的一条脏内容（退出/崩溃守护批；只增不改——旧消费方零影响） */
 export interface EditorSnapshotRecord {
   path: string;
@@ -335,9 +163,6 @@ export interface EditorPaneActions {
   /** 全部脏标签的内容快照（autosave 兜底用：O(脏数) 取值，不切标签不落盘） */
   snapshots: () => EditorSnapshotRecord[];
 }
-
-/** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
-let bootEditorMarked = false;
 
 /**
  * A10：保存互斥从"组件实例一把全局锁"降为 **per-path 锁**，且提到模块级共享——
@@ -620,38 +445,6 @@ export function EditorPane({
   const autosaveFailedRef = useRef(new Set<string>());
   /** 自动保存闲置定时器（A6；卸载与文件切换都要能取消） */
   const autosaveTimerRef = useRef<number | null>(null);
-  /**
-   * D1 面包屑链（宿主自绘——取证：standalone Monaco 0.57 的 `monaco.d.ts` 里 `breadcrumb`
-   * 零命中，公开面没有面包屑，见 `breadcrumb-path.ts` 头注）。数据**复用 B3 的 documentSymbol
-   * 树**（与大纲/吸顶同源同判据，不建第二份符号树）；空数组 = 不渲染整条栏
-   * （糖视图 / 无文件 / 光标不在任何块内——只读派生态下绝不导到派生行号）。
-   *
-   * 1020 编辑器体感批改存**逐级下拉数据**（`CrumbLevel`）而不是裸链：同级列表要的是
-   * "这一层还有哪些块"，那份数据本来就在同一棵缓存树里，另存一份链反而要第二次下行。
-   */
-  const [crumbLevels, setCrumbLevels] = useState<readonly CrumbLevel[]>([]);
-  /** 面包屑刷新入口（ref 化：光标/model 监听只注册一次，须读最新闭包） */
-  const crumbRefreshRef = useRef<((forceParse?: boolean) => void) | null>(null);
-  /** 防抖重算定时器（PS-5：打字期间全文解析**每轮停笔一次**，不是每击键一次） */
-  const crumbTimerRef = useRef<number | null>(null);
-  /**
-   * 大纲树缓存（path + model 版本号为键：光标移动只换链、不重解析）。
-   *
-   * PS-5 起多带两位来源账：`fromIndex` = 这份树是从**项目索引**派生的（盘上真相），
-   * 不是现文本解析的 ⇒ 它的失效判据除版本号外还要认索引指纹 `indexStamp`
-   * （保存之后索引补扫一次，树会跟着变，而干净缓冲区的版本号不会变）。
-   */
-  const crumbTreeCacheRef = useRef<{
-    path: string;
-    versionId: number;
-    symbols: EditorDocumentSymbol[];
-    fromIndex: boolean;
-    indexStamp: string | null;
-  } | null>(null);
-  /** 上一次渲染的链键（等值即不 setState——光标每动一次不该白刷一次 React） */
-  const crumbsKeyRef = useRef('');
-  /** 上一次**重算过链**的位点（同 path 同行即跳过全文解析，判据见 `crumbsNeedRefresh`） */
-  const crumbLastRef = useRef<CrumbCursor | null>(null);
 
   /** O(1) 脏判定：model 当前版本号 ≠ 已保存基线版本号（BUG-4；基线随池走——分屏后同一文件多组共享） */
   const computeDirty = useCallback((path: string): boolean => {
@@ -661,63 +454,17 @@ export function EditorPane({
     return entry.model.getAlternativeVersionId() !== base;
   }, []);
 
-  /* ───────────── PS-5 面包屑：能用已索引的名录就不解析全文 ───────────── */
-
-  /** 当前项目索引（**软取**）：直接吃宿主唯一那一枚 `erbParserIndex()`（与悬停 / 函数名 / 文件事实
-   *  同一份取法，ST-TAIL 2026-10-20 归一：此前这里手抄了第三份 `try + tryGet + ?? null`）。
-   *  未开项目、未建好、服务抛错一律当"没有"，绝不抛进光标监听。 */
-  const currentErbIndex = useCallback((): ErbIndex | null => erbParserIndex(kernel), [kernel]);
-
   /**
-   * 从索引里取这份文件的符号表（拿不到 = null，调用方按原路解析）。
-   *
-   * 三条判据任一不过即**不用索引**，因为面包屑点击会 reveal 行号，行号错一位就是
-   * 把作者导到别处（比没有面包屑更糟，同 `crumbRefresh` 大文件清链那条理由）：
-   * ① 只有 ERB 方言在索引里（`.kojo` 的树由糖线按现文本现算，索引没有它）；
-   * ② 缓冲区必须**干净**——索引读的是盘上那份，作者改了没保存时它是过期真相；
-   * ③ 索引里那份的行数必须等于当前 model 的行数（干净 + 行数一致 ⇒ 盘上==缓冲，
-   *    行号坐标系对得上；对不上宁可不猜）。
-   *
-   * 产出形状与 erb-parser 的 `erbDocumentSymbols` 逐字同源（函数 + 声明、文档序：
-   * 同起始行时函数在前）。这里不抄 `detail`：面包屑只读 name/kind/startLine，
-   * 而 `enclosingChainAt` 的平局折法只认"文档序第一枚"，排序一致就够。
+   * 面包屑刷新链（D1）：缓存 / 索引快路 / 防抖重算三条腿全在 `use-breadcrumb.ts`，
+   * 本组件只持有它吐回的 `crumbLevels`（渲染）与 `crumbTreeCacheRef`（登记簿反查）。
    */
-  const symbolsFromIndex = useCallback(
-    (path: string, lineCount: number): { symbols: EditorDocumentSymbol[]; stamp: string | null } | null => {
-      if (!isErbLike(path)) return null;
-      if (computeDirty(path)) return null;
-      const index = currentErbIndex();
-      const file = erbFileInIndex(index, path);
-      if (!file || file.lineCount !== lineCount) return null;
-      const symbols: EditorDocumentSymbol[] = [];
-      for (const fn of file.functions) {
-        symbols.push({ name: fn.name, kind: 'function', startLine: fn.startLine, endLine: fn.endLine });
-      }
-      for (const dim of file.dims) {
-        symbols.push({ name: dim.name, kind: 'declaration', startLine: dim.line, endLine: dim.line });
-      }
-      symbols.sort((a, b) => a.startLine - b.startLine || (a.kind === b.kind ? 0 : a.kind === 'function' ? -1 : 1));
-      return { symbols, stamp: index?.fingerprint ?? null };
-    },
-    [computeDirty, currentErbIndex],
-  );
-
-  /**
-   * 把一次全文重算推到停笔之后（PS-5）。
-   *
-   * 单条在途就够：定时器闭包读的是**落地时刻**的光标与版本号（与装饰防抖同一条纪律），
-   * 所以连打期间不需要逐键排程，最后一次停笔补一次即收敛。
-   * `crumbLastRef` 先清空是**必须的**——绕过 `crumbsNeedRefresh` 那道"同 path 同行不重算"
-   * 的闸（那道闸正是为了省这次解析而设，不清就会 self-skip 掉自己约的这次重算）。
-   */
-  const scheduleCrumbRebuild = useCallback((): void => {
-    if (crumbTimerRef.current !== null) return;
-    crumbTimerRef.current = window.setTimeout(() => {
-      crumbTimerRef.current = null;
-      crumbLastRef.current = null;
-      crumbRefreshRef.current?.(true);
-    }, MARKER_DEBOUNCE_MS);
-  }, []);
+  const breadcrumb = useBreadcrumb({
+    kernel,
+    editorRef,
+    filePathRef,
+    sugarModelRef,
+    computeDirty,
+  });
 
   /**
    * A9 状态栏选区读数：活动文件真 model 的选区/光标 → 文案（判据全在纯函数
@@ -1102,6 +849,13 @@ export function EditorPane({
     if (!ed || !model || model.isDisposed() || ed.getModel() !== model) return;
     ed.updateOptions(sugarReadTypography(loadFontSizePref()));
   }, []);
+
+  /**
+   * 偏好安装器（字体 / 缩放 / 快建议 / 排版 / 显示订阅；REF-FRONT-PERF 搬进
+   * `use-editor-preferences.ts`）。本 hook 不注册 effect——安装点仍在实例创建
+   * effect 的原来那一行，接线/退订次序与拆前逐字一致。
+   */
+  const installPreferences = useEditorPreferences({ sugarModelRef, reapplySugarReadOptions });
 
   /**
    * 生成糖视图：整份文件投影成糖文本 → 建一份**只读内存 model** → `ed.setModel()` 换上。
@@ -1810,399 +1564,44 @@ export function EditorPane({
   };
 
   // 编辑器实例（仅一次）；卸载时 dispose 全部 model
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    // 缩放在实例创建**之前**播种：EditorZoom 是全局单例，创建时算 fontInfo 就按它缩放
-    applyFontZoomPref(monaco.editor.EditorZoom);
-    // 界面字号缩放（C-1b）：外壳 CSS 变量的播种点，与 `applyFontZoomPref` 同一拍——
-    // 本实例是常驻挂载点，偏好 setter 那边负责"改完当场见效"，这里负责"下次启动也认"。
-    // 100%（缺省）时这一调用一位都不写，界面逐字等于样式表现值。
-    applyUiFontScalePref();
-    const ed = monaco.editor.create(host, {
-      // 主题随偏好走（反馈 3）：模块顶层 `registerErbLanguage` 已定义三套，
-      // 这里按当前 localStorage 偏好落初值，之后的切换由上面的 useThemePref effect 负责。
-      theme: monacoThemeIdFor(loadThemePref()),
-      language: ERB_LANGUAGE_ID,
-      automaticLayout: true,
-      // 用户反馈 7：原生右键菜单必须留在 light DOM。0.57 的 `useShadowDOM` 缺省 **true**，
-      // 菜单会被塞进编辑器内的 open shadow root——document 级样式（context-menu.css 的玻璃
-      // 面、主题 token、data-motion/data-glass 开关）一律进不去，观感无法统一。关掉它之后
-      // 菜单仍是 Monaco 原生那一份（全部动作 + zh-cn NLS + 自带键盘导航），只是挂到编辑器
-      // 容器的 light DOM 里；影响面仅限 context view（右键菜单 / 内联提示菜单），不碰编辑、
-      // worker 与排版。实测见 2026-10-17 反馈批的浏览器冒烟记录（提交信息）。
-      useShadowDOM: false,
-      // 缩略图不在这里硬编码（C-1b）：三态偏好的判据只有一份，住在
-      // `editor-display-prefs.ts` 的 `minimapEnabledFor`，由下面的显示偏好补丁发下来
-      // （文本块模式：不逐字符渲染——口上文本为长行文，色块更干净也更省性能）。
-      fontSize: loadFontSizePref(),
-      lineNumbers: 'on',
-      renderWhitespace: 'none',
-      scrollBeyondLastLine: false,
-      // 折行不在这里硬编码（P2-16）：走下面的排版偏好补丁（layoutPrefPatch），与切文件
-      // 路径（applySizeTier → editorOptionsForLineCount）读同一份偏好；create 时屏幕上
-      // 还没有文件，按 small 档取值（即此前的 'on'），第一个文件落档后按真实行数覆写。
-      // 中文块回车的精确缩进层（ZH-D4）：`onEnterRules` 的正则只看得到原文，块头行尾带 `;`
-      // 注释这类同步层判不了的形态靠 on-type provider 兜；Monaco 只在 `formatOnType` 为真时派发它。
-      formatOnType: true,
-      // 行上内联注解（B8）：**创建时就按默认关**——Monaco 这条选项的缺省是 `true`
-      // （`common/config/editorOptions.js` 的 `EditorBooleanOption(23, 'codeLens', true)`），
-      // 只靠下面那个偏好 effect 事后覆盖，等于让"默认关"依赖一次 effect 的时序；
-      // 真值仍只有一处（`CODE_LENS_DEFAULT`），这里不另写 `false`。
-      codeLens: CODE_LENS_DEFAULT,
-      // 编辑器体感（ui-polish）：平滑滚动 / 平滑光标 / 整行高亮 / 上下留白
-      smoothScrolling: true,
-      cursorSmoothCaretAnimation: 'on',
-      renderLineHighlight: 'all',
-      padding: { top: 6, bottom: 16 },
-      scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
-      // 编程字体（单一真源）：**只走 create 路径**，不进体量降级集——字体与体量两轴正交，
-      // updateOptions 只覆写发过去的键，创建时钉一次就贯穿切文件
-      ...CODE_FONT_BASELINE,
-      // 显示偏好（1020 编辑器体感批）：行高 / 空白符 / 缩略图 / 行号 / 行内提示从设置页来，
-      // **缺省值就是上面这几行硬编码的那一份**（editor-display-prefs.ts 的缺省），
-      // 没动过设置的作者今天逐字不变。字体族走同一条 create 路径（覆盖上面那条基线栈）。
-      ...editorDisplayOptionPatch(0),
-      ...editorDisplayFontPatch(),
-      // 中文打字噪声 / 选词基线（A2+A3）：与切文件降级集同源（editor-options.ts）
-      ...CJK_TYPING_BASELINE,
-      // 快建议总开关与延迟同源设置页；只读 / 预览的关闭由切文件与糖视图两处 updateOptions 覆盖
-      quickSuggestions: quickSuggestionsFor(false, loadQuickSuggestionsPref()),
-      quickSuggestionsDelay: loadSuggestDelayPref(),
-      // find 体验基线（A7）：create 与切文件两条路径都要带上，吞一条就是档位漂移
-      ...FIND_BASELINE,
-      // 排版偏好（P2-16）：折行三选一 + 多光标修饰键 + 列选择。与切文件路径同读一份
-      // 偏好（editor-options.ts 的 layoutPrefPatch）——没有文件时按 small 档取值，
-      // 强制开 / 强制关同样在这一格生效。
-      ...layoutPrefPatch(),
-    });
-    editorRef.current = ed;
-    if (!bootEditorMarked) {
-      bootEditorMarked = true;
-      perf.bootMark('boot.editorInteractive', undefined, '自导航起点 ms；Monaco 实例创建完成（近似：已挂载可输入）');
-    }
-    // SPLIT-1：本实例登记进模块登记簿——交出去的是组件持有的**同一批 ref 壳**（复制 ref 就是
-    // 让 provider 读影子）。全局 provider 只注册一份（ensureGlobalProviders 内部有门），各
-    // provider 的 resolve 经 `owningPaneOf(model)` 找归属实例再读它的 ref。
-    const paneId = registerPane({
+  // REF-FRONT-PERF：创建/销毁、4 个命令、全局 provider 接线、模型池释放与卸载清账全部
+  // 搬进 use-monaco-instance.ts。偏好与面包屑仍在这一条 effect 的原来两拍里安装（安装器
+  // 由两个 hook 给出），所以 effect 数量/顺序、退订顺序与拆前逐字一致。
+  useMonacoInstance({
+    hostRef,
+    kernel,
+    refs: {
       editorRef,
       entriesRef,
       filePathRef,
       sugarModelRef,
+      sugarOriginalModelRef,
       sugarLineMapRef,
       pendingActionsRef,
       actionSeqRef,
-      crumbTreeCacheRef,
-    });
-    setGlobalKernel(kernel); // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
-    ensureGlobalProviders();
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      void saveRef.current();
-    });
-    // A7「在选定内容中查找」：选中即把文本灌进 find widget 并把搜索域钉在选区。
-    // 实测（vendor 取证）：action `editor.actions.findWithArgs` 由 findController 的
-    // `StartFindWithArgsAction` 注册（standalone 包含），args 形态
-    // `{ searchString, findInSelection, ... }`，`findInSelection: true` 走 `updateSearchScope`
-    // 把当前非空选区变 searchScope。键位 Ctrl+Alt+F：核过 keybindings.ts 无占用
-    // （Ctrl+Shift+F 是全库检索、Ctrl+F/Ctrl+H 是 Monaco 内建，均避让）。
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {
-      const model = ed.getModel();
-      const selection = ed.getSelection();
-      if (!model || !selection || selection.isEmpty()) return;
-      const action = ed.getAction('editor.actions.findWithArgs');
-      if (!action) return;
-      void action.run({ searchString: model.getValueInRange(selection), findInSelection: true });
-    });
-    /**
-     * VETO-1：预览面上 F2 改名 / Shift+Alt+F 格式化同样是**写类**动作——派生文本上没有
-     * 可落点，Monaco 内建动作在糖 model 上要么被 provider 静默拒绝、要么什么都不发生。
-     * 键位表不碰（`keybindings.ts` 明说不劫持 Monaco 内建键），只在本实例 `addCommand`
-     * 拦一拍：**预览面** ⇒ 与两条总线否决同一条带「切回原文」按钮的通知；
-     * **原文面** ⇒ 原样交回 Monaco 内建动作，零新增通知（同一条命令逐字照旧）。
-     */
-    ed.addCommand(monaco.KeyCode.F2, () => {
-      if (sugarModelRef.current) {
-        notifyPreviewWriteVeto(PREVIEW_WRITE_VETO);
-        return;
-      }
-      void ed.getAction('editor.action.rename')?.run();
-    });
-    ed.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {
-      if (sugarModelRef.current) {
-        notifyPreviewWriteVeto(PREVIEW_WRITE_VETO);
-        return;
-      }
-      void ed.getAction('editor.action.formatDocument')?.run();
-    });
-    // 偏好落盘只在设置页，生效走 Monaco 配置项：开 ⇒ 逐 model 挂上着色器，关 ⇒ 卸掉，
-    // 不用重开文件（standalone 的 DocumentSemanticTokensFeature 自己监听这条配置）。
-    applyNameColorPref(ed);
-    const nameColorUnsub = subscribeNameColorPref(() => applyNameColorPref(ed));
-    // 字号/缩放偏好（A1）：设置页一改立即生效；反向（Monaco 原生 fontZoom 动作改了
-    // EditorZoom 单例）也落盘，两条方向都收敛到 localStorage 这一份真源。
-    const fontSizeUnsub = subscribeFontSizePref(() => {
-      applyFontSizePref(ed);
-      applyFontZoomPref(monaco.editor.EditorZoom);
-      // 字号变了，阅读态行距（按字号算的倍数）跟着重发——只在预览在屏时
-      reapplySugarReadOptions();
-    });
-    const fontZoomSync = monaco.editor.EditorZoom.onDidChangeZoomLevel((level) => setFontZoomPref(level));
-    // 补全弹出延迟（QSUG-1）：同一份偏好既喂宿主观察者（每次排程现读），也喂 Monaco 的
-    // quickSuggestionsDelay；设置页一改立即重发，不用重开文件。
-    const suggestDelayUnsub = subscribeSuggestDelayPref(() => {
-      ed.updateOptions({ quickSuggestionsDelay: loadSuggestDelayPref() });
-    });
-    // 快建议总开关（QSUG-2）：关 ⇒ 整条自动弹出停；只读 / 糖预览仍按各自的门强制 false。
-    // 编辑器的 readOnly 选项是唯一可写态真源（糖预览在 setModel 时已置 true）。
-    const quickSuggestionsUnsub = subscribeQuickSuggestionsPref(() => {
-      let readOnly = false;
-      try {
-        readOnly = ed.getOption(monaco.editor.EditorOption.readOnly);
-      } catch {
-        readOnly = false;
-      }
-      ed.updateOptions({ quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()) });
-    });
-    // 排版偏好（P2-16）：折行 / 多光标修饰键 / 列选择。与切文件路径同读一份偏好
-    // （editor-options.ts 的 layoutPrefPatch）；这里只补发这三个键——补丁里没有
-    // readOnly / quickSuggestions，所以订阅回调不必复刻切标签那层的 overrides。
-    // 「跟随体量档」时按**此刻屏幕上那份文档**的行数取档位值（糖预览在屏上就算投影的
-    // 行数，与挂预览那一拍同口径）：从强制关翻回跟随档，大文件当场回到 huge 档的关值。
-    const layoutUnsub = subscribeLayoutPref(() => {
-      const model = ed.getModel();
-      ed.updateOptions(layoutPrefPatch(model ? model.getLineCount() : 0));
-      // 预览在屏：阅读栏宽（bounded + 88 列）盖在偏好补发之后——用户显式改折行偏好，
-      // 下一次挂预览仍按正文口径走，这里只保住"此刻这份投影"的稿纸栏宽。
-      reapplySugarReadOptions();
-    });
-    // 显示偏好（1020 编辑器体感批，C-1b 补缩略图三态与界面字号）：行高 / 空白符 / 缩略图 /
-    // 行号 / 行内提示 / 字体族。只补发这几位——`formatOnType` 由方言判据管（`tierOverrides`），
-    // 字体族与体量正交但同一条偏好轴，一起发。行数按**此刻屏幕上那份 model** 取（糖预览在屏上
-    // 就算投影行数，与挂预览那一拍同口径）：缩略图这一位在 huge 档恒关，偏好翻不回它，
-    // 与档位表同一把尺；「跟随」档那两条内容判据（`.kojo` 正文 / 预览投影）也按同一份 model 现算。
-    const displayUnsub = subscribeEditorDisplayPrefs(() => {
-      const model = ed.getModel();
-      // 缩略图「跟随」档的上下文按**此刻屏幕上这份 model** 取（与挂/撤预览那两拍同口径）：
-      // 糖投影 → preview，真 `.kojo` 文件 → kojoText；两者都不是才按体量档决定画不画。
-      const sugarModel = sugarModelRef.current;
-      ed.updateOptions({
-        ...editorDisplayOptionPatch(model ? model.getLineCount() : 0, undefined, {
-          preview: sugarModel !== null && model === sugarModel,
-          kojoText: model ? model.getLanguageId() === KOJO_LANGUAGE_ID : false,
-        }),
-        ...editorDisplayFontPatch(),
-      });
-      // 界面字号缩放不进 Monaco（它是外壳的 CSS 变量）：偏好一改就把那几位落到根元素。
-      // 本实例是常驻挂载点，另一处写入点（设置页）在 setter 里当场应用，两条路同一个真源。
-      applyUiFontScalePref();
-      // 预览在屏：设置页的 `lineHeight` 补发会把稿纸行距顶掉，按阅读口径盖回去
-      reapplySugarReadOptions();
-    });
-    // 焦点上抛（SPLIT-1）：编辑器聚焦 ⇒ 宿主把焦点组切到本组（点哪组哪组成为焦点组）
-    const focusDisposer = ed.onDidFocusEditorText(() => {
-      setPaneFocused(paneId); // 模块级焦点随编辑器焦点走（跳转探针读"最后聚焦的实例"）
-      onFocusedRef.current?.();
-    });
-    // 面包屑（D1，宿主自绘——standalone Monaco 无面包屑 API，取证见 `breadcrumb-path.ts`）。
-    // 数据复用大纲那棵树：`collectDocumentSymbols` 的应答判据与 provider 接线逐字同款
-    // （糖视图只读 model 一律不给——行号属派生物，面包屑不许把作者导到不存在的位置）。
-    //
-    // PS-5 把"这棵树什么时候必须重算"收成三条，按代价从低到高排：
-    // ① **版本号没动** ⇒ 用缓存（改前就有）；索引派生的条目额外认索引指纹——保存之后
-    //    盘上补扫会让树变，而干净缓冲区的版本号不变（`fromIndex` / `indexStamp` 就是为这一条加的）；
-    // ② 版本动了但缓冲区**干净**且索引认得这份文件 ⇒ 从**已索引**的函数名录派生，
-    //    零解析、零全文复制（浏览/跳转这条主路径从此一次全文解析都不付）；
-    // ③ 版本动了且**改脏了** ⇒ 沿用同一份文件的上一次树，把解析推到停笔那一拍
-    //    （`scheduleCrumbRebuild`，250ms，与装饰防抖同节奏）。
-    // ③ 的滞后窗口与 `crumbsNeedRefresh` 既有口径同一类（"块边界真的变了，最多滞后到
-    // 下一次换行即补上"），换到的收益是"每敲一键整篇 getValue + 全文扫描一次"不再发生；
-    // 换文件的第一次仍**立即**解析（没有可沿用的树时不给作者看上一份文件的链）。
-    //
-    // 1020 编辑器体感批改了**大文件那一闸的位置**：此前它在最前面按行数一刀切清空，
-    // 于是 ② 这条零解析的索引快路对 ≥5,000 行的文件**根本走不到**——5,000 行正是语料里
-    // "长但天天读"的那一档，VS Code 在大文件仍保留面包屑。现在体量闸落在④：只有"缓存没有、
-    // 索引不认、只能现解析"时才按体量清链（清链必须清的理由逐字不变：旧链会把别的文件的行号
-    // reveal 进当前文件）。
-    crumbRefreshRef.current = (forceParse = false) => {
-      const ed = editorRef.current;
-      const path = filePathRef.current;
-      const model = ed?.getModel() ?? null;
-      const apply = (next: readonly CrumbLevel[]): void => {
-        const key = crumbsKey(next.map((l) => l.current));
-        if (key === crumbsKeyRef.current) return;
-        crumbsKeyRef.current = key;
-        setCrumbLevels(next);
-      };
-      if (!ed || !path || sugarModelRef.current || !model) {
-        crumbLastRef.current = null;
-        apply([]);
-        return;
-      }
-      const cursor: CrumbCursor = { path, line: ed.getPosition()?.lineNumber ?? 1, lineCount: model.getLineCount() };
-      if (!crumbsNeedRefresh(cursor, crumbLastRef.current)) return;
-      crumbLastRef.current = cursor;
-      try {
-        const versionId = model.getAlternativeVersionId();
-        const cache = crumbTreeCacheRef.current;
-        const chainOf = (symbols: readonly EditorDocumentSymbol[]): void =>
-          apply(crumbLevelsAt(symbols, cursor.line));
-        // ① 同版本（索引条目还须同指纹）⇒ 缓存就是当前真相，一次解析都不付
-        if (
-          cache &&
-          cache.path === path &&
-          cache.versionId === versionId &&
-          (!cache.fromIndex || cache.indexStamp === (currentErbIndex()?.fingerprint ?? null))
-        ) {
-          chainOf(cache.symbols);
-          return;
-        }
-        // ② 干净缓冲区 + 索引认得这份文件 ⇒ 用已索引的名录，不碰全文解析
-        const indexed = symbolsFromIndex(path, cursor.lineCount);
-        if (indexed) {
-          crumbTreeCacheRef.current = {
-            path,
-            versionId,
-            symbols: indexed.symbols,
-            fromIndex: true,
-            indexStamp: indexed.stamp,
-          };
-          chainOf(indexed.symbols);
-          return;
-        }
-        // ③ 脏了：同一份文件的旧树继续顶着（最多滞后一个防抖窗口），停笔那一拍补一次真解析
-        if (!forceParse && cache && cache.path === path) {
-          scheduleCrumbRebuild();
-          chainOf(cache.symbols);
-          return;
-        }
-        // ④ 只剩"现解析"这一条路：大文件不值这一刀，清链（**不是**维持现状，理由见上）
-        if (cursor.lineCount >= LARGE_FILE_LINES) {
-          crumbLastRef.current = null;
-          apply([]);
-          return;
-        }
-        const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
-          kind: 'documentSymbol',
-          path,
-          text: model.getValue(),
-          project: kernel.project.current(),
-          lineCount: cursor.lineCount,
-        });
-        crumbTreeCacheRef.current = { path, versionId, symbols, fromIndex: false, indexStamp: null };
-        chainOf(symbols);
-      } catch (e: unknown) {
-        // 面包屑是只读呈现面：出错就"没链"，绝不把光标处理链带崩
-        console.warn(`[breadcrumb] 刷新抛错：${errorText(e)}`);
-        apply([]);
-      }
-    };
-    // A9 选区读数搭同一条光标监听：不新增高频监听，等值去抖在 pushSelStatus 内
-    const crumbCursorSub = ed.onDidChangeCursorPosition(() => {
-      crumbRefreshRef.current?.();
-      pushSelStatus();
-    });
-    const crumbModelSub = ed.onDidChangeModel(() => {
-      crumbRefreshRef.current?.();
-      pushSelStatus();
-    });
-    // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
-    const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
-    const viewScrSub = ed.onDidScrollChange(snapshotActiveView);
-    // C1 反向下行批：光标位点广播（面板跟着光标走）。选区也要听——拖动选择区改变的是
-    // 活动端（position），Monaco 两条事件都可能先到，重复的那次由广播器去重吞掉（零成本）。
-    const cursorSub = ed.onDidChangeCursorPosition(() => publishCursor());
-    const cursorSelSub = ed.onDidChangeCursorSelection(() => publishCursor());
-    // 上下文主动触发补全（1017）：QSUG-1 打开全局快建议后，本观察者只补一种缺口——
-    // 中文词法下 Monaco 不会把 CJK 当"词"自动触发的那一拍；位置判据与提供者同源。
-    // **每编辑器实例一枚**（SPLIT1 分屏互不串），随卸载释放。
-    // 延迟偏好**每次排程现读**（SUGGEST-2B）：设置页改完下一次击键即生效，不需要重开文件；
-    // 卸载由 `contextSuggestSub.dispose()` 一并清掉未响的那一拍定时器。
-    const contextSuggestSub = installSuggestContextTrigger(ed, {
-      getPath: () => filePathRef.current,
-      isDerivedView: () => sugarModelRef.current !== null,
-      getDebounceMs: () => loadSuggestDelayPref(),
-      getQuickSuggestionsEnabled: () => loadQuickSuggestionsPref(),
-    });
-    const flushViewOnUnload = (): void => flushViewStates();
-    window.addEventListener('beforeunload', flushViewOnUnload);
-    return () => {
-      nameColorUnsub();
-      fontSizeUnsub();
-      fontZoomSync.dispose();
-      suggestDelayUnsub();
-      quickSuggestionsUnsub();
-      layoutUnsub();
-      displayUnsub();
-      focusDisposer.dispose();
-      crumbCursorSub.dispose();
-      crumbModelSub.dispose();
-      // PS-5 面包屑防抖：在途那一次重算随实例退场作废（回调里读的是这个实例的 model）
-      if (crumbTimerRef.current !== null) {
-        window.clearTimeout(crumbTimerRef.current);
-        crumbTimerRef.current = null;
-      }
-      viewCurSub.dispose();
-      viewScrSub.dispose();
-      cursorSub.dispose();
-      cursorSelSub.dispose();
-      contextSuggestSub.dispose();
-      window.removeEventListener('beforeunload', flushViewOnUnload);
-      crumbRefreshRef.current = null;
-      // SPLIT-1：本实例退册；全局 provider 属于"活实例集合"，最后一个实例退场才拆
-      // （unregisterPane 只退册并回答"是不是最后一个"；拆毁顺序不许动：provider → 跳转探针
-      //  → 问题汇总，且整段都在 clearSugarView / ed.dispose 之前）
-      if (unregisterPane(paneId)) {
-        disposeGlobalProviders();
-        setJumpProbe(null);
-        clearAllProblems(); // 清掉全部文件的问题，防幽灵诊断残留
-      }
-      clearSugarView();
-      // 兜底：糖 model 若因"无处可还原"被保留挂载，随卸载一并回收（编辑器即将 dispose）
-      sugarModelRef.current?.dispose();
-      sugarModelRef.current = null;
-      sugarOriginalModelRef.current = null;
-      if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
-      markerTimerRef.current = null;
-      if (autosaveTimerRef.current !== null) window.clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = null;
-      externalConflictRef.current.clear();
-      autosaveFailedRef.current.clear();
-      // 卸载 = 会话终点：补一次最后快照（在途防抖窗口内的改动）再同步 flush
-      if (prevPathRef.current) persistEditorSlice(ed, prevPathRef.current);
-      flushViewStates();
-      ed.dispose();
-      editorRef.current = null;
-      for (const [path, entry] of [...entriesRef.current]) {
-        entry.listener.dispose();
-        editorModelPool.release(path);
-      }
-      entriesRef.current.clear();
-      viewStatesRef.current.clear();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      crumbTreeCacheRef: breadcrumb.crumbTreeCacheRef,
+      viewStatesRef,
+      prevPathRef,
+    },
+    saveRef,
+    notifyPreviewWriteVeto,
+    clearSugarView,
+    persistEditorSlice,
+    snapshotActiveView,
+    publishCursor,
+    pushSelStatus,
+    onFocusedRef,
+    markerTimerRef,
+    autosaveTimerRef,
+    externalConflictRef,
+    autosaveFailedRef,
+    installPreferences,
+    installBreadcrumb: breadcrumb.install,
+  });
 
-  /**
-   * 「标注函数被谁调用」开关落地（B8，2026-10-16 行内注解批）。
-   *
-   * 偏好真源是 `code-lens-pref.ts` 的 localStorage（**默认关**，理由写在那份文件里），
-   * 本 effect 只做一件事：把它写成 Monaco 的 `codeLens` 选项。
-   * 这条腿必须在**选项**上而不是在 `resolve()` 里返回空数组——关掉时 Monaco 不再发请求，
-   * 于是那份文档的整篇解析一次都不付（供给器没有可视区间，开着的代价是"每次停笔解析一遍"）。
-   *
-   * 翻开关为什么要听事件而不是自己再读一次偏好：Monaco 只在 `EditorOption.codeLens`
-   * 变化时重算注解（取证 `codelensController.js` 的 `e.hasChanged(...) → _onModelChange()`），
-   * 不推就是"作者关掉设置页回到编辑器，一条注解都没动"。壳层的设置页与本页读的都是同一把
-   * localStorage，所以这里不存在两份状态——事件只是"去重算一次"的扳机（同 `editor.sugarView.set`）。
-   */
-  useEffect(() => {
-    const apply = (on: boolean): void => {
-      editorRef.current?.updateOptions({ codeLens: on });
-    };
-    apply(loadCodeLensPref());
-    const un = kernel.bus.on('editor.codeLens.set', ({ on }) => apply(on));
-    return un;
-  }, [kernel]);
+  // 「标注函数被谁调用」开关（B8）：偏好落地 / 事件订阅 / 退订全在 use-editor-preferences.ts。
+  // **调用点必须留在实例创建之后**：create 时 `codeLens` 先落默认关，这一拍才把偏好覆盖上去。
+  useCodeLensPreference(editorRef, kernel);
 
   // Monarch directive 词表同源化（T5）：判据（基底 ∪ 当前项目 adapter 的指令表、等值去重、
   // 回基底）与实例引用计数都住在 `editor-global-providers.ts`——词表喂的是全局那一份 `.erb`
@@ -2244,7 +1643,7 @@ export function EditorPane({
       if (sugarCacheRef.current?.path === path) sugarCacheRef.current = null;
       // 面包屑树缓存同理：重开同一文件时 model 的版本号会从 1 重新数，
       // 留着旧条目就可能把上一份内容的树当"当前内容"发上屏（与 #F6 同一条理由）。
-      if (crumbTreeCacheRef.current?.path === path) crumbTreeCacheRef.current = null;
+      if (breadcrumb.crumbTreeCacheRef.current?.path === path) breadcrumb.crumbTreeCacheRef.current = null;
       entriesRef.current.delete(path);
       viewStatesRef.current.delete(path);
       if (left === 0) {
@@ -2743,7 +2142,7 @@ export function EditorPane({
           空链整条不渲染（糖视图 / 不在任何块内 = 没有可信的真文件行号可展示）。
           点击走 `editor.revealLocation` 既有通道跳块头行——不新造导航机制。 */}
       <CrumbBar
-        levels={crumbLevels}
+        levels={breadcrumb.crumbLevels}
         onRevealLine={(line) => {
           if (!filePath) return;
           kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });

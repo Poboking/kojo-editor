@@ -195,8 +195,12 @@ describe('find 体验基线（A7）', () => {
     }
   });
 
-  it('create 路径 spread 同一份基线（EditorPane.tsx 静态取证）', () => {
-    const src = readFileSync(fileURLToPath(new URL('../src/ui/EditorPane.tsx', import.meta.url)), 'utf8');
+  it('create 路径 spread 同一份基线（use-monaco-instance.ts 静态取证）', () => {
+    // REF-FRONT-PERF：create 选项从 EditorPane 搬进实例 hook，判据跟着搬家
+    const src = readFileSync(
+      fileURLToPath(new URL('../src/ui/editor-pane/use-monaco-instance.ts', import.meta.url)),
+      'utf8',
+    );
     expect(src).toContain('...FIND_BASELINE,');
     expect(src).toContain('...CJK_TYPING_BASELINE,');
   });
