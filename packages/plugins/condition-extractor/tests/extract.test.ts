@@ -66,6 +66,32 @@ describe('extractFunctionConditions · 基础', () => {
     expect(r!.dependencies.map((d) => d.key).sort()).toEqual(['TALENT:恋人', 'TALENT:恋慕']);
   });
 
+  it('SIF 行尾逗号（引擎 ReduceArguments(EoL) 静默容忍）不再判 opaque', () => {
+    const r = extractFunctionConditions(
+      fn,
+      cf([
+        ['SIF', 'FLAG:甲斐性無,', 0, 1],
+        ['SIF', 'TALENT:恋慕 && CFLAG:2 >= 500,', 0, 2],
+        ['SIF', 'CFLAG:2 & 1p3', 0, 3],
+      ]),
+    );
+    expect(r).not.toBeNull();
+    expect(r!.predicateCount).toBe(3);
+    expect(r!.unparsedCount).toBe(0);
+    // 修复前这三条全 opaque ⇒ 其依赖不收录；修复后依赖照常进表（同键合并计数）
+    expect(r!.dependencies.map((d) => d.key).sort()).toEqual(['CFLAG:2', 'FLAG:甲斐性無', 'TALENT:恋慕']);
+    expect(r!.dependencies.find((d) => d.key === 'CFLAG:2')!.count).toBe(2);
+    expect(r!.dependencies.find((d) => d.key === 'CFLAG:2' && d.comparisons.length > 0)).toMatchObject({
+      comparisons: [{ op: '>=', value: 500 }],
+    });
+  });
+
+  it('SIF 逗号后仍有内容（引擎引数过多报错）→ 照旧 opaque', () => {
+    const r = extractFunctionConditions(fn, cf([['SIF', 'A, B', 0, 1]]));
+    expect(r!.predicateCount).toBe(1);
+    expect(r!.unparsedCount).toBe(1);
+  });
+
   it('比较符翻转（字面量在左）', () => {
     const r = extractFunctionConditions(fn, cf([['IF', '500 <= CFLAG:2', 0, 1]]));
     expect(r!.dependencies[0]!.comparisons).toEqual([{ op: '>=', value: 500, text: '500' }]);

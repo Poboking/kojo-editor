@@ -161,6 +161,77 @@ describe('parseExpression · 基本形式', () => {
   });
 });
 
+describe('parseExpression · p 指数位标志字面量（引擎 ReadInt64：ApN = A×2^N）', () => {
+  it('1p3 = 8：位与运算（真实语料残余形态）', () => {
+    expect(parseExpression('1p3')).toEqual({ kind: 'literal', value: 8, text: '1p3' });
+    expect(parseExpression('FLAG:甲斐性無 & 1p3')).toMatchObject({
+      kind: 'binary',
+      op: '&',
+      left: { kind: 'ref', name: 'FLAG' },
+      right: { kind: 'literal', value: 8, text: '1p3' },
+    });
+  });
+
+  it('参与比较：括号位与后 != 0', () => {
+    const e = parseExpression('(CFLAG:2 & 1p4) != 0');
+    expect(e).toMatchObject({
+      kind: 'binary',
+      op: '!=',
+      left: { kind: 'binary', op: '&', right: { kind: 'literal', value: 16 } },
+      right: { kind: 'literal', value: 0 },
+    });
+  });
+
+  it('多位标志或 / 通用底数 ApN', () => {
+    // 引擎语义不限于 1：readDigits 的全部位作 significand
+    expect(parseExpression('FLAG:9 & (1p0 | 2p3)')).toMatchObject({
+      right: { kind: 'binary', op: '|', left: { kind: 'literal', value: 1 }, right: { kind: 'literal', value: 16 } },
+    });
+    expect(parseExpression('1p1 == 2')).toMatchObject({
+      left: { kind: 'literal', value: 2, text: '1p1' },
+    });
+    expect(parseExpression('10p1')).toEqual({ kind: 'literal', value: 20, text: '10p1' });
+  });
+
+  it('大小写（引擎读 p 也读 P）', () => {
+    expect(parseExpression('1P3')).toEqual({ kind: 'literal', value: 8, text: '1P3' });
+  });
+
+  it('降级口径不变：p 后无数字 / 超出 64 位范围 / 非数字尾巴 → opaque', () => {
+    expect(parseExpression('1p')).toEqual({ kind: 'opaque', text: '1p' });
+    expect(parseExpression('1p63')).toEqual({ kind: 'opaque', text: '1p63' }); // 2^63 > Int64.MaxValue
+    expect(parseExpression('1p100')).toEqual({ kind: 'opaque', text: '1p100' });
+    expect(parseExpression('1pABC')).toEqual({ kind: 'opaque', text: '1pABC' });
+    expect(parseExpression('1abc')).toEqual({ kind: 'opaque', text: '1abc' });
+  });
+
+  it('p 指数与 e 指数不串味', () => {
+    // e 仍是十进制指数（既有口径），p 段不抢
+    expect(parseExpression('2e3')).toEqual({ kind: 'literal', value: 2000, text: '2e3' });
+  });
+});
+
+describe('parseExpression · 顶层行尾逗号（引擎 ReduceArguments(EoL)：行尾逗号静默容忍）', () => {
+  it('真实语料残余形态 `SIF FLAG:甲斐性無,` → 条件即 FLAG:甲斐性無', () => {
+    expect(parseExpression('FLAG:甲斐性無,')).toEqual({
+      kind: 'ref',
+      name: 'FLAG',
+      indices: ['甲斐性無'],
+      text: 'FLAG:甲斐性無',
+    });
+    expect(parseExpression('TALENT:恋慕 && CFLAG:2 >= 500,')).toMatchObject({
+      kind: 'binary',
+      op: '&&',
+      right: { kind: 'binary', op: '>=' },
+    });
+  });
+
+  it('逗号后还有内容（`A, B`）引擎报引数过多 → 照旧 opaque', () => {
+    expect(parseExpression('A, B')).toEqual({ kind: 'opaque', text: 'A, B' });
+    expect(parseExpression('A,,B')).toEqual({ kind: 'opaque', text: 'A,,B' });
+  });
+});
+
 describe('parseExpression · 包容降级（绝不抛错）', () => {
   it('赋值形式 → opaque', () => {
     expect(parseExpression('X = 1')).toEqual({ kind: 'opaque', text: 'X = 1' });
