@@ -10,7 +10,9 @@
  * (c) D4 三条腿各自走哪条：**同文件 / 已开标签 ⇒ 真 `LocationLink[]`（多目标全给，
  *     Peek 才有的可选）**，**未打开文件 ⇒ 事件通道兜底**；
  * (d) 自证"绝不返回指向未建 model 的 URI"（缺 model 的目标一律不进列表；列表构造后
- *     为空则退回事件通道，不留空列表让 Monaco 哑掉）。
+ *     为空则退回事件通道，不留空列表让 Monaco 哑掉）；
+ * (e) NAV-1（2026-10-20）：同文件就地跳照旧交回 Monaco（返回 false、不发 revealLocation），
+ *     但"导航已发生"补记一次（宿主接线 → pushNav；同 path+line 去重照旧）；跨文件腿不变。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -24,6 +26,7 @@ import {
   planDefinitionJump,
   toDefinitionLinks,
 } from '../src/monaco/kojo-definition';
+import { createNavState, pushNav } from '../src/ui/navigation-history';
 
 const REQUEST = {
   kind: 'definition',
@@ -555,11 +558,15 @@ describe('installDefinitionProvider · peekTarget（未打开目标的隐藏 mod
 /* ============================== opener · 跨 model 跳转落回宿主通道 ============================== */
 
 describe('installDefinitionProvider · registerEditorOpener', () => {
-  function withOpener(navigate: (location: EditorSymbolLocation) => void): Monaco.editor.ICodeEditorOpener {
+  function withOpener(
+    navigate: (location: EditorSymbolLocation) => void,
+    recordInPlaceNavigation?: (location: EditorSymbolLocation) => void,
+  ): Monaco.editor.ICodeEditorOpener {
     const { monaco, openers } = stubMonaco();
     installDefinitionProvider(monaco, {
       resolve: () => [],
       navigate,
+      ...(recordInPlaceNavigation ? { recordInPlaceNavigation } : {}),
       openModelFor: liveModelFor,
       pathForUri: (uri) => (uri === CURRENT_URI ? CURRENT_PATH : uri === OTHER_URI ? OTHER_PATH : undefined),
     });
@@ -578,6 +585,128 @@ describe('installDefinitionProvider · registerEditorOpener', () => {
     });
     expect(handled).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * NAV-1（2026-10-20）：同文件就地跳不入栈的补账。Monaco 缺省 handler 已经完成跳转
+   * （含高亮动画），本层只把"导航已发生"交给宿主记账——绝不发 `editor.revealLocation`
+   * （那是"请跳"，会再定位一次 = 跳两次）。
+   *
+   * 测试把宿主那侧的最小接线（订阅 → pushNav）摊平成一个 handler 直调：
+   * 记账一次 = pushNav 一次；同 path+line 再来一次 = pushNav 仍只挪光标、栈不涨。
+   */
+  it('同文件就地跳 → 只补一次「导航已发生」（pushNav 一次；不重发 revealLocation）', () => {
+    const navigate = vi.fn();
+    const push = vi.fn(pushNav);
+    let state = createNavState('C:\\p');
+    const opener = withOpener(navigate, (location) => {
+      state = push(
+        state,
+        {
+          path: location.filePath,
+          line: location.line,
+          ...(location.column !== undefined ? { column: location.column } : {}),
+        },
+        'C:\\p',
+      );
+    });
+
+    expect(
+      opener.openCodeEditor(editorWith(sourceModel), uriOf(CURRENT_URI), { lineNumber: 5, column: 3 }),
+    ).toBe(false);
+
+    expect(navigate).not.toHaveBeenCalled(); // 高亮动画那条腿不动：就地跳仍归 Monaco
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0]![1]).toEqual({ path: CURRENT_PATH, line: 5, column: 3 });
+    expect(state.stack).toEqual([{ path: CURRENT_PATH, line: 5, column: 3 }]);
+  });
+
+  it('同 path+line 再跳一次：pushNav 再记一次但栈不涨（去重语义照旧）', () => {
+    const push = vi.fn(pushNav);
+    let state = createNavState('C:\\p');
+    const opener = withOpener(vi.fn(), (location) => {
+      state = push(
+        state,
+        {
+          path: location.filePath,
+          line: location.line,
+          ...(location.column !== undefined ? { column: location.column } : {}),
+        },
+        'C:\\p',
+      );
+    });
+    const jump = () =>
+      opener.openCodeEditor(editorWith(sourceModel), uriOf(CURRENT_URI), { lineNumber: 5, column: 3 });
+
+    jump();
+    jump();
+
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(state.stack).toHaveLength(1); // 同 path + 同 line ⇒ 只挪光标，不重复入栈
+    expect(state.cursor).toBe(0);
+  });
+
+  it('同文件请求带区间 ⇒ 记账同样升级成 `span`（与跨文件那条腿同一判据），仍返回 false', () => {
+    const record = vi.fn();
+    const opener = withOpener(vi.fn(), record);
+    expect(
+      opener.openCodeEditor(editorWith(sourceModel), uriOf(CURRENT_URI), {
+        startLineNumber: 8,
+        startColumn: 4,
+        endLineNumber: 8,
+        endColumn: 12,
+      }),
+    ).toBe(false);
+    expect(record).toHaveBeenCalledWith({
+      filePath: CURRENT_PATH,
+      line: 8,
+      column: 4,
+      span: { columnStart: 4, columnEnd: 12 },
+    });
+  });
+
+  it('宿主不认识的同 model URI / 没给落点 ⇒ 不记账（不猜路径、不猜位置）', () => {
+    const record = vi.fn();
+    const { monaco, openers } = stubMonaco();
+    installDefinitionProvider(monaco, {
+      resolve: () => [],
+      navigate: vi.fn(),
+      recordInPlaceNavigation: record,
+      openModelFor: liveModelFor,
+      pathForUri: () => undefined, // 例如糖视图的 inmemory URI：不是宿主文件
+    });
+    const opener = openers[0]!;
+    expect(opener.openCodeEditor(editorWith(sourceModel), uriOf(CURRENT_URI), { lineNumber: 5, column: 3 })).toBe(false);
+    expect(opener.openCodeEditor(editorWith(sourceModel), uriOf(CURRENT_URI))).toBe(false);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('记账抛错不拖垮就地跳（旁路旁到底：仍返回 false 交回 Monaco）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const opener = withOpener(vi.fn(), () => {
+      throw new Error('boom');
+    });
+    expect(
+      opener.openCodeEditor(editorWith(sourceModel), uriOf(CURRENT_URI), { lineNumber: 5, column: 3 }),
+    ).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('跨文件那条腿不变：只发 `editor.revealLocation`（navigate），不补记账', () => {
+    const navigate = vi.fn();
+    const record = vi.fn();
+    const opener = withOpener(navigate, record);
+    expect(
+      opener.openCodeEditor(editorWith(sourceModel), uriOf(OTHER_URI), {
+        startLineNumber: 8,
+        startColumn: 4,
+        endLineNumber: 8,
+        endColumn: 4,
+      }),
+    ).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({ filePath: OTHER_PATH, line: 8, column: 4 });
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('已开的别的标签 → 反查宿主路径、发一次 `editor.revealLocation`、返回 true（已处置）', () => {

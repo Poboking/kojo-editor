@@ -130,6 +130,32 @@ export interface KernelEventMap {
     source?: string;
   };
   /**
+   * 编辑器**已完成**一次导航（NAV-1 同文件补账，2026-10-20）：与 `editor.revealLocation`
+   * 方向相反——那条是"请跳"（消费方开文件 / 定位），本条是"已经跳完了"。
+   *
+   * 发起场景是同文件 F12 / Ctrl+Click / Peek 里回车：Monaco 的缺省 handler 就地完成
+   * setSelection + reveal（含 `symbolHighlight` 高亮动画），宿主既不抢跳、也不重放；
+   * 但导航历史（Alt+← / Alt+→）需要知道这里发生过一次导航，否则同文件跳转永远回不来。
+   * 跨文件那条腿一直经 `editor.revealLocation` 记账，不受影响。
+   *
+   * 消费方契约：**只许 pushNav**（写导航历史），**不得**反向驱动跳转——再开一次文件 /
+   * 再定位就是"跳两次"，高亮动画也会被打断。
+   *
+   * 载荷与 `editor.revealLocation` 的位置事实同形（`filePath` + `line` + 可选
+   * `column` / `span`；行列口径 1 基、UTF-16 码元、`columnEnd` 不含），`source` 只标
+   * "谁发起的"（诊断用，不是凭据）。
+   *
+   * 通用、游戏无关。**宿主专属**：导航历史是宿主状态，插件伪造本事件 = 往作者的回退
+   * 历史里塞幽灵条目（与 `editor.cursorMoved` 同档：宿主广播，插件只许听）。
+   */
+  'editor.navigated': {
+    filePath: string;
+    line: number;
+    column?: number;
+    span?: RevealSpan;
+    source?: string;
+  };
+  /**
    * 编辑器当前文件变更（v0.3 批 S5-UI）：宿主在"当前编辑的文件"发生变化时广播。
    *
    * 通用、游戏无关——「当前打开的是哪个文件」是**宿主状态**，不是任何插件的
@@ -456,6 +482,9 @@ const KERNEL_ONLY_EVENT_NAMES = [
   // 光标位点 = 编辑器此刻的宿主状态（与 editor.codeLens.set 同档：插件伪造"光标在哪"
   // 就是谎报编辑器状态，面板据此乱高亮/乱清高亮）。宿主广播，插件只许听。
   'editor.cursorMoved',
+  // 导航既成事实（NAV-1）：导航栈是宿主状态，插件伪造 = 往作者的回退历史里塞幽灵条目
+  //（与 editor.cursorMoved 同档：宿主广播，插件只许听）。
+  'editor.navigated',
 ] as const satisfies readonly (keyof KernelEventMap)[];
 
 /** 内核事件名（= 插件可 emit 的集合；供 kernel `scopedBus` 执法使用） */

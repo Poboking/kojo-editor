@@ -1401,6 +1401,18 @@ export function ensureGlobalProviders(): void {
           ),
         );
       },
+      // NAV-1（2026-10-20）：同文件 F12 / Ctrl+Click / Peek 回车由 Monaco 缺省 handler 就地
+      // 跳完（含 symbolHighlight 高亮动画），**这里只发"跳过了"的事实**——与 `navigate`
+      // 的"请跳"相反；App 订阅 `editor.navigated` 后只 pushNav，不得再定位（跳两次）。
+      recordInPlaceNavigation: (location) => {
+        // 载荷仍由 `revealLocationOf` 构造（列/区间同源）；`line` 在这里补成必填——
+        // `DefinitionLocation.line` 本来就是必填，事件契约只是不接受"没有行的导航"。
+        const payload = revealLocationOf(
+          { path: location.filePath, line: location.line, column: location.column, span: location.span },
+          '转到定义',
+        );
+        requireKernel().bus.emit('editor.navigated', { ...payload, line: location.line });
+      },
       // D4（Peek 就地预览）两条腿的判据都来自**全部组**的打开表（`openModelAcrossGroups` /
       // 路径，值 = 那份 model），路径比较一律走 `matchOpenedPath` 的 `pathKey` 口径
       // （HK-7：平台原样路径与宿主键在 Windows 上分隔符/大小写不一致，裸字符串比会静默判不上）：

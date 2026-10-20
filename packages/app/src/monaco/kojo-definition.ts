@@ -5,7 +5,7 @@ import type {
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
-import { clampRevealPosition, revealSpanOf } from './reveal-position';
+import { clampRevealPosition, revealSpanOf, type RevealSpan } from './reveal-position';
 import { registerForKojoDialects } from './register-dialects';
 import { mergeNavigationLegs, resolveErbDimDefinitionAt } from './erb-dim-navigation';
 import { labelDefinitionLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
@@ -197,6 +197,15 @@ export interface DefinitionHandlers {
   /** 落地一次跳转（宿主注入；当前实现经 `editor.revealLocation` 复用既有导航通道） */
   navigate(location: DefinitionLocation): void;
   /**
+   * **同 model 就地跳已经发生**（NAV-1，2026-10-20）：Monaco 缺省 handler 完成
+   * setSelection + reveal（含 `symbolHighlight` 高亮动画）之后，本处只把这一事实交给
+   * 宿主记账（装配点的实现发 `editor.navigated`，App 订阅后只 `pushNav`）。
+   *
+   * 契约：消费方**只许写导航历史**，不得反向驱动跳转（再开文件 / 再定位 = "跳两次"，
+   * 高亮动画也会被打断）。缺省不接线 ⇒ 行为与此前逐字一致（additive）。
+   */
+  recordInPlaceNavigation?(location: DefinitionLocation): void;
+  /**
    * 目标路径 → **已在编辑器里打开**的 model（宿主按 `pathKey` 口径查自己的标签表）。
    * 缺省视为"都没有"⇒ D4 全部退回事件通道，行为与 D4 之前逐字一致（additive 接线）。
    */
@@ -312,6 +321,29 @@ export function provideLocations(
 }
 
 /**
+ * `openCodeEditor` 收到的落点（Monaco 给的是 `IRange | IPosition`）→ 宿主位置事实。
+ *
+ * 两条腿（同文件记账 / 跨文件发事件）共用这一个解析：真给了宽度才升级成 `span`，
+ * 零宽/点式请求仍是一条 `column`——与 `reveal-position` 的退化判据逐字相同。
+ * `undefined` = 没给落点（不猜目标，调用方据此拒绝）。
+ */
+function landingOf(
+  selectionOrPosition: Monaco.IRange | Monaco.IPosition | undefined,
+): { line: number; column?: number; span?: RevealSpan } | undefined {
+  if (!selectionOrPosition) return undefined;
+  const landedAt = selectionOrPosition as Partial<Monaco.IRange & Monaco.IPosition>;
+  const line = landedAt.lineNumber ?? landedAt.startLineNumber;
+  if (line === undefined) return undefined;
+  const column = landedAt.column ?? landedAt.startColumn;
+  const endColumn = landedAt.endColumn;
+  const span =
+    column !== undefined && endColumn !== undefined && endColumn > column
+      ? { columnStart: column, columnEnd: endColumn }
+      : undefined;
+  return { line, ...(column !== undefined ? { column } : {}), ...(span !== undefined ? { span } : {}) };
+}
+
+/**
  * Peek 里按 Enter / `gotoNextSymbolFromResult` / F12 多目标的跨 model 跳转落地
  * （standalone **必须**宿主补这一手，理由见 `installDefinitionProvider` 的取证段）。
  *
@@ -327,25 +359,29 @@ export function registerLocationOpener(
     openCodeEditor(source, resource, selectionOrPosition) {
       const attached = source.getModel();
       // 同 model（同文件就地跳）：交回 Monaco 缺省 handler（它只做 setSelection + reveal，
-      // 顺带给 symbolHighlight 高亮动画），本处不抢也不发事件，避免"跳两次"
-      if (attached && attached.uri.toString() === resource.toString()) return false;
+      // 顺带给 symbolHighlight 高亮动画），本处**不抢跳转、不发 `editor.revealLocation`**
+      //（那会让宿主再开一次文件/再定位，等于"跳两次"）。
+      // NAV-1 补的一拍（2026-10-20）：跳照旧由 Monaco 做，但"导航已发生"这一事实必须
+      // 交给宿主记账（`recordInPlaceNavigation` → 宿主发 `editor.navigated` → App 只 pushNav），
+      // 否则同文件 F12 / Peek 回车永远进不了导航栈，Alt+← 回不来。
+      if (attached && attached.uri.toString() === resource.toString()) {
+        const path = handlers.pathForUri?.(resource.toString());
+        const landing = landingOf(selectionOrPosition);
+        if (path !== undefined && landing) {
+          try {
+            handlers.recordInPlaceNavigation?.({ filePath: path, ...landing });
+          } catch (e: unknown) {
+            // 记账是旁路：它抛错绝不能把 Monaco 的就地跳（含高亮动画）拖下水
+            console.warn(`[kojo-definition] recordInPlaceNavigation('${path}') 抛错：${errorText(e)}`);
+          }
+        }
+        return false;
+      }
       const path = handlers.pathForUri?.(resource.toString());
-      if (!path || !selectionOrPosition) return false; // 不是宿主认识的文件 / 没给落点：不猜
-      const landedAt = selectionOrPosition as Partial<Monaco.IRange & Monaco.IPosition>;
-      const line = landedAt.lineNumber ?? landedAt.startLineNumber;
-      if (line === undefined) return false;
-      const column = landedAt.column ?? landedAt.startColumn;
-      const endColumn = landedAt.endColumn;
-      const span =
-        column !== undefined && endColumn !== undefined && endColumn > column
-          ? { columnStart: column, columnEnd: endColumn }
-          : undefined;
-      handlers.navigate({
-        filePath: path,
-        line,
-        ...(column !== undefined ? { column } : {}),
-        ...(span !== undefined ? { span } : {}),
-      });
+      if (!path) return false; // 不是宿主认识的文件：不猜
+      const landing = landingOf(selectionOrPosition);
+      if (!landing) return false; // 没给落点：不猜
+      handlers.navigate({ filePath: path, ...landing });
       return true;
     },
   });
@@ -363,7 +399,8 @@ export function registerLocationOpener(
  * the currently attached one."。所以"model 已存在就能切过去"这条腿**不是白捡的**，必须
  * 由宿主补一手：opener 收到跨 model 的请求 → 反查宿主路径 → 发同一条
  * `editor.revealLocation`（App 开标签 / 换 model / 定位，一条通道走到底）。同 model 的请求
- * 返回 `false`，让 Monaco 自己就地跳（带 symbolHighlight 高亮动画，比事件通道更准）。
+ * 返回 `false`，让 Monaco 自己就地跳（带 symbolHighlight 高亮动画，比事件通道更准）；
+ * 跳完只补一条 `recordInPlaceNavigation`（NAV-1：宿主据此只记账，不重放跳转）。
  *
  * opener 全进程**只此一枚**（W9）：`registerEditorOpener` 后注册者会顶掉前一位，
  * 而"跳到实现"要的落地通道与此逐字相同 ⇒ 它不重复注册（见 `erb-implementation.ts`）。
