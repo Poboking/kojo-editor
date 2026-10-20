@@ -73,7 +73,7 @@ import type {
 } from '@kojo/plugin-api';
 
 /** 快照格式版本；改 `FunctionConditions`/`StateDependency` 语义或抽取口径时 +1 */
-export const EXTRACT_SNAPSHOT_FORMAT = 6;
+export const EXTRACT_SNAPSHOT_FORMAT = 7;
 
 /** 存储键 = 固定槽位名（版本在 payload 里，换格式时旧文件读出即判死并被覆盖） */
 export const EXTRACT_STORE_KEY = 'extract-snapshot-v1';

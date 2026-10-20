@@ -18,6 +18,15 @@
  * - 实参空槽 / 尾逗号、下标接调用（`NAME:TOINT(x)`）、后缀 `++`/`--`；
  * - `0b` 二进制与十进制指数 `2e3` / `1.5e-2`（裸小数仍不认）；
  * - 行尾续写 fail-open（只作用于 `diagnoseExpression`，`parseExpression` 语义不变）。
+ *
+ * 2026-10-20 残余 13 条收口批（W8-B；引擎源码逐条取证）：
+ * - `p`/`P` 二进制指数（引擎 `LexicalAnalyzer.ReadInt64`：`ApN` = A × 2^N，N 用十进制读、
+ *   超出 64 位有符号整数范围引擎抛错 ⇒ 这里超界就回退旧口径不认）：`1p3` 位标志字面量
+ *   参与位运算 / 比较不再降级 opaque；
+ * - 顶层行尾逗号（引擎 `ExpressionParser.ReduceArguments(ArgsEndWith.EoL)`：表达式止于逗号、
+ *   行尾逗号静默吞掉 ⇒ `SIF FLAG:甲斐性無,` 的条件就是 `FLAG:甲斐性無`）：只在**整条表达式
+ *   已解析完**且逗号是最后 token 时容忍，`A, B` 这类中间逗号照旧 opaque；
+ * - 抽取口径变化 ⇒ EXTRACT_SNAPSHOT_FORMAT 6→7（opaque 转 parsed 会改变依赖与未解析统计）。
  */
 
 import type { ConditionExpr } from '@kojo/plugin-api';
@@ -72,6 +81,20 @@ const OP2 = ['&&', '||', '^^', '!&', '!|', '==', '!=', '<=', '>=', '<<', '>>', '
 const OP1 = new Set(['+', '-', '*', '/', '%', '<', '>', '=', '!', '&', '|', '^', '~', '?', '#']);
 
 const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
+
+/**
+ * 二进制指数段（`1p3` = 1×2³）的扫描终点；不构成 `p`/`P` 指数就原样返回 `from`。
+ * 与引擎 `ReadInt64` 同口径：`p`/`P` 后**至少一位**数字（无数字时引擎按指数 0 静默容忍，
+ * 这里不认——回退旧口径整体降级 opaque，不猜）。
+ */
+function scanBinaryExponent(s: string, from: number): number {
+  const c = s[from];
+  if (c !== 'p' && c !== 'P') return from;
+  if (!isDigit(s[from + 1])) return from;
+  let k = from + 1;
+  while (isDigit(s[k])) k++;
+  return k;
+}
 
 /**
  * 十进制指数段（`2e3` / `1.5e-2`）的扫描终点；不构成指数就原样返回 `from`。
@@ -219,7 +242,7 @@ function tokenize(input: string): Token[] {
       i = close + 2;
       continue;
     }
-    // 数字：十进制 / 0x 十六进制 / 0b 二进制 / 十进制指数（引擎 AddIntegerLiteral 系）
+    // 数字：十进制 / 0x 十六进制 / 0b 二进制 / p·e 指数（引擎 AddIntegerLiteral 系）
     if (c >= '0' && c <= '9') {
       let base = 10;
       if (c === '0' && (input[i + 1] === 'x' || input[i + 1] === 'X')) {
@@ -232,6 +255,20 @@ function tokenize(input: string): Token[] {
         while (i < input.length && (input[i] === '0' || input[i] === '1')) i++;
       } else {
         while (isDigit(input[i])) i++;
+        // 二进制指数 `ApN`（引擎 ReadInt64：p/P = 以 2 为底，位标志字面量 `1p3` = 8）
+        const pEnd = scanBinaryExponent(input, i);
+        if (pEnd !== i) {
+          const significand = Number.parseInt(input.slice(start, i), 10);
+          const exp = Number.parseInt(input.slice(i + 1, pEnd), 10);
+          const d = significand * Math.pow(2, exp);
+          // 引擎同口径：超出 64 位有符号整数范围会抛错 ⇒ 这里超界就回退旧口径不认
+          //（2^63 恰是 double 下 Int64.MaxValue 的舍入值，须用 `< 2^63` 判上界）
+          if (Number.isFinite(d) && d < 9223372036854775808 && d >= -9223372036854775808) {
+            out.push({ kind: 'num', text: input.slice(start, pEnd), value: d, pos: start });
+            i = pEnd;
+            continue;
+          }
+        }
         i = scanDecimalExponent(input, i);
       }
       const text = input.slice(start, i);
@@ -408,6 +445,11 @@ class Parser {
     return this.peek().kind === 'eof';
   }
 
+  /** 吃掉一个逗号（顶层行尾逗号容忍专用；调用方先用 `current()` 确认是逗号） */
+  consumeComma(): void {
+    if (this.peek().kind === 'comma') this.i++;
+  }
+
   /** 当前未消费的 token（诊断定位用） */
   current(): Token {
     return this.peek();
@@ -562,6 +604,10 @@ export function parseExpression(text: string): ConditionExpr {
     const toks = tokenize(text);
     const p = new Parser(text, toks);
     const expr = p.parseExpr(0);
+    // 顶层行尾逗号（引擎 ReduceArguments(ArgsEndWith.EoL)：表达式止于逗号，行尾逗号静默吞掉，
+    // 真实语料 `SIF FLAG:甲斐性無,`）。只在表达式已解析完、逗号是**最后 token** 时容忍——
+    // `A, B`（逗号后还有内容）引擎报"引数が多すぎます"，这里照旧 opaque 不猜。
+    while (p.current().kind === 'comma') p.consumeComma();
     if (!p.atEnd()) {
       const t = p.current();
       throw new ExprSyntaxError(describeUnexpectedToken(t), 'syntax', t.pos);
