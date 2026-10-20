@@ -70,6 +70,11 @@ struct WriteDomainState {
     /// 判定结果与"每次写都重新 canonicalize 一遍根"逐字相同（含根解析失败的错误文案），
     /// 省掉的只是重复的系统调用与两份 Vec 克隆。被任何根变更点整体清空。
     canon_roots: Mutex<HashMap<PathBuf, PathBuf>>,
+    /// **备忘录代际**（短锁版专用）：`invalidate_canon_roots` 先抬代际再清表。
+    /// 短锁版在 `is_dir` / `canonicalize_deep` 期间不持锁，若只靠"清表"，
+    /// 在途的旧计算会在清表后把陈旧根重新插回去（等于越过了那次变更）。
+    /// 命中与写入各复核一次代际：代际变了就不采信/不落缓存 ⇒ 陈旧条目不会复活。
+    canon_epoch: AtomicU64,
     /// **允许域变更序号**（REF-FRONT-PERF，2026-10-20）：`register_write_domain` 改 async 后，
     /// 它的"规范化 + 准入门判定"在阻塞线程池上跑，期间 `clear_write_domain`（项目关闭）或另一次
     /// 注册可能插进来——旧实现全在主线程、天然串行。取号 + 落定前复核把顺序找回来：
@@ -481,6 +486,7 @@ fn canonical_root_cached_short(
     root: &Path,
     op: &str,
 ) -> Result<PathBuf, String> {
+    let epoch = state.canon_epoch.load(Ordering::SeqCst);
     let hit = state
         .canon_roots
         .lock()
@@ -489,16 +495,21 @@ fn canonical_root_cached_short(
         .cloned();
     if let Some(hit) = hit {
         if root.is_dir() {
-            return Ok(hit);
-        }
-        if let Ok(mut memo) = state.canon_roots.lock() {
+            // 命中期间发生允许域变更 ⇒ 这次命中可能来自变更前，按未命中重算。
+            if state.canon_epoch.load(Ordering::SeqCst) == epoch {
+                return Ok(hit);
+            }
+        } else if let Ok(mut memo) = state.canon_roots.lock() {
             memo.remove(root);
         }
     }
     let canon = canonicalize_deep(root).map_err(|e| root_unresolved_message(op, root, &e.to_string()))?;
     if root.is_dir() {
         if let Ok(mut memo) = state.canon_roots.lock() {
-            memo.insert(root.to_path_buf(), canon.clone());
+            // 计算期间发生变更 ⇒ 不把变更前的旧结果插回表里（见 `invalidate_canon_roots`）。
+            if state.canon_epoch.load(Ordering::SeqCst) == epoch {
+                memo.insert(root.to_path_buf(), canon.clone());
+            }
         }
     }
     Ok(canon)
@@ -551,6 +562,8 @@ fn ensure_write_allowed(
 /// 允许域任何一处变更（项目根注册 / 清除 / 常驻根增减）⇒ 备忘录整体作废。
 /// 判定的正确性不依赖这一句（命中还要求原路径仍是目录），但它把陈旧窗口压到零。
 fn invalidate_canon_roots(state: &WriteDomainState) {
+    // 先抬代际再清表：短锁版在系统调用期间不持锁，落缓存前会复核这一代际。
+    state.canon_epoch.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut memo) = state.canon_roots.lock() {
         memo.clear();
     }
