@@ -241,6 +241,7 @@ export type {
   ScaffoldResult,
   StateLinePreset,
   StateModel,
+  VariableDictionaryStatus,
   VariableInfo,
   VariableSchema,
   VariableSource,

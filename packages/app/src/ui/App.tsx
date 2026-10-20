@@ -59,6 +59,8 @@ import {
   type DropOverlayState,
 } from './drag-drop';
 import { useNotify } from './NotificationCenter';
+// 变量名词典缺失/读失败必须让作者看见（TW-DICT-VISIBLE）：陈述来自契约、一次会话同一项目只说一遍
+import { reportDictionaryStatus, variableSchemaFor } from './dictionary-notice-ledger';
 import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
 import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
 import { installWindowCloseGuard } from './window-close-guard';
@@ -720,6 +722,13 @@ export function App(): ReactElement {
         cancelPrefetchRef.current?.();
         await ensureProjectPlugins(kernel);
         const p = await kernel.project.open(dir);
+        /**
+         * TW-DICT-VISIBLE：`project.open()` 返回即 `loadProject` 已把变量字典填好（`project.opened`
+         * 就在返回前发出）⇒ 这里是"schema 就绪"的确定时机。词典缺席 / 读失败 ⇒ 一条中文 toast，
+         * 同会话同项目同一种失败只说一遍（台账在 `dictionary-notice-ledger.ts`，文案也只住那一侧）。
+         * `dictionary` 缺省（实现没陈述）⇒ 不出声——不得把"没陈述"当失败。
+         */
+        reportDictionaryStatus(notify, p.rootDir, variableSchemaFor(kernel, p.adapterId));
         setProject(p);
         // 换项目（欢迎页首开 / 拖入新目录）：旧项目的整套 UI 态整体带走；
         // 同目录 reload 靠 keepView 保住标签，只清激活与定位（原行为）。

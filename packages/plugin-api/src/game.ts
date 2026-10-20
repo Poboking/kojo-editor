@@ -142,11 +142,41 @@ export interface VariableInfo {
   source?: VariableSource;
 }
 
+/**
+ * 变量名词典的装载陈述（`VariableSchema.dictionary` 的取值）。
+ *
+ * 「词典」= 实现用来把变量名从游戏原文翻成作者语言的那份词表（数据源与形态归各实现）。
+ * 词典缺席 / 读失败时名称回落原文是**既有口径**，但这件事过去只进日志 ⇒ 作者面完全静默：
+ * 看到一屏原文名，无从判断"这游戏没带词典"还是"编辑器不认"。本形状把"这次到底读没读到"
+ * 作为**事实**交给宿主，由宿主决定怎么上屏（一次会话同一身份只说一遍）。
+ */
+export interface VariableDictionaryStatus {
+  /** 词典是否装载成功。`false` = 名称按原文显示（作者面应当知情） */
+  readonly loaded: boolean;
+  /**
+   * 未装载的原因（`loaded: false` 时给出）：
+   * - `'missing'` = 文件不在位（游戏版本没带 / 汉化包没装）；
+   * - `'read-error'` = 在位但读不出来（权限 / 编码 / 坏文件）。
+   */
+  readonly reason?: 'missing' | 'read-error';
+  /** 词典文件绝对路径（只进技术悬停；可缺省） */
+  readonly path?: string;
+}
+
 /** 变量字典（口上相关变量、CFLAG 位图、好感变量等；版本化） */
 export interface VariableSchema {
   readonly version: string;
   /** 游戏中该 schema 对应的版本标记（如 '4.980'） */
   readonly gameVersion?: string;
+  /**
+   * 变量名词典的装载陈述（**可选、additive**）。
+   *
+   * **缺省 = 实现没陈述**：消费方**不得**把它当成"0 条 / 装载成功 / 装载失败"任何一种
+   * ——既不许据此上屏"词典缺失"，也不许当成"词典已装"。只有显式 `loaded: false` 才是
+   * 可上屏的事实；`loaded: true` 只表示装载成功（条数不进契约）。
+   * 旧实现零改动仍通过编译、行为与今天逐字相同。
+   */
+  readonly dictionary?: VariableDictionaryStatus;
   /**
    * 字典**实际读过的输入**（如游戏 CSV 名称表）的内容摘要。
    *

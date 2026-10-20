@@ -422,3 +422,117 @@ describe('loadEratwVariableSchema：`CSV/*.als` 进字典（P-10③ 具名核对
     expect(base.inputDigest).not.toBe(edited.inputDigest);
   });
 });
+
+/**
+ * TW-DICT-VISIBLE：词典装载的**事实陈述**（契约 `VariableSchema.dictionary`）。
+ *
+ * 钉四件事：在位 ⇒ `loaded: true`；缺文件 ⇒ `loaded: false, reason: 'missing'`；
+ * 读不动 ⇒ `reason: 'read-error'`；不传 `chsMapPath` ⇒ 键不存在（实现没陈述），
+ * 且缺词典这条路的可观察输出与今天逐字相同（名称回落口径零回退）。
+ */
+describe('词典装载陈述（VariableSchema.dictionary，TW-DICT-VISIBLE）', () => {
+  const silentLog: Logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+
+  const CHF_PATH = '/game/plugins/tw_csv_chs.xml';
+  const XML = '<map><p><k>信頼度</k><v>信赖度</v></p></map>';
+
+  /**
+   * 严格读盘：表里没有的文件**抛错**（照平台桥原文形态），不给''兜底——
+   * 空串会把"缺文件"伪装成"读到了空词典"，正是本批要区分的那一格。
+   */
+  function dictIo(files: Record<string, string>, failure?: Error): FileIO {
+    return {
+      listDir: async () => [
+        { name: 'CFLAG.csv', path: '/game/CSV/CFLAG.csv', isDirectory: false },
+      ],
+      readText: async (path: string) => {
+        if (failure !== undefined) throw failure;
+        const text = files[path] ?? files[path.replace('/game/CSV/', '')];
+        if (text === undefined) {
+          throw new Error(`read ${path}: 系统找不到指定的文件。 (os error 2)`);
+        }
+        return { path, text };
+      },
+      readTexts: async (paths: readonly string[]) =>
+        paths.map((p) => ({ path: p, text: files[p] ?? files[p.replace('/game/CSV/', '')] ?? '' })),
+    } as unknown as FileIO;
+  }
+
+  const load = (files: Record<string, string>, failure?: Error, withChs = true) =>
+    loadEratwVariableSchema({
+      io: dictIo(files, failure),
+      csvDir: '/game/CSV',
+      ...(withChs ? { chsMapPath: CHF_PATH } : {}),
+      log: silentLog,
+    });
+
+  it('词典在位 ⇒ loaded: true（带路径、不带原因）', async () => {
+    const schema = await load({
+      'CFLAG.csv': '4,信頼度\n',
+      [CHF_PATH]: XML,
+    });
+    expect(schema.dictionary).toEqual({ loaded: true, path: CHF_PATH });
+    // 事实与既有效果同源：描述轴确实拿到了中文（不是"陈述成功、行为没变"）
+    expect(schema.lookup('CFLAG', 4)?.description).toBe('信赖度');
+  });
+
+  it('缺文件 ⇒ loaded: false + reason: \'missing\'（且既有 warn 照旧打）', async () => {
+    const warnings: string[] = [];
+    const schema = await loadEratwVariableSchema({
+      io: dictIo({ 'CFLAG.csv': '4,信頼度\n' }),
+      csvDir: '/game/CSV',
+      chsMapPath: CHF_PATH,
+      log: { ...silentLog, warn: (m: string) => warnings.push(m) },
+    });
+    expect(schema.dictionary).toEqual({ loaded: false, reason: 'missing', path: CHF_PATH });
+    // 名称回落原文（既有口径），但这件事不再只住日志
+    expect(schema.lookup('CFLAG', 4)?.description).toBe('信頼度');
+    expect(warnings.some((w) => w.includes('变量名汉化词典读取失败'))).toBe(true);
+  });
+
+  it('读不动（非"不存在"）⇒ reason: \'read-error\'（不猜成没装）', async () => {
+    const schema = await load(
+      { 'CFLAG.csv': '4,信頼度\n' },
+      new Error(`read ${CHF_PATH}: 拒绝访问。 (os error 5)`),
+    );
+    expect(schema.dictionary).toEqual({ loaded: false, reason: 'read-error', path: CHF_PATH });
+    expect(schema.lookup('CFLAG', 4)?.description).toBe('信頼度');
+  });
+
+  it('不传 chsMapPath ⇒ 不陈述（键不存在 ≠ 0 条 ≠ 失败）', async () => {
+    const schema = await load({ 'CFLAG.csv': '4,信頼度\n' }, undefined, false);
+    expect('dictionary' in schema).toBe(false);
+    expect(schema.dictionary).toBeUndefined();
+  });
+
+  it('零回退：缺词典这条路的输出除新键外与"没传词典"逐字相同（含 inputDigest）', async () => {
+    const files = { 'CFLAG.csv': '2,好感度\n4,信頼度\n' };
+    const baseline = await load(files, undefined, false);
+    const missing = await load(files);
+
+    // 键集合只多 `dictionary` 一个
+    expect(Object.keys(missing).filter((k) => k !== 'dictionary').sort()).toEqual(
+      Object.keys(baseline).sort(),
+    );
+    // 摘要不因"读失败"多算素材（失败的文件本来就没进 digest）
+    expect(missing.inputDigest).toBe(baseline.inputDigest);
+    expect(missing.version).toBe(baseline.version);
+    // 三条既有消费轴的读数逐字相同
+    for (const [family, index] of [
+      ['CFLAG', 2],
+      ['CFLAG', 4],
+      ['CFLAG', 999],
+      ['CFLAG', '信頼度'],
+    ] as const) {
+      expect(missing.lookup(family, index)).toEqual(baseline.lookup(family, index));
+    }
+    expect(missing.names!('CFLAG')).toEqual(baseline.names!('CFLAG'));
+    expect(missing.slotCn!('CFLAG', '信頼度')).toBe(baseline.slotCn!('CFLAG', '信頼度'));
+    expect(missing.slotCn!('CFLAG', '信頼度')).toBeUndefined();
+  });
+});

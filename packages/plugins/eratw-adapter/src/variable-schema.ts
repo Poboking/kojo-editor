@@ -55,7 +55,14 @@
  */
 
 import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
-import type { FileIO, Logger, VariableInfo, VariableSchema, VariableSource } from '@kojo/plugin-api';
+import type {
+  FileIO,
+  Logger,
+  VariableDictionaryStatus,
+  VariableInfo,
+  VariableSchema,
+  VariableSource,
+} from '@kojo/plugin-api';
 
 import { BITS_BY_FAMILY_INDEX } from './bit-tables';
 
@@ -589,6 +596,21 @@ function withBits(info: VariableInfo): VariableInfo {
 }
 
 /**
+ * 词典读失败归类的**唯一一处**（TW-DICT-VISIBLE）：`'missing'` = 文件不在位，
+ * `'read-error'` = 在位但读不动。
+ *
+ * 判据 = 平台桥在异常串里带出的"文件不存在"痕迹。Rust 侧原样转发 `std::io::Error` 的
+ * Display（`read {path}: {e}`），各平台文案不同（Windows `系统找不到指定的文件。 (os error 2)`、
+ * Unix `No such file or directory (os error 2)`），故只认跨平台稳定的片段。
+ * **认不出一律 `'read-error'`**：宁可说"读失败"，也不猜"没装"（猜错会让作者去装一份
+ * 其实已经存在的词典）。不为此新开一次 `stat` —— 事实只取这条既有读盘路径。
+ */
+function classifyDictionaryReadFailure(err: unknown): 'missing' | 'read-error' {
+  const text = String(err).toLowerCase();
+  return /(os error 2\b|enoent|no such file|找不到)/.test(text) ? 'missing' : 'read-error';
+}
+
+/**
  * 加载 eraTW 变量字典：扫描 `CSV/` 根目录的全部 `*.csv` 名称表**与** `*.als` 追加名表
  * （文件名去掉扩展名后大写即变量名；子目录不进入——Chara 子目录是角色数据，不是变量表），
  * 再把市场字典包目录（`marketAppendDirs`，KM-15）里的名表**同轮并入**。
@@ -770,13 +792,29 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
 
   // 汉化词典（JP→CN）：叠加在名称表之上。缺表 / 读失败 = 空词典（名称回落原文），**不抛**。
   const jpToCn = new Map<string, string>();
+  /**
+   * 词典装载的**事实陈述**（TW-DICT-VISIBLE；契约 `VariableSchema.dictionary`）。
+   *
+   * 取值只在下面这一处既有读盘点取（**不新开读盘**）：读到 = `loaded: true`；
+   * 读失败 = `loaded: false` + 归类（文件不在位 / 在位但读不动）。未传 `chsMapPath`
+   * ⇒ 不陈述（`undefined`：消费方不得当成 0 条或失败）。返回值按"陈述了才带键"铺设
+   * ⇒ 不走这条路的调用方（既有测试 / 无词典装配态）拿到的 schema 逐字不变。
+   */
+  let dictionaryStatus: VariableDictionaryStatus | undefined;
   if (chsMapPath !== undefined) {
     try {
       const tf = await io.readText(chsMapPath);
       for (const [k, v] of parseChsMap(tf.text)) jpToCn.set(k, v);
       digestParts.push(stableHash(`${chsMapPath}\u0000${tf.text}`));
+      dictionaryStatus = { loaded: true, path: chsMapPath };
       log.info(`变量名汉化词典：${jpToCn.size} 条（${chsMapPath}）`);
     } catch (err) {
+      // 既有 warn 一字不改（机器面读数不动）；事实同时进契约陈述，供宿主上屏
+      dictionaryStatus = {
+        loaded: false,
+        reason: classifyDictionaryReadFailure(err),
+        path: chsMapPath,
+      };
       log.warn(`变量名汉化词典读取失败（跳过，名称回落原文）：${chsMapPath} — ${String(err)}`);
     }
   }
@@ -796,6 +834,8 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
   return {
     version: '1',
     inputDigest,
+    // 只在陈述了事实时才带这个键（未传 `chsMapPath` ⇒ 键不存在 ⇒ 既有消费方逐字不变）
+    ...(dictionaryStatus !== undefined ? { dictionary: dictionaryStatus } : {}),
     lookup(variableName: string, index?: number | string): VariableInfo | undefined {
       const key = variableName.toUpperCase();
       const table = tables.get(key);
