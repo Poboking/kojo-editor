@@ -259,6 +259,11 @@ function rawSymbol(
       const head = (node.lines[0] ?? '').trim();
       return head.length === 0 ? null : { name: clip(head, NAME_MAX), kind: 'function', ...rangeOf(node.loc) };
     }
+    // `开关:` 是唯一的「带头声明的块」：大纲一枚叶子（条目不进大纲，同 `别名` 右值口径），
+    // 折叠真源 `kojoFoldingRanges` 摊平本树 ⇒ 登记一次，大纲/吸顶/面包屑/折叠同值。
+    // `loc` 已含体后尾随空行，与 CST 折叠的伸行口径逐行对齐（A/B 闸的「仅 CST」两条）。
+    case 'switchBlock':
+      return { name: '开关', kind: 'block', ...rangeOf(node.loc) };
     case 'aliasDecl':
       return { name: joinParts(['别名', node.name]), kind: 'declaration', ...rangeOf(node.loc) };
     default:

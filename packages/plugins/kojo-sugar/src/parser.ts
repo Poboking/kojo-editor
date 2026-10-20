@@ -34,6 +34,7 @@ import type {
   SugarNode,
   SugarSourceSpan,
   SugarTopLevelNode,
+  SwitchBlock,
   TextLine,
   TimingBlock,
   TimingNamedParam,
@@ -316,9 +317,11 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       // B4-fp：记下 `函数前缀:` 那一行的源位置（诊断定位用；additive）——
       // 解析器手边就有 `line`，无需另存；未写该行则字段缺省。
       if (cls.key === 'head.functionPrefix') frontMatter.functionPrefixLoc = posOf(line);
-      // `开关:` 后的缩进块
+      // `开关:` 后的缩进块。块的结构位也进 `topLevel`（大纲/折叠真源），条目本体仍只进
+      // `frontMatter.switches`（发射读那里）——两处不是同一件事，不造第二份条目真源。
       if (cls.key === 'head.switch') {
-        readSwitchItems(cursor, line.indent, frontMatter);
+        const block = readSwitchItems(cursor, line.indent, frontMatter, posOf(line));
+        if (block !== null) topLevel.push(block);
       }
       continue;
     }
@@ -474,8 +477,19 @@ function applyHeadDecl(fm: SugarFrontMatter, key: string, value: string): void {
   }
 }
 
-/** `开关:` 后的缩进条目（`眠姦口上有: 是`） */
-function readSwitchItems(cursor: Cursor, baseIndent: number, fm: SugarFrontMatter): void {
+/**
+ * `开关:` 后的缩进条目（`眠姦口上有: 是`）；顺带交出块的结构区间（无条目 ⇒ `null`）。
+ *
+ * 止行 = 本读法**最后消费的那一行**（含体后尾随空行）：CST 的 `switch_body` 与折叠的
+ * `extendFoldOverTrailingBlanks` 就是这么伸的，两侧同值才不会在 A/B 闸里 44 vs 45 漂。
+ */
+function readSwitchItems(
+  cursor: Cursor,
+  baseIndent: number,
+  fm: SugarFrontMatter,
+  head: { line: number; column: number },
+): SwitchBlock | null {
+  const first = fm.switches.length;
   while (!cursor.done) {
     const line = cursor.peek()!;
     const content = contentOf(line);
@@ -483,7 +497,7 @@ function readSwitchItems(cursor: Cursor, baseIndent: number, fm: SugarFrontMatte
       cursor.next();
       continue;
     }
-    if (line.indent <= baseIndent) return;
+    if (line.indent <= baseIndent) break;
     const m = /^([^:：]+)\s*[:：]\s*(.*)$/.exec(content);
     if (!m) {
       cursor.next();
@@ -496,6 +510,12 @@ function readSwitchItems(cursor: Cursor, baseIndent: number, fm: SugarFrontMatte
     });
     cursor.next();
   }
+  if (fm.switches.length === first) return null;
+  const last = cursor.lines[cursor.index - 1];
+  return {
+    kind: 'switchBlock',
+    loc: { start: head, end: { line: last?.endLine ?? head.line, column: 1 } },
+  };
 }
 
 /** 构建 `AliasDecl`（含三约束校验） */

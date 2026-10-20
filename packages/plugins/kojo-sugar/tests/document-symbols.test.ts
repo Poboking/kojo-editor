@@ -100,6 +100,26 @@ describe('kojo-sugar · 文档大纲（documentSymbol）', () => {
     expect(timing!.children).toBeUndefined();
   });
 
+  it('`开关:` 头声明进大纲（块结构位；条目本体仍只住 frontMatter）', () => {
+    const src = [
+      '角色: 12', // 1
+      '开关:', // 2
+      '    眠姦口上有: 是', // 3
+      '    别的一个: 否', // 4
+      '时机 指令 310：', // 5
+      '    「嗯。」', // 6
+      '',
+    ].join('\n');
+    const out = symbols(src);
+    expect(out.map(shape)).toEqual([
+      ['开关', 2, 4],
+      ['时机 指令 310', 5, 7],
+    ]);
+    // 叶子：条目不进大纲（与 `别名` 右值同一口径，不做第二份条目真源）
+    expect(out[0]!.kind).toBe('block');
+    expect(out[0]!.children).toBeUndefined();
+  });
+
   it('别名声明 / 用户函数 / 原生直通块都收（顶层结构一个不漏）', () => {
     const src = [
       '角色: 12',

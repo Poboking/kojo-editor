@@ -476,6 +476,7 @@ export type {
   CommentLine,
   SugarStatement,
   SugarTopLevelNode,
+  SwitchBlock,
   SugarTranspileOptions,
   SugarTranspileResult,
   SugarTranspileService,

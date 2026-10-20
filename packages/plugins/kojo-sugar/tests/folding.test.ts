@@ -54,6 +54,13 @@ describe('kojo-sugar · 折叠区间（foldingRange）', () => {
     for (const r of list) expect(r.endLine).toBeGreaterThan(r.startLine);
   });
 
+  it('`开关:` 头声明也成区间（与 CST `switch_body` 同一块，止行含尾随空行）', () => {
+    const src = ['角色: 12', '开关:', '    眠姦口上有: 是', '    别的一个: 否', '', '时机 指令 310：', '    「嗯。」', ''].join('\n');
+    const list = ranges(src);
+    expect(has(list, 2, 5)).toBe(true); // 体后那条空行被 CST 折叠伸进来，真源同值
+    expect(has(list, 6, 8)).toBe(true);
+  });
+
   it('分支：规则池的池与每条分支各成区间（登记进大纲即登记进折叠——同一棵树）', () => {
     const src = [
       '角色: 12', // 1

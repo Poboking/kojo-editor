@@ -824,6 +824,19 @@ export interface ConstDecl extends SugarNodeBase {
   value: string;
 }
 
+/**
+ * `开关:` 头部声明 + 其后的缩进条目块（`眠姦口上有: 是` …）。
+ *
+ * 结构上这是唯一的「带头声明的块」：CST（`grammar.js` 的 `_switch_open` / `switch_body`）
+ * 与 `queries/folds.scm` 一直按块给它区间，而 AST 此前只把条目收进
+ * `frontMatter.switches` 就 `continue` 了 ⇒ 大纲/折叠真源里没有它（A/B 闸的「仅 CST」清单）。
+ * 本节点只补**结构位**（块头行 → 体末，含体后尾随空行）；条目本体仍只在
+ * `frontMatter.switches` 一份（发射读那里），不造第二份条目真源。
+ */
+export interface SwitchBlock extends SugarNodeBase {
+  kind: 'switchBlock';
+}
+
 /* ============================== SugarNode 联合 ============================== */
 
 /**
@@ -872,7 +885,14 @@ export type SugarNode = SugarStatement | SugarExprNode;
  * 文档级节点（只出现在文件顶层，不进块体）：
  * `别名` 声明 / 时机块 / 自定指令块。
  */
-export type SugarTopLevelNode = AliasDecl | ConstDecl | TimingBlock | CustomCommandBlock | FunctionBlock | CommentLine;
+export type SugarTopLevelNode =
+  | AliasDecl
+  | ConstDecl
+  | SwitchBlock
+  | TimingBlock
+  | CustomCommandBlock
+  | FunctionBlock
+  | CommentLine;
 
 /* ============================== 文档与头声明 ============================== */
 
