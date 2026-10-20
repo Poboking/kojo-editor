@@ -193,8 +193,9 @@ describe('isDataReference · 形状判据（只看形状，不看名字）', () 
 const STILL_NULL: readonly string[] = [
   '「服装 = 裸」', // 台词行：引号内的 `=` 不是运算符
   '"服装 = 裸"',
-  '{', // 装饰花括号：语义未取证，留给下一批（见交付回执）
-  '}',
+  // `{` / `}` **整行**已由 TAIL-1 交付给 control.ts（`多行语句开始` / `多行语句结束`，见
+  // `native-display-increment-brace.test.ts`）；这里只剩"括号不是整行"的形状仍是真未知：
+  '{ 1 }',
   '{LOCAL = 1}',
   'CFLAG:100', // 裸引用：没有顶层 `=` ⇒ 不是赋值
   '残りムシ数, 3',

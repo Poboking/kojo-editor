@@ -11,6 +11,8 @@
  * - 数据表：`PRINTDATA[…]` / `DATAFORM` / `DATA` / `ENDDATA` / `STRDATA`（开词族同源，`数据表 原形 …`）；
  * - 数据表**分组**记号 `DATALIST` / `ENDLIST`（糖层无写形、批 N 刻意不投影）⇒ 中性显示形
  *   `分组 原形 <记号> [原文]：` / `分组结束 原形 <记号> [原文]`（与 TRY 系、停用区同一档先例）；
+ * - 多行语句括号 `{` / `}`（整行独占；引擎的行連結包围）⇒ 中性显示形
+ *   `多行语句开始` / `多行语句结束`（判据与语料普查见常量处注释）；
  * - 预处理行：`#DIM` / `#DIMS` / `#GLOBAL` / `#LOCALSIZE` / `#LOCALSSIZE` / `#FUNCTION` /
  *   `#FUNCTIONS` / `#SFUNCTION` / `#XFUNCTION` / `#TESTMEMORY` 等。
  *
@@ -148,6 +150,28 @@ const TRY_NEUTRAL_OPEN: ReadonlySet<string> = new Set([...TRY_CATCH_OPEN, ...TRY
 const GROUP_W = '分组';
 const GROUP_END_W = `${GROUP_W}${BLOCK_END_SUFFIX}`;
 const DATA_GROUPING_NEUTRAL: ReadonlySet<string> = new Set(['DATALIST', 'ENDLIST', 'STRDATA']);
+
+/* ---------------- 多行语句括号（`{` / `}` 独占一行） ---------------- */
+
+/**
+ * `{` / `}` 独占一行 = **一条语句跨多行书写的包围括号**（引擎的行連結装置），
+ * 不是图形原语、也不是代码块：语料普查（SANYOUSEI 盘，2026-10-20）共 **789 对**，
+ * 开括号下一行的首个记号分布是 `CALLF` 214 / `LOCALS` 135 / `CALL` 97 / `#DIMS` 61 /
+ * `台词` 54 / `IF` 49 / `RETURNF` 45 / `ELSEIF` 25 / `#DIM` 16 / `CASE` 11 …
+ * ——调用实参、赋值右值、预处理声明、条件式**都能被它包住**，共同点只有"这是一条
+ * 被拆成多行写的语句"。因此词形只陈述**类**（`多行语句开始` / `多行语句结束`），
+ * 不替读者判断括号里是哪一种语句；括号**内部**的续行仍由各自的语句层认领/兜底。
+ *
+ * 为什么**不进 `KEYWORDS`**（与 `试探` / `分组` 逐字同一条判据）：糖层没有这层括号的写形，
+ * 登记 = 承诺写得回去；显示形靠"整行就是那一个括号记号"触发，与词表无耦合。
+ * 行尾 `;` 注释沿用本文件统一的 `splitComment` 通路原样缀回。
+ */
+const MULTILINE_START_W = '多行语句开始';
+const MULTILINE_END_W = '多行语句结束';
+const BRACE_NEUTRAL: ReadonlyMap<string, string> = new Map([
+  ['{', MULTILINE_START_W],
+  ['}', MULTILINE_END_W],
+]);
 
 /* --------------------------- 表达式侧（条件形） --------------------------- */
 
@@ -465,6 +489,10 @@ export function renderControlLine(input: NativeDisplayInput): string | null {
 function renderBody(body: string, input: NativeDisplayInput): string | null {
   if (body.startsWith('#')) return renderPreprocessor(body);
   if (body.startsWith('$')) return renderLabel(body);
+  // 多行语句括号（`{` / `}` 整行）：已知结构、糖层无写形 ⇒ 中性显示形（判据见常量处）。
+  // 位置在 `HEAD_RE` 之前：两枚不是标识符，进不了后面任何一张表。
+  const brace = BRACE_NEUTRAL.get(body);
+  if (brace !== undefined) return brace;
   const m = HEAD_RE.exec(body);
   if (!m) return null;
   const kind = (m[1] ?? '').toUpperCase();

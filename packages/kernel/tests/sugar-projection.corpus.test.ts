@@ -111,13 +111,15 @@ const DATA_ENTRY_RE = /^\s*(DATAFORM|DATA)\b/;
  */
 const FALLBACK_PREFIX = '未识别语句 · ';
 /**
- * 兜底行总预算：挂盘实测 **3,744**；×1.1 = 4,118。
+ * 兜底行总预算：挂盘实测 **2,055**；×1.1 = 2,260（2,260.5 向下取整）。
  * （历史读数：修前 77,329——注释 20,645 / SKIP 区 37,496 / PRINT 族 9,583 全部落兜底；
  *  `@` 函数头与 `#` 声明补上中性显示形后 13,770；`DATALIST`/`ENDLIST`/`STRDATA` 中性形 +
- *  TRY 单行档语句形 9,046；赋值/表达式行与原语补登（`7202f02`）再砍到 **3,744**。）
+ *  TRY 单行档语句形 9,046；赋值/表达式行与原语补登（`7202f02`）再砍到 **3,744**；
+ *  裸自增/自减行（**1,371** 行：`ABL:親密 ++` / `CFLAG:1:1009 ++` / `Snum++;2` 一族）+
+ *  `{}` 多行语句括号（**318** 行 = 159 对）⇒ **2,055**。）
  * 只给规则微调留 ≤10% 余量；超过就是"正常 ERB 又被标成错误"的回归。
  */
-const FALLBACK_LINE_BUDGET = 4_118;
+const FALLBACK_LINE_BUDGET = 2_260;
 
 /* ---------------- 兜底行的**成因归因**（工包 D：总量之外还要问"到底是什么"） ---------------- */
 
@@ -162,9 +164,10 @@ const FALLBACK_ATTRIBUTION_KEYS: readonly FallbackAttributionKey[] = [
  * 其余四格的首轮上界按池份额给（0.5 / 0.75 × 预算）过一轮；**2026-10-20 挂盘跑出分格实测后
  * 逐字下调**（预算只降不升）：`tryOther` 0 / `dataGrouping` 0（两族的显示形本轮落地 ⇒ 结构性归零）、
  * `controlFlow` 实测 **20**（全是 `FOR` 的异形写法：`FOR 種類,0,MAXPANTS` / `FOR LOCAL, 4`）、
- * `other` 三轮实测 9,026 → **3,724**（赋值行收掉之后剩下的头名 = `CFLAG` 528 / `EXP` 278 /
- * `TIMES` 240 / `LOCALS` 200 / `{` 159 / `}` 159 / `GETMILLISECOND` 148 / `TCVAR` 126；
- * 样例已指到下一刀的形状：`ABL:親密 ++` / `CFLAG:1:1009 ++` 这类**后缀自增/自减行**）。
+ * `other` 实测 9,026 → 3,724（赋值行收掉之后）→ **2,035**（裸自增/自减 **1,371** +
+ * `{}` 多行语句括号 **318** 两族落地后；剩下的头名 = `TIMES` 240 / `LOCALS` 200 /
+ * `GETMILLISECOND` 148 / `DEBUGPRINTFORML` 75 / `TWAIT` 74 / `SETFONT` 72 /
+ * `CFLAG` 64（`|=` 位运算赋值）/ `REUSELASTLINE` 59 / `RESULTS` 55）。
  */
 const FALLBACK_CLASS_BUDGET: Readonly<Record<FallbackAttributionKey, number>> = {
   tryNine: 0, // 结构性：本批交付中性显示形
@@ -172,7 +175,7 @@ const FALLBACK_CLASS_BUDGET: Readonly<Record<FallbackAttributionKey, number>> = 
   dataGrouping: 0, // 结构性：分组记号中性形本轮落地，挂盘实测 0
   printVariant: 0, // 结构性：与 `print` 类同一判据
   controlFlow: 22, // = 实测 20 × 1.1（`FOR` 异形）
-  other: 4_096, // = 实测 3,724 × 1.1（下一刀砍"后缀自增行 / 裸引用行 / `{}` 块 / 图形原语长尾"）
+  other: 2_238, // = 实测 2,035 × 1.1（下一刀：`TIMES` 表达式语句 / `LOCALS '=` / 位运算赋值 `|=`）
 };
 
 /**

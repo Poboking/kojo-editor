@@ -7,6 +7,10 @@
  *   是中文形**（`RESULT` / `LOCAL` 这类语言层槽位给中文显示名）；左值既不是引擎族头、也不是
  *   语言层槽位，而**形状**仍是一个引用（`服装 = 裸` / `順位 -= 1` / `CFLAG:100(%A(B)%) = 1`）时
  *   ⇒ **载荷逐字带走，只加 `赋值` 词头**（判据与"为什么不翻"见 `isDataReference` 头注）；
+ * - 裸自增 / 自减：`<引用> ++` / `<引用>--`（后缀）与 `++<引用>` / `-- <引用>`（前缀）——
+ *   `自增 <目标>` / `自减 <目标>`；目标与赋值左值**同一把尺子**（`renderTarget` 的族头别名 /
+ *   语言层槽位，查不到时 `isDataReference` 判形状、载荷逐字）。后缀形是语料大盘
+ *   （`ABL:親密 ++` / `CFLAG:1:1009 ++`，实测 1,371 行），前缀形盘上 0 例、防御性认领；
  * - 调用：`CALL` / `CALLL` / `CALLFORM` / `CALLF` / `TRYCALL` / `TRYCALLFORM` / `TRYJUMP` /
  *   `TRYGOTO` / `TRYGOTOFORM`（后两枚 = `sugar-ident` 的 `TRY_SINGLE_LINE` 单行档，
  *   **不在** ZH-C 认领的那九枚开块词里）；
@@ -253,6 +257,67 @@ function renderAssignment(code: string, lookup: NativeDisplayLookup | undefined,
   return `赋值 ${lhsRaw} ${op} ${rhsOut}`; // 查不到别名也必须给中文形
 }
 
+/* ==================== 裸自增 / 自减 ==================== */
+
+/**
+ * 后缀 / 前缀两形。**只在整行就是一个引用加运算符时认领**（两侧都不许有别的记号）：
+ * - 后缀：`<引用> ++` / `<引用>++`（空白可有可无，`CFLAG:1:1007  ++` 盘上真形）；
+ * - 前缀：`++<引用>` / `--<引用>`（盘上 0 例；`--` 前缀实测同样 0——两形都按同一判据防御性认领）。
+ *
+ * 为什么这样切不会误判"非自增的裸引用行"：`++`/`--` 必须是整行的**最后**一段（后缀）或
+ * **最前**一段（前缀），中间那串再交给 `renderTarget` / `isDataReference` 判"是不是一个引用"。
+ * 裸引用（`CFLAG:1:1009` / `ABL:親密` / `Snum`）不匹配任何一形 ⇒ `null`；`A + B ++` 的
+ * 目标不是单个引用 ⇒ `null`；`X = Y++` 先被赋值档收走（右值逐字保留 `Y++`），不在这里被拆。
+ */
+const POSTFIX_INC_RE = /^(.+?)\s*(\+\+|--)$/;
+const PREFIX_INC_RE = /^(\+\+|--)\s*(\S[\s\S]*)$/;
+
+/** `++` → `自增`，`--` → `自减`（只翻**运算符这一层**；目标名一个字符都不猜，见下） */
+const INC_VERBS: Readonly<Record<string, string>> = { '++': '自增', '--': '自减' };
+
+/**
+ * 裸自增 / 自减行 ⇒ `自增 <目标>` / `自减 <目标>`。
+ *
+ * ## 为什么不写成 `赋值 <目标> += 1`
+ * `++` / `--` 是**单目自增运算符**，与 `+= 1` 同值但不同写法：显示形若改写成赋值，
+ * 就把"这一行是表达式语句"读成了"这一行是赋值语句"——两种写法在 ERB 里是不同的语句类。
+ * 词头只描述运算符本身（`自增` / `自减`），不替读者判断这个变量"是什么"。
+ *
+ * ## 目标怎么显示
+ * 与赋值左值**同一把尺子**（本文件只有一份 `renderTarget`）：
+ * - 引擎族头 / 语言层槽位 ⇒ 中文别名或中文槽位名（`LOCAL:2 ++` → `自增 局部:2`）；
+ * - 作者自造名 / 宏 / 带函数调用索引的引用 ⇒ 形状判据（`isDataReference`）通过就**逐字**带走
+ *   （`Snum++` → `自增 Snum`；`残りムシ数 --` → `自减 残りムシ数`）；
+ * - 形状都不是一个引用 ⇒ `null`（`A + B ++` 不归本档）。
+ *
+ * ## 可逆性（"不丢信息"的落点）
+ * 显示形携带**目标全文 + 运算符方向**；读回写形 `<目标> ++|--` 是逐字重建的。
+ * 前缀 / 后缀在**语句位置**上语义等价（值不被使用），故不强留前后位置记号——
+ * 这一点写死在注释里，免得以后有人把它当成漏掉的信息。
+ *
+ * 行尾注释由入口的 `splitTrailingComment` 统一剥离、原样缀回（`Snum++;2` → `自增 Snum ;2`）。
+ */
+function renderIncrement(code: string, lookup: NativeDisplayLookup | undefined): string | null {
+  const m = POSTFIX_INC_RE.exec(code);
+  let targetRaw: string;
+  let op: string;
+  if (m !== null) {
+    targetRaw = m[1]!.trim();
+    op = m[2]!;
+  } else {
+    const p = PREFIX_INC_RE.exec(code);
+    if (p === null) return null;
+    op = p[1]!;
+    targetRaw = p[2]!.trim();
+  }
+  if (targetRaw.length === 0) return null;
+
+  const rendered = renderTarget(targetRaw, lookup);
+  if (rendered === null && !isDataReference(targetRaw)) return null;
+  const target = rendered === null ? targetRaw : rendered.text;
+  return `${INC_VERBS[op]!} ${target}`;
+}
+
 /* ==================== 调用 ==================== */
 
 const CALL_RE = /^(?:([A-Z][A-Z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Z][A-Z0-9_]*))$/;
@@ -480,7 +545,11 @@ export const renderStatementLine: NativeDisplayPass = (input: NativeDisplayInput
     renderPrint(code) ??
     renderButton(code) ??
     renderLayout(code) ??
-    (PRINT_LED_RE.test(code) ? null : renderAssignment(code, input.lookup, 0));
+    // `PRINT` 打头的行不许进这两档：表外打印变体由投影的台词形收走，
+    // 这里只防"行里恰好以 `++` 结尾"的漏网形状（`PRINTFORM ++`）被读成自增。
+    (PRINT_LED_RE.test(code)
+      ? null
+      : renderAssignment(code, input.lookup, 0) ?? renderIncrement(code, input.lookup));
   if (rendered === null) return null;
   const line = comment.length > 0 ? `${rendered} ${comment}` : rendered;
   return line === input.content ? null : line; // 红线自证：原样返回一律视为失败
