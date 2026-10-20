@@ -28,7 +28,7 @@ import {
   type KojoStructureReply,
   type KojoStructureSyntaxFault,
 } from '../src/monaco/tree-sitter/types';
-import { disposeKojoStructureOverlay, installKojoStructureOverlay, kojoStructureOverlayState } from '../src/monaco/tree-sitter/providers';
+import { disposeStructureOverlay, installStructureOverlay, structureOverlayState } from '../src/monaco/tree-sitter/providers';
 import type * as Monaco from '../src/monaco/entry';
 
 /**
@@ -660,7 +660,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
 
 describe('偏好为关 ⇒ 结构诊断这一层不存在', () => {
   afterEach(() => {
-    disposeKojoStructureOverlay();
+    disposeStructureOverlay();
     delete (globalThis as { window?: unknown }).window;
   });
 
@@ -680,8 +680,8 @@ describe('偏好为关 ⇒ 结构诊断这一层不存在', () => {
 
   it('关着（node 环境无 window ⇒ 默认关）：装配点零调用 ⇒ 上屏器也没被创建', () => {
     const { monaco, calls } = countingMonaco();
-    installKojoStructureOverlay(monaco);
-    expect(kojoStructureOverlayState()).toEqual({ installed: true, active: false, client: null });
+    installStructureOverlay(monaco);
+    expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
     expect(calls).toEqual([]);
   });
 
@@ -759,6 +759,21 @@ vi.mock('../src/monaco/tree-sitter/client', async () => {
   return { StructureClient: StubStructureClient, STRUCTURE_REQUEST_TIMEOUT_MS: 4_000 };
 });
 
+// A4：语言运行时由 descriptor 交回；桩掉这一格，pref-on 用例不去装配真 `?worker` / `?url`
+vi.mock('../src/monaco/tree-sitter/kojo-runtime', () => ({
+  KOJO_STRUCTURE_RUNTIME: {
+    runtimeWasmUrl: 'runtime.wasm（桩）',
+    grammarWasmUrl: 'kojo.wasm（桩）',
+    createWorker: () => {
+      throw new Error('桩 client 不建线程');
+    },
+    semantic: {
+      legend: { tokenTypes: [], tokenModifiers: [] },
+      encode: () => ({ data: new Uint32Array(0), droppedRows: 0, droppedEmpty: 0, droppedWide: 0, droppedOverlaps: 0 }),
+    },
+  },
+}));
+
 describe('叠层开着时的接线：到货会上屏，坏了会清零、只说一次、不抛回编辑链', () => {
   let warn: ReturnType<typeof vi.spyOn>;
 
@@ -787,7 +802,7 @@ describe('叠层开着时的接线：到货会上屏，坏了会清零、只说�
   });
 
   afterEach(() => {
-    disposeKojoStructureOverlay();
+    disposeStructureOverlay();
     stub.instance = null;
     stub.model = null;
     delete (globalThis as unknown as { window?: unknown }).window;
@@ -798,9 +813,9 @@ describe('叠层开着时的接线：到货会上屏，坏了会清零、只说�
     const { monaco, published } = fakeMonaco();
     const model = fakeModel(['角色: 12', '    循环：', '        「一句。」']);
     stub.model = model;
-    installKojoStructureOverlay(monaco as unknown as typeof Monaco);
+    installStructureOverlay(monaco as unknown as typeof Monaco);
     await flush();
-    expect(kojoStructureOverlayState().active).toBe(true);
+    expect(structureOverlayState().active).toBe(true);
     const client = stub.instance;
     if (!client) throw new Error('桩 client 没被装上（providers 的装配边界变了）');
 
@@ -822,7 +837,7 @@ describe('叠层开着时的接线：到货会上屏，坏了会清零、只说�
     // ④ 整档停用：叠层拆干净（作者回到只有词法层），本层不留一条
     client.fatal();
     await flush();
-    expect(kojoStructureOverlayState()).toEqual({ installed: true, active: false, client: null });
+    expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
     expect(published.at(-1)?.markers).toEqual([]);
 
     // ⑤ 停用之后又有迟到的结果：不许抛回编辑链（上屏器已经不在，回调得静默落地）

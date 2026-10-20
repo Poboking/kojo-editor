@@ -37,7 +37,7 @@ import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
  * - fail-open：路径缺席 / 文本为空 / 行越界 / 不是声明名 / 名字不存在 ⇒ `[]`，不抛。
  */
 
-/** ERB 方言后缀（与 `registerForKojoDialects` 的 ERB 面同族；`.kojo` 不参与） */
+/** ERB 方言后缀（与 `registerForLanguageServices` 的 ERB 面同族；`.kojo` 不参与） */
 const ERB_PATH_RE = /\.(?:erb|erh|erd)$/i;
 
 /** 行首 `#DIM*` 判据（名字与修饰词的切分仍以解析器的 `parseDimDeclaration` 为准） */

@@ -7,7 +7,7 @@ import type {
   EditorSemanticTokenType,
 } from '@kojo/plugin-api';
 import {errorText,  EDITOR_SEMANTIC_TOKEN_MODIFIERS, EDITOR_SEMANTIC_TOKEN_TYPES } from '@kojo/plugin-api';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
 
 /**
@@ -308,7 +308,7 @@ export function installSemanticTokensProvider(
     },
     releaseDocumentSemanticTokens: () => undefined,
   };
-  return registerForKojoDialects(monaco, (m, id) =>
+  return registerForLanguageServices(monaco, (m, id) =>
     m.languages.registerDocumentSemanticTokensProvider(id, provider),
   );
 }

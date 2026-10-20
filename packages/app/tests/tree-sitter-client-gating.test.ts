@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { StructureClient } from '../src/monaco/tree-sitter/client';
 import { onStructureDegradation, resetStructureDegradationLedger } from '../src/monaco/tree-sitter/fallback';
+import type { StructureLanguageRuntime } from '../src/monaco/tree-sitter/structure-runtime';
 import type { KojoStructureIndentRules, KojoStructureToken } from '../src/monaco/tree-sitter/types';
 
 /**
@@ -62,6 +63,13 @@ vi.mock('../src/monaco/tree-sitter/assets', () => ({
     indentsQuery: '',
   },
 }));
+
+/** 每门语言交回的运行时（A4）：client 不再自己 import worker / wasm，测试从这一格注入 */
+const RUNTIME: StructureLanguageRuntime = {
+  runtimeWasmUrl: 'runtime.wasm（桩）',
+  grammarWasmUrl: 'kojo.wasm（桩）',
+  createWorker: () => new harness.FakeWorker() as unknown as Worker,
+};
 
 /* ================================ 脚手架 ================================ */
 
@@ -129,7 +137,7 @@ describe('结构 client 装配期门控（init → ready → parse 的次序）'
   });
 
   function makeClient(timeoutMs = 250): { client: StructureClient; worker: InstanceType<typeof harness.FakeWorker> } {
-    const client = new StructureClient({ timeoutMs, onFatal: (m) => fatalMessages.push(m) });
+    const client = new StructureClient({ runtime: RUNTIME, timeoutMs, onFatal: (m) => fatalMessages.push(m) });
     expect(client.start()).toBe(true);
     const worker = harness.FakeWorker.instances.at(-1)!;
     expect(sentTypes(worker)).toEqual(['init']); // start 只发 init
@@ -231,7 +239,7 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
   });
 
   function readyClient(): { client: StructureClient; worker: InstanceType<typeof harness.FakeWorker> } {
-    const client = new StructureClient({ timeoutMs: 250, onFatal: (m) => fatalMessages.push(m) });
+    const client = new StructureClient({ runtime: RUNTIME, timeoutMs: 250, onFatal: (m) => fatalMessages.push(m) });
     client.start();
     const worker = harness.FakeWorker.instances.at(-1)!;
     worker.reply({ type: 'ready', version: 0 });

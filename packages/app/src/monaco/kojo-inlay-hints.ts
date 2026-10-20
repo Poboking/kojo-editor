@@ -6,7 +6,7 @@ import type {
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 行内提示的**宿主接线**（LS-R6，2026-10-16 语言服务批）：`ui.editor.languageService`
@@ -155,5 +155,5 @@ export function installInlayHintsProvider(monaco: typeof Monaco, handlers: Inlay
       return { hints: toMonacoInlayHints(monaco, model, hints, range), dispose: () => undefined };
     },
   };
-  return registerForKojoDialects(monaco, (m, id) => m.languages.registerInlayHintsProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerInlayHintsProvider(id, provider));
 }

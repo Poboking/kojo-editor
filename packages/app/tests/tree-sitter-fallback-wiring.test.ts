@@ -3,9 +3,9 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { resetStructureDegradationLedger, onStructureDegradation } from '../src/monaco/tree-sitter/fallback';
 import { resetStructureSemanticWarnings } from '../src/monaco/tree-sitter/semantic';
 import {
-  disposeKojoStructureOverlay,
-  installKojoStructureOverlay,
-  kojoStructureOverlayState,
+  disposeStructureOverlay,
+  installStructureOverlay,
+  structureOverlayState,
 } from '../src/monaco/tree-sitter/providers';
 
 /**
@@ -107,6 +107,27 @@ vi.mock('../src/monaco/tree-sitter/client', async () => {
   }
   return { StructureClient: StubStructureClient, STRUCTURE_REQUEST_TIMEOUT_MS: 4_000 };
 });
+
+// A4：client 不再自己 import worker / wasm，语言运行时由 descriptor 交回；测试桩掉这一格，
+// 免得 pref-on 用例去装配真 `?worker` / `?url`（node 池起不了线程）。
+vi.mock('../src/monaco/tree-sitter/kojo-runtime', () => ({
+  KOJO_STRUCTURE_RUNTIME: {
+    runtimeWasmUrl: 'runtime.wasm（桩）',
+    grammarWasmUrl: 'kojo.wasm（桩）',
+    createWorker: () => {
+      throw new Error('桩 client 不建线程');
+    },
+    semantic: {
+      legend: { tokenTypes: [], tokenModifiers: [] },
+      encode: () => ({ data: new Uint32Array(0), droppedRows: 0, droppedEmpty: 0, droppedWide: 0, droppedOverlaps: 0 }),
+    },
+    baseIndentPatterns: () => ({
+      indentOnEnter: [],
+      increaseIndentPattern: /(?!)/,
+      decreaseIndentPattern: /(?!)/,
+    }),
+  },
+}));
 
 /* ---------------------------- 假 Monaco（只给装配面要用的那几格） ---------------------------- */
 
@@ -237,21 +258,21 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
   afterEach(() => {
     unsubscribe?.();
     unsubscribe = null;
-    disposeKojoStructureOverlay();
+    disposeStructureOverlay();
     delete (globalThis as unknown as { window?: unknown }).window;
     vi.restoreAllMocks();
   });
 
   async function installAndActivate(): Promise<Captured> {
     const { monaco, captured } = fakeMonaco();
-    expect(() => installKojoStructureOverlay(monaco as never)).not.toThrow();
+    expect(() => installStructureOverlay(monaco as never)).not.toThrow();
     await flush();
     return captured;
   }
 
   it('(a) 解析报错 ⇒ 语义着色回 null、折叠回 []（一格都不画，交回词法层）', async () => {
     const captured = await installAndActivate();
-    expect(kojoStructureOverlayState()).toEqual({ installed: true, active: true, client: 'ready' });
+    expect(structureOverlayState()).toEqual({ installed: true, active: true, client: 'ready' });
     if (!captured.semantic || !captured.folding) throw new Error('叠层开着却没注册两枚 provider（装配面漂）');
     const m = model(40);
     const result = await captured.semantic.provideDocumentSemanticTokens(m, null, NO_CANCEL);
@@ -298,8 +319,8 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
       expect(() => client.fatal()).not.toThrow(); // 真 client 形状：台账 + 叫装配层拆 provider
     }
     expect(harness.fatalCount).toBe(1); // client 自己那道 `status === 'dead'` 闸
-    expect(kojoStructureOverlayState().active).toBe(false);
-    expect(kojoStructureOverlayState().client).toBeNull();
+    expect(structureOverlayState().active).toBe(false);
+    expect(structureOverlayState().client).toBeNull();
     expect(captured.semanticDisposed).toBe(true);
     expect(captured.foldingDisposed).toBe(true);
     expect(harness.disposed).toBe(1); // client 只拆一次
@@ -317,7 +338,7 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
   it('(c2) wasm 阶段就装不上（构造即抛）⇒ 叠层回到"没开过"、着色选项还原、装配点不抛', async () => {
     harness.mode = 'throwCtor';
     const captured = await installAndActivate();
-    const state = kojoStructureOverlayState();
+    const state = structureOverlayState();
     console.log(`wasm 装载失败后的叠层状态: ${JSON.stringify(state)}`);
     console.log(`着色选项写入序: ${JSON.stringify(captured.optionWrites)}`);
     expect(state).toEqual({ installed: true, active: false, client: null });
@@ -346,7 +367,7 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
     }
     console.log(`reject 探针 ⇒ provider: ${outcome}（真实 client.ts 的失败路径一律回 null，故此形不可达；缺口登记见文件头）`);
     expect(['resolve null', 'reject（未 catch，直接交给 Monaco）']).toContain(outcome);
-    expect(kojoStructureOverlayState().active).toBe(true); // 探针不许把叠层自己弄坏
+    expect(structureOverlayState().active).toBe(true); // 探针不许把叠层自己弄坏
   });
 
   it('(对照) 一切正常但这次没解出东西：同样不画半截色（回 null 让另一枚着色供给器应答）', async () => {

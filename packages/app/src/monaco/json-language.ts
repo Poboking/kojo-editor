@@ -13,6 +13,8 @@
 import type * as Monaco from './entry';
 
 export const JSON_LANGUAGE_ID = 'json';
+/** `.json` 源扩展名（注册映射与选语言判据共用这一份） */
+export const JSON_SOURCE_EXTENSION = '.json';
 
 /** 注册进宿主（幂等：已在则跳过——与 erb / kojo 两个 register 同款守卫） */
 export function registerJsonLanguage(monaco: typeof Monaco): void {
@@ -20,7 +22,7 @@ export function registerJsonLanguage(monaco: typeof Monaco): void {
 
   monaco.languages.register({
     id: JSON_LANGUAGE_ID,
-    extensions: ['.json'],
+    extensions: [JSON_SOURCE_EXTENSION],
     aliases: ['JSON', 'json'],
   });
 

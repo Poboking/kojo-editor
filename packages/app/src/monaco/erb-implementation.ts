@@ -4,7 +4,7 @@ import {
   provideLocations,
   type DefinitionHandlers,
 } from './kojo-definition';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 跳到实现（R3 残项 2026-10-16；W9 落点 span 批 2026-10-17 收口）——`Ctrl+F12` / Peek Implementation。
@@ -62,5 +62,5 @@ export function installImplementationProvider(
       return provideLocations(handlers, findModel, model, position, label);
     },
   };
-  return registerForKojoDialects(monaco, (m, id) => m.languages.registerImplementationProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerImplementationProvider(id, provider));
 }

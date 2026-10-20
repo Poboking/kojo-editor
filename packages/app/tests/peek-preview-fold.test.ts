@@ -181,7 +181,7 @@ function stubMonaco(): {
   };
   return {
     monaco: monaco as unknown as typeof Monaco,
-    // 两种语言 id 注册的是**同一枚** provider（`registerForKojoDialects`），取第一枚即可
+    // 两种语言 id 注册的是**同一枚** provider（`registerForLanguageServices`），取第一枚即可
     get provider() {
       return registered[0]!.provider;
     },

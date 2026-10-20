@@ -6,7 +6,7 @@ import type {
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 文档大纲的**宿主接线**（B3，2026-10-15 编辑器特性批）。
@@ -142,5 +142,5 @@ export function installDocumentSymbolProvider(
       return toMonacoDocumentSymbols(monaco, model, symbols);
     },
   };
-  return registerForKojoDialects(monaco, (m, id) => m.languages.registerDocumentSymbolProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerDocumentSymbolProvider(id, provider));
 }

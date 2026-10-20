@@ -26,9 +26,9 @@ import {
   resetStructureDegradationLedger,
 } from '../src/monaco/tree-sitter/fallback';
 import {
-  disposeKojoStructureOverlay,
-  installKojoStructureOverlay,
-  kojoStructureOverlayState,
+  disposeStructureOverlay,
+  installStructureOverlay,
+  structureOverlayState,
 } from '../src/monaco/tree-sitter/providers';
 import type * as Monaco from '../src/monaco/entry';
 
@@ -418,16 +418,16 @@ function countingMonaco(): { monaco: typeof Monaco; calls: string[] } {
   return { monaco: make('monaco') as unknown as typeof Monaco, calls };
 }
 
-describe('installKojoStructureOverlay · 偏好为关时一毫米都不动', () => {
+describe('installStructureOverlay · 偏好为关时一毫米都不动', () => {
   afterEach(() => {
-    disposeKojoStructureOverlay();
+    disposeStructureOverlay();
     delete (globalThis as { window?: unknown }).window;
   });
 
   it('node 环境（无 window ⇒ 偏好回默认关）：注册面调用次数为 0', () => {
     const { monaco, calls } = countingMonaco();
-    installKojoStructureOverlay(monaco);
-    expect(kojoStructureOverlayState()).toEqual({ installed: true, active: false, client: null });
+    installStructureOverlay(monaco);
+    expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
     expect(calls).toEqual([]);
   });
 
@@ -442,15 +442,15 @@ describe('installKojoStructureOverlay · 偏好为关时一毫米都不动', () 
     };
     const { monaco, calls } = countingMonaco();
     store.set('kojo.ui.treeSitter.v1', 'yes-please'); // 不是 'on' ⇒ 不算开
-    installKojoStructureOverlay(monaco);
-    expect(kojoStructureOverlayState().active).toBe(false);
+    installStructureOverlay(monaco);
+    expect(structureOverlayState().active).toBe(false);
     expect(calls).toEqual([]);
   });
 
   it('重复装配被幂等门挡住（第二次也不碰 Monaco）', () => {
     const { monaco, calls } = countingMonaco();
-    installKojoStructureOverlay(monaco);
-    installKojoStructureOverlay(monaco);
+    installStructureOverlay(monaco);
+    installStructureOverlay(monaco);
     expect(calls).toEqual([]);
   });
 });

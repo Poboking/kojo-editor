@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 import { errorText } from '@kojo/plugin-api';
 
 /**
@@ -405,5 +405,5 @@ export function installSignatureHelp(monaco: typeof Monaco, handlers: SignatureH
       return { value: toMonacoSignatureHelp(hit), dispose: () => undefined };
     },
   };
-  return registerForKojoDialects(monaco, (m, id) => m.languages.registerSignatureHelpProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerSignatureHelpProvider(id, provider));
 }

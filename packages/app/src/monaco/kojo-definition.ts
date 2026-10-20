@@ -6,7 +6,7 @@ import type {
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
 import { clampRevealPosition, revealSpanOf, type RevealSpan } from './reveal-position';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 import { mergeNavigationLegs, resolveErbDimDefinitionAt } from './erb-dim-navigation';
 import { labelDefinitionLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
 
@@ -458,7 +458,7 @@ export function installDefinitionProvider(
     },
   };
   const opener = registerLocationOpener(monaco, handlers);
-  const dialectSubs = registerForKojoDialects(monaco, (m, id) => m.languages.registerDefinitionProvider(id, provider));
+  const dialectSubs = registerForLanguageServices(monaco, (m, id) => m.languages.registerDefinitionProvider(id, provider));
   return {
     dispose: () => {
       dialectSubs.dispose();

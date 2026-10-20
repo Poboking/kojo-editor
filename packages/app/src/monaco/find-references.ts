@@ -5,7 +5,7 @@ import type {
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { mergeNavigationLegs, resolveErbDimReferencesAt } from './erb-dim-navigation';
 import { labelReferenceLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
@@ -389,7 +389,7 @@ export function installReferenceProvider(
       return true;
     },
   });
-  const dialectSubs = registerForKojoDialects(monaco, (m, id) => m.languages.registerReferenceProvider(id, provider));
+  const dialectSubs = registerForLanguageServices(monaco, (m, id) => m.languages.registerReferenceProvider(id, provider));
   return {
     dispose: () => {
       dialectSubs.dispose();

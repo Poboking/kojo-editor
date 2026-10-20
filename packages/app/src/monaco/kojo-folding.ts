@@ -6,7 +6,7 @@ import type {
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
 import { clampMonacoLine } from './positions';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 折叠区间的**宿主接线**（D3，2026-10-15 折叠/面包屑批）。
@@ -107,5 +107,5 @@ export function installFoldingRangeProvider(
       return toMonacoFoldingRanges(model, ranges);
     },
   };
-  return registerForKojoDialects(monaco, (m, id) => m.languages.registerFoldingRangeProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerFoldingRangeProvider(id, provider));
 }

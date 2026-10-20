@@ -37,8 +37,8 @@ import type {
 } from '@kojo/plugin-api';
 import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/plugin-kojo-sugar';
-import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
-import { KOJO_LANGUAGE_ID } from '../monaco/kojo-language';
+import { ERB_DIRECTIVES, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
+import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
 import { installHover, type HoverTables } from '../monaco/kojo-hover';
 import {
   PROVIDED_CODE_ACTION_KINDS,
@@ -1182,7 +1182,7 @@ export function provideCodeActionsFor(
   const diagnostics = markersToDecorations(monaco, context.markers ?? []);
   if (
     diagnostics.length === 0 &&
-    (model.getLanguageId() === ERB_LANGUAGE_ID || model.getLanguageId() === KOJO_LANGUAGE_ID)
+    descriptorForLanguageId(model.getLanguageId())?.languageServices === true
   ) {
     return { actions: [], dispose: () => undefined };
   }
@@ -1333,8 +1333,12 @@ export function ensureGlobalProviders(): void {
         ...(line !== undefined ? { line } : {}),
       });
     }));
+    // 一等语言（descriptor 声明 languageServices）共用这一枚 provider；新增语言零改动
+    const codeActionLanguages = languageDescriptors()
+      .filter((descriptor) => descriptor.languageServices === true)
+      .map((descriptor) => descriptor.id);
     globalDisposers.push(monaco.languages.registerCodeActionProvider(
-      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID],
+      codeActionLanguages,
       {
         provideCodeActions: (model, range, context) => {
           const ctx = owningPaneOf(model);

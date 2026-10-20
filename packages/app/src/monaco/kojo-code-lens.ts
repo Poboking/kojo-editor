@@ -7,7 +7,7 @@ import type {
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 行上内联注解的**宿主接线**（B8，2026-10-16 行内注解批）：`ui.editor.languageService`
@@ -233,7 +233,7 @@ export function installCodeLensProvider(monaco: typeof Monaco, handlers: CodeLen
       return { lenses: toMonacoCodeLenses(model, lenses), dispose: () => undefined };
     },
   };
-  const dialectSubs = registerForKojoDialects(monaco, (m, id) => m.languages.registerCodeLensProvider(id, provider));
+  const dialectSubs = registerForLanguageServices(monaco, (m, id) => m.languages.registerCodeLensProvider(id, provider));
   return {
     dispose: () => {
       dialectSubs.dispose();

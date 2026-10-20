@@ -8,7 +8,7 @@ import {
 } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 文档格式化的**宿主接线**（E1，`Shift+Alt+F`）。
@@ -125,7 +125,7 @@ export function installDocumentFormatter(
       return toTextEdits(model, edits);
     },
   };
-  return registerForKojoDialects(monaco, (m, id) =>
+  return registerForLanguageServices(monaco, (m, id) =>
     m.languages.registerDocumentFormattingEditProvider(id, provider),
   );
 }

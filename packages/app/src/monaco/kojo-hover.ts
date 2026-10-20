@@ -18,7 +18,7 @@ import { livePanes } from '../ui/editor-pane-registry';
 import { erbBitHoverName } from './erb-completion-bits';
 import { BLANK_CLASS_STR } from './kojo-completion-position';
 import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
-import { registerForKojoDialects } from './register-dialects';
+import { registerForLanguageServices } from './register-dialects';
 
 /**
  * 悬停**中文名**（ZH-F2，显示线第二面）—— 把光标下的**原生记号**显示其中文名。
@@ -762,5 +762,5 @@ export function installHover(
       };
     },
   };
-  return registerForKojoDialects(monaco, (m, id) => m.languages.registerHoverProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerHoverProvider(id, provider));
 }

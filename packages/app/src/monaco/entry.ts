@@ -153,7 +153,7 @@ void assemblyDisposables; // 与模块同寿：不回收，但句柄在此可见
 // 一概不进主线程静态图，装配函数本身也只读一次偏好、挂一张订阅表，不注册任何 provider。
 // 装载失败（懒 chunk 取不到）不许静默：经回落台账说一次，编辑器继续走词法层。
 void import('./tree-sitter/providers')
-  .then((m) => m.installKojoStructureOverlay(monacoApi))
+  .then((m) => m.installStructureOverlay(monacoApi))
   .catch((error: unknown) => {
     reportStructureDegradation({
       capability: 'all',

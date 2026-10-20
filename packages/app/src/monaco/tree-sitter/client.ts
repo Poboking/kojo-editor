@@ -8,10 +8,9 @@ import type * as Monaco from '../entry';
 // **不**抬全局 `worker.format`（那会连 Monaco 自己的 `editor.worker` 一起改成模块 worker，
 // 一条实验特性不该动既有 worker 的加载方式），也**不**走 alias 钉桩（alias 生效但动态
 // import 仍在，照样切 chunk）。
-import TsWorker from './kojo-ts.worker?worker';
-import { KOJO_STRUCTURE_ASSETS } from './assets';
 import { applyEdit, commonEdit } from './edit';
 import { reportStructureDegradation } from './fallback';
+import type { StructureLanguageRuntime } from './structure-runtime';
 import {
   KOJO_STRUCTURE_PROTOCOL,
   isStructureReply,
@@ -109,6 +108,8 @@ interface TrackedDocument {
 }
 
 export interface StructureClientOptions {
+  /** 这一门语言的结构层运行时（worker 入口 / 两枚 wasm；由 descriptor 按需交回） */
+  readonly runtime: StructureLanguageRuntime;
   /** 超时读数（注入以便测试） */
   timeoutMs?: number;
   /** 整档停用时的通知（装配层在这里拆 provider） */
@@ -129,6 +130,7 @@ export class StructureClient {
   private status: StructureStatus = 'idle';
   private latestIndent: FacetResult<KojoStructureIndentRules> | null = null;
   private readonly waiters = new Map<FacetName, Set<() => void>>();
+  private readonly runtime: StructureLanguageRuntime;
   private readonly timeoutMs: number;
   private readonly onFatal: (message: string) => void;
   /** 文档隔离号的发生器（只增不减；worker 拿它回显，主线程拿它对号） */
@@ -140,7 +142,8 @@ export class StructureClient {
   ) => void;
   private readonly onSyntaxClear: (model: Monaco.editor.ITextModel) => void;
 
-  constructor(options: StructureClientOptions = {}) {
+  constructor(options: StructureClientOptions) {
+    this.runtime = options.runtime;
     this.timeoutMs = options.timeoutMs ?? STRUCTURE_REQUEST_TIMEOUT_MS;
     this.onFatal = options.onFatal ?? (() => undefined);
     this.onSyntax = options.onSyntax ?? (() => undefined);
@@ -166,11 +169,11 @@ export class StructureClient {
     const request: KojoStructureRequest = {
       type: 'init',
       protocol: KOJO_STRUCTURE_PROTOCOL,
-      wasmUrl: KOJO_STRUCTURE_ASSETS.kojoWasmUrl,
-      runtimeWasmUrl: KOJO_STRUCTURE_ASSETS.runtimeWasmUrl,
+      wasmUrl: this.runtime.grammarWasmUrl,
+      runtimeWasmUrl: this.runtime.runtimeWasmUrl,
     };
     try {
-      const worker = new TsWorker();
+      const worker = this.runtime.createWorker();
       worker.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
       worker.onerror = (event: ErrorEvent) =>
         this.fatal(`worker 线程报错：${event.message || '（无消息）'}`);

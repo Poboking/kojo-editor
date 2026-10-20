@@ -10,8 +10,8 @@ import {errorText,  FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-a
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
-import { registerErbLanguage } from '../monaco/erb-language';
-import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '../monaco/kojo-language';
+import { registerBuiltinLanguageSurfaces } from '../monaco/languages';
+import { KOJO_LANGUAGE_ID, decorationsToMarkers } from '../monaco/kojo-language';
 import { monacoThemeIdFor } from '../monaco/theme';
 import { useThemePref } from './theme-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
@@ -130,8 +130,7 @@ import { useMonacoInstance } from './editor-pane/use-monaco-instance';
 self.MonacoEnvironment = {
   getWorker: () => new editorWorker(),
 };
-registerErbLanguage(monaco);
-registerKojoLanguage(monaco);
+registerBuiltinLanguageSurfaces(monaco);
 
 /** marker owner（同一 owner 的 markers 每次整体替换；不同 owner 互不干扰） */
 const MARKER_OWNER = 'kojo-decorators';
