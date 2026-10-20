@@ -129,6 +129,7 @@ function fakeModel(
       return lines.slice(range.startLineNumber - 1, range.endLineNumber).join('\n');
     },
     getAlternativeVersionId: () => state.versionId,
+    getVersionId: () => state.versionId,
   };
   return {
     model: model as unknown as Monaco.editor.ITextModel,

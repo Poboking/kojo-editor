@@ -125,6 +125,7 @@ function bigModel(lines: readonly string[], languageId = ERB_LANGUAGE_ID) {
       return lines.slice(r.startLineNumber - 1, r.endLineNumber).join('\n');
     },
     getAlternativeVersionId: () => state.versionId,
+    getVersionId: () => state.versionId,
   };
   return {
     model: model as unknown as Monaco.editor.ITextModel,

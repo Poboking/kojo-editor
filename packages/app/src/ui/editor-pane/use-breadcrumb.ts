@@ -27,6 +27,7 @@ import {
 } from '../breadcrumb-path';
 import { collectDocumentSymbols } from '../../monaco/kojo-symbols';
 import { erbParserIndex } from '../editor-global-providers';
+import { documentRequestFields } from '../language-service-request';
 import { LARGE_FILE_LINES } from '../editor-options';
 import { isErbLike } from '../lift-preview';
 import { erbFileInIndex, MARKER_DEBOUNCE_MS } from './pane-helpers';
@@ -227,10 +228,7 @@ export function useBreadcrumb(params: BreadcrumbParams): BreadcrumbControls {
           }
           const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
             kind: 'documentSymbol',
-            path,
-            text: model.getValue(),
-            project: kernel.project.current(),
-            lineCount: cursor.lineCount,
+            ...documentRequestFields(model, path, kernel.project.current()),
           });
           crumbTreeCacheRef.current = { path, versionId, symbols, fromIndex: false, indexStamp: null };
           chainOf(symbols);

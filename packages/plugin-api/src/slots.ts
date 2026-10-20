@@ -366,6 +366,28 @@ export type WellKnownCommandId = (typeof WellKnownCommands)[keyof typeof WellKno
 /* -------------------- ui.editor.languageService -------------------- */
 
 /**
+ * 一份文档在语言服务请求里的**模型身份**（LANG-CONTRACT，2026-10-20，additive 可选两格）。
+ *
+ * 为什么不是每个能力各写一份：按语言分派、按版本判陈旧是**所有**文档型请求的共同前提；
+ * 写在这里，新增能力只要 `extends` 就自动带上。
+ *
+ * - `languageId`：宿主从 `ITextModel.getLanguageId()` 原样递来。供方**按它认语言**，
+ *   不拿 `path` 扩展名猜——扩展名只是文件身份，糖投影、无标题缓冲、大小写不一的方言
+ *   后缀都会让"扩展名 = 语言"失灵。缺省 = 旧行为（按 `path` 自认），既有贡献方零改动。
+ * - `version`：宿主从 `ITextModel.getVersionId()` 递来（内容每变一次 +1）。供方可拿它
+ *   当缓存键；异步产出在落地前拿它与 model 现版本对照，**不等就整批丢弃并重问**——
+ *   绝不把按旧坐标算出的结果写进新文本。
+ *
+ * **取消语义**：`provide` 是同步纯函数，调用返回即结束，没有"在途响应"可取消；
+ * 契约**刻意不发明** `CancellationToken`（发明了也只能是永远不触发的假令牌）。
+ * 取消/过期只发生在宿主把结果交给 Monaco 或 worker 之前，判据统一是 `version`。
+ */
+export interface EditorDocumentIdentity {
+  readonly languageId?: string;
+  readonly version?: number;
+}
+
+/**
  * 转到定义请求（单槽 + 请求判别，2026-10-15 语言服务批）。
  *
  * 为什么**单槽 + `kind` 判别**而不是每能力一个槽：definition 与将来的
@@ -373,7 +395,7 @@ export type WellKnownCommandId = (typeof WellKnownCommands)[keyof typeof WellKno
  * 差异只在产出。分槽会让宿主接线 N 次、让每个贡献方各抄一份"取光标位置的样板"；
  * 单槽 + 判别式则**新增能力 = 往联合里加一个成员**——宿主与既有贡献方零改动。
  */
-export interface EditorDefinitionRequest {
+export interface EditorDefinitionRequest extends EditorDocumentIdentity {
   readonly kind: 'definition';
   readonly path: string;
   /** 模型全文（宿主给的是**真文件**的文本，糖视图下不供——见宿主接线注） */
@@ -394,7 +416,7 @@ export interface EditorDefinitionRequest {
  * `text` 仍是**模型全文**（不是磁盘内容）——大纲行号必须对得上作者正在看的那份缓冲区，
  * 用索引里磁盘上的行号会随未保存编辑整体错位。
  */
-export interface EditorDocumentSymbolRequest {
+export interface EditorDocumentSymbolRequest extends EditorDocumentIdentity {
   readonly kind: 'documentSymbol';
   readonly path: string;
   readonly text: string;
@@ -403,7 +425,12 @@ export interface EditorDocumentSymbolRequest {
   readonly lineCount?: number;
 }
 
-/** 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`；新增能力 additive 追加联合成员，不改旧成员） */
+/**
+ * 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` /
+ * `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`；新增能力 additive
+ * 追加联合成员，不改旧成员）。**文档型成员一律 `extends EditorDocumentIdentity`**
+ * （带 `languageId` / `version`），`workspaceSymbol` 除外——它不钉在任何一份缓冲区上。
+ */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
   | EditorDocumentSymbolRequest
@@ -487,7 +514,7 @@ export interface EditorDocumentSymbolResult {
  * 输入形状与 `documentSymbol` 一致（整篇结构、不是光标处记号）；`text` 同样是
  * **模型全文**（折叠区间必须对得上作者正在看的缓冲区）。
  */
-export interface EditorFoldingRangeRequest {
+export interface EditorFoldingRangeRequest extends EditorDocumentIdentity {
   readonly kind: 'foldingRange';
   readonly path: string;
   readonly text: string;
@@ -530,6 +557,8 @@ export type EditorLanguageServiceResult =
  *
  * 与前三员的输入差异：**没有文件**。问的是"整个工作区里谁叫这个名字"，
  * 所以只给查询串与项目；数据源（项目索引 / 别的名录）由提供方自己认得，宿主不递文件。
+ * 因此它**不 extends `EditorDocumentIdentity`**：查询不钉在任何一份缓冲区上，
+ * 没有语言与版本可言。
  *
  * `query` 是**原样字符串**（未归一大小写、未 trim）：匹配口径归提供方——ERB 名按引擎
  * 惯例大小写不敏感，别的方言未必，宿主不替各方归一。
@@ -584,7 +613,7 @@ export interface EditorWorkspaceSymbolResult {
  * 工作区符号那种"另有 N 条未列出"的补白在这里没有落点（code lens 没有列表头可写），
  * 所以那条口径**刻意不搬**过来。
  */
-export interface EditorCodeLensRequest {
+export interface EditorCodeLensRequest extends EditorDocumentIdentity {
   readonly kind: 'codeLens';
   readonly path: string;
   readonly text: string;
@@ -674,7 +703,7 @@ export interface EditorSemanticTokenSpan {
  * 语义着色请求：形状与 `documentSymbol` / `foldingRange` 逐字同族（整篇结构、不是光标处记号），
  * 因此 `text` 同样是**模型全文**、`provide` 同样是**纯函数**（不读盘、不写盘、不发事件）。
  */
-export interface EditorSemanticTokenRequest {
+export interface EditorSemanticTokenRequest extends EditorDocumentIdentity {
   readonly kind: 'semanticToken';
   readonly path: string;
   readonly text: string;
@@ -712,7 +741,7 @@ export interface EditorSemanticTokenResult {
  * （见宿主 `kojo-inlay-hints.ts` 的代价模型）。供方纪律不变：索引缺席返回空数组、
  * 不读盘、绝不触发整项目扫描——只对请求给进来的这份缓冲区做单遍线性扫描。
  */
-export interface EditorInlayHintRequest {
+export interface EditorInlayHintRequest extends EditorDocumentIdentity {
   readonly kind: 'inlayHint';
   readonly path: string;
   /** 模型全文（与 documentSymbol / foldingRange 同族：提示钉在缓冲区坐标上） */
@@ -755,7 +784,7 @@ export interface EditorInlayHintResult {
  * 本就是同一个名字的两面。产出按 {@link EditorSymbolLocation} 给"文件:行:列"——
  * 落地（Peek / 跳转）由宿主决定，贡献方不碰导航。
  */
-export interface EditorReferencesRequest {
+export interface EditorReferencesRequest extends EditorDocumentIdentity {
   readonly kind: 'references';
   readonly path: string;
   /** 模型全文（宿主给的是**真文件**的文本，糖视图下不供——与 `definition` 同一判据） */
@@ -801,7 +830,7 @@ export interface EditorRenameEdit {
  * rename 走 `erb-rename` 的专用通道（双通道送达 + 只读全或无，2026-10-16 已交付），
  * **不经本成员**；本成员服务 `.kojo` 这类"单文件、判据在转译器"的改名面。
  */
-export interface EditorRenameRequest {
+export interface EditorRenameRequest extends EditorDocumentIdentity {
   readonly kind: 'rename';
   readonly path: string;
   readonly text: string;
@@ -835,9 +864,35 @@ export interface EditorRenameResult {
  *
  * 返回值三态，宿主据此合并，无歧义（以 `definition` 为例；`documentSymbol` /
  * `foldingRange` 同构，把"目标"换成"顶层符号树 / 折叠区间"）：
- * - `undefined` = **我不认这个请求 / 这个文件**（不该由我应答）——宿主跳过；
+ * - `undefined` = **我不认这个请求 / 这个文件 / 这门语言**（不该由我应答）——宿主跳过；
  * - `{ locations: [] }` = 认这个文件、但此处没有定义（**不猜**）；
  * - `{ locations: [...] }` = 目标（可多个）。
+ *
+ * ## 多源与顺序（同 kind 有多家供方时）
+ *
+ * 槽按**注册顺序**交回贡献方，宿主按这个顺序逐家问，**不排序、不投票**：
+ *
+ * - 集合型（definition / references / documentSymbol / foldingRange / codeLens /
+ *   semanticToken / inlayHint / workspaceSymbol）：各家结果**取并集**并按契约字段去重；
+ *   一家抛错只让这一家缺席（可见 `console.warn`），不让整篇结果消失。
+ * - 单答型（rename）：**第一家**给出 `EditorRenameResult` 的说了算，后面的不再问——
+ *   "改哪些位置、怎么改"不能被两家并集拼出来。
+ * - 认不出 / 不服务：返回 `undefined`；宿主把它当"这家弃权"，继续问下一家。
+ *   返回空结果则有语义（见三态），**不等于弃权**。
+ *
+ * 数字优先级（`priority` 字段）**刻意不引入**：今天同 kind 的多家按路径 / 语言天然互斥
+ * （ERB 供方 vs `.kojo` 供方），并集安全；需要"主 / 备"裁决的只在 Monaco provider 层
+ * 已有落点（结构着色层命中时优先、未命中原样回退），不在槽内另立一套表决机制。
+ *
+ * ## 语言分派、版本与取消
+ *
+ * 文档型请求带 `languageId`（见 {@link EditorDocumentIdentity}）：当它出现时，
+ * **它就是语言事实**，供方按它决定"这门语言归不归我"，不拿扩展名二次猜测；
+ * 缺席时才退回按 `path` 自认（旧行为）。
+ *
+ * 请求里的 `version` 是 model 当前版本；`provide` 同步返回，没有在途响应可取消，
+ * 所以契约不引入 LSP 式取消令牌、不做 didOpen / didChange 文档同步——文本与光标
+ * 都由宿主**随请求递入**。过期判据只服务异步产出落地前的复核：版本不等即丢弃重问。
  */
 export interface EditorLanguageServiceContribution extends ContributionBase {
   provide(request: EditorLanguageServiceRequest): EditorLanguageServiceResult | undefined;

@@ -99,6 +99,7 @@ function fakeDoc(lines: readonly string[], languageId = ERB_LANGUAGE_ID): FakeDo
     getValueInRange: (range: Monaco.IRange) =>
       lines.slice(range.startLineNumber - 1, range.endLineNumber).join('\n'),
     getAlternativeVersionId: () => 1,
+    getVersionId: () => 1,
   };
   return { model: model as unknown as Monaco.editor.ITextModel, lines, getValueCalls: () => state.fullCopies };
 }

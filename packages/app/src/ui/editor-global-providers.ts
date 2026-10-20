@@ -75,6 +75,7 @@ import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
 import { setReferenceTally } from './reference-tally-store';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
+import { documentRequestFields } from './language-service-request';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
 // P2-14：quick fix 预览层（纯逻辑）——落地前先出 diff 预览，确认才应用
 import {
@@ -617,12 +618,9 @@ export function readDefinitionTargets(
   if (at === null) return [];
   const locations = collectDefinitionLocations(kernel.slots.query('ui.editor.languageService'), {
     kind: 'definition',
-    path: target.path,
-    text: target.model.getValue(),
+    ...documentRequestFields(target.model, target.path, kernel.project.current()),
     line: at.line,
     column: at.column,
-    project: kernel.project.current(),
-    lineCount: target.model.getLineCount(),
   });
   return target.sugar ? foldLocationsToPreview(model, target, locations) : locations;
 }
@@ -645,12 +643,9 @@ export function readReferences(
   if (at === null) return null;
   const locations = collectReferenceLocations(kernel.slots.query('ui.editor.languageService'), {
     kind: 'references',
-    path: target.path,
-    text: target.model.getValue(),
+    ...documentRequestFields(target.model, target.path, kernel.project.current()),
     line: at.line,
     column: at.column,
-    project: kernel.project.current(),
-    lineCount: target.model.getLineCount(),
   });
   return {
     path: target.path,
@@ -667,10 +662,7 @@ export function readDocumentSymbols(
   if (!target) return [];
   const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
     kind: 'documentSymbol',
-    path: target.path,
-    text: target.model.getValue(),
-    project: kernel.project.current(),
-    lineCount: target.model.getLineCount(),
+    ...documentRequestFields(target.model, target.path, kernel.project.current()),
   });
   return target.sugar ? foldSymbolsToPreview(symbols, target.sugar.fold) : symbols;
 }
@@ -764,12 +756,10 @@ function documentSymbolsCached(ctx: PaneCtx, target: ReadTarget): EditorDocument
   const versionId = target.model.getAlternativeVersionId();
   const cache = ctx.crumbTreeCacheRef.current;
   if (cache && cache.path === target.path && cache.versionId === versionId) return cache.symbols;
-  const symbols = collectDocumentSymbols(requireKernel().slots.query('ui.editor.languageService'), {
+  const kernel = requireKernel();
+  const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
     kind: 'documentSymbol',
-    path: target.path,
-    text: target.model.getValue(),
-    project: requireKernel().project.current(),
-    lineCount: target.model.getLineCount(),
+    ...documentRequestFields(target.model, target.path, kernel.project.current()),
   });
   ctx.crumbTreeCacheRef.current = { path: target.path, versionId, symbols };
   return symbols;
@@ -1000,10 +990,7 @@ export function foldingRangesFor(
   const ranges = memoizedDocument(foldingMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
     collectFoldingRanges(contributions, {
       kind: 'foldingRange',
-      path,
-      text: model.getValue(),
-      project: kernel.project.current(),
-      lineCount,
+      ...documentRequestFields(model, path, kernel.project.current()),
     }),
   );
   return capFoldingRanges(path, ranges);
@@ -1028,10 +1015,7 @@ export function inlayHintsFor(
   return memoizedDocument(inlayHintsMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
     collectInlayHints(contributions, {
       kind: 'inlayHint',
-      path,
-      text: model.getValue(),
-      project: kernel.project.current(),
-      lineCount,
+      ...documentRequestFields(model, path, kernel.project.current()),
     }),
   );
 }
@@ -1051,10 +1035,7 @@ export function codeLensesFor(
   return memoizedDocument(codeLensesMemo, model, documentMemoKey(model, path, kernel, contributions.length), () => {
     const lenses = collectCodeLenses(contributions, {
       kind: 'codeLens',
-      path,
-      text: model.getValue(),
-      project: kernel.project.current(),
-      lineCount,
+      ...documentRequestFields(model, path, kernel.project.current()),
     });
     // 产出预算：**全有或全无**（缺席携带语义，不许用来表示"额度用完了"）
     return withinCodeLensBudget(lenses.length, lineCount) ? lenses : [];
@@ -1477,12 +1458,10 @@ export function ensureGlobalProviders(): void {
         const path = isSugarModel ? realPath.replace(/\.[A-Za-z0-9]+$/, KOJO_SOURCE_EXTENSION) : realPath;
         const lineCount = model.getLineCount();
         if (!shouldComputeSemanticTokens(lineCount)) return [];
-        return collectSemanticTokenSpans(requireKernel().slots.query('ui.editor.languageService'), {
+        const kernel = requireKernel();
+        return collectSemanticTokenSpans(kernel.slots.query('ui.editor.languageService'), {
           kind: 'semanticToken',
-          path,
-          text: model.getValue(),
-          project: requireKernel().project.current(),
-          lineCount,
+          ...documentRequestFields(model, path, kernel.project.current()),
         });
       },
     }));
@@ -1642,18 +1621,16 @@ export function ensureGlobalProviders(): void {
           return { edits: [], rejectReason: '当前视图不参与重命名（请在原文视图内按 F2）' };
         }
         const path = ctx.filePathRef.current;
-        for (const contribution of requireKernel().slots.query('ui.editor.languageService')) {
+        const kernel = requireKernel();
+        for (const contribution of kernel.slots.query('ui.editor.languageService')) {
           let result: ReturnType<typeof contribution.provide>;
           try {
             result = contribution.provide({
               kind: 'rename',
-              path,
-              text: model.getValue(),
+              ...documentRequestFields(model, path, kernel.project.current()),
               line: position.lineNumber,
               column: position.column,
               newName,
-              project: requireKernel().project.current(),
-              lineCount: model.getLineCount(),
             });
           } catch (e: unknown) {
             console.warn(
