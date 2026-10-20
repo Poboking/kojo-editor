@@ -11,9 +11,11 @@
  */
 
 import { mkdtempSync, readdirSync, statSync } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isErbDialectPath, pathKey } from '@kojo/plugin-api';
 import type { ErbIndexState, ErbParserService, GameProject } from '@kojo/plugin-api';
 import { createKernel } from '../../../kernel/src/kernel';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
@@ -111,5 +113,49 @@ describe.skipIf(!SMOKE)('索引状态事实 · 真实语料自证', () => {
     expect(ns.functions).toBe(qs.functions);
     expect(ns.filesScanned).not.toBe(qs.filesScanned);
     expect(ns.phase).not.toBe(qs.phase);
+  }, 300_000);
+
+  /**
+   * 覆盖面自证（MULTI-CORPUS 只读普查批，2026-10-20）：**索引 membership 与盘面独立枚举对齐**。
+   *
+   * 为什么 `filesScanned === idx.files.size` 还不够：那一条只证明"走过多少就解析了多少"——
+   * walk 少走了一整类文件，两边依旧相等（同为 2,000）。本条换一个方向复算：**先独立枚举**
+   * 口上域里的方言文件（谓词用契约的 `isErbDialectPath`，与 walk 同一真源 ⇒ 口径不会分叉），
+   * 再要求它们逐个命中 `index.files`。少走（filter 回归）、读/解析失败（该文件进不了索引）
+   * 都会在这里显形，而不是被"两边同时变少"掩盖。
+   *
+   * 四盘真语料实测（画蛇添足 2,316 / 原生官方 1,263 / 魔王改版 2,370 / eraAkumaMaid 563）
+   * 盘面数与本条读数**逐位相等**，故可钉；断言只对"口上域的盘面文件"成立，不受工作区根
+   * （另一条被走的来源，可能是空的、也可能有作者文件）影响。
+   */
+  it('口上域盘面方言文件逐个进索引（独立枚举复算，不靠 walk 自报）', async () => {
+    const onDisk: string[] = [];
+    const walk = (dir: string): void => {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return; // 读不到的子树由 onDisk 条数兜住（>100 的前提断言）
+      }
+      for (const e of entries) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (isErbDialectPath(e.name)) onDisk.push(p);
+      }
+    };
+    for (const root of project.kojoPaths) walk(root);
+    expect(onDisk.length, '口上域该有方言文件（盘前提）').toBeGreaterThan(100);
+
+    // 显式给根重建（不依赖用例顺序）：上一条用例收尾在 `buildIndex([])`，此刻的索引是空态。
+    const idx = await parser.buildIndex(project.kojoPaths);
+    const indexed = new Set([...idx.files.keys()].map(pathKey));
+    const missing = onDisk.filter((p) => !indexed.has(pathKey(p)));
+    console.log(
+      `[idx-state] 覆盖面：口上域盘面 ${onDisk.length} 份方言文件 / 索引侧 ${idx.files.size} 份；` +
+        `未进索引 ${missing.length}${missing.length > 0 ? `（前 5 条：${missing.slice(0, 5).join(' | ')}）` : ''}`,
+    );
+    expect(missing, `口上域有方言文件没进索引：${missing.slice(0, 5).join(' | ')}`).toEqual([]);
+    // 反向：walk 的自报数不可能少于盘面枚举（少了就是漏走，不用等上面那条）
+    expect(readState(parser).filesScanned).toBeGreaterThanOrEqual(onDisk.length);
   }, 300_000);
 });
