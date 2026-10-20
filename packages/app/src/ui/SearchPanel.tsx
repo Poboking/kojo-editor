@@ -257,8 +257,12 @@ export interface SearchPanelProps {
    * 跳源：路径 + 行 + **命中的列区间**（W9 落点 span 批）。
    * 第 3 位此前是裸 `column`——同一处位置，定义那条腿给的是区间、这条给的是一头，
    * 落点必然分叉；现在六条发起方统一交区间（缺区间才退化，退化判据在 `reveal-position`）。
+   *
+   * 第 4 位是**焦点选项**（W7-B，2026-10-20；additive）：`{ focus: false }` = 定位后
+   * 不把焦点交给编辑器。键盘逐项跳（输入框回车 / Shift+回车）必须带它，否则第一跳
+   * 就把焦点抢到编辑器、连续回车全部落空；鼠标点行不传（与旧行为一致，定位即聚焦）。
    */
-  onReveal: (path: string, line: number, span?: RevealSpan) => void;
+  onReveal: (path: string, line: number, span?: RevealSpan, options?: { readonly focus?: boolean }) => void;
 }
 
 /** 单条命中行：主按钮跳转；行尾一枚替换钮（hover / focus-within 显形，键盘可达） */
@@ -436,7 +440,8 @@ export function SearchPanel({
   const stepMatch = (delta: 1 | -1): boolean => {
     const target = stepSearchMatch(delta);
     if (target === null) return false;
-    onReveal(target.path, target.match.line, searchMatchSpan(target.match));
+    // W7-B：逐项跳只定位、不抢焦点——焦点留在检索框，连续回车才能一项项往下走。
+    onReveal(target.path, target.match.line, searchMatchSpan(target.match), { focus: false });
     return true;
   };
 

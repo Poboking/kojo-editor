@@ -22,6 +22,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clampRevealPosition,
+  revealFocusesEditor,
   revealLocationOf,
   revealSpanOf,
   revealTargetOf,
@@ -240,6 +241,29 @@ describe('revealLocationOf · 发起方的唯一载荷出口', () => {
 
   it('`source` 不给就不带这个键（总线载荷里不留 `source: undefined`）', () => {
     expect('source' in revealLocationOf({ path: 'C:/p/a.ERB', line: 1 })).toBe(false);
+  });
+});
+
+describe('焦点选项（W7-B：检索逐项跳不抢焦点）', () => {
+  it('唯一判据：只有显式 false 才不聚焦，缺席 / true 都保持现行行为', () => {
+    expect(revealFocusesEditor({ focus: false })).toBe(false);
+    expect(revealFocusesEditor({})).toBe(true);
+    expect(revealFocusesEditor({ focus: true })).toBe(true);
+  });
+
+  it('事件载荷 → 定位目标：focus:false 原样带走，老载荷不留这个键', () => {
+    expect(revealTargetOf({ line: 3, focus: false }, 7).focus).toBe(false);
+    expect('focus' in revealTargetOf({ line: 3 }, 7)).toBe(false);
+  });
+
+  it('发起方载荷出口：focus:false 原样带走，老调用不留这个键', () => {
+    expect(revealLocationOf({ path: 'C:/p/a.ERB', line: 8, focus: false }, '搜索')).toEqual({
+      filePath: 'C:/p/a.ERB',
+      line: 8,
+      focus: false,
+      source: '搜索',
+    });
+    expect('focus' in revealLocationOf({ path: 'C:/p/a.ERB', line: 8 })).toBe(false);
   });
 });
 

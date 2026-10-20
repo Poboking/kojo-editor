@@ -546,7 +546,9 @@ export function App(): ReactElement {
   useEffect(() => {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
-      requestOpenFile(ev.filePath, ev.line ?? 1, ev.column, ev.span);
+      // W7-B：`focus: false`（检索框逐项跳）一路带到编辑器——定位但不抢焦点，
+      // 老发起方不带这个键 ⇒ 仍按现行行为聚焦。
+      requestOpenFile(ev.filePath, ev.line ?? 1, ev.column, ev.span, false, ev.focus);
       // 同款记录（MM-7）：问题面板/转到定义/查找引用/函数树跳转来的打开也进最近文件
       recordRecentFile(ev.filePath);
     });
@@ -756,7 +758,7 @@ export function App(): ReactElement {
   );
 
   const commitOpenFile = useCallback(
-    (path: string, line?: number, column?: number, span?: RevealSpan, preview = false) => {
+    (path: string, line?: number, column?: number, span?: RevealSpan, preview = false, focus?: boolean) => {
       // SPLIT-1：开进焦点组。preview=true ⇒ 就地替换本组那张预览（规则在 tabs-ops 一份）
       setEditorGroups((prev) =>
         preview ? openPreviewInActiveGroup(prev, path, (p) => dirtyRef.current.has(p)) : openInActiveGroup(prev, path),
@@ -765,7 +767,8 @@ export function App(): ReactElement {
       const gid = editorGroupsRef.current.activeGroupId;
       mruRef.current = { ...mruRef.current, [gid]: touchMru(mruRef.current[gid] ?? [], path) };
       // W9：区间一路带到编辑器（退化判据唯一住在 `revealTargetOf`，这里不许再折一次列）
-      const target = line ? revealTargetOf({ line, column, span }, Date.now()) : null;
+      // W7-B：焦点选项同拍透传（`false` = 键盘逐项跳，定位后不抢检索框焦点）
+      const target = line ? revealTargetOf({ line, column, span, focus }, Date.now()) : null;
       setReveal(target);
       // MM-6：导航历史同拍入栈。行/列/区间取本次 reveal 的落点（没给行 = 第 1 行；
       // NAV-1：列与区间终点一并记下，回跳才回得到原列而不是行首。区间只在**真给了宽度**
@@ -828,9 +831,9 @@ export function App(): ReactElement {
   useEffect(() => subscribeTabCycle(cycleTab), [cycleTab]);
 
   const requestOpenFile = useCallback(
-    (path: string, line?: number, column?: number, span?: RevealSpan, preview = false) => {
+    (path: string, line?: number, column?: number, span?: RevealSpan, preview = false, focus?: boolean) => {
       // P3 多标签：切换标签不丢内容（model 留内存），无需未保存确认
-      commitOpenFile(path, line, column, span, preview);
+      commitOpenFile(path, line, column, span, preview, focus);
     },
     [commitOpenFile],
   );

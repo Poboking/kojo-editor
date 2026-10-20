@@ -891,10 +891,14 @@ export function ProjectView({
           roots={a.roots}
           scopes={a.scopes.items}
           scopeNotices={a.scopes.notices}
-          onReveal={(path, line, span) =>
+          onReveal={(path, line, span, options) =>
             // W9 判据①：与问题面板同一个载荷出口（区间折列住在 `revealLocationOf`，
-            // 这里不再自己写一遍"`column` = 区间起点"）
-            a.kernel.bus.emit('editor.revealLocation', revealLocationOf({ path, line, span }, '搜索'))
+            // 这里不再自己写一遍"`column` = 区间起点"）。
+            // W7-B：检索框回车 / Shift+回车带 `focus:false`——逐项跳只定位、不抢检索框焦点。
+            a.kernel.bus.emit(
+              'editor.revealLocation',
+              revealLocationOf({ path, line, span, focus: options?.focus }, '搜索'),
+            )
           }
         />
       );
@@ -1054,6 +1058,7 @@ export function ProjectView({
             revealColumn={focused ? reveal?.column : undefined}
             revealSpan={focused ? reveal?.span : undefined}
             revealNonce={focused ? reveal?.nonce : undefined}
+            revealFocus={focused ? reveal?.focus : undefined}
             onDirtyChange={stableDirtyChange}
             registerActions={registerActions ? cb.register : undefined}
             onReauth={stableReauth}

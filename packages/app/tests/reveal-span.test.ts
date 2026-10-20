@@ -226,16 +226,24 @@ describe('W9 判据②：span 缺失的退化显式且唯一（零宽落点）',
     expect(nan).toEqual(bad);
   });
 
-  it('面板回调的第三位在两条面板上都是同一个类型（`SearchPanelProps.onReveal` 与问题面板同形）', () => {
+  it('面板回调的第三位在两条面板上都是同一个类型，第四位是焦点选项（additive）', () => {
     const span = { columnStart: START, columnEnd: END };
     const seen: (number | undefined)[][] = [];
-    const onReveal: SearchPanelProps['onReveal'] = (path, line, s) => {
+    const foci: (boolean | undefined)[] = [];
+    const onReveal: SearchPanelProps['onReveal'] = (path, line, s, options) => {
       seen.push([line, s?.columnStart, s?.columnEnd]);
+      foci.push(options?.focus);
       expect(path).toBe(PATH);
     };
     onReveal(PATH, LINE, span);
-    expect(seen).toEqual([[LINE, START, END]]);
-    expect(onReveal.length).toBeLessThanOrEqual(3); // 三个参数就是全部（没有第四条腿）
+    onReveal(PATH, LINE, span, { focus: false });
+    expect(seen).toEqual([
+      [LINE, START, END],
+      [LINE, START, END],
+    ]);
+    // 老调用不传 ⇒ undefined（现行聚焦行为）；键盘逐项跳传 false
+    expect(foci).toEqual([undefined, false]);
+    expect(onReveal.length).toBeLessThanOrEqual(4); // 第四位是 W7-B 的焦点选项，没有第五位
   });
 });
 
@@ -442,6 +450,7 @@ describe('W9 判据① · ProjectView 的两条面板腿都只经 revealLocation
   it('检索面板不再自己折列：`column: span.columnStart` 这第二份折法已经消失', async () => {
     const code = await projectViewSource();
     expect(code).not.toMatch(/column:\s*span\.columnStart/);
-    expect(code).toMatch(/revealLocationOf\(\{ path, line, span \}, '搜索'\)/);
+    // W7-B：键盘逐项跳的焦点选项也走这个出口（`focus` 与落点同一份载荷）
+    expect(code).toMatch(/revealLocationOf\(\{ path, line, span, focus: options\?\.focus \}, '搜索'\)/);
   });
 });

@@ -46,8 +46,23 @@ export interface RevealTarget {
   readonly column?: number;
   /** 1 基、UTF-16 码元、`columnEnd` 不含；缺席 = 零宽落点（退化唯一口径见文件头） */
   readonly span?: RevealSpan;
+  /**
+   * 定位后是否把焦点交给编辑器（W7-B，2026-10-20；additive）。
+   * `false` = 不抢发起方（检索框）的焦点；缺席 = 现行行为（定位后聚焦）。
+   */
+  readonly focus?: boolean;
   /** 同一文件重复定位时用于触发重新滚动（nonce 变化即重新定位） */
   readonly nonce: number;
+}
+
+/**
+ * 落定后要不要聚焦编辑器（**唯一判据**，W7-B 2026-10-20）。
+ *
+ * 只有显式 `focus: false` 才不抢焦点——缺席 / `true` 都保持"定位即聚焦"的旧行为，
+ * 老发起方一个都不改。`applyReveal` 只许调它，不许在组件里再抄一遍 `!== false`。
+ */
+export function revealFocusesEditor(target: { readonly focus?: boolean }): boolean {
+  return target.focus !== false;
 }
 
 /**
@@ -139,7 +154,7 @@ export function revealSpanOf(fact: { readonly column?: number; readonly span?: R
  * 老消费方读 `column`、新消费方读 `span`，两条读法同一个落点。
  */
 export function revealTargetOf(
-  event: { readonly line?: number; readonly column?: number; readonly span?: RevealSpan },
+  event: { readonly line?: number; readonly column?: number; readonly span?: RevealSpan; readonly focus?: boolean },
   nonce: number,
 ): RevealTarget {
   const line = usableColumn(event.line) ?? 1;
@@ -149,6 +164,8 @@ export function revealTargetOf(
     line,
     ...(column !== undefined ? { column } : {}),
     ...(span !== undefined ? { span } : {}),
+    // 焦点选项原样带走（缺席就不留键：老载荷与旧目标逐字同形）
+    ...(event.focus !== undefined ? { focus: event.focus } : {}),
     nonce,
   };
 }
@@ -189,7 +206,13 @@ export function clampRevealPosition(
  * 再由 `clampRevealPosition` 折成屏幕上的落点——**一条链上只有这两处判据**。
  */
 export function revealLocationOf(
-  fact: { readonly path: string; readonly line: number; readonly column?: number; readonly span?: RevealSpan },
+  fact: {
+    readonly path: string;
+    readonly line: number;
+    readonly column?: number;
+    readonly span?: RevealSpan;
+    readonly focus?: boolean;
+  },
   source?: string,
 ): RevealLocationPayload {
   const span = revealSpanOf(fact);
@@ -199,6 +222,8 @@ export function revealLocationOf(
     line: fact.line,
     ...(column !== undefined ? { column } : {}),
     ...(span !== undefined ? { span } : {}),
+    // W7-B：焦点选项与落点同一条出口（缺席不留键，老载荷逐字同形）
+    ...(fact.focus !== undefined ? { focus: fact.focus } : {}),
     ...(source !== undefined ? { source } : {}),
   };
 }

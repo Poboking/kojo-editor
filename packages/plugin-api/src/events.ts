@@ -121,12 +121,18 @@ export interface KernelEventMap {
    * 盖住的那一段、检索发命中的那几个码元、定义/引用发那个名字），
    * 不许有的发区间、有的发行首——同一处位置两条腿落两个地方就是这个 bug。
    * 越界与缺省怎么夹取**不由发起方决定**：判据只在宿主那一处（`reveal-position`）。
+   *
+   * **焦点（W7-B 检索逐项跳，2026-10-20；additive）**：`focus: false` = 只开文件 / 定位，
+   * **不把焦点交给编辑器**——键盘逐项导航（检索框回车 / Shift+回车）靠它连续跳才能一项项
+   * 往下走，否则第一跳就把焦点抢到编辑器、后续回车全落在编辑器里。缺席 = 现行行为
+   * （定位后聚焦编辑器），鼠标点击等老发起方零改动。
    */
   'editor.revealLocation': {
     filePath: string;
     line?: number;
     column?: number;
     span?: RevealSpan;
+    focus?: boolean;
     source?: string;
   };
   /**

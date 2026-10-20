@@ -15,7 +15,12 @@ import { KOJO_LANGUAGE_ID, decorationsToMarkers, registerKojoLanguage } from '..
 import { monacoThemeIdFor } from '../monaco/theme';
 import { useThemePref } from './theme-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
-import { clampRevealPosition, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
+import {
+  clampRevealPosition,
+  revealFocusesEditor,
+  type RevealSpan,
+  type RevealTarget,
+} from '../monaco/reveal-position';
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatRulesPref } from './format-pref';
@@ -187,6 +192,8 @@ interface Props {
   revealSpan?: RevealSpan;
   /** 定位序号：同一文件重复定位时变化以触发重新滚动 */
   revealNonce?: number;
+  /** 定位后是否聚焦编辑器（W7-B：`false` = 不抢发起方焦点；缺席 = 现行行为聚焦） */
+  revealFocus?: boolean;
   /** 脏状态上抛（P3：按路径逐个上报，宿主维护 dirtyPaths 集合） */
   onDirtyChange?: (path: string, dirty: boolean) => void;
   /** 注册编辑器动作句柄（宿主"保存并关闭 / 全部保存"流程用；卸载时以 null 注销） */
@@ -220,6 +227,7 @@ export function EditorPane({
   revealColumn,
   revealSpan,
   revealNonce,
+  revealFocus,
   onDirtyChange,
   registerActions,
   onReauth,
@@ -623,7 +631,9 @@ export function EditorPane({
       endLineNumber: position.lineNumber,
       endColumn: position.columnEnd,
     });
-    ed.focus();
+    // W7-B：键盘逐项跳（检索框回车 / Shift+回车）带 `focus:false`——只定位、不抢焦点，
+    // 连续回车才能一项项走；缺省（鼠标点击 / 旧发起方）仍是"定位即聚焦"。
+    if (revealFocusesEditor(target)) ed.focus();
   }, []);
 
   /**
@@ -1041,11 +1051,12 @@ export function EditorPane({
           line: revealLine,
           ...(revealColumn !== undefined ? { column: revealColumn } : {}),
           ...(revealSpan !== undefined ? { span: revealSpan } : {}),
+          ...(revealFocus !== undefined ? { focus: revealFocus } : {}),
           nonce: revealNonce ?? 0,
         }
       : null;
     applyReveal();
-  }, [revealLine, revealColumn, revealSpan, revealNonce, filePath, applyReveal]);
+  }, [revealLine, revealColumn, revealSpan, revealNonce, revealFocus, filePath, applyReveal]);
 
   /** 保存成功：把该文件 model 的当前版本号立为新基线 */
   const markSaved = useCallback(
