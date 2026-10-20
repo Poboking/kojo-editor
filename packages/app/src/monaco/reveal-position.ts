@@ -13,6 +13,16 @@
  * `packages/plugins/kojo-sugar/src/column-map.ts`）声明的同一条口径——所以源映射给出的列
  * 可以直接当 Monaco 列用，两端都不必换算，也不许在这里 `length` / 数码点。
  *
+ * **代理对不劈开**（2026-10-20 补）：列口径**仍是 UTF-16 码元**（`getLineMaxColumn`
+ * 与糖线源映射都不动，这里也绝不把列换算成码点）。但 1 基列 `c` 是**插入点**：`c`
+ * 落在代理对 high(i) / low(i+1) 两个码元**之间**时，选区会把一个字符劈成两半——
+ * Peek 列表拿到半截文本、高亮错位。修正取**最小位移**：起点向对边界**内收**
+ * （`c` → `c+1`，丢掉那半截），终点向对边界**外扩**（`c` → `c+1`，把整个字符收进选区），
+ * 零宽落点按起点规则落在对之后的同一个边界上。判定需要该行文本，因此
+ * `RevealGeometry.lineText` 是**可选注入**：不给就逐字保留改动前的纯码元夹取
+ * （旧调用方零改动、也无从脑补）；给了才做边界修正。全角等 BMP 字符、孤立代理
+ * （不成对）都不是"对中间"，一个码元都不挪。
+ *
  * **退化只有一条**（W9 判据②）：发起方给不出 `span` 时落点退化成**零宽**
  * （起点 = `column`，给不出列就是行首 1），**不猜区间终点**、不铺到行尾。
  * 这条规则不许在任何发起方里重抄一遍——要退化，就把 `span` 留空，让这里退。
@@ -55,6 +65,45 @@ export interface RevealGeometry {
   readonly lineCount: number;
   /** 该行最后一个合法列（Monaco `getLineMaxColumn`） */
   maxColumn(lineNumber: number): number;
+  /**
+   * 该行文本（可选；与 Monaco `getLineContent` 同口径，行尾不含换行）。
+   * 提供时用于**代理对边界修正**（见文件头）；缺席 = 只做纯码元夹取（改动前行为）。
+   * 与 `maxColumn` 一样按**已夹取的行号**问——行越界时那一行根本不存在。
+   */
+  lineText?(lineNumber: number): string;
+}
+
+/** 高代理区码元（UTF-16） */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** 低代理区码元（UTF-16） */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
+ * 列 `column`（1 基插入点）是否切在**代理对中间**：
+ * 插入点后一个码元是低代理、前一个是对应的高代理。
+ * 孤立代理（不成对）与 BMP 字符（含全角）都不算。
+ */
+function splitsSurrogatePair(text: string, column: number): boolean {
+  const low = column - 1;
+  return (
+    low >= 1 &&
+    low < text.length &&
+    isLowSurrogate(text.charCodeAt(low)) &&
+    isHighSurrogate(text.charCodeAt(low - 1))
+  );
+}
+
+/**
+ * 越过代理对的**最小修正**：起点内收 / 终点外扩都朝对之后挪一格（见文件头）。
+ * 挪后仍是合法边界：对中间意味着 `column <= 行长度`，`column + 1 <= 行长 + 1 = maxColumn`。
+ */
+function leaveSurrogatePair(text: string, column: number): number {
+  return splitsSurrogatePair(text, column) ? column + 1 : column;
 }
 
 /** 可用的列：有限数；其余（缺省 / NaN / Infinity）一律当"没给列" */
@@ -111,6 +160,8 @@ export function revealTargetOf(
  * `geometry.maxColumn(已夹取的行)`——**先夹行再取行长**，否则行越界时行长根本不存在。
  * 区间终点同样两头夹：下限 = 已夹取的起点（终点绝不越过起点，反向了就收成一个点），
  * 上限 = 该行最后一个合法列；没给区间就退化成零宽（口径见文件头）。
+ * 最后一步是**代理对边界修正**（口径见文件头）：只在 `geometry.lineText` 给了行文本时做，
+ * 起点 / 终点各自离开"对中间"（向对之后挪一格）；行文本缺席则原样返回上面的纯码元夹取。
  */
 export function clampRevealPosition(
   target: { readonly line: number; readonly column?: number; readonly span?: RevealSpan },
@@ -121,7 +172,11 @@ export function clampRevealPosition(
   const span = revealSpanOf(target);
   const column = Math.min(Math.max(1, span?.columnStart ?? 1), maxColumn);
   const columnEnd = Math.min(Math.max(column, span?.columnEnd ?? column), maxColumn);
-  return { lineNumber, column, columnEnd };
+  const lineText = geometry.lineText?.(lineNumber);
+  if (typeof lineText !== 'string') return { lineNumber, column, columnEnd };
+  const safeColumn = leaveSurrogatePair(lineText, column);
+  const safeColumnEnd = Math.max(safeColumn, leaveSurrogatePair(lineText, columnEnd));
+  return { lineNumber, column: safeColumn, columnEnd: safeColumnEnd };
 }
 
 /**
@@ -158,4 +213,6 @@ export function revealLocationOf(
  *  - `monaco/find-references.ts` 的 Peek 腿与 `ui/jump-to-state.ts` 的 G1 腿交同一个夹取函数。
  * 守卫在 `tests/reveal-span.test.ts`（六条腿同三元组对拍）与 `tests/jump-to-state.test.ts`
  * （判据不复制：会算列的只有本文件）。新增发起方**不许**在这里之外拼载荷。
+ * 代理对边界修正的**行文本**由各腿的 `RevealGeometry.lineText` 可选喂入；没喂的腿保持
+ * 改动前的纯码元夹取（逐字一致）。边界判据只许住在本文件，调用方不许另写一份。
  * ================================================================= */

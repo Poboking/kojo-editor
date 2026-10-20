@@ -13,6 +13,10 @@
  *   既不铺到行尾、也不"顺手选一个词"；坏 `span`（端点缺失 / 反向 / NaN）整个丢掉退回同一档；
  * - **发起方共用一个载荷出口**：`revealLocationOf` 在场时 `column` 与 `span` 必然同源
  *   （读旧口径的宿主与读新区间的编辑器落到同一个位置）。
+ *
+ * 代理对补批（2026-10-20）再钉一条：列口径仍是 UTF-16 码元（**不改成码点**），但注入行文本后
+ * 起点 / 终点**不得落在代理对中间**——起点向对边界内收、终点向对边界外扩，零宽落点落在边界上；
+ * 全角（BMP）字符与孤立代理是**对照**：它们不是"对中间"，一个码元都不许挪。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -31,6 +35,15 @@ function geometry(lineCount: number, maxColumn: number, asked: number[] = []) {
       asked.push(lineNumber);
       return maxColumn;
     },
+  };
+}
+
+/** 带行文本的桩几何：`lineText` 与 Monaco `getLineContent` 同口径（行尾不含换行） */
+function textGeometry(lines: readonly string[]) {
+  return {
+    lineCount: lines.length,
+    maxColumn: (lineNumber: number) => (lines[lineNumber - 1] ?? '').length + 1,
+    lineText: (lineNumber: number) => lines[lineNumber - 1] ?? '',
   };
 }
 
@@ -227,5 +240,89 @@ describe('revealLocationOf · 发起方的唯一载荷出口', () => {
 
   it('`source` 不给就不带这个键（总线载荷里不留 `source: undefined`）', () => {
     expect('source' in revealLocationOf({ path: 'C:/p/a.ERB', line: 1 })).toBe(false);
+  });
+});
+
+describe('clampRevealPosition · 代理对不劈开（UTF-16 码元边界修正）', () => {
+  // 1 基列 c 是**插入点**：c 落在代理对的 high / low 两个码元之间时，选区会把一个字符劈成两半。
+  // 判据：起点向对边界内收（c+1，丢掉半截字符），终点向对边界外扩（c+1，把整个字符收进来）；
+  // 零宽落点随起点，落在对之后的合法边界。列口径仍是 UTF-16 码元，这里**不数码点**。
+
+  it('行尾 astral：columnEnd 恰落在低代理 ⇒ 外扩到对之后（整个字进选区）', () => {
+    // 'ab𝄞' = a(0) b(1) high(2) low(3) ⇒ 列 4 在代理对中间、列 5 = 行尾
+    expect(clampRevealPosition({ line: 1, span: { columnStart: 1, columnEnd: 4 } }, textGeometry(['ab𝄞']))).toEqual({
+      lineNumber: 1,
+      column: 1,
+      columnEnd: 5,
+    });
+  });
+
+  it('行尾 astral：终点先夹到 maxColumn（对之后），边界修正不越界', () => {
+    expect(
+      clampRevealPosition({ line: 1, span: { columnStart: 2, columnEnd: 999 } }, textGeometry(['ab𝄞'])),
+    ).toEqual({ lineNumber: 1, column: 2, columnEnd: 5 });
+  });
+
+  it('起点落在低代理 ⇒ 向对边界内收（`column` 与零宽 span 同规则）', () => {
+    // 'a𝄞b' = a(0) high(1) low(2) b(3) ⇒ 列 3 在代理对中间、列 4 = 对之后
+    const g = textGeometry(['a𝄞b']);
+    expect(clampRevealPosition({ line: 1, column: 3 }, g)).toEqual({ lineNumber: 1, column: 4, columnEnd: 4 });
+    expect(clampRevealPosition({ line: 1, span: { columnStart: 3, columnEnd: 5 } }, g)).toEqual({
+      lineNumber: 1,
+      column: 4,
+      columnEnd: 5,
+    });
+  });
+
+  it('行首 astral：列 2 在代理对中间 → 列 3；列 1 / 3 本就是边界，零修正', () => {
+    // '𝄞ab' = high(0) low(1) a(2) b(3) ⇒ 列 1 在空前、列 2 在中间、列 3 在对之后
+    const g = textGeometry(['𝄞ab']);
+    expect(clampRevealPosition({ line: 1, column: 2 }, g)).toEqual({ lineNumber: 1, column: 3, columnEnd: 3 });
+    expect(clampRevealPosition({ line: 1, column: 1 }, g)).toEqual({ lineNumber: 1, column: 1, columnEnd: 1 });
+    expect(clampRevealPosition({ line: 1, column: 3 }, g)).toEqual({ lineNumber: 1, column: 3, columnEnd: 3 });
+  });
+
+  it('全角字符（BMP、单码元）作对照：列 2 是真正的字符边界，零修正', () => {
+    // 'ＡＢ' 各占一个码元（U+FF21 / U+FF22）——把"宽字符"误判成代理对就会在这里红
+    expect(
+      clampRevealPosition({ line: 1, span: { columnStart: 2, columnEnd: 3 } }, textGeometry(['ＡＢ'])),
+    ).toEqual({ lineNumber: 1, column: 2, columnEnd: 3 });
+  });
+
+  it('孤立代理（不成对）不是"对中间"：位置本就是码元边界，不动', () => {
+    // 单个高代理后接 x；x 后接单个低代理——都不是合法字符，但也没有"对"可收
+    expect(clampRevealPosition({ line: 1, column: 2 }, textGeometry(['\uD834x']))).toEqual({
+      lineNumber: 1,
+      column: 2,
+      columnEnd: 2,
+    });
+    expect(clampRevealPosition({ line: 1, column: 2 }, textGeometry(['x\uDD1E']))).toEqual({
+      lineNumber: 1,
+      column: 2,
+      columnEnd: 2,
+    });
+  });
+
+  it('没有 lineText 的几何（改动前的调用方）⇒ 逐字保留旧夹取，不擅自脑补', () => {
+    expect(clampRevealPosition({ line: 1, span: { columnStart: 1, columnEnd: 4 } }, geometry(1, 5))).toEqual({
+      lineNumber: 1,
+      column: 1,
+      columnEnd: 4,
+    });
+  });
+
+  it('lineText 按**已夹取的行号**取（行越界时不问模型里不存在的行）', () => {
+    // '𝄞x' = high(0) low(1) x(2)：列 2 在代理对中间
+    const asked: number[] = [];
+    const g = {
+      lineCount: 2,
+      maxColumn: () => 4,
+      lineText: (lineNumber: number) => {
+        asked.push(lineNumber);
+        return '𝄞x';
+      },
+    };
+    expect(clampRevealPosition({ line: 99, column: 2 }, g)).toEqual({ lineNumber: 2, column: 3, columnEnd: 3 });
+    expect(asked).toEqual([2]);
   });
 });
