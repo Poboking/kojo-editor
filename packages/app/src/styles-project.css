@@ -3503,6 +3503,69 @@ button.erb-mode-hint.unlocked:hover {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/* W7-H：状态栏 EOL 读数（仅可写原文面可点；只读 / 预览面仍是纯文字）。
+   按钮 reset 掉全局 button 外观，命中区沿用状态栏行高（行内小件，不做 24px 胶囊）。 */
+.sb-eol-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.sb-eol {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.sb-eol:hover,
+.sb-eol[aria-expanded='true'] {
+  background: var(--hover);
+  color: var(--fg);
+}
+/* 两档小菜单：状态栏在窗口底部 ⇒ 菜单向上开（bottom: calc(100% + 6px)） */
+.sb-eol-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 92px;
+  padding: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+}
+.sb-eol-item {
+  border: none;
+  background: transparent;
+  padding: 4px 8px;
+  margin: 0;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.sb-eol-item:hover {
+  background: var(--hover);
+}
+/* 当前档：勾选列 + 强调色（role=menuitemradio 的视觉态） */
+.sb-eol-item.on {
+  color: var(--accent-text);
+}
+.sb-eol-item.on::after {
+  content: '✓';
+  margin-left: 8px;
+}
 .sb-dirty {
   color: var(--fg-dim);
   white-space: nowrap;

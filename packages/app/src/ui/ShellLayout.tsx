@@ -163,6 +163,14 @@ export interface EditorStatusInfo {
   autosavedAt?: number | null;
   /** A9 选区/光标读数文案（`选中 …` 或 `行:列`；糖视图/无文件时 ''） */
   sel?: string;
+  /**
+   * EOL 读数此刻能不能点击切换（W7-H）。
+   *
+   * 只有"可写 + 原文面"为 true：只读文件（写权限未批准 / 游戏目录 ERB 未解锁）与
+   * `.kojo` 预览面挂的是派生只读 model，切换改不到真文件 ⇒ 入口整条不画。
+   * 缺省（undefined）= 不可切换，旧上报方零改动。
+   */
+  eolSwitchable?: boolean;
 }
 
 /**
@@ -180,7 +188,8 @@ export function isSameEditorStatus(a: EditorStatusInfo | null, b: EditorStatusIn
     a.eol === b.eol &&
     a.lines === b.lines &&
     (a.autosavedAt ?? null) === (b.autosavedAt ?? null) &&
-    (a.sel ?? '') === (b.sel ?? '')
+    (a.sel ?? '') === (b.sel ?? '') &&
+    (a.eolSwitchable ?? false) === (b.eolSwitchable ?? false)
   );
 }
 
@@ -244,14 +253,91 @@ function LockIcon(): ReactElement {
   );
 }
 
-/** 状态栏右区那三格读数（编码·EOL·行数 ／ 选区 ／ 自动保存时刻） */
-function EditorStatusReadout(): ReactElement | null {
+/** 状态栏 EOL 两档（与 EditorPane 的 `entry.eol` 同口径，大写） */
+export type EditorEolChoice = 'LF' | 'CRLF';
+
+/**
+ * 状态栏右区那三格读数（编码·EOL·行数 ／ 选区 ／ 自动保存时刻）。
+ *
+ * W7-H：EOL 那一格在**可写原文面**变成按钮，点开是 LF / CRLF 两档小菜单
+ * （落地由编辑器动作句柄 `switchEol` 负责：`model.setEOL` + 标脏）。
+ * 只读 / 预览 / 没开文件时 `eolSwitchable` 不为 true ⇒ 仍是纯文字（无入口）。
+ *
+ * 导出是给 `packages/app/tests/status-eol-readout.test.ts` 直接渲染取证用；
+ * 生产消费方仍只有本文件的 `statusbar` 一处。
+ */
+export function EditorStatusReadout({
+  onSwitchEol,
+}: {
+  onSwitchEol?: (eol: EditorEolChoice) => void;
+}): ReactElement | null {
   const status = useSyncExternalStore(subscribeShellEditorStatus, getShellEditorStatus, getShellEditorStatus);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const canSwitchEol = status?.eolSwitchable === true && onSwitchEol !== undefined;
+  // 读数消失 / 切到不可切换面（只读、预览）⇒ 菜单不许留在屏上
+  useEffect(() => {
+    if (!canSwitchEol) setMenuOpen(false);
+  }, [canSwitchEol]);
+  // 轻量 popover 的收场：点别处或 Esc 关掉（不引入新组件库）
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (ev: PointerEvent): void => {
+      const target = ev.target as Element | null;
+      if (target && target.closest('.sb-eol-wrap')) return;
+      setMenuOpen(false);
+    };
+    const onKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuOpen]);
   if (!status) return null;
   return (
     <>
       <span className="sb-editor">
-        {status.encoding} · {status.eol} · {status.lines} 行
+        {status.encoding} ·{' '}
+        {canSwitchEol ? (
+          <span className="sb-eol-wrap">
+            <button
+              type="button"
+              className="sb-eol"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title={`当前换行符：${status.eol}（点击切换 LF / CRLF）`}
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              {status.eol}
+            </button>
+            {menuOpen ? (
+              <span className="sb-eol-menu" role="menu" aria-label="换行符">
+                {(['LF', 'CRLF'] as const).map((choice) => (
+                  <button
+                    key={choice}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={status.eol === choice}
+                    className={`sb-eol-item${status.eol === choice ? ' on' : ''}`}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      // 已是目标档：只收菜单，不制造一次无意义的脏
+                      if (status.eol !== choice) onSwitchEol?.(choice);
+                    }}
+                  >
+                    {choice}
+                  </button>
+                ))}
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          status.eol
+        )}{' '}
+        · {status.lines} 行
       </span>
       {status.sel ? <span className="sb-sel">{status.sel}</span> : null}
       {/* 自动保存轻指示（A6）：同一条 onStatusInfo 链路带出的读数，不做第二个协议 */}
@@ -295,6 +381,11 @@ interface Props {
   onReauth: () => void;
   /** 当前文件脏态（状态栏保存态指示） */
   dirty: boolean;
+  /**
+   * 状态栏 EOL 读数切档的落地入口（W7-H）。缺省 = 读数不可点；
+   * EditorPane 上报 `eolSwitchable: true` 时才画入口。
+   */
+  onSwitchEol?: (eol: EditorEolChoice) => void;
   /** 索引状态（状态栏左区） */
   stats: { fileCount: number; fnCount: number; indexing: boolean; indexError: string | null };
   /** 命令执行上下文（ui.toolbar / 命令面板消费） */
@@ -358,6 +449,7 @@ export function ShellLayout(props: Props): ReactElement {
     activeFile,
     onReauth,
     dirty,
+    onSwitchEol,
     stats,
     commandCtx,
     onCloseProject,
@@ -1847,7 +1939,7 @@ export function ShellLayout(props: Props): ReactElement {
           ))}
         {/* PS-6：这三格读的是壳层状态 store（见 `setShellEditorStatus`），
             光标移动只重渲这一枚小叶子，不再掀整壳。没读数 ⇒ 不画（旧口径一致）。 */}
-        <EditorStatusReadout />
+        <EditorStatusReadout onSwitchEol={onSwitchEol} />
         {/* 脏读数（C-1a 语义修正）：只读态下「已保存」是误导——这份文件根本走不了保存；
             没有改动时如实说「未修改」。有未保存改动仍显示「未保存」（那是事实）。 */}
         <span

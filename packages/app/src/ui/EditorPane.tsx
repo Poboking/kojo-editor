@@ -136,6 +136,28 @@ registerBuiltinLanguageSurfaces(monaco);
 const MARKER_OWNER = 'kojo-decorators';
 
 /**
+ * W7-H：把换行符风格落到这份 model 上（Monaco 那一拍，纯操作、与 React 无关）。
+ *
+ * `setEOL` 会改 model 版本号 ⇒ 既有脏判定（`getAlternativeVersionId()` !== 基线）
+ * 立刻成立，撤销栈也如实留一条（可直接 Ctrl+Z 撤回换行切换）；`getValue()` 随之
+ * 改用新换行。已是目标风格 ⇒ 不动（不制造无意义的脏）。
+ *
+ * **保存面边界（本批取证结论，勿误读为闭环）**：缺省保存走
+ * `kernel.io.writeText(path, text)` 的"逐行保换行"模式——未改动行保留盘上原换行、
+ * 改动行按原多数派，纯换行切换会被原样归一回去。保存闭环需要给 writeText 显式
+ * `{ eol }`（内核既有参数）+ 受控的按文件覆盖位，属盘链改动，本批不做。
+ */
+export function applyEolToModel(model: Monaco.editor.ITextModel, eol: 'LF' | 'CRLF'): boolean {
+  if (model.isDisposed()) return false;
+  const target = eol === 'CRLF' ? '\r\n' : '\n';
+  if (model.getEOL() === target) return false;
+  model.setEOL(
+    eol === 'CRLF' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF,
+  );
+  return true;
+}
+
+/**
  * `.kojo` 预览装配判据的项目侧摘要（PS-5 缓存键的一部分）。
  *
  * 段由 `ui.editor.liftPreview` 按 `{path, text, project}` 现算 ⇒ 决定产物的只有
@@ -166,6 +188,12 @@ export interface EditorPaneActions {
   saveAll: () => Promise<boolean>;
   /** 全部脏标签的内容快照（autosave 兜底用：O(脏数) 取值，不切标签不落盘） */
   snapshots: () => EditorSnapshotRecord[];
+  /**
+   * 切换当前活动标签的换行符（W7-H：状态栏 EOL 读数的 LF / CRLF 菜单）。
+   * 只动内存 model（`setEOL` 会改版本号 ⇒ 既有脏判定立刻成立）；只读 / 预览面拒绝。
+   * 返回是否受理（已是目标档 / 面不可写 ⇒ false，不制造无意义脏）。
+   */
+  switchEol: (eol: 'LF' | 'CRLF') => boolean;
 }
 
 /**
@@ -200,7 +228,7 @@ interface Props {
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
   /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数 + A9 选区/光标读数；卸载或无文件时 null；autosavedAt 走同一条链路，A6 状态栏轻指示） */
-  onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null; sel?: string } | null) => void;
+  onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null; sel?: string; eolSwitchable?: boolean } | null) => void;
   /** 编辑器获得焦点（SPLIT-1：宿主据此把焦点组切到本组） */
   onFocused?: () => void;
 }
@@ -487,20 +515,41 @@ export function EditorPane({
     if (!model || !sel) return '';
     return selectionStatusText(model, sel, { line: sel.positionLineNumber, column: sel.positionColumn });
   };
+  /**
+   * 这份文件此刻能不能切换 EOL（W7-H）：只读门与写可行性与保存同一把尺子。
+   * - 预览面：屏上是只读派生 model，切换改不到真文件 ⇒ 不提供入口；
+   * - `kernel.io.isWritable`：写权限未批准 / 未解锁的游戏目录 ERB ⇒ 改也存不了；
+   * - `erbReadOnlyGate`：与 Monaco `readOnly` 同一个门（判定参数与换文件 effect 一致）。
+   */
+  const eolSwitchAllowed = useCallback(
+    (path: string): boolean => {
+      if (sugarModelRef.current !== null) return false;
+      if (!kernel.io.isWritable(path)) return false;
+      const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
+      return !erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit });
+    },
+    [kernel],
+  );
+
   /** 读数上抛：复用 dirty/编码 在走的 onStatusInfo 链路；文案未变则不惊动壳层重渲染 */
-  const pushSelStatus = (force = false): void => {
-    const entry = entriesRef.current.get(filePathRef.current);
-    if (!entry) return;
-    const sel = selReadout();
-    if (!force && sel === selStatusRef.current) return;
-    selStatusRef.current = sel;
-    onStatusInfoRef.current?.({
-      encoding: entry.encoding,
-      eol: entry.eol,
-      lines: entry.model.getLineCount(),
-      sel,
-    });
-  };
+  const pushSelStatus = useCallback(
+    (force = false): void => {
+      const entry = entriesRef.current.get(filePathRef.current);
+      if (!entry) return;
+      const sel = selReadout();
+      if (!force && sel === selStatusRef.current) return;
+      selStatusRef.current = sel;
+      onStatusInfoRef.current?.({
+        encoding: entry.encoding,
+        eol: entry.eol,
+        lines: entry.model.getLineCount(),
+        sel,
+        // 只读 / 预览面不画切换入口；每次上报现算（解锁、预览开关都会紧接着补一报）
+        eolSwitchable: eolSwitchAllowed(filePathRef.current),
+      });
+    },
+    [eolSwitchAllowed],
+  );
 
   /**
    * 全部脏标签的内容快照（autosave 兜底句柄，退出/崩溃守护批）：逐 model 读
@@ -1014,7 +1063,9 @@ export function EditorPane({
     sugarViewRef.current = sugarView;
     saveSugarViewPref(sugarView);
     applySugarView();
-  }, [sugarView, applySugarView]);
+    // 预览面只读 ⇒ EOL 切换入口随开关收回/恢复（读数同一链路，不新开协议）
+    pushSelStatus(true);
+  }, [sugarView, applySugarView, pushSelStatus]);
 
   // 阅读模式「显示语法标记」：偏好落盘 + 立即重铺装饰（只动显示层，投影零改动；
   // 装饰集挂在当前糖 model 上，所以切档 / 重挂之后还要由 applySugarView 再铺一次）
@@ -1032,7 +1083,9 @@ export function EditorPane({
     const canEdit = unlockedPathsRef.current.has(p) || directEditable(p);
     applyEditabilityAndSuggest(ed, erbReadOnlyGate(p, { inWorkspace: inWorkspace(p), canEdit }));
     applySugarView();
-  }, [directMode, kernel, applySugarView]);
+    // 可编辑来源变了 ⇒ 状态栏 EOL 切换入口跟着重算（与 readOnly 同一门）
+    pushSelStatus(true);
+  }, [directMode, kernel, applySugarView, pushSelStatus]);
 
   // 糖视图开关意图 → 宿主落地（插件发意图、宿主渲染；与 editor.liftPreview.show 同款）
   useEffect(() => {
@@ -1254,6 +1307,36 @@ export function EditorPane({
   }, [computeDirty, savePathDetailed, notify]);
 
   /**
+   * 切换当前活动标签的换行符（W7-H：状态栏 EOL 读数的 LF / CRLF 菜单）。
+   *
+   * 只改内存 model：`applyEolToModel` 的 `setEOL` 改版本号 ⇒ 既有脏判定立刻成立，
+   * 保存仍走既有链路。**保存面未闭环**——缺省 `kernel.io.writeText` 逐行保留盘上
+   * 原换行，纯换行切换会在保存时被归一回去（取证与改动方案见 `applyEolToModel` 头注）。
+   * 只读 / 预览面拒绝（入口本就不画，这里再守一道，防动作通道被别处直调）。
+   */
+  const switchEol = useCallback(
+    (eol: 'LF' | 'CRLF'): boolean => {
+      const path = filePathRef.current;
+      const entry = path ? entriesRef.current.get(path) : undefined;
+      if (!path || !entry || entry.model.isDisposed()) return false;
+      if (!eolSwitchAllowed(path)) return false;
+      // 读数已是目标档：只收菜单，不制造一次无意义的脏
+      if (entry.eol === eol) return true;
+      // model 已经就是目标换行（混合换行文件里首行风格与多数派不一致时偶发）：
+      // 不产生脏，也不谎报读数 —— 当作没发生
+      if (!applyEolToModel(entry.model, eol)) return false;
+      entry.eol = eol;
+      if (filePathRef.current === path) {
+        setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
+        // 状态栏读数立刻换档（并顺带重算 eolSwitchable；脏标记由 model 监听上报）
+        pushSelStatus(true);
+      }
+      return true;
+    },
+    [eolSwitchAllowed, pushSelStatus],
+  );
+
+  /**
    * 以磁盘最新内容重载某个打开中的 model（2026-10-12 审阅补丁，修 B1）。
    *
    * 触发源：内核事件 `file.changed`（谁改盘谁发）——当前主要来自 💡 升糖
@@ -1444,9 +1527,9 @@ export function EditorPane({
 
   // 动作句柄注册（宿主标签流程：保存并关闭 / 全部保存）
   useEffect(() => {
-    registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll, snapshots });
+    registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll, snapshots, switchEol });
     return () => registerActions?.(null);
-  }, [save, savePath, saveAll, snapshots, registerActions]);
+  }, [save, savePath, saveAll, snapshots, switchEol, registerActions]);
 
   // 卸载时清空状态栏编辑器信息
   useEffect(() => () => onStatusInfo?.(null), [onStatusInfo]);
@@ -1489,6 +1572,7 @@ export function EditorPane({
             lines: live.model.getLineCount(),
             autosavedAt: Date.now(),
             sel: selStatusRef.current,
+            eolSwitchable: eolSwitchAllowed(path),
           });
         }
         return;
@@ -1504,7 +1588,7 @@ export function EditorPane({
         });
       }
     },
-    [computeDirty, kernel, notify],
+    [computeDirty, eolSwitchAllowed, kernel, notify],
   );
 
   /** 闲置去抖：最后一次输入重起计时；关着开关就不挂定时器（零成本）。**恒稳引用**——model 监听只注册一次，靠 ref 读最新 tick（与 saveRef 同款纪律） */
@@ -1788,12 +1872,14 @@ export function EditorPane({
       // kernel 换代）不清——否则正弹着的确认框会被静默吞掉，保存意图丢失。
       if (prev !== filePath) setPendingChoice(null);
       setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
-      pushSelStatus(true);
       // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
       refreshMarkers(entry.model, filePath);
       applySugarView(); // 预览：整份 ERB 投影成 .kojo 写法（默认关；`.kojo` 自动跳过）
+      // EOL 切换入口的可用性要按**最终上屏的 model** 上报（预览可能刚挂上只读糖 model）⇒
+      // 这一报必须排在 applySugarView 之后
+      pushSelStatus(true);
       applyReveal();
       // C1 反向下行批：setModel + 视图恢复 + 定位都落定后补发一次位点——面板刚切过来
       // 就有位点（此前收到的还是上一份文件的旧位点，消费方按 filePath 判等自会忽略）
@@ -1822,8 +1908,10 @@ export function EditorPane({
       applyEditabilityAndSuggest(ed, erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
       // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
       applySugarView();
+      // 可编辑门翻转 ⇒ EOL 切换入口跟着收回/恢复（只读面不提供切换）
+      pushSelStatus(true);
     },
-    [applySugarView],
+    [applySugarView, pushSelStatus],
   );
 
   // 首次打开 ERB：问一次"要不要开预览"（问过就再不问）。

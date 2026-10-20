@@ -282,7 +282,7 @@ describe('PS-5 · props 面零改动（隔壁线靠这份签名稳定调用点�
       'onDirtyChange?: (path: string, dirty: boolean) => void;',
       'registerActions?: (actions: EditorPaneActions | null) => void;',
       'onReauth: () => void;',
-      'onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null; sel?: string } | null) => void;',
+      'onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null; sel?: string; eolSwitchable?: boolean } | null) => void;',
       'onFocused?: () => void;',
     ]) {
       expect(props, `Props 里应当逐字有这一行：${line}`).toContain(line);
