@@ -103,12 +103,18 @@ export const COLD_SAMPLES_PER_CHILD = 4;
 export const COLD_RUNS = COLD_CHILDREN * COLD_SAMPLES_PER_CHILD;
 
 /**
- * 单击键增量：**4 个子进程 × (1 次整篇打底 + 2 次预热击键 + 3 次计量击键)** ⇒ 样本数仍是 `EDIT_RUNS = 12`。
- * 每子进程 6 次解（1 整篇 + 5 次带旧树的增量）⇒ 原生 RSS 峰值同样 ≈ 0.85 GB 量级。
+ * 单击键增量：**4 个子进程 × (1 次整篇打底 + 2 次预热击键 + 8 次计量击键)** ⇒ `EDIT_RUNS = 32`。
+ * 每子进程 11 次解（1 整篇 + 10 次带旧树的增量）⇒ 原生 RSS 峰值实测 443–459 MB/子进程。
+ *
+ * **为什么从 3 次/子进程提到 8 次（2026-10-20）**：n=12 时"p95"在数学上**就是 12 个样本的最大值**，
+ * 一次 CI 共享 runner 的 CPU 抢占就能把判据打红——CI run 39360271928 实测 p50 **8.24 ms**（与同机
+ * 本机 6.15–6.82 ms 同档）却报了 p95 **16.29 ms**（≥2× p50），而三个绿跑同文件是 10.3–11.4 ms；
+ * 同一次输出里 `退回整篇的击键` 那行**没有内容**（= 查询十二击全走窗口，不是判据在退路）。
+ * 提到 32 个样本后 p95 落到"第 2 差"，单点尖刺不再一票否决，而**16 ms 的那条线一个字没动**。
  */
 export const EDIT_CHILDREN = 4;
 export const EDIT_WARM_EDITS = 2;
-export const EDIT_SAMPLES_PER_CHILD = 3;
+export const EDIT_SAMPLES_PER_CHILD = 8;
 export const EDIT_RUNS = EDIT_CHILDREN * EDIT_SAMPLES_PER_CHILD;
 
 /** 单击键判据（判据 ②）改的那一行（0 基） */

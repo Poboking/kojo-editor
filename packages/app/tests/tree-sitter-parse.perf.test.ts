@@ -20,9 +20,10 @@
  *    `[vitest-pool]: Worker exited unexpectedly` ⇒ 整条池子被判崩（本文件此前的崩法正是这一条）。
  * 2. **原生高水位不还给 OS**：每解一次 5,000 行档，进程 RSS 抬 ~110–150 MB 且**不下降**
  *    （`heapUsed` 全程 ≤ 40 MB、`external` 平的 ⇒ 不是 JS 侧滞留；`Tree`/`Parser`/`Query` 也都按
- *    规矩 `delete()` 了）。同进程跑 20 + 12 轮就是把 fork 推到 ~3 GB 然后**跑到一半**真 OOM。
- *    ⇒ 轮数按"每子进程 ≤ 6 次解"切开（见 `tree-sitter-perf-corpus.ts` 的拆进程计划），
- *    样本数一条不减：**冷全量 n=20、单击键增量 n=12 与拆进程前逐字相同**。
+ *    规矩 `delete()` 了）。同进程跑 20 + 32 轮仍是把 fork 推到数 GB 然后**跑到一半**真 OOM。
+ *    ⇒ 轮数按子进程切开（见 `tree-sitter-perf-corpus.ts` 的拆进程计划；单击键那档每子进程
+ *    11 次解，实测峰值 RSS 443–459 MB/子进程），样本数只增不减：**冷全量 n=20 不变、
+ *    单击键增量 n=12 → n=32（2026-10-20，理由见 §16 ms 一帧线）**。
  *
  * 这条例矩不是新造的：`packages/kojo-syntax-tree/tools/parse-corpus.mjs` 早就因为同一个 Zone 崩溃
  * 把每份 fixture 拆进独立子进程，"父进程不碰 wasm，以 stdout 的 JSON 为准，规避崩溃码"。本文件照抄的
@@ -61,12 +62,15 @@
  * ## 16 ms 一帧线：现在的口径（TSIT2-G 之后）
  *
  * 旧口径"p95 < 160 ms"与"比值 1.2 倍"都太松：把整篇查询塞回来（增量 p50 ≈ 40 ms / p95 ≈ 47 ms）
- * 两条都照样绿。查询接上改动窗口之后（本机空载，三轮实测）：**增量 p50 5.96–6.52 ms /
+ * 两条都照样绿。查询接上改动窗口之后（本机空载，三轮实测，当轮 n=12）：**增量 p50 5.96–6.52 ms /
  * p95 10.30–11.36 ms；整篇重解 p50 56.7–57.4 ms**。判据按这个现实钉：
  * · **比值** `增量 p50 × 4 < 整篇 p50`（实测 ~9 倍；系数取 4 是给满载留一倍余量，同时仍能抓住
  *   "有人把整篇重查塞回 change()"——那种形态比值直接掉回 1.4）；
- * · **一帧线** `p50 < 16` **并且** `p95 < 16`（两条都钉：p95 余量 1.4× 是有意留下的——它翻了通常
- *   不是抖动，而是"退回整篇的击键"那一行真的有内容，判据自己会说出来）；
+ * · **一帧线** `p50 < 16` **并且** `p95 < 16`（两条都钉）。**16 这个数没动过，动的是样本数（2026-10-20）**：
+ *   n=12 时 `quantile(0.95)` 数学上就是 12 个样本的最大值，一次共享 runner 的 CPU 抢占就能一票打红
+ *   （CI run 39360271928：p50 8.24 ms 与绿跑同档，p95 却 16.29 ms，且"退回整篇的击键"那行**没有内容**）。
+ *   现在 4 个子进程 × 8 击 = n=32，p95 取第 2 差，单点尖刺不再一票否决；**最大值只报不判**。
+ *   p95 真翻线时仍先看"退回整篇的击键"那行——有内容就是判据在退路，不是负载抖动；
  * · 取字窗口与查询窗口各判各的：`reads` 那组判据管**解**有多局部，`queryScope` 那组管**查**有多
  *   局部，两条都不许悄悄退回整篇（`⑦` 里"有击键没走查询窗口"那条判据直接把理由打印出来）。
  */
@@ -435,6 +439,10 @@ describe('结构解析 · 单击键增量（真 tree.edit + 有界取字）', ()
     console.log(`增量解（parse + 查询 + 回话）: ${fmt(reading)}（${EDIT_CHILDREN} 个子进程 × ${EDIT_WARM_EDITS} 次预热击键 + ${EDIT_SAMPLES_PER_CHILD} 次计量）`);
     console.log(`对照·整篇重解（⑤ 那一轮）   : ${fmt(full.reading)}`);
     console.log(`增量取字段数                : 中位 ${quantile([...readSamples].sort((a, b) => a - b), 0.5)} / 最大 ${Math.max(...readSamples)}`);
+    // 逐批样本序是"尾部尖刺是冷首击还是随机抢占"的唯一现场证据（p95 翻线时先看这里，再决定修判据还是修实现）
+    console.log(
+      `各批样本（ms，从左到右）      : ${children.map((child, index) => `#${index} ${child.samples.map((sample) => sample.ms.toFixed(2)).join('/')}`).join('  |  ')}`,
+    );
     console.log(`每一击键的结构段数          : ${[...tokenSamples].join(' / ')}（不随击键漂移 = 增量没把树解歪）`);
     const fellBack = batch.samples.filter((sample) => sample.queryScope !== 'window');
     console.log(`查询走的是什么              : ${[...new Set(scopes)].join(' / ')}（窗口里的顶层节点数 ${windowNodes.join(' / ')}）`);
@@ -444,7 +452,10 @@ describe('结构解析 · 单击键增量（真 tree.edit + 有界取字）', ()
     console.log(
       `分腿均值（每击键）            : parse ${legs.parse.toFixed(2)} + 问脏段 ${legs.changedRanges.toFixed(2)} + 着色 ${legs.semanticQuery.toFixed(2)} + 折叠 ${legs.foldsQuery.toFixed(2)} + 缩进 ${legs.indentQuery.toFixed(2)} + 残缺扫描 ${legs.syntaxScan.toFixed(2)} = ${legs.total.toFixed(2)} ms（改前这一趟查询 + 扫描 ≈ 35 ms，整档 p50 ≈ 40 ms）`,
     );
-    console.log(`目标线 16 ms：p50 ${reading.p50 < 16 ? '达标' : '未达标'}（${reading.p50.toFixed(2)} ms，余量 ${(16 / reading.p50).toFixed(2)}×）/ p95 ${reading.p95 < 16 ? '达标' : '未达标'}（${reading.p95.toFixed(2)} ms，余量 ${(16 / reading.p95).toFixed(2)}×；n=${reading.runs}，本机 p95 就是最大值那一击，满载时会越过 16 ⇒ 判据钉在 p50 上，见文件头）`);
+    const slowest = Math.max(...batch.samples.map((sample) => sample.ms));
+    console.log(
+      `目标线 16 ms：p50 ${reading.p50 < 16 ? '达标' : '未达标'}（${reading.p50.toFixed(2)} ms，余量 ${(16 / reading.p50).toFixed(2)}×）/ p95 ${reading.p95 < 16 ? '达标' : '未达标'}（${reading.p95.toFixed(2)} ms，余量 ${(16 / reading.p95).toFixed(2)}×；n=${reading.runs} ⇒ p95 取第 ${Math.ceil(reading.runs * 0.95)} 差，已不是最大值）/ 最慢一击 ${slowest.toFixed(2)} ms（只报不判）`,
+    );
     console.log(rssLine('拆进程后', batch));
     expect(reading.runs).toBe(EDIT_RUNS);
     // 结构判据（比值，不靠绝对毫秒）：增量必须比整篇重解**便宜得多**。
@@ -455,14 +466,14 @@ describe('结构解析 · 单击键增量（真 tree.edit + 有界取字）', ()
       reading.p50 * 4,
       `增量 p50 ${reading.p50.toFixed(2)} ms 已经不像增量（整篇重解 p50 ${full.reading.p50.toFixed(2)} ms）⇒ 有人把全文重解或全文重查查回来了`,
     ).toBeLessThan(full.reading.p50);
-    // 一帧线：p50 与 p95 都钉在 16 ms 上。三轮实测 p50 5.96–6.52 / p95 10.30–11.36（余量 1.4×）。
+    // 一帧线：p50 与 p95 都钉在 16 ms 上。本机 n=32 三轮实测 p50 6.26–6.73 / p95 7.64–8.53。
     // 这条线以前只敢打印不敢判：改前 p95 = 47 ms（每击键整篇重查 + 全树重扫），窗口那条腿接上
-    // 之后才真的进了一帧。p95 只剩 1.4× 余量是**有意的**——机器满载抖到 16 以上时，先看上面
-    // "退回整篇的击键"那一行有没有内容（有就是窗口判据在退路，不是抖动），再决定是收判据还是修判据。
+    // 之后才真的进了一帧。样本数 2026-10-20 从 n=12 提到 n=32（理由见文件头）：n=12 时 p95 就是最大值，
+    // 单点 CPU 抢占会假红；提到 32 后 p95 取第 2 差，**16 ms 这条线一个字没动**。
     expect(reading.p50, `增量 p50 ${reading.p50.toFixed(2)} ms 超过一帧线 16 ms`).toBeLessThan(16);
     expect(
       reading.p95,
-      `增量 p95 ${reading.p95.toFixed(2)} ms 超过一帧线 16 ms（三轮实测 10.3–11.4；先查上面"退回整篇的击键"那行是不是有内容——那是判据在退路，不是抖动）`,
+      `增量 p95 ${reading.p95.toFixed(2)} ms 超过一帧线 16 ms（n=${reading.runs}：p95 已取第 ${Math.ceil(reading.runs * 0.95)} 差，不再是单点抖动；先查上面"退回整篇的击键"那行是不是有内容——那是判据在退路，不是负载）`,
     ).toBeLessThan(16);
     // 取字窗口与文档规模解耦（每击键只该取改动附近那几段）
     expect(Math.max(...readSamples), '某次击键取了 16 段以上 ⇒ 增量退化成全文重扫').toBeLessThanOrEqual(16);
