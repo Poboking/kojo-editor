@@ -3,6 +3,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LineDecoration } from '@kojo/plugin-api';
+import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
+import { diagnosticDecorations } from '../../plugins/ui-sugar-editor/src/panel-logic';
 import { StructureEngine } from '../src/monaco/tree-sitter/engine';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
@@ -10,8 +12,10 @@ import {
   STRUCTURE_SYNTAX_OWNER,
   STRUCTURE_SYNTAX_SOURCE,
   blockHeadWord,
+  closeWord,
   createStructureSyntaxPresenter,
   dropLinesAlreadyErrored,
+  missingStructureName,
   syntaxErrorCode,
   syntaxFaultDecorations,
   syntaxFaultMessage,
@@ -45,8 +49,8 @@ import type * as Monaco from '../src/monaco/entry';
  * 1. **一处残缺一条波浪线，落在作者该看的那一行**：没收盘的块 ⇒ 落点 = 块头行
  *    （MISSING 记号本身零宽，指着那儿作者什么也看不见）；未闭合的 `「` / `{` ⇒ 落点 = 出错行；
  * 2. **文案是人话**：带行号、带"缺的是哪个写形"，屏上不出现 tree-sitter / ERROR / MISSING / CST；
- * 3. **不重复计数**：同一行已有转译器那一路的 error ⇒ 我们这条不画（`kojo-decorators` 那份
- *    markers 就是判据真源，不另立台账）；
+ * 3. **不重复计数**：同一行、同一严重级、列区间相交的转译器那一路 error ⇒ 我们这条不画
+ *    （`kojo-decorators` 那份 markers 就是判据真源，不另立台账）；同一行不同区间各画各的；
  * 4. **闸门与 fail-open**：偏好为关时上屏器根本不诞生（对 Monaco 零调用）；扫描/线程失败 ⇒
  *    装饰清零 + 台账说一次 + 绝不把异常抛回编辑链。
  */
@@ -120,6 +124,80 @@ describe('结构残缺事实（真 wasm 折出来的那些行）', () => {
     const interp = await faultsOf(fixture('broken-unterminated-interp.kojo'));
     expect(interp.faults.map((f) => f.kind)).toEqual(['unterminated-interp']);
     expect(interp.faults[0]?.row).toBe(4);
+  }, 180_000);
+
+  it('未闭合台词（MISSING:speech_close）：文案点名「台词右引号」，落点在开引号那一行行尾（1 基列）', async () => {
+    const { faults } = await faultsOf(fixture('broken-unterminated-string.kojo'));
+    const fault = faults.find((f) => f.expectedToken === 'speech_close');
+    expect(fault, '真语法应当把未闭合的「报成 MISSING:speech_close').toBeDefined();
+    const message = syntaxFaultMessage(fault!);
+    expect(message, '文案必须带上作者要补的那个人话名').toContain('「台词右引号」');
+    expect(message, '机器记号名不许上屏').not.toContain('speech_close');
+    const [decoration] = syntaxFaultDecorations([fault!]);
+    // 第 5 行（0 基 4）行尾：`「这句台词忘了写右引号，行尾也没有折行符` 共 20 个码元 ⇒ 1 基 [21, 22)
+    expect({ line: decoration?.line, start: decoration?.startColumn, end: decoration?.endColumn }).toEqual({
+      line: 5,
+      start: 21,
+      end: 22,
+    });
+  }, 180_000);
+
+  it('未闭合循环 / 出错处理：落点是块头（不是 MISSING 的零宽点），文案各点名收束词', async () => {
+    const { faults } = await faultsOf(fixture('broken-unclosed-block.kojo'));
+    const loop = faults.find((f) => f.expectedToken === 'loop_end');
+    const caught = faults.find((f) => f.expectedToken === 'catch_end');
+    expect(loop, '循环块应当有 MISSING:loop_end').toBeDefined();
+    expect(caught, '出错处理块应当有 MISSING:catch_end').toBeDefined();
+    expect(syntaxFaultMessage(loop!)).toContain('「循环结束」');
+    expect(syntaxFaultMessage(caught!)).toContain('「出错处理结束」');
+    const decorations = syntaxFaultDecorations([loop!, caught!]);
+    // 两处落点都是块头行（第 15 / 21 行），列区间盖住块头词（1 基、末端排他）
+    expect(decorations.map((d) => [d.line, d.startColumn, d.endColumn])).toEqual([
+      [15, 5, 8],
+      [21, 5, 10],
+    ]);
+  }, 180_000);
+
+  it('文件末的未闭合结构：落点不跑到文外——块头在前、缺口行与最后一行自洽', async () => {
+    const loopText = ['角色: 12', '时机 指令 310：', '    循环：', '        「一句。」'].join('\n');
+    const loop = await faultsOf(loopText);
+    expect(loop.faults).toHaveLength(1);
+    expect(loop.faults[0]).toMatchObject({ row: 2, faultRow: 3, kind: 'unclosed-block', expectedToken: 'loop_end' });
+    expect(syntaxFaultMessage(loop.faults[0]!)).toContain('第 4 行');
+
+    const speechText = ['角色: 12', '时机 指令 310：', '「没写完'].join('\n');
+    const speech = await faultsOf(speechText);
+    expect(speech.faults).toHaveLength(1);
+    expect(speech.faults[0]?.faultRow).toBe(2); // 文件最后一行（0 基 2），不跑到文外
+    const [decoration] = syntaxFaultDecorations(speech.faults);
+    expect({ line: decoration?.line, start: decoration?.startColumn, end: decoration?.endColumn }).toEqual({
+      line: 3,
+      start: 1,
+      end: 5, // `「没写完` 共 4 个码元 ⇒ 1 基 [1, 5)
+    });
+  }, 180_000);
+
+  it('同一处未闭合插值：真转译器与结构层各报一条 error ⇒ 只留转译器那条（最近邻），两边说法不打架', async () => {
+    const text = ['角色: 12', '时机 指令 310：', '    {她的胆怯 ? 1 : 2'].join('\n');
+    // 结构层：CST 的 ERROR → kojo.unterminated-interp
+    const { faults } = await faultsOf(text);
+    const structure = faults.filter((f) => f.kind === 'unterminated-interp');
+    expect(structure, '结构层应当在这一行报未闭合插值').toHaveLength(1);
+    // 插件层：真转译器 → interpolation-unclosed（同一个故障，两面各报一条）
+    const sugar = createSugarTranspileService();
+    const plugin: LineDecoration[] = diagnosticDecorations(
+      sugar.transpile(text, { filePath: 'probe.kojo' }).diagnostics,
+    ).filter((d) => d.code === 'interpolation-unclosed');
+    expect(plugin, '转译器应当在同一行报插值未闭合').toHaveLength(1);
+    expect(plugin[0]?.line).toBe(3);
+    expect(plugin[0]?.severity).toBe('error');
+    // 口径不冲突：两句话都在说"插值没闭合"，不是同一行两种说法
+    const structureMessage = syntaxFaultMessage(structure[0]!);
+    expect(plugin[0]?.message).toContain('插值');
+    expect(structureMessage).toContain('插值');
+    expect(structureMessage).toContain('}');
+    // 去重：保留插件侧（语义判定的最近邻），结构层这一条退让
+    expect(dropLinesAlreadyErrored(syntaxFaultDecorations(structure), plugin)).toEqual([]);
   }, 180_000);
 
   it('嵌套两层都没收盘：最内层那一枚先报（内层的块头行在前）', async () => {
@@ -256,6 +334,28 @@ describe('文案：说清"哪里没闭合 / 期望什么"，屏上零机器词',
   });
 });
 
+describe('机器记号名 → 人话名：唯一一张表（以后加族只改这里）', () => {
+  it.each([
+    ['speech_close', '台词右引号'],
+    ['loop_end', '循环结束'],
+    ['catch_end', '出错处理结束'],
+    ['data_end', '数据表结束'],
+  ] as const)('%s → %s', (token, name) => {
+    expect(missingStructureName(token)).toBe(name);
+  });
+
+  it('表外记号不编词；缺省不猜', () => {
+    expect(missingStructureName('some_new_end')).toBeNull();
+    expect(missingStructureName(undefined)).toBeNull();
+    expect(missingStructureName('')).toBeNull();
+  });
+
+  it('块收束词仍只从收束词族取：台词右引号不是「收束词」', () => {
+    expect(closeWord('loop_end')).toBe('循环结束');
+    expect(closeWord('speech_close')).toBeNull();
+  });
+});
+
 describe('装饰成形：一处一行、1 基、带码、按行升序', () => {
   it('行/列换算与排序', () => {
     const decorations = syntaxFaultDecorations([
@@ -287,7 +387,7 @@ describe('装饰成形：一处一行、1 基、带码、按行升序', () => {
 
 /* ─────────────────────── ③ 不重复计数（去重判据） ─────────────────────── */
 
-describe('同一行只许一条红：转译器说过的行我们不再叠', () => {
+describe('同一区间只许一条红：转译器说过的段我们不再叠', () => {
   const ours: LineDecoration[] = [
     { line: 5, severity: 'error', message: '第 5 行的台词开了「却没有等到」。', code: 'kojo.unterminated-string' },
     { line: 9, severity: 'error', message: '第 9 行的块没有等到「循环结束」。', code: 'kojo.unclosed-block' },
@@ -311,6 +411,33 @@ describe('同一行只许一条红：转译器说过的行我们不再叠', () =
     const input: LineDecoration[] = [{ line: 3, severity: 'error', message: 'x' }];
     dropLinesAlreadyErrored(input, [{ line: 3, severity: 'error' }]);
     expect(input).toHaveLength(1);
+  });
+
+  it('同一行、同一严重级、区间相交 ⇒ 只留装饰通道那一条（插件是最近邻，结构层退让）', () => {
+    const structure: LineDecoration[] = [
+      { line: 5, severity: 'error', message: '结构层', code: 'kojo.unterminated-interp', startColumn: 5, endColumn: 18 },
+    ];
+    const kept = dropLinesAlreadyErrored(structure, [
+      { line: 5, severity: 'error', startColumn: 1, endColumn: 7 },
+    ]);
+    expect(kept).toEqual([]);
+  });
+
+  it('同一行但区间不相交 ⇒ 各说各事，不互相顶掉（不同问题不按行连坐）', () => {
+    const structure: LineDecoration[] = [
+      { line: 5, severity: 'error', message: '结构层', code: 'kojo.unclosed-block', startColumn: 10, endColumn: 20 },
+    ];
+    const kept = dropLinesAlreadyErrored(structure, [
+      { line: 5, severity: 'error', startColumn: 1, endColumn: 6 },
+    ]);
+    expect(kept.map((d) => d.code)).toEqual(['kojo.unclosed-block']);
+  });
+
+  it('区间缺列 ⇒ 按整行算（旧口径不退化：插件只说"这一行有错"时结构层仍退让）', () => {
+    const structure: LineDecoration[] = [
+      { line: 5, severity: 'error', message: '结构层', code: 'kojo.unclosed-block', startColumn: 10, endColumn: 20 },
+    ];
+    expect(dropLinesAlreadyErrored(structure, [{ line: 5, severity: 'error' }])).toEqual([]);
   });
 });
 
@@ -411,6 +538,36 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     expect(published).toHaveLength(1);
     expect(published[0]?.owner).toBe(STRUCTURE_SYNTAX_OWNER);
     expect(published[0]?.markers).toEqual([]);
+  });
+
+  it('同行区间相交的 error ⇒ 只留装饰通道那一条；区间不相交 ⇒ 结构层照画', () => {
+    const decorated: Monaco.editor.IMarker[] = [
+      {
+        startLineNumber: 5,
+        startColumn: 1,
+        endColumn: 6,
+        severity: 8,
+        message: '插件侧',
+        owner: DECORATOR_MARKER_OWNER,
+      } as unknown as Monaco.editor.IMarker,
+    ];
+    const { monaco, published } = fakeMonaco(decorated);
+    presenter = createStructureSyntaxPresenter(monaco);
+    // 结构层这一条落在第 5 行 [11,12)：与插件 [1,6) 不相交 ⇒ 不同问题，两条都该在
+    presenter.show(fakeModel(lines), [fault({ row: 4, column: 10, endColumn: 11, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false);
+    expect(published.at(-1)?.markers).toHaveLength(1);
+    expect(published.at(-1)?.markers[0]?.startColumn).toBe(11);
+    // 插件改成盖住整行 ⇒ 同一区间同一严重级，只留插件侧
+    decorated[0] = {
+      startLineNumber: 5,
+      startColumn: 1,
+      endColumn: 12,
+      severity: 8,
+      message: '插件侧',
+      owner: DECORATOR_MARKER_OWNER,
+    } as unknown as Monaco.editor.IMarker;
+    presenter.show(fakeModel(lines), [fault({ row: 4, column: 10, endColumn: 11, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false);
+    expect(published.at(-1)?.markers).toEqual([]);
   });
 
   it('装饰通道后到货（异步）⇒ 重算并按同判据撤下我们那条', () => {

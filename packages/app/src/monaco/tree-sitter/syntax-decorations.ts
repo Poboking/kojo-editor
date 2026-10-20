@@ -28,10 +28,12 @@ import { KOJO_STRUCTURE_MAX_SYNTAX_FAULTS, type KojoStructureSyntaxFault, type K
  *   这是取舍，不是遗漏：那两张面板的口径是"转译器对这份源的判定"，
  *   结构层的残缺不是转译器的判断，混进去等于让面板宣称一件它没算过的事（铁律 4 的反面）。
  *
- * ## 不重复计数（同一行只许一条红）
+ * ## 不重复计数（同一区间同一严重级只留一条）
  *
- * 规则：**本行的转译器/装饰通道已经有 error 级 marker ⇒ 我们这一条不画**。
- * 判据取自 `monaco.editor.getModelMarkers({ owner: 装饰通道 owner, resource })` ——
+ * 规则：**同一行、同为 error、列区间相交**的转译器/装饰通道 marker ⇒ 我们这一条不画，
+ * 保留插件侧那一条（它是语义判定的最近邻）；同一行但区间不相交 = 不同问题，各画各的
+ * （按行连坐会吞掉同一行另一段的真红线）。判据取自
+ * `monaco.editor.getModelMarkers({ owner: 装饰通道 owner, resource })` ——
  * 那是同一份 model 上唯一真源，不另立台账、不猜转译器"会不会"报。
  * 方向也要顾：装饰通道是异步的，比我们先或后都可能 ⇒ 订 `onDidChangeMarkers`，
  * 它的每一次刷新都让我们**按同一判据重算一次**（重算结果与上次逐字相同就不再发，
@@ -75,29 +77,54 @@ export function syntaxErrorCode(kind: KojoStructureSyntaxKind): string {
 /* --------------------------------- 文案 --------------------------------- */
 
 /**
- * 收束记号名（语法层的 token 名，ASCII）→ 词表的 **KeywordId**（也是 ASCII 标识）。
+ * **机器记号名（tree-sitter 的 MISSING token 名，ASCII）→ 作者要照着补的那个人话名。**
  *
- * **这里一个字都不抄中文词形**：中文写形（作者要照着补的那几个字）只能从
- * `@kojo/plugin-kojo-sugar` 的词表派生（`SUGAR_LEXICON_WORDS`），抄一份进 monaco 层就是
- * 第二张投影表——被 `tests/kojo-lexicon-single-source.test.ts` 当场拦住（词形一改，
- * 屏上文案与真实写形就分叉，正是"写得出来读不回来"那类事故）。
+ * 这是"缺的是什么结构"的**唯一映射表**：以后语法加族，只在这张表里补一行，文案与测试
+ * 都跟着走——不许在 `syntaxFaultMessage` 的各分支里再写死一个词（那会让同一件事有两处
+ * 口径，加族时必漏一处）。
  *
- * 只此三枚：本 DSL 只有 `循环` / `出错处理` / `数据表` 三族登记了显式收束词，其余族靠回缩收盘
- * （语法包头注与 `packages/kojo-syntax-tree/tests/fixtures/broken-unclosed-block.kojo` 都写明了）。
- * 表外的记号名 ⇒ `closeWord()` 回 null，文案退回"没有等到它的收束词"，**不编**一个看起来像的词。
+ * 两种登记方式，按记号的性质选：
+ * - **显式收束词的族**（`循环` / `出错处理` / `数据表`）给词表的 **KeywordId**：中文写形
+ *   （作者要照着补的那几个字）只能从 `@kojo/plugin-kojo-sugar` 的词表派生
+ *   （`SUGAR_LEXICON_WORDS`），抄一份进 monaco 层就是第二张投影表——被
+ *   `tests/kojo-lexicon-single-source.test.ts` 当场拦住（词形一改，屏上文案与真实写形就
+ *   分叉，正是"写得出来读不回来"那类事故）。
+ * - **没有中文关键字写形的记号**（台词串的 `speech_close` 就是右引号本身）给 `text`：
+ *   它本来就不是词表里的词，不适用上面那条单源纪律。
+ *
+ * 表外的记号名 ⇒ `missingStructureName()` 回 null，文案退回"它的收束词"，**不编**一个
+ * 看起来像的词（`some_new_end` 不会变成"某个新结束"）。
  */
-const CLOSE_KEYWORD_ID: Readonly<Record<string, SugarLexiconWord['id']>> = {
-  loop_end: 'block.loopEnd',
-  catch_end: 'block.catchEnd',
-  data_end: 'block.dataTableEnd',
+type MissingStructureName = { readonly keywordId: SugarLexiconWord['id'] } | { readonly text: string };
+
+export const MISSING_STRUCTURE_NAMES: Readonly<Record<string, MissingStructureName>> = {
+  loop_end: { keywordId: 'block.loopEnd' },
+  catch_end: { keywordId: 'block.catchEnd' },
+  data_end: { keywordId: 'block.dataTableEnd' },
+  // 台词串的收束记号就是右引号：`MISSING:speech_close` 是"这里少了一个」"，不是少一条关键字
+  speech_close: { text: '台词右引号' },
 };
 
-/** 记号名 → 中文写形（查不到 = null；宁可少说一句，不造一个词） */
-export function closeWord(expectedToken: string | undefined): string | null {
+/** 记号名 → 人话名（null = 表外，不编词） */
+export function missingStructureName(expectedToken: string | undefined): string | null {
   if (!expectedToken) return null;
-  const id = CLOSE_KEYWORD_ID[expectedToken];
-  if (!id) return null;
-  return SUGAR_LEXICON_WORDS.find((w) => w.id === id && w.primary)?.word ?? null;
+  // 记号名来自 worker 回话（不可信输入）：只认自有的键，别让 `constructor` / `__proto__`
+  // 这类名字从原型链上摸到一个"看起来存在"的条目
+  if (!Object.hasOwn(MISSING_STRUCTURE_NAMES, expectedToken)) return null;
+  const name = MISSING_STRUCTURE_NAMES[expectedToken]!;
+  if ('text' in name) return name.text;
+  return SUGAR_LEXICON_WORDS.find((w) => w.id === name.keywordId && w.primary)?.word ?? null;
+}
+
+/**
+ * 收束记号名 → 中文写形（**只认块收束词那一族**；表外的记号回 null）。
+ * 与 {@link missingStructureName} 共用同一张表：这里只是把"不是收束词"的记号（台词右引号）
+ * 排除掉，免得 `unclosed-block` 文案把一句台词缺的引号说成"块没有收盘"。
+ */
+export function closeWord(expectedToken: string | undefined): string | null {
+  if (!expectedToken || !Object.hasOwn(MISSING_STRUCTURE_NAMES, expectedToken)) return null;
+  const name = MISSING_STRUCTURE_NAMES[expectedToken]!;
+  return 'keywordId' in name ? missingStructureName(expectedToken) : null;
 }
 
 /** 块头文本 → 那一族的字（`循环：` → `循环`、`时机 指令 900：` → `时机`） */
@@ -111,27 +138,49 @@ export function blockHeadWord(headText: string | undefined): string | null {
   return firstWord === '' ? null : firstWord;
 }
 
+/** 一条残缺文案要用的上下文（行号 1 基；缺的人话名可能为 null = 表外记号） */
+interface FaultMessageContext {
+  /** 作者该看的那一行（块头 / 开引号那一行） */
+  readonly line: number;
+  /** 缺口实际所在的行（MISSING 插入点 / ERROR 末行） */
+  readonly faultLine: number;
+  /** 块头族名（`循环` / `出错处理` / `时机`；认不出 = null） */
+  readonly blockWord: string | null;
+  /** 缺的结构的人话名（见 {@link MISSING_STRUCTURE_NAMES}；表外 = null） */
+  readonly missing: string | null;
+}
+
+/**
+ * **类别 → 文案**的唯一映射（`Record` 而不是 `switch`：`KojoStructureSyntaxKind` 加一类
+ * 时这里少一条就是编译期红，不会悄悄回落到一句"读不通"）。
+ */
+const FAULT_MESSAGE_BUILDERS: Readonly<Record<KojoStructureSyntaxKind, (ctx: FaultMessageContext) => string>> = {
+  'unclosed-block': ({ line, faultLine, blockWord, missing }) => {
+    const opened = blockWord ? `第 ${line} 行的「${blockWord}」块` : `第 ${line} 行的块`;
+    if (missing) {
+      return `${opened}没有等到「${missing}」——它一直开到第 ${faultLine} 行；请在收回缩进的那一行补写「${missing}」。`;
+    }
+    return `${opened}没有等到它的收束词——它一直开到第 ${faultLine} 行；请把这一族该有的收束语句补上。`;
+  },
+  'unterminated-string': ({ line, missing }) => {
+    // 表外的记号也把"缺的是右引号"说出来：这是这一类的定义，不是猜某个新词
+    const name = missing ?? '台词右引号';
+    return `第 ${line} 行的这句台词开了「，到行尾还没等到「${name}」——请补上它，或在行尾用「续」把这一句接到下一行。`;
+  },
+  'unterminated-interp': ({ line }) =>
+    `第 ${line} 行的插值开了 {，到行尾还没等到 }——插值要写在同一行内，左右花括号都得有。`,
+  'unexpected-token': ({ line }) =>
+    `第 ${line} 行有结构解析读不通的内容——请检查这一行（以及它的上一行）是否缺了收束词、右引号或右花括号。`,
+};
+
 /** 一处残缺 → 作者看得见的那句话（行号 1 基；文案里必须带位置与"期望什么"） */
 export function syntaxFaultMessage(fault: KojoStructureSyntaxFault): string {
-  const line = fault.row + 1;
-  const faultLine = fault.faultRow + 1;
-  switch (fault.kind) {
-    case 'unclosed-block': {
-      const word = blockHeadWord(fault.blockHeadText);
-      const expected = closeWord(fault.expectedToken);
-      const opened = word ? `第 ${line} 行的「${word}」块` : `第 ${line} 行的块`;
-      if (expected) {
-        return `${opened}没有等到「${expected}」——它一直开到第 ${faultLine} 行；请在收回缩进的那一行补写「${expected}」。`;
-      }
-      return `${opened}没有等到它的收束词——它一直开到第 ${faultLine} 行；请把这一族该有的收束语句补上。`;
-    }
-    case 'unterminated-string':
-      return `第 ${line} 行的这句台词开了「，到行尾还没等到」——请补上右引号，或在行尾用「续」把这一句接到下一行。`;
-    case 'unterminated-interp':
-      return `第 ${line} 行的插值开了 {，到行尾还没等到 }——插值要写在同一行内，左右花括号都得有。`;
-    case 'unexpected-token':
-      return `第 ${line} 行有结构解析读不通的内容——请检查这一行（以及它的上一行）是否缺了收束词、右引号或右花括号。`;
-  }
+  return FAULT_MESSAGE_BUILDERS[fault.kind]({
+    line: fault.row + 1,
+    faultLine: fault.faultRow + 1,
+    blockWord: blockHeadWord(fault.blockHeadText),
+    missing: missingStructureName(fault.expectedToken),
+  });
 }
 
 /* ------------------------------ 纯判据（可单测） ------------------------------ */
@@ -163,29 +212,54 @@ export function syntaxFaultDecorations(faults: readonly KojoStructureSyntaxFault
   return [...byLine.values()].sort((a, b) => a.line - b.line);
 }
 
-/** 装饰通道在那一行已经说过话吗（error 级 ⇒ 说过；warning 不顶掉结构残缺） */
+/**
+ * 装饰通道在那一行已经说过话吗（error 级 ⇒ 说过；warning 不顶掉结构残缺）。
+ *
+ * `startColumn` / `endColumn`（1 基、末端排他）是 additive 的可选区间：装饰通道的
+ * marker 自带列，能给就精确到区间；缺省 = **整行**（旧口径：只说"这一行有错"）。
+ */
 export interface OccupiedLine {
   readonly line: number;
   readonly severity: 'error' | 'warning' | 'info';
+  readonly startColumn?: number;
+  readonly endColumn?: number;
+}
+
+/** 两条区间是否相交（缺列 = 整行；零宽/倒挂的列区间同样按整行算，宁多算不少算） */
+function rangesOverlap(decoration: LineDecoration, occupied: OccupiedLine): boolean {
+  if (decoration.line !== occupied.line) return false;
+  const startOf = (start: number | undefined): number => (start !== undefined && Number.isFinite(start) ? start : 1);
+  const endOf = (start: number, end: number | undefined): number => {
+    if (end === undefined || !Number.isFinite(end) || end <= start) return Number.POSITIVE_INFINITY;
+    return end;
+  };
+  const aStart = startOf(decoration.startColumn);
+  const bStart = startOf(occupied.startColumn);
+  return Math.max(aStart, bStart) < Math.min(endOf(aStart, decoration.endColumn), endOf(bStart, occupied.endColumn));
 }
 
 /**
- * **不重复计数**的那一步：同一行已有 error 级装饰（转译器或别的插件已经指出这一行）
+ * **不重复计数**的那一步：**同一行、同一严重级（error）、列区间相交**的装饰通道条目
  * ⇒ 我们这一条不画。
  *
- * 判据只看"那一行有没有一条 error 在那里"，不看码：两个来源对同一行的定位本来就等价于
- * 同一件事（作者眼前就是那一行红了），叠两条只会让他数两遍。
- * 反向也成立且不亏：我们不画的那一行，面板与波浪线都有人负责。
+ * 为什么保留装饰通道（转译器 / 插件）那一条：它是这份源**语义判定的最近邻**——诊断由
+ * 转译器自己算出来，列区间也是它给的；结构层是语法树上的第二意见（作者开着结构层才有），
+ * 同一区间同一严重级时退让，避免同一个问题在眼前数两遍。
+ *
+ * 为什么不再"整行连坐"：同一行可以并排站着**不同**的问题（左边一个全角标点、右边一个
+ * 没收盘的块）。只看行号会把后者的红线也吞掉——那不是去重，是漏报。区间不相交 ⇒ 各说
+ * 各事；缺列（插件只说"这一行有错"）⇒ 仍按整行算，旧行为不退化。
+ *
+ * 反向也成立且不亏：我们退让的那一段，面板与波浪线都有人负责。
  */
 export function dropLinesAlreadyErrored(
   decorations: readonly LineDecoration[],
   occupied: readonly OccupiedLine[],
 ): LineDecoration[] {
   if (decorations.length === 0 || occupied.length === 0) return [...decorations];
-  const taken = new Set<number>();
-  for (const item of occupied) if (item.severity === 'error') taken.add(item.line);
-  if (taken.size === 0) return [...decorations];
-  return decorations.filter((d) => !taken.has(d.line));
+  const taken = occupied.filter((item) => item.severity === 'error');
+  if (taken.length === 0) return [...decorations];
+  return decorations.filter((decoration) => !taken.some((item) => rangesOverlap(decoration, item)));
 }
 
 /** 一份 markers 的可比签名（用于"重算没变就不再发第二次"——防 onDidChangeMarkers 自激） */
@@ -226,6 +300,9 @@ export function createStructureSyntaxPresenter(monaco: typeof Monaco): Structure
     return markers.map((m) => ({
       line: m.startLineNumber,
       severity: m.severity === monaco.MarkerSeverity.Error ? 'error' : m.severity === monaco.MarkerSeverity.Warning ? 'warning' : 'info',
+      // marker 自带 1 基列区间（末端排他）；整行 marker 由 decorationsToMarkers 填成 [1, 行尾+1]
+      startColumn: m.startColumn,
+      endColumn: m.endColumn,
     }));
   };
 
