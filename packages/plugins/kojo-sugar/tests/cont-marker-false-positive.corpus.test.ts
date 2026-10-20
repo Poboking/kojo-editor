@@ -32,7 +32,7 @@
  * 必须仍然报错，不许为了让上面那条转绿就把规则删掉。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SugarTranspileResult } from '@kojo/plugin-api';
@@ -76,7 +76,9 @@ function erbFiles(dir: string): string[] {
  * 末字那种（`「我继续」`）可能是作者真想把标记写进引号，判据上仍有争议 ⇒ 不取。
  */
 function collectQuoteContSamples(): QuoteContSample[] {
-  if (!SMOKE) return [];
+  // 语料根指到没有 `個人口上` 的盘（如 eraAkumaMaid 的 `ERB/EVENT_K`）⇒ 无样本、整组跳过，
+  // 不许在收集期抛 ENOENT（那会让 vitest 判成"文件收集失败"而不是"跳过"）。
+  if (!SMOKE || !existsSync(KOJO_DIR)) return [];
   const samples: QuoteContSample[] = [];
   const files = erbFiles(KOJO_DIR).slice(0, MAX_FILES);
   for (const file of files) {
