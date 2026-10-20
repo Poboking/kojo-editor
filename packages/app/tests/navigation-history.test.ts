@@ -1,6 +1,7 @@
 /**
  * MM-6 / MM-10 · 导航历史纯逻辑单测：前进/后退（去重 / 前进分支截断 / 边界不改态）、
- * 恢复关闭的标签（批量压入顺序 / 上限淘汰 / 空栈拒绝）、跨项目清空。
+ * 恢复关闭的标签（批量压入顺序 / 上限淘汰 / 空栈拒绝）、跨项目清空、列/区间随条目往返
+ * （NAV-1：回跳落到原列而不是行首）。
  * 零 React、零 Monaco——App 是唯一状态所有者，这里的每条纯函数就是它写入历史的唯一通道。
  */
 
@@ -10,6 +11,7 @@ import {
   clearNav,
   createNavState,
   navBack,
+  navEntrySpan,
   navForward,
   popClosed,
   pushClosed,
@@ -19,6 +21,13 @@ import {
 } from '../src/ui/navigation-history';
 
 const at = (path: string, line = 1): NavEntry => ({ path, line });
+/** 带列/区间的条目：缺席的键不落进对象（既有 toEqual 断言逐字不受影响） */
+const pos = (path: string, line: number, column?: number, endColumn?: number): NavEntry => ({
+  path,
+  line,
+  ...(column !== undefined ? { column } : {}),
+  ...(endColumn !== undefined ? { endColumn } : {}),
+});
 const paths = (s: NavState): string => s.stack.map((e) => `${e.path}:${e.line}`).join(' ');
 
 /** 连着 push 一串条目（同 project 根；返回终态） */
@@ -133,6 +142,65 @@ describe('导航历史 · 前进/后退与边界（不静默的底气）', () =>
     expect(s.cursor).toBe(1);
     const fwd = navForward(s); // 从 b 还能前进回 c
     expect(fwd.entry).toEqual(at('c.erb'));
+  });
+});
+
+describe('导航历史 · 列/区间（NAV-1：回跳落回原列，不是行首）', () => {
+  it('入栈保列：从 (path,12,7) 出发、导航到别处，back 回到 (path,12,7) 而不是 (path,12,1)', () => {
+    const s = pushAll(createNavState(), [pos('a.erb', 12, 7), pos('b.erb', 3, 2)]);
+    const back = navBack(s);
+    expect(back.entry).toEqual(pos('a.erb', 12, 7));
+    expect(back.entry!.column).toBe(7); // 不是行首 1
+  });
+
+  it('入栈保区间：endColumn 随条目往返（back 拿回原区间，forward 也不丢）', () => {
+    const s = pushAll(createNavState(), [pos('a.erb', 12, 7, 11), pos('b.erb', 3)]);
+    const back = navBack(s);
+    expect(back.entry).toEqual(pos('a.erb', 12, 7, 11));
+    const fwd = navForward(back.state);
+    expect(fwd.entry).toEqual(pos('b.erb', 3));
+  });
+
+  it('去重仍按 path+line：同行的列不同不重复入栈，首条条目的列改写不掉（既有语义）', () => {
+    let s = pushNav(createNavState(), pos('a.erb', 12, 7), null);
+    s = pushNav(s, pos('a.erb', 12, 20), null); // 同一行、不同列 ⇒ 同一个位置
+    expect(s.stack).toHaveLength(1);
+    expect(s.stack[0]).toEqual(pos('a.erb', 12, 7)); // 首次到访的列胜出
+    // 光标在别处时命中同 path+line：只挪光标，条目原样（列不改写）
+    s = pushNav(s, pos('b.erb', 1), null);
+    s = pushNav(s, pos('a.erb', 12, 20), null);
+    expect(s.stack).toHaveLength(2);
+    expect(s.cursor).toBe(0);
+    expect(s.stack[0]).toEqual(pos('a.erb', 12, 7));
+  });
+
+  it('没给列的旧条目原样保留：不凭空补列（退化口径逐字不变）', () => {
+    const s = pushAll(createNavState(), [at('a.erb', 12), at('b.erb', 3)]);
+    const back = navBack(s);
+    expect(back.entry).toEqual(at('a.erb', 12));
+    expect(back.entry!.column).toBeUndefined();
+  });
+
+  it('back 落地同拍 pushNav（App 的 commitOpenFile 同款）带列/区间：历史不涨、列不丢', () => {
+    let s = pushAll(createNavState(), [pos('a.erb', 12, 7, 11), pos('b.erb', 3, 2)]);
+    const back = navBack(s);
+    s = pushNav(back.state, back.entry!, null);
+    expect(s.stack).toHaveLength(2);
+    expect(s.cursor).toBe(0);
+    expect(s.stack[0]).toEqual(pos('a.erb', 12, 7, 11)); // 区间还在
+  });
+});
+
+describe('导航历史 · 条目 → 打开路径的 span（navEntrySpan）', () => {
+  it('真给了宽度才升级成区间（与两条 editor opener 同一判据）', () => {
+    expect(navEntrySpan(pos('a.erb', 12, 7, 11))).toEqual({ columnStart: 7, columnEnd: 11 });
+  });
+
+  it('只有列 / 零宽 / 没列 / 反向区间 ⇒ undefined（由 reveal-position 统一退化，不在这里猜）', () => {
+    expect(navEntrySpan(pos('a.erb', 12, 7))).toBeUndefined();
+    expect(navEntrySpan(pos('a.erb', 12, 7, 7))).toBeUndefined();
+    expect(navEntrySpan(at('a.erb', 12))).toBeUndefined();
+    expect(navEntrySpan(pos('a.erb', 12, 9, 3))).toBeUndefined();
   });
 });
 

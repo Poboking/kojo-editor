@@ -6,20 +6,40 @@
  * 读写），本模块的每条规则由 `navigation-history.test.ts` 钉死。
  *
  * 两块栈，一条产品语义：
- * - **导航栈**（MM-6）：`{ path, line }` 条目的时间线 + `cursor` 光标。back = 光标
- *   前移，forward = 光标后移，push = 截断「前进」分支后压栈（VSCode 语义：跳到新
- *   位置后，前进历史作废）。同 path 同 line 不重复入栈（已在时间线里的位置 = 把
- *   光标挪回去，栈不涨）。
+ * - **导航栈**（MM-6）：`{ path, line, column?, endColumn? }` 条目的时间线 + `cursor`
+ *   光标。back = 光标前移，forward = 光标后移，push = 截断「前进」分支后压栈（VSCode
+ *   语义：跳到新位置后，前进历史作废）。同 path 同 line 不重复入栈（已在时间线里的
+ *   位置 = 把光标挪回去，栈不涨；**列不参与判重**——同一条行上的不同列算同一个位置，
+ *   首次到访记下的列就是该位置的列，见 pushNav）。
+ * - **列/区间**（NAV-1）：入栈时把 reveal 的 `column` 与区间终点 `endColumn` 一并记下，
+ *   回跳才回得到原列而不是行首（区间只在真给了宽度时记，零宽等价于只有列）。
  * - **恢复栈**（MM-10）：被关标签的 LIFO（`closed[0]` = 最近关闭），上限
  *   `CLOSED_TABS_LIMIT`，超限丢最旧的。
  * - **不跨项目**：`rootDir` 与传入值不同 ⇒ 两块栈连同 rootDir 整体作废再入栈
  *   （A 项目的导航/恢复栈对 B 项目没有意义，产品语义）。
  */
 
-/** 导航栈条目：一个位置（路径 + 行；行 1 基，与 `revealTargetOf` 的 line 同口径） */
+/**
+ * 导航栈条目：一个位置（路径 + 行；行 1 基，与 `revealTargetOf` 的 line 同口径）。
+ *
+ * 列（NAV-1，additive）：`column` = reveal 的起点列（1 基、UTF-16 码元），`endColumn`
+ * = 区间终点（1 基、**不含**端点）。两者缺席都等于"发起方没给列/区间"（回跳落行首，
+ * 与入栈前的退化口径逐字一致）。**列不参与去重**：判重只看 path + line（见 pushNav），
+ * 因为"同一条行上的不同列"在作者心里是同一个落脚点。
+ */
 export interface NavEntry {
   readonly path: string;
   readonly line: number;
+  /** 1 基起点列；缺席 = 没给列（回跳落行首） */
+  readonly column?: number;
+  /** 1 基、不含端点的区间终点；缺席 = 零宽（只有列）或没给列 */
+  readonly endColumn?: number;
+}
+
+/** 条目里记下的列区间（与 `revealLocationOf` 的 span 同形，纯数字、不借 Monaco 类型） */
+export interface NavSpan {
+  readonly columnStart: number;
+  readonly columnEnd: number;
 }
 
 /** 导航历史全态（不可变：每个纯函数返回新对象，命中边界时原样返回同一引用） */
@@ -71,7 +91,9 @@ function forRoot(state: NavState, rootDir: string | null): NavState {
  * 入栈一个导航条目（MM-6 的唯一写入口；App 的 `commitOpenFile` 同拍调用）。
  *
  * - 同 path 同 line ⇒ **不重复入栈**：目标已在时间线里（含恰是当前光标处）时只把
- *   光标挪过去，栈原样长不大——back/forward 落地、重复点击同一定位，都不会污染历史；
+ *   光标挪过去，栈原样长不大——back/forward 落地、重复点击同一定位，都不会污染历史。
+ *   **判重不看列**（既有语义，NAV-1 明确保留）：同一条行上的第二次到访即使列不同，
+ *   也只挪光标、不改写首条条目的列——该位置的列以首次到访记下的为准；
  * - 否则 ⇒ 截断光标之后的「前进」分支，压栈，光标移到栈尾（VSCode 语义：跳到新
  *   位置后，前进历史作废）；
  * - 传入 rootDir 与 state 不同 ⇒ 先跨项目清空再入栈（项目语义，见文件头）。
@@ -82,6 +104,19 @@ export function pushNav(state: NavState, entry: NavEntry, rootDir: string | null
   if (at >= 0) return at === base.cursor ? base : { ...base, cursor: at };
   const kept = base.stack.slice(0, base.cursor + 1); // 光标之后（含光标处旧条目）整段作废
   return { ...base, stack: [...kept, entry], cursor: kept.length };
+}
+
+/**
+ * 条目里的列区间 → 打开路径的 `span`（NAV-1：回跳时把区间一并交回 `commitOpenFile`）。
+ *
+ * 只有**真给了宽度**（`endColumn > column`）才升级成区间，否则 `undefined`——与两条
+ * editor opener（`kojo-definition` / `find-references`）的升级判据逐字相同：零宽/没给列
+ * 仍是一条 `column`，由 `reveal-position` 统一退化，不在这里二次实现。
+ */
+export function navEntrySpan(entry: NavEntry): NavSpan | undefined {
+  if (entry.column === undefined || entry.endColumn === undefined) return undefined;
+  if (entry.endColumn <= entry.column) return undefined;
+  return { columnStart: entry.column, columnEnd: entry.endColumn };
 }
 
 /** 后退（Alt+←）：光标前移一格。已在最早（或空栈）⇒ 原 state + null（调用方发人话拒绝） */

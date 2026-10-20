@@ -100,6 +100,7 @@ import {
 import {
   createNavState,
   navBack as navBackInHistory,
+  navEntrySpan,
   navForward as navForwardInHistory,
   popClosed,
   pushClosed,
@@ -880,9 +881,25 @@ export function App(): ReactElement {
       // W9：区间一路带到编辑器（退化判据唯一住在 `revealTargetOf`，这里不许再折一次列）
       const target = line ? revealTargetOf({ line, column, span }, Date.now()) : null;
       setReveal(target);
-      // MM-6：导航历史同拍入栈。行取本次 reveal 的落点行（没给行 = 第 1 行）；
+      // MM-6：导航历史同拍入栈。行/列/区间取本次 reveal 的落点（没给行 = 第 1 行；
+      // NAV-1：列与区间终点一并记下，回跳才回得到原列而不是行首。区间只在**真给了宽度**
+      // 时记（零宽等价于只有列，与两条 editor opener 的升级判据同口径）。
       // rootDir 可能还是 null（欢迎页期的跳转）——照记，项目一出现按跨项目规则整段作废。
-      navRef.current = pushNav(navRef.current, { path, line: target?.line ?? 1 }, rootDirRef.current);
+      const navColumn = target?.column;
+      const navEndColumn =
+        navColumn !== undefined && target?.span !== undefined && target.span.columnEnd > navColumn
+          ? target.span.columnEnd
+          : undefined;
+      navRef.current = pushNav(
+        navRef.current,
+        {
+          path,
+          line: target?.line ?? 1,
+          ...(navColumn !== undefined ? { column: navColumn } : {}),
+          ...(navEndColumn !== undefined ? { endColumn: navEndColumn } : {}),
+        },
+        rootDirRef.current,
+      );
     },
     [],
   );
@@ -1333,6 +1350,7 @@ export function App(): ReactElement {
   /**
    * 后退（MM-6，Alt+←）：导航栈光标前移，落地走 commitOpenFile——它同拍 pushNav，
    * 而目标条目正是光标新驻地，去重规则下栈不涨、光标不漂（back/forward 不污染历史）。
+   * NAV-1：条目记下的列/区间随落地一并交回（`navEntrySpan`），回跳落回原列而不是行首。
    * 到栈底 ⇒ 人话拒绝（铁律 4：按了必须有反应，不静默）。
    */
   const navBack = useCallback(() => {
@@ -1342,10 +1360,10 @@ export function App(): ReactElement {
       return;
     }
     navRef.current = moved.state;
-    commitOpenFile(moved.entry.path, moved.entry.line);
+    commitOpenFile(moved.entry.path, moved.entry.line, moved.entry.column, navEntrySpan(moved.entry));
   }, [commitOpenFile, notify]);
 
-  /** 前进（MM-6，Alt+→）：光标后移；到栈顶 ⇒ 人话拒绝（同 navBack 的铁律） */
+  /** 前进（MM-6，Alt+→）：光标后移；到栈顶 ⇒ 人话拒绝（同 navBack 的铁律；列/区间同款交回） */
   const navForward = useCallback(() => {
     const moved = navForwardInHistory(navRef.current);
     if (!moved.entry) {
@@ -1353,7 +1371,7 @@ export function App(): ReactElement {
       return;
     }
     navRef.current = moved.state;
-    commitOpenFile(moved.entry.path, moved.entry.line);
+    commitOpenFile(moved.entry.path, moved.entry.line, moved.entry.column, navEntrySpan(moved.entry));
   }, [commitOpenFile, notify]);
 
   /**
