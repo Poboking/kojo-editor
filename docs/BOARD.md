@@ -21,5 +21,4 @@
 | CASE-MULTILINE-VALUES | CASE 多行值列表未拼（STATE 行 32）：拼接估 +311 谓词，需基线取舍 | 先取证：现状归类 / +311 构成 / 误报风险面，证据齐再定实现或缓做 | 认领：lead·W8-C 2026-10-20 |
 | SNAPSHOT-MISS-ATTR | 派生快照未命中（索引可用 16.8s vs 命中 3.05s）触发未归因（STATE 行 28）：立项「受控作废」复现 + read+parse 6.9s / refs scan 7.4s 分段 | 判据：每类失效输入位有受控复现读数；定位到「不该失效却失效」的判据则取证留认领 | 认领：lead·W8-D 2026-10-20 |
 | UPDATER-ENV-PROXY | 自动更新跟随环境代理（STATE 行 45 下批待办）：Rust 侧读 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY 经 check 的 proxy 参数传入，未设置零改动 | 判据：cargo 单测覆盖优先序 / 畸形值忽略 / 未设置不传；audit ✅ | 认领：lead·W8-E 2026-10-20 |
-| PERF-14-IPC-MERGE | 内核 storage 两趟 IPC 合并（STATE 行 30 PERF-13 尾）：lint 复用轮 `exists` + `readFileBytes` 两趟 → additive 单趟 | 判据：同输入对拍一致（不存在/存在/读失败）；既有契约语义不动 | 认领：lead·W8-F 2026-10-20 |
 | BETA1-INSTALL-DOCS | v0.4.0-beta.1 发版余项（STATE 行 49）：面向用户的安装/使用文档——USER-GUIDE 补安装 / 首启 / 自动更新 / 常见问题，术语照「.kojo 语言/预览/校验」口径 | 纯文档批豁免测试面；签名状态以仓库/CI 工作流事实为准，不编造 | 认领：lead·W8-G 2026-10-20 |
