@@ -138,6 +138,41 @@ fn under_cap_file_is_not_rewritten() {
     assert!(body.contains("新行"), "追加在同文件：{body}");
 }
 
+/// 上限边界是**闭区间**：恰好 5MB 不触发重写（日常追加 = OpenOptions append，不整读），
+/// 越过上限后的下一次追加才保尾截断一次。这条钉住"追加经济性"的前提：
+/// 重写成本只在文件已经超限时付，且只付一次（截断后回到上限以内）。
+#[test]
+fn size_cap_boundary_rewrites_only_when_already_over() {
+    let dir = temp_dir("cap-boundary");
+    let file = dir.join(format!("frontend-{}.log", today_tag()));
+    let mut exact: Vec<u8> = Vec::with_capacity(LOG_SIZE_CAP_BYTES as usize);
+    while exact.len() + 2 <= LOG_SIZE_CAP_BYTES as usize {
+        exact.extend_from_slice(b"x\n");
+    }
+    while exact.len() < LOG_SIZE_CAP_BYTES as usize {
+        exact.push(b'x');
+    }
+    std::fs::write(&file, &exact).unwrap();
+
+    // 恰好等于上限：不重写（内容原样，只追加）
+    append_frontend_line(&dir, "error", "恰在上限", None).unwrap();
+    let body = std::fs::read(&file).unwrap();
+    assert!(
+        !body.starts_with("（日志超过".as_bytes()),
+        "恰好等于上限不该截断（<= 边界）"
+    );
+    assert!(body.starts_with(b"x\n"), "不超限时头部一字节不动");
+    assert!(body.len() > exact.len(), "新记录应已追加");
+
+    // 越过上限后的下一次追加：保尾截断一次（标记 + 旧尾 + 新行都在）
+    append_frontend_line(&dir, "error", "越限之后", None).unwrap();
+    let body = std::fs::read(&file).unwrap();
+    assert!(body.starts_with("（日志超过".as_bytes()), "超限应保尾截断");
+    assert!(String::from_utf8_lossy(&body).contains("越限之后"), "新记录在尾部");
+    assert!(body.len() <= LOG_SIZE_CAP_BYTES as usize + 1024, "截断后贴着上限");
+    assert!(body.contains(&b'x'), "旧尾部内容仍在（截头不截尾）");
+}
+
 /* ------------------------------ panic hook ------------------------------ */
 
 #[test]

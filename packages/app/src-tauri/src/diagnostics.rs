@@ -205,8 +205,12 @@ pub fn append_frontend_line(
 ///
 /// 纯 IO 原语：不接受路径参数、落点写死 ⇒ 无越权面，不过写允许域闸（同 `export_file`
 /// 的"无路径参数"哲学；宿主自己的日志目录恒为 appData）。
+///
+/// 落盘形态：**OpenOptions append**（无整读；只有文件**已超** 5MB 上限时才做一次
+/// `enforce_size_cap` 的保尾重写——日常追加不读旧内容）。追加仍是一次 open+write，
+/// 但它在 IPC 线程上会随盘况（Defender / 慢盘）抖动 ⇒ 上阻塞线程池。
 #[tauri::command]
-pub fn append_frontend_log(
+pub async fn append_frontend_log(
     app: tauri::AppHandle,
     level: String,
     message: String,
@@ -217,7 +221,10 @@ pub fn append_frontend_log(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {e}"))?;
-    append_frontend_line(&log_dir(&app_dir), &level, &message, detail.as_deref())
+    crate::run_blocking("append_frontend_log", move || {
+        append_frontend_line(&log_dir(&app_dir), &level, &message, detail.as_deref())
+    })
+    .await
 }
 
 /* ------------------------------ 轮转 ------------------------------ */

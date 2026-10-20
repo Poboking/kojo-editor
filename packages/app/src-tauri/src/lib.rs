@@ -70,6 +70,53 @@ struct WriteDomainState {
     /// 判定结果与"每次写都重新 canonicalize 一遍根"逐字相同（含根解析失败的错误文案），
     /// 省掉的只是重复的系统调用与两份 Vec 克隆。被任何根变更点整体清空。
     canon_roots: Mutex<HashMap<PathBuf, PathBuf>>,
+    /// **允许域变更序号**（REF-FRONT-PERF，2026-10-20）：`register_write_domain` 改 async 后，
+    /// 它的"规范化 + 准入门判定"在阻塞线程池上跑，期间 `clear_write_domain`（项目关闭）或另一次
+    /// 注册可能插进来——旧实现全在主线程、天然串行。取号 + 落定前复核把顺序找回来：
+    /// 落定与清除共用 `project_root` 锁，序号不等 = 期间发生过清除/后发注册 ⇒ 本次作废
+    /// （fail-closed 报错，决不把已关闭的项目根复活）。
+    domain_epoch: AtomicU64,
+}
+
+/// 取一个「允许域变更」序号（register 在耗时判定前取号；落定前复核）。
+fn begin_domain_change(state: &WriteDomainState) -> u64 {
+    state.domain_epoch.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// 注册落定：复核取号后允许域没被并发变更，再写入项目根。
+/// 与清除共用 `project_root` 锁 ⇒ "检查—落定"与清除线性化（后发生的清除恒胜）。
+fn commit_project_root(
+    state: &WriteDomainState,
+    root: PathBuf,
+    epoch: u64,
+) -> Result<(), String> {
+    let mut guard = state
+        .project_root
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?;
+    if state.domain_epoch.load(Ordering::SeqCst) != epoch {
+        return Err(
+            "写允许域注册被并发变更取消（判定期间项目被关闭或换开）：请重新打开项目".to_string(),
+        );
+    }
+    *guard = Some(root);
+    drop(guard);
+    // 允许域变了 ⇒ 规范化备忘录整体作废（见 `canonical_root_cached`）
+    invalidate_canon_roots(state);
+    Ok(())
+}
+
+/// 清除的同步核心（命令侧只是包装；单测直接打这一层）：取新号（在途注册一律作废）+ 清根。
+fn clear_domain_core(state: &WriteDomainState) -> Result<(), String> {
+    let mut guard = state
+        .project_root
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?;
+    state.domain_epoch.fetch_add(1, Ordering::SeqCst);
+    *guard = None;
+    drop(guard);
+    invalidate_canon_roots(state);
+    Ok(())
 }
 
 /// 规范化路径：找到最深的已存在祖先做 canonicalize（解析 `..` 与符号链接），
@@ -310,13 +357,25 @@ fn record_approved_root(
     Ok(())
 }
 
+/// 目标路径 → 允许域判定的规范化形态（**只有一份**：直算 / 备忘录 / 命令侧三条路共用 ⇒
+/// "目标解析失败"的文案逐字相同）。这一步要开文件句柄（`canonicalize`），
+/// 放在取锁**之前**做：写域的锁只保护三份状态，不该把一次系统调用圈在锁里。
+fn canonicalize_target_for_domain(path: &Path, op: &str) -> Result<PathBuf, String> {
+    canonicalize_deep(path)
+        .map_err(|e| format!("写允许域（{op}）：路径解析失败 {path_display}: {e}", path_display = path.display()))
+}
+
 /// 允许域判定的**唯一实现**：`resolve_root` 只换"根怎么规范化"这一步（每次直算 / 走备忘录），
 /// 判序、包含关系与三条文案（目标解析失败 / 根解析失败 / 域外拒绝）都只有一份 ⇒
 /// 加速层不可能把判定改形。入参用引用（`Option<&Path>` / `&[PathBuf]`）：判定过程不再构造
 /// `Vec<PathBuf>`（原先每次写都要克隆一遍全部根）。
-fn ensure_in_domain_with<R>(
-    project_root: Option<&Path>,
+///
+/// 目标已由 [`canonicalize_target_for_domain`] 规范化 ⇒ 命令侧可以先在锁外算好再进来
+/// （`ensure_write_allowed`），判序与文案不变。
+fn ensure_canon_target_in_domain_with<R>(
+    canon_target: &Path,
     app_data_dir: &Path,
+    project_root: Option<&Path>,
     extra_roots: &[PathBuf],
     path: &Path,
     op: &str,
@@ -325,8 +384,6 @@ fn ensure_in_domain_with<R>(
 where
     R: FnMut(&Path) -> Result<PathBuf, String>,
 {
-    let canon_target = canonicalize_deep(path)
-        .map_err(|e| format!("写允许域（{op}）：路径解析失败 {path_display}: {e}", path_display = path.display()))?;
     let mut roots: Vec<&Path> = vec![app_data_dir];
     if let Some(r) = project_root {
         roots.push(r);
@@ -334,7 +391,7 @@ where
     roots.extend(extra_roots.iter().map(|p| p.as_path()));
     for root in roots {
         let canon_root = resolve_root(root)?;
-        if is_within(&canon_target, &canon_root) {
+        if is_within(canon_target, &canon_root) {
             return Ok(());
         }
     }
@@ -342,6 +399,30 @@ where
         "写允许域拒绝（{op}）：{} 不在允许域内（允许 = 项目根目录 / appDataDir / 自选项目位置；未打开项目时仅 appDataDir + 自选项目位置）",
         path.display()
     ))
+}
+
+/// 判定入口（参照实现 / 单测用）：目标规范化 + [`ensure_canon_target_in_domain_with`]。
+fn ensure_in_domain_with<R>(
+    project_root: Option<&Path>,
+    app_data_dir: &Path,
+    extra_roots: &[PathBuf],
+    path: &Path,
+    op: &str,
+    resolve_root: R,
+) -> Result<(), String>
+where
+    R: FnMut(&Path) -> Result<PathBuf, String>,
+{
+    let canon_target = canonicalize_target_for_domain(path, op)?;
+    ensure_canon_target_in_domain_with(
+        &canon_target,
+        app_data_dir,
+        project_root,
+        extra_roots,
+        path,
+        op,
+        resolve_root,
+    )
 }
 
 /// 允许域根解析失败的文案（**只有一份**：直算与备忘录两条路共用 ⇒ 逐字相同）。
@@ -356,8 +437,8 @@ fn root_unresolved_message(op: &str, root: &Path, reason: &str) -> String {
 /// `project_root` = 当前注册的项目根（可为 None），`app_data_dir` 常驻允许，
 /// `extra_roots` = 用户经对话框自选并常驻授权的项目位置根。
 /// 生产路径走 `ensure_write_allowed`（备忘录版）；这一支是"**每个根每次都直算**"的参照实现，
-/// 与生产共用同一个 `ensure_in_domain_with` ⇒ 判序不可能分叉，`write_domain_tests` 就靠它
-/// 钉"缓存版与直算版逐字同判定"（含三条错误文案）。
+/// 与生产共用同一个 `ensure_canon_target_in_domain_with` ⇒ 判序不可能分叉，
+/// `write_domain_tests` 就靠它钉"缓存版与直算版逐字同判定"（含三条错误文案）。
 #[cfg(test)]
 fn ensure_in_write_domain(
     project_root: Option<&Path>,
@@ -392,11 +473,44 @@ fn canonical_root_cached(
     Ok(canon)
 }
 
+/// 备忘录的**生产版**（短锁）：与 [`canonical_root_cached`] 逐条同语义，但锁只在
+/// map 的读/写上持有——`root.is_dir()` 与 `canonicalize_deep` 都是系统调用
+/// （实测目录 `is_dir` ~0.13ms、目标 canonicalize ~0.2ms），不许圈在写域的锁里。
+fn canonical_root_cached_short(
+    state: &WriteDomainState,
+    root: &Path,
+    op: &str,
+) -> Result<PathBuf, String> {
+    let hit = state
+        .canon_roots
+        .lock()
+        .map_err(|_| "write domain state poisoned".to_string())?
+        .get(root)
+        .cloned();
+    if let Some(hit) = hit {
+        if root.is_dir() {
+            return Ok(hit);
+        }
+        if let Ok(mut memo) = state.canon_roots.lock() {
+            memo.remove(root);
+        }
+    }
+    let canon = canonicalize_deep(root).map_err(|e| root_unresolved_message(op, root, &e.to_string()))?;
+    if root.is_dir() {
+        if let Ok(mut memo) = state.canon_roots.lock() {
+            memo.insert(root.to_path_buf(), canon.clone());
+        }
+    }
+    Ok(canon)
+}
+
 /// 命令侧包装：取 appDataDir + 当前注册的项目根 + 常驻授权根，执行判定（走备忘录）。
 ///
-/// 锁序固定为 `project_root → extra_roots → canon_roots`，且前两份**不克隆**
-/// （原先每次写克隆两个 Vec）；仓里其它地方从不嵌套持有这三把锁 ⇒ 无死锁面。
-/// 判定过程只在"备忘录未命中"时才碰文件系统。
+/// **锁内只取快照，锁外做系统调用**（REF-FRONT-PERF）：目标 canonicalize、根的
+/// `is_dir` / `canonicalize_deep` 都要开句柄（合计每写 ~0.4ms 量级），与被保护的三份状态
+/// 无关 ⇒ 三把锁各自只在"克隆几个路径 / 读写 map"的瞬间持有。判序、文案与拒绝/放行结果
+/// 逐字不变（同一个 `ensure_canon_target_in_domain_with`）；快照只在"允许域变更"瞬间
+/// 才可能过时，而写域变更是项目级低频事件（判定本身也从不承诺与它原子）。
 fn ensure_write_allowed(
     app: &tauri::AppHandle,
     state: &WriteDomainState,
@@ -408,21 +522,30 @@ fn ensure_write_allowed(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {e}"))?;
-    let project = state
-        .project_root
-        .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?;
-    let extras = state
-        .extra_roots
-        .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?;
-    let mut memo = state
-        .canon_roots
-        .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?;
-    ensure_in_domain_with(project.as_deref(), &app_dir, &extras, path, op, |root| {
-        canonical_root_cached(&mut memo, root, op)
-    })
+    let canon_target = canonicalize_target_for_domain(path, op)?;
+    // 快照：两个小 Vec/PathBuf 的克隆（纳秒级），换掉锁内两条 `is_dir` 系统调用
+    let (project, extras) = {
+        let project = state
+            .project_root
+            .lock()
+            .map_err(|_| "write domain state poisoned".to_string())?
+            .clone();
+        let extras = state
+            .extra_roots
+            .lock()
+            .map_err(|_| "write domain state poisoned".to_string())?
+            .clone();
+        (project, extras)
+    };
+    ensure_canon_target_in_domain_with(
+        &canon_target,
+        &app_dir,
+        project.as_deref(),
+        &extras,
+        path,
+        op,
+        |root| canonical_root_cached_short(state, root, op),
+    )
 }
 
 /// 允许域任何一处变更（项目根注册 / 清除 / 常驻根增减）⇒ 备忘录整体作废。
@@ -446,7 +569,7 @@ fn invalidate_canon_roots(state: &WriteDomainState) {
 /// UNC（`\\...`）在规范化之前先拒：既绕开网络命名空间触发的凭据外泄与主线程阻塞，
 /// 拖放/对话框也从不交付 UNC 作为可写根。
 #[tauri::command]
-fn register_write_domain(
+async fn register_write_domain(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     root: String,
@@ -459,8 +582,6 @@ fn register_write_domain(
         .path()
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {e}"))?;
-    let canon_root = canonicalize_deep(Path::new(&root))
-        .map_err(|e| format!("写允许域注册失败：路径解析失败 {root}: {e}"))?;
     let approved = state
         .approved_roots
         .lock()
@@ -471,33 +592,29 @@ fn register_write_domain(
         .lock()
         .map_err(|_| "write domain state poisoned".to_string())?
         .clone();
-    if !is_root_approved(&app_dir, &approved, &extras, &canon_root) {
-        return Err(format!(
-            "写允许域注册拒绝：{root} 未经系统目录对话框或拖放由宿主交付，不在准入清单内"
-        ));
-    }
-    let mut guard = state
-        .project_root
-        .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?;
-    *guard = Some(PathBuf::from(root));
-    drop(guard);
-    // 允许域变了 ⇒ 规范化备忘录整体作废（见 `canonical_root_cached`）
-    invalidate_canon_roots(&state);
-    Ok(())
+    // 准入门判定要 canonicalize 目标根（慢盘 / 网络盘上可阻塞）：上阻塞线程池。
+    // 判定用的两份清单是取锁快照——准入根与常驻根只增不减，快照不会把"该放的"判成"不该放"。
+    // 取号在判定之前：判定期间项目被关闭 / 换开 ⇒ 落定前复核会发现序号已变（fail-closed）。
+    let epoch = begin_domain_change(&state);
+    let root_for_check = root.clone();
+    run_blocking("register_write_domain", move || {
+        let canon_root = canonicalize_deep(Path::new(&root_for_check))
+            .map_err(|e| format!("写允许域注册失败：路径解析失败 {root_for_check}: {e}"))?;
+        if !is_root_approved(&app_dir, &approved, &extras, &canon_root) {
+            return Err(format!(
+                "写允许域注册拒绝：{root_for_check} 未经系统目录对话框或拖放由宿主交付，不在准入清单内"
+            ));
+        }
+        Ok(())
+    })
+    .await?;
+    commit_project_root(&state, PathBuf::from(root), epoch)
 }
 
 /// project.closed：清除项目根（回到仅 appDataDir 可写）。
 #[tauri::command]
 fn clear_write_domain(state: tauri::State<'_, WriteDomainState>) -> Result<(), String> {
-    let mut guard = state
-        .project_root
-        .lock()
-        .map_err(|_| "write domain state poisoned".to_string())?;
-    *guard = None;
-    drop(guard);
-    invalidate_canon_roots(&state);
-    Ok(())
+    clear_domain_core(&state)
 }
 
 /* ------------------------------- DTO ------------------------------- */
@@ -643,22 +760,26 @@ async fn write_file_bytes(
 }
 
 #[tauri::command]
-fn ensure_dir(
+async fn ensure_dir(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     path: String,
 ) -> Result<(), String> {
+    // 闸口（含目标 canonicalize）留在命令内、与写盘同命令；落盘一段上阻塞线程池
     ensure_write_allowed(&app, &state, Path::new(&path), "ensure_dir")?;
-    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+    run_blocking("ensure_dir", move || {
+        std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+    })
+    .await
 }
 
-#[tauri::command]
-fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
+/// 列目录的同步核心（命令侧只是 async 壳；单测直接打这一层）。
+fn list_dir_of(path: &str) -> Result<Vec<DirEntryDto>, String> {
     let mut out = Vec::new();
     // 铁律 4（内核不许静默）：只有"目录不存在"折叠成空列表（与 NodeBridge 语义一致，
     // 首次运行/尚未创建的目录是正常态）；其它 `read_dir` 错误（权限、路径是文件、句柄失效、
     // 网络名不可达……）必须**如实报错上抛**，绝不与"空目录"混为一谈。
-    let read = match std::fs::read_dir(&path) {
+    let read = match std::fs::read_dir(path) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => return Err(format!("列目录失败 {path}: {e}")),
@@ -678,46 +799,98 @@ fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
 }
 
 #[tauri::command]
-fn walk_dir(path: String, opts: Option<WalkOptionsDto>) -> Result<Vec<DirEntryDto>, String> {
-    let o = opts.unwrap_or_default();
+async fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
+    // 一次目录列举的条目数随语料走（成千条）：不许把 read_dir 的活内联在 IPC 线程上。
+    run_blocking("list_dir", move || list_dir_of(&path)).await
+}
+
+/// 递归列举的同步核心（命令侧只是 async 壳；单测直接打这一层）。
+///
+/// **手工 `read_dir` 走查**（REF-FRONT-PERF，2026-10-20）：不再经 walkdir。两点实证
+/// （2,000 文件 / 50 目录合成盘，同机 debug 交替计时探针，walkdir 与手工各 15 轮取中位）：
+/// ① 限深（`maxDepth`）**5.2×**（41ms → 8ms）：walkdir 对每个到达深度上限的目录仍会
+///    先 `read_dir` 打开句柄再立刻丢弃（`push` 不判深度）；
+/// ② 常规全量走查基本持平（57.6ms → 56.2ms，差异在探针噪声内）：本条的主收益在 ①，
+///    以及"不再需要每条目克隆 walkdir 的 metadata 与错误包装"。
+/// 语义逐条保持原口径：前序 DFS、子序 = `read_dir` 顺序（与 walkdir 相同）；`maxDepth`
+/// 计**根之下的层数**（`maxDepth: 0` = 仅直接子项，与 TS 桥同口径）；不跟随符号链接
+/// （符号链接目录本身照常作为条目输出）；读不了的条目静默跳过（与旧实现
+/// `filter_map(|e| e.ok())` 同形——错误可见性由调用方的计数兜底）。
+fn walk_dir_of(path: &str, o: WalkOptionsDto) -> Result<Vec<DirEntryDto>, String> {
     let include_files = o.include_files.unwrap_or(true);
     let include_dirs = o.include_dirs.unwrap_or(false);
     let max_depth = o.max_depth.unwrap_or(usize::MAX);
     let with_metadata = o.with_metadata.unwrap_or(false);
+    // 深度口径与 walkdir 对齐：根为 0，直接子项为 1；用户 maxDepth 再加 1
+    let walk_max = if max_depth == usize::MAX { usize::MAX } else { max_depth + 1 };
 
     let mut out = Vec::new();
-    let walker = walkdir::WalkDir::new(&path)
-        .min_depth(1)
-        .max_depth(if max_depth == usize::MAX { usize::MAX } else { max_depth + 1 });
-    for entry in walker.into_iter().filter_map(|e| e.ok()) {
-        let is_dir = entry.file_type().is_dir();
-        // include_dirs 只控制“是否输出目录条目”，递归不受影响
-        if is_dir && !include_dirs {
-            continue;
-        }
-        if !is_dir && !include_files {
-            continue;
-        }
-        let p = entry.path();
-        // 顺路取元数据：Windows 上 `DirEntry::metadata()` 用的是枚举时已经拿到的信息，
-        // 不再额外系统调用——**这正是"一次遍历替掉 N 次 stat"成立的前提**。
-        // 取不到就留空（前端退化回 stat_file），绝不伪造 0。
-        let (mtime_ms, size) = match (with_metadata, is_dir) {
-            (true, false) => match entry.metadata() {
-                Ok(md) => (Some(mtime_ms_of(md.modified().ok())), Some(md.len())),
-                Err(_) => (None, None),
-            },
-            _ => (None, None),
+    let root = Path::new(path);
+    let root_read = match std::fs::read_dir(root) {
+        // 根读不了 = 空结果（walkdir 把根错误作为一条 Err 交给 filter_map 丢弃 ⇒ 同形）
+        Err(_) => return Ok(out),
+        Ok(r) => r,
+    };
+    // 显式栈 = (目录, 该目录的迭代器, 该目录里条目的深度)；栈顶即当前目录 ⇒ 输出恒为前序 DFS
+    let mut stack: Vec<(PathBuf, std::fs::ReadDir, usize)> = vec![(root.to_path_buf(), root_read, 1)];
+    loop {
+        let next = match stack.last_mut() {
+            Some((_, it, _)) => it.next(),
+            None => break,
         };
-        out.push(DirEntryDto {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: p.to_string_lossy().to_string(),
-            is_directory: is_dir,
-            mtime_ms,
-            size,
-        });
+        let entry = match next {
+            Some(Ok(e)) => e,
+            Some(Err(_)) => continue,
+            None => {
+                stack.pop();
+                continue;
+            }
+        };
+        let depth = match stack.last() {
+            Some((_, _, d)) => *d,
+            None => break,
+        };
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let is_dir = file_type.is_dir();
+        let entry_path = entry.path();
+        // include_dirs / include_files 只控制“是否输出条目”，递归不受影响
+        if (is_dir && include_dirs) || (!is_dir && include_files) {
+            // 顺路取元数据：Windows 上 `DirEntry::metadata()` 用的是枚举时已经拿到的信息，
+            // 不再额外系统调用——**这正是"一次遍历替掉 N 次 stat"成立的前提**。
+            // 取不到就留空（前端退化回 stat_file），绝不伪造 0。
+            let (mtime_ms, size) = match (with_metadata, is_dir) {
+                (true, false) => match entry.metadata() {
+                    Ok(md) => (Some(mtime_ms_of(md.modified().ok())), Some(md.len())),
+                    Err(_) => (None, None),
+                },
+                _ => (None, None),
+            };
+            out.push(DirEntryDto {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: entry_path.to_string_lossy().to_string(),
+                is_directory: is_dir,
+                mtime_ms,
+                size,
+            });
+        }
+        // 符号链接目录与 walkdir 一样不深入（防环）；到达深度上限的目录连 read_dir 都不做
+        if is_dir && !file_type.is_symlink() && depth < walk_max {
+            if let Ok(child) = std::fs::read_dir(&entry_path) {
+                stack.push((entry_path, child, depth + 1));
+            }
+        }
     }
     Ok(out)
+}
+
+#[tauri::command]
+async fn walk_dir(path: String, opts: Option<WalkOptionsDto>) -> Result<Vec<DirEntryDto>, String> {
+    let o = opts.unwrap_or_default();
+    // 冷开索引期的整树走查是"量随语料走"的活 ⇒ 上阻塞线程池
+    run_blocking("walk_dir", move || walk_dir_of(&path, o)).await
 }
 
 /// 存在性判定的同步核心（命令侧只是它的 async 壳；测试直接打这一层）。
@@ -978,59 +1151,70 @@ async fn stat_files(paths: Vec<String>) -> Result<Vec<BatchStatDto>, String> {
 }
 
 #[tauri::command]
-fn rename_path(
+async fn rename_path(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     from: String,
     to: String,
 ) -> Result<(), String> {
-    // rename 同时改动 from（移走）与 to（写入），两端都在允许域内才放行
+    // rename 同时改动 from（移走）与 to（写入），两端都在允许域内才放行（闸口留在命令内）
     ensure_write_allowed(&app, &state, Path::new(&from), "rename_src")?;
     ensure_write_allowed(&app, &state, Path::new(&to), "rename_dst")?;
-    std::fs::rename(&from, &to).map_err(|e| e.to_string())
+    run_blocking("rename_path", move || {
+        std::fs::rename(&from, &to).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-fn copy_file(
+async fn copy_file(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     from: String,
     to: String,
 ) -> Result<(), String> {
-    // from 是读取源（读路径不受允许域限制）；to 是写入目标，必须过闸
+    // from 是读取源（读路径不受允许域限制）；to 是写入目标，必须过闸（闸口留在命令内）
     ensure_write_allowed(&app, &state, Path::new(&to), "copy_dst")?;
-    if let Some(parent) = Path::new(&to).parent() {
-        // 铁律 4：建目录失败不许静默吞掉（吞了会把"父目录建不出来"伪装成"copy 失败"、
-        // 丢掉真正的 IO 错）。create_dir_all 对已存在目录返回 Ok ⇒ 只有真错才上抛。
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建目标目录失败 {}: {e}", parent.display()))?;
-    }
-    std::fs::copy(&from, &to).map(|_| ()).map_err(|e| e.to_string())
+    run_blocking("copy_file", move || {
+        if let Some(parent) = Path::new(&to).parent() {
+            // 铁律 4：建目录失败不许静默吞掉（吞了会把"父目录建不出来"伪装成"copy 失败"、
+            // 丢掉真正的 IO 错）。create_dir_all 对已存在目录返回 Ok ⇒ 只有真错才上抛。
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目标目录失败 {}: {e}", parent.display()))?;
+        }
+        std::fs::copy(&from, &to).map(|_| ()).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-fn remove_file(
+async fn remove_file(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     path: String,
 ) -> Result<(), String> {
     ensure_write_allowed(&app, &state, Path::new(&path), "remove")?;
-    std::fs::remove_file(&path).map_err(|e| e.to_string())
+    run_blocking("remove_file", move || {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// 递归删除目录（不存在则幂等成功；同写允许域第二道闸）。
 #[tauri::command]
-fn remove_dir(
+async fn remove_dir(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     path: String,
 ) -> Result<(), String> {
     ensure_write_allowed(&app, &state, Path::new(&path), "remove_dir")?;
-    match std::fs::remove_dir_all(&path) {
+    // 整棵树的删除是"量随目录走"的活 ⇒ 上阻塞线程池
+    run_blocking("remove_dir", move || match std::fs::remove_dir_all(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
-    }
+    })
+    .await
 }
 
 /* ---------------------------- 对话框 / 环境 ---------------------------- */
@@ -1144,13 +1328,33 @@ async fn choose_workspace_root(
     Ok(Some(picked.to_string_lossy().to_string()))
 }
 
+/// 内存 ∪ 磁盘清单的去重与失效剔除（**纯函数**，可单测）：保授权顺序、
+/// 剔掉盘上已不存在的目录（剔的时候出声）。
+fn merge_workspace_roots(app_data_dir: &Path, memory: Vec<PathBuf>) -> Vec<String> {
+    let mut merged: Vec<PathBuf> = Vec::new();
+    for p in memory.into_iter().chain(read_workspace_roots(app_data_dir)) {
+        if !merged.iter().any(|q| is_same_path(q, &p)) {
+            merged.push(p);
+        }
+    }
+    let mut out = Vec::new();
+    for p in merged {
+        if !p.is_dir() {
+            eprintln!("[workspace_roots] 授权根不存在，跳过：{}", p.display());
+            continue;
+        }
+        out.push(p.to_string_lossy().to_string());
+    }
+    out
+}
+
 /// 只读：当前常驻授权的**自选**项目位置根（不含默认工作区根——那由内核自己拼）。
 ///
 /// 取值 = 内存 ∪ 磁盘清单（去重、保授权顺序），并剔掉磁盘上已不存在的目录
 /// （作者删了那个文件夹 / 换了机器），剔的时候出声。
 /// `setup` 已经把清单读进内存，这里再合并一次是为了：setup 读失败也不能让前端永远看不见已授权根。
 #[tauri::command]
-fn workspace_roots(
+async fn workspace_roots(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
 ) -> Result<Vec<String>, String> {
@@ -1164,21 +1368,11 @@ fn workspace_roots(
         .lock()
         .map_err(|_| "write domain state poisoned".to_string())?
         .clone();
-    let mut merged: Vec<PathBuf> = Vec::new();
-    for p in memory.into_iter().chain(read_workspace_roots(&app_dir)) {
-        if !merged.iter().any(|q| is_same_path(q, &p)) {
-            merged.push(p);
-        }
-    }
-    let mut out = Vec::new();
-    for p in merged {
-        if !p.is_dir() {
-            eprintln!("[workspace_roots] 授权根不存在，跳过：{}", p.display());
-            continue;
-        }
-        out.push(p.to_string_lossy().to_string());
-    }
-    Ok(out)
+    // 读清单文件 + 逐个 is_dir 都是盘上活 ⇒ 阻塞线程池（快照在锁内取、锁外做 IO）
+    run_blocking("workspace_roots", move || {
+        Ok(merge_workspace_roots(&app_dir, memory))
+    })
+    .await
 }
 
 /// 导出**单个文件**到用户选定的位置（ZIP 发布包用；base64 过 IPC，与 `write_file_bytes` 同口径）。
@@ -1585,6 +1779,43 @@ fn normalize_event_kind(kind: &EventKind) -> Option<&'static str> {
 #[derive(Default)]
 struct WatchState {
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// **监视会话变更序号**（REF-FRONT-PERF）：`start_watch` 改 async 后建监视器在阻塞线程池上，
+    /// 期间 `stop_watch`（项目关闭）或另一次 start 可能插进来（旧实现全在主线程串行）。
+    /// start 取号 → 建好 → 落定前复核：序号不等 ⇒ 本次启动作废（watcher 直接 Drop），
+    /// 与"后发生的 stop/start 恒胜"的串行语义一致。
+    epoch: AtomicU64,
+}
+
+/// 取一个「监视会话变更」序号（start 在建设之前取号）。
+fn begin_watch_change(state: &WatchState) -> u64 {
+    state.epoch.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// 监视器落定：期间发生过 stop / 后发 start ⇒ 丢弃本次建好的 watcher（Drop 即注销句柄）。
+fn commit_watcher(
+    state: &WatchState,
+    watcher: notify::RecommendedWatcher,
+    epoch: u64,
+) -> Result<(), String> {
+    let mut guard = state
+        .watcher
+        .lock()
+        .map_err(|_| "watch state poisoned".to_string())?;
+    if state.epoch.load(Ordering::SeqCst) == epoch {
+        *guard = Some(watcher);
+    }
+    Ok(())
+}
+
+/// 停止的同步核心（命令侧只是包装）：取新号（在途 start 一律作废）+ 丢弃 watcher。
+fn clear_watcher(state: &WatchState) -> Result<(), String> {
+    let mut guard = state
+        .watcher
+        .lock()
+        .map_err(|_| "watch state poisoned".to_string())?;
+    state.epoch.fetch_add(1, Ordering::SeqCst);
+    *guard = None;
+    Ok(())
 }
 
 /// notify 回调 → WebView 事件。零判断，逐条透传。
@@ -1630,7 +1861,7 @@ impl notify::EventHandler for WebviewForwarder {
 
 /// 起（或换）监视会话：递归监视 `paths`，原始事件转发到 WebView。
 #[tauri::command]
-fn start_watch(
+async fn start_watch(
     app: tauri::AppHandle,
     state: tauri::State<'_, WatchState>,
     paths: Vec<String>,
@@ -1646,38 +1877,37 @@ fn start_watch(
     //    `FS_WATCH_ERROR_EVENT` → 前端重连状态机接管重建（P0-5 的 TS 半边），
     //    这就是"缓冲溢出不丢事件、变成一次可见的失效-自愈"的闭环。
     let config = notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
-    let mut watcher = notify::RecommendedWatcher::new(WebviewForwarder { app }, config)
-        .map_err(|e| format!("创建文件监视器失败: {e}"))?;
+    // 建监视器 + 逐根登记（ReadDirectoryChangesW 要开目录句柄）是盘上活 ⇒ 阻塞线程池；
+    // watcher 建好再交回命令侧存进托管状态（与旧实现同一生命周期）。
+    // 取号在建设之前：建设期间 stop / 后发 start ⇒ 落定前复核会丢弃本次 watcher。
+    let epoch = begin_watch_change(&state);
+    let (watcher, report) = run_blocking("start_watch", move || {
+        let mut watcher = notify::RecommendedWatcher::new(WebviewForwarder { app }, config)
+            .map_err(|e| format!("创建文件监视器失败: {e}"))?;
 
-    let mut watched = Vec::new();
-    let mut failed = Vec::new();
-    for p in paths {
-        match watcher.watch(Path::new(&p), notify::RecursiveMode::Recursive) {
-            Ok(()) => watched.push(p),
-            Err(e) => failed.push(FailedRoot {
-                path: p,
-                error: e.to_string(),
-            }),
+        let mut watched = Vec::new();
+        let mut failed = Vec::new();
+        for p in paths {
+            match watcher.watch(Path::new(&p), notify::RecursiveMode::Recursive) {
+                Ok(()) => watched.push(p),
+                Err(e) => failed.push(FailedRoot {
+                    path: p,
+                    error: e.to_string(),
+                }),
+            }
         }
-    }
+        Ok::<_, String>((watcher, WatchReport { watched, failed }))
+    })
+    .await?;
 
-    let mut guard = state
-        .watcher
-        .lock()
-        .map_err(|_| "watch state poisoned".to_string())?;
-    *guard = Some(watcher);
-    Ok(WatchReport { watched, failed })
+    commit_watcher(&state, watcher, epoch)?;
+    Ok(report)
 }
 
 /// 停监视（project.closed / 桥卸载）。丢弃 watcher 即注销句柄。
 #[tauri::command]
 fn stop_watch(state: tauri::State<'_, WatchState>) -> Result<(), String> {
-    let mut guard = state
-        .watcher
-        .lock()
-        .map_err(|_| "watch state poisoned".to_string())?;
-    *guard = None;
-    Ok(())
+    clear_watcher(&state)
 }
 
 /* ------------------------- 外部文件拖放（drag-drop 批） ------------------------- */
@@ -3041,9 +3271,11 @@ mod diagnostics_tests;
 #[cfg(test)]
 mod write_domain_tests {
     use super::{
-        canonical_root_cached, canonicalize_deep, ensure_in_domain_with, ensure_in_write_domain,
-        is_root_approved, is_same_path, is_within, push_approved_root, push_extra_root,
-        read_approved_roots, read_workspace_roots, write_approved_roots, write_workspace_roots,
+        begin_domain_change, canonical_root_cached, canonical_root_cached_short, canonicalize_deep,
+        clear_domain_core, commit_project_root, ensure_in_domain_with, ensure_in_write_domain,
+        is_root_approved, is_same_path, is_within, merge_workspace_roots, push_approved_root,
+        push_extra_root, read_approved_roots, read_workspace_roots, write_approved_roots,
+        write_workspace_roots, WriteDomainState,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -3281,6 +3513,24 @@ mod write_domain_tests {
         assert_eq!(read_workspace_roots(&appdata).len(), 1);
     }
 
+    /// `workspace_roots` 的纯核心（async 壳只负责把盘上活挪走）：内存在前、磁盘在后，
+    /// 同一目录两种写法只留一条，盘上已不存在的根剔除（顺序 = 授权顺序）。
+    #[test]
+    fn merge_workspace_roots_keeps_order_dedups_and_drops_missing() {
+        let appdata = temp_root("merge");
+        let a = mkdir(&temp_root("a"));
+        let b = mkdir(&temp_root("b"));
+        let c = mkdir(&temp_root("c"));
+        let missing = temp_root("missing").join("gone");
+        // 磁盘清单里有 b / a / 一个已删除的根；内存里有 a（重复）与 c
+        write_workspace_roots(&appdata, &[b.clone(), a.clone(), missing]).unwrap();
+        let out = merge_workspace_roots(&appdata, vec![a.clone(), c.clone()]);
+        assert_eq!(out.len(), 3, "重复项应合并、缺失项应剔除：{out:?}");
+        assert!(is_same_path(Path::new(&out[0]), &a), "内存快照在前：{out:?}");
+        assert!(is_same_path(Path::new(&out[1]), &c));
+        assert!(is_same_path(Path::new(&out[2]), &b), "磁盘清单按原序补后：{out:?}");
+    }
+
     /* -------- 开项目准入门（register_write_domain 的纯判定半边，2026-10 安全审阅批） -------- */
 
     fn canon(p: &Path) -> PathBuf {
@@ -3360,6 +3610,45 @@ mod write_domain_tests {
         assert_eq!(read_approved_roots(&appdata).len(), 1);
     }
 
+    /* -------- 允许域变更序号（REF-FRONT-PERF：register 异步化后的顺序找回） -------- */
+
+    /// `register_write_domain` 的判定挪到阻塞线程池之后，"判定 → 落定"之间可能插进
+    /// `clear_write_domain`（项目关闭）或后发注册。序号复核必须让**后发生的变更恒胜**：
+    /// 清除之后，任何在途注册都不许把已关闭的项目根复活（fail-closed + 可见报错）。
+    #[test]
+    fn pending_registration_is_cancelled_by_clear_or_newer_registration() {
+        let state = WriteDomainState::default();
+        let a = PathBuf::from(r"C:\projects\a");
+        let b = PathBuf::from(r"C:\projects\b");
+
+        // 场景 1：判定期间项目被关闭 ⇒ 落定被拒，根保持空（不复活）
+        let epoch = begin_domain_change(&state);
+        clear_domain_core(&state).unwrap();
+        let err = commit_project_root(&state, a.clone(), epoch).unwrap_err();
+        assert!(err.contains("并发变更"), "拒因应说清并发变更：{err}");
+        assert!(
+            state.project_root.lock().unwrap().is_none(),
+            "清除之后的在途注册不许落下"
+        );
+
+        // 场景 2：后发注册先落定 ⇒ 先发那次（序号更小）作废，根 = 后发的
+        let first = begin_domain_change(&state);
+        let second = begin_domain_change(&state);
+        commit_project_root(&state, b.clone(), second).unwrap();
+        assert!(commit_project_root(&state, a, first).is_err(), "先发的那次必须作废");
+        assert_eq!(
+            state.project_root.lock().unwrap().as_deref(),
+            Some(b.as_path()),
+            "后发注册恒胜"
+        );
+
+        // 场景 3：正常路径（序号最新）照常落定
+        clear_domain_core(&state).unwrap();
+        let epoch = begin_domain_change(&state);
+        commit_project_root(&state, b.clone(), epoch).unwrap();
+        assert_eq!(state.project_root.lock().unwrap().as_deref(), Some(b.as_path()));
+    }
+
     /* -------- 允许域根的规范化备忘录（PS-1 §8：安全闸的加速层） -------- */
 
     /// 备忘录与"每个根每次直算"的参照实现必须**逐字同判定**：
@@ -3398,6 +3687,47 @@ mod write_domain_tests {
             }
         }
         assert!(memo.len() >= 2, "跑了一整轮却没缓存住根：{memo:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 生产版备忘录（**短锁**：map 读写才持锁，`is_dir` / `canonicalize_deep` 都在锁外）
+    /// 必须与参照版逐条同语义：命中须仍为目录、失败不缓存、重算结果与直算同值同文案。
+    /// 这一条钉"锁外系统调用"没有把缓存判据改形。
+    #[test]
+    fn short_lock_memo_matches_the_reference_and_refuses_stale_entries() {
+        let base = temp_root("shortmemo");
+        let root = mkdir(&base.join("root"));
+        let state = WriteDomainState::default();
+
+        let first = canonical_root_cached_short(&state, &root, "write").unwrap();
+        assert_eq!(first, canonicalize_deep(&root).unwrap(), "首次结果应与直算同值");
+        assert_eq!(
+            state.canon_roots.lock().unwrap().get(&root),
+            Some(&first),
+            "首次成功应写进缓存"
+        );
+        assert_eq!(
+            canonical_root_cached_short(&state, &root, "write").unwrap(),
+            first,
+            "命中路径应返回同一份规范化结果"
+        );
+
+        // 原始写法不再是目录（删掉换成文件）⇒ 作废重算，且不再缓存
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::write(&root, "file now").unwrap();
+        let again = canonical_root_cached_short(&state, &root, "write").unwrap();
+        assert_eq!(again, canonicalize_deep(&root).unwrap());
+        assert!(
+            !state.canon_roots.lock().unwrap().contains_key(&root),
+            "陈旧条目应被移除且不再缓存"
+        );
+
+        // 解析失败的根不进缓存，文案与参照版逐字相同
+        let gone = PathBuf::from(r"Z:\kojo-no-such-drive\root");
+        let direct = canonical_root_cached(&mut HashMap::new(), &gone, "write").unwrap_err();
+        let cached = canonical_root_cached_short(&state, &gone, "write").unwrap_err();
+        assert_eq!(cached, direct, "两条路的根解析失败文案必须逐字相同");
+        assert!(!state.canon_roots.lock().unwrap().contains_key(&gone));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -3446,8 +3776,12 @@ mod write_domain_tests {
 
 #[cfg(test)]
 mod watch_tests {
-    use super::{is_atomic_write_temp, is_watch_ignored, normalize_event_kind};
+    use super::{
+        begin_watch_change, clear_watcher, commit_watcher, is_atomic_write_temp, is_watch_ignored,
+        normalize_event_kind, WatchState,
+    };
     use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
+    use notify::Watcher;
     use std::path::Path;
 
     #[test]
@@ -3583,6 +3917,35 @@ mod watch_tests {
         // 反过来：根本身是正常目录、只有子目录被忽略 ⇒ 根上的事件照常透传
         assert!(!is_watch_ignored(Path::new(r"C:\repo\README.md")));
         assert!(!is_watch_ignored(Path::new(r"C:\repo")));
+    }
+
+    /// 监视会话变更序号（REF-FRONT-PERF）：`start_watch` 的"建监视器"挪到阻塞线程池之后，
+    /// 期间 `stop_watch` 必须让在途启动作废——旧实现全在主线程、天然串行；丢掉这个复核，
+    /// 项目关闭后 watcher 会被"迟到的启动"复活（句柄泄漏 + 旧根事件继续转发）。
+    #[test]
+    fn pending_watch_start_is_cancelled_by_stop() {
+        let state = WatchState::default();
+        let make = || {
+            notify::RecommendedWatcher::new(|_res| {}, notify::Config::default())
+                .expect("RecommendedWatcher 应能创建")
+        };
+
+        let pending = make();
+        let epoch = begin_watch_change(&state);
+        clear_watcher(&state).unwrap();
+        commit_watcher(&state, pending, epoch).unwrap();
+        assert!(
+            state.watcher.lock().unwrap().is_none(),
+            "停止之后，在途启动不许复活 watcher"
+        );
+
+        let fresh = make();
+        let epoch = begin_watch_change(&state);
+        commit_watcher(&state, fresh, epoch).unwrap();
+        assert!(
+            state.watcher.lock().unwrap().is_some(),
+            "最新序号的启动应照常落定"
+        );
     }
 }
 
@@ -3743,7 +4106,7 @@ mod watch_runtime_tests {
 
 #[cfg(test)]
 mod io_primitives_tests {
-    use crate::{list_dir, stat_file_at, walk_dir, WalkOptionsDto};
+    use crate::{list_dir_of, stat_file_at, walk_dir_of, WalkOptionsDto};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3773,7 +4136,7 @@ mod io_primitives_tests {
             include_dirs: Some(true),
             with_metadata: Some(true),
         };
-        let entries = walk_dir(dir.to_string_lossy().to_string(), Some(opts)).unwrap();
+        let entries = walk_dir_of(&dir.to_string_lossy(), opts).unwrap();
         assert!(entries.iter().any(|e| e.is_directory), "目录条目应仍在");
 
         let mut files = 0;
@@ -3797,7 +4160,7 @@ mod io_primitives_tests {
     fn walk_without_metadata_omits_the_keys_entirely() {
         let dir = temp_dir("nometa");
         std::fs::write(dir.join("a.ERB"), "x").unwrap();
-        let entries = walk_dir(dir.to_string_lossy().to_string(), None).unwrap();
+        let entries = walk_dir_of(&dir.to_string_lossy(), WalkOptionsDto::default()).unwrap();
         let json = serde_json::to_string(&entries).unwrap();
         assert!(!json.contains("mtimeMs"), "不该出现该键：{json}");
         assert!(!json.contains("\"size\""), "不该出现该键：{json}");
@@ -3812,18 +4175,136 @@ mod io_primitives_tests {
         std::fs::write(dir.join("a.ERB"), "x").unwrap();
 
         // 已存在目录 ⇒ Ok + 条目
-        let ok = list_dir(dir.to_string_lossy().to_string()).unwrap();
+        let ok = list_dir_of(&dir.to_string_lossy()).unwrap();
         assert!(ok.iter().any(|e| e.name == "a.ERB"), "正常目录没列出条目");
 
         // 不存在的目录 ⇒ Ok(空)（首次运行/尚未创建的目录是正常态，与 NodeBridge 一致）
         let missing = dir.join("nope").to_string_lossy().to_string();
-        assert_eq!(list_dir(missing).unwrap().len(), 0, "不存在应折叠成空列表");
+        assert_eq!(list_dir_of(&missing).unwrap().len(), 0, "不存在应折叠成空列表");
 
         // 其它错误 ⇒ Err：路径含内嵌 NUL ⇒ std 在进入文件系统前就返回 InvalidInput
         // （非 NotFound、跨平台确定），旧实现会把它误吞成 Ok([])
         let nul = format!("{}\0bad", dir.display());
-        assert!(list_dir(nul).is_err(), "非 NotFound 的 read_dir 错误被静默吞掉");
+        assert!(list_dir_of(&nul).is_err(), "非 NotFound 的 read_dir 错误被静默吞掉");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 深度口径（手工走查重写后的钉子）：`maxDepth` 计的是**根之下的层数**，
+    /// `maxDepth: 0` = 仅直接子项。这组数字同时是 TS 桥口径（`walkdir-bridge-equivalence`
+    /// 的 `maxDepth: 0` 用例）与旧 walkdir 实现的逐层平移。
+    #[test]
+    fn walk_depth_counts_levels_below_the_root() {
+        let dir = temp_dir("walkdepth");
+        std::fs::create_dir_all(dir.join("a").join("b")).unwrap();
+        std::fs::write(dir.join("top.ERB"), "x").unwrap();
+        std::fs::write(dir.join("a").join("mid.ERB"), "x").unwrap();
+        std::fs::write(dir.join("a").join("b").join("deep.ERB"), "x").unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let names = |depth: Option<usize>, dirs: bool| -> Vec<String> {
+            let mut v: Vec<String> = walk_dir_of(
+                &root,
+                WalkOptionsDto {
+                    max_depth: depth,
+                    include_files: Some(!dirs),
+                    include_dirs: Some(dirs),
+                    with_metadata: None,
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+            v.sort();
+            v
+        };
+
+        assert_eq!(names(Some(0), false), vec!["top.ERB".to_string()], "maxDepth 0 = 直接子项");
+        assert_eq!(
+            names(Some(1), false),
+            vec!["mid.ERB".to_string(), "top.ERB".to_string()],
+            "maxDepth 1 = 根下两层"
+        );
+        assert_eq!(
+            names(Some(2), false),
+            vec!["deep.ERB".to_string(), "mid.ERB".to_string(), "top.ERB".to_string()]
+        );
+        assert_eq!(names(None, false).len(), 3, "不限深 = 全部");
+        // 目录条目与文件条目共用同一口径（includeDirs 只筛输出，不影响递归）
+        assert_eq!(names(Some(0), true), vec!["a".to_string()], "maxDepth 0 的目录侧");
+        assert_eq!(names(Some(1), true), vec!["a".to_string(), "b".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `includeFiles` / `includeDirs` 只筛**输出条目**，不剪枝：只要目录时深层目录仍到达，
+    /// 只要文件时深层文件仍到达（旧 walkdir 实现的同一条契约）。
+    #[test]
+    fn include_flags_filter_output_not_recursion() {
+        let dir = temp_dir("walkflags");
+        std::fs::create_dir_all(dir.join("a").join("b")).unwrap();
+        std::fs::write(dir.join("a").join("b").join("x.ERB"), "x").unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        let dirs = walk_dir_of(
+            &root,
+            WalkOptionsDto {
+                max_depth: None,
+                include_files: Some(false),
+                include_dirs: Some(true),
+                with_metadata: None,
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = dirs.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"a") && names.contains(&"b"), "目录侧递归被过滤剪掉了：{names:?}");
+        assert!(dirs.iter().all(|e| e.is_directory));
+
+        let files = walk_dir_of(
+            &root,
+            WalkOptionsDto {
+                max_depth: None,
+                include_files: Some(true),
+                include_dirs: Some(false),
+                with_metadata: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(files.len(), 1, "深层文件应照常输出");
+        assert_eq!(files[0].name, "x.ERB");
+        assert!(!files[0].is_directory);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 前序 DFS：目录条目必须先于它的全部子孙出现（旧 walkdir 同序；树形消费按此折叠）。
+    #[test]
+    fn walk_preorder_keeps_parent_directory_before_children() {
+        use std::path::MAIN_SEPARATOR_STR;
+        let dir = temp_dir("walkorder");
+        for sub in ["a", "b"] {
+            std::fs::create_dir_all(dir.join(sub).join("inner")).unwrap();
+            std::fs::write(dir.join(sub).join("inner").join("f.ERB"), "x").unwrap();
+        }
+        let entries = walk_dir_of(
+            &dir.to_string_lossy(),
+            WalkOptionsDto {
+                max_depth: None,
+                include_files: Some(true),
+                include_dirs: Some(true),
+                with_metadata: None,
+            },
+        )
+        .unwrap();
+        for (i, e) in entries.iter().enumerate() {
+            if !e.is_directory {
+                continue;
+            }
+            let prefix = format!("{}{sep}", e.path, sep = MAIN_SEPARATOR_STR);
+            for (j, child) in entries.iter().enumerate() {
+                if child.path.starts_with(&prefix) {
+                    assert!(j > i, "父目录条目必须在其子项之前：{}", e.path);
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -4260,8 +4741,9 @@ mod async_command_tests {
     //! `State` 参数的几条；要 `State` 的写侧命令只能靠"闸的判定核心对平 + 编译期"，
     //! 命令级端到端属真壳判据（本批未跑真壳，见交付说明）。
     use super::{
-        encode_string, path_exists, read_file_bytes, read_file_bytes_raw, read_files_raw,
-        stat_file, stat_file_at, stat_files, stat_files_of, B64,
+        encode_string, list_dir, list_dir_of, path_exists, read_file_bytes, read_file_bytes_raw,
+        read_files_raw, stat_file, stat_file_at, stat_files, stat_files_of, walk_dir, walk_dir_of,
+        WalkOptionsDto, B64,
     };
     use base64::Engine as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4365,6 +4847,81 @@ mod async_command_tests {
         ))
         .expect_err("不可映射字符必须被拒，不许悄悄写成 HTML 实体");
         assert!(err.contains("无法表示的字符"), "拒因不符：{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 阻塞下放的核心承诺（所有 async 壳共用）：活真的**不在调用线程**上跑，
+    /// 且业务错误串原样过界（线程池只可能在"池本身炸了"时加自己的前缀）。
+    #[test]
+    fn run_blocking_moves_work_off_the_calling_thread_and_keeps_errors_verbatim() {
+        let caller = std::thread::current().id();
+        let worker = tauri::async_runtime::block_on(super::run_blocking("probe", move || {
+            Ok::<_, String>(std::thread::current().id())
+        }))
+        .unwrap();
+        assert_ne!(caller, worker, "活仍跑在调用线程上（阻塞下放没生效）");
+
+        let err = tauri::async_runtime::block_on(super::run_blocking("probe", || {
+            Err::<(), _>("原样错误串".to_string())
+        }))
+        .unwrap_err();
+        assert_eq!(err, "原样错误串", "业务错误串被线程池改写");
+    }
+
+    /// `list_dir` / `walk_dir` 的 async 壳与同步核心**逐字节同形**（JSON 对平）：
+    /// 把目录列举挪到阻塞线程池之后，前端载荷与错误口径一条都不许变。
+    #[test]
+    fn async_dir_listing_wrappers_match_their_sync_cores() {
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("kojo-async-dir-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.ERB"), "x").unwrap();
+        std::fs::write(dir.join("sub").join("b.ERB"), "y").unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let gone = dir.join("nope").to_string_lossy().to_string();
+
+        // list_dir：正常目录逐字节对平；不存在仍折叠成空（不是 Err）
+        let listed = tauri::async_runtime::block_on(list_dir(root.clone())).unwrap();
+        assert_eq!(
+            serde_json::to_string(&listed).unwrap(),
+            serde_json::to_string(&list_dir_of(&root).unwrap()).unwrap(),
+            "list_dir 的 async 壳与同步核心形状漂了"
+        );
+        assert_eq!(
+            tauri::async_runtime::block_on(list_dir(gone)).unwrap().len(),
+            0,
+            "不存在目录仍应折叠成空列表"
+        );
+
+        // walk_dir：选项走同一份 DTO，结果逐字节对平（含 withMetadata 的键）
+        let walked = tauri::async_runtime::block_on(walk_dir(
+            root.clone(),
+            Some(WalkOptionsDto {
+                max_depth: None,
+                include_files: Some(true),
+                include_dirs: Some(true),
+                with_metadata: Some(true),
+            }),
+        ))
+        .unwrap();
+        let sync_walked = walk_dir_of(
+            &root,
+            WalkOptionsDto {
+                max_depth: None,
+                include_files: Some(true),
+                include_dirs: Some(true),
+                with_metadata: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&walked).unwrap(),
+            serde_json::to_string(&sync_walked).unwrap(),
+            "walk_dir 的 async 壳与同步核心形状漂了"
+        );
+        assert_eq!(walked.len(), 3, "a.ERB + sub + sub/b.ERB");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
