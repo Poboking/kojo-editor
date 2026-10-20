@@ -82,7 +82,7 @@ describe('多行条件 · `{`…`}` 行连接', () => {
     expect(r!.dependencies.map((d) => d.key)).toEqual(['FLAG:1', 'FLAG:2', 'FLAG:3']);
   });
 
-  it('CASE 多行值列表**不**拼接（本批只收 IF 族；拼接会凭空抬高谓词总数）', () => {
+  it('CASE 多行值列表在 `{`…`}` 块内：拼接后逐值展开（W8-C2 起 CASE 纳入行连接）', () => {
     const text = [
       '@TEST_FUNC',
       'SELECTCASE FLAG:2',
@@ -94,10 +94,13 @@ describe('多行条件 · `{`…`}` 行连接', () => {
     ].join('\n');
     const stmts = scanControlFlow(text);
     const withLines = extractFunctionConditions(fn, stmts, { lines: linesOf(text) });
-    // 现状：`CASE 1, 2,` 只展开两个值（尾逗号留空槽跳过），续行 3, 4 不进谓词——
-    // 这是既有口径，不在本批"多行 IF"判据内；拼接 CASE 会让真语料谓词总数 +311。
-    expect(withLines!.predicateCount).toBe(2);
-    expect(withLines!.dependencies[0]!.comparisons.map((c) => c.value)).toEqual([1, 2]);
+    // 块内值列表拼成一条逻辑行 `1, 2, 3, 4` ⇒ 四个值全部进谓词（真语料 +307 条值片段同源）
+    expect(withLines!.predicateCount).toBe(4);
+    expect(withLines!.unparsedCount).toBe(0);
+    expect(withLines!.dependencies[0]!.comparisons.map((c) => c.value)).toEqual([1, 2, 3, 4]);
+    // 不给原始行时行为不变（缺省 = 不拼接）
+    const withoutLines = extractFunctionConditions(fn, stmts);
+    expect(withoutLines!.predicateCount).toBe(2);
   });
 
   it('SIF 的多行条件同样拼接（同属 IF 族）', () => {
@@ -170,6 +173,98 @@ describe('`@"…"` 嵌套引号 · `%…%` 插值里的字符串', () => {
     const r = extract(text);
     expect(r!.unparsedCount).toBe(0);
     expect(r!.dependencies[0]!.comparisons).toEqual([{ op: '==', value: '50% OFF', text: '@"50% OFF"' }]);
+  });
+});
+
+describe('CASE 值列表 · 非块尾逗号不拼（W8-C2；真语料 7 处取证形态的合成替身）', () => {
+  it('`CASE [[跳蛋]],` 下一行是内层 SELECTCASE：不拼（尾逗号不携带续行意图，拼了会吃掉内层 SELECTCASE）', () => {
+    const text = [
+      '@TEST_FUNC',
+      'SELECTCASE X',
+      'CASE [[跳蛋]], ',
+      '\tSELECTCASE Y',
+      '\tCASE "SALES"',
+      '\tENDSELECT',
+      'ENDSELECT',
+    ].join('\n');
+    const r = extract(text);
+    // CASE 只展开头一个值片段；内层 SELECTCASE 仍是独立语句、其 CASE 归内层 subject
+    //（ARG/ARGS 是语言级局部量不进依赖，这里用 X/Y 便于钉住"没有吃进内层语句"）
+    expect(r!.predicateCount).toBe(2);
+    expect(r!.unparsedCount).toBe(0);
+    expect(r!.dependencies.map((d) => d.key)).toEqual(['X', 'Y']);
+  });
+
+  it('`CASE "A", "B",` 下一行是 SIF：尾逗号后的空槽跳过，SIF 仍是独立谓词', () => {
+    const text = [
+      '@TEST_FUNC',
+      'SELECTCASE X',
+      'CASE "A", "B",',
+      'SIF Y',
+      '\tRETURN 1',
+      'ENDSELECT',
+    ].join('\n');
+    const r = extract(text);
+    expect(r!.predicateCount).toBe(3); // CASE 2 值 + SIF 1 条
+    expect(r!.unparsedCount).toBe(0);
+    expect(r!.dependencies.map((d) => d.key)).toEqual(['X', 'Y']);
+  });
+
+  it('`CASE 53,` 下一行是注释行：注释不进值列表，片段数不变', () => {
+    const text = ['@TEST_FUNC', 'SELECTCASE X', 'CASE 53,', '\t;注释', '\tCALL F', 'ENDSELECT'].join('\n');
+    const r = extract(text);
+    expect(r!.predicateCount).toBe(1);
+    expect(r!.unparsedCount).toBe(0);
+  });
+});
+
+describe('CASE 值列表 · `{`…`}` 门边缘（引擎报错语义 ⇒ 不应拼）', () => {
+  it('`{` 行夹了字（不是孤行）：不拼，残句保持原样', () => {
+    const text = [
+      '@TEST_FUNC',
+      'SELECTCASE FLAG:2',
+      '{ 注释',
+      'CASE 1, 2,',
+      '\t3, 4',
+      '}',
+      'ENDSELECT',
+    ].join('\n');
+    const r = extract(text);
+    expect(r!.predicateCount).toBe(2); // 只展开 `1, 2,` 头两个值
+    expect(r!.dependencies[0]!.comparisons.map((c) => c.value)).toEqual([1, 2]);
+  });
+
+  it('`{` 未闭合：不猜，保持既有片段（引擎会报错；这里保守回退原样）', () => {
+    const text = [
+      '@TEST_FUNC',
+      'SELECTCASE FLAG:2',
+      '{',
+      'CASE 1, 2,',
+      '\t3, 4',
+      'ENDSELECT',
+    ].join('\n');
+    const stmts = scanControlFlow(text);
+    const detail = extractFunctionPredicates(fn, stmts, { endLine: 6, lines: linesOf(text) });
+    const casePreds = detail.predicates.filter((p) => p.kind === 'CASE');
+    expect(casePreds).toHaveLength(2);
+    expect(casePreds[0]!.text).toBe('1, 2,');
+  });
+
+  it('`CASE` 单独一行、值全在块内（块在 CASE 行后开）：孤行 `{` 必须在语句**前**，此形不拼', () => {
+    const text = [
+      '@TEST_FUNC',
+      'SELECTCASE FLAG:2',
+      'CASE',
+      '{',
+      '\t1, 2,',
+      '\t3',
+      '}',
+      'ENDSELECT',
+    ].join('\n');
+    const r = extract(text);
+    // joinBracedExpression 的门是"语句前的非空行是孤行 `{`"；`{` 在 CASE 行后不满足
+    // ⇒ 没有任何片段进谓词 ⇒ 聚合视图返回 null（调用方不收录）
+    expect(r).toBeNull();
   });
 });
 
