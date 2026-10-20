@@ -1052,6 +1052,7 @@ export function ProjectView({
             openPaths={g.tabs}
             revealLine={focused ? reveal?.line : undefined}
             revealColumn={focused ? reveal?.column : undefined}
+            revealSpan={focused ? reveal?.span : undefined}
             revealNonce={focused ? reveal?.nonce : undefined}
             onDirtyChange={stableDirtyChange}
             registerActions={registerActions ? cb.register : undefined}

@@ -20,7 +20,7 @@ import { monacoThemeIdFor } from '../monaco/theme';
 import { loadThemePref, useThemePref } from './theme-pref';
 import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
-import { clampRevealPosition, type RevealTarget } from '../monaco/reveal-position';
+import { clampRevealPosition, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
 import { installSuggestContextTrigger } from '../monaco/suggest-context-trigger';
 import { applyFormatOnSave } from './format-on-save';
@@ -89,7 +89,9 @@ import { createDocumentBroadcaster } from './document-broadcast';
 import {
   clampSlice,
   extractViewSlice,
+  FOLDING_CONTRIBUTION_ID,
   flushViewStates,
+  foldRestoreState,
   getViewState,
   setViewState,
 } from './view-state-store';
@@ -356,6 +358,8 @@ interface Props {
   revealLine?: number;
   /** 定位列（1 基、UTF-16 码元；缺席 = 落行首，与列接线前一致） */
   revealColumn?: number;
+  /** 定位区间（导航回跳带回来的原选区；缺席 = 零宽落点，退化口径只在 `reveal-position` 里写） */
+  revealSpan?: RevealSpan;
   /** 定位序号：同一文件重复定位时变化以触发重新滚动 */
   revealNonce?: number;
   /** 脏状态上抛（P3：按路径逐个上报，宿主维护 dirtyPaths 集合） */
@@ -389,6 +393,7 @@ export function EditorPane({
   openPaths,
   revealLine,
   revealColumn,
+  revealSpan,
   revealNonce,
   onDirtyChange,
   registerActions,
@@ -1276,10 +1281,15 @@ export function EditorPane({
   // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
   useEffect(() => {
     revealRef.current = revealLine
-      ? { line: revealLine, ...(revealColumn !== undefined ? { column: revealColumn } : {}), nonce: revealNonce ?? 0 }
+      ? {
+          line: revealLine,
+          ...(revealColumn !== undefined ? { column: revealColumn } : {}),
+          ...(revealSpan !== undefined ? { span: revealSpan } : {}),
+          nonce: revealNonce ?? 0,
+        }
       : null;
     applyReveal();
-  }, [revealLine, revealColumn, revealNonce, filePath, applyReveal]);
+  }, [revealLine, revealColumn, revealSpan, revealNonce, filePath, applyReveal]);
 
   /** 保存成功：把该文件 model 的当前版本号立为新基线 */
   const markSaved = useCallback(
@@ -1784,6 +1794,15 @@ export function EditorPane({
       ed.setSelections(
         clamped.selections.map((r) => new monaco.Selection(r.startLineNumber, r.startColumn, r.endLineNumber, r.endColumn)),
       );
+      // FOLD-1：折叠状态是视图状态的一部分；恢复走 Monaco 自己的 folding contribution
+      // （缺省不挂/形状不认识 ⇒ 返回 undefined，这一拍就等于没折过，不猜）
+      const foldState = foldRestoreState(clamped.folds);
+      if (foldState) {
+        const folding = ed.getContribution(FOLDING_CONTRIBUTION_ID) as
+          | { restoreViewState?: (state: unknown) => void }
+          | null;
+        folding?.restoreViewState?.(foldState);
+      }
       ed.setScrollPosition({ scrollTop: clamped.scrollTop, scrollLeft: clamped.scrollLeft });
     } catch {
       // 出错退化 = 这次不恢复：视图状态是易失偏好，绝不反绑打开流程
@@ -2246,7 +2265,8 @@ export function EditorPane({
       // 先把上一个标签的视图状态存下（光标/滚动原位恢复）
       const prev = prevPathRef.current;
       if (prev && prev !== filePath && entriesRef.current.has(prev)) {
-        viewStatesRef.current.set(prev, ed.saveViewState());
+        // 糖视图挂着时 saveViewState() 记的是**派生行号/折叠**：不得写进原文条目的内存视图
+        if (!sugarModelRef.current) viewStatesRef.current.set(prev, ed.saveViewState());
         persistEditorSlice(ed, prev);
       }
       let entry = entriesRef.current.get(filePath);
