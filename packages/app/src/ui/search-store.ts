@@ -9,7 +9,14 @@ import {
   type SearchResult,
 } from '../bridge/search';
 import { errorText } from '@kojo/plugin-api';
-import { DEFAULT_EXTENSION_TEXT, isValidSearchQuery, parseExtensions, replaceSummaryText } from './search-query';
+import {
+  DEFAULT_EXTENSION_TEXT,
+  getGlobFilterText,
+  isValidSearchQuery,
+  parseExtensions,
+  parseFileFilter,
+  replaceSummaryText,
+} from './search-query';
 import {
   acceptFilesBatch,
   DEFAULT_SEARCH_SORT,
@@ -357,6 +364,9 @@ export function clearSearchResult(): void {
  * 超集，对不齐时以完成态为准，绝不许"事件说三条、最终态说两条"）。
  * `searchId` 过期丢弃口径不变：迟到进度 / 迟到批次都按 searchId 过滤，旧检索的
  * 读数不许覆盖新检索。
+ *
+ * glob 过滤（W7-A）：装配请求时现读 `getGlobFilterText()` 解析成 `options.globs`——
+ * 与「类型」框是两个独立维度（且的关系），**空 globs 不带这个键**（老请求体逐字一致）。
  */
 export async function runSearch(
   roots: readonly string[],
@@ -389,11 +399,21 @@ export async function runSearch(
   if (state.phase === 'running') return;
 
   const searchId = nextId++;
+  // glob 过滤（W7-A 接线）：文本住 `search-query` 的模块级（与 `extensionText` 隔离，
+  // 两个框各管一维），发请求那一刻现解析——与扩展名同一条"用发请求时的条件"口径。
+  // **只填不改义**：`extensions` 仍是 `extensionText` 的后缀清单（glob 词不进这个框，
+  // 见 `SearchFilterBar`），`globs` 是**追加**的第二个维度，Rust 侧按且执行。
+  // 空 globs **不带这个键**（老请求体逐字一致：缺键 = 不过滤，与 Rust DTO 的 `None` 同义）。
+  const globs = parseFileFilter(getGlobFilterText()).globs;
   const request: SearchRequest = {
     searchId,
     roots: [...roots],
     query: state.query,
-    options: { ...state.options, extensions: parseExtensions(state.extensionText) },
+    options: {
+      ...state.options,
+      extensions: parseExtensions(state.extensionText),
+      ...(globs.length ? { globs } : {}),
+    },
   };
   set({
     searchId,

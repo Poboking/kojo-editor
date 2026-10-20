@@ -94,10 +94,10 @@ export function parseFileFilter(text: string): FileFilterParts {
  * glob 过滤框的当前文本（**模块级**，与 `extensionText` 住 `search-store` 同理由：
  * 侧栏切走会卸载面板，过滤条件必须活得比面板久）。
  *
- * 这是 P2-11 检索链路接线前的**接缝**：`search-store.runSearch` 发请求时读它——
+ * 这是 `search-store.runSearch` 发请求时读的**唯一真源**：请求装配时
  * `parseFileFilter(getGlobFilterText()).globs` → `request.options.globs`
- * （契约位 `SearchOptions.globs` 由 P2-11 在 `bridge/search.ts` 落，本批不碰）。
- * 本批只交付解析判据 + 输入框 + Rust 侧过滤执行，请求装配归 P2-11 那一行。
+ * （**只在非空时带键**：空 globs 的请求体与接线前逐字一致）。
+ * 本模块只持有文本与解析判据；请求怎么装配归 search-store。
  */
 let globFilterText = '';
 

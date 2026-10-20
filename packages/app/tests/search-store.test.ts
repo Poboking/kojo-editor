@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchMatch, SearchRequest, SearchResult } from '../src/bridge/search';
+import { setGlobFilterText } from '../src/ui/search-query';
 import {
   clearSearchResult,
   requestReplaceFocus,
@@ -70,11 +71,14 @@ describe('search-store', () => {
     resetSearch();
     setSearchCanceller(null);
     setSearchRunner(null);
+    // glob 文本住 `search-query` 模块级（跨面板存活）：逐测清空，别让上一条的 glob 漏进来
+    setGlobFilterText('');
   });
   afterEach(() => {
     setSearchRunner(null);
     setSearchCanceller(null);
     resetSearch();
+    setGlobFilterText('');
   });
 
   it('初始态：idle、条件有缺省值、无结果无错误', () => {
@@ -125,6 +129,36 @@ describe('search-store', () => {
       extensions: ['csv', 'erb'],
     });
     expect(req.searchId).toBeGreaterThan(0);
+  });
+
+  it('glob 框非空：请求 options.globs 带上解析后的 glob（与 extensions 各自一维）', async () => {
+    const runner = vi.fn<SearchRunner>(async () => result());
+    setSearchRunner(runner);
+    setQuery('abc');
+    setExtensionText('erb');
+    // 混进一个非 glob 词（`.kojo` 不含 * ? /）：它属于「类型」框，不该进 globs，
+    // 也不该从 glob 框倒灌进 extensions（extensions 仍只认「类型」框）
+    setGlobFilterText('*.kojo, src/**/*.erb, .kojo');
+    await runSearch(ROOTS);
+    const req = runner.mock.calls[0]![0] as SearchRequest;
+    expect(req.options.globs).toEqual(['*.kojo', 'src/**/*.erb']);
+    expect(req.options.extensions).toEqual(['erb']);
+  });
+
+  it('glob 框为空：请求里不出现 globs 键（老请求体逐字一致）', async () => {
+    const runner = vi.fn<SearchRunner>(async () => result());
+    setSearchRunner(runner);
+    setQuery('abc');
+    setExtensionText('erb, csv');
+    await runSearch(ROOTS);
+    const req = runner.mock.calls[0]![0] as SearchRequest;
+    expect('globs' in req.options).toBe(false);
+    expect(req.options).toEqual({
+      isRegex: false,
+      caseSensitive: false,
+      wholeWord: false,
+      extensions: ['csv', 'erb'],
+    });
   });
 
   it('成功路径：running → done，进度在途中可见、收尾清空', async () => {
