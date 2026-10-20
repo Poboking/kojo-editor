@@ -4,7 +4,7 @@
 > 架构与设计见 [ARCHITECTURE.md](ARCHITECTURE.md)，`.kojo` 语言完整语法见
 > [SYNTAX-SUGAR-SURFACE-SPEC.md](SYNTAX-SUGAR-SURFACE-SPEC.md)。
 >
-> 当前处于 **0.1.0 迭代期**：功能可用，界面会随批次调整。本指南刻意只描述
+> 当前迭代活跃，界面会随批次调整。本指南刻意只描述
 > **面板名称与操作流程**（不绑定具体按钮位置），以免界面改版后失效。
 
 ---
@@ -31,16 +31,27 @@ eraTW 口上库里有两千多个文件、近十万个函数，传统做法靠�
 
 ## 2. 安装
 
-### 方式 A：安装包（推荐）
+### 方式 A：从 GitHub Release 下载（推荐）
 
-构建产物位于：
+**系统要求：Windows 10 / 11（x64）。** 到
+[Releases 页面](https://github.com/Poboking/kojo-editor/releases/latest) 下载：
 
-```
-packages/app/src-tauri/target/release/bundle/nsis/
-```
+- **安装版**：`kojo-editor_<版本号>_x64-setup.exe`，双击按向导安装（可装到非默认盘）；
+- **绿色版**：`kojo-editor_<版本号>_x64-portable.zip`，解压后直接运行
+  `kojo-editor.exe`，不写注册表、不建开始菜单。绿色版依赖系统 **WebView2 运行时**
+  （Windows 11 自带；Windows 10 可能需要先安装
+  [Evergreen 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)）。
 
-双击 `*-setup.exe` 安装、启动即可（无需开发环境）。若你没有安装包，请用方式 B，
-或向项目维护者索取。
+每个 Release 附带 `SHA256SUMS.txt`，可用 `sha256sum -c SHA256SUMS.txt`（或
+`certutil -hashfile <文件名> SHA256`）核对下载完整性。
+
+**关于 SmartScreen / 杀软提示**：安装包目前**未做代码签名**（发布产物只对自动更新
+通道做了签名校验，见下文「自动更新」）。首次运行安装包或绿色版 exe 时，Windows 可能弹出
+「Windows 已保护你的电脑」——点「更多信息 → 仍要运行」即可；杀毒软件若拦截，
+可先按上面的方法核对 SHA256 再决定是否加入白名单。如果你对来路有顾虑，
+一律以仓库 Release 页附带的校验值为准。
+
+若你没有安装包（例如在内网环境），请用方式 B，或向项目维护者索取。
 
 ### 方式 B：从源码构建
 
@@ -62,6 +73,34 @@ pnpm --filter @kojo/app tauri build
 >
 > ⚠ 开发机上若 `localhost:1420` 被上一次未退干净的 vite 占着，`tauri dev` 会直接失败退出，
 > 并把**已经在跑的编辑器窗口一起带走**。启动前先确认该端口空闲。
+
+### 自动更新（内置）
+
+安装版内置自动更新器：到「**设置 → 更新**」点检查即可一键检查并安装后续版本，
+更新包会经内置公钥校验签名，验证不过的更新包不会被安装。更新源是 GitHub
+Releases 上的 `latest.json`，因此检查更新同样需要能连上 GitHub（见下方常见问题）。
+
+两条口径要知道：
+
+- **稳定版**（版本号不含 `-`，如 `v0.4.1`）走自动更新通道：发布新版后，已安装的
+  稳定版会检测到并提示更新；
+- **预发布版**（版本号含 `-`，如 `v0.4.2-beta.1`）**不进**稳定更新通道——
+  `releases/latest` 仍指向最近的稳定版。试用预发布请手动到该 Release 页面下载安装
+  （应用内**没有**手动「下载指定版本」的入口）。
+
+### 常见安装问题
+
+- **GitHub 下载 / 检查更新失败**：GitHub 直连在部分网络环境时通时断。下载安装包
+  失败就给浏览器挂上代理再下；「检查更新」失败时，可让代理以环境变量
+  （`HTTP_PROXY` / `HTTPS_PROXY`）的方式生效后再试，或者干脆到 Release 页面手动
+  下载新安装包覆盖安装。
+- **杀软报「未知的发布者」或拦截 exe**：安装包未做代码签名（见方式 A 的说明），属预期现象。
+  先核对 `SHA256SUMS.txt` 中的校验值，一致再放行。
+- **绿色版双击没反应 / 报缺组件**：多半是缺 WebView2 运行时（Windows 11 自带；
+  Windows 10 需先装 Evergreen 运行时，见方式 A 链接）。安装版在系统缺 WebView2 时
+  会在安装过程中**联网自动下载补装**，一般不用手动处理。
+- **安装路径**：默认装在 `C:\Program Files\`（路径本身含空格）下可以正常运行，
+  也可以在向导里改到非默认盘。
 
 ---
 
