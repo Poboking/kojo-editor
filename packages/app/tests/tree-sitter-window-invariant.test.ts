@@ -52,7 +52,7 @@ const syntaxPkg = join(repoRoot, 'packages', 'kojo-syntax-tree');
 
 const assets = {
   runtimeWasm: join(repoRoot, 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm'),
-  kojoWasm: readFileSync(join(syntaxPkg, 'tree-sitter-kojo.wasm')),
+  grammarWasm: readFileSync(join(syntaxPkg, 'tree-sitter-kojo.wasm')),
   highlightsQuery: readFileSync(join(syntaxPkg, 'queries', 'highlights.scm'), 'utf8'),
   foldsQuery: readFileSync(join(syntaxPkg, 'queries', 'folds.scm'), 'utf8'),
   indentsQuery: readFileSync(join(syntaxPkg, 'queries', 'indents.scm'), 'utf8'),

@@ -76,7 +76,7 @@ const corpus = await import(importUrl(join(here, 'tree-sitter-perf-corpus.ts')))
 /** 与 worker 里 `assets.ts` 同一批文件；node 侧用 `fs` 读（`?url` / `?raw` 在这池里解析不了） */
 const assets = {
   runtimeWasm: join(repoRoot, 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm'),
-  kojoWasm: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'tree-sitter-kojo.wasm')),
+  grammarWasm: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'tree-sitter-kojo.wasm')),
   highlightsQuery: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'queries', 'highlights.scm'), 'utf8'),
   foldsQuery: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'queries', 'folds.scm'), 'utf8'),
   indentsQuery: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'queries', 'indents.scm'), 'utf8'),

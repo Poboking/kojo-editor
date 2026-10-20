@@ -526,7 +526,7 @@ async function runChildMode(fixtureId: string, seed: number, startStep: number, 
 
   const assets = {
     runtimeWasm: join(repoRoot, 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm'),
-    kojoWasm: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'tree-sitter-kojo.wasm')),
+    grammarWasm: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'tree-sitter-kojo.wasm')),
     highlightsQuery: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'queries', 'highlights.scm'), 'utf8'),
     foldsQuery: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'queries', 'folds.scm'), 'utf8'),
     indentsQuery: readFileSync(join(repoRoot, 'packages', 'kojo-syntax-tree', 'queries', 'indents.scm'), 'utf8'),

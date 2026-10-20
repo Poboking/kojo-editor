@@ -28,7 +28,13 @@ import {
   type KojoStructureReply,
   type KojoStructureSyntaxFault,
 } from '../src/monaco/tree-sitter/types';
-import { disposeStructureOverlay, installStructureOverlay, structureOverlayState } from '../src/monaco/tree-sitter/providers';
+import {
+  disposeStructureOverlay,
+  installStructureOverlay,
+  structureOverlayLanguageStates,
+  structureOverlayState,
+} from '../src/monaco/tree-sitter/providers';
+import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import type * as Monaco from '../src/monaco/entry';
 
 /**
@@ -62,7 +68,7 @@ const FIXTURE_DIR = join(syntaxPkg, 'tests', 'fixtures');
 
 const assets = {
   runtimeWasm: join(repoRoot, 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm'),
-  kojoWasm: readFileSync(join(syntaxPkg, 'tree-sitter-kojo.wasm')),
+  grammarWasm: readFileSync(join(syntaxPkg, 'tree-sitter-kojo.wasm')),
   highlightsQuery: readFileSync(join(syntaxPkg, 'queries', 'highlights.scm'), 'utf8'),
   foldsQuery: readFileSync(join(syntaxPkg, 'queries', 'folds.scm'), 'utf8'),
   indentsQuery: readFileSync(join(syntaxPkg, 'queries', 'indents.scm'), 'utf8'),
@@ -760,6 +766,17 @@ vi.mock('../src/monaco/tree-sitter/client', async () => {
 });
 
 // A4：语言运行时由 descriptor 交回；桩掉这一格，pref-on 用例不去装配真 `?worker` / `?url`
+// ERB 也登记了 structure：本文件判 Kojo 的残缺上屏，ERB 运行时同样桩掉，避免真 `?worker` 装配拖慢 flush。
+vi.mock('../src/monaco/tree-sitter/erb-runtime', () => ({
+  ERB_STRUCTURE_RUNTIME: {
+    runtimeWasmUrl: 'runtime.wasm（桩）',
+    grammarWasmUrl: 'erb.wasm（桩）',
+    createWorker: () => {
+      throw new Error('桩 client 不建线程（ERB）');
+    },
+  },
+}));
+
 vi.mock('../src/monaco/tree-sitter/kojo-runtime', () => ({
   KOJO_STRUCTURE_RUNTIME: {
     runtimeWasmUrl: 'runtime.wasm（桩）',
@@ -834,10 +851,12 @@ describe('叠层开着时的接线：到货会上屏，坏了会清零、只说�
     client.syntaxDead();
     expect(warned(warn).filter((line) => line.includes('syntax/parse'))).toHaveLength(1);
 
-    // ④ 整档停用：叠层拆干净（作者回到只有词法层），本层不留一条
+    // ④ 整档停用：只拆 Kojo 这一门（作者回到该语言的词法层）；ERB 同级叠层不受牵连
     client.fatal();
     await flush();
-    expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
+    expect(structureOverlayLanguageStates()[KOJO_LANGUAGE_ID]).toBeUndefined();
+    expect(structureOverlayLanguageStates()[ERB_LANGUAGE_ID]).toBeDefined();
+    expect(structureOverlayState().installed).toBe(true);
     expect(published.at(-1)?.markers).toEqual([]);
 
     // ⑤ 停用之后又有迟到的结果：不许抛回编辑链（上屏器已经不在，回调得静默落地）

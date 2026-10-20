@@ -31,6 +31,9 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
   matchesPath: (filePath) => isErbDialectPath(filePath),
   register: registerErbLanguage,
   languageServices: true,
+  structure: {
+    load: () => import('./tree-sitter/erb-runtime').then((m) => m.ERB_STRUCTURE_RUNTIME),
+  },
 };
 
 const KOJO_DESCRIPTOR: LanguageDescriptor = {

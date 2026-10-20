@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { resetStructureDegradationLedger, onStructureDegradation } from '../src/monaco/tree-sitter/fallback';
 import { resetStructureSemanticWarnings } from '../src/monaco/tree-sitter/semantic';
 import {
   disposeStructureOverlay,
   installStructureOverlay,
+  structureOverlayLanguageStates,
   structureOverlayState,
 } from '../src/monaco/tree-sitter/providers';
 
@@ -110,6 +112,18 @@ vi.mock('../src/monaco/tree-sitter/client', async () => {
 
 // A4：client 不再自己 import worker / wasm，语言运行时由 descriptor 交回；测试桩掉这一格，
 // 免得 pref-on 用例去装配真 `?worker` / `?url`（node 池起不了线程）。
+// ERB 也登记了 structure（ERB-TS-STRUCTURE）：本文件判的是 Kojo 客户端接线，ERB 运行时同样桩掉，
+// 否则 activate 会去动态装配真 `?worker` / `?url`（node 池慢且与本文件判据无关）。
+vi.mock('../src/monaco/tree-sitter/erb-runtime', () => ({
+  ERB_STRUCTURE_RUNTIME: {
+    runtimeWasmUrl: 'runtime.wasm（桩）',
+    grammarWasmUrl: 'erb.wasm（桩）',
+    createWorker: () => {
+      throw new Error('桩 client 不建线程（ERB）');
+    },
+  },
+}));
+
 vi.mock('../src/monaco/tree-sitter/kojo-runtime', () => ({
   KOJO_STRUCTURE_RUNTIME: {
     runtimeWasmUrl: 'runtime.wasm（桩）',
@@ -272,7 +286,10 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
 
   it('(a) 解析报错 ⇒ 语义着色回 null、折叠回 []（一格都不画，交回词法层）', async () => {
     const captured = await installAndActivate();
-    expect(structureOverlayState()).toEqual({ installed: true, active: true, client: 'ready' });
+    expect(structureOverlayState()).toMatchObject({ installed: true, active: true });
+    // 两门语言各有一条叠层；ERB 的桩 client 不参与本文件判据，只要求它没被 Kojo 的路径带走
+    expect(structureOverlayLanguageStates()[KOJO_LANGUAGE_ID]).toBe('ready');
+    expect(structureOverlayLanguageStates()[ERB_LANGUAGE_ID]).toBeDefined();
     if (!captured.semantic || !captured.folding) throw new Error('叠层开着却没注册两枚 provider（装配面漂）');
     const m = model(40);
     const result = await captured.semantic.provideDocumentSemanticTokens(m, null, NO_CANCEL);
@@ -319,8 +336,10 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
       expect(() => client.fatal()).not.toThrow(); // 真 client 形状：台账 + 叫装配层拆 provider
     }
     expect(harness.fatalCount).toBe(1); // client 自己那道 `status === 'dead'` 闸
-    expect(structureOverlayState().active).toBe(false);
-    expect(structureOverlayState().client).toBeNull();
+    // 整档回落只拆这一门语言：ERB 叠层不受 Kojo 的 fatal 牵连
+    expect(structureOverlayLanguageStates()[KOJO_LANGUAGE_ID]).toBeUndefined();
+    expect(structureOverlayLanguageStates()[ERB_LANGUAGE_ID]).toBeDefined();
+    expect(structureOverlayState().active).toBe(true);
     expect(captured.semanticDisposed).toBe(true);
     expect(captured.foldingDisposed).toBe(true);
     expect(harness.disposed).toBe(1); // client 只拆一次
@@ -345,8 +364,9 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
     expect(captured.semantic).toBeNull(); // 一枚 provider 都没注册成
     expect(captured.folding).toBeNull();
     const lines = warned(warn);
-    expect(lines.filter((l) => l.includes('[kojo-structure] all/wasm'))).toHaveLength(1);
-    expect(notices).toEqual(['all/wasm']);
+    // 两门语言各报一次自己的装配失败（ERB 与 Kojo 同级，不许互相掩盖）
+    expect(lines.filter((l) => l.includes('[kojo-structure] all/wasm'))).toHaveLength(2);
+    expect(notices).toEqual(['all/wasm', 'all/wasm']);
     // 接管过又还回去：最后一次写必须回到「名字分色」自己的判据（此环境里 = 关）
     expect(captured.optionWrites.at(-1)).toBe(false);
   });

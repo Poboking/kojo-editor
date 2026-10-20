@@ -25,6 +25,11 @@ describe('内置语言 descriptor', () => {
     expect(descriptorForLanguageId(JSON_LANGUAGE_ID)?.languageServices).toBeUndefined();
   });
 
+  it('ERB 与 Kojo 都声明结构层（同级一等）；装载由 descriptor 按需触发', () => {
+    expect(typeof descriptorForLanguageId(ERB_LANGUAGE_ID)?.structure?.load).toBe('function');
+    expect(typeof descriptorForLanguageId(KOJO_LANGUAGE_ID)?.structure?.load).toBe('function');
+  });
+
   it('认路判据与收口前 languageFor 逐字对拍', () => {
     const cases: ReadonlyArray<readonly [string, string]> = [
       ['D:\\作品\\事件.kojo', KOJO_LANGUAGE_ID],

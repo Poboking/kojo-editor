@@ -1,121 +1,14 @@
 /**
- * 结构解析 worker（**主线程永不解析**：CST 与查询只活在这一条线程里）。
- *
- * 装配点把它当独立线程用（`client.ts` 里 `new TsWorker()`）。本文件只做三件事：
- * 收消息 → 调 `engine.ts` 的 `StructureEngine`（装载 wasm、增量重解、跑查询都在那边）→
- * 把引擎的回话原样 `postMessage` 出去（引擎只产 plain 数据，Node 对象绝不跨线程）。
- *
- * 为什么只剩这么点：增量口径与查询执行是**要被真语法真 wasm 量过**的东西，
- * 留在 worker 本体里就等于"只有起得了 Worker 的池能量它"（node 池起不来 `?worker`）。
- * 拆到 `engine.ts` 之后 worker 与测试打的是同一条 `tree.edit()` + `parse(stringer, oldTree)` 路，
- * 口径不可能各走各的（调用形状的证据与读数见 `tests/tree-sitter-parse.perf.test.ts`）。
- *
- * 三条纪律（1、3 属于线程本体，2 属于引擎，写在这里当目录）：
- * 1. **不 import Monaco、不 import 宿主 UI**：worker 的依赖面只有 `./engine` + `./types` + `./assets`，
- *    主线程那套模块图（词表 / 主题 / 内核）一概不进这条线程；
- * 2. **增量优先**：`change` 走 `tree.edit()` + 有界取字符回调重解，
- *    整篇重解只发生在 `parse`（首份 / 切文档 / 没有可用旧树时的重新对齐）；
- * 3. **出错就报出去，不硬撑**：任何一步抛错都回一条 `error`（带 `stage` 与 `capability`），
- *    由宿主决定是"整档回落"还是"这一面回落"。worker 自己绝不回落到半吊子状态继续答。
- *
- * 另两条时序口径（都不属于引擎，属于线程本体这层）：
- * - **装配没完成不该自杀**：`await` 两枚 wasm 才 `ready`，装配期间收到的 `parse` 只暂存最新
- *   一条（其后的 `change` 并进那条暂存文本），`ready` 一到补解——绝不再回一条 `all` 把
- *   整档打死（曾经每次必现：主线程的 parse 注定先于 ready 到达）；
- * - **`doc` 号原样过手**：请求带哪枚跨文档隔离号，四条内容回复就带回哪枚；worker 不解释它，
- *   对号与丢弃都在 `client.ts`（旧文档的在途结果不许冒充新文档的结果上屏）。
+ * `.kojo` 结构解析 worker 入口：只交出 Kojo 的两枚 wasm + 三份查询，消息环在 `worker-bootstrap.ts`。
+ * 主线程永不解析（CST 与查询只活在这一条线程里）。
  */
 import { KOJO_STRUCTURE_ASSETS } from './assets';
-import { StructureEngine } from './engine';
-import {
-  KOJO_STRUCTURE_PROTOCOL,
-  type KojoStructureReply,
-  type KojoStructureRequest,
-} from './types';
+import { startStructureWorker } from './worker-bootstrap';
 
-/** worker 全局的窄投影（app 的 tsconfig 只挂 DOM lib，不挂 WebWorker lib，故在此声明用到的三件） */
-interface WorkerScope {
-  postMessage(message: KojoStructureReply): void;
-  onmessage: ((event: MessageEvent<KojoStructureRequest>) => void) | null;
-  onerror: ((event: ErrorEvent) => void) | null;
-}
-const scope = self as unknown as WorkerScope;
-
-const engine = new StructureEngine({
-  assets: {
-    runtimeWasm: KOJO_STRUCTURE_ASSETS.runtimeWasmUrl,
-    kojoWasm: KOJO_STRUCTURE_ASSETS.kojoWasmUrl,
-    highlightsQuery: KOJO_STRUCTURE_ASSETS.highlightsQuery,
-    foldsQuery: KOJO_STRUCTURE_ASSETS.foldsQuery,
-    indentsQuery: KOJO_STRUCTURE_ASSETS.indentsQuery,
-  },
-  emit: (message) => scope.postMessage(message),
+startStructureWorker({
+  runtimeWasm: KOJO_STRUCTURE_ASSETS.runtimeWasmUrl,
+  grammarWasm: KOJO_STRUCTURE_ASSETS.kojoWasmUrl,
+  highlightsQuery: KOJO_STRUCTURE_ASSETS.highlightsQuery,
+  foldsQuery: KOJO_STRUCTURE_ASSETS.foldsQuery,
+  indentsQuery: KOJO_STRUCTURE_ASSETS.indentsQuery,
 });
-
-/* ------------------------------- 线程内状态 ------------------------------- */
-
-/**
- * 装配完成前收到的首解请求（只留最新一条；见 `onmessage` 里的纵深说明）。
- * 引擎只留一棵树，所以暂存也只需要一份"最新全文 + 它的版本与 doc 号"。
- */
-let stagedParse: Extract<KojoStructureRequest, { type: 'parse' }> | null = null;
-
-scope.onmessage = (event: MessageEvent<KojoStructureRequest>) => {
-  const request = event.data;
-  if (!request || typeof request.type !== 'string') return;
-  if (request.type === 'init') {
-    if (engine.initialized) return;
-    if (request.protocol !== KOJO_STRUCTURE_PROTOCOL) {
-      scope.postMessage({
-        type: 'error',
-        version: 0,
-        stage: 'worker',
-        capability: 'all',
-        message: `协议版本不符（worker 认 ${KOJO_STRUCTURE_PROTOCOL}，宿主发 ${request.protocol}）⇒ 结构解析整档停用`,
-      });
-      return;
-    }
-    void engine.init().then((ok) => {
-      if (!ok) return;
-      // 装配期间暂存过的首解在这里补上（纵深：正常流里主线程门控会等 ready 才发 parse，
-      // 这条只接住"没等 ready 就发"的调用方，别让它白等）
-      const staged = stagedParse;
-      stagedParse = null;
-      if (staged) engine.parse(staged.doc, staged.version, staged.text);
-    });
-    return;
-  }
-  if (!engine.initialized) {
-    // 装配没完成**不再自杀**（主线程那侧已门控：init → ready → parse 次序由它保证，
-    // 这里只是纵深）。parse 存最新一条（后来者覆盖），装配完成后补解；`change` 只在
-    // 已经暂存了同一份文档的首解时**并进那条暂存文本**（缝合口径与引擎逐字相同），
-    // 没解过就来的 change 缝不出有意义的树 ⇒ 丢。回应的 doc 号一律来自暂存的那条 parse，
-    // 补解后的四条内容回复都带着它（跨文档隔离由主线程 `client.ts` 对号）。
-    if (request.type === 'parse') stagedParse = request;
-    else if (request.type === 'change' && stagedParse !== null && stagedParse.doc === request.doc) {
-      stagedParse = {
-        type: 'parse',
-        doc: stagedParse.doc,
-        version: request.version,
-        text:
-          stagedParse.text.slice(0, request.start.offset) +
-          request.newText +
-          stagedParse.text.slice(request.oldEnd.offset),
-      };
-    }
-    return;
-  }
-  if (request.type === 'parse') engine.parse(request.doc, request.version, request.text);
-  else if (request.type === 'change') engine.change(request);
-};
-
-scope.onerror = (event: ErrorEvent) => {
-  // 线程级未捕获异常：能说话就说，说不出去由宿主的超时/崩溃判据兜住
-  scope.postMessage({
-    type: 'error',
-    version: 0,
-    stage: 'worker',
-    capability: 'all',
-    message: `worker 线程异常：${event.message}`,
-  });
-};

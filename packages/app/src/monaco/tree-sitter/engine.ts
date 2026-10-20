@@ -1,5 +1,5 @@
 /**
- * 结构解析的**引擎本体**（CST 与三份查询只在这里活；`kojo-ts.worker.ts` 只是它外面的消息环）。
+ * 结构解析的**引擎本体**（CST 与查询只在这里活；`worker-bootstrap.ts` 只是它外面的通用消息环）。
  *
  * ## 为什么把引擎从 worker 里拆出来
  *
@@ -9,9 +9,9 @@
  * 测试直接 `new StructureEngine({ assets, emit })` 驱动同一条 `tree.edit()` +
  * `parse(stringer, oldTree)` 路——**不许**在测试里另抄一份"看起来一样的"调用形状。
  *
- * 资源（两枚 wasm 与三份查询）由构造参数注入而不是 import `./assets`：`assets.ts` 走
+ * 资源（wasm 与查询）由构造参数注入而不是 import `./assets`：`assets.ts` / `erb-assets.ts` 走
  * Vite 的 `?url` / `?raw`，node 池解析不了；注入也顺带把"worker 不许硬编码路径"这条
- * 纪律写成了类型（引擎根本拿不到 URL 之外的资源）。
+ * 纪律写成了类型（引擎根本拿不到 URL 之外的资源）。查询按能力可选，ERB 首版只给 folds。
  *
  * ## 增量口径（实测，非推测；读数见 `tests/tree-sitter-parse.perf.test.ts`）
  *
@@ -97,13 +97,17 @@ import {
   type KojoStructureToken,
 } from './types';
 
-/** 引擎要的资源：两枚 wasm（浏览器给 URL、node 测试给字节）+ 三份查询源码 */
+/**
+ * 引擎要的资源：两枚 wasm（浏览器给 URL、node 测试给字节）+ 查询源码。
+ * 查询按能力可选：ERB 首版只提供 folds（无 semantic / indent），缺哪份就少哪一面，
+ * **不**把缺失当成装配错误（否则每次起线程都会报一条假的"回落"）。
+ */
 export interface StructureEngineAssets {
   readonly runtimeWasm: string;
-  readonly kojoWasm: string | Uint8Array;
-  readonly highlightsQuery: string;
-  readonly foldsQuery: string;
-  readonly indentsQuery: string;
+  readonly grammarWasm: string | Uint8Array;
+  readonly highlightsQuery?: string;
+  readonly foldsQuery?: string;
+  readonly indentsQuery?: string;
 }
 
 /**
@@ -504,7 +508,12 @@ export class StructureEngine {
     if (foldPreferred && capture.name !== 'fold') return null;
     const node = capture.node;
     const startRow = node.startPosition.row;
-    const endRow = node.endPosition.row;
+    let endRow = node.endPosition.row;
+    // 止行口径跨语法统一：有的语法把收尾换行吃进块 span（ERB 的裸控制词行 token 以换行为终点），
+    // 此时 endPosition 落在下一行行首；折叠要的是**最后一行正文**，回退一行。
+    // （`extendFoldOverTrailingBlanks` 从 node.endIndex 起扫，endIndex 落在下一行行首时
+    // 仍能正确判断该行是否为空行并把它当尾随空行吞下。）
+    if (endRow > startRow && node.endPosition.column === 0) endRow -= 1;
     if (endRow <= startRow) return null;
     const extended = extendFoldOverTrailingBlanks(this.documentText, node, endRow);
     const parent = node.parent;
@@ -918,13 +927,18 @@ export class StructureEngine {
 
   /* --------------------------------- 装配 --------------------------------- */
 
-  /** 三份查询各编各的：一份编译失败只让那一面回落，不许连累另外两面 */
+  /** 查询各编各的（缺省 = 这门语言不供那一面）：一份编译失败只让那一面回落，不许连累另外两面 */
   private compileQueries(language: Language): void {
-    const attempts: Array<{ source: string; name: 'highlights' | 'folds' | 'indents'; set: (q: Query) => void }> = [
-      { source: this.assets.highlightsQuery, name: 'highlights', set: (q) => (this.highlightsQuery = q) },
-      { source: this.assets.foldsQuery, name: 'folds', set: (q) => (this.foldsQuery = q) },
-      { source: this.assets.indentsQuery, name: 'indents', set: (q) => (this.indentsQuery = q) },
-    ];
+    const attempts: Array<{ source: string; name: 'highlights' | 'folds' | 'indents'; set: (q: Query) => void }> = [];
+    if (this.assets.highlightsQuery !== undefined) {
+      attempts.push({ source: this.assets.highlightsQuery, name: 'highlights', set: (q) => (this.highlightsQuery = q) });
+    }
+    if (this.assets.foldsQuery !== undefined) {
+      attempts.push({ source: this.assets.foldsQuery, name: 'folds', set: (q) => (this.foldsQuery = q) });
+    }
+    if (this.assets.indentsQuery !== undefined) {
+      attempts.push({ source: this.assets.indentsQuery, name: 'indents', set: (q) => (this.indentsQuery = q) });
+    }
     for (const attempt of attempts) {
       try {
         attempt.set(new Query(language, attempt.source));
@@ -960,9 +974,9 @@ export class StructureEngine {
     }
     let language: Language;
     try {
-      language = await Language.load(this.assets.kojoWasm);
+      language = await Language.load(this.assets.grammarWasm);
     } catch (error: unknown) {
-      this.fail(0, 'wasm', 'all', `.kojo 语法载入失败：${reason(error)}`);
+      this.fail(0, 'wasm', 'all', `结构语法载入失败：${reason(error)}`);
       return false;
     }
     try {
