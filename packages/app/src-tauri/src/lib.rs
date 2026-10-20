@@ -407,6 +407,7 @@ where
 }
 
 /// 判定入口（参照实现 / 单测用）：目标规范化 + [`ensure_canon_target_in_domain_with`]。
+#[cfg(test)]
 fn ensure_in_domain_with<R>(
     project_root: Option<&Path>,
     app_data_dir: &Path,
@@ -460,6 +461,7 @@ fn ensure_in_write_domain(
 /// 备忘录版根规范化：命中且该原始写法**此刻仍是一个目录** ⇒ 采信缓存；
 /// 未命中 / 已不是目录（被删、换卷、改成文件）⇒ 作废重算。失败**不进缓存**，
 /// 下次仍按实时结果重算 ⇒ 错误文案与直算逐字一致（判定的三条分支一条都没少）。
+#[cfg(test)]
 fn canonical_root_cached(
     memo: &mut HashMap<PathBuf, PathBuf>,
     root: &Path,
