@@ -308,7 +308,11 @@ export function installReferenceProvider(
           // 夹取仍走全仓唯一的 `clampRevealPosition`：映射与投影 model 的对应关系不许假定算准了
           const landing = clampRevealPosition(
             { line: previewLine, column: 1 },
-            { lineCount: model.getLineCount(), maxColumn: (n) => model.getLineMaxColumn(n) },
+            {
+              lineCount: model.getLineCount(),
+              maxColumn: (n) => model.getLineMaxColumn(n),
+              lineText: (n) => model.getLineContent(n),
+            },
           );
           out.push({
             uri: model.uri,
@@ -333,7 +337,11 @@ export function installReferenceProvider(
           // Peek 就地跳与 F12 事件通道从此共用一个落点函数
           const landing = clampRevealPosition(
             { line: location.line, column: location.column, span },
-            { lineCount: live.getLineCount(), maxColumn: (n) => live.getLineMaxColumn(n) },
+            {
+              lineCount: live.getLineCount(),
+              maxColumn: (n) => live.getLineMaxColumn(n),
+              lineText: (n) => live.getLineContent(n),
+            },
           );
           line = landing.lineNumber;
           startColumn = landing.column;

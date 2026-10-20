@@ -37,6 +37,8 @@ const modelStub = () =>
     uri: { toString: () => 'file:///a.ERB' },
     getLineCount: () => 20,
     getLineMaxColumn: () => LINE_LENGTH + 1,
+    // 代理对边界修正只在这条腿被喂行文本时启用（本桩全 BMP ⇒ 结果与旧口径逐字一致）
+    getLineContent: () => '  @FOO_BAR(x'.padEnd(LINE_LENGTH, ' '),
     getWordAtPosition: () => ({ startColumn: 6, endColumn: 13 }),
   }) as unknown as Monaco.editor.ITextModel;
 

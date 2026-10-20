@@ -144,7 +144,7 @@ function stubMonaco(): {
   return { monaco: monaco as unknown as typeof Monaco, registered, openers, disposed };
 }
 
-/** 只提供行列口径的桩 model（`getLineMaxColumn` = 行长 + 1，与 Monaco 同口径） */
+/** 只提供行列口径的桩 model（`getLineMaxColumn` = 行长 + 1，与 Monaco 同口径；行文本全 BMP） */
 function fakeModel(
   uriString: string,
   opts: { lineCount?: number; lineLength?: number; word?: { startColumn: number; endColumn: number } } = {},
@@ -155,6 +155,8 @@ function fakeModel(
     uri: { toString: () => uriString },
     getLineCount: () => lineCount,
     getLineMaxColumn: (lineNumber: number) => (lineNumber >= 1 && lineNumber <= lineCount ? lineLength + 1 : 1),
+    // 代理对边界修正要读行文本；本桩全是 BMP ⇒ 与旧口径逐字一致
+    getLineContent: (lineNumber: number) => (lineNumber >= 1 && lineNumber <= lineCount ? 'x'.repeat(lineLength) : ''),
     getWordAtPosition: () => opts.word ?? null,
   } as unknown as Monaco.editor.ITextModel;
 }

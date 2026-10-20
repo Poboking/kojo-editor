@@ -610,6 +610,8 @@ export function EditorPane({
       {
         lineCount: model.getLineCount(),
         maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
+        // 代理对不劈开：行文本只喂给边界修正（列口径仍是 UTF-16，见 reveal-position 文件头）
+        lineText: (lineNumber) => model.getLineContent(lineNumber),
       },
     );
     ed.revealLineInCenter(position.lineNumber);

@@ -156,6 +156,7 @@ export function toDefinitionLinks(
     const geometry = {
       lineCount: target.getLineCount(),
       maxColumn: (lineNumber: number) => target.getLineMaxColumn(lineNumber),
+      lineText: (lineNumber: number) => target.getLineContent(lineNumber),
     };
     // 落点判据**只有这一份**：行列与区间一律由 `clampRevealPosition` 夹到 model 真实存在的值
     const landing = clampRevealPosition({ line: location.line, column: location.column, span: location.span }, geometry);
