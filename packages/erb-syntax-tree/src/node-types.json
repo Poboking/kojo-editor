@@ -1,0 +1,2218 @@
+[
+  {
+    "type": "at_string",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "brace_literal",
+          "named": true
+        },
+        {
+          "type": "form_interpolation",
+          "named": true
+        },
+        {
+          "type": "form_substitution",
+          "named": true
+        },
+        {
+          "type": "percent_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "at_string_line",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "at_string",
+          "named": true
+        },
+        {
+          "type": "brace_literal",
+          "named": true
+        },
+        {
+          "type": "comment_inline",
+          "named": true
+        },
+        {
+          "type": "form_interpolation",
+          "named": true
+        },
+        {
+          "type": "form_substitution",
+          "named": true
+        },
+        {
+          "type": "percent_literal",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "branch_block",
+    "named": true,
+    "fields": {
+      "branch": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "case_line",
+            "named": true
+          },
+          {
+            "type": "caseelse_line",
+            "named": true
+          },
+          {
+            "type": "catch_line",
+            "named": true
+          },
+          {
+            "type": "else_line",
+            "named": true
+          },
+          {
+            "type": "elseif_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "data_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "enddata_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "printdata_line",
+            "named": true
+          },
+          {
+            "type": "printdatad_line",
+            "named": true
+          },
+          {
+            "type": "printdatadl_line",
+            "named": true
+          },
+          {
+            "type": "printdatadw_line",
+            "named": true
+          },
+          {
+            "type": "printdatak_line",
+            "named": true
+          },
+          {
+            "type": "printdatakl_line",
+            "named": true
+          },
+          {
+            "type": "printdatakw_line",
+            "named": true
+          },
+          {
+            "type": "printdatal_line",
+            "named": true
+          },
+          {
+            "type": "printdataw_line",
+            "named": true
+          },
+          {
+            "type": "strdata_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "do_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "loop_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "do_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "for_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "next_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "for_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "funclist_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "endfunc_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "trycalllist_line",
+            "named": true
+          },
+          {
+            "type": "trygotolist_line",
+            "named": true
+          },
+          {
+            "type": "tryjumplist_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "function_block",
+    "named": true,
+    "fields": {
+      "head": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "function_head",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "function_head",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "function_name",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "function_head_rest",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "if_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "endif_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "if_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "branch_block",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "list_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "endlist_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "datalist_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "noskip_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "endnoskip_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "noskip_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "repeat_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "rend_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "repeat_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "select_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "endselect_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "selectcase_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "branch_block",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "skip_block",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "skip_body",
+            "named": true
+          }
+        ]
+      },
+      "close": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "skip_end",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "skip_start",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "skip_body",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "skip_end",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "skip_start",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "source_file",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "case_line",
+          "named": true
+        },
+        {
+          "type": "caseelse_line",
+          "named": true
+        },
+        {
+          "type": "catch_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "else_line",
+          "named": true
+        },
+        {
+          "type": "elseif_line",
+          "named": true
+        },
+        {
+          "type": "endcatch_line",
+          "named": true
+        },
+        {
+          "type": "enddata_line",
+          "named": true
+        },
+        {
+          "type": "endfunc_line",
+          "named": true
+        },
+        {
+          "type": "endif_line",
+          "named": true
+        },
+        {
+          "type": "endlist_line",
+          "named": true
+        },
+        {
+          "type": "endnoskip_line",
+          "named": true
+        },
+        {
+          "type": "endselect_line",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "function_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "loop_line",
+          "named": true
+        },
+        {
+          "type": "next_line",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "rend_line",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "wend_line",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "statement_line",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "brace_literal",
+          "named": true
+        },
+        {
+          "type": "comment_inline",
+          "named": true
+        },
+        {
+          "type": "form_interpolation",
+          "named": true
+        },
+        {
+          "type": "form_substitution",
+          "named": true
+        },
+        {
+          "type": "percent_literal",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "string",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "brace_literal",
+          "named": true
+        },
+        {
+          "type": "form_interpolation",
+          "named": true
+        },
+        {
+          "type": "form_substitution",
+          "named": true
+        },
+        {
+          "type": "percent_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "string_line",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "brace_literal",
+          "named": true
+        },
+        {
+          "type": "comment_inline",
+          "named": true
+        },
+        {
+          "type": "form_interpolation",
+          "named": true
+        },
+        {
+          "type": "form_substitution",
+          "named": true
+        },
+        {
+          "type": "percent_literal",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "try_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "endcatch_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tryccall_line",
+            "named": true
+          },
+          {
+            "type": "tryccallform_line",
+            "named": true
+          },
+          {
+            "type": "trycgoto_line",
+            "named": true
+          },
+          {
+            "type": "trycgotoform_line",
+            "named": true
+          },
+          {
+            "type": "trycjump_line",
+            "named": true
+          },
+          {
+            "type": "trycjumpform_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "branch_block",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "while_block",
+    "named": true,
+    "fields": {
+      "close": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "wend_line",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "while_line",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "at_string_line",
+          "named": true
+        },
+        {
+          "type": "bracket_line",
+          "named": true
+        },
+        {
+          "type": "comment_line",
+          "named": true
+        },
+        {
+          "type": "data_block",
+          "named": true
+        },
+        {
+          "type": "dim_directive",
+          "named": true
+        },
+        {
+          "type": "directive_line",
+          "named": true
+        },
+        {
+          "type": "do_block",
+          "named": true
+        },
+        {
+          "type": "for_block",
+          "named": true
+        },
+        {
+          "type": "funclist_block",
+          "named": true
+        },
+        {
+          "type": "if_block",
+          "named": true
+        },
+        {
+          "type": "label_line",
+          "named": true
+        },
+        {
+          "type": "list_block",
+          "named": true
+        },
+        {
+          "type": "noskip_block",
+          "named": true
+        },
+        {
+          "type": "repeat_block",
+          "named": true
+        },
+        {
+          "type": "select_block",
+          "named": true
+        },
+        {
+          "type": "sif_line",
+          "named": true
+        },
+        {
+          "type": "skip_block",
+          "named": true
+        },
+        {
+          "type": "statement_line",
+          "named": true
+        },
+        {
+          "type": "string_line",
+          "named": true
+        },
+        {
+          "type": "try_block",
+          "named": true
+        },
+        {
+          "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "\"",
+    "named": false
+  },
+  {
+    "type": "@",
+    "named": false
+  },
+  {
+    "type": "brace_literal",
+    "named": true
+  },
+  {
+    "type": "bracket_line",
+    "named": true
+  },
+  {
+    "type": "case_line",
+    "named": true
+  },
+  {
+    "type": "caseelse_line",
+    "named": true
+  },
+  {
+    "type": "catch_line",
+    "named": true
+  },
+  {
+    "type": "comment_inline",
+    "named": true
+  },
+  {
+    "type": "comment_line",
+    "named": true
+  },
+  {
+    "type": "datalist_line",
+    "named": true
+  },
+  {
+    "type": "dim_directive",
+    "named": true
+  },
+  {
+    "type": "directive_line",
+    "named": true
+  },
+  {
+    "type": "do_line",
+    "named": true
+  },
+  {
+    "type": "else_line",
+    "named": true
+  },
+  {
+    "type": "elseif_line",
+    "named": true
+  },
+  {
+    "type": "endcatch_line",
+    "named": true
+  },
+  {
+    "type": "enddata_line",
+    "named": true
+  },
+  {
+    "type": "endfunc_line",
+    "named": true
+  },
+  {
+    "type": "endif_line",
+    "named": true
+  },
+  {
+    "type": "endlist_line",
+    "named": true
+  },
+  {
+    "type": "endnoskip_line",
+    "named": true
+  },
+  {
+    "type": "endselect_line",
+    "named": true
+  },
+  {
+    "type": "for_line",
+    "named": true
+  },
+  {
+    "type": "form_interpolation",
+    "named": true
+  },
+  {
+    "type": "form_substitution",
+    "named": true
+  },
+  {
+    "type": "function_head_rest",
+    "named": true
+  },
+  {
+    "type": "function_name",
+    "named": true
+  },
+  {
+    "type": "if_line",
+    "named": true
+  },
+  {
+    "type": "label_line",
+    "named": true
+  },
+  {
+    "type": "loop_line",
+    "named": true
+  },
+  {
+    "type": "next_line",
+    "named": true
+  },
+  {
+    "type": "noskip_line",
+    "named": true
+  },
+  {
+    "type": "percent_literal",
+    "named": true
+  },
+  {
+    "type": "printdata_line",
+    "named": true
+  },
+  {
+    "type": "printdatad_line",
+    "named": true
+  },
+  {
+    "type": "printdatadl_line",
+    "named": true
+  },
+  {
+    "type": "printdatadw_line",
+    "named": true
+  },
+  {
+    "type": "printdatak_line",
+    "named": true
+  },
+  {
+    "type": "printdatakl_line",
+    "named": true
+  },
+  {
+    "type": "printdatakw_line",
+    "named": true
+  },
+  {
+    "type": "printdatal_line",
+    "named": true
+  },
+  {
+    "type": "printdataw_line",
+    "named": true
+  },
+  {
+    "type": "rend_line",
+    "named": true
+  },
+  {
+    "type": "repeat_line",
+    "named": true
+  },
+  {
+    "type": "selectcase_line",
+    "named": true
+  },
+  {
+    "type": "sif_line",
+    "named": true
+  },
+  {
+    "type": "strdata_line",
+    "named": true
+  },
+  {
+    "type": "trycalllist_line",
+    "named": true
+  },
+  {
+    "type": "tryccall_line",
+    "named": true
+  },
+  {
+    "type": "tryccallform_line",
+    "named": true
+  },
+  {
+    "type": "trycgoto_line",
+    "named": true
+  },
+  {
+    "type": "trycgotoform_line",
+    "named": true
+  },
+  {
+    "type": "trycjump_line",
+    "named": true
+  },
+  {
+    "type": "trycjumpform_line",
+    "named": true
+  },
+  {
+    "type": "trygotolist_line",
+    "named": true
+  },
+  {
+    "type": "tryjumplist_line",
+    "named": true
+  },
+  {
+    "type": "wend_line",
+    "named": true
+  },
+  {
+    "type": "while_line",
+    "named": true
+  }
+]

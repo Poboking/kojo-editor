@@ -97,6 +97,13 @@ describe('parseFunctionDefinition', () => {
     expect(parseFunctionDefinition('$LABEL')).toBeNull();
     expect(parseFunctionDefinition('PRINTL foo')).toBeNull();
   });
+
+  it('行首 @"…" 是 FORM 续行串，不是函数定义', () => {
+    expect(parseFunctionDefinition('@"Rape %CALLNAME:TARGET%"')).toBeNull();
+    expect(parseFunctionDefinition('@ \t"%UNICODE(0x2660)%",')).toBeNull();
+    const file = parseErbText('@"第一行"\n\t@"第二行"\n');
+    expect(file.functions).toEqual([]);
+  });
 });
 
 describe('parseDimDeclaration', () => {

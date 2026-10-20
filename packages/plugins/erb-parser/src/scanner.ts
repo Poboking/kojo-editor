@@ -85,6 +85,10 @@ export function parseParams(inner: string): ErbParam[] {
 export function parseFunctionDefinition(trimmed: string): { name: string; params: ErbParam[]; nameOffset: number } | null {
   if (!trimmed.startsWith('@')) return null;
   const body = trimmed.slice(1);
+  // 行首 `@"…"` 是 FORM 续行 / HTML 串（`@` 与开引号合成一枚记号），不是函数定义；
+  // 不挡住会把 `@"%UNICODE(0x2660)%"` 一类的续行认成形如 `"%UNICODE` 的函数（真语料 DIM.ERH）。
+  const firstNonSpace = body.search(/[^ \t\u3000]/);
+  if (firstNonSpace < 0 || body[firstNonSpace] === '"') return null;
   let nameEnd = body.length;
   for (let i = 0; i < body.length; i++) {
     const c = body[i]!;

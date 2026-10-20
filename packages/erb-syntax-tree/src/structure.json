@@ -1,0 +1,197 @@
+{
+  "source": {
+    "scanner": "packages/plugins/erb-parser/src/scanner.ts"
+  },
+  "markers": {
+    "skipStart": "[SKIPSTART]",
+    "skipEnd": "[SKIPEND]"
+  },
+  "dimDirectives": [
+    "DIMCHAR",
+    "DEFINE",
+    "DIMSTR",
+    "DIMF",
+    "DIMS",
+    "DIM"
+  ],
+  "dimFlags": "i",
+  "controlFlow": {
+    "open": {
+      "DATALIST": "list",
+      "DO": "do",
+      "FOR": "for",
+      "IF": "if",
+      "NOSKIP": "noskip",
+      "PRINTDATA": "data",
+      "PRINTDATAD": "data",
+      "PRINTDATADL": "data",
+      "PRINTDATADW": "data",
+      "PRINTDATAK": "data",
+      "PRINTDATAKL": "data",
+      "PRINTDATAKW": "data",
+      "PRINTDATAL": "data",
+      "PRINTDATAW": "data",
+      "REPEAT": "repeat",
+      "SELECTCASE": "select",
+      "STRDATA": "data",
+      "TRYCALLLIST": "funclist",
+      "TRYCCALL": "try",
+      "TRYCCALLFORM": "try",
+      "TRYCGOTO": "try",
+      "TRYCGOTOFORM": "try",
+      "TRYCJUMP": "try",
+      "TRYCJUMPFORM": "try",
+      "TRYGOTOLIST": "funclist",
+      "TRYJUMPLIST": "funclist",
+      "WHILE": "while"
+    },
+    "branch": {
+      "CASE": "select",
+      "CASEELSE": "select",
+      "CATCH": "try",
+      "ELSE": "if",
+      "ELSEIF": "if"
+    },
+    "close": {
+      "ENDCATCH": "try",
+      "ENDDATA": "data",
+      "ENDFUNC": "funclist",
+      "ENDIF": "if",
+      "ENDLIST": "list",
+      "ENDNOSKIP": "noskip",
+      "ENDSELECT": "select",
+      "LOOP": "do",
+      "NEXT": "for",
+      "REND": "repeat",
+      "WEND": "while"
+    },
+    "leaf": [
+      "SIF"
+    ],
+    "pairs": {
+      "list": {
+        "open": [
+          "DATALIST"
+        ],
+        "branch": [],
+        "close": [
+          "ENDLIST"
+        ]
+      },
+      "do": {
+        "open": [
+          "DO"
+        ],
+        "branch": [],
+        "close": [
+          "LOOP"
+        ]
+      },
+      "for": {
+        "open": [
+          "FOR"
+        ],
+        "branch": [],
+        "close": [
+          "NEXT"
+        ]
+      },
+      "if": {
+        "open": [
+          "IF"
+        ],
+        "branch": [
+          "ELSE",
+          "ELSEIF"
+        ],
+        "close": [
+          "ENDIF"
+        ]
+      },
+      "noskip": {
+        "open": [
+          "NOSKIP"
+        ],
+        "branch": [],
+        "close": [
+          "ENDNOSKIP"
+        ]
+      },
+      "data": {
+        "open": [
+          "PRINTDATA",
+          "PRINTDATAD",
+          "PRINTDATADL",
+          "PRINTDATADW",
+          "PRINTDATAK",
+          "PRINTDATAKL",
+          "PRINTDATAKW",
+          "PRINTDATAL",
+          "PRINTDATAW",
+          "STRDATA"
+        ],
+        "branch": [],
+        "close": [
+          "ENDDATA"
+        ]
+      },
+      "repeat": {
+        "open": [
+          "REPEAT"
+        ],
+        "branch": [],
+        "close": [
+          "REND"
+        ]
+      },
+      "select": {
+        "open": [
+          "SELECTCASE"
+        ],
+        "branch": [
+          "CASE",
+          "CASEELSE"
+        ],
+        "close": [
+          "ENDSELECT"
+        ]
+      },
+      "funclist": {
+        "open": [
+          "TRYCALLLIST",
+          "TRYGOTOLIST",
+          "TRYJUMPLIST"
+        ],
+        "branch": [],
+        "close": [
+          "ENDFUNC"
+        ]
+      },
+      "try": {
+        "open": [
+          "TRYCCALL",
+          "TRYCCALLFORM",
+          "TRYCGOTO",
+          "TRYCGOTOFORM",
+          "TRYCJUMP",
+          "TRYCJUMPFORM"
+        ],
+        "branch": [
+          "CATCH"
+        ],
+        "close": [
+          "ENDCATCH"
+        ]
+      },
+      "while": {
+        "open": [
+          "WHILE"
+        ],
+        "branch": [],
+        "close": [
+          "WEND"
+        ]
+      }
+    }
+  }
+}

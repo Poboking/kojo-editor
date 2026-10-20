@@ -1,0 +1,37 @@
+{
+  "name": "@kojo/erb-syntax-tree",
+  "version": "0.0.0",
+  "private": true,
+  "description": "tree-sitter 语法层：ERB（EraBasic 脚本）行式结构的 CST 与折叠查询。语言层，零游戏名词；宿主经语言描述符按需装载。",
+  "license": "GPL-3.0-or-later",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./grammar": "./grammar.js",
+    "./wasm": "./tree-sitter-erb.wasm"
+  },
+  "scripts": {
+    "gen-structure": "node tools/gen-erb-structure.mjs",
+    "parser": "tree-sitter generate grammar.js",
+    "wasm": "tree-sitter build --wasm -o tree-sitter-erb.wasm",
+    "build": "npm run gen-structure && npm run parser && npm run wasm",
+    "parse-corpus": "node tools/parse-corpus.mjs",
+    "fold-compare": "node tools/fold-compare.mjs",
+    "perf": "node tools/perf-probe.mjs"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.27.1"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.27.1"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.erb",
+      "language": "erb",
+      "file-types": ["erb", "erh"],
+      "folds": "queries/folds.scm",
+      "highlights": "queries/highlights.scm"
+    }
+  ]
+}

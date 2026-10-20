@@ -139,6 +139,16 @@ importers:
         specifier: ^7.3.7
         version: 7.3.7(@types/node@22.20.5)(lightningcss@1.33.0)
 
+  packages/erb-syntax-tree:
+    dependencies:
+      web-tree-sitter:
+        specifier: ^0.27.1
+        version: 0.27.1
+    devDependencies:
+      tree-sitter-cli:
+        specifier: ^0.27.1
+        version: 0.27.1
+
   packages/kernel:
     dependencies:
       '@kojo/plugin-api':
