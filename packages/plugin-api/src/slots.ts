@@ -2,6 +2,7 @@ import type { Unsubscribe } from './base';
 import type { RevealSpan } from './events';
 import type { GameAdapter } from './game';
 import type { GameProject } from './game';
+import type { EolStyle } from './io';
 
 /**
  * 槽位系统（对应架构文档 §4）。
@@ -999,6 +1000,15 @@ export interface EditorSaveRequest {
   readonly text: string;
   readonly project: GameProject | null;
   readonly choices?: EditorSaveChoices;
+  /**
+   * **行尾覆盖档**（EOL-OVERRIDE-SAVE 批，additive——旧接管者零改动）：
+   * 作者对这份文件做了显式 EOL 切换（状态栏 LF/CRLF 菜单）时，宿主随保存请求
+   * 递上 `'crlf' | 'lf'`，接管者写**源文件**时应传给 `io.writeText` 的 `{ eol }`
+   * （内核语义：显式 eol ⇒ 整段统一到该档，不走逐行保换行）。缺席 = 无覆盖，
+   * 按缺省"保编码保换行"写。**只约束源文件**：编译产物（如 `.kojo` → `.ERB`）
+   * 的行尾归产物管线自己的策略管。
+   */
+  readonly eol?: EolStyle;
 }
 
 /**

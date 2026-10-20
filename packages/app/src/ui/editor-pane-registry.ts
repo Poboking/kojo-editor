@@ -25,6 +25,14 @@ export interface ModelEntry {
   /** 打开时的编码/EOL（状态栏展示用；保存由内核 io 保编码） */
   encoding: string;
   eol: string;
+  /**
+   * **EOL 保存覆盖位**（EOL-OVERRIDE-SAVE 批）：作者经状态栏菜单**显式切换**过
+   * 换行档才置位（打开读盘 / 重载不置位）；保存仅当此位在场时给 `writeText`
+   * 显式 `{ eol }`（内核语义 = 整段统一），落盘成功即清位；重载 / 外部冲突
+   * （含合并）/ 放弃修改（强制重载 / 关标签随条目销毁）时复位。
+   * 缺席（undefined）= 保存走缺省"保编码保换行"。
+   */
+  eolOverride?: 'LF' | 'CRLF';
 }
 
 /**

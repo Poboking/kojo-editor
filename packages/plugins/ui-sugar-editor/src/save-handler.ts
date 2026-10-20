@@ -115,6 +115,12 @@ function blockNote(plan: SugarSavePlan): string {
 export async function performSugarSave(deps: SugarSaveDeps, request: EditorSaveRequest): Promise<EditorSaveOutcome> {
   const { sugar, io } = deps;
 
+  // ---- 源文件写盘参数（EOL-OVERRIDE-SAVE 批，additive）：宿主随请求递上行尾覆盖档
+  // （作者显式切过换行）时透传给 `io.writeText` 的 `{ eol }`（内核语义 = 整段统一）；
+  // 缺席 = 旧形状逐字不变（保编码保换行）。只约束**源文件**；产物 `.ERB` 的行尾
+  // 归 compileToFile 自己的策略管，不经此覆盖。
+  const sourceWriteOpts = request.eol ? { eol: request.eol } : undefined;
+
   // ---- 前置（纯函数；无副作用）：目标推导 + 转译 + 全角空格告警 ----
   const plan = sugar.planSave({ source: request.text, sourcePath: request.path });
 
@@ -137,7 +143,7 @@ export async function performSugarSave(deps: SugarSaveDeps, request: EditorSaveR
     const opId = await journal.begin('sugar-save', `保存 ${baseName(request.path)}（源+产物）`);
     try {
       await journal.record(opId, request.path);
-      await io.writeText(request.path, request.text);
+      await io.writeText(request.path, request.text, sourceWriteOpts);
       if (plan.blocked || !plan.erbPath) {
         await journal.commit(opId);
         return { status: 'saved', message: '已保存源文件', note: blockNote(plan) };
@@ -165,7 +171,7 @@ export async function performSugarSave(deps: SugarSaveDeps, request: EditorSaveR
 
   // ---- 1. 保存源文件（始终；作者成果不可因编译失败而丢）----
   try {
-    await io.writeText(request.path, request.text);
+    await io.writeText(request.path, request.text, sourceWriteOpts);
   } catch (err) {
     // 原子写失败 = 盘上没动，无需回滚
     return { status: 'error', message: `保存源文件失败：${err instanceof Error ? err.message : String(err)}` };
