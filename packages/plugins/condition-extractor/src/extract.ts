@@ -102,12 +102,15 @@ function splitToRange(s: string): [string, string] | null {
   return null;
 }
 
-/** 展开一条 CASE 为若干谓词（conjunction = 同行 AND 标记，见 FunctionPredicate） */
+/** 展开一条 CASE 为若干谓词（conjunction = 同行 AND 标记，见 FunctionPredicate）
+ *  @param rawText CASE 的逻辑行原文：缺省取语句自带表达式；`{`…`}` 行连接批（W8-C2）
+ *                 传入拼接后的整条值列表（`expandCase` 对原文零游戏知识，只管切值）。 */
 function expandCase(
   stmt: ControlFlowStatement,
   subject: ConditionExpr | null,
+  rawText: string = stmt.expression,
 ): { expr: ConditionExpr; line: number; conjunction?: 'and' }[] {
-  const raw = stmt.expression.trim();
+  const raw = rawText.trim();
   if (raw.length === 0) return [];
   const out: { expr: ConditionExpr; line: number; conjunction?: 'and' }[] = [];
 
@@ -440,9 +443,11 @@ export function collectPredicates(
   /**
    * 多行条件的拼接原文；无行资料 / 不在 `{`…`}` 块内 ⇒ 原样（不猜）。
    *
-   * 只收 IF / ELSEIF / SIF（本批判据就是"多行 IF 条件不进谓词"）：
-   * CASE 的多行值列表在现状下**不是 opaque**（`CASE 1, 2,` 的尾逗号只是少展开后续行），
-   * 拼它会凭空抬高谓词总数（真语料 +311，全是补全的 CASE 值）⇒ 收窄，留作后续单。
+   * 收 IF / ELSEIF / SIF / CASE（引擎 `EraStreamReader.ReadEnabledLine` 的行連結对四者
+   * 一视同仁；W8-C2 起照真语料取证把 CASE 纳入）。判据与 IF 族完全同门：孤行 `{` 起、
+   * 孤行 `}` 止。**没有**「行尾 `,` ⇒ 连下一行」这条规则——尾逗号不携带续行意图，
+   * 非块的尾逗号 CASE（真语料 7 处，如 `CASE [[跳蛋]],` 下一行是真正的内层 SELECTCASE）
+   * 按尾逗号拼会把内层 SELECTCASE 吃成值片段、凭空多出假谓词（PITFALLS 记过反噬）。
    */
   const exprTextOf = (s: ControlFlowStatement): string =>
     opts.lines ? (joinBracedExpression(s.line, s.expression, opts.lines) ?? s.expression) : s.expression;
@@ -475,10 +480,13 @@ export function collectPredicates(
       }
       case 'CASE': {
         const top = selectStack[selectStack.length - 1];
-        for (const p of expandCase(s, top?.subject ?? null)) {
+        // 值列表同样过 `{`…`}` 行连接门（与 IF 族同判据；见 exprTextOf 注）：块内多行
+        // CASE 列表拼接后逐值展开，谓词数随值数增长——这是补全真值，不是假谓词。
+        const text = exprTextOf(s);
+        for (const p of expandCase(s, top?.subject ?? null, text)) {
           preds.push({
             kind: 'CASE',
-            text: s.expression,
+            text,
             expr: p.expr,
             line: p.line,
             depth: s.depth,

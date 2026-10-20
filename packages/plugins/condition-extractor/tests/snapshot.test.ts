@@ -175,7 +175,7 @@ describe('v3 按文件桶编解码', () => {
       'schema',
     ]);
     expect(Object.keys(c.dependencies[0]!.schema!).sort()).toEqual(['description', 'index', 'name']);
-    expect(EXTRACT_SNAPSHOT_FORMAT).toBe(7);
+    expect(EXTRACT_SNAPSHOT_FORMAT).toBe(8);
   });
 
   /** v4 的全部收益都建立在这一条不变式上：`key` 不落盘 = 它一定是 name/indices 的派生值 */
