@@ -14,6 +14,7 @@ import {
   setSearchScope,
   setSearchSortMode,
   snapshot,
+  stepSearchHistory,
   stepSearchMatch,
   stopSearch,
   subscribe,
@@ -532,16 +533,31 @@ export function SearchPanel({
               ref={inputRef}
               className="search-input ksp-input"
               placeholder="在文件中搜索…"
-              title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）"
+              title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）；↑/↓ 回溯最近检索"
               aria-label="在文件中搜索"
               autoComplete="off"
               spellCheck={false}
               value={s.query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                // 输入法组词中的回车只是在确认候选词，不是"跳下一项 / 开始检索"
-                // （中文作者的主路径；不挡会把一次组词变成一次跳转）
-                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                // 输入法组词中的 ↑↓ 是在候选词里翻页、回车是在确认候选词——一律不接管
+                // （中文作者的主路径；不挡会把一次组词变成一次历史回溯 / 跳转）
+                if (e.nativeEvent.isComposing) return;
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                  // ↑/↓ 回溯最近检索（W7-E；数据面在 `search-store.stepSearchHistory`）：
+                  // ↑ 从草稿进入历史并向更旧走，↓ 向更新走、退到最新一条再按 = 还原草稿。
+                  // 没有历史 / 还没进入回溯时的 ↓ **不消费**——既有「↓ 进结果第一行」的
+                  // 行导航（`panel-row-nav`）原样保留；消费时必须停住冒泡，否则同一下按键
+                  // 会被面板根上的行导航再处理一遍（输入框与结果区各动一次）。
+                  if (stepSearchHistory(e.key === 'ArrowUp' ? -1 : 1)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                  return;
+                }
+                // 回车 = 有结果逐项跳 / 没结果开始检索（输入法组词中的回车已在上面
+                // 让位给候选词确认——中文作者的主路径，不挡会把一次组词变成一次跳转）
+                if (e.key !== 'Enter') return;
                 e.preventDefault();
                 // 有结果优先逐项跳（VSCode 查找控件的 Enter 手感）；查询改过 / 没结果
                 // ⇒ `stepSearchMatch` 返回 null，退回"回车开始检索"
@@ -857,7 +873,7 @@ export function SearchPanel({
             </>
           ) : (
             <div className="search-status dim ksp-hint">
-              输入检索词后回车；点结果行跳转到该位置（回车 / Shift+回车逐项跳，↑↓ 逐行看，F4 跳到下一条并打开）。
+              输入检索词后回车（↑/↓ 回溯最近检索）；点结果行跳转到该位置（回车 / Shift+回车逐项跳，结果区内 ↑↓ 逐行看，F4 跳到下一条并打开）。
             </div>
           )}
         </div>

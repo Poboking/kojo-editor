@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchMatch, SearchRequest, SearchResult } from '../src/bridge/search';
-import { setGlobFilterText } from '../src/ui/search-query';
+import { SEARCH_HISTORY_LIMIT, setGlobFilterText } from '../src/ui/search-query';
 import {
   clearSearchResult,
   requestReplaceFocus,
@@ -17,6 +17,7 @@ import {
   setSearchRunner,
   setSearchSortMode,
   snapshot,
+  stepSearchHistory,
   stepSearchMatch,
   stopSearch,
   subscribe,
@@ -65,6 +66,25 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: 
 }
 
 const ROOTS = ['C:\\game'];
+
+/** 内存版 Storage：node 测试环境没有 localStorage，stub 一份即可验证读写与坏值回落 */
+function fakeStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (key: string) => map.get(key) ?? null,
+    key: (index: number) => [...map.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      map.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      map.set(key, value);
+    },
+  };
+}
 
 describe('search-store', () => {
   beforeEach(() => {
@@ -283,25 +303,6 @@ describe('search-store', () => {
 });
 
 describe('search-store 检索开关跨会话（VS Code 同款：选项不是一次性的）', () => {
-  /** 内存版 Storage：node 测试环境没有 localStorage，stub 一份即可验证读写与坏值回落 */
-  function fakeStorage(): Storage {
-    const map = new Map<string, string>();
-    return {
-      get length() {
-        return map.size;
-      },
-      clear: () => map.clear(),
-      getItem: (key: string) => map.get(key) ?? null,
-      key: (index: number) => [...map.keys()][index] ?? null,
-      removeItem: (key: string) => {
-        map.delete(key);
-      },
-      setItem: (key: string, value: string) => {
-        map.set(key, value);
-      },
-    };
-  }
-
   beforeEach(() => {
     vi.unstubAllGlobals();
     resetSearch();
@@ -527,5 +528,187 @@ describe('search-store 替换状态机（R7 搜索替换批）', () => {
     const before = snapshot().replaceFocusNonce;
     requestReplaceFocus();
     expect(snapshot().replaceFocusNonce).toBe(before + 1);
+  });
+});
+
+describe('search-store 最近检索（W7-E：有效查询 / 去重 / 上限 / 跨会话）', () => {
+  const HISTORY_KEY = 'kojo.ui.search.history.v1';
+
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    resetSearch();
+    setSearchRunner(null);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setSearchRunner(null);
+    resetSearch();
+  });
+
+  /** 走一遍完整检索（历史只在真发起检索时记） */
+  async function search(query: string): Promise<void> {
+    setQuery(query);
+    await runSearch(ROOTS);
+  }
+
+  it('有效查询入史：最新在前、原文照存', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    setSearchRunner(async () => result({ totalMatches: 1 }));
+    await search('口上');
+    await search('口上 接吻');
+    expect(snapshot().queryHistory).toEqual(['口上 接吻', '口上']);
+    // 真源是一份逐字可读的 JSON 数组（与三开关同一套存法与键风格）
+    expect(JSON.parse(storage.getItem(HISTORY_KEY)!)).toEqual(['口上 接吻', '口上']);
+  });
+
+  it('去重：同一条只留最新位置（再搜旧词 ⇒ 回到队首、不增条）', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    setSearchRunner(async () => result());
+    await search('a');
+    await search('b');
+    await search('a');
+    expect(snapshot().queryHistory).toEqual(['a', 'b']);
+    expect(JSON.parse(storage.getItem(HISTORY_KEY)!)).toEqual(['a', 'b']);
+  });
+
+  it('上限：只留最近 N 条，更旧的被挤掉（存储同样只有 N 条）', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    setSearchRunner(async () => result());
+    for (let i = 1; i <= SEARCH_HISTORY_LIMIT + 3; i++) await search(`q${i}`);
+    expect(snapshot().queryHistory).toHaveLength(SEARCH_HISTORY_LIMIT);
+    expect(snapshot().queryHistory[0]).toBe(`q${SEARCH_HISTORY_LIMIT + 3}`);
+    expect(snapshot().queryHistory).not.toContain('q3');
+    expect(snapshot().queryHistory.at(-1)).toBe('q4');
+    expect(JSON.parse(storage.getItem(HISTORY_KEY)!)).toHaveLength(SEARCH_HISTORY_LIMIT);
+  });
+
+  it('没真的发起检索的不入史：空白查询 / 无根目录都不算有效检索', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    const runner = vi.fn<SearchRunner>();
+    setSearchRunner(runner);
+    setQuery('   ');
+    await runSearch(ROOTS);
+    setQuery('abc');
+    await runSearch([]);
+    expect(runner).not.toHaveBeenCalled();
+    expect(snapshot().queryHistory).toEqual([]);
+    expect(storage.getItem(HISTORY_KEY)).toBeNull();
+  });
+
+  it('持久化读回：下次启动（resetSearch 现读）历史还在', () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    storage.setItem(HISTORY_KEY, JSON.stringify(['beta', 'alpha']));
+    resetSearch();
+    expect(snapshot().queryHistory).toEqual(['beta', 'alpha']);
+  });
+
+  it('存储坏值：坏 JSON / 非数组 / 坏元素一律丢弃，不炸面板', () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    storage.setItem(HISTORY_KEY, '{bad json');
+    resetSearch();
+    expect(snapshot().queryHistory).toEqual([]);
+    storage.setItem(HISTORY_KEY, JSON.stringify({ entries: ['a'] }));
+    resetSearch();
+    expect(snapshot().queryHistory).toEqual([]);
+    // 坏元素（数字 / null / 空白）跳过、重复只留第一次出现的
+    storage.setItem(HISTORY_KEY, JSON.stringify(['ok', 1, null, '  ', 'ok', 'b']));
+    resetSearch();
+    expect(snapshot().queryHistory).toEqual(['ok', 'b']);
+  });
+
+  it('localStorage 不可用（隐私模式 / 抛错）⇒ 历史照常记在内存里，只是不落盘', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem(): string | null {
+        throw new Error('SecurityError');
+      },
+      setItem(): void {
+        throw new Error('SecurityError');
+      },
+    });
+    resetSearch();
+    setSearchRunner(async () => result());
+    await search('abc');
+    expect(snapshot().queryHistory).toEqual(['abc']);
+    expect(stepSearchHistory(-1)).toBe(true);
+    expect(snapshot().query).toBe('abc');
+  });
+
+  it('↑/↓ 回溯：↑ 从草稿进最新、继续往更旧；↓ 往回走，退到最新再按还原草稿', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    setSearchRunner(async () => result());
+    await search('a');
+    await search('b');
+    setQuery('草稿');
+    expect(stepSearchHistory(-1)).toBe(true);
+    expect(snapshot().query).toBe('b');
+    expect(snapshot().historyCursor).toBe(0);
+    expect(stepSearchHistory(-1)).toBe(true);
+    expect(snapshot().query).toBe('a');
+    expect(snapshot().historyCursor).toBe(1);
+    // 到最旧一条停住（不越过、也不退出回溯）
+    expect(stepSearchHistory(-1)).toBe(true);
+    expect(snapshot().query).toBe('a');
+    expect(snapshot().historyCursor).toBe(1);
+    expect(stepSearchHistory(1)).toBe(true);
+    expect(snapshot().query).toBe('b');
+    expect(snapshot().queryHistory).toEqual(['b', 'a']);
+    // 最新一条再 ↓ = 还原草稿并退出回溯
+    expect(stepSearchHistory(1)).toBe(true);
+    expect(snapshot().query).toBe('草稿');
+    expect(snapshot().historyCursor).toBe(-1);
+  });
+
+  it('回溯中打字 ⇒ 退出回溯；下一次 ↑ 从最新重新开始，草稿取当前文本', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    setSearchRunner(async () => result());
+    await search('a');
+    await search('b');
+    setQuery('');
+    stepSearchHistory(-1);
+    expect(snapshot().query).toBe('b');
+    setQuery('b2');
+    expect(snapshot().historyCursor).toBe(-1);
+    expect(stepSearchHistory(-1)).toBe(true);
+    expect(snapshot().query).toBe('b');
+    expect(stepSearchHistory(1)).toBe(true);
+    expect(snapshot().query).toBe('b2');
+  });
+
+  it('没有历史 / 还没进入回溯的 ↓ ⇒ 不消费（↑↓ 让给结果行导航），文本一个字不动', () => {
+    resetSearch();
+    setQuery('abc');
+    expect(stepSearchHistory(-1)).toBe(false);
+    expect(stepSearchHistory(1)).toBe(false);
+    expect(snapshot().query).toBe('abc');
+  });
+
+  it('发起检索即结束回溯：下一次 ↑ 从最新一条重新开始', async () => {
+    const storage = fakeStorage();
+    vi.stubGlobal('localStorage', storage);
+    resetSearch();
+    setSearchRunner(async () => result());
+    await search('a');
+    await search('b');
+    setQuery('');
+    stepSearchHistory(-1);
+    expect(snapshot().historyCursor).toBe(0);
+    await runSearch(ROOTS);
+    expect(snapshot().historyCursor).toBe(-1);
+    stepSearchHistory(-1);
+    expect(snapshot().query).toBe('b');
   });
 });

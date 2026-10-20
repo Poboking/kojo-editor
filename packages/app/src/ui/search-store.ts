@@ -13,8 +13,10 @@ import {
   DEFAULT_EXTENSION_TEXT,
   getGlobFilterText,
   isValidSearchQuery,
+  normalizeSearchHistory,
   parseExtensions,
   parseFileFilter,
+  pushSearchHistory,
   replaceSummaryText,
 } from './search-query';
 import {
@@ -97,6 +99,15 @@ export interface SearchState {
   replaceRunning: boolean;
   /** 最近一次替换的汇总（纯展示；`null` = 没替换过 / 已随结果清空） */
   replaceSummary: string | null;
+  /**
+   * 最近检索（W7-E）：有效查询，最新在前、去重、上限 `SEARCH_HISTORY_LIMIT`。
+   * 跨会话保留（localStorage，与三开关同一份存法）；检索框 ↑/↓ 据此回溯。
+   */
+  queryHistory: readonly string[];
+  /** 回溯游标（`-1` = 没在回溯；`0` = 历史最新一条） */
+  historyCursor: number;
+  /** 开始回溯前输入框里的草稿（↓ 退到最新一条再按一次 = 还原它并退出回溯） */
+  historyDraft: string;
 }
 
 /** 检索执行者（注入 seam：缺省 = Tauri 桥；单测注入假实现）。
@@ -167,7 +178,7 @@ function defaultSearchOptions(): SearchOptionsState {
 }
 
 /** localStorage 访问器（node 测试环境无 localStorage；隐私模式可能抛错——都不该影响检索） */
-function searchOptionsStorage(): Storage | null {
+function searchStorage(): Storage | null {
   try {
     return (globalThis as { localStorage?: Storage }).localStorage ?? null;
   } catch {
@@ -177,7 +188,7 @@ function searchOptionsStorage(): Storage | null {
 
 /** 读开关（坏值 / 缺键 / 非布尔一律当关；只认显式的 `true`） */
 function loadSearchOptionsPref(): SearchOptionsState {
-  const storage = searchOptionsStorage();
+  const storage = searchStorage();
   if (storage === null) return defaultSearchOptions();
   let raw: string | null;
   try {
@@ -202,12 +213,57 @@ function loadSearchOptionsPref(): SearchOptionsState {
 
 /** 写开关（写不进去不算错：只影响下次启动，不影响本次） */
 function saveSearchOptionsPref(options: SearchOptionsState): void {
-  const storage = searchOptionsStorage();
+  const storage = searchStorage();
   if (storage === null) return;
   try {
     storage.setItem(SEARCH_OPTIONS_PREF_KEY, JSON.stringify(options));
   } catch {
     /* 隐私模式 / 配额满：本次会话照常 */
+  }
+}
+
+/* ---------------------- 最近检索（W7-E：↑/↓ 回溯 + 跨会话） ---------------------- */
+
+/**
+ * 最近检索住 localStorage——与三开关**同一份存法、同一套键风格**（`kojo.ui.search.<域>.v1`），
+ * 不新造第二套偏好机制。值是一份字符串数组（最新在前），最多 `SEARCH_HISTORY_LIMIT` 条。
+ *
+ * 为什么值得跨会话：检索词是作者的**工作记忆**（某个函数名、某句台词、某个正则），
+ * 关掉程序再打开还要重新敲一遍；而历史只是回放清单，不参与命中判据，
+ * 读不到 / 坏值 ⇒ 回空列表，与"没搜过"同形，绝不把面板炸掉（铁律 4 的失败方向）。
+ *
+ * 隐私面：查询原文会落到本机 localStorage（只在本机、不随项目走、不进日志）；
+ * 这里刻意不调用任何日志接口——"搜了什么"不该出现在诊断输出里。
+ */
+const SEARCH_HISTORY_KEY = 'kojo.ui.search.history.v1';
+
+/** 读历史（坏 JSON / 非数组 / 坏元素一律丢弃，清洗口径在 `normalizeSearchHistory`） */
+function loadSearchHistoryPref(): readonly string[] {
+  const storage = searchStorage();
+  if (storage === null) return [];
+  let raw: string | null;
+  try {
+    raw = storage.getItem(SEARCH_HISTORY_KEY);
+  } catch {
+    return [];
+  }
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? normalizeSearchHistory(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 写历史（写不进去不算错：只影响下次启动，本次会话照常可回溯） */
+function saveSearchHistoryPref(history: readonly string[]): void {
+  const storage = searchStorage();
+  if (storage === null) return;
+  try {
+    storage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    /* 隐私模式 / 配额满：历史留在内存里，本次会话照常 */
   }
 }
 
@@ -240,6 +296,9 @@ const INITIAL: SearchState = {
   replaceFocusNonce: 0,
   replaceRunning: false,
   replaceSummary: null,
+  queryHistory: loadSearchHistoryPref(),
+  historyCursor: -1,
+  historyDraft: '',
 };
 
 let state: SearchState = INITIAL;
@@ -285,8 +344,46 @@ export function setReplaceRunner(next: ReplaceRunner | null): void {
   replaceRunner = next;
 }
 
+/**
+ * 写检索词（输入框的每一下键入走这里）。
+ *
+ * 手工编辑即**退出历史回溯**（游标复位）：否则"↑ 取回旧词 → 接着打字 → 再按 ↑"
+ * 会从旧词的位置继续往更旧走，而屏幕上的文本早已不是历史里的那一条。
+ */
 export function setQuery(query: string): void {
-  set({ query });
+  set({ query, historyCursor: -1 });
+}
+
+/**
+ * ↑/↓ 回溯最近检索（检索框的键盘数据面；`delta = -1` 向更旧、`+1` 向更新）。
+ *
+ * 状态机（与主流编辑器同款手感）：
+ * - 第一次 ↑ = 把**当前草稿**记下、取回历史最新一条；继续 ↑ 往更旧走，到最旧为止；
+ * - ↓ 往更新走；已在最新一条时再按 ↓ = **还原草稿**并退出回溯；
+ * - 返回 `false` = 这一下不归历史管（没有历史 / 还没进入回溯就按 ↓）——
+ *   面板据此把 ↑↓ 原样让给既有的结果行导航（`panel-row-nav`），老手感不丢。
+ *
+ * 只在真的消费时改状态：没有历史时 `query` 一个字都不动。
+ */
+export function stepSearchHistory(delta: -1 | 1): boolean {
+  const history = state.queryHistory;
+  if (history.length === 0) return false;
+  if (delta === 1 && state.historyCursor < 0) return false;
+  if (delta === -1) {
+    // 首次 ↑：草稿 = 现在输入框里的文本（↓ 回到最新一条后再按时还原它）
+    const draft = state.historyCursor < 0 ? state.query : state.historyDraft;
+    const next = state.historyCursor < 0 ? 0 : Math.min(state.historyCursor + 1, history.length - 1);
+    set({ query: history[next]!, historyCursor: next, historyDraft: draft });
+    return true;
+  }
+  if (state.historyCursor > 0) {
+    const next = state.historyCursor - 1;
+    set({ query: history[next]!, historyCursor: next });
+    return true;
+  }
+  // 已在最新一条：↓ 还原草稿并退出回溯
+  set({ query: state.historyDraft, historyCursor: -1, historyDraft: '' });
+  return true;
 }
 
 export function setReplaceText(text: string): void {
@@ -398,6 +495,11 @@ export async function runSearch(
   }
   if (state.phase === 'running') return;
 
+  // 最近检索（W7-E）：过了「有效查询 + 有根 + 不在跑」三道闸才记——没真的发起检索的词
+  // 不进历史（半截输入 / 空白不算"有效查询"）。去重与截断在纯函数里，写盘只在真变时。
+  const queryHistory = pushSearchHistory(state.queryHistory, state.query);
+  if (queryHistory !== state.queryHistory) saveSearchHistoryPref(queryHistory);
+
   const searchId = nextId++;
   // glob 过滤（W7-A 接线）：文本住 `search-query` 的模块级（与 `extensionText` 隔离，
   // 两个框各管一维），发请求那一刻现解析——与扩展名同一条"用发请求时的条件"口径。
@@ -425,6 +527,10 @@ export async function runSearch(
     streamFiles: [],
     resultQuery: null,
     matchCursor: -1,
+    // 检索已落地 = 这一轮回溯结束（下一次 ↑ 从"现在搜的词"重新开始）
+    queryHistory,
+    historyCursor: -1,
+    historyDraft: '',
   });
 
   try {
@@ -580,6 +686,10 @@ export function resetSearch(): void {
     // 开关跨会话：现读一次存储（不是复用模块载入时的快照）——项目关开不该把
     // 作者刚切的判据悄悄翻回全关
     options: loadSearchOptionsPref(),
+    // 最近检索同理：项目关闭不清历史（那是作者的工作记忆，不属于某个项目）
+    queryHistory: loadSearchHistoryPref(),
+    historyCursor: -1,
+    historyDraft: '',
     focusNonce: state.focusNonce,
     replaceFocusNonce: state.replaceFocusNonce,
   };

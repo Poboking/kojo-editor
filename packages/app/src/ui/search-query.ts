@@ -169,6 +169,54 @@ export function isValidSearchQuery(query: string): boolean {
   return query.trim() !== '';
 }
 
+/* ------------------------------ 最近检索（W7-E） ------------------------------ */
+
+/**
+ * 「最近检索」保留的条数上限。
+ *
+ * 20 条的理由：检索框窄、历史是**翻**出来的不是列出来的，再多按 ↑ 也翻不动；
+ * 20 ≈ 一次会话里真正会回头再用的查询数，同时把一条 localStorage 值压在几百字节。
+ */
+export const SEARCH_HISTORY_LIMIT = 20;
+
+/**
+ * 把一条查询并入历史（**纯函数**，存储编解码不在这里）：最新在前、去重、上限截断。
+ *
+ * - 全空白不入史（不是有效检索，`isValidSearchQuery` 同一判据）；
+ * - 去重 = 同一条只留最新的位置（再搜一次旧词，它回到队首而不是多一条）；
+ * - 已在队首且未越限 ⇒ **原引用返回**：调用方据此跳过写盘与多余的状态替换。
+ */
+export function pushSearchHistory(
+  history: readonly string[],
+  query: string,
+  limit: number = SEARCH_HISTORY_LIMIT,
+): readonly string[] {
+  if (!isValidSearchQuery(query)) return history;
+  if (limit <= 0) return [];
+  if (history[0] === query && history.length <= limit) return history;
+  return [query, ...history.filter((q) => q !== query)].slice(0, limit);
+}
+
+/**
+ * 存储里的原始值 → 清洗后的历史（**纯函数**）：只认非空字符串、同一判据滤掉空白、
+ * 去重保序、截到上限。手改坏的 JSON 元素（数字 / null / 对象）一律丢弃，
+ * 不猜、不 stringify——历史是只读回放，坏一条不该废掉整份。
+ */
+export function normalizeSearchHistory(
+  list: readonly unknown[],
+  limit: number = SEARCH_HISTORY_LIMIT,
+): string[] {
+  const out: string[] = [];
+  if (limit <= 0) return out;
+  for (const item of list) {
+    if (typeof item !== 'string' || !isValidSearchQuery(item)) continue;
+    if (out.includes(item)) continue;
+    out.push(item);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /** 短路径（口径真源 = `plugin-api/paths.shortPath`，与问题面板、四块插件面板同一条）：
  *  取末两段——检索结果面板窄，末两段是唯一的区分点。名字保留检索层的叫法，实现不再抄第二份。 */
 export function shortSearchPath(path: string): string {
