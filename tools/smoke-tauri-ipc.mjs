@@ -297,6 +297,8 @@ async function attemptReadonlyTyping(cdp) {
 const storeDir = path.join(os.homedir(), 'AppData', 'Roaming', 'dev.kojo.editor', 'store', '_global');
 const recentFile = path.join(storeDir, 'recent-projects.json');
 const approvedFile = path.join(storeDir, 'approved-writable.json');
+/** Rust 侧**准入门**清单（宿主经对话框/拖放亲自交付过的目录）——与上面那份 TS 批准记录**是两件事** */
+const approvedRootsFile = path.join(path.dirname(path.dirname(storeDir)), 'approved_roots.txt');
 let recentBackup = null;
 let approvedBackup = null;
 
@@ -364,11 +366,30 @@ function storePrecheck() {
   } catch {
     wsRoots = [];
   }
+  let admitted = [];
+  try {
+    admitted = fs
+      .readFileSync(approvedRootsFile, 'utf-8')
+      .split(/\r?\n/)
+      .map((s) => s.trim().replace(/^\\\\\?\\/, ''))
+      .filter(Boolean);
+  } catch {
+    admitted = [];
+  }
+  const within = (r) => low(GAME_DIR) === low(r) || low(GAME_DIR).startsWith(low(r) + '\\') || low(GAME_DIR).startsWith(low(r) + '/');
   return {
     approvedHasRoot,
     approvedDirs,
     workspaceRoots: wsRoots,
     gameDirIsWorkspace: wsRoots.some((r) => low(GAME_DIR).startsWith(low(r) + '\\') || low(GAME_DIR).startsWith(low(r) + '/')),
+    /**
+     * Rust 准入门读数（IPC-SHELL-SAVE-RED，2026-10-20 定责得来）：`register_write_domain` 只放行
+     * **落在 approved_roots.txt / workspace_roots.txt / appDataDir 之内**的目录（`lib.rs:is_root_approved`）。
+     * 与 `approvedHasRoot`（TS 侧批准写权限）**不同源**：批准记录在准入门之前就存在的老目录，
+     * TS 会解锁编辑、保存却恒被拒成「不在可写范围内」⇒ 这条读数一打出来，b1 的红不用再猜。
+     */
+    rustAdmittedRoots: admitted,
+    gameDirAdmitted: admitted.some(within),
   };
 }
 
@@ -575,6 +596,35 @@ async function main() {
     const backupRoot = path.join(appData, 'backup');
     const backupsBefore = listBackups(backupRoot);
 
+    /**
+     * 保存步红的**分诊读数**（IPC-SHELL-SAVE-RED，2026-10-20）：旧探针只说"没等到已保存"，
+     * 三种成因在屏上同形——① 注册当场 fail-closed（前端必上屏）；② 注册成功后项目根被清；
+     * ③ 域是好的、坏在 UI 保存链路。这里一次拿齐三档读数，且**只在已 FAIL 的分支里调用**，
+     * 不参与 PASS/FAIL 判据：
+     *   `notice` = `.notification-center` 原文（null/无注册文案 ⇒ 排除①）；
+     *   `rawWrite` = 直调 `write_file_bytes` 把**原字节原样**写回同一文件（磁盘此刻仍是原字节，
+     *                等于一次幂等重写，不新增文件、不改内容）⇒ ok=true 就是 Rust 域没问题，红在 UI 腿；
+     *   被拒才补 `register_write_domain` 再试一次：成功且第二次写通过 ⇒ 坐实"当时项目根为空"，
+     *   其 Err 原文即准入判定结论。后续 d 步先关项目（= 清域）⇒ 这一改不会污染 d/e 的拒绝断言。
+     */
+    const saveTriage = async () => {
+      const b64 = originalBytes ? originalBytes.toString('base64') : '';
+      return await cdp.evalJs(`(async () => {
+        const inv = ${INV};
+        const raw = async () => {
+          try { await inv('write_file_bytes', { path: ${JSON.stringify(filePath)}, data: ${JSON.stringify(b64)} }); return { ok: true }; }
+          catch (err) { return { ok: false, err: String(err).slice(0, 170) }; }
+        };
+        const notice = document.querySelector('.notification-center')?.innerText ?? null;
+        const first = await raw();
+        if (first.ok) return { notice, rawWrite: first, reRegister: null };
+        let reRegister = null;
+        try { await inv('register_write_domain', { root: ${JSON.stringify(GAME_DIR)} }); reRegister = { registered: true }; }
+        catch (err) { reRegister = { registered: false, err: String(err).slice(0, 170) }; }
+        return { notice, rawWrite: first, reRegister, retryWrite: reRegister.registered ? await raw() : null };
+      })()`);
+    };
+
     // 聚焦编辑器中心 + 插入 marker
     const box = await cdp.evalJs(`(() => {
       const el = document.querySelector('.editor-body .monaco-editor');
@@ -694,7 +744,10 @@ async function main() {
         脏点: !!document.querySelector('.dirty-dot.on'),
         模态: [...document.querySelectorAll('.modal')].map((m) => m.getAttribute('aria-label')),
       }))()`);
-      throw new Error(`${e.message}｜点击=${saveClick}｜现场=${JSON.stringify(why)}`);
+      // 分诊读数单独打一行：外层 `rec(..., String(e).slice(0,500))` 会把长消息砍尾，
+      // 挤在 Error 里就等于没打（2026-10-20 实测被截掉 reRegister，白跑一轮）。
+      console.log(`[b1-triage] ${JSON.stringify(await saveTriage())}`);
+      throw new Error(`${e.message}｜点击=${saveClick}｜现场=${JSON.stringify(why)}｜分诊见上一行 [b1-triage] 与 [b1-diag] store 前置`);
     }
 
     const onDisk = fs.existsSync(filePath) ? fs.readFileSync(filePath).toString('utf-8') : '';
