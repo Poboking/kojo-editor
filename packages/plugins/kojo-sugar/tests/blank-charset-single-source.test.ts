@@ -76,6 +76,7 @@ import {
   trimTrailingSpace,
 } from '../src/sugar-ident';
 import { formatText } from '../src/formatter';
+import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
 
 const FF = '\u3000'; // 全角空格 U+3000
 const NBSP = '\u00a0'; // 不换行空格（**不是**空白）
@@ -121,6 +122,11 @@ describe('真源自证（`blank-charset.ts` 是唯一一张表）', () => {
   it('字符集恰为：半角空格 / TAB / 全角空格 U+3000', () => {
     expect(BLANK_CHARS).toEqual([' ', '\t', FF]);
     expect(BLANK_CHARS).toHaveLength(3);
+  });
+
+  it('全角空格与契约层导出值逐字相等（blank-charset 为构建期裸 Node 链不 import 契约层，靠本闸钉住）', () => {
+    expect(FF).toBe(FULLWIDTH_SPACE);
+    expect(BLANK_CHARS).toContain(FULLWIDTH_SPACE);
   });
 
   it('`isBlankChar`：三枚真、NBSP / EM SPACE / 空串 / 多字符一律假', () => {

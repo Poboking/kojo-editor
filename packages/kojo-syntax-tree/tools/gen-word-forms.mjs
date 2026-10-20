@@ -35,9 +35,37 @@
  *   --check：只比对既有产物是否与重新生成的一致（不一致退 1，供 CI 用）。
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+/**
+ * 裸 Node（类型擦除档）不做**无扩展名**的 TS 解析，而真源叶子之间允许互相 import
+ * （如 `sugar-ident.ts` → `./blank-charset`，CHARSET-SS 之后不再是单文件根）。
+ * 按 bundler 口径补一条相对路径 → `.ts` 的兜底；解析不到仍照常抛（fail-closed），
+ * 绝不静默产出缺席判据的投影。
+ */
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (err) {
+      if (
+        !/\.[cm]?[jt]sx?$/.test(specifier) &&
+        !specifier.endsWith('/') &&
+        (specifier.startsWith('./') || specifier.startsWith('../'))
+      ) {
+        try {
+          return nextResolve(`${specifier}.ts`, context);
+        } catch {
+          throw err;
+        }
+      }
+      throw err;
+    }
+  },
+});
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/kojo-syntax-tree/tools
 const pkgRoot = resolve(here, '..'); // packages/kojo-syntax-tree

@@ -43,11 +43,20 @@
  * - 格式化器**从不改行尾空白**（台词行尾的全角空格是要打印的字），所以"行尾"这一列
  *   formatter 一律"不动"——与前三处的"读"判据不冲突。
  *
- * 本模块是**零依赖叶子**（只取契约层的 `FULLWIDTH_SPACE`，不 import 包内任何模块）——
- * `lexer` / `sugar-ident` 都能安心引它，不会造出环。
+ * 本模块是**零依赖叶子**（不 import 任何模块）——`lexer` / `sugar-ident` 都能安心引它，
+ * 不会造出环；更硬的一条约束在**构建期**：`sugar-ident.ts` 会被
+ * `kojo-syntax-tree/tools/gen-word-forms.mjs` 用裸 Node（类型擦除档）直接 `import()`，
+ * 而 `@kojo/plugin-api` 的入口会连带加载 `io.ts`（参数属性不在擦除档内）⇒ 一旦这里
+ * 运行期 import 契约层，词表投影生成器直接起不来（`word-forms-single-source` 的字节闸红）。
  */
 
-import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
+/**
+ * 全角空格（`U+3000`）。
+ *
+ * 字符值**不**在运行期从契约层的 `FULLWIDTH_SPACE` 取（原因见文件头：构建期裸 Node 链路）；
+ * 由 `blank-charset-single-source.test.ts` 与契约层导出值逐字相等钉住，漂移即红。
+ */
+const FULLWIDTH_SPACE = '\u3000';
 
 /**
  * 缩进 / 空白字符：半角空格、TAB、全角空格（`U+3000`）。
