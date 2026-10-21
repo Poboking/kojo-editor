@@ -7,13 +7,15 @@
  * `getValue()` / `getEOL()` / `getLineCount()` / `getValueLength()`。
  * 只比文本不算数：幽灵空行这类缺陷只有行数与档位抓得到（PITFALLS 163）。
  *
- * ## 边角一 · 整篇无行尾（单行 / 空文件）的档位选择 —— 实测**不等价**
- * 改前（win32，LF 档 model + 盘 `甲改`）：新 `[甲改,档 \n,行1,长2]` vs 旧 `[甲改,档 \r\n,行1,长2]`，
- * 差在档位。成因：`setValue` 走 `PieceTreeTextBufferBuilder._getEOL(defaultEOL)` 的 `total === 0`
- * 分支 ⇒ 取**创建时的 defaultEOL**，而这一档是**平台相关**的（monaco 0.57.0
- * `editor/common/services/modelService.js:46`：`DEFAULT_EOL = (isLinux || isMacintosh) ? LF : CRLF`）——
- * 所以既不能硬编 LF 也不能硬编 CRLF，必须读 `model.getOptions().defaultEOL`（公开面、正是
- * `_getEOL` 的那个入参；桩 model 没这个方法时回退保持现档 ⇒ 零调用方改动）。
+ * ## 边角一 · 整篇无行尾（单行 / 空文件）的档位选择 —— EOL-EDGE 二改（2026-10-22）：兜**现档**
+ * 旧口径（对拍 `setValue`）落**创建档** `defaultEOL`——平台相关（monaco 0.57.0
+ * `editor/common/services/modelService.js:46`：`DEFAULT_EOL = (isLinux || isMacintosh) ? LF : CRLF`）。
+ * 事故：作者显式切档（如选 LF）后盘上文件被外部压成单行（整篇无行尾）⇒ 重载落创建档
+ * （Windows standalone 兜 CRLF），把作者刚选的档**静默打回**。盘上没有多数派证据时落创建档
+ * 是凭空猜测 ⇒ 改为「无证据听意图」：兜 **model 现档**——monaco 先例同构（语言变更时单行 model
+ * 被强制回配置档，`modelService.js:180-183`），与 EOL-READOUT-TRUTH「model 真档为唯一读数」对齐。
+ * 破「与 setValue 同果」对拍系**组长批准**：那条等果只针对冷打开（当时不存在作者切档意图），
+ * 仅 ③（现档恰等于创建档）保住等果对照。多行文多数派（边角二）**零变化**。
  *
  * ## 边角二 · 孤 `\r`（老式 Mac 行尾）的分段口径 —— 实测**不等价**，两处
  * 1. **判档漏计孤 CR**：`_getEOL` 用 `total = cr+lf+crlf`、CR 侧 `cr+crlf`；原实现只数 `\n` 结尾
@@ -28,8 +30,9 @@
  *    vs 旧 `[a\r\nb改\r\nc\r\n,行4,长10]`——**行数与长度都差**。
  *    ⇒ 落差量前把这一个 `\r` 写成已对齐的档位（`trailingLoneCrAsEol`）。
  *
- * 下方"口径回退自证"把三处改因各拆一次、分段口径退回一次 ⇒ 四项读数立刻不同果（证明上面的绿不是假绿）。
- * 手工回退实测：把 `disk-text-sync.ts` 还原到 dev 尖端版本 ⇒ 本文件 **9/23 红**。
+ * 下方"口径回退自证"把改因各拆一次、分段口径退回一次 ⇒ 立刻不同果（绿不是假绿）；
+ * 自证 B 在 EOL-EDGE 二改后方向反转：它钉的是**有意**的破等果（无行尾兜现档 vs setValue 落创建档）。
+ * 手工回退实测（上一批）：把 `disk-text-sync.ts` 还原到更早版本 ⇒ 孤 CR / 分段各案立刻红。
  * 零改动面：撤销栈前后停点、`forceMoveMarkers`、重载不落盘、写域闸门（本文件只碰内存 model）。
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -54,7 +57,10 @@ function readings(m: monaco.editor.ITextModel): Readings {
   return [m.getValue(), m.getEOL(), m.getLineCount(), m.getValueLength()];
 }
 
-/** 创建档 = `setValue` 在整篇无行尾时落的那一档（平台相关，见头注）；探针 model 由 afterEach 收 */
+/**
+ * 创建档 = `setValue` 在整篇无行尾时落的那一档（平台相关，旧口径的 oracle）；
+ * 现档兜底口径下它只用来构造「现档≠创建档」的反档初值与 ③ 对照。afterEach 收探针。
+ */
 let creationCache: string | undefined;
 function CREATION_EOL(): string {
   if (!creationCache) {
@@ -63,14 +69,15 @@ function CREATION_EOL(): string {
   }
   return creationCache;
 }
-/** 现档与创建档**相反**的初值：跨平台都真正构成"档位要变"的那条边角 */
+/** 现档与创建档**相反**的初值：跨平台都真正构成"作者选档被打回"的那条事故形状 */
 function opposingInitial(): string {
   return CREATION_EOL() === '\r\n' ? '甲\n乙\n丙' : '甲\r\n乙\r\n丙';
 }
 
 /**
  * 对拍主函数：四项读数逐字等 + 新通道绝对读数钉死（防"两条一起错"，同果不等于同对）。
- * `pinnedEol` 由调用方给：有行尾的样本 = 字面档位；整篇无行尾的样本 = `CREATION_EOL()`。
+ * 现档兜底口径下只用于**有多数派证据**的样本（边角二）；
+ * 整篇无行尾的样本已破等果，走各案自己的绝对读数断言（见边角一）。
  */
 function parity4(initial: string, disk: string, value: string, eol: string, lines: number, len: number): void {
   const a = makeModel(initial);
@@ -83,39 +90,57 @@ function parity4(initial: string, disk: string, value: string, eol: string, line
   expect(readings(b), '旧通道绝对读数（对拍基准）').toEqual(pinned);
 }
 
-describe('边角一 · 整篇无行尾（单行 / 空文件）：档位落创建档，与 setValue 同果', () => {
-  it('⓪创建档自证：无行尾初值的 model 档位 == getOptions().defaultEOL（平台相关，不许硬编）', () => {
-    const m = makeModel('probe');
-    expect(m.getEOL()).toBe(CREATION_EOL());
+describe('边角一 · 整篇无行尾（单行 / 空文件）：无证据听现档（EOL-EDGE 二改，不再落创建档）', () => {
+  it('⓪前置自证：反档初值（现档≠创建档）与创建档探针各各自洽（跨平台，不许硬编）', () => {
+    expect(makeModel('probe').getEOL()).toBe(CREATION_EOL());
     expect(makeModel(opposingInitial()).getEOL()).not.toBe(CREATION_EOL()); // 反档初值确实存在
   });
 
-  it('①现档与创建档相反 + 无行尾盘 ⇒ 档位跟着创建档走（改前保持现档 ⇒ 不同果）', () => {
-    parity4(opposingInitial(), '甲改', '甲改', CREATION_EOL(), 1, 2);
+  it('①现档 LF + 无行尾盘 ⇒ 重载后仍 LF（事故回归：改前落创建档把作者选的 LF 静默打回）', () => {
+    const m = makeModel('甲\n乙\n丙');
+    expect(applyDiskText(m, '甲改')).toBeGreaterThanOrEqual(1);
+    expect(readings(m)).toEqual(['甲改', '\n', 1, 2]);
   });
 
-  it('②LF 档 model + 无行尾盘：同果', () => {
-    parity4('甲\n乙\n丙', '甲改', '甲改', CREATION_EOL(), 1, 2);
+  it('②现档 CRLF + 无行尾盘 ⇒ 重载后仍 CRLF', () => {
+    const m = makeModel('甲\r\n乙\r\n丙');
+    expect(applyDiskText(m, '甲改')).toBeGreaterThanOrEqual(1);
+    expect(readings(m)).toEqual(['甲改', '\r\n', 1, 2]);
   });
 
-  it('③CRLF 档 model + 无行尾盘：同果', () => {
-    parity4('甲\r\n乙\r\n丙', '甲改', '甲改', CREATION_EOL(), 1, 2);
+  it('③对照：现档恰等于创建档（无行尾初值）⇒ 与 setValue 同果不变（等果支仅此存留）', () => {
+    const a = makeModel('probe'); // 无行尾初值 ⇒ model 现档 == 创建档
+    const b = makeModel('probe');
+    expect(applyDiskText(a, '乙改')).toBeGreaterThanOrEqual(1);
+    b.setValue('乙改');
+    expect(readings(a)).toEqual(['乙改', CREATION_EOL(), 1, 2]);
+    expect(readings(b)).toEqual(readings(a));
   });
 
-  it('④空盘（清零）+ CRLF 档：同果', () => {
-    parity4('甲\r\n乙\r\n丙', '', '', CREATION_EOL(), 1, 0);
+  it('④现档 LF + 无行尾盘：落地值仍是单行裸文——eol 无处落，不造假行尾（即后续落盘字节）', () => {
+    const m = makeModel('甲\n乙\n丙');
+    applyDiskText(m, '甲改');
+    expect(m.getValue()).toBe('甲改'); // 逐字相等 ⇒ 无任何 \r/\n 被兜底档伪造出来
+    expect(m.getLineCount()).toBe(1);
+    expect(m.getValueLength()).toBe(2);
   });
 
-  it('⑤空盘（清零）+ LF 档：同果（改前这里也差档位）', () => {
-    parity4('甲\n乙\n丙', '', '', CREATION_EOL(), 1, 0);
+  it('⑤空盘（清零）+ 现档 LF ⇒ 档位仍 LF（改前落创建档）', () => {
+    const m = makeModel('甲\n乙\n丙');
+    expect(applyDiskText(m, '')).toBeGreaterThanOrEqual(1);
+    expect(readings(m)).toEqual(['', '\n', 1, 0]);
   });
 
-  it('⑥初值本就是无行尾单行 + 盘换字：同果', () => {
-    parity4('甲', '乙', '乙', CREATION_EOL(), 1, 1);
+  it('⑥空盘（清零）+ 现档 CRLF ⇒ 档位仍 CRLF', () => {
+    const m = makeModel('甲\r\n乙\r\n丙');
+    expect(applyDiskText(m, '')).toBeGreaterThanOrEqual(1);
+    expect(readings(m)).toEqual(['', '\r\n', 1, 0]);
   });
 
-  it('⑦两行压成无行尾单行：同果', () => {
-    parity4('甲\r\n乙', '乙', '乙', CREATION_EOL(), 1, 1);
+  it('⑦两行压成无行尾单行 + 现档 CRLF ⇒ 仍 CRLF（绝对钉死）', () => {
+    const m = makeModel('甲\r\n乙');
+    expect(applyDiskText(m, '乙')).toBeGreaterThanOrEqual(1);
+    expect(readings(m)).toEqual(['乙', '\r\n', 1, 1]);
   });
 });
 
@@ -200,16 +225,16 @@ describe('口径回退自证 · 改因各拆一次、分段口径退回一次 �
     expect(readings(m)).not.toEqual(readings(oracle));
   });
 
-  it('B：无行尾盘保持现档（不读创建档）⇒ 档位与 setValue 不同果（复现改前读数）', () => {
-    const initial = opposingInitial(); // 现档故意与创建档相反，跨平台都差
+  it('B：无行尾盘兜现档 ≠ setValue 落创建档——EOL-EDGE 二改**有意**的破等果（无证据听意图）', () => {
+    const initial = opposingInitial(); // 现档故意与创建档相反，跨平台都构成"作者选档被打回"的形状
     const m = makeModel(initial);
     const oracle = makeModel(initial);
     const currentBefore = m.getEOL();
-    applyWithoutEolAlign(m, '甲改');
+    applyDiskText(m, '甲改');
     oracle.setValue('甲改');
     expect(currentBefore).not.toBe(CREATION_EOL());
-    expect(m.getEOL()).toBe(currentBefore); // 保持现档 = 改前行为
-    expect(oracle.getEOL()).toBe(CREATION_EOL()); // 旧通道落创建档
+    expect(m.getEOL()).toBe(currentBefore); // 新口径：无多数派证据 ⇒ 兜现档（作者意图）
+    expect(oracle.getEOL()).toBe(CREATION_EOL()); // setValue 冷打开语义：落创建档
     expect(m.getEOL()).not.toBe(oracle.getEOL());
   });
 
