@@ -100,7 +100,10 @@ const openModel = (applied: () => void): Monaco.editor.ITextModel =>
   ({
     getLineCount: () => 2,
     getLineContent: (n: number) => (n === 1 ? 'CALL FOO' : 'PRINTL FOO'),
-    applyEdits: () => applied(),
+    // 活面腿走**上栈通道**（前停点 → pushEditOperations → 后停点）；本文件钉的是 journal 记账序，
+    // 撤销段的行为取证在 search-replace-exec-undo.test.ts 的真 monaco model 上
+    pushStackElement: () => {},
+    pushEditOperations: (_before: null, _edits: unknown[], _computer: () => null) => applied(),
   }) as unknown as Monaco.editor.ITextModel;
 
 describe('闭文件批量替换进 OpJournal（2026-10-18 undo 覆盖批）', () => {
@@ -173,7 +176,7 @@ describe('闭文件批量替换进 OpJournal（2026-10-18 undo 覆盖批）', ()
       journal,
     })(request(['C:/p/ERB/a.ERB', 'C:/p/ERB/b.ERB', 'C:/p/ERB/open.ERB']));
 
-    expect(out.applied).toBe(2); // 只有活面（applyEdits 两处 FOO）
+    expect(out.applied).toBe(2); // 只有活面（一次上栈的 pushEditOperations 落两处 FOO）
     expect(calls.filter((c) => c.m === 'write')).toHaveLength(0); // 一条闭文件都没写
     expect(h.files.get('C:/p/ERB/a.ERB')).toBe('CALL FOO\n'); // 盘没动
     expect(openApplied).toBe(1);

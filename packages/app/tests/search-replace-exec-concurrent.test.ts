@@ -98,7 +98,9 @@ describe('PS-13：闭文件替换并发窗口化（产出与串行版逐项等�
     const openModel = {
       getLineCount: () => 2,
       getLineContent: (n: number) => (n === 1 ? 'CALL FOO' : 'PRINTL FOO'),
-      applyEdits: () => {},
+      // 上栈通道（等价性用例只关心产出计数，落地行为真身取证见 search-replace-exec-undo.test.ts）
+      pushStackElement: () => {},
+      pushEditOperations: (_before: null, _edits: unknown[], _computer: () => null) => {},
     } as unknown as Monaco.editor.ITextModel;
     paths.push('C:/p/ERB/open.ERB'); // 活面：走 model，不进闭文件清单
     // 重复写法：同一份正文的两种拼写（pathKey 折叠大小写 + 分隔符），只许替换一次
@@ -137,7 +139,7 @@ describe('PS-13：闭文件替换并发窗口化（产出与串行版逐项等�
     for (const k of keys1) expect(h2.files.get(k)).toBe(h1.files.get(k));
     expect(h1.files.get(P(0))).toBe('CALL BAR\nPRINTL BAR\n');
     expect(h1.files.get('C:/p/ERB/dup.ERB')).toBe('CALL BAR\n'); // 重复写法只替换一次（不双写）
-    // 有实改才写盘：filesChanged 26 = 闭文件 25 + 活面 1（活面走 applyEdits，不落 io）
+    // 有实改才写盘：filesChanged 26 = 闭文件 25 + 活面 1（活面走上栈的 pushEditOperations，不落 io）
     expect(serial.filesChanged).toBe(26);
     expect(h1.writes).toHaveLength(25);
     expect([...h2.writes].sort()).toEqual([...h1.writes].sort()); // 写集合同（顺序不承诺）

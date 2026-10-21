@@ -77,19 +77,29 @@ describe('createFileReplaceRunner（全部替换 = 与 F2 同一条落盘通道�
     expect(h.files.get(RO)).toBe('CALL FOO\n');
   });
 
-  it('已打开文件走 live model（applyEdits），不落 io 通道', async () => {
+  it('已打开文件走 live model（上栈的 pushEditOperations + 前后停点），不落 io 通道', async () => {
     const h = harness({ [A]: 'CALL FOO\n' }, [A]);
     const ops: Array<{ range: unknown; text: string }> = [];
+    let stops = 0;
+    const seen: Array<{ before: unknown; computer: unknown }> = [];
     const model = {
       getLineCount: () => 1,
       getLineContent: (n: number) => (n === 1 ? 'CALL FOO' : ''),
-      applyEdits: (edits: Array<{ range: unknown; text: string }>) => ops.push(...edits),
+      pushStackElement: () => {
+        stops += 1;
+      },
+      pushEditOperations: (before: unknown, edits: Array<{ range: unknown; text: string }>, computer: () => unknown) => {
+        seen.push({ before, computer: computer() });
+        ops.push(...edits);
+      },
     } as unknown as Monaco.editor.ITextModel;
     const runner = createFileReplaceRunner({ io: h.io, modelFor: (p) => (p === A ? model : undefined) });
     const out = await runner(request([A]));
     expect(out.applied).toBe(1);
     expect(ops).toHaveLength(1);
     expect(ops[0]!.text).toBe('BAR');
+    expect(stops).toBe(2); // 前封口（作者那一格）+ 后封口（替换这一格）
+    expect(seen).toEqual([{ before: null, computer: null }]);
     expect(h.writes).toEqual([]); // 已开标签由 Monaco 落地，不双写
   });
 

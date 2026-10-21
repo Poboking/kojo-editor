@@ -18,9 +18,14 @@ interface FakeModel {
   readonly uri: { scheme: string; fsPath: string; toString(): string };
   readonly lines: string[];
   readonly applied: unknown[][];
+  /** 上栈通道读数：`pushStackElement()` 被调了几次（前封口 + 后封口 = 2） */
+  stops: number;
+  /** 每次 `pushEditOperations` 收到的 (beforeCursorState, cursorStateComputer()) —— 都必须是 null */
+  cursor: Array<{ before: unknown; computer: unknown }>;
   getLineCount(): number;
   getLineContent(n: number): string;
-  applyEdits(edits: unknown[]): void;
+  pushStackElement(): void;
+  pushEditOperations(before: unknown, edits: unknown[], computer: () => unknown): void;
 }
 
 const stub = vi.hoisted(() => {
@@ -41,9 +46,16 @@ const stub = vi.hoisted(() => {
       uri: fileUri(creationPath),
       lines,
       applied: [],
+      stops: 0,
+      cursor: [],
       getLineCount: () => model.lines.length,
       getLineContent: (n: number) => model.lines[n - 1] ?? '',
-      applyEdits: (edits: unknown[]) => {
+      // 上栈通道（`pushEditOperations`，不是 `applyEdits`）：停点 + 差量 + 停点
+      pushStackElement: () => {
+        model.stops += 1;
+      },
+      pushEditOperations: (before: unknown, edits: unknown[], computer: () => unknown) => {
+        model.cursor.push({ before, computer: computer() });
         model.applied.push(edits);
       },
     };
@@ -122,7 +134,9 @@ describe('createFileReplaceRunner · 缺省 model 通道', () => {
     expect(out.applied).toBe(1);
     expect(out.filesChanged).toBe(1);
     expect(out.errors).toEqual([]);
-    expect(open.applied).toHaveLength(1); // 落在 live model 上
+    expect(open.applied).toHaveLength(1); // 落在 live model 上（一次 pushEditOperations）
+    expect(open.stops).toBe(2); // 前后各一个停点 ⇒ 替换在栈上自成一段（真 model 的行为取证见 search-replace-exec-undo.test.ts）
+    expect(open.cursor).toEqual([{ before: null, computer: null }]); // 不替作者算新光标位
     expect(writes).toEqual([]); // 绝不绕开缓冲区写盘
     expect(reads).toEqual([]);
   });
