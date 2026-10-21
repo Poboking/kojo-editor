@@ -147,9 +147,17 @@ const MARKER_OWNER = 'kojo-decorators';
 /**
  * W7-H：把换行符风格落到这份 model 上（Monaco 那一拍，纯操作、与 React 无关）。
  *
- * `setEOL` 会改 model 版本号 ⇒ 既有脏判定（`getAlternativeVersionId()` !== 基线）
- * 立刻成立，撤销栈也如实留一条（可直接 Ctrl+Z 撤回换行切换）；`getValue()` 随之
- * 改用新换行。已是目标风格 ⇒ 不动（不制造无意义的脏）。
+ * `pushEOL`（**不是** `setEOL`）会改 model 版本号 ⇒ 既有脏判定（`getAlternativeVersionId()` !== 基线）
+ * 立刻成立，`getValue()` 随之改用新换行；前后各一颗 `pushStackElement()` ⇒ 切档在撤销栈上
+ * **自成一段**（产品口径：一次 Ctrl+Z 只退行尾档位、作者打字留下）。已是目标风格 ⇒ 不动（不制造无意义的脏）。
+ *
+ * 为什么必须换 `pushEOL`（FIX-UNDO-RESIDUAL④，2026-10-21）：monaco.d.ts 把 `applyEdits` / `setEOL`
+ * 归为 **raw 变更、不上撤销栈**——旧写法改完整篇行尾**撤不掉**，作者按 Ctrl+Z 退的是自己上一次打字
+ * （本函数头注曾反向承诺"撤销栈留一条"，那句与 API 契约相反，已在 `status-eol-switch.test.ts` 一并改对）。
+ * `pushEOL` 经 `editStack.js` 的 `_getOrCreateEditStackElement`，与 `pushEditOperations` 同一个并格判据
+ * （`canAppend`：栈顶那格还"开着"就把切档并进作者那一格）⇒ **前停点实测必需**，不是可选项；
+ * 后停点让切档自己封口，之后作者再打字另起一格。取证：`status-eol-switch.test.ts`
+ * 「applyEolToModel 上栈」那组（真 monaco model 三段：前停点、后停点、raw 通道机理锚）。
  *
  * **保存面闭环（EOL-OVERRIDE-SAVE 批）**：显式切换由调用方（`switchEol`）在
  * `ModelEntry.eolOverride` 置位；保存链路（`savePathDetailed`）仅当覆盖位在场时
@@ -161,9 +169,13 @@ export function applyEolToModel(model: Monaco.editor.ITextModel, eol: 'LF' | 'CR
   if (model.isDisposed()) return false;
   const target = eol === 'CRLF' ? '\r\n' : '\n';
   if (model.getEOL() === target) return false;
-  model.setEOL(
+  // 前停点：给作者上一次打字/粘贴封口（少了它 ⇒ 切档并进作者那一格，见上注）
+  model.pushStackElement();
+  model.pushEOL(
     eol === 'CRLF' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF,
   );
+  // 后停点：给切档那一格封口，之后作者再打字不会并进档位里
+  model.pushStackElement();
   return true;
 }
 
@@ -1369,7 +1381,8 @@ export function EditorPane({
   /**
    * 切换当前活动标签的换行符（W7-H：状态栏 EOL 读数的 LF / CRLF 菜单）。
    *
-   * 只改内存 model：`applyEolToModel` 的 `setEOL` 改版本号 ⇒ 既有脏判定立刻成立，
+   * 只改内存 model：`applyEolToModel` 的 `pushEOL`（前后各一停点）改版本号 ⇒ 既有脏判定立刻成立，
+   * 切档在栈上自成一段（一次 Ctrl+Z 只退档位），
    * 保存仍走既有链路。**保存面已闭环**（EOL-OVERRIDE-SAVE 批）：显式切换在
    * `ModelEntry.eolOverride` 置位，`savePathDetailed` 仅当位在场时给内核
    * `writeText` 递显式 `{ eol }`（整段统一，绕开逐行保换行的归一），落盘成功清位、

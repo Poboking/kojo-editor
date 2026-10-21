@@ -7,10 +7,14 @@
  * promise ⇒ vitest 记未处理拒绝）。入口/菜单的渲染取证在
  * `status-eol-readout.test.ts`（那份只引壳层，不引 Monaco）。
  *
- * 交付面（本批）：
- * - 落地 = `model.setEOL`（`applyEolToModel`）：版本号偏离基线 ⇒ 既有脏判定
- *   （`computeDirty` 就是 `getAlternativeVersionId() !== 基线`）立刻成立，
- *   `model.getValue()` 改用新换行；撤销栈留一条（Ctrl+Z 可撤回）；
+ * 交付面（本批 + FIX-UNDO-RESIDUAL④ 更正）：
+ * - 落地 = `applyEolToModel`：版本号偏离基线 ⇒ 既有脏判定（`computeDirty` 就是
+ *   `getAlternativeVersionId() !== 基线`）立刻成立，`model.getValue()` 改用新换行；
+ * - **撤销面（旧注写过「`setEOL` 撤销栈留一条」，那是与 monaco API 契约相反的话）**：
+ *   monaco.d.ts 明写 `applyEdits` / `setEOL` 这类是 raw 变更、**不上撤销栈**。所以旧写法下
+ *   「切换行尾」根本撤不掉，作者按 Ctrl+Z 退的是自己上一次打字。现改走 `pushEOL` +
+ *   **前后各一颗 `pushStackElement()`** ⇒ 产品口径钉死为「一次 Ctrl+Z 只退行尾档位、作者打字留下」
+ *   （取证见下面 ② 那组三段，全在**真 monaco model** 上跑；① 的脏判定读数不受影响）；
  * - 只读 / 预览面由 `eolSwitchAllowed` 拒绝（写权限 + `erbReadOnlyGate` + 非预览）。
  *
  * **保存面未闭环（本批取证结论，别把这里读成闭环）**：缺省保存走
@@ -101,7 +105,93 @@ describe('applyEolToModel：切换后版本号偏离基线（既有脏判定）�
   });
 });
 
-/* ---------------- ② 接线（静态守门：动作句柄 / 焦点组 / 三处状态上报） ---------------- */
+/* ---------------- ② 撤销面（FIX-UNDO-RESIDUAL④）：切档在栈上自成一段 ---------------- */
+
+describe('applyEolToModel 上栈：一次 Ctrl+Z 只退行尾档位，作者打字留下', () => {
+  const models: monaco.editor.ITextModel[] = [];
+  let seq = 1000;
+  const makeModel = (text: string): monaco.editor.ITextModel => {
+    const model = monaco.editor.createModel(
+      text,
+      'plaintext',
+      monaco.Uri.parse(`inmemory://w7h-undo/${++seq}`),
+    );
+    models.push(model);
+    return model;
+  };
+  /** 作者打一个字：真壳里是键入，落栈同一条路，**不补停点 ⇒ 栈顶那格开着**（正是并格的温床） */
+  const authorTyping = (model: monaco.editor.ITextModel, line: number, typed: string): void => {
+    const col = model.getLineMaxColumn(line);
+    model.pushEditOperations(
+      null,
+      [{ range: new monaco.Range(line, col, line, col), text: typed }],
+      () => null,
+    );
+  };
+
+  afterEach(() => {
+    for (const model of models.splice(0)) if (!model.isDisposed()) model.dispose();
+  });
+
+  it('打字 → 切 LF：第一下只退档位（CRLF 回来、X 还在屏上），第二下才退打字', () => {
+    const model = makeModel('a\r\nb\r\n');
+    authorTyping(model, 2, 'X');
+    const afterTyping = model.getValue();
+    expect(afterTyping).toBe('a\r\nbX\r\n');
+
+    expect(applyEolToModel(model, 'LF')).toBe(true);
+    expect(model.getValue()).toBe('a\nbX\n'); // 整篇换行已换档，作者的 X 一个字没丢
+
+    expect(model.canUndo()).toBe(true);
+    model.undo(); // ← 作者按下 Ctrl+Z 的那一下
+    expect(model.getEOL()).toBe('\r\n');
+    expect(model.getValue()).toBe(afterTyping); // 退掉的只有行尾档位
+    expect(model.canUndo()).toBe(true);
+    model.undo(); // 这才轮到作者自己的打字
+    expect(model.getValue()).toBe('a\r\nb\r\n');
+  });
+
+  it('切档后再打字另起一格（后停点封口）：撤销依次退打字、再退档位', () => {
+    const model = makeModel('a\r\nb\r\n');
+    expect(applyEolToModel(model, 'LF')).toBe(true);
+    const afterSwitch = model.getValue();
+    expect(afterSwitch).toBe('a\nb\n');
+
+    authorTyping(model, 1, 'Y');
+    expect(model.getValue()).toBe('aY\nb\n');
+
+    model.undo(); // 第一下只退打字 ⇒ 打字没并进档位那一格
+    expect(model.getValue()).toBe(afterSwitch);
+    expect(model.getEOL()).toBe('\n');
+    model.undo(); // 第二下才退档位
+    expect(model.getEOL()).toBe('\r\n');
+    expect(model.getValue()).toBe('a\r\nb\r\n');
+  });
+
+  it('机理反证（monaco 契约锚，不随本批代码变红）：raw 的 setEOL 在栈上一段都不留 ⇒ 切档与打字混在同一步', () => {
+    const model = makeModel('a\r\nb\r\n');
+    authorTyping(model, 2, 'X');
+    expect(model.getValue()).toBe('a\r\nbX\r\n');
+
+    // 改前那条路：monaco.d.ts 归为 raw 变更（`applyEdits` / `setEOL` 一类），**不上撤销栈**
+    model.setEOL(monaco.editor.EndOfLineSequence.LF);
+    expect(model.getValue()).toBe('a\nbX\n');
+
+    // 栈上多不出"切档"这一段 ⇒ 可退的只有打字那一格，产品要的"第一下只退档位"在这条路上不存在
+    let steps = 0;
+    while (model.canUndo() && steps < 8) {
+      model.undo();
+      steps += 1;
+    }
+    expect(steps).toBe(1);
+    // 而那唯一一步把档位顺带翻回（元素存的是 beforeEOL），作者的 X 却退不掉（坐标已 stale）
+    // = 打字与切档被裹在一起 + 机器改动的后果无从单独回退，正是 API 注释里的 "dire consequences"
+    expect(model.getEOL()).toBe('\r\n');
+    expect(model.getValue()).toContain('X');
+  });
+});
+
+/* ---------------- ③ 接线（静态守门：动作句柄 / 焦点组 / 三处状态上报） ---------------- */
 
 describe('接线：动作句柄、焦点组转发、状态上报同一链路', () => {
   it('setEOL 走 Monaco 的 EndOfLineSequence，且已是目标档时不动（不制造无意义脏）', () => {
@@ -110,6 +200,21 @@ describe('接线：动作句柄、焦点组转发、状态上报同一链路', (
     expect(APPLY_EOL).toContain('model.isDisposed()');
     expect(APPLY_EOL).toContain('model.getEOL() === target');
   });
+
+  it('上栈通道本体（代码面钉子，删掉即红）：pushEOL 前后各一颗 pushStackElement，且不留 raw setEOL', () => {
+    // 剥注释：头注里"setEOL 是 raw 变更"这类解释性文字不该把针弄红/弄绿
+    const code = APPLY_EOL.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    expect(code).toContain('model.pushEOL(');
+    expect(code).not.toContain('model.setEOL('); // raw 通道不许再出现在这颗上
+    const first = code.indexOf('pushStackElement()');
+    const eolAt = code.indexOf('model.pushEOL(');
+    const last = code.lastIndexOf('pushStackElement()');
+    expect(first, 'applyEolToModel 里没有停点').toBeGreaterThanOrEqual(0);
+    expect(eolAt).toBeGreaterThan(first); // 前停点确在切档之前（给作者那一格封口）
+    expect(last).toBeGreaterThan(eolAt); // 后停点保留（切档自己那格也得封）
+    expect(code.match(/pushStackElement\(\)/g)?.length).toBe(2);
+  });
+
 
   it('switchEol 只认可写原文面：预览判据 + 写权限 + 只读门（与保存/readOnly 同一把尺子）', () => {
     expect(SWITCH_EOL).toContain('eolSwitchAllowed(path)');
