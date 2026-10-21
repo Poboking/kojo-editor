@@ -400,6 +400,67 @@ describe('补丁行为⑤（PERSIST-B）：先静默写状态、之后才第一�
   });
 });
 
+/** 取 widget DOM 里替换输入框（.replace-part 包裹那枚，滤掉测量用 unusedInput/unusedTextArea）的实际值集合 */
+function replaceInputDomValues(widget: FindWidgetInstance): string[] {
+  const root = widget.getDomNode().querySelector('.replace-part .monaco-findInput');
+  if (!root) throw new Error('widget DOM 里没有 .replace-part .monaco-findInput');
+  const els = Array.from(root.querySelectorAll('input, textarea')).filter(
+    (el) => !el.classList.contains('unusedInput') && !el.classList.contains('unusedTextArea'),
+  );
+  if (els.length === 0) throw new Error('替换输入框的 input/textarea 一个都没摸到');
+  return els.map((el) => (el as HTMLInputElement).value);
+}
+
+describe('补丁行为⑦（REPLACE-SEED）：替换框同病同修——先静默写状态、之后才第一次开框 ⇒ 替换框值＝持久替换词', () => {
+  it('setFindStateSilently（含 replaceString）后构造 widget：替换输入框 DOM 实际值逐字等于持久串，且不回写状态、不开框不夺焦', async () => {
+    const { controller, rec, editor } = await newController('光标词');
+    let fired = 0;
+    const sub = controller.onDidChangeFindState(() => {
+      fired += 1;
+    });
+    controller.setFindStateSilently({
+      searchString: 'PERSIST2ND',
+      replaceString: '持久替换词',
+      isRegex: false,
+      wholeWord: false,
+      matchCase: false,
+    });
+    expect(fired).toBe(1); // 静默设置那拍
+    const widget = newWidget(controller, editor);
+    expect(fired).toBe(1); // 构造期回填（查找框 + 替换框两处）都不许把 _state 再改一遍（不回环）
+    try {
+      expect(replaceInputDomValues(widget)).toEqual(['持久替换词']);
+      expect(controller.getState().isRevealed).toBe(false);
+      expect(rec.focusCalls).toBe(0);
+    } finally {
+      sub.dispose();
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+
+  it('替换框回填不破坏查找框回填：两框各回各的词，互不踩踏（查找框仍是持久词、开关照旧）', async () => {
+    const { controller, editor } = await newController('光标词');
+    controller.setFindStateSilently({
+      searchString: 'PERSIST2ND',
+      replaceString: 'REPL2ND',
+      isRegex: true,
+      wholeWord: false,
+      matchCase: true,
+    });
+    const widget = newWidget(controller, editor);
+    try {
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['PERSIST2ND']));
+      expect(replaceInputDomValues(widget)).toEqual(['REPL2ND']);
+      const aria = Array.from(widget.getDomNode().querySelectorAll('[aria-checked="true"]')).length;
+      expect(aria).toBe(2); // isRegex + matchCase
+    } finally {
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+});
+
 describe('补丁行为⑥（PERSIST-B）：三档 seedSearchStringFromSelection 语义一字不动', () => {
   /** 逐字镜像 findController 开框动作里的档位闸门（getOption(find).seedSearchStringFromSelection） */
   const seedArgsFor = (tier: 'selection' | 'always' | 'never') => ({

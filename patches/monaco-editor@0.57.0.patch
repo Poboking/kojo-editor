@@ -116,3 +116,21 @@ index 9a907e9..a535121 100644
          this._register(this._findInput.onKeyDown((e) => {
              if (e.equals(3 /* KeyCode.Enter */) && !this._codeEditor.getOption(50 /* EditorOption.find */).findOnType) {
                  this._state.change({ searchString: this._findInput.getValue() }, true);
+@@ -948,7 +959,17 @@ class FindWidget extends Widget {
+             toggleStyles: defaultToggleStyles,
+             hoverLifecycleOptions,
+         }, this._contextKeyService, true));
+         this._replaceInput.setPreserveCase(!!this._state.preserveCase);
++        /* BEGIN kojo-editor vendor patch (FIND-STATE-PERSIST-B) -------------------------
++         * 替换框同病：_replaceInput 到这里（_buildDomNode 尾段）才创建，晚于上方查找框回填点
++         * ——_state.replaceString 持久化了却进不了框，重启后首开替换框为空。
++         * 与 _onStateChanged 同一通道（inputBox.value）回填一次；此刻 onKeyDown/onDidChange
++         * 监听尚未注册 ⇒ 不回写 _state、不回环；三档 seedSearchStringFromSelection 一字不动。
++         * 用 inputBox.value 而非 setValue：ReplaceInput 没有 setValue（FindInput 才有），
++         * 原生同步路径（_onStateChanged 的 e.replaceString 分支）本就走 inputBox.value。
++         * ------------------------------------------------------------------------------ */
++        this._replaceInput.inputBox.value = this._state.replaceString;
++        /* END kojo-editor vendor patch */
+         this._register(this._replaceInput.onKeyDown((e) => this._onReplaceInputKeyDown(e)));
+         this._register(this._replaceInput.inputBox.onDidChange(() => {
+             this._state.change({ replaceString: this._replaceInput.inputBox.value }, false);
