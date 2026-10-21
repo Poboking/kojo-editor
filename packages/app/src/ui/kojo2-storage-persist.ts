@@ -11,9 +11,16 @@
  *
  * 本模块只做三件事，而且每件都做成可单测的纯逻辑（端口注入）：
  *
- * 1. **账本**：`{ version, fingerprint, slots: { [declarationKey]: slotName }, updatedAt }`。
+ * 1. **账本**：`{ version, fingerprint, slots, records, updatedAt }`。
  *    只收 `# 变量`（表/池/常量没有槽位语义）；`declarationKey` 默认取注册表已经算好的
  *    `storageKey`（注册表缺省口径 = `uri#行:列`，实现在分隔处用 NUL；这里不另造一套），也可注入。
+ *    `slots` 是「声明键 → 槽名」，`records` 是「声明键 → `{ slot, valueType, arraySize }`」
+ *    ——**槽位的形状事实**（K2-STORAGE-HOST-FULL）。为什么非要有它：core 的
+ *    `SlotRegistrySnapshot.classes` 记录着每格的值类型与数组长度，而只有 `slots` 的旧账本
+ *    反哺不回 `previousSnapshot`，于是「跨构建改型」这条 fail-closed 判据（`# 变量 好感 整数`
+ *    改成 `字符串` 必须报错而不是静默读坏存档）在宿主侧永远不触发。`records` 与 `slots`
+ *    在**同一次两阶段提交**里落盘（键集必须一致），版本仍是 1：旧账本没有 `records` ⇒
+ *    解析为 `{}`（不视为损坏），下一次内容有变化时自动回填。
  * 2. **两阶段提交**：先把「新账本 + 旧账本引用」写进 `pending` 键 → **回读逐字节比对**
  *    → 才写正式键 → 删 `pending`。任一步失败都走**校验式回滚**（先读现状，只修
  *   真正偏离的那一格），返回可判别错误，不把半批留在盘上。
@@ -74,18 +81,45 @@ export const KOJO2_STORAGE_PENDING_VERSION = 1 as const;
 /** 槽位所属的存储期（与 core `KojoVarStorage` 同口径；本层不 import core，用结构联合） */
 export type Kojo2StorageSlotStorage = 'scene' | 'save' | 'session';
 
+/** 存储期的确定顺序（落盘/还原都按它，跨构建字节稳定） */
+export const KOJO2_STORAGE_CLASS_ORDER: readonly Kojo2StorageSlotStorage[] = Object.freeze([
+  'scene',
+  'save',
+  'session',
+]);
+
+/**
+ * 一格槽位的**形状事实**（与 core `SlotAssignmentRecord` 同形，本层不 import core）。
+ *
+ * `valueType` / `arraySize` 是「旧存档里这一格的字节怎么解释」的唯一凭证：
+ * 声明改型（整数↔字符串）或改数组长度都必须在下一次装配时被判成 `core/storage/shape-changed`，
+ * 而不是拿新形状去读旧字节。
+ */
+export interface Kojo2StorageRecord {
+  /** 槽号（与 `slots[declarationKey]` 里的槽名必须指同一格） */
+  readonly slot: number;
+  readonly valueType: 'int' | 'string';
+  /** 一维数组长度；null = 标量 */
+  readonly arraySize: number | null;
+}
+
+/** 账本的形状表（键 = 稳定声明键；与 `slots` 键集一致） */
+export type Kojo2StorageRecords = Readonly<Record<string, Kojo2StorageRecord>>;
+
 /**
  * 可持久化的槽位账本（**跨构建事实**）。
  *
- * `slots` 只含 `# 变量`；键是稳定声明键，值是宿主可读的槽名（缺省 `存储期#槽号`，
- * 例如 `save#3`）。场景槽按单元分账，槽名本身不带单元前缀——槽名是**声明键的注脚**，
- * 不是全局唯一 id（声明键才是）。
+ * `slots` / `records` 只含 `# 变量`；键是稳定声明键，`slots` 值是宿主可读的槽名
+ * （缺省 `存储期#槽号`，例如 `save#3`）。场景槽按单元分账，槽名本身不带单元前缀——
+ * 槽名是**声明键的注脚**，不是全局唯一 id（声明键才是）。
  */
 export interface Kojo2StorageLedger {
   readonly version: typeof KOJO2_STORAGE_LEDGER_VERSION;
   /** 账本所属的游戏指纹（adapter/CSV/ERH/汉化事实；换盘检测的唯一依据） */
   readonly fingerprint: string;
   readonly slots: Readonly<Record<string, string>>;
+  /** 槽位形状（additive；旧账本缺失 ⇒ 空表，不视为损坏） */
+  readonly records: Kojo2StorageRecords;
   /** 最近一次**内容变化**的 ISO 时间；同键幂等重提不刷新它 */
   readonly updatedAt: string;
 }
@@ -150,21 +184,45 @@ function canonicalSlots(slots: Readonly<Record<string, string>>): Record<string,
   return out;
 }
 
+/** 形状表的确定形态：键排序，每格字段序固定（slot → valueType → arraySize） */
+function canonicalRecords(records: Kojo2StorageRecords): Record<string, Kojo2StorageRecord> {
+  const out: Record<string, Kojo2StorageRecord> = {};
+  for (const key of Object.keys(records).sort(compareText)) {
+    const record = records[key];
+    if (record === undefined) continue;
+    out[key] = { slot: record.slot, valueType: record.valueType, arraySize: record.arraySize };
+  }
+  return out;
+}
+
 function freezeLedger(ledger: Kojo2StorageLedger): Kojo2StorageLedger {
+  for (const key of Object.keys(ledger.records)) {
+    const record = ledger.records[key];
+    if (record !== undefined) Object.freeze(record);
+  }
+  Object.freeze(ledger.records);
   Object.freeze(ledger.slots);
   return Object.freeze(ledger);
 }
 
+/**
+ * 落盘形态（键序固定：version → fingerprint → slots（键排序）→ records（键排序）→ updatedAt）。
+ *
+ * `records` 为空时**整个字段省略**：这样"没有变量"的空账本字节与 batch-4 逐字相同
+ * （旧测试的逐字节断言不必改动），也让"旧账本没有 records"与"新账本恰好没有变量"同形。
+ */
 function ledgerJson(ledger: Kojo2StorageLedger): Record<string, unknown> {
+  const records = canonicalRecords(ledger.records);
   return {
     version: ledger.version,
     fingerprint: ledger.fingerprint,
     slots: canonicalSlots(ledger.slots),
+    ...(Object.keys(records).length === 0 ? {} : { records }),
     updatedAt: ledger.updatedAt,
   };
 }
 
-/** 序列化账本（键序固定：version → fingerprint → slots（键排序）→ updatedAt） */
+/** 序列化账本（见 {@link ledgerJson} 的键序与省略规则） */
 export function serializeKojo2StorageLedger(ledger: Kojo2StorageLedger): string {
   return JSON.stringify(ledgerJson(ledger));
 }
@@ -175,6 +233,8 @@ export function serializeKojo2StorageLedger(ledger: Kojo2StorageLedger): string 
  * 校验顺序刻意：版本先于其它字段——未来格式即便形状不同，也要给「版本不受支持」这条
  * 可判别错误，而不是含糊的「坏 JSON」。`slots` 的键/值都必须是非空字符串，且拒绝
  * `__proto__` 一类原型污染键（`JSON.parse` 会把它做成自有属性，`Object.keys` 能看见）。
+ * `records` **缺席即空表**（旧账本），出现则逐格校验 `slot` / `valueType` / `arraySize`，
+ * 并要求它的键集是 `slots` 的子集（两份表不许各说各话）。
  */
 export function parseKojo2StorageLedger(text: string): Kojo2StorageLedgerParseResult {
   if (typeof text !== 'string') {
@@ -233,12 +293,81 @@ export function parseKojo2StorageLedger(text: string): Kojo2StorageLedgerParseRe
     }
     slots[key] = value;
   }
+
+  /*
+   * `records`（additive）：**缺席 = 旧账本 = 空表**（向前兼容，绝不因此判损坏）；
+   * 一旦出现就必须逐格合法——形状字段是"旧存档字节怎么解释"的凭证，猜不得。
+   */
+  const records: Record<string, Kojo2StorageRecord> = {};
+  const rawRecords = raw.records;
+  if (rawRecords !== undefined) {
+    if (!isRecord(rawRecords)) {
+      return { kind: 'corrupt', reason: 'shape', detail: '账本 records 必须是对象' };
+    }
+    for (const key of Object.keys(rawRecords)) {
+      if (key.length === 0) {
+        return { kind: 'corrupt', reason: 'shape', detail: '账本 records 不允许空声明键' };
+      }
+      if (UNSAFE_SLOT_KEYS.has(key)) {
+        return {
+          kind: 'corrupt',
+          reason: 'shape',
+          detail: `账本 records 含原型污染键「${key}」——拒绝把它当成声明键`,
+        };
+      }
+      if (!Object.prototype.hasOwnProperty.call(slots, key)) {
+        return {
+          kind: 'corrupt',
+          reason: 'shape',
+          detail: `账本 records["${key}"] 在 slots 里没有对应槽名——两份表必须同键集`,
+        };
+      }
+      const entry = rawRecords[key];
+      if (!isRecord(entry)) {
+        return {
+          kind: 'corrupt',
+          reason: 'shape',
+          detail: `账本 records["${key}"] 必须是对象`,
+        };
+      }
+      const slot = entry.slot;
+      if (typeof slot !== 'number' || !Number.isInteger(slot) || slot < 0) {
+        return {
+          kind: 'corrupt',
+          reason: 'shape',
+          detail: `账本 records["${key}"].slot 必须是非负整数`,
+        };
+      }
+      const valueType = entry.valueType;
+      if (valueType !== 'int' && valueType !== 'string') {
+        return {
+          kind: 'corrupt',
+          reason: 'shape',
+          detail: `账本 records["${key}"].valueType 必须是 "int" / "string"`,
+        };
+      }
+      const arraySize = entry.arraySize;
+      if (
+        arraySize !== null &&
+        (typeof arraySize !== 'number' || !Number.isInteger(arraySize) || arraySize < 0)
+      ) {
+        return {
+          kind: 'corrupt',
+          reason: 'shape',
+          detail: `账本 records["${key}"].arraySize 必须是 null 或非负整数`,
+        };
+      }
+      records[key] = { slot, valueType, arraySize };
+    }
+  }
+
   return {
     kind: 'ok',
     ledger: freezeLedger({
       version: KOJO2_STORAGE_LEDGER_VERSION,
       fingerprint,
       slots: Object.freeze(canonicalSlots(slots)),
+      records: Object.freeze(canonicalRecords(records)),
       updatedAt,
     }),
   };
@@ -522,7 +651,11 @@ function repairRollback(
 /* ============================== 内部：从注册表派生账本 ============================== */
 
 type DeriveResult =
-  | { readonly kind: 'ok'; readonly slots: Readonly<Record<string, string>> }
+  | {
+      readonly kind: 'ok';
+      readonly slots: Readonly<Record<string, string>>;
+      readonly records: Kojo2StorageRecords;
+    }
   | { readonly kind: 'plan-not-ok'; readonly failures: readonly Kojo2StoragePlanFailure[]; readonly detail: string }
   | {
       readonly kind: 'key-policy-mismatch';
@@ -556,7 +689,7 @@ function planFailuresOf(registry: Kojo2StorageRegistry): readonly Kojo2StoragePl
 }
 
 /**
- * 从注册表派生 `声明键 → 槽名`。
+ * 从注册表派生 `声明键 → 槽名` **与形状表**（槽名与形状必须同一次规划、同一次落盘）。
  *
  * 三条硬口径：
  * ① 只认 `storagePlan.ok === true`：规划失败时槽位是占位/不可信值，宁可整笔不落；
@@ -667,7 +800,110 @@ function deriveSlots(
     slots[key] = slotName;
   }
 
-  return { kind: 'ok', slots: Object.freeze(canonicalSlots(slots)) };
+  const derived = deriveRecords(plan.nextSnapshot, slots);
+  if (derived.kind !== 'ok') return { kind: 'invalid-registry', detail: derived.detail };
+  return {
+    kind: 'ok',
+    slots: Object.freeze(canonicalSlots(slots)),
+    records: derived.records,
+  };
+}
+
+/**
+ * 从 `storagePlan.nextSnapshot.classes` 派生形状表（`声明键 → 形状`）。
+ *
+ * 为什么从快照派生而不是从符号重新算：快照是 core 分配槽位时**实际落进存档**的那份事实
+ * （`valueType` / `arraySize` 已按核心口径归一），账本要与它逐格对齐；重新算就等于在宿主侧
+ * 另造一套形状口径，迟早与快照漂移。
+ *
+ * 三条硬口径：
+ * ① 每格 `slot` / `valueType` / `arraySize` 必须合法（`arraySize` 缺席 ≠ 标量，是坏形状）；
+ * ② 同一声明键不得跨存储期出现两次（槽号只在类内唯一）；
+ * ③ 键集与 `slots` **双向相等**——少一格会让"改型检测"漏判，多一格会让账本自相矛盾。
+ */
+function deriveRecords(
+  snapshot: unknown,
+  slots: Readonly<Record<string, string>>,
+):
+  | { readonly kind: 'ok'; readonly records: Kojo2StorageRecords }
+  | { readonly kind: 'invalid-registry'; readonly detail: string } {
+  if (!isRecord(snapshot)) {
+    return { kind: 'invalid-registry', detail: 'storagePlan.nextSnapshot 必须是对象' };
+  }
+  const classes = snapshot.classes;
+  if (!isRecord(classes)) {
+    return { kind: 'invalid-registry', detail: 'storagePlan.nextSnapshot.classes 必须是对象' };
+  }
+  const records: Record<string, Kojo2StorageRecord> = {};
+  for (const storage of KOJO2_STORAGE_CLASS_ORDER) {
+    const table = classes[storage];
+    if (table === undefined) continue;
+    if (!isRecord(table)) {
+      return { kind: 'invalid-registry', detail: `nextSnapshot.classes.${storage} 必须是对象` };
+    }
+    for (const key of Object.keys(table)) {
+      if (key.length === 0) {
+        return { kind: 'invalid-registry', detail: `nextSnapshot.classes.${storage} 含空声明键` };
+      }
+      const entry = table[key];
+      if (!isRecord(entry)) {
+        return {
+          kind: 'invalid-registry',
+          detail: `nextSnapshot.classes.${storage}["${key}"] 必须是对象`,
+        };
+      }
+      const slot = entry.slot;
+      if (typeof slot !== 'number' || !Number.isInteger(slot) || slot < 0) {
+        return {
+          kind: 'invalid-registry',
+          detail: `nextSnapshot.classes.${storage}["${key}"].slot 必须是非负整数`,
+        };
+      }
+      const valueType = entry.valueType;
+      if (valueType !== 'int' && valueType !== 'string') {
+        return {
+          kind: 'invalid-registry',
+          detail: `nextSnapshot.classes.${storage}["${key}"].valueType 必须是 "int" / "string"`,
+        };
+      }
+      const arraySize = entry.arraySize;
+      if (
+        !(
+          arraySize === null ||
+          (typeof arraySize === 'number' && Number.isInteger(arraySize) && arraySize >= 0)
+        )
+      ) {
+        return {
+          kind: 'invalid-registry',
+          detail: `nextSnapshot.classes.${storage}["${key}"].arraySize 必须是 null 或非负整数`,
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(records, key)) {
+        return {
+          kind: 'invalid-registry',
+          detail: `声明键「${key}」在多个存储期里同时出现——槽号只在类内唯一，账本必须同键唯一`,
+        };
+      }
+      records[key] = Object.freeze({ slot, valueType, arraySize });
+    }
+  }
+  for (const key of Object.keys(records)) {
+    if (!Object.prototype.hasOwnProperty.call(slots, key)) {
+      return {
+        kind: 'invalid-registry',
+        detail: `形状表里的「${key}」没有对应槽名——slots 与 nextSnapshot 不是同一次规划`,
+      };
+    }
+  }
+  for (const key of Object.keys(slots)) {
+    if (!Object.prototype.hasOwnProperty.call(records, key)) {
+      return {
+        kind: 'invalid-registry',
+        detail: `槽位「${key}」缺少形状事实（valueType/arraySize）——没有它就检测不到跨构建改型`,
+      };
+    }
+  }
+  return { kind: 'ok', records: Object.freeze(canonicalRecords(records)) };
 }
 
 function sameSlots(
@@ -678,6 +914,25 @@ function sameSlots(
   if (aKeys.length !== Object.keys(b).length) return false;
   for (const key of aKeys) {
     if (!Object.prototype.hasOwnProperty.call(b, key) || a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function sameRecords(a: Kojo2StorageRecords, b: Kojo2StorageRecords): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    const left = a[key];
+    const right = b[key];
+    if (left === undefined || right === undefined) return false;
+    if (
+      left.slot !== right.slot ||
+      left.valueType !== right.valueType ||
+      left.arraySize !== right.arraySize
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -958,9 +1213,13 @@ export function createKojo2StoragePersister(
       }
     }
 
-    /* ---------- ⑤ 同键幂等：内容一致 → 零写，updatedAt 不刷新 ---------- */
+    /* ---------- ⑤ 同键幂等：槽位**与形状**都一致 → 零写，updatedAt 不刷新 ---------- */
 
-    if (previous !== null && sameSlots(previous.slots, derived.slots)) {
+    if (
+      previous !== null &&
+      sameSlots(previous.slots, derived.slots) &&
+      sameRecords(previous.records, derived.records)
+    ) {
       return committed(previous, previous, false);
     }
 
@@ -978,6 +1237,7 @@ export function createKojo2StoragePersister(
       version: KOJO2_STORAGE_LEDGER_VERSION,
       fingerprint,
       slots: derived.slots,
+      records: derived.records,
       updatedAt,
     });
     const nextText = serializeKojo2StorageLedger(next);

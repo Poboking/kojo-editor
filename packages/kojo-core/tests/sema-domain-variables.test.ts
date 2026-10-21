@@ -196,13 +196,18 @@ describe('sema · 域符号变量：未声明与优先级', () => {
     );
   });
 
-  it('外部变量是标量脸：`名[下标]` 不认它（仍按未声明数组报，宁缺不猜）', () => {
+  it('外部变量是标量（省略 arraySize）：`名[下标]` 报 bad-index（名字已声明、但不是数组）', () => {
+    /*
+     * K2-SEMA-WIRING 起外部变量有数组面：adapter 省略 `arraySize` ⇒ 该名字**已声明为标量**，
+     * 下标语法属于"形状不对"（`core/expr/bad-index`），不再冒充"未声明的数组"
+     * （`core/expr/unknown-symbol` 会让作者去声明一个已经存在的名字）。长度/元素类型仍一概不猜。
+     */
     expectCode(
       `
 @算
     外部计数[0] = 1
 `,
-      'core/expr/unknown-symbol',
+      'core/expr/bad-index',
     );
   });
 

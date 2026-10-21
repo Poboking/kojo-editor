@@ -1,0 +1,17 @@
+{
+  "id": "narrative-scaffold-daily",
+  "status": "blocked",
+  "blockedReason": "v2-compile-failed",
+  "v1": {
+    "ok": true,
+    "lines": 19,
+    "errors": 0,
+    "firstErrorCode": null
+  },
+  "migration": {
+    "ok": true,
+    "unsupported": 0,
+    "unsupportedConstructs": [],
+    "outputLines": 8
+  }
+}

@@ -343,6 +343,8 @@ describe('SugarDiagnostic · 结构', () => {
       'function-name-unknown',
       'notin-complex-operand',
       'raw-block-inline',
+      // S5.6 additive：作者文本里的字符装不下引擎字面量（生产者 kojo-sugar 心形路径）
+      'literal-unencodable',
       'internal',
     ];
     expect(new Set(codes).size).toBe(codes.length); // 无重复

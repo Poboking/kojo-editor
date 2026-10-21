@@ -1442,6 +1442,19 @@ export type SugarDiagnosticCode =
   | 'fullwidth-expr-punct'
   /* --- 原生直通（规范 §3.10） --- */
   | 'raw-block-inline' // 原生直通块出现在非顶层位置（如嵌在句子中间）
+  /**
+   * K2-CODES（S5.6 码表补齐）：**引擎字面量装不下作者文本**——心形提示（`CALL HPH_PRINT`）
+   * 的文本里含 `encodeErbText` 拒收的字符（NUL / 未配对代理项），或转义后仍越界。
+   * 生产者：`kojo-sugar/src/codegen.ts::reportHeartLiteralFailure`（**error**，本行零字节、
+   * 宁缺勿编）。与 `internal` 的分工：后者是"转译器自身异常"（作者改不了，只能报障）；
+   * 本码是"**作者文本里的字符**装不下"——唯一动作是删掉那个字符再转译，提示必须给出下一步。
+   * 此前借用 `internal`，作者被指向了错误的处置（报障）而不是修文。
+   *
+   * 闭集扩展是 **additive**（S2 定：只允许新增、不得临时发明字符串）；新增一条要同步
+   * `diagnostic-copy.ts` 的运行期枚举 + 中文短名（两处由 `app/tests/diagnostic-copy.test.ts`
+   * 双向对账），以及 adapter 教程全表的提示码行（`eratw-adapter/src/tutorial-reference-expr.ts`）。
+   */
+  | 'literal-unencodable'
   /* --- 兜底 --- */
   | 'internal'; // 转译器自身异常（绝不静默；由 S2 使用）
 

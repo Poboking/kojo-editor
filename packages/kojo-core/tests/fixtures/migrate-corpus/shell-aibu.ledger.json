@@ -1,0 +1,17 @@
+{
+  "id": "shell-aibu",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 11,
+    "errors": 1,
+    "firstErrorCode": "block-empty"
+  },
+  "migration": {
+    "ok": true,
+    "unsupported": 0,
+    "unsupportedConstructs": [],
+    "outputLines": 11
+  }
+}

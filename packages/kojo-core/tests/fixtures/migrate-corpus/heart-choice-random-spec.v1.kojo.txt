@@ -1,0 +1,21 @@
+; @kojo-migration-corpus · 来源: packages/plugins/kojo-sugar/tests/goldens/spec-6.2-choice-heart-random.kojo
+; 复制口径: 本头注之后 = 源文件逐字节复制（编码/EOL 原样；本文件 EOL=LF）
+; 语料分层: 双 golden（v1 产物 + 2.0 产物）
+; 说明: 规范 §6.2 心形 + 选项 + 随机（片段，补 `角色:`）
+; 片段补全: 剥掉源文件首部 `//` 说明横幅；无 `角色:` 时补 `角色: 12`（与 kojo-sugar golden 测试 readKojo 同口径，由 loader 施加）
+// Golden fixture — 规范 §6.2（选项 + 心形 + 随机）
+// 来源：docs/SYNTAX-SUGAR-SURFACE-SPEC.md §6.2（v1.2 冻结版，逐字照抄）
+// 用途：S2 批转译内核的逐字节验收基准；本文件**不得**为迁就实现而修改。
+时机 指令 311：
+    心形 「……嗯。」
+    选项：
+        「用亲吻代替回答」：
+            「……唔。」
+            她轻轻闭上了眼睛。 续
+            心形 「虽然，还不太明白……但是、不讨厌。」
+        「摸摸头」：
+            随机：
+                「……呼。」
+                「再、再摸摸嘛。」
+        「什么也不做」：
+            「……回去吧。」

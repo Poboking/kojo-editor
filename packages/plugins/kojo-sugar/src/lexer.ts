@@ -66,24 +66,22 @@ import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from './sugar-ident';
 // 空白 / 缩进字符集的唯一真源（CHARSET-SS 批）：行首、缩进折算、行尾去空白全走同一张表，
 // 此处不再自持 `[ \t\u3000]` 正则或第二份折算算法。
 import { indentLevelOf, leadingBlank, trimTrailingBlank } from './blank-charset';
+// 折行段 / 逻辑行视图 / 逻辑偏移→物理位置：真源已搬到 core（`lower/column-fold.ts`，
+// K2-NATIVE-DEDENT：与 `@原生` 去缩进面共用同一份折回实现）。本包只**再导出**，既有
+// `./lexer` 导入面零改动、语义逐字不变；core 不认识插件包，依赖方向仍单向。
+import { logicalPosition } from '@kojo/kojo-core';
+import type { FoldSegment, SourceLineView } from '@kojo/kojo-core';
 import type { DiagnosticSink } from './types';
+
+// 原 `export interface FoldSegment` / `export interface SourceLineView` / `export function logicalPosition`
+// 三处实现已删除（真源在 core）；这里补上同名导出，保证 `./lexer` 的既有导入面逐字不变。
+export { logicalPosition };
+export type { FoldSegment, SourceLineView };
 
 /* ============================== 物理行 → 逻辑行 ============================== */
 
-/**
- * 折行段（S6 列级映射的地基）：一条逻辑行由哪几个**物理行**拼成。
- *
- * 折行把多条源行合成一条产物行 ⇒ 只有知道「逻辑偏移落在哪个物理行」，
- * 产物列才能折回**正确的源行与源列**（而不是统统落回首行起点）。
- */
-export interface FoldSegment {
-  /** 该段起点在**逻辑文本**里的 0 基码元偏移 */
-  offset: number;
-  /** 该段所属物理行（1 基） */
-  line: number;
-  /** 该段首字符在物理行里的列（1 基；UTF-16 码元。续接行按 `trimStart` 合并 ⇒ 跳过行首空白） */
-  column: number;
-}
+/* 折行段（`FoldSegment`）与逻辑行视图（`SourceLineView`）的类型真源在 core
+ * `lower/column-fold.ts`（上方 import + 再导出）；此处不再持第二份声明。 */
 
 /** 逻辑行：一条"逻辑上不可分"的源行（`\` 折行已合并） */
 export interface LogicalLine {
@@ -160,35 +158,17 @@ export function splitLogicalLines(source: string): LogicalLine[] {
 /**
  * 源侧「逻辑行」视图（S6 列级映射用；键 = 该逻辑行的**首个物理行号**，1 基）。
  *
- * 转译是 `source → AST → 产物` 的单向流，codegen 手里只有节点 `loc`；本视图补上
- * 「那一行的逻辑全文 + 折行段」，让列区段能在**生成时**就地校验并落到物理列，
- * 而不是事后拿正则去产物里回推（产物里没有源列信息，回推只能猜）。
+ * 类型真源在 core `lower/column-fold.ts::SourceLineView`（上方 import + 再导出）；
+ * 本文件只负责从源文本切出它。
  */
-export interface SourceLineView {
-  /** 合并折行后的逻辑全文（含首行缩进） */
-  readonly text: string;
-  /** 折行段（升序；未折行 = 单段） */
-  readonly segments: readonly FoldSegment[];
-}
-
 export function sourceLineViews(source: string): Map<number, SourceLineView> {
   const map = new Map<number, SourceLineView>();
   for (const line of splitLogicalLines(source)) map.set(line.line, { text: line.text, segments: line.segments });
   return map;
 }
 
-/**
- * 逻辑偏移（0 基码元）→ 物理源位置（1 基列）。越界按尾段夹紧，绝不抛错——
- * 列映射是**查询**，宁可给保守值也不静默失败。
- */
-export function logicalPosition(segments: readonly FoldSegment[], offset: number): SugarPosition {
-  let seg = segments[0] ?? { offset: 0, line: 1, column: 1 };
-  for (const s of segments) {
-    if (s.offset > offset) break;
-    seg = s;
-  }
-  return { line: seg.line, column: seg.column + Math.max(0, offset - seg.offset) };
-}
+/* `logicalPosition`（逻辑偏移 → 物理源位置）已搬到 core `lower/column-fold.ts`，
+ * 上方 import + 再导出；此处不再持第二份实现。 */
 
 /** 缩进折算的真源在 `blank-charset.ts::indentLevelOf`（CHARSET-SS 批：此前本文件与 `sugar-ident`
  * 各有一份同算法实现，改一处忘一处就分叉）。 */

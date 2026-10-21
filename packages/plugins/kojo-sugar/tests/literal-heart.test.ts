@@ -95,11 +95,19 @@ describe('① 心形字面量 · 装不下的字符 fail-closed', () => {
     const src = doc('    心形 「甲\u0000乙」');
     const r = t(src);
     const bad = r.diagnostics.find((d) => d.severity === 'error');
+    expect(bad?.code).toBe('literal-unencodable');
     expect(bad?.message).toContain('U+0000');
     // 诊断落在作者文本的那个码元上（1 基列：4 缩进 + `心形 `3 + `「` + `甲` = 10）
     expect(bad?.loc).toEqual({ line: 3, column: 10 });
     expect(hphLines(src)).toEqual([]);
     expect(r.erb).not.toContain('\u0000');
+  });
+
+  it('专用码 `literal-unencodable`：不再是 `internal`（转译器异常 ≠ 作者文本装不下）', () => {
+    const src = doc('    心形 「甲\u0000乙」');
+    const codes = t(src).diagnostics.map((d) => d.code);
+    expect(codes).toContain('literal-unencodable');
+    expect(codes).not.toContain('internal');
   });
 
   it('未配对代理项 → error、零 `HPH_PRINT`（不产非法 UTF-16 产物）', () => {

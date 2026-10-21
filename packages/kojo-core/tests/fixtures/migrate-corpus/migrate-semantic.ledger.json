@@ -1,0 +1,17 @@
+{
+  "id": "migrate-semantic",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 30,
+    "errors": 1,
+    "firstErrorCode": "indent-mismatch"
+  },
+  "migration": {
+    "ok": true,
+    "unsupported": 0,
+    "unsupportedConstructs": [],
+    "outputLines": 19
+  }
+}

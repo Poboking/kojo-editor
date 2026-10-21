@@ -1,0 +1,34 @@
+; 合成样例：规范 §6.1 形态（合成数据，供 .kojo 转译/语法示例）
+
+@M_KOJO_SUCCESS_COM_K101_310
+TFLAG:192 = 0
+
+@M_KOJO_MESSAGE_COM_K101_310
+CALL M_KOJO_MESSAGE_COM_K101_310_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_COM_K101_310_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「呀……！」
+	PRINTFORMDL 她猛地一缩，随后慢慢转过身来。
+	IF TALENT:TARGET:胆怯
+		PRINTFORMDW 眼眶里浮起一点泪光。
+	ENDIF
+	SELECTCASE TFLAG:193
+		CASE 1
+			PRINTFORMW 「不、不要……！」
+		CASE 2, 3
+			PRINTFORMW 「呜……真是的。」
+			PRINTFORMDL 她红着脸，小声嘟囔着。
+		CASEELSE
+			PRINTFORMDW 她什么也没说，只是微微眯起了眼睛。
+	ENDSELECT
+ENDIF
+RETURN 1
+
+@M_KOJO_COLOR_K101
+SETCOLOR 0x88AACC

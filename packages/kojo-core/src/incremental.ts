@@ -62,6 +62,8 @@ import { compileKojoFile } from './compile.js';
 import type { CompileKojoSourceResult } from './compile.js';
 import { createDiagnosticSink, severityOf } from './diagnostics.js';
 import type { DiagnosticSink, KojoDiagnostic } from './diagnostics.js';
+import { checkKojoFile } from './sema/check.js';
+import { featureDiagnosticKey } from './lower/feature-gate.js';
 import { lex } from './lexer.js';
 import { parse } from './parser.js';
 import type { PositionIndex } from './positions.js';
@@ -1377,7 +1379,6 @@ function tryStructuralIncremental(
 /* ============================== 拼接（compose） ============================== */
 
 function compose(state: CacheState, adapter: GameAdapter, backend: KojoEmitBackend): CompileKojoSourceResult {
-  void adapter;
   const parseDiags: KojoDiagnostic[] = [];
   for (const unit of state.units) for (const diagnostic of unit.lexDiags) parseDiags.push(diagnostic);
   for (const unit of state.units) for (const diagnostic of unit.sourceDiags) parseDiags.push(diagnostic);
@@ -1405,6 +1406,19 @@ function compose(state: CacheState, adapter: GameAdapter, backend: KojoEmitBacke
   for (const diagnostic of state.machineDiags) diags.push(diagnostic);
   for (const unit of state.units) for (const diagnostic of unit.walkDiags) diags.push(diagnostic);
   for (const diagnostic of state.weaveDiags) diags.push(diagnostic);
+  // 语义层并表（K2-SEMA-WIRING 的 wiring 请求；与 `runCompile` 同口径）：sema 先算，主链胜出
+  // （同 `(code, span)` = 同一事实 ⇒ 丢弃 sema 那条），sema 独有的追加在后——增量结果必须与
+  // `compileKojoFile` 逐字相等，否则构建期自检会判 degraded、把增量提速永久关掉。
+  {
+    const sema = checkKojoFile(file, { adapter, reporting: 'with-lowering' });
+    const seen = new Set(diags.map(featureDiagnosticKey));
+    for (const diagnostic of sema.diagnostics) {
+      const key = featureDiagnosticKey(diagnostic);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      diags.push(diagnostic);
+    }
+  }
   if (hasError(diags)) {
     return { ok: false, erb: '', sourceMap: empty(), diagnostics: diags, slots: [], file };
   }

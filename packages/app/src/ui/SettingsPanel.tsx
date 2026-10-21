@@ -70,6 +70,8 @@ import {
   type UiFontScalePref,
 } from './editor-display-prefs';
 import { isComposingEvent } from './shell-keys';
+// Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
+import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
 import '../settings-search.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
@@ -605,6 +607,11 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 真源在 editor-display-prefs.ts，本页只排版 */}
             <EditorDisplayRows />
           </div>
+
+          {/* Kojo 2.0 档位（K2-CUTOVER-STAGE）：三态单选 + 每档人话 + 单文件破例清单（可撤）
+              + 恢复出厂。组件自订阅切换控制器（不经壳层 props 镜像），切档后语言重挂与
+              「需要重载窗口」提示都在它自己那一块里说清。 */}
+          <Kojo2CutoverSettings />
 
           {/* 直连模式开关：仍经封存总闸控制——封存态不渲染（本功能尚未交付为常态） */}
           {!sealed ? (

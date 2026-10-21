@@ -23,8 +23,10 @@
  * - **文件命名空间**（§3.4.5）：变量/常量/表/池/模板/函数共用一套名字；同文件重名 → error。
  *   函数对函数的同文件重名由上面的 Layer 判定报一次，这里**不双报**。
  * - **返回路径**：本层**不重解析函数体**，只吃 C2/语义层送来的事实
- *   （`hasValueReturn` / `hasBareReturn` / `allPathsReturn`）：混用 → `core/func/return-mixed`；
- *   非 void 且"并非所有可达路径都以 `@返` 结束" → `core/func/missing-return`（保守检查）。
+ *   （`hasValueReturn` / `hasBareReturn` / `allPathsReturn` / `returnFlow`）。事实带
+ *   `returnFlow`（= 事实来自语义层）时，`return-mixed` 与 `missing-return` **都归编译链**：
+ *   混用由主链递归分析落在具体 `@返` 行、落空由语义层只在可证落空时报——本层只留事实，
+ *   **不双报**；没有 `returnFlow` 的旧事实仍按 `allPathsReturn` 保守判定（向后兼容）。
  *
  * ## 性能与确定性
  *
@@ -109,7 +111,10 @@ export interface EventCatalogFacts {
  * - `hasValueReturn`：函数体里是否出现过带值 `@返 表达式`；
  * - `hasBareReturn`：是否出现过无值 `@返`；
  * - `allPathsReturn`：是否已被证明"所有可达路径都以 `@返` 结束"（保守检查由上游做，
- *   上游证不出就填 `false`——本层据此报 `missing-return`，宁可多报也不许产出隐式返回）。
+ *   上游证不出就填 `false`——本层据此报 `missing-return`，宁可多报也不许产出隐式返回）；
+ * - `returnFlow`（additive；K2-SEMA-WIRING）：语义层 `KojoSemaFunctionSymbol.returnFlow`
+ *   的三态投影。**给出即表示"missing-return 归语义层所有"**：编译期已按同一份判据报过
+ *   （只有 `falls-through` 才报），本层只留事实、不再报第二遍——两个入口各报一次就是双报。
  */
 export interface FunctionReturnFact {
   readonly name: string;
@@ -118,6 +123,7 @@ export interface FunctionReturnFact {
   readonly hasValueReturn: boolean;
   readonly hasBareReturn: boolean;
   readonly allPathsReturn: boolean;
+  readonly returnFlow?: 'returns' | 'falls-through' | 'unproven';
 }
 
 export interface ProjectAnalysisInput {
@@ -589,8 +595,17 @@ function analyzeReturns(
   for (const fact of ordered) {
     const mixed = fact.hasValueReturn && fact.hasBareReturn;
     const returnsValue = fact.hasValueReturn && !fact.hasBareReturn;
-    const missingReturn = returnsValue && !fact.allPathsReturn;
-    if (mixed) {
+    /*
+     * 返回路径归属（K2-SEMA-WIRING）：事实带了 `returnFlow` 就说明它来自语义层——编译期已按
+     * "只在能证明落空时报"的判据报过 missing-return，`@返` 混用也由主链的递归分析在**具体
+     * `@返` 行**报过；本层只留事实（`checks[]`），不再报第二条诊断（两个入口各报一次 = 双报）。
+     * 没有 `returnFlow` 的旧事实仍走原判据（向后兼容，不改变既有调用方口径）。
+     */
+    const semaOwned = fact.returnFlow !== undefined;
+    const missingReturn = semaOwned
+      ? returnsValue && fact.returnFlow === 'falls-through'
+      : returnsValue && !fact.allPathsReturn;
+    if (mixed && !semaOwned) {
       reported += 1;
       diagnostics.push(
         diagnostic(
@@ -599,7 +614,7 @@ function analyzeReturns(
           fact.span,
         ),
       );
-    } else if (missingReturn) {
+    } else if (missingReturn && !semaOwned) {
       reported += 1;
       diagnostics.push(
         diagnostic(

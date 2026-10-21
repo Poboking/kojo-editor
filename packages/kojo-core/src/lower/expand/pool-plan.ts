@@ -17,7 +17,7 @@
  * 3. **`? 否` 必须存在、必须最后、必须可打印**（§7.1 既有规则）：缺/重复/位置错/空
  *    一律 `style: 'error'` + 诊断，调用方**不产字节**（不静默补一个空兜底）。
  * 4. **等值键不得重复**：同一主语下两档同值无法区分（`IF` 链第一个命中；等值分派也会
- *    静默取第一个），按计划不自洽 fail-closed。
+ *    静默取第一个），按计划不自洽 fail-closed（`core/pool/duplicate-case`）。
  * 5. **主语必须是纯表达式**且同一来源（trim 后逐字相同）：函数调用/字符串/三元/
  *    比较组合都不收（可能有副作用或非整数）。
  *
@@ -315,10 +315,10 @@ function computePlan(pool: KojoPoolDecl): PoolDispatchPlan {
         subject,
         reason: `等值键 ${scan.fact.value} 重复出现（第 ${first + 1} / ${index + 1} 个分支）：运行期无法区分该命中哪一档。`,
         diagnostics: [
-          // 码表是闭集、本批不允许改 `diagnostics.ts`：借用最接近的 error 码并写清语义；
-          // 建议后续补 `core/pool/duplicate-case`（见批次报告"缺口"）。
+          // 计划面自己的码（S5.6 additive）：与 `core/expr/not-expression` 分开，作者才知道
+          // 该改的是"两个分支的等值键撞了"，不是"这行不是表达式"。
           diagnosticOf(
-            'core/expr/not-expression',
+            'core/pool/duplicate-case',
             `池「${pool.name}」的等值键 ${scan.fact.value} 重复出现（第 ${first + 1} / ${index + 1} 个分支）：等值分派会静默取第一个，必须改成互不相同的整数（§7.1）。`,
             branch.span,
           ),

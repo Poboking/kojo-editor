@@ -13,6 +13,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { foldPositionToPhysical as coreFoldPositionToPhysical } from '@kojo/kojo-core';
 import { createSugarTranspileService } from '../src/service';
 import { foldPositionToPhysical } from '../src/column-map';
 import { sourceLineViews } from '../src/lexer';
@@ -122,5 +123,10 @@ describe('④ foldPositionToPhysical · 越界夹取口径', () => {
     // 已折过的物理位置再折一次不变（幂等）
     const once = fold(1, 3)!;
     expect(foldPositionToPhysical(views, once)).toEqual(once);
+  });
+
+  it('实现单源（K2-NATIVE-DEDENT）：本包导出与 core `lower/column-fold.ts` 是**同一枚**函数', () => {
+    // 只搬一份：`column-map.ts` 只是再导出 core 的实现，不是第二份拷贝
+    expect(foldPositionToPhysical).toBe(coreFoldPositionToPhysical);
   });
 });

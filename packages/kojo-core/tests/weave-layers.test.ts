@@ -447,7 +447,7 @@ describe('适配器能力检查', () => {
     expect(result.conflicts).toHaveLength(1);
     const conflict = result.conflicts[0]!;
     expect(conflict.kind).toBe('not-weavable');
-    expect(conflict.code).toBe('core/weave/unsupported');
+    expect(conflict.code).toBe('core/weave/not-weavable');
     expect(result.shadowed).toEqual([]);
     expect(result.units[0]!.bucket).toBe('plain');
     expect(result.units[0]!.verdict).toBe('blocked');

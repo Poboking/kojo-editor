@@ -1,0 +1,19 @@
+{
+  "id": "faces-family",
+  "status": "blocked",
+  "blockedReason": "migration-unsupported",
+  "v1": {
+    "ok": true,
+    "lines": 58,
+    "errors": 0,
+    "firstErrorCode": null
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 4,
+    "unsupportedConstructs": [
+      "多个 `时机` 块（2.0 一个文件只写一个 `# 机`）"
+    ],
+    "outputLines": 8
+  }
+}

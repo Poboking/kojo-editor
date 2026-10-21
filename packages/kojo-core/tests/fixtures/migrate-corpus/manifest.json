@@ -1,0 +1,629 @@
+{
+  "schema": "kojo-migration-corpus/1",
+  "notes": "迁移 differential 语料（K2-MIGRATION-DIFFERENTIAL / §16.8 M7.1·M7.2·M7.6）。每份 `.v1.kojo` = 头注 + 仓内既有 v1 fixture 的逐字节复制；`completion` 是源 fixture 自带的片段补全口径（与 kojo-sugar golden 测试 readKojo 同口径，由 loader 施加，本目录不改写正文）；`.v1.erb` = v1 真产物（kojo-sugar 真入口），`.2.erb` = 2.0 真产物（真 core + 真 eraTW backend，profile.narrationColor=default 对齐 v1 缺省取色）；blocked case 用 `.ledger.json` 记缺口（v1 侧编不出 / 迁移有 unsupported / 2.0 侧编不出）。 重生成口径：以同一注入（kojo-sugar 真入口 + 真 core + 真 eraTW backend，profile.narrationColor=default）重跑并覆盖 golden；源 fixture 变更时须同时更新 sourceSha256 / headerLines（源漂移由 packages/kojo-core/tests/migration-corpus.test.ts 钉住）。",
+  "cases": [
+    {
+      "id": "narrative-scaffold-317",
+      "source": "fixtures/scaffold/性骚扰指令.kojo",
+      "sourceSha256": "da1dbbc47c6ab9a0e505120c7ceeace4e2bec816af80578542276dcd9a66d9bf",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": "12"
+      },
+      "notes": "脚手架空壳：叙事 + `时机 指令 317`（片段，按 golden 口径补 `角色:`）",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "narrative-scaffold-daily",
+      "source": "fixtures/scaffold/日常指令.kojo",
+      "sourceSha256": "b1f2192f6ed436272a34dbc7193a4f2ea130dc964abdafba95e0fcac34f3acfa",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": "12"
+      },
+      "notes": "脚手架空壳：`时机 日常 4`（面词不在 2.0 九事件目录内）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v2-compile-failed"
+      }
+    },
+    {
+      "id": "conditional-scaffold-event",
+      "source": "fixtures/scaffold/事件.kojo",
+      "sourceSha256": "6aa51031125427a80324fcee3677d1898e80ca4381817d25d4bd9314a9bc7d39",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "如果 / 否则如果",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": "12"
+      },
+      "notes": "条件块 `如果 !TALENT:恋慕` + `时机 事件 22`（面词不在目录内）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v2-compile-failed"
+      }
+    },
+    {
+      "id": "conditional-scaffold-mark",
+      "source": "fixtures/scaffold/刻印取得.kojo",
+      "sourceSha256": "aca2072f5183e83f01f96216219d4c8d2a2b78c227ac72a40c2dede18e04d618",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "如果 / 否则如果",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": "12"
+      },
+      "notes": "三臂条件链（`否则如果` ×2）+ `时机 标记`（面词不在目录内）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v2-compile-failed"
+      }
+    },
+    {
+      "id": "narration-spec-default",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/spec-3.3-narration-default.kojo",
+      "sourceSha256": "c04025ae0202c191c1f3ac796c3799a30803d2d241ac5146585bdddaddcb0582",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": true,
+        "prependChara": null
+      },
+      "notes": "规范 §3.3 旁白缺省口径（D 系打印）",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "narration-spec-author-color",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/spec-3.3-narration-author-color.kojo",
+      "sourceSha256": "045ffe9808953bb72b15850468a305795743e96ea57e1e31d77102e62c850a11",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "`旁白色` 文件头声明",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": true,
+        "prependChara": null
+      },
+      "notes": "规范 §3.3 `旁白色: 作者色`（取色声明 2.0 搬 profile → unsupported）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "heart-choice-random-spec",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/spec-6.2-choice-heart-random.kojo",
+      "sourceSha256": "816cf4ddd7aac35b9f37240b35f0c5c69cd9d953f940371134a65267c38a1bff",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "已是 2.0 行",
+        "心形",
+        "文件头声明",
+        "时机块",
+        "选项块",
+        "随机"
+      ],
+      "completion": {
+        "stripBanner": true,
+        "prependChara": "12"
+      },
+      "notes": "规范 §6.2 心形 + 选项 + 随机（片段，补 `角色:`）",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "value-lookup-spec-310",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/spec-6.1-lumia-310.kojo",
+      "sourceSha256": "9938272bb1468c903ee58845b1b890fe0e74168be0dd4a56b0e11b294a556c18",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "是 臂",
+        "`口上色` 文件头声明",
+        "否则",
+        "当 / 是 分支",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": true,
+        "prependChara": "12"
+      },
+      "notes": "规范 §6.1 `当/是` 值查找 + 命名参数时机（`口上色` + `成否:`）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "value-lookup-sample-310",
+      "source": "fixtures/sugar/sample-310.kojo",
+      "sourceSha256": "ec7a947a0a187d0beb0c06b006fa7187c4949e10a5e168c84de33a619ea026df",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "是 臂",
+        "`口上色` 文件头声明",
+        "否则",
+        "当 / 是 分支",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "合成样例：`当 TFLAG:193` + `口上色` + 命名参数时机",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "faces-standard",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/a4/a4-faces.kojo",
+      "sourceSha256": "d590f982b2626fd10d7c134dcc1665cf27b9333dbc0bfd369af0ecd134666f9f",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "时机块",
+        "文件头声明"
+      ],
+      "completion": {
+        "stripBanner": true,
+        "prependChara": null
+      },
+      "notes": "多 `时机`（8 个）→ 2.0 一文件一 `# 机`，需按挂点拆文件",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "faces-family",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/a4/a4-faces-family.kojo",
+      "sourceSha256": "19f11d72167cbd0128745f5d8dc14c657b0b226e929008c49bd3dfd093e6e25e",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "时机块",
+        "文件头声明"
+      ],
+      "completion": {
+        "stripBanner": true,
+        "prependChara": null
+      },
+      "notes": "多 `时机` + `口上:` 家族段（`{t}` 段进 adapter 配置）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "teaching-full",
+      "source": "fixtures/sugar/teaching-full.kojo",
+      "sourceSha256": "6ebccae4fc7df63202b579c4a2109a1f81a4ad7d704b0a2a0bbd7c569c15b26d",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "时机块",
+        "如果 / 否则如果",
+        "文件头声明",
+        "是 臂",
+        "`别名` 声明",
+        "否则",
+        "随机",
+        "v1 叙事区原生行",
+        "v1 源折行（行尾 `\\`）",
+        "分支规则池",
+        "当 / 是 分支",
+        "心形",
+        "赋值/裸表达式",
+        "隐藏情景 / 隐藏口上",
+        "预处理器",
+        "`口上色` 文件头声明",
+        "`旁白色` 文件头声明",
+        "原生 @ 块",
+        "已是 2.0 行",
+        "着色",
+        "组"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "教学全集：分行/标签/常量/别名/着色/随机/分支/函数 + 多时机",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "release-check",
+      "source": "fixtures/sugar/release-check.kojo",
+      "sourceSha256": "965812fc23c2954f837b9117060418e83b9ce542e6d8930418221a35e3afa35c",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "时机块",
+        "如果 / 否则如果",
+        "v1 叙事区原生行",
+        "否则",
+        "已是 2.0 行",
+        "循环族",
+        "心形",
+        "文件头声明",
+        "是 臂",
+        "预处理器",
+        "`别名` 声明",
+        "初回 / 询问 / 确认",
+        "赋值/裸表达式",
+        "出错处理族",
+        "随机",
+        "隐藏情景 / 隐藏口上",
+        "`增减` 语句糖",
+        "`试探` TRY 系行",
+        "当 / 是 分支",
+        "着色",
+        "`条目` 数据表条目行",
+        "`步进` 语句糖",
+        "`结算` 语句糖",
+        "`若` 段块",
+        "`跳出循环`",
+        "v1 `常量` 声明",
+        "v1 源折行（行尾 `\\`）",
+        "函数",
+        "分支规则池",
+        "原生 @ 块",
+        "数据表族",
+        "组",
+        "菜单",
+        "调用",
+        "返回",
+        "选项块",
+        "`函数跳转`",
+        "`口上色` 文件头声明",
+        "`旁白色` 文件头声明",
+        "`自定指令` 块",
+        "`自机色` 文件头声明",
+        "`跳过本轮`",
+        "`重跑本轮`",
+        "标签",
+        "跳到"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "发版覆盖率样例：循环/初回/数据表/菜单/询问/确认/出错处理/若/自定指令 全构造",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "corpus-hasei",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/corpus-k12-lumia-hasei.kojo",
+      "sourceSha256": "2b479c438c8b38fb839c1b55a7f2140731035ff45ccd437a2ac0192c669e5694",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "v1 叙事区原生行",
+        "时机块",
+        "叙事行",
+        "如果 / 否则如果",
+        "随机",
+        "原生 @ 块",
+        "否则",
+        "`口上色` 文件头声明",
+        "已是 2.0 行",
+        "文件头声明"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "真语料切片（派生自 K12 口上）：分支池 + 函数 + 调用 + 随机 + 空行",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "corpus-sekumara",
+      "source": "packages/plugins/kojo-sugar/tests/goldens/corpus-k12-lumia-sekumara.kojo",
+      "sourceSha256": "e9b96433b987bf8bb6d4e3c7882e70ffff0d75abdfc21dafb8e135748cbdc935",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "v1 叙事区原生行",
+        "叙事行",
+        "如果 / 否则如果",
+        "时机块",
+        "随机",
+        "否则",
+        "已是 2.0 行",
+        "`口上色` 文件头声明",
+        "文件头声明"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "真语料切片（派生自 K12 口上）：条件链 + 分支池 + 随机",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "migration-unsupported"
+      }
+    },
+    {
+      "id": "legacy-v1-torture",
+      "source": "packages/kojo-core/tests/fixtures/legacy-v1.kojo.txt",
+      "sourceSha256": "a8f37d3f0460a613c5c5b4e18686091fe75aa2a49cad20f0ed6b4b65daf9c066",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "已是 2.0 行",
+        "原生 @ 块",
+        "循环族",
+        "数据表族",
+        "# 时机 声明",
+        "`别名` 声明",
+        "分支规则池",
+        "初回 / 询问 / 确认",
+        "否则",
+        "如果 / 否则如果",
+        "当 / 是 分支",
+        "心形",
+        "文件头声明",
+        "是 臂",
+        "版本声明",
+        "着色",
+        "组",
+        "调用",
+        "返回",
+        "选项块",
+        "随机",
+        "隐藏情景 / 隐藏口上",
+        "预处理器"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "迁移引擎的 v1 构造全集夹具（含 `# 版本` / 原生 @ 块 / 预处理器）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "migrate-mechanical",
+      "source": "packages/kojo-core/tests/fixtures/migrate/mechanical.kojo.txt",
+      "sourceSha256": "edf58776a3094b29adcb946db18e9a7f16aea80482205c027b7d0920538ceea4",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "如果 / 否则如果",
+        "心形",
+        "文件头声明",
+        "v1 叙事区原生行",
+        "函数",
+        "原生 @ 块",
+        "否则",
+        "时机块",
+        "标签",
+        "着色",
+        "组",
+        "调用",
+        "跳到",
+        "返回",
+        "随机",
+        "预处理器"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "机械层夹具：条件链 / 随机组 / 心形块 / 行内如果 / `@` 原生块",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "migrate-semantic",
+      "source": "packages/kojo-core/tests/fixtures/migrate/semantic.kojo.txt",
+      "sourceSha256": "256064023ab84b65bb07685939a5ffbac32da60aab2940e9aa4adac3aac5ce08",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "是 臂",
+        "分支规则池",
+        "初回 / 询问 / 确认",
+        "否则",
+        "当 / 是 分支",
+        "文件头声明",
+        "时机块",
+        "版本声明"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "语义层夹具：`当/是` → `# 表`、`分支：` → `# 池`、`初回` → `@原生`",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "migrate-unsupported",
+      "source": "packages/kojo-core/tests/fixtures/migrate/unsupported.kojo.txt",
+      "sourceSha256": "af6100df7d884b590bb76e85299ae6aef8cf6a14c43a887f964b9ab946173625",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [
+        "叙事行",
+        "循环族",
+        "数据表族",
+        "`别名` 声明",
+        "`旁白色` 文件头声明",
+        "`条目` 数据表条目行",
+        "`步进` 语句糖",
+        "`设置标记` 语句糖",
+        "分支规则池",
+        "初回 / 询问 / 确认",
+        "否则",
+        "已是 2.0 行",
+        "当 / 是 分支",
+        "文件头声明",
+        "时机块",
+        "是 臂",
+        "标签",
+        "菜单",
+        "调用",
+        "赋值/裸表达式",
+        "跳到",
+        "返回",
+        "隐藏情景 / 隐藏口上"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "unsupported 台账夹具：循环/数据表/菜单/出错处理/隐藏情景/赋值/标记",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "shell-aibu",
+      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/爱抚指令.kojo",
+      "sourceSha256": "c769e6a87dc09ba6ba4c5a11e8904133f057e7188768fca40192b59f87cd6d56",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "adapter 脚手架空壳（只有 `;` 注释：v1 侧报 block-empty）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "shell-zetcho",
+      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/绝顶.kojo",
+      "sourceSha256": "0084579966740e17804c523d8e74973389c5b5dc74991959d5c78587cc7066e7",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "adapter 脚手架空壳（只有 `;` 注释）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "shell-houshi",
+      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/奉仕指令.kojo",
+      "sourceSha256": "06062d6a37508d044baccc658eaf08ce8a18644ebec11c2a88e37c80e5ff200e",
+      "headerLines": 5,
+      "eol": "lf",
+      "tier": "baseline+ledger",
+      "constructs": [],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "adapter 脚手架空壳（只有 `;` 注释）",
+      "expected": {
+        "status": "blocked",
+        "blockedReason": "v1-compile-failed"
+      }
+    }
+  ]
+}

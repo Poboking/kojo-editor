@@ -1,0 +1,26 @@
+{
+  "id": "release-check",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 1325,
+    "errors": 20,
+    "firstErrorCode": "unknown-identifier"
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 63,
+    "unsupportedConstructs": [
+      "`别名` 声明",
+      "`口上色` 文件头声明",
+      "`旁白色` 文件头声明",
+      "`自定指令` 块",
+      "`自机色` 文件头声明",
+      "v1 `常量` 声明",
+      "多个 `时机` 块（2.0 一个文件只写一个 `# 机`）",
+      "赋值/裸表达式"
+    ],
+    "outputLines": 654
+  }
+}

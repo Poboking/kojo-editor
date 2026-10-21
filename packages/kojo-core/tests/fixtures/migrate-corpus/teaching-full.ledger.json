@@ -1,0 +1,22 @@
+{
+  "id": "teaching-full",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 284,
+    "errors": 3,
+    "firstErrorCode": "unknown-identifier"
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 13,
+    "unsupportedConstructs": [
+      "`别名` 声明",
+      "`口上色` 文件头声明",
+      "`旁白色` 文件头声明",
+      "多个 `时机` 块（2.0 一个文件只写一个 `# 机`）"
+    ],
+    "outputLines": 172
+  }
+}

@@ -34,7 +34,9 @@
  * 4. 都没有 ⇒ `core/expr/unknown-symbol`（adapter 的 `unknown = 'raw'` 时放行）。
  *
  * 1、2 是既有口径（顺序不动，别翻）；3 只填"原本必然报错"的格子 ⇒ 旧 adapter 行为零翻转。
- * 外部变量是**标量**脸：`名[下标]` / `名.长度` 不认它（仍按"未声明数组"报，宁缺不猜）。
+ * 外部变量默认是**标量**脸（旧 adapter 省略数组面 ⇒ `名[下标]` / `名.长度` 仍按"不是数组"报，
+ * 宁缺不猜）；adapter 显式给了 `arraySize`（K2-SEMA-WIRING 的 additive 数组面）才认下标，
+ * 常量下标越界报既有 `core/expr/index-out-of-range`。
  *
  * ## 保守口径（不误伤）
  *
@@ -90,6 +92,24 @@ export interface KojoSemaContext {
   readonly adapter: GameAdapter;
   /** 文件身份（项目层事实需要；core 不读盘，缺省空串） */
   readonly filePath?: string;
+  /**
+   * 报告口径（additive；K2-SEMA-WIRING）：本层是"唯一判定者"还是"与编译主链并跑"。
+   *
+   * - `standalone`（缺省）：查询面 / 独立检查——本层手上没有 lowering，能力闸（adapter 声明面）、
+   *   `@返` 混用、落空全部由本层报；
+   * - `with-lowering`：编译主链（`lower/expand/index.ts::runCompile`）。主链已有更知情/落点更精确的
+   *   同族判定，本层让出三类，避免双报：
+   *
+   *   1. **落点能力闸**（programFeatures / presentation）：主链是**单源**（adapter 声明 ∧
+   *      backend 落点，`lower/feature-gate.ts`），比本层的 adapter-only 判定更知情；若本层也报，
+   *      "adapter 与 backend 不一致"时会同时出现主链的声明面冲突（span = null）与本层的
+   *      use-site "未开启"（同码不同 span，`(code, span)` 去重管不到），作者会被指向错的修法；
+   *   2. **`core/func/return-mixed`**：主链的递归分析落在**具体那条 `@返` 行**，比本层的函数
+   *      声明行更精确；
+   *   3. 其余（类型 / 名字链 / 数组越界 / `missing-return` / 存储期）本层**独占**，照报——
+   *      这些是主链根本不判的格子，让出去就是静默。
+   */
+  readonly reporting?: 'standalone' | 'with-lowering';
 }
 
 /** 一个形参的静态事实 */
@@ -170,6 +190,20 @@ interface DeclInfo {
   readonly isArray: boolean;
   readonly arraySize: number | null;
   readonly storage: KojoVarStorage | null;
+}
+
+/**
+ * adapter 外部变量的事实投影（`domainSymbols.variables`；additive 面）。
+ *
+ * - `type`：标量值类型，或数组的**元素**类型（`elementKind ?? valueKind`）；
+ * - `isArray`：条目给了 `arraySize` 键（含 `null`）；
+ * - `arraySize`：`null` = 数组但长度不可静态求值（不做越界判定）。
+ */
+interface DomainVariableFact {
+  readonly type: KojoSemaType;
+  readonly readonly: boolean;
+  readonly isArray: boolean;
+  readonly arraySize: number | null;
 }
 
 /** 赋值目标形状（`KojoAssignTarget.text` 的解析结果） */
@@ -271,6 +305,7 @@ class FileChecker {
   private readonly file: KojoFile;
   private readonly adapter: GameAdapter;
   private readonly filePath: string;
+  private readonly reporting: 'standalone' | 'with-lowering';
   private readonly diagnostics: KojoDiagnostic[] = [];
   private readonly decls = new Map<string, DeclInfo>();
   private readonly functions = new Map<string, KojoFunctionDecl>();
@@ -282,6 +317,7 @@ class FileChecker {
     this.file = file;
     this.adapter = context.adapter;
     this.filePath = context.filePath ?? '';
+    this.reporting = context.reporting ?? 'standalone';
   }
 
   run(): KojoSemaResult {
@@ -310,11 +346,17 @@ class FileChecker {
     if (diagnostic !== null) this.diagnostics.push(diagnostic);
   }
 
+  /**
+   * 落点能力闸（programFeatures / presentation）：`context.reporting === 'with-lowering'` 时**不报**。
+   * 编译主链自己有一份更知情的单源判定（adapter ∧ backend），见 {@link KojoSemaContext.reporting}。
+   */
   private gateProgram(feature: ProgramFeatureKey, span: KojoSpan): void {
+    if (this.reporting === 'with-lowering') return;
     this.gate(checkProgramFeature(this.adapter, feature, span));
   }
 
   private gatePresentation(feature: PresentationFeature, span: KojoSpan): void {
+    if (this.reporting === 'with-lowering') return;
     this.gate(checkPresentation(this.adapter, feature, span));
   }
 
@@ -562,11 +604,14 @@ class FileChecker {
     const flow = this.flowOfDispatchList(decl.body);
 
     if (facts.hasValueReturn && facts.hasBareReturn) {
-      this.report(
-        'core/func/return-mixed',
-        `函数“${decl.name}”的 @返 混用：既有带值 @返，又有无值 @返——同一函数必须全部有值或全部无值（§7.3）。`,
-        decl.span,
-      );
+      // with-lowering：主链的递归分析把同一条事实落在**具体 @返 行**（更精确），本层不重复
+      if (this.reporting === 'standalone') {
+        this.report(
+          'core/func/return-mixed',
+          `函数“${decl.name}”的 @返 混用：既有带值 @返，又有无值 @返——同一函数必须全部有值或全部无值（§7.3）。`,
+          decl.span,
+        );
+      }
     } else if (returnsValue && flow === 'continues') {
       this.report(
         'core/func/missing-return',
@@ -773,6 +818,18 @@ class FileChecker {
        */
       const variable = this.domainVariable(name);
       if (variable !== null) {
+        /*
+         * 数组面（additive；K2-SEMA-WIRING）：整名赋值一律不收——换什么值都不行，
+         * 这是"目标形状"问题（与文件内 `# 变量 名 类型[N]` 同一条判据、同一个码）。
+         */
+        if (variable.isArray) {
+          this.report(
+            'core/array/whole-assign',
+            `“${name}”是外部数组（adapter 的 domainSymbols.variables 声明了 arraySize）：2.0 不支持数组整体赋值，请写元素（\`${name}[下标]\`，§9.2）。`,
+            span,
+          );
+          return;
+        }
         if (variable.readonly) {
           this.report(
             'core/expr/readonly-target',
@@ -796,8 +853,9 @@ class FileChecker {
     switch (info.kind) {
       case 'var':
         if (info.isArray) {
+          // 目标形状本身不收（换什么值都不行）⇒ 计划面的码，不借用 type-mismatch（S5.6）。
           this.report(
-            'core/expr/type-mismatch',
+            'core/array/whole-assign',
             `“${name}”是数组：2.0 不支持数组整体赋值，请写元素（\`${name}[下标]\`，§9.2）。`,
             span,
           );
@@ -826,6 +884,32 @@ class FileChecker {
     if (scope.has(name)) return;
     const info = this.decls.get(name);
     if (info === undefined) {
+      /*
+       * 第三档（additive）：adapter 声明的**外部数组**。判据与文件内数组同源：
+       * 声明了 `arraySize`（`null` 也算）才认下标，否则仍按"不是数组"报（宁缺不猜）。
+       */
+      const variable = this.domainVariable(name);
+      if (variable !== null) {
+        if (!variable.isArray) {
+          this.report(
+            'core/expr/bad-index',
+            `“${name}”不是数组：adapter 的 domainSymbols.variables 里它是标量（省略了 arraySize），不能写下标（§9.2）。`,
+            span,
+          );
+          return;
+        }
+        if (variable.readonly) {
+          this.report(
+            'core/expr/readonly-target',
+            `外部数组“${name}”在 adapter 里声明为只读，不能写元素（§9.6）。`,
+            span,
+          );
+          return;
+        }
+        this.checkIndex(index, variable.arraySize, span);
+        this.checkValueAssign(op, variable.type, rhs, span, `外部数组“${name}”的元素`);
+        return;
+      }
       if (this.adapter.domainSymbols.unknown === 'raw') return;
       this.report(
         'core/expr/unknown-symbol',
@@ -850,6 +934,24 @@ class FileChecker {
     if (scope.has(name)) return;
     const info = this.decls.get(name);
     if (info === undefined) {
+      // 外部数组也有声明长度（`.长度` 同口径）；标量外部变量与未声明名走同一条"没有 .长度"
+      const variable = this.domainVariable(name);
+      if (variable !== null && variable.isArray) {
+        this.report(
+          'core/expr/readonly-target',
+          `“${name}.长度”是只读的声明长度（adapter 的 domainSymbols.variables.arraySize），不能赋值（§9.2）。`,
+          span,
+        );
+        return;
+      }
+      if (variable !== null) {
+        this.report(
+          'core/expr/bad-index',
+          `“${name}”没有 \`.长度\`：adapter 的 domainSymbols.variables 里它是标量（省略了 arraySize）（§9.2）。`,
+          span,
+        );
+        return;
+      }
       if (this.adapter.domainSymbols.unknown === 'raw') return;
       this.report(
         'core/expr/unknown-symbol',
@@ -989,15 +1091,18 @@ class FileChecker {
   /* ------------------------------ 函数调用 ------------------------------ */
 
   /**
-   * `! 函名(...)` 的实参 vs 形参默认值类型。
+   * `! 函名(...)` 的实参个数与实参/形参默认值类型。
    *
-   * 2.0 没有形参类型标注：默认值字面量是唯一的静态类型事实；无默认值的形参是动态类型，
+   * 个数（S5.6 additive，`core/func/arg-count`）：2.0 只按位置传参、没有可变参数，
+   * 缺必填 / 多给都落不到函数签名上——此前**静默**（产物照发，语义由引擎猜）。
+   * 类型：2.0 没有形参类型标注：默认值字面量是唯一的静态类型事实；无默认值的形参是动态类型，
    * 传什么都不判（§7.3：core 不做跨函数类型推断）。
    */
   private checkCall(call: KojoCallStmt, scope: Scope): void {
     for (const arg of call.args) this.checkExpr(arg);
     const fn = this.functions.get(call.name);
     if (fn !== undefined) {
+      this.checkArgCount(call, fn);
       for (let index = 0; index < call.args.length; index++) {
         const arg = call.args[index]!;
         const param = fn.params[index];
@@ -1014,6 +1119,38 @@ class FileChecker {
       }
     }
     if (call.body !== undefined) this.walkNarrative(call.body, scope);
+  }
+
+  /**
+   * 实参个数判定（`core/func/arg-count`；只对**本文件已声明**的 `@函` 做，外部名字不猜）。
+   *
+   * 必填下界按**位置**取：最后一个"没有默认值"的形参的序号 + 1——默认值可以写在中间
+   * （parser 不强制尾部），若只看"无默认值形参个数"，`函(a=1, b)` 给 1 个实参就会被
+   * 误判成"没缺"。上界 = 形参表长度。
+   */
+  private checkArgCount(call: KojoCallStmt, fn: KojoFunctionDecl): void {
+    const params = fn.params;
+    const given = call.args.length;
+    if (given > params.length) {
+      this.report(
+        'core/func/arg-count',
+        `函数“${call.name}”只有 ${params.length} 个形参：多出的 ${given - params.length} 个实参不会传给函数（§7.3）。`,
+        call.span,
+      );
+      return;
+    }
+    let required = 0;
+    for (let index = 0; index < params.length; index++) {
+      if (params[index]!.defaultValue === undefined) required = index + 1;
+    }
+    if (given < required) {
+      const param = params[required - 1]!;
+      this.report(
+        'core/func/arg-count',
+        `函数“${call.name}”的第 ${required} 个形参“${param.name}”没有默认值：实参至少要给 ${required} 个，这里只给了 ${given} 个（§7.3）。`,
+        call.span,
+      );
+    }
   }
 
   /* ------------------------------ 表达式里的数组下标 ------------------------------ */
@@ -1049,6 +1186,12 @@ class FileChecker {
       const info = this.decls.get(name);
       if (info !== undefined && info.kind === 'var' && info.isArray) {
         this.checkIndex(text.slice(cursor + 1, end), info.arraySize, this.spanWithin(expr, cursor, end - cursor + 1));
+      } else if (info === undefined) {
+        // 外部数组（additive）：与文件内数组同一条越界判据
+        const variable = this.domainVariable(name);
+        if (variable !== null && variable.isArray) {
+          this.checkIndex(text.slice(cursor + 1, end), variable.arraySize, this.spanWithin(expr, cursor, end - cursor + 1));
+        }
       }
       index = end + 1;
     }
@@ -1084,7 +1227,12 @@ class FileChecker {
     const local = scope.get(name);
     if (local !== undefined) return local;
     const info = this.decls.get(name);
-    if (info === undefined) return this.domainVariable(name)?.type ?? 'unknown';
+    if (info === undefined) {
+      const variable = this.domainVariable(name);
+      // 裸外部数组名没有静态值语义（元素要靠下标）：不猜，留 unknown
+      if (variable === null || variable.isArray) return 'unknown';
+      return variable.type;
+    }
     if (info.kind === 'function' || info.kind === 'pool' || info.kind === 'template') return 'unknown';
     return info.type;
   }
@@ -1094,11 +1242,21 @@ class FileChecker {
    *
    * 旧 adapter 省略这一面 ⇒ 恒 `null` ⇒ 名字解析链与今天**逐字节一致**（仍报未声明）。
    * `valueKind` 直接进值类型格：`character` 只可能从这里来（AST 的 `# 变量` 没有这个词）。
+   *
+   * 数组面（additive；K2-SEMA-WIRING）：`arraySize` 键**存在**（含 `null`）= 数组；
+   * 元素类型 = `elementKind ?? valueKind`（adapter 不另给元素类型时，条目的 valueKind 就是
+   * 元素类型）；`arraySize: null` = 长度不可静态求值 ⇒ 认下标但不判越界。
    */
-  private domainVariable(name: string): { readonly type: KojoSemaType; readonly readonly: boolean } | null {
+  private domainVariable(name: string): DomainVariableFact | null {
     const found = findDomainVariable(this.adapter, name);
     if (found === undefined) return null;
-    return { type: found.valueKind, readonly: found.readonly === true };
+    const isArray = found.arraySize !== undefined;
+    return {
+      type: found.elementKind ?? found.valueKind,
+      readonly: found.readonly === true,
+      isArray,
+      arraySize: isArray ? (found.arraySize ?? null) : null,
+    };
   }
 
   private attributeType(attribute: string): KojoSemaType | null {
@@ -1126,13 +1284,17 @@ class FileChecker {
     const lengthRef = LENGTH_REF_RE.exec(text);
     if (lengthRef !== null) {
       const info = this.decls.get(lengthRef[1]!);
-      return info !== undefined && info.isArray ? 'int' : 'unknown';
+      if (info !== undefined) return info.isArray ? 'int' : 'unknown';
+      // 外部数组的 `.长度` 也是声明长度（additive 数组面）
+      return this.domainVariable(lengthRef[1]!)?.isArray === true ? 'int' : 'unknown';
     }
 
     const elementRef = ELEMENT_REF_RE.exec(text);
     if (elementRef !== null) {
       const info = this.decls.get(elementRef[1]!);
-      return info !== undefined && info.isArray ? info.type : 'unknown';
+      if (info !== undefined) return info.isArray ? info.type : 'unknown';
+      const variable = this.domainVariable(elementRef[1]!);
+      return variable !== null && variable.isArray ? variable.type : 'unknown';
     }
 
     if (isIdentifier(text)) {
@@ -1144,7 +1306,8 @@ class FileChecker {
         return info.type;
       }
       const variable = this.domainVariable(text);
-      if (variable !== null) return variable.type;
+      // 裸外部数组名（additive）：元素要靠下标取，裸名没有静态值语义 ⇒ 不猜
+      if (variable !== null) return variable.isArray ? 'unknown' : variable.type;
       return this.isNameFunction(text) ? 'string' : 'unknown';
     }
     return 'unknown';

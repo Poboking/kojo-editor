@@ -6,6 +6,7 @@ import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
 import { SearchPanel } from './SearchPanel';
+import { kojo2PreviewBottomView } from './kojo2-preview-host';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
 import { revealInExplorer } from './reveal-explorer';
@@ -935,6 +936,18 @@ export function ProjectView({
     return StableSearch;
   }, []);
 
+  /**
+   * Kojo 2.0「编译预览」内建底部视图（K2-EDITOR-MOUNT ①）。
+   *
+   * 挂载点选**既有底部面板区**（与「问题」同一容器、同一种 `UIPanelContribution`），
+   * 不新造面板宿主：面板体的数据由编辑器侧的预览入口经模块桥推送（`kojo2-preview-host`），
+   * 本文件只负责"有没有这只视图"。
+   *
+   * flag 关 ⇒ `kojo2PreviewBottomView()` 返回 `null`，底部区连 tab 都不出现（零挂载零监听；
+   * 开关是装配那一刻读的，与语言面 / 诊断同一条口径）。
+   */
+  const kojo2PreviewView = useMemo(() => kojo2PreviewBottomView(), []);
+
   const builtinViews = useMemo<UIPanelContribution[]>(
     () => [
       {
@@ -968,8 +981,9 @@ export function ProjectView({
         defaultActive: false,
         component: problemComponent,
       },
+      ...(kojo2PreviewView === null ? [] : [kojo2PreviewView]),
     ],
-    [fileTreeComponent, problemComponent, searchComponent],
+    [fileTreeComponent, problemComponent, searchComponent, kojo2PreviewView],
   );
 
   /**

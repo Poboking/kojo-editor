@@ -59,6 +59,8 @@ import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { planAddExtraRoot } from './workspace-roots';
 import { getKojo2CutoverController } from './kojo2-cutover';
+// K2-CUTOVER-STAGE：阶段切换后的宿主效果注入口（设置页只负责改档，不认识 Monaco）
+import { installKojo2CutoverStageEffects } from './kojo2-cutover-settings';
 // 2.0 打开入口闸（K2-EDITOR-OPEN-PATHS）：开关关着时它只回 `off`，打开路径逐字不变
 import { routeKojo2OpenPath } from './kojo2-open-paths';
 import {
@@ -215,6 +217,30 @@ function omitPaths(prev: ReadonlySet<string>, gone: ReadonlySet<string>): Readon
  * 一定存在；隐私模式写失败由控制器自己吞成 `persisted=false`，不抛。
  */
 if (typeof window !== 'undefined') getKojo2CutoverController().attachStorage(window.localStorage);
+
+/**
+ * Kojo 2.0 切档的宿主效果（K2-CUTOVER-STAGE）：改档后让已开 model 按新阶段重挂语言。
+ *
+ * 重挂器住在 monaco 图里（`editor-model-pool-instance`），这里**动态 import**：
+ * 开机静态图（PS-10 的走图判据）一分不多，切档时才把它拉进来。失败不静默（铁律 4）：
+ * 重挂没做成只是"标签要重开/重载才换色"，用一条 warn 说出来，不挡任何操作。
+ */
+if (typeof window !== 'undefined') {
+  installKojo2CutoverStageEffects({
+    refreshAll: () => {
+      void import('./editor-model-pool-instance').then(
+        (module) => module.kojo2ModelLanguage.refreshAll(),
+        (error: unknown) => {
+          console.warn(
+            `[kojo2] 切档后重挂已开文件的语言失败（重载窗口可恢复）：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        },
+      );
+    },
+  });
+}
 
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
@@ -1534,6 +1560,20 @@ export function App(): ReactElement {
       // 固定标签不留悬空 pin（C2）
       setDirtyPaths((prev) => reconcilePathsAfterDiskChange(prev, del, renamed));
       setPinnedPaths((prev) => reconcilePathsAfterDiskChange(prev, del, renamed));
+      // K2 batch-5（K2-EDITOR-MOUNT ③）：改名 / 另存为改了扩展名（`.kojo` → `.kojo2`）时，
+      // 语言判据的答案会跟着变；仍活着的 model 必须立刻重判，否则"文件已经叫 2.0 了，
+      // 词法还挂在 v1 上"（整篇假错误）。重挂器住在 monaco 图里，与上面「切档后重挂」
+      // 同一条纪律：**动态 import**，不让 App 的启动模块图拖 monaco 进来。
+      // 池里没有这一份（改名链路重建 model 的常见情形）⇒ 那个函数返回 false、零动作。
+      if (renamed.length > 0) {
+        const pairs = renamed.map((r) => ({ from: r.from, to: r.to }));
+        void import('./editor-model-pool-instance').then(
+          (module) => {
+            for (const pair of pairs) module.retargetKojo2RenamedModel(pair.from, pair.to);
+          },
+          () => undefined, // 重挂器装不上 = 停旧判据（下一份 model 建时仍会按新路径判）
+        );
+      }
       // 最近文件摘除（MM-7）：被删的与被改名的旧路径从欢迎页列表移除并落盘
       // （真有变化才写：无变化不惊动渲染与存储）
       const gonePaths = [...del, ...renamed.map((r) => r.from)];

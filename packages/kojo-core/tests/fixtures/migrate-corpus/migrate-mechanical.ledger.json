@@ -1,0 +1,17 @@
+{
+  "id": "migrate-mechanical",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 53,
+    "errors": 2,
+    "firstErrorCode": "unknown-identifier"
+  },
+  "migration": {
+    "ok": true,
+    "unsupported": 0,
+    "unsupportedConstructs": [],
+    "outputLines": 29
+  }
+}

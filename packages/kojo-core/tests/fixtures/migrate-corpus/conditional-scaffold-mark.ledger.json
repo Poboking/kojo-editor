@@ -1,0 +1,17 @@
+{
+  "id": "conditional-scaffold-mark",
+  "status": "blocked",
+  "blockedReason": "v2-compile-failed",
+  "v1": {
+    "ok": true,
+    "lines": 24,
+    "errors": 0,
+    "firstErrorCode": null
+  },
+  "migration": {
+    "ok": true,
+    "unsupported": 0,
+    "unsupportedConstructs": [],
+    "outputLines": 12
+  }
+}

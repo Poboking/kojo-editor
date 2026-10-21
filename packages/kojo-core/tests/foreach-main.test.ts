@@ -225,7 +225,15 @@ describe('`@巡` 主链 · 作者数组事实', () => {
     expect(capture.requests[0]!.body[0]).toBe('SIF {__kojo_foreach_3_e == "好"}');
   });
 
-  it('长度解析成 0 ⇒ 计划写死"整块跳过"（`FOR i, 0, 0` = 零轮；不先跑一轮空体）', () => {
+  it('长度解析成 0 ⇒ 编译期拒收 `core/decl/bad-array-size`（§3.4.2：N 必须是正整数）', () => {
+    /*
+     * 期望翻转（K2-SEMA-WIRING）：这条用例原先断言"0 长数组照常编译、计划写死整块跳过"。
+     * 语义层接线后，`# 变量 空表 整数[零]`（零 = 0）与 parser 对字面量 `[0]` 的判据统一：
+     * 声明长度必须是正整数 ⇒ 该文件在编译期就 error、零字节，降糖拿不到这份声明
+     * （原来的 `skeleton.empty === 'skip'` 分支只剩"手工构造计划"时的防御路径）。
+     * 0 长语义若日后放开（K2-CODES 的 `# 变量 [0]` 语义），这条断言与 sema 的
+     * `core/decl/bad-array-size` 判据要一起回退。
+     */
     const source = [
       '# 机 开场',
       '# 常量 零 整数 = 0',
@@ -236,11 +244,8 @@ describe('`@巡` 主链 · 作者数组事实', () => {
     const capture = capturingBackend();
     const result = compile(source, foreachAdapter(), capture.backend);
 
-    expect(errorCodes(result)).toEqual([]);
-    const plan = capture.requests[0]!.plan;
-    expect(plan.length).toEqual({ kind: 'declared', size: 0 });
-    expect(plan.skeleton.empty).toBe('skip');
-    expect(plan.skeleton.start).toBe(0);
+    expect(errorCodes(result)).toEqual(['core/decl/bad-array-size']);
+    expect(result.erb).toBe('');
   });
 
   it('长度解析不出（未声明常量）⇒ 不进数组事实 ⇒ 按未声明报错（不静默放行）', () => {

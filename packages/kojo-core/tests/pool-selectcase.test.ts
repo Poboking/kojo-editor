@@ -216,7 +216,7 @@ describe('planPoolDispatch · 计划不自洽 → error（诊断 + 不产字节�
     expect(plan.style).toBe('error');
     expect(plan.cases).toEqual([]);
     expect(plan.reason).toContain('重复');
-    expect(plan.diagnostics.map((item) => item.code)).toEqual(['core/expr/not-expression']);
+    expect(plan.diagnostics.map((item) => item.code)).toEqual(['core/pool/duplicate-case']);
     expect(plan.diagnostics[0]?.severity).toBe('error');
     expect(plan.diagnostics[0]?.span?.start.line).toBe(6); // 第二个 `? 好感 == 0`
   });
@@ -270,7 +270,7 @@ describe('planPoolDispatch · 计划不自洽 → error（诊断 + 不产字节�
     ];
     const result = compile(source, FIXTURE_BACKEND);
     expect(result.ok).toBe(false);
-    expect(result.diagnostics.filter((item) => item.code === 'core/expr/not-expression')).toHaveLength(1);
+    expect(result.diagnostics.filter((item) => item.code === 'core/pool/duplicate-case')).toHaveLength(1);
   });
 });
 
@@ -449,7 +449,7 @@ describe('core 侧只发结构请求（零引擎关键字）', () => {
     expect(result.ok).toBe(false);
     expect(result.erb).toBe('');
     expect(result.sourceMap.lineCount).toBe(0);
-    expect(result.diagnostics.map((item) => item.code)).toContain('core/expr/not-expression');
+    expect(result.diagnostics.map((item) => item.code)).toContain('core/pool/duplicate-case');
     expect(probe.requests).toHaveLength(0);
   });
 

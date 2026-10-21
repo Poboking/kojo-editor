@@ -1,0 +1,17 @@
+; @kojo-migration-corpus · 来源: packages/plugins/kojo-sugar/tests/goldens/spec-3.3-narration-author-color.kojo
+; 复制口径: 本头注之后 = 源文件逐字节复制（编码/EOL 原样；本文件 EOL=LF）
+; 语料分层: v1 产物 + 迁移台账（2.0 产物不可得，见 .ledger.json）
+; 说明: 规范 §3.3 `旁白色: 作者色`（取色声明 2.0 搬 profile → unsupported）
+; 片段补全: 剥掉源文件首部 `//` 说明横幅（与 kojo-sugar golden 测试 readKojo 同口径，由 loader 施加）
+// Golden fixture —— 旁白口径（`旁白色: 作者色`）· 无引号文本产出非 D 系
+// 来源：docs/SYNTAX-SUGAR-SURFACE-SPEC.md §3.3 / §5.1（`d = (旁白色 == 默认) 且 not speech`）
+// 用途：锁定"无引号 + 非 D"这一原生高频形态（语料 12.8 万行）的可转译性；
+//       与 spec-6.2 不同，本 fixture **不带** `旁白色:` 声明时旁白走 D 系——
+//       两张 golden 合起来锁死旁白口径对 D 归属的作用。
+角色: 12
+旁白色: 作者色
+
+时机 指令 310：
+    她点了点头。
+    她叹了口气。 续
+    「今天也来训练了？」

@@ -27,6 +27,7 @@ import type {
   KojoDiagnostic,
   KojoEmitBackend,
   KojoSpan,
+  SourceMap,
 } from '@kojo/kojo-core';
 import {
   FIXTURE_ADAPTER,
@@ -43,9 +44,28 @@ export interface Kojo2DiagnosticsInput {
   readonly filePath: string;
 }
 
-/** 编译入口的最小产物形状（默认实现是 core `compileKojoSource`；测试可注入替身） */
+/**
+ * 编译入口的最小产物形状（默认实现是 core `compileKojoSource`；测试可注入替身）。
+ *
+ * `erb` / `sourceMap` 是**additive 可选项**（K2-EDITOR-MOUNT ①）：诊断链路本来就把它们
+ * 算出来了（core `CompileKojoResult` 结构兼容），只是过去在这里被丢掉。填上它们，
+ * 预览面板才能消费**同一次**编译的产物与 source map——两处各编译一次是两份不同源的
+ * 结果，错位会静默跳到隔壁行。
+ */
 export interface Kojo2DiagnosticCompileResult {
   readonly diagnostics: readonly KojoDiagnostic[];
+  /** 同一次编译的产物文本；省略 = 这个入口只提供诊断（预览不亮） */
+  readonly erb?: string;
+  /** 与 `erb` **同一次**编译的 source map；与 `erb` 成对出现 */
+  readonly sourceMap?: SourceMap;
+}
+
+/** 一次编译里"预览真正要"的那两格（诊断结果自带的产物，K2-EDITOR-MOUNT ①） */
+export interface Kojo2DiagnosticsArtifacts {
+  /** 产物文本（core 成功口径：`lines.join('\n') + '\n'`；编译失败 = `''`） */
+  readonly erb: string;
+  /** 与 `erb` 同一次编译的 source map（`lineCount === splitKojoGeneratedLines(erb).length`） */
+  readonly sourceMap: SourceMap;
 }
 
 /** 编译入口端口：source + filePath → 诊断（同步；异步由上层 sync 模块负责） */
@@ -76,6 +96,13 @@ export interface Kojo2DiagnosticsResult {
   readonly filePath: string;
   readonly diagnostics: readonly KojoDiagnostic[];
   readonly markers: readonly Monaco.editor.IMarkerData[];
+  /**
+   * 同一次编译的产物 + source map（K2-EDITOR-MOUNT ①；`null` = 这一轮没有可预览的产物）。
+   *
+   * **可省略**：注入的编译入口只答诊断（旧替身 / 未来的纯诊断 worker）时不提供，
+   * 消费方按"没有产物"处理。本服务自己产出的结果总是显式给 `null` 或对象。
+   */
+  readonly artifacts?: Kojo2DiagnosticsArtifacts | null;
   /** 编译入口抛错时的消息（`null` = 编译入口正常返回；不是诊断） */
   readonly error: string | null;
   readonly errorCount: number;
@@ -163,6 +190,7 @@ export function createKojo2Diagnostics(
       assertInput(input);
       let diagnostics: readonly KojoDiagnostic[] = [];
       let markers: readonly Monaco.editor.IMarkerData[] = [];
+      let artifacts: Kojo2DiagnosticsArtifacts | null = null;
       let error: string | null = null;
       try {
         const compiled = compile(input);
@@ -171,17 +199,25 @@ export function createKojo2Diagnostics(
         }
         diagnostics = compiled.diagnostics;
         markers = kojo2DiagnosticsToMarkers(options.monaco, diagnostics, input.source);
+        // 一次编译两处消费（K2-EDITOR-MOUNT ①）：产物与 source map 只在**同一支编译入口**
+        // 里成对出现，缺一半就当没有（不拿上一轮的 map 配这一轮的产物）。
+        if (typeof compiled.erb === 'string' && compiled.sourceMap !== undefined) {
+          artifacts = { erb: compiled.erb, sourceMap: compiled.sourceMap };
+        }
       } catch (thrown) {
-        // 编译入口抛错不是"没有诊断"：保留 error 读数，markers 清空（上层据此清旧波浪线）
+        // 编译入口抛错不是"没有诊断"：保留 error 读数，markers 清空（上层据此清旧波浪线）；
+        // 产物同样作废（半成品字节不许进预览）。
         error = messageOf(thrown);
         diagnostics = [];
         markers = [];
+        artifacts = null;
       }
       const errorCount = countSeverity(diagnostics, 'error');
       return {
         filePath: input.filePath,
         diagnostics,
         markers,
+        artifacts,
         error,
         errorCount,
         warningCount: countSeverity(diagnostics, 'warning'),

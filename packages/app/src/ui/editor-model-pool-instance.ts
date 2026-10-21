@@ -25,6 +25,8 @@ import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   createKojo2ModelLanguageController,
   languageIdForKojo2Model,
+  retargetKojo2ModelPath,
+  type Kojo2LanguageModelLike,
 } from './kojo2-model-language';
 import { createEditorModelPool } from './editor-model-pool';
 
@@ -78,3 +80,28 @@ export const editorModelPool = createEditorModelPool({
   modelVersion: (model) => model.getAlternativeVersionId(),
   writeText: (kernel, path, text) => kernel.io.writeText(path, text),
 });
+
+/* ============================== 另存为 / 改名接线（K2-EDITOR-MOUNT ③） ============================== */
+
+/**
+ * 盘上改名 / 另存为之后，把**仍活着的** model 按新路径重判 2.0 语言面。
+ *
+ * 接线点在壳层的盘上事实收尾（`App.tsx` 的 `onFilesGone`：`{ from, to }` 的唯一产地处）——
+ * 改名把 `.kojo` 变 `.kojo2` 时，语言判据的答案会跟着变，不重判就是"文件已经叫 2.0 了，
+ * 词法还挂在 v1 上"。
+ *
+ * 判据全在 `retargetKojo2ModelPath`（纯函数、可单测）；本函数只把池与控制器绑上去：
+ * - 池里没有这一份（改名链路重建 model 的常见情形）⇒ `false`，新 model 建时 `attach`
+ *   已按新路径判过，这里不猜；
+ * - flag 关 ⇒ 控制器无挂载 ⇒ `false`（零监听、零动作，v1 行为逐字不变）。
+ */
+export function retargetKojo2RenamedModel(fromPath: string, nextPath: string): boolean {
+  return retargetKojo2ModelPath(
+    { fromPath, nextPath },
+    {
+      liveModel: (filePath) =>
+        editorModelPool.liveModel(filePath) as unknown as Kojo2LanguageModelLike | undefined,
+      retarget: (model, path) => kojo2ModelLanguage.retarget(model, path),
+    },
+  );
+}

@@ -8,7 +8,15 @@
  */
 import type { KojoSpan } from './ast.js';
 
-/** core 首批稳定码（与设计稿 §11.3 一一对应；词法/迁移类为 C1 实现所需 additive 扩码） */
+/**
+ * core 首批稳定码（与设计稿 §11.3 一一对应；词法/迁移类为 C1 实现所需 additive 扩码）。
+ *
+ * **闭集只增不改**（§11.3 / §16.6 S5.6）：既有码的字符串、与文案/级别语义一律不动。
+ * S5.6 批（码表补齐）additive 扩入：`core/pool/duplicate-case`、`core/func/arg-count`、
+ * `core/array/whole-assign`、`core/weave/not-weavable`——每条都在声明处写清生产者、
+ * 分工与消息模板；`core/decl/bad-array-size` 早已在表内（`# 变量 x 整数[0]` 仍按设计稿
+ * §3.4.2「N 必须是正整数」拒收，不新增码、不放开 0 长）。
+ */
 export type CoreDiagnosticCode =
   /* 词法与结构（C1 additive） */
   | 'core/lex/anchor'
@@ -59,6 +67,20 @@ export type CoreDiagnosticCode =
   | 'core/pool/unknown-call'
   | 'core/pool/cycle'
   | 'core/pool/default-not-last'
+  /**
+   * 等值分派计划里**同一主语下的等值键重复**（`lower/expand/pool-plan.ts`；§7.1 / §16.2 C2.6）。
+   * 两档同值无法区分：`IF` 链取第一个命中，等值分派同样会静默取第一个 ⇒ 计划不自洽，
+   * **fail-closed 不产字节**（调用方报完即停）。
+   *
+   * 与 `core/expr/not-expression` 的分工：后者是"这一行/这个条件根本不是表达式"（语法面）；
+   * 本码是"形态完全合法、但两条分支落同一个键"（计划面）。此前借用前者，作者读到的
+   * 提示指向了错误的修法方向。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板：`池「{池名}」的等值键 {整数} 重复出现（第 {i} / {j} 个分支）：等值分派会静默
+   * 取第一个，必须改成互不相同的整数（§7.1）。`
+   */
+  | 'core/pool/duplicate-case'
   | 'core/template/missing-slot'
   | 'core/template/unexpected-slot'
   | 'core/template/multi-slot'
@@ -89,6 +111,18 @@ export type CoreDiagnosticCode =
   | 'core/control/constant-condition'
   | 'core/control/unsupported'
   | 'core/array/unsupported'
+  /**
+   * **数组整体赋值**（`sema/check.ts::checkNameAssign`；§3.4.2 / §9.2）。
+   * `队列 = 1` 这类写法：2.0 不支持数组整体赋值（没有数组字面量 / 整体比较 / 切片），
+   * 作者该写元素（`队列[下标] = 值`）或 `.长度` 只读读取。
+   *
+   * 与 `core/expr/type-mismatch` 的分工：后者说的是"值的类型和槽不匹配"（换个值还能写）；
+   * 本码说的是"这个赋值目标整体就不收"（任何值都不行），修法完全不同。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板：`“{名字}”是数组：2.0 不支持数组整体赋值，请写元素（\`{名字}[下标]\`，§9.2）。`
+   */
+  | 'core/array/whole-assign'
   | 'core/goto/unsupported'
   | 'core/goto/unknown-label'
   | 'core/goto/duplicate-label'
@@ -99,6 +133,21 @@ export type CoreDiagnosticCode =
   | 'core/func/return-mixed'
   | 'core/func/missing-return'
   | 'core/func/void-value'
+  /**
+   * **`! 函名(...)` 的实参个数不符**（`sema/check.ts::checkCall`；§7.3）。
+   * 两种成因同码：缺必填（形参没有默认值却没给）与多给（实参数超过形参表）。
+   * 2.0 只按**位置**传参、没有可变参数 ⇒ 两种都是"这个调用根本落不到函数签名上"，
+   * 此前完全静默（产物照发，运行期少/多参的语义由引擎猜）。
+   *
+   * 与 `core/template/arg-count` 的分工：后者只属于 `# 模板` 的插槽调用（模板有自己的
+   * 形参口径，见 `template.ts`），**不得挪用**到 `@函` 调用上。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板（缺必填）：`函数“{名}”的第 {n} 个形参“{形参}”没有默认值：实参至少要给 {n} 个，
+   * 这里只给了 {m} 个（§7.3）。`
+   * 消息模板（多给）：`函数“{名}”只有 {n} 个形参：多出的 {m-n} 个实参不会传给函数（§7.3）。`
+   */
+  | 'core/func/arg-count'
   | 'core/func/recursion-unsupported'
   /* 原生与织入 */
   | 'core/native/empty'
@@ -109,6 +158,20 @@ export type CoreDiagnosticCode =
   | 'core/weave/shadowed-listener'
   | 'core/weave/scene-inside'
   | 'core/weave/unsupported'
+  /**
+   * 事件在 adapter 目录里声明 **`weavable: false`**（`project/weave-layers.ts`；§8.6 / §16.3 A3.9）。
+   * 事件形状认得出、`@织` 写法也合法，但这类事件运行期不会被监听调用 ⇒ 挂上去是死代码，
+   * 逐块 `blocked`。
+   *
+   * 与 `core/weave/unsupported` 的分工：后者是"adapter 没有这个事件 / 优先级模型不落修饰词"
+   * （能力面缺落点）；本码是"事件明确声明不可监听"（数据面拒收）。此前两者共用前者，
+   * 作者看到的"未知事件"提示与事实相反。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板：`事件「{事件}」在 adapter 目录里声明为不可被 @织 监听（{落点}）——挂上去
+   * 运行期不会执行，已阻断。`
+   */
+  | 'core/weave/not-weavable'
   /* 迁移、profile、feature */
   | 'core/migration/if'
   | 'core/migration/switch'

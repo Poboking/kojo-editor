@@ -104,6 +104,9 @@ import { installKojo2SemanticTokensProvider } from '../monaco/kojo2-semantic';
 // **本文件仍不认识任何具体 adapter**：2.0 adapter 由宿主组合根经 `GlobalProviderOptions`
 // 注入（那枚对象不在 `game.adapter` 槽位上，见该接口的注），语言层零游戏名词（解耦审计 A）。
 import { installKojo2LanguageProviders } from '../monaco/kojo2-providers';
+// K2 batch-5：2.0 一键迁移 code action（纯逻辑 + Monaco 翻译层同在那一枚里）。
+// 宿主只注入"怎么落地"（同一条 `applyTextEdits`），本文件仍零游戏名词。
+import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   SIGNATURE_LOOKBACK_LINES,
@@ -1527,6 +1530,21 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
           monaco,
           kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
         ),
+      );
+      // K2 batch-5：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 / 心形 / 着色 / 随机 /
+      // 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进），语言 id 只认 `kojo2`。
+      // 改写规则全在 core 迁移器（本层只做定位 + 搬运 + 校验）；**落地走同一条**
+      // `applyTextEdits`（前后各一颗 undo 停点，CODEACTION-UNDO-STACK 口径）——
+      // 不新造第二条编辑应用机制，也不让 Monaco 自己 apply（那会绕开停点）。
+      globalDisposers.push(
+        installKojo2CodeActionProvider(monaco, {
+          applyEdits: (model, edits) => {
+            const ctx = owningPaneOf(model);
+            const ed = ctx?.editorRef.current ?? null;
+            if (!ctx || !ed) return false;
+            return applyTextEdits(ed, edits);
+          },
+        }),
       );
     }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。

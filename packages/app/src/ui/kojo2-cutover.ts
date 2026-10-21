@@ -36,8 +36,11 @@
  * ```
  *
  * 存储键与既有预演开关 `ui/kojo2-flag.ts` 的 `kojo.ui.kojo2Cutover.v1` **分开**：那一格是
- * "2.0 面要不要挂"的布尔预演开关，本文件是"切到哪一档 + 哪个文件破例"的计划书；
- * K2-CUTOVER 收口时由设置页把两者对齐（见交付报告的 wiring 请求）。
+ * "2.0 面要不要挂"的布尔预演开关，本文件是"切到哪一档 + 哪个文件破例"的计划书。
+ *
+ * **K2-CUTOVER-STAGE 起两者已对齐**：阶段是唯一真源，`kojo2-flag` 反过来由阶段派生
+ * （`stage !== 'v1-only'` 即"2.0 面开启"）。旧布尔键只作**兼容读**：`'on'` 视作 `dual`
+ * （规则见 {@link stageFromLegacyKojo2Flag}，宿主开机 `attachStorage` 时正好迁移一次）。
  */
 
 import {
@@ -87,6 +90,42 @@ export const KOJO2_STAGE_LABELS: Readonly<Record<Kojo2CutoverStage, string>> = {
 /** 运行期阶段守卫（持久化里读到脏值 / devtools 传错，一律回缺省，不抛） */
 export function isKojo2CutoverStage(value: unknown): value is Kojo2CutoverStage {
   return value === 'v1-only' || value === 'dual' || value === '2.0-default';
+}
+
+/* ---------------------- 2.0 面开没开：阶段派生的唯一判据 ---------------------- */
+
+/**
+ * 旧布尔预演键（K2-CUTOVER-STAGE 之前 `ui/kojo2-flag.ts` 的唯一真源）。
+ *
+ * 现在它只是**兼容读**：盘上没有切换计划时才看它。键名常量住在这里、由
+ * `ui/kojo2-flag.ts` re-export 同一枚（全仓不再有第二份可漂移的字面量）。
+ */
+export const KOJO2_LEGACY_FLAG_KEY = 'kojo.ui.kojo2Cutover.v1';
+
+/**
+ * 这一档允不允许挂 2.0 面（`v1-only` = 不允许；`dual` / `2.0-default` = 允许）。
+ *
+ * 这是 `isKojo2CutoverEnabled()` 的**唯一**语义来源：所有既有 flag 守卫（语言面 / 主题 /
+ * 诊断 / 预览 / 拖放清单）零改动，只是背后的判据从"布尔键"换成了"阶段"。
+ */
+export function kojo2StageAllowsSurface(stage: Kojo2CutoverStage): boolean {
+  return stage !== 'v1-only';
+}
+
+/**
+ * 旧布尔键 → 阶段的**迁移规则（写死）**：只有 `'on'` 算数，映射到 `dual`。
+ *
+ * 为什么是 `dual` 而不是 `2.0-default`：旧键的语义只是"把 2.0 面挂上"，不是"老文件按内容
+ * 指纹改判"。映射到 `dual` ⇒ 老 `.kojo` 一行都不动、`.kojo2` 打得开，正好等于旧键当年
+ * 承诺的效果；`'off'` / `'ON'` / `'1'` / 乱写一律不参与（失败方向 = 少露）。
+ *
+ * 适用面（与 `ui/kojo2-flag.ts` 的解析顺序同一条）：**盘上计划缺席、或计划还停在缺省档
+ * `v1-only`** 时才看它。`v1-only` 既是缺省值、也是开机自动写下的基线（没人"选"过），
+ * 不该把 batch-3/4 里翻过旧开关的人静默关掉；一旦作者在新设置页**显式**改过档，旧键就被
+ * 删掉（{@link createKojo2CutoverController} 的提交路径），阶段从此独占真源。
+ */
+export function stageFromLegacyKojo2Flag(raw: string | null): Kojo2CutoverStage | null {
+  return raw === 'on' ? 'dual' : null;
 }
 
 /** 阶段下标（未知 = 缺省位置 0） */
@@ -555,6 +594,50 @@ export interface Kojo2CutoverStorage {
 /** 存储键（与 `ui/kojo2-flag.ts` 的 `kojo.ui.kojo2Cutover.v1` 分开，见模块头注） */
 export const KOJO2_CUTOVER_STORAGE_KEY = 'kojo.ui.kojo2Cutover.plan.v1';
 
+/** 从注入 storage 读一格原始字符串（读抛错 / 没挂 storage 一律 null，不抛进调用方） */
+function readStorageString(storage: Kojo2CutoverStorage | null, key: string): string | null {
+  if (storage === null) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 解析一份计划文档的**阶段**（纯函数：不读 storage、不碰全局）。
+ *
+ * 坏 JSON / 坏版本 / 坏阶段一律 `null`（调用方回缺省，不抛）。导出给 `ui/kojo2-flag.ts`
+ * 做热路径缓存：那里按"计划原始串有没变"决定要不要重解析（`refreshMarkers` 之类每击键
+ * 都会问一次开关，不能每次都 `JSON.parse` 一份含 override 表的文档）。
+ */
+export function parseKojo2CutoverStage(raw: string | null): Kojo2CutoverStage | null {
+  if (raw === null || raw.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const document = parsed as { version?: unknown; stage?: unknown };
+  if (document.version !== 1) return null;
+  return isKojo2CutoverStage(document.stage) ? document.stage : null;
+}
+
+/**
+ * 读盘上的阶段（**清过坏值**：坏 JSON / 坏版本 / 坏阶段一律 null，调用方自行兜底）。
+ *
+ * 导出给 `ui/kojo2-flag.ts` 单源派生用：那边只认"盘上有没有一档"，不需要 override 清单。
+ * 本函数不碰全局 `localStorage`——`storage` 是注入进来的那一份（与控制器同一纪律）。
+ */
+export function readKojo2CutoverStage(
+  storage: Kojo2CutoverStorage | null,
+  key: string = KOJO2_CUTOVER_STORAGE_KEY,
+): Kojo2CutoverStage | null {
+  return parseKojo2CutoverStage(readStorageString(storage, key));
+}
+
 /** 落盘文档（版本位留给将来的字段演进；读不懂的一律回缺省） */
 interface PersistedCutoverPlan {
   readonly version: 1;
@@ -663,7 +746,13 @@ export interface Kojo2CutoverController {
   attachStorage(storage: Kojo2CutoverStorage | null): void;
   /** 摘掉持久化端口（之后的改动只留在内存） */
   detachStorage(): void;
-  /** 恢复出厂：缺省阶段 + 清空 override + 删存储键 */
+  /**
+   * 恢复出厂：缺省阶段 + 清空 override + 删存储键。
+   *
+   * 只动**计划**这一格。旧布尔键不在这里删（本模块只碰自己那一个键的历史记账）：宿主做
+   * "恢复出厂"要两件一起做——用 `ui/kojo2-cutover-settings.tsx` 的 `resetKojo2CutoverAll`
+   * （先删旧键再 `reset`），否则计划一删，旧键 `'on'` 会把解析拉回 `dual`。
+   */
   reset(): void;
 }
 
@@ -730,10 +819,27 @@ export function createKojo2CutoverController(
     for (const listener of [...listeners]) listener(next);
   }
 
+  /**
+   * 显式改档 = 迁移完成：把旧布尔键删掉（只删**存在**的那一格，免得给"删了几次"记账添噪）。
+   *
+   * 不删的后果：计划一旦被 `reset()` 删掉，旧键 `'on'` 会重新把解析拉回 `dual`——"恢复出厂
+   * 了但 2.0 面还开着"。删不掉的后果只是"旧键继续生效"（读侧规则不变），不抛进调用方。
+   */
+  function retireLegacyFlag(): void {
+    if (storage === null) return;
+    if (readStorageString(storage, KOJO2_LEGACY_FLAG_KEY) === null) return;
+    try {
+      storage.removeItem(KOJO2_LEGACY_FLAG_KEY);
+    } catch {
+      /* 删不掉：旧键留着，读侧仍按 {@link stageFromLegacyKojo2Flag} 的规则解释 */
+    }
+  }
+
   function commitStage(next: Kojo2CutoverStage): Kojo2CutoverStage {
     if (!isKojo2CutoverStage(next) || next === stage) return stage;
     stage = next;
     persist();
+    retireLegacyFlag();
     emit();
     return stage;
   }
@@ -810,12 +916,24 @@ export function createKojo2CutoverController(
       storage = next;
       persisted = next !== null;
       const plan = readPersistedPlan(next, storageKey);
+      const legacy = stageFromLegacyKojo2Flag(
+        readStorageString(next, KOJO2_LEGACY_FLAG_KEY),
+      );
       if (plan !== null) {
         stage = plan.stage;
         overrides.clear();
         for (const [path, parser] of plan.overrides) overrides.set(path, parser);
+        // K2-CUTOVER-STAGE：计划停在缺省档 `v1-only` 且旧键还是 `'on'` ⇒ 抬到 `dual` 并写回。
+        // `v1-only` 同时也是开机自动写下的基线（没人选过），旧键才是 batch-3/4 里作者真正
+        // 拨过的那一只开关；显式改过档的人不会有旧键（提交路径已把它删掉），所以这条不会
+        // 覆盖任何人的明确选择。规则见 {@link stageFromLegacyKojo2Flag}。
+        if (stage === 'v1-only' && legacy !== null) {
+          stage = legacy;
+          persist();
+        }
       } else if (next !== null) {
-        // 盘上还没有计划：把当前状态写下去（"我看到的这一档"就是基线）
+        // 盘上还没有计划：旧键 `'on'` ⇒ 以 `dual` 起步，再把手里的这一档写成基线。
+        if (legacy !== null) stage = legacy;
         persist();
       }
       emit();

@@ -61,7 +61,17 @@ import type { PreferencesInstaller } from './use-editor-preferences';
 // K2 batch-3：2.0 诊断接线（flag 关时安装器立即返回空操作，连监听都不挂）。
 // 住在本实例 effect 里而不是 EditorPane：事件源（ed / filePathRef / sugarModelRef）都在
 // 这一拍之后才齐，且退场次序本来就由本 hook 的清账段钉死。
-import { installKojo2ProblemWiring } from '../kojo2-problem-wiring';
+import {
+  createKojo2CompileCache,
+  installKojo2ProblemWiring,
+  pathOfKojo2Model,
+} from '../kojo2-problem-wiring';
+// K2 batch-5（K2-EDITOR-MOUNT ①）：预览面板的入口与宿主桥。编译成品由上面那条诊断接线
+// 写进**同一个**缓存，预览只读——一次编译两处消费，绝不二次编译。
+import { createKojo2PreviewEntry } from '../kojo2-preview-entry';
+import { publishKojo2PreviewEntry } from '../kojo2-preview-host';
+import { isKojo2DiagnosticsPath } from '../kojo2-diagnostics-gate';
+import { revealLocationOf } from '../../monaco/reveal-position';
 // K2 batch-4：2.0 语言服务（`# 机` 事件目录）的 adapter 注入源。与上一行同一条宿主组合根
 // 豁免口径——语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由此注入。
 import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 2.0 语言服务 adapter 由宿主组合根注入（与 ui/kojo2-problem-wiring.ts 同一豁免口径）
@@ -278,6 +288,47 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     });
     // 面包屑：刷新入口 + 光标/model 两条监听（判据与缓存全在 use-breadcrumb.ts）
     const disposeBreadcrumb = installBreadcrumb(ed, pushSelStatus);
+    /**
+     * Kojo 2.0 预览面板（K2-EDITOR-MOUNT ①）：入口在这一拍建，**编译成品不在这里算**。
+     *
+     * - `compile` 只读 {@link kojo2CompileCache}：那里面装的就是下面诊断接线那次 core 编译
+     *   的产物 + 同源 source map（一次编译两处消费；预览二次编译会让两份结果不同源）；
+     * - `onJumpToSource` 走既有导航通道 `editor.revealLocation`（App 开文件 / 定位），
+     *   与问题面板、转到定义同一条腿，不新造第二套跳转；
+     * - flag 关 ⇒ `createKojo2PreviewEntry` 返回 `null`：下面零监听、零桥、零面板。
+     */
+    const kojo2CompileCache = createKojo2CompileCache();
+    const kojo2Preview = createKojo2PreviewEntry({
+      compile: (filePath) => kojo2CompileCache.getLastCompile(filePath),
+      onJumpToSource: (filePath, line, column) => {
+        kernel.bus.emit(
+          'editor.revealLocation',
+          revealLocationOf({ path: filePath, line, column }, '编译预览'),
+        );
+      },
+    });
+    // 宿主桥：壳层底部面板用 `useSyncExternalStore` 读它（`null` 入口 ⇒ 只画一句 idle）
+    const unpublishKojo2Preview = publishKojo2PreviewEntry(kojo2Preview);
+    // 光标同步：只订"光标位置变化"一格（面板按行同步，同列变化不通知）
+    const disposeKojo2PreviewCursor = kojo2Preview?.attachCursor(ed) ?? (() => undefined);
+    /**
+     * 切标签：目标不是 `.kojo2`（或没有 model）⇒ **立即**撤面板，不等下一轮诊断。
+     *
+     * 路径判据与诊断接线同一条（`pathOfKojo2Model` + `isKojo2DiagnosticsPath`）——
+     * `onDidChangeModel` 那一拍 `filePathRef` 可能还是旧标签的值，所以以 model URI 为准。
+     * **糖投影 model 是派生物**（`inmemory://sugar/...`，不是文件）：跳过这一拍，别把它的
+     * 伪路径当文件塞给预览；糖视图的开关会让诊断那一条腿让路（派生物没有可诊断的语义），
+     * 预览随 `onCompile(null)` 一起撤——与波浪线同一个真相，回来时一起回来。
+     */
+    const kojo2PreviewModelSub =
+      kojo2Preview === null
+        ? null
+        : ed.onDidChangeModel(() => {
+            const model = ed.getModel();
+            if (model === null || sugarModelRef.current === model) return;
+            const next = pathOfKojo2Model(model, filePathRef.current);
+            kojo2Preview.setFile(next.length > 0 && isKojo2DiagnosticsPath(next) ? next : null);
+          });
     // Kojo 2.0 诊断（K2 batch-3）：内容变化 / 活动 model 切换两条监听 + 问题面板上账。
     // flag 关 ⇒ 安装器立即返回空操作（不挂监听、不碰 problem-store），v1 行为逐字不变。
     const disposeKojo2Problems = installKojo2ProblemWiring({
@@ -288,6 +339,14 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       markerHost: monaco,
       severitySource: monaco,
       notify,
+      // K2 batch-5：把这一轮编译的成品留下（预览唯一的读入口），并通知预览刷新 / 卸载
+      compileCache: kojo2CompileCache,
+      onCompile: (filePath) => {
+        if (kojo2Preview === null) return;
+        if (filePath === null) kojo2Preview.setFile(null);
+        else if (kojo2Preview.snapshot().filePath !== filePath) kojo2Preview.setFile(filePath);
+        else kojo2Preview.refresh();
+      },
     });
     // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
     const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
@@ -317,6 +376,13 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       focusDisposer.dispose();
       disposeBreadcrumb();
       disposeKojo2Problems();
+      // K2 batch-5：预览入口先摘桥再 dispose（撤下后面板不再拿到半死的句柄）；
+      // 次序与诊断同段：面板数据源（缓存）随实例一起走，不留上一实例的产物。
+      disposeKojo2PreviewCursor();
+      kojo2PreviewModelSub?.dispose();
+      unpublishKojo2Preview();
+      kojo2Preview?.dispose();
+      kojo2CompileCache.clear();
       viewCurSub.dispose();
       viewScrSub.dispose();
       viewFindSub?.dispose();

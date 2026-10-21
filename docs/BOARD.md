@@ -37,15 +37,22 @@
 | K2-CUTOVER | 单批切换：app 接线/主题合并/`.kojo` 扩展名/退役旧解析器；**批次三先做预演（feature flag）** | 仓内无旧 golden/旧分支；全量测试不回退；发布态单一模式 | 批次三认领：lead（`K2-CUTOVER-PRE` 拆出） |
 | K2-PRE-REUSE | 旧后端复用面缺陷：①字面量编码器（心形 `@"…"`）②空产物守门被注释穿透 ③写后回读失败不回滚 ④诊断列折回物理行 ⑤CJK 函数头自证 | 每条红→绿用例；只修复用面；全量不回退 | 批次三认领：lead · 来源：语言实现审阅（workbuddy 注 2026-10-22：**②③⑤ 已由本组落 dev**＝`c11cb3d4` 注释穿透 / `08ac046d` 回读回滚 / `51eef191` CJK 函数头，回执与读数在各提交信息；**① 字面量编码器本组认领后遇 429 未开工**，④ 与 POS-UTIL 合流——①④ 留给 lead 批次三收口时定派） |
 | K2-RELEASE | R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真实工程人工验收 | P0 全完成；eraTW 完整体验；反向回滚可用 | 待认领 |
-| K2-EDITOR-MOUNT | 宿主挂载残项（批次三/四已交付组件与接线，**预览面板仍未挂载**）：①预览面板挂到 ProjectView/底部面板（复用诊断那次编译的缓存，禁二次编译）；②诊断真壳验收（只出现 2.0 来源、切标签撤条、失败 toast）；③`controller.retarget()` 接到另存为/改名链路；④存储账本接 kernel storage（水合镜像 + 串行队列，见 K2-STORAGE-HOST） | 每项 flag 关 ⇒ v1 逐字不变；真壳读数；不抢 v1 marker owner | 待认领 · 认领：lead 2026-10-22 |
-| K2-STORAGE-HOST | 槽位持久化**宿主接线**：注册表（22 tests）+ 账本两阶段提交模块（34 tests）已交付；**未做**：kernel.storage 异步端口适配（镜像+队列）、`previousSnapshot` 持久化（P0：本账本无 valueType/arraySize，不能反哺 registry）、`recycled` 落账拦截、失败上屏映射 | 崩溃不留半批；换盘 error 上屏；改型跨构建可检测 | 部分交付 · 认领：lead 2026-10-22 |
-| K2-SEMA-WIRING | 语义层接主链：`sema/checkKojoFile`（63 tests）与 `expr/**`（147 tests）已交付并进公共面；**未接线**：编译主链/宿主诊断调用点（与 lowering 同码同 span 按 `(code, span)` 去重）、`missing-return` 归属（避免项目层二次报）、外部变量数组面（`名[下标]`/`.长度`） | 不双报；错误不产字节；外部变量零假阳 | 待认领 · 认领：lead 2026-10-22 |
-| K2-INCR-HOLES | 增量编译器已知洞：结构化模型自检失败即 `degraded` 永久全量（任意行位置插入任意结构行可复现）；多行替换/全文替换仍整份重建（263–368ms）；`选项`/BOM 文件永久全量；槽族正则需随新槽族同步 | 每次退化可见（`degradedReason`）；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
-| K2-NATIVE-DEDENT | `@原生`/原生块残项：core `lower/native.ts` 的去缩进诊断列折回物理行（v1 折行面已由 `foldPositionToPhysical` 收口，核心面未接）；raw 块行 sourceMap 仍整块挂块首行；`@`/`[SKIPSTART]` 块边界仍按逻辑行 | 折行/CRLF/CJK 列回映；字节级透传不回退 | 待认领 · 认领：lead 2026-10-22 |
+| K2-STORAGE-HOST | 槽位持久化**宿主接线**：注册表（22）+ 账本两阶段提交（40）+ 宿主 adapter（48，水合/镜像/串行队列/records/`previousSnapshot` 还原/`recycled` 拦截/失败上屏码）已交付；**未做**：项目打开时的生产接线（建 host → hydrate → loadPreviousSnapshot → registry → commit → flush，调用序见 adapter 头注） | 崩溃不留半批；换盘 error 上屏；改型跨构建可检测 | 部分交付 · 认领：lead 2026-10-22 |
+| K2-PROJECT-HOST | 项目级分析接宿主：`kojo2-project-analysis`（37 tests，10k @函 median 46ms）+ 扫描器装配面已交付；**未做**：生产把 `kojo2Project`（enabled + eraTW adapter）传进 `scannerDeps()`（adapter 进开机图的取舍） | 同轮扫描不二次读盘；flag 关零动作 | 部分交付 · 认领：lead 2026-10-22 |
+| K2-MIGRATION-CORPUS | 仓内迁移语料（22 份 / 211KB）+ differential harness（40 tests）+ 语料回归（101 tests）+ `migrate-diff` CLI 已交付（迁移率 26.9%；differs 3 / blocked 19，未洗白）；**未做**：真实语料机接入（`KOJO_MIGRATION_CORPUS_DIR` 已备）与双 golden 比例提升 | 状态与 manifest 期望相符；golden 逐字节 | 部分交付 · 认领：lead 2026-10-22 |
+| K2-INCR-HOLES | 增量编译器已知洞：结构化模型自检失败即 `degraded` 永久全量（任意行位置插入任意结构行可复现）；多行/全文替换仍整份重建；`选项`/BOM 文件永久全量；槽族正则需随新槽族同步（sema 并表已随主链接线补上） | 每次退化可见（`degradedReason`）；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
+| K2-NATIVE-COLUMNS | `@原生` source map 物理列：core 已备 `NativeLineColumns` 消费端与 `column-fold` 单源；**未做**：parser 收集每行被剥码元数（`lineColumns`，Tab=4 宽剥）+ 块内纯空白行按 `raw` 保留（§C2.10 规则 4 vs §8.5 冲突待裁）；落地需翻转 `sourcemap-segments` 一条 golden | 折行/CRLF/CJK 物理列正确；字节零丢失 | 待认领 · 认领：lead 2026-10-22 |
+| K2-ADAPTER-PROFILE | 迁移 differential 发现：`createEratwEmitBackend` 把 `eratwLoweringProfile()`（`narrationColor='author'`）写死，project/adapter profile 覆盖到不了 backend ⇒ v1 旁白 D 系 vs 2.0 非 D 系必然 differs | profile 覆盖可达；该 differential 腿转 normalized-equal | 待认领 · 认领：lead 2026-10-22 |
+| K2-MIGRATE-QUOTE | v1 台词 `「…」` 是内容、2.0 把引号当语法剥掉 ⇒ 有台词的迁移必 differs；迁移器应否改 `角色：「…」`→`> 「…」` 属语义决策 | 口径落字；differential 状态可解释 | 待认领 · 认领：lead 2026-10-22 |
+| K2-EVENT-FACEWORD | 迁移器接受任意 `时机` 面词（`事件 22`/`日常 4`/`标记`）⇒ 产物 `# 机` 撞 `event/unknown`（红灯类 blocked，3 份语料中招）；`成否:`/`类型:` 命名参数 26 处不可迁移 | 面词白名单或迁移期显式阻断 + 台账 | 待认领 · 认领：lead 2026-10-22 |
 
 > **批次三并行说明（2026-10-21/22）**：17 路子 agent 按互不重叠写域推进（FOREACH/OPTIONS/EDITOR-WIRE/EDITOR-SEMANTIC/EDITOR-MIGRATE-UI/MIGRATE-SEMANTIC/CONFORMANCE/PERF-INCR/TS-RUNTIME/SOURCEMAP-HOST/STORAGE-HOST/CUTOVER-PRE，加接线 OPTIONS-WIRE/FOREACH-WIRE/EDITOR-HOOKUP，加 parser 健壮性修复）。组长统一收口、跑门、提交。完成行按协议删行，回执进提交信息。
 
 ## 批次四（2026-10-22，已交付）
 
 > **批次四 17 路全部交付并接主链**（EXPR-AST/SEMA-TYPES/TABLE-SELECTCASE/POOL-SELECTCASE/PROGRAM-RECURSION/FEATURE-GATE-UNIFY/WEAVE-LAYER/SOURCEMAP-SEGMENTS/PERF-INCR-FALLBACK/CONFORMANCE-CLI/STORAGE-PERSIST/EDITOR-PROVIDERS/EDITOR-OPEN-PATHS/MIGRATE-MOUNT/PREVIEW-PANEL/TS-WORKER/CUTOVER-THEME）+ 3 路收口（raw 块字节透传 + lift 回滚、递归闸单源 + domainSymbols.variables、表/池 SELECTCASE 落点契约化）。完成行已删，回执进提交正文。
+
+## 批次五（2026-10-22，已交付）
+
+> **批次五 10 路全部交付**（STORAGE-HOST-FULL / SEMA-WIRING / EDITOR-MOUNT / NATIVE-DEDENT / CUTOVER-STAGE / MIGRATION-DIFFERENTIAL / PROJECT-HOST / CODES / CODE-ACTIONS / RELEASE-GATE）；完成行已删，回执进提交正文。
 

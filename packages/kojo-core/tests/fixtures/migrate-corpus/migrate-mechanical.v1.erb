@@ -1,0 +1,53 @@
+; 旧注释
+#DIM 旧变量, 0
+@M_KOJO_K灵梦
+RESULTS = "_灵梦口上"
+
+@M_KOJO_灵梦口上_MESSAGE_COM_K灵梦_310
+CALL M_KOJO_灵梦口上_MESSAGE_COM_K灵梦_310_1
+RETURN RESULT
+
+@M_KOJO_灵梦口上_MESSAGE_COM_K灵梦_310_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	IF 恋慕 >= 500
+		PRINTFORML 「你好。」
+	ELSEIF 恋慕 >= 100
+		PRINTFORMDW 她笑了。
+	ELSE
+		CALL HPH_PRINT(@"呀。","w")
+	ENDIF
+	$主菜单
+	GOTO 主菜单
+	SETCOLOR 0xFF8080
+	PRINTFORMDW 红色旁白。
+	RESETCOLOR
+	LOCAL = RAND:2
+	SELECTCASE LOCAL
+		CASE 0
+			PRINTFORMW 「甲。」
+		CASE 1
+			PRINTFORMW 「乙。」
+			PRINTFORMDW 旁白。
+	ENDSELECT
+	CALL HPH_PRINT(@"哇。","w")
+	SETCOLOR 0x4682B4
+	CALL HPH_PRINT(@"我也很高兴。","w")
+	RESETCOLOR
+	IF TFLAG:1
+		PRINTFORMW 「行内。」
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_K灵梦_打招呼
+#FUNCTION
+	CALL 早安()
+	RETURNF 1
+
+@M_KOJO_K12_310
+PRINTFORMW 原生行
+

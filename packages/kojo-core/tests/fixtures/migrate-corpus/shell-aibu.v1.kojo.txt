@@ -1,0 +1,16 @@
+; @kojo-migration-corpus · 来源: packages/plugins/eratw-adapter/tests/fixtures/default-sugar/爱抚指令.kojo
+; 复制口径: 本头注之后 = 源文件逐字节复制（编码/EOL 原样；本文件 EOL=LF）
+; 语料分层: v1 产物 + 迁移台账（2.0 产物不可得，见 .ledger.json）
+; 说明: adapter 脚手架空壳（只有 `;` 注释：v1 侧报 block-empty）
+; 片段补全: 无（源文件即完整 v1 输入）
+; 《取证作品》· 影狼（K63）— 爱抚指令
+; 剧本1 · 版本 1.0 · 作者：取证作者
+;
+; 【面说明】爱抚指令面：爱抚系指令（COM）时的反应台词。
+; 【函数形态】M_KOJO_MESSAGE_${com}_K63_{i}
+;   {i} = 时机编号（按游戏内事件/指令编号填写）。
+;   ${com} = 指令类型段（COM / SCOM / CUSTOM_COM / CUSTOM_SCOM）。
+;   有家族段（别人版口上）时，家族段插在 M_KOJO 之后的下划线处。
+;
+; —— 脚手架生成的空壳文件：只有注释，没有活函数 ——
+; 请在下方开始创作（ERB 函数定义以 @ 开头）。

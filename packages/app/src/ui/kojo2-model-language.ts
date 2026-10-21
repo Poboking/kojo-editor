@@ -403,3 +403,51 @@ export function createKojo2ModelLanguageController(
     },
   };
 }
+
+/* ============================== 另存为 / 改名的接线口（K2-EDITOR-MOUNT ③） ============================== */
+
+/** 路径改写接线的注入面（真身绑 `editor-model-pool-instance`，测试逐格替换） */
+export interface Kojo2ModelPathRetargetDeps {
+  /** 按路径取**活着的** model（真身 = `editorModelPool.liveModel`，判等走 `pathKey`） */
+  readonly liveModel: (filePath: string) => Kojo2LanguageModelLike | undefined;
+  /** 真身 = `kojo2ModelLanguage.retarget`（未挂 / flag 关 ⇒ `false`） */
+  readonly retarget: (model: Kojo2LanguageModelLike, nextPath: string) => boolean;
+}
+
+/**
+ * 改名 / 另存为之后：把逗留着的 model 按**新路径**立即重判语言面。
+ *
+ * ## 为什么要有这一格（而不是让调用方自己拼两句）
+ *
+ * 路径改写发生在壳层（`App` 的盘上事实收尾：`{ from, to }` 一对），而 model 住在池里；
+ * 判据（路径相等 / 空路径 / 池里没有 / flag 关）与失败方向必须只有一份。改名把
+ * `.kojo` 变成 `.kojo2` 时，`languageIdForKojo2Model` 的答案会跟着变——不重判就是
+ * "文件已经叫 2.0 了，词法还挂在 v1 上"（整篇假错误）。
+ *
+ * ## 口径
+ *
+ * - `from === to` / `nextPath` 为空 ⇒ `false`（没有可改的事实，零动作）；
+ * - 池里没有这份（改名链路重建了 model 的常见情形）⇒ `false`：新 model 建的时候
+ *   `attach` 已经按新路径判过，这里再猜一次只会瞎改；
+ * - 任何一格抛错 ⇒ `false`（`false` 只是"没改"，不是失败；绝不抛进壳层的事件链）；
+ * - flag 关 ⇒ 控制器那一格自己就是 `false`（没有挂载，零监听），本函数不做第二判定。
+ */
+export function retargetKojo2ModelPath(
+  input: { readonly fromPath: string; readonly nextPath: string },
+  deps: Kojo2ModelPathRetargetDeps,
+): boolean {
+  if (input.fromPath === input.nextPath) return false;
+  if (input.nextPath.length === 0) return false;
+  let model: Kojo2LanguageModelLike | undefined;
+  try {
+    model = deps.liveModel(input.fromPath);
+  } catch {
+    return false;
+  }
+  if (model === undefined) return false;
+  try {
+    return deps.retarget(model, input.nextPath);
+  } catch {
+    return false;
+  }
+}

@@ -1,0 +1,1325 @@
+; ============================================================
+; 发版验证样例 · 全语法面长跑用例（release-check）
+; ------------------------------------------------------------
+; 这份文件是**发版判据①（`.kojo` 编辑 → 保存 → 编译 → 真实游戏可跑）的输入**。
+; 它与教学样例（`teaching-full.kojo`）的分工不同：
+;   · 教学样例 = 每种写法各一个、旁边讲规则，给人读；
+;   · 本文件 = 把写法**混在真实口上的结构里长跑**：多时机、多分野、嵌套块、
+;     中英双套关键字、原生直通、别名四形态全部同时出现，用来压实机与自动化守门。
+; 机器守门：packages/kernel/tests/sugar-releasecheck.transpile.test.ts
+;   （转译零 error + 产物与 golden 逐字节一致 + **词表覆盖率断言**：
+;    关键字表里每个语义 id 的中英两种词形、每个时机分野、每个中文运算符，
+;    都必须在本文件里真实出现——漏了直接红，不靠人记得住。）
+;
+; 角色号为什么是 145：语料里 155 个角色有前人口上目录，145 号没有——
+; 编译产物 `@M_KOJO_K145` 一族不会和别人的口上撞函数名。
+; ⚠ 实机勾验时若你的存档里没有 145 号角色，**只改下面 `角色:` 那一行**即可
+;   （三件套与所有函数名都由它派生，正文一个字不用动）。
+; ============================================================
+; ---------- 头部声明：可选项全用满 ----------
+; `口上:` 行尾可挂 `选择器: <n>`（= 同一家族下的第 n 版口上，语料里的「别人版」写法，
+; 实测形如 `@M_KOJO_K58_1(ARG)` + `#LOCALSIZE/#LOCALSSIZE`）。作用面只有**登记函数**：
+; 名字带 `_{n}` 段并附两行预处理，时机函数名照旧走家族名 `M_KOJO_发版检查_…`。
+; 只写 `选择器:` 不写名字 = 名字变成「选择器: 1」整串（原样拼进函数名，不提示）。
+; B4-fp 文件头选项 `函数前缀:`：覆盖 adapter 的 `userFunction.template`。
+; 这里刻意写成与 adapter 缺省**完全等价**的模板（`M_KOJO_K{n}_{name}`），
+; 于是本文件既真跑到了"作者私有前缀"这条路，产物函数名又与缺省口径逐字相同
+; （下方 `@M_KOJO_K145_问候` 一族断言不受影响）。
+; P-4 文件头选项 `随机形: 直出`：整份文件的 `随机：` 块与行内简写都改产**直出形**
+; `SELECTCASE RAND:n` + `CASE i`（不占 `LOCAL` 槽，与语料近年主流逐字同构）。
+; 取值只有 `直出` 有意义，写别的值一律按缺省形（`LOCAL = RAND:n` + `SELECTCASE LOCAL`）处理。
+; 本文件因此**不出现** `LOCAL = RAND:` 形——那条口径由 kojo-sugar 单测与教学样例守着。
+; ---------- 别名四形态（§3.1 / §3.8） ----------
+; ① 变量别名（**可读可写**）：`X = 1`、`如果 X：` 都解析到原生变量
+; ② 角色别名（只读，插值里展开成显示名）
+; ③ 数值字面量别名（只读，表达式位置直接展开）
+; ④ 字符串字面量别名（只读）
+; ---------- 文件级常量（7 号批）----------
+; `常量 <名> = <整数>` / `const` 同形 → 产物**不发射任何声明**，只在文件顶部留一行注释
+; `; 常量 <名> = <值>（编译期展开为字面量，不占引擎全局名）`。为什么不发 `#DIM CONST`：
+; Emuera 里函数外的那个声明是**游戏级全局**，两个文件同名（或与语料 `.ERH` 撞名）会让
+; 游戏加载期整体失败；而这里所有引用在编译期已被字面量替换 ⇒ 声明纯属死重。
+; 常量名在本文件表达式里当**只读数值**用（裸名与 `CFLAG:<常量名>` 三段形都解析成数值）。
+; ============================================================
+; 时机一 · 初见（分野表第一行；无编号）
+; ============================================================
+; ============================================================
+; 时机二 · 指令 310（主力入口：全部控制流 + 演出）
+; ⚠ 这里**不写 `成否:`**：写了 `成否:` 工具就会为本时机生成 SUCCESS 函数，
+; 而下面「时机五」里有独立的 `时机 成功 310：`——两处会生成**同名函数**
+; `@M_KOJO_…_SUCCESS_COM_K145_310`（守门的"产物函数名不得重复"断言抓到的就是它）。
+; `成否:` 的四个取值改由 316–319 四个编号分别演示。
+; ============================================================
+; ============================================================
+; 时机三 · 指令 311（时机内子句：MESSAGECHECK 位协议）
+; ============================================================
+; 英文别名子句 `skip-scene` / `skip-kojo` 与中文等价。**必须换编号**：
+; 同一编号、同一面的两个时机各写 MESSAGECHECK 子句会生成**同名**钩子函数，
+; 游戏加载时就是重复定义（下面的守门断言正是为这类错误而加）。
+; ============================================================
+; 时机四 · 指令 312 类型: SCOM（副指令面；`类型:` 决定函数名里的段）
+; ============================================================
+; ---------- 命名参数 `成否:` 的四个取值各一个（§3.2 表；每个都生成自己的 SUCCESS 函数） ----------
+; ============================================================
+; 时机五 · 分野表逐项覆盖（每条一分野，产物函数名互不相同）
+; ============================================================
+; 1016 批：计数器名路径——`偷看` 经 adapter 计数器值域表换算成编号 2（产物同 `_COUNTER_K…_2`）
+; ============================================================
+; 时机五B · 附录 C 之外的新增实测分野（引擎源码确证 caller）
+; 每条一分野、产物函数名互不相同；`游玩指南结果` 的 `{i}` 是输入编号。
+; ============================================================
+; ============================================================
+; 时机五C · 图像面（附录 C #37）——尾部是**运行期形态名**（`%ARGS:1%`），
+; 不是编号：令牌原样拼进函数名（adapter 以 `indexKind: literal` 声明）。
+; 引擎以 3 实参调用 `…(ARGS:2,ARG:3,ARG:4)` ⇒ 必须声明 `参数: ARGS, ARG, ARG:1`。
+; ============================================================
+; ============================================================
+; 时机六 · 选项块（§3.7：一次时机只允许一个 选项，且不可嵌套）
+; ============================================================
+; ============================================================
+; 时机六B · 数字输入菜单块（§3.7B `菜单：`：逐条 `PRINTL [n] 标签` + `$INPUT_LOOP`
+;            回跳落点 + `INPUT` + `SELECTCASE RESULT` + `CASEELSE → GOTO` 回菜单）。
+;            与按钮形 `选项：` 的读回变量不同（`RESULT` vs `RESULTS`），产物形态照语料主流。
+; ============================================================
+; ============================================================
+; 时机六C · 问答块（2 号任务）——作者爱用的**引擎封装问答函数**：
+;          `询问 "提示语"：` 多选 → `CALL ASK_M(标签,条件,…)`（eraTW `@ASK_M`）；
+;          `确认 "提示语"：` 恰两项 → `CALL ASK_YN(标签,标签)`（eraTW `@ASK_YN`）。
+;          读回变量照引擎：`SELECTCASE RESULT` / `CASE 0..n-1`（0 基，按书写次序）。
+;          与 `选项：`（PRINTBUTTON+INPUTS+RESULTS）/ `菜单：`（PRINTL+INPUT+SELECTCASE）是
+;          **第三条管线**；函数名 / 参数 / 读回变量全由 adapter 模板声明（转译器里零硬编码）。
+;          中英双形同块各过一次。
+; ============================================================
+; ============================================================
+; 时机七 · 英文别名等价块（同一套语法，关键字换成英文；
+;          词表覆盖断言靠这一段证明"中英双收"不是纸面话）
+; ============================================================
+; ============================================================
+; 时机八 · 中文运算符全家桶（§4.3 全部词形逐个用上，含逻辑字面量 `真` / `假` / `空` 与 `异或`）
+; 一条件里混用中文与原生运算符，产物必须逐字等价——这既验"中英不串味"，
+; 也是判据①实机时要看到的现象之一（分支走对边）。
+; ============================================================
+; ============================================================
+; 自定指令块（HK-12）——`自定指令 <名> [编号: N] [可否使用: <条件>] [计数器不发: <条件>]：`
+; 产物 = NAME（`RESULTS = 赛钱`）/ ABLE（`RETURN 1`）/ 本体（記入チェック骨架）
+;        + 可选钩子（CAN_COM / COM_Counter不发，写了子句才生成）函数组；
+; 编号缺省时在 adapter 的 `customComRange`（eraTW 270–299）内取**最小未用**并防撞车
+; （迁移前手写的原生块若已占号，自动让位）。改名只动 RESULTS 值、编号不变。
+; ============================================================
+; ============================================================
+; 段块（E13）——库内「多信封分段」的可写形（1016 批只留 `若` 一词形；旧形 `段` / `section`
+; 与行尾 `（关）` 停用标记已删）。`若 <ERB条件>：` 逐段发 `LOCAL = 1` + `IF LOCAL && <条件>`
+; 信封。段的条件与 `如果` 同一条转译管线。
+; ⚠ 段必须占满时机正文的最外层（与普通语句混排报 `section-mixed`），故单开一个时机。
+; ============================================================
+; ============================================================
+; 时机九 · 循环 / 跳转 / 数据表 / 出错处理（1017-C：控制流四族中文写形逐个用上）
+; `循环结束` 一条写法对 NEXT / WEND / REND / LOOP 四枚闭合词——收束由开块模态决定；
+; `循环 <表达式> 次：` = 按那一项指定的次数重复（引擎 `REPEAT <表达式>`），
+; `循环 无限：` 才是不带次数参数的无限循环（裸 `REPEAT`）；
+; `跳到`（跳到标签）与 `函数跳转`（跳到一个函数调用串，余文逐字带走）是两形，不撞成一个叫法；
+; `循环：` 开出的块收盘上真形 `循环结束 当 <条件>`（引擎 `LOOP <条件>`）；
+; 数据表条目正文**逐字**透传（数据不是语句）；变体记号走 `原形`（翻类不翻义）。
+; TRY 系九枚（`TRYC…` 六枚配出错处理 / `TRY…LIST` 三枚）同一装置：`试探 原形 <记号> <原文>`，
+; 记号限定在那九枚之内，记号之后的余文（含行尾注释）**逐字**进产物——载荷是数据，不猜义项。
+; ============================================================
+; ============================================================
+; 用户函数最小面（B4，§7.2 重开）——`函数 <名>(形参…)：` 声明作者自己的函数
+; `调用 <名>(实参)` 是语句位置调用；裸 `返回` 是过程收尾（产物 `RETURN`）。
+; 产物函数名走 adapter 的 `userFunction.template`（`M_KOJO_K{n}_{name}`）。
+; 形参默认值（本批）：形参写成 `名 = 整数` → 产物形参段照写 `ARG = 整数`
+; （引擎声明位默认值；语料实测 1,078 处，如 `@CIRNO_ADJUST(ARG = 0)`）；
+; 允许只给前几个形参默认值、后几个照旧裸写。默认值是作者原文**逐字**透传。
+; ⚠ 本文件只用**过程态**（裸 `返回`，不产 `#FUNCTION`）——守门的
+; `#FUNCTION` / `#FUNCTIONEND` 配平断言要求两者成对；值函数（`返回 <值>`）会产
+; **不配对**的 `#FUNCTION` / `#FUNCTIONS`，那种形态改在单测
+; `kojo-sugar/tests/user-function.transpile.test.ts` 里验证。中英两套词形都用上。
+; ============================================================
+; ============================================================
+; 原生直通块（§3.10）——**必须放文件最后**
+; `@` 开头的块从该行起直到下一个 `@` 行或文件末尾整块透传；
+; 放在中间会把后面的时机块一起吞掉。用途：v1 未覆盖的入口、自定义工具函数、
+; 菜单 `$标签` + `GOTO` 回跳等不做 .kojo 化的写法。
+; ============================================================
+; 常量 发版检查_阈值 = 1200（编译期展开为字面量，不占引擎全局名）
+; 常量 发版检查_上限 = 3（编译期展开为字面量，不占引擎全局名）
+@M_KOJO_K145_1(ARG)
+#LOCALSIZE 1
+#LOCALSSIZE 1
+RESULTS = "_发版检查"
+RESULTS:1 = "发版检查用 · 全语法面"
+RESULTS:2 = "判据①实机输入<br>覆盖时机分野 / 控制流 / 插值 / 别名 / 演出 / 原生直通"
+
+@M_KOJO_FLAGSETTING_K145
+FLAG:眠姦口上有 = 1
+FLAG:時間停止口上有 = 0
+
+@M_KOJO_发版检查_ENCOUNTER_K145
+CALL M_KOJO_发版检查_ENCOUNTER_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_ENCOUNTER_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	; §3.3 三种节奏：等待（默认）/ 续（不等待，与下一行连打）/ 旁白（无引号）
+	PRINTFORMW 「……这里好暗。%CALLNAME:MASTER%是谁？」
+	; §3.3 行首 `你：` = 自机（玩家）台词：发一次 `SETCOLOR <自机色>` + 非 D 打印
+	SETCOLOR 0x4682B4
+	PRINTFORMW 是我。
+	RESETCOLOR
+	PRINTFORML 阴影里有两团光，比声音更早一步靠过来。
+	PRINTFORMW 「人家可是很凶的哦？」
+	; §3.4 插值四类别，由编辑器按变量字典自动判：
+	;   代词 → %CALLNAME:…% ；属性 → {族:作用域:名} ；
+	;   行内条件 → \@…?…#…\@ ；字面量与别名 → 原样展开
+	PRINTFORMW 「%CALLNAME:15%也来了吗？\@TALENT:TARGET:恋慕?人家才不怕呢。#……别、别过来。\@」
+	; §3.5 中文运算符与原生运算符混写（§4.3：等于 不等于 超过 至少 不足 至多 且 或 非）
+	IF CFLAG:TARGET:好感度 >= 500 && !(TARGET:反発刻印 > 1)
+		PRINTFORMW 「%CALLNAME:MASTER%的手是暖的。」
+	ELSE
+		PRINTFORMW 「……冷。」
+	ENDIF
+	; §3.10 源折行：行尾 `\` = 物理折行、逻辑同一行，产物只有一条 PRINT
+	PRINTFORMW 这段旁白刻意写得很长，用来验证折行只生成一条输出指令、不会在游戏里被切成三段。
+	; §3.8 安全线：正文裸文本里的"她""你"不做任何替换
+	PRINTFORMW 她的影子先一步缠上%CALLNAME:MASTER%的手腕。
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_310
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_310_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_310_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	; 嵌套：如果 里面再开 如果，缩进即块（ENDIF 全由工具补）
+	IF TALENT:TARGET:恋慕
+		PRINTFORMW 「……随%CALLNAME:MASTER%处置。」
+		IF CFLAG:TARGET:好感度 >= 500
+			CALL HPH_PRINT(@"呀……好烫。","w")
+		ELSE
+			PRINTFORMW 「就、就一下哦。」
+		ENDIF
+	ELSEIF TALENT:TARGET:思慕
+		PRINTFORML 「人家还没答应呢……」
+		PRINTFORMW 她别过脸，耳尖却红到根。
+	ELSEIF TARGET:反発刻印 >= 2
+		PRINTFORMW 「——痴汉！」
+	ELSE
+		PRINTFORMW 「……哈？」
+	ENDIF
+	; §3.5 单行形式：块头行尾直接跟内容 → 编译成完整 IF / 内容 / ENDIF 三行
+	IF TARGET:诶嘿嘿
+		PRINTFORMW 她笑出了声，又赶紧捂住嘴。
+	ENDIF
+	; §3.5 范围与取反：`是 … 到 …` / `X 不在 a 到 b`
+	IF !(CFLAG:TARGET:好感度 >= 0 && CFLAG:TARGET:好感度 <= 99)
+		PRINTFORMW 「轻一点啦。」
+	ENDIF
+	; 英文别名 `notin` 与 `到` 的等价词形（覆盖断言要求中英两种词形都真的被解析过）
+	IF !(TARGET:欲望 >= 8 && TARGET:欲望 <= 12)
+		PRINTFORMW 「还不够呢。」
+	ENDIF
+	; §3.11 分支：规则池（条件即注解）——条件走与 `如果` **完全相同**的降糖管线
+	; （属性 `她的X` / 中文运算符 `且`·`超过` / 别名与常量阈值都可直接写），块体第一层是
+	; `[条件]` 标签行、标签下缩进更深的是该分支正文，产物 = 一条 IF / ELSEIF / ELSE / ENDIF 链。
+	; 本池刻意混形（`且` + 不同主语 + 中文运算符）⇒ 按规范**不排序、保持书写顺序**；
+	; `[其他]` 是兜底（与 `[否则]` / `[else]` 等价）**必须写在最末**——缺兜底 = `rule-pool-no-fallback`、
+	; 兜底不在末尾 = `rule-pool-fallback-not-last`，两者都是 error 且**该块一条字节都不产**。
+	; 英文别名 `branch:` 的等价形在「时机七 · 英文别名等价块」里另走一遍（那一池是同主语数值比较，
+	; 触发 §3.11 的自动排序：阈值从窄到宽）。
+	IF TALENT:TARGET:恋慕 && CFLAG:TARGET:好感度 >= 500
+		PRINTFORMW 「……那、那里……！」
+		PRINTFORMW 她红着脸缩了一下身子。
+	ELSEIF TARGET:反発刻印 > 1
+		PRINTFORMW 「……请不要乱摸。」
+	ELSE
+		PRINTFORMW 她只是歪了歪头，像是没发生过任何事。
+	ENDIF
+	; §3.6 选择块：单值 / 多值 / 范围 / 兜底，四形态各一个
+	SELECTCASE TFLAG:193
+		CASE 1
+			PRINTFORMW 「不、不要……！」
+		CASE 2, 3
+			PRINTFORML 她绷紧了背。
+			PRINTFORMW 「……那里不行。」
+		CASE 5 TO 8
+			PRINTFORMW 「呜……」
+		CASEELSE
+			PRINTFORMW 她什么也没说，只是眯起眼睛看着%CALLNAME:MASTER%。
+	ENDSELECT
+	; §3.6 随机：块形态（等概率，修掉 RAND 连写的坑）与行内简写
+	; （本文件头开了 `随机形: 直出` ⇒ 这两处都产 `SELECTCASE RAND:n`，不占 `LOCAL` 槽）
+	; 候选组（E18）：一条候选想说好几句 ⇒ `组：` 收拢，产物与裸行候选同构（中英两形都过一遍）
+	SELECTCASE RAND:5
+		CASE 0
+			PRINTFORMW 「……呼。」
+		CASE 1
+			PRINTFORMW 「一句说完不够。」
+			PRINTFORMW 「再接一句。」
+		CASE 2
+			PRINTFORMW 「英文别名同形。」
+			PRINTFORMW 「也一样逐句透传。」
+		CASE 3
+			PRINTFORMW 「再、再一下嘛。」
+		CASE 4
+			PRINTFORMW 「%CALLNAME:MASTER%故意的吧。」
+	ENDSELECT
+	SELECTCASE RAND:3
+		CASE 0
+			PRINTFORMW 「嗯。」
+		CASE 1
+			PRINTFORMW 「哦？」
+		CASE 2
+			PRINTFORMW 「……哈？！」
+	ENDSELECT
+	; §3.3 空行语句（批 P / v1.5）：整行恰为 `空行` / `blank` → 打一行空行
+	; 默认**不等待**（裸 `PRINTFORML`）；`空行 等待` 才是等待形（`PRINTFORMDW`）。
+	PRINTFORML
+	PRINTFORML
+	PRINTFORMDW
+	; §3.5 / §3.6 表达式位置：赋值右侧的分支（`如果` 必须有 `否则`，`当` 必须有 `否则`）
+	IF CFLAG:TARGET:好感度 >= 500
+		CFLAG:TARGET:1088 = 1
+	ELSE
+		CFLAG:TARGET:1088 = 0
+	ENDIF
+	SELECTCASE TARGET:欲望
+		CASE 0 TO 2
+			TCVAR:TARGET:20 = 0
+		CASE 3 TO 5
+			TCVAR:TARGET:20 = 1
+		CASEELSE
+			TCVAR:TARGET:20 = 2
+	ENDSELECT
+	; 经验结算行（B5）：`结算 <表达式>` → 一行原生 `EXP:<表达式>`；中英两形都过一次
+	EXP:Ｍ経験 += 1
+	EXP:Ｍ経験 += 1
+	; 数值增减行（1016 批）：`增减 <族>:<对象>:<槽> <op> <增量>` → 一行 `CALL <族目标函数>(…)`；
+	; 中英两形、两族（CFLAG 槽在前 / BASE 对象在前）、`+=`/`-=` 两向都过一次。
+	; 初回（1 号任务）：`初回 "key"：` → `IF ONCE("key")` … `ENDIF`（引擎 `ONCE(...)` 访问器）
+	IF ONCE("发版检查_初见")
+		PRINTFORMW 「……第一次这样，是你。」
+	ENDIF
+	; §3.9 演出：心形四种模式（台词+等待 / 台词+续 / 旁白+等待 / 旁白+续）
+	CALL HPH_PRINT(@"……嗯。","w")
+	CALL HPH_PRINT(@"还想做……舒服ー的事……HPH","l")
+	CALL HPH_PRINT(@"她的呼吸乱了半拍。","dw")
+	CALL HPH_PRINT(@"她的呼吸乱了半拍。","dl")
+	; §3.9 着色块：SETCOLOR / RESETCOLOR 成对由工具保证
+	SETCOLOR 0xFF8080
+	PRINTFORMW 「这行是红的。」
+	; 着色块内插自机台词：run 收尾复原回**块色** 0xFF8080（非默认色）
+	SETCOLOR 0x4682B4
+	PRINTFORMW 这一段我也说。
+	SETCOLOR 0xFF8080
+	RESETCOLOR
+	; 着色块里再套如果（块内可以写其它块）
+	SETCOLOR 0x80FF80
+	IF TARGET:诶嘿嘿
+		PRINTFORMW 「嘿嘿。」
+	ELSE
+		PRINTFORMW 「……」
+	ENDIF
+	RESETCOLOR
+	; §3.10 原生直通行：行首全大写英文指令 → 整行原样透传（.kojo 不是围栏）
+	CFLAG:TARGET:1088 = 1
+	TFLAG:192 = 0
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_MESSAGECHECK_COM_K145_311
+IF TARGET:诶嘿嘿 == 0
+SETBIT RESULT, 0
+ENDIF
+IF FLAG:70
+SETBIT RESULT, 1
+ENDIF
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_311
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_311_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_311_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「呀……那里、不行……」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_MESSAGECHECK_COM_K145_315
+IF TALENT:TARGET:恋慕 == 0
+SETBIT RESULT, 0
+ENDIF
+IF TALENT:TARGET:思慕 == 0
+SETBIT RESULT, 1
+ENDIF
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_315
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_315_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_315_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「（英文子句）」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_SCOM_K145_312
+CALL M_KOJO_发版检查_MESSAGE_SCOM_K145_312_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_SCOM_K145_312_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「副指令也会走到这里。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_CUSTOM_COM_K145_313
+CALL M_KOJO_发版检查_MESSAGE_CUSTOM_COM_K145_313_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_CUSTOM_COM_K145_313_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「自定义指令面（CUSTOM_COM）。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_CUSTOM_SCOM_K145_314
+CALL M_KOJO_发版检查_MESSAGE_CUSTOM_SCOM_K145_314_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_CUSTOM_SCOM_K145_314_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「自定义副指令面（CUSTOM_SCOM）。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_SUCCESS_COM_K145_316
+TFLAG:192 = 0
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_316
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_316_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_316_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「成否位交给游戏判断。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_SUCCESS_COM_K145_317
+TFLAG:192 = 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_317
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_317_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_317_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「这次一定成。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_SUCCESS_COM_K145_318
+TFLAG:192 = -1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_318
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_318_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_318_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「这次不成。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_SUCCESS_COM_K145_319
+TFLAG:192 = -2
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_319
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_319_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_319_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「连这段都别放。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COUNTER_K145_20
+CALL M_KOJO_发版检查_MESSAGE_COUNTER_K145_20_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COUNTER_K145_20_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……%CALLNAME:MASTER%的手，好暖和。」
+ENDIF
+RETURN 1
+
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_B_K145
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_B_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_B_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	IF PALAM:欲情 >= PALAMLV:4 && TARGET:诶嘿嘿
+		CALL HPH_PRINT(@"呀啊……！！","w")
+	ELSE
+		PRINTFORMW 「……唔、嗯……」
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_B2_K145
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_B2_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_B2_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……不、不行，那样的话……」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_C_K145
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_C_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_C_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……哈啊，好累……」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_F_K145
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_F_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_F_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……这么快就……」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_A2_K145_1
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_A2_K145_1_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_A2_K145_1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「哈啊……」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_MARKCNG_K145
+CALL M_KOJO_发版检查_MESSAGE_MARKCNG_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_MARKCNG_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她看着自己手臂上多出来的纹章，沉默了很久。
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EXTRASOURCE_COM_K145_40
+CALL M_KOJO_发版检查_EXTRASOURCE_COM_K145_40_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EXTRASOURCE_COM_K145_40_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「这段是补充素材（EXTRASOURCE）。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_SUCCESS_COM_K145_310
+CALL M_KOJO_发版检查_SUCCESS_COM_K145_310_1
+RETURN RESULT
+
+@M_KOJO_发版检查_SUCCESS_COM_K145_310_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	IF CFLAG:TARGET:好感度 >= 500
+		TFLAG:192 = 1
+	ELSE
+		TFLAG:192 = 0
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_DAILY_EVENT_K145_100
+CALL M_KOJO_发版检查_DAILY_EVENT_K145_100_1
+RETURN RESULT
+
+@M_KOJO_发版检查_DAILY_EVENT_K145_100_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「今天也来训练了？」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EVENT_K145_100
+CALL M_KOJO_发版检查_EVENT_K145_100_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EVENT_K145_100_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	; 通用事件（EVENT 族）——与"特殊事件/自定义事件/日常"是四个不同函数名
+	PRINTFORMW 「%CALLNAME:MASTER%又来找我玩？」
+ENDIF
+RETURN 1
+
+@DIARY_发版检查_TEXT_K145
+CALL DIARY_发版检查_TEXT_K145_1
+RETURN RESULT
+
+@DIARY_发版检查_TEXT_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「被%CALLNAME:MASTER%摸了。\@TALENT:TARGET:恋慕?……也不是不行。#下次要收钱的。\@」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_SPEVENT_K145_1
+CALL M_KOJO_发版检查_SPEVENT_K145_1_1
+RETURN RESULT
+
+@M_KOJO_发版检查_SPEVENT_K145_1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「特殊事件（SPEVENT，带 SKIP 检查）。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_CUSTOM_EVENT_K145_5
+CALL M_KOJO_发版检查_CUSTOM_EVENT_K145_5_1
+RETURN RESULT
+
+@M_KOJO_发版检查_CUSTOM_EVENT_K145_5_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「剧本自定义事件入口。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EVENT_K145_ONABARE_1
+CALL M_KOJO_发版检查_EVENT_K145_ONABARE_1_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EVENT_K145_ONABARE_1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……%CALLNAME:MASTER%在看什么？」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EVENT_K145_PERMISSION_1
+CALL M_KOJO_发版检查_EVENT_K145_PERMISSION_1_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EVENT_K145_PERMISSION_1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「可以哦。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EVENT_K145_LOST_VIRGIN_STOP
+CALL M_KOJO_发版检查_EVENT_K145_LOST_VIRGIN_STOP_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EVENT_K145_LOST_VIRGIN_STOP_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……等一下。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EVENT_K145_PANCHIRA
+CALL M_KOJO_发版检查_EVENT_K145_PANCHIRA_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EVENT_K145_PANCHIRA_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她慌忙按住被风掀起的裙角。
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_ENDING_K145
+CALL M_KOJO_发版检查_MESSAGE_ENDING_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_ENDING_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「后来啊——」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_CHECK_K145_30
+CALL M_KOJO_发版检查_CHECK_K145_30_1
+RETURN RESULT
+
+@M_KOJO_发版检查_CHECK_K145_30_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	RESULTS = 1
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_FLAGSETTING_K145
+CALL M_KOJO_发版检查_FLAGSETTING_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_FLAGSETTING_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	CFLAG:TARGET:1088 = 0
+	TCVAR:TARGET:20 = 0
+ENDIF
+RETURN 1
+
+@CHARA_INFO_KOJO_发版检查_K145
+CALL CHARA_INFO_KOJO_发版检查_K145_1
+RETURN RESULT
+
+@CHARA_INFO_KOJO_发版检查_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……%CALLNAME:MASTER%想知道什么？」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_EVENT_K145_GIFT
+CALL M_KOJO_发版检查_EVENT_K145_GIFT_1
+RETURN RESULT
+
+@M_KOJO_发版检查_EVENT_K145_GIFT_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她拆开%CALLNAME:MASTER%递来的东西，愣了一下。
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_D_K145
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_D_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_D_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她的气息悄悄乱了一拍。
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_E_K145
+CALL M_KOJO_发版检查_MESSAGE_PALAMCNG_E_K145_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_PALAMCNG_E_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「唔……这种、黏糊糊的……」
+ENDIF
+RETURN 1
+
+@K145_发版检查_ROOM_DESCRIPTION
+CALL K145_发版检查_ROOM_DESCRIPTION_1
+RETURN RESULT
+
+@K145_发版检查_ROOM_DESCRIPTION_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「这就是%CALLNAME:MASTER%的房间？」
+ENDIF
+RETURN 1
+
+@KOJO_发版检查_OPTION_K145
+CALL KOJO_发版检查_OPTION_K145_1
+RETURN RESULT
+
+@KOJO_发版检查_OPTION_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「……还有这种玩法？」
+ENDIF
+RETURN 1
+
+@KOJO_发版检查_OPTION_EXIST_K145
+CALL KOJO_发版检查_OPTION_EXIST_K145_1
+RETURN RESULT
+
+@KOJO_发版检查_OPTION_EXIST_K145_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	RESULTS = 1
+ENDIF
+RETURN 1
+
+@KOJO_发版检查_OPTION_K145_RESULT_1
+CALL KOJO_发版检查_OPTION_K145_RESULT_1_1
+RETURN RESULT
+
+@KOJO_发版检查_OPTION_K145_RESULT_1_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「原来如此。」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_IMAGE_K145_特殊服装(ARGS,ARG,ARG:1)
+CALL M_KOJO_发版检查_IMAGE_K145_特殊服装_1(ARGS,ARG,ARG:1)
+RETURN RESULT
+
+@M_KOJO_发版检查_IMAGE_K145_特殊服装_1(ARGS,ARG,ARG:1)
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「这身衣服……怎么样？」
+	RESULTS = 1
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_IMAGE_EX_K145_特殊表情(ARGS,ARG,ARG:1)
+CALL M_KOJO_发版检查_IMAGE_EX_K145_特殊表情_1(ARGS,ARG,ARG:1)
+RETURN RESULT
+
+@M_KOJO_发版检查_IMAGE_EX_K145_特殊表情_1(ARGS,ARG,ARG:1)
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	RESULTS = 1
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_320
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_320_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_320_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她退到墙边，抬眼看%CALLNAME:MASTER%。
+	PRINTBUTTON "道歉，然后退开", "1"
+	PRINTBUTTON "继续", "2"
+	PRINTBUTTON "什么也不做", "3"
+	INPUTS
+	SELECTCASE RESULTS
+		CASE "1"
+			PRINTFORMW 「……唔。」
+			PRINTFORMW 她明显松了一口气。
+		CASE "2"
+			CALL HPH_PRINT(@"被%CALLNAME:MASTER%牵着的话……HPH","w")
+			IF TALENT:TARGET:恋慕
+				SETCOLOR 0xFFB0C8
+				PRINTFORMW 「……不要放手。」
+				RESETCOLOR
+			ELSE
+				PRINTFORMW 「疼。」
+			ENDIF
+		CASE "3"
+			PRINTFORML 她等了很久，最后自己别过脸去。
+			PRINTFORMW 「……真是的。」
+	ENDSELECT
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_321
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_321_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_321_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她抱着手臂等你决定。
+	PRINTL [1] 道歉，然后退开
+	PRINTL [2] 继续
+	PRINTL [3] 什么也不做
+	$INPUT_LOOP
+	INPUT
+	SELECTCASE RESULT
+		CASE 1
+			PRINTFORMW 「……唔，好吧。」
+		CASE 2
+			CALL HPH_PRINT(@"那……那来吧。HPH","w")
+			IF TALENT:TARGET:恋慕
+				PRINTFORMW 「不许放开手。」
+			ENDIF
+		CASE 3
+			PRINTFORMW 「……哼。」
+		CASEELSE
+			GOTO INPUT_LOOP
+	ENDSELECT
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_322
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_322_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_322_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 她歪着头等你回答。
+	PRINTFORMW 要不要一起修炼？
+	CALL ASK_M("好呀",1,"下次吧",0)
+	SELECTCASE RESULT
+		CASE 0
+			PRINTFORMW 「嗯！」
+		CASE 1
+			PRINTFORMW 「……算了。」
+	ENDSELECT
+	PRINTFORMW 英文别名同形：
+	CALL ASK_M("要",1,"不要",1)
+	SELECTCASE RESULT
+		CASE 0
+			PRINTFORMW 「那就开始吧。」
+		CASE 1
+			PRINTFORMW 「那下次。」
+	ENDSELECT
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_323
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_323_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_323_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 要开启了吗？
+	CALL ASK_YN("开启","关闭")
+	SELECTCASE RESULT
+		CASE 0
+			PRINTFORMW 「好。」
+		CASE 1
+			PRINTFORMW 「……嗯。」
+	ENDSELECT
+	PRINTFORMW 英文别名同形：
+	CALL ASK_YN("是","否")
+	SELECTCASE RESULT
+		CASE 0
+			PRINTFORMW 「嗯。」
+		CASE 1
+			PRINTFORMW 「再想想。」
+	ENDSELECT
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_330
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_330_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_330_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	IF TALENT:TARGET:恋慕
+		PRINTFORMW 「（中文台词，英文块头）」
+	ELSEIF TALENT:TARGET:思慕
+		PRINTFORML 「elif 分支」
+	ELSEIF TARGET:诶嘿嘿
+		PRINTFORML 「elseif 与 elif 等价，两种词形都收」
+	ELSE
+		PRINTFORMW 「else 分支」
+	ENDIF
+	SIF CFLAG:TARGET:好感度 >= 500
+		PRINTFORMW 「英文 then 与中文 则 等价（SIF 单行条件）」
+	SELECTCASE TFLAG:193
+		CASE 1, 2
+			PRINTFORMW 「is 多值」
+		CASE 0 TO 3
+			PRINTFORMW 「is 范围（to）」
+		CASEELSE
+			PRINTFORMW 「兜底」
+	ENDSELECT
+	SELECTCASE RAND:2
+		CASE 0
+			PRINTFORMW 「random 候选一」
+		CASE 1
+			PRINTFORMW 「random 候选二」
+	ENDSELECT
+	SELECTCASE RAND:2
+		CASE 0
+			PRINTFORMW 「行内一」
+		CASE 1
+			PRINTFORMW 「行内二」
+	ENDSELECT
+	PRINTBUTTON "cont 标记用英文", "1"
+	PRINTBUTTON "heart 用英文", "2"
+	INPUTS
+	SELECTCASE RESULTS
+		CASE "1"
+			PRINTFORML 「这一行不等待」
+			PRINTFORMW 「下一行才等待」
+		CASE "2"
+			CALL HPH_PRINT(@"……HPH","w")
+	ENDSELECT
+	PRINTL [1] menulabel 用英文
+	$INPUT_LOOP
+	INPUT
+	SELECTCASE RESULT
+		CASE 1
+			PRINTFORMW 「英文 `menu:` 与中文 `菜单：` 同形」
+		CASEELSE
+			GOTO INPUT_LOOP
+	ENDSELECT
+	; §3.11 英文别名块头 `branch:`（与中文 `分支：` 逐字节等价）+ 英文兜底标签 `[else]`
+	; （与 `[其他]` / `[否则]` 等价）。本池三条条件全是「同一主语 + 同一运算符 `>=` +
+	; 十进制整数字面量阈值」⇒ 恰好满足 §3.11 自动排序的全部四条，产物按**阈值从窄到宽**
+	; 发射（500 → 100 → 0），兜底恒在末尾。书写顺序刻意是宽在前——就是要在这枚长跑样例里
+	; 看到 ELSEIF 被重排，而不只在单测里。
+	IF CFLAG:TARGET:好感度 >= 500
+		PRINTFORMW 「（池·500）」
+	ELSEIF CFLAG:TARGET:好感度 >= 100
+		PRINTFORMW 「（池·100）」
+	ELSEIF CFLAG:TARGET:好感度 >= 0
+		PRINTFORMW 「（池·0）」
+	ELSE
+		PRINTFORMW 「（池·兜底）」
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_341
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_341_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_341_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	IF TARGET:反発刻印 == 0 && CFLAG:TARGET:好感度 != 0
+		PRINTFORMW 「条件成立。」
+	ENDIF
+	IF CFLAG:TARGET:好感度 < 100 || TARGET:欲望 <= 3
+		PRINTFORMW 「门槛没过。」
+	ENDIF
+	; 逻辑字面量中文主形：`真` / `假` / `空` → 引擎记号 `true` / `false` / `null`
+	; （产物永远是引擎记号，别名只影响输入）。长词优先：`不等于 真` 整对换成引擎写法，
+	; 不会被拆成 `非` + `等于`，也不产 `! =`。
+	IF TARGET:诶嘿嘿 == true && CFLAG:TARGET:1088 == false
+		PRINTFORMW 「一边是开的，一边是关的。」
+	ENDIF
+	IF TARGET:反発刻印 != null
+		PRINTFORMW 「刻印读得出来。」
+	ENDIF
+	; `异或` → `XOR`：两个布尔只占一边才进（实机判边时最容易看错的一条）
+	IF TARGET:诶嘿嘿 XOR CFLAG:TARGET:1088
+		PRINTFORMW 「只占一边。」
+	ENDIF
+	; 单行条件（5 号任务）：`如果 <条件> 则 <语句>` → `SIF <条件>` + 紧随一条语句（**不产 ENDIF**）
+	SIF CFLAG:TARGET:好感度 >= 500
+		PRINTFORMW 「那就好。」
+	IF ! TALENT:TARGET:恋慕
+		PRINTFORMW 「还不是喜欢。」
+	ENDIF
+	SELECTCASE CFLAG:TARGET:好感度
+		CASE 0 <= 99
+			PRINTFORMW 「刚认识。」
+		CASEELSE
+			PRINTFORMW 「熟客。」
+	ENDSELECT
+	; 文件级常量当数值用（7 号批）：裸名在编译期展开成常量的整数值
+	IF 1200 > 3
+		PRINTFORMW 「常量读得出来。」
+	ENDIF
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_355
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_355_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_355_1
+;-------------------------------------------------
+;NOWEX:噴乳（記入チェック＝1）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL && NOWEX:噴乳
+	PRINTFORMW 「涩涩的话」
+ENDIF
+;-------------------------------------------------
+;TFLAG:193（記入チェック＝1）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL && TFLAG:193
+	PRINTFORMW 「日常的对话」
+ENDIF
+RETURN 1
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_360
+CALL M_KOJO_发版检查_MESSAGE_COM_K145_360_1
+RETURN RESULT
+
+@M_KOJO_发版检查_MESSAGE_COM_K145_360_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	FOR LOCAL, 0, 3, 1
+		LOCAL + 1
+		LOCAL - 1
+		IF CFLAG:TARGET:好感度 >= 500
+			CONTINUE
+		ELSE
+			BREAK
+		ENDIF
+	NEXT
+	WHILE CFLAG:TARGET:好感度 < 500
+		RESTART
+	WEND
+	REPEAT 3
+		PRINTFORMW 「重复三轮。」
+	REND
+	REPEAT
+		BREAK
+	REND
+	DO
+		$RELCHK_LOOP_EXIT
+		GOTO RELCHK_LOOP_EXIT
+		JUMP M_KOJO_K145_回声()
+	LOOP 1
+	PRINTDATA
+		DATAFORM 「露出不愉快的表情…」
+		DATA 「随意应付了几句…」
+	ENDDATA
+	CATCH
+		PRINTFORMW 「这一段兜住。」
+	ENDCATCH
+	TRYCCALLFORM RELEASE_CHECK_TOOL
+	CATCH
+		PRINTFORMW 「缺函数时也兜住这一段。」
+	ENDCATCH
+	TRYCALLLIST RELEASE_CHECK_TOOL, M_KOJO_K145_问候
+	TRYCGOTO 1, $RELCHK_LOOP_EXIT
+ENDIF
+RETURN 1
+
+@KOJO_发版检查_COM_NAME_K145_270
+RESULTS = 赛钱
+
+@KOJO_发版检查_COM_ABLE_K145_270
+RETURN 1
+
+@KOJO_发版检查_CAN_COM_K145_270
+IF CFLAG:TARGET:好感度 >= 50
+RETURN 1
+ENDIF
+RETURN 0
+
+@KOJO_发版检查_COM_Counter不发_K145_270
+IF CFLAG:TARGET:好感度 >= 90
+RETURN 1
+ENDIF
+RETURN 0
+
+@KOJO_发版检查_COM_K145_270
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	PRINTFORMW 「要不要赛点钱？」
+ENDIF
+RETURN 1
+
+@M_KOJO_K145_问候(ARG = 1,ARG:1)
+	ARG = ARG + 1
+	CALL M_KOJO_K145_回声()
+	RETURN
+
+@M_KOJO_K145_回声
+	CALL M_KOJO_K145_问候()
+	RETURN
+
+@M_KOJO_COLOR_K145
+SETCOLOR 0xE4FC08
+
+@RELEASE_CHECK_TOOL
+#FUNCTION
+#DIM L_TOTAL
+#DIMS L_NAMES
+L_TOTAL = 0
+FOR LOCAL, 4
+    L_TOTAL += LOCAL
+NEXT
+$RELEASE_CHECK_LABEL
+LOCAL = L_TOTAL
+IF LOCAL >= 4
+    GOTO RELEASE_CHECK_DONE
+ENDIF
+PRINTFORMW 直通行的 FOR / NEXT / $标签 / GOTO 都原样保留
+RELEASE_CHECK_DONE = 1
+; 上面的 `= 1` 是行首 `$标签` 的跳转目标（引擎的标签写法），不是赋值
+#FUNCTIONEND
+
+
+@RELEASE_CHECK_COLOR_HELPER
+#FUNCTION
+; 分发器 / 配色函数一类的原生写法也走这条路
+SETCOLOR 0xF9906F
+PRINTFORMDW 这一行的颜色由原生 SETCOLOR 决定
+RESETCOLOR
+#FUNCTIONEND
+

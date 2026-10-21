@@ -2644,10 +2644,9 @@ function heartCall(text: string, speech: boolean, wait: boolean): HeartCall {
  *
  * `at` = 失败码元在源里的位置（1 基、逻辑全文坐标；由调用方按 `_rawAt` + 体偏移算）。
  *
- * 诊断码复用既有闭集里的 `internal`：`SugarDiagnosticCode` 是 plugin-api 的闭集
- * （本批改动面外），其中没有「字面量装不下」的码；文案写清这是**作者文本里的
- * 字符**（不是转译器异常）与唯一下一步（删字）。若后续允许扩码，应换成
- * `literal-unencodable` 一类专用码。
+ * 码是 `literal-unencodable`（S5.6 additive；契约闭集已收录）：它说的是"**作者文本里有
+ * 引擎字面量装不下的字符**"，不是"转译器异常"——文案必须给出唯一下一步（删字），
+ * 不能把作者引向"报障"。此前借用 `internal`，方向是反的。
  */
 function reportHeartLiteralFailure(
   sink: DiagnosticSink,
@@ -2656,7 +2655,7 @@ function reportHeartLiteralFailure(
 ): void {
   const first = failures[0]!;
   sink.report({
-    code: 'internal',
+    code: 'literal-unencodable',
     severity: 'error',
     message:
       `心形提示里有引擎字面量装不下的字符：${describeErbLiteralFailure(first)}。` +

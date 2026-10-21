@@ -1,0 +1,14 @@
+;kojo2: # 机 指令 317
+@M_KOJO_MESSAGE_COM_K12_317(ARG)
+CALL M_KOJO_MESSAGE_COM_K12_317_1(ARG)
+RETURN RESULT
+
+@M_KOJO_MESSAGE_COM_K12_317_1(ARG)
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+    PRINTFORMW 涩涩的话
+ENDIF
+RETURN 1

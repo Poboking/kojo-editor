@@ -1,0 +1,17 @@
+{
+  "id": "shell-zetcho",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 9,
+    "errors": 1,
+    "firstErrorCode": "block-empty"
+  },
+  "migration": {
+    "ok": true,
+    "unsupported": 0,
+    "unsupportedConstructs": [],
+    "outputLines": 9
+  }
+}

@@ -1,0 +1,24 @@
+; 来源：ERB/口上・メッセージ関連/個人口上/101 Tokiko [朱鷺子]/朱鷺子/M_KOJO_K101_刻印取得.ERB :: @M_KOJO_MESSAGE_MARKCNG_K101；摘取日期 2026-10-14
+
+@M_KOJO_MESSAGE_MARKCNG_K12
+CALL M_KOJO_MESSAGE_MARKCNG_K12_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_MARKCNG_K12_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	;このままだと地の文が表示されません
+	;地の文を表示したい方は、下記のコメントアウトを削除して下さい
+	;苦痛刻印
+	IF TFLAG:22 == 1
+		PRINTFORMW 「日常的对话」
+	ELSEIF TFLAG:22 == 2
+		PRINTFORMW 「日常的对话」
+	ELSEIF TFLAG:22 == 3
+		PRINTFORMW 「日常的对话」
+	ENDIF
+ENDIF
+RETURN 1

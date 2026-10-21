@@ -79,6 +79,8 @@ export const SUGAR_DIAGNOSTIC_CODES = [
   'fullwidth-expr-punct',
   /* --- 原生直通 --- */
   'raw-block-inline',
+  /* --- 字面量编码（S5.6 additive：作者文本里有引擎装不下的字符） --- */
+  'literal-unencodable',
   /* --- 兜底 --- */
   'internal',
 ] as const satisfies readonly SugarDiagnosticCode[];
@@ -176,6 +178,7 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'notin-complex-operand': { name: '区间判断的操作数过于复杂', detail: '含加减或函数调用时会被整体求值两次。' },
   'fullwidth-expr-punct': { name: '表达式里有全角标点', detail: '条件或赋值里用了全角冒号/等号，引擎不认。' },
   'raw-block-inline': { name: '原生直通块位置不对', detail: '原生块只能写在顶层。' },
+  'literal-unencodable': { name: '字面量装不下', detail: '这一行的文本里有引擎装不下的字符，已整行不生成；删掉那个字符再转译。' },
   internal: { name: '内部异常', detail: '转译器自身出错，请带上原始码反馈。' },
 
   /* --- 原生结构 / 表达式诊断（问题面板） --- */

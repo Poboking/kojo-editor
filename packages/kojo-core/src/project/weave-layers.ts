@@ -49,7 +49,8 @@
  *    A 压 B、B 压 C 的链：B 的 `suppressors` = [A]，C 的 = [A, B]。
  *    跨覆盖层的接管按第 3 条互不压盖（与 `analysis.ts` 一致）。
  * 5. **能力检查（S5.4）**：事件不在 `eventCatalog` → `core/weave/unsupported`；事件声明
- *    `weavable: false` → 同样阻断（挂上去运行期不会执行）。`weavable` 缺省视为可监听
+ *    `weavable: false` → `core/weave/not-weavable`（S5.6 additive；"声明不可监听"与"adapter
+ *    不认识这个事件"是两件事，提示方向不同）。`weavable` 缺省视为可监听
  *    （additive，老事实不带这一格）。
  * 6. **层模式来源**：基座层（无 `layerId`）读 `layerPolicy` 的 `event-hook` 规则，覆盖层
  *    （有 `layerId`）读 `kojo-overlay` 规则；没有规则退 `defaultMode`，再缺省 `unique`（最严）。
@@ -131,7 +132,7 @@ export type WeaveLayerConflictKind =
   | 'priority-unsupported'
   /** 事件不在 adapter 目录（`core/weave/unsupported`） */
   | 'unknown-event'
-  /** 事件声明不可被 `@织` 监听（`core/weave/unsupported`） */
+  /** 事件声明不可被 `@织` 监听（`core/weave/not-weavable`） */
   | 'not-weavable';
 
 /**
@@ -452,14 +453,14 @@ export function analyzeWeaveLayers(
         continue;
       }
       if (!weavable) {
-        addUnitCode(fact, 'core/weave/unsupported');
+        addUnitCode(fact, 'core/weave/not-weavable');
         eventConflicts.push(
           conflictFact({
             kind: 'not-weavable',
             event,
             bucket,
             layerId: fact.layerId ?? null,
-            code: 'core/weave/unsupported',
+            code: 'core/weave/not-weavable',
             facts: [fact],
             describe: (locations) =>
               `事件「${event}」在 adapter 目录里声明为不可被 @织 监听（${locations}）——挂上去运行期不会执行，已阻断。`,

@@ -99,6 +99,8 @@ const AT = '2026-10-22T00:00:00.000Z';
 const VAR_FAVOR = '# 变量 好感 整数 = 0 存档';
 const VAR_MOOD = '# 变量 心情 整数 = 0 存档';
 const VAR_TRUST = '# 变量 信赖 整数 = 0 存档';
+const VAR_NAME = '# 变量 称呼 字符串 存档';
+const VAR_ITEMS = '# 变量 物品 整数[3] 存档';
 
 type SlotSnapshot = NonNullable<Kojo2StorageRegistry['storagePlan']['nextSnapshot']>;
 
@@ -922,7 +924,7 @@ describe('kojo2 槽位账本 · 串行化与边界', () => {
     expect(read.raw).toContain('"version":9');
   });
 
-  it('返回结构运行时冻结：账本、slots 都改不动', () => {
+  it('返回结构运行时冻结：账本、slots、records 都改不动', () => {
     const result = committedOf(
       commitOf(persisterOf(new FakePort()), registryOf(sourceOf(VAR_FAVOR))),
     );
@@ -930,6 +932,7 @@ describe('kojo2 槽位账本 · 串行化与边界', () => {
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.ledger)).toBe(true);
     expect(Object.isFrozen(result.ledger.slots)).toBe(true);
+    expect(Object.isFrozen(result.ledger.records)).toBe(true);
     expect(() => {
       (result.ledger as { fingerprint: string }).fingerprint = '改不动';
     }).toThrow(TypeError);
@@ -947,5 +950,206 @@ describe('kojo2 槽位账本 · 串行化与边界', () => {
       '{"version":1,"fingerprint":"f","slots":{"a":"save#0","b":"save#1"},' +
         '"updatedAt":"2026-01-01T00:00:00.000Z"}',
     );
+  });
+});
+
+/* ============================== 6. records（形状事实）：扩账本 / 旧账兼容 ============================== */
+
+describe('kojo2 槽位账本 · records 形状事实', () => {
+  it('首次 commit：records 与 slots 同键集，int / string / 数组形状逐格正确且冻结', () => {
+    const port = new FakePort();
+    const persister = persisterOf(port);
+    const registry = registryOf(sourceOf(VAR_FAVOR, VAR_NAME, VAR_ITEMS));
+    const result = committedOf(commitOf(persister, registry));
+
+    const favorKey = storageKeyOf(registry, '好感');
+    const nameKey = storageKeyOf(registry, '称呼');
+    const itemsKey = storageKeyOf(registry, '物品');
+    expect(result.ledger.records).toEqual({
+      [favorKey]: { slot: slotOf(registry, '好感'), valueType: 'int', arraySize: null },
+      [nameKey]: { slot: slotOf(registry, '称呼'), valueType: 'string', arraySize: null },
+      [itemsKey]: { slot: slotOf(registry, '物品'), valueType: 'int', arraySize: 3 },
+    });
+    expect(Object.keys(result.ledger.records).sort()).toEqual(
+      Object.keys(result.ledger.slots).sort(),
+    );
+    // 槽名与形状必须指同一格
+    for (const key of Object.keys(result.ledger.records)) {
+      expect(result.ledger.slots[key]).toBe(`save#${String(result.ledger.records[key]?.slot)}`);
+    }
+    expect(Object.isFrozen(result.ledger.records)).toBe(true);
+    expect(Object.isFrozen(result.ledger.records[favorKey])).toBe(true);
+    expect(ledgerAt(port)).toEqual(result.ledger);
+  });
+
+  it('pending 文档的 next / previous 都带 records（崩溃后可取证形状）', () => {
+    const port = new FakePort();
+    const persister = persisterOf(port);
+    const before = registryOf(sourceOf(VAR_FAVOR));
+    const first = committedOf(commitOf(persister, before));
+    const after = registryOf(sourceOf(VAR_FAVOR, VAR_NAME, VAR_ITEMS), {
+      previous: snapshotOf(before),
+    });
+    const second = committedOf(commitOf(persister, after));
+
+    const pending = pendingViewOf(port);
+    expect(pending.next.records).toEqual(second.ledger.records);
+    expect(pending.previous?.records).toEqual(first.ledger.records);
+    expect(Object.keys(pending.next.records)).toHaveLength(3);
+  });
+
+  it('旧账本没有 records：解析为 {} 且不视为损坏；下一次提交自动回填（changed=true）', () => {
+    const port = new FakePort();
+    const persister = persisterOf(port);
+    const registry = registryOf(sourceOf(VAR_FAVOR, VAR_MOOD));
+    const first = committedOf(commitOf(persister, registry));
+
+    // 抹掉 records，模拟 batch-4 的旧账本（旧账本连这个字段都不存在）
+    const legacy = { ...first.ledger } as Record<string, unknown>;
+    delete legacy.records;
+    port.store.set(KOJO2_STORAGE_LEDGER_KEY, JSON.stringify(legacy));
+
+    const read = persister.readLedger();
+    expect(read.kind).toBe('ok');
+    if (read.kind !== 'ok') return;
+    expect(read.ledger.records).toEqual({});
+    expect(read.ledger.slots).toEqual(first.ledger.slots);
+
+    port.resetOps();
+    const refilled = committedOf(commitOf(persister, registry));
+    expect(refilled.changed).toBe(true);
+    expect(refilled.ledger.slots).toEqual(first.ledger.slots);
+    expect(Object.keys(refilled.ledger.records).sort()).toEqual(
+      Object.keys(refilled.ledger.slots).sort(),
+    );
+    expect(port.writeKeys()).toEqual([KOJO2_STORAGE_PENDING_KEY, KOJO2_STORAGE_LEDGER_KEY]);
+    expect(JSON.parse(textAt(port, KOJO2_STORAGE_LEDGER_KEY))).toHaveProperty('records');
+  });
+
+  it('坏 records 形状一律 corrupt-ledger(shape)，零写', () => {
+    const validRecord = { slot: 0, valueType: 'int', arraySize: null };
+    const protoRecord = Object.fromEntries([['__proto__', validRecord]]);
+    const cases: readonly Record<string, unknown>[] = [
+      { version: 1, fingerprint: 'f', slots: { k: 'save#0' }, records: [], updatedAt: 't' },
+      { version: 1, fingerprint: 'f', slots: { k: 'save#0' }, records: { k: 3 }, updatedAt: 't' },
+      {
+        version: 1,
+        fingerprint: 'f',
+        slots: { k: 'save#0' },
+        records: { k: { slot: 0, valueType: 'float', arraySize: null } },
+        updatedAt: 't',
+      },
+      {
+        version: 1,
+        fingerprint: 'f',
+        slots: { k: 'save#0' },
+        records: { k: { slot: -2, valueType: 'int', arraySize: null } },
+        updatedAt: 't',
+      },
+      {
+        version: 1,
+        fingerprint: 'f',
+        slots: { k: 'save#0' },
+        records: { k: { slot: 0.5, valueType: 'int', arraySize: null } },
+        updatedAt: 't',
+      },
+      {
+        version: 1,
+        fingerprint: 'f',
+        slots: { k: 'save#0' },
+        records: { k: { slot: 0, valueType: 'int', arraySize: '3' } },
+        updatedAt: 't',
+      },
+      {
+        version: 1,
+        fingerprint: 'f',
+        slots: { k: 'save#0' },
+        records: { k: { slot: 0, valueType: 'int' } },
+        updatedAt: 't',
+      },
+      { version: 1, fingerprint: 'f', slots: {}, records: { ghost: validRecord }, updatedAt: 't' },
+      {
+        version: 1,
+        fingerprint: 'f',
+        slots: { k: 'save#0' },
+        records: protoRecord,
+        updatedAt: 't',
+      },
+      { version: 1, fingerprint: 'f', slots: { k: 'save#0' }, records: { '': validRecord }, updatedAt: 't' },
+    ];
+    for (const raw of cases) {
+      const port = new FakePort();
+      port.store.set(KOJO2_STORAGE_LEDGER_KEY, JSON.stringify(raw));
+      port.resetOps();
+      const result = commitOf(persisterOf(port), registryOf(sourceOf(VAR_FAVOR)));
+      expect(result.kind, JSON.stringify(raw)).toBe('corrupt-ledger');
+      if (result.kind !== 'corrupt-ledger') continue;
+      expect(result.reason, JSON.stringify(raw)).toBe('shape');
+      expect(port.writes(), JSON.stringify(raw)).toEqual([]);
+    }
+  });
+
+  it('records 序列化：键排序 + 字段序固定、空表省略字段（旧字节逐字不变）', () => {
+    const raw =
+      '{"version":1,"fingerprint":"f","slots":{"b":"save#1","a":"save#0"},' +
+      '"records":{"b":{"slot":1,"valueType":"string","arraySize":null},' +
+      '"a":{"slot":0,"valueType":"int","arraySize":2}},"updatedAt":"2026-01-01T00:00:00.000Z"}';
+    const parsed = parseKojo2StorageLedger(raw);
+    expect(parsed.kind).toBe('ok');
+    if (parsed.kind !== 'ok') return;
+    expect(Object.keys(parsed.ledger.records)).toEqual(['a', 'b']);
+    // 盘上键序不管怎么排，序列化一律规范化（slots/records 键排序 + 字段序固定）
+    expect(serializeKojo2StorageLedger(parsed.ledger)).toBe(
+      '{"version":1,"fingerprint":"f","slots":{"a":"save#0","b":"save#1"},' +
+        '"records":{"a":{"slot":0,"valueType":"int","arraySize":2},' +
+        '"b":{"slot":1,"valueType":"string","arraySize":null}},' +
+        '"updatedAt":"2026-01-01T00:00:00.000Z"}',
+    );
+    expect(
+      serializeKojo2StorageLedger({ ...parsed.ledger, records: {} }),
+    ).toBe(
+      '{"version":1,"fingerprint":"f","slots":{"a":"save#0","b":"save#1"},' +
+        '"updatedAt":"2026-01-01T00:00:00.000Z"}',
+    );
+  });
+
+  it('形状表与槽位表不同键集 → invalid-registry（缺一格 / 多一格都不落账）', () => {
+    const base = registryOf(sourceOf(VAR_FAVOR, VAR_MOOD));
+    const favorKey = storageKeyOf(base, '好感');
+    const nextSnapshot = snapshotOf(base);
+    const saveTable = nextSnapshot.classes.save ?? {};
+    const favorRecord = saveTable[favorKey];
+    if (favorRecord === undefined) throw new Error('fixture 里没有好感的形状记录');
+    const missing = {
+      ...base,
+      storagePlan: {
+        ...base.storagePlan,
+        nextSnapshot: { ...nextSnapshot, classes: { save: { [favorKey]: favorRecord } } },
+      },
+    } as unknown as Kojo2StorageRegistry;
+    const port = new FakePort();
+    const missingResult = commitOf(persisterOf(port), missing);
+    expect(missingResult.kind).toBe('invalid-registry');
+    if (missingResult.kind === 'invalid-registry') {
+      expect(missingResult.detail).toContain('缺少形状事实');
+    }
+    expect(port.writes()).toEqual([]);
+
+    const ghost = {
+      ...base,
+      storagePlan: {
+        ...base.storagePlan,
+        nextSnapshot: {
+          ...nextSnapshot,
+          classes: {
+            save: { ...saveTable, ghost: { slot: 9, valueType: 'int', arraySize: null } },
+          },
+        },
+      },
+    } as unknown as Kojo2StorageRegistry;
+    const ghostPort = new FakePort();
+    const ghostResult = commitOf(persisterOf(ghostPort), ghost);
+    expect(ghostResult.kind).toBe('invalid-registry');
+    expect(ghostPort.writes()).toEqual([]);
   });
 });

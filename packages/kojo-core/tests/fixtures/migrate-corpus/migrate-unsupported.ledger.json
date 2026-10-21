@@ -1,0 +1,28 @@
+{
+  "id": "migrate-unsupported",
+  "status": "blocked",
+  "blockedReason": "v1-compile-failed",
+  "v1": {
+    "ok": false,
+    "lines": 51,
+    "errors": 3,
+    "firstErrorCode": "unknown-identifier"
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 10,
+    "unsupportedConstructs": [
+      "`别名` 声明",
+      "`循环 …：` 块",
+      "`循环结束` 收束行",
+      "`数据表结束` 收束行",
+      "`数据表：` 随机数据表块",
+      "`旁白色` 文件头声明",
+      "`菜单：` 块",
+      "`设置标记` 语句糖",
+      "`隐藏情景 / 隐藏口上` 声明",
+      "赋值/裸表达式"
+    ],
+    "outputLines": 34
+  }
+}

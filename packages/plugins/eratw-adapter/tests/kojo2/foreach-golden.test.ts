@@ -51,7 +51,14 @@ describe('eraTW @巡：全链 golden（.kojo2 → ERB 逐字节）', () => {
     expect(result.sourceMap.lineCount).toBe(result.erb.split('\n').length - 1);
   });
 
-  it('空集合（常量长度 0）⇒ `FOR i, 0, 0` 零轮（不先跑一轮空体）', () => {
+  it('空集合（常量长度 0）⇒ 编译期拒收 `core/decl/bad-array-size`（§3.4.2：N 必须是正整数）', () => {
+    /*
+     * 期望翻转（K2-SEMA-WIRING）：本用例原先断言"0 长数组照常编译、`FOR i, 0, 0` 零轮"。
+     * 语义层接线后，`整数[零]`（零 = 0）与 parser 对字面量 `[0]` 的判据统一：声明长度必须是
+     * 正整数 ⇒ 编译期 error、零字节，降糖拿不到这份声明。`skeleton.empty === 'skip'` 的零轮
+     * 骨架仍由 `kojo-core/tests/foreach.test.ts` 在**计划层**直接钉住（不依赖这条非法输入）。
+     * 0 长语义若日后放开（K2-CODES 的 `# 变量 [0]` 语义），这条断言与 sema 判据要一起回退。
+     */
     const source = [
       '# 视 灵梦',
       '# 机 初见',
@@ -62,12 +69,9 @@ describe('eraTW @巡：全链 golden（.kojo2 → ERB 逐字节）', () => {
     ].join('\n');
     const result = service().transpile({ source, filePath: 'kojo2-foreach-empty.kojo2' });
 
-    expect(result.ok).toBe(true);
-    const lines = result.erb.slice(0, -1).split('\n');
-    const forLine = lines.find((line) => line.trimStart().startsWith('FOR '));
-    expect(forLine).toBe('    FOR __kojo_foreach_5_i, 0, 0');
-    // 循环体照常排（零轮不会执行），但绝不多出"先跑一轮"的守卫
-    expect(result.erb).not.toContain('IF __kojo_foreach_5_i');
+    expect(result.ok).toBe(false);
+    expect(result.erb).toBe('');
+    expect(result.diagnostics.map((diagnostic) => String(diagnostic.code))).toEqual(['core/decl/bad-array-size']);
   });
 
   it('嵌套 `@巡`：槽名按各自块头行号、缩进逐层累加（外层绑定在内层仍可见）', () => {

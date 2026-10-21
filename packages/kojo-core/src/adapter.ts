@@ -182,11 +182,27 @@ export interface AttributeSymbol {
  *   知道类型；要"动态类型"就别声明，让它继续报未声明）；
  * - `readonly` 缺省 = 可写；`true` = 只读（作者可读、写则报既有 `core/expr/readonly-target`）；
  * - 这一面**只**参与名字解析与类型/只读判定，不参与 lowering（产物仍原样写作者名字）。
+ *
+ * ## 数组面（additive；K2-SEMA-WIRING）
+ *
+ * 外部变量也可以是**一维数组**（引擎全局槽，作者不写 `# 变量`）。判据写死：
+ * - `arraySize` **省略** = 标量：`名[下标]` / `名.长度` 不认它（与引入数组面之前逐字节一致，
+ *   仍按"不是数组"报 `core/expr/bad-index`）——旧 adapter 零改动；
+ * - `arraySize: null` = 是数组，但长度不可静态求值：认 `名[下标]` / `名.长度`，**不做**越界判定；
+ * - `arraySize: <正整数>` = 声明长度：常量下标越界报既有 `core/expr/index-out-of-range`；
+ * - `elementKind`（可省）只描述数组元素类型；省略 = 与 `valueKind` 同类型。标量给 `elementKind`
+ *   是契约矛盾（`unit/adapter-inconsistent`），因为标量没有元素。
  */
 export interface DomainVariableSymbol {
   readonly name: string;
   readonly valueKind: 'int' | 'string' | 'character';
   readonly readonly?: boolean;
+  /**
+   * 数组面（additive；省略 = 标量）：`null` = 数组但长度不可静态求值；正整数 = 声明长度。
+   */
+  readonly arraySize?: number | null;
+  /** 数组元素类型（additive；只在给了 `arraySize` 时合法；省略 = 同 `valueKind`） */
+  readonly elementKind?: 'int' | 'string' | 'character';
 }
 
 /** 名字函数（"角色文本"一类）：源名 → 引擎调用 + 形参名 */
@@ -786,6 +802,33 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
               ADAPTER_VALIDATION_CODES.incomplete,
               `域符号变量“${name}”的 readonly 必须是布尔值（缺省 = 可写）。`,
             );
+          }
+          /*
+           * 数组面（additive）：省略 = 标量；`null` = 长度不可静态求值；正整数 = 声明长度。
+           * 形状坏一律 incomplete（不能猜长度），语义矛盾（标量给 elementKind）一律 inconsistent。
+           */
+          if (
+            variable.arraySize !== undefined &&
+            variable.arraySize !== null &&
+            !(isInteger(variable.arraySize) && variable.arraySize > 0)
+          ) {
+            push(
+              ADAPTER_VALIDATION_CODES.incomplete,
+              `域符号变量“${name}”的 arraySize 必须是正整数或 null（null = 数组但长度不可静态求值；省略 = 标量）。`,
+            );
+          }
+          if (variable.elementKind !== undefined) {
+            if (!isOneOf(variable.elementKind, DOMAIN_VARIABLE_KINDS)) {
+              push(
+                ADAPTER_VALIDATION_CODES.incomplete,
+                `域符号变量“${name}”的 elementKind 非法（int / string / character）。`,
+              );
+            } else if (variable.arraySize === undefined) {
+              push(
+                ADAPTER_VALIDATION_CODES.inconsistent,
+                `域符号变量“${name}”给了 elementKind 却没有 arraySize：elementKind 只描述数组元素，标量用 valueKind。`,
+              );
+            }
           }
           if (variableNames.has(name)) {
             push(ADAPTER_VALIDATION_CODES.inconsistent, `域符号变量“${name}”重复声明。`);

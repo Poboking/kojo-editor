@@ -1,0 +1,20 @@
+{
+  "id": "value-lookup-spec-310",
+  "status": "blocked",
+  "blockedReason": "migration-unsupported",
+  "v1": {
+    "ok": true,
+    "lines": 36,
+    "errors": 0,
+    "firstErrorCode": null
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 2,
+    "unsupportedConstructs": [
+      "`口上色` 文件头声明",
+      "`时机` 块头（事件 / 命名参数形状不认识）"
+    ],
+    "outputLines": 18
+  }
+}

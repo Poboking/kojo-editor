@@ -1,0 +1,20 @@
+{
+  "id": "corpus-hasei",
+  "status": "blocked",
+  "blockedReason": "migration-unsupported",
+  "v1": {
+    "ok": true,
+    "lines": 510,
+    "errors": 0,
+    "firstErrorCode": null
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 18,
+    "unsupportedConstructs": [
+      "`口上色` 文件头声明",
+      "多个 `时机` 块（2.0 一个文件只写一个 `# 机`）"
+    ],
+    "outputLines": 309
+  }
+}

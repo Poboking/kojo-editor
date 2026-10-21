@@ -32,10 +32,31 @@
  *    不许当成"这个文件只有这些问题"）。
  * ④ **取消即停**：`cancel()` 推进世代号，循环在每个检查点退出，覆盖读数落 `cancelled`
  *    ——屏幕上已上账的那部分仍然说得清自己只覆盖了一半。
+ *
+ * ## 2.0 那一格（additive，K2-PROJECT-HOST）
+ *
+ * 同一轮扫描里额外跑一次 `.kojo2` **项目级**分析（跨文件重名 / Layer / 接管 / 被压 / 存储期）：
+ * 文本**复用这一轮已读的那一份**（不二次读盘），结论按文件合并进**同一个** `publish`。
+ * `.kojo` 与未装配（`deps.kojo2Project` 缺席 / 开关关）时逐字无改动——v1 那一路的
+ * 采集、分批、世代、覆盖读数全部照旧。判定与映射在 `kojo2-project-analysis.ts`，
+ * 本文件只做"什么时候叫、把结果并进哪一格、耗时怎么报"。
+ *
+ * 两个刻意的取舍：① `.kojo2` 的 publish 延到**整轮读完**之后（跨文件结论必须看全，且这
+ * 一路只读一次盘），中途取消 ⇒ 这些文件的旧账原样留着，与"这一轮根本没跑到它们"同义；
+ * ② 2.0 这一格炸了只把 `degraded` / `errors` 点亮，v1 那一路的结果照旧上账，整轮不崩。
  */
 
 import type { EditorDecoratorContribution, GameProject, LineDecoration } from '@kojo/plugin-api';
 import { isUnderPath, parentDir, pkey } from './file-tree-ops';
+import {
+  KOJO2_PROJECT_PROBLEM_PATH,
+  analyzeKojo2Project,
+  kojo2ProjectPassEnabled,
+  type Kojo2ProjectDocument,
+  type Kojo2ProjectPassOptions,
+  type Kojo2ProjectStats,
+} from './kojo2-project-analysis';
+import { isKojo2Path } from './kojo2-open';
 import type { EditorProblem, ProjectScanCoverage, ProjectScanStatus } from './problem-store';
 
 /** 一路装饰贡献的最小面（与 `marker-pool.MarkerContributor` 同形；槽位贡献天然满足） */
@@ -195,6 +216,14 @@ export interface ProjectScannerDeps {
   pendingRescanCount?(): number;
   /** 每批之间让一次路（宿主接 `kernel.compute.yieldToMain`；缺省 = 微任务） */
   yieldBetween?(): Promise<void>;
+  /**
+   * Kojo 2.0 项目级分析的装配面（**additive**；缺省 = 不跑）。
+   *
+   * 给出它之后，`.kojo2` 文件在**同一轮扫描**里额外过一次项目级分析（复用本文件刚读到的
+   * 文本，不二次读盘），结论与本文件的 v1 诊断合并后经同一个 `publish` 上账。
+   * `.kojo` 文件、`enabled()` 为 false、或这个字段缺席时，v1 行为逐字不变。
+   */
+  readonly kojo2Project?: Kojo2ProjectPassOptions;
   perBatch?: number;
   maxFiles?: number;
 }
@@ -225,6 +254,11 @@ export interface ScanOutcome {
   /** 是否撞到本轮上限（⇒ 覆盖不完整） */
   readonly capped: boolean;
   readonly errors: readonly ScanError[];
+  /**
+   * 2.0 项目级分析读数（additive）：`null` = 这一轮没跑（`.kojo2` 为零 / 开关关 / 未装配）。
+   * 跑了但零份 `.kojo2` 时也是 `null`——"没这一步"与"这一步跑了但没结论"要说得出区别。
+   */
+  readonly kojo2: Kojo2ProjectStats | null;
 }
 
 /** 累计中的那一轮（对外只交出 `ScanOutcome` 那份只读镜像；写它的是采集器自己） */
@@ -240,6 +274,7 @@ interface OutcomeDraft {
   batches: number;
   capped: boolean;
   errors: ScanError[];
+  kojo2: Kojo2ProjectStats | null;
 }
 
 const idleCoverage = (roots: readonly string[]): ProjectScanCoverage => ({
@@ -253,6 +288,43 @@ const idleCoverage = (roots: readonly string[]): ProjectScanCoverage => ({
   pendingRescan: 0,
   capped: false,
 });
+
+/** 这一文件的 v1 诊断 + 2.0 项目级结论（空的那一侧直接复用原数组，不白复制一次） */
+function mergeProblems(
+  own: readonly EditorProblem[],
+  project: readonly EditorProblem[],
+): readonly EditorProblem[] {
+  if (project.length === 0) return own;
+  if (own.length === 0) return project;
+  return [...own, ...project];
+}
+
+/**
+ * 2.0 判定段的耗时读数。
+ *
+ * 宿主给了 `onTiming` 就交出去（接 perf / 日志）；没给就打印一行——**判定段按「万级 @函」
+ * 归一**（`ms/万 @函`），口径与 core `tests/project.bench.test.ts` 的万级函数读数、
+ * 以及本仓既有「13.5ms / 10k」那一族读法一致，便于直接横向比。解析耗时单列：
+ * 那一段随文本量线性，且文本已在内存（**不含读盘**）。
+ */
+function reportKojo2Timing(options: Kojo2ProjectPassOptions, stats: Kojo2ProjectStats): void {
+  if (options.onTiming !== undefined) {
+    options.onTiming(stats.timing);
+    return;
+  }
+  const t = stats.timing;
+  // 样本太小（个位数文件）时归一出来的"万函数耗时"没有意义，只在有量的时候才报
+  const perTenThousand =
+    stats.functions >= 1_000 ? (t.analyzeMs / stats.functions) * 10_000 : null;
+  // eslint-disable-next-line no-console
+  console.info(
+    `[project-scan] kojo2 项目级分析：${stats.documents} 份 .kojo2 / ${stats.functions} 个 @函 / ${stats.weaves} 个 @织` +
+      ` → ${stats.problems} 条问题；判定 ${t.analyzeMs.toFixed(2)}ms` +
+      (perTenThousand === null ? '' : `（≈${perTenThousand.toFixed(1)}ms/万 @函）`) +
+      ` · 解析 ${t.parseMs.toFixed(2)}ms · 合计 ${t.totalMs.toFixed(2)}ms` +
+      '（口径：文本已在内存，不含读盘）',
+  );
+}
 
 /**
  * 采集器本体：**一个实例 = 一条世代线**。
@@ -294,8 +366,19 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
       batches: 0,
       capped: false,
       errors: [],
+      kojo2: null,
     };
     const roots = deps.roots();
+    /**
+     * 2.0 那一格的装配读数：`enabled` 只在这一轮开头读一次（与语言面 / 主题同一口径：
+     * 装配那一刻定，不逐文件现问）。false ⇒ 下面连 `.kojo2` 判据都不调，v1 行为逐字不变。
+     */
+    const kojo2 = deps.kojo2Project;
+    const kojo2Active = kojo2ProjectPassEnabled(kojo2);
+    const kojo2IsKojo2 = kojo2?.isKojo2 ?? isKojo2Path;
+    /** 本轮读到的 `.kojo2` 文本 + 它们各自的 v1 诊断（结论要看完所有文件才出 ⇒ 延后上账） */
+    const kojo2Documents: Kojo2ProjectDocument[] = [];
+    const kojo2Pending = new Map<string, readonly EditorProblem[]>();
     // 整格重置：上一轮剩下的 skipped / outOfRoots 不许在这一轮刚开始时就挂在读数上
     emit({ ...idleCoverage(roots), status: 'running', roots });
     const stale = (): boolean => runId !== my;
@@ -369,8 +452,16 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
             outcome.degraded++;
             note(path, `诊断方抛错已跳过：${scanned.failedContributors.join('、')}`);
           }
-          deps.publish(path, scanned.problems);
-          outcome.published++;
+          // `.kojo2` 的项目级结论要看完这一轮**所有**文件才出得来（跨文件事实），
+          // 所以这里只记账、不立刻 publish；文本就此留在内存，绝不为分析再读一次盘。
+          if (kojo2Active && kojo2IsKojo2(path)) {
+            const layerId = kojo2?.layerOf?.(path);
+            kojo2Documents.push({ path, text, ...(layerId === undefined ? {} : { layerId }) });
+            kojo2Pending.set(path, scanned.problems);
+          } else {
+            deps.publish(path, scanned.problems);
+            outcome.published++;
+          }
           outcome.scanned++;
         }
         emit({
@@ -384,6 +475,38 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
           pendingRescan: pending(),
           capped: outcome.capped,
         });
+      }
+      if (kojo2Active && kojo2 !== undefined && kojo2Documents.length > 0) {
+        // 判定是同步纯逻辑：上面最后一次 await 之后到这里没有让出点，不存在"半轮"读数。
+        if (stale()) return quit('cancelled');
+        try {
+          const analysis = analyzeKojo2Project({
+            documents: kojo2Documents,
+            ...(kojo2.adapter === undefined ? {} : { adapter: kojo2.adapter }),
+            ...(kojo2.storage === undefined ? {} : { storage: kojo2.storage }),
+            ...(kojo2.parse === undefined ? {} : { parse: kojo2.parse }),
+            ...(kojo2.projectPath === undefined ? {} : { projectPath: kojo2.projectPath }),
+            ...(kojo2.now === undefined ? {} : { now: kojo2.now }),
+          });
+          // 一文件一次 publish：本文件的 v1 诊断 + 落在它头上的项目级结论（整档替换语义）
+          for (const [path, ownProblems] of kojo2Pending) {
+            deps.publish(path, mergeProblems(ownProblems, analysis.problemsByPath.get(path) ?? []));
+            outcome.published++;
+          }
+          // 项目级（无单一声明/监听可指）那一格也要上账：只活在返回值里就等于悄悄丢掉（铁律 4）
+          const projectPath = kojo2.projectPath ?? KOJO2_PROJECT_PROBLEM_PATH;
+          deps.publish(projectPath, analysis.problemsByPath.get(projectPath) ?? []);
+          outcome.kojo2 = analysis.stats;
+          reportKojo2Timing(kojo2, analysis.stats);
+        } catch (e) {
+          // 2.0 这一格炸了：本轮其余结论照旧上账，但"少了一路"必须看得见（不静默）
+          outcome.degraded += kojo2Pending.size;
+          note('(kojo2 项目级分析)', `分析异常：${String(e instanceof Error ? e.message : e)}`);
+          for (const [path, ownProblems] of kojo2Pending) {
+            deps.publish(path, ownProblems);
+            outcome.published++;
+          }
+        }
       }
       return quit('complete');
     } catch (e) {

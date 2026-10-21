@@ -1,0 +1,19 @@
+{
+  "id": "narration-spec-author-color",
+  "status": "blocked",
+  "blockedReason": "migration-unsupported",
+  "v1": {
+    "ok": true,
+    "lines": 15,
+    "errors": 0,
+    "firstErrorCode": null
+  },
+  "migration": {
+    "ok": false,
+    "unsupported": 1,
+    "unsupportedConstructs": [
+      "`旁白色` 文件头声明"
+    ],
+    "outputLines": 6
+  }
+}
