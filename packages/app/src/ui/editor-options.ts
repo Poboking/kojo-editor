@@ -55,10 +55,16 @@
  * 的三个写入点）与 EditorPane 的 create options 都 spread 同一个 {@link layoutPrefPatch}，
  * 没有一条路径读偏好、另一条路径留硬编码。create 时屏幕上还没有文件 ⇒ 按 small 档取值
  * （正是今天硬编码的 `'on'`），第一个文件落档后由 `applySizeTier` 按真实行数覆写。
+ *
+ * **查找词优先叠层（FIND-STATE-PERSIST-B，1021）**：同一形态照搬一遍——三档偏好
+ * （`find-pref.ts`，默认 'selection'）由 {@link findPrefPatch} 翻成 `find.seedSearchStringFromSelection`，
+ * 叠在档位表之后、恒带整组 find 字段；`FIND_BASELINE` 那格 'always' 退为"偏好层缺席时的
+ * 兜底"，档位表与偏好互不读写对方的真源。
  */
 import type * as Monaco from '../monaco/entry';
 import { CJK_AMBIGUOUS_WHITELIST, CJK_WORD_SEPARATORS } from '../monaco/word-separators';
 import { loadLayoutPref, type LayoutPref } from './layout-pref';
+import { loadFindSeedPref, type FindSeedPref } from './find-pref';
 
 /** 大文件阈值（行）：≥ 此行数即降级若干"全文级"Monaco 特性 */
 export const LARGE_FILE_LINES = 5000;
@@ -296,7 +302,9 @@ export function editorProfileTierForLineCount(lineCount: number): EditorProfileT
  * `loopAtEnd` 不存在（循环查找真名是 `loop`，缺省已 true）；
  * `seedSearchStringFromGlobalClipboard` 非公开配置。
  * 「选中即搜」是 `seedSearchStringFromSelection !== 'never'` 的内建行为（缺省 'always'），
- * 这里显式钉住防档位漂移。
+ * 这里显式钉住防档位漂移。FIND-STATE-PERSIST-B 起这一格是**偏好层缺席时的兜底**：
+ * 作者实际用哪一档由 {@link findPrefPatch} 叠在这之后决定（真源在 `find-pref.ts`，
+ * 档位表本身不读 localStorage——两份真相各管各的轴，P2-16 同一条纪律）。
  */
 export const FIND_BASELINE: EditorOptionPatch = {
   find: {
@@ -304,6 +312,26 @@ export const FIND_BASELINE: EditorOptionPatch = {
     loop: true,
   },
 };
+
+/**
+ * 查找词优先补丁（FIND-STATE-PERSIST-B）：把 `find-pref.ts` 的三档偏好翻成 Monaco 的
+ * `find.seedSearchStringFromSelection`，**叠在档位表之后**（create options、`applySizeTier`
+ * 的三个写入点与偏好订阅回调三条路同调它——写选项的路径因此读同一份偏好）。
+ *
+ * **恒带整组 find 字段**（spread `FIND_BASELINE.find` 再改一位）：monaco 的 `find` 是一枚
+ * 对象选项，`updateOptions({ find: { …部分字段 } })` 时 `EditorFind.validate` 对缺的字段
+ * 逐位回落**内建缺省**而非上一拍的值——将来谁往基线加了非缺省值（如 `loop:false`），
+ * 只发一字的补丁就会把它打回默认。带着全量发就没这条缝（实测前后快照对照见
+ * `tests/find-pref.test.ts` 第 ④ 组，用例钉「其余 find 字段零变化」）。
+ */
+export function findPrefPatch(pref: FindSeedPref = loadFindSeedPref()): EditorOptionPatch {
+  return {
+    find: {
+      ...FIND_BASELINE.find,
+      seedSearchStringFromSelection: pref,
+    },
+  };
+}
 
 /**
  * 排版偏好补丁（P2-16）：把 `layout-pref.ts` 那份偏好翻成 Monaco 选项，
@@ -334,7 +362,8 @@ export function layoutPrefPatch(
 
 /**
  * 与文件规模相称的 Monaco 选项（**纯函数**）= 中文基线 + find 基线 + 公共补丁 + 档位表全量
- * + 排版偏好叠层（P2-16，见 {@link layoutPrefPatch}：偏好永远叠在档位表之后）。
+ * + 排版偏好叠层（P2-16，见 {@link layoutPrefPatch}）+ 查找词优先叠层
+ * （FIND-STATE-PERSIST-B，见 {@link findPrefPatch}：偏好永远叠在档位表之后）。
  */
 export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch {
   return {
@@ -343,6 +372,7 @@ export function editorOptionsForLineCount(lineCount: number): EditorOptionPatch 
     ...COMMON_OPTIONS,
     ...TIER_OPTIONS[editorProfileTierForLineCount(lineCount)],
     ...layoutPrefPatch(lineCount),
+    ...findPrefPatch(),
   };
 }
 

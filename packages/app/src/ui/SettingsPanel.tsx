@@ -35,6 +35,7 @@ import {
   type MultiCursorModifierPref,
   type WordWrapPref,
 } from './layout-pref';
+import { useFindSeedPref, saveFindSeedPref, type FindSeedPref } from './find-pref'; // FIND-STATE-PERSIST-B
 import {
   hintClassFor,
   isDraftNoop,
@@ -94,6 +95,16 @@ const WORD_WRAP_CHOICES: readonly { value: WordWrapPref; label: string }[] = [
 const MULTI_CURSOR_CHOICES: readonly { value: MultiCursorModifierPref; label: string }[] = [
   { value: 'ctrlCmd', label: 'Ctrl/Cmd' },
   { value: 'alt', label: 'Alt' },
+];
+
+/**
+ * 查找词优先三档（FIND-STATE-PERSIST-B，2026-10-21）。值 = `find-pref.ts` 的登记名
+ * （与 Monaco 0.57 的取值逐字一致，落到编辑器前零翻译）；**默认档「仅用选中文字」排第一**。
+ */
+const FIND_SEED_CHOICES: readonly { value: FindSeedPref; label: string }[] = [
+  { value: 'selection', label: '仅用选中文字' },
+  { value: 'always', label: '总是用光标或选区' },
+  { value: 'never', label: '从不（用上次记住的）' },
 ];
 
 /**
@@ -588,6 +599,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 排版三行（P2-16）：折行 / 多光标修饰键 / 列选择。自订阅 layout-pref，
                 壳层镜像行归 P2-14 的接线批——两边各占一小段，互不重排。 */}
             <LayoutPrefRows />
+            {/* 查找词优先（FIND-STATE-PERSIST-B）：真源在 find-pref.ts，本页只排版。 */}
+            <FindPrefRow />
             {/* 显示偏好八行（1020 编辑器体感批 + C-1b 的缩略图三态与界面字号）：
                 真源在 editor-display-prefs.ts，本页只排版 */}
             <EditorDisplayRows />
@@ -967,8 +980,42 @@ function LayoutPrefRows(): ReactElement {
   );
 }
 
-/** 右面板（tabpanel）的稳定 id：导航栏每项 aria-controls 指过来 */
-const SETTINGS_PANEL_ID = 'settings-nav-panel';
+/**
+ * 查找词优先一行（FIND-STATE-PERSIST-B，2026-10-21）：三选一分段，形态照 `LayoutPrefRows`
+ * ——真源在 `find-pref.ts`，这里只排版；编辑器实例订同一张表即时生效，不用重开文件。
+ */
+function FindPrefRow(): ReactElement {
+  const pref = useFindSeedPref();
+  return (
+    <div className="settings-row static">
+      <span className="theme-segment" role="radiogroup" aria-label="查找词优先">
+        {FIND_SEED_CHOICES.map((c) => (
+          <button
+            key={c.value}
+            type="button"
+            role="radio"
+            aria-checked={pref === c.value}
+            className={`theme-seg-btn${pref === c.value ? ' on' : ''}`}
+            onClick={() => saveFindSeedPref(c.value)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </span>
+      <span>
+        查找词优先
+        <span className="settings-hint">
+          按下查找后，查找框先填哪个词。默认「仅用选中文字」：选中一段文字再按查找，框里就是这段；
+          光标停在某个词上不算选中，框里保持上次记住的词（每个文件各记各的，重启也认）。
+          「总是用光标或选区」连光标所在的词也会取；「从不」只认上次记住的词。
+          只改查找框先填的词、不动文件
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** 右面板（tabpanel）的稳定 id：导航栏每项 aria-controls 指过来 */const SETTINGS_PANEL_ID = 'settings-nav-panel';
 const tabIdOf = (id: SettingsSectionId): string => `settings-nav-tab-${id}`;
 
 /**

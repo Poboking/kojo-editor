@@ -6,7 +6,7 @@
  * - 订阅必须**在实例创建 effect 之内、编辑器 create 之后**接线——`ed` 是闭包主角，
  *   提到另一个 effect 里接线会晚一拍（首个 commit 内改设置页的那一次就丢）；
  * - 拆阅时的退订次序与接线次序**逐字一致**（nameColor → fontSize → fontZoom →
- *   suggestDelay → quickSuggestions → layout → display），且整段在实例卸载清账的
+ *   suggestDelay → quickSuggestions → layout → findSeed → display），且整段在实例卸载清账的
  *   **最前面**执行（组件原来的 return cleanup 就是按这个顺序写的）。
  *
  * 所以本文件不自己注册 effect：`useEditorPreferences` 只返回一个**安装器**，
@@ -32,8 +32,9 @@ import {
   setFontZoomPref,
   subscribeFontSizePref,
 } from '../font-size-pref';
-import { layoutPrefPatch, quickSuggestionsFor } from '../editor-options';
+import { findPrefPatch, layoutPrefPatch, quickSuggestionsFor } from '../editor-options';
 import { subscribeLayoutPref } from '../layout-pref';
+import { subscribeFindSeedPref } from '../find-pref'; // FIND-STATE-PERSIST-B
 import {
   applyUiFontScalePref,
   editorDisplayFontPatch,
@@ -106,6 +107,13 @@ export function useEditorPreferences(params: EditorPreferencesParams): Preferenc
         // 下一次挂预览仍按正文口径走，这里只保住"此刻这份投影"的稿纸栏宽。
         reapplySugarReadOptions();
       });
+      // 查找词优先（FIND-STATE-PERSIST-B）：三档真源在 find-pref.ts，与 create / 切文件
+      // 两条路径同读 editor-options.ts 的 findPrefPatch。补丁**恒带整组 find 字段**
+      // （EditorFind.validate 对缺字段逐位回落内建缺省，只发一字会顶掉同组其余值——
+      // 实测快照钉在 tests/find-pref.test.ts），这一拍不需要按行数取档（find 与体量正交）。
+      const findSeedUnsub = subscribeFindSeedPref(() => {
+        ed.updateOptions(findPrefPatch());
+      });
       // 显示偏好（1020 编辑器体感批，C-1b 补缩略图三态与界面字号）：行高 / 空白符 / 缩略图 /
       // 行号 / 行内提示 / 字体族。只补发这几位——`formatOnType` 由方言判据管（`tierOverrides`），
       // 字体族与体量正交但同一条偏好轴，一起发。行数按**此刻屏幕上那份 model** 取（糖预览在屏上
@@ -137,6 +145,7 @@ export function useEditorPreferences(params: EditorPreferencesParams): Preferenc
         suggestDelayUnsub();
         quickSuggestionsUnsub();
         layoutUnsub();
+        findSeedUnsub();
         displayUnsub();
       };
     },

@@ -30,6 +30,7 @@ import { applyFontZoomPref, loadFontSizePref } from '../font-size-pref';
 import {
   CJK_TYPING_BASELINE,
   FIND_BASELINE,
+  findPrefPatch,
   layoutPrefPatch,
   quickSuggestionsFor,
 } from '../editor-options';
@@ -190,6 +191,9 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       // 偏好（editor-options.ts 的 layoutPrefPatch）——没有文件时按 small 档取值，
       // 强制开 / 强制关同样在这一格生效。
       ...layoutPrefPatch(),
+      // 查找词优先（FIND-STATE-PERSIST-B）：叠在基线之后，三档真源在 find-pref.ts，
+      // 与切文件路径（editorOptionsForLineCount）读同一份补丁。
+      ...findPrefPatch(),
     });
     editorRef.current = ed;
     if (!bootEditorMarked) {

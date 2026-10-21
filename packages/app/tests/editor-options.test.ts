@@ -21,6 +21,8 @@ import {
   type EditorOptionPatch,
 } from '../src/ui/editor-options';
 import { editorDisplayOptionPatch } from '../src/ui/editor-display-prefs';
+// —— FIND-STATE-PERSIST-B 追加用例的依赖 ——
+import { findPrefPatch } from '../src/ui/editor-options';
 
 /**
  * 大文件 Monaco 选项降级（三档表驱动）。
@@ -186,16 +188,23 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
  */
 describe('find 体验基线（A7）', () => {
   it('字段集合 = 0.57 实测在册：seedSearchStringFromSelection + loop，没有编造的字段', () => {
+    // FIND-STATE-PERSIST-B：基线那格 'always' 退为"偏好层缺席时的兜底"，作者实际档位
+    // 由 findPrefPatch 叠层决定（默认 'selection'，真源 find-pref.ts）——本行钉的是兜底值。
     expect(FIND_BASELINE.find).toEqual({ seedSearchStringFromSelection: 'always', loop: true });
   });
 
   it('切文件路径（editorOptionsForLineCount）两档都带 find，档位降级不关循环/播种', () => {
+    // 偏好叠层在档位表之后：三档样本下 find 同值（不变式照旧），值 = 默认档 selection + loop
     for (const n of [10, LARGE_FILE_LINES, 100_000]) {
-      expect(editorOptionsForLineCount(n).find).toEqual(FIND_BASELINE.find);
+      expect(editorOptionsForLineCount(n).find).toEqual(findPrefPatch().find);
+      expect(editorOptionsForLineCount(n).find).toEqual({
+        seedSearchStringFromSelection: 'selection',
+        loop: true,
+      });
     }
   });
 
-  it('create 路径 spread 同一份基线（use-monaco-instance.ts 静态取证）', () => {
+  it('create 路径 spread 同一份基线与查找词优先补丁（use-monaco-instance.ts 静态取证）', () => {
     // REF-FRONT-PERF：create 选项从 EditorPane 搬进实例 hook，判据跟着搬家
     const src = readFileSync(
       fileURLToPath(new URL('../src/ui/editor-pane/use-monaco-instance.ts', import.meta.url)),
@@ -203,6 +212,7 @@ describe('find 体验基线（A7）', () => {
     );
     expect(src).toContain('...FIND_BASELINE,');
     expect(src).toContain('...CJK_TYPING_BASELINE,');
+    expect(src).toContain('...findPrefPatch(),');
   });
 
   it('vendor 实测（取证）：「选中即搜 + 循环」是 monaco 0.57 的内建缺省——loopAtEnd 这名字根本不存在', () => {

@@ -138,7 +138,11 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清
   it('不变式不被动：find 与 CJK 基线逐档同值，降级集永不含字号/缩放', () => {
     for (const n of tierSamples) {
       const o = editorOptionsForLineCount(n);
-      expect(o.find, String(n)).toEqual(FIND_BASELINE.find);
+      // find 与体量正交的不变式照旧（FIND-STATE-PERSIST-B 后 = 基线 loop + 默认档 selection）
+      expect(o.find, String(n)).toEqual({
+        ...FIND_BASELINE.find,
+        seedSearchStringFromSelection: 'selection',
+      });
       expect(o.unicodeHighlight, String(n)).toEqual(CJK_TYPING_BASELINE.unicodeHighlight);
       expect(Object.keys(o)).not.toContain('fontSize');
       expect(Object.keys(o)).not.toContain('zoomLevel');
