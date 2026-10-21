@@ -1,0 +1,809 @@
+[
+  {
+    "type": "bare_speech",
+    "named": true,
+    "fields": {
+      "text": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "speech_string",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "continue_mark",
+          "named": true
+        },
+        {
+          "type": "presentation_hint",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "block",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block_body",
+            "named": true
+          },
+          {
+            "type": "native_body",
+            "named": true
+          },
+          {
+            "type": "table_body",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "calc_head",
+            "named": true
+          },
+          {
+            "type": "color_head",
+            "named": true
+          },
+          {
+            "type": "condition_head",
+            "named": true
+          },
+          {
+            "type": "else_head",
+            "named": true
+          },
+          {
+            "type": "foreach_head",
+            "named": true
+          },
+          {
+            "type": "function_head",
+            "named": true
+          },
+          {
+            "type": "group_head",
+            "named": true
+          },
+          {
+            "type": "native_head",
+            "named": true
+          },
+          {
+            "type": "pool_head",
+            "named": true
+          },
+          {
+            "type": "random_head",
+            "named": true
+          },
+          {
+            "type": "repeat_head",
+            "named": true
+          },
+          {
+            "type": "table_head",
+            "named": true
+          },
+          {
+            "type": "template_head",
+            "named": true
+          },
+          {
+            "type": "trigger",
+            "named": true
+          },
+          {
+            "type": "weave_head",
+            "named": true
+          },
+          {
+            "type": "while_head",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "block_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "bare_speech",
+          "named": true
+        },
+        {
+          "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "break_stmt",
+          "named": true
+        },
+        {
+          "type": "calc_head",
+          "named": true
+        },
+        {
+          "type": "call_line",
+          "named": true
+        },
+        {
+          "type": "color_head",
+          "named": true
+        },
+        {
+          "type": "comment",
+          "named": true
+        },
+        {
+          "type": "condition_head",
+          "named": true
+        },
+        {
+          "type": "constant_decl",
+          "named": true
+        },
+        {
+          "type": "continue_stmt",
+          "named": true
+        },
+        {
+          "type": "dedent",
+          "named": true
+        },
+        {
+          "type": "else_head",
+          "named": true
+        },
+        {
+          "type": "event_decl",
+          "named": true
+        },
+        {
+          "type": "face_command",
+          "named": true
+        },
+        {
+          "type": "foreach_head",
+          "named": true
+        },
+        {
+          "type": "function_head",
+          "named": true
+        },
+        {
+          "type": "group_head",
+          "named": true
+        },
+        {
+          "type": "indent",
+          "named": true
+        },
+        {
+          "type": "jump_stmt",
+          "named": true
+        },
+        {
+          "type": "label_stmt",
+          "named": true
+        },
+        {
+          "type": "narration",
+          "named": true
+        },
+        {
+          "type": "random_head",
+          "named": true
+        },
+        {
+          "type": "repeat_head",
+          "named": true
+        },
+        {
+          "type": "return_stmt",
+          "named": true
+        },
+        {
+          "type": "scene_decl",
+          "named": true
+        },
+        {
+          "type": "slot_marker",
+          "named": true
+        },
+        {
+          "type": "speech",
+          "named": true
+        },
+        {
+          "type": "trigger",
+          "named": true
+        },
+        {
+          "type": "variable_decl",
+          "named": true
+        },
+        {
+          "type": "view_decl",
+          "named": true
+        },
+        {
+          "type": "weave_head",
+          "named": true
+        },
+        {
+          "type": "while_head",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "interpolation",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "interp_body",
+          "named": true
+        },
+        {
+          "type": "interp_close",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "narration",
+    "named": true,
+    "fields": {
+      "marker": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "narration_marker",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "continue_mark",
+          "named": true
+        },
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "narration_text",
+          "named": true
+        },
+        {
+          "type": "presentation_hint",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "native_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "dedent",
+          "named": true
+        },
+        {
+          "type": "indent",
+          "named": true
+        },
+        {
+          "type": "native_line",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "source_file",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "bare_speech",
+          "named": true
+        },
+        {
+          "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "break_stmt",
+          "named": true
+        },
+        {
+          "type": "calc_head",
+          "named": true
+        },
+        {
+          "type": "call_line",
+          "named": true
+        },
+        {
+          "type": "color_head",
+          "named": true
+        },
+        {
+          "type": "comment",
+          "named": true
+        },
+        {
+          "type": "condition_head",
+          "named": true
+        },
+        {
+          "type": "constant_decl",
+          "named": true
+        },
+        {
+          "type": "continue_stmt",
+          "named": true
+        },
+        {
+          "type": "else_head",
+          "named": true
+        },
+        {
+          "type": "event_decl",
+          "named": true
+        },
+        {
+          "type": "face_command",
+          "named": true
+        },
+        {
+          "type": "foreach_head",
+          "named": true
+        },
+        {
+          "type": "function_head",
+          "named": true
+        },
+        {
+          "type": "group_head",
+          "named": true
+        },
+        {
+          "type": "jump_stmt",
+          "named": true
+        },
+        {
+          "type": "label_stmt",
+          "named": true
+        },
+        {
+          "type": "narration",
+          "named": true
+        },
+        {
+          "type": "random_head",
+          "named": true
+        },
+        {
+          "type": "repeat_head",
+          "named": true
+        },
+        {
+          "type": "return_stmt",
+          "named": true
+        },
+        {
+          "type": "scene_decl",
+          "named": true
+        },
+        {
+          "type": "slot_marker",
+          "named": true
+        },
+        {
+          "type": "speech",
+          "named": true
+        },
+        {
+          "type": "trigger",
+          "named": true
+        },
+        {
+          "type": "variable_decl",
+          "named": true
+        },
+        {
+          "type": "view_decl",
+          "named": true
+        },
+        {
+          "type": "weave_head",
+          "named": true
+        },
+        {
+          "type": "while_head",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "speech",
+    "named": true,
+    "fields": {
+      "speaker": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "speaker",
+            "named": true
+          }
+        ]
+      },
+      "text": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "speech_string",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "continue_mark",
+          "named": true
+        },
+        {
+          "type": "presentation_hint",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "speech_string",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "speech_close",
+          "named": true
+        },
+        {
+          "type": "speech_text",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "table_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "comment",
+          "named": true
+        },
+        {
+          "type": "dedent",
+          "named": true
+        },
+        {
+          "type": "indent",
+          "named": true
+        },
+        {
+          "type": "table_row",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "table_row",
+    "named": true,
+    "fields": {
+      "range": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "table_else",
+            "named": true
+          },
+          {
+            "type": "table_range",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "table_value",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "assignment",
+    "named": true
+  },
+  {
+    "type": "blank_line",
+    "named": true
+  },
+  {
+    "type": "break_stmt",
+    "named": true
+  },
+  {
+    "type": "calc_head",
+    "named": true
+  },
+  {
+    "type": "call_line",
+    "named": true
+  },
+  {
+    "type": "color_head",
+    "named": true
+  },
+  {
+    "type": "comment",
+    "named": true
+  },
+  {
+    "type": "condition_head",
+    "named": true
+  },
+  {
+    "type": "constant_decl",
+    "named": true
+  },
+  {
+    "type": "continue_mark",
+    "named": true
+  },
+  {
+    "type": "continue_stmt",
+    "named": true
+  },
+  {
+    "type": "dedent",
+    "named": true
+  },
+  {
+    "type": "else_head",
+    "named": true
+  },
+  {
+    "type": "event_decl",
+    "named": true
+  },
+  {
+    "type": "face_command",
+    "named": true
+  },
+  {
+    "type": "foreach_head",
+    "named": true
+  },
+  {
+    "type": "function_head",
+    "named": true
+  },
+  {
+    "type": "group_head",
+    "named": true
+  },
+  {
+    "type": "indent",
+    "named": true
+  },
+  {
+    "type": "interp_body",
+    "named": true
+  },
+  {
+    "type": "interp_close",
+    "named": true
+  },
+  {
+    "type": "jump_stmt",
+    "named": true
+  },
+  {
+    "type": "label_stmt",
+    "named": true
+  },
+  {
+    "type": "narration_marker",
+    "named": true
+  },
+  {
+    "type": "narration_text",
+    "named": true
+  },
+  {
+    "type": "native_head",
+    "named": true
+  },
+  {
+    "type": "native_line",
+    "named": true
+  },
+  {
+    "type": "pool_head",
+    "named": true
+  },
+  {
+    "type": "presentation_hint",
+    "named": true
+  },
+  {
+    "type": "random_head",
+    "named": true
+  },
+  {
+    "type": "repeat_head",
+    "named": true
+  },
+  {
+    "type": "return_stmt",
+    "named": true
+  },
+  {
+    "type": "scene_decl",
+    "named": true
+  },
+  {
+    "type": "slot_marker",
+    "named": true
+  },
+  {
+    "type": "speaker",
+    "named": true
+  },
+  {
+    "type": "speech_close",
+    "named": true
+  },
+  {
+    "type": "speech_text",
+    "named": true
+  },
+  {
+    "type": "table_else",
+    "named": true
+  },
+  {
+    "type": "table_head",
+    "named": true
+  },
+  {
+    "type": "table_range",
+    "named": true
+  },
+  {
+    "type": "table_value",
+    "named": true
+  },
+  {
+    "type": "template_head",
+    "named": true
+  },
+  {
+    "type": "trigger",
+    "named": true
+  },
+  {
+    "type": "variable_decl",
+    "named": true
+  },
+  {
+    "type": "view_decl",
+    "named": true
+  },
+  {
+    "type": "weave_head",
+    "named": true
+  },
+  {
+    "type": "while_head",
+    "named": true
+  }
+]

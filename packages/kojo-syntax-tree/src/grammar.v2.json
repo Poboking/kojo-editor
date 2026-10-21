@@ -1,0 +1,958 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/grammar.schema.json",
+  "name": "kojo2",
+  "rules": {
+    "source_file": {
+      "type": "REPEAT",
+      "content": {
+        "type": "SYMBOL",
+        "name": "_item"
+      }
+    },
+    "_item": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "PREC_RIGHT",
+          "value": 0,
+          "content": {
+            "type": "SYMBOL",
+            "name": "block"
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_line"
+        }
+      ]
+    },
+    "block": {
+      "type": "PREC_RIGHT",
+      "value": 0,
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "open",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "table_head"
+                }
+              },
+              {
+                "type": "FIELD",
+                "name": "body",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "table_body"
+                }
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "open",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "pool_head"
+                }
+              },
+              {
+                "type": "FIELD",
+                "name": "body",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "block_body"
+                }
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "open",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "template_head"
+                }
+              },
+              {
+                "type": "FIELD",
+                "name": "body",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "block_body"
+                }
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "open",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "native_head"
+                }
+              },
+              {
+                "type": "FIELD",
+                "name": "body",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "native_body"
+                }
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "open",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_optional_block_head"
+                }
+              },
+              {
+                "type": "FIELD",
+                "name": "body",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "block_body"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "_optional_block_head": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "calc_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "color_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "random_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "group_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "while_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "foreach_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "repeat_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "function_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "weave_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "condition_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "else_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "trigger"
+        }
+      ]
+    },
+    "block_body": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "indent"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_item"
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "dedent"
+        }
+      ]
+    },
+    "table_body": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "indent"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "table_row"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "comment"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "blank_line"
+              }
+            ]
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "dedent"
+        }
+      ]
+    },
+    "native_body": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "indent"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "native_line"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "blank_line"
+              }
+            ]
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "dedent"
+        }
+      ]
+    },
+    "_line": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "comment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "blank_line"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "slot_marker"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "scene_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "view_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "event_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "variable_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "constant_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "face_command"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "return_stmt"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "break_stmt"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "continue_stmt"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "label_stmt"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "jump_stmt"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "narration"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "speech"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "bare_speech"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "call_line"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "calc_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "color_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "random_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "group_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "while_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "foreach_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "repeat_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "function_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "weave_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "condition_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "else_head"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "trigger"
+        }
+      ]
+    },
+    "scene_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+幕(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "view_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+视(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "event_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+机(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "variable_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+变量(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "constant_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+常量(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "table_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+表(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "pool_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+池(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "template_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+模(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "calc_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@算[ \\t\\u3000]*"
+      }
+    },
+    "color_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@着色(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "random_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@随机[ \\t\\u3000]*"
+      }
+    },
+    "group_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@组[ \\t\\u3000]*"
+      }
+    },
+    "while_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@循(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "foreach_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@巡(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "repeat_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@复(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "function_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@函[ \\t\\u3000]+[^\\n]*"
+      }
+    },
+    "weave_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@织[ \\t\\u3000]+[^\\n]*"
+      }
+    },
+    "native_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@原生[ \\t\\u3000]*"
+      }
+    },
+    "face_command": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@颜绘(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "return_stmt": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@返(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "break_stmt": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@断[ \\t\\u3000]*"
+      }
+    },
+    "continue_stmt": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@续[ \\t\\u3000]*"
+      }
+    },
+    "label_stmt": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@标(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "jump_stmt": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@跳(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "condition_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\?(?:[ \\t\\u3000]+(?:[^否\\n][^\\n]*|[ \\t\\u3000]*))?"
+      }
+    },
+    "else_head": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\?[ \\t\\u3000]*否[ \\t\\u3000]*"
+      }
+    },
+    "trigger": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "(?:![ \\t\\u3000]+[^\\n]*|![ \\t\\u3000]*)"
+      }
+    },
+    "narration": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "marker",
+          "content": {
+            "type": "SYMBOL",
+            "name": "narration_marker"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "narration_text"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "interpolation"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "presentation_hint"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "continue_mark"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "narration_marker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": ">[ \\t\\u3000]*"
+      }
+    },
+    "narration_text": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 2,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:\\\\[^\\n]|[^{\\n(])*[^ \\t\\u3000\\r\\n续({\\\\]"
+        }
+      }
+    },
+    "speech": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "speaker",
+          "content": {
+            "type": "SYMBOL",
+            "name": "speaker"
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "text",
+          "content": {
+            "type": "SYMBOL",
+            "name": "speech_string"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "presentation_hint"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "continue_mark"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "bare_speech": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "text",
+          "content": {
+            "type": "SYMBOL",
+            "name": "speech_string"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "presentation_hint"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "continue_mark"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "speaker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|\\{[^{}\\n]*\\})[ \\t\\u3000]*："
+      }
+    },
+    "speech_string": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_speech_open"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "speech_text"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "interpolation"
+              }
+            ]
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "speech_close"
+        }
+      ]
+    },
+    "_speech_open": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "「"
+      }
+    },
+    "speech_text": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "(?:\\\\[^\\n]|[^{}」\\n])+"
+      }
+    },
+    "speech_close": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "」"
+      }
+    },
+    "interpolation": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_interp_open"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "interp_body"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "interp_close"
+        }
+      ]
+    },
+    "_interp_open": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "PATTERN",
+          "value": "\\{"
+        }
+      }
+    },
+    "interp_body": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "[^{}\\n]+"
+      }
+    },
+    "interp_close": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\}"
+      }
+    },
+    "presentation_hint": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\([^()\\n]*\\)"
+      }
+    },
+    "continue_mark": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "PATTERN",
+          "value": "续[ \\t\\u3000]*"
+        }
+      }
+    },
+    "assignment": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A]|\\{)[^=\\n「]*[+\\-*/]?=[^\\n]*"
+      }
+    },
+    "call_line": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "PATTERN",
+          "value": "[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*(?:\\.[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*)?\\([^\\n]*"
+        }
+      }
+    },
+    "table_row": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "range",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "table_range"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "table_else"
+              }
+            ]
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "value",
+          "content": {
+            "type": "SYMBOL",
+            "name": "table_value"
+          }
+        }
+      ]
+    },
+    "table_range": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "(?:(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+)\\.\\.(?:(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+))?|\\.\\.(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+)|(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+))"
+      }
+    },
+    "table_else": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "否"
+      }
+    },
+    "table_value": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "[^ \\t\\u3000\\r\\n][^\\n]*"
+      }
+    },
+    "comment": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\/\\/[^\\n]*"
+      }
+    },
+    "blank_line": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\n"
+      }
+    },
+    "slot_marker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\[插槽\\][ \\t\\u3000]*"
+      }
+    }
+  },
+  "extras": [
+    {
+      "type": "PATTERN",
+      "value": "[ \\r]+"
+    }
+  ],
+  "conflicts": [],
+  "precedences": [],
+  "externals": [
+    {
+      "type": "SYMBOL",
+      "name": "indent"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "dedent"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "native_line"
+    }
+  ],
+  "inline": [],
+  "supertypes": [],
+  "reserved": {}
+}
