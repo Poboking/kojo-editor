@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
  */
 
 const FIND_JS = 'editor/contrib/find/browser/findController.js';
+const FIND_WIDGET_JS = 'editor/contrib/find/browser/findWidget.js';
 const API_DTS = 'editor/editor.api.d.ts';
 
 /** 仓库根：从 cwd 往上找 pnpm-workspace.yaml（vitest 起在根，但被单独调用时未必） */
@@ -61,6 +62,27 @@ describe('vendor 补丁已生效：安装产物里必须真的带着那三枚方
     expect(dts).toContain('export interface IFindStateSnapshot');
     expect(dts).toMatch(/setFindStateSilently\(state: IFindStateSnapshot\): void/);
     expect(dts).toMatch(/getFindStateSilently\(\): IFindStateSnapshot/);
+  });
+
+  it('widget 半边（PERSIST-B）：findWidget.js 构造期在 _buildDomNode 里紧邻三开关 setter 补一次回填', () => {
+    const src = readVendor(FIND_WIDGET_JS);
+    // 形状钉死：三枚 setXxx(!!…) 之后紧跟补丁注释＋setValue，最后 END 收尾（不许漂到别处）
+    expect(src).toMatch(
+      /this\._findInput\.setWholeWords\(!\!\s*this\._state\.wholeWord\);\s*\/\* BEGIN kojo-editor vendor patch \(FIND-STATE-PERSIST-B\)[\s\S]{0,900}?this\._findInput\.setValue\(this\._state\.searchString\);[\s\S]{0,120}?\/\* END kojo-editor vendor patch \*\//,
+    );
+    // 本文件正常路径本来只有 _onStateChanged 那一枚 setValue；补丁只多加构造期这一枚 ⇒ 恰 2
+    expect(src.match(/this\._findInput\.setValue\(this\._state\.searchString\);/g)?.length).toBe(2);
+  });
+
+  it('补丁本体带 findWidget.js 的文件级 hunk（懒创建回填走 vendor 补丁，不进宿主 DOM  hack）', () => {
+    const patchFile = readFileSync(`${repoRoot()}/patches/monaco-editor@0.57.0.patch`, 'utf8');
+    expect(patchFile).toContain(
+      'diff --git a/esm/vs/editor/contrib/find/browser/findWidget.js b/esm/vs/editor/contrib/find/browser/findWidget.js',
+    );
+    expect(patchFile).toMatch(/^\+\s*this\._findInput\.setValue\(this\._state\.searchString\);/m);
+    // 构造期回填只准碰输入框，一次都不许在补丁段里调 _start（开框/夺焦那条路）
+    const widgetSection = patchFile.slice(patchFile.indexOf('diff --git a/esm/vs/editor/contrib/find/browser/findWidget.js'));
+    expect(widgetSection).not.toContain('_start(');
   });
 
   it('补丁链本体在仓里（patches/ + pnpm 11 认的 pnpm-workspace.yaml，且 lockfile 带 patch_hash）', () => {

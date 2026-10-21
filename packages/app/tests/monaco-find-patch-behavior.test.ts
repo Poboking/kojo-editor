@@ -68,11 +68,40 @@ interface FindModule {
  * 2026-10-21 审阅批实测：装载放在用例里 ⇒ 首个用例被判超时、后续用例继续等同一段装载，
  * 连锁 4 条 timed out（全量三跑三红，同文件单跑却 6/6 绿）；顶到顶层后用例本体只剩 1–2ms。
  * 断言一条不动。
+ *
+ * findWidget.js 顶层装载同理（widget 半边 PERSIST-B）：测的是安装产物里那枚**真 FindWidget**
+ * ——补丁没打上 ⇒ 构造期不回填输入框 ⇒ 判据①当场红。
  */
 const monoFind = (await import(pathToFileURL(monacoFindModulePath()).href)) as FindModule;
 
-/** 起一枚真控制器：只喂它构造期与静默路径真的会用到的最小接口 */
-async function newController(cursorWord = '恢复词') {
+const FIND_WIDGET_JS = 'editor/contrib/find/browser/findWidget.js';
+
+function monacoFindWidgetModulePath(): string {
+  for (const base of [`${repoRoot()}/packages/app/node_modules`, `${repoRoot()}/node_modules`]) {
+    const p = `${base}/monaco-editor/esm/vs/${FIND_WIDGET_JS}`;
+    if (existsSync(p)) return p;
+  }
+  throw new Error('monaco-editor findWidget.js 产物不可达：pnpm install 没跑？');
+}
+
+interface FindWidgetInstance {
+  getDomNode(): HTMLElement;
+  dispose(): void;
+}
+
+interface WidgetModule {
+  FindWidget: new (...args: unknown[]) => FindWidgetInstance;
+}
+
+const monoWidget = (await import(pathToFileURL(monacoFindWidgetModulePath()).href)) as WidgetModule;
+
+/**
+ * 起一枚真控制器：只喂它构造期与静默路径真的会用到的最小接口。
+ * `selectionEmpty=true` ⇒ 选区退化为"光标压词"（PERSIST-B 三档 seed 用例用）；默认保持旧行为。
+ * 后半组方法是真 FindWidget 构造期要碰的那几枚（overlay/事件/getOption 的 find 字段），
+ * 对旧用例（纯控制器路径）零影响——只是接口变宽。
+ */
+async function newController(cursorWord = '恢复词', selectionEmpty = false) {
   const rec = REC();
   const model = {
     getValueInRange: () => cursorWord,
@@ -83,7 +112,7 @@ async function newController(cursorWord = '恢复词') {
     endLineNumber: 1,
     startColumn: 3,
     endColumn: 3 + cursorWord.length,
-    isEmpty: () => cursorWord.length === 0,
+    isEmpty: () => selectionEmpty,
     getStartPosition: () => ({ lineNumber: 1, column: 3 }),
   };
   const editor = {
@@ -92,8 +121,33 @@ async function newController(cursorWord = '恢复词') {
     getSelection: () => selection,
     getSelections: () => [selection],
     getConfiguredWordAtPosition: () => ({ word: cursorWord, startColumn: 3, endColumn: 3 + cursorWord.length }),
-    getOption: () => ({ globalFindClipboard: false, loop: true, autoFindInSelection: 'never' }),
+    getOption: () => ({
+      globalFindClipboard: false,
+      loop: true,
+      autoFindInSelection: 'never',
+      addExtraSpaceOnTop: false,
+      findOnType: false,
+      history: 'never',
+      replaceHistory: 'never',
+      seedSearchStringFromSelection: 'never',
+    }),
     onDidChangeModel: () => ({ dispose: () => {} }),
+    onDidChangeConfiguration: () => ({ dispose: () => {} }),
+    onDidChangeCursorSelection: () => ({ dispose: () => {} }),
+    onDidFocusEditorWidget: () => ({ dispose: () => {} }),
+    onDidScrollChange: () => ({ dispose: () => {} }),
+    onDidLayoutChange: () => ({ dispose: () => {} }),
+    addOverlayWidget: (w: FindWidgetInstance) => {
+      document.body.appendChild(w.getDomNode());
+    },
+    removeOverlayWidget: (w: FindWidgetInstance) => {
+      w.getDomNode().remove();
+    },
+    getLayoutInfo: () => ({ width: 600, height: 400, contentWidth: 560 }),
+    // widget 构造尾段（addExtraSpaceOnTop 判定那路）会伸 viewZones：给一枚静默假面
+    changeViewZones: (cb: (z: { addZone: () => number; removeZone: () => void; layoutZone: () => void }) => void) => {
+      cb({ addZone: () => 0, removeZone: () => {}, layoutZone: () => {} });
+    },
     focus: () => {
       rec.focusCalls += 1;
     },
@@ -238,6 +292,174 @@ describe('补丁行为④：选区 / 光标压词不覆盖已放回的状态（�
       controller.setFindStateSilently({ searchString: '', replaceString: '', isRegex: false, wholeWord: false, matchCase: false });
       expect(controller.getState().searchString).toBe('');
     } finally {
+      controller.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PERSIST-B（widget 半边）：真壳 run6 残红的根因钉子。
+// find widget 是懒创建的（findController.js 首开才 _createFindWidget），而未打补丁的 findWidget.js
+// 构造期（_buildDomNode）只把 _state 喂给三枚开关（setRegex/setCaseSensitive/setWholeWords），
+// **没有 setValue**；输入框的值只由 _onStateChanged 的 `this._findInput.setValue(this._state.searchString)`
+// 推。⇒ "先 setFindStateSilently、之后才第一次开框"这条路词进得了状态进不了框
+// （run6 读数：value:""、inputCls:"input empty"，而三开关 aria-checked=true）。
+// 下面断言一律取 widget DOM 里 find 输入框的**实际值**，不是控制器状态（状态本来就是对的）。
+// ---------------------------------------------------------------------------
+
+/** 控制器持有的就是真 FindReplaceState（widget 构造期要的第三参）；change 是 monaco 正常 seed 通道 */
+interface FindState extends FindStateView {
+  change(opts: Record<string, unknown>, reveal: boolean, updateHistory?: boolean): void;
+}
+
+/** ContextScopedFindInput 要 createScoped（返回可 dispose 的同一枚）；键面只需 set/reset/get */
+function fakeContextKeyService(): Record<string, unknown> {
+  const svc: Record<string, unknown> = {
+    createKey: () => ({ set: () => {}, reset: () => {}, get: () => false }),
+    onDidChange: () => ({ dispose: () => {} }),
+    context: {},
+    queryContext: () => true,
+    dispose: () => {},
+  };
+  svc.createScoped = () => svc;
+  return svc;
+}
+
+function newWidget(controller: Controller, editor: unknown): FindWidgetInstance {
+  const state = controller.getState() as FindState;
+  return new monoWidget.FindWidget(
+    editor,
+    controller,
+    state,
+    {}, // contextViewProvider：构造期不碰（只被 hover 类路径惰性用）
+    { appendKeybinding: (_l: string, _id: string) => '', getUserBinding: () => undefined }, // keybindingService
+    fakeContextKeyService(), // contextKeyService（widget 与 scoped history 共用一枚）
+    { setupDelayedHover: () => ({ dispose: () => {} }) }, // hoverService：SimpleButton 构造期就 setupDelayedHover 挂 tooltip
+    new Set<string>(), // 查找历史上拉（构造期只判引用）
+    new Set<string>(), // 替换历史
+    { getValue: () => false }, // configurationService
+    {}, // accessibilityService
+  );
+}
+
+/** 取 widget DOM 里查找输入框（非测量用 unusedInput/unusedTextArea）的实际值集合 */
+function findInputDomValues(widget: FindWidgetInstance): string[] {
+  const root = widget.getDomNode().querySelector('.monaco-findInput');
+  if (!root) throw new Error('widget DOM 里没有 .monaco-findInput');
+  const els = Array.from(root.querySelectorAll('input, textarea')).filter(
+    (el) => !el.classList.contains('unusedInput') && !el.classList.contains('unusedTextArea'),
+  );
+  if (els.length === 0) throw new Error('查找输入框的 input/textarea 一个都没摸到');
+  return els.map((el) => (el as HTMLInputElement).value);
+}
+
+describe('补丁行为⑤（PERSIST-B）：先静默写状态、之后才第一次开框 ⇒ 框内值＝持久词', () => {
+  it('setFindStateSilently 后构造 widget：find 输入框 DOM 实际值逐字等于持久词，且不回写状态、不开框不夺焦', async () => {
+    const { controller, rec, editor } = await newController('光标词');
+    let fired = 0;
+    const sub = controller.onDidChangeFindState(() => {
+      fired += 1;
+    });
+    controller.setFindStateSilently({
+      searchString: 'PERSIST2ND',
+      replaceString: '',
+      isRegex: true,
+      wholeWord: false,
+      matchCase: true,
+    });
+    expect(fired).toBe(1); // 静默设置那拍
+    const widget = newWidget(controller, editor);
+    expect(fired).toBe(1); // 构造期回填不许把 _state 再改一遍（不回环）
+    try {
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['PERSIST2ND']));
+      // 三开关同批回填（run6 里开关本来就回得来，这条钉住"补值不弄坏开关"）
+      const aria = Array.from(widget.getDomNode().querySelectorAll('[aria-checked="true"]')).length;
+      expect(aria).toBe(2); // isRegex + matchCase
+      expect(controller.getState().isRevealed).toBe(false);
+      expect(rec.focusCalls).toBe(0);
+    } finally {
+      sub.dispose();
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+
+  it('构造期回填不盖后续 seed：_state.change 之后 _onStateChanged 仍把框值覆盖成新词（monaco 正常路径顺序不变）', async () => {
+    const { controller, editor } = await newController('光标词');
+    controller.setFindStateSilently({ searchString: 'PERSIST2ND', replaceString: '', isRegex: false, wholeWord: false, matchCase: false });
+    const widget = newWidget(controller, editor);
+    try {
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['PERSIST2ND']));
+      // 这正是 _start seed 分支的调用形态：change ⇒ _onStateChanged ⇒ setValue 覆盖
+      (controller.getState() as FindState).change({ searchString: '选区seed' }, false);
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['选区seed']));
+    } finally {
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+});
+
+describe('补丁行为⑥（PERSIST-B）：三档 seedSearchStringFromSelection 语义一字不动', () => {
+  /** 逐字镜像 findController 开框动作里的档位闸门（getOption(find).seedSearchStringFromSelection） */
+  const seedArgsFor = (tier: 'selection' | 'always' | 'never') => ({
+    seed: tier === 'never' ? ('none' as const) : ('single' as const),
+    fromNonEmpty: tier === 'selection',
+  });
+
+  async function openedWidget(cursorWord: string, selectionEmpty: boolean) {
+    const h = await newController(cursorWord, selectionEmpty);
+    h.controller.setFindStateSilently({ searchString: 'PERSIST2ND', replaceString: '', isRegex: false, wholeWord: false, matchCase: false });
+    return { ...h, widget: newWidget(h.controller, h.editor) };
+  }
+
+  it('selection 档：光标压词（空选区）取不到 seed ⇒ 不劫持已恢复的词，框里仍是持久词', async () => {
+    const { controller, mod, editor, widget } = await openedWidget('光标词', true);
+    try {
+      const { seed, fromNonEmpty } = seedArgsFor('selection');
+      expect(seed).toBe('single');
+      expect(mod.getSelectionSearchString(editor, seed, fromNonEmpty)).toBeNull();
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['PERSIST2ND']));
+    } finally {
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+
+  it('selection 档：真选中（非空选区）即选即查——seed 经 _state.change 覆盖构造期回填值', async () => {
+    const { controller, mod, editor, widget } = await openedWidget('选中词', false);
+    try {
+      const { seed, fromNonEmpty } = seedArgsFor('selection');
+      expect(mod.getSelectionSearchString(editor, seed, fromNonEmpty)).toBe('选中词');
+      (controller.getState() as FindState).change({ searchString: '选中词' }, false);
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['选中词']));
+    } finally {
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+
+  it('always 档（single, false）：光标压词仍种光标词，回填值让位于 seed', async () => {
+    const { controller, mod, editor, widget } = await openedWidget('光标词', true);
+    try {
+      const { seed, fromNonEmpty } = seedArgsFor('always');
+      expect(mod.getSelectionSearchString(editor, seed, fromNonEmpty)).toBe('光标词');
+      (controller.getState() as FindState).change({ searchString: '光标词' }, false);
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['光标词']));
+    } finally {
+      widget.dispose();
+      controller.dispose();
+    }
+  });
+
+  it('never 档：闸门给 none，seed helper 根本不参与 ⇒ 框里只用持久词', async () => {
+    const { controller, widget } = await openedWidget('光标词', true);
+    try {
+      expect(seedArgsFor('never').seed).toBe('none');
+      expect(new Set(findInputDomValues(widget))).toEqual(new Set(['PERSIST2ND']));
+      expect(controller.getState().searchString).toBe('PERSIST2ND');
+    } finally {
+      widget.dispose();
       controller.dispose();
     }
   });
