@@ -24,6 +24,7 @@ import {
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
 import { readFindState, writeFindState } from '../monaco/find-state-sync'; // FIND-STATE-PERSIST（读回/写存两处调用，接线面到此为止）
 import { applyFormatOnSave } from './format-on-save';
+import { applyStackedModelEdits } from './stacked-model-edits'; // STACKED-MODEL-EDITS：程序化写 model 的唯一上栈通道
 import { loadFormatRulesPref } from './format-pref';
 import { classifySaveRace } from './save-race';
 import { selectionStatusText } from './selection-status';
@@ -1245,9 +1246,12 @@ export function EditorPane({
           );
           let text = rawText;
           if (prepared.changed) {
-            // `pushEditOperations` 一次落地全部 edits ⇒ 落进撤销栈的是**一个**元素；
+            // 走**共用上栈通道**（STACKED-MODEL-EDITS）：前停点 → `pushEditOperations(null, …)` → 后停点
+            // ⇒ 整理结果在撤销栈上**恰好占一个元素**，一次 Ctrl+Z 只退整理、作者打字留下。
+            // 改前这里裸调 `pushEditOperations([], …)` **前后皆无停点**：栈顶那格（作者上一次打字）
+            // 还开着，`EditStack.canAppend` 把整理结果并进那一格 ⇒ Ctrl+S 一次、作者那一步就被吞。
             // 用它而不是 `ed.executeEdits` 是因为后台标签的 model 不在编辑器上（全部保存途中）。
-            entry.model.pushEditOperations([], toTextEdits(entry.model, prepared.edits), () => null);
+            applyStackedModelEdits(entry.model, toTextEdits(entry.model, prepared.edits));
             text = entry.model.getValue();
           }
           // A1 保存竞态守卫：文本定稿（保存前整理已落地）即快照版本号——写盘窗口内的
