@@ -401,14 +401,22 @@ export function getViewState(root: string, file: string): ViewSlice | null {
   return v;
 }
 
-/** 写（进 LRU 尾端 + 超限淘汰 + 折叠预算 + 防抖落盘；非法 slice 静默丢弃） */
+/**
+ * 写（进 LRU 尾端 + 超限淘汰 + 折叠预算 + 防抖落盘；非法 slice 静默丢弃）。
+ * find 是**唯一不跟"整条替换"的字段**（FIND-STATE-PERSIST 覆盖修复①）：入参清洗后不带 find
+ * ⇒ 保留既有条目已记录的 find（其余字段照旧整条覆盖）。这一条是"本拍无可写"的落盘半边——
+ * 读侧（find-state-sync）在未动过查找时返回 null、withFind 不挂键，到这里若不保留，
+ * 一次普通光标快照就会把已记录的查找词洗掉（真壳读数：开机首拍即全空的根因之二）。
+ * 想真正清掉 find 只有一条路：入参带一条合法的 find（含全空串——作者清空过查找框）。
+ */
 export function setViewState(root: string, file: string, slice: ViewSlice): void {
   const s = sanitizeSlice(slice);
   if (!s) return;
   const m = loadCache();
   const k = viewStateKey(root, file);
+  const prevFind = m.get(k)?.find;
   m.delete(k);
-  m.set(k, s);
+  m.set(k, s.find === undefined && prevFind !== undefined ? { ...s, find: prevFind } : s);
   trimEntries(m);
   enforceFoldBudget(m);
   if (flushTimer === null) {

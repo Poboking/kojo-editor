@@ -1936,10 +1936,16 @@ export function EditorPane({
         quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
       }, minimapCtxForPath(filePath)));
+      // FIND-STATE-PERSIST 覆盖修复②·读拍**排在 setModel 之前**：换 model 那拍会同步触发光标/滚动
+      // 快照与 find 的 searchScope 事件，`switchingModelRef` 只拦得住宿主这一路写存，别的实例或
+      // 上一拍仍可能先把本文件的记录洗掉 ⇒ 晚一拍读到的就是别人的词。写拍必须在 setModel 之后
+      // （monaco 换 model 那拍会从 workspace 存储重置开关，放早了被它盖掉）。
+      const persistedFindRoot = kernel.project.current()?.rootDir;
+      const persistedFind = persistedFindRoot ? getViewState(persistedFindRoot, filePath)?.find : undefined;
       // 换 model 与视图恢复这一拍内的 cursor/scroll/find 事件都不许写存：此刻屏上是 1:1
       // 默认态（查找词还是上一个文件的、光标/折叠尚未恢复），写下去会覆盖该文件已存的视图状态
-      switchingModelRef.current = true;
       try {
+        switchingModelRef.current = true;
         ed.setModel(entry.model);
         const vs = viewStatesRef.current.get(filePath);
         if (vs) ed.restoreViewState(vs);
@@ -1947,10 +1953,10 @@ export function EditorPane({
         // FIND-STATE-PERSIST 读回点（**必须挂在这条 if/else 之后**：vs 命中的同会话切回路径
         // 压根不进 applyPersistedView，写在里面就漏掉一半）。顺序前提：`setModel` 已在上面跑过，
         // monaco 自己那拍"开关从 workspace 存储重置"已经发生，这里覆盖它才是最终值。
-        const persistedFindRoot = kernel.project.current()?.rootDir;
-        if (persistedFindRoot) {
-          const persistedFind = getViewState(persistedFindRoot, filePath)?.find;
-          if (persistedFind) writeFindState(ed, persistedFind);
+        if (persistedFind) {
+          // ②·恢复自身触发一次写存纠偏：放回后立即把"词=记录值"的整条切片纠回来，
+          // 免得别的拍已把别的文件的词洗进本条记录（store 自带防抖，无额外落盘成本）。
+          if (writeFindState(ed, persistedFind)) persistEditorSlice(ed, filePath);
         }
       } finally {
         switchingModelRef.current = false;

@@ -43,18 +43,40 @@ export function findControllerOf(ed: Monaco.editor.IStandaloneCodeEditor): Monac
   return controller;
 }
 
-/** 读当前查找状态（逐字返回，交给 view-state-store 清洗）；补丁未生效 ⇒ null */
+/**
+ * 本会话"查找被动过"的登记册（键 = find 控制器实例，编辑器销毁即随 WeakSet 回收）。
+ * 判据来源只有两处：`onDidChangeFindState` 的任一事件（作者拨框、程序放回都算——放回的值
+ * 就是该文件此刻的真状态，理应当"有可写"）与 `writeFindState` 成功一拍。
+ * 口径（FIND-STATE-PERSIST 覆盖修复①）：**全默认空 且 本会话没动过** ⇒ 这一拍无可写。
+ * 真壳读数（停机前记 PERSIST2ND、开机首拍后全空）的根因就在这：补丁的 `getFindStateSilently`
+ * 对从没用过查找框的 widget 也返回结构完整的**全空记录**，旧口径把它当合法值写存，
+ * 把已记录的词覆盖掉。空串本身仍是合法值（作者清空过查找框＝动过 ⇒ 已登记）。
+ */
+const touchedFindControllers = new WeakSet<Monaco.editor.IFindController>();
+
+/** 全默认空（词/替换词皆空串、三开关皆 false）＝ widget 从没被拨过的形状 */
+export function isPristineFind(s: SerializedFind): boolean {
+  return s.searchString === '' && s.replaceString === '' && !s.isRegex && !s.wholeWord && !s.matchCase;
+}
+
+/**
+ * 读当前查找状态（逐字返回，交给 view-state-store 清洗）；补丁未生效 ⇒ null。
+ * 追加一条无可写判据：本会话未登记且当前值全默认空 ⇒ 也返回 null（这一拍不写存，
+ * 覆盖闸的另一半在 store 的 `setViewState`——入参不带 find 时保留既有条目的 find）。
+ */
 export function readFindState(ed: Monaco.editor.IStandaloneCodeEditor): SerializedFind | null {
   const controller = findControllerOf(ed);
   if (!controller) return null;
   const s = controller.getFindStateSilently();
-  return {
+  const find: SerializedFind = {
     searchString: s.searchString,
     replaceString: s.replaceString,
     isRegex: s.isRegex,
     wholeWord: s.wholeWord,
     matchCase: s.matchCase,
   };
+  if (!touchedFindControllers.has(controller) && isPristineFind(find)) return null;
+  return find;
 }
 
 /**
@@ -71,6 +93,9 @@ export function writeFindState(ed: Monaco.editor.IStandaloneCodeEditor, find: Se
     wholeWord: find.wholeWord,
     matchCase: find.matchCase,
   });
+  // 程序放回同样登记：放回值就是本文件此刻真状态，之后的快照拍必须照常写存
+  // （不靠事件回环兜底——monaco 的 change 只在值真变时才发事件）。
+  touchedFindControllers.add(controller);
   return true;
 }
 
@@ -97,6 +122,11 @@ export function subscribeFindState(
   return controller.onDidChangeFindState((e) => {
     const ev = e as Monaco.editor.IFindStateChangeEvents & { searchScope?: boolean };
     if (ev.searchScope) return;
+    // 先登记再上抛：宿主这次快照拍必须能读到"有可写"的判定（含作者清空查找框那拍）。
+    // 换 model 那发 searchScope 事件在上面就整条丢掉了——它不是作者动作，不许替作者登记。
+    touchedFindControllers.add(controller);
+    onChange();
+  });
     onChange();
   });
 }
