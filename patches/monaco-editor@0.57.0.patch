@@ -94,3 +94,25 @@ index 15126138ded04e92d68cff1fd1df6bf87d87e6c9..a96a75ee3372b321599a2f181ef54325
  }
  
  declare namespace languages {
+diff --git a/esm/vs/editor/contrib/find/browser/findWidget.js b/esm/vs/editor/contrib/find/browser/findWidget.js
+index 9a907e9..a535121 100644
+--- a/esm/vs/editor/contrib/find/browser/findWidget.js
++++ b/esm/vs/editor/contrib/find/browser/findWidget.js
+@@ -805,6 +805,17 @@ class FindWidget extends Widget {
+         this._findInput.setRegex(!!this._state.isRegex);
+         this._findInput.setCaseSensitive(!!this._state.matchCase);
+         this._findInput.setWholeWords(!!this._state.wholeWord);
++        /* BEGIN kojo-editor vendor patch (FIND-STATE-PERSIST-B) -------------------------
++         * 查找框是懒创建的：findController 首开才 _createFindWidget()，而构造期（本 _buildDomNode）
++         * 只把 _state 喂给上面三枚开关——输入框的值原本只由 _onStateChanged 的 setValue 推。
++         * ⇒「先 setFindStateSilently、之后才第一次开框」时持久词进得了状态进不了框
++         *   （真壳 run6 读数：value:""、inputCls:"input empty"，三开关 aria-checked=true）。
++         * 构造期补一次 setValue＝与 _onStateChanged 同一通道；此刻 inputBox.onDidChange 监听
++         * 尚未注册 ⇒ 不回写 _state、不回环；后续选区 seed 仍按 change→_onStateChanged 覆盖本值
++         * （三档 seedSearchStringFromSelection 语义一字不动）。
++         * ------------------------------------------------------------------------------ */
++        this._findInput.setValue(this._state.searchString);
++        /* END kojo-editor vendor patch */
+         this._register(this._findInput.onKeyDown((e) => {
+             if (e.equals(3 /* KeyCode.Enter */) && !this._codeEditor.getOption(50 /* EditorOption.find */).findOnType) {
+                 this._state.change({ searchString: this._findInput.getValue() }, true);
