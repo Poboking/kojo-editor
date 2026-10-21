@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  monaco-editor@0.57.0: 58c0bd6158f0f50f79fb73cc5c13a8e2c4842529973e73d29bc68aa96a3fa71e
+
 importers:
 
   .:
@@ -115,7 +118,7 @@ importers:
         version: 2.13.3
       monaco-editor:
         specifier: 0.57.0
-        version: 0.57.0
+        version: 0.57.0(patch_hash=58c0bd6158f0f50f79fb73cc5c13a8e2c4842529973e73d29bc68aa96a3fa71e)
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -2181,7 +2184,7 @@ snapshots:
 
   marked@14.0.0: {}
 
-  monaco-editor@0.57.0:
+  monaco-editor@0.57.0(patch_hash=58c0bd6158f0f50f79fb73cc5c13a8e2c4842529973e73d29bc68aa96a3fa71e):
     dependencies:
       dompurify: 3.4.15
       marked: 14.0.0

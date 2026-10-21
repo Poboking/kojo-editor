@@ -1,0 +1,96 @@
+diff --git a/esm/vs/editor/contrib/find/browser/findController.js b/esm/vs/editor/contrib/find/browser/findController.js
+index ecc531299cc616160651dcf36003ed67239aeec8..13af2ed9e29df24f28e18d029a3c802525f89e7c 100644
+--- a/esm/vs/editor/contrib/find/browser/findController.js
++++ b/esm/vs/editor/contrib/find/browser/findController.js
+@@ -222,6 +222,44 @@ let CommonFindController = class CommonFindController extends Disposable {
+         }
+         this._state.change({ searchString: searchString }, false);
+     }
++    /* BEGIN kojo-editor vendor patch (FIND-STATE-PERSIST) ------------------------------
++     * 为什么必须进补丁、进不了我们的代码：
++     * `FindReplaceState`（findState.js）没有出现在 monaco 的任何公开导出里，controller 的
++     * `_state` 也是私有字段；公开面 `IEditorFindOptions`（editor.api.d.ts）根本不含搜索词。
++     * ⇒ 从外面「把上次的查找状态放回去」只能 `getState() as any` 摸私有类，
++     *   或走 `editor.actions.findWithArgs` 命令（实测会弹 widget、抢焦点 56–84ms/次，
++     *   且首切时被光标所在词按 seedSearchStringFromSelection 劫持）。
++     * 本补丁把这条下注面换成**有类型的公开入口**：只改状态，不碰 widget / 焦点 / 选区 / 剪贴板 seed。
++     * ------------------------------------------------------------------------------ */
++    /**
++     * 静默设置查找状态（词 / 替换词 / 正则 / 全词 / 大小写）。
++     * 不经 `_start()`：不创建 FindWidget、不改 `isRevealed`、不动焦点、不吃选区与光标 seed；
++     * `updateHistory = false` ⇒ 不污染查找历史上拉。三开关必须全传（省略 = 保持现值）。
++     */
++    setFindStateSilently(state) {
++        this._state.change({
++            searchString: state.searchString,
++            replaceString: state.replaceString,
++            isRegex: state.isRegex,
++            wholeWord: state.wholeWord,
++            matchCase: state.matchCase,
++        }, false, false);
++    }
++    /** 读当前查找状态（同一形状的快照，供宿主按文件持久化；开关取 actual*＝未经 override 覆盖的真值） */
++    getFindStateSilently() {
++        return {
++            searchString: this._state.searchString,
++            replaceString: this._state.replaceString,
++            isRegex: this._state.actualIsRegex,
++            wholeWord: this._state.actualWholeWord,
++            matchCase: this._state.actualMatchCase,
++        };
++    }
++    /** 订阅查找状态变更（转授 `_state.onFindReplaceStateChange`，宿主据此写存，不必轮询） */
++    onDidChangeFindState(listener) {
++        return this._state.onFindReplaceStateChange(listener);
++    }
++    /* END kojo-editor vendor patch */
+     highlightFindOptions(ignoreWhenVisible = false) {
+         // overwritten in subclass
+     }
+diff --git a/esm/vs/editor/editor.api.d.ts b/esm/vs/editor/editor.api.d.ts
+index 15126138ded04e92d68cff1fd1df6bf87d87e6c9..a96a75ee3372b321599a2f181ef543258a619fc8 100644
+--- a/esm/vs/editor/editor.api.d.ts
++++ b/esm/vs/editor/editor.api.d.ts
+@@ -6569,6 +6569,42 @@ declare namespace editor {
+ 	//compatibility:
+ 	export type IReadOnlyModel = ITextModel;
+ 	export type IModel = ITextModel;
++
++	/* BEGIN kojo-editor vendor patch (FIND-STATE-PERSIST) ------------------------------
++	 * 上面三处 JS 方法（findController.js 的 set/getFindStateSilently、onDidChangeFindState）的
++	 * 类型面。为什么必须进补丁：`FindReplaceState` 不在 monaco 公开导出里，`getContribution`
++	 * 返回的 controller 也只有一个 `IEditorContribution`（dispose/saveViewState/restoreViewState），
++	 * 宿主想读/写搜索词就只能 `as any`——本补丁把那条下注面变成有类型的公开面。
++	 * 消费路径：`editor.getContribution<editor.IFindController>('editor.contrib.findController')`。
++	 * ------------------------------------------------------------------------------ */
++	/** 查找状态的可持久化快照（三开关必全传：省略 = 保持现值，恢复时必须逐字回填） */
++	export interface IFindStateSnapshot {
++		searchString: string;
++		replaceString: string;
++		isRegex: boolean;
++		wholeWord: boolean;
++		matchCase: boolean;
++	}
++
++	/** `FindReplaceState.change()` 的变更标记（宿主只当作"该写存了"的信号，不解释逐字段含义） */
++	export interface IFindStateChangeEvents {
++		readonly searchString?: boolean;
++		readonly replaceString?: boolean;
++		readonly isRegex?: boolean;
++		readonly wholeWord?: boolean;
++		readonly matchCase?: boolean;
++	}
++
++	/** `editor.contrib.findController` 贡献上由本补丁公开的方法 */
++	export interface IFindController extends IEditorContribution {
++		/** 静默设置查找状态：不打开查找框、不改焦点、不吃选区/光标 seed、不写查找历史 */
++		setFindStateSilently(state: IFindStateSnapshot): void;
++		/** 读当前查找状态快照（开关为未经 override 覆盖的 actual 真值） */
++		getFindStateSilently(): IFindStateSnapshot;
++		/** 订阅查找状态变更 */
++		onDidChangeFindState(listener: (e: IFindStateChangeEvents) => void): IDisposable;
++	}
++	/* END kojo-editor vendor patch */
+ }
+ 
+ declare namespace languages {
