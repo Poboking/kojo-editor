@@ -22,6 +22,7 @@ import {
   type RevealTarget,
 } from '../monaco/reveal-position';
 import { dialectForLanguage, toTextEdits } from '../monaco/kojo-format';
+import { readFindState, writeFindState } from '../monaco/find-state-sync'; // FIND-STATE-PERSIST（读回/写存两处调用，接线面到此为止）
 import { applyFormatOnSave } from './format-on-save';
 import { loadFormatRulesPref } from './format-pref';
 import { classifySaveRace } from './save-race';
@@ -54,6 +55,7 @@ import {
   foldRestoreState,
   getViewState,
   setViewState,
+  withFind,
 } from './view-state-store';
 import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
 import { pathLabelParts } from './path-label';
@@ -1668,7 +1670,8 @@ export function EditorPane({
     const root = kernel.project.current()?.rootDir;
     if (!root) return;
     const slice = extractViewSlice(ed.saveViewState(), ed.getScrollTop(), ed.getScrollLeft());
-    if (slice) setViewState(root, path, slice);
+    // FIND-STATE-PERSIST 写存点：查找词与三开关随本条视图切片一起落（additive，同 folds 形态）
+    if (slice) setViewState(root, path, withFind(slice, readFindState(ed)));
   };
   /** 活动标签的即时快照（光标/滚动事件驱动；store 防抖合并落盘） */
   const snapshotActiveView = (): void => {
@@ -1921,6 +1924,14 @@ export function EditorPane({
       const vs = viewStatesRef.current.get(filePath);
       if (vs) ed.restoreViewState(vs);
       else applyPersistedView(ed, entry.model, filePath);
+      // FIND-STATE-PERSIST 读回点（**必须挂在这条 if/else 之后**：vs 命中的同会话切回路径
+      // 压根不进 applyPersistedView，写在里面就漏掉一半）。顺序前提：`setModel` 已在上面跑过，
+      // monaco 自己那拍"开关从 workspace 存储重置"已经发生，这里覆盖它才是最终值。
+      const persistedFindRoot = kernel.project.current()?.rootDir;
+      if (persistedFindRoot) {
+        const persistedFind = getViewState(persistedFindRoot, filePath)?.find;
+        if (persistedFind) writeFindState(ed, persistedFind);
+      }
       setDirty(computeDirty(filePath));
       setError(null);
       // 换文件才作废未决的保存告警（避免误对旧文件应用修复）；同文件重跑（依赖抖动 /

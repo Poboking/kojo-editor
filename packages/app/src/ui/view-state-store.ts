@@ -5,8 +5,9 @@ import { pathKey } from '@kojo/plugin-api';
  * 纯逻辑零 React 零 Monaco——Monaco 视图状态在这里只是 `unknown`，抽取/钳制是纯函数，可单测。
  * 与布局同族（layout.ts 的"版本化 key + 清洗"路子），独立成库：键按 项目根+文件绝对路径 组合。
  *
- * 版本策略（folds 为 additive 字段，**不 bump schema、不改键**）：
+ * 版本策略（folds / find 为 additive 字段，**不 bump schema、不改键**）：
  * - 旧版本写出的 v1 条目没有 folds ⇒ 读入时补 []（视作"无折叠"），不迁移、不炸；
+ * - 旧版本写出的 v1 条目没有 find ⇒ 读入即"这个文件没记过查找状态"，恢复整拍跳过（不拿空串覆盖）；
  * - 旧版本读到带 folds 的新条目会忽略该未知字段，下次 flush 自然退回无 folds——可接受的降级
  *   （光标/滚动不受影响，只是折叠丢一次）；bump 版本会整库丢弃旧光标状态，代价大于收益。
  * - 条目内 folds 损坏只清该字段（selections 仍有效）；selections 损坏才整条摘除（原纪律不变）。
@@ -46,6 +47,11 @@ export interface ViewSlice {
    * 行号与 Monaco 一致，1-based。
    */
   folds?: SerializedFold[];
+  /**
+   * 查找状态（可选 = additive，同 folds 的先例：不 bump schema、不改键）。
+   * 缺失 = 这个文件从没打开过查找框；此时恢复路径整拍跳过，绝不拿空串去覆盖当前状态。
+   */
+  find?: SerializedFind;
 }
 
 /**
@@ -66,6 +72,23 @@ export interface SerializedFold {
   /** 行内容校验和：内容变了的折叠由 Monaco applyMemento 自行跳过，不恢复错位折叠 */
   checksum?: number;
 }
+
+/**
+ * 查找状态（FIND-STATE-PERSIST；**同样是 additive 字段，不 bump schema**，口径见文件头 folds 那段）。
+ * 三开关**必全传**：monaco 的 `change()` 对省略的字段是"保持现值"，恢复时漏一个就是把上一个文件的
+ * 开关值带进这个文件——所以这里不用可选字段，逐字回填。
+ * 词表为空串是合法值（作者清空过查找框），故 sanitize 不 trim、不拒空。
+ */
+export interface SerializedFind {
+  searchString: string;
+  replaceString: string;
+  isRegex: boolean;
+  wholeWord: boolean;
+  matchCase: boolean;
+}
+
+/** 单词条上下文的体积上限（正则串可能很长；超限视作损坏，丢 find 字段、不丢条目） */
+export const MAX_FIND_TEXT = 512;
 
 interface PersistedEnvelope {
   v: number;
@@ -157,12 +180,39 @@ function sanitizeSlice(raw: unknown): ViewSlice | null {
     if (selections.length >= MAX_SELECTIONS) break;
   }
   if (selections.length === 0) return null;
-  return {
-    selections,
-    scrollTop: nonNegative(r.scrollTop),
-    scrollLeft: nonNegative(r.scrollLeft),
-    folds: sanitizeFolds(r.folds), // 缺失/损坏 ⇒ []，不拖垮本条目的光标状态
-  };
+  return withFind(
+    {
+      selections,
+      scrollTop: nonNegative(r.scrollTop),
+      scrollLeft: nonNegative(r.scrollLeft),
+      folds: sanitizeFolds(r.folds), // 缺失/损坏 ⇒ []，不拖垮本条目的光标状态
+    },
+    r.find,
+  );
+}
+
+/**
+ * 查找状态清洗：五个字段**全有或全无**（半成品开关集比没有更糟——恢复时会把上一个文件的值漏进来）。
+ * 词/替换词允许空串（作者清空过查找框），只限长度；不 trim（`" foo"` 这类带空格的查询是作者的本意）。
+ */
+export function sanitizeFind(raw: unknown): SerializedFind | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const text = (v: unknown): string | null => (typeof v === 'string' && v.length <= MAX_FIND_TEXT ? v : null);
+  const searchString = text(r.searchString);
+  const replaceString = text(r.replaceString);
+  if (searchString === null || replaceString === null) return null;
+  if (typeof r.isRegex !== 'boolean' || typeof r.wholeWord !== 'boolean' || typeof r.matchCase !== 'boolean') return null;
+  return { searchString, replaceString, isRegex: r.isRegex, wholeWord: r.wholeWord, matchCase: r.matchCase };
+}
+
+/**
+ * 把（未清洗的）查找快照挂进视图切片：合法就覆盖，非法/缺失就**原样返回**（find 是可选字段，
+ * 读不到就当这个文件没记过查找状态，绝不写半条进去）。
+ */
+export function withFind(slice: ViewSlice, raw: unknown): ViewSlice {
+  const find = sanitizeFind(raw);
+  return find ? { ...slice, find } : slice;
 }
 
 function rangeFromCursorStateEntry(item: unknown): SerializedRange | null {
@@ -280,7 +330,10 @@ export function clampSlice(slice: ViewSlice, lineCount: number, maxColumnOf: (li
     if (!moved && f.checksum !== undefined) out.checksum = f.checksum;
     folds.push(out);
   }
-  return { selections, scrollTop: slice.scrollTop, scrollLeft: slice.scrollLeft, folds };
+  // find 与文件几何无关（不含行列），原样透传；非法/缺字段 ⇒ 不写这个键（别把 undefined 落进 JSON）
+  const clampedFind = sanitizeFind(slice.find);
+  const rest = { selections, scrollTop: slice.scrollTop, scrollLeft: slice.scrollLeft, folds };
+  return clampedFind ? { ...rest, find: clampedFind } : rest;
 }
 
 // cache 的失效判据 = localStorage 引用变了（测试替换替身 / 环境切换都自动重读）

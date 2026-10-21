@@ -21,6 +21,7 @@ import * as monaco from '../../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../../monaco/erb-language';
 import { monacoThemeIdFor } from '../../monaco/theme';
+import { subscribeFindState } from '../../monaco/find-state-sync'; // FIND-STATE-PERSIST
 import { loadThemePref } from '../theme-pref';
 import { CODE_LENS_DEFAULT } from '../code-lens-pref';
 import { installSuggestContextTrigger } from '../../monaco/suggest-context-trigger';
@@ -261,6 +262,9 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
     const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
     const viewScrSub = ed.onDidScrollChange(snapshotActiveView);
+    // FIND-STATE-PERSIST 写存驱动：改查找词 / 拨三个开关也算视图状态变更（同一条防抖通道）。
+    // 补丁未生效 ⇒ subscribeFindState 返回 null，不挂不抛，与读回点同一口径。
+    const viewFindSub = subscribeFindState(ed, snapshotActiveView);
     // C1 反向下行批：光标位点广播（面板跟着光标走）。选区也要听——拖动选择区改变的是
     // 活动端（position），Monaco 两条事件都可能先到，重复的那次由广播器去重吞掉（零成本）。
     const cursorSub = ed.onDidChangeCursorPosition(() => publishCursor());
@@ -284,6 +288,7 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       disposeBreadcrumb();
       viewCurSub.dispose();
       viewScrSub.dispose();
+      viewFindSub?.dispose();
       cursorSub.dispose();
       cursorSelSub.dispose();
       contextSuggestSub.dispose();
