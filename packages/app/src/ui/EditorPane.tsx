@@ -1576,8 +1576,11 @@ export function EditorPane({
       const model = sugarModelRef.current ? null : ed?.getModel();
       if (ed && model) {
         const fixed = model.getValue().split(FULLWIDTH_SPACE).join(' ');
-        ed.executeEdits('kojo-fix-fullwidth', [{ range: model.getFullModelRange(), text: fixed }]);
-        ed.pushUndoStop();
+        // FIX-ALL-UNDO-STACK（2026-10-21）：改走 `applyDiskText` 的停点口径（与 RELOAD-UNDO-KEEP
+        // 同源，不发明第二套）。旧写法 `executeEdits` + 事后单发 `pushUndoStop` **缺前停点**——
+        // monaco 的 EditStack 只要栈顶那格还开着就把整篇替换并进作者刚才的打字里，
+        // 第一次 Ctrl+Z 连打字一起吞（真壳取证：屏盘不一致）。前后各一停 ⇒ 替换自成**一个**撤销元素。
+        applyDiskText(model, fixed);
       }
       void save();
     },
