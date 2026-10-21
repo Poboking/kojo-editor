@@ -4,8 +4,9 @@
  * 分两层：
  * - **替身层**（内存 FileIO）：精确驱动各成功/失败路径（越权、回读不一致、
  *   error 诊断拒绝、备份触发），断言**顺序安全语义**（守卫先于一切副作用）；
+ *   K2-PRE-REUSE ③ 起追加「回读失败即回滚」面（坏/半产物不许留盘）；
  * - **真实链路层**（NodeBridge + 临时目录）：端到端写盘 → 回读逐字节一致，
- *   并断言落盘字节确实是 BOM + LF + 末尾换行。
+ *   并断言落盘字节确实是 BOM + LF + 末尾换行；另含真 io 的回滚对拍。
  *
  * 全部写临时目录（appData 副本），绝不触真实游戏目录。
  */
@@ -14,7 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DirEntry, FileStat, FileIO, TextFile, TrashEntry, WriteTextOptions } from '@kojo/plugin-api';
-import { WriteNotAllowedError } from '@kojo/plugin-api';
+import { SugarCompileError, WriteNotAllowedError } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { compileToFile, encodeErbBytes } from '../src/compile';
@@ -51,10 +52,16 @@ interface HarnessOptions {
   files?: Record<string, Uint8Array>;
   /** 可写判定（默认可写） */
   writable?: (p: string) => boolean;
-  /** 'tamper' = 写盘后篡改落盘内容（触发回读不一致） */
-  writeMode?: 'normal' | 'tamper';
+  /**
+   * 一次性介质故障：这些路径的**第一次** `writeBytes` 静默多出一个字节
+   * （模拟「写调用成功、盘上字节坏了」→ 回读不一致）。只坏第一次——回滚的
+   * 恢复写必须能干净落地，否则测不出回滚正确性（真实 io 的原子写不会次次坏）。
+   */
+  tamperPaths?: readonly string[];
   /** 回读抛错（触发回读失败路径） */
   failReread?: boolean;
+  /** 回滚注定失败（备份读不回 / 删除抛错）——用于验证失败路径的诊断不静默 */
+  failRollback?: boolean;
 }
 
 /**
@@ -63,9 +70,13 @@ interface HarnessOptions {
  */
 function makeFs(io: HarnessOptions = {}) {
   const files: Record<string, Uint8Array> = { ...(io.files ?? {}) };
+  /** 备份桶（照内核 `backup()`：把写前字节复制进 `{appData}/backup/{hash}/`） */
+  const backupFiles: Record<string, Uint8Array> = {};
   const backups: string[] = [];
   const written: string[] = [];
+  const removed: string[] = [];
   const createdDirs: string[] = [];
+  const tampered = new Set<string>();
   const isWritable = io.writable ?? (() => true);
 
   const guard = (p: string): void => {
@@ -95,7 +106,8 @@ function makeFs(io: HarnessOptions = {}) {
       Promise.all(paths.map(async (p) => api.readText(p).catch(() => null))),
     readBytes: async (p: string): Promise<Uint8Array> => {
       if (io.failReread && written.includes(p)) throw new Error('readback exploded');
-      const b = files[p];
+      if (io.failRollback && p.startsWith('backup://')) throw new Error('backup unreadable');
+      const b = files[p] ?? backupFiles[p];
       if (!b) throw new Error(`not found: ${p}`);
       return b;
     },
@@ -109,7 +121,9 @@ function makeFs(io: HarnessOptions = {}) {
     writeBytes: async (p: string, data: Uint8Array): Promise<void> => {
       guard(p);
       written.push(p);
-      if (io.writeMode === 'tamper') {
+      // 一次性介质故障（见 HarnessOptions.tamperPaths）：每个路径只坏第一次写入
+      if (io.tamperPaths?.includes(p) && !tampered.has(p)) {
+        tampered.add(p);
         const mutated = new Uint8Array(data.length + 1);
         mutated.set(data, 0);
         mutated[data.length] = 0x00; // 多一个字节 → 回读长度不一致
@@ -142,8 +156,14 @@ function makeFs(io: HarnessOptions = {}) {
     // 契约 additive（2026-10-16 市场与导入 IO 批）：本夹具不提供服务端复制 ⇒ 走到即红
     copyFile: async () => { throw new Error('copyFile is not wired in this fake'); },
     removeDir: async () => { throw new Error('removeDir is not wired in this fake'); },
-    // 契约 additive（2026-10-16 文件树编辑批）：本夹具不提供单文件删除 ⇒ 走到即红
-    removeFile: async () => { throw new Error('removeFile is not wired in this fake'); },
+    // 契约 additive（2026-10-16 文件树编辑批）：如实实现（过同一道闸；不存在按契约拒绝）
+    removeFile: async (p: string): Promise<void> => {
+      guard(p);
+      if (io.failRollback) throw new Error('removeFile exploded');
+      if (!(p in files)) throw new Error(`not found: ${p}`);
+      delete files[p];
+      removed.push(p);
+    },
     chooseWorkspaceRoot: async () => {
       throw new Error('chooseWorkspaceRoot is not supported by this fake');
     },
@@ -151,6 +171,7 @@ function makeFs(io: HarnessOptions = {}) {
     backup: async (p: string): Promise<string | null> => {
       if (!(p in files)) return null;
       const target = `backup:///${p.replace(/[/\\:]/g, '_')}.bak`;
+      backupFiles[target] = new Uint8Array(files[p]!); // 写前字节进桶（回滚的恢复源）
       backups.push(target);
       return target;
     },
@@ -209,7 +230,7 @@ function makeFs(io: HarnessOptions = {}) {
     },
   };
 
-  return { io: api, files, backups, written, createdDirs };
+  return { io: api, files, backupFiles, backups, written, removed, createdDirs };
 }
 
 /** 真实转译服务（无 adapter 字典——合成源只用原生变量族；分野表来自 eraTW adapter） */
@@ -364,7 +385,7 @@ describe('compileToFile · 双闸与备份', () => {
 describe('compileToFile · 回读验证', () => {
   it('落盘字节与产物不一致 → 显式报错并携带备份路径', async () => {
     const target = '/game/個人口上/x.ERB';
-    const h = makeFs({ files: { [target]: new TextEncoder().encode('OLD') }, writeMode: 'tamper' });
+    const h = makeFs({ files: { [target]: new TextEncoder().encode('OLD') }, tamperPaths: [target] });
     const svc = makeService(h.io);
     await expect(svc.compileToFile(GOOD_SOURCE, target)).rejects.toThrow(/回读验证失败.*备份/);
   });
@@ -387,6 +408,66 @@ describe('compileToFile · 回读验证', () => {
   });
 });
 
+/* K2-PRE-REUSE ③：写后回读失败必须回滚到写前状态——坏/半产物不许留盘。
+ * 注入形态 = 「写成功、回读失败」：tamperPaths（写调用成功但盘上字节坏了）
+ * 或 failReread（回读直接抛）。源文件（写前内容）必须毫发无损地回来。 */
+describe('compileToFile · 回读失败回滚（K2-PRE-REUSE ③）', () => {
+  it('回读不一致（目标写前存在）→ 抛错前先回滚：写前字节逐字恢复，坏产物不留盘', async () => {
+    const target = '/game/個人口上/x.ERB';
+    const original = new TextEncoder().encode('OLD');
+    const h = makeFs({ files: { [target]: original }, tamperPaths: [target] });
+    const svc = makeService(h.io);
+    let caught: SugarCompileError | undefined;
+    try {
+      await svc.compileToFile(GOOD_SOURCE, target);
+      expect.unreachable('应当抛错');
+    } catch (err) {
+      caught = err as SugarCompileError;
+    }
+    expect(caught?.name).toBe('SugarCompileError');
+    expect(caught?.message).toMatch(/回读验证失败.*已回滚到写前状态/);
+    // 写前状态逐字节恢复（不是"差不多恢复"——字节级相等）
+    expect(Array.from(h.files[target]!)).toEqual(Array.from(original));
+    // 备份未被回滚动过（仍是写前那份，手动恢复的兜底），错误携带备份路径
+    expect(caught?.backupPath).toBe(h.backups[0]);
+    expect(Array.from(h.backupFiles[h.backups[0]!]!)).toEqual(Array.from(original));
+  });
+
+  it('回读抛错（目标写前存在）→ 回滚：原文件恢复', async () => {
+    const target = '/game/個人口上/x.ERB';
+    const original = new TextEncoder().encode('OLD');
+    const h = makeFs({ files: { [target]: original }, failReread: true });
+    const svc = makeService(h.io);
+    await expect(svc.compileToFile(GOOD_SOURCE, target)).rejects.toThrow(/回读验证失败.*已回滚到写前状态/);
+    expect(Array.from(h.files[target]!)).toEqual(Array.from(original));
+  });
+
+  it('回读抛错（目标写前不存在）→ 回滚：半成品移除，无备份可依', async () => {
+    const target = '/game/個人口上/x.ERB';
+    const h = makeFs({ failReread: true });
+    const svc = makeService(h.io);
+    await expect(svc.compileToFile(GOOD_SOURCE, target)).rejects.toThrow(/回读验证失败.*半成品已移除/);
+    expect(h.files[target]).toBeUndefined(); // 坏产物不在盘上
+    expect(h.removed).toEqual([target]); // 确实走了删除，不是碰运气不存在
+  });
+
+  it('回滚自身失败（有备份）→ 诊断如实报告、不静默（备份位置仍在消息里）', async () => {
+    const target = '/game/個人口上/x.ERB';
+    const original = new TextEncoder().encode('OLD');
+    const h = makeFs({ files: { [target]: original }, failReread: true, failRollback: true });
+    const svc = makeService(h.io);
+    // 盘上留着未回滚的产物——但错误文本必须指名回滚失败与备份兜底（绝不静默）
+    await expect(svc.compileToFile(GOOD_SOURCE, target)).rejects.toThrow(/回滚失败.*请手动恢复/s);
+  });
+
+  it('回滚自身失败（无备份）→ 诊断明说可能残留半成品（不静默）', async () => {
+    const target = '/game/個人口上/x.ERB';
+    const h = makeFs({ failReread: true, failRollback: true });
+    const svc = makeService(h.io);
+    await expect(svc.compileToFile(GOOD_SOURCE, target)).rejects.toThrow(/回滚失败.*可能残留半成品/s);
+  });
+});
+
 describe('compileToFile · 源映射旁挂', () => {
   it('writeSourceMap: true → 产 .map.json 旁挂且内容可解析', async () => {
     const h = makeFs();
@@ -405,9 +486,60 @@ describe('compileToFile · 源映射旁挂', () => {
     expect(res.sourceMapPath).toBeUndefined();
     expect(Object.keys(h.files).some((k) => k.endsWith('.map.json'))).toBe(false);
   });
+
+  it('旁挂回读不一致（旁挂写前不存在）→ 只回滚旁挂；主产物已验证通过、保持不动', async () => {
+    const target = '/approved/x.ERB';
+    const h = makeFs({ tamperPaths: [`${target}.map.json`] });
+    const svc = makeService(h.io);
+    await expect(svc.compileToFile(GOOD_SOURCE, target, { writeSourceMap: true })).rejects.toThrow(
+      /源映射旁挂.*已回滚到写前状态/s,
+    );
+    // 旁挂回到写前状态（写前不存在 ⇒ 移除），不留坏旁挂
+    expect(h.files[`${target}.map.json`]).toBeUndefined();
+    expect(h.removed).toEqual([`${target}.map.json`]);
+    // 主产物在位且未被牵连：与一次干净编译的产物逐字节相同（可再次编译只补旁挂）
+    const clean = makeFs();
+    await makeService(clean.io).compileToFile(GOOD_SOURCE, target, { writeSourceMap: true });
+    expect(Array.from(h.files[target]!)).toEqual(Array.from(clean.files[target]!));
+  });
+
+  it('旁挂回读不一致（旁挂写前已存在）→ 旁挂恢复旧内容；主产物保持', async () => {
+    const target = '/approved/x.ERB';
+    const sidecar = `${target}.map.json`;
+    const oldMap = new TextEncoder().encode('{"old":true}');
+    const h = makeFs({ files: { [sidecar]: oldMap }, tamperPaths: [sidecar] });
+    const svc = makeService(h.io);
+    await expect(svc.compileToFile(GOOD_SOURCE, target, { writeSourceMap: true })).rejects.toThrow(
+      /源映射旁挂.*已回滚到写前状态/s,
+    );
+    expect(Array.from(h.files[sidecar]!)).toEqual(Array.from(oldMap));
+    expect(h.files[target]).toBeDefined();
+  });
 });
 
 /* ============================== 真实链路层（磁盘） ============================== */
+
+/**
+ * 一次性写篡改装饰器：包住真 `FileIO`，只把 `target` 的**第一次** `writeBytes`
+ * 写成多一字节的坏内容（模拟「写成功、回读失败」）。其余方法经原型链原样
+ * 委派（`Object.create` 不复制类方法，查找自然落到真实例上）。
+ */
+function tamperFirstWrite(real: FileIO, target: string): FileIO {
+  let tampered = false;
+  const wrapped = Object.create(real) as FileIO;
+  wrapped.writeBytes = async (p: string, data: Uint8Array): Promise<void> => {
+    if (!tampered && p === target) {
+      tampered = true;
+      const bad = new Uint8Array(data.length + 1);
+      bad.set(data, 0);
+      bad[data.length] = 0x00;
+      await real.writeBytes(p, bad);
+      return;
+    }
+    await real.writeBytes(p, data);
+  };
+  return wrapped;
+}
 
 describe('compileToFile · 真实磁盘端到端（appData 副本，绝不写游戏目录）', () => {
   let tmp: string;
@@ -466,5 +598,38 @@ describe('compileToFile · 真实磁盘端到端（appData 副本，绝不写游
     const firstCode = text.split('\n').find((l) => l.trim().length > 0 && !l.trimStart().startsWith(';'));
     expect(firstCode?.startsWith('@')).toBe(true);
     expect(text).toContain('@M_KOJO_MESSAGE_COM_K12_310');
+  });
+
+  it('回读不一致（真 io，目标写前存在）→ 回滚：写前字节逐字恢复，备份兜底仍在盘上', async () => {
+    const target = path.join(tmp, '個人口上', 'K12', 'M_KOJO_K12_指令.ERB');
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const original = Buffer.from('; 写前的旧产物\n@OLD_K12_310\n', 'utf8');
+    await fs.writeFile(target, original);
+    io.setWritableRoots([tmp]);
+    const svc = createSugarTranspileService({ io: tamperFirstWrite(io, target), faceTable: stubFaceTable() });
+
+    let backupPath: string | null = null;
+    try {
+      await svc.compileToFile(GOOD_SOURCE, target);
+      expect.unreachable('应当抛错');
+    } catch (err) {
+      const e = err as SugarCompileError;
+      expect(e.name).toBe('SugarCompileError');
+      expect(e.message).toMatch(/回读验证失败.*已回滚到写前状态/);
+      backupPath = e.backupPath;
+    }
+    // 写前内容逐字节恢复（fs 层对拍，不经过被测代码的读路径）
+    expect(await fs.readFile(target)).toEqual(original);
+    // 备份兜底仍在盘上、内容就是写前那份（手动恢复可依赖）
+    expect(backupPath).toBeTruthy();
+    expect(await fs.readFile(backupPath!)).toEqual(original);
+  });
+
+  it('回读不一致（真 io，目标写前不存在）→ 回滚：半成品移除，盘上无残留', async () => {
+    const target = path.join(tmp, '個人口上', 'K12', 'M_KOJO_K12_310.ERB');
+    io.setWritableRoots([tmp]);
+    const svc = createSugarTranspileService({ io: tamperFirstWrite(io, target), faceTable: stubFaceTable() });
+    await expect(svc.compileToFile(GOOD_SOURCE, target)).rejects.toThrow(/回读验证失败.*半成品已移除/);
+    await expect(fs.stat(target)).rejects.toThrow(); // 无半成品残留
   });
 });

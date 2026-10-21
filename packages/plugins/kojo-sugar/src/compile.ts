@@ -7,14 +7,19 @@
  *    （不产半成品、不建目录、不备份、不写盘）；
  * 2. **组装**：产物文本 → 按编码口径编成字节（BOM + 换行 + 末尾换行）；
  * 3. **目录**：目标父目录不存在则经内核 io `ensureDir`（仍过第一道闸）；
- * 4. **备份**：目标已存在时先经内核 io `backup` 入 `{appData}/backup/{hash}/`；
+ * 4. **备份**：目标已存在时先经内核 io `backup` 入 `{appData}/backup/{hash}/`
+ *    （这份备份即「写前状态」的快照，回读失败时靠它恢复）；
  * 5. **写盘**：内核 io `writeBytes`（第一道闸 `writablePaths`；越权抛
  *    `WriteNotAllowedError` **原样传播**——此时备份已做、原文件未覆盖）；
- * 6. **回读验证**：重新读字节 → 与产物字节逐字节比对，不一致抛
- *    `SugarCompileError`（**携带备份路径**）。
+ * 6. **回读验证**：重新读字节 → 与产物字节逐字节比对；**失败即回滚**
+ *    （读抛或字节不一致都算）：有备份 → 读备份字节原样写回恢复原文件；
+ *    无备份 → 移除半成品。回滚后抛 `SugarCompileError`，消息带回滚结果
+ *    （回滚自身失败也如实上文本，备份位置照旧在——作者可手动恢复）。
  *
  * 顺序即安全语义（同注入器）：守卫在备份**之前**抛；越权写抛出时备份已存在、
- * 目标未被覆盖；回读失败时报错消息必带备份位置。
+ * 目标未被覆盖；回读失败即 abort 对位——**坏/半产物不许留盘**，写前状态必须
+ * 原样回来（口径照内核 journal 的回滚：有快照写回、无快照删除，见
+ * `kernel/src/journal.ts::rollbackEntries`）。
  *
  * **编码口径（不是 kernel 的 "保编码保换行"）**：产物是**新建/全量重写**的
  * 生成物，不存在"保持原样"语义，故走字节层 `writeBytes` 自组装字节，而非
@@ -135,6 +140,64 @@ export function compileToBytes(
   return { bytes: encodeErbBytes(result.erb, resolveEncoding(options)), transpile: result };
 }
 
+/* ============================== 回读失败回滚 ============================== */
+
+/** 回滚结果（诊断用：成功带动作描述，失败带原因） */
+type RollbackResult = { ok: true; detail: string } | { ok: false; reason: string };
+
+/**
+ * 回滚到**写前状态**（回读验证失败时调用；注入器 `journal.abort` 的本文件对位）。
+ *
+ * - 有备份（目标写前存在）→ 读备份字节**原样写回**（`writeBytes` 无写前备份，
+ *   不会把坏产物折进作者可见的历史版本账）；
+ * - 无备份（目标写前不存在）→ 移除半成品（`removeFile` 与 `writeBytes` 同一道
+ *   写闸；先 `exists` 兜竞态——文件已然消失等于写前状态已达成）。
+ *
+ * 口径照内核 journal 的回滚（`kernel/src/journal.ts::rollbackEntries`）：有快照
+ * 写回、无快照删除。**刻意不在回滚前备份坏产物**——那会把损坏字节写进作者可见
+ * 的备份时间线，而写前那份备份本来就是恢复源。
+ */
+async function rollbackToPreWrite(io: FileIO, path: string, backupPath: string | null): Promise<RollbackResult> {
+  try {
+    if (backupPath !== null) {
+      const original = await io.readBytes(backupPath);
+      await io.writeBytes(path, original);
+      return { ok: true, detail: `原文件已从备份恢复：${backupPath}` };
+    }
+    if (await io.exists(path)) await io.removeFile(path);
+    return { ok: true, detail: '目标写前不存在，半成品已移除' };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** 回滚结果 → 诊断片段：成功明示写前状态已恢复；失败明示原因与手动兜底（不静默） */
+function rollbackOutcome(rollback: RollbackResult, backupPath: string | null): string {
+  if (rollback.ok) return `已回滚到写前状态（${rollback.detail}）`;
+  return backupPath !== null
+    ? `回滚失败（${rollback.reason}）；原文件已备份于 ${backupPath}，请手动恢复`
+    : `回滚失败（${rollback.reason}）；目标写前不存在且无备份可恢复，盘上可能残留半成品，请手动处理`;
+}
+
+/**
+ * 回读验证失败：**先回滚到写前状态，再带完整诊断抛错**。
+ *
+ * 错误文本 = 失败 headline + 回滚结果。回滚自身失败也如实进文本（备份位置照旧
+ * 在）——失败路径不静默是本链路的安全语义，不是可选项。
+ */
+async function readbackFailureError(
+  io: FileIO,
+  path: string,
+  backupPath: string | null,
+  headline: string,
+): Promise<SugarCompileError> {
+  const rollback = await rollbackToPreWrite(io, path, backupPath);
+  return new SugarCompileError(`${headline}——${rollbackOutcome(rollback, backupPath)}`, {
+    targetPath: path,
+    backupPath,
+  });
+}
+
 /** 编译落盘（依赖注入：转译函数 + 内核 io + 可选日志） */
 export async function compileToFile(
   deps: SugarCompilerDeps,
@@ -172,40 +235,70 @@ export async function compileToFile(
     });
   }
 
-  // ---- 6. 回读验证（字节级；不一致 = 致命，携带备份位置）----
+  // ---- 6. 回读验证（字节级；不一致 = 致命：先回滚到写前状态，再带诊断抛错）----
+  // 坏/半产物不许留盘（K2-PRE-REUSE ③）：读抛或字节不一致都先回滚——有备份
+  // 恢复原文件、无备份移除半成品；回滚成败都进错误文本（不静默）。
   let persisted: Uint8Array;
   try {
     persisted = await io.readBytes(absoluteTarget);
   } catch (err) {
-    const hint = backupPath ? `——原文件已备份于 ${backupPath}` : '';
-    throw new SugarCompileError(`回读验证失败（无法重新读取产物）：${err instanceof Error ? err.message : String(err)}${hint}`, {
-      targetPath: absoluteTarget,
+    throw await readbackFailureError(
+      io,
+      absoluteTarget,
       backupPath,
-    });
+      `回读验证失败（无法重新读取产物）：${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   if (!bytesEqual(persisted, bytes)) {
-    const hint = backupPath ? `——原文件已备份于 ${backupPath}` : '（原文件此前不存在，无备份）';
-    throw new SugarCompileError(
-      `回读验证失败（落盘字节与产物不一致：期望 ${bytes.length}B，实得 ${persisted.length}B）${hint}`,
-      { targetPath: absoluteTarget, backupPath },
+    throw await readbackFailureError(
+      io,
+      absoluteTarget,
+      backupPath,
+      `回读验证失败（落盘字节与产物不一致：期望 ${bytes.length}B，实得 ${persisted.length}B）`,
     );
   }
 
   // ---- 7.（可选）源映射旁挂 ----
   let sourceMapPath: string | undefined;
   if (options?.writeSourceMap) {
-    sourceMapPath = `${absoluteTarget}.map.json`;
+    const sidecarPath = `${absoluteTarget}.map.json`;
+    sourceMapPath = sidecarPath;
     const mapBytes = new TextEncoder().encode(`${JSON.stringify(result.sourceMap, null, 2)}\n`);
-    // 旁挂文件与产物同域；同样先备份（已存在时）再写再回读
-    await io.backup(sourceMapPath);
-    await io.writeBytes(sourceMapPath, mapBytes);
-    const readBack = await io.readBytes(sourceMapPath);
-    if (!bytesEqual(readBack, mapBytes)) {
-      const hint = backupPath ? `——原文件已备份于 ${backupPath}` : '';
-      throw new SugarCompileError(`回读验证失败（源映射旁挂文件不一致）${hint}`, {
-        targetPath: absoluteTarget,
-        backupPath,
-      });
+    // 旁挂文件与产物同域；同样先备份（已存在时）再写再回读。
+    // 旁挂回读失败 ⇒ 只回滚旁挂本身：主产物已逐字节通过验证，不因可选的旁挂
+    // 失败而撤销；错误文本明确区分两者（主产物在位 + 旁挂回滚结果）。
+    const sidecarBackup = await io.backup(sidecarPath);
+    try {
+      await io.writeBytes(sidecarPath, mapBytes);
+    } catch (err) {
+      if (err instanceof SugarCompileError) throw err;
+      if (err instanceof Error && err.name === 'WriteNotAllowedError') throw err;
+      throw new SugarCompileError(
+        `源映射旁挂写盘失败：${err instanceof Error ? err.message : String(err)}` +
+          (sidecarBackup ? `——原旁挂已备份于 ${sidecarBackup}` : ''),
+        { targetPath: sidecarPath, backupPath: sidecarBackup },
+      );
+    }
+    let sidecarRead: Uint8Array;
+    try {
+      sidecarRead = await io.readBytes(sidecarPath);
+    } catch (err) {
+      const rollback = await rollbackToPreWrite(io, sidecarPath, sidecarBackup);
+      throw new SugarCompileError(
+        `回读验证失败（无法重新读取源映射旁挂）：${err instanceof Error ? err.message : String(err)}` +
+          `——主产物已落盘且通过回读验证（${absoluteTarget}，${bytes.length}B），` +
+          `旁挂${rollbackOutcome(rollback, sidecarBackup)}`,
+        { targetPath: sidecarPath, backupPath: sidecarBackup },
+      );
+    }
+    if (!bytesEqual(sidecarRead, mapBytes)) {
+      const rollback = await rollbackToPreWrite(io, sidecarPath, sidecarBackup);
+      throw new SugarCompileError(
+        `回读验证失败（源映射旁挂落盘字节与产物不一致：期望 ${mapBytes.length}B，实得 ${sidecarRead.length}B）` +
+          `——主产物已落盘且通过回读验证（${absoluteTarget}，${bytes.length}B），` +
+          `旁挂${rollbackOutcome(rollback, sidecarBackup)}`,
+        { targetPath: sidecarPath, backupPath: sidecarBackup },
+      );
     }
   }
 
