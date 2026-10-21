@@ -9,6 +9,8 @@ import type { CoreDiagnosticCode, DiagnosticSink } from '../diagnostics.js';
 import { severityOf } from '../diagnostics.js';
 import type { KojoEmitBackend, EmitResult } from './backend.js';
 import { createEmitBuffer, type EmitBuffer } from './buffer.js';
+import type { FeatureCheck, ResolvedProgramFeatures } from './feature-gate.js';
+import { featureDiagnosticKey, resolveProgramFeatures } from './feature-gate.js';
 
 /** 叙事区 / 调度区（决定裸行怎么解释；降糖只关心"这段体是哪张脸"） */
 export type LowerRegion = 'narrative' | 'dispatch';
@@ -21,6 +23,10 @@ export type LowerDispatchBody = (nodes: readonly KojoDispatchNode[]) => void;
 
 export interface LowerState {
   readonly backend: KojoEmitBackend;
+  /** 统一能力闸（K2-FEATURE-GATE-UNIFY）：adapter 声明 × backend 落点已解析一次，主链只读它 */
+  readonly featureGate: ResolvedProgramFeatures;
+  /** 已报过的 feature 诊断键（`code@span`）：同一情形只报一条（见 `reportFeature`） */
+  readonly reportedFeatures: Set<string>;
   readonly buffer: EmitBuffer;
   readonly sink: DiagnosticSink;
   /** 当前 `# 视` 目标（池内裸引号的默认说话人）；缺省 null */
@@ -43,11 +49,18 @@ export interface CreateLowerStateInput {
   readonly buffer: EmitBuffer;
   readonly sink: DiagnosticSink;
   readonly view?: string | null;
+  /**
+   * 已解析好的能力闸（2.0 主链从 `ExpandContext.featureGate` 传下来，一次 compile 只解析一次）。
+   * 缺省 = 通用 lower 路径（没有 adapter 可比）：按 backend 的落点记录判（旧行为不变）。
+   */
+  readonly featureGate?: ResolvedProgramFeatures;
 }
 
 export function createLowerState(input: CreateLowerStateInput): LowerState {
   return {
     backend: input.backend,
+    featureGate: input.featureGate ?? resolveProgramFeatures(null, input.backend),
+    reportedFeatures: new Set<string>(),
     buffer: input.buffer,
     sink: input.sink,
     view: input.view ?? null,
@@ -63,6 +76,21 @@ export function createLowerState(input: CreateLowerStateInput): LowerState {
 /** 报一条 core 诊断（级别由码表唯一定义，见 diagnostics.ts） */
 export function report(state: LowerState, code: CoreDiagnosticCode, message: string, span: KojoSpan | null): void {
   state.sink.report({ code, severity: severityOf(code), message, span });
+}
+
+/**
+ * 报一条能力闸诊断（**唯一出口**）：同一 `(code, span)` 只报一条。
+ *
+ * 口径：同一码 + 同一 span = **同一情形**（重复走同一节点、或同一段源行被展开两次）。
+ * 报两条只是噪音，也不利于"产物面与诊断面一致"的可断言性（K2-FEATURE-GATE-UNIFY）。
+ */
+export function reportFeature(state: LowerState, check: FeatureCheck): void {
+  const diagnostic = check.diagnostic;
+  if (diagnostic === null) return;
+  const key = featureDiagnosticKey(diagnostic);
+  if (state.reportedFeatures.has(key)) return;
+  state.reportedFeatures.add(key);
+  state.sink.report(diagnostic);
 }
 
 /** 把 backend 的一次发射写进缓冲区（失败诊断原样收下） */

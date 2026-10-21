@@ -8,6 +8,13 @@
  *   只改样式常量，不动接线。
  * - 三步状态：预演（只读）→ 文件列表 + diff / 台账预览 → 应用（备份 + 回读 + 失败回滚）。
  *
+ * K2-MIGRATE-MOUNT 起多两块**加法**（旧调用方零改动）：
+ * - `Kojo2MigrateWizardHost`：宿主用的挂载壳（`position: fixed` 遮罩 + 居中），样式仍全内联；
+ * - `applyPlan` / `undoPlan` 两个可选端口：宿主入口（`kojo2-migrate-entry.ts`）把自己的
+ *   `apply` / `undo` 交进来，写盘之后的"刷新文件树与已开编辑器"由它收尾——向导不认识
+ *   宿主的刷新通道。不给端口 = 直接调模型层，与接线前逐字一致。
+ * - 语义升级台账（`rewrites`）逐条上屏：每条给出「v1 第 N–M 行 → 落点」的独立 diff。
+ *
  * 安全口径由模型层兜底（dry-run 端口类型只有 `readText`；整批默认 fail-closed），
  * 本组件只负责让作者**看见**阻断原因与回滚结果，不提供任何绕闸按钮。
  */
@@ -27,6 +34,7 @@ import {
   type MigrateDryRun,
   type MigrateFilePlan,
   type MigrateIoPort,
+  type MigrateRewriteView,
   type MigrateUndoResult,
 } from './kojo2-migrate-model';
 
@@ -43,6 +51,19 @@ export interface Kojo2MigrateWizardProps {
   readonly onUndone?: (result: MigrateUndoResult) => void;
   /** 人话通知通道（可选；不传则只在本组件内显示） */
   readonly notify?: (message: string) => void;
+  /**
+   * 应用端口（可选；缺省 = 直接调模型层的 `applyMigratePlan`）。
+   *
+   * 宿主入口（`kojo2-migrate-entry.ts`）传自己的 `apply`：写盘之后"让文件树与已开编辑器
+   * 重载"那一步由它收尾——向导只认识 `io`，不认识宿主的刷新通道，也不该认识。
+   * 给了这个端口就不再额外触发 `onApplied`（刷新与通知已经在端口里做过一次）。
+   */
+  readonly applyPlan?: (plan: MigrateDryRun) => Promise<MigrateApplyResult>;
+  /** 撤销端口（可选；语义同 `applyPlan`） */
+  readonly undoPlan?: (
+    plan: MigrateDryRun,
+    applied: MigrateApplyResult,
+  ) => Promise<MigrateUndoResult>;
 }
 
 type WizardPhase = 'loading' | 'ready' | 'applying' | 'undoing' | 'done' | 'error';
@@ -55,6 +76,8 @@ export function Kojo2MigrateWizard({
   onApplied,
   onUndone,
   notify,
+  applyPlan,
+  undoPlan,
 }: Kojo2MigrateWizardProps): ReactElement {
   const [plan, setPlan] = useState<MigrateDryRun | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -127,31 +150,39 @@ export function Kojo2MigrateWizard({
     setPhase('applying');
     setError(null);
     try {
-      const result = await applyMigratePlan(io, plan);
+      const result = applyPlan === undefined ? await applyMigratePlan(io, plan) : await applyPlan(plan);
       setApplyResult(result);
       if (result.ok) {
         setPhase('done');
-        notify?.(result.message);
-        onApplied?.(result);
+        // 给了宿主端口 ⇒ 刷新与通知已在端口里做过一次，这里不再重复
+        if (applyPlan === undefined) {
+          notify?.(result.message);
+          onApplied?.(result);
+        }
       } else {
         setPhase('ready');
-        notify?.(result.message);
+        if (applyPlan === undefined) notify?.(result.message);
       }
     } catch (reason) {
       setError(errorText(reason));
       setPhase('ready');
     }
-  }, [io, notify, onApplied, phase, plan]);
+  }, [applyPlan, io, notify, onApplied, phase, plan]);
 
   const runUndo = useCallback(async (): Promise<void> => {
     if (plan === null || applyResult === null || phase !== 'done') return;
     setPhase('undoing');
     setError(null);
     try {
-      const result = await undoMigratePlan(io, plan, applyResult);
+      const result =
+        undoPlan === undefined
+          ? await undoMigratePlan(io, plan, applyResult)
+          : await undoPlan(plan, applyResult);
       if (result.ok) {
-        notify?.(result.message);
-        onUndone?.(result);
+        if (undoPlan === undefined) {
+          notify?.(result.message);
+          onUndone?.(result);
+        }
         setApplyResult(null);
         setReloadNonce((n) => n + 1); // 重新预演：列表回到迁移前状态
       } else {
@@ -162,7 +193,7 @@ export function Kojo2MigrateWizard({
       setError(errorText(reason));
       setPhase('done');
     }
-  }, [applyResult, io, notify, onUndone, phase, plan]);
+  }, [applyResult, io, notify, onUndone, phase, plan, undoPlan]);
 
   const canApply = plan !== null && plan.ok && phase === 'ready';
   const blockedCount = plan === null ? 0 : plan.summary.blockedCount + plan.summary.readErrorCount;
@@ -175,7 +206,9 @@ export function Kojo2MigrateWizard({
           <div style={styles.subtitle}>
             {plan === null
               ? '正在读取文件…'
-              : `${plan.files.length} 个文件 · 可迁移 ${plan.summary.migratableCount} · 阻断 ${blockedCount} · +${plan.summary.addedLines} / −${plan.summary.removedLines} 行`}
+              : `${plan.files.length} 个文件 · 可迁移 ${plan.summary.migratableCount} · 阻断 ${blockedCount} · +${plan.summary.addedLines} / −${plan.summary.removedLines} 行${
+                  plan.summary.rewriteCount > 0 ? ` · 语义升级 ${plan.summary.rewriteCount} 条` : ''
+                }`}
           </div>
         </div>
         <span style={plan !== null && plan.ok ? styles.badgeOk : styles.badgeWarn}>
@@ -239,6 +272,7 @@ export function Kojo2MigrateWizard({
                   </span>
                   <span style={styles.dim}>
                     {selected.sourceEncoding} · {selected.sourceEol.toUpperCase()} · 写盘 preserve
+                    {selected.rewrites.length > 0 ? ` · 语义升级 ${selected.rewrites.length} 条` : ''}
                   </span>
                 </div>
 
@@ -249,6 +283,29 @@ export function Kojo2MigrateWizard({
                     </div>
                   ))}
                 </div>
+
+                {selected.rewrites.length > 0 ? (
+                  <section style={styles.section} aria-label="语义升级">
+                    <div style={styles.rewriteTitle}>
+                      语义升级 · {selected.rewrites.length} 条
+                      <span style={styles.dim}>
+                        下列构造在机械层是 unsupported；语义层证得动，已改写为 2.0（逐条给出原块 → 落点）
+                      </span>
+                    </div>
+                    {selected.rewrites.map((rewrite, index) => (
+                      <div key={`${rewrite.kind}:${rewrite.line}:${index}`} style={styles.rewriteItem}>
+                        <div style={styles.rewriteHead}>
+                          <span style={styles.lineChip}>{rewriteRangeLabel(rewrite)}</span>
+                          <span>{rewrite.title}</span>
+                          {rewrite.declName === null ? null : (
+                            <code style={styles.code}>{rewrite.declName}</code>
+                          )}
+                        </div>
+                        <pre style={styles.rewriteDiff}>{rewrite.diffText}</pre>
+                      </div>
+                    ))}
+                  </section>
+                ) : null}
 
                 {selected.error !== null ? (
                   <div style={styles.errorBox}>{selected.error}</div>
@@ -291,7 +348,7 @@ export function Kojo2MigrateWizard({
 
                 <div style={styles.planNote}>
                   {selected.ok
-                    ? `应用计划：先备份，再以 ${selected.sourceEncoding} / ${selected.sourceEol.toUpperCase()} 原样写回。${selected.backup.rollbackHint}`
+                    ? `应用计划：原地改写（不改扩展名、不删源）——先备份，再以 ${selected.sourceEncoding} / ${selected.sourceEol.toUpperCase()} 原样写回。${selected.backup.rollbackHint}`
                     : '该文件含不可迁移写法：整批默认拒绝写盘，源文件不会被改动。'}
                 </div>
               </>
@@ -352,6 +409,24 @@ export function Kojo2MigrateWizard({
   );
 }
 
+/**
+ * 宿主的**挂载壳**：把向导放进一层盖住窗口的遮罩里（`position: fixed`）。
+ *
+ * 为什么单独一层：向导本体（`Kojo2MigrateWizard`）是"一块对话框"，不假设自己被谁包着；
+ * 宿主只需要在开的时候渲染这一层。样式全部内联、复用同一份 `styles`，**不碰** `styles.css`
+ * （那是冲突热点），也就不需要新的类名。
+ *
+ * 点遮罩**不关**：应用 / 回滚在途时误触空白处就关掉，作者会看不到最终结果（与向导内部
+ * 对 Esc 的处理同一条纪律——`applying` / `undoing` 阶段关不掉）。
+ */
+export function Kojo2MigrateWizardHost(props: Kojo2MigrateWizardProps): ReactElement {
+  return (
+    <div style={styles.backdrop} data-kojo2-migrate-host="">
+      <Kojo2MigrateWizard {...props} />
+    </div>
+  );
+}
+
 /* ============================== 呈现小工具 ============================== */
 
 interface StatusTone {
@@ -365,6 +440,13 @@ function statusOf(file: MigrateFilePlan): StatusTone {
   if (!file.ok) return { label: `阻断 ${file.unsupported.length}`, color: '#ffca8a', border: 'rgba(255,202,138,0.4)' };
   if (!file.changed) return { label: '已是 2.0', color: '#9aa7b8', border: 'rgba(154,167,184,0.35)' };
   return { label: `+${file.summary.addedLines} / −${file.summary.removedLines}`, color: '#7ee787', border: 'rgba(126,231,135,0.35)' };
+}
+
+/** 语义升级的行范围标签（单行块不写 `–` 空档） */
+function rewriteRangeLabel(rewrite: MigrateRewriteView): string {
+  return rewrite.endLine > rewrite.line
+    ? `第 ${rewrite.line}–${rewrite.endLine} 行`
+    : `第 ${rewrite.line} 行`;
 }
 
 function diffLineStyle(line: string): CSSProperties {
@@ -387,6 +469,17 @@ function errorText(error: unknown): string {
 /* ============================== 内联样式（局部，不碰全局样式表） ============================== */
 
 const styles = {
+  backdrop: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 'var(--z-modal)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    background: 'rgba(1,4,9,0.62)',
+    backdropFilter: 'blur(2px)',
+  },
   root: {
     width: 'min(1080px, 94vw)',
     height: 'min(720px, 86vh)',
@@ -492,6 +585,27 @@ const styles = {
   },
   section: { marginTop: 14 },
   sectionTitle: { fontSize: 12, fontWeight: 700, color: '#ffca8a', marginBottom: 6 },
+  rewriteTitle: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 12, fontWeight: 700, color: '#8ab4f8', marginBottom: 6 },
+  rewriteItem: {
+    padding: '8px 10px',
+    marginBottom: 6,
+    border: '1px solid rgba(56,139,253,0.35)',
+    borderRadius: 8,
+    background: 'rgba(56,139,253,0.07)',
+  },
+  rewriteHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', color: '#c9d1d9' },
+  rewriteDiff: {
+    margin: '6px 0 0',
+    padding: '6px 8px',
+    maxHeight: 180,
+    overflow: 'auto',
+    background: '#010409',
+    borderRadius: 6,
+    fontFamily: 'ui-monospace, Consolas, monospace',
+    fontSize: 11,
+    lineHeight: 1.55,
+    whiteSpace: 'pre',
+  },
   unsupportedItem: {
     padding: '8px 10px',
     marginBottom: 6,

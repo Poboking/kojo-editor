@@ -164,6 +164,41 @@ describe('② 全仓守门：`.kojo` 的大小写清单只由契约那一份派�
   });
 });
 
+/* ─────────────────── ②b `.kojo2` 单源：字面量只准住零依赖叶子（K2-CUTOVER-THEME） ─────────────────── */
+
+/**
+ * `.kojo2` 是 2.0 的暂挂扩展名。K2-CUTOVER-THEME 之前它有两份：`kojo2-language.ts` 的定义处
+ * 与 `ui/kojo2-cutover.ts` 的抄本（后者刻意不 import monaco 语言面，因为那条链拖着糖词表）。
+ * 现在字面源下沉到零 import 叶子 `monaco/kojo2-constants.ts`：语言面只 re-export，
+ * 路由层直接 import——全仓只此一处可改，抄本归零。
+ */
+const KOJO2_EXT_LITERAL = /["']\.kojo2["']/;
+const KOJO2_CONSTANTS_FILE = 'packages/app/src/monaco/kojo2-constants.ts';
+
+describe('②b `.kojo2` 字面量单源：路由层与语言面都从零依赖叶子取', () => {
+  it('app/src 里带引号的 `.kojo2` 字面量只出现在 kojo2-constants.ts 一处', () => {
+    const hits = appSourceFiles()
+      .filter((rel) => KOJO2_EXT_LITERAL.test(readFileSync(path.join(ROOT, rel), 'utf8')))
+      .sort();
+    expect(hits).toEqual([KOJO2_CONSTANTS_FILE]);
+  });
+
+  it('路由层不再自持字面量，派生自叶子常量', () => {
+    const text = read('packages/app/src/ui/kojo2-cutover.ts').join('\n');
+    expect(text).toMatch(/import \{ KOJO2_SOURCE_EXTENSION \} from '\.\.\/monaco\/kojo2-constants'/);
+    expect(text).toMatch(/export const KOJO2_FILE_EXTENSION: string = KOJO2_SOURCE_EXTENSION;/);
+    expect(text).not.toMatch(KOJO2_EXT_LITERAL);
+  });
+
+  it('语言面把 id / 扩展名从叶子 re-export（不复制第二份）', () => {
+    const text = read('packages/app/src/monaco/kojo2-language.ts').join('\n');
+    expect(text).toMatch(/import \{ KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION \} from '\.\/kojo2-constants'/);
+    expect(text).toMatch(/export \{ KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION \};/);
+    expect(text).not.toMatch(KOJO2_EXT_LITERAL);
+    expect(text).not.toMatch(/export const KOJO2_SOURCE_EXTENSION/);
+  });
+});
+
 /* ─────────────────────────── ③ 行为面：登记的就是契约那份派生物 ─────────────────────────── */
 
 interface Register {

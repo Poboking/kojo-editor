@@ -180,6 +180,25 @@ function rollbackOutcome(rollback: RollbackResult, backupPath: string | null): s
 }
 
 /**
+ * 回读验证失败 → **先回滚到写前状态，再给出一句完整诊断**（headline + 回滚结果）。
+ *
+ * 这是回读失败路径的**唯一**措辞与回滚口径：`compileToFile`（`readbackFailureError`）
+ * 与升糖回写（`lift-apply.ts::applyLiftToFile`）共用本函数——两条写链路的安全语义
+ * 逐字同源（各抄一份迟早分叉，`08ac046d` 只修了一条链路的教训）。
+ *
+ * 回滚自身失败也如实进文本（备份位置照旧在）：失败路径不静默是这条链路的安全语义。
+ */
+export async function readbackFailureDetail(
+  io: FileIO,
+  path: string,
+  backupPath: string | null,
+  headline: string,
+): Promise<string> {
+  const rollback = await rollbackToPreWrite(io, path, backupPath);
+  return `${headline}——${rollbackOutcome(rollback, backupPath)}`;
+}
+
+/**
  * 回读验证失败：**先回滚到写前状态，再带完整诊断抛错**。
  *
  * 错误文本 = 失败 headline + 回滚结果。回滚自身失败也如实进文本（备份位置照旧
@@ -191,8 +210,7 @@ async function readbackFailureError(
   backupPath: string | null,
   headline: string,
 ): Promise<SugarCompileError> {
-  const rollback = await rollbackToPreWrite(io, path, backupPath);
-  return new SugarCompileError(`${headline}——${rollbackOutcome(rollback, backupPath)}`, {
+  return new SugarCompileError(await readbackFailureDetail(io, path, backupPath, headline), {
     targetPath: path,
     backupPath,
   });

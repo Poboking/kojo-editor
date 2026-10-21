@@ -1,0 +1,441 @@
+/**
+ * Kojo 2.0 的**worker 侧**：tree-sitter 运行时、树缓存与三份查询都只活在这条线程里。
+ *
+ * ## 为什么搬进 worker
+ *
+ * batch-3 把 wasm 放在主线程（`kojo2-runtime.ts` 单例）：5,000 行文档的首解 ~36ms、增量 ~6ms，
+ * 单看数字不大，但每一次重解都占着 UI 线程，且查询（highlights/folds）与解析共享同一条
+ * 消息环。搬进 worker 之后主线程只剩"发文本、收纯数据"，最坏情况是着色晚一拍，不是编辑器卡住。
+ *
+ * ## 协议（真源在 `kojo2-worker-protocol.ts`）
+ *
+ * 一条请求 `{ id, type, text, version, oldTreeId? }` ⇒ 一条同 `id` 的回复。
+ * 四种 `type` 分工：
+ * - `parse`：首解 / 增量重解。`oldTreeId` 是上一次回复交出的树（增量基准）。
+ * - `captures` / `folds` / `indents`：先保证有树（缓存命中且文本逐字相同 ⇒ 直接查；
+ *   文本变了 ⇒ 先增量重解；不认识 ⇒ 整篇重解），再跑对应查询。
+ *
+ * ## 树的所有权（这条线程里唯一会 `delete()` 树的地方）
+ *
+ * - 缓存上限 `KOJO2_WORKER_MAX_TREES`（默认 8，LRU）：主线程超时丢弃的迟到结果最多让一棵树
+ *   多活一会儿，不会无限涨；
+ * - 增量重解的旧树：`runtime.parse` 之后立即 `delete()`（运行时头注：旧树已被 `tree.edit`
+ *   改写过，不再当基准）；
+ * - `dispose()`：删光缓存 + 释放运行时（运行时自身的 `dispose` 幂等；worker 线程被 terminate
+ *   时 wasm 也会随线程回收，这条只是给优雅退出与测试兜底）。
+ *
+ * ## 纪律
+ *
+ * - 不 import Monaco / 宿主 UI / 插件包，也**不 import `kojo2-runtime.ts`**（那个模块带动态
+ *   装载器，进了 worker 图就会切 chunk）：运行时由 `options.loadRuntime` 交进来，类型只从
+ *   `kojo2-runtime-core.ts` 取；
+ * - **永不抛**：任何一步出错都变成 `{ ok: false, reason, message }`；本地线程级未捕获异常由
+ *   `startKojo2Worker` 的 `onerror` 兜一条 `id: 0`（主线程只会记一笔，不会拿它当任何请求的答案）；
+ * - 查询各面独立降级：`folds` 查询能用就真跑，`indents` 查询刻意零捕获就回
+ *   `query-unavailable`（**不编规则**，理由见 `queries/v2/indents.scm` 头注）。
+ */
+import type { Node as SyntaxNode, Tree } from 'web-tree-sitter';
+import type { Kojo2Capture } from './kojo2-tokenizer';
+import type {
+  Kojo2QueryKind,
+  Kojo2RuntimeResult,
+  Kojo2TreeSitterRuntime,
+} from './kojo2-runtime-core';
+import {
+  isKojo2WorkerRequest,
+  type Kojo2CapturesReply,
+  type Kojo2FoldRange,
+  type Kojo2FoldsReply,
+  type Kojo2ParseReply,
+  type Kojo2WorkerFailure,
+  type Kojo2WorkerFailureReason,
+  type Kojo2WorkerQueryRequest,
+  type Kojo2WorkerReply,
+  type Kojo2WorkerRequest,
+  type Kojo2WorkerRequestType,
+} from './kojo2-worker-protocol';
+
+/** 树缓存上限：正常编辑只用到 1 棵；8 棵给左右分屏 / 迟到请求留余量 */
+export const KOJO2_WORKER_MAX_TREES = 8;
+/** 折叠区间上限：5k 行文档的 `block` 数量远小于此；病态文档不许把数组撑爆 */
+export const KOJO2_WORKER_MAX_FOLDS = 4_000;
+
+interface CachedTree {
+  readonly tree: Tree;
+  /** 这棵树对应的全文（查询请求拿它判断"能不能直接查"） */
+  readonly text: string;
+  readonly version: number;
+}
+
+export interface Kojo2WorkerEngineOptions {
+  /**
+   * 装载运行时（**必须**由调用方给：worker 入口传零动态 import 的 `createKojo2Runtime`，
+   * 测试传 `getKojo2TreeSitterRuntime(realDeps)` 的包装）。引擎自己不 import
+   * `kojo2-runtime.ts`——那个模块带动态 import，进了 worker 图就会切 chunk。
+   */
+  readonly loadRuntime: () => Promise<Kojo2RuntimeResult>;
+  readonly maxTrees?: number;
+}
+
+export interface Kojo2WorkerEngine {
+  /** 串行处理（一条 worker 只有一个 parser，消息环本来就不该交错） */
+  handle(request: Kojo2WorkerRequest): Promise<Kojo2WorkerReply>;
+  /** 幂等：删缓存树 + 释放自己装载的运行时 */
+  dispose(): void;
+  readonly treeCount: number;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function safeDeleteTree(tree: Tree): void {
+  try {
+    tree.delete();
+  } catch {
+    /* 已被别处删除 / wasm 已卸载：没有可回收的 */
+  }
+}
+
+function failure(
+  id: number,
+  type: Kojo2WorkerRequestType | undefined,
+  reason: Kojo2WorkerFailureReason,
+  message: string,
+  treeId?: string,
+): Kojo2WorkerFailure {
+  return treeId === undefined
+    ? { ok: false, id, type, reason, message }
+    : { ok: false, id, type, reason, message, treeId };
+}
+
+/**
+ * `@fold` 捕获 → 折叠区间（纯函数，便于单测）。
+ *
+ * 宿主约定（与 v1 逐字一致）：取捕获节点的 `startPosition.row .. endPosition.row`，
+ * **只有 `endRow > startRow`** 才产生折叠；同一区间去重；按（起行升序、止行降序）排。
+ */
+export function foldsFromCaptures(
+  captures: readonly Kojo2Capture[],
+  maxFolds: number = KOJO2_WORKER_MAX_FOLDS,
+): Kojo2FoldRange[] {
+  const limit = Number.isFinite(maxFolds) && maxFolds >= 1 ? Math.trunc(maxFolds) : KOJO2_WORKER_MAX_FOLDS;
+  const seen = new Set<string>();
+  const out: Kojo2FoldRange[] = [];
+  for (const capture of captures) {
+    if (capture === null || typeof capture !== 'object' || capture.name !== 'fold') continue;
+    const startRow = capture.startPosition?.row;
+    const endRow = capture.endPosition?.row;
+    if (typeof startRow !== 'number' || typeof endRow !== 'number') continue;
+    if (!Number.isFinite(startRow) || !Number.isFinite(endRow)) continue;
+    const from = Math.trunc(startRow);
+    const to = Math.trunc(endRow);
+    if (from < 0 || to <= from) continue;
+    const key = `${from}:${to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ startRow: from, endRow: to, kind: 'block' });
+    if (out.length >= limit) break;
+  }
+  out.sort((a, b) => a.startRow - b.startRow || b.endRow - a.endRow);
+  return out;
+}
+
+/**
+ * 造一条 worker 侧引擎（不起线程：消息环在 {@link startKojo2Worker}）。
+ *
+ * 运行时由 `options.loadRuntime` 交进来；引擎在 `dispose()` 时对它调 `dispose()`
+ * （运行时自身的 `dispose` 幂等；worker 线程被 terminate 时 wasm 也会随线程回收）。
+ */
+export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo2WorkerEngine {
+  const maxTrees = Number.isFinite(options.maxTrees) && (options.maxTrees ?? 0) >= 1
+    ? Math.trunc(options.maxTrees as number)
+    : KOJO2_WORKER_MAX_TREES;
+  /** 插入序 = LRU 序（Map 保序；每次命中不额外搬，够用） */
+  const trees = new Map<string, CachedTree>();
+  let treeSeq = 0;
+  let runtimePromise: Promise<Kojo2RuntimeResult> | null = null;
+  let runtime: Kojo2TreeSitterRuntime | null = null;
+  let disposed = false;
+  let queue: Promise<void> = Promise.resolve();
+
+  const loadRuntime = (): Promise<Kojo2RuntimeResult> => {
+    if (runtimePromise !== null) return runtimePromise;
+    runtimePromise = options.loadRuntime().then(
+      (result) => {
+        if (result.ok) runtime = result.runtime;
+        return result;
+      },
+      (error: unknown): Kojo2RuntimeResult => ({
+        ok: false,
+        reason: 'unavailable',
+        message: `结构解析运行时装载抛错：${describeError(error)}`,
+      }),
+    );
+    return runtimePromise;
+  };
+
+  const forget = (treeId: string): CachedTree | null => {
+    const entry = trees.get(treeId);
+    if (entry === undefined) return null;
+    trees.delete(treeId);
+    return entry;
+  };
+
+  const evict = (): void => {
+    while (trees.size > maxTrees) {
+      const oldest = trees.keys().next();
+      if (oldest.done === true) return;
+      const entry = forget(oldest.value);
+      if (entry !== null) safeDeleteTree(entry.tree);
+    }
+  };
+
+  const remember = (tree: Tree, text: string, version: number): string => {
+    const treeId = `t${++treeSeq}`;
+    trees.set(treeId, { tree, text, version });
+    evict();
+    return treeId;
+  };
+
+  /** 增量之后旧树已被 `tree.edit` 改写过：从缓存删掉并立即释放（运行时头注的所有权口径） */
+  const dropAfterEdit = (treeId: string | undefined): void => {
+    if (treeId === undefined) return;
+    const entry = forget(treeId);
+    if (entry !== null) safeDeleteTree(entry.tree);
+  };
+
+  interface ResolvedTree {
+    readonly ok: true;
+    readonly treeId: string;
+    readonly root: SyntaxNode;
+    readonly incremental: boolean;
+    readonly reparsed: boolean;
+    readonly runtime: Kojo2TreeSitterRuntime;
+  }
+
+  type ResolveResult = ResolvedTree | Kojo2WorkerFailure;
+
+  /**
+   * 把一条查询请求变成"一棵可查的树"：缓存命中且文本相同 ⇒ 不重解；
+   * 文本变了 ⇒ 增量重解；树不认识 ⇒ 整篇重解。
+   */
+  const resolveTree = async (request: Kojo2WorkerQueryRequest): Promise<ResolveResult> => {
+    const loaded = await loadRuntime();
+    if (!loaded.ok) return failure(request.id, request.type, loaded.reason, loaded.message);
+    const active = loaded.runtime;
+    const cached = request.oldTreeId === undefined ? null : trees.get(request.oldTreeId) ?? null;
+    if (cached !== null && cached.text === request.text) {
+      return { ok: true, treeId: request.oldTreeId!, root: cached.tree.rootNode, incremental: false, reparsed: false, runtime: active };
+    }
+    const parsed = active.parse(request.text, cached?.tree ?? null);
+    dropAfterEdit(request.oldTreeId);
+    if (!parsed.ok) {
+      return failure(request.id, request.type, parsed.reason, parsed.message);
+    }
+    const treeId = remember(parsed.tree, request.text, request.version);
+    return {
+      ok: true,
+      treeId,
+      root: parsed.rootNode,
+      incremental: parsed.incremental,
+      reparsed: true,
+      runtime: active,
+    };
+  };
+
+  const runParse = async (request: Extract<Kojo2WorkerRequest, { type: 'parse' }>): Promise<Kojo2WorkerReply> => {
+    const loaded = await loadRuntime();
+    if (!loaded.ok) return failure(request.id, 'parse', loaded.reason, loaded.message);
+    const active = loaded.runtime;
+    const previous = request.oldTreeId === undefined ? null : trees.get(request.oldTreeId) ?? null;
+    const started = nowMs();
+    const parsed = active.parse(request.text, previous?.tree ?? null);
+    const parseMs = Math.max(0, nowMs() - started);
+    dropAfterEdit(request.oldTreeId);
+    if (!parsed.ok) return failure(request.id, 'parse', parsed.reason, parsed.message);
+    const reply: Kojo2ParseReply = {
+      ok: true,
+      id: request.id,
+      type: 'parse',
+      version: request.version,
+      treeId: remember(parsed.tree, request.text, request.version),
+      incremental: parsed.incremental,
+      changedRanges: parsed.changedRanges,
+      textLength: parsed.textLength,
+      parseMs,
+      loadMs: active.initMs,
+    };
+    return reply;
+  };
+
+  const runQuery = async (request: Kojo2WorkerQueryRequest): Promise<Kojo2WorkerReply> => {
+    const kind: Kojo2QueryKind = request.type === 'captures' ? 'highlights' : request.type;
+    // indents 先看查询买没买：没有就不为一条注定 `query-unavailable` 的请求白解一棵树
+    if (request.type === 'indents') {
+      const loaded = await loadRuntime();
+      if (!loaded.ok) return failure(request.id, 'indents', loaded.reason, loaded.message);
+      const status = loaded.runtime.queryStatus('indents');
+      if (!status.ok) return failure(request.id, 'indents', status.reason, status.message);
+    }
+    const resolved = await resolveTree(request);
+    if (!resolved.ok) return resolved;
+    const status = resolved.runtime.queryStatus(kind);
+    if (!status.ok) return failure(request.id, request.type, status.reason, status.message, resolved.treeId);
+    const started = nowMs();
+    const captured = resolved.runtime.queryCaptures(resolved.root, kind);
+    const queryMs = Math.max(0, nowMs() - started);
+    if (!captured.ok) {
+      return failure(request.id, request.type, captured.reason, captured.message, resolved.treeId);
+    }
+    const common = {
+      ok: true as const,
+      id: request.id,
+      version: request.version,
+      treeId: resolved.treeId,
+      incremental: resolved.incremental,
+      reparsed: resolved.reparsed,
+      queryMs,
+      loadMs: resolved.runtime.initMs,
+    };
+    if (request.type === 'captures') {
+      const reply: Kojo2CapturesReply = { ...common, type: 'captures', captures: captured.captures };
+      return reply;
+    }
+    if (request.type === 'folds') {
+      const reply: Kojo2FoldsReply = {
+        ...common,
+        type: 'folds',
+        folds: foldsFromCaptures(captured.captures),
+      };
+      return reply;
+    }
+    // indents：查询真的跑了。0 条捕获 = `indents.scm` 刻意零捕获（真源）；>0 条 = 将来查询
+    // 加了捕获但本批没有"捕获 → 回车规则"的翻译层——两种都不许冒充"结构缩进已支持"。
+    return failure(
+      request.id,
+      'indents',
+      'query-unavailable',
+      captured.captures.length === 0
+        ? 'queries/v2/indents.scm 有 0 条捕获（刻意零捕获，见文件头注）⇒ 2.0 的结构缩进不提供规则；回车仍走语言层'
+        : `queries/v2/indents.scm 有 ${captured.captures.length} 条捕获，但本批没有"捕获 → 回车规则"的翻译层 ⇒ 这一档不提供规则`,
+      resolved.treeId,
+    );
+  };
+
+  const dispatch = async (request: Kojo2WorkerRequest): Promise<Kojo2WorkerReply> => {
+    if (disposed) {
+      return failure(
+        isKojo2WorkerRequest(request) ? request.id : 0,
+        isKojo2WorkerRequest(request) ? request.type : undefined,
+        'disposed',
+        '结构解析 worker 已释放 ⇒ 调用方降级到词法层',
+      );
+    }
+    if (!isKojo2WorkerRequest(request)) {
+      return failure(0, undefined, 'invalid-input', 'worker 收到的请求形状不符协议（缺 id / type）');
+    }
+    if (typeof request.text !== 'string') {
+      return failure(request.id, request.type, 'invalid-input', '请求的 text 不是字符串');
+    }
+    if (typeof request.version !== 'number' || !Number.isFinite(request.version)) {
+      return failure(request.id, request.type, 'invalid-input', '请求的 version 不是有限数');
+    }
+    try {
+      return request.type === 'parse' ? await runParse(request) : await runQuery(request);
+    } catch (error) {
+      return failure(request.id, request.type, 'crashed', `worker 处理请求时抛错：${describeError(error)}`);
+    }
+  };
+
+  const handle = (request: Kojo2WorkerRequest): Promise<Kojo2WorkerReply> => {
+    const run = queue.then(
+      () => dispatch(request),
+      () => dispatch(request),
+    );
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
+  return {
+    handle,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const entry of trees.values()) safeDeleteTree(entry.tree);
+      trees.clear();
+      // 运行时自己的 dispose 幂等；即使它是测试注入的共享单例，重复 dispose 也无副作用
+      // （宿主侧 `disposeKojo2TreeSitterRuntime()` 之后再收一次账照旧成立）。
+      runtime?.dispose();
+      runtime = null;
+    },
+    get treeCount() {
+      return trees.size;
+    },
+  };
+}
+
+/** worker 全局的窄投影（app 的 tsconfig 只挂 DOM lib，不挂 WebWorker lib） */
+export interface Kojo2WorkerScope {
+  postMessage(message: Kojo2WorkerReply): void;
+  onmessage: ((event: MessageEvent<unknown>) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
+}
+
+/**
+ * 装消息环并返回引擎（worker 入口 `kojo2-ts.worker.ts` 只调这一句；测试可传自己的 scope）。
+ *
+ * 收件闸在 `isKojo2WorkerRequest`：没有 `id` 的垃圾消息连回都不回（回 `id: 0` 只会制造噪音）。
+ * 回话失败（主线程已经 `terminate()`）在这里吞掉：线程下一刻就不归我们管了。
+ *
+ * `options.loadRuntime` 在生产入口里**必须**由静态资源装配（见 `kojo2-ts.worker.ts` 头注）：
+ * worker 的 iife 产物不接受动态 import 切 chunk，资源必须由入口静态 import 后注入。
+ */
+export function startKojo2Worker(
+  options: Kojo2WorkerEngineOptions,
+  scope?: Kojo2WorkerScope,
+): Kojo2WorkerEngine {
+  const target = scope ?? (self as unknown as Kojo2WorkerScope);
+  const engine = createKojo2WorkerEngine(options);
+  target.onmessage = (event: MessageEvent<unknown>) => {
+    const request: unknown = event.data;
+    if (!isKojo2WorkerRequest(request)) return;
+    void engine.handle(request).then(
+      (reply) => {
+        try {
+          target.postMessage(reply);
+        } catch {
+          /* 主线程已经没了：worker 也会被 terminate，没有可补救的 */
+        }
+      },
+      (error: unknown) => {
+        try {
+          target.postMessage(
+            failure(0, undefined, 'crashed', `worker 回话链断了：${describeError(error)}`),
+          );
+        } catch {
+          /* 同上 */
+        }
+      },
+    );
+  };
+  target.onerror = (event: ErrorEvent) => {
+    try {
+      target.postMessage(
+        failure(0, undefined, 'crashed', `worker 线程异常：${event.message || '（无消息）'}`),
+      );
+    } catch {
+      /* 同上 */
+    }
+  };
+  return engine;
+}

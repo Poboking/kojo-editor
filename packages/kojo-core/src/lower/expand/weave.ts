@@ -11,6 +11,7 @@ import type { KojoWeaveDecl } from '../../ast.js';
 import { checkEventArgs, checkEvent } from '../../adapter.js';
 import { createEmitBuffer } from '../buffer.js';
 import type { LowerState } from '../state.js';
+import { segmentSpecsOf } from '../../source-map.js';
 import { captureSlots, reportAt, reportDiagnostic } from './context.js';
 import type { ExpandContext, WalkNarrative } from './context.js';
 
@@ -81,7 +82,14 @@ export function assembleWeave(decl: KojoWeaveDecl, ctx: ExpandContext, state: Lo
     if (mapped === null || mapped.source === null) {
       state.buffer.push(line, { kind: 'generated', source: null });
     } else {
-      state.buffer.push(line, { kind: mapped.kind, source: mapped.source, origins: mapped.origins });
+      // 列级事实随行搬（additive）：监听体里的模板/池展开分段不能在装配时丢掉
+      const segments = segmentSpecsOf(mapped);
+      state.buffer.push(line, {
+        kind: mapped.kind,
+        source: mapped.source,
+        origins: mapped.origins,
+        ...(segments === undefined ? {} : { segments }),
+      });
     }
   }
   state.buffer.pushEmitted(state.backend.weave.weaveFooter(), { source: decl.span }, ctx.sink);

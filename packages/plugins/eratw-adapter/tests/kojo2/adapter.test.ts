@@ -20,8 +20,11 @@ import {
   checkSymbol,
   checkWeavePriority,
   eventNames,
+  findDomainVariable,
   validateGameAdapter,
 } from '../../../../kojo-core/src/adapter.js';
+import { parseSource } from '../../../../kojo-core/src/parser.js';
+import { checkKojoFile } from '../../../../kojo-core/src/sema/index.js';
 import { createEratwFaceTable } from '../../src/face-templates.js';
 import { ERATW_LIBRARY_FUNCTIONS } from '../../src/library-table.js';
 import {
@@ -180,6 +183,32 @@ describe('eraTW adapter：域符号', () => {
     expect(checkSymbol(ERATW_GAME_ADAPTER, '好感度')).toBeNull();
     expect(checkSymbol(ERATW_GAME_ADAPTER, '角色文本')).toBeNull();
     expect(checkSymbol(ERATW_GAME_ADAPTER, '不存在的属性')?.code).toBe('core/expr/unknown-symbol');
+  });
+
+  it('域符号变量：只收 v1 台账里有裸写证据的五个引擎全局（additive 面）', () => {
+    const variables = ERATW_DOMAIN_SYMBOLS.variables ?? [];
+    expect(variables.map((item) => item.name)).toEqual(['TIME', 'MONEY', 'RESULTS', 'RESULT', 'ARG']);
+    for (const variable of variables) {
+      expect(variable.valueKind).toBe('int');
+      // 全部可写（readonly 省略）：这五个都是作者真的会赋值的槽
+      expect(variable.readonly).not.toBe(true);
+    }
+    expect(Object.isFrozen(ERATW_DOMAIN_SYMBOLS.variables)).toBe(true);
+    expect(findDomainVariable(ERATW_GAME_ADAPTER, 'TIME')).toMatchObject({ name: 'TIME', valueKind: 'int' });
+    // 台账口径：没登记的名字不认（纯读伪变量 DAY 等有意未收）
+    expect(findDomainVariable(ERATW_GAME_ADAPTER, 'DAY')).toBeUndefined();
+    expect(checkSymbol(ERATW_GAME_ADAPTER, 'DAY')?.code).toBe('core/expr/unknown-symbol');
+  });
+
+  it('sema 视角：外部变量赋值不再假阳，未登记名字仍报未声明', () => {
+    const check = (body: string) =>
+      checkKojoFile(parseSource(`@算\n${body}\n`), { adapter: ERATW_GAME_ADAPTER }).diagnostics.map((item) =>
+        String(item.code),
+      );
+    expect(check('    TIME = 5')).not.toContain('core/expr/unknown-symbol');
+    expect(check('    MONEY += 10')).not.toContain('core/expr/unknown-symbol');
+    expect(check('    RESULTS = 1')).not.toContain('core/expr/unknown-symbol');
+    expect(check('    不存在的变量 = 1')).toContain('core/expr/unknown-symbol');
   });
 });
 

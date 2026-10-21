@@ -5,7 +5,8 @@
  * - **零 IO、零游戏名词**：事件名与引擎落点都是抽象占位（OPEN / CLOSE / VIEW / PLAYER），
  *   任何真实游戏的口上事实都不许出现在这里；具体游戏的 adapter 住在各自插件包。
  * - 最小面：2 个事件、`{我}` / `{你}` 两个代词、wait/color 缺省、只有场景存储、
- *   program 全关、presentation 全 null —— 这样 core 测试既能跑通契约自检，
+ *   program 全关、presentation 全 null、域符号变量四条（`domainSymbols.variables`，additive 面）——
+ *   这样 core 测试既能跑通契约自检，
  *   也能稳定踩到"未知事件 / 未声明能力 / 未声明存储期"的错误路径。
  * - 数据在模块装载时深冻结一次：之后查表零构造开销。
  */
@@ -107,6 +108,18 @@ export const FIXTURE_ADAPTER: GameAdapter = freezeAdapter({
       },
     ],
     nameFunctions: [{ name: '名字', engine: 'NAME_OF', args: ['对象'], returns: 'string' }],
+    /**
+     * 域符号变量（additive 面）：四条覆盖三种 `valueKind` + 只读，供 sema 的
+     * "外部变量赋值 / 只读 / 类型兼容 / 旧 adapter 省略字段"四类判定各取正反例。
+     * 名字一律 `外部…` 前缀：fixture 是伪游戏，不借真实游戏词；也不与上面的
+     * 代词 / 属性 / 名字函数撞名（撞名是装载期 error）。
+     */
+    variables: [
+      { name: '外部计数', valueKind: 'int' },
+      { name: '外部文本', valueKind: 'string' },
+      { name: '外部上限', valueKind: 'int', readonly: true },
+      { name: '外部角色', valueKind: 'character' },
+    ],
     speakers: { kind: 'closed', names: ['我', '你'] },
     unknown: 'error',
   },

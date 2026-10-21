@@ -20,6 +20,8 @@ import type { CoreDiagnosticCode, DiagnosticSink, KojoDiagnostic } from '../../d
 import { severityOf } from '../../diagnostics.js';
 import type { KojoEmitBackend, KojoHiddenSlot } from '../backend.js';
 import type { EmitBuffer } from '../buffer.js';
+import type { ResolvedProgramFeatures } from '../feature-gate.js';
+import { resolveProgramFeatures } from '../feature-gate.js';
 import type { LowerState } from '../state.js';
 import type { TableLoweringPlan } from '../../table.js';
 import { collectIntegerConstants } from '../../table.js';
@@ -32,6 +34,13 @@ export type WalkDispatch = (nodes: readonly import('../../ast.js').KojoDispatchN
 export interface ExpandContext {
   readonly adapter: GameAdapter;
   readonly backend: KojoEmitBackend;
+  /**
+   * 能力闸的单源结论（K2-FEATURE-GATE-UNIFY）：adapter 声明 × backend 落点，一次 compile 解析一次。
+   *
+   * 主链（`walk.ts` / `program.ts`）与 `createLowerState` 都读它——不再有第二个真源；
+   * 冲突诊断（`featureGate.diagnostics`）由编译入口报一次。
+   */
+  readonly featureGate: ResolvedProgramFeatures;
   /** 源文本（预分配行数估算、宿主身份等；core 不解析第二遍） */
   readonly sourceText: string;
   readonly sink: DiagnosticSink;
@@ -101,6 +110,7 @@ export function createExpandContext(input: CreateExpandContextInput): ExpandCont
   return {
     adapter: input.adapter,
     backend: input.backend,
+    featureGate: resolveProgramFeatures(input.adapter, input.backend),
     sourceText: input.sourceText,
     sink: input.sink,
     view: input.view,

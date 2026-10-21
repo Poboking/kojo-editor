@@ -6,6 +6,9 @@
   "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "kojo-conformance": "./src/main.ts"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

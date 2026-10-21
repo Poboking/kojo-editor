@@ -12,36 +12,64 @@
  * 切换控制器**路由**决定，不是只看扩展名。开关关着时路由恒等于 `languageFor(path)`
  * （逐字等价于收口前），开关打开后 `.kojo2` 才挂到 `kojo2` 语言面、`v1-only` 阶段
  * 的 `.kojo2` 则落 `plaintext`（打不开但也不塞给 v1 词法）。
+ *
+ * K2-CUTOVER-THEME 接线（`ui/kojo2-model-language.ts`）：建 model 时判一次不够——
+ * `2.0-default` 阶段 `.kojo` 的解析器由**正文指纹**决定，正文变了、路径改了都得重判。
+ * 所以每建一份 model 就挂一个重挂手柄：内容变化防抖后 `monaco.editor.setModelLanguage`，
+ * 同语言不重挂、flag 关时整条链零动作；model 被池回收时手柄自动解绑（`onWillDispose`），
+ * 不碰引用计数。判据与建 model 共用 {@link languageIdForKojo2Model} 一枚函数。
  */
 import * as monaco from '../monaco/entry';
-import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-language';
-import { isKojo2CutoverEnabled } from './kojo2-flag';
 import { getKojo2CutoverController } from './kojo2-cutover';
-import { createEditorModelPool, languageFor } from './editor-model-pool';
+import { isKojo2CutoverEnabled } from './kojo2-flag';
+import {
+  createKojo2ModelLanguageController,
+  languageIdForKojo2Model,
+} from './kojo2-model-language';
+import { createEditorModelPool } from './editor-model-pool';
 
-/** 建 model 时选语言：开关关 / 非 2.0 文件 ⇒ 与收口前同一条 `languageFor` */
+/** 建 model / 重挂共用的语言判据（真源在 `kojo2-model-language.ts`，本文件只转发） */
 function languageIdForModel(path: string, text: string): string {
-  if (!isKojo2CutoverEnabled()) return languageFor(path);
-  const route = getKojo2CutoverController().route({ filePath: path, source: text });
-  switch (route.kind) {
-    case 'resolved':
-      return route.parser === 'kojo2' ? KOJO2_LANGUAGE_ID : languageFor(path);
-    case 'ambiguous':
-      // 唯一兜底是 v1（`route.fallback`），提示由打开链路露给作者，这里不另造文案。
-      return languageFor(path);
-    case 'blocked':
-      // 阶段把 2.0 面关着：不把 2.0 文件塞给 v1 词法（那会把整篇标成错误）。
-      return 'plaintext';
-    case 'needs-content':
-    case 'not-kojo':
-      return languageFor(path);
-  }
+  return languageIdForKojo2Model(path, text);
+}
+
+/**
+ * 进程级 model 语言重挂器（与池同生）。
+ *
+ * `setModelLanguage` 是唯一碰 Monaco 的出口；模型结构上满足 `Kojo2LanguageModelLike`
+ * （`getValue` / `getLanguageId` / `onDidChangeContent` / `onWillDispose`），无需适配层。
+ */
+export const kojo2ModelLanguage = createKojo2ModelLanguageController({
+  isEnabled: isKojo2CutoverEnabled,
+  resolveLanguage: languageIdForKojo2Model,
+  setModelLanguage: (model, languageId) => {
+    monaco.editor.setModelLanguage(model as monaco.editor.ITextModel, languageId);
+  },
+});
+
+// 切流阶段 / per-file override 是"路由事实"，不是"正文变化"：改档后开着的标签必须立刻
+// 重新路由（`v1-only → dual` 时已开的 `.kojo2` 从 plaintext 挂回 `kojo2`）。flag 关时
+// 不订阅——一个监听都不挂，与没有任何 2.0 面时逐字等价。
+if (isKojo2CutoverEnabled()) {
+  getKojo2CutoverController().subscribe(() => {
+    kojo2ModelLanguage.refreshAll();
+  });
 }
 
 export const editorModelPool = createEditorModelPool({
   readText: (kernel, path) => kernel.io.readText(path),
-  createModel: (path, text) =>
-    monaco.editor.createModel(text, languageIdForModel(path, text), monaco.Uri.file(path)),
+  createModel: (path, text) => {
+    // 判据只算一次：建 model 用这一枚，attach 时也把它交回去 ⇒ 首次对齐不再重扫正文
+    // （`.kojo` 在 2.0-default 阶段的指纹要扫全文，开一份大文件不该扫两遍）。
+    const languageId = languageIdForModel(path, text);
+    const model = monaco.editor.createModel(
+      text,
+      languageId,
+      monaco.Uri.file(path),
+    );
+    kojo2ModelLanguage.attach(model, path, { languageId });
+    return model;
+  },
   // PS-12 冷档三注入（缺一即冷档禁用）：
   // 码元记账走 getValueLength（不拼整篇字符串）；干净判据与 EditorPane 脏判定同口径
   // （getAlternativeVersionId，BUG-4）；补写盘经 kernel.io.writeText（写域强制由内核把关）。

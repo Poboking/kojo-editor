@@ -18,6 +18,9 @@
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
+// 2.0 语言层的 adapter **只是类型**（`GlobalProviderOptions.kojo2Adapter` 的形状）：
+// 具体实例由宿主组合根注入，本文件既不 import 任何 adapter 包，也不认识任何游戏名词。
+import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
 import { errorText, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
 import type {
   EditorCodeAction,
@@ -97,6 +100,10 @@ import {
 // 本模块静态引它只拉起 `kojo2-runtime` 的**类型与单例壳**，两枚 wasm 与 highlights 查询
 // 仍只在运行时的默认装载器里动态 import（`kojo2-assets.ts` 不进主线程静态图）。
 import { installKojo2SemanticTokensProvider } from '../monaco/kojo2-semantic';
+// K2 batch-4：Kojo 2.0 的补全 / 悬停 / 转定义三枚 provider（纯模型 → Monaco 协议）。
+// **本文件仍不认识任何具体 adapter**：2.0 adapter 由宿主组合根经 `GlobalProviderOptions`
+// 注入（那枚对象不在 `game.adapter` 槽位上，见该接口的注），语言层零游戏名词（解耦审计 A）。
+import { installKojo2LanguageProviders } from '../monaco/kojo2-providers';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   SIGNATURE_LOOKBACK_LINES,
@@ -234,6 +241,25 @@ function staticTablesFor(
 ): Pick<CompletionTables, 'faceTable' | 'libraryTable' | 'counterTable'> {
   const picked = contributions.find((c) => hasStaticTables(c.adapter));
   return picked ? staticTablesOf(picked.adapter) : {};
+}
+
+/**
+ * 全局 provider 的**注入面**（additive；既有调用方零改动）。
+ *
+ * 目前只有一格：Kojo 2.0 语言服务要的 adapter（`# 机` 事件目录 / 域符号的唯一来源）。
+ *
+ * 为什么**不能**从 `game.adapter` 槽位取：槽位上那枚是 v1 契约的 `GameAdapter`
+ * （`gameId` / `loadProject` / 各张糖表），而 2.0 的语言层要的是 `@kojo/kojo-core` 的
+ * `GameAdapter`（事件目录 / 域符号 / profile）——两枚是不同的对象，槽位里没有后者。
+ * 由宿主组合根注入（与 `ui/kojo2-problem-wiring.ts` 的 2.0 adapter 装配同一口径），
+ * 本文件因此仍然一行游戏名词都不认识（解耦审计 A）。
+ *
+ * 缺省 = 没有 adapter：`# 机` 那一路零候选（**不猜内置事件**），悬停 / 转定义 / 声明名单
+ * 照常工作——它们本来就不需要游戏知识。
+ */
+export interface GlobalProviderOptions {
+  /** 2.0 adapter 的**现取**入口（项目可开可关；每次请求重问，不缓存上一轮的事实） */
+  readonly kojo2Adapter?: () => Kojo2GameAdapter | null | undefined;
 }
 
 /**
@@ -1295,11 +1321,16 @@ let lastWordsKey = '__unset__';
  * 把**已登记的**逐枚拆掉、清空登记表、复位 `globalsInstalled` 后**重新抛出**。半途失败绝不
  * 留 `globalsInstalled = true`——否则每次 EditorPane 挂载都被开头那道门挡住、永不重试，
  * 补全 / 💡 / 悬停 / 改名整批 provider 就此静默永久缺失（铁律 4：内核不静默，宿主同样不静默）。
+ *
+ * `options`（additive；旧调用方零改动）= 宿主组合根交进来的**注入面**，见
+ * {@link GlobalProviderOptions}。注入只在该门第一次放行时收下（`globalsInstalled` 之后
+ * 再调用是空转），但 getter 本身每轮请求重问 ⇒ 项目开闭不要求重装 provider。
  */
-export function ensureGlobalProviders(): void {
+export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void {
   if (globalsInstalled) return;
   // 置位只为挡住同一批挂载里的重入；抛错路径由下面 catch 撤回（见模块内"全有或全无"注）。
   globalsInstalled = true;
+  const kojo2Adapter = options.kojo2Adapter;
   try {
     // 💡 CodeAction 宿主适配（槽 `ui.editor.codeAction`，P3b）：宿主只做 Monaco 协议
     // 转换（registerCodeActionProvider），动作产出全在插件（纯函数 provideActions）；
@@ -1488,6 +1519,15 @@ export function ensureGlobalProviders(): void {
     // 超时 ⇒ provider 回空 tokens（不着色），不抛、不写任何 markers。
     if (isKojo2CutoverEnabled()) {
       globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
+      // K2 batch-4：三枚语言服务 provider（补全 / 悬停 / 转定义），语言 id 只认 `kojo2`。
+      // adapter 走组合根注入的 getter —— 项目切换 / 槽位变化都不必重装 provider；
+      // 没注入 / 取不到 ⇒ 只有 `# 机` 那一路零候选（同文件语义照常工作）。
+      globalDisposers.push(
+        installKojo2LanguageProviders(
+          monaco,
+          kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
+        ),
+      );
     }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *

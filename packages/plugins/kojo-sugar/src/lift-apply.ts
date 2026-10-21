@@ -12,7 +12,8 @@
  *     3. 目录（域内才建；越权在此即抛，仍无备份副作用）
  *     4. 备份（目标已存在才做）
  *     5. 写盘（内核 io 第一道闸 `writablePaths`；`WriteNotAllowedError` **原样传播**）
- *     6. 回读验证（字节级；不一致 = 致命，携带备份位置）
+ *     6. 回读验证（字节级；不一致 = 致命：**先回滚到写前字节**再抛错，回滚成败都进文本
+ *        ——回滚实现与 `compileToFile` 共用 `compile.ts::readbackFailureDetail`）
  *     7. 发 `file.changed`
  *
  * ## 为什么"倒序替换"是必须的（且要显式断言）
@@ -44,7 +45,7 @@ import type {
 } from '@kojo/plugin-api';
 import { SugarApplyError } from '@kojo/plugin-api';
 import { indentLevelOf, isAllBlank, leadingBlank } from './blank-charset';
-import { encodeErbBytes, bytesEqual } from './compile';
+import { encodeErbBytes, bytesEqual, readbackFailureDetail } from './compile';
 
 /* ============================== 行工具 ============================== */
 
@@ -334,21 +335,31 @@ export async function applyLiftToFile(
     });
   }
 
-  // ---- 6. 回读验证（字节级；不一致 = 致命，携带备份位置）----
+  // ---- 6. 回读验证（字节级；不一致 = 致命：先回滚到写前状态，再带诊断抛错）----
+  // 坏/半产物不许留盘（与 `compileToFile` 同一口径、同一份实现）：读抛或字节不一致
+  // 都先回滚——有备份恢复原文件、无备份移除半成品；回滚成败都进错误文本（不静默）。
   let persisted: Uint8Array;
   try {
     persisted = await io.readBytes(sourcePath);
   } catch (err) {
-    const hint = backupPath ? `——原文件已备份于 ${backupPath}` : '';
     throw new SugarApplyError(
-      `回读验证失败（无法重新读取文件）：${err instanceof Error ? err.message : String(err)}${hint}`,
+      await readbackFailureDetail(
+        io,
+        sourcePath,
+        backupPath,
+        `回读验证失败（无法重新读取文件）：${err instanceof Error ? err.message : String(err)}`,
+      ),
       { targetPath: sourcePath, backupPath },
     );
   }
   if (!bytesEqual(persisted, bytes)) {
-    const hint = backupPath ? `——原文件已备份于 ${backupPath}` : '（原文件此前不存在，无备份）';
     throw new SugarApplyError(
-      `回读验证失败（落盘字节与产物不一致：期望 ${bytes.length}B，实得 ${persisted.length}B）${hint}`,
+      await readbackFailureDetail(
+        io,
+        sourcePath,
+        backupPath,
+        `回读验证失败（落盘字节与产物不一致：期望 ${bytes.length}B，实得 ${persisted.length}B）`,
+      ),
       { targetPath: sourcePath, backupPath },
     );
   }

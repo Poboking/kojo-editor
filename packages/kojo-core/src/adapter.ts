@@ -26,6 +26,8 @@ import type {
 import { severityOf } from './diagnostics.js';
 import type { ForeachDeclarations } from './lower/expand/foreach.js';
 import { validateForeachDeclarations } from './lower/expand/foreach.js';
+/* 能力闸单源（K2-FEATURE-GATE-UNIFY）：键表唯一真源在 feature-gate，查询面委托它的统一入口 */
+import { PROGRAM_FEATURE_KEYS, checkFeature, resolveProgramFeatures } from './lower/feature-gate.js';
 
 /* ============================== 1. 契约总表 ============================== */
 
@@ -167,6 +169,26 @@ export interface AttributeSymbol {
   readonly description: string;
 }
 
+/**
+ * 域符号**变量**（additive；K2-SEMA-DOMAIN-VARIABLES）：adapter 外部世界里**不由作者文件声明**
+ * 的全局标量（引擎 / 游戏自己的变量），作者可以直接读它、也可能可以写它。
+ *
+ * 为什么需要这一面：2.0 禁止对未声明名字赋值（§3.4.5），而这类变量**永远不会**出现在作者的
+ * `# 变量` 里 ⇒ 没有这一面时 `名字 = 值` 只能被判成 `core/expr/unknown-symbol`（假阳）。
+ *
+ * 口径（写死，别扩）：
+ * - `name` 是**作者在源端写的名字**（不是引擎落点；落点由各 adapter 的表达式管线负责）；
+ * - `valueKind` 只允许三种**叶子**类型（`unknown` 无意义：adapter 既然声明了变量，就说明它
+ *   知道类型；要"动态类型"就别声明，让它继续报未声明）；
+ * - `readonly` 缺省 = 可写；`true` = 只读（作者可读、写则报既有 `core/expr/readonly-target`）；
+ * - 这一面**只**参与名字解析与类型/只读判定，不参与 lowering（产物仍原样写作者名字）。
+ */
+export interface DomainVariableSymbol {
+  readonly name: string;
+  readonly valueKind: 'int' | 'string' | 'character';
+  readonly readonly?: boolean;
+}
+
 /** 名字函数（"角色文本"一类）：源名 → 引擎调用 + 形参名 */
 export interface NameFunctionSymbol {
   readonly name: string;
@@ -188,6 +210,14 @@ export interface DomainSymbols {
   readonly pronouns: readonly PronounSymbol[];
   readonly attributes: readonly AttributeSymbol[];
   readonly nameFunctions: readonly NameFunctionSymbol[];
+  /**
+   * 域符号变量（additive；**可缺省**）：
+   * - 省略 / `undefined` = 本 adapter 没有外部变量面（**旧 adapter 零改动**，sema 行为与今天
+   *   逐字节一致：仍按 `core/expr/unknown-symbol` 报未声明）；
+   * - 名字空间与 `pronouns` / `attributes` / `nameFunctions` **互斥**（撞名 = 装载期
+   *   `unit/adapter-inconsistent`，一个名字只能有一个解析面）。
+   */
+  readonly variables?: readonly DomainVariableSymbol[];
   readonly speakers: SpeakerSource;
   /** 未知符号策略：`error` = 报错（默认）；`raw` = 原样放行（糖视图无法表达的走 raw） */
   readonly unknown: 'error' | 'raw';
@@ -329,15 +359,13 @@ export type ProgramFeatureKey = 'arrays' | 'while' | 'goto' | 'recursion' | 'for
 
 export type ProgramFeatures = Readonly<Record<ProgramFeatureKey, boolean>>;
 
-/** 程序层键的**唯一真源**（校验与补全按它遍历，不另写一份字符串表） */
-export const PROGRAM_FEATURE_KEYS: readonly ProgramFeatureKey[] = Object.freeze([
-  'arrays',
-  'while',
-  'goto',
-  'recursion',
-  'foreach',
-  'repeat',
-] as const);
+/**
+ * 程序层键的**唯一真源**（校验与补全按它遍历，不另写一份字符串表）。
+ *
+ * K2-FEATURE-GATE-UNIFY 后表本身住在 `lower/feature-gate.ts`（能力闸单源），这里只再导出：
+ * 公开面不变，消费方仍从这里取。
+ */
+export { PROGRAM_FEATURE_KEYS };
 
 /** 源文件/产物编码（每个 Unit 独立保留，§10.4） */
 export type TextEncoding = 'utf-8' | 'utf-8-bom' | 'utf-16le-bom';
@@ -460,32 +488,18 @@ const ADAPTER_NAMESPACES: readonly AdapterDiagnosticNamespace[] = Object.freeze(
   'overlay',
   'raw',
 ] as const);
+/** 域符号变量允许的值类型（叶子；`unknown` 不登记——声明了变量就等于声明了类型） */
+const DOMAIN_VARIABLE_KINDS: readonly DomainVariableSymbol['valueKind'][] = Object.freeze([
+  'int',
+  'string',
+  'character',
+] as const);
 
 /** 存储期源端写法（core 语言词；仅用于诊断文案） */
 const STORAGE_LABELS: Readonly<Record<StoragePeriod, string>> = Object.freeze({
   scene: '场景',
   save: '存档',
   session: '会话',
-});
-
-/** 程序层键 → 源端构造（诊断文案用；构造名是 core 语言词，不是游戏知识） */
-const PROGRAM_FEATURE_SYNTAX: Readonly<Record<ProgramFeatureKey, string>> = Object.freeze({
-  arrays: '数组 [ ]',
-  while: '@循',
-  goto: '@标 / @跳',
-  recursion: '@函 递归',
-  foreach: '@巡',
-  repeat: '@复',
-});
-
-/** 未声明 feature 时的 core 诊断码（码表 §11.3 的细分映射，唯一真源） */
-const PROGRAM_FEATURE_CODES: Readonly<Record<ProgramFeatureKey, DiagnosticCode>> = Object.freeze({
-  arrays: 'core/array/unsupported',
-  while: 'core/control/unsupported',
-  goto: 'core/goto/unsupported',
-  recursion: 'core/func/recursion-unsupported',
-  foreach: 'core/control/unsupported',
-  repeat: 'core/control/unsupported',
 });
 
 /** 未声明 presentation 时的 core 诊断码（§4.8 / §8.2 / §8.3 / §7.5） */
@@ -535,6 +549,23 @@ function isInteger(value: unknown): value is number {
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value);
+}
+
+/**
+ * 域符号的**其它三张脸**（代词 / 角色属性 / 名字函数）→ `名字 → 中文标签`。
+ *
+ * 只服务 `domainSymbols.variables` 的撞名自检：一个名字在名字解析链里只能落到一个面，
+ * 否则"读它是什么类型"就得靠猜（本仓不许猜）。防御性写法：坏形状的条目跳过、不抛。
+ */
+function symbolFaceNames(symbols: Partial<DomainSymbols>): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  const add = (name: unknown, label: string): void => {
+    if (isText(name) && !out.has(name)) out.set(name, label);
+  };
+  if (Array.isArray(symbols.pronouns)) for (const item of symbols.pronouns) add(item?.pronoun, '代词');
+  if (Array.isArray(symbols.attributes)) for (const item of symbols.attributes) add(item?.name, '角色属性');
+  if (Array.isArray(symbols.nameFunctions)) for (const item of symbols.nameFunctions) add(item?.name, '名字函数');
+  return out;
 }
 
 /* ============================== 12. 校验：adapter 自检 ============================== */
@@ -718,6 +749,56 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
         } else names.add(fn.name);
         if (!isText(fn.engine)) {
           push('core/expr/unknown-symbol', `名字函数“${fn.name ?? '?'}”缺少引擎调用名。`);
+        }
+      }
+    }
+
+    /*
+     * 域符号变量（additive；缺省 = 空 ⇒ 旧 adapter 零诊断）。
+     * 形状坏 → incomplete；重名 / 与既有符号面撞名 → inconsistent（都取既有码，不新造）。
+     */
+    const rawVariables: unknown = symbols.variables;
+    if (rawVariables !== undefined) {
+      if (!Array.isArray(rawVariables)) {
+        push(ADAPTER_VALIDATION_CODES.incomplete, 'domainSymbols.variables 必须是数组（可省略：省略 = 没有外部变量面）。');
+      } else {
+        const otherFaces = symbolFaceNames(symbols);
+        const variableNames = new Set<string>();
+        for (const raw of rawVariables as readonly unknown[]) {
+          const variable = raw as Partial<DomainVariableSymbol> | null;
+          if (variable === null || typeof variable !== 'object') {
+            push(ADAPTER_VALIDATION_CODES.incomplete, 'domainSymbols.variables 含非对象条目。');
+            continue;
+          }
+          if (!isText(variable.name)) {
+            push(ADAPTER_VALIDATION_CODES.incomplete, 'domainSymbols.variables 含空名。');
+            continue;
+          }
+          const name = variable.name;
+          if (!isOneOf(variable.valueKind, DOMAIN_VARIABLE_KINDS)) {
+            push(
+              ADAPTER_VALIDATION_CODES.incomplete,
+              `域符号变量“${name}”的 valueKind 非法（int / string / character）。`,
+            );
+          }
+          if (variable.readonly !== undefined && typeof variable.readonly !== 'boolean') {
+            push(
+              ADAPTER_VALIDATION_CODES.incomplete,
+              `域符号变量“${name}”的 readonly 必须是布尔值（缺省 = 可写）。`,
+            );
+          }
+          if (variableNames.has(name)) {
+            push(ADAPTER_VALIDATION_CODES.inconsistent, `域符号变量“${name}”重复声明。`);
+            continue;
+          }
+          variableNames.add(name);
+          const face = otherFaces.get(name);
+          if (face !== undefined) {
+            push(
+              ADAPTER_VALIDATION_CODES.inconsistent,
+              `域符号变量“${name}”与已声明的${face}撞名：一个名字只能有一个解析面。`,
+            );
+          }
         }
       }
     }
@@ -1104,12 +1185,22 @@ export function checkSpeaker(adapter: GameAdapter, speaker: string, span: KojoSp
   );
 }
 
-/** 域符号是否可解析（代词 / 角色属性 / 名字函数）；`unknown = raw` 时放行 */
+/**
+ * 查一条域符号变量（additive 面；旧 adapter 没声明 ⇒ 恒 `undefined`——**不猜、不造空表**）。
+ *
+ * 单一查询点：sema 的名字解析与 `checkSymbol` 都走它，避免两处各自 `.find` 出两套口径。
+ */
+export function findDomainVariable(adapter: GameAdapter, name: string): DomainVariableSymbol | undefined {
+  return adapter.domainSymbols.variables?.find((item) => item.name === name);
+}
+
+/** 域符号是否可解析（代词 / 角色属性 / 名字函数 / 域符号变量）；`unknown = raw` 时放行 */
 export function checkSymbol(adapter: GameAdapter, symbol: string, span: KojoSpan | null = null): KojoDiagnostic | null {
   const symbols = adapter.domainSymbols;
   if (symbols.pronouns.some((item) => item.pronoun === symbol)) return null;
   if (symbols.attributes.some((item) => item.name === symbol)) return null;
   if (symbols.nameFunctions.some((item) => item.name === symbol)) return null;
+  if (symbols.variables?.some((item) => item.name === symbol) === true) return null;
   if (symbols.unknown === 'raw') return null;
   return diagnostic(
     'core/expr/unknown-symbol',
@@ -1140,19 +1231,19 @@ const PRESENTATION_LABELS: Readonly<Record<PresentationFeature, string>> = Objec
   options: '选项',
 });
 
-/** programFeatures 细粒度开关；关闭 = error，并指出可替代写法（§10.10） */
+/**
+ * programFeatures 细粒度开关；关闭 = error，并指出可替代写法（§10.10）。
+ *
+ * K2-FEATURE-GATE-UNIFY：**委托统一入口**（`lower/feature-gate.ts::checkFeature`）。
+ * 查询/补全面手上没有 backend（落点面），所以按"只有声明面"解析——
+ * 与主链同一个判定函数、同一份码、同一份文案（不再另写一套）。
+ */
 export function checkProgramFeature(
   adapter: GameAdapter,
   feature: ProgramFeatureKey,
   span: KojoSpan | null = null,
 ): KojoDiagnostic | null {
-  if (adapter.programFeatures[feature] === true) return null;
-  const syntax = PROGRAM_FEATURE_SYNTAX[feature];
-  return diagnostic(
-    PROGRAM_FEATURE_CODES[feature],
-    `${syntax} 未开启。当前 adapter（${adapter.id}）的 programFeatures 没有 ${feature}；请开启，或用 @原生 写等价物。`,
-    span,
-  );
+  return checkFeature(resolveProgramFeatures(adapter, null), feature, span).diagnostic;
 }
 
 /** 存储期是否声明；未声明 = error（不能猜落点） */

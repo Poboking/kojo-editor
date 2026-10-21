@@ -23,7 +23,9 @@
  * 项目根时给一句人话（{@link KOJO2_CREATE_NEEDS_PROJECT_REASON}），不静默返回。
  */
 import { extname, isPathUnder, pathKey } from '@kojo/plugin-api';
-import { KOJO2_SOURCE_EXTENSION } from '../monaco/kojo2-language';
+// 扩展名取**零依赖叶子**（不取 `monaco/kojo2-language`）：本模块的消费方里有拖放/快速打开/
+// 项目扫描这些只按后缀收文件的清单，判据只需要一枚字符串，不该为它拖上词表链（同 PS-10）。
+import { KOJO2_SOURCE_EXTENSION } from '../monaco/kojo2-constants';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 
 /**

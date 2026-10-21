@@ -1,16 +1,17 @@
 /**
- * Kojo 2.0 的 **Monaco 语义着色 provider**（K2-EDITOR-WIRE 批·第三条腿）。
+ * Kojo 2.0 的 **Monaco 语义着色 provider**（K2-TS-WORKER 批：主线程不再直接跑 wasm）。
  *
  * ## 数据链（每一条都只在自己的层里）
  *
- * `getKojo2TreeSitterRuntime()`（懒加载单例）→ `parse(text, oldTree)`（**增量**：按 model
- * 版本缓存旧树）→ `captures(rootNode)`（highlights 查询的纯数据投影）→
- * `capturesToTokenSpans(..., { lineCount, maxColumn })`（0 基行列 → 1 基 Monaco 区间）→
- * 本文件的 {@link encodeKojo2SemanticTokens}（5 元组 delta 编码）→ `{ data }`。
+ * `getKojo2WorkerClient()`（主线程薄客户端，`?worker` 懒建线程）→
+ * `captures(text, version, oldTreeId?)`（worker 内 `parse` + highlights 查询，回纯数据
+ * `{ captures, treeId }`）→ `capturesToTokenSpans(..., { lineCount, maxColumn })`
+ * （0 基行列 → 1 基 Monaco 区间）→ 本文件的 {@link encodeKojo2SemanticTokens}
+ * （5 元组 delta 编码）→ `{ data }`。
  *
- * 本文件**不碰 wasm**、不读查询、不懂 tree-sitter 节点：它只做"运行时产物 → Monaco 协议"
- * 的最后一段。资源只在 `kojo2-runtime.ts` 的默认装载器里动态 import（flag 关 / 没人要结构层
- * 时，`kojo2-assets.ts` 连字符串都不进主线程模块图）。
+ * 本文件**不碰 wasm**、不读查询、不懂 tree-sitter 节点、也不知道旧树长什么样：
+ * 它只认 worker 回复里的 `treeId`。上一版把 `treeId` 交回去，worker 就能增量重解；
+ * 本文件从不 `delete()` 树（树活在那条线程里，由 worker 的 LRU 收账）。
  *
  * ## legend 与主题：名字逐字对齐，不造第二套色板
  *
@@ -38,26 +39,26 @@
  * - `variable`（说话人）→ 说话人档；`number` / `operator` / `embedded`（`@原生` 体）→
  *   各自一档。
  *
- * ## 增量与所有权
+ * ## 增量与所有权（worker 侧）
  *
- * 旧树按 **model 版本号**缓存（`WeakMap<model, { versionId, tree }>`）：同一版本重复问
- * 直接命中（Monaco 停笔 / 滚动都会重问）；版本变了才把旧树交给 `parse`。运行时的约定是
- * "旧树在增量解之后已被 `tree.edit` 改写过，不许再当新树用" ⇒ 拿到新树后**立即 delete
- * 旧树**，缓存里只留新树。同一个运行时只有一个 `Parser`，所以请求在 provider 内**串行**
- * （`serialize` 队列）：两个并发 parse 会把同一枚 parser 的增量状态踩乱。
+ * 缓存键是 **model 版本号 + worker 交回的 `treeId`**：同一版本重复问直接命中（Monaco 停笔 /
+ * 滚动都会重问）；版本变了才把上一版 `treeId` 交给 worker，由它决定"文本没变就复用 /
+ * 变了就增量重解 / 不认识就整篇重解"。同一个 provider 的请求仍然**串行**（`serialize` 队列）：
+ * worker 只有一条 parser，而语义 provider 的并发只会让"哪一版上屏"变得不可预测。
  *
- * 运行时异常 / 装载失败 / 查询缺席 ⇒ **返回空 tokens**（不着色），并 `warn` 一次；
+ * worker 不可用 / 超时 / 解析失败 / 查询缺席 ⇒ **返回空 tokens**（不着色），并 `warn` 一次；
  * 绝不抛进 Monaco、绝不写 markers（着色是只读呈现面，失败不该变成问题面板里的噪音）。
+ * 失败那一版同样进缓存（同版本不反复重试），但 `treeId` 只在 worker 明确交回时才留
+ * （查询失败但树已解出 ⇒ 下一版继续增量；解析失败 ⇒ 归零，下一版整篇重解）。
  *
  * ## 注册
  *
  * {@link installKojo2SemanticTokensProvider} 只给 `kojo2` 语言 id 注册，**flag 关时零注册**
  * （调用点在 `ui/editor-global-providers.ts` 的既有 helper 序列里；本函数自身也再挡一次，
- * 因为它是导出的、可能被别的入口直接调用）。disposal 幂等：先撤 provider 注册，再释放
- * 本 provider 缓存过的每一棵树。
+ * 因为它是导出的、可能被别的入口直接调用）。disposal 幂等：先撤 provider 注册，再丢本
+ * provider 的缓存（worker 客户端是共享单例，**不**在这里 dispose）。
  */
 import type * as Monaco from './entry';
-import type { Tree } from 'web-tree-sitter';
 import { KOJO2_LANGUAGE_ID, KOJO2_TOKEN, type Kojo2TokenName } from './kojo2-language';
 import { KOJO2_THEME_TOKEN_MAP } from './kojo2-theme';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
@@ -66,11 +67,7 @@ import {
   type Kojo2Capture,
   type Kojo2TokenSpan,
 } from './tree-sitter/kojo2-tokenizer';
-import {
-  getKojo2TreeSitterRuntime,
-  type Kojo2RuntimeResult,
-  type Kojo2TreeSitterRuntime,
-} from './tree-sitter/kojo2-runtime';
+import type { Kojo2CapturesReply, Kojo2WorkerResult } from './tree-sitter/kojo2-worker-protocol';
 
 /* ============================== capture 名 → 档位 ============================== */
 
@@ -247,25 +244,43 @@ export function encodeKojo2SemanticTokens(
 
 /* ============================== provider ============================== */
 
+/**
+ * 本 provider 对 worker 客户端的最小依赖面（结构类型：真 `Kojo2WorkerClient` 与测试替身都满足）。
+ * 只要一个 `captures`：`parse` 由 worker 在查询请求内部按 `oldTreeId` 决定怎么做。
+ */
+export interface Kojo2SemanticWorkerClient {
+  captures(text: string, version: number, oldTreeId?: string): Promise<Kojo2WorkerResult<Kojo2CapturesReply>>;
+}
+
 /** 依赖注入缝（测试用；生产全部走缺省） */
 export interface Kojo2SemanticProviderDeps {
-  /** 取运行时（缺省 = `kojo2-runtime` 的懒加载单例；测试注入假运行时） */
-  readonly getRuntime?: () => Promise<Kojo2RuntimeResult>;
+  /**
+   * 取 worker 客户端（缺省 = 动态 import `kojo2-worker-runtime` 的单例）。
+   * 动态 import 让**主线程静态图里连薄客户端都不出现**：flag 关 / 没人要结构层时，
+   * `?worker` 入口与协议模块一个字节都不装载。
+   */
+  readonly getClient?: () => Kojo2SemanticWorkerClient | Promise<Kojo2SemanticWorkerClient>;
   /** 告警出口（缺省 `console.warn`；测试可收账） */
   readonly warn?: (message: string) => void;
+}
+
+/** 缺省客户端：懒到第一次真着色才把 worker 模块拉进来 */
+async function defaultWorkerClient(): Promise<Kojo2SemanticWorkerClient> {
+  const module = await import('./tree-sitter/kojo2-worker-runtime');
+  return module.getKojo2WorkerClient();
 }
 
 /** provider + 它自己的资源账（Monaco 的 provider 接口没有 dispose 位） */
 export interface Kojo2SemanticProviderHandle {
   readonly provider: Monaco.languages.DocumentSemanticTokensProvider;
-  /** 幂等：释放缓存过的每一棵语法树（运行时单例不归这里管） */
+  /** 幂等：丢掉本 provider 的版本缓存（worker 客户端是共享单例，不归这里管） */
   dispose(): void;
 }
 
 interface ModelCacheEntry {
   readonly versionId: number;
-  /** 上一次 parse 交出的树（下次增量的基准；`null` = 上次失败 / 还没解过） */
-  readonly tree: Tree | null;
+  /** worker 交回的树号（下一版的增量基准；`null` = 上次失败且 worker 没交出可用的树） */
+  readonly treeId: string | null;
   readonly tokens: Uint32Array;
 }
 
@@ -280,28 +295,15 @@ const EMPTY_DATA = new Uint32Array(0);
 export function createKojo2SemanticTokensProvider(
   deps: Kojo2SemanticProviderDeps = {},
 ): Kojo2SemanticProviderHandle {
-  const getRuntime = deps.getRuntime ?? (() => getKojo2TreeSitterRuntime());
+  const getClient = deps.getClient ?? defaultWorkerClient;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
-  /** model → 上一趟的树与结果（`WeakMap`：标签关掉、model 释放后自然可回收） */
+  /** model → 上一版的树号与结果（`WeakMap`：标签关掉、model 释放后自然可回收） */
   let cache = new WeakMap<Monaco.editor.ITextModel, ModelCacheEntry>();
-  /** 缓存里所有树的硬引用账（`WeakMap` 不可遍历，dispose 时要逐棵 delete） */
-  const trees = new Set<Tree>();
-  /** 同一运行时只有一个 parser ⇒ 请求串行（并发 parse 会踩增量状态） */
+  /** worker 只有一条 parser ⇒ 请求串行（并发只会让"哪一版上屏"不可预测） */
   let tail: Promise<void> = Promise.resolve();
   let disposed = false;
 
-  const releaseTree = (tree: Tree): void => {
-    trees.delete(tree);
-    try {
-      tree.delete();
-    } catch {
-      /* 已被别处删除 / wasm 已卸载：没有可回收的 */
-    }
-  };
-
   const forget = (model: Monaco.editor.ITextModel): void => {
-    const entry = cache.get(model);
-    if (entry?.tree) releaseTree(entry.tree);
     cache.delete(model);
   };
 
@@ -316,53 +318,35 @@ export function createKojo2SemanticTokensProvider(
 
   const compute = async (model: Monaco.editor.ITextModel): Promise<Uint32Array> => {
     if (disposed) return EMPTY_DATA;
-    const runtimeResult = await getRuntime();
-    if (disposed) return EMPTY_DATA;
-    if (!runtimeResult.ok) {
-      warnOnce(
-        warn,
-        `runtime:${runtimeResult.reason}`,
-        `[kojo2-semantic] 结构解析运行时不可用（${runtimeResult.reason}）：${runtimeResult.message} ⇒ 本轮不着色`,
-      );
-      return EMPTY_DATA;
-    }
+    const versionId = model.getVersionId();
+    const cached = cache.get(model);
+    if (cached?.versionId === versionId) return cached.tokens;
     if (model.isDisposed()) {
       forget(model);
       return EMPTY_DATA;
     }
-    const runtime: Kojo2TreeSitterRuntime = runtimeResult.runtime;
-    const versionId = model.getVersionId();
-    const cached = cache.get(model);
-    if (cached?.versionId === versionId) return cached.tokens;
 
     const text = model.getValue();
-    const previous = cached?.tree ?? null;
-    const parsed = runtime.parse(text, previous);
-    // 旧树在增量解之后已被 `tree.edit` 改写过（运行时头注的所有权口径）：不再当新树用，
-    // 也不留着——它是这一份 model 上一版本才配拥有的东西。解析失败同样丢（状态可疑）。
-    if (previous !== null && (!parsed.ok || parsed.tree !== previous)) releaseTree(previous);
-    if (!parsed.ok) {
-      warnOnce(
-        warn,
-        `parse:${parsed.reason}`,
-        `[kojo2-semantic] 结构解析失败（${parsed.reason}）：${parsed.message} ⇒ 本轮不着色`,
-      );
-      cache.set(model, { versionId, tree: null, tokens: EMPTY_DATA });
+    const client = await getClient();
+    if (disposed) return EMPTY_DATA;
+    const result = await client.captures(text, versionId, cached?.treeId ?? undefined);
+    if (disposed) return EMPTY_DATA;
+    if (model.isDisposed()) {
+      forget(model);
       return EMPTY_DATA;
     }
-    trees.add(parsed.tree);
-    const captured = runtime.captures(parsed.rootNode);
-    if (!captured.ok) {
+    if (!result.ok) {
       warnOnce(
         warn,
-        `captures:${captured.reason}`,
-        `[kojo2-semantic] highlights 查询不可用（${captured.reason}）：${captured.message} ⇒ 本轮不着色`,
+        `worker:${result.reason}`,
+        `[kojo2-semantic] 结构解析不可用（${result.reason}）：${result.message} ⇒ 本轮不着色`,
       );
-      cache.set(model, { versionId, tree: parsed.tree, tokens: EMPTY_DATA });
+      // worker 明确交回了树号（查询失败但树已解出）⇒ 下一版继续增量；否则归零。
+      cache.set(model, { versionId, treeId: result.treeId ?? null, tokens: EMPTY_DATA });
       return EMPTY_DATA;
     }
     const spans = capturesToTokenSpans(
-      mapKojo2Captures(captured.captures, (name) =>
+      mapKojo2Captures(result.value.captures, (name) =>
         warnOnce(
           warn,
           `capture:${name}`,
@@ -376,7 +360,7 @@ export function createKojo2SemanticTokensProvider(
       },
     );
     const tokens = encodeKojo2SemanticTokens(spans);
-    cache.set(model, { versionId, tree: parsed.tree, tokens });
+    cache.set(model, { versionId, treeId: result.value.treeId, tokens });
     return tokens;
   };
 
@@ -407,8 +391,6 @@ export function createKojo2SemanticTokensProvider(
     dispose() {
       if (disposed) return;
       disposed = true;
-      for (const tree of [...trees]) releaseTree(tree);
-      trees.clear();
       cache = new WeakMap();
     },
   };
@@ -417,8 +399,8 @@ export function createKojo2SemanticTokensProvider(
 /**
  * 为 `kojo2` 语言注册语义着色 provider（**flag 关 = 零注册**）。
  *
- * 返回的 disposable 幂等：撤掉 Monaco 注册，再释放 provider 缓存的树（运行时单例留给
- * 结构层其它腿用，不在这里 dispose）。
+ * 返回的 disposable 幂等：撤掉 Monaco 注册，再丢 provider 的版本缓存（worker 客户端是
+ * 共享单例，留给其它结构层消费方，不在这里 dispose）。
  */
 export function installKojo2SemanticTokensProvider(
   monaco: typeof Monaco,

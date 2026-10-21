@@ -22,6 +22,8 @@
  * （`isKojo2Line` 是"这一行能不能过 2.0 词法"的既有判据，**不在这里手抄第二份**）；
  * 逐行 diff 复用 `kojo2-migrate-model.ts` 的 `buildMigrateDiff`（与迁移向导同一套行对齐，
  * 不另跑 LCS，也就不会出现"预览说三行、向导说五行"的第二份真源）。
+ * 扩展名取自 `monaco/kojo2-constants.ts`：那是一个**连 type import 都没有**的身份叶子，
+ * 带不进来任何 Monaco 运行时（K2-CUTOVER-THEME 之前这里被迫抄一份字面量，见下方常量注释）。
  *
  * ## 持久化
  *
@@ -46,6 +48,7 @@ import {
   type MigrateResult,
 } from '@kojo/kojo-core';
 import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { KOJO2_SOURCE_EXTENSION } from '../monaco/kojo2-constants';
 import {
   buildMigrateDiff,
   formatMigrateDiff,
@@ -103,13 +106,15 @@ export const KOJO2_ANCHOR_MARKS = ['#', '@', '>', '?', '!'] as const;
 export type Kojo2AnchorMark = (typeof KOJO2_ANCHOR_MARKS)[number];
 
 /**
- * 2.0 源扩展名（与 `monaco/kojo2-language.ts` 的 `.kojo2` 同一条判据）。
+ * 2.0 源扩展名：**直接取零依赖叶子的那一枚**（`monaco/kojo2-constants.ts`）。
  *
- * 本模块刻意**不 import monaco 语言面**（那会把糖词表拖进路由层）；代价是这里有一份
- * 字面量，由 `kojo2-cutover.test.ts` 与 `KOJO2_SOURCE_EXTENSION` / `KOJO_SOURCE_EXTENSION`
- * 逐字对拍钉住——改扩展名时两处一起改，漏一处测试先红。
+ * 这里曾经有一份字面量，因为本模块刻意零 Monaco、零 DOM，而 `KOJO2_SOURCE_EXTENSION`
+ * 住在 `monaco/kojo2-language.ts`（一加载就拖 `@kojo/plugin-kojo-sugar` 的 ~900 KB 词表链）。
+ * K2-CUTOVER-THEME 把语言 id / 扩展名下沉到零 import 叶子后，路由层取的就是**同一个
+ * 字面源**：`kojo2-language.ts` 只是 re-export 同一对象，全仓不再有第二份可漂移的拷贝
+ * （守门见 `kojo-extension-single-source.test.ts` 的 `.kojo2` 单源断言）。
  */
-export const KOJO2_FILE_EXTENSION = '.kojo2';
+export const KOJO2_FILE_EXTENSION: string = KOJO2_SOURCE_EXTENSION;
 
 /**
  * v1 源扩展名：**直接取契约那一枚**（`@kojo/plugin-api::KOJO_SOURCE_EXTENSION`），

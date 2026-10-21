@@ -249,8 +249,8 @@ describe('零抄本：语言面不许手写 2.0 词形', () => {
     expect(hits, `kojo2 语言面出现 2.0 词形手抄字面量（词形只能经 kojo2-lexicon 从 core 来）：\n${hits.join('\n')}`).toEqual([]);
   });
 
-  it('扩展名 `.kojo2` 全仓只有一处字面量（CUTOVER 换扩展名只改这一格）', () => {
-    const files = ['kojo2-language.ts', 'kojo2-lexicon.ts', 'kojo2-enter.ts'];
+  it('扩展名 `.kojo2` 全仓只有一处字面量（K2-CUTOVER-THEME 后住在零依赖叶子 kojo2-constants.ts）', () => {
+    const files = ['kojo2-constants.ts', 'kojo2-language.ts', 'kojo2-lexicon.ts', 'kojo2-enter.ts'];
     const occurrences: string[] = [];
     for (const file of files) {
       read(file)
@@ -260,7 +260,7 @@ describe('零抄本：语言面不许手写 2.0 词形', () => {
         });
     }
     expect(occurrences).toHaveLength(1);
-    expect(occurrences[0]!.startsWith('kojo2-language.ts:')).toBe(true);
+    expect(occurrences[0]!.startsWith('kojo2-constants.ts:')).toBe(true);
     // 不许出现"抢 v1 `.kojo`"的字面量（v1 的扩展名清单只住契约层）
     for (const file of files) expect(read(file)).not.toMatch(/["']\.kojo["']/);
   });

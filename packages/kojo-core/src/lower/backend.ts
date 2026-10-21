@@ -33,6 +33,10 @@ import type {
 import type { KojoDiagnostic } from '../diagnostics.js';
 import type { ForeachLoopPlan, ForeachSlotRole } from './expand/foreach.js';
 import type { OptionsEtbPlan } from './expand/options.js';
+/* 等值分派的结构请求（K2-DISPATCH-WIRING）：**type-only**——契约文件只登记形状，
+   运行时实现归 adapter；擦除后不产生 core → 计划的运行时环。 */
+import type { PoolDispatchEmitRequest } from './expand/pool-plan.js';
+import type { TableDispatchEmitRequest } from './expand/table-plan.js';
 
 /* ============================== 发射结果 ============================== */
 
@@ -95,6 +99,14 @@ export interface KojoLoweringProfile {
   /** `@织` 修饰词（之前/之后/接管）是否可用：`emuera-buckets` 才能用 */
   readonly priorityModel?: 'emuera-buckets' | 'none';
   readonly presentations: KojoPresentationCapabilities;
+  /**
+   * 程序层落点能力（§9.1）。
+   *
+   * **这是"落点"一侧**：`programFeatures.<键>` = 本 backend 真能发出的产物能力。
+   * 作者能不能写由 adapter 的 `programFeatures` 决定（声明一侧）；两侧的收口判定只有一处
+   * （`lower/feature-gate.ts::resolveProgramFeatures` / `checkFeature`），主链与查询面都读它，
+   * 别在这里或调用方另写一份判断（K2-FEATURE-GATE-UNIFY）。
+   */
   readonly programFeatures?: KojoProgramFeatures;
 }
 
@@ -236,6 +248,18 @@ export interface KojoPresentationEmitter {
     request: OptionsEmitRequest,
     lowerItem: (item: KojoOptionItem, index: number) => readonly string[],
   ): EmitResult;
+  /**
+   * `# 池` 的**可证等值**落点（K2-POOL-SELECTCASE；additive）。
+   *
+   * 缺省 = 老 adapter 不支持：core 保持既有 `IF / ELSEIF / ELSE` 链（产物逐字节不变，
+   * 不是错误、也不静默降半档）。提供时，core 只在 `pool-plan.ts` 判定**同一主语 +
+   * 整数等值可证**时调用；`request.caseLines[i]` ↔ `request.plan.cases[i]`，每行都是
+   * core 已降糖的产物行（无缩进），adapter 只缩进嵌入、**不得改写/删除/插入/重排**。
+   * 主语求值行由 core 在请求之前发完，adapter 不重复求值。
+   *
+   * 返回值是**整块**产物行（块头 + 各档 + 兜底 + 块尾）或 `EmitFailure`（fail-closed）。
+   */
+  poolDispatch?(request: PoolDispatchEmitRequest): EmitResult;
 }
 
 export interface KojoWeaveEmitter {
@@ -308,6 +332,18 @@ export interface KojoProgramEmitter {
    * （fail-closed，不退回 `forEachHeader/Footer` 猜绑定）。
    */
   forEachLoop?(request: ForEachEmitRequest): EmitResult;
+  /**
+   * `# 表` 的**可证等值**落点（K2-TABLE-SELECTCASE；additive）。
+   *
+   * 缺省 = 老 adapter 不支持：core 保持既有等值 `IF / ELSEIF / ELSE` 链（产物逐字节
+   * 不变，不是错误）。提供时，core 只在 `table-plan.ts` 判定全部臂是精确整数等值、
+   * 臂数达标、判别式纯整数时调用；`request.armLines[i]` ↔ `request.plan.cases[i]`，
+   * 每行都是 core 已降糖的产物行（无缩进），adapter 只缩进嵌入、**不得改写/删除/插入/重排**。
+   * 判别式求值行由 core 在请求之前发完，adapter 不重复求值。
+   *
+   * 返回值是**整块**产物行（块头 + 各档 + 兜底 + 块尾）或 `EmitFailure`（fail-closed）。
+   */
+  tableDispatch?(request: TableDispatchEmitRequest): EmitResult;
 }
 
 /* ============================== 文件装配（`# 机` 事件头） ============================== */
@@ -319,7 +355,7 @@ export interface KojoProgramEmitter {
  * `wrapMachine` / `weaveHeader`，由它按槽的静态类型事实落声明；**不要让 adapter 反推
  * body 文本，也不要靠名字后缀猜类型**。
  */
-export type KojoHiddenSlotKind = 'table' | 'random' | 'template' | 'foreach';
+export type KojoHiddenSlotKind = 'table' | 'random' | 'template' | 'foreach' | 'pool';
 
 /** 槽的用途细分（additive；adapter 可选读，声明形态/命名可据此分档） */
 export type KojoHiddenSlotRole =
@@ -337,6 +373,8 @@ export type KojoHiddenSlotRole =
   | 'foreach-key'
   /** `@巡` 的名字槽（角色集合的 `{名}`） */
   | 'foreach-name'
+  /** `# 池` 的主语槽（整数，只求值一次；池的分派判别值） */
+  | 'pool-subject'
   /** 其它编译期构造预留 */
   | 'template-slot';
 
@@ -365,7 +403,8 @@ export interface KojoHiddenSlot {
    * - 表判别槽 `__kojo_table_<名>`：恒 `int`（分档表达式是整数）；
    * - 表值槽 `__kojo_table_<名>__value`：该表 values 的声明类型（表值同质）；
    * - `@随机` 的 `__kojo_rand_<行>`：文本候选落点 `string`；含控制流/副作用走
-   *   `RAND+SELECTCASE` 时是候选下标，`int`（core 按候选纯度给最可证值）。
+   *   `RAND+SELECTCASE` 时是候选下标，`int`（core 按候选纯度给最可证值）；
+   * - 池主语槽 `__kojo_pool_<池名>`：恒 `int`（池分派只对整数等值可证）。
    */
   readonly valueType: KojoHiddenSlotValueType;
   /** 用途细分（additive；表有两槽，adapter 需要区分判别值 / 分档结果） */

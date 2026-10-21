@@ -37,7 +37,7 @@ import type {
 import { fullwidthSpaceLines, isReadonlyAlias, resolveSugarTarget, SugarCompileError } from '@kojo/plugin-api';
 import { buildDoc, type TopNode } from './parser';
 import { codegen } from './codegen';
-import { generatedPositionOf, sourceColumnOfEntry, sourceMapIndex } from './column-map';
+import { foldPositionToPhysical, generatedPositionOf, sourceColumnOfEntry, sourceMapIndex } from './column-map';
 import { sourceLineViews } from './lexer';
 import { compileToBytes as runCompileToBytes, compileToFile as runCompileToFile } from './compile';
 import type { AliasEntry, AliasTable, DiagnosticSink, DictionaryLookup } from './types';
@@ -51,6 +51,24 @@ class Sink implements DiagnosticSink {
   all(): SugarDiagnostic[] {
     return this.items;
   }
+}
+
+/* ====================== 诊断坐标折回物理行（§10.7） ====================== */
+
+/**
+ * 诊断坐标统一折回**物理行列**——本包唯一出口（别处不再各折各的）。
+ *
+ * 生产端（词法 / 语法 / 降糖）手里的列是**逻辑坐标**（折行合并后的行内偏移 + 行首缩进）；
+ * 作者在编辑器里看到的位置必须是**物理行**上的**物理列**（折行续接、CRLF、CJK / emoji
+ * 的 UTF-16 宽度都在 `column-map.ts` 里一次算清）。折回是幂等的（见
+ * `foldPositionToPhysical`）⇒ 已在生产端折过的位置再折一次不会走样。
+ */
+function foldDiagnostics(diagnostics: readonly SugarDiagnostic[], views: ReturnType<typeof sourceLineViews>): SugarDiagnostic[] {
+  return diagnostics.map((diag) => {
+    if (diag.loc === null) return diag;
+    const folded = foldPositionToPhysical(views, diag.loc);
+    return folded === diag.loc ? diag : { ...diag, loc: folded };
+  });
 }
 
 /* ====================== 转译结果共享缓存（L2 批） ====================== */
@@ -407,8 +425,11 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
   function parse(source: string, options: SugarTranspileOptions = {}): SugarDoc {
     const sink = new Sink();
     const filePath = options.filePath ?? '';
+    // 诊断出口统一折回物理行（§10.7）：生产端给的是逻辑坐标
+    const views = sourceLineViews(source);
     try {
-      return buildDoc(source, filePath, sink);
+      const doc = buildDoc(source, filePath, sink);
+      return { ...doc, diagnostics: foldDiagnostics(doc.diagnostics, views) };
     } catch (err) {
       // 转译器自身异常**绝不静默**（契约 `internal` 码）
       sink.report({
@@ -417,7 +438,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
         message: `转译器内部错误：${err instanceof Error ? err.message : String(err)}`,
         loc: null,
       });
-      return { filePath, frontMatter: { switches: [], aliases: [] }, topLevel: [], diagnostics: sink.all() };
+      return { filePath, frontMatter: { switches: [], aliases: [] }, topLevel: [], diagnostics: foldDiagnostics(sink.all(), views) };
     }
   }
 
@@ -430,6 +451,8 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
   function transpileUncached(source: string, options: SugarTranspileOptions = {}): SugarTranspileResult {
     const sink = new Sink();
     const filePath = options.filePath ?? '';
+    // 列/诊断共用的逻辑行视图（含折行段）：codegen 记列与出口折回同一份切分
+    const views = sourceLineViews(source);
     let doc: SugarDoc;
     try {
       doc = buildDoc(source, filePath, sink);
@@ -440,7 +463,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
         message: `转译器内部错误：${err instanceof Error ? err.message : String(err)}`,
         loc: null,
       });
-      return { erb: '', sourceMap: [], diagnostics: sink.all() };
+      return { erb: '', sourceMap: [], diagnostics: foldDiagnostics(sink.all(), views) };
     }
 
     // ---- 角色号守门（fail-closed，先于 codegen）----
@@ -491,7 +514,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
       options,
       // 列级映射（S6）：与源文本同一次切分出的逻辑行视图（含折行段）——
       // codegen 用它就地校验「产物这段 == 源这段」，不过校验的段一律不记。
-      views: sourceLineViews(source),
+      views,
     });
 
     // ---- 空产物守门（fail-closed）----
@@ -524,7 +547,7 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     return {
       erb,
       sourceMap,
-      diagnostics: sink.all(),
+      diagnostics: foldDiagnostics(sink.all(), views),
       ...(charNo !== undefined && charNo.length > 0 ? { charNo } : {}),
     };
   }

@@ -5,6 +5,9 @@
  * - 用已有 backend 的 `program.assign` + `control.if/elseIf/else/endif` 发**完整 IF 链**；
  *   `plan.landing === 'selectcase'` 只是计划建议（adapter 若提供 SELECTCASE 钩子可后续优化），
  *   语义与 SELECTCASE 等价（静态非重叠 + 必有 `否`），不改变求值次数/顺序；
+ *   K2-TABLE-SELECTCASE 起：可证等值（`table-plan.ts` 判据）且 adapter 实现了
+ *   `program.tableDispatch` 时改发**结构请求**（等值分派落点由 adapter 定）；
+ *   其余情况（不可证 / 无该能力）仍走这条 IF 链，产物逐字节不变；
  * - 隐藏槽两名：`__kojo_table_<名>`（判别值，只求值一次）与 `__kojo_table_<名>__value`
  *   （分档结果）；都属 `__kojo_` 保留前缀，作者不可声明；
  * - 值的 `KojoExprText` 由 core 从静态字面量构造（字符串按 Kojo 双引号规则转义），
@@ -16,6 +19,7 @@ import type { KojoExprText, KojoSpan, KojoTableDecl } from '../../ast.js';
 import { validateTable } from '../../table.js';
 import type { TableLoweringPlan, TablePlanRow } from '../../table.js';
 import { isEmitFailure } from '../backend.js';
+import type { EmitResult } from '../backend.js';
 import type { LowerState } from '../state.js';
 import { emit } from '../state.js';
 import { literalToExpr, rewriteExpr, scanIdentifiers } from './expr.js';
@@ -23,6 +27,8 @@ import type { NameNeighbors } from './expr.js';
 import { recordSlot, reportAt } from './context.js';
 import type { ExpandContext } from './context.js';
 import { foreachSlotInScope } from './context.js';
+import { planTableDispatch, tableDispatchOf } from './table-plan.js';
+import type { TableDispatchEmitRequest, TableDispatchPlan } from './table-plan.js';
 
 /** 判别值隐藏槽（只求值一次） */
 export function tableSubjectSlot(tableName: string): string {
@@ -95,6 +101,80 @@ function rowTest(row: TablePlanRow, subjectSlot: string, span: KojoSpan): KojoEx
   return { text, span };
 }
 
+/**
+ * 把 backend 的一次发射物化成"已降糖行"（子缓冲口径的轻量版：只取行、不占父缓冲）。
+ *
+ * 失败（`EmitFailure`）时诊断原样进 sink、返回 null：调用方**不产字节**；
+ * `[]` 视为"这一发没有产物行"（同样不产字节，不生成空档骨架）。
+ */
+function materializeEmit(result: EmitResult, ctx: ExpandContext): readonly string[] | null {
+  if (result === null) return null;
+  if (typeof result === 'string') return [result];
+  if (isEmitFailure(result)) {
+    for (const diagnostic of result.diagnostics) ctx.sink.report(diagnostic);
+    return null;
+  }
+  return result.length === 0 ? null : result;
+}
+
+/** 一条表行的值赋值（`<值槽> = <字面量>`）→ 已降糖行；失败时诊断已进 sink、返回 null */
+function lowerArmValue(row: TablePlanRow, valueSlot: string, ctx: ExpandContext): readonly string[] | null {
+  return materializeEmit(
+    ctx.backend.program.assign({
+      target: { text: valueSlot, span: row.span },
+      op: '=',
+      value: literalToExpr(row.value, row.span),
+      span: row.span,
+    }),
+    ctx,
+  );
+}
+
+/**
+ * 等值分派落点（K2-TABLE-SELECTCASE；`selectcase` 计划）：每臂的赋值行在这里**预先降糖**，
+ * 再把纯结构请求交给 adapter（core 只发请求，零引擎关键字）。
+ *
+ * 返回语义：
+ * - `true`：已发射，或已 fail-closed（错误诊断已进 sink，不产字节）——调用方别再发 IF 链；
+ * - `false`：没有该 backend 能力 / 计划行号对不上——调用方保持既有 IF 链（产物不变）。
+ *
+ * source map 口径：整块（含各档赋值行）归到表 decl 的 span——与 `@随机` / `选项` 的
+ * 块级映射同一口径（§10.7"展开块映射到块头"）；逐个 CASE 的精确列映射不在本批范围。
+ */
+function emitTableDispatch(
+  dispatch: TableDispatchPlan,
+  subjectSlot: string,
+  valueSlot: string,
+  plan: TableLoweringPlan,
+  ctx: ExpandContext,
+  state: LowerState,
+): boolean {
+  const emitter = tableDispatchOf(ctx.backend);
+  if (emitter === null) return false; // adapter 没有等值分派能力：保持现状
+
+  const armLines: (readonly string[])[] = [];
+  for (const item of dispatch.cases) {
+    const row = plan.rows[item.rowIndex];
+    if (row === undefined) return false; // 计划行号越界 = 不自洽，退回 IF 链（不静默丢档）
+    const lines = lowerArmValue(row, valueSlot, ctx);
+    if (lines === null) return true; // 赋值行表达不了：诊断已报，不产半成品
+    armLines.push(lines);
+  }
+
+  let elseLines: readonly string[] = [];
+  if (dispatch.hasDefault) {
+    const row = plan.rows[plan.defaultRow];
+    if (row === undefined) return false;
+    const lines = lowerArmValue(row, valueSlot, ctx);
+    if (lines === null) return true;
+    elseLines = lines;
+  }
+
+  const request: TableDispatchEmitRequest = { plan: dispatch, subjectSlot, valueSlot, armLines, elseLines };
+  emit(state, emitter(request), plan.span);
+  return true;
+}
+
 function emitTable(name: string, plan: TableLoweringPlan, ctx: ExpandContext, state: LowerState): void {
   const subjectSlot = tableSubjectSlot(name);
   const valueSlot = tableValueSlot(name);
@@ -111,6 +191,15 @@ function emitTable(name: string, plan: TableLoweringPlan, ctx: ExpandContext, st
     ctx.backend.program.assign({ target: { text: subjectSlot, span: plan.subject.span }, op: '=', value: subject, span: plan.subject.span }),
     plan.subject.span,
   );
+
+  // 落点判定（C2.5 / §6.3）：可证等值 + adapter 有等值分派能力 → 发结构请求（additive）；
+  // 其余情况（不可证 / 计划不自洽 / 无该能力）保持下面的既有 IF 链，产物逐字节不变。
+  const dispatch = planTableDispatch(plan);
+  if (dispatch.style === 'error') {
+    for (const diagnostic of dispatch.diagnostics) ctx.sink.report(diagnostic);
+    return; // 计划不自洽：不产字节（fail-closed）
+  }
+  if (dispatch.style === 'selectcase' && emitTableDispatch(dispatch, subjectSlot, valueSlot, plan, ctx, state)) return;
 
   let emittedHeader = false;
   for (const row of plan.rows) {

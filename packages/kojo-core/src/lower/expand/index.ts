@@ -20,12 +20,14 @@ import type { KojoHiddenSlot } from '../backend.js';
 import { createEmitBuffer } from '../buffer.js';
 import { createLowerState } from '../state.js';
 import type { SourceMap, SourceMapLine } from '../../source-map.js';
-import { createSourceMapBuilder } from '../../source-map.js';
+import { copySourceMapLine, createSourceMapBuilder } from '../../source-map.js';
 import { createExpandContext, estimateLines, hiddenSlots, indexDeclarations, reportAt, reportDiagnostic } from './context.js';
 import { validateAllTables } from './tables.js';
 import { validateAllPools } from './pool.js';
 import { assembleWeave } from './weave.js';
 import { walkDispatch, walkNarrative } from './walk.js';
+import { analyzeFunctions } from './recursion.js';
+import type { RecursionAnalysis } from './recursion.js';
 
 export interface RunCompileOptions {
   readonly adapter: GameAdapter;
@@ -43,6 +45,13 @@ export interface RunCompileResult {
   readonly diagnostics: readonly KojoDiagnostic[];
   /** 本文件用到的隐藏槽（去重、稳定序；adapter 据此发 `#DIM` 等声明） */
   readonly slots: readonly KojoHiddenSlot[];
+  /**
+   * 函数图 / 递归环 / 返回证明 / 着色泄漏事实（K2-PROGRAM-RECURSION，additive）。
+   *
+   * 只在成功路径给（error ⇒ 0 字节，与产品形状无关的事实也一并丢弃，保持"失败不产半成品"）。
+   * 诊断已并入 `diagnostics`，本字段只供 UI / 项目层消费。
+   */
+  readonly recursion?: RecursionAnalysis;
 }
 
 function emptyMap(): SourceMap {
@@ -92,13 +101,9 @@ function findBodyBlock(wrapped: readonly string[], body: readonly string[]): num
   return -1;
 }
 
-/** 把一条已有映射登记到新 builder（保留 kind/source/origins；缺失 = generated） */
+/** 把一条已有映射登记到新 builder（行级 + 列级整体复制；缺失行按 generated 落） */
 function appendMapped(builder: ReturnType<typeof createSourceMapBuilder>, generatedLine: number, mapped: SourceMapLine | null): void {
-  if (mapped === null || mapped.source === null) {
-    builder.appendLine({ generatedLine, kind: 'generated', source: null });
-    return;
-  }
-  builder.appendLine({ generatedLine, kind: mapped.kind, source: mapped.source, origins: mapped.origins });
+  copySourceMapLine(builder, generatedLine, mapped);
 }
 
 /** 重建包装后的 source map：wrapper 行 → `# 机` 声明（事件头 origin），body 行沿用原映射 */
@@ -115,17 +120,7 @@ function rebuildWrappedMap(
     builder.appendLine({ generatedLine: generatedLine++, kind: 'source', source: machineSpan });
   }
   for (let i = 0; i < body.length; i++) {
-    const mapped = bodyMap.lineAt(i + 1);
-    if (mapped === null || mapped.source === null) {
-      builder.appendLine({ generatedLine: generatedLine++, kind: 'generated', source: null });
-    } else {
-      builder.appendLine({
-        generatedLine: generatedLine++,
-        kind: mapped.kind,
-        source: mapped.source,
-        origins: mapped.origins,
-      });
-    }
+    appendMapped(builder, generatedLine++, bodyMap.lineAt(i + 1));
   }
   for (let i = bodyStart + body.length; i < wrapped.length; i++) {
     builder.appendLine({ generatedLine: generatedLine++, kind: 'source', source: machineSpan });
@@ -160,8 +155,15 @@ export function runCompile(file: KojoFile, options: RunCompileOptions): RunCompi
   // 静态校验前置：未引用的表/池也要报重叠/缺否/空分支等 error（不靠引用触发）
   validateAllTables(ctx);
   validateAllPools(ctx);
+  // 能力闸单源（K2-FEATURE-GATE-UNIFY）：adapter 声明 × backend 落点不一致在编译入口报**一次**
+  // （span = null：声明面事实；use-site 不再重复喊"未开启"）。位置与 incremental 的 compose 对齐。
+  for (const diagnostic of ctx.featureGate.diagnostics) reportDiagnostic(ctx, diagnostic);
+  // 递归/返回静态分析（K2-PROGRAM-RECURSION）：只产事实 + 既有码诊断（证不出不报 missing-return）。
+  // 放在 walk 之前：诊断先并入，error 时后面照常 0 字节（不靠 lowering 触发才报）。
+  const recursion = analyzeFunctions(file, ctx);
+  for (const diagnostic of recursion.diagnostics) reportDiagnostic(ctx, diagnostic);
   const buffer = createEmitBuffer(estimateLines(options.sourceText, options.estimatedLines));
-  const state = createLowerState({ backend: options.backend, buffer, sink, view: ctx.view });
+  const state = createLowerState({ backend: options.backend, buffer, sink, view: ctx.view, featureGate: ctx.featureGate });
   // 3) `# 机`：事件目录/参数校验（一个文件最多一个事件）
   const machines = file.decls.filter((decl): decl is KojoMachineDecl => decl.kind === 'machine');
   for (let i = 1; i < machines.length; i++) {
@@ -180,7 +182,7 @@ export function runCompile(file: KojoFile, options: RunCompileOptions): RunCompi
   const mainFinished = buffer.finish();
 
   const weaveBuffer = createEmitBuffer(32);
-  const weaveState = createLowerState({ backend: options.backend, buffer: weaveBuffer, sink, view: ctx.view });
+  const weaveState = createLowerState({ backend: options.backend, buffer: weaveBuffer, sink, view: ctx.view, featureGate: ctx.featureGate });
   for (const decl of file.decls) {
     if (decl.kind === 'weave') assembleWeave(decl, ctx, weaveState, walkNarrative);
   }
@@ -233,7 +235,7 @@ export function runCompile(file: KojoFile, options: RunCompileOptions): RunCompi
   }
 
   const erb = lines.length === 0 ? '' : `${lines.join('\n')}\n`;
-  return { ok: true, erb, sourceMap, diagnostics: sink.all.slice(startIndex), slots };
+  return { ok: true, erb, sourceMap, diagnostics: sink.all.slice(startIndex), slots, recursion };
 }
 
 /** 让 expand 目录的走法在别处复用（compile.ts 只走 runCompile；这里保留类型收口） */
@@ -241,7 +243,10 @@ export { walkDispatch, walkNarrative };
 
 /**
  * 展开模块的公共面（顺序按数据流：`展开器走法` → `选项` 的 ETB 计划与降糖 →
- * `@巡` 的集合计划）。别处只许从这里/`lower/index.ts`/`src/index.ts` 取，禁止深路径 import。
+ * `@巡` 的集合计划 → `# 表` / `# 池` 的等值分派计划）。别处只许从这里/`lower/index.ts`/
+ * `src/index.ts` 取，禁止深路径 import。
  */
 export * from './options.js';
 export * from './foreach.js';
+export * from './table-plan.js';
+export * from './pool-plan.js';

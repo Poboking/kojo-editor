@@ -62,6 +62,9 @@ import type { PreferencesInstaller } from './use-editor-preferences';
 // 住在本实例 effect 里而不是 EditorPane：事件源（ed / filePathRef / sugarModelRef）都在
 // 这一拍之后才齐，且退场次序本来就由本 hook 的清账段钉死。
 import { installKojo2ProblemWiring } from '../kojo2-problem-wiring';
+// K2 batch-4：2.0 语言服务（`# 机` 事件目录）的 adapter 注入源。与上一行同一条宿主组合根
+// 豁免口径——语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由此注入。
+import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 2.0 语言服务 adapter 由宿主组合根注入（与 ui/kojo2-problem-wiring.ts 同一豁免口径）
 import type { Notify } from '../NotificationCenter';
 
 /** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
@@ -222,7 +225,11 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       crumbTreeCacheRef,
     });
     setGlobalKernel(kernel); // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
-    ensureGlobalProviders();
+    // K2 batch-4：Kojo 2.0 语言服务（`# 机` 事件目录）要的 adapter 由此注入——它**不是**
+    // `game.adapter` 槽位上那枚 v1 契约对象，槽位里没有 2.0 的 `eventCatalog` / `domainSymbols`。
+    // 与 `ui/kojo2-problem-wiring.ts` 的 2.0 adapter 装配同一口径（宿主组合根 + 同一豁免理由）；
+    // 全局 provider 只注册一次，getter 每次请求现问，项目开闭不必重装。
+    ensureGlobalProviders({ kojo2Adapter: () => ERATW_GAME_ADAPTER });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });

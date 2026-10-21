@@ -69,6 +69,7 @@ import { checkTimingArgsDeclaration, CJK, isFullwidthAssignmentText, type LoopMo
 import { argPositionToken, RESERVED_PRONOUNS, TIMING_ARGS_PARAM, TIMING_NAMED_PARAMS, TIMING_SUCCESS_PARAM } from './keywords';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
+import { describeErbLiteralFailure, encodeErbText, erbStringLiteral, formattedErbLiteral, type ErbLiteralFailure } from './literal';
 import type { TopNode } from './parser';
 import type { CatchBlock, DataBlock, LoopBlock, RulePoolBlock } from './parser';
 import { sortRulePoolBranches } from './rule-pool';
@@ -562,16 +563,6 @@ function emitRegistrationResults(em: Emitter, fm: SugarFrontMatter, familySeg: s
   if (familySeg.length > 0) em.pushGenerated(0, `RESULTS = ${erbStringLiteral(familySeg)}`);
   if (fm.displayName) em.pushGenerated(0, `RESULTS:1 = ${erbStringLiteral(fm.displayName)}`);
   if (fm.description) em.pushGenerated(0, `RESULTS:2 = ${erbStringLiteral(fm.description)}`);
-}
-
-/**
- * ERB 字符串字面量包裹。引擎的 `"` 不可内嵌、**无转义概念**——
- * `JSON.stringify` 的 `\"` 产物在 ERB 里是非法字节（旧缺陷）；内嵌 `"`
- * 一律降级为全角 `＂`（U+FF02，字形几乎一致、不破坏字面量结构）。
- * 无 `"` 时逐字节不变（golden 不受扰动）。
- */
-function erbStringLiteral(value: string): string {
-  return `"${value.replace(/"/g, '＂')}"`;
 }
 
 /**
@@ -2285,14 +2276,25 @@ function isSingleLineStatement(node: SugarNode, ctx: BodyContext): boolean {
 /**
  * 列基准（S6）：节点内容在**逻辑全文**里的 0 基码元偏移。
  *
+ * 取 parser 记下的 `_rawAt`（`text` 节点 = 内容起点；`heart` 节点 = 心形标记之后的
+ * 体起点——单行形 `心形 「…」` 的体比行内容晚 `心形 ` 三格）。缺省回落到节点起点。
  * `-1` = 该行没有可用的源侧视图（⇒ 本行不记列，退现行级）。行内体（`如果 …： 内容`
- * 的单行形，parser 的合成逻辑行）与块首混写时基准会失配，由 `buildColumnRuns` 的
- * 逐码元相等校验兜底丢弃——本函数只做**便宜的**前缀一致预检，不承诺精确。
+ * 的单行形，parser 的合成逻辑行）与块首混写时基准仍可能失配，由 `buildColumnRuns`
+ * 的逐码元相等校验兜底丢弃——本函数只做**便宜的**前缀一致预检，不承诺精确。
  */
 function rawBase(em: Emitter, node: TextLine | HeartLine): number {
-  const base = node.loc.start.column - 1;
+  const recorded = (node as TextLine & { _rawAt?: number })._rawAt;
+  const base = recorded ?? node.loc.start.column - 1;
   if (base < 0) return -1;
   return em.viewOf(node.loc.start.line) ? base : -1;
+}
+
+/**
+ * 节点内容在**行内 `_raw` 坐标**里的起点（插值 loc 的坐标系 ⇒ 诊断折回逻辑全文用）。
+ * `_rawAt` 是 parser 记录的真源；缺省按节点列起点（旧口径）。
+ */
+function rawAtOf(node: TextLine | HeartLine): number {
+  return (node as TextLine & { _rawAt?: number })._rawAt ?? node.loc.start.column - 1;
 }
 
 /** 该源行的逻辑全文（无视图 ⇒ 空串 ⇒ `identitySpec` 一律定位不到 ⇒ 不记列） */
@@ -2332,18 +2334,28 @@ function emitTextLine(
   // ---- §5.2 第 0 步（前置判定）：纯条件行 → IF 块 ----
   const pure = pureConditionalBody(node, ctx);
   if (pure) {
-    const cond = lowerExpression(pure.condText, exprCtx(ctx, pure.condLoc));
+    // 插值 loc 是**行内体坐标**（相对 `_raw`）；诊断要的是逻辑全文坐标 ⇒ 补 `base`
+    const condLoc = base < 0 ? pure.condLoc : shiftLoc(pure.condLoc, base);
+    const cond = lowerExpression(pure.condText, exprCtx(ctx, condLoc));
+    const inner = pure.thenText;
+    const speech = detectSpeechText(inner);
+    // 心形体的字面量可能装不下某些字符（NUL / CR / 未配对代理项）⇒ fail-closed。
+    // 在**压 `IF` 之前**判：坏行不留半截 `IF`（半成品比没有更坏）。
+    const call = heart ? heartCall(inner, speech, node.wait) : null;
+    if (call && call.failures.length > 0) {
+      const first = call.failures[0]!;
+      reportHeartLiteralFailure(ctx.sink, call.failures, { line: condLoc.line, column: condLoc.column + first.offset });
+      return;
+    }
     em.push(
       indent,
       `IF ${cond}`,
       sourceLine,
       view ? identitySpec(view.text, pure.condText, base < 0 ? 0 : base, 3) : [],
     );
-    const inner = pure.thenText;
-    const speech = detectSpeechText(inner);
     // `thenText` 是插值内的字面片段（源里原样存在）；产物把它包进 `PRINTFORM`/`HPH_PRINT`
     // 前缀之后 ⇒ 定位 needle、算出体起始偏移，仍是一段恒等区段。
-    const line = heart ? heartCall(inner, speech, node.wait) : printLine(inner, speech, node.wait, ctx);
+    const line = call ? call.line : printLine(inner, speech, node.wait, ctx);
     const at = inner.length > 0 ? line.indexOf(inner) : -1;
     em.push(
       indent + 1,
@@ -2351,7 +2363,7 @@ function emitTextLine(
       sourceLine,
       view && at >= 0 ? identitySpec(view.text, inner, base < 0 ? 0 : base, at) : [],
     );
-    em.push(indent + 1 - 1, `ENDIF`, null);
+    em.push(indent, `ENDIF`, null);
     return;
   }
 
@@ -2364,7 +2376,13 @@ function emitTextLine(
   const windowed = clipAndShift(body.runs, stripped, body.raw.length, 0);
   if (heart) {
     // `forceNonD`：自机台词一律非 D 变体——`dw/dl` 忽略 `SETCOLOR`，上了色也看不见
-    const call = heartCallAnchored(text, forceNonD ? true : node.speech, node.wait);
+    const call = heartCall(text, forceNonD ? true : node.speech, node.wait);
+    // 字面量装不下 ⇒ 报 error 且**本行不产字节**（fail-closed；不写坏产物）
+    if (call.failures.length > 0) {
+      const first = call.failures[0]!;
+      reportHeartLiteralFailure(ctx.sink, call.failures, heartFailureLoc(node, text, call.inner, first.offset));
+      return;
+    }
     em.push(
       indent,
       call.line,
@@ -2441,7 +2459,7 @@ function textBody(node: TextLine | HeartLine, ctx: BodyContext, base = -1): { ra
   for (const it of interps) {
     if (it.loc.start.line !== it.loc.end.line) continue;
     copy(cursor, it.loc.start.column - 1);
-    out += renderInterpolation(it, ctx);
+    out += renderInterpolation(it, ctx, base);
     cursor = it.loc.end.column - 1;
   }
   copy(cursor, source.length);
@@ -2449,18 +2467,24 @@ function textBody(node: TextLine | HeartLine, ctx: BodyContext, base = -1): { ra
   return { raw: scanStrayPercent(out, node, ctx), runs };
 }
 
-/** 插值 → FORM 片段（规范 §3.4 表） */
-function renderInterpolation(it: Interpolation, ctx: BodyContext): string {
+/**
+ * 插值 → FORM 片段（规范 §3.4 表）。
+ *
+ * `base` = 本行 `_raw` 在**逻辑全文**里的起点：插值 loc 是 `_raw` 坐标，诊断要的是
+ * 逻辑全文坐标（含缩进 / 心形标记）⇒ 只在这里补一次，别处不再各补各的。
+ */
+function renderInterpolation(it: Interpolation, ctx: BodyContext, base = -1): string {
+  const at = base >= 0 ? shiftLoc(it.loc.start, base) : it.loc.start;
   if (it.form === 'cond') {
-    const cond = lowerExpression(it.condText ?? '', exprCtx(ctx, it.loc.start));
-    const thenText = expandFragment(it.thenText ?? '', ctx, it.loc.start);
-    const elseText = it.elseText !== undefined ? expandFragment(it.elseText, ctx, it.loc.start) : undefined;
+    const cond = lowerExpression(it.condText ?? '', exprCtx(ctx, at));
+    const thenText = expandFragment(it.thenText ?? '', ctx, at);
+    const elseText = it.elseText !== undefined ? expandFragment(it.elseText, ctx, at) : undefined;
     if (elseText === undefined || elseText.length === 0) return `\\@${cond}?${thenText}\\@`;
     return `\\@${cond}?${thenText}#${elseText}\\@`;
   }
   // expr 形态：字符串族 → `%…%`；数值族 → `{…}`
   const text = it.text;
-  const lowered = lowerExpression(text, exprCtx(ctx, it.loc.start));
+  const lowered = lowerExpression(text, exprCtx(ctx, at));
   // 条件别名展开产物 = 行内条件 `\@条件?真#假\@`（`expression.ts` 的
   // `conditionalAliasExpression`）：它是 **FORM 片段**，不是表达式——既不能包 `{}`
   // （`{\@…\@}` 非法）也不能包 `%…%`。原样落进文本，与 `{}` 行内条件同款。
@@ -2584,25 +2608,81 @@ function printLine(text: string, speech: boolean, wait: boolean, ctx: BodyContex
  *
  * - **引号剥离**：§3.9 的示例 `心形 「……嗯。」` → `CALL HPH_PRINT(@"……嗯。","w")`，
  *   即台词引号不进入 `@""` 字面量；
+ * - **字面量编码**：文本体一律走 `literal.ts::encodeErbText`（本包唯一编码器）——
+ *   半角 `"` 降为全角 `＂`、`\` 双写；装不下的字符（NUL / CR / 未配对代理项）
+ *   进 `failures`，调用方据此**不产本行字节**（fail-closed）；
  * - 模式字母由与文本行完全相同的规则决定：`w` / `l` / `dw` / `dl`。
  */
-function heartCall(text: string, speech: boolean, wait: boolean): string {
+interface HeartCall {
+  /** 整行产物文本（`failures` 非空时**不得发射**） */
+  readonly line: string;
+  /** `@""` 里的文本体（**编码前**、剥引号后）；只有与源逐码元相等时才可用于列区段 */
+  readonly inner: string;
+  /** `inner` 在源文本体里的起点（-1 = 不记列：空体 / 被转义改宽） */
+  readonly innerAt: number;
+  readonly failures: readonly ErbLiteralFailure[];
+}
+
+function heartCall(text: string, speech: boolean, wait: boolean): HeartCall {
   const d = !speech; // 心形沿用"旁白走 D 系"的同构规则（w/l ↔ dw/dl）
   const mode = (d ? 'd' : '') + (wait ? 'w' : 'l');
   const inner = speech ? stripQuotesForHeart(text) : text;
-  return `${HEART_PRINT_PREFIX}${inner}","${mode}")`;
+  const encoded = encodeErbText(inner);
+  // 列区段是**逐码元恒等**契约：转义改了字符或宽度（`"`→`＂` / `\`→`\\`）就退行级，
+  // 宁可少记一段，也不把错位的列写进 sourceMap。
+  const verbatim = encoded.ok && encoded.body === inner;
+  return {
+    line: `CALL HPH_PRINT(${formattedErbLiteral(encoded.body)},"${mode}")`,
+    inner,
+    innerAt: verbatim && inner.length > 0 ? text.indexOf(inner) : -1,
+    failures: encoded.failures,
+  };
+}
+
+/**
+ * 心形字面量装不下作者文本 ⇒ **报 error、本行不产字节**（fail-closed）。
+ *
+ * `at` = 失败码元在源里的位置（1 基、逻辑全文坐标；由调用方按 `_rawAt` + 体偏移算）。
+ *
+ * 诊断码复用既有闭集里的 `internal`：`SugarDiagnosticCode` 是 plugin-api 的闭集
+ * （本批改动面外），其中没有「字面量装不下」的码；文案写清这是**作者文本里的
+ * 字符**（不是转译器异常）与唯一下一步（删字）。若后续允许扩码，应换成
+ * `literal-unencodable` 一类专用码。
+ */
+function reportHeartLiteralFailure(
+  sink: DiagnosticSink,
+  failures: readonly ErbLiteralFailure[],
+  at: { line: number; column: number },
+): void {
+  const first = failures[0]!;
+  sink.report({
+    code: 'internal',
+    severity: 'error',
+    message:
+      `心形提示里有引擎字面量装不下的字符：${describeErbLiteralFailure(first)}。` +
+      '这一行没有生成（宁缺勿编，绝不写坏产物）；请删掉该字符后重转译。',
+    loc: at,
+  });
+}
+
+/** 失败码元在源里的列（1 基、逻辑全文坐标）：`_rawAt` + 体在原文里的起点 + 体内偏移 */
+function heartFailureLoc(
+  node: TextLine | HeartLine,
+  text: string,
+  inner: string,
+  offset: number,
+): { line: number; column: number } {
+  const at = text.indexOf(inner);
+  const start = rawAtOf(node) + (at >= 0 ? at : 0);
+  return { line: node.loc.start.line, column: start + offset + 1 };
 }
 
 /** `CALL HPH_PRINT(@"` —— 心形调用里文本体之前的固定前缀（宽 = 文本体在产物行的起始偏移） */
 const HEART_PRINT_PREFIX = 'CALL HPH_PRINT(@"';
 
-/**
- * 同 `heartCall`，另给「体原文里 `@""` 内那段文本的起点」（S6 列区段的裁剪窗口）。
- * 引号剥离/`trim` 后找不到定位点（空体）⇒ `-1`，调用方不记列。
- */
-function heartCallAnchored(text: string, speech: boolean, wait: boolean): { line: string; inner: string; innerAt: number } {
-  const inner = speech ? stripQuotesForHeart(text) : text;
-  return { line: heartCall(text, speech, wait), inner, innerAt: inner.length > 0 ? text.indexOf(inner) : -1 };
+/** 行内体坐标 → 逻辑全文坐标（列加 `base`；行不变——行内体永远在逻辑行的首物理行起算） */
+function shiftLoc(loc: { line: number; column: number }, base: number): { line: number; column: number } {
+  return { line: loc.line, column: loc.column + base };
 }
 
 /**
@@ -2610,9 +2690,8 @@ function heartCallAnchored(text: string, speech: boolean, wait: boolean): { line
  *
  * 判据不是"首尾都是引号"，而是**首个闭合引号恰好是最后一个字符**：
  * `「甲」「乙」` 首尾虽然都是引号，但首个 `」` 在中段——它是一行里的**两段**
- * 文本，剥掉首尾会得到 `甲」「乙`（把两段粘成一段残句）。多段文本原样保留，
- * `@"…"` 字面量里的内嵌引号不构成转义问题（ERB 只在 `"` 处收尾，而这里
- * 只把整行包进一对 `@"…"`，内部没有半角 `"`）。
+ * 文本，剥掉首尾会得到 `甲」「乙`（把两段粘成一段残句）。多段文本原样保留；
+ * 其中若含半角 `"`，由字面量编码器降为全角 `＂`（不会截断 `@"…"`）。
  */
 function stripQuotesForHeart(text: string): string {
   const t = text.trim();

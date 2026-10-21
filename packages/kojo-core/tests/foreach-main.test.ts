@@ -358,7 +358,10 @@ describe('`@巡` 主链 · fail-closed（恰一条 error、零字节、零落点
   });
 
   it('adapter 没有集合声明（foreachCollections = null）⇒ 未声明集合，不猜', () => {
-    const result = compile(TEAM_SOURCE, FIXTURE_ADAPTER);
+    // K2-FEATURE-GATE-UNIFY：能力闸收成单源后，`FIXTURE_ADAPTER`（programFeatures 全关）+ 程序层
+    // 全开的 backend 属于**双源不一致**，编译入口会先报 6 条能力闸 error（不再走到集合解析）。
+    // 本用例要测的是"能力开着、但集合没声明"⇒ 显式让 adapter 声明 foreach 能力、只把集合留空。
+    const result = compile(TEAM_SOURCE, foreachAdapter({ foreachCollections: null }));
 
     expect(result.ok).toBe(false);
     expect(errorCodes(result)).toEqual(['core/expr/unknown-symbol']);

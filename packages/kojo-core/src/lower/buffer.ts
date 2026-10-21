@@ -10,7 +10,12 @@
  */
 import type { KojoSpan } from '../ast.js';
 import type { DiagnosticSink } from '../diagnostics.js';
-import type { SourceMap, SourceMapLineKind, SourceMapOrigin } from '../source-map.js';
+import type {
+  SourceMap,
+  SourceMapLineKind,
+  SourceMapOrigin,
+  SourceMapSegmentSpec,
+} from '../source-map.js';
 import { createSourceMapBuilder } from '../source-map.js';
 import type { EmitResult } from './backend.js';
 import { isEmitFailure } from './backend.js';
@@ -20,6 +25,12 @@ export interface EmitMapping {
   /** 缺省：有源 → 'source'，无源 → 'generated' */
   readonly kind?: SourceMapLineKind;
   readonly origins?: readonly SourceMapOrigin[];
+  /**
+   * 随行一起登记的**列级分段**（additive；列相对该产物行）。
+   * `endColumn` 缺省时按该行文本的码元宽度补成 `行宽 + 1`（排他）——这里知道行文本，
+   * 所以调用方只需要给"从第几列起"；空行没有可覆盖的列，规格被跳过（不造 [1,1) 空段）。
+   */
+  readonly segments?: readonly SourceMapSegmentSpec[];
 }
 
 export interface EmitFinish {
@@ -63,6 +74,21 @@ export function createEmitBuffer(estimatedLines = 256): EmitBuffer {
       source: mapping.source,
       ...(mapping.origins === undefined ? {} : { origins: mapping.origins }),
     });
+    const specs = mapping.segments;
+    if (specs === undefined || specs.length === 0) return;
+    for (const spec of specs) {
+      // 终点缺省 = 该行全部码元（`line.length` 是 UTF-16 码元数，与 source map 列口径一致）
+      const endColumn = spec.endColumn ?? line.length + 1;
+      if (endColumn <= spec.startColumn) continue; // 空行 / 零宽规格：没有可覆盖的列，不造空段
+      map.appendSegment({
+        generatedLine,
+        generatedColumn: spec.startColumn,
+        source: spec.source,
+        endColumn,
+        ...(spec.kind === undefined ? {} : { kind: spec.kind }),
+        ...(spec.origins === undefined ? {} : { origins: spec.origins }),
+      });
+    }
   };
 
   const pushEmitted = (result: EmitResult, mapping: EmitMapping, sink: DiagnosticSink): void => {

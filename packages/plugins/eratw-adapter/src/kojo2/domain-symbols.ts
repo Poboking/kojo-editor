@@ -15,6 +15,7 @@
 import type {
   AttributeSymbol,
   DomainSymbols,
+  DomainVariableSymbol,
   NameFunctionSymbol,
   PronounSymbol,
 } from '../../../../kojo-core/src/adapter.js';
@@ -118,6 +119,39 @@ const NAME_FUNCTIONS: readonly NameFunctionSymbol[] = Object.freeze(
     ),
 );
 
+/* ------------------------------ 域符号变量 ------------------------------ */
+
+/**
+ * 作者**可写**的引擎全局标量（additive 面 `domainSymbols.variables`）。
+ *
+ * 搬的是既有台账的事实，不猜（凭据 = `kojo-sugar/src/engine-globals.ts` 的入库判据，
+ * 那份白名单的三条门槛是"引擎内建 + 真实语料实测裸用 + 作者造不出这个名字"，
+ * 每条都带口上盘裸读 / 裸写计数）：
+ * - `TIME`：时辰；裸写 266（时辰推进），作者真的会写 ⇒ 可写；
+ * - `MONEY`：所持金；裸写 136 ⇒ 可写；
+ * - `RESULTS`：按钮输入回传信号（`RESULTS = 1`）；裸写 1937 ⇒ 可写；
+ * - `RESULT`：调用返回值；裸写 387 ⇒ 可写；
+ * - `ARG`：`CALL` 入参（调用前赋值）；裸写 37 ⇒ 可写。
+ *
+ * **没收进来的**（有意为之，不是遗漏）：
+ * - 纯读的引擎伪变量 `DAY`（裸写 0）/ `COUNT` / `LINECOUNT` / `CHARANUM`：它们在本仓
+ *   唯一的可见效果是"赋值不再报未声明"；作者从不写它们 ⇒ 收进来只会把"未声明"这条
+ *   可行动的提示换成"已声明为只读"，没有事实收益。要收时按同一台账逐条补，不预埋；
+ * - 角色作用域选择器 `TARGET` / `MASTER` / `PLAYER` / `ASSI`：2.0 有 `{我}` / `{你}` / `{她}`
+ *   三个代词面（本表 `pronouns`），再登记成变量 = 两套入口看同一个东西；
+ * - `ARGS`（字符串数组）：裸写有计数，但"裸名 = 第 0 项"这层下标语义本 adapter 未在
+ *   2.0 侧落点，登记成标量会与 `ARGS:n` 撞语义 ⇒ 暂不登记。
+ *
+ * 值类型一律 `int`：引擎侧这五个都是整数槽；`readonly` 全部省略（= 可写）。
+ */
+const VARIABLES: readonly DomainVariableSymbol[] = Object.freeze([
+  Object.freeze({ name: 'TIME', valueKind: 'int' as const }),
+  Object.freeze({ name: 'MONEY', valueKind: 'int' as const }),
+  Object.freeze({ name: 'RESULTS', valueKind: 'int' as const }),
+  Object.freeze({ name: 'RESULT', valueKind: 'int' as const }),
+  Object.freeze({ name: 'ARG', valueKind: 'int' as const }),
+]);
+
 /* ------------------------------ 汇总 ------------------------------ */
 
 /**
@@ -130,6 +164,7 @@ export const ERATW_DOMAIN_SYMBOLS: DomainSymbols = Object.freeze({
   pronouns: PRONOUNS,
   attributes: ATTRIBUTES,
   nameFunctions: NAME_FUNCTIONS,
+  variables: VARIABLES,
   speakers: Object.freeze({ kind: 'project' as const, table: 'CHARA', key: 'CALLNAME' }),
   unknown: 'error',
 });

@@ -59,6 +59,8 @@ import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { planAddExtraRoot } from './workspace-roots';
 import { getKojo2CutoverController } from './kojo2-cutover';
+// 2.0 打开入口闸（K2-EDITOR-OPEN-PATHS）：开关关着时它只回 `off`，打开路径逐字不变
+import { routeKojo2OpenPath } from './kojo2-open-paths';
 import {
   applyPin,
   batchCloseEmptyReason,
@@ -97,6 +99,15 @@ import { pruneMru, stepMru, touchMru } from './tab-mru';
 import { subscribeTabCycle, type TabCycleDirection } from './tab-cycle';
 import type { OpenFileOptions } from './tabs-ops';
 import { useShellOverlays } from './shell-overlays';
+// K2-MIGRATE-MOUNT：Kojo 2.0 迁移向导的宿主入口（纯逻辑，命令 / 开合 / IO 注入 / 刷新收尾）
+// 与挂载壳。开关关时 `commands()` 返回空数组 ⇒ 命令表零变化（见 kojo2-migrate-entry.ts）。
+import {
+  createKojo2MigrateEntry,
+  type Kojo2MigrateEntry,
+  type Kojo2MigrateEntrySnapshot,
+} from './kojo2-migrate-entry';
+import { Kojo2MigrateWizardHost } from './kojo2-migrate';
+import { listSourceFiles, type ShellCommandSpec } from './commands';
 import {
   fileOpGuardMessage,
   pathGoneByDelete,
@@ -516,6 +527,65 @@ export function App(): ReactElement {
   // React 钩子次序不变。
   useShellOverlays(kernel);
 
+  /* --------- Kojo 2.0 迁移向导入口（K2-MIGRATE-MOUNT；开关关 = 零注册） --------- */
+
+  /**
+   * 迁移候选根：口上域 ∪ 会话附加根（与文件树 / `Ctrl+P` 的候选根同口径，只去字面重复）。
+   *
+   * 用 ref 镜像而不是闭包捕获：入口是在**命令按下那一刻**才去列举的，闭包不能拿
+   * "开项目那会儿"的旧根（附加根是会话级可变状态）。
+   */
+  const migrateRootsRef = useRef<readonly string[]>([]);
+  migrateRootsRef.current = project ? [...new Set([...project.kojoPaths, ...extraRoots])] : [];
+  /** 通知通道镜像（`useNotify` 的返回身份不保证恒定，入口不该跟着重建） */
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  const [migrateEntry, setMigrateEntry] = useState<Kojo2MigrateEntry | null>(null);
+  const [migrateState, setMigrateState] = useState<Kojo2MigrateEntrySnapshot | null>(null);
+
+  /**
+   * 入口与 kernel 同生命周期（换内核 = 换 io，旧入口的写端口作废）。
+   *
+   * `listFiles` 复用 `commands.ts` 的 `listSourceFiles`（宿主唯一的递归列举口径），
+   * 收口由入口按 `.kojo` 做——这里不另写第二份扩展名判据。
+   */
+  useEffect(() => {
+    if (kernel === null) {
+      setMigrateEntry(null);
+      setMigrateState(null);
+      return;
+    }
+    const io = kernel.io;
+    const entry = createKojo2MigrateEntry({
+      io,
+      listFiles: () => listSourceFiles(io.walkDir.bind(io), migrateRootsRef.current),
+      /**
+       * 刷新走宿主**既有**通道：`file.changed` 一条事件同时喂给两侧——
+       * 文件树（`affectsKojoTree` 过滤 + 400ms 合批重列）与已开编辑器
+       * （外部改动重载：干净即静默重载、脏则交作者选）。**不自造第二条刷新链**。
+       *
+       * `kind: 'change'`：迁移只改内容（原地改写，不改名不删源），不是新增/删除。
+       */
+      refreshFiles: (paths) => {
+        for (const path of paths) kernel.bus.emit('file.changed', { kind: 'change', path });
+      },
+      notify: (message) => notifyRef.current({ kind: 'info', message }),
+    });
+    setMigrateEntry(entry);
+    setMigrateState(entry.getSnapshot());
+    return entry.subscribe(setMigrateState);
+  }, [kernel]);
+
+  /**
+   * 命令表：开关关 ⇒ 空数组（零注册，命令面板 / 快捷键表里一个字都不出现）。
+   * 与 `monaco/languages.ts` 同一条生效时机口径——开关在**装配那一刻**读，
+   * 翻了要重载窗口才换表（本批不提供运行时热切换）。
+   */
+  const migrateCommands = useMemo<readonly ShellCommandSpec[]>(
+    () => migrateEntry?.commands() ?? [],
+    [migrateEntry],
+  );
+
   // 结构解析叠层（实验，默认关）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通
   // 都自动退回原有的着色与折叠，但"退回了"这件事由这里上一条通知。台账按消息去重 ⇒
   // 同一种错一次会话只说一遍（`monaco/tree-sitter/fallback.ts`），不随编辑重复弹。
@@ -576,11 +646,17 @@ export function App(): ReactElement {
   useEffect(() => {
     if (!kernel) return;
     const un = kernel.bus.on('editor.revealLocation', (ev) => {
-      // W7-B：`focus: false`（检索框逐项跳）一路带到编辑器——定位但不抢焦点，
-      // 老发起方不带这个键 ⇒ 仍按现行行为聚焦。
-      requestOpenFile(ev.filePath, ev.line ?? 1, ev.column, ev.span, false, ev.focus);
-      // 同款记录（MM-7）：问题面板/转到定义/查找引用/函数树跳转来的打开也进最近文件
-      recordRecentFile(ev.filePath);
+      // 2.0 文件同样先过入口闸（K2-EDITOR-OPEN-PATHS）：`v1-only` 阶段点开一份 `.kojo2`
+      // （如向导刚建的那份）给一句人话，而不是把它当纯文本悄悄开出来。
+      // `routeOpenPath` / `rootDirRef` 都声明在本 effect **之后**：回调是异步的（总线事件），
+      // 执行时绑定早已初始化——与下面 `requestOpenFile` 同一条既有先例。
+      routeOpenPath(ev.filePath, rootDirRef.current, () => {
+        // W7-B：`focus: false`（检索框逐项跳）一路带到编辑器——定位但不抢焦点，
+        // 老发起方不带这个键 ⇒ 仍按现行行为聚焦。
+        requestOpenFile(ev.filePath, ev.line ?? 1, ev.column, ev.span, false, ev.focus);
+        // 同款记录（MM-7）：问题面板/转到定义/查找引用/函数树跳转来的打开也进最近文件
+        recordRecentFile(ev.filePath);
+      });
     });
     return () => {
       un();
@@ -890,19 +966,51 @@ export function App(): ReactElement {
   );
 
   /**
+   * `.kojo2` 的入口闸（K2-EDITOR-OPEN-PATHS）：所有打开入口先过这一拍，再过改动前那条路。
+   *
+   * - 开关关 / 不是 2.0 文件 ⇒ `routeKojo2OpenPath` 返回 `off` / `not-kojo2`，这里立刻
+   *   调 `open()`（= 改动前那一条路，**逐字未变**）；
+   * - 开关开 + `.kojo2` ⇒ 走 batch-3 的路由（当前项目内直接开 / 切项目并排队）或
+   *   阶段闸的 `blocked`（`v1-only` 阶段人话已上屏，**不开空编辑器**）。
+   *
+   * `rootDir` 是"这份文件属于哪个项目"：文件树/快速打开 = 当前根；欢迎页最近文件 =
+   * 记录里带的那个根（换项目时走 openProject 的 pendingOpenFile 腿）。
+   */
+  const routeOpenPath = useCallback(
+    (path: string, rootDir: string | null, open: () => void): void => {
+      const plan = routeKojo2OpenPath(
+        { path, rootDir },
+        { currentRoot: rootDirRef.current, projectOpen: rootDirRef.current !== null },
+        {
+          openFile: open,
+          openProject: (root, opts) => void openProject(root, { pendingOpenFile: opts.pendingOpenFile }),
+          notify: (message) => notify({ kind: 'info', message }),
+        },
+      );
+      if (plan.kind === 'off' || plan.kind === 'not-kojo2') open();
+    },
+    [openProject, notify],
+  );
+
+  /**
    * MM-7 欢迎页「最近文件」点击：同项目（根未变且项目开着）⇒ 直接开文件；
    * 换了项目 ⇒ 先开项目，pendingOpenFile 在 openProject 成功路径末尾落地
    * （打开失败绝不顺带打开文件）。
+   *
+   * 2.0 文件先过 `routeOpenPath`（K2-EDITOR-OPEN-PATHS）：开关打开时 `.kojo2` 由它
+   * 决定"直接开 / 切项目 / 被阶段拦下说一句"，非 2.0 文件照下面这条老路走。
    */
   const openRecentFile = useCallback(
     (path: string, rootDir: string) => {
-      if (rootDirRef.current === rootDir && project) {
-        requestOpenFile(path);
-        return;
-      }
-      void openProject(rootDir, { pendingOpenFile: path });
+      routeOpenPath(path, rootDir, () => {
+        if (rootDirRef.current === rootDir && project) {
+          requestOpenFile(path);
+          return;
+        }
+        void openProject(rootDir, { pendingOpenFile: path });
+      });
     },
-    [project, openProject, requestOpenFile],
+    [project, openProject, requestOpenFile, routeOpenPath],
   );
 
   /**
@@ -911,10 +1019,12 @@ export function App(): ReactElement {
    */
   const openFile = useCallback(
     (path: string, opts?: OpenFileOptions) => {
-      requestOpenFile(path, undefined, undefined, undefined, opts?.preview === true);
-      recordRecentFile(path); // MM-7：文件树/快速打开的落地也进最近文件
+      routeOpenPath(path, rootDirRef.current, () => {
+        requestOpenFile(path, undefined, undefined, undefined, opts?.preview === true);
+        recordRecentFile(path); // MM-7：文件树/快速打开的落地也进最近文件
+      });
     },
-    [requestOpenFile, recordRecentFile],
+    [requestOpenFile, recordRecentFile, routeOpenPath],
   );
 
   const phaseRef = useRef<AppPhase>(phase);
@@ -1038,7 +1148,8 @@ export function App(): ReactElement {
           projectOpen: ph === 'project',
           // SAFE-1：项目态换目录的脏确认收口在 openProject 换根守卫（不再这里拒切）
           currentProjectDir: rootDirRef.current,
-          openFile: (p) => requestOpenFile(p),
+          // 拖放的文件也只喂既有打开入口；2.0 文件先过阶段闸（开关关着 = 直通，逐字不变）
+          openFile: (p) => routeOpenPath(p, rootDirRef.current, () => requestOpenFile(p)),
           // 拖拽路径：检测失败顺势引导去「导入项目」向导（其它入口不开这个 opt，只人话化报错）
           openProject: (dir) => void openProject(dir, { routeDetectionFailToImport: true }),
           reloadProject: () => {
@@ -1060,7 +1171,7 @@ export function App(): ReactElement {
       disposed = true;
       unlisten?.();
     };
-  }, [kernel, notify, requestOpenFile, openProject]);
+  }, [kernel, notify, requestOpenFile, openProject, routeOpenPath]);
 
   /**
    * 批量关闭队列（C1）：**尚未关闭**的剩余待关标签（null = 没有进行中的批量关闭）。
@@ -1649,6 +1760,7 @@ export function App(): ReactElement {
             registerTreeRefresh={registerTreeRefresh}
             extraRoots={extraRoots}
             onAddExtraRoot={() => void addExtraRoot()}
+            extraShellCommands={migrateCommands}
           />
         </Suspense>
       </ProjectErrorBoundary>
@@ -1724,6 +1836,19 @@ export function App(): ReactElement {
         ) : null}
         {pendingProjectSwitch ? (
           <UnsavedFilesConfirmDialog context="switch" paths={pendingProjectSwitch.paths} onDecide={decideProjectSwitch} />
+        ) : null}
+        {/* Kojo 2.0 迁移向导（K2-MIGRATE-MOUNT）：只在入口状态为 open 时挂载，
+            与其余模态同在根舞台（遮罩自己 fixed 铺满窗口）。应用 / 撤销后的刷新由入口
+            经 `file.changed` 收尾，这里不重复接线。 */}
+        {kernel !== null && migrateEntry !== null && migrateState?.status === 'open' ? (
+          <Kojo2MigrateWizardHost
+            io={kernel.io}
+            filePaths={migrateState.filePaths}
+            speaker={migrateEntry.speaker()}
+            onClose={() => migrateEntry.close()}
+            applyPlan={migrateEntry.apply}
+            undoPlan={migrateEntry.undo}
+          />
         ) : null}
       </div>
     </div>

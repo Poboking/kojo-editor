@@ -394,6 +394,8 @@ describe('eraTW backend：@织 监听头', () => {
           { name: '__kojo_table_心情', kind: 'table', valueType: 'int' },
           { name: '__kojo_table_心情__value', kind: 'table', valueType: 'string' },
           { name: '__kojo_rand_40', kind: 'random', valueType: 'int' },
+          // 池主语槽（kind 是池自己的事实）：声明形态仍只由 valueType 决定 → #DIM
+          { name: '__kojo_pool_等级问候', kind: 'pool', valueType: 'int', role: 'pool-subject' },
         ],
       }),
     );
@@ -404,6 +406,7 @@ describe('eraTW backend：@织 监听头', () => {
       '#DIM __kojo_table_心情',
       '#DIMS __kojo_table_心情__value',
       '#DIM __kojo_rand_40',
+      '#DIM __kojo_pool_等级问候',
     ]);
     b.weave.weaveFooter();
   });
@@ -502,6 +505,8 @@ describe('eraTW backend：wrapMachine 事件头', () => {
         // 整数表：判别槽与结果值槽都是 int → 都是 #DIM（不再靠 __value 后缀猜）
         { name: '__kojo_table_档位', kind: 'table', valueType: 'int' },
         { name: '__kojo_table_档位__value', kind: 'table', valueType: 'int' },
+        // 池主语槽：kind=pool 与 template 同一落点（#DIM）
+        { name: '__kojo_pool_等级问候', kind: 'pool', valueType: 'int', role: 'pool-subject' },
       ],
     };
     const lines = asLines(backend().wrapMachine?.(request) ?? null);
@@ -511,6 +516,7 @@ describe('eraTW backend：wrapMachine 事件头', () => {
     expect(lines[head + 3]).toBe('#DIM __kojo_rand_9');
     expect(lines[head + 4]).toBe('#DIM __kojo_table_档位');
     expect(lines[head + 5]).toBe('#DIM __kojo_table_档位__value');
+    expect(lines[head + 6]).toBe('#DIM __kojo_pool_等级问候');
   });
 
   it('无状态：两次 wrapMachine 各自按自己的 slots 声明，互不影响', () => {

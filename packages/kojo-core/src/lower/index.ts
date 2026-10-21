@@ -117,11 +117,31 @@ export function lowerNarrative(nodes: readonly KojoNarrativeNode[], options: Low
 export * from './backend.js';
 export * from './buffer.js';
 export * from './condition.js';
+/* 能力闸单源（K2-FEATURE-GATE-UNIFY）：解析/判定/去重键的公共面。
+   键表 `PROGRAM_FEATURE_KEYS` 只从 adapter 面再导出（避免两个公共路径同名，公开面不变）。 */
+export {
+  PROGRAM_FEATURE_CODES,
+  PROGRAM_FEATURE_SYNTAX,
+  checkFeature,
+  featureDiagnosticKey,
+  resolveProgramFeatures,
+} from './feature-gate.js';
+export type {
+  FeatureCheck,
+  ProgramFeatureDeclaringAdapter,
+  ProgramFeatureLandingBackend,
+  ProgramFeatureSource,
+  ResolvedProgramFeatures,
+} from './feature-gate.js';
 export * from './narrative.js';
 export * from './native.js';
 export * from './presentation.js';
 /* 展开降糖（`选项` 的 ETB 计划是 adapter 契约的 additive 字段，归公共面） */
 export * from './expand/options.js';
+/* 等值分派计划（K2-DISPATCH-WIRING）：`# 表` / `# 池` 的可证等值判定与结构请求。
+   契约字段 `program.tableDispatch` / `presentation.poolDispatch` 的请求/计划形状只在这里定。 */
+export * from './expand/table-plan.js';
+export * from './expand/pool-plan.js';
 export * from './program.js';
 export * from './state.js';
 export * from './text.js';

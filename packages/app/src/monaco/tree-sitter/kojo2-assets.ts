@@ -1,11 +1,15 @@
 /**
- * Kojo 2.0 结构层的**资源装配点**（两枚 wasm + highlights 查询）；v1 的同形装配点在 `assets.ts`。
+ * Kojo 2.0 结构层的**资源装配点**（两枚 wasm + 三份查询）；v1 的同形装配点在 `assets.ts`。
  *
- * ## 为什么单独成文件
+ * ## 谁 import 本文件
  *
- * `?url` / `?raw` 是 Vite 交付面（也是本批唯一被点名的构建风险），把四枚 import 关在一个
- * 文件里，风险面只有一处可读可审。**只有 `kojo2-runtime.ts` 的默认装载器动态 import 本文件**：
- * flag 关着 / 作者没开结构层时，这些资源连字符串都不进主线程模块图（v1 `kojo-runtime.ts` 同纪律）。
+ * - **worker 入口**（`kojo2-ts.worker.ts`）**静态** import：worker 的 iife 产物不接受动态
+ *   import 切 chunk，资源必须由入口静态取进来再注入 `createKojo2Runtime()`；
+ * - 主线程的懒加载单例（`kojo2-runtime.ts`）**动态** import：flag 关着 / 没人要结构层时，
+ *   这些资源连字符串都不进主线程模块图（v1 `kojo-runtime.ts` 同纪律）。
+ *
+ * `?url` / `?raw` 是 Vite 交付面（也是本批唯一被点名的构建风险），把五枚 import 关在一个
+ * 文件里，风险面只有一处可读可审。
  *
  * ## 两枚 wasm 各是谁的
  *
@@ -27,11 +31,15 @@
  */
 import grammarWasmUrl from '../../../../kojo-syntax-tree/tree-sitter-kojo2.wasm?url';
 import runtimeWasmUrl from 'web-tree-sitter/web-tree-sitter.wasm?url';
+import foldsQuery from '../../../../kojo-syntax-tree/queries/v2/folds.scm?raw';
 import highlightsQuery from '../../../../kojo-syntax-tree/queries/v2/highlights.scm?raw';
-import type { Kojo2RuntimeAssets } from './kojo2-runtime';
+import indentsQuery from '../../../../kojo-syntax-tree/queries/v2/indents.scm?raw';
+import type { Kojo2RuntimeAssets } from './kojo2-runtime-core';
 
 export const KOJO2_TREE_SITTER_ASSETS: Kojo2RuntimeAssets = {
   runtimeWasmUrl,
   grammarWasm: grammarWasmUrl,
   highlightsQuery,
+  foldsQuery,
+  indentsQuery,
 } as const;

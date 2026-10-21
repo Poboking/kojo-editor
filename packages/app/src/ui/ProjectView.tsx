@@ -145,6 +145,12 @@ interface Props {
   extraRoots?: readonly string[];
   /** 「添加文件夹…」入口（对话框与去重都在宿主 App，这里只发意图） */
   onAddExtraRoot?: () => void;
+  /**
+   * 宿主追加的壳层命令（K2-MIGRATE-MOUNT）：命令表在这里合并，**注册源仍在宿主**
+   * （`App.tsx` 按开关注入 `kojo2-migrate-entry.ts` 的 `commands()`；开关关 ⇒ 空数组
+   * ⇒ 与接线前逐字一致）。这里只做透传，不认识任何一条命令的语义。
+   */
+  extraShellCommands?: readonly ShellCommandSpec[];
 }
 
 /**
@@ -250,6 +256,7 @@ export function ProjectView({
   registerTreeRefresh,
   extraRoots,
   onAddExtraRoot,
+  extraShellCommands,
 }: Props): ReactElement {
   /**
    * 每组各自的状态上报（SPLIT-1）：状态栏显示**焦点组**的编码/EOL/行数——
@@ -694,11 +701,13 @@ export function ProjectView({
           onSetGroupsOrientation('row');
         },
       },
+      // 宿主追加的命令（K2-MIGRATE-MOUNT；开关关时是空数组，表与接线前逐字一致）
+      ...(extraShellCommands ?? []),
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建。
     // groups 也是：三条 MM-9 命令（splitEditorDown / setGroupsColumn / setGroupsRow）
     // 的 run 闭包读它判组数，依赖漏了就是过期读数。
-    [onRequestCloseTab, onSaveAll, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion],
+    [onRequestCloseTab, onSaveAll, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

@@ -2,6 +2,7 @@ import type { FileIO } from '@kojo/plugin-api';
 import {errorText,  ERB_DIALECT_EXTENSIONS, KOJO_SOURCE_EXTENSION, basename } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 import { joinPath } from './file-tree-ops';
+import { kojo2SourceExtensions } from './kojo2-open';
 
 /**
  * 从系统资源管理器拖文件/文件夹进窗口即打开（drag-drop 批）。
@@ -26,11 +27,28 @@ import { joinPath } from './file-tree-ops';
 export const OPENABLE_EXT: readonly string[] = [KOJO_SOURCE_EXTENSION, ...ERB_DIALECT_EXTENSIONS, '.md', '.txt'];
 
 /**
- * 覆盖提示文案（拖拽悬停时浮层那句）。**由 {@link OPENABLE_EXT} 派生**，不另抄一份清单——
- * FT-2 的 `.ERH` 进面就是靠这条：清单加一项，提示自动跟着变，不会有"能拖不能说"的错位。
+ * 拖放**实际**认的扩展名 = {@link OPENABLE_EXT} + 开关打开时应追加的 2.0 后缀。
+ *
+ * 追加那一段取 `ui/kojo2-open.ts` 的 `kojo2SourceExtensions()`（开关只在那一个地方读）；
+ * 开关关着时它返回空数组 ⇒ 本函数与 {@link OPENABLE_EXT} 逐项相同，拖放行为与改动前**逐字
+ * 一致**（`erh-open-surface.test.ts` 还钉着悬停文案的逐字形态）。
+ *
+ * 为什么不在 `OPENABLE_EXT` 上就地追加：那是一枚**静态**导出常量（改前清单也是它），
+ * 在模块求值时读开关等于把"窗口重载后才生效"焊进拖放判据；本函数每次现读，判据与
+ * 语言面/路由面同一时刻生效。
+ */
+export function openableExtensions(): readonly string[] {
+  const extra = kojo2SourceExtensions();
+  return extra.length === 0 ? OPENABLE_EXT : [...OPENABLE_EXT, ...extra];
+}
+
+/**
+ * 覆盖提示文案（拖拽悬停时浮层那句）。**由 {@link openableExtensions} 派生**，不另抄一份
+ * 清单——FT-2 的 `.ERH` 进面就是靠这条：清单加一项，提示自动跟着变，不会有"能拖不能说"
+ * 的错位。开关关着时文案与 `OPENABLE_EXT` 派生的那一句逐字相同。
  */
 export function dropHintText(): string {
-  return `松手就能打开：${OPENABLE_EXT.join(' / ')}`;
+  return `松手就能打开：${openableExtensions().join(' / ')}`;
 }
 
 /** 拒绝理由（面向零基础作者的中文人话，不出现内部词） */
@@ -106,13 +124,17 @@ function extensionOf(name: string): string {
 /**
  * 按扩展名把拖入路径分成"可开 / 被拒"两组，各自保持拖入顺序。
  * 只管扩展名这一层：目录判定字符串层面做不了，由 stat 落地（见 `splitByStat`）。
+ *
+ * 认的清单取 {@link openableExtensions}（不是静态的 `OPENABLE_EXT`）：开关打开时 2.0 的
+ * `.kojo2` 也拖得进来；关着时两份清单逐项相同，行为与改动前一致。
  */
 export function classifyDrop(rawPaths: readonly string[]): ClassifiedDrop {
   const files: string[] = [];
   const rejected: RejectedDrop[] = [];
+  const openable = openableExtensions();
   for (const p of rawPaths) {
     const ext = extensionOf(fileNameOf(p));
-    if (ext !== '' && OPENABLE_EXT.includes(ext)) files.push(p);
+    if (ext !== '' && openable.includes(ext)) files.push(p);
     else rejected.push({ path: p, reason: UNKNOWN_FILE_REASON });
   }
   return { files, rejected };

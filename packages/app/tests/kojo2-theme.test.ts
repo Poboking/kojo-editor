@@ -13,6 +13,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_THEME_RULES, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
+import {
+  KOJO2_LIGHT_THEME_RULES,
+  KOJO2_THEME_RULES as LEAF_THEME_RULES,
+  KOJO2_TOKEN as LEAF_TOKEN,
+  KOJO_SEMANTIC_THEME_RULES,
+  KOJO_SUGAR_THEME_RULES,
+} from '../src/monaco/kojo-theme-rules';
 import { defineMonacoThemes } from '../src/monaco/theme';
 import {
   KOJO2_COLOR_KEYS,
@@ -361,3 +368,139 @@ describe('defineMonacoThemes · Kojo 2.0 主题只在 flag 开时注册', () => 
     expect(fake.defined.size).toBe(6);
   });
 });
+
+/* ==================== K2-CUTOVER-THEME：2.0 规则并入 v1 三套 ==================== */
+
+/**
+ * v1 三套主题的**规则词表契约**（本测试自持一份，不 import `theme.ts` 的实现细节）：
+ * 词法基线 11 档 + 糖 15 档 + 语义 5 档 = 31 条。flag 关时三套 rules 必须**逐字**就是这
+ * 31 条（K2-CUTOVER-THEME 的硬判据）；flag 开时这 31 条仍在原位，2.0 规则只许**追加**。
+ */
+const V1_BASE_TOKENS: readonly string[] = [
+  'comment',
+  'keyword',
+  'keyword.preprocessor',
+  'entity.name.function',
+  'variable',
+  'string',
+  'number',
+  'label',
+  'identifier',
+  'operator',
+  'string.escape',
+];
+
+const V1_RULE_TOKENS: readonly string[] = [
+  ...V1_BASE_TOKENS,
+  ...KOJO_SUGAR_THEME_RULES.map((rule) => rule.token),
+  ...KOJO_SEMANTIC_THEME_RULES.map((rule) => rule.token),
+];
+
+/** 装配一次并拿 `defineTheme` 捕获的账（flag 由调用方先 stub） */
+function captureThemes(): Map<string, Monaco.editor.IStandaloneThemeData> {
+  const fake = fakeMonaco();
+  defineMonacoThemes(fake.monaco);
+  return fake.defined;
+}
+
+function tokensOf(theme: Monaco.editor.IStandaloneThemeData): string[] {
+  return theme.rules.map((rule) => rule.token);
+}
+
+describe('2.0 规则并入 v1 三套：flag 开才追加，flag 关逐字不变', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('flag 开 · kojo-dark：v1 31 条原序在前，2.0 暗色规则逐格追加在后', () => {
+    stubFlag(true);
+    const themes = captureThemes();
+    const dark = themes.get('kojo-dark')!;
+    expect(tokensOf(dark).slice(0, V1_RULE_TOKENS.length)).toEqual([...V1_RULE_TOKENS]);
+    expect(tokensOf(dark).length).toBe(V1_RULE_TOKENS.length + KOJO2_THEME_RULES.length);
+    expect(dark.rules.slice(V1_RULE_TOKENS.length)).toEqual([...KOJO2_THEME_RULES]);
+  });
+
+  it('flag 开 · kojo-light：追加的是亮色规则（不是把暗色调色板照搬）', () => {
+    stubFlag(true);
+    const light = captureThemes().get('kojo-light')!;
+    const merged = light.rules.slice(V1_RULE_TOKENS.length);
+    expect(merged).toEqual([...KOJO2_LIGHT_THEME_RULES]);
+    // 亮暗两套 2.0 规则确实不同（每一档前景都不一样，否则浅底上必掉对比度）
+    const darkByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule.foreground]));
+    for (const rule of merged) {
+      expect(rule.foreground, `${rule.token} 亮色误用暗色`).not.toBe(darkByToken.get(rule.token));
+    }
+  });
+
+  it('flag 开 · kojo-mint-dark：追加暗色 2.0 规则（与 kojo2-mint-dark 同一选择）', () => {
+    stubFlag(true);
+    const mint = captureThemes().get('kojo-mint-dark')!;
+    expect(mint.rules.slice(V1_RULE_TOKENS.length)).toEqual([...KOJO2_THEME_RULES]);
+  });
+
+  it('flag 关 · 三套一个 `kojo2.*` 都没有，规则数 = v1 基线 31', () => {
+    stubFlag(false);
+    const themes = captureThemes();
+    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
+      const tokens = tokensOf(themes.get(id)!);
+      expect(tokens, id).toEqual([...V1_RULE_TOKENS]);
+      expect(tokens.length, id).toBe(V1_RULE_TOKENS.length);
+      expect(
+        tokens.filter((token) => token.startsWith('kojo2.')),
+        `${id} 在 flag 关时混进了 2.0 规则`,
+      ).toEqual([]);
+    }
+  });
+
+  it('flag 关 · 规则前缀与 flag 开逐字相同（合并只追加，不重排、不改 v1 一格）', () => {
+    stubFlag(false);
+    const off = captureThemes();
+    stubFlag(true);
+    const on = captureThemes();
+    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
+      const prefix = on.get(id)!.rules.slice(0, V1_RULE_TOKENS.length);
+      expect(prefix, id).toEqual(off.get(id)!.rules);
+    }
+  });
+
+  it('flag 关 · 部件色与 flag 开逐字相同（合并只动 rules，不碰 colors）', () => {
+    stubFlag(false);
+    const off = captureThemes();
+    stubFlag(true);
+    const on = captureThemes();
+    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
+      expect(on.get(id)!.colors, id).toEqual(off.get(id)!.colors);
+    }
+  });
+
+  it('flag 开 · 合并进 kojo-dark 的 2.0 规则与独立 kojo2-dark 主题逐格同源', () => {
+    stubFlag(true);
+    const dark = captureThemes().get('kojo-dark')!;
+    expect(dark.rules.slice(V1_RULE_TOKENS.length)).toEqual([...kojo2DarkTheme.rules]);
+    expect(kojo2DarkTheme.rules).toEqual([...KOJO2_THEME_RULES]);
+  });
+
+  it('亮色 2.0 规则表在 #f6f8fa 上每档对比度 ≥ 4.5（合并进 kojo-light 不掉档）', () => {
+    expect(KOJO2_LIGHT_THEME_RULES.length).toBe(Object.values(KOJO2_TOKEN).length);
+    for (const rule of KOJO2_LIGHT_THEME_RULES) {
+      expect(rule.foreground, rule.token).toBeDefined();
+      expect(contrast(rule.foreground!, 'f6f8fa'), `${rule.token} 在浅底上太弱`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('KOJO2_LIGHT_THEME_RULES 与 KOJO2_TOKEN 逐字对齐（token 集合 + 顺序 + 字体样式）', () => {
+    expect(KOJO2_LIGHT_THEME_RULES.map((rule) => rule.token)).toEqual([...Object.values(KOJO2_TOKEN)]);
+    const darkByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule]));
+    for (const rule of KOJO2_LIGHT_THEME_RULES) {
+      expect(rule.fontStyle, `${rule.token} 亮/暗字重漂移`).toBe(darkByToken.get(rule.token)?.fontStyle);
+    }
+  });
+
+  it('规则数据单源：kojo2-language 的 re-export 与叶子是同一对象（搬家没复制）', () => {
+    expect(KOJO2_THEME_RULES).toBe(LEAF_THEME_RULES);
+    expect(KOJO2_TOKEN).toBe(LEAF_TOKEN);
+  });
+});
+
+

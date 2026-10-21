@@ -102,13 +102,27 @@ export interface LogicalLine {
 }
 
 /**
+ * 把源文本切成**物理行**（去行尾换行；`\r\n` / `\r` / `\n` 三种 EOL 同一切法）。
+ *
+ * 这是全包**唯一**的切行正则：`splitLogicalLines` 自己也调它，物理行视图与逻辑行视图
+ * 因此逐行对齐（`LogicalLine.line` / `endLine` 是 1 基物理行号）。
+ *
+ * 谁需要它：`@` 原生块 / `[SKIPSTART]` 死区是"引擎不编译、转译器一个字节都不许解释"的
+ * 逐字节透传区，**不能**拿折行后的逻辑行 `text`（那会丢行尾 `\` 与续行缩进——实测
+ * `A = 1 \` + `    B = 2` 变成 `A = 1 B = 2`）。块外仍按逻辑行折行（§3.10）。
+ */
+export function splitPhysicalLines(source: string): string[] {
+  return source.split(/\r\n|\r|\n/);
+}
+
+/**
  * 把源文本切成逻辑行。
  *
  * 折行规则（规范 §3.10）：行尾 `\`（可后随空白）表示"物理折行、逻辑同一行"。
  * 合并时**去掉** `\`，并把下一行按 `trimStart` 续接（缩进不进入内容）。
  */
 export function splitLogicalLines(source: string): LogicalLine[] {
-  const physical = source.split(/\r\n|\r|\n/);
+  const physical = splitPhysicalLines(source);
   const out: LogicalLine[] = [];
   let i = 0;
   while (i < physical.length) {
@@ -1756,7 +1770,7 @@ export function parseTextLine(
   const content = contentOf(line);
   reportFullwidthAssignmentLine(content, line, sink);
   const { text, wait } = stripCont(content, sink, line);
-  const interpolations = scanInterpolations(text, line.line, sink);
+  const interpolations = scanInterpolations(text, line, line.rawIndent.length, sink);
   const speech = detectSpeechOf(text, interpolations);
   return { speech, wait, interpolations, body: text };
 }
@@ -1776,14 +1790,21 @@ function reportFullwidthAssignmentLine(content: string, line: LogicalLine, sink:
   });
 }
 
-/** 剥 `续` 标记（导出供 `心形` 行复用；规则与文本行完全一致） */
+/**
+ * 剥 `续` 标记（导出供 `心形` 行复用；规则与文本行完全一致）。
+ *
+ * `base` = 传入的 `content` 在**逻辑行全文**里的起点（0 基码元）：文本行传行内容
+ * （= 行首缩进宽度，缺省值），心形行传的是 `心形 ` 之后的体（比行内容晚三格）。
+ * 只影响**诊断列**（`cont-inside-quotes`）；`续` 的判定与剥离不受影响。
+ */
 export function stripCont(
   content: string,
   sink: DiagnosticSink,
   line: LogicalLine,
+  base = line.rawIndent.length,
 ): { text: string; wait: boolean } {
   // 检测"引号内出现 `续`"——引号内文本不做替换，故只做诊断
-  detectContInsideQuotes(content, sink, line);
+  detectContInsideQuotes(content, sink, line, base);
 
   for (const mark of CONT_MARKS) {
     // PS-8：无 `g`/`y` 旗标 ⇒ 记忆实例跨行共享安全（test/replace 不带 lastIndex 态）
@@ -1831,7 +1852,7 @@ const CONT_QUOTE_RES: readonly RegExp[] = (['续', 'cont', 'continue'] as const)
   (mark) => new RegExp(`[「｢][^」｣]*?\\s${escapeRe(mark)}\\s*[」｣]`, 'g'),
 );
 
-function detectContInsideQuotes(content: string, sink: DiagnosticSink, line: LogicalLine): void {
+function detectContInsideQuotes(content: string, sink: DiagnosticSink, line: LogicalLine, base: number): void {
   for (const re of CONT_QUOTE_RES) {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -1840,7 +1861,8 @@ function detectContInsideQuotes(content: string, sink: DiagnosticSink, line: Log
         code: 'cont-inside-quotes',
         severity: 'error',
         message: `「续」写在了引号内——它是行尾标记，必须写在引号之外。`,
-        loc: { line: line.line, column: m.index + 1 },
+        // 逻辑全文坐标（含行首缩进 / 心形标记）：折行由 service 的折回入口统一落物理行列
+        loc: { line: line.line, column: base + m.index + 1 },
       });
     }
   }
@@ -1858,9 +1880,35 @@ function escapeRe(s: string): string {
  * - 其余 → `expr` 形态；
  * - `{}` 内出现 `当` / `如果` → `interpolation-block-expression`（硬约束 §3.6）；
  * - `{` 未收尾 → `interpolation-unclosed`；`{}` 内再写 `{}` → `interpolation-nested`。
+ *
+ * **坐标分两层**（别混）：
+ * - 返回的插值 `loc` 是**行内体坐标**（相对传入的 `text`，AST 消费方按 `_raw` 切片）；
+ * - 报出的诊断是**逻辑全文坐标**（`base` + 偏移），由 service 的折回入口落到物理行列。
+ *   `base` = `text` 在逻辑行全文里的起点（缩进 + `心形 ` 前缀等）。
+ *
+ * 两种调用形（同名重载；三元形是**只读外部消费方**的既有契约，行为逐字不变）：
+ * - `(text, line, base, sink)`：转译器内部用（带逻辑行 ⇒ 诊断能折回物理行）；
+ * - `(text, lineNo, sink)`：仍按"行内体坐标 = 1 基列"报诊断（无折行信息，不猜）。
  */
-export function scanInterpolations(text: string, lineNo: number, sink: DiagnosticSink): Interpolation[] {
+export function scanInterpolations(
+  text: string,
+  line: LogicalLine,
+  base: number,
+  sink: DiagnosticSink,
+): Interpolation[];
+export function scanInterpolations(text: string, lineNo: number, sink: DiagnosticSink): Interpolation[];
+export function scanInterpolations(
+  text: string,
+  lineOrNo: LogicalLine | number,
+  baseOrSink: number | DiagnosticSink,
+  maybeSink?: DiagnosticSink,
+): Interpolation[] {
+  const lineNo = typeof lineOrNo === 'number' ? lineOrNo : lineOrNo.line;
+  const base = typeof baseOrSink === 'number' ? baseOrSink : 0;
+  const sink = typeof baseOrSink === 'number' ? maybeSink! : baseOrSink;
   const out: Interpolation[] = [];
+  /** 行内体偏移 → 逻辑全文坐标（诊断用；折回物理行的换算在 service 统一做） */
+  const at = (offset: number): SugarPosition => ({ line: lineNo, column: base + offset + 1 });
   let i = 0;
   while (i < text.length) {
     const ch = text[i]!;
@@ -1884,7 +1932,7 @@ export function scanInterpolations(text: string, lineNo: number, sink: Diagnosti
           code: 'interpolation-nested',
           severity: 'error',
           message: '插值不能嵌套——`{}` 内不能再写 `{}`；需要按分支显示不同内容时请用行内条件 `{条件 ? A : B}`。',
-          loc: { line: lineNo, column: j + 1 },
+          loc: at(j),
         });
         break;
       }
@@ -1896,13 +1944,13 @@ export function scanInterpolations(text: string, lineNo: number, sink: Diagnosti
         code: 'interpolation-unclosed',
         severity: 'error',
         message: '插值 `{` 没有对应的 `}`。',
-        loc: { line: lineNo, column: startCol },
+        loc: at(i),
       });
       i = j >= text.length ? text.length : j + 1;
       continue;
     }
     const endCol = j + 2; // `}` 之后一列（1 基，半开区间）
-    out.push(buildInterpolation(inner, lineNo, startCol, endCol, sink));
+    out.push(buildInterpolation(inner, lineNo, startCol, endCol, at(i), sink));
     i = j + 1;
   }
   return out;
@@ -1913,6 +1961,7 @@ function buildInterpolation(
   lineNo: number,
   startCol: number,
   endCol: number,
+  reportLoc: SugarPosition,
   sink: DiagnosticSink,
 ): Interpolation {
   const loc: SugarSourceSpan = {
@@ -1929,7 +1978,7 @@ function buildInterpolation(
       code: 'interpolation-block-expression',
       severity: 'error',
       message: '插值 `{}` 内不能写「当」/「如果」——ERB 行内条件不支持嵌套；请改用行内条件 `{条件 ? A : B}`，或把条件提为整行。',
-      loc: { line: lineNo, column: startCol },
+      loc: reportLoc,
     });
     return { kind: 'interpolation', form: 'expr', text: trimmed, loc };
   }

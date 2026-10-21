@@ -27,6 +27,10 @@ export * from './lower/index.js';
 export * from './lower/expand/options.js';
 /* `@巡` 的集合计划（K2-FOREACH；adapter 契约 `foreachCollections` 的唯一真源） */
 export * from './lower/expand/foreach.js';
+/* `# 表` / `# 池` 的等值分派计划（K2-DISPATCH-WIRING）：契约字段
+   `program.tableDispatch` / `presentation.poolDispatch` 的请求形状与判定函数的唯一真源 */
+export * from './lower/expand/table-plan.js';
+export * from './lower/expand/pool-plan.js';
 export * from './compile.js';
 /* 增量编译：编辑器击键路径（单元缓存 + 全量自检；`compile` 仍是唯一语义真相） */
 export * from './incremental.js';
@@ -35,6 +39,12 @@ export * from './adapter.js';
 export * from './fixture-adapter.js';
 /* 项目级：冲突/Layer/接管 + 存储期分配 */
 export * from './project/index.js';
+/* 表达式 AST（K2-EXPR-AST）：ExprText 的结构化解析/打印/对拍，供语义服务与类型检查 */
+export * from './expr/index.js';
+/* 语义检查（K2-SEMA-TYPES）：类型格 + 声明/赋值/数组/函数/能力检查（只读 adapter 契约） */
+export * from './sema/index.js';
+/* 递归/返回静态分析（K2-PROGRAM-RECURSION）：函数图、环、返回种类、着色泄漏事实 */
+export * from './lower/expand/recursion.js';
 /* 迁移：v1 源码 → 2.0 源码（M7） */
 export * from './migrate/index.js';
 /* 迁移：语义升级层（`当`/`分支：`/`初回` 三条可证改写，M7 加厚） */

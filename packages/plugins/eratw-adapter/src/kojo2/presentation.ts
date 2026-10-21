@@ -10,6 +10,7 @@
  */
 import type { AdapterPresentation } from '../../../../kojo-core/src/adapter.js';
 import { ERATW_LIBRARY_FUNCTIONS } from '../library-table.js';
+import { ERATW_PROFILE } from './profile.js';
 
 /** 从既有库表取引擎函数名；缺条目 = adapter 数据坏了，装载期直接抛（不静默） */
 function engineOf(libraryName: string): string {
@@ -71,4 +72,38 @@ export const ERATW_PRESENTATION: AdapterPresentation = Object.freeze({
   color: COLOR,
   face: FACE,
   options: OPTIONS,
+});
+
+/* ============================== `# 池` 等值分派落点数据 ============================== */
+
+/**
+ * `# 池` 可证等值时的块形状（引擎块关键字 + 排版事实）：**只住数据，emitter 不写死**。
+ *
+ * `style` 是 adapter 缺省落点（`ERATW_PROFILE.poolStyle`，eraTW = `if`）：`selectcase`
+ * 不是 profile 开关，而是编译器在**等值可证**时的优化（§7.1 / §10.2），所以 emitter
+ * 只按 core 的计划落块，不按 `style` 自行决定。
+ */
+export interface PoolDispatchPresentation {
+  /** adapter 缺省落点（core 决定是否优化；`selectcase` 只是等值优化） */
+  readonly style: 'if' | 'selectcase';
+  /** 块头（主语槽跟在后面） */
+  readonly selectCase: string;
+  /** 一档（整数跟在后面） */
+  readonly case: string;
+  /** 兜底档（不带值；池的 `? 否` 必填，恒生成） */
+  readonly caseElse: string;
+  /** 块尾 */
+  readonly endSelect: string;
+  /** 一级缩进（档头一层、档内正文再一层） */
+  readonly indent: string;
+}
+
+/** eraTW 的池等值分派块数据（module 装载时冻结一次） */
+export const ERATW_POOL_DISPATCH: PoolDispatchPresentation = Object.freeze({
+  style: ERATW_PROFILE.poolStyle,
+  selectCase: 'SELECTCASE',
+  case: 'CASE',
+  caseElse: 'CASE ELSE',
+  endSelect: 'ENDSELECT',
+  indent: '    ',
 });

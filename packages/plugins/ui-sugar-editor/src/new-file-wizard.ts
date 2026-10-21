@@ -34,6 +34,8 @@ import type {
   KojoFaceTable,
   ProjectService,
   SlotRegistry,
+  UIPanelComponent,
+  UIPanelProps,
   WorkspaceArtifact,
   WorkspaceProject,
 } from '@kojo/plugin-api';
@@ -73,11 +75,27 @@ function familySegment(family: string): string {
   return family.trim().replace(/[\\/:*?"<>|]/g, '');
 }
 
-/** 目标文件名预览：`{declare模板代入角色号}[_{家族}].kojo` */
-export function previewFileName(declareTemplate: string, charNo: number, family: string): string {
+/** 1.x 表层源的扩展名（本插件产出的默认形态；2.0 的扩展名由**宿主下传**，这里不写） */
+const KOJO_V1_EXTENSION = '.kojo';
+
+/** 新建文件的语言档：1.x 表层（缺省）/ 2.0 */
+export type KojoNewFileFormat = 'kojo' | 'kojo2';
+
+/**
+ * 目标文件名预览：`{declare模板代入角色号}[_{家族}]<扩展名>`。
+ *
+ * 扩展名由调用方给（缺省 1.x `.kojo`）：2.0 的扩展名住在宿主（`monaco/kojo2-constants.ts`
+ * 全仓唯一处），经 `uiPrefs.kojo2.extension` 下传——插件侧因此**零** `.kojo2` 字面量。
+ */
+export function previewFileName(
+  declareTemplate: string,
+  charNo: number,
+  family: string,
+  extension: string = KOJO_V1_EXTENSION,
+): string {
   const base = declareTemplate.replaceAll('{n}', String(charNo));
   const seg = familySegment(family);
-  return seg ? `${base}_${seg}.kojo` : `${base}.kojo`;
+  return seg ? `${base}_${seg}${extension}` : `${base}${extension}`;
 }
 
 /** 模板内容（v1.2 冻结规范形态：全角冒号、4 空格缩进） */
@@ -103,9 +121,45 @@ export function buildTemplate(opts: {
   return lines.join('\n');
 }
 
-/** 向导 overlay 组件（createElement 风格，与本插件既有面板一致） */
-export function createNewKojoWizard(deps: WizardDeps): () => unknown {
-  return function NewKojoWizard(): unknown {
+/**
+ * 2.0 模板内容（K2-EDITOR-OPEN-PATHS）：**与扩展名同一种语言**。
+ *
+ * 2.0 的行法（规范 §3 / §4）与 1.x 三条硬差别，模板逐条照做：
+ * - 注释是整行 `//`（`;` 只属于 `@原生` 里的 ERB），文件头那行元信息因此改写；
+ * - 没有 `角色:` / `口上:` 文件头声明（规范 §3.2：这两条搬到 adapter / 工程配置），
+ *   角色身份由文件名（`M_KOJO_K{no}_…`）与工程配置承载；元信息只留在注释里给作者看；
+ * - 挂点写成 `# 机 <事件> [编号]`（分野键即 adapter 的事件名；编号只在作者填了才写），
+ *   正文里的台词必须带说话人（2.0 顶层不许裸引号，规范 §4.9/§4.10）。
+ *
+ * 没有选分野 ⇒ 只留文件头注释（与 1.x 无分野时同形：不产出一个挂不上事件的正文）。
+ */
+export function buildKojo2Template(opts: {
+  charNo: number;
+  charName: string;
+  family: string;
+  face: string | null;
+  faceIndex: string;
+}): string {
+  const lines: string[] = [];
+  const seg = familySegment(opts.family);
+  lines.push(`// ${opts.charName}（${opts.charNo}）${seg ? ` · ${seg}` : ''}`);
+  if (!opts.face) return `${lines.join('\n')}\n`;
+  const idx = opts.faceIndex.trim();
+  lines.push(`# 机 ${opts.face}${idx ? ` ${idx}` : ''}`);
+  lines.push('');
+  lines.push(`${opts.charName}：「……」`);
+  lines.push('');
+  return lines.join('\n');
+}
+
+/**
+ * 向导 overlay 组件（createElement 风格，与本插件既有面板一致）。
+ *
+ * 形参是宿主下传的 `UIPanelProps`：本向导只读一格——`uiPrefs.kojo2`（2.0 面投影，
+ * 见 `@kojo/plugin-api` 的 `UiPrefs`）。缺省 = 没有 2.0 ⇒ 界面与改动前逐字相同。
+ */
+export function createNewKojoWizard(deps: WizardDeps): UIPanelComponent {
+  return function NewKojoWizard(props: UIPanelProps): unknown {
     const gameProject = deps.project.current();
     const faceTable = gameProject ? faceTableOf(deps.slots, gameProject) : undefined;
     const declareTemplate = faceTable?.registration?.declare;
@@ -138,6 +192,18 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    /* ---------- 语言档（K2-EDITOR-OPEN-PATHS）：只在宿主下传 2.0 面时出现在界面上 ---------- */
+
+    /**
+     * 宿主下传的 2.0 面投影。**缺省 = 没有 2.0**（旧宿主 / 无渲染环境 / 开关关着）——
+     * 这时下面那个格式选择器一个选项都不多，界面与改动前逐字相同。
+     */
+    const kojo2Surface = props.uiPrefs?.kojo2;
+    const [format, setFormat] = useState<KojoNewFileFormat>('kojo');
+    /** 本次要产出的扩展名：2.0 档取宿主给的那一枚（插件侧零字面量），其余恒 1.x */
+    const extension =
+      format === 'kojo2' && kojo2Surface ? kojo2Surface.extension : KOJO_V1_EXTENSION;
+
     const ws = deps.flow.state();
 
     /* ---------- 无项目 / 适配器知识缺省：显式降级（不静默） ---------- */
@@ -160,7 +226,8 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
     }
 
     const chara = charas.find((c) => c.no === charNo) ?? null;
-    const fileName = chara ? previewFileName(declareTemplate, chara.no, family) : '';
+    // 扩展名跟着语言档走：`fileName` 与 `draft().text` 必须同一种语言（2.0 档产 2.0 行法）
+    const fileName = chara ? previewFileName(declareTemplate, chara.no, family, extension) : '';
     // 选中分野的模板含 {i} 时才消费编号（与转译器同口径）
     const needsIndex = face !== null && (faceTable.faces[face]?.template.includes('{i}') ?? false);
     const indexOk = face === null || !needsIndex || /^\d+$/.test(faceIndex.trim());
@@ -175,18 +242,13 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
     const absDir = project ? deps.flow.landingDir(project.id, artifact) : null;
     const targetPath = absDir !== null && fileName.length > 0 ? join(absDir, fileName) : null;
 
-    /** 作者正在填的这份内容（三条路径共用的落盘输入） */
+    /** 作者正在填的这份内容（三条路径共用的落盘输入；模板语言跟着扩展名走） */
     const draft = (): KojoFileDraft | null => {
       if (!chara) return null;
+      const form = { charNo: chara.no, charName: chara.name, family, face, faceIndex };
       return {
         fileName,
-        text: buildTemplate({
-          charNo: chara.no,
-          charName: chara.name,
-          family,
-          face,
-          faceIndex,
-        }),
+        text: format === 'kojo2' ? buildKojo2Template(form) : buildTemplate(form),
       };
     };
 
@@ -233,6 +295,21 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
     /* ---------- 表单体（三种落点分支共用） ---------- */
 
     const fields = [
+      // 语言档（K2-EDITOR-OPEN-PATHS）：**只在宿主下传 2.0 面时才有这一行**。
+      // 开关关着 / 旧宿主 ⇒ 这一格是 null，表单与改动前逐字相同（一个选项都不多）。
+      kojo2Surface
+        ? h('label', { key: 'format', className: 'wizard-field' },
+            h('span', { className: 'wizard-label' }, '文件格式'),
+            h('select', {
+              value: format,
+              disabled: busy,
+              onChange: (e: { target: { value: string } }) =>
+                setFormat(e.target.value === 'kojo2' ? 'kojo2' : 'kojo'),
+            },
+              h('option', { value: 'kojo' }, `1.x 口上文件（${KOJO_V1_EXTENSION}）`),
+              h('option', { value: 'kojo2' }, `2.0 口上文件（${kojo2Surface.extension}）`)))
+        : null,
+
       // 角色（只为文件名里的角色号；落点已与游戏目录无关）
       h('label', { key: 'chara', className: 'wizard-field' },
         h('span', { className: 'wizard-label' }, '角色'),
@@ -350,7 +427,9 @@ export function createNewKojoWizard(deps: WizardDeps): () => unknown {
             h('code', null, targetPath ?? '—')),
           h('div', { className: 'dim' },
             absDir !== null
-              ? '工作区恒可写；要进游戏目录请用「部署」（自动把 .kojo 转成 .ERB）。'
+              ? format === 'kojo2'
+                ? '工作区恒可写；2.0 文件目前是预演面（打得开、脸是对的；部署链路由 K2-CUTOVER 接）。'
+                : '工作区恒可写；要进游戏目录请用「部署」（自动把 .kojo 转成 .ERB）。'
               : '这个项目还没有作者包——换一个，或先用「＋ 新建」建一个作品包。')));
       actions = h('div', { className: 'wizard-actions' },
         h('button', { className: 'ghost small', onClick: deps.close, disabled: busy }, '取消'),

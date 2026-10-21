@@ -59,6 +59,10 @@ export function mergeOrigins(outer: readonly SourceMapOrigin[], inner: readonly 
  *
  * 子状态复制父状态（颜色/循环深度等），子体里的状态变化不泄漏回父体——展开体是
  * 自足的一段（池/模板内部状态不影响调用点后面的降糖）。
+ *
+ * 列级（additive）：搬进父缓冲的每条展开行**整行一段**列级分段——`source` = 子行的精确
+ * 源 span（模板/池定义处那一行），`origins` = 帧锚点 + 子行锚点（调用处在最前）。这样
+ * 宿主按列点进展开行也能拿到"调用处 + 定义处"两个锚点，而不用先猜这一行属于哪个块。
  */
 export function lowerWithFrame(
   nodes: readonly KojoNarrativeNode[],
@@ -80,6 +84,12 @@ export function lowerWithFrame(
       continue;
     }
     const origins = mergeOrigins(frame.origins, mapped.origins);
-    state.buffer.push(line, { kind, source: mapped.source, origins });
+    state.buffer.push(line, {
+      kind,
+      source: mapped.source,
+      origins,
+      // 整行一段：起点 1、终点由 buffer 按行宽补成 `行宽 + 1`（排他）
+      segments: [{ startColumn: 1, source: mapped.source, kind, origins }],
+    });
   }
 }

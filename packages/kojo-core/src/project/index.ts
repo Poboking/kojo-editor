@@ -7,3 +7,5 @@
  */
 export * from './analysis.js';
 export * from './storage.js';
+/* `@织` 层冲突 / 被压监听（K2-WEAVE-LAYER）：纯数据事实，码取既有 weave 码表 */
+export * from './weave-layers.js';

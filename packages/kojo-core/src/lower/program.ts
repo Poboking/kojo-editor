@@ -17,13 +17,14 @@ import type {
   KojoSpan,
   KojoWhileLoop,
 } from '../ast.js';
-import type { KojoProgramFeatures } from './backend.js';
 import { lowerConditionChain } from './condition.js';
+import type { ProgramFeatureKey } from '../adapter.js';
+import { checkFeature } from './feature-gate.js';
 import { lowerNativeBlock } from './native.js';
 import { lowerFaceLine } from './presentation.js';
 import { lowerBlankLine, lowerTextLine } from './text.js';
 import type { LowerDispatchBody, LowerNarrativeBody, LowerState } from './state.js';
-import { emit, report } from './state.js';
+import { emit, report, reportFeature } from './state.js';
 
 const DECIMAL_INT_RE = /^-?\d+$/;
 
@@ -35,22 +36,16 @@ function closeColorOnTransfer(state: LowerState, span: KojoSpan): void {
   }
 }
 
-function featureFlag(
-  state: LowerState,
-  key: keyof KojoProgramFeatures,
-  span: KojoSpan,
-  surface: string,
-  code: 'core/control/unsupported' | 'core/goto/unsupported',
-): boolean {
-  const features = state.backend.profile.programFeatures;
-  if (features?.[key] === true) return true;
-  report(
-    state,
-    code,
-    `当前 adapter（${state.backend.id}）没有开启 program 能力 \`${key}\`：${surface} 不能生成产物。请开启 profile.programFeatures.${key}，或用 \`@原生\` 写。`,
-    span,
-  );
-  return false;
+/**
+ * 能力闸（K2-FEATURE-GATE-UNIFY）：判定 / 码 / 文案都来自统一入口 `feature-gate.ts`。
+ *
+ * 主链不再自己读 `profile.programFeatures`——本函数与 `expand/walk.ts` 的
+ * `programFeatureEnabled` 读的是**同一份** `state.featureGate`，产物面与诊断面不可能分叉。
+ */
+function featureFlag(state: LowerState, key: ProgramFeatureKey, span: KojoSpan): boolean {
+  const check = checkFeature(state.featureGate, key, span);
+  reportFeature(state, check);
+  return check.enabled;
 }
 
 /** `@算` 块：视觉分组（无运行时表示时 adapter 返回 null），体是调度节点 */
@@ -101,7 +96,7 @@ export function lowerDispatchNodes(nodes: readonly KojoDispatchNode[], state: Lo
         emit(state, state.backend.program.label(node.name), node.span);
         break;
       case 'jump':
-        if (!featureFlag(state, 'goto', node.span, '@跳', 'core/goto/unsupported')) break;
+        if (!featureFlag(state, 'goto', node.span)) break;
         closeColorOnTransfer(state, node.span);
         emit(state, state.backend.program.jump(node.target), node.span);
         break;
@@ -148,7 +143,7 @@ function isSingleLineDispatchNode(node: KojoDispatchNode): boolean {
 }
 
 function lowerWhileLoop(node: KojoWhileLoop, state: LowerState, lowerNarrativeBody: LowerNarrativeBody): void {
-  if (!featureFlag(state, 'while', node.span, '@循', 'core/control/unsupported')) return;
+  if (!featureFlag(state, 'while', node.span)) return;
   emit(state, state.backend.program.whileHeader(node.test), node.span);
   state.loopDepth++;
   lowerDispatchNodes(node.body, state, lowerNarrativeBody);
@@ -161,7 +156,7 @@ function repeatCountOf(count: KojoExprText): number | null {
 }
 
 function lowerRepeatLoop(node: KojoRepeatLoop, state: LowerState, lowerNarrativeBody: LowerNarrativeBody): void {
-  if (!featureFlag(state, 'repeat', node.span, '@复', 'core/control/unsupported')) return;
+  if (!featureFlag(state, 'repeat', node.span)) return;
   const count = repeatCountOf(node.count);
   if (count !== null && !(Number.isSafeInteger(count) && count > 0)) {
     report(state, 'core/control/bad-repeat', `\`@复\` 的次数必须是正整数字面量或整数常量（这里静态可证为 ${count}）。`, node.span);
@@ -175,7 +170,7 @@ function lowerRepeatLoop(node: KojoRepeatLoop, state: LowerState, lowerNarrative
 }
 
 function lowerForEachLoop(node: KojoForEachLoop, state: LowerState, lowerNarrativeBody: LowerNarrativeBody): void {
-  if (!featureFlag(state, 'foreach', node.span, '@巡', 'core/control/unsupported')) return;
+  if (!featureFlag(state, 'foreach', node.span)) return;
   emit(state, state.backend.program.forEachHeader(node.collection), node.span);
   state.loopDepth++;
   lowerNarrativeBody(node.body);

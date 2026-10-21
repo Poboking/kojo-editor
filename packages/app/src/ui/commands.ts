@@ -8,6 +8,8 @@
 
 import type { EditorCommandContext, EditorCommandContribution } from '@kojo/plugin-api';
 import { ERB_DIALECT_EXTENSIONS, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+// 2.0 追加项：清单与开关判据只住在 `ui/kojo2-open.ts`（本文件不读开关、不抄字面量）
+import { kojo2SourceExtensions } from './kojo2-open';
 
 /** 归一化后的按键描述 */
 export interface KeyChord {
@@ -185,13 +187,27 @@ export const QUICK_OPEN_SOURCE_EXTENSIONS: readonly string[] = [
   KOJO_SOURCE_EXTENSION,
 ];
 
+/**
+ * 快速打开**实际**认的后缀 = {@link QUICK_OPEN_SOURCE_EXTENSIONS} + 2.0 追加项。
+ *
+ * 追加项取 `ui/kojo2-open.ts::kojo2SourceExtensions()`（开关只在那一个地方读）；关着时
+ * 返回空数组 ⇒ 与基线清单逐项相同（`Ctrl+P` 与整项目扫描的后缀判据与改动前一致）。
+ */
+export function quickOpenSourceExtensions(): readonly string[] {
+  const extra = kojo2SourceExtensions();
+  return extra.length === 0 ? QUICK_OPEN_SOURCE_EXTENSIONS : [...QUICK_OPEN_SOURCE_EXTENSIONS, ...extra];
+}
+
 /** 路径是否是快速打开认得的源文件（大小写不敏感；无后缀 / 目录段结尾 ⇒ 否） */
 export function isQuickOpenSourcePath(path: string): boolean {
   if (typeof path !== 'string') return false;
   const dot = path.lastIndexOf('.');
   const sep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   if (dot <= sep) return false;
-  return QUICK_OPEN_SOURCE_EXTENSIONS.includes(path.slice(dot).toLowerCase());
+  const ext = path.slice(dot).toLowerCase();
+  // 先判基线清单：绝大多数条目命中即返回，开关读取不会落到每一个文件上
+  if (QUICK_OPEN_SOURCE_EXTENSIONS.includes(ext)) return true;
+  return kojo2SourceExtensions().includes(ext);
 }
 
 /** `listSourceFiles` 需要的最小列举面（注入 seam：真实是 `kernel.io.walkDir`，单测给假的） */

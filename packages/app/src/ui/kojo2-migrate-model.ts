@@ -3,14 +3,25 @@
  *
  * 职责只有三件事，全部与 React 无关、可在 node 环境直接单测：
  *
- * 1. **dry-run**：`v1 source + filePath → migrateKojoSource`，产出逐行 diff、
- *    unsupported 台账（带原行文本）、诊断与逐文件迁移计划。dry-run 的 IO 端口
- *    类型只有 `readText`——"不写盘"不是靠调用方自觉，而是**类型上做不到**。
+ * 1. **dry-run**：`v1 source + filePath → migrateKojoSourceSemantic`，产出逐行 diff、
+ *    语义升级台账（`rewrites`，每条自带一段 diff）、unsupported 台账（带原行文本）、
+ *    诊断与逐文件迁移计划。dry-run 的 IO 端口类型只有 `readText`——"不写盘"不是靠
+ *    调用方自觉，而是**类型上做不到**。
  * 2. **计划**：每个文件写明编码 / EOL 保留口径、写前备份、回滚口令
  *    （`restoreBackup(path, versionId)` 的原文提示），以及应用后回填的版本号。
  * 3. **应用**：先复核盘上内容仍是 dry-run 看到的那一份（防外部改动），再 `backup`
  *    → `writeText({ encoding:'preserve', eol:'preserve' })` → **readback 断言**；
  *    任一环失败（含回读不一致）都回滚到备份或显式重写原文。迁移失败不破坏源。
+ *
+ * 迁移引擎取 **语义层**（`migrateKojoSourceSemantic`，core 公共入口）：机械层对
+ * `当 / 分支： / 初回` 三类构造一律记 unsupported，语义层把其中**可证**的那些先改写成 2.0
+ * 文本、再交给机械层收口，并额外给出 `rewrites` 台账。落盘判据仍是机械层的 `ok`
+ * （语义层是 `MigrateResult` 的超集，返回值结构兼容）——本层不放松 fail-closed。
+ *
+ * 目标口径（设计稿 §16.7 U6.7 裁决，写死在这里）：
+ * **原地改写** —— `targetPath = filePath`，**不自动改扩展名**（不产出 `.kojo2`）、
+ * **不删源文件**、不做"写完再删旧件"的两步。迁移后文件仍是 `.kojo`，内容为 2.0；
+ * 切流阶段由 `kojo2-cutover` 的控制器决定用哪个解析器读它（本层不掺和路由）。
  *
  * 纪律：
  * - 读写只经 `@kojo/plugin-api` 的 `FileIO` 子集（真身 = `kernel.io`），测试注入假 io；
@@ -18,9 +29,11 @@
  * - 整批默认 fail-closed：只要有一个文件阻断，`applyMigratePlan` 一个字节都不写。
  */
 import {
-  migrateKojoSource,
+  migrateKojoSourceSemantic,
   summarizeMigration,
-  type MigrateResult,
+  type SemanticMigrateResult,
+  type SemanticRewrite,
+  type SemanticRewriteKind,
 } from '@kojo/kojo-core';
 import type { EolStyle, FileEncoding, FileIO, TextFile } from '@kojo/plugin-api';
 
@@ -170,6 +183,94 @@ function diffPrefix(kind: MigrateDiffKind): string {
   return ' ';
 }
 
+/* ============================== 语义升级台账 ============================== */
+
+/**
+ * 三种语义升级落点的人话（向导逐条上屏的标题；来源 = core `SemanticRewriteKind`）。
+ *
+ * 只在这里写一次：模型层不认识"表 / 池 / 原生围栏"的语义，它只是把 core 给的
+ * `kind` 翻成人能读的一行标题——判据仍住在 core。
+ */
+const REWRITE_TITLES: Readonly<Record<SemanticRewriteKind, string>> = {
+  'switch-table': '`当 / 是 / 否则` → `# 表` + 引用点',
+  'branch-pool': '`分支：` → `# 池` + `! 池名`',
+  'ask-native': '`初回 / 询问 / 确认` → `@原生` 围栏',
+};
+
+/**
+ * 一条语义升级的上屏形态：**自带一段逐条 diff**（不是整份文件 diff 的碎片）。
+ *
+ * 为什么单独一段：整份 diff 里，`当` 块被换成 `# 表` 声明**提升到文件顶层** + 原位置换
+ * 引用行，两处改动在整份 diff 里隔得很远；作者要点对"这条改写到底把哪几句搬走了"，
+ * 只有把 `原块行 → 引用行` 并排放在一起才看得懂。
+ */
+export interface MigrateRewriteView {
+  readonly kind: SemanticRewriteKind;
+  /** 被改写的 v1 构造块头行（1 基） */
+  readonly line: number;
+  /** 该构造最后一行（含缩进体，1 基） */
+  readonly endLine: number;
+  /** 生成的表 / 池声明名；`ask-native` 为 null */
+  readonly declName: string | null;
+  /** 原位置替换出的引用行（`> {表}` / `! 池` / `@原生`） */
+  readonly reference: string;
+  /** 人话落点标题（见 `REWRITE_TITLES`） */
+  readonly title: string;
+  /** 被搬走的 v1 原块逐行原文（含块头与缩进体） */
+  readonly removedLines: readonly string[];
+  /** 该条改写的 diff 片段（向导逐条上屏 / 复制进迁移日志） */
+  readonly diffText: string;
+}
+
+/**
+ * core 的 `rewrites` → 上屏形态（纯函数；v1 原块文本从 `source` 按行号切出来）。
+ *
+ * 行号越界不猜：`line` 已经由 core 回映到 v1 源行，这里只做 `[line, endLine]` 的裁剪，
+ * 切不到就退化成空块（diff 里只剩引用行），不编造原文。
+ */
+export function buildRewriteViews(
+  filePath: string,
+  source: string,
+  rewrites: readonly SemanticRewrite[],
+): MigrateRewriteView[] {
+  const lines = splitLines(source);
+  return rewrites.map((rewrite) => {
+    const from = Math.max(1, rewrite.line);
+    const to = Math.max(from, rewrite.endLine);
+    const removedLines = lines.slice(from - 1, to);
+    const view: Omit<MigrateRewriteView, 'diffText'> = {
+      kind: rewrite.kind,
+      line: rewrite.line,
+      endLine: rewrite.endLine,
+      declName: rewrite.declName,
+      reference: rewrite.reference,
+      title: REWRITE_TITLES[rewrite.kind],
+      removedLines,
+    };
+    return { ...view, diffText: formatRewriteDiff(filePath, view) };
+  });
+}
+
+/** 单条改写的 diff 文本：原块在左、落点在右（`ask-native` 的原块是被搬进围栏，故按 context 展示） */
+export function formatRewriteDiff(
+  filePath: string,
+  rewrite: Omit<MigrateRewriteView, 'diffText'>,
+): string {
+  const kindTag = rewrite.declName === null ? rewrite.title : `${rewrite.title} · ${rewrite.declName}`;
+  const head = [
+    `--- a/${filePath}（v1 第 ${rewrite.line}–${rewrite.endLine} 行）`,
+    `+++ b/${filePath}（2.0）`,
+    `@@ ${kindTag} @@`,
+  ];
+  // `@原生` 围栏：原块逐行搬进围栏、一个字节都不解释 ⇒ 原块是 context，新增的只有围栏头
+  const blockPrefix = rewrite.kind === 'ask-native' ? ' ' : '-';
+  return [
+    ...head,
+    ...rewrite.removedLines.map((line) => `${blockPrefix}${line}`),
+    `+${rewrite.reference}`,
+  ].join('\n');
+}
+
 /* ============================== dry-run 结果 ============================== */
 
 /** 不可迁移台账的上屏形态（多带一列原行文本） */
@@ -222,12 +323,20 @@ export interface MigrateFileSummary {
   readonly addedLines: number;
   readonly removedLines: number;
   readonly newLineCount: number;
+  /** 语义升级条数（`当` / `分支` / `初回` 里被可证改写的块） */
+  readonly rewriteCount: number;
 }
 
 /** 单文件 dry-run + 迁移计划 */
 export interface MigrateFilePlan {
   readonly filePath: string;
-  /** 当前口径 = 原地改写；留字段供后续 `.kojo2` 目标模式接线 */
+  /**
+   * 目标路径 —— **原地改写**：恒等于 `filePath`（§16.7 U6.7 裁决）。
+   *
+   * 本层不改扩展名（不产出 `.kojo2`）、不删源：迁移后文件仍是 `.kojo`，内容为 2.0。
+   * 字段保留是为了让"将来要落到别的路径"的模式（若设计稿改口径）有接线点，而不是
+   * 现在就偷偷实现两套写盘语义。
+   */
   readonly targetPath: string;
   readonly ok: boolean;
   /** 读盘 / 迁移引擎异常（非 unsupported）；有值即 ok=false */
@@ -242,6 +351,8 @@ export interface MigrateFilePlan {
   readonly backup: MigrateBackupPlan;
   readonly diff: readonly MigrateDiffLine[];
   readonly diffText: string;
+  /** 语义升级台账（core `rewrites` 的上屏形态；每条自带一段 diff） */
+  readonly rewrites: readonly MigrateRewriteView[];
   readonly unsupported: readonly MigrateUnsupportedView[];
   readonly diagnostics: readonly MigrateDiagnosticView[];
   readonly summary: MigrateFileSummary;
@@ -258,6 +369,8 @@ export interface MigratePlanSummary {
   readonly errorCount: number;
   readonly addedLines: number;
   readonly removedLines: number;
+  /** 整批语义升级条数 */
+  readonly rewriteCount: number;
 }
 
 /** 整批 dry-run 结果（`ok=false` ⇒ 默认拒绝整批写盘） */
@@ -293,9 +406,12 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
   const write = writePlanFor(targetPath);
   const emptyDiffText = formatMigrateDiff(filePath, []);
 
-  let result: MigrateResult;
+  let result: SemanticMigrateResult;
   try {
-    result = migrateKojoSource(source, input.speaker === undefined ? {} : { speaker: input.speaker });
+    result = migrateKojoSourceSemantic(
+      source,
+      input.speaker === undefined ? {} : { speaker: input.speaker },
+    );
   } catch (error) {
     return failedPlan(filePath, targetPath, encoding, eol, errorText(error), emptyDiffText);
   }
@@ -303,6 +419,7 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
   const diff = buildMigrateDiff(source, result.code, result.sourceMap);
   const diffText = formatMigrateDiff(filePath, diff);
   const sourceLines = splitLines(source);
+  const rewrites = buildRewriteViews(filePath, source, result.rewrites);
   const unsupported: MigrateUnsupportedView[] = result.unsupported.map((item) => ({
     line: item.line,
     construct: item.construct,
@@ -328,6 +445,7 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
     backup: backupPlanFor(filePath, null),
     diff,
     diffText,
+    rewrites,
     unsupported,
     diagnostics: result.diagnostics.map((diagnostic) => diagnosticView(filePath, diagnostic)),
     summary: {
@@ -339,6 +457,7 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
       addedLines: addCount,
       removedLines: removeCount,
       newLineCount: splitLines(result.code).length,
+      rewriteCount: rewrites.length,
     },
   };
 }
@@ -752,7 +871,7 @@ function backupPlanFor(filePath: string, versionId: string | null): MigrateBacku
   return {
     required: true,
     versionId,
-    applyHint: `应用时先备份 ${filePath}，再原地写入 2.0 文本（编码 / 换行保持原样）`,
+    applyHint: `应用时先备份 ${filePath}，再原地写入 2.0 文本（编码 / 换行保持原样；不改扩展名、不删源）`,
     rollbackHint:
       versionId === null
         ? `回滚：restoreBackup("${filePath}", "<备份版本号>")`
@@ -762,7 +881,7 @@ function backupPlanFor(filePath: string, versionId: string | null): MigrateBacku
 
 function diagnosticView(
   filePath: string,
-  diagnostic: MigrateResult['diagnostics'][number],
+  diagnostic: SemanticMigrateResult['diagnostics'][number],
 ): MigrateDiagnosticView {
   return {
     severity: diagnostic.severity,
@@ -791,6 +910,7 @@ function summarizePlan(
       errorCount: files.reduce((sum, file) => sum + file.summary.errorCount, 0),
       addedLines: files.reduce((sum, file) => sum + file.summary.addedLines, 0),
       removedLines: files.reduce((sum, file) => sum + file.summary.removedLines, 0),
+      rewriteCount: files.reduce((sum, file) => sum + file.summary.rewriteCount, 0),
     },
   };
 }
@@ -817,6 +937,7 @@ function failedPlan(
     backup: backupPlanFor(filePath, null),
     diff: [],
     diffText,
+    rewrites: [],
     unsupported: [],
     diagnostics: [],
     summary: {
@@ -828,6 +949,7 @@ function failedPlan(
       addedLines: 0,
       removedLines: 0,
       newLineCount: 0,
+      rewriteCount: 0,
     },
   };
 }

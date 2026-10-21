@@ -365,7 +365,6 @@ describe('失败回滚：源文件必须回到迁移前', () => {
 });
 
 /* ============================== 整批 ============================== */
-
 describe('整批：默认 fail-closed，allowPartial 才动可迁移文件', () => {
   const GOOD = 'C:\\proj\\good.kojo';
   const BAD_FILE = 'C:\\proj\\bad.kojo';
@@ -404,5 +403,107 @@ describe('整批：默认 fail-closed，allowPartial 才动可迁移文件', () 
     expect(result.skipped).toBe(1);
     expect((await io.readText(GOOD)).text).toBe(V1_CODE);
     expect((await io.readText(BAD_FILE)).text).toBe(BAD);
+  });
+});
+
+/* ============================== 语义层（K2-MIGRATE-MOUNT 起改调） ============================== */
+
+/**
+ * 本批把 dry-run 的引擎从机械层换成**语义层**（`migrateKojoSourceSemantic`）。
+ *
+ * 返回值是机械层结果的超集（`MigrateResult & { rewrites }`），所以上面 16 条期望
+ * **一条都不用改**——这是那批期望的回归证据。下面几条钉的是"换引擎换来了什么"：
+ * `当 / 分支： / 初回` 从"一律阻断"变成"可证的才改写、不可证的照旧阻断"。
+ */
+describe('语义层：rewrites 进计划，可证的构造不再阻断', () => {
+  const SWITCH =
+    '角色: 灵梦\n时机 指令 310：\n    当 TFLAG:193：\n        是 1：\n            她一言不发。\n        是 5 到 8：\n            她微微眯起眼睛。\n        否则：\n            她什么也没说。\n';
+
+  it('`当` → `# 表`：ok=true、unsupported 清零、rewrites 一条带逐条 diff', () => {
+    const plan = planMigrateFile({ filePath: FILE, source: SWITCH });
+
+    expect(plan.ok).toBe(true);
+    expect(plan.unsupported).toEqual([]);
+    expect(plan.code).toBe(
+      '# 表 迁移表1 由 TFLAG:193\n' +
+        '    1 她一言不发。\n' +
+        '    5..8 她微微眯起眼睛。\n' +
+        '    否 她什么也没说。\n' +
+        '\n' +
+        '# 机 指令 310\n' +
+        '> {迁移表1}\n',
+    );
+
+    expect(plan.rewrites).toHaveLength(1);
+    const rewrite = plan.rewrites[0]!;
+    expect(rewrite).toMatchObject({
+      kind: 'switch-table',
+      line: 3,
+      endLine: 9,
+      declName: '迁移表1',
+      reference: '> {迁移表1}',
+    });
+    // 原块逐行（含块头与缩进体）在 diff 左侧，落点在右侧
+    expect(rewrite.removedLines).toEqual([
+      '    当 TFLAG:193：',
+      '        是 1：',
+      '            她一言不发。',
+      '        是 5 到 8：',
+      '            她微微眯起眼睛。',
+      '        否则：',
+      '            她什么也没说。',
+    ]);
+    expect(rewrite.diffText).toContain(`--- a/${FILE}（v1 第 3–9 行）`);
+    expect(rewrite.diffText).toContain('-    当 TFLAG:193：');
+    expect(rewrite.diffText).toContain('+> {迁移表1}');
+    // 整份 diff 仍然照旧（声明提升到顶层 + 原位置换引用行）
+    expect(plan.diffText).toContain('+# 表 迁移表1 由 TFLAG:193');
+    expect(plan.summary).toMatchObject({ ok: true, unsupportedCount: 0, rewriteCount: 1 });
+  });
+
+  it('`分支：` → `# 池` 与 `初回` → `@原生`：两种 kind 各一条，汇总计入整批', async () => {
+    const BRANCH =
+      '角色: 灵梦\n时机 指令 310：\n    分支：\n        [她的恋慕 >= 100]\n            她笑了。\n        [其他]\n            她什么也没说。\n';
+    const ASK = '角色: 灵梦\n时机 指令 310：\n    初回 "once"：\n        「甲」\n';
+    const io = new FakeIo();
+    io.seed(FILE, BRANCH);
+    io.seed('C:\\proj\\b.kojo', ASK);
+
+    const run = await dryRunMigrateFiles(io, [FILE, 'C:\\proj\\b.kojo']);
+
+    expect(run.ok).toBe(true);
+    expect(run.summary.rewriteCount).toBe(2);
+    expect(run.files[0]?.rewrites[0]).toMatchObject({
+      kind: 'branch-pool',
+      declName: '迁移池1',
+      reference: '! 迁移池1',
+    });
+    expect(run.files[0]?.code).toContain('# 池 迁移池1\n    ? 她的恋慕 >= 100\n');
+    expect(run.files[1]?.rewrites[0]).toMatchObject({ kind: 'ask-native', declName: null });
+    expect(run.files[1]?.code).toContain('@原生\n    初回 "once"：\n        「甲」');
+    // `初回` 的围栏内容还是 v1：warning 上屏（ok 不受影响）
+    expect(run.files[1]?.summary.warningCount).toBeGreaterThan(0);
+  });
+
+  it('不可证的形态维持阻断：字符串臂的 `当` 仍然 ok=false、rewrites 为空', () => {
+    const source =
+      '角色: 灵梦\n时机 指令 310：\n    当 恋慕：\n        是 "高"：\n            她笑了。\n        否则：\n            她没说话。\n';
+
+    const plan = planMigrateFile({ filePath: FILE, source });
+
+    expect(plan.ok).toBe(false);
+    expect(plan.rewrites).toEqual([]);
+    expect(plan.unsupported.map((item) => item.code)).toContain('core/migration/switch');
+    expect(plan.summary.rewriteCount).toBe(0);
+  });
+
+  it('目标口径：原地改写（targetPath === filePath，不改扩展名、不产出 .kojo2）', () => {
+    const plan = planMigrateFile({ filePath: FILE, source: V1 });
+
+    expect(plan.targetPath).toBe(FILE);
+    expect(plan.write.targetPath).toBe(FILE);
+    expect(plan.backup.applyHint).toContain(FILE);
+    expect(plan.backup.applyHint).toContain('不改扩展名、不删源');
+    expect(plan.code).not.toContain('.kojo2');
   });
 });

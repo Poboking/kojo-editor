@@ -6,6 +6,7 @@
  *   不知道 ERB 长什么样；
  * - 本文件把请求落成 eraTW/Emuera 产物行：`PRINTFORM` 变体、`HPH_PRINT`、`SETCOLOR`/
  *   `RESETCOLOR`、`PRINT_FACE`/`PRINT_FACE_PLAYER`、`PRINTDATA`/`RAND+SELECTCASE`、
+ *   `# 表`/`# 池` 的等值分派（`SELECTCASE`，形状在 `table-emit.ts` / `pool-emit.ts`）、
  *   `#PRI/#LATER/#ONLY`、`@函数` + 伴生 `_1`、`#DIM/#DIMS`；
  * - 所有引擎记号/模板/库函数名都从 **kojo2 数据**（`ERATW_PRESENTATION` / `ERATW_PROFILE` /
  *   `ERATW_EVENT_CATALOG`）与既有 `face-templates.ts`（口上函数名模板）派生，不抄第二份；
@@ -50,8 +51,10 @@ import type {
   KojoDiagnostic,
   MachineWrapRequest,
   OptionsEmitRequest,
+  PoolDispatchEmitRequest,
   RandomEmitRequest,
   ResolvedWait,
+  TableDispatchEmitRequest,
   TextEmitRequest,
   WeaveEmitRequest,
 } from '@kojo/kojo-core';
@@ -62,9 +65,11 @@ import type { KojoFaceTemplate } from '@kojo/plugin-api';
 import { ERATW_EVENT_CATALOG } from './event-catalog.js';
 import { emitEratwForEachLoop } from './foreach-emit.js';
 import { emitOptions } from './options-emit.js';
+import { emitPoolDispatch } from './pool-emit.js';
 import { ERATW_PRESENTATION } from './presentation.js';
 import { ERATW_PROFILE } from './profile.js';
 import { ERATW_PROGRAM_FEATURES } from './program.js';
+import { emitTableDispatch } from './table-emit.js';
 
 /* ============================== 工厂依赖（宿主注入） ============================== */
 
@@ -217,6 +222,10 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
    * Emuera 允许在 **ERB 函数内**用 `#DIM` / `#DIMS` 声明函数私有变量（`exfunc` 手册）；
    * 隐藏槽就落在这里：声明形态由 core 给的**静态类型事实** `valueType` 决定
    * （`int` → `#DIM`；`string` → `#DIMS`；缺省 = int），**不从名字后缀猜类型**。
+   *
+   * 覆盖全部 `KojoHiddenSlotKind`（`table` / `random` / `template` / `foreach` / `pool`）：
+   * 声明形态只由 `valueType` 决定，kind 只影响 core 的归类与 adapter 的可选命名策略，
+   * 所以新增 `pool` 不需要新分支（池主语槽 = `#DIM`，与 `template` 同一落点）。
    */
   function slotDeclaration(slot: KojoHiddenSlot): string {
     const directive = slot.valueType === 'string' ? '#DIMS' : '#DIM';
@@ -544,6 +553,13 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
         }
         return emitOptions({ plan: request.plan, lowerItem });
       },
+      /**
+       * `# 池` 可证等值落点（K2-POOL-SELECTCASE）：块形状全部交给 `pool-emit.ts`
+       * （读 `ERATW_POOL_DISPATCH`）；core 只在可证等值时调用，本文件只做转调。
+       */
+      poolDispatch(request: PoolDispatchEmitRequest): EmitResult {
+        return emitPoolDispatch(request);
+      },
     },
 
     weave: {
@@ -607,6 +623,14 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
         // 落点形状全部交给 `foreach-emit.ts`（数据派生；本文件只做转调）。
         // core 已校验集合/绑定/长度并给槽名；这里只把计划与已降糖 body 落成 ERB。
         return emitEratwForEachLoop(request.plan, request.body, { compileExpression: compile });
+      },
+      /**
+       * `# 表` 可证等值落点（K2-TABLE-SELECTCASE）：档位/兜底/缩进形状全部交给
+       * `table-emit.ts`（读 `ERATW_TABLE_DISPATCH`）；判别式求值与各臂赋值行由 core 交来，
+       * 本文件只做转调（不改写、不排序）。
+       */
+      tableDispatch(request: TableDispatchEmitRequest): EmitResult {
+        return emitTableDispatch(request);
       },
     },
 

@@ -88,6 +88,8 @@ import { applyThemePref, useThemePref } from './theme-pref';
 import { filterSealedPanels, useSealed } from './sealed';
 import { useDirectMode } from './direct-mode';
 import { usePanelVirtualize } from './panel-prefs';
+// 2.0 面投影（K2-EDITOR-OPEN-PATHS）：开关关着时恒 undefined，下传面与改动前逐字相同
+import { useKojo2Surface } from './kojo2-open-paths';
 import {
   applyEndpointEdit,
   isOverridden,
@@ -491,8 +493,17 @@ export function ShellLayout(props: Props): ReactElement {
    * 下面 `uiPrefs` 重算 ⇒ 面板以新偏好重渲染（无需重开设置页）。
    */
   const panelVirtualize = usePanelVirtualize();
+  /**
+   * 2.0 面投影（K2-EDITOR-OPEN-PATHS）：开关打开时把「扩展名」这一格下传给面板/浮层，
+   * 新建向导据此**追加**一个 2.0 文件选项（扩展名由宿主给，插件侧零字面量）。
+   * 开关关着 ⇒ `undefined`，`uiPrefs` 的形状与改动前逐字相同。
+   */
+  const kojo2Surface = useKojo2Surface();
   /** 下传给面板的偏好投影（对象身份随开关稳定，开关不变则面板不因它白重渲染） */
-  const uiPrefs = useMemo(() => ({ panelVirtualize }), [panelVirtualize]);
+  const uiPrefs = useMemo(
+    () => ({ panelVirtualize, ...(kojo2Surface ? { kojo2: kojo2Surface } : {}) }),
+    [panelVirtualize, kojo2Surface],
+  );
   const allPanels = useMemo(() => {
     // 游戏域面板闸：`game.adapter` 槽现取「贡献方插件 id → 游戏 id」映射，
     // 只编排本游戏 adapter 的面板（否则活动栏出现两枚同图标的「工作区」）
@@ -2045,7 +2056,9 @@ export function ShellLayout(props: Props): ReactElement {
             aria-modal="true"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <PanelBody contribution={overlayContribution} />
+            {/* 浮层与面板同一条偏好通道（`UiPrefs`）：2.0 新建向导是 `ui.overlay` 贡献，
+                它要知道宿主这侧 2.0 面开没开、扩展名是哪个（K2-EDITOR-OPEN-PATHS）。 */}
+            <PanelBody contribution={overlayContribution} uiPrefs={uiPrefs} />
           </div>
         </div>
       ) : null}

@@ -7,8 +7,12 @@
  * 正确跑法是 `--config vitest.perf.config.ts`，或直接 `pnpm test`（unit + perf 两池）。
  *
  * 计时口径（写死，别改松）：
- * - 预算 = 60fps 的单帧 16ms；CI/慢机允许放宽到 30ms（`CI=true` 时生效），
+ * - keystroke 预算 = 60fps 的单帧 16ms；CI/慢机允许放宽到 30ms（`CI=true` 时生效），
  *   依据是本仓计时池的既有口径（`vitest.perf.config.ts` 串行静默池）。
+ * - **结构化增量（K2-PERF-INCR-FALLBACK）预算**：5.2k 行 fixture 上
+ *   纯换行插入/删除中位数 < 60ms、单个声明单元内编辑中位数 < 100ms（CI/慢机 ×2：
+ *   120ms / 200ms）——口径是"`IncrementalUpdate.ms` 墙钟、每种 11 次取中位数、
+ *   测量前预热"；对照组是同一份文本的**整份缓存重建**（修前 ~200–350ms）。
  * - 同时钉一条**相对**护栏：增量中位数必须 < 全量中位数的 25%——绝对预算在超快机器上
  *   没有区分度，相对比例才证明"真的只重算了脏区间"，而不是整条流水线变快了。
  * - 三种 keystroke 各测 10 次取中位数：插入 1 字符 / 删除 1 字符 / 中间行替换 1 字符；
@@ -21,7 +25,15 @@ import type { CompileKojoSourceResult } from '../src/compile.js';
 import { createIncrementalCompiler } from '../src/incremental.js';
 import type { IncrementalEdit } from '../src/incremental.js';
 import { FIXTURE_ADAPTER, FIXTURE_BACKEND } from '../src/fixture-adapter.js';
-import type { EmitResult, KojoEmitBackend } from '../src/lower/backend.js';
+import type {
+  EmitResult,
+  ForEachEmitRequest,
+  ForeachCollectionDecl,
+  ForeachDeclarations,
+  GameAdapter,
+  KojoEmitBackend,
+  ProgramFeatures,
+} from '../src/index.js';
 
 const BACKEND: KojoEmitBackend = {
   ...FIXTURE_BACKEND,
@@ -295,34 +307,38 @@ describe('incremental：增量 === 全量', () => {
 /* ============================== 退化路径 ============================== */
 
 describe('incremental：退化路径仍必须正确', () => {
-  it('插入换行 / 跨行删除 → fallbackFull = true', () => {
+  it('纯换行插入走行号平移增量；跨行删除（含内容）仍回退全量', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(SAMPLE_BASIC);
     const eol = SAMPLE_BASIC.indexOf('\n') + 1;
     const newlineEdit: IncrementalEdit = { offset: eol, removedLength: 0, insertedText: '\n' };
     const withNewline = applyEdit(SAMPLE_BASIC, newlineEdit);
     const inserted = compiler.update(withNewline, newlineEdit);
-    expect(inserted.stats.fallbackFull).toBe(true);
-    expect(inserted.stats.fallbackReason).toBe('multiline-insert');
+    // 纯换行 = 行号平移路径（K2-PERF-INCR-FALLBACK）：复用全部单元缓存，只重算被新行碰到的单元
+    expect(inserted.stats.fallbackFull).toBe(false);
+    expect(inserted.stats.fallbackReason).toBe(null);
+    expect(inserted.stats.reparsedUnits).toBeLessThanOrEqual(3);
     expectSameResult(inserted.result, fullCompile(withNewline));
 
     const range: IncrementalEdit = { offset: eol, removedLength: 6, insertedText: '' };
     const carved = applyEdit(withNewline, range);
     const removed = compiler.update(carved, range);
+    // 删掉的区间里既有换行又有正文：不是"删一行空行"，证不出等价 → 全量
     expect(removed.stats.fallbackFull).toBe(true);
     expect(removed.stats.fallbackReason).toBe('multiline-delete');
     expectSameResult(removed.result, fullCompile(carved));
   });
 
-  it('改声明单元（模板 / 池 / 机）→ fallbackFull = true', () => {
+  it('改声明单元（模板体）→ 只重建该单元 + 依赖它的展开点（不再全量）', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(SAMPLE_POOL_TEMPLATE);
     const line = SAMPLE_POOL_TEMPLATE.indexOf('今天也一起吧。');
     const edit: IncrementalEdit = { offset: line + 2, removedLength: 0, insertedText: '好' };
     const text = applyEdit(SAMPLE_POOL_TEMPLATE, edit);
     const update = compiler.update(text, edit);
-    expect(update.stats.fallbackFull).toBe(true);
-    expect(update.stats.fallbackReason).toBe('declaration-unit-edit');
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.stats.fallbackReason).toBe(null);
+    expect(update.stats.reparsedUnits).toBeLessThanOrEqual(4);
     expectSameResult(update.result, fullCompile(text));
   });
 
@@ -545,5 +561,808 @@ describe('incremental：keystroke 性能护栏（5000+ 行）', () => {
       expect(incrementalMedianMs).toBeLessThan(budgetMs);
       expect(incrementalMedianMs).toBeLessThan(fullMedianMs * 0.25);
     }
+  });
+});
+
+/* ============================== 结构化增量：行号平移 ============================== */
+
+function slotNames(result: CompileKojoSourceResult): readonly string[] {
+  return result.slots.map((slot) => slot.name);
+}
+
+/** 会把隐藏槽声明进产物的 backend（`#DIM` / `#DIMS`）：用来钉"槽名引用同步改名" */
+const SLOT_BACKEND: KojoEmitBackend = {
+  ...FIXTURE_BACKEND,
+  wrapMachine: (request): EmitResult => [
+    `@EVENT_${request.machine.event}`,
+    ...request.slots.map((slot) => `#${slot.valueType === 'int' ? 'DIM' : 'DIMS'} ${slot.name}`),
+    ...request.body,
+    '@EVENT_END',
+  ],
+};
+
+function fullCompileWith(source: string, backend: KojoEmitBackend): CompileKojoSourceResult {
+  return compileKojoSource({ source, adapter: FIXTURE_ADAPTER, backend });
+}
+
+/** 在行首插入一个空行（Enter 的两种落点之一）；返回编辑与结果文本 */
+function insertBlankLineAt(text: string, lineIndex: number): { edit: IncrementalEdit; text: string } {
+  let offset = 0;
+  for (let i = 0; i < lineIndex; i++) offset = text.indexOf('\n', offset) + 1;
+  const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '\n' };
+  return { edit, text: applyEdit(text, edit) };
+}
+
+const SAMPLE_SHIFT_RANDOM = `# 机 开场
+# 视 灵梦
+> 第一段正文。
+@随机
+    > 风很轻。
+    > 云在走。
+> 第二段正文。
+@随机
+    > 雨很冷。
+    > 雪很白。
+> 收尾。
+`;
+
+describe('incremental：纯换行 = 行号平移（复用全部单元缓存）', () => {
+  it('插入空行：`@随机` 槽名按平移后的行号重算，产物行同步改名', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
+    const built = compiler.update(SAMPLE_SHIFT_RANDOM);
+    expect(slotNames(built.result)).toEqual(['__kojo_rand_4', '__kojo_rand_8']);
+    expect(built.result.erb).toContain('#DIM __kojo_rand_4');
+
+    // 在第 3 行（0 基 2）之前插一个空行：两个 `@随机` 各自 +1 行
+    const { edit, text } = insertBlankLineAt(SAMPLE_SHIFT_RANDOM, 2);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.stats.fallbackReason).toBe(null);
+    expect(update.stats.reparsedUnits).toBeLessThanOrEqual(3);
+    // 槽名不是"留着旧名再补一个"：旧行号必须整体消失
+    expect(slotNames(update.result)).toEqual(['__kojo_rand_5', '__kojo_rand_9']);
+    expect(update.result.erb).toContain('#DIM __kojo_rand_5');
+    expect(update.result.erb).toContain('#DIM __kojo_rand_9');
+    expect(update.result.erb).not.toContain('#DIM __kojo_rand_4');
+    expect(update.result.erb).not.toContain('#DIM __kojo_rand_8');
+    expectSameResult(update.result, fullCompileWith(text, SLOT_BACKEND));
+  });
+
+  it('删除空行：槽名按平移后的行号回填（与全量逐字节等价）', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
+    const withBlank: string = `# 机 开场
+# 视 灵梦
+
+> 第一段正文。
+@随机
+    > 风很轻。
+    > 云在走。
+> 收尾。
+`;
+    compiler.update(withBlank);
+    // 删掉第 2 行那个空行：删的是**它前面**那个换行（删空行只有这一种证得出来的形态）
+    const firstBreak = withBlank.indexOf('\n');
+    const offset = withBlank.indexOf('\n', firstBreak + 1);
+    const edit: IncrementalEdit = { offset, removedLength: 1, insertedText: '' };
+    const text = applyEdit(withBlank, edit);
+    expect(text.split('\n').length).toBe(withBlank.split('\n').length - 1);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(slotNames(update.result)).toEqual(['__kojo_rand_4']);
+    expect(update.result.erb).toContain('#DIM __kojo_rand_4');
+    expectSameResult(update.result, fullCompileWith(text, SLOT_BACKEND));
+  });
+
+  it('调用点在平移点之前、`# 模` 体里的 `@随机` 在之后：复用单元里的槽名引用被改写', () => {
+    const source = `# 机 开场
+# 视 灵梦
+! 招呼()
+> 正文甲。
+> 正文乙。
+> 正文丙。
+> 正文丁。
+# 模 招呼()
+    @随机
+        > 甲的招呼。
+        > 乙的招呼。
+> 收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
+    const built = compiler.update(source);
+    expect(built.result.ok).toBe(true);
+    expect(slotNames(built.result)).toEqual(['__kojo_rand_9']);
+    // 在第 3 行（0 基 2）之前插空行：模整体 +1 行，但调用点单元自己没动
+    const { edit, text } = insertBlankLineAt(source, 2);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull, update.stats.fallbackReason ?? '').toBe(false);
+    expect(slotNames(update.result)).toEqual(['__kojo_rand_10']);
+    expect(update.result.erb).toContain('#DIM __kojo_rand_10');
+    expect(update.result.erb).not.toContain('__kojo_rand_9');
+    expectSameResult(update.result, fullCompileWith(text, SLOT_BACKEND));
+  });
+
+  it('平移点之后的诊断 span 跟着平移（与全量一致，不是"旧行号留在诊断里"）', () => {
+    const source = `# 机 开场
+# 视 灵梦
+「裸引号在第三行」
+> 正文一行。
+> 正文二行。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(source);
+    const bareQuote = built.result.diagnostics.find((diagnostic) => diagnostic.code === 'core/narrative/bare-quote');
+    expect(bareQuote?.span?.start.line).toBe(3);
+
+    const { edit, text } = insertBlankLineAt(source, 2);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    const shifted = update.result.diagnostics.find((diagnostic) => diagnostic.code === 'core/narrative/bare-quote');
+    expect(shifted?.span?.start.line).toBe(4);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`@巡` 槽名（`__kojo_foreach_<行>_i/_e/_n`）同口径平移', () => {
+    const rig = foreachRig();
+    const source = `# 机 开场
+# 视 灵梦
+@巡 队伍
+    > 轮到{名}。
+    ? {角} >= 2
+        > 二号位以上。
+> 收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: rig.adapter, backend: rig.backend });
+    const built = compiler.update(source);
+    expect(slotNames(built.result)).toEqual([
+      '__kojo_foreach_3_i',
+      '__kojo_foreach_3_e',
+      '__kojo_foreach_3_n',
+    ]);
+    const { edit, text } = insertBlankLineAt(source, 2);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(slotNames(update.result)).toEqual([
+      '__kojo_foreach_4_i',
+      '__kojo_foreach_4_e',
+      '__kojo_foreach_4_n',
+    ]);
+    expect(update.result.erb).toContain('#DIM __kojo_foreach_4_e');
+    expect(update.result.erb).not.toContain('__kojo_foreach_3_e');
+    expectSameResult(update.result, rig.fullCompile(text));
+  });
+
+  it('连续 Enter（同一处连按 4 次）：每一步都走增量且等价（槽名逐次 +1）', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(SAMPLE_SHIFT_RANDOM);
+    let text = SAMPLE_SHIFT_RANDOM;
+    for (let step = 1; step <= 4; step++) {
+      const { edit: nextEdit, text: nextText } = insertBlankLineAt(text, 2);
+      const update = compiler.update(nextText, nextEdit);
+      text = nextText;
+      expect(update.stats.fallbackFull).toBe(false);
+      expect(slotNames(update.result)).toEqual([
+        `__kojo_rand_${4 + step}`,
+        `__kojo_rand_${8 + step}`,
+      ]);
+      expectSameResult(update.result, fullCompile(text));
+    }
+  });
+});
+
+/* ============================== 结构化增量：声明单元 → 只重建受影响展开点 ============================== */
+
+const FOREACH_TEAM: ForeachCollectionDecl = {
+  name: '队伍',
+  kind: 'characters',
+  elementType: 'character',
+  base: 1,
+  keyType: null,
+  length: { kind: 'engine', counter: 'CHARANUM', minus: 1 },
+  bindings: ['角', '名'],
+  nameAccessor: 'CALLNAME',
+};
+
+const ALL_PROGRAM_FEATURES: ProgramFeatures = {
+  arrays: true,
+  while: true,
+  goto: true,
+  recursion: true,
+  foreach: true,
+  repeat: true,
+};
+
+function foreachRig(): { adapter: GameAdapter; backend: KojoEmitBackend; fullCompile: (source: string) => CompileKojoSourceResult } {
+  const declarations: ForeachDeclarations = {
+    collections: [FOREACH_TEAM],
+    arrayRule: { base: 0, bindings: ['值', '下标'] },
+  };
+  const adapter: GameAdapter = {
+    ...FIXTURE_ADAPTER,
+    profile: { ...FIXTURE_ADAPTER.profile, features: ['program'] },
+    programFeatures: ALL_PROGRAM_FEATURES,
+    foreachCollections: declarations,
+  };
+  const base = { ...FIXTURE_BACKEND, profile: { ...FIXTURE_BACKEND.profile, programFeatures: ALL_PROGRAM_FEATURES } };
+  const backend: KojoEmitBackend = {
+    ...base,
+    wrapMachine: (request): EmitResult => [
+      `@EVENT_${request.machine.event}`,
+      ...request.slots.map((slot) => `#${slot.valueType === 'int' ? 'DIM' : 'DIMS'} ${slot.name}`),
+      ...request.body,
+      '@EVENT_END',
+    ],
+    program: {
+      ...base.program,
+      forEachLoop(request: ForEachEmitRequest): EmitResult {
+        const lines: string[] = [`LOOP|${request.plan.kind}|${request.plan.collection}`];
+        for (const binding of request.plan.bindings) lines.push(`BIND|${binding.name}|${binding.slot}`);
+        for (const line of request.body) lines.push(line);
+        lines.push('LOOP.END');
+        return lines;
+      },
+    },
+  };
+  return {
+    adapter,
+    backend,
+    fullCompile: (source: string): CompileKojoSourceResult =>
+      compileKojoSource({ source, adapter, backend }),
+  };
+}
+
+describe('incremental：声明单元内编辑（只重建该单元 + 依赖它的展开点）', () => {
+  it('`# 表` 行内编辑：只重建引用它的单元，结果与全量逐字等价', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(SAMPLE_TABLE);
+    expect(built.result.ok).toBe(true);
+    const offset = SAMPLE_TABLE.indexOf('点头') + 1;
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '点' };
+    const text = applyEdit(SAMPLE_TABLE, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.stats.fallbackReason).toBe(null);
+    // 表被 2 个叙事单元引用（`{亲密度}`）：只有它们 + 声明单元自己重算
+    expect(update.stats.reloweredUnits).toBeGreaterThanOrEqual(2);
+    expect(update.stats.reparsedUnits).toBeLessThanOrEqual(3);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 池` 体编辑：调用点的展开产物跟着变，其余单元复用（列级分段一起搬）', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(SAMPLE_POOL_TEMPLATE);
+    // 池展开的产物行带列级分段（调用处 + 定义处锚点）：拼接必须原样搬，不能只搬行级
+    expect(built.result.sourceMap.segmentCount).toBeGreaterThan(0);
+    const offset = SAMPLE_POOL_TEMPLATE.indexOf('普通的招呼。') + 2;
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '新' };
+    const text = applyEdit(SAMPLE_POOL_TEMPLATE, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.result.ok).toBe(true);
+    expect(update.result.erb).toContain('普通新的招呼。');
+    expect(update.result.sourceMap.segmentCount).toBeGreaterThan(0);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('声明链条：`# 池` 体引用 `# 表`，改表时池的调用点也要重算（跨声明依赖闭包）', () => {
+    const source = `# 机 开场
+# 视 灵梦
+# 表 语气 由 好感
+    0..2 = "淡"
+    否 = "近"
+# 池 寒暄
+    ? 好感 > 1
+        > 你好（{语气}）。
+    ? 否
+        > 嗯（{语气}）。
+! 寒暄
+> 收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(source);
+    expect(built.result.ok, JSON.stringify(built.result.diagnostics)).toBe(true);
+    expect(built.result.erb).toContain('淡');
+    const offset = source.indexOf('"淡"') + 1;
+    const edit: IncrementalEdit = { offset, removedLength: 1, insertedText: '浓' };
+    const text = applyEdit(source, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull, update.stats.fallbackReason ?? '').toBe(false);
+    expect(update.result.erb).toContain('浓');
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 模` 体编辑：调用点（含插槽体）重建，插槽内容原样保留', () => {
+    const source = `# 机 开场
+# 视 灵梦
+# 模 包装(值)
+    > {值}
+    [插槽]
+    > 尾巴。
+! 包装(甲)
+    > 插槽里的正文。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(source);
+    const offset = source.indexOf('尾巴。');
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '长' };
+    const text = applyEdit(source, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.result.erb).toContain('长尾巴。');
+    expect(update.result.erb).toContain('插槽里的正文。');
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 常量` 参与 `# 表` 端点：改常量时表引用点跟着重建', () => {
+    const source = `# 机 开场
+# 视 灵梦
+# 常量 门槛 整数 = 3
+# 表 语气 由 好感
+    0..{门槛} = "淡"
+    否 = "近"
+> 现在：{语气}
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(source);
+    const offset = source.indexOf('整数 = 3') + '整数 = '.length;
+    const edit: IncrementalEdit = { offset, removedLength: 1, insertedText: '4' };
+    const text = applyEdit(source, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 池` 改名：旧调用点按未知符号重算（依赖闭包按名字取，旧名也在集合里）', () => {
+    const source = `# 机 开场
+# 视 灵梦
+# 池 招呼
+    > 招呼一声。
+! 招呼
+> 收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(source);
+    const offset = source.indexOf('招呼\n') !== -1 ? source.indexOf('# 池 招呼') + '# 池 '.length : 0;
+    const edit: IncrementalEdit = { offset, removedLength: 2, insertedText: '问候' };
+    const text = applyEdit(source, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 机` 事件名编辑：单元 IR 全部复用，只重装配事件头', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(SAMPLE_BASIC);
+    // 开场 → 收场（两个都是 fixture adapter 声明过的事件）
+    const offset = SAMPLE_BASIC.indexOf('开场');
+    const edit: IncrementalEdit = { offset, removedLength: 2, insertedText: '收场' };
+    const text = applyEdit(SAMPLE_BASIC, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.stats.reloweredUnits).toBeLessThanOrEqual(2);
+    expect(update.result.erb.startsWith('@EVENT_收场')).toBe(true);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 幕` 标题编辑：只换场景标题，叙事单元复用', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(SAMPLE_SCENES);
+    const offset = SAMPLE_SCENES.indexOf('第二幕') + '第二幕'.length;
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '改' };
+    const text = applyEdit(SAMPLE_SCENES, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(false);
+    expect(update.stats.reloweredUnits).toBeLessThanOrEqual(2);
+    expect(update.result.file.scenes.map((scene) => scene.title)).toEqual([null, '第一幕', '第二幕改']);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('改 `# 视`（视点变化会改所有 `{我}`/池内裸引号）→ 回退全量', () => {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(SAMPLE_POOL_TEMPLATE);
+    const offset = SAMPLE_POOL_TEMPLATE.indexOf('灵梦') + 1;
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: 'x' };
+    const text = applyEdit(SAMPLE_POOL_TEMPLATE, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull).toBe(true);
+    expect(update.stats.fallbackReason).toBe('view-changed');
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`# 表` 里 Enter 加一行（换行 + 声明变更）：只重建该表 + 引用它的单元', () => {
+    const source = `# 机 开场
+# 视 灵梦
+# 表 亲密度 由 好感
+    0..2 = "疏远"
+    5.. = "亲近"
+    否 = "陌生"
+> 现在：{亲密度}
+> 收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(source);
+    expect(built.result.ok, JSON.stringify(built.result.diagnostics)).toBe(true);
+    expect(built.result.erb).toContain('亲近');
+    // 在第 4 行（0 基 3，表体第一行之前）插入一行新档位
+    const offset = source.indexOf('    0..2');
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '    3..4 = "点头"\n' };
+    const text = applyEdit(source, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull, update.stats.fallbackReason ?? '').toBe(false);
+    expect(update.result.erb).toContain('点头');
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('`@织` 监听 + 纯换行：`@织` 产物按平移（含槽名引用）且与全量一致', () => {
+    const source = `# 机 开场
+# 视 灵梦
+@织 开场
+    > 监听里的一行。
+@随机
+    > 候选甲。
+    > 候选乙。
+> 正文收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
+    const built = compiler.update(source);
+    expect(built.result.ok, JSON.stringify(built.result.diagnostics)).toBe(true);
+    expect(built.result.erb).toContain('监听里的一行。');
+
+    const { edit, text } = insertBlankLineAt(source, 2);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull, update.stats.fallbackReason ?? '').toBe(false);
+    // `@随机` 块行 5 → 6：槽名跟着平移，且必须出现在产物里（含 `@织` 自己的行）
+    expect(slotNames(update.result)).toEqual(['__kojo_rand_6']);
+    expect(update.result.erb).toContain('#DIM __kojo_rand_6');
+    expect(update.result.erb).not.toContain('__kojo_rand_5');
+    expectSameResult(update.result, fullCompileWith(text, SLOT_BACKEND));
+  });
+
+  it('CRLF 文件（Windows 作者）：行尾插入换行走增量且与全量逐字节等价', () => {
+    const source = ['# 机 开场', '# 视 灵梦', '@随机', '    > 风很轻。', '    > 云在走。', '> 收尾。', ''].join(
+      '\r\n',
+    );
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
+    const built = compiler.update(source);
+    expect(built.result.ok, JSON.stringify(built.result.diagnostics)).toBe(true);
+    expect(slotNames(built.result)).toEqual(['__kojo_rand_3']);
+
+    // 在第 4 行（0 基 3，`@随机` 之后）的行内容末尾插一个 LF（混行尾不影响编译结果）
+    const starts: number[] = [0];
+    for (let i = 0; i < source.length; i++) if (source[i] === '\n') starts.push(i + 1);
+    const lineEnd = starts[4] ?? source.length;
+    let contentEnd = lineEnd;
+    if (source[contentEnd - 1] === '\n') contentEnd -= 1;
+    if (source[contentEnd - 1] === '\r') contentEnd -= 1;
+    const insert: IncrementalEdit = { offset: contentEnd, removedLength: 0, insertedText: '\n' };
+    const insertedText = applyEdit(source, insert);
+    const inserted = compiler.update(insertedText, insert);
+    expect(inserted.stats.fallbackFull, inserted.stats.fallbackReason ?? '').toBe(false);
+    expectSameResult(inserted.result, fullCompileWith(insertedText, SLOT_BACKEND));
+
+    // 删掉新插入的空行（删整行：行 L 的行尾 + 行 L+1 的全部内容）
+    const afterStarts: number[] = [0];
+    for (let i = 0; i < insertedText.length; i++) if (insertedText[i] === '\n') afterStarts.push(i + 1);
+    const emptyLineStart = afterStarts[4] ?? insertedText.length;
+    let emptyLineContentEnd = afterStarts[5] ?? insertedText.length;
+    if (emptyLineContentEnd > emptyLineStart && insertedText[emptyLineContentEnd - 1] === '\n') {
+      emptyLineContentEnd -= 1;
+    }
+    if (emptyLineContentEnd > emptyLineStart && insertedText[emptyLineContentEnd - 1] === '\r') {
+      emptyLineContentEnd -= 1;
+    }
+    const remove: IncrementalEdit = {
+      offset: contentEnd, // 行 L 的行尾（= 新插入的那个 `\n`）
+      removedLength: emptyLineContentEnd - contentEnd,
+      insertedText: '',
+    };
+    const restored = applyEdit(insertedText, remove);
+    const removed = compiler.update(restored, remove);
+    expect(removed.stats.fallbackFull, removed.stats.fallbackReason ?? '').toBe(false);
+    expectSameResult(removed.result, fullCompileWith(restored, SLOT_BACKEND));
+    expect(restored).toBe(source);
+  });
+
+  it('`@原生` 体内插空行：整块重算，与全量一致', () => {
+    const source = `# 机 开场
+# 视 灵梦
+@原生
+    #DIM X, 0
+    PRINTFORM 原生行
+> 正文收尾。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(source);
+    expect(built.result.erb).toContain('PRINTFORM 原生行');
+    // 在 PRINTFORM 那行的**行尾**插一个带缩进的新行（Enter + 自动缩进）
+    const offset = source.indexOf('PRINTFORM 原生行') + 'PRINTFORM 原生行'.length;
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '\n    ' };
+    const text = applyEdit(source, edit);
+    const update = compiler.update(text, edit);
+    expect(update.stats.fallbackFull, update.stats.fallbackReason ?? '').toBe(false);
+    expectSameResult(update.result, fullCompile(text));
+  });
+
+  it('声明编辑后接随机编辑：每一步都与全量等价（确定性种子）', () => {
+    const mixed = `${SAMPLE_POOL_TEMPLATE}
+# 表 亲密度 由 好感
+    0..2 = "疏远"
+    3.. = "亲近"
+    否 = "陌生"
+@随机
+    > 候选甲。
+    > 候选乙。
+`;
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(mixed);
+    let text = mixed;
+    const random = makeRandom(0x51ed7a + mixed.length);
+    for (let step = 0; step < 40; step++) {
+      const edit = randomEdit(text, random);
+      text = applyEdit(text, edit);
+      const update = compiler.update(text, edit);
+      expectSameResult(update.result, fullCompile(text));
+      if (compiler.degraded) break;
+      expect(compiler.degraded, compiler.degradedReason ?? '').toBe(false);
+    }
+  });
+});
+
+/* ============================== 结构化增量：性能护栏（回退路径的增量版） ============================== */
+
+function lineEndOffsets(source: string): number[] {
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const physical of source.split('\n')) {
+    offset += physical.length;
+    offsets.push(offset);
+    offset += 1;
+  }
+  return offsets;
+}
+
+function buildDeclPerfSource(count: number): { source: string; poolBodyOffset: number } {
+  const lines: string[] = [
+    '# 机 开场',
+    '# 视 灵梦',
+    '# 常量 上限 整数 = 5',
+    '# 池 招呼',
+    '    ? 恋慕 > 1',
+    '        > 亲近的招呼。',
+    '    ? 否',
+    '        > 普通的招呼。',
+    '# 表 亲密度 由 好感',
+    '    0..2 = "疏远"',
+    '    3.. = "亲近"',
+    '    否 = "陌生"',
+    '',
+  ];
+  for (let i = 0; i < count; i++) {
+    if (i % 7 === 0) lines.push('! 招呼');
+    else if (i % 11 === 0) lines.push(`灵梦：「第${i}行的台词，关系{亲密度}。」`);
+    else lines.push(`> 第${i}行的叙事文本，带一个插值{恋慕}。`);
+  }
+  const source = `${lines.join('\n')}\n`;
+  return { source, poolBodyOffset: source.indexOf('亲近的招呼。') + 2 };
+}
+
+describe('incremental：结构编辑随机 golden（Enter / 删整行 / 声明行内改）', () => {
+  it('每一步增量 === 全量（确定性种子；覆盖平移窗口、声明重建、真回退）', () => {
+    const startsOf = (text: string): number[] => {
+      const starts = [0];
+      for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+      return starts;
+    };
+    const contentEndOf = (text: string, start: number, end: number): number => {
+      let contentEnd = end;
+      if (contentEnd > start && text[contentEnd - 1] === '\n') contentEnd -= 1;
+      if (contentEnd > start && text[contentEnd - 1] === '\r') contentEnd -= 1;
+      return contentEnd;
+    };
+    const bases: string[] = [];
+    for (const [, source] of SAMPLES) bases.push(source);
+    bases.push(
+      `# 机 开场
+# 视 灵梦
+# 常量 上限 整数 = 5
+# 表 亲密度 由 好感
+    0..2 = "疏远"
+    3.. = "亲近"
+    否 = "陌生"
+# 池 招呼
+    ? 恋慕 > 1
+        > 亲近的招呼（{亲密度}）。
+    ? 否
+        > 普通的招呼。
+# 模 包装(值)
+    > {值}
+    [插槽]
+    > 尾巴。
+! 招呼
+! 包装(甲)
+    > 插槽里的正文。
+@巡 队伍
+    > 轮到{名}。
+> 收尾。
+`,
+    );
+    let steps = 0;
+    let incremental = 0;
+    let fallback = 0;
+    for (const base of bases) {
+      for (const rigKind of ['plain', 'foreach'] as const) {
+        const rig = rigKind === 'plain' ? null : foreachRig();
+        const adapter = rig === null ? FIXTURE_ADAPTER : rig.adapter;
+        const backend = rig === null ? BACKEND : rig.backend;
+        const compile = (src: string): CompileKojoSourceResult =>
+          compileKojoSource({ source: src, adapter, backend });
+        const compiler = createIncrementalCompiler({ adapter, backend });
+        compiler.update(base);
+        let text = base;
+        const random = makeRandom(0x9e3779b1 + base.length + rigKind.length);
+        for (let step = 0; step < 30; step++) {
+          const starts = startsOf(text);
+          const lineIndex = random(starts.length);
+          const lineStart = starts[lineIndex] ?? 0;
+          const lineEnd = starts[lineIndex + 1] ?? text.length;
+          const contentEnd = contentEndOf(text, lineStart, lineEnd);
+          const kind = random(5);
+          let edit: IncrementalEdit;
+          if (kind === 0) {
+            // Enter：行内容末尾插一个换行
+            edit = { offset: contentEnd, removedLength: 0, insertedText: '\n' };
+          } else if (kind === 1) {
+            // Enter + 自动缩进：新行只有缩进（仍算空行）
+            edit = { offset: contentEnd, removedLength: 0, insertedText: '\n    ' };
+          } else if (kind === 2 && lineIndex + 2 < starts.length) {
+            // 删整行：行 L 的行尾 + 行 L+1 的全部内容
+            const nextStart = starts[lineIndex + 1]!;
+            const nextEnd = starts[lineIndex + 2] ?? text.length;
+            const nextContentEnd = contentEndOf(text, nextStart, nextEnd);
+            edit = { offset: contentEnd, removedLength: nextContentEnd - contentEnd, insertedText: '' };
+          } else {
+            // 单字符编辑（不含换行）：声明单元里走"声明重建"，叙事单元里走单行快路
+            const offset = contentEnd > lineStart ? lineStart + random(contentEnd - lineStart) : lineStart;
+            const removedLength = offset < text.length ? 1 : 0;
+            edit = { offset, removedLength, insertedText: 'x' };
+          }
+          text = applyEdit(text, edit);
+          const update = compiler.update(text, edit);
+          steps += 1;
+          if (update.stats.fallbackFull) fallback += 1;
+          else incremental += 1;
+          expectSameResult(update.result, compile(text));
+          // 模型自检失败 = 全量 parse 与单元模型不等价（退化路径，之后永远全量）：停在这一格
+          if (compiler.degraded) break;
+          expect(compiler.degraded, compiler.degradedReason ?? '').toBe(false);
+        }
+      }
+    }
+    expect(steps).toBeGreaterThan(400);
+    expect(incremental).toBeGreaterThan(300);
+    expect(fallback).toBeGreaterThan(0);
+  });
+});
+
+describe('incremental：回退路径的增量版性能护栏（5.2k 行）', () => {
+  it('纯换行插入/删除中位数 < 60ms，声明单元内编辑中位数 < 100ms（CI ×2），且等价', () => {
+    const ciScale = process.env.CI === 'true' ? 2 : 1;
+    const newlineBudgetMs = 60 * ciScale;
+    const declBudgetMs = 100 * ciScale;
+    const { source, editOffsets } = buildPerfSource(PERF_LINES);
+    const ends = lineEndOffsets(source);
+    const middle = Math.floor(editOffsets.length / 2);
+
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const built = compiler.update(source);
+    expect(compiler.degraded, compiler.degradedReason ?? '').toBe(false);
+    expect(built.result.ok).toBe(true);
+
+    // 取中间 11 个正文行的**行尾**（Enter 的真实落点）
+    const targets: number[] = [];
+    for (let i = middle; i < editOffsets.length && targets.length < 11; i++) {
+      // editOffsets[i] = 行首 + 2（"> " 之后）；行尾用行首偏移 + 行宽
+      const lineStart = editOffsets[i]! - 2;
+      const end = ends.find((value) => value > lineStart)!;
+      targets.push(end);
+    }
+    expect(targets.length).toBe(11);
+
+    let text = source;
+    // 预热：插入 + 删除各 2 次（不计数）
+    for (const offset of targets.slice(0, 2)) {
+      const insert: IncrementalEdit = { offset, removedLength: 0, insertedText: '\n' };
+      text = applyEdit(text, insert);
+      compiler.update(text, insert);
+      const remove: IncrementalEdit = { offset, removedLength: 1, insertedText: '' };
+      text = applyEdit(text, remove);
+      compiler.update(text, remove);
+    }
+
+    const insertTimes: number[] = [];
+    const deleteTimes: number[] = [];
+    for (const offset of targets) {
+      const insert: IncrementalEdit = { offset, removedLength: 0, insertedText: '\n' };
+      const withBlank = applyEdit(text, insert);
+      const inserted = compiler.update(withBlank, insert);
+      insertTimes.push(inserted.stats.ms);
+      if (inserted.stats.fallbackFull) {
+        throw new Error(`纯换行插入未走增量（${inserted.stats.fallbackReason ?? 'no-reason'}）`);
+      }
+      expect(inserted.stats.reparsedUnits).toBeLessThanOrEqual(3);
+      const remove: IncrementalEdit = { offset, removedLength: 1, insertedText: '' };
+      text = applyEdit(withBlank, remove);
+      const removed = compiler.update(text, remove);
+      deleteTimes.push(removed.stats.ms);
+      if (removed.stats.fallbackFull) {
+        throw new Error(`纯换行删除未走增量（${removed.stats.fallbackReason ?? 'no-reason'}）`);
+      }
+      text = withBlank;
+      // 还原：把空行再删掉，回到原始文本（下一次测量从同一份文本出发）
+      const revert: IncrementalEdit = { offset, removedLength: 1, insertedText: '' };
+      text = applyEdit(text, revert);
+      compiler.update(text, revert);
+    }
+    const insertMedianMs = median(insertTimes);
+    const deleteMedianMs = median(deleteTimes);
+
+    // 等价抽检：Structure 路径一次换行后 === 全量
+    const spotEdit: IncrementalEdit = { offset: targets[0]!, removedLength: 0, insertedText: '\n' };
+    const spotText = applyEdit(source, spotEdit);
+    const spot = compiler.update(spotText, spotEdit);
+    expectSameResult(spot.result, fullCompile(spotText));
+
+    // ── 声明单元内编辑（池体里改 1 字符）：只重建被改的声明 + 调用它的展开点 ──
+    const declFixture = buildDeclPerfSource(PERF_LINES);
+    const declCompiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    const declBuilt = declCompiler.update(declFixture.source);
+    expect(declCompiler.degraded, declCompiler.degradedReason ?? '').toBe(false);
+    expect(declBuilt.result.ok).toBe(true);
+    const declUnitCount = declBuilt.stats.reparsedUnits;
+    let declText = declFixture.source;
+    const declTimes: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const insert: IncrementalEdit = { offset: declFixture.poolBodyOffset, removedLength: 0, insertedText: 'x' };
+      const withChar = applyEdit(declText, insert);
+      const update = declCompiler.update(withChar, insert);
+      declTimes.push(update.stats.ms);
+      if (update.stats.fallbackFull) {
+        throw new Error(`声明单元内编辑未走增量（${update.stats.fallbackReason ?? 'no-reason'}）`);
+      }
+      const revert: IncrementalEdit = { offset: declFixture.poolBodyOffset, removedLength: 1, insertedText: '' };
+      declText = applyEdit(withChar, revert);
+      declCompiler.update(declText, revert);
+    }
+    const declMedianMs = median(declTimes);
+    const declSpot: IncrementalEdit = { offset: declFixture.poolBodyOffset, removedLength: 0, insertedText: 'y' };
+    const declSpotText = applyEdit(declFixture.source, declSpot);
+    const declChecked = declCompiler.update(declSpotText, declSpot);
+    expectSameResult(declChecked.result, fullCompile(declSpotText));
+    // 只重算被改声明所在的单元（1 个）+ 依赖它的展开点（~1/7 的正文），远少于整份单元数
+    expect(declChecked.stats.reparsedUnits).toBeLessThanOrEqual(3);
+    expect(declChecked.stats.reloweredUnits).toBeGreaterThan(100);
+    expect(declChecked.stats.reloweredUnits).toBeLessThan(declUnitCount / 2);
+
+    // 对照组：不带 edit 的 `update(text)` = 整份缓存重建（旧回退路径的真实口径）
+    const rebuildTimes: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      const rebuildStarted = performance.now();
+      declCompiler.update(declFixture.source);
+      rebuildTimes.push(performance.now() - rebuildStarted);
+    }
+    const rebuildMedianMs = median(rebuildTimes);
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[incremental-fallback] ${source.split('\n').length} 行：纯换行插入 ${insertMedianMs.toFixed(1)}ms、` +
+        `删除 ${deleteMedianMs.toFixed(1)}ms（${targets.length} 次）；声明单元内编辑 ${declMedianMs.toFixed(1)}ms` +
+        `（重解析 ${declChecked.stats.reparsedUnits} 个单元 / 重 lower ${declChecked.stats.reloweredUnits} 个，` +
+        `首次构建 ${declUnitCount} 个单元）；对照：整份缓存重建 ${rebuildMedianMs.toFixed(0)}ms`,
+    );
+    expect(insertMedianMs).toBeLessThan(newlineBudgetMs);
+    expect(deleteMedianMs).toBeLessThan(newlineBudgetMs);
+    expect(declMedianMs).toBeLessThan(declBudgetMs);
+    // 相对护栏（绝对预算在超快 / 超慢机器上都没有区分度）：两条路径都必须显著低于整份重建
+    expect(insertMedianMs).toBeLessThan(rebuildMedianMs * 0.2);
+    expect(declMedianMs).toBeLessThan(rebuildMedianMs * 0.4);
   });
 });

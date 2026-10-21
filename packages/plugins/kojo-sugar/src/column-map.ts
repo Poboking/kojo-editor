@@ -76,6 +76,36 @@ export function verbatimSpec(sourceOffset: number, length: number): RunSpec[] {
   return length > 0 ? [{ generatedOffset: 0, length, sourceOffset }] : [];
 }
 
+/* ============================== 诊断坐标折回物理行（§10.7） ============================== */
+
+/**
+ * **逻辑坐标 → 物理行列**（诊断「折回物理行」的唯一入口；§10.7 / §4.13）。
+ *
+ * 坐标口径（写死，全链不得改）：
+ * - 行、列均 **1 基**；列按 **UTF-16 码元**计（`String.prototype.length` 口径：中文/全角
+ *   标点 = 1，emoji（代理对）= 2，**不是码点**）；
+ * - 入参 `position.line` 是**逻辑行首的物理行号**，`position.column` 是该逻辑行全文里的
+ *   1 基列（含行首缩进）⇒ 逻辑偏移 = `column - 1`；
+ * - **越界夹取**：`column < 1` 夹到偏移 0（行首）；`column - 1 > 逻辑全文长度` 夹到全文
+ *   末尾（落到末段末尾列，即"行尾之后"）；**绝不抛错、绝不回落到首行起点**——
+ *   列映射是查询，宁可给保守值也不静默失败；
+ * - 该行**不是**逻辑行首（= 物理续接行）、或该逻辑行**未折行**（单段）⇒ **原样返回**
+ *   （未折行时逻辑坐标与物理坐标逐字相等；续接行没有自己的视图，原样即正确）。
+ *
+ * 幂等性：对已经是物理坐标的位置再折一次结果不变（首段内的列原样映射回自身；
+ * 续接行没有视图 ⇒ 落进上面"原样返回"那一支）——所以「生成点先折 + 出口统一再折」
+ * 不会走样。
+ */
+export function foldPositionToPhysical(
+  views: ReadonlyMap<number, SourceLineView>,
+  position: SugarPosition,
+): SugarPosition {
+  const view = views.get(position.line);
+  if (view === undefined || view.segments.length <= 1) return position;
+  const offset = Math.min(Math.max(position.column - 1, 0), view.text.length);
+  return logicalPosition(view.segments, offset);
+}
+
 /**
  * 取区段与「源窗口 `[srcFrom, srcTo)`」的交集，再平移到产物坐标（窗口起点 ⇔ `genBase`）。
  *

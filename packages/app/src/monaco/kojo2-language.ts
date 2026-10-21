@@ -1,5 +1,5 @@
 /**
- * Kojo 2.0 的 **Monaco 语言面**（U6）：词法分档 + 语言配置 + 专属配色。
+ * Kojo 2.0 的 **Monaco 语言面**（U6）：词法分档 + 语言配置（配色数据见零依赖叶子）。
  *
  * ## 定位
  * 这是 2.0 前端的**第一刀**，暂挂扩展名 `.kojo2`（**不抢** v1 的 `.kojo`）：真正的切流
@@ -13,8 +13,9 @@
  * （档位表见 {@link KOJO2_TOKEN_TIERS}，配色见 {@link KOJO2_THEME_RULES}）。
  *
  * 主题合并**不在本文件**：`theme.ts` 是仓里唯一的主题装配点（`kojo-dark` / `kojo-light` /
- * `kojo-mint-dark` 一次定义），CUTOVER 时把 {@link KOJO2_THEME_RULES} 与
- * `KOJO_SUGAR_THEME_RULES` 同位并进即可；本文件不 defineTheme，避免出现第二份主题。
+ * `kojo-mint-dark` 一次定义）。2.0 的规则数据住在零 import 叶子 `kojo-theme-rules.ts`，
+ * `theme.ts` 在 flag 开时把它并进 v1 三套（K2-CUTOVER-THEME）；本文件不 defineTheme，
+ * 避免出现第二份主题。
  *
  * ## 词表零抄本
  * 所有中文字形来自 {@link ./kojo2-lexicon}（core / 糖聚合的转发）；本文件**只有正则与状态机**。
@@ -51,54 +52,30 @@ import {
   escapeRegExp,
 } from './kojo2-lexicon';
 import { CJK_WORD_PATTERN } from './word-separators';
+import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from './kojo2-constants';
+import { KOJO2_THEME_RULES, KOJO2_TOKEN } from './kojo-theme-rules';
 
-/** Monaco 语言 id（`languages.ts` 切流时用它；本文件不注册 descriptor）。 */
-export const KOJO2_LANGUAGE_ID = 'kojo2';
-
-/** 暂挂扩展名：`.kojo2`（全仓唯一字面处；CUTOVER 换扩展名时只改这一格）。 */
-export const KOJO2_SOURCE_EXTENSION = '.kojo2';
+/**
+ * 语言 id 与源扩展名：**定义处已下沉**零 import 叶子 `kojo2-constants.ts`（K2-CUTOVER-THEME）。
+ *
+ * 为什么不留在本文件：本文件一加载就经 `kojo2-lexicon` 拖上 `@kojo/plugin-kojo-sugar`
+ * （~900 KB 词表链），而路由层（`ui/kojo2-cutover.ts`）与 model 重挂层只需要这两枚字符串。
+ * 此处按**同一字面源** re-export：既有 import 点（`languages.ts` / `ui/kojo2-open.ts` /
+ * 测试）读到的值一字不变，别在这里复制第二份。
+ */
+export { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION };
 
 /* ============================== token 分档 ============================== */
 
 /**
- * token 名（全部 `kojo2.` 前缀，与 v1 的 `sugar.*` 不撞名）。
- * 细分子档（`.keyword.delimiter` / `.speech.string` / `.number.hex`）与父档同色，
- * 保留它们是为了将来"标点/字面量单独调色"时有挂点，不用改词法。
+ * token 名与配色：**定义处已下沉**零 import 叶子 `kojo-theme-rules.ts`（K2-CUTOVER-THEME）。
+ *
+ * `theme.ts` 在开机静态图里，要在 flag 开时把 2.0 规则并进 v1 三套主题，就不能经本文件
+ * 取那批数据（等于把糖词表挂回首屏）。因此 `KOJO2_TOKEN` / `KOJO2_THEME_RULES` /
+ * `KOJO2_LIGHT_THEME_RULES` 住在叶子，本文件与 `kojo2-theme.ts` 各自 re-export 同一对象本体。
  */
-export const KOJO2_TOKEN = {
-  /** 五锚点符号（`# @ > ? !` 与行首转义 `\`） */
-  anchor: 'kojo2.anchor',
-  /** 声明词 / 调度词（`#` 后的词、`@` 后的词、`!` 的被调名） */
-  declaration: 'kojo2.declaration',
-  /** 保留词（`由` / `否` / `续` / `空行` / 类型词 / 存储期词 / 织入修饰词 / `[插槽]`） */
-  keyword: 'kojo2.keyword',
-  /** 结构性标点（`：` / `「」` / 括号 / 逗号）——与保留词同档同色 */
-  delimiter: 'kojo2.keyword.delimiter',
-  /** 说话人（`角色：` 的整段前导 + 域符号 `我/你/她`） */
-  speaker: 'kojo2.speaker',
-  /** 台词正文 */
-  speech: 'kojo2.speech',
-  /** 字符串字面量（`"…"`，正文面同款文本色） */
-  string: 'kojo2.speech.string',
-  /** 旁白正文（`>` 之后） */
-  narration: 'kojo2.narration',
-  /** 插值 `{…}` / `{条件 ? A : B}`（含花括号） */
-  interp: 'kojo2.interp',
-  /** 行尾表演提示 `(心形)` / `(别过头)` */
-  hint: 'kojo2.hint',
-  /** `@原生` 围栏体（整行原文，不解释） */
-  raw: 'kojo2.raw',
-  /** 整行 `//` 注释 */
-  comment: 'kojo2.comment',
-  /** 十进制整数 */
-  number: 'kojo2.number',
-  /** 十六进制颜色/常量字面量 */
-  hex: 'kojo2.number.hex',
-  /** 运算符（ASCII 符号与中文运算符词） */
-  operator: 'kojo2.operator',
-} as const;
-
-export type Kojo2TokenName = (typeof KOJO2_TOKEN)[keyof typeof KOJO2_TOKEN];
+export { KOJO2_THEME_RULES, KOJO2_TOKEN };
+export type { Kojo2TokenName } from './kojo-theme-rules';
 
 /**
  * 档位表（作者可见的分层口径 → token 名；同档共享前景色）。
@@ -126,33 +103,6 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   { tier: '注释', tokens: [KOJO2_TOKEN.comment], why: '不参与演出的说明' },
   { tier: '数字', tokens: [KOJO2_TOKEN.number, KOJO2_TOKEN.hex], why: '字面量在表达式里要能扫读' },
   { tier: '运算符', tokens: [KOJO2_TOKEN.operator], why: '中文运算符词与符号同档，判定位一眼可辨' },
-];
-
-/**
- * `kojo2` 专属配色（深底 vs-dark / 既有 `kojo-dark` 同底）。
- *
- * 取色纪律：**一档一色** + 深底对比度 ≥ 4.5 + 任意两档 CIE Lab 色差 ≥ 12（测试复跑）。
- * 语义族沿用既有暗色惯性：紫=声明、青=保留词、橙=说话人、绿=台词/字面、蓝=旁白、
- * 黄=插值、粉=提示、灰=原生、暗青灰=注释、淡紫=数字、青绿=运算符；锚点用最亮的粉紫。
- *
- * **合并点**：`theme.ts`（CUTOVER 把本数组与 `KOJO_SUGAR_THEME_RULES` 同位并进三套主题）。
- */
-export const KOJO2_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = [
-  { token: KOJO2_TOKEN.anchor, foreground: 'ff79c6', fontStyle: 'bold' },
-  { token: KOJO2_TOKEN.declaration, foreground: 'bd93f9' },
-  { token: KOJO2_TOKEN.keyword, foreground: '8be9fd' },
-  { token: KOJO2_TOKEN.delimiter, foreground: '8be9fd' },
-  { token: KOJO2_TOKEN.speaker, foreground: 'ffb86c' },
-  { token: KOJO2_TOKEN.speech, foreground: 'a6e3a1' },
-  { token: KOJO2_TOKEN.string, foreground: 'a6e3a1' },
-  { token: KOJO2_TOKEN.narration, foreground: '89b4fa' },
-  { token: KOJO2_TOKEN.interp, foreground: 'f9e2af' },
-  { token: KOJO2_TOKEN.hint, foreground: 'f38ba8', fontStyle: 'italic' },
-  { token: KOJO2_TOKEN.raw, foreground: '9aa0a6' },
-  { token: KOJO2_TOKEN.comment, foreground: '6a8f9a', fontStyle: 'italic' },
-  { token: KOJO2_TOKEN.number, foreground: 'd6acff' },
-  { token: KOJO2_TOKEN.hex, foreground: 'd6acff' },
-  { token: KOJO2_TOKEN.operator, foreground: '66d9c8' },
 ];
 
 /* ============================== 词法状态机 ============================== */

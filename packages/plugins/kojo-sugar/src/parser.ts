@@ -53,6 +53,7 @@ import {
   RESERVED_SECTION_NAMES,
   scanInterpolations,
   splitLogicalLines,
+  splitPhysicalLines,
   stripCont,
   stripInlineComment,
   type LineClass,
@@ -214,14 +215,24 @@ function posOf(line: LogicalLine): { line: number; column: number } {
   return { line: line.line, column: line.rawIndent.length + 1 };
 }
 
-/** 可推进的物理行游标 */
-class Cursor {  constructor(
+/**
+ * 可推进的源行游标：**逻辑行视图**（语法判定）× **物理行原文**（逐字节透传）。
+ *
+ * 两份视图锚在同一份切分上（`splitPhysicalLines` / `splitLogicalLines`，1 基物理行号）：
+ * 块外一律走逻辑行（行尾 `\` 折行是规范 §3.10 的语义）；`@` 原生块与 `[SKIPSTART]` 死区
+ * 是"引擎不编译、转译器一个字节都不许解释"的透传区，必须走 `physicalLinesOf`——
+ * 折行归一在那里就是改内容（行尾 `\`、续行缩进、空行都得原样落地）。
+ */
+class Cursor {
+  constructor(
     readonly lines: LogicalLine[],
     readonly sink: DiagnosticSink,
+    /** 物理行原文（下标 0 = 物理第 1 行） */
+    private readonly physical: readonly string[],
   ) {}
 
   private i = 0;
-  /** 原生 `@` 块用的物理行视图（`LogicalLine` 与物理行一一对应时使用） */
+
   peek(): LogicalLine | undefined {
     return this.lines[this.i];
   }
@@ -238,6 +249,18 @@ class Cursor {  constructor(
   }
   get done(): boolean {
     return this.i >= this.lines.length;
+  }
+
+  /**
+   * 一条逻辑行覆盖的**物理行原文**（`line.line` … `line.endLine`，含折行续接行）。
+   *
+   * 未折行 = 单元素且与 `line.text` 逐字节相等；折行 = 逐条物理行（保留行尾 `\`、
+   * 续行缩进、尾随空白与空行）——这是原生块"整块逐字节透传"的唯一数据源。
+   */
+  physicalLinesOf(line: LogicalLine): string[] {
+    const out: string[] = [];
+    for (let n = line.line; n <= line.endLine; n++) out.push(this.physical[n - 1] ?? '');
+    return out;
   }
 }
 
@@ -258,9 +281,11 @@ export type TopNode = SugarTopLevelNode | RawFunctionBlock | RawLine;
 /** 构建 `SugarDoc`（顶层：头部声明 + 别名 + 时机块） */
 export function buildDoc(source: string, filePath: string, sink: DiagnosticSink): SugarDoc {
   const lines = splitLogicalLines(source);
+  // 同一份切分的物理行原文：原生块 / 死区的逐字节透传必须用它（折行归一会丢字节）
+  const physical = splitPhysicalLines(source);
   const frontMatter = emptyFrontMatter();
   const topLevel: TopNode[] = [];
-  const cursor = new Cursor(lines, sink);
+  const cursor = new Cursor(lines, sink, physical);
   const aliasNames = new Set<string>();
   /** 已解析的常量名（重名 → `alias-duplicate`；与既有别名撞名 → `alias-name-conflict`） */
   const constNames = new Set<string>();
@@ -641,15 +666,22 @@ function buildConstDecl(
  * 读取原生函数块：从当前 `@` 行起直到下一个 `@` 行或文件末尾。
  * **整块逐行原样透传**（块内不解析糖语法）——行文本取**物理行原文**
  * （保留缩进，因为 `#DIM` 等预处理行对列位置无要求但保持原样最安全）。
+ *
+ * **块体 / 块头都按物理行取**（`Cursor.physicalLinesOf`）：块内行尾 `\` 不是折行请求，
+ * 它是透传字节的一部分（实测缺陷：取逻辑行 `line.text` 会把 `A = 1 \` + `    B = 2`
+ * 归一成 `A = 1 B = 2`，丢 `\` 与续行缩进且零诊断）。
+ *
+ * 块**边界判定**仍走逻辑行内容（`contentOf(line).startsWith('@')`）：`@` 行若被上一行
+ * 的 `\` 折进同一条逻辑行，它就不构成新块的起点——这是既有语义，本批不动。
  */
 function readRawFunctionBlock(cursor: Cursor): RawFunctionBlock {
   const first = cursor.next()!;
-  const rawLines: string[] = [first.text];
+  const rawLines: string[] = cursor.physicalLinesOf(first);
   let last = first;
   while (!cursor.done) {
     const line = cursor.peek()!;
     if (contentOf(line).startsWith('@')) break;
-    rawLines.push(line.text);
+    rawLines.push(...cursor.physicalLinesOf(line));
     last = line;
     cursor.next();
   }
@@ -668,6 +700,9 @@ function readRawFunctionBlock(cursor: Cursor): RawFunctionBlock {
  * 任何资格解释它：不降糖、不剥注释、不折行、不归缩进。复用 `@` 块那条 `em.pushRaw` 通路，
  * `codegen` / `formatter` 一侧零改动（发射手径本就"整块逐字节透传"）。
  *
+ * 块体行同样取**物理行原文**（`Cursor.physicalLinesOf`，与 `@` 块同一份视图）：
+ * 死区里的行尾 `\` 是字节，不是折行请求；本函数不自持第二份切行。
+ *
  * 收束判定**不在此重抄记号字面量**：拿 `classifyLine` 的产物（严格等值那一支）配对，
  * 词形唯一真源仍是 `lexer.ts`——与 `consumeEnd` 同一口径。
  *
@@ -680,12 +715,12 @@ function readRawFunctionBlock(cursor: Cursor): RawFunctionBlock {
  */
 function readSkipBlock(cursor: Cursor, head?: LogicalLine): RawFunctionBlock {
   const first = head ?? cursor.next()!;
-  const rawLines: string[] = [first.text];
+  const rawLines: string[] = cursor.physicalLinesOf(first);
   let last = first;
   let closed = false;
   while (!cursor.done) {
     const line = cursor.peek()!;
-    rawLines.push(line.text);
+    rawLines.push(...cursor.physicalLinesOf(line));
     last = line;
     cursor.next();
     if (classifyLine(line).kind === 'skipEnd') {
@@ -1324,6 +1359,9 @@ class BlockParser {
       // 契约层不复制源片段；转译器按 `loc` 从源文本切片重建。
       // 这里直接携带**剥掉 `续` 标记后**的行原文（与插值列号同坐标系）。
       _raw: parsed.body,
+      // `_raw` 在**逻辑全文**里的起点（诊断折回物理行 / 列区段的唯一基准）：
+      // 文本行的体就是行内容，起点 = 行首缩进宽度。
+      _rawAt: line.rawIndent.length,
     } as TextLine | HeartLine;
   }
 
@@ -1347,8 +1385,13 @@ class BlockParser {
 
   /** 构建 `心形` 行（规范 §3.9）——判定规则与 TextLine 完全相同，仅标记不同 */
   private buildHeartNode(line: LogicalLine, raw: string): HeartLine {
-    const { text, wait } = stripCont(raw, this.sink, line);
-    const interpolations = scanInterpolations(text, line.line, this.sink);
+    // `raw` 是 `心形 ` 之后的**行内体**（`心形：` 块体内则是整行内容）；它的起点 =
+    // 行首缩进 + 前缀宽度。`text` 只是剥掉了行尾 `续`，起点与 `raw` 相同。
+    const content = contentOf(line);
+    const bodyAt = content.endsWith(raw) ? content.length - raw.length : content.indexOf(raw);
+    const rawAt = line.rawIndent.length + (bodyAt >= 0 ? bodyAt : 0);
+    const { text, wait } = stripCont(raw, this.sink, line, rawAt);
+    const interpolations = scanInterpolations(text, line, rawAt, this.sink);
     const speech = detectSpeechOf(text, interpolations);
     return {
       kind: 'heartLine',
@@ -1357,6 +1400,7 @@ class BlockParser {
       interpolations,
       loc: spanOf(line),
       _raw: text,
+      _rawAt: rawAt,
     } as HeartLine;
   }
 

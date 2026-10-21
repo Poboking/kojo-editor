@@ -19,15 +19,17 @@ import type {
   KojoExprText,
   KojoNarrativeNode,
   KojoPoolDecl,
+  KojoSpan,
   KojoTemplateDecl,
   KojoTextPart,
 } from '../../ast.js';
 import { isSingleLineNarrativeNode, lowerConditionChain } from '../condition.js';
+import { checkFeature } from '../feature-gate.js';
 import { lowerDispatchNodes, lowerSandboxBlock } from '../program.js';
 import { lowerNarrativeNodes } from '../narrative.js';
 import { lowerColorBlock, lowerRandomBlock, randomCandidatePurity } from '../presentation.js';
 import type { LowerState } from '../state.js';
-import { emit } from '../state.js';
+import { emit, reportFeature } from '../state.js';
 import { lowerOptionsBlockExpanded } from './options.js';
 import { collectTableRefs, ensureTables } from './tables.js';
 import { recordSlot } from './context.js';
@@ -238,8 +240,26 @@ export const walkDispatch: WalkDispatch = (nodes, ctx, state) => {
   for (const node of nodes) walkDispatchNode(node, ctx, state);
 };
 
-function programFeatureEnabled(state: LowerState, key: 'while' | 'repeat' | 'foreach' | 'goto'): boolean {
-  return state.backend.profile.programFeatures?.[key] === true;
+/**
+ * 能力闸（K2-FEATURE-GATE-UNIFY）：**只从统一入口取判定**，并**只在这里报一次**。
+ *
+ * 读的是 `state.featureGate`（adapter 声明 × backend 落点解析一次的单源结论），
+ * 不再直读 `backend.profile.programFeatures`。报与不报全由 `checkFeature` 的结论决定：
+ * - 已开启 ⇒ `diagnostic === null`，什么都不报；
+ * - 关闭 ⇒ 一条统一文案的 error（span = 本节点），返回 false，调用方**直接返回**（零字节）；
+ * - 双源冲突 ⇒ 编译入口已按声明面报过一次（span = null），这里返回的 `diagnostic` 为 null
+ *   ⇒ 不再重复喊"未开启"（同一情形只报一条）。
+ *
+ * `reportFeature` 另按 `(code, span)` 去重（同一节点被重复走到时只留一条）。
+ */
+function programFeatureEnabled(
+  state: LowerState,
+  key: 'while' | 'repeat' | 'foreach',
+  span: KojoSpan,
+): boolean {
+  const check = checkFeature(state.featureGate, key, span);
+  reportFeature(state, check);
+  return check.enabled;
 }
 
 function delegateLeaf(node: KojoDispatchNode, ctx: ExpandContext, state: LowerState): void {
@@ -311,11 +331,8 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
       return;
     }
     case 'whileLoop': {
-      // 能力闸交给 lower 的发射器（诊断文案只有一份），未开启时它报完即返回
-      if (!programFeatureEnabled(state, 'while')) {
-        delegateLeaf(node, ctx, state);
-        return;
-      }
+      // 能力闸已由统一入口判过并报过（见 programFeatureEnabled）；关闭 ⇒ 零字节直接收手。
+      if (!programFeatureEnabled(state, 'while', node.span)) return;
       hoist(refsOfExprs([node.test], ctx), ctx, state);
       emit(state, state.backend.program.whileHeader(rewriteExpandExpr(node.test, ctx)), node.span);
       state.loopDepth++;
@@ -325,10 +342,7 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
       return;
     }
     case 'repeatLoop': {
-      if (!programFeatureEnabled(state, 'repeat')) {
-        delegateLeaf(node, ctx, state);
-        return;
-      }
+      if (!programFeatureEnabled(state, 'repeat', node.span)) return;
       const trimmed = node.count.text.trim();
       if (/^-?\d+$/.test(trimmed) && !(Number(trimmed) > 0 && Number.isSafeInteger(Number(trimmed)))) {
         // 静态非正次数由 lower 的发射器报 core/control/bad-repeat（同一份判据）
@@ -346,7 +360,10 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
     case 'forEachLoop': {
       // 2.0 主链：adapter 集合声明 + 本文件数组事实 → 计划（失败零字节）→ `program.forEachLoop`
       // 落点（引擎关键字全在 adapter）。绑定名改写走帧作用域，出体即失效。
-      lowerExpandedForEachLoop(node, ctx, state, walkNarrative, programFeatureEnabled(state, 'foreach'));
+      // 能力闸在统一入口（关闭时已经报过一条，不再进集合解析）。
+      const enabled = programFeatureEnabled(state, 'foreach', node.span);
+      if (!enabled) return;
+      lowerExpandedForEachLoop(node, ctx, state, walkNarrative, enabled);
       return;
     }
     case 'sandboxBlock':
