@@ -132,6 +132,10 @@ describe('②重载不破光标：不替作者算新光标位，差量也不碰�
     const stub: DiskSyncModel = {
       getValue: () => AUTHOR_BASE,
       getPositionAt: (offset) => ({ lineNumber: AUTHOR_BASE.slice(0, offset).split('\n').length, column: 1 }),
+      getEOL: () => '\n',
+      setEOL: () => {
+        seen.order.push('eol'); // DISK 是纯 LF ⇒ 多数派口径不该触发换档
+      },
       pushStackElement: () => {
         seen.stops += 1;
         seen.order.push('stop');
@@ -149,7 +153,7 @@ describe('②重载不破光标：不替作者算新光标位，差量也不碰�
     expect(seen.computer).toBeNull();
     expect(seen.edits).toBe(1);
     expect(seen.stops).toBe(2); // 前封口（作者那格）+ 后封口（重载这格）
-    expect(seen.order).toEqual(['stop', 'edit', 'stop']);
+    expect(seen.order).toEqual(['stop', 'edit', 'stop']); // 同档 ⇒ 换档一步都没多走
   });
 
   it('头部改行 ⇒ 差量区间整个落在作者光标行之前（第 4 行不动）', () => {
@@ -158,7 +162,8 @@ describe('②重载不破光标：不替作者算新光标位，差量也不碰�
     const edit = edits[0]!;
     const cursorLineStart = AUTHOR_BASE.split('\n').slice(0, 3).join('\n').length + 1; // 第 4 行行首偏移
     expect(edit.end).toBeLessThanOrEqual(cursorLineStart);
-    expect(AUTHOR_BASE.slice(edit.start, edit.end)).toBe('头行');
+    // RELOAD-EOL-PIN 起按行分段：差量含行尾（'头行\n'），区间上界仍 <= 光标行行首
+    expect(AUTHOR_BASE.slice(edit.start, edit.end)).toBe('头行\n');
   });
 
   it('接线：saveViewState / restoreViewState 仍一前一后包住差量落地（前手量到 4:22 的那条路不许断）', () => {
@@ -192,10 +197,12 @@ describe('③脏冲突路径零改动（防把两条路并成一条）', () => {
     expect(SOURCE).toContain('setStatus(' + "'已从磁盘重新加载（文件在外部被修改）'");
   });
 
-  it('接线：合并分支（作者脏 + 两侧各改各的）保持原样，本批没并进来动它', () => {
+  it('接线：合并分支已被 RELOAD-MERGE-UNDO 并入同一差量口径（本批不 revert 它）', () => {
     const mergeBranch = sliceBetween("if (typeof decision === 'object' && decision.kind === 'merge')", '\n      const clashCount');
-    expect(mergeBranch).toContain('live.model.setValue(decision.text)');
-    expect(mergeBranch).not.toContain('applyDiskText');
+    // 改前这里是 `live.model.setValue(decision.text)`（撤销栈照旧被清）；
+    // RELOAD-MERGE-UNDO 起两条腿共用 `applyDiskText`，行为用例见 `reload-merge-undo.test.ts`。
+    expect(mergeBranch).toContain('applyDiskText(live.model, decision.text)');
+    expect(mergeBranch).not.toMatch(/\.setValue\(/);
   });
 });
 
@@ -204,13 +211,13 @@ describe('④差量口径：公共前后缀之外恰好一段', () => {
     expect(diskSyncEdits('甲\n乙', '甲\n乙')).toEqual([]);
     expect(diskSyncEdits('', '新内容')).toEqual([{ start: 0, end: 0, text: '新内容' }]);
     expect(diskSyncEdits('甲', '')).toEqual([{ start: 0, end: 1, text: '' }]);
-    expect(diskSyncEdits('完全不同的内容', '另一份内容')).toEqual([{ start: 0, end: 5, text: '另一份' }]);
+    expect(diskSyncEdits('完全不同的内容', '另一份内容')).toEqual([{ start: 0, end: 7, text: '另一份内容' }]); // 按行：无行尾段=整行替换
   });
 
   it('前后缀都对齐：中段一处改动 = 一段差量，落地逐字相等（含 CRLF 盘上文本）', () => {
     const oldText = '一\n二\n三\n四\n五\n';
     const newText = '一\n二\n改\n四\n五\n';
-    expect(diskSyncEdits(oldText, newText)).toEqual([{ start: 4, end: 5, text: '改' }]);
+    expect(diskSyncEdits(oldText, newText)).toEqual([{ start: 4, end: 6, text: '改\n' }]); // 行级分段：段=内容+行尾
 
     const model = makeModel('a\r\nb\r\nc');
     expect(applyDiskText(model, 'a\r\nB2\r\nc')).toBe(1);

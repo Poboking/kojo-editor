@@ -1467,7 +1467,11 @@ export function EditorPane({
         externalConflictRef.current.delete(path);
         live.eolOverride = undefined; // 外部冲突以合并收场：旧切换意图一并复位（EOL-OVERRIDE-SAVE）
         editorModelPool.setSavedBase(path, text);
-        live.model.setValue(decision.text); // 版本号变了 ⇒ 监听如实上报"仍未保存"
+        // RELOAD-MERGE-UNDO：与重载那条腿同一口径（差量上栈，前后各一次 `pushStackElement`），
+        // 合并结果在撤销栈上占**一个**元素 ⇒ 一次 Ctrl+Z 回到作者自己的改动。
+        // 改前这里是整篇 setValue 落地＝`_commandManager.clear()` 清整条栈（数据丢失级）。
+        // 这里不进 reloadingRef：合并结果版本号变了 ⇒ 监听照旧如实上报"仍未保存"（与改前同果）。
+        applyDiskText(live.model, decision.text);
         if (filePathRef.current === path) setStatus('已合并磁盘改动与你的未保存改动（还没写入磁盘）');
         notify({
           kind: 'info',
