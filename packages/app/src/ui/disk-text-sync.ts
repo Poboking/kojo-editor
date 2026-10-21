@@ -37,8 +37,24 @@
  *   ⇒ 凭空多一行空行（实测 `甲\n乙\n丙` ←盘 `甲\r\n乙改\r\n丙` 得 `甲\n乙改\n\n丙`）。
  *   ⇒ `diskSyncEdits` 改**按行分段**（行=内容+行尾原子单位），边界永不切在 `\r\n` 中间。
  * 钉死用例：`packages/app/tests/disk-text-sync-eol.test.ts`（五条对拍 + 反向自证）。
- * 已知残余（未仿，见该文件注记）：无行尾符单行文件的档位选择（`setValue` 用创建时 defaultEOL，
- * 本模块保持现档）；孤 `\r`（老式 Mac 行尾）在 `setValue` 里也算换行、本模块按内容处理。
+ *
+ * ## DISK-SYNC-EOL-EDGE（2026-10-21 补·两条边角对拍读数）
+ * 头注曾把两处列为"已知残余"。实测**都不等价**，改因与读数见下（口径 = 与 `setValue` 四项读数
+ * 逐字同果：`getValue` / `getEOL` / `getLineCount` / `getValueLength`）：
+ * - **孤 `\r`（老式 Mac 行尾）判档**：`_getEOL` 把**孤 `\r` 也计入行尾总数**（`total = cr+lf+crlf`、
+ *   `crSide = cr+crlf`），原实现只数 `\n` 结尾 ⇒ 纯 CR 盘文被判成"无行尾"、保持现档。
+ *   改前实测：盘 `甲\r乙改\r丙` 进 LF 档 model ⇒ 新路径 [`甲\n乙改\n丙`,档`\n`,行3,长6]，
+ *   旧路径 setValue ⇒ [`甲\r\n乙改\r\n丙`,档`\r\n`,行3,长8]（行数和得著、档位与文本差著——
+ *   只有档位在先，monaco 的 `EditData` 才会把插入段里的孤 `\r` 折成**现档**行尾）。
+ *   ⇒ `detectMajorityEol` 改为 `_getEOL` 的逐字镜像（三计数 + `cr+crlf > total/2`）；`cr = 0` 时
+ *   与原式**完全同值**，故既有五条对拍零影响。分段口径不动：`splitLinesKeepEol` 本就把孤 `\r`
+ *   当行尾收进段内，档位对齐后 `EditData` 归一即与 setValue 同果（实测 7 条 CR 样本全绿）。
+ * - **整篇无行尾（单行文件）**：`setValue` 取的是**创建时的 `defaultEOL`**、不是现档，而
+ *   monaco standalone `createModel` 的兜底是 **CRLF**（实测 `getOptions().defaultEOL === 2`，
+ *   与 `TextModel.DEFAULT_CREATION_OPTIONS` 的 LF 不同）。改前实测：LF 档 model + 盘 `甲改`
+ *   ⇒ 新路径档 `\n`、旧路径档 `\r\n`（文本/行数/长度三项等，只档位差）。
+ *   ⇒ 无行尾分支现取 `model.getOptions().defaultEOL`（公开面、与 `setValue` 同一个入参），
+ *   桩 model 无该方法时回退保持现档。**不改签名、不改调用方**：`DiskSyncModel` 加的是可选成员。
  */
 
 /** 一条差量：`oldText.slice(start, end)` 换成 `text`（偏移按 `getValue()` 的字符序，0 基、含首不含末） */
@@ -59,7 +75,7 @@ function splitLinesKeepEol(text: string): string[] {
       if (text[j] === '\r' && text[j + 1] === '\n') {
         j += 2;
       } else {
-        j += 1; // 孤 `\r` 按内容走：只跳过它本身，后面的 `\n` 归下一行（本模块口径，见头注残余）
+        j += 1; // 孤 `\r`：段到此收（`\r` 留在段内当行尾），后面的 `\n` 归下一行——与 monaco 的换行计数同口径
         lines.push(text.slice(i, j));
         i = j;
         continue;
@@ -70,6 +86,19 @@ function splitLinesKeepEol(text: string): string[] {
   }
   if (text.endsWith('\n') || text.endsWith('\r\n')) lines.push('');
   return lines;
+}
+
+/**
+ * 盘文以**孤 `\r` 收尾**时（老式 Mac 文件常这样结尾），monaco 的 `setValue` 把它当一个行尾 ⇒
+ * 末尾多出一个空行；而 `applyEdits` 的校验里有一条 `removeTrailingCR`（`textModel.js:959`：
+ * CRLF 档 + 差量段以孤 `\r` 收尾 + 区间末正好落在该行末列 ⇒ 直接丢掉那个 `\r`），
+ * 差量通道因此少一行、长度也差一（实测盘 `a\r\nb改\r\nc\r`：新 `[a\r\nb改\r\nc,行3,长8]`
+ * vs 旧 `[a\r\nb改\r\nc\r\n,行4,长10]`）。
+ * ⇒ 落差量前把这一个 `\r` 写成**已对齐的档位**，两条通道同果（LF 档下 `\r`→`\n` 本就同解，零风险）。
+ */
+function trailingLoneCrAsEol(text: string, eol: string): string {
+  if (text.length === 0 || !text.endsWith('\r')) return text; // 以 `\r\n` 收尾的结尾是 `\n`，不动
+  return `${text.slice(0, -1)}${eol}`;
 }
 
 /**
@@ -96,18 +125,42 @@ export function diskSyncEdits(oldText: string, newText: string): readonly DiskSy
   return [{ start: startOffset, end: endOffset, text: newLines.slice(start, endNew).join('') }];
 }
 
-/** `setValue` 同款多数派口径（monaco 0.57.0 `PieceTreeTextBufferBuilder._getEOL`）：`\r\n` 过半 ⇒ CRLF，否则 LF；全文无行尾 ⇒ 保持现档 */
-export function detectMajorityEol(text: string, current: string): string {
+/**
+ * `setValue` 同款多数派口径——monaco 0.57.0 `PieceTreeTextBufferBuilder._getEOL` 的逐字镜像：
+ * 三计数 `cr / lf / crlf`，`cr + crlf > (cr + lf + crlf) / 2` ⇒ CRLF，否则 LF；
+ * 整篇无行尾 ⇒ 取**创建时的 defaultEOL**（`noEol`，standalone `createModel` 兜的是 CRLF 不是 LF），
+ * 拿不到创建档位时（桩 model）才保持现档。`cr = 0` 时与旧式 `crlf > (crlf+lf)/2` 完全同值。
+ */
+export function detectMajorityEol(text: string, current: string, noEol?: string): string {
   let lf = 0;
+  let cr = 0;
   let crlf = 0;
   for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === '\n') {
-      if (i > 0 && text[i - 1] === '\r') crlf += 1;
-      else lf += 1;
+    const ch = text[i];
+    if (ch === '\r') {
+      if (text[i + 1] === '\n') {
+        crlf += 1;
+        i += 1; // `\r\n` 是一个行尾，不重复计 cr
+      } else {
+        cr += 1; // 孤 CR 在 monaco 的判档里同样算换行（DISK-SYNC-EOL-EDGE）
+      }
+    } else if (ch === '\n') {
+      lf += 1;
     }
   }
-  if (crlf + lf === 0) return current;
-  return crlf > (crlf + lf) / 2 ? '\r\n' : '\n';
+  if (cr + lf + crlf === 0) return noEol ?? current;
+  return cr + crlf > (cr + lf + crlf) / 2 ? '\r\n' : '\n';
+}
+
+/**
+ * `setValue` 在整篇无行尾时落的那一档 = 模型创建时的 `defaultEOL`（monaco 里 `_getEOL` 的入参）。
+ * 走公开面 `ITextModel.getOptions()`（`DefaultEndOfLine`：LF=1、其余按 CRLF 处理，同 `_getEOL` 的三元）；
+ * 桩 model 没这个方法 ⇒ 返回 `undefined`，调用方回退保持现档。
+ */
+function creationDefaultEol(model: DiskSyncModel): string | undefined {
+  const options = model.getOptions?.();
+  if (!options) return undefined;
+  return options.defaultEOL === 1 ? '\n' : '\r\n';
 }
 
 /** 一条差量的 model 侧形状（与 monaco `IIdentifiedSingleEditOperation` 结构兼容，不引 monaco 类型） */
@@ -137,6 +190,11 @@ export interface DiskSyncModel {
   getEOL(): string;
   /** 整档换行（monaco `EndOfLineSequence`：0=LF、1=CRLF；raw 变更、不进撤销栈） */
   setEOL(eol: 0 | 1): void;
+  /**
+   * 创建时的档位来源（真身 = monaco 公开面 `ITextModel.getOptions()`，只读 `defaultEOL` 一个字段）。
+   * **可选**：桩 model 不提供 ⇒ `setValue` 的"无行尾 ⇒ 落创建档"这步退化为保持现档。
+   */
+  getOptions?(): { readonly defaultEOL: number };
 }
 
 /**
@@ -155,9 +213,11 @@ export interface DiskSyncModel {
 export function applyDiskText(model: DiskSyncModel, text: string): number {
   // RELOAD-EOL-PIN：先按 `setValue` 同款多数派口径对齐整档（raw 变更、不上栈、不改栈元素数），
   // 再落差量——否则 CRLF 盘进 LF model 时新路径文本/档位都与旧路径不同果（对拍实测，见头注）。
-  const eol = detectMajorityEol(text, model.getEOL());
+  // DISK-SYNC-EOL-EDGE：口径含孤 CR 计数与"整篇无行尾 ⇒ 落创建档"两支，缺一支就少一路同果。
+  const eol = detectMajorityEol(text, model.getEOL(), creationDefaultEol(model));
   if (eol !== model.getEOL()) model.setEOL(eol === '\r\n' ? 1 : 0);
-  const edits = diskSyncEdits(model.getValue(), text);
+  // DISK-SYNC-EOL-EDGE：孤 CR 收尾的盘文先按已对齐档位改写末一个行尾，再算差量（见该函数注记）。
+  const edits = diskSyncEdits(model.getValue(), trailingLoneCrAsEol(text, eol));
   if (edits.length === 0) return 0;
   model.pushStackElement();
   const operations: DiskSyncEditOperation[] = edits.map((edit) => {
