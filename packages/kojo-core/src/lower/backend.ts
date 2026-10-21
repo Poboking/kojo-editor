@@ -31,6 +31,8 @@ import type {
   KojoWeaveModifier,
 } from '../ast.js';
 import type { KojoDiagnostic } from '../diagnostics.js';
+import type { ForeachLoopPlan, ForeachSlotRole } from './expand/foreach.js';
+import type { OptionsEtbPlan } from './expand/options.js';
 
 /* ============================== 发射结果 ============================== */
 
@@ -196,10 +198,18 @@ export interface WeaveEmitRequest {
   readonly slots: readonly KojoHiddenSlot[];
 }
 
-/** `选项`（2.0 待定 UI）：label 是按钮文字，body 是该按钮触发的正文 */
+/**
+ * `选项`（2.0 待定 UI）：label 是按钮文字，body 是该按钮触发的正文。
+ *
+ * `plan` 是 core 算好的 **ETB 结构计划**（按钮顺序 / 回传值 / 输入步 / 分支骨架）。
+ * 2.0 编译主链（`expand/walk.ts`）**总是**给；缺省只发生在走通用 lower（无 adapter
+ * 能力闸的块级预览路径）时——新 adapter 应按 `plan` 落点，读到 undefined 就 fail-closed。
+ * 这是 additive 字段：旧 adapter 只读 `items`/`span` 仍结构兼容。
+ */
 export interface OptionsEmitRequest {
   readonly items: readonly KojoOptionItem[];
   readonly span: KojoSpan;
+  readonly plan?: OptionsEtbPlan;
 }
 
 export interface KojoPresentationEmitter {
@@ -219,6 +229,7 @@ export interface KojoPresentationEmitter {
   ): EmitResult;
   /**
    * `选项` 块（2.0 待定 UI）：头/尾/按钮如何落由 adapter 决定；
+   * `request.plan` 给按钮顺序/回传值/分派骨架（core 的结构事实，adapter 不猜）；
    * `lowerItem(item, index)` **返回**该按钮正文的已降糖行（同上，source map 归块头）。
    */
   optionsBlock(
@@ -252,6 +263,22 @@ export interface ExprCallEmitRequest {
   readonly span: KojoSpan;
 }
 
+/**
+ * `@巡` 的完整索引循环请求（additive；2.0 主链优先走 `program.forEachLoop`）。
+ *
+ * 分工（与 `选项` 的 ETB 计划同一口径）：
+ * - `plan` 是 core 校验过的**纯事实**（槽名 / 绑定 / 长度机制 / 空集合整块跳过），
+ *   adapter 不得改变这些语义（不得先跑一轮再判空、不得把结束值改成含）；
+ * - `body` 是**已降糖**的循环体行（core 用子缓冲算好，`state.loopDepth` 已生效）：
+ *   adapter 只负责缩进嵌入，**不得改写/删除/插入** body 行；
+ * - 产物形状（索引循环关键字、元素取法）是 adapter 的落点事实，core 零引擎关键字。
+ */
+export interface ForEachEmitRequest {
+  readonly plan: ForeachLoopPlan;
+  readonly body: readonly string[];
+  readonly span: KojoSpan;
+}
+
 export interface KojoProgramEmitter {
   /** `@算` 视觉分组开（没有运行时表示时返回 null） */
   sandboxEnter(): EmitResult;
@@ -268,8 +295,19 @@ export interface KojoProgramEmitter {
   whileFooter(): EmitResult;
   repeatHeader(count: KojoExprText): EmitResult;
   repeatFooter(): EmitResult;
+  /**
+   * **旧路径**（通用 lower；没有展开感知的块级预览）：`@巡` 的头/尾。
+   * 2.0 主链不走它——主链用下面的 `forEachLoop`（带 plan 与已降糖 body）。
+   */
   forEachHeader(collection: KojoExprText): EmitResult;
   forEachFooter(): EmitResult;
+  /**
+   * `@巡` 索引循环（additive；**2.0 主链的唯一落点**）。
+   *
+   * 缺省 = 老 backend 不支持：core 报 `core/feature/unsupported` 且**不产字节**
+   * （fail-closed，不退回 `forEachHeader/Footer` 猜绑定）。
+   */
+  forEachLoop?(request: ForEachEmitRequest): EmitResult;
 }
 
 /* ============================== 文件装配（`# 机` 事件头） ============================== */
@@ -281,7 +319,7 @@ export interface KojoProgramEmitter {
  * `wrapMachine` / `weaveHeader`，由它按槽的静态类型事实落声明；**不要让 adapter 反推
  * body 文本，也不要靠名字后缀猜类型**。
  */
-export type KojoHiddenSlotKind = 'table' | 'random' | 'template';
+export type KojoHiddenSlotKind = 'table' | 'random' | 'template' | 'foreach';
 
 /** 槽的用途细分（additive；adapter 可选读，声明形态/命名可据此分档） */
 export type KojoHiddenSlotRole =
@@ -291,8 +329,28 @@ export type KojoHiddenSlotRole =
   | 'table-value'
   /** `@随机` 的候选下标槽（整数） */
   | 'random-slot'
+  /** `@巡` 的索引槽（整数；`{下标}` 直接引用） */
+  | 'foreach-index'
+  /** `@巡` 的元素槽（数组元素 / 角色号） */
+  | 'foreach-element'
+  /** `@巡` 的键槽（键值集合；`{键}`） */
+  | 'foreach-key'
+  /** `@巡` 的名字槽（角色集合的 `{名}`） */
+  | 'foreach-name'
   /** 其它编译期构造预留 */
   | 'template-slot';
+
+/**
+ * `@巡` 槽角色 → 隐藏槽角色（`foreach.ts` 的槽事实是语言层的，契约角色是发射层的）。
+ *
+ * 唯一一份映射：walk 发槽、adapter 声明、测试断言都按它对齐。
+ */
+export const FOREACH_HIDDEN_SLOT_ROLES: Readonly<Record<ForeachSlotRole, KojoHiddenSlotRole>> = Object.freeze({
+  index: 'foreach-index',
+  element: 'foreach-element',
+  key: 'foreach-key',
+  name: 'foreach-name',
+});
 
 /** 槽的静态类型事实（ERB 声明用：int → `#DIM`，string → `#DIMS`） */
 export type KojoHiddenSlotValueType = 'int' | 'string';

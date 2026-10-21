@@ -22,6 +22,7 @@ import { literalToExpr, rewriteExpr, scanIdentifiers } from './expr.js';
 import type { NameNeighbors } from './expr.js';
 import { recordSlot, reportAt } from './context.js';
 import type { ExpandContext } from './context.js';
+import { foreachSlotInScope } from './context.js';
 
 /** 判别值隐藏槽（只求值一次） */
 export function tableSubjectSlot(tableName: string): string {
@@ -34,21 +35,30 @@ export function tableValueSlot(tableName: string): string {
 }
 
 /** 名字位置判定：调用位 `名字(` 不是表引用（表不是函数）；属性位 `名字.xxx` 也不是 */
-function isNamePosition(neighbors: NameNeighbors): boolean {
+export function isNamePosition(neighbors: NameNeighbors): boolean {
   return neighbors.after !== '(' && neighbors.before !== '.';
 }
 
-/** 一层表引用替换（表达式/文本插值共用）：表名 → 值隐藏槽 */
+/**
+ * 一层表引用替换（表达式/文本插值共用）：表名 → 值隐藏槽。
+ *
+ * `@巡` 绑定名**遮蔽**同名表：`{值}` 在循环体内始终指元素槽（与语言层名字解析优先级一致）。
+ */
 export function tableLookup(ctx: ExpandContext): (name: string, neighbors: NameNeighbors) => string | undefined {
   return (name, neighbors) => {
     if (!isNamePosition(neighbors)) return undefined;
+    if (foreachSlotInScope(ctx, name) !== null) return undefined;
     return ctx.tables.has(name) ? tableValueSlot(name) : undefined;
   };
 }
 
-/** 表达式里引用了哪些表（按出现顺序去重） */
+/** 表达式里引用了哪些表（按出现顺序去重；循环体内的绑定名不算表引用） */
 export function collectTableRefs(expr: KojoExprText, ctx: ExpandContext): readonly string[] {
-  return scanIdentifiers(expr.text, (name, neighbors) => isNamePosition(neighbors) && ctx.tables.has(name));
+  return scanIdentifiers(
+    expr.text,
+    (name, neighbors) =>
+      isNamePosition(neighbors) && foreachSlotInScope(ctx, name) === null && ctx.tables.has(name),
+  );
 }
 
 function planOf(name: string, ctx: ExpandContext): TableLoweringPlan | null {

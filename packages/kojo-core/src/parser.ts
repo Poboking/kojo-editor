@@ -1121,6 +1121,22 @@ function parsePoolDecl(st: ParserState, header: KojoDeclRecord): void {
   st.decls.push(decl);
 }
 
+/**
+ * 参数列表收口：`)` 之后再出现非空白 = 右括号未配对 / 声明头有脏尾巴。
+ * 扫描本身有界（matchParenEnd 单遍），这里只负责把「多余尾巴」变成诊断而不是静默吞掉。
+ */
+function reportParenTail(
+  st: ParserState,
+  rest: string,
+  restOffset: number,
+  close: number,
+  header: KojoLexLine,
+  label: string,
+): void {
+  if (rest.slice(close + 1).trim().length === 0) return;
+  report(st, 'core/lex/anchor', `${label} 的参数列表 \`)\` 后不能有内容。`, restOffset + close + 1, header.contentEnd);
+}
+
 function parseTemplateDecl(st: ParserState, header: KojoDeclRecord): void {
   const rest = header.rest;
   const restOffset = header.restOffset;
@@ -1133,6 +1149,7 @@ function parseTemplateDecl(st: ParserState, header: KojoDeclRecord): void {
     if (close < 0) {
       reportSpan(st, 'core/lex/anchor', '`# 模` 的参数括号未闭合。', spanOfLine(st, header));
     } else {
+      reportParenTail(st, rest, restOffset, close, header, '`# 模`');
       const argTokens = splitTopLevelArgs(rest.slice(open + 1, close), restOffset + open + 1);
       params = argTokens.map((token) => {
         const eq = token.text.indexOf('=');
@@ -1207,7 +1224,11 @@ function parseTemplateDecl(st: ParserState, header: KojoDeclRecord): void {
 /* ============================== @函 / @织 ============================== */
 
 function parseFunctionDecl(st: ParserState, header: KojoLexLine): void {
-  if (header.kind !== 'dispatch') return;
+  // 防御：本函数是块头消费者（调用方不会预推进），任何提前 return 都必须自己推进，否则顶层死循环。
+  if (header.kind !== 'dispatch') {
+    st.i++;
+    return;
+  }
   const rest = header.rest;
   const restOffset = header.restOffset;
   const open = rest.indexOf('(');
@@ -1219,6 +1240,7 @@ function parseFunctionDecl(st: ParserState, header: KojoLexLine): void {
     if (close < 0) {
       reportSpan(st, 'core/lex/anchor', '`@函` 的参数括号未闭合。', spanOfLine(st, header));
     } else {
+      reportParenTail(st, rest, restOffset, close, header, '`@函`');
       const argTokens = splitTopLevelArgs(rest.slice(open + 1, close), restOffset + open + 1);
       for (let i = 0; i < argTokens.length; i++) {
         const token = argTokens[i]!;
@@ -1257,6 +1279,8 @@ function parseFunctionDecl(st: ParserState, header: KojoLexLine): void {
       `\`@函\` 的名字 \`${name}\` 不是合法标识符（形如 \`@函 增加羁绊(目标, 数值=10)\`）。`,
       spanOfLine(st, header),
     );
+    // 块头消费者必须推进：名字非法（如 `@函 a)`）时旧路径直接 return，顶层拿到同一下标会无限重报 → OOM。
+    skipLineAndSubtree(st);
     return;
   }
   registerDeclarationName(st, name, spanOfLine(st, header), '函数');
@@ -1280,10 +1304,15 @@ const WEAVE_MODIFIER_MAP: ReadonlyMap<string, KojoWeaveModifier> = new Map<strin
 ]);
 
 function parseWeaveDecl(st: ParserState, header: KojoLexLine): void {
-  if (header.kind !== 'dispatch') return;
+  if (header.kind !== 'dispatch') {
+    st.i++;
+    return;
+  }
   const tokens = splitSpaces(header.rest, header.restOffset);
   if (tokens.length === 0) {
     reportSpan(st, 'core/lex/anchor', '`@织` 缺事件名（形如 `@织 回合末 之后`）。', spanOfLine(st, header));
+    // 同 `@函`：块头消费者必须推进；裸 `@织` 直接 return 会让顶层原地重报直到 OOM。
+    skipLineAndSubtree(st);
     return;
   }
   let modifierStart = tokens.length;

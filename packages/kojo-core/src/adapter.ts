@@ -24,6 +24,8 @@ import type {
   KojoDiagnostic,
 } from './diagnostics.js';
 import { severityOf } from './diagnostics.js';
+import type { ForeachDeclarations } from './lower/expand/foreach.js';
+import { validateForeachDeclarations } from './lower/expand/foreach.js';
 
 /* ============================== 1. 契约总表 ============================== */
 
@@ -52,6 +54,14 @@ export interface GameAdapter {
   readonly storageClasses: StorageClasses;
   /** 程序层细粒度开关：arrays / while / goto / recursion / foreach / repeat */
   readonly programFeatures: ProgramFeatures;
+  /**
+   * `@巡` 的集合声明（additive；K2-FOREACH）：命名集合 + 作者数组规则。
+   *
+   * `null` = 本 adapter 不支持 `@巡`（老 adapter 传 null 即可，零改动）；
+   * 声明事实全在 adapter，**数组事实**（作者 `# 变量 名 类型[N]`）由 core 从源码收集后
+   * 经 `ForeachPlanOptions.arrays` 注入——adapter 不预列作者变量。
+   */
+  readonly foreachCollections: ForeachDeclarations | null;
   /** Unit 编码/EOL 策略（按文件保留，不归一化） */
   readonly encodingPolicy: EncodingPolicy;
   /** 同名/同层多定义判定：unique / shared-hook / overlay */
@@ -271,6 +281,11 @@ export interface OptionsPresentation {
   readonly status: 'pending';
   readonly button: string;
   readonly input: string;
+  /**
+   * 输入读回槽（additive；引擎事实由 adapter 数据声明）：按钮输入把玩家选择写回的
+   * 变量名（如按钮输入系读回 `RESULTS`）。落点关键词只从这份数据来，backend 不写死。
+   */
+  readonly result: string;
   /** 单场景最多选项块数（§7.5：一个场景最多一个） */
   readonly maxPerScene: number;
 }
@@ -479,8 +494,9 @@ const PRESENTATION_UNSUPPORTED_CODES: Readonly<Record<PresentationFeature, Diagn
   heart: 'core/feature/unsupported',
   color: 'core/color/unsupported',
   face: 'core/face/unsupported',
-  // `选项` 是 2.0 待定 API：未声明时按待定项 warning，不静默
-  options: 'core/options/pending',
+  // `选项` 是 2.0 待定 UI（pending warning 由 lowering 出），但**未声明 = error**：
+  // 没有按钮落点就不能生成有效产物 ⇒ 与 lowering 的能力闸同码同级别（fail-closed）。
+  options: 'core/feature/unsupported',
 });
 
 /** adapter 自检码（命名空间闭集；校验函数与测试共用这一份字符串源） */
@@ -585,6 +601,29 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
           ADAPTER_VALIDATION_CODES.inconsistent,
           'programFeatures 开启了程序层能力，但 profile.features 没有声明 program。',
         );
+      }
+    }
+  }
+
+  /* --- foreachCollections（additive；null/缺省 = 不支持，不报错） --- */
+  const foreachCollections: ForeachDeclarations | null | undefined = adapter.foreachCollections;
+  if (foreachCollections !== null && foreachCollections !== undefined) {
+    if (typeof foreachCollections !== 'object') {
+      push(ADAPTER_VALIDATION_CODES.incomplete, 'foreachCollections 必须是对象或 null（null = 不支持 @巡）。');
+    } else {
+      const rawCollections: unknown = foreachCollections.collections;
+      const hasArrayRule = foreachCollections.arrayRule !== null && foreachCollections.arrayRule !== undefined;
+      if (!Array.isArray(rawCollections)) {
+        push(ADAPTER_VALIDATION_CODES.incomplete, 'foreachCollections.collections 必须是数组（可为空）。');
+      } else if (rawCollections.length === 0 && !hasArrayRule) {
+        push(
+          ADAPTER_VALIDATION_CODES.incomplete,
+          'foreachCollections 既没有命名集合也没有数组规则：`@巡` 没有任何可解析的落点（要么给声明，要么给 null）。',
+        );
+      }
+      // 声明自洽性：语言层规则只有一份（foreach.ts），这里只把消息挂到既有 adapter 码表
+      for (const message of validateForeachDeclarations(foreachCollections)) {
+        push(ADAPTER_VALIDATION_CODES.inconsistent, message);
       }
     }
   }
@@ -763,6 +802,10 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
       const options = presentation.options;
       if (!isText(options.button) || !isText(options.input)) {
         push('core/options/pending', 'presentation.options 缺少按钮/输入落点。');
+      }
+      // 读回槽 additive：缺了就不能把玩家选择分派回按钮（emitter 会 fail-closed，这里先报）
+      if (!isText(options.result)) {
+        push('core/options/pending', 'presentation.options 缺少按钮输入的读回槽（result）。');
       }
       if (presentation.options.status !== 'pending') {
         push('core/options/pending', 'presentation.options.status 只能是 pending（2.0 待定 API）。');
@@ -1075,7 +1118,7 @@ export function checkSymbol(adapter: GameAdapter, symbol: string, span: KojoSpan
   );
 }
 
-/** 演出面是否声明；未声明 → 该面的 core 码（`选项` 按待定 warning） */
+/** 演出面是否声明；未声明 → 该面的 core 码（四项一律 error；`选项` 的 pending warning 只来自 lowering） */
 export function checkPresentation(
   adapter: GameAdapter,
   feature: PresentationFeature,

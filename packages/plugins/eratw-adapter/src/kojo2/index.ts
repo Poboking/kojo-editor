@@ -22,6 +22,7 @@ import { ERATW_DOMAIN_SYMBOLS } from './domain-symbols.js';
 import { ERATW_PRESENTATION } from './presentation.js';
 import { ERATW_STORAGE_CLASSES } from './storage.js';
 import { ERATW_PROGRAM_FEATURES } from './program.js';
+import { ERATW_FOREACH_DECLARATIONS } from './collections.js';
 import {
   ERATW_CAPABILITY,
   ERATW_CONFORMANCE_SUITE,
@@ -64,6 +65,7 @@ export const ERATW_GAME_ADAPTER: GameAdapter = freezeAdapter({
   presentation: ERATW_PRESENTATION,
   storageClasses: ERATW_STORAGE_CLASSES,
   programFeatures: ERATW_PROGRAM_FEATURES,
+  foreachCollections: ERATW_FOREACH_DECLARATIONS,
   encodingPolicy: ERATW_ENCODING_POLICY,
   layerPolicy: ERATW_LAYER_POLICY,
   diagnosticNamespace: ERATW_DIAGNOSTIC_NAMESPACE,
@@ -80,4 +82,17 @@ export {
   type EratwCompileTarget,
   type EratwEmitDeps,
 } from './backend.js';
+
+/* ---------- `选项` 落点（纯函数；backend 转调它，测试/一致性套件可直接复用） ---------- */
+export {
+  emitOptions,
+  type EratwOptionsEmitInput,
+  type OptionsBranchFact,
+  type OptionsButtonFact,
+  type OptionsPlanFact,
+} from './options-emit.js';
+
+/* ---------- `@巡` 集合声明与索引循环落点（K2-FOREACH） ---------- */
+export * from './collections.js';
+export { emitEratwForEachLoop, type EratwForeachEmitOptions } from './foreach-emit.js';
 

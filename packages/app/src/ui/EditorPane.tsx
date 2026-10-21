@@ -130,6 +130,9 @@ import {
   type SugarCacheEntry,
 } from './editor-pane/pane-helpers';
 import { useBreadcrumb } from './editor-pane/use-breadcrumb';
+// K2 batch-3：`.kojo2` 的问题归 2.0 诊断链路独占（flag 关 ⇒ 恒 false，v1 行为逐字不变）。
+// 只引这个纯判据模块，不把 core 编译 / eraTW backend 拖进本文件的模块图。
+import { kojo2OwnsDiagnostics } from './kojo2-diagnostics-gate';
 import {
   useCodeLensPreference,
   useEditorPreferences,
@@ -815,6 +818,10 @@ export function EditorPane({
   const refreshMarkers = useCallback(
     (model: Monaco.editor.ITextModel, path: string) => {
       if (model.isDisposed()) return;
+      // Kojo 2.0 面自带诊断（flag 开 + `.kojo2`）：v1 装饰器在这份文件上一条结果都没有，
+      // 照常发布空档会把 2.0 已上账的问题与波浪线整档抹掉 ⇒ 这一档让路。
+      // flag 关 / 非 2.0 文件 ⇒ 恒 false，下面逐字不变。
+      if (kojo2OwnsDiagnostics(path)) return;
       markerRunner.refresh(path, () => (model.isDisposed() ? '' : model.getValue()));
     },
     [markerRunner],
@@ -1810,6 +1817,8 @@ export function EditorPane({
     autosaveFailedRef,
     installPreferences,
     installBreadcrumb: breadcrumb.install,
+    // K2 batch-3：2.0 诊断失败要发一条 error toast（可见提示），出口是壳层通知中心
+    notify,
   });
 
   // 「标注函数被谁调用」开关（B8）：偏好落地 / 事件订阅 / 退订全在 use-editor-preferences.ts。

@@ -238,3 +238,10 @@ export function runCompile(file: KojoFile, options: RunCompileOptions): RunCompi
 
 /** 让 expand 目录的走法在别处复用（compile.ts 只走 runCompile；这里保留类型收口） */
 export { walkDispatch, walkNarrative };
+
+/**
+ * 展开模块的公共面（顺序按数据流：`展开器走法` → `选项` 的 ETB 计划与降糖 →
+ * `@巡` 的集合计划）。别处只许从这里/`lower/index.ts`/`src/index.ts` 取，禁止深路径 import。
+ */
+export * from './options.js';
+export * from './foreach.js';

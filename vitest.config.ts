@@ -12,6 +12,7 @@ export const config = defineConfig({
     alias: {
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
       '@kojo/kojo-core': r('./packages/kojo-core/src/index.ts'),
+      '@kojo/kojo-conformance': r('./packages/kojo-conformance/src/index.ts'),
       '@kojo/kojo-project-kit': r('./packages/kojo-project-kit/src/index.ts'),
       '@kojo/kernel': r('./packages/kernel/src/index.ts'),
       '@kojo/plugin-erb-parser': r('./packages/plugins/erb-parser/src/index.ts'),

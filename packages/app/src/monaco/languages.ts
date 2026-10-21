@@ -12,12 +12,22 @@
  * 注册顺序 = provider 注册顺序（ERB 先、Kojo 后，与收口前 `registerForKojoDialects`
  * 逐字一致）；认路判据彼此不重叠，路径解析结果不受顺序影响。JSON 不声明
  * `languageServices`，因此不参与通用语言服务双注册。认不出路径 ⇒ plaintext 兜底。
+ *
+ * **Kojo 2.0 是开关后的追加项**（K2-EDITOR-WIRE，预演）：开关（`ui/kojo2-flag.ts`，默认关）
+ * 关着时本文件行为与收口前逐字一致（仍只有 ERB / Kojo / JSON 三枚）；打开后**在末尾追加**
+ * 一枚暂挂 `.kojo2` 的 `kojo2` descriptor，v1 的 `.kojo` descriptor 与注册次序一字不动。
  */
 import type * as Monaco from './entry';
 import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
+import {
+  KOJO2_LANGUAGE_ID,
+  KOJO2_SOURCE_EXTENSION,
+  registerKojo2Language,
+} from './kojo2-language';
 import {
   languageIdForPath,
   registerAllLanguageSurfaces,
@@ -54,9 +64,27 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
   register: registerJsonLanguage,
 };
 
+/**
+ * Kojo 2.0 的 descriptor（K2-EDITOR-WIRE，**预演**）：只在开关打开时**追加**进表。
+ *
+ * - 暂挂 `.kojo2`，**不抢** v1 的 `.kojo`（v1 三枚 descriptor 与注册次序逐字不动）；
+ * - 与 v1 两门一等语言不同，这里**不声明** `languageServices` / `structure`：2.0 的宿主
+ *   语言服务与结构层还没接，声明了只会把 v1 的 provider 挂到 2.0 的语言 id 上
+ *   （空结果顶掉 Monaco 内建行为 = 假承诺）。预演要的只是"文件打得开、脸是对的"；
+ * - 表是进程级只增表，本行在**模块求值**时按开关定一次；改开关后重载窗口才换表。
+ */
+const KOJO2_DESCRIPTOR: LanguageDescriptor = {
+  id: KOJO2_LANGUAGE_ID,
+  label: 'kojo2',
+  matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO2_SOURCE_EXTENSION,
+  register: registerKojo2Language,
+};
+
 registerLanguage(ERB_DESCRIPTOR);
 registerLanguage(KOJO_DESCRIPTOR);
 registerLanguage(JSON_DESCRIPTOR);
+// 追加式：开关关时这一行整体不执行，上面三枚的注册结果与收口前逐字一致。
+if (isKojo2CutoverEnabled()) registerLanguage(KOJO2_DESCRIPTOR);
 
 /** 按路径选 Monaco 语言 id（收口前 `languageFor` 的单源） */
 export function languageForPath(filePath: string): string {

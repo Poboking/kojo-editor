@@ -4,6 +4,10 @@ import type * as Monaco from './entry';
 // 词表链，本文件在开机静态图里（diff-view / QuickFixPreviewOverlay 都经它），
 // 直接 import 老家就等于把糖包静态挂回开机图。叶子与两个老家的关系见叶子头注。
 import { KOJO_SUGAR_THEME_RULES, KOJO_SEMANTIC_THEME_RULES } from './kojo-theme-rules';
+// K2 batch-3：2.0 三套主题的注册闸。flag 模块零依赖（只读 localStorage），静态引它
+// 不破坏上面那条 PS-10 断链；主题数据本身（`kojo2-theme`）仍走**动态 import**（见
+// `defineMonacoThemes` 末尾）。
+import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /**
  * Monaco 三套主题（2026-10-17 反馈 3：编辑器配色跟随主题）。
@@ -559,4 +563,26 @@ export function defineMonacoThemes(monaco: typeof Monaco): void {
     rules: mintRules(),
     colors: KOJO_MINT_COLORS,
   });
+  // Kojo 2.0 三套主题（K2 batch-3，flag 守卫）：与 v1 三套**不同 id**（`kojo2-*`），
+  // 不覆盖、不继承，重复注册由 `registerKojo2Themes` 的 WeakSet 幂等挡掉。
+  //
+  // 为什么是**动态 import** 而不是静态引 `kojo2-theme`：本文件在开机静态图里，而
+  // `kojo2-theme → kojo2-language → kojo2-lexicon → @kojo/plugin-kojo-sugar` 是那条
+  // 被 `ps10-eager-graph.test.ts` 点名的 ~900 KB 词表链——静态引就把糖包挂回首屏。
+  // 动态装载的时机安全性：2.0 主题 id 目前没有任何消费方（切主题仍走 v1 三套），
+  // 第一次 `setTheme('kojo2-*')` 只可能发生在切流批；本批只保证"定义好、可被切"。
+  // 失败不静默：v1 三套已经定义完，这里只少 2.0 那三套，用一条 warn 说出来。
+  if (isKojo2CutoverEnabled()) {
+    void import('./kojo2-theme')
+      .then((module) => {
+        module.registerKojo2Themes(monaco);
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          `[theme] Kojo 2.0 主题注册失败（v1 三套不受影响，2.0 文件会按 v1 主题上色）：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  }
 }

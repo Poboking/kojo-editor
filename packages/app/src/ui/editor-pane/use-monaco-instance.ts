@@ -58,6 +58,11 @@ import { perf } from '../../perf';
 import { PREVIEW_WRITE_VETO } from './pane-helpers';
 import type { EditorPaneRefs, MutableRef } from './pane-context';
 import type { PreferencesInstaller } from './use-editor-preferences';
+// K2 batch-3：2.0 诊断接线（flag 关时安装器立即返回空操作，连监听都不挂）。
+// 住在本实例 effect 里而不是 EditorPane：事件源（ed / filePathRef / sugarModelRef）都在
+// 这一拍之后才齐，且退场次序本来就由本 hook 的清账段钉死。
+import { installKojo2ProblemWiring } from '../kojo2-problem-wiring';
+import type { Notify } from '../NotificationCenter';
 
 /** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
 let bootEditorMarked = false;
@@ -89,6 +94,8 @@ export interface MonacoInstanceParams {
     ed: Monaco.editor.IStandaloneCodeEditor,
     onCursorActivity: () => void,
   ) => () => void;
+  /** 壳层通知中心（2.0 诊断失败时发一条 error toast；缺省 = 只进问题面板 + console） */
+  notify: Notify;
 }
 
 export function useMonacoInstance(params: MonacoInstanceParams): void {
@@ -110,6 +117,7 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     autosaveFailedRef,
     installPreferences,
     installBreadcrumb,
+    notify,
   } = params;
   const {
     editorRef,
@@ -263,6 +271,17 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     });
     // 面包屑：刷新入口 + 光标/model 两条监听（判据与缓存全在 use-breadcrumb.ts）
     const disposeBreadcrumb = installBreadcrumb(ed, pushSelStatus);
+    // Kojo 2.0 诊断（K2 batch-3）：内容变化 / 活动 model 切换两条监听 + 问题面板上账。
+    // flag 关 ⇒ 安装器立即返回空操作（不挂监听、不碰 problem-store），v1 行为逐字不变。
+    const disposeKojo2Problems = installKojo2ProblemWiring({
+      editor: ed,
+      kernel,
+      filePathRef,
+      sugarModelRef,
+      markerHost: monaco,
+      severitySource: monaco,
+      notify,
+    });
     // 视图状态：光标/滚动驱动快照（store 内防抖合并落盘）；页面卸载前 flush 一次
     const viewCurSub = ed.onDidChangeCursorPosition(snapshotActiveView);
     const viewScrSub = ed.onDidScrollChange(snapshotActiveView);
@@ -290,6 +309,7 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       disposePreferences();
       focusDisposer.dispose();
       disposeBreadcrumb();
+      disposeKojo2Problems();
       viewCurSub.dispose();
       viewScrSub.dispose();
       viewFindSub?.dispose();

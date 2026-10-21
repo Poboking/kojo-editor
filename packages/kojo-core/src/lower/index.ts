@@ -9,6 +9,7 @@
  * - `condition.ts`—— `?` 链 first-match + SIF 降级；
  * - `native.ts`   —— `@原生` 逐行透传（折回物理行）；
  * - `presentation.ts` —— `@着色` / `@颜绘` / `@随机` 骨架；
+ * - `expand/options.ts` —— `选项` 的 ETB 计划 + 2.0 主链降糖（adapter UI 能力闸）；
  * - `program.ts`  —— 调度区 / program 形状（`@算`、循环、跳转、返回、颜色清理）；
  * - `weave.ts`    —— `@织` 监听骨架；
  * - `narrative.ts`—— 叙事节点分发器（唯一的"汇合点"）。
@@ -119,6 +120,8 @@ export * from './condition.js';
 export * from './narrative.js';
 export * from './native.js';
 export * from './presentation.js';
+/* 展开降糖（`选项` 的 ETB 计划是 adapter 契约的 additive 字段，归公共面） */
+export * from './expand/options.js';
 export * from './program.js';
 export * from './state.js';
 export * from './text.js';

@@ -19,6 +19,7 @@ import type {
   EmitResult,
   ExprCallEmitRequest,
   FaceEmitRequest,
+  ForEachEmitRequest,
   HintSupport,
   KojoEmitBackend,
   KojoLoweringProfile,
@@ -144,6 +145,9 @@ export const FIXTURE_ADAPTER: GameAdapter = freezeAdapter({
     foreach: false,
     repeat: false,
   },
+
+  // 老 adapter 的兼容面：null = 不支持 `@巡`（fixture 用错误路径测 fail-closed）
+  foreachCollections: null,
 
   encodingPolicy: {
     defaultEncoding: 'utf-8',
@@ -400,6 +404,17 @@ export const FIXTURE_BACKEND: KojoEmitBackend = freezeBackend({
     },
     forEachFooter(): EmitResult {
       return 'NEXT';
+    },
+    /**
+     * `@巡` 主链落点（伪引擎的**结构编码**，不是 ERB）：每个绑定一行，循环体原样嵌入。
+     * core 测试据此断言"索引循环由 backend 出、绑定名改写正确"，不把 ERB 形状拖进 core。
+     */
+    forEachLoop(request: ForEachEmitRequest): EmitResult {
+      const lines: string[] = [`FOREACH|${request.plan.kind}|${request.plan.collection}`];
+      for (const binding of request.plan.bindings) lines.push(`BIND|${binding.name}|${binding.slot}`);
+      for (const line of request.body) lines.push(line);
+      lines.push('FOREACH.END');
+      return lines;
     },
   },
 });

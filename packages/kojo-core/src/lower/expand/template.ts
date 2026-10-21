@@ -43,10 +43,11 @@ import type {
 import { decodeIntegerLiteral, decodeQuotedLiteral, isIdentifier } from '../../lexer.js';
 import type { LowerState } from '../state.js';
 import { expansionFrame, lowerWithFrame } from './frame.js';
-import { collectTableRefs, ensureTables, tableLookup } from './tables.js';
+import { collectTableRefs, ensureTables } from './tables.js';
+import { rewriteExpandExpr } from './lookup.js';
 import { reportAt } from './context.js';
 import type { ExpandContext, WalkNarrative } from './context.js';
-import { replaceIdentifiers, rewriteExpr } from './expr.js';
+import { replaceIdentifiers } from './expr.js';
 import type { NameNeighbors } from './expr.js';
 
 /** 一个模板实参的两种位面形态 */
@@ -64,8 +65,8 @@ function toTemplateArg(expr: KojoExprText, ctx: ExpandContext): TemplateArg {
   if (quoted !== null) return { expr, literalText: quoted };
   const int = decodeIntegerLiteral(trimmed);
   if (int !== null) return { expr, literalText: String(int) };
-  const refs = collectTableRefs(expr, ctx);
-  return { expr: refs.length === 0 ? expr : rewriteExpr(expr, tableLookup(ctx)).expr, literalText: null };
+  // 表引用与 `@巡` 绑定名都换隐藏槽（同一查找口）；没有命中时 rewriteExpr 原样返回
+  return { expr: rewriteExpandExpr(expr, ctx), literalText: null };
 }
 
 function paramLookup(subs: ReadonlyMap<string, TemplateArg>): (name: string, neighbors: NameNeighbors) => string | undefined {
@@ -316,7 +317,7 @@ export function expandTemplateCall(call: KojoCallStmt, template: KojoTemplateDec
     const raw = call.args[i]!;
     const refs = collectTableRefs(raw, ctx);
     if (refs.length > 0) ensureTables(refs, ctx, state);
-    args.push(toTemplateArg(refs.length === 0 ? raw : rewriteExpr(raw, tableLookup(ctx)).expr, ctx));
+    args.push(toTemplateArg(raw, ctx));
   }
   const subs = new Map<string, TemplateArg>();
   for (let i = 0; i < template.params.length; i++) subs.set(template.params[i]!.name, args[i]!);

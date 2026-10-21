@@ -7,11 +7,13 @@
 import type {
   KojoConstDecl,
   KojoDecl,
+  KojoExprText,
   KojoFile,
   KojoFunctionDecl,
   KojoPoolDecl,
   KojoTemplateDecl,
   KojoTableDecl,
+  KojoVarDecl,
 } from '../../ast.js';
 import type { GameAdapter } from '../../adapter.js';
 import type { CoreDiagnosticCode, DiagnosticSink, KojoDiagnostic } from '../../diagnostics.js';
@@ -21,6 +23,7 @@ import type { EmitBuffer } from '../buffer.js';
 import type { LowerState } from '../state.js';
 import type { TableLoweringPlan } from '../../table.js';
 import { collectIntegerConstants } from '../../table.js';
+import type { ForeachArrayFact } from './foreach.js';
 
 /** 展开器用的"体走法"回调（避免 expand 目录内部循环 import） */
 export type WalkNarrative = (nodes: readonly import('../../ast.js').KojoNarrativeNode[], ctx: ExpandContext, state: LowerState) => void;
@@ -40,6 +43,13 @@ export interface ExpandContext {
   readonly functions: Map<string, KojoFunctionDecl>;
   /** 已声明整数常量（表端点静态求值用） */
   readonly constants: Map<string, number>;
+  /**
+   * 可遍历数组事实（`# 变量 名 类型[N]`，K2-FOREACH）：`N` 经 `# 常量` 解析成整数。
+   * 非定长 / 解析不出的**不进这张表**——`@巡` 会按"未声明数组"报错（不静默放行）。
+   */
+  readonly arrays: Map<string, ForeachArrayFact>;
+  /** `@巡` 绑定名改写的作用域栈：帧 = 一层循环（出体即弹出，不污染后续节点） */
+  readonly foreachFrames: ForeachBindingFrame[];
   /** 表校验结果缓存：同一张表只校验/只报一次（plan=null 表示有 error） */
   readonly tablePlans: Map<string, TableLoweringPlan | null>;
   /** 循环检测栈（表/池/模板各自一条；栈里出现同名 = 环） */
@@ -66,6 +76,17 @@ export interface SlotScope {
   readonly order: string[];
 }
 
+/**
+ * 一层 `@巡` 的绑定作用域：绑定名 → 隐藏槽。
+ *
+ * 为什么是**帧栈**而不是全局改名表：`{值}` / `{下标}` / `{角}` / `{名}` 是语言层固定词，
+ * 只在该循环体内指隐藏槽；嵌套循环按内层优先遮蔽外层，出体即失效（后续节点里的同名
+ * 作者变量必须保持原样）。
+ */
+export interface ForeachBindingFrame {
+  readonly slots: ReadonlyMap<string, string>;
+}
+
 export interface CreateExpandContextInput {
   readonly adapter: GameAdapter;
   readonly backend: KojoEmitBackend;
@@ -88,6 +109,8 @@ export function createExpandContext(input: CreateExpandContextInput): ExpandCont
     templates: new Map(),
     functions: new Map(),
     constants: new Map(),
+    arrays: new Map(),
+    foreachFrames: [],
     tablePlans: new Map(),
     tableStack: [],
     poolStack: [],
@@ -159,6 +182,10 @@ export function hiddenSlots(ctx: ExpandContext): readonly KojoHiddenSlot[] {
 
 /** 把 `file.decls` 索引进上下文（声明提升：引用点可以出现在声明之前） */
 export function indexDeclarations(ctx: ExpandContext, decls: readonly KojoDecl[]): void {
+  // 常量先索引：`# 变量 名 整数[长度]` 的长度可能引用声明在后面的 `# 常量`
+  const consts = decls.filter((decl): decl is KojoConstDecl => decl.kind === 'const');
+  for (const [name, value] of collectIntegerConstants(consts)) ctx.constants.set(name, value);
+
   for (const decl of decls) {
     switch (decl.kind) {
       case 'table':
@@ -173,12 +200,70 @@ export function indexDeclarations(ctx: ExpandContext, decls: readonly KojoDecl[]
       case 'function':
         ctx.functions.set(decl.name, decl);
         break;
+      case 'var':
+        indexArrayFact(ctx, decl);
+        break;
       default:
         break;
     }
   }
-  const consts = decls.filter((decl): decl is KojoConstDecl => decl.kind === 'const');
-  for (const [name, value] of collectIntegerConstants(consts)) ctx.constants.set(name, value);
+}
+
+const DECIMAL_INT_RE = /^-?\d+$/;
+const IDENTIFIER_RE = /^[\p{L}_][\p{L}\p{N}_]*$/u;
+
+/**
+ * 定长数组的长度解析（`# 变量 名 类型[N]` 的 `N`）：
+ * 十进制非负整数，或**已声明的整数 `# 常量`**。其它形态（表达式 / 未知常量 / 负数 /
+ * 非安全整数）一律返回 null ⇒ 不进 `arrays`，`@巡` 会按"本文件没有该数组事实"报错
+ * （fail-closed；0 保留为"空集合"的事实，见 `skeleton.empty = 'skip'`）。
+ */
+function resolveArraySize(size: KojoExprText, constants: ReadonlyMap<string, number>): number | null {
+  const text = size.text.trim();
+  if (text.length === 0) return null;
+  let value: number | undefined;
+  if (DECIMAL_INT_RE.test(text)) {
+    value = Number(text);
+  } else if (IDENTIFIER_RE.test(text)) {
+    value = constants.get(text);
+  }
+  if (value === undefined || !Number.isSafeInteger(value) || value < 0) return null;
+  return value;
+}
+
+/** 一条 `# 变量` 如果是定长数组 → 记一条 `ForeachArrayFact`（元素类型来自作者声明） */
+function indexArrayFact(ctx: ExpandContext, decl: KojoVarDecl): void {
+  if (decl.arraySize === undefined) return;
+  const size = resolveArraySize(decl.arraySize, ctx.constants);
+  if (size === null) return;
+  const fact: ForeachArrayFact = Object.freeze({ name: decl.name, elementType: decl.valueType, size });
+  ctx.arrays.set(decl.name, fact);
+}
+
+/** 本文件的可遍历数组事实（声明序；plan 的唯一输入） */
+export function foreachArrayFacts(ctx: ExpandContext): readonly ForeachArrayFact[] {
+  return [...ctx.arrays.values()];
+}
+
+/* ---------- `@巡` 绑定作用域（帧栈；出体即失效） ---------- */
+
+/** 压入一层 `@巡` 绑定作用域 */
+export function pushForeachFrame(ctx: ExpandContext, slots: ReadonlyMap<string, string>): void {
+  ctx.foreachFrames.push({ slots });
+}
+
+/** 弹出最近一层 `@巡` 绑定作用域（与 push 严格配对；调用方用 try/finally） */
+export function popForeachFrame(ctx: ExpandContext): void {
+  ctx.foreachFrames.pop();
+}
+
+/** 当前作用域里绑定名对应的隐藏槽（内层优先；不在任何 `@巡` 体内 → null） */
+export function foreachSlotInScope(ctx: ExpandContext, name: string): string | null {
+  for (let i = ctx.foreachFrames.length - 1; i >= 0; i--) {
+    const slot = ctx.foreachFrames[i]!.slots.get(name);
+    if (slot !== undefined) return slot;
+  }
+  return null;
 }
 
 /** 报一条 core 诊断（级别仍由 diagnostics.ts 码表唯一定义） */

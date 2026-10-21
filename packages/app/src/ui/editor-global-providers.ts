@@ -93,6 +93,11 @@ import {
   installSemanticTokensProvider,
   shouldComputeSemanticTokens,
 } from '../monaco/kojo-semantic-tokens';
+// K2 batch-3：Kojo 2.0 的语义着色 provider（tree-sitter 增量解 → capture → 5 元组）。
+// 本模块静态引它只拉起 `kojo2-runtime` 的**类型与单例壳**，两枚 wasm 与 highlights 查询
+// 仍只在运行时的默认装载器里动态 import（`kojo2-assets.ts` 不进主线程静态图）。
+import { installKojo2SemanticTokensProvider } from '../monaco/kojo2-semantic';
+import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   SIGNATURE_LOOKBACK_LINES,
   type ResolvedSignature,
@@ -1477,6 +1482,13 @@ export function ensureGlobalProviders(): void {
         });
       },
     }));
+    // Kojo 2.0 语义着色（K2 batch-3）：**只给 `kojo2` 语言 id** 注册，与上面 v1 那条
+    // `registerForLanguageServices` 的方言表并行且不重叠（`.kojo2` 不在 v1 方言表里）。
+    // flag 关 ⇒ 这一行整体不执行，provider 表与今天逐字一致；flag 开但运行时装载失败 /
+    // 超时 ⇒ provider 回空 tokens（不着色），不抛、不写任何 markers。
+    if (isKojo2CutoverEnabled()) {
+      globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
+    }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *
      * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，

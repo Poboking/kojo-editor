@@ -23,7 +23,13 @@ export * from './literal.js';
 export * from './table.js';
 export * from './source-map.js';
 export * from './lower/index.js';
+/* 降糖主链的展开构造：`选项` 的 ETB 计划（adapter 契约 additive 字段的唯一真源） */
+export * from './lower/expand/options.js';
+/* `@巡` 的集合计划（K2-FOREACH；adapter 契约 `foreachCollections` 的唯一真源） */
+export * from './lower/expand/foreach.js';
 export * from './compile.js';
+/* 增量编译：编辑器击键路径（单元缓存 + 全量自检；`compile` 仍是唯一语义真相） */
+export * from './incremental.js';
 /* 适配层契约与 fixture */
 export * from './adapter.js';
 export * from './fixture-adapter.js';
@@ -31,3 +37,5 @@ export * from './fixture-adapter.js';
 export * from './project/index.js';
 /* 迁移：v1 源码 → 2.0 源码（M7） */
 export * from './migrate/index.js';
+/* 迁移：语义升级层（`当`/`分支：`/`初回` 三条可证改写，M7 加厚） */
+export * from './migrate/semantic.js';

@@ -60,6 +60,9 @@ const NEUTRAL_DIRS = [
   'packages/app/src/monaco', // 同上：Monaco 语言层（引擎级词汇可，具体游戏约定不可）
   // tree-sitter 语法层（.kojo 表层 DSL 的 CST，语言级词汇可、游戏约定不可）。2026-10-19 TSIT 批收编。
   'packages/kojo-syntax-tree/src',
+  // Kojo 2.0 语言核心与一致性套件：语言级词汇可，游戏事实必须经 GameAdapter 注入。2026-10-21 K2 批收编。
+  'packages/kojo-core/src',
+  'packages/kojo-conformance/src',
 ];
 
 /** 组合根豁免：app 的 bootstrap/UI 可以引用具体插件（那是宿主的接线职责） */

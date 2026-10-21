@@ -60,6 +60,8 @@ const OPTIONS = Object.freeze({
   status: 'pending' as const,
   button: 'PRINTBUTTON',
   input: 'INPUTS',
+  // Emuera 按钮输入的读回槽（引擎约定）；落点关键词由这份数据给，backend 不写死
+  result: 'RESULTS',
   maxPerScene: 1,
 });
 

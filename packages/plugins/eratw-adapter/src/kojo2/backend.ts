@@ -42,6 +42,7 @@ import type {
   EmitResult,
   ExprCallEmitRequest,
   FaceEmitRequest,
+  ForEachEmitRequest,
   HintSupport,
   KojoEmitBackend,
   KojoHiddenSlot,
@@ -59,6 +60,8 @@ import { isEmitFailure, encodeEngineLiteral, encodeEngineText } from '@kojo/kojo
 import { createEratwFaceTable } from '../face-templates.js';
 import type { KojoFaceTemplate } from '@kojo/plugin-api';
 import { ERATW_EVENT_CATALOG } from './event-catalog.js';
+import { emitEratwForEachLoop } from './foreach-emit.js';
+import { emitOptions } from './options-emit.js';
 import { ERATW_PRESENTATION } from './presentation.js';
 import { ERATW_PROFILE } from './profile.js';
 import { ERATW_PROGRAM_FEATURES } from './program.js';
@@ -530,10 +533,16 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
       face,
       randomBlock,
       optionsBlock(request: OptionsEmitRequest, lowerItem: (item: KojoOptionItem, index: number) => readonly string[]): EmitResult {
-        // `选项` 是 2.0 待定 UI（§7.5）：eraTW 侧暂无稳定按钮协议 → fail-closed。
-        // 先让 core 的 body 降糖不至于被丢弃诊断：这里直接拒绝，不产半成品。
-        void lowerItem;
-        return fail('`选项` 是 2.0 待定 UI，eraTW backend 暂无稳定按钮协议：请改用 `@原生`（PRINTBUTTON/INPUTS）。', request.span);
+        // 落点形状全部交给 `options-emit.ts`（数据派生；本文件只做能力/计划闸）。
+        // 主链（expand/walk）总带 ETB 计划；缺计划 = 走的是无 adapter 能力闸的通用 lower，
+        // 此时不猜按钮顺序/回传值 → fail-closed（不产半成品字节）。
+        if (request.plan === undefined) {
+          return fail(
+            '`选项` 请求缺少 ETB 计划（core 2.0 主链必带 plan）：不能确定按钮顺序/回传值，fail-closed。',
+            request.span,
+          );
+        }
+        return emitOptions({ plan: request.plan, lowerItem });
       },
     },
 
@@ -584,15 +593,20 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
         return 'REND';
       },
       forEachHeader(collection: KojoExprText): EmitResult {
-        // `@巡` 的 `{值}`/`{下标}` 绑定必须由 adapter 数据声明；kojo2 数据里还没有
-        // 这一条（E4 的后续数据项），故 fail-closed 而不是猜一个绑定名。
+        // 旧路径（无展开感知的块级预览）：`@巡` 的绑定必须由 plan 给（`forEachLoop`）；
+        // 这里没有计划 ⇒ fail-closed，不猜绑定名。
         return fail(
-          '`@巡` 的集合绑定（{值}/{下标}）还没在 eraTW adapter 数据里声明：不能生成索引循环；请改用 `@循` 或 `@原生`。',
+          '`@巡` 的集合绑定（{值}/{下标}）必须由计划给出：本路径没有 ForeachLoopPlan，不能生成索引循环；请改用 `@循` 或 `@原生`。',
           collection.span,
         );
       },
       forEachFooter(): EmitResult {
         return 'NEXT';
+      },
+      forEachLoop(request: ForEachEmitRequest): EmitResult {
+        // 落点形状全部交给 `foreach-emit.ts`（数据派生；本文件只做转调）。
+        // core 已校验集合/绑定/长度并给槽名；这里只把计划与已降糖 body 落成 ERB。
+        return emitEratwForEachLoop(request.plan, request.body, { compileExpression: compile });
       },
     },
 

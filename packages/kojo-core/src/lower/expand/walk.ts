@@ -25,14 +25,17 @@ import type {
 import { isSingleLineNarrativeNode, lowerConditionChain } from '../condition.js';
 import { lowerDispatchNodes, lowerSandboxBlock } from '../program.js';
 import { lowerNarrativeNodes } from '../narrative.js';
-import { lowerColorBlock, lowerOptionsBlock, lowerRandomBlock, randomCandidatePurity } from '../presentation.js';
+import { lowerColorBlock, lowerRandomBlock, randomCandidatePurity } from '../presentation.js';
 import type { LowerState } from '../state.js';
 import { emit } from '../state.js';
-import { collectTableRefs, ensureTables, tableLookup } from './tables.js';
+import { lowerOptionsBlockExpanded } from './options.js';
+import { collectTableRefs, ensureTables } from './tables.js';
 import { recordSlot } from './context.js';
 import { expandPoolCall } from './pool.js';
 import { expandTemplateCall } from './template.js';
-import { rewriteExpr, rewriteTextParts } from './expr.js';
+import { lowerExpandedForEachLoop } from './foreach-walk.js';
+import { expandLookup, rewriteExpandExpr } from './lookup.js';
+import { rewriteTextParts } from './expr.js';
 import type { ExpandContext, WalkDispatch, WalkNarrative } from './context.js';
 
 /* ============================== 表引用收集（只收当前节点直接表达式） ============================== */
@@ -57,13 +60,21 @@ function hoist(refs: readonly string[], ctx: ExpandContext, state: LowerState): 
   if (refs.length > 0) ensureTables(refs, ctx, state);
 }
 
+/**
+ * 这一段是否需要走表达式改写：表引用（要提升）或 `@巡` 绑定名（要换槽）任一命中即可。
+ * 绑定改写不产额外行，所以 SIF 判据仍只看表引用（见 `narrativeSifBody`）。
+ */
+function needsRewrite(refs: readonly string[], ctx: ExpandContext): boolean {
+  return refs.length > 0 || ctx.foreachFrames.length > 0;
+}
+
 function rewriteParts(parts: readonly KojoTextPart[], ctx: ExpandContext): readonly KojoTextPart[] {
-  return rewriteTextParts(parts, tableLookup(ctx)).parts;
+  return rewriteTextParts(parts, expandLookup(ctx)).parts;
 }
 
 function rewriteBranchesTests(branches: readonly KojoConditionBranch[], ctx: ExpandContext): readonly KojoConditionBranch[] {
   return branches.map((branch) => ({
-    test: branch.test === null ? null : rewriteExpr(branch.test, tableLookup(ctx)).expr,
+    test: branch.test === null ? null : rewriteExpandExpr(branch.test, ctx),
     body: branch.body,
     span: branch.span,
   }));
@@ -126,7 +137,7 @@ function expandOrDelegateCall(
   }
   // 普通函数 / adapter 基础库函数：实参里的表引用先求值，再把调用交给 lower 的发射器
   hoist(refsOfExprs(args, ctx), ctx, state);
-  const rewritten = args.map((arg) => rewriteExpr(arg, tableLookup(ctx)).expr);
+  const rewritten = args.map((arg) => rewriteExpandExpr(arg, ctx));
   const callNode = { kind: 'call' as const, name, args: rewritten, span: owner.span };
   lowerDispatchNodes([callNode], state, (body) => walkNarrative(body, ctx, state));
 }
@@ -141,7 +152,7 @@ function walkNarrativeNode(node: KojoNarrativeNode, ctx: ExpandContext, state: L
   switch (node.kind) {
     case 'textLine': {
       const refs = refsOfParts(node.parts, ctx);
-      if (refs.length === 0) {
+      if (!needsRewrite(refs, ctx)) {
         lowerNarrativeNodes([node], state);
         return;
       }
@@ -168,7 +179,7 @@ function walkNarrativeNode(node: KojoNarrativeNode, ctx: ExpandContext, state: L
     }
     case 'colorBlock': {
       hoist(refsOfExprs([node.color], ctx), ctx, state);
-      const rewritten = { ...node, color: rewriteExpr(node.color, tableLookup(ctx)).expr };
+      const rewritten = { ...node, color: rewriteExpandExpr(node.color, ctx) };
       lowerColorBlock(rewritten, state, (body) => walkNarrative(body, ctx, state));
       return;
     }
@@ -199,7 +210,10 @@ function walkNarrativeNode(node: KojoNarrativeNode, ctx: ExpandContext, state: L
       return;
     }
     case 'optionsBlock':
-      lowerOptionsBlock(node, state, (child, item) => walkNarrative(item.body, ctx, child));
+      // 2.0 主链：adapter 能力闸（fail-closed）+ ETB 计划；块体仍走 2.0 叙事 lower
+      lowerOptionsBlockExpanded(node, { adapter: ctx.adapter }, state, (child, item) =>
+        walkNarrative(item.body, ctx, child),
+      );
       return;
     case 'sandboxBlock':
       lowerSandboxBlock(node, state, (body) => walkDispatch(body, ctx, state));
@@ -236,7 +250,7 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
   switch (node.kind) {
     case 'assign': {
       hoist(refsOfExprs([node.value], ctx), ctx, state);
-      delegateLeaf({ ...node, value: rewriteExpr(node.value, tableLookup(ctx)).expr }, ctx, state);
+      delegateLeaf({ ...node, value: rewriteExpandExpr(node.value, ctx) }, ctx, state);
       return;
     }
     case 'call':
@@ -244,14 +258,14 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
       return;
     case 'exprCall': {
       hoist(refsOfExprs([node.call], ctx), ctx, state);
-      delegateLeaf({ ...node, call: rewriteExpr(node.call, tableLookup(ctx)).expr }, ctx, state);
+      delegateLeaf({ ...node, call: rewriteExpandExpr(node.call, ctx) }, ctx, state);
       return;
     }
     case 'return': {
       const exprs = node.value === undefined ? [] : [node.value];
       hoist(refsOfExprs(exprs, ctx), ctx, state);
       delegateLeaf(
-        node.value === undefined ? node : { ...node, value: rewriteExpr(node.value, tableLookup(ctx)).expr },
+        node.value === undefined ? node : { ...node, value: rewriteExpandExpr(node.value, ctx) },
         ctx,
         state,
       );
@@ -259,7 +273,7 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
     }
     case 'textLine': {
       const refs = refsOfParts(node.parts, ctx);
-      if (refs.length === 0) {
+      if (!needsRewrite(refs, ctx)) {
         delegateLeaf(node, ctx, state);
         return;
       }
@@ -282,7 +296,7 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
       const rewritten: KojoDispatchCondition = {
         kind: 'dispatchCondition',
         branches: node.branches.map((branch) => ({
-          test: branch.test === null ? null : rewriteExpr(branch.test, tableLookup(ctx)).expr,
+          test: branch.test === null ? null : rewriteExpandExpr(branch.test, ctx),
           body: branch.body,
           span: branch.span,
         })),
@@ -303,7 +317,7 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
         return;
       }
       hoist(refsOfExprs([node.test], ctx), ctx, state);
-      emit(state, state.backend.program.whileHeader(rewriteExpr(node.test, tableLookup(ctx)).expr), node.span);
+      emit(state, state.backend.program.whileHeader(rewriteExpandExpr(node.test, ctx)), node.span);
       state.loopDepth++;
       walkDispatch(node.body, ctx, state);
       state.loopDepth--;
@@ -322,7 +336,7 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
         return;
       }
       hoist(refsOfExprs([node.count], ctx), ctx, state);
-      emit(state, state.backend.program.repeatHeader(rewriteExpr(node.count, tableLookup(ctx)).expr), node.span);
+      emit(state, state.backend.program.repeatHeader(rewriteExpandExpr(node.count, ctx)), node.span);
       state.loopDepth++;
       walkDispatch(node.body, ctx, state);
       state.loopDepth--;
@@ -330,16 +344,9 @@ function walkDispatchNode(node: KojoDispatchNode, ctx: ExpandContext, state: Low
       return;
     }
     case 'forEachLoop': {
-      if (!programFeatureEnabled(state, 'foreach')) {
-        delegateLeaf(node, ctx, state);
-        return;
-      }
-      hoist(refsOfExprs([node.collection], ctx), ctx, state);
-      emit(state, state.backend.program.forEachHeader(rewriteExpr(node.collection, tableLookup(ctx)).expr), node.span);
-      state.loopDepth++;
-      walkNarrative(node.body, ctx, state);
-      state.loopDepth--;
-      emit(state, state.backend.program.forEachFooter(), node.span);
+      // 2.0 主链：adapter 集合声明 + 本文件数组事实 → 计划（失败零字节）→ `program.forEachLoop`
+      // 落点（引擎关键字全在 adapter）。绑定名改写走帧作用域，出体即失效。
+      lowerExpandedForEachLoop(node, ctx, state, walkNarrative, programFeatureEnabled(state, 'foreach'));
       return;
     }
     case 'sandboxBlock':

@@ -180,6 +180,12 @@ importers:
         specifier: workspace:*
         version: link:../plugins/state-replay
 
+  packages/kojo-conformance:
+    dependencies:
+      '@kojo/kojo-core':
+        specifier: workspace:*
+        version: link:../kojo-core
+
   packages/kojo-core: {}
 
   packages/kojo-project-kit:

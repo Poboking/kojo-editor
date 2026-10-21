@@ -157,8 +157,12 @@ function isPureTextNode(node: KojoNarrativeNode, state: LowerState): boolean {
 }
 
 /**
- * `选项`（§7.5，2.0 待定 UI）：**永远先给 `core/options/pending` warning**（不是旧语法例外）；
- * adapter 未声明 UI 能力 → error 且不产字节；声明了才把按钮/正文交给 adapter 落点。
+ * `选项`（§7.5，2.0 待定 UI）的**通用 lower 路径**（无 adapter 上下文，块级预览/旧消费方用）：
+ * 永远先给 `core/options/pending` warning；backend profile 未开 → error 且不产字节。
+ *
+ * 2.0 编译主链不走这里：`expand/walk.ts` 调 `lowerOptionsBlockExpanded`
+ * （adapter UI 能力闸 + ETB 计划）。本路径不带 `plan`，新 adapter 应按 fail-closed 处理
+ * （不知道按钮顺序/回传值就不猜）。
  */
 export function lowerOptionsBlock(
   node: KojoOptionsBlock,

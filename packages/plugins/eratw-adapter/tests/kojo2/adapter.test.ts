@@ -28,6 +28,8 @@ import {
   ERATW_DOMAIN_SYMBOLS,
   ERATW_EVENT_CATALOG,
   ERATW_EVENT_NAMES,
+  ERATW_FOREACH_COLLECTIONS,
+  ERATW_FOREACH_DECLARATIONS,
   ERATW_GAME_ADAPTER,
   ERATW_GAME_FINGERPRINT,
   ERATW_PRESENTATION,
@@ -252,11 +254,12 @@ describe('eraTW adapter：演出面（与既有库表对齐）', () => {
     expect(face?.maxArgs).toBe(4);
   });
 
-  it('选项：待定 API，落 PRINTBUTTON + INPUTS，单场景一个', () => {
+  it('选项：待定 API，落 PRINTBUTTON + INPUTS + RESULTS，单场景一个', () => {
     expect(ERATW_PRESENTATION.options).toEqual({
       status: 'pending',
       button: 'PRINTBUTTON',
       input: 'INPUTS',
+      result: 'RESULTS',
       maxPerScene: 1,
     });
   });
@@ -281,6 +284,26 @@ describe('eraTW adapter：演出面（与既有库表对齐）', () => {
     const faceTable = createEratwFaceTable();
     expect(Object.keys(faceTable.faces).length).toBeGreaterThan(0);
     expect(faceTable.playerColor).toBeTruthy();
+  });
+});
+
+describe('eraTW adapter：`@巡` 集合声明（K2-FOREACH，additive）', () => {
+  it('契约字段 `foreachCollections` 挂的就是 ERA 数据冻结件（同一引用，不复制）', () => {
+    expect(ERATW_GAME_ADAPTER.foreachCollections).toBe(ERATW_FOREACH_DECLARATIONS);
+    expect(ERATW_FOREACH_COLLECTIONS).toBe(ERATW_FOREACH_DECLARATIONS.collections);
+    expect(Object.isFrozen(ERATW_GAME_ADAPTER.foreachCollections)).toBe(true);
+  });
+
+  it('角色集合 `队伍` 与数组规则都在契约里；全量自检仍零诊断', () => {
+    const collections = ERATW_GAME_ADAPTER.foreachCollections?.collections ?? [];
+    expect(collections.map((collection) => collection.name)).toEqual(['队伍']);
+    expect(ERATW_GAME_ADAPTER.foreachCollections?.arrayRule).toEqual({ base: 0, bindings: ['值', '下标'] });
+    expect(validateGameAdapter(ERATW_GAME_ADAPTER)).toEqual([]);
+  });
+
+  it('programFeatures.foreach 开启 + 集合声明齐备 = `@巡` 可用（能力闸与数据面自洽）', () => {
+    expect(checkProgramFeature(ERATW_GAME_ADAPTER, 'foreach')).toBeNull();
+    expect(ERATW_GAME_ADAPTER.foreachCollections).not.toBeNull();
   });
 });
 

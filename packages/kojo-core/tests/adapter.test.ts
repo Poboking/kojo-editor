@@ -32,6 +32,7 @@ import {
   validateGameAdapter,
 } from '../src/adapter';
 import { FIXTURE_ADAPTER } from '../src/fixture-adapter';
+import type { ForeachDeclarations } from '../src/lower/expand/foreach';
 
 /** 在 fixture 上做**浅层**改写：本文件只测校验函数，不测数据结构本身 */
 function fixtureWith(overrides: Partial<GameAdapter>): GameAdapter {
@@ -156,10 +157,10 @@ describe('用户源码侧：未声明 presentation', () => {
     expect(checkPresentation(FIXTURE_ADAPTER, 'heart')?.severity).toBe('error');
   });
 
-  it('`选项` 是 2.0 待定 API：未声明时按 core/options/pending warning（可见但不阻断）', () => {
+  it('`选项` 未声明 = fail-closed error（与 lowering 能力闸同码同级别；待定 warning 只来自 lowering）', () => {
     const diagnostic = checkPresentation(FIXTURE_ADAPTER, 'options');
-    expect(diagnostic?.code).toBe('core/options/pending');
-    expect(diagnostic?.severity).toBe('warning');
+    expect(diagnostic?.code).toBe('core/feature/unsupported');
+    expect(diagnostic?.severity).toBe('error');
   });
 
   it('声明后的演出面返回 null', () => {
@@ -333,6 +334,86 @@ describe('adapter 自检：坏契约的错误路径', () => {
     expect(diagnostics.length).toBeGreaterThan(0);
     expect(diagnostics.every((d) => d.severity === 'error')).toBe(true);
     expect(diagnostics.map((d) => d.code)).toContain(ADAPTER_VALIDATION_CODES.eventEmpty);
+  });
+});
+
+describe('adapter 自检：`@巡` 集合声明（K2-FOREACH，additive）', () => {
+  const DECLARATIONS: ForeachDeclarations = {
+    collections: [
+      {
+        name: '队伍',
+        kind: 'characters',
+        elementType: 'character',
+        base: 1,
+        keyType: null,
+        length: { kind: 'engine', counter: 'COUNT', minus: 1 },
+        bindings: ['角', '名'],
+        nameAccessor: 'NAME_OF',
+      },
+    ],
+    arrayRule: { base: 0, bindings: ['值', '下标'] },
+  };
+
+  it('fixture 传 null（= 本 adapter 不支持 `@巡`）：自检仍全绿（老 adapter 零改动）', () => {
+    expect(FIXTURE_ADAPTER.foreachCollections).toBeNull();
+    expect(validateGameAdapter(FIXTURE_ADAPTER)).toEqual([]);
+  });
+
+  it('自洽声明：adapter 全量自检零诊断', () => {
+    expect(validateGameAdapter(fixtureWith({ foreachCollections: DECLARATIONS }))).toEqual([]);
+  });
+
+  it('声明自洽时 `@巡` 才有落点；反之未声明集合是运行期错误（不静默）', () => {
+    const adapter = fixtureWith({ foreachCollections: DECLARATIONS });
+    // adapter 自检不查用户源码；集合名解析发生在 lowering（plan）
+    expect(validateGameAdapter(adapter)).toEqual([]);
+  });
+
+  it('绑定越界（角色集合声明 {值}）→ unit/adapter-inconsistent（走既有 adapter 码表）', () => {
+    const broken: ForeachDeclarations = {
+      ...DECLARATIONS,
+      collections: [{ ...DECLARATIONS.collections[0]!, bindings: ['值'] }],
+    };
+    const codes = codesOf(fixtureWith({ foreachCollections: broken })).filter((code) => code.startsWith('unit/'));
+    expect(codes).toEqual([ADAPTER_VALIDATION_CODES.inconsistent]);
+  });
+
+  it('声明了 {名} 却没有 {角} / 缺 nameAccessor → unit/adapter-inconsistent', () => {
+    const noAngle: ForeachDeclarations = {
+      ...DECLARATIONS,
+      collections: [{ ...DECLARATIONS.collections[0]!, bindings: ['名'] }],
+    };
+    expect(codesOf(fixtureWith({ foreachCollections: noAngle }))).toContain(ADAPTER_VALIDATION_CODES.inconsistent);
+
+    const noAccessor: ForeachDeclarations = {
+      ...DECLARATIONS,
+      collections: [{ ...DECLARATIONS.collections[0]!, nameAccessor: null }],
+    };
+    expect(codesOf(fixtureWith({ foreachCollections: noAccessor }))).toContain(ADAPTER_VALIDATION_CODES.inconsistent);
+  });
+
+  it('命名集合重复 / 数组规则绑定越界 → unit/adapter-inconsistent', () => {
+    const duplicated: ForeachDeclarations = {
+      ...DECLARATIONS,
+      collections: [DECLARATIONS.collections[0]!, DECLARATIONS.collections[0]!],
+    };
+    expect(codesOf(fixtureWith({ foreachCollections: duplicated }))).toContain(ADAPTER_VALIDATION_CODES.inconsistent);
+
+    const badRule: ForeachDeclarations = {
+      ...DECLARATIONS,
+      arrayRule: { base: 0, bindings: ['角'] },
+    };
+    expect(codesOf(fixtureWith({ foreachCollections: badRule }))).toContain(ADAPTER_VALIDATION_CODES.inconsistent);
+  });
+
+  it('空声明（无集合也无数组规则）→ unit/adapter-incomplete（要么给声明、要么给 null）', () => {
+    const empty: ForeachDeclarations = { collections: [], arrayRule: null };
+    expect(codesOf(fixtureWith({ foreachCollections: empty }))).toContain(ADAPTER_VALIDATION_CODES.incomplete);
+  });
+
+  it('collections 不是数组 → unit/adapter-incomplete（形状都不对，不猜）', () => {
+    const malformed = { collections: null, arrayRule: null } as unknown as ForeachDeclarations;
+    expect(codesOf(fixtureWith({ foreachCollections: malformed }))).toContain(ADAPTER_VALIDATION_CODES.incomplete);
   });
 });
 

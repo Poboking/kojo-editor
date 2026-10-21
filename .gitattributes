@@ -4,3 +4,6 @@
 # core.autocrlf=true，没有本文件时 checkout 会把 LF 转成 CRLF 导致测试失败。
 # 二进制文件（.ico 等）由 text=auto 自动识别，不做行尾转换。
 * text=auto eol=lf
+# CRLF 契约夹具：测试要读**真 CRLF 字节**（v2-parse 的「CRLF 与 LF 解析同构」判据），
+# 加 eol=lf 归一化会把夹具洗成 LF ⇒ 断言自欺。这一条必须显式 `-text`。
+packages/kojo-syntax-tree/tests/v2-fixtures/crlf.kojo2 -text

@@ -58,6 +58,7 @@ import { loadDevNoteSeen, markDevNoteSeen } from './dev-note-pref';
 import { WelcomeOverlayHost } from './WelcomeOverlayHost';
 import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { planAddExtraRoot } from './workspace-roots';
+import { getKojo2CutoverController } from './kojo2-cutover';
 import {
   applyPin,
   batchCloseEmptyReason,
@@ -194,6 +195,15 @@ function omitPaths(prev: ReadonlySet<string>, gone: ReadonlySet<string>): Readon
   }
   return next ?? prev;
 }
+
+/**
+ * Kojo 2.0 切换计划（K2-CUTOVER-PRE）：把持久化端口挂上控制器单例。
+ *
+ * 模块求值一次即可：控制器是进程级单例，存储只影响「阶段 / per-file override」这两个
+ * 计划值，不参与渲染；没有这一行也能跑（只在内存里）。`localStorage` 在浏览器 dev 环境
+ * 一定存在；隐私模式写失败由控制器自己吞成 `persisted=false`，不抛。
+ */
+if (typeof window !== 'undefined') getKojo2CutoverController().attachStorage(window.localStorage);
 
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
