@@ -8,8 +8,12 @@
  */
 import type { KojoSpan } from './ast.js';
 
-/** core 首批稳定码（与设计稿 §11.3 一一对应，共 91 枚） */
+/** core 首批稳定码（与设计稿 §11.3 一一对应；词法/迁移类为 C1 实现所需 additive 扩码） */
 export type CoreDiagnosticCode =
+  /* 词法与结构（C1 additive） */
+  | 'core/lex/anchor'
+  | 'core/lex/indent'
+  | 'core/lex/interpolation'
   /* 声明与名字 */
   | 'core/decl/duplicate-name'
   | 'core/decl/unknown-type'
@@ -17,10 +21,14 @@ export type CoreDiagnosticCode =
   | 'core/decl/unknown-storage'
   | 'core/decl/reserved-name'
   | 'core/decl/unknown-name'
+  | 'core/decl/unknown'
   | 'core/decl/not-top-level'
   | 'core/decl/bad-array-size'
   | 'core/decl/const-cycle'
   | 'core/decl/const-not-constant'
+  | 'core/decl/missing-machine'
+  | 'core/decl/multiple-machine'
+  | 'core/decl/multiple-view'
   /* 类型与表达式 */
   | 'core/expr/type-mismatch'
   | 'core/expr/assign-to-constant'
@@ -30,8 +38,11 @@ export type CoreDiagnosticCode =
   | 'core/expr/divide-by-zero'
   | 'core/expr/not-expression'
   | 'core/expr/unknown-symbol'
+  | 'core/expr/bad-literal'
+  | 'core/expr/void-in-expression'
   /* 表 */
   | 'core/table/overlap'
+  | 'core/table/bad-range'
   | 'core/table/missing-default'
   | 'core/table/empty-default'
   | 'core/table/type-mismatch'
@@ -87,7 +98,6 @@ export type CoreDiagnosticCode =
   | 'core/func/missing-return'
   | 'core/func/void-value'
   | 'core/func/recursion-unsupported'
-  | 'core/expr/void-in-expression'
   /* 原生与织入 */
   | 'core/native/empty'
   | 'core/native/indent'
@@ -106,6 +116,18 @@ export type CoreDiagnosticCode =
   | 'core/migration/hidden-timing'
   | 'core/migration/alias'
   | 'core/migration/color-option'
+  | 'core/migration/comment'
+  | 'core/migration/version'
+  | 'core/migration/heart'
+  | 'core/migration/color'
+  | 'core/migration/random'
+  | 'core/migration/data'
+  | 'core/migration/branch'
+  | 'core/migration/label'
+  | 'core/migration/raw'
+  | 'core/migration/timing'
+  | 'core/migration/fullwidth-punct'
+  | 'core/migration/wait'
   | 'core/options/pending'
   | 'core/profile/missing'
   | 'core/feature/unsupported';

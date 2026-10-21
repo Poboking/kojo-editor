@@ -54,3 +54,6 @@ export {
 // `CharaInfo.kojoDir`，无一句游戏名词），宿主全文检索只消费「标签 + 检索根」两样
 // 泛型事实。此处仍转出，是为了本包既有公共 API 不因搬家而变。
 export { charaSearchScopeOptions } from '@kojo/kojo-project-kit';
+// Kojo 2.0（K2 重构）：eraTW 的游戏事实数据层（事件目录/域符号/profile/presentation/存储期/
+// programFeatures）。core 契约在 `@kojo/kojo-core`，本目录只放游戏数据，零逻辑外溢。
+export * from './kojo2/index.js';

@@ -35,10 +35,12 @@ export type KojoLiteral = number | string;
 export type KojoVarStorage = 'scene' | 'save' | 'session';
 export type KojoValueType = 'int' | 'string';
 
-/** `# 幕 <标题>`：场景序列，不提升、不是函数 */
-export interface KojoSceneDecl {
-  readonly kind: 'scene';
-  readonly title: string;
+/** `# 幕 <标题>`：场景序列，不提升、不是函数（见 `KojoSceneNode`） */
+export interface KojoSceneNode {
+  readonly kind: 'sceneNode';
+  /** null = 隐式场景（文件没有 `# 幕`，或首个 `# 幕` 之前的正文） */
+  readonly title: string | null;
+  readonly items: readonly KojoNarrativeNode[];
   readonly span: KojoSpan;
 }
 
@@ -154,7 +156,6 @@ export interface KojoPoolDecl {
 }
 
 export type KojoDecl =
-  | KojoSceneDecl
   | KojoViewDecl
   | KojoMachineDecl
   | KojoVarDecl
@@ -253,6 +254,20 @@ export interface KojoFaceLine {
   readonly span: KojoSpan;
 }
 
+/** `选项：` 的按钮条目：`「标签」：` + 缩进正文（待定 UI，parser 仍建树，lowering 给 warning） */
+export interface KojoOptionItem {
+  readonly label: string;
+  readonly body: readonly KojoNarrativeNode[];
+  readonly span: KojoSpan;
+}
+
+/** `选项：` 块（2.0 待定 UI；adapter presentation，core 只保形） */
+export interface KojoOptionsBlock {
+  readonly kind: 'optionsBlock';
+  readonly items: readonly KojoOptionItem[];
+  readonly span: KojoSpan;
+}
+
 export type KojoNarrativeNode =
   | KojoTextLine
   | KojoBlankLine
@@ -261,7 +276,17 @@ export type KojoNarrativeNode =
   | KojoRandomBlock
   | KojoNativeBlock
   | KojoSandboxBlock
-  | KojoFaceLine;
+  | KojoFaceLine
+  | KojoOptionsBlock
+  /* 叙事区允许 `! 池名 / ! 模名(...) / ! 函名(...)`（§3.8 / §4.9） */
+  | KojoCallStmt
+  /* 程序层块可出现在叙事区（设计稿 §4.9 / §9.4） */
+  | KojoWhileLoop
+  | KojoRepeatLoop
+  | KojoForEachLoop
+  | KojoLoopJumpStmt
+  | KojoLabelStmt
+  | KojoJumpStmt;
 
 /* ============================== 调度区 / 程序层 ============================== */
 
@@ -287,6 +312,8 @@ export interface KojoCallStmt {
   readonly kind: 'call';
   readonly name: string;
   readonly args: readonly KojoExprText[];
+  /** `! 模名(…)` 调用处缩进块 = `[插槽]` 内容（§7.2）；池/函调用为空 */
+  readonly body?: readonly KojoNarrativeNode[];
   readonly span: KojoSpan;
 }
 
@@ -373,22 +400,21 @@ export type KojoDispatchNode =
   | KojoRepeatLoop
   | KojoForEachLoop
   | KojoSandboxBlock
-  | KojoNativeBlock;
+  | KojoNativeBlock
+  /* 调度区允许显式打印（`@函` / 循环体内可用 `>` / `角色：`，§4.1 / §7.3） */
+  | KojoTextLine
+  | KojoBlankLine
+  | KojoFaceLine;
 
 /* ============================== 文件 ============================== */
 
 /**
- * 一个 2.0 源文件。声明提升（decls 独立于 items），但 `# 幕` 按书写顺序留在 items 中，
- * 因此 scenes 的顺序就是演出顺序。
+ * 一个 2.0 源文件。声明提升（`decls` 独立于场景），`# 幕` 按书写顺序切成 `scenes`；
+ * 没有 `# 幕` 或首个 `# 幕` 之前有正文时，用 `title: null` 的隐式场景承载。
  */
 export interface KojoFile {
   readonly decls: readonly KojoDecl[];
-  readonly items: readonly KojoNarrativeNode[];
-  /** 文件级诊断（词法/解析阶段） */
-  readonly diagnostics: readonly {
-    readonly code: string;
-    readonly severity: 'error' | 'warning';
-    readonly message: string;
-    readonly span: KojoSpan | null;
-  }[];
+  readonly scenes: readonly KojoSceneNode[];
+  /** 文件级诊断（词法/解析阶段）；类型与全局码表同源 */
+  readonly diagnostics: readonly import('./diagnostics.js').KojoDiagnostic[];
 }
