@@ -22,6 +22,7 @@ import type {
   HintSupport,
   KojoEmitBackend,
   KojoLoweringProfile,
+  MachineWrapRequest,
   OptionsEmitRequest,
   RandomEmitRequest,
   ResolvedWait,
@@ -249,6 +250,19 @@ export const FIXTURE_BACKEND: KojoEmitBackend = freezeBackend({
   // fixture 不认识任何演出提示：全部归"导演批注"（不打印，保留在 source map）
   hintSupport(_hint: string): HintSupport {
     return 'annotation';
+  },
+
+  /**
+   * `# 机` 最小事件头（确定性字节，core 的 compile/golden 按它钉）：
+   * `MACHINE <event> [args…]` → 每个隐藏槽一行注释 → body 原样 → `MACHINE.END`。
+   *
+   * fixture 是伪引擎、没有真变量声明，故 slots 只落注释（真 adapter 落引擎等价物）；
+   * body 行**逐字嵌入、顺序不变**（source map 靠核心的连续子序列匹配）。
+   */
+  wrapMachine(request: MachineWrapRequest): EmitResult {
+    const head = ['MACHINE', request.machine.event, ...request.machine.args].join(' ');
+    const slots = request.slots.map((slot) => `;SLOT ${slot.name} ${slot.kind} ${slot.valueType}`);
+    return [head, ...slots, ...request.body, 'MACHINE.END'];
   },
 
   text: {

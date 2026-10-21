@@ -15,6 +15,7 @@ import type {
   AssignEmitRequest,
   BlankEmitRequest,
   FaceEmitRequest,
+  MachineWrapRequest,
   TextEmitRequest,
   WeaveEmitRequest,
 } from '../src/lower/backend';
@@ -186,7 +187,7 @@ describe('fixture backend：program 层落点', () => {
   });
 
   it('@织 头/尾各一行', () => {
-    const request: WeaveEmitRequest = { event: '开场', args: [], modifiers: ['pri'], span: SPAN };
+    const request: WeaveEmitRequest = { event: '开场', args: [], modifiers: ['pri'], span: SPAN, slots: [] };
     expect(FIXTURE_BACKEND.weave.weaveHeader(request)).toContain('WEAVE 开场');
     expect(FIXTURE_BACKEND.weave.weaveFooter()).toBe('WEAVE.END');
   });
@@ -223,6 +224,54 @@ describe('fixture backend × core 降糖：SIF 单行契约', () => {
     const result = lowerNarrative([chain([lineNode('甲。'), lineNode('乙。')])], { backend: FIXTURE_BACKEND });
     expect(result.ok).toBe(true);
     expect(result.lines).toEqual(['IF {条件}', 'SAY 我: 甲。 /WAIT', 'SAY 我: 乙。 /WAIT', 'ENDIF']);
+  });
+});
+
+describe('fixture backend：`# 机` 最小 wrapper', () => {
+  const MACHINE = {
+    kind: 'machine' as const,
+    event: '开场',
+    args: ['310'],
+    span: SPAN,
+  };
+
+  function wrapRequest(overrides: Partial<MachineWrapRequest> = {}): MachineWrapRequest {
+    return { machine: MACHINE, body: ['SAY 我: 你好 /WAIT'], view: null, slots: [], ...overrides };
+  }
+
+  it('头 = `MACHINE <event> [args…]`，尾 = `MACHINE.END`，body 原样嵌在中间', () => {
+    const lines = FIXTURE_BACKEND.wrapMachine?.(wrapRequest()) as readonly string[];
+    expect(lines[0]).toBe('MACHINE 开场 310');
+    expect(lines).toContain('SAY 我: 你好 /WAIT');
+    expect(lines[lines.length - 1]).toBe('MACHINE.END');
+  });
+
+  it('slots 逐槽一行注释（fixture 不声明真变量；含 valueType 事实）', () => {
+    const lines = FIXTURE_BACKEND.wrapMachine?.(
+      wrapRequest({
+        slots: [
+          { name: '__kojo_table_心情', kind: 'table', valueType: 'int' },
+          { name: '__kojo_table_心情__value', kind: 'table', valueType: 'string' },
+          { name: '__kojo_rand_12', kind: 'random', valueType: 'int' },
+        ],
+      }),
+    ) as readonly string[];
+    expect(lines).toEqual([
+      'MACHINE 开场 310',
+      ';SLOT __kojo_table_心情 table int',
+      ';SLOT __kojo_table_心情__value table string',
+      ';SLOT __kojo_rand_12 random int',
+      'SAY 我: 你好 /WAIT',
+      'MACHINE.END',
+    ]);
+  });
+
+  it('body 行顺序/内容不变（core 用连续子序列找回 source map）', () => {
+    const body = ['SAY 我: 甲 /WAIT', 'BLANK /CONT', 'SAY 我: 乙 /WAIT'];
+    const lines = FIXTURE_BACKEND.wrapMachine?.(wrapRequest({ body })) as readonly string[];
+    const start = lines.indexOf(body[0]!);
+    expect(start).toBeGreaterThan(0);
+    for (let i = 0; i < body.length; i++) expect(lines[start + i]).toBe(body[i]);
   });
 });
 

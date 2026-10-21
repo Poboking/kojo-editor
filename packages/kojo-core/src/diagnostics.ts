@@ -43,6 +43,7 @@ export type CoreDiagnosticCode =
   /* 表 */
   | 'core/table/overlap'
   | 'core/table/bad-range'
+  | 'core/table/cycle'
   | 'core/table/missing-default'
   | 'core/table/empty-default'
   | 'core/table/type-mismatch'
@@ -61,6 +62,7 @@ export type CoreDiagnosticCode =
   | 'core/template/missing-slot'
   | 'core/template/unexpected-slot'
   | 'core/template/multi-slot'
+  | 'core/template/arg-count'
   | 'core/template/side-effect'
   /* 叙事与等待 */
   | 'core/narrative/bare-quote'

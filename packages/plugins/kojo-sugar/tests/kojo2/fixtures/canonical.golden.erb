@@ -1,0 +1,33 @@
+MACHINE 开场
+;SLOT __kojo_rand_38 random int
+TELL: 晨光透过鸟居。 /WAIT
+SAY 我: {你}今天来得挺早嘛。 /WAIT ;(微笑)
+SAY 我: ……好。 /CONT
+BLANK /WAIT
+BLANK /WAIT
+BLANK /CONT
+IF {恋慕 >= 亲近线}
+SAY 我: 今天也一起加油吧。 /WAIT
+ELSE
+TELL: 她只是点了点头。 /WAIT
+ENDIF
+RANDOM group-text 2
+TELL: 风声。 /WAIT
+TELL: 树叶沙沙。 /WAIT
+TELL: 她笑了。 /WAIT
+RANDOM.END
+SET 心情快照 = {"晴"}
+IF {亲近线 > 100}
+SAY 我: 早上好。 /WAIT ;(微笑)
+ELSE
+SAY 我: 今天也一起加油吧。 /WAIT
+ENDIF
+TELL: （她因为被夸奖跑开了。） /WAIT
+CALL 增加(1)
+; 逃生舱
+PRINTFORML 原样保留
+TELL: 最后一行。 /WAIT
+MACHINE.END
+WEAVE 开场
+TELL: 监听里的旁白。 /WAIT
+WEAVE.END

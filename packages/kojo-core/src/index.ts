@@ -23,8 +23,11 @@ export * from './literal.js';
 export * from './table.js';
 export * from './source-map.js';
 export * from './lower/index.js';
+export * from './compile.js';
 /* 适配层契约与 fixture */
 export * from './adapter.js';
 export * from './fixture-adapter.js';
 /* 项目级：冲突/Layer/接管 + 存储期分配 */
 export * from './project/index.js';
+/* 迁移：v1 源码 → 2.0 源码（M7） */
+export * from './migrate/index.js';

@@ -71,3 +71,13 @@ export const ERATW_GAME_ADAPTER: GameAdapter = freezeAdapter({
   sourceMap: ERATW_SOURCE_MAP,
   conformanceSuite: ERATW_CONFORMANCE_SUITE,
 });
+
+/* ---------- E4：`KojoEmitBackend` 实现（additive；不改变上面的数据面） ---------- */
+export {
+  createEratwEmitBackend,
+  eratwLoweringProfile,
+  type EratwCompileExpression,
+  type EratwCompileTarget,
+  type EratwEmitDeps,
+} from './backend.js';
+

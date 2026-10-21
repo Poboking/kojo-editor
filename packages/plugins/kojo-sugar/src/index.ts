@@ -1196,3 +1196,16 @@ export {
 
 // 结构化着色（B6，2026-10-16；纯函数，糖 AST 与缓冲区文本进、着色 span 出）
 export { kojoSemanticTokens } from './semantic-tokens';
+
+// Kojo 2.0 并存层（开发期新增导出；**不改** v1 注册/requires/provides，也不抢
+// `sugar.transpile` 键——2.0 由宿主显式选用）。adapter/backend 全由调用方注入，
+// 本包仍零游戏知识、零插件交叉 import（解耦审计 B/C 项）。
+export {
+  createKojo2TranspileService,
+  type Kojo2CompileFn,
+  type Kojo2CompileRequest,
+  type Kojo2CompileResult,
+  type Kojo2TranspileDeps,
+  type Kojo2TranspileInput,
+  type Kojo2TranspileService,
+} from './kojo2/index.js';

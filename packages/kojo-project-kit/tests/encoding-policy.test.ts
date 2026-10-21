@@ -299,6 +299,16 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     count: 1,
     why: '编码探测的 BOM 字节表（读侧判据，不产出字节）',
   },
+  {
+    file: 'packages/kojo-core/src/migrate/index.ts',
+    count: 2,
+    why: 'v1→2.0 迁移保留输入 BOM：BOM 输入 ⇒ 迁移产物同 BOM（编码不归一化契约）',
+  },
+  {
+    file: 'packages/kojo-core/src/migrate/source.ts',
+    count: 1,
+    why: '迁移源文本的 BOM 探测与剥离（事实保留，避免二次 BOM）',
+  },
 ];
 
 const UPPER_BOM_ESCAPE = /\\uFEFF/;

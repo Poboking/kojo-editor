@@ -22,6 +22,7 @@ import type {
   KojoAssignOp,
   KojoAssignTarget,
   KojoExprText,
+  KojoMachineDecl,
   KojoOptionItem,
   KojoRandomCandidate,
   KojoSpan,
@@ -187,6 +188,12 @@ export interface WeaveEmitRequest {
   readonly args: readonly string[];
   readonly modifiers: readonly KojoWeaveModifier[];
   readonly span: KojoSpan;
+  /**
+   * **该监听函数自己的**隐藏槽清单（去重、稳定序；没有则空数组）。
+   * ERB 局部槽跨函数不可见：监听体的槽不能并进主 `# 机` 的 wrapper 声明。
+   * core 的 compile 总是传；adapter 实现按它发 `#LOCALSIZE`/声明。
+   */
+  readonly slots: readonly KojoHiddenSlot[];
 }
 
 /** `选项`（2.0 待定 UI）：label 是按钮文字，body 是该按钮触发的正文 */
@@ -265,6 +272,69 @@ export interface KojoProgramEmitter {
   forEachFooter(): EmitResult;
 }
 
+/* ============================== 文件装配（`# 机` 事件头） ============================== */
+
+/**
+ * core 在产物里**只发引用、不发表明**的隐藏槽（`__kojo_` 保留前缀）。
+ *
+ * 声明（ERB 的 `#DIM` / `#DIMS` / LOCAL 等）是装配事实：core 把清单交给 adapter 的
+ * `wrapMachine` / `weaveHeader`，由它按槽的静态类型事实落声明；**不要让 adapter 反推
+ * body 文本，也不要靠名字后缀猜类型**。
+ */
+export type KojoHiddenSlotKind = 'table' | 'random' | 'template';
+
+/** 槽的用途细分（additive；adapter 可选读，声明形态/命名可据此分档） */
+export type KojoHiddenSlotRole =
+  /** `# 表` 的判别值槽（整数，只求值一次） */
+  | 'table-subject'
+  /** `# 表` 的分档结果值槽（类型 = 表值列类型） */
+  | 'table-value'
+  /** `@随机` 的候选下标槽（整数） */
+  | 'random-slot'
+  /** 其它编译期构造预留 */
+  | 'template-slot';
+
+/** 槽的静态类型事实（ERB 声明用：int → `#DIM`，string → `#DIMS`） */
+export type KojoHiddenSlotValueType = 'int' | 'string';
+
+export interface KojoHiddenSlot {
+  /** 隐藏槽名（`__kojo_` 前缀） */
+  readonly name: string;
+  /** 槽的来源构造（声明形态可能不同） */
+  readonly kind: KojoHiddenSlotKind;
+  /**
+   * 槽值的静态类型（**必填事实**）：ERB 声明据此选 `#DIM`（int）/ `#DIMS`（string）。
+   * - 表判别槽 `__kojo_table_<名>`：恒 `int`（分档表达式是整数）；
+   * - 表值槽 `__kojo_table_<名>__value`：该表 values 的声明类型（表值同质）；
+   * - `@随机` 的 `__kojo_rand_<行>`：文本候选落点 `string`；含控制流/副作用走
+   *   `RAND+SELECTCASE` 时是候选下标，`int`（core 按候选纯度给最可证值）。
+   */
+  readonly valueType: KojoHiddenSlotValueType;
+  /** 用途细分（additive；表有两槽，adapter 需要区分判别值 / 分档结果） */
+  readonly role?: KojoHiddenSlotRole;
+}
+
+/**
+ * `# 机 <事件> [参数…]` 的事件头/包装函数请求。
+ *
+ * 包装形状（事件函数名、伴生函数、守卫、`#PRI` 头、`@函数名`…）是 **adapter 的模板事实**，
+ * 宿主没有能力凭空知道，所以由 backend 注入；core 只把 body 行交给它，并把返回的
+ * wrapper 行登记进 source map（wrapper 行 → `# 机` 声明 span = 事件头 origin）。
+ *
+ * **body 契约**（source map 靠它找回 body 子序列）：
+ * - body 是已降糖行，**没有统一缩进**（core 不排版）；
+ * - adapter 返回完整产物行时，body 行必须**按原顺序原样嵌入**：可以加缩进（`trimStart()`
+ *   后逐字相等即可），**不得改写/删除/插入** body 行；wrapper 行放在 body 前后。
+ */
+export interface MachineWrapRequest {
+  readonly machine: KojoMachineDecl;
+  /** 已降糖的正文行（无 wrapper；core 不缩进） */
+  readonly body: readonly string[];
+  readonly view: string | null;
+  /** 本文件用到的隐藏槽清单（去重、稳定序；adapter 据此发声明） */
+  readonly slots: readonly KojoHiddenSlot[];
+}
+
 /* ============================== 后端 ============================== */
 
 /** adapter 注入的唯一实现面 */
@@ -279,4 +349,10 @@ export interface KojoEmitBackend {
   readonly presentation: KojoPresentationEmitter;
   readonly weave: KojoWeaveEmitter;
   readonly program: KojoProgramEmitter;
+  /**
+   * `# 机` 事件包装（**有 `# 机` 时必须实现**，否则 compile 报 `core/feature/unsupported`）：
+   * 返回完整产物行（body 原样嵌入，位置/缩进由 adapter 定）。
+   * 每个文件最多一个 `# 机`，调用一次；`@织` 不走这个钩子（它有自己的 weaveHeader/weaveFooter）。
+   */
+  readonly wrapMachine?: (request: MachineWrapRequest) => EmitResult;
 }

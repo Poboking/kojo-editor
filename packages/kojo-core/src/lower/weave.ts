@@ -51,7 +51,14 @@ export function lowerWeave(decl: KojoWeaveDecl, state: LowerState, lowerBody: Lo
 
   emit(
     state,
-    state.backend.weave.weaveHeader({ event: decl.event, args: decl.args, modifiers: decl.modifiers, span: decl.span }),
+    state.backend.weave.weaveHeader({
+      event: decl.event,
+      args: decl.args,
+      modifiers: decl.modifiers,
+      span: decl.span,
+      // 单文件 lower 入口不做展开，不知道监听体内的隐藏槽；展开感知入口（compile）会传真实清单。
+      slots: [],
+    }),
     decl.span,
   );
   state.weaveDepth++;
