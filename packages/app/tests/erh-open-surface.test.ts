@@ -63,11 +63,14 @@ describe('① 拖得开：.ERH 进拖入白名单，提示文案由同一份清�
 });
 
 describe('② 有高亮：Monaco 扩展名映射与方言清单同源', () => {
-  /** 只留注册表要用的四个方法；断言"注册了什么"，不碰真 Monaco */
+  /** 只留注册表与语言配置要用的成员；断言"注册了什么"，不碰真 Monaco */
   function mockMonaco() {
     const registered: Array<{ id: string; extensions: string[]; aliases: string[] }> = [];
     const monaco = {
       languages: {
+        // ERB-ENTER-RULES：`.erb` 的语言配置现在也过 `toMonacoEnterConfig`（与 `.kojo` 同一道翻译层），
+        // 装配 `onEnterRules` 时要读这一格；取值与 monaco-editor 的枚举逐字对齐（同 monarch-harness）。
+        IndentAction: { None: 0, Indent: 1, IndentOutdent: 2, Outdent: 3 },
         getLanguages: () => registered.map((r) => ({ id: r.id })),
         register: (d: { id: string; extensions: string[]; aliases: string[] }) => registered.push(d),
         setMonarchTokensProvider: vi.fn(),

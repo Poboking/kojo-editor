@@ -4,6 +4,7 @@ import { kojoMonacoExtensions } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES, sugarEditorLexicon, SYSTEM_FUNCTION_ALIASES, sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
+import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
 
 /**
@@ -344,21 +345,17 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
   } as Monaco.languages.IMonarchLanguage);
 
   // ZH-D4 回车层级：正则族由 `kojo-sugar` 从关键字表**派生**（本文件零词形硬编码）。
-  const enterPatterns = sugarEnterRulePatterns();
+  // ERB-ENTER-RULES（2026-10-21）：Monaco 协议翻译收进 `enter-rules.ts` 一处，`.erb` 与
+  // `.kojo` 从同一道门出去；本文件的产物逐字不变（可选格不写 = 既有手感零改动）。
+  const enterConfig = toMonacoEnterConfig(monaco, sugarEnterRulePatterns());
   monaco.languages.setLanguageConfiguration(KOJO_LANGUAGE_ID, {
     comments: { lineComment: ';' },
     // 全角标点按词分隔（A3）；`：` 触发字在 quickSuggestions 关后靠它走显式触发通道（见 word-separators.ts 头注）
     wordPattern: CJK_WORD_PATTERN,
     // 块头行回车 ⇒ 新行 +1 级（`beforeText` 匹配"光标以左整行"⇒ 天然只在冒号后回车触发）；
     // 精确判型另见 `kojo-format.ts` 的 on-type 兜底层。
-    onEnterRules: enterPatterns.indentOnEnter.map((beforeText) => ({
-      beforeText,
-      action: { indentAction: monaco.languages.IndentAction.Indent },
-    })),
-    indentationRules: {
-      increaseIndentPattern: enterPatterns.increaseIndentPattern,
-      decreaseIndentPattern: enterPatterns.decreaseIndentPattern,
-    },
+    onEnterRules: enterConfig.onEnterRules,
+    indentationRules: enterConfig.indentationRules,
     // 三格同一张表派生；`open === close` 的那一对（`"`）不是括号，只进闭合与包裹两格
     brackets: KOJO_PAIRS.filter(([open, close]) => open !== close).map(
       ([open, close]) => [open, close] as [string, string],

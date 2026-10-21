@@ -10,13 +10,18 @@
  * Monaco 的 `onEnterRules` / provider 协议。格式化模块头注的警告在这里同样成立：
  * 判据抄的那刻起，"回车跟进的层级 = 转译认的层级"这个保证就没了。
  *
- * ## 两层供给（同一真源的两个出口）
+ * ## 两层供给（同一真源的两个出口）+ 一道通用装配
  *
  * 1. {@link sugarEnterRulePatterns}：从词表**派生**的正则族，喂 Monaco 的
  *    `onEnterRules` / `indentationRules`（按键同步生效，零异步抖动）；
  * 2. {@link sugarEnterIndentAfter}：逐字走 `classifyLine` 的**精确判定**，喂
  *    on-type formatter（`editor.formatOnType` 开启时兜住正则族的已知近似缺口，
- *    如块头行尾带 `;` 注释——正则看原文、词法看剥注释后的代码段）。
+ *    如块头行尾带 `;` 注释——正则看原文、词法看剥注释后的代码段）；
+ * 3. {@link enterRulePatternsFromRoles}：**同一套正则装配**的通用形，入参是一枚
+ *    {@link EnterRoleVocabulary}（开块 / 分支 / 闭合 / 单行 + 注释记号 + 大小写口径）。
+ *    `.erb` 的词表由宿主从引擎配对表（`erb-parser/scanner.ts` 的 `classifyControlFlow`）
+ *    喂进来 ⇒ 两门一等语言的回车层走**同一张派生表**、各自词形单源，宿主不抄第二份清单
+ *    （ERB-PARITY / ERB-ENTER-RULES，2026-10-21）。本层不认识任何语言名。
  *
  * ## 已知近似（正则族 vs 精确判定的差集，均由测试钉死、不是口头承诺）
  *
@@ -172,6 +177,111 @@ export interface SugarEnterRulePatterns {
 
 /** 段头（与前一同级块头对齐的收束+开放形）——回车落到这些行上时先退一级 */
 const SEGMENT_ALIGN_IDS: readonly KeywordId[] = ['block.elif', 'block.else', 'block.is', 'block.group'];
+
+/**
+ * 回车规则的**角色词表**（ERB-ENTER-RULES，2026-10-21）。
+ *
+ * 一门语言的块角色分四档（开块 / 分支 / 闭合 / 只抬下一行），词形**必须来自该语言自己的
+ * 真源**：`.kojo` 从 `SUGAR_LEXICON_WORDS`（本包 `keywords.ts`），`.erb` 从引擎配对表
+ * （`erb-parser/scanner.ts` 的 `classifyControlFlow`，由宿主喂进来）。本层不写词形清单、
+ * 更不认识语言名——它只把"词表 + 注释记号 + 大小写口径"翻成 Monaco 要的三格正则。
+ *
+ * 为什么分支与开块同抬一级、同时又要进闭合档（口径来自真实语料的排版习惯，
+ * 基线盘 `COMMON.ERB` 105-117 / 1059-1064 逐行量得）：
+ * `SELECTCASE` 在 d 层 ⇒ `CASE` 落在 d+1；`CASE` 的**兄弟**行回到 d+1（不是 d+2），
+ * 而 `CASE` 的正文落在 d+2 ⇒ `CASE` 既抬下一行（分支形）、又与父块同层（收束形）。
+ */
+export interface EnterRoleVocabulary {
+  /** 开块语句：下一行更深一级（`IF` / `SELECTCASE` / `REPEAT` …） */
+  readonly open: readonly string[];
+  /** 分支语句：下一行更深一级，且本行与兄弟分支同层（`ELSE` / `CASE` / `CATCH` …） */
+  readonly branch: readonly string[];
+  /** 闭合语句：本行退回开块那一层（`ENDIF` / `ENDSELECT` / `REND` …） */
+  readonly close: readonly string[];
+  /** 只抬下一行的单行形（无闭合语句，如 `SIF`） */
+  readonly indentNextLine?: readonly string[];
+  /** 行注释记号（`;`）：命中它的行不参与缩进继承，也不被别的规则改动 */
+  readonly lineComment?: string;
+  /** 关键字大小写不敏感（Emuera 引擎事实；糖侧是 `false`——小写另有别名档） */
+  readonly caseInsensitive?: boolean;
+}
+
+/**
+ * 词表派生出的回车规则族（三格必有、两格按需）。
+ * 与 {@link SugarEnterRulePatterns} 同形且多两格可选：糖侧那份是本类型的特例，
+ * 宿主的 Monaco 翻译层（`app/src/monaco/enter-rules.ts`）只认这一种形状，
+ * 两门语言从同一道门出去。
+ */
+export interface EnterRulePatterns {
+  /** 回车后新行 +1 级的行形状（每族一条，宿主逐条翻成 `onEnterRules` 的 Indent 动作） */
+  readonly indentOnEnter: readonly RegExp[];
+  /** `indentationRules.increaseIndentPattern`（粘贴 / 行中回车智能缩进） */
+  readonly increaseIndentPattern: RegExp;
+  /** `indentationRules.decreaseIndentPattern`：落到收束形上 ⇒ 与父块平级 */
+  readonly decreaseIndentPattern: RegExp;
+  /** `indentationRules.indentNextLinePattern`：只抬下一行的单行形（`SIF` 一类） */
+  readonly indentNextLinePattern?: RegExp;
+  /** `indentationRules.unIndentedLinePattern`：注释行不改自己的缩进、也不参与下一行的继承 */
+  readonly unIndentedLinePattern?: RegExp;
+}
+
+/** 关键字后的"词已尽"判据（与 `erb-parser/scanner.ts::controlFlowToken` 的 `^([A-Za-z_]+)` 同口径） */
+const KEYWORD_TAIL = '(?![A-Za-z_])';
+
+/** 词形 → 交替组（长词优先，与 `wordGroup` 同一排序纪律；重复词形去重） */
+function roleAlternation(words: readonly string[]): string {
+  return [...new Set(words)]
+    .sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0))
+    .map(esc)
+    .join('|');
+}
+
+/** `^\s*(?:词形)` 的行首锚（行首空白集与糖侧同一个 `WS`：空格 / TAB / 全角空格） */
+function roleLineStart(words: readonly string[]): string | null {
+  if (words.length === 0) return null;
+  return `^${WS}*(?:${roleAlternation(words)})${KEYWORD_TAIL}`;
+}
+
+/** 若干"行首锚"并成一条（空档自动跳过） */
+function unionLineStart(sources: readonly (string | null)[]): string | null {
+  const kept = sources.filter((s): s is string => s !== null && s.length > 0);
+  if (kept.length === 0) return null;
+  return kept.length === 1 ? kept[0]! : `(?:${kept.join('|')})`;
+}
+
+/**
+ * 从块角色词表派生回车规则族（无副作用；宿主注册期各调一次）。
+ *
+ * 分档去向：`open` ∪ `branch` ⇒ `increaseIndentPattern` 与 `indentOnEnter`（抬下一行）；
+ * `close` ∪ `branch` ⇒ `decreaseIndentPattern`（收束回父块那一层）；
+ * `indentNextLine` ⇒ `indentNextLinePattern`（只抬下一行，正文再回车不叠加）；
+ * `lineComment` ⇒ `unIndentedLinePattern`（注释行不参与继承：列 0 的注释不把后续行拖到列 0）。
+ */
+export function enterRulePatternsFromRoles(vocab: EnterRoleVocabulary): EnterRulePatterns {
+  const flags = vocab.caseInsensitive === true ? 'i' : '';
+  const open = roleLineStart(vocab.open);
+  const branch = roleLineStart(vocab.branch);
+  const close = roleLineStart(vocab.close);
+  const next = vocab.indentNextLine === undefined ? null : roleLineStart(vocab.indentNextLine);
+  const comment = vocab.lineComment === undefined ? null : `^${WS}*${esc(vocab.lineComment)}`;
+  const increase = unionLineStart([open, branch]);
+  if (increase === null) {
+    throw new Error('enterRulePatternsFromRoles: 词表里没有任何开块 / 分支词形（空表 = 这门语言的回车层不存在，不许静默注册）');
+  }
+  const indentOnEnter = [open, branch].filter((s): s is string => s !== null).map((s) => new RegExp(s, flags));
+  // 词表可以没有收束形（纯缩进语言），但 `indentationRules` 这一格 Monaco 要求必填 ⇒
+  // 用恒不成立的空负向预查顶上，**不是**"匹配空行"（`^$` 会把每个空行都当收束形）
+  const neverMatch = new RegExp('(?!)', flags);
+  const decrease = unionLineStart([close, branch]);
+  const patterns: EnterRulePatterns = {
+    indentOnEnter,
+    increaseIndentPattern: new RegExp(increase, flags),
+    decreaseIndentPattern: decrease === null ? neverMatch : new RegExp(decrease, flags),
+    ...(next === null ? {} : { indentNextLinePattern: new RegExp(next, flags) }),
+    ...(comment === null ? {} : { unIndentedLinePattern: new RegExp(comment, flags) }),
+  };
+  return patterns;
+}
 
 /** 从词表派生回车正则族（无参无副作用；宿主注册期调用一次即可） */
 export function sugarEnterRulePatterns(): SugarEnterRulePatterns {

@@ -1,6 +1,8 @@
 import type * as Monaco from './entry';
 import { ERB_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
+import { erbEnterRulePatterns, ERB_LINE_COMMENT } from './erb-enter';
+import { toMonacoEnterConfig } from './enter-rules';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
@@ -305,10 +307,16 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
 
   monarchDisposable = monaco.languages.setMonarchTokensProvider(ERB_LANGUAGE_ID, erbMonarch(ERB_DIRECTIVES));
 
+  // ERB-ENTER-RULES（2026-10-21）：回车层级与 `.kojo` 走同一道翻译层（`enter-rules.ts`），
+  // 词表由引擎配对表派生（`erb-enter.ts`，零手抄词形）——ERB 是一等语言，
+  // 打字手感这一格不是 `.kojo` 的专属福利。
+  const enterConfig = toMonacoEnterConfig(monaco, erbEnterRulePatterns());
   monaco.languages.setLanguageConfiguration(ERB_LANGUAGE_ID, {
-    comments: { lineComment: ';' },
+    comments: { lineComment: ERB_LINE_COMMENT },
     // 全角标点按词分隔（A3）；双击/Ctrl+方向键另经编辑器选项 wordSeparators，两处同源 word-separators.ts
     wordPattern: CJK_WORD_PATTERN,
+    onEnterRules: enterConfig.onEnterRules,
+    indentationRules: enterConfig.indentationRules,
     brackets: [
       ['(', ')'],
       ['[', ']'],

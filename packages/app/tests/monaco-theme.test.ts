@@ -32,6 +32,9 @@ function stubMonaco(): { monaco: typeof Monaco; themes: Map<string, CapturedThem
   const registered: string[] = [];
   const monaco = {
     languages: {
+      // ERB-ENTER-RULES：`registerErbLanguage` 现在也装配两件套，翻译层要读这一格
+      // （取值与 monaco-editor 的枚举逐字对齐，同 monarch-harness / kojo-enter.test.ts）
+      IndentAction: { None: 0, Indent: 1, IndentOutdent: 2, Outdent: 3 },
       getLanguages: () => registered.map((id) => ({ id })),
       register: (language: { id: string }) => {
         registered.push(language.id);

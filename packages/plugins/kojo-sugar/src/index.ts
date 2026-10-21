@@ -1143,9 +1143,14 @@ export { STATEMENT_FUNCTIONS } from './statement-functions';
 export { buildFunctionName } from './codegen';
 
 // ZH-D4 回车层级（纯判型 + 由词表派生的回车正则族；宿主 Monaco 只做协议翻译）
+// ERB-ENTER-RULES（2026-10-21）additive 再导出：`enterRulePatternsFromRoles` 是**同一套**
+// 正则装配的通用形，`.erb` 由宿主喂引擎配对表派生的角色词表进来 ⇒ 两门一等语言共用一张派生表。
 export {
   sugarEnterIndentAfter,
   sugarEnterRulePatterns,
+  enterRulePatternsFromRoles,
+  type EnterRoleVocabulary,
+  type EnterRulePatterns,
   type SugarEnterRulePatterns,
 } from './enter';
 // SUGGEST-2A：行分类单一真源（宿主 `.kojo` 原生区判定用）——判型 / 切行与转译器、回车缩进

@@ -10,7 +10,12 @@
 import { describe, expect, it } from 'vitest';
 import { splitLogicalLines } from '../src/lexer';
 import { computeFormatEdits } from '../src/formatter';
-import { sugarEnterIndentAfter, sugarEnterRulePatterns } from '../src/enter';
+import {
+  enterRulePatternsFromRoles,
+  type EnterRulePatterns,
+  sugarEnterIndentAfter,
+  sugarEnterRulePatterns,
+} from '../src/enter';
 
 /** 折一层后的层级读数（判据与转译同源：`splitLogicalLines` 的 `indentLevel`） */
 const levelOf = (indent: string): number => splitLogicalLines(`${indent}x`)[0]!.indent;
@@ -185,5 +190,95 @@ describe('连续回车幂等（判据①）与格式化往返（判据②）', (
     // 负责口径：formatter 的「缩进归一」规则（`U+3000`→2 半角空格再按单位重排）；
     // 回车层只保证层级 +1（上面 `追加单位的层级折算` 一条已钉死），不管半角化。
     expect(levelOf(formatted[1]!.match(/^[ \t\u3000]*/)?.[0] ?? '')).toBe(2);
+  });
+});
+
+/* ============================ 通用装配：角色词表 → 回车规则族 ============================ */
+
+/**
+ * `enterRulePatternsFromRoles`（ERB-ENTER-RULES，2026-10-21）：
+ * `.kojo` 那份 `sugarEnterRulePatterns()` 与 `.erb` 那份共用这一套装配，差别只在喂进来的
+ * 词表。本组用例**不含任何语言名**——假词表说明装配口径，真词表的口径在宿主侧
+ * `packages/app/tests/erb-enter.test.ts` 钉。
+ */
+describe('enterRulePatternsFromRoles（角色词表的通用装配，语言中立）', () => {
+  const VOCAB = {
+    open: ['OPENBLOCK', 'IFX'],
+    branch: ['MIDDLE'],
+    close: ['ENDBLOCK'],
+    indentNextLine: ['SINGLE'],
+    lineComment: '~',
+    caseInsensitive: true,
+  } as const;
+
+  it('分档去向：开块∪分支抬下一行，闭合∪分支收束，单行形只进 indentNextLinePattern', () => {
+    const p = enterRulePatternsFromRoles(VOCAB);
+    expect(p.increaseIndentPattern.test('OPENBLOCK x')).toBe(true);
+    expect(p.increaseIndentPattern.test('\tMIDDLE 3')).toBe(true);
+    expect(p.increaseIndentPattern.test('SINGLE 1')).toBe(false);
+    expect(p.indentNextLinePattern!.test('SINGLE 1')).toBe(true);
+    expect(p.decreaseIndentPattern.test('ENDBLOCK')).toBe(true);
+    expect(p.decreaseIndentPattern.test('MIDDLE 3')).toBe(true);
+    expect(p.decreaseIndentPattern.test('OPENBLOCK x')).toBe(false);
+    // 注释档：行首 `~` 算注释，缩进后的也算；串里的 `~` 不算（判据锚在行首）
+    expect(p.unIndentedLinePattern!.test('~ 说明')).toBe(true);
+    expect(p.unIndentedLinePattern!.test('\t~说明')).toBe(true);
+    expect(p.unIndentedLinePattern!.test('PRINT ~ 内联')).toBe(false);
+    // 词表分档 ⇒ 规则族只有开块与分支两条 Indent 规则（单行形靠 indentNextLinePattern 走继承）
+    expect(p.indentOnEnter.length).toBe(2);
+    expect(p.indentOnEnter[0]!.test('OPENBLOCK 1')).toBe(true);
+    expect(p.indentOnEnter[0]!.test('MIDDLE 3'), '分支形不该混进开块族').toBe(false);
+    expect(p.indentOnEnter[1]!.test('MIDDLE 3')).toBe(true);
+    expect(p.indentOnEnter[1]!.test('SINGLE 1'), '单行形不进 indentOnEnter').toBe(false);
+  });
+
+  it('大小写口径由词表说：caseInsensitive 缺席 ⇒ 正则不带 i 旗', () => {
+    expect(enterRulePatternsFromRoles(VOCAB).increaseIndentPattern.flags).toContain('i');
+    const sensitive = enterRulePatternsFromRoles({ ...VOCAB, caseInsensitive: false });
+    expect(sensitive.increaseIndentPattern.flags).not.toContain('i');
+    expect(sensitive.increaseIndentPattern.test('openblock x'), '小写形态不该命中（大小写敏感档）').toBe(false);
+  });
+
+  it('关键字后的"词已尽"判据与配对扫描器同口径：字母/下划线才算同词，长词不被前缀抢走', () => {
+    const p = enterRulePatternsFromRoles(VOCAB);
+    expect(p.increaseIndentPattern.test('OPENBLOCKX 1'), 'OPENBLOCKX 不该被 OPENBLOCK 抢走').toBe(false);
+    expect(p.increaseIndentPattern.test('OPENBLOCK_1 1'), '下划线仍属同一词').toBe(false);
+    // 数字尾巴算"词已尽"：配对扫描器取词用的是 `^([A-Za-z_]+)`（数字不进词），这里不许另立一套
+    expect(p.increaseIndentPattern.test('OPENBLOCK2 1')).toBe(true);
+    expect(p.increaseIndentPattern.test('OPENBLOCK(ARG)')).toBe(true);
+    expect(p.increaseIndentPattern.test('OPENBLOCK ;行内说明')).toBe(true);
+    // 长词优先：词表里同时有长短两形时，长形先试（`MIDDLE` / `MID` 同形冲突的负空间）
+    const both = enterRulePatternsFromRoles({ ...VOCAB, open: ['MID', 'MIDDLE'] });
+    expect(both.increaseIndentPattern.test('MIDDLE 1')).toBe(true);
+  });
+
+  it('行首空白集与糖侧同源：空格 / TAB / 全角空格三形都算缩进', () => {
+    const p = enterRulePatternsFromRoles(VOCAB);
+    for (const ind of [' ', '\t', '\u3000', ' \t\u3000']) {
+      expect(p.increaseIndentPattern.test(`${ind}OPENBLOCK 1`), JSON.stringify(ind)).toBe(true);
+    }
+  });
+
+  it('空词表当场抛错（铁律 4：不许静默注册一门"回车层不存在"的语言）', () => {
+    expect(() => enterRulePatternsFromRoles({ open: [], branch: [], close: [] })).toThrow(
+      /没有任何开块/,
+    );
+  });
+
+  it('没有收束形的语言 ⇒ decreaseIndentPattern 恒不成立（不是"匹配空行"）', () => {
+    const p = enterRulePatternsFromRoles({ open: ['OPENBLOCK'], branch: [], close: [] });
+    expect(p.decreaseIndentPattern.test('')).toBe(false);
+    expect(p.decreaseIndentPattern.test('OPENBLOCK 1')).toBe(false);
+    expect(p.unIndentedLinePattern).toBeUndefined();
+    expect(p.indentNextLinePattern).toBeUndefined();
+  });
+
+  it('糖侧那份仍走同一形状：三份规则齐备、逐条 beforeText 含于 increase（两格不分叉）', () => {
+    // 结构相容即通用层的消费者（宿主的 `toMonacoEnterConfig`）认得糖侧那份——这里按通用型读它
+    const sugar: EnterRulePatterns = sugarEnterRulePatterns();
+    expect(sugar.indentOnEnter.length).toBeGreaterThanOrEqual(6);
+    for (const r of sugar.indentOnEnter) expect(sugar.increaseIndentPattern.source).toContain(r.source);
+    expect(sugar.unIndentedLinePattern, '糖侧本批不新增可选格（既有手感零改动）').toBeUndefined();
+    expect(sugar.indentNextLinePattern).toBeUndefined();
   });
 });
