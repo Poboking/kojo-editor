@@ -45,6 +45,7 @@ import { applySizeTier, quickSuggestionsFor } from './editor-options';
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
 import { decideExternalChange, matchOpenedPath, openExternalChangeDiff } from './external-change';
+import { applyDiskText } from './disk-text-sync';
 import { createDocumentBroadcaster } from './document-broadcast';
 import {
   clampSlice,
@@ -1432,7 +1433,9 @@ export function EditorPane({
         const vs = isActive && ed ? ed.saveViewState() : null;
         reloadingRef.current = true;
         try {
-          live.model.setValue(text);
+          // RELOAD-UNDO-KEEP：差量上栈（`setValue` 会 `_commandManager.clear()` 清掉整条撤销栈
+          // = 数据丢失）。盘上内容成为栈上**一个**元素 ⇒ 一次 Ctrl+Z 回到作者自己的改动。
+          applyDiskText(live.model, text);
         } finally {
           reloadingRef.current = false;
         }
