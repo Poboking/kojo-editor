@@ -249,7 +249,14 @@ describe('接线面：openProject 必须走这份判定，不许再按单侧记�
     expect(src).toContain('admitProjectWriteDomain(');
     expect(src).toContain('setWritable(admission.writable)');
     expect(src).toContain('redeliverProjectWriteDomain(');
-    // 重授权那一路也吃同一份事实：批了 TS 记录也不许把 writable 直接翻成 true
-    expect(src).toContain('hostGrant: writeDomainRef.current.grant');
+    // 重授权那一路也吃同一份事实：批了 TS 记录也不许把 writable 直接翻成 true。
+    // SAVE-BUTTON-IO-SEAM 出路②：这份事实的存储从 hook 私有的 writeDomainRef 搬进
+    // `write-domain.ts` 会话单例（写方仍只有本 hook），判定入口随之变成
+    // `getSessionWriteDomainFact()`——同一份事实换了住址，不是多了第二份。
+    expect(src).toContain('const hostFact = getSessionWriteDomainFact();');
+    expect(src).toContain('hostGrant: hostFact.grant');
+    // 写方封口：会话事实只许从 setSessionWriteDomainFact 进出，屏上不许长出第二份宿主事实
+    expect(src.split('setSessionWriteDomainFact(').length - 1).toBe(3);
+    expect(src).not.toContain('writeDomainRef.current');
   });
 });

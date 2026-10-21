@@ -1,4 +1,4 @@
-import { errorText } from '@kojo/plugin-api';
+import { errorText, isPathUnder } from '@kojo/plugin-api';
 import type { ProjectErrorAction, ProjectErrorBar } from './project-error-notice';
 
 /**
@@ -48,10 +48,47 @@ export interface WriteDomainFact {
 export const initialWriteDomainFact: WriteDomainFact = { dir: null, grant: 'not-hosted', reason: null };
 
 /**
+ * 会话级宿主写域事实（SAVE-BUTTON-IO-SEAM，2026-10-21）：出路① 把这份事实收进了
+ * `use-project-session` 的 ref，但那是 hook 私有的——每个文件那颗保存按钮住在
+ * `EditorPane`，拿不到它，只能继续按 TS 批准记录 `kernel.io.isWritable` 判，于是
+ * 宿主拒过的目录里按钮照旧可点、按下照旧被拒。这里把**同一份事实**（不新造第三套可写态）
+ * 挂到模块级单例：写方仍然只有 `use-project-session` 一处（开项目 / 重新交付 / 关项目复位），
+ * 读方允许任何 UI 组件现读。项目是应用级单例 ⇒ 单例存储不会串台。
+ */
+let sessionWriteDomainFact: WriteDomainFact = initialWriteDomainFact;
+
+export function setSessionWriteDomainFact(fact: WriteDomainFact): void {
+  sessionWriteDomainFact = fact;
+}
+
+export function getSessionWriteDomainFact(): WriteDomainFact {
+  return sessionWriteDomainFact;
+}
+
+/**
+ * 「这个路径此刻是不是被宿主准入门挡着」——保存按钮置灰与保存前置拦截共用的唯一判定。
+ * 只挡**被拒的那个项目目录之下**的路径：宿主拒的是那一次交付的项目根，作者工作区 /
+ * 常驻可写根 / 别的项目都不在这句话的范围里（判据不许扩大）。
+ */
+export function saveBlockedByHostWriteDomain(path: string): boolean {
+  const fact = sessionWriteDomainFact;
+  if (fact.grant !== 'refused' || fact.dir === null) return false;
+  return isPathUnder(fact.dir, path);
+}
+
+/**
  * 出路动作与原生选目录框的标题共用同一个名字：作者按下按钮后，对话框顶上写的就是按钮说的那件事。
- * （守卫用例按"文件 + 逐字片段 + 处数"钉这句话，本文件里只许出现一次。）
+ * （守卫用例按"文件 + 逐字片段 + 处数"钉这句话，本文件里字面量只许出现一次——
+ * 下面的保存停用句用插值引用它，不重抄。）
  */
 export const writeDomainRedeliverLabel = '重新选择这个文件夹';
+
+/**
+ * 宿主拒过的目录里"按下去必然失败"的保存动作（Ctrl+S / 保存并关闭 / 全部保存）被前置拦截时
+ * 说的那句话（SAVE-BUTTON-IO-SEAM 出路②）：只指路，不发明新授权词（「准入门」「写域」不上屏）。
+ * 按钮的悬停与拦截通知引用**同一个 const** ⇒ 屏上不会出现两种叫法。
+ */
+export const writeDomainSaveBlockedMessage = `这个文件夹还没有交给编辑器写入：请用页面左下错误提示里的「${writeDomainRedeliverLabel}」恢复写入后再保存。`;
 
 /** 被拒时给作者的那句话（机制名与宿主路径 API 名都不上屏；原因原文照旧逐字带在冒号后面） */
 export function writeDomainRefusedMessage(fact: WriteDomainFact): string {

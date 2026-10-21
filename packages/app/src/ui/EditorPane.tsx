@@ -56,6 +56,11 @@ import {
 } from './view-state-store';
 import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
 import { pathLabelParts } from './path-label';
+// SAVE-BUTTON-IO-SEAM（出路②）：保存按钮的可用性从此**同时认宿主那份事实**——
+// 判定与文案都住在 `write-domain.ts` 会话单例（写方只有 use-project-session 一处），
+// 这里只现读一个布尔值，不在本文件另写第二套可写态、也不动别的判定。
+import { saveBlockedByHostWriteDomain, writeDomainSaveBlockedMessage } from './write-domain';
+import { SaveButton } from './save-button';
 import { Icon } from './icons';
 // 糖视图阅读模式（.kojo 预览专用）的显示层样式：装饰类 + 工具条开关，组件级引入
 // （照 tab-chip.css / welcome.css 先例；只影响挂在糖 model 上的装饰，不碰普通编辑）
@@ -1155,6 +1160,15 @@ export function EditorPane({
         path,
         async () => {
           const isActive = filePathRef.current === path;
+          // SAVE-BUTTON-IO-SEAM（出路②）前置拦截：宿主准入门拒过的目录里 TS 批准记录照旧在
+          // 册（`kernel.io.isWritable` 为真），但**按下去必然失败**——这条判定吃宿主那份事实，
+          // 与工具条按钮的置灰（`saveBlockedByHostWriteDomain` 同一个函数）同生同灭。
+          // Ctrl+S / 保存并关闭 / 全部保存都收在这一个口；只挡被拒项目目录之下的路径，
+          // 作者工作区与常驻可写根的保存零改动。写域本身**没有**放宽：内核那道闸原样不动。
+          if (saveBlockedByHostWriteDomain(path)) {
+            if (!quiet) notify({ kind: 'error', message: writeDomainSaveBlockedMessage });
+            return { path, status: 'failed', message: writeDomainSaveBlockedMessage };
+          }
           // P0 前置拦截：按文件实际可写性判定（工作区恒可写，不被项目授权状态误伤——
           // 双真相源：工作区 = 创作权威，游戏目录 = 部署目标）
           if (!kernel.io.isWritable(path)) {
@@ -1594,7 +1608,9 @@ export function EditorPane({
         saveWarningPending: pendingChoiceRef.current !== null,
         externalChangePending: externalConflictRef.current.has(path),
         sugarView: sugarModelRef.current !== null,
-        writable: kernel.io.isWritable(path),
+        // SAVE-BUTTON-IO-SEAM（出路②）：宿主拒过的目录里自动保存同样必然失败——按与保存
+        // 按钮同一个判定跳过（不是放宽写域，是不再对着必然被拒的路径白敲 IPC）。
+        writable: kernel.io.isWritable(path) && !saveBlockedByHostWriteDomain(path),
       });
       if (decision !== 'run') return;
       if (await saveRef.current()) {
@@ -2262,15 +2278,16 @@ export function EditorPane({
             只读态整颗**不渲染**（只读的说明只留底部状态栏胶囊一处，2026-10-14 去重口径，
             工具条不再重造只读提示，也不摆一颗永远按不动的实心按钮）；
             可写但无改动 = .idle 弱化档（ghost 化，仍 disabled，快捷键行为零改动）；
-            改过内容才回到醒目主按钮。判定用 `kernel.io.isWritable` 同一真源，不另立口径。 */}
+            改过内容才回到醒目主按钮。判定用 `kernel.io.isWritable` 同一真源，不另立口径。
+            SAVE-BUTTON-IO-SEAM（出路②）在此口径上**追加**宿主那一半：TS 批准记录在册但
+            宿主准入门拒过的目录里，按钮渲染但置灰、悬停指回常驻错误条的那颗出路按钮
+            （`save-button.tsx`；按下去必然失败的动作不再按得动）。 */}
         {kernel.io.isWritable(filePath) ? (
-          <button
-            className={`primary small${dirty ? '' : ' idle'}`}
-            onClick={() => void save()}
-            disabled={!dirty}
-          >
-            保存 (Ctrl+S)
-          </button>
+          <SaveButton
+            dirty={dirty}
+            hostBlocked={saveBlockedByHostWriteDomain(filePath)}
+            onSave={() => void save()}
+          />
         ) : null}
       </div>
       {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内），

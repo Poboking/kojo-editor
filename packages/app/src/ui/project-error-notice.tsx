@@ -58,9 +58,17 @@ export interface ProjectErrorNoticeProps {
   readonly action?: ProjectErrorAction | null;
 }
 
+/**
+ * 常驻错误条的 DOM id（SAVE-BUTTON-IO-SEAM 出路②，2026-10-21）：宿主拒绝态下保存按钮
+ * 置灰时以 `aria-describedby` 指到这里——作者按下不了的按钮，悬停与可达性都指回这条
+ * 错误条上那颗「重新选择这个文件夹」。**焦点交接走这条关联而不强行 focus()**：
+ * 每次切到被拒项目的标签就抢编辑器焦点，比按不动的按钮更打扰作者。
+ */
+export const projectErrorNoticeId = 'project-session-error';
+
 export function ProjectErrorNotice({ message, onDismiss, action = null }: ProjectErrorNoticeProps): ReactElement {
   return (
-    <div className="notice error project-session-error" role="alert">
+    <div id={projectErrorNoticeId} className="notice error project-session-error" role="alert">
       <span className="project-session-error-message">{message}</span>
       {action ? (
         <button type="button" className="small toast-action" title={action.title} onClick={action.run}>

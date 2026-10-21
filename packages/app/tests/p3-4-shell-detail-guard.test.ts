@@ -5,7 +5,8 @@
  * 三组各钉一件事：
  *  ① 保存三段式：只读态那颗实心主按钮**整颗不渲染**（说明只留底部状态栏一处，
  *     2026-10-14 去重口径）；可写无改动 = `.idle` 弱化档；有改动才回实心主按钮；
- *     `kernel.io.isWritable` 仍是唯一可写真源，`保存 (Ctrl+S)` 与 onClick save 接线零改动。
+ *     `kernel.io.isWritable` 仍是渲染条件真源（SAVE-BUTTON-IO-SEAM 出路② 在其上**追加**
+ *     宿主拒绝态置灰，按钮 JSX 随之析出到 `save-button.tsx`，三段式形状与接线口径不变）。
  *  ② 激活标签：底色 + 顶部 accent 线之外补左右 `--border-strong` 描边、字重 600，
  *     且全部 token、无裸 hex（三主题由 token 层跟随，本仓themes/不许组件写死颜色）。
  *  ③ 品牌记号（欢迎页侧）：与标题栏同一枚「口上/对话框」气泡，走 mask + `--accent`
@@ -18,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 const pane = read('../src/ui/EditorPane.tsx');
+const saveBtn = read('../src/ui/save-button.tsx');
 const css = read('../src/styles-project.css');
 const welcome = read('../src/ui/welcome.css');
 
@@ -28,18 +30,19 @@ function cssBlock(source: string, selector: string): string {
   return source.slice(at, source.indexOf('}', at));
 }
 
-describe('P3-4 ① 保存按钮三段式（EditorPane 渲染处）', () => {
+describe('P3-4 ① 保存按钮三段式（SAVE-BUTTON-IO-SEAM 出路② 起，按钮 JSX 住在 save-button.tsx，渲染条件留在 EditorPane）', () => {
   it('只读（不可写）态整颗不渲染：按钮被 isWritable 三元包住，else 分支是 null', () => {
     expect(pane).toContain('{kernel.io.isWritable(filePath) ? (');
     // 旧的「disabled 的醒目主按钮」形状不许回来
     expect(pane).not.toContain('disabled={!dirty || !kernel.io.isWritable(filePath)}');
   });
 
-  it('可写态：无改动挂 .idle 弱化、有改动回实心；disabled 只看 dirty；接线（onClick save）不丢', () => {
-    expect(pane).toContain('className={`primary small${dirty ? \'\' : \' idle\'}`}');
-    expect(pane).toContain('disabled={!dirty}');
-    expect(pane).toContain('onClick={() => void save()}');
-    expect(pane).toContain('保存 (Ctrl+S)');
+  it('可写态：无改动挂 .idle 弱化、有改动回实心；disabled = 无改动或宿主拒绝态；接线（onSave→save）不丢', () => {
+    expect(pane).toContain('onSave={() => void save()}');
+    expect(pane).toContain('hostBlocked={saveBlockedByHostWriteDomain(filePath)}');
+    expect(saveBtn).toContain('className={`primary small${dirty ? \'\' : \' idle\'}`}');
+    expect(saveBtn).toContain('disabled={!dirty || hostBlocked}');
+    expect(saveBtn).toContain('保存 (Ctrl+S)');
   });
 
   it('.idle 弱化档样式在 styles-project.css，且只吃 token', () => {

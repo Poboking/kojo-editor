@@ -35,6 +35,9 @@ const COPY_FILES = [
   'packages/app/src/ui/project-error-notice.tsx',
   // WRITE-ADMIT-SPLIT 出路①：宿主写域事实与那颗出路按钮的上屏句子都住这里
   'packages/app/src/ui/write-domain.ts',
+  // SAVE-BUTTON-IO-SEAM 出路②：保存按钮置灰态的悬停句子引用 write-domain 同一份文案，
+  // 组件本体只消费布尔判定——句子字面量不许在这颗按钮上重抄一份
+  'packages/app/src/ui/save-button.tsx',
   'packages/app/src/ui/error-boundary.tsx',
   'packages/app/src/ui/CallHierarchyOverlay.tsx',
   'packages/app/src/ui/FileHistoryOverlay.tsx',
@@ -181,7 +184,13 @@ const PINNED_COPY: readonly {
     file: 'packages/app/src/ui/write-domain.ts',
     phrase: '重新选择这个文件夹',
     count: 1,
-    why: '出路那颗按钮的中文名，与原生选目录框标题同源（同一个 const ⇒ 屏幕上不会出现两种叫法；作者面不写「重新交付」「准入门」这类机制词）',
+    why: '出路那颗按钮的中文名，与原生选目录框标题同源（同一个 const ⇒ 屏幕上不会出现两种叫法；作者面不写「重新交付」「准入门」这类机制词；SAVE-BUTTON-IO-SEAM 出路② 的保存停用句用插值引用它，字面量不增处）',
+  },
+  {
+    file: 'packages/app/src/ui/write-domain.ts',
+    phrase: '这个文件夹还没有交给编辑器写入',
+    count: 1,
+    why: 'SAVE-BUTTON-IO-SEAM 出路②：宿主拒绝态下保存按钮的悬停与 Ctrl+S 前置拦截共用这同一句（按钮 title 与通知引用同一个 const）；只指路到那条常驻错误条与那颗出路按钮，「准入门」「写允许域」等机制词不上屏',
   },
   {
     file: 'packages/app/src/ui/write-domain.ts',

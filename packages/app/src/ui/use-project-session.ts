@@ -39,13 +39,14 @@ import { workspaceRootsOf } from './workspace-roots';
 import type { ProjectErrorAction } from './project-error-notice';
 import {
   admitProjectWriteDomain,
+  getSessionWriteDomainFact,
   initialWriteDomainFact,
   isProjectWritableOf,
   redeliverProjectWriteDomain,
+  setSessionWriteDomainFact,
   writeDomainFixAction,
   writeDomainRefusedMessage,
   type WriteDomainAdmission,
-  type WriteDomainFact,
 } from './write-domain';
 
 /**
@@ -207,16 +208,18 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
    * 宿主这一半边的写域事实（WRITE-ADMIT-SPLIT 出路①）：`{dir, grant, reason}`。
    * 「这个项目能不能直接编辑」从此要**同时**吃 TS 批准记录与这一份——以前只看前者，
    * 于是注册被准入门拒了、下面那行 `setWritable(approved !== null)` 仍把 UI 翻成"能编辑"。
-   * 这份事实只由 `applyWriteDomainAdmission` 写、只由本 hook 读（关项目 / 换项目即复位）。
+   * SAVE-BUTTON-IO-SEAM（出路②）：这份事实的**存储本体**住在 `write-domain.ts` 的会话单例
+   * （`setSessionWriteDomainFact` / `getSessionWriteDomainFact`）。写方仍然只有本 hook
+   *（开项目 / 重新交付 / 关项目复位这三处，一次都不许多）；读方多了每个文件那颗保存按钮
+   * （EditorPane 现读同一份 ⇒ 宿主拒过时置灰），没有第二份真源，也不新造第三套可写态。
    */
-  const writeDomainRef = useRef<WriteDomainFact>(initialWriteDomainFact);
   /** 出路动作可能长期挂在错误条上：run 走 ref，按钮永远叫得响当前这份实现（同 App 的 onReauthRef 手法） */
   const redeliverRef = useRef<() => void>(() => undefined);
 
   /** 一次写域交付的落地：会话事实 + 错误条（含出路）+ 可写态，三者只从这一处写 */
   const applyWriteDomainAdmission = useCallback(
     (admission: WriteDomainAdmission) => {
-      writeDomainRef.current = admission.fact;
+      setSessionWriteDomainFact(admission.fact);
       if (admission.error === null) setError(null);
       else raiseError(admission.error.message, admission.error.action);
       setWritable(admission.writable);
@@ -230,7 +233,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
    * 成功后错误条消失、可写态按两份事实重新对齐；取消则什么都不变。
    */
   const redeliverWriteDomain = useCallback(async () => {
-    const dir = writeDomainRef.current.dir;
+    const dir = getSessionWriteDomainFact().dir;
     if (!kernel || dir === null || !isTauri()) return;
     const admission = await redeliverProjectWriteDomain({
       dir,
@@ -269,7 +272,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
       if (!opts?.keepView) setPhase('opening');
       setError(null);
       // 换项目 / 重开都从"宿主还没表态"起算：上一次交付结果不许踩进这一趟
-      writeDomainRef.current = initialWriteDomainFact;
+      setSessionWriteDomainFact(initialWriteDomainFact);
       // 静默只读修复（P0）：不一致事件只在 open() 期间同步发出——局部订阅，
       // 避免常驻监听与 openProject 状态写入之间的竞态
       let approvalMismatch = false;
@@ -416,7 +419,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         // WRITE-ADMIT-SPLIT 出路①：宿主写域事实与那条带出路的错误条都只属于这个项目——
         // 项目一关，Rust 侧回到「仅应用数据目录可写」，屏上不许留着"这个项目不能写"的话
         // 和一颗对着空现场按得下去的按钮（clear_write_domain 真失败仍会另报一条）。
-        writeDomainRef.current = initialWriteDomainFact;
+        setSessionWriteDomainFact(initialWriteDomainFact);
         setError(null);
         // 检索结果按项目根算出来的：项目一关，旧结果里的路径全部失去意义（留着只会误导）
         resetSearch();
@@ -450,14 +453,15 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         await kernel.project.approveWritablePaths(p, p.writablePaths);
         // WRITE-ADMIT-SPLIT 出路①：批的是 TS 那半边记录。宿主没把写域交出来时（准入门拒过），
         // 这里照同一份事实判 ⇒ 仍是只读，并把那条带出路的错误重新挂上屏，别让徽章说谎。
+        const hostFact = getSessionWriteDomainFact();
         const writableNow = isProjectWritableOf({
           hasApprovalRecord: true,
           approvalMismatch: false,
-          hostGrant: writeDomainRef.current.grant,
+          hostGrant: hostFact.grant,
         });
         setWritable(writableNow);
-        if (!writableNow && writeDomainRef.current.grant === 'refused') {
-          raiseError(writeDomainRefusedMessage(writeDomainRef.current), writeDomainFixAction(() => redeliverRef.current()));
+        if (!writableNow && hostFact.grant === 'refused') {
+          raiseError(writeDomainRefusedMessage(hostFact), writeDomainFixAction(() => redeliverRef.current()));
         }
       } catch (e: unknown) {
         // 授权失败必须显式可见（P0 实机反馈）：否则对话框一关、徽章仍是「只读」，
