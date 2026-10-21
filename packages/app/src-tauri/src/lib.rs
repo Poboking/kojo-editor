@@ -63,6 +63,8 @@ mod updater_proxy;
 /// `<appDataDir>/approved_roots.txt`，故"最近项目 / 常驻根"重开时其根早已在册、照常放行。
 /// **没有任何命令接受路径参数来授予写权限**——JS 侧递来一个字符串就放行的入口不存在；
 /// `register_write_domain` 只把"确实被宿主交出去过"的目录（或其子目录）认作项目根。
+/// 这两份清单本身就是凭据 ⇒ 命令侧对它们一律拒写（`is_reserved_state_file`，
+/// 拦写入 / 改名 / 拷贝 / 删除），只有宿主的 `read_*` / `write_*` 私有函数能改。
 #[derive(Default)]
 struct WriteDomainState {
     project_root: Mutex<Option<PathBuf>>,
@@ -250,6 +252,33 @@ const APPROVED_ROOTS_FILE: &str = "approved_roots.txt";
 
 fn approved_roots_file(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(APPROVED_ROOTS_FILE)
+}
+
+/// 宿主授权清单（两份文件名）：`register_write_domain` 的准入**唯一凭据**（见 `is_root_approved`）。
+/// 它们即使落在 appDataDir（本身是常驻允许域）内，也不许经任何命令写入 / 改名 / 拷贝 / 删除——
+/// 否则 WebView 侧先写一份 `C:\` 进 `approved_roots.txt`，重启后 `register_write_domain("C:\\")`
+/// 就通过准入 ⇒ 任意路径可写、只读游戏目录保护失效。
+/// 宿主自己的读写走 `read_*` / `write_*` 私有函数（直接 `std::fs`，不经命令），故不受影响。
+const RESERVED_STATE_FILES: [&str; 2] = [WORKSPACE_ROOTS_FILE, APPROVED_ROOTS_FILE];
+
+/// 纯判定：`target` 的文件名命中保留清单**且**落点确实在 `app_data_dir` 内 ⇒ true。
+/// 只按名字拒会误伤用户项目里恰好同名的普通文件，故必须同时判落点。
+/// 落点判定先 `canonicalize_deep`（短路径 / `..` / 大小写 / 符号链接都要挡住）；
+/// 规范化失败时**不放行**，退回原始组件的 `is_within` 比较（此时判定只会更严，不会更松）。
+fn is_reserved_state_file(app_data_dir: &Path, target: &Path) -> bool {
+    let Some(name) = target.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let hit_name = RESERVED_STATE_FILES
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved));
+    if !hit_name {
+        return false;
+    }
+    match (canonicalize_deep(target), canonicalize_deep(app_data_dir)) {
+        (Ok(canon_target), Ok(canon_app)) => is_within(&canon_target, &canon_app),
+        _ => is_within(target, app_data_dir),
+    }
 }
 
 /// 从磁盘读回准入根清单：不存在 = 空（首次运行正常态）；读失败出声后按空处理。
@@ -542,17 +571,26 @@ fn memo_insert_canon_if_current(
 /// 无关 ⇒ 三把锁各自只在"克隆几个路径 / 读写 map"的瞬间持有。判序、文案与拒绝/放行结果
 /// 逐字不变（同一个 `ensure_canon_target_in_domain_with`）；快照只在"允许域变更"瞬间
 /// 才可能过时，而写域变更是项目级低频事件（判定本身也从不承诺与它原子）。
-fn ensure_write_allowed(
-    app: &tauri::AppHandle,
+/// 命令侧判定核心（纯逻辑壳，可单测、不依赖 Tauri 类型）：保留名闸 → 目标规范化 →
+/// 允许域判定（备忘录版）。`ensure_write_allowed` 只负责取 appDataDir 与状态快照。
+///
+/// 保留名闸必须在域判定**之前**：appDataDir 是常驻允许域，若不做这一步，
+/// `write_file_bytes` / `rename_path` / `copy_file` / `remove_file` / `remove_dir`
+/// 都能改到 `approved_roots.txt` / `workspace_roots.txt`，等于让 JS 自己签发写权限。
+fn ensure_write_allowed_from_parts(
+    app_data_dir: &Path,
     state: &WriteDomainState,
     path: &Path,
     op: &str,
 ) -> Result<(), String> {
-    use tauri::Manager;
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir: {e}"))?;
+    // 这两份文件是准入门的唯一凭据：JS 面任何写 / 改名 / 拷贝 / 删除都不许碰。
+    // 宿主自己的读写走 `read_*` / `write_*` 私有函数（直接 `std::fs`），不经命令，故不受影响。
+    if is_reserved_state_file(app_data_dir, path) {
+        return Err(format!(
+            "拒绝写入宿主授权清单（只由宿主维护）：{}",
+            path.display()
+        ));
+    }
     let canon_target = canonicalize_target_for_domain(path, op)?;
     // 快照：两个小 Vec/PathBuf 的克隆（纳秒级），换掉锁内两条 `is_dir` 系统调用
     let (project, extras) = {
@@ -570,13 +608,28 @@ fn ensure_write_allowed(
     };
     ensure_canon_target_in_domain_with(
         &canon_target,
-        &app_dir,
+        app_data_dir,
         project.as_deref(),
         &extras,
         path,
         op,
         |root| canonical_root_cached_short(state, root, op),
     )
+}
+
+/// 命令侧包装：取 appDataDir，其余判定交给 [`ensure_write_allowed_from_parts`]。
+fn ensure_write_allowed(
+    app: &tauri::AppHandle,
+    state: &WriteDomainState,
+    path: &Path,
+    op: &str,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    ensure_write_allowed_from_parts(&app_dir, state, path, op)
 }
 
 /// 允许域任何一处变更（项目根注册 / 清除 / 常驻根增减）⇒ 备忘录整体作废。
@@ -3278,8 +3331,9 @@ mod write_domain_tests {
     use super::{
         canonical_root_cached, canonical_root_cached_short, canonicalize_deep,
         clear_domain_core, commit_project_root, domain_change_snapshot, ensure_in_domain_with,
-        ensure_in_write_domain,
-        invalidate_canon_roots, is_root_approved, is_same_path, is_within, memo_insert_canon_if_current,
+        ensure_in_write_domain, ensure_write_allowed_from_parts,
+        invalidate_canon_roots, is_reserved_state_file, is_root_approved, is_same_path, is_within,
+        memo_insert_canon_if_current,
         merge_workspace_roots, push_approved_root, push_extra_root, read_approved_roots,
         read_workspace_roots, write_approved_roots, write_workspace_roots, WriteDomainState,
     };
@@ -3815,6 +3869,69 @@ mod write_domain_tests {
             Some(&canon),
             "当代际的结果应正常落表"
         );
+    }
+
+    /// 授权清单（`approved_roots.txt` / `workspace_roots.txt`）是准入门的唯一凭据，
+    /// 即使落在常驻允许域 appDataDir 内也必须命中；命名判据含大小写与 `..` 穿越。
+    #[test]
+    fn reserved_state_file_names_hit_only_inside_appdata() {
+        let appdata = temp_root("reserved");
+        let nested = mkdir(&appdata.join("a"));
+        assert!(is_reserved_state_file(
+            &appdata,
+            &appdata.join("approved_roots.txt")
+        ));
+        assert!(
+            is_reserved_state_file(&appdata, &appdata.join("WORKSPACE_ROOTS.TXT")),
+            "Windows 大小写不敏感：大写写法也是同一份清单"
+        );
+        assert!(
+            is_reserved_state_file(
+                &appdata,
+                &nested.join("..").join("approved_roots.txt")
+            ),
+            "`..` 落回 appDataDir 的写法不许绕过"
+        );
+        assert!(!is_reserved_state_file(
+            &appdata,
+            &appdata.join("other.txt")
+        ));
+        // 用户项目里恰好同名：不在 appDataDir 下，不许误伤
+        let project = temp_root("reserved-proj");
+        assert!(!is_reserved_state_file(
+            &appdata,
+            &project.join("approved_roots.txt")
+        ));
+        let _ = std::fs::remove_dir_all(&appdata);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// 行为级：命令侧判定壳必须拒保留名（含改名 / 拷贝 / 删除），普通名照常放行。
+    #[test]
+    fn reserved_state_file_blocked_by_command_gate() {
+        let appdata = temp_root("reservedgate");
+        let state = WriteDomainState::default();
+        for op in ["write", "rename", "copy", "remove"] {
+            let err = ensure_write_allowed_from_parts(
+                &appdata,
+                &state,
+                &appdata.join("approved_roots.txt"),
+                op,
+            )
+            .unwrap_err();
+            assert!(err.contains("宿主授权清单"), "{op} unexpected: {err}");
+        }
+        assert!(ensure_write_allowed_from_parts(
+            &appdata,
+            &state,
+            &appdata.join("Workspace_Roots.txt"),
+            "write"
+        )
+        .is_err());
+        // appDataDir 仍是允许域：普通文件名不受影响
+        ensure_write_allowed_from_parts(&appdata, &state, &appdata.join("other.txt"), "write")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&appdata);
     }
 }
 

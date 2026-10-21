@@ -11,7 +11,6 @@
 (label_line) @label
 (bracket_line) @keyword.control
 (function_head) @function
-(parameter) @variable.parameter
 (string) @string
 (form_interpolation) @string.special
 (form_substitution) @string.special

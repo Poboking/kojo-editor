@@ -168,6 +168,18 @@ export function applyEolToModel(model: Monaco.editor.ITextModel, eol: 'LF' | 'CR
 }
 
 /**
+ * model 的换行档——**唯一真值**（EOL-READOUT-TRUTH，2026-10-21 审阅批）。
+ *
+ * `ModelEntry.eol` 只是"打开那一刻盘上多数派"的缓存：①重载走 `applyDiskText`（按 model EOL
+ * 归一，不会改 model 的档）却把缓存改成盘上读数；②混合行尾文件在 create 时 model 的档就可能
+ * 与多数派不同。两处都会让缓存与屏幕分家 —— 读它就会出现"状态栏说 CRLF、屏幕是 LF、点 LF 还
+ * 被早退吞掉"（菜单永远动不了）。所以状态栏 / 崩溃快照 / 切换早退一律现取 model。
+ */
+export function modelEolOf(model: Monaco.editor.ITextModel): 'LF' | 'CRLF' {
+  return model.getEOL() === '\r\n' ? 'CRLF' : 'LF';
+}
+
+/**
  * `.kojo` 预览装配判据的项目侧摘要（PS-5 缓存键的一部分）。
  *
  * 段由 `ui.editor.liftPreview` 按 `{path, text, project}` 现算 ⇒ 决定产物的只有
@@ -558,7 +570,8 @@ export function EditorPane({
       selStatusRef.current = sel;
       onStatusInfoRef.current?.({
         encoding: entry.encoding,
-        eol: entry.eol,
+        // 读数现取 model（entry.eol 只是打开时的盘上缓存，重载/混合行尾后会分家）
+        eol: modelEolOf(entry.model),
         lines: entry.model.getLineCount(),
         sel,
         // 只读 / 预览面不画切换入口；每次上报现算（解锁、预览开关都会紧接着补一报）
@@ -578,7 +591,13 @@ export function EditorPane({
     for (const [path, entry] of [...entriesRef.current]) {
       if (entry.model.isDisposed()) continue;
       if (!computeDirty(path)) continue;
-      out.push({ path, text: entry.model.getValue(), encoding: entry.encoding, eol: entry.eol });
+      out.push({
+        path,
+        text: entry.model.getValue(),
+        encoding: entry.encoding,
+        // 崩溃恢复要重建 model：档必须取屏幕真相（缓存可能与 model 分家）
+        eol: modelEolOf(entry.model),
+      });
     }
     return out;
   }, [computeDirty]);
@@ -1363,17 +1382,23 @@ export function EditorPane({
       const entry = path ? entriesRef.current.get(path) : undefined;
       if (!path || !entry || entry.model.isDisposed()) return false;
       if (!eolSwitchAllowed(path)) return false;
+      // 早退判据取 **model** 的真档（EOL-READOUT-TRUTH）：`entry.eol` 是打开时的盘上缓存，
+      // 重载（applyDiskText 不改 model 档）与混合行尾文件都会让它与屏幕分家 —— 拿缓存比，
+      // 会出现"状态栏说一个档、点另一个档被当成无意义操作吞掉"，菜单从此动不了。
+      const current = modelEolOf(entry.model);
       // 读数已是目标档：只收菜单，不制造一次无意义的脏
-      if (entry.eol === eol) return true;
-      // model 已经就是目标换行（混合换行文件里首行风格与多数派不一致时偶发）：
-      // 不产生脏，也不谎报读数 —— 当作没发生
+      if (current === eol) {
+        entry.eol = eol; // 缓存跟上真值，别留第二个答案
+        return true;
+      }
+      // 走到这里 model 的档一定与目标不同 ⇒ 真改（applyEolToModel 自己还兜一层 disposed/同档）
       if (!applyEolToModel(entry.model, eol)) return false;
       entry.eol = eol;
       // 覆盖位**只在显式切换这一刻置位**：保存链据此知道"这份文件的换行是作者
       // 改的，落盘要整段统一"，而不是把打开时读到的档位误当覆盖（EOL-OVERRIDE-SAVE）
       entry.eolOverride = eol;
       if (filePathRef.current === path) {
-        setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
+        setStatus(`${entry.encoding} · ${modelEolOf(entry.model)} · ${entry.model.getLineCount()} 行`);
         // 状态栏读数立刻换档（并顺带重算 eolSwitchable；脏标记由 model 监听上报）
         pushSelStatus(true);
       }
@@ -1639,7 +1664,8 @@ export function EditorPane({
           // sel 随行——不带的话「选中…」widget 会在自动保存成功的一瞬消失（口径同 pushSelStatus）
           onStatusInfoRef.current?.({
             encoding: live.encoding,
-            eol: live.eol,
+            // 读数现取 model（与 pushSelStatus 同一把尺，见 modelEolOf）
+            eol: modelEolOf(live.model),
             lines: live.model.getLineCount(),
             autosavedAt: Date.now(),
             sel: selStatusRef.current,
@@ -1966,7 +1992,7 @@ export function EditorPane({
       // 换文件才作废未决的保存告警（避免误对旧文件应用修复）；同文件重跑（依赖抖动 /
       // kernel 换代）不清——否则正弹着的确认框会被静默吞掉，保存意图丢失。
       if (prev !== filePath) setPendingChoice(null);
-      setStatus(`${entry.encoding} · ${entry.eol} · ${entry.model.getLineCount()} 行`);
+      setStatus(`${entry.encoding} · ${modelEolOf(entry.model)} · ${entry.model.getLineCount()} 行`);
       // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;

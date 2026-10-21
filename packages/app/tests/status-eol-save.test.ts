@@ -136,8 +136,10 @@ describe('autosave 不清覆盖位：runAutosave 走 saveRef（同一条保存�
       'const documentBroadcaster = useMemo(',
     );
     expect(snapshots).not.toContain('eolOverride');
-    // 快照读数用 entry.eol（读数档），不读覆盖位——快照既不落盘也不清位
-    expect(snapshots).toContain('eol: entry.eol');
+    // 快照读数取**屏幕真相**（model 的档）：既不读覆盖位、也不清位。
+    // 不用缓存 `entry.eol` —— 重载/混合行尾后它会与 model 分家（EOL-READOUT-TRUTH / PITFALLS 167）
+    expect(snapshots).toContain('eol: modelEolOf(entry.model)');
+    expect(snapshots, '崩溃恢复快照不许退回缓存档（会按错档重建 model）').not.toContain('eol: entry.eol');
   });
 
   it('savePathDetailed 之外不存在 autosave 专属的覆盖位复位（语义只归保存成功/重载链管）', () => {

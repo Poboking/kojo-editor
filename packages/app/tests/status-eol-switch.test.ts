@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as monaco from '../src/monaco/entry';
-import { applyEolToModel } from '../src/ui/EditorPane';
+import { applyEolToModel, modelEolOf } from '../src/ui/EditorPane';
 
 const SOURCE = readFileSync(
   path.resolve(import.meta.dirname, '..', 'src', 'ui', 'EditorPane.tsx'),
@@ -137,5 +137,66 @@ describe('接线：动作句柄、焦点组转发、状态上报同一链路', (
     // 只读门翻转 / 预览开关 / 直连开关 ⇒ 立刻重报（入口跟着收回或恢复）
     const refreshes = SOURCE.match(/pushSelStatus\(true\)/g)?.length ?? 0;
     expect(refreshes).toBeGreaterThanOrEqual(6);
+  });
+});
+
+/* ---------------- ③ EOL-READOUT-TRUTH：读数与早退一律取 model（缓存会说谎） ---------------- */
+
+describe('modelEolOf：档位真值只认 model.getEOL()', () => {
+  const models: monaco.editor.ITextModel[] = [];
+  let seq = 0;
+  const makeModel = (text: string): monaco.editor.ITextModel => {
+    const model = monaco.editor.createModel(
+      text,
+      'plaintext',
+      monaco.Uri.parse(`inmemory://eol-readout/${++seq}`),
+    );
+    models.push(model);
+    return model;
+  };
+
+  afterEach(() => {
+    for (const model of models.splice(0)) if (!model.isDisposed()) model.dispose();
+  });
+
+  it('LF / CRLF 两档逐字相等；混合行尾返回 model 自己认的那一档（不是多数派）', () => {
+    expect(modelEolOf(makeModel('a\nb\n'))).toBe('LF');
+    expect(modelEolOf(makeModel('a\r\nb\r\n'))).toBe('CRLF');
+
+    const mixed = makeModel('a\r\nb\nc\n');
+    expect(modelEolOf(mixed)).toBe(mixed.getEOL() === '\r\n' ? 'CRLF' : 'LF');
+  });
+
+  it('setEOL 之后真值立刻跟着换（缓存字段不参与判定）', () => {
+    const model = makeModel('a\r\nb\r\n');
+    expect(modelEolOf(model)).toBe('CRLF');
+    applyEolToModel(model, 'LF');
+    expect(modelEolOf(model)).toBe('LF');
+  });
+});
+
+describe('接线：读数 / 早退 / 崩溃快照都取 model 真值（entry.eol 只是打开时的盘上缓存）', () => {
+  it('状态栏两处 eol 与自动保存那条都走 modelEolOf', () => {
+    const pushSel = sliceBetween('const pushSelStatus = useCallback(', '* 全部脏标签', SOURCE);
+    expect(pushSel, 'pushSelStatus 的 eol 必须取 model').toContain('eol: modelEolOf(entry.model)');
+    // 自动保存成功那条（live = entriesRef 现取）
+    expect(SOURCE).toContain('eol: modelEolOf(live.model)');
+    // 开文件那行状态文案
+    expect(SOURCE).toContain(
+      'setStatus(`${entry.encoding} · ${modelEolOf(entry.model)} · ${entry.model.getLineCount()} 行`)',
+    );
+  });
+
+  it('switchEol 的早退比较用 model 真档，不再拿缓存 entry.eol 比', () => {
+    expect(SWITCH_EOL).toContain('const current = modelEolOf(entry.model);');
+    expect(SWITCH_EOL).toContain('if (current === eol)');
+    expect(SWITCH_EOL, '拿缓存比会把"状态说 A、屏幕是 B"的文件永远卡死在早退里').not.toContain(
+      'if (entry.eol === eol)',
+    );
+  });
+
+  it('崩溃恢复快照的 eol 也取 model（重建 model 时不能按缓存写错档）', () => {
+    const snapshots = sliceBetween('const snapshots = useCallback(', '  }, [computeDirty]);', SOURCE);
+    expect(snapshots).toContain('eol: modelEolOf(entry.model)');
   });
 });
