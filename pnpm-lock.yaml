@@ -177,6 +177,8 @@ importers:
         specifier: workspace:*
         version: link:../plugins/state-replay
 
+  packages/kojo-core: {}
+
   packages/kojo-project-kit:
     dependencies:
       '@kojo/plugin-api':
