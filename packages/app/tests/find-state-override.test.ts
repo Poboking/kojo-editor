@@ -69,16 +69,25 @@ function installStorage(initial: Record<string, string> = {}): void {
 }
 
 /** 打过补丁的控制器替身：getFindStateSilently 对没碰过的 widget 也回结构完整的值（真补丁口径） */
+type FindChange = Monaco.editor.IFindStateChangeEvents & { searchScope?: boolean };
+
 function patchedEditor(initial: SerializedFind) {
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(e: FindChange) => void>();
   const state = { ...initial };
   const controller = {
     setFindStateSilently: vi.fn((s: SerializedFind) => {
+      const before = { ...state };
       Object.assign(state, s);
-      listeners.forEach((l) => l());
+      // monaco 的 `findState.change()` 只在**值真变**时才发事件，且事件按变更字段打标记；
+      // 换 model 那一头发的是 `{ searchScope: true }`（不是作者动作，由下面的 fire 单独模拟）。
+      const ev: FindChange = {};
+      for (const key of ['searchString', 'replaceString', 'isRegex', 'wholeWord', 'matchCase'] as const) {
+        if (before[key] !== state[key]) (ev as Record<string, unknown>)[key] = true;
+      }
+      if (Object.keys(ev).length > 0) listeners.forEach((l) => l(ev));
     }),
     getFindStateSilently: () => ({ ...state }),
-    onDidChangeFindState: (l: () => void) => {
+    onDidChangeFindState: (l: (e: FindChange) => void) => {
       listeners.add(l);
       return { dispose: () => listeners.delete(l) };
     },
@@ -86,7 +95,9 @@ function patchedEditor(initial: SerializedFind) {
   const ed = {
     getContribution: (id: string) => (id === FIND_CONTROLLER_ID ? controller : null),
   } as unknown as Monaco.editor.IStandaloneCodeEditor;
-  return { ed, state };
+  /** 模拟 monaco 内部打一发事件（换 model 的 searchScope 那发走这条路） */
+  const fire = (e: FindChange): void => void listeners.forEach((l) => l(e));
+  return { ed, state, fire };
 }
 
 describe('① 读侧无可写闸：全默认空 且 本会话没动过查找 ⇒ 这一拍无可写', () => {
@@ -114,6 +125,18 @@ describe('① 读侧无可写闸：全默认空 且 本会话没动过查找 ⇒
   it('writeFindState 成功即登记（不依赖事件是否真发）：放回值之后的快照拍必须可写', () => {
     const { ed } = patchedEditor({ ...PRISTINE });
     writeFindState(ed, { ...PRISTINE }); // 同值写：monaco 真实现不发变更事件，登记不能只靠事件回环
+    expect(readFindState(ed)).toEqual(PRISTINE);
+  });
+
+  it('换 model 的 searchScope 事件整条丢掉：既不回调宿主，也**不许替作者登记**（两闸合流处）', () => {
+    const { ed, fire } = patchedEditor({ ...PRISTINE });
+    const cb = vi.fn();
+    expect(subscribeFindState(ed, cb)).not.toBeNull();
+    fire({ searchScope: true }); // setModel 同步打的那一发
+    expect(cb).toHaveBeenCalledTimes(0);
+    expect(readFindState(ed)).toBeNull(); // 没登记 ⇒ 空值闸照旧拦着（若这里登记了，作者从没动过查找也会被洗条）
+    fire({ matchCase: true }); // 真作者动作才登记
+    expect(cb).toHaveBeenCalledTimes(1);
     expect(readFindState(ed)).toEqual(PRISTINE);
   });
 });

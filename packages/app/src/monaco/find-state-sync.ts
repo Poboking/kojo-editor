@@ -127,6 +127,4 @@ export function subscribeFindState(
     touchedFindControllers.add(controller);
     onChange();
   });
-    onChange();
-  });
 }
