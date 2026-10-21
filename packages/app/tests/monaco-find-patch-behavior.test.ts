@@ -57,6 +57,20 @@ interface Controller {
 
 const REC = () => ({ focusCalls: 0, contextKeySets: [] as unknown[] });
 
+interface FindModule {
+  CommonFindController: new (...args: unknown[]) => Controller;
+  getSelectionSearchString: (ed: unknown, seed?: string, fromNonEmpty?: boolean) => string | null;
+}
+
+/**
+ * 真 monaco 图的装载放在**模块顶层**（collection 期只做一次，不吃用例的 testTimeout）：
+ * 这段 import 本机单跑 5–10s（真 monaco 全图，不是桩），全量 604 文件并发下可涨到 60s 以上。
+ * 2026-10-21 审阅批实测：装载放在用例里 ⇒ 首个用例被判超时、后续用例继续等同一段装载，
+ * 连锁 4 条 timed out（全量三跑三红，同文件单跑却 6/6 绿）；顶到顶层后用例本体只剩 1–2ms。
+ * 断言一条不动。
+ */
+const monoFind = (await import(pathToFileURL(monacoFindModulePath()).href)) as FindModule;
+
 /** 起一枚真控制器：只喂它构造期与静默路径真的会用到的最小接口 */
 async function newController(cursorWord = '恢复词') {
   const rec = REC();
@@ -98,10 +112,7 @@ async function newController(cursorWord = '恢复词') {
     remove: () => {},
   };
   const clipboardService = { readFindText: async () => '', writeFindText: () => {} };
-  const mod = (await import(pathToFileURL(monacoFindModulePath()).href)) as {
-    CommonFindController: new (...args: unknown[]) => Controller;
-    getSelectionSearchString: (ed: unknown, seed?: string, fromNonEmpty?: boolean) => string | null;
-  };
+  const mod = monoFind;
   const controller = new mod.CommonFindController(
     editor,
     contextKeyService,

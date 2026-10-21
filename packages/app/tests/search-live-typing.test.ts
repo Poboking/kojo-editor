@@ -11,14 +11,16 @@
  *   ① 顺序（前一次已完成）：改词后照旧触发；
  *   ② **重叠（前一次仍在跑）：改词不丢，跑完自动补搜**——本文件的核心回归；
  *   ③ 补搜不自我循环：一次落定后不再无端重发（稳定）；
- *   ④ 关掉"打字即搜"开关：既不触发、也不补搜（设置不被 store 绕开）。
+ *   ④ 关掉"打字即搜"开关：既不触发、也不补搜（设置不被 store 绕开）；
+ *   ⑤ 检索失败后**不原地重试**（error 相位下补搜闸拦不住会每 300ms 重发一次，永不停止）；
+ *   ⑥ 但失败只挡"同一个词"：改成新词仍自动搜（不是把自动搜整体关死）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement as h } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SearchResult } from '../src/bridge/search';
 import { SearchPanel } from '../src/ui/SearchPanel';
-import { resetSearch, setQuery, setSearchRunner } from '../src/ui/search-store';
+import { resetSearch, setQuery, setSearchRunner, snapshot } from '../src/ui/search-store';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -170,5 +172,47 @@ describe('检索面板「打字即搜」', () => {
       vi.advanceTimersByTime(2000);
     });
     expect(queries, '关掉开关后补搜也不发生').toEqual([]);
+  });
+
+  it('检索失败后不自动重试（不得无限循环）', async () => {
+    vi.useFakeTimers();
+    // 只数次数：失败不 resolve/reject 以外的花活（重试风暴本身就是"被调用了多少次"）
+    let calls = 0;
+    setSearchRunner(() => {
+      calls += 1;
+      return Promise.reject(new Error('boom'));
+    });
+    await mount();
+
+    await type('abc');
+    expect(calls, '第一次已发起').toBe(1);
+
+    // 失败后相位落 error；再推 10 个 300ms 防抖窗。计时器触发与"失败落定"分两拍 flush：
+    // 挤在一拍里 running→error 会被 React 批量成 error→error，effect 不重跑，反倒看不见重试风暴。
+    for (let i = 0; i < 10; i += 1) {
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      await act(async () => {});
+    }
+    expect(calls, '同一个词失败后不许自动重试（改前约 10 次量级）').toBe(1);
+    expect(snapshot().phase, '失败后相位是 error').toBe('error');
+  });
+
+  it('同一个词失败后改成新词仍会搜', async () => {
+    vi.useFakeTimers();
+    const queries: string[] = [];
+    setSearchRunner((req) => {
+      queries.push(req.query);
+      return Promise.reject(new Error('boom'));
+    });
+    await mount();
+
+    await type('abc');
+    expect(queries).toEqual(['abc']);
+
+    // 失败闸只挡"同一个词原地重试"，不是把自动搜整体关死
+    await type('abcd');
+    expect(queries, '换成新词仍照常自动搜').toEqual(['abc', 'abcd']);
   });
 });

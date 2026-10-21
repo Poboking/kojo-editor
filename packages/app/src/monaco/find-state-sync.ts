@@ -77,6 +77,16 @@ export function writeFindState(ed: Monaco.editor.IStandaloneCodeEditor, find: Se
 /**
  * 订阅查找状态变更（作者改词、拨开关都要写存；store 侧自带 600ms 防抖）。
  * 补丁未生效 ⇒ 返回 null，调用方不必挂退订。
+ *
+ * **换 model 触发的 searchScope 事件不是作者改词，写存会串档**：`ed.setModel()` 会同步调起
+ * find 贡献的 `_state.change({ searchScope: null, matchCase: … })`，而 findState 对
+ * `searchScope=null` 恒置 `somethingChanged=true` ⇒ 每次换文件都无条件来一发。此刻
+ * `searchString` 还是**上一个文件**的词（`change()` 不动它）、光标/折叠也还没恢复，写存就把
+ * 上一个词 + 1:1 空视图盖进新文件的键。searchScope 只服务"仅在选区内查找"、不参与持久化，
+ * 所以这类事件整条丢掉。
+ *
+ * 类型面：补丁里的 `IFindStateChangeEvents` 没有这个字段，而补丁文件是冻结件（不改），
+ * 所以只能就地做运行时结构判断——不为此往补丁 d.ts 里加字段，也不 `as any` 整个事件。
  */
 export function subscribeFindState(
   ed: Monaco.editor.IStandaloneCodeEditor,
@@ -84,5 +94,9 @@ export function subscribeFindState(
 ): Monaco.IDisposable | null {
   const controller = findControllerOf(ed);
   if (!controller) return null;
-  return controller.onDidChangeFindState(() => onChange());
+  return controller.onDidChangeFindState((e) => {
+    const ev = e as Monaco.editor.IFindStateChangeEvents & { searchScope?: boolean };
+    if (ev.searchScope) return;
+    onChange();
+  });
 }

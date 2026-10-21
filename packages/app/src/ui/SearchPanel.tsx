@@ -428,6 +428,9 @@ export function SearchPanel({
   const extensionSummary = extensionSummaryText(s.extensionText);
 
   const start = (): void => {
+    // 记下"这一次真正发出去的是哪个词"（自动补搜与手动点的都记）：失败后据此判断
+    // 是不是同一个词在原地重试。放在 `start` 首行而不是防抖回调里——手动按钮也走这里。
+    attemptedQueryRef.current = s.query;
     // 范围收窄发生在发请求**之前**：扫描代价在原生侧，少扫就是少扫（不是全扫再挑）。
     const narrowing = narrowRoots(roots, selectedScope);
     void runSearch(narrowing.roots, describeAppliedScope(selectedScope, narrowing));
@@ -474,6 +477,8 @@ export function SearchPanel({
   // 挂载时带来的旧查询**不自动搜**：状态活得比面板久（切走再切回来结果已在，
   // 白跑一次全量检索只是浪费）。只有挂载后的查询变化才触发。
   const mountedQueryRef = useRef(s.query);
+  /** 最近一次**真正发出去**的查询词（`start` 首行写；null = 本次挂载还没发过） */
+  const attemptedQueryRef = useRef<string | null>(null);
   useEffect(() => {
     if (!liveSearch) return;
     if (!isValidSearchQuery(s.query)) return;
@@ -484,6 +489,10 @@ export function SearchPanel({
     // 这一屏结果已经就是当前词的 ⇒ 无事可做。它同时是"补搜不自我循环"的闸：
     // 补搜跑完后 `resultQuery` 追上 `query`，effect 哪怕因相位变化重跑也会被这条挡住。
     if (s.phase === 'done' && s.resultQuery === s.query) return;
+    // 这个词刚发过且失败了：自动补搜不许原地重试（失败相位下 `resultQuery` 被清成 null，
+    // 上一条闸拦不住 ⇒ error→running→error 每 300ms 一次，永不停止；未打开项目 /
+    // runner 抛错都会命中）。作者改词或手动点检索才再发。
+    if (s.phase === 'error' && attemptedQueryRef.current === s.query) return;
     const timer = setTimeout(() => {
       startRef.current();
     }, SEARCH_DEBOUNCE_MS);

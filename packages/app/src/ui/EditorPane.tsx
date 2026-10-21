@@ -279,6 +279,13 @@ export function EditorPane({
   const viewStatesRef = useRef(new Map<string, Monaco.editor.ICodeEditorViewState | null>());
   /** 上一个活动路径（切换时先把它的视图状态存下） */
   const prevPathRef = useRef<string | null>(null);
+  /**
+   * 正在换 model + 恢复视图的这一拍（FIND-STATE-PERSIST 回归修复，2026-10-21）：
+   * `ed.setModel()` 会**同步**触发 monaco find 贡献的 `onDidChangeModel` ⇒ `_state.change()`
+   * ⇒ 我们的查找/光标写存回调。那一拍屏上是新 model 的 1:1 默认态、查找词还是上一个文件的，
+   * 任何写存都会盖掉该文件已存的视图状态 ⇒ 置 true 期间 `snapshotActiveView` 直接早退。
+   */
+  const switchingModelRef = useRef(false);
   /** 上一次 savePath 是否走了"竞态保留脏"分支（写成功但保存期间又来新输入）——非失败，A6 不误报 */
   const saveRacedRef = useRef(false);
   const revealRef = useRef<RevealTarget | null>(null);
@@ -1682,6 +1689,8 @@ export function EditorPane({
   };
   /** 活动标签的即时快照（光标/滚动事件驱动；store 防抖合并落盘） */
   const snapshotActiveView = (): void => {
+    // 换 model 与视图恢复那一拍内的 cursor/scroll/find 事件都不许写存（见 switchingModelRef）
+    if (switchingModelRef.current) return;
     const ed = editorRef.current;
     const path = filePathRef.current;
     if (!ed || !path) return;
@@ -1927,17 +1936,24 @@ export function EditorPane({
         quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
       }, minimapCtxForPath(filePath)));
-      ed.setModel(entry.model);
-      const vs = viewStatesRef.current.get(filePath);
-      if (vs) ed.restoreViewState(vs);
-      else applyPersistedView(ed, entry.model, filePath);
-      // FIND-STATE-PERSIST 读回点（**必须挂在这条 if/else 之后**：vs 命中的同会话切回路径
-      // 压根不进 applyPersistedView，写在里面就漏掉一半）。顺序前提：`setModel` 已在上面跑过，
-      // monaco 自己那拍"开关从 workspace 存储重置"已经发生，这里覆盖它才是最终值。
-      const persistedFindRoot = kernel.project.current()?.rootDir;
-      if (persistedFindRoot) {
-        const persistedFind = getViewState(persistedFindRoot, filePath)?.find;
-        if (persistedFind) writeFindState(ed, persistedFind);
+      // 换 model 与视图恢复这一拍内的 cursor/scroll/find 事件都不许写存：此刻屏上是 1:1
+      // 默认态（查找词还是上一个文件的、光标/折叠尚未恢复），写下去会覆盖该文件已存的视图状态
+      switchingModelRef.current = true;
+      try {
+        ed.setModel(entry.model);
+        const vs = viewStatesRef.current.get(filePath);
+        if (vs) ed.restoreViewState(vs);
+        else applyPersistedView(ed, entry.model, filePath);
+        // FIND-STATE-PERSIST 读回点（**必须挂在这条 if/else 之后**：vs 命中的同会话切回路径
+        // 压根不进 applyPersistedView，写在里面就漏掉一半）。顺序前提：`setModel` 已在上面跑过，
+        // monaco 自己那拍"开关从 workspace 存储重置"已经发生，这里覆盖它才是最终值。
+        const persistedFindRoot = kernel.project.current()?.rootDir;
+        if (persistedFindRoot) {
+          const persistedFind = getViewState(persistedFindRoot, filePath)?.find;
+          if (persistedFind) writeFindState(ed, persistedFind);
+        }
+      } finally {
+        switchingModelRef.current = false;
       }
       setDirty(computeDirty(filePath));
       setError(null);
