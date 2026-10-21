@@ -23,35 +23,38 @@
 | POS-UTIL | 位置换算分散：tree-sitter 的 0-based 行与 UTF-16 码元、Monaco / plugin-api 的 1-based 行、range 端点各写各的；**否决**前一版建议的 CST↔AST `PositionMapper`（`.erb` 无 CST、`.kojo` 的 tree-sitter 可选且默认关 ⇒ 映射表会空或过期），只收口边界换算 | 判据：所有行列/区间换算走同一模块；边界测试覆盖 CJK、emoji、CRLF、折叠行与生成映射；不新增运行期节点身份映射或第三套坐标系；语义服务与编辑器读数不变 | 进行中 · 认领：lead 2026-10-20 |
 | ERB-PARITY | **ERB 是主用户群的一等语言，不是 Kojo 的附属/实验位**：口上作者可以直接写 `.erb`，`.kojo` 是可选糖而不是入口前提；语言注册、语言服务、树层叠层、默认语言与能力矩阵都不得只给 Kojo | 判据：ERB / Kojo 走同一 descriptor/registry/engine 基础设施；ERB 直写不依赖 `.kojo`；宿主 provider 双语言对齐（`registerForLanguageServices` 口径）；tree-sitter 能力按 descriptor 选择而非语言名硬编码；不得因 Kojo 特性降低 ERB 默认体验 | 进行中 · 认领：lead 2026-10-20（A3/A4 基础设施已拉平；ERB 结构层已接入、pref 默认仍关） |
 
-## 在办 · Kojo 2.0（设计基线 v0.9 · 2026-10-21 立项）
+## 在办 · Kojo 2.0（设计基线 v0.9 · 批次三 2026-10-21）
 
-> **依据**：`docs/KOJO-2.0-LANGUAGE-SPEC.md`（v0.9 设计稿 + 任务清单**合并入库版**；本机原两稿自此由该文档取代，Phase2 批注版 v0.5 不入库）。
-> **用户已定（2026-10-21）**：① 开发期旧 `.kojo` 前端与 2.0 前端**并存**，发布态仍是单一模式，由 `K2-CUTOVER` 单批收口；② 旧前端只修**会被 2.0 复用的后端面**（`K2-PRE-REUSE`），会被 2.0 前端整体替换的问题改写进设计约束；③ 看板按包/文件粒度拆行。
-> **顺序**：`K2-D0` → `K2-CONTRACT` → `K2-CORE-PKG` → `K2-LEX` / `K2-PARSE` → `K2-LOWER-*` / `K2-PROGRAM` / `K2-STORAGE` → `K2-PROJECT` / `K2-SEM` / `K2-ADAPTER-*` → `K2-TS` / `K2-MONARCH` / `K2-PROVIDERS` / `K2-FORMAT` → `K2-MIGRATOR` → `K2-MIGRATION-CORPUS` → `K2-CUTOVER` → `K2-RELEASE`。并行点：ADAPTER-* 与 LOWER-* 在契约冻结后并行；TS 重写可与 LEX/PARSE 并行；`K2-PRE-REUSE` 不依赖 D0，可先开。
+> **依据**：`docs/KOJO-2.0-LANGUAGE-SPEC.md`（v0.9 设计稿+任务清单合并入库版）。
+> **已定**：开发期双前端并存、发布态单一模式（CUTOVER 单批收口）；旧前端只修会被 2.0 复用的后端面；看板按包/文件粒度拆行。
+> **批次一/二已落 `dev`＝`58f86e7c`**：core 包/前端/降糖/端到端/迁移引擎/适配层/项目层/eraTW backend/Monaco 2.0 语言面/tree-sitter v2。对应行已销，回执在提交正文。批次三 12 路并行（见文末新行）。
 
 | ID | 任务（落点） | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
-| K2-D0 | **设计冻结与结构裁决**：设计稿已入库（`docs/KOJO-2.0-LANGUAGE-SPEC.md`，v0.9 设计稿 + 任务清单合并版，含 D0.1–D0.11 与复用清单）；确认 D0.1–D0.11 + 追加 4 项：core 包归属与 audit 放行、项目级分析层、存储期分配器、多时机拆文件形态；定旧前端退役时点 | 决策逐条落字（设计稿或 ADR）；`docs/` 已有可引用的 2.0 规格（✅ 2026-10-21）；C1 开工前无悬空结构问题；D0 未过不得开 K2-LEX/K2-PARSE | 进行中 · 认领：lead 2026-10-21（**设计稿已入库**；待拍板 D0.1–D0.11 + 4 条结构前置） |
-| K2-CONTRACT | `packages/plugin-api` 扩 2.0 契约：`sugar.ts` 新 AST（声明/表/池/模/程序/展示）、诊断码闭集、source-map 双向；新增 `GameAdapter` 契约（eventCatalog / domainSymbols / profile / presentation / storageClasses / programFeatures / layerPolicy / diagnosticNamespace / capability / sourceMap） | additive、旧消费方零改动；`pnpm typecheck` 双绿；核心包无游戏名词（audit A）；fixture adapter 仅依赖契约即可编译 | 待认领 |
-| K2-CORE-PKG | **2.0 core 包布局裁决与骨架**：新增 `packages/kojo-core` 还是留在 `kojo-sugar` 内模块（二选一，须过 `audit:decoupling` B 项）；§1.5 复用清单逐条指到现有文件/符号；前端入口与纯函数边界 | `audit:decoupling` ✅（A–D）；复用清单每条可核对；core 不 import Monaco、不 import kernel、无游戏名词；单文件转译仍是纯函数 | 待认领 |
-| K2-LEX | **2.0 词法器**：五锚点（`# @ > ? !` + 无符号台词）、声明词、`@原生` 缩进围栏、转义（`\>`/`\?`/`\=`/`\{`/`\\`）、行尾 `续`、整行 `//`、`@颜绘` 单行、`# 表` 两列行 | 2.0 fixture 全解析 + 旧写法全 error + `{}/`续`/`空行` parity；坐标 1 基 UTF-16、折行与 `@原生` 去缩进可回物理行；**全角标点走唯一入口报 error**（不再逐调用点手挂） | 待认领 |
-| K2-PARSE | **2.0 解析器**：声明区、叙事区、`?` 条件链、`# 表` / `# 池` / `# 模`、`@算` / `@随机` / `@组` / `@颜绘` / `@原生` / `@织`、程序块；空行/缩进断言 | 每条旧写法有 error + 迁移用例；`?` 与 `如果` 混用 error；错误不静默、不产半成品；C1.9 快照全绿 | 待认领 |
-| K2-LOWER-TEXT | **文本三正交 lowering**：`角色：` / `>` / 行尾 `续` / `空行` 三态 / `(心形)` / 插值；**统一引擎字面量编码器**（`"` / `\` 按 `ReadString` 语义，不可表达即 fail-closed） | golden 与 PRINT 变体选择逐字节；含 `"`/`\` 的台词/心形有回归用例；复用 `printLine`/`heartCall`/`detectSpeechOf` 不重写 | 待认领 |
-| K2-LOWER-TABLE | `# 表` lowering：闭区间/开放区间/精确值、静态非重叠、值列 trim、`否`→ELSE、源表达式只求值一次（隐藏槽 `__kojo_table_*`） | 重叠/缺否/空否/类型混合/动态端点全 error；落 `SELECTCASE` 或 `IF` 链；golden；与旧 `当` 的穷尽性差异有说明 | 待认领 |
-| K2-LOWER-POOL | `# 池` / `# 模` 编译期展开：默认说话人 `{我}`、禁副作用、`[插槽]`、循环/深度检测、展开预览 | 池落 `IF/ELSEIF`（等值可证才 `SELECTCASE`）；池/模展开 source map 双向可跳；缺/多插槽、循环展开全 error | 待认领 |
-| K2-LOWER-PRESENT | 演出落点：`@随机`/`@组`（PRINTDATA/DATAFORM vs RAND+SELECTCASE）、`@着色`（SETCOLOR/RESETCOLOR 配对与转移清理）、`@颜绘`（PRINT_FACE/PRINT_FACE_PLAYER）、`@织`（#PRI/#LATER/#ONLY） | adapter 未声明即 error；控制转移自动 `RESETCOLOR`；候选/参数形状全 error；golden | 待认领 |
-| K2-PROGRAM | **程序层 lowering + feature gate**：一维数组/`.长度`、`@循`/`@断`/`@续`、`@标`/`@跳`、`@巡`/`@复`、递归 `@函`/`@返`、控制转移清理 | golden；adapter 未开启能力 error 不静默；颜色/作用域不泄漏；`@复 当` 不存在；字面量越界可证 error；口径统一为「语言完整性需要、不阻塞 core 验收」 | 待认领 |
-| K2-STORAGE | **存储期分配器**（风险 P0）：`场景`/`存档`/`会话` → ERB 槽；项目级稳定分配、初始化时机、读档语义、`gameFingerprint` 换盘检测 | 槽位跨构建稳定（改名/新增不搬旧槽）；换盘/换汉化可检测并 error；写坏存档防御（只读验证 + 备份 + 回滚）；专项用例 | 待认领 |
-| K2-PROJECT | **项目级分析层**（设计稿缺件）：重名函数/Layer 判定、`@织` 同事件同层多 `接管` 编译期 error、被压监听 warning、项目符号/事件索引；单文件转译保持纯函数，项目级结论由该层提供 | 项目级冲突编译期可见（不等保存）；单文件编译签名不变；与 `convention-linter` / `condition-extractor` 的索引边界写清；用例钉「改一个文件只重算受影响结论」 | 待认领 |
-| K2-SEM | 语义与诊断：符号解析（`# 视`/`{我}{你}{她}`/domainSymbols）、类型检查、结构检查、诊断码闭集、迁移码、source map/展开视图 | 诊断快照稳定；错误不产字节；展开双向可跳；adapter 码 additive 命名空间；`core/*` 码表逐条有测试 | 待认领 |
-| K2-ADAPTER-ERATW | `packages/plugins/eratw-adapter` 抽取：九事件 eventCatalog、domainSymbols（我/你/她、角色属性、名字函数）、profile（narrationColor/dialogueColor/waitDefault/colorMode/poolStyle/randStyle）、presentation、storageClasses、programFeatures、layerPolicy | 九事件/域符号/取色等待/存储期/展示不再出现在 core；eraTW 功能不回退；`audit:decoupling` ✅；旧 `face-templates.ts` 37 面与 `library-table.ts` 直接复用 | 待认领 |
-| K2-ADAPTER-FIXTURE | **fixture adapter + conformance kit 雏形**：core 测试用最小事件/符号/profile；golden + differential + smoke + encoding 可独立跑 | core 测试可只依赖 fixture adapter；conformance kit 不依赖 eraTW；adapter 作者可照跑 | 待认领 |
-| K2-TS | **`packages/kojo-syntax-tree` 2.0 重写**（按重写估，不是增补）：`grammar.js` / `src/scanner.c` / queries（folds·highlights·indents）/ `word-forms.json` / wasm 体积闸 | 2.0 fixture 0 ERROR/MISSING；折叠与转译器 `loc` 对拍；三份查询全部可编译；wasm 体积棘轮只降不升；旧语法查询/词形全部退役 | 待认领 |
-| K2-MONARCH | `packages/app/src/monaco/kojo-language.ts` 2.0 Monarch + 语言配置：五锚点/声明词/表演提示/`?`链/`@原生` 分档；`wordPattern`/brackets/onEnter 从词表派生 | 词表零抄本守卫（`kojo-lexicon-single-source` 口径）；与转译器词法逐词对拍；五锚点各一档且互不撞色 | 待认领 |
-| K2-PROVIDERS | `packages/app/src/monaco/kojo-*` 2.0 语言服务：补全/悬停/定义/引用/改名/折叠/语义着色/inlay/code action/预览展开；插件贡献面（`ui.editor.languageService`）按 2.0 重接 | ERB/Kojo 双语言对齐（`registerForLanguageServices` 口径）；只注册 2.0 面；旧 provider 退役清单逐项销行；补全/悬停/定义有 golden 断言 | 待认领 |
-| K2-FORMAT | 格式化 + 回车缩进：2.0 四空格缩进、`@原生` 一字节不动、`//` 注释、声明区/块区呼吸；on-type 与区间格式化 | 幂等；原生区/停用区零改动；单键 on-type O(1)；有 golden 与不变量用例 | 待认领 |
-| K2-MIGRATOR | **迁移引擎**：全部旧写法 → 2.0；多时机拆文件（建文件/命名/回写/工程索引）、`初回/询问/确认` 处置、dry-run、逐文件、编码/EOL 保留、备份/回滚/readback | 每条旧写法一键修复；修复后按 2.0 编译通过；拆文件有命名/回写/回滚用例；迁移只改源码、不产半成品、失败不破坏源 | 待认领 |
-| K2-MIGRATION-CORPUS | 真实语料迁移 + 行为 differential：旧产物行为 vs 迁移后 2.0 行为（不以旧产物为基线）；迁移率可量化 | 剩余项有明确 error；编码/EOL 不变；真实壳冒烟；parse/compile 性能不回退 | 待认领 |
-| K2-CUTOVER | **单批切换**：C2 golden + 迁移闸 + U6 冒烟全绿后，退役旧解析器/旧 fixtures、全量迁移仓内核 `.kojo`、版本三处同步；开发期双前端并存到此为止 | 仓内无旧语法 golden 与旧解析分支；全量测试数不回退；双 typecheck + `audit:decoupling` ✅；发布态单一模式；回滚路径可用 | 待认领（用户已定：开发期并存、单批切换） |
-| K2-PRE-REUSE | **旧后端复用面缺陷修补**（不依赖 D0，可先开）：① 统一引擎字面量编码器（心形 `@"…"`）；② 空产物守门被注释穿透（`service.ts`）；③ 写后回读失败不回滚产物（`compile.ts`）；④ 诊断列/坐标折回物理行（与 POS-UTIL 合流）；⑤ CJK 函数头自证（`definition.ts` 头名 ASCII 正则） | 每条带红→绿用例；只修「2.0 会复用」的后端面，不修将被替换的旧前端判据；全量测试数不回退 | 待认领 · 来源：2026-10-21 语言实现审阅 |
-| K2-RELEASE | **R9 发布闸**：core gate / eraTW adapter gate / program gate / UI gate + `STATE`·`BOARD` 落账 + 全量门 + 真实工程人工验收 | P0 任务全完成；eraTW 完整体验；program 可开关；反向回滚可用；版本号三处逐字相等（`app-version.test.ts`） | 待认领 |
+| K2-D0 | **设计冻结与结构裁决**：D0.1–D0.11 + 4 项结构前置落字；定包归属/审计放行、项目级分析层、存储期分配器、多时机拆文件；定旧前端退役时点 | 决策逐条落字；C1 开工前无悬空结构问题（C1 已按 §4.8/§4.13/§10.3/§10.7 约束实现，待追认） | 进行中 · 认领：lead 2026-10-21 |
+| K2-CONTRACT | 2.0 契约面：现落 `@kojo/kojo-core`（AST/诊断码/source-map/GameAdapter），**与设计稿 C1.2「扩 plugin-api」的落点偏离**待 D0 裁决；需评估是否 additive 镜像到 plugin-api | additive、旧消费方零改动；双 typecheck；core 零游戏名词；fixture adapter 仅依赖契约编译 | 进行中 · 认领：lead 2026-10-21 |
+| K2-CORE-PKG | core 包布局与 audit 放行：`packages/kojo-core` 已建（非插件库，B/C 项不拦）；§15.2 复用清单核对与偏离记账 | audit A–D ✅；复用点可核对；单文件转译纯函数 | 进行中 · 认领：lead 2026-10-21 |
+| K2-PROGRAM | 程序层补齐：`@巡` 绑定数据（数组/角色集合/长度机制）、递归深度事实、feature gate 落社区；`@复/@循/@标/@跳` 已 golden | 关闭 feature error 不静默；`@巡 {值}/{下标}` 可落 ERB；越界可证 error；golden | 批次三认领：lead（`K2-FOREACH` 拆出并行） |
+| K2-STORAGE | 存储期分配器 core 已交付（11 类失败接诊断、稳定槽/回收/换盘）；**宿主持久化与接线未做** | 槽位跨构建稳定；换盘 error；写坏存档防御；app 侧注册表端口落地 | 批次三认领：lead（`K2-STORAGE-HOST` 拆出） |
+| K2-PROJECT | 项目级分析 core 已交付（重名/Layer/接管，13.5ms）；**未接入宿主与插件消费面** | 项目级冲突编译期可见；与 convention-linter/condition-extractor 边界写清 | 批次三认领：lead |
+| K2-SEM | 语义与诊断：类型检查、符号解析（表达式 AST 化）、展开视图、迁移码并表 | 诊断快照稳定；错误不产字节；adapter 码 additive | 批次三认领：lead（`K2-SEMANTIC-CORE` 拆出） |
+| K2-MIGRATOR | 迁移引擎机械层已交付（42 tests）；**语义升级（当→#表/分支→#池/初回→@原生）未做** | 不可迁移项经 PITFALLS 双证后转可迁移或维持 fail-closed | 批次三认领：lead（`K2-MIGRATE-SEMANTIC` 拆出） |
+| K2-MIGRATION-CORPUS | 真实语料迁移 + 行为 differential；本机无真语料（`tools/corpus.mjs` rc=1），以仓内 fixtures + 语料机补测 | 迁移率可量化；编码/EOL 不变；壳冒烟 | 待认领 · 阻塞：语料不在位 |
+| K2-CUTOVER | 单批切换：app 接线/主题合并/`.kojo` 扩展名/退役旧解析器；**批次三先做预演（feature flag）** | 仓内无旧 golden/旧分支；全量测试不回退；发布态单一模式 | 批次三认领：lead（`K2-CUTOVER-PRE` 拆出） |
+| K2-PRE-REUSE | 旧后端复用面缺陷：①字面量编码器（心形 `@"…"`）②空产物守门被注释穿透 ③写后回读失败不回滚 ④诊断列折回物理行 ⑤CJK 函数头自证 | 每条红→绿用例；只修复用面；全量不回退 | 批次三认领：lead · 来源：语言实现审阅 |
+| K2-RELEASE | R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真实工程人工验收 | P0 全完成；eraTW 完整体验；反向回滚可用 | 待认领 |
+| K2-EDITOR-WIRE | app 接线预演：注册 `kojo2` descriptor（暂 `.kojo2`）、打开/新建/保存路由、feature flag；v1 `.kojo` 不动 | 新语言可真实打开编辑；flag 关时逐字不变；app typecheck | 批次三认领：lead |
+| K2-EDITOR-SEMANTIC | kojo2 语言服务：补全/悬停/定义/引用/折叠/语义着色 + core 诊断→markers（波浪线） | 与 core 公共入口单源；错误/警告可见；app typecheck | 批次三认领：lead |
+| K2-EDITOR-MIGRATE-UI | 迁移向导：dry-run、逐文件 diff、unsupported 台账上屏、备份/回滚 | 迁移失败不破坏源；readback；UI 可撤销 | 批次三认领：lead |
+| K2-OPTIONS | `选项`（2.0 待定 UI）：core 节点→adapter presentation lowering + eraTW backend（PRINTBUTTON/INPUTS 族）；warning 保留 | adapter 未声明即 fail-closed；golden；选项块体不丢 | 批次三认领：lead |
+| K2-FOREACH | `@巡` 绑定：adapter 集合声明 + core 槽/绑定事实 + eraTW backend 索引循环 | 集合空跳过；`{值}/{下标}/{角}/{名}` 可落；未声明 error | 批次三认领：lead |
+| K2-CONFORMANCE | conformance kit：fixture adapter golden/differential/encoding 套件 + CLI 雏形（不改包名） | 可独立跑；adapter 作者可复用；不依赖 eraTW | 批次三认领：lead |
+| K2-PERF-INCR | 增量前端：编辑期 lex/parse 增量快照（复用上一版行/块），目标 5k 行击键 <16ms | bench 数字；语义与全量逐字节等价；无陈旧树 | 批次三认领：lead |
+| K2-TS-RUNTIME | tree-sitter v2 接入 app：worker/引擎运行时挂 kojo2（flag 后），折叠/高亮/诊断走 v2 | wasm 47KB 加载；查询编译；与服务侧折叠对拍 | 批次三认领：lead |
+| K2-SOURCEMAP-HOST | source map 消费面：预览 DSL↔ERB 双向定位、跳转回源（minimal） | 逐行映射；不可映射显式 null；还原等价 | 批次三认领：lead |
+| K2-STORAGE-HOST | SlotRegistry 宿主实现：持久化到 kernel storage 域、两阶段提交、换盘检测接线 | 崩溃不留半批；同键幂等；换盘 error 上屏 | 批次三认领：lead |
+| K2-MIGRATE-SEMANTIC | 迁移语义升级：`当/是`→`# 表`（静态非重叠可证）、`分支：[条件]`→`# 池`、`初回/询问/确认`→`@原生` 围栏 | 可证者真改写；不可证维持 unsupported；迁移后 parse 零 error | 批次三认领：lead |
+| K2-CUTOVER-PRE | 切流预演：theme 合并、languages.ts 条件注册、旧前端退役开关、`.kojo` 双解析分流 | flag 默认关 ⇒ v1 逐字不变；flag 开 ⇒ 2.0 全链可用；可回滚 | 批次三认领：lead |
+| K2-SEMANTIC-CORE | 表达式 AST 化（可选）：把 ExprText 升级为 core 表达式语法树，供类型检查/悬停；保持与既有表达式降糖对拍 | 全量对拍等价；golden 不回退；性能不回退（或仅语义服务用） | 批次三认领：lead |
+
+> **批次三并行说明（2026-10-21）**：12 路子 agent 按互不重叠写域推进（FOREACH/OPTIONS/EDITOR-WIRE/EDITOR-SEMANTIC/EDITOR-MIGRATE-UI/MIGRATE-SEMANTIC/CONFORMANCE/PERF-INCR/TS-RUNTIME/SOURCEMAP-HOST/STORAGE-HOST/CUTOVER-PRE）；组长统一收口、跑门、提交。完成行按协议删行，回执进提交信息。
