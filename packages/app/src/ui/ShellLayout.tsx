@@ -105,10 +105,12 @@ import {
 import { UpdateDialog } from './UpdateDialog';
 import { isTauri } from '../bridge/invoke';
 import { modalDepth, closeTopModal } from './modal-stack';
+import { useNotify } from './NotificationCenter';
 import {
   isComposingEvent,
   isEditableKeyTarget,
   nextRovingIndex,
+  reportKeyYield,
   resolveEscLayer,
   resolveGlobalKeyGate,
   shouldRunGlobalCommand,
@@ -1160,6 +1162,15 @@ export function ShellLayout(props: Props): ReactElement {
    */
   const composingRef = useRef(false);
 
+  /**
+   * 让位读数发射口（KEY-YIELD-VISIBLE）：走既有通知中心 toast，不新造提示通道。
+   * ref 只为一件事——全局 keydown 监听器挂载一次（依赖表为空），闭包里不能抓着
+   * 会变的身份不放；`notify` 本身在 NotificationCenter 里是 useCallback 稳定值。
+   */
+  const notify = useNotify();
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+
   // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级见 shell-keys 的 ESC_PRIORITY）
   useEffect(() => {
     let chordAt = 0;
@@ -1182,12 +1193,24 @@ export function ShellLayout(props: Props): ReactElement {
       //    否则输入框 blur 触发 onCancel，一次改名静默作废。命中即 return：
       //    不 preventDefault、不 run，原生输入行为原样保留。
       // Monaco 的隐藏 textarea 被 isEditableKeyTarget 放行，编辑器内快捷键照旧。
+      // 命中「键先给了输入」的两层 ⇒ 经通知中心留一行读数（为什么没执行 + 先 Esc 再按），
+      // 判定与节流单源在 shell-keys 的 reportKeyYield；不 preventDefault、不 run，语义一字未动。
       const keyEvidence = {
         defaultPrevented: e.defaultPrevented,
         composing: isComposingEvent(e, composingRef.current),
         editableTarget: isEditableKeyTarget(e.target),
       };
-      if (resolveGlobalKeyGate(keyEvidence) !== null) return;
+      const gate = resolveGlobalKeyGate(keyEvidence);
+      if (gate !== null) {
+        reportKeyYield({
+          gate,
+          event: e,
+          commands: registryRef.current,
+          now: Date.now(),
+          emit: (message) => notifyRef.current({ kind: 'info', message }),
+        });
+        return;
+      }
       const k = e.key.toLowerCase();
       // Ctrl+K Z 和弦：先记 Ctrl+K，1.5s 内按 Z 触发（两键序列，注册表单键表达不了）
       if (chordAt > 0) {

@@ -6,6 +6,8 @@
  * if 阶梯里就只能靠人眼读；分离后，顺序由这个模块单源持有。
  */
 
+import { chordEquals, chordFromEvent, formatKeybinding, parseKeybinding } from './commands';
+
 /**
  * Esc 链上的五层在场标志。
  *
@@ -40,6 +42,100 @@ export function resolveEscLayer(layers: EscLayers): EscLayer | null {
     if (layers[layer]) return layer;
   }
   return null;
+}
+
+/* ------------------------- KEY-YIELD-VISIBLE：快捷键让位读数 ------------------------- */
+
+/**
+ * 「因让位不执行、但作者有权知道」的两层早退。
+ *
+ * `defaultPrevented` **不在其列**：那次按键已被更靠内层的处理者消费（往往就是真的执行了
+ * 某个动作），全局侧再说一句"没执行"是谎报。剩下两层是纯粹的"键先让给了输入"：
+ * 合成期（键属于输入法）与输入面（键属于正在打字的地方）——按下去屏上什么都不发生，
+ * 又不说为什么，就是铁律 4 的静默。
+ */
+export type KeyYieldNoticeGate = 'composing' | 'editableTarget';
+
+const KEY_YIELD_NOTICED_GATES: readonly string[] = ['composing', 'editableTarget'];
+
+/**
+ * 让位读数节流窗（**滑动窗口**，2026-10-21 KEY-YIELD-VISIBLE 定口径）：
+ * 同一 `reasonKey`（早退层 + 被让开的命令 id）距**上一次让位**不足 1500ms ⇒ 不叠第二条
+ * toast，但时间戳照更新——连按期间窗口跟着滑，停手满 1.5s 后同一键再让位才会再响一次。
+ *
+ * 选滑动而不是固定窗口的理由：让位是高频事件（输入法打字时每个组合键都撞门），
+ * 固定窗口下"每 1.5s 抢弹一条"仍会在持续输入中途刷出多条；滑动窗口保证
+ * **一段连续连按只响第一下**，而那一句已经写清了怎么办。
+ */
+export const KEY_YIELD_THROTTLE_MS = 1500;
+
+/** reasonKey → 上一次让位时刻（epochMs）。条数上界 = 早退层 × 注册表命令，无须回收 */
+const lastKeyYieldAt = new Map<string, number>();
+
+/** 清节流表（仅测试用：用例之间不该互相吃窗口） */
+export function resetKeyYieldThrottle(): void {
+  lastKeyYieldAt.clear();
+}
+
+/**
+ * 这个 reason 键现在该不该上屏？（滑动窗口判据见 `KEY_YIELD_THROTTLE_MS` 的注释；
+ * `now` 由调用方注入，测试不吃真实时钟）
+ */
+export function shouldEmitKeyYieldNotice(reasonKey: string, now: number): boolean {
+  const last = lastKeyYieldAt.get(reasonKey);
+  lastKeyYieldAt.set(reasonKey, now);
+  return last === undefined || now - last >= KEY_YIELD_THROTTLE_MS;
+}
+
+/**
+ * 让位读数文案（作者面，去黑话硬口径：不出现「焦点/捕获/冒泡/binding」；
+ * 「这个键先给了……」一个句式说"让路"这件事到底，与 `USER-GUIDE` §12 的补救句同一件事）。
+ *
+ * 两句都必须同时说清**为什么没执行**与**该怎么做**（先 Esc 再按一次），缺一句就是没交付。
+ */
+export function keyYieldNoticeMessage(displayKeys: string, gate: KeyYieldNoticeGate): string {
+  if (gate === 'composing') {
+    return `${displayKeys} 没执行——这个键先给了输入法。先按 Esc 收起候选，再按一次。`;
+  }
+  return `${displayKeys} 没执行——这个键先给了正在输入的地方。先按 Esc 退出输入，再按一次。`;
+}
+
+/** 让位读数要匹配的注册表条目（结构子集：`CommandEntry` 天然满足，不反向拖入执行面） */
+export interface KeyYieldCommand {
+  readonly id: string;
+  readonly keybinding?: string;
+}
+
+/**
+ * 让位读数的单源入口：门命中「键先给了输入」的层、**且这次按键真的绑着一条命令**
+ * （否则按键本来就归输入面，谈不上"快捷键没执行"）⇒ 产出一行文案，经节流后交给 `emit`。
+ *
+ * 和弦（键位串含空格）不参与——它由全局处理器的特例分支分发，与单键不同一条路径
+ * （与 `keybindingConflictWith` / `buildKeybindingRows` 的既有口径一致）。
+ * 返回是否上屏（false = 不该响 / 被节流），调用方**不得**据返回值改变按键语义。
+ */
+export function reportKeyYield(params: {
+  readonly gate: GlobalKeyGate;
+  readonly event: KeyboardEvent;
+  readonly commands: readonly KeyYieldCommand[];
+  readonly now: number;
+  readonly emit: (message: string) => void;
+}): boolean {
+  if (!KEY_YIELD_NOTICED_GATES.includes(params.gate ?? '')) return false;
+  const chord = chordFromEvent(params.event);
+  if (chord === null) return false; // 裸修饰键（单独按 Ctrl）本来就不触发任何命令
+  for (const cmd of params.commands) {
+    const kb = cmd.keybinding;
+    if (!kb || kb.includes(' ')) continue;
+    const parsed = parseKeybinding(kb);
+    if (parsed && chordEquals(parsed, chord)) {
+      const gate = params.gate as KeyYieldNoticeGate;
+      if (!shouldEmitKeyYieldNotice(`${gate}:${cmd.id}`, params.now)) return false;
+      params.emit(keyYieldNoticeMessage(formatKeybinding(kb), gate));
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
