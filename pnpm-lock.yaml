@@ -47,6 +47,9 @@ importers:
       '@kojo/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@kojo/kojo-core':
+        specifier: workspace:*
+        version: link:../kojo-core
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api
@@ -252,6 +255,9 @@ importers:
 
   packages/plugins/kojo-sugar:
     dependencies:
+      '@kojo/kojo-core':
+        specifier: workspace:*
+        version: link:../../kojo-core
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api

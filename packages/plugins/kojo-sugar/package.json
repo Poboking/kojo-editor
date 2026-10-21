@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kojo/plugin-api": "workspace:*"
+    "@kojo/plugin-api": "workspace:*",
+    "@kojo/kojo-core": "workspace:*"
   },
   "devDependencies": {
     "@kojo/plugin-erb-parser": "workspace:*",
