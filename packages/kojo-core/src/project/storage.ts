@@ -22,7 +22,7 @@
  *
  * `SlotClassSpec` 只表达"这类存储期能用的编号闭区间 + 声明键作用域"：
  * - `scope: 'project'`（存档/会话）：一份账本全项目共用——两个文件声明同名存档变量是
- *   真冲突（引擎侧该名字只有一个全局落点），报 `core/decl/duplicate-name`；
+ *   真冲突（引擎侧该名字只有一个全局落点），报 `core/storage/duplicate-name`；
  * - `scope: 'unit'`（场景）：按 `unitId`（`# 机` / `@织` 监听）分账，跨单元同名互不影响
  *   （§3.4.4：场景变量不得跨单元共享）。
  *
@@ -31,11 +31,11 @@
  *
  * ## 诊断口径
  *
- * 只用 core 闭集码（不新增码）：`core/decl/duplicate-name`（键/名字冲突）、
- * `core/decl/unknown-storage`（adapter 未声明该存储期）。其余是**存储完整性失败**
- * （换盘、改型、区段漂移、区段耗尽、登记簿损坏）——core 码表没有对应码，本层以
- * 结构化 `StorageFailure` 返回（`kind` + 人话），由宿主按项目级错误呈现；不伪造一个
- * 语义不符的 core 码。
+ * 每条失败**必带一枚 core 诊断**（`core/storage/*` 闭集，见 `STORAGE_FAILURE_CODES`；
+ * severity 一律 error，span 指回声明处，项目级失败为 null）——失败对象与诊断同源，
+ * 项目层不产"裸 `StorageFailure`"。存储账本是**跨构建事实**（与单文件 AST 的声明
+ * 重名不是同一件事），故键/名字撞车也走 `core/storage/duplicate-key` /
+ * `duplicate-name`，两套码各管各的面。
  */
 import type { KojoSpan, KojoValueType, KojoVarStorage } from '../ast.js';
 import { severityOf, type CoreDiagnosticCode, type KojoDiagnostic } from '../diagnostics.js';
@@ -126,10 +126,8 @@ export interface SlotRegistry {
 /* ============================== 结果 ============================== */
 
 /**
- * 存储完整性失败的种类（机器可读；core 码表没有对应码所以不硬套诊断）。
- *
- * 除 `unknown-storage-class` / `duplicate-*` 两类有 core 码外，其余都是项目级
- * 存储完整性错误——它们指向"账本与当前项目/存档不一致"，不是某一行源码写错。
+ * 存储完整性失败的种类（机器可读；每种都对应一枚 `core/storage/*` 诊断码，
+ * 见 `STORAGE_FAILURE_CODES`——项目层不产"裸失败"，诊断面与 code 面同源）。
  */
 export type StorageFailureKind =
   | 'snapshot-version-unsupported'
@@ -144,11 +142,26 @@ export type StorageFailureKind =
   | 'slot-range-changed'
   | 'slot-space-exhausted';
 
+/** 失败种类 → core 诊断码（`diagnostics.ts` additive 入表；级别一律 error） */
+const STORAGE_FAILURE_CODES: Readonly<Record<StorageFailureKind, CoreDiagnosticCode>> = {
+  'snapshot-version-unsupported': 'core/storage/snapshot-version',
+  'fingerprint-mismatch': 'core/storage/fingerprint-mismatch',
+  'invalid-class-spec': 'core/storage/invalid-class',
+  'invalid-declaration': 'core/storage/invalid-declaration',
+  'unknown-storage-class': 'core/storage/unknown-class',
+  'duplicate-declaration-key': 'core/storage/duplicate-key',
+  'duplicate-storage-name': 'core/storage/duplicate-name',
+  'declaration-shape-changed': 'core/storage/shape-changed',
+  'corrupt-snapshot': 'core/storage/corrupt-snapshot',
+  'slot-range-changed': 'core/storage/range-changed',
+  'slot-space-exhausted': 'core/storage/exhausted',
+};
+
 export interface StorageFailure {
   readonly kind: StorageFailureKind;
   readonly message: string;
-  /** 有语义贴合的 core 码时给诊断；存储完整性类失败为 null（不伪造码） */
-  readonly diagnostic: KojoDiagnostic | null;
+  /** 与 `kind` 一一对应的 core 诊断（severity=error；span=声明处，项目级失败为 null） */
+  readonly diagnostic: KojoDiagnostic;
 }
 
 export interface SlotAssignment {
@@ -238,14 +251,16 @@ function emptyPlanState(): MutablePlan {
   return { assignments: [], recycled: [], retired: [], failures: [], diagnostics: [], retained: 0, allocated: 0 };
 }
 
-function fail(
-  state: MutablePlan,
-  kind: StorageFailureKind,
-  message: string,
-  diagnostic: KojoDiagnostic | null,
-): void {
+/**
+ * 记一条失败：失败对象与诊断**同源**（`kind` 查表得 core 码），不产"裸失败"。
+ *
+ * `span` = 该失败指向的声明处（可点回源行）；项目级失败（换盘 / 版本 / 区段声明）
+ * 没有单一声明可指，给 null。
+ */
+function fail(state: MutablePlan, kind: StorageFailureKind, message: string, span: KojoSpan | null): void {
+  const diagnostic = diagnosticOf(STORAGE_FAILURE_CODES[kind], message, span);
   state.failures.push({ kind, message, diagnostic });
-  if (diagnostic !== null) state.diagnostics.push(diagnostic);
+  state.diagnostics.push(diagnostic);
 }
 
 /** 收束：ok=false 时绝不产出新快照（不产半成品） */
@@ -367,7 +382,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
         state,
         'invalid-declaration',
         `存储期声明「${fact.name}」（${formatLocation(fact)}）缺少稳定声明键——无法跨构建保住槽位，已拒绝分配。`,
-        null,
+        fact.span,
       );
       continue;
     }
@@ -377,11 +392,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
         state,
         'duplicate-declaration-key',
         `稳定声明键「${fact.key}」被两个声明共用（${formatLocation(first)} / ${formatLocation(fact)}）——键必须唯一，否则两个声明会争同一个槽，已拒绝分配。`,
-        diagnosticOf(
-          'core/decl/duplicate-name',
-          `存储期声明键「${fact.key}」重复（${formatLocation(fact)}；首次 ${formatLocation(first)}）——同一槽位不能被两个声明共享。`,
-          fact.span,
-        ),
+        fact.span,
       );
       continue;
     }
@@ -395,11 +406,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
       state,
       'unknown-storage-class',
       `存储期「${fact.storage}」（${fact.name} @ ${formatLocation(fact)}）没有 adapter 声明的槽位区段——不能猜落点。`,
-      diagnosticOf(
-        'core/decl/unknown-storage',
-        `存储期「${fact.storage}」未被当前 adapter 的 storageClasses 声明（${formatLocation(fact)}）——未声明即 error，不能猜槽位落点。`,
-        fact.span,
-      ),
+      fact.span,
     );
   }
 
@@ -419,11 +426,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
       state,
       'duplicate-storage-name',
       `同名存储期声明「${fact.name}」（${formatLocation(fact)} 与 ${formatLocation(first)}）落在同一个 ${spec.scope === 'unit' ? '单元' : '项目级'} 存储空间里——引擎侧只有一个名字，后声明会被静默覆盖。`,
-      diagnosticOf(
-        'core/decl/duplicate-name',
-        `存储期声明「${fact.name}」重名（${formatLocation(fact)}；首次 ${formatLocation(first)}）——同一存储空间里同名会静默覆盖，已阻断。`,
-        fact.span,
-      ),
+      fact.span,
     );
   }
 
@@ -460,7 +463,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
           state,
           'declaration-shape-changed',
           `存储期变量「${fact.name}」声明形状从 ${shapeText(prev.valueType, prev.arraySize)} 变为 ${shapeText(fact.valueType, fact.arraySize)}（${formatLocation(fact)}）——槽位 ${prev.slot} 已绑定旧存档，按新形状读取会写坏存档，已拒绝（不静默改型）。`,
-          null,
+          fact.span,
         );
       }
       if (prev.slot < spec.min || prev.slot > spec.max) {
@@ -468,7 +471,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
           state,
           'slot-range-changed',
           `存储期变量「${fact.name}」的既有槽位 ${prev.slot} 不在当前区段 [${spec.min}, ${spec.max}] 内（${formatLocation(fact)}）——搬槽等于让旧存档错位，已拒绝。`,
-          null,
+          fact.span,
         );
       }
       if (retainedUsed.has(prev.slot)) {
@@ -476,7 +479,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
           state,
           'corrupt-snapshot',
           `槽位登记簿损坏：存储期「${storage}」的槽位 ${prev.slot} 被两个声明同时占用（后者 ${fact.key}）——拒绝在其上继续分配。`,
-          null,
+          fact.span,
         );
       }
       retainedUsed.add(prev.slot);
@@ -524,7 +527,7 @@ export function planStorageSlots(facts: StorageFacts, previous: SlotRegistrySnap
           state,
           'slot-space-exhausted',
           `存储期「${storage}」的槽位区段 [${spec.min}, ${spec.max}] 已用尽（本次需要 ${classFacts.length} 个槽）——拒绝分配，绝不挤占/移动既有槽。`,
-          null,
+          fact.span,
         );
         break;
       }

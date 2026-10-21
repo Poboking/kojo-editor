@@ -269,6 +269,8 @@ function analyzeFunctions(
   const sharedHook: ProjectFunctionGroup[] = [];
   const overlay: ProjectFunctionGroup[] = [];
   let functionConflicts = 0;
+  let singleDefinitionNames = 0;
+  let duplicateNames = 0;
 
   for (const name of [...byName.keys()].sort(compareText)) {
     const raw = byName.get(name)!;
@@ -328,15 +330,16 @@ function analyzeFunctions(
     else if (bucket === 'overlay') overlay.push(group);
     else unique.push(group);
     if (conflict) functionConflicts += 1;
+    if (definitions.length > 1) duplicateNames += 1;
+    else singleDefinitionNames += 1;
   }
 
-  const duplicateFunctionNames = unique.filter((group) => group.definitions.length > 1).length + sharedHook.length + overlay.length;
   return {
     buckets: { unique, sharedHook, overlay },
     stats: {
       functionDefinitions: facts.length,
-      uniqueFunctionNames: unique.filter((group) => group.definitions.length === 1).length,
-      duplicateFunctionNames,
+      uniqueFunctionNames: singleDefinitionNames,
+      duplicateFunctionNames: duplicateNames,
       functionConflicts,
       sharedHookNames: sharedHook.length,
       overlayNames: overlay.length,
@@ -497,19 +500,31 @@ function analyzeDeclarations(
     readonly declarations: ProjectDeclarationFact[];
     readonly functions: ProjectFunctionFact[];
   }
+  /**
+   * 惰性建组：绝大多数「文件 × 名字」只有一条记录（万级函数全量），为它们建 bucket/数组
+   * 纯属白烧内存与 GC。这里先只记第一枚，遇到第二条才真正建组——组数 = 重名数。
+   */
+  const firstEntries = new Map<string, NamespaceEntry>();
   const buckets = new Map<string, Bucket>();
-  const keyOf = (filePath: string, name: string): string => `${filePath}\u0000${name}`;
-  const bucketOf = (filePath: string, name: string): Bucket => {
-    const key = keyOf(filePath, name);
+  const addEntry = (filePath: string, name: string, entry: NamespaceEntry): void => {
+    const key = `${filePath}\u0000${name}`;
+    const first = firstEntries.get(key);
+    if (first === undefined) {
+      firstEntries.set(key, entry);
+      return;
+    }
     let bucket = buckets.get(key);
     if (bucket === undefined) {
       bucket = { filePath, name, declarations: [], functions: [] };
       buckets.set(key, bucket);
+      if (first.kind === 'decl') bucket.declarations.push(first.fact);
+      else bucket.functions.push(first.fact);
     }
-    return bucket;
+    if (entry.kind === 'decl') bucket.declarations.push(entry.fact);
+    else bucket.functions.push(entry.fact);
   };
-  for (const fact of declarations) bucketOf(fact.filePath, fact.name).declarations.push(fact);
-  for (const fact of functions) bucketOf(fact.filePath, fact.name).functions.push(fact);
+  for (const fact of declarations) addEntry(fact.filePath, fact.name, { kind: 'decl', fact });
+  for (const fact of functions) addEntry(fact.filePath, fact.name, { kind: 'function', fact });
 
   const groups: DeclarationNameGroup[] = [];
   const keys = [...buckets.keys()].sort(compareText);
@@ -519,7 +534,6 @@ function analyzeDeclarations(
       ...bucket.declarations.map((fact): NamespaceEntry => ({ kind: 'decl', fact })),
       ...bucket.functions.map((fact): NamespaceEntry => ({ kind: 'function', fact })),
     ];
-    if (entries.length < 2) continue;
     const ordered = entries
       .map((entry, index) => ({ entry, index }))
       .sort((a, b) => compareLocated(locatedOf(a.entry), locatedOf(b.entry)) || a.index - b.index)

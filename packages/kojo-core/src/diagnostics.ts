@@ -128,6 +128,18 @@ export type CoreDiagnosticCode =
   | 'core/migration/timing'
   | 'core/migration/fullwidth-punct'
   | 'core/migration/wait'
+  /* 存储期分配（project/storage，fail-closed 完整性面） */
+  | 'core/storage/fingerprint-mismatch'
+  | 'core/storage/snapshot-version'
+  | 'core/storage/invalid-class'
+  | 'core/storage/invalid-declaration'
+  | 'core/storage/unknown-class'
+  | 'core/storage/duplicate-key'
+  | 'core/storage/duplicate-name'
+  | 'core/storage/shape-changed'
+  | 'core/storage/corrupt-snapshot'
+  | 'core/storage/range-changed'
+  | 'core/storage/exhausted'
   | 'core/options/pending'
   | 'core/profile/missing'
   | 'core/feature/unsupported';

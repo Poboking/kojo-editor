@@ -25,6 +25,7 @@ import {
   type SlotTable,
   type SlotClassSpec,
   type StorageDeclarationFact,
+  type StorageFailureKind,
   type StorageFacts,
 } from '../src/project/storage';
 
@@ -84,6 +85,25 @@ const saveTable = (table: SlotTable): Partial<Record<KojoVarStorage, SlotTable>>
 
 const slotOf = (plan: ReturnType<typeof planStorageSlots>, key: string): number | undefined =>
   plan.assignments.find((assignment) => assignment.key === key)?.slot;
+
+/**
+ * 失败断言：`StorageFailure.kind` 与它自带的 core 诊断码**一一对应**，
+ * 且同一批诊断也出现在 `plan.diagnostics`（项目层不产"裸失败"）。
+ */
+function expectFailure(
+  plan: ReturnType<typeof planStorageSlots>,
+  kinds: readonly StorageFailureKind[],
+  codes: readonly string[],
+): void {
+  expect(plan.ok).toBe(false);
+  expect(plan.nextSnapshot).toBeNull();
+  expect(plan.failures.map((failure) => failure.kind)).toEqual(kinds);
+  expect(plan.failures.map((failure) => failure.diagnostic.code)).toEqual(codes);
+  expect(plan.diagnostics.map((diag) => diag.code)).toEqual(codes);
+  for (const failure of plan.failures) {
+    expect(failure.diagnostic.severity).toBe('error');
+  }
+}
 
 /* ============================== 1. 首次分配 / 幂等 ============================== */
 
@@ -195,14 +215,12 @@ describe('槽位分配 · 稳定性', () => {
     expect(plan.assignments.map((assignment) => assignment.slot)).toEqual([0, 1]);
   });
 
-  it('项目级存储同名（不同文件）⇒ duplicate-storage-name + core/decl/duplicate-name', () => {
+  it('项目级存储同名（不同文件）⇒ duplicate-storage-name + core/storage/duplicate-name', () => {
     const plan = planStorageSlots(
       factsOf([decl('k1', '今天已触发', 'save', { filePath: 'a.kojo' }), decl('k2', '今天已触发', 'save', { filePath: 'b.kojo' })]),
       null,
     );
-    expect(plan.ok).toBe(false);
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['duplicate-storage-name']);
-    expect(plan.diagnostics.map((diag) => diag.code)).toEqual(['core/decl/duplicate-name']);
+    expectFailure(plan, ['duplicate-storage-name'], ['core/storage/duplicate-name']);
     expect(plan.diagnostics[0]!.severity).toBe('error');
   });
 });
@@ -213,28 +231,25 @@ describe('槽位分配 · 换盘与完整性 fail-closed', () => {
   it('gameFingerprint 不匹配 ⇒ ok=false、nextSnapshot=null、账本原样不动', () => {
     const previous = snapshotOf(saveTable({ 'k-a': record(0) }), '旧盘');
     const plan = planStorageSlots(factsOf([decl('k-a', 'A', 'save')], { gameFingerprint: '新盘' }), previous);
-    expect(plan.ok).toBe(false);
-    expect(plan.nextSnapshot).toBeNull();
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['fingerprint-mismatch']);
-    expect(plan.diagnostics).toEqual([]);
+    expectFailure(plan, ['fingerprint-mismatch'], ['core/storage/fingerprint-mismatch']);
+    expect(plan.failures[0]!.diagnostic.span).toBeNull(); // 项目级失败：没有单一声明可指
     expect(plan.assignments).toEqual([]);
   });
 
   it('登记簿版本未知 ⇒ snapshot-version-unsupported（拒绝在未知格式上分配）', () => {
     const previous = { ...snapshotOf(saveTable({ 'k-a': record(0) })), version: 2 } as unknown as SlotRegistrySnapshot;
     const plan = planStorageSlots(factsOf([decl('k-a', 'A', 'save')]), previous);
-    expect(plan.ok).toBe(false);
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['snapshot-version-unsupported']);
+    expectFailure(plan, ['snapshot-version-unsupported'], ['core/storage/snapshot-version']);
   });
 
   it('存档变量改类型/数组长度 ⇒ declaration-shape-changed（不静默改型）', () => {
     const previous = snapshotOf(saveTable({ 'k-a': record(0) }));
     const changed = planStorageSlots(factsOf([decl('k-a', 'A', 'save', { valueType: 'string' })]), previous);
-    expect(changed.ok).toBe(false);
-    expect(changed.failures.map((failure) => failure.kind)).toEqual(['declaration-shape-changed']);
+    expectFailure(changed, ['declaration-shape-changed'], ['core/storage/shape-changed']);
 
     const resized = planStorageSlots(factsOf([decl('k-a', 'A', 'save', { arraySize: 10 })]), previous);
-    expect(resized.failures.map((failure) => failure.kind)).toEqual(['declaration-shape-changed']);
+    expectFailure(resized, ['declaration-shape-changed'], ['core/storage/shape-changed']);
+    expect(resized.failures[0]!.diagnostic.span?.start.line).toBe(1); // span 指回声明处
   });
 
   it('场景变量改型合法（每次调用重建，不绑存档）', () => {
@@ -256,8 +271,7 @@ describe('槽位分配 · 换盘与完整性 fail-closed', () => {
       factsOf([decl('k-a', 'A', 'save')], { classes: [{ storage: 'save', min: 10, max: 20, scope: 'project' }] }),
       previous,
     );
-    expect(plan.ok).toBe(false);
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['slot-range-changed']);
+    expectFailure(plan, ['slot-range-changed'], ['core/storage/range-changed']);
   });
 
   it('槽位区段耗尽 ⇒ slot-space-exhausted（不挤占、不移动既有槽）', () => {
@@ -267,30 +281,24 @@ describe('槽位分配 · 换盘与完整性 fail-closed', () => {
       factsOf([decl('k-a', 'A', 'save'), decl('k-b', 'B', 'save'), decl('k-c', 'C', 'save')], { classes }),
       first.nextSnapshot,
     );
-    expect(second.ok).toBe(false);
-    expect(second.failures.map((failure) => failure.kind)).toEqual(['slot-space-exhausted']);
-    expect(second.nextSnapshot).toBeNull();
+    expectFailure(second, ['slot-space-exhausted'], ['core/storage/exhausted']);
   });
 
-  it('声明键重复 ⇒ duplicate-declaration-key + core/decl/duplicate-name（指向第二处）', () => {
+  it('声明键重复 ⇒ duplicate-declaration-key + core/storage/duplicate-key（指向第二处）', () => {
     const plan = planStorageSlots(
       factsOf([decl('dup', 'A', 'save', { line: 1 }), decl('dup', 'B', 'save', { line: 2 })]),
       null,
     );
-    expect(plan.ok).toBe(false);
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['duplicate-declaration-key']);
-    expect(plan.diagnostics[0]!.code).toBe('core/decl/duplicate-name');
+    expectFailure(plan, ['duplicate-declaration-key'], ['core/storage/duplicate-key']);
     expect(plan.diagnostics[0]!.span?.start.line).toBe(2);
   });
 
-  it('存储期未被 adapter 声明 ⇒ unknown-storage-class + core/decl/unknown-storage', () => {
+  it('存储期未被 adapter 声明 ⇒ unknown-storage-class + core/storage/unknown-class', () => {
     const plan = planStorageSlots(
       factsOf([decl('k', 'X', 'save')], { classes: [{ storage: 'scene', min: 0, max: 9, scope: 'unit' }] }),
       null,
     );
-    expect(plan.ok).toBe(false);
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['unknown-storage-class']);
-    expect(plan.diagnostics.map((diag) => diag.code)).toEqual(['core/decl/unknown-storage']);
+    expectFailure(plan, ['unknown-storage-class'], ['core/storage/unknown-class']);
   });
 
   it('区段声明非法（min > max / 非整数）⇒ invalid-class-spec', () => {
@@ -298,8 +306,19 @@ describe('槽位分配 · 换盘与完整性 fail-closed', () => {
       factsOf([decl('k', 'X', 'save')], { classes: [{ storage: 'save', min: 5, max: 1, scope: 'project' }] }),
       null,
     );
-    expect(plan.ok).toBe(false);
-    expect(plan.failures.map((failure) => failure.kind)).toEqual(['invalid-class-spec']);
+    expectFailure(plan, ['invalid-class-spec'], ['core/storage/invalid-class']);
+  });
+
+  it('声明没有稳定键 ⇒ invalid-declaration + core/storage/invalid-declaration（span 指回声明）', () => {
+    const plan = planStorageSlots(factsOf([decl('', 'X', 'save', { line: 7 })]), null);
+    expectFailure(plan, ['invalid-declaration'], ['core/storage/invalid-declaration']);
+    expect(plan.diagnostics[0]!.span?.start.line).toBe(7);
+  });
+
+  it('登记簿损坏（同一槽被两个声明占用）⇒ corrupt-snapshot', () => {
+    const previous = snapshotOf(saveTable({ 'k-a': record(0), 'k-b': record(0) }));
+    const plan = planStorageSlots(factsOf([decl('k-a', 'A', 'save'), decl('k-b', 'B', 'save')]), previous);
+    expectFailure(plan, ['corrupt-snapshot'], ['core/storage/corrupt-snapshot']);
   });
 
   it('adapter 撤掉某个存储期：其旧条目退役（retired 可见），不静默丢', () => {
