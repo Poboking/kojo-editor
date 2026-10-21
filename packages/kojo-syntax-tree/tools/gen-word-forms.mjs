@@ -45,27 +45,39 @@ import { fileURLToPath } from 'node:url';
  * （如 `sugar-ident.ts` → `./blank-charset`，CHARSET-SS 之后不再是单文件根）。
  * 按 bundler 口径补一条相对路径 → `.ts` 的兜底；解析不到仍照常抛（fail-closed），
  * 绝不静默产出缺席判据的投影。
+ *
+ * vitest 下必须跳过：vmThreads 池把 `node:module` 的 `registerHooks` 换成抛错桩
+ * （`"registerHooks" is not available when running in Vitest`），而测试进程里
+ * vite 自带解析器本就能吃 `.ts`，这条兜底纯属多余。判据用「本脚本是否为 node 入口」
+ * 而不是 `VITEST` 环境变量——测试里 `execFileSync` 起的裸 node 子进程会**继承** `VITEST`，
+ * 但它作为入口跑本工具时同样需要 hooks。不跳过则 `word-forms-single-source.test.ts`
+ * 在 import 期整文件红（本机 vmThreads 全量恒红一条的既有环境账）。
  */
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    try {
-      return nextResolve(specifier, context);
-    } catch (err) {
-      if (
-        !/\.[cm]?[jt]sx?$/.test(specifier) &&
-        !specifier.endsWith('/') &&
-        (specifier.startsWith('./') || specifier.startsWith('../'))
-      ) {
-        try {
-          return nextResolve(`${specifier}.ts`, context);
-        } catch {
-          throw err;
+const invokedAsMain =
+  process.argv[1] != null &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+if (invokedAsMain) {
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      try {
+        return nextResolve(specifier, context);
+      } catch (err) {
+        if (
+          !/\.[cm]?[jt]sx?$/.test(specifier) &&
+          !specifier.endsWith('/') &&
+          (specifier.startsWith('./') || specifier.startsWith('../'))
+        ) {
+          try {
+            return nextResolve(`${specifier}.ts`, context);
+          } catch {
+            throw err;
+          }
         }
+        throw err;
       }
-      throw err;
-    }
-  },
-});
+    },
+  });
+}
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/kojo-syntax-tree/tools
 const pkgRoot = resolve(here, '..'); // packages/kojo-syntax-tree
