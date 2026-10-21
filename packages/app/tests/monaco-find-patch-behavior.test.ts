@@ -332,7 +332,7 @@ function newWidget(controller: Controller, editor: unknown): FindWidgetInstance 
     controller,
     state,
     {}, // contextViewProvider：构造期不碰（只被 hover 类路径惰性用）
-    { appendKeybinding: (_l: string, _id: string) => '', getUserBinding: () => undefined }, // keybindingService
+    { appendKeybinding: (_l: string, _id: string) => '', getUserBinding: () => undefined, lookupKeybinding: () => null }, // keybindingService（`showHistoryHint` 构造期即调 lookupKeybinding，缺它记未捕获异常）
     fakeContextKeyService(), // contextKeyService（widget 与 scoped history 共用一枚）
     { setupDelayedHover: () => ({ dispose: () => {} }) }, // hoverService：SimpleButton 构造期就 setupDelayedHover 挂 tooltip
     new Set<string>(), // 查找历史上拉（构造期只判引用）
