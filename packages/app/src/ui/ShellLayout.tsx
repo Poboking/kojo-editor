@@ -264,7 +264,7 @@ export type EditorEolChoice = 'LF' | 'CRLF';
  * 状态栏右区那三格读数（编码·EOL·行数 ／ 选区 ／ 自动保存时刻）。
  *
  * W7-H：EOL 那一格在**可写原文面**变成按钮，点开是 LF / CRLF 两档小菜单
- * （落地由编辑器动作句柄 `switchEol` 负责：`model.setEOL` + 标脏）。
+ * （落地由编辑器动作句柄 `switchEol` 负责：`model.pushEOL` + 前后停点 + 标脏，撤销栈上自成一段）。
  * 只读 / 预览 / 没开文件时 `eolSwitchable` 不为 true ⇒ 仍是纯文字（无入口）。
  *
  * 导出是给 `packages/app/tests/status-eol-readout.test.ts` 直接渲染取证用；
