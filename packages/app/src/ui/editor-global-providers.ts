@@ -328,6 +328,12 @@ function erbFileFactsFor(kernel: Kernel): ErbFileFactsProvider {
  *   夹取而非报错（陈旧行号不该让编辑器崩）；
  * - **单次 `executeEdits`**：多段改写合并成一个撤销步——用户按一次 Ctrl+Z 应当
  *   撤销"这次改写"，而不是被要求按 N 次。
+ * - **前后各一颗停点**（`CODEACTION-UNDO-STACK`）：**前停点必须有**。monaco 0.57 的
+ *   `executeEdits` 全程不 `pushStackElement`（`codeEditorWidget.js:937` → `viewModelImpl.js:962`
+ *   → `cursor.js:371`；带停点的只有 `_executeEditOperation`），栈顶那格还"开着"时
+ *   `EditStack.canAppend` 会把机器改写**并进作者上一次打字那一格** ⇒ 一次 Ctrl+Z
+ *   同时退掉"自己刚打的字 + 机器改写"。前停点先替作者封口，后停点再替机器封口，
+ *   于是机器改写自成一格、作者那一笔仍在屏上（口径与 `disk-text-sync.applyDiskText` 一致）。
  *
  * 返回是否真的落了一次编辑。
  */
@@ -345,6 +351,8 @@ export function applyTextEdits(
       return { range: new monaco.Range(from, 1, to, model.getLineMaxColumn(to)), text: e.newText };
     })
     .sort((a, b) => b.range.startLineNumber - a.range.startLineNumber);
+  // 前停点：先替作者上一次打字封口，机器改写才不会被 canAppend 并进去（见上「三条纪律」第 4 条）。
+  ed.pushUndoStop();
   ed.executeEdits('kojo.codeAction', ops);
   ed.pushUndoStop();
   return true;
