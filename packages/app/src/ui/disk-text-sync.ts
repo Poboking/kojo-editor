@@ -23,9 +23,22 @@
  * 这里再兜一层，免得空编辑白占一个栈位）。
  *
  * ## 边界（本模块**不**碰）
- * - 换行：交给 monaco 自己归一（`EditData` 按 model EOL 折行），与 `setValue` 同源，不改 EOL 语义；
  * - 基线 / 脏判定 / 冲突通知：全部留在调用方（`EditorPane`），决策树一条分支都不动；
  * - 写域判定：只改内存 model，盘上一个字节都不写。
+ *
+ * ## RELOAD-EOL-PIN（2026-10-21 补·对拍读数）
+ * 上面曾写「换行交给 monaco 自己归一，与 `setValue` 同源」——实测**不成立**，两处不等价：
+ * - 旧路径 `setValue` 经 `PieceTreeTextBufferBuilder._getEOL`（monaco 0.57.0）按**多数派重探整档 EOL**
+ *   并归一全部行尾（CRLF 盘进 LF model ⇒ model 档位随之翻转）；原差量路径不改档 ⇒ 文本与档位都不同果。
+ *   ⇒ 现补前置档位对齐（`applyDiskText` 首部、口径 = `detectMajorityEol`）：按同一多数派口径 `setEOL`
+ *   对齐后再落差量（`setEOL` 是 raw 变更、
+ *   不进撤销栈 ⇒ 重载仍恰占**一个**栈元素）。
+ * - 按字符公共前后缀会把**孤立 `\r` 留在差量边界**，monaco 把插入文本里的 `\r` 归一成换行
+ *   ⇒ 凭空多一行空行（实测 `甲\n乙\n丙` ←盘 `甲\r\n乙改\r\n丙` 得 `甲\n乙改\n\n丙`）。
+ *   ⇒ `diskSyncEdits` 改**按行分段**（行=内容+行尾原子单位），边界永不切在 `\r\n` 中间。
+ * 钉死用例：`packages/app/tests/disk-text-sync-eol.test.ts`（五条对拍 + 反向自证）。
+ * 已知残余（未仿，见该文件注记）：无行尾符单行文件的档位选择（`setValue` 用创建时 defaultEOL，
+ * 本模块保持现档）；孤 `\r`（老式 Mac 行尾）在 `setValue` 里也算换行、本模块按内容处理。
  */
 
 /** 一条差量：`oldText.slice(start, end)` 换成 `text`（偏移按 `getValue()` 的字符序，0 基、含首不含末） */
@@ -35,22 +48,66 @@ export interface DiskSyncEdit {
   readonly text: string;
 }
 
+/** 行 = 内容 + 行尾的原子段（`\r\n` 与 `\n` 算行尾；末段可无行尾）。差量分段的基本单位，边界永不切开 `\r\n`。 */
+function splitLinesKeepEol(text: string): string[] {
+  const lines: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    let j = i;
+    while (j < text.length && text[j] !== '\n' && text[j] !== '\r') j += 1;
+    if (j < text.length) {
+      if (text[j] === '\r' && text[j + 1] === '\n') {
+        j += 2;
+      } else {
+        j += 1; // 孤 `\r` 按内容走：只跳过它本身，后面的 `\n` 归下一行（本模块口径，见头注残余）
+        lines.push(text.slice(i, j));
+        i = j;
+        continue;
+      }
+    }
+    lines.push(text.slice(i, j));
+    i = j;
+  }
+  if (text.endsWith('\n') || text.endsWith('\r\n')) lines.push('');
+  return lines;
+}
+
 /**
- * 纯函数：把 `oldText` 原地变成 `newText` 的最小差量（公共前后缀之外恰好一段）。
+ * 纯函数：把 `oldText` 原地变成 `newText` 的最小差量（**按行**公共前后缀之外恰好一段，
+ * RELOAD-EOL-PIN 起不再是按字符——字符前后缀会把 `\r\n` 切开成孤立 `\r`，monaco 归一后凭空多空行）。
  * 相等 ⇒ 空数组。零依赖、零 monaco，单测直接用字符串喂。
  */
 export function diskSyncEdits(oldText: string, newText: string): readonly DiskSyncEdit[] {
   if (oldText === newText) return [];
-  const shorter = Math.min(oldText.length, newText.length);
+  const oldLines = splitLinesKeepEol(oldText);
+  const newLines = splitLinesKeepEol(newText);
   let start = 0;
-  while (start < shorter && oldText[start] === newText[start]) start += 1;
-  let endOld = oldText.length;
-  let endNew = newText.length;
-  while (endOld > start && endNew > start && oldText[endOld - 1] === newText[endNew - 1]) {
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) start += 1;
+  let endOld = oldLines.length;
+  let endNew = newLines.length;
+  while (endOld > start && endNew > start && oldLines[endOld - 1] === newLines[endNew - 1]) {
     endOld -= 1;
     endNew -= 1;
   }
-  return [{ start, end: endOld, text: newText.slice(start, endNew) }];
+  let startOffset = 0;
+  for (let k = 0; k < start; k += 1) startOffset += oldLines[k]!.length;
+  let endOffset = startOffset;
+  for (let k = start; k < endOld; k += 1) endOffset += oldLines[k]!.length;
+  return [{ start: startOffset, end: endOffset, text: newLines.slice(start, endNew).join('') }];
+}
+
+/** `setValue` 同款多数派口径（monaco 0.57.0 `PieceTreeTextBufferBuilder._getEOL`）：`\r\n` 过半 ⇒ CRLF，否则 LF；全文无行尾 ⇒ 保持现档 */
+export function detectMajorityEol(text: string, current: string): string {
+  let lf = 0;
+  let crlf = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '\n') {
+      if (i > 0 && text[i - 1] === '\r') crlf += 1;
+      else lf += 1;
+    }
+  }
+  if (crlf + lf === 0) return current;
+  return crlf > (crlf + lf) / 2 ? '\r\n' : '\n';
 }
 
 /** 一条差量的 model 侧形状（与 monaco `IIdentifiedSingleEditOperation` 结构兼容，不引 monaco 类型） */
@@ -76,6 +133,10 @@ export interface DiskSyncModel {
     editOperations: DiskSyncEditOperation[],
     cursorStateComputer: () => null,
   ): unknown;
+  /** 现档行尾（RELOAD-EOL-PIN：对拍 `setValue` 的多数派重探需先读档） */
+  getEOL(): string;
+  /** 整档换行（monaco `EndOfLineSequence`：0=LF、1=CRLF；raw 变更、不进撤销栈） */
+  setEOL(eol: 0 | 1): void;
 }
 
 /**
@@ -92,6 +153,10 @@ export interface DiskSyncModel {
  * 活动标签那侧还照旧由调用方 `saveViewState`/`restoreViewState` 兜一层——那是前手量到 4:22 保住的东西。
  */
 export function applyDiskText(model: DiskSyncModel, text: string): number {
+  // RELOAD-EOL-PIN：先按 `setValue` 同款多数派口径对齐整档（raw 变更、不上栈、不改栈元素数），
+  // 再落差量——否则 CRLF 盘进 LF model 时新路径文本/档位都与旧路径不同果（对拍实测，见头注）。
+  const eol = detectMajorityEol(text, model.getEOL());
+  if (eol !== model.getEOL()) model.setEOL(eol === '\r\n' ? 1 : 0);
   const edits = diskSyncEdits(model.getValue(), text);
   if (edits.length === 0) return 0;
   model.pushStackElement();
