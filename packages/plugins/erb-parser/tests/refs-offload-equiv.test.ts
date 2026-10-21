@@ -27,6 +27,7 @@ import type {
   ComputePool,
   ErbFile,
   ErbParserService,
+  ErbReference,
   ErbReferenceIndex,
   FileIO,
   PluginContext,
@@ -247,7 +248,7 @@ function activate(io: FileIO, compute: ComputePool): { services: Map<string, unk
 
 /** 反向索引的可比形态（键序 = 聚合序；条目逐个字段序列化，不做排序"宽容"） */
 function encodeRefs(refs: ErbReferenceIndex | undefined): string {
-  const bySymbol = refs?.bySymbol ?? new Map();
+  const bySymbol = refs?.bySymbol ?? new Map<string, readonly ErbReference[]>();
   return JSON.stringify(
     [...bySymbol.entries()].map(([name, list]) => [name, list.map((r) => [r.filePath, r.line, r.column, r.endColumn, r.kind])]),
   );
@@ -410,7 +411,7 @@ describe('查找引用 / 重命名取数面 · 通道产出直接喂下游同结
     expect(names.length).toBe(20);
     for (const name of names) {
       // ① 服务出口（find-references / rename / 台账都只走这一条）
-      expect(JSON.stringify(parser.referencesTo(name))).toBe(JSON.stringify(legacyIndex.bySymbol.get(name) ?? []));
+      expect(JSON.stringify(parser.referencesTo!(name))).toBe(JSON.stringify(legacyIndex.bySymbol.get(name) ?? []));
       // ② 光标处引用点（F12 / 查找引用同一条腿）
       for (const ref of legacyIndex.bySymbol.get(name) ?? []) {
         const text = files[ref.filePath]!;
