@@ -1,6 +1,6 @@
 /**
- * 文法层回归：2.0 全语法正例（fixtures/kojo2-canonical.kojo）+ 旧写法反例
- * （fixtures/legacy-v1.kojo）+ 各类结构/诊断单测（§3–§9）。
+ * 文法层回归：2.0 全语法正例（fixtures/kojo2-canonical.kojo2）+ 旧写法反例
+ * （fixtures/legacy-v1.kojo.txt）+ 各类结构/诊断单测（§3–§9）。
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -56,13 +56,13 @@ function firstSceneItems(source: string) {
 
 describe('parse：2.0 正典 fixture 全绿', () => {
   it('fixture 无 error 诊断', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const errors = file.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     expect(errors.map((error) => `${error.code}: ${error.message}`)).toEqual([]);
   });
 
   it('声明提升：decls 顺序 = 书写顺序，幕不进 decls', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     expect(file.decls.map((decl) => decl.kind)).toEqual([
       'view',
       'machine',
@@ -81,12 +81,12 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('幕按书写序切成 scenes；首个幕之前无正文 ⇒ 无隐式前奏', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     expect(file.scenes.map((scene) => scene.title)).toEqual(['神社清晨', '神社夜晚']);
   });
 
   it('第一幕覆盖 §4–§9 的叙事/演出/调度形状', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const kinds = new Set(file.scenes[0]!.items.map((node) => node.kind));
     for (const kind of [
       'textLine',
@@ -106,7 +106,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('第二幕：program 层三个循环是叙事区节点', () => {
-    const nodes = parseSource(fixture('kojo2-canonical.kojo')).scenes[1]!.items;
+    const nodes = parseSource(fixture('kojo2-canonical.kojo2')).scenes[1]!.items;
     const whileLoop = nodes.find((node) => node.kind === 'whileLoop') as KojoWhileLoop | undefined;
     const repeatLoop = nodes.find((node) => node.kind === 'repeatLoop') as KojoRepeatLoop | undefined;
     const forEachLoop = nodes.find((node) => node.kind === 'forEachLoop') as KojoForEachLoop | undefined;
@@ -116,7 +116,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('# 表：静态分档 + 否 兜底 + 开放区间', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const table = file.decls.find((decl) => decl.kind === 'table') as KojoTableDecl;
     expect(table.name).toBe('心情');
     expect(table.subject.text).toBe('恋慕');
@@ -127,7 +127,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('# 池：一条 ? 链 + 裸引号默认说话人 + 行尾提示', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const pool = file.decls.find((decl) => decl.kind === 'pool');
     if (pool?.kind !== 'pool') throw new Error('no pool');
     expect(pool.name).toBe('早安问候');
@@ -140,7 +140,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('# 模：参数 + 唯一 [插槽] 位置', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const template = file.decls.find((decl) => decl.kind === 'template');
     if (template?.kind !== 'template') throw new Error('no template');
     expect(template.name).toBe('娇羞退场');
@@ -150,7 +150,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('@函：参数默认值 + 返回 + 调度区裸写赋值', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const fn = file.decls.find((decl) => decl.kind === 'function') as KojoFunctionDecl;
     expect(fn.name).toBe('增加羁绊');
     expect(fn.params.map((param) => [param.name, param.defaultValue])).toEqual([
@@ -162,7 +162,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('@织：修饰词 → later，块体是叙事节点', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const weave = file.decls.find((decl) => decl.kind === 'weave');
     if (weave?.kind !== 'weave') throw new Error('no weave');
     expect(weave.event).toBe('回合末');
@@ -171,7 +171,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('@原生：去基准缩进、相对缩进与 Tab/原文保留', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const native = file.scenes[0]!.items.find((node) => node.kind === 'nativeBlock') as KojoNativeBlock;
     expect(native.lines).toEqual([
       '; 逃生舱：底层 ERB 代码',
@@ -183,7 +183,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('插值：三段条件插值进 AST（cond / then / else 都是源切片）', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const line = file.scenes[0]!.items[2] as KojoTextLine;
     if (line.kind !== 'textLine') throw new Error('not text line');
     const interp = line.parts.find((part) => part.kind === 'interp');
@@ -193,7 +193,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
   });
 
   it('模板调用带缩进块 = 插槽内容', () => {
-    const file = parseSource(fixture('kojo2-canonical.kojo'));
+    const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const calls = file.scenes[0]!.items.filter((node): node is KojoCallStmt => node.kind === 'call');
     const withBody = calls.find((call) => call.name === '娇羞退场');
     expect(withBody?.body).toHaveLength(1);
@@ -205,7 +205,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
 
 describe('parse：旧写法反例全部报迁移诊断，且不进 AST', () => {
   it('legacy fixture 覆盖 §12.1 迁移码', () => {
-    const codes = new Set(codesOf(fixture('legacy-v1.kojo')));
+    const codes = new Set(codesOf(fixture('legacy-v1.kojo.txt')));
     for (const code of [
       'core/migration/version',
       'core/migration/timing',
@@ -234,7 +234,7 @@ describe('parse：旧写法反例全部报迁移诊断，且不进 AST', () => {
   });
 
   it('`选项：` 不是旧语法：warning + 真节点（body 不丢）', () => {
-    const file = parseSource(fixture('legacy-v1.kojo'));
+    const file = parseSource(fixture('legacy-v1.kojo.txt'));
     expect(file.diagnostics.some((diagnostic) => diagnostic.code === 'core/options/pending' && diagnostic.severity === 'warning')).toBe(true);
     const options = file.scenes
       .flatMap((scene) => scene.items)
@@ -245,7 +245,7 @@ describe('parse：旧写法反例全部报迁移诊断，且不进 AST', () => {
   });
 
   it('旧写法不产出 AST：legacy fixture 的 decls 只有合法 # 机', () => {
-    const file = parseSource(fixture('legacy-v1.kojo'));
+    const file = parseSource(fixture('legacy-v1.kojo.txt'));
     expect(file.decls.map((decl) => decl.kind)).toEqual(['machine']);
   });
 

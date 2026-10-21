@@ -11,7 +11,7 @@ import { Language, Parser, Query, type Node } from 'web-tree-sitter';
  * 这里不碰宿主色板（宿主是后续批次的事）；本闸只钉三件事：
  *  1. 三份查询都能编译（query 语法与节点名没错）；
  *  2. folds 只捕 `block`，且每枚折叠区间确实跨行（endRow > startRow）；
- *  3. highlights 的捕获名全部是官方命名约定下的档位，且每档在 full.kojo 上都有命中
+ *  3. highlights 的捕获名全部是官方命名约定下的档位，且每档在 full.kojo2 上都有命中
  *     （"capture 名有档位"不是写了就算——得真落在节点上）。
  * indents 是本批**有意零捕获**（见该文件头注），这里钉"零 pattern / 零 capture"不被误加。
  */
@@ -20,7 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = resolve(here, '..');
 const wasmPath = join(pkgRoot, 'tree-sitter-kojo2.wasm');
 const QUERY_DIR = join(pkgRoot, 'queries', 'v2');
-const fullPath = join(pkgRoot, 'tests', 'v2-fixtures', 'full.kojo');
+const fullPath = join(pkgRoot, 'tests', 'v2-fixtures', 'full.kojo2');
 
 let language: Language;
 let parser: Parser;
@@ -32,7 +32,7 @@ beforeAll(async () => {
   parser = new Parser();
   parser.setLanguage(language);
   const tree = parser.parse(readFileSync(fullPath, 'utf8'));
-  if (!tree) throw new Error('full.kojo 解析失败');
+  if (!tree) throw new Error('full.kojo2 解析失败');
   root = tree.rootNode;
 }, 120_000);
 
@@ -63,7 +63,7 @@ describe('folds：只折 block，且折叠区间真的跨行', () => {
   it('捕获名 = fold；命中节点全是 block；endRow > startRow', () => {
     const q = loadQuery('folds');
     const matches = q.matches(root);
-    expect(matches.length, 'full.kojo 的折叠区间数').toBeGreaterThanOrEqual(15);
+    expect(matches.length, 'full.kojo2 的折叠区间数').toBeGreaterThanOrEqual(15);
     for (const m of matches) {
       for (const c of m.captures) {
         expect(c.name).toBe('fold');
@@ -80,7 +80,7 @@ describe('folds：只折 block，且折叠区间真的跨行', () => {
   });
 });
 
-describe('highlights：捕获名有档位，且每档在 full.kojo 上都有命中', () => {
+describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命中', () => {
   it('档位集合', () => {
     const q = loadQuery('highlights');
     const names = new Set(q.captureNames);
@@ -129,7 +129,7 @@ describe('highlights：捕获名有档位，且每档在 full.kojo 上都有命�
       'none',
     ];
     const noHit = wanted.filter((n) => !hit.has(n));
-    expect(noHit, `这些档位在 full.kojo 上零命中：${noHit.join(', ')}`).toEqual([]);
+    expect(noHit, `这些档位在 full.kojo2 上零命中：${noHit.join(', ')}`).toEqual([]);
     // 关键档位的命中数下界（防止只命中最稀疏的一枚就过闸）
     const all = q.matches(root).flatMap((m) => m.captures.map((c) => c.name));
     const countOf = (n: string): number => all.filter((x) => x === n).length;

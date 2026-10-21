@@ -70,8 +70,8 @@ function count(root: Node, type: string): number {
 }
 
 describe('未闭合台词：MISSING 落在行末，下一行照常解析', () => {
-  it('broken-unclosed-speech.kojo', () => {
-    const { root, rows, faults } = parseFixture('broken-unclosed-speech.kojo');
+  it('broken-unclosed-speech.kojo2', () => {
+    const { root, rows, faults } = parseFixture('broken-unclosed-speech.kojo2');
     // 只有一枚 MISSING:speech_close，且落在作者那一行（第 5 行，0 基 4）
     expect(faults.map((f) => f.type)).toEqual(['MISSING:speech_close']);
     const target = rows.findIndex((l) => l.includes('这句话没有收束'));
@@ -86,8 +86,8 @@ describe('未闭合台词：MISSING 落在行末，下一行照常解析', () =>
 });
 
 describe('未闭合插值：故障定位在插值那一行', () => {
-  it('broken-unclosed-interp.kojo', () => {
-    const { root, rows, faults } = parseFixture('broken-unclosed-interp.kojo');
+  it('broken-unclosed-interp.kojo2', () => {
+    const { root, rows, faults } = parseFixture('broken-unclosed-interp.kojo2');
     expect(faults.length).toBe(1);
     const target = rows.findIndex((l) => l.includes('她今天看起来{心情'));
     expect(target).toBeGreaterThanOrEqual(0);
@@ -101,7 +101,7 @@ describe('未闭合插值：故障定位在插值那一行', () => {
 
 describe('缺体的声明块 / @原生：故障落在块头行，块头节点仍可定位', () => {
   it('broken-without-body.kojo（# 池 缺体）', () => {
-    const { root, rows, faults } = parseFixture('broken-without-body.kojo');
+    const { root, rows, faults } = parseFixture('broken-without-body.kojo2');
     expect(faults.length).toBeGreaterThanOrEqual(1);
     const target = rows.findIndex((l) => l.includes('# 池'));
     expect(target).toBeGreaterThanOrEqual(0);
@@ -115,7 +115,7 @@ describe('缺体的声明块 / @原生：故障落在块头行，块头节点仍
   });
 
   it('broken-unclosed-native.kojo（@原生 空块）', () => {
-    const { root, rows, faults } = parseFixture('broken-unclosed-native.kojo');
+    const { root, rows, faults } = parseFixture('broken-unclosed-native.kojo2');
     expect(faults.length).toBeGreaterThanOrEqual(1);
     const target = rows.findIndex((l) => l.trim() === '@原生');
     expect(target).toBeGreaterThanOrEqual(0);
@@ -125,7 +125,7 @@ describe('缺体的声明块 / @原生：故障落在块头行，块头节点仍
   });
 
   it('broken-table-missing-value.kojo（缺值 ⇒ MISSING:table_value）', () => {
-    const { root, rows, faults } = parseFixture('broken-table-missing-value.kojo');
+    const { root, rows, faults } = parseFixture('broken-table-missing-value.kojo2');
     expect(faults.length).toBe(1);
     expect(faults[0]!.type).toBe('MISSING:table_value');
     const target = rows.findIndex((l) => l.trim().startsWith('否'));
@@ -137,8 +137,8 @@ describe('缺体的声明块 / @原生：故障落在块头行，块头节点仍
 });
 
 describe('结构区 Tab 缩进：只打 Tab 那一行', () => {
-  it('broken-tab-indent.kojo', () => {
-    const { root, rows, faults } = parseFixture('broken-tab-indent.kojo');
+  it('broken-tab-indent.kojo2', () => {
+    const { root, rows, faults } = parseFixture('broken-tab-indent.kojo2');
     expect(faults.length).toBeGreaterThanOrEqual(1);
     const target = rows.findIndex((l) => l.startsWith('\t'));
     expect(target).toBeGreaterThanOrEqual(0);
@@ -152,12 +152,12 @@ describe('结构区 Tab 缩进：只打 Tab 那一行', () => {
 
 describe('错误恢复总口径：不跨行、不整篇崩', () => {
   const names = [
-    'broken-unclosed-speech.kojo',
-    'broken-unclosed-interp.kojo',
-    'broken-without-body.kojo',
-    'broken-unclosed-native.kojo',
-    'broken-tab-indent.kojo',
-    'broken-table-missing-value.kojo',
+    'broken-unclosed-speech.kojo2',
+    'broken-unclosed-interp.kojo2',
+    'broken-without-body.kojo2',
+    'broken-unclosed-native.kojo2',
+    'broken-tab-indent.kojo2',
+    'broken-table-missing-value.kojo2',
   ];
 
   it(`每份残缺样本都可解析、有可定位故障（${names.length} 份）`, () => {
@@ -174,11 +174,11 @@ describe('错误恢复总口径：不跨行、不整篇崩', () => {
   it('故障行之外仍有正常节点（错误被限制，不吞后续正文）', () => {
     const cases: Array<[string, number]> = [
       // [fixture, 故障行之后必须出现的正常节点数下界；故障落在文件末行时为 0]
-      ['broken-unclosed-speech.kojo', 1],
-      ['broken-unclosed-interp.kojo', 1],
-      ['broken-without-body.kojo', 0],
-      ['broken-tab-indent.kojo', 1],
-      ['broken-table-missing-value.kojo', 0],
+      ['broken-unclosed-speech.kojo2', 1],
+      ['broken-unclosed-interp.kojo2', 1],
+      ['broken-without-body.kojo2', 0],
+      ['broken-tab-indent.kojo2', 1],
+      ['broken-table-missing-value.kojo2', 0],
     ];
     for (const [name, minAfter] of cases) {
       const { root, rows, faults } = parseFixture(name);

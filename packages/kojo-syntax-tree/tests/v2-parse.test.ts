@@ -74,7 +74,7 @@ function collect(dir: string, out: string[]): string[] {
     if (e.isDirectory()) {
       if (p === BROKEN) continue;
       collect(p, out);
-    } else if (e.name.endsWith('.kojo')) out.push(p);
+    } else if (e.name.endsWith('.kojo2')) out.push(p);
   }
   return out;
 }
@@ -83,7 +83,7 @@ const validFixtures = collect(FIXTURES, []).sort();
 const rel = (file: string): string => file.slice(FIXTURES.length + 1).replaceAll('\\', '/');
 
 describe('合法 fixtures：零 ERROR / 零 MISSING', () => {
-  it(`正样本都至少两份（实收 ${validFixtures.length}）：full.kojo + crlf.kojo`, () => {
+  it(`正样本都至少两份（实收 ${validFixtures.length}）：full.kojo2 + crlf.kojo2`, () => {
     expect(validFixtures.length, 'v2 正样本 fixture 缺失').toBeGreaterThanOrEqual(2);
   });
 
@@ -99,9 +99,9 @@ describe('合法 fixtures：零 ERROR / 零 MISSING', () => {
   });
 
   it('CRLF 文件与 LF 文件解析结果同构（换行只由 blank_line 认领）', () => {
-    const crlf = readFileSync(join(FIXTURES, 'crlf.kojo'), 'utf8');
-    expect(crlf.includes('\r\n'), 'crlf.kojo 必须真的是 CRLF').toBe(true);
-    const { root, faults } = parseFile(join(FIXTURES, 'crlf.kojo'));
+    const crlf = readFileSync(join(FIXTURES, 'crlf.kojo2'), 'utf8');
+    expect(crlf.includes('\r\n'), 'crlf.kojo2 必须真的是 CRLF').toBe(true);
+    const { root, faults } = parseFile(join(FIXTURES, 'crlf.kojo2'));
     expect(faults).toEqual([]);
     // 有台词、有 `续`、有 @算 块：CRLF 下缩进/行尾判定与 LF 同口径
     expect(root.descendantsOfType('speech').length).toBe(1);
@@ -110,12 +110,12 @@ describe('合法 fixtures：零 ERROR / 零 MISSING', () => {
   });
 });
 
-describe('full.kojo：2.0 语法面全部落成 CST 节点', () => {
+describe('full.kojo2：2.0 语法面全部落成 CST 节点', () => {
   let root: Node;
   let text: string;
 
   beforeAll(() => {
-    const r = parseFile(join(FIXTURES, 'full.kojo'));
+    const r = parseFile(join(FIXTURES, 'full.kojo2'));
     root = r.root;
     text = r.text;
   });
@@ -180,7 +180,7 @@ describe('full.kojo：2.0 语法面全部落成 CST 节点', () => {
     };
     walk(root);
     const missing = wanted.filter((t) => !present.has(t));
-    expect(missing, `full.kojo 缺这些 CST 节点：${missing.join(', ')}`).toEqual([]);
+    expect(missing, `full.kojo2 缺这些 CST 节点：${missing.join(', ')}`).toEqual([]);
   });
 
   it('台词：说话人 + 「…」 + 行内插值 + 行尾提示', () => {
