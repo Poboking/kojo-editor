@@ -816,9 +816,57 @@ describe('P2-12 · filterText 补键（standalone Monaco 的 fuzzyScore 不挂�
     expect(out.filterText!.startsWith('好感度系统 ')).toBe(true);
   });
 
-  it('source 自定义 filterText（≠ label）⇒ 原样不动（匹配面是各 source 的主权）', () => {
+  it('source 自定义 filterText（≠ label）⇒ **可检索键并集**：自带键一个不丢且仍居首位，原文 + 全拼 + 首字母追加（SUGGEST-PINYIN-GAP；旧"原样放行"互斥口径已废）', () => {
     const out = assemble({ ...item('甲'), filterText: '自定义键' });
-    expect(out.filterText).toBe('自定义键');
+    expect(out.filterText).toBe('自定义键 甲 jia j'); // 自带键打头 ⇒ 对它的既有前缀打分/上色位次不动
+    expect(out.filterText!.startsWith('自定义键')).toBe(true);
+  });
+
+  /**
+   * Monaco 过滤口径的最小仿真（`completionModel.js`：query 不是 `filterText` 的字符子序列
+   * 即 `continue` 丢候选；大小写不敏感与 `completion-rename-dims.test.ts` 同式）——
+   * "命中"的判据是**这条候选活下来**，不是打分高低。
+   */
+  const monacoHits = (filterText: string, query: string): boolean => {
+    const haystack = filterText.toLowerCase();
+    let i = 0;
+    for (const ch of query.toLowerCase()) {
+      const at = haystack.indexOf(ch, i);
+      if (at < 0) return false;
+      i = at + 1;
+    }
+    return true;
+  };
+
+  it('SUGGEST-PINYIN-GAP · 自带 filterText 的中文源用**全拼**命中：`haogandu` 在并集面上活下来（互斥放行下整条候选被丢）', () => {
+    const out = assemble({ ...item('好感度'), filterText: 'CALL_HGD' });
+    expect(out.filterText).toBe('CALL_HGD 好感度 haogandu hgd');
+    expect(monacoHits(String(out.filterText), 'haogandu')).toBe(true);
+  });
+
+  it('SUGGEST-PINYIN-GAP · 自带 filterText 的中文源用**首字母**命中：`hgd` 活下来；`gd` 这类跨字首字母子序列同样活（自带键 `CALL_X` 刻意不含这两个串 ⇒ 互斥放行必红）', () => {
+    const out = assemble({ ...item('好感度'), filterText: 'CALL_X' });
+    expect(monacoHits(String(out.filterText), 'hgd')).toBe(true);
+    expect(monacoHits(String(out.filterText), 'gd')).toBe(true);
+  });
+
+  it('SUGGEST-PINYIN-GAP · **原自带键仍可命中**（并集不是替换）：对 `call` 的前缀仍打在原键首位；中文原文 `好感` 也重新可搜', () => {
+    const out = assemble({ ...item('好感度'), filterText: 'CALL_HGD' });
+    expect(monacoHits(String(out.filterText), 'call')).toBe(true);
+    expect(out.filterText!.startsWith('CALL_HGD')).toBe(true); // 位次零挪动 ⇒ 原键的既有打分面不破
+    expect(monacoHits(String(out.filterText), '好感')).toBe(true); // 旧互斥口径下中文输入命不中原键 ⇒ 候选直接消失
+  });
+
+  it('SUGGEST-PINYIN-GAP · 并集只进 filterText：label / insertText / rankKey 档位（前缀 `1|`）全不被带跑', () => {
+    const out = assemble({ ...item('好感度', '9_z'), filterText: 'CALL_HGD' }, '好感');
+    expect(out.label).toBe('好感度');
+    expect(out.insertText).toBe('好感度');
+    expect(out.sortText).toMatch(/^1\|/); // 排序档由 label 原文算，与 filterText 无关
+  });
+
+  it('SUGGEST-PINYIN-GAP · 纯 ASCII label + 自带自定义键 ⇒ 无可拼音键仍原样放行（不造噪声；自带键零改动）', () => {
+    const out = assemble({ ...item('CALL_A'), filterText: 'alias_x' });
+    expect(out.filterText).toBe('alias_x');
   });
 
   it('filterText 逐字等于 label（全仓九源主流写法）⇒ 照补拼音键（等值 = 未自定义）', () => {

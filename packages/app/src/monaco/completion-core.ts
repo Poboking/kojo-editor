@@ -472,24 +472,34 @@ export function mergeSuggestions(
 }
 
 /**
- * filterText 的**可检索键补齐**（P2-12）：把中文候选的拼音键补进 `filterText`，
- * 让 Monaco 的客户端过滤（`fuzzyScore` 不挂拼音词典）能用 ASCII 拼音命中中文候选。
+ * filterText 的**可检索键并集**补齐（P2-12 · SUGGEST-PINYIN-GAP）：把中文候选的拼音键补进
+ * `filterText`，让 Monaco 的客户端过滤（`fuzzyScore` 不挂拼音词典）能用 ASCII 拼音命中中文候选。
  *
- * 口径（两条同时满足，缺一即破）：
- * 1. **不覆盖 source 自带的匹配面**：`filterText` 已存在且**不等于** label 原文
- *    （source 自定义了异于原文的键）⇒ 原样不动；
- * 2. 其余（无 `filterText`，或逐字等于 label 原文——全仓九源的主流写法）⇒ 补为
- *    `原文 全拼串 首字母串`，**原文留在首位** ⇒ 前缀匹配与匹配位次上色不破
- *    （非原文开头时高亮退化的代价，判据记在 `kojo-completion.ts` 的头注里）。
+ * 口径（**并集，不是互斥放行**——SUGGEST-PINYIN-GAP 改的就是这一条）：
+ * 1. **不覆盖 source 自带的匹配面 = 一个键都不丢，而不是原样放行**：
+ *    - 无 `filterText`，或逐字等于 label 原文（全仓九源的主流写法）⇒ 补为
+ *      `原文 全拼串 首字母串`，**原文留在首位** ⇒ 前缀匹配与匹配位次上色不破
+ *      （非原文开头时高亮退化的代价，判据记在 `kojo-completion.ts` 的头注里）；**产出逐字同旧**，
+ *      现有主流源的既有钉值断言零改动；
+ *    - `filterText` 已存在且**不等于** label 原文（source 自定义了异于原文的键）⇒ **自带键仍居首位**
+ *      （对原键输入的前缀打分与上色面不动），其后追加 `label 原文 全拼串 首字母串`
+ *      ⇒ 原键 / 中文原文 / 罗马字三类输入都命中；旧口径"自定义键 = 不补拼音"会把拼音检索
+ *      整段挡在这几路之外（作者用罗马字找中文函数名时搜不到它们），且中文原文输入也命不中
+ *      （原键不含中文时候选直接被 `continue` 丢弃）——两条都是本次要销的账；
+ * 2. **显示面仍是 `label` 原文**：本函数只写 `filterText`（匹配键），绝不碰 `label` / `insertText`
+ *    （上屏与落盘面；插入用 `insertText ?? label`，与 filterText 无关）。
  *
- * 纯 ASCII 标签（{@link pinyinKeysOf} 返 `undefined`）⇒ 不补：无可拼音键，不造噪声。
+ * 纯 ASCII 标签（{@link pinyinKeysOf} 返 `undefined`）⇒ 不补：无可拼音键，不造噪声
+ * （此时 source 自带键原样保留）。拼音键锚在 label 上——label 纯 ASCII 而自带键是中文时，
+ * 那枚中文键不自得拼音（今日全仓零路如此；`rankKey` 同样锚 label，两处口径一致）。
  */
 function withPinyinFilterText(item: Monaco.languages.CompletionItem): Monaco.languages.CompletionItem {
   const label = labelText(item.label);
-  if (item.filterText !== undefined && item.filterText !== label) return item;
   const keys = pinyinKeysOf(label);
   if (keys === undefined) return item;
-  return { ...item, filterText: `${label} ${keys.full} ${keys.initials}` };
+  const own = item.filterText;
+  if (own === undefined || own === label) return { ...item, filterText: `${label} ${keys.full} ${keys.initials}` };
+  return { ...item, filterText: `${own} ${label} ${keys.full} ${keys.initials}` };
 }
 
 /* ============================== 调用协议 → snippet / 签名 ============================== */
