@@ -2,6 +2,7 @@ import { errorText, pathKey } from '@kojo/plugin-api';
 import type { OpJournal } from '@kojo/plugin-api';
 import type * as MonacoRuntime from '../monaco/entry';
 import { loadCasePreservePref } from './search-query';
+import { applyStackedModelEdits } from './stacked-model-edits'; // STACKED-MODEL-EDITS：程序化写 model 的唯一上栈通道
 import {
   applyLineEdits,
   compileReplaceMatcher,
@@ -23,8 +24,8 @@ import type { MatchTarget, ReplaceOutcome, ReplaceRequest, SearchOptionsState } 
  * 替换执行器（宿主层装配）：把替换计划落成**两种通道**——与 `erb-rename.ts` 先例同形，
  * 且自 W8 XLANG-RENAME 起**共用同一条落盘通道**（`reference-utils.rewriteClosedFile`）：
  *
- * - **已打开**：Monaco live model 逐行现匹配 + **上栈通道**（`pushStackElement()` → `pushEditOperations`
- *   → `pushStackElement()`；脏标记由 model 自己给，撤销段由前后两个停点给——见 `applyReplaceEdits`）；
+ * - **已打开**：Monaco live model 逐行现匹配 + **共用上栈通道** `applyStackedModelEdits`（前停点 →
+ *   `pushEditOperations(null, …)` → 后停点；脏标记由 model 自己给，撤销段由两颗停点给）；
  *   model 从 Monaco 全局注册表取，**判等口径用全仓统一的 `pathKey`**（见 `pickModelByPathKey`：
  *   裸 `Uri.file` 精确匹配会让"另一种盘符写法"把开着且脏的标签判成关闭文件，替换就会读盘、
  *   写盘，绕过 live buffer）——EditorPane 只用 `Uri.file(path)` 建真文件 model，糖视图 model
@@ -238,27 +239,11 @@ interface ReplaceEditOperation {
 }
 
 /**
- * 把替换落点写进 live model，并让它在**撤销栈上自成一段**。
- *
- * 为什么不能走 `model.applyEdits()`（2026-10-21 数据丢失级缺陷的正解）：monaco.d.ts 对它的原话是
- * 「Edit the model **without adding the edits to the undo stack**. This can have dire consequences
- * on the undo stack! See @pushEditOperations for the preferred way.」——不进栈 ⇒ 作者按一次 Ctrl+Z
- * 退掉的是**自己上一次打字**，机器改动留在屏上撤不回。
- *
- * 前后两下 `pushStackElement()` 缺一不可：`EditStack._getOrCreateEditStackElement` 只要栈顶那格还
- * "开着"（`canAppend`）就把新编辑**并进同一格**，所以
- * - before：给作者上一次的打字/粘贴封口 ⇒ 替换不会被并进作者那一格（产品口径明确**不许**这个退化）；
- * - after：给替换自己封口 ⇒ 之后作者再打字另起一格，不会并进替换里。
- *
- * 光标：`beforeCursorState` 传 `null`、`cursorStateComputer` 返回 `null`（不替作者算新光标位），
- * 与 `disk-text-sync.applyDiskText` 同一条口径。零落点直接返回 ⇒ 栈上一位都不多占。
+ * 落 model 的通道**只有一条**：`applyStackedModelEdits`（STACKED-MODEL-EDITS 收口，2026-10-21）。
+ * 停点判据、为什么不能用 `applyEdits`、光标口径全部写在该模块头注里（本模块曾经自带一份
+ * `applyReplaceEdits`，与它逐字同形——同一条通道不该有两份实现，故收成一处并被守门测试钉住）。
+ * 真 monaco model 上的撤销段取证：`search-replace-exec-undo.test.ts`。
  */
-function applyReplaceEdits(model: MonacoRuntime.editor.ITextModel, ops: ReplaceEditOperation[]): void {
-  if (ops.length === 0) return;
-  model.pushStackElement();
-  model.pushEditOperations(null, ops, () => null);
-  model.pushStackElement();
-}
 
 /**
  * 组装替换执行器（browser 侧装配；单测打 `modelFor` + 假 io，绕开 Monaco 注册表）。
@@ -277,7 +262,7 @@ export function createFileReplaceRunner(
    */
   const registryUnsure = (): boolean => injected === undefined && monacoRuntime === null;
 
-  /** 已打开 model：逐行现匹配 → `applyReplaceEdits`（**上栈**：前后各一停点 ⇒ 本次替换 = 一步撤销） */
+  /** 已打开 model：逐行现匹配 → `applyStackedModelEdits`（**上栈**：前后各一停点 ⇒ 本次替换 = 一步撤销） */
   const replaceInModel = (
     model: MonacoRuntime.editor.ITextModel,
     m: ReplaceMatcher,
@@ -300,7 +285,7 @@ export function createFileReplaceRunner(
         });
       }
     }
-    applyReplaceEdits(model, ops);
+    applyStackedModelEdits(model, ops);
     return ops.length;
   };
 
@@ -486,7 +471,7 @@ export function createFileReplaceRunner(
         const v = planSingleReplacement(line, target.column - 1, matcher, template, expected, caseOpts);
         if (v.kind === 'skip') return outcome({ stale: 1, errors: [v.reason] });
         // 单条替换同样走上栈通道：一次 Ctrl+Z 只退这一处替换，作者此前的打字仍在栈上
-        applyReplaceEdits(open, [
+        applyStackedModelEdits(open, [
           {
             range: {
               startLineNumber: target.line,

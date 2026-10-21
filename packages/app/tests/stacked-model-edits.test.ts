@@ -169,5 +169,40 @@ describe('④接线钉子：EditorPane 的保存整理只剩共用通道（裸�
     expect(EDITOR_PANE).toContain("from './stacked-model-edits'");
   });
 
+  it('替换执行器同样从共用模块取（不另留第二份实现）', () => {
+    const exec = readFileSync(path.join(APP, 'src', 'ui', 'search-replace-exec.ts'), 'utf8');
+    expect(codeOf(exec)).not.toContain('pushEditOperations(');
+    expect(exec).toContain('applyStackedModelEdits(model, ops);');
+    expect(exec).toContain('applyStackedModelEdits(open, [');
+  });
 });
 
+describe('⑤全仓守门：pushEditOperations( 只许住在共用模块里', () => {
+  /** 逐字点名的既有第二通道（本批禁止改动；由 reload-merge-undo / disk-text-sync-eol 各自守着） */
+  const ALLOWED = new Set(['packages/app/src/ui/stacked-model-edits.ts', 'packages/app/src/ui/disk-text-sync.ts']);
+
+  function srcFiles(dir: string, out: string[] = []): string[] {
+    for (const name of readdirSync(dir)) {
+      if (name === 'node_modules' || name === 'dist' || name.startsWith('.')) continue;
+      const full = path.join(dir, name);
+      if (statSync(full).isDirectory()) srcFiles(full, out);
+      else if (/\.tsx?$/.test(name)) out.push(full);
+    }
+    return out;
+  }
+
+  it('除共用模块与点名的 disk-text-sync 外，任何 src 文件都不许直接调 pushEditOperations', () => {
+    const repoRoot = path.resolve(APP, '..', '..'); // packages/app → 仓库根
+    const offenders: string[] = [];
+    for (const file of srcFiles(path.join(repoRoot, 'packages'))) {
+      const rel = path.relative(repoRoot, file).replace(/\\/g, '/');
+      if (!/[\\/]src[\\/]/.test(rel)) continue; // 只看 src 面（测试与工具自有其通道）
+      if (ALLOWED.has(rel)) continue;
+      if (codeOf(readFileSync(file, 'utf8')).includes('pushEditOperations(')) offenders.push(rel);
+    }
+    expect(offenders, `新增裸调上栈的 src 文件：${offenders.join(', ')}`).toEqual([]);
+    // 守卫不许写成空转：共用模块本体必须真的有这条调用（前停点 → null → 后停点那一条）
+    const shared = readFileSync(path.join(repoRoot, 'packages/app/src/ui/stacked-model-edits.ts'), 'utf8');
+    expect(codeOf(shared)).toContain('model.pushEditOperations(null, ops, () => null);');
+  });
+});
