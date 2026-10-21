@@ -236,10 +236,15 @@ describe('④接线：merge 落地已换成差量（反向自证：改回 setVal
     expect(MERGE_BRANCH_CODE).not.toMatch(/\.setValue\(/);
   });
 
-  it('差量通道 import 仍在位（重载腿与合并腿共用同一模块，不许各自抄一份）', () => {
+  it('差量通道 import 仍在位（三条腿共用同一模块，不许各自抄一份）', () => {
     expect(SOURCE).toMatch(/import \{[^}]*applyDiskText[^}]*\} from '\.\/disk-text-sync'/);
-    const occurrences = SOURCE.match(/applyDiskText\(/g) ?? [];
-    expect(occurrences).toHaveLength(2); // applyReload 一处 + merge 一处
+    // 组长返工（2026-10-21 合流时）：原写法把 `applyDiskText(` 钉成恰好 2 处，
+    // FIX-ALL-UNDO-STACK 落地全角替换那处（第 3 条腿）后必红——计数钉的是数量不是通道。
+    // 改成按参数点名三条腿 + 禁 `setValue` 复发：再多一条合法腿也不会误红，也不许谁退回旧路。
+    expect(SOURCE).toContain('applyDiskText(live.model, text)'); // 重载腿
+    expect(SOURCE).toContain('applyDiskText(live.model, decision.text)'); // merge 腿
+    expect(SOURCE).toContain('applyDiskText(model, fixed)'); // 全角替换腿（FIX-ALL-UNDO-STACK）
+    expect(SOURCE).not.toMatch(/\.setValue\(/);
   });
 
   it('机理取证：同一段合并结果用 setValue 落地会清空整条栈（本批换掉的正是它）', () => {
