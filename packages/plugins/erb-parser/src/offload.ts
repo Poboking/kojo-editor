@@ -30,6 +30,7 @@ import { isErbDialectPath } from '@kojo/plugin-api';
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
 import { structureDiagnostic } from './structure-fix';
+import { scanFileRefs, type FileRefs } from './references';
 
 /** 任务 kind：纯解析一个 ERB 文件 */
 export const PARSE_FILE_TASK = 'erb.parseFile';
@@ -42,6 +43,14 @@ export const SCAN_FLOW_TASK = 'erb.scanControlFlow';
  * 就把整份文件重扫一遍，纯 CPU、纯数据，正是该搬进 worker 的那一类。
  */
 export const STRUCTURE_DECORATIONS_TASK = 'erb.structureDecorations';
+/**
+ * 任务 kind（REFS-WORKER，2026-10-21）：**反向引用批量扫描**（一批正文 + 项目名录 → 逐文件 `FileRefs`）。
+ *
+ * 这一段此前是全仓最后一块"整棵语料的纯 CPU 扫描留在主线程"的账（真语料快照未命中轮
+ * `refs scan 7,388ms`，见 STATE §二）。判据本体 `scanFileRefs` 一个字都不改，本文件只做
+ * "把 `hasName` 闭包换成**名录数据**"这一件事：worker 拿名录建 Set、按同一个 `hasName` 谓词扫。
+ */
+export const SCAN_REFS_TASK = 'erb.scanRefs';
 
 export interface ParseFilePayload {
   text: string;
@@ -50,6 +59,80 @@ export interface ParseFilePayload {
 
 export interface ScanFlowPayload {
   text: string;
+}
+
+/** 引用批扫的连接符（名字是 `\p{L}\p{N}_` 记号串，按判据不可能含换行；含了会被下面的条数自证抓住） */
+const NAME_JOIN = '\n';
+
+/**
+ * `erb.scanRefs` 的载荷（REFS-WORKER）。
+ *
+ * **名录为什么走"连接串 + 条数"而不是 `string[]`**：结构化克隆 99,030 枚字符串的**主线程序列化**
+ * 实测每次 8.6ms（整轮 37 块 ≈ 318ms），而 5.8MiB 单串只 1.4ms（整轮 ≈ 52ms）；整轮正文
+ * （183.5MiB / 96.2M 码元）本身序列化只 169ms ⇒ 名录才是那笔可省的固定税。
+ * 串到 worker 侧要 `split` + 建 Set（本机实测 190–300ms/槽，受后台负载影响），
+ * 按名录指纹缓存后**每槽每代只付一次**（4 槽并行摊到关键路径 ≈ 一次）。
+ * `namesCount` 是**条数自证**：拆出来条数不符（名字里真混进了连接符）就抛错 ⇒ 调用方回退内联老路径，
+ * 绝不用一份残缺名录去扫（宁慢不错，且不静默）。
+ */
+export interface ScanRefsPayload {
+  /** 名录摘要（与快照溯源位同一把尺：`snapshot.nameSetDigest`）；worker 侧按它缓存 Set */
+  namesFp: number;
+  /** 名录条数（split 后自证） */
+  namesCount: number;
+  /** 归一化名录，`\\n` 连接 */
+  namesJoined: string;
+  /** 待扫正文（与调用方给的路径数组同序；空串是"读失败位"，由调用方就地剔掉，不进本载荷） */
+  texts: string[];
+}
+
+/** 名录 Set 的跨请求缓存（单槽一份；指纹变了自然作废） */
+let refsNameCache: { fp: number; set: ReadonlySet<string> } | null = null;
+
+function refsNameSetOf(payload: ScanRefsPayload): ReadonlySet<string> {
+  if (refsNameCache !== null && refsNameCache.fp === payload.namesFp) return refsNameCache.set;
+  // 空名录是合法输入（这一轮项目里一个函数都没有）；`''.split('\n')` 会得 `['']`，
+  // 所以条数自证要在**空表**上单独判，不能拿 split 的结果去比。
+  const parts = payload.namesCount === 0 ? [] : payload.namesJoined.split(NAME_JOIN);
+  if (parts.length !== payload.namesCount) {
+    throw new Error(
+      `refs name set unusable: split produced ${parts.length} entries for namesCount ${payload.namesCount}`,
+    );
+  }
+  const set = new Set(parts);
+  refsNameCache = { fp: payload.namesFp, set };
+  return set;
+}
+
+/**
+ * 批量引用扫描（**纯函数**，两侧共用同一份 ⇒ 有 worker / 无 worker 同产出）。
+ *
+ * `hasName` 由名录 Set 现拼，谓词与主线程侧 `byName.has(upper)` 逐位同判据；
+ * 扫描本体是 `references.ts:scanFileRefs`，本函数不掺任何判据（等价对拍见
+ * `tests/refs-offload-equiv.test.ts`）。
+ */
+export function scanRefsBatch(payload: ScanRefsPayload): FileRefs[] {
+  const names = refsNameSetOf(payload);
+  return payload.texts.map((text) => scanFileRefs(text, (upper: string) => names.has(upper)));
+}
+
+/** 观测面：当前槽是否已持有名录 Set（一次性取证用，不参与判据） */
+export function refsNameCacheState(): { fp: number; size: number } | null {
+  return refsNameCache === null ? null : { fp: refsNameCache.fp, size: refsNameCache.set.size };
+}
+
+/** 载荷的名录三位（每轮构建算一次、逐块复用同一枚串，不逐块重连） */
+export type ScanRefsNamesPart = Pick<ScanRefsPayload, 'namesFp' | 'namesCount' | 'namesJoined'>;
+
+/**
+ * 名录三位组装（**连接符与条数只在这一处定形**，宿主与 worker 不许各写一遍）。
+ *
+ * `names` 传索引的 `byName.keys()`；调用方按轮缓存返回值再逐块 `{ ...names, texts }` ——
+ * 99,030 名 `join` 一次约 5ms，逐块重连会把这条税又交回主线程（实测见交付读数）。
+ */
+export function scanRefsNamesOf(namesFp: number, names: Iterable<string>): ScanRefsNamesPart {
+  const parts = [...names];
+  return { namesFp, namesCount: parts.length, namesJoined: parts.join(NAME_JOIN) };
 }
 
 /**
@@ -69,6 +152,7 @@ export function erbStructureDecorations({ path, text }: EditorDecoratePayload): 
 export const erbParserTasks: ComputeTaskTable = {
   [PARSE_FILE_TASK]: ((payload: ParseFilePayload) => parseErbText(payload.text, payload.path)) as never,
   [SCAN_FLOW_TASK]: ((payload: ScanFlowPayload): ControlFlowStatement[] => scanControlFlow(payload.text)) as never,
+  [SCAN_REFS_TASK]: ((payload: ScanRefsPayload): FileRefs[] => scanRefsBatch(payload)) as never,
   [STRUCTURE_DECORATIONS_TASK]: ((payload: EditorDecoratePayload): LineDecoration[] =>
     erbStructureDecorations(payload)) as never,
 };

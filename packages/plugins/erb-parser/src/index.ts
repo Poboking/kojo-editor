@@ -37,11 +37,14 @@ export {
 export {
   PARSE_FILE_TASK,
   SCAN_FLOW_TASK,
+  SCAN_REFS_TASK,
   STRUCTURE_DECORATIONS_TASK,
   erbParserTasks,
   erbStructureDecorations,
+  scanRefsBatch,
   type ParseFilePayload,
   type ScanFlowPayload,
+  type ScanRefsPayload,
 } from './offload';
 // 索引快照（纯函数；增量复扫的判据与合并逻辑）
 export {

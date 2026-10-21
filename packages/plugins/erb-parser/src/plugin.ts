@@ -21,11 +21,15 @@ import { idleIndexState, indexStateOf, sourceFactsOf, type IndexOutcome, type So
 import {
   PARSE_FILE_TASK,
   SCAN_FLOW_TASK,
+  SCAN_REFS_TASK,
   STRUCTURE_DECORATIONS_TASK,
   erbParserTasks,
   erbStructureDecorations,
+  scanRefsNamesOf,
   type ParseFilePayload,
   type ScanFlowPayload,
+  type ScanRefsNamesPart,
+  type ScanRefsPayload,
 } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkControlFlowStructure } from './structure';
@@ -129,6 +133,22 @@ const SLICE_MS = 8;
  * （≈ 一帧 4MB 级 IPC 载荷），解析段/引用段的读盘就此从"每文件两趟 IPC"变成"每批一趟"。
  */
 const READ_BATCH = 64;
+
+/**
+ * 引用段进并行通道的**最小批量**（REFS-WORKER，2026-10-21）。
+ *
+ * 真语料 crossover 实测（node 桥、同进程同内存态、名录 99,030 名）：单请求往返
+ * 1 棵 64.9ms / 8 棵 42.9ms / 16 棵 58.8ms，同期内联 1.0 / 19.5 / 24.3ms ⇒ 小批进 worker
+ * 只多付一次名录序列化，**净亏**；32 棵起内联已到 83ms（主线程），而序列化只 5.5ms。
+ * 门槛取 16：热轮"改一棵"（最常见的那一支）留在内联、墙钟零回退，批量巡检走通道。
+ */
+const REFS_OFFLOAD_MIN_FILES = 16;
+/**
+ * 引用段的**在途块数**（同上实测：窗 1＝3,522ms 墙钟＝零提速，窗 2＝1,956ms、窗 4＝1,765ms、
+ * 窗 8＝1,441ms）。取 4 = 池容量（与解析段 `PARSE_CONCURRENCY` 同口径）：再开窗只是把在途载荷
+ * 翻倍（每块 ≈5MiB 正文 + 5.8MiB 名录），那笔收益归"运输层槽数"这条线，不在本批顺手要内存。
+ */
+const REFS_WINDOW = 4;
 
 /** 一趟批量读的产出形态（失败位 null，与逐文件 readText 抛错同语义面） */
 type BatchTexts = Awaited<ReturnType<FileIO['readTexts']>>;
@@ -615,20 +635,82 @@ export function createErbParserPlugin(): Plugin {
           }
         }
         const refsToScan = provenanceToScan.length > 0 ? [...freshToScan, ...provenanceToScan] : freshToScan;
+        /* ---------------- REFS-WORKER（2026-10-21）：引用段整块进并行通道 ----------------
+         * 扫描本体仍是 `references.ts:scanFileRefs`，**判据一个字没动**：这里只是把
+         * `hasName` 那枚闭包换成"名录数据"（`erb.scanRefs` 的 worker 侧用同一份 `byName`
+         * 键集建 Set，谓词逐位同 `byName.has(upper)`）。三条路径（有通道 / 无通道 / 通道挂了）
+         * 共用 `scanRefsBatch` ⇒ 产出逐条目全等，对拍见 `tests/refs-offload-equiv.test.ts`。
+         *
+         * - **IO 仍不搬**（铁律同解析段）：读盘走既有 `readBatchesPipelined` 双缓冲；
+         * - 在途 `REFS_WINDOW` 块：一块在反序列化时另一块已在 worker 里扫 ⇒ 这才是真并行
+         *   （窗 1 实测＝零提速，见常量注）；
+         * - 不足 `REFS_OFFLOAD_MIN_FILES` 的块留在主线程内联：热轮"改一棵"那一支**墙钟零回退**；
+         * - 任何一环不对（载荷自证不符 / 产出条数不符 / offload 抛）⇒ 该块**原样退回内联老路径**
+         *   并出一声 warn（宁慢不错、不静默）；
+         * - `refsByPath` 按路径回位 ⇒ 完成顺序不影响聚合（`buildReferenceIndex` 按 walk 序取数）。
+         */
+        let refsNamesPart: ScanRefsNamesPart | null = null;
+        const refsOffloadStat = { offload: 0, inline: 0, fallback: 0, files: 0 };
+        const refsInFlight: Promise<void>[] = [];
+        const dispatchRefsChunk = async (chunk: readonly string[], texts: BatchTexts): Promise<void> => {
+          const paths: string[] = [];
+          const bodies: string[] = [];
+          for (let k = 0; k < chunk.length; k++) {
+            const path = chunk[k]!;
+            const tf = texts[k];
+            if (!tf) {
+              ctx.log.warn(`Refs scan skipped (reread failed): ${path}`);
+              continue;
+            }
+            paths.push(path);
+            bodies.push(tf.text);
+          }
+          if (paths.length === 0) return;
+          /** 老路径（也是所有回退的落点）：主线程直接扫，谓词就是索引本身 */
+          const scanInline = (): void => {
+            for (let i = 0; i < paths.length; i++) refsByPath.set(paths[i]!, scanFileRefs(bodies[i]!, hasName));
+          };
+          if (paths.length < REFS_OFFLOAD_MIN_FILES) {
+            refsOffloadStat.inline++;
+            refsOffloadStat.files += paths.length;
+            scanInline();
+            return;
+          }
+          refsNamesPart ??= scanRefsNamesOf(namesFp, byName.keys());
+          refsOffloadStat.offload++;
+          refsOffloadStat.files += paths.length;
+          const task = compute
+            .offload<FileRefs[]>(SCAN_REFS_TASK, { ...refsNamesPart, texts: bodies } satisfies ScanRefsPayload)
+            .then(
+              (batch) => {
+                const got: unknown = batch;
+                if (!Array.isArray(got) || got.length !== paths.length) {
+                  refsOffloadStat.fallback++;
+                  ctx.log.warn(
+                    `Refs offload returned a mismatched batch (got ${
+                      Array.isArray(got) ? String(got.length) : typeof got
+                    } for ${paths.length} files); scanned inline`,
+                  );
+                  scanInline();
+                  return;
+                }
+                for (let i = 0; i < paths.length; i++) refsByPath.set(paths[i]!, got[i] as FileRefs);
+              },
+              (err: unknown) => {
+                refsOffloadStat.fallback++;
+                ctx.log.warn(
+                  `Refs offload failed (${paths.length} file(s), scanned inline): ${String(err)}`,
+                );
+                scanInline();
+              },
+            );
+          refsInFlight.push(task);
+          if (refsInFlight.length >= REFS_WINDOW) await refsInFlight.shift();
+        };
         await readBatchesPipelined(refsToScan, async (chunk, texts) => {
-          await compute.runSliced(
-            chunk,
-            { concurrency: STAT_CONCURRENCY, sliceMs: SLICE_MS, priority: 'background', label: 'index.refs' },
-            async (path, k) => {
-              const tf = texts[k];
-              if (!tf) {
-                ctx.log.warn(`Refs scan skipped (reread failed): ${path}`);
-                return;
-              }
-              refsByPath.set(path, scanFileRefs(tf.text, hasName));
-            },
-          );
+          await dispatchRefsChunk(chunk, texts);
         });
+        await Promise.all(refsInFlight);
         const refsScanMs = Date.now() - refsStartedAt;
 
         /**
@@ -686,6 +768,16 @@ export function createErbParserPlugin(): Plugin {
             `键 ${salvaged === null ? '-' : salvaged.key})`,
         );
 
+        /**
+         * 引用段的**运输面**单独一行（REFS-WORKER）：`refs scan` 那条读数不区分"在主线程扫的"
+         * 与"在 worker 里扫的"，而这一区分正是本批的判据面（内联块数 = 小批门槛外还剩多少、
+         * 回退块数 = 通道不健康的证据）。零块就是 0，不静默也不刷屏。
+         */
+        ctx.log.info(
+          `  index refs: ${refsOffloadStat.offload} chunk(s) offloaded / ${refsOffloadStat.inline} inline / ` +
+            `${refsOffloadStat.fallback} fallback (files ${refsOffloadStat.files} of ${refsToScan.length}, ` +
+            `window ${REFS_WINDOW}, min ${REFS_OFFLOAD_MIN_FILES})`,
+        );
         // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）
         const snapshotDirty =
           needsRewrite ||
