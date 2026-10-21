@@ -180,3 +180,69 @@ describe('kojoReferencesAt', () => {
     expect(locations).toEqual([]);
   });
 });
+
+/* ============================================================================
+ * K2-PRE-REUSE ⑤ · CJK / 全角拉丁函数名的引用与改名（2026-10-21）
+ *
+ * 与 `definition.test.ts` 的同批块分工：那一块钉「定义」腿的字符集断链，这一块钉
+ * 「引用 / 改名」腿对同一类名字的闭环——取词尺（`unicodeTokenAt` / `MODEL_TOKEN_CLASS`）
+ * 本就认 CJK 与全角拉丁，判据是"原生直通块里的汉字 / 全角函数头"这类形态也走得通
+ * 探针法的全链路（产物名钉取 → 引用集 → 整卷复核）。
+ * ========================================================================== */
+
+describe('kojoReferencesAt · 原生直通块里的 CJK / 全角函数头（K2-PRE-REUSE ⑤）', () => {
+  /** 两个原生块：第二个 CALL 第一个的头名（规范 §3.10 整块透传） */
+  const nativeFixture = (name: string): string[] => [
+    '角色: 101',
+    '',
+    `@${name}`,
+    '#FUNCTION',
+    'RETURN 1',
+    '#FUNCTIONEND',
+    '',
+    '@主流程',
+    '#FUNCTION',
+    `CALL ${name}`,
+    '#FUNCTIONEND',
+  ];
+
+  for (const name of ['好感度检查', 'パラメータ検査', 'Ｃ絶頂']) {
+    it(`引用集含 @ 头与 CALL 行：\`${name}\``, () => {
+      const src = nativeFixture(name).join('\n');
+      const locations = kojoReferencesAt({ source: src, path: 't.kojo', line: 10, column: 6, transpile });
+      expect(locations.map((l) => ({ line: l.line, column: l.column }))).toEqual([
+        { line: 3, column: 2 }, // @ 头自身（源第 3 行，名字在第 2 列）
+        { line: 10, column: 6 }, // CALL 行（源第 10 行，名字在第 6 列）
+      ]);
+    });
+  }
+});
+
+describe('planKojoRename · 全角拉丁函数名（K2-PRE-REUSE ⑤）', () => {
+  const FIXTURE_FW = [
+    '; 全角函数名夹具',
+    '角色: 101',
+    '函数前缀: K101_',
+    '',
+    '函数 Ｃ計数()：',
+    '    返回 1',
+    '',
+    '函数 记录()：',
+    '    调用 Ｃ計数()',
+    '',
+  ].join('\n');
+
+  it('全角名整串命中：定义点 + 调用点进编辑集，产物名 K101_Ｃ計数 → K101_Ｃ改称', () => {
+    const plan = planKojoRename({ source: FIXTURE_FW, path: 't.kojo', line: 5, column: 4, newName: 'Ｃ改称', transpile });
+    expect(plan.kind).toBe('hit');
+    if (plan.kind !== 'hit') return;
+    expect(plan.edits.map((e) => e.line)).toEqual([5, 9]);
+    expect(plan.productName).toBe('K101_Ｃ計数');
+    expect(plan.oldName).toBe('Ｃ計数');
+  });
+
+  it('引用查询同判据：全角名的引用集 = 定义点 + 调用点', () => {
+    const locations = kojoReferencesAt({ source: FIXTURE_FW, path: 't.kojo', line: 5, column: 4, transpile });
+    expect(locations.map((l) => l.line)).toEqual([5, 9]);
+  });
+});

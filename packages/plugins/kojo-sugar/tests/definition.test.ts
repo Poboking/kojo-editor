@@ -6,6 +6,10 @@
  * ② 名字来自别处（复用项目 ERB 索引 `byName`）。本文件两条腿都钉：前者用**桩转译结果**
  * 精确驱动（含"生成头无源行 → 向下取最近有源行"与"不得越过下一个函数"两种边界），
  * 后者用真转译产物验证"真实 codegen 造出的头，`findGeneratedHeaderLine` 找得到"。
+ *
+ * 文件尾追加 K2-PRE-REUSE ⑤ 面：**CJK / 全角拉丁函数头自证**——取词尺与头名尺统一到
+ * `identifier-chars` 名字字符集后的红→绿用例、ASCII 逐字不变回归、全角标点 / 全角
+ * 数字负断言。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -156,12 +160,13 @@ describe('resolveKojoDefinition · fail-visible 负例（绝不猜、不崩）',
     expect(call('CALL NOPE|_X(1)\n', 'CALL NOPE_X(1)\n')).toEqual([]);
   });
 
-  it('光标在空白 / 关键字 / CJK 上 → 空数组', () => {
+  it('光标在空白 / 关键字 / 未收录的词上 → 空数组', () => {
     // 空白：注释行里的空格（左右都不是记号字符）
     expect(call('; |调用别处的库函数\nCALL LIB_FUNC(1)\n', '; 调用别处的库函数\nCALL LIB_FUNC(1)\n')).toEqual([]);
     // 关键字 `CALL` 本身不是函数名（不在 byName 里）
     expect(call('CALL| LIB_FUNC(1)\n', 'CALL LIB_FUNC(1)\n')).toEqual([]);
-    // CJK
+    // 未收录的中文词：K2-PRE-REUSE ⑤ 起 CJK 词**取得出整串**（这里是 `指令`），
+    // 空数组的成因由"取不出词"变成"索引里没有这个名字"——断言不变，理由改写
     expect(call('时机 |指令 310：\n', '时机 指令 310：\n')).toEqual([]);
   });
 
@@ -265,5 +270,164 @@ describe('findGeneratedHeaderLine · 与真实 codegen 同源', () => {
         expect(loc.column).toBeLessThanOrEqual(line!.length + 1);
       }
     }
+  });
+});
+
+/* ============================================================================
+ * K2-PRE-REUSE ⑤ · CJK / 全角拉丁函数头自证（2026-10-21）
+ *
+ * 改前的病（两条尺各只认 ASCII，断在同一环上）：
+ * - **取词尺**：`symbolTokenAt` 缺省 ASCII 集 ⇒ 光标在中文 / 日文 / 全角拉丁函数名上
+ *   取不出整串（`CALL 好感度检查` 量出 `undefined`）⇒ 请求直接空数组；
+ * - **头名尺**：`^@([A-Za-z0-9_]+)` ⇒ 就算取得出，产物里的 `@好感度检查` 也匹配不上。
+ * 两条都是"作者明明写对了，却被告知没有定义"。
+ *
+ * 改后：两把尺统一到 `identifier-chars` 单一真源派生的**名字字符集**（ASCII 字母
+ * 数字下划线 + CJK + 全角拉丁字母；明确不收全角标点 / 全角数字 / `$`）。本块钉
+ * 三面：红→绿自证用例、ASCII 逐字不变、全角标点 / 全角数字负断言。
+ * ========================================================================== */
+
+describe('resolveKojoDefinition · CJK / 全角拉丁函数头自证（K2-PRE-REUSE ⑤）', () => {
+  const service = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
+
+  /** 真转译依赖（自证腿不查索引：`index: () => null`——折不回就本该没有答案） */
+  const realDeps = (result: SugarTranspileResult): KojoDefinitionDeps => ({
+    transpile: () => result,
+    sourceOf: (r, g) => service.sourceOf(r, g),
+    sourceColumnOf: (r, g, c) => service.sourceColumnOf(r, g, c),
+    index: () => null,
+  });
+
+  /**
+   * 夹具：两个**原生直通块**（规范 §3.10，`@头` 整块透传）——头名即函数名，第二块
+   * `CALL` 第一块的头名。期望：光标在 CALL 上，自证腿折回第一个 `@头` 的**源行 4**
+   * （原生块所有行的源行都记在块首，`codegen` 的 `pushRaw` 既定口径）。
+   */
+  const nativeFixture = (name: string): string[] => [
+    '角色: 101',
+    '口上色: 0x88AACC',
+    '',
+    `@${name}`,
+    '#FUNCTION',
+    'RETURN 1',
+    '#FUNCTIONEND',
+    '',
+    '@主流程',
+    '#FUNCTION',
+    `CALL ${name}`,
+    '#FUNCTIONEND',
+  ];
+
+  /** 在全文第 `line` 行名字首字符处插光标标记（`requestAt` 的 `marked` 契约） */
+  const markedAt = (text: string, line: number, name: string): string => {
+    const lines = text.split('\n');
+    const at = lines[line - 1]!.indexOf(name);
+    expect(at, `第 ${line} 行应含 「${name}」`).toBeGreaterThanOrEqual(0);
+    lines[line - 1] = `${lines[line - 1]!.slice(0, at)}|${lines[line - 1]!.slice(at)}`;
+    return lines.join('\n');
+  };
+
+  const CASES = [
+    ['好感度检查', '汉字'],
+    ['パラメータ検査', '片假名 + 汉字（日文）'],
+    ['Ｃ絶頂', '全角拉丁 + 汉字'],
+    ['SHOW_上半身内衣', 'ASCII + 汉字混排'],
+  ] as const;
+
+  for (const [name, label] of CASES) {
+    it(`${label}：\`CALL ${name}\` 自证折回 \`@${name}\` 的源行`, () => {
+      const src = nativeFixture(name).join('\n');
+      const result = service.transpile(src, { filePath: KOJO });
+      expect(result.diagnostics.some((d) => d.severity === 'error')).toBe(false);
+      // 产物里确有这个 @ 头（原生块逐字透传）；找不到即本用例无的放矢
+      expect(findGeneratedHeaderLine(result.erb, name)).toBeGreaterThan(0);
+      const locs = resolveKojoDefinition(requestAt(src, markedAt(src, 11, name)), realDeps(result));
+      expect(locs).toHaveLength(1);
+      const [loc] = locs;
+      expect(loc!.filePath).toBe(KOJO);
+      expect(loc!.line).toBe(4);
+      if (loc!.column !== undefined) {
+        expect(loc!.column).toBeGreaterThanOrEqual(1);
+        expect(loc!.column).toBeLessThanOrEqual(nativeFixture(name)[3]!.length + 1);
+      }
+    });
+  }
+
+  it('全角小写引用折叠成全角大写键：`CALL ｃ絶頂` 命中产物头 `@Ｃ絶頂`（大小写不敏感扩到全角）', () => {
+    const result = stubResult(['@Ｃ絶頂', '\tRETURN 1'], [[1, 3], [2, 4]]);
+    const text = 'CALL ｃ絶頂\n';
+    const locs = resolveKojoDefinition(requestAt(text, 'CALL |ｃ絶頂'), depsOf(result, null));
+    expect(locs).toEqual([{ filePath: KOJO, line: 3 }]);
+  });
+
+  it('索引腿：汉字库函数名（本文件不产出）→ byName 命中定义行', () => {
+    const result = stubResult(['@M_KOJO_K101_X', '\tRETURN 1'], [[1, null], [2, 3]]);
+    const index = indexOf({ LIB_充填率: [{ filePath: LIB, startLine: 42 }] });
+    const text = 'CALL LIB_充填率(1)\n';
+    const locs = resolveKojoDefinition(requestAt(text, 'CALL LIB_|充填率(1)'), depsOf(result, index));
+    expect(locs).toEqual([{ filePath: LIB, line: 42 }]);
+  });
+
+  it('索引腿：日文函数名多处定义 → 全部返回（与 ASCII 重名行为同形）', () => {
+    const result = stubResult(['@OTHER', '\tRETURN 1'], [[1, null], [2, 2]]);
+    const index = indexOf({
+      パラメータ検査: [
+        { filePath: LIB, startLine: 17 },
+        { filePath: 'C:\\game\\lib2.ERB', startLine: 3 },
+      ],
+    });
+    const text = 'CALL パラメータ検査(1)\n';
+    const locs = resolveKojoDefinition(requestAt(text, 'CALL |パラメータ検査(1)'), depsOf(result, index));
+    expect(locs.map((l) => l.line)).toEqual([17, 3]);
+  });
+});
+
+describe('resolveKojoDefinition · 全角标点 / 全角数字负断言（K2-PRE-REUSE ⑤）', () => {
+  const result = stubResult(['@OTHER', '\tRETURN 1'], [[1, null], [2, 2]]);
+
+  it('全角标点混入的名字取不出整串：索引里躺着 `充填，率` 也查不到（token 止步于 `，`）', () => {
+    const index = indexOf({ '充填，率': [{ filePath: LIB, startLine: 5 }] });
+    const text = 'CALL 充填，率(1)\n';
+    const locs = resolveKojoDefinition(requestAt(text, 'CALL |充填，率(1)'), depsOf(result, index));
+    expect(locs).toEqual([]);
+  });
+
+  it('全角数字混入的名字取不出整串：`指令３１０` 只取得出 `指令`（３＝U+FF13 不在名字集）', () => {
+    const index = indexOf({
+      指令３１０: [{ filePath: LIB, startLine: 5 }],
+      指令: [{ filePath: 'C:\\game\\lib2.ERB', startLine: 9 }],
+    });
+    const text = 'CALL 指令３１０()\n';
+    // 光标在 `指` 上：token = `指令` ⇒ 命中 lib2 的 `指令`，**不是** `指令３１０`
+    const locs = resolveKojoDefinition(requestAt(text, 'CALL |指令３１０()'), depsOf(result, index));
+    expect(locs).toEqual([{ filePath: 'C:\\game\\lib2.ERB', line: 9 }]);
+  });
+
+  it('头名侧同口径：含全角标点 / 全角数字的名字匹配不上 `@` 头（宁可不给答案）', () => {
+    expect(findGeneratedHeaderLine('@充填，率\n\tRETURN 1\n', '充填，率')).toBeNull();
+    expect(findGeneratedHeaderLine('@指令３１０\n\tRETURN 1\n', '指令３１０')).toBeNull();
+    // 干净名对干净头照旧命中（负断言只针对"混入"的那一侧）
+    expect(findGeneratedHeaderLine('@充填率\n\tRETURN 1\n', '充填率')).toBe(1);
+  });
+});
+
+describe('findGeneratedHeaderLine · 名字字符集面（K2-PRE-REUSE ⑤）', () => {
+  it('ASCII 口径逐字不变：裸名 / 带参数声明 / 停在不收录字符 / 整串相等才命中', () => {
+    expect(findGeneratedHeaderLine('@FOO\n', 'FOO')).toBe(1);
+    expect(findGeneratedHeaderLine('@FOO(ARG,ARG:1)\n', 'FOO')).toBe(1); // 参数声明段不碍事
+    expect(findGeneratedHeaderLine('@FOO BAR\n', 'FOO')).toBe(1); // 空白截断（旧口径）
+    expect(findGeneratedHeaderLine('@FOO_BAR\n', 'FOO')).toBeNull(); // 前缀不等于整串
+    expect(findGeneratedHeaderLine('@FOO\n', 'FO')).toBeNull();
+    expect(findGeneratedHeaderLine('\t@INDENTED\n', 'INDENTED')).toBeNull(); // 带缩进不是函数头
+    expect(findGeneratedHeaderLine('@FOO$BAR\n', 'FOO')).toBe(1); // `$` 仍不收：截在 `$`（旧口径）
+    expect(findGeneratedHeaderLine('@FOO$BAR\n', 'FOO$BAR')).toBeNull();
+  });
+
+  it('CJK / 全角拉丁整串命中（汉字 / 假名 / 全角字母 / 混排，带参数声明亦可）', () => {
+    expect(findGeneratedHeaderLine('@好感度检查\n', '好感度检查')).toBe(1);
+    expect(findGeneratedHeaderLine('@パラメータ\n', 'パラメータ')).toBe(1);
+    expect(findGeneratedHeaderLine('@Ｃ絶頂\n', 'Ｃ絶頂')).toBe(1);
+    expect(findGeneratedHeaderLine('@SHOW_上半身内衣(ARG)\n', 'SHOW_上半身内衣')).toBe(1);
+    expect(findGeneratedHeaderLine('@漢々柿\n', '漢々柿')).toBeNull(); // 々＝U+3005（叠字符号）不在名字集：与 `identifier-chars` 口径逐字一致
   });
 });

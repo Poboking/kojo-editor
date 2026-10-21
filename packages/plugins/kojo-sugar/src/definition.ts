@@ -6,6 +6,7 @@ import type {
   SugarTranspileResult,
 } from '@kojo/plugin-api';
 import { symbolTokenAt } from '@kojo/plugin-api';
+import { IDENT_NAME_CHARS, isIdentNameChar } from './identifier-chars';
 
 /**
  * `.kojo` 转到定义（2026-10-15 语言服务批）。
@@ -40,12 +41,27 @@ export interface KojoDefinitionDeps {
 /** 折回时问列级映射用的产物列：**行首**（列 1）= "这一行映射到的源起点"，不依赖任何自算的字符宽度 */
 const LINE_HEAD_COLUMN = 1;
 
+/**
+ * 产物函数头的名字字符类（`@` 之后连续的名字字符）——与光标取词**同一把尺**
+ * （`identifier-chars` 单一真源派生的 {@link IDENT_NAME_CHARS}）：ASCII 字母数字
+ * 下划线 + CJK（平假名 / 片假名 / 汉字 / 扩展 A）+ 全角拉丁字母，**明确不收**
+ * 全角标点 / 全角数字 / `$`。
+ *
+ * 为什么必须同尺：本模块的自证腿是「光标处取到的名字 → 在产物里找同名 `@` 头」。
+ * 两把尺漂移的表现就是病本身——取词尺收 ASCII 时中文名取不出整串（旧代码：
+ * `symbolTokenAt` 缺省集），头名尺收 ASCII 时取出了也找不到头（旧代码：
+ * `^@([A-Za-z0-9_]+)`）——两条都是"作者明明写对了，却被告知没有定义"。
+ * ASCII 侧逐字不变：新类 = 旧类 `[A-Za-z0-9_]` + CJK + 全角拉丁，一个 ASCII
+ * 字符的判定结果都没动（数字允许打头亦保留旧口径）。
+ */
+const HEADER_NAME_RE = new RegExp(`^@([${IDENT_NAME_CHARS}]+)`);
+
 /** `.kojo` 产物里的函数定义头：`@NAME` 或 `@NAME(...)`（`参数:` 声明段可有可无） */
 export function findGeneratedHeaderLine(erb: string, name: string): number | null {
   const wanted = name.toUpperCase();
   const lines = erb.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    const m = /^@([A-Za-z0-9_]+)/.exec(lines[i]!);
+    const m = HEADER_NAME_RE.exec(lines[i]!);
     if (m && m[1]!.toUpperCase() === wanted) return i + 1;
   }
   return null;
@@ -80,7 +96,11 @@ export function resolveKojoDefinition(
 ): EditorSymbolLocation[] {
   const lineText = lineTextOf(request.text, request.line);
   if (lineText === undefined) return [];
-  const token = symbolTokenAt(lineText, request.column);
+  // 取词尺 = 头名尺（`isIdentNameChar`，见 {@link HEADER_NAME_RE} 注）：中文 / 日文 /
+  // 全角拉丁的函数名要整串取得出，"名字 → 产物 @ 头"才闭得上环。ASCII 侧与旧缺省
+  // 集逐字同一（都只认 `[A-Za-z0-9_]`）；列口径（1 基、尾后一格命中、越界不猜）
+  // 仍是 `symbolTokenAt` 原函数，未动。
+  const token = symbolTokenAt(lineText, request.column, isIdentNameChar);
   if (!token) return [];
   const name = token.text.toUpperCase();
 

@@ -48,3 +48,25 @@ export function isIdentStart(ch: string): boolean {
 export function isIdentPart(ch: string): boolean {
   return IDENT_PART_RE.test(ch);
 }
+
+/**
+ * 「函数头名 / 光标取词」共用的**名字字符**类源（起始集 + `0-9`；**刻意不含
+ * `$`**、不含全角标点 / 全角数字——与文件头注的口径逐字一致）。
+ *
+ * 为什么有这一张（K2-PRE-REUSE ⑤）：`.kojo` 侧「名字 → 产物函数头」的自证闭环
+ * （`definition.ts`）要求**取词尺与头名尺是同一套字符**——两处各写一个集，就会
+ * 重现本批修的病：中文 / 日文函数名在光标处取不出整串、或取出了却在产物里找不到
+ * `@` 头，作者看到的是"没有定义"。
+ *
+ * 为什么不是 {@link isIdentPart}：那个集含字符串变量后缀 `$`（`实参$` 的写法），
+ * 而函数名引用与 `@` 头都不收它（`$` 起首的 `$LABEL` 归标签腿）。数字允许打头
+ * 是逐字保留旧头名正则 `[A-Za-z0-9_]+` 的历史口径——ASCII 行为不变是本批硬判据。
+ */
+export const IDENT_NAME_CHARS = `${IDENT_CHARS}0-9`;
+
+const IDENT_NAME_CHAR_RE = new RegExp(`[${IDENT_NAME_CHARS}]`);
+
+/** 名字字符判定（头名正则组装与 `symbolTokenAt` 取词共用同一枚谓词） */
+export function isIdentNameChar(ch: string): boolean {
+  return IDENT_NAME_CHAR_RE.test(ch);
+}
