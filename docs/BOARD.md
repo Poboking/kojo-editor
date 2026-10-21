@@ -25,13 +25,13 @@
 
 ## 在办 · Kojo 2.0（设计基线 v0.9 · 2026-10-21 立项）
 
-> **依据**：`D:\DSH\kojo语言设计\Kojo-2.0-语法设计稿.md` v0.9 + `Kojo-2.0-重构任务清单.md` v0.9（**暂存本机、未入库**，K2-D0 负责入库）。Phase2 批注版 v0.5 已被 v0.9 取代，仅其「SDK 评估」附录留档。
+> **依据**：`docs/KOJO-2.0-LANGUAGE-SPEC.md`（v0.9 设计稿 + 任务清单**合并入库版**；本机原两稿自此由该文档取代，Phase2 批注版 v0.5 不入库）。
 > **用户已定（2026-10-21）**：① 开发期旧 `.kojo` 前端与 2.0 前端**并存**，发布态仍是单一模式，由 `K2-CUTOVER` 单批收口；② 旧前端只修**会被 2.0 复用的后端面**（`K2-PRE-REUSE`），会被 2.0 前端整体替换的问题改写进设计约束；③ 看板按包/文件粒度拆行。
 > **顺序**：`K2-D0` → `K2-CONTRACT` → `K2-CORE-PKG` → `K2-LEX` / `K2-PARSE` → `K2-LOWER-*` / `K2-PROGRAM` / `K2-STORAGE` → `K2-PROJECT` / `K2-SEM` / `K2-ADAPTER-*` → `K2-TS` / `K2-MONARCH` / `K2-PROVIDERS` / `K2-FORMAT` → `K2-MIGRATOR` → `K2-MIGRATION-CORPUS` → `K2-CUTOVER` → `K2-RELEASE`。并行点：ADAPTER-* 与 LOWER-* 在契约冻结后并行；TS 重写可与 LEX/PARSE 并行；`K2-PRE-REUSE` 不依赖 D0，可先开。
 
 | ID | 任务（落点） | 关键判据 / 已实测事实 | 状态 |
 |---|---|---|---|
-| K2-D0 | **设计冻结与结构裁决**：设计稿入库（`docs/` 位置与命名，建议 `docs/KOJO-2.0-LANGUAGE-SPEC.md`）；确认 D0.1–D0.11 + 追加 4 项：core 包归属与 audit 放行、项目级分析层、存储期分配器、多时机拆文件形态；定旧前端退役时点 | 决策逐条落字（设计稿或 ADR）；`docs/` 出现可引用的 2.0 规格；C1 开工前无悬空结构问题；D0 未过不得开 K2-LEX/K2-PARSE | 认领：lead 2026-10-21 |
+| K2-D0 | **设计冻结与结构裁决**：设计稿已入库（`docs/KOJO-2.0-LANGUAGE-SPEC.md`，v0.9 设计稿 + 任务清单合并版，含 D0.1–D0.11 与复用清单）；确认 D0.1–D0.11 + 追加 4 项：core 包归属与 audit 放行、项目级分析层、存储期分配器、多时机拆文件形态；定旧前端退役时点 | 决策逐条落字（设计稿或 ADR）；`docs/` 已有可引用的 2.0 规格（✅ 2026-10-21）；C1 开工前无悬空结构问题；D0 未过不得开 K2-LEX/K2-PARSE | 进行中 · 认领：lead 2026-10-21（**设计稿已入库**；待拍板 D0.1–D0.11 + 4 条结构前置） |
 | K2-CONTRACT | `packages/plugin-api` 扩 2.0 契约：`sugar.ts` 新 AST（声明/表/池/模/程序/展示）、诊断码闭集、source-map 双向；新增 `GameAdapter` 契约（eventCatalog / domainSymbols / profile / presentation / storageClasses / programFeatures / layerPolicy / diagnosticNamespace / capability / sourceMap） | additive、旧消费方零改动；`pnpm typecheck` 双绿；核心包无游戏名词（audit A）；fixture adapter 仅依赖契约即可编译 | 待认领 |
 | K2-CORE-PKG | **2.0 core 包布局裁决与骨架**：新增 `packages/kojo-core` 还是留在 `kojo-sugar` 内模块（二选一，须过 `audit:decoupling` B 项）；§1.5 复用清单逐条指到现有文件/符号；前端入口与纯函数边界 | `audit:decoupling` ✅（A–D）；复用清单每条可核对；core 不 import Monaco、不 import kernel、无游戏名词；单文件转译仍是纯函数 | 待认领 |
 | K2-LEX | **2.0 词法器**：五锚点（`# @ > ? !` + 无符号台词）、声明词、`@原生` 缩进围栏、转义（`\>`/`\?`/`\=`/`\{`/`\\`）、行尾 `续`、整行 `//`、`@颜绘` 单行、`# 表` 两列行 | 2.0 fixture 全解析 + 旧写法全 error + `{}/`续`/`空行` parity；坐标 1 基 UTF-16、折行与 `@原生` 去缩进可回物理行；**全角标点走唯一入口报 error**（不再逐调用点手挂） | 待认领 |
