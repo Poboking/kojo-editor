@@ -256,6 +256,23 @@ function guardConstShadowing(
 }
 
 /**
+ * 产物是否含「函数或正文」（空产物守门的判据；fail-closed 口径）。
+ *
+ * ERB 注释行（行首除空白外首字符为 `;`）按"注释不能丢"逐字进产物，但它们在
+ * ERB 里是惰性的 ⇒ **只含注释的产物与空产物等价**（零函数、零正文）。判空若
+ * 只做 `trim()`，注释-only / 注释占满的 `.kojo` 会穿过空产物守门，把只有注释
+ * 的 `.ERB` 写到目标位置覆盖既有产物。故按行剥掉空白行与注释行后再判有没有
+ * 剩余内容——产物里任何真实行（`@` 函数头 / `#DIM` / 语句…）都不以 `;` 起头，
+ * 不会误剥。
+ */
+function erbHasContent(erb: string): boolean {
+  return erb.split('\n').some((line) => {
+    const t = line.trim();
+    return t.length > 0 && !t.startsWith(';');
+  });
+}
+
+/**
  * 前缀模板 → 等价的**完整命名模板**（B4-fp；纯函数）。
  *
  * 语法（零游戏知识）：占位符只认 `{n}`（角色号）/ `{name}`（作者函数名）。
@@ -478,15 +495,21 @@ export function createSugarTranspileService(opts: CreateSugarServiceOptions = {}
     });
 
     // ---- 空产物守门（fail-closed）----
-    // 纯文件头（或只有别名声明）的 `.kojo` 合法但**没有任何可落盘的内容**：
-    // 旧行为会把它写成只有 BOM 的 `.ERB`，覆盖掉目标位置的既有产物。源文件
+    // 纯文件头（或只有别名/常量声明、只有注释）的 `.kojo` 合法但**没有任何可落盘的
+    // 内容**：旧行为会把它写成只有 BOM 的 `.ERB`，覆盖掉目标位置的既有产物。源文件
     // 非空却零产物 ⇒ 这是"看起来成功了、实际什么都没生成"的静默失败，必须拦下。
+    //
+    // **判空必须剥掉 ERB 注释行**：`;` 注释按"注释不能丢"逐字进产物（codegen 的
+    // `comment` 分支），`erb.trim()` 因此非空——注释-only（或注释占满）的源文件
+    // 会顶着"非空产物"穿过守门，把只有注释的 `.ERB` 写到目标位置，与空产物同害
+    // （零函数、零正文，覆盖既有产物）。ERB 里"行首除空白外首字符为 `;`"即注释、
+    // 且注释行是惰性的 ⇒ 判据按行剥空白与注释后看有没有剩余内容。
     // 已有 error 时不再补这一条：那些文件本就已被 fail-closed 拦下，空产物是
     // 预期结果，重复报错只会稀释真正的成因。
     const hasError = sink.all().some((d) => d.severity === 'error');
     if (
       !hasError &&
-      erb.trim().length === 0 &&
+      !erbHasContent(erb) &&
       source.split('\n').some((line) => line.trim().length > 0)
     ) {
       sink.report({

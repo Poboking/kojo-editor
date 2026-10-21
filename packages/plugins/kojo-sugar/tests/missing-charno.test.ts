@@ -7,8 +7,9 @@
  * `.kojo` 会写出一份只有 3 字节 BOM 的 `.ERB`。
  *
  * 本批判据：`missing-charno`（error）在 codegen 前发出；空产物在源非空时报
- * `block-empty`（error）；两者都让 `planSave` / `compileToBytes` / `compileToFile`
- * 在**任何 IO 之前**拒绝。
+ * `block-empty`（error）——**产物只有注释也算空产物**（`;` 注释按"注释不能丢"
+ * 逐字进产物，`trim()` 判空会被它穿透；判据按行剥空白与注释后看有无内容）；
+ * 两者都让 `planSave` / `compileToBytes` / `compileToFile` 在**任何 IO 之前**拒绝。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -96,5 +97,51 @@ describe('HIGH · 纯文件头（零产物）→ block-empty（error，拒绝写
   it('空源/纯空白不算"零产物失败"（不误伤空文件）', () => {
     expect(codesOf('')).toEqual([]);
     expect(codesOf('  \n\t\n')).toEqual([]);
+  });
+});
+
+describe('HIGH · 注释-only 源穿透空产物守门 → block-empty（error，拒绝写只有注释的 .ERB）', () => {
+  // 取证（2026-10-21）：`;` 注释按"注释不能丢"逐字进产物 ⇒ `erb.trim()` 非空，
+  // 旧守门（`erb.trim().length === 0`）把"只有注释的产物"判成非空 ⇒ 注释-only 的
+  // `.kojo` 零诊断穿过，`compileToFile` 会把只有注释的 `.ERB` 覆盖到目标位置——
+  // 与空产物同害（零函数、零正文，覆盖既有产物）。修法：判空改成按行剥空白行与
+  // ERB 注释行后看有没有剩余内容（`service.ts` 的 `erbHasContent`），产物不动。
+  const commentOnly: Array<[string, string]> = [
+    ['单行注释', '; 这只是注释\n'],
+    ['多行注释', '; 注释一\n; 注释二\n'],
+    ['注释+文件头角色号', '角色: 12\n; 注释\n'],
+    ['注释+别名声明', '角色: 12\n别名 甲 = 1\n; 注释\n'],
+  ];
+
+  it.each(commentOnly)('%s：源非空、产物只有注释 ⇒ block-empty（error）', (_name, src) => {
+    const r = svc().transpile(src);
+    const hit = r.diagnostics.find((d) => d.code === 'block-empty' && d.severity === 'error');
+    expect(hit, '注释-only 源零诊断穿过守门（旧缺陷）').toBeDefined();
+    // 修法只动守门判据、不动产物：注释仍逐字在产物里（"注释不能丢"不被放宽）
+    expect(r.erb).toContain(';');
+    expect(
+      r.erb.split('\n').some((l) => l.trim().length > 0 && !l.trim().startsWith(';')),
+      '产物除了注释还有别的内容（判据剥过头了）',
+    ).toBe(false);
+  });
+
+  it('planSave 阻断；compileToBytes 拒绝', () => {
+    expect(svc().planSave({ source: '; 只有注释\n', sourcePath: '/proj/a.kojo' }).blocked).toBe(true);
+    expect(() => svc().compileToBytes('; 只有注释\n')).toThrow(SugarCompileError);
+  });
+
+  it('compileToFile 在触碰任何 IO 之前就拒绝（不建目录/不备份/不写盘）', async () => {
+    const { io, touched } = untouchableIO();
+    const s = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable(), io });
+    await expect(s.compileToFile('; 只有注释\n', '/proj/a.ERB')).rejects.toBeInstanceOf(SugarCompileError);
+    expect(touched(), '守卫失效：已触碰 IO').toBe(false);
+  });
+
+  it('不误伤：注释占满但确有正文 ⇒ 有明确产物，零 block-empty', () => {
+    const src = '角色: 12\n; 文件说明\n时机 绝顶：\n\t「正文」\n; 行尾注释\n';
+    const r = svc().transpile(src);
+    expect(r.diagnostics.filter((d) => d.code === 'block-empty')).toEqual([]);
+    expect(r.erb, '真函数头不在产物里').toContain('@');
+    expect(r.erb, '注释被修法弄丢了（"注释不能丢"）').toContain('; 文件说明');
   });
 });
