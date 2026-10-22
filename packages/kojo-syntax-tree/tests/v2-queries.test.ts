@@ -12,8 +12,9 @@ import { Language, Parser, Query, type Node } from 'web-tree-sitter';
  *  1. 三份查询都能编译（query 语法与节点名没错）；
  *  2. folds 只捕 `block`，且每枚折叠区间确实跨行（endRow > startRow）；
  *  3. highlights 的捕获名全部是官方命名约定下的档位，且每档在 full.kojo2 上都有命中
- *     （"capture 名有档位"不是写了就算——得真落在节点上）。
- * indents 是本批**有意零捕获**（见该文件头注），这里钉"零 pattern / 零 capture"不被误加。
+ *     （"capture 名有档位"不是写了就算——得真落在节点上）；
+ *  4. indents（K2-INDENT-BRACKETS 起）有真捕获：`indent.increase` 只落开体行，
+ *     `indent.align` 只落并列容器，且没有任何捕获落在 `@原生` 体内。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -142,12 +143,81 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
   });
 });
 
-describe('indents：本批显式零捕获（按设计，不是漏写）', () => {
-  it('零 pattern / 零 capture；命中为空', () => {
+describe('indents：真捕获（K2-INDENT-BRACKETS）', () => {
+  it('捕获名只有 increase / align；increase 只落开体节点，且每枚都是所在 block 的 open', () => {
     const q = loadQuery('indents');
-    expect(q.patternCount(), 'indents.scm 本批有意零模式（见文件头注）').toBe(0);
-    expect(q.captureNames).toEqual([]);
-    expect(q.matches(root)).toEqual([]);
+    expect(q.patternCount(), 'indents.scm 必须有真模式').toBeGreaterThan(0);
+    expect([...new Set(q.captureNames)].sort()).toEqual(['indent.align', 'indent.increase']);
+    const increaseTypes = new Set<string>();
+    for (const match of q.matches(root)) {
+      for (const capture of match.captures) {
+        if (capture.name !== 'indent.increase') continue;
+        increaseTypes.add(capture.node.type);
+        expect(capture.node.parent?.type, `${capture.node.type} 不是块头`).toBe('block');
+        const open = capture.node.parent?.childForFieldName('open');
+        expect(open?.startIndex).toBe(capture.node.startIndex);
+      }
+    }
+    // 五锚点里除 `>` / `!` 外的开体形状（`#`/`@` 块 + `?` 链）+ `@原生` 围栏头
+    // （`!` 的 trigger 节点在 block_body 里也当裸调用行出现，按节点捕会误伤，见 indents.scm 头注）
+    expect([...increaseTypes].sort()).toEqual([
+      'calc_head',
+      'color_head',
+      'condition_head',
+      'else_head',
+      'foreach_head',
+      'function_head',
+      'group_head',
+      'native_head',
+      'pool_head',
+      'random_head',
+      'repeat_head',
+      'table_head',
+      'template_head',
+      'weave_head',
+      'while_head',
+    ]);
+    q.delete();
+  });
+
+  it('align 落在并列容器的首项上：表行 + `# 池` 首分支 / `@随机` 首候选 / `@组` 组首行', () => {
+    const q = loadQuery('indents');
+    const alignRows = new Set<number>();
+    for (const match of q.matches(root)) {
+      for (const capture of match.captures) {
+        if (capture.name === 'indent.align') alignRows.add(capture.node.startPosition.row + 1);
+      }
+    }
+    // full.kojo2：表行 12–15、池首分支 18、随机首候选 62、组首行 64
+    for (const row of [12, 13, 14, 15, 18, 62, 64]) {
+      expect(alignRows.has(row), `第 ${row} 行没有并列捕获`).toBe(true);
+    }
+    q.delete();
+  });
+
+  it('`@原生` 围栏体内零捕获（围栏里长得像块头的行不会进捕获表）', () => {
+    const q = loadQuery('indents');
+    const fenceRanges: Array<{ from: number; to: number }> = [];
+    const walk = (node: Node): void => {
+      if (node.type === 'native_body') {
+        // `native_body` 起点是栏头行末的零宽 `indent` 记号 ⇒ 体内从下一行起
+        fenceRanges.push({ from: node.startPosition.row + 1, to: node.endPosition.row });
+      }
+      for (const child of node.children) walk(child);
+    };
+    walk(root);
+    expect(fenceRanges.length).toBeGreaterThan(0);
+    for (const match of q.matches(root)) {
+      for (const capture of match.captures) {
+        const row = capture.node.startPosition.row;
+        for (const range of fenceRanges) {
+          expect(
+            row >= range.from && row <= range.to,
+            `第 ${row + 1} 行的 ${capture.name} 落在 @原生 体内`,
+          ).toBe(false);
+        }
+      }
+    }
     q.delete();
   });
 });

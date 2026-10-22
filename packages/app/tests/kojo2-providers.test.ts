@@ -24,6 +24,7 @@ import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { KOJO2_ANCHOR_CHARS } from '../src/monaco/kojo2-completion';
+import { kojo2CompletionSnippets } from '../src/monaco/kojo2-completion-snippets';
 import type { Kojo2CompletionCandidate } from '../src/monaco/kojo2-completion';
 import {
   KOJO2_DECL_WORD_BY_KIND,
@@ -146,6 +147,7 @@ function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
   const fake = {
     languages: {
       CompletionItemKind: KINDS,
+    CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
       registerCompletionItemProvider: register('completion'),
       registerHoverProvider: register('hover'),
       registerDefinitionProvider: register('definition'),
@@ -410,8 +412,12 @@ describe('CompletionItemKind 映射：按候选类别分档，声明按种类细
     const fake = installForTest();
     const at = atMarker(`${COMPLETION_BASE}|`);
     const suggestions = suggestionsAt(fake, at.model, at.position);
-    expect(suggestions.map((item) => item.label)).toEqual([...KOJO2_ANCHOR_CHARS]);
-    for (const item of suggestions) expect(item.kind).toBe(KINDS.Operator);
+    // 行首同时给块骨架（K2-COMPLETE-SNIPPET，翻译层追加）：锚点仍是前五枚
+    expect(suggestions.slice(0, KOJO2_ANCHOR_CHARS.length).map((item) => item.label)).toEqual([
+      ...KOJO2_ANCHOR_CHARS,
+    ]);
+    for (const item of suggestions.slice(0, KOJO2_ANCHOR_CHARS.length)) expect(item.kind).toBe(KINDS.Operator);
+    for (const item of suggestions.slice(KOJO2_ANCHOR_CHARS.length)) expect(item.kind).toBe(KINDS.Snippet);
   });
 
   it('声明词 ⇒ Keyword', () => {
@@ -588,7 +594,7 @@ describe('补全字段：range / insertText / sortText / filterText / documentat
     const anchors = atMarker(`${COMPLETION_BASE}|`);
     expect(
       kojo2CompletionItems(fake.monaco, anchors.model, anchors.position, undefined).length,
-    ).toBe(KOJO2_ANCHOR_CHARS.length);
+    ).toBe(KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length);
   });
 });
 
@@ -762,7 +768,7 @@ describe('失败面：无 adapter / getter 抛错 / 取文抛错 ⇒ 空结果',
     const fake = installForTest();
     const anchors = atMarker(`${COMPLETION_BASE}|`);
     expect(suggestionsAt(fake, anchors.model, anchors.position).length).toBe(
-      KOJO2_ANCHOR_CHARS.length,
+      KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length,
     );
     const at = atMarker(`${COMPLETION_BASE}! |`);
     expect(suggestionsAt(fake, at.model, at.position).length).toBeGreaterThan(0);
@@ -778,7 +784,7 @@ describe('失败面：无 adapter / getter 抛错 / 取文抛错 ⇒ 空结果',
     expect(suggestionsAt(fake, event.model, event.position)).toEqual([]);
     const anchors = atMarker(`${COMPLETION_BASE}|`);
     expect(suggestionsAt(fake, anchors.model, anchors.position).length).toBe(
-      KOJO2_ANCHOR_CHARS.length,
+      KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length,
     );
   });
 
@@ -799,7 +805,9 @@ describe('失败面：无 adapter / getter 抛错 / 取文抛错 ⇒ 空结果',
     const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
     const at = atPoint(COMPLETION_FIXTURE, 9_999, 1);
     const suggestions = suggestionsAt(fake, at.model, at.position);
-    expect(suggestions.map((item) => item.label)).toEqual([...KOJO2_ANCHOR_CHARS]);
+    expect(suggestions.slice(0, KOJO2_ANCHOR_CHARS.length).map((item) => item.label)).toEqual([
+      ...KOJO2_ANCHOR_CHARS,
+    ]);
   });
 });
 
@@ -833,3 +841,7 @@ describe('宿主注册点与解耦面（读源码断言）', () => {
     expect(source).not.toMatch(/import \* as Monaco from/);
   });
 });
+
+
+
+

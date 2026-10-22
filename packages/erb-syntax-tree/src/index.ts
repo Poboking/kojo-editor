@@ -3,10 +3,12 @@ import { Language, Parser, Query, type Node, type Tree } from 'web-tree-sitter';
 /**
  * ERB 结构语法的**装载面**（不是语义层）。
  *
- * 本包只回答"哪一行是什么结构、哪些行能折起来"：不做符号表、不做索引、不做 semantic tokens。
- * 宿主经语言描述符的 `structure.load()` 取运行时；折叠走的正是这里的 `createParser()` /
- * `compileQuery()` / `foldRanges()` 同一条面（浏览器侧由 `erb-ts.worker.ts` 注入 wasm 与查询），
- * Node 读数工具也走同一面，避免工具与宿主各写一份坐标口径。
+ * 本包只回答"哪一行是什么结构、哪些行能折起来、哪些行是块的开/分支/收束"：不做符号表、
+ * 不做索引。宿主经语言描述符的 `structure.load()` 取运行时；折叠走的正是这里的
+ * `createParser()` / `compileQuery()` / `foldRanges()` 同一条面（浏览器侧由
+ * `erb-ts.worker.ts` 注入 wasm 与查询），Node 读数工具也走同一面，避免工具与宿主各写一份
+ * 坐标口径。语义着色 / 缩进 / 结构诊断的查询在同目录 `queries/`（判据在查询里，配色与
+ * 上屏在宿主）。
  */
 
 let languagePromise: Promise<Language> | null = null;

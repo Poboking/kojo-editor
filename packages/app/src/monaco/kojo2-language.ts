@@ -326,16 +326,29 @@ export const KOJO2_MONARCH: Monaco.languages.IMonarchLanguage = {
 /* ============================== 语言配置 / 注册 ============================== */
 
 /**
- * 打字期成对记号：台词 `「」`、插值 `{}`、全角/半角括号、字符串 `""`。
- * 只收真语法里成对出现的（全角 `：` 是块头终止符，不是括号，不进表）。
+ * 打字期成对记号（**一处登记、三格消费**：`brackets` = 配对高亮 / 对着色 / 跳到配对，
+ * `autoClosingPairs` = 敲开括号补闭括号，`surroundingPairs` = 选中文本敲括号包住它）。
+ *
+ * 每一对都要有 2.0 语法事实背书：
+ * - `「」` 台词引号（§4.5；台词体内的 `#` / `?` / `>` 是正文，靠这一对圈住）；
+ * - `{}` 插值（§4.12；闭合插值的收束记号）；
+ * - `[]` 数组类型后缀 `字符串[3]`（§3.4）与 `# 模` 的 `[插槽]`（§7.2）；
+ * - `（）` / `()` 旁白括注 / 实参括注（全角括注是正文，半角才是表演提示，§4.8）；
+ * - `""` 字符串字面量（表值 / 函数默认参数）。
+ *
+ * **不许进这张表的**：全角 `：` / `，`（块头终止符与分隔符，不是括号对）、`『』`（语法不认这一对，
+ * 正文里出现也只是字面文本）。`autoClosingPairs` 的 `notIn` 只有 `string` / `comment` / `regex`
+ * 三档，表达不了"我在 `@原生` 围栏里"——那条上下文判定住 `kojo2-indent.ts` 的 on-type 层
+ * （同一台词法器判 `kind === 'native'`），不在语言配置里造假。
  */
-const KOJO2_PAIRS: readonly (readonly [open: string, close: string])[] = [
-  ['「', '」'],
+export const KOJO2_PAIRS: readonly (readonly [open: string, close: string])[] = Object.freeze([
   ['{', '}'],
+  ['[', ']'],
+  ['「', '」'],
   ['（', '）'],
   ['(', ')'],
   ['"', '"'],
-];
+] as const);
 
 /** 语言配置（`comments` / `wordPattern` / 成对记号 / 回车层级；全部由单源派生）。 */
 export function kojo2LanguageConfiguration(

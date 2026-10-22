@@ -85,6 +85,19 @@ export function erbVariableSlotAt(lineText: string, column: number): ErbVariable
 }
 
 /**
+ * 结构层的**变量引用末段**探针（`erb-completion-members.ts` 的「字段位」消费；**纯函数**）。
+ *
+ * 与 {@link erbVariableSlotAt} 的**唯一差别**：不核对族头白名单——`CSTR:` / `EX:` 这类
+ * 引擎族不在降糖白名单里，但结构上仍是 `族:名` 引用，成员源要能认出"这里是动态名字段 ⇒
+ * 没静态数据就不猜"，而不是把它们当成普通行文。候选侧仍然只补白名单族
+ * （{@link erbVariableCompletionItems}）；判据复用**同一个** `parseVariableContext`，
+ * 不另写一份段解析（两份必然漂移）。
+ */
+export function erbVariableReferenceSlotAt(lineText: string, column: number): ErbVariableSlot | null {
+  return parseVariableContext(lineText, column);
+}
+
+/**
  * 产出 ERB 变量引用末段（索引 / 名字位）的补全候选（**纯函数**，供补全基座调用）。
  *
  * 行为：仅当光标处在形如 `族:` 或 `族:段:` 的变量引用、且**末段是索引 / 名字位置**时

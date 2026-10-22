@@ -14,6 +14,7 @@
  *   猜成任何 DSL 都会把别的语言的补全 / 悬停塞进不相干文件。
  */
 import type * as Monaco from './entry';
+import type { LanguageCapability } from './language-capabilities';
 import type { StructureLanguageRuntime } from './tree-sitter/structure-runtime';
 
 export const FALLBACK_LANGUAGE_ID = 'plaintext';
@@ -41,6 +42,17 @@ export interface LanguageDescriptor {
   readonly structure?: {
     readonly load: () => Promise<StructureLanguageRuntime>;
   };
+  /**
+   * 这门语言**已交付**的语言面（LANG-PARITY-GATE，additive：旧 descriptor 零改动）。
+   *
+   * 取值 = `monaco/language-capabilities.ts` 的 `ERB_CAPABILITIES` / `KOJO2_CAPABILITIES`
+   * （矩阵的行由同一份声明对拍生成）。这里**只列已交付的**：已知缺口在矩阵里以
+   * `{ exempt }` 记，不写进这一格——声明是"有"，不是"想要"。
+   *
+   * 宿主今天不按它分支行为（注册点的注册行才是真源）；它是闸门对账的声明面：
+   * `language-parity.test.ts` 逐项断言「声明的面 = 矩阵里非豁免的面 = 注册点取证得到的面」。
+   */
+  readonly capabilities?: readonly LanguageCapability[];
 }
 
 const descriptors: LanguageDescriptor[] = [];

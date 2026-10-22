@@ -20,11 +20,23 @@ import type { KojoStructureIndentRules } from './types';
  * 必须是同一份行为，否则开关一开就多了一次语言配置重写。
  */
 
-/** 基底（词表派生）那三份规则的投影——`sugarEnterRulePatterns()` 的形状，抽出来好注入假值 */
+/**
+ * 基底（词表派生）那三份规则的投影——`sugarEnterRulePatterns()` / `erbEnterRulePatterns()`
+ * 的形状，抽出来好注入假值。
+ *
+ * `indentNextLinePattern` / `unIndentedLinePattern` 是**additive 两格**：Monaco 的
+ * `indentationRules` 是**整对象替换**（后注册的赢），结构层若只写 increase/decrease，
+ * 基底这两格会被顺手撤掉——ERB 的 `SIF` 只抬下一行、注释行不参与继承正是靠它们。
+ * 没有这两格的基底（`.kojo` 的糖侧）不写这两个键 ⇒ 行为逐字不变。
+ */
 export interface BaseIndentPatterns {
   readonly indentOnEnter: readonly RegExp[];
   readonly increaseIndentPattern: RegExp;
   readonly decreaseIndentPattern: RegExp;
+  /** 只抬下一行的单行形（`SIF` 一类）；基底没有 ⇒ 省略 */
+  readonly indentNextLinePattern?: RegExp;
+  /** 不参与缩进继承的行（注释行）；基底没有 ⇒ 省略 */
+  readonly unIndentedLinePattern?: RegExp;
 }
 
 /** 合并结果（`action` 用字面量而不是 Monaco 枚举：本文件不碰 Monaco，枚举在装配层映射） */
@@ -32,6 +44,10 @@ export interface MergedIndentConfig {
   readonly onEnterRules: readonly { readonly beforeText: RegExp; readonly action: 'indent' }[];
   readonly increaseIndentPattern: RegExp;
   readonly decreaseIndentPattern: RegExp;
+  /** 基底的"只抬下一行"格原样带出（结构层不产这一档；丢了就是撤掉既有行为） */
+  readonly indentNextLinePattern?: RegExp;
+  /** 基底的"不参与继承"格原样带出（同上） */
+  readonly unIndentedLinePattern?: RegExp;
   /** 这次由结构层补进来的条数（写进"生效读数"，也用于装配层的去重键） */
   readonly added: number;
   /** 正则源码非法而被丢掉的条数（丢掉必须能被看见，装配层据此说一次） */
@@ -100,8 +116,19 @@ export function mergeIndentConfig(
     ],
     increaseIndentPattern: increase,
     decreaseIndentPattern: decrease,
+    // 基底这两格是"整对象替换"里最容易被顺手撤掉的部分：原样带出，结构层不产它们。
+    ...(base.indentNextLinePattern ? { indentNextLinePattern: base.indentNextLinePattern } : {}),
+    ...(base.unIndentedLinePattern ? { unIndentedLinePattern: base.unIndentedLinePattern } : {}),
     added: enter.length + goodIncrease.length + goodDecrease.length,
     rejected,
-    key: [...enter.map((r) => r.source), ...goodIncrease, ...goodDecrease].join('\u0000'),
+    key: [
+      ...enter.map((r) => r.source),
+      ...goodIncrease,
+      ...goodDecrease,
+      base.indentNextLinePattern?.source,
+      base.unIndentedLinePattern?.source,
+    ]
+      .filter((s): s is string => typeof s === 'string')
+      .join('\u0000'),
   };
 }

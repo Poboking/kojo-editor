@@ -36,6 +36,7 @@ import { KOJO2_INDENT_UNIT } from '../src/monaco/kojo2-enter';
 import { KOJO2_INDENT_WIDTH } from '../src/monaco/kojo2-lexicon';
 import {
   installKojo2IndentProvider,
+  KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
   KOJO2_INDENT_TRIGGER_CHARS,
   kojo2IndentAfterLine,
   kojo2IndentEditsAt,
@@ -848,7 +849,11 @@ describe('install · 回车缩进 provider 的注册纪律', () => {
     const disposable = installKojo2IndentProvider(fake.monaco);
     expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['onType', 'kojo2']]);
     const provider = fake.registrations[0]!.provider as Monaco.languages.OnTypeFormattingEditProvider;
-    expect(provider.autoFormatTriggerCharacters).toEqual(['\n']);
+    // 一枚 provider 两条腿：回车缩进 + 围栏内自动闭合守卫（开括号一族）
+    expect(provider.autoFormatTriggerCharacters).toEqual([
+      ...KOJO2_INDENT_TRIGGER_CHARS,
+      ...KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
+    ]);
     expect([...KOJO2_INDENT_TRIGGER_CHARS]).toEqual(['\n']);
     disposable.dispose();
     disposable.dispose();

@@ -8,6 +8,7 @@ import { erbDeclaredCompletionItems } from './erb-completion-declared';
 import { erbFamilyCompletionItems } from './erb-completion-families';
 import { erbFunctionCompletionItems, erbFunctionNameSlot } from './erb-completion-functions';
 import { erbLabelCompletionItems } from './erb-completion-labels';
+import { erbMemberCompletionItems, erbMemberSlotAt } from './erb-completion-members';
 import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
 import { erbVariableCompletionItems } from './erb-completion-variables';
 import { erbWordCompletionItems } from './erb-completion-words';
@@ -403,6 +404,23 @@ const DECLARED_SOURCE: ErbCompletionSource = {
 };
 
 /**
+ * 成员 / 属性 / 函数族补全（ERB-COMPLETE-MEMBER，**追加在最后**）：点号成员位（`y.` / `M_KOJO.`）
+ * 从**两本既有名录**派生同族函数（项目函数族 `receiver_*` + 系统函数族 `receiver*`），族头位
+ * （`CF|` / `TFLAG|`）从 `ENGINE_VARIABLE_FAMILIES` 派生引擎族；字段位（`CFLAG:|` / `CSTR:名|`）
+ * **无静态数据 ⇒ 零候选**（`uncertain` 标记在纯 API 面，见 `erb-completion-members.ts` 头注）。
+ * 纯函数住在 `erb-completion-members.ts`。
+ *
+ * 刻意**不加 `requires` 依赖**：名录缺席时族头候选照常出货（只有成员位退化为零候选），
+ * 否则整源被跳过并多报一条降级信号——那是把"部分可补"错报成"缺表"。
+ */
+const MEMBERS_SOURCE: ErbCompletionSource = {
+  id: 'erb-members',
+  provide({ monaco, model, position, tables }): Monaco.languages.CompletionItem[] {
+    return erbMemberCompletionItems(monaco, model, position, tables);
+  },
+};
+
+/**
  * 文档词源（QSUG-2，**追加在最后**）：当前文件里同前缀的代码词。
  *
  * 开关住在 `tables.wordBasedSuggestions`（宿主注入设置页偏好）；缺席 = 不供。
@@ -426,6 +444,10 @@ const WORDS_SOURCE: ErbCompletionSource = {
  * 项按 label 去重（先注册者胜）⇒ 行首只留骨架、行中纯文本照旧（见 snippet 模块头注）。
  * 名字位两个新源（`erb-families` / `erb-declared`）**追加在末尾**：先注册者胜语义不动，
  * 同 label 与既有源相撞时老源胜。
+ *
+ * ERB-COMPLETE-MEMBER 再把 `erb-members` **追加在最后**（排在 `erb-words` 之后）：它只在
+ * 点号成员位（既有各源都不认）与族头位（与 `erb-families` 逐条重合 ⇒ 去重后老源胜）出货，
+ * 既有源的顺序 / 去重 / 排序口径一行未动。
  */
 export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   ERB_SNIPPET_SOURCE,
@@ -438,6 +460,7 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
   FAMILIES_SOURCE,
   DECLARED_SOURCE,
   WORDS_SOURCE,
+  MEMBERS_SOURCE,
 ];
 
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */
@@ -485,7 +508,10 @@ export function memoizedErbFunctionNames(getIndex: () => ErbIndex | null | undef
 export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
   languageId: ERB_LANGUAGE_ID,
   logTag: ERB_LOG_TAG,
-  triggerCharacters: ['#', '[', '@', '$'],
+  // `.` 追加在既有四枚**之后**（ERB-COMPLETE-MEMBER）：点号成员位（`y.`）的候选由
+  // `erb-members` 出，而 Monaco 默认词法把 `.` 当词分隔符 ⇒ 不挂触发字符就弹不出来。
+  // 去重口径 = 已在册则不重复（`new Set` 展开，顺序保持首次出现的位置）。
+  triggerCharacters: [...new Set(['#', '[', '@', '$', '.'])],
   sources: ERB_COMPLETION_SOURCES,
   callForm: { sourceIds: ERB_CALL_FORM_SOURCE_IDS },
   locate(_monaco, model, position) {
@@ -497,6 +523,23 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
     if (gate === 'in-string') return undefined;
     const range = erbTokenRange(model, position);
     const prefix = line.slice(range.startColumn - 1, range.endColumn - 1);
+    // ERB-COMPLETE-MEMBER：点号位**只给成员源**（`erb-members`）。
+    // ① 落在点号成员位（`M_KOJO.|` / `M_KOJO.K|`）⇒ 整轮只留该源：ERB 没有点号语法，
+    //    其余源在这里给的整表系统函数是纯噪声；
+    // ② 光标紧前的字符就是 `.` 但不是成员位（`1.|` / `1.5` 的小数点）⇒ **整轮零候选**
+    //    ——`. `如今在 triggerCharacters 里，不拦就会每敲一个小数点弹一次系统函数整表。
+    // 判定用同一份纯函数（`erbMemberSlotAt`），不在装配点另写点号正则。
+    const col0 = Math.min(position.column - 1, line.length);
+    const memberSlot = erbMemberSlotAt(line, position.column);
+    if (memberSlot !== null && memberSlot.kind === 'member') {
+      return {
+        range,
+        prefix,
+        keep: (_item, sourceId) => sourceId === 'erb-members',
+        seed: { lineNumber: position.lineNumber, text: line },
+      };
+    }
+    if (col0 > 0 && line[col0 - 1] === '.') return undefined;
     return {
       range,
       prefix,
@@ -518,8 +561,9 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
 
 /**
  * 为 `.erb` / `.erh`（`ERB_LANGUAGE_ID`）注册**一个**补全 provider。
- * `triggerCharacters` = 四个**只有补全能补**的记号：`#` 指令头、`[` 区间标记、
- * `@` 函数定义头（函数名候选）、`$` 标签目标（`JUMP $-` / `GOTO $-` 一族）。
+ * `triggerCharacters` = 五个**只有补全能补**的记号：`#` 指令头、`[` 区间标记、
+ * `@` 函数定义头（函数名候选）、`$` 标签目标（`JUMP $-` / `GOTO $-` 一族）、
+ * `.` 点号成员位（`erb-members` 的函数族成员；R4 之前没有源由 `.` 触发）。
  * 这些字符 Monaco 默认词法都不含（词分隔符），不弹窗就只剩手打全名一条路；
  * 其余位置由 `locate` 的位置门挡掉（串内 / 注释内零候选），不会打扰常规输入。
  * `getTables` 每次补全时才调用（表按当前项目 adapter 实时取，同 hover 纪律）。

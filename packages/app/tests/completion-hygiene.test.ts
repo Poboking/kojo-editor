@@ -235,6 +235,8 @@ const ERB_SCENARIOS: ReadonlyArray<readonly [string, ErbCompletionSourceContext]
   ['erb-bits', erbCtx('SETBIT CFLAG:1, ', 17)], // 位槽（位号 + 中文位名）
   ['erb-families', erbCtx('PRINTFORML CF', 14)], // 行中族头位（CF → CFLAG）
   ['erb-declared', erbCtx('PRINTFORML 心', 13)], // 行中裸名位（#DIM 声明名，桩 facts 给 心情）
+  // ERB-COMPLETE-MEMBER：点号成员位（`M_KOJO.` ⇒ 名录同族成员 `M_KOJO_A` / `M_KOJO_B`）
+  ['erb-members', erbCtx('M_KOJO.', 8)],
 ];
 
 interface Collected {

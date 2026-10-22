@@ -37,6 +37,26 @@ export { ERB_DIRECTIVES };
 export const ERB_LANGUAGE_ID = 'kojo-erb';
 
 /**
+ * ERB 的成对记号（**一处登记、四格消费**：`brackets` 配对高亮 / `colorizedBracketPairs`
+ * 嵌套括号着色 / `autoClosingPairs` 敲开补闭 / `surroundingPairs` 选中包裹）。
+ *
+ * 只收 ASCII 三对：`{}` 是 FORM 插值记号（`erc-syntax-tree` 的 `form_interpolation` /
+ * `form_substitution` 两侧都有结构事实），`[]` 是标签行与数组索引，`()` 是条件/实参。
+ * **全角括号 `（）` / `「」` 不收**：ERB 里它们是普通正文标点，不是结构括号（与 `.kojo`
+ * 的 `KOJO_PAIRS` 不同——那边 `「」` 是台词标记）；ERB 的 `"` 也不进 `brackets`
+ * （引号不是嵌套结构，只进自动闭合/包裹两格）。
+ */
+export const ERB_BRACKET_PAIRS: readonly (readonly [string, string])[] = [
+  ['(', ')'],
+  ['[', ']'],
+  ['{', '}'],
+];
+
+/** 引号对：只进 `autoClosingPairs` / `surroundingPairs`（见上：它不是嵌套括号） */
+export const ERB_QUOTE_PAIR = ['"', '"'] as const;
+
+
+/**
  * 合并基底词表与 adapter 词表（**纯函数**，两表进、合并词表出）：
  * - 并集按**大小写不敏感**去重（Emuera 关键字大小写不敏感；先出现者保留原样——基底在前，
  *   英文指令保持基底写法，adapter 同名异写不产生重复项）；
@@ -317,22 +337,16 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
     wordPattern: CJK_WORD_PATTERN,
     onEnterRules: enterConfig.onEnterRules,
     indentationRules: enterConfig.indentationRules,
-    brackets: [
-      ['(', ')'],
-      ['[', ']'],
-      ['{', '}'],
-    ],
+    brackets: ERB_BRACKET_PAIRS.map(([open, close]) => [open, close] as [string, string]),
+    // additive：同一张表再喂一格，让嵌套括号按层着色（Monaco 0.57 的 LanguageConfiguration）
+    colorizedBracketPairs: ERB_BRACKET_PAIRS.map(([open, close]) => [open, close] as [string, string]),
     autoClosingPairs: [
-      { open: '(', close: ')' },
-      { open: '[', close: ']' },
-      { open: '{', close: '}' },
-      { open: '"', close: '"' },
+      ...ERB_BRACKET_PAIRS.map(([open, close]) => ({ open, close })),
+      { open: ERB_QUOTE_PAIR[0], close: ERB_QUOTE_PAIR[1] },
     ],
     surroundingPairs: [
-      { open: '(', close: ')' },
-      { open: '[', close: ']' },
-      { open: '{', close: '}' },
-      { open: '"', close: '"' },
+      ...ERB_BRACKET_PAIRS.map(([open, close]) => ({ open, close })),
+      { open: ERB_QUOTE_PAIR[0], close: ERB_QUOTE_PAIR[1] },
     ],
   });
 

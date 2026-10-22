@@ -62,8 +62,9 @@ export type Kojo2TreeSitterModule = typeof import('web-tree-sitter');
 /**
  * 运行时需要的资源：两枚 wasm + 三份查询（查询各自可选 = 缺哪份就少哪一面，parse 不受影响）。
  *
- * `foldsQuery` / `indentsQuery` 是本批 additive 加上的：2.0 的 `queries/v2/` 里三份都在，
- * 折叠那一面真的有捕获（`(block) @fold`），缩进那一面**刻意零捕获**（见 `indents.scm` 头注），
+ * `foldsQuery` / `indentsQuery` 是 additive 加上的：2.0 的 `queries/v2/` 里三份都在，
+ * 折叠那一面有捕获（`(block) @fold`），缩进那一面自批次八起也有真捕获
+ * （`@indent.increase` / `@indent.align`，见 `indents.scm` 头注），
  * 两者都交给 worker 侧判定，而不是在这里按文件名猜。
  */
 export interface Kojo2RuntimeAssets {

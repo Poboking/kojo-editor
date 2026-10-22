@@ -138,11 +138,12 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
   it('触发字符含 `@`（函数定义头）与 `$`（标签目标）——它们不在 Monaco 默认词法里', () => {
     const { monaco, registered } = stubMonaco();
     const dispose = installErbCompletion(monaco, () => ({}));
-    expect(registered[0]!.provider.triggerCharacters).toEqual(['#', '[', '@', '$']);
+    // ERB-COMPLETE-MEMBER：`.` 追加在既有四枚之后（点号成员位 `y.` 由 `erb-members` 出货）
+    expect(registered[0]!.provider.triggerCharacters).toEqual(['#', '[', '@', '$', '.']);
     dispose.dispose();
   });
 
-  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，骨架最前 + 十个 source 全在册（词源追加末尾）', () => {
+  it('扩展点稳定：ERB_COMPLETION_SOURCES 是可追加数组，骨架最前 + 十一个 source 全在册（词源 / 成员源追加末尾）', () => {
     expect(Array.isArray(ERB_COMPLETION_SOURCES)).toBe(true);
     expect(ERB_COMPLETION_SOURCES.map((s) => s.id)).toEqual([
       'erb-snippet',
@@ -155,6 +156,7 @@ describe('EC-1 · .erb 补全装配（provider 注册）', () => {
       'erb-families',
       'erb-declared',
       'erb-words',
+      'erb-members',
     ]);
   });
 });
@@ -466,6 +468,8 @@ describe('SH-4 · 依赖表 / 提供者缺席 = 降级不静默（三态可复�
     // 两名位新源刻意无 requires：erbFileFacts 缺席是"宿主未注入通道"的正常态，零候选即正确语义
     expect(byId.get('erb-families')).toBeUndefined();
     expect(byId.get('erb-declared')).toBeUndefined();
+    // 成员源同样无 requires：名录缺席时族头候选照常出货（只有成员位退化为零候选）
+    expect(byId.get('erb-members')).toBeUndefined();
   });
 });
 

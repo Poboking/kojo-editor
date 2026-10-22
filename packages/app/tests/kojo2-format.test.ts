@@ -567,7 +567,8 @@ describe('⑧注册：flag 关零注册；flag 开只给 `kojo2` 一枚 provider
     expect(register).toBeGreaterThan(guard);
     expect(code).not.toContain('executeEdits');
     expect(code).not.toContain('pushUndoStop');
-    expect(code).not.toContain('registerDocumentRangeFormattingEditProvider');
+    // 区间格式化（K2-INDENT-BRACKETS）另有一枚 installer：整篇这一枚不许抢它的注册
+    expect(body).not.toContain('registerDocumentRangeFormattingEditProvider');
     // 只认 2.0 语言面：不 import v1 的 `kojo-language`
     expect(code).not.toContain("from './kojo-language'");
   });

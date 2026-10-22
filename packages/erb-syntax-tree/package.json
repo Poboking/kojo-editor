@@ -31,7 +31,8 @@
       "language": "erb",
       "file-types": ["erb", "erh"],
       "folds": "queries/folds.scm",
-      "highlights": "queries/highlights.scm"
+      "highlights": "queries/highlights.scm",
+      "indent": "queries/indents.scm"
     }
   ]
 }

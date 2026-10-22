@@ -31,8 +31,11 @@
  *   `kojo2-runtime-core.ts` 取；
  * - **永不抛**：任何一步出错都变成 `{ ok: false, reason, message }`；本地线程级未捕获异常由
  *   `startKojo2Worker` 的 `onerror` 兜一条 `id: 0`（主线程只会记一笔，不会拿它当任何请求的答案）；
- * - 查询各面独立降级：`folds` 查询能用就真跑，`indents` 查询刻意零捕获就回
- *   `query-unavailable`（**不编规则**，理由见 `queries/v2/indents.scm` 头注）。
+ * - 查询各面独立降级：`folds` 查询能用就真跑；`indents` 查询的捕获由
+ *   {@link indentRulesFromCaptures} 翻成宿主的 `KojoStructureIndentRules` 三条腿
+ *   （`increase` / `decrease` / `enter`，`mergeIndentConfig` 直接可吃），**只有查询缺席 /
+ *   编译失败**才回 `query-unavailable`——查询在、但这份文档没有开体行 ⇒ 三条腿全空（合法答案，
+ *   宿主据此不重发语言配置）。
  */
 import type { Node as SyntaxNode, Tree } from 'web-tree-sitter';
 import type { Kojo2Capture } from './kojo2-tokenizer';
@@ -46,6 +49,8 @@ import {
   type Kojo2CapturesReply,
   type Kojo2FoldRange,
   type Kojo2FoldsReply,
+  type Kojo2IndentRules,
+  type Kojo2IndentsReply,
   type Kojo2ParseReply,
   type Kojo2WorkerFailure,
   type Kojo2WorkerFailureReason,
@@ -145,6 +150,119 @@ export function foldsFromCaptures(
   }
   out.sort((a, b) => a.startRow - b.startRow || b.endRow - a.endRow);
   return out;
+}
+
+/** 缩进规则条数上限：词形家族只有十几枚，64 已经比现实宽一个量级（病态文档不许把数组撑爆） */
+export const KOJO2_WORKER_MAX_INDENT_PATTERNS = 64;
+
+/** 宿主契约里的捕获名（`queries/v2/indents.scm` 用的就是这三个 / 加 align；不新造词） */
+const INDENT_INCREASE = 'indent.increase';
+const INDENT_ENTER = 'indent.enter';
+const INDENT_DECREASE = 'indent.decrease';
+const INDENT_ALIGN = 'indent.align';
+
+/** 行首空白集：与 core 词法器同一张表（半角空格 / Tab / 全角空格） */
+const LEAD = '[ \\t\\u3000]';
+
+/** 正则元字符转义（词形是 CJK，但保留转义以防词表扩展） */
+function escapePatternSource(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 按物理行切（CRLF / CR / LF 都算；与 core `lex` 的行号同源） */
+function splitTextLines(text: string): string[] {
+  return text.split(/\r\n|\r|\n/);
+}
+
+/**
+ * 捕获节点的**首行** → "行首锚 + 词形"的锚定正则源码（够用即止；`null` = 这一格没有规则）。
+ *
+ * 派生口径（`queries/v2/indents.scm` 头注里承诺的"kind → 档位表"在宿主侧的唯一实现）：
+ * - `#` 声明头：`#` + 空白 + **词形**（表名 / 池名 / 模板名都不进规则）；
+ * - `@` 调度头：`@` + 词形（`@算` / `@随机` / `@原生` …；实参不进规则）；
+ * - `?`：行首锚点本身就是词形（`? 恋慕 >= 500` / `? 否` / `?否` 同一条；`!` 分支留着但
+ *   本批查询不捕它——裸调用行与触发块头同形，见 `queries/v2/indents.scm` 头注）。
+ *
+ * 为什么不用"整行精确匹配"（v1 那条路）：块头行带实参，整行文本一换就失效；这里只取
+ * **首个词形**，换表名 / 换条件 / 换实参都不改规则。词形从文档原文取，不在本文件手写词表
+ * （2.0 词表真源在 core，worker 不引它——那会把糖词表拖进 worker 图）。
+ */
+function headPatternOf(line: string): string | null {
+  const trimmed = line.replace(/^[ \t\u3000]+/, '');
+  if (trimmed.length === 0) return null;
+  const anchor = trimmed[0]!;
+  if (anchor === '#') {
+    const word = /^#[ \t\u3000]+(\S+)/.exec(trimmed);
+    if (word === null) return null;
+    return `^${LEAD}*#${LEAD}+${escapePatternSource(word[1]!)}(?:${LEAD}|$)`;
+  }
+  if (anchor === '@') {
+    // 调度词后可以紧跟实参（`@函 名(...)`）：词形在空白 / 括注 / 逗号 / 冒号处截断
+    const word = /^@([^\s(（,，:：]+)/.exec(trimmed);
+    if (word === null) return null;
+    return `^${LEAD}*@${escapePatternSource(word[1]!)}(?:${LEAD}|$)`;
+  }
+  // `?` / `!` 是行首锚点：2.0 里一行的首字符就是判据，后面紧跟什么都还是同一个锚点
+  // （`? 否` / `?否` / `? 任意条件` 必须同一条规则）
+  if (anchor === '?') return `^${LEAD}*\\?`;
+  if (anchor === '!') return `^${LEAD}*!`;
+  return null;
+}
+
+/**
+ * `@indent.*` 捕获 → 宿主的缩进规则（纯函数，便于单测）。
+ *
+ * 三腿去向（与 `KojoStructureIndentRules` / `mergeIndentConfig` 逐字对齐）：
+ * - `indent.increase` → `increasePatterns` **与** `enterPatterns`（回车 / 行中回车 / 粘贴都要抬
+ *   一级；v1 糖侧的 `indentOnEnter` 与 `increaseIndentPattern` 也是同一批源码，口径一致）；
+ * - `indent.enter` → `enterPatterns`（查询若显式给了这一档就用它；本批不重复捕获）；
+ * - `indent.decrease` → `decreasePatterns`（2.0 没有收束记号，查询目前不捕获 ⇒ 恒空）；
+ * - `indent.align` → **不翻译**：Monaco 的默认"新行沿用当前行缩进"就是同级；这一档是给
+ *   nvim 式消费者的并列真源，硬塞进三腿只会多出一条错误规则。
+ *
+ * 失败方向是"少给规则"：坐标越界 / 首行取不到 / 不是开体形状 ⇒ 这一条跳过，不抛。
+ */
+export function indentRulesFromCaptures(
+  captures: readonly Kojo2Capture[],
+  text: string,
+  maxPatterns: number = KOJO2_WORKER_MAX_INDENT_PATTERNS,
+): Kojo2IndentRules {
+  const limit =
+    Number.isFinite(maxPatterns) && maxPatterns >= 1
+      ? Math.trunc(maxPatterns)
+      : KOJO2_WORKER_MAX_INDENT_PATTERNS;
+  const empty: Kojo2IndentRules = { increasePatterns: [], decreasePatterns: [], enterPatterns: [] };
+  if (typeof text !== 'string' || captures.length === 0) return empty;
+  const lines = splitTextLines(text);
+  const increase = new Set<string>();
+  const enter = new Set<string>();
+  const decrease = new Set<string>();
+  for (const capture of captures) {
+    if (capture === null || typeof capture !== 'object') continue;
+    const name = capture.name;
+    // 并列档（`indent.align`）是给 nvim 式消费者的真源：不投影到三腿，也不落到任何一条规则
+    if (name === INDENT_ALIGN) continue;
+    if (name !== INDENT_INCREASE && name !== INDENT_ENTER && name !== INDENT_DECREASE) continue;
+    const start = capture.startPosition;
+    const row = start?.row;
+    if (typeof row !== 'number' || !Number.isFinite(row)) continue;
+    const line = lines[Math.trunc(row)];
+    if (line === undefined) continue;
+    const column = typeof start?.column === 'number' && Number.isFinite(start.column) ? Math.trunc(start.column) : 0;
+    const pattern = headPatternOf(line.slice(Math.max(0, column)));
+    if (pattern === null) continue;
+    if (name === INDENT_DECREASE) {
+      if (decrease.size < limit) decrease.add(pattern);
+      continue;
+    }
+    if (increase.size < limit) increase.add(pattern);
+    if (enter.size < limit) enter.add(pattern);
+  }
+  return {
+    increasePatterns: [...increase].sort(),
+    decreasePatterns: [...decrease].sort(),
+    enterPatterns: [...enter].sort(),
+  };
 }
 
 /**
@@ -277,7 +395,8 @@ export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo
 
   const runQuery = async (request: Kojo2WorkerQueryRequest): Promise<Kojo2WorkerReply> => {
     const kind: Kojo2QueryKind = request.type === 'captures' ? 'highlights' : request.type;
-    // indents 先看查询买没买：没有就不为一条注定 `query-unavailable` 的请求白解一棵树
+    // indents 先看查询买没买：查询缺席 / 编译失败就不为一条注定 `query-unavailable` 的请求白解一棵树
+    // （查询在时一定真跑——这份文档有没有开体行是另一回事，三条腿可能就是全空）。
     if (request.type === 'indents') {
       const loaded = await loadRuntime();
       if (!loaded.ok) return failure(request.id, 'indents', loaded.reason, loaded.message);
@@ -316,17 +435,14 @@ export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo
       };
       return reply;
     }
-    // indents：查询真的跑了。0 条捕获 = `indents.scm` 刻意零捕获（真源）；>0 条 = 将来查询
-    // 加了捕获但本批没有"捕获 → 回车规则"的翻译层——两种都不许冒充"结构缩进已支持"。
-    return failure(
-      request.id,
-      'indents',
-      'query-unavailable',
-      captured.captures.length === 0
-        ? 'queries/v2/indents.scm 有 0 条捕获（刻意零捕获，见文件头注）⇒ 2.0 的结构缩进不提供规则；回车仍走语言层'
-        : `queries/v2/indents.scm 有 ${captured.captures.length} 条捕获，但本批没有"捕获 → 回车规则"的翻译层 ⇒ 这一档不提供规则`,
-      resolved.treeId,
-    );
+    // indents：查询真的跑了 ⇒ 捕获翻成宿主的三条腿。查询在、但这份文档没有开体行 ⇒ 三条腿全空：
+    // 那是合法答案（宿主 `mergeIndentConfig` 拿到空规则就不重发语言配置），不是"不可用"。
+    const reply: Kojo2IndentsReply = {
+      ...common,
+      type: 'indents',
+      rules: indentRulesFromCaptures(captured.captures, request.text),
+    };
+    return reply;
   };
 
   const dispatch = async (request: Kojo2WorkerRequest): Promise<Kojo2WorkerReply> => {

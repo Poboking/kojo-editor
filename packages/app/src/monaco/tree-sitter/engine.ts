@@ -11,7 +11,7 @@
  *
  * 资源（wasm 与查询）由构造参数注入而不是 import `./assets`：`assets.ts` / `erb-assets.ts` 走
  * Vite 的 `?url` / `?raw`，node 池解析不了；注入也顺带把"worker 不许硬编码路径"这条
- * 纪律写成了类型（引擎根本拿不到 URL 之外的资源）。查询按能力可选，ERB 首版只给 folds。
+ * 纪律写成了类型（引擎根本拿不到 URL 之外的资源）。查询按能力可选：缺哪份就少哪一面。
  *
  * ## 增量口径（实测，非推测；读数见 `tests/tree-sitter-parse.perf.test.ts`）
  *
@@ -62,9 +62,9 @@
  * · 顶层节点定位落进根节点的空白（extras）里、或缓存里出现**横跨窗口边界**的条目；
  * · 零宽结果（MISSING）正好压在窗口边界上 ⇒ 归属判不出来；
  * · 缓存本身是被上限截出来的前缀（残缺过多 ⇒ 补不出正确前缀，老实整篇）；
- * · 缩进那一面今天**恒整篇**（`indentRulesFrom`）：它的产物是"节点首行文本 → 锚定正则"的
- *   去重 + 排序**集合**，集合语义下少一条就是错；而本语法 `indents.scm` 没有 `@indent.*`
- *   捕获 ⇒ 装配阶段就回落 ⇒ 这一面实测不耗时（读数见 perf 池的回话台账）。
+ * · 缩进那一面今天**恒整篇**（`indentRulesFrom`）：它的产物是"行首锚正则"的去重 + 排序
+ *   **集合**，集合语义下少一条就是错；v1 的 `indents.scm` 没有 `@indent.*` 捕获 ⇒ 装配阶段
+ *   就回落，ERB 那份有捕获（每次仍整篇重查，但只是遍历一遍捕获，实测不贵）。
  *
  * 退回整篇**不是**故障：结果仍然与整篇重算逐字相等，只是贵。所以这里**不回 `error` 回话**
  * （`error` 在宿主那一侧的意思是"这一面没顶上"，会真把 provider 拆掉），而是把决定写进
@@ -99,8 +99,18 @@ import {
 
 /**
  * 引擎要的资源：两枚 wasm（浏览器给 URL、node 测试给字节）+ 查询源码。
- * 查询按能力可选：ERB 首版只提供 folds（无 semantic / indent），缺哪份就少哪一面，
- * **不**把缺失当成装配错误（否则每次起线程都会报一条假的"回落"）。
+ * 查询按能力可选：缺哪份就少哪一面，**不**把缺失当成装配错误（否则每次起线程都会报一条
+ * 假的"回落"）。ERB 首版只给 folds；本批起 ERB / Kojo 都按各自 `?raw` 资产交回三份
+ * （highlights / folds / indents）。
+ *
+ * ## 语言可注入的两条派生规则（additive；缺省 = 既有行为逐字不变）
+ *
+ * 查询只说"这段是什么结构"，把它翻成宿主协议（档位名 / 缩进正则）本来由本文件按
+ * Kojo v1 的全局表做。ERB 的结构形状不同（控制流是整行不透明 token、档位表也不同），
+ * 所以这两步允许语言入口注入——**引擎仍然不认语言名**：
+ * - {@link captureTier}：ERB 用 `erb-semantic.ts` 的捕获表，Kojo 不传 ⇒ 走 `types.ts`；
+ * - {@link indentPattern}：ERB 用节点 kind 派生关键字行首锚（`erb-indent-patterns.ts`），
+ *   否则整行原文会被转成一次性规则（下一份文档就失效）；Kojo 不传 ⇒ 走 `anchoredPattern`。
  */
 export interface StructureEngineAssets {
   readonly runtimeWasm: string;
@@ -108,6 +118,10 @@ export interface StructureEngineAssets {
   readonly highlightsQuery?: string;
   readonly foldsQuery?: string;
   readonly indentsQuery?: string;
+  /** 捕获名 + 节点类型 → 档位名；`null` = 表外（说一次并不着色），`undefined` = 有意不着色 */
+  readonly captureTier?: (capture: string, nodeType: string) => string | null | undefined;
+  /** 缩进捕获 → 正则源码；返回 `null` = 这一条不产规则（缺省 = 节点首行原文的整行锚定） */
+  readonly indentPattern?: (capture: string, nodeType: string, line: string) => string | null;
 }
 
 /**
@@ -468,7 +482,12 @@ export class StructureEngine {
    * 的），而整篇解那一趟一定看得到全文 ⇒ 不会因为走了窗口就少说一条。
    */
   private tokenValue(capture: { name: string; node: Node }): KojoStructureToken | null {
-    const tier = tierForCapture(capture.name, capture.node.type);
+    const tier =
+      this.assets.captureTier !== undefined
+        ? this.assets.captureTier(capture.name, capture.node.type)
+        : tierForCapture(capture.name, capture.node.type);
+    // `undefined` = 语言入口明说"这枚捕获不供着色"（例如只为折叠 / 诊断保留）⇒ 安静跳过。
+    if (tier === undefined) return null;
     if (tier === null) {
       if (!this.reportedCaptures.has(capture.name)) {
         this.reportedCaptures.add(capture.name);
@@ -476,7 +495,7 @@ export class StructureEngine {
           0,
           'query',
           'semantic',
-          `highlights 查询里的捕获 @${capture.name} 没有档位映射 ⇒ 该类节点不着色（宿主侧在 types.ts 的 KOJO_STRUCTURE_CAPTURE_TIERS 里登记，或从查询里删掉）`,
+          `highlights 查询里的捕获 @${capture.name} 没有档位映射 ⇒ 该类节点不着色（宿主侧在档位表里登记——Kojo 是 types.ts，ERB 是 erb-semantic.ts——或从查询里删掉）`,
         );
       }
       return null;
@@ -636,12 +655,14 @@ export class StructureEngine {
   }
 
   /**
-   * 缩进规则：约定捕获名 `@indent.increase` / `@indent.decrease` / `@indent.enter`，
-   * 每条取其节点**首行文本**并转成"整行精确匹配"的锚定正则源码交给宿主。
+   * 缩进规则：约定捕获名 `@indent.increase`（同义 `@indent.begin`）/
+   * `@indent.decrease`（同义 `@indent.end`）/ `@indent.enter`，每条取其节点**首行文本**
+   * 并转成"整行精确匹配"的锚定正则源码交给宿主；语言入口可以注入 {@link
+   * StructureEngineAssets.indentPattern} 改派生形状（ERB 按节点 kind 取关键字行首锚，
+   * 不把实参写进规则）。
    * 查询里没有任何 `@indent.*` 捕获 ⇒ 三条腿都为空，宿主连配置都不重发。
    *
-   * **这一面恒整篇**（文件头已写明）：产物是去重 + 排序的**集合**，窗口拼装少一条就是错；
-   * 本语法的 `indents.scm` 没有捕获 ⇒ 装配阶段就回落 ⇒ 实测不耗时。
+   * **这一面恒整篇**（文件头已写明）：产物是去重 + 排序的**集合**，窗口拼装少一条就是错。
    */
   private indentRulesFrom(query: Query, root: Node): KojoStructureIndentRules {
     const increase = new Set<string>();
@@ -650,9 +671,13 @@ export class StructureEngine {
     for (const capture of query.captures(root)) {
       const line = this.firstLineText(capture.node);
       if (line === null) continue;
-      const pattern = anchoredPattern(line);
-      if (capture.name === 'indent.increase') increase.add(pattern);
-      else if (capture.name === 'indent.decrease') decrease.add(pattern);
+      const pattern =
+        this.assets.indentPattern !== undefined
+          ? this.assets.indentPattern(capture.name, capture.node.type, line)
+          : anchoredPattern(line);
+      if (pattern === null || pattern.length === 0) continue;
+      if (capture.name === 'indent.increase' || capture.name === 'indent.begin') increase.add(pattern);
+      else if (capture.name === 'indent.decrease' || capture.name === 'indent.end') decrease.add(pattern);
       else if (capture.name === 'indent.enter') enter.add(pattern);
     }
     return {
@@ -959,7 +984,7 @@ export class StructureEngine {
     if (this.indentsQuery && !this.indentsQuery.captureNames.some((n) => n.startsWith('indent.'))) {
       this.indentsQuery.delete();
       this.indentsQuery = null;
-      this.fail(0, 'query', 'indent', 'indents 查询里没有 @indent.increase / @indent.decrease / @indent.enter 捕获 ⇒ 缩进这一面不由结构层供，继续走原有回车规则');
+      this.fail(0, 'query', 'indent', 'indents 查询里没有 @indent.increase / @indent.decrease（同义 begin / end）/ @indent.enter 捕获 ⇒ 缩进这一面不由结构层供，继续走原有回车规则');
     }
   }
 

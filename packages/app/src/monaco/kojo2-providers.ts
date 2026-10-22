@@ -59,7 +59,7 @@
  *   的说明在 `detail` 上，不编一段悬停正文。
  */
 import type * as Monaco from './entry';
-import type { GameAdapter } from '@kojo/kojo-core';
+import { projectEventArgs, type GameAdapter } from '@kojo/kojo-core';
 import { KOJO2_LANGUAGE_ID } from './kojo2-language';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { kojo2ExpandCompilationFor, type Kojo2ExpandCompileSource } from '../ui/kojo2-expand-compile';
@@ -69,7 +69,11 @@ import {
   type Kojo2ExpandCompilation,
   type Kojo2ExpandView,
 } from './kojo2-expand-view';
-import { kojo2CompletionAt, type Kojo2CompletionCandidate } from './kojo2-completion';
+import { kojo2CompletionAt, type Kojo2CompletionCandidate, type Kojo2CompletionOptions } from './kojo2-completion';
+import {
+  kojo2SnippetCandidatesAt,
+  type Kojo2CompletionSnippet,
+} from './kojo2-completion-snippets';
 import { kojo2HoverAt, kojo2HoverLines, type Kojo2HoverResult } from './kojo2-hover';
 import { kojo2DefinitionAt } from './kojo2-definition';
 import {
@@ -115,6 +119,11 @@ export interface Kojo2ProviderOptions {
    * （零注册零行为，不新造第二个 provider）。
    */
   readonly getCompile?: Kojo2ExpandCompileSource;
+  /**
+   * 补全的**宿主投影**（K2-COMPLETE-ARGS-FACE）：事件参数形状 / `@颜绘` 脸表 / 行尾提示名。
+   * 缺省 ⇒ 各新候选位零候选（不猜）；既有候选源逐字不变。
+   */
+  readonly completion?: Omit<Kojo2CompletionOptions, 'adapter'>;
 }
 
 /* ============================== 常量 ============================== */
@@ -130,6 +139,8 @@ export const KOJO2_COMPLETION_TRIGGER_CHARS: readonly string[] = Object.freeze([
   '?',
   '!',
   '{',
+  // `(`：行尾表演提示组 `(心形)` 的提示名位（K2-COMPLETE-ARGS-FACE）。
+  '(',
 ]);
 
 /** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
@@ -179,6 +190,26 @@ function adapterAt(source: Kojo2AdapterSource): GameAdapter | undefined {
 }
 
 /* ============================== CompletionItemKind 映射 ============================== */
+
+/**
+ * adapter 的 `eventCatalog` → 补全参数形状投影（`# 机 <事件> <参数…>` 的参数名候选）。
+ *
+ * 投影是 core 的纯函数；按 adapter **对象身份**记忆化（`WeakMap`）：项目切换会换一枚 adapter，
+ * 旧项目的目录不会被带到新项目上。投影抛错 ⇒ `undefined`（参数位零候选，不猜）。
+ */
+const EVENT_ARGS_CACHE = new WeakMap<GameAdapter, ReturnType<typeof projectEventArgs>>();
+
+function eventArgsOf(adapter: GameAdapter): ReturnType<typeof projectEventArgs> | undefined {
+  const cached = EVENT_ARGS_CACHE.get(adapter);
+  if (cached !== undefined) return cached;
+  try {
+    const projected = projectEventArgs(adapter.eventCatalog);
+    EVENT_ARGS_CACHE.set(adapter, projected);
+    return projected;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 声明种类 → Monaco `CompletionItemKind`（比五档粗分更贴作者直觉的一层细分）。
@@ -231,6 +262,21 @@ export function kojo2CompletionKindOf(
       return K.Variable;
     case 'declaration':
       return completionKindOfDeclaration(K, candidate.declarationKind);
+    // K2-COMPLETE-ARGS-FACE 的新候选位（细分映射只在此处；纯函数层只给语义类别）
+    case 'eventArgument':
+      return K.Value;
+    case 'valueType':
+    case 'storagePeriod':
+      return K.Keyword;
+    case 'templateParam':
+      return K.Variable;
+    case 'faceObject':
+      return K.Variable;
+    case 'faceArgument':
+      return K.Value;
+    case 'templateSlot':
+    case 'hintName':
+      return K.Text;
     default:
       return K.Text;
   }
@@ -352,20 +398,55 @@ export function kojo2CompletionItems(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
   adapter: GameAdapter | undefined,
+  completion?: Omit<Kojo2CompletionOptions, 'adapter'>,
 ): Monaco.languages.CompletionItem[] {
   const source = sourceOf(model);
   if (source === null) return [];
-  const candidates = kojo2CompletionAt(
-    { source, line: position.lineNumber, column: position.column },
-    adapter === undefined ? {} : { adapter },
-  );
-  if (candidates.length === 0) return [];
+  const query = { source, line: position.lineNumber, column: position.column };
+  const eventArgs =
+    completion?.eventArgs ?? (adapter === undefined ? undefined : eventArgsOf(adapter));
+  const candidates = kojo2CompletionAt(query, {
+    ...(completion ?? {}),
+    ...(eventArgs === undefined ? {} : { eventArgs }),
+    ...(adapter === undefined ? {} : { adapter }),
+  });
   const lineText = lineTextOf(model, position.lineNumber);
   const range = tokenRangeAt(position.lineNumber, lineText, position.column);
   const declarations = candidates.some((candidate) => candidate.kind === 'declaration')
     ? declarationsOf(source)
     : NO_DECLARATIONS;
-  return candidates.map((candidate) => completionItemOf(monaco, candidate, range, declarations));
+  const items = candidates.map((candidate) =>
+    completionItemOf(monaco, candidate, range, declarations),
+  );
+  // 块级 snippets（K2-COMPLETE-SNIPPET）：只由**宿主翻译层**在行首追加；纯函数永不产 snippet。
+  // 宿主 monaco 缺 `Snippet` 档 / 规则枚举时整段跳过（老桩 / 精简宿主不因此整轮补全闪空）。
+  if (
+    monaco.languages.CompletionItemKind.Snippet !== undefined &&
+    monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet !== undefined
+  ) {
+    for (const snippet of kojo2SnippetCandidatesAt(query)) {
+      items.push(snippetCompletionItemOf(monaco, snippet, range));
+    }
+  }
+  return items;
+}
+
+/** 一条块级 snippet → `CompletionItem`（`InsertAsSnippet` 只在宿主翻译层打开）。 */
+function snippetCompletionItemOf(
+  monaco: typeof Monaco,
+  snippet: Kojo2CompletionSnippet,
+  range: Monaco.IRange,
+): Monaco.languages.CompletionItem {
+  return {
+    label: snippet.label,
+    kind: monaco.languages.CompletionItemKind.Snippet,
+    insertText: snippet.insertText,
+    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    detail: snippet.detail,
+    sortText: snippet.sortText,
+    filterText: snippet.label,
+    range,
+  };
 }
 
 /* ============================== 展开视图的取数缝（K2-EXPAND-VIEW） ============================== */
@@ -637,7 +718,13 @@ export function installKojo2LanguageProviders(
     provideCompletionItems(model, position) {
       try {
         return {
-          suggestions: kojo2CompletionItems(monaco, model, position, adapterAt(adapterSource)),
+          suggestions: kojo2CompletionItems(
+            monaco,
+            model,
+            position,
+            adapterAt(adapterSource),
+            options.completion,
+          ),
         };
       } catch {
         // Monaco 把 throw 吞成"补全闪一下没了"；空列表是它能读出"这里没有候选"的唯一形状。

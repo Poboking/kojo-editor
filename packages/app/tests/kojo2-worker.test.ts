@@ -591,14 +591,21 @@ describe('真 wasm · parse / captures / folds / indents（worker 本体）', ()
     expect(result.message).toContain('folds');
   });
 
-  it('indents 可判别地不可用：reason=query-unavailable 且说清 indents.scm 零捕获', async () => {
+  it('indents 真跑：indents.scm 的捕获翻成 increase/enter 规则（2.0 没有收束记号 ⇒ decrease 空）', async () => {
     const { client } = realPair();
-    const result = await client.indents('> 一行。\n', 1);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.reason).toBe('query-unavailable');
-    expect(result.message).toContain('indents.scm');
-    expect(result.message).toContain('零捕获');
+    const result = await client.indents('# 表 心情 由 恋慕\n    0..99 疏远\n', 1);
+    expect(result.ok, result.ok ? '' : result.message).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.type).toBe('indents');
+    expect(result.value.rules.increasePatterns.length).toBeGreaterThan(0);
+    // 回车与 increase 同一批源码（v1 糖侧的 indentOnEnter / increaseIndentPattern 也是同批）
+    expect(result.value.rules.enterPatterns).toEqual(result.value.rules.increasePatterns);
+    expect(result.value.rules.decreasePatterns).toEqual([]);
+    // 规则按"行首锚 + 词形"派生 ⇒ 换表名仍然命中（不是逐字匹配整行）
+    const table = result.value.rules.increasePatterns.find((pattern) =>
+      new RegExp(pattern).test('# 表 别的名字 由 心情'),
+    );
+    expect(table, `没有命中「# 表」词形的规则：${result.value.rules.increasePatterns.join(' | ')}`).toBeTruthy();
   });
 
   it('并发两次 parse：worker 按到达序串行处理，两棵新树互不冒充', async () => {

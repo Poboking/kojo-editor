@@ -115,7 +115,18 @@ import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
 // 两者都自挡 flag（关 ⇒ 零注册）；格式化走 Monaco 内建 `editor.action.formatDocument`
 //（Shift+Alt+F），本文件不新增命令。
 import { installKojo2DocumentSymbolProvider } from '../monaco/kojo2-symbols';
-import { installKojo2DocumentFormatter } from '../monaco/kojo2-format';
+import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
+// K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
+// 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、各自再挡 flag，且安装器内零 IO。
+import { installKojo2ReferenceProvider } from '../monaco/kojo2-references';
+import { installKojo2RenameProvider } from '../monaco/kojo2-rename';
+import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
+import { installKojo2InlayHintsProvider } from '../monaco/kojo2-inlay';
+import { installKojo2CodeLensProvider } from '../monaco/kojo2-codelens';
+import { installKojo2HighlightProvider } from '../monaco/kojo2-highlight';
+import { installKojo2SelectionRangeProvider } from '../monaco/kojo2-selection-range';
+// 引用计数与引用面同源（code lens 的"本文件 N 处用到"不许自扫一套）。
+import { kojo2ReferencesAt } from '../monaco/kojo2-references';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   SIGNATURE_LOOKBACK_LINES,
@@ -1566,6 +1577,39 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       // 显式格式化动作（不接保存链路——作者不按 Shift+Alt+F 就不动缓冲内容）。
       globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));
       globalDisposers.push(installKojo2DocumentFormatter(monaco));
+      // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。补全的事件参数形状
+      // 在 `kojo2-providers` 里由 adapter 的 `eventCatalog` 现投影（本层仍零游戏名词）；
+      // `faceTemplates` / `hintNames` 暂无 adapter 生产者 ⇒ 不传（新候选位零候选，不猜）。
+      globalDisposers.push(installKojo2ReferenceProvider(monaco));
+      globalDisposers.push(installKojo2RenameProvider(monaco));
+      globalDisposers.push(
+        installKojo2SignatureHelpProvider(
+          monaco,
+          kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
+        ),
+      );
+      globalDisposers.push(
+        installKojo2InlayHintsProvider(
+          monaco,
+          kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
+        ),
+      );
+      globalDisposers.push(
+        installKojo2CodeLensProvider(monaco, {
+          getFilePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
+          countReferences: (query) => {
+            const result = kojo2ReferencesAt(query.source, {
+              line: query.line,
+              column: query.column,
+            });
+            if (result === null) return 0;
+            return result.refs.filter((site) => site.kind !== 'decl').length;
+          },
+        }),
+      );
+      globalDisposers.push(installKojo2HighlightProvider(monaco));
+      globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
+      globalDisposers.push(installKojo2RangeFormatter(monaco));
     }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *

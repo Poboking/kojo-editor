@@ -24,6 +24,8 @@
  * 本文件零 Monaco 运行时：`formatKojo2Source` 只依赖 core 词法（`lex`，行类 / 缩进 / 围栏状态的
  * 唯一真源）、core 文法（`parseSource`，只做上面的可解析闸）与 `kojo2-lexicon` 的词表。
  * {@link installKojo2DocumentFormatter} 是 `Shift+Alt+F` 的 provider 接线（flag 关 = 零注册）；
+ * {@link formatKojo2Range} / {@link installKojo2RangeFormatter} 是**区间格式化**（K2-INDENT-BRACKETS
+ * 加的 additive 腿）：同一台 `runKojo2Format` 整篇算、按行映射只落选中行，provider 同样 flag 关零注册。
  * {@link applyKojo2Format} 是给命令 / 保存链路用的**落地端口**，它**动态** import 宿主既有的
  * `applyTextEdits`（前后各一颗 undo 停点，CODEACTION-UNDO-STACK 口径）——本文件**不出现**
  * `executeEdits` / `pushUndoStop`，也不另造第二套编辑应用机制。
@@ -359,16 +361,26 @@ function parseErrorCount(source: string): number | null {
 
 /* ============================== 主函数 ============================== */
 
+/** 一次格式化的**中间产物**（`formatKojo2Source` 与 `formatKojo2Range` 共用同一台规则） */
+interface Kojo2FormatLayout {
+  readonly code: string;
+  readonly bom: string;
+  readonly rawLines: readonly RawLine[];
+  readonly lexLineCount: number;
+  /** 逐行成品（`origin` = 原始物理行下标；插入的空行 = -1） */
+  readonly rebuilt: readonly KeptLine[];
+  readonly endsWithEol: boolean;
+}
+
 /**
- * 格式化 2.0 源码（纯函数：文本进、成品 + edits 出）。
+ * 规则主体（内部）：文本进、逐行成品出；`null` = 不改（空文件 / 词法抛错 / 行数对不上 /
+ * 无可解析闸不过 / 结果与输入逐字节相同）。
  *
- * 失败方向永远是"少改"：词法/文法抛错、行数对不上、格式化后 error 数变大 ⇒ 原样返回
- * （`changed=false`，`edits` 缺席）。空文件 / 全空白文件同样原样返回——那种文件没有结构可归一，
- * 动它只会改写源事实。
+ * K2-INDENT-BRACKETS 把这一层从 `formatKojo2Source` 里抽出来，是因为**区间格式化**要同一份
+ * `rebuilt`（含 `origin` 行映射）才能只改选中行；再跑一遍规则会分叉出第二套空行/缩进判断。
  */
-export function formatKojo2Source(source: string, options: Kojo2FormatOptions = {}): Kojo2FormatResult {
-  const unchanged: Kojo2FormatResult = { code: source, changed: false };
-  if (typeof source !== 'string' || source.length === 0) return unchanged;
+function runKojo2Format(source: string, options: Kojo2FormatOptions): Kojo2FormatLayout | null {
+  if (typeof source !== 'string' || source.length === 0) return null;
 
   const wantIndent = options.indent !== false;
   const wantBlankLines = options.blankLines !== false;
@@ -376,7 +388,7 @@ export function formatKojo2Source(source: string, options: Kojo2FormatOptions = 
 
   const bom = source.charCodeAt(0) === 0xfeff ? '\ufeff' : '';
   const body = source.slice(bom.length);
-  if (body.length === 0) return unchanged;
+  if (body.length === 0) return null;
   const endsWithEol = /(?:\r\n|\r|\n)$/.test(body);
   const rawLines = splitPhysical(body);
 
@@ -384,11 +396,11 @@ export function formatKojo2Source(source: string, options: Kojo2FormatOptions = 
   try {
     lexLines = lex(source).lines;
   } catch {
-    return unchanged;
+    return null;
   }
   // core 词法行 = 物理行（末行无换行时与 splitPhysical 等长；有换行时少一格"EOL 后的空行"）。
-  if (lexLines.length === 0 || lexLines.length > rawLines.length) return unchanged;
-  if (lexLines.every((line) => line.kind === 'blank')) return unchanged;
+  if (lexLines.length === 0 || lexLines.length > rawLines.length) return null;
+  if (lexLines.every((line) => line.kind === 'blank')) return null;
 
   const depths = computeDepths(lexLines);
 
@@ -466,14 +478,31 @@ export function formatKojo2Source(source: string, options: Kojo2FormatOptions = 
   }
 
   const code = bom + rebuilt.map((line) => line.text + line.eol).join('');
-  if (code === source) return unchanged;
+  if (code === source) return null;
 
   /* ---- 可解析闸 ---- */
   const before = parseErrorCount(source);
   const after = parseErrorCount(code);
-  if (before === null || after === null || after > before) return unchanged;
+  if (before === null || after === null || after > before) return null;
 
-  return { code, changed: true, edits: buildEdits(bom, rawLines, lexLines.length, rebuilt, endsWithEol) };
+  return { code, bom, rawLines, lexLineCount: lexLines.length, rebuilt, endsWithEol };
+}
+
+/**
+ * 格式化 2.0 源码（纯函数：文本进、成品 + edits 出）。
+ *
+ * 失败方向永远是"少改"：词法/文法抛错、行数对不上、格式化后 error 数变大 ⇒ 原样返回
+ * （`changed=false`，`edits` 缺席）。空文件 / 全空白文件同样原样返回——那种文件没有结构可归一，
+ * 动它只会改写源事实。
+ */
+export function formatKojo2Source(source: string, options: Kojo2FormatOptions = {}): Kojo2FormatResult {
+  const run = runKojo2Format(source, options);
+  if (run === null) return { code: source, changed: false };
+  return {
+    code: run.code,
+    changed: true,
+    edits: buildEdits(run.bom, run.rawLines, run.lexLineCount, run.rebuilt, run.endsWithEol),
+  };
 }
 
 /**
@@ -519,6 +548,99 @@ function buildEdits(
   ];
 }
 
+/* ============================== 区间格式化（K2-INDENT-BRACKETS） ============================== */
+
+/**
+ * **区间格式化**（`Ctrl+Shift+I` / 「格式化选择区域」的 2.0 版）：规则与判据全部复用
+ * {@link formatKojo2Source}（同一台 `runKojo2Format`），只把落点裁到 `[startLine, endLine]`。
+ *
+ * ## 为什么不把选区切出来单独格式化
+ *
+ * 2.0 的缩进深度是**文档级**判据（开体栈从文件头压下来）、`@原生` 围栏状态也是跨行的；
+ * 切片视角会把块体内的行当成顶层、把围栏里的行当普通行。所以这里整篇算一遍，再按
+ * `rebuilt` 的 `origin` 行映射取"选中行那一段"——与 `Shift+Alt+F` 逐字同口径。
+ *
+ * ## 与整篇结果的关系（可断言的不变式）
+ *
+ * `formatKojo2Range(src, a, b).code` 在 `[a, b]` 行上的字节 == `formatKojo2Source(src).code`
+ * 对应行（按 `rebuilt` 映射对齐；整篇没有增删行时就是同号行）。选区之外逐字节不动：
+ * 那是"只格式化选中行"的定义，也是这条腿唯一敢承诺的东西。
+ *
+ * ## 边界（一律少改）
+ *
+ * - 行号非整数 / 倒置 / 越界 ⇒ 原样返回；
+ * - 选中的行全被空行规则折掉（没有可落点的 kept 行）⇒ 原样返回，不删行；
+ * - 拼出来的混合文档 `parseSource` error 数比输入多 ⇒ 原样返回（与整篇同一条可解析闸）。
+ *
+ * 选区边界上的空行增删属于**选区之外**的呼吸（例如块头前那一空行），本腿不落笔；
+ * 选区内部新增的空行照整篇结果带上（它们夹在 kept 行之间）。
+ */
+export function formatKojo2Range(
+  source: string,
+  startLine: number,
+  endLine: number,
+  options: Kojo2FormatOptions = {},
+): Kojo2FormatResult {
+  if (typeof source !== 'string' || source.length === 0) return { code: source, changed: false };
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine)) return { code: source, changed: false };
+  if (startLine < 1 || endLine < startLine) return { code: source, changed: false };
+  const run = runKojo2Format(source, options);
+  if (run === null) return { code: source, changed: false };
+  const total = run.rawLines.length;
+  const lo = Math.min(startLine, total);
+  const hi = Math.min(endLine, total);
+  if (lo < 1 || hi < lo) return { code: source, changed: false };
+
+  // 选中行 → rebuilt 下标（只认原始行；插在选区内部的空行随首/末 kept 行一起进段）
+  let firstUnit = -1;
+  let lastUnit = -1;
+  for (let index = 0; index < run.rebuilt.length; index += 1) {
+    const origin = run.rebuilt[index]!.origin;
+    if (origin < lo - 1 || origin > hi - 1) continue;
+    if (firstUnit < 0) firstUnit = index;
+    lastUnit = index;
+  }
+  if (firstUnit < 0 || lastUnit < firstUnit) return { code: source, changed: false };
+
+  const segment = run.rebuilt.slice(firstUnit, lastUnit + 1);
+  const head = run.rawLines.slice(0, lo - 1);
+  const tail = run.rawLines.slice(hi);
+  const code =
+    run.bom +
+    [
+      ...head.map((line) => line.content + line.eol),
+      ...segment.map((line) => line.text + line.eol),
+      ...tail.map((line) => line.content + line.eol),
+    ].join('');
+  if (code === source) return { code: source, changed: false };
+
+  // 与整篇同一条可解析闸：混合文档不许比输入更坏
+  const before = parseErrorCount(source);
+  const after = parseErrorCount(code);
+  if (before === null || after === null || after > before) return { code: source, changed: false };
+
+  const lastOriginal = run.rawLines[hi - 1]!;
+  return {
+    code,
+    changed: true,
+    edits: [
+      {
+        range: {
+          startLineNumber: lo,
+          startColumn: 1,
+          endLineNumber: hi,
+          endColumn: lastOriginal.content.length + 1,
+        },
+        // 首行带 BOM 时把 BOM 一并带上（与整篇的 buildEdits 同一口径）
+        newText: (lo === 1 ? run.bom : '') + segment.map((line) => line.text).join('\n'),
+      },
+    ],
+  };
+}
+
+/** 任务书里的名字：`formatRange` 是 {@link formatKojo2Range} 的别名（调用方不必猜前缀） */
+export const formatRange = formatKojo2Range;
+
 /* ============================== 宿主接线 1：Shift+Alt+F ============================== */
 
 /** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
@@ -557,6 +679,51 @@ export function installKojo2DocumentFormatter(monaco: typeof Monaco): Monaco.IDi
     },
   };
   const registration = monaco.languages.registerDocumentFormattingEditProvider(
+    KOJO2_LANGUAGE_ID,
+    provider,
+  );
+  let disposed = false;
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      registration.dispose();
+    },
+  };
+}
+
+/* ============================== 宿主接线 1b：区间格式化（Ctrl+Shift+I） ============================== */
+
+/**
+ * 选中行格式化的 2.0 provider（**只注册 `kojo2` 语言 id**；flag 关 = 零注册）。
+ *
+ * 与整篇 provider 同一条纪律：只做"该不该应答 + 形状翻译"，异常收成"这次不格式化"。
+ * 规则本体是 {@link formatKojo2Range}（整篇算 + 行映射裁剪），本函数一个缩进判据都不写。
+ *
+ * **接线请求（本文件不动 `ui/editor-global-providers.ts`）**：2.0 段里与
+ * `installKojo2DocumentFormatter` 并排加一行 `globalDisposers.push(installKojo2RangeFormatter(monaco))`。
+ * 不给这行 = 选区格式化仍走 v1 的 `.kojo` provider（`kojo-format.ts`），2.0 面不接。
+ */
+export function installKojo2RangeFormatter(monaco: typeof Monaco): Monaco.IDisposable {
+  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
+  const provider: Monaco.languages.DocumentRangeFormattingEditProvider = {
+    displayName: 'kojo-editor',
+    provideDocumentRangeFormattingEdits(model: FormatModelShape, range): Monaco.languages.TextEdit[] {
+      try {
+        if (typeof model.getLanguageId === 'function' && model.getLanguageId() !== KOJO2_LANGUAGE_ID) {
+          return [];
+        }
+        const source = model.getValue();
+        if (typeof source !== 'string') return [];
+        const result = formatKojo2Range(source, range.startLineNumber, range.endLineNumber);
+        if (result.edits === undefined) return [];
+        return result.edits.map((edit) => ({ range: { ...edit.range }, text: edit.newText }));
+      } catch {
+        return [];
+      }
+    },
+  };
+  const registration = monaco.languages.registerDocumentRangeFormattingEditProvider(
     KOJO2_LANGUAGE_ID,
     provider,
   );

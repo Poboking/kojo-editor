@@ -30,8 +30,11 @@ const NAME_CHAR_RE =
  * token 起点前一枚字符的**排除集**（防守；这些位置的归属主收口在装配层白名单）：
  * `#` / `[` = 预处理 / 区间标记记号，`@` = ERB 函数定义位，`$` = 标签，`%` = 表单串，
  * 引号 = 字符串字面量，`:` / `：` = `族:名` 段分隔（那里是 EC-2 的名字位，不是族头位）。
+ *
+ * 导出（additive）：`erb-completion-members.ts` 的点号成员位判定要拒绝 `$标签.` / `@函数.`
+ * 这类**被 sigil 领起的 token**（那是别的源的位），复用这一份排除集、不另抄第二份。
  */
-const ERB_SIGIL_BEFORE: ReadonlySet<string> = new Set(['#', '[', '@', '$', '%', '"', "'", '：', ':']);
+export const ERB_SIGIL_BEFORE: ReadonlySet<string> = new Set(['#', '[', '@', '$', '%', '"', "'", '：', ':']);
 
 /** 裸标识符名字位（0 基区间、左含右不含；`prefix` = 光标前已输入部分；与 `KojoNameField` 同形） */
 export interface ErbNameSlot {

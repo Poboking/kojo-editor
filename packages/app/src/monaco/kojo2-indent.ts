@@ -1,15 +1,18 @@
 /**
- * Kojo 2.0 的**回车缩进**（K2-FOLD-INDENT 批）：`kojo2IndentAfterLine(text, line)` 纯判据 +
- * 一枚 on-type formatter（触发字符 `\n`）。
+ * Kojo 2.0 的**打字期结构增强层**（K2-FOLD-INDENT 批起，K2-INDENT-BRACKETS 批扩到括号）：
+ * - `kojo2IndentAfterLine(text, line)` 回车缩进纯判据；
+ * - `kojo2AutoCloseGuardEditsAt(model, position, trigger)` 围栏内自动闭合守卫；
+ * - 一枚 on-type formatter 承接两条腿（触发字符 `\n` + 成对记号的开括号）。
  *
- * ## 为什么这一批不编 `queries/v2/indents.scm` 的规则
+ * ## 与 `queries/v2/indents.scm` 的分工（K2-INDENT-BRACKETS 之后）
  *
- * 那份查询**刻意零捕获**（头注写明两条理由）：2.0 的缩进配对已经由外部记号
- * （`src/scanner.v2.c` 的 `indent` / `dedent`）做完，"捕获 → 回车规则"没有第二份真源可加；
- * 而 `(block) @indent.increase` 取的是块头**整行文本**，转成锚定正则要么撞上非法正则，
- * 要么退化成逐字匹配那一行。worker 因此如实回 `query-unavailable`（本批不动它）。
- * 回车这一面改用**结构判据**：判型只消费 core 的词法结果（`lex()` 的 `kind` / `word` /
- * `indent`），本文件**不写第二套词法**、一个词形都不手抄。
+ * 那份查询**已经有真捕获**（`@indent.increase` / `@indent.align`），worker 把它翻成宿主的
+ * `KojoStructureIndentRules` 三条腿（`kojo2-worker.ts::indentRulesFromCaptures`）——但那是
+ * **静态规则**：Monaco 的 `onEnterRules` / `indentationRules` 只拿得到"当前行文本"，看不到
+ * "这一行在不在 `@原生` 围栏里"，也拿不到"缩进是否在 4 空格栅格上"。回车这一面因此保留
+ * **上下文判据**：判型只消费 core 的词法结果（`lex()` 的 `kind` / `word` / `indent`），
+ * 本文件**不写第二套词法**、一个词形都不手抄。两层不冲突：静态规则管按键瞬间的近似手感，
+ * 本层在 `formatOnType` 开启时校正到精确值（不一致才发一条 edit）。
  *
  * ## 判据（每一行只落一档；顺序即优先级）
  *
@@ -49,18 +52,29 @@
  *
  * {@link installKojo2IndentProvider} 只给 `kojo2` 语言 id 注册 on-type formatter，
  * **flag 关时零注册**（调用点在 `ui/editor-global-providers.ts` 的 2.0 段里，本函数自身
- * 也再挡一次）。触发字符跟随 v1 的 `installEnterIndenter`（`'\n'`）：Monaco 只在
- * `editor.formatOnType` 开启时派发——所以它是**增强层**，按键瞬间的手感仍由
- * `kojo2-enter.ts` 的 `onEnterRules` 兜；两层不冲突：正则层先给一个近似缩进，本层在
- * 生效时校正到精确值（不一致才发一条 edit）。
+ * 也再挡一次）。触发字符两族：`\n`（回车缩进，跟随 v1 `installEnterIndenter`）与
+ * `KOJO2_PAIRS` 里的开括号（围栏内自动闭合守卫）。**必须同一枚 provider**：Monaco 只派发
+ * 注册表里第一枚 provider 的触发字符（`format.js::getOnTypeFormattingEdits`），拆成两枚会让
+ * 其中一族静默失效。
+ *
+ * Monaco 只在 `editor.formatOnType` 开启时派发——所以它是**增强层**，按键瞬间的手感仍由
+ * `kojo2-enter.ts` 的 `onEnterRules` 与语言配置的 `autoClosingPairs` 兜；两条腿不冲突。
+ * 围栏内自动闭合这条守卫因此也有上限：`formatOnType` 关掉的作者仍会在围栏里拿到自动闭合
+ * （语言配置没有围栏上下文，`notIn` 只认 `string` / `comment` / `regex`）。
  *
  * 失败面：判不准 / 模型已释放 / 词法抛错 ⇒ `[]`（一个字符都不改），绝不抛进 Monaco。
  */
 import type * as Monaco from './entry';
-import { KOJO2_LANGUAGE_ID } from './kojo2-language';
+import { KOJO2_LANGUAGE_ID, KOJO2_PAIRS } from './kojo2-language';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
-import { KOJO2_BLOCK_HEADER_COLON_RE, KOJO2_INDENT_UNIT } from './kojo2-enter';
-import { KOJO2_INDENT_WIDTH } from './kojo2-lexicon';
+import { KOJO2_BLOCK_HEADER_COLON_RE, KOJO2_INDENT_UNIT, KOJO2_NATIVE_HEADER_RE, kojo2IndentationRules } from './kojo2-enter';
+import { KOJO2_INDENT_WIDTH, KOJO2_NATIVE_FENCE_WORD } from './kojo2-lexicon';
+import {
+  mergeIndentConfig,
+  type BaseIndentPatterns,
+  type MergedIndentConfig,
+} from './tree-sitter/indent';
+import type { Kojo2IndentRules } from './tree-sitter/kojo2-worker-protocol';
 import {
   KOJO_DECL_WORDS,
   KOJO_DISPATCH_WORDS,
@@ -134,6 +148,27 @@ const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
  * 触发面越窄，越不会与作者的手动缩进打架（打别的字不该触发缩进校正）。
  */
 export const KOJO2_INDENT_TRIGGER_CHARS: readonly string[] = Object.freeze(['\n']);
+
+/**
+ * 自动闭合的**开括号**触发字符（与语言配置的 `autoClosingPairs` 同一张表 `KOJO2_PAIRS`）。
+ *
+ * 为什么要走 on-type：Monaco 的静态 `autoClosingPairs` 只有 `notIn: ['string'|'comment'|'regex']`
+ * 三档，`@原生` 围栏是 tokenizer 状态、不在那三档里 ⇒ 语言配置挡不住围栏内的自动补。
+ * 围栏上下文（`lex` 的 `kind === 'native'`）只有本模块的 on-type 层拿得到，所以由这里在
+ * 同一枚 provider 里处理（Monaco 的 on-type 只派发**注册表里第一枚** provider 的触发字符，
+ * 拆成第二枚 provider 会让回车缩进或本档之一静默失效——`format.js::getOnTypeFormattingEdits`）。
+ */
+export const KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS: readonly string[] = Object.freeze([
+  ...new Set(KOJO2_PAIRS.map(([open]) => open)),
+]);
+
+/** 开括号 → 闭括号（`"` 两边同一枚）；表外 ⇒ `null` */
+function closerOf(open: string): string | null {
+  for (const [openChar, closeChar] of KOJO2_PAIRS) {
+    if (openChar === open) return closeChar;
+  }
+  return null;
+}
 
 /* ============================== 结构判据（纯函数） ============================== */
 
@@ -289,6 +324,98 @@ export function kojo2IndentEditsAt(
 }
 
 /**
+ * 自动闭合的**围栏守卫**（导出仅为可单测：宿主只经 provider 调它）。
+ *
+ * 判据三条，缺一条就会误删作者的东西：
+ * - 触发的必须是成对记号表里的**开**括号，且光标左侧刚打进去的就是它、右侧紧贴的是它的闭括号
+ *   （合起来就是 Monaco 自动闭合留下的指纹）；
+ * - 光标所在行必须是 `lex` 判定的 `@原生` **体内**（`kind === 'native'`，含围栏内空行）；
+ * - 围栏外 / 台词 / 注释一律 `[]`（自动闭合照旧，本守卫一个字都不碰）。
+ *
+ * 返回的编辑删掉那枚**自动补出来的**闭括号；不确定（模型取不到 / 行号越界 / 词法抛错）⇒ `[]`。
+ *
+ * 已知上限（写出来而不是藏着）：这是 on-type 层，Monaco 只在 `formatOnType` 开启时派发；
+ * 关掉它的作者在围栏内仍会拿到自动闭合（语言配置那一格没有围栏上下文，`notIn` 也不认
+ * tokenizer 状态）。`@原生` 原文保真优先：宁可少补，不许改写围栏里的字节。
+ */
+export function kojo2AutoCloseGuardEditsAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  trigger: string,
+): Monaco.languages.TextEdit[] {
+  if (typeof trigger !== 'string' || trigger.length !== 1) return [];
+  const closer = closerOf(trigger);
+  if (closer === null) return [];
+  if (typeof model.getLanguageId === 'function' && model.getLanguageId() !== KOJO2_LANGUAGE_ID) {
+    return [];
+  }
+  const line = position.lineNumber;
+  const column = position.column;
+  if (!Number.isInteger(line) || line < 1) return [];
+  if (!Number.isInteger(column) || column < 2) return [];
+  const current = lineContentOf(model, line);
+  // 光标左一格 = 刚打进去的开括号；右一格 = 自动闭合补出来的闭括号
+  if (current[column - 2] !== trigger) return [];
+  if (current[column - 1] !== closer) return [];
+  let text: string;
+  try {
+    text = model.getValue();
+  } catch {
+    return [];
+  }
+  if (typeof text !== 'string' || !text.includes(KOJO2_NATIVE_FENCE_WORD)) return [];
+  let record: KojoLexLine | undefined;
+  try {
+    record = lex(text).lines[line - 1];
+  } catch {
+    return [];
+  }
+  if (record === undefined || record.kind !== 'native') return [];
+  return [
+    {
+      range: {
+        startLineNumber: line,
+        startColumn: column,
+        endLineNumber: line,
+        endColumn: column + 1,
+      },
+      text: '',
+    },
+  ];
+}
+
+/**
+ * 基底（`kojo2-enter.ts` 的语言配置判据）：`@原生` 栏头与行尾全角冒号两条回车规则。
+ *
+ * 与 `kojo2IndentationRules()` 同一份源码（`indentOnEnter` 就是那两格 `beforeText`，
+ * `increaseIndentPattern` 是它们的并集）；结构层的规则是**加法**，这两条一条都不撤。
+ */
+const KOJO2_BASE_INDENT: BaseIndentPatterns = (() => {
+  const rules = kojo2IndentationRules();
+  return {
+    indentOnEnter: [KOJO2_NATIVE_HEADER_RE, KOJO2_BLOCK_HEADER_COLON_RE],
+    increaseIndentPattern: rules.increaseIndentPattern,
+    decreaseIndentPattern: rules.decreaseIndentPattern,
+  };
+})();
+
+/**
+ * worker 的 `indents` 规则 → 宿主可直接 `setLanguageConfiguration` 的合并结果（additive 便捷口）。
+ *
+ * 这就是"宿主 `mergeIndentConfig` 消费"那一步：基底用 2.0 自己的回车判据（`@原生` 栏头 /
+ * 行尾全角冒号），结构层规则只**加**在后面；`null` = worker 没给规则 / 全空 ⇒ 宿主不重发
+ * 语言配置（与 v1 `syncIndentConfig` 同口径，空规则 = 一个字都不发）。
+ *
+ * 纯函数、零注册：调用点在宿主（`ui/editor-global-providers.ts` 的 2.0 段）而不是本文件。
+ * 接线请求见本文件头「注册」与 `kojo2-format.ts` 的 `installKojo2RangeFormatter` 注释。
+ */
+export function kojo2IndentConfigWith(
+  rules: Kojo2IndentRules | null | undefined,
+): MergedIndentConfig | null {
+  return mergeIndentConfig(KOJO2_BASE_INDENT, rules);
+}
+
+/**
  * 为 `kojo2` 语言注册回车缩进 formatter（**flag 关 = 零注册**）。
  *
  * 返回的 disposable 幂等（注册只撤一次）；provider 体内任何异常都只让**这一轮**不改缩进。
@@ -296,12 +423,18 @@ export function kojo2IndentEditsAt(
 export function installKojo2IndentProvider(monaco: typeof Monaco): Monaco.IDisposable {
   if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
   const provider: Monaco.languages.OnTypeFormattingEditProvider = {
-    autoFormatTriggerCharacters: [...KOJO2_INDENT_TRIGGER_CHARS],
-    provideOnTypeFormattingEdits(model, position) {
+    // 一枚 provider 两条腿：`\n` 走回车缩进，开括号走围栏内自动闭合守卫（见两个触发字符常量的注释）
+    autoFormatTriggerCharacters: [
+      ...KOJO2_INDENT_TRIGGER_CHARS,
+      ...KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
+    ],
+    provideOnTypeFormattingEdits(model, position, ch) {
       try {
-        return kojo2IndentEditsAt(model, position);
+        return ch === '\n'
+          ? kojo2IndentEditsAt(model, position)
+          : kojo2AutoCloseGuardEditsAt(model, position, ch);
       } catch {
-        // 判不准 / 模型已释放 / 桩 model：一个字符都不改（缩进是增强层，不是唯一通路）
+        // 判不准 / 模型已释放 / 桩 model：一个字符都不改（缩进与围栏守卫都是增强层，不是唯一通路）
         return [];
       }
     },
@@ -310,7 +443,8 @@ export function installKojo2IndentProvider(monaco: typeof Monaco): Monaco.IDispo
   const registration = monaco.languages.registerOnTypeFormattingEditProvider(
     KOJO2_LANGUAGE_ID,
     provider,
-  );  let disposed = false;
+  );
+  let disposed = false;
   return {
     dispose() {
       if (disposed) return;

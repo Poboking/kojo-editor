@@ -60,25 +60,18 @@
 > **批次七 8 路全部交付**（MIGRATE-SHAPE / STORAGE-RECYCLED-UI / EXPAND-VIEW / FORMAT-2 / LANG-CONFORMANCE / RELEASE-AUTOMATION / SEMA-QUICKFIX / EDITOR-SYMBOLS）+ 5 处组长接线（大纲/格式化 provider 注册、展开视图编译来源、`eventArgs` 进 app、面包屑 2.0 分支、artifact 阈值重基线）；完成行已删，回执进提交正文。
 
 
-## 在办 · 编辑器体感对齐（ERB / kojo2 同权 · 2026-10-22）
+## 编辑器体感对齐（ERB / kojo2 同权 · 2026-10-22）
 
 > **依据**：2026-10-22 体感评审（对标 VS Code 的 LSP 面逐项补齐）。**原则**：ERB 与 kojo2 同为一级语言，能力矩阵由 descriptor 声明 + `LANG-PARITY-GATE` 钉住；禁止"某 provider 只挂一门语言"。来源：组长评审，待认领。
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| ERB-TS-FACETS | ERB 树层全量 facets：补 `indents.scm` / `brackets.scm` / 结构诊断查询，`ERB_STRUCTURE_RUNTIME` 声明 semantic/indent/brackets 面；providers 消费（语义着色 / 智能缩进 / 括号配对 / 选择范围 / 结构诊断）；pref 灰度 + 降级可见；与 `erb-enter` 词法层级对拍 | 缩进一致率 ≥99%；残缺标签不静默；flag 关逐字不变 | 待认领 |
-| ERB-TS-SEMANTIC | ERB 语义着色：tag / 表达式 / 注释 / 文本分层（Monarch 仍作底 tokenizer），token 契约与主题规则单源（`kojo-theme-rules`）；与 v1 名字分色不打架 | 分层 token 全覆盖；与既有主题规则逐字对齐 | 待认领 |
-| ERB-COMPLETE-MEMBER | ERB 成员/属性/函数族补全启发式扩展：名录台账 + 上下文，标注确定度；不猜动态类型 | 命中率读数；不确定项显式标注 | 待认领 |
-| K2-LSP-REFS | kojo2 引用查找：`@函` / `# 表/# 池/# 模/# 变量/# 常量/# 机/# 织` 同文件 + 跨文件引用（项目索引），Find All References provider | 分组/上限/性能护栏；噪音零容忍（字符串/注释不误报） | 待认领 |
-| K2-LSP-RENAME | kojo2 符号重命名：声明与引用同步（WorkspaceEdit），字符串 / `@原生` / 注释不误改，冲突可见；复用 undo 停点 | 重命名后 parse 零 error；跨文件一致 | 待认领 |
-| K2-LSP-SIGNATURE | kojo2 签名帮助：`@函` / `# 模` 形参、`!` 调用位、默认值/存储期提示 | 未知形参不猜；参数位高亮正确 | 待认领 |
-| K2-LSP-INLAY | kojo2 inlay hints：`# 变量` 类型、`@巡` 绑定、`# 表` 分档值/`{表}` 读法（可开关） | 大文件击键不超预算；flag 关零渲染 | 待认领 |
-| K2-LSP-CODELENS | kojo2 code lens：`# 机` 事件、`@织` 监听、函数引用计数（点击进引用面） | disposed/后台 model 不崩；计数与引用面同源 | 待认领 |
-| K2-LSP-HILITE-SELECT | kojo2 document highlight（同符号出现处）+ selection range（按结构展开：声明→块→幕），`?` 链/`@原生` 边界写死 | 展开层级与 AST 一致；边界不越块 | 待认领 |
-| K2-LSP-CALLHIER | kojo2 call hierarchy：`@函` 调用/被调用（项目级索引），无结果显式空 | 跨文件可展开；循环不炸 | 待认领 |
-| K2-INDENT-BRACKETS | kojo2 括号配对/自动闭合 + `indents.scm` 实现（当前零捕获）+ on-type/范围格式化接 `kojo2-format` | `@原生` 内零改动；格式化后 parse 零 error | 待认领 |
-| K2-COMPLETE-ARGS | kojo2 补全补位：`# 机 <事件>` 参数 / `@织` 事件名 / 存储期（`存档·场景·会话`）/ `# 模` 形参与插槽（adapter 投影注入） | 语言层零游戏名词；候选来自 adapter 事实 | 待认领 |
-| K2-COMPLETE-FACE | `@颜绘` 对象/表情/服装/差分 + `(心形)` 提示名补全（`faceTemplates` / `hintSupport` 投影注入，语言层不 import adapter） | 候选与 adapter 数据逐项对拍 | 待认领 |
-| K2-COMPLETE-SNIPPET | kojo2 块级 snippets：`?` 链、`# 表` 两列、`# 池` 分支、`@巡` 骨架、`# 机` 事件头（宿主翻译层决定插形态，纯函数不猜） | 插入后 parse 零 error；位置门不误触 | 待认领 |
-| LANG-PARITY-GATE | 一等语言能力矩阵闸：descriptor 声明 capabilities（folding/outline/format/semantic/indent/refs/rename/signature/inlay/codelens/implementation/highlight/selection/callhierarchy/completion/hover/definition/diagnostics），测试断言 ERB 与 kojo2 **每项"都注册或都有显式豁免"**，并锁注册种类/顺序 | 任一语言缺面即红；豁免必须写理由 | 待认领 |
 | LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 待认领 |
+
+> **批次八（2026-10-22，已交付）**：12 路并行——ERB 树层全量 facets（indents/brackets/diagnostics/semantic）、ERB 成员补全、kojo2 引用/重命名/签名/inlay/code lens/高亮扩选/调用层级、缩进括号、补全补位、能力矩阵闸；组长接线 8 枚 provider + 补全注入 + ERB 结构诊断上屏。完成行已删，回执进提交正文。
+
+| K2-INDENT-WIRE | 结构层消费 `indents.scm`：`kojo2IndentConfigWith(reply.rules)` 接 `setLanguageConfiguration('kojo2', { onEnterRules, indentationRules })`（口径照 v1 `syncIndentConfig`，只交两属性）。当前真捕获已产出、宿主未消费 | 规则注入后回车层级与 on-enter 一致；`@原生` 内零规则 | 待认领 |
+| K2-LSP-CALLHIER-PANEL | Monaco 0.57 无 `registerCallHierarchyProvider`：宿主自建调用层级面板，消费 `createKojo2CallHierarchyProvider()`（纯模型已交付并测试） | 面板可展开同文件入/出边；`data` 可作跨文件键 | 待认领 |
+| K2-COMPLETE-DATA | 补全数据源：`faceTemplates`（`@颜绘` 表情/服装/差分）与 `hintNames`（`(心形)` 提示名）目前**无 adapter 生产者** ⇒ 新候选位恒空；需 adapter additive 字段或工程级数据 | 候选与 adapter 数据逐项对拍；不手抄词表 | 待认领 |
+| ERB-LSP-PARITY | ERB 同权补缺：ERB 侧仍无 `highlight` / `selection` / `callhierarchy` 三面（kojo2 已有）；同时 kojo2 `implementation` 无模块。补齐后两语言能力矩阵仅剩真实差异 | 两语言矩阵逐项要么都交付、要么有理由豁免 | 待认领 |
+| K2-LSP-CROSSFILE | 引用/重命名/调用层级跨文件：当前只覆盖同文件（项目索引批）；`kojo2-references` 的 `getIndex`、callhierarchy 的 `data` 已留口 | 跨文件结果可展开；上限/性能护栏 | 待认领 |
