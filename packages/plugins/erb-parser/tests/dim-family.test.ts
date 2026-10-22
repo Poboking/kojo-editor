@@ -108,7 +108,8 @@ describe('erb-parser · #DIM 族的索引面与快照面', () => {
     // 上一代盘上形态：`#DIM DYNAMIC CNT` 被记成 name=`DYNAMIC`（本批判为假事实的 2,866 行之一）。
     // 它的**元组结构与当前版本逐字相符**——结构校验挡不住陈旧值，只有版本判据挡得住。
     const legacyEntries: Record<string, unknown[]> = {
-      '/a.ERB': [1000, 12, 12, 1, 0, [], [['DYNAMIC', 'DIM', 1]], [], [], null],
+      // 11 位＝v11 当前形态（第 11 位候选集 `null`＝未知，仍是结构合法的当前条目）
+      '/a.ERB': [1000, 12, 12, 1, 0, [], [['DYNAMIC', 'DIM', 1]], [], [], null, null],
     };
     const currentShape = { version: SNAPSHOT_VERSION, rootDir: 'D:/p', savedAt: 1, entries: legacyEntries };
     // ① 结构本身是合法的当前形态 ⇒ 证明"拒它"靠的绝不是结构（假名条目照样能过结构校验）
