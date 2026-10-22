@@ -33,7 +33,7 @@ import type {
   PluginContext,
 } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { SCAN_REFS_TASK, scanRefsBatch, scanRefsNamesOf, refsNameCacheState, type ScanRefsPayload } from '../src/offload';
+import { SCAN_REFS_TASK, scanRefsBatch, scanRefsNamesOf, refsNameCacheState, type ScanRefsFileResult, type ScanRefsPayload } from '../src/offload';
 import { buildReferenceIndex, erbReferenceLocationsAt, scanFileRefs, type FileRefs } from '../src/references';
 import { nameSetDigest } from '../src/snapshot';
 import { parseErbText } from '../src/scanner';
@@ -88,7 +88,20 @@ const DICT = [
 ];
 
 /** 逐条目序列化（对拍用：元组形态原样进 JSON，不做任何归一） */
-const encode = (refs: readonly FileRefs[]): string => JSON.stringify(refs);
+const encode = (refs: readonly ScanRefsFileResult[]): string => JSON.stringify(refs);
+
+/**
+ * 对照面（REFS-PROVENANCE 起 scanRefsBatch 交回 {refs, candidates} 对）：
+ * refs 用老谓词直扫，候选集用同一个 `scanFileRefs` 的收集位收——
+ * 这正是"收集是 additive、refs 判据一字未动"的两面。
+ */
+const expectOf = (text: string, names: ReadonlySet<string>): ScanRefsFileResult => {
+  const candidates = new Set<string>();
+  const refs = scanFileRefs(text, (u) => names.has(u), (u) => {
+    candidates.add(u);
+  });
+  return { refs, candidates: [...candidates].join('\n') };
+};
 
 function payloadOf(names: readonly string[], texts: string[]): ScanRefsPayload {
   const part = scanRefsNamesOf(nameSetDigest(names), names);
@@ -102,7 +115,7 @@ describe('scanRefsBatch · 与主线程内联路径逐条目全等', () => {
     const dicts: readonly string[][] = [DICT, DICT.slice(0, 3), []];
     for (const names of dicts) {
       const set = new Set(names);
-      const want = texts.map((t) => scanFileRefs(t, (u) => set.has(u)));
+      const want = texts.map((t) => expectOf(t, set));
       const payload = payloadOf(names, texts);
       // 冷轮：指纹是新的 ⇒ worker 侧走"建 Set"那一条
       const cold = scanRefsBatch({ ...payload, namesFp: nameSetDigest(names) + 1_000_003 });
@@ -121,8 +134,11 @@ describe('scanRefsBatch · 与主线程内联路径逐条目全等', () => {
     expect(refsNameCacheState()?.fp).toBe(nameSetDigest(['ALPHA']));
     const second = scanRefsBatch(payloadOf(['BETA'], [text]));
     expect(refsNameCacheState()?.fp).toBe(nameSetDigest(['BETA']));
-    expect(encode(first)).toBe(encode([scanFileRefs(text, (u) => u === 'ALPHA')]));
-    expect(encode(second)).toBe(encode([scanFileRefs(text, (u) => u === 'BETA')]));
+    expect(encode(first)).toBe(encode([expectOf(text, new Set(['ALPHA']))]));
+    expect(encode(second)).toBe(encode([expectOf(text, new Set(['BETA']))]));
+    // 候选集与命中无关（收集发生在判定前）：换名录不换候选
+    expect(first[0]!.candidates).toBe('CALL\nALPHA\nBETA');
+    expect(second[0]!.candidates).toBe('CALL\nALPHA\nBETA');
     // 再回第一枚名录：缓存只留最新一份，回退重建后产出仍与首轮逐字相同
     expect(encode(scanRefsBatch(payloadOf(['ALPHA'], [text])))).toBe(encode(first));
   });
@@ -133,7 +149,9 @@ describe('scanRefsBatch · 与主线程内联路径逐条目全等', () => {
     const poisoned = { ...payloadOf(names, ['CALL ALPHA\n']), namesJoined: 'ALPHA\nBETA\nDELTA\nGAMMA' };
     expect(() => scanRefsBatch(poisoned)).toThrow(/name set unusable/);
     // 反恒真：同一份 texts 在合规名录下是能扫出东西的（抛的是自证失败，不是"空结果"）
-    expect(encode(scanRefsBatch(payloadOf(['ALPHA'], ['CALL ALPHA\n'])))).toBe('[[["ALPHA",1,6,1]]]');
+    expect(encode(scanRefsBatch(payloadOf(['ALPHA'], ['CALL ALPHA\n'])))).toBe(
+      encode([{ refs: [['ALPHA', 1, 6, 1]] as unknown as FileRefs, candidates: 'CALL\nALPHA' }]),
+    );
   });
 });
 

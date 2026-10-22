@@ -28,6 +28,7 @@ import {
   scanRefsNamesOf,
   type ParseFilePayload,
   type ScanFlowPayload,
+  type ScanRefsFileResult,
   type ScanRefsNamesPart,
   type ScanRefsPayload,
 } from './offload';
@@ -46,14 +47,17 @@ import {
   SNAPSHOT_VERSION,
   aggregateIndex,
   attachRefs,
+  changedNamesBetween,
   coerceSnapshot,
   countEntries,
   diffSnapshot,
   encodeEntries,
+  entryNamesOf,
   mergeEntries,
   nameSetDigest,
   pruneSnapshotKeys,
   refsAreReusable,
+  refsProvableUnchanged,
   salvageSnapshot,
   snapshotKeyCandidatesFor,
   snapshotKeyFor,
@@ -625,14 +629,60 @@ export function createErbParserPlugin(): Plugin {
         const refsStartedAt = Date.now();
         const hasName = (upper: string): boolean => byName.has(upper);
         const refsByPath = new Map<string, FileRefs>();
+        /** 本次重扫各文件的候选记号集（'\n' 连接；与 refsByPath 逐路径同锁步，见 dispatchRefsChunk） */
+        const candidatesByPath = new Map<string, string>();
         const freshToScan = diff.stale.filter((path) => fresh.has(path));
+        /**
+         * 溯源巡检（REFS-PROVENANCE，2026-10-22）——**逐文件可证免扫**：
+         *
+         * PS-3 的判据是"条目记的名录摘要 === 当前摘要"，名录一变 ⇒ 全部摘要失配 ⇒ 全树重扫
+         * （真语料 3,971 文件实测 7.4 s；REFS-WORKER 后 1.4 s）。本批把判据细化到逐文件：
+         * 条目第 11 位记下**候选记号集**（构建 refs 时问过 hasName 的一切记号），而
+         * `scanFileRefs` 的产出只取决于"每个候选过不过 hasName"——名录的**对称差**
+         * （`changedNamesBetween`）与该文件候选集不相交 ⇒ 每个记号的判定结果不变
+         * ⇒ refs 逐字节不变（`refsProvableUnchanged`）⇒ **免扫，只补记新摘要**（盖章）。
+         * 真语料实测：改/名一个中等用量名字只牵动个位数文件（见交付读数）。
+         *
+         * 保守侧（宁可重扫、绝不静默错）：
+         * - 候选未知（键缺席 = v10 迁移条目）⇒ 重扫一遍顺带收候选（升级后第一轮付一次全树 refs 重扫，
+         *   此后逐轮热——`SNAPSHOT_VERSION` 头注的可见迁移路径）；
+         * - salvage 丢过条目（`skipped > 0`）⇒ 条目集不完整 ⇒ 旧名录还原不可信 ⇒ 对称差这条路
+         *   整段关掉，退回 PS-3 的全量溯源重扫；
+         * - 摘要失配 + 候选命中差集 ⇒ 嫌疑坐实，重扫。
+         */
         const provenanceToScan: string[] = [];
-        if (snapshot !== null && snapshot.namesFp !== namesFp) {
-          // 信封摘要与当前名录不符（含旧盘无信封位）⇒ 逐条目巡检；相符 ⇒ 全体条目已可信，跳过
+        const provenanceClean: string[] = [];
+        let changed: ReadonlySet<string> | null = null;
+        if (snapshot !== null) {
+          if (snapshot.namesFp !== namesFp) {
+            changed =
+              salvaged !== null && salvagedSkipped > 0
+                ? null
+                : changedNamesBetween(entryNamesOf(snapshot.entries), new Set(byName.keys()));
+          }
           for (const path of diff.reusable) {
             const e = snapshot.entries[path];
-            if (e !== undefined && !refsAreReusable(e, namesFp)) provenanceToScan.push(path);
+            if (e === undefined) continue;
+            if (refsAreReusable(e, namesFp)) {
+              // refs 溯源相符：refs 必然正确。候选未知（v10 迁移）仍要扫一遍收候选——
+              // 否则它永远答不了下一轮的免扫判据（每轮都白付重扫）
+              if (e.candidates === undefined) provenanceToScan.push(path);
+              continue;
+            }
+            if (changed !== null && refsProvableUnchanged(e, changed)) provenanceClean.push(path);
+            else provenanceToScan.push(path);
           }
+        }
+        if (provenanceClean.length > 0 && snapshot !== null) {
+          // 盖章（纯函数重建条目）：免扫条目的 refs 原样留用，但溯源位补记当前名录摘要——
+          // 连同本轮扫过的条目一起，落盘后全体条目重新记账相符（信封位下一轮照常命中）。
+          // 必须在 mergeEntries/attachRefs 之前替换 snapshot：落盘与 referencesBuild 读的都是这份。
+          const stampedEntries = { ...snapshot.entries };
+          for (const path of provenanceClean) {
+            const e = stampedEntries[path]!;
+            stampedEntries[path] = { ...e, refsNamesFp: namesFp };
+          }
+          snapshot = { ...snapshot, entries: stampedEntries };
         }
         const refsToScan = provenanceToScan.length > 0 ? [...freshToScan, ...provenanceToScan] : freshToScan;
         /* ---------------- REFS-WORKER（2026-10-21）：引用段整块进并行通道 ----------------
@@ -666,9 +716,20 @@ export function createErbParserPlugin(): Plugin {
             bodies.push(tf.text);
           }
           if (paths.length === 0) return;
-          /** 老路径（也是所有回退的落点）：主线程直接扫，谓词就是索引本身 */
+          /** 老路径（也是所有回退的落点）：主线程直接扫，谓词就是索引本身。
+           * REFS-PROVENANCE：候选收集位与 hasName 判定同源同序——refs 产出与不收集时逐字节相同 */
           const scanInline = (): void => {
-            for (let i = 0; i < paths.length; i++) refsByPath.set(paths[i]!, scanFileRefs(bodies[i]!, hasName));
+            for (let i = 0; i < paths.length; i++) {
+              const candidates = new Set<string>();
+              refsByPath.set(
+                paths[i]!,
+                scanFileRefs(bodies[i]!, hasName, (upper) => {
+                  candidates.add(upper);
+                }),
+              );
+              // 记号判据是 \p{L}\p{N}_ ⇒ 候选不含连接符（真语料 3971 文件 / 170 万候选 sepSafe 实测）
+              candidatesByPath.set(paths[i]!, [...candidates].join('\n'));
+            }
           };
           if (paths.length < REFS_OFFLOAD_MIN_FILES) {
             refsOffloadStat.inline++;
@@ -680,7 +741,7 @@ export function createErbParserPlugin(): Plugin {
           refsOffloadStat.offload++;
           refsOffloadStat.files += paths.length;
           const task = compute
-            .offload<FileRefs[]>(SCAN_REFS_TASK, { ...refsNamesPart, texts: bodies } satisfies ScanRefsPayload)
+            .offload<ScanRefsFileResult[]>(SCAN_REFS_TASK, { ...refsNamesPart, texts: bodies } satisfies ScanRefsPayload)
             .then(
               (batch) => {
                 const got: unknown = batch;
@@ -694,7 +755,24 @@ export function createErbParserPlugin(): Plugin {
                   scanInline();
                   return;
                 }
-                for (let i = 0; i < paths.length; i++) refsByPath.set(paths[i]!, got[i] as FileRefs);
+                // 形状逐条自证（REFS-PROVENANCE）：产出是 {refs, candidates} 对；不符 = 通道产出不可信
+                // ⇒ 原样退回内联老路径（宁慢不错、不静默，纪律同条数自证）
+                for (let i = 0; i < got.length; i++) {
+                  const item = got[i] as { refs?: unknown; candidates?: unknown } | null;
+                  if (item === null || typeof item !== 'object' || !Array.isArray(item.refs) || typeof item.candidates !== 'string') {
+                    refsOffloadStat.fallback++;
+                    ctx.log.warn(
+                      `Refs offload returned a malformed item at ${i} (expected {refs, candidates}); scanned inline`,
+                    );
+                    scanInline();
+                    return;
+                  }
+                }
+                for (let i = 0; i < paths.length; i++) {
+                  const item = got[i] as ScanRefsFileResult;
+                  refsByPath.set(paths[i]!, item.refs);
+                  candidatesByPath.set(paths[i]!, item.candidates);
+                }
               },
               (err: unknown) => {
                 refsOffloadStat.fallback++;
@@ -764,8 +842,8 @@ export function createErbParserPlugin(): Plugin {
         /** salvage 单独一行：壳侧日志按 170 字符截断，把作废面的读数挤到第二行才看得见 */
         ctx.log.info(
           `  index salvage: ${salvaged === null ? 0 : countEntries(salvaged.entries)}/${allFiles.length} ` +
-            `(丢 ${salvagedSkipped}, 溯源补正 ${provenanceToScan.length}, 旧形态 ${salvaged?.legacy === true ? 1 : 0}, ` +
-            `键 ${salvaged === null ? '-' : salvaged.key})`,
+            `(丢 ${salvagedSkipped}, 溯源补正 ${provenanceToScan.length}, 候选免扫 ${provenanceClean.length}, ` +
+            `旧形态 ${salvaged?.legacy === true ? 1 : 0}, 键 ${salvaged === null ? '-' : salvaged.key})`,
         );
 
         /**
@@ -790,7 +868,9 @@ export function createErbParserPlugin(): Plugin {
             // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合）+ 溯源巡检补扫的复用条目（PS-3：
             // 热轮与 salvage 轮同判据），恰好是需要挂接的那批；未复扫条目自带快照 refs、原样留用。
             // 挂上新流水的条目同时记下**当前名录摘要**：下一轮"正文没变、名录变了"就靠它对号入座。
-            const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath, namesFp);
+            // REFS-PROVENANCE：候选集随同一批挂接（每个重扫路径都有，空集 = ''，键照写）——
+            // 下一轮的逐文件免扫判据（refsProvableUnchanged）吃的正是这一位。
+            const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath, namesFp, candidatesByPath);
             // 信封摘要（PS-3）：全体条目都记了当前账才写数，否则写 null（下轮退回逐条目巡检）
             const envelopeFp = verifiedNamesDigest(entries, namesFp);
             const entryCount = countEntries(entries);

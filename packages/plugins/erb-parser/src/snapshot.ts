@@ -107,8 +107,21 @@ import type { FileRefs, RefRun } from './references';
  * `DYNAMIC`），另有 22 行 `#DEFINE` 一条不收。修复后同一行的 `name` 是另一个字符串——
  * 与 v7→v8 的逗号形修复同判据（准入纪律第 1 条：解析器口径没变才准入），v9 及更早**不得入表**：
  * 升 v10 后第一轮对存量盘付一次整体冷重建（fail-closed），此后照常热。
+ *
+ * **v10 → v11**（REFS-PROVENANCE 批，2026-10-22）：**条目追加第 11 位 `candidates`**＝
+ * 该文件的**候选记号集**——构建 refs 时被拿去问 `hasName` 的一切归一化记号（命中与否都算，
+ * 含 `@` 定义名），`'\n'` 连接成一个字符串（记号判据 `\p{L}\p{N}_` ⇒ 不可能含连接符）。
+ * 这是"溯源位"从**名录指纹**细化到**逐文件可证**的一步：v10 的溯源位只能回答"这份 refs 是
+ * 哪张名录下扫的"，名录一变就得全树重扫（真语料 3,971 文件实测 7.4 s / 离线 worker 1.4 s）；
+ * 有了逐文件候选集，构建轮拿"新旧名录的对称差 ∩ 该文件候选集"就能**证明**"名录变了但这份
+ * refs 逐字节不变"——真语料实测改/名一个中等用量名字只牵动个位数文件（见交付读数）。
+ * 迁移路径**可见且一次性**：v10 条目没有候选位 ⇒ 按准入纪律 3 落在保守侧 = 该条 refs 判
+ * "候选未知"，构建轮照常复用其结构、但 refs 要重扫一遍**顺带收候选**（此后逐轮热）；
+ * 即升级后第一轮付一次全树 refs 重扫，与 v9→v10 的冷重建同款代价、只付一次。
+ * 盘上 `null` = 候选未知（仅 v10 迁移条目会短暂处于此态，下轮落盘前必然补正）；
+ * 内存里键**恒在**（含空串 = "已知没有候选"——空文件/无记号文件据此免于永远重扫）。
  */
-export const SNAPSHOT_VERSION = 10;
+export const SNAPSHOT_VERSION = 11;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -118,14 +131,22 @@ export const SNAPSHOT_VERSION = 10;
  * 2. 新旧差异只能是**新条目多了位**（旧 payload 缺位 ⇒ 该位按"未知"处理，绝不猜值）；
  * 3. 缺位的"未知"必须落在**保守侧**：要么触发一次重扫，要么判该文件过期，不许静默当真。
  *
- * - `10`：同形（10 位）。
+ * - `11`：同形（11 位；第 11 位 = 候选记号集）。
+ * - `10`：同形（10 位）+ **缺第 11 位**。v11 没动解析口径（前 10 位逐字同义），差异只是
+ *   "新条目多了候选位" ⇒ 按纪律 2/3 准入：缺位 = 候选未知 = 保守侧（refs 重扫一遍补候选，
+ *   结构照常复用，见 `SNAPSHOT_VERSION` 头注 v10→v11 的迁移路径）。`hasCandidates: false`
+ *   就是给构建轮看的"这批条目必然要付一轮 refs 补扫"的标记。
  * - `9` 及更早**一律不在表**：v10 的 `#DIM` 族修复改了 `dims.name` 的值语义（2,866 行的名字
  *   从引擎关键字变成真名），复用 = 索引脏数据；v9 虽只缺"名字起点列"一位，但续用它等于
  *   静默保留本批要修的症状（缺位的"未知"按纪律 3 本来就得分文件重扫 ⇒ 付一样的钱、多一套分支）；
  *   v7 及更早是逗号形函数头的口径变更。
  */
-const SALVAGEABLE_VERSIONS: ReadonlyMap<number, { readonly arity: number; readonly hasRefsFp: boolean }> = new Map([
-  [10, { arity: 10, hasRefsFp: true }],
+const SALVAGEABLE_VERSIONS: ReadonlyMap<
+  number,
+  { readonly arity: number; readonly hasRefsFp: boolean; readonly hasCandidates: boolean }
+> = new Map([
+  [11, { arity: 11, hasRefsFp: true, hasCandidates: true }],
+  [10, { arity: 10, hasRefsFp: true, hasCandidates: false }],
 ]);
 
 /** 单个文件的快照条目 */
@@ -156,6 +177,15 @@ export interface SnapshotEntry {
    * 补扫结果连新摘要一起落盘 ⇒ 只付这一轮，信封位命中时整段巡检都不走）。
    */
   readonly refsNamesFp?: number;
+  /**
+   * 该文件的**候选记号集**（REFS-PROVENANCE，2026-10-22）：构建 `refs` 时被拿去问
+   * `hasName` 的一切归一化记号（命中与否都算，含 `@` 定义名），`'\n'` 连接；
+   * **空串 = 已知没有候选**（与"未知"是两回事）。
+   * 溯源巡检的逐文件判据：名录新旧对称差（`changedNamesBetween`）里若有名字落在本集
+   * ⇒ 这份 refs 可能缺边/多边 ⇒ 重扫；反之可**证明** refs 逐字节不变 ⇒ 只补记新摘要、免扫
+   * （`refsProvableUnchanged`）。**键缺席 = 未知**（v10 迁移条目）⇒ 一律重扫补候选。
+   */
+  readonly candidates?: string;
 }
 
 /** 索引快照（按项目根一份） */
@@ -262,9 +292,22 @@ type DimTuple = [string, string, number];
 type RefTuple = [string, number, number, 0 | 1 | 2];
 /** `[标签名, 行, 所属函数定义行]`（v6 起；无标签 = 空数组） */
 type LabelTuple = [string, number, number];
-/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签, refs 名录摘要]`
- * 第 10 位 v7 起才有；v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理） */
-type EntryTuple = [number | null, number | null, number, number, 0 | 1, FunctionTuple[], DimTuple[], RefTuple[], LabelTuple[], number | null];
+/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签, refs 名录摘要, 候选记号集]`
+ * 第 10 位 v7 起才有；第 11 位（候选集，`'\n'` 连接；`null` = 未知）v11 起才有；
+ * v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理） */
+type EntryTuple = [
+  number | null,
+  number | null,
+  number,
+  number,
+  0 | 1,
+  FunctionTuple[],
+  DimTuple[],
+  RefTuple[],
+  LabelTuple[],
+  number | null,
+  string | null,
+];
 
 const FLAG_EXPRESSION = 1;
 
@@ -307,8 +350,9 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       raw[1] === e.size &&
       raw[2] === e.textLength &&
       raw[7] === (e.refs as unknown) &&
-      raw.length === 10 &&
+      raw.length === 11 &&
       raw[9] === (e.refsNamesFp ?? null) &&
+      raw[10] === (e.candidates ?? '') &&
       // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
       Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
       Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
@@ -343,13 +387,15 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       refs,
       labels,
       e.refsNamesFp ?? null,
+      // 候选集：键缺席（v10 迁移条目没补扫过）= 未知 = 盘上 null，**不猜空串**
+      e.candidates ?? null,
     ];
   }
   return out;
 }
 
-/** 当前版本条目元组的元数（v7 = 10；第 10 位 = refs 名录摘要） */
-const CURRENT_ARITY = 10;
+/** 当前版本条目元组的元数（v11 = 11；第 10 位 = refs 名录摘要、第 11 位 = 候选记号集） */
+const CURRENT_ARITY = 11;
 
 function isRefTuple(t: unknown): t is RefTuple {
   return (
@@ -377,8 +423,8 @@ function isFunctionTuple(t: unknown): t is FunctionTuple {
 }
 
 /**
- * **逐条目**结构校验（`arity` 由版本表给：v7 = 10、v6 = 9）。
- * 通过 ⇒ 归一成 10 位元组（v6 缺的第 10 位补 `null` = 溯源未知，**不猜值**）；不通过 ⇒ null。
+ * **逐条目**结构校验（`arity` 由版本表给：v11 = 11、v10 = 10）。
+ * 通过 ⇒ 归一成 11 位元组（v10 缺的第 11 位补 `null` = 候选未知，**不猜值**）；不通过 ⇒ null。
  * 校验是急的：函数/声明/引用/标签每一位都查完才返回（懒还原不打折 fail-closed）。
  */
 function validateEntryTuple(t: unknown, arity: number): EntryTuple | null {
@@ -388,7 +434,10 @@ function validateEntryTuple(t: unknown, arity: number): EntryTuple | null {
   if (typeof t[2] !== 'number' || typeof t[3] !== 'number') return null;
   if (t[4] !== 0 && t[4] !== 1) return null;
   if (!Array.isArray(t[5]) || !Array.isArray(t[6]) || !Array.isArray(t[7]) || !Array.isArray(t[8])) return null;
-  if (arity === CURRENT_ARITY && t[9] !== null && typeof t[9] !== 'number') return null;
+  // 第 10 位（refs 名录摘要）：v7 起才有（表内版本都 ≥10；arity 9 的调用只剩测试面上的旧形态语义）
+  if (arity >= 10 && t[9] !== null && typeof t[9] !== 'number') return null;
+  // 第 11 位（候选集）：v11 起才有；v10 迁移条目归一时补 null = 候选未知（保守侧，不猜空串）
+  if (arity === CURRENT_ARITY && t[10] !== null && typeof t[10] !== 'string') return null;
   const fns = t[5] as unknown[];
   const dims = t[6] as unknown[];
   const refs = t[7] as unknown[];
@@ -400,7 +449,7 @@ function validateEntryTuple(t: unknown, arity: number): EntryTuple | null {
   if (!refs.every(isRefTuple)) return null;
   if (!labels.every(isLabelTuple)) return null;
   // 当前形态**原样返回**（不复制）：`encodeEntries` 的落盘快路径靠"元组还是盘上那个对象"来免重建，
-  // 复制一下就让 100k 级条目全走重建路径了；旧形态才补第 10 位（null = 溯源未知，不猜值）
+  // 复制一下就让 100k 级条目全走重建路径了；旧形态才补缺位（null = 该位未知，不猜值）
   const arr = t as unknown[];
   const normalized: unknown[] = arity === CURRENT_ARITY ? arr : [...arr, null];
   return normalized as unknown as EntryTuple;
@@ -452,6 +501,7 @@ function lazyFile(path: string, tuple: EntryTuple): ErbFile {
 /** 校验过的元组 → 内存条目（键即路径 ⇒ 回填 `file.path` / `function.filePath`） */
 function entryFromTuple(path: string, tuple: EntryTuple): SnapshotEntry {
   const refsNamesFp = tuple[9];
+  const candidates = tuple[10];
   return {
     mtimeMs: tuple[0],
     size: tuple[1],
@@ -461,11 +511,13 @@ function entryFromTuple(path: string, tuple: EntryTuple): SnapshotEntry {
     // 溯源未知（v6 补的 null）⇒ **不留这个键**：与"条目本来没这个字段"同形，
     // 也让 round-trip 判据（decodeEntries(encodeEntries(x))toEqual x）不被 null 撑歪
     ...(typeof refsNamesFp === 'number' ? { refsNamesFp } : {}),
+    // 候选集：'' 也是已知事实（已知没有候选），**键照留**——只有 null（v10 迁移未知）才缺键
+    ...(typeof candidates === 'string' ? { candidates } : {}),
   };
 }
 
 /**
- * 还原盘上元组为内存条目（**当前版本**形态，10 位）；结构任一不符 ⇒ null（整体弃用）。
+ * 还原盘上元组为内存条目（**当前版本**形态，11 位）；结构任一不符 ⇒ null（整体弃用）。
  *
  * 走这里的只有"当前键 + 当前版本"那份快照；旧版本 / 部分损坏的盘上数据由
  * `salvageSnapshot` 逐条目处理（PERF-12a）。
@@ -784,6 +836,70 @@ export function refsAreReusable(entry: SnapshotEntry, currentDigest: number): bo
   return entry.refs !== undefined && entry.refsNamesFp === currentDigest;
 }
 
+/* ---------------------------------------------------------------------------
+ * refs 溯源位 · 逐文件判据（REFS-PROVENANCE，2026-10-22）
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 快照条目全集的**名录**（构建轮拿它和当前 `byName` 求对称差）。
+ *
+ * 为什么能从条目还原旧名录：落盘快照的条目集 = 上一次构建时的文件全集
+ * （`mergeEntries` 丢弃已消失文件），每条目的函数名 = 那次聚合进 `byName` 的名字。
+ * 惰性外壳走 RAW 元组快路径（`raw[5]` 的名字逐个 `toUpperCase`，与 `aggregateIndex`
+ * 同一条口径、不触发 100k 级函数对象构造）；已物化的文件走 `normalizedName`。
+ */
+export function entryNamesOf(entries: Readonly<Record<string, SnapshotEntry>>): Set<string> {
+  const out = new Set<string>();
+  for (const path in entries) {
+    const e = entries[path]!;
+    const raw = (e.file as RawCarrier)[RAW];
+    if (raw !== undefined) {
+      for (const t of raw[5]) out.add(t[0].toUpperCase());
+      continue;
+    }
+    for (const fn of e.file.functions) out.add(fn.normalizedName);
+  }
+  return out;
+}
+
+/**
+ * 新旧名录的**对称差**（旧有新无 + 新有旧无）＝"变掉了的名字"。
+ *
+ * 溯源巡检的嫌疑名单：一个名字在差集里 ⇔ 它的**加入或移除**会让"判据含它/不含它"
+ * 的存量 refs 变样。名字没变 ⇒ 任何文件的 refs 与它无关。与 `nameSetDigest` 的关系：
+ * 摘要负责"变没变"（O(1) 快答），差集负责"变了**哪些**"（逐文件判据的原料）。
+ */
+export function changedNamesBetween(oldNames: ReadonlySet<string>, newNames: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  for (const n of oldNames) if (!newNames.has(n)) out.add(n);
+  for (const n of newNames) if (!oldNames.has(n)) out.add(n);
+  return out;
+}
+
+/**
+ * **可证免扫**判据：名录变了（`changed` 非空）但这份条目的 refs 逐字节不变的证明。
+ *
+ * 证明链：`scanFileRefs` 的产出只取决于"每个候选记号过不过 `hasName`"——记号没变、
+ * 名录里 `candidates ∩ changed = ∅` ⇒ 每个记号的判定结果不变 ⇒ refs 逐字节不变。
+ * 于是只需把盘上候选串逐段（`'\n'` 分段，不 split——大文件 37,938 段也不多分配一个数组）
+ * 对着 `changed` 查一遍，查到即**嫌疑坐实**必须重扫；查完没有 ⇒ 免扫，只补记新摘要。
+ * 保守侧：refs 缺失 / 候选未知（键缺席 = v10 迁移未知态）⇒ `false`（重扫），绝不猜。
+ */
+export function refsProvableUnchanged(entry: SnapshotEntry, changed: ReadonlySet<string>): boolean {
+  if (entry.refs === undefined) return false;
+  const candidates = entry.candidates;
+  if (candidates === undefined) return false;
+  if (candidates.length === 0) return true; // 已知空集：任何名录变化都碰不到它
+  let i = 0;
+  for (;;) {
+    const nl = candidates.indexOf('\n', i);
+    const seg = nl === -1 ? candidates.slice(i) : candidates.slice(i, nl);
+    if (changed.has(seg)) return false;
+    if (nl === -1) return true;
+    i = nl + 1;
+  }
+}
+
 /**
  * 合并出新快照的 entries：本次重扫的用新结果，其余沿用旧条目；
  * **已从磁盘消失的文件不保留**（快照不收尸就会越攒越大）。
@@ -816,16 +932,32 @@ export function mergeEntries(
  * `refsNamesFp`（PERF-12a）只跟着**这次真的挂上去的**那批 refs 走：谁被挂上新流水，
  * 谁才配有"我是在这张名录下扫的"这条溯源；没有新流水的条目零触碰（原样的 refs +
  * 原样的溯源位留在一起，不能被别人的名录摘要冒充）。
+ *
+ * `candidatesByPath`（REFS-PROVENANCE，2026-10-22）同理：候选集是**这次扫描顺带**收的
+ * （`scanFileRefs` 的收集位 / `erb.scanRefs` 的产出第 2 位），只跟着新流水一起挂——
+ * 调用方必须给**每个**重扫路径都备好候选串（空集 = `''`，键照写：''是"已知没有"，
+ * 缺键是"未知"，两者差一轮重扫）。
  */
 export function attachRefs(
   entries: Record<string, SnapshotEntry>,
   refsByPath: ReadonlyMap<string, FileRefs>,
   refsNamesFp?: number,
+  candidatesByPath?: ReadonlyMap<string, string>,
 ): Record<string, SnapshotEntry> {
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, e] of Object.entries(entries)) {
     const refs = refsByPath.get(path);
-    out[path] = refs === undefined ? e : { ...e, refs, ...(refsNamesFp === undefined ? {} : { refsNamesFp }) };
+    if (refs === undefined) {
+      out[path] = e;
+      continue;
+    }
+    const candidates = candidatesByPath?.get(path);
+    out[path] = {
+      ...e,
+      refs,
+      ...(refsNamesFp === undefined ? {} : { refsNamesFp }),
+      ...(candidates === undefined ? {} : { candidates }),
+    };
   }
   return out;
 }

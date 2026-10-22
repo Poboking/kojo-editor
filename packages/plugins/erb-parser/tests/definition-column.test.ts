@@ -140,7 +140,7 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
 
   it('旧形态条目（函数元组只有 5/6 位）读回来 ⇒ 没有列这个事实，不抛、不补 1', () => {
     const v8Shape: Record<string, unknown[]> = {
-      '/a.ERB': [1000, 20, 20, 2, 0, [['FOO', 1, 2, [], 0], ['BAR', 2, 2, [], 0, ';注']], [], [], [], null],
+      '/a.ERB': [1000, 20, 20, 2, 0, [['FOO', 1, 2, [], 0], ['BAR', 2, 2, [], 0, ';注']], [], [], [], null, null],
     };
     const decoded = decodeEntries(v8Shape);
     expect(decoded).not.toBeNull();
@@ -163,17 +163,18 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
   it('坏列值（0 / 小数 / 字符串）⇒ 整条判过期（fail-closed，不"修"快照）', () => {
     for (const bad of [0, 1.5, '2', null]) {
       const payload: Record<string, unknown[]> = {
-        '/a.ERB': [1000, 20, 20, 1, 0, [['FOO', 1, 1, [], 0, null, bad]], [], [], [], null],
+        '/a.ERB': [1000, 20, 20, 1, 0, [['FOO', 1, 1, [], 0, null, bad]], [], [], [], null, ''],
       };
       expect(decodeEntries(payload), `坏值 ${String(bad)}`).toBeNull();
     }
   });
 
-  it('版本判据：当前键 v9；v8 不在准入表 ⇒ 旧盘一条都不复用（不静默留缺列）', () => {
+  it('版本判据：当前键 v11；v9 不在准入表 ⇒ 旧盘一条都不复用（不静默留缺列）', () => {
     expect(snapshotKeyFor('D:/p')).toContain(`v${SNAPSHOT_VERSION}`);
-    // `snapshotKeyCandidatesFor` 只探表内版本：v8 键不进候选 ⇒ 上一代整份弃用、一次冷重建
-    const candidates = [snapshotKeyFor('D:/p'), snapshotKeyFor('D:/p', SNAPSHOT_VERSION - 1)];
-    expect(candidates[1]).toContain(`v${SNAPSHOT_VERSION - 1}`);
+    // `snapshotKeyCandidatesFor` 只探表内版本：v10 已作为"同形迁移"入表（缺候选位 = 补一轮扫），
+    // v9 不在表 ⇒ 旧盘一条都不复用、一次冷重建
+    const candidates = [snapshotKeyFor('D:/p'), snapshotKeyFor('D:/p', SNAPSHOT_VERSION - 2)];
+    expect(candidates[1]).toContain(`v${SNAPSHOT_VERSION - 2}`);
   });
 });
 
@@ -333,6 +334,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
       [['FOO', 1, 3, 0]],
       [],
       null,
+      null, // 候选未知（v10 迁移态）：refs 溯源与候选都判可疑 ⇒ refs 重扫，结构照常复用
     ];
     const payload = JSON.stringify({ version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: { [A]: legacyEntry } });
     const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT) ? payload : undefined));
@@ -346,10 +348,10 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
     expect('span' in (res as { locations: Record<string, unknown>[] }).locations[0]!).toBe(false);
   });
 
-  it('上一代快照（v8 键 + v8 版本号）不进候选 ⇒ 整份弃用、冷重建出**真**列，不写假列', async () => {
+  it('隔代快照（v9 键 + v9 版本号）不进候选 ⇒ 整份弃用、冷重建出**真**列，不写假列', async () => {
     const staleEntry: unknown[] = [1000, TEXT_A.length, TEXT_A.length, 2, 0, [['FOO', 1, 2, [], 0]], [], [], [], null];
-    const payload = JSON.stringify({ version: SNAPSHOT_VERSION - 1, rootDir: ROOT, savedAt: 1, entries: { [A]: staleEntry } });
-    const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT, SNAPSHOT_VERSION - 1) ? payload : undefined));
+    const payload = JSON.stringify({ version: SNAPSHOT_VERSION - 2, rootDir: ROOT, savedAt: 1, entries: { [A]: staleEntry } });
+    const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT, SNAPSHOT_VERSION - 2) ? payload : undefined));
     await h.waitIndexed();
     // 重建出来的索引带真列（而不是沿用缺位条目 = 静默保留本批要修的症状）
     expect(h.index()!.byName.get('FOO')![0]!.nameColumn).toBe(3);
@@ -357,7 +359,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
       column: 3,
       span: { columnStart: 3, columnEnd: 6 },
     });
-    // 旧键不在候选列里 ⇒ 从没被读起来当回事（logs 里不该有"复用了 v8"的 salvage 读数）
-    expect(h.logs.filter((l) => /salvage/.test(l)).join('\n')).not.toContain(`v${SNAPSHOT_VERSION - 1}`);
+    // 旧键不在候选列里 ⇒ 从没被读起来当回事（logs 里不该有"复用了 v9"的 salvage 读数）
+    expect(h.logs.filter((l) => /salvage/.test(l)).join('\n')).not.toContain(`v${SNAPSHOT_VERSION - 2}`);
   });
 });

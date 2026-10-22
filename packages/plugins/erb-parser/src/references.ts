@@ -343,8 +343,20 @@ export function normalizedUpper(run: string): string {
  * `ErbIndex.byName` 提供，本模块因此对"项目里有哪些函数"零知识、可独立单测。
  * 行可见性与 `parseErbText` 对齐：`[SKIPSTART]…[SKIPEND]` 屏蔽、整行 `;`、
  * `#` 指令、`$` 标签、`@` 定义行（只取名字记号，形参不扫）。
+ *
+ * `collect`（REFS-PROVENANCE，2026-10-22，**可选**）：**每一个被拿去问 `hasName` 的
+ * 归一化记号**（命中与否都算，含 `@` 定义名）逐个交给它——这是"该文件的候选记号集"，
+ * 溯源巡检拿它回答"名录里变掉的名字碰没碰到这个文件"。判据面**一字未动**：
+ * 收集发生在 hasName 判定的**前**一步、对同一个 `upper` 串，命中与否不影响收集，
+ * refs 产出与不传 `collect` 时逐字节相同（等价对拍见 `refs-offload-equiv.test.ts`）。
+ * 成员访问（`colonAdjacent`）的记号**到不了 hasName** ⇒ 也不是候选——与"它们不算引用"
+ * 同一条边界，两处各写一遍就是第二判据。
  */
-export function scanFileRefs(text: string, hasName: (normalizedName: string) => boolean): FileRefs {
+export function scanFileRefs(
+  text: string,
+  hasName: (normalizedName: string) => boolean,
+  collect?: (normalizedName: string) => void,
+): FileRefs {
   const out: RefRun[] = [];
   for (const { line, raw, isDefinition, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (isDefinition) {
@@ -359,6 +371,7 @@ export function scanFileRefs(text: string, hasName: (normalizedName: string) => 
       const name = slice.trim();
       if (name.length > 0) {
         const upper = name.toUpperCase();
+        if (collect !== undefined) collect(upper);
         if (hasName(upper)) out.push([upper, line, at + 2 + (slice.length - slice.trimStart().length), KIND_DEFINITION]);
       }
       continue;
@@ -377,6 +390,7 @@ export function scanFileRefs(text: string, hasName: (normalizedName: string) => 
       // 无小写 ⇒ `normalizedUpper` 按定义返回原串（省掉一次 toUpperCase 全文扫描）；
       // 有小写仍交给 `normalizedUpper` 算，归一判据不在本函数里复述。
       const upper = hasLower ? normalizedUpper(run) : run;
+      if (collect !== undefined) collect(upper);
       if (!hasName(upper)) return;
       out.push([upper, line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
     });

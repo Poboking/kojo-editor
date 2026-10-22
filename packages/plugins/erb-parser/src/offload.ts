@@ -86,6 +86,22 @@ export interface ScanRefsPayload {
   texts: string[];
 }
 
+/**
+ * 单文件的批扫产出（REFS-PROVENANCE，2026-10-22）：refs 之外**顺带**交回该文件的
+ * 候选记号集（问过 `hasName` 的一切记号，'\n' 连接；'' = 没有候选）。
+ *
+ * 为什么搭这趟车：候选收集只在**重扫那批文件**上发生（复用文件自带盘上候选位），
+ * 而重扫本来就要走这条通道——让 worker 与内联老路径产出**同形**（调用方逐位对拍），
+ * 溯源巡检就能把"名录变掉的名字 ∩ 候选集"的判定落到每份文件上，全树重扫就此退役。
+ * 记号判据是 `\p{L}\p{N}_` ⇒ 候选**不可能含连接符**（真语料 3971 文件 / 170 万候选实测
+ * `sepSafe=true`），仍由调用方的形状自证兜底。
+ */
+export interface ScanRefsFileResult {
+  refs: FileRefs;
+  /** 该文件的候选记号集，`\\n` 连接（归一化大写；顺序 = 扫描序，无语义） */
+  candidates: string;
+}
+
 /** 名录 Set 的跨请求缓存（单槽一份；指纹变了自然作废） */
 let refsNameCache: { fp: number; set: ReadonlySet<string> } | null = null;
 
@@ -109,11 +125,18 @@ function refsNameSetOf(payload: ScanRefsPayload): ReadonlySet<string> {
  *
  * `hasName` 由名录 Set 现拼，谓词与主线程侧 `byName.has(upper)` 逐位同判据；
  * 扫描本体是 `references.ts:scanFileRefs`，本函数不掺任何判据（等价对拍见
- * `tests/refs-offload-equiv.test.ts`）。
+ * `tests/refs-offload-equiv.test.ts`）。候选收集走同一个 `scanFileRefs` 的可选
+ * 收集位（REFS-PROVENANCE）：与 refs 同一遍扫描产出，**refs 判据一字未动**。
  */
-export function scanRefsBatch(payload: ScanRefsPayload): FileRefs[] {
+export function scanRefsBatch(payload: ScanRefsPayload): ScanRefsFileResult[] {
   const names = refsNameSetOf(payload);
-  return payload.texts.map((text) => scanFileRefs(text, (upper: string) => names.has(upper)));
+  return payload.texts.map((text) => {
+    const candidates = new Set<string>();
+    const refs = scanFileRefs(text, (upper: string) => names.has(upper), (u: string) => {
+      candidates.add(u);
+    });
+    return { refs, candidates: [...candidates].join(NAME_JOIN) };
+  });
 }
 
 /** 观测面：当前槽是否已持有名录 Set（一次性取证用，不参与判据） */
@@ -152,7 +175,7 @@ export function erbStructureDecorations({ path, text }: EditorDecoratePayload): 
 export const erbParserTasks: ComputeTaskTable = {
   [PARSE_FILE_TASK]: ((payload: ParseFilePayload) => parseErbText(payload.text, payload.path)) as never,
   [SCAN_FLOW_TASK]: ((payload: ScanFlowPayload): ControlFlowStatement[] => scanControlFlow(payload.text)) as never,
-  [SCAN_REFS_TASK]: ((payload: ScanRefsPayload): FileRefs[] => scanRefsBatch(payload)) as never,
+  [SCAN_REFS_TASK]: ((payload: ScanRefsPayload): ScanRefsFileResult[] => scanRefsBatch(payload)) as never,
   [STRUCTURE_DECORATIONS_TASK]: ((payload: EditorDecoratePayload): LineDecoration[] =>
     erbStructureDecorations(payload)) as never,
 };

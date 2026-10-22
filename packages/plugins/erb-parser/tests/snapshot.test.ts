@@ -37,8 +37,9 @@ function file(path: string, names: readonly string[]): ErbFile {
 }
 
 function entry(path: string, mtimeMs: number | null, names: readonly string[], size: number | null = 4096): SnapshotEntry {
-  // v4 起 decode 恒回填 refs（缺 = 结构不符）；夹具同形，round-trip 判据才不空转
-  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [] };
+  // v4 起 decode 恒回填 refs（缺 = 结构不符）；v11 起候选集键恒在（'' = 已知没有候选）；
+  // 夹具同形，round-trip 判据才不空转
+  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [], candidates: '' };
 }
 
 /** 盘上形态：v5 起 entries 是位置元组（第 2 位 size、第 8 位引用流水），内存形状只在加载后存在 */
