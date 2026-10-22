@@ -17,6 +17,14 @@
 
 import type { Tutorial, TutorialSection } from './tutorial-content';
 import { SEC_ALIAS_CONST, SEC_DIAGNOSTICS, SEC_EXPRESSIONS, SEC_VARIABLES } from './tutorial-reference-expr';
+import {
+  SEC_KOJO2_ANCHORS,
+  SEC_KOJO2_DECLS,
+  SEC_KOJO2_DISPATCH,
+  SEC_KOJO2_MIGRATION,
+  SEC_KOJO2_SYMBOLS,
+  SEC_KOJO2_WAIT,
+} from './tutorial-reference-kojo2';
 import { SEC_CONTROL_FLOW, SEC_MARKERS, SEC_TEXT_LINES } from './tutorial-reference-lines';
 import {
   SEC_BLOCK_PARAMS,
@@ -43,7 +51,8 @@ const unquote = (s: TutorialSection): TutorialSection => ({
   heading: s.heading.replace(/^「/u, '').replace(/」$/u, ''),
 });
 
-/** 目录顺序 = 数据顺序：先查头与面，再查行与流控，再查变量与表达式，最后查提示与坑 */
+/** 目录顺序 = 数据顺序：先查头与面，再查行与流控，再查变量与表达式，最后查提示与坑；
+ *  末尾六节是 2.0（`.kojo2`）那一族，与前面十三节的字面互不相干 */
 const SECTIONS: TutorialSection[] = [
   SEC_HOW_TO_READ,
   unquote(SEC_HEAD_KEYS),
@@ -58,11 +67,17 @@ const SECTIONS: TutorialSection[] = [
   unquote(SEC_NATIVE_ONLY),
   unquote(SEC_DIAGNOSTICS),
   unquote(SEC_PITFALLS),
+  unquote(SEC_KOJO2_ANCHORS),
+  unquote(SEC_KOJO2_DISPATCH),
+  unquote(SEC_KOJO2_DECLS),
+  unquote(SEC_KOJO2_WAIT),
+  unquote(SEC_KOJO2_MIGRATION),
+  unquote(SEC_KOJO2_SYMBOLS),
 ];
 
 export const REFERENCE_TUTORIAL: Tutorial = {
   id: 'reference',
   title: 'kojo 语法全表（附录）',
-  lead: '现行全部 `.kojo` 写法的对照表：怎么写、编译成什么、写错时的提示原文。查字面用这张表，学写法回两份教程。',
+  lead: '十三张表查 `.kojo` 的现行写法，末尾六张查 `.kojo2` 的 2.0 写法：怎么写、撞上时屏上出哪句原话。查字面用这张表，学写法回那两本教程。',
   sections: SECTIONS,
 };
