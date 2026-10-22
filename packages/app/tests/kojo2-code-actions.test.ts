@@ -23,6 +23,7 @@
  */
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as monaco from '../src/monaco/entry';
 import {
@@ -54,7 +55,7 @@ import {
 } from '../src/monaco/kojo2-code-actions';
 import { applyTextEdits } from '../src/ui/editor-global-providers';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
 
 /* ============================== 夹具小工具 ============================== */
