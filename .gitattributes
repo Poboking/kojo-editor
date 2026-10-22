@@ -7,3 +7,10 @@
 # CRLF 契约夹具：测试要读**真 CRLF 字节**（v2-parse 的「CRLF 与 LF 解析同构」判据），
 # 加 eol=lf 归一化会把夹具洗成 LF ⇒ 断言自欺。这一条必须显式 `-text`。
 packages/kojo-syntax-tree/tests/v2-fixtures/crlf.kojo2 -text
+# 迁移语料的编码面夹具（K2-CORPUS-EXPAND）：CRLF / BOM 的**真字节**是判据本体。
+# 走 `eol=lf` 归一化会把 CRLF 洗成 LF（PITFALLS 119 同款），断言就成了看工具心情；
+# 这条必须显式 `-text`，BOM 文件同理（避免任何字符集重写动到 EF BB BF）。
+packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/crlf-*.kojo.txt -text
+packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/bom-*.kojo.txt -text
+packages/kojo-core/tests/fixtures/migrate-corpus/crlf-*.v1.kojo.txt -text
+packages/kojo-core/tests/fixtures/migrate-corpus/bom-*.v1.kojo.txt -text

@@ -4,6 +4,10 @@
  * 口径：设计稿 §10.2 / 附录 B.4。profile 的值是 **adapter 缺省**，project/file
  * profile 可以覆盖；core 不内置任何一条。
  *
+ * 覆盖怎么进落点（K2-ADAPTER-PROFILE）：`profile-resolve.ts::resolveEratwProfile()`
+ * （纯函数，三层：本文件的缺省 → `adapterProfile` 声明映射 → 调用方生效覆盖），
+ * backend 在工厂里合成一次并冻进实例。本文件**只放缺省值**，不放覆盖逻辑。
+ *
  * 证据：
  * - `narrationColor` / `dialogueColor`：旧 `旁白色` / `口上色` 迁到这里（§4.7）；
  *   eraTW 缺省按"作者色"，由工程 profile 决定实际取色。

@@ -25,6 +25,18 @@
  * });
  * ```
  *
+ * ## profile 端口（K2-ADAPTER-PROFILE）
+ *
+ * 本 backend 的 `profile` 是**落点事实**（core 读它解析等待/随机/演出能力，发射器读它选
+ * `PRINTFORM` 变体）。缺省 = `eratwLoweringProfile()`（全部从 kojo2 数据派生）；调用方可以
+ * 两层注入（后者盖前者，合并/校验由 `profile-resolve.ts` 的纯函数负责）：
+ *
+ * - `adapterProfile`：`GameAdapter.profile`（**声明**）——按写死的映射表只搬落点字段；
+ * - `profile`：生效覆盖（project / file profile）。
+ *
+ * 不传任何一层 ⇒ 产物与今天**逐字节相同**。传了非法值 ⇒ 建实例时就抛（fail-closed，
+ * 不静默回缺省）：配置错不能被"看起来还能编"掩盖。
+ *
  * ## 隐藏槽
  *
  * core 的 `@随机`/`# 表` 用 `__kojo_` 前缀的隐藏槽。Emuera 允许在 **ERB 函数内**用
@@ -36,6 +48,7 @@
  */
 import type { KojoAssignTarget, KojoExprText, KojoOptionItem, KojoRandomCandidate, KojoSpan, KojoTextPart } from '@kojo/kojo-core';
 import type {
+  AdapterProfile,
   AssignEmitRequest,
   BlankEmitRequest,
   CallEmitRequest,
@@ -67,8 +80,8 @@ import { emitEratwForEachLoop } from './foreach-emit.js';
 import { emitOptions } from './options-emit.js';
 import { emitPoolDispatch } from './pool-emit.js';
 import { ERATW_PRESENTATION } from './presentation.js';
-import { ERATW_PROFILE } from './profile.js';
-import { ERATW_PROGRAM_FEATURES } from './program.js';
+import type { EratwProfileOverrides } from './profile-resolve.js';
+import { eratwAdapterProfileOverrides, resolveEratwProfile } from './profile-resolve.js';
 import { emitTableDispatch } from './table-emit.js';
 
 /* ============================== 工厂依赖（宿主注入） ============================== */
@@ -90,6 +103,21 @@ export interface EratwEmitDeps {
   readonly familySegment?: string;
   /** 口上函数模板的 `${段}` 选择（如 `指令` 的 `com` 段；缺省取 adapter 表首键） */
   readonly segments?: Readonly<Record<string, string>>;
+  /**
+   * 生效 profile 的**落点覆盖**（project / file profile；additive）。
+   *
+   * 只收落点字段（六个取色/等待/落点字段 + `presentations` / `programFeatures` 子开关）；
+   * 缺省 = 不覆盖（产物与今天逐字节相同）。非法值/未知键 → 建实例时抛（fail-closed）。
+   */
+  readonly profile?: EratwProfileOverrides;
+  /**
+   * adapter 侧**声明**（`GameAdapter.profile`；additive）。
+   *
+   * 按 `ERATW_ADAPTER_PROFILE_LANDING` 写死映射表只搬六个落点字段——声明与落点因此同源，
+   * 不会一边改口径、另一边按缺省发。`features` / `programFeatures` / `presentations` /
+   * `priorityModel` 故意**不搬**（声明面与落点面分开，双源对拍才有效）。
+   */
+  readonly adapterProfile?: AdapterProfile;
 }
 
 /* ============================== 常量（全部数据派生） ============================== */
@@ -130,28 +158,13 @@ function oneLineComment(text: string): string {
 
 /**
  * profile 读数：**逐字段从 kojo2 数据派生**（不写第二份默认值）。
- * `priorityModel` 由事件目录事实推：只要声明了 emuera 桶事件，才允许 之前/之后/接管。
+ *
+ * 现在是 `resolveEratwProfile()` 的无覆盖形态（同一份实现；profile 覆盖见
+ * `profile-resolve.ts`）。`priorityModel` 由事件目录事实推：只要声明了 emuera 桶事件，
+ * 才允许 之前/之后/接管。
  */
 export function eratwLoweringProfile(): KojoLoweringProfile {
-  const bucketEvents = ERATW_EVENT_CATALOG.events.filter((spec) => spec.priority === 'emuera-buckets');
-  return Object.freeze({
-    waitDefault: ERATW_PROFILE.waitDefault,
-    narrationColor: ERATW_PROFILE.narrationColor,
-    dialogueColor: ERATW_PROFILE.dialogueColor,
-    colorMode: ERATW_PROFILE.colorMode,
-    poolStyle: ERATW_PROFILE.poolStyle,
-    randStyle: ERATW_PROFILE.randStyle,
-    priorityModel: bucketEvents.length > 0 ? 'emuera-buckets' : 'none',
-    presentations: Object.freeze({
-      heart: ERATW_PRESENTATION.heart !== null,
-      color: ERATW_PRESENTATION.color !== null,
-      face: ERATW_PRESENTATION.face !== null,
-      // `randStyle` 已在 adapter profile 里声明 → 随机落点可用
-      random: ERATW_PROFILE.randStyle !== undefined,
-      options: ERATW_PRESENTATION.options !== null,
-    }),
-    programFeatures: ERATW_PROGRAM_FEATURES,
-  });
+  return resolveEratwProfile();
 }
 
 /* ============================== 构建器 ============================== */
@@ -160,9 +173,15 @@ export function eratwLoweringProfile(): KojoLoweringProfile {
  * 建一个 eraTW backend。
  *
  * 无状态：同输入同输出；一个实例可服务串行/并行编译（不保留跨文件事实）。
+ *
+ * profile 三层（缺省 → adapter 声明 → 生效覆盖）在这里合成一次并冻进实例；
+ * 非法覆盖值会让本函数**抛错**（fail-closed，不静默回缺省）。
  */
 export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
-  const profile = eratwLoweringProfile();
+  const profile = resolveEratwProfile(
+    deps.adapterProfile === undefined ? null : eratwAdapterProfileOverrides(deps.adapterProfile),
+    deps.profile ?? null,
+  );
   const { compileExpression } = deps;
   const compileTarget: EratwCompileTarget =
     deps.compileTarget ?? ((target: KojoAssignTarget) => target.text);
@@ -241,12 +260,40 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
 
   const waitLetter = (wait: ResolvedWait): 'W' | 'L' => (wait === 'wait' ? 'W' : 'L');
 
+  /**
+   * D 系打印是否可用（`profile.colorMode`）：`plain` = 本 adapter 不落 D 变体，
+   * 一律非 D（D 系会忽略 `SETCOLOR`，`plain` 口径下连"默认色"也不借 D 表达）。
+   */
+  const dSystem = (): boolean => profile.colorMode === 'D';
+
+  /**
+   * **空文本体**的裸指令（`空行`，与 `lower/text.ts::lowerBlankLine` 同一通道）。
+   *
+   * 口径写死（v1 codegen `printLine` 短路径同源）：空行没有可着色内容，
+   * - `等待` → D 系 `PRINTFORMDW`（D 可用时）/ `PRINTFORMW`（`plain` 时）；
+   * - `续`   → 恒 `PRINTFORML`（**不加 D**：v1/语料的空行续写形态就是它，加了就是白送字节差）。
+   */
+  const emptyLineDirective = (wait: ResolvedWait): string =>
+    wait === 'wait' ? `PRINTFORM${dSystem() ? 'D' : ''}W` : 'PRINTFORML';
+
+  /**
+   * 该行取色是否落在**默认色**（= 可以用 D 变体表达"不上色"）：
+   * - 旁白看 `narrationColor`，台词（含池内裸引号）看 `dialogueColor`；
+   * - `@着色` 块内恒非默认色（块色要 `SETCOLOR`，D 系忽略它）⇒ 非 D；
+   * - `auto` 不是"默认色"证据（保守落非 D，不替作者猜）。
+   */
+  function defaultColorLine(dialogue: boolean, request: TextEmitRequest): boolean {
+    if (request.color.kind !== 'profile') return false;
+    const policy = dialogue ? profile.dialogueColor : profile.narrationColor;
+    return policy === 'default';
+  }
+
   function textLine(request: TextEmitRequest): EmitResult {
     const body = renderFormatBody(request.parts, request.span);
     if (isEmitFailure(body)) return body;
 
     const dialogue = request.speech.kind !== 'narration';
-    const heart = ERATW_PRESENTATION.heart;
+    const heart = presentationOpen('heart') ? ERATW_PRESENTATION.heart : null;
 
     // `(心形)` → HPH_PRINT(@"…","<mode>")：模式按 presentation 数据四象限
     if (heart !== null && request.hint === HEART_HINT && request.hintRole === 'supported') {
@@ -267,19 +314,32 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
 
     // 空文本体（`空行` 走 blank 通道；这里只防防御性空体）：v1 口径 = 裸 PRINTFORM 指令
     if (body.length === 0) {
-      return `${request.wait === 'wait' ? 'PRINTFORMDW' : 'PRINTFORML'}${annotation}`;
+      return `${emptyLineDirective(request.wait)}${annotation}`;
     }
 
-    // `d` = 旁白 且 取色走默认色（D 系忽略 SETCOLOR）；块色/台词恒非 D
-    const d = !dialogue && request.color.kind === 'profile' && profile.narrationColor === 'default';
+    // `d` = 取色走默认色（旁白/台词各自的 profile 口径）且 D 系可用；块色恒非 D
+    const d = dSystem() && defaultColorLine(dialogue, request);
     return `PRINTFORM${d ? 'D' : ''}${waitLetter(request.wait)} ${body}${annotation}`;
   }
 
   /* ---------- 演出 ---------- */
 
+  /**
+   * 演出面可用 = **数据声明了形状** ∧ **生效 profile 声明了能力**。
+   *
+   * 后半是 K2-ADAPTER-PROFILE 的补口：`presentations` 可被 project/file profile 关掉
+   * （core 的能力闸读的就是它），适配器这一侧必须同口径——否则"声明不支持"却照样发字节。
+   * 缺省两者都真 ⇒ 行为与今天逐字节相同。
+   */
+  function presentationOpen(feature: 'heart' | 'color' | 'face' | 'random' | 'options'): boolean {
+    return profile.presentations[feature] === true;
+  }
+
   function colorEnter(color: KojoExprText): EmitResult {
     const presentation = ERATW_PRESENTATION.color;
-    if (presentation === null) return fail('当前 eraTW adapter 没有声明着色演出。', color.span);
+    if (presentation === null || !presentationOpen('color')) {
+      return fail('当前 eraTW adapter 没有声明着色演出。', color.span);
+    }
     const compiled = compile(color);
     if (isEmitFailure(compiled)) return compiled;
     return `${presentation.setColor} ${compiled}`;
@@ -287,13 +347,15 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
 
   function colorExit(): EmitResult {
     const presentation = ERATW_PRESENTATION.color;
-    if (presentation === null) return null;
+    if (presentation === null || !presentationOpen('color')) return null;
     return presentation.resetColor;
   }
 
   function face(request: FaceEmitRequest): EmitResult {
     const presentation = ERATW_PRESENTATION.face;
-    if (presentation === null) return fail('当前 eraTW adapter 没有声明颜绘演出。', request.span);
+    if (presentation === null || !presentationOpen('face')) {
+      return fail('当前 eraTW adapter 没有声明颜绘演出。', request.span);
+    }
     const object = request.object ?? 'me';
     const call = presentation.calls.find((item) => item.object === object);
     if (call === undefined) return fail(`颜绘对象“${object}”在 adapter 表里没有调用落点。`, request.span);
@@ -324,15 +386,28 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
    * `@随机` 落点（与 core 的 `random-slot.valueType` 判据自洽）：
    * - 纯文本单行 + `randStyle = printdata` → `PRINTDATA/DATAFORM`（该落点不引用下标槽；
    *   全 `续` 不等待、全等待补一行 `WAIT`，混合同一候选族表达不了 → fail-closed）；
-   * - 其余（多行/副作用/未声明的 printdatal 落点）→ `RAND + SELECTCASE`，槽是**候选下标 int**。
+   * - 声明了 `printdatal`（DATALIST 落点）？本 adapter 数据没有该表 →
+   *   **fail-closed**（不静默回退 PRINTDATA：那是另一个落点，行为不同）；
+   * - 其余（多行/副作用/`rand-selectcase`/未声明的 printdatal 落点）→ `RAND + SELECTCASE`，
+   *   槽是**候选下标 int**。
    */
   function randomBlock(
     request: RandomEmitRequest,
     lowerCandidate: (candidate: KojoRandomCandidate, index: number) => readonly string[],
   ): EmitResult {
-    if (request.purity === 'single-line-text' && profile.randStyle === 'printdata') {
-      const dataform = tryPrintData(request);
-      if (dataform !== null) return dataform;
+    if (!presentationOpen('random')) {
+      return fail('当前 eraTW adapter 没有声明 `@随机` 落点（presentations.random = false）。', request.span);
+    }
+    if (request.purity === 'single-line-text') {
+      if (profile.randStyle === 'printdata') {
+        const dataform = tryPrintData(request);
+        if (dataform !== null) return dataform;
+      } else if (profile.randStyle === 'printdatal') {
+        return fail(
+          'profile.randStyle = `printdatal`（DATALIST 落点）：当前 eraTW adapter 数据没有声明该候选表落点，不能生成候选表（fail-closed，不静默回退 PRINTDATA）。请改回 `printdata` 或声明该落点数据。',
+          request.span,
+        );
+      }
     }
     return randSelectCase(request, lowerCandidate);
   }
@@ -499,14 +574,21 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
     /** 行尾提示：`(心形)` 是 adapter 声明过的演出；其余一律导演批注（不打印） */
     hintSupport(hint: string): HintSupport {
       if (hint !== HEART_HINT) return 'annotation';
-      return ERATW_PRESENTATION.heart !== null ? 'supported' : 'unsupported';
+      // 能力 = 数据有形状 ∧ 生效 profile 开着（旧口径只看数据；缺省下两者同真）
+      return presentationOpen('heart') && ERATW_PRESENTATION.heart !== null ? 'supported' : 'unsupported';
     },
 
     text: { line: textLine },
 
     blank: {
+      /**
+       * 打空行：`等待` → `PRINTFORMDW`（`colorMode = plain` 时 `PRINTFORMW`）；`续` → `PRINTFORML`。
+       *
+       * 空行**没有可着色的内容**，故 D 字母只由 `profile.colorMode` 决定，且只出现在等待形
+       * （见 {@link emptyLineDirective}）。缺省 `colorMode = D` ⇒ 与今天/v1 逐字节同口径。
+       */
       line(request: BlankEmitRequest): EmitResult {
-        return request.wait === 'wait' ? 'PRINTFORMDW' : 'PRINTFORML';
+        return emptyLineDirective(request.wait);
       },
     },
 
@@ -545,6 +627,9 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
         // 落点形状全部交给 `options-emit.ts`（数据派生；本文件只做能力/计划闸）。
         // 主链（expand/walk）总带 ETB 计划；缺计划 = 走的是无 adapter 能力闸的通用 lower，
         // 此时不猜按钮顺序/回传值 → fail-closed（不产半成品字节）。
+        if (!presentationOpen('options')) {
+          return fail('当前 eraTW adapter 没有开启「选项」UI（presentations.options = false）。', request.span);
+        }
         if (request.plan === undefined) {
           return fail(
             '`选项` 请求缺少 ETB 计划（core 2.0 主链必带 plan）：不能确定按钮顺序/回传值，fail-closed。',
@@ -556,6 +641,11 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
       /**
        * `# 池` 可证等值落点（K2-POOL-SELECTCASE）：块形状全部交给 `pool-emit.ts`
        * （读 `ERATW_POOL_DISPATCH`）；core 只在可证等值时调用，本文件只做转调。
+       *
+       * 为什么**不按** `profile.poolStyle` 开关：`poolStyle` 声明的是"不可证时的兜底形状"
+       * （eraTW = `IF / ELSEIF / ELSE`，由 core 自己发），`selectcase` 是**等值可证时的
+       * 语义等价优化**（§7.1 / §10.2）——两者不是互斥的 profile 开关。所以本能力恒挂，
+       * 由 core 的 `pool-plan` 决定用不用；`poolStyle` 只是落点事实面的读数。
        */
       poolDispatch(request: PoolDispatchEmitRequest): EmitResult {
         return emitPoolDispatch(request);

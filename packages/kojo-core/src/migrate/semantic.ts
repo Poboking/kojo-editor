@@ -28,9 +28,11 @@
  * - **静态非重叠**：所有臂按 `[from, to]` 求交，两两不重叠（端点相等即重叠）；重叠/空区间/重复
  *   一律不认——`# 表` 不排序、不取"第一条命中"（§6.2），重叠就**不可能**等价；
  * - **`否则` → `否`**：`# 表` 的 `否` 必填且必须最后，所以缺兜底、兜底不在最后都不认；
- * - **值列 = 臂正文**：臂正文必须**恰好一行、形态一致**的打印行（全是旁白、或全是同一说话人的
- *   台词），因为 `# 表` 的值列只能装一个字面量（§6.1「不能写 `{表达式}`」）。引用点因此写成
- *   `> {表名}`（旁白）或 `角色：「{表名}」`（台词）：表按当前值分档，打印结果与 v1 分支一致；
+ * - **值列 = 臂正文（= v1 打印文本）**：臂正文必须**恰好一行、形态一致**的打印行（全是旁白、或全是
+ *   同一说话人的台词），因为 `# 表` 的值列只能装一个字面量（§6.1「不能写 `{表达式}`」）。引用点因此写成
+ *   `> {表名}`（旁白）或 `角色：「{表名}」`（台词）：表按当前值分档，打印结果与 v1 分支一致。
+ *   **台词臂的 `「…」` 是 v1 的内容、要打印**（K2-MIGRATE-QUOTE）：值列收 `「甲。」` 整段，
+ *   运行期由 `{表}` 插值原样打印；值列是字面量、不参与 2.0 语法配对，所以引号安全。
  *   正文里带插值 `{}` / 行尾等待（`续` / `~` / `⏎` / `cont`）/ 多行 / 注释 / 更深块的臂**不认**
  *   （表值列表达不了它们，硬塞就是猜）。
  *
@@ -438,7 +440,7 @@ class SemanticUpgrader {
       if (arm.value.kind === 'dialogue' && first.kind === 'dialogue' && arm.value.speaker !== first.speaker) {
         return { ok: false, reason: '台词臂的说话人不一致（表值列只能装同一说话人的正文）' };
       }
-      const problem = tableValueProblem(arm.value.text, first.kind);
+      const problem = tableValueProblem(arm.value.text);
       if (problem !== null) return { ok: false, reason: problem };
       values.push(arm.value.text.trim());
     }
@@ -753,6 +755,10 @@ function rangeText(range: ArmRange): string {
 /**
  * 臂正文的打印形态：`{表}` 引用点只能插进一条打印行，所以只认"整行旁白"或"整行台词"。
  * 行尾等待 / 表演提示 / 行内 `;` 不在表值列的表达范围内（表值列是字面量，§6.1）。
+ *
+ * **引号口径（K2-MIGRATE-QUOTE）**：值列装的是**v1 打印出来的那段字**，所以 v1 台词臂
+ * `「甲。」` 的值是 `「甲。」`（连引号），引用点 `角色：「{表}」` 在运行期把值原样打印。
+ * 这是 §15.2.3「只换行首分类」的直接推论：v1 台词的引号是内容，不是语法。
  */
 function printShapeOf(cls: Classified, body: string): PrintShape | null {
   const text = body.trim();
@@ -764,14 +770,13 @@ function printShapeOf(cls: Classified, body: string): PrintShape | null {
     const close = text.startsWith('｢') ? '｣' : '」';
     if (!text.endsWith(close)) return null;
     const inner = text.slice(1, -1);
-    if (inner.length === 0) return null;
-    if (/[「｢」｣]/.test(inner)) return null;
-    return { kind: 'dialogue', speaker: null, text: inner };
+    // `｢｣` 按 §12.1 归一成全角；值列可以带引号（运行期字面量，不参与 2.0 语法配对）
+    return { kind: 'dialogue', speaker: null, text: `「${inner}」` };
   }
   return { kind: 'narration', text };
 }
 
-/** 已经是 2.0 的台词行（`角色：「…」`）→ 说话人 + 引号内正文 */
+/** 已经是 2.0 的台词行（`角色：「…」`）→ 说话人 + 引号内正文（正文 = 打印文本） */
 function dialogueShape(text: string): PrintShape | null {
   const quote = text.indexOf('「');
   if (quote <= 1) return null;
@@ -783,12 +788,11 @@ function dialogueShape(text: string): PrintShape | null {
   if (!text.endsWith('」')) return null;
   const inner = text.slice(quote + 1, -1);
   if (inner.length === 0) return null;
-  if (/[「｢」｣]/.test(inner)) return null;
   return { kind: 'dialogue', speaker, text: inner };
 }
 
 /** 表值列的字面量安全：不许插值、不许变整数、不许引号开头（都会改变打印出来的字） */
-function tableValueProblem(text: string, kind: 'narration' | 'dialogue'): string | null {
+function tableValueProblem(text: string): string | null {
   const value = text.trim();
   if (value.length === 0) return '臂正文（表值）为空';
   if (/[{}]/.test(value)) return '臂正文里有 `{` / `}`（`# 表` 值列不做插值，打印结果会变）';
@@ -797,9 +801,8 @@ function tableValueProblem(text: string, kind: 'narration' | 'dialogue'): string
   if (decodeIntegerLiteral(value) !== null) {
     return '臂正文是整数字面量（`# 表` 值列会把它解码成数值；文字表不能混整数）';
   }
-  if (kind === 'dialogue' && /[「｢」｣]/.test(value)) {
-    return '台词正文里有引号（嵌进 `角色：「{表}」` 会破坏引号配对）';
-  }
+  // 台词臂的 `「…」` 是**打印文本**（v1 引号是内容）：值列原样收，运行期由 `{表}` 插值打印，
+  // 不参与 2.0 语法配对，所以这里不拦引号（K2-MIGRATE-QUOTE）。
   return null;
 }
 
@@ -903,9 +906,9 @@ function poolBodyLineOk(text: string): boolean {
   return isDialogueLine(value);
 }
 
-/** 2.0 台词行（`角色：「…」`，可带一个行尾表演提示组 / `续`） */
+/** 2.0 台词行（`角色：「…」`，可带一个行尾表演提示组 / `续`）；正文可含引号（v1 引号是内容） */
 function isDialogueLine(text: string): boolean {
-  return /^\S+?：「[^「」]*」(?:\([^()]*\))?(?:\s+续)?$/u.test(text);
+  return /^\S+?：「.*」(?:\([^()]*\))?(?:\s+续)?$/u.test(text);
 }
 
 /* ============================== 纯工具：文本 ------------------------------ */

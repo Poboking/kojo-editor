@@ -59,29 +59,29 @@ describe('机械可迁移：逐字节正例', () => {
       '    「甲」 ~\n    「乙」 ⏎\n    「丙」 cont\n    「丁」 continue\n    「戊」 续\n';
     const result = migrateOk(src);
     expect(result.code).toBe(
-      MACHINE + '灵梦：「甲」 续\n灵梦：「乙」 续\n灵梦：「丙」 续\n灵梦：「丁」 续\n灵梦：「戊」 续\n',
+      MACHINE + '灵梦：「「甲」」 续\n灵梦：「「乙」」 续\n灵梦：「「丙」」 续\n灵梦：「「丁」」 续\n灵梦：「「戊」」 续\n',
     );
   });
 
   it('`;` 注释 → 整行 `//`（保留缩进与注释正文）', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    ; 分节线\n    「甲」\n');
-    expect(result.code).toBe(MACHINE + '// 分节线\n灵梦：「甲」\n');
+    expect(result.code).toBe(MACHINE + '// 分节线\n灵梦：「「甲」」\n');
   });
 
-  it('裸旁白 → `>`；裸台词 → `角色：「…」`（说话人取 v1 文件头 `角色:`）', () => {
+  it('裸旁白 → `>`；裸台词 → `角色：「…」`（说话人取 v1 文件头 `角色:`；**v1 引号是内容**，原样保留）', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    她点了点头。\n    「你好。」\n');
-    expect(result.code).toBe(MACHINE + '> 她点了点头。\n灵梦：「你好。」\n');
+    expect(result.code).toBe(MACHINE + '> 她点了点头。\n灵梦：「「你好。」」\n');
   });
 
   it('说话人可来自 options.speaker（v1 文件头缺 `角色:` 时的兜底）', () => {
     const result = migrateOk('时机 指令 310：\n    「你好。」\n', { speaker: '灵梦' });
-    expect(result.code).toBe(MACHINE + '灵梦：「你好。」\n');
+    expect(result.code).toBe(MACHINE + '灵梦：「「你好。」」\n');
     expect(result.metadata.chara).toBeNull();
   });
 
   it('半角旧引号 `｢…｣` → 「」', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    ｢你好。｣\n');
-    expect(result.code).toBe(MACHINE + '灵梦：「你好。」\n');
+    expect(result.code).toBe(MACHINE + '灵梦：「「你好。」」\n');
   });
 
   it('`心形 「…」` 单行 / `心形：` 块 → 行尾 `(心形)`（含 `你：` 自机前缀）', () => {
@@ -96,18 +96,18 @@ describe('机械可迁移：逐字节正例', () => {
 
   it('`着色 0x…：` 块 → `@着色 0x…`（块体同缩进迁移）', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    着色 0xFF8080：\n        「红。」\n    普通旁白。\n');
-    expect(result.code).toBe(MACHINE + '@着色 0xFF8080\n    灵梦：「红。」\n> 普通旁白。\n');
+    expect(result.code).toBe(MACHINE + '@着色 0xFF8080\n    灵梦：「「红。」」\n> 普通旁白。\n');
   });
 
   it('`随机：` 块 → `@随机`（单行候选取说话人；多行候选包 `@组`；`组：` → `@组`）', () => {
     const src = fixture('mechanical.kojo.txt');
     const result = migrateOk(src);
-    expect(result.code).toContain('@随机\n    灵梦：「甲。」\n    @组\n        灵梦：「乙。」\n        > 旁白。\n');
+    expect(result.code).toContain('@随机\n    灵梦：「「甲。」」\n    @组\n        灵梦：「「乙。」」\n        > 旁白。\n');
   });
 
   it('行内 `随机 「甲」,「乙」` → `@随机` + 两个候选行', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    随机 「甲。」,「乙。」\n');
-    expect(result.code).toBe(MACHINE + '@随机\n    灵梦：「甲。」\n    灵梦：「乙。」\n');
+    expect(result.code).toBe(MACHINE + '@随机\n    灵梦：「「甲。」」\n    灵梦：「「乙。」」\n');
   });
 
   it('`如果 / 否则如果 / 否则` → `?` / `?` / `? 否`（保序，不排序）', () => {
@@ -119,18 +119,18 @@ describe('机械可迁移：逐字节正例', () => {
     const result = migrateOk(src);
     expect(result.code).toBe(
       MACHINE +
-        '? 恋慕 >= 500\n    灵梦：「高。」\n? 恋慕 >= 100\n    灵梦：「中。」\n? 否\n    灵梦：「低。」\n',
+        '? 恋慕 >= 500\n    灵梦：「「高。」」\n? 恋慕 >= 100\n    灵梦：「「中。」」\n? 否\n    灵梦：「「低。」」\n',
     );
   });
 
   it('行内块头 `如果 条件： 语句` → `?` + 缩进一行', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    如果 TFLAG:1： 「行内。」\n');
-    expect(result.code).toBe(MACHINE + '? TFLAG:1\n    灵梦：「行内。」\n');
+    expect(result.code).toBe(MACHINE + '? TFLAG:1\n    灵梦：「「行内。」」\n');
   });
 
   it('`时机 指令 310：` → `# 机 指令 310`，块体降一级；`# 时机` 旧形同映射', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    「a」\n');
-    expect(result.code).toBe(MACHINE + '灵梦：「a」\n');
+    expect(result.code).toBe(MACHINE + '灵梦：「「a」」\n');
     const hash = migrateOk('角色: 灵梦\n# 时机 事件 100\n');
     expect(hash.code).toBe('# 机 事件 100\n');
   });
@@ -161,7 +161,7 @@ describe('机械可迁移：逐字节正例', () => {
 
   it('`选项：` 保留为 2.0 待定 UI：条目与正文照常迁移，给 `core/options/pending` warning', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    选项：\n        「好」：\n            「嗯。」\n');
-    expect(result.code).toBe(MACHINE + '选项：\n    「好」：\n        灵梦：「嗯。」\n');
+    expect(result.code).toBe(MACHINE + '选项：\n    「好」：\n        灵梦：「「嗯。」」\n');
     expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([['core/options/pending', 'warning']]);
   });
 
@@ -177,7 +177,7 @@ describe('机械可迁移：逐字节正例', () => {
 
   it('缩进归一：TAB 缩进 → 4 空格/级；全角空格同样折算', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n\t如果 TFLAG:1：\n\t\t「a」\n');
-    expect(result.code).toBe(MACHINE + '? TFLAG:1\n    灵梦：「a」\n');
+    expect(result.code).toBe(MACHINE + '? TFLAG:1\n    灵梦：「「a」」\n');
   });
 
   it('v1 文件头声明：`角色:` 作说话人，其余搬进 metadata（不进 2.0 脚本）', () => {
@@ -191,21 +191,21 @@ describe('机械可迁移：逐字节正例', () => {
 
   it('`# 版本` 删除并给 warning（2.0 没有版本号）', () => {
     const result = migrateOk('# 版本 1.0\n角色: 灵梦\n时机 指令 310：\n    「a」\n');
-    expect(result.code).toBe(MACHINE + '灵梦：「a」\n');
+    expect(result.code).toBe(MACHINE + '灵梦：「「a」」\n');
     expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([['core/migration/version', 'warning']]);
   });
 
   it('CRLF / BOM / 末尾换行原样保留', () => {
     const src = '\uFEFF角色: 灵梦\r\n时机 指令 310：\r\n    「a」\r\n';
     const result = migrateOk(src);
-    expect(result.code).toBe('\uFEFF# 机 指令 310\r\n灵梦：「a」\r\n');
+    expect(result.code).toBe('\uFEFF# 机 指令 310\r\n灵梦：「「a」」\r\n');
     const noFinal = migrateOk('角色: 灵梦\n时机 指令 310：\n    「a」');
     expect(noFinal.code.endsWith('\n')).toBe(false);
   });
 
   it('options.eol 可强制输出 EOL（M7.3 编码/EOL 保留的显式覆盖口）', () => {
     const result = migrateOk('角色: 灵梦\n时机 指令 310：\n    「a」\n', { eol: '\r\n' });
-    expect(result.code).toBe('# 机 指令 310\r\n灵梦：「a」\r\n');
+    expect(result.code).toBe('# 机 指令 310\r\n灵梦：「「a」」\r\n');
   });
 
   it('条件链重叠 warning：同文条件重复 / 恒真条件后面还有分支（可证的才报）', () => {
@@ -364,7 +364,7 @@ describe('sourceMap（新行 → 旧行）与幂等', () => {
     const src = '角色: 灵梦\n时机 指令 310：\n    「a」\n';
     const result = migrateOk(src);
     // 新行 1 = `# 机` ← 旧行 2（时机块头）；新行 2 = 台词 ← 旧行 3
-    expect(result.code.split('\n').slice(0, -1)).toEqual(['# 机 指令 310', '灵梦：「a」']);
+    expect(result.code.split('\n').slice(0, -1)).toEqual(['# 机 指令 310', '灵梦：「「a」」']);
     expect(result.sourceMap).toEqual([2, 3]);
   });
 
@@ -384,8 +384,8 @@ describe('sourceMap（新行 → 旧行）与幂等', () => {
       expect(oldLine).toBeGreaterThanOrEqual(1);
       expect(oldLine).toBeLessThanOrEqual(oldLineCount);
     }
-    // 台词行 `灵梦：「你好。」 续` 回源到 v1 的 `「你好。」 ~`
-    const line = result.code.split('\n').indexOf('    灵梦：「你好。」 续') + 1;
+    // 台词行 `灵梦：「「你好。」」 续` 回源到 v1 的 `「你好。」 ~`
+    const line = result.code.split('\n').indexOf('    灵梦：「「你好。」」 续') + 1;
     expect(result.sourceMap[line - 1]).toBe(10);
   });
 

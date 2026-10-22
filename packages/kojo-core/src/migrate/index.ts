@@ -26,6 +26,23 @@
  *    再整体缩进一级。
  * 6. **文件头元数据不丢**：`角色:` 作裸台词说话人，其余声明进 `metadata`（2.0 没有这些行；
  *    字段属于 adapter / 工程配置，见 §15.2.3）。
+ * 7. **v1 台词的引号是内容**（K2-MIGRATE-QUOTE，2026-10-22 裁决）：v1 把 `「…」` 行**连引号一起打印**
+ *    （`PRINTFORMW 「涩涩的话」`），2.0 的 `角色：「…」` 引号是**语法**、只剥最外层那一对（首 `「`
+ *    … 末 `」`，见 `lexer.ts::classifyDialogue`）。所以 v1 台词的打印文本**原样**放进 2.0 正文：
+ *    `灵梦：「「涩涩的话」」` ⇒ 2.0 打印 `「涩涩的话」`，与 v1 逐字一致。依据：
+ *    - §12.1「裸台词 `「…」` → `角色：「…」`」+ §15.2.3「只换行首分类；PRINT 变体、插值、转义复用」
+ *      ——迁移只改行首分类，正文（含 v1 引号）不再改；
+ *    - §2.6 的转义闭集只有行首 `\` / `\{` / `\}` / `\\`，`「」「」` 不是需要转义的字符（§4.13 叙事区
+ *      本来就用全角 `「」`），因此这里不需要（也不能）用反斜杠"转义"，可打印形态就是放在 2.0 正文里；
+ *    - §4.8 的规范级约束管的是"作者文本进引擎字面量"（`"`/`\` 由 `literal.ts` 唯一编码器处理），
+ *      台词正文的 `「」` 不是引擎字面量特殊字符。
+ *    **心形**是 v1 唯一把引号当语法的路径（`HPH_PRINT` 的实参不含引号），迁移按 v1 同一判据
+ *    （`stripQuotesForHeart`：首个闭合引号必须收在行尾）剥；多段文本（`「甲」「乙」`）v1 原样打印，
+ *    这里也走"打印文本原样进正文"。
+ * 8. **`时机` 面词不猜**（K2-EVENT-FACEWORD）：调用方把 adapter `eventCatalog` 的名字投影经
+ *    `options.eventNames` 传进来时，面词必须是其中之一，否则迁移期 unsupported（不产 `# 机`）；
+ *    命名参数（`成否:` / `类型:` / `参数:`）一律 unsupported 并给 adapter 事件配置的目标提示。
+ *    没传目录 = 调用方没给 adapter 事实，沿用 v1 形状判定（不内置任何事件名——core 零游戏知识）。
  */
 import type { CoreDiagnosticCode, KojoDiagnostic } from '../diagnostics.js';
 import type { KojoSpan } from '../ast.js';
@@ -58,6 +75,14 @@ export interface MigrateOptions {
   readonly speaker?: string;
   /** 输出 EOL 覆盖；缺省沿用输入多数派（M7.3「编码/EOL 保留」） */
   readonly eol?: Eol;
+  /**
+   * adapter 事件目录的**名字投影**（宿主调用 `eventNames(adapter)` 交进来；§3.5 / 附录 B.1）。
+   *
+   * - 给了 ⇒ `时机` / `# 时机` 的面词必须是其中之一，否则迁移期 unsupported（**不产 `# 机`**，
+   *   提示里列出可迁的事件名）——这条把"迁移产物编不过 `event/unknown`"挡在迁移期；
+   * - 没给 ⇒ 不猜目录（无 adapter 事实），沿用 v1 的形状判定。core 不内置任何事件名（零游戏知识）。
+   */
+  readonly eventNames?: readonly string[];
 }
 
 /** 一条不可机械迁移的台账（`line` = v1 源 1 基行号） */
@@ -118,6 +143,7 @@ class Migrator {
   private readonly src: V1Source;
   private readonly lines: readonly V1Line[];
   private readonly eol: Eol;
+  private readonly options: MigrateOptions;
   private readonly optionSpeaker: string | null;
   private readonly out: OutLine[] = [];
   private readonly diagnostics: KojoDiagnostic[] = [];
@@ -131,6 +157,7 @@ class Migrator {
   constructor(src: V1Source, options: MigrateOptions) {
     this.src = src;
     this.lines = src.lines;
+    this.options = options;
     this.eol = options.eol ?? src.eol;
     this.optionSpeaker = options.speaker !== undefined && options.speaker.trim().length > 0 ? options.speaker.trim() : null;
     this.speaker = this.optionSpeaker;
@@ -207,6 +234,11 @@ class Migrator {
   /**
    * v1 文本行 → 2.0 叙事行（台词 `角色：「…」` / 旁白 `> …`）。
    *
+   * **引号口径（K2-MIGRATE-QUOTE）**：v1 的 `「…」` 台词行连引号一起打印（`PRINTFORMW 「…」`），
+   * 2.0 的语法引号只剥最外层一对 ⇒ 迁移把 **v1 的打印文本原样**放进 2.0 正文
+   * （`灵梦：「「…」」`），打印结果与 v1 逐字一致。**心形**在 v1 里剥引号（`HPH_PRINT` 实参不含
+   * 引号），迁移沿用 v1 同一判据，不额外套引号。
+   *
    * 失败 = 形态不完整（裸引号缺右引号 / 引号后还有正文 / 没说话人）⇒ 调用方记 unsupported。
    */
   private convertText(
@@ -257,13 +289,23 @@ class Migrator {
           code: 'core/narrative/bare-quote',
         };
       }
-      return { ok: true, text: `${speaker}：「${inner}」${hint}${waitText}` };
+      // 2.0 台词正文 = **v1 的打印文本**：
+      // - 普通台词：v1 连引号一起打印 ⇒ 正文是整行 v1 文本（`｢｣` 按 §12.1 归一成全角，其余逐字，
+      //   含引号后的空白——v1 也照打；不丢字符）；
+      // - 心形：v1 只在"首个闭合引号收在行尾"时剥引号，否则多段文本原样打印 ⇒ 同一判据。
+      const printed = heart
+        ? heartPrintedText(body)
+        : `${first === '｢' ? '「' : first}${inner}${closeChar === '｣' ? '」' : closeChar}${body.slice(close + 1)}`;
+      return { ok: true, text: `${speaker}：「${printed}」${hint}${waitText}` };
     }
     return { ok: true, text: `> ${body}${hint}${waitText}` };
   }
 
   /**
    * `心形` 行 / `心形：` 块体行 → 2.0 叙事行（额外处理 v1 心形块里的 `你：` 自机前缀）。
+   *
+   * 正文取 **v1 心形实际打印的文本**（`stripQuotesForHeart` 同一判据：首个闭合引号收在行尾才剥，
+   * 多段文本原样），再交给 2.0 语法引号包一层。
    */
   private convertHeartLine(
     v1Body: string,
@@ -279,7 +321,7 @@ class Migrator {
         text = rewriteWaitAlias(text).replace(/(?:^|[\s\u3000])续\s*$/u, '').trimEnd();
       }
       const waitText = wait ? ' 续' : '';
-      const inner = text.startsWith('「') && text.endsWith('」') ? text.slice(1, -1) : text;
+      const inner = heartPrintedText(text);
       if (inner.length === 0) {
         return { ok: false, construct: '`你：` 心形行没有内容', hint: '补台词内容，或改用 `> 旁白`', code: 'core/migration/raw' };
       }
@@ -396,13 +438,13 @@ class Migrator {
         return this.handleHeadDecl(index, to, line, kind);
 
       case 'timingHash': {
-        const machine = normalizeMachine(kind.rest);
-        if (machine === null) {
-          this.reportUnsupported(line, '`# 时机` 声明（事件形状不认识）', TARGET_HINTS.timing!, 'core/migration/timing');
+        const parsed = parseTimingHead(kind.rest, this.options.eventNames);
+        if (!parsed.ok) {
+          this.reportUnsupported(line, parsed.construct, parsed.hint, 'core/migration/timing');
           this.emitRaw(line.raw, line.number);
           return index + 1;
         }
-        this.emit(level, `# 机 ${machine}`, line.number);
+        this.emit(level, `# 机 ${parsed.machine}`, line.number);
         return index + 1;
       }
 
@@ -619,17 +661,12 @@ class Migrator {
       );
       return this.emitRawBlock(index, to, line);
     }
-    const machine = normalizeMachine(kind.rest);
-    if (machine === null) {
-      this.reportUnsupported(
-        line,
-        '`时机` 块头（事件 / 命名参数形状不认识）',
-        '改成 `# 机 <事件> [编号]`；`成否:` / `类型:` / `参数:` 等命名参数搬到 adapter 事件配置（§3.5 / §15.2.3）',
-        'core/migration/timing',
-      );
+    const parsed = parseTimingHead(kind.rest, this.options.eventNames);
+    if (!parsed.ok) {
+      this.reportUnsupported(line, parsed.construct, parsed.hint, 'core/migration/timing');
       return this.emitRawBlock(index, to, line);
     }
-    this.emit(level, `# 机 ${machine}`, line.number);
+    this.emit(level, `# 机 ${parsed.machine}`, line.number);
     const end = this.bodyEnd(index, to);
     this.migrateRange(index + 1, end, { delta: -1, shift: 0, skipBlank: false });
     return end;
@@ -1028,15 +1065,115 @@ function isKojo2BlockHead(body: string): boolean {
   return false;
 }
 
-/** 迁移 `# 机` 的事件形状归一：`<事件> [参数…]`（拒绝命名参数 / 冒号 / 过多参数） */
-export function normalizeMachine(rest: string): string | null {
+/* ============================== `时机` 块头 ============================== */
+
+/** v1 `时机` 块头的命名参数键（§3.2 命名参数表；`args` 是 `参数:` 的英文别名） */
+const TIMING_NAMED_PARAM_KEYS: ReadonlySet<string> = new Set(['成否', '类型', '参数', 'args']);
+
+/** `时机` 块头解析结果：成功给 `# 机` 的机器串；失败给**不猜的理由**（台账 construct + 目标提示） */
+export type TimingHeadParse =
+  | { readonly ok: true; readonly machine: string }
+  | { readonly ok: false; readonly construct: string; readonly hint: string };
+
+/**
+ * 解析 v1 `时机 [分野] [编号] [命名参数…]` 块头（`rest` 已剥块尾冒号）。
+ *
+ * 三条判据（每条都**不猜**）：
+ * 1. 命名参数（`成否:` / `类型:` / `参数:` / `args:`）⇒ unsupported：2.0 `# 机` 只写 `<事件> [编号]`，
+ *    这些是 adapter 事件配置（§3.5 / §15.2.3）；台账里点名是哪几个参数，不静默丢；
+ * 2. 面词白名单（**只有调用方给了 `eventNames` 才判**）：不在 adapter `eventCatalog` 里 ⇒ unsupported，
+ *    提示列出可迁的事件名。core 不内置任何事件名（零游戏知识，§3.5）；
+ * 3. 形状（多余冒号 / 超过 3 段）⇒ unsupported。没给目录时沿用 v1 形状判定（调用方自行负责事后校验）。
+ */
+export function parseTimingHead(rest: string, eventNames?: readonly string[]): TimingHeadParse {
   const text = rest.trim();
-  if (text.length === 0) return null;
-  if (/[:：]/.test(text)) return null;
-  const tokens = text.split(/[ \t\u3000]+/);
-  if (tokens.length > 3) return null;
-  if (!tokens.every((token) => token.length > 0)) return null;
-  return tokens.join(' ');
+  if (text.length === 0) {
+    return {
+      ok: false,
+      construct: '`时机` 块头（缺事件名）',
+      hint: '写 `# 机 <事件> [编号]`；事件名取 adapter 的 `eventCatalog`（§3.5）。',
+    };
+  }
+  const tokens = text.split(/[ \t\u3000]+/).filter((token) => token.length > 0);
+  const named = namedTimingParams(tokens);
+  if (named.length > 0) {
+    return {
+      ok: false,
+      construct: `\`时机\` 块头（命名参数 ${named.map((name) => `\`${name}:\``).join(' / ')}）`,
+      hint: '命名参数搬到 adapter 事件配置（§15.2.3）：2.0 `# 机` 只写 `<事件> [编号]`（§3.5）。',
+    };
+  }
+  // 不在命名参数闭集里的冒号：形状不认识（与旧判据同一口径，避免把 `a:b` 当事件名产出去）
+  if (/[:：]/u.test(text)) {
+    return {
+      ok: false,
+      construct: '`时机` 块头（事件形状不认识）',
+      hint: '改成 `# 机 <事件> [编号]`；`成否:` / `类型:` / `参数:` 等命名参数搬到 adapter 事件配置（§3.5 / §15.2.3）。',
+    };
+  }
+  const face = tokens[0]!;
+  if (eventNames !== undefined && !eventNames.includes(face)) {
+    const available = eventNames.length === 0 ? '(adapter 未声明任何事件)' : eventNames.join('、');
+    return {
+      ok: false,
+      construct: `\`时机\` 面词「${face}」不在 adapter 事件目录`,
+      hint:
+        eventNames.length === 0
+          ? '当前 adapter 的 `eventCatalog` 是空的：先补 adapter 契约（§3.5），再迁移 `时机`。'
+          : `2.0 \`# 机\` 只认 adapter 声明的事件：${available}（§3.5 / 附录 B.1）。「${face}」这个 v1 面词 2.0 暂无落点：请按挂点拆文件或放进 \`@原生\`。`,
+    };
+  }
+  if (tokens.length > 3) {
+    return {
+      ok: false,
+      construct: '`时机` 块头（段数超过 `<事件> <编号>`）',
+      hint: '改成 `# 机 <事件> [编号]`：v1 的额外子句 2.0 没有落点（§3.5）。',
+    };
+  }
+  return { ok: true, machine: tokens.join(' ') };
+}
+
+/** 块头里的命名参数名（`成否:` 形，或行尾空值形 `… 参数`——v1 的块尾冒号会吃掉那个 `:`） */
+function namedTimingParams(tokens: readonly string[]): readonly string[] {
+  const found: string[] = [];
+  tokens.forEach((token, index) => {
+    if (index === 0) return; // 第 0 段是面词，不可能是命名参数
+    const bare = token.replace(/[:：]$/u, '');
+    if (!TIMING_NAMED_PARAM_KEYS.has(bare)) return;
+    const hasColon = bare !== token;
+    // 值位置的裸词（如 `类型: 类型` 的取值）不算命名参数：只认 `名字:` 形或块尾空值形
+    if (hasColon || index === tokens.length - 1) found.push(bare);
+  });
+  return found;
+}
+
+/**
+ * 旧入口（导出面保留）：`时机` 块头 → 机器串；形状不认识 → null。
+ *
+ * 不传 `eventNames` ⇒ 只判形状、不判面词（与 `parseTimingHead(rest)` 同义）。
+ */
+export function normalizeMachine(rest: string): string | null {
+  const parsed = parseTimingHead(rest);
+  return parsed.ok ? parsed.machine : null;
+}
+
+/**
+ * v1 心形实际打印的文本（与 kojo-sugar `codegen.ts::stripQuotesForHeart` 同一判据）：
+ * 首个闭合引号**收在行尾**才剥一层引号；多段文本（`「甲」「乙」`）原样——v1 也原样打印。
+ */
+function heartPrintedText(text: string): string {
+  const trimmed = text.trim();
+  const pairs: readonly (readonly ['「' | '｢', '」' | '｣'])[] = [
+    ['「', '」'],
+    ['｢', '｣'],
+  ];
+  for (const [open, close] of pairs) {
+    if (!trimmed.startsWith(open)) continue;
+    const closeAt = trimmed.indexOf(close, open.length);
+    if (closeAt === trimmed.length - close.length) return trimmed.slice(open.length, closeAt);
+    return text;
+  }
+  return text;
 }
 
 /** `$名` / `*名` → 名（v1 显示层剥离口径；2.0 `@标` / `@跳` 只写名） */

@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  CORPUS_INTEGRATION,
   createReleaseGate,
   DEFAULT_ITEMS,
   formatReport,
@@ -19,8 +20,10 @@ import {
   parseAuditOutput,
   parseBuildOutput,
   parseConformanceJson,
+  parseSmokeOutput,
   parseTypecheckOutput,
   parseVitestSummary,
+  probeCorpus,
   resolveSelectedItems,
   runReleaseGate,
   TAIL_LINES,
@@ -45,7 +48,10 @@ const VITEST_GREEN = [
   '   Duration  1.25s (transform 100ms)',
 ].join('\n');
 
-function greenHandlers() {
+type RunnerReply = { rc: number; stdout?: string; stderr?: string; timedOut?: boolean };
+type Handler = (request: { id: string }) => RunnerReply;
+
+function greenHandlers(): Record<string, Handler> {
   return {
     'typecheck-root': () => ({ rc: 0, stdout: '', stderr: '' }),
     'typecheck-app': () => ({ rc: 0, stdout: '', stderr: '' }),
@@ -61,9 +67,9 @@ function greenHandlers() {
   };
 }
 
-function makeRunner(handlers) {
-  const calls = [];
-  const run = async (request) => {
+function makeRunner(handlers: Record<string, Handler>) {
+  const calls: Array<{ id: string; command: string; args: string[]; cwd: string; timeoutMs: number; env?: Record<string, string> }> = [];
+  const run = async (request: { id: string; command: string; args: string[]; cwd: string; timeoutMs: number; env?: Record<string, string> }) => {
     calls.push(request);
     const handler = handlers[request.id];
     if (handler === undefined) throw new Error(`测试未给 ${request.id} 配 handler`);
@@ -95,6 +101,8 @@ describe('release-gate · 参数与选项目', () => {
       '--skip-tests',
       '--fail-fast',
       '--build',
+      '--corpus',
+      '--shell',
       '--only=audit, conformance',
       '--only=audit',
     ]);
@@ -104,6 +112,8 @@ describe('release-gate · 参数与选项目', () => {
       skipTests: true,
       failFast: true,
       build: true,
+      corpus: true,
+      shell: true,
       only: ['audit', 'conformance'],
       help: false,
     });
@@ -116,7 +126,7 @@ describe('release-gate · 参数与选项目', () => {
     expect(parseArgs(['--only', 'audit']).options.only).toEqual(['audit']);
   });
 
-  it('默认选项目 = 6 个核心项（build 可选不跑），顺序固定', () => {
+  it('默认选项目 = 6 个核心项（4 个可选项全 SKIP 且原因各自可读），顺序固定', () => {
     const selected = resolveSelectedItems({});
     expect(selected.error).toBeUndefined();
     expect(selected.items.map((item) => item.id)).toEqual([
@@ -127,11 +137,16 @@ describe('release-gate · 参数与选项目', () => {
       'test-unit',
       'test-perf',
     ]);
-    expect(selected.skipped).toEqual([{ id: 'build-app', reason: '可选：未传 --build' }]);
-    expect(ITEM_IDS).toEqual([...ITEM_IDS.slice(0, 6), 'build-app']);
+    expect(selected.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    expect(selected.skipped.find((entry) => entry.id === 'build-app')?.reason).toBe('可选：未传 --build');
+    expect(selected.skipped.find((entry) => entry.id === 'corpus')?.reason).toContain('语料');
+    expect(selected.skipped.find((entry) => entry.id === 'smoke-dom')?.reason).toContain('桌面壳');
+    // build-app 仍排在第 7 位（既有 JSON 消费方按位置认它），新可选项一律追加在后
+    expect(ITEM_IDS).toEqual([...ITEM_IDS.slice(0, 6), 'build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    expect(ITEM_IDS).toHaveLength(10);
   });
 
-  it('--skip-tests 只剔两池，未跑项带原因；核心项一个不少', () => {
+  it('--skip-tests 剔三池（含 corpus），未跑项带原因；核心项一个不少', () => {
     const selected = resolveSelectedItems({ skipTests: true });
     expect(selected.items.map((item) => item.id)).toEqual([
       'typecheck-root',
@@ -139,8 +154,16 @@ describe('release-gate · 参数与选项目', () => {
       'audit',
       'conformance',
     ]);
-    expect(selected.skipped.map((entry) => entry.id)).toEqual(['test-unit', 'test-perf', 'build-app']);
-    expect(selected.skipped.filter((entry) => entry.reason === '--skip-tests')).toHaveLength(2);
+    expect(selected.skipped.map((entry) => entry.id)).toEqual([
+      'test-unit',
+      'test-perf',
+      'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+    ]);
+    expect(selected.skipped.filter((entry) => entry.reason === '--skip-tests')).toHaveLength(3);
+    expect(selected.items.some((item) => item.kind === 'test')).toBe(false);
   });
 
   it('--only 按项清单顺序执行，不按参数顺序；未知项直接报错', () => {
@@ -256,10 +279,11 @@ describe('release-gate · 执行与失败语义', () => {
     expect(report.skipped).toContainEqual({ id: 'test-perf', reason: '--fail-fast' });
   });
 
-  it('--fail-fast 全绿时不误跳任何项', async () => {
+  it('--fail-fast 全绿时不误跳任何项（只留 4 个可选项的默认 SKIP）', async () => {
     const { report, calls } = await runGate(['--fail-fast']);
     expect(calls).toHaveLength(6);
-    expect(report.skipped).toEqual([{ id: 'build-app', reason: '可选：未传 --build' }]);
+    expect(report.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    expect(report.skipped.every((entry) => entry.reason.startsWith('可选：'))).toBe(true);
   });
 
   it('--only 只执行选中项，其余进 skipped；--skip-tests 真跑快速档', async () => {
@@ -271,6 +295,9 @@ describe('release-gate · 执行与失败语义', () => {
       'test-unit',
       'test-perf',
       'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
     ]);
 
     const fast = await runGate(['--skip-tests']);
@@ -460,5 +487,283 @@ describe('release-gate · 读数解析（真实输出形态）', () => {
     const human = formatReport({ ...report, skipped: [] });
     expect(human).toContain('RESULT: PASS');
     expect(human).not.toContain('SKIP');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * K2-RELEASE-CI：三个可选项（corpus / smoke-dom / smoke-ipc）与 SKIP 口径
+ * 铁律：缺前置 ⇒ SKIP + 原因（不是 FAIL、不是静默）；前置坏了 / 项本身红了 ⇒ FAIL。
+ * ------------------------------------------------------------------ */
+
+const CORPUS_DIR = 'C:/game/eraTW-corpus';
+
+/** 只跑语料项时的最小 handler 面：探针 + 集成测试 */
+function corpusHandlers({ probe = () => ({ rc: 0, stdout: `${CORPUS_DIR}\n`, stderr: '' }) } = {}) {
+  return {
+    'corpus-probe': probe,
+    corpus: () => ({ rc: 0, stdout: VITEST_GREEN, stderr: '' }),
+  };
+}
+
+const DOM_SMOKE_GREEN = [
+  '[smoke] checks: {"viteUp":true,"hostLaunched":true,"cdpUp":true,"domRendered":true,"originChecked":true} exited=false',
+  '✅ tauri DOM smoke passed',
+].join('\n');
+
+const IPC_SMOKE_GREEN = [
+  '================ 冒烟汇总 ================',
+  'PASS a   真实 IPC 双闸: ok',
+  'PASS b   写盘边界: ok',
+  '共 12 项；FAIL 0',
+  '✅ tauri IPC 冒烟全部通过',
+].join('\n');
+
+describe('release-gate · 可选项与 SKIP 口径', () => {
+  it('--shell 拉进两项壳冒烟、--corpus 只拉语料项，其余可选项仍 SKIP', () => {
+    const shell = resolveSelectedItems({ shell: true });
+    expect(shell.items.map((item) => item.id)).toEqual([
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'test-unit',
+      'test-perf',
+      'smoke-dom',
+      'smoke-ipc',
+    ]);
+    expect(shell.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus']);
+
+    const corpus = resolveSelectedItems({ corpus: true });
+    expect(corpus.items.map((item) => item.id)).toEqual([
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'test-unit',
+      'test-perf',
+      'corpus',
+    ]);
+    expect(corpus.skipped.map((entry) => entry.id)).toEqual(['build-app', 'smoke-dom', 'smoke-ipc']);
+  });
+
+  it('--only 点名的可选项无视开关（不带 --shell / --corpus 也跑），skip-tests 也压不过它', () => {
+    expect(resolveSelectedItems({ only: ['smoke-dom'] }).items.map((item) => item.id)).toEqual(['smoke-dom']);
+    expect(resolveSelectedItems({ only: ['smoke-ipc'] }).items.map((item) => item.id)).toEqual(['smoke-ipc']);
+    expect(resolveSelectedItems({ only: ['corpus'], skipTests: true }).items.map((item) => item.id)).toEqual(['corpus']);
+    // 但没点名的 corpus 会被 --skip-tests 剔掉（快速档不跑语料）
+    const fast = resolveSelectedItems({ corpus: true, skipTests: true });
+    expect(fast.items.some((item) => item.id === 'corpus')).toBe(false);
+    expect(fast.skipped.find((entry) => entry.id === 'corpus')?.reason).toBe('--skip-tests');
+  });
+
+  it('语料缺位（探针 rc=1）⇒ SKIP + 原因，报告仍 PASS / exit 0，且不为了面子把缺失判红', async () => {
+    const handlers = corpusHandlers({
+      probe: () => ({
+        rc: 1,
+        stdout: '',
+        stderr: '[FAIL] 盘上未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；设 KOJO_CORPUS_DIR=<语料目录> 可指定',
+      }),
+    });
+    const { code, report, calls, text } = await runGate(['--only=corpus'], handlers);
+    expect(code).toBe(0);
+    expect(report.result).toBe('PASS');
+    expect(report.items).toEqual([]);
+    expect(report.failed).toEqual([]);
+    const skip = report.skipped.find((entry) => entry.id === 'corpus');
+    expect(skip).toBeDefined();
+    expect(skip?.reason).toContain('语料不在位');
+    expect(skip?.reason).toContain('rc=1');
+    expect(skip?.reason).toContain('未发现符合内容条件的语料目录');
+    expect(text).toContain('SKIP corpus');
+    expect(text).toContain('RESULT: PASS');
+    // 只跑了探针，集成测试一步都没起（缺语料时不空跑 vitest）
+    expect(calls.map((call) => call.id)).toEqual(['corpus-probe']);
+  });
+
+  it('探针 rc=0 但没打印目录 ⇒ 仍 SKIP（不静默、不当作跑通），原因写明输出异常', async () => {
+    const handlers = corpusHandlers({ probe: () => ({ rc: 0, stdout: '  \n', stderr: '' }) });
+    const { code, report, calls } = await runGate(['--only=corpus'], handlers);
+    expect(code).toBe(0);
+    expect(report.result).toBe('PASS');
+    expect(report.skipped.find((entry) => entry.id === 'corpus')?.reason).toContain('未打印目录');
+    expect(calls.map((call) => call.id)).toEqual(['corpus-probe']);
+  });
+
+  it('探针 rc=2（KOJO_CORPUS_DIR 指了坏路径）⇒ FAIL 且 rc 原样传播，不洗成 SKIP', async () => {
+    const handlers = corpusHandlers({
+      probe: () => ({
+        rc: 2,
+        stdout: '',
+        stderr: '[FAIL] KOJO_CORPUS_DIR 指向的目录不存在: D:/nope\n  盘上候选: （盘上无符合 ERB/+CSV/ 的目录）',
+      }),
+    });
+    const { code, report, calls } = await runGate(['--only=corpus'], handlers);
+    expect(code).toBe(1);
+    expect(report.result).toBe('FAIL');
+    expect(report.failed).toEqual(['corpus']);
+    const item = report.items.find((entry) => entry.id === 'corpus');
+    expect(item?.rc).toBe(2);
+    expect(item?.readings.phase).toBe('corpus-probe');
+    expect(item?.readings.corpusPresent).toBeNull();
+    expect(item?.tail).toContain('KOJO_CORPUS_DIR 指向的目录不存在');
+    expect(report.skipped.some((entry) => entry.id === 'corpus')).toBe(false);
+    expect(calls.map((call) => call.id)).toEqual(['corpus-probe']);
+  });
+
+  it('探针超时 ⇒ rc 124 + readings.timeout + FAIL（前置卡死不能被当成缺语料）', async () => {
+    const handlers = corpusHandlers({ probe: () => ({ rc: 0, timedOut: true, stdout: '', stderr: '探针卡住' }) });
+    const { code, report } = await runGate(['--only=corpus'], handlers);
+    const item = report.items.find((entry) => entry.id === 'corpus');
+    expect(item?.rc).toBe(124);
+    expect(item?.readings.timeout).toBe(true);
+    expect(report.result).toBe('FAIL');
+    expect(code).toBe(1);
+  });
+
+  it('探针抛错 ⇒ rc 127 + FAIL，tail 留探针异常原文（不吞成 SKIP）', async () => {
+    const handlers = corpusHandlers({
+      probe: () => {
+        throw new Error('注入的语料探针异常');
+      },
+    });
+    const { code, report } = await runGate(['--only=corpus'], handlers);
+    const item = report.items.find((entry) => entry.id === 'corpus');
+    expect(item?.rc).toBe(127);
+    expect(item?.tail).toContain('语料探针抛错');
+    expect(item?.tail).toContain('注入的语料探针异常');
+    expect(report.failed).toEqual(['corpus']);
+    expect(code).toBe(1);
+  });
+
+  it('语料在位 ⇒ 集成测试收到 KOJO_SMOKE_PROJECT，命令就是 AGENTS §三 那条，读数带目录与 vitest 汇总', async () => {
+    const handlers = corpusHandlers();
+    const { code, report, calls } = await runGate(['--only=corpus'], handlers);
+    expect(code).toBe(0);
+    expect(calls.map((call) => call.id)).toEqual(['corpus-probe', 'corpus']);
+
+    const probe = calls[0];
+    expect(probe.args[0].replaceAll('\\', '/')).toContain('tools/corpus.mjs');
+    expect(probe.args).toContain('--print');
+    expect(probe.timeoutMs).toBeGreaterThan(0);
+
+    const integration = calls[1];
+    expect(integration.env).toEqual({ KOJO_SMOKE_PROJECT: CORPUS_DIR });
+    expect(integration.args).toContain('run');
+    expect(integration.args.join(' ')).toContain(CORPUS_INTEGRATION);
+
+    const item = report.items.find((entry) => entry.id === 'corpus');
+    expect(item?.rc).toBe(0);
+    expect(item?.cmd).toContain('KOJO_SMOKE_PROJECT');
+    expect(item?.cmd).toContain(CORPUS_INTEGRATION);
+    expect(item?.readings).toMatchObject({
+      phase: 'corpus-probe',
+      corpusPresent: true,
+      corpusDir: CORPUS_DIR,
+      parsed: true,
+    });
+    expect(item?.readings.tests).toMatchObject({ passed: 40, failed: 0, total: 40 });
+    expect(report.result).toBe('PASS');
+  });
+
+  it('smoke-dom 跑通 ⇒ PASS + 读数认出 DOM checks；smoke-ipc 读汇总项数', async () => {
+    const handlers = greenHandlers();
+    handlers['smoke-dom'] = () => ({ rc: 0, stdout: DOM_SMOKE_GREEN, stderr: '' });
+    handlers['smoke-ipc'] = () => ({ rc: 0, stdout: IPC_SMOKE_GREEN, stderr: '' });
+    const { code, report, calls } = await runGate(['--shell'], handlers);
+    expect(code).toBe(0);
+    expect(report.result).toBe('PASS');
+    expect(calls.filter((call) => call.id.startsWith('smoke-')).length).toBe(2);
+    for (const call of calls.filter((entry) => entry.id.startsWith('smoke-'))) {
+      expect(call.args[0].replaceAll('\\', '/')).toContain('tools/smoke-tauri-');
+      expect(call.timeoutMs).toBeGreaterThan(0);
+    }
+    const dom = report.items.find((entry) => entry.id === 'smoke-dom');
+    expect(dom?.readings).toMatchObject({ parsed: true, verdict: 'passed', checks: 5, failed: 0 });
+    const ipc = report.items.find((entry) => entry.id === 'smoke-ipc');
+    expect(ipc?.readings).toMatchObject({ parsed: true, verdict: 'passed', total: 12, failed: 0 });
+  });
+
+  it('壳冒烟 rc=1 ⇒ FAIL（显式点名就不许被 SKIP 洗白），阅读数仍记 verdict=failed', async () => {
+    const handlers = greenHandlers();
+    handlers['smoke-dom'] = () => ({ rc: 1, stdout: '❌ tauri DOM smoke failed\n[smoke] 未满足：CDP 9222 未监听', stderr: '' });
+    const { code, report } = await runGate(['--only=smoke-dom'], handlers);
+    expect(code).toBe(1);
+    expect(report.failed).toEqual(['smoke-dom']);
+    expect(report.items[0].readings.verdict).toBe('failed');
+    expect(report.items[0].tail).toContain('CDP 9222 未监听');
+  });
+
+  it('壳冒烟超时 ⇒ rc 124 + FAIL（壳挂死不是「没得跑」）', async () => {
+    const handlers = greenHandlers();
+    handlers['smoke-ipc'] = () => ({ rc: 0, timedOut: true, stdout: 'partial', stderr: '' });
+    const { code, report } = await runGate(['--only=smoke-ipc'], handlers);
+    const item = report.items[0];
+    expect(item.rc).toBe(124);
+    expect(item.readings).toMatchObject({ timeout: true, parsed: false });
+    expect(report.result).toBe('FAIL');
+    expect(code).toBe(1);
+  });
+
+  it('parseSmokeOutput 认不出就说 parsed:false（不猜绿）', () => {
+    expect(parseSmokeOutput('完全无关的输出')).toEqual({ parsed: false });
+    expect(parseSmokeOutput('')).toEqual({ parsed: false });
+    expect(parseSmokeOutput('共 3 项；FAIL 1')).toMatchObject({ parsed: true, total: 3, failed: 1, verdict: null });
+  });
+
+  it('--shell --corpus --json 的 JSON 结构照样稳定：顶层键序、每项六键、skipped 两键、items 顺序', async () => {
+    const handlers = { ...greenHandlers(), ...corpusHandlers() };
+    handlers['smoke-dom'] = () => ({ rc: 0, stdout: DOM_SMOKE_GREEN, stderr: '' });
+    handlers['smoke-ipc'] = () => ({ rc: 0, stdout: IPC_SMOKE_GREEN, stderr: '' });
+    const { text } = await runGate(['--shell', '--corpus', '--json'], handlers);
+    const parsed = JSON.parse(text);
+    expect(Object.keys(parsed)).toEqual([
+      'tool',
+      'schemaVersion',
+      'result',
+      'exitCode',
+      'durationMs',
+      'items',
+      'failed',
+      'skipped',
+    ]);
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.items.map((item: { id: string }) => item.id)).toEqual([
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'test-unit',
+      'test-perf',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+    ]);
+    for (const item of parsed.items) expect(Object.keys(item)).toEqual(['id', 'cmd', 'rc', 'ms', 'readings', 'tail']);
+    for (const entry of parsed.skipped) expect(Object.keys(entry)).toEqual(['id', 'reason']);
+    // 唯一没跑的可选项只剩 build-app（且仍在第 7 位之前被跳过，不插进 items）
+    expect(parsed.skipped).toEqual([{ id: 'build-app', reason: '可选：未传 --build' }]);
+  });
+
+  it('probeCorpus 是纯函数式探针：缺 run / 回报结构符合契约', async () => {
+    await expect(probeCorpus({})).rejects.toThrow(/probeCorpus/);
+    const skip = await probeCorpus({ run: async () => ({ rc: 1, stdout: '', stderr: '[FAIL] 没有语料' }) });
+    expect(skip).toEqual({ skip: expect.stringContaining('语料不在位') });
+    const dir = await probeCorpus({ run: async () => ({ rc: 0, stdout: `${CORPUS_DIR}\n`, stderr: '' }) });
+    expect(dir.env).toEqual({ KOJO_SMOKE_PROJECT: CORPUS_DIR });
+    expect(dir.readings).toMatchObject({ corpusPresent: true, corpusDir: CORPUS_DIR });
+  });
+
+  it('语料项在默认账之外但描述符自洽：可选项、有探针、超时为正', () => {
+    const ids = DEFAULT_ITEMS.map((item) => item.id);
+    expect(ids.indexOf('build-app')).toBe(6);
+    const corpus = DEFAULT_ITEMS.find((item) => item.id === 'corpus');
+    expect(corpus?.optional).toBe('corpus');
+    expect(typeof corpus?.preflight).toBe('function');
+    expect(corpus?.timeoutMs).toBeGreaterThan(0);
+    for (const id of ['smoke-dom', 'smoke-ipc']) {
+      const item = DEFAULT_ITEMS.find((entry) => entry.id === id);
+      expect(item?.optional).toBe('shell');
+      expect(item?.timeoutMs).toBeGreaterThan(0);
+    }
   });
 });

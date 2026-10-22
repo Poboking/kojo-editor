@@ -390,6 +390,13 @@ export interface MigratePlanInput {
   readonly eol?: EolStyle;
   /** v1 文件头缺 `角色:` 时的说话人兜底 */
   readonly speaker?: string;
+  /**
+   * adapter 事件目录的名字投影（`eventCatalog.events[].event`，K2-EVENT-FACEWORD）。
+   *
+   * 给了目录 ⇒ 迁移期就能把「`时机` 面词不在九事件内」判成 unsupported（不产会撞
+   * `event/unknown` 的 `# 机`）；不给 ⇒ 沿用 v1 形状判定（不猜目录）。
+   */
+  readonly eventNames?: readonly string[];
 }
 
 /**
@@ -408,10 +415,10 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
 
   let result: SemanticMigrateResult;
   try {
-    result = migrateKojoSourceSemantic(
-      source,
-      input.speaker === undefined ? {} : { speaker: input.speaker },
-    );
+    const migrateOptions: { speaker?: string; eventNames?: readonly string[] } = {};
+    if (input.speaker !== undefined) migrateOptions.speaker = input.speaker;
+    if (input.eventNames !== undefined) migrateOptions.eventNames = input.eventNames;
+    result = migrateKojoSourceSemantic(source, migrateOptions);
   } catch (error) {
     return failedPlan(filePath, targetPath, encoding, eol, errorText(error), emptyDiffText);
   }
@@ -466,7 +473,7 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
 export async function dryRunMigrateFiles(
   io: MigrateReadPort,
   filePaths: readonly string[],
-  options: { readonly speaker?: string } = {},
+  options: { readonly speaker?: string; readonly eventNames?: readonly string[] } = {},
 ): Promise<MigrateDryRun> {
   const files: MigrateFilePlan[] = [];
   for (const filePath of filePaths) {
@@ -493,6 +500,7 @@ export async function dryRunMigrateFiles(
         encoding: file.encoding,
         eol: file.eol,
         ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
+        ...(options.eventNames === undefined ? {} : { eventNames: options.eventNames }),
       }),
     );
   }

@@ -5,15 +5,17 @@
  * - v1 侧 = kojo-sugar 真入口（`createSugarTranspileService` + 与 golden 测试同一套
  *   `stubDict` / `stubFaceTable`）；
  * - 2.0 侧 = 真 core（`compileKojoSource`）+ 真 eraTW backend（`createEratwEmitBackend`）；
- * - 迁移 = core `migrateKojoSourceSemantic`（语义层，含 `当/分支/初回` 三落点）。
+ * - 迁移 = core `migrateKojoSourceSemantic`（语义层，含 `当/分支/初回` 三落点）+ 真 adapter
+ *   事件目录（`ERATW_EVENT_NAMES`；`时机` 面词白名单在迁移期生效，K2-EVENT-FACEWORD）。
  *
  * 语料在 `tests/fixtures/migrate-corpus/`：每份 `.v1.kojo.txt` = 溯源头注 + 仓内既有 v1 fixture 的
  * 逐字节复制（`manifest.json` 记 sha256 与补全口径）。本文件逐份复核：
  * 源保真 / v1 产物 / 2.0 产物或迁移台账 / 迁移幂等 / fail-closed 与 parse 口径。
  *
  * **期望的落点**（当前读到的现状，不是"应当 equal"）：语料里既有可迁移可编译的 case
- * （双 golden，产物**如实**有差异：v1 缺省 D 系 vs 2.0 `narrationColor: author`、台词引号
- * 被当语法剥掉），也有大量 blocked（多 `时机` 块 / 取色声明 / 命名参数 / 循环族 …）。
+ * （双 golden，产物**如实**有差异：v1 缺省 D 系 vs 2.0 `narrationColor: author`、随机落点差异），
+ * 也有大量 blocked（多 `时机` 块 / 取色声明 / 命名参数 / 面词不在 adapter 目录 / 循环族 …）。
+ * 台词引号按 K2-MIGRATE-QUOTE 已语义保持（v1 `「…」` 是内容，迁移产物仍打印引号）——不再是差异项。
  * 这些都在 `manifest.json` 的 `expected` 里逐条记账；改现状要同时更新语料与期望。
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -24,7 +26,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { classifyV1, compileKojoSource, migrateKojoSourceSemantic, parseSource } from '../src/index.js';
 import { createSugarTranspileService } from '../../plugins/kojo-sugar/src/service.js';
 import { stubDict, stubFaceTable } from '../../plugins/kojo-sugar/tests/support.js';
-import { ERATW_GAME_ADAPTER, createEratwEmitBackend } from '../../plugins/eratw-adapter/src/kojo2/index.js';
+import { ERATW_EVENT_NAMES, ERATW_GAME_ADAPTER, createEratwEmitBackend } from '../../plugins/eratw-adapter/src/kojo2/index.js';
 import type {
   MigrationCaseReport,
   MigrationCorpus,
@@ -33,6 +35,7 @@ import type {
 } from '../../kojo-conformance/src/migration.js';
 import {
   formatMigrationReport,
+  generateMigrationManifest,
   loadMigrationCorpus,
   runMigrationCli,
   runMigrationDifferential,
@@ -93,8 +96,12 @@ const compile2 = (source: string) => {
   };
 };
 
+/**
+ * 迁移：core 语义层 + **真 adapter 事件目录**（`时机` 面词白名单，K2-EVENT-FACEWORD）。
+ * 没有目录的裸调用（app 侧现状）只判形状；语料跑的是"宿主已接 adapter"的口径。
+ */
 const migrate = (source: string) => {
-  const result = migrateKojoSourceSemantic(source);
+  const result = migrateKojoSourceSemantic(source, { eventNames: ERATW_EVENT_NAMES });
   return {
     ok: result.ok,
     code: result.code,
@@ -125,7 +132,7 @@ describe('语料清单：≥20 份、来源可解析、覆盖要求构造', () =
     expect(corpus.problems).toEqual([]);
     expect(corpus.manifest).not.toBeNull();
     expect(corpus.manifest?.schema).toBe('kojo-migration-corpus/1');
-    expect(records.length).toBeGreaterThanOrEqual(20);
+    expect(records.length).toBeGreaterThanOrEqual(28);
     expect(new Set(records.map((record) => record.id)).size).toBe(records.length);
   });
 
@@ -172,12 +179,94 @@ describe('语料清单：≥20 份、来源可解析、覆盖要求构造', () =
     expect(diff.failures).toEqual([]);
     expect(diff.ok).toBe(true);
     for (const record of records) {
+      const expected = record.expected;
+      expect(expected, `${record.id}: 回归语料必须写期望（null 只许出现在生成骨架里）`).not.toBeNull();
+      if (expected === null) continue;
       const report = reportOf(record.id);
-      expect(report.status, record.id).toBe(record.expected.status);
-      if (record.expected.status === 'blocked') {
-        expect(report.blockedReason, record.id).toBe(record.expected.blockedReason ?? null);
+      expect(report.status, record.id).toBe(expected.status);
+      if (expected.status === 'blocked') {
+        expect(report.blockedReason, record.id).toBe(expected.blockedReason ?? null);
       }
     }
+  });
+});
+
+/* ============================== 1.5 编码面与本批下界 ============================== */
+
+describe('编码面：CRLF / BOM 真字节与 loader 载入（M7.3 保留契约）', () => {
+  it('每份语料的 eol / bom 声明与盘上真字节一致（不靠工具归一化）', () => {
+    for (const record of records) {
+      const bytes = readFileSync(path.join(CORPUS_DIR, `${record.id}.v1.kojo.txt`));
+      const actualBom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 'utf-8' : 'none';
+      expect(actualBom, record.id).toBe(record.bom ?? 'none');
+      const text = bytes.toString('utf8');
+      const hasCrlf = text.includes('\r\n');
+      const loneLf = /\n/.test(text.replace(/\r\n/g, ''));
+      expect(hasCrlf ? 'crlf' : 'lf', record.id).toBe(record.eol);
+      if (record.eol === 'crlf') expect(loneLf, `${record.id}: CRLF 档里混了裸 LF`).toBe(false);
+      else expect(hasCrlf, `${record.id}: LF 档里混了 CRLF`).toBe(false);
+    }
+  });
+
+  it('crlf-narration：整份 CRLF、无 BOM，loader 切头注后正文仍逐字保留 CRLF', () => {
+    const id = 'crlf-narration';
+    const record = recordOf(id);
+    expect(record.eol).toBe('crlf');
+    expect(record.bom ?? 'none').toBe('none');
+    const bytes = readFileSync(path.join(CORPUS_DIR, `${id}.v1.kojo.txt`));
+    expect(bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf).toBe(false);
+    const text = bytes.toString('utf8');
+    expect(text.split('\r\n').length - 1).toBeGreaterThan(record.headerLines);
+    expect(/\n/.test(text.replace(/\r\n/g, ''))).toBe(false);
+    const source = corpus.cases.find((item) => item.id === id)?.source ?? '';
+    expect(source.startsWith('角色: 12\r\n')).toBe(true);
+    expect(source.includes('\r\n')).toBe(true);
+    expect(/\n/.test(source.replace(/\r\n/g, ''))).toBe(false);
+    // 迁移侧 EOL 保留（M7.3）：v1 产物是 LF，但迁移器产物沿用源档
+    expect(reportOf(id).products.migrated?.includes('\r\n')).toBe(true);
+  });
+
+  it('bom-narration：首三字节 EF BB BF，loader 剥 BOM 后正文以 `角色:` 开头（v1 才编得过）', () => {
+    const id = 'bom-narration';
+    const record = recordOf(id);
+    expect(record.bom).toBe('utf-8');
+    expect(record.headerLines).toBe(0);
+    const bytes = readFileSync(path.join(CORPUS_DIR, `${id}.v1.kojo.txt`));
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]);
+    const source = corpus.cases.find((item) => item.id === id)?.source ?? '';
+    expect(source.charCodeAt(0)).not.toBe(0xfeff);
+    expect(source.startsWith('角色: 12')).toBe(true);
+    expect(reportOf(id).readings.v1.ok, 'v1 侧应能编过（BOM 若没剥会 unknown-identifier）').toBe(true);
+  });
+
+  it('双 golden 下界：≥8 份（本批 5 份新增 + 既有 3 份），且每份都有 .2.erb 与 v1 产物', () => {
+    const dual = records.filter((record) => record.tier === 'dual-golden');
+    expect(dual.length).toBeGreaterThanOrEqual(8);
+    for (const record of dual) {
+      const golden = corpus.goldens.get(record.id)!;
+      expect(golden.v2Product, record.id).not.toBeNull();
+      expect(golden.v1Product, record.id).not.toBeNull();
+      expect(reportOf(record.id).status, record.id).not.toBe('blocked');
+    }
+    // 本批新增的 5 份逐字来源 case 必须都在
+    for (const id of ['dual-good-source', 'dual-choice-block', 'dual-random-block', 'dual-heart-line', 'dual-color-block']) {
+      expect(recordOf(id).tier).toBe('dual-golden');
+    }
+  });
+
+  it('manifest 骨架生成器：真实语料目录一份不落、eol/bom/tier 与清单自洽', () => {
+    const skeleton = generateMigrationManifest(nodeIo, CORPUS_DIR);
+    expect(skeleton.problems).toEqual([]);
+    expect(skeleton.caseIds).toEqual([...records.map((record) => record.id)].sort());
+    for (const generated of skeleton.manifest.cases) {
+      const record = recordOf(generated.id);
+      expect(generated.eol, generated.id).toBe(record.eol);
+      expect(generated.bom ?? 'none', generated.id).toBe(record.bom ?? 'none');
+      expect(generated.tier, generated.id).toBe(record.tier);
+      // 骨架的 expected 一律 null（只报告不判定，首跑后人工填）
+      expect(generated.expected).toBeNull();
+    }
+    expect(JSON.parse(skeleton.text).schema).toBe('kojo-migration-corpus/1');
   });
 });
 
@@ -197,8 +286,13 @@ describe('逐份语料：源保真 / 双 golden / 迁移幂等 / fail-closed', (
       ).toBe(true);
       const lines = stored.split(record.eol === 'crlf' ? '\r\n' : '\n');
       expect(lines.length).toBe(record.headerLines + original.split(record.eol === 'crlf' ? '\r\n' : '\n').length);
-      // 头注必须点明来源（可追溯，不是匿名快照）
-      expect(lines.slice(0, record.headerLines).join('\n')).toContain(record.source);
+      if (record.headerLines > 0) {
+        // 头注必须点明来源（可追溯，不是匿名快照）
+        expect(lines.slice(0, record.headerLines).join('\n')).toContain(record.source);
+      } else {
+        // headerLines=0 的编码面夹具：文件本身就是 v1 源，溯源只走 manifest（BOM 必在首字节）
+        expect(record.bom).toBe('utf-8');
+      }
     },
   );
 
@@ -223,7 +317,7 @@ describe('逐份语料：源保真 / 双 golden / 迁移幂等 / fail-closed', (
       } else {
         expect(golden.ledger, record.id).not.toBeNull();
         expect(report.status).toBe('blocked');
-        expect(report.blockedReason).toBe(record.expected.blockedReason ?? null);
+        expect(report.blockedReason).toBe(record.expected?.blockedReason ?? null);
       }
     },
   );
@@ -269,9 +363,10 @@ describe('迁移率量化与状态分布（读数落报告，可 JSON）', () =>
     expect(summary.identical + summary.normalizedEqual + summary.differs + summary.blocked).toBe(records.length);
     const blockedSum = summary.blockedByReason.reduce((sum, item) => sum + item.cases, 0);
     expect(blockedSum).toBe(summary.blocked);
-    // 本语料的现状：可迁移可编译的 case 全都**如实**有行为差异（不洗白）
+    // 本语料的现状：可迁移可编译的 case **如实**记账；本批新增心形单行一条
+    // 只差编码面/排版 ⇒ normalized-equal（不硬凑 identical），其余差异照旧落 differs
     expect(summary.identical).toBe(0);
-    expect(summary.normalizedEqual).toBe(0);
+    expect(summary.normalizedEqual).toBeGreaterThanOrEqual(1);
     expect(summary.differs).toBeGreaterThan(0);
     expect(summary.blocked).toBeGreaterThan(0);
   });
@@ -280,7 +375,7 @@ describe('迁移率量化与状态分布（读数落报告，可 JSON）', () =>
     expect(verifyMigrationGoldens(corpus, diff)).toEqual([]);
   });
 
-  it('缺口台账：六类已知迁移缺口在语料里各有一份代表（缺口不被"绿"掩盖）', () => {
+  it('缺口台账：已知迁移缺口在语料里各有一份代表（缺口不被"绿"掩盖）', () => {
     const reports = diff.cases;
     const unsupportedOf = (id: string): readonly string[] => reportOf(id).readings.migration.unsupportedConstructs;
     const has = (needle: string): boolean => reports.some((report) => unsupportedOf(report.id).some((item) => item.includes(needle)));
@@ -290,15 +385,19 @@ describe('迁移率量化与状态分布（读数落报告，可 JSON）', () =>
     // ② 取色文件头声明（`口上色` / `旁白色` / `自机色` → profile）
     expect(has('`口上色` 文件头声明') || has('`旁白色` 文件头声明')).toBe(true);
     // ③ 时机命名参数（`成否:` / `类型:` → adapter 事件配置）
-    expect(has('`时机` 块头（事件 / 命名参数形状不认识）')).toBe(true);
+    expect(has('命名参数')).toBe(true);
     // ④ 循环 / 数据表 / 菜单 族（2.0 未覆盖 ⇒ 台账）
     expect(has('`循环 …：` 块')).toBe(true);
     expect(has('`数据表：` 随机数据表块')).toBe(true);
     expect(has('`菜单：` 块')).toBe(true);
-    // ⑤ 迁移产物编不过：v1 的时机面词不在 2.0 九事件目录里（红灯类）
+    // ⑤ `时机` 面词白名单（K2-EVENT-FACEWORD）：目录外的 `日常` / `事件` / `标记` 在**迁移期**
+    //    就落 unsupported（不再等到 2.0 编译撞 `event/unknown` 才红）⇒ 本语料 v2-compile-failed 归零
     expect(
-      reports.some((report) => report.blockedReason === 'v2-compile-failed' && report.readings.v2.firstErrorCode === 'event/unknown'),
+      reports.some(
+        (report) => report.blockedReason === 'migration-unsupported' && has('面词'),
+      ),
     ).toBe(true);
+    expect(reports.every((report) => report.blockedReason !== 'v2-compile-failed')).toBe(true);
     // ⑥ v1 侧自己就编不出（脚手架空壳 / 迁移专用夹具）：基线不可得，不许当成"迁移失败"
     expect(reports.some((report) => report.blockedReason === 'v1-compile-failed')).toBe(true);
   });

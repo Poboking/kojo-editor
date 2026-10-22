@@ -7,8 +7,9 @@
  *
  * ── 模型（为什么可以只重算一段） ─────────────────────────────────────────────
  * 文本按**顶层语句单元**（unit）切分：行首不缩进的一条语句 / 一个块头（连同缩进的体）。
- * `?` 链按 parser 的规则（连续同缩进 `?` 行 + 缩进体 + 之间注释）合并成一个单元；
- * 空行断链（parser §5 同口径）。每个单元缓存三层：
+ * `?` 链按 parser 的规则（连续同缩进 `?` 行 + 缩进体 + 之间注释 / legacy 行）合并成一个单元；
+ * 空行是否断链与 parser 的"块体吸收"同口径（下一个非空非注释行仍缩进 ⇒ 空行并进上一分支的体、
+ * 链不断；回到行首 ⇒ 断链）。每个单元缓存三层：
  *   1. **LexedDocument 片段**：只对该单元的行重新 `lex`（切片从行首开始，列号天然对齐）；
  *   2. **AST 节点**：该单元源码单独 `parse` 出来的节点（局部行号 + 单元起始行 = 全文件坐标）；
  *   3. **IR**：该单元节点单独走 `walkNarrative` 得到的产物行 + source map 行 + 隐藏槽 + 诊断。
@@ -17,32 +18,39 @@
  *
  * ── 安全切分点（safe split points） ─────────────────────────────────────────
  * - 普通叙事单元内部可以改（含块体行、`@着色` / `@随机` 体、`?` 分支体）——只要编辑后
- *   该行的**结构等价类**不变（见 `safeLineTransition`），单元边界就不会移动；
+ *   该行的**结构等价类**不变（见 `safeLineTransition`），单元边界就不会移动；类变了则先跑
+ *   `unitBoundariesHold`（局部重切分见证）——相邻单元的 `?` 链合并会移动网格，见证不过就交结构路径；
  * - **声明单元内可以改**（`# 表` / `# 池` / `# 模` / `# 函` / `# 机` / `# 幕`）：只重建该单元，
  *   再按"名字引用闭包"重算依赖它的展开点（池/模体里引用的表、数组长度引用的常量都在闭包里）；
  *   视点（`# 视` target）变了会改所有 `{我}`/池内裸引号 ⇒ 回退全量；
- * - **行数变化**只要形状能证明就只做平移：`插入/删除恰好一行`（换行 + 该行内容，或内容 + 换行）
- *   ⇒ 窗口之外的字逐字不变，所有单元缓存原样复用，只平移 span / 槽名（`__kojo_rand_<行>` /
- *   `__kojo_foreach_<行>` 的行号部分按"那一行落在窗口哪一侧"逐行重算），并把被新行/删行碰到
- *   的几个单元（halo）重算；
- * - 仍然证不出等价（跨行替换、窗口落在声明上又无法重解析、单元边界对不上、源里出现
- *   `__kojo_` 字面量…）⇒ 回退全量；
- * - 文件含 `选项`（全局计数诊断）、BOM、或模型自检失败：`degraded` 置位，之后永远全量。
+ * - **任意连续替换只做行号平移 + halo 重建**（K2-INCR-HOLES ②）：窗口之前的字逐字不变，
+ *   窗口之后的行整体平移 `deltaLines`（span / 槽名 `__kojo_rand_<行>` / `__kojo_foreach_<行>` 按
+ *   "该行落在窗口哪一侧"逐行重算），与窗口相交的单元（halo）整段重算。纯换行插入/删除只是
+ *   `deltaLines = ±1` 的特例；粘贴块（+k）、跨行删（-k）、同行数多行替换（0）走同一份证明：
+ *   把 [见证前单元 .. 见证后单元] 切片重新 `lex + partition`，halo 左右两侧的新范围必须与旧单元
+ *   起点/终点/文本逐字相同，且 halo 两端落在旧单元边界上；
+ * - 仍然证不出等价（整份替换、窗口落在声明上又无法重解析、单元边界对不上、源里出现
+ *   `__kojo_` 字面量…）⇒ 本轮回退全量（`fallbackFull: true`，带自检），**不关死**增量；
+ * - 只有**模型定义上不支持**的文档才粘性降级：文件含 `选项`（全局计数诊断）或 BOM
+ *   ⇒ `degraded = true`（`degradedReason` 细分为 `options-block` / `bom-source`），之后永远全量。
  *
  * ── 回退判定的保险：**构建期自检** ─────────────────────────────────────────
  * 每次全量重建缓存后，会把"单元拼接"的结果与真正的全量结果逐字对比
- * （ok / erb / 每行 source map（含列级分段）/ 诊断顺序 / 隐藏槽 / AST）。不一致就
- * `degraded = true` 并永久走全量——宁可慢，不可错。结构化增量本身不跑全量对拍（跑一次
- * 就等于放弃增量），它对每一条编辑都要**在函数内证明**：单元边界用"外圈各扩一个单元切片
+ * （ok / erb / 每行 source map（含列级分段）/ 诊断顺序 / 隐藏槽 / AST）。不一致时：
+ * 这一轮 fail-closed 走全量、`lastUnmodelledReason` 记下原因（非粘性，下一轮重新尝试建缓存），
+ * 只有 `选项` / BOM 这类定义上不支持的形状才置粘性 `degraded`——宁可慢，不可错，也绝不因为
+ * 打字过程中的一个临时畸形形状把增量永久关死（K2-INCR-HOLES ①）。结构化增量本身不跑全量对拍
+ * （跑一次就等于放弃增量），它对每一条编辑都要**在函数内证明**：单元边界用"外圈各扩一个单元切片
  * lex + partition 逐段重现"验证，声明语义用"去掉 span 后逐项对拍 + 名字闭包"验证。
  * `tests/incremental.test.ts` 的 golden 断言（随机编辑增量 === 全量）钉住同一条契约。
  *
  * ── 性能口径（实测见 tests/incremental.test.ts） ──────────────────────────
  * 5000+ 行 / ~5500 单元的源文本：全量 compile 中位数 25–40ms 量级，整份缓存重建（旧回退路径）
  *   200–350ms；单字符编辑的增量路径只做 O(脏单元行数) 的 lex/parse/lower + O(总产物行数) 的
- *   拼接与 source map 重登记 + 一次 `wrapMachine`，实测 4–6ms。回退路径的增量版
- *   （K2-PERF-INCR-FALLBACK）实测：**纯换行插入/删除 14–21ms**、**单个声明单元内编辑
- *   55–75ms**（该 fixture 每 7 行调用一次被改的池 ⇒ 重算 ~13% 的单元），都远低于旧的整份重建。
+ *   拼接与 source map 重登记 + 一次 `wrapMachine`，实测 4–7ms。结构化增量
+ *   （K2-PERF-INCR-FALLBACK + K2-INCR-HOLES ②）实测：**纯换行插入/删除 17–25ms**、
+ *   **5 行粘贴 / 3 行跨行删 20–24ms**、**单个声明单元内编辑 55–75ms**（该 fixture 每 7 行
+ *   调用一次被改的池 ⇒ 重算 ~13% 的单元），都远低于旧的整份重建（粘贴/跨行删修前 185–195ms）。
  *   构建期（首帧）是 O(单元数) 的探针 + 一次全量自检，属冷路径：编辑器在文档打开时付一次。
  */
 import type {
@@ -96,7 +104,7 @@ export interface IncrementalEdit {
   readonly offset: number;
   /** 上一轮文本里被删掉的码元数 */
   readonly removedLength: number;
-  /** 新插入的文本（含换行时走"行号平移"增量：只要它是"插一行"的形状，否则回退全量） */
+  /** 新插入的文本（含任意多行：走"行号平移 + halo 重建"结构化增量，证不出才回退全量） */
   readonly insertedText: string;
 }
 
@@ -112,7 +120,7 @@ export interface IncrementalStats {
   readonly reparsedUnits: number;
   /** 本轮重新 lower 的单元数（行内单行编辑 = 1；声明变更时 = 被改单元 + 依赖它的展开点） */
   readonly reloweredUnits: number;
-  /** 是否回退到全量编译（非法编辑 / 跨块大改 / 模型不支持 / 首次构建） */
+  /** 是否回退到全量编译（非法编辑 / 这一段证不出等价 / 模型不支持 / 首次构建） */
   readonly fallbackFull: boolean;
   /** 回退原因（走增量时为 null） */
   readonly fallbackReason: string | null;
@@ -142,15 +150,41 @@ export interface IncrementalCompiler {
    *   结果**始终**与全量一致。
    */
   update(text: string, edit?: IncrementalEdit | null): IncrementalUpdate;
-  /** 模型自检失败 → 之后永远走全量（只读读数，便于宿主提示/观测） */
+  /**
+   * **粘性**降级：模型定义上不支持当前文档（BOM / `选项` 全局计数），之后永远走全量。
+   *
+   * 形状类失败（自检不等价、诊断挂不到行…）不再置位：那一轮 fail-closed 走全量，
+   * 下一轮编辑重新尝试增量（见 `lastUnmodelledReason`）。
+   */
   readonly degraded: boolean;
-  /** 最近一次降级原因（未降级时为 null） */
+  /** 粘性降级原因细分：`'bom-source'` / `'options-block'`（未降级时为 null） */
   readonly degradedReason: string | null;
+  /**
+   * 最近一次"这一段文本证不出等价"的原因（**非粘性**：下一轮成功建缓存 / 走增量即清空）。
+   *
+   * 两类来源：
+   * - 构建期自检/归属失败（transient）：`'self-check-compile-mismatch'` / `'scene-header-unmapped'` /
+   *   `'diagnostic-unmapped'` / `'unpositioned-diagnostic'`；
+   * - 编辑级证明失败（这一帧退回带自检的全量重建）：`'whole-file-replacement'` /
+   *   `'unit-boundary-drift'` / `'view-changed'` / `'duplicate-decl-names'` …
+   *
+   * 与粘性的 `degraded` 分开：宿主可据此显示"这一帧退回全量"，而不必提示"本文件已禁用增量"。
+   */
+  readonly lastUnmodelledReason: string | null;
 }
 
 /* ============================== 行 / 单元模型 ============================== */
 
-type LineClass = 'decl' | 'options' | 'trivia' | 'condition' | 'native' | 'leaf' | `dispatch:${string}`;
+type LineClass =
+  | 'decl'
+  | 'options'
+  | 'blank'
+  | 'comment'
+  | 'legacy'
+  | 'condition'
+  | 'native'
+  | 'leaf'
+  | `dispatch:${string}`;
 
 interface LineMeta {
   readonly cls: LineClass;
@@ -255,6 +289,7 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
   let state: CacheState | null = null;
   let degraded = false;
   let degradeReason: string | null = null;
+  let unmodelledReason: string | null = null;
 
   const fullResult = (text: string): CompileKojoSourceResult => {
     const file = parse(lex(text));
@@ -274,6 +309,7 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
     const built = tryBuild(text, adapter, backend, options.view);
     if (built.kind === 'ok') {
       state = built.state;
+      unmodelledReason = isUnmodelledFallback(reason) ? reason : null;
       return {
         result: built.result,
         stats: {
@@ -288,8 +324,15 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
         },
       };
     }
-    degraded = true;
-    degradeReason = built.reason;
+    if (built.permanent) {
+      degraded = true;
+      degradeReason = built.reason;
+      unmodelledReason = null;
+    } else {
+      // 形状问题（不是"模型定义上不支持"）：本轮 fail-closed 回退全量，但不关死增量——
+      // 下一轮编辑会重新尝试建缓存（K2-INCR-HOLES ①）。
+      unmodelledReason = built.reason;
+    }
     return {
       result: fullResult(text),
       stats: {
@@ -311,6 +354,9 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
     },
     get degradedReason() {
       return degradeReason;
+    },
+    get lastUnmodelledReason() {
+      return unmodelledReason;
     },
     update(text: string, edit?: IncrementalEdit | null): IncrementalUpdate {
       const startedAt = clockNow();
@@ -352,12 +398,14 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
       const fast = tryIncremental(current, text, edit, adapter, backend);
       if (fast.kind === 'ok') {
         state = fast.state;
+        unmodelledReason = null;
         return { result: fast.result, stats: { ...fast.stats, ms: clockNow() - startedAt } };
       }
       // 结构化增量：行号平移（纯换行增删）+ 只重建受影响单元（含声明单元与其展开点）。
       const structural = tryStructuralIncremental(current, text, edit, adapter, backend, options.view);
       if (structural.kind === 'ok') {
         state = structural.state;
+        unmodelledReason = null;
         return { result: structural.result, stats: { ...structural.stats, ms: clockNow() - startedAt } };
       }
       return rebuildAll(text, structural.reason, startedAt);
@@ -367,7 +415,30 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
 
 /* ============================== 全量缓存构建 ============================== */
 
-type BuildOutcome = { kind: 'ok'; state: CacheState; result: CompileKojoSourceResult } | { kind: 'fail'; reason: string };
+/**
+ * 缓存构建失败的两类原因（K2-INCR-HOLES ① 的判据细分）：
+ * - **permanent**：模型**定义上**不支持这类文档（BOM / `选项` 全局计数诊断），重建多少次都一样
+ *   ⇒ `degraded = true`，之后永远全量（宿主应提示"本文件已退回全量"）；
+ * - **transient**：只是**这一段文本的形状**证不出等价（自检不等价、诊断挂不到行、场景头映射不到…）。
+ *   这类失败不设粘性 `degraded`：本轮 fail-closed 回退全量（结果仍与全量逐字一致），
+ *   下一轮编辑重新尝试建缓存——否则打字过程中的一个临时畸形形状会把增量永久关死。
+ */
+type BuildFailure = { readonly kind: 'fail'; readonly reason: string; readonly permanent: boolean };
+
+const PERMANENT_BUILD_FAILURES: ReadonlySet<string> = new Set<string>(['bom-source', 'options-block']);
+
+/** 这些回退原因不是"模型证不出"（没有编辑 / 调用方给了不一致的区间），不该进 `lastUnmodelledReason` */
+const NON_UNMODELLED_FALLBACKS: ReadonlySet<string> = new Set<string>(['initial-build', 'full-rebuild', 'invalid-edit']);
+
+function isUnmodelledFallback(reason: string): boolean {
+  return !NON_UNMODELLED_FALLBACKS.has(reason);
+}
+
+function buildFailure(reason: string): BuildFailure {
+  return { kind: 'fail', reason, permanent: PERMANENT_BUILD_FAILURES.has(reason) };
+}
+
+type BuildOutcome = { kind: 'ok'; state: CacheState; result: CompileKojoSourceResult } | BuildFailure;
 
 function tryBuild(
   text: string,
@@ -375,7 +446,7 @@ function tryBuild(
   backend: KojoEmitBackend,
   viewOption: string | null | undefined,
 ): BuildOutcome {
-  if (text.charCodeAt(0) === 0xfeff) return { kind: 'fail', reason: 'bom-source' };
+  if (text.charCodeAt(0) === 0xfeff) return buildFailure('bom-source');
   const lexed = lex(text);
   const parsed = parse(lexed);
   const view = resolveView(parsed.decls, viewOption);
@@ -393,7 +464,7 @@ function tryBuild(
     for (let line = range.start; line < range.end; line++) {
       const record = lexed.lines[line]!;
       const cls = classOf(record);
-      if (cls === 'options') return { kind: 'fail', reason: 'options-block' };
+      if (cls === 'options') return buildFailure('options-block');
       meta.push({ cls, indent: record.indent });
       unitOfLine[line] = i;
     }
@@ -436,10 +507,10 @@ function tryBuild(
     if (scene.title === null) continue;
     const lineIndex = scene.span.start.line - 1;
     const unitIndex = unitOfLine[lineIndex];
-    if (unitIndex === undefined || unitIndex < 0) return { kind: 'fail', reason: 'scene-header-unmapped' };
+    if (unitIndex === undefined || unitIndex < 0) return buildFailure('scene-header-unmapped');
     const unit = units[unitIndex]!;
     const header = lexed.lines[lineIndex];
-    if (header === undefined) return { kind: 'fail', reason: 'scene-header-missing' };
+    if (header === undefined) return buildFailure('scene-header-missing');
     unit.scene = { title: scene.title, headerSpan: spanOfLine(header, lexed.positions) };
   }
 
@@ -459,9 +530,9 @@ function tryBuild(
   // 全量 parse 的输出 = 词法诊断（lex 阶段，全文件源序）在前，parse 诊断在后；
   // 声明单元的 lex 诊断从 `lexed.diagnostics` 按行归属，parse 诊断从后半段归属。
   for (const diagnostic of lexed.diagnostics) {
-    if (diagnostic.span === null) return { kind: 'fail', reason: 'unpositioned-diagnostic' };
+    if (diagnostic.span === null) return buildFailure('unpositioned-diagnostic');
     const unitIndex = unitOfLine[diagnostic.span.start.line - 1];
-    if (unitIndex === undefined || unitIndex < 0) return { kind: 'fail', reason: 'diagnostic-unmapped' };
+    if (unitIndex === undefined || unitIndex < 0) return buildFailure('diagnostic-unmapped');
     if (declOfUnit[unitIndex] !== true) continue; // 非声明单元的词法诊断由该单元 lex 复现
     const unit = units[unitIndex]!;
     unit.lexDiags = [...unit.lexDiags, diagnostic];
@@ -469,10 +540,10 @@ function tryBuild(
   const parseDiagsInput = parsed.diagnostics.slice(lexed.diagnostics.length);
   for (const diagnostic of parseDiagsInput) {
     if (diagnostic.code === MISSING_MACHINE) continue; // 由 compose 按当前首个正文节点重算（跨编辑会移动）
-    if (diagnostic.code === 'core/options/pending') return { kind: 'fail', reason: 'options-block' };
-    if (diagnostic.span === null) return { kind: 'fail', reason: 'unpositioned-diagnostic' };
+    if (diagnostic.code === 'core/options/pending') return buildFailure('options-block');
+    if (diagnostic.span === null) return buildFailure('unpositioned-diagnostic');
     const unitIndex = unitOfLine[diagnostic.span.start.line - 1];
-    if (unitIndex === undefined || unitIndex < 0) return { kind: 'fail', reason: 'diagnostic-unmapped' };
+    if (unitIndex === undefined || unitIndex < 0) return buildFailure('diagnostic-unmapped');
     if (declOfUnit[unitIndex] !== true) continue; // 非声明单元的 parse 诊断由该单元 parse 复现
     const unit = units[unitIndex]!;
     if (CALL_BODY_CODES.has(diagnostic.code)) unit.postDiags = [...unit.postDiags, diagnostic];
@@ -551,7 +622,7 @@ function tryBuild(
     ...(viewOption === undefined ? {} : { view: viewOption }),
   });
   if (!sameCompiled(composed, { ...expected, file: parsed })) {
-    return { kind: 'fail', reason: 'self-check-compile-mismatch' };
+    return buildFailure('self-check-compile-mismatch');
   }
   return { kind: 'ok', state: candidate, result: composed };
 }
@@ -561,6 +632,46 @@ function tryBuild(
 type FastOutcome =
   | { kind: 'ok'; state: CacheState; result: CompileKojoSourceResult; stats: IncrementalStats }
   | { kind: 'unsafe'; reason: string };
+
+/**
+ * 快速路径的边界见证：编辑过的单元必须仍是"整份文本单独切分出来的那个单元"。
+ *
+ * 为什么必须查：`safeLineTransition` 会放行一部分**结构类变化**的行内编辑（`?` 头改成正文、
+ * 空行 ↔ 注释、正文 ↔ 空行…），而 `partitionLines` 的链折叠会让**相邻单元**的网格跟着变。
+ * 例如把空行改成注释：parser 的 `?` 链循环对注释行是 continue，后面那条 `? ...` 单元会被并进
+ * 前一条链；只重 parse 被改单元、其余单元复用旧 AST，拼出来的 AST 就比全量多一条链
+ * （活体正确性洞，K2-INCR-HOLES ①）。
+ *
+ * 判据：把 [前一单元 .. 后两单元] 切片重新 `lex + partition`，要求它逐段重现旧单元网格
+ * （起点、终点、文本逐字相同）。切片从单元边界开始 ⇒ 链状态在边界处重置，局部切分与全文件同口径。
+ * 后两单元是为了验证"被改单元之后的那个单元"的右边界（需要看到再下一行才会成为新单元）。
+ */
+function unitBoundariesHold(
+  current: CacheState,
+  text: string,
+  newStarts: readonly number[],
+  unitIndex: number,
+): boolean {
+  const units = current.units;
+  const first = unitIndex > 0 ? unitIndex - 1 : 0;
+  const last = unitIndex + 2 < units.length ? unitIndex + 2 : units.length - 1;
+  const windowStart = units[first]!.startLine;
+  const windowEnd = units[last]!.endLine;
+  const lexed = lex(sliceLines(text, newStarts, windowStart, windowEnd));
+  const ranges = partitionLines(lexed.lines);
+  let expected = first;
+  for (const range of ranges) {
+    if (expected > last) return false;
+    const owner = units[expected]!;
+    if (range.start !== owner.startLine - windowStart) return false;
+    if (range.end !== owner.endLine - windowStart) return false;
+    const absStart = range.start + windowStart;
+    const absEnd = range.end + windowStart;
+    if (sliceLines(text, newStarts, absStart, absEnd) !== owner.text) return false;
+    expected += 1;
+  }
+  return expected === last + 1;
+}
 
 function tryIncremental(
   current: CacheState,
@@ -599,6 +710,14 @@ function tryIncremental(
   if (editedRecord === undefined) return { kind: 'unsafe', reason: 'edited-line-missing' };
   if (!safeLineTransition(oldMeta, classOf(editedRecord), editedRecord.indent)) {
     return { kind: 'unsafe', reason: 'line-structure-changed' };
+  }
+
+  // 边界见证：编辑过的单元必须仍是"整份文本单独切分出来的那个单元"（相邻单元的链合并会改变网格）。
+  // 只在被改行的**结构等价类**变了才查：\`partitionLines\` 只看每行的 class + indent，
+  // 类与缩进都不变 ⇒ 切分网格逐行相同（打字/改字这类 keystroke 不必付这份钱）。
+  const editedCls = classOf(editedRecord);
+  if (editedCls !== oldMeta.cls && !unitBoundariesHold(current, text, newLineStarts, unitIndex)) {
+    return { kind: 'unsafe', reason: 'unit-boundary-drift' };
   }
 
   const newMeta: LineMeta[] = [];
@@ -829,37 +948,6 @@ function shiftUnit(unit: Unit, shift: LineShift): Unit {
   };
 }
 
-/** `eol + 其余内容`（其余内容里不许再有换行）= 一次"插一行"；不是这个形状返回 null */
-function splitSingleEol(text: string): { readonly eol: string; readonly rest: string } | null {
-  const eol = text.startsWith('\r\n') ? '\r\n' : text.startsWith('\n') ? '\n' : text.startsWith('\r') ? '\r' : null;
-  if (eol === null) return null;
-  const rest = text.slice(eol.length);
-  if (rest.indexOf('\n') >= 0 || rest.indexOf('\r') >= 0) return null;
-  return { eol, rest };
-}
-
-/** `新行内容 + eol`（内容里不许有换行）＝ 插在行首的那一种形状；不是这个形状返回 null */
-function splitTrailingEol(text: string): { readonly eol: string; readonly head: string } | null {
-  const eol = text.endsWith('\r\n') ? '\r\n' : text.endsWith('\n') ? '\n' : text.endsWith('\r') ? '\r' : null;
-  if (eol === null) return null;
-  const head = text.slice(0, text.length - eol.length);
-  if (head.indexOf('\n') >= 0 || head.indexOf('\r') >= 0) return null;
-  return { eol, head };
-}
-
-function lineStartOf(lineStarts: readonly number[], line0: number): number {
-  return lineStarts[line0] ?? 0;
-}
-
-/** 一行的行尾符长度（LF / CRLF / 裸 CR / 无行尾） */
-function eolLengthOf(text: string, lineStart: number, lineEnd: number): number {
-  if (lineEnd <= lineStart) return 0;
-  const last = text.charCodeAt(lineEnd - 1);
-  if (last === 10) return lineEnd - 1 > lineStart && text.charCodeAt(lineEnd - 2) === 13 ? 2 : 1;
-  if (last === 13) return 1;
-  return 0;
-}
-
 function unitIndexAtLine(state: CacheState, line0: number): number {
   const unitIndex = state.unitOfLine[line0];
   return unitIndex === undefined ? -1 : unitIndex;
@@ -960,21 +1048,23 @@ function unsafeStructural(reason: string): FastOutcome {
 }
 
 /**
- * 结构化增量（回退路径的增量版）：**行号平移 + 只重建受影响单元**。
+ * 结构化增量（K2-PERF-INCR-FALLBACK + K2-INCR-HOLES ②）：**行号平移 + 只重建受影响单元**。
  *
- * 能证明安全的两类编辑：
- * 1. **纯换行**（插入/删除恰好一个换行序列，另一侧没有内容改动；`delta = ±1`）：
- *    其余行逐字不变，所有单元缓存原样复用，只做 span / 槽名平移；被新行/合并行碰到的那几个
- *    单元（halo）重算。
- * 2. **行内改动**（单行内替换，`delta = 0`）：halo 内的单元重算——声明单元就走"重解析该单元
- *    + 依赖它的展开点重算"。
+ * 能证明安全的编辑形状 = **任意一段连续替换**（`IncrementalEdit` 本来就是半开区间替换）：
+ * - **纯换行插入/删除**（`deltaLines = ±1`）是特例：窗口之外的字逐字不变，只做 span / 槽名平移；
+ * - **粘贴块 / 跨行删 / 同行数多行替换**（`deltaLines = ±k` 或 `0`）：窗口之后的行整体平移，
+ *   与窗口相交的单元（halo）整段重算，声明单元再按"名字引用闭包"重算展开点；
+ * - **行内改动**（`deltaLines = 0`、无换行）：halo = 被改单元（及其被并进来的邻居）。
  *
- * 证明方式（都在本函数内、O(halo 行数) 的局部校验，不 lex 全文件）：
- * - **单元边界**：把 halo 前后各扩一个单元一起切片 `lex + partitionLines`，要求外圈两段的
- *   行范围与旧缓存逐段重现、中间段连续覆盖——边界成立才继续；任何不一致 → 回退全量；
+ * 证明方式（都在本函数内、O(窗口 + 见证单元) 的局部校验，不 lex 全文件）：
+ * - **单元边界**：必建区 = 与窗口相交的旧单元；把见证区（前后各一个单元）切片重新
+ *   `lex + partitionLines`，取**包含**必建区的新范围作为 halo。halo 左侧的每个新范围必须与旧单元
+ *   **起点/终点/文本逐字相同**，右侧的每个新范围必须等于旧单元平移 `deltaLines`，halo 两端必须
+ *   落在旧单元边界上；对不上就加一圈见证重试（最多 3 轮），仍对不上 → 回退全量；
  * - **声明语义**：`decls` 去掉 span 后逐项对拍，变了就按名字算依赖闭包（池/模体里引用的名字、
  *   `# 变量` 数组长度引用的 `# 常量`），只重算提到这些名字的单元；
- * - **跨单元 parse 上下文**：重解析声明单元时，同一单元内重复声明名 / 视点变化 → 回退全量。
+ * - **跨单元 parse 上下文**：重解析声明单元时，同一单元内重复声明名 / 视点变化 → 回退全量；
+ *   整份替换没有可复用单元 → 交回带构建期自检的全量重建。
  */
 function tryStructuralIncremental(
   current: CacheState,
@@ -988,73 +1078,38 @@ function tryStructuralIncremental(
   const oldStarts = current.lineStarts;
   const oldLineCount = oldStarts.length;
   if (oldLineCount === 0) return unsafeStructural('empty-source');
+  if (!Number.isInteger(edit.offset) || edit.offset < 0 || edit.offset > oldText.length) {
+    return unsafeStructural('invalid-edit-range');
+  }
+  if (
+    !Number.isInteger(edit.removedLength) ||
+    edit.removedLength < 0 ||
+    edit.offset + edit.removedLength > oldText.length
+  ) {
+    return unsafeStructural('invalid-edit-range');
+  }
   if (text.indexOf(RESERVED_PREFIX) >= 0) return unsafeStructural('reserved-prefix-in-source');
 
   const newStarts = lineStartsOf(text);
   const newLineCount = newStarts.length;
   const deltaLines = newLineCount - oldLineCount;
-  const removed = oldText.slice(edit.offset, edit.offset + edit.removedLength);
-  const inserted = edit.insertedText;
 
-  let shift: LineShift;
-  let windowStart: number;
-  let windowEnd: number;
-  if (deltaLines === 0) {
-    // 行内改动：行数不变，且删/插里都不含换行。
-    if (inserted.indexOf('\n') >= 0 || inserted.indexOf('\r') >= 0) return unsafeStructural('multiline-insert');
-    if (removed.indexOf('\n') >= 0 || removed.indexOf('\r') >= 0) return unsafeStructural('multiline-delete');
-    const lineA = lineIndexAt(oldStarts, edit.offset);
-    const lineB = lineIndexAt(oldStarts, edit.offset + edit.removedLength);
-    if (lineA !== lineB) return unsafeStructural('multiline-edit-range');
-    shift = NO_SHIFT;
-    windowStart = lineA;
-    windowEnd = lineB;
-  } else if (deltaLines === 1) {
-    // 插一行：插入文本 = `行尾符 + 新行内容`（落在行内容末尾）或 `新行内容 + 行尾符`（落在行首）。
-    // 两种形状都只允许**恰好一个**行尾符，且新行内容里不许再带换行。
-    if (edit.removedLength !== 0) return unsafeStructural('multiline-insert');
-    const at = lineIndexAt(oldStarts, edit.offset);
-    const lineStartOffset = oldStarts[at] ?? 0;
-    const lineEndOffset = at + 1 < oldLineCount ? oldStarts[at + 1]! : oldText.length;
-    const contentEndOffset = lineEndOffset - eolLengthOf(oldText, lineStartOffset, lineEndOffset);
-    let insertedBefore: number;
-    if (edit.offset === contentEndOffset) {
-      if (splitSingleEol(inserted) === null) return unsafeStructural('multiline-insert');
-      insertedBefore = at + 1;
-    } else if (edit.offset === lineStartOffset) {
-      if (splitTrailingEol(inserted) === null) return unsafeStructural('multiline-insert');
-      insertedBefore = at;
-    } else {
-      return unsafeStructural('multiline-insert');
-    }
-    if (insertedBefore <= 0 || insertedBefore > oldLineCount) return unsafeStructural('multiline-insert');
-    shift = { at: insertedBefore, delta: 1 };
-    windowStart = Math.max(0, insertedBefore - 1);
-    windowEnd = Math.min(oldLineCount - 1, insertedBefore + 1);
-  } else if (deltaLines === -1) {
-    // 删一行：被删区间 = 行 L 的行尾符 + 行 L+1 的**全部内容**（行 L 内容逐字不动、行 L+1 整行消失）。
-    if (inserted !== '') return unsafeStructural('multiline-delete');
-    const at = lineIndexAt(oldStarts, edit.offset);
-    if (at + 1 >= oldLineCount) return unsafeStructural('multiline-delete');
-    const lineEndOffset = at + 1 < oldLineCount ? oldStarts[at + 1]! : oldText.length;
-    const nextStartOffset = oldStarts[at + 1]!;
-    const nextEndOffset = at + 2 < oldLineCount ? oldStarts[at + 2]! : oldText.length;
-    const contentEndOffset = lineEndOffset - eolLengthOf(oldText, lineStartOf(oldStarts, at), lineEndOffset);
-    const nextContentEndOffset = nextEndOffset - eolLengthOf(oldText, nextStartOffset, nextEndOffset);
-    if (edit.offset !== contentEndOffset) return unsafeStructural('multiline-delete');
-    if (edit.offset + edit.removedLength !== nextContentEndOffset) return unsafeStructural('multiline-delete');
-    const removedLine = at + 1;
-    shift = { at: removedLine, delta: -1 };
-    windowStart = Math.max(0, removedLine - 1);
-    windowEnd = Math.min(oldLineCount - 1, removedLine + 1);
-  } else {
-    return unsafeStructural(deltaLines > 0 ? 'multiline-insert' : 'multiline-delete');
-  }
+  // ── 编辑窗口（旧坐标、0 基闭区间）：被删区间碰到的行 ───────────────────────────
+  // 窗口之前的行逐字不变（`isConsistentEdit` 已钉住前后缀），窗口之后的行整体平移 deltaLines 行。
+  // 这就是"任意连续替换"的统一形状：行内改（delta=0）、单行增删（±1）、粘贴块（+k）、跨行删（-k）
+  // 都落在同一份证明里。终点取被删区间末尾字符所在行；若区间恰好收在行首，`lineIndexAt` 会给下一行
+  // ——多算一行无害，它照样按新文本整段重建。
+  const windowStart = lineIndexAt(oldStarts, edit.offset);
+  const windowEnd = lineIndexAt(oldStarts, edit.offset + edit.removedLength);
+  // 平移分段点与 `mapSpanLine` 同口径：1 基行号 `> windowEnd + 1`（= 0 基下标 >= windowEnd + 1，
+  // 即窗口之后的第一行）整体挪 deltaLines。窗口内（含最后一行）不平移：它们全部重建。
+  const shift: LineShift = deltaLines === 0 ? NO_SHIFT : { at: windowEnd + 1, delta: deltaLines };
+  const newWindowEnd = windowEnd + deltaLines;
 
   const oldUnits = current.units;
-  const firstHalo = unitIndexAtLine(current, windowStart);
-  const lastHalo = unitIndexAtLine(current, windowEnd);
-  if (firstHalo < 0 || lastHalo < firstHalo || lastHalo >= oldUnits.length) {
+  const overlapFirst = unitIndexAtLine(current, windowStart);
+  const overlapLast = unitIndexAtLine(current, windowEnd);
+  if (overlapFirst < 0 || overlapLast < overlapFirst || overlapLast >= oldUnits.length) {
     return unsafeStructural('unit-unmapped');
   }
   for (const unitIndex of current.declUnitOfDecl) {
@@ -1073,65 +1128,176 @@ function tryStructuralIncremental(
     }
   }
 
-  const extraFirst = firstHalo > 0 ? firstHalo - 1 : -1;
-  const extraLast = lastHalo + 1 < oldUnits.length ? lastHalo + 1 : -1;
-  const haloStartOld = oldUnits[firstHalo]!.startLine;
-  const haloEndOld = oldUnits[lastHalo]!.endLine;
-  const extStartOld = extraFirst >= 0 ? oldUnits[extraFirst]!.startLine : haloStartOld;
-  const extEndOld = extraLast >= 0 ? oldUnits[extraLast]!.endLine : haloEndOld;
-  const haloStartNew = mapLineBoundary(haloStartOld, shift);
-  const haloEndNew = mapLineBoundary(haloEndOld, shift);
-  const extStartNew = mapLineBoundary(extStartOld, shift);
-  const extEndNew = mapLineBoundary(extEndOld, shift);
-  if (extEndNew <= extStartNew || haloEndNew <= haloStartNew) return unsafeStructural('unit-boundary-mismatch');
+  // 整份替换（窗口盖住全部单元）⇒ 没有任何可复用单元，也失去"两侧见证"；
+  // 与其裸拼单元，不如交回带构建期自检的全量重建（结果更可信、代价一样）。
+  if (overlapFirst === 0 && overlapLast === oldUnits.length - 1) {
+    return unsafeStructural('whole-file-replacement');
+  }
 
-  // ── 单元边界局部校验：外圈各扩一个单元，切片 lex + partition 必须逐段重现 ──
-  const extLexed = lex(sliceLines(text, newStarts, extStartNew, extEndNew));
-  for (const record of extLexed.lines) {
-    if (classOf(record) === 'options') return unsafeStructural('options-block');
-  }
-  const extRanges = partitionLines(extLexed.lines);
-  let lowerBound = 0;
-  let upperBound = extRanges.length;
-  if (extraFirst >= 0) {
-    const extra = oldUnits[extraFirst]!;
-    const got = extRanges[0];
-    if (got === undefined || got.start !== 0 || got.end !== extra.endLine - extStartNew) {
-      return unsafeStructural('unit-boundary-mismatch');
-    }
-    lowerBound = 1;
-  } else if (extStartNew !== 0) {
-    return unsafeStructural('unit-boundary-mismatch');
-  }
-  if (extraLast >= 0) {
-    const extra = oldUnits[extraLast]!;
-    const got = extRanges[extRanges.length - 1];
-    const wantStart = mapLineBoundary(extra.startLine, shift) - extStartNew;
-    const wantEnd = mapLineBoundary(extra.endLine, shift) - extStartNew;
-    if (got === undefined || got.start !== wantStart || got.end !== wantEnd) {
-      return unsafeStructural('unit-boundary-mismatch');
-    }
-    upperBound = extRanges.length - 1;
-  }
-  if (upperBound <= lowerBound) return unsafeStructural('unit-boundary-mismatch');
+  // ── halo = 覆盖"与编辑窗口相交的旧单元"的新范围；外圈各扩一个单元做"边界见证" ─────
+  // 证明（全部局部，不 lex 全文件）：
+  //   1. 记旧坐标里的必建区 [haloStartOld, haloEndOld)，新坐标里它整体是
+  //      [haloStartOld, haloEndOld + deltaLines)（起点在窗口之前 ⇒ 不平移）；
+  //   2. 把 [见证前单元 .. 见证后单元] 切片重新 `lex + partition`，取**包含**这段区间的
+  //      新范围 [rFirst..rLast] 作为 halo（整段重建）；
+  //   3. halo 之前的每个新范围必须与旧单元**起点/终点/文本逐字相同**；halo 之后的每个新范围
+  //      必须等于旧单元平移 deltaLines（同样逐字比对）；halo 两端必须落在旧单元边界上；
+  //   4. 任何一条不成立 ⇒ 再加一圈见证重试（最多 3 轮）；仍不成立 ⇒ 证不出等价 ⇒ 交回全量。
+  // 允许多并（新边界落进相邻旧单元 ⇒ 连它一起重建），不允许少并（旧单元被拆开）。
+  const extraFirst = overlapFirst > 0 ? overlapFirst - 1 : -1;
+  const extraLast = overlapLast + 1 < oldUnits.length ? overlapLast + 1 : -1;
+  let extFirst = extraFirst >= 0 ? extraFirst : overlapFirst;
+  let extLast = extraLast >= 0 ? extraLast : overlapLast;
+  // 旧坐标的必建区（0 基、半开）。halo 的终点严格在窗口之后（单元 endLine 半开）。
+  const haloStartOld = oldUnits[overlapFirst]!.startLine;
+  const haloEndOldTarget = oldUnits[overlapLast]!.endLine + deltaLines;
+  let firstHalo = -1;
+  let lastHalo = -1;
+  let haloParses: SliceParse[] | null = null;
 
-  const haloParses: SliceParse[] = [];
-  let cursor = haloStartNew;
-  for (let i = lowerBound; i < upperBound; i++) {
-    const range = extRanges[i]!;
-    const absStart = range.start + extStartNew;
-    const absEnd = range.end + extStartNew;
-    if (absStart !== cursor) return unsafeStructural('unit-boundary-mismatch');
-    cursor = absEnd;
-    const slice = parseSliceInto(sliceLines(text, newStarts, absStart, absEnd), absStart);
-    for (const meta of slice.meta) if (meta.cls === 'options') return unsafeStructural('options-block');
-    haloParses.push(slice);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const extStartNew = oldUnits[extFirst]!.startLine; // 窗口之前 → 不平移
+    const extEndNew = oldUnits[extLast]!.endLine + deltaLines; // 单元 endLine 半开、严格在窗口之后
+    if (extStartNew > windowStart || extEndNew <= extStartNew || extEndNew > newLineCount) break;
+    const widen = (): boolean => {
+      let grew = false;
+      if (extFirst > 0) {
+        extFirst -= 1;
+        grew = true;
+      }
+      if (extLast + 1 < oldUnits.length) {
+        extLast += 1;
+        grew = true;
+      }
+      return grew;
+    };
+    const extLexed = lex(sliceLines(text, newStarts, extStartNew, extEndNew));
+    let optionLike = false;
+    for (const record of extLexed.lines) {
+      if (classOf(record) === 'options') {
+        optionLike = true;
+        break;
+      }
+    }
+    if (optionLike) return unsafeStructural('options-block');
+    const extRanges = partitionLines(extLexed.lines);
+    let haloFirstRange = -1;
+    let haloLastRange = -1;
+    for (let i = 0; i < extRanges.length; i++) {
+      const rangeStart = extRanges[i]!.start + extStartNew;
+      const rangeEnd = extRanges[i]!.end + extStartNew;
+      if (haloFirstRange < 0 && rangeStart <= haloStartOld && haloStartOld < rangeEnd) haloFirstRange = i;
+      if (rangeStart < haloEndOldTarget && haloEndOldTarget <= rangeEnd) haloLastRange = i;
+    }
+    if (haloFirstRange < 0 || haloLastRange < haloFirstRange) {
+      if (widen()) continue;
+      break;
+    }
+    const haloStartNew = extRanges[haloFirstRange]!.start + extStartNew;
+    const haloEndNew = extRanges[haloLastRange]!.end + extStartNew;
+    // halo 两端必须落在旧单元边界上（多并进来的相邻单元也算：它们是"整单元"被并的）。
+    const haloFirstUnit = unitIndexAtLine(current, haloStartNew);
+    if (haloFirstUnit < extFirst || oldUnits[haloFirstUnit]!.startLine !== haloStartNew) {
+      if (widen()) continue;
+      break;
+    }
+    const haloEndOld = haloEndNew - deltaLines;
+    const lastHaloUnit = unitIndexAtLine(current, haloEndOld - 1);
+    if (
+      haloEndOld <= 0 ||
+      haloEndOld > oldLineCount ||
+      lastHaloUnit < haloFirstUnit ||
+      oldUnits[lastHaloUnit]!.endLine !== haloEndOld
+    ) {
+      if (widen()) continue;
+      break;
+    }
+    // 左侧见证：前缀新范围数必须等于旧单元数（少一个都说明旧单元被拆开）。
+    if (haloFirstRange !== haloFirstUnit - extFirst) {
+      if (widen()) continue;
+      break;
+    }
+    let prefixOk = true;
+    for (let i = 0; i < haloFirstRange; i++) {
+      const range = extRanges[i]!;
+      const absStart = range.start + extStartNew;
+      const absEnd = range.end + extStartNew;
+      const owner = oldUnits[extFirst + i]!;
+      if (absStart !== owner.startLine || absEnd !== owner.endLine) {
+        prefixOk = false;
+        break;
+      }
+      if (sliceLines(text, newStarts, absStart, absEnd) !== owner.text) {
+        prefixOk = false;
+        break;
+      }
+    }
+    if (!prefixOk) {
+      if (widen()) continue;
+      break;
+    }
+    // 右侧见证：后缀新范围必须等于旧单元平移 deltaLines，同样逐字比对。
+    const newSuffixCount = extRanges.length - (haloLastRange + 1);
+    if (newSuffixCount !== extLast - lastHaloUnit) {
+      if (widen()) continue;
+      break;
+    }
+    let suffixOk = true;
+    for (let j = 0; j < newSuffixCount; j++) {
+      const range = extRanges[haloLastRange + 1 + j]!;
+      const absStart = range.start + extStartNew;
+      const absEnd = range.end + extStartNew;
+      const owner = oldUnits[lastHaloUnit + 1 + j]!;
+      if (absStart !== owner.startLine + deltaLines || absEnd !== owner.endLine + deltaLines) {
+        suffixOk = false;
+        break;
+      }
+      if (sliceLines(text, newStarts, absStart, absEnd) !== owner.text) {
+        suffixOk = false;
+        break;
+      }
+    }
+    if (!suffixOk) {
+      if (widen()) continue;
+      break;
+    }
+    const rebuilt: SliceParse[] = [];
+    let cursor = haloStartNew;
+    let contiguous = true;
+    for (let i = haloFirstRange; i <= haloLastRange; i++) {
+      const range = extRanges[i]!;
+      const absStart = range.start + extStartNew;
+      const absEnd = range.end + extStartNew;
+      if (absStart !== cursor) {
+        contiguous = false;
+        break;
+      }
+      cursor = absEnd;
+      rebuilt.push(parseSliceInto(sliceLines(text, newStarts, absStart, absEnd), absStart));
+    }
+    if (!contiguous || cursor !== haloEndNew) {
+      if (widen()) continue;
+      break;
+    }
+    // 重建出来的单元里如果出现"声明头但缩进不为 0"这种畸形，交给全量（本模型不解释它）
+    let shapeOk = true;
+    for (const slice of rebuilt) {
+      for (const meta of slice.meta) {
+        if (meta.cls === 'options') return unsafeStructural('options-block');
+      }
+      if (slice.headCls === 'decl' && slice.headIndent !== 0) shapeOk = false;
+      if (slice.strayDecls) shapeOk = false;
+      if (!shapeOk) break;
+    }
+    if (!shapeOk) return unsafeStructural('stray-declaration');
+    firstHalo = haloFirstUnit;
+    lastHalo = lastHaloUnit;
+    haloParses = rebuilt;
+    break;
   }
-  if (cursor !== haloEndNew) return unsafeStructural('unit-boundary-mismatch');
-  // 重建出来的单元里如果出现"声明头但缩进不为 0"这种畸形，交给全量（本模型不解释它）
-  for (const slice of haloParses) {
-    if (slice.headCls === 'decl' && slice.headIndent !== 0) return unsafeStructural('orphan-unit');
-    if (slice.strayDecls) return unsafeStructural('stray-declaration');
+
+  if (haloParses === null || firstHalo < 0 || lastHalo < firstHalo) {
+    return unsafeStructural('unit-boundary-drift');
   }
 
   const haloCount = haloParses.length;
@@ -2097,8 +2263,17 @@ interface LineRange {
  * 顶层语句单元切分（安全切分点）：
  * - 行首不缩进的非空/非注释行开始一个新单元；
  * - 缩进行（块体）、注释、空行并入当前单元；`@原生` 体行（含缩进为 0 的空行）一律并入；
- * - `?` 链：连续同缩进 `?` 行 + 缩进体 + 之间注释算一个单元；**空行断链**（parser §5 同口径）；
+ * - `?` 链：连续同缩进 `?` 行 + 缩进体 + 之间注释 / legacy 行算一个单元；
+ * - **空行是否断链按 parser 的"块体吸收"口径**（不是见空行就断）：块体里遇到空行时，
+ *   parser 先看下一个非空非注释行——它仍缩进 ⇒ 空行并进上一分支的体、链不断；它回到行首
+ *   或文件结束 ⇒ 空行留在链外、链断（`parser.ts` 的 `parseNarrativeBlock` / `parseConditionChainCore`）。
+ *   这条口径是 K2-INCR-HOLES ① 的根因：旧实现一律"空行断链"，于是把 `? A`（空行）`    > 体`
+ *   `? 否` 拆成两个单元，拼接结果比全量多一个条件链 ⇒ 构建期自检失败 ⇒ 永久 degraded；
+ * - legacy 行（`如果` 等 1.x 写法）在 parser 的链循环里是 `continue`（不断链），这里同口径；
  * - 文件开头的空行/注释自成一个 trivia 单元。
+ *
+ * 切分只会**多并**不会**少并**：并进来的行仍由该单元的切片 `lex + parse` 逐字复现，
+ * 所以过并只损失复用粒度、不改变结果；少并才会把 parser 的一个构造拆成两段。
  */
 function partitionLines(lines: readonly KojoLexLine[]): LineRange[] {
   const ranges: LineRange[] = [];
@@ -2114,10 +2289,12 @@ function partitionLines(lines: readonly KojoLexLine[]): LineRange[] {
     }
     if (record.kind === 'native') continue; // `@原生` 体（含空行）不切分
     if (record.kind === 'blank') {
-      chainOpen = false;
+      // parser：空行后面还是缩进体 ⇒ 空行被块体吸收，链继续；否则断链（§5）。
+      chainOpen = chainOpen && nextIndentedAfterTrivia(lines, i + 1);
       continue;
     }
     if (record.kind === 'comment') continue;
+    if (record.kind === 'legacy') continue; // parser 的链循环对 legacy 行 continue（不断链）
     if (record.indent !== 0) continue;
     if (cls === 'condition' && chainOpen) continue;
     ranges.push({ start, end: i });
@@ -2126,6 +2303,16 @@ function partitionLines(lines: readonly KojoLexLine[]): LineRange[] {
   }
   if (start >= 0) ranges.push({ start, end: lines.length });
   return ranges;
+}
+
+/** 下一个非空、非注释行是否缩进（parser 的 `nextNonBlankIndex` 同口径：注释一起跳过） */
+function nextIndentedAfterTrivia(lines: readonly KojoLexLine[], from: number): boolean {
+  for (let i = from; i < lines.length; i++) {
+    const record = lines[i]!;
+    if (record.kind === 'blank' || record.kind === 'comment') continue;
+    return record.indent > 0;
+  }
+  return false;
 }
 
 function classOf(record: KojoLexLine): LineClass {
@@ -2139,8 +2326,11 @@ function classOf(record: KojoLexLine): LineClass {
     case 'native':
       return 'native';
     case 'blank':
+      return 'blank';
     case 'comment':
-      return 'trivia';
+      return 'comment';
+    case 'legacy':
+      return 'legacy';
     case 'dispatch':
       return record.word === '函' || record.word === '织' ? 'decl' : `dispatch:${record.word}`;
     default:
@@ -2164,6 +2354,7 @@ function safeLineTransition(oldMeta: LineMeta, nextCls: LineClass, nextIndent: n
   if (oldCls === 'options' || nextCls === 'options') return false;
   if (oldCls === 'native' || nextCls === 'native') return false;
   if (oldCls.startsWith('dispatch:') || nextCls.startsWith('dispatch:')) return false;
+  if (oldCls === 'legacy' || nextCls === 'legacy') return false;
   if (nextCls === 'condition') return false;
   return true;
 }

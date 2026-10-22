@@ -11,7 +11,7 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, FileWatchStatus, GameProject, RecentProject } from '@kojo/plugin-api';
-import {errorText,  join } from '@kojo/plugin-api';
+import {errorText,  join, pathKey } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
@@ -119,6 +119,18 @@ import type { EditorPaneActions } from './EditorPane';
 import { openModelAcrossGroups } from './editor-pane-registry';
 // 整项目诊断扫描的装配与调度（判据一份，全住在那模块里；这里只递宿主事实）
 import { mountProjectScan } from './project-scan-schedule';
+// K2-PROJECT-WIRE：2.0 项目级分析的装配面（惰性 adapter，动态 import 不进开机图；
+// flag 关时工厂内部零动作，调用点无分支）。
+import { installKojo2ProjectScan } from './kojo2-project-scan-adapter';
+// K2-STORAGE-SERVICE：项目打开后唯一的槽位账本装配点（React 无关的服务；这里只负责
+// 项目开/关两拍与把 adapter 事实惰性递进去）。
+import {
+  createKojo2StorageService,
+  type Kojo2StorageServiceAdapter,
+} from './kojo2-storage-service';
+import { KOJO2_STORAGE_DEFAULT_CLASSES } from './kojo2-storage-registry';
+import { isKojo2Path } from './kojo2-open';
+import { isKojo2CutoverEnabled } from './kojo2-flag';
 // REF-FRONT-PERF：项目生命周期（开/关/写允许域/审批/会话 flush）收在专用 hook；
 // App 只留 UI state 与渲染。项目子树另加错误边界 + 项目态错误条。
 import { useProjectSession, useSessionFlush, useSessionStore } from './use-project-session';
@@ -155,6 +167,48 @@ const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['P
  */
 function createProjectView() {
   return lazy(loadProjectView);
+}
+
+/**
+ * 槽位账本的 adapter 事实（K2-STORAGE-SERVICE）。
+ *
+ * `import()` 留在动态边上：adapter 插件包不进开机静态图（与
+ * `ui/kojo2-project-scan-adapter.ts` 同一条 PS-10 纪律）。装载失败**不静默**：
+ * 交一句人话给宿主，本轮不建服务（零写），项目其余功能照常。
+ *
+ * `storageClasses`：A3.6 的落点名/初始化语义在 `ERATW_GAME_ADAPTER.storageClasses`，
+ * 但那份契约目前只有引擎落点（`SAVEDATA`/`TCVAR`/`LOCAL`）与槽前缀，**没有槽位编号
+ * 区段**；宿主先用 `KOJO2_STORAGE_DEFAULT_CLASSES` 的现口径（0..4095）顶数值，
+ * 但**只保留 adapter 真声明过的存储期**——adapter 没声明的存储期绝不替它补，
+ * 声明用了就会在 core 的规划闸报 `core/storage/unknown-class`。adapter 补出数值
+ * 区段后只改这一行映射。
+ */
+async function loadKojo2StorageAdapter(
+  onUnavailable: (reason: string) => void,
+): Promise<Kojo2StorageServiceAdapter | null> {
+  try {
+    const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 宿主组合根的惰性 adapter 装载点；与 ui/kojo2-project-scan-adapter.ts 同一豁免口径（动态 import 不进开机静态图）
+    const declared = new Set(
+      mod.ERATW_GAME_ADAPTER.storageClasses.classes.map((spec) => spec.period),
+    );
+    return {
+      gameFingerprint: mod.ERATW_GAME_ADAPTER.gameFingerprint.digest,
+      storageClasses: KOJO2_STORAGE_DEFAULT_CLASSES.filter((spec) =>
+        declared.has(spec.storage),
+      ),
+      /**
+       * 仓库还没有「编辑器声明账本键」（注册表头注说的跨构建稳定键）⇒ 先用
+       * `(文件, 名字)` 近似：**搬行不搬槽**（位置键会随插入一行就把整段槽位判成
+       * 删除+新增，回收闸会被日常编辑频繁触发）。`pathKey` 归一化盘符大小写/分隔符，
+       * 同一文件从两种写法进来仍认成同一声明。改名按新声明处理（旧槽 retire），
+       * 若新声明回收了旧槽，服务会零写阻断、等作者显式放行——那是真该问人的时候。
+       */
+      declarationKey: (input) => `${pathKey(input.uri)}\u0000${input.name}`,
+    };
+  } catch (error) {
+    onUnavailable(errorText(error));
+    return null;
+  }
 }
 
 /**
@@ -240,6 +294,22 @@ if (typeof window !== 'undefined') {
       );
     },
   });
+}
+
+/**
+ * K2-EVENT-FACEWORD 的宿主接线：迁移向导的事件目录（adapter `eventCatalog` 的名字投影）。
+ *
+ * 动态 `import()`：插件包不进开机静态图（与 `kojo2-project-scan-adapter` / storage loader
+ * 同一条 PS-10 纪律）；装载失败返回 `undefined` ⇒ 迁移器退回 v1 形状判定（不猜目录、
+ * 不阻断预演），事件面词白名单只是"更早、更准"的那一层。
+ */
+async function loadKojo2MigrateEventNames(): Promise<readonly string[] | undefined> {
+  try {
+    const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 宿主组合根的惰性 adapter 装载点（动态 import 不进开机静态图，口径同 kojo2-project-scan-adapter）
+    return mod.ERATW_EVENT_NAMES;
+  } catch {
+    return undefined;
+  }
 }
 
 export function App(): ReactElement {
@@ -544,6 +614,9 @@ export function App(): ReactElement {
       kernel,
       extraRoots: () => extraRootsRef.current,
       onNotice: (message) => notify({ kind: 'info', message }),
+      // 2.0 项目级分析（K2-PROJECT-WIRE）：flag 关时这个对象不存在、扫描器连 `.kojo2`
+      // 判据都不调；adapter 由工厂动态 import，失败降级为「无 adapter 的织面回退」。
+      ...installKojo2ProjectScan(),
     });
     return () => handle.dispose();
   }, [kernel, notify]);
@@ -566,6 +639,89 @@ export function App(): ReactElement {
   /** 通知通道镜像（`useNotify` 的返回身份不保证恒定，入口不该跟着重建） */
   const notifyRef = useRef(notify);
   notifyRef.current = notify;
+
+  /**
+   * Kojo 2.0 槽位账本（K2-STORAGE-SERVICE）：项目打开 / 关闭的**唯一**接线点。
+   *
+   * ① flag 关 ⇒ 直接返回：不建服务、不读盘、零写（服务内部另有同一道闸，双保险）；
+   * ② 文档清单 = 项目口上根 ∪ 会话附加根里按 `.kojo2` 后缀现读；任何一根读不动、任何一份
+   *    读不动都记 `complete=false`——服务据此**零写跳过**（把读不到当成删除会回收它的槽位，
+   *    文件恢复后新声明就会读到旧存档字节）。**不并入**跨项目的常驻工作区根：那会把别的
+   *    项目的声明算进本项目账本；
+   * ③ adapter 动态 import（不进开机静态图）；装载失败只报一句，本轮不建服务。
+   *
+   * 关闭 / 换项目 = effect 清理：先等还在飞的 open 落地，再 `closeProject()`（flush 后丢弃
+   * 实例；flush 失败由服务自己上屏）。`cancelled` 防的是「项目已经关了、文档才读完」的迟到装配。
+   */
+  useEffect(() => {
+    if (!kernel || !project) return;
+    if (!isKojo2CutoverEnabled()) return;
+    const service = createKojo2StorageService({
+      kernel,
+      notify: (notice) => notifyRef.current(notice),
+    });
+    let cancelled = false;
+    /** 本次装配的 open promise：清理时要等它落地再关，否则 close 会拿到 busy 而漏掉实例 */
+    let opening: Promise<void> | null = null;
+    void (async () => {
+      const roots = [...new Set([...project.kojoPaths, ...extraRootsRef.current])];
+      const documents: { uri: string; source: string }[] = [];
+      let complete = roots.length > 0;
+      for (const root of roots) {
+        if (cancelled) return;
+        try {
+          const entries = await kernel.io.walkDir(root, {
+            includeFiles: true,
+            includeDirs: false,
+            filter: (entry) => entry.isDirectory || isKojo2Path(entry.name),
+          });
+          for (const entry of entries) {
+            if (cancelled) return;
+            if (entry.isDirectory || !isKojo2Path(entry.name)) continue;
+            try {
+              const text = await kernel.io.readText(entry.path);
+              documents.push({ uri: entry.path, source: text.text });
+            } catch {
+              complete = false;
+            }
+          }
+        } catch {
+          complete = false;
+        }
+      }
+      if (cancelled) return;
+      const adapter = await loadKojo2StorageAdapter((reason) =>
+        notifyRef.current({
+          kind: 'error',
+          message: `Kojo 2.0 存储期事实装载失败，本次不写槽位账本（项目其余功能不受影响）：${reason}`,
+        }),
+      );
+      if (cancelled || adapter === null) return;
+      opening = service
+        .openProject({
+          projectKey: pathKey(project.rootDir),
+          documents,
+          adapter,
+          documentsComplete: complete,
+        })
+        .then(() => undefined);
+      await opening;
+    })().catch((error: unknown) => {
+      notifyRef.current({
+        kind: 'error',
+        message: `Kojo 2.0 槽位账本装配失败（项目其余功能不受影响）：${errorText(error)}`,
+      });
+    });
+    return () => {
+      cancelled = true;
+      void (async () => {
+        // 先让还在飞的 open 落地（服务对并发 close 只回 busy），再关：不留没有 flush 的实例。
+        if (opening !== null) await opening.catch(() => undefined);
+        await service.closeProject();
+      })();
+    };
+  }, [kernel, project?.rootDir]);
+
   const [migrateEntry, setMigrateEntry] = useState<Kojo2MigrateEntry | null>(null);
   const [migrateState, setMigrateState] = useState<Kojo2MigrateEntrySnapshot | null>(null);
 
@@ -1885,6 +2041,7 @@ export function App(): ReactElement {
             io={kernel.io}
             filePaths={migrateState.filePaths}
             speaker={migrateEntry.speaker()}
+            loadEventNames={loadKojo2MigrateEventNames}
             onClose={() => migrateEntry.close()}
             applyPlan={migrateEntry.apply}
             undoPlan={migrateEntry.undo}

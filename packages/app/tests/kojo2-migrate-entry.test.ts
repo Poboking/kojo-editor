@@ -120,7 +120,7 @@ class FakeIo implements MigrateIoPort {
 const FILE = 'C:\\proj\\a.kojo';
 const OTHER = 'C:\\proj\\b.kojo';
 const V1 = '角色: 灵梦\n时机 指令 310：\n    「你好。」\n';
-const V1_CODE = '# 机 指令 310\n灵梦：「你好。」\n';
+const V1_CODE = '# 机 指令 310\n灵梦：「「你好。」」\n';
 const BAD = '角色: 灵梦\n时机 指令 310：\n    她的心情 = 1\n';
 
 /** 语义层才证得动的 `当` 块（机械层对它记 unsupported，见 core 测试同款夹具） */
@@ -555,3 +555,4 @@ describe('语义层：入口注入的 io 跑出的计划带 rewrites（逐条 di
     expect(rewrite.diffText).toContain('+@原生');
   });
 });
+

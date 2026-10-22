@@ -232,10 +232,23 @@ export interface KojoRandomBlock {
   readonly span: KojoSpan;
 }
 
-/** `@原生` 缩进围栏：块体保留物理行原文（去基准缩进后） */
+/**
+ * `@原生` 缩进围栏：块体保留物理行原文（去基准缩进后）。
+ *
+ * `lineColumns`（additive，可选）：`lines[i]` 第一个码元在**物理源行**里的 1 基列
+ * （UTF-16 码元口径）。去缩进是"按缩进**宽度**剥前导空白"（Tab 按 4 计、全角空格按 2 计），
+ * 被剥掉的**码元数**无法从去缩进后的文本反推（`\t\tX` 与 `        X` 去缩进后同形），
+ * 所以只有握着原文的 parser 能给出精确起点列。缺省（手工构造的节点 / 旧消费方）⇒
+ * lowering 退化为去缩进视图坐标，不伪造物理列（见 `lower/native.ts`）。
+ *
+ * 纯空白行按 §8.5「空行原样保留」保留**物理行原文**（含缩进空白，字节零丢失），
+ * 其 `lineColumns[i]` 恒为 `1`：视图文本 = 物理行全文，折回是恒等映射；纯空白行没有
+ * "第一个内容字符"，取行首（任何 > 1 的值都会把空白字节映射到行外）。
+ */
 export interface KojoNativeBlock {
   readonly kind: 'nativeBlock';
   readonly lines: readonly string[];
+  readonly lineColumns?: readonly number[];
   readonly span: KojoSpan;
 }
 

@@ -13,7 +13,7 @@
     "unsupported": 2,
     "unsupportedConstructs": [
       "`口上色` 文件头声明",
-      "`时机` 块头（事件 / 命名参数形状不认识）"
+      "`时机` 块头（命名参数 `成否:`）"
     ],
     "outputLines": 16
   }

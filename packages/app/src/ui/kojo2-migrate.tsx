@@ -44,6 +44,12 @@ export interface Kojo2MigrateWizardProps {
   readonly filePaths: readonly string[];
   /** v1 文件头缺 `角色:` 时的说话人兜底（工程配置里拿到的角色名） */
   readonly speaker?: string;
+  /**
+   * adapter 事件目录的惰性装载（K2-EVENT-FACEWORD 的宿主接线）：给了就在 dry-run 前取一次
+   * （失败/缺席 ⇒ `undefined`，迁移器退回 v1 形状判定，不猜目录）。宿主用动态 import 供它，
+   * 插件包因此不进开机静态图。
+   */
+  readonly loadEventNames?: () => Promise<readonly string[] | undefined>;
   readonly onClose: () => void;
   /** 应用成功（含部分跳过）后的宿主回调，用于刷新文件树 / 通知 */
   readonly onApplied?: (result: MigrateApplyResult) => void;
@@ -72,6 +78,7 @@ export function Kojo2MigrateWizard({
   io,
   filePaths,
   speaker,
+  loadEventNames,
   onClose,
   onApplied,
   onUndone,
@@ -95,9 +102,20 @@ export function Kojo2MigrateWizard({
     setError(null);
     setApplyResult(null);
     setPlan(null);
-    void dryRunMigrateFiles(io, filePaths, speaker === undefined ? {} : { speaker }).then(
+    void (async () => {
+      // 事件目录惰性装载（失败 = 缺席，不阻断预演）：白名单只在给了目录时生效。
+      const eventNames =
+        loadEventNames === undefined
+          ? undefined
+          : await loadEventNames().catch(() => undefined);
+      if (cancelled) return;
+      const options: { speaker?: string; eventNames?: readonly string[] } = {};
+      if (speaker !== undefined) options.speaker = speaker;
+      if (eventNames !== undefined) options.eventNames = eventNames;
+      return dryRunMigrateFiles(io, filePaths, options);
+    })().then(
       (next) => {
-        if (cancelled) return;
+        if (cancelled || next === undefined) return;
         setPlan(next);
         setSelectedPath((previous) => {
           if (previous !== null && next.files.some((file) => file.filePath === previous)) return previous;
@@ -116,7 +134,7 @@ export function Kojo2MigrateWizard({
     };
     // filePaths 只经 pathsKey 参与依赖：宿主传新数组但内容相同 → 不重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [io, pathsKey, speaker, reloadNonce]);
+  }, [io, pathsKey, speaker, loadEventNames, reloadNonce]);
 
   const selected = useMemo<MigrateFilePlan | null>(() => {
     if (plan === null || selectedPath === null) return null;

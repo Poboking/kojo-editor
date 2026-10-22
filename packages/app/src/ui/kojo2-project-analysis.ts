@@ -56,6 +56,18 @@
  * 解析（`lex + parse`）与判定分开计时（{@link Kojo2ProjectTiming}）。判定段的量级与
  * core `tests/project.bench.test.ts` 同一口径（万级 `@函` 数十毫秒）；解析段随文本量线性，
  * 由调用方决定是否按轮上限截断。扫描器只在 `.kojo2` 文件上走这条路，`.kojo` 与本模块无关。
+ *
+ * ## 惰性 adapter（K2-PROJECT-WIRE）
+ *
+ * 生产宿主的 adapter 住在插件包里，若在模块求值 / 装配那一刻静态取用，就会把整包拽进开机图。
+ * 因此扫描装配面（{@link Kojo2ProjectPassOptions.adapter}）接受**惰性 getter**：
+ * {@link analyzeKojo2ProjectAsync} 在判定前 `await` 一次（每个 getter 实例只求值一次，
+ * 结果与失败都缓存），拿到事实再走同步判定。解析失败（抛错 / 拒绝 / 返回 `undefined`）
+ * **不炸、不静默**：`stats.adapterUnavailable = true`，第一次失败经 `onAdapterUnavailable`
+ * （缺省 `console.warn`）给一条可见读数，分析照常跑——织面退回 `analyzeProject` 的既有路径。
+ *
+ * 同步入口 {@link analyzeKojo2Project} 仍然只吃事实对象：它的调用方（测试 / 纯逻辑复用）
+ * 不需要为异步买单，`adapterUnavailable` 恒 `false`。
  */
 import {
   analyzeProject,
@@ -128,6 +140,35 @@ export interface Kojo2ProjectDocument {
 /** adapter 事实（与 core `WeaveLayerAdapterFacts` 同形；真实 `GameAdapter` 结构上直接满足） */
 export type Kojo2ProjectAdapterFacts = WeaveLayerAdapterFacts;
 
+/**
+ * 惰性 adapter getter：宿主在这里接动态 `import()`（不进开机静态图）。
+ *
+ * 三种返回都合法：事实 = 本轮拿得到；`undefined` = 拿不到（缺席，走降级）；
+ * `Promise` = 异步装载（本模块 `await` 一次并缓存结果，不会逐文件重复求值）。
+ */
+export type Kojo2ProjectAdapterGetter = () =>
+  | Kojo2ProjectAdapterFacts
+  | undefined
+  | Promise<Kojo2ProjectAdapterFacts | undefined>;
+
+/** 装配面接受的 adapter 形态：直接给事实（测试 / 已是同步事实）或惰性 getter */
+export type Kojo2ProjectAdapterInput = Kojo2ProjectAdapterFacts | Kojo2ProjectAdapterGetter;
+
+/**
+ * 一次 adapter 解析的读数。
+ *
+ * - `unavailable`：**给了 getter 但没拿到事实**（抛错 / 拒绝 / 返回 undefined）；
+ *   与「压根没配 adapter」区分开——后者是 `unavailable:false` + `facts:undefined`。
+ * - `reason`：失败原因（仅 `unavailable` 时有）。
+ * - `lazy`：这次是否走了 getter（false = 直接给的事实 / 未配置）。
+ */
+export interface Kojo2ProjectAdapterResolution {
+  readonly facts: Kojo2ProjectAdapterFacts | undefined;
+  readonly unavailable: boolean;
+  readonly reason: string | null;
+  readonly lazy: boolean;
+}
+
 /** 存储期声明的稳定键入参（与 `kojo2-storage-registry` 同一形状，便于宿主复用同一把账本键） */
 export interface Kojo2ProjectStorageKey {
   readonly path: string;
@@ -164,6 +205,20 @@ export interface Kojo2ProjectAnalysisInput {
   readonly now?: () => number;
 }
 
+/**
+ * 异步入口的输入面：与 {@link Kojo2ProjectAnalysisInput} 只差 `adapter` 允许惰性形态，
+ * 外加一条失败读数通道。同步入口保持只吃事实——不给既有 37 条判据添 await。
+ */
+export interface Kojo2ProjectAsyncAnalysisInput extends Omit<Kojo2ProjectAnalysisInput, 'adapter'> {
+  /** 事实对象或惰性 getter（getter 每个实例只求值一次；失败走降级） */
+  readonly adapter?: Kojo2ProjectAdapterInput;
+  /**
+   * 惰性 adapter **第一次**解析失败时的可见读数（缺省 = `console.warn` 一行）。
+   * 同一条 getter 的失败只报一次（后续轮次命中缓存，不再刷屏）。
+   */
+  readonly onAdapterUnavailable?: (reason: string) => void;
+}
+
 /** 判定两段的计时读数（毫秒；两段都含映射与去重，`parseMs + analyzeMs ≈ totalMs`） */
 export interface Kojo2ProjectTiming {
   readonly parseMs: number;
@@ -192,6 +247,13 @@ export interface Kojo2ProjectStats {
   readonly weaveUnits: number;
   /** 织面是否走了 `analyzeWeaveLayers`（false = adapter 缺席，能力检查未跑） */
   readonly weaveLayers: boolean;
+  /**
+   * 惰性 adapter 是否解析失败（抛错 / 拒绝 / 返回 undefined）。
+   *
+   * `true` ⇒ 本轮**没有** adapter 事实，织面退回 `analyzeProject`；`false` 既覆盖
+   * “拿到事实”，也覆盖“压根没配 adapter”（未配置不是失败）。同步入口恒 `false`。
+   */
+  readonly adapterUnavailable: boolean;
   readonly timing: Kojo2ProjectTiming;
 }
 
@@ -214,7 +276,13 @@ export interface Kojo2ProjectPassOptions {
   readonly enabled?: () => boolean;
   /** `.kojo2` 判据（缺省 {@link isKojo2Path}） */
   readonly isKojo2?: (path: string) => boolean;
-  readonly adapter?: Kojo2ProjectAdapterFacts;
+  /**
+   * adapter 事实或**惰性 getter**（生产接动态 `import()`；见 {@link Kojo2ProjectAdapterInput}）。
+   * getter 每个实例只求值一次，失败不炸（`stats.adapterUnavailable` + 一次可见读数）。
+   */
+  readonly adapter?: Kojo2ProjectAdapterInput;
+  /** 惰性 adapter 第一次不可用时的可见读数（缺省 `console.warn`；宿主接通知通道时注入） */
+  readonly onAdapterUnavailable?: (reason: string) => void;
   readonly storage?: Kojo2ProjectStorageOptions;
   readonly parse?: (text: string) => KojoFile;
   readonly projectPath?: string;
@@ -416,6 +484,78 @@ const coreParse = (text: string): KojoFile => parse(lex(text));
 
 function messageOf(thrown: unknown): string {
   return thrown instanceof Error ? thrown.message : String(thrown);
+}
+
+/* ============================== 惰性 adapter ============================== */
+
+/**
+ * 解析结果缓存：键是 getter 本身（`WeakMap` ⇒ getter 被回收后缓存跟着走）。
+ *
+ * 为什么按 getter 而不按"这一轮"缓存：生产 getter 里是动态 `import()` + 事实对象，
+ * 每轮（约 60s）重新求值一次纯属白烧主线程；同一个 getter 的生命周期就是"装一次 adapter"。
+ * 失败也缓存（同一条 getter 失败一次就够了：宿主换 adapter 时换 getter 实例即可重试）。
+ */
+const adapterResolutions = new WeakMap<
+  Kojo2ProjectAdapterGetter,
+  Promise<Kojo2ProjectAdapterResolution>
+>();
+
+/** 已经报过"不可用"的 getter（失败只给一条可见读数，不按轮刷屏） */
+const adapterWarned = new WeakSet<Kojo2ProjectAdapterGetter>();
+
+/** 缺省可见读数：一行警告；宿主想要面板提示就注入 `onAdapterUnavailable` */
+function warnAdapterUnavailable(reason: string): void {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[kojo2 项目级] adapter 不可用：${reason}；织面退回 analyzeProject（本轮不判未知事件 / 优先级模型），` +
+      '其余跨文件结论照常出。',
+  );
+}
+
+/**
+ * 把装配面的 adapter 形态解析成事实（惰性 getter 只 `await` 一次，失败折成 `unavailable`）。
+ *
+ * **永不 reject**：getter 抛错 / 拒绝 / 返回 `undefined` 都归一成 `unavailable:true`，
+ * 由调用方照常跑"无 adapter"路径。这是本模块唯一会为 adapter 让出执行权的地方。
+ */
+export async function resolveKojo2ProjectAdapter(
+  adapter: Kojo2ProjectAdapterInput | undefined,
+  onUnavailable?: (reason: string) => void,
+): Promise<Kojo2ProjectAdapterResolution> {
+  if (adapter === undefined) {
+    return { facts: undefined, unavailable: false, reason: null, lazy: false };
+  }
+  if (typeof adapter !== 'function') {
+    return { facts: adapter, unavailable: false, reason: null, lazy: false };
+  }
+
+  const cached = adapterResolutions.get(adapter);
+  if (cached !== undefined) return cached;
+
+  const pending = (async (): Promise<Kojo2ProjectAdapterResolution> => {
+    let reason: string;
+    try {
+      const facts = await adapter();
+      if (facts !== undefined) {
+        return { facts, unavailable: false, reason: null, lazy: true };
+      }
+      reason = 'getter 返回 undefined';
+    } catch (thrown) {
+      reason = messageOf(thrown);
+    }
+    if (!adapterWarned.has(adapter)) {
+      adapterWarned.add(adapter);
+      try {
+        (onUnavailable ?? warnAdapterUnavailable)(reason);
+      } catch {
+        // 读数通道自己炸了不该把"降级"升级成"整轮失败"：stats 仍然会置位。
+      }
+    }
+    return { facts: undefined, unavailable: true, reason, lazy: true };
+  })();
+
+  adapterResolutions.set(adapter, pending);
+  return pending;
 }
 
 /** 问题去重键：同一（文件, 落点, 码）只上账一次（跨来源的同一条结论不翻倍，文案以先入者为准） */
@@ -801,9 +941,37 @@ export function analyzeKojo2Project(input: Kojo2ProjectAnalysisInput): Kojo2Proj
       problems: ordered.length,
       weaveUnits: layers === null ? 0 : layers.units.length,
       weaveLayers: layers !== null,
+      // 同步入口只吃事实：没有"解析失败"这一态（异步入口会按解析结果覆盖）。
+      adapterUnavailable: false,
       timing: { parseMs, analyzeMs, totalMs },
     },
   };
+}
+
+/**
+ * 异步入口：先解析 adapter（可能是惰性 getter），再跑与同步入口**逐行相同**的判定。
+ *
+ * 纪律：
+ * - getter 失败**不炸、不静默**：`stats.adapterUnavailable = true` + 第一次失败一条可见读数，
+ *   然后走"无 adapter"的既有路径（织面退回 `analyzeProject`，不判未知事件 / 优先级模型）。
+ * - getter 每个实例只求值一次（{@link resolveKojo2ProjectAdapter} 的缓存）⇒ 扫描器每轮重跑
+ *   也不会重复动态装载。
+ * - `adapterUnavailable` 只表示"给了 getter 却没拿到事实"；没配 adapter 不算失败。
+ */
+export async function analyzeKojo2ProjectAsync(
+  input: Kojo2ProjectAsyncAnalysisInput,
+): Promise<Kojo2ProjectAnalysisResult> {
+  const resolution = await resolveKojo2ProjectAdapter(input.adapter, input.onAdapterUnavailable);
+  const result = analyzeKojo2Project({
+    documents: input.documents,
+    ...(resolution.facts === undefined ? {} : { adapter: resolution.facts }),
+    ...(input.storage === undefined ? {} : { storage: input.storage }),
+    ...(input.parse === undefined ? {} : { parse: input.parse }),
+    ...(input.projectPath === undefined ? {} : { projectPath: input.projectPath }),
+    ...(input.now === undefined ? {} : { now: input.now }),
+  });
+  if (!resolution.unavailable) return result;
+  return { ...result, stats: { ...result.stats, adapterUnavailable: true } };
 }
 
 /* ============================== 装配判据 ============================== */

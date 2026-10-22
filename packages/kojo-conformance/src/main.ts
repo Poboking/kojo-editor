@@ -9,7 +9,7 @@
  *   仓库内可跑的转发壳是 `tools/kojo-conformance.mjs`（用已有 Vite 以 SSR 加载本文件）。
  * - `main()` 只返回/设置退出码，不调用 `process.exit`：调用方（含测试）能继续收尾。
  */
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,7 +22,9 @@ import { formatConformanceReport, runConformanceCli } from './cli.js';
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'target', '.vite']);
 
 /** 真 IO：路径相对 `cwd` 解析；文本读 UTF-8（BOM 以 U+FEFF 保留，交给 CLI 判定） */
-export function createNodeIo(cwd: string = process.cwd()): ConformanceIoPort {
+export function createNodeIo(
+  cwd: string = process.cwd(),
+): ConformanceIoPort & { writeText: (target: string, text: string) => void } {
   const absolute = (target: string): string => (path.isAbsolute(target) ? target : path.resolve(cwd, target));
   return {
     readText: (target: string): string => readFileSync(absolute(target), 'utf8'),
@@ -41,6 +43,10 @@ export function createNodeIo(cwd: string = process.cwd()): ConformanceIoPort {
       walk(absolute(dir), '');
       out.sort();
       return out;
+    },
+    // `migrate-diff --generate-manifest --out` 用（仍在显式路径上，不越写允许域）
+    writeText: (target: string, text: string): void => {
+      writeFileSync(absolute(target), text, 'utf8');
     },
   };
 }

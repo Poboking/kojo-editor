@@ -26,6 +26,7 @@ import {
   collectV1Sites,
   countMigrationRate,
   formatMigrationReport,
+  generateMigrationManifest,
   loadMigrationCorpus,
   normalizeMigrationProduct,
   runMigrationCli,
@@ -476,6 +477,212 @@ describe('语料目录：manifest 是真源、头注精确剥离、golden 复核
   });
 });
 
+/* ============================== 6.5 编码面：CRLF / BOM 的载入 ============================== */
+
+describe('编码面：EOL / BOM 按实物字节复核，剥编码不污染正文', () => {
+  it('CRLF 语料：按声明切头注后正文仍是 CRLF（不被 completion 洗成 LF）', () => {
+    const files = {
+      'corpus/manifest.json': MANIFEST([
+        { ...RECORD, headerLines: 1, eol: 'crlf', completion: { stripBanner: false, prependChara: null } },
+      ]),
+      'corpus/case-a.v1.kojo.txt': '; 头注\r\n角色: 1\r\n\r\n时机 指令 310：\r\n    你好。\r\n',
+    };
+    const corpus = loadMigrationCorpus(memoryIo(files), 'corpus');
+    expect(corpus.problems).toEqual([]);
+    expect(corpus.cases[0]?.source).toBe('角色: 1\r\n\r\n时机 指令 310：\r\n    你好。\r\n');
+    expect(corpus.cases[0]?.source.includes('\r\n')).toBe(true);
+    expect(corpus.cases[0]?.source.replace(/\r\n/g, '')).not.toContain('\n');
+  });
+
+  it('CRLF + prependChara：补的 `角色:` 行也用 CRLF（不混档）', () => {
+    const files = {
+      'corpus/manifest.json': MANIFEST([
+        { ...RECORD, headerLines: 1, eol: 'crlf', completion: { stripBanner: false, prependChara: '12' } },
+      ]),
+      'corpus/case-a.v1.kojo.txt': '; 头注\r\n时机 指令 310：\r\n    你好。\r\n',
+    };
+    const corpus = loadMigrationCorpus(memoryIo(files), 'corpus');
+    expect(corpus.problems).toEqual([]);
+    expect(corpus.cases[0]?.source.startsWith('角色: 12\r\n')).toBe(true);
+  });
+
+  it('BOM 语料：声明 utf-8 时剥掉 U+FEFF 再进编译（不混进首行）', () => {
+    const files = {
+      'corpus/manifest.json': MANIFEST([{ ...RECORD, headerLines: 0, bom: 'utf-8' }]),
+      'corpus/case-a.v1.kojo.txt': '\uFEFF角色: 1\n\n时机 指令 310：\n    你好。\n',
+    };
+    const corpus = loadMigrationCorpus(memoryIo(files), 'corpus');
+    expect(corpus.problems).toEqual([]);
+    expect(corpus.cases[0]?.source.startsWith('角色: 1')).toBe(true);
+    expect(corpus.cases[0]?.source.charCodeAt(0)).not.toBe(0xfeff);
+  });
+
+  it('声明与实物不符 → problems（EOL / BOM 各一条，不猜）', () => {
+    const eolMismatch = loadMigrationCorpus(
+      memoryIo({
+        'corpus/manifest.json': MANIFEST([{ ...RECORD, headerLines: 0, eol: 'crlf' }]),
+        'corpus/case-a.v1.kojo.txt': '角色: 1\n时机 指令 310：\n',
+      }),
+      'corpus',
+    );
+    expect(eolMismatch.problems[0]?.message).toContain('EOL 声明是 crlf');
+    expect(eolMismatch.cases).toEqual([]);
+
+    const bomMismatch = loadMigrationCorpus(
+      memoryIo({
+        'corpus/manifest.json': MANIFEST([{ ...RECORD, headerLines: 0, bom: 'none' }]),
+        'corpus/case-a.v1.kojo.txt': '\uFEFF角色: 1\n',
+      }),
+      'corpus',
+    );
+    expect(bomMismatch.problems[0]?.message).toContain('BOM 声明是 none');
+  });
+});
+
+/* ============================== 6.6 真实目录 manifest 骨架 ============================== */
+
+/** 带写盘的内存 IO（`writeText` 落进 files 并记录调用） */
+function writableIo(files: Record<string, string>): {
+  readonly io: MigrationCorpusIo;
+  readonly writes: { readonly path: string; readonly text: string }[];
+} {
+  const writes: { path: string; text: string }[] = [];
+  const io: MigrationCorpusIo = {
+    readText: (target: string) => {
+      const key = target.replaceAll('\\', '/').replace(/^\.\//, '');
+      const text = files[key];
+      if (text === undefined) throw new Error(`ENOENT ${key}`);
+      return text;
+    },
+    listFiles: (dir: string) => {
+      const prefix = `${dir.replaceAll('\\', '/').replace(/\/+$/, '')}/`;
+      return Object.keys(files)
+        .filter((path) => path.startsWith(prefix))
+        .map((path) => path.slice(prefix.length));
+    },
+    writeText: (target: string, text: string) => {
+      writes.push({ path: target, text });
+      files[target.replaceAll('\\', '/')] = text;
+    },
+  };
+  return { io, writes };
+}
+
+/** 生成骨架用的最小 CLI 依赖（本组只测 argv/IO，编译替身恒定） */
+const plainDeps = (files: Record<string, string>) => ({
+  io: memoryIo(files),
+  compileV1: () => out(BASE_V1),
+  compile2: () => out(BASE_V1),
+  migrate: () => ({ ok: true, code: '# 机 指令 310\n', unsupported: [] }),
+});
+
+const GENERATED_FILES = (): Record<string, string> => ({
+  'real/alpha.v1.kojo.txt': '角色: 12\n时机 指令 310：\n    她点了点头。\n',
+  'real/alpha.v1.erb': 'OLD\n',
+  'real/alpha.2.erb': 'OLD2\n',
+  'real/beta.v1.kojo.txt': '\uFEFF角色: 12\r\n时机 指令 310：\r\n    她叹了口气。\r\n',
+  'real/nested/gamma.v1.kojo.txt': '角色: 12\n',
+});
+
+describe('--generate-manifest：真实目录 → 初版骨架（不猜状态、编码面按字节）', () => {
+  it('列出候选、探测 EOL/BOM/tier/constructs，expected 留 null（首跑后再填）', () => {
+    const skeleton = generateMigrationManifest(memoryIo(GENERATED_FILES()), 'real');
+    expect(skeleton.problems).toEqual([]);
+    expect(skeleton.caseIds).toEqual(['alpha', 'beta']);
+    expect(skeleton.manifest.schema).toBe('kojo-migration-corpus/1');
+    const alpha = skeleton.manifest.cases.find((entry) => entry.id === 'alpha')!;
+    expect(alpha.eol).toBe('lf');
+    expect(alpha.bom).toBe('none');
+    expect(alpha.tier).toBe('dual-golden');
+    expect(alpha.expected).toBeNull();
+    expect(alpha.headerLines).toBe(0);
+    expect(alpha.constructs).toEqual(['叙事行', '文件头声明', '时机块']);
+    const beta = skeleton.manifest.cases.find((entry) => entry.id === 'beta')!;
+    expect(beta.eol).toBe('crlf');
+    expect(beta.bom).toBe('utf-8');
+    expect(beta.tier).toBe('baseline+ledger');
+    // 子目录候选不猜成 case（loader 只认扁平目录），但要如实记账
+    expect(skeleton.manifest.notes).toContain('跳过 1 份子目录候选');
+  });
+
+  it('stdout 就是可落盘的 manifest.json；JSON.parse 形状合法（expected null 也收）', () => {
+    const result = runMigrationCli(['migrate-diff', '--dir', 'real', '--generate-manifest'], {
+      io: memoryIo(GENERATED_FILES()),
+      compileV1: () => out(BASE_V1),
+      compile2: () => out(BASE_V1),
+      migrate: () => ({ ok: true, code: '# 机 指令 310\n', unsupported: [] }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.report.manifest?.cases).toBe(2);
+    expect(result.text.trimStart().startsWith('{')).toBe(true);
+    const parsed = JSON.parse(result.text) as { cases: { id: string }[] };
+    expect(parsed.cases.map((entry) => entry.id)).toEqual(['alpha', 'beta']);
+    // 默认不写盘
+    const after = memoryIo(GENERATED_FILES());
+    expect(() => after.readText('real/manifest.json')).toThrow('ENOENT');
+  });
+
+  it('生成的骨架能被 loader 直接载入（expected=null → 只报告不判定）', () => {
+    const files = GENERATED_FILES();
+    const skeleton = generateMigrationManifest(memoryIo(files), 'real');
+    files['real/manifest.json'] = skeleton.text;
+    const corpus = loadMigrationCorpus(memoryIo(files), 'real');
+    expect(corpus.problems).toEqual([]);
+    expect(corpus.records.map((record) => record.id)).toEqual(['alpha', 'beta']);
+    const result = runMigrationDifferential({
+      cases: corpus.cases,
+      compileV1: () => out(BASE_V1),
+      compile2: () => out(BASE_V1),
+      migrate: () => ({ ok: true, code: '# 机 指令 310\n', unsupported: [] }),
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('--out 走注入写盘，stdout 改成人话回执（内容与文件逐字节同文）', () => {
+    const { io, writes } = writableIo(GENERATED_FILES());
+    const result = runMigrationCli(['migrate-diff', '--dir', 'real', '--generate-manifest', '--out', 'real/manifest.json'], {
+      io,
+      compileV1: () => out(BASE_V1),
+      compile2: () => out(BASE_V1),
+      migrate: () => ({ ok: true, code: '# 机 指令 310\n', unsupported: [] }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.path).toBe('real/manifest.json');
+    expect(writes[0]?.text).toBe(result.report.manifest?.text);
+    expect(result.text).toContain('已写入清单骨架 real/manifest.json');
+    expect(result.text).not.toContain('"cases"');
+  });
+
+  it('--out 不带 --generate-manifest → exit 2（子命令边界不混）', () => {
+    const result = runMigrationCli(['migrate-diff', '--dir', 'real', '--out', 'x.json'], plainDeps({}));
+    expect(result.exitCode).toBe(2);
+    expect(result.report.usage).toContain('--out 只能与 --generate-manifest');
+  });
+
+  it('--generate-manifest 缺 --dir → exit 2，用法里给出完整命令', () => {
+    const result = runMigrationCli(['migrate-diff', '--generate-manifest'], plainDeps({}));
+    expect(result.exitCode).toBe(2);
+    expect(result.report.usage).toContain('--generate-manifest 需要 --dir');
+    expect(result.report.usage).toContain('node tools/kojo-conformance.mjs migrate-diff --generate-manifest');
+  });
+
+  it('目录里没有候选 → exit 1（空骨架不是"全绿"）', () => {
+    const result = runMigrationCli(['migrate-diff', '--dir', 'real', '--generate-manifest'], {
+      io: memoryIo({ 'real/readme.txt': 'x' }),
+      compileV1: () => out(BASE_V1),
+      compile2: () => out(BASE_V1),
+      migrate: () => ({ ok: true, code: '# 机 指令 310\n', unsupported: [] }),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.report.failures[0]?.message).toContain('没有 <id>.v1.kojo.txt');
+    // 失败时不能只打一份空骨架：原因与下一步命令都要上屏
+    expect(result.text).toContain('清单骨架生成失败');
+    expect(result.text).toContain('--generate-manifest --dir');
+  });
+});
+
 /* ============================== 7. CLI：用法 / 退出码 / 报告 ============================== */
 
 describe('migrate-diff CLI：用法、退出码、JSON 稳定', () => {
@@ -505,6 +712,17 @@ describe('migrate-diff CLI：用法、退出码、JSON 稳定', () => {
     const result = runMigrationCli(['migrate-diff'], deps({}));
     expect(result.exitCode).toBe(2);
     expect(result.report.usage).toContain('需要 --dir');
+  });
+
+  it('缺 manifest.json → exit 1，失败清单直接给 --generate-manifest 的下一步命令', () => {
+    const result = runMigrationCli(
+      ['migrate-diff', '--dir', 'corpus'],
+      plainDeps({ 'corpus/case-a.v1.kojo.txt': V1_SOURCE }),
+    );
+    expect(result.exitCode).toBe(1);
+    const hint = result.report.failures.find((item) => item.message.includes('--generate-manifest'));
+    expect(hint).toBeDefined();
+    expect(hint?.message).toContain('migrate-diff --generate-manifest --dir corpus');
   });
 
   it('未知参数 → exit 2（不猜）', () => {
@@ -543,7 +761,7 @@ describe('migrate-diff CLI：用法、退出码、JSON 稳定', () => {
     const second = formatMigrationReport(result.report, { json: true });
     expect(first).toBe(second);
     const parsed = JSON.parse(first) as Record<string, unknown>;
-    expect(Object.keys(parsed)).toEqual(['dir', 'summary', 'migrationReport', 'cases', 'failures', 'usage']);
+    expect(Object.keys(parsed)).toEqual(['dir', 'summary', 'migrationReport', 'cases', 'failures', 'usage', 'manifest']);
     const cases = parsed['cases'] as unknown[];
     expect((cases[0] as Record<string, unknown>)['id']).toBe('case-a');
     expect(first.endsWith('\n')).toBe(true);

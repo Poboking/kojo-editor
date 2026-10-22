@@ -8,6 +8,7 @@
       "sourceSha256": "da1dbbc47c6ab9a0e505120c7ceeace4e2bec816af80578542276dcd9a66d9bf",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "dual-golden",
       "constructs": [
         "叙事行",
@@ -20,7 +21,7 @@
       },
       "notes": "脚手架空壳：叙事 + `时机 指令 317`（片段，按 golden 口径补 `角色:`）",
       "expected": {
-        "status": "differs",
+        "status": "normalized-equal",
         "blockedReason": null
       }
     },
@@ -30,6 +31,7 @@
       "sourceSha256": "b1f2192f6ed436272a34dbc7193a4f2ea130dc964abdafba95e0fcac34f3acfa",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -43,7 +45,7 @@
       "notes": "脚手架空壳：`时机 日常 4`（面词不在 2.0 九事件目录内）",
       "expected": {
         "status": "blocked",
-        "blockedReason": "v2-compile-failed"
+        "blockedReason": "migration-unsupported"
       }
     },
     {
@@ -52,6 +54,7 @@
       "sourceSha256": "6aa51031125427a80324fcee3677d1898e80ca4381817d25d4bd9314a9bc7d39",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -66,7 +69,7 @@
       "notes": "条件块 `如果 !TALENT:恋慕` + `时机 事件 22`（面词不在目录内）",
       "expected": {
         "status": "blocked",
-        "blockedReason": "v2-compile-failed"
+        "blockedReason": "migration-unsupported"
       }
     },
     {
@@ -75,6 +78,7 @@
       "sourceSha256": "aca2072f5183e83f01f96216219d4c8d2a2b78c227ac72a40c2dede18e04d618",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -89,7 +93,7 @@
       "notes": "三臂条件链（`否则如果` ×2）+ `时机 标记`（面词不在目录内）",
       "expected": {
         "status": "blocked",
-        "blockedReason": "v2-compile-failed"
+        "blockedReason": "migration-unsupported"
       }
     },
     {
@@ -98,6 +102,7 @@
       "sourceSha256": "c04025ae0202c191c1f3ac796c3799a30803d2d241ac5146585bdddaddcb0582",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "dual-golden",
       "constructs": [
         "叙事行",
@@ -120,6 +125,7 @@
       "sourceSha256": "045ffe9808953bb72b15850468a305795743e96ea57e1e31d77102e62c850a11",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -143,6 +149,7 @@
       "sourceSha256": "816cf4ddd7aac35b9f37240b35f0c5c69cd9d953f940371134a65267c38a1bff",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "dual-golden",
       "constructs": [
         "叙事行",
@@ -169,6 +176,7 @@
       "sourceSha256": "9938272bb1468c903ee58845b1b890fe0e74168be0dd4a56b0e11b294a556c18",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -195,6 +203,7 @@
       "sourceSha256": "ec7a947a0a187d0beb0c06b006fa7187c4949e10a5e168c84de33a619ea026df",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -221,6 +230,7 @@
       "sourceSha256": "d590f982b2626fd10d7c134dcc1665cf27b9333dbc0bfd369af0ecd134666f9f",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -243,6 +253,7 @@
       "sourceSha256": "19f11d72167cbd0128745f5d8dc14c657b0b226e929008c49bd3dfd093e6e25e",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -265,6 +276,7 @@
       "sourceSha256": "6ebccae4fc7df63202b579c4a2109a1f81a4ad7d704b0a2a0bbd7c569c15b26d",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -306,6 +318,7 @@
       "sourceSha256": "965812fc23c2954f837b9117060418e83b9ce542e6d8930418221a35e3afa35c",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -371,6 +384,7 @@
       "sourceSha256": "2b479c438c8b38fb839c1b55a7f2140731035ff45ccd437a2ac0192c669e5694",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "v1 叙事区原生行",
@@ -400,6 +414,7 @@
       "sourceSha256": "e9b96433b987bf8bb6d4e3c7882e70ffff0d75abdfc21dafb8e135748cbdc935",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "v1 叙事区原生行",
@@ -428,6 +443,7 @@
       "sourceSha256": "a8f37d3f0460a613c5c5b4e18686091fe75aa2a49cad20f0ed6b4b65daf9c066",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -471,6 +487,7 @@
       "sourceSha256": "edf58776a3094b29adcb946db18e9a7f16aea80482205c027b7d0920538ceea4",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -507,6 +524,7 @@
       "sourceSha256": "256064023ab84b65bb07685939a5ffbac32da60aab2940e9aa4adac3aac5ce08",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -535,6 +553,7 @@
       "sourceSha256": "af6100df7d884b590bb76e85299ae6aef8cf6a14c43a887f964b9ab946173625",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [
         "叙事行",
@@ -577,6 +596,7 @@
       "sourceSha256": "c769e6a87dc09ba6ba4c5a11e8904133f057e7188768fca40192b59f87cd6d56",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [],
       "completion": {
@@ -595,6 +615,7 @@
       "sourceSha256": "0084579966740e17804c523d8e74973389c5b5dc74991959d5c78587cc7066e7",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [],
       "completion": {
@@ -613,6 +634,7 @@
       "sourceSha256": "06062d6a37508d044baccc658eaf08ce8a18644ebec11c2a88e37c80e5ff200e",
       "headerLines": 5,
       "eol": "lf",
+      "bom": "none",
       "tier": "baseline+ledger",
       "constructs": [],
       "completion": {
@@ -623,6 +645,171 @@
       "expected": {
         "status": "blocked",
         "blockedReason": "v1-compile-failed"
+      }
+    },
+    {
+      "id": "dual-good-source",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/good-source.kojo.txt",
+      "sourceSha256": "6e569a11b8b819fdc073cc7a68665a9c4fa51b0d83f43cab4abdb939c8769b4d",
+      "headerLines": 5,
+      "eol": "lf",
+      "bom": "none",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "最小合法糖源：单时机 + 台词 + 旁白行尾 `续`（萃取自 compile.test 的 GOOD_SOURCE）（来源：packages/plugins/kojo-sugar/tests/compile.test.ts 的 GOOD_SOURCE（逐字））",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "dual-choice-block",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/choice-block.kojo.txt",
+      "sourceSha256": "cfd1614edc93e26fddcde9d87adde1076ddd9266cf8dc481fa5a80ba836e5012",
+      "headerLines": 5,
+      "eol": "lf",
+      "bom": "none",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块",
+        "选项块",
+        "选项条目"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "选项块三臂：PRINTBUTTON 序 / INPUTS / SELECTCASE RESULTS（萃取自 transpile.test）（来源：packages/plugins/kojo-sugar/tests/transpile.test.ts §3.7 的选项块源（逐字））",
+      "expected": {
+        "status": "normalized-equal",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "dual-random-block",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/random-block.kojo.txt",
+      "sourceSha256": "867265e070d469cf03a941c2b49b6e358be8ce1cbac3b4ba95c9689481042d18",
+      "headerLines": 5,
+      "eol": "lf",
+      "bom": "none",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块",
+        "随机"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "随机块两候选：LOCAL = RAND:n + SELECTCASE（萃取自 transpile.test）（来源：packages/plugins/kojo-sugar/tests/transpile.test.ts §3.6 的随机块源（逐字））",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "dual-heart-line",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/heart-line.kojo.txt",
+      "sourceSha256": "cdc90175e71c9881734ecdb0b643197ff37fe8fc4905f0a0ce244e94cc3c660f",
+      "headerLines": 5,
+      "eol": "lf",
+      "bom": "none",
+      "tier": "dual-golden",
+      "constructs": [
+        "文件头声明",
+        "时机块",
+        "心形"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "心形单行：CALL HPH_PRINT 字面量编码（萃取自 literal-heart.test）（来源：packages/plugins/kojo-sugar/tests/literal-heart.test.ts 的心形单行源（逐字））",
+      "expected": {
+        "status": "normalized-equal",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "dual-color-block",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/color-block.kojo.txt",
+      "sourceSha256": "cacbd7f1c624630fcc58f7c876f148c61f5610350ada2c4046d8acc1e331963e",
+      "headerLines": 5,
+      "eol": "lf",
+      "bom": "none",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块",
+        "着色"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "着色块三行：SETCOLOR / 自机色前缀 / RESETCOLOR 收尾（萃取自 player-color.test）（来源：packages/plugins/kojo-sugar/tests/player-color.test.ts 的着色块源（逐字））",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "crlf-narration",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/crlf-narration.kojo.txt",
+      "sourceSha256": "64cd0f46dc97ff49f122a11effd339f93947cf9dc66a93f42116486d977082d5",
+      "headerLines": 5,
+      "eol": "crlf",
+      "bom": "none",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "CRLF 无 BOM 的 v1 源：头注与正文整份 CRLF，钉 loader 的 EOL 保真与头注切除（来源：v1 编码面夹具（CRLF）：正文取自 spec-3.3 旁白口径的最小形）",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
+      }
+    },
+    {
+      "id": "bom-narration",
+      "source": "packages/plugins/kojo-sugar/tests/fixtures/migrate-dual/bom-narration.kojo.txt",
+      "sourceSha256": "942eff4e7f63c7da7b935bb865ba90d4e00ea20617b36f9e586b42407a91ae24",
+      "headerLines": 0,
+      "eol": "lf",
+      "bom": "utf-8",
+      "tier": "dual-golden",
+      "constructs": [
+        "叙事行",
+        "文件头声明",
+        "时机块"
+      ],
+      "completion": {
+        "stripBanner": false,
+        "prependChara": null
+      },
+      "notes": "UTF-8 BOM 的 v1 源（headerLines=0，BOM 在源本体首字节）：钉 loader 剥 BOM 后 v1 才编得过（来源：v1 编码面夹具（UTF-8 BOM）：正文与 crlf-narration 同形（对照组））",
+      "expected": {
+        "status": "differs",
+        "blockedReason": null
       }
     }
   ]

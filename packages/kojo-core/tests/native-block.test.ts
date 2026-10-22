@@ -5,10 +5,13 @@
  * 1. **逐行 source map**：块体第 i 行 ↔ 物理第 `块头行 + 1 + i` 行（1:1），kind = `native`，
  *    **不再整块挂块首行**；空行、末行、`# 机` 包装后都各自成行。
  * 2. **物理列折回**：`column-fold.ts` 是唯一实现（与 v1 折行面同一枚函数）；
- *    `@原生` 走 `foldDedentedPosition`（单段也折）。parser 提供 additive `lineColumns` 时
- *    source map 列即**物理列**；缺省时退化为去缩进视图坐标（不伪造，见 `native.ts` 契约）。
+ *    `@原生` 走 `foldDedentedPosition`（单段也折）。parser 恒提供 `lineColumns`（被剥掉的
+ *    码元数 + 1）⇒ source map 列即**物理列**；手工构造的节点可缺省，缺省时退化为去缩进
+ *    视图坐标（不伪造，见 `native.ts` 契约）。
  * 3. **字节级透传**：块内非空行去基准缩进后逐字节等于源切片（相对缩进 / Tab / 行尾空白 /
- *    行尾 `\` / `;` / CJK / emoji 一个字节不动）；空行保留为独立空行；CRLF 源产物不留 `\r`。
+ *    行尾 `\` / `;` / CJK / emoji 一个字节不动）；**纯空白行按物理行原文保留（§8.5，
+ *    含缩进空白——§C2.10 规则 4 的"归一空行"会让字节静默丢失，本文件按字节零丢失裁定）；
+ *    CRLF 源产物不留 `\r`。
  * 4. **块外零变化**：同一份源里块外文本行与无 `@原生` 的基线逐字节相同。
  *
  * 口径写死：1 基行列、列按 **UTF-16 码元**（emoji = 2）；越界夹取见 `column-fold.ts`。
@@ -18,6 +21,7 @@ import type { KojoNativeBlock, KojoSpan } from '../src/ast.js';
 import { compileKojoSource } from '../src/compile.js';
 import { FIXTURE_ADAPTER, FIXTURE_BACKEND } from '../src/fixture-adapter.js';
 import { foldPositionToPhysical as foldFromPublicSurface } from '../src/index.js';
+import { parseSource } from '../src/parser.js';
 import {
   clampLogicalOffset,
   foldDedentedPosition,
@@ -137,22 +141,37 @@ describe('A. `@原生` 逐行 source map（物理行 1:1）', () => {
     }
   });
 
-  it('缺省列口径 = 去缩进视图坐标：span 宽度逐码元等于行文本长度（emoji 算 2）', () => {
+  it('物理列口径：`    TAB SET…` 剥 4 空格 ⇒ span 7:5..7:19（宽度 14 码元，emoji 算 2）', () => {
     const result = compile(PROBE);
-    const cjkRow = result.sourceMap.lineAt(6)!; // `\tSET A, "灵梦😀"`
+    const cjkRow = result.sourceMap.lineAt(6)!; // 源第 7 行 `    \tSET A, "灵梦😀"`
     const text = rows(result.erb)[5]!;
+    expect(cjkRow.source).toEqual({
+      start: { line: 7, column: 5 },
+      end: { line: 7, column: 19 },
+    });
     expect(cjkRow.source!.end.column - cjkRow.source!.start.column).toBe(text.length);
     // `\t`(1) + `SET A, "`(8) + 灵梦(2) + 😀(2) + `"`(1) = 14 码元（码点口径会给 13）
     expect(text.length).toBe(14);
   });
 
-  it('source map 的列不是「整块块首列」：相邻行 span 各自独立（逐行读数）', () => {
+  it('source map 的列不是「整块块首列」：相邻行各自从自己的物理起点列开始', () => {
     const result = compile(PROBE);
-    const widths = [2, 3, 4, 5, 6, 7].map((row) => {
+    const read = (row: number) => {
       const mapped = result.sourceMap.lineAt(row)!;
-      return mapped.source!.end.column - mapped.source!.start.column;
-    });
-    expect(widths).toEqual([4, 13, 0, 13, 14, 5]);
+      return {
+        start: mapped.source!.start.column,
+        width: mapped.source!.end.column - mapped.source!.start.column,
+      };
+    };
+    // 块体 6 行：4/8/空/4/4/4 空格缩进（第 6 行先 4 空格再 Tab）；去缩进只吃基准 4
+    expect([2, 3, 4, 5, 6, 7].map(read)).toEqual([
+      { start: 5, width: 4 },
+      { start: 5, width: 13 },
+      { start: 1, width: 0 },
+      { start: 5, width: 13 },
+      { start: 5, width: 14 },
+      { start: 5, width: 5 },
+    ]);
   });
 });
 
@@ -160,7 +179,7 @@ describe('A. `@原生` 逐行 source map（物理行 1:1）', () => {
 /* B. 物理列折回（additive `lineColumns` 契约；parser 落地前缺省）                 */
 /* ============================================================================ */
 
-describe('B. `@原生` 物理列（additive `lineColumns`）', () => {
+describe('B. `@原生` 物理列（additive `lineColumns`；手工节点的缺省口径）', () => {
   it('给出每行物理起点列时，span 落在物理列上（9..10 / 5..6）', () => {
     const result = lowerNative(nativeNode(['A', 'B'], 10, [9, 5]));
     expect(result.lines).toEqual(['A', 'B']);
@@ -309,11 +328,18 @@ describe('C. `@原生` 字节级透传', () => {
     expect(rows(result.erb)).toEqual(['MACHINE 开场', 'A', 'TELL: x /WAIT', 'MACHINE.END']);
   });
 
-  it('纯空白行按「空行」口径输出为空行（§C2.10 去缩进规则 4；不是逐字节保留缩进空白）', () => {
+  it('纯空白行按 §8.5「空行原样保留」逐字节保留缩进空白（不归一为空行）', () => {
     const source = ['# 机 开场', '@原生', '    A', '       ', '    B', '> x'].join('\n');
     const result = compile(source);
     expect(errorsOf(source)).toEqual([]);
-    expect(rows(result.erb)).toEqual(['MACHINE 开场', 'A', '', 'B', 'TELL: x /WAIT', 'MACHINE.END']);
+    expect(rows(result.erb)).toEqual(['MACHINE 开场', 'A', '       ', 'B', 'TELL: x /WAIT', 'MACHINE.END']);
+    // 7 个半角空格一个不少（旧口径会变成空串，静默丢 7 字节）
+    expect(hex(rows(result.erb)[2]!)).toBe('20202020202020');
+    // 该产物行折回物理第 4 行整行：1..8（1 基、半开）
+    expect(result.sourceMap.lineAt(3)?.source).toEqual({
+      start: { line: 4, column: 1 },
+      end: { line: 4, column: 8 },
+    });
   });
 });
 
@@ -420,6 +446,195 @@ describe('E. `@原生` 诊断坐标', () => {
     expect(errorsOf(source)).toEqual([]);
     expect(rows(result.erb)[1]).toBe('😀甲');
     expect(result.sourceMap.lineAt(2)?.source?.start.line).toBe(3);
+  });
+});
+
+/* ============================================================================ */
+/* G. K2-NATIVE-COLUMNS：parser 的 `lineColumns` 与物理列/字节（口径写死）        */
+/* ============================================================================ */
+
+/**
+ * 探针：Tab 缩进 / 全角空格 / 纯空白行（半角+全角）/ 行尾全角空白 / emoji / CJK。
+ *
+ * 块头在第 2 行，块体第 3..9 行；基准缩进 = 4（块内非空行的 `indentWidth` 最小值）。
+ * 行 4 `\tB` 的 Tab = 4 宽 = 基准 ⇒ 整枚 Tab 被剥（`removed = 1`，起点列 2）。
+ * 行 5 `    　C` 是 4 空格 + 全角空格 + C：全角空格**不是**词法层 `indentWidth` 的一部分，
+ * 剥到 4 宽即停 ⇒ U+3000 作为相对缩进保留（起点列 5）。
+ */
+const COLUMNS_LINES = [
+  '# 机 开场',
+  '@原生',
+  '    IF A',
+  '\tB',
+  '    　C',
+  '  　　  ',
+  '    D　E  ',
+  '    😀甲',
+  '    Z',
+  '> 出去',
+];
+const COLUMNS = COLUMNS_LINES.join('\n');
+
+/** parser 产出的 `@原生` 节点（真前端，不手搓） */
+function parsedNative(source: string): KojoNativeBlock {
+  const node = parseSource(source).scenes[0]!.items.find((item) => item.kind === 'nativeBlock');
+  if (node === undefined) throw new Error('源里没有 @原生 块');
+  return node as KojoNativeBlock;
+}
+
+/** 源第 `line` 行（1 基）从 `column` 起的 `length` 个码元（逐字节切片的对照） */
+function sourceSlice(source: string, line: number, column: number, length: number): string {
+  return source.split(/\r?\n/)[line - 1]!.slice(column - 1, column - 1 + length);
+}
+
+describe('G. `lineColumns` 口径：被剥码元数 + 1（物理列）', () => {
+  it('parser 恒提供 `lineColumns`，长度与 lines 对齐，且 = [5,2,5,1,5,5,5]', () => {
+    const node = parsedNative(COLUMNS);
+    expect(node.lineColumns).toHaveLength(node.lines.length);
+    expect(node.lineColumns).toEqual([5, 2, 5, 1, 5, 5, 5]);
+    // Tab 只允许出现在 `@原生` 块体里：块内 Tab 不产 `core/lex/indent`
+    expect(errorsOf(COLUMNS)).toEqual([]);
+  });
+
+  it('每一行都等于「源物理行按 lineColumns 起的切片」：逐字节相等', () => {
+    const node = parsedNative(COLUMNS);
+    for (let i = 0; i < node.lines.length; i++) {
+      const column = node.lineColumns![i]!;
+      const text = node.lines[i]!;
+      expect(sourceSlice(COLUMNS, 3 + i, column, text.length), `line ${i}`).toBe(text);
+    }
+  });
+
+  it('Tab 缩进：整枚 Tab（4 宽）被剥 ⇒ 起点列 2，span 4:2..4:3', () => {
+    const node = parsedNative(COLUMNS);
+    expect(node.lines[1]).toBe('B');
+    expect(node.lineColumns![1]).toBe(2);
+    expect(compile(COLUMNS).sourceMap.lineAt(3)?.source).toEqual({
+      start: { line: 4, column: 2 },
+      end: { line: 4, column: 3 },
+    });
+  });
+
+  it('全角空格不是词法缩进：剥到基准 4 即停，U+3000 作为相对缩进保留（起点列 5）', () => {
+    const node = parsedNative(COLUMNS);
+    expect(node.lines[2]).toBe('　C');
+    expect(hex(node.lines[2]!)).toBe('e3808043');
+    expect(node.lineColumns![2]).toBe(5);
+    expect(compile(COLUMNS).sourceMap.lineAt(4)?.source).toEqual({
+      start: { line: 5, column: 5 },
+      end: { line: 5, column: 7 },
+    });
+  });
+
+  it('纯空白行：物理行原文（半角 + 两个全角 + 半角），起点列 1，span 覆盖整行', () => {
+    const node = parsedNative(COLUMNS);
+    expect(node.lines[3]).toBe('  　　  ');
+    expect(hex(node.lines[3]!)).toBe('2020e38080e380802020'); // 10 字节，一个不少
+    expect(node.lineColumns![3]).toBe(1);
+    expect(compile(COLUMNS).sourceMap.lineAt(5)?.source).toEqual({
+      start: { line: 6, column: 1 },
+      end: { line: 6, column: 7 }, // 6 码元 + 1
+    });
+  });
+
+  it('只含全角空格的物理行也按纯空白行处理：原文保留、起点列 1', () => {
+    const source = ['# 机 开场', '@原生', '    A', '　　', '    B', '> x'].join('\n');
+    const node = parsedNative(source);
+    expect(node.lines[1]).toBe('　　');
+    expect(hex(node.lines[1]!)).toBe('e38080e38080');
+    expect(node.lineColumns![1]).toBe(1);
+    expect(rows(compile(source).erb)[2]).toBe('　　');
+  });
+
+  it('CRLF 源：lineColumns / 行文本 / span 与 LF 逐值相同（EOL 不重算列）', () => {
+    const lf = parsedNative(COLUMNS);
+    const crlf = parsedNative(COLUMNS_LINES.join('\r\n'));
+    expect(crlf.lineColumns).toEqual(lf.lineColumns);
+    expect(crlf.lines).toEqual(lf.lines);
+    const lfResult = compile(COLUMNS);
+    const crlfResult = compile(COLUMNS_LINES.join('\r\n'));
+    expect(crlfResult.erb).toBe(lfResult.erb);
+    for (let line = 1; line <= lfResult.sourceMap.lineCount; line++) {
+      expect(crlfResult.sourceMap.lineAt(line)?.source).toEqual(lfResult.sourceMap.lineAt(line)?.source);
+    }
+  });
+
+  it('emoji 行：起点列 5 + 文本 3 码元（😀 代理对占 2）⇒ span 8:5..8:8', () => {
+    const node = parsedNative(COLUMNS);
+    expect(node.lines[5]).toBe('😀甲');
+    expect(node.lines[5]!.length).toBe(3);
+    expect(node.lineColumns![5]).toBe(5);
+    expect(compile(COLUMNS).sourceMap.lineAt(7)?.source).toEqual({
+      start: { line: 8, column: 5 },
+      end: { line: 8, column: 8 },
+    });
+  });
+
+  it('同形不同列：`        X`（8 空格）与 `\\t\\tX`（两 Tab）去缩进后同形，但起点列 9 / 3', () => {
+    const source = ['# 机 开场', '@原生', '        X', '\t\tX'].join('\n');
+    const node = parsedNative(source);
+    expect(node.lines).toEqual(['X', 'X']);
+    expect(node.lineColumns).toEqual([9, 3]);
+    const result = compile(source);
+    expect(result.sourceMap.lineAt(2)?.source).toEqual({
+      start: { line: 3, column: 9 },
+      end: { line: 3, column: 10 },
+    });
+    expect(result.sourceMap.lineAt(3)?.source).toEqual({
+      start: { line: 4, column: 3 },
+      end: { line: 4, column: 4 },
+    });
+  });
+
+  it('混合缩进：基准 8 下，8 空格剥 8（列 9）、两 Tab 剥 2（列 3）、`\\t` 留在内容里', () => {
+    const source = ['# 机 开场', '@原生', '        A', '\t\tB', '        \tC', '> x'].join('\n');
+    const node = parsedNative(source);
+    expect(node.lines).toEqual(['A', 'B', '\tC']);
+    expect(node.lineColumns).toEqual([9, 3, 9]);
+    expect(rows(compile(source).erb)).toEqual(['MACHINE 开场', 'A', 'B', '\tC', 'TELL: x /WAIT', 'MACHINE.END']);
+  });
+
+  it('越界夹取走同一入口：已解析行的视图列 0 / 999 夹到行首 / 行尾之后', () => {
+    expect(foldDedentedPosition(nativeLineView(4, 2, 'B'), { line: 4, column: 0 })).toEqual({ line: 4, column: 2 });
+    expect(foldDedentedPosition(nativeLineView(4, 2, 'B'), { line: 4, column: 999 })).toEqual({ line: 4, column: 3 });
+    expect(foldDedentedPosition(nativeLineView(6, 1, '  　　  '), { line: 6, column: 999 })).toEqual({ line: 6, column: 7 });
+  });
+
+  it('幂等（纯函数）：同一源两次 parse / 两次 compile，列与行级 span 逐值相同', () => {
+    expect(parsedNative(COLUMNS)).toEqual(parsedNative(COLUMNS));
+    const read = (source: string) => {
+      const result = compile(source);
+      const out: string[] = [];
+      for (let line = 1; line <= result.sourceMap.lineCount; line++) {
+        out.push(JSON.stringify(result.sourceMap.lineAt(line)?.source ?? null));
+      }
+      return out;
+    };
+    expect(read(COLUMNS)).toEqual(read(COLUMNS));
+  });
+
+  it('块尾纯空白行仍是块与下一行的分隔：不进块体、不产字节（既有口径）', () => {
+    const source = ['# 机 开场', '@原生', '    A', '   ', '> x'].join('\n');
+    const node = parsedNative(source);
+    expect(node.lines).toEqual(['A']);
+    expect(node.lineColumns).toEqual([5]);
+    expect(rows(compile(source).erb)).toEqual([
+      'MACHINE 开场',
+      'A',
+      'TELL: x /WAIT',
+      'MACHINE.END',
+    ]);
+  });
+
+  it('产物里块体逐字节少掉的只有基准缩进：全角/emoji/Tab 内容字节零丢失', () => {
+    const result = compile(COLUMNS);
+    const product = rows(result.erb).slice(1, 8);
+    expect(product).toEqual(['IF A', 'B', '　C', '  　　  ', 'D　E  ', '😀甲', 'Z']);
+    const productHex = hex(product.join('\n'));
+    expect(productHex).toContain('e3808043'); // 全角空格 + C
+    expect(productHex).toContain('2020e38080e380802020'); // 纯空白行原文
+    expect(productHex).toContain('f09f9880e794b2'); // 😀甲
+    expect(productHex).toContain('44e380804520200a'); // `D　E  ` 含行尾两空格
   });
 });
 

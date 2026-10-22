@@ -1,7 +1,7 @@
 {
   "id": "narrative-scaffold-daily",
   "status": "blocked",
-  "blockedReason": "v2-compile-failed",
+  "blockedReason": "migration-unsupported",
   "v1": {
     "ok": true,
     "lines": 19,
@@ -9,9 +9,11 @@
     "firstErrorCode": null
   },
   "migration": {
-    "ok": true,
-    "unsupported": 0,
-    "unsupportedConstructs": [],
+    "ok": false,
+    "unsupported": 1,
+    "unsupportedConstructs": [
+      "`时机` 面词「日常」不在 adapter 事件目录"
+    ],
     "outputLines": 8
   }
 }

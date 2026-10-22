@@ -17,7 +17,6 @@
 | POS-UTIL | 位置换算分散：tree-sitter 的 0-based 行与 UTF-16 码元、Monaco / plugin-api 的 1-based 行、range 端点各写各的；**否决**前一版建议的 CST↔AST `PositionMapper`（`.erb` 无 CST、`.kojo` 的 tree-sitter 可选且默认关 ⇒ 映射表会空或过期），只收口边界换算 | 判据：所有行列/区间换算走同一模块；边界测试覆盖 CJK、emoji、CRLF、折叠行与生成映射；不新增运行期节点身份映射或第三套坐标系；语义服务与编辑器读数不变 | 进行中 · 认领：lead 2026-10-20 |
 | ERB-PARITY | **ERB 是主用户群的一等语言，不是 Kojo 的附属/实验位**：口上作者可以直接写 `.erb`，`.kojo` 是可选糖而不是入口前提；语言注册、语言服务、树层叠层、默认语言与能力矩阵都不得只给 Kojo | 判据：ERB / Kojo 走同一 descriptor/registry/engine 基础设施；ERB 直写不依赖 `.kojo`；宿主 provider 双语言对齐（`registerForLanguageServices` 口径）；tree-sitter 能力按 descriptor 选择而非语言名硬编码；不得因 Kojo 特性降低 ERB 默认体验 | 进行中 · 认领：lead 2026-10-20（A3/A4 基础设施已拉平；ERB 结构层已接入、pref 默认仍关） |
 | TUT-UGUIDE | 内置教程已按 Kojo 2.0 设计稿补齐（1177b417 / f1554004 / 98c2b044 / cad84d27），但 **`docs/USER-GUIDE.md` 全文 0 处提 2.0**：手册只讲 v1 那条路，而编辑器里已经有第四张教程卡与「文件格式」那一档 ⇒ 两处口径不一致（唯一交叉引用 `USER-GUIDE.md:404` 指的「.kojo 语言教程」第⑪节仍对得上，未受影响） | 判据：手册把「默认档＝只认 v1／切档才认 2.0／`.kojo2` 无落盘产物」三件事写清，**只改冲突行、一行算一行**（§五 文档纪律），不许顺手重写整本；教程那四本已按实现写，手册以它们为准 | 待认领 · 来源：chief 教程批收口 2026-10-22 |
-| REL-GATE-CI | **推 tag 即发布，机器闸不在链上**：`release.yml` 只有 `pnpm install --frozen-lockfile`（`:44`）→ `tauri-apps/tauri-action@v0`（`:47`）→ `releaseDraft: false`，**不跑** `pnpm test` / 双 typecheck / `audit:decoupling` / `node tools/release-gate.mjs`；`ci.yml` 也不跑发布闸 ⇒ R9「发布闸」实际靠人记得先手跑一次（本批是先手跑绿才打 tag，下一个人未必） | 判据：打 tag 前有一道机器把关——要么 `release.yml` 在 build 前加一步 `node tools/release-gate.mjs`（纯文档批豁免测试面那条口径照旧），要么给 `tools/release-gate.mjs` 加 `--print-tag-command` 让"闸绿"与"允许打 tag"绑成同一件事；**不许**为此把 CI 变成第二份发版流水线（构建仍归 release.yml） | 待认领 · 来源：chief 0.4.2-beta.2 发版前实测 2026-10-22 |
 | CMD-NUL-BYTE | `packages/app/src/ui/commands.ts` 是**全仓 1591 个文本文件里唯一带裸 NUL 字节的**（第 275 行缓存键 `` `${nonce}<NUL>${roots.join('\n')}` ``，偏移 12293/12806）⇒ 文件被 `file` 判成二进制、**NUL 之后的行对基于文本扫描的工具失明**（grep/ripgrep/review 脚本一类）；TypeScript 与运行都不受影响，纯卫生与可审性问题 | 判据：一行改动把裸 NUL 换成转义形态（语义逐字节等价，运行期分隔符仍是同一个 `\u0000`）；改完 `node -e "fs.readFileSync(p).includes(0)"` 必须 false，且 `grep -c nonce` 仍数得出 6 处、`ps14-source-cache.test.ts` 全绿。**⚠ 别用 Edit/Write 硬试**：本会话两次尝试都被参数层的 JSON 转义吃掉（一次把 `${nonce}<NUL>` 写成 `${nonce}\u{0}U0000`＝分隔符从 1 字节变 6 字节，一次 0 occurrences），已 `git checkout --` 逐字还原；请用脚本落这一格（见 MEMORY「Edit 工具转义坑」） | 待认领 · 来源：chief 0.4.2-beta.2 实机测试 2026-10-22 |
 | MK-SMOKE-RECAL | `smoke-tauri-market.mjs` 本机 4 红（2026-10-22 发行前实测）：f2/g/h 三条 = **锚点过期**（`ANCHOR_BYTES=1612` / `ANCHOR_SHA256=f1b72c01…` / 期望 2 条包，线上实测 4,141 B / sha `e100bb76ea79` / 6 条包——社区投稿已进注册表，钉的是**会变的外部内容**）；k 一条 = **判据踩在自己的采样噪声面上**（`intervalMs=300` 却判「行消失 ≤ 目录消失 + 300ms」，实测 469ms / 2,013ms 两跑皆红，功能面逐字节与记账全对） | 判据：f2/g/h 改成「schema 合规 + 远程与盘上逐字节自洽」为准、锚点只钉**本仓可控**内容（外部注册表内容不钉 sha，或按 `fetchedAt` 分档）；k 的容差须 > 2×采样间隔，或改钉「同一轮内行消失前无二次轮询」这类与粒度无关的判据——**不许**为凑绿把功能断言写松 | 待认领 · 来源：chief 发行前实机测试 2026-10-22 |
 
@@ -36,18 +35,13 @@
 | K2-PROJECT | 项目级分析 core 已交付（重名/Layer/接管，13.5ms）；**未接入宿主与插件消费面** | 项目级冲突编译期可见；与 convention-linter/condition-extractor 边界写清 | 批次三认领：lead |
 | K2-SEM | 语义与诊断：类型检查、符号解析（表达式 AST 化）、展开视图、迁移码并表 | 诊断快照稳定；错误不产字节；adapter 码 additive | 批次三认领：lead（`K2-SEMANTIC-CORE` 拆出） |
 | K2-MIGRATOR | 迁移引擎机械层已交付（42 tests）；**语义升级（当→#表/分支→#池/初回→@原生）未做** | 不可迁移项经 PITFALLS 双证后转可迁移或维持 fail-closed | 批次三认领：lead（`K2-MIGRATE-SEMANTIC` 拆出） |
-| K2-MIGRATION-CORPUS | 真实语料迁移 + 行为 differential；本机无真语料（`tools/corpus.mjs` rc=1），以仓内 fixtures + 语料机补测 | 迁移率可量化；编码/EOL 不变；壳冒烟 | 待认领 · 阻塞：语料不在位 |
 | K2-CUTOVER | 单批切换：app 接线/主题合并/`.kojo` 扩展名/退役旧解析器；**批次三先做预演（feature flag）** | 仓内无旧 golden/旧分支；全量测试不回退；发布态单一模式 | 批次三认领：lead（`K2-CUTOVER-PRE` 拆出） |
 | K2-PRE-REUSE | 旧后端复用面缺陷：①字面量编码器（心形 `@"…"`）②空产物守门被注释穿透 ③写后回读失败不回滚 ④诊断列折回物理行 ⑤CJK 函数头自证 | 每条红→绿用例；只修复用面；全量不回退 | 批次三认领：lead · 来源：语言实现审阅（workbuddy 注 2026-10-22：**②③⑤ 已由本组落 dev**＝`c11cb3d4` 注释穿透 / `08ac046d` 回读回滚 / `51eef191` CJK 函数头，回执与读数在各提交信息；**① 字面量编码器本组认领后遇 429 未开工**，④ 与 POS-UTIL 合流——①④ 留给 lead 批次三收口时定派） |
 | K2-RELEASE | R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真实工程人工验收 | P0 全完成；eraTW 完整体验；反向回滚可用 | 待认领 |
-| K2-STORAGE-HOST | 槽位持久化**宿主接线**：注册表（22）+ 账本两阶段提交（40）+ 宿主 adapter（48，水合/镜像/串行队列/records/`previousSnapshot` 还原/`recycled` 拦截/失败上屏码）已交付；**未做**：项目打开时的生产接线（建 host → hydrate → loadPreviousSnapshot → registry → commit → flush，调用序见 adapter 头注） | 崩溃不留半批；换盘 error 上屏；改型跨构建可检测 | 部分交付 · 认领：lead 2026-10-22 |
-| K2-PROJECT-HOST | 项目级分析接宿主：`kojo2-project-analysis`（37 tests，10k @函 median 46ms）+ 扫描器装配面已交付；**未做**：生产把 `kojo2Project`（enabled + eraTW adapter）传进 `scannerDeps()`（adapter 进开机图的取舍） | 同轮扫描不二次读盘；flag 关零动作 | 部分交付 · 认领：lead 2026-10-22 |
-| K2-MIGRATION-CORPUS | 仓内迁移语料（22 份 / 211KB）+ differential harness（40 tests）+ 语料回归（101 tests）+ `migrate-diff` CLI 已交付（迁移率 26.9%；differs 3 / blocked 19，未洗白）；**未做**：真实语料机接入（`KOJO_MIGRATION_CORPUS_DIR` 已备）与双 golden 比例提升 | 状态与 manifest 期望相符；golden 逐字节 | 部分交付 · 认领：lead 2026-10-22 |
-| K2-INCR-HOLES | 增量编译器已知洞：结构化模型自检失败即 `degraded` 永久全量（任意行位置插入任意结构行可复现）；多行/全文替换仍整份重建；`选项`/BOM 文件永久全量；槽族正则需随新槽族同步（sema 并表已随主链接线补上） | 每次退化可见（`degradedReason`）；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
-| K2-NATIVE-COLUMNS | `@原生` source map 物理列：core 已备 `NativeLineColumns` 消费端与 `column-fold` 单源；**未做**：parser 收集每行被剥码元数（`lineColumns`，Tab=4 宽剥）+ 块内纯空白行按 `raw` 保留（§C2.10 规则 4 vs §8.5 冲突待裁）；落地需翻转 `sourcemap-segments` 一条 golden | 折行/CRLF/CJK 物理列正确；字节零丢失 | 待认领 · 认领：lead 2026-10-22 |
-| K2-ADAPTER-PROFILE | 迁移 differential 发现：`createEratwEmitBackend` 把 `eratwLoweringProfile()`（`narrationColor='author'`）写死，project/adapter profile 覆盖到不了 backend ⇒ v1 旁白 D 系 vs 2.0 非 D 系必然 differs | profile 覆盖可达；该 differential 腿转 normalized-equal | 待认领 · 认领：lead 2026-10-22 |
-| K2-MIGRATE-QUOTE | v1 台词 `「…」` 是内容、2.0 把引号当语法剥掉 ⇒ 有台词的迁移必 differs；迁移器应否改 `角色：「…」`→`> 「…」` 属语义决策 | 口径落字；differential 状态可解释 | 待认领 · 认领：lead 2026-10-22 |
-| K2-EVENT-FACEWORD | 迁移器接受任意 `时机` 面词（`事件 22`/`日常 4`/`标记`）⇒ 产物 `# 机` 撞 `event/unknown`（红灯类 blocked，3 份语料中招）；`成否:`/`类型:` 命名参数 26 处不可迁移 | 面词白名单或迁移期显式阻断 + 台账 | 待认领 · 认领：lead 2026-10-22 |
+| K2-MIGRATION-CORPUS | 仓内迁移语料 **29 份** + differential harness（52 tests）+ 语料回归（134 tests）+ `migrate-diff` CLI（含 `--generate-manifest` 骨架）已交付：双 golden **10/29（34.5%）**、迁移率 **27.9%**、`RESULT: PASS`（29 cases：normalized-equal 3 / differs 7 / blocked 19；CRLF/BOM 字节保真）；**未做**：真实语料机接入（`KOJO_MIGRATION_CORPUS_DIR` 已备，golden 需按真语料重生成） | 状态与 manifest 相符；golden 逐字节 | 部分交付 · 认领：lead 2026-10-22 |
+| K2-INCR-HOLES | 增量已知洞（收口后仍余）：`选项`/BOM 粘性永久全量；整份替换/改 `# 视` 仍整份重建（~200–300ms）；声明单元内编辑 55–75ms；槽族正则只覆盖 `rand/foreach`；构建期自检冷路径 ~300ms。已收口：结构行插入不再永久 degraded（退化判据细分 `lastUnmodelledReason`，25,200 步 fuzz 0 mismatch）、粘贴多行 185→20ms / 跨行删 195→19ms | 每次退化可见；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
+| K2-STORAGE-RECYCLED-UI | 存储宿主接线已交付（service 31 tests + App 项目开/关两拍）；**未做**：`recycled` 只有 API 没有壳内出口（作者看到阻断 toast 但无法点"放行重试"）；账本只在项目打开时提交（会话内改声明要重开项目）；`declarationKey` 为 (文件,名字) 近似（改名 retire/可能触发回收闸）；A3.6 槽位数值区段靠宿主默认 0..4095 顶；真壳读数（ledger 落盘/切项目/坏账/回收重试）待补 | 作者可确认重试；改名不搬槽；真壳读数 | 待认领 · 认领：lead 2026-10-22 |
+| K2-MIGRATE-SHAPE | 迁移口径已收口（引号语义 + `时机` 面词白名单 + app 已接线 `eventNames`）；**未做**：事件参数形状未校验（`初见 3` 仍产 `# 机 初见 3` 撞 `event/argument`）；v1 行形如 `角色：「…」` 与 2.0 同形（幂等优先放行，真语料需版本信号消歧）；`# 表` 值列含 `{}` 仍 fail-closed | 迁移期或编译期明确阻断，不产红灯产物 | 待认领 · 认领：lead 2026-10-22 |
 
 > **批次三并行说明（2026-10-21/22）**：17 路子 agent 按互不重叠写域推进（FOREACH/OPTIONS/EDITOR-WIRE/EDITOR-SEMANTIC/EDITOR-MIGRATE-UI/MIGRATE-SEMANTIC/CONFORMANCE/PERF-INCR/TS-RUNTIME/SOURCEMAP-HOST/STORAGE-HOST/CUTOVER-PRE，加接线 OPTIONS-WIRE/FOREACH-WIRE/EDITOR-HOOKUP，加 parser 健壮性修复）。组长统一收口、跑门、提交。完成行按协议删行，回执进提交信息。
 
@@ -58,4 +52,8 @@
 ## 批次五（2026-10-22，已交付）
 
 > **批次五 10 路全部交付**（STORAGE-HOST-FULL / SEMA-WIRING / EDITOR-MOUNT / NATIVE-DEDENT / CUTOVER-STAGE / MIGRATION-DIFFERENTIAL / PROJECT-HOST / CODES / CODE-ACTIONS / RELEASE-GATE）；完成行已删，回执进提交正文。
+
+## 批次六（2026-10-22，已交付）
+
+> **批次六 10 路全部交付**（STORAGE-WIRE / PROJECT-WIRE / NATIVE-COLUMNS / ADAPTER-PROFILE / MIGRATE-SEMANTICS-2 / FOLD-INDENT / INCR-HOLES / CUTOVER-ROUTE / RELEASE-CI / CORPUS-EXPAND）+ 3 处组长接线（App 项目级分析装配、事件面词 `eventNames` 进 app、`@原生` 物理列口径翻转）；完成行已删，回执进提交正文。
 

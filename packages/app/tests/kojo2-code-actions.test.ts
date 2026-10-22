@@ -137,8 +137,8 @@ describe('②裸引号：补说话人', () => {
     const facts = factsOf(source, 4, 4);
     expect(facts).toHaveLength(1);
     expect(facts[0]!.code).toBe('core/narrative/bare-quote');
-    expect(facts[0]!.edit.newText).toBe('我：「……早。」');
-    expect(expectParseCleanAfter(facts[0]!, source)).toBe('# 机 开场\n# 视 我\n\n我：「……早。」\n');
+    expect(facts[0]!.edit.newText).toBe('我：「「……早。」」');
+    expect(expectParseCleanAfter(facts[0]!, source)).toBe('# 机 开场\n# 视 我\n\n我：「「……早。」」\n');
   });
 
   it('没有 `# 视` 也没有兜底说话人 ⇒ 不产（不编一个作者没说过的名字）', () => {
@@ -149,7 +149,7 @@ describe('②裸引号：补说话人', () => {
     const source = '# 机 开场\n\n「……早。」\n';
     const facts = factsOf(source, 3, 3, { speaker: '你' });
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.edit.newText).toBe('你：「……早。」');
+    expect(facts[0]!.edit.newText).toBe('你：「「……早。」」');
   });
 });
 
@@ -224,7 +224,7 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
     expect(fact.code).toBe('core/migration/branch');
     expect(fact.edits).toHaveLength(1);
     expect(fact.edit.newText).toBe(
-      '# 池 迁移池1\n    ? 数值 < 100\n        我：「早。」\n    ? 否\n        我：「嗨。」\n\n! 迁移池1',
+      '# 池 迁移池1\n    ? 数值 < 100\n        我：「「早。」」\n    ? 否\n        我：「「嗨。」」\n\n! 迁移池1',
     );
     const after = expectParseCleanAfter(fact, SOURCE);
     expect(after).toContain('! 迁移池1\n');
@@ -847,3 +847,4 @@ describe('⑮逐类动作：应用后 core parse 零 error', () => {
 function codeOf(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 }
+

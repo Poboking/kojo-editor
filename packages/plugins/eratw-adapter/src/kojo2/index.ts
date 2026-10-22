@@ -83,6 +83,18 @@ export {
   type EratwEmitDeps,
 } from './backend.js';
 
+/* ---------- profile 覆盖（K2-ADAPTER-PROFILE；additive：纯函数 + 写死映射表） ---------- */
+export {
+  ERATW_ADAPTER_PROFILE_LANDING,
+  ERATW_ADAPTER_PROFILE_LANDING_FIELDS,
+  ERATW_DEFAULT_LOWERING_PROFILE,
+  eratwAdapterProfileOverrides,
+  resolveEratwProfile,
+  type EratwAdapterProfileLandingField,
+  type EratwProfileLayer,
+  type EratwProfileOverrides,
+} from './profile-resolve.js';
+
 /* ---------- `选项` 落点（纯函数；backend 转调它，测试/一致性套件可直接复用） ---------- */
 export {
   emitOptions,

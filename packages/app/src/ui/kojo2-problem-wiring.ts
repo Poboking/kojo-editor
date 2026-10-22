@@ -23,8 +23,9 @@
  * ## 事件语义
  *
  * - `onDidChangeModelContent`：合并击键 → 取文本 → 诊断（活动 model 才跑）；
- * - `onDidChangeModel`：换 model（切标签 / `setModel`）**立即**跑一次；目标不是 `.kojo2`
- *   （例如切回 `.erb`）⇒ `sync.clear()`（撤旧波浪线 + 撤问题面板条目）。
+ * - `onDidChangeModel`：换 model（切标签 / `setModel`）**立即**跑一次；目标按**路由**不归
+ *   2.0 管（例如切回 `.erb`，或 `2.0-default` 下内容仍是 v1 的 `.kojo`）⇒ `sync.clear()`
+ *   （撤旧波浪线 + 撤问题面板条目）。
  * - 卸载：取消定时器 → 撤两个监听 → `sync.dispose()`（幂等）。
  *
  * 路径以 **model 的 URI** 为准（`monaco.Uri.file(path)` 是 model 池建的），`filePathRef`
@@ -69,7 +70,13 @@ import {
 } from './kojo2-problem-sync';
 import { clearProblems, setProblems, type EditorProblem } from './problem-store';
 import type { NoticeInput } from './NotificationCenter';
-import { kojo2DiagnosticsEnabled, isKojo2DiagnosticsPath } from './kojo2-diagnostics-gate';
+import {
+  isKojo2RouteablePath,
+  kojo2DiagnosticsEnabled,
+  kojo2OwnsRoute,
+  kojo2RouteForPath,
+  kojo2RouteForText,
+} from './kojo2-diagnostics-gate';
 
 /** 诊断失败在问题面板里的稳定诊断码（不是 core 诊断码；一眼看出这是工具链自己的事） */
 export const KOJO2_DIAGNOSTICS_FAILURE_CODE = 'kojo2/diagnostics-unavailable';
@@ -454,15 +461,75 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
     },
   });
 
-  /** 当前该诊断的目标：活动 model 且是 `.kojo2`（糖投影 = 派生物，跳过） */
-  const resolveTarget = (): { model: Monaco.editor.ITextModel; filePath: string } | null => {
+  /**
+   * `2.0-default` 下 `.kojo` 拿不到正文时的**可见**提示去抖（同一份只吵一次）。
+   *
+   * 这一档不接管（不猜成 2.0、不把 v1 的活抢过来），但也不静默：作者得知道"这份文件的
+   * 2.0 诊断为什么没亮"，否则"屏上什么都没有"会被读成"这份文件是干净的"。
+   */
+  const warnedNeedsContent = new Set<string>();
+  const noteNeedsContent = (filePath: string): void => {
+    if (warnedNeedsContent.has(filePath)) return;
+    warnedNeedsContent.add(filePath);
+    notify({
+      kind: 'info',
+      message:
+        'Kojo 2.0：这份 .kojo 在「2.0 默认」阶段要读正文才能判定解析器，但当前取不到正文——暂时按 v1 处理，2.0 诊断未接管。',
+      detail: filePath,
+    });
+  };
+
+  /** 本轮诊断目标（`source` 只在归属判据必须读正文时带上，`run` 复用它不二次整篇复制） */
+  interface WiringTarget {
+    readonly model: Monaco.editor.ITextModel;
+    readonly filePath: string;
+    readonly source?: string;
+  }
+
+  /**
+   * 当前该诊断的目标：活动 model 且**路由**判定归 2.0 管（糖投影 = 派生物，跳过）。
+   *
+   * 判据与语言面同一个入口（`kojo2-diagnostics-gate` 的 `kojo2RouteFor*`），不再按扩展名：
+   * - `resolved` + parser `kojo2` ⇒ 接管（`.kojo2`，或 `2.0-default` 下内容已是 2.0 的 `.kojo`）；
+   * - `resolved` v1 / `blocked` / `not-kojo` / `ambiguous` ⇒ 不接管（v1 诊断照常）；
+   * - `needs-content`（`2.0-default` 的 `.kojo`）：`readSource=false` 时先当候选（让击键
+   *   排上定时器，正文留到防抖到点只读一次）；`readSource=true` 时读一次正文再判，
+   *   读不到 ⇒ **不接管**并露一句话（{@link noteNeedsContent}）。
+   */
+  const resolveTarget = (readSource: boolean): WiringTarget | null => {
     const model = editor.getModel();
     if (!model || model.isDisposed()) return null;
     if (options.sugarModelRef?.current === model) return null;
     const filePath = pathOfKojo2Model(model, options.filePathRef.current);
-    // 开关已在安装那一刻判过（本批不做运行时热切换）⇒ 热路径只判扩展名，不再摸 localStorage。
-    if (filePath.length === 0 || !isKojo2DiagnosticsPath(filePath)) return null;
-    return { model, filePath };
+    // 便宜预筛：`.erb` / `.json` 之类每次击键都不该摸阶段与正文
+    if (filePath.length === 0 || !isKojo2RouteablePath(filePath)) return null;
+
+    const pathDecision = kojo2RouteForPath(filePath);
+    switch (pathDecision.kind) {
+      case 'not-kojo':
+      case 'blocked':
+        return null;
+      case 'ambiguous':
+        // 路径判据给不出这一档（内容指纹才有）；真出现了也不接管——不猜。
+        return null;
+      case 'resolved':
+        if (pathDecision.parser !== 'kojo2') return null;
+        if (!readSource) return { model, filePath };
+        return { model, filePath, source: model.getValue() };
+      case 'needs-content': {
+        if (!readSource) return { model, filePath };
+        let source: string;
+        try {
+          source = model.getValue();
+        } catch {
+          noteNeedsContent(filePath);
+          return null;
+        }
+        const decision = kojo2RouteForText(filePath, source);
+        if (!kojo2OwnsRoute(decision)) return null;
+        return { model, filePath, source };
+      }
+    }
   };
 
   let timer: unknown = null;
@@ -474,13 +541,14 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
 
   /** 定时器响时才取一次文本（见文件头）；取完立刻交给第 2 层并催它跑（其 debounce = 0）。 */
   const run = (): void => {
-    const target = resolveTarget();
+    const target = resolveTarget(true);
     if (target === null) {
       sync.clear();
       return;
     }
     sync.setActive(target.model, target.filePath);
-    if (!sync.schedule(target.model, target.filePath, target.model.getValue())) return;
+    const source = target.source ?? target.model.getValue();
+    if (!sync.schedule(target.model, target.filePath, source)) return;
     void sync.flush();
   };
 
@@ -498,8 +566,8 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
 
   const contentSub = editor.onDidChangeModelContent(() => {
     // 非 2.0 文件不排定时器（`.erb` 的每次击键都排一个 200ms 的空转没有必要）；
-    // 目标为空同时意味着"刚切走"——顺手把上一份的结论撤干净。
-    if (resolveTarget() === null) {
+    // `needs-content` 也算"候选"：正文留到定时器响时只读一次，不在这里逐键扫全文。
+    if (resolveTarget(false) === null) {
       cancel();
       sync.clear();
       return;

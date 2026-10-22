@@ -738,6 +738,15 @@ export interface Kojo2CutoverController {
   getOverride(filePath: string): Kojo2Parser | null;
   /** 路由判定（存好的 override 参与，`request.override` 更优先） */
   route(request: Kojo2RouteRequest): Kojo2RouteDecision;
+  /**
+   * 以**指定阶段**路由（K2-CUTOVER-ROUTE）。
+   *
+   * 为什么需要这一格：控制器的内存阶段与 `ui/kojo2-flag.ts` 解析出的「生效阶段」在开机
+   * `attachStorage` 之后逐字相等，但**测试 / 调试面板**可能只喂了盘上计划而没挂存储端；
+   * 诊断/问题归属要跟"作者此刻看到的档位"走，就得不改控制器状态地把阶段交进来。
+   * 存好的 override 仍由控制器统一持有（调用方不必自己拼一份）。
+   */
+  routeAt(stage: Kojo2CutoverStage, request: Kojo2RouteRequest): Kojo2RouteDecision;
   /** 迁移预览（不落盘；与阶段无关，任何阶段都能预演） */
   previewMigration(request: Kojo2MigrationPreviewRequest): Kojo2MigrationPreview;
   /** 订阅状态变化（阶段 / override / 存储挂载）；返回取消订阅 */
@@ -854,6 +863,26 @@ export function createKojo2CutoverController(
     return null;
   }
 
+  /**
+   * 路由的**唯一**执行体：`route`（控制器当前阶段）与 `routeAt`（外部指定阶段）共用。
+   *
+   * override 的优先级写死在这里：一次性 `request.override` > 存好的那一份 > 无。
+   * 阶段脏值不猜——回控制器当前阶段（与 `setStage` 的失败方向同一条）。
+   */
+  function routeDecision(
+    stageToUse: Kojo2CutoverStage,
+    request: Kojo2RouteRequest,
+  ): Kojo2RouteDecision {
+    const storedKey = findOverrideKey(request.filePath);
+    const stored = storedKey === null ? null : (overrides.get(storedKey) ?? null);
+    return decideKojo2Route({
+      stage: isKojo2CutoverStage(stageToUse) ? stageToUse : stage,
+      filePath: request.filePath,
+      ...(request.source === undefined ? {} : { source: request.source }),
+      override: request.override ?? stored,
+    });
+  }
+
   return {
     getStage: () => stage,
     getSnapshot: snapshot,
@@ -896,14 +925,10 @@ export function createKojo2CutoverController(
       return key === null ? null : (overrides.get(key) ?? null);
     },
     route(request) {
-      const storedKey = findOverrideKey(request.filePath);
-      const stored = storedKey === null ? null : (overrides.get(storedKey) ?? null);
-      return decideKojo2Route({
-        stage,
-        filePath: request.filePath,
-        ...(request.source === undefined ? {} : { source: request.source }),
-        override: request.override ?? stored,
-      });
+      return routeDecision(stage, request);
+    },
+    routeAt(stageToUse, request) {
+      return routeDecision(stageToUse, request);
     },
     previewMigration: (request) => previewKojo2Migration(request),
     subscribe(listener) {

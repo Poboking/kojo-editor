@@ -44,13 +44,17 @@
  * 两个刻意的取舍：① `.kojo2` 的 publish 延到**整轮读完**之后（跨文件结论必须看全，且这
  * 一路只读一次盘），中途取消 ⇒ 这些文件的旧账原样留着，与"这一轮根本没跑到它们"同义；
  * ② 2.0 这一格炸了只把 `degraded` / `errors` 点亮，v1 那一路的结果照旧上账，整轮不崩。
+ *
+ * adapter 可以是**惰性 getter**（生产 = 动态 `import()`，不进开机静态图）：分析入口因此是
+ * async 的；装载失败由分析模块自己折成 `stats.adapterUnavailable` + 一次可见读数，不把整轮
+ * 拖崩。`await` 之后照本文件第 ② 条纪律复查世代，迟到结论一个字都不上账。
  */
 
 import type { EditorDecoratorContribution, GameProject, LineDecoration } from '@kojo/plugin-api';
 import { isUnderPath, parentDir, pkey } from './file-tree-ops';
 import {
   KOJO2_PROJECT_PROBLEM_PATH,
-  analyzeKojo2Project,
+  analyzeKojo2ProjectAsync,
   kojo2ProjectPassEnabled,
   type Kojo2ProjectDocument,
   type Kojo2ProjectPassOptions,
@@ -477,17 +481,23 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
         });
       }
       if (kojo2Active && kojo2 !== undefined && kojo2Documents.length > 0) {
-        // 判定是同步纯逻辑：上面最后一次 await 之后到这里没有让出点，不存在"半轮"读数。
         if (stale()) return quit('cancelled');
         try {
-          const analysis = analyzeKojo2Project({
+          // 惰性 adapter 可能异步装载（`import()`）：入口是 async 的，解析失败会自己降级成
+          // "无 adapter"并置 `stats.adapterUnavailable`，不把整轮炸掉（判据在分析模块里）。
+          const analysis = await analyzeKojo2ProjectAsync({
             documents: kojo2Documents,
             ...(kojo2.adapter === undefined ? {} : { adapter: kojo2.adapter }),
+            ...(kojo2.onAdapterUnavailable === undefined
+              ? {}
+              : { onAdapterUnavailable: kojo2.onAdapterUnavailable }),
             ...(kojo2.storage === undefined ? {} : { storage: kojo2.storage }),
             ...(kojo2.parse === undefined ? {} : { parse: kojo2.parse }),
             ...(kojo2.projectPath === undefined ? {} : { projectPath: kojo2.projectPath }),
             ...(kojo2.now === undefined ? {} : { now: kojo2.now }),
           });
+          // await 之后同一纪律：世代已换 ⇒ 这份迟到的结论一个字都不许上账。
+          if (stale()) return quit('cancelled');
           // 一文件一次 publish：本文件的 v1 诊断 + 落在它头上的项目级结论（整档替换语义）
           for (const [path, ownProblems] of kojo2Pending) {
             deps.publish(path, mergeProblems(ownProblems, analysis.problemsByPath.get(path) ?? []));
@@ -499,6 +509,8 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
           outcome.kojo2 = analysis.stats;
           reportKojo2Timing(kojo2, analysis.stats);
         } catch (e) {
+          // 同上：被取代的那一轮连降级路径也不许上账（旧轮写出旧结论 = 迟到盖新账）。
+          if (stale()) return quit('cancelled');
           // 2.0 这一格炸了：本轮其余结论照旧上账，但"少了一路"必须看得见（不静默）
           outcome.degraded += kojo2Pending.size;
           note('(kojo2 项目级分析)', `分析异常：${String(e instanceof Error ? e.message : e)}`);

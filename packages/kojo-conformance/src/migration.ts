@@ -930,6 +930,8 @@ export interface MigrationCorpusIo {
   readonly readText: (path: string) => string;
   /** 列目录下的文件（**相对路径**，分隔符可 `/` 或 `\`）；不存在时抛错 */
   readonly listFiles: (dir: string) => readonly string[];
+  /** 写一段 UTF-8 文本（`--out` 用；缺注 = 该宿主不支持落盘，CLI 报用法错误） */
+  readonly writeText?: (path: string, text: string) => void;
 }
 
 /** 语料分层：双 golden（可迁移可编译） / v1 产物 + 台账（2.0 产物不可得） */
@@ -953,12 +955,24 @@ export interface MigrationCorpusCaseRecord {
   /** `.v1.kojo.txt` 开头被 loader 剥掉的溯源头注行数 */
   readonly headerLines: number;
   readonly eol: 'lf' | 'crlf';
+  /**
+   * 编码面 BOM 声明（M7.3「编码/EOL 保留」的读入侧）。
+   *
+   * - `none` = 无 BOM（旧清单缺省按此判）；
+   * - `utf-8` = 文件首字节是三连 `EF BB BF`。
+   *
+   * loader 会先按声明复核实物字节、再把 BOM 剥掉后才把正文交给编译器：BOM 是编码面，
+   * 不是程序文本（与归一化白名单 `bom` 同一条依据）。声明与实物不符 ⇒ 进 `problems`，
+   * 不猜（否则 BOM 会混进首行，v1 侧直接 `unknown-identifier`）。
+   */
+  readonly bom?: 'none' | 'utf-8';
   readonly tier: MigrationCorpusTier;
   /** 该 case 覆盖的 v1 写法（按迁移报告同一套 construct 词表） */
   readonly constructs: readonly string[];
   readonly completion: MigrationCorpusCompletion;
   readonly notes: string;
-  readonly expected: MigrationCaseExpectation;
+  /** `null` = 只报告不判定（`--generate-manifest` 骨架用；首跑后再按读数填状态） */
+  readonly expected: MigrationCaseExpectation | null;
 }
 
 /** 语料清单 */
@@ -1027,13 +1041,20 @@ function corpusProblem(id: string, message: string): MigrationCaseFailure {
   return { id, kind: 'golden', message };
 }
 
-/** 施加片段补全（与 kojo-sugar golden 测试 `readKojo` 同口径；纯文本，不改写正文） */
+/**
+ * 施加片段补全（与 kojo-sugar golden 测试 `readKojo` 同口径；纯文本，不改写正文）。
+ *
+ * EOL 按输入原样保留（M7.3）：CRLF 档切出来的行仍用 CRLF 拼回去，补的 `角色:` 行也用
+ * 同一档行尾。早先实现固定 `join('\n')`，会把 CRLF 语料在 loader 这一步洗成 LF——
+ * 那让"CRLF 字节保真"的判据在进编译器前就失效（源快照字节对了、编译输入不对）。
+ */
 export function applyMigrationCompletion(raw: string, completion: MigrationCorpusCompletion): string {
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
   let lines = raw.split(/\r\n|\r|\n/);
   if (completion.stripBanner) lines = lines.filter((line) => !line.startsWith('//'));
-  const text = lines.join('\n');
+  const text = lines.join(eol);
   if (completion.prependChara !== null && completion.prependChara.length > 0) {
-    if (!/^[ \t]*角色\s*[:：]/m.test(text)) return `角色: ${completion.prependChara}\n${text}`;
+    if (!/^[ \t]*角色\s*[:：]/m.test(text)) return `角色: ${completion.prependChara}${eol}${text}`;
   }
   return text;
 }
@@ -1094,8 +1115,28 @@ export function loadMigrationCorpus(io: MigrationCorpusIo, dir: string): Migrati
       problems.push(corpusProblem(record.id, `无法读取 ${v1Rel}：${errorMessage(error)}`));
       continue;
     }
-    const eol = stored.includes('\r\n') ? '\r\n' : '\n';
-    const lines = stored.split(eol);
+    // 编码面：先认实物字节，再与清单声明复核（声明是回归锚，不拿来"修"实物）。
+    const actualBom: 'none' | 'utf-8' = stored.charCodeAt(0) === BOM_CODE_POINT ? 'utf-8' : 'none';
+    const declaredBom = record.bom ?? 'none';
+    if (declaredBom !== actualBom) {
+      problems.push(
+        corpusProblem(
+          record.id,
+          `${v1Rel} 的 BOM 声明是 ${declaredBom}，实物是 ${actualBom}（BOM 属编码面：声明与字节必须一致）`,
+        ),
+      );
+      continue;
+    }
+    const decoded = actualBom === 'utf-8' ? stripBomChar(stored) : stored;
+    const actualEol: 'lf' | 'crlf' = decoded.includes('\r\n') ? 'crlf' : 'lf';
+    if (record.eol !== actualEol) {
+      problems.push(
+        corpusProblem(record.id, `${v1Rel} 的 EOL 声明是 ${record.eol}，实物是 ${actualEol}（按声明切会把头注切错）`),
+      );
+      continue;
+    }
+    const eol = actualEol === 'crlf' ? '\r\n' : '\n';
+    const lines = decoded.split(eol);
     if (record.headerLines < 0 || record.headerLines >= lines.length) {
       problems.push(corpusProblem(record.id, `${v1Rel} 的头注行数 ${record.headerLines} 越界（共 ${lines.length} 行）`));
       continue;
@@ -1162,8 +1203,8 @@ function isManifest(value: unknown): value is MigrationCorpusManifest {
       typeof entry.headerLines === 'number' &&
       typeof entry.completion === 'object' &&
       entry.completion !== null &&
-      typeof entry.expected === 'object' &&
-      entry.expected !== null
+      // `null` 合法 = 清单骨架的"只报告不判定"（`--generate-manifest` 初版）
+      (entry.expected === null || (typeof entry.expected === 'object' && entry.expected !== null))
     );
   });
 }
@@ -1291,12 +1332,142 @@ function deepEqualJson(left: unknown, right: unknown): boolean {
   return false;
 }
 
-/* ============================== 8. CLI（纯逻辑；IO / 编译器注入） ============================== */
+/* ============================== 8. 真实目录 manifest 骨架 ============================== */
+
+/** 生成骨架的结果（`text` 就是可直接落盘的 `manifest.json` 全文） */
+export interface MigrationManifestSkeleton {
+  readonly dir: string;
+  readonly manifest: MigrationCorpusManifest;
+  readonly text: string;
+  readonly caseIds: readonly string[];
+  /** 目录级问题（读不出 / 无候选）；缺伴生 golden 只记 note，不算问题 */
+  readonly problems: readonly MigrationCaseFailure[];
+}
+
+/** 骨架顶注（与语料机约定同一套词；`expected:null` 的含义写清楚） */
+const MANIFEST_SKELETON_NOTES = [
+  '迁移 differential 语料清单（`--generate-manifest` 初版骨架）。',
+  '由真实目录里现存的 `<id>.v1.kojo.txt` 反推 case；以下字段是**占位**，首跑前必须人工补：',
+  '`source`（仓内/语料机溯源路径）、`sourceSha256`、`headerLines`（首部溯源头注行数；',
+  '没头注填 0）、`completion`（源 fixture 自带的片段补全口径）、`expected`（首跑 `migrate-diff`',
+  '后按实测 status/blockedReason 填；`null` = 只报告不判定）。',
+  '`eol` / `bom` 由生成器按实物字节探测，loader 会复核声明与实物一致（编码面不猜）。',
+].join('\n');
+
+/**
+ * 从真实目录生成 `manifest.json` 初版骨架（纯逻辑；IO 注入，不写盘）。
+ *
+ * 只认扁平目录（与 `loadMigrationCorpus` 同一约定：`v1Rel = <id>.v1.kojo.txt`）：
+ * 子目录里的同名文件不会被猜成 case；清单骨架里把跳过的条目数写进 notes。
+ */
+export function generateMigrationManifest(io: MigrationCorpusIo, dir: string): MigrationManifestSkeleton {
+  const root = normalizeDir(dir);
+  const problems: MigrationCaseFailure[] = [];
+  const notes: string[] = [MANIFEST_SKELETON_NOTES];
+  let entries: readonly string[];
+  try {
+    entries = io.listFiles(root);
+  } catch (error: unknown) {
+    return {
+      dir: root,
+      manifest: { schema: 'kojo-migration-corpus/1', notes: MANIFEST_SKELETON_NOTES, cases: Object.freeze([]) },
+      text: `${JSON.stringify({ schema: 'kojo-migration-corpus/1', notes: MANIFEST_SKELETON_NOTES, cases: [] }, null, 2)}\n`,
+      caseIds: Object.freeze([]),
+      problems: Object.freeze([corpusProblem('(io)', `无法列出语料目录 ${root}：${errorMessage(error)}`)]),
+    };
+  }
+
+  const normalized = [...new Set(entries.map(normalizeRelPath))].sort();
+  const fileSet = new Set(normalized);
+  const nested: string[] = [];
+  const ids: string[] = [];
+  for (const entry of normalized) {
+    if (!entry.endsWith(MIGRATION_CORPUS_SUFFIXES.v1)) continue;
+    if (entry.includes('/')) {
+      nested.push(entry);
+      continue;
+    }
+    ids.push(entry.slice(0, -MIGRATION_CORPUS_SUFFIXES.v1.length));
+  }
+  ids.sort();
+  if (nested.length > 0) {
+    notes.push(`跳过 ${nested.length} 份子目录候选（loader 只认扁平目录）：${nested.slice(0, 3).join('、')}${nested.length > 3 ? ' …' : ''}`);
+  }
+  if (ids.length === 0) {
+    problems.push(
+      corpusProblem('(empty)', `目录里没有 <id>${MIGRATION_CORPUS_SUFFIXES.v1}；检查 --dir 是否指到真实语料目录`),
+    );
+  }
+
+  const cases: MigrationCorpusCaseRecord[] = [];
+  for (const id of ids) {
+    const v1Rel = `${id}${MIGRATION_CORPUS_SUFFIXES.v1}`;
+    let stored: string;
+    try {
+      stored = io.readText(joinPath(root, v1Rel));
+    } catch (error: unknown) {
+      problems.push(corpusProblem(id, `无法读取 ${v1Rel}：${errorMessage(error)}`));
+      continue;
+    }
+    const bom: 'none' | 'utf-8' = stored.charCodeAt(0) === BOM_CODE_POINT ? 'utf-8' : 'none';
+    const decoded = bom === 'utf-8' ? stripBomChar(stored) : stored;
+    const hasCrlf = decoded.includes('\r\n');
+    const hasLoneLf = /\n/.test(decoded.replace(/\r\n/g, ''));
+    const eol: 'lf' | 'crlf' = hasCrlf ? 'crlf' : 'lf';
+    const constructs = [...new Set(collectV1Sites(decoded).map((site) => site.construct))].sort();
+    const missing: string[] = [];
+    for (const suffix of [MIGRATION_CORPUS_SUFFIXES.v1Product, MIGRATION_CORPUS_SUFFIXES.ledger]) {
+      if (!fileSet.has(`${id}${suffix}`)) missing.push(`${id}${suffix}`);
+    }
+    const dual = fileSet.has(`${id}${MIGRATION_CORPUS_SUFFIXES.v2Product}`);
+    const noteParts = [
+      '`--generate-manifest` 初版骨架：source / sourceSha256 / headerLines / completion / expected 待补；首跑后按读数填。',
+    ];
+    if (hasCrlf && hasLoneLf) noteParts.push('⚠ 实物是混合 EOL（CRLF + 裸 LF）：loader 只认单一档，先统一行尾。');
+    if (!dual && !fileSet.has(`${id}${MIGRATION_CORPUS_SUFFIXES.ledger}`)) {
+      noteParts.push(`缺伴生 ${missing.join(' / ') || 'golden'}：blocked case 至少要有 .ledger.json。`);
+    }
+    cases.push({
+      id,
+      source: v1Rel,
+      sourceSha256: '',
+      headerLines: 0,
+      eol,
+      bom,
+      tier: dual ? 'dual-golden' : 'baseline+ledger',
+      constructs,
+      completion: { stripBanner: false, prependChara: null },
+      notes: noteParts.join(' '),
+      expected: null,
+    });
+  }
+
+  const manifest: MigrationCorpusManifest = {
+    schema: 'kojo-migration-corpus/1',
+    notes: notes.join('\n'),
+    cases: Object.freeze(cases),
+  };
+  const text = `${JSON.stringify(manifest, null, 2)}\n`;
+  return {
+    dir: root,
+    manifest,
+    text,
+    caseIds: Object.freeze(cases.map((entry) => entry.id)),
+    problems: Object.freeze(problems),
+  };
+}
+
+/* ============================== 9. CLI（纯逻辑；IO / 编译器注入） ============================== */
 
 export const MIGRATION_CLI_USAGE = [
   '用法:',
   '  kojo-conformance migrate-diff --dir <语料目录> [--json] [--no-golden]',
+  '  kojo-conformance migrate-diff --dir <真实目录> --generate-manifest [--out <manifest.json>]',
   '  kojo-conformance migrate-diff help',
+  '',
+  '真实目录还没有 manifest.json 时（先出骨架，再人工补字段）:',
+  '  node tools/kojo-conformance.mjs migrate-diff --generate-manifest --dir <真实目录>',
+  '  骨架打印到 stdout；`--out <path>` 直接落盘（占位字段见骨架顶注）。',
   '',
   '语料目录约定（见 <目录>/manifest.json）:',
   '  <id>.v1.kojo.txt v1 源（首 headerLines 行是溯源头注，不进编译）',
@@ -1335,6 +1506,12 @@ export interface MigrationCliReport {
   readonly failures: readonly MigrationCaseFailure[];
   /** 非 null = 用法 / help 文本（exit 2 或 help；`--json` 对它不生效） */
   readonly usage: string | null;
+  /** 非 null = `--generate-manifest` 模式（`text` 恒为可直接落盘的清单全文） */
+  readonly manifest: {
+    readonly text: string;
+    readonly outPath: string | null;
+    readonly cases: number;
+  } | null;
 }
 
 /** CLI 依赖：IO + 三条真入口（v1 编译 / 2.0 编译 / 迁移）；本模块不认识任何具体游戏或插件 */
@@ -1358,16 +1535,28 @@ interface MigrationCliArgs {
   readonly json: boolean;
   readonly golden: boolean;
   readonly help: boolean;
+  readonly generateManifest: boolean;
+  readonly out: string | null;
   readonly error: string | null;
 }
 
 function parseMigrationArgs(argv: readonly string[]): MigrationCliArgs {
   if (argv[0] === 'help' || argv.includes('--help') || argv.includes('-h')) {
-    return { dir: null, json: argv.includes('--json'), golden: false, help: true, error: null };
+    return {
+      dir: null,
+      json: argv.includes('--json'),
+      golden: false,
+      help: true,
+      generateManifest: false,
+      out: null,
+      error: null,
+    };
   }
   let dir: string | null = null;
   let json = false;
   let golden = true;
+  let generateManifest = false;
+  let out: string | null = null;
   let error: string | null = null;
   const fail = (message: string): void => {
     if (error === null) error = message;
@@ -1389,6 +1578,23 @@ function parseMigrationArgs(argv: readonly string[]): MigrationCliArgs {
       golden = false;
       continue;
     }
+    if (token === '--generate-manifest') {
+      if (generateManifest) fail('重复参数：--generate-manifest');
+      generateManifest = true;
+      continue;
+    }
+    if (token === '--out') {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        fail('缺少 --out 的值');
+        continue;
+      }
+      i++;
+      if (out !== null) fail('重复参数：--out');
+      else if (value.trim().length === 0) fail('--out 的值不能为空');
+      else out = value;
+      continue;
+    }
     if (token === '--dir') {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) {
@@ -1403,7 +1609,7 @@ function parseMigrationArgs(argv: readonly string[]): MigrationCliArgs {
     }
     fail(`未知参数：${token}`);
   }
-  return { dir, json, golden, help: false, error };
+  return { dir, json, golden, help: false, generateManifest, out, error };
 }
 
 function emptySummary(): MigrationDifferentialSummary {
@@ -1430,6 +1636,7 @@ function usageReport(dir: string, reason: string): MigrationCliReport {
     cases: Object.freeze([]),
     failures: Object.freeze([]),
     usage: `${MIGRATION_CLI_USAGE}\n\n错误：${reason}`,
+    manifest: null,
   };
 }
 
@@ -1445,6 +1652,23 @@ function formatRate(rate: MigrationRateReport): string {
  */
 export function formatMigrationReport(report: MigrationCliReport, options: { readonly json?: boolean } = {}): string {
   if (report.usage !== null) return `${report.usage}\n`;
+  if (report.manifest !== null) {
+    if (report.failures.length > 0) {
+      // 生成失败（空目录 / 读不出 / 写盘失败）时不能只打一份空骨架：失败原因要上屏
+      return `${[
+        '清单骨架生成失败：',
+        ...report.failures.map((failure) => `  [${failure.kind}] ${failure.id}  ${failure.message}`),
+        '',
+        `用法：${
+          MIGRATION_CLI_USAGE.split('\n').find((line) => line.includes('node tools/kojo-conformance.mjs'))?.trim() ??
+          'node tools/kojo-conformance.mjs migrate-diff --generate-manifest --dir <真实目录>'
+        }`,
+      ].join('\n')}\n`;
+    }
+    // 骨架模式：stdout 直接就是可落盘的 manifest.json（`--out` 时改成人话回执，全文进文件）
+    if (report.manifest.outPath === null) return report.manifest.text;
+    return `已写入清单骨架 ${report.manifest.outPath}（${report.manifest.cases} cases；占位字段见文件顶注）\n`;
+  }
   if (options.json === true) return `${JSON.stringify(report, null, 2)}\n`;
 
   const summary = report.summary;
@@ -1505,6 +1729,7 @@ export function runMigrationCli(argv: readonly string[], deps: MigrationCliDeps)
       cases: Object.freeze([]),
       failures: Object.freeze([]),
       usage: MIGRATION_CLI_USAGE,
+      manifest: null,
     };
     return { exitCode: 0, report, text: `${MIGRATION_CLI_USAGE}\n` };
   }
@@ -1513,8 +1738,45 @@ export function runMigrationCli(argv: readonly string[], deps: MigrationCliDeps)
     return { exitCode: 2, report, text: formatMigrationReport(report) };
   }
   if (parsed.dir === null) {
-    const report = usageReport('', 'migrate-diff 需要 --dir <语料目录>');
+    const reason = parsed.generateManifest
+      ? '--generate-manifest 需要 --dir <真实目录>：node tools/kojo-conformance.mjs migrate-diff --generate-manifest --dir <目录>'
+      : 'migrate-diff 需要 --dir <语料目录>（目录里没有 manifest.json 时先跑 --generate-manifest）';
+    const report = usageReport('', reason);
     return { exitCode: 2, report, text: formatMigrationReport(report) };
+  }
+  if (parsed.out !== null && !parsed.generateManifest) {
+    const report = usageReport(parsed.dir, '--out 只能与 --generate-manifest 一起用');
+    return { exitCode: 2, report, text: formatMigrationReport(report) };
+  }
+
+  if (parsed.generateManifest) {
+    const skeleton = generateMigrationManifest(deps.io, parsed.dir);
+    const failures: MigrationCaseFailure[] = [...skeleton.problems];
+    let outPath: string | null = null;
+    // 有问题（空目录 / 读不出）时不写半成品骨架：先让失败原因上屏
+    if (parsed.out !== null && failures.length === 0) {
+      if (deps.io.writeText === undefined) {
+        failures.push(corpusProblem('(io)', `本宿主不支持写盘，无法 --out ${parsed.out}；去掉 --out 让骨架走 stdout`));
+      } else {
+        try {
+          deps.io.writeText(parsed.out, skeleton.text);
+          outPath = parsed.out;
+        } catch (error: unknown) {
+          failures.push(corpusProblem('(io)', `写入 ${parsed.out} 失败：${errorMessage(error)}`));
+        }
+      }
+    }
+    const report: MigrationCliReport = {
+      dir: skeleton.dir,
+      summary: emptySummary(),
+      migrationReport: emptyRate(),
+      cases: Object.freeze([]),
+      failures: Object.freeze(failures),
+      usage: null,
+      manifest: { text: skeleton.text, outPath, cases: skeleton.caseIds.length },
+    };
+    const exitCode: 0 | 1 = failures.length === 0 && skeleton.caseIds.length > 0 ? 0 : 1;
+    return { exitCode, report, text: formatMigrationReport(report) };
   }
 
   const corpus = loadMigrationCorpus(deps.io, parsed.dir);
@@ -1526,6 +1788,15 @@ export function runMigrationCli(argv: readonly string[], deps: MigrationCliDeps)
     ...(deps.classify === undefined ? {} : { classify: deps.classify }),
   });
   const failures: MigrationCaseFailure[] = [...corpus.problems, ...result.failures];
+  if (corpus.manifest === null) {
+    // 缺清单是"用法没走对"，不是产物差异：把下一步命令直接写在失败清单里（不静默）
+    failures.push(
+      corpusProblem(
+        'manifest.json',
+        `缺 manifest.json：先跑 \`migrate-diff --generate-manifest --dir ${parsed.dir}\` 生成骨架，补 source/headerLines/expected 后再跑本命令`,
+      ),
+    );
+  }
   if (parsed.golden) failures.push(...verifyMigrationGoldens(corpus, result));
 
   const cases: MigrationCliCaseReport[] = result.cases.map((report) => ({
@@ -1549,6 +1820,7 @@ export function runMigrationCli(argv: readonly string[], deps: MigrationCliDeps)
     cases: Object.freeze(cases),
     failures: Object.freeze(failures),
     usage: null,
+    manifest: null,
   };
   const exitCode: 0 | 1 = failures.length === 0 ? 0 : 1;
   return { exitCode, report, text: formatMigrationReport(report) };

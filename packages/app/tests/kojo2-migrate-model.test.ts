@@ -112,7 +112,7 @@ class FakeIo implements MigrateIoPort {
 
 const FILE = 'C:\\proj\\a.kojo';
 const V1 = '角色: 灵梦\n时机 指令 310：\n    「你好。」\n';
-const V1_CODE = '# 机 指令 310\n灵梦：「你好。」\n';
+const V1_CODE = '# 机 指令 310\n灵梦：「「你好。」」\n';
 const BAD = '角色: 灵梦\n时机 指令 310：\n    她的心情 = 1\n';
 
 /* ============================== dry-run / 计划 ============================== */
@@ -137,7 +137,7 @@ describe('dry-run 计划：逐行 diff、编码/EOL 保留、备份回滚口令'
     expect(plan.diffText).toContain(`+++ b/${FILE}`);
     expect(plan.diffText).toContain('-角色: 灵梦');
     expect(plan.diffText).toContain('+# 机 指令 310');
-    expect(plan.diffText).toContain('+灵梦：「你好。」');
+    expect(plan.diffText).toContain('+灵梦：「「你好。」」');
     expect(plan.summary).toMatchObject({ ok: true, unsupportedCount: 0, addedLines: 2, removedLines: 3 });
   });
 
@@ -507,3 +507,49 @@ describe('语义层：rewrites 进计划，可证的构造不再阻断', () => {
     expect(plan.code).not.toContain('.kojo2');
   });
 });
+
+/* ============================== 事件面词白名单（宿主接线） ============================== */
+
+/**
+ * K2-EVENT-FACEWORD 的 app 侧接线：`eventNames` 从向导/模型一路传进 core 迁移器。
+ *
+ * core 不内置事件目录（零游戏知识），目录由 adapter 的 `eventCatalog` 投影而来；
+ * 不传 = 沿用 v1 形状判定（老行为），传了才在迁移期挡「面词不在九事件内」。
+ */
+describe('`时机` 面词白名单：eventNames 透传（K2-EVENT-FACEWORD 宿主接线）', () => {
+  const TIMING = '角色: 灵梦\n时机 事件 22：\n    「你好。」\n';
+
+  it('给了目录且面词不在其中 ⇒ 不产 `# 机`，unsupported 点名事件目录', () => {
+    const plan = planMigrateFile({
+      filePath: FILE,
+      source: TIMING,
+      eventNames: ['初见', '指令 310'],
+    });
+
+    expect(plan.ok).toBe(false);
+    expect(plan.code).not.toContain('# 机');
+    const item = plan.unsupported.find((entry) => entry.construct.includes('时机'));
+    expect(item).toBeDefined();
+    expect(item!.targetHint.length).toBeGreaterThan(0);
+  });
+
+  it('面词命中目录 ⇒ 正常迁出 `# 机`（白名单不误伤合法事件）', () => {
+    const plan = planMigrateFile({
+      filePath: FILE,
+      source: '角色: 灵梦\n时机 初见：\n    「你好。」\n',
+      eventNames: ['初见', '指令 310'],
+    });
+
+    expect(plan.ok).toBe(true);
+    expect(plan.code).toContain('# 机 初见\n');
+  });
+
+  it('不给目录 ⇒ 沿用 v1 形状判定（不猜目录、不阻断；老行为固定）', () => {
+    const plan = planMigrateFile({ filePath: FILE, source: TIMING });
+
+    expect(plan.ok).toBe(true);
+    expect(plan.code).toContain('# 机 事件 22\n');
+  });
+});
+
+

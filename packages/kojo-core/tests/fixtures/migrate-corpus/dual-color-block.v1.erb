@@ -1,0 +1,19 @@
+@M_KOJO_MESSAGE_COM_K12_310
+CALL M_KOJO_MESSAGE_COM_K12_310_1
+RETURN RESULT
+
+@M_KOJO_MESSAGE_COM_K12_310_1
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+	SETCOLOR 0xFF0000
+	PRINTFORMW 「红台词」
+	SETCOLOR 0x4682B4
+	PRINTFORMW 自机
+	SETCOLOR 0xFF0000
+	PRINTFORMW 「还是红台词」
+	RESETCOLOR
+ENDIF
+RETURN 1

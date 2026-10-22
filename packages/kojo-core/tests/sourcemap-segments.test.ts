@@ -8,6 +8,9 @@
  * - 模板/池展开产物行：整行一段，`source` = 定义处精确 span，`origins` = **[调用处, 定义处]**
  *   （顺序沿用既有 `expansionFrame` 约定：`origins[0]` = call-site、末项 = 定义处）；
  * - 行级映射逐字节不变（末尾 golden 全表钉住），分段只是 additive。
+ *   唯一**有意**的例外（K2-NATIVE-COLUMNS）：`@原生` 行的列从"去缩进视图坐标"升级为
+ *   **物理列**（`lineColumns` 由 parser 提供），golden 第 16 行因此 20:1..20:14 → 20:5..20:18；
+ *   行号、产物文本、kind、origins 一律不动。
  *
  * 端到端断言全部走真实前端（`compileKojoSource` + fixture adapter/backend），
  * 只有 builder 层契约用直接构造（不手搓 `SourceMap` 形状冒充编译产物）。
@@ -525,6 +528,10 @@ describe('行级映射逐字节不变（分段只是 additive 事实）', () => 
    * 批前（batch-3 产线）行级映射的快照：本批只改分段，这 24 行必须逐字相等。
    * 覆盖 `# 机` 包装（1/17 行）、随机块（3..6）、池（8..12）、模板+插槽（13..15）、
    * `@原生`（16）、`@织` 伴生函数（18..24）。
+   *
+   * 第 16 行是 K2-NATIVE-COLUMNS 的**有意口径升级**（其余 23 行逐字不变）：
+   * 源第 20 行 = `    ; raw 🧵 line`，旧口径记去缩进视图坐标 20:1..20:14，
+   * 新口径记物理列 20:5..20:18（4 空格缩进被剥、emoji 代理对仍按 2 码元），行号与文本不变。
    */
   const GOLDEN = [
     '1|MACHINE 开场|source|1:1..1:7|',
@@ -542,7 +549,7 @@ describe('行级映射逐字节不变（分段只是 additive 事实）', () => 
     '13|TELL: （因为被夸奖，她退开了） /WAIT|template|9:5..9:20|call-site@17:1..17:12 template-definition@8:1..11:13',
     '14|SAY 灵梦: 那我先走了。 /WAIT|template|18:5..18:16|call-site@17:1..17:12 template-definition@8:1..11:13',
     '15|TELL: （门合上了） /WAIT|template|11:5..11:13|call-site@17:1..17:12 template-definition@8:1..11:13',
-    '16|; raw 🧵 line|native|20:1..20:14|',
+    '16|; raw 🧵 line|native|20:5..20:18|',
     '17|MACHINE.END|source|1:1..1:7|',
     '18|WEAVE 开场|source|21:1..22:9|',
     '19|IF {恋慕 < 100}|pool|4:5..5:20|call-site@22:5..22:9 pool-definition@3:1..7:19',

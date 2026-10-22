@@ -1,0 +1,14 @@
+;kojo2: # 机 指令 310
+@M_KOJO_MESSAGE_COM_K12_310(ARG)
+CALL M_KOJO_MESSAGE_COM_K12_310_1(ARG)
+RETURN RESULT
+
+@M_KOJO_MESSAGE_COM_K12_310_1(ARG)
+;-------------------------------------------------
+;記入チェック（=0, 非表示、1, 表示）
+LOCAL = 1
+;-------------------------------------------------
+IF LOCAL
+    CALL HPH_PRINT(@"嗯。","w")
+ENDIF
+RETURN 1

@@ -116,10 +116,15 @@ function createV2Compiler(core, eratw) {
   };
 }
 
-/** 迁移真入口：core 语义层（`当` / `分支` / `初回` 三落点） */
-function createMigrator(core) {
+/**
+ * 迁移真入口：core 语义层（`当` / `分支` / `初回` 三落点）。
+ *
+ * 事件目录**从真 adapter 注入**：`时机` 面词白名单是 adapter 事实（core 零游戏知识），迁移器只认
+ * `ERATW_EVENT_NAMES` 的九事件；不在目录里的面词在迁移期落 unsupported（不产 `# 机`）。
+ */
+function createMigrator(core, eratw) {
   return (source) => {
-    const result = core.migrateKojoSourceSemantic(source);
+    const result = core.migrateKojoSourceSemantic(source, { eventNames: eratw.ERATW_EVENT_NAMES });
     return {
       ok: result.ok,
       code: result.code,
@@ -144,7 +149,7 @@ function runMigrateDiff(modules, argv) {
     io: main.createNodeIo(),
     compileV1: createV1Compiler(sugar, support),
     compile2: createV2Compiler(core, eratw),
-    migrate: createMigrator(core),
+    migrate: createMigrator(core, eratw),
   });
   const text = migration.formatMigrationReport(result.report, { json: effective.includes('--json') });
   if (result.exitCode === 2) process.stderr.write(text);

@@ -83,7 +83,7 @@ afterEach(() => {
 /** 真实 v1 片段：文件头 + 时机块 + 裸台词（迁移器会给台词补说话人） */
 const V1_BASIC = '角色: 灵梦\n时机 指令 310：\n    「你好。」\n';
 /** 上面那份的 2.0 结果（逐字节；迁移器口径已由 `kojo2-migrate-model.test.ts` 钉住） */
-const V1_BASIC_MIGRATED = '# 机 指令 310\n灵梦：「你好。」\n';
+const V1_BASIC_MIGRATED = '# 机 指令 310\n灵梦：「「你好。」」\n';
 /** 已是 2.0 写法（幂等） */
 const KOJO2_SAMPLE = '# 机 指令 310\n灵梦：「你好。」\n';
 /** `分支：` 不可机械迁移：整块原样保留 + `ok=false` */
@@ -553,7 +553,7 @@ describe('迁移预览：core 分类 + 改写 + diff 摘要，且没有写盘通
     expect(preview.diffText).toContain(`--- a/${KOJO_FILE}`);
     expect(preview.diffText).toContain(`+++ b/${KOJO_FILE}`);
     expect(preview.diffText).toContain('+# 机 指令 310');
-    expect(preview.diffText).toContain('+灵梦：「你好。」');
+    expect(preview.diffText).toContain('+灵梦：「「你好。」」');
     expect(preview.diffText).toContain('-角色: 灵梦');
     // diff 摘要与计数同源：removed 条数 = 被改写的旧行数
     expect(preview.diff.filter((line) => line.kind === 'removed')).toHaveLength(3);
@@ -610,7 +610,7 @@ describe('迁移预览：core 分类 + 改写 + diff 摘要，且没有写盘通
       speaker: '灵梦',
     });
     expect(withSpeaker.ok).toBe(true);
-    expect(withSpeaker.code).toBe('灵梦：「你好。」\n');
+    expect(withSpeaker.code).toBe('灵梦：「「你好。」」\n');
     expect(withSpeaker.changedLineCount).toBe(1);
   });
 
@@ -673,3 +673,4 @@ describe('迁移预览：core 分类 + 改写 + diff 摘要，且没有写盘通
     expect(preview).toEqual(previewKojo2Migration({ filePath: KOJO_FILE, source: V1_BASIC }));
   });
 });
+

@@ -2305,33 +2305,55 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
   while (included.length > 0 && included[included.length - 1]!.blank) included.pop();
   const base = baseIndent === Number.POSITIVE_INFINITY ? 0 : baseIndent;
   const lines: string[] = [];
+  const lineColumns: number[] = [];
   for (let i = 0; i < included.length; i++) {
     const child = included[i]!;
     if (child.blank) {
-      lines.push('');
+      // §8.5「空行原样保留」压过 §C2.10 规则 4「归一为空行」：`@原生` 是字节逃生舱，
+      // 纯空白行里的缩进空白也是作者的字节，归一为空行会静默丢字节（硬判据：字节零丢失）。
+      // 原文 = 物理行全文（不含 EOL，EOL 由产物侧按 §10.4 统一）；视图文本 = 物理行，
+      // 所以起点列只能是 1（折回恒等），纯空白行没有"第一个内容字符"可报。
+      lines.push(child.raw);
+      lineColumns.push(1);
       continue;
     }
-    lines.push(dedentNative(child.raw, base));
+    const dedented = dedentNative(child.raw, base);
+    lines.push(dedented.text);
+    // `lineColumns[i]` = 去缩进后行首码元在物理行里的 1 基列 = 被剥掉的码元数 + 1
+    // （残余的相对缩进仍属于行文本，不另算"内容起点"）。
+    lineColumns.push(dedented.removed + 1);
   }
-  return { kind: 'nativeBlock', lines, span: blockSpan(st, line) };
+  return { kind: 'nativeBlock', lines, lineColumns, span: blockSpan(st, line) };
 }
 
-function dedentNative(raw: string, base: number): string {
+/**
+ * 按**缩进宽度**剥前导空白；返回去缩进文本 + 被剥掉的**码元数**。
+ *
+ * 尺子与 `kojo-sugar/blank-charset.ts::indentLevelOf` 同一套（core 不能 import 插件包，
+ * 单向依赖 ⇒ 这里只复刻**宽度**定义，由测试钉住逐值相等）：半角空格 = 1、Tab = 4、
+ * 全角空格 U+3000 = 2，4 宽 = 1 级。`base` 来自 lexer 的 `indentWidth`（只数空格/Tab），
+ * 所以全角空格只可能在不再是行首缩进的位置出现：剥到 `base` 即停，绝不把一个字切成两半。
+ */
+function dedentNative(raw: string, base: number): { readonly text: string; readonly removed: number } {
   let width = 0;
   let i = 0;
   while (i < raw.length) {
     const c = raw.charCodeAt(i);
     if (c === 32) {
       if (width + 1 > base) break;
-      width++;
+      width += 1;
       i++;
     } else if (c === 9) {
       if (width + 4 > base) break;
       width += 4;
       i++;
+    } else if (c === 0x3000) {
+      if (width + 2 > base) break;
+      width += 2;
+      i++;
     } else break;
   }
-  return raw.slice(i);
+  return { text: raw.slice(i), removed: i };
 }
 
 /* ============================== 选项（待定 UI） ============================== */

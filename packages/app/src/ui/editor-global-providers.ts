@@ -107,6 +107,10 @@ import { installKojo2LanguageProviders } from '../monaco/kojo2-providers';
 // K2 batch-5：2.0 一键迁移 code action（纯逻辑 + Monaco 翻译层同在那一枚里）。
 // 宿主只注入"怎么落地"（同一条 `applyTextEdits`），本文件仍零游戏名词。
 import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
+// K2 batch-6：折叠区间（worker `folds`）与回车缩进（on-type，`\n` 触发）。
+// 折叠只多一条**动态** import（worker 客户端仍在第一次真折叠时才装载），缩进是纯判据 + 一枚 provider。
+import { installKojo2FoldingProvider } from '../monaco/kojo2-folding';
+import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   SIGNATURE_LOOKBACK_LINES,
@@ -1546,6 +1550,13 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
           },
         }),
       );
+      // K2 batch-6：折叠区间（worker 的 `folds` 查询 → 1 基 `FoldingRange`）与回车缩进
+      // （on-type formatter，`\n` 触发；判据 = core 词法的结构判据，见 `monaco/kojo2-indent.ts`）。
+      // 两枚都只认 `kojo2` 语言 id，且各自再挡一次 flag（导出函数，可能被别的入口直接调用）：
+      // 折叠在 worker 不可用 / 超时 / `folds.scm` 缺席时回 `[]`（不抛、不写 markers）；
+      // 缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
+      globalDisposers.push(installKojo2FoldingProvider(monaco));
+      globalDisposers.push(installKojo2IndentProvider(monaco));
     }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *

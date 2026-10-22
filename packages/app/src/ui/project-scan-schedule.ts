@@ -49,6 +49,7 @@ import {
   type ProjectScannerDeps,
   type ScanContributor,
 } from './project-diagnostics';
+import type { Kojo2ProjectPassOptions } from './kojo2-project-analysis';
 import {
   clearProjectScan,
   rescanPendingCount,
@@ -101,6 +102,14 @@ export interface MountProjectScanOptions {
   isTyping?: () => boolean;
   /** 覆盖读数之外的另一句人话（列举整批读炸这种"本轮失败"以外的降级） */
   onNotice?: (message: string) => void;
+  /**
+   * Kojo 2.0 项目级分析的装配面（**additive**；缺省 = 不跑）。
+   *
+   * 生产由宿主经 `installKojo2ProjectScan()` 注入（惰性 adapter，不进开机静态图）；
+   * 本模块只**原样透传**给采集器（`scannerDeps`），不读它的字段、不另立默认值——
+   * 启用判据 / adapter 形态 / 降级口径都归 `kojo2-project-analysis`。
+   */
+  kojo2Project?: Kojo2ProjectPassOptions;
 }
 
 export interface ProjectScanHandle {
@@ -230,6 +239,8 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       pendingRescanCount: () => rescanPendingCount(),
       yieldBetween: () => kernel.compute.yieldToMain(),
       maxFiles: SCAN_MAX_FILES_PER_RUN,
+      // 原样透传：装配面缺席 ⇒ 采集器连 `.kojo2` 判据都不调（v1 行为逐字不变）
+      ...(opts.kojo2Project === undefined ? {} : { kojo2Project: opts.kojo2Project }),
     };
   }
 

@@ -73,9 +73,11 @@ describe('kojo2 source map 模型 · 真 core 编译 fixture', () => {
 
     const nativeLine = generatedLineOf('; raw 🧵 line');
     expect(MODEL.lineAt(nativeLine)?.kind).toBe('native');
+    // `@原生` 的映射自 batch-6 起是**物理列**：源行 `    ; raw …` 的内容从第 5 列起，
+    // 产物去掉了 4 格基准缩进 ⇒ 产物第 1 列对应源第 5 列。
     expect(MODEL.generatedToKojo({ line: nativeLine, column: 1 })).toEqual({
       line: sourceLineOf('; raw 🧵 line'),
-      column: 1,
+      column: 5,
     });
 
     expect(MODEL.generatedToKojo({ line: 1, column: 1 })?.line).toBe(sourceLineOf('# 机 开场'));
@@ -113,18 +115,21 @@ describe('kojo2 source map 模型 · 双向映射与 UTF-16 列', () => {
     expect(back).toEqual({ line: sourceLine, column: afterEmoji });
   });
 
-  it('@原生 逐行透传：生成列与源列同构（含代理对，不按码点重算）', () => {
+  it('@原生 逐行透传：生成列按物理列平移（含代理对，不按码点重算）', () => {
     const sourceLine = sourceLineOf('; raw 🧵 line');
     const generatedLine = generatedLineOf('; raw 🧵 line');
-    // 源行有 4 空格缩进，但 @原生 映射是“去缩进后的物理行文本”，锚在第 1 列
-    expect(MODEL.kojoToGenerated({ line: sourceLine, column: 3 })).toEqual({
+    // 物理列口径：源行 4 格基准缩进被剥掉，内容从源第 5 列 / 产物第 1 列起；
+    // 段内逐码元平移 ⇒ 源第 7 列（`r`）对应产物第 3 列。
+    expect(MODEL.kojoToGenerated({ line: sourceLine, column: 7 })).toEqual({
       line: generatedLine,
       column: 3,
     });
     expect(MODEL.generatedToKojo({ line: generatedLine, column: 3 })).toEqual({
       line: sourceLine,
-      column: 3,
+      column: 7,
     });
+    // 缩进区（源第 1..4 列）不在映射段内 ⇒ 显式 undefined，不伪造列。
+    expect(MODEL.kojoToGenerated({ line: sourceLine, column: 3 })).toBeUndefined();
   });
 
   it('模板展开：定义行 ↔ 展开行往返；调用处经 origins 也能正向落到展开首行', () => {

@@ -52,6 +52,15 @@ jobs:
       - name: Decoupling audit
         run: pnpm audit:decoupling
 
+      # K2-RELEASE-CI（设计稿 §16.10 R9.6）：发布门槛**快速档**——双 typecheck + 解耦审计 +
+      # conformance 一次成型，逐项读数 + 一条 `RESULT: PASS|FAIL`（rc 非 0 一律 FAIL）。
+      # --skip-tests：上面两池已各自跑过，同一笔账不付两遍。
+      # 不加 --shell / --corpus：桌面壳冒烟与真实语料集成需要桌面会话 + 本机游戏目录，
+      # CI 上属于「没得跑」而非「跑挂了」——release-gate 把这两类记为 SKIP 并写明原因，
+      # 不判红（口径见 `node tools/release-gate.mjs --help`）。本步不下载任何额外工具。
+      - name: Release gate（快速档 · R9.6 机器面）
+        run: node tools/release-gate.mjs --skip-tests
+
   # Rust 侧（Tauri 宿主 IO 原语）独立并行闸：不塞进 verify 前面拖慢它。
   # 本机基线 2026-10-17 实测：128 tests（123 passed / 5 ignored）。
   rust:
@@ -77,3 +86,18 @@ jobs:
       # 且与 AGENTS.md §三 验证矩阵口径一致。
       - name: cargo test --lib
         run: node -e "require('child_process').execSync('cargo test --lib',{cwd:'packages/app/src-tauri',stdio:'inherit'})"
+
+# ── 夜间 / 发版前置（**建议，未启用**；故只留注释，不占 CI 分钟）──────────────────
+# 快速档已进 verify；全量档的价值是把 `--json` 报告**留档**（逐项 rc/ms/readings/tail 可回溯）。
+# 接线方式（不改现有 job，只在需要时新增并行 job）：
+#   1) `on:` 加 `schedule: [{ cron: '0 19 * * *' }]`（UTC 19 = 北京 03）或 `workflow_dispatch:`；
+#   2) 新 job `gate-full`（runs-on: windows-latest）步骤照抄 verify 的 checkout /
+#      Remove local .npmrc / Setup pnpm / Setup node / Install dependencies；
+#   3) 跑全量并落盘：`node tools/release-gate.mjs --json > release-gate.json`
+#      （全量 = 双 typecheck + audit + conformance + 两池；不加 --shell / --corpus：
+#        CI 无桌面会话、无真实语料，这两项来了也只会 SKIP 并记原因）；
+#   4) `actions/upload-artifact@v4`（name: release-gate，path: release-gate.json，retention-days: 30）。
+# 发版前置同理：release.yml 只在 tag 上跑发布构建（本批红线：只动 ci.yml），
+# 真要卡发版就把发布 job 的 `needs:` 指到一条 gate-full 上，而不是在这里复制发布逻辑。
+# 暂不启用的理由：全量含两池（与 verify 重复约 10 分钟），且 `--shell` / `--corpus`
+# 需要自托管 runner 才有桌面会话与语料；先观察一段定时全量的稳定性再转正。
