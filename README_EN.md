@@ -140,7 +140,8 @@ contribution workflow in [AGENTS.md](AGENTS.md).
 | v0.3          | .kojo language end-to-end (edit, compile, save)                    | ✅              |
 | v0.4.0-beta.1 | Save loop · file watching · auto-update · settings · packaging     | ✅              |
 | v0.4.1        | Kojo market · condition matrix · syntax reference · completion + performance | ✅              |
-| v0.4.2-beta.1 | eraAkumaMaid adapter · tree-sitter syntax layer · editor feel batch · ERB language service · search/completion · split & navigation | 🧪 Pre-release (current) |
+| v0.4.2-beta.1 | eraAkumaMaid adapter · tree-sitter syntax layer · editor feel batch · ERB language service · search/completion · split & navigation | 🧪 Pre-release |
+| v0.4.2-beta.2 | Kojo 2.0 track (off by default) · ERB structural folding · undo stack never cleared · find state persists · read-only & EOL truth · updater honors proxy | 🧪 Pre-release (current) |
 
 ## Feedback
 
