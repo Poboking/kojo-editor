@@ -2,12 +2,15 @@
  * Kojo 2.0 的**打字期结构增强层**（K2-FOLD-INDENT 批起，K2-INDENT-BRACKETS 批扩到括号）：
  * - `kojo2IndentAfterLine(text, line)` 回车缩进纯判据；
  * - `kojo2AutoCloseGuardEditsAt(model, position, trigger)` 围栏内自动闭合守卫；
- * - 一枚 on-type formatter 承接两条腿（触发字符 `\n` + 成对记号的开括号）。
+ * - 一枚 on-type formatter 承接两条腿（触发字符 `\n` + 成对记号的开括号）；
+ * - `installKojo2IndentConfigFromWorker(monaco, { getClient })`：把 worker 的 `indents` 回复
+ *   经 `kojo2IndentConfigWith` 真正送进 `setLanguageConfiguration`（K2-INDENT-WIRE 批）。
  *
  * ## 与 `queries/v2/indents.scm` 的分工（K2-INDENT-BRACKETS 之后）
  *
  * 那份查询**已经有真捕获**（`@indent.increase` / `@indent.align`），worker 把它翻成宿主的
- * `KojoStructureIndentRules` 三条腿（`kojo2-worker.ts::indentRulesFromCaptures`）——但那是
+ * `KojoStructureIndentRules` 三条腿（`kojo2-worker.ts::indentRulesFromCaptures`），宿主侧
+ * 由 `installKojo2IndentConfigFromWorker` 合并进语言配置（只加不撤）——那是
  * **静态规则**：Monaco 的 `onEnterRules` / `indentationRules` 只拿得到"当前行文本"，看不到
  * "这一行在不在 `@原生` 围栏里"，也拿不到"缩进是否在 4 空格栅格上"。回车这一面因此保留
  * **上下文判据**：判型只消费 core 的词法结果（`lex()` 的 `kind` / `word` / `indent`），
@@ -62,6 +65,10 @@
  * 围栏内自动闭合这条守卫因此也有上限：`formatOnType` 关掉的作者仍会在围栏里拿到自动闭合
  * （语言配置没有围栏上下文，`notIn` 只认 `string` / `comment` / `regex`）。
  *
+ * {@link installKojo2IndentConfigFromWorker} 不注册 provider（Monaco 没有"缩进规则
+ * provider"接口），只持有 `setLanguageConfiguration` 的账：挂点是 `kojo2-semantic.ts` 的
+ * 安装器，语义着色**成功**拿到捕获之后惰性触发（见本文件「结构规则 → 语言配置」段）。
+ *
  * 失败面：判不准 / 模型已释放 / 词法抛错 ⇒ `[]`（一个字符都不改），绝不抛进 Monaco。
  */
 import type * as Monaco from './entry';
@@ -74,7 +81,11 @@ import {
   type BaseIndentPatterns,
   type MergedIndentConfig,
 } from './tree-sitter/indent';
-import type { Kojo2IndentRules } from './tree-sitter/kojo2-worker-protocol';
+import type {
+  Kojo2IndentRules,
+  Kojo2IndentsReply,
+  Kojo2WorkerResult,
+} from './tree-sitter/kojo2-worker-protocol';
 import {
   KOJO_DECL_WORDS,
   KOJO_DISPATCH_WORDS,
@@ -406,13 +417,353 @@ const KOJO2_BASE_INDENT: BaseIndentPatterns = (() => {
  * 行尾全角冒号），结构层规则只**加**在后面；`null` = worker 没给规则 / 全空 ⇒ 宿主不重发
  * 语言配置（与 v1 `syncIndentConfig` 同口径，空规则 = 一个字都不发）。
  *
- * 纯函数、零注册：调用点在宿主（`ui/editor-global-providers.ts` 的 2.0 段）而不是本文件。
- * 接线请求见本文件头「注册」与 `kojo2-format.ts` 的 `installKojo2RangeFormatter` 注释。
+ * 纯函数、零注册：接线在 {@link installKojo2IndentConfigFromWorker}（宿主挂点是
+ * `kojo2-semantic.ts` 的安装器：语义着色成功拿到捕获之后惰性触发）。
  */
 export function kojo2IndentConfigWith(
   rules: Kojo2IndentRules | null | undefined,
 ): MergedIndentConfig | null {
   return mergeIndentConfig(KOJO2_BASE_INDENT, rules);
+}
+
+/* ============================== 结构规则 → 语言配置（K2-INDENT-WIRE） ============================== */
+
+/**
+ * 三条腿各自的规则上限。
+ *
+ * 规则按**语言**累积（`setLanguageConfiguration` 是语言级的，不是文档级的）：一篇文档的
+ * `# 表` 与另一篇的 `# 池` 都该进同一份配置，否则"打开 A 再打开 B"会把 A 的块头规则弄丢。
+ * 但累积必须有界——词形家族只有十几枚，128 已比现实宽一个量级；病态文档（真词表外的一堆
+ * 伪块头）不许把语言配置撑爆。
+ */
+export const KOJO2_INDENT_CONFIG_MAX_PATTERNS = 128;
+
+/**
+ * 缩进规则来源（worker 客户端的最小依赖面；真 `Kojo2WorkerClient` 与测试替身都满足）。
+ *
+ * `indents` 是**可选**的：只买语义面的替身 / 老客户端没有这一格 ⇒ 本层零改动
+ * （不是"发一条空规则"，是一条都不发）。
+ */
+export interface Kojo2IndentRulesSource {
+  indents?(
+    text: string,
+    version: number,
+    oldTreeId?: string,
+  ): Promise<Kojo2WorkerResult<Kojo2IndentsReply>>;
+}
+
+/** 依赖注入缝（测试用；生产全部走缺省） */
+export interface Kojo2IndentConfigDeps {
+  /**
+   * 取 worker 客户端（缺省 = 动态 import `kojo2-worker-runtime` 的单例）。
+   * 动态 import 让**主线程静态图里连薄客户端都不出现**：flag 关 / 没人要结构层时，
+   * `?worker` 入口与协议模块一个字节都不装载。
+   */
+  readonly getClient?: () => Kojo2IndentRulesSource | null | Promise<Kojo2IndentRulesSource | null>;
+  /** 一次性告警出口（缺省 `console.warn`；测试可收账） */
+  readonly warn?: (message: string) => void;
+}
+
+/**
+ * 结构规则 → 语言配置的**句柄**（不注册 provider：本层只持有 `setLanguageConfiguration`
+ * 的那一枚 disposable）。
+ */
+export interface Kojo2IndentConfigHandle {
+  /**
+   * 惰性触发一轮（宿主在**语义着色 provider 成功拿到捕获之后**调它；同一 model 同一版本
+   * 只发一次 worker 请求）。返回 Promise 只为可单测——宿主 `void` 掉即可。
+   *
+   * `oldTreeId` = 语义着色那一轮刚解出来的树号：worker 的查询请求带它就能直接查（文本逐字
+   * 相同 ⇒ 不重解），不带也能跑（worker 会自己解一棵）。这是**省一次 parse** 的增量，
+   * 不是正确性前提。
+   */
+  request(model: Monaco.editor.ITextModel, oldTreeId?: string): Promise<boolean>;
+  /** `request` 的别名（同一条队列；导出只为可读的调用点） */
+  applyFor(model: Monaco.editor.ITextModel, oldTreeId?: string): Promise<boolean>;
+  /** 幂等：撤掉本层写过的语言配置，之后不再发请求 / 不再写配置 */
+  dispose(): void;
+}
+
+/**
+ * 缺省客户端：懒到第一次真请求才把 worker 模块拉进来（与 `kojo2-semantic.ts` 同一条惰性口径）。
+ */
+async function defaultIndentWorkerClient(): Promise<Kojo2IndentRulesSource | null> {
+  const module = await import('./tree-sitter/kojo2-worker-runtime');
+  return module.getKojo2WorkerClient();
+}
+
+/** 规则腿的运行时兜底：只留非空字符串（假客户端 / 版本错位都不许把配置写坏） */
+function readRuleLeg(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const pattern of value) {
+    if (typeof pattern === 'string' && pattern.length > 0) out.push(pattern);
+  }
+  return out;
+}
+
+/** 累积规则（三条腿各自去重 + 封顶；存量一条都不撤） */
+function absorbPatterns(target: Set<string>, patterns: readonly string[], limit: number): void {
+  for (const pattern of patterns) {
+    if (target.size >= limit) return;
+    target.add(pattern);
+  }
+}
+
+/**
+ * 造一枚"结构规则 → 语言配置"的同步器（**不注册任何 provider**）。
+ *
+ * ## 挂点为什么是"语义着色成功之后"
+ *
+ * Monaco 的 `setLanguageConfiguration` 是语言级的，但规则只能由 worker 在**某一篇文本**上
+ * 跑 `indents` 查询得到；而宿主手里唯一"每篇都过一遍、且已经证明 worker 可用"的位置，就是
+ * 语义着色 provider 的成功分支（`kojo2-semantic.ts`，它已经拿到 model + 版本号）。
+ * 于是：worker 不回复 / 查询缺席 ⇒ 着色那条链先降级，本层连请求都不会发 ⇒ **零改动**。
+ *
+ * ## 纪律（每一条都有对应测试）
+ *
+ * - **只交两个属性**：`onEnterRules` + `indentationRules`（property 级合并；注释 / 括号 /
+ *   `wordPattern` 一概不写 ⇒ 继续走 `kojo2LanguageConfiguration` 那一份）；
+ * - **同 key 只发一次**：key = `mergeIndentConfig` 的规则指纹（含基底两格）；同一份规则
+ *   第二次回复不再重写语言配置（每次重注册会让 Monaco 整批编辑器重算缩进）；
+ * - **规则按语言累积**：后开的文档只**加**自己那批块头词形，从不撤前一篇的；
+ * - **失败零改动**：worker 不可用 / 超时 / 查询缺席 / 回复坏形 / 取客户端抛错
+ *   ⇒ 不写配置，**也不撤**已有配置（旧配置继续生效）；
+ * - **同一 model 同一版本只问一次**（Monaco 停笔 / 滚动会反复重问 provider）；
+ * - **不抛进 Monaco**：所有异常只让这一轮不写配置；
+ * - {@link Kojo2IndentConfigHandle.dispose} 幂等：只撤一次自己写过的那枚配置。
+ *
+ * flag 关 ⇒ 交回的句柄什么都不做（零请求、零配置，见 {@link installKojo2IndentConfigFromWorker}）。
+ */
+export function createKojo2IndentConfigSync(
+  monaco: typeof Monaco,
+  deps: Kojo2IndentConfigDeps = {},
+): Kojo2IndentConfigHandle {
+  const getClient = deps.getClient ?? defaultIndentWorkerClient;
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
+  const warned = new Set<string>();
+  /** 语言级累积（三条腿各自去重 + 封顶） */
+  const increase = new Set<string>();
+  const enter = new Set<string>();
+  const decrease = new Set<string>();
+  /** model → 已经问过的版本号（同版本不重发请求） */
+  const requested = new WeakMap<Monaco.editor.ITextModel, number>();
+  /** 已写进语言配置的规则指纹（`MergedIndentConfig.key`） */
+  let appliedKey: string | null = null;
+  /** 本层写过的那枚语言配置的 disposable（只撤自己写的那一份） */
+  let registration: Monaco.IDisposable | null = null;
+  /** 一条队列：两条回复并发时，"后写的那份"必须包含"先写的那份"（语言配置不能倒退） */
+  let tail: Promise<void> = Promise.resolve();
+  let disposed = false;
+
+  const warnOnce = (key: string, message: string): void => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    try {
+      warn(message);
+    } catch {
+      /* 告警出口自己炸了不该把本层带下水 */
+    }
+  };
+
+  const serialize = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = tail.then(task, task);
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
+  const versionOf = (model: Monaco.editor.ITextModel): number => {
+    try {
+      const version = model.getVersionId();
+      return typeof version === 'number' && Number.isFinite(version) ? Math.trunc(version) : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  /** 只交 `onEnterRules` + `indentationRules`（两个属性，property 级合并） */
+  const writeConfig = (merged: MergedIndentConfig): Monaco.IDisposable | null => {
+    let result: Monaco.IDisposable | undefined;
+    try {
+      result = monaco.languages.setLanguageConfiguration(KOJO2_LANGUAGE_ID, {
+        onEnterRules: merged.onEnterRules.map((rule) => ({
+          beforeText: rule.beforeText,
+          action: { indentAction: monaco.languages.IndentAction.Indent },
+        })),
+        indentationRules: {
+          increaseIndentPattern: merged.increaseIndentPattern,
+          decreaseIndentPattern: merged.decreaseIndentPattern,
+          // 基底这两格是"整对象替换"里最容易被顺手撤掉的部分：原样带出（2.0 基底没有 ⇒ 不写）
+          ...(merged.indentNextLinePattern === undefined
+            ? {}
+            : { indentNextLinePattern: merged.indentNextLinePattern }),
+          ...(merged.unIndentedLinePattern === undefined
+            ? {}
+            : { unIndentedLinePattern: merged.unIndentedLinePattern }),
+        },
+      });
+    } catch (error: unknown) {
+      // 写不进去 = 这一轮零改动（旧配置还在：registration 只在写成功之后才换）
+      warnOnce(
+        `write:${error instanceof Error ? error.message : String(error)}`,
+        `[kojo2-indent] 无法写语言配置（本轮保持原样，编辑器不受影响）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+    if (result !== null && typeof result === 'object' && typeof result.dispose === 'function') {
+      return result;
+    }
+    // 桩 Monaco / 老版本可能不交 disposable：本层没有可撤的账，给一枚空句柄占位
+    return { dispose: () => undefined };
+  };
+
+  const applyOnce = async (
+    model: Monaco.editor.ITextModel,
+    oldTreeId?: string,
+  ): Promise<boolean> => {
+    if (disposed) return false;
+    if (typeof model.isDisposed === 'function' && model.isDisposed()) return false;
+    // 只服务 2.0 语言：`setLanguageConfiguration` 会改**整门语言**的缩进手感，认错语言就是事故
+    const languageId = typeof model.getLanguageId === 'function' ? model.getLanguageId() : KOJO2_LANGUAGE_ID;
+    if (languageId !== KOJO2_LANGUAGE_ID) return false;
+    let text: string;
+    try {
+      text = model.getValue();
+    } catch {
+      return false; // 模型已释放 / 桩 model 取不到文：一个字都不改
+    }
+    if (typeof text !== 'string' || text.trim().length === 0) return false;
+
+    let client: Kojo2IndentRulesSource | null;
+    try {
+      client = await getClient();
+    } catch (error: unknown) {
+      warnOnce(
+        `client:${error instanceof Error ? error.message : String(error)}`,
+        `[kojo2-indent] 取不到结构 worker（本轮不写缩进配置，原有回车规则不变）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+    if (disposed) return false;
+    if (client === null || client === undefined) return false;
+    const indents = client.indents;
+    // 只买语义面的客户端 / 老替身没有这一格 ⇒ 本层零改动（一条规则都不发）
+    if (typeof indents !== 'function') return false;
+
+    let reply: Kojo2WorkerResult<Kojo2IndentsReply>;
+    try {
+      // `oldTreeId` = 语义着色刚解出来的那棵树：worker 文本逐字相同 ⇒ 直接查，不重解
+      reply = await indents.call(client, text, versionOf(model), oldTreeId);
+    } catch (error: unknown) {
+      warnOnce(
+        `request:${error instanceof Error ? error.message : String(error)}`,
+        `[kojo2-indent] indents 请求抛错（本轮不写缩进配置）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+    if (disposed) return false;
+    if (reply === null || typeof reply !== 'object' || reply.ok !== true) {
+      const reason = reply !== null && typeof reply === 'object' && 'reason' in reply ? String(reply.reason) : 'unknown';
+      warnOnce(
+        `worker:${reason}`,
+        `[kojo2-indent] 结构层没有给出缩进规则（${reason}）⇒ 保持既有语言配置不变`,
+      );
+      return false;
+    }
+    if (reply.value.type !== 'indents') return false;
+
+    const rules = reply.value.rules as Partial<Kojo2IndentRules> | null | undefined;
+    absorbPatterns(increase, readRuleLeg(rules?.increasePatterns), KOJO2_INDENT_CONFIG_MAX_PATTERNS);
+    absorbPatterns(enter, readRuleLeg(rules?.enterPatterns), KOJO2_INDENT_CONFIG_MAX_PATTERNS);
+    absorbPatterns(decrease, readRuleLeg(rules?.decreasePatterns), KOJO2_INDENT_CONFIG_MAX_PATTERNS);
+
+    const merged = kojo2IndentConfigWith({
+      increasePatterns: [...increase].sort(),
+      decreasePatterns: [...decrease].sort(),
+      enterPatterns: [...enter].sort(),
+    });
+    // `null` = 这份文档没有开体行（基底一条都在，但基底已经由语言注册写过了）⇒ 不重发
+    if (merged === null) return false;
+    if (merged.rejected > 0) {
+      warnOnce(
+        `rejected:${merged.rejected}:${merged.key}`,
+        `[kojo2-indent] 结构层给了 ${merged.rejected} 条非法正则 ⇒ 这几条丢掉，其余规则照常生效`,
+      );
+    }
+    if (merged.key === appliedKey) return false;
+
+    const next = writeConfig(merged);
+    if (next === null) return false;
+    const previous = registration;
+    registration = next;
+    appliedKey = merged.key;
+    // 新配置已经生效，才撤旧的那一枚（property 级合并：撤旧不会把新配置带走）
+    try {
+      previous?.dispose();
+    } catch {
+      /* 旧注册自己炸了：新配置已经生效，不影响结论 */
+    }
+    return true;
+  };
+
+  const request = (model: Monaco.editor.ITextModel, oldTreeId?: string): Promise<boolean> => {
+    if (disposed) return Promise.resolve(false);
+    if (model === null || typeof model !== 'object') return Promise.resolve(false);
+    const version = versionOf(model);
+    if (requested.get(model) === version) return Promise.resolve(false);
+    requested.set(model, version);
+    return serialize(() => applyOnce(model, oldTreeId).catch(() => false));
+  };
+
+  return {
+    request,
+    applyFor: request,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      const current = registration;
+      registration = null;
+      appliedKey = null;
+      try {
+        current?.dispose();
+      } catch {
+        /* 撤注册失败不改结论：编辑器正在关，配置随语言服务一起走 */
+      }
+    },
+  };
+}
+
+/** flag 关时交回的句柄（调用方照常 `request` / `dispose`，什么也不会发生） */
+function noopIndentConfigHandle(): Kojo2IndentConfigHandle {
+  const never = (): Promise<boolean> => Promise.resolve(false);
+  return { request: never, applyFor: never, dispose: () => undefined };
+}
+
+/**
+ * 宿主挂点：把 worker `indents` 回复经 {@link kojo2IndentConfigWith} 送进
+ * `setLanguageConfiguration('kojo2', { onEnterRules, indentationRules })`。
+ *
+ * **不注册 provider**（所以 flag 关时天然"零注册"）；宿主在语义着色 provider 成功拿到捕获
+ * 之后调 `request(model)` 惰性触发（挂点在 `kojo2-semantic.ts` 的 `install` 里）。
+ *
+ * 为什么不做成 provider：Monaco 没有"缩进规则 provider"接口，规则只能写进语言配置；
+ * 而语言配置是语言级的——本函数因此只持有那一枚 disposable 的账。
+ */
+export function installKojo2IndentConfigFromWorker(
+  monaco: typeof Monaco,
+  deps: Kojo2IndentConfigDeps = {},
+): Kojo2IndentConfigHandle {
+  if (!isKojo2CutoverEnabled()) return noopIndentConfigHandle();
+  return createKojo2IndentConfigSync(monaco, deps);
 }
 
 /**

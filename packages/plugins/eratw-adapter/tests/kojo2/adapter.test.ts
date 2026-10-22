@@ -31,14 +31,18 @@ import {
   ERATW_DOMAIN_SYMBOLS,
   ERATW_EVENT_CATALOG,
   ERATW_EVENT_NAMES,
+  ERATW_FACE_ARGUMENT_NAMES,
   ERATW_FOREACH_COLLECTIONS,
   ERATW_FOREACH_DECLARATIONS,
   ERATW_GAME_ADAPTER,
   ERATW_GAME_FINGERPRINT,
+  ERATW_HEART_HINT,
+  ERATW_HINT_NAMES,
   ERATW_PRESENTATION,
   ERATW_PROFILE,
   ERATW_PROGRAM_FEATURES,
   ERATW_STORAGE_CLASSES,
+  createEratwEmitBackend,
 } from '../../src/kojo2/index.js';
 
 /** 附录 B.1 的九事件（中文名 → 引擎事件）——测试侧独立抄一份**期望值**，防数据侧漂移 */
@@ -313,6 +317,50 @@ describe('eraTW adapter：演出面（与既有库表对齐）', () => {
     const faceTable = createEratwFaceTable();
     expect(Object.keys(faceTable.faces).length).toBeGreaterThan(0);
     expect(faceTable.playerColor).toBeTruthy();
+  });
+});
+
+describe('eraTW adapter：2.0 补全数据（K2-COMPLETE-DATA，additive）', () => {
+  const SPAN = { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } } as const;
+  const backend = createEratwEmitBackend({ compileExpression: (expr) => expr.text });
+
+  it('表情格 = adapter 的默认表情（同一枚数据派生，不抄第二份）', () => {
+    const names = ERATW_PRESENTATION.faceTemplates?.expressions ?? [];
+    expect([...names]).toEqual([ERATW_PRESENTATION.face?.defaultExpression]);
+    expect(names.length).toBeGreaterThan(0);
+    expect(ERATW_FACE_ARGUMENT_NAMES.expressions).toEqual(names);
+  });
+
+  it('后端省略表情时补的那一枚，就是补全给出的表情（产物与候选对拍）', () => {
+    const expression = ERATW_FACE_ARGUMENT_NAMES.expressions?.[0];
+    expect(expression).toBeDefined();
+    expect(backend.presentation.face({ object: 'me', args: [], span: SPAN })).toBe(
+      `CALL PRINT_FACE, TARGET, \"${expression}\"`,
+    );
+  });
+
+  it('服装 / 差分 / 特效：v1 没有词表 ⇒ 不登记（缺省 = 零候选，宁缺勿编）', () => {
+    expect(Object.keys(ERATW_PRESENTATION.faceTemplates ?? {})).toEqual(['expressions']);
+    expect(ERATW_PRESENTATION.faceTemplates?.costumes).toBeUndefined();
+    expect(ERATW_PRESENTATION.faceTemplates?.differentials).toBeUndefined();
+    expect(ERATW_PRESENTATION.faceTemplates?.effects).toBeUndefined();
+  });
+
+  it('行尾提示名 = `hintSupport` 认得的同一枚（行为对拍，不是第二张表）', () => {
+    const names = ERATW_PRESENTATION.hintNames ?? [];
+    expect([...names]).toEqual([ERATW_HEART_HINT]);
+    expect(ERATW_HINT_NAMES).toEqual(names);
+    for (const name of names) expect(backend.hintSupport(name)).toBe('supported');
+    expect(backend.hintSupport('微笑')).toBe('annotation');
+  });
+
+  it('数据挂在 adapter 上、深冻结、契约自检仍全绿', () => {
+    expect(validateGameAdapter(ERATW_GAME_ADAPTER)).toEqual([]);
+    expect(ERATW_GAME_ADAPTER.presentation.faceTemplates).toBe(ERATW_FACE_ARGUMENT_NAMES);
+    expect(ERATW_GAME_ADAPTER.presentation.hintNames).toBe(ERATW_HINT_NAMES);
+    expect(Object.isFrozen(ERATW_GAME_ADAPTER.presentation.faceTemplates)).toBe(true);
+    expect(Object.isFrozen(ERATW_GAME_ADAPTER.presentation.faceTemplates?.expressions)).toBe(true);
+    expect(Object.isFrozen(ERATW_GAME_ADAPTER.presentation.hintNames)).toBe(true);
   });
 });
 

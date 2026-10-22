@@ -118,7 +118,9 @@ import { installKojo2DocumentSymbolProvider } from '../monaco/kojo2-symbols';
 import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
 // K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
 // 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、各自再挡 flag，且安装器内零 IO。
-import { installKojo2ReferenceProvider } from '../monaco/kojo2-references';
+import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references';
+import { createKojo2ProjectIndex } from '../monaco/kojo2-project-index';
+import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-language';
 import { installKojo2RenameProvider } from '../monaco/kojo2-rename';
 import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
 import { installKojo2InlayHintsProvider } from '../monaco/kojo2-inlay';
@@ -140,6 +142,9 @@ import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-com
 import type { ErbFileFactsProvider } from '../monaco/completion-core';
 import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
 import { createApplyToClosedFile, installErbRename } from '../monaco/erb-rename';
+// K2 batch-9：ERB 的同符号高亮与结构化扩选（两语言同权面；只挂 `kojo-erb`）。
+import { installErbHighlightProvider } from '../monaco/erb-highlight';
+import { installErbSelectionRangeProvider } from '../monaco/erb-selection-range';
 import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
 import { installKojoRename } from '../monaco/kojo-rename';
 import { installImplementationProvider } from '../monaco/erb-implementation';
@@ -157,6 +162,20 @@ import {
 } from './editor-pane-registry';
 import { sourceLineToSugar } from './sugar-view';
 import { loadWordBasedSuggestionsPref } from './suggest-pref';
+
+/**
+ * 2.0 项目级符号索引（K2-INDEX-REFS）：引用面与将来的跨文件重命名/调用层级共用这一份。
+ *
+ * 宿主（项目扫描 / 打开中 model 变更）经 {@link kojo2ProjectIndexUpdate} 喂养；
+ * **空索引合法**——引用面自动退回同文件行为（不猜、不报错）。
+ */
+export const kojo2ProjectIndex = createKojo2ProjectIndex();
+
+/** 喂一份文件给项目索引（`text === null` = 文件删除/离开项目） */
+export function kojo2ProjectIndexUpdate(path: string, text: string | null): void {
+  if (text === null) kojo2ProjectIndex.removeFile(path);
+  else kojo2ProjectIndex.updateFile({ path, text });
+}
 
 /** CodeAction 执行命令 id（宿主统一注册一次；command 参数为 pendingActionsRef 的反查 key） */
 const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
@@ -1578,9 +1597,16 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));
       globalDisposers.push(installKojo2DocumentFormatter(monaco));
       // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。补全的事件参数形状
-      // 在 `kojo2-providers` 里由 adapter 的 `eventCatalog` 现投影（本层仍零游戏名词）；
-      // `faceTemplates` / `hintNames` 暂无 adapter 生产者 ⇒ 不传（新候选位零候选，不猜）。
-      globalDisposers.push(installKojo2ReferenceProvider(monaco));
+      // 与 `faceTemplates` / `hintNames` 都在 `kojo2-providers` 里按 adapter 现取
+      //（本层仍零游戏名词；旧 adapter 缺字段 ⇒ 对应候选位零候选，不猜）。
+      // K2 batch-9：引用面换成**项目级**（`kojo2ProjectIndex` 由宿主喂；索引空时自动退回同文件）。
+      globalDisposers.push(
+        installKojo2ProjectReferenceProvider(monaco, {
+          getIndex: () => kojo2ProjectIndex,
+          pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
+          uriForPath: (path) => monaco.Uri.file(path),
+        }),
+      );
       globalDisposers.push(installKojo2RenameProvider(monaco));
       globalDisposers.push(
         installKojo2SignatureHelpProvider(
@@ -1610,6 +1636,66 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       globalDisposers.push(installKojo2HighlightProvider(monaco));
       globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
       globalDisposers.push(installKojo2RangeFormatter(monaco));
+      // K2 batch-9：把打开中的 `.kojo2` model 喂给项目索引（跨文件引用面要它）。
+      // 创建时立即入索引、内容变更 400ms 防抖后更新；本段 dispose 时全部摘监听并清空索引
+      //（索引是 module 单例，换工作区不许串数据）。取不到路径 / 取文抛错 ⇒ 这一篇不进索引。
+      const indexTimers = new Map<string, ReturnType<typeof setTimeout>>();
+      const indexListeners: { dispose: () => void }[] = [];
+      const feedIndexModel = (model: Monaco.editor.ITextModel): void => {
+        try {
+          const path = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
+          if (typeof path !== 'string' || path.length === 0) return;
+          kojo2ProjectIndexUpdate(path, model.getValue());
+          indexListeners.push(
+            model.onDidChangeContent(() => {
+              const previous = indexTimers.get(path);
+              if (previous !== undefined) clearTimeout(previous);
+              indexTimers.set(
+                path,
+                setTimeout(() => {
+                  indexTimers.delete(path);
+                  try {
+                    kojo2ProjectIndexUpdate(
+                      path,
+                      model.isDisposed() ? null : model.getValue(),
+                    );
+                  } catch {
+                    /* 索引只是增强面：取文失败就保持旧条目 */
+                  }
+                }, 400),
+              );
+            }),
+          );
+        } catch {
+          /* 桩 model / 取文失败：这一篇不进索引（引用面自动退回同文件） */
+        }
+      };
+      try {
+        for (const model of monaco.editor.getModels()) {
+          if (model.getLanguageId() === KOJO2_LANGUAGE_ID) feedIndexModel(model);
+        }
+        globalDisposers.push(
+          monaco.editor.onDidCreateModel((model) => {
+            if (model.getLanguageId() === KOJO2_LANGUAGE_ID) feedIndexModel(model);
+          }),
+        );
+      } catch {
+        /* 老桩 monaco 没有模型事件：索引留空（引用面仍可同文件工作） */
+      }
+      globalDisposers.push({
+        dispose: () => {
+          for (const listener of indexListeners) {
+            try {
+              listener.dispose();
+            } catch {
+              /* 逐枚隔离 */
+            }
+          }
+          for (const timer of indexTimers.values()) clearTimeout(timer);
+          indexTimers.clear();
+          for (const path of kojo2ProjectIndex.files()) kojo2ProjectIndex.removeFile(path);
+        },
+      });
     }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *
@@ -1697,6 +1783,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         return kojoReferencesViaSlot(kernel.slots.query('ui.editor.languageService'), kernel, probe);
       },
     }));
+    // K2 batch-9（ERB-HIGHLIGHT-SELECT）：ERB 侧同符号高亮 + 结构化扩选。
+    // 两枚都是**编辑器语言服务**，与结构层/2.0 开关无关（不进 `isKojo2CutoverEnabled()` 块），
+    // 只挂 `kojo-erb` 语言 id；安装器自身幂等、异常回空。
+    globalDisposers.push(installErbHighlightProvider(monaco));
+    globalDisposers.push(installErbSelectionRangeProvider(monaco));
     // 查找所有引用（R2，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别
     // 成员。宿主只做协议翻译——认活动标签的真 model（与转到定义逐字同判据）、问槽、
     // 把"未打开文件"那条腿的点击落回 `editor.revealLocation`（与转到定义同通道）。

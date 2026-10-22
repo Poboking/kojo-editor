@@ -38,7 +38,6 @@
 | K2-CUTOVER | 单批切换：app 接线/主题合并/`.kojo` 扩展名/退役旧解析器；**批次三先做预演（feature flag）** | 仓内无旧 golden/旧分支；全量测试不回退；发布态单一模式 | 批次三认领：lead（`K2-CUTOVER-PRE` 拆出） |
 | K2-PRE-REUSE | 旧后端复用面缺陷：①字面量编码器（心形 `@"…"`）②空产物守门被注释穿透 ③写后回读失败不回滚 ④诊断列折回物理行 ⑤CJK 函数头自证 | 每条红→绿用例；只修复用面；全量不回退 | 批次三认领：lead · 来源：语言实现审阅（workbuddy 注 2026-10-22：**②③⑤ 已由本组落 dev**＝`c11cb3d4` 注释穿透 / `08ac046d` 回读回滚 / `51eef191` CJK 函数头，回执与读数在各提交信息；**① 字面量编码器本组认领后遇 429 未开工**，④ 与 POS-UTIL 合流——①④ 留给 lead 批次三收口时定派） |
 | K2-RELEASE | R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真实工程人工验收 | P0 全完成；eraTW 完整体验；反向回滚可用 | 待认领 |
-| K2-MIGRATION-CORPUS | 仓内迁移语料 **29 份** + differential harness（52 tests）+ 语料回归（134 tests）+ `migrate-diff` CLI（含 `--generate-manifest` 骨架）已交付：双 golden **10/29（34.5%）**、迁移率 **27.9%**、`RESULT: PASS`（29 cases：normalized-equal 3 / differs 7 / blocked 19；CRLF/BOM 字节保真）；**未做**：真实语料机接入（`KOJO_MIGRATION_CORPUS_DIR` 已备，golden 需按真语料重生成） | 状态与 manifest 相符；golden 逐字节 | 部分交付 · 认领：lead 2026-10-22 |
 | K2-INCR-HOLES | 增量已知洞（收口后仍余）：`选项`/BOM 粘性永久全量；整份替换/改 `# 视` 仍整份重建（~200–300ms）；声明单元内编辑 55–75ms；槽族正则只覆盖 `rand/foreach`；构建期自检冷路径 ~300ms。已收口：结构行插入不再永久 degraded（退化判据细分 `lastUnmodelledReason`，25,200 步 fuzz 0 mismatch）、粘贴多行 185→20ms / 跨行删 195→19ms | 每次退化可见；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
 
 > **批次三并行说明（2026-10-21/22）**：17 路子 agent 按互不重叠写域推进（FOREACH/OPTIONS/EDITOR-WIRE/EDITOR-SEMANTIC/EDITOR-MIGRATE-UI/MIGRATE-SEMANTIC/CONFORMANCE/PERF-INCR/TS-RUNTIME/SOURCEMAP-HOST/STORAGE-HOST/CUTOVER-PRE，加接线 OPTIONS-WIRE/FOREACH-WIRE/EDITOR-HOOKUP，加 parser 健壮性修复）。组长统一收口、跑门、提交。完成行按协议删行，回执进提交信息。
@@ -66,12 +65,16 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 待认领 |
+| LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 批次九认领：lead 2026-10-22 |
 
 > **批次八（2026-10-22，已交付）**：12 路并行——ERB 树层全量 facets（indents/brackets/diagnostics/semantic）、ERB 成员补全、kojo2 引用/重命名/签名/inlay/code lens/高亮扩选/调用层级、缩进括号、补全补位、能力矩阵闸；组长接线 8 枚 provider + 补全注入 + ERB 结构诊断上屏。完成行已删，回执进提交正文。
 
-| K2-INDENT-WIRE | 结构层消费 `indents.scm`：`kojo2IndentConfigWith(reply.rules)` 接 `setLanguageConfiguration('kojo2', { onEnterRules, indentationRules })`（口径照 v1 `syncIndentConfig`，只交两属性）。当前真捕获已产出、宿主未消费 | 规则注入后回车层级与 on-enter 一致；`@原生` 内零规则 | 待认领 |
 | K2-LSP-CALLHIER-PANEL | Monaco 0.57 无 `registerCallHierarchyProvider`：宿主自建调用层级面板，消费 `createKojo2CallHierarchyProvider()`（纯模型已交付并测试） | 面板可展开同文件入/出边；`data` 可作跨文件键 | 待认领 |
-| K2-COMPLETE-DATA | 补全数据源：`faceTemplates`（`@颜绘` 表情/服装/差分）与 `hintNames`（`(心形)` 提示名）目前**无 adapter 生产者** ⇒ 新候选位恒空；需 adapter additive 字段或工程级数据 | 候选与 adapter 数据逐项对拍；不手抄词表 | 待认领 |
-| ERB-LSP-PARITY | ERB 同权补缺：ERB 侧仍无 `highlight` / `selection` / `callhierarchy` 三面（kojo2 已有）；同时 kojo2 `implementation` 无模块。补齐后两语言能力矩阵仅剩真实差异 | 两语言矩阵逐项要么都交付、要么有理由豁免 | 待认领 |
-| K2-LSP-CROSSFILE | 引用/重命名/调用层级跨文件：当前只覆盖同文件（项目索引批）；`kojo2-references` 的 `getIndex`、callhierarchy 的 `data` 已留口 | 跨文件结果可展开；上限/性能护栏 | 待认领 |
+
+> **批次九（2026-10-22，在办）**：9 路并行——ERB 两枚 provider 补齐、kojo2 跨文件引用/重命名/调用层级、项目索引、indents 规则消费、补全数据源、真实语料机、体感验收矩阵。provider 注册与矩阵改口由组长统一接线。
+
+
+| K2-INDEX-HOST-FEED | 项目索引的**完整喂养**：当前只喂"打开中的 model"（创建/内容变更 400ms 防抖）；项目扫描结果（未打开文件）与 rename/callhierarchy 的跨文件 resolver 尚未接 `kojo2ProjectIndex`（`declsOf`/`getFile().text`/`refsOf` 映射已在模块头写明） | 未打开文件也进索引；跨文件重命名/调用层级吃到同一份索引 | 待认领 |
+| K2-CORPUS-SOURCE | 真实语料机**没有输入**：本机 eraTW 4.980 基线是纯游戏盘（无 `.kojo`，递归发现 0 份）；`corpus` 工具已就绪（缺席 rc=2 / 0 份 rc=1 不当绿），需把 `KOJO_CORPUS_DIR` 指向含 v1 作者源的工程或迁移快照盘后再重生成 golden | 发现 ≥1 份 `.kojo` 且状态/原因分类可读 | 待认领 |
+
+> **批次九（2026-10-22，已交付）**：9 路并行——ERB 高亮/扩选、ERB 调用层级 provider、kojo2 项目索引+跨文件引用、跨文件重命名/调用层级纯 API、indents 规则消费、补全数据源（adapter 契约 + eraTW 真源）、真实语料机（`corpus` 子命令）、体感验收矩阵；组长接线（ERB 两枚 provider 注册、项目级引用面 + 打开中 model 喂索引、能力矩阵改口、矩阵/单源闸跟随）。完成行已删，回执进提交正文。

@@ -336,11 +336,46 @@ export interface OptionsPresentation {
   readonly maxPerScene: number;
 }
 
+/**
+ * `@颜绘` 的**参数候选数据**（additive；K2-COMPLETE-DATA）。
+ *
+ * 四格按 §8.3 的位置序：表情 / 服装 / 差分 / 特效。每一格都可缺省——缺省 = 这一格
+ * 没有可枚举的游戏事实（语言层零候选），**不猜、不借邻居的词**。
+ *
+ * 这是**补全数据**，不是发射数据：发射落点仍住 `FacePresentation`（`calls` / `maxArgs` /
+ * `placeholder`）。本面只回答"这一格能填哪些词"，值必须来自 adapter 自己的游戏数据。
+ */
+export interface FaceTemplateNames {
+  /** 表情格（对象之后第一枚实参） */
+  readonly expressions?: readonly string[];
+  /** 服装格 */
+  readonly costumes?: readonly string[];
+  /** 差分格 */
+  readonly differentials?: readonly string[];
+  /** 特效格 */
+  readonly effects?: readonly string[];
+}
+
 export interface AdapterPresentation {
   readonly heart: HeartPresentation | null;
   readonly color: ColorPresentation | null;
   readonly face: FacePresentation | null;
   readonly options: OptionsPresentation | null;
+  /**
+   * `@颜绘` 参数补全数据（additive；**可缺省**）。
+   *
+   * - 省略 / `undefined` = 没有参数候选数据（**旧 adapter 零改动**：补全各格零候选，
+   *   与引入本字段之前逐字节一致）；
+   * - 与 `face` 的能力声明分离：`face` 说"能不能画"，本字段说"能填哪些词"。
+   */
+  readonly faceTemplates?: FaceTemplateNames;
+  /**
+   * 行尾表演提示名（additive；**可缺省**）。
+   *
+   * 名单 = 本 adapter 认得的提示词（语义由 adapter 的 `hintSupport` 决定：supported /
+   * annotation / unsupported）。省略 = 语言层零候选，不猜任何内置提示名。
+   */
+  readonly hintNames?: readonly string[];
 }
 
 /* ============================== 7. 存储期 ============================== */
@@ -511,6 +546,14 @@ const DOMAIN_VARIABLE_KINDS: readonly DomainVariableSymbol['valueKind'][] = Obje
   'character',
 ] as const);
 
+/** `presentation.faceTemplates` 的四个格（补全数据；顺序 = §8.3 参数位置序） */
+const FACE_TEMPLATE_KEYS: readonly (keyof FaceTemplateNames)[] = Object.freeze([
+  'expressions',
+  'costumes',
+  'differentials',
+  'effects',
+] as const);
+
 /** 存储期源端写法（core 语言词；仅用于诊断文案） */
 const STORAGE_LABELS: Readonly<Record<StoragePeriod, string>> = Object.freeze({
   scene: '场景',
@@ -585,6 +628,26 @@ function symbolFaceNames(symbols: Partial<DomainSymbols>): ReadonlyMap<string, s
 }
 
 /* ============================== 12. 校验：adapter 自检 ============================== */
+
+/**
+ * 候选名清单的形状自检（additive 补全面）。
+ *
+ * 只查"是不是非空字符串数组"：名字本身是否属于游戏是 adapter 的事，core 不猜（§10.10）。
+ * 缺省（`undefined`）= 没有候选数据 = 合法（旧 adapter 零诊断）。
+ */
+function checkCompletionNames(
+  names: unknown,
+  label: string,
+  push: (code: DiagnosticCode, message: string) => void,
+): void {
+  if (!Array.isArray(names)) {
+    push(ADAPTER_VALIDATION_CODES.incomplete, `${label} 必须是字符串数组（省略 = 没有候选数据）。`);
+    return;
+  }
+  if (names.some((name) => !isText(name))) {
+    push(ADAPTER_VALIDATION_CODES.incomplete, `${label} 含空名：候选名必须是 adapter 认得的词。`);
+  }
+}
 
 /**
  * adapter 装载时的**全量自检**（§8.6 第 5 条：参数冲突在 adapter 装载时校验，
@@ -937,6 +1000,27 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
       if (!isInteger(options.maxPerScene) || options.maxPerScene < 1) {
         push(ADAPTER_VALIDATION_CODES.inconsistent, 'presentation.options.maxPerScene 必须是正整数。');
       }
+    }
+
+    /*
+     * 补全数据（additive；缺省 = 语言层零候选 ⇒ 旧 adapter 零诊断）。
+     * 形状坏只报 incomplete：**不猜**哪些名字"应该"存在。
+     */
+    const faceTemplates: Partial<FaceTemplateNames> | undefined = presentation.faceTemplates;
+    if (faceTemplates !== undefined) {
+      if (typeof faceTemplates !== 'object' || faceTemplates === null) {
+        push(ADAPTER_VALIDATION_CODES.incomplete, 'presentation.faceTemplates 必须是对象（省略 = 没有参数候选）。');
+      } else {
+        for (const key of FACE_TEMPLATE_KEYS) {
+          const names = faceTemplates[key];
+          if (names !== undefined) {
+            checkCompletionNames(names, `presentation.faceTemplates.${key}`, push);
+          }
+        }
+      }
+    }
+    if (presentation.hintNames !== undefined) {
+      checkCompletionNames(presentation.hintNames, 'presentation.hintNames', push);
     }
   }
 

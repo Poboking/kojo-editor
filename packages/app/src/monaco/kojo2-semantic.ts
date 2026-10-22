@@ -63,6 +63,11 @@ import { KOJO2_LANGUAGE_ID, KOJO2_TOKEN, type Kojo2TokenName } from './kojo2-lan
 import { KOJO2_THEME_TOKEN_MAP } from './kojo2-theme';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import {
+  installKojo2IndentConfigFromWorker,
+  type Kojo2IndentConfigHandle,
+  type Kojo2IndentRulesSource,
+} from './kojo2-indent';
+import {
   capturesToTokenSpans,
   type Kojo2Capture,
   type Kojo2TokenSpan,
@@ -262,6 +267,16 @@ export interface Kojo2SemanticProviderDeps {
   readonly getClient?: () => Kojo2SemanticWorkerClient | Promise<Kojo2SemanticWorkerClient>;
   /** 告警出口（缺省 `console.warn`；测试可收账） */
   readonly warn?: (message: string) => void;
+  /**
+   * **结构规则 → 语言配置**的挂点（K2-INDENT-WIRE）：每一轮**捕获成功**之后同步调一次。
+   *
+   * 为什么挂在这里：Monaco 没有"缩进规则 provider"接口，规则只能写进语言配置；而宿主手里
+   * 唯一"每篇都过一遍、且已经证明 worker 可用"的位置就是本 provider 的成功分支（model +
+   * 版本号都在手上）。省缺 = 不挂（`createKojo2SemanticTokensProvider` 的直接调用方零改动）；
+   * 生产由 {@link installKojo2SemanticTokensProvider} 接到
+   * `installKojo2IndentConfigFromWorker` 上。
+   */
+  readonly syncIndentConfig?: (model: Monaco.editor.ITextModel, treeId?: string) => void;
 }
 
 /** 缺省客户端：懒到第一次真着色才把 worker 模块拉进来 */
@@ -297,6 +312,7 @@ export function createKojo2SemanticTokensProvider(
 ): Kojo2SemanticProviderHandle {
   const getClient = deps.getClient ?? defaultWorkerClient;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
+  const syncIndentConfig = deps.syncIndentConfig ?? (() => undefined);
   /** model → 上一版的树号与结果（`WeakMap`：标签关掉、model 释放后自然可回收） */
   let cache = new WeakMap<Monaco.editor.ITextModel, ModelCacheEntry>();
   /** worker 只有一条 parser ⇒ 请求串行（并发只会让"哪一版上屏"不可预测） */
@@ -361,6 +377,15 @@ export function createKojo2SemanticTokensProvider(
     );
     const tokens = encodeKojo2SemanticTokens(spans);
     cache.set(model, { versionId, treeId: result.value.treeId, tokens });
+    // K2-INDENT-WIRE：捕获成功 = worker 可用 ⇒ 顺手问一次 `indents` 并把规则写进语言配置。
+    // 失败面天然是"零改动"（worker 不可用时这条链根本走不到这里），且同步器自己再按
+    // "同一 model 同一版本只问一次 / 规则指纹不变不重写"兜一层。交回 `treeId`：同一棵树
+    // 上再跑一次查询，worker 不必为这条请求重解（文本逐字相同）。
+    try {
+      syncIndentConfig(model, result.value.treeId);
+    } catch {
+      /* 缩进配置是增强层：挂点自己炸了不该影响着色 */
+    }
     return tokens;
   };
 
@@ -399,8 +424,13 @@ export function createKojo2SemanticTokensProvider(
 /**
  * 为 `kojo2` 语言注册语义着色 provider（**flag 关 = 零注册**）。
  *
- * 返回的 disposable 幂等：撤掉 Monaco 注册，再丢 provider 的版本缓存（worker 客户端是
- * 共享单例，留给其它结构层消费方，不在这里 dispose）。
+ * 本安装器同时是 **K2-INDENT-WIRE 的宿主挂点**：它持有
+ * `installKojo2IndentConfigFromWorker(...)` 的句柄，并把 `syncIndentConfig` 注入 provider
+ * ——于是"结构规则进语言配置"这件事与"结构着色"共用同一个 model / 版本号 / worker 客户端，
+ * 不新开挂点、也不在 `editor-global-providers.ts` 里多一行。flag 关时两者一起不挂。
+ *
+ * 返回的 disposable 幂等：撤掉 Monaco 注册 → 丢 provider 的版本缓存 → 撤掉本层写过的语言
+ * 配置（worker 客户端是共享单例，留给其它结构层消费方，不在这里 dispose）。
  */
 export function installKojo2SemanticTokensProvider(
   monaco: typeof Monaco,
@@ -409,7 +439,23 @@ export function installKojo2SemanticTokensProvider(
   if (!isKojo2CutoverEnabled()) {
     return { dispose: () => undefined };
   }
-  const handle = createKojo2SemanticTokensProvider(deps);
+  // 语言配置的账：**只有这一枚**（Monaco 没有缩进 provider 接口，规则只能写进语言配置）
+  const semanticGetClient = deps.getClient;
+  const indentConfig: Kojo2IndentConfigHandle = installKojo2IndentConfigFromWorker(monaco, {
+    // 结构面与语义面共用同一枚 worker 客户端（真客户端上两张查询都在）；`indents` 是
+    // 可选面，替身没有时同步器取"零改动"（见 `Kojo2IndentRulesSource`），不是发空规则。
+    ...(semanticGetClient === undefined
+      ? {}
+      : { getClient: async (): Promise<Kojo2IndentRulesSource> => (await semanticGetClient()) as Kojo2IndentRulesSource }),
+    ...(deps.warn === undefined ? {} : { warn: deps.warn }),
+  });
+  const handle = createKojo2SemanticTokensProvider({
+    ...deps,
+    syncIndentConfig: (model, treeId) => {
+      void indentConfig.request(model, treeId);
+      deps.syncIndentConfig?.(model, treeId);
+    },
+  });
   let registration: Monaco.IDisposable;
   try {
     registration = monaco.languages.registerDocumentSemanticTokensProvider(
@@ -417,9 +463,10 @@ export function installKojo2SemanticTokensProvider(
       handle.provider,
     );
   } catch (error) {
-    // 注册失败 = 这一枚根本没挂上；把 provider 自己的账先收了再外抛，
+    // 注册失败 = 这一枚根本没挂上；把两枚自己的账先收了再外抛，
     // 由 `ensureGlobalProviders` 的"全有或全无"统一回滚（错误不许在这里吞掉）。
     handle.dispose();
+    indentConfig.dispose();
     throw error;
   }
   let disposed = false;
@@ -430,7 +477,11 @@ export function installKojo2SemanticTokensProvider(
       try {
         registration.dispose();
       } finally {
-        handle.dispose();
+        try {
+          handle.dispose();
+        } finally {
+          indentConfig.dispose();
+        }
       }
     },
   };

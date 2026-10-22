@@ -19,8 +19,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { eventNames } from '@kojo/kojo-core';
-import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
+import { eventNames, FIXTURE_ADAPTER } from '@kojo/kojo-core';
+import { ERATW_GAME_ADAPTER, ERATW_HEART_HINT, ERATW_PRESENTATION } from '@kojo/plugin-eratw-adapter';
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { KOJO2_ANCHOR_CHARS } from '../src/monaco/kojo2-completion';
@@ -595,6 +595,59 @@ describe('补全字段：range / insertText / sortText / filterText / documentat
     expect(
       kojo2CompletionItems(fake.monaco, anchors.model, anchors.position, undefined).length,
     ).toBe(KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length);
+  });
+});
+
+/* ============================== ③b 补全数据接线（K2-COMPLETE-DATA） ============================== */
+
+describe('补全数据接线：adapter 契约字段现取，显式注入优先，旧 adapter 零候选', () => {
+  it('`@颜绘 我 ` 的表情格 = adapter `presentation.faceTemplates.expressions`（逐项相等）', () => {
+    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
+    const at = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
+    const expected = [...(ERATW_PRESENTATION.faceTemplates?.expressions ?? [])];
+    expect(expected.length).toBeGreaterThan(0);
+    expect(suggestionsAt(fake, at.model, at.position).map((item) => item.label)).toEqual(expected);
+  });
+
+  it('行尾 `(心` 的提示名 = adapter `presentation.hintNames`（与 hintSupport 同一枚）', () => {
+    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
+    const at = atMarker(`${COMPLETION_BASE}灵梦：「早安」(心|`);
+    const expected = [...(ERATW_PRESENTATION.hintNames ?? [])];
+    expect(expected).toEqual([ERATW_HEART_HINT]);
+    expect(suggestionsAt(fake, at.model, at.position).map((item) => item.label)).toEqual(expected);
+  });
+
+  it('显式 `completion` 注入优先于 adapter 字段（宿主可换投影）', () => {
+    const fake = installForTest({
+      adapter: ERATW_GAME_ADAPTER,
+      completion: { faceTemplates: { expressions: ['合成表情'] }, hintNames: ['合成提示'] },
+    });
+    const face = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
+    expect(suggestionsAt(fake, face.model, face.position).map((item) => item.label)).toEqual([
+      '合成表情',
+    ]);
+    const hint = atMarker(`${COMPLETION_BASE}灵梦：「早安」(合|`);
+    expect(suggestionsAt(fake, hint.model, hint.position).map((item) => item.label)).toEqual([
+      '合成提示',
+    ]);
+  });
+
+  it('旧 adapter（契约字段缺省）⇒ 表情格 / 提示名格零候选，不猜', () => {
+    expect(FIXTURE_ADAPTER.presentation.faceTemplates).toBeUndefined();
+    expect(FIXTURE_ADAPTER.presentation.hintNames).toBeUndefined();
+    const fake = installForTest({ adapter: FIXTURE_ADAPTER });
+    const face = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
+    expect(suggestionsAt(fake, face.model, face.position)).toEqual([]);
+    const hint = atMarker(`${COMPLETION_BASE}灵梦：「早安」(心|`);
+    expect(suggestionsAt(fake, hint.model, hint.position)).toEqual([]);
+  });
+
+  it('没有 adapter 也没有显式注入 ⇒ 两格零候选（不借内置词兜底）', () => {
+    const fake = installForTest();
+    const face = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
+    expect(suggestionsAt(fake, face.model, face.position)).toEqual([]);
+    const hint = atMarker(`${COMPLETION_BASE}灵梦：「早安」(心|`);
+    expect(suggestionsAt(fake, hint.model, hint.position)).toEqual([]);
   });
 });
 

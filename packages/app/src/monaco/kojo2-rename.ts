@@ -49,10 +49,34 @@
  * 3. 把编辑应用到自己那份源码上，再用 core `parseSource` 复查：**必须零 error**——
  *    否则说明这次改名把文件改坏了（或文件本来就有语法错），一律不产编辑。
  *
- * ## WorkspaceEdit 只含本文件
+ * ## WorkspaceEdit：provider 仍只落本文件，跨文件走 plan 层
  *
- * 2.0 的符号是**文件局部**名字（规范 §7.2 排除跨文件可见）：本通道只往请求的 model 上落编辑。
- * 跨文件 / 项目索引（同名的另一份 `.kojo2`）留给项目索引批，本层不猜、不串道。
+ * 2.0 的符号是**文件局部**名字（规范 §7.2 排除跨文件可见）：{@link installKojo2RenameProvider}
+ * 仍只往请求的 model 上落编辑（旧消费方零改动）。跨文件口径长在**纯函数 plan 层**：
+ *
+ * - {@link kojo2RenamePlan}：同文件 plan（单项，仍走 {@link kojo2RenameAt}）；
+ * - {@link kojo2RenamePlanXFile}：请求文件 + `resolvers` 给的候选文件 → 按路径分组的编辑集。
+ *   候选文件**逐个交给同一条** {@link kojo2RenameAt}（不写第二把尺子）；文件定位用
+ *   `kojo2-declarations` 的 `kojo2DeclarationNamed` 取声明行列，再喂回 `kojo2RenameAt`。
+ *   候选集由**项目索引**注入（`listFilesWithSymbol`），本层不建索引、不扫盘、不猜路径。
+ *
+ * ## plan 层的全或无与上限（K2-RENAME-XFILE）
+ *
+ * 1. 任何一步 blocker（非法名 / 重名 / 同名 / 引用扫描不可证 / parse 闸 / 候选读取为 `null` /
+ *    候选索引抛错 / 超上限）⇒ **`editsByPath` 整体为空**，`blockers` 逐条说清（绝不落半截）；
+ * 2. 上限：文件 {@link KOJO2_RENAME_PLAN_MAX_FILES} 份（含请求文件）、编辑
+ *    {@link KOJO2_RENAME_PLAN_MAX_EDITS} 段（全 plan 合计）——超限即阻断而不是截断；
+ * 3. `resolvers` 整体缺失 / 缺 `readSource` / `listFilesWithSymbol` 抛错 / `readSource` 抛错
+ *    ⇒ **退回同文件 plan**（机制不可用是降级，不是编辑错误）；`readSource` 返回 `null`
+ *    是"索引说有这么份文件却读不到"的事实错误 ⇒ 阻断；
+ * 4. 路径**逐字保留** resolver / 调用方给的字符串：不归一化、不补分隔符、不做大小写折叠；
+ *    只按字符串去掉请求文件自己与重复项；顺序 = 请求文件在前 + 候选声明序；
+ * 5. 只选"有同名声明"的候选：没有该声明的文件跳过（2.0 名字是文件局部事实，别处的同名文字
+ *    不是这个符号）；候选的 `kind` 不再二次筛（候选集是项目索引的权威）。
+ *
+ * 只读判定沿用 provider 的既有口径（{@link installKojo2RenameProvider} 的 `modelRefusal`：
+ * 已释放 / `getOptions().readOnly`）；plan 层拿不到 model，**不新增第二套只读判据**——目标
+ * 文件的只读性由 `resolvers` / 宿主负责。
  *
  * ## 失败面
  *
@@ -79,6 +103,7 @@ import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DeclarationAt,
   kojo2DeclarationHeaderAt,
+  kojo2DeclarationNamed,
   kojo2DocumentOf,
   kojo2IsNativeRecord,
   kojo2IsTextSurface,
@@ -911,6 +936,221 @@ export function kojo2RenameAt(
   }
 
   return { symbol, edits, blockers: [] };
+}
+
+/* ============================== 跨文件 plan（纯函数） ============================== */
+
+/** plan 的文件上限（**含**请求文件；超限阻断，不截断）。 */
+export const KOJO2_RENAME_PLAN_MAX_FILES = 64;
+
+/** plan 的编辑上限（全 plan 合计；超限阻断，不截断）。 */
+export const KOJO2_RENAME_PLAN_MAX_EDITS = 2000;
+
+/** 一份文件的编辑集（plan 的路径分组；`path` 逐字保留调用方给的字符串）。 */
+export interface Kojo2RenamePathEdits {
+  readonly path: string;
+  readonly edits: readonly Kojo2RenameEdit[];
+}
+
+/**
+ * 一次（可跨文件的）改名计划。
+ *
+ * `blockers` 非空 ⇒ `editsByPath` 恒为空（全或无，见模块头"plan 层"一节）。
+ */
+export interface Kojo2RenamePlan {
+  readonly symbol: Kojo2RenameSymbol | null;
+  readonly editsByPath: readonly Kojo2RenamePathEdits[];
+  readonly blockers: readonly string[];
+}
+
+/**
+ * 跨文件候选的注入点（**由项目索引批接线**：本层不建索引 × 不扫盘）。
+ *
+ * - `listFilesWithSymbol(name)`：声明了 `name` 的**文件路径**（候选集的权威）；可缺省
+ *   （缺省 ⇒ 只做同文件）；
+ * - `readSource(path)`：按路径读源文；`null` = 索引说有这份文件但读不到 ⇒ **阻断**；
+ *   抛错 = 读取机制本身不可用 ⇒ **退回同文件 plan**。
+ */
+export interface Kojo2RenameResolvers {
+  readonly listFilesWithSymbol?: (name: string) => readonly string[];
+  readonly readSource: (path: string) => string | null;
+}
+
+type CandidateOutcome =
+  | { readonly kind: 'skip' }
+  | { readonly kind: 'blocked'; readonly reasons: readonly string[] }
+  | { readonly kind: 'edits'; readonly edits: readonly Kojo2RenameEdit[] };
+
+/**
+ * 同文件 plan（`path` 缺省 `''`：这一项就是**请求的那份 source**，路径事实归调用方/宿主；
+ * 跨文件口径请走 {@link kojo2RenamePlanXFile}，那里由调用方给真实路径）。
+ */
+function singleFilePlan(
+  source: string,
+  position: Kojo2RenamePosition,
+  newName: string,
+  path: string,
+): Kojo2RenamePlan {
+  const result = kojo2RenameAt(source, position, newName);
+  if (result.blockers.length > 0 || result.edits.length === 0) {
+    return { symbol: result.symbol, editsByPath: [], blockers: result.blockers };
+  }
+  return { symbol: result.symbol, editsByPath: [{ path, edits: result.edits }], blockers: [] };
+}
+
+/**
+ * 同文件改名计划：单文件、单段路径（缺省 `''`）。
+ *
+ * 就是 {@link kojo2RenameAt} 的 plan 形态（**同一枚尺子**，不重算编辑）；`editsByPath` 至多一项。
+ * 可选第 4 参 `path` 只影响那一项里的 `path` 字符串（缺省 `''`），编辑本身与它无关。
+ */
+export function kojo2RenamePlan(
+  source: string,
+  position: Kojo2RenamePosition,
+  newName: string,
+  path = '',
+): Kojo2RenamePlan {
+  return singleFilePlan(source, position, newName, path);
+}
+
+/**
+ * 候选文件 → 同一条 `kojo2RenameAt`。
+ *
+ * 定位：`kojo2DeclarationNamed(document, name, 1)` 取**第一枚**同名声明的行列（重名由
+ * `kojo2RenameAt` 的 duplicates 闸报出）；没有同名声明的文件**跳过**（不是这个符号）。
+ * 索引建不起来 / 改名被闸 / parse 闸 ⇒ `blocked`（整次 plan 取消）。
+ */
+function renameInCandidate(source: string, name: string, newName: string): CandidateOutcome {
+  let document: Kojo2Document;
+  try {
+    document = kojo2DocumentOf(source);
+  } catch (error: unknown) {
+    return {
+      kind: 'blocked',
+      reasons: [`无法建立候选文件的声明索引（${errorText(error)}）`],
+    };
+  }
+  const declaration = kojo2DeclarationNamed(document, name, 1);
+  if (declaration === undefined) return { kind: 'skip' };
+  const result = kojo2RenameAt(
+    source,
+    { line: declaration.line, column: declaration.nameStart },
+    newName,
+  );
+  if (result.blockers.length > 0) return { kind: 'blocked', reasons: result.blockers };
+  if (result.edits.length === 0) return { kind: 'skip' };
+  return { kind: 'edits', edits: result.edits };
+}
+
+/** `listFilesWithSymbol` 的安全调用：`null` = 不可用（缺省 / 抛错 / 形状不对）⇒ 退回同文件。 */
+function listCandidatesSafely(
+  resolvers: Kojo2RenameResolvers,
+  name: string,
+): readonly string[] | null {
+  const list = resolvers.listFilesWithSymbol;
+  if (typeof list !== 'function') return null;
+  let listed: readonly string[];
+  try {
+    listed = list(name);
+  } catch (error: unknown) {
+    console.warn(`[kojo2-rename] listFilesWithSymbol 抛错，退回同文件 plan：${errorText(error)}`);
+    return null;
+  }
+  if (!Array.isArray(listed)) return null;
+  return listed.filter((item): item is string => typeof item === 'string');
+}
+
+/**
+ * 跨文件改名计划：请求文件（`path` + `source` ± `position`）→ 按路径分组的编辑集。**纯函数**。
+ *
+ * 步骤与口径（全或无）：
+ * 1. 请求文件先跑同文件 `kojo2RenameAt`；被闸 ⇒ 原样返回（`editsByPath` 空，resolver 一次不调）；
+ * 2. `resolvers` 缺失 / 缺 `readSource` / 列候选抛错 / 读候选抛错 ⇒ 退回**同文件 plan**；
+ * 3. 候选：按 resolver 给序、去掉请求文件自己与重复路径、跳过没有同名声明者；
+ * 4. 任一路由阻断（含读取为 `null`、超 64 份 / 2000 段）⇒ `editsByPath` 整体为空 + `blockers`。
+ */
+export function kojo2RenamePlanXFile(
+  source: string,
+  path: string,
+  position: Kojo2RenamePosition,
+  newName: string,
+  resolvers?: Kojo2RenameResolvers | null,
+): Kojo2RenamePlan {
+  const sameFile = kojo2RenamePlan(source, position, newName, path);
+  // 请求文件自己就被闸挡住：不调 resolver（省 IO，也不让"半截候选"有机会进 blockers）。
+  if (sameFile.blockers.length > 0 || sameFile.symbol === null) return sameFile;
+  if (
+    resolvers === undefined ||
+    resolvers === null ||
+    typeof resolvers !== 'object' ||
+    typeof resolvers.readSource !== 'function'
+  ) {
+    return sameFile;
+  }
+
+  const listed = listCandidatesSafely(resolvers, sameFile.symbol.name);
+  if (listed === null) return sameFile;
+
+  const seen = new Set<string>([path]);
+  const candidates: string[] = [];
+  for (const candidatePath of listed) {
+    if (candidatePath.length === 0) continue;
+    if (seen.has(candidatePath)) continue;
+    seen.add(candidatePath);
+    candidates.push(candidatePath);
+  }
+  if (candidates.length === 0) return sameFile;
+
+  const filesWithRequest = candidates.length + 1;
+  if (filesWithRequest > KOJO2_RENAME_PLAN_MAX_FILES) {
+    return {
+      symbol: sameFile.symbol,
+      editsByPath: [],
+      blockers: [
+        `跨文件候选共 ${filesWithRequest} 份（含请求文件），超过上限 ` +
+          `${KOJO2_RENAME_PLAN_MAX_FILES} 份：跨文件改名已取消（超限不做截断）`,
+      ],
+    };
+  }
+
+  const editsByPath: Kojo2RenamePathEdits[] = [...sameFile.editsByPath];
+  const blockers: string[] = [];
+  let totalEdits = sameFile.editsByPath[0]?.edits.length ?? 0;
+
+  for (const candidatePath of candidates) {
+    let candidateSource: string | null;
+    try {
+      candidateSource = resolvers.readSource(candidatePath);
+    } catch (error: unknown) {
+      // 读取机制抛错 ≠ 文件不存在：降级回同文件 plan，不落半截 WorkspaceEdit。
+      console.warn(
+        `[kojo2-rename] readSource 抛错（${candidatePath}），退回同文件 plan：${errorText(error)}`,
+      );
+      return sameFile;
+    }
+    if (candidateSource === null || typeof candidateSource !== 'string') {
+      blockers.push(`读不到候选文件「${candidatePath}」的内容，跨文件改名已取消`);
+      continue;
+    }
+    const outcome = renameInCandidate(candidateSource, sameFile.symbol.name, newName);
+    if (outcome.kind === 'blocked') {
+      blockers.push(`「${candidatePath}」：${outcome.reasons.join('；')}`);
+      continue;
+    }
+    if (outcome.kind === 'skip') continue;
+    totalEdits += outcome.edits.length;
+    if (totalEdits > KOJO2_RENAME_PLAN_MAX_EDITS) {
+      blockers.push(
+        `跨文件编辑合计 ${totalEdits} 段，超过上限 ${KOJO2_RENAME_PLAN_MAX_EDITS} 段：` +
+          '跨文件改名已取消（超限不做截断）',
+      );
+      break;
+    }
+    editsByPath.push({ path: candidatePath, edits: outcome.edits });
+  }
+
+  if (blockers.length > 0) return { symbol: sameFile.symbol, editsByPath: [], blockers };
+  return { symbol: sameFile.symbol, editsByPath, blockers: [] };
 }
 
 /* ============================== Monaco 翻译层 ============================== */

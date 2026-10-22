@@ -19,6 +19,11 @@
  * - **`language` 子命令**（K2-LANG-CONFORMANCE）同理：套件与判定全在 `src/language.ts`
  *   （纯逻辑、IO 注入）；本文件只把 fixture 与真 eraTW adapter/backend 装进注册表
  *   （`--adapter fixture|eratw`），换 adapter 不改判定。
+ * - **`corpus` 子命令**（K2-CORPUS-REAL）同样薄：发现 / 状态聚合 / 抽样 / manifest 全在
+ *   `src/corpus.ts`；本文件只负责三件事——①把 `tools/corpus.mjs` 的真实解析链装成
+ *   `resolveRoot`（缺席 = SKIP，不猜目录名）；②三条真入口与迁移植入同一批注入；
+ *   ③`node:crypto` 的 sha256 与字节读写。`--generate-manifest` 的落点固定为仓内
+ *   真实语料 fixture 目录，本文件不给"任意落点"参数。
  *
  * 用法（与 bin 一致）：
  *   node tools/kojo-conformance.mjs list-cases
@@ -28,20 +33,37 @@
  *   node tools/kojo-conformance.mjs language --adapter eratw --json
  *   node tools/kojo-conformance.mjs migrate-diff --dir packages/kojo-core/tests/fixtures/migrate-corpus
  *   node tools/kojo-conformance.mjs migrate-diff --dir <语料机目录> --json
- * 退出码：透传 main.ts / migration.ts 的 0 / 1 / 2；启动失败 = 1。
+ *   node tools/kojo-conformance.mjs corpus --json
+ *   node tools/kojo-conformance.mjs corpus --dir <语料根> --limit 200 --json
+ *   node tools/kojo-conformance.mjs corpus --generate-manifest
+ * 退出码：透传 main.ts / migration.ts / corpus.ts 的 0 / 1 / 2；启动失败 = 1。
  */
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createServer } from 'vite';
+
+import { CorpusError, corpusHint, resolveCorpusDir } from './corpus.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const ENTRY = '/packages/kojo-conformance/src/main.ts';
 const START_ATTEMPTS = 2;
 const MIGRATE_COMMAND = 'migrate-diff';
 const LANGUAGE_COMMAND = 'language';
+const CORPUS_COMMAND = 'corpus';
 
 /** migrate-diff 需要额外加载的 TS 入口（真 core / 真 v1 转译 / 真 adapter backend / 判定逻辑） */
 const MIGRATE_ENTRIES = {
   migration: '/packages/kojo-conformance/src/migration.ts',
+  core: '/packages/kojo-core/src/index.ts',
+  sugar: '/packages/plugins/kojo-sugar/src/service.ts',
+  support: '/packages/plugins/kojo-sugar/tests/support.ts',
+  eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
+};
+
+/** corpus 子命令的额外入口（与 migrate-diff 同一批真链路；判定/发现全在 corpus.ts） */
+const CORPUS_ENTRIES = {
+  corpus: '/packages/kojo-conformance/src/corpus.ts',
   core: '/packages/kojo-core/src/index.ts',
   sugar: '/packages/plugins/kojo-sugar/src/service.ts',
   support: '/packages/plugins/kojo-sugar/tests/support.ts',
@@ -60,7 +82,7 @@ const LANGUAGE_ENTRIES = {
  * `configFile` 指向仓库的 `vitest.config.ts`：那份配置是**包别名（`@kojo/*`）的单一真源**，
  * 这里复用它，避免在工具里抄第二份 alias 表（抄了必漂移）。
  */
-async function loadModules(needMigration, needLanguage = false) {
+async function loadModules(kind) {
   const server = await createServer({
     configFile: path.join(REPO, 'vitest.config.ts'),
     root: REPO,
@@ -72,14 +94,10 @@ async function loadModules(needMigration, needLanguage = false) {
     const main = await server.ssrLoadModule(ENTRY);
     if (typeof main.main !== 'function') throw new Error('src/main.ts 未导出 main()');
     const modules = { main };
-    if (needMigration) {
-      for (const [key, entry] of Object.entries(MIGRATE_ENTRIES)) {
-        modules[key] = await server.ssrLoadModule(entry);
-      }
-      return modules;
-    }
-    if (needLanguage) {
-      for (const [key, entry] of Object.entries(LANGUAGE_ENTRIES)) {
+    const extra =
+      kind === 'migrate' ? MIGRATE_ENTRIES : kind === 'language' ? LANGUAGE_ENTRIES : kind === 'corpus' ? CORPUS_ENTRIES : null;
+    if (extra !== null) {
+      for (const [key, entry] of Object.entries(extra)) {
         modules[key] = await server.ssrLoadModule(entry);
       }
     }
@@ -195,11 +213,82 @@ function runLanguage(modules, argv) {
   return main.runMain({ argv, languageAdapters: registrations });
 }
 
+/* ---------------------------- corpus（真实语料机） ---------------------------- */
+
+/**
+ * 真实语料解析链（`tools/corpus.mjs` 的 `resolveCorpusDir`）：**语料不在位 = SKIP**。
+ *
+ * 返回值是纯逻辑可消费的 `CorpusRootResolution`：`ok:false` 的 reason 必须写清
+ * "缺席"这件事（rc=1 = 盘上没发现；rc=2 = env/--corpus 指了坏路径），
+ * 不许把缺席转成空目录去跑。
+ */
+function createCorpusRootResolver() {
+  return () => {
+    try {
+      const dir = resolveCorpusDir({ label: 'kojo-conformance corpus', print: false });
+      if (dir !== null) return { ok: true, dir };
+      return {
+        ok: false,
+        dir: null,
+        reason: `语料不在位（node tools/corpus.mjs --print rc=1）：盘上未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`,
+      };
+    } catch (error) {
+      // CorpusError = 环境变量/显式路径指了坏位置（corpus.mjs CLI 的 rc=2 档）
+      const message = error instanceof CorpusError ? error.message : error instanceof Error ? error.message : String(error);
+      return { ok: false, dir: null, reason: `语料不在位（corpus.mjs 解析失败 rc=2）：${message}` };
+    }
+  };
+}
+
+/** corpus 的 IO：真文件系统 + 字节面（保真副本 / sha256 都按字节） */
+function createCorpusIo(main) {
+  const nodeIo = main.createNodeIo();
+  const cwd = process.cwd();
+  const absolute = (target) => (path.isAbsolute(target) ? target : path.resolve(cwd, target));
+  return {
+    ...nodeIo,
+    readBytes: (target) => new Uint8Array(readFileSync(absolute(target))),
+    writeBytes: (target, bytes) => {
+      const file = absolute(target);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, bytes);
+    },
+    mkdir: (dir) => mkdirSync(absolute(dir), { recursive: true }),
+  };
+}
+
+/** `corpus`：argv → 发现/聚合/抽样（corpus.ts）→ 文本 + 退出码 */
+function runCorpus(modules, argv) {
+  const { corpus, core, sugar, support, eratw, main } = modules;
+  const result = corpus.runCorpusCli(argv, {
+    io: createCorpusIo(main),
+    compileV1: createV1Compiler(sugar, support),
+    compile2: createV2Compiler(core, eratw),
+    migrate: createMigrator(core, eratw),
+    sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'),
+    resolveRoot: createCorpusRootResolver(),
+    // 落点固定为仓内真实语料 fixture 目录：不给"任意落点"参数（写盘允许域是声明出来的）
+    realCorpusDir: path.join(REPO, corpus.REAL_CORPUS_DIR),
+  });
+  const text = corpus.formatCorpusReport(result.report, { json: argv.includes('--json') });
+  if (result.exitCode === 2) process.stderr.write(text);
+  else process.stdout.write(text);
+  return result.exitCode;
+}
+
+/** argv[0] → 需要额外加载的入口组（未知子命令走 main.ts，行为与改动前一致） */
+function moduleKindOf(command) {
+  if (command === MIGRATE_COMMAND) return 'migrate';
+  if (command === LANGUAGE_COMMAND) return 'language';
+  if (command === CORPUS_COMMAND) return 'corpus';
+  return null;
+}
+
 let modules;
 let lastError;
 for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
   try {
-    modules = await loadModules(process.argv[2] === MIGRATE_COMMAND, process.argv[2] === LANGUAGE_COMMAND);
+    modules = await loadModules(moduleKindOf(process.argv[2]));
     break;
   } catch (error) {
     // 本机实测过一次并发起两个 Vite 时的瞬时 transform 错（同一条命令随后单跑即绿）；
@@ -215,5 +304,6 @@ if (modules === undefined) {
   const argv = process.argv.slice(2);
   if (argv[0] === MIGRATE_COMMAND) process.exitCode = runMigrateDiff(modules, argv);
   else if (argv[0] === LANGUAGE_COMMAND) process.exitCode = runLanguage(modules, argv);
+  else if (argv[0] === CORPUS_COMMAND) process.exitCode = runCorpus(modules, argv);
   else process.exitCode = modules.main.main(argv);
 }

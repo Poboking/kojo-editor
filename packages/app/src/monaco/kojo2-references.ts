@@ -41,13 +41,18 @@
  *   的形状）；注册半途抛错原样外抛（只有一枚注册，没有半成品要回滚，宿主那侧的"全有或全无"
  *   才有机会收口）；
  * - 索引注入位 {@link Kojo2ReferenceIndexSource}：缺省现建 `kojo2DocumentOf`；宿主可注入
- *   同一份已建索引（性能缝）。**跨文件项目索引留给宿主下批**——本批只回答同文件引用，
- *   provider 不扫项目、不读盘、不发额外请求。
+ *   同一份已建索引（性能缝）；
+ * - **跨文件（K2-INDEX-REFS）**：{@link kojo2ReferenceSymbolsOf} 把同一套判据摊成"整篇的
+ *   每个符号"，项目索引（`kojo2-project-index.ts`）只消费它；{@link kojo2ProjectReferencesAt}
+ *   把本文件结果与索引的跨文件结果合并（声明位在前），
+ *   {@link installKojo2ProjectReferenceProvider} 是它的 Monaco 落点。索引本身零 IO，
+ *   由宿主从项目扫描喂文本。
  *
  * ## 已知边界
  *
- * - 跨文件引用（项目索引 / 未打开文件）不在本批：纯函数只吃一篇源文，provider 只回
- *   `model.uri` 上的落点；接线请求见交付报告；
+ * - 跨文件查找有两档归属：本文件有同名声明（或事件挂点）时走同文件判据；本文件没有时走
+ *   项目索引的候选位 + `symbolAt`（要求 `options.path`，且项目里这个名字**只有一种**
+ *   声明种类）——同名多家族是 core 错误，此时回 `null`，不猜；
  * - 表体行端点（`# 表` 的 `0..99`）在 core 是表达式位，本批不收集（表体行的值列是字面量，
  *   按行扫会把值误当引用；要精确得走 AST 行结构，留给后续批）；
  * - `# 视` 的视角目标、`@跳` / `@标` 的标签名不属本批符号面（没有声明索引可归属）。
@@ -70,6 +75,7 @@ import {
 } from './kojo2-declarations';
 import { isNameChar } from './kojo-completion-position';
 import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import type { Kojo2ProjectIndex, Kojo2ProjectSymbolRef } from './kojo2-project-index';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */
@@ -147,10 +153,39 @@ export interface Kojo2ReferencesResult {
 }
 
 /**
+ * 一份源文里的**一个符号 + 它的全部同文件出现点**。
+ *
+ * 这是 `kojo2ReferencesAt` 的"整篇"形态：同一套声明 / 事件事实、同一份表达式扫描、
+ * 同一张 `symbolForSite` / `sitesForSymbol` 判据表，只是入口从"光标处那一个"换成
+ * "这一篇里的每一个"。项目索引（`kojo2-project-index.ts`）只消费它，**不另写扫描器**——
+ * 跨文件引用与同文件引用因此不可能给出两套不同的事实。
+ *
+ * `refs` 源码序、含声明位、同位置只出现一次（与 `kojo2ReferencesAt().refs` 逐条同口径）。
+ */
+export interface Kojo2DocumentSymbolFacts {
+  readonly symbol: Kojo2ReferenceSymbol;
+  readonly refs: readonly Kojo2ReferenceSite[];
+}
+
+/**
+ * 一处**候选引用位**：语法上确实是表达式 / 调用位的一个标识符，但**不要求**这个名字
+ * 在本文件里有声明（项目索引要看见"只在别的文件声明"的名字）。
+ *
+ * 位置判据与 {@link kojo2ReferencesAt} 逐条相同（同一套 `collectLine` / `scanIdentifiers`）；
+ * 唯一的放宽是去掉"本地声明名单"过滤——这一步在项目索引里换成了"项目里有这个符号吗"。
+ * 调用名（`! 名` / `名(`）记 `call`，其余表达式位记 `ref`。
+ */
+export interface Kojo2ReferenceCandidate {
+  readonly name: string;
+  readonly span: Kojo2ReferenceSpan;
+  readonly kind: 'ref' | 'call';
+}
+
+/**
  * 索引注入位：源码进，已建文档索引出（`null` = 这一份没有现成索引）。
  *
  * 缺省 = 现建 `kojo2DocumentOf`（同输入必同输出）；宿主注入时必须保证索引与这份源码
- * **同一版本**（换版本会让行列落错位）。跨文件项目索引是宿主下批的事，本批只要求同形。
+ * **同一版本**（换版本会让行列落错位）。跨文件项目索引是**另一条注入路**（`Kojo2ProjectIndex`）。
  */
 export type Kojo2ReferenceIndexSource = (source: string) => Kojo2Document | null;
 
@@ -159,7 +194,7 @@ export interface Kojo2ReferenceOptions {
   readonly getIndex?: Kojo2ReferenceIndexSource;
 }
 
-/** 安装器的注入面（当前只有索引缝；跨文件项目索引是宿主下批的接线） */
+/** 安装器的注入面（同文件 provider 只有索引缝；跨文件接线见 `installKojo2ProjectReferenceProvider`） */
 export interface Kojo2ReferenceProviderOptions extends Kojo2ReferenceOptions {}
 
 /** 单次结果的条数上限；超出部分按源码序截掉并置 `truncated` */
@@ -434,7 +469,8 @@ function scanRangesOfTextLine(
 
 /** 名字集合（表达式扫描只收集**有声明**的名字；事件名走 {@link SiteFamily} 另一路） */
 interface Collector {
-  readonly names: ReadonlySet<string>;
+  /** `null` = 不做名字过滤（项目索引的"候选引用位"要看见本文件没声明的名字） */
+  readonly names: ReadonlySet<string> | null;
   readonly sites: SiteFact[];
 }
 
@@ -446,7 +482,7 @@ function collectRange(
   range: ScanRange,
 ): void {
   scanIdentifiers(text, range.from, range.to, (hit) => {
-    if (!collector.names.has(hit.name)) return;
+    if (collector.names !== null && !collector.names.has(hit.name)) return;
     collector.sites.push({
       family: 'declaration',
       name: hit.name,
@@ -510,7 +546,8 @@ function collectLine(
       return;
     }
     case 'trigger': {
-      if (line.name.length === 0 || !collector.names.has(line.name)) return;
+      if (line.name.length === 0) return;
+      if (collector.names !== null && !collector.names.has(line.name)) return;
       const start = line.nameOffset - line.lineOffset;
       collector.sites.push({
         family: 'declaration',
@@ -579,13 +616,20 @@ function sitesOf(
   document: Kojo2Document,
   declarations: readonly DeclarationFact[],
   events: readonly EventAttestation[],
+  names: ReadonlySet<string> | null | undefined = undefined,
 ): SiteFact[] {
-  const names = new Set<string>();
-  for (const declaration of declarations) {
-    // `# 幕` 标题不是可引用名字（正文里的同名 token 不归给幕），不进表达式名单。
-    if (declaration.kind !== 'scene') names.add(declaration.name);
+  let collectedNames: ReadonlySet<string> | null;
+  if (names === undefined) {
+    const local = new Set<string>();
+    for (const declaration of declarations) {
+      // `# 幕` 标题不是可引用名字（正文里的同名 token 不归给幕），不进表达式名单。
+      if (declaration.kind !== 'scene') local.add(declaration.name);
+    }
+    collectedNames = local;
+  } else {
+    collectedNames = names;
   }
-  const collector: Collector = { names, sites: [] };
+  const collector: Collector = { names: collectedNames, sites: [] };
 
   const stack: { readonly indent: number; readonly line: KojoLexLine }[] = [];
   for (let index = 0; index < document.lines.length; index++) {
@@ -727,6 +771,34 @@ function sitesForSymbol(
   return sites.filter((candidate) => candidate.family === family && candidate.name === symbol.name);
 }
 
+/** 一篇源文的全部符号事实（`kojo2ReferencesAt` 与 `kojo2ReferenceSymbolsOf` 共用的唯一入口） */
+interface SourceAnalysis {
+  readonly declarations: readonly DeclarationFact[];
+  readonly sites: readonly SiteFact[];
+  readonly eventGroups: readonly EventGroup[];
+}
+
+/**
+ * 建一篇源文的符号事实；没有声明也没有事件 ⇒ `null`（两种入口各自折成自己的空形态）。
+ *
+ * 解析入口仍走 {@link documentFor}：注入的文档索引优先，坏值 / 抛错退回现建——
+ * 与单点查询逐条同口径，不因为"要整篇"就换一条路。
+ */
+function analyzeSource(
+  source: string,
+  getIndex: Kojo2ReferenceIndexSource | undefined,
+): SourceAnalysis | null {
+  const document = documentFor(source, getIndex);
+  const declarations = declarationFactsOf(document);
+  const events = eventAttestationsOf(document);
+  if (declarations.length === 0 && events.length === 0) return null;
+  return {
+    declarations,
+    sites: sitesOf(document, declarations, events),
+    eventGroups: eventGroupsOf(events),
+  };
+}
+
 /* ============================== 纯逻辑入口 ============================== */
 
 /**
@@ -744,26 +816,17 @@ export function kojo2ReferencesAt(
   if (typeof source !== 'string' || source.length === 0) return null;
   if (!isUsablePosition(position)) return null;
 
-  let document: Kojo2Document;
   try {
-    document = documentFor(source, options.getIndex);
-  } catch {
-    return null;
-  }
+    const analysis = analyzeSource(source, options.getIndex);
+    if (analysis === null) return null;
 
-  try {
-    const declarations = declarationFactsOf(document);
-    const events = eventAttestationsOf(document);
-    if (declarations.length === 0 && events.length === 0) return null;
-
-    const sites = sitesOf(document, declarations, events);
-    const site = siteAt(sites, position);
+    const site = siteAt(analysis.sites, position);
     if (site === undefined) return null;
 
-    const symbol = symbolForSite(site, declarations, eventGroupsOf(events));
+    const symbol = symbolForSite(site, analysis.declarations, analysis.eventGroups);
     if (symbol === null) return null;
 
-    const familySites = sitesForSymbol(sites, symbol);
+    const familySites = sitesForSymbol(analysis.sites, symbol);
     const refs = familySites.map((candidate) => ({
       span: spanOf(candidate.line, candidate.startColumn, candidate.endColumn),
       kind: candidate.kind,
@@ -781,6 +844,138 @@ export function kojo2ReferencesAt(
   } catch {
     // 纯函数不把异常交给调用方：坏输入 / 意外索引一律"这里查不到"（与 provider 的空结果同向）。
     return null;
+  }
+}
+
+/* ============================== 整篇符号事实（项目索引的取数口） ============================== */
+
+/** 符号事实的规范序：声明行 → 起始列 → 结束列 → 名字 → 种类（与源码序同向） */
+function compareSymbolFacts(a: Kojo2DocumentSymbolFacts, b: Kojo2DocumentSymbolFacts): number {
+  return (
+    a.symbol.declSpan.startLine - b.symbol.declSpan.startLine ||
+    a.symbol.declSpan.startColumn - b.symbol.declSpan.startColumn ||
+    a.symbol.declSpan.endColumn - b.symbol.declSpan.endColumn ||
+    compareText(a.symbol.name, b.symbol.name) ||
+    compareText(a.symbol.kind, b.symbol.kind)
+  );
+}
+
+/** 符号身份键（名字 + 种类 + 声明落点；`# 幕` 同标题两幕因此各算一条） */
+function symbolFactKey(symbol: Kojo2ReferenceSymbol): string {
+  const span = symbol.declSpan;
+  return `${symbol.name}\u0000${symbol.kind}\u0000${span.startLine}\u0000${span.startColumn}\u0000${span.endColumn}`;
+}
+
+/** 符号 → 它的整篇出现点（走 `sitesForSymbol`，与单点查询同一条判据） */
+function factsOfSymbol(
+  symbol: Kojo2ReferenceSymbol,
+  analysis: SourceAnalysis,
+): Kojo2DocumentSymbolFacts {
+  const decl: NameSpanFact = {
+    name: symbol.name,
+    line: symbol.declSpan.startLine,
+    startColumn: symbol.declSpan.startColumn,
+    endColumn: symbol.declSpan.endColumn,
+  };
+  const sites = sitesForSymbol(analysis.sites, { name: symbol.name, kind: symbol.kind, decl });
+  return {
+    symbol,
+    refs: sites.map((site) => ({
+      span: spanOf(site.line, site.startColumn, site.endColumn),
+      kind: site.kind,
+    })),
+  };
+}
+
+/**
+ * 一篇源文的**全部可归属符号**与各自出现点（纯函数；项目索引的逐文件取数口）。
+ *
+ * 与 {@link kojo2ReferencesAt} 共用同一条分析链（`analyzeSource` / `symbolForSite` /
+ * `sitesForSymbol`）：位置查询是"这一篇里的一个符号"，这里是"这一篇里的每一个符号"。
+ * 事件名按 {@link EventGroup} 归属（`# 机` 优先，没有才取最早 `@织` 作锚点），`# 幕`
+ * 按具体那一条标题归属；同名但不同家族（变量 / 事件 / 幕）各成一条，不互相串。
+ *
+ * 空源 / 没有符号 / 解析抛错 ⇒ `[]`（纯函数不抛；与 `kojo2ReferencesAt` 返回 `null` 同向）。
+ */
+export function kojo2ReferenceSymbolsOf(
+  source: string,
+  options: Kojo2ReferenceOptions = {},
+): readonly Kojo2DocumentSymbolFacts[] {
+  if (typeof source !== 'string' || source.length === 0) return [];
+
+  try {
+    const analysis = analyzeSource(source, options.getIndex);
+    if (analysis === null) return [];
+
+    const out: Kojo2DocumentSymbolFacts[] = [];
+    const seen = new Set<string>();
+    const push = (symbol: Kojo2ReferenceSymbol): void => {
+      const key = symbolFactKey(symbol);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(factsOfSymbol(symbol, analysis));
+    };
+
+    // 声明位：逐条声明成符号（重名在错误态下也各自可归属；同一条声明只进一次）。
+    for (const declaration of analysis.declarations) {
+      push({
+        name: declaration.name,
+        kind: declaration.kind,
+        declSpan: spanOf(declaration.line, declaration.startColumn, declaration.endColumn),
+      });
+    }
+    // 事件位：`# 机` 与 `@织` 合成的一条事件符号（声明锚点由 eventGroups 定）。
+    for (const group of analysis.eventGroups) {
+      push({
+        name: group.name,
+        kind: 'event',
+        declSpan: spanOf(group.decl.line, group.decl.startColumn, group.decl.endColumn),
+      });
+    }
+
+    out.sort(compareSymbolFacts);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 一篇源文的**全部候选引用位**（纯函数；项目索引跨文件查询的另一半取数口）。
+ *
+ * 与 {@link kojo2ReferencesAt} 走同一条 `collectLine` / `scanIdentifiers` 扫描，唯一放宽：
+ * 不再要求名字在本文件里有声明。去掉了这一步，才能看见"只在别的文件里声明"的真实引用
+ * （例如 B 文件里 `{心情}`，而 `# 表 心情` 写在 A 文件）。
+ *
+ * 返回里**不含声明位**（`kind === 'decl'` 由符号事实单独给）与 `# 机` / `@织` 的事件名
+ * （事件挂点不是表达式引用，事件查询走符号事实）。空源 / 解析抛错 ⇒ `[]`。
+ */
+export function kojo2ReferenceCandidatesOf(
+  source: string,
+  options: Kojo2ReferenceOptions = {},
+): readonly Kojo2ReferenceCandidate[] {
+  if (typeof source !== 'string' || source.length === 0) return [];
+
+  try {
+    const document = documentFor(source, options.getIndex);
+    const declarations = declarationFactsOf(document);
+    const events = eventAttestationsOf(document);
+    // names = null：不按本地声明名单过滤（这是与单点查询唯一的差异）。
+    const sites = sitesOf(document, declarations, events, null);
+
+    const out: Kojo2ReferenceCandidate[] = [];
+    for (const site of sites) {
+      if (site.family !== 'declaration') continue; // 事件名不是表达式引用
+      if (site.kind === 'decl') continue; // 声明位另行给出
+      out.push({
+        name: site.name,
+        span: spanOf(site.line, site.startColumn, site.endColumn),
+        kind: site.kind,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
 
@@ -813,6 +1008,33 @@ function toMonacoRange(span: Kojo2ReferenceSpan): Monaco.IRange {
 }
 
 /**
+ * **唯一**的 ReferenceProvider 注册点（同文件 / 跨文件两个 provider 共用）。
+ *
+ * 注册失败原样外抛（只有一枚注册，没有半成品要回滚）；dispose 幂等且不抛（一枚撤不掉
+ * 不许把卸载链带崩）。ReferenceProvider 的注册**在源码里只此一处**——既有测试用
+ * "只注册一次"钉的就是这条纪律。
+ */
+function installKojo2Provider(
+  monaco: typeof Monaco,
+  provider: Monaco.languages.ReferenceProvider,
+): Monaco.IDisposable {
+  const registration = monaco.languages.registerReferenceProvider(KOJO2_LANGUAGE_ID, provider);
+
+  let disposed = false;
+  return {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      try {
+        registration.dispose();
+      } catch {
+        /* 幂等 + 不抛：一枚撤不掉不许把卸载链带崩（错误也没有第二个消费者） */
+      }
+    },
+  };
+}
+
+/**
  * 为 `kojo2` 语言注册 ReferenceProvider（Shift+F12），返回**幂等**的 disposable。
  *
  * - flag 关 ⇒ 空操作（**零注册**）；
@@ -828,7 +1050,7 @@ export function installKojo2ReferenceProvider(
 ): Monaco.IDisposable {
   if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
-  const provider: Monaco.languages.ReferenceProvider = {
+  return installKojo2Provider(monaco, {
     provideReferences(model, position, context) {
       try {
         const source = sourceOf(model);
@@ -852,20 +1074,317 @@ export function installKojo2ReferenceProvider(
         return [];
       }
     },
-  };
+  });
+}
 
-  const registration = monaco.languages.registerReferenceProvider(KOJO2_LANGUAGE_ID, provider);
+/* ============================== 跨文件项目引用（K2-INDEX-REFS） ============================== */
 
-  let disposed = false;
-  return {
-    dispose() {
-      if (disposed) return;
-      disposed = true;
+/** 跨文件的一条出现点（落点路径 + 区间 + 角色；路径是宿主给的原样路径） */
+export interface Kojo2ProjectReferenceSite {
+  readonly path: string;
+  readonly span: Kojo2ReferenceSpan;
+  readonly kind: Kojo2ReferenceSiteKind;
+}
+
+/**
+ * 合并结果里的一条出现点。
+ *
+ * `path === null` = **本文件**（provider 用 `model.uri` 落点）；其余是项目索引里的另一份
+ * 文件（provider 用注入的 `path → Uri` 转换，缺省 `monaco.Uri.file`）。
+ */
+export interface Kojo2ProjectMergedSite {
+  readonly path: string | null;
+  readonly span: Kojo2ReferenceSpan;
+  readonly kind: Kojo2ReferenceSiteKind;
+}
+
+/** 一次跨文件引用查找的结果（`null` = 这个位置没有可归属的符号） */
+export interface Kojo2ProjectReferencesResult {
+  readonly symbol: Kojo2ReferenceSymbol;
+  /** 本文件出现点（源码序、含声明位；与 `kojo2ReferencesAt().refs` 逐条相同） */
+  readonly local: readonly Kojo2ReferenceSite[];
+  /** 跨文件出现点（不含本文件；按路径 → 源码序） */
+  readonly external: readonly Kojo2ProjectReferenceSite[];
+  /** 合并视图：**声明位在前**（稳定分区），其余按"本文件 → 跨文件"原序 */
+  readonly refs: readonly Kojo2ProjectMergedSite[];
+  /** 本文件或索引任一侧触到上限（索引侧 {@link KOJO2_PROJECT_REF_LIMIT}） */
+  readonly truncated: boolean;
+}
+
+/** 跨文件查找的注入面 */
+export interface Kojo2ProjectLookupOptions {
+  /** 本文件路径：给出后索引侧会排除它（避免同一份文件在 `local` / `external` 里各出一遍） */
+  readonly path?: string;
+  /** 本文件文档索引的注入位（透传给 `kojo2ReferencesAt`，与同文件查询同一口径） */
+  readonly getIndex?: Kojo2ReferenceIndexSource;
+}
+
+/** 光标处的候选引用名字（本文件没有同名声明时，用它把位置对到项目符号上） */
+function candidateNameAt(
+  source: string,
+  position: Kojo2ReferencePosition,
+  getIndex: Kojo2ReferenceIndexSource | undefined,
+): string | null {
+  if (!isUsablePosition(position)) return null;
+  const col0 = position.column - 1;
+  const candidates = kojo2ReferenceCandidatesOf(
+    source,
+    getIndex === undefined ? {} : { getIndex },
+  );
+  for (const candidate of candidates) {
+    if (candidate.span.startLine !== position.line) continue;
+    if (col0 < candidate.span.startColumn - 1 || col0 > candidate.span.endColumn - 1) continue;
+    return candidate.name;
+  }
+  return null;
+}
+
+/**
+ * 光标处的**同文件 + 跨文件**引用（纯函数：零 IO、零 Monaco）。
+ *
+ * 分工仍是两条腿、一张尺子：
+ * - 本文件这一半**原样**调 {@link kojo2ReferencesAt}（符号归属 / 出现点判据不复制）；
+ * - 跨文件这一半只向项目索引问 `refsOf({ name, kind })`——索引的每个文件事实又是用
+ *   {@link kojo2ReferenceSymbolsOf} / {@link kojo2ReferenceCandidatesOf} 建的，所以两边
+ *   不可能各说一套。
+ *
+ * **本文件没有改名声明时**（典型形态：B 文件里 `{心情}`，而 `# 表 心情` 在 A 文件）：
+ * {@link kojo2ReferencesAt} 回 `null`，这里改问索引 `symbolAt(options.path, position)`
+ * 拿到位置上的符号名字与声明种类，再把整项目的出现点按"本文件 / 别的文件"拆开返回。
+ * 项目里同名多家族（core 错误）或这个名字没有声明 ⇒ 仍回 `null`（不猜）。
+ *
+ * `index` 缺席（`null` / `undefined`）= 退化成同文件查询（`external` 为空），宿主没装索引时
+ * 行为与旧 provider 一致。`options.path` 缺省时索引若含本文件，本文件的落点会在 `external`
+ * 里再出现一遍（宿主不知道路径就无从排除；provider 总会带上路径）。
+ */
+export function kojo2ProjectReferencesAt(
+  source: string,
+  position: Kojo2ReferencePosition,
+  index: Kojo2ProjectIndex | null | undefined,
+  options: Kojo2ProjectLookupOptions = {},
+): Kojo2ProjectReferencesResult | null {
+  const local = kojo2ReferencesAt(
+    source,
+    position,
+    options.getIndex === undefined ? {} : { getIndex: options.getIndex },
+  );
+
+  if (local !== null) {
+    let external: Kojo2ProjectReferenceSite[] = [];
+    let externalTruncated = false;
+    if (index !== null && index !== undefined) {
       try {
-        registration.dispose();
+        const found = index.refsOf({
+          name: local.symbol.name,
+          kind: local.symbol.kind,
+          ...(options.path === undefined ? {} : { excludePath: options.path }),
+        });
+        external = [...found.refs];
+        externalTruncated = found.truncated;
       } catch {
-        /* 幂等 + 不抛：一枚撤不掉不许把卸载链带崩（错误也没有第二个消费者） */
+        // 注入的索引端抛错 = 这一侧拿不到跨文件事实：本文件结果照旧交出。
+        external = [];
+        externalTruncated = false;
+      }
+    }
+    return assembleProjectResult(
+      local.symbol,
+      local.refs,
+      external,
+      local.truncated || externalTruncated,
+    );
+  }
+
+  // 本文件没有可归属符号：可能是"只在别的文件声明、这里是一处可证引用位"。
+  if (index === null || index === undefined || options.path === undefined) return null;
+
+  let resolved: Kojo2ProjectSymbolRef | null = null;
+  try {
+    if (typeof index.symbolAt === 'function') {
+      resolved = index.symbolAt({
+        path: options.path,
+        line: position.line,
+        column: position.column,
+      });
+    }
+  } catch {
+    resolved = null;
+  }
+  // 当前文件可能还没喂进索引（正在编辑的脏 model）：用**这份源码**的候选位拿名字，
+  // 声明种类仍只看项目索引（本文件没有声明，不存在"本地优先"的问题）。
+  if (resolved === null) {
+    const name = candidateNameAt(source, position, options.getIndex);
+    if (name === null) return null;
+    const kinds = new Set<Kojo2DeclarationKind>();
+    for (const declaration of index.declsOf(name)) {
+      if (declaration.kind === 'scene' || declaration.kind === 'event') continue;
+      kinds.add(declaration.kind);
+    }
+    // 同名多家族（core 错误）⇒ 不猜。
+    if (kinds.size !== 1) return null;
+    for (const kind of kinds) resolved = { name, kind };
+  }
+  if (resolved === null) return null;
+
+  const symbol = resolved;
+  try {
+    const declaration = index
+      .declsOf(symbol.name)
+      .filter((candidate) => candidate.kind === symbol.kind)[0];
+    if (declaration === undefined) return null;
+
+    const localFound = index.refsOf({
+      name: symbol.name,
+      kind: symbol.kind,
+      onlyPath: options.path,
+    });
+    const externalFound = index.refsOf({
+      name: symbol.name,
+      kind: symbol.kind,
+      excludePath: options.path,
+    });
+    const localRefs: Kojo2ReferenceSite[] = localFound.refs.map((ref) => ({
+      span: ref.span,
+      kind: ref.kind,
+    }));
+    return assembleProjectResult(
+      // 跨文件符号的声明落点取**路径序第一条**（本文件没有"最近的声明"可谈）。
+      { name: symbol.name, kind: symbol.kind, declSpan: declaration.span },
+      localRefs,
+      [...externalFound.refs],
+      localFound.truncated || externalFound.truncated,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** 合并结果（声明位在前：稳定分区，不重排其余出现点） */
+function assembleProjectResult(
+  symbol: Kojo2ReferenceSymbol,
+  localRefs: readonly Kojo2ReferenceSite[],
+  external: readonly Kojo2ProjectReferenceSite[],
+  truncated: boolean,
+): Kojo2ProjectReferencesResult {
+  const merged: Kojo2ProjectMergedSite[] = [];
+  for (const site of localRefs) merged.push({ path: null, span: site.span, kind: site.kind });
+  for (const site of external) merged.push({ path: site.path, span: site.span, kind: site.kind });
+  const refs: Kojo2ProjectMergedSite[] = [];
+  for (const site of merged) if (site.kind === 'decl') refs.push(site);
+  for (const site of merged) if (site.kind !== 'decl') refs.push(site);
+  return { symbol, local: localRefs, external, refs, truncated };
+}
+
+/** 跨文件 provider 的注入面 */
+export interface Kojo2ProjectReferenceProviderOptions {
+  /** 项目索引 getter（宿主接自己那份 `createKojo2ProjectIndex()`；缺席 = 退化为同文件） */
+  readonly getIndex?: () => Kojo2ProjectIndex | null | undefined;
+  /** model → 本文件路径（缺省取 `model.uri.fsPath` / `uri.path`；取不到 = 索引不排除自身） */
+  readonly pathOf?: (model: Monaco.editor.ITextModel) => string | undefined;
+  /**
+   * 跨文件 `path` → `Monaco.Uri`（缺省 `monaco.Uri.file`）。
+   * 转换抛错 / 转换不出 ⇒ 这一条落 `model.uri`（"缺省 model.uri 兜底"）。
+   */
+  readonly uriForPath?: (path: string) => Monaco.Uri | undefined;
+}
+
+/** 取本文件路径：注入转换优先；缺省读 uri 的 fsPath / path（两者都取不到 ⇒ undefined） */
+function pathOfModel(
+  model: Monaco.editor.ITextModel,
+  pathOf: ((model: Monaco.editor.ITextModel) => string | undefined) | undefined,
+): string | undefined {
+  if (pathOf !== undefined) {
+    try {
+      const path = pathOf(model);
+      return typeof path === 'string' && path.length > 0 ? path : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const uri = uriOf(model) as unknown as { fsPath?: unknown; path?: unknown } | undefined;
+  if (uri === undefined) return undefined;
+  if (typeof uri.fsPath === 'string' && uri.fsPath.length > 0) return uri.fsPath;
+  if (typeof uri.path === 'string' && uri.path.length > 0) return uri.path;
+  return undefined;
+}
+
+/** path → Uri（注入优先；缺省 monaco.Uri.file；失败 / 不可用 ⇒ undefined，由调用方兜底） */
+function uriForProjectPath(
+  monaco: typeof Monaco,
+  path: string,
+  uriForPath: ((path: string) => Monaco.Uri | undefined) | undefined,
+): Monaco.Uri | undefined {
+  if (uriForPath !== undefined) {
+    try {
+      return uriForPath(path);
+    } catch {
+      return undefined;
+    }
+  }
+  const uriApi = (monaco as unknown as { Uri?: { file?: (path: string) => Monaco.Uri } }).Uri;
+  try {
+    return typeof uriApi?.file === 'function' ? uriApi.file(path) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 为 `kojo2` 语言注册**跨文件** ReferenceProvider（Shift+F12），返回**幂等** disposable。
+ *
+ * - flag 关 ⇒ 空操作（**零注册**）；
+ * - 只挂 `KOJO2_LANGUAGE_ID`，与 {@link installKojo2ReferenceProvider} 二选一（同时装会得到
+ *   两份结果，宿主按批次切换，不在这里替宿主去重）；
+ * - 索引 getter 抛错 / 回 `null` ⇒ 只是没有跨文件这一半，本文件结果照旧交出；
+ * - `includeDeclaration === false` ⇒ 去掉**所有** `decl` 位（含跨文件那份声明）；
+ * - 取文失败 / model 无 uri / 任何异常 ⇒ `[]`；注册失败原样外抛（一枚注册，无半成品）。
+ */
+export function installKojo2ProjectReferenceProvider(
+  monaco: typeof Monaco,
+  options: Kojo2ProjectReferenceProviderOptions = {},
+): Monaco.IDisposable {
+  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
+
+  return installKojo2Provider(monaco, {
+    provideReferences(model, position, context) {
+      try {
+        const source = sourceOf(model);
+        if (source === null) return [];
+        const modelUri = uriOf(model);
+        if (modelUri === undefined) return [];
+        const path = pathOfModel(model, options.pathOf);
+
+        let index: Kojo2ProjectIndex | null = null;
+        if (options.getIndex !== undefined) {
+          try {
+            index = options.getIndex() ?? null;
+          } catch {
+            index = null;
+          }
+        }
+
+        const result = kojo2ProjectReferencesAt(
+          source,
+          { line: position.lineNumber, column: position.column },
+          index,
+          path === undefined ? {} : { path },
+        );
+        if (result === null) return [];
+
+        const includeDeclaration = context?.includeDeclaration !== false;
+        const locations: Monaco.languages.Location[] = [];
+        for (const site of result.refs) {
+          if (!includeDeclaration && site.kind === 'decl') continue;
+          const uri =
+            site.path === null
+              ? modelUri
+              : (uriForProjectPath(monaco, site.path, options.uriForPath) ?? modelUri);
+          locations.push({ uri, range: toMonacoRange(site.span) });
+        }
+        return locations;
+      } catch {
+        return [];
       }
     },
-  };
+  });
 }

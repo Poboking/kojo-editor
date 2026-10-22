@@ -574,7 +574,7 @@ describe('语言 id / 扩展名关系：两门语言互不蚕食', () => {
 /* ============================== 档位清单（锁死） ============================== */
 
 describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变了"', () => {
-  it('ERB：11 枚共享 provider + 共享诊断上屏腿；self 只有补全 / 改名；3 项豁免', () => {
+  it('ERB：11 枚共享 provider + 共享诊断上屏腿；self 有补全/改名/高亮/扩选；1 项豁免（callhierarchy，0.57 无 API）', () => {
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'shared')).toEqual([
       'codelens',
       'definition',
@@ -589,7 +589,12 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
       'semantic',
       'signature',
     ]);
-    expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'self')).toEqual(['completion', 'rename']);
+    expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'self')).toEqual([
+      'completion',
+      'highlight',
+      'rename',
+      'selection',
+    ]);
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'builtin')).toEqual([
       'brackets',
       'indent',
@@ -597,8 +602,6 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
     expect(exemptionsOf(ERB_LANGUAGE_ID).map((entry) => entry.capability).sort()).toEqual([
       'callhierarchy',
-      'highlight',
-      'selection',
     ]);
   });
 
@@ -669,3 +672,4 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
 });
+

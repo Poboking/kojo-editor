@@ -69,7 +69,7 @@ import {
   type Kojo2ExpandCompilation,
   type Kojo2ExpandView,
 } from './kojo2-expand-view';
-import { kojo2CompletionAt, type Kojo2CompletionCandidate, type Kojo2CompletionOptions } from './kojo2-completion';
+import { kojo2CompletionAt, type Kojo2CompletionCandidate, type Kojo2CompletionOptions, type Kojo2FaceTemplates } from './kojo2-completion';
 import {
   kojo2SnippetCandidatesAt,
   type Kojo2CompletionSnippet,
@@ -120,8 +120,12 @@ export interface Kojo2ProviderOptions {
    */
   readonly getCompile?: Kojo2ExpandCompileSource;
   /**
-   * 补全的**宿主投影**（K2-COMPLETE-ARGS-FACE）：事件参数形状 / `@颜绘` 脸表 / 行尾提示名。
-   * 缺省 ⇒ 各新候选位零候选（不猜）；既有候选源逐字不变。
+   * 补全的**宿主投影**（K2-COMPLETE-ARGS-FACE / K2-COMPLETE-DATA）：事件参数形状 /
+   * `@颜绘` 参数 / 行尾提示名。
+   *
+   * 每一项缺省时各自回落到 adapter 的契约字段（事件目录现投影 / `presentation.faceTemplates` /
+   * `presentation.hintNames`；旧 adapter 没有这些字段 ⇒ 对应候选位零候选，不猜）。
+   * 显式注入优先——宿主可换投影而不换 adapter。
    */
   readonly completion?: Omit<Kojo2CompletionOptions, 'adapter'>;
 }
@@ -206,6 +210,29 @@ function eventArgsOf(adapter: GameAdapter): ReturnType<typeof projectEventArgs> 
     const projected = projectEventArgs(adapter.eventCatalog);
     EVENT_ARGS_CACHE.set(adapter, projected);
     return projected;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * adapter 声明的 `@颜绘` 参数候选（K2-COMPLETE-DATA）与行尾提示名：**现取**契约字段。
+ *
+ * 与 {@link eventArgsOf} 同一条纪律：数据住 adapter，语言层只读；项目切换会换一枚 adapter，
+ * 字段本身是引用、不需要缓存。字段缺省（旧 adapter）/ 读取抛错 ⇒ `undefined` ⇒ 各格零候选，
+ * 不猜任何内置词。显式注入的 `completion.faceTemplates` / `completion.hintNames` 优先。
+ */
+function faceTemplatesOf(adapter: GameAdapter): Kojo2FaceTemplates | undefined {
+  try {
+    return adapter.presentation.faceTemplates;
+  } catch {
+    return undefined;
+  }
+}
+
+function hintNamesOf(adapter: GameAdapter): readonly string[] | undefined {
+  try {
+    return adapter.presentation.hintNames;
   } catch {
     return undefined;
   }
@@ -405,10 +432,17 @@ export function kojo2CompletionItems(
   const query = { source, line: position.lineNumber, column: position.column };
   const eventArgs =
     completion?.eventArgs ?? (adapter === undefined ? undefined : eventArgsOf(adapter));
+  // K2-COMPLETE-DATA：宿主没显式注入时，从 adapter 的契约字段现取（旧 adapter 没有 ⇒ 零候选）
+  const faceTemplates =
+    completion?.faceTemplates ?? (adapter === undefined ? undefined : faceTemplatesOf(adapter));
+  const hintNames =
+    completion?.hintNames ?? (adapter === undefined ? undefined : hintNamesOf(adapter));
   const candidates = kojo2CompletionAt(query, {
     ...(completion ?? {}),
     ...(eventArgs === undefined ? {} : { eventArgs }),
     ...(adapter === undefined ? {} : { adapter }),
+    ...(faceTemplates === undefined ? {} : { faceTemplates }),
+    ...(hintNames === undefined ? {} : { hintNames }),
   });
   const lineText = lineTextOf(model, position.lineNumber);
   const range = tokenRangeAt(position.lineNumber, lineText, position.column);

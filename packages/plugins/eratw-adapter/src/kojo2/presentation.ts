@@ -8,7 +8,7 @@
  * `ERATW_LIBRARY_FUNCTIONS` 取（心形 → HPH_PRINT、显示表情 → PRINT_FACE），
  * 查不到就在模块装载时报错（fail-closed，绝不静默降级）。
  */
-import type { AdapterPresentation } from '../../../../kojo-core/src/adapter.js';
+import type { AdapterPresentation, FaceTemplateNames } from '../../../../kojo-core/src/adapter.js';
 import { ERATW_LIBRARY_FUNCTIONS } from '../library-table.js';
 import { ERATW_PROFILE } from './profile.js';
 
@@ -22,13 +22,21 @@ function engineOf(libraryName: string): string {
 }
 
 /**
+ * 行尾提示词（§4.8）：eraTW 只认这一枚**演出**提示，其余括号组是导演批注。
+ *
+ * 单一真源：心形演出的引擎落点（库表查名）与 backend `hintSupport`、2.0 补全数据都从
+ * 本常量取，不抄第二份。
+ */
+export const ERATW_HEART_HINT = '心形';
+
+/**
  * `(心形)` → `HPH_PRINT(@"…", "<模式>")`。
  * 模式四象限（原型语料实证，v1 tutorial-reference-lines 同口径）：
  * - 台词：等待 `w` / `续` `l`；
  * - 旁白：等待 `dw` / `续` `dl`。
  */
 const HEART = Object.freeze({
-  engine: engineOf('心形'),
+  engine: engineOf(ERATW_HEART_HINT),
   dialogue: Object.freeze({ wait: 'w' as const, continue: 'l' as const }),
   narration: Object.freeze({ wait: 'dw' as const, continue: 'dl' as const }),
 });
@@ -66,12 +74,40 @@ const OPTIONS = Object.freeze({
   maxPerScene: 1,
 });
 
-/** eraTW 演出面：四项全声明（未声明的面 core 会按 §10.10 报"当前 adapter 不支持"） */
-export const ERATW_PRESENTATION: AdapterPresentation = Object.freeze({
+/**
+ * `@颜绘` 参数候选（K2-COMPLETE-DATA；additive 补全面）。
+ *
+ * 只登记**有 v1 真源**的维度：
+ * - 表情 = `FACE.defaultExpression`（adapter 自己保证能画的默认表情，同一枚数据派生，
+ *   不另抄词表）；
+ * - 服装 / 差分 / 特效：v1 数据里没有可枚举词表（引擎侧收任意字符串），故**不登记**——
+ *   缺省 = 语言层这三格零候选，宁缺勿编。
+ */
+export const ERATW_FACE_ARGUMENT_NAMES: FaceTemplateNames = Object.freeze({
+  expressions: Object.freeze([FACE.defaultExpression]),
+});
+
+/** 行尾提示名（K2-COMPLETE-DATA）：与 backend `hintSupport` 同一枚真源 */
+export const ERATW_HINT_NAMES: readonly string[] = Object.freeze([ERATW_HEART_HINT]);
+
+/** 能力声明面（本文件下面要按"声明了才给候选"派生补全数据，故先落这一格） */
+const DECLARED: Pick<AdapterPresentation, 'heart' | 'color' | 'face' | 'options'> = Object.freeze({
   heart: HEART,
   color: COLOR,
   face: FACE,
   options: OPTIONS,
+});
+
+/**
+ * eraTW 演出面：四项全声明（未声明的面 core 会按 §10.10 报"当前 adapter 不支持"）。
+ *
+ * 补全数据（K2-COMPLETE-DATA）跟着能力面走：能力没声明就不给候选（候选只描述"能填什么"，
+ * 不能替能力面说"能用"）。
+ */
+export const ERATW_PRESENTATION: AdapterPresentation = Object.freeze({
+  ...DECLARED,
+  ...(DECLARED.face === null ? {} : { faceTemplates: ERATW_FACE_ARGUMENT_NAMES }),
+  ...(DECLARED.heart === null ? {} : { hintNames: ERATW_HINT_NAMES }),
 });
 
 /* ============================== `# 池` 等值分派落点数据 ============================== */

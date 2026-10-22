@@ -174,6 +174,76 @@ describe('用户源码侧：未声明 presentation', () => {
   });
 });
 
+describe('补全数据契约（K2-COMPLETE-DATA，additive）', () => {
+  it('旧 adapter 不声明：`faceTemplates` / `hintNames` 缺省 undefined，自检零诊断', () => {
+    expect(FIXTURE_ADAPTER.presentation.faceTemplates).toBeUndefined();
+    expect(FIXTURE_ADAPTER.presentation.hintNames).toBeUndefined();
+    expect(validateGameAdapter(FIXTURE_ADAPTER)).toEqual([]);
+  });
+
+  it('声明合法清单：零诊断，四格与提示名原样可读', () => {
+    const adapter = fixtureWith({
+      presentation: {
+        ...FIXTURE_ADAPTER.presentation,
+        faceTemplates: {
+          expressions: ['表情甲'],
+          costumes: ['服装甲'],
+          differentials: ['差分甲'],
+          effects: ['特效甲'],
+        },
+        hintNames: ['提示甲'],
+      },
+    });
+    expect(validateGameAdapter(adapter)).toEqual([]);
+    expect(adapter.presentation.faceTemplates?.expressions).toEqual(['表情甲']);
+    expect(adapter.presentation.faceTemplates?.costumes).toEqual(['服装甲']);
+    expect(adapter.presentation.hintNames).toEqual(['提示甲']);
+  });
+
+  it('只给一部分维度也合法（缺的维度 = 该格零候选，不猜）', () => {
+    const adapter = fixtureWith({
+      presentation: {
+        ...FIXTURE_ADAPTER.presentation,
+        faceTemplates: { expressions: ['表情甲'] },
+      },
+    });
+    expect(validateGameAdapter(adapter)).toEqual([]);
+    expect(adapter.presentation.faceTemplates?.costumes).toBeUndefined();
+    expect(adapter.presentation.faceTemplates?.effects).toBeUndefined();
+  });
+
+  it('形状坏 ⇒ unit/adapter-incomplete（空名 / 非数组都不放行）', () => {
+    const codesOf = (presentation: GameAdapter['presentation']): readonly string[] =>
+      validateGameAdapter(fixtureWith({ presentation })).map((diagnostic) => String(diagnostic.code));
+    const base = FIXTURE_ADAPTER.presentation;
+    expect(
+      codesOf({ ...base, hintNames: '提示甲' as unknown as readonly string[] }),
+    ).toContain(ADAPTER_VALIDATION_CODES.incomplete);
+    expect(codesOf({ ...base, hintNames: [''] })).toContain(ADAPTER_VALIDATION_CODES.incomplete);
+    expect(
+      codesOf({
+        ...base,
+        faceTemplates: { expressions: [''] },
+      }),
+    ).toContain(ADAPTER_VALIDATION_CODES.incomplete);
+  });
+
+  it('深冻结覆盖补全数据（运行期不得改词表）', () => {
+    const adapter = freezeAdapter(
+      fixtureWith({
+        presentation: {
+          ...FIXTURE_ADAPTER.presentation,
+          faceTemplates: { expressions: ['表情甲'] },
+          hintNames: ['提示甲'],
+        },
+      }),
+    );
+    expect(Object.isFrozen(adapter.presentation.faceTemplates)).toBe(true);
+    expect(Object.isFrozen(adapter.presentation.faceTemplates?.expressions)).toBe(true);
+    expect(Object.isFrozen(adapter.presentation.hintNames)).toBe(true);
+  });
+});
+
 describe('用户源码侧：programFeatures 闸门', () => {
   it('fixture program 全关 → 每种构造映射到正确的 core 码', () => {
     expect(checkProgramFeature(FIXTURE_ADAPTER, 'arrays')?.code).toBe('core/array/unsupported');

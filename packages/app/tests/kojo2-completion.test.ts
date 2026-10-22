@@ -545,6 +545,37 @@ describe('`(心形)` 行尾提示名：注入才有候选', () => {
   });
 });
 
+/* ============================================================================ */
+/* K2-COMPLETE-DATA：eraTW 契约字段（adapter 数据，同一份真源）                  */
+/* ============================================================================ */
+
+describe('K2-COMPLETE-DATA：eraTW 的补全数据就是 adapter 契约字段', () => {
+  const faceTemplates = ERATW_GAME_ADAPTER.presentation.faceTemplates;
+  const hintNames = ERATW_GAME_ADAPTER.presentation.hintNames;
+
+  it('adapter 声明了表情格与提示名（补全数据有生产者）', () => {
+    expect(faceTemplates?.expressions?.length).toBeGreaterThan(0);
+    expect(hintNames?.length).toBeGreaterThan(0);
+  });
+
+  it('`@颜绘 我 |` 出 adapter 声明的表情（逐项相等，不手抄）', () => {
+    expect(
+      labelsOf(kojo2CompletionAt(queryAt(`${BASE}@颜绘 我 |`), { faceTemplates })),
+    ).toEqual([...(faceTemplates?.expressions ?? [])]);
+  });
+
+  it('行尾未闭合的 `(` 之后出 adapter 声明的提示名', () => {
+    expect(
+      labelsOf(kojo2CompletionAt(queryAt(`${BASE}灵梦：「早安」( |`), { hintNames })),
+    ).toEqual([...(hintNames ?? [])]);
+  });
+
+  it('未注入（旧 adapter / 无注入）⇒ 表情格与提示名格零候选，不猜', () => {
+    expect(kojo2CompletionAt(queryAt(`${BASE}@颜绘 我 |`))).toEqual([]);
+    expect(kojo2CompletionAt(queryAt(`${BASE}灵梦：「早安」( |`))).toEqual([]);
+  });
+});
+
 describe('新候选位的位置门：台词 / `@原生` / 注释 / 旧写法不误触', () => {
   it('`@原生` 体内的 `# 机 指令 编` 零候选（原文不解释）', () => {
     const source = FIXTURE.replace(

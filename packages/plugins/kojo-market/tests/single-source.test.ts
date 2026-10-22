@@ -126,8 +126,11 @@ describe('市场单一真源守门', () => {
   });
 
   it('SHA-256 实现全仓唯一（真调用点，不是提及）', () => {
+    // `/tests/` 里的 node:crypto 是**对拍 oracle**（校验被测实现与标准库一致），不是第二份校验锚。
     expect(
-      scan([/createHash\(\s*['"]sha256['"]\s*\)/, /\.digest\(\s*['"]SHA-256['"]\s*,/], ALL),
+      scan([/createHash\(\s*['"]sha256['"]\s*\)/, /\.digest\(\s*['"]SHA-256['"]\s*,/], ALL).filter(
+        (f) => !f.includes('/tests/'),
+      ),
     ).toEqual([ONLY_SHA_SOURCE]);
   });
 
@@ -198,7 +201,11 @@ describe('市场单一真源守门', () => {
       /\bmd5\b/i,
     ];
     const hits = scan(PATTERNS, ALL).filter(
-      (f) => f !== HOST_DIGEST_SOURCE && f !== HOST_DIGEST_TEST_SOURCE,
+      (f) =>
+        f !== HOST_DIGEST_SOURCE &&
+        f !== HOST_DIGEST_TEST_SOURCE &&
+        // 测试里用标准库做 oracle 不算第二份实现（同上一枚用例的口径）
+        !f.includes('/tests/'),
     );
     expect(hits).toEqual([ONLY_SHA_SOURCE]);
     // 例外必须窄：宿主只准有一处上传摘要原语，且下行校验锚仍只住 TS

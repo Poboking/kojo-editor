@@ -119,9 +119,9 @@ export function isLanguageCapabilityExemption(
 /**
  * ERB **已交付**的能力（descriptor 直接引用；也是矩阵该语言行的生成依据）。
  *
- * 排除的三项（矩阵里是 `{ exempt }`，理由见各状态）：
- * `highlight` / `selection` / `callhierarchy` —— Monaco provider 侧 ERB 尚无对应腿
- * （`callhierarchy` 只有纯模型 `erb-call-hierarchy.ts`，被调用面板走它，不经 Monaco 协议）。
+ * 排除的一项（矩阵里是 `{ exempt }`，理由见状态表）：
+ * `callhierarchy` —— Monaco 0.57 无该 API；纯模型 `erb-call-hierarchy.ts` 与 provider 模块
+ * `erb-callhierarchy-provider.ts` 已交付，宿主用 `createErbCallHierarchyProvider()` 自建面板。
  */
 export const ERB_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
   LanguageCapability.Folding,
@@ -136,6 +136,9 @@ export const ERB_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
   LanguageCapability.Inlay,
   LanguageCapability.CodeLens,
   LanguageCapability.Implementation,
+  // 批次九：ERB 的同符号高亮与结构化扩选（两语言同权面）
+  LanguageCapability.Highlight,
+  LanguageCapability.Selection,
   LanguageCapability.Completion,
   LanguageCapability.Hover,
   LanguageCapability.Definition,
@@ -148,7 +151,8 @@ export const ERB_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
  *
  * 批次八的 refs / rename / signature / inlay / codelens / highlight / selection 七枚模块
  * 已在 `ui/editor-global-providers.ts` 的 2.0 段接线，因此进这份表；`callhierarchy` 的纯模型
- * 已交付但 Monaco 0.57 无该 API（宿主自建面板），仍留豁免。
+ * 已交付但 Monaco 0.57 无该 API（宿主自建面板），仍留豁免；`implementation` 明确不做
+ *（2.0 里"跳实现"与"转定义"是同一件事，F12 已覆盖）。
  */
 export const KOJO2_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
   LanguageCapability.Folding,
@@ -204,17 +208,11 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
     [LanguageCapability.Inlay]: 'shared',
     [LanguageCapability.CodeLens]: 'shared',
     [LanguageCapability.Implementation]: 'shared',
-    [LanguageCapability.Highlight]: {
-      exempt:
-        'ERB 侧没有 documentHighlight provider（同符号扫描腿未建；批次八 ERB 树层只补 semantic / indent / brackets 面）',
-    },
-    [LanguageCapability.Selection]: {
-      exempt:
-        'ERB 侧没有 selectionRange provider（按结构扩选尚未接线；树层 facets 未声明 selection 面）',
-    },
+    [LanguageCapability.Highlight]: 'self',
+    [LanguageCapability.Selection]: 'self',
     [LanguageCapability.CallHierarchy]: {
       exempt:
-        'ERB 只有纯模型 monaco/erb-call-hierarchy.ts（被调用面板取数），Monaco callHierarchy provider 未注册',
+        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；纯模型 monaco/erb-call-hierarchy.ts 与 provider 模块 monaco/erb-callhierarchy-provider.ts 已交付，宿主需用 createErbCallHierarchyProvider() 自建面板消费',
     },
     [LanguageCapability.Completion]: 'self',
     [LanguageCapability.Hover]: 'shared',
@@ -231,8 +229,8 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
  * Monaco 内建）；`diagnostics` 是 `self`：2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` →
  * `setModelMarkers(..., KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用）。
  *
- * 剩余两项豁免：`implementation`（2.0 无模块）与 `callhierarchy`（Monaco 0.57 无该 API，
- * 纯模型 `monaco/kojo2-callhierarchy.ts` 由宿主自建面板消费）。
+ * 剩余两项豁免：`implementation`（明确不做：2.0 里"跳实现"与"转定义"同义，F12 已覆盖）与
+ * `callhierarchy`（Monaco 0.57 无该 API，纯模型 `monaco/kojo2-callhierarchy.ts` 由宿主自建面板消费）。
  */
 const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabilityStatus>> =
   Object.freeze({
@@ -249,7 +247,7 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.CodeLens]: 'self',
     [LanguageCapability.Implementation]: {
       exempt:
-        '批次八无对应模块（跳实现未扩到 2.0；v1 的共享跳实现面见 monaco/erb-implementation.ts）',
+        '明确不做、无对应模块：2.0 里"跳实现"与"转定义"是同一件事（F12 已覆盖 `@函`/模板落点），v1 的共享跳实现面见 monaco/erb-implementation.ts',
     },
     [LanguageCapability.Highlight]: 'self',
     [LanguageCapability.Selection]: 'self',

@@ -79,7 +79,7 @@ import { ERATW_EVENT_CATALOG } from './event-catalog.js';
 import { emitEratwForEachLoop } from './foreach-emit.js';
 import { emitOptions } from './options-emit.js';
 import { emitPoolDispatch } from './pool-emit.js';
-import { ERATW_PRESENTATION } from './presentation.js';
+import { ERATW_PRESENTATION, ERATW_HEART_HINT } from './presentation.js';
 import type { EratwProfileOverrides } from './profile-resolve.js';
 import { eratwAdapterProfileOverrides, resolveEratwProfile } from './profile-resolve.js';
 import { emitTableDispatch } from './table-emit.js';
@@ -125,8 +125,7 @@ export interface EratwEmitDeps {
 /** 口上函数表（既有 adapter 单一真源；本文件只消费不解释） */
 const FACE_TABLE = createEratwFaceTable();
 
-/** core 的行尾提示词（§4.8）；eraTW 只认识这一枚演出提示 */
-const HEART_HINT = '心形';
+/** core 的行尾提示词（§4.8）：单一真源在 `presentation.ts`（与补全数据同一枚） */
 
 /** `@织` 修饰词 → Emuera 事件函数属性（§8.6 / 附录 B.1） */
 const WEAVE_PRIORITY_ATTR: Readonly<Record<'pri' | 'later' | 'only', string>> = Object.freeze({
@@ -296,7 +295,7 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
     const heart = presentationOpen('heart') ? ERATW_PRESENTATION.heart : null;
 
     // `(心形)` → HPH_PRINT(@"…","<mode>")：模式按 presentation 数据四象限
-    if (heart !== null && request.hint === HEART_HINT && request.hintRole === 'supported') {
+    if (heart !== null && request.hint === ERATW_HEART_HINT && request.hintRole === 'supported') {
       const mode = dialogue
         ? request.wait === 'wait'
           ? heart.dialogue.wait
@@ -573,7 +572,7 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
 
     /** 行尾提示：`(心形)` 是 adapter 声明过的演出；其余一律导演批注（不打印） */
     hintSupport(hint: string): HintSupport {
-      if (hint !== HEART_HINT) return 'annotation';
+      if (hint !== ERATW_HEART_HINT) return 'annotation';
       // 能力 = 数据有形状 ∧ 生效 profile 开着（旧口径只看数据；缺省下两者同真）
       return presentationOpen('heart') && ERATW_PRESENTATION.heart !== null ? 'supported' : 'unsupported';
     },

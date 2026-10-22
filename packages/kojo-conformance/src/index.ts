@@ -9,3 +9,5 @@ export * from './kit.js';
 export * from './language.js';
 export * from './differential.js';
 export * from './encoding.js';
+export * from './migration.js';
+export * from './corpus.js';
