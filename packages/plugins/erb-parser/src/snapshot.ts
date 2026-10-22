@@ -352,7 +352,7 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       raw[7] === (e.refs as unknown) &&
       raw.length === 11 &&
       raw[9] === (e.refsNamesFp ?? null) &&
-      raw[10] === (e.candidates ?? '') &&
+      raw[10] === (e.candidates ?? null) &&
       // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
       Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
       Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
