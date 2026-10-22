@@ -1,5 +1,6 @@
 /**
- * 内置教程内容与接线单测（E6；E10 补「样例溯源守卫」；E12 守卫来源扩到三份 fixture）。
+ * 内置教程内容与接线单测（E6；E10 补「样例溯源守卫」；E12 守卫来源扩到三份 fixture；
+ * 2026-10-21 Kojo 2.0 现实批补「档位口径逐字 + 2.0 定位在场 + 事件名对现行目录」三条）。
  *
  * 教程是"会过期的代码"：这里钉的是**结构性底线**（节数、标题唯一、段落/样例非空、
  * 样例不出现 `undefined` 这类拼装泄漏），三条必须成立的内容事实——
@@ -13,7 +14,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { KOJO_TUTORIAL, SUGAR_TUTORIAL, TUTORIALS, type Tutorial } from '../src/tutorial-content';
+import { KOJO2_TUTORIAL } from '../src/tutorial-content-kojo2';
+import { ERATW_EVENT_NAMES } from '../src/kojo2/event-catalog';
 import {
+  KOJO2_TUTORIAL_OVERLAY_ID,
   KOJO_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
   createTutorialOverlay,
@@ -34,25 +38,41 @@ function tutorialText(t: Tutorial): string {
 }
 
 describe('教程内容（E6）', () => {
-  it('两个教程 id / title 正确，且 TUTORIALS 索引与单例一致', () => {
+  it('四本教程 id / title 正确，且 TUTORIALS 索引与单例一致', () => {
     expect(TUTORIALS.sugar).toBe(SUGAR_TUTORIAL);
     expect(TUTORIALS.kojo).toBe(KOJO_TUTORIAL);
+    expect(TUTORIALS.kojo2).toBe(KOJO2_TUTORIAL);
     expect(SUGAR_TUTORIAL.id).toBe('sugar');
     expect(KOJO_TUTORIAL.id).toBe('kojo');
+    expect(KOJO2_TUTORIAL.id).toBe('kojo2');
     expect(SUGAR_TUTORIAL.title).toBe('.kojo 语言教程');
     expect(KOJO_TUTORIAL.title).toBe('口上教程');
+    expect(KOJO2_TUTORIAL.title).toBe('Kojo 2.0 语言教程');
     expect(SUGAR_TUTORIAL.lead.length).toBeGreaterThan(0);
     expect(KOJO_TUTORIAL.lead.length).toBeGreaterThan(0);
+    expect(KOJO2_TUTORIAL.lead.length).toBeGreaterThan(0);
   });
 
-  it.each([SUGAR_TUTORIAL, KOJO_TUTORIAL])('$title：节数 ≥ 6，标题非空且互不重复', (t) => {
+  /**
+   * 词表登记闸（2.0 接线批）：`TUTORIALS` 的键必须与 `TutorialId` 词表**一一对应**——
+   * 少一本就是某路入口点了拿不到正文（静默），多一本就是 `Record<TutorialId, Tutorial>` 编译不过。
+   * 顺带钉住"旧两本提到的 2.0 教程名 = 真源 title 字面"，指路句与接线名不许各写一份。
+   */
+  it('TUTORIALS 键表恰好四本，且指路句里的 2.0 教程名就是正源 title', () => {
+    expect(Object.keys(TUTORIALS).sort()).toEqual(['kojo', 'kojo2', 'reference', 'sugar']);
+    for (const t of [SUGAR_TUTORIAL, KOJO_TUTORIAL]) {
+      expect(tutorialText(t), `${t.title} 的 2.0 指路名与正源 title 不一致`).toContain(KOJO2_TUTORIAL.title);
+    }
+  });
+
+  it.each([SUGAR_TUTORIAL, KOJO_TUTORIAL, KOJO2_TUTORIAL])('$title：节数 ≥ 6，标题非空且互不重复', (t) => {
     expect(t.sections.length).toBeGreaterThanOrEqual(6);
     const headings = t.sections.map((s) => s.heading);
     for (const h of headings) expect(h.trim().length).toBeGreaterThan(0);
     expect(new Set(headings).size).toBe(headings.length);
   });
 
-  it.each([SUGAR_TUTORIAL, KOJO_TUTORIAL])('$title：每节段落非空、样例给定字段合法', (t) => {
+  it.each([SUGAR_TUTORIAL, KOJO_TUTORIAL, KOJO2_TUTORIAL])('$title：每节段落非空、样例给定字段合法', (t) => {
     for (const s of t.sections) {
       expect(s.paragraphs.length).toBeGreaterThan(0);
       for (const p of s.paragraphs) expect(p.trim().length).toBeGreaterThan(0);
@@ -63,6 +83,10 @@ describe('教程内容（E6）', () => {
           expect(sample.erb.trim().length).toBeGreaterThan(0);
           expect(sample.erb).not.toContain('undefined');
         }
+      }
+      // 对照表的渲染前提：行长必须等于列数（2.0 那本的⑬就靠这张表）
+      for (const table of s.tables ?? []) {
+        for (const row of table.rows) expect(row.length, `${t.title} / ${s.heading}`).toBe(table.columns.length);
       }
     }
   });
@@ -96,11 +120,58 @@ describe('教程内容（E6）', () => {
   });
 
   /**
+   * Kojo 2.0 现实口径（2026-10-21 现实批）——这里钉的全是**必须逐字在场**，一条没放宽。
+   *
+   * ① 口上教程里那段档位说明与其余 lane 用的是**同一段字面**：三份教程各写各的"怎么切档"
+   *    是最难查的漂移（读者会在两本里读到两种操作），所以整段按字符串钉死；
+   * ② 两份教程都得把读者指到「Kojo 2.0 语言教程」，并说清自己教的是 v1——只有一份教程
+   *    承认 2.0 存在，另一本就会把人留在旧写法里还以为学全了；
+   * ③ 指路句里的教程名一律用**现行 title 字面**（`.kojo 语言教程` 由常量给，不许另抄）。
+   */
+  it('两份教程都交代 2.0 定位，且档位口径逐字统一', () => {
+    const tierText =
+      '今天默认档位是「只认 v1」：新装的编辑器打开 `.kojo` 走的还是老写法。要看这份教程里的 2.0 写法，去设置页把「Kojo 2.0 档位」切到「双轨」（老 `.kojo` 一字不动，新 `.kojo2` 走 2.0）或「2.0 默认」；切档后需要重载一次窗口，语言面与配色才全部换过来（编辑器会提示，不会静默）。';
+    expect(tutorialText(KOJO_TUTORIAL), '口上教程缺档位口径（或被人改写了字面）').toContain(tierText);
+    for (const t of [SUGAR_TUTORIAL, KOJO_TUTORIAL]) {
+      const text = tutorialText(t);
+      expect(text, `${t.title} 没指向「Kojo 2.0 语言教程」`).toContain('Kojo 2.0 语言教程');
+      expect(text, `${t.title} 没交代自己讲的是 v1 / 两门分开`).toContain('v1');
+      expect(text, `${t.title} 的指路句没用 .kojo 教程的现行标题`).toContain(SUGAR_TUTORIAL.title);
+    }
+  });
+
+  /**
+   * 2.0 的事件口径按**现行实现**列（不是按设计稿的记忆）：口上教程⑧那九条事件名必须与
+   * eraTW 事件目录逐字相等、一条不缺——面名与事件名混讲是这批最容易复发的失真。
+   */
+  it('口上教程列出的 2.0 事件名与 eraTW 事件目录逐字一致', () => {
+    const text = tutorialText(KOJO_TUTORIAL);
+    for (const name of ERATW_EVENT_NAMES) {
+      expect(text, `口上教程漏了 2.0 事件：${name}`).toContain(`\`${name}\``);
+    }
+  });
+
+  /**
+   * 两门语言的标点口径不许混在一句里：v1 的块头以全角冒号结尾是**对的**，2.0 的声明标题
+   * 不写冒号也是**对的**（设计稿 §4.13），所以钉的是"两句都在场且各自归属清楚"。
+   */
+  it('口上教程⑦按语言分开写标点口径（v1 块头带冒号 / 2.0 声明不写冒号）', () => {
+    const s7 = KOJO_TUTORIAL.sections.find((s) => s.heading.startsWith('⑦'));
+    const text = s7 ? [s7.heading, ...s7.paragraphs].join('\n') : '';
+    expect(text, '⑦ 节不见了').not.toBe('');
+    expect(text).toContain('以全角冒号结尾');
+    expect(text).toContain('声明标题不写冒号');
+    expect(text).toContain('# 机');
+  });
+
+  /**
    * 已封存的三件不许出现在教程里（用户 2026-10-13 令：只留设置页一个总开关）。
    * 教程是给零基础作者的第一个信息源，提一件"其实看不见"的功能等于埋一个坑。
+   * 2.0 接线批起，`kojo2` 那本同判（三本散文共一条底线）。
    */
-  it('两个教程都不提已封存的三件（.kojo 预览 / .kojo 转译检查 / 归档浏览器）', () => {
-    const all = tutorialText(SUGAR_TUTORIAL) + tutorialText(KOJO_TUTORIAL);
+  it('三本教程都不提已封存的三件（.kojo 预览 / .kojo 转译检查 / 归档浏览器）', () => {
+    const all =
+      tutorialText(SUGAR_TUTORIAL) + tutorialText(KOJO_TUTORIAL) + tutorialText(KOJO2_TUTORIAL);
     for (const sealed of ['.kojo 预览', '.kojo 转译检查', '归档浏览器', '糖视图', '语法糖视图', '糖预览']) {
       expect(all, `教程里出现了已封存功能：${sealed}`).not.toContain(sealed);
     }
@@ -132,6 +203,10 @@ describe('教程内容（E6）', () => {
  *   （教程需要把"文件头"和"某一块"放在一起讲，也需要把两份样例的同一面并排给看）；
  * - 行首空白一律忽略——截取时会剥掉整块缩进（tab 与 4 空格互换不算漂移）。
  * 它的目的不是证明内容正确，而是抓"日后有人手滑改了样例里的一个字"。
+ *
+ * **`kojo2` 不并进来，不是放宽**：这批出处全是 `.kojo`（v1）语料，2.0 的样张一枚都不该
+ * 从里面截；它的同源守卫（十一份 `.kojo2` 夹具 + "零 erb 样张"）在
+ * `tests/tutorial-content-kojo2.test.ts`，两处合起来才是四本全覆盖。
  */
 const sugarFixture = (name: string): string =>
   fileURLToPath(new URL(`../../../../fixtures/sugar/${name}`, import.meta.url));
@@ -213,10 +288,11 @@ describe('教程浮层接线（E6）', () => {
   it('overlay id 命名与既有向导对齐（eratw. 前缀 + 教程名）', () => {
     expect(SUGAR_TUTORIAL_OVERLAY_ID).toBe('eratw.tutorialSugar');
     expect(KOJO_TUTORIAL_OVERLAY_ID).toBe('eratw.tutorialKojo');
+    expect(KOJO2_TUTORIAL_OVERLAY_ID).toBe('eratw.tutorialKojo2');
   });
 
   it('工厂产出宿主可渲染的组件（UIPanelComponent 形态）', () => {
-    for (const tutorial of [SUGAR_TUTORIAL, KOJO_TUTORIAL]) {
+    for (const tutorial of [SUGAR_TUTORIAL, KOJO_TUTORIAL, KOJO2_TUTORIAL]) {
       expect(typeof createTutorialOverlay({ tutorial, close: () => {} })).toBe('function');
     }
   });
@@ -272,10 +348,48 @@ describe('节标题圈码记号拆分（splitHeadingMarker）', () => {
       expect(splitHeadingMarker(s.heading).marker, s.heading).toBeNull();
     }
   });
+
+  it('2.0 那本各节一律以圈码起首（目录成列的版面前提）', () => {
+    for (const s of KOJO2_TUTORIAL.sections) {
+      expect(splitHeadingMarker(s.heading).marker, s.heading).not.toBeNull();
+    }
+  });
+});
+
+/** 脚部按钮的文字（`.ghost small` 那一组：去处按钮 + 「关闭」） */
+function footerLabels(node: unknown): string[] {
+  const flat = (n: unknown): string =>
+    typeof n === 'string' ? n : Array.isArray(n) ? n.map(flat).join('') : '';
+  return collectNodes(node, 'ghost small').map((el) => flat(el.props?.children));
+}
+
+describe('脚部「查语法全表」去处（2.0 接线批）', () => {
+  /**
+   * 按钮给不给，只由**调用方给不给 `openReference`** 决定；`tutorial.id !== 'reference'`
+   * 是第二道锁（免得全表把自己再指回自己）。这一条对新 id 天然放行 ⇒ 2.0 那本的接线
+   * 故意**不传**去处：全表收的是 `.kojo`（v1）写法，2.0 的读者点过去只会拿到对不上号
+   * 的产物对照（2.0 那本自己的旧写法对照表在⑬的 tables 里）。
+   */
+  const build = (t: Tutorial, withReference: boolean): unknown =>
+    (createTutorialOverlay({
+      tutorial: t,
+      close: () => {},
+      ...(withReference ? { openReference: () => {} } : {}),
+    }) as () => unknown)();
+
+  it('v1 两本给去处；2.0 与全表不给（全表那枚由第二道锁兜住）', () => {
+    expect(footerLabels(build(SUGAR_TUTORIAL, true))).toEqual(['查语法全表', '关闭']);
+    expect(footerLabels(build(KOJO_TUTORIAL, true))).toEqual(['查语法全表', '关闭']);
+    // 误传去处也不许给全表画按钮（单槽位里"打开自己"是空转）
+    expect(footerLabels(build(TUTORIALS.reference, true))).toEqual(['关闭']);
+    // 接线事实：2.0 那本的脚部只有「关闭」
+    expect(footerLabels(build(KOJO2_TUTORIAL, false))).toEqual(['关闭']);
+    expect(footerLabels(build(KOJO2_TUTORIAL, true))).toEqual(['查语法全表', '关闭']);
+  });
 });
 
 describe('教程浮层结构（2026-10-17 文档式重排）', () => {
-  const ALL = [SUGAR_TUTORIAL, KOJO_TUTORIAL, TUTORIALS.reference];
+  const ALL = [SUGAR_TUTORIAL, KOJO_TUTORIAL, KOJO2_TUTORIAL, TUTORIALS.reference];
 
   it('根是 .wizard.tutorial，含抬头 / 两列主体 / 目录栏 / 正文列', () => {
     for (const t of ALL) {
@@ -405,7 +519,7 @@ describe('教程浮层抬头（反馈 2）', () => {
 });
 
 describe('目录折叠（反馈 6）', () => {
-  const ALL = [SUGAR_TUTORIAL, KOJO_TUTORIAL, TUTORIALS.reference];
+  const ALL = [SUGAR_TUTORIAL, KOJO_TUTORIAL, KOJO2_TUTORIAL, TUTORIALS.reference];
 
   it('目录是「标题行 + 条目列表」两级，标题行保留原 .tutorial-toc-label 并带折叠按钮', () => {
     for (const t of ALL) {
