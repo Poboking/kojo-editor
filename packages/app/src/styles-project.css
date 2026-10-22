@@ -4750,23 +4750,26 @@ button.primary .hint {
   margin-inline: calc((100% - var(--sample-w)) / 2);
 }
 /* 样例代码块：围栏代码的观感——井底色（--bg，与向导预览同源）、细边、等宽字。
+   版面是"表头 + 代码身"两行：表头的一切外观力学由库的井面标签行原语供给（它说"这块是
+   哪一侧"），**代码身是唯一滚动的一层**——表头不在滚动区里，所以滚到哪儿都不会盖住
+   正在读的行（2026-10-22 用户反馈：旧实现的表头是吸顶遮罩，一滚就压住代码内容）。
    长行软折行（pre-wrap）：对照块里 CJK 台词很长，横滚会把左右对照撕开；
    overflow-wrap 只管整词放不下的那种折断，正常换行机会仍走空白与 CJK 字间。
-   max-height 封顶 + 内部滚动：口上块动辄二十行，不设上限会把「编译为」的对照关系
+   max-height 封顶 + 代码身内部滚动：口上块动辄二十行，不设上限会把「编译为」的对照关系
    拉出整整两屏；320px 大约 14 行，够读完一段、又始终在同屏见到对面那块。 */
 .tutorial-code {
   margin: 0;
-  /* 井面（底 / 边 / 圆角 / 内衬）交效果库 `.u-well`：这里只写"这口井怎么抬、内衬多少"。
+  /* 内衬归表头与代码身各自管：井容器零内衬，表头才能贴住井的顶边（圆角靠 overflow 裁）。
+     井面（底 / 边 / 圆角 / 阴影）仍交效果库 `.u-well`；这里只写"这口井怎么抬、怎么分两行"。
      一线顶边高光 + 极淡投影让代码块从磨砂卡片上"浮"起一点，比纯平贴更有质感（内敛不抢眼）。 */
-  --well-pad-t: var(--space-2);
-  --well-pad-i: var(--space-3);
-  --well-pad-b: var(--space-3);
+  --well-pad-t: 0;
+  --well-pad-i: 0;
+  --well-pad-b: 0;
   --well-raise: var(--well-edge), var(--well-shadow);
+  display: flex;
+  flex-direction: column;
   max-height: 320px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
+  overflow: hidden;
   /* 教程里的代码块就是"你在编辑器里写的那份"⇒ 取编辑器面（与 Monaco 同一条栈），
      左边看着像源、右边看着像产物，对照关系靠字面本身也说了一遍 */
   font-family: var(--font-code);
@@ -4774,8 +4777,7 @@ button.primary .hint {
   line-height: 1.6;
   tab-size: 2;
 }
-/* 围栏的语言标签：吸顶行的一切力学（sticky / 负 margin / 实底 / 顶圆角）都在库的
-   `.u-well-head::before` 里，这里只剩"这块是什么"的一句话。 */
+/* 围栏的语言标签：只给文案，"这块是哪一侧"的行体力学在库的 `.u-well-head::before` 里。 */
 .tutorial-code::before {
   content: 'kojo 口上';
 }
@@ -4783,9 +4785,22 @@ button.primary .hint {
   content: '编译产物';
 }
 .tutorial-code code {
-  background: none;
+  /* 代码身：滚动与内衬都在这一层。底色沉一档（--surface-sunken）把"代码面"与抬起的表头
+     分开——表头是标签、代码身是被读的内容，靠明度差说层级，不靠再加一条边框。 */
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  background: var(--surface-sunken);
   border: none;
-  padding: 0;
+  /* 全局 `code` 规则给的 4px 圆角/--font-mono 在块级代码身上不成立：圆角会在井的顶角露出
+     一圈 pre 底色（浅色主题最明显），字面也该跟 pre 的编辑器栈走，不该与表头分成两套字。 */
+  border-radius: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-family: inherit;
   font-size: inherit;
 }
 /* 左右对照：kojo | 「编译为」 | 产物。窄容器（< 700px）回落上下堆叠——
@@ -9175,22 +9190,18 @@ button.resume-session {
   padding: var(--well-pad-t, 0) var(--well-pad-i, 0) var(--well-pad-b, 0);
 }
 
-/* 井面吸顶标签行：块自己说"我是哪一侧"，滚多远都在顶部。文案由消费方的
-   `::before { content: … }` 给——库不代发文案，也不与消费方抢 content 的特异度。 */
+/* 井面标签行：块自己说"我是哪一侧"。它是井自己的**第一行**，不进正文的滚动区——
+   父级是 flex 列、滚动交给井身元素，`flex: none` 让它永远占住自己那一行。
+   刻意**不吸顶**：吸顶遮罩会在滚动时把正在读的代码行盖在下面（2026-10-22 用户反馈
+   的缺陷形态），"标签永远可见"不值得拿正文换。
+   文案由消费方的 `::before { content: … }` 给——库不代发文案，也不与消费方抢 content 的特异度。 */
 .u-well-head::before,
 .tutorial-code::before {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: block;
-  margin:
-    calc(-1 * var(--well-pad-t, var(--space-2))) calc(-1 * var(--well-pad-i, var(--space-3)))
-    var(--space-1);
-  padding: 2px var(--well-pad-i, var(--space-3));
+  flex: none;
+  padding: var(--head-pad-y, 5px) var(--head-pad-i, var(--space-3));
   background: var(--head-bg, var(--surface-raised));
-  border-bottom: 1px solid var(--border);
-  border-radius:
-    var(--well-radius, var(--radius-md)) var(--well-radius, var(--radius-md)) 0 0;
+  border-bottom: 1px solid var(--head-border, var(--border-subtle));
   color: var(--head-fg, var(--fg-dim));
   font-size: var(--fs-0);
   font-weight: 600;
