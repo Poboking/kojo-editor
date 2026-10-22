@@ -57,6 +57,9 @@
  * 用法：node tools/smoke-tauri-dom.mjs [监测秒数，默认 100]
  *       KOJO_SMOKE_VITE_PORT=1432 node tools/smoke-tauri-dom.mjs 110   （换 vite 端口，CDP 仍是 9222）
  *       KOJO_SMOKE_ISOLATE_APPDATA=1 …                                   （独立 appDataDir，干净首启面；可选）
+ *       KOJO_BOOT_SETTLE_MS=12000 …                                      （放宽「可点后」观察窗；默认 4000=release 口径。
+ *                                                                        dev 形态 vite 不打包，空闲预取排到窗后 ⇒ 判红是量测窗，
+ *                                                                        不是产品回归；出货判据请用 release exe 走 boot-marks）
  * 退出码：0 = 通过；1 = 失败；2 = 前置不满足（端口被占 / 配置自相矛盾 / 断言①底色真源读不到）。
  * 注意：会短暂弹出应用窗口（结束后自动关闭）。
  */
@@ -92,6 +95,14 @@ const MOUNTING_NOTICE_SEL = '.notice:not(.crash-recovery)';
 
 /** 断言②的 Network 域取证轮（Page.reload 重跑一轮开机）最多等多久 */
 const NETWORK_WAIT_MS = Number(process.env.KOJO_BOOT_NETWORK_WAIT_MS ?? 90000);
+/**
+ * 「可点之后」再等多久才切 Network 读数（反空匹配自证的那扇窗）。默认 4000 与 release 实测同量级
+ * （可点后预取 1–2 条到账）；**dev 形态必须放大**——vite 不打包，ProjectView 那张模块图要在空闲里
+ * 排队，本机 2026-10-22 实测首个 monaco 请求落在导航后 25–30s，4s 窗必然读成「整轮零 monaco」而判红
+ * （同一棵树 `tauri build --no-bundle` 出的 release exe 经 boot-marks 复测断言②为真绿）。
+ * 只加宽观察窗，不改判据：可点前含 monaco 依旧红、可点后一条 monaco 都见不到依旧判「匹配面可疑」。
+ */
+const SETTLE_MS = Number(process.env.KOJO_BOOT_SETTLE_MS ?? 4000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function portOpenOn(host, port) {
@@ -421,6 +432,7 @@ if (checks.bootChecked && checks.bootWsUrl) {
   const cap = await captureBootNetwork({
     wsUrl: checks.bootWsUrl,
     waitMs: NETWORK_WAIT_MS,
+    settleMs: SETTLE_MS,
     log: (s) => console.log(`[smoke] ${s}`),
   });
   checks.networkTotal = cap.ok ? cap.total : null;
@@ -501,7 +513,12 @@ if (!passed) {
           '或 内联底色 / 挂载后计算底色 != 该档源码的 --bg；档位与三方读数见上方打印行）',
         checks.bootChecked && !checks.a2 && `L1-0 断言②未过（口径=${checks.a2Caliber || '未采'}：可点前出现过 monaco 请求，` +
           `或整轮一条 monaco 都没采到=匹配面可疑；Network 域读数 ${checks.networkMonacoBefore ?? 'n/a'}/${checks.networkMonacoTotal ?? 'n/a'} 条，` +
-          `时间线读数见上方）`,
+          `时间线读数见上方）` +
+          (checks.networkMonacoTotal === 0 && SETTLE_MS === 4000
+            ? '｜ 整轮零 monaco 且用的是默认 4s 窗：dev 形态 vite 不打包，空闲预取（App.tsx 兜底 2.5s + rIC 至多 4s）' +
+              '可能排在窗后。先按 `KOJO_BOOT_SETTLE_MS=12000` 复跑定责，并用 release exe 走 `node tools/boot-marks.mjs` ' +
+              '取出货口径——别直接改判据。'
+            : ''),
         checks.bootChecked && !checks.splashGone && '引导层 #boot-splash 未被移除（应在 React 首次提交后撤罩）',
         exited && '进程提前退出',
       ]
