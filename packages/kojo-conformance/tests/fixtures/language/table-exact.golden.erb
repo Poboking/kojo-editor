@@ -1,0 +1,15 @@
+MACHINE 开场
+;SLOT __kojo_table_档位 table int
+;SLOT __kojo_table_档位__value table string
+SET __kojo_table_档位 = {外部计数}
+IF {__kojo_table_档位 == 0}
+SET __kojo_table_档位__value = {"零"}
+ELSEIF {__kojo_table_档位 == 1}
+SET __kojo_table_档位__value = {"一"}
+ELSEIF {__kojo_table_档位 == 2}
+SET __kojo_table_档位__value = {"二"}
+ELSE
+SET __kojo_table_档位__value = {"多"}
+ENDIF
+TELL: 现在档位是{__kojo_table_档位__value}。 /WAIT
+MACHINE.END

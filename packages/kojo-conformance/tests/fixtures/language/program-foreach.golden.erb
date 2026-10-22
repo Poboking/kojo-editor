@@ -1,0 +1,16 @@
+MACHINE 开场
+;SLOT __kojo_foreach_9_i foreach int
+;SLOT __kojo_foreach_9_e foreach string
+SET 队伍状态[0] = {"健康"}
+SET 队伍状态[1] = {"受伤"}
+SET 队伍状态[2] = {"健康"}
+FOREACH|array|队伍状态
+BIND|值|__kojo_foreach_9_e
+BIND|下标|__kojo_foreach_9_i
+IF {__kojo_foreach_9_e == "受伤"}
+TELL: 第{__kojo_foreach_9_i + 1}位队员需要治疗。 /WAIT
+ELSE
+TELL: 第{__kojo_foreach_9_i + 1}位：{__kojo_foreach_9_e}。 /WAIT
+ENDIF
+FOREACH.END
+MACHINE.END

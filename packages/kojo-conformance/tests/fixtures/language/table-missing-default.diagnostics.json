@@ -1,0 +1,11 @@
+{
+  "case": "table/missing-default",
+  "diagnostics": [
+    {
+      "code": "core/table/missing-default",
+      "severity": "error",
+      "line": 1,
+      "column": 1
+    }
+  ]
+}

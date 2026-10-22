@@ -1,0 +1,17 @@
+MACHINE 开场
+;SLOT __kojo_table_混合档 table int
+;SLOT __kojo_table_混合档__value table string
+SET __kojo_table_混合档 = {外部计数}
+IF {__kojo_table_混合档 <= 99}
+SET __kojo_table_混合档__value = {"低"}
+ELSEIF {__kojo_table_混合档 >= 100 && __kojo_table_混合档 <= 499}
+SET __kojo_table_混合档__value = {"中"}
+ELSEIF {__kojo_table_混合档 == 500}
+SET __kojo_table_混合档__value = {"整"}
+ELSEIF {__kojo_table_混合档 >= 501}
+SET __kojo_table_混合档__value = {"高"}
+ELSE
+SET __kojo_table_混合档__value = {"未知"}
+ENDIF
+TELL: 混合表的读数：{__kojo_table_混合档__value}。 /WAIT
+MACHINE.END

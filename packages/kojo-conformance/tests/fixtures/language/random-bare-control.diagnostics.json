@@ -1,0 +1,17 @@
+{
+  "case": "random/bare-control",
+  "diagnostics": [
+    {
+      "code": "core/random/bare-control",
+      "severity": "error",
+      "line": 4,
+      "column": 5
+    },
+    {
+      "code": "core/random/one-candidate",
+      "severity": "error",
+      "line": 3,
+      "column": 1
+    }
+  ]
+}

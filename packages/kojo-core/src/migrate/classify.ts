@@ -211,19 +211,50 @@ function isBlankLineStatement(body: string): boolean {
   return rest === '' || rest === '等待' || rest === '续' || rest === 'wait';
 }
 
+/**
+ * 2.0 台词形 `角色：「…」` 的结构（K2-MIGRATE-SHAPE）。
+ *
+ * 只描述**形状**（说话人 / 引号内正文 / 引号后尾巴），不判断它来自 v1 还是 2.0——
+ * 同形歧义的裁决在 `index.ts`（需要 v1 说话人事实，判别层不持有该事实）。
+ */
+export interface DialogueShape {
+  /** 全角冒号前的说话人（已 trim；非空） */
+  readonly speaker: string;
+  /** 最外层 `「` 内、最外层 `」` 前的正文（v1 里这段是**打印文本的一部分**） */
+  readonly body: string;
+  /** 收尾引号之后的内容（已 trim）：`''` / `续` / `(表演提示)[ 续]` */
+  readonly tail: string;
+  /** 首个 `「` 的下标 */
+  readonly quote: number;
+  /** 末个 `」` 的下标 */
+  readonly close: number;
+  /** 说话人后全角冒号的下标（= quote - 1） */
+  readonly colon: number;
+}
+
+/**
+ * 解析 2.0 台词形 `角色：「…」`（含行尾 `续` 与一个表演提示组）；不是该形 → null。
+ *
+ * 单一真源：`isKojo2Line` 的台词判据、v1 同形歧义的裁决（`index.ts`）都走这里，
+ * 避免两处各写一份正则而漂移。
+ */
+export function parseDialogueShape(body: string): DialogueShape | null {
+  const quote = body.indexOf('「');
+  if (quote <= 1) return null;
+  const colon = body.indexOf('：');
+  if (colon <= 0 || colon !== quote - 1) return null;
+  const speaker = body.slice(0, colon).trim();
+  if (speaker.length === 0) return null;
+  const close = body.lastIndexOf('」');
+  if (close <= quote) return null;
+  const tail = body.slice(close + 1).trim();
+  if (tail.length !== 0 && tail !== '续' && !/^\([^()]*\)(?:\s+续)?$/.test(tail)) return null;
+  return { speaker, body: body.slice(quote + 1, close), tail, quote, close, colon };
+}
+
 /** 2.0 台词 `角色：「…」`（含行尾 `续` 与一个表演提示组） */
 function isDialogue2(body: string): boolean {
-  const quote = body.indexOf('「');
-  if (quote <= 1) return false;
-  const colon = body.indexOf('：');
-  if (colon <= 0 || colon !== quote - 1) return false;
-  const speaker = body.slice(0, colon).trim();
-  if (speaker.length === 0) return false;
-  const close = body.lastIndexOf('」');
-  if (close <= quote) return false;
-  const tail = body.slice(close + 1).trim();
-  if (tail.length === 0 || tail === '续') return true;
-  return /^\([^()]*\)(?:\s+续)?$/.test(tail);
+  return parseDialogueShape(body) !== null;
 }
 
 /** 行尾等待别名 → 正典 `续`（`~` / `⏎` / `cont` / `continue`；`续` 不动） */

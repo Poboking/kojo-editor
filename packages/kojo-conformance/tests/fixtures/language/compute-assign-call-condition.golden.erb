@@ -1,0 +1,10 @@
+MACHINE 开场
+SET 计数 = {1}
+SET 计数 += {2}
+IF {计数 > 2}
+SET 计数 = {0}
+ELSE
+SET 计数 = {1}
+ENDIF
+CALL 增加(5)
+MACHINE.END

@@ -1,0 +1,11 @@
+{
+  "case": "template/side-effect",
+  "diagnostics": [
+    {
+      "code": "core/template/side-effect",
+      "severity": "error",
+      "line": 2,
+      "column": 5
+    }
+  ]
+}

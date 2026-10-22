@@ -21,6 +21,15 @@
  * | `core/pool/no-default` | 补 `? 否` + 末条分支正文 | 本层（core 无"补兜底"改写） |
  * | `core/template/unexpected-slot` | 模板体补 `[插槽]` | 本层（core 无"补插槽"改写） |
  * | `core/lex/indent` | 缩进按层级改成 4 空格倍数 | 本层（core 无"修缩进"改写） |
+ * | `core/expr/unknown-symbol` | 声明区补 `# 变量 <名> <类型>` | 本层（按赋值字面量推类型；推不出按整数） |
+ * | `core/expr/type-mismatch` | `# 变量` 的声明类型改成整数 / 字符串（二选一） | 本层（只换声明类型 token） |
+ * | `core/func/arg-count` | 调用括号里补占位实参 `0` / `""` | 本层（缺必填；形参默认值类型唯一才补） |
+ *
+ * 显式**不产**（作者决策 / 删改危险，宁缺勿猜）：
+ *
+ * - `core/expr/readonly-target`：只读目标该改赋值还是改 adapter 契约，机器不能替作者选；
+ * - `core/expr/index-out-of-range` / `core/expr/bad-index`：作者可能想改下标本身，或补的是数组声明；
+ * - `core/func/arg-count` 的"实参多给"：删实参有语义危险，不给一键删。
  *
  * ## 纪律一：改写规则只有 core 一份（本层不写第二套迁移表）
  *
@@ -50,6 +59,11 @@
  * 全链那一步只用 fixture 事实，且**只判"目标码是否消失"**——不拿 fixture 的游戏事实去否决
  * 作者文件（那会把"这台 adapter 不支持颜色"记到迁移动作头上，见 {@link defaultVerifier}）。
  *
+ * 语义层那三条（`core/expr/unknown-symbol` / `core/expr/type-mismatch` / `core/func/arg-count`）
+ * 的目标诊断**可能不在改动行上**（补声明改的是声明区，诊断在正文）：收口时先把原诊断的 span
+ * 按编辑位移映射到新文本，再在全链编译里要求**那个位置**的目标码消失；只判"全文件还有没有同码"
+ * 会误伤同一文件里另一处无关的同码诊断。
+ *
  * ## 纪律三：与宿主同一条落地通道（undo 停点）
  *
  * 本层**不碰编辑器**：动作带的是 `command`（不是 Monaco 的 `edit`），落地由宿主注入的
@@ -77,8 +91,14 @@ import {
   KOJO_DOMAIN_SYMBOL_NAMES,
   classifyV1,
   compileKojoSource,
+  decodeIntegerLiteral,
+  decodeQuotedLiteral,
+  findTopLevelAssignOp,
+  isIdentifier,
   migrateKojoSourceSemantic,
   parseSource,
+  splitSpaces,
+  splitTopLevelArgs,
 } from '@kojo/kojo-core';
 import type { EditorTextEdit } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
@@ -91,14 +111,15 @@ import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 公共形状 ============================== */
 
-/** 动作类别：迁移（改写旧写法）/ 补全（补缺失的必填件）/ 修缩进 */
-export type Kojo2CodeActionKind = 'migrate' | 'complete' | 'indent';
+/** 动作类别：迁移（改写旧写法）/ 补全（补缺失的必填件）/ 修缩进 / 修复（语义诊断） */
+export type Kojo2CodeActionKind = 'migrate' | 'complete' | 'indent' | 'fix';
 
-/** 三类动作的人话标签（宿主 / 测试按它上屏；本层不写界面文案） */
+/** 四类动作的人话标签（宿主 / 测试按它上屏；本层不写界面文案） */
 export const KOJO2_CODE_ACTION_KIND_LABELS: Readonly<Record<Kojo2CodeActionKind, string>> = {
   migrate: '迁移',
   complete: '补全',
   indent: '修缩进',
+  fix: '修复',
 };
 
 /** 请求区间（1 基行 / 1 基列，尾列半开；与 Monaco `IRange` 同口径） */
@@ -174,6 +195,10 @@ export const KOJO2_CODE_ACTION_CODES: ReadonlySet<string> = new Set<string>([
   'core/pool/no-default',
   'core/template/unexpected-slot',
   'core/lex/indent',
+  // 语义层（S5.2 / S5.6）：只收"机器能独立证清"的三条，其余见模块头「显式不产」。
+  'core/expr/unknown-symbol',
+  'core/expr/type-mismatch',
+  'core/func/arg-count',
 ]);
 
 /**
@@ -184,6 +209,16 @@ const COMPILE_STAGE_CODES: ReadonlySet<string> = new Set<string>([
   'core/table/missing-default',
   'core/pool/no-default',
   'core/template/unexpected-slot',
+]);
+
+/**
+ * 语义层诊断码：它们本来就是 `compile` 才报的（{@link checkKojoFile} 的输出），且目标诊断
+ * 通常**不在改动行上**（补声明 / 改声明类型）。收口时按编辑位移映射原 span 再判目标码消失。
+ */
+const SEMA_QUICKFIX_CODES: ReadonlySet<string> = new Set<string>([
+  'core/expr/unknown-symbol',
+  'core/expr/type-mismatch',
+  'core/func/arg-count',
 ]);
 
 /* ============================== 源文本模型 ============================== */
@@ -938,6 +973,276 @@ function indentCandidatesOf(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActio
   return facts;
 }
 
+/* ---------------------------- 语义诊断快速修复（S5.2 / S5.6） ---------------------------- */
+
+/** 单行声明头（声明区扫描：`# 幕` 不算——它是正文块起点，§3.2） */
+const SINGLE_LINE_DECL_HEAD_RE = /^#\s+(?:视|机|变量|常量)(?:\s|$)/u;
+
+function isCommentLine(text: string): boolean {
+  return bodyOf(text).startsWith('//');
+}
+
+/** 诊断 span 覆盖的**单行**原文（跨行 / 越界一律 null：本层的语义修复只认单行目标） */
+function textAtSpan(doc: SourceDoc, span: KojoSpan | null): string | null {
+  if (span === null || span.start.line !== span.end.line) return null;
+  const line = doc.lines[span.start.line - 1];
+  if (line === undefined) return null;
+  const from = span.start.column - 1;
+  const to = span.end.column - 1;
+  if (from < 0 || to < from || to > line.length) return null;
+  return line.slice(from, to);
+}
+
+/**
+ * 文件里已经声明过的名字（`# 变量` / `# 常量` / `# 表` / `# 池` / `# 模` / `@函`）。
+ *
+ * `# 视` 的目标与 `# 机` 的事件不是**可赋值名字**（sema 的名字链不索引它们），所以不进来；
+ * `@织` 没有名字。解析器抛错 ⇒ null（不猜"没声明"）。
+ */
+function declaredNamesOf(source: string): ReadonlySet<string> | null {
+  try {
+    const names = new Set<string>();
+    for (const decl of parseSource(source).decls) {
+      switch (decl.kind) {
+        case 'var':
+        case 'const':
+        case 'table':
+        case 'pool':
+        case 'template':
+        case 'function':
+          names.add(decl.name);
+          break;
+        default:
+          break;
+      }
+    }
+    return names;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 新单行声明的插入行（1 基）：**首个正文块 / 块声明之前**，紧贴最后一条单行声明
+ * （`# 机` / `# 视` / `# 变量` / `# 常量`）。§3.2 要求单行声明连续、整组与正文空一行，
+ * 所以插在"最后一条单行声明之后、中间空行 / 注释之前"，而不是块声明那种上下各空一行。
+ * `# 幕` 是正文块起点：插到它之前（声明区结束）。
+ */
+function singleDeclInsertLine(doc: SourceDoc): number {
+  let lastSingle = 0;
+  let index = 1;
+  for (; index <= doc.lines.length; index += 1) {
+    const text = doc.lines[index - 1] ?? '';
+    if (isEmptyLine(text) || isCommentLine(text)) continue;
+    if (indentWidth(text) === 0 && SINGLE_LINE_DECL_HEAD_RE.test(text)) {
+      lastSingle = index;
+      continue;
+    }
+    break;
+  }
+  return lastSingle > 0 ? lastSingle + 1 : Math.min(index, doc.lines.length + 1);
+}
+
+/** "把 `decl` 作为单行声明插在 `at` 之前"落成整行替换（`at` 越过末行 ⇒ 追加到末行之后） */
+function singleDeclInsertEdit(doc: SourceDoc, at: number, decl: string): Kojo2CodeActionEdit {
+  if (at <= doc.lines.length) {
+    const next = doc.lines[at - 1] ?? '';
+    // 下一行是空行 / 注释：原样跟在声明后面；是块声明或正文：补一行空行隔开（§3.2）。
+    const trailing = isEmptyLine(next) || isCommentLine(next) ? [] : [''];
+    return replaceLines(doc, at, at, [decl, ...trailing, next]);
+  }
+  const last = Math.max(1, doc.lines.length);
+  return replaceLines(doc, last, last, [doc.lines[last - 1] ?? '', decl]);
+}
+
+/**
+ * `core/expr/unknown-symbol`：在声明区补一条 `# 变量 <名> <类型>`。
+ *
+ * 类型口径：赋值右侧是字面量就**按字面量类型**声明（整数 → `整数`，双引号字符串 → `字符串`）；
+ * 推不出（表达式 / 只有未声明名字 / 不是赋值）⇒ **按整数**，标题写明"按整数声明，请按需改类型"。
+ * 名字已声明 ⇒ 不产（那说明该诊断不是"缺声明"，改名 / 拼写问题机器不猜，任务口径「宁缺勿猜」）；
+ * 目标不是**单个合法名字**（数组元素 / `.长度` / `{角色}的<属性>`）⇒ 不产。
+ */
+function unknownSymbolCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact[] {
+  const span = diag.span;
+  const name = textAtSpan(ctx.doc, span);
+  if (name === null || !isIdentifier(name)) return [];
+  const declared = declaredNamesOf(ctx.input.source);
+  if (declared === null || declared.has(name)) return [];
+
+  const literalType = assignmentLiteralType(ctx.doc, span, name);
+  const token = literalType === 'string' ? '字符串' : '整数';
+  const decl = `# 变量 ${name} ${token}`;
+  const reason =
+    literalType === null
+      ? '按整数声明，请按需改类型'
+      : literalType === 'string'
+        ? '按赋值右侧字符串字面量推断，可再改'
+        : '按赋值右侧整数字面量推断，可再改';
+  return [
+    makeFact(
+      'complete',
+      `新增 \`${decl}\`（${reason}）`,
+      [singleDeclInsertEdit(ctx.doc, singleDeclInsertLine(ctx.doc), decl)],
+      [diag],
+      diag.code as CoreDiagnosticCode,
+    ),
+  ];
+}
+
+/**
+ * 取名字赋值右侧的字面量类型（`null` = 不是单行赋值 / 右侧不是字面量）。
+ *
+ * 只认"左端就是 `name` 的赋值"：`{角色}的x = 1`、`! f(name)` 的参数类型诊断都借用了
+ * `type-mismatch` 的码，但它们不是"给这个 `# 变量` 的声明改类型"能修的。
+ */
+function assignmentLiteralType(
+  doc: SourceDoc,
+  span: KojoSpan | null,
+  name: string,
+): 'int' | 'string' | null {
+  if (span === null) return null;
+  const text = doc.lines[span.start.line - 1];
+  if (text === undefined) return null;
+  const body = bodyOf(text);
+  const op = findTopLevelAssignOp(body);
+  if (op === null) return null;
+  if (body.slice(0, op.index).trim() !== name) return null;
+  const rhs = body.slice(op.index + op.op.length).trim();
+  if (decodeQuotedLiteral(rhs) !== null) return 'string';
+  if (decodeIntegerLiteral(rhs) !== null) return 'int';
+  return null;
+}
+
+/**
+ * `core/expr/type-mismatch`：把 `# 变量` 的声明类型改成整数 / 字符串（两条候选，二选一）。
+ *
+ * 触发条件严格按任务口径：**左侧是 `# 变量` 声明、右侧是整数字面量**；否则不产。
+ * 两条候选都先给，交给 {@link verifyFact} 的"应用后目标码必须消失"筛：只有把类型改成与
+ * 右侧字面量一致的那条能过；若声明自带与目标类型冲突的初值（`# 变量 名 字符串 = "甲"`
+ * 改成整数会先撞 parser 的 `core/decl/bad-initializer`），两条都过不了 ⇒ 零动作。
+ */
+function typeMismatchCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact[] {
+  const span = diag.span;
+  const name = textAtSpan(ctx.doc, span);
+  if (name === null || !isIdentifier(name)) return [];
+  if (assignmentLiteralType(ctx.doc, span, name) !== 'int') return [];
+
+  const declLine = declaredVarLine(ctx.input.source, name);
+  if (declLine === null) return [];
+  const text = ctx.doc.lines[declLine - 1];
+  if (text === undefined || indentWidth(text) !== 0) return [];
+  const indent = indentOf(text);
+  const body = text.slice(indent.length);
+  const tokens = splitSpaces(body, 0);
+  if (tokens.length < 4) return [];
+  if (tokens[0]?.text !== '#' || tokens[1]?.text !== '变量' || tokens[2]?.text !== name) return [];
+  const typeToken = tokens[3]!;
+  if (typeToken.text !== '整数' && typeToken.text !== '字符串') return []; // 数组 / 未知类型不碰
+
+  const facts: Kojo2CodeActionFact[] = [];
+  for (const token of ['整数', '字符串'] as const) {
+    if (typeToken.text === token) continue; // 已经是这个类型 ⇒ 不是"改类型"
+    const newLine = `${indent}${body.slice(0, typeToken.offset)}${token}${body.slice(
+      typeToken.offset + typeToken.text.length,
+    )}`;
+    facts.push(
+      makeFact(
+        'fix',
+        `把 \`${name}\` 的声明类型改成${token}（第 ${declLine} 行）`,
+        [replaceLines(ctx.doc, declLine, declLine, [newLine])],
+        [diag],
+        diag.code as CoreDiagnosticCode,
+      ),
+    );
+  }
+  return facts;
+}
+
+/** 文件里 `# 变量 <name>` 声明所在行（1 基；标量；找不到 / 是数组 ⇒ null） */
+function declaredVarLine(source: string, name: string): number | null {
+  try {
+    for (const decl of parseSource(source).decls) {
+      if (decl.kind !== 'var' || decl.name !== name) continue;
+      return decl.arraySize === undefined ? decl.span.start.line : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `core/func/arg-count`：缺必填 ⇒ 在调用括号里补占位实参。
+ *
+ * 类型口径（**保守**）：2.0 没有形参类型标注，缺的必填形参自己没有默认值；本层退一步看
+ * **这条函数所有"有默认值形参"的字面量类型**——唯一才用（整数 → `0`，字符串 → `""`），
+ * 没有默认值 / 混类型 ⇒ **不产**（任务口径「无法判定就不产」）。实参多给 ⇒ 不产（删参危险）。
+ */
+function argCountCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact[] {
+  const span = diag.span;
+  if (span === null) return [];
+  const line = span.start.line;
+  const text = ctx.doc.lines[line - 1];
+  if (text === undefined) return [];
+  const indent = indentOf(text);
+  const body = text.slice(indent.length);
+  const call = /^!\s*([^\s(]+)\s*(?:\(([\s\S]*)\))?\s*$/u.exec(body);
+  if (call === null) return [];
+  const name = call[1]!;
+  const hasParens = call[2] !== undefined;
+  const argText = call[2] ?? '';
+  const given = hasParens && argText.trim().length > 0 ? splitTopLevelArgs(argText, 0).length : 0;
+
+  const params = functionParamsOf(ctx.input.source, name);
+  if (params === null) return [];
+  if (given > params.length) return []; // 多给：删参危险，不产
+  let required = 0;
+  for (let index = 0; index < params.length; index += 1) {
+    if (params[index]!.defaultValue === undefined) required = index + 1;
+  }
+  if (given >= required) return [];
+
+  const types = new Set<'int' | 'string'>();
+  for (const param of params) {
+    if (param.defaultValue === undefined) continue;
+    types.add(typeof param.defaultValue === 'number' ? 'int' : 'string');
+  }
+  if (types.size !== 1) return [];
+  const placeholder = [...types][0] === 'int' ? '0' : '""';
+  const missing = required - given;
+  const inserted = new Array<string>(missing).fill(placeholder).join(', ');
+  const close = hasParens ? body.lastIndexOf(')') : -1;
+  if (hasParens && close < 0) return [];
+  const newBody = hasParens
+    ? `${body.slice(0, close)}${given > 0 ? ', ' : ''}${inserted}${body.slice(close)}`
+    : `${body}(${inserted})`;
+  return [
+    makeFact(
+      'complete',
+      `补 ${missing} 个必填实参（占位 \`${preview(inserted, 16)}\`，按形参默认值类型，第 ${line} 行）`,
+      [replaceLines(ctx.doc, line, line, [`${indent}${newBody}`])],
+      [diag],
+      diag.code as CoreDiagnosticCode,
+    ),
+  ];
+}
+
+/** 文件里 `@函 <name>` 的形参表（找不到 / 解析抛错 ⇒ null；外部名字不猜） */
+function functionParamsOf(
+  source: string,
+  name: string,
+): readonly { readonly defaultValue?: unknown }[] | null {
+  try {
+    for (const decl of parseSource(source).decls) {
+      if (decl.kind === 'function' && decl.name === name) return decl.params;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /* ============================== 候选分派 ============================== */
 
 function candidatesFor(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact[] {
@@ -962,6 +1267,12 @@ function candidatesFor(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact
       return templateSlotCandidates(diag, ctx);
     case 'core/lex/indent':
       return indentCandidatesOf(diag, ctx);
+    case 'core/expr/unknown-symbol':
+      return unknownSymbolCandidates(diag, ctx);
+    case 'core/expr/type-mismatch':
+      return typeMismatchCandidates(diag, ctx);
+    case 'core/func/arg-count':
+      return argCountCandidates(diag, ctx);
     default:
       return [];
   }
@@ -1019,6 +1330,69 @@ function spanTouchesRequest(span: KojoSpan, range: Kojo2CodeActionRange): boolea
   return span.start.line <= range.endLine && range.startLine <= span.end.line;
 }
 
+/** 编辑前的一行，在应用这批整行编辑之后会落到第几行（用于把旧诊断搬到新文本上） */
+function relocatedLine(line: number, edits: readonly Kojo2CodeActionEdit[]): number {
+  const sorted = [...edits].sort((a, b) => a.range.startLine - b.range.startLine);
+  let delta = 0;
+  for (const edit of sorted) {
+    const start = edit.range.startLine;
+    const end = edit.range.endLine;
+    const added = edit.newText.length === 0 ? 0 : edit.newText.split('\n').length;
+    const removed = end - start + 1;
+    if (line < start) return line + delta;
+    if (line <= end) return start + delta + Math.min(line - start, Math.max(0, added - 1));
+    delta += added - removed;
+  }
+  return line + delta;
+}
+
+/** 旧诊断 span → 应用编辑后的等价 span（列不参与行级动作的判据，原样保留） */
+function relocatedSpan(span: KojoSpan | null, edits: readonly Kojo2CodeActionEdit[]): KojoSpan | null {
+  if (span === null) return null;
+  return {
+    start: { line: relocatedLine(span.start.line, edits), column: span.start.column },
+    end: { line: relocatedLine(span.end.line, edits), column: span.end.column },
+  };
+}
+
+/**
+ * 语义修复的收口：把**原诊断**搬到应用后的位置，在全链编译里要求目标码在**那个位置**消失。
+ *
+ * 不能只看"改后全文件还有没有同码"：同一文件里另一处无关的同码诊断不该否决这条动作；
+ * 也不能只看改动区间：补声明改的是声明区，目标诊断在正文。
+ *
+ * 另加一条计数闸：修完目标后，全文件的同码诊断数必须**比改前少至少这一条**——否则
+ * "修好这处、又在别处修出新的一处"（例如把 `# 变量` 改成整数后，另一处 `名 = "x"` 崩掉）
+ * 会被记在这条动作账上。改前计数为 0（陈旧 marker）同样零动作（宁缺勿猜）。
+ */
+function semaTargetRemains(
+  fact: Kojo2CodeActionFact,
+  ctx: BuildCtx,
+  applied: AppliedEdits,
+): boolean {
+  const before = safeCompile(ctx.verifier, ctx.input.source);
+  if (before === null) return true;
+  const after = safeCompile(ctx.verifier, applied.text);
+  if (after === null) return true; // 编译不了 = 这条产物不可用
+  const beforeCount = before.filter((diagnostic) => diagnostic.code === fact.code).length;
+  const afterCount = after.filter((diagnostic) => diagnostic.code === fact.code).length;
+  if (afterCount > beforeCount - fact.diagnostics.length) return true;
+  for (const original of fact.diagnostics) {
+    const anchor = relocatedSpan(original.span, fact.edits);
+    if (anchor === null) return true;
+    for (const diagnostic of after) {
+      if (diagnostic.code !== fact.code || diagnostic.span === null) continue;
+      if (
+        diagnostic.span.start.line <= anchor.end.line &&
+        anchor.start.line <= diagnostic.span.end.line
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * 一条候选动作的收口判据（见模块头「纪律二」三条）。
  *
@@ -1052,6 +1426,9 @@ function verifyFact(fact: Kojo2CodeActionFact, ctx: BuildCtx, before: readonly K
     ) {
       return false;
     }
+  }
+  if (SEMA_QUICKFIX_CODES.has(fact.code)) {
+    if (semaTargetRemains(fact, ctx, applied)) return false;
   }
   return true;
 }
@@ -1112,7 +1489,7 @@ export const KOJO2_CODE_ACTION_COMMAND = 'kojo2.codeAction.run';
 /** 本 provider 会产出的 Monaco 类别（`providedCodeActionKinds` 的交集判据） */
 export const KOJO2_PROVIDED_CODE_ACTION_KINDS: readonly string[] = [QUICK_FIX_KIND, REFACTOR_KIND];
 
-/** 动作类别 → Monaco `CodeActionKind`（迁移 / 补全是 quickfix，改缩进是 refactor） */
+/** 动作类别 → Monaco `CodeActionKind`（迁移 / 补全 / 语义修复是 quickfix，改缩进是 refactor） */
 export function kojo2CodeActionKindOf(kind: Kojo2CodeActionKind): string {
   return kind === 'indent' ? REFACTOR_KIND : QUICK_FIX_KIND;
 }

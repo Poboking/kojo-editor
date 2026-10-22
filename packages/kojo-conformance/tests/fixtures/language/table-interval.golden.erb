@@ -1,0 +1,15 @@
+MACHINE 开场
+;SLOT __kojo_table_心情 table int
+;SLOT __kojo_table_心情__value table string
+SET __kojo_table_心情 = {外部计数}
+IF {__kojo_table_心情 >= 0 && __kojo_table_心情 <= 99}
+SET __kojo_table_心情__value = {"疏远"}
+ELSEIF {__kojo_table_心情 >= 100 && __kojo_table_心情 <= 499}
+SET __kojo_table_心情__value = {"平常"}
+ELSEIF {__kojo_table_心情 >= 500}
+SET __kojo_table_心情__value = {"亲近"}
+ELSE
+SET __kojo_table_心情__value = {"未知"}
+ENDIF
+TELL: 她今天看起来{__kojo_table_心情__value}。 /WAIT
+MACHINE.END

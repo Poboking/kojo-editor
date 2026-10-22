@@ -1,0 +1,11 @@
+{
+  "case": "table/overlap",
+  "diagnostics": [
+    {
+      "code": "core/table/overlap",
+      "severity": "error",
+      "line": 3,
+      "column": 5
+    }
+  ]
+}

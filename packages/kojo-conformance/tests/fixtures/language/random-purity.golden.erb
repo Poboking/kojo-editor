@@ -1,0 +1,12 @@
+MACHINE 开场
+;SLOT __kojo_rand_4 random int
+;SLOT __kojo_rand_8 random int
+RANDOM single-line-text 2
+SAY 灵梦: 甲 /WAIT
+TELL: 乙 /WAIT
+RANDOM.END
+RANDOM control-or-side-effect 2
+SAY 灵梦: 丙{外部计数} /WAIT
+TELL: 丁 /WAIT
+RANDOM.END
+MACHINE.END

@@ -26,12 +26,55 @@ import {
   type CrumbLevel,
 } from '../breadcrumb-path';
 import { collectDocumentSymbols } from '../../monaco/kojo-symbols';
+// K2 batch-7：`.kojo2` 的面包屑走 2.0 符号（纯逻辑；与大纲 provider 同源，v1 索引不参与）。
+import { kojo2DocumentSymbols, type Kojo2SymbolFact } from '../../monaco/kojo2-symbols';
+import { KOJO2_LANGUAGE_ID } from '../../monaco/kojo2-constants';
 import { erbParserIndex } from '../editor-global-providers';
 import { documentRequestFields } from '../language-service-request';
 import { LARGE_FILE_LINES } from '../editor-options';
 import { isErbLike } from '../lift-preview';
 import { erbFileInIndex, MARKER_DEBOUNCE_MS } from './pane-helpers';
 import type { CrumbTreeCache, MutableRef } from './pane-context';
+
+/**
+ * 2.0 符号事实 → 面包屑的大纲项（K2 batch-7）。
+ *
+ * 面包屑只读 `name`/`startLine`/`children`，`kind` 只用于图标分档：
+ * 场景 = section、函数/监听 = function、其余 = declaration。层级用 `container` 下标组树
+ * （父恒在子前，坏下标当顶层——与大纲 provider 同一兜底，不接环）。
+ */
+function kojo2EditorSymbols(source: string): EditorDocumentSymbol[] {
+  const facts = kojo2DocumentSymbols(source);
+  const kindOf = (fact: Kojo2SymbolFact): EditorDocumentSymbol['kind'] =>
+    fact.kind === 'scene'
+      ? 'section'
+      : fact.kind === 'function' || fact.kind === 'weave'
+        ? 'function'
+        : 'declaration';
+  // 两遍：先按 container 分组（父恒在子前，坏下标当顶层——与大纲 provider 同一兜底），
+  // 再递归建只读树。一遍内联会让先建的父节点捕获到空 children（数组后填不回去）。
+  const childIndexes: number[][] = facts.map(() => []);
+  const rootIndexes: number[] = [];
+  for (let index = 0; index < facts.length; index++) {
+    const fact = facts[index]!;
+    const parent = fact.container;
+    if (parent === undefined || parent < 0 || parent >= index) rootIndexes.push(index);
+    else childIndexes[parent]!.push(index);
+  }
+  const build = (index: number): EditorDocumentSymbol => {
+    const fact = facts[index]!;
+    const children = childIndexes[index]!.map(build);
+    return {
+      name: fact.name,
+      kind: kindOf(fact),
+      startLine: fact.range.startLine,
+      endLine: fact.range.endLine,
+      ...(fact.detail.length > 0 ? { detail: fact.detail } : {}),
+      ...(children.length > 0 ? { children } : {}),
+    };
+  };
+  return rootIndexes.map(build);
+}
 
 export interface BreadcrumbParams {
   kernel: Kernel;
@@ -201,7 +244,14 @@ export function useBreadcrumb(params: BreadcrumbParams): BreadcrumbControls {
             chainOf(cache.symbols);
             return;
           }
-          // ② 干净缓冲区 + 索引认得这份文件 ⇒ 用已索引的名录，不碰全文解析
+          // ② 0 号特例：`.kojo2` 走 2.0 符号（纯逻辑解析，不依赖 v1 索引；缓存键同上）
+          if (model.getLanguageId() === KOJO2_LANGUAGE_ID) {
+            const symbols = kojo2EditorSymbols(model.getValue());
+            crumbTreeCacheRef.current = { path, versionId, symbols, fromIndex: false, indexStamp: null };
+            chainOf(symbols);
+            return;
+          }
+          // ③ 干净缓冲区 + 索引认得这份文件 ⇒ 用已索引的名录，不碰全文解析
           const indexed = symbolsFromIndex(path, cursor.lineCount);
           if (indexed) {
             crumbTreeCacheRef.current = {

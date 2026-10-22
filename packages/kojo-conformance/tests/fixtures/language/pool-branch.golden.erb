@@ -1,0 +1,9 @@
+MACHINE 开场
+IF {外部计数 < 100}
+TELL: 她抬了下眼。 /WAIT
+ELSEIF {外部计数 < 500}
+SAY 灵梦: 早上好。 /WAIT
+ELSE
+SAY 灵梦: 亲爱的，早安。 /WAIT ;(微笑)
+ENDIF
+MACHINE.END

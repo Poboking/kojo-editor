@@ -1,0 +1,11 @@
+{
+  "case": "presentation/nested-color",
+  "diagnostics": [
+    {
+      "code": "core/color/nested",
+      "severity": "error",
+      "line": 4,
+      "column": 5
+    }
+  ]
+}

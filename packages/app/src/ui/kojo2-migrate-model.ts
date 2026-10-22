@@ -31,6 +31,7 @@
 import {
   migrateKojoSourceSemantic,
   summarizeMigration,
+  type MigrateEventArgs,
   type SemanticMigrateResult,
   type SemanticRewrite,
   type SemanticRewriteKind,
@@ -397,6 +398,13 @@ export interface MigratePlanInput {
    * `event/unknown` 的 `# 机`）；不给 ⇒ 沿用 v1 形状判定（不猜目录）。
    */
   readonly eventNames?: readonly string[];
+  /**
+   * adapter 事件**参数形状**投影（`projectEventArgs(eventCatalog)`，K2-MIGRATE-SHAPE）。
+   *
+   * 给了目录 ⇒ `时机 <面词> <参数…>` 的个数/形状在迁移期就校验（目录内面词但参数坏 →
+   * unsupported，不产会在 2.0 撞 `event/argument` 的 `# 机`）；不给 ⇒ 沿用旧形状判定。
+   */
+  readonly eventArgs?: MigrateEventArgs;
 }
 
 /**
@@ -415,9 +423,14 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
 
   let result: SemanticMigrateResult;
   try {
-    const migrateOptions: { speaker?: string; eventNames?: readonly string[] } = {};
+    const migrateOptions: {
+      speaker?: string;
+      eventNames?: readonly string[];
+      eventArgs?: MigrateEventArgs;
+    } = {};
     if (input.speaker !== undefined) migrateOptions.speaker = input.speaker;
     if (input.eventNames !== undefined) migrateOptions.eventNames = input.eventNames;
+    if (input.eventArgs !== undefined) migrateOptions.eventArgs = input.eventArgs;
     result = migrateKojoSourceSemantic(source, migrateOptions);
   } catch (error) {
     return failedPlan(filePath, targetPath, encoding, eol, errorText(error), emptyDiffText);
@@ -473,7 +486,11 @@ export function planMigrateFile(input: MigratePlanInput): MigrateFilePlan {
 export async function dryRunMigrateFiles(
   io: MigrateReadPort,
   filePaths: readonly string[],
-  options: { readonly speaker?: string; readonly eventNames?: readonly string[] } = {},
+  options: {
+    readonly speaker?: string;
+    readonly eventNames?: readonly string[];
+    readonly eventArgs?: MigrateEventArgs;
+  } = {},
 ): Promise<MigrateDryRun> {
   const files: MigrateFilePlan[] = [];
   for (const filePath of filePaths) {
@@ -501,6 +518,7 @@ export async function dryRunMigrateFiles(
         eol: file.eol,
         ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
         ...(options.eventNames === undefined ? {} : { eventNames: options.eventNames }),
+        ...(options.eventArgs === undefined ? {} : { eventArgs: options.eventArgs }),
       }),
     );
   }

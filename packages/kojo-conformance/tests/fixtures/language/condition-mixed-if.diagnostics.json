@@ -1,0 +1,11 @@
+{
+  "case": "condition/mixed-if",
+  "diagnostics": [
+    {
+      "code": "core/migration/if",
+      "severity": "error",
+      "line": 5,
+      "column": 1
+    }
+  ]
+}

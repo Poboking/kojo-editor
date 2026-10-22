@@ -1,0 +1,11 @@
+{
+  "case": "program/return-outside",
+  "diagnostics": [
+    {
+      "code": "core/func/return-outside",
+      "severity": "error",
+      "line": 3,
+      "column": 1
+    }
+  ]
+}

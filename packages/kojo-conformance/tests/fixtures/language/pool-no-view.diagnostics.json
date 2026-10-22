@@ -1,0 +1,11 @@
+{
+  "case": "pool/no-view",
+  "diagnostics": [
+    {
+      "code": "core/pool/no-view",
+      "severity": "error",
+      "line": 3,
+      "column": 9
+    }
+  ]
+}

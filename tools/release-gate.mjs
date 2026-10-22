@@ -16,6 +16,19 @@
  *   需桌面会话 + WebView2，CI 上必然跑不起来。
  * 这三项都**不改变**核心 4+2 项的默认账：CI 快速档就是 `--skip-tests`，全量档只多两池。
  *
+ * K2-RELEASE-AUTOMATION 加的 `--release` 档（§16.10 R9.5–R9.7 的发版机器面）在默认账之外**另加四项**
+ * （`releaseOnly`：默认不跑、只在 `--release` 或显式 `--only` 时跑，其余情况记 SKIP + 原因）：
+ * - `version-sync`：三处 `version`（root `package.json` / `packages/app/package.json` /
+ *   `packages/app/src-tauri/tauri.conf.json`）逐字相等（AGENTS §七；`app-version.test.ts` 钉住）；
+ * - `language-suite`：`node tools/kojo-conformance.mjs language --json`（语言面套件属另一条线；
+ *   当前 CLI 尚无 `language` 子命令 ⇒ rc=2 且「未知命令：language」⇒ SKIP 并写明，绝不自己实现）；
+ * - `artifact-audit`：先 `pnpm --filter @kojo/app build`，再量 `packages/app/dist`
+ *   入口块 / 总量 / 件数上界（阈值取 `docs/STATE.md` 批次七重基线：≤1,100 kB / ≤10.5 MiB / ≤85 件）；
+ * - `cargo-test`：`cargo test --lib`（15 分钟上限）。**必须经 node 起**（PITFALLS：Git-Bash 的
+ *   `TMP=/tmp` 会让 MSVC `link.exe` 报 LNK1104），并兜底把 TMP/TEMP/TMPDIR 换成 Windows 形态。
+ * `--release` 的默认项序固定为 `RELEASE_ITEM_IDS`（version-sync 第一，cargo-test 最后），
+ * `--shell` / `--corpus` 仍按开关追加；`--only` 优先于 `--release`。
+ *
  * 结构：
  * - `createReleaseGate({ run })` = 纯执行编排（runner 注入，单测用假 runner）；
  * - `createProcessRunner()` = 真 spawn + 超时杀进程树 + 捕获 stdout/stderr；
@@ -25,6 +38,8 @@
  * 用法与退出码见 `USAGE`；`node tools/release-gate.mjs --help`。
  */
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,6 +61,10 @@ const TIMEOUT = Object.freeze({
   corpusProbe: 60 * 1000,
   corpus: 30 * 60 * 1000,
   smoke: 10 * 60 * 1000,
+  /** `cargo test --lib`：冷 target 首编译可能十几分钟，故给足 15 分钟（超时 = rc 124 FAIL） */
+  cargoTest: 15 * 60 * 1000,
+  /** version-sync 只读三个 JSON，不 spawn：留个非零值只为「每项都有超时」的形状一致 */
+  versionSync: 60 * 1000,
 });
 
 const ANSI = /\u001B\[[0-?]*[ -/]*[@-~]/g;
@@ -192,6 +211,305 @@ function firstLine(text, limit = 220) {
   return line.length > limit ? `${line.slice(0, limit)}…` : line;
 }
 
+/* ------------------------------------------------------------------ *
+ * K2-RELEASE-AUTOMATION（--release 档）的三块本地检查 + cargo 读数
+ * - version-sync / artifact-audit 是**进程内检查**（`item.local`）：前者只读三个 JSON，
+ *   后者的构建由 `item.preflight` 起子进程、本地只量盘上产物；
+ * - 两者都把 `readText` / `readDist` 做成注入点（单测用假函数，真跑用 fs），
+ *   这样阈值与判定逻辑可被逐字钉住，又不必往仓库里塞 8 MB 假产物。
+ * ------------------------------------------------------------------ */
+
+/** AGENTS §七 / §16.10 R9.5：三处 version 必须逐字相等（顺序即报告里的输出顺序） */
+export const VERSION_FILES = Object.freeze([
+  { key: 'rootPkg', rel: 'package.json', label: 'package.json' },
+  { key: 'appPkg', rel: 'packages/app/package.json', label: 'packages/app/package.json' },
+  { key: 'tauriConf', rel: 'packages/app/src-tauri/tauri.conf.json', label: 'packages/app/src-tauri/tauri.conf.json' },
+]);
+
+/** 默认读文件（只在 runner 层用；单测注入假 readText） */
+async function defaultReadText(absPath) {
+  return fs.readFile(absPath, 'utf8');
+}
+
+/**
+ * 三处 version 逐字比较。**读不到 / JSON 坏 / version 非非空字符串都算 FAIL**（不猜绿）：
+ * 返回 `{ rc, readings, tail }`，readings 固定带三值（读不到的记 null）与 `matched`。
+ */
+export async function inspectVersionSync({ root = ROOT, readText = defaultReadText } = {}) {
+  const readings = { present: true, rootPkg: null, appPkg: null, tauriConf: null, matched: false };
+  const broken = [];
+  const found = [];
+  for (const spec of VERSION_FILES) {
+    const abs = path.join(root, spec.rel);
+    let text;
+    try {
+      text = await readText(abs);
+    } catch (error) {
+      broken.push({ ...spec, reason: `读不到文件（${errorText(error).split('\n')[0]}）` });
+      continue;
+    }
+    let version = null;
+    try {
+      version = JSON.parse(String(text))?.version ?? null;
+    } catch {
+      broken.push({ ...spec, reason: 'JSON 解析失败' });
+      continue;
+    }
+    if (typeof version !== 'string' || version.trim().length === 0) {
+      broken.push({ ...spec, reason: 'version 缺失或不是非空字符串' });
+      continue;
+    }
+    readings[spec.key] = version;
+    found.push({ ...spec, version });
+  }
+  readings.present = broken.length === 0 && found.length === VERSION_FILES.length;
+  readings.matched = readings.present && new Set(found.map((entry) => entry.version)).size === 1;
+
+  if (readings.matched) {
+    const [version] = found.map((entry) => entry.version);
+    return {
+      rc: 0,
+      readings,
+      tail: `[version-sync] 三处 version 一致：${version}（${VERSION_FILES.map((spec) => spec.label).join(' / ')}）`,
+    };
+  }
+
+  const lines = ['[version-sync] FAIL：三处 version 不一致（必须逐字相等，AGENTS §七）'];
+  if (broken.length > 0) {
+    lines.push('  读不到/读不懂的文件：');
+    for (const entry of broken) lines.push(`    - ${entry.label}：${entry.reason}`);
+  }
+  if (found.length > 0) {
+    lines.push('  实测三值：');
+    for (const spec of VERSION_FILES) {
+      const value = readings[spec.key];
+      lines.push(`    ${spec.label} = ${value === null ? '（读不到）' : value}`);
+    }
+  }
+  lines.push('  规则：root package.json / packages/app/package.json /');
+  lines.push('        packages/app/src-tauri/tauri.conf.json 的 version 逐字相等');
+  lines.push('        （packages/app/tests/app-version.test.ts 钉住；发版提交三处同步）。');
+  return { rc: 1, readings, tail: lines.join('\n') };
+}
+
+/**
+ * `docs/STATE.md` 的既有基线换算成上界（设计稿 §16.10 R9.7 的产物面）：
+ * 入口块 1,035 kB（批次七实测）→ 上限 1,100 kB；dist 72 件 8.97 MiB → 上限 10.5 MiB / 85 件。
+ * 口径：vite 报的 `kB` 是 1000 字节；`MB` 按 MiB 计（10.5 MiB 有 ~1.5 MiB 余量，防正常增件即红）。
+ */
+export const ARTIFACT_LIMITS = Object.freeze({
+  entryBytes: 1_100_000,
+  distBytes: Math.round(10.5 * 1024 * 1024),
+  files: 85,
+});
+
+const MIB = 1024 * 1024;
+
+/** 入口块 = index.html 的 `<script type="module" src=…>`；认不出退到最大的 `.js`（tail 里会注明） */
+export function findEntryRel(indexHtml = '', files = []) {
+  const match = /<script\b[^>]*\bsrc=["']([^"']+\.js)["']/i.exec(String(indexHtml));
+  if (match !== null) {
+    const rel = match[1].replace(/^\.?\//, '').replaceAll('\\', '/');
+    if (files.some((file) => file.rel === rel)) return rel;
+  }
+  const js = files
+    .filter((file) => file.rel.endsWith('.js'))
+    .sort((left, right) => right.bytes - left.bytes);
+  return js[0]?.rel ?? null;
+}
+
+/** 纯测量：给定产物清单（`{rel,bytes}`）与 index.html，算三个上界是否被突破 */
+export function measureArtifacts({ files = [], indexHtml = '', limits = ARTIFACT_LIMITS, entryRel } = {}) {
+  const normalized = files.map((file) => ({
+    rel: String(file.rel).replaceAll('\\', '/'),
+    bytes: Number(file.bytes) || 0,
+  }));
+  const distBytes = normalized.reduce((sum, file) => sum + file.bytes, 0);
+  const entry = entryRel ?? findEntryRel(indexHtml, normalized);
+  const entryBytes = entry === null ? null : (normalized.find((file) => file.rel === entry)?.bytes ?? null);
+  const exceeded = [];
+  if (entryBytes === null) exceeded.push('entry-missing');
+  else if (entryBytes > limits.entryBytes) exceeded.push('entry');
+  if (distBytes > limits.distBytes) exceeded.push('dist');
+  if (normalized.length > limits.files) exceeded.push('files');
+  return { files: normalized.length, distBytes, entry, entryBytes, exceeded, limits };
+}
+
+/**
+ * 真读 `packages/app/dist`：缺目录返回 `{ present:false }`（不抛），其余抛给调用方记 FAIL。
+ * `indexHtml` 读不到就空串（入口块退到「最大的 .js」，读数里仍可追溯）。
+ */
+export async function defaultReadDist({ root = ROOT } = {}) {
+  const base = path.join(root, 'packages/app/dist');
+  const walk = async (rel) => {
+    const dir = rel.length === 0 ? base : path.join(base, rel);
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const files = [];
+    for (const entry of entries) {
+      const next = rel.length === 0 ? entry.name : `${rel}/${entry.name}`;
+      if (entry.isDirectory()) files.push(...(await walk(next)));
+      else if (entry.isFile()) files.push({ rel: next.replaceAll('\\', '/'), bytes: (await fs.stat(path.join(dir, entry.name))).size });
+    }
+    return files;
+  };
+  let files;
+  try {
+    files = await walk('');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { present: false, dir: base };
+    throw error;
+  }
+  let indexHtml = '';
+  try {
+    indexHtml = await fs.readFile(path.join(base, 'index.html'), 'utf8');
+  } catch {
+    indexHtml = '';
+  }
+  return { present: true, dir: base, files, indexHtml };
+}
+
+/**
+ * 产物上界检查（构建由 `item.preflight` 先跑）。**缺 dist = FAIL 且可读**：
+ * 报告里点名缺的是哪个目录、下一步跑什么，而不是一句 `rc=1`。
+ */
+export async function inspectArtifacts({ root = ROOT, readDist = defaultReadDist } = {}) {
+  let dist;
+  try {
+    dist = await readDist({ root });
+  } catch (error) {
+    return {
+      rc: 1,
+      readings: { present: null, error: firstLine(errorText(error)) },
+      tail: `[artifact-audit] 读 packages/app/dist 抛错：${errorText(error)}`,
+    };
+  }
+  if (dist?.present !== true) {
+    const dir = dist?.dir ?? path.join(root, 'packages/app/dist');
+    return {
+      rc: 1,
+      readings: { present: false, dir },
+      tail: [
+        `[artifact-audit] FAIL：产物目录不存在或为空：${dir}`,
+        '  先跑 pnpm --filter @kojo/app build（本项 --release 档会自动先构建；--only 单跑同样先构建）',
+        '  构建失败时本项按构建的 rc 计 FAIL，tail 见构建输出。',
+      ].join('\n'),
+    };
+  }
+  const measured = measureArtifacts({ files: dist.files ?? [], indexHtml: dist.indexHtml ?? '', limits: ARTIFACT_LIMITS });
+  const distMiB = Math.round((measured.distBytes / MIB) * 100) / 100;
+  const entryKB = measured.entryBytes === null ? null : Math.round(measured.entryBytes / 1000);
+  const readings = {
+    present: true,
+    files: measured.files,
+    distBytes: measured.distBytes,
+    distMiB,
+    entry: measured.entry,
+    entryBytes: measured.entryBytes,
+    entryKB,
+    limits: { entryKB: 1100, distMiB: 10.5, files: 85 },
+    exceeded: measured.exceeded,
+  };
+  const summary = `[artifact-audit] 实测：${measured.files} 件 / dist ${distMiB} MiB / 入口 ${measured.entry ?? '（认不出）'} ${entryKB === null ? '—' : `${entryKB} kB`}（上限 40 件 / 8 MiB / 1,100 kB）`;
+  if (measured.exceeded.length === 0) return { rc: 0, readings, tail: summary };
+
+  const lines = ['[artifact-audit] FAIL：产物超出上界'];
+  if (measured.exceeded.includes('entry-missing')) lines.push('  dist 里认不出入口块：index.html 无 script src，且无 .js 产物');
+  if (measured.exceeded.includes('entry')) {
+    lines.push(`  入口块 ${measured.entry} = ${entryKB} kB ＞ 上限 1,100 kB`);
+  }
+  if (measured.exceeded.includes('dist')) lines.push(`  dist 总量 = ${distMiB} MiB ＞ 上限 10.5 MiB`);
+  if (measured.exceeded.includes('files')) lines.push(`  产物件数 = ${measured.files} ＞ 上限 85`);
+  lines.push(summary);
+  return { rc: 1, readings, tail: lines.join('\n') };
+}
+
+/** `packages/app/src-tauri`（cargo 的 cwd）与 cargo test 的参数 */
+export const CARGO_TEST_DIR = 'packages/app/src-tauri';
+export const CARGO_TEST_COMMAND = 'cargo test --lib';
+
+/**
+ * cargo 必须**经 node 起**（docs/PITFALLS.md：Git-Bash 的 `TMP=/tmp` 让 MSVC `link.exe` 报
+ * LNK1104 ⇒ 直跑必挂）。这里起一层 node，内层 `execSync` 照 AGENTS §三 的形态跑，并把
+ * TMP/TEMP/TMPDIR 显式换成 Windows 形态（`os.tmpdir()`）——两道都上，CI 与本机 Git-Bash 都稳。
+ * 输出整段写回 stdout/stderr（runner 侧仍能抓 tail 与 parsec），失败透传 rc。
+ */
+export function buildCargoTestScript({ root = ROOT, platform = process.platform, tmpdir = os.tmpdir() } = {}) {
+  const cwd = path.join(root, CARGO_TEST_DIR);
+  const windows = platform === 'win32';
+  const envExpr = windows
+    ? `{ ...process.env, TMP: ${JSON.stringify(tmpdir)}, TEMP: ${JSON.stringify(tmpdir)}, TMPDIR: ${JSON.stringify(tmpdir)} }`
+    : 'process.env';
+  return [
+    "const { execSync } = require('node:child_process');",
+    `const cwd = ${JSON.stringify(cwd)};`,
+    `const env = ${envExpr};`,
+    'try {',
+    `  process.stdout.write(execSync(${JSON.stringify(CARGO_TEST_COMMAND)}, { cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));`,
+    '} catch (error) {',
+    '  if (error && error.stdout) process.stdout.write(String(error.stdout));',
+    '  if (error && error.stderr) process.stderr.write(String(error.stderr));',
+    "  if (error && !error.stdout && !error.stderr) process.stderr.write(`${(error && error.message) ?? error}\\n`);",
+    "  process.exit(typeof error?.status === 'number' ? error.status : 1);",
+    '}',
+  ].join('\n');
+}
+
+/** cargo 汇总：`test result: ok. 194 passed; 0 failed; 5 ignored; 0 measured; …`（取最后一段） */
+export function parseCargoTestOutput(text = '') {
+  const clean = stripAnsi(text);
+  const matches = [
+    ...clean.matchAll(/test result:\s*(ok|FAILED)\.\s*(\d+)\s*passed;\s*(\d+)\s*failed;\s*(\d+)\s*ignored/g),
+  ];
+  if (matches.length === 0) return { parsed: false };
+  const last = matches[matches.length - 1];
+  return {
+    parsed: true,
+    verdict: last[1],
+    passed: Number(last[2]),
+    failed: Number(last[3]),
+    ignored: Number(last[4]),
+    suites: matches.length,
+  };
+}
+
+/**
+ * `language` 子命令的 `--json` 报告（该套件属另一条线，形状未定 ⇒ 只认通用读数）：
+ * 有 `cases` 就记用例数，否则只记 JSON 顶层键数；解析不出 = parsed:false（判定仍以 rc 为准）。
+ */
+export function parseLanguageSuiteJson(text = '') {
+  const clean = stripAnsi(text);
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start < 0 || end <= start) return { parsed: false };
+  let report;
+  try {
+    report = JSON.parse(clean.slice(start, end + 1));
+  } catch {
+    return { parsed: false };
+  }
+  const cases = Array.isArray(report?.cases) ? report.cases : null;
+  const failures = Array.isArray(report?.failures) ? report.failures.length : null;
+  return {
+    parsed: true,
+    keys: report !== null && typeof report === 'object' ? Object.keys(report).length : 0,
+    cases: cases === null ? null : cases.length,
+    passed: cases === null ? null : cases.filter((item) => item?.ok === true).length,
+    failed: cases === null ? null : cases.filter((item) => item?.ok !== true).length,
+    failures,
+  };
+}
+
+/** 已存在的 `language` 子命令识别：唯一可靠的「没有」证据是 CLI 的未知命令分支 */
+const UNKNOWN_LANGUAGE = /未知(?:命令|子命令)\s*[：:]\s*language|unknown\s+(?:command|subcommand)\s*[：:]?\s*language/i;
+
+function languageSkipReason(text) {
+  if (!UNKNOWN_LANGUAGE.test(stripAnsi(text))) return null;
+  return (
+    'conformance CLI 尚无 language 子命令（rc=2「未知命令：language」）：' +
+    '语言面套件属另一条线，本项按 SKIP 记账，不在这里自己实现'
+  );
+}
+
 function nodeItem(id, rel, args, kind, timeoutMs, parse, extra = {}) {
   return {
     id,
@@ -330,11 +648,136 @@ function corpusItem() {
 }
 
 /**
+ * version-sync（--release 首项）：三处 version 逐字比较。进程内只读三个 JSON，
+ * 不 spawn、不需要构建；判定与读数见 `inspectVersionSync`。
+ */
+function versionSyncItem() {
+  return {
+    id: 'version-sync',
+    kind: 'core',
+    cmd: '比较 package.json / packages/app/package.json / packages/app/src-tauri/tauri.conf.json 的 version',
+    command: NODE,
+    args: [],
+    shell: false,
+    timeoutMs: TIMEOUT.versionSync,
+    releaseOnly: true,
+    skipReason: '仅 --release 或 --only=version-sync 时跑（三处版本同步闸）',
+    parse: () => ({}),
+    local: ({ cwd, readText }) => inspectVersionSync({ root: cwd, readText }),
+  };
+}
+
+/**
+ * artifact-audit：先 `pnpm --filter @kojo/app build`（preflight，失败即 FAIL 并把构建 tail 带出），
+ * 再量 `packages/app/dist` 的入口块 / 总量 / 件数上界。阈值见 `ARTIFACT_LIMITS`。
+ */
+function artifactAuditItem() {
+  return {
+    id: 'artifact-audit',
+    kind: 'build',
+    cmd: 'pnpm --filter @kojo/app build → 量 packages/app/dist（入口 ≤1,100 kB / ≤10.5 MiB / ≤85 件）',
+    command: NODE,
+    args: [],
+    shell: false,
+    timeoutMs: TIMEOUT.build,
+    releaseOnly: true,
+    skipReason: '仅 --release 或 --only=artifact-audit 时跑（先构建 app，再量 dist 上界）',
+    parse: () => ({}),
+    preflight: ({ run, cwd }) => buildAppForAudit({ run, cwd }),
+    local: ({ cwd, readDist }) => inspectArtifacts({ root: cwd, readDist }),
+  };
+}
+
+/** artifact-audit 的构建前置：rc / 超时 / 抛错都变成该项的 FAIL（附构建输出） */
+async function buildAppForAudit({ run, cwd }) {
+  const started = Date.now();
+  const invocation = pnpmInvocation(['--filter', '@kojo/app', 'build']);
+  let raw;
+  try {
+    raw = await run({
+      id: 'artifact-audit-build',
+      command: invocation.command,
+      args: invocation.args,
+      cwd,
+      timeoutMs: TIMEOUT.build,
+      shell: false,
+    });
+  } catch (error) {
+    return {
+      fail: {
+        rc: 127,
+        tail: `[artifact-audit] 构建抛错：${errorText(error)}`,
+        readings: { phase: 'artifact-build', buildRc: 127, buildMs: Date.now() - started },
+      },
+    };
+  }
+  const timedOut = raw?.timedOut === true;
+  const rc = timedOut ? 124 : normalizeRc(raw?.rc);
+  const text = readAll(raw);
+  const parsed = parseBuildOutput(text);
+  const readings = {
+    phase: 'artifact-build',
+    buildRc: rc,
+    buildMs: Date.now() - started,
+    builtInMs: parsed.parsed ? parsed.builtInMs : null,
+    assets: parsed.assets,
+  };
+  if (timedOut) return { fail: { rc, tail: text, readings: { ...readings, timeout: true } } };
+  if (rc !== 0) return { fail: { rc, tail: text, readings } };
+  return { readings };
+}
+
+/** cargo-test：经 node 起 `cargo test --lib`（PITFALLS 的 TMP 坑），15 分钟上限 */
+function cargoTestItem() {
+  return {
+    id: 'cargo-test',
+    kind: 'rust',
+    releaseOnly: true,
+    skipReason: '仅 --release 或 --only=cargo-test 时跑（需 Rust 工具链，15 分钟上限）',
+    cmd: `node -e "execSync('${CARGO_TEST_COMMAND}', { cwd: '${CARGO_TEST_DIR}' })"`,
+    command: NODE,
+    args: ['-e', buildCargoTestScript()],
+    shell: false,
+    timeoutMs: TIMEOUT.cargoTest,
+    parse: (text) => parseCargoTestOutput(text),
+  };
+}
+
+/**
+ * language-suite：`node tools/kojo-conformance.mjs language --json`。
+ * 该子命令属另一条线：当前 CLI 还没有它（rc=2「未知命令：language」）⇒ `interpret` 把
+ * 这一种 rc=2 定性为 SKIP 并写明原因；真跑红（rc≠0 且不是未知命令）仍是 FAIL，绝不洗白。
+ */
+function languageSuiteItem() {
+  return {
+    id: 'language-suite',
+    kind: 'core',
+    releaseOnly: true,
+    skipReason: '仅 --release 或 --only=language-suite 时跑（语言面套件；子命令不存在则 SKIP 并说明）',
+    cmd: 'node tools/kojo-conformance.mjs language --json',
+    command: NODE,
+    args: [path.join(ROOT, 'tools/kojo-conformance.mjs'), 'language', '--json'],
+    shell: false,
+    timeoutMs: TIMEOUT.conformance,
+    parse: (text) => parseLanguageSuiteJson(text),
+    interpret: ({ rc, text }) => {
+      if (rc !== 2) return null;
+      const reason = languageSkipReason(text);
+      return reason === null ? null : { skip: reason };
+    },
+  };
+}
+
+/**
  * 项清单 = 发布门槛的全部机器面。顺序即执行顺序（前 6 项是默认账，后 4 项可选）。
  * 可选性由 `optional` 声明（= 解锁开关名：build / corpus / shell），
  * `skipReason` 是默认不跑时写进报告的原因（SKIP 必须可解释）。
  * `smoke-dom` / `smoke-ipc` 需桌面会话 + WebView2，`corpus` 需真实游戏目录：
  * 三者在 CI / 无游戏机上「没得跑」而不是「跑挂了」，故只 SKIP。
+ *
+ * 末尾四项是 K2-RELEASE-AUTOMATION 的 `--release` 档（`releaseOnly`：默认档不跑、记 SKIP，
+ * 只有 `--release` 或显式 `--only` 才跑）。**追加在最后**是为了不挪既有 10 项的位置
+ * （JSON 消费方按顺序认 build-app / corpus / smoke-*）。
  */
 export const DEFAULT_ITEMS = Object.freeze([
   pnpmItem('typecheck-root', ['typecheck'], 'core', TIMEOUT.typecheck, (text) => parseTypecheckOutput(text)),
@@ -378,6 +821,29 @@ export const DEFAULT_ITEMS = Object.freeze([
     (text) => parseSmokeOutput(text),
     { optional: 'shell', skipReason: '可选：需桌面壳（未传 --shell / --only=smoke-ipc）' },
   ),
+  versionSyncItem(),
+  cargoTestItem(),
+  artifactAuditItem(),
+  languageSuiteItem(),
+]);
+
+/**
+ * `--release` 的默认项序（§16.10 R9.5–R9.7 的发版机器面）：
+ * 版本同步 → 双 typecheck → 审计 → conformance → 语言套件 → 两池 → 产物上界 → Rust。
+ * 顺序是判定顺序的语义表达（版本不一致不该先花 10 分钟跑测试），故与 DEFAULT_ITEMS 的
+ * 追加顺序解耦，由这张表钉住。
+ */
+export const RELEASE_ITEM_IDS = Object.freeze([
+  'version-sync',
+  'typecheck-root',
+  'typecheck-app',
+  'audit',
+  'conformance',
+  'language-suite',
+  'test-unit',
+  'test-perf',
+  'artifact-audit',
+  'cargo-test',
 ]);
 
 export const ITEM_IDS = Object.freeze(DEFAULT_ITEMS.map((item) => item.id));
@@ -387,6 +853,9 @@ export const USAGE = [
   '',
   '选项：',
   '  --json             stdout 只输出机器可读 JSON（schemaVersion=1），不含人类文本',
+  '  --release          发布全量档（§16.10 R9.5–R9.7）：version-sync → 双 typecheck → audit →',
+  '                     conformance → language-suite → 两池 → artifact-audit → cargo-test；',
+  '                     --shell / --corpus / --build 仍按开关追加；--only 优先于本档',
   '  --only=<id,...>    只跑指定项（按项清单顺序执行，不是参数顺序；点名的可选项照跑）',
   '  --skip-tests       跳过 test-unit / test-perf / corpus（快速档；显式 --only 点名的仍会跑）',
   '  --fail-fast        首项失败后不再执行后续项（默认失败隔离：一项红继续跑）',
@@ -397,6 +866,7 @@ export const USAGE = [
   '',
   `项：${ITEM_IDS.join(', ')}`,
   '可选四项默认 SKIP 并记原因：build-app(--build) / corpus(--corpus) / smoke-dom,smoke-ipc(--shell)。',
+  '仅 --release（或显式 --only）才跑：version-sync / cargo-test / artifact-audit / language-suite。',
   '',
   '退出码：0 = 全绿；1 = 有失败（含超时 / runner 异常）；2 = 用法错误',
 ].join('\n');
@@ -417,6 +887,7 @@ function addOnly(options, raw, errors) {
 export function parseArgs(argv = []) {
   const options = {
     json: false,
+    release: false,
     skipTests: false,
     failFast: false,
     build: false,
@@ -429,6 +900,7 @@ export function parseArgs(argv = []) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') options.json = true;
+    else if (arg === '--release') options.release = true;
     else if (arg === '--skip-tests') options.skipTests = true;
     else if (arg === '--fail-fast') options.failFast = true;
     else if (arg === '--build') options.build = true;
@@ -449,34 +921,63 @@ export function parseArgs(argv = []) {
 }
 
 /**
- * 选项目：缺省 = 6 个核心项（其余 4 个可选，默认 SKIP 并带原因）。
+ * 选项目：缺省 = 6 个核心项（其余 4 个可选，4 个 releaseOnly 默认不做）。
  * - `--skip-tests` 去掉测试池（test-unit / test-perf / corpus），但**显式点名**的优先
  *   （`--only=test-unit --skip-tests` 仍跑，便于只跑单池）；
  * - `optional` 声明的开关（build / corpus / shell）打开才收可选段；`--only` 点名的**无视开关**
  *   （`--only=smoke-dom` 不带 `--shell` 也跑，便于单点复跑）。
+ * - `releaseOnly` 项（version-sync / cargo-test / artifact-audit / language-suite）只在
+ *   `--release` 或显式 `--only` 时跑，否则记 SKIP + `skipReason`——默认档（CI 快速档）账不变。
+ * - `--release` 的项序由 `RELEASE_ITEM_IDS` 决定（不是 DEFAULT_ITEMS 顺序）；开关追加的可选项
+ *   仍按 DEFAULT_ITEMS 顺序接在末尾；`--only` 存在时**优先于** `--release`（单点复跑用）。
  * 返回的 skipped 记录未跑项与原因，JSON/human 都直接消费。
  */
-export function resolveSelectedItems({ only = [], skipTests = false, build = false, corpus = false, shell = false } = {}) {
+export function resolveSelectedItems({
+  only = [],
+  skipTests = false,
+  build = false,
+  corpus = false,
+  shell = false,
+  release = false,
+} = {}) {
   const unknown = only.filter((id) => !ITEM_IDS.includes(id));
   if (unknown.length > 0) {
     return { error: `未知项：${unknown.join(', ')}（可用项：${ITEM_IDS.join(', ')}）` };
   }
   const explicit = new Set(only);
   const unlocked = { build, corpus, shell };
-  let selected = DEFAULT_ITEMS.filter((item) => only.length === 0 || explicit.has(item.id));
-  if (skipTests) selected = selected.filter((item) => item.kind !== 'test' || explicit.has(item.id));
-  selected = selected.filter((item) => explicit.has(item.id) || item.optional === undefined || unlocked[item.optional] === true);
+  const byId = new Map(DEFAULT_ITEMS.map((item) => [item.id, item]));
 
-  if (selected.length === 0) return { error: '没有可执行的项（检查 --only / --skip-tests）' };
+  let selected;
+  if (only.length > 0) {
+    selected = DEFAULT_ITEMS.filter((item) => explicit.has(item.id));
+  } else if (release) {
+    const releaseItems = RELEASE_ITEM_IDS.map((id) => byId.get(id)).filter(Boolean);
+    const extras = DEFAULT_ITEMS.filter(
+      (item) =>
+        !RELEASE_ITEM_IDS.includes(item.id) && item.optional !== undefined && unlocked[item.optional] === true,
+    );
+    selected = [...releaseItems, ...extras];
+  } else {
+    selected = DEFAULT_ITEMS.filter(
+      (item) =>
+        item.releaseOnly !== true && (item.optional === undefined || unlocked[item.optional] === true),
+    );
+  }
+  if (skipTests) selected = selected.filter((item) => item.kind !== 'test' || explicit.has(item.id));
+
+  if (selected.length === 0) return { error: '没有可执行的项（检查 --only / --skip-tests / --release）' };
 
   const skipped = DEFAULT_ITEMS.filter((item) => !selected.includes(item)).map((item) => ({
     id: item.id,
     reason:
       item.kind === 'test' && skipTests
         ? '--skip-tests'
-        : item.optional !== undefined && unlocked[item.optional] !== true
+        : item.releaseOnly === true
           ? item.skipReason
-          : '--only 未选中',
+          : item.optional !== undefined && unlocked[item.optional] !== true
+            ? item.skipReason
+            : '--only 未选中',
   }));
   return { items: selected, skipped };
 }
@@ -500,8 +1001,19 @@ function errorText(error) {
  * 前置探针（`item.preflight`）跑在该项之前，能把一项**变成 SKIP**（缺前置）或**变成 FAIL**
  * （前置坏了）——两种都由项自己说清原因，编排层不改口径：
  *   `{ skip: reason }` / `{ fail: { rc, tail, readings } }` / `{ env, readings }`。
+ *
+ * 两类不进 runner 的检查（`--release` 档）：
+ * - `item.local({ cwd, readText, readDist }) → { rc, readings, tail }`：进程内读盘/量产物
+ *   （version-sync / artifact-audit），结果形状与子进程项**逐字同构**（六键）；
+ * - `item.interpret({ rc, timedOut, stdout, stderr, text, readings }) → { skip } | null`：
+ *   按输出定性（language 子命令不存在 = SKIP 而非 FAIL）；只允许改判成 SKIP，绿色/红色仍由 rc 定。
  */
-export function createReleaseGate({ run, now = () => Date.now() } = {}) {
+export function createReleaseGate({
+  run,
+  now = () => Date.now(),
+  readText = defaultReadText,
+  readDist = defaultReadDist,
+} = {}) {
   if (typeof run !== 'function') throw new TypeError('createReleaseGate 需要注入 run({id,command,args,...})');
 
   async function preflightItem(item, cwd) {
@@ -544,6 +1056,39 @@ export function createReleaseGate({ run, now = () => Date.now() } = {}) {
       }
     }
 
+    // 进程内检查：没有 command 可跑，但结果必须与子进程项同构（id/cmd/rc/ms/readings/tail）
+    if (typeof item.local === 'function') {
+      let outcome;
+      try {
+        outcome = await item.local({ cwd, readText, readDist });
+      } catch (error) {
+        outcome = {
+          rc: 127,
+          readings: { phase: 'local', localError: true },
+          tail: `[release-gate] 本地检查抛错：${errorText(error)}`,
+        };
+      }
+      const localRc = normalizeRc(outcome?.rc);
+      let localReadings =
+        outcome?.readings !== null && typeof outcome?.readings === 'object' && !Array.isArray(outcome.readings)
+          ? { ...outcome.readings }
+          : {};
+      if (prepared?.readings !== null && typeof prepared?.readings === 'object') {
+        localReadings = { ...prepared.readings, ...localReadings };
+      }
+      return {
+        result: {
+          id: item.id,
+          cmd: item.cmd,
+          rc: localRc,
+          ms: Math.max(0, now() - started),
+          readings: localReadings,
+          tail: lastLines(String(outcome?.tail ?? '')),
+        },
+        ok: localRc === 0,
+      };
+    }
+
     let raw;
     const request = {
       id: item.id,
@@ -576,6 +1121,19 @@ export function createReleaseGate({ run, now = () => Date.now() } = {}) {
       readings = { ...prepared.readings, ...readings };
     }
     if (timedOut) readings = { ...readings, timeout: true };
+
+    // 按输出定性：只允许「改判成 SKIP」（缺子命令等），不能把红洗绿。
+    if (typeof item.interpret === 'function') {
+      let verdict = null;
+      try {
+        verdict = item.interpret({ rc, timedOut, stdout, stderr, text: readAll({ stdout, stderr }), readings });
+      } catch {
+        verdict = null;
+      }
+      if (verdict !== null && typeof verdict === 'object' && typeof verdict.skip === 'string' && verdict.skip.length > 0) {
+        return { skip: { id: item.id, reason: verdict.skip } };
+      }
+    }
 
     const measured = Number(raw?.ms);
     const ms = Number.isFinite(measured) ? Math.max(0, Math.round(measured)) : Math.max(0, now() - started);
@@ -747,6 +1305,8 @@ export async function runReleaseGate({
   run,
   cwd = ROOT,
   now = () => Date.now(),
+  readText = defaultReadText,
+  readDist = defaultReadDist,
   writeOut = (text) => void process.stdout.write(text),
   writeErr = (text) => void process.stderr.write(text),
 } = {}) {
@@ -770,7 +1330,7 @@ export async function runReleaseGate({
   }
 
   const runner = run ?? createProcessRunner();
-  const gate = createReleaseGate({ run: runner, now });
+  const gate = createReleaseGate({ run: runner, now, readText, readDist });
   const started = now();
   const execution = await gate.execute(selected.items, { cwd, failFast: parsed.options.failFast });
   const durationMs = Math.max(0, Math.round(now() - started));
@@ -805,3 +1365,4 @@ if (isDirectInvocation()) {
       process.exitCode = 1;
     });
 }
+

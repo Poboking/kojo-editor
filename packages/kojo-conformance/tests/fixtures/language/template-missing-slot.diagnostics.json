@@ -1,0 +1,11 @@
+{
+  "case": "template/missing-slot",
+  "diagnostics": [
+    {
+      "code": "core/template/missing-slot",
+      "severity": "error",
+      "line": 8,
+      "column": 1
+    }
+  ]
+}

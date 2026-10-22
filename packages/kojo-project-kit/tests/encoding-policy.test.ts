@@ -315,6 +315,11 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     why: '一致性套件的编码编解码器：BOM 字节表是读侧判据，再编码时按输入 BOM 事实原样补回（只比对、不写源文件）',
   },
   {
+    file: 'packages/kojo-conformance/src/language.ts',
+    count: 1,
+    why: '一致性套件的 BOM 剥离判据：\BOM = \\uFEFF\ 常量只做 startsWith 判据 + 剥离（读侧，不产出字节）',
+  },
+  {
     file: 'packages/kojo-conformance/src/kit.ts',
     count: 1,
     why: 'BOM 不变式对拍：给源文本前缀补 `\\uFEFF` 再编译，断言产物与不带 BOM 时逐字节相同（不写盘）',
@@ -432,3 +437,4 @@ describe('③ 教程文案与策略同源（实现先漂 ⇒ ①；文案先漂 
     expect(row('compiled-product').bom === 'always').toBe(PRODUCT_ENCODING.bom);
   });
 });
+

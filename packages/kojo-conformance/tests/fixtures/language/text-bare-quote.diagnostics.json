@@ -1,0 +1,11 @@
+{
+  "case": "text/bare-quote",
+  "diagnostics": [
+    {
+      "code": "core/narrative/bare-quote",
+      "severity": "error",
+      "line": 4,
+      "column": 1
+    }
+  ]
+}

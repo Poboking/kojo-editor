@@ -1,0 +1,10 @@
+MACHINE 开场
+IF {外部计数 >= 亲近线}
+TELL: 她停下扫帚，眼神柔和下来。 /WAIT
+TELL: 第一个成立的分支。 /WAIT
+ELSEIF {外部计数 >= 100}
+TELL: 第二档。 /WAIT
+ELSE
+TELL: 兜底。 /WAIT
+ENDIF
+MACHINE.END

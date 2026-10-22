@@ -1,0 +1,11 @@
+{
+  "case": "program/label-in-block",
+  "diagnostics": [
+    {
+      "code": "core/goto/label-in-block",
+      "severity": "error",
+      "line": 4,
+      "column": 5
+    }
+  ]
+}

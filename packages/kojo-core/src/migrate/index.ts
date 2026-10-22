@@ -43,14 +43,24 @@
  *    `options.eventNames` 传进来时，面词必须是其中之一，否则迁移期 unsupported（不产 `# 机`）；
  *    命名参数（`成否:` / `类型:` / `参数:`）一律 unsupported 并给 adapter 事件配置的目标提示。
  *    没传目录 = 调用方没给 adapter 事实，沿用 v1 形状判定（不内置任何事件名——core 零游戏知识）。
+ * 9. **`时机` 参数形状按目录核**（K2-MIGRATE-SHAPE）：调用方再给 `options.eventArgs`
+ *    （`projectEventArgs(eventCatalog)` 一行派生）时，面词命中后按目录核参数个数 / 必填 /
+ *    整数形状——`时机 初见 3`（0 参事件带编号）、`时机 指令 摸屁股`（int 参数给中文指令名）
+ *    在迁移期就 unsupported，不产会撞 `event/argument` 的 `# 机`。目录里没有该面词 ⇒ 不猜参数。
+ * 10. **v1 `角色：「…」` 同形歧义**（K2-MIGRATE-SHAPE）：v1 把这类行连前缀与引号一起打印，
+ *    2.0 当台词；输入里存在 v1 专属构造时按 v1 事实裁决（`你：` 是 v1 自机前缀；前缀不是
+ *    v1 说话人 ⇒ 旁白打印），证不出就保留台词并报 `core/migration/ambiguous-dialogue` warning。
+ *    判据与反例见 `reshapeV1DialogueLike` 的头注；纯 2.0 输入一律原样放行（幂等）。
  */
 import type { CoreDiagnosticCode, KojoDiagnostic } from '../diagnostics.js';
 import type { KojoSpan } from '../ast.js';
+import type { EventCatalog } from '../adapter.js';
 import {
   classifyV1,
   hasWaitMark,
   isChoiceItem,
   isKojo2Line,
+  parseDialogueShape,
   rewriteWaitAlias,
   TARGET_HINTS,
   type Classified,
@@ -83,6 +93,65 @@ export interface MigrateOptions {
    * - 没给 ⇒ 不猜目录（无 adapter 事实），沿用 v1 的形状判定。core 不内置任何事件名（零游戏知识）。
    */
   readonly eventNames?: readonly string[];
+  /**
+   * adapter 事件目录的**参数形状投影**（K2-MIGRATE-SHAPE；`eventCatalog.events[].args` 的
+   * 名字 + 可选性 + 值形状，宿主可用 `projectEventArgs(adapter.eventCatalog)` 一行派生）。
+   *
+   * - 给了 ⇒ 面词命中目录后，`时机 <面词> <参数…>` 的参数个数 / 值形状按目录校验：个数不合
+   *   （`时机 初见 3`）、必填不够、整数参数给了非整数（v1 的中文指令名）⇒ 迁移期 unsupported，
+   *   **不产会撞 `event/argument` 的 `# 机`**；
+   * - 目录里没有该面词的条目 ⇒ **不猜**（跳过参数校验，仍只做面词白名单）；
+   * - 没给 ⇒ 维持旧行为（只校验面词，参数原样带过去）——调用方没给 adapter 事实，不去猜。
+   */
+  readonly eventArgs?: MigrateEventArgs;
+  /**
+   * **语义升级层内部接线**（`semantic.ts` 用；普通调用方不需要）：这些行（1 基，指传给
+   * `migrateKojoSource` 的文本行号）已知是 2.0——例如语义层生成的 `# 表` / `# 池` 引用行。
+   * 它们不参与 v1 同形裁决（否则会被当成 v1 的 `角色：「…」` 打印文本，误报歧义或误改成旁白）。
+   */
+  readonly trustedLines?: readonly number[];
+}
+
+/** 一条事件参数的**形状投影**（`EventArgumentSpec` 的迁移端子集；core 不内置事件事实） */
+export interface MigrateEventArgShape {
+  /** 参数名（诊断文案用；例如「编号」） */
+  readonly name: string;
+  /** 可选（缺省 = 必填；adapter 的 `required` 取反后传入） */
+  readonly optional?: boolean;
+  /** `optional` 的反面写法（adapter `EventArgumentSpec` 原样投影时直接可用；两者都给时以 `optional` 为准） */
+  readonly required?: boolean;
+  /** 值形状（adapter `kind` 的投影；缺省 = 不判值形状） */
+  readonly kind?: 'int' | 'string' | 'any';
+}
+
+/** 一条参数形状是否可选：`optional` 优先；否则 `required === false` 也算可选；都没有 = 必填 */
+function isOptionalArg(arg: MigrateEventArgShape): boolean {
+  if (arg.optional !== undefined) return arg.optional;
+  return arg.required === false;
+}
+
+/** 事件名 → 参数形状（`MigrateOptions.eventArgs` 的形状；宿主可直接用 `projectEventArgs` 派生） */
+export type MigrateEventArgs = Readonly<Record<string, readonly MigrateEventArgShape[]>>;
+
+/**
+ * adapter `eventCatalog` → `MigrateOptions.eventArgs` 的**唯一投影**（宿主 / conformance / 测试共用）。
+ *
+ * `required` 取反成 `optional`、`kind` 原样带过去；事件名与参数名逐字来自 adapter（core 零游戏知识）。
+ */
+export function projectEventArgs(catalog: EventCatalog): MigrateEventArgs {
+  // 无原型对象：事件名来自 adapter 数据，但仍是外部输入（`__proto__` 之类的键不写进原型链）
+  const out: Record<string, readonly MigrateEventArgShape[]> = Object.create(null) as Record<
+    string,
+    readonly MigrateEventArgShape[]
+  >;
+  for (const spec of catalog.events) {
+    out[spec.event] = Object.freeze(
+      spec.args.map((arg) =>
+        Object.freeze({ name: arg.name, optional: !arg.required, kind: arg.kind }),
+      ),
+    );
+  }
+  return Object.freeze(out);
 }
 
 /** 一条不可机械迁移的台账（`line` = v1 源 1 基行号） */
@@ -153,19 +222,58 @@ class Migrator {
   /** v1 文件头 `角色:` 的原值（metadata 用；与 options.speaker 兜底分开） */
   private headerChara: string | null = null;
   private timingBlocks = 0;
+  /** v1 文件头预扫出的说话人（`角色:` / `char:` 的首个非空值；同形歧义裁决用） */
+  private readonly headerSpeaker: string | null;
+  /** 迁移期说话人事实：`options.speaker` 优先、文件头兜底（与裸台词口径同源） */
+  private readonly v1Speaker: string | null;
+  /**
+   * 输入里是否有 **v1 专属构造**（K2-MIGRATE-SHAPE）：决定 `角色：「…」` 行按 v1 打印文本解释。
+   * 纯 2.0 输入没有这些构造 ⇒ 同形台词一律原样放行（幂等），不猜、不报歧义。
+   */
+  private hasV1Construct = false;
+  /** 已知是 2.0 的输入行（语义层生成；同形裁决直接放行） */
+  private readonly trustedLines: ReadonlySet<number>;
 
   constructor(src: V1Source, options: MigrateOptions) {
     this.src = src;
     this.lines = src.lines;
     this.options = options;
+    this.trustedLines = new Set(options.trustedLines ?? []);
     this.eol = options.eol ?? src.eol;
     this.optionSpeaker = options.speaker !== undefined && options.speaker.trim().length > 0 ? options.speaker.trim() : null;
     this.speaker = this.optionSpeaker;
-    for (const line of this.lines) {
+    let headerSpeaker: string | null = null;
+    for (let i = 0; i < this.lines.length; i++) {
+      const line = this.lines[i]!;
       if (line.body.trim().length === 0) continue;
       const cls = classifyV1(line.body);
       if (cls.kind.kind === 'timingHead') this.timingBlocks++;
+      if (
+        headerSpeaker === null &&
+        cls.kind.kind === 'headDecl' &&
+        (cls.kind.word === '角色' || cls.kind.word === 'char') &&
+        cls.kind.value.length > 0
+      ) {
+        headerSpeaker = cls.kind.value;
+      }
+      // `text`（裸台词 / 裸旁白）不算 v1 证据：2.0 文件里也可能有"还没补 `>` 的裸旁白"错误行，
+      // 但那不足以证明整份输入是 v1、更不足以改写台词形行。v1 专属结构（文件头 / 时机 / 如果 / …）
+      // 才是强证据——真实 v1 文件必然带其一（`角色:` 与 `时机 …：` 都是 v1 必填）。
+      if (!V1_NEUTRAL_KINDS.has(cls.kind.kind)) this.hasV1Construct = true;
+      // 2.0 缩进块的块体**不是 v1 证据**：`@算` 体里的 `X = 1`、`@原生` 体里的 ERB 在判别层
+      // 与 v1 语句同形（`other`），不按上下文跳过就会把纯 2.0 文件误判成 v1（K2-MIGRATE-SHAPE）。
+      if (cls.kind.kind === 'kojo2' && isKojo2BlockHead(line.body)) {
+        let j = i + 1;
+        while (j < this.lines.length) {
+          const next = this.lines[j]!;
+          if (!isBlankBody(next.body) && next.indent <= line.indent) break;
+          j++;
+        }
+        i = j - 1;
+      }
     }
+    this.headerSpeaker = headerSpeaker;
+    this.v1Speaker = this.optionSpeaker ?? headerSpeaker;
   }
 
   /* ============================== 发射原语 ============================== */
@@ -330,6 +438,93 @@ class Migrator {
     return this.convertText(body, true);
   }
 
+  /* ============================== 同形歧义裁决（K2-MIGRATE-SHAPE） ============================== */
+
+  /**
+   * v1 文件里 `角色：「…」` 与 2.0 台词同形的裁决。返回 `null` = 按 2.0 台词原样放行。
+   *
+   * ## 可证判据（写死，不猜）
+   *
+   * 1. **只在有 v1 事实的输入上裁决**：输入里没有任何 v1 专属构造（文件头 / `时机 …：` /
+   *    `如果 …：` / `当 …：` / 心形 / `@` 原生块 …）⇒ **证不出**这里是 v1，同形行一律原样放行
+   *    （幂等基础；迁移产物里已改写的行也不会因二次迁移再被改写）。
+   * 2. `你：「…」`：v1 的 `你：` 是**自机前缀**（`kojo-sugar/src/codegen.ts::isPlayerLine`：
+   *    任意正文行的行首 `你：` 剥掉、按自机色打印），v1 打印的是前缀之后的整段文本
+   *    （含 `「」`）。所以按台词迁移、正文 = **前缀之后的 v1 打印文本**（`你：「「…」」`）。
+   * 3. 其余 `X：「…」`：v1 **没有**"说话人前缀"语法（v1 台词是裸 `「…」`，说话人来自文件头
+   *    `角色:`）。因此
+   *    - 已知 v1 说话人 S（`options.speaker` → 文件头 `角色:`）且 `X ≠ S` ⇒ `X` 可证**不是**
+   *      v1 说话人前缀，这行是 v1 的旁白打印 ⇒ 按旁白迁移（`> X：「…」`，整行逐字）；
+   *    - `X === S` 或 S 未知 ⇒ **证不出**（这行完全可能是作者已经手改过的 2.0 台词）⇒ 原样
+   *      保留为台词，并报 `core/migration/ambiguous-dialogue` warning（不阻断、不静默）。
+   *
+   * 旁白改写会撞 2.0 的表演提示语法（行尾半角 `(…)` 不打印）时 **fail-closed**：记 unsupported，
+   * 不产会改变打印文本的旁白行。
+   *
+   * @returns 非 null = 已消费该行（返回下一行下标）；null = 交给默认的 2.0 原样放行。
+   */
+  private reshapeV1DialogueLike(index: number, line: V1Line, level: number): number | null {
+    if (!this.hasV1Construct) return null;
+    if (this.trustedLines.has(line.number)) return null;
+    const shape = parseDialogueShape(line.body);
+    if (shape === null) return null;
+    const next = index + 1;
+
+    if (shape.speaker === '你' && shape.colon === 1) {
+      // v1 的自机前缀只认**紧贴行首**的 `你：`（`codegen.ts::PLAYER_PREFIX_RE = /^你[:：]/`）；
+      // `你 ：「…」`（冒号前有空格）在 v1 里是普通文本行，走下面的旁白判据。
+      // 已经是我们自己的产物（正文就是一段带引号的打印文本）：原样放行，二次迁移不套第四层引号。
+      if (shape.body.startsWith('「') && shape.body.endsWith('」')) return null;
+      const rest = line.body.slice(shape.quote);
+      const wait = shape.tail === '续';
+      const printed = wait ? stripTrailingWait(rest) : rest;
+      this.emit(level, `你：「${printed}」${wait ? ' 续' : ''}`, line.number);
+      return next;
+    }
+
+    if (this.v1Speaker === null || shape.speaker === this.v1Speaker) {
+      this.warn('core/migration/ambiguous-dialogue', this.ambiguousDialogueMessage(line, shape.speaker), lineSpan(line));
+      return null;
+    }
+
+    // 可证：X 不是 v1 的说话人 ⇒ v1 打印的就是整行（含 `X：` 与引号）。
+    if (shape.tail !== '' && shape.tail !== '续') {
+      this.reportUnsupported(
+        line,
+        `v1 旁白打印 \`${shape.speaker}：「…」\`（行尾半角括号）`,
+        `2.0 会把行尾半角 \`(…)\` 当表演提示、不打印：把括号改成全角 \`（…）\` 后写成 \`> ${shape.speaker}：「…」\`，或整行放进 \`@原生\`（§4.8 / §12.1）。`,
+        'core/migration/raw',
+      );
+      this.emitRaw(line.raw, line.number);
+      return next;
+    }
+    if (shape.tail === '续') {
+      this.emit(level, `> ${stripTrailingWait(line.body)} 续`, line.number);
+      return next;
+    }
+    this.emit(level, `> ${line.body}`, line.number);
+    return next;
+  }
+
+  /** 同形歧义的 warning 文案（两种"证不出"各写清依据与改法） */
+  private ambiguousDialogueMessage(line: V1Line, speaker: string): string {
+    const head =
+      `第 ${line.number} 行 \`${speaker}：「…」\` 与 v1 的旁白打印同形：v1 会把 \`${speaker}：\` 与引号一起打印，` +
+      '2.0 只打印引号内正文。';
+    if (this.v1Speaker !== null) {
+      return (
+        `${head}\`${speaker}\` 正是 v1 文件头 \`角色:\` 声明的说话人——无法证明这行已经是 2.0 台词还是 v1 打印，` +
+        '已按台词原样保留（幂等优先）；若它原本是 v1 旁白，请改成 `> ' +
+        `${speaker}：「…」\`（§12.1 / §15.2.3）。`
+      );
+    }
+    return (
+      `${head}文件里没有 v1 说话人声明（\`角色:\`），无法证明 \`${speaker}\` 不是 v1 的说话人前缀——` +
+      '已按台词原样保留；若它原本是 v1 旁白，请改成 `> ' +
+      `${speaker}：「…」\`（§12.1 / §15.2.3）。`
+    );
+  }
+
   /* ============================== 主流程 ============================== */
 
   migrate(): MigrateResult {
@@ -383,6 +578,10 @@ class Migrator {
         return index + 1;
 
       case 'kojo2': {
+        // v1 文件里 `角色：「…」` 与 2.0 台词**同形**：先按 v1 事实裁决（K2-MIGRATE-SHAPE），
+        // 判不了就原样放行（幂等）并留 warning 台账——绝不静默改写台词。
+        const reshaped = this.reshapeV1DialogueLike(index, line, level);
+        if (reshaped !== null) return reshaped;
         // 已 2.0 的行：**缩进位移为 0 时逐字节原样**（幂等的构造基础）；在迁移后的
         // `时机` 体里（delta=-1）或 `@组` 包装位（shift=+1）则按层级重排缩进——
         // 否则 `空行 等待` 这类 2.0 行会留在 v1 的缩进深度上。
@@ -438,7 +637,7 @@ class Migrator {
         return this.handleHeadDecl(index, to, line, kind);
 
       case 'timingHash': {
-        const parsed = parseTimingHead(kind.rest, this.options.eventNames);
+        const parsed = parseTimingHead(kind.rest, this.options.eventNames, this.options.eventArgs);
         if (!parsed.ok) {
           this.reportUnsupported(line, parsed.construct, parsed.hint, 'core/migration/timing');
           this.emitRaw(line.raw, line.number);
@@ -661,7 +860,7 @@ class Migrator {
       );
       return this.emitRawBlock(index, to, line);
     }
-    const parsed = parseTimingHead(kind.rest, this.options.eventNames);
+    const parsed = parseTimingHead(kind.rest, this.options.eventNames, this.options.eventArgs);
     if (!parsed.ok) {
       this.reportUnsupported(line, parsed.construct, parsed.hint, 'core/migration/timing');
       return this.emitRawBlock(index, to, line);
@@ -1038,6 +1237,26 @@ class Migrator {
 
 /* ============================== 小工具 ============================== */
 
+/**
+ * 判别种类里**不能证明输入是 v1** 的几种（K2-MIGRATE-SHAPE）：
+ * 空行 / 注释 / 已 2.0 行 / 裸文本行，以及 **2.0 与 v1 同形的 `选项：`**（`选项` 是 2.0 待定 UI，
+ * 写法与 v1 相同——只看它会把纯 2.0 文件误判成 v1）。其余（文件头、`时机 …：`、`如果 …：`、
+ * 心形、`@` 原生块 …）都是 v1 专属构造——真实 v1 文件必然至少带一个（`角色:` 与 `时机 …：` 是 v1 必填）。
+ */
+const V1_NEUTRAL_KINDS: ReadonlySet<V1Kind['kind']> = new Set<V1Kind['kind']>([
+  'blank',
+  'comment',
+  'kojo2',
+  'text',
+  'choiceHead',
+  'choiceItem',
+]);
+
+/** 去掉行尾正典等待标记 `续`（连同其前的空白）；**正文里的 `续` 不动** */
+function stripTrailingWait(text: string): string {
+  return text.replace(/(?:^|[\s\u3000])续\s*$/u, '').trimEnd();
+}
+
 /** 心形块体行是否可按 v1 文本行迁移（注释/文本/心形行；`你：` 前缀也认） */
 function isHeartTextCandidate(body: string, cls: Classified): boolean {
   if (cls.kind.kind === 'text' || cls.kind.kind === 'heartLine') return true;
@@ -1078,14 +1297,22 @@ export type TimingHeadParse =
 /**
  * 解析 v1 `时机 [分野] [编号] [命名参数…]` 块头（`rest` 已剥块尾冒号）。
  *
- * 三条判据（每条都**不猜**）：
+ * 四条判据（每条都**不猜**）：
  * 1. 命名参数（`成否:` / `类型:` / `参数:` / `args:`）⇒ unsupported：2.0 `# 机` 只写 `<事件> [编号]`，
  *    这些是 adapter 事件配置（§3.5 / §15.2.3）；台账里点名是哪几个参数，不静默丢；
  * 2. 面词白名单（**只有调用方给了 `eventNames` 才判**）：不在 adapter `eventCatalog` 里 ⇒ unsupported，
  *    提示列出可迁的事件名。core 不内置任何事件名（零游戏知识，§3.5）；
- * 3. 形状（多余冒号 / 超过 3 段）⇒ unsupported。没给目录时沿用 v1 形状判定（调用方自行负责事后校验）。
+ * 3. **参数形状**（K2-MIGRATE-SHAPE；**只有调用方给了该事件的 `eventArgs` 条目才判**）：参数个数
+ *    （必填 / 上限）与值形状照 adapter 的事件目录核——`时机 初见 3`（0 参事件带编号）、
+ *    `时机 指令 摸屁股`（int 参数给中文指令名）、`时机 指令 编号=310`（`名称=值` 配置形）都会在
+ *    迁移期 unsupported，**不产会撞 `event/argument` 的 `# 机`**。目录里没有该面词 ⇒ 不猜参数；
+ * 4. 形状（多余冒号 / 超过 3 段）⇒ unsupported。没给目录时沿用 v1 形状判定（调用方自行负责事后校验）。
  */
-export function parseTimingHead(rest: string, eventNames?: readonly string[]): TimingHeadParse {
+export function parseTimingHead(
+  rest: string,
+  eventNames?: readonly string[],
+  eventArgs?: MigrateEventArgs,
+): TimingHeadParse {
   const text = rest.trim();
   if (text.length === 0) {
     return {
@@ -1123,6 +1350,14 @@ export function parseTimingHead(rest: string, eventNames?: readonly string[]): T
           : `2.0 \`# 机\` 只认 adapter 声明的事件：${available}（§3.5 / 附录 B.1）。「${face}」这个 v1 面词 2.0 暂无落点：请按挂点拆文件或放进 \`@原生\`。`,
     };
   }
+  // 参数形状：目录里有这个事件的形状才判（没有 = 调用方没给该事件的事实，不猜）。
+  // `hasOwnProperty` 而不是直接索引：面词来自源文本，`__proto__` 一类键不能命中原型链。
+  const argSpec =
+    eventArgs !== undefined && Object.prototype.hasOwnProperty.call(eventArgs, face) ? eventArgs[face] : undefined;
+  if (argSpec !== undefined) {
+    const problem = timingEventArgsProblem(face, tokens.slice(1), argSpec);
+    if (problem !== null) return { ok: false, construct: problem.construct, hint: problem.hint };
+  }
   if (tokens.length > 3) {
     return {
       ok: false,
@@ -1131,6 +1366,68 @@ export function parseTimingHead(rest: string, eventNames?: readonly string[]): T
     };
   }
   return { ok: true, machine: tokens.join(' ') };
+}
+
+/** `# 机` 参数的整数形状（与 `adapter.ts::checkEventArgs` 同一判据：不带前导零的十进制） */
+const INT_ARG_RE = /^-?(?:0|[1-9]\d*)$/u;
+
+/**
+ * `时机 <面> <参数…>` 按 adapter 事件目录校验参数形状（K2-MIGRATE-SHAPE）。
+ *
+ * 只在**目录给了这个面词的条目**时调用；返回 null = 形状可接受。
+ */
+function timingEventArgsProblem(
+  face: string,
+  args: readonly string[],
+  spec: readonly MigrateEventArgShape[],
+): { readonly construct: string; readonly hint: string } | null {
+  const required = spec.filter((arg) => !isOptionalArg(arg));
+  if (args.length < required.length) {
+    return {
+      construct: `\`时机\` 事件「${face}」的参数不足（至少 ${required.length} 个：${required.map((arg) => arg.name).join('、')}，这里 ${args.length} 个）`,
+      hint: `按 adapter 的事件目录补参数：\`# 机 ${face}${exampleArgs(required)}\`（§3.5 / 附录 B.1）；2.0 没有落点就整段放进 \`@原生\`。`,
+    };
+  }
+  if (args.length > spec.length) {
+    const extra = args.slice(spec.length);
+    const expected = spec.length === 0 ? '不接受参数' : `最多 ${spec.length} 个（${spec.map((arg) => arg.name).join('、')}）`;
+    return {
+      construct: `\`时机\` 事件「${face}」的参数过多（${expected}，这里 ${args.length} 个，多出 \`${extra.join(' ')}\`）`,
+      hint: `改成合法形状 \`# 机 ${face}${exampleArgs(spec)}\`（§3.5）；v1 的额外子句 2.0 没有落点，放进 \`@原生\`（§15.2.3）。`,
+    };
+  }
+  for (let i = 0; i < args.length; i++) {
+    const value = args[i]!;
+    const argSpec = spec[i]!;
+    if (/[=＝]/u.test(value)) {
+      return {
+        construct: `\`时机\` 事件「${face}」的参数 ${i + 1}（${argSpec.name}）写成了 \`名称=值\` 配置形「${value}」`,
+        hint: `位置参数只写值：\`# 机 ${face}${exampleArgs(spec)}\`；` +
+          '`成否` / `类型` / `参数` 这类事件配置搬到 adapter（§3.5 / §15.2.3），或整段放进 `@原生`。',
+      };
+    }
+    // `名称 值` 两段形（作者把事件配置写成"参数名 + 取值"的位置参数）：首段与目录参数名逐字同名
+    // 且后面还跟着一段 ⇒ 这不是一个值。只在多参数事件上可证（单参数会被上面的个数上限先挡掉）。
+    if (i + 1 < args.length && value === argSpec.name) {
+      return {
+        construct: `\`时机\` 事件「${face}」的参数 ${i + 1} 写成了 \`名称 值\` 配置形（「${value}」与目录参数名同名）`,
+        hint: `位置参数只写值：\`# 机 ${face}${exampleArgs(spec)}\`（§3.5）；` +
+          '事件配置（成否 / 类型 / 参数）搬到 adapter 事件配置里（§15.2.3），或整段放进 `@原生`。',
+      };
+    }
+    if (argSpec.kind === 'int' && !INT_ARG_RE.test(value)) {
+      return {
+        construct: `\`时机\` 事件「${face}」的参数 ${i + 1}（${argSpec.name}）必须是整数，实际「${value}」`,
+        hint: `2.0 \`# 机\` 只收整数编号：v1 里的中文指令名先在 adapter 的指令表换算成编号再写 \`# 机 ${face} <编号>\`，或整段放进 \`@原生\`（§3.5）。`,
+      };
+    }
+  }
+  return null;
+}
+
+/** 事件参数的示例串（`编号` → ` <编号>`；诊断文案用，不参与解析） */
+function exampleArgs(spec: readonly MigrateEventArgShape[]): string {
+  return spec.map((arg) => (isOptionalArg(arg) ? ` [${arg.name}]` : ` <${arg.name}>`)).join('');
 }
 
 /** 块头里的命名参数名（`成否:` 形，或行尾空值形 `… 参数`——v1 的块尾冒号会吃掉那个 `:`） */
@@ -1233,7 +1530,7 @@ export function summarizeMigration(result: MigrateResult): {
 }
 
 /* 供测试与后续批次的导出（不重复造第二份判别表） */
-export { classifyV1, hasWaitMark, isChoiceItem, isKojo2Line, rewriteWaitAlias, TARGET_HINTS } from './classify.js';
+export { classifyV1, hasWaitMark, isChoiceItem, isKojo2Line, parseDialogueShape, rewriteWaitAlias, TARGET_HINTS } from './classify.js';
 export { readSource } from './source.js';
-export type { Classified, V1Kind } from './classify.js';
+export type { Classified, DialogueShape, V1Kind } from './classify.js';
 export type { Eol, V1Line, V1Source } from './source.js';

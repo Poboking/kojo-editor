@@ -70,6 +70,9 @@ import {
 // 写进**同一个**缓存，预览只读——一次编译两处消费，绝不二次编译。
 import { createKojo2PreviewEntry } from '../kojo2-preview-entry';
 import { publishKojo2PreviewEntry } from '../kojo2-preview-host';
+// K2 batch-7：展开视图（模板/池/随机）的编译成品来源——只登记这一实例的缓存读取器，
+// hover/definition 按路径问，不二次编译（flag 关 ⇒ 零注册）。
+import { registerKojo2ExpandCompileSource } from '../kojo2-expand-compile';
 import { isKojo2DiagnosticsPath } from '../kojo2-diagnostics-gate';
 import { revealLocationOf } from '../../monaco/reveal-position';
 // K2 batch-4：2.0 语言服务（`# 机` 事件目录）的 adapter 注入源。与上一行同一条宿主组合根
@@ -309,6 +312,11 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     });
     // 宿主桥：壳层底部面板用 `useSyncExternalStore` 读它（`null` 入口 ⇒ 只画一句 idle）
     const unpublishKojo2Preview = publishKojo2PreviewEntry(kojo2Preview);
+    // 展开视图的成品来源（K2 batch-7）：与预览读同一份缓存；flag 关（入口 null）⇒ 零注册。
+    const unregisterKojo2ExpandCompile =
+      kojo2Preview === null
+        ? (() => undefined)
+        : registerKojo2ExpandCompileSource((filePath) => kojo2CompileCache.getLastCompile(filePath));
     // 光标同步：只订"光标位置变化"一格（面板按行同步，同列变化不通知）
     const disposeKojo2PreviewCursor = kojo2Preview?.attachCursor(ed) ?? (() => undefined);
     /**
@@ -383,6 +391,7 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       unpublishKojo2Preview();
       kojo2Preview?.dispose();
       kojo2CompileCache.clear();
+      unregisterKojo2ExpandCompile();
       viewCurSub.dispose();
       viewScrSub.dispose();
       viewFindSub?.dispose();

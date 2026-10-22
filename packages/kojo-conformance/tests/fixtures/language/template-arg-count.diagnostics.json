@@ -1,0 +1,11 @@
+{
+  "case": "template/arg-count",
+  "diagnostics": [
+    {
+      "code": "core/template/arg-count",
+      "severity": "error",
+      "line": 6,
+      "column": 1
+    }
+  ]
+}

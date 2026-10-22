@@ -1,0 +1,11 @@
+{
+  "case": "program/break-outside",
+  "diagnostics": [
+    {
+      "code": "core/control/break-outside",
+      "severity": "error",
+      "line": 3,
+      "column": 1
+    }
+  ]
+}

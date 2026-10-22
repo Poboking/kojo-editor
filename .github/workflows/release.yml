@@ -43,6 +43,18 @@ jobs:
       - name: install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # K2-RELEASE-AUTOMATION（设计稿 §16.10 R9.5–R9.7）：发布前的**机器面快速闸**——
+      # 三处 version 逐字一致（root package.json / packages/app/package.json /
+      # packages/app/src-tauri/tauri.conf.json）+ 双 typecheck + 解耦审计 + conformance，
+      # 逐项读数一次成型，rc≠0 就不再往下打 tag 构建。
+      # 只点这 5 项：两池（unit/perf）、app 构建、cargo 的重活已分别由 CI 的 verify 与 rust
+      # job 跑过，这里重复只会拖长 tag 构建并放大超时面（红线：构建仍归 release.yml，
+      # 不在这里复制第二份发版流水线）。
+      # 全量档（version-sync + 两池 + artifact-audit + cargo-test）由发版人手跑或夜间 job 跑：
+      #   node tools/release-gate.mjs --release --json
+      - name: Release gate（发版前机器面）
+        run: node tools/release-gate.mjs --only=version-sync,typecheck-root,typecheck-app,audit,conformance
+
       - name: build and release
         uses: tauri-apps/tauri-action@v0
         env:

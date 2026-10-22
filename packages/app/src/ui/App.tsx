@@ -12,6 +12,8 @@ import {
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, FileWatchStatus, GameProject, RecentProject } from '@kojo/plugin-api';
 import {errorText,  join, pathKey } from '@kojo/plugin-api';
+// K2-MIGRATE-SHAPE：adapter 事件目录 → 迁移期参数形状投影（core 公共入口，宿主只做投影）。
+import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
 import { removeRecentOptimistic } from './WelcomeView';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
@@ -128,6 +130,11 @@ import {
   createKojo2StorageService,
   type Kojo2StorageServiceAdapter,
 } from './kojo2-storage-service';
+// K2-STORAGE-RECYCLED-UI（缺口②）：会话内 `.kojo2` 变更 → 防抖 → refreshDeclarations。
+// 调度判据全住在这个零 React 模块里；App 只递「文档怎么重列」与事件路径。
+import { createKojo2DeclRefresh, type Kojo2DeclRefresh } from './kojo2-storage-refresh';
+// 回收阻断的命令表出口（toast 动作之外的二次入口；开关关 = effect 不建服务 ⇒ 零注册）
+import { createKojo2StorageRetryCommand } from './kojo2-storage-retry-command';
 import { KOJO2_STORAGE_DEFAULT_CLASSES } from './kojo2-storage-registry';
 import { isKojo2Path } from './kojo2-open';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
@@ -307,6 +314,21 @@ async function loadKojo2MigrateEventNames(): Promise<readonly string[] | undefin
   try {
     const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 宿主组合根的惰性 adapter 装载点（动态 import 不进开机静态图，口径同 kojo2-project-scan-adapter）
     return mod.ERATW_EVENT_NAMES;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * K2-MIGRATE-SHAPE 的宿主接线：事件**参数形状**投影（`projectEventArgs(eventCatalog)`）。
+ *
+ * 与上面同一条动态 import 纪律；投影本身是 core 的纯函数，宿主不解释事件目录。
+ * 失败/缺席 ⇒ `undefined`：迁移器只判面词、不猜参数形状（旧行为固定）。
+ */
+async function loadKojo2MigrateEventArgs(): Promise<MigrateEventArgs | undefined> {
+  try {
+    const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 同上（动态 import，不进开机静态图）
+    return projectEventArgs(mod.ERATW_EVENT_CATALOG);
   } catch {
     return undefined;
   }
@@ -643,32 +665,57 @@ export function App(): ReactElement {
   /**
    * Kojo 2.0 槽位账本（K2-STORAGE-SERVICE）：项目打开 / 关闭的**唯一**接线点。
    *
-   * ① flag 关 ⇒ 直接返回：不建服务、不读盘、零写（服务内部另有同一道闸，双保险）；
+   * ① flag 关 ⇒ 直接返回：不建服务、不读盘、零写、零命令（服务内部另有同一道闸，双保险）；
    * ② 文档清单 = 项目口上根 ∪ 会话附加根里按 `.kojo2` 后缀现读；任何一根读不动、任何一份
    *    读不动都记 `complete=false`——服务据此**零写跳过**（把读不到当成删除会回收它的槽位，
    *    文件恢复后新声明就会读到旧存档字节）。**不并入**跨项目的常驻工作区根：那会把别的
    *    项目的声明算进本项目账本；
-   * ③ adapter 动态 import（不进开机静态图）；装载失败只报一句，本轮不建服务。
+   * ③ adapter 动态 import（不进开机静态图）；装载失败只报一句，本轮不建服务；
+   * ④ 打开之后才挂 `file.changed` 防抖刷新（K2-STORAGE-RECYCLED-UI 缺口②）：同一条
+   *    `collectDocuments` 重列文档，交给 `refreshDeclarations`（失败不拆已 opened 实例）。
    *
-   * 关闭 / 换项目 = effect 清理：先等还在飞的 open 落地，再 `closeProject()`（flush 后丢弃
-   * 实例；flush 失败由服务自己上屏）。`cancelled` 防的是「项目已经关了、文档才读完」的迟到装配。
+   * 关闭 / 换项目 = effect 清理：先停刷新、摘监听、撤命令，再等还在飞的 open 落地后
+   * `closeProject()`（flush 后丢弃实例；flush 失败由服务自己上屏）。`cancelled` 防的是
+   * 「项目已经关了、文档才读完」的迟到装配。
    */
+  const [storageCommands, setStorageCommands] = useState<readonly ShellCommandSpec[]>([]);
   useEffect(() => {
-    if (!kernel || !project) return;
-    if (!isKojo2CutoverEnabled()) return;
+    if (!kernel || !project) {
+      setStorageCommands([]);
+      return;
+    }
+    if (!isKojo2CutoverEnabled()) {
+      setStorageCommands([]);
+      return;
+    }
     const service = createKojo2StorageService({
       kernel,
       notify: (notice) => notifyRef.current(notice),
     });
+    // 回收阻断的二次入口：与 toast 动作同一个 retryWithRecycledAllowed（不新造通知系统）
+    setStorageCommands([
+      createKojo2StorageRetryCommand({
+        service,
+        notify: (notice) => notifyRef.current(notice),
+      }),
+    ]);
     let cancelled = false;
     /** 本次装配的 open promise：清理时要等它落地再关，否则 close 会拿到 busy 而漏掉实例 */
     let opening: Promise<void> | null = null;
-    void (async () => {
+    /** 会话内声明刷新器（打开之后才建；清理时先 dispose，迟到的 collect 不会写账本） */
+    let refresh: Kojo2DeclRefresh | null = null;
+    let unFileChanged: (() => void) | null = null;
+
+    /** 唯一递归列举口径：项目口上根 ∪ 会话附加根，只按 `.kojo2` 收文件 */
+    const collectDocuments = async (): Promise<{
+      documents: readonly { uri: string; source: string }[];
+      documentsComplete: boolean;
+    }> => {
       const roots = [...new Set([...project.kojoPaths, ...extraRootsRef.current])];
       const documents: { uri: string; source: string }[] = [];
       let complete = roots.length > 0;
       for (const root of roots) {
-        if (cancelled) return;
+        if (cancelled) return { documents, documentsComplete: false };
         try {
           const entries = await kernel.io.walkDir(root, {
             includeFiles: true,
@@ -676,7 +723,7 @@ export function App(): ReactElement {
             filter: (entry) => entry.isDirectory || isKojo2Path(entry.name),
           });
           for (const entry of entries) {
-            if (cancelled) return;
+            if (cancelled) return { documents, documentsComplete: false };
             if (entry.isDirectory || !isKojo2Path(entry.name)) continue;
             try {
               const text = await kernel.io.readText(entry.path);
@@ -689,6 +736,11 @@ export function App(): ReactElement {
           complete = false;
         }
       }
+      return { documents, documentsComplete: complete };
+    };
+
+    void (async () => {
+      const initial = await collectDocuments();
       if (cancelled) return;
       const adapter = await loadKojo2StorageAdapter((reason) =>
         notifyRef.current({
@@ -700,12 +752,22 @@ export function App(): ReactElement {
       opening = service
         .openProject({
           projectKey: pathKey(project.rootDir),
-          documents,
+          documents: initial.documents,
           adapter,
-          documentsComplete: complete,
+          documentsComplete: initial.documentsComplete,
         })
         .then(() => undefined);
       await opening;
+      if (cancelled) return;
+      // 打开之后再挂刷新：不要在装配途中的 file.changed 上抢跑（那时还没有实例可刷新）
+      const controller = createKojo2DeclRefresh({
+        service,
+        collect: collectDocuments,
+        isKojo2Path,
+        onFailure: (message) => notifyRef.current({ kind: 'error', message }),
+      });
+      refresh = controller;
+      unFileChanged = kernel.bus.on('file.changed', (ev) => controller.noteChange(ev.path));
     })().catch((error: unknown) => {
       notifyRef.current({
         kind: 'error',
@@ -714,9 +776,14 @@ export function App(): ReactElement {
     });
     return () => {
       cancelled = true;
+      refresh?.dispose();
+      unFileChanged?.();
+      setStorageCommands([]);
       void (async () => {
-        // 先让还在飞的 open 落地（服务对并发 close 只回 busy），再关：不留没有 flush 的实例。
+        // 先让还在飞的 open 落地（服务对并发 close 只回 busy），再等声明刷新收尾，最后关：
+        // 不留没有 flush 的实例，也不让一次 300ms 内的刷新把 close 挤成 busy。
         if (opening !== null) await opening.catch(() => undefined);
+        if (refresh !== null) await refresh.whenIdle();
         await service.closeProject();
       })();
     };
@@ -766,6 +833,16 @@ export function App(): ReactElement {
   const migrateCommands = useMemo<readonly ShellCommandSpec[]>(
     () => migrateEntry?.commands() ?? [],
     [migrateEntry],
+  );
+
+  /**
+   * 项目视图的壳层命令 = 迁移入口 ∪ 槽位账本重试。两者在开关关时都是空数组
+   * （迁移入口自己判/槽位账本的 effect 根本不建服务），所以这里不重复读开关。
+   * 合并一次 memo：`ProjectView` 的 `extraShellCommands` 身份稳定，注册表不随每帧重建。
+   */
+  const shellCommands = useMemo<readonly ShellCommandSpec[]>(
+    () => [...migrateCommands, ...storageCommands],
+    [migrateCommands, storageCommands],
   );
 
   // 结构解析叠层（实验，默认关）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通
@@ -1956,7 +2033,7 @@ export function App(): ReactElement {
             registerTreeRefresh={registerTreeRefresh}
             extraRoots={extraRoots}
             onAddExtraRoot={() => void addExtraRoot()}
-            extraShellCommands={migrateCommands}
+            extraShellCommands={shellCommands}
           />
         </Suspense>
       </ProjectErrorBoundary>
@@ -2042,6 +2119,7 @@ export function App(): ReactElement {
             filePaths={migrateState.filePaths}
             speaker={migrateEntry.speaker()}
             loadEventNames={loadKojo2MigrateEventNames}
+            loadEventArgs={loadKojo2MigrateEventArgs}
             onClose={() => migrateEntry.close()}
             applyPlan={migrateEntry.apply}
             undoPlan={migrateEntry.undo}

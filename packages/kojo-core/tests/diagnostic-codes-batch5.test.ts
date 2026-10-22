@@ -3,7 +3,8 @@
  *
  * 钉三件事：
  * 1. **码表是闭集、只增不改**：`diagnostics.ts` 的 `CoreDiagnosticCode` 联合相对 batch-4
- *    基线只多出本批四条；既有码逐条仍在（一条都不许删/改名）；无重复；新码全部 error。
+ *    基线只多出 batch-5 四条 + batch-7 一条（`core/migration/ambiguous-dialogue`，迁移期
+ *    warning）；既有码逐条仍在（一条都不许删/改名）；无重复；batch-5 新码全部 error。
  * 2. **生产者真的用新码**（不是只写进表）：`pool-plan.ts` / `sema/check.ts` /
  *    `project/weave-layers.ts` 各自的正反例——正例必须命中新码，反例必须不命中，
  *    且**不再借用**此前那张借来的码（`core/expr/not-expression` /
@@ -40,6 +41,12 @@ const BATCH5_CODES: readonly CoreDiagnosticCode[] = [
   'core/array/whole-assign',
   'core/weave/not-weavable',
 ];
+
+/**
+ * batch-7（K2-MIGRATE-SHAPE）additive 的一条：迁移期"同形歧义"warning 台账。
+ * 它不在 batch-5 的四条里，故单列一张表；下面的"差集"断言把两批一起算。
+ */
+const BATCH7_CODES: readonly CoreDiagnosticCode[] = ['core/migration/ambiguous-dialogue'];
 
 /**
  * batch-4 收工时的全表（`git show <batch-4>/diagnostics.ts`）。
@@ -123,7 +130,15 @@ describe('码表 · 闭集只增（S5.6）', () => {
   it('本批相对基线的差集恰为四条新码（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
-    expect(added.sort()).toEqual([...BATCH5_CODES].sort());
+    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES].sort());
+  });
+
+  it('batch-7 的同形歧义码是 warning（迁移期保留现状，不阻断）', () => {
+    for (const code of BATCH7_CODES) {
+      expect(declared, `${code} 不在 CoreDiagnosticCode 联合里`).toContain(code);
+      expect(CORE_WARNING_CODES.has(code), `${code} 必须是 warning`).toBe(true);
+      expect(severityOf(code)).toBe('warning');
+    }
   });
 
   it('新码全部 error（不在 warning 集合里，severityOf 逐条为 error）', () => {

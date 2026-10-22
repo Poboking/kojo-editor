@@ -1,0 +1,11 @@
+{
+  "case": "pool/missing-default",
+  "diagnostics": [
+    {
+      "code": "core/pool/no-default",
+      "severity": "error",
+      "line": 1,
+      "column": 1
+    }
+  ]
+}

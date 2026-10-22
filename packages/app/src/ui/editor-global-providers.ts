@@ -111,6 +111,11 @@ import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
 // 折叠只多一条**动态** import（worker 客户端仍在第一次真折叠时才装载），缩进是纯判据 + 一枚 provider。
 import { installKojo2FoldingProvider } from '../monaco/kojo2-folding';
 import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
+// K2 batch-7：大纲/面包屑符号（DocumentSymbolProvider）与 2.0 格式化器。
+// 两者都自挡 flag（关 ⇒ 零注册）；格式化走 Monaco 内建 `editor.action.formatDocument`
+//（Shift+Alt+F），本文件不新增命令。
+import { installKojo2DocumentSymbolProvider } from '../monaco/kojo2-symbols';
+import { installKojo2DocumentFormatter } from '../monaco/kojo2-format';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
   SIGNATURE_LOOKBACK_LINES,
@@ -1557,6 +1562,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       // 缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
       globalDisposers.push(installKojo2FoldingProvider(monaco));
       globalDisposers.push(installKojo2IndentProvider(monaco));
+      // K2 batch-7：大纲（Ctrl+Shift+O）与面包屑共用同一份符号事实；格式化器只服务
+      // 显式格式化动作（不接保存链路——作者不按 Shift+Alt+F 就不动缓冲内容）。
+      globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));
+      globalDisposers.push(installKojo2DocumentFormatter(monaco));
     }
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *

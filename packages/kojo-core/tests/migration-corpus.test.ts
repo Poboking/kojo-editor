@@ -23,10 +23,10 @@ import * as path from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { classifyV1, compileKojoSource, migrateKojoSourceSemantic, parseSource } from '../src/index.js';
+import { classifyV1, compileKojoSource, migrateKojoSourceSemantic, parseSource, projectEventArgs } from '../src/index.js';
 import { createSugarTranspileService } from '../../plugins/kojo-sugar/src/service.js';
 import { stubDict, stubFaceTable } from '../../plugins/kojo-sugar/tests/support.js';
-import { ERATW_EVENT_NAMES, ERATW_GAME_ADAPTER, createEratwEmitBackend } from '../../plugins/eratw-adapter/src/kojo2/index.js';
+import { ERATW_EVENT_CATALOG, ERATW_EVENT_NAMES, ERATW_GAME_ADAPTER, createEratwEmitBackend } from '../../plugins/eratw-adapter/src/kojo2/index.js';
 import type {
   MigrationCaseReport,
   MigrationCorpus,
@@ -97,11 +97,15 @@ const compile2 = (source: string) => {
 };
 
 /**
- * 迁移：core 语义层 + **真 adapter 事件目录**（`时机` 面词白名单，K2-EVENT-FACEWORD）。
- * 没有目录的裸调用（app 侧现状）只判形状；语料跑的是"宿主已接 adapter"的口径。
+ * 迁移：core 语义层 + **真 adapter 事件目录**（`时机` 面词白名单 + 参数形状，K2-EVENT-FACEWORD /
+ * K2-MIGRATE-SHAPE）。没有目录的裸调用（app 侧现状）只判形状；语料跑的是"宿主已接 adapter"的口径：
+ * `eventNames` 挡面词、`eventArgs`（`projectEventArgs(ERATW_EVENT_CATALOG)`）挡参数形状。
  */
 const migrate = (source: string) => {
-  const result = migrateKojoSourceSemantic(source, { eventNames: ERATW_EVENT_NAMES });
+  const result = migrateKojoSourceSemantic(source, {
+    eventNames: ERATW_EVENT_NAMES,
+    eventArgs: projectEventArgs(ERATW_EVENT_CATALOG),
+  });
   return {
     ok: result.ok,
     code: result.code,

@@ -13,8 +13,20 @@
  * language selector；v1 的 `.kojo` / `.erb` 面由 `registerForLanguageServices` 各挂各的，
  * 两边不重叠）。
  *
- * ## 零游戏知识（audit A 的硬约束）
+ * ## 展开视图（K2-EXPAND-VIEW）：只借同一枚 provider 追加
  *
+ * 模板 / 池 / 随机展开的"调用处 ↦ 定义处 ↦ 产物行"全在纯模型 `kojo2-expand-view.ts` 里判完；
+ * 本文件只做两件 additive 的事：
+ * - **悬停**：光标在**调用行**上时，在声明正文之后追加一段展开 Markdown（同一个 `contents`
+ *   数组的第二项，**不新造第二个 `HoverProvider`** —— Monaco 多 provider 的合并顺序不可控）；
+ * - **转定义**：光标在**展开体的源行**上时，在声明落点之后追加两条 `LocationLink`
+ *   （调用处 / 定义处），同样挂在**同一枚** provider 的返回数组里。
+ *
+ * 编译成品由 `ui/kojo2-expand-compile.ts` 的模块级登记表提供（面板挂载时登记自己的
+ * `compileCache.getLastCompile`）：**绝不二次编译**，也不缓存第二份 source map。登记表空
+ * （或 flag 关）⇒ 两处行为与 batch-4 逐字一致。
+ *
+ * ## 零游戏知识（audit A 的硬约束）
  * 本文件**不 import 任何 adapter 包**：事件名住在 `# 机` 的候选里，而候选由
  * `kojo2CompletionAt(query, { adapter })` 经 core 的 `eventNames(adapter)` 派生；域符号同样由
  * 纯模型从 core 的 `KOJO_DOMAIN_SYMBOL_NAMES` 取。adapter 由**调用方注入**
@@ -50,6 +62,13 @@ import type * as Monaco from './entry';
 import type { GameAdapter } from '@kojo/kojo-core';
 import { KOJO2_LANGUAGE_ID } from './kojo2-language';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
+import { kojo2ExpandCompilationFor, type Kojo2ExpandCompileSource } from '../ui/kojo2-expand-compile';
+import {
+  expandViewAt,
+  expandViewMarkdown,
+  type Kojo2ExpandCompilation,
+  type Kojo2ExpandView,
+} from './kojo2-expand-view';
 import { kojo2CompletionAt, type Kojo2CompletionCandidate } from './kojo2-completion';
 import { kojo2HoverAt, kojo2HoverLines, type Kojo2HoverResult } from './kojo2-hover';
 import { kojo2DefinitionAt } from './kojo2-definition';
@@ -88,6 +107,14 @@ export interface Kojo2ProviderOptions {
   readonly adapter?: Kojo2AdapterSource;
   /** 文件身份（只服务 `LocationLink.targetUri`；缺省 = 沿用 `model.uri`） */
   readonly getFilePath?: Kojo2FilePathSource;
+  /**
+   * **展开视图的编译成品**（K2-EXPAND-VIEW）：按文件路径取"那一次编译的产物 + 同源 source map"。
+   *
+   * 缺省 = 问模块级登记表 {@link kojo2ExpandCompilationFor}（面板挂载时登记了自己的编译缓存，
+   * 见 `ui/kojo2-expand-compile.ts`）；两边都取不到 ⇒ 悬停 / 转定义**逐字保持**无展开段的旧行为
+   * （零注册零行为，不新造第二个 provider）。
+   */
+  readonly getCompile?: Kojo2ExpandCompileSource;
 }
 
 /* ============================== 常量 ============================== */
@@ -341,12 +368,104 @@ export function kojo2CompletionItems(
   return candidates.map((candidate) => completionItemOf(monaco, candidate, range, declarations));
 }
 
+/* ============================== 展开视图的取数缝（K2-EXPAND-VIEW） ============================== */
+
+/**
+ * 这份 model 背后的文件路径（注入的身份优先，其次 `model.uri.fsPath`）。
+ *
+ * 与 {@link targetUriOf} 分开的原因：展开视图要的是**路径**（去问编译缓存），
+ * 转定义要的是 **Uri 对象**（`Uri.file(path)` 可以失败，那就退回 `model.uri`）。
+ * 桩 model 没有 uri ⇒ `null`（展开段不出现，其余腿不受影响）。
+ */
+function filePathOfModel(
+  model: Monaco.editor.ITextModel,
+  getFilePath: Kojo2FilePathSource | undefined,
+): string | null {
+  if (getFilePath !== undefined) {
+    try {
+      const path = getFilePath(model);
+      if (typeof path === 'string' && path.length > 0) return path;
+    } catch {
+      /* 身份取不到：退回 model.uri（下面） */
+    }
+  }
+  const uri = (model as unknown as { uri?: { fsPath?: unknown } }).uri;
+  if (uri !== null && typeof uri === 'object' && typeof uri.fsPath === 'string' && uri.fsPath.length > 0) {
+    return uri.fsPath;
+  }
+  return null;
+}
+
+/**
+ * 光标处的展开视图（取不到 = `null`，**不抛**）。
+ *
+ * 编译成品是**诊断那一轮**的缓存（`compileCache.getLastCompile`）：这里绝不二次编译——
+ * 展开视图要显示的产物行与屏上预览、波浪线必须是同一份字节。缓存里没有这一份 ⇒ `null`
+ * （作者还没停手 / 这份文件没编译成功 / flag 关着）。
+ */
+function expandViewFor(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  getFilePath: Kojo2FilePathSource | undefined,
+  getCompile: Kojo2ExpandCompileSource | undefined,
+): Kojo2ExpandView | null {
+  const filePath = filePathOfModel(model, getFilePath);
+  if (filePath === null) return null;
+  let compilation: Kojo2ExpandCompilation | null;
+  try {
+    compilation = getCompile === undefined ? kojo2ExpandCompilationFor(filePath) : getCompile(filePath);
+  } catch {
+    return null; // 缓存读取端抛错 = 这一份取不到（悬停 / 转定义照旧给别的事实）
+  }
+  if (compilation === null || compilation === undefined) return null;
+  try {
+    const view = expandViewAt(
+      compilation.compiled,
+      compilation.sourceMapModel,
+      { line: position.lineNumber, column: position.column },
+      { source: sourceOf(model) ?? undefined },
+    );
+    return view.kind === 'expand' ? view : null;
+  } catch {
+    return null; // 展开视图是附加段：它挂了不许带走声明悬停 / 转定义
+  }
+}
+
+/** span → Monaco 区间（1 基；span 可以是跨行的，`LocationLink.range` 允许） */
+function rangeOfSpan(span: { readonly start: { readonly line: number; readonly column: number }; readonly end: { readonly line: number; readonly column: number } }): Monaco.IRange {
+  return {
+    startLineNumber: span.start.line,
+    startColumn: span.start.column,
+    endLineNumber: span.end.line,
+    endColumn: span.end.column,
+  };
+}
+
 /* ============================== 悬停 ============================== */
 
-/** 悬停结果（Markdown 正文 + 屏上区间）；`undefined` = 此处没有可讲的声明事实 */
+/** 悬停的可选注入面（缺省 = 不注入文件身份、不取编译缓存：与 batch-4 逐字一致） */
+export interface Kojo2HoverOptions {
+  readonly getFilePath?: Kojo2FilePathSource;
+  readonly getCompile?: Kojo2ExpandCompileSource;
+}
+
+/** 转定义的附加注入面（只服务展开视图的编译成品；缺省 = 问模块级登记表） */
+export interface Kojo2ExpandLookupOptions {
+  readonly getCompile?: Kojo2ExpandCompileSource;
+}
+
+/**
+ * 悬停结果（声明事实 + **追加**展开段；`undefined` = 此处没有可讲的事实）。
+ *
+ * 展开段只挂在**调用行**命中时（`view.via === 'call-site'`）：光标已在展开体的源行上时，
+ * 作者要看的是"这一行是谁展开出来的"，那是转定义那一条腿的事（两条 LocationLink），
+ * 不在悬停里再贴一遍同样的产物。两段 Markdown **同一枚 provider 的两个 contents**：
+ * Monaco 多 provider 的合并顺序不可控，绝不为展开视图新造第二个 `HoverProvider`。
+ */
 export function kojo2HoverOf(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
+  options: Kojo2HoverOptions = {},
 ): Monaco.languages.Hover | undefined {
   const source = sourceOf(model);
   if (source === null) return undefined;
@@ -355,16 +474,26 @@ export function kojo2HoverOf(
     line: position.lineNumber,
     column: position.column,
   });
-  if (hover === undefined) return undefined;
-  return {
-    contents: [{ value: kojo2HoverMarkdown(hover) }],
-    range: {
-      startLineNumber: position.lineNumber,
-      startColumn: hover.startColumn,
-      endLineNumber: position.lineNumber,
-      endColumn: hover.endColumn,
-    },
-  };
+  const expand = expandViewFor(model, position, options.getFilePath, options.getCompile);
+  const expandSegment =
+    expand !== null && expand.via === 'call-site' ? expandViewMarkdown(expand) : null;
+  if (hover === undefined && expandSegment === null) return undefined;
+  const contents: Monaco.IMarkdownString[] = [];
+  if (hover !== undefined) contents.push({ value: kojo2HoverMarkdown(hover) });
+  if (expandSegment !== null) contents.push(expandSegment);
+  if (hover !== undefined) {
+    return {
+      contents,
+      range: {
+        startLineNumber: position.lineNumber,
+        startColumn: hover.startColumn,
+        endLineNumber: position.lineNumber,
+        endColumn: hover.endColumn,
+      },
+    };
+  }
+  // 只有展开段（`@随机` 块头这类没有声明事实的位置）：区间取调用处 span（单行、精确）
+  return { contents, range: expand === null ? undefined : rangeOfSpan(expand.callSite) };
 }
 
 /* ============================== 转定义 ============================== */
@@ -408,49 +537,80 @@ function targetUriOf(
  *
  * 纯模型只答同文件落点，所以 `uri` 得由宿主补（见 {@link targetUriOf}）；
  * 落点区间取声明的**名字段**（不是整行）——落下去光标正好压在那个名字上。
+ *
+ * ## 展开视图的两条附加 Link（K2-EXPAND-VIEW，additive）
+ *
+ * 光标落在**展开体的源行**上（`view.via === 'definition'`：模板 / 池定义体的一行、
+ * 随机块的一条候选）时，在声明落点之后追加两条：
+ *
+ * 1. **调用处**（`call-site`）——"这一行是被哪个 `! 名` 展开出来的 / 哪个 `@随机` 派生的"；
+ * 2. **定义处**（`definition`）——模板 / 池声明头到体末那一段；随机块 = 块本身。
+ *
+ * 挂在**同一枚** provider 的返回数组里（不新造第二个 `DefinitionProvider`：Monaco 多 provider
+ * 的合并顺序不可控，`F12` 到底跳哪一条就变得不可断言）。光标在调用行上时**不加**这两条——
+ * 那时作者的意图是"这个名字定义在哪"，与既有声明落点重合，多给两条只会让 F12 变成多选。
  */
 export function kojo2DefinitionLinksOf(
   monaco: typeof Monaco,
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
   getFilePath: Kojo2FilePathSource | undefined,
+  options: Kojo2ExpandLookupOptions = {},
 ): Monaco.languages.LocationLink[] {
   const source = sourceOf(model);
   if (source === null) return [];
+  const targetUri = targetUriOf(monaco, model, getFilePath);
+  if (targetUri === undefined) return [];
+  const links: Monaco.languages.LocationLink[] = [];
+
+  const lineText = lineTextOf(model, position.lineNumber);
+  const col0 = Math.min(Math.max(position.column - 1, 0), lineText.length);
+  const originSelectionRange = (): Monaco.IRange | undefined => {
+    const span = kojo2TokenSpanAt(lineText, col0);
+    if (span === null) return undefined;
+    return {
+      startLineNumber: position.lineNumber,
+      startColumn: span.start + 1,
+      endLineNumber: position.lineNumber,
+      endColumn: span.end + 1,
+    };
+  };
+
   const target = kojo2DefinitionAt({
     source,
     line: position.lineNumber,
     column: position.column,
   });
-  if (target === undefined) return [];
-  const targetUri = targetUriOf(monaco, model, getFilePath);
-  if (targetUri === undefined) return [];
-  const targetRange: Monaco.IRange = {
-    startLineNumber: target.line,
-    startColumn: target.column,
-    endLineNumber: target.line,
-    endColumn: target.endColumn,
-  };
-  const lineText = lineTextOf(model, position.lineNumber);
-  const col0 = Math.min(Math.max(position.column - 1, 0), lineText.length);
-  const span = kojo2TokenSpanAt(lineText, col0);
-  const originSelectionRange: Monaco.IRange | undefined =
-    span === null
-      ? undefined
-      : {
-          startLineNumber: position.lineNumber,
-          startColumn: span.start + 1,
-          endLineNumber: position.lineNumber,
-          endColumn: span.end + 1,
-        };
-  return [
-    {
+  if (target !== undefined) {
+    const targetRange: Monaco.IRange = {
+      startLineNumber: target.line,
+      startColumn: target.column,
+      endLineNumber: target.line,
+      endColumn: target.endColumn,
+    };
+    const originRange = originSelectionRange();
+    links.push({
       uri: targetUri,
       range: targetRange,
       targetSelectionRange: targetRange,
-      ...(originSelectionRange === undefined ? {} : { originSelectionRange }),
-    },
-  ];
+      ...(originRange === undefined ? {} : { originSelectionRange: originRange }),
+    });
+  }
+
+  const expand = expandViewFor(model, position, getFilePath, options.getCompile);
+  if (expand !== null && expand.via === 'definition') {
+    const originRange = originSelectionRange();
+    for (const span of [expand.callSite, expand.definition]) {
+      const range = rangeOfSpan(span);
+      links.push({
+        uri: targetUri,
+        range,
+        targetSelectionRange: range,
+        ...(originRange === undefined ? {} : { originSelectionRange: originRange }),
+      });
+    }
+  }
+  return links;
 }
 
 /* ============================== 安装 ============================== */
@@ -470,6 +630,7 @@ export function installKojo2LanguageProviders(
 
   const adapterSource: Kojo2AdapterSource = options.adapter;
   const getFilePath = options.getFilePath;
+  const getCompile = options.getCompile;
 
   const completionProvider: Monaco.languages.CompletionItemProvider = {
     triggerCharacters: [...KOJO2_COMPLETION_TRIGGER_CHARS],
@@ -488,7 +649,9 @@ export function installKojo2LanguageProviders(
   const hoverProvider: Monaco.languages.HoverProvider = {
     provideHover(model, position) {
       try {
-        return kojo2HoverOf(model, position);
+        // 展开段与声明悬停**同一个** provider 的两个 contents（K2-EXPAND-VIEW）：
+        // 不新造第二个 HoverProvider——Monaco 多 provider 的合并顺序不可控。
+        return kojo2HoverOf(model, position, { getFilePath, getCompile });
       } catch {
         return undefined;
       }
@@ -498,7 +661,7 @@ export function installKojo2LanguageProviders(
   const definitionProvider: Monaco.languages.DefinitionProvider = {
     provideDefinition(model, position) {
       try {
-        return kojo2DefinitionLinksOf(monaco, model, position, getFilePath);
+        return kojo2DefinitionLinksOf(monaco, model, position, getFilePath, { getCompile });
       } catch {
         return [];
       }

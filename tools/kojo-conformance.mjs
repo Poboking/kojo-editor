@@ -16,11 +16,16 @@
  *   **三条真入口**装进去——v1 侧 = kojo-sugar 真转译服务（表与 golden 测试同源）、
  *   2.0 侧 = 真 core + 真 eraTW backend、迁移 = core 语义层。换 adapter / 换语料只需换
  *   这里的注入，不改判定。
+ * - **`language` 子命令**（K2-LANG-CONFORMANCE）同理：套件与判定全在 `src/language.ts`
+ *   （纯逻辑、IO 注入）；本文件只把 fixture 与真 eraTW adapter/backend 装进注册表
+ *   （`--adapter fixture|eratw`），换 adapter 不改判定。
  *
  * 用法（与 bin 一致）：
  *   node tools/kojo-conformance.mjs list-cases
  *   node tools/kojo-conformance.mjs check --adapter fixture --dir packages/kojo-conformance/tests/fixtures
  *   node tools/kojo-conformance.mjs check --golden <源.kojo2>:<产物.erb> --json
+ *   node tools/kojo-conformance.mjs language --json
+ *   node tools/kojo-conformance.mjs language --adapter eratw --json
  *   node tools/kojo-conformance.mjs migrate-diff --dir packages/kojo-core/tests/fixtures/migrate-corpus
  *   node tools/kojo-conformance.mjs migrate-diff --dir <语料机目录> --json
  * 退出码：透传 main.ts / migration.ts 的 0 / 1 / 2；启动失败 = 1。
@@ -32,6 +37,7 @@ const REPO = path.resolve(import.meta.dirname, '..');
 const ENTRY = '/packages/kojo-conformance/src/main.ts';
 const START_ATTEMPTS = 2;
 const MIGRATE_COMMAND = 'migrate-diff';
+const LANGUAGE_COMMAND = 'language';
 
 /** migrate-diff 需要额外加载的 TS 入口（真 core / 真 v1 转译 / 真 adapter backend / 判定逻辑） */
 const MIGRATE_ENTRIES = {
@@ -42,13 +48,19 @@ const MIGRATE_ENTRIES = {
   eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
 };
 
+/** language 子命令需要额外加载的 TS 入口（语言套件纯逻辑 + 可选 eraTW 注入） */
+const LANGUAGE_ENTRIES = {
+  language: '/packages/kojo-conformance/src/language.ts',
+  eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
+};
+
 /**
  * 起一个 Vite SSR 服务器把 TS 入口载进来；载完即关（后续调用不会再触发模块加载）。
  *
  * `configFile` 指向仓库的 `vitest.config.ts`：那份配置是**包别名（`@kojo/*`）的单一真源**，
  * 这里复用它，避免在工具里抄第二份 alias 表（抄了必漂移）。
  */
-async function loadModules(needMigration) {
+async function loadModules(needMigration, needLanguage = false) {
   const server = await createServer({
     configFile: path.join(REPO, 'vitest.config.ts'),
     root: REPO,
@@ -60,9 +72,16 @@ async function loadModules(needMigration) {
     const main = await server.ssrLoadModule(ENTRY);
     if (typeof main.main !== 'function') throw new Error('src/main.ts 未导出 main()');
     const modules = { main };
-    if (!needMigration) return modules;
-    for (const [key, entry] of Object.entries(MIGRATE_ENTRIES)) {
-      modules[key] = await server.ssrLoadModule(entry);
+    if (needMigration) {
+      for (const [key, entry] of Object.entries(MIGRATE_ENTRIES)) {
+        modules[key] = await server.ssrLoadModule(entry);
+      }
+      return modules;
+    }
+    if (needLanguage) {
+      for (const [key, entry] of Object.entries(LANGUAGE_ENTRIES)) {
+        modules[key] = await server.ssrLoadModule(entry);
+      }
     }
     return modules;
   } finally {
@@ -119,12 +138,18 @@ function createV2Compiler(core, eratw) {
 /**
  * 迁移真入口：core 语义层（`当` / `分支` / `初回` 三落点）。
  *
- * 事件目录**从真 adapter 注入**：`时机` 面词白名单是 adapter 事实（core 零游戏知识），迁移器只认
- * `ERATW_EVENT_NAMES` 的九事件；不在目录里的面词在迁移期落 unsupported（不产 `# 机`）。
+ * 事件目录**从真 adapter 注入**：`时机` 面词白名单 + 参数形状都是 adapter 事实（core 零游戏知识）。
+ * - `eventNames`：不在 `ERATW_EVENT_NAMES` 的面词在迁移期落 unsupported（不产 `# 机`）；
+ * - `eventArgs`：`projectEventArgs(ERATW_EVENT_CATALOG)` 的投影——`时机 初见 3` 这类
+ *   "面词命中但参数形状不合"的写法同样在迁移期挡掉，不产会撞 `event/argument` 的 `# 机`。
  */
 function createMigrator(core, eratw) {
+  const eventArgs = core.projectEventArgs(eratw.ERATW_EVENT_CATALOG);
   return (source) => {
-    const result = core.migrateKojoSourceSemantic(source, { eventNames: eratw.ERATW_EVENT_NAMES });
+    const result = core.migrateKojoSourceSemantic(source, {
+      eventNames: eratw.ERATW_EVENT_NAMES,
+      eventArgs,
+    });
     return {
       ok: result.ok,
       code: result.code,
@@ -157,11 +182,24 @@ function runMigrateDiff(modules, argv) {
   return result.exitCode;
 }
 
+/** `language`：语言 fixture 注册表（默认 fixture + 可选真 eraTW 注入；判定全在 language.ts） */
+function runLanguage(modules, argv) {
+  const { language, eratw, main } = modules;
+  const registrations = {
+    ...language.createLanguageAdapters(),
+    eratw: {
+      adapter: eratw.ERATW_GAME_ADAPTER,
+      backend: eratw.createEratwEmitBackend({ compileExpression: (expr) => expr.text, charNo: '12' }),
+    },
+  };
+  return main.runMain({ argv, languageAdapters: registrations });
+}
+
 let modules;
 let lastError;
 for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
   try {
-    modules = await loadModules(process.argv[2] === MIGRATE_COMMAND);
+    modules = await loadModules(process.argv[2] === MIGRATE_COMMAND, process.argv[2] === LANGUAGE_COMMAND);
     break;
   } catch (error) {
     // 本机实测过一次并发起两个 Vite 时的瞬时 transform 错（同一条命令随后单跑即绿）；
@@ -175,5 +213,7 @@ if (modules === undefined) {
   process.exitCode = 1;
 } else {
   const argv = process.argv.slice(2);
-  process.exitCode = argv[0] === MIGRATE_COMMAND ? runMigrateDiff(modules, argv) : modules.main.main(argv);
+  if (argv[0] === MIGRATE_COMMAND) process.exitCode = runMigrateDiff(modules, argv);
+  else if (argv[0] === LANGUAGE_COMMAND) process.exitCode = runLanguage(modules, argv);
+  else process.exitCode = modules.main.main(argv);
 }

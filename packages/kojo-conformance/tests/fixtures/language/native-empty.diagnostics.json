@@ -1,0 +1,11 @@
+{
+  "case": "native/empty",
+  "diagnostics": [
+    {
+      "code": "core/native/empty",
+      "severity": "error",
+      "line": 3,
+      "column": 1
+    }
+  ]
+}

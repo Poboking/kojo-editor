@@ -1,0 +1,11 @@
+{
+  "case": "presentation/face-args",
+  "diagnostics": [
+    {
+      "code": "core/face/args",
+      "severity": "error",
+      "line": 4,
+      "column": 1
+    }
+  ]
+}

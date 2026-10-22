@@ -1,0 +1,11 @@
+{
+  "case": "weave/modifier-conflict",
+  "diagnostics": [
+    {
+      "code": "core/weave/modifier-conflict",
+      "severity": "error",
+      "line": 3,
+      "column": 1
+    }
+  ]
+}

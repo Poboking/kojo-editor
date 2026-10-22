@@ -1,0 +1,11 @@
+MACHINE 开场
+LABEL 主菜单
+TELL: 请选择你的行动： /WAIT
+IF {选择 == 1}
+GOTO 战斗
+ELSE
+GOTO 主菜单
+ENDIF
+LABEL 战斗
+TELL: 你拔出了武器。 /WAIT
+MACHINE.END

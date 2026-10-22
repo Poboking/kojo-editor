@@ -40,8 +40,6 @@
 | K2-RELEASE | R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真实工程人工验收 | P0 全完成；eraTW 完整体验；反向回滚可用 | 待认领 |
 | K2-MIGRATION-CORPUS | 仓内迁移语料 **29 份** + differential harness（52 tests）+ 语料回归（134 tests）+ `migrate-diff` CLI（含 `--generate-manifest` 骨架）已交付：双 golden **10/29（34.5%）**、迁移率 **27.9%**、`RESULT: PASS`（29 cases：normalized-equal 3 / differs 7 / blocked 19；CRLF/BOM 字节保真）；**未做**：真实语料机接入（`KOJO_MIGRATION_CORPUS_DIR` 已备，golden 需按真语料重生成） | 状态与 manifest 相符；golden 逐字节 | 部分交付 · 认领：lead 2026-10-22 |
 | K2-INCR-HOLES | 增量已知洞（收口后仍余）：`选项`/BOM 粘性永久全量；整份替换/改 `# 视` 仍整份重建（~200–300ms）；声明单元内编辑 55–75ms；槽族正则只覆盖 `rand/foreach`；构建期自检冷路径 ~300ms。已收口：结构行插入不再永久 degraded（退化判据细分 `lastUnmodelledReason`，25,200 步 fuzz 0 mismatch）、粘贴多行 185→20ms / 跨行删 195→19ms | 每次退化可见；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
-| K2-STORAGE-RECYCLED-UI | 存储宿主接线已交付（service 31 tests + App 项目开/关两拍）；**未做**：`recycled` 只有 API 没有壳内出口（作者看到阻断 toast 但无法点"放行重试"）；账本只在项目打开时提交（会话内改声明要重开项目）；`declarationKey` 为 (文件,名字) 近似（改名 retire/可能触发回收闸）；A3.6 槽位数值区段靠宿主默认 0..4095 顶；真壳读数（ledger 落盘/切项目/坏账/回收重试）待补 | 作者可确认重试；改名不搬槽；真壳读数 | 待认领 · 认领：lead 2026-10-22 |
-| K2-MIGRATE-SHAPE | 迁移口径已收口（引号语义 + `时机` 面词白名单 + app 已接线 `eventNames`）；**未做**：事件参数形状未校验（`初见 3` 仍产 `# 机 初见 3` 撞 `event/argument`）；v1 行形如 `角色：「…」` 与 2.0 同形（幂等优先放行，真语料需版本信号消歧）；`# 表` 值列含 `{}` 仍 fail-closed | 迁移期或编译期明确阻断，不产红灯产物 | 待认领 · 认领：lead 2026-10-22 |
 
 > **批次三并行说明（2026-10-21/22）**：17 路子 agent 按互不重叠写域推进（FOREACH/OPTIONS/EDITOR-WIRE/EDITOR-SEMANTIC/EDITOR-MIGRATE-UI/MIGRATE-SEMANTIC/CONFORMANCE/PERF-INCR/TS-RUNTIME/SOURCEMAP-HOST/STORAGE-HOST/CUTOVER-PRE，加接线 OPTIONS-WIRE/FOREACH-WIRE/EDITOR-HOOKUP，加 parser 健壮性修复）。组长统一收口、跑门、提交。完成行按协议删行，回执进提交信息。
 
@@ -56,4 +54,8 @@
 ## 批次六（2026-10-22，已交付）
 
 > **批次六 10 路全部交付**（STORAGE-WIRE / PROJECT-WIRE / NATIVE-COLUMNS / ADAPTER-PROFILE / MIGRATE-SEMANTICS-2 / FOLD-INDENT / INCR-HOLES / CUTOVER-ROUTE / RELEASE-CI / CORPUS-EXPAND）+ 3 处组长接线（App 项目级分析装配、事件面词 `eventNames` 进 app、`@原生` 物理列口径翻转）；完成行已删，回执进提交正文。
+
+## 批次七（2026-10-22，已交付）
+
+> **批次七 8 路全部交付**（MIGRATE-SHAPE / STORAGE-RECYCLED-UI / EXPAND-VIEW / FORMAT-2 / LANG-CONFORMANCE / RELEASE-AUTOMATION / SEMA-QUICKFIX / EDITOR-SYMBOLS）+ 5 处组长接线（大纲/格式化 provider 注册、展开视图编译来源、`eventArgs` 进 app、面包屑 2.0 分支、artifact 阈值重基线）；完成行已删，回执进提交正文。
 

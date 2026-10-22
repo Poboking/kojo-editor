@@ -1,0 +1,11 @@
+{
+  "case": "compute/unknown-name",
+  "diagnostics": [
+    {
+      "code": "core/expr/unknown-symbol",
+      "severity": "error",
+      "line": 4,
+      "column": 5
+    }
+  ]
+}

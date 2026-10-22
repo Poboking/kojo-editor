@@ -26,6 +26,7 @@ import {
   type CSSProperties,
   type ReactElement,
 } from 'react';
+import type { MigrateEventArgs } from '@kojo/kojo-core';
 import {
   applyMigratePlan,
   dryRunMigrateFiles,
@@ -50,6 +51,11 @@ export interface Kojo2MigrateWizardProps {
    * 插件包因此不进开机静态图。
    */
   readonly loadEventNames?: () => Promise<readonly string[] | undefined>;
+  /**
+   * adapter 事件**参数形状**投影的惰性装载（K2-MIGRATE-SHAPE）：与 `loadEventNames` 同处 await，
+   * 失败/缺席 ⇒ `undefined`（迁移器不猜参数形状）。
+   */
+  readonly loadEventArgs?: () => Promise<MigrateEventArgs | undefined>;
   readonly onClose: () => void;
   /** 应用成功（含部分跳过）后的宿主回调，用于刷新文件树 / 通知 */
   readonly onApplied?: (result: MigrateApplyResult) => void;
@@ -79,6 +85,7 @@ export function Kojo2MigrateWizard({
   filePaths,
   speaker,
   loadEventNames,
+  loadEventArgs,
   onClose,
   onApplied,
   onUndone,
@@ -103,15 +110,24 @@ export function Kojo2MigrateWizard({
     setApplyResult(null);
     setPlan(null);
     void (async () => {
-      // 事件目录惰性装载（失败 = 缺席，不阻断预演）：白名单只在给了目录时生效。
-      const eventNames =
+      // 事件目录惰性装载（失败 = 缺席，不阻断预演）：白名单与参数形状只在给了目录时生效。
+      const [eventNames, eventArgs] = await Promise.all([
         loadEventNames === undefined
-          ? undefined
-          : await loadEventNames().catch(() => undefined);
+          ? Promise.resolve(undefined)
+          : loadEventNames().catch(() => undefined),
+        loadEventArgs === undefined
+          ? Promise.resolve(undefined)
+          : loadEventArgs().catch(() => undefined),
+      ]);
       if (cancelled) return;
-      const options: { speaker?: string; eventNames?: readonly string[] } = {};
+      const options: {
+        speaker?: string;
+        eventNames?: readonly string[];
+        eventArgs?: MigrateEventArgs;
+      } = {};
       if (speaker !== undefined) options.speaker = speaker;
       if (eventNames !== undefined) options.eventNames = eventNames;
+      if (eventArgs !== undefined) options.eventArgs = eventArgs;
       return dryRunMigrateFiles(io, filePaths, options);
     })().then(
       (next) => {
@@ -134,7 +150,7 @@ export function Kojo2MigrateWizard({
     };
     // filePaths 只经 pathsKey 参与依赖：宿主传新数组但内容相同 → 不重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [io, pathsKey, speaker, loadEventNames, reloadNonce]);
+  }, [io, pathsKey, speaker, loadEventNames, loadEventArgs, reloadNonce]);
 
   const selected = useMemo<MigrateFilePlan | null>(() => {
     if (plan === null || selectedPath === null) return null;

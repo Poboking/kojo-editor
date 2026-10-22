@@ -1,0 +1,11 @@
+{
+  "case": "random/one-candidate",
+  "diagnostics": [
+    {
+      "code": "core/random/one-candidate",
+      "severity": "error",
+      "line": 3,
+      "column": 1
+    }
+  ]
+}

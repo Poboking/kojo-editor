@@ -17,6 +17,8 @@ import { FIXTURE_ADAPTER, FIXTURE_BACKEND } from '@kojo/kojo-core';
 
 import type { ConformanceAdapterRegistration, ConformanceIoPort } from './cli.js';
 import { formatConformanceReport, runConformanceCli } from './cli.js';
+import type { LanguageAdapterRegistration } from './language.js';
+import { createLanguageAdapters, LANGUAGE_FIXTURE_DIR, runLanguageCli } from './language.js';
 
 /** 递归列文件时一跳到底的目录：工程目录不该把依赖/构建产物当口上源文件 */
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'target', '.vite']);
@@ -82,6 +84,13 @@ export interface ConformanceMainOptions {
   readonly cwd?: string;
   readonly io?: ConformanceIoPort;
   readonly adapters?: Readonly<Record<string, ConformanceAdapterRegistration>>;
+  /**
+   * `language` 子命令的 adapter 注册表（默认只有派生的 `fixture`；eraTW 由
+   * `tools/kojo-conformance.mjs` 薄壳注入，本文件保持零游戏事实）。
+   */
+  readonly languageAdapters?: Readonly<Record<string, LanguageAdapterRegistration>>;
+  /** `language` 子命令的 fixture 目录缺省值（默认 `LANGUAGE_FIXTURE_DIR`） */
+  readonly languageRoot?: string;
   readonly writeOut?: (text: string) => void;
   readonly writeErr?: (text: string) => void;
 }
@@ -97,6 +106,18 @@ export function runMain(options: ConformanceMainOptions): number {
   const adapters = options.adapters ?? createNodeAdapters();
   const writeOut = options.writeOut ?? ((text: string): void => void process.stdout.write(text));
   const writeErr = options.writeErr ?? ((text: string): void => void process.stderr.write(text));
+
+  // `language` 是语言面套件，报告形状与 check/list-cases 不同 ⇒ 独立分发（纯逻辑在 language.ts）
+  if (argv[0] === 'language') {
+    const languageResult = runLanguageCli(argv, {
+      io,
+      adapters: options.languageAdapters ?? createLanguageAdapters(),
+      defaultRoot: options.languageRoot ?? LANGUAGE_FIXTURE_DIR,
+    });
+    if (languageResult.exitCode === 2) writeErr(languageResult.text);
+    else writeOut(languageResult.text);
+    return languageResult.exitCode;
+  }
 
   const result = runConformanceCli(argv, { io, adapters });
   const text = formatConformanceReport(result.report, { json: argv.includes('--json') });

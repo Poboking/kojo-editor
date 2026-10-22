@@ -191,6 +191,20 @@ export type CoreDiagnosticCode =
   | 'core/migration/label'
   | 'core/migration/raw'
   | 'core/migration/timing'
+  /**
+   * **同形歧义的显式台账**（`migrate/index.ts`；K2-MIGRATE-SHAPE，§12.1 / §15.2.3）。
+   *
+   * v1 的 `角色：「…」` 行是**连前缀与引号一起打印**的旁白文本；2.0 同一行是台词（只打印引号内
+   * 正文）。迁移器能证明「这个前缀不是 v1 说话人」时按旁白改写；证不出时（前缀正是 v1 文件头
+   * `角色:` 声明的说话人，或文件没有说话人事实）**原样保留为台词**并报本码——不静默，也不阻断。
+   *
+   * 与 `core/migration/raw` 的分工：后者是"这句我们根本改不动"（如行尾半角括号会被 2.0 当表演
+   * 提示，旁白改写会改变打印文本）；本码是"两种解读都说得通、按幂等优先保留台词"。
+   *
+   * 级别：warning（在 `CORE_WARNING_CODES` 里；迁移器显式标 warning，不进 `ok`）。
+   * 消息模板：见 `migrate/index.ts::ambiguousDialogueMessage`。
+   */
+  | 'core/migration/ambiguous-dialogue'
   | 'core/migration/fullwidth-punct'
   | 'core/migration/wait'
   /* 存储期分配（project/storage，fail-closed 完整性面） */
@@ -216,6 +230,8 @@ export const CORE_WARNING_CODES: ReadonlySet<CoreDiagnosticCode> = new Set<CoreD
   'core/goto/backward',
   'core/weave/shadowed-listener',
   'core/options/pending',
+  // 迁移期专用：同形歧义只能保留现状并提示（不阻断迁移）。见码声明处的分工说明。
+  'core/migration/ambiguous-dialogue',
 ]);
 
 /** adapter 诊断命名空间（additive，不覆盖 core 码） */

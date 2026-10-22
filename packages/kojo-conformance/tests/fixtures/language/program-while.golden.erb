@@ -1,0 +1,13 @@
+MACHINE 开场
+WHILE {体力恢复 < 4}
+SET 体力恢复 += {1}
+IF {体力恢复 == 2}
+TELL: 她感觉好一些了。 /WAIT
+CONTINUE
+ELSEIF {体力恢复 > 3}
+TELL: 她完全恢复了！ /WAIT
+BREAK
+ENDIF
+TELL: 正在休息中……第{体力恢复}次。 /WAIT
+WEND
+MACHINE.END

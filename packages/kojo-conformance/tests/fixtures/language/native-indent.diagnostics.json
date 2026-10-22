@@ -1,0 +1,11 @@
+{
+  "case": "native/indent",
+  "diagnostics": [
+    {
+      "code": "core/native/indent",
+      "severity": "error",
+      "line": 4,
+      "column": 1
+    }
+  ]
+}

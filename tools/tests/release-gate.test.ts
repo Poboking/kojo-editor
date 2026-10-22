@@ -11,19 +11,29 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  ARTIFACT_LIMITS,
+  buildCargoTestScript,
+  CARGO_TEST_DIR,
   CORPUS_INTEGRATION,
   createReleaseGate,
   DEFAULT_ITEMS,
+  findEntryRel,
   formatReport,
+  inspectArtifacts,
+  inspectVersionSync,
   ITEM_IDS,
+  measureArtifacts,
   parseArgs,
   parseAuditOutput,
   parseBuildOutput,
+  parseCargoTestOutput,
   parseConformanceJson,
+  parseLanguageSuiteJson,
   parseSmokeOutput,
   parseTypecheckOutput,
   parseVitestSummary,
   probeCorpus,
+  RELEASE_ITEM_IDS,
   resolveSelectedItems,
   runReleaseGate,
   TAIL_LINES,
@@ -48,8 +58,55 @@ const VITEST_GREEN = [
   '   Duration  1.25s (transform 100ms)',
 ].join('\n');
 
+const VERSION_GREEN = { root: '0.4.2-beta.2', app: '0.4.2-beta.2', tauri: '0.4.2-beta.2' };
+
+/** 假 readText：按路径尾段认文件（tauri.conf.json 先认，免得被 package.json 抢） */
+function versionReadText(versions: { root: string; app: string; tauri: string } = VERSION_GREEN) {
+  return async (absPath: string): Promise<string> => {
+    const norm = String(absPath).replaceAll('\\', '/');
+    if (norm.endsWith('src-tauri/tauri.conf.json')) return JSON.stringify({ version: versions.tauri });
+    if (norm.endsWith('packages/app/package.json')) return JSON.stringify({ version: versions.app });
+    return JSON.stringify({ version: versions.root });
+  };
+}
+
+/** 与 docs/STATE.md 基线同形的产物清单：13 件 / ≈2.3 MiB / 入口 865.9 kB ⇒ 三项全达标 */
+function baselineDistFiles() {
+  const files = [
+    { rel: 'index.html', bytes: 7_233 },
+    { rel: 'assets/index-entry.js', bytes: 865_900 },
+    { rel: 'assets/entry.css', bytes: 175_373 },
+    { rel: 'assets/tree-sitter-kojo.wasm', bytes: 821_724 },
+    { rel: 'assets/tree-sitter-erb.wasm', bytes: 384_062 },
+  ];
+  for (let index = 0; index < 8; index += 1) files.push({ rel: `assets/chunk-${index}.js`, bytes: 20_000 });
+  return files;
+}
+
+const ENTRY_HTML = '<script type="module" crossorigin src="/assets/index-entry.js"></script>';
+
+/** 假 readDist：默认给达标的基线产物；present:false 模拟「构建没跑/清了 dist」 */
+function distReader(
+  files: Array<{ rel: string; bytes: number }> = baselineDistFiles(),
+  options: { present?: boolean; indexHtml?: string; dir?: string } = {},
+) {
+  const { present = true, indexHtml = ENTRY_HTML, dir = 'packages/app/dist' } = options;
+  return async () => (present === true ? { present: true, dir, files, indexHtml } : { present: false, dir });
+}
+
+const CARGO_GREEN = [
+  'running 194 tests',
+  'test result: ok. 194 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 12.34s',
+].join('\n');
+const LANGUAGE_GREEN = JSON.stringify({ cases: [{ ok: true }, { ok: true }], failures: [] });
+const LANGUAGE_NO_SUBCOMMAND = ['用法:', '  kojo-conformance check --dir <目录>', '', '错误：未知命令：language'].join('\n');
+
 type RunnerReply = { rc: number; stdout?: string; stderr?: string; timedOut?: boolean };
 type Handler = (request: { id: string }) => RunnerReply;
+type GateDeps = {
+  readText?: (absPath: string) => Promise<string>;
+  readDist?: (request: { root?: string }) => Promise<unknown>;
+};
 
 function greenHandlers(): Record<string, Handler> {
   return {
@@ -64,6 +121,9 @@ function greenHandlers(): Record<string, Handler> {
     'test-unit': () => ({ rc: 0, stdout: VITEST_GREEN, stderr: '' }),
     'test-perf': () => ({ rc: 0, stdout: VITEST_GREEN, stderr: '' }),
     'build-app': () => ({ rc: 0, stdout: 'dist/index.js  1.2 kB\n✓ built in 26.5s', stderr: '' }),
+    'artifact-audit-build': () => ({ rc: 0, stdout: 'dist/index.js  1.2 kB\n✓ built in 26.5s', stderr: '' }),
+    'cargo-test': () => ({ rc: 0, stdout: CARGO_GREEN, stderr: '' }),
+    'language-suite': () => ({ rc: 0, stdout: LANGUAGE_GREEN, stderr: '' }),
   };
 }
 
@@ -78,7 +138,7 @@ function makeRunner(handlers: Record<string, Handler>) {
   return { calls, run };
 }
 
-async function runGate(argv, handlers = greenHandlers()) {
+async function runGate(argv, handlers = greenHandlers(), deps: GateDeps = {}) {
   const { calls, run } = makeRunner(handlers);
   const out = [];
   const err = [];
@@ -86,6 +146,9 @@ async function runGate(argv, handlers = greenHandlers()) {
     argv,
     run,
     now: () => 1000,
+    // 本地检查（version-sync / artifact-audit）走注入的假盘：默认三处版本一致 + 达标产物
+    readText: deps.readText ?? versionReadText(),
+    readDist: deps.readDist ?? distReader(),
     writeOut: (text) => out.push(text),
     writeErr: (text) => err.push(text),
   });
@@ -109,6 +172,7 @@ describe('release-gate · 参数与选项目', () => {
     expect(errors).toEqual([]);
     expect(options).toEqual({
       json: true,
+      release: false,
       skipTests: true,
       failFast: true,
       build: true,
@@ -126,7 +190,7 @@ describe('release-gate · 参数与选项目', () => {
     expect(parseArgs(['--only', 'audit']).options.only).toEqual(['audit']);
   });
 
-  it('默认选项目 = 6 个核心项（4 个可选项全 SKIP 且原因各自可读），顺序固定', () => {
+  it('默认选项目 = 6 个核心项（可选项全 SKIP 且原因各自可读），顺序固定', () => {
     const selected = resolveSelectedItems({});
     expect(selected.error).toBeUndefined();
     expect(selected.items.map((item) => item.id)).toEqual([
@@ -137,13 +201,22 @@ describe('release-gate · 参数与选项目', () => {
       'test-unit',
       'test-perf',
     ]);
-    expect(selected.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    expect(selected.skipped.map((entry) => entry.id)).toEqual([
+      'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
+    ]);
     expect(selected.skipped.find((entry) => entry.id === 'build-app')?.reason).toBe('可选：未传 --build');
     expect(selected.skipped.find((entry) => entry.id === 'corpus')?.reason).toContain('语料');
     expect(selected.skipped.find((entry) => entry.id === 'smoke-dom')?.reason).toContain('桌面壳');
-    // build-app 仍排在第 7 位（既有 JSON 消费方按位置认它），新可选项一律追加在后
-    expect(ITEM_IDS).toEqual([...ITEM_IDS.slice(0, 6), 'build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
-    expect(ITEM_IDS).toHaveLength(10);
+    // build-app 仍排在第 7 位（既有 JSON 消费方按位置认它），新项一律追加在后
+    expect(ITEM_IDS).toEqual([...ITEM_IDS.slice(0, 10), 'version-sync', 'cargo-test', 'artifact-audit', 'language-suite']);
+    expect(ITEM_IDS).toHaveLength(14);
   });
 
   it('--skip-tests 剔三池（含 corpus），未跑项带原因；核心项一个不少', () => {
@@ -161,6 +234,10 @@ describe('release-gate · 参数与选项目', () => {
       'corpus',
       'smoke-dom',
       'smoke-ipc',
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
     ]);
     expect(selected.skipped.filter((entry) => entry.reason === '--skip-tests')).toHaveLength(3);
     expect(selected.items.some((item) => item.kind === 'test')).toBe(false);
@@ -279,11 +356,22 @@ describe('release-gate · 执行与失败语义', () => {
     expect(report.skipped).toContainEqual({ id: 'test-perf', reason: '--fail-fast' });
   });
 
-  it('--fail-fast 全绿时不误跳任何项（只留 4 个可选项的默认 SKIP）', async () => {
+  it('--fail-fast 全绿时不误跳任何项（只留可选 / releaseOnly 的默认 SKIP）', async () => {
     const { report, calls } = await runGate(['--fail-fast']);
     expect(calls).toHaveLength(6);
-    expect(report.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
-    expect(report.skipped.every((entry) => entry.reason.startsWith('可选：'))).toBe(true);
+    expect(report.skipped.map((entry) => entry.id)).toEqual([
+      'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
+    ]);
+    expect(report.skipped.every((entry) => entry.reason.startsWith('可选：') || entry.reason.startsWith('仅 --release'))).toBe(
+      true,
+    );
   });
 
   it('--only 只执行选中项，其余进 skipped；--skip-tests 真跑快速档', async () => {
@@ -298,6 +386,10 @@ describe('release-gate · 执行与失败语义', () => {
       'corpus',
       'smoke-dom',
       'smoke-ipc',
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
     ]);
 
     const fast = await runGate(['--skip-tests']);
@@ -531,7 +623,14 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
       'smoke-dom',
       'smoke-ipc',
     ]);
-    expect(shell.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus']);
+    expect(shell.skipped.map((entry) => entry.id)).toEqual([
+      'build-app',
+      'corpus',
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
+    ]);
 
     const corpus = resolveSelectedItems({ corpus: true });
     expect(corpus.items.map((item) => item.id)).toEqual([
@@ -543,7 +642,15 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
       'test-perf',
       'corpus',
     ]);
-    expect(corpus.skipped.map((entry) => entry.id)).toEqual(['build-app', 'smoke-dom', 'smoke-ipc']);
+    expect(corpus.skipped.map((entry) => entry.id)).toEqual([
+      'build-app',
+      'smoke-dom',
+      'smoke-ipc',
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
+    ]);
   });
 
   it('--only 点名的可选项无视开关（不带 --shell / --corpus 也跑），skip-tests 也压不过它', () => {
@@ -740,8 +847,17 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
     ]);
     for (const item of parsed.items) expect(Object.keys(item)).toEqual(['id', 'cmd', 'rc', 'ms', 'readings', 'tail']);
     for (const entry of parsed.skipped) expect(Object.keys(entry)).toEqual(['id', 'reason']);
-    // 唯一没跑的可选项只剩 build-app（且仍在第 7 位之前被跳过，不插进 items）
-    expect(parsed.skipped).toEqual([{ id: 'build-app', reason: '可选：未传 --build' }]);
+    // 没跑的可选项只剩 build-app（且仍在 items 之外，不插进顺序），四个 releaseOnly 项照记 SKIP
+    expect(parsed.skipped).toEqual([
+      { id: 'build-app', reason: '可选：未传 --build' },
+      { id: 'version-sync', reason: '仅 --release 或 --only=version-sync 时跑（三处版本同步闸）' },
+      { id: 'cargo-test', reason: '仅 --release 或 --only=cargo-test 时跑（需 Rust 工具链，15 分钟上限）' },
+      { id: 'artifact-audit', reason: '仅 --release 或 --only=artifact-audit 时跑（先构建 app，再量 dist 上界）' },
+      {
+        id: 'language-suite',
+        reason: '仅 --release 或 --only=language-suite 时跑（语言面套件；子命令不存在则 SKIP 并说明）',
+      },
+    ]);
   });
 
   it('probeCorpus 是纯函数式探针：缺 run / 回报结构符合契约', async () => {
@@ -767,3 +883,477 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * K2-RELEASE-AUTOMATION：`--release` 档（§16.10 R9.5–R9.7 的发版机器面）
+ * 四个 releaseOnly 项：version-sync / cargo-test / artifact-audit / language-suite。
+ * 铁律：默认档账不变（CI 快速档零改动）；`--release` 顺序由 RELEASE_ITEM_IDS 钉住；
+ * 缺前置只允许 SKIP（带原因），真红一律 FAIL；volume/件数超限必须打印实测值。
+ * ------------------------------------------------------------------ */
+
+describe('release-gate · --release 档选项目', () => {
+  it('parseArgs 认 --release，且可与 --json 组合', () => {
+    const { options, errors } = parseArgs(['--release', '--json']);
+    expect(errors).toEqual([]);
+    expect(options.release).toBe(true);
+    expect(options.json).toBe(true);
+    expect(parseArgs([]).options.release).toBe(false);
+  });
+
+  it('--release 默认 10 项，项序 = RELEASE_ITEM_IDS（version-sync 第一、cargo-test 最后）', () => {
+    const selected = resolveSelectedItems({ release: true });
+    expect(selected.error).toBeUndefined();
+    expect(selected.items.map((item) => item.id)).toEqual([...RELEASE_ITEM_IDS]);
+    expect(RELEASE_ITEM_IDS).toEqual([
+      'version-sync',
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'language-suite',
+      'test-unit',
+      'test-perf',
+      'artifact-audit',
+      'cargo-test',
+    ]);
+    expect(selected.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    // 四个 releaseOnly 项都在默认账之外，且都声明了可读原因
+    for (const id of ['version-sync', 'cargo-test', 'artifact-audit', 'language-suite']) {
+      const item = DEFAULT_ITEMS.find((entry) => entry.id === id);
+      expect(item?.releaseOnly).toBe(true);
+      expect(typeof item?.skipReason).toBe('string');
+    }
+  });
+
+  it('默认档（无 --release）不含四个 releaseOnly 项，SKIP 原因点名 --release 与 --only', () => {
+    const selected = resolveSelectedItems({});
+    expect(selected.items.map((item) => item.id)).toEqual([
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'test-unit',
+      'test-perf',
+    ]);
+    for (const id of ['version-sync', 'cargo-test', 'artifact-audit', 'language-suite']) {
+      const reason = selected.skipped.find((entry) => entry.id === id)?.reason ?? '';
+      expect(reason).toContain('仅 --release');
+      expect(reason).toContain(`--only=${id}`);
+    }
+  });
+
+  it('--release 可与 --shell / --corpus / --build 组合：追加项接在末尾、顺序固定', () => {
+    const all = resolveSelectedItems({ release: true, shell: true, corpus: true, build: true });
+    expect(all.items.map((item) => item.id)).toEqual([
+      ...RELEASE_ITEM_IDS,
+      'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+    ]);
+    expect(all.skipped).toEqual([]);
+  });
+
+  it('--only 优先于 --release（单点复跑不被全量档拐走）', () => {
+    const selected = resolveSelectedItems({ release: true, only: ['audit'] });
+    expect(selected.items.map((item) => item.id)).toEqual(['audit']);
+    expect(selected.skipped.find((entry) => entry.id === 'version-sync')?.reason).toContain('仅 --release');
+  });
+
+  it('--release --skip-tests 去掉两池，仍留 artifact-audit / cargo-test', () => {
+    const selected = resolveSelectedItems({ release: true, skipTests: true });
+    expect(selected.items.map((item) => item.id)).toEqual([
+      'version-sync',
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'language-suite',
+      'artifact-audit',
+      'cargo-test',
+    ]);
+    expect(selected.skipped.find((entry) => entry.id === 'test-unit')?.reason).toBe('--skip-tests');
+    expect(selected.skipped.find((entry) => entry.id === 'test-perf')?.reason).toBe('--skip-tests');
+  });
+
+  it('--release 全绿 = PASS / exit 0 / 10 项 / 只跳 4 个可选项', async () => {
+    const { code, report, calls } = await runGate(['--release']);
+    expect(code).toBe(0);
+    expect(report.result).toBe('PASS');
+    expect(report.failed).toEqual([]);
+    expect(report.items.map((item) => item.id)).toEqual([...RELEASE_ITEM_IDS]);
+    expect(report.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    // version-sync / artifact-audit 是进程内检查：不起子进程；artifact-audit 的构建经 runner 走
+    expect(calls.map((call) => call.id)).toEqual([
+      'typecheck-root',
+      'typecheck-app',
+      'audit',
+      'conformance',
+      'language-suite',
+      'test-unit',
+      'test-perf',
+      'artifact-audit-build',
+      'cargo-test',
+    ]);
+  });
+
+  it('--release 失败隔离：version-sync 红，后面 9 项照跑（一次拿全账）', async () => {
+    const { code, report, calls } = await runGate(['--release'], greenHandlers(), {
+      readText: versionReadText({ root: '0.4.2-beta.2', app: '0.4.2-beta.1', tauri: '0.4.2-beta.1' }),
+    });
+    expect(code).toBe(1);
+    expect(report.result).toBe('FAIL');
+    expect(report.failed).toEqual(['version-sync']);
+    expect(report.items).toHaveLength(10);
+    expect(calls.some((call) => call.id === 'cargo-test')).toBe(true);
+    expect(calls.some((call) => call.id === 'artifact-audit-build')).toBe(true);
+  });
+
+  it('--release --fail-fast：version-sync（首项）红即停，未跑项记 --fail-fast', async () => {
+    const { report, calls } = await runGate(['--release', '--fail-fast'], greenHandlers(), {
+      readText: versionReadText({ root: '0.4.2-beta.2', app: '0.4.2-beta.1', tauri: '0.4.2-beta.1' }),
+    });
+    expect(calls).toEqual([]);
+    expect(report.failed).toEqual(['version-sync']);
+    expect(report.items).toHaveLength(1);
+    expect(report.skipped).toContainEqual({ id: 'typecheck-root', reason: '--fail-fast' });
+    expect(report.skipped).toContainEqual({ id: 'cargo-test', reason: '--fail-fast' });
+  });
+
+  it('--release --json 结构稳定：顶层 8 键 / 每项 6 键 / items 顺序 = RELEASE_ITEM_IDS', async () => {
+    const { text } = await runGate(['--release', '--json']);
+    const parsed = JSON.parse(text);
+    expect(Object.keys(parsed)).toEqual([
+      'tool',
+      'schemaVersion',
+      'result',
+      'exitCode',
+      'durationMs',
+      'items',
+      'failed',
+      'skipped',
+    ]);
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.items.map((item: { id: string }) => item.id)).toEqual([...RELEASE_ITEM_IDS]);
+    for (const item of parsed.items) expect(Object.keys(item)).toEqual(['id', 'cmd', 'rc', 'ms', 'readings', 'tail']);
+    for (const entry of parsed.skipped) expect(Object.keys(entry)).toEqual(['id', 'reason']);
+  });
+});
+
+describe('release-gate · version-sync（三处 version 逐字相等）', () => {
+  it('三处一致 ⇒ PASS，readings 带三值 + matched', async () => {
+    const { code, report } = await runGate(['--only=version-sync']);
+    expect(code).toBe(0);
+    const item = report.items[0];
+    expect(item.id).toBe('version-sync');
+    expect(item.readings).toMatchObject({
+      present: true,
+      rootPkg: '0.4.2-beta.2',
+      appPkg: '0.4.2-beta.2',
+      tauriConf: '0.4.2-beta.2',
+      matched: true,
+    });
+    expect(item.tail).toContain('三处 version 一致');
+  });
+
+  it('任一处不一致 ⇒ FAIL / exit 1，tail 打印三值供逐字对比', async () => {
+    const { code, report } = await runGate(['--only=version-sync'], greenHandlers(), {
+      readText: versionReadText({ root: '0.4.2-beta.2', app: '0.4.2-beta.1', tauri: '0.4.2-beta.1' }),
+    });
+    expect(code).toBe(1);
+    expect(report.result).toBe('FAIL');
+    expect(report.failed).toEqual(['version-sync']);
+    const item = report.items[0];
+    expect(item.rc).toBe(1);
+    expect(item.readings).toMatchObject({
+      present: true,
+      matched: false,
+      rootPkg: '0.4.2-beta.2',
+      appPkg: '0.4.2-beta.1',
+      tauriConf: '0.4.2-beta.1',
+    });
+    expect(item.tail).toContain('三处 version 不一致');
+    expect(item.tail).toContain('package.json = 0.4.2-beta.2');
+    expect(item.tail).toContain('packages/app/package.json = 0.4.2-beta.1');
+    expect(item.tail).toContain('packages/app/src-tauri/tauri.conf.json = 0.4.2-beta.1');
+  });
+
+  it('文件读不到 / JSON 坏 / version 为空 ⇒ FAIL 且点名文件与原因（不猜绿）', async () => {
+    const missing = await inspectVersionSync({
+      readText: async (absPath: string) => {
+        if (String(absPath).includes('tauri.conf.json')) throw new Error('ENOENT: no such file');
+        return JSON.stringify({ version: '0.4.2-beta.2' });
+      },
+    });
+    expect(missing.rc).toBe(1);
+    expect(missing.readings).toMatchObject({ present: false, matched: false, tauriConf: null });
+    expect(missing.tail).toContain('读不到文件');
+    expect(missing.tail).toContain('tauri.conf.json');
+
+    const broken = await inspectVersionSync({ readText: async () => '{ not json' });
+    expect(broken.rc).toBe(1);
+    expect(broken.tail).toContain('JSON 解析失败');
+
+    const empty = await inspectVersionSync({ readText: async () => JSON.stringify({ version: '   ' }) });
+    expect(empty.rc).toBe(1);
+    expect(empty.readings.matched).toBe(false);
+    expect(empty.tail).toContain('version 缺失');
+  });
+
+  it('version-sync 可经 --only 单跑，也可在 --release 里作为第一项（先于任何子进程）', async () => {
+    const single = await runGate(['--only=version-sync']);
+    expect(single.calls).toEqual([]);
+    const release = await runGate(['--release']);
+    expect(release.report.items[0].id).toBe('version-sync');
+    expect(release.calls.some((call) => call.id === 'version-sync')).toBe(false);
+  });
+});
+
+describe('release-gate · artifact-audit（dist 上界）', () => {
+  it('阈值常量 = STATE 批次七重基线换算：入口 1,100 kB / dist 10.5 MiB / 85 件', () => {
+    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(10.5 * 1024 * 1024), files: 85 });
+  });
+
+  it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {
+    const { code, report } = await runGate(['--only=artifact-audit']);
+    expect(code).toBe(0);
+    const item = report.items[0];
+    expect(item.id).toBe('artifact-audit');
+    expect(item.readings).toMatchObject({
+      present: true,
+      files: 13,
+      entry: 'assets/index-entry.js',
+      entryBytes: 865_900,
+      entryKB: 866,
+      exceeded: [],
+    });
+    expect(item.readings.distMiB).toBeCloseTo(2.32, 1);
+    expect(item.tail).toContain('实测');
+    expect(item.tail).toContain('1,100 kB');
+  });
+
+  it('入口块超 1,100 kB ⇒ FAIL，tail 打印实测值与上限', async () => {
+    const files = baselineDistFiles();
+    files[1] = { rel: 'assets/index-entry.js', bytes: 1_250_000 };
+    const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), { readDist: distReader(files) });
+    expect(code).toBe(1);
+    const item = report.items[0];
+    expect(item.rc).toBe(1);
+    expect(item.readings.exceeded).toEqual(['entry']);
+    expect(item.readings.entryKB).toBe(1250);
+    expect(item.tail).toContain('产物超出上界');
+    expect(item.tail).toContain('1250 kB ＞ 上限 1,100 kB');
+  });
+
+  it('dist 总量超 10.5 MiB ⇒ FAIL（件数仍达标，只报总量一项）', async () => {
+    const files = [...baselineDistFiles(), { rel: 'assets/huge.wasm', bytes: 10 * 1024 * 1024 }];
+    const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), { readDist: distReader(files) });
+    expect(code).toBe(1);
+    const item = report.items[0];
+    expect(item.readings.exceeded).toEqual(['dist']);
+    expect(item.readings.files).toBe(14);
+    expect(item.tail).toMatch(/dist 总量 = [\d.]+ MiB ＞ 上限 10.5 MiB/);
+  });
+
+  it('产物件数超 85 ⇒ FAIL，tail 打印实测件数', async () => {
+    const files = [{ rel: 'assets/index-entry.js', bytes: 800_000 }];
+    for (let index = 0; index < 90; index += 1) files.push({ rel: `assets/c-${index}.js`, bytes: 1_000 });
+    const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), { readDist: distReader(files) });
+    expect(code).toBe(1);
+    const item = report.items[0];
+    expect(item.readings.files).toBe(91);
+    expect(item.readings.exceeded).toEqual(['files']);
+    expect(item.tail).toContain('产物件数 = 91 ＞ 上限 85');
+  });
+
+  it('缺 dist ⇒ FAIL 且 tail 可读：点名目录 + 下一步该跑什么', async () => {
+    const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), {
+      readDist: distReader([], { present: false }),
+    });
+    expect(code).toBe(1);
+    const item = report.items[0];
+    expect(item.rc).toBe(1);
+    expect(item.readings.present).toBe(false);
+    expect(item.tail).toContain('产物目录不存在或为空');
+    expect(item.tail).toContain('packages/app/dist');
+    expect(item.tail).toContain('pnpm --filter @kojo/app build');
+  });
+
+  it('构建失败 ⇒ FAIL，rc 取构建的 rc、tail 带构建输出', async () => {
+    const handlers = greenHandlers();
+    handlers['artifact-audit-build'] = () => ({ rc: 1, stdout: 'vite v7 building for production...', stderr: 'error during build: 3 errors' });
+    const { code, report } = await runGate(['--only=artifact-audit'], handlers);
+    expect(code).toBe(1);
+    const item = report.items[0];
+    expect(item.rc).toBe(1);
+    expect(item.readings.phase).toBe('artifact-build');
+    expect(item.readings.buildRc).toBe(1);
+    expect(item.tail).toContain('error during build: 3 errors');
+  });
+
+  it('构建超时 ⇒ rc 124 + readings.timeout（不量盘、不猜绿）', async () => {
+    const handlers = greenHandlers();
+    handlers['artifact-audit-build'] = () => ({ rc: 0, timedOut: true, stdout: 'still building', stderr: '' });
+    const { code, report } = await runGate(['--only=artifact-audit'], handlers);
+    const item = report.items[0];
+    expect(item.rc).toBe(124);
+    expect(item.readings.timeout).toBe(true);
+    expect(code).toBe(1);
+  });
+
+  it('measureArtifacts / findEntryRel：入口取 index.html 的 module script，认不出退最大 .js', () => {
+    expect(findEntryRel(ENTRY_HTML, baselineDistFiles())).toBe('assets/index-entry.js');
+    expect(
+      findEntryRel('<html></html>', [
+        { rel: 'assets/small.js', bytes: 1 },
+        { rel: 'assets/big.js', bytes: 100 },
+      ]),
+    ).toBe('assets/big.js');
+    expect(findEntryRel('', [])).toBeNull();
+    const measured = measureArtifacts({ files: baselineDistFiles(), indexHtml: ENTRY_HTML });
+    expect(measured).toMatchObject({ files: 13, entry: 'assets/index-entry.js', entryBytes: 865_900, exceeded: [] });
+    expect(measureArtifacts({ files: [], indexHtml: '' }).exceeded).toEqual(['entry-missing']);
+  });
+
+  it('真目录读数不抛错：dist 在不在都给出可读账（CI 无构建产物时也不红）', async () => {
+    const result = await inspectArtifacts();
+    expect(typeof result.readings.present).toBe('boolean');
+    expect([0, 1]).toContain(result.rc);
+    if (result.readings.present === false) expect(result.tail).toContain('产物目录不存在或为空');
+  });
+});
+
+describe('release-gate · cargo-test（只在 --release / --only 跑）', () => {
+  it('默认档不跑，--only=cargo-test 与 --release 才出现', () => {
+    expect(resolveSelectedItems({}).items.some((item) => item.id === 'cargo-test')).toBe(false);
+    expect(resolveSelectedItems({ shell: true }).items.some((item) => item.id === 'cargo-test')).toBe(false);
+    expect(resolveSelectedItems({ only: ['cargo-test'] }).items.map((item) => item.id)).toEqual(['cargo-test']);
+    expect(resolveSelectedItems({ release: true }).items.map((item) => item.id)).toContain('cargo-test');
+  });
+
+  it('cargo 经 node 起、15 分钟上限、cwd 指向 src-tauri，并把 TMP 兜底成 Windows 形态', () => {
+    const cargo = DEFAULT_ITEMS.find((item) => item.id === 'cargo-test');
+    expect(cargo?.timeoutMs).toBe(15 * 60 * 1000);
+    expect(cargo?.command).toBe(process.execPath);
+    expect(cargo?.args[0]).toBe('-e');
+    expect(cargo?.args[1]).toContain('cargo test --lib');
+    expect(CARGO_TEST_DIR).toBe('packages/app/src-tauri');
+    // 路径分隔符随平台：只钉「cwd 落在 src-tauri 里」这一事实
+    expect(String(cargo?.args[1])).toContain('src-tauri');
+    expect(cargo?.cmd).toContain('cargo test --lib');
+
+    const win = buildCargoTestScript({ root: 'C:/repo', platform: 'win32', tmpdir: 'C:\\Users\\x\\AppData\\Local\\Temp' });
+    expect(win).toContain('TMP:');
+    expect(win).toContain('AppData');
+    expect(win).toContain('cargo test --lib');
+    expect(buildCargoTestScript({ platform: 'linux' })).not.toContain('TMP:');
+  });
+
+  it('cargo 绿 ⇒ PASS + 读最后一段 test result（194/0/5）', async () => {
+    const { code, report, calls } = await runGate(['--only=cargo-test']);
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args[0]).toBe('-e');
+    expect(report.items[0].readings).toMatchObject({
+      parsed: true,
+      verdict: 'ok',
+      passed: 194,
+      failed: 0,
+      ignored: 5,
+    });
+  });
+
+  it('cargo 红 ⇒ FAIL（rc 原样传播），读数为 FAILED 段', async () => {
+    const handlers = greenHandlers();
+    handlers['cargo-test'] = () => ({
+      rc: 101,
+      stdout: 'test result: FAILED. 193 passed; 1 failed; 5 ignored; 0 measured; 0 filtered out',
+      stderr: '',
+    });
+    const { code, report } = await runGate(['--only=cargo-test'], handlers);
+    expect(code).toBe(1);
+    const item = report.items[0];
+    expect(item.rc).toBe(101);
+    expect(item.readings).toMatchObject({ verdict: 'FAILED', passed: 193, failed: 1 });
+    expect(report.failed).toEqual(['cargo-test']);
+  });
+
+  it('cargo 超时 ⇒ rc 124 + timeout 读数 ⇒ FAIL', async () => {
+    const handlers = greenHandlers();
+    handlers['cargo-test'] = () => ({ rc: 0, timedOut: true, stdout: 'running 194 tests', stderr: '' });
+    const { code, report } = await runGate(['--only=cargo-test'], handlers);
+    expect(code).toBe(1);
+    expect(report.items[0].rc).toBe(124);
+    expect(report.items[0].readings.timeout).toBe(true);
+  });
+
+  it('parseCargoTestOutput：多段取最后、认不出 parsed:false', () => {
+    const text = [
+      'test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out',
+      'test result: ok. 194 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out',
+    ].join('\n');
+    expect(parseCargoTestOutput(text)).toMatchObject({ parsed: true, passed: 194, ignored: 5, suites: 2 });
+    expect(parseCargoTestOutput('cargo: command not found')).toEqual({ parsed: false });
+  });
+});
+
+describe('release-gate · language-suite（子命令不存在 ⇒ SKIP 并说明）', () => {
+  it('「未知命令：language」（rc=2）⇒ SKIP + 原因，报告仍 PASS / exit 0', async () => {
+    const handlers = greenHandlers();
+    handlers['language-suite'] = () => ({ rc: 2, stdout: '', stderr: LANGUAGE_NO_SUBCOMMAND });
+    const { code, report, calls, text } = await runGate(['--only=language-suite'], handlers);
+    expect(code).toBe(0);
+    expect(report.result).toBe('PASS');
+    expect(report.items).toEqual([]);
+    const skip = report.skipped.find((entry) => entry.id === 'language-suite');
+    expect(skip?.reason).toContain('尚无 language 子命令');
+    expect(skip?.reason).toContain('另一条线');
+    expect(text).toContain('SKIP language-suite');
+    // 该命令确实起过一次（不是凭 --release 推断出来的 SKIP）
+    expect(calls.map((call) => call.id)).toEqual(['language-suite']);
+  });
+
+  it('真跑绿（rc=0 + JSON）⇒ PASS + 读数 cases/passed/failed', async () => {
+    const { code, report } = await runGate(['--only=language-suite']);
+    expect(code).toBe(0);
+    expect(report.items[0].readings).toMatchObject({ parsed: true, cases: 2, passed: 2, failed: 0 });
+  });
+
+  it('真跑红（rc=1）⇒ FAIL，不被 SKIP 洗白', async () => {
+    const handlers = greenHandlers();
+    handlers['language-suite'] = () => ({
+      rc: 1,
+      stdout: JSON.stringify({ cases: [{ ok: true }, { ok: false }], failures: [{ message: 'boom' }] }),
+      stderr: '',
+    });
+    const { code, report } = await runGate(['--only=language-suite'], handlers);
+    expect(code).toBe(1);
+    expect(report.failed).toEqual(['language-suite']);
+    expect(report.items[0].readings).toMatchObject({ cases: 2, passed: 1, failed: 1, failures: 1 });
+    expect(report.skipped.some((entry) => entry.id === 'language-suite')).toBe(false);
+  });
+
+  it('rc=2 但不是「未知命令」⇒ FAIL（SKIP 口径不扩大）', async () => {
+    const handlers = greenHandlers();
+    handlers['language-suite'] = () => ({ rc: 2, stdout: '', stderr: '错误：--json 需要子命令' });
+    const { code, report } = await runGate(['--only=language-suite'], handlers);
+    expect(code).toBe(1);
+    expect(report.failed).toEqual(['language-suite']);
+  });
+
+  it('language 超时 ⇒ rc 124 + FAIL', async () => {
+    const handlers = greenHandlers();
+    handlers['language-suite'] = () => ({ rc: 0, timedOut: true, stdout: '{"cases":', stderr: '' });
+    const { code, report } = await runGate(['--only=language-suite'], handlers);
+    expect(code).toBe(1);
+    expect(report.items[0].rc).toBe(124);
+    expect(report.items[0].readings.timeout).toBe(true);
+  });
+
+  it('parseLanguageSuiteJson：有 cases 记用例数，坏 JSON 说 parsed:false', () => {
+    expect(parseLanguageSuiteJson(LANGUAGE_GREEN)).toMatchObject({ parsed: true, cases: 2, passed: 2, failed: 0 });
+    expect(parseLanguageSuiteJson('{"generated": true, "summary": "ok"}')).toMatchObject({ parsed: true, cases: null });
+    expect(parseLanguageSuiteJson('no json here')).toEqual({ parsed: false });
+  });
+});
+

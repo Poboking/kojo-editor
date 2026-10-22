@@ -86,7 +86,7 @@ import type { CoreDiagnosticCode, KojoDiagnostic } from '../diagnostics.js';
 import { decodeIntegerLiteral } from '../lexer.js';
 import { FULLWIDTH_EXPR_PUNCT } from '../literal.js';
 import { migrateKojoSource, type MigrateOptions, type MigrateResult, type MigrateUnsupported } from './index.js';
-import { classifyV1, hasWaitMark, type Classified } from './classify.js';
+import { classifyV1, hasWaitMark, parseDialogueShape, type Classified } from './classify.js';
 import { indentOfLevel, isBlankBody, lineSpan, readSource, type V1Line, type V1Source } from './source.js';
 
 /* ============================== 公共类型 ============================== */
@@ -118,6 +118,8 @@ export interface SemanticMigrateResult extends MigrateResult {
 interface OutLine {
   readonly text: string;
   readonly source: number;
+  /** 本行是语义层**生成的 2.0**（表 / 池声明与引用行）：机械层不再按 v1 同形裁决（K2-MIGRATE-SHAPE） */
+  readonly generated?: boolean;
 }
 
 /** 一条 `是` 臂的整数区间（两端含；精确值退化为 from === to） */
@@ -137,6 +139,19 @@ type Attempt<T> = { readonly ok: true; readonly value: T } | { readonly ok: fals
 /** 表声明名 / 池声明名（自动生成，避开源文本里已有的同名标识符） */
 const TABLE_PREFIX = '迁移表';
 const POOL_PREFIX = '迁移池';
+
+/**
+ * 未采纳的语义升级在台账里追加的**可行动落点**（K2-MIGRATE-SHAPE）。
+ *
+ * 机械层的通用提示不能说错（教程表逐字引用它）：`当` 的值全是字面量时 `# 表` 仍是正解；
+ * 但值列装不下正文时（`{}` / 多行 / 行尾等待），唯一可走的是 `?` 链或 `@原生`。
+ */
+const DECLINED_ACTIONS: Partial<Record<CoreDiagnosticCode, string>> = {
+  'core/migration/switch':
+    '`# 表` 值列只收一行字面量、不做插值：正文带 `{}` / 多行 / 行尾等待时，改写成 `?` 链或整块放进 `@原生`（§6.5 / §12.1）',
+  'core/migration/branch': '改写成 `?` 链或整块放进 `@原生`（§7.1 / §12.1）',
+  'core/migration/ask': '整块放进 `@原生` 后按 ERB 手工改写（§12.1）',
+};
 
 /** 池体分支正文的目标缩进级（`# 池` 0 级 → 分支 1 级 → 分支正文 2 级） */
 const POOL_BODY_LEVEL = 2;
@@ -176,6 +191,8 @@ class SemanticUpgrader {
   private readonly body: OutLine[] = [];
   private readonly rewrites: SemanticRewrite[] = [];
   private readonly notes: KojoDiagnostic[] = [];
+  /** 未采纳的语义升级（v1 行号 → 码 + 原因）：用于把**可行动提示**补进机械层台账（K2-MIGRATE-SHAPE） */
+  private readonly declined = new Map<number, { readonly code: CoreDiagnosticCode; readonly reason: string }>();
   /** 已生成的声明名（表 / 池共用命名空间，但前缀不同） */
   private readonly generated = new Set<string>();
   private readonly seq = new Map<string, number>();
@@ -203,7 +220,15 @@ class SemanticUpgrader {
   run(): SemanticMigrateResult {
     this.scan();
     const intermediate = this.renderIntermediate();
-    const mech = migrateKojoSource(intermediate.code, this.options);
+    // 语义层生成的 2.0 行（表 / 池 / 引用）跳过机械层的 v1 同形裁决：
+    // 它们是本层按 2.0 语法写出来的，再被当成"v1 的 `角色：「…」` 打印"会误报歧义、甚至误改成旁白。
+    const mechOptions: MigrateOptions = {
+      ...this.options,
+      ...(intermediate.trustedLines.length === 0
+        ? {}
+        : { trustedLines: [...(this.options.trustedLines ?? []), ...intermediate.trustedLines] }),
+    };
+    const mech = migrateKojoSource(intermediate.code, mechOptions);
     const toV1 = (line: number): number => {
       if (line <= 0) return line;
       const mapped = intermediate.lineMap[line - 1];
@@ -213,9 +238,25 @@ class SemanticUpgrader {
       ...mech,
       sourceMap: mech.sourceMap.map(toV1),
       diagnostics: [...this.notes, ...mech.diagnostics.map((diagnostic) => remapDiagnostic(diagnostic, toV1))],
-      unsupported: mech.unsupported.map((entry) => remapUnsupported(entry, toV1)),
+      unsupported: mech.unsupported.map((entry) => this.enrichDeclined(remapUnsupported(entry, toV1))),
       rewrites: this.rewrites,
     };
+  }
+
+  /**
+   * 未采纳的语义升级：把**具体原因 + 可行动落点**补进机械层台账的 `targetHint`。
+   *
+   * 机械层的 `targetHint` 是"这类构造该去哪"的通用话（`TARGET_HINTS`，教程表逐字引用它，
+   * 不能改）；但对 `当` 块来说，"值查找写 `# 表`"在值列装不下正文时是**错误指引**——
+   * `# 表` 值列是字面量、不做插值，正文带 `{}` / 多行 / 行尾等待时只能改 `?` 链或 `@原生`。
+   * 这里按行追加本次的具体原因，让台账直接可行动（K2-MIGRATE-SHAPE）。
+   */
+  private enrichDeclined(entry: MigrateUnsupported): MigrateUnsupported {
+    const declined = this.declined.get(entry.line);
+    if (declined === undefined || declined.code !== entry.code) return entry;
+    const action = DECLINED_ACTIONS[declined.code];
+    const suffix = `（本次未自动改写：${declined.reason}${action === undefined ? '' : `。${action}`}）`;
+    return { ...entry, targetHint: `${entry.targetHint}${suffix}` };
   }
 
   /** 逐行扫；围栏区整段原样放行，三类块各试一次语义升级 */
@@ -274,8 +315,8 @@ class SemanticUpgrader {
    * 空行同时是声明体的自然收束（缩进回 0 也会收，但空行让产物读起来是 2.0 的样子）。
    */
   private pushDecl(lines: readonly string[], source: number): void {
-    for (const text of lines) this.decls.push({ text, source });
-    this.decls.push({ text: '', source });
+    for (const text of lines) this.decls.push({ text, source, generated: true });
+    this.decls.push({ text: '', source, generated: true });
   }
 
   /** 成功改写的 warning：**不阻断**（warning 不进 `ok`），但作者要知道名字是自动生成的 */
@@ -285,6 +326,7 @@ class SemanticUpgrader {
 
   /** 未采纳的 warning：块原样交给机械层记 unsupported（**不猜**） */
   private decline(code: CoreDiagnosticCode, line: V1Line, reason: string): void {
+    this.declined.set(line.number, { code, reason });
     this.notes.push({
       code,
       severity: 'warning',
@@ -362,7 +404,7 @@ class SemanticUpgrader {
     }
     const { name, decl, reference } = attempt.value;
     this.pushDecl(decl, line.number);
-    this.body.push({ text: `${indentOfLevel(line.indent)}${reference}`, source: line.number });
+    this.body.push({ text: `${indentOfLevel(line.indent)}${reference}`, source: line.number, generated: true });
     this.pushComment(line.indent, cls.comment, line.number);
     this.pushRewrite('switch-table', line.number, end, name, reference);
     this.note(
@@ -481,6 +523,13 @@ class SemanticUpgrader {
       }
       const cls = classifyV1(cur.body);
       if (cls.kind.kind === 'comment') return { ok: false, reason: '臂正文里带 `;` 注释，迁进 `# 表` 会丢注释' };
+      if (sameShapeDialogueLine(cls, cur.body)) {
+        return {
+          ok: false,
+          reason:
+            '臂正文是 `X：「…」`：v1 里它是旁白打印（连前缀与引号一起打印），2.0 却当台词——同形歧义不猜，整块保持 v1 原样',
+        };
+      }
       if (found !== null) return { ok: false, reason: '臂正文多于一行（`# 表` 值列只能装一行正文）' };
       const shape = printShapeOf(cls, cur.body);
       if (shape === null) {
@@ -504,7 +553,7 @@ class SemanticUpgrader {
     }
     const { name, decl, reference } = attempt.value;
     this.pushDecl(decl, line.number);
-    this.body.push({ text: `${indentOfLevel(line.indent)}${reference}`, source: line.number });
+    this.body.push({ text: `${indentOfLevel(line.indent)}${reference}`, source: line.number, generated: true });
     this.pushComment(line.indent, cls.comment, line.number);
     this.pushRewrite('branch-pool', line.number, end, name, reference);
     this.note(
@@ -592,6 +641,19 @@ class SemanticUpgrader {
     const rawLines: string[] = [];
     for (let i = start; i < end; i++) rawLines.push(this.lines[i]!.raw);
     if (rawLines.length === 0) return { ok: false, reason: '条件分支没有正文' };
+    // 同形歧义（K2-MIGRATE-SHAPE）：`X：「…」` 在 v1 是旁白打印、在 2.0 是台词。语义层不解释它，
+    // 整块保持 v1 原样（机械层记 unsupported）——把正文拆成独立片段再迁时片段可能丢掉 v1 证据，
+    // 不能指望子调用替我们裁决。
+    for (let i = start; i < end; i++) {
+      const cur = this.lines[i]!;
+      if (isBlankBody(cur.body)) continue;
+      if (sameShapeDialogueLine(classifyV1(cur.body), cur.body)) {
+        return {
+          ok: false,
+          reason: '分支正文里有 `X：「…」`：v1 里它是旁白打印（连前缀与引号一起打印），2.0 却当台词——同形歧义不猜，整块保持 v1 原样',
+        };
+      }
+    }
     const sub = migrateKojoSource(`${rawLines.join('\n')}\n`, this.subOptions());
     if (!sub.ok) {
       return { ok: false, reason: '分支正文里仍有机械层不可迁移的写法（`# 池` 内禁止副作用）' };
@@ -678,17 +740,26 @@ class SemanticUpgrader {
     }
   }
 
-  private renderIntermediate(): { readonly code: string; readonly lineMap: readonly number[] } {
+  private renderIntermediate(): {
+    readonly code: string;
+    readonly lineMap: readonly number[];
+    /** 语义层生成的 2.0 行（1 基中间态行号）；机械层跳过同形裁决（K2-MIGRATE-SHAPE） */
+    readonly trustedLines: readonly number[];
+  } {
     const out: OutLine[] = [...this.decls, ...this.body];
     if (this.body.length === 0) {
       while (out.length > 0 && out[out.length - 1]!.text.length === 0) out.pop();
     }
-    if (out.length === 0) return { code: '', lineMap: [] };
+    if (out.length === 0) return { code: '', lineMap: [], trustedLines: [] };
     const text = out.map((line) => line.text).join(this.src.eol);
     const withFinal = this.src.finalNewline ? `${text}${this.src.eol}` : text;
     // BOM 码元**取自输入首字符**（本层不凭空造 BOM，只把输入的 BOM 带过去；复用机械层同一契约）
     const bom = this.src.bom ? this.sourceText.slice(0, 1) : '';
-    return { code: `${bom}${withFinal}`, lineMap: out.map((line) => line.source) };
+    const trustedLines: number[] = [];
+    out.forEach((line, index) => {
+      if (line.generated === true) trustedLines.push(index + 1);
+    });
+    return { code: `${bom}${withFinal}`, lineMap: out.map((line) => line.source), trustedLines };
   }
 }
 
@@ -909,6 +980,17 @@ function poolBodyLineOk(text: string): boolean {
 /** 2.0 台词行（`角色：「…」`，可带一个行尾表演提示组 / `续`）；正文可含引号（v1 引号是内容） */
 function isDialogueLine(text: string): boolean {
   return /^\S+?：「.*」(?:\([^()]*\))?(?:\s+续)?$/u.test(text);
+}
+
+/**
+ * v1 文件里与 2.0 台词同形的行（`X：「…」`，K2-MIGRATE-SHAPE）。
+ *
+ * 判据与机械层 `migrate/index.ts::parseDialogueShape` 同一入口。语义层遇到这种行**不解释**
+ * （不把它当台词值塞进 `# 表` / `# 池`）：v1 里它是连前缀与引号一起打印的旁白文本，
+ * 两种读法都说得通，猜错会静默改掉打印内容 ⇒ 整块交给机械层记 unsupported。
+ */
+function sameShapeDialogueLine(cls: Classified, body: string): boolean {
+  return cls.kind.kind === 'kojo2' && parseDialogueShape(body) !== null;
 }
 
 /* ============================== 纯工具：文本 ------------------------------ */
