@@ -10,7 +10,7 @@ import { Icon } from './icons';
 import './welcome.css';
 
 /** 教程卡片指向的语义 id（与内核事件 `ui.tutorial.open` 的载荷同一词表） */
-export type WelcomeTutorialId = 'kojo' | 'sugar' | 'reference';
+export type WelcomeTutorialId = 'kojo' | 'sugar' | 'kojo2' | 'reference';
 
 /** 无接线时的稳定空表（模块级常量：不给探测 effect 每次渲染造新引用） */
 const NO_RECENT_FILES: readonly RecentFileRecord[] = [];
@@ -20,12 +20,16 @@ export interface WelcomeTutorialEntry {
   readonly id: WelcomeTutorialId;
   readonly title: string;
   readonly blurb: string;
-  readonly icon: 'book' | 'wand' | 'structure';
+  readonly icon: 'book' | 'wand' | 'code' | 'structure';
 }
 
 /**
- * 右侧「教程」三张卡片（顺序 = 阅读顺序：先工作流、再写法、最后查表）。
+ * 右侧「教程」四张卡片（顺序 = **阅读顺序**：先工作流、再 `.kojo` 老写法、再 2.0 新写法、最后查表）。
  * 纯数据、无副作用：卡片点击只把 `id` 交给 App → 内核事件，宿主不理解教程内容。
+ *
+ * 卡名逐字取各本教程自己的 title（`Kojo 2.0 语言教程` 就是正文那一本的标题，不许另抄）；
+ * 本层只认语义 id，一句教程内容都不写。四张卡共用同一条开合判据（`tutorialsOpenable`）：
+ * 内核没装配好 / 项目正在打开时按钮**disabled 且带 title 说明**，不靠"点了没反应"。
  */
 export const WELCOME_TUTORIALS: readonly WelcomeTutorialEntry[] = [
   {
@@ -39,6 +43,12 @@ export const WELCOME_TUTORIALS: readonly WelcomeTutorialEntry[] = [
     title: '语法教程',
     blurb: '引号、条件、随机、插值……台词写法逐条对照。',
     icon: 'wand',
+  },
+  {
+    id: 'kojo2',
+    title: 'Kojo 2.0 语言教程',
+    blurb: '默认档还是老写法；这一本教 2.0 的新写法。',
+    icon: 'code',
   },
   {
     id: 'reference',

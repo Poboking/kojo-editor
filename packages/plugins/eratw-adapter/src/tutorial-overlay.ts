@@ -1,8 +1,10 @@
 /**
- * 内置教程浮层（2026-10-13 教程批 E6；`ui.overlay` 贡献，三个实例：语法糖 / 口上 / 语法全表附录）。
+ * 内置教程浮层（2026-10-13 教程批 E6；`ui.overlay` 贡献，四个实例：语法糖 / 口上 /
+ * 《Kojo 2.0 语言教程》/ 语法全表附录。四本共用这一份渲染器，节数与样张张数都由数据给）。
  *
  * 链路：面板底部教程按钮 → 内核事件 `ui.overlay.open` → 宿主打开本 overlay
- * → 正文读 `tutorial-content.ts` / `tutorial-reference.ts` 的纯数据 → 「关闭」按钮发 `ui.overlay.close`。
+ * → 正文读 `tutorial-content.ts` / `tutorial-reference.ts` / `tutorial-content-kojo2.ts` 的纯数据
+ * → 「关闭」按钮发 `ui.overlay.close`。
  * Esc / 遮罩关闭由宿主负责，组件不自己处理（与既有向导同一契约）。
  *
  * 长文滚动策略：抬头（标题 + 导语）与脚部固定，只有正文列 `.tutorial-body` 滚（样式见
@@ -42,6 +44,7 @@ import type { Tutorial, TutorialSample, TutorialTable } from './tutorial-content
 /** overlay 贡献 id（面板按钮发 `ui.overlay.open` 时引用）——真源在 `tutorial-lazy.ts`
  *  （PS-10：适配器为了拿 id 不该静态挂着本模块与正文；这里原样转发，旧引用零改动）。 */
 export {
+  KOJO2_TUTORIAL_OVERLAY_ID,
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
@@ -406,6 +409,11 @@ export function createTutorialOverlay(deps: TutorialOverlayDeps): () => unknown 
       h(
         'div',
         { className: 'wizard-actions' },
+        // 「查语法全表」只服务 v1 侧那两本：全表是「现行全部 `.kojo` 写法」的附录（见
+        // `tutorial-reference.ts` 头注与 lead），把 2.0 的读者送过去就是拿 v1 表充 2.0 的账。
+        // 2.0 那本自带旧写法对照表（⑬ 的 tables），所以接线处**不传** `openReference`（缺省
+        // 即不渲染按钮，见 `TutorialOverlayDeps`）；下面这道 `!== 'reference'` 是第二道锁，
+        // 对新 id 天然放行 ⇒ 按钮的有无始终由"调用方给不给去处"这一处决定。
         deps.openReference && tutorial.id !== 'reference'
           ? h('button', { className: 'ghost small', onClick: deps.openReference }, '查语法全表')
           : null,

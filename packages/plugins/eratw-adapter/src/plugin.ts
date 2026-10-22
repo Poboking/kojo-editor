@@ -49,6 +49,7 @@ import { IMPORT_KOJO_OVERLAY_ID, createImportKojoWizard, type PendingImport } fr
 import { DEPLOY_KOJO_OVERLAY_ID, createDeployKojoWizard } from './deploy-wizard';
 import { PUBLISH_KOJO_OVERLAY_ID, createPublishKojoWizard } from './publish-wizard';
 import {
+  KOJO2_TUTORIAL_OVERLAY_ID,
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
@@ -63,12 +64,15 @@ import { pickAndRequestImport, registerImportCommand } from '@kojo/kojo-project-
  * 教程语义 id → 本插件注册的 overlay 贡献 id（用户反馈 8 批）。
  *
  * 只读映射，两个入口共用同一份：欢迎页的教程卡片走内核事件 `ui.tutorial.open`
- * （由下方监听器查表），「我的口上项目」面板底部的三个按钮走本包的
+ * （由下方监听器查表），「我的口上项目」面板底部的四个按钮走本包的
  * `openTutorial` 回调。发起方只认识语义 id，模态叫什么始终是本包的私事。
+ *
+ * `kojo2` 是 **additive** 追加的一项（四本教程 ⇒ 四枚常驻贡献），旧三个 id 的映射一字未动。
  */
 export const TUTORIAL_OVERLAY_BY_ID: Readonly<Record<TutorialId, string>> = {
   kojo: KOJO_TUTORIAL_OVERLAY_ID,
   sugar: SUGAR_TUTORIAL_OVERLAY_ID,
+  kojo2: KOJO2_TUTORIAL_OVERLAY_ID,
   reference: REFERENCE_TUTORIAL_OVERLAY_ID,
 };
 
@@ -738,8 +742,9 @@ export function createEratwAdapterPlugin(): Plugin {
           // 「导入项目」= 命令面板那条 `kojo.importKojoProject` 的同一具身体（共享层
           // `pickAndRequestImport`），只换来源标记
           openImportWizard: () => pickAndRequestImport(ctx, io, 'projects-panel'),
-          // 教程入口（E6；TUT-2 加全表）：三个 overlay 常驻注册（见下方），这里只发打开意图。
-          // 用户反馈 8 批起映射抽成 `TUTORIAL_OVERLAY_BY_ID`，与内核事件监听共用一份。
+          // 教程入口（E6；TUT-2 加全表；2.0 批加《Kojo 2.0 语言教程》）：四个 overlay 常驻注册
+          // （见下方），这里只发打开意图。用户反馈 8 批起映射抽成 `TUTORIAL_OVERLAY_BY_ID`，
+          // 与内核事件监听共用一份。
           openTutorial: (which) =>
             ctx.bus.emit('ui.overlay.open', {
               id: TUTORIAL_OVERLAY_BY_ID[which],
@@ -855,10 +860,10 @@ export function createEratwAdapterPlugin(): Plugin {
         }),
       });
 
-      /* ---- 内置教程（E6）：语法糖 + 口上 + 语法全表附录；入口在「我的口上项目」面板底部 ---- */
+      /* ---- 内置教程（E6）：语法糖 + 口上 + Kojo 2.0 + 语法全表附录；入口在「我的口上项目」面板底部 ---- */
 
       /**
-       * 教程打开意图（用户反馈 8 批）：欢迎页等发起方只发语义 id（kojo/sugar/reference），
+       * 教程打开意图（用户反馈 8 批）：欢迎页等发起方只发语义 id（kojo/sugar/kojo2/reference），
        * 本插件映射到自己的 overlay 贡献后打开——发起方不知道模态叫什么（与
        * `market.publishRequested` 同款分工）。退订挂 `ctx.onDispose`：插件停用后，
        * 总线上的意图不再打开本插件的浮层。
@@ -881,10 +886,10 @@ export function createEratwAdapterPlugin(): Plugin {
       };
 
       /**
-       * 三个教程浮层（PS-10 首屏批）：贡献照旧在此刻注册——id / order / size 一字不动，
-       * 面板顺序与 `ui.tutorial.open` 映射的语义完全不变；只有**正文**换成懒装载壳，
-       * 浮层真被打开那一刻才 `import()` 那 223 KB 文案（开机默认不开教程 ⇒ 欢迎页不该
-       * 为它付解析与求值的钱）。
+       * 四个教程浮层（PS-10 首屏批立时三个，`kojo2` 为 additive 追加）：贡献照旧在此刻注册——
+       * 旧三本的 id / order / size 一字不动，面板顺序与 `ui.tutorial.open` 映射的语义完全不变；
+       * 只有**正文**走懒装载壳，浮层真被打开那一刻才 `import()` 那数百 KB 文案
+       * （开机默认不开教程 ⇒ 欢迎页不该为它付解析与求值的钱）。
        */
       ctx.slots.register('ui.overlay', {
         id: SUGAR_TUTORIAL_OVERLAY_ID,
@@ -919,6 +924,32 @@ export function createEratwAdapterPlugin(): Plugin {
           close: () =>
             ctx.bus.emit('ui.overlay.close', {
               id: REFERENCE_TUTORIAL_OVERLAY_ID,
+              source: 'eratw-adapter',
+            }),
+        }),
+      });
+
+      /**
+       * 《Kojo 2.0 语言教程》（additive 第四本，与另外三本同一具懒装载壳）。
+       *
+       * 三条口径要说清：
+       * - `order` 顺延到 33：30/31/32 是旧三本的既有档位（`ps10-tutorial-lazy.test.ts` 逐字钉着，
+       *   动号就是动既有可观察面）。这里的 order **不参与**面板 / 欢迎页的阅读顺序——那两处
+       *   的行序由消费侧自己排（工作流 → v1 → 2.0 → 查表）。
+       * - **不传** `openReference`：语法全表是 `.kojo`（v1）那套写法的附录，2.0 的读者点过去
+       *   只会拿到对不上号的产物对照；2.0 那本自带旧写法对照表，脚部只留「关闭」。
+       * - 正文仍走动态边：`TUTORIALS.kojo2` 由懒壳在打开那一刻随 `import('./tutorial-content')`
+       *   一起进来，本文件不静态挂它（PS-10 的开机图判据照旧成立）。
+       */
+      ctx.slots.register('ui.overlay', {
+        id: KOJO2_TUTORIAL_OVERLAY_ID,
+        order: 33,
+        size: 'wide',
+        component: createLazyTutorialOverlay({
+          tutorial: 'kojo2',
+          close: () =>
+            ctx.bus.emit('ui.overlay.close', {
+              id: KOJO2_TUTORIAL_OVERLAY_ID,
               source: 'eratw-adapter',
             }),
         }),

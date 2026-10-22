@@ -15,7 +15,7 @@
  * 刻意**不**做开机预取：预取只是把字节提前，`import()` 的**求值**同样占主线程
  * （开机预取 = 和用户点「继续上次会话」抢同一根线程），而教程是"要看才装"的东西。
  *
- * 三个 overlay id 的真源也搬到这里（`tutorial-overlay.ts` 原样转发导出，旧引用零改动）：
+ * 四个 overlay id 的真源也搬到这里（`tutorial-overlay.ts` 原样转发导出，旧引用零改动）：
  * 否则 `plugin.ts` 为了拿 id 仍要静态挂着渲染器与行内解析那一截。
  */
 import { createElement as h, useEffect, useState, type ComponentType, type ReactNode } from 'react';
@@ -26,6 +26,8 @@ import type { Tutorial, TutorialId } from './tutorial-content';
 export const SUGAR_TUTORIAL_OVERLAY_ID = 'eratw.tutorialSugar';
 export const KOJO_TUTORIAL_OVERLAY_ID = 'eratw.tutorialKojo';
 export const REFERENCE_TUTORIAL_OVERLAY_ID = 'eratw.tutorialReference';
+/** 《Kojo 2.0 语言教程》（additive：id 与另外三本同族，装载链路一字共用） */
+export const KOJO2_TUTORIAL_OVERLAY_ID = 'eratw.tutorialKojo2';
 
 /** 懒装载壳的依赖：与 `createTutorialOverlay` 同形，只是正文换成"按 id 现取" */
 export interface LazyTutorialDeps {

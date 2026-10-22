@@ -26,6 +26,7 @@ import { IMPORT_KOJO_OVERLAY_ID } from '../src/import-wizard';
 import { DEPLOY_KOJO_OVERLAY_ID } from '../src/deploy-wizard';
 import { PUBLISH_KOJO_OVERLAY_ID } from '../src/publish-wizard';
 import {
+  KOJO2_TUTORIAL_OVERLAY_ID,
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
@@ -277,7 +278,7 @@ describe('「我的口上项目」面板注册（P-B）', () => {
 });
 
 describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署 / 发布口上）', () => {
-  it('注册七个 ui.overlay：新建 + 导入 + 部署 + 发布 + 两份教程 + 语法全表附录，id 与各引用常量一致', () => {
+  it('注册八个 ui.overlay：新建 + 导入 + 部署 + 发布 + 三份教程 + 语法全表附录，id 与各引用常量一致', () => {
     const { overlays } = activateWithPanel();
     const ids = overlays.map((o) => o.id);
     expect(ids).toContain(NEW_KOJO_PROJECT_OVERLAY_ID);
@@ -286,17 +287,21 @@ describe('口上项目向导注册（P-C 新建 / P-F 导入 / P-E 部署 / 发�
     expect(ids).toContain(PUBLISH_KOJO_OVERLAY_ID);
     expect(ids).toContain(SUGAR_TUTORIAL_OVERLAY_ID);
     expect(ids).toContain(KOJO_TUTORIAL_OVERLAY_ID);
+    expect(ids).toContain(KOJO2_TUTORIAL_OVERLAY_ID);
     expect(ids).toContain(REFERENCE_TUTORIAL_OVERLAY_ID);
-    expect(overlays).toHaveLength(7);
+    // 四本教程 ⇒ 四枚常驻贡献（一枚都不能少：入口点了却没提供方就是"静默无反应"）
+    expect(ids.filter((id) => /tutorial/i.test(id))).toHaveLength(4);
+    expect(overlays).toHaveLength(8);
     for (const o of overlays) expect(typeof o.component).toBe('function');
   });
 
-  it('三本教程 + 发布口上向导标 size: wide（E9 宽版）；其余向导浮层维持缺省宽度档', () => {
+  it('四本教程 + 发布口上向导标 size: wide（E9 宽版）；其余向导浮层维持缺省宽度档', () => {
     const { overlays } = activateWithPanel();
     for (const o of overlays) {
       const isWide =
         o.id === SUGAR_TUTORIAL_OVERLAY_ID ||
         o.id === KOJO_TUTORIAL_OVERLAY_ID ||
+        o.id === KOJO2_TUTORIAL_OVERLAY_ID ||
         o.id === REFERENCE_TUTORIAL_OVERLAY_ID ||
         o.id === PUBLISH_KOJO_OVERLAY_ID;
       expect(o.size).toBe(isWide ? 'wide' : undefined);
@@ -438,5 +443,79 @@ describe('面板工具条 · 「导入项目」按钮（dep 存在才画）', ()
     const btns = buttonsOf(renderPanel(panelDeps({ openNewWizard: () => {} })));
     expect(btns.some((b) => b.text.includes('导入项目'))).toBe(false);
     expect(btns.some((b) => b.text.includes('新建'))).toBe(true); // 对照组：新建照画
+  });
+});
+
+/* ------------------------------ 教程区四行入口（2026-10 · Kojo 2.0 批接线） ------------------------------ */
+
+/**
+ * 教程行：行名（`.kp-tutorial-name` 那一格的**纯文本**，不含图标回退字形）、悬停说明、点击回调。
+ * 行名按 span 摘而不是整颗按钮文本——没注入 renderIcon 时按钮文本里黏着回退字形（`▤` / `✦` …），
+ * 拿它做逐字比对就会假红（也不许借此放宽成"包含即可"）。
+ */
+interface TutorialRow {
+  name: string;
+  title: string;
+  open(): void;
+}
+
+const nameSpanOf = (children: unknown): string => {
+  const walk = (node: unknown): string => {
+    if (node === null || node === undefined) return '';
+    if (Array.isArray(node)) return node.map(walk).join('');
+    if (typeof node !== 'object') return ''; // 图标回退字形之类的裸字符串：不是行名
+    const el = node as { props?: Record<string, unknown> };
+    if (el.props?.className === 'kp-tutorial-name') return textOf(el.props.children);
+    return walk(el.props?.children);
+  };
+  return walk(children);
+};
+
+function tutorialRowsOf(node: unknown, out: TutorialRow[] = []): TutorialRow[] {
+  if (node === null || node === undefined || typeof node !== 'object') return out;
+  if (Array.isArray(node)) {
+    for (const c of node) tutorialRowsOf(c, out);
+    return out;
+  }
+  const el = node as { type?: unknown; props?: Record<string, unknown> };
+  if (el.type === 'button' && el.props?.className === 'kp-tutorial-btn') {
+    out.push({
+      name: nameSpanOf(el.props?.children),
+      title: String(el.props?.title ?? ''),
+      open: el.props?.onClick as () => void,
+    });
+    return out;
+  }
+  tutorialRowsOf(el.props?.children, out);
+  return out;
+}
+
+/** 行序 = 阅读顺序（工作流 → v1 写法 → 2.0 写法 → 查表）；行名逐字取各本教程自己的 title */
+const TUTORIAL_ROWS = [
+  ['kojo', '口上教程'],
+  ['sugar', '.kojo 语言教程'],
+  ['kojo2', 'Kojo 2.0 语言教程'],
+  ['reference', 'kojo 语法全表'],
+] as const;
+
+describe('面板教程区 · 四行入口（2.0 批接线）', () => {
+  it('四行按阅读顺序排，行名逐字对得上（第四行＝《Kojo 2.0 语言教程》）', () => {
+    const rows = tutorialRowsOf(renderPanel(panelDeps()));
+    expect(rows.map((r) => r.name)).toEqual(TUTORIAL_ROWS.map(([, name]) => name));
+    // 每行都自带人话说明（四枚都是图标+名称的行按钮，没有 title 就等于少一半可达性）
+    for (const r of rows) expect(r.title.trim().length, r.name).toBeGreaterThan(0);
+  });
+
+  it('逐行点击只发语义 id，顺序与行序一致（本层不认识 overlay 贡献名）', () => {
+    const opened: string[] = [];
+    const rows = tutorialRowsOf(renderPanel(panelDeps({ openTutorial: (which) => void opened.push(which) })));
+    for (const r of rows) r.open();
+    expect(opened).toEqual(TUTORIAL_ROWS.map(([id]) => id));
+  });
+
+  it('没有教程提供方（不传 openTutorial）⇒ 教程区整块不画，不摆四枚点了没反应的按钮', () => {
+    expect(tutorialRowsOf(renderPanel(panelDeps({ openTutorial: undefined })))).toEqual([]);
+    // 对照组：注入提供方 ⇒ 四行全在
+    expect(tutorialRowsOf(renderPanel(panelDeps()))).toHaveLength(4);
   });
 });

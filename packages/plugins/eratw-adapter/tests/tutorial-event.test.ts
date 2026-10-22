@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FileIO, PluginContext } from '@kojo/plugin-api';
 import { TUTORIAL_OVERLAY_BY_ID, createEratwAdapterPlugin } from '../src/plugin';
 import {
+  KOJO2_TUTORIAL_OVERLAY_ID,
   KOJO_TUTORIAL_OVERLAY_ID,
   REFERENCE_TUTORIAL_OVERLAY_ID,
   SUGAR_TUTORIAL_OVERLAY_ID,
@@ -11,7 +12,7 @@ import {
  * 用户反馈 8 批：教程打开意图 `ui.tutorial.open` 的接线守门。
  *
  * 钉三件事：
- * - 语义 id → overlay 贡献 id 的映射与三个常驻 overlay 一一对应（唯一真源）；
+ * - 语义 id → overlay 贡献 id 的映射与四个常驻 overlay 一一对应（唯一真源）；
  * - 监听器按映射发 `ui.overlay.open`（source 恒为适配器，发起方的 source 不被改写）；
  * - 未知 id 出声不打开，退订后总线上的意图不再触发本插件。
  *
@@ -26,6 +27,8 @@ interface Harness {
   disposers: Array<() => void>;
   emitted: Array<{ type: string; payload: unknown }>;
   warns: string[];
+  /** `activate()` 真注册进 `ui.overlay` 的贡献 id（映射不许指向空位） */
+  overlayIds: string[];
 }
 
 function activateAdapter(): Harness {
@@ -33,6 +36,7 @@ function activateAdapter(): Harness {
   const disposers: Array<() => void> = [];
   const emitted: Array<{ type: string; payload: unknown }> = [];
   const warns: string[] = [];
+  const overlayIds: string[] = [];
 
   const io = {
     async exists() {
@@ -96,25 +100,37 @@ function activateAdapter(): Harness {
       throw new Error(`unexpected inject: ${key}`);
     },
     tryInject: () => undefined,
-    slots: { register: () => () => {} },
+    slots: {
+      register: (slot: string, item: { id: string }) => {
+        if (slot === 'ui.overlay') overlayIds.push(item.id);
+        return () => {};
+      },
+    },
   } as unknown as PluginContext;
 
   createEratwAdapterPlugin().activate(ctx);
-  return { handlers, disposers, emitted, warns };
+  return { handlers, disposers, emitted, warns, overlayIds };
 }
 
 describe('教程打开意图（用户反馈 8 批）', () => {
-  it('语义 id 映射 = 三个常驻教程 overlay（面板入口与内核事件共用一份）', () => {
+  it('语义 id 映射 = 四个常驻教程 overlay（面板入口与内核事件共用一份）', () => {
     expect(TUTORIAL_OVERLAY_BY_ID).toEqual({
       kojo: KOJO_TUTORIAL_OVERLAY_ID,
       sugar: SUGAR_TUTORIAL_OVERLAY_ID,
+      kojo2: KOJO2_TUTORIAL_OVERLAY_ID,
       reference: REFERENCE_TUTORIAL_OVERLAY_ID,
     });
+    // 映射不许指向空位：每一枚去处都必须是 activate() 真注册过的贡献（四路入口点了都要有人接）
+    const { overlayIds } = activateAdapter();
+    for (const id of Object.values(TUTORIAL_OVERLAY_BY_ID)) {
+      expect(overlayIds, `映射里的 ${id} 没有被注册（点了没浮层 = 静默）`).toContain(id);
+    }
   });
 
   it.each([
     ['kojo', KOJO_TUTORIAL_OVERLAY_ID],
     ['sugar', SUGAR_TUTORIAL_OVERLAY_ID],
+    ['kojo2', KOJO2_TUTORIAL_OVERLAY_ID],
     ['reference', REFERENCE_TUTORIAL_OVERLAY_ID],
   ] as const)('ui.tutorial.open(%s) → 打开 %s', (tutorial, overlayId) => {
     const { handlers, emitted } = activateAdapter();

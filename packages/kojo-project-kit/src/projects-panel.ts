@@ -768,6 +768,10 @@ export function createKojoProjectsPanel(
      * 教程入口（E6）：常驻面板底部（body 之后、状态条之前），不随树滚动——
      * 写不下去时抬头就能找到，不藏在菜单里。行按钮与树行同族（度量 / hover /
      * focus-visible 复用 styles.css 的行按钮组）。
+     *
+     * 行序＝**阅读顺序**（与欢迎页四卡同一条口径）：工作流 → v1 写法 → 2.0 写法 → 查表。
+     * 行名逐字取各本教程自己的 title（这里不另抄名目）；本层只认语义 id，
+     * 一句教程内容都不许写进来（那是 adapter 的事）。
      */
     // 取到局部常量：`deps.openTutorial` 在箭头函数里的收窄不可靠
     const openTutorial = deps.openTutorial;
@@ -783,6 +787,16 @@ export function createKojoProjectsPanel(
         'button',
         {
           className: 'kp-tutorial-btn',
+          title: '口上从选游戏目录到部署进游戏的全流程（含导出、许可与常见故障查法）',
+          onClick: () => openTutorial('kojo'),
+        },
+        ic('book', 14, '▤'),
+        h('span', { className: 'kp-tutorial-name' }, '口上教程'),
+      ),
+      h(
+        'button',
+        {
+          className: 'kp-tutorial-btn',
           title: '.kojo 语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
           onClick: () => openTutorial('sugar'),
         },
@@ -793,11 +807,12 @@ export function createKojoProjectsPanel(
         'button',
         {
           className: 'kp-tutorial-btn',
-          title: '口上从选游戏目录到部署进游戏的全流程（含导出、许可与常见故障查法）',
-          onClick: () => openTutorial('kojo'),
+          title:
+            'Kojo 2.0（`.kojo2`）的每一种写法。今天默认档位仍是「只认 v1」，这一本只教 2.0 那一套，不与 v1 混讲',
+          onClick: () => openTutorial('kojo2'),
         },
-        ic('book', 14, '▤'),
-        h('span', { className: 'kp-tutorial-name' }, '口上教程'),
+        ic('code', 14, '❖'),
+        h('span', { className: 'kp-tutorial-name' }, 'Kojo 2.0 语言教程'),
       ),
       h(
         'button',

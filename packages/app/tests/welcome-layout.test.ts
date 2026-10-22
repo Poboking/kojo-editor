@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { RecentProject } from '@kojo/plugin-api';
-import { WelcomeView } from '../src/ui/WelcomeView';
+import { WelcomeView, WELCOME_TUTORIALS } from '../src/ui/WelcomeView';
 
 /**
  * 欢迎页版式回归（用户反馈第 2 条）：欢迎页是"选目录前"的整页视图，不该模拟
@@ -10,7 +10,7 @@ import { WelcomeView } from '../src/ui/WelcomeView';
  *
  * 这里钉的是 SSR 形状：欢迎页**完全没有标签**（`.welcome-tabbar` / `.welcome-tab` /
  * tab/tabpanel 语义一律不出现）；卡片在舞台里居中并带 aria-label；关闭 × 贴卡片
- * 右上角；两栏内容（教程三卡 + 最近）一个不少。标签视觉已抽成独立可复用件
+ * 右上角；两栏内容（教程四卡 + 最近）一个不少。标签视觉已抽成独立可复用件
  * （`tab-chip.tsx`），由 tab-chip.test.ts 单独看管。行为面（点击接线 / 居中滚动）
  * 由 CSS 与真壳承担，SSR 不序列化事件处理器。
  */
@@ -82,12 +82,43 @@ describe('欢迎页 · 卡片与关闭钮', () => {
 });
 
 describe('欢迎页 · 内容面不缩水', () => {
-  it('三张教程卡（口上教程 / 语法教程 / 语法全表）都在', () => {
+  it('四张教程卡（口上教程 / 语法教程 / Kojo 2.0 语言教程 / 语法全表）按阅读顺序排', () => {
     const html = render();
-    expect(html.match(/class="welcome-tutorial"/g)).toHaveLength(3);
+    expect(html.match(/class="welcome-tutorial"/g)).toHaveLength(4);
     expect(html).toContain('口上教程');
     expect(html).toContain('语法教程');
+    expect(html).toContain('Kojo 2.0 语言教程');
     expect(html).toContain('语法全表');
+    // 顺序 = 工作流 → v1 写法 → 2.0 写法 → 查表（插错一格就是让作者先读错的那本）
+    const at = (title: string): number => html.indexOf(`welcome-tutorial-title">${title}<`);
+    const order = ['口上教程', '语法教程', 'Kojo 2.0 语言教程', '语法全表'].map(at);
+    for (const [i, pos] of order.entries()) expect(pos, `第 ${i + 1} 张卡没找到`).toBeGreaterThan(-1);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('第四卡只发语义 id `kojo2`，且如实交代"默认档不认这一本"', () => {
+    const kojo2 = WELCOME_TUTORIALS.find((t) => t.id === 'kojo2');
+    expect(kojo2).toBeDefined();
+    expect(kojo2!.title).toBe('Kojo 2.0 语言教程');
+    // 卡片只许说"默认档≠这一本教的东西"，不许把读者留在"以为切了才有"的错觉里。
+    // 档位标签的实名（「只认 v1」）住在 `kojo2-cutover.ts` 的 `KOJO2_STAGE_LABELS`，
+    // **本层不引述**：一是这里"一句教程内容都不写"的既有纪律，二是 `app-version.test.ts`
+    // 的禁死值闸扫整个 WelcomeView.tsx 文本，带 `v`＋数字的字面量一律红（两条闸撞过一次，
+    // 撞回来的那次是标签引到宿主里，不是版本闸误报——所以宿主别抄标签）。
+    expect(kojo2!.blurb).toContain('默认档');
+    expect(kojo2!.blurb).toContain('老写法');
+    expect(kojo2!.blurb).toContain('2.0');
+    expect(kojo2!.blurb).not.toMatch(/v\d/);
+    // 四张卡都是语义 id，宿主不许在这里认识任何 overlay 贡献名
+    expect(WELCOME_TUTORIALS.map((t) => t.id)).toEqual(['kojo', 'sugar', 'kojo2', 'reference']);
+  });
+
+  it('提供方不在场（内核未装配）⇒ 四张卡一律 disabled 且带人话 title，不静默空点', () => {
+    // 新加的那张走的必须是同一条开合判据（`tutorialsOpenable`）：不许出现"点得动却没浮层"的第四路入口
+    expect(render().match(/class="welcome-tutorial" disabled/g)).toBeNull(); // 就绪态：四枚都可点
+    expect(render({ kernelReady: false }).match(/class="welcome-tutorial" disabled="" title="内核装配中…"/g)).toHaveLength(
+      4,
+    );
   });
 
   it('最近区仍在：标题 / 路径行 / 清除入口', () => {
