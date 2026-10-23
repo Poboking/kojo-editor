@@ -2491,8 +2491,10 @@ export function EditorPane({
             ) : (
               /* 预览横幅（1023 覆盖面批）：这一簇（开关 + 读数 + 语法标记开关）就是
                  `sugar-preview` 面的根元素。**只在预览真在屏上时才挂面属性**——预览关着时
-                 这颗按钮只是外框上的普通按钮，右键该归外层面 `editor`（就近路由不会自动
-                 回落到外层，所以属性本身必须跟着状态走）。`display: contents` 见
+                 这颗按钮只是外框上的普通按钮，右键该归外层面 `editor`（路由自 WP2 收口起改为
+                 逐级上溯：内层**不表态**才问外层；而面属性不挂 = 这一层根本不存在，于是自然落到
+                 `editor`——这正是关着预览时想要的，所以属性必须跟着状态走）。
+                 `display: contents` 见
                  `context-menu-editor-chrome.css`：包裹层不参与布局，工具条一个字都不动。 */
               <span className="sugar-banner" data-context-surface={sugarPreviewing ? 'sugar-preview' : undefined}>
                 {/* 预览开关：整份 ERB 投影成 .kojo 写法（只读显示，磁盘一字未动）——
