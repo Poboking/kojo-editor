@@ -1105,6 +1105,29 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
     expect(html.replace(/title="[^"]*"/g, '')).not.toMatch(/https:\/\/[^<]*index\.json/);
   });
 
+  it('折叠记号走宿主图标桥（名字 + 档位，SVG 进 .mk-hint-toggle），桥缺位时不画字符（批次十一 L07 零字符图标）', () => {
+    // ① 宿主注入图标桥：视图层只传「注册表名字 + 尺寸档位名」，画出来的是宿主给的节点
+    const seen: Array<[string, unknown]> = [];
+    const withBridge = renderView([viewEntry('a.pack', '1.0.0')], [], {
+      renderIcon: (name: string, size?: unknown) => {
+        seen.push([name, size]);
+        return createElement('svg', { 'data-icon': name });
+      },
+    });
+    expect(seen).toEqual([['chevron-right', 'xs']]);
+    expect(withBridge).toContain('<span class="mk-hint-toggle" aria-hidden="true"><svg data-icon="chevron-right"></svg>');
+    // ② 桥缺位（无渲染环境 / 旧宿主）：那一格留空给 CSS 画出的记号，**绝不回退成字符图标**
+    const noBridge = renderView([viewEntry('a.pack', '1.0.0')], []);
+    expect(noBridge).toContain('<span class="mk-hint-toggle" aria-hidden="true"></span>');
+    // ③ 全幅面扫描：这一屏里没有任何"字符当图标"的残留。
+    //    名单只收**图标位**上的字符；`·` 不在列——它出现在元信息句子里（"1.2 MB · 3 个文件"）
+    //    是文本标点，画面上的**条目分隔符**已由 market.css 画成圆点，不是字符（见该文件 L07 段）。
+    for (const glyph of ['▸', '›', '⋯', '✓', '✔', '✕', '＋', '－', '▲', '▼']) {
+      const visible = noBridge.replace(/title="[^"]*"/g, '');
+      expect(visible, glyph).not.toContain(glyph);
+    }
+  });
+
   it('渲染层的主行也不含机器词（展开层没展开 ⇒ 核对码与 id/kind 都不该出现）', () => {
     const html = renderView(packs, installed);
     for (const word of ['index.json', 'sha256', 'manifest', 'schema', 'kind', 'minAppVersion', 'id ', 'zip']) {
@@ -1381,25 +1404,30 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
     expect(byClass(searchWrap, 'mk-clear')).toHaveLength(1);
   });
 
-  it('行的层级：一张卡两排——第一排名字 + 动作（.mk-head），第二排事实（.mk-facts），行本身不是 button', () => {
+  it('行的层级：卡片按档分层——第一排名字 + 动作（.mk-head）、〔摘要排 .mk-sub 可缺省〕、末排事实（.mk-facts），行本身不是 button', () => {
     const tree = MarketPanelView(viewProps(packs2, installed1));
     const rows = byClass(tree, 'mk-row');
     expect(rows).toHaveLength(3);
     for (const r of rows) expect(r.type, '行不许是 button 语义').toBe('div');
     const mains = byClass(tree, 'mk-main');
     expect(mains).toHaveLength(3);
+    let withSummary = 0;
     for (const main of mains) {
       const lines = kids(main).filter(isEl);
-      expect(
-        lines.map((e) => (e.props.className as string).split(/\s+/)[0]),
-        '一张卡恰好两排',
-      ).toEqual(['mk-head', 'mk-facts']);
+      const tiers = lines.map((e) => (e.props.className as string).split(/\s+/)[0]);
+      // 批次十一 L07 的层级口径：头排与事实排恒在，中间至多一排摘要（已装行没摘要 ⇒ 只有两排）
+      expect(tiers[0], '卡片第一排必须是 .mk-head').toBe('mk-head');
+      expect(tiers[tiers.length - 1], '卡片末排必须是 .mk-facts').toBe('mk-facts');
+      const middle = tiers.slice(1, -1);
+      expect(middle.length, '头排与事实排之间至多一排摘要').toBeLessThanOrEqual(1);
+      for (const m of middle) expect(m, '中间排只许是摘要排').toBe('mk-sub');
+      if (middle.length === 1) withSummary += 1;
       const head = lines[0]!;
       const headEls = kids(head).filter(isEl);
       expect((headEls[0]!.props.className as string).split(/\s+/)).toContain('mk-name');
       expect(headEls[headEls.length - 1]!.props.className, '动作簇是第一排的最后一项').toBe('mk-actions');
-      // 事实一律在第二排，且只有事实
-      for (const f of kids(lines[1]!).filter(isEl)) {
+      // 事实一律在末排，且只有事实
+      for (const f of kids(lines[lines.length - 1]!).filter(isEl)) {
         expect((f.props.className as string).split(/\s+/)).toContain('mk-meta');
       }
       const acts = byClass(main, 'mk-actions');
@@ -1407,6 +1435,9 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
       // 这一行的按钮一枚都不许落在动作簇之外
       expect(buttonEls(main).length).toBe(buttonEls(acts[0]!).length);
     }
+    // 摘要排不是"人人都有一行"：有 summary 的索引行才有（已装行没有 ⇒ 两排）
+    expect(withSummary, '有摘要的行才多出 .mk-sub 这一排').toBeGreaterThan(0);
+    expect(withSummary, '已装行不该凭空多出摘要排').toBeLessThan(mains.length);
   });
 
   it('组标题给计数：已装组 = 条数 + 服务口径的占用，索引组 = 屏上剩几条（过滤后跟着变，已装组不跟着变）', () => {

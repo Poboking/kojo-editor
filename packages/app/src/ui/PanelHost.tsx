@@ -1,5 +1,5 @@
 import { memo, type ComponentType, type ReactElement } from 'react';
-import type { UIPanelContribution, UIPanelProps } from '@kojo/plugin-api';
+import type { IconSizeTier, UIPanelContribution, UIPanelProps } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { createPluginContextMenuBridge } from './plugin-context-menu-bridge';
 // 三个属性名与面板面本身都来自这个模块：**import 它就是登记 `plugin-panel` 面**
@@ -37,7 +37,9 @@ type UiPrefs = NonNullable<UIPanelProps['uiPrefs']>;
  */
 
 /** 图标桥的唯一实现：贡献方拿到图标名，宿主决定怎么画（模块级常量 ⇒ 引用恒稳定） */
-const renderIcon = (name: string, size?: number): ReactElement => <Icon name={name} size={size} />;
+const renderIcon = (name: string, size?: number | IconSizeTier): ReactElement => (
+  <Icon name={name} size={size} />
+);
 
 /** 宿主版本闸的记账：`{ 当前计数, 上一次比过的依赖快照 }` */
 export interface HostVersionState {

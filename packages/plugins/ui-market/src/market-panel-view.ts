@@ -7,7 +7,7 @@
  */
 
 import { createElement, type ReactNode } from 'react';
-import { type InstalledPack } from '@kojo/plugin-api';
+import { type InstalledPack, type UIPanelProps } from '@kojo/plugin-api';
 import type { MarketSnapshot } from './actions';
 import {
   ACTION_LABEL,
@@ -44,6 +44,12 @@ import {
  */
 export interface MarketPanelViewProps {
   readonly snapshot: MarketSnapshot;
+  /**
+   * 图标桥（宿主 PanelHost 注入，契约见 `UIPanelProps.renderIcon`）：折叠件那一枚
+   * `chevron-right` 经它渲染成注册表 SVG——**字符不当图标用**（批次十一 L07）。
+   * 可选：无渲染环境（纯函数单测）下不画记号，视觉由 `.mk-hint-toggle:empty` 的 CSS 画出件兜底。
+   */
+  readonly renderIcon?: UIPanelProps['renderIcon'];
   /** 装配层注入的当前应用版本（面板源码不写版本号） */
   readonly appVersion: string;
   readonly query: string;
@@ -90,7 +96,7 @@ export interface MarketPanelViewProps {
  * .panel-market                 根：列布局，外层不滚
  * ├─ .mk-toolbar                flex:none —— 搜索组（.mk-search-wrap：输入 + 清除）/ 动作组（.mk-toolbar-actions：拉取 + 发布口上）
  * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time(短读数, title=全量) .mk-note(aria-live)
- * │                                        .mk-progress(无文字进度) .mk-warn details.mk-hint(> summary + .mk-hint-more)
+ * │                                        .mk-progress(无文字进度) .mk-warn details.mk-hint(> summary[ span.mk-hint-toggle + 一行 ] + .mk-hint-more)
  * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
  *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
  *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row(或 .mk-row.busy + aria-busy) × n（索引）
@@ -107,6 +113,8 @@ export interface MarketPanelViewProps {
  * 2. **状态与列表分家**——工具条、状态、数据时间、说明住在滚动区之外，
  *    列表长到几十条时作者仍然看得见"这是哪一刻的数据"；
  * 3. **按钮 children 永远是纯字符串**（图标一律不上按钮）：动作判据按标签找按钮、并把 `onClick` 真的调一次；
+ *    非按钮位子上要放记号（如折叠件的尖角），走宿主图标桥 `renderIcon(名字, 档位)` 取注册表 SVG——
+ *    **字符不当图标用**（批次十一 L07），本层源码里一个图标字符都不许出现；
  * 4. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `market.css`。
  */
 export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
@@ -339,7 +347,19 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         : createElement(
             'details',
             { className: 'mk-hint' },
-            createElement('summary', null, CAPABILITY_HINT),
+            // 折叠记号 = 注册表 SVG（`chevron-right` 的 xs 档），不是字符（批次十一 L07）。
+            // 图标桥缺省（无渲染环境）时这里画成空 span，由 `.mk-hint-toggle:empty` 的 CSS 记号兜底——
+            // 既不留空白，也不把字符当图标用。
+            createElement(
+              'summary',
+              null,
+              createElement(
+                'span',
+                { className: 'mk-hint-toggle', 'aria-hidden': true },
+                (p.renderIcon?.('chevron-right', 'xs') as ReactNode | undefined) ?? null,
+              ),
+              CAPABILITY_HINT,
+            ),
             createElement('div', { className: 'mk-hint-more' }, CAPABILITY_DETAIL),
           ),
     ),

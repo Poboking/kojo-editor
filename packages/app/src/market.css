@@ -1,12 +1,16 @@
 /* ============================================================================
    口上市场面板的**全部视觉**——mk 一族 / .panel-market 整域住这一个文件
    ----------------------------------------------------------------------------
-   ① 批次十一 L07 起，原先散布在 `styles-project.css` 三段里的市场域规则（基础层 /
-      效果推广 A 组 / MK-UI 精修批）**逐字迁入本文件**，按「基础 → 推广 → 精修 → 排版」
-      的到达序排列——同特异性后来者胜的终值与迁移前逐条对拍等价（刻意修正处均有注）。
+   ① 批次十一 L07 起，原先散布在 `styles-project.css` 三段里的市场域规则（基础层 = 基线树
+      7579 起的 `口上市场面板（mk-*，KM-3）` 段、效果推广 A 组 = 8503 起、MK-UI 精修批 = 8982 起）
+      **逐字迁入本文件**，按「基础 → 推广 → 精修 → 排版」
+      的到达序排列——此前该注释口径失实（说基础层住在本文件，实际整段住在 `styles-project.css`），
+      现按实测改齐（行号取基线 `b/misak/1023-visual-batch11`，本批之后行号会漂，认段落标题别认行号）。
       `styles-project.css` 不再保留任何市场域规则 ⇒ 本域不再依赖
       「styles-project.css → market.css」的跨文件加载顺序撑腰（该懒链保留，只为让
       css 注入早于 ProjectView 首帧）。
+      **等价性的证明不靠人工核对**：`node tools/market-css-equivalence.mjs`（对基线树跑同一把
+      级联秤，逐条比市场域选择器的最终计算值；漂移/消失/新增三条名单外的任何一条即 rc=1）。
    ② 只取本仓设计 token（--bg-* / --surface-* / --border-* / --accent* / --fg* /
       --space-* / --radius-* / --shadow-* / --fs-*），零硬编码颜色，换主题自动跟随。
    ③ 焦点环只认 `:focus-visible`（键盘导航）；静息按钮零常驻环——「发布口上…」不再
@@ -353,7 +357,16 @@
 }
 
 /* ---------- 空态：给存在感，不是贴在左边缘的一行灰字 ---------- */
-/* ui-kit-candidate: KitEmpty——统一空态语言（虚线井 + sunken 底 + 居中一句话），市场侧先落地 */
+/* ui-kit-candidate: KitEmpty——统一空态语言（虚线井 + sunken 底 + 居中一句话）。
+   本批**不**直接把渲染交给 `packages/app/src/ui-kit` 的 `KitEmpty`，两条硬阻塞（复评时按此判定，别再改回"只标 candidate"）：
+   ① 依赖方向：`ui-kit/` 住在 **app 侧**（`packages/app/src/ui-kit/index.tsx`），而市场面板住插件侧
+      `packages/plugins/ui-market`——插件 import app 源码破铁律 2（插件只依赖 `@kojo/plugin-api`，
+      全仓现无任何插件 import app 内部模块的先例，审计 B/C 的精神即此）；
+   ② `ui-kit.css` 尚未接进 `main.tsx`（L14 只并了组件与样式文件，接线未落），且 `KitEmpty`
+      现有两档（`stack` / `inline`）**没有带边框井面这一档**——直接换件 = 市场空态在真壳里变成裸灰字。
+   ⇒ 待 L14 补 `KitEmpty` 的井面档并把 ui-kit.css 接进静态链后，删掉本块 `.mk-empty` 视觉、
+     面板侧把 `kit-empty kit-empty-stack` 两枚类名与 `.mk-empty` 并列发出即可（本层文案已是
+     "一句话"形态，与 kit 的 `title` 档同形，无需另立面）。 */
 .mk-empty {
   padding: var(--space-3) var(--space-2);
   border: 1px dashed var(--border);
@@ -579,10 +592,17 @@
 .mk-facts {
   column-gap: var(--space-1);
 }
+/* 分隔点是**画出来的**（3px 圆点），不是字符：全仓纪律——字符不当图标用（批次十一 L07）。
+   基线那枚 `content: ''` 的竖发丝线换形不换位，几何口径与它一致（inline-block + margin 让位）。 */
 .mk-meta + .mk-meta::before {
-  content: '·';
+  content: '';
+  display: inline-block;
+  inline-size: 3px;
+  block-size: 3px;
+  border-radius: 50%;
+  vertical-align: middle;
   margin-inline-end: var(--space-1);
-  color: var(--border-strong);
+  background: var(--border-strong);
 }
 
 /* 摘要：最多两行省略（长摘要不再把卡片撑成一面墙；全文仍可由作者从来源页看） */
@@ -721,21 +741,43 @@
 /* 能力说明折叠件：summary 一行是常驻读数，点开才见展开段；
    去默认三角（本仓视觉里没有原生三角的位置），hover 提一档色示意可点。 */
 .mk-hint > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   list-style: none;
   cursor: pointer;
 }
 .mk-hint > summary::-webkit-details-marker {
   display: none;
 }
-.mk-hint > summary::before {
-  content: '＋';
-  margin-inline-end: var(--space-1);
+/* 折叠记号 = 宿主图标注册表的 SVG（`chevron-right`，xs 档，经 PanelHost 的 renderIcon 桥发出）。
+   批次十一 L07：这一枚原先是 CSS 字符 `＋`/`－` 两态——字符不当图标用，且换形读不出"同一件事的两种状态"，
+   改成同一枚图标转 90°。宿主未注入图标桥时不画记号（summary 整行仍是可点文字，不空白也不退成字符）。 */
+.mk-hint > summary .mk-hint-toggle {
+  display: inline-flex;
+  flex: none;
   color: var(--border-strong);
+  transition: transform var(--dur-1) var(--ease-out);
 }
-.mk-hint[open] > summary::before {
-  content: '－';
+.mk-hint[open] > summary .mk-hint-toggle {
+  transform: rotate(90deg);
+}
+/* 图标桥缺位（旧宿主 / 无渲染环境）时的兜底记号：**纯 CSS 画**一枚朝右尖角（两条 1.5px 边
+   = 注册表 SVG 的 strokeWidth 同值），零字符。真壳里 `renderIcon` 恒注入 ⇒ 这两条不命中。 */
+.mk-hint > summary .mk-hint-toggle:empty {
+  inline-size: 5px;
+  block-size: 5px;
+  border-block-start: 1.5px solid var(--border-strong);
+  border-inline-end: 1.5px solid var(--border-strong);
+  transform: rotate(45deg);
+}
+.mk-hint[open] > summary .mk-hint-toggle:empty {
+  transform: rotate(135deg);
 }
 .mk-hint > summary:hover {
+  color: var(--fg);
+}
+.mk-hint > summary:hover .mk-hint-toggle {
   color: var(--fg);
 }
 .mk-hint[open] > summary {
