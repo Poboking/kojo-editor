@@ -90,9 +90,15 @@ const GROUP_LABEL = groups[0]!.label; // '#1 灵梦'
 const treeMarkup = (): string =>
   renderToStaticMarkup(h(FileTree, { project, index, activeFile: null, onOpenFile: () => {} }));
 
-/** 「符号 + 空格 + 数字」的读数（徽标 / 状态栏 / 组头共用这一种上屏形态） */
+/** 「符号 + 空格 + 数字」的读数（状态栏 / 组头共用这一种上屏形态；树徽标 L10 起是 SVG，另走 `treeBadgeNums`） */
 const nums = (markup: string, sym: string): number[] =>
   [...markup.matchAll(new RegExp(`>${sym} (\\d+)<`, 'g'))].map((m) => Number(m[1]));
+
+/** 树徽标读数（批次十一 L10：`✕ n` 字符换成状态族 SVG + 数字，读数按 `data-prob` 那格取） */
+const treeBadgeNums = (markup: string, sev: 'error' | 'warning'): number[] =>
+  [...markup.matchAll(new RegExp(`data-prob="${sev}".*?</svg> (\\d+)</span>`, 'g'))].map((m) =>
+    Number(m[1]),
+  );
 
 const sum = (ns: readonly number[]): number => ns.reduce((a, b) => a + b, 0);
 
@@ -222,8 +228,9 @@ describe('文件树徽标 · SSR 实际画出来', () => {
     setProblems(F1, [mk(F1, 1, 'error'), mk(F1, 2, 'error'), mk(F1, 5, 'warning')]);
     const markup = treeMarkup();
     expect((markup.match(/class="tree-prob-mark"/g) ?? []).length).toBe(1);
-    expect(nums(markup, '✕')).toEqual([2]);
-    expect(nums(markup, '⚠')).toEqual([1]);
+    expect(nums(markup, '✕')).toEqual([]); // 徽标字形已 SVG 化：markup 里不再有 `>✕ n<` 形态
+    expect(treeBadgeNums(markup, 'error')).toEqual([2]);
+    expect(treeBadgeNums(markup, 'warning')).toEqual([1]);
     expect(markup).toContain('M_KOJO_K1_1.ERB ✕2 ⚠1');
     expect(markup).toContain(`内${PROBLEM_SCOPE.label}文件的诊断`);
   });
@@ -253,8 +260,10 @@ describe('文件树徽标 · SSR 实际画出来', () => {
     // 判据不变：三枚全读同一次派生的同一个值 —— 谁也不许自己再数一遍。
     expect(badges).toHaveLength(3);
     for (const b of badges) {
-      expect(b.textContent).toContain('✕ 1');
-      expect(b.textContent).toContain('⚠ 1');
+      // L10 图标批：`✕ n`/`⚠ n` 字符换成状态族 SVG（error/warning）+ 数字，读数按 data-prob 格取
+      expect(b.querySelector('svg.icon')).not.toBeNull();
+      expect(b.querySelector('[data-prob="error"]')?.textContent).toBe(' 1');
+      expect(b.querySelector('[data-prob="warning"]')?.textContent).toBe(' 1');
     }
     // 活订阅：诊断换了（这里是清掉），徽标当场退场——不重挂树也得跟着真相走
     await act(async () => {

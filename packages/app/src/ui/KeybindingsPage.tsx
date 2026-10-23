@@ -242,7 +242,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
 
       <div className="kb-toolbar">
         <div className="kb-search">
-          <Icon name="search" size={14} className="kb-search-icon" />
+          <Icon name="search" size="sm" className="kb-search-icon" />
           <input
             ref={searchRef}
             type="search"
@@ -264,7 +264,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
                 searchRef.current?.focus();
               }}
             >
-              <Icon name="close" size={14} />
+              <Icon name="close" size="sm" />
             </button>
           ) : null}
         </div>
@@ -423,7 +423,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
                             setKeybindingOverride(row.id, null);
                           }}
                         >
-                          <Icon name="reset" size={14} />
+                          <Icon name="reset" size="sm" />
                         </button>
                       ) : null}
                       {showRemove ? (
@@ -437,7 +437,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
                             setKeybindingOverride(row.id, '');
                           }}
                         >
-                          <Icon name="trash" size={14} />
+                          <Icon name="trash" size="sm" />
                         </button>
                       ) : null}
                     </span>

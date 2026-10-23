@@ -289,13 +289,21 @@ textarea,
   caret-color: var(--accent);
 }
 
-/* 图标基类（UI P4 · §5.123）：16×16 网格、单色、`currentColor`。
-   颜色一律继承文字色——悬停变亮 / 禁用变暗 / `.on` 变 accent 都不必为图标另写规则，
-   这也是把 emoji 换成 SVG 的主要收益（emoji 不吃 `color`，永远是一群固定色）。
-   `vertical-align` 让裸图标与同行文字对齐；尺寸由调用处的 `size` 属性给，不靠 font-size。 */
+/* 图标基类（UI P4 · §5.123；批次十一 L10 定对齐两套口径）：
+   16×16 网格、单色、`currentColor`。颜色一律继承文字色——悬停变亮 / 禁用变暗 /
+   `.on` 变 accent 都不必为图标另写规则，这也是把 emoji 换成 SVG 的主要收益
+   （emoji 不吃 `color`，永远是一群固定色）。
+   对齐分两套场景，两条规则各管一边、互不打架：
+   - **flex/grid 行内**（按钮、工具条、导航行——绝大多数调用）：`align-self: center`
+     让图标在交叉轴自居中，不依赖行容器是否写了 `align-items: center`；
+     `vertical-align` 对 flex/grid item 天然无效，在这类容器里不参与对齐。
+   - **行内文字流**（图标直接混在文本句里，如状态栏、树徽标）：item 规则不生效，
+     由 `vertical-align: -0.16em` 按文字基线偏移。
+   尺寸由调用处的 `size` 档位给（`icons.tsx` 的 ICON_SIZES 四档），不靠 font-size。 */
 .icon {
   display: inline-block;
   flex: none;
+  align-self: center;
   vertical-align: -0.16em;
 }
 /* 未登记在图标表里的贡献（第三方插件的单字符 icon）按字形回落渲染 */
