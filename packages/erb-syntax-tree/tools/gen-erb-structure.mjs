@@ -91,6 +91,30 @@ export function projectDimDirectives(scannerSource) {
   return { patterns: directives, flags };
 }
 
+/**
+ * 从源码抽 `DIM_MODIFIERS`（`#DIM` 族声明行的前置关键字）的一级分支与标志。
+ *
+ * 真源跨两行（`const DIM_MODIFIERS =` 与正则各占一行），故 `=` 之后用 `\s*` 跨行。
+ * 修饰词表漏一个词，名字就会被记成那个关键字（`#DIM DYNAMIC CNT_CHARA` → `DYNAMIC`），
+ * 所以投影与真源漂移时必须抛错，不许静默回退空表。
+ */
+export function projectDimModifiers(scannerSource) {
+  const m = /const DIM_MODIFIERS =\s*\/\^\(([^)]+)\)\\s\+\/([a-z]*);/.exec(scannerSource);
+  if (!m) throw new Error('真源里找不到 `const DIM_MODIFIERS = /^(…)\\s+/flags;`——投影脚本与 scanner.ts 已漂移');
+  const [, pattern, flags] = m;
+  if (!flags.includes('i')) {
+    throw new Error(`DIM_MODIFIERS 的标志是 "${flags}"（预期含 i）；grammar 的大小写展开依赖这条判据`);
+  }
+  const patterns = pattern.split('|').map((s) => s.trim()).filter(Boolean);
+  if (patterns.length === 0) throw new Error('DIM_MODIFIERS 一级分支为空');
+  for (const p of patterns) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(p)) throw new Error(`DIM_MODIFIERS 分支不是大写修饰词：${p}`);
+  }
+  // 长的在前：`DUMMY` 与 `DUMMY_EXT` 并存时短词先胜会把长词劈成「短词 + 名字」。
+  patterns.sort((a, b) => b.length - a.length || cmp(a, b));
+  return { patterns, flags };
+}
+
 /** 控制流词 → 角色 / 配对。输入是**活模块**的名单与分类函数，测试可注入别名。 */
 export function projectControlFlow(words, classify) {
   const open = {};
@@ -141,12 +165,15 @@ export function projectControlFlow(words, classify) {
 export function buildStructure({ scannerSource, words, classify }) {
   const markers = projectMarkers(scannerSource);
   const dim = projectDimDirectives(scannerSource);
+  const dimMods = projectDimModifiers(scannerSource);
   const flow = projectControlFlow(words, classify);
   return {
     source: { scanner: SCANNER_REL },
     markers,
     dimDirectives: dim.patterns,
     dimFlags: dim.flags,
+    dimModifiers: dimMods.patterns,
+    dimModifierFlags: dimMods.flags,
     controlFlow: flow,
   };
 }
@@ -214,7 +241,7 @@ async function main() {
   const s = JSON.parse(serialized);
   const pairCount = Object.keys(s.controlFlow.pairs).length;
   console.log(
-    `[gen-erb-structure] 已写 ${OUT} + ${HEADER_OUT}：控制词 ${Object.keys(s.controlFlow.open).length + Object.keys(s.controlFlow.branch).length + Object.keys(s.controlFlow.close).length + s.controlFlow.leaf.length} 枚 / ${pairCount} 个配对类别 / 标记 ${s.markers.skipStart}…${s.markers.skipEnd} / #DIM 族 ${s.dimDirectives.length} 枚`,
+    `[gen-erb-structure] 已写 ${OUT} + ${HEADER_OUT}：控制词 ${Object.keys(s.controlFlow.open).length + Object.keys(s.controlFlow.branch).length + Object.keys(s.controlFlow.close).length + s.controlFlow.leaf.length} 枚 / ${pairCount} 个配对类别 / 标记 ${s.markers.skipStart}…${s.markers.skipEnd} / #DIM 族 ${s.dimDirectives.length} 枚 / #DIM 修饰词 ${s.dimModifiers.length} 枚`,
   );
 }
 

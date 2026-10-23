@@ -89,6 +89,16 @@ describe('ERB 结构投影单源守卫', () => {
     expect(scanner.parseDimDeclaration('#DIMX PROBE_NAME')).toBeNull();
   });
 
+  it('(b3) #DIM 修饰词：投影的每个词都能被真源 parseDimDeclaration 剥掉', async () => {
+    const scanner = await import('../../plugins/erb-parser/src/scanner.ts');
+    expect(fresh.dimModifiers.length).toBeGreaterThan(0);
+    for (const mod of fresh.dimModifiers) {
+      const parsed = scanner.parseDimDeclaration(`#DIM ${mod} PROBE_NAME`);
+      expect(parsed?.directive, `#DIM ${mod} 真源不认修饰词`).toBe('DIM');
+      expect(parsed?.name, `${mod} 没被剥成名字`).toBe('PROBE_NAME');
+    }
+  });
+
   it('(c) 变异闸：换一份词表 + 分类函数，投影立刻跟着变', () => {
     const fake = 'ZFAKE';
     const fakeEnd = 'ZFAKEEND';
@@ -116,6 +126,7 @@ describe('ERB 结构投影单源守卫', () => {
       fresh.markers.skipStart,
       fresh.markers.skipEnd,
       ...fresh.dimDirectives,
+      ...fresh.dimModifiers,
     ];
     // 只查"整条字符串字面量恰为投影名"（注释已剥；`'IF'` 这类手抄必红）
     const literals = [...stripped.matchAll(/'([^'\n]*)'|"([^"\n]*)"/g)].map((m) => (m[1] ?? m[2] ?? '').trim());

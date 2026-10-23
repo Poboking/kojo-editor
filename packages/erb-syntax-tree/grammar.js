@@ -10,12 +10,13 @@
  * scanner.ts 的 `classifyControlFlow()`，本文件只把它的输出翻译成规则。
  *
  * ## 结构面（故意做窄）
- * - **行**：`comment_line`（`;` 起）、`directive_line`（`#` 起）、`dim_directive`（`#DIM` 族）、
- *   `label_line`（`$` 起）、`bracket_line`（`[` 起的其余整行，含 `[IF_DEBUG]` 一类条件跳过标记）、
+ * - **行**：`comment_line`（`;` 起）、`directive_line`（`#` 起的其余整行）、`dim_directive`（`#DIM` 族，
+ *   声明词 / 修饰词 / 名字 / 尾部各自成节点）、`label_line`（`$` 起）、
+ *   `bracket_line`（`[` 起的其余整行，含 `[IF_DEBUG]` 一类条件跳过标记）、
  *   `statement_line`（兜底语句/文本行）。
  * - **函数**：`function_block` = `function_head` + 直到下一条 `@` 行（或 EOF）的行。
  *   头支持裸形 `@NAME`、括号形 `@NAME(A, B:1 = 3)`、逗号形 `@NAME, A, B`；
- *   形参切分出 `parameter` 节点（名字 / 索引 / 默认值），不解释默认值语义。
+ *   形参已切分为 `parameter` 节点（修饰词 / 名字 / 维度 / 默认值），不解释默认值语义。
  * - **控制流块**：开块 / 分支 / 闭合全部按 scanner 的配对表生成 `(if_block)`、(select_block) 等；
  *   分支段有 `(branch_block)`，折叠查询直接取它。
  * - **[SKIPSTART]…[SKIPEND]**：`skip_block`，区内原文由一个 external scanner 一次吞成
@@ -50,6 +51,8 @@ need(S && S.controlFlow && S.controlFlow.pairs, 'controlFlow.pairs');
 need(S.markers && S.markers.skipStart && S.markers.skipEnd, 'markers.skipStart/skipEnd');
 need(Array.isArray(S.dimDirectives) && S.dimDirectives.length > 0, 'dimDirectives');
 need(typeof S.dimFlags === 'string' && S.dimFlags.includes('i'), 'dimFlags 含 i');
+need(Array.isArray(S.dimModifiers) && S.dimModifiers.length > 0, 'dimModifiers');
+need(typeof S.dimModifierFlags === 'string' && S.dimModifierFlags.includes('i'), 'dimModifierFlags 含 i');
 
 const CF = S.controlFlow;
 const PAIRS = CF.pairs;
@@ -67,9 +70,11 @@ function ci(word) {
 /** kind（`TRYCCALLFORM`）→ 节点名（`tryccallform_line`）。 */
 const lineNode = (word) => `${word.toLowerCase()}_line`;
 
-/** 词法优先级（数字越大越先胜；等长命中时才由它裁决）。 */
+/** 词法优先级（数字越大越先胜；同场候选中它先于"最长匹配"裁决）。 */
 const P = {
-  line: 0,
+  // 兜底语句行首原子必须是**最低**词法优先级：函数头余文的 reduce 路径让它与 `(` `)` `,` 等同场竞争，
+  // 唯一负级才能保证结构记号不被长匹配吞掉（详见 `_line_head` 注释）。
+  line: -2,
   brace: 1,
   percent: 1,
   bracket: 2,
@@ -116,9 +121,12 @@ const CONTROL_LINE_RULES = (() => {
 const lineRefs = (words) => words.map((w) => lineNode(w));
 
 
-/** `#DIM` 族整行 token：一级分支逐字母展开大小写；之后必须跟水平空白才成声明。 */
+/** `#DIM` 族声明词：一级分支逐字母展开大小写；之后必须跟一个水平空白才成声明。 */
 const DIM_ALT = [...S.dimDirectives].sort((a, b) => b.length - a.length || cmp(a, b)).map(ci).join('|');
-const DIM_DIRECTIVE = `#(?:${DIM_ALT})(?:[ \\t\\u3000][^\\r\\n]*)?`;
+const DIM_KEYWORD = `#(?:${DIM_ALT})[ \\t\\f\\u3000]`;
+/** 声明行前置修饰词（投影自 scanner.ts 的 DIM_MODIFIERS；含 REF，故形参修饰词复用同一张表）。 */
+const DIM_MODIFIER_ALT = [...S.dimModifiers].sort((a, b) => b.length - a.length || cmp(a, b)).map(ci).join('|');
+const DIM_MODIFIER = `(?:${DIM_MODIFIER_ALT})[ \\t\\u3000]+`;
 
 /** 控制流块规则（逐配对类别生成；字面量只来自 structure.json）与分支段规则。 */
 const CONTROL_BLOCK_RULES = {};
@@ -160,14 +168,16 @@ const BRACKET_LINE = `\\[[^\\r\\n]*`;
  * `@` 函数头：名字终止符与 scanner `parseFunctionDefinition` 逐字对齐
  * （ASCII 空格 / TAB / `(` / `,` / `;`）。
  *
- * 首版把**头行余文**（括号形参 / 逗号形参 / 行内注释）收成不透明 token
- * `function_head_rest`，不建 parameter 子节点：形参默认值里可以有括号调用与引号，
- * 一旦让它们参与词法，`(ARG,…)` 就会与"同位置起一条新语句行"竞争（实测被 `_line_head`
- * 整段吃掉）。结构层只需要"这是一条 `@` 头"与函数名；形参细分留给后续语言注册表批次。
- * 头行余文的 token 给高优先级：它总吃到行尾，长度 ≥ `_line_head`，等长时由优先级裁决。
+ * 头行余文切成结构节点：括号形 / 逗号形形参一律落 `parameter_list` / `comma_parameter_list`，
+ * 每枚形参再切 `parameter_modifier` / `parameter_name` / `parameter_dimension` / `parameter_default`。
+ *
+ * 两条硬约束（都来自实测）：
+ * 1. 函数体**必须**从 `_newline` 起手（见 `function_block` 注释），否则 `(ARG,…)` 会与
+ *    "同位置起一条新语句行"竞争，被 `_line_head` 按最长匹配整段吃掉。
+ * 2. 形参修饰词只认投影的修饰词表（含 `REF`），不能写成宽泛 ASCII 标识符——`ARG = 3` 会
+ *    把 `ARG ` 误当修饰词，名字就没了。
  */
 const FUNCTION_NAME = '[^ \\t(,;"\\r\\n]+';
-const FUNCTION_HEAD_REST = '[^\\r\\n]+';
 
 module.exports = grammar({
   name: 'erb',
@@ -208,16 +218,59 @@ module.exports = grammar({
     function_block: ($) => prec.right(seq(field('head', $.function_head), optional($._function_body))),
     _function_body: ($) => prec.right(seq($._newline, repeat($._body_item))),
 
-    function_head: ($) =>
-      seq(
-        '@',
-        field('name', $.function_name),
-        optional($.function_head_rest),
-      ),
+    function_head: ($) => seq('@', field('name', $.function_name), optional($.function_head_tail)),
 
     function_name: () => tkSrc(5, FUNCTION_NAME),
-    /** 头行余文：括号形参 / 逗号形参 / 行尾注释，一律不透明（见上方常量注释）。 */
-    function_head_rest: () => tkSrc(12, FUNCTION_HEAD_REST),
+
+    /**
+     * 头行余文（名字之后）：
+     * - 括号形 / 逗号形形参表，可再接行内注释或裸余文；
+     * - 裸头后的行内注释（`comment_inline` 独立成支，不能放进 parameter_list：
+     *   注释里若含 `)` 会把参数表的收括号吞掉）；
+     * - 其余余文（`function_head_trailing` 首字符排除 `(` `,` `;`，
+     *   在 `(` 处 parameter_list 胜、在 `,` 处 comma_parameter_list 胜、在 `;` 处注释胜）。
+     */
+    function_head_tail: ($) =>
+      choice(
+        seq(
+          choice($.parameter_list, $.comma_parameter_list),
+          optional(choice($.comment_inline, $.function_head_tail_text)),
+        ),
+        $.comment_inline,
+        $.function_head_trailing,
+      ),
+    // 余文 token 的**词法优先级低于一切结构记号**（见 `_line_head` 的注释）：
+    // tree-sitter 先按词法优先级裁决、再比长度，余文若给高优先级，`)` `,` `:` `=` `"` 与形参名
+    // 都会被它按长匹配吞掉（实测 `@F(A)` 只剩空 parameter_list）。
+    function_head_trailing: () => tkSrc(-1, '[^(;,\\r\\n][^\\r\\n]*'),
+    function_head_tail_text: () => tkSrc(-1, '[^;\\r\\n]+'),
+
+    // ---- 形参（scanner 的 parseParams 口径：按 `=` 切默认值，左侧按空白分段的最后一段是名字）----
+    parameter_list: ($) => seq('(', optional($._parameter_items), optional(')')),
+    comma_parameter_list: ($) => seq(',', optional($._parameter_items)),
+    _parameter_items: ($) => seq($.parameter, repeat(seq(',', optional($.parameter)))),
+    parameter: ($) =>
+      seq(
+        repeat($.parameter_modifier),
+        field('name', $.parameter_name),
+        optional(field('dimension', $.parameter_dimension)),
+        optional(field('default', $.parameter_default)),
+      ),
+    parameter_modifier: () => tkSrc(9, DIM_MODIFIER),
+    parameter_name: () => tkSrc(8, '[^ \\t\\f\\u3000:;=,()\\[\\]\\r\\n]+'),
+    parameter_dimension: ($) => seq(':', $.parameter_dimension_value),
+    parameter_dimension_value: () => tkSrc(9, '[^ \\t\\f\\u3000;=,()\\r\\n]+'),
+    // `=` 之后是可选的默认值：右结合 = 「能 shift 就 shift」，让 `= "VOID"` 的值归默认值，
+    // 只有值起不了头（`,` / `)` / 行尾）才收成空默认（消解 tree-sitter 的 reduce/shift 冲突）。
+    parameter_default: ($) => prec.right(seq('=', optional($.parameter_default_value))),
+    // 值由串 / 裸文 / 括号值拼接：右结合让能续的片段都续进同一个默认值（不劈成多个兄弟）。
+    parameter_default_value: ($) => prec.right(repeat1(choice($.string, $.parameter_default_raw, $.parameter_paren_value))),
+    parameter_default_raw: () => tkSrc(1, '[^,;()"\\r\\n]+'),
+    // 同上：`(` 之后有嵌套括号值时右结合优先（`(FOO(1))` 内层归值，空括号只在 `)` 处收）。
+    parameter_paren_value: ($) => prec.right(seq('(', optional($._parameter_default_items), optional(')'))),
+    // `(` 内的逗号优先留在括号值里（右结合），外层形参表的逗号只在括号收口后才算。
+    _parameter_default_items: ($) =>
+      prec.right(seq($.parameter_default_value, repeat(seq(',', optional($.parameter_default_value))))),
 
     // ============================================================
     // 停用区：原样吞掉，只认投影来的 [SKIPSTART] / [SKIPEND]
@@ -256,8 +309,31 @@ module.exports = grammar({
       ),
 
     comment_line: () => tkSrc(P.comment, ';[^\\r\\n]*'),
-    directive_line: () => tkSrc(P.directive, '#[^\\r\\n]*'),
-    dim_directive: () => tkSrc(P.dim_directive, DIM_DIRECTIVE),
+    /** 其余 `#` 行：匿名 `#` + 可选 body（`#DIM ` 的声明词长 5 > 匿名 `#` 长 1 ⇒ 最长匹配先归 dim_directive）。 */
+    directive_line: ($) => seq('#', optional($._directive_body)),
+    _directive_body: () => tkSrc(P.directive, '[^\\r\\n]+'),
+    /**
+     * `#DIM` 族：声明词 + 修饰词（真源可叠多个）+ 可选声明 + 行内注释。
+     *
+     * 声明（名字 / 尾部）必须是**独立规则**且整体可选：若名字与尾部都在同一层可选，
+     * 尾部 `[^;\r\n]+` 会按最长匹配把名字整段吞掉（`#DEFINE TEST_CONST 3` 的名字就没了）。
+     * 尾部直接吃 `, 10` / `= 3` / ` 3` 三种形态，遇 `;` 让位给行内注释。
+     */
+    dim_directive: ($) =>
+      prec(
+        P.dim_directive,
+        seq(
+          field('directive', $.dim_keyword),
+          repeat($.dim_modifier),
+          optional($.dim_declaration),
+          optional($.comment_inline),
+        ),
+      ),
+    dim_declaration: ($) => seq(field('name', $.dim_name), optional(field('tail', $.dim_tail))),
+    dim_keyword: () => tkSrc(P.dim_directive, DIM_KEYWORD),
+    dim_modifier: () => tkSrc(9, DIM_MODIFIER),
+    dim_name: () => tkSrc(8, '[^ \\t\\f\\u3000,;=()\\[\\]\\r\\n]+'),
+    dim_tail: () => tkSrc(5, '[^;\\r\\n]+'),
     label_line: () => tkSrc(P.label, '\\$[^\\r\\n]*'),
     bracket_line: () => tkSrc(P.bracket, BRACKET_LINE),
 
@@ -281,6 +357,10 @@ module.exports = grammar({
       ),
     // 首字符排除水平空白：否则缩进的 `@` 函数头 / `$` 标签 / `[` 行会被整行吞成语句行
     // （真语料存在 `\t@FUNC`；extras 本该先吞掉缩进，但 token 自己能从空白起手时就不会被跳过）。
+    //
+    // 词法优先级必须**低于一切结构记号（含匿名 `(` `)` `,` `:` `=` `"`）**：函数头余文的
+    // reduce 路径让本记号在 `@F(…)` 的 `(` 处也进词法候选集，tree-sitter 先按优先级裁决，
+    // 0 级时本记号会按长匹配把 `(ARG,…)` 整段吃成语句行。给负优先级后，`(` 等结构记号稳胜。
     _line_head: () => tkSrc(P.line, '[^ \\t\\f\\u3000\\uFEFF;@"#$\\[\\r\\n%{}][^\\r\\n;"%{}]*'),
     /**
      * 行内续文（串 / `{…}` / `%…%` 之外的部分）。优先级**高于控制词 token**：一旦语句行已经开始，

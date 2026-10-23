@@ -188,6 +188,21 @@
     }
   },
   {
+    "type": "comma_parameter_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "parameter",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "data_block",
     "named": true,
     "fields": {
@@ -338,6 +353,76 @@
         }
       ]
     }
+  },
+  {
+    "type": "dim_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "dim_name",
+            "named": true
+          }
+        ]
+      },
+      "tail": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "dim_tail",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "dim_directive",
+    "named": true,
+    "fields": {
+      "directive": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "dim_keyword",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "comment_inline",
+          "named": true
+        },
+        {
+          "type": "dim_declaration",
+          "named": true
+        },
+        {
+          "type": "dim_modifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "dim_modifier",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "directive_line",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "do_block",
@@ -821,7 +906,38 @@
       "required": false,
       "types": [
         {
-          "type": "function_head_rest",
+          "type": "function_head_tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "function_head_tail",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "comma_parameter_list",
+          "named": true
+        },
+        {
+          "type": "comment_inline",
+          "named": true
+        },
+        {
+          "type": "function_head_tail_text",
+          "named": true
+        },
+        {
+          "type": "function_head_trailing",
+          "named": true
+        },
+        {
+          "type": "parameter_list",
           "named": true
         }
       ]
@@ -1174,6 +1290,140 @@
         },
         {
           "type": "while_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "parameter",
+    "named": true,
+    "fields": {
+      "default": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "parameter_default",
+            "named": true
+          }
+        ]
+      },
+      "dimension": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "parameter_dimension",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "parameter_name",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "parameter_modifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "parameter_default",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "parameter_default_value",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "parameter_default_value",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "parameter_default_raw",
+          "named": true
+        },
+        {
+          "type": "parameter_paren_value",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "parameter_dimension",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "parameter_dimension_value",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "parameter_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "parameter",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "parameter_modifier",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "parameter_paren_value",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "parameter_default_value",
           "named": true
         }
       ]
@@ -1988,6 +2238,30 @@
     "named": false
   },
   {
+    "type": "#",
+    "named": false
+  },
+  {
+    "type": "(",
+    "named": false
+  },
+  {
+    "type": ")",
+    "named": false
+  },
+  {
+    "type": ",",
+    "named": false
+  },
+  {
+    "type": ":",
+    "named": false
+  },
+  {
+    "type": "=",
+    "named": false
+  },
+  {
     "type": "@",
     "named": false
   },
@@ -2024,11 +2298,15 @@
     "named": true
   },
   {
-    "type": "dim_directive",
+    "type": "dim_keyword",
     "named": true
   },
   {
-    "type": "directive_line",
+    "type": "dim_name",
+    "named": true
+  },
+  {
+    "type": "dim_tail",
     "named": true
   },
   {
@@ -2084,7 +2362,11 @@
     "named": true
   },
   {
-    "type": "function_head_rest",
+    "type": "function_head_tail_text",
+    "named": true
+  },
+  {
+    "type": "function_head_trailing",
     "named": true
   },
   {
@@ -2109,6 +2391,18 @@
   },
   {
     "type": "noskip_line",
+    "named": true
+  },
+  {
+    "type": "parameter_default_raw",
+    "named": true
+  },
+  {
+    "type": "parameter_dimension_value",
+    "named": true
+  },
+  {
+    "type": "parameter_name",
     "named": true
   },
   {

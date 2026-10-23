@@ -15,6 +15,20 @@
     "DIM"
   ],
   "dimFlags": "i",
+  "dimModifiers": [
+    "CHARADATA",
+    "SAVEDATA",
+    "DYNAMIC",
+    "GLOBAL",
+    "NOINIT",
+    "STATIC",
+    "CHARA",
+    "CONST",
+    "LOCAL",
+    "OUT",
+    "REF"
+  ],
+  "dimModifierFlags": "i",
   "controlFlow": {
     "open": {
       "DATALIST": "list",

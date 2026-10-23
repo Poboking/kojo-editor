@@ -291,6 +291,89 @@ describe('大小写 / 换行 / BOM / 容错', () => {
   });
 });
 
+describe('结构子节点：形参切分', () => {
+  const text = readFileSync(join(FIXTURES, 'valid-structure.erb'), 'utf8');
+
+  it('fixture：形参 9 枚，按函数头分组的名字 / 维度 / 默认值 / 修饰词', () => {
+    const tree = parse(text);
+    expect(allOf(tree.rootNode, 'parameter')).toHaveLength(9);
+    const heads = allOf(tree.rootNode, 'function_head');
+    const grouped = heads.map((h) => allOf(h, 'parameter_name').map((n) => n.text.trim()));
+    expect(grouped).toEqual([
+      ['ARG', 'ARG', 'X', 'ARGS'],
+      ['ARGS', 'ARG', 'ARGS', 'ARG'],
+      ['選択中キャラID'],
+    ]);
+    const dims = (h: Node) => allOf(h, 'parameter_dimension_value').map((n) => n.text.trim());
+    expect(dims(heads[0]!), '括号头维度').toEqual(['1', '2']);
+    expect(dims(heads[1]!), '逗号头维度').toEqual(['1', '1']);
+    const defaults = allOf(heads[0]!, 'parameter_default').map((n) => n.text.trim());
+    expect(defaults).toEqual(['= 3', '= "VOID"']);
+    expect(allOf(tree.rootNode, 'parameter_modifier').map((n) => n.text.trim())).toEqual(['ref']);
+    tree.delete();
+  });
+
+  it('未闭合括号头：`)` 可缺省，仍是 0 故障 2 枚形参', () => {
+    const tree = parse('@F(ARG, ARG\n');
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'parameter')).toHaveLength(2);
+    tree.delete();
+  });
+
+  it('尾逗号不报错', () => {
+    const tree = parse('@F(A,)\n');
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'parameter_name').map((n) => n.text.trim())).toEqual(['A']);
+    tree.delete();
+  });
+});
+
+describe('结构子节点：#DIM 族', () => {
+  const text = readFileSync(join(FIXTURES, 'valid-structure.erb'), 'utf8');
+
+  it('fixture：声明词 / 名字 / 尾部逐个成节点', () => {
+    const tree = parse(text);
+    expect(allOf(tree.rootNode, 'dim_keyword')).toHaveLength(4);
+    expect(allOf(tree.rootNode, 'dim_name')).toHaveLength(4);
+    expect(allOf(tree.rootNode, 'dim_tail')).toHaveLength(2);
+    tree.delete();
+  });
+
+  it('修饰词逐个成节点，尾部吃逗号尺寸', () => {
+    const tree = parse('#DIM CONST GLOBAL X, 10\n');
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'dim_keyword')).toHaveLength(1);
+    expect(allOf(tree.rootNode, 'dim_modifier').map((n) => n.text.trim())).toEqual(['CONST', 'GLOBAL']);
+    expect(allOf(tree.rootNode, 'dim_name').map((n) => n.text)).toEqual(['X']);
+    expect(allOf(tree.rootNode, 'dim_tail').map((n) => n.text.trim())).toEqual([', 10']);
+    tree.delete();
+  });
+
+  it('无逗号尾部：名字与尾部不混淆', () => {
+    const tree = parse('#DEFINE TEST_CONST 3\n');
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'dim_name').map((n) => n.text)).toEqual(['TEST_CONST']);
+    expect(allOf(tree.rootNode, 'dim_tail').map((n) => n.text.trim())).toEqual(['3']);
+    tree.delete();
+  });
+
+  it('近形不是 #DIM 族：落 directive_line', () => {
+    const tree = parse('#DIMX foo\n#LOCALSIZE 8\n');
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'dim_directive')).toEqual([]);
+    expect(allOf(tree.rootNode, 'directive_line')).toHaveLength(2);
+    tree.delete();
+  });
+
+  it('#DIM 后只有修饰词：修饰词按名字落节点（与结构语法口径一致）', () => {
+    const tree = parse('#DIM LOCAL\n');
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'dim_directive')).toHaveLength(1);
+    expect(allOf(tree.rootNode, 'dim_name').map((n) => n.text)).toEqual(['LOCAL']);
+    tree.delete();
+  });
+});
+
 describe('折叠查询 folds.scm', () => {
   it('函数 / 控制流 / 分支段 / 停用区都产区间；空函数与空块不产', () => {
     const text = readFileSync(join(FIXTURES, 'valid-structure.erb'), 'utf8');
