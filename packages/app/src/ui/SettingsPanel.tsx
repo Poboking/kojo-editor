@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
+import { useRef, useState, useEffect, useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { useSyncExternalStore } from 'react';
 import { MARKET_DEFAULT_INDEX_URL } from '@kojo/plugin-api';
 import type { LayoutAction } from './layout';
@@ -72,7 +72,7 @@ import {
 import { isComposingEvent } from './shell-keys';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
-import { isFailureNote, registerSettingsMenuBridge, useMenuNote } from './context-menu-pages';
+import { isFailureNote, isPrimaryButton, registerSettingsMenuBridge, useMenuNote } from './context-menu-pages';
 import '../settings-search.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
@@ -1084,6 +1084,17 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
     return () => registerSettingsMenuBridge(null);
   }, [setMenuNote]);
 
+  /**
+   * 点遮罩关设置——**只认左键**。
+   *
+   * 右键在遮罩上按一下，若也走关窗，就会「先关掉设置、再弹出一个压在空页面上的右键菜单」；
+   * 右键是开菜单的手势，关窗留给左键（判据 `isPrimaryButton`，与教程/各浮层同一口径）。
+   */
+  const closeOnBackdrop = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!isPrimaryButton(e)) return;
+    onClose();
+  };
+
   const pickResult = (entry: SettingsSearchEntry): void => {
     setActive(entry.section);
     if (entry.key !== undefined) setJump({ key: entry.key, n: ++jumpSeqRef.current });
@@ -1119,7 +1130,7 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   if (!activeEntry) {
     // 理论上到不了这里（general 一节恒有内容 ⇒ visible 恒非空）；防御性渲染一个可关闭的空壳，绝不白屏。
     return (
-      <div className="overlay-backdrop" onMouseDown={() => onClose()}>
+      <div className="overlay-backdrop" onMouseDown={closeOnBackdrop}>
         <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
           <div className="wizard">
             <h3 className="settings-title">设置</h3>
@@ -1143,7 +1154,7 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   };
 
   return (
-    <div className="overlay-backdrop" onMouseDown={() => onClose()}>
+    <div className="overlay-backdrop" onMouseDown={closeOnBackdrop}>
       <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
         {/* 右上 ✕：与遮罩点击、页脚「完成」同一个 onClose 入口；Esc 仍走壳层全局键盘（modal 栈） */}
         <button

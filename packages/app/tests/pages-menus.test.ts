@@ -21,6 +21,7 @@ import {
   buildWelcomePageMenu,
   buildWelcomeRecentMenu,
   isFailureNote,
+  isPrimaryButton,
   keybindingMenuStateOf,
   registerKeybindingsMenuBridge,
   registerSettingsMenuBridge,
@@ -373,6 +374,12 @@ describe('回执文案的成败判据', () => {
     expect(isFailureNote('已复制项目路径')).toBe(false);
     expect(isFailureNote('复制失败：剪贴板拒绝了这次写入')).toBe(true);
     expect(isFailureNote('这个动作现在没法执行')).toBe(true);
+  });
+
+  it('遮罩关窗只认左键：右键是开菜单，不是关浮层', () => {
+    expect(isPrimaryButton({ button: 0 })).toBe(true);
+    expect(isPrimaryButton({ button: 1 })).toBe(false); // 中键
+    expect(isPrimaryButton({ button: 2 })).toBe(false); // 右键
   });
 });
 
