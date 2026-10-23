@@ -286,10 +286,11 @@ describe('接线：读数 / 早退 / 崩溃快照都取 model 真值（entry.eol
     expect(pushSel, 'pushSelStatus 的 eol 必须取 model').toContain('eol: modelEolOf(entry.model)');
     // 自动保存成功那条（live = entriesRef 现取）
     expect(SOURCE).toContain('eol: modelEolOf(live.model)');
-    // 开文件那行状态文案
-    expect(SOURCE).toContain(
-      'setStatus(`${entry.encoding} · ${modelEolOf(entry.model)} · ${entry.model.getLineCount()} 行`)',
-    );
+    // 批次十一 L13 去重：编码·EOL·行数**不再写进工具条状态位**（这份读数只在底部状态栏
+    // 一份；工具条与状态栏各打一份同一个数，正是"重复信息"的实测病灶）。开/换文件与
+    // EOL 切换两条腿都只走 pushSelStatus 上抛，工具条那一格从此只剩 瞬时态/错误 两档。
+    expect(SOURCE).not.toContain('setStatus(`${entry.encoding}');
+    expect(SOURCE).toContain('setStatus(\'\');');
   });
 
   it('switchEol 的早退比较用 model 真档，不再拿缓存 entry.eol 比', () => {

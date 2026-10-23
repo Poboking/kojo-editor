@@ -11,20 +11,28 @@
  *    mint-dark）由 `themes/*.css` 各自给值，本文件不写死任何十六进制。
  */
 
-/* 语法标记降档：opacity 压对比 + 抢戏的粗体收掉（如 `续` 的主题档是 bold） */
-.monaco-editor .sugar-read-mark {
-  opacity: 0.42;
-  font-weight: normal !important;
+/* 语法标记降档（批次十一 L13：`opacity + !important` → **主题化色阶**）。
+   旧三档用 opacity .42/.55/.72 压对比——那是"相对当前字色再打折"，浅色主题下
+   亮语法色（如 `sugar.cont` 的 #e5c07b）@0.42 压在近白底上只剩 ~1.5:1，近不可读。
+   现在三档全部落**主题 token 的绝对色阶**：深浅三套主题各给各的档，浅色下同样是
+   可用的低对比而不是残影。特异性 `.monaco-editor .view-lines .sugar-read-*`（0,3,0）
+   压过 Monaco 运行时注入的裸 `.mtkN/.mtkb`（0,1,0），不再需要任何 `!important`。 */
+.monaco-editor .view-lines .sugar-read-mark {
+  /* 最低档：主题元信息色（dark #8b949e / light #59636e，均 ≥4.5:1），粗体收掉 */
+  color: var(--fg-dim);
+  font-weight: normal;
 }
-.monaco-editor .sugar-read-syntax {
-  opacity: 0.72;
+.monaco-editor .view-lines .sugar-read-syntax {
+  /* 中间两档：--fg 与 --fg-dim 的定比混色——比"打六折"稳定，底色再花也不失锚 */
+  color: color-mix(in srgb, var(--fg) 72%, var(--fg-dim));
 }
-.monaco-editor .sugar-read-delimiter {
-  opacity: 0.55;
+.monaco-editor .view-lines .sugar-read-delimiter {
+  color: color-mix(in srgb, var(--fg) 55%, var(--fg-dim));
 }
-/* 台词分层：正文换成中性前景（主题主前景色，对比度 AA），语法色让位给它 */
-.monaco-editor .sugar-read-speech {
-  color: var(--fg) !important;
+/* 台词分层：正文换成中性前景（主题主前景色，对比度 AA），语法色让位给它。
+   同款特异性打法，`!important` 一并退场。 */
+.monaco-editor .view-lines .sugar-read-speech {
+  color: var(--fg);
 }
 
 /* 工具条上的「显示语法标记」开关：与 `.kojo 预览` 那颗同族控件（ghost small）。
