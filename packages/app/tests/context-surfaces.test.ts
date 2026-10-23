@@ -6,8 +6,8 @@
  * - 清单是权威（id 唯一、无障碍名全中文、分区合法）；
  * - 「已声明的面」必须是清单的子集（清单外的新面会在这条上红，逼你先登记）；
  * - 声明幂等：同 id 覆盖 + 告警，不重复占位；
- * - 三级策略按顺序生效：显式面 → 输入框面 → 兜底；前一级「没话说」就往下一级走
- *   （空菜单不能被当成"有话说"）。
+ * - 三级策略按顺序生效：输入框面（优先）→ 显式面（逐级上溯）→ 兜底；前一级「没话说」
+ *   就往下一级走（空菜单不能被当成"有话说"），内层不表态要问外层而不是直接落兜底。
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -157,5 +157,73 @@ describe('buildContextMenuRoute · 三级策略', () => {
   it('未声明的面 id（元素上有属性但没人登记）也走兜底', () => {
     const route = buildContextMenuRoute(surfaceRoot('nobody-declared-this'), event());
     expect(route?.source).toBe('app-fallback');
+  });
+});
+
+describe('buildContextMenuRoute · 嵌套面上溯', () => {
+  const nested = (outerId: string, innerId: string): HTMLElement => {
+    const outer = document.createElement('div');
+    outer.setAttribute('data-context-surface', outerId);
+    const inner = document.createElement('div');
+    inner.setAttribute('data-context-surface', innerId);
+    const leaf = document.createElement('span');
+    inner.appendChild(leaf);
+    outer.appendChild(inner);
+    document.body.appendChild(outer);
+    return leaf;
+  };
+
+  it('内层不表态 ⇒ 问外层（不降级成通用菜单）', () => {
+    declareContextSurface({
+      id: 'editor',
+      ariaLabel: '编辑区菜单',
+      area: 'editor',
+      build: () => [{ id: 'editor.closeGroup', label: '关闭编辑器组' }],
+    });
+    declareContextSurface({
+      id: 'diff-view',
+      ariaLabel: '差异视图菜单',
+      area: 'panel',
+      // 局部没话说（例如这里不是可对比的行）——它不该把用户的右键一路打到兜底
+      build: () => null,
+    });
+    const route = buildContextMenuRoute(nested('editor', 'diff-view'), event());
+    expect(route?.source).toBe('editor');
+    expect(route?.items.map((i) => i.label)).toEqual(['关闭编辑器组']);
+  });
+
+  it('同一 id 在嵌套里重复出现时只问一次（不重复构建）', () => {
+    let calls = 0;
+    declareContextSurface({
+      id: 'panel-tabs',
+      ariaLabel: '面板选项卡菜单',
+      area: 'panel',
+      build: () => {
+        calls += 1;
+        return [];
+      },
+    });
+    const route = buildContextMenuRoute(nested('panel-tabs', 'panel-tabs'), event());
+    expect(calls).toBe(1);
+    expect(route?.source).toBe('app-fallback');
+  });
+
+  it('输入框在容器面内部时，输入框面优先（不被容器面截走）', () => {
+    // 浮窗里放一个输入框：右键它必须是剪切/复制/粘贴，不是「关闭浮窗」
+    declareContextSurface({
+      id: 'floating-window',
+      ariaLabel: '浮动窗菜单',
+      area: 'panel',
+      build: () => [{ id: 'floatingWindow.close', label: '关闭浮窗' }],
+    });
+    const host = document.createElement('div');
+    host.setAttribute('data-context-surface', 'floating-window');
+    const input = document.createElement('input');
+    host.appendChild(input);
+    document.body.appendChild(host);
+
+    const route = buildContextMenuRoute(input, event());
+    expect(route?.source).toBe('input');
+    expect(route?.items.some((i) => i.label === '关闭浮窗')).toBe(false);
   });
 });

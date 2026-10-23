@@ -14,12 +14,21 @@
  *
  * ## 三级策略（根路由 `buildContextMenuRoute`）
  *
- * 1. 显式面：`closest('[data-context-surface]')` 命中且该面有 `build` ⇒ 面的专属菜单；
- * 2. 输入类面：目标是 input / textarea / contenteditable ⇒ `input` 面（WP0 自带）；
+ * 1. **输入类面（优先）**：目标是 input / textarea / contenteditable ⇒ `input` 面（WP0 自带）。
+ *    它排在最前面是刻意的：剪切/复制/粘贴/撤销重做是通用编辑语义，不是某个布局的私有面，
+ *    不能被容器面（浮窗/面板/对话框）截走——右键输入框却弹出「关闭窗口」是错的行为；
+ * 2. 显式面：从 `closest('[data-context-surface]')` 命中的**最近**面开始，该面有 `build`
+ *    且表态 ⇒ 面的专属菜单；该面**不表态** ⇒ **继续往外层面上溯**（同一个 id 只问一次），
+ *    直到没有外层声明面为止；
  * 3. 兜底：`buildFallbackMenu`（通用菜单，只放通用动作）。
  *
  * 前面一级返回**空菜单**（`null` / 空数组）时视为「这一级不表态」，继续往下一级走
  * ——「按不了」与「没话说」必须分开：面没话说就走兜底，而不是给用户一个空壳。
+ *
+ * **为什么第 2 级要上溯而不是直接落兜底**：面注册表本来就是按嵌套设计的（编辑器组套编辑区、
+ * 浮窗套面板、对话框套页面）。内层面对某个局部「没话说」是很正常的（例如只在有选中文本时
+ * 才出「复制所选」），此时用户期望的是**外层的组级菜单**，而不是被降级成通用菜单；
+ * 直接落兜底等于把嵌套声明的意义废掉。
  */
 import {
   FALLBACK_MENU_ARIA_LABEL,
@@ -216,17 +225,25 @@ export function buildContextMenuRoute(
   target: HTMLElement,
   event: MouseEvent,
 ): ContextMenuRoute | null {
-  // 一级：显式声明的面（最近的祖先说了算）
-  const surfaceRoot = target.closest<HTMLElement>('[data-context-surface]');
-  const surfaceId = surfaceRoot === null ? null : surfaceRoot.getAttribute('data-context-surface');
-  if (surfaceId !== null) {
-    const explicit = trySurface(registry.get(surfaceId), target, event);
-    if (explicit !== null) return explicit;
-  }
-  // 二级：输入类面（输入框不强迫各面自己贴属性——它是全局语义而不是某个布局的私有面）
+  // 一级：输入类面**优先于一切容器面**——输入框里的剪切/复制/粘贴/撤销重做是通用编辑语义，
+  // 不能被容器面（浮窗/面板/对话框/设置页）截走：右键输入框却弹出「关闭窗口」是错的行为。
+  // 各面若想在输入框上给专属动作，靠 `input` 面自己的 build 分支去做，别在外层抢。
   if (isTextInputTarget(target)) {
     const input = trySurface(registry.get('input'), target, event);
     if (input !== null) return input;
+  }
+  // 二级：显式声明的面——从最近祖先往外逐级上溯（内层不表态时才问外层）
+  const asked = new Set<string>();
+  let surfaceRoot = target.closest<HTMLElement>('[data-context-surface]');
+  while (surfaceRoot !== null) {
+    const surfaceId = surfaceRoot.getAttribute('data-context-surface');
+    if (surfaceId !== null && !asked.has(surfaceId)) {
+      asked.add(surfaceId);
+      const explicit = trySurface(registry.get(surfaceId), target, event);
+      if (explicit !== null) return explicit;
+    }
+    const parent = surfaceRoot.parentElement;
+    surfaceRoot = parent === null ? null : parent.closest<HTMLElement>('[data-context-surface]');
   }
   // 三级：兜底（只放通用动作，业务动作归各面）
   const items = buildFallbackMenu(target);
