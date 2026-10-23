@@ -27,6 +27,13 @@ function hostSpy(): InjectMenuHost & { calls: string[] } {
 }
 
 describe('变量行菜单', () => {
+  it('两处菜单的 id 都唯一（宿主按 id 分发，重号会点错动作）', () => {
+    const varIds = ids(buildInjectVarMenu({ key: 'GOLD', kind: 'scalar', scalarValue: 1 }));
+    const panelIds = ids(buildInjectPanelMenu({ path: 'save.erb', scanning: false }));
+    expect(new Set(varIds).size).toBe(varIds.length);
+    expect(new Set(panelIds).size).toBe(panelIds.length);
+  });
+
   it('标量有值：复制变量名 + 复制变量值（都可用）', () => {
     const items = buildInjectVarMenu({ key: 'GOLD', kind: 'scalar', scalarValue: 120 });
     expect(ids(items)).toEqual(['inj.copyKey', 'inj.copyValue']);

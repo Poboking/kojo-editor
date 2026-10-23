@@ -46,6 +46,15 @@ function hostSpy(): VerdictMenuHost & { calls: string[] } {
 }
 
 describe('诊断行菜单', () => {
+  it('两处菜单的 id 都唯一（宿主按 id 分发，重号会点错动作）', () => {
+    const diagIds = ids(buildVerdictDiagMenu(diag()));
+    const panelIds = ids(buildVerdictPanelMenu({ filePath: 'a.kojo', canRefresh: true }));
+    const panelNoFile = ids(buildVerdictPanelMenu({ filePath: null, canRefresh: false }));
+    for (const list of [diagIds, panelIds, panelNoFile]) {
+      expect(new Set(list).size).toBe(list.length);
+    }
+  });
+
   it('项集合：跳到源行 + 复制诊断；全中文', () => {
     const items = buildVerdictDiagMenu(diag());
     expect(ids(items)).toEqual(['sv.diag.reveal', 'sv.diag.copy']);

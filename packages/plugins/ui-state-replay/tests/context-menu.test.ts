@@ -46,6 +46,13 @@ function hostSpy(): ReplayMenuHost & { calls: string[] } {
 }
 
 describe('谓词行菜单', () => {
+  it('两处菜单的 id 都唯一（宿主按 id 分发，重号会点错动作）', () => {
+    const predIds = ids(buildReplayPredicateMenu(pred()));
+    const panelIds = ids(buildReplayPanelMenu({ hasView: true, busy: false }));
+    expect(new Set(predIds).size).toBe(predIds.length);
+    expect(new Set(panelIds).size).toBe(panelIds.length);
+  });
+
   it('项集合：跳到这一行 / 复制谓词 / 复制求值状态；全中文', () => {
     const items = buildReplayPredicateMenu(pred());
     expect(ids(items)).toEqual(['rp.pred.reveal', 'rp.pred.copyText', 'rp.pred.copyState']);

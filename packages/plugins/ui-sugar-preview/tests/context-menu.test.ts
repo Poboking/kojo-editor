@@ -41,6 +41,17 @@ function hostSpy(): PreviewMenuHost & { calls: string[] } {
 }
 
 describe('逐行映射行菜单', () => {
+  it('三处菜单的 id 都唯一（宿主按 id 分发，重号会点错动作）', () => {
+    const rowIds = ids(buildPreviewRowMenu(row()));
+    const diagIds = ids(
+      buildPreviewDiagMenu({ severity: 'error', message: '缩进', line: 3, column: 1 }),
+    );
+    const panelIds = ids(buildPreviewPanelMenu({ filePath: 'a.kojo', canRefresh: true }));
+    for (const list of [rowIds, diagIds, panelIds]) {
+      expect(new Set(list).size).toBe(list.length);
+    }
+  });
+
   it('项集合：跳到源行 / 复制源行文本 / 复制产物行标签；全中文', () => {
     const items = buildPreviewRowMenu(row());
     expect(ids(items)).toEqual(['pv.row.reveal', 'pv.row.copySource', 'pv.row.copyGenerated']);
