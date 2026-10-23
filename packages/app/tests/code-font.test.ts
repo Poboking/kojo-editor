@@ -21,21 +21,26 @@ import { HUGE_FILE_LINES, LARGE_FILE_LINES, editorOptionsForLineCount } from '..
  */
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+// 视觉批十一 L01：`:root` token 块已从 styles.css 抽到单源 tokens.css。
+// 字体族声明住在 tokens.css，「散装字面量清零」这条要扫的是消费侧（styles.css），
+// 两文件拼接后一并覆盖——判据强度不降。
+const tokens = () => read('../src/tokens.css');
 const css = () => read('../src/styles.css');
+const both = () => `${tokens()}\n${css()}`;
 const FONT_KEYS = Object.keys(CODE_FONT_BASELINE).sort();
 
 describe('单一真源 · CSS 与 TS 逐字镜像', () => {
-  it('styles.css 的 :root 必须原样带着 CODE_FONT_CSS_LINE 这一行', () => {
-    expect(css()).toContain(CODE_FONT_CSS_LINE);
+  it('tokens.css 的 :root 必须原样带着 CODE_FONT_CSS_LINE 这一行', () => {
+    expect(tokens()).toContain(CODE_FONT_CSS_LINE);
     expect(CODE_FONT_CSS_LINE.startsWith(`${CODE_FONT_CSS_TOKEN}: `)).toBe(true);
   });
 
   it('散装字面量清零：CSS 里不许再有 `font-family: Consolas…` 这种自带栈的声明', () => {
-    expect(css().match(/font-family:\s*Consolas/g), '散装 font-family 声明').toBeNull();
+    expect(both().match(/font-family:\s*Consolas/g), '散装 font-family 声明').toBeNull();
   });
 
   it('--font-mono 的值不动（约 30 处既有消费方零改动，它只是"没分档年代的默认档"）', () => {
-    expect(css()).toContain("--font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;");
+    expect(tokens()).toContain("--font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;");
   });
 });
 

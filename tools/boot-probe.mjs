@@ -11,7 +11,7 @@
  *
  * **①「开机 ≤500ms 内 `#root` 非空 或 body 计算底色已落到该 `data-theme` 档应有的 `--bg`」**
  *  样本 = `index.html` 内联脚本落在 `window.__kojoBootMarks` 的 parse 期读数；
- *  第三方 = `expectedBootBg(档)` 从**源码现读**的 `--bg`（dark 档真源在 `packages/app/src/styles.css`
+ *  第三方 = `expectedBootBg(档)` 从**源码现读**的 `--bg`（dark 档真源在 `packages/app/src/tokens.css`
  *  的基础 `:root`，light / mint-dark 在 `packages/app/src/themes/<档>.css`）。
  *  **三方才有线**：内联字面量（parse 期）· 挂载后计算值 · 该档主题源里的 `--bg`——只比前两枚，
  *  两个手写源同时漂成第三种颜色就抓不到（这条闸的真实身份是跨文件对撞，不是页内自洽）。
@@ -173,9 +173,9 @@ export function sameRgb(a, b) {
   return x.r === y.r && x.g === y.g && x.b === y.b;
 }
 
-/** 断言①底色真源所在文件（相对仓库根）：dark 档的基础 token 就住在 `styles.css` 的 `:root` */
+/** 断言①底色真源所在文件（相对仓库根）：dark 档的基础 token 住在单源 `tokens.css` 的 `:root`（视觉批十一 L01 起） */
 const BOOT_BG_SOURCE_FILES = {
-  dark: 'packages/app/src/styles.css',
+  dark: 'packages/app/src/tokens.css',
   light: 'packages/app/src/themes/light.css',
   'mint-dark': 'packages/app/src/themes/mint-dark.css',
 };

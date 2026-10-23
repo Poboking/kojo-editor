@@ -167,7 +167,8 @@ function cssHex(file: string, name: 'bg' | 'fg'): string {
 }
 
 const CSS_SOURCES: readonly { theme: MonacoThemeId; file: string }[] = [
-  { theme: 'kojo-dark', file: '../src/styles.css' },
+  // 视觉批十一 L01：dark 档 `--bg/--fg` 随基础 :root 收敛到单源 tokens.css
+  { theme: 'kojo-dark', file: '../src/tokens.css' },
   { theme: 'kojo-light', file: '../src/themes/light.css' },
   { theme: 'kojo-mint-dark', file: '../src/themes/mint-dark.css' },
 ];

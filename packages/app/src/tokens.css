@@ -1,0 +1,217 @@
+/* ============================================================================
+   设计 token 单源（视觉批十一 L01-tokens，2026-10-24）
+   ----------------------------------------------------------------------------
+   这里是全站唯一的顶层 `:root` 定义点：原先 styles.css 与 styles-project.css 各带一份
+   逐字节相同的副本（各 8815 字符），收敛成这一份。加载契约由 main.tsx 静态链顺序钉死
+   （tokens.css → styles.css → themes/*.css），`styles-split.equivalence.test.ts` 的 E 闸
+   禁止任何 styles*.css 重新出现裸 `:root` 声明块。翻色主题（light / mint-dark）只**同名
+   重定义**本文件的 token，特异性和后置都天然压过这里。
+   规矩：加 token 只加在这一处；组件样式文件里只许 `var(--…)` 消费，不许定义。
+   ui-kit-candidate: 全站设计 token 单源（间距/圆角/阴影/玻璃/表面/焦点/层级/字号/动效/字体族）
+   ============================================================================ */
+
+:root {
+  --bg: #1e2227;
+  --bg-2: #24292f;
+  --bg-3: #2b3138;
+  --border: #3a424b;
+  /* 描边双档（VSCode 精修批 2026-10-17）：既有 `--border` 是控件描边的中档；密集区分隔
+     （树行 / 表格线 / 面板内 hairline）用更低对比的 `--border-subtle`，悬停与聚焦前的过渡、
+     以及需要"看得见边界"的地方用 `--border-strong`。三档都是非文字元素，发丝线本就低于 3:1
+     （装饰性分隔，不承担可点区识别），故只按视觉层次取，不套文字对比判据。 */
+  --border-subtle: #2f363d;
+  --border-strong: #4a545f;
+  --fg: #d7dce2;
+  --fg-dim: #8b949e;
+  --accent: #4c8bf5;
+  /* 实机对比度量出来的分工（§5.102）：`--accent` (#4c8bf5) 上压白字只有 3.32:1，
+     正文级不达 WCAG AA（4.5:1）——而白字蓝底正是**每一个主按钮**（保存 / 创建并打开 / 完成）。
+     故填色底另给一档更深的 `--accent-strong`（白字 4.87:1），`--accent` 继续留给描边与高亮。
+     注意：`--accent` 当**文字**压在深底上同样不够（code 4.04:1 / 链接式幽灵按钮 4.41:1），
+     那一档（`--accent-text`）涉及 15 处规则，本批刻意没一起动，已登记成看板后续条目。 */
+  --accent-strong: #2e6fd1;
+  /* 反过来：`--accent` 当**文字**压在深底上也不达标（实机：糖视图开关 4.41:1、
+     向导里的 `code` 4.04:1，正文级需 4.5:1）。文字档给亮一点的 `--accent-text`
+     （5.54:1）；描边仍用 `--accent`（非文字元素按 3:1，实测 4.15:1 已过）。 */
+  --accent-text: #6ea8ff;
+  --accent-dim: rgb(var(--accent-rgb) / 0.22);
+  --green: #4fc08d;
+  --red: #e06c75;
+  --amber: #d19a66;
+  /* UI 重设计批 P1 设计 token 扩展（定稿 §十；浅色主题预留，不做实现）
+     视觉批十一 L01 补刻度：--space-0（2px 发丝级内衬）与 --space-5（24px 区块级留白），
+     六档成族后覆盖率才有意义；替换字面量归 L02/L12，本批只定义。 */
+  --space-0: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  /* 圆角尺度（UI P4 · §5.122）：此前散落 12 种字面量（1/3/4/5/6/8/12/14px），
+     而 token 只定义了 2 档、仅 10 处用它。收成 5 档，档位按"件的大小"命名。
+     余两个语义值不进尺度：`50%`（圆点，几何）与 `0`（显式直角）。 */
+  --radius-xs: 2px; /* 细指示条（标签下的高亮条）/ 滚动条 */
+  --radius-sm: 4px; /* 密集控件：树行、菜单项、chip、小按钮 */
+  --radius-md: 6px; /* 中件：工具条按钮、输入框、面板块、状态条 */
+  --radius-lg: 10px; /* 浮层与卡片：picker、overlay、toast、notice、modal、欢迎卡 */
+  --radius-pill: 999px; /* 胶囊徽章 */
+  /* 阴影（UI P4 · §5.122；VSCode 精修批 2026-10-17 改为**分层抬升**）：每档 = 一层贴地
+     接触阴影（近、实、小偏移）+ 一层环境投影（远、虚、大偏移），比单层纯黑更"有厚度"、
+     更像真实光照下浮起来的物件。3 档抬升（轻浮层 → 浮层 → 模态）。
+     边条式 inset 阴影（`.editor-tab.active` 等的 accent 指示条）语义不同，不并入。 */
+  --shadow-1:
+    0 1px 2px rgba(0, 0, 0, 0.32),
+    0 6px 20px rgba(0, 0, 0, 0.45); /* 轻浮层：右键菜单、toast */
+  --shadow-2:
+    0 2px 5px rgba(0, 0, 0, 0.34),
+    0 12px 36px rgba(0, 0, 0, 0.5); /* 浮层：picker、overlay 宿主 */
+  --shadow-3:
+    0 2px 6px rgba(0, 0, 0, 0.36),
+    0 16px 48px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(0, 0, 0, 0.24); /* 模态与欢迎卡：末层 1px 环给浮层与背景一条明确切边 */
+  /* 抬升面顶边高光（VSCode 精修批）：raised/overlay 面挂一条极淡的 inset 顶亮边，
+     是"这块面比后面那块更靠近光源"的最省笔墨的暗示——磨砂玻璃的 `--glass-edge` 同族思路。 */
+  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  /* 井面（内嵌 / 代码底）的抬升档：井是"凹面"，受光与投影都比 --edge-raise / --shadow-1
+     低半档（刻意不同值——直接复用会把"凹"读成"凸"）。缺省不抬，要抬的消费方写
+     `--well-raise: var(--well-edge), var(--well-shadow);`。 */
+  --well-edge: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --well-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --well-raise: none;
+  /* 焦点环柔光：配 `:focus-visible` 的 box-shadow 用（见下），比硬 outline 更高级、不占布局。 */
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
+  /* 磨砂玻璃 token（glass）：可复用的毛玻璃面。
+     `--glass-alpha` = 填充不透明度，真源是 `glass-pref.ts`（设置页「外观 · 毛玻璃透明度」），
+     挂载时写到 `<html>`；任意面都能 `style="--glass-alpha:.5"` 局部覆盖，旋钮一动全场面跟着变。
+     **合色标定**（2026-10-17 跨切面统一批）：tint 不是直接抄 `--bg-2`，而是"预合成"值——让 alpha=.85
+     时压在暗化遮罩上的**合成结果**正好等于编辑器自己的 chrome（tint→--bg-2、tint-raise→--bg-3）。
+     于是"拧透明度"只改变背后泄漏多少、**不改色相**，且 `data-glass='solid'` 实心档落 --bg-2 与磨砂档
+     合成色一致（开关只切质感、不跳色）。换主题色时 tint/tint-raise 与 --bg-2/--bg-3 一并重算。
+     blur/saturate 是设计常量、不暴露给用户；edge 是顶边高光（磨砂玻璃的"厚度"）。 */
+  --glass-blur: 16px; /* 20→16：遮罩已在同层先做 0.8× 模糊，串联后 20px 边际收益为 0，只多耗 GPU */
+  --glass-saturate: 1.25; /* 1.5→1.25：底近无彩，1.5 把泄漏边缘推成可察觉彩噪；且与遮罩饱和相乘 */
+  --glass-alpha: 0.85; /* 缺省 15% 通透（= glass-pref 的 GLASS_TRANSPARENCY_DEFAULT，两处同步） */
+  --glass-tint: 40 45 51; /* 预合成：alpha .85 落 --bg-2 */
+  --glass-tint-raise: 48 54 62; /* 预合成：alpha .85 落 --bg-3（玻璃面上的抬升件用） */
+  --glass-edge: rgba(255, 255, 255, 0.07); /* 0.09→0.07：1px 绕一圈，0.09 在面上读成"贴纸白边" */
+  /* 顶缘抬升色的淡出距离：玻璃面的"光从上面来"在多高之内收干净。缺省 96px 是给浮层/模态这种
+     几百高的面；矮面（右键菜单 ~150px）自己覆盖成 56px，否则整面都是渐变、顶边高光读不出来。 */
+  --glass-fade: 96px;
+  /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
+     全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个
+     **按角色取面**的入口（值指向既有档），换主题色时一处联动。`sunken` 比 `--bg` 再低半档，
+     用于输入井 / 内嵌区 / 代码块底——本仓既有约定就是"输入比容器暗"（wizard 输入用 `--bg`）。 */
+  --surface-sunken: #191d22;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+  /* 焦点环（VSCode focusBorder 的同位）：键盘焦点专用，比 `--accent` 亮一档（非文字元素，
+     实测 `--focus-ring` 压 `--bg` = 5.72:1，远超 UI 组件 3:1 判据）。`--focus-glow` 是环外那圈
+     柔光，配 `--shadow-focus`（box-shadow）用——比硬 outline 更高级、且不吃布局宽度。 */
+  --focus-ring: #5b9aff;
+  --focus-glow: rgba(91, 154, 255, 0.35);
+  --z-toolbar: 10;
+  --z-overlay: 1000;
+  --z-modal: 1100;
+  /* 层级意图（视觉批十一 L01）：toolbar(10) < overlay 宿主(1000) < modal/遮罩(1100)
+     < toast(1200)。toast 与常驻错误条必须**盖在模态之上**——模态里操作失败的通知若被
+     压在遮罩下就违背「内核不静默」。这是现存最高一档；若将来出现必须盖住 toast 的
+     取色/文件选择类浮层（--z-picker），另开 ≥1300 档并在此注释登记，不许散落加裸数。
+     实散的 1200 字面量（notification-center / project-session-error）替换归 L02/L12。 */
+  --z-toast: 1200;
+  /* 字号尺度（UI P4 · §5.121）：**实机渲染出 10 档字号、其中 4 档是半像素**
+     （10 / 11 / 11.5 / 12 / 12.5 / 13 / 14 / 16 / 17 / 26，12.5px 一项就摊到 193 个元素）。
+     半像素不是"更精细"，是各子系统各自微调出来的产物：`.rp-*`/`.ab-*`/`.inj-*` 整族 10.5px，
+     壳层自己的标签页 / 工具条却是 12.5px。CJK 字形在 10.5/11.5 上会被推到子像素网格，
+     看着发糊、行与行轻重不一——这正是"不耐看"的根因。
+     规矩：**只用这 6 档整数**，档位按角色命名不按组件；要新档先说清为什么现有 6 档不够。
+     （对齐现代编辑器：VSCode 的 UI 正文 13px、元信息 11px，同样只有少数几档。） */
+  --fs-0: 11px; /* 元信息：计数、徽章、副行路径、提示 */
+  --fs-1: 12px; /* 密集控件：树行、菜单、输入、工具条 */
+  --fs-2: 13px; /* 正文级 UI：标签页、面板标题、toast */
+  --fs-3: 14px; /* 强调正文：向导标题、picker 输入、#root 基准 */
+  --fs-4: 16px; /* 空态主句 / 大按钮 */
+  --fs-5: 18px; /* 模态标题 */
+  --fs-display: 26px; /* 欢迎页标题（唯一一处 display） */
+  /* 动效 token（ui-polish；VSCode 精修批 2026-10-17 补齐节奏与缓动族）：统一节奏，改一处全局生效。
+     `--dur-3` 是入场/浮层展开的更长档；缓动按角色分工——`--ease-out` 减速（悬停、位移收尾），
+     `--ease-spring` 带一丝回弹（浮层/弹窗入场、开关拨动，"活"但不夸张），`--ease-in-out` 对称
+     （滑块、进度），`--ease-standard` 是 Material 式通用档。全部在 `data-motion='reduced'` 下被压平。 */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* 按压反馈档位（效果库 `.u-press-*` 与全站高频可点面共用）：
+     --dur-press 比松开档（--dur-1）快，按下才"跟手"；罩层比 hover(.06) 强一档且中性，
+     不占 --active 的"选中"语义（那枚色已被 .tree-file.active 等表示选中，必须让位）。 */
+  --press-dy: 0.5px;
+  --press-overlay: rgba(255, 255, 255, 0.1);
+  --dur-press: 70ms;
+  /* 具名动效时长（视觉批十一 L01）：`--dur-*` 管**交互节奏**（hover/入场/按压，随用户
+     操作触发），这族管**环境动画的循环周期**（spinner、涟漪、呼吸、极光等自走动画）——
+     此前 19 处 animation 时长全是字面量，拧一处全局生效的前提是先有这一族。
+     `--stagger` 是列表逐行进场的节拍间隔。**只定义不替换**，替换归 L02/L12。
+     全部在 `data-motion='reduced'` 下与 --dur-* 同被压平（既有全局规则按 duration 覆盖，
+     消费方替换为 var() 后自动继承该豁免）。 */
+  --anim-spin: 700ms; /* 载入 spinner 一圈 */
+  --anim-ripple: 480ms; /* 按压涟漪扩散一次 */
+  --anim-breathe: 2.8s; /* 呼吸/常驻提示的明暗循环 */
+  --anim-aurora: 26s; /* 欢迎页极光双色团漂移一整轮（够慢才不像走马灯） */
+  --stagger: 45ms; /* 列表项逐行入场节拍 */
+  /* 禁用态统一透明度：按钮 / 菜单项 / 输入框 / 开关同取一档（VIS-4 口径） */
+  --disabled-opacity: 0.5;
+  /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
+  --hover: rgba(255, 255, 255, 0.06);
+  --active: rgb(var(--accent-rgb) / 0.16);
+  /* —— 主题可翻的交互色族（主题系统 2026-10-17 · Phase 0 地基）——
+     把原先散在组件里的白/黑/字面 hex 收成语义 token，浅色/薄荷主题只需在此**同名重定义**，
+     不必逐条 `[data-theme]` 覆盖几十个选择器。默认值 = 既有深色现值，逐字节不变（断言① 稳）。 */
+  /* accent 的 RGB 三元组（= `--accent` #4c8bf5）：所有 accent alpha wash 由它派生，主题翻一处全跟 */
+  --accent-rgb: 76 139 245;
+  --hover-soft: rgba(255, 255, 255, 0.04); /* 最淡底：树组行 / 标签 / kbd chip */
+  --hover-strong: rgba(255, 255, 255, 0.1); /* 关闭钮一类的强底 */
+  --sel-bg: rgb(var(--accent-rgb) / 0.35); /* 文本选区（accent 族） */
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.24);
+  --scroll-thumb-active: rgba(255, 255, 255, 0.34);
+  --on-accent: #fff; /* accent 填充上的文字/滑块色（各主题多为白） */
+  /* 按钮/主按钮三态底色（上批的实机值原样搬进 token，值不变、只是可被主题翻） */
+  --btn-bg-hover: #333a42;
+  --btn-bg-active: #262c33;
+  --accent-strong-hover: #3272d4; /* 白字 4.67:1，达 AA */
+  --accent-strong-active: #2a66c0; /* 白字 5.58:1 */
+  --danger: var(--red);
+  --warning: var(--amber);
+  --success: var(--green);
+  /* 幻影转正（视觉批十一 L01）：以下三枚被组件以 `var(--x, 字面回落)` 引用却从未定义
+     （settings-search.css 一家泄了三组色）。真值在此落地后回落即死码——消费侧删回落
+     归 L09，翻主题时它们随派生源自动跟色。 */
+  --input-bg: var(--surface-sunken); /* 输入井底：跟语义表面档，light/mint 自动翻 */
+  --accent-soft: rgb(var(--accent-rgb) / 0.12); /* accent 弱 wash（选中行/命中底） */
+  --warn: var(--amber); /* --warning 的同义短名，供既有引用直接转正 */
+  /* 等宽面按「这块在读什么」分三档，不按组件分（此前：Monaco 走它自己的平台默认栈、
+     `--font-mono` 一份、散装 `Consolas, 'Cascadia Mono', monospace` 八份，三处口径互不相干）。
+     --font-code    编辑器代码面。**真源是 TS**：`ui/code-font.ts` 的 CODE_FONT_STACK 同时喂
+                    Monaco 与下面这一行（`code-font.test.ts` 逐字比对，改一处必改两处）。
+                    拉丁头是 Cascadia 系（比 Consolas 宽 ~9%）⇒ **凡按 em 标了槽位的规则都不许取它**，
+                    那些面一律走 --font-meta。
+     --font-meta    UI 里的标识与读数面（规则 ID / 路径:行 / 计数 / 诊断码 / 键位串）。拉丁头
+                    与 --font-mono 逐字相同（Consolas 打头 ⇒ 3.4em / 9em 这类槽位零位移），
+                    差别只在 CJK 收尾给的是 **UI 黑体**：这些面要么被 ellipsis 截断、要么承载
+                    标签语义（中文角色名、诊断码短名、「按下新键位…」），从不跨行竖向对齐。
+     --font-console 多行成列的流面（时间戳 | 级别 | 中文消息）。CJK 收尾给**等宽**汉字面
+                    （Windows 必装 MS Gothic / Linux Noto Sans Mono CJK SC）：全角 advance
+                    严格 = 2×ASCII，竖着才对得齐、框线不断列。
+     --font-mono    没分档年代的默认档，值不动（约 30 处既有消费方零改动）；新写的规则一律按
+                    角色取上面三档，任何人不许再抄 Consolas 字面量。 */
+  --font-code: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace;
+  --font-meta: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Microsoft YaHei UI', 'Noto Sans CJK SC', monospace;
+  --font-console: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Noto Sans Mono CJK SC', 'MS Gothic', monospace;
+  --font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;
+  font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
+}

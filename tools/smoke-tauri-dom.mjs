@@ -38,7 +38,7 @@
  * ① 开机 ≤500 ms 内 `#root` 非空**或** body 计算底色已落到**该 `data-theme` 档应有的 `--bg`**
  *    ——三方对撞：内联脚本 parse 期样本（style 一 parse 即生效且不会退场，最迟 ≤500 ms 成立）
  *    ＋ t+500 ms 采样兜底支 ＋ `expectedBootBg(档)` 从源码现读的 `--bg`
- *    （dark 档真源在 `packages/app/src/styles.css` 基础 `:root`，light / mint-dark 在 `themes/<档>.css`）；
+ *    （dark 档真源在 `packages/app/src/tokens.css` 基础 `:root`，light / mint-dark 在 `themes/<档>.css`）；
  *    同时钉「**内联底色 == 该档 `--bg` == React 挂载后的计算底色**」（任一处漂移即红，
  *    也防两个手写源同时漂成第三种颜色）与「#boot-splash 已被移除」。
  *    ⚠ 这条判据**不要求深色**：浅色用户开机底色 `#f6f8fa` 是设置不是故障（旧「亮度 < 96」
