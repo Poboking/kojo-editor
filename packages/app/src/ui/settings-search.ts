@@ -147,7 +147,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'general.layout', section: 'general', sectionLabel: '通用', label: '重置布局', keywords: ['布局 侧栏 面板 分屏'], key: 'general.layout' },
 
   // ---- 语言能力 / 快捷键 / 市场 / 关于 ----
-  { id: 'language.capabilities', section: 'capabilities', sectionLabel: '语言能力', label: '语言能力', keywords: ['language 语法 支持 矩阵'] },
+  // 锚点真存在（住在 capability-matrix-view.tsx 的语言行上），所以照其他行一样登记 key。
+  // 锚点真存在（住在 capability-matrix-view.tsx 的语言行上），所以照其他行一样登记 key。
+  { id: 'language.capabilities', section: 'capabilities', sectionLabel: '语言能力', label: '语言能力', keywords: ['language 语法 支持 矩阵'], key: 'language.capabilities' },
   // 快捷键一整页：不给 key——那一节里没有"设置行"可指，页面上每个键位行自有 `[data-kb-id]`
   // 锚点（住在 KeybindingsPage.tsx，不在设置页的 `[data-settings-key]` 体系内）。
   // 指一枚并不存在的行锚点，等于让点击静默落空；跳节本身就是落到那一页（铁律 4）。
