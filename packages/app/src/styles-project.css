@@ -1509,98 +1509,19 @@ textarea {
    那些类留在上面那份里，两个面板共用）。 */
 
 
-/* ---------------------- 侧栏「在文件中搜索」（2026-10-15 检索批） ---------------------- */
+/* ---------------------- 「在文件中搜索」·跨视图通用行类（检索域真源收口批·L08） ---------------------- */
 
-/* 结果行沿用问题面板的"位置 + 预览"两栏语言（.conv-issue-loc 同族），
-   只补输入条、三个开关与命中高亮。面板宽度只有一档（侧栏 260px 起），
-   所以预览一律尾部省略——换行会把"一屏几条结果"压到个位数。 */
-.panel-search {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.search-input {
-  flex: 1;
-  min-width: 0;
-}
-.search-toggle {
-  flex: none;
-  padding: 2px 5px;
-  font-size: var(--fs-0);
-  font-family: var(--font-meta);
-  /* 同一族钮上 `Aa`/`.*`（拉丁）与「全词」「全部替换」（汉字）并存：两个 `normal` 行高不同
-     会让一排钮高低不齐，钉死一个值。 */
-  line-height: 1.4;
-}
-/* 开关态：与壳层其它"已开启"控件同色（.on 用 accent 描边 + 淡底） */
-.search-toggle.on {
-  border-color: var(--accent);
-  color: var(--accent-text);
-  background: var(--accent-dim);
-}
-.search-ext-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-0);
-}
-.search-ext {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-0);
-}
-.search-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.search-status {
-  font-size: var(--fs-0);
-  line-height: 1.5;
-}
-.search-error {
-  color: var(--red);
-}
-.search-stopped {
-  color: var(--amber);
-}
+/* 批次十一 L08：检索面板自己的 `.search-*` 视觉真源已全部收进
+   `ui/search-panel.css`（`.panel-search.ksp` 高特异性接管，旧类名仍挂元素上）。
+   这一段只保留**检索面板之外**的消费方——调用层级浮层 `CallHierarchyOverlay`
+   复用 `search-rows / search-match / search-loc`（复用关系归 L12 线，勿动；
+   浮层行不带 `.panel-search.ksp` 祖先，吃的就是这里的单类规则）。 */
 .search-rows {
   display: flex;
   flex-direction: column;
   max-height: 46vh;
   overflow: auto;
   font-size: var(--fs-1);
-}
-.search-file {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 4px 2px 2px;
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  border-top: 1px solid var(--bg-3);
-  position: sticky;
-  top: 0;
-  background: var(--bg);
-}
-.search-file-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.search-file-count {
-  flex: none;
-  font-family: var(--font-meta);
-  /* 命中计数：钉自己的档位（原来骑在祖先的 11px 上，同值但断了耦合）+ 等宽数字，
-     「9 → 10」不抖行尾 */
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-0);
 }
 .search-match {
   width: 100%;
@@ -1624,46 +1545,6 @@ textarea {
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-0);
   min-width: 3.4em;
-}
-.search-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* 命中高亮：不用 <mark> 的浏览器默认黄底——那是浅色底的设计，深色主题下刺眼 */
-.search-hit {
-  background: var(--accent-dim);
-  color: var(--accent-text);
-  border-radius: 2px;
-}
-
-/* 替换行（R7 搜索替换批）：与检索行同构；「全部替换」复用 .search-toggle 尺寸 */
-.search-replace-summary {
-  color: var(--accent-text);
-}
-.search-match-row {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-}
-.search-match-row .search-match {
-  flex: 1;
-  min-width: 0;
-  width: auto;
-}
-.search-replace-one {
-  flex: none;
-  align-self: center;
-  padding: 1px 6px;
-  font-size: var(--fs-0);
-  opacity: 0;
-}
-/* 悬停/键盘聚焦该行时显形：hover 覆盖鼠标，focus-within 覆盖 Tab 导航（UI-4 键盘可达） */
-.search-match-row:hover .search-replace-one,
-.search-match-row:focus-within .search-replace-one {
-  opacity: 1;
 }
 
 /* ------------------------------ editor ------------------------------ */
@@ -7471,27 +7352,10 @@ button.primary .hint {
   opacity: 1;
 }
 
-/* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ---- */
-.search-scope-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-0);
-}
-.search-scope {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-0);
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  padding: 2px 4px;
-}
-.search-scope-empty,
-.search-scope-stale,
-.search-scope-notice {
-  color: var(--amber);
-}
+/* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ----
+   批次十一 L08 收口：`.search-scope-row/.search-scope/.search-scope-empty|stale|notice`
+   只被检索面板消费，视觉早已由 `search-panel.css` 的 `ksp-opt-row / ksp-opt-select /
+   ksp-note-warn`（高特异性）接管且逐字节同效——旧基线规则删除，真源单一化。 */
 
 
 /* ==============================================================   G1「看这一行的状态」（2026-10-16 跳到命中状态批）
