@@ -126,6 +126,75 @@ export function nextMenuIndex(
   }
 }
 
+/* ------------------------------ 首字母跳转 ------------------------------ */
+
+/**
+ * type-ahead 的累积窗口（毫秒）。500ms 是 WAI-ARIA menu 与桌面菜单的通行档：
+ * 更短会把「新」「建」两下拆成两次首字母跳；更长会让用户停手后敲的字母被拼进上一条查询。
+ */
+export const TYPE_AHEAD_RESET_MS = 500;
+
+/** 一次按键里与 type-ahead 判据相关的部分（React 合成事件 / 原生事件都能喂） */
+export interface TypeAheadKeyEvent {
+  readonly key: string;
+  readonly ctrlKey?: boolean;
+  readonly metaKey?: boolean;
+  readonly altKey?: boolean;
+  /** 输入法组合期间（拼音候选未提交）不拦截——否则中文用户一按字母就被抢走 */
+  readonly isComposing?: boolean;
+}
+
+/**
+ * 按键 → 可参与 type-ahead 的字符；不该参与时返回 null。
+ *
+ * 判据（三条都要过）：单字符、不是空格、不带 Ctrl/Meta/Alt（组合键是命令，不是找项）、
+ * 不处于输入法组合期。大小写归一化成小写——菜单项 `label` 多为中文，但快捷键混排的
+ * 英文项仍要能用小写敲到大写开头。
+ */
+export function typeAheadCharOf(event: TypeAheadKeyEvent): string | null {
+  if (event.isComposing === true) return null;
+  if (event.ctrlKey === true || event.metaKey === true || event.altKey === true) return null;
+  const key = event.key;
+  if (key.length !== 1 || key === ' ') return null;
+  return key.toLowerCase();
+}
+
+/**
+ * 把新字符并进当前查询串（纯函数，窗口由调用侧判）：
+ * - 距上次按键超过 `TYPE_AHEAD_RESET_MS` ⇒ 从头开始；
+ * - 连续敲**同一个**字符（「打」「打」）⇒ 查询串回到单字符，用来在同类项之间循环
+ *   （Windows / VSCode 菜单同口径；否则「打打」永远不命中，第二次按键等于没反应）。
+ */
+export function nextTypeAheadQuery(previous: string, char: string, elapsedMs: number): string {
+  if (previous === '' || elapsedMs > TYPE_AHEAD_RESET_MS) return char;
+  if (previous === char.repeat(previous.length)) return char;
+  return previous + char;
+}
+
+/**
+ * 首字母落点（纯函数）：从 `current` 的**下一项**开始找 label 以 `query` 开头的可用项，
+ * 绕一圈回到 `current` 为止（循环）；没有命中 ⇒ -1（调用侧据此不 preventDefault）。
+ *
+ * 匹配口径：`query` 与 label 都转小写后比前缀；disabled 项跳过（与方向键同一档）。
+ * `current` 为 -1（刚打开 / 焦点不在项上）时从第 0 项找起。
+ */
+export function typeAheadIndex(
+  items: readonly ContextMenuItem[],
+  current: number,
+  query: string,
+): number {
+  const needle = query.toLowerCase();
+  if (needle === '' || items.length === 0) return -1;
+  const start = current < 0 ? 0 : current + 1;
+  for (let step = 0; step < items.length; step++) {
+    const index = (start + step) % items.length;
+    const item = items[index]!;
+    if (item.disabled) continue;
+    if (item.label.toLowerCase().startsWith(needle)) return index;
+  }
+  return -1;
+}
+
 /* ------------------------------ 中文化守卫 ------------------------------ */
 
 /** 菜单文案是否含中日韩统一表意文字（含则视为中文文案；空串 / 纯符号视为不合格） */

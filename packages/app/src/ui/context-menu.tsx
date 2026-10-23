@@ -10,8 +10,10 @@
  *   作用域判定与异步通道（重命名输入 / 关闭确认链）仍留在各宿主，组件不知道业务；
  * - **键盘口径照 WAI-ARIA menu**：`role=menu` + `role=menuitem`，打开即聚焦首个可用项，
  *   ↑/↓ 在可用项之间移动（不循环，到边界即停——与 VSCode 菜单一致），Home/End 到首/尾，
- *   Enter/Space 由原生 button 触发，Esc 关闭并把焦点还给打开前的元素，Tab 关闭（不困在菜单里）。
- *   **子菜单**：→ 打开并聚焦首项、← 收起并回到父项、Esc 逐级关闭、悬停即开。
+ *   可打印字符在 500ms 内累积成查询串、跳到下一个 label 以它开头的可用项（循环），
+ *   Enter/Space 由原生 button 触发，Esc 关闭并把焦点还给打开前的元素，Tab 关闭（不困在菜单里，
+ *   也不抢浏览器默认的焦点移动）。**子菜单**：→ 打开并聚焦首项、← 收起并回到父项、
+ *   Esc 逐级关闭、悬停即开。
  *
  * 视口夹取（clampMenuPosition）是本批的判据点：右键点必然贴着光标，菜单若按固定
  * `min(clientX, innerWidth - 260)` 定位，宽菜单（中文标签 + 快捷键）仍会顶出右缘；
@@ -35,6 +37,9 @@ import {
   MENU_VIEWPORT_MARGIN,
   clampMenuPosition,
   nextMenuIndex,
+  nextTypeAheadQuery,
+  typeAheadCharOf,
+  typeAheadIndex,
   type ContextMenuItem,
   type MenuPoint,
 } from './context-menu-model';
@@ -42,8 +47,12 @@ import '../context-menu.css';
 
 export {
   MENU_VIEWPORT_MARGIN,
+  TYPE_AHEAD_RESET_MS,
   clampMenuPosition,
   nextMenuIndex,
+  nextTypeAheadQuery,
+  typeAheadCharOf,
+  typeAheadIndex,
 } from './context-menu-model';
 export type {
   ContextMenuItem,
@@ -97,6 +106,11 @@ interface MenuPanelProps {
   readonly autoFocus: boolean;
   /** 子层：只关自己（父层收到后把焦点还给父项）；根层为 null */
   readonly onCloseSelf: (() => void) | null;
+  /**
+   * 「关掉时把焦点还给谁」这一个槽：整棵菜单树**共用同一个对象**（由根层创建、逐层传下来）。
+   * Tab 关菜单时要把它清成 null —— 焦点已经交给浏览器的默认顺序，卸载清理不能再抓回来。
+   */
+  readonly focusReturn: { current: HTMLElement | null };
 }
 
 function MenuPanel(props: MenuPanelProps): ReactElement {
@@ -104,7 +118,8 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
   const panelRef = useRef<HTMLDivElement | null>(null);
   /** item.id → 按钮（子菜单定位与「←」回焦都要它） */
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
-  const restoreRef = useRef<HTMLElement | null>(null);
+  /** 首字母跳转的累积查询串（每层各自独立：子菜单里敲字母不跳父菜单） */
+  const typeAheadRef = useRef({ query: '', at: 0 });
   const [placed, setPlaced] = useState<MenuPoint>(() => props.point ?? anchorOrigin(props.anchor));
   const [openChildId, setOpenChildId] = useState<string | null>(null);
   const [childAutoFocus, setChildAutoFocus] = useState(false);
@@ -138,26 +153,30 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
 
   // 打开后焦点第一项（禁用项跳过）；根层卸载时只在「焦点还在菜单里 / 已落回 body」时归还，
   // 避免把宿主动作后续的自动聚焦（重命名输入框等）抢回来。
+  // 「还焦点」这件事也走 `focusReturn` 槽：Tab 关菜单会先把它清空（见 onKeyDown），
+  // 那样无论卸载时浏览器把焦点停在哪，清理都不会再把焦点抢回触发处。
   useEffect(() => {
     if (depth > 0) {
       if (props.autoFocus) focusFirstItem(panelRef.current);
       return;
     }
     const previous = document.activeElement;
-    restoreRef.current = previous instanceof HTMLElement ? previous : null;
+    props.focusReturn.current = previous instanceof HTMLElement ? previous : null;
+    // 面板节点在挂载时抓一次：卸载清理跑的时点，ref 可能已经被摘掉，而 DOM 还在文档里
+    // ——那时若拿 ref 判「焦点是否还在菜单内」会误判成「不在」，焦点就还不回去了。
+    const panel = panelRef.current;
     focusFirstItem(panelRef.current);
     return () => {
-      const target = restoreRef.current;
+      const target = props.focusReturn.current;
       if (target === null || !target.isConnected) return;
       const active = document.activeElement;
-      const menu = panelRef.current;
-      const stillOurs = menu !== null && active !== null && menu.contains(active);
+      const stillOurs = panel !== null && active !== null && panel.contains(active);
       if (active !== null && active !== document.body && !stillOurs) return;
       target.focus({ preventScroll: true });
     };
     // 根层只在挂载/卸载时跑（内容变化不该重置「焦点从哪来」）；子层随 autoFocus 变真补一次
     // ——先悬停开后按 → 的路径，靠的就是这一跳。
-  }, [props.autoFocus, depth]);
+  }, [props.autoFocus, depth, props.focusReturn]);
 
   const openChildOf = (id: string | null): ContextMenuItem | undefined =>
     id === null ? undefined : items.find((item) => item.id === id);
@@ -203,8 +222,10 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
         return;
       }
       case 'Tab': {
-        // 菜单不困住 Tab：关掉并把焦点交还，后续 Tab 从触发处继续
-        e.preventDefault();
+        // 菜单不困住 Tab：关掉整棵菜单，但**不** preventDefault——焦点按浏览器默认顺序
+        // 落到下一个可聚焦元素（菜单是 fixed 层，不关就会「人去楼空，楼还杵在那儿」）。
+        // 同时把「还焦点」的槽清空：卸载清理若把焦点抓回触发处，会把 Tab 的落点改写一次。
+        props.focusReturn.current = null;
         onDismiss();
         return;
       }
@@ -234,8 +255,35 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
         if (next >= 0) itemRefs.current.get(items[next]!.id)?.focus();
         return;
       }
-      default:
+      default: {
+        // 首字母跳转：可打印字符在 500ms 内累积成查询串，从当前项之后找第一个 label
+        // 以它开头的可用项（绕回即循环）。输入法组合期不拦截——那时 key 是拼音字母，
+        // 抢走会让中文用户连候选框都敲不出来。没命中就不 preventDefault（按键照常生效）。
+        const char = typeAheadCharOf({
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          altKey: e.altKey,
+          isComposing: e.nativeEvent.isComposing,
+        });
+        if (char === null) return;
+        const now = Date.now();
+        const query = nextTypeAheadQuery(
+          typeAheadRef.current.query,
+          char,
+          now - typeAheadRef.current.at,
+        );
+        const index = typeAheadIndex(items, activeIndex(), query);
+        if (index < 0) {
+          // 没命中：查询串丢掉。留着「打」再去敲「开」会一路带着无效前缀，越敲越不中。
+          typeAheadRef.current = { query: '', at: now };
+          return;
+        }
+        typeAheadRef.current = { query, at: now };
+        e.preventDefault();
+        itemRefs.current.get(items[index]!.id)?.focus();
         return;
+      }
     }
   };
 
@@ -339,6 +387,7 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
           anchor={itemRefs.current.get(openChild.id) ?? null}
           autoFocus={childAutoFocus}
           onCloseSelf={() => closeChild(true)}
+          focusReturn={props.focusReturn}
         />
       )}
     </>
@@ -354,6 +403,8 @@ export function ContextMenu({
   onDismiss,
   ariaLabel,
 }: ContextMenuProps): ReactElement {
+  /** 整棵树的「关掉还焦点给谁」（Tab 关菜单时清空它，见 MenuPanel 的 onKeyDown） */
+  const focusReturn = useRef<HTMLElement | null>(null);
   return (
     <>
       <div
@@ -371,6 +422,7 @@ export function ContextMenu({
         anchor={null}
         autoFocus
         onCloseSelf={null}
+        focusReturn={focusReturn}
       />
     </>
   );
