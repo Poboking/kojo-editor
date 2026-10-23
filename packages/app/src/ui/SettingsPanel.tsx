@@ -72,6 +72,8 @@ import {
 import { isComposingEvent } from './shell-keys';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
+// 语言能力矩阵的只读视图（批次十 S15）：现读 monaco/language-capabilities.ts，零 props、样式全内联。
+import { CapabilityMatrixSection } from './capability-matrix-view';
 import '../settings-search.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
@@ -198,7 +200,14 @@ export interface SettingsPanelProps {
  * 快捷键页由下一批（b/kbset）追加，届时往 `SETTINGS_SECTIONS` 里加一条即可，
  * 联合类型与外壳零改动。
  */
-export type SettingsSectionId = 'general' | 'appearance' | 'editor' | 'market' | 'about' | 'keybindings';
+export type SettingsSectionId =
+  | 'general'
+  | 'appearance'
+  | 'editor'
+  | 'capabilities'
+  | 'market'
+  | 'about'
+  | 'keybindings';
 
 /**
  * 一节 = 导航栏一项 + 右面板内容。`render` 无参：它闭包捕获 `SETTINGS_SECTIONS` 的 props 形参，
@@ -630,6 +639,13 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           ) : null}
         </>
       ),
+    },
+    {
+      id: 'capabilities',
+      label: '语言能力',
+      // 能力矩阵 → 棋盘图标（icons.tsx 的 matrix）
+      icon: 'matrix',
+      render: () => <CapabilityMatrixSection />,
     },
     {
       id: 'market',

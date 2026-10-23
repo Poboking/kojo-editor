@@ -19,8 +19,11 @@ import type {
 import { WriteNotAllowedError } from '@kojo/plugin-api';
 import {
   applyEol,
+  decodeWithEncoding,
   decodeWithProbe,
   detectEol,
+  ENCODING_IDS,
+  isFileEncoding,
   normalizeEol,
   probeEncoding,
   reconstructEol,
@@ -632,6 +635,83 @@ export class FileIOServiceImpl implements FileIO {
     // 失效广播（二进制写路径 = 撤销注入的回滚通道 journal 也走这里）：下游二进制缓存
     // 不能靠 mtime/size 判据——原地改值的重写 size 不变，粗粒度介质上 mtime 也可同值
     this.publishBinaryChange('change', path);
+  }
+
+  /* ---------------- 显式编码读写（批次十 S2：按指定编码重开 / 另存，additive） ---------------- */
+
+  /** 编码判据的运行时校验（显式编码入口共用）：未知编码必须报错，绝不用别的编码静默写入 */
+  private assertKnownEncoding(encoding: FileEncoding): void {
+    if (!isFileEncoding(encoding)) {
+      throw new Error(`不支持的编码：${String(encoding)}（可选：${ENCODING_IDS.join(' / ')}）`);
+    }
+  }
+
+  /**
+   * 按**调用方显式指定的编码**读回文本（不探测；批次十 S2）。
+   *
+   * 与 `readText` 的差别只有一条：解码判据不是探测结果而是入参 `encoding`——"文件其实是
+   * GBK，我按 Shift-JIS 看"这类误判现场要靠它纠正。解码后**内核编码判据跟着入参走**：
+   * `encodingCache` / `eolCache` / 换行指纹 / 原文字节快照一并按这份解读刷新（会话文本缓存
+   * 同批失效），于是下一次 `writeText` 的 preserve 不会回退到旧探测编码。
+   *
+   * 读侧不过写闸（与 `readText` 同口径）；`writable > 0` 才留指纹/字节快照（与
+   * `rememberFingerprints` 同一个闸：只读文件的这两份拷贝永远写不回去）。
+   */
+  async readTextWithEncoding(path: string, encoding: FileEncoding): Promise<TextFile> {
+    this.assertKnownEncoding(encoding);
+    const bytesCall = this.readBytes(path);
+    const statCall = this.bridge.stat(path);
+    statCall.catch(() => {});
+    const bytes = await bytesCall;
+    const raw = decodeWithEncoding(bytes, encoding);
+    const eol = detectEol(raw);
+    const key = pathKey(path);
+    this.setMeta(this.encodingCache, key, encoding);
+    this.setMeta(this.eolCache, key, eol);
+    // 盘上字节没变，但**会话里对这份内容的解读**变了：批量读缓存与指纹/快照按新解读重刷
+    this.invalidateTextCache(path);
+    this.rememberFingerprints(path, key, raw, bytes);
+    const st = await statCall;
+    return { path, text: normalizeEol(raw), encoding, eol, mtimeMs: st?.mtimeMs ?? null };
+  }
+
+  /**
+   * 把模型文本按**目标编码**编成字节（只编码、不写盘；批次十 S2）。
+   *
+   * 换行与 `writeText` 的 preserve 同判据：有原文指纹就逐行还原（未改动行保留原换行），
+   * 没有就整段取缓存的多数派 eol（再没有 = lf）。UTF-16 补 BOM（桥的 encode 不产 BOM）。
+   *
+   * 目标编码不受支持时**直接报错**（`FileEncoding` 全集之外的值不许被静默写成别的编码）。
+   */
+  async encodeForSave(path: string, text: string, encoding: FileEncoding): Promise<Uint8Array> {
+    this.assertKnownEncoding(encoding);
+    const key = pathKey(path);
+    const eol = this.eolCache.get(key) ?? 'lf';
+    const rawEol =
+      this.eolMapCache.get(key) ?? (await this.ensureFingerprintFromDisk(path, key));
+    const body =
+      rawEol === undefined
+        ? applyEol(normalizeEol(text), eol)
+        : reconstructEol(splitPreserveEol(rawEol), text, eol);
+    return this.bridge.encode(withUtf16Bom(body, encoding), encoding);
+  }
+
+  /**
+   * 让内核编码判据**跟随**刚写入的显式编码（批次十 S2）：`writeBytes` 是按探测回填的，
+   * GBK 内容可能被探测成 shift_jis；本方法用调用方给的 `bytes` 按指定编码重解一遍，
+   * 把编码/EOL 判据、换行指纹与原文字节快照统一到"作者选定的这个编码"。
+   *
+   * 调用时机 = 显式编码写盘之后（`saveWithEncoding`）；不写盘、不广播（写路径自己发）。
+   */
+  adoptEncoding(path: string, encoding: FileEncoding, bytes: Uint8Array): void {
+    this.assertKnownEncoding(encoding);
+    const key = pathKey(path);
+    const raw = decodeWithEncoding(bytes, encoding);
+    this.invalidateTextCache(path);
+    this.setMeta(this.encodingCache, key, encoding);
+    this.setMeta(this.eolCache, key, detectEol(raw));
+    this.putEolMap(key, raw);
+    this.putRawBytes(key, bytes);
   }
 
   private async probeOnDisk(path: string): Promise<FileEncoding | null> {

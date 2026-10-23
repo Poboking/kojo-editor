@@ -6,6 +6,7 @@ import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
 import { SearchPanel } from './SearchPanel';
+import { OutlinePanel } from './OutlinePanel';
 import { kojo2PreviewBottomView } from './kojo2-preview-host';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
@@ -937,6 +938,31 @@ export function ProjectView({
   }, []);
 
   /**
+   * 侧栏「大纲」的稳定组件身份（批次十 S9；同 problem/search 的 ref 闭包写法）。
+   *
+   * 面板自己订阅内核（光标 / 文档 / 活动文件），宿主只负责两件事：把最新 kernel
+   * 桥进去、把跳源折成既有 `editor.revealLocation` 载荷（落点判据仍只在
+   * `revealLocationOf` 一处）。kernel 换人时用版本计数把 ref 里的新值送过 memo。
+   */
+  const outlineArgsRef = useRef({ kernel });
+  outlineArgsRef.current = { kernel };
+  const outlineVersion = useHostVersion([kernel]);
+  const outlineComponent = useMemo(() => {
+    const StableOutline = (): ReactElement => {
+      const a = outlineArgsRef.current;
+      return (
+        <OutlinePanel
+          kernel={a.kernel}
+          onReveal={(path, line) =>
+            a.kernel.bus.emit('editor.revealLocation', revealLocationOf({ path, line }, '大纲'))
+          }
+        />
+      );
+    };
+    return StableOutline;
+  }, []);
+
+  /**
    * Kojo 2.0「编译预览」内建底部视图（K2-EDITOR-MOUNT ①）。
    *
    * 挂载点选**既有底部面板区**（与「问题」同一容器、同一种 `UIPanelContribution`），
@@ -972,6 +998,17 @@ export function ProjectView({
         component: searchComponent,
       },
       {
+        // 侧栏大纲（批次十 S9）：独立视图 = 活动栏自带开关（点同枚图标收起、再点展开），
+        // 激活项与容器尺寸由布局 store 持久化，即"记忆布局"。order 45 排在搜索(40)之后，
+        // 不写 defaultActive:false ⇒ 留在活动栏上半区，且不抢文件树(30)的默认激活落点。
+        id: 'kojo.outline',
+        title: '大纲',
+        icon: 'structure',
+        order: 45,
+        location: 'sidebar',
+        component: outlineComponent,
+      },
+      {
         // defaultActive:false —— 不抢「约定校验」（bottom，order 50）现有的默认激活落点（Ctrl+J）
         id: 'kojo.problems',
         title: '问题',
@@ -983,7 +1020,7 @@ export function ProjectView({
       },
       ...(kojo2PreviewView === null ? [] : [kojo2PreviewView]),
     ],
-    [fileTreeComponent, problemComponent, searchComponent, kojo2PreviewView],
+    [fileTreeComponent, problemComponent, searchComponent, outlineComponent, kojo2PreviewView],
   );
 
   /**
@@ -992,8 +1029,13 @@ export function ProjectView({
    * 拿 `undefined` 走 0，memo 行为与改动前逐字一致（不让一次切标签变成十只面板陪跑）。
    */
   const panelHostVersions = useMemo<Readonly<Record<string, number>>>(
-    () => ({ 'kojo.files': fileTreeVersion, 'kojo.search': searchVersion, 'kojo.problems': problemVersion }),
-    [fileTreeVersion, searchVersion, problemVersion],
+    () => ({
+      'kojo.files': fileTreeVersion,
+      'kojo.search': searchVersion,
+      'kojo.problems': problemVersion,
+      'kojo.outline': outlineVersion,
+    }),
+    [fileTreeVersion, searchVersion, problemVersion, outlineVersion],
   );
 
   /* ---------------- 标签栏（C1/C2/C3）：渲染与交互在 TabBar，宿主只接回调 ---------------- */

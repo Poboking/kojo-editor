@@ -40,7 +40,8 @@ import type * as Monaco from '../src/monaco/entry';
  *    屏上就是"开了开关什么也没变"）；
  * ② 协议形状闸——worker 回传的任何不符形状的消息都被判掉（两侧版本对不上时不许硬解）；
  * ③ 增量算术——`commonEdit` + `applyEdit` 必须恒等于新文本（缝错一格就是把错树留在手上着色）；
- * ④ **默认关 = 一毫米都不动**：偏好为关时装配函数对 Monaco 的调用次数必须是 0。
+ * ④ **默认开 = 装配即激活；显式关 = 一毫米都不动**（TS-DEFAULT）：只有存过 `off` 才算关，
+ *    关着时装配函数对 Monaco 的调用次数必须是 0。
  *
  * 纯逻辑层全覆盖；worker 线程本体（`kojo-ts.worker.ts`）与真实 wasm 装载归真壳验收
  * （`tools/smoke-tauri-*`），本池是 node，起不了 Worker。
@@ -399,9 +400,9 @@ describe('reportStructureDegradation · 一次性，但不静默', () => {
   });
 });
 
-/* ==================== 默认关 = 对 Monaco 零调用（闸门本体） ==================== */
+/* ============ 默认开 = 装配即激活；显式关 = 对 Monaco 零调用（闸门本体） ============ */
 
-/** 计数桩：任何一次属性访问都记下来（关着时这张表必须是空的） */
+/** 计数桩：任何一次调用都记下来（显式关着时这张表必须是空的） */
 function countingMonaco(): { monaco: typeof Monaco; calls: string[] } {
   const calls: string[] = [];
   const make = (path: string): unknown =>
@@ -412,45 +413,65 @@ function countingMonaco(): { monaco: typeof Monaco; calls: string[] } {
       },
       apply: (_target, _thisArg, args) => {
         calls.push(`${path}(${args.length})`);
-        return { dispose: () => undefined };
+        // 返回"空可迭代 + dispose"：装配面既会 for-of 遍历 getEditors()，也会把返回值当 disposable 收下
+        return Object.assign([], { dispose: () => undefined });
       },
     });
   return { monaco: make('monaco') as unknown as typeof Monaco, calls };
 }
 
-describe('installStructureOverlay · 偏好为关时一毫米都不动', () => {
+function storageWith(value: string | null): void {
+  const store = new Map<string, string>();
+  if (value !== null) store.set('kojo.ui.treeSitter.v1', value);
+  (globalThis as { window?: unknown }).window = {
+    localStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    },
+  };
+}
+
+describe('installStructureOverlay · 默认开装配，显式关才一毫米都不动', () => {
   afterEach(() => {
     disposeStructureOverlay();
     delete (globalThis as { window?: unknown }).window;
   });
 
-  it('node 环境（无 window ⇒ 偏好回默认关）：注册面调用次数为 0', () => {
+  /**
+   * 空候选：本文件只判"装不装、动不动 Monaco"，真 wasm / worker 的装配归
+   * `tree-sitter-default.test.ts` 与真壳冒烟；空表让激活体走完不触任何资源装载。
+   */
+  const noCandidates: never[] = [];
+
+  it('node 环境（无 window ⇒ 偏好回默认开）：装配即激活并碰 Monaco 注册面', () => {
     const { monaco, calls } = countingMonaco();
-    installStructureOverlay(monaco);
-    expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
-    expect(calls).toEqual([]);
+    installStructureOverlay(monaco, noCandidates);
+    expect(structureOverlayState()).toMatchObject({ installed: true, active: true, client: null });
+    expect(calls.length).toBeGreaterThan(0);
   });
 
-  it('localStorage 里没存过 on ⇒ 仍然关（脏数据的方向必须是少露）', () => {
-    const store = new Map<string, string>();
-    (globalThis as { window?: unknown }).window = {
-      localStorage: {
-        getItem: (k: string) => store.get(k) ?? null,
-        setItem: (k: string, v: string) => void store.set(k, v),
-        removeItem: (k: string) => void store.delete(k),
-      },
-    };
+  it('localStorage 里没存过 / 脏值 ⇒ 仍然开（脏数据的方向是多露，不能把未关过的当关）', () => {
+    storageWith('yes-please'); // 不是 'off' ⇒ 回默认（开）
     const { monaco, calls } = countingMonaco();
-    store.set('kojo.ui.treeSitter.v1', 'yes-please'); // 不是 'on' ⇒ 不算开
-    installStructureOverlay(monaco);
-    expect(structureOverlayState().active).toBe(false);
+    installStructureOverlay(monaco, noCandidates);
+    expect(structureOverlayState().active).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it('显式存过 off ⇒ 装配不动 Monaco（零调用、active false）', () => {
+    storageWith('off');
+    const { monaco, calls } = countingMonaco();
+    installStructureOverlay(monaco, noCandidates);
+    expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
     expect(calls).toEqual([]);
   });
 
   it('重复装配被幂等门挡住（第二次也不碰 Monaco）', () => {
     const { monaco, calls } = countingMonaco();
-    installStructureOverlay(monaco);
-    installStructureOverlay(monaco);
-    expect(calls).toEqual([]);
+    installStructureOverlay(monaco, noCandidates);
+    const afterFirst = calls.length;
+    installStructureOverlay(monaco, noCandidates);
+    expect(calls.length).toBe(afterFirst);
   });
 });

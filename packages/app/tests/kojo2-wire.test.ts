@@ -1,17 +1,15 @@
 /**
  * K2-EDITOR-WIRE 的判据闸：Kojo 2.0 在真实编辑器里**可打开**（预演，不切流）。
  *
- * 三组断言：
- * ① 开关关（缺省）= **逐字不变**：descriptor 表仍只有 v1 三枚、`.kojo2` 认不出（plaintext）、
- *    挂面只挂三枚、路由一个 port 都不碰；
- * ② 开关开 = **追加**一枚 `kojo2`：认领 `.kojo2`（大小写不敏感、只认最后一段扩展名），
- *    Monaco 面（`.kojo2` 扩展名 / Monarch / 语言配置）随之挂上；v1 三条路径一字不改；
+ * 三组断言（K2-SURFACE-DEFAULT 起语言面与切流开关解耦）：
+ * ① 开关关（缺省）= **语言面照常可见**：descriptor 表四枚齐全、`.kojo2` 认出 `kojo2`、
+ *    挂面四枚都挂上；切流语义仍关——`.kojo2` 打开请求 `off` 且零 port 调用；
+ * ② 开关开 = 语言面同上；`.kojo2` 的路由放行（大小写不敏感、只认最后一段扩展名），v1 三条路径一字不改；
  * ③ `.kojo2` 打开 / 新建只走**注入的既有通道**（openFile / openProject 的 pendingOpenFile 腿 /
  *    既有新建通道），非 2.0 文件一律 `not-kojo2` 不接管。
  *
  * 单测环境是 `node`（无 window / 无 Monaco）：开关用假 localStorage，语言面用最小桩。
- * `languages.ts` 在模块求值那一刻读开关 ⇒ 每个用例 `resetModules` 后重新 import，
- * 才等于"重载窗口"。
+ * descriptor 表是进程级只增表 ⇒ 每个用例 `resetModules` 后重新 import，避免跨用例串表。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
@@ -154,22 +152,25 @@ function expectNoCalls(log: PortLog): void {
   expect(log.notices).toEqual([]);
 }
 
-/* ============================ ① 开关关：逐字不变 ============================ */
+/* ================== ① 开关关（缺省）：语言面照常，切流语义仍关 ================== */
 
-describe('开关关（缺省）：v1 行为逐字不变', () => {
-  it('descriptor 表仍只有 v1 三枚；`.kojo2` 认不出 ⇒ plaintext，无 descriptor 命中', async () => {
+describe('开关关（缺省）：语言面照常可见，切流语义仍关', () => {
+  it('descriptor 表四枚齐全；`.kojo2` 认得出且唯一命中 kojo2', async () => {
     const { registry, languages } = await boot(false);
     expect(registry.languageDescriptors().map((descriptor) => descriptor.id)).toEqual([
       ERB_LANGUAGE_ID,
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
+      KOJO2_LANGUAGE_ID,
     ]);
-    expect(languages.languageForPath('D:/p/M.kojo2')).toBe('plaintext');
-    expect(registry.descriptorForPath('D:/p/M.kojo2')).toBeNull();
-    expect(registry.languageDescriptors().filter((d) => d.matchesPath('D:/p/M.kojo2'))).toEqual([]);
+    expect(languages.languageForPath('D:/p/M.kojo2')).toBe(KOJO2_LANGUAGE_ID);
+    expect(registry.descriptorForPath('D:/p/M.kojo2')?.id).toBe(KOJO2_LANGUAGE_ID);
+    expect(registry.languageDescriptors().filter((d) => d.matchesPath('D:/p/M.kojo2')).map((d) => d.id)).toEqual([
+      KOJO2_LANGUAGE_ID,
+    ]);
   });
 
-  it('v1 认路与收口前逐字一致（大小写 / 最后一段扩展名 / plaintext 兜底）', async () => {
+  it('认路（大小写 / 最后一段扩展名 / plaintext 兜底）不随开关改口', async () => {
     const { languages } = await boot(false);
     const cases: ReadonlyArray<readonly [string, string]> = [
       ['D:/p/M.kojo', KOJO_LANGUAGE_ID],
@@ -178,7 +179,7 @@ describe('开关关（缺省）：v1 行为逐字不变', () => {
       ['D:/p/M.erm', ERB_LANGUAGE_ID],
       ['D:/p/settings.json', JSON_LANGUAGE_ID],
       ['D:/p/note.txt', 'plaintext'],
-      ['D:/p/M.kojo2', 'plaintext'],
+      ['D:/p/M.kojo2', KOJO2_LANGUAGE_ID],
       ['D:/p/M.kojo2.bak', 'plaintext'],
     ];
     for (const [path, expected] of cases) {
@@ -186,7 +187,7 @@ describe('开关关（缺省）：v1 行为逐字不变', () => {
     }
   });
 
-  it('挂面只挂 v1 三枚：kojo2 的扩展名 / Monarch / 配置一格都不出现', async () => {
+  it('挂面照常挂四枚：kojo2 的扩展名 / Monarch / 配置都在', async () => {
     const { languages } = await boot(false);
     const { monaco, captured } = fakeMonaco();
     languages.registerBuiltinLanguageSurfaces(monaco);
@@ -194,9 +195,10 @@ describe('开关关（缺省）：v1 行为逐字不变', () => {
       ERB_LANGUAGE_ID,
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
+      KOJO2_LANGUAGE_ID,
     ]);
-    expect(captured.monarchs.has('kojo2')).toBe(false);
-    expect(captured.configs.has('kojo2')).toBe(false);
+    expect(captured.monarchs.has('kojo2')).toBe(true);
+    expect(captured.configs.has('kojo2')).toBe(true);
   });
 
   it('`.kojo2` 打开请求 ⇒ off，零 port 调用（调用方照原样走 v1 流程）', async () => {
@@ -212,10 +214,10 @@ describe('开关关（缺省）：v1 行为逐字不变', () => {
   });
 });
 
-/* ======================== ② 开关开：追加 kojo2，v1 不动 ======================== */
+/* ======================== ② 开关开：语言面同上，路由放行 ======================== */
 
-describe('开关开：追加 kojo2 descriptor（暂挂 `.kojo2`）', () => {
-  it('追加在表尾；`.kojo2` 命中且唯一（大小写不敏感、只认最后一段扩展名）', async () => {
+describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
+  it('表尾仍是 kojo2；`.kojo2` 命中且唯一（大小写不敏感、只认最后一段扩展名）', async () => {
     const { registry, languages } = await boot(true);
     expect(registry.languageDescriptors().map((descriptor) => descriptor.id)).toEqual([
       ERB_LANGUAGE_ID,

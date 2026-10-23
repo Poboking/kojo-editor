@@ -189,7 +189,7 @@ describe('automated：真读源码，读不到就红', () => {
     const rel = 'packages/app/src/monaco/language-capabilities.ts';
     const source = BASE.readFile(rel);
     const mutated = source.replace(
-      "        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；纯模型 monaco/erb-call-hierarchy.ts 与 provider 模块 monaco/erb-callhierarchy-provider.ts 已交付，宿主需用 createErbCallHierarchyProvider() 自建面板消费',",
+      "        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；纯模型 monaco/erb-call-hierarchy.ts 与 provider 模块 monaco/erb-callhierarchy-provider.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',",
       "        '',",
     );
     expect(mutated).not.toBe(source);

@@ -296,10 +296,10 @@ describe('foldingAffordable · 档位判据与编辑器选项是**同一份表**
     expect(foldingAffordable(HUGE_FILE_LINES - 1)).toBe(true);
   });
 
-  it('只有 huge 档让路；**逐点等于档位表上 folding 那一格**（判据只许有一份）', () => {
+  it('折叠在 small/large 让路、huge 让路（PS-4：一开就多一次整篇 copy）；**逐点等于档位表上 folding 那一格**（判据只许有一份）', () => {
+    // 2026-10-23 PS-4 实测：折叠一开就多一次整篇 copy（9 → 10），huge 仍让路；
+    // 缝上逐点跟随档位表（huge = false）。下面的往返等式仍是"判据只许有一份"的钉子。
     expect(foldingAffordable(HUGE_FILE_LINES)).toBe(false);
-    // 真实语料之最那篇 52,601 行：落在 huge ⇒ 让路，但**选项那边同一拍就把折叠槽整条撤了**
-    // （看得见的是"没有折痕"，不是"有折痕折不动"）
     expect(foldingAffordable(52_601)).toBe(false);
     expect(foldingAffordable(990_000)).toBe(false);
     for (const n of [1, 4_999, LARGE_FILE_LINES, 12_000, HUGE_FILE_LINES - 1, HUGE_FILE_LINES, 52_601, 990_000]) {
@@ -316,20 +316,18 @@ describe('foldingAffordable · 档位判据与编辑器选项是**同一份表**
 describe('foldingRangesFor · 让路可见、重问不重扫', () => {
   const smallDoc = ['@FOO', 'IF X', 'ENDIF'];
 
-  it('档外（huge）：一次都不 copy 整篇、一次都不问供方，并**报出一条降级**（铁律 4：不许静默）', () => {
+  it('huge 档（52,601 行）：折叠让路（PS-4：一开就多一次整篇 copy）⇒ 不问供方、不取文、可见提示一次', () => {
     const asks: { text: string; lineCount: number }[] = [];
-    const { kernel } = fakeKernel({ languageService: [languageServiceStub('foldingRange', { kind: 'foldingRange', ranges: [] }, asks)] });
+    const ranges = [{ startLine: 2, endLine: 3 }];
+    const { kernel } = fakeKernel({ languageService: [languageServiceStub('foldingRange', { kind: 'foldingRange', ranges }, asks)] });
     const doc = fakeModel(smallDoc, { lineCount: 52_601 });
-    const path = 'C:/erb/ps4-折叠档外.ERB';
+    const path = 'C:/erb/ps4-折叠huge.ERB';
+    // 2026-10-23 PS-4 读数：折叠一开就多一次整篇 copy（9 → 10）⇒ huge 仍按档位表让路，
+    // 且让路必须可见（warn 一次），不许静默消失。
     expect(foldingRangesFor(doc.model, path, kernel)).toEqual([]);
     expect(asks).toHaveLength(0);
     expect(doc.getValueCalls()).toBe(0);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toContain(path);
-    // 同一篇再问一次不许再报（每 (能力, 文件) 一次；去重表若失效就是每次滚动都刷屏）
-    foldingRangesFor(doc.model, path, kernel);
-    expect(warn).toHaveBeenCalledTimes(1);
-    // 这一档的折叠压根没问供方 ⇒ "截了尾巴"那句说法也不许留着（没有折痕的面上挂一句超额 = 谎话）
     expect(foldingCapNoticeFor(path)).toBeNull();
   });
 

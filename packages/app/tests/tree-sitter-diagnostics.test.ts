@@ -684,9 +684,13 @@ describe('偏好为关 ⇒ 结构诊断这一层不存在', () => {
     return { monaco: make('monaco') as unknown as typeof Monaco, calls };
   }
 
-  it('关着（node 环境无 window ⇒ 默认关）：装配点零调用 ⇒ 上屏器也没被创建', () => {
+  it('显式关着（存过 off）：装配点零调用 ⇒ 上屏器也没被创建', () => {
+    // TS-DEFAULT 起默认开；要判"关 = 一毫米都不动"必须真的存过 off，而不是靠无 window
+    (globalThis as unknown as { window: unknown }).window = {
+      localStorage: { getItem: () => 'off', setItem: () => undefined, removeItem: () => undefined },
+    };
     const { monaco, calls } = countingMonaco();
-    installStructureOverlay(monaco);
+    installStructureOverlay(monaco, []);
     expect(structureOverlayState()).toEqual({ installed: true, active: false, client: null });
     expect(calls).toEqual([]);
   });

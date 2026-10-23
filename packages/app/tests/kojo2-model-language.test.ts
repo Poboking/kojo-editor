@@ -3,7 +3,8 @@
  *
  * 钉六件事：
  * 1. **判据单源**：`languageIdForKojo2Model` 就是建 model 与重挂共用的那一枚函数
- *    （flag 关 ⇒ 恒 `languageFor`；flag 开 ⇒ 路由；`blocked` ⇒ `plaintext`）；
+ *    （flag 关 ⇒ 恒 `languageFor`，此时 `.kojo2` 的语言面照常是 `kojo2`；
+ *    flag 开 ⇒ 路由；`blocked` ⇒ `plaintext`）；
  * 2. **幂等**：目标语言与 `getLanguageId()` 相同 ⇒ 一次 `setModelLanguage` 都不调，
  *    `stats.skipped` 如实记账；
  * 3. **防抖**：窗口内多次正文变化合并成一次重判（注入假调度器，不碰真时钟）；
@@ -200,13 +201,13 @@ function stubFlag(on: boolean): FlagFake {
 /* ============================== 判据单源 ============================== */
 
 describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', () => {
-  it('flag 关 ⇒ 恒等于 languageFor（与收口前逐字等价，最长的路径也不多看正文）', () => {
+  it('flag 关 ⇒ 恒等于 languageFor；`.kojo2` 的语言面照常认出 2.0', () => {
     stubFlag(false);
     for (const path of [KOJO_PATH, KOJO2_PATH, 'C:/x/a.json', 'C:/x/readme.txt']) {
       expect(languageIdForKojo2Model(path, '# 机 指令 310\n灵梦：「你好。」')).toBe(languageFor(path));
     }
-    // `.kojo2` 在 flag 关时只是普通未知扩展名 ⇒ plaintext（没有 2.0 语言面）
-    expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe('plaintext');
+    // K2-SURFACE-DEFAULT：`.kojo2` 的 descriptor 无条件登记 ⇒ flag 关也是 kojo2（切流语义另管）
+    expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
   });
 
   it('flag 开 + dual：`.kojo2` 挂 2.0，`.kojo` 仍按 v1（开关不许抢老扩展名）', () => {

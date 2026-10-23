@@ -285,3 +285,42 @@ export function withUtf16Bom(body: string, encoding: FileEncoding): string {
   if (encoding === 'utf-16le' || encoding === 'utf-16be') return `\uFEFF${body}`;
   return body;
 }
+
+/* -------------------- 显式编码（批次十 S2，additive） -------------------- */
+
+/**
+ * 全部受支持编码的**运行时枚举**（顺序 = UI 编码菜单的展示序）。
+ * 与类型 `FileEncoding` 同源：新增一个字面量必须同时加到这里，
+ * `decodeWithEncoding` / 显式编码入口的本层校验都按它认。
+ */
+export const ENCODING_IDS: readonly FileEncoding[] = [
+  'utf-8',
+  'utf-8-bom',
+  'shift_jis',
+  'gbk',
+  'gb18030',
+  'big5',
+  'utf-16le',
+  'utf-16be',
+];
+
+/** 运行时判定某字符串是不是受支持的编码（显式编码入口的第一道校验，未知编码必须报错） */
+export function isFileEncoding(value: string): value is FileEncoding {
+  return (ENCODING_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * **按调用方显式指定的编码**解码（不探测；批次十 S2）。
+ *
+ * 判据与两具平台桥的 `decode` 同形：`new TextDecoder(DECODE_LABEL[encoding])`，非法字节
+ * 替换为 U+FFFD（不严格口径——"按这个编码看"本身就是用户的显式选择，解不干净时应当
+ * 看见替换字符而不是被拒绝）。BOM 由 TextDecoder 按 WHATWG 剥掉。
+ *
+ * @throws 编码不在 `FileEncoding` 内（错误原话列出可选值，不静默猜）
+ */
+export function decodeWithEncoding(bytes: Uint8Array, encoding: FileEncoding): string {
+  if (!isFileEncoding(encoding)) {
+    throw new Error(`不支持的编码：${String(encoding)}（可选：${ENCODING_IDS.join(' / ')}）`);
+  }
+  return new TextDecoder(DECODE_LABEL[encoding]).decode(bytes);
+}

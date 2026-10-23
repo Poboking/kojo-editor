@@ -1217,17 +1217,50 @@ function sourceOfModel(model: Monaco.editor.ITextModel): string | null {
 }
 
 /**
+ * 装配面的 additive 注入（批次十 S18：项目索引批的 resolver 从这里进来）。
+ *
+ * 全部可选：**什么都不传 = 与接线前逐字同行为**（只改本 model）。
+ */
+export interface Kojo2RenameInstallOptions {
+  /** 跨文件候选（`createKojo2ProjectRenameResolvers` 的产物）；缺省 ⇒ 只做同文件 */
+  readonly resolvers?: Kojo2RenameResolvers;
+  /** model → 磁盘路径（跨文件 plan 的请求文件路径）；缺省读 `uri.fsPath` */
+  readonly pathOf?: (model: Monaco.editor.ITextModel) => string | null | undefined;
+  /** 路径 → URI（跨文件编辑的落点）；缺省 `monaco.Uri.file` */
+  readonly uriForPath?: (path: string) => Monaco.Uri;
+}
+
+/** 请求文件路径：宿主注入优先，退回 model 的 file URI；取不到 ⇒ `null`（跨文件不启用） */
+function renamePathOf(
+  model: Monaco.editor.ITextModel,
+  options: Kojo2RenameInstallOptions,
+): string | null {
+  try {
+    const provided = options.pathOf?.(model);
+    if (typeof provided === 'string' && provided.length > 0) return provided;
+  } catch {
+    /* 宿主路径解析抛错 ⇒ 退回 uri（绝不让改名整体失败） */
+  }
+  const uri = (model as unknown as { uri?: Monaco.Uri }).uri;
+  const fsPath = uri === undefined || uri === null ? undefined : uri.fsPath;
+  return typeof fsPath === 'string' && fsPath.length > 0 ? fsPath : null;
+}
+
+/**
  * 为 `kojo2` 语言注册 RenameProvider（**只此一枚**），返回**幂等** disposable。
  *
  * - flag 关 ⇒ 空操作（**零注册**）；
  * - selector 只有 `KOJO2_LANGUAGE_ID`：v1 `.kojo` 的 F2 由 `kojo-rename` 另挂，两边不重叠；
- * - `resolveRenameLocation` 在任何拒绝路径上都给 `rejectReason`（Monaco 0.57 见理由就丢弃
+ * - `resolveRenameLocation` 在任何拒绝路径上都给 `rejectReason`（Monaco 0.57 见理由就丢掉
  *   输入框并就近提示——作者看得到"为什么不能改"）；
- * - `provideRenameEdits` 只产**本 model** 的 `IWorkspaceTextEdit`（跨文件留给项目索引批）；
+ * - `provideRenameEdits`：**没给 `resolvers` / 拿不到请求文件路径 ⇒ 只产本 model 的
+ *   `IWorkspaceTextEdit`**；给了 ⇒ 走 `kojo2RenamePlanXFile`，按路径分组产**跨文件**编辑
+ *   （全或无：任一文件被闸 / 读不到 ⇒ 整次取消，不落半截 WorkspaceEdit）；
  * - provider 体内任何抛错都退成拒绝理由，绝不把 throw 甩进 Monaco。
  */
 export function installKojo2RenameProvider(
   monaco: typeof Monaco,
+  options: Kojo2RenameInstallOptions = {},
 ): Monaco.IDisposable {
   if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
@@ -1261,30 +1294,50 @@ export function installKojo2RenameProvider(
       const source = sourceOfModel(model);
       if (source === null) return reject('取不到这份文件的内容，改名取消');
       try {
-        const result = kojo2RenameAt(
-          source,
-          { line: position.lineNumber, column: position.column },
-          newName,
-        );
-        if (result.symbol === null) {
-          return reject(result.blockers[0] ?? '这里没有可改名的符号');
+        const path = renamePathOf(model, options);
+        const plan =
+          options.resolvers !== undefined && path !== null
+            ? kojo2RenamePlanXFile(
+                source,
+                path,
+                { line: position.lineNumber, column: position.column },
+                newName,
+                options.resolvers,
+              )
+            : kojo2RenamePlan(
+                source,
+                { line: position.lineNumber, column: position.column },
+                newName,
+              );
+        if (plan.symbol === null) {
+          return reject(plan.blockers[0] ?? '这里没有可改名的符号');
         }
-        if (result.blockers.length > 0) {
-          return reject(result.blockers.join('\n'));
+        if (plan.blockers.length > 0) {
+          return reject(plan.blockers.join('\n'));
         }
-        if (result.edits.length === 0) {
+        if (plan.editsByPath.length === 0) {
           return reject('没有可落地的编辑（引用集为空），改名取消');
         }
         const uri = (model as unknown as { uri?: Monaco.Uri }).uri;
         if (uri === undefined || uri === null) {
           return reject('这份文件没有 URI，无法构造 WorkspaceEdit');
         }
+        const uriForPath: (path: string) => Monaco.Uri =
+          options.uriForPath ?? ((target) => monaco.Uri.file(target));
         return {
-          edits: result.edits.map((edit) => ({
-            resource: uri,
-            versionId: undefined,
-            textEdit: { range: toMonacoRange(edit.range), text: edit.newText },
-          })),
+          edits: plan.editsByPath.flatMap((group) => {
+            // 请求文件自己用 model 的 URI（保留编辑器侧的 scheme / 大小写口径），
+            // 其余路径交给宿主注入的映射（缺省按磁盘路径造 file URI）。
+            const resource =
+              group.path.length === 0 || (path !== null && group.path === path)
+                ? uri
+                : uriForPath(group.path);
+            return group.edits.map((edit) => ({
+              resource,
+              versionId: undefined,
+              textEdit: { range: toMonacoRange(edit.range), text: edit.newText },
+            }));
+          }),
         };
       } catch (error: unknown) {
         console.warn(`[kojo2-rename] 落地失败：${errorText(error)}`);

@@ -65,6 +65,11 @@ export function saveFormatOnSavePref(on: boolean): void {
  * 不传与传"全开"逐字等价），这里只是它的偏好面。读方（手动整理的组请求、保存链路
  * 落盘前）都以 {@link loadFormatRulesPref} **现读**，没有第二份缓存可漂。
  *
+ * 覆盖面不是只有 `.kojo`：本偏好同时服务 **ERB**（`dialectForLanguage` 认 `kojo` / `erb`
+ * 两种方言，ERB 与 `.kojo` 共用 `kojo-sugar` 的规则核心）；**kojo2 不是"没有格式化"，而是
+ * 走自己的 `monaco/kojo2-format.ts`**——规则开关形状与这里同源（`indent` 等加法布尔），
+ * 但不是同一份偏好键。
+ *
  * ## 为什么是新键而不是往老键里塞
  *
  * 老键的值域是**单字符串 `'on'`**（读取口径 `=== 'on'`），而它的读取方
@@ -85,7 +90,7 @@ const RULES_KEY = 'kojo.ui.formatRules.v1';
 export interface FormatRules {
   /** 全角空格折算（行首缩进 U+3000 → 2 半角、注释区 → 1 半角）；关 = U+3000 原样保留 */
   fullWidthSpace: boolean;
-  /** 缩进归一（仅 .kojo 糖行：行首空白按单位 × 层级重排）；关 = 行首空白一字不动 */
+  /** 缩进归一（ERB / `.kojo` 糖行；kojo2 走自己的格式化器）：行首空白按单位 × 层级重排；关 = 行首空白一字不动 */
   indent: boolean;
 }
 

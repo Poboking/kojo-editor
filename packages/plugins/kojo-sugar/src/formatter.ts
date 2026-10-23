@@ -8,7 +8,8 @@
  * 缩进对 `.kojo` 是语法的一部分，而层级的唯一算法是这里的 `indentLevel`
  * （TAB = 1 级、`U+3000` = 2 空格、空格 = `ceil(n/4)`）与行分类的 `classifyLine`
  * /`inlineCommentIndex`。格式化若不在同一层实现，就必然要抄一份判据——抄的那刻起
- * "改缩进不改语义"这个保证就没了。ERB 形只是**同一套规则关掉缩进那条**，
+ * "改缩进不改语义"这个保证就没了。ERB 形与 `.kojo` 共用同一份规则面，只是缩进来源
+ * 不同：`.kojo` 的层级是语法（词法器算），ERB 的层级按**现有配对**排（S11）——
  * 所以两种方言放同一个模块，而不是拆到 `erb-parser` 去各写一遍。
  *
  * ## 三条规则与它们的边界（取舍都写在这，改动前先读）
@@ -20,14 +21,19 @@
  *    **正文/台词/字符串里的 `U+3000` 一律不动**：eraTW 4.980 全量实测 55,565 行含
  *    `U+3000` 者**全部是行中用途**（注释分隔与 `PRINTFORMW 　「…」` 的台词缩进），
  *    那是作者要的排版、且会原样打印给玩家——一刀切替换就是把内容改了。
- * 2. **缩进归一**（仅 `.kojo`，且仅"糖行"）：将行首空白重排成
+ * 2. **缩进**（`.kojo` 只动糖行，`.erb` 按现有配对排块层级）：`.kojo` 把行首空白重排成
  *    `<单位> × indentLevel(原行首空白)` —— 层级由转译器算出、再按同一函数折回，
  *    **可证不变**（`indentLevel(新缩进) === indentLevel(旧缩进)`），所以它只统一
  *    写法、不动结构。单位在文件内探测（TAB 或 4 空格，取占多数的一方）；
  *    探测不出（无缩进行 / 平局 / 全是 2 空格这类"层级本就判不准"的写法）就**整条规则关掉**。
- *    原生直通行（`rawLine`）不参与归一：ERB 原文的缩进没有结构含义。
- *    `@` 原生块（`rawBlockStart` 起，延续到下一个 `@` 行或文件尾）**整块一个字符都不动** ——
- *    那里的每一行逐字节进产物，"改了也不进产物"这条放行前提在块内不成立。
+ *    **ERB 形（S11）**：按**现有配对**排块层级——开块行 d / 块体 d+1 / 分支行 d+1 /
+ *    分支体 d+2 / 闭合行 d（与 `app/src/monaco/erb-enter.ts` 的回车档位同一份读数）。
+ *    词表镜像 `erb-parser/scanner.ts`（插件间禁交叉 import）；顶层行与 `@`/`#`/`$`
+ *    指令行、注释行、`@"…"` 续行保留原缩进，块体/死区整行不碰，单位与判准门槛同上。
+ *    `.kojo` 里的原生直通行（`rawLine`）不参与归一：那一段要整理请直接走 ERB 形。
+ *    `.kojo` 里的 `@` 原生块（`rawBlockStart` 起，延续到下一个 `@` 行或文件尾）
+ *    **整块一个字符都不动** —— 那里的每一行逐字节进产物，"改了也不进产物"这条放行前提
+ *    在块内不成立。
  * 3. **行尾**：编辑**永不跨物理行**（每条 edit 落在同一行内），换行符原样保留，
  *    混合行尾也原样保留 —— 既不会把 LF 变成 CRLF，也不会把 CRLF 变成 LF。
  *
@@ -52,12 +58,13 @@
  * 行首缩进与注释区的 U+3000 都不折；仅含 U+3000 的空白行也不再清空（半角空白行
  * 照旧清空——那不是全角问题）；含 U+3000 的缩进同时排除出「缩进归一」的重排
  * （否则归一会把 U+3000 按层级抹掉，"保留"就成了空话）。
- * 关 `indent` 的语义是"**行首空白写法不动**"：只影响 `.kojo` 糖行的单位×层级重排
- * （ERB 形本来就没有这条规则，关了行为不变）。
+ * 关 `indent` 的语义是"**行首空白写法不动**"：`.kojo` 糖行的单位×层级重排与
+ * `.erb` 的块层级重排都归这条管；关了 ⇒ 只剩全角折算。
  *
  * ## 明确不做（与结构修复 `erb-structure-fix` 划界）
  *
- * 不补 `ENDIF`、不改块层级、不动行尾空白（台词行尾的 `U+3000` 是要打印的字）、
+ * 不补 `ENDIF`、不修结构（ERB 缩进只照**现有**配对排，不改配对结果）、不动行尾空白
+ * （台词行尾的 `U+3000` 是要打印的字）、
  * 不碰折行（`\` 续接）涉及的任何物理行、不改编码。判不准的一律不动：
  * 格式化产出 0 条 edit 是**正常结果**，不是失败。
  */
@@ -108,8 +115,8 @@ export interface FormatRuleOptions {
    */
   readonly fullWidthSpace?: boolean;
   /**
-   * 缩进归一（仅 `.kojo` 糖行）：行首空白按探测单位 × 层级重排。关 ⇒ 行首空白
-   * 写法一个字符都不动（ERB 形本就不做这条，关了与今天一致）。
+   * 缩进：`.kojo` 糖行按探测单位 × 层级重排；`.erb` 按现有配对排块层级。
+   * 关 ⇒ 行首空白写法一个字符都不动（只剩全角折算）。
    */
   readonly indent?: boolean;
 }
@@ -378,6 +385,183 @@ export function erbBodyRegionAtLineEnd(prefixText: string): { kind: ErbBodyRegio
   return { kind: state.inSkip ? 'skip' : 'data', openLine: state.open + 1 };
 }
 
+/* ============================== ERB 块层级缩进（S11） ==============================
+ *
+ * `.kojo` 的层级是语法、由词法器算；ERB 的缩进没有语法作用，这里按**现有配对**排出
+ * 可读层级（不补、不拆、不报错——结构修复是 `erb-structure-fix` 的活）。
+ *
+ * 词表取 `erb-parser/scanner.ts` 配对表的**镜像**：插件之间不许交叉 import（audit C），
+ * 只能在本包再写一张；增删词必须两边对拍。数据表族（`PRINTDATA*` / `STRDATA` /
+ * `DATALIST` / `ENDDATA` / `ENDLIST`）**不进这张表**：它们的块体由 `erbBodyLineMask`
+ * 整行保护、不参与缩进，记号行按普通行排在当前块体层；若让开词压栈，被掩掉的嵌套
+ * 开词会让闭合行错配。
+ *
+ * 排版口径量自真实语料（与 `app/src/monaco/erb-enter.ts` 的回车档位同一份读数）：
+ *   开块行 d · 块体 d+1 · 分支行 d+1 · 分支体 d+2 · 闭合行 d
+ * 顶层行（d = 0）保持原缩进：真语料的函数体是顶格的，强行抬一级会把每份文件都改写
+ * 一遍；注释、`#` / `$` 指令、`@` 函数头与 `@"…"` 续行同样只保留原缩进。
+ * 单位继续"探测不出就不动"——没有 TAB / 4 空格缩进行 ⇒ 整条规则关掉（与 `.kojo`
+ * 同一门槛，也是宿主"窗口腿 = 整篇腿"在切片起点处的既有前提）。
+ */
+
+/** 开块 → 配对类别（`erb-parser/scanner.ts` 开块表的镜像；TRY 两档同口径） */
+const ERB_INDENT_OPEN: Readonly<Record<string, string>> = {
+  IF: 'if',
+  SELECTCASE: 'select',
+  FOR: 'for',
+  WHILE: 'while',
+  REPEAT: 'repeat',
+  DO: 'do',
+  NOSKIP: 'noskip',
+  TRYCGOTO: 'try',
+  TRYCJUMP: 'try',
+  TRYCCALL: 'try',
+  TRYCGOTOFORM: 'try',
+  TRYCJUMPFORM: 'try',
+  TRYCCALLFORM: 'try',
+  TRYCALLLIST: 'funclist',
+  TRYGOTOLIST: 'funclist',
+  TRYJUMPLIST: 'funclist',
+};
+
+/** 分支 → 它所在块的类别（分支自己不开块，兄弟分支同层） */
+const ERB_INDENT_BRANCH: Readonly<Record<string, string>> = {
+  ELSEIF: 'if',
+  ELSE: 'if',
+  CASE: 'select',
+  CASEELSE: 'select',
+  CATCH: 'try',
+};
+
+/** 闭合 → 它所闭合的类别（与开块表成对；孤儿闭合按普通行排） */
+const ERB_INDENT_CLOSE: Readonly<Record<string, string>> = {
+  ENDIF: 'if',
+  ENDSELECT: 'select',
+  NEXT: 'for',
+  WEND: 'while',
+  REND: 'repeat',
+  LOOP: 'do',
+  ENDNOSKIP: 'noskip',
+  ENDCATCH: 'try',
+  ENDFUNC: 'funclist',
+};
+
+/** `@` 函数定义行（`@"…"` 是跨行 CALL 的续行，不是边界——与 `structure.ts` 的判据一致） */
+const ERB_FUNCTION_HEADER_RE = /^@(?![ \t\u3000]*")/;
+
+/** 一个已开块：开块行**自己的**缩进（绝对串）与"是否已出现过分支行" */
+interface ErbIndentFrame {
+  readonly pair: string;
+  readonly indent: string;
+  branch: boolean;
+}
+
+/** 栈顶向下找最近一个同类块；-1 = 没有（与 scanner 的配对序一致） */
+function findErbFrame(stack: readonly ErbIndentFrame[], pair: string): number {
+  for (let i = stack.length - 1; i >= 0; i--) if (stack[i]!.pair === pair) return i;
+  return -1;
+}
+
+/**
+ * 探测 ERB 的缩进单位：只在**非保护行、有缩进**的行里数 TAB / 4 空格。
+ * 平局或一方都没有 ⇒ `null` = 判不准 ⇒ 整条规则关掉（同 `.kojo`）。
+ */
+function detectErbIndentUnit(lines: readonly string[], body: readonly boolean[]): string | null {
+  let tabs = 0;
+  let spaces = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (body[i]) continue;
+    const content = lines[i]!;
+    const indent = leadingBlank(content);
+    // 纯空白行不是"单位证据"：它的空白身份归空白规则管
+    if (indent.length === 0 || content.length === indent.length) continue;
+    if (/^\t+$/.test(indent)) tabs++;
+    else if (/^ +$/.test(indent) && indent.length % SPACE_UNIT.length === 0) spaces++;
+  }
+  if (tabs === spaces) return null;
+  return tabs > spaces ? TAB_UNIT : SPACE_UNIT;
+}
+
+/**
+ * 每行的**块层级缩进**（`null` = 保留原缩进：顶层 / 指令 / 注释 / 续行 / 孤儿闭合）。
+ *
+ * 入参与 `erbBodyLineMask` 等长；被保护行整行跳过（不参与层级、也不改字节）。
+ * 所有判断只看去行首空白后的 `rest`，缩进本身只用于"顶层保留原样"这个锚点
+ * ⇒ 对同一份文本再运行必然给出同一串目标缩进（幂等由测试钉住）。
+ */
+function erbIndentPlan(
+  lines: readonly string[],
+  body: readonly boolean[],
+  unit: string,
+  rules: ResolvedRules,
+): (string | null)[] {
+  const plan = lines.map(() => null as string | null);
+  const stack: ErbIndentFrame[] = [];
+  /** 当前块体层（栈顶块的体缩进；分支体内再深一级） */
+  const bodyIndent = (): string | null => {
+    const top = stack[stack.length - 1];
+    return top === undefined ? null : top.indent + unit + (top.branch ? unit : '');
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (body[i]) continue;
+    const content = lines[i]!;
+    const rawIndent = leadingBlank(content);
+    const rest = content.slice(rawIndent.length);
+    if (rest.length === 0) continue; // 纯空白行：不参与层级、由空白规则管
+    if (rest.startsWith('@')) {
+      // 函数定义行把层级归零（上一函数欠的闭合不许把下一函数整段缩进）；`@"…"` 续行原样
+      if (ERB_FUNCTION_HEADER_RE.test(rest)) stack.length = 0;
+      continue;
+    }
+    // 注释 / `#` 指令 / `$` 标签：不改缩进、也不改层级
+    if (rest.startsWith(';') || rest.startsWith('#') || rest.startsWith('$')) continue;
+    const word = /^[A-Za-z_]+/.exec(rest)?.[0]?.toUpperCase();
+    if (word === undefined) {
+      // 非词首形态（`@"…"` 续行、`[SKIPSTART]` 等）：按当前块体排
+      const indent = bodyIndent();
+      if (indent !== null) plan[i] = indent;
+      continue;
+    }
+    const openPair = ERB_INDENT_OPEN[word];
+    if (openPair !== undefined) {
+      const indent = bodyIndent();
+      if (indent !== null) plan[i] = indent;
+      // 顶层开块行保留原缩进，块体从它起算（真语料里顶层行也可能本来就带缩进）
+      const anchor = indent ?? (rules.fullWidthSpace ? halfwidthInIndent(rawIndent) : rawIndent);
+      stack.push({ pair: openPair, indent: anchor, branch: false });
+      continue;
+    }
+    const branchPair = ERB_INDENT_BRANCH[word];
+    if (branchPair !== undefined) {
+      const at = findErbFrame(stack, branchPair);
+      if (at >= 0) {
+        const frame = stack[at]!;
+        plan[i] = frame.indent + unit;
+        frame.branch = true;
+      } else {
+        const indent = bodyIndent();
+        if (indent !== null) plan[i] = indent;
+      }
+      continue;
+    }
+    const closePair = ERB_INDENT_CLOSE[word];
+    if (closePair !== undefined) {
+      const at = findErbFrame(stack, closePair);
+      if (at >= 0) {
+        plan[i] = stack[at]!.indent;
+        stack.length = at;
+      } else {
+        const indent = bodyIndent();
+        if (indent !== null) plan[i] = indent;
+      }
+      continue;
+    }
+    // `SIF` 与其余普通语句：按当前块体排；`SIF` 不抬下一行（那是回车规则的活，这里不猜）
+    const indent = bodyIndent();
+    if (indent !== null) plan[i] = indent;
+  }
+  return plan;
+}
 
 /**
  * ERB 一行的新内容（`null` = 不用改）。
@@ -385,9 +569,10 @@ export function erbBodyRegionAtLineEnd(prefixText: string): { kind: ErbBodyRegio
  * 注释判据刻意只认**整行注释**（去缩进后以 `;` 开头）：ERB 的行中 `;` 既可能是注释、
  * 也可能就在打印文本里（`PRINTFORMW` 的参数不是带引号的串），这一层分不开 ⇒ 不动。
  * 同一个"分不开就不动"做到块这一层：调用方先用 `erbBodyLineMask` 把正文区
- * （数据表块体 / 停用死区）整行剔除，本函数只见结构行——它自己仍是逐行纯函数。
+ * （数据表块体 / 停用死区）整行剔除，本函数只见结构行——它自己仍是逐行纯函数：
+ * 块缩进目标由调用方按 `erbIndentPlan` 传入（`null` = 保留原缩进）。
  */
-function erbNewContent(content: string, rules: ResolvedRules): string | null {
+function erbNewContent(content: string, rules: ResolvedRules, blockIndent: string | null): string | null {
   if (content.length === 0) return null;
   if (isAllIndent(content)) {
     // 纯空白行 → 真空行（空白身份无歧义）；但行内有 U+3000 且折算规则关着时不动
@@ -396,8 +581,14 @@ function erbNewContent(content: string, rules: ResolvedRules): string | null {
   }
   const indent = leadingBlank(content);
   const rest = content.slice(indent.length);
-  // 折算关 ⇒ 缩进与注释区都原样（返回与原串相等 ⇒ 上层记 null）
-  const newIndent = rules.fullWidthSpace ? halfwidthInIndent(indent) : indent;
+  // 块层级给的缩进优先；折算关且原缩进含 U+3000 ⇒ 原样（"保留"不能变成改写）
+  const keepRawIndent = !rules.fullWidthSpace && indent.includes(FULLWIDTH_SPACE);
+  const newIndent =
+    blockIndent !== null && !keepRawIndent
+      ? blockIndent
+      : rules.fullWidthSpace
+        ? halfwidthInIndent(indent)
+        : indent;
   const newRest = rules.fullWidthSpace && rest.startsWith(';') ? halfwidthInText(rest) : rest;
   const next = newIndent + newRest;
   return next === content ? null : next;
@@ -449,8 +640,14 @@ function newContents(text: string, dialect: FormatDialect, rules: ResolvedRules)
 
   if (dialect === 'erb') {
     // 块上下文只在这里进 ERB 形（唯一一处；整篇/区间/on-type 三条腿都从本函数过，判据不分叉）
-    const body = erbBodyLineMask(lines.map((l) => l.content));
-    for (let i = 0; i < lines.length; i++) out[i] = body[i] ? null : erbNewContent(lines[i]!.content, rules);
+    const contents = lines.map((l) => l.content);
+    const body = erbBodyLineMask(contents);
+    // 单位探测不出 ⇒ 整条块缩进关掉（同 `.kojo` 的保守门槛），只剩全角折算与空白规则
+    const unit = rules.indent ? detectErbIndentUnit(contents, body) : null;
+    const plan = unit === null ? null : erbIndentPlan(contents, body, unit, rules);
+    for (let i = 0; i < lines.length; i++) {
+      out[i] = body[i] ? null : erbNewContent(lines[i]!.content, rules, plan?.[i] ?? null);
+    }
     return out;
   }
 
