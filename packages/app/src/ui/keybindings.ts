@@ -7,6 +7,12 @@ import {
   type KeyChord,
   type CommandEntry,
 } from './commands';
+import {
+  KEYBINDING_CATEGORY_ORDER,
+  KEYBINDING_SPECS,
+  defaultKeybindingOf,
+  keybindingSpecOf,
+} from './keybinding-specs';
 
 /**
  * 集中键位注册表（R8 快捷键批）——宿主层单一真源。
@@ -34,93 +40,24 @@ import {
  *   （`rebindable: false`，对话框里明示）。
  * - **不与 UI-4 roving tabindex 冲突**：本模块只定义键位数据，键盘可达性（方向键
  *   漫游、focus-visible）仍在各组件的漫游逻辑里，两不相干。
- */
-
-/** 键位注册表条目（宿主键位清单；展示名一律中文） */
-export interface KeybindingSpec {
-  /** 命令 id（与统一命令注册表同 key；Monaco 内部键位用 `editor.internal.` 前缀） */
-  readonly id: string;
-  /** 中文展示名（命令面板/键位表同词） */
-  readonly title: string;
-  /** 中文分类 */
-  readonly category: string;
-  /** 缺省键位（`undefined` = 无缺省键，仅命令面板入口；和弦含空格） */
-  readonly keys?: string;
-  /** 是否允许改键（和弦与 Monaco 内部键为 false） */
-  readonly rebindable: boolean;
-  /** 键位表里的备注（如「编辑器内生效」） */
-  readonly note?: string;
-}
-
-/** 全部宿主键位（新增快捷键必须在这里登记，否则键位表看不见它） */
-export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
-  // ---- 布局（壳层容器语义） ----
-  { id: 'layout.toggleSidebar', title: '切换主侧栏', category: '布局', keys: 'ctrl+b', rebindable: true },
-  { id: 'layout.toggleBottom', title: '切换底部区', category: '布局', keys: 'ctrl+j', rebindable: true },
-  { id: 'layout.toggleAux', title: '切换副侧栏', category: '布局', keys: 'ctrl+alt+b', rebindable: true },
-  { id: 'layout.toggleZen', title: '切换写作模式', category: '布局', keys: 'ctrl+k z', rebindable: false, note: '和弦，暂不支持改键' },
-  { id: 'layout.openSettings', title: '打开设置', category: '布局', rebindable: true },
-  { id: 'layout.reset', title: '重置布局', category: '布局', rebindable: true },
-  // ---- 工作台 ----
-  { id: 'workbench.commandPalette', title: '命令面板', category: '工作台', keys: 'ctrl+shift+p', rebindable: true, note: 'F1 亦可' },
-  { id: 'workbench.quickOpen', title: '快速打开文件', category: '工作台', keys: 'ctrl+p', rebindable: true },
-  { id: 'workbench.workspaceSymbols', title: '转到工作区符号', category: '工作台', keys: 'ctrl+t', rebindable: true },
-  { id: 'workbench.searchInFiles', title: '在文件中搜索', category: '工作台', keys: 'ctrl+shift+f', rebindable: true },
-  { id: 'workbench.replaceInFiles', title: '在文件中替换', category: '工作台', keys: 'ctrl+shift+h', rebindable: true },
-  { id: 'workbench.problems', title: '问题面板', category: '工作台', keys: 'ctrl+shift+m', rebindable: true },
-  { id: 'workbench.keybindings', title: '打开键盘快捷键', category: '工作台', rebindable: true },
-  // 兜底右键菜单的「检查更新」入口（1023 覆盖面批）：无缺省键位，登记在此只为让
-  // 菜单与命令面板共用同一份中文名（`menuItemFromCommand` 从这里取标题）。
-  { id: 'workbench.checkUpdates', title: '检查更新', category: '工作台', rebindable: true },
-  // 文字缩放（A1 批给的缺省键位，本批入表 = 可查可改可显示）
-  { id: 'editor.fontZoomIn', title: '放大文字', category: '编辑器', keys: 'ctrl+=', rebindable: true },
-  { id: 'editor.fontZoomOut', title: '缩小文字', category: '编辑器', keys: 'ctrl+-', rebindable: true },
-  { id: 'editor.fontZoomReset', title: '重置文字缩放', category: '编辑器', keys: 'ctrl+0', rebindable: true },
-  { id: 'workbench.closeActiveTab', title: '关闭当前标签', category: '工作台', keys: 'ctrl+w', rebindable: true },
-  { id: 'workbench.saveAll', title: '全部保存', category: '工作台', keys: 'ctrl+shift+s', rebindable: true },
-  { id: 'workbench.fixAll', title: '一键修复当前文件', category: '工作台', keys: 'ctrl+shift+y', rebindable: true },
-  { id: 'workbench.toggleSugarView', title: '切换 .kojo 预览', category: '工作台', keys: 'ctrl+alt+t', rebindable: true },
-  { id: 'workbench.jumpToState', title: '看这一行的状态', category: '工作台', keys: 'ctrl+alt+s', rebindable: true },
-  // 导航历史（MM-6 前进/后退 + MM-10 恢复关闭的标签）：编辑器肌肉记忆批。
-  // Alt+←/→ 与 Ctrl+Shift+T 都是单键 chord，走全局分发（ShellLayout 注册表匹配）。
-  { id: 'workbench.navBack', title: '后退', category: '工作台', keys: 'alt+arrowleft', rebindable: true },
-  { id: 'workbench.navForward', title: '前进', category: '工作台', keys: 'alt+arrowright', rebindable: true },
-  { id: 'workbench.reopenClosedTab', title: '恢复关闭的标签', category: '工作台', keys: 'ctrl+shift+t', rebindable: true },
-  // 标签最近使用切换（1020 编辑器体感批）：Ctrl+Tab 在**焦点组**的 MRU 序里往后走。
-  // Monaco 没有占这条键（vendor 里 `CtrlCmd|Tab` 零命中），宿主直接吃；连按语义在 App 的 cycleTab。
-  { id: 'workbench.nextTab', title: '切到上一个用过的标签', category: '工作台', keys: 'ctrl+tab', rebindable: true, note: '连按继续在后用序里走；仅本组' },
-  { id: 'workbench.prevTab', title: '切到下一个用过的标签', category: '工作台', keys: 'ctrl+shift+tab', rebindable: true, note: '与上一条方向相反；仅本组' },
-  // ---- 分屏（SPLIT-1 编辑器组批 + MM-9 布局持久化批） ----
-  { id: 'workbench.splitEditor', title: '向右拆分编辑器', category: '工作台', keys: 'ctrl+\\', rebindable: true },
-  // MM-9：向下拆分同时把排列钉为上下（column）——命令名说什么就给什么；
-  // 翻方向两条仅分屏时生效（单组翻了看不出来，命令侧先给人话）
-  { id: 'workbench.splitEditorDown', title: '向下拆分编辑器', category: '工作台', rebindable: true, note: '拆分并切换为上下排列' },
-  { id: 'workbench.setGroupsColumn', title: '编辑器组上下排列', category: '工作台', rebindable: true, note: '仅分屏时生效；单组先拆分' },
-  { id: 'workbench.setGroupsRow', title: '编辑器组左右排列', category: '工作台', rebindable: true, note: '仅分屏时生效；单组先拆分' },
-  { id: 'workbench.closeEditorGroup', title: '关闭编辑器组', category: '工作台', rebindable: true, note: '仅分屏时生效；单组不可关' },
-  // ---- 编辑器动作（命令面板入口；不带缺省键位 = 不劫持 Monaco 内建键） ----
-  { id: 'editor.action.find', title: '查找', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+F 为 Monaco 内建' },
-  { id: 'editor.action.replace', title: '替换', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+H 为 Monaco 内建' },
-  { id: 'editor.action.formatDocument', title: '格式化文档', category: '编辑器', rebindable: true, note: '编辑器内 Shift+Alt+F 为 Monaco 内建' },
-  { id: 'editor.action.rename', title: '重命名符号', category: '编辑器', rebindable: true, note: '编辑器内 F2 为 Monaco 内建' },
-  { id: 'editor.action.references', title: '查找引用', category: '编辑器', rebindable: true, note: '编辑器内 Shift+F12 为 Monaco 内建' },
-  { id: 'editor.action.gotoLine', title: '转到行', category: '编辑器', rebindable: true, note: '编辑器内 Ctrl+G 为 Monaco 内建' },
-  // ---- 编辑器内部（Monaco addCommand，仅展示） ----
-  { id: 'editor.internal.save', title: '保存当前文件', category: '编辑器', keys: 'ctrl+s', rebindable: false, note: '编辑器内生效，暂不支持改键' },
-  // A7「在选定内容中查找」：有选区时把选中文本灌进 find 并把搜索域钉在选区（无选区不动作）
-  { id: 'editor.internal.findInSelection', title: '在选定内容中查找', category: '编辑器', keys: 'ctrl+alt+f', rebindable: false, note: '编辑器内生效；先选中文本再按' },
-];
-
-const DEFAULTS = new Map(KEYBINDING_SPECS.filter((s) => s.keys !== undefined).map((s) => [s.id, s.keys!]));
-
-/**
- * 分类的展示顺序（快捷键页左导航据此排）。
  *
- * 为什么要显式一张序表而不是 `localeCompare`：分类名是中文，字典序随运行环境的区域设置漂移，
- * 同一张表在两台机器上两种顺序 ⇒ 作者记住「编辑器在第三位」就不可靠。
- * 新增分类**必须同时**加进这里，否则该分类会被排到最后（漏了也不会炸，只是靠后）。
+ * ## 规格表已下沉（1023 开机图减重批）
+ *
+ * 中文标题、缺省键与分类序这张**纯数据表**搬到了 `./keybinding-specs`：右键菜单的
+ * 数据面（`context-menu-model.ts`）只需要查表，从前为两根展示字符串把本模块整包
+ * （localStorage 覆盖表、持久化、订阅、React 钩子）拖进首屏。这里保留原样的再导出，
+ * 调用方一行不用改；**表仍只有一份**，本文件不再持有任何键位字面量。
  */
-export const KEYBINDING_CATEGORY_ORDER: readonly string[] = ['工作台', '布局', '编辑器'];
+
+// 纯数据与纯查表函数住在 `./keybinding-specs`（零 import 的叶子模块）。这里再导出，
+// 是为了让既有 `import { keybindingSpecOf } from './keybindings'` 的调用面保持不变。
+export {
+  KEYBINDING_CATEGORY_ORDER,
+  KEYBINDING_SPECS,
+  defaultKeybindingOf,
+  keybindingSpecOf,
+};
+export type { KeybindingSpec } from './keybinding-specs';
 
 /** 键位现状三态：原样 / 被改过 / 被作者关掉（解绑） */
 export type BindingState = 'default' | 'overridden' | 'unbound';
@@ -215,17 +152,12 @@ export function useKeybindingsVersion(): number {
 
 /* ---------------------------- 查询与修改 ---------------------------- */
 
-/** 缺省键位（不在注册表 = undefined） */
-export function defaultKeybindingOf(id: string): string | undefined {
-  return DEFAULTS.get(id);
-}
-
 /** 生效键位 = 覆盖 ?? 缺省；不在注册表 = undefined；已解绑也 = undefined（无键位可用） */
 export function effectiveKeybindingOf(id: string): string | undefined {
   const o = overrides[id];
   if (o === '') return undefined; // 显式解绑：覆盖表里存空串，对分发与展示都等于「没有键位」
   if (o !== undefined) return o;
-  return DEFAULTS.get(id);
+  return defaultKeybindingOf(id);
 }
 
 /** 这条键位现在是原样、被改过，还是被作者关掉了（快捷键页的行徽标据此画） */
@@ -252,11 +184,6 @@ export function resetAllKeybindings(): number {
   persist();
   bump();
   return cleared;
-}
-
-/** 注册表条目（展示用） */
-export function keybindingSpecOf(id: string): KeybindingSpec | undefined {
-  return KEYBINDING_SPECS.find((s) => s.id === id);
 }
 
 /** 该 id 是否有用户覆盖 */
