@@ -31,6 +31,11 @@ import {
   rowFixKey,
   type ProblemSeverity,
 } from './problem-fix';
+import {
+  COPY_ALL_DISABLED_REASON,
+  setProblemsMenuContext,
+} from './problem-menu';
+import './context-menu-search.css';
 
 /**
  * 底部「问题」面板（看板 HK-4 · UI-6；P2-13 分组/过滤/行内修复/复制批）。
@@ -254,10 +259,13 @@ export function ProblemPanel({
       .catch((e: unknown) => showFlash(key, `动作失败：${errorText(e)}`));
   };
 
-  /** 复制消息：文案判据在 `problemCopyText`（纯函数）；成败都有反馈（不静默） */
-  const copyProblem = (p: EditorProblem): void => {
-    const key = `copy\u0000${rowFixKey(p)}`;
-    const text = problemCopyText(p);
+  /**
+   * 写剪贴板 + 回执（复制消息 / 复制全部共用）：成败都说一句，不静默。
+   *
+   * `key` = 回执挂在哪儿（行键 ⇒ 那一行；`'panel'` ⇒ 汇总行）——菜单动作没有自己的
+   * 落点，回执位置就是它唯一的"我收到了"。
+   */
+  const writeClipboard = (key: string, text: string, okText: string): void => {
     try {
       const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
       if (!clipboard?.writeText) {
@@ -265,13 +273,81 @@ export function ProblemPanel({
         return;
       }
       void clipboard.writeText(text).then(
-        () => showFlash(key, '已复制到剪贴板'),
+        () => showFlash(key, okText),
         () => showFlash(key, '复制失败：剪贴板拒绝了这次写入'),
       );
     } catch (e: unknown) {
       showFlash(key, `复制失败：${errorText(e)}`);
     }
   };
+
+  /** 复制消息：文案判据在 `problemCopyText`（纯函数）；成败都有反馈（不静默） */
+  const copyProblem = (p: EditorProblem): void => {
+    // 回执挂在**这一行**（`rowFixKey`）：此前用的 `copy\0…` 前缀与渲染侧的判等键对不上，
+    // 行内「复制」按下去永远看不到回执（菜单动作同样会哑掉）
+    writeClipboard(rowFixKey(p), problemCopyText(p), '已复制到剪贴板');
+  };
+
+  /** 复制全部：文案逐条走同一个 `problemCopyText`（不另写一份格式） */
+  const copyAllProblems = (): void => {
+    if (items.length === 0) {
+      showFlash('panel', COPY_ALL_DISABLED_REASON);
+      return;
+    }
+    writeClipboard('panel', items.map((p) => problemCopyText(p)).join('\n'), `已复制 ${items.length} 条问题`);
+  };
+
+  /** 清除过滤：严重级回全开 + 清空文本（过滤尺一变，既有的窗口复位 effect 会跟上） */
+  const clearFilter = (): void => {
+    setSevSel(ALL_SEVERITIES);
+    setFilterText('');
+  };
+
+  /** 菜单里的快速修复：与行内「修复」按钮同一条判据与落地路径 */
+  const quickFixProblem = (p: EditorProblem): void => {
+    const action = rowFixAction(p);
+    if (action === undefined) {
+      showFlash(rowFixKey(p), '这条问题没有唯一解修复');
+      return;
+    }
+    applyFix(p, action);
+  };
+
+  /* ---------------------- 右键菜单面（1023 覆盖面批 · WP3.2） ---------------------- */
+
+  /**
+   * 每次提交后刷新菜单上下文（无依赖 = 每次渲染后重灌）。
+   *
+   * 面板会随底部面板切换反复挂载，而面是模块级注册的（重复声明会告警）——所以面只声明
+   * 一次（见 `problem-menu`），这里只把"此刻有哪些通道 + 动作落在哪"换新。卸载不清空：
+   * 面只认 DOM 上的 `data-context-surface="problems"`，面板没了，菜单也走不到这里。
+   */
+  useEffect(() => {
+    setProblemsMenuContext({
+      capabilities: {
+        canCopy:
+          typeof navigator !== 'undefined' &&
+          typeof navigator.clipboard?.writeText === 'function',
+      },
+      handlers: {
+        reveal: (p) => onReveal(p.path, p.line, problemRevealSpan(p)),
+        quickFix: quickFixProblem,
+        copyProblem,
+        filterByCode: (code) => setFilterText(code),
+        copyAll: copyAllProblems,
+        clearFilter,
+      },
+      // 行身份 → 问题本体：路径 + 行 + 码（码可能为空串，与 DOM 属性同一口径）
+      problemAt: (path, line, code) =>
+        items.find(
+          (p) => p.path === path && p.line === line && (p.code ?? '') === code,
+        ) ?? null,
+      // 唯一解判据与行内「修复」按钮同一条：有解才给菜单项，没解整项不显示
+      quickFixAvailable: (p) => rowFixAction(p) !== undefined,
+      itemCount: () => items.length,
+      filtering: () => filtering,
+    });
+  });
 
   const renderRow = (p: EditorProblem, globalIndex: number): ReactElement => {
     // ZH-D2：码位第一眼给**中文短名**，原码逐字留在悬停 title——真源在契约层
@@ -280,7 +356,15 @@ export function ProblemPanel({
     const fixAction = rowFixAction(p);
     const rowKey = rowFixKey(p);
     return (
-      <li key={`${rowKey}:${globalIndex}`} className="prob-item">
+      <li
+        key={`${rowKey}:${globalIndex}`}
+        className="prob-item"
+        // 右键菜单的行身份（1023 覆盖面批）：只存"是哪一条"，问题本体由面的上下文回查
+        data-problem-row=""
+        data-problem-path={p.path}
+        data-problem-line={p.line}
+        data-problem-code={p.code ?? ''}
+      >
         <button
           className="conv-issue-btn"
           data-panel-row=""
@@ -337,6 +421,9 @@ export function ProblemPanel({
   return (
     <div
       className="panel-problems"
+      // 右键面（1023 覆盖面批）：行由 `data-problem-row` 认领；汇总行 / 空白区出面板级菜单；
+      // 过滤框与勾选框由 `problem-menu` 主动让给全局输入框面（粘贴/全选在那一面）
+      data-context-surface="problems"
       // 行导航（1020 编辑器体感批）：↑↓ 逐条看，F8/Shift+F8 跳过去并当场打开。
       // 焦点在编辑器里时这一对键仍归 Monaco 的 `marker.nextInFiles`（见「键盘快捷键」页的内建组）；
       // 焦点落到本面板时由这里按**过滤后的可见列表**代跳——被筛掉的条不该用键跳过去。
@@ -358,6 +445,12 @@ export function ProblemPanel({
             <span className="conv-count" style={{ color: SEVERITY_COLOR.info }}>
               提示 {info}
             </span>
+            {/* 面板级动作的回执（复制全部）：与行内回执同一个类，挂在汇总行 */}
+            {flash !== null && flash.key === 'panel' ? (
+              <span className="prob-flash" role="status">
+                {flash.text}
+              </span>
+            ) : null}
           </div>
           <div className="prob-toolbar">
             {ALL_SEVERITIES.map((s) => (

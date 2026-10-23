@@ -1,8 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import type { SearchMatch, SearchProgress } from '../bridge/search';
-import { nextWindow, type RenderWindow } from '@kojo/plugin-api';
+import { errorText, nextWindow, type RenderWindow } from '@kojo/plugin-api';
+import { isTauri } from '../bridge/invoke';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { Icon } from './icons';
+import { revealFailureText, revealInExplorer } from './reveal-explorer';
+import { setSearchMenuContext } from './search-menu';
 import {
   clearSearchResult,
   runReplace,
@@ -50,6 +53,7 @@ import {
 } from './search-scope';
 import { SearchFilterBar } from './SearchFilterBar';
 import '../search-panel.css';
+import './context-menu-search.css';
 
 /**
  * 侧栏「在文件中搜索」面板（2026-10-15 全文检索批；2026-10-17 用户反馈 5 重排）。
@@ -281,7 +285,14 @@ function SearchMatchRow({
   onReplace: () => void;
 }): ReactElement {
   return (
-    <div className="search-match-row ksp-row">
+    <div
+      className="search-match-row ksp-row"
+      // 右键菜单的行身份（1023 覆盖面批）：只存"是哪一条"，命中本体由面的上下文回查
+      data-search-match=""
+      data-search-path={path}
+      data-search-line={match.line}
+      data-search-column={match.column}
+    >
       <button
         type="button"
         className="search-match ksp-row-main"
@@ -340,6 +351,44 @@ export function SearchPanel({
    * 连续全量重读。开关住面板自己行内（选项区），不占全局设置。
    */
   const [liveSearch, setLiveSearch] = useState(true);
+
+  /**
+   * 菜单动作的回执（复制 / 资源管理器；1023 覆盖面批）。
+   *
+   * 右键菜单里的动作没有行内按钮那样的落点，成败必须有一句话上屏（铁律 4：
+   * 复制失败 / 资源管理器打不开都不许静默）。收 1.8s 后自动收起——与问题面板的
+   * `prob-flash` 同一套反馈语言，不新增第二套通知机制。
+   */
+  const [flash, setFlash] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current);
+    },
+    [],
+  );
+  const showFlash = (text: string): void => {
+    setFlash(text);
+    if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlash(null), 1_800);
+  };
+
+  /** 写剪贴板（成败都说一句；没有剪贴板时菜单项本身已经整项不显示，这里是双保险） */
+  const copyText = (text: string): void => {
+    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+    if (!clipboard?.writeText) {
+      showFlash('复制失败：当前环境没有剪贴板能力');
+      return;
+    }
+    try {
+      void clipboard.writeText(text).then(
+        () => showFlash('已复制到剪贴板'),
+        () => showFlash('复制失败：剪贴板拒绝了这次写入'),
+      );
+    } catch (e: unknown) {
+      showFlash(`复制失败：${errorText(e)}`);
+    }
+  };
 
   // 挂载即聚焦；快捷键/命令再次命中（focusNonce 变化）也重新聚焦并全选——
   // 这是"Ctrl+Shift+F 就该能直接打字"的那一步（面板可能早就开着）。
@@ -521,6 +570,58 @@ export function SearchPanel({
       return next;
     });
   };
+
+  /* ---------------------- 右键菜单面（1023 覆盖面批 · WP3.1） ---------------------- */
+
+  /**
+   * 文件路径 → 这一屏投影里它的命中（菜单按 `data-search-*` 认领行，再回这里取命中本体）。
+   *
+   * 为什么不在 DOM 属性里塞命中：属性只能存字符串，且结果一刷新就会指向一条已经不存在的
+   * 命中；菜单只认"是哪一条"，命中本体留在现场这份投影里（找不到 ⇒ 菜单整级不表态）。
+   */
+  const matchesByPath = useMemo(() => {
+    const map = new Map<string, SearchMatch[]>();
+    for (const g of groups) map.set(g.path, [...g.matches]);
+    return map;
+  }, [groups]);
+
+  /**
+   * 每次提交后刷新菜单上下文（`useEffect` 无依赖 = 每次渲染后重灌）。
+   *
+   * 不在渲染体里写模块状态：并发渲染下被放弃的那一次会把菜单指向一棵从未上屏的树。
+   * 也不在卸载时清空 —— 面（`search-results`）只认 DOM 上的 `data-context-surface`，
+   * 面板卸载后这颗元素随之消失，菜单根本走不到这里。
+   */
+  useEffect(() => {
+    setSearchMenuContext({
+      capabilities: {
+        // 替换要落盘：必须有完成态结果、且没有别的替换在写
+        canReplace: result !== null && s.phase === 'done' && !s.replaceRunning,
+        canReveal: isTauri(),
+        canCopy:
+          typeof navigator !== 'undefined' &&
+          typeof navigator.clipboard?.writeText === 'function',
+      },
+      handlers: {
+        openMatch: (path, match) => {
+          // 与点行同一条「当前项」判据（`selectSearchMatch`），菜单跳转不该另立一套游标
+          selectSearchMatch(path, match.line, match.column);
+          onReveal(path, match.line, searchMatchSpan(match));
+        },
+        copyText,
+        revealPath: (path) => {
+          void revealInExplorer(path).then(
+            () => showFlash('已在资源管理器中显示'),
+            (e: unknown) => showFlash(revealFailureText(e)),
+          );
+        },
+        replaceMatch: (path, match) => replaceOne(path, match),
+      },
+      findMatch: (path, line, column) =>
+        matchesByPath.get(path)?.find((m) => m.line === line && m.column === column) ?? null,
+      firstMatchOf: (path) => matchesByPath.get(path)?.[0] ?? null,
+    });
+  });
 
   return (
     <div
@@ -803,6 +904,12 @@ export function SearchPanel({
         ) : null}
 
         <div className="ksp-status-zone">
+          {/* 菜单动作回执（复制 / 在资源管理器中显示）：1.8s 后自动收起，不占常驻版面 */}
+          {flash !== null ? (
+            <div className="search-status ksp-note ksp-menu-flash" role="status">
+              {flash}
+            </div>
+          ) : null}
           {s.phase === 'running' ? (
             <div className="search-status ksp-status ksp-progress">
               <span className="ksp-spinner" aria-hidden="true" />
@@ -906,6 +1013,9 @@ export function SearchPanel({
         <div
           ref={resultsRef}
           className="search-rows ksp-results"
+          // 结果区的右键面（1023 批）：命中行 / 文件头由下面的 `data-search-*` 认领，
+          // 空白处本面不表态（走兜底通用菜单）
+          data-context-surface="search-results"
           style={{ '--ksp-gutter': String(gutterCh) } as CSSProperties}
         >
           {groups.map((g) => {
@@ -918,6 +1028,9 @@ export function SearchPanel({
                   className="search-file ksp-file"
                   title={g.path}
                   aria-expanded={!folded}
+                  // 右键菜单的文件组身份（见 `search-menu` 的 `SEARCH_FILE_ATTR`）
+                  data-search-file=""
+                  data-search-path={g.path}
                   onClick={() => toggleFile(g.path)}
                 >
                   <span className="ksp-file-caret" aria-hidden="true">

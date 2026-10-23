@@ -1,0 +1,26 @@
+/**
+ * 搜索结果 / 问题面板的右键菜单补丁样式（1023 覆盖面批 · WP3.1 / WP3.2）。
+ *
+ * 为什么单独一个文件：本批 11 路并行，`search-panel.css` / `styles-project.css` /
+ * `context-menu.css` 都是共享样式表（改一次必然撞车）。这里只放本批新增的类，
+ * 由各自组件 import —— 两个面板不装在一起时谁也看不见谁的规则。
+ */
+
+/* ---------------------- 搜索结果：菜单动作回执 ---------------------- */
+
+/* 复制 / 资源管理器的成败回执：与状态区说明同排版，用左侧 accent 竖条区分
+   "这是刚才那一下的结果"而不是一条常驻状态（1.8s 后自行消失）。 */
+.panel-search.ksp .ksp-menu-flash {
+  color: var(--accent-text);
+  border-left: 2px solid var(--accent);
+  padding-left: var(--space-1);
+}
+
+/* ---------------------- 问题面板：菜单动作回执 ---------------------- */
+
+/* 行内修复 / 复制 / 菜单动作共用同一个反馈位（`prob-flash`）。此前没有任何样式，
+   回执与正文同色——"点了没反应"和"点了但字太小看不见"是同一件事（铁律 4）。 */
+.panel-problems .prob-flash {
+  color: var(--accent-text);
+  font-size: var(--fs-0);
+}
