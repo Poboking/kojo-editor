@@ -2,6 +2,13 @@ import { memo, type ComponentType, type ReactElement } from 'react';
 import type { UIPanelContribution, UIPanelProps } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { createPluginContextMenuBridge } from './plugin-context-menu-bridge';
+// 三个属性名与面板面本身都来自这个模块：**import 它就是登记 `plugin-panel` 面**
+// （`declareContextSurface` 在模块顶层，加载即登记）。PanelHost 必然被加载，故登记不会漏。
+import {
+  PLUGIN_PANEL_ID_ATTR,
+  PLUGIN_PANEL_PLUGIN_ATTR,
+  PLUGIN_PANEL_TITLE_ATTR,
+} from './plugin-panel-menu';
 
 /** 宿主下传的 UI 偏好投影类型（从契约字段派生——`UiPrefs` 未从 plugin-api 桶导出） */
 type UiPrefs = NonNullable<UIPanelProps['uiPrefs']>;
@@ -64,7 +71,19 @@ export function hostVersionStep(prev: HostVersionState, deps: readonly unknown[]
 }
 
 export interface PanelBodyProps {
-  contribution: Pick<UIPanelContribution, 'id' | 'component'>;
+  /**
+   * `title` / `pluginId` 是 1023 覆盖面批扩的（additive，两个字段都只是读）：
+   * - `title`：插件面板的宿主级右键要能"复制面板名"；
+   * - `pluginId`：**区分插件面板与内建视图的唯一判据**（注册时由内核注入；内建视图没有）。
+   *   只有插件面板才挂 `plugin-panel` 面——内建视图（搜索结果 / 问题 / 预览…）各有各的面，
+   *   在这里统一挂一个父面会按 `closest` 的「最近祖先」规则**遮蔽**掉它们自己。
+   */
+  contribution: Pick<UIPanelContribution, 'id' | 'component'> & {
+    /** 面板名（插件面板一定有；`OverlayContribution` 这类宿主内建贡献可以没有） */
+    readonly title?: string;
+    /** 内核注册时注入的插件 id。**有没有它是「插件面板 / 内建视图」的唯一判据** */
+    readonly pluginId?: string;
+  };
   /** 浮窗态（2026-10-14 UI 浮动批）：面板正渲染在可移动浮窗里时转发给贡献方，供其调整自身 chrome */
   floating?: boolean;
   /**
@@ -113,8 +132,19 @@ function PanelBodyView({ contribution, floating, uiPrefs }: PanelBodyProps): Rea
   // 右键菜单通道（1023 批）：按面板 id 取一个**引用稳定**的桥（`createPluginContextMenuBridge`
   // 内部复用），面板塞进 effect 依赖数组时不会反复重订阅。
   const openContextMenu = createPluginContextMenuBridge(contribution.id);
+  // 插件面板才有宿主级兜底面（见 `PanelBodyProps.contribution` 的说明）：空白处右键给的是
+  // 宿主能力（复制面板名 / 面板 ID / 插件 ID），行内业务动作仍归面板自己经 `openContextMenu`。
+  const pluginPanelAttrs =
+    contribution.pluginId === undefined
+      ? {}
+      : {
+          'data-context-surface': 'plugin-panel',
+          [PLUGIN_PANEL_ID_ATTR]: contribution.id,
+          [PLUGIN_PANEL_TITLE_ATTR]: contribution.title ?? contribution.id,
+          [PLUGIN_PANEL_PLUGIN_ATTR]: contribution.pluginId,
+        };
   return (
-    <div className={`panel panel-${contribution.id}`}>
+    <div className={`panel panel-${contribution.id}`} {...pluginPanelAttrs}>
       <Comp
         renderIcon={renderIcon}
         openContextMenu={openContextMenu}

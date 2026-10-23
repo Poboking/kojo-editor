@@ -91,7 +91,10 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
   { id: 'welcome-recent', ariaLabel: '最近项目菜单', area: 'chrome' },
   { id: 'settings', ariaLabel: '设置菜单', area: 'chrome' },
   { id: 'keybindings', ariaLabel: '快捷键菜单', area: 'chrome' },
-  { id: 'market', ariaLabel: '市场菜单', area: 'chrome' },
+  // 这里**没有** `market`：市场不是 app 的页面，是插件 `ui-market` 提供的面板。
+  // 它的右键走插件通道（`UIPanelProps.openContextMenu`，见 `ui-market/src/context-menu.ts`），
+  // 不经过界面面注册表；面板空白处则由 `plugin-panel` 面统一接管。登记 `market` 会得到
+  // 一个永远没有宿主的空面——同 `outline` 的理由。
   { id: 'tutorial', ariaLabel: '教程菜单', area: 'chrome' },
   { id: 'palette', ariaLabel: '命令面板菜单', area: 'chrome' },
   // ---- 插件面板 ----
