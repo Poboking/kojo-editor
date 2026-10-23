@@ -1,7 +1,26 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
-import type { EditorCommandContext, EditorWorkspaceSymbol } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorDocumentSymbol, EditorWorkspaceSymbol } from '@kojo/plugin-api';
 import type { CommandEntry } from './commands';
+import { isTauri } from '../bridge/invoke';
+import { useNotify, type Notify } from './NotificationCenter';
+import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
+import { openContextMenu } from './context-menu-host';
+import { buildContextMenuRoute, declareContextSurface, type ContextSurfaceBuildResult } from './context-surfaces';
 import { dirLabelParts } from './path-label';
+import {
+  KEYBINDINGS_COMMAND_ID,
+  PALETTE_ROW_ACTION,
+  buildPaletteRowMenu,
+  commandRowTarget,
+  fileRowTarget,
+  paletteRowAttributes,
+  paletteRowMenuAriaLabel,
+  paletteRowTargetOf,
+  symbolRowTarget,
+  type PaletteMenuCapabilities,
+  type PaletteRowTarget,
+} from './palette-menu';
+import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { isComposingEvent } from './shell-keys';
 import {
   activeSymbolKey,
@@ -70,7 +89,15 @@ interface PickerItem {
   secondaryRanges?: HitRanges;
   /** 小节标题（与上一行不同时，在这一行上方插一条分组标签）：「最近打开」与命令的 category */
   group?: string;
+  /**
+   * 这一行的右键菜单载荷（文件路径 / 命令 id / `文件:行`）。
+   * 没有它就等于「`Picker` 不认识这一行」——右键继续往路由的下一级走（如 `:` 行号行）。
+   */
+  menu?: PaletteRowTarget;
 }
+
+/** 行右键菜单归属的面（两个 id 都已在 `CONTEXT_SURFACE_MANIFEST` 登记） */
+type PaletteSurfaceId = 'quick-open' | 'palette';
 
 interface PickerProps {
   placeholder: string;
@@ -95,6 +122,10 @@ interface PickerProps {
    *   其它浮层的遮罩不在本批范围）。
    */
   variant?: PaletteVariant;
+  /** 行右键菜单归属的面（列表容器挂 `data-context-surface`，路由据此找到面） */
+  surface: PaletteSurfaceId;
+  /** 符号行的「跳转」落点：面板自己给（文件行 / 命令行没有这一项） */
+  onJump?: (target: PaletteRowTarget) => void;
 }
 
 type PaletteVariant = 'default' | 'commands' | 'palette';
@@ -165,6 +196,113 @@ export function commandRows(items: readonly PickerItem[], commands: readonly Com
   });
 }
 
+/* ------------------- 行右键菜单（1023 覆盖面批 · WP2.6 / WP4.9 / WP3.3） ------------------- */
+
+/**
+ * 行菜单的动作通道（通知 + 跳转）：由当前挂载的 `Picker` 注入。
+ *
+ * 为什么需要这一层：面声明在模块顶层（`declareContextSurface`），拿不到组件里的
+ * `useNotify()` 与各面板的跳转回调。这与地基的 `registerContextMenuCommandRunner`
+ * 是同一条注入口径——菜单不自己实现业务动作，只把动作交给**在场的那个面板**。
+ * `null` = 没有选择器在场：这一级不表态，让路由继续往兜底走。
+ */
+interface PaletteRowChannel {
+  readonly notify: Notify;
+  readonly jump: (target: PaletteRowTarget) => void;
+}
+
+let rowChannel: PaletteRowChannel | null = null;
+
+/** 能力现算（每次开菜单）：剪贴板 / 桌面壳 / 命令通道都可能晚于首帧就绪 */
+function paletteMenuCapabilities(): PaletteMenuCapabilities {
+  const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+  return {
+    copyText: clipboard !== undefined && typeof clipboard.writeText === 'function',
+    revealInExplorer: isTauri(),
+    keybindingsCommand: canRunContextMenuCommand(KEYBINDINGS_COMMAND_ID),
+  };
+}
+
+/** 写剪贴板 + 一句轻反馈（口径照 FileTree `copyText` / tabs-bar `copyPath`） */
+function copyPaletteText(text: string, doneNote: string): void {
+  const channel = rowChannel;
+  if (channel === null) return;
+  const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+  if (clipboard === undefined || typeof clipboard.writeText !== 'function') {
+    channel.notify({ kind: 'error', message: '复制失败：当前环境没有可用的剪贴板' });
+    return;
+  }
+  void clipboard.writeText(text).then(
+    () => channel.notify({ kind: 'info', message: doneNote }),
+    () => channel.notify({ kind: 'error', message: '复制失败：剪贴板不可用' }),
+  );
+}
+
+/**
+ * 选中一项之后落地。
+ *
+ * 面自己的动作（复制 / 显示 / 跳转）在这里分支；其余 id 一律当命令交给命令通道
+ * ——「打开键盘快捷键」的 id 就是那条命令本身，不另造一个同义动作。
+ */
+function runPaletteRowAction(id: string, target: PaletteRowTarget): void {
+  switch (id) {
+    case PALETTE_ROW_ACTION.copyPath:
+      copyPaletteText(target.path, '已复制完整路径');
+      return;
+    case PALETTE_ROW_ACTION.copyName:
+      copyPaletteText(target.symbolName, '已复制符号名');
+      return;
+    case PALETTE_ROW_ACTION.copyCommandId:
+      copyPaletteText(target.commandId, '已复制命令 ID');
+      return;
+    case PALETTE_ROW_ACTION.copyCommandTitle:
+      copyPaletteText(target.label, '已复制命令标题');
+      return;
+    case PALETTE_ROW_ACTION.revealInExplorer:
+      void revealInExplorer(target.path).catch((err: unknown) => {
+        rowChannel?.notify({ kind: 'error', message: revealFailureText(err) });
+      });
+      return;
+    case PALETTE_ROW_ACTION.jump:
+      rowChannel?.jump(target);
+      return;
+    default:
+      // 命令类项：命令不存在 / when 不满足时返回 false，此时没有更具体的原因可说
+      runContextMenuCommand(id);
+  }
+}
+
+/** 面的构建：行上没话说（空白区 / `:` 行号行 / 通道不在场）就回 `null`，继续往下一级走 */
+function buildPaletteRowSurface(target: HTMLElement): ContextSurfaceBuildResult {
+  const row = paletteRowTargetOf(target);
+  if (row === null || rowChannel === null) return null;
+  const items = buildPaletteRowMenu(row, paletteMenuCapabilities());
+  if (items.length === 0) return null;
+  return {
+    items,
+    ariaLabel: paletteRowMenuAriaLabel(row.kind),
+    onSelect: (id) => {
+      runPaletteRowAction(id, row);
+    },
+  };
+}
+
+// 快速打开 / 工作区符号共用一个面（同一个 `Picker`；无障碍名按行种类在构建里换措辞）
+declareContextSurface({
+  id: 'quick-open',
+  ariaLabel: '快速打开菜单',
+  area: 'explorer',
+  build: (ctx) => buildPaletteRowSurface(ctx.target),
+});
+
+// 命令面板（F1 与 `Ctrl+P` 的 `>` 模式）
+declareContextSurface({
+  id: 'palette',
+  ariaLabel: '命令面板菜单',
+  area: 'chrome',
+  build: (ctx) => buildPaletteRowSurface(ctx.target),
+});
+
 function Picker({
   placeholder,
   emptyText,
@@ -175,7 +313,27 @@ function Picker({
   onClose,
   footnote,
   variant = 'default',
+  surface,
+  onJump,
 }: PickerProps): ReactElement {
+  const notify = useNotify();
+  /**
+   * 通道注册：`notify` 是壳层稳定值，跳转回调每次渲染可能换身份 ⇒ 走 ref 读，
+   * 通道本身只注册一次（卸载时按引用比对清空，避免两个面板同时挂着时互踩）。
+   */
+  const jumpRef = useRef(onJump);
+  jumpRef.current = onJump;
+  const channel = useMemo<PaletteRowChannel>(
+    () => ({ notify, jump: (target) => jumpRef.current?.(target) }),
+    [notify],
+  );
+  useEffect(() => {
+    rowChannel = channel;
+    return () => {
+      if (rowChannel === channel) rowChannel = null;
+    };
+  }, [channel]);
+
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -261,6 +419,7 @@ function Picker({
         <div
           ref={listRef}
           className={`picker-list ${variant === 'default' ? '' : 'pk-list'}`}
+          data-context-surface={surface}
         >
           {items.length === 0 ? (
             <div className="picker-empty dim">{emptyText}</div>
@@ -276,8 +435,21 @@ function Picker({
                   className={`picker-item ${i === cursor ? 'active' : ''}`}
                   disabled={it.disabled === true}
                   {...(it.title !== undefined ? { title: it.title } : {})}
+                  {...(it.menu !== undefined ? paletteRowAttributes(it.menu) : {})}
                   onMouseEnter={() => setCursor(i)}
                   onClick={() => pick(i)}
+                  onContextMenu={
+                    it.menu === undefined
+                      ? undefined
+                      : (e) => {
+                          // 行自己把事件交给根路由（不靠 window 上那条全局线）：同一份面的构建，
+                          // 停止冒泡是为了不出现"关掉又立刻重开"的双份菜单。
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const route = buildContextMenuRoute(e.currentTarget, e.nativeEvent);
+                          if (route !== null) openContextMenu({ x: e.clientX, y: e.clientY, ...route });
+                        }
+                  }
                 >
                   <span className="picker-primary">{marked(it.primary, it.ranges)}</span>
                   {dirLabel !== null && it.secondaryDir !== undefined ? (
@@ -329,7 +501,14 @@ export function CommandPalette({ commands, commandCtx, onClose }: CommandPalette
   // 条目构造与 Ctrl+P 的 `>` 模式共用一份（`commandItems`）：两个入口给两种高亮/顺序 = 迟早分叉
   const items = useMemo(() => commandItems(commands, query, commandCtx), [commands, query, commandCtx]);
   // 分类从主行文本挪到分组标签（显示层；过滤/排序判据仍是 `filterCommands` 那一条尺子）
-  const rows = useMemo(() => commandRows(items, commands), [items, commands]);
+  const rows = useMemo(
+    () =>
+      commandRows(items, commands).map((row) => ({
+        ...row,
+        menu: commandRowTarget(row.key, row.primary),
+      })),
+    [items, commands],
+  );
 
   return (
     <Picker
@@ -345,6 +524,7 @@ export function CommandPalette({ commands, commandCtx, onClose }: CommandPalette
       }}
       onClose={onClose}
       variant="palette"
+      surface="palette"
     />
   );
 }
@@ -426,13 +606,45 @@ export function QuickOpen({
 
   const items = useMemo(() => commandRows(view.items, commands), [view.items, commands]);
 
+  /** `@` 模式的行 → 符号本体（键就是 `activeSymbolKey`，这里按同一个函数反查） */
+  const symbolsByKey = useMemo(() => {
+    const map = new Map<string, EditorDocumentSymbol>();
+    for (const symbol of source?.symbols ?? []) map.set(activeSymbolKey(symbol), symbol);
+    return map;
+  }, [source]);
+
+  /**
+   * 行 + 右键菜单载荷：**只加菜单字段，不动过滤/排序/高亮**。
+   * `:` 行号行没有载荷 ⇒ 右键走根路由的下一级（它本来也没有"行之外"的动作）。
+   */
+  const rows = useMemo(() => {
+    if (mode.kind === 'files') {
+      return items.map((it) => ({ ...it, menu: fileRowTarget(it.key, it.primary) }));
+    }
+    if (mode.kind === 'commands') {
+      return items.map((it) => ({ ...it, menu: commandRowTarget(it.key, it.primary) }));
+    }
+    if (mode.kind === 'symbols') {
+      const path = source?.path ?? '';
+      return items.map((it) => {
+        const symbol = symbolsByKey.get(it.key);
+        if (symbol === undefined || path === '') return it;
+        return {
+          ...it,
+          menu: symbolRowTarget(path, symbol.startLine, symbol.name, it.primary),
+        };
+      });
+    }
+    return items;
+  }, [items, mode.kind, source, symbolsByKey]);
+
   return (
     <Picker
       placeholder={MODE_TEXT[mode.kind].placeholder}
       emptyText={view.emptyText}
       query={query}
       onQuery={setQuery}
-      items={items}
+      items={rows}
       onPick={(key) => {
         if (mode.kind === 'files') {
           onClose();
@@ -460,7 +672,17 @@ export function QuickOpen({
       }}
       onClose={onClose}
       variant={mode.kind === 'commands' ? 'commands' : 'default'}
+      surface="quick-open"
       {...(view.footnote !== null ? { footnote: view.footnote } : {})}
+      {...(mode.kind === 'symbols'
+        ? {
+            // 「跳转」= 与点这一行同一条落点（`editor.revealLocation`，不新造通道）
+            onJump: (target: PaletteRowTarget) => {
+              onClose();
+              onReveal({ filePath: target.path, line: target.line, source: '当前文件符号' });
+            },
+          }
+        : {})}
     />
   );
 }
@@ -500,19 +722,42 @@ export function WorkspaceSymbols({
   // 条目形状（主行/副行/行号）的判据在 `workspace-symbols.ts`（纯映射，可单测）
   const items = useMemo(() => symbolPickerItems(picked.items), [picked.items]);
 
+  /** 行 + 右键菜单载荷（`symbolPickerItems` 与 `picked.items` 同序一一对应） */
+  const rows = useMemo(
+    () =>
+      items.map((it, i) => {
+        const symbol = picked.items[i];
+        if (symbol === undefined) return it;
+        return {
+          ...it,
+          menu: symbolRowTarget(symbol.filePath, symbol.line, symbol.name, it.primary),
+        };
+      }),
+    [items, picked.items],
+  );
+
   return (
     <Picker
       placeholder="按名称搜索工作区符号…"
       emptyText={notice(query)}
       query={query}
       onQuery={setQuery}
-      items={items}
+      items={rows}
       onPick={(key) => {
         const symbol = picked.items.find((s) => symbolPickerKey(s) === key);
         onClose();
         if (symbol) onPickSymbol(symbol);
       }}
       onClose={onClose}
+      surface="quick-open"
+      onJump={(target) => {
+        // 「跳转」= 与点这一行同一条通道（`onPickSymbol` 落地 `editor.revealLocation`）
+        const symbol = picked.items.find(
+          (s) => s.filePath === target.path && s.line === target.line && s.name === target.symbolName,
+        );
+        onClose();
+        if (symbol !== undefined) onPickSymbol(symbol);
+      }}
       {...(overflow !== null ? { footnote: overflow } : {})}
     />
   );
