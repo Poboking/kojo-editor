@@ -12,7 +12,20 @@
 
 import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
-import type { FileIO, PluginContext, SugarTranspileService } from '@kojo/plugin-api';
+import type {
+  FileIO,
+  PluginContext,
+  PluginContextMenuAnchor,
+  SugarTranspileService,
+  UIPanelProps,
+} from '@kojo/plugin-api';
+import { diagnosticDisplay } from '@kojo/plugin-api';
+import {
+  copyVerdictText,
+  openVerdictDiagMenu,
+  openVerdictPanelMenu,
+  type VerdictMenuHost,
+} from './context-menu';
 import {
   DIAG_WINDOW,
   buildVerdictRows,
@@ -37,10 +50,10 @@ export interface VerdictPanelDeps {
   readonly diagList: (props: VerdictDiagListProps) => ReactElement;
 }
 
-export function createVerdictPanel(deps: VerdictPanelDeps): () => unknown {
+export function createVerdictPanel(deps: VerdictPanelDeps): (props: UIPanelProps) => unknown {
   const { ctx, sugar, io, diagList } = deps;
 
-  function VerdictPanel(): unknown {
+  function VerdictPanel(props: UIPanelProps): unknown {
     const [filePath, setFilePath] = useState<string | null>(null);
     const [degrade, setDegrade] = useState<VerdictDegrade>('no-project');
     const [summary, setSummary] = useState<VerdictSummary | null>(null);
@@ -147,10 +160,39 @@ export function createVerdictPanel(deps: VerdictPanelDeps): () => unknown {
       ctx.bus.emit('editor.revealLocation', { filePath, line });
     };
 
+    /**
+     * 右键菜单落点（1023 批）：三条都接回已有通道（定位 / 重算 / `editor.sugarView.set`）。
+     * 复制失败写进 `menuNote`（工具栏下面一行小字），不另起浮层。
+     */
+    const [menuNote, setMenuNote] = useState('');
+    const rerunVerdict = (): void => setNonce((n) => n + 1);
+    const menuHost: VerdictMenuHost = {
+      reveal,
+      refresh: rerunVerdict,
+      setSugarView: (on) => {
+        ctx.bus.emit('editor.sugarView.set', { on, source: 'ui-sugar-editor' });
+      },
+      copy: (text) => {
+        void copyVerdictText(text).then((ok) => {
+          if (ok) {
+            setMenuNote('已复制');
+            return;
+          }
+          setMenuNote('复制失败：当前环境不允许写剪贴板');
+          ctx.log.warn('糖判定复制失败：剪贴板不可用');
+        });
+      },
+    };
+
+    // 空白处右键（1023 批）：刷新判定 · 切回源码 / 按语法糖显示 · 复制文件路径
     const shell = (children: ReactNode[]): ReactNode =>
       createElement(
         'div',
-        { className: 'panel-sugar-verdict' },
+        {
+          className: 'panel-sugar-verdict',
+          onContextMenu: (e: PluginContextMenuAnchor) =>
+            openVerdictPanelMenu(props, e, { filePath, canRefresh: isKojoFile(filePath) }, menuHost),
+        },
         createElement(
           'div',
           { className: 'sv-toolbar' },
@@ -166,6 +208,7 @@ export function createVerdictPanel(deps: VerdictPanelDeps): () => unknown {
             '刷新',
           ),
         ),
+        menuNote === '' ? null : createElement('div', { className: 'dim sv-hint' }, menuNote),
         ...children,
       );
 

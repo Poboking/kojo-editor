@@ -11,6 +11,7 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type {
   PluginContext,
+  PluginContextMenuAnchor,
   ProjectService,
   SnapshotArchive,
   SnapshotInjectionResult,
@@ -38,6 +39,12 @@ import {
   type ScopeKind,
 } from './panel-logic';
 import { VarList } from './var-list';
+import {
+  copyInjectText,
+  openInjectPanelMenu,
+  openInjectVarMenu,
+  type InjectMenuHost,
+} from './context-menu';
 import { renderToolbar, renderPhaseBox } from './panel-frame';
 import { renderEditor } from './editor-box';
 import { renderPendingBox } from './pending-box';
@@ -395,6 +402,20 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     );
 
     // 变量目录（窗口化渲染：初窗 ≤ INITIAL，触底 / 点击「显示更多」按 STEP 追加）
+    /**
+     * 右键菜单落点（1023 批）：两条都接回面板已有的动作（`rescan` 与剪贴板），
+     * 复制失败写进已有的 `editError` 那一行，不另起浮层。
+     */
+    const menuHost: InjectMenuHost = {
+      rescan,
+      copy: (text) => {
+        void copyInjectText(text).then((ok) => {
+          setEditError(ok ? null : '复制失败：当前环境不允许写剪贴板');
+          if (!ok) ctx.log.warn('状态注入复制失败：剪贴板不可用');
+        });
+      },
+    };
+
     const varList = createElement(VarList, {
       rows: filtered,
       selectedKey,
@@ -403,6 +424,13 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       onGrow: growVars,
       onSelect: selectVar,
       virtualize,
+      onMenu: (row, event) =>
+        openInjectVarMenu(
+          props,
+          event,
+          { key: row.key, kind: row.kind, ...(row.scalarValue === undefined ? {} : { scalarValue: row.scalarValue }) },
+          menuHost,
+        ),
     });
 
     // 编辑区
@@ -438,7 +466,12 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       setArmed,
     });
 
-    return createElement('div', { className: 'panel-snapshot-injector' },
+    return createElement('div', {
+      className: 'panel-snapshot-injector',
+      // 空白处右键（1023 批）：重新扫描 · 复制档位路径
+      onContextMenu: (event: PluginContextMenuAnchor) =>
+        openInjectPanelMenu(props, event, { path, scanning }, menuHost),
+    },
       head,
       createElement('div', { className: 'inj-body' },
         createElement('div', { className: 'inj-left' }, scopeSel, varList),

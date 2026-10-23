@@ -35,7 +35,9 @@ import type {
   ConditionExtractorService,
   FunctionReplay,
   KojoCallSlot,
+  PredicateReplay,
   Plugin,
+  PluginContextMenuAnchor,
   ProjectService,
   ReplayStateView,
   SlotRegistry,
@@ -64,6 +66,13 @@ import {
 import { ASSUME_STYLE, renderReplayPreview, type EmitReveal } from './preview';
 import { createReplayActivation } from './activation';
 import { createSceneActions } from './scene-actions';
+import {
+  copyReplayText,
+  openReplayPanelMenu,
+  openReplayPredicateMenu,
+  type ReplayMenuHost,
+  type ReplayPredicateMenuTarget,
+} from './context-menu';
 
 /** 函数名提示上限 */
 const SUGGEST_LIMIT = 50;
@@ -598,6 +607,50 @@ export function createUiStateReplayPlugin(): Plugin {
           // eslint-disable-next-line react-hooks/exhaustive-deps
           [],
         );
+
+        /**
+         * 右键菜单落点（1023 批）：两条动作都接回已有通道（`emitReveal` / `runReplay`），
+         * 复制失败写进既有错误行。回调经 ref 转发、身份恒定——否则它进 `resultBody`
+         * 的 memo 依赖会让那棵 3,700 行的树每帧重建（PS-7 的口径）。
+         */
+        const [menuNote, setMenuNote] = useState('');
+        const menuHost: ReplayMenuHost = {
+          reveal: (filePath, line, source) => emitReveal(filePath, line, source),
+          rerun: () => runReplay(),
+          copy: (text) => {
+            void copyReplayText(text).then((ok) => {
+              if (ok) {
+                setMenuNote('已复制');
+                return;
+              }
+              setMenuNote('复制失败：当前环境不允许写剪贴板');
+              ctx.log.warn('状态回放复制失败：剪贴板不可用');
+            });
+          },
+        };
+        /** 谓词行 → 菜单目标（文件与来源取自当前这份回放结果，菜单不另存一份） */
+        const predicateTarget = (p: PredicateReplay): ReplayPredicateMenuTarget => {
+          const out = p.outcome;
+          return {
+            line: p.line,
+            kind: p.kind,
+            text: p.text,
+            outcome: out.kind,
+            ...(out.kind === 'unknown' && out.unknown !== undefined ? { unknownMessage: out.unknown.message } : {}),
+            filePath: result?.filePath ?? '',
+            normalizedName: result?.normalizedName ?? '',
+          };
+        };
+        const predicateMenuRef = useRef<(p: PredicateReplay, e: PluginContextMenuAnchor) => void>(
+          () => undefined,
+        );
+        predicateMenuRef.current = (p, e) => {
+          openReplayPredicateMenu(props, e, predicateTarget(p), menuHost);
+        };
+        const onPredicateMenu = useCallback(
+          (p: PredicateReplay, e: PluginContextMenuAnchor) => predicateMenuRef.current(p, e),
+          [],
+        );
         const resultBody: ReturnType<typeof createElement> | null = useMemo(() => {
           if (!result || !analysis) return null;
           return createElement(
@@ -612,6 +665,7 @@ export function createUiStateReplayPlugin(): Plugin {
               predLimit: predWindow,
               onGrowPreds: growPreds,
               analysis,
+              onPredicateMenu,
             }),
           );
           // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -634,17 +688,22 @@ export function createUiStateReplayPlugin(): Plugin {
           replayError !== null ? createElement('div', { className: 'rp-error' }, replayError) : null;
         const contextHintEl = contextHint !== null ? createElement('div', { className: 'rp-hint dim' }, contextHint) : null;
 
+        // 空白处右键（1023 批）：重新回放（按 busy / 无结果给出禁用原因）
+        const panelMenu = (e: PluginContextMenuAnchor): void => {
+          openReplayPanelMenu(props, e, { hasView: view !== null, busy: replayBusy }, menuHost);
+        };
+
         if (!projectNow) {
           return createElement(
             'div',
-            { className: 'panel-state-replay' },
+            { className: 'panel-state-replay', onContextMenu: panelMenu },
             createElement('div', { className: 'rp-empty dim' }, '打开项目后可回放（快照 × 角色 × 函数）'),
           );
         }
 
         return createElement(
           'div',
-          { className: 'panel-state-replay' },
+          { className: 'panel-state-replay', onContextMenu: panelMenu },
           createElement('div', { className: 'rp-toolbar' }, archiveSelect, charaSelect),
           viewStatus,
           createElement('div', { className: 'rp-toolbar' }, fnInput, callSlots ? null : contextInput, replayBtn),
@@ -655,6 +714,7 @@ export function createUiStateReplayPlugin(): Plugin {
           suggestList,
           pendingNote !== null ? createElement('div', { className: 'rp-hint dim' }, pendingNote) : null,
           replayErrorEl,
+          menuNote === '' ? null : createElement('div', { className: 'rp-hint dim' }, menuNote),
           resultBody,
           result === null && !replayError
             ? createElement(

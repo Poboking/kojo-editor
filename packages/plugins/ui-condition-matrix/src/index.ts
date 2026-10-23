@@ -39,6 +39,7 @@ import type {
   GameProject,
   KojoInstructionTable,
   Plugin,
+  PluginContextMenuAnchor,
   ProjectService,
   SlotRegistry,
   StateDependency,
@@ -81,7 +82,15 @@ import {
   type MatrixLayout,
   type MatrixRow,
 } from './matrix-logic';
-import { MatrixRowView, type RevealTarget } from './row-view';
+import { MatrixRowView, orderByLine, type RevealTarget } from './row-view';
+import {
+  copyMatrixText,
+  openMatrixCellMenu,
+  openMatrixPanelMenu,
+  type MatrixCellMenuTarget,
+  type MatrixMenuHost,
+  type MatrixPanelMenuTarget,
+} from './context-menu';
 import { buildColgroup, renderGridHead, spacerRow } from './grid-parts';
 import { renderDetail } from './detail-pane';
 import { createMatrixStore } from './matrix-store';
@@ -1158,6 +1167,76 @@ export function createUiConditionMatrixPlugin(): Plugin {
               })
             : null;
 
+        // ---- 右键菜单（1023 批 · WP5.2）：格子 / 面板空白处两处落点 ----
+        // 行视图是 memo 的：格子回调必须是**稳定引用**（ref 转发最新一帧的矩阵与宿主），
+        // 否则每次滚动帧都换一次 props，整表 memo 直接失效。
+        const matrixMenuHost: MatrixMenuHost = {
+          reveal: (filePath, line, source) =>
+            ctx.bus.emit('editor.revealLocation', { filePath, line, source }),
+          refresh: () => store.refresh(),
+          setGapOnly: (on) => setGapOnly(on),
+          copy: (text) => {
+            void copyMatrixText(text).then((ok) => {
+              setNotice(ok ? '已复制到剪贴板' : '剪贴板不可用，复制失败');
+            });
+          },
+        };
+        const cellMenuRunnerRef = useRef<
+          (rowKey: string, columnKey: string, anchor: PluginContextMenuAnchor) => void
+        >(() => {});
+        cellMenuRunnerRef.current = (rowKey, columnKey, anchor) => {
+          if (!matrix) return;
+          const row = matrix.rows.find((r) => r.key === rowKey);
+          const col = matrix.columns.find((c) => c.key === columnKey);
+          if (!row || !col) return;
+          const cell = row.cells[columnKey];
+          const present = cell !== undefined && cell.present;
+          const target: MatrixCellMenuTarget = {
+            rowKey,
+            rowLabel: row.label ?? null,
+            columnKey,
+            columnLabel: col.label,
+            present,
+            count: present ? cell.count : 0,
+            functions: present
+              ? orderByLine(cell.functions).map((fn) => ({
+                  name: fn.name,
+                  filePath: fn.filePath,
+                  startLine: fn.startLine,
+                  comparisons: fn.comparisons,
+                }))
+              : [],
+          };
+          openMatrixCellMenu(props, anchor, target, matrixMenuHost);
+        };
+        const onCellMenu = useCallback(
+          (rowKey: string, columnKey: string, anchor: PluginContextMenuAnchor): void =>
+            cellMenuRunnerRef.current(rowKey, columnKey, anchor),
+          [],
+        );
+        const charaChoice = selectedNo === null ? null : charasMemo.choices.find((c) => c.no === selectedNo) ?? null;
+        const panelMenuTarget: MatrixPanelMenuTarget = {
+          charaLabel:
+            selectedNo === null
+              ? null
+              : charaChoice
+                ? charaChoice.name
+                  ? `K${charaChoice.no} ${charaChoice.name}`
+                  : `K${charaChoice.no}`
+                : `K${selectedNo}`,
+          rowCount: matrix?.rows.length ?? 0,
+          columnCount: matrix?.columns.length ?? 0,
+          gapCells: matrix?.gapCells ?? 0,
+          totalCells: matrix?.totalCells ?? 0,
+          gapOnly,
+        };
+        const onPanelMenu =
+          props.openContextMenu === undefined
+            ? undefined
+            : (event: PluginContextMenuAnchor): void => {
+                openMatrixPanelMenu(props, event, panelMenuTarget, matrixMenuHost);
+              };
+
         // ---- 状态条：全局读数 + 当前作用域覆盖率 ----
         const pct = matrix ? coveragePercent(matrix.filledCells, matrix.totalCells) : 0;
         const status = createElement(
@@ -1731,6 +1810,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 fillColumns: fillByRow.get(row.key) ?? EMPTY_FILL_COLUMNS,
                 rowIndex: win.start + i, // 绝对行索引（data-r 跨窗一致，方向键据此平移）
                 onCell,
+                onCellMenu,
               }),
             ),
             spacerRow(win.bottomPad, 'pad-bottom', colCount + 1),
@@ -1833,7 +1913,11 @@ export function createUiConditionMatrixPlugin(): Plugin {
 
         return createElement(
           'div',
-          { className: 'panel-condition-matrix', ref: rootRef },
+          {
+            className: 'panel-condition-matrix',
+            ref: rootRef,
+            ...(onPanelMenu === undefined ? {} : { onContextMenu: onPanelMenu }),
+          },
           toolbar,
           entryHint,
           status,

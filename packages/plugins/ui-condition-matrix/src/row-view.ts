@@ -11,6 +11,7 @@
  */
 
 import { createElement, memo, type ReactNode } from 'react';
+import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import type { MatrixCell, MatrixCellFunction, MatrixColumnGroup, MatrixRow } from './matrix-logic';
 /** 按「行号升序、同号按路径」排序（详情展示 / 取最早贡献函数） */
 export function orderByLine(fns: readonly MatrixCellFunction[]): MatrixCellFunction[] {
@@ -63,6 +64,11 @@ export interface MatrixRowViewProps {
     target: RevealTarget | null,
     present: boolean,
   ) => void;
+  /**
+   * 格子右键（可选）：宿主没注入能力时整项不挂 `onContextMenu`，行 DOM 与旧版逐字一致。
+   * 回调由面板用**稳定引用**传入（ref 转发），否则整表 memo 每帧失效。
+   */
+  readonly onCellMenu?: (rowKey: string, columnKey: string, anchor: PluginContextMenuAnchor) => void;
 }
 
 /**
@@ -70,7 +76,8 @@ export interface MatrixRowViewProps {
  * 格子带 `data-r`/`data-c`（渲染序索引）供网格方向键导航定位。
  */
 export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewProps): ReactNode {
-  const { row, groups, foldedFaces, selectedColumn, cursorColumn, fillColumns, rowIndex, onCell } = props;
+  const { row, groups, foldedFaces, selectedColumn, cursorColumn, fillColumns, rowIndex, onCell, onCellMenu } =
+    props;
   const cells: ReactNode[] = [];
   let c = 0;
   for (const group of groups) {
@@ -113,6 +120,12 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
                 'data-r': rowIndex,
                 'data-c': dataC,
                 onClick: () => onCell(row.key, col.key, null, false),
+                ...(onCellMenu === undefined
+                  ? {}
+                  : {
+                      onContextMenu: (event: PluginContextMenuAnchor) =>
+                        onCellMenu(row.key, col.key, event),
+                    }),
               },
               isFillSel ? '✓' : '·',
             ),
@@ -145,6 +158,12 @@ export const MatrixRowView = memo(function MatrixRowView(props: MatrixRowViewPro
                   true,
                 );
               },
+              ...(onCellMenu === undefined
+                ? {}
+                : {
+                    onContextMenu: (event: PluginContextMenuAnchor) =>
+                      onCellMenu(row.key, col.key, event),
+                  }),
             },
             String(cell.count),
           ),

@@ -13,7 +13,12 @@
  */
 
 import { createElement, useCallback, useEffect, useRef, type ReactElement, type ReactNode } from 'react';
-import type { BranchChainOutcome, FunctionReplay, PredicateReplay } from '@kojo/plugin-api';
+import type {
+  BranchChainOutcome,
+  FunctionReplay,
+  PluginContextMenuAnchor,
+  PredicateReplay,
+} from '@kojo/plugin-api';
 import {
   MORE_ROW_STYLE,
   MORE_ROW_TITLE,
@@ -97,6 +102,11 @@ export interface PredicateListProps {
   /** 触底 / 点击「显示更多」→ 追加一窗（新值由 growWindow(prev, total, PRED_WINDOW) 计算） */
   readonly onGrow: (total: number) => void;
   readonly emitReveal: EmitReveal;
+  /**
+   * 右键谓词行（1023 批，可选）：交给宿主统一渲染的菜单（跳到行 / 复制谓词）。
+   * 缺省 = 没有右键菜单（旧调用方与 SSR 判据零改动）。
+   */
+  readonly onMenu?: (predicate: PredicateReplay, event: PluginContextMenuAnchor) => void;
 }
 
 export function PredicateList(props: PredicateListProps): ReactElement {
@@ -113,7 +123,12 @@ export function PredicateList(props: PredicateListProps): ReactElement {
       const isAt = atLine !== null && p.line === atLine;
       return createElement(
         'li',
-        { key: `${p.line}:${i}` },
+        {
+          key: `${p.line}:${i}`,
+          ...(props.onMenu === undefined
+            ? {}
+            : { onContextMenu: (event: PluginContextMenuAnchor) => props.onMenu?.(p, event) }),
+        },
         createElement(
           'button',
           {
@@ -218,6 +233,8 @@ export function renderReplayPreview(opts: {
   /** 谓词渲染窗口（undefined = 初始窗口）与触底增窗回调（窗口状态归面板壳层持有） */
   predLimit: number | undefined;
   onGrowPreds: (total: number) => void;
+  /** 右键谓词行（可选；1023 批）——透传给 `PredicateList` */
+  onPredicateMenu?: (predicate: PredicateReplay, event: PluginContextMenuAnchor) => void;
   /**
    * 面板算好的只读统计（PS-7：`analyzeReplay` 的记忆化产物）。
    * 给了就直接用；没给（如单测与别的调用方）就地算——呈现结果逐字相同。
@@ -321,6 +338,7 @@ export function renderReplayPreview(opts: {
       limit: predLimit,
       onGrow: onGrowPreds,
       emitReveal,
+      ...(opts.onPredicateMenu === undefined ? {} : { onMenu: opts.onPredicateMenu }),
     }),
   );
 }

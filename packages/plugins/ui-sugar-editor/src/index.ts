@@ -46,6 +46,7 @@ import type {
   LineDecoration,
   OpJournal,
   Plugin,
+  PluginContextMenuAnchor,
   ProjectService,
   SlotRegistry,
   SugarDiagnostic,
@@ -119,6 +120,8 @@ export interface VerdictDiagListProps {
   readonly cursorLine?: number | null;
   /** 高亮行节点回执（面板侧 scrollIntoView 跟随用；缺省 = 不跟随） */
   readonly cursorRef?: { current: FollowNode | null };
+  /** 右键诊断行（1023 批，可选）：跳到源行 · 复制诊断 */
+  readonly onMenu?: (row: VerdictRow, event: PluginContextMenuAnchor) => void;
 }
 
 export function VerdictDiagList(props: VerdictDiagListProps): ReactElement {
@@ -142,6 +145,9 @@ export function VerdictDiagList(props: VerdictDiagListProps): ReactElement {
           ref: isCur ? props.cursorRef : undefined,
           onClick: r.line !== null ? () => props.onReveal(r.line as number) : undefined,
           title: r.line !== null ? '点击定位到源行' : '文件级诊断',
+          ...(props.onMenu === undefined
+            ? {}
+            : { onContextMenu: (event: PluginContextMenuAnchor) => props.onMenu?.(r, event) }),
         },
         createElement('span', { className: 'sv-sev' }, sevLabel(r.severity)),
         createElement('span', { className: 'sv-loc dim' }, r.line === null ? '—' : `L${r.line}:${r.column ?? 1}`),

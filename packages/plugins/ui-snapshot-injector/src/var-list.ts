@@ -17,7 +17,7 @@
  */
 
 import { createElement, type ReactElement } from 'react';
-import type { VariableSchema } from '@kojo/plugin-api';
+import type { PluginContextMenuAnchor, VariableSchema } from '@kojo/plugin-api';
 import { varLabel, varWindowSize, type VarRow } from './panel-logic';
 import { listSpacer, useRowWindow } from './list-window';
 import { MoreRow } from './more-row';
@@ -41,6 +41,11 @@ export interface VarListProps {
    * 按契约「缺省 = 最保守值」必须由用户在设置页显式开。
    */
   readonly virtualize?: boolean;
+  /**
+   * 右键变量行（1023 批，可选）：交给宿主统一渲染的菜单（复制变量名 / 变量值）。
+   * 缺省 = 没有右键菜单（旧调用方与 SSR 判据零改动）。
+   */
+  readonly onMenu?: (row: VarRow, event: PluginContextMenuAnchor) => void;
 }
 
 export function VarList(props: VarListProps): ReactElement {
@@ -77,6 +82,9 @@ export function VarList(props: VarListProps): ReactElement {
           disabled: r.kind === 'other',
           title: r.cellsTruncated ? '该数组未能完整读取，无法改写' : r.preview,
           onClick: () => props.onSelect(r.key),
+          ...(props.onMenu === undefined
+            ? {}
+            : { onContextMenu: (event: PluginContextMenuAnchor) => props.onMenu?.(r, event) }),
         },
         createElement('span', { className: 'inj-var-key' }, r.key),
         label ? createElement('span', { className: 'inj-var-label' }, label) : null,

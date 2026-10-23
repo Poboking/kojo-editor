@@ -32,8 +32,17 @@ import type {
   SnapshotSourceService,
   SugarPreviewResult,
   SugarPreviewService,
+  UIPanelProps,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
+import {
+  copyPreviewText,
+  openPreviewDiagMenu,
+  openPreviewPanelMenu,
+  openPreviewRowMenu,
+  type PreviewMenuHost,
+} from './context-menu';
 import {
   DIAG_WINDOW,
   ROW_WINDOW,
@@ -114,7 +123,7 @@ export function createUiSugarPreviewPlugin(): Plugin {
         snapshots = undefined;
       }
 
-      function PreviewPanel(): unknown {
+      function PreviewPanel(props: UIPanelProps): unknown {
         const [filePath, setFilePath] = useState<string | null>(null);
         const [archivePath, setArchivePath] = useState<string>('');
         const [source, setSource] = useState<string | null>(null);
@@ -283,6 +292,27 @@ export function createUiSugarPreviewPlugin(): Plugin {
           ctx.bus.emit('editor.revealLocation', { filePath, line });
         };
 
+        /**
+         * 右键菜单落点（1023 批）：三条都接回上面已有的函数（`reveal` / 重算 / 剪贴板）。
+         * 复制失败写进 `menuNote`（面板底部一行小字），不另起浮层。
+         */
+        const [menuNote, setMenuNote] = useState('');
+        const rerunPreview = (): void => setNonce((n) => n + 1);
+        const menuHost: PreviewMenuHost = {
+          reveal,
+          refresh: rerunPreview,
+          copy: (text) => {
+            void copyPreviewText(text).then((ok) => {
+              if (ok) {
+                setMenuNote('已复制');
+                return;
+              }
+              setMenuNote('复制失败：当前环境不允许写剪贴板');
+              ctx.log.warn('转译检查复制失败：剪贴板不可用');
+            });
+          },
+        };
+
         /* ------------------------------ 头部 ------------------------------ */
 
         const archiveOpts: ArchiveOption[] = snapshots ? buildArchiveOptions(snapshots.current()) : [];
@@ -315,8 +345,19 @@ export function createUiSugarPreviewPlugin(): Plugin {
           ),
         );
 
+        // 空白处右键（1023 批）：刷新预览（非 .kojo 时禁用+原因）· 复制文件路径
         const shell = (children: ReactNode[]): ReactNode =>
-          createElement('div', { className: 'panel-sugar-preview' }, head, ...children);
+          createElement(
+            'div',
+            {
+              className: 'panel-sugar-preview',
+              onContextMenu: (e: PluginContextMenuAnchor) =>
+                openPreviewPanelMenu(props, e, { filePath, canRefresh: isKojoFile(filePath) }, menuHost),
+            },
+            head,
+            ...children,
+            menuNote === '' ? null : createElement('div', { className: 'dim pv-hint' }, menuNote),
+          );
 
         /* ------------------------------ 降级态 ------------------------------ */
 
@@ -412,6 +453,8 @@ export interface DiagSectionProps {
   readonly onGrow: (total: number) => void;
   /** 点击诊断行 = 定位源行意图（宿主消费） */
   readonly onReveal: (line: number) => void;
+  /** 右键诊断行（1023 批，可选）：跳到位置 · 复制诊断 */
+  readonly onMenu?: (diag: DiagnosticRow, event: PluginContextMenuAnchor) => void;
 }
 
 export function DiagSection(props: DiagSectionProps): ReactElement {
@@ -434,6 +477,9 @@ export function DiagSection(props: DiagSectionProps): ReactElement {
           key: d.key,
           className: `pv-diag ${d.severity}`,
           onClick: d.line !== null ? () => props.onReveal(d.line as number) : undefined,
+          ...(props.onMenu === undefined
+            ? {}
+            : { onContextMenu: (event: PluginContextMenuAnchor) => props.onMenu?.(d, event) }),
           title: d.line !== null ? '点击定位到源行' : '文件级诊断',
         },
         createElement('span', { className: 'pv-diag-sev' }, sevLabel(d.severity)),
@@ -464,6 +510,8 @@ export interface RowsSectionProps {
   readonly cursorLine?: number | null;
   /** 高亮行节点回执（面板侧 scrollIntoView 跟随用；缺省 = 不跟随） */
   readonly cursorRef?: { current: FollowNode | null };
+  /** 右键映射行（1023 批，可选）：跳到源行 · 复制源行 / 产物标签 */
+  readonly onMenu?: (row: PreviewRow, event: PluginContextMenuAnchor) => void;
 }
 
 export function RowsSection(props: RowsSectionProps): ReactElement {
@@ -487,6 +535,9 @@ export function RowsSection(props: RowsSectionProps): ReactElement {
             ref: isCur ? props.cursorRef : undefined,
             onClick: () => props.onReveal(r.sourceLine),
             title: '点击定位到该源行',
+            ...(props.onMenu === undefined
+              ? {}
+              : { onContextMenu: (event: PluginContextMenuAnchor) => props.onMenu?.(r, event) }),
           },
           createElement('span', { className: 'pv-line-no dim' }, String(r.sourceLine)),
           createElement('span', { className: 'pv-src' }, r.sourceText.length === 0 ? ' ' : r.sourceText),
