@@ -2572,7 +2572,7 @@ export function EditorPane({
             ' 你的内容和保存都不受影响；换回较小的文件，检查会自动跟上。'
           }
         >
-          <Icon name="warning" size={13} /> 文件太大，错误检查已暂停
+          <Icon name="warning" size="sm" /> 文件太大，错误检查已暂停
         </span>
       ) : null}
       {/* 折叠超额的那句人话（同一族徽章度量，不另造样式）：说的是"少折了"，
@@ -2586,7 +2586,7 @@ export function EditorPane({
             ' 换回较短的文件就全部折得动。'
           }
         >
-          <Icon name="warning" size={13} /> 折叠太多，只折前 {FOLDING_MAX_RANGES} 处
+          <Icon name="warning" size="sm" /> 折叠太多，只折前 {FOLDING_MAX_RANGES} 处
         </span>
       ) : null}
     </>
@@ -2616,7 +2616,7 @@ export function EditorPane({
           <span className="file-base">{labelParts.base}</span>
         </span>
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
-          {dirty ? <Icon name="circle-filled" size={9} /> : null}
+          {dirty ? <Icon name="circle-filled" size="xs" /> : null}
         </span>
         {/* 次要徽章族（校验暂停 / 折叠超额）——JSX 单源在上面 `toolbarNoticeNodes`：
             宽屏直排，窄屏（≤1280）整族收进「更多」浮层（降级层级，不硬藏）。
@@ -2641,7 +2641,7 @@ export function EditorPane({
                     : '已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效），.kojo 预览同时关闭——要动手改的原文必须看得见。点击收回这次破例。'
                 }
               >
-                <Icon name="edit" size={13} /> 已解锁编辑
+                <Icon name="edit" size="sm" /> 已解锁编辑
               </button>
             ) : directMode && kernel.io.isWritable(filePath) ? (
               /* 直连模式：已获写权限的目录内文件直接可编辑 → 信息色提示（非警示）。
@@ -2681,7 +2681,7 @@ export function EditorPane({
                       sugarSegments && sugarSegments.path === filePath ? sugarSegments.segments : null,
                   })}
                 >
-                  <Icon name="preview" size={13} /> .kojo 预览
+                  <Icon name="preview" size="sm" /> .kojo 预览
                 </button>
                 {sugarView && sugarStats ? (
                   <>
@@ -2747,7 +2747,7 @@ export function EditorPane({
         <span className="editor-status" title={error ?? (status !== '' ? status : undefined)}>
           {error ? (
             <span className="editor-status-error">
-              <Icon name="warning" size={13} /> {error}
+              <Icon name="warning" size="sm" /> {error}
             </span>
           ) : status !== '' ? (
             <span className="editor-status-flash">{status}</span>

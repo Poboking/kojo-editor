@@ -13,12 +13,15 @@
 
 /* 语法标记降档（批次十一 L13：`opacity + !important` → **主题化色阶**）。
    旧三档用 opacity .42/.55/.72 压对比——那是"相对当前字色再打折"，浅色主题下
-   亮语法色（如 `sugar.cont` 的 #e5c07b）@0.42 压在近白底上只剩 ~1.5:1，近不可读。
-   现在三档全部落**主题 token 的绝对色阶**：深浅三套主题各给各的档，浅色下同样是
-   可用的低对比而不是残影。特异性 `.monaco-editor .view-lines .sugar-read-*`（0,3,0）
-   压过 Monaco 运行时注入的裸 `.mtkN/.mtkb`（0,1,0），不再需要任何 `!important`。 */
+   亮语法色（`sugar.cont` 的浅档本身只 6.9:1）@0.42 折完压在近白底上只剩 **2.07:1**，
+   正文级判据 4.5:1 直接落穿，等于把标记擦掉而不是弱化。
+   现在三档全部落**主题 token 的绝对色阶**（值随 `themes/*.css` 翻，本文件零十六进制）：
+   浅色实算 mark 5.74 / delimiter 9.86 / syntax 11.64（压 editor 底 --bg），深档
+   5.20 / 8.33 / 9.48——最差一档也过 AA，浅色下是"可用的低对比"而不是残影。
+   特异性 `.monaco-editor .view-lines .sugar-read-*`（0,3,0）压过 Monaco 运行时注入的
+   裸 `.mtkN/.mtkb`（0,1,0），不再需要任何 `!important`。 */
 .monaco-editor .view-lines .sugar-read-mark {
-  /* 最低档：主题元信息色（dark #8b949e / light #59636e，均 ≥4.5:1），粗体收掉 */
+  /* 最低档 = 主题元信息色 `--fg-dim`（浅色 5.74:1 / 深色 5.20:1，均过 4.5），粗体收掉 */
   color: var(--fg-dim);
   font-weight: normal;
 }
@@ -50,7 +53,9 @@
 }
 .sugar-marks-toggle.on {
   color: var(--accent-text);
-  background: rgb(var(--accent-rgb) / 0.12);
+  /* `--accent-soft`（L01 转正的 accent 弱 wash，= accent-rgb @0.12）：开态底吃语义档，
+     换主题随 --accent-rgb 自动跟色，不再手抄 alpha */
+  background: var(--accent-soft);
   border-color: var(--accent);
 }
 .sugar-marks-toggle.on:hover:not(:disabled) {

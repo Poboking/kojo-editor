@@ -1731,7 +1731,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   /* 恒定占位宽（批次十一 L13）：非脏时这颗零宽，首次打字图标一插 ⇒ 后面整族控件
-     横移一格（"打字首字工具条抖一下"的前半条病因）。钉成 13px 常宽，脏与非脏同格。 */
+     横移一格（"打字首字工具条抖一下"的前半条病因）。脏点走图标四档的 `xs`(12px)，
+     这里按 12 + 1px 余量钉成 13px 常宽，脏与非脏同格；改档位要同步改这一格。 */
   width: 13px;
   justify-content: center;
   flex: none;
@@ -1813,7 +1814,10 @@ textarea {
   position: relative;
 }
 /* 编辑器装载骨架：Monaco 创建 / 首文件落屏之前顶替纯空白（EditorPane `showEditorSkeleton`）。
-   条子复用效果库 `.skeleton`（扫光），这里只管排布。 */
+   条子复用效果库 `.skeleton`（扫光），这里只管排布。
+   `z-index: 2` 是**组件内部**的先后（骨架压过 Monaco 自己那层空容器），不是全局层级梯上的一档
+   ——L01 的梯从 `--z-toolbar`(10) 起，凡 <10 的都只在父元素内比个大小，故不占 token 名；
+   若将来要把它抬进正式档，先在 tokens.css 登记再吃。 */
 .editor-body-skeleton {
   position: absolute;
   inset: 0;
@@ -1822,7 +1826,7 @@ textarea {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-4);
-  background: var(--bg);
+  background: var(--surface);
 }
 .editor-skeleton-bar {
   height: 10px;
@@ -1847,13 +1851,14 @@ textarea {
    解锁按钮 `0 10px + --radius-pill + 18px`，同族控件不同级。现全部收进同一基线：
    `padding 0 10px / --radius-pill / line-height 18px`（取控件感更强的一方作族标准，
    按钮与徽章互切不再跳尺寸）。
-   ⚠ 2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
+   注意：2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
    （与底部状态栏重复），`.erb-mode-hint` 只剩「已解锁编辑」与「直连可编辑」两家——
-   别再把 🔒 加回来，也别在工具条重造只读胶囊。 */
+   别再把「只读」加回成一枚字符锁图标（图标一律走 `icons.tsx` 的 SVG 通道），
+   也别在工具条重造只读胶囊。 */
 .erb-mode-hint {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1); /* 与图标/文字的缝：吃 4px 语义档，不再写字面量 */
   flex: 0 0 auto;
   font-size: var(--fs-1);
   /* 配色按**风险**给，不按"有没有字"给：只读是游戏目录的安全默认态，作者一开就是
@@ -1939,13 +1944,16 @@ button.erb-mode-hint.unlocked:hover {
   position: absolute;
   top: calc(100% + var(--space-1));
   left: 0;
-  z-index: 1100;
+  /* 层级吃 token 梯（L01 单源）：工具条从属浮层走 `--z-overlay`(1000) 档——盖得住编辑器面，
+     但**必须在 `--z-modal`(1100) 之下**：弹着确认框时这一族不该浮在模态上抢答。
+     原写死的 1100 会把次要提示顶到与模态同级，是借来的位不是该站的位。 */
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: var(--bg-2);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-1);
