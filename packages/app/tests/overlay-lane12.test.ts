@@ -20,7 +20,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createElement as h } from 'react';
+import { createElement as h, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { OVERLAY_EXIT_CLASS, overlayFrame } from '../src/ui/overlay-chrome';
@@ -163,12 +163,14 @@ describe('L12-6 换壳不掉批次十的菜单面', () => {
     expect(markup).toContain('ov-close');
   });
   it('调用层级空态真实渲染：外框根上仍能 closest 到面与 ✕（同一 deps.close）', () => {
+    // createCallHierarchyOverlay 的公共签名是 `() => unknown`（批次九遗留的松声明，非本批改）。
+    // 本批纪律是行为零改动，不动公共签名，测试侧定点收窄成 React 组件形态。
     const Overlay = createCallHierarchyOverlay({
       currentIndex: () => null,
       functionAt: () => null,
       reveal: () => undefined,
       close: () => undefined,
-    });
+    }) as () => ReactElement;
     const markup = renderToStaticMarkup(h(Overlay));
     expect(markup).toContain('data-context-surface="call-hierarchy"');
     expect(markup).toContain('ov-head');
