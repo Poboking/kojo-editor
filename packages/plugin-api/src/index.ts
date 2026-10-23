@@ -317,6 +317,22 @@ export type {
   PluginContextMenuRequest,
 } from './context-menu';
 
+/* ---- 插件面板的「界面面登记」（1023 右键覆盖面 WP5.4；插件不可 import 宿主注册表） ---- */
+export {
+  declarePluginContextSurface,
+  getPluginContextSurface,
+  listPluginContextSurfaces,
+  resetPluginContextSurfaces,
+} from './context-surface';
+export type {
+  PluginContextSurfaceArea,
+  PluginContextSurfaceBuildContext,
+  PluginContextSurfaceBuildResult,
+  PluginContextSurfaceMenu,
+  PluginContextSurfaceSpec,
+  PluginContextSurfaceTarget,
+} from './context-surface';
+
 // 光标处标识符整串（跨插件共享的极小纯函数；解耦审计禁插件交叉 import，故住契约层）
 export { symbolTokenAt } from './symbol-token';
 export type { SymbolToken } from './symbol-token';
