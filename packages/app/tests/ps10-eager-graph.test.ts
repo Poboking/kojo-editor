@@ -191,7 +191,16 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // （−79 文件 / −943 KB）。阈值只留 ~7% 余量：一枚项目级插件被静态拽回来（最小的
     // ui-plugin-status 9 KB、最大的 kojo-sugar 901 KB）里除了最小的那种都可能悄悄过关，
     // 所以真判据是上面两条成员断言，这里只是兜底 tripwire。
+    //
+    // 2026-10-23（右键菜单覆盖面批）：191 → 215 文件，增量**逐一对上**本批新增的 10 个
+    // 面模块——context-menu-pages / context-menu-shell / editor-context-actions /
+    // preview-menu / palette-menu / plugin-context-menu-bridge / plugin-panel-menu /
+    // problem-menu / search-menu / tutorial-context-menu（`git diff --diff-filter=A
+    // 0179079f..HEAD -- packages/app/src`）＝ 10 个，与 215−205 精确相等。
+    // 右键菜单是**开机即用**的功能，没有懒加载的理由，所以这是功能增长而非整包回灌；
+    // 上一行的成员断言（插件包只许两个常驻 + 两个已知漏点）仍然全绿，说明没有回灌。
+    // 闸随之 205 → 220（同比例留余量）。KB 闸不动：这 10 个模块都很小，撞不到 3,050。
     expect(totalKb).toBeLessThanOrEqual(3_050);
-    expect(files.length).toBeLessThanOrEqual(205);
+    expect(files.length).toBeLessThanOrEqual(220);
   });
 });

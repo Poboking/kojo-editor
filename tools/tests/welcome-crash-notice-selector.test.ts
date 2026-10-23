@@ -10,8 +10,10 @@
  * ② **只有一处**：页面内表达式必须引用这根常量（`JSON.stringify(MOUNTING_NOTICE_SEL)`），
  *    工具里**零处**裸 `querySelector('.notice')`——否则有人改了常量、表达式还走旧的。
  * ③ **收窄不会连"装配中"一起放过**：「内核装配中…」那条 notice 在 `WelcomeView.tsx` 里是
- *    `className="notice welcome-notice" role="status"`（**无修饰类**，按 `role="status"` 结构性
- *    定位，不匹配界面文案）⇒ 必带 `notice`、必不带 `crash-recovery`。
+ *    `className="notice welcome-notice" role="status"`（**无修饰类**，按专属类 `welcome-notice`
+ *    结构性定位，不匹配界面文案）⇒ 必带 `notice`、必不带 `crash-recovery`。
+ *    锚点原是 `role="status"`；本批欢迎页新增了页面级菜单回执（同为 role=status，正当用法）
+ *    后换的——理由写在该用例内。
  * ④ **`:not` 真的减在 `.notice` 集合上**：崩溃恢复横幅仍以 `notice crash-recovery` 渲染
  *    （className 的独立 token 级判定）——它若哪天不再挂 `notice`，这条 `:not()` 就成了空动作，
  *    守卫要跟着说话。
@@ -94,10 +96,23 @@ describe('SMOKE-NOTICE ① 判据串逐字钉死（放宽 = 红）', () => {
 });
 
 describe('SMOKE-NOTICE ② 收窄不会连「内核装配中…」一起放过', () => {
-  it('欢迎页存在无修饰类的 .notice[role=status]（装配中那条）', () => {
-    const statusLines = WELCOME_LINES.filter((l) => l.includes('role="status"'));
-    expect(statusLines.length, 'WelcomeView 里找不到 role="status" 的 notice').toBeGreaterThanOrEqual(1);
-    for (const l of statusLines) {
+  it('欢迎页存在挂了 .notice 的装配中提示（welcome-notice 那条）', () => {
+    /*
+     * 锚点是**两个条件同时成立**，缺一不可：
+     * - `role="status"`：把「警告 / 打开失败 / 崩溃恢复」那一族（role=alert）排除掉。
+     *   注意崩溃横幅同样挂 `welcome-notice`（`notice crash-recovery welcome-notice`），
+     *   所以**不能只用类名**过滤，否则它会被当成装配中那条。
+     * - `welcome-notice`：把 2026-10-23 本批新增的**页面级菜单回执**排除掉——它是
+     *   `page-menu-note welcome-menu-note` + `role="status"`，本身就是正确的可访问性用法，
+     *   不该被这条守卫逼着改语义；而且它的 `className` 与 `role` 分在两行，按行取 token
+     *   时 role 行没有任何类名，旧判据（只看 role）正是这样把它误判成「notice 丢了 .notice」。
+     * 类名与 role 都是结构，不是界面文案，换锚点不违反本文件的 ⑤。
+     */
+    const noticeLines = WELCOME_LINES.filter(
+      (l) => l.includes('role="status"') && lineClassTokens(l).has('welcome-notice'),
+    );
+    expect(noticeLines.length, 'WelcomeView 里找不到 role=status 且带 welcome-notice 的装配中提示').toBeGreaterThanOrEqual(1);
+    for (const l of noticeLines) {
       const tokens = lineClassTokens(l);
       expect(tokens.has('notice'), `装配中 notice 必须仍挂 .notice：${l.trim()}`).toBe(true);
       expect(
