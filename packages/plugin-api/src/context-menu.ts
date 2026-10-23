@@ -93,6 +93,11 @@ export interface PluginContextMenuAnchor {
   readonly clientX: number;
   readonly clientY: number;
   preventDefault?(): void;
+  /**
+   * 阻断冒泡（可选）。面板根与行/格各自挂了菜单时**必须**停在这里：否则同一发右键
+   * 会依次触发行菜单与面板菜单，后者把前者顶掉（宿主只有一个菜单实例）。
+   */
+  stopPropagation?(): void;
 }
 
 /**
@@ -101,7 +106,8 @@ export interface PluginContextMenuAnchor {
  * 三件事一次做对，免得 11 个面板各写一份：
  * 1. 宿主没注入能力（旧宿主 / 纯渲染环境）⇒ 直接返回 false，**不抛错、不自造浮层**；
  * 2. 空菜单 ⇒ 不弹（这一级「没话说」等于没按到，空壳菜单比没有更糟）；
- * 3. 真发起时先 `preventDefault()`——阻断 WebView2 默认菜单与「开不开我们的菜单」是两件事。
+ * 3. 真发起时先 `preventDefault()` + `stopPropagation()`——阻断 WebView2 默认菜单与「开不开我们的菜单」是两件事；
+ *    停冒泡是为了让**最近的一级**（格子 / 行）赢：面板根上也挂了菜单时，冒泡过去就会把它顶掉。
  */
 export function requestPluginMenu(
   host: { readonly openContextMenu?: (request: PluginContextMenuRequest) => void },
@@ -112,6 +118,7 @@ export function requestPluginMenu(
 ): boolean {
   if (host.openContextMenu === undefined || items.length === 0) return false;
   anchor.preventDefault?.();
+  anchor.stopPropagation?.();
   host.openContextMenu({
     x: anchor.clientX,
     y: anchor.clientY,

@@ -150,6 +150,18 @@ describe('requestPluginMenu：面板发起口的三条口径', () => {
     expect(seen[0]?.ariaLabel).toBe('面板菜单');
     expect(seen[0]?.items[0]?.label).toBe('复制');
   });
+
+  it('真发起时同时停冒泡：面板根与行/格都挂了菜单，最近的一级要赢', () => {
+    let stopped = 0;
+    requestPluginMenu(
+      { openContextMenu: () => undefined },
+      { clientX: 0, clientY: 0, stopPropagation: () => stopped++ },
+      items,
+      '面板菜单',
+      () => undefined,
+    );
+    expect(stopped).toBe(1);
+  });
 });
 
 describe('copyTextToClipboard：复制通道的降级口径', () => {
