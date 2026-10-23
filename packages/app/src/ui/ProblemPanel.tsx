@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import {
   diagnosticDisplay,
   errorText,
@@ -44,6 +44,7 @@ import {
   setProblemsMenuContext,
 } from './problem-menu';
 import './context-menu-search.css';
+import { Icon } from './icons';
 
 /**
  * 底部「问题」面板（看板 HK-4 · UI-6；P2-13 分组/过滤/行内修复/复制批）。
@@ -57,8 +58,10 @@ import './context-menu-search.css';
  * 波浪线盖住的列区间，与检索面板、转到定义、G1 回放跳转**同一个形状**；
  * 区间给不出就整个省略，退化由 `reveal-position` 判一次（面板不许自己补列）。
  *
- * 视觉与「约定校验」面板同族（复用 `.conv-summary` / `.conv-count` / `.conv-dot`
- * 等约定面板类），只补少量 `.prob-*`。
+ * 视觉族（批次十一 L03）：行体沿用「约定校验」面板的语言（`.conv-summary` / `.conv-count` /
+ * `.conv-dot` / `.conv-issue-btn`），**控件与密度**与检索面板（`.ksp-*`，见 `search-panel.css`）
+ * 同尺——工具条 / 过滤控件 / 分组头 / 行内动作的规则全部住 `problem-panel.css`
+ * （根类 `.prob` 提特异性，压过 `styles-project.css` 里遗留的单类旧档）。
  *
  * ## P2-13（2026-10-19）四件事
  *
@@ -107,6 +110,60 @@ const SEVERITY_LABEL: Record<ProblemSeverity, string> = {
 };
 
 /**
+ * 严重级 → 内置图标名（`icons.tsx` 的 SVG）。批次十一 L03：字符 `✕ ⚠ ℹ` 不再被**画**出来，
+ * 屏上的图标一律 SVG；这里只映射语义，不映射颜色（颜色仍单源 `SEVERITY_TINT`）。
+ */
+const SEVERITY_ICON: Record<ProblemSeverity, 'error' | 'warning' | 'info'> = {
+  error: 'error',
+  warning: 'warning',
+  info: 'info',
+};
+
+/**
+ * 严重级 → 上屏**读数腿**的符号（`符号 空格 数字`）。
+ *
+ * 这一格文字不上屏（CSS 视觉隐藏），吃它的是两只眼睛：屏幕阅读器，和
+ * `tests/problem-truth-single-source.test.ts` 那把「四处一个真相」的尺（它按文本形态取数，
+ * 正是为了钉住状态栏 / 面板组头 / 树徽标读同一个数）。可见腿换成 SVG 时把这条腿留着，
+ * 单源闸继续 armed——与 `search-panel.css` 的 `ksp-sr` 同一族做法（可见与读数分离）。
+ */
+const SEVERITY_GLYPH: Record<ProblemSeverity, string> = {
+  error: '✕',
+  warning: '⚠',
+  info: 'ℹ',
+};
+
+/**
+ * 一枚严重级计数徽标（SVG 图标 + 数字 + 读数腿）。
+ *
+ * `// ui-kit-candidate: KitCount` —— 计数徽标现在全仓四套并存（`.conv-count` / `.ksp-file-count` /
+ * `.tree-prob-mark` / 状态栏 `.sb-problems-item`）；这一枚按 `ksp-file-count` 的尺度写
+ * （胶囊 / `--fs-0` / `tabular-nums` / 底纹由 `currentColor` 派生 ⇒ 零新增色值），
+ * 收编时把另三套换成它，而不是再造第五套。
+ */
+function SeverityCount({
+  severity,
+  count,
+}: {
+  severity: ProblemSeverity;
+  count: number;
+}): ReactElement {
+  return (
+    <span
+      className="prob-count"
+      style={{ color: SEVERITY_COLOR[severity] }}
+      title={`${SEVERITY_LABEL[severity]} ${count}`}
+    >
+      <Icon name={SEVERITY_ICON[severity]} size={11} className="prob-count-icon" />
+      <span className="prob-count-num" aria-hidden="true">
+        {count}
+      </span>
+      <span className="prob-count-sr">{`${SEVERITY_GLYPH[severity]} ${count}`}</span>
+    </span>
+  );
+}
+
+/**
  * 来源下拉里「全部来源」的哨兵值：与「未标注来源」的键 `''` 必须分开——
  * 两个选项共用一个空值，选中哪个都是同一份 DOM 值，过滤就再也切不回全部。
  */
@@ -145,6 +202,44 @@ interface RowFixEntry {
   readonly contribLen: number;
   readonly textLen: number;
   readonly action: EditorCodeAction | undefined;
+}
+
+/** 过滤工具条的输入井占位（与检索面板的 `ksp-field` 同一族，见 `problem-panel.css`） */
+const FILTER_INPUT_PLACEHOLDER = '过滤：消息 / 诊断码 / 来源 / 路径…';
+
+/**
+ * 自绘勾选控件：真 `<input type="checkbox">` 只把外观换成画出来的方框，语义一格不动
+ * （Tab 得到它、空格切得动、`checked` 受控、屏幕阅读器读得出）——与 `Switch.tsx` 同一
+ * 语言，只是形态是勾选而非拨动。
+ *
+ * `// ui-kit-candidate: KitCheck` —— 收编后可替掉检索面板那颗 `ksp-opt-check`
+ * 与设置页里靠 `accent-color` 的散勾选，全仓一族的方框。
+ */
+function KitCheck({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  /** 直接给布尔值（同 `Switch`）：调用方不必再读 event，也不给"第二处偷偷读 event"留口子 */
+  onChange: (checked: boolean) => void;
+  /** 无障碍名（放进 `<label>` 时与可见文字同词，满足 WCAG 2.5.3 label-in-name） */
+  label: string;
+}): ReactElement {
+  return (
+    <span className="prob-check">
+      <input
+        type="checkbox"
+        className="prob-check-input"
+        checked={checked}
+        aria-label={label}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="prob-check-box" aria-hidden="true">
+        <Icon name="check" size={10} className="prob-check-glyph" />
+      </span>
+    </span>
+  );
 }
 
 export function ProblemPanel({
@@ -393,12 +488,15 @@ export function ProblemPanel({
         data-problem-code={p.code ?? ''}
       >
         <button
-          className="conv-issue-btn"
+          className="conv-issue-btn prob-row"
           data-panel-row=""
+          // 严重级只以 CSS 自定义属性下传一次（圆点 + hover 导轨共用它），值仍取自
+          // `SEVERITY_TINT` 那一份——面板不自带色值（静态闸 `problem-truth-single-source` 钉着）。
+          style={{ '--prob-tint': SEVERITY_COLOR[p.severity] } as CSSProperties}
           title={`${p.path}:${p.line}`}
           onClick={() => onReveal(p.path, p.line, problemRevealSpan(p))}
         >
-          <span className="conv-dot" style={{ backgroundColor: SEVERITY_COLOR[p.severity] }} />
+          <span className="conv-dot" />
           <span className="conv-issue-loc dim">
             {shortPath(p.path)}:{p.line}
           </span>
@@ -409,24 +507,26 @@ export function ProblemPanel({
             </code>
           ) : null}
         </button>
-        {fixAction ? (
+        <span className="prob-row-actions">
+          {fixAction ? (
+            <button
+              type="button"
+              className="ghost small prob-fix"
+              title={`唯一解行内修复：${fixAction.title}`}
+              onClick={() => applyFix(p, fixAction)}
+            >
+              修复
+            </button>
+          ) : null}
           <button
             type="button"
-            className="ghost small prob-fix"
-            title={`唯一解行内修复：${fixAction.title}`}
-            onClick={() => applyFix(p, fixAction)}
+            className="ghost small prob-copy"
+            title={`复制消息：${problemCopyText(p)}`}
+            onClick={() => copyProblem(p)}
           >
-            修复
+            复制
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="ghost small prob-copy"
-          title={`复制消息：${problemCopyText(p)}`}
-          onClick={() => copyProblem(p)}
-        >
-          复制
-        </button>
+        </span>
         {flash !== null && flash.key === rowKey ? (
           <span className="prob-flash" role="status">
             {flash.text}
@@ -447,7 +547,7 @@ export function ProblemPanel({
 
   return (
     <div
-      className="panel-problems"
+      className="panel-problems prob"
       // 右键面（1023 覆盖面批）：行由 `data-problem-row` 认领；汇总行 / 空白区出面板级菜单；
       // 过滤框与勾选框由 `problem-menu` 主动让给全局输入框面（粘贴/全选在那一面）
       data-context-surface="problems"
@@ -462,9 +562,14 @@ export function ProblemPanel({
       }}
     >
       {header.kind === 'empty' ? (
-        <div className="conv-empty dim">未发现问题 ✅</div>
+        <div className="conv-empty prob-empty dim">
+          未发现问题
+          <Icon name="check" size={13} className="prob-empty-icon" />
+        </div>
       ) : (
-        <>
+        // 表头 + 工具条合成一块 sticky 头：列表的滚动交回容器（`.container-body`）之后，
+        // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"（与 `ksp-head` 同一处理）。
+        <div className="prob-head">
           <div className="conv-summary">
             <span className="conv-count" style={{ color: SEVERITY_COLOR.error }}>
               错误 {error}
@@ -485,9 +590,9 @@ export function ProblemPanel({
           <div className="prob-toolbar">
             {ALL_SEVERITIES.map((s) => (
               <label key={s} className="prob-sev-check">
-                <input
-                  type="checkbox"
+                <KitCheck
                   checked={sevSel.includes(s)}
+                  label={SEVERITY_LABEL[s]}
                   onChange={() =>
                     setFilterPrefs((cur) => ({
                       ...cur,
@@ -498,58 +603,68 @@ export function ProblemPanel({
                     }))
                   }
                 />
-                <span style={{ color: SEVERITY_COLOR[s] }}>{SEVERITY_LABEL[s]}</span>
+                <span className="prob-sev-label" style={{ color: SEVERITY_COLOR[s] }}>
+                  {SEVERITY_LABEL[s]}
+                </span>
               </label>
             ))}
             {srcOpts.length > 1 ? (
               // 来源过滤（S14）：单一来源时不给下拉——只有一个选项的开关是噪音
-              <select
-                className="prob-filter"
-                aria-label="按诊断来源过滤问题"
-                title="按诊断来源过滤"
-                value={sourceSel === null ? ALL_SOURCES_VALUE : sourceSel}
-                onChange={(e) =>
-                  setFilterPrefs((cur) => ({
-                    ...cur,
-                    source: e.target.value === ALL_SOURCES_VALUE ? null : e.target.value,
-                  }))
-                }
-              >
-                <option value={ALL_SOURCES_VALUE}>全部来源</option>
-                {srcOpts.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}（{o.count}）
-                  </option>
-                ))}
-              </select>
+              // 外观自绘（`appearance:none` + SVG 箭头 + token 化井面），选项语义与键盘行为仍归原生
+              // `// ui-kit-candidate: KitSelect`（列表弹层仍由系统画；换全自绘要另写开合与键盘态）
+              <span className="prob-select-wrap">
+                <select
+                  className="prob-filter prob-select"
+                  aria-label="按诊断来源过滤问题"
+                  title="按诊断来源过滤"
+                  value={sourceSel === null ? ALL_SOURCES_VALUE : sourceSel}
+                  onChange={(e) =>
+                    setFilterPrefs((cur) => ({
+                      ...cur,
+                      source: e.target.value === ALL_SOURCES_VALUE ? null : e.target.value,
+                    }))
+                  }
+                >
+                  <option value={ALL_SOURCES_VALUE}>全部来源</option>
+                  {srcOpts.map((o) => (
+                    <option key={o.key} value={o.key}>
+                      {o.label}（{o.count}）
+                    </option>
+                  ))}
+                </select>
+                <Icon name="chevron-down" size={12} className="prob-select-caret" />
+              </span>
             ) : null}
-            <input
-              className="prob-filter"
-              type="text"
-              value={filterText}
-              placeholder="过滤：消息 / 诊断码 / 来源 / 路径…"
-              aria-label="按消息、诊断码、来源或路径过滤问题"
-              onChange={(e) => setFilterPrefs((cur) => ({ ...cur, text: e.target.value }))}
-            />
+            {/* 与检索面板的 `ksp-field` 同族：边框与焦点环画在井上，输入框自己无框 */}
+            <span className="prob-field">
+              <input
+                className="prob-filter prob-input"
+                type="text"
+                value={filterText}
+                placeholder={FILTER_INPUT_PLACEHOLDER}
+                aria-label="按消息、诊断码、来源或路径过滤问题"
+                onChange={(e) => setFilterPrefs((cur) => ({ ...cur, text: e.target.value }))}
+              />
+            </span>
             {filtering ? (
               <>
                 <span className="prob-filtered-count dim">
                   筛出 {filtered.length}/{items.length}
                 </span>
-                <button type="button" className="ghost small" onClick={clearFilter}>
+                <button type="button" className="ghost small prob-clear" onClick={clearFilter}>
                   清除过滤
                 </button>
               </>
             ) : null}
           </div>
-        </>
+        </div>
       )}
 
       {filtered.length === 0 ? (
         items.length > 0 ? (
           // 过滤把所有条目筛光了：直说，不留一片"看起来空了"的谜（铁律 4）。
           // 与"根本没有问题"是两种空态：这里是「过滤后无结果」，顶部还有一枚「清除过滤」。
-          <div className="conv-empty dim">
+          <div className="conv-empty prob-empty-filtered dim">
             没有匹配过滤条件的问题（{items.length} 条被过滤隐藏，点「清除过滤」回到全部）
           </div>
         ) : null
@@ -575,21 +690,17 @@ export function ProblemPanel({
                   onClick={() => toggleGroup(g.path)}
                 >
                   <span className="prob-group-caret" aria-hidden="true">
-                    {isCollapsed ? '▸' : '▾'}
+                    <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={12} />
                   </span>
                   <span className="prob-group-path" title={g.path}>
                     {g.label}
                   </span>
                   <span className="prob-group-counts">
-                    {gc.error > 0 ? (
-                      <span style={{ color: SEVERITY_COLOR.error }}>✕ {gc.error}</span>
-                    ) : null}
+                    {gc.error > 0 ? <SeverityCount severity="error" count={gc.error} /> : null}
                     {gc.warning > 0 ? (
-                      <span style={{ color: SEVERITY_COLOR.warning }}>⚠ {gc.warning}</span>
+                      <SeverityCount severity="warning" count={gc.warning} />
                     ) : null}
-                    {gc.info > 0 ? (
-                      <span style={{ color: SEVERITY_COLOR.info }}>ℹ {gc.info}</span>
-                    ) : null}
+                    {gc.info > 0 ? <SeverityCount severity="info" count={gc.info} /> : null}
                   </span>
                 </button>
                 {!isCollapsed && rows.length > 0 ? (

@@ -1,0 +1,610 @@
+/* ============================================================================
+   底部「问题」面板 · 与检索面板同族重排（批次十一 L03，2026-10-23）
+
+   本文件只服务 `ui/ProblemPanel.tsx`（面板根类 `.prob`），由 `main.tsx` 引入。
+   动因（组长真壳截图取证）：`.prob-toolbar` / `.prob-filter` / `.prob-sev-check` /
+   `.prob-group-head` / `.prob-group-caret` **全仓一条规则都没有** ⇒ 工具条落进
+   `styles.css` 的全局 `button` / 原生 `select` / 原生 checkbox 默认档，与精修过的
+   检索面板（`.ksp-*`）长成两族。这里把缺的那一族补上，并把 `.prob-*` 从
+   `styles-project.css` 的遗留单类段搬进来（同批删净，不留两处）。
+
+   两条硬纪律（照 `search-panel.css` 的口径）：
+
+   ① **每条规则至少两个类**（`.panel-problems.prob …`）。面板 CSS 走首屏静态链、
+      `styles-project.css` 随项目懒块后到，同特异性会"后来者胜"；双类 + 后代选择器
+      对遗留单类 / 全局元素选择器稳定取胜——级联与到达顺序解绑，换个引入点也不塌。
+   ② **不写死颜色**。面 / 边 / 字 / 焦点 / 圆角 / 尺度全取 `styles.css` 的 token；
+      严重级颜色仍单源于 `problem-store.SEVERITY_TINT`，由组件以 `--prob-tint` /
+      `color` 内联下传，本文件只**用它**（`currentColor` 派生底纹），不复制色值。
+
+   布局：`.prob-head`（三档读数 + 过滤控件）sticky 常驻，`.prob-list` 只负责排条目——
+   滚动交回容器 `.container-body`（`styles-project.css` 「容器级滚动：消灭面板各自的小
+   滚动条」那条定稿）。旧的 `.prob-list{max-height:320px;overflow:auto}` 与可变高底部
+   面板叠加成双重滚动条，同批废除。
+   ============================================================================ */
+
+/* ------------------------------- 根与布局 ------------------------------- */
+
+.panel-problems.prob {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* ------------------ 表头 + 工具条：一块常驻头（sticky） ------------------ */
+
+/* 面板体外层是 `.panel{padding: var(--space-2) var(--space-3)}`；负外边距把这圈内衬
+   反出来、由本段自己吃，于是粘住时整条带子横到容器边缘、条目从它**底下**滚过去，
+   不会在左上角留出一圈"字飘在内容上"的缝。 */
+.panel-problems.prob > .prob-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: calc(var(--space-2) * -1) calc(var(--space-3) * -1) 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 三档读数：与检索面板的 `ksp-summary` 同档（fs-1 正文读数控件、fs-2 只给这三枚主数） */
+.panel-problems.prob .conv-summary {
+  gap: var(--space-3);
+  align-items: center;
+}
+.panel-problems.prob .conv-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* 色由组件内联给（SEVERITY_TINT 单源）；这里只管字号与重量 */
+  font-size: var(--fs-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* --------------------------------- 工具条 --------------------------------- */
+
+.panel-problems.prob .prob-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+/* 三枚严重级开关的整行热区（`<label>` 天然把文字也变成可点区） */
+.panel-problems.prob .prob-sev-check {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 24px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--fs-1);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.panel-problems.prob .prob-sev-check:hover {
+  background: var(--hover-soft);
+}
+.panel-problems.prob .prob-sev-label {
+  /* 色由组件内联给（SEVERITY_TINT 单源） */
+  white-space: nowrap;
+  font-size: var(--fs-1);
+}
+
+/* ------------------- KitCheck：自绘勾选（语义腿仍是原生） ------------------- */
+/* ui-kit-candidate: KitCheck —— 与 `Switch.tsx` 同语言的勾选形态；真 checkbox 只把外观
+   换成画出来的方框，Tab / 空格 / `checked` 受控 / 屏幕阅读器一条不掉。收编后可替掉
+   `ksp-opt-check` 与设置页里靠 `accent-color` 的散勾选。 */
+
+/* 视觉隐藏、**不** `display:none`：后者会把键盘焦点与无障碍名一起丢掉（同 `Switch`） */
+.panel-problems.prob .prob-check {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.panel-problems.prob .prob-check-input {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+.panel-problems.prob .prob-check-box {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  color: transparent;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.panel-problems.prob .prob-check-glyph {
+  opacity: 0;
+  /* 图标本体按 16 格画，勾到 10 档时描边相对变粗是**想要的**（小勾要看得见） */
+  transform: scale(0.7);
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    transform var(--dur-2) var(--ease-spring);
+}
+/* 选中态：accent 填充档（与全站"已开启"同一语言），勾走 `--on-accent` */
+.panel-problems.prob .prob-check-input:checked + .prob-check-box {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--on-accent);
+}
+.panel-problems.prob .prob-check-input:checked + .prob-check-box .prob-check-glyph {
+  opacity: 1;
+  transform: none;
+}
+.panel-problems.prob .prob-check-input:focus-visible + .prob-check-box {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.panel-problems.prob .prob-check-input:disabled + .prob-check-box {
+  opacity: var(--disabled-opacity);
+}
+
+/* ------------------- KitSelect：原生 select 的 token 化外观 ------------------- */
+/* ui-kit-candidate: KitSelect —— 外观自绘（`appearance:none` + SVG 箭头 + 井面），
+   开合 / 键盘 / 弹层仍归原生：弹层由系统画，换全自绘要另写开合态与焦点管理。 */
+.panel-problems.prob .prob-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-width: 0;
+}
+.panel-problems.prob .prob-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  max-width: 220px;
+  min-height: 24px;
+  padding: 0 20px 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--fg);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+.panel-problems.prob .prob-select:hover {
+  border-color: var(--border-strong);
+}
+.panel-problems.prob .prob-select:focus-visible {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+/* 系统弹层的选项面：不指定的话在深底上会落平台白底 */
+.panel-problems.prob .prob-select option {
+  background-color: var(--surface-overlay);
+  color: var(--fg);
+}
+.panel-problems.prob .prob-select-caret {
+  position: absolute;
+  right: 5px;
+  /* 箭头只是指认，点它的人仍是下面的 select */
+  pointer-events: none;
+  color: var(--fg-dim);
+}
+
+/* ------------------- 过滤输入井（与 `ksp-field` 同族） ------------------- */
+/* ui-kit-candidate: KitFieldWell —— 边框与焦点环画在井上、输入框自己无框；
+   检索面板 `ksp-field` 与本面板 `.prob-field` 是同一条规则的两个宿主。 */
+.panel-problems.prob .prob-field {
+  flex: 1 1 200px;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.panel-problems.prob .prob-field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.panel-problems.prob .prob-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  /* 井内净高 24（井 26 − 两条 1px 边）：撑满井口，可点高度够 WCAG 2.5.8 而不涨行高 */
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  line-height: 1.4;
+}
+.panel-problems.prob .prob-input::placeholder {
+  color: var(--fg-dim);
+  opacity: 1;
+}
+
+/* 筛出读数 + 清除过滤 */
+.panel-problems.prob .prob-filtered-count {
+  flex: none;
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.panel-problems.prob .prob-clear {
+  flex: none;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.panel-problems.prob .prob-clear:hover {
+  border-color: transparent;
+  background: var(--hover);
+  color: var(--fg);
+}
+.panel-problems.prob .prob-clear:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+
+/* ------------------------------ 列表容器 ------------------------------ */
+
+/* 双重滚动条收掉：高度与滚动都交回 `.container-body`（容器级滚动，定稿 §十） */
+.panel-problems.prob .prob-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  max-height: none;
+  overflow: visible;
+}
+.panel-problems.prob .prob-group {
+  list-style: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+/* 组与组之间一条发丝线；首组的顶线交给 sticky 头那条，不画双线 */
+.panel-problems.prob .prob-group + .prob-group {
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* 分组头 = 折叠开关（真 button，`aria-expanded` 在组件上） */
+.panel-problems.prob .prob-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px var(--space-1) 2px 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-1);
+  text-align: left;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+.panel-problems.prob .prob-group-head:hover {
+  border-color: transparent;
+  background: var(--hover-soft);
+  color: var(--fg);
+}
+.panel-problems.prob .prob-group-head:active:not(:disabled) {
+  background: var(--hover);
+}
+.panel-problems.prob .prob-group-head:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.panel-problems.prob .prob-group-caret {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--fg-dim);
+}
+.panel-problems.prob .prob-group-head:hover .prob-group-caret {
+  color: var(--fg);
+}
+.panel-problems.prob .prob-group-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-problems.prob .prob-group-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  margin-left: auto;
+}
+/* 组内行：整体缩进一档，读成"这组的孩子" */
+.panel-problems.prob .prob-group-rows {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--space-1) var(--space-1) var(--space-3);
+}
+
+/* ------------------------ KitCount：一枚计数徽标 ------------------------ */
+/* ui-kit-candidate: KitCount —— 全仓计数徽标现存四套（`.conv-count` / `.ksp-file-count` /
+   `.tree-prob-mark` / 状态栏 `.sb-problems-item`），本枚按 `ksp-file-count` 的尺度写
+   （胶囊 / `--fs-0` / `tabular-nums` / 最小 18 宽）。底纹走 `currentColor` 派生：色相仍由
+   组件从 SEVERITY_TINT 下传，本文件不复制任何色值。收编时替换另三套，别造第五套。 */
+.panel-problems.prob .prob-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.panel-problems.prob .prob-count-icon {
+  flex: none;
+}
+/* 读数腿（AT 与「四处一个真相」那把尺共用的 `符号 空格 数字`）：布局零占位 */
+.panel-problems.prob .prob-count-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------- 行（密度） ------------------------------- */
+
+.panel-problems.prob .prob-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.panel-problems.prob .prob-item:hover,
+.panel-problems.prob .prob-item:focus-within {
+  background: var(--hover-soft);
+}
+
+/* 行主按钮：沿用约定面板的 `.conv-issue-btn` 骨架，这里只接管密度与状态 */
+.panel-problems.prob .prob-row {
+  flex: 1 1 auto;
+  /* 旧 `.conv-issue-btn` 的 width:100% 会让 flex 基准按整行算（动作钮被挤出去） */
+  width: auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-height: 22px;
+  padding: 2px var(--space-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  text-align: left;
+}
+/* hover 底色交给整行（`.prob-item:hover`），本钮不再自画一层，免得两圈边对不齐 */
+.panel-problems.prob .prob-row:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg);
+  /* 全站行 hover 那 2px 位移（`styles-project.css` F 段）在这里不做：导轨贴左缘画，
+     一位移就与边之间空出 2px 缝，读成"条没对齐" */
+  transform: none;
+}
+.panel-problems.prob .prob-row:active:not(:disabled) {
+  background: var(--hover);
+}
+/* 严重级导轨：与注入器 / 糖预览那族同款 inset 2px，色 = `--prob-tint`（SEVERITY_TINT 下传） */
+.panel-problems.prob .prob-item:hover .prob-row,
+.panel-problems.prob .prob-row:focus-visible {
+  box-shadow: inset 2px 0 0 var(--prob-tint, var(--border-strong));
+}
+.panel-problems.prob .prob-row:focus-visible {
+  outline: none;
+}
+
+/* 圆点：形状尺寸仍由 `.conv-dot` 给，颜色改吃 `--prob-tint`（同一份 SEVERITY_TINT） */
+.panel-problems.prob .conv-dot {
+  background: var(--prob-tint, var(--fg-dim));
+}
+.panel-problems.prob .prob-row .conv-issue-loc {
+  /* 宽面板上 40% 会把消息挤到读不动；按字符数封顶（`--font-meta` 的 ch 随字号缩放） */
+  max-width: 26ch;
+}
+.panel-problems.prob .prob-code {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--surface-overlay);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  line-height: 15px;
+}
+
+/* 行内动作：常驻槽位（显隐只改透明度，行高不跳）；静息弱、悬停 / 焦点才亮 */
+.panel-problems.prob .prob-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  opacity: 0.5;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.panel-problems.prob .prob-item:hover .prob-row-actions,
+.panel-problems.prob .prob-item:focus-within .prob-row-actions {
+  opacity: 1;
+}
+.panel-problems.prob .prob-fix,
+.panel-problems.prob .prob-copy {
+  position: relative;
+  min-height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.panel-problems.prob .prob-fix:hover,
+.panel-problems.prob .prob-copy:hover {
+  border-color: transparent;
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+.panel-problems.prob .prob-fix:active:not(:disabled),
+.panel-problems.prob .prob-copy:active:not(:disabled) {
+  background: var(--active);
+  color: var(--accent-text);
+}
+.panel-problems.prob .prob-fix:focus-visible,
+.panel-problems.prob .prob-copy:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* 行级反馈（复制 / 修复成败，1.8s 自动收起）：浮在行尾槽位上，不撑行高 */
+.panel-problems.prob .prob-flash {
+  position: absolute;
+  right: var(--space-1);
+  bottom: 1px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-1);
+  color: var(--accent-text);
+  font-size: var(--fs-0);
+  line-height: 18px;
+}
+
+/* -------------------------- 空态 / 筛光头 / 哨兵 -------------------------- */
+
+.panel-problems.prob .prob-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  font-size: var(--fs-1);
+}
+/* 空态那枚勾：语义是"这一档没问题"，取成功色一档（token，不写死） */
+.panel-problems.prob .prob-empty-icon {
+  flex: none;
+  color: var(--success);
+}
+.panel-problems.prob .prob-empty-filtered {
+  padding: var(--space-1) 0;
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.panel-problems.prob .prob-more {
+  align-self: flex-start;
+  min-height: 24px;
+  padding: 2px var(--space-2);
+  margin-top: var(--space-1);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+.panel-problems.prob .prob-more:hover {
+  border-color: transparent;
+  background: var(--hover);
+  color: var(--fg);
+}
+.panel-problems.prob .prob-more:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+
+/* ============================================================================
+   命中区补齐 ≥24×24（WCAG 2.5.8；口径同 `search-panel.css` 的 P3-2 段）
+
+   小控件（行内动作钮 22 高、清除过滤与哨兵已 24、勾选框 14 见方但整枚 `<label>`
+   是热区）里只有动作钮够不到 24。**不动任何视觉尺寸**：靠一层透明 `::before`
+   向外扩命中测试，不画颜色、不带过渡，三主题与 reduced-motion 自然无涉。
+   ============================================================================ */
+
+.panel-problems.prob .prob-fix::before,
+.panel-problems.prob .prob-copy::before {
+  content: '';
+  position: absolute;
+  inset: -1px 0;
+  background: transparent;
+}
+
+/* ------------------------------ 减弱动效 ------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-problems.prob .prob-check-glyph {
+    transition: opacity var(--dur-1) linear;
+    transform: none;
+  }
+}
+:root[data-motion='reduced'] .panel-problems.prob .prob-check-glyph {
+  transition: opacity var(--dur-1) linear;
+  transform: none;
+}

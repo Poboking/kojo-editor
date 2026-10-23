@@ -1498,30 +1498,16 @@ textarea {
 
 /* --------------------------- problems panel (HK-4 · UI-6) --------------------------- */
 
-/* 底部「问题」面板：复用约定面板视觉语言（.conv-summary/.conv-count/.conv-dot/
-   .conv-issue-btn/.conv-issue-loc/.conv-issue-msg），只补列表容器与诊断码标签。 */
-.panel-problems {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.prob-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  max-height: 320px;
-  overflow: auto;
-}
-.prob-item {
-  margin: 0;
-}
-.prob-code {
-  flex: none;
-  font-family: var(--font-meta);
-  font-size: var(--fs-0);
-}
+/* 底部「问题」面板的全部 `.prob-*` 规则已搬进 `problem-panel.css`（批次十一 L03）：
+   与 `.ksp-*` 检索面板同族的一整套（工具条 / 勾选 / 下拉 / 输入井 / 分组头 / 行密度 /
+   KitCount 计数徽标），双类选择器 `.panel-problems.prob …` 提特异性。
+   这里刻意**一条都不留**——旧档只有四条（`.panel-problems` / `.prob-list max-height:320`
+   / `.prob-item` / `.prob-code`），留着就是"同一个控件两本账"，也正是双重滚动条的出处
+   （滚动已交回 `.container-body`，见本文件「容器级滚动」段）。
+   行体仍复用约定面板的语言（`.conv-summary` / `.conv-count` / `.conv-dot` /
+   `.conv-issue-btn` / `.conv-issue-loc` / `.conv-issue-msg` / `.conv-empty` / `.conv-more`，
+   那些类留在上面那份里，两个面板共用）。 */
+
 
 /* ---------------------- 侧栏「在文件中搜索」（2026-10-15 检索批） ---------------------- */
 
