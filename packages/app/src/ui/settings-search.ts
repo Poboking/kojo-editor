@@ -9,11 +9,12 @@
  * 三条口径：
  * - `key`：给了 ⇒ 该项在页面上有 `[data-settings-key]` 锚点，点结果能滚到那一行并闪一下；
  *   没给 ⇒ 只跳到对应节（一节恒有内容，绝不出现"点了没反应"，铁律 4）。
- *   **每一行控件都必须登记 key**，否则搜索结果指不到那一行（覆盖率由
- *   `tests/settings-search-coverage.test.ts` 钉死：索引名 = 页面文案、锚点双向闭合）。
+ *   控件行一律登记 key，且**登记了就必须真有一枚锚点**——写了 key 而页面上找不到那一行、
+ *   或条目指向不存在的节，由 `tests/settings-search.test.ts` 当场钉红。
+ *   整页级的条目（快捷键页）例外地不给 key：那一节的"行"就是整页，键位行另有 `[data-kb-id]`。
  * - `isModified` 可选：**只有拿得到真源读数的条目才写它**。「已修改」过滤是一条判据，
  *   猜出来的已修改比没有已修改过滤更坏（作者会据此去翻一处其实没动过的设置）。
- * - `label` 与页面上那行的文案**逐字一致**（搜到就认得出；漂移由覆盖率测试拦下）。
+ * - `label` 与页面上那行的文案**逐字一致**（搜到就认得出）。
  */
 import { overrideCount } from './keybindings';
 import { loadLayoutPref, LAYOUT_PREF_DEFAULT } from './layout-pref';
@@ -82,47 +83,50 @@ const formatIndentChanged = (): boolean =>
   loadFormatRulesPref().indent !== FORMAT_RULES_DEFAULT.indent;
 
 /**
- * 条目索引（顺序 = 无查询时「已修改」列表的展示序，按节分组、节内按页面行序）。
+ * 条目索引（顺序 = 无查询时「已修改」列表的展示序，按节分组、节内按**页面行序**）。
+ *
+ * "节内按页面行序"是这条顺序的唯一尺：同一条判据既决定搜索结果的排列，也决定徽标点开
+ * 的那张清单，所以页面上两行谁在上、索引里就谁在前（改页面行序 ⇒ 这里跟着挪，
+ * 否则「已修改」清单会和页面反着排，读者以为某一页跳过了改动）。
  *
  * 覆盖面是**全量**：页面上每一行控件都要在这里有一条条目、有一个锚点 key——
- * "搜到却找不到那一行"（索引名 ≠ 页面文案）与"这一行压根搜不到"都由
- * `tests/settings-search-coverage.test.ts` 当场钉红。新增一行设置 = 页面加
- * `data-settings-key` + 这里加一条同 key 条目，两步缺一即红。
+ * "索引登记了 key 而页面上没那枚 `data-settings-key`"（点了指不到那一行）与
+ * "条目指向不存在的节"由 `tests/settings-search.test.ts` 当场钉红。新增一行设置 =
+ * 页面加 `data-settings-key` + 这里加一条同 key 条目，两步缺一即红。
  */
 export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
-  // ---- 编辑器 · 书写体感 ----
+  // ---- 编辑器（条目顺序 = 设置页这一节从上到下的**实际行序**；「已修改」列表照它展示）----
+  // 字号与缩放（SettingsPanel 的「正文字号」行 + 「文字缩放」行）
   { id: 'editor.fontSize', section: 'editor', sectionLabel: '编辑器', label: '正文字号', keywords: ['字号 font size'], key: 'editor.fontSize', isModified: () => loadFontSizePref() !== FONT_SIZE_DEFAULT },
   { id: 'editor.fontZoom', section: 'editor', sectionLabel: '编辑器', label: '文字缩放', keywords: ['zoom 放大 缩小 ctrl+='], key: 'editor.fontZoom', isModified: () => loadFontZoomPref() !== FONT_ZOOM_DEFAULT },
-  { id: 'editor.uiFontScale', section: 'editor', sectionLabel: '编辑器', label: '界面字号', keywords: ['ui scale 标签页 侧栏'], key: 'editor.uiFontScale', isModified: displayKeyModified('uiFontScale') },
-  { id: 'editor.lineHeight', section: 'editor', sectionLabel: '编辑器', label: '行高', keywords: ['line height 行距'], key: 'editor.lineHeight', isModified: displayKeyModified('lineHeight') },
-  { id: 'editor.fontFamily', section: 'editor', sectionLabel: '编辑器', label: '编程字体', keywords: ['font family 字体族 cascadia consolas'], key: 'editor.fontFamily', isModified: displayKeyModified('fontFamily') },
-  { id: 'editor.multiCursor', section: 'editor', sectionLabel: '编辑器', label: '多光标修饰键', keywords: ['multi cursor alt ctrl 多个光标'], key: 'editor.multiCursor', isModified: multiCursorChanged },
-  { id: 'editor.columnSelection', section: 'editor', sectionLabel: '编辑器', label: '列选择', keywords: ['column selection 方块'], key: 'editor.columnSelection', isModified: columnSelectionChanged },
-
-  // ---- 编辑器 · 补全与提示 ----
+  // 补全与提示（弹出总开关 → 文档词 → 延迟 → 行内提示在下面的显示偏好带）
   { id: 'editor.quickSuggestions', section: 'editor', sectionLabel: '编辑器', label: '输入时自动弹出补全', keywords: ['quick suggestions 补全 候选'], key: 'editor.quickSuggestions', isModified: () => loadQuickSuggestionsPref() !== QUICK_SUGGESTIONS_DEFAULT },
   { id: 'editor.wordSuggestions', section: 'editor', sectionLabel: '编辑器', label: '文档词补全', keywords: ['word based 补全'], key: 'editor.wordSuggestions', isModified: () => loadWordBasedSuggestionsPref() !== WORD_BASED_SUGGESTIONS_DEFAULT },
   { id: 'editor.suggestDelay', section: 'editor', sectionLabel: '编辑器', label: '补全弹出延迟', keywords: ['delay 延迟 立即'], key: 'editor.suggestDelay', isModified: () => loadSuggestDelayPref() !== SUGGEST_DELAY_DEFAULT },
-  { id: 'editor.inlayHints', section: 'editor', sectionLabel: '编辑器', label: '行内提示', keywords: ['inlay hints 形参名 内联'], key: 'editor.inlayHints', isModified: displayKeyModified('inlayHints') },
-  { id: 'editor.codeLens', section: 'editor', sectionLabel: '编辑器', label: '标注函数被谁调用', keywords: ['code lens 引用 被用到'], key: 'editor.codeLens', isModified: () => loadCodeLensPref() !== CODE_LENS_DEFAULT },
-  { id: 'editor.findSeed', section: 'editor', sectionLabel: '编辑器', label: '查找词优先', keywords: ['find 查找 选中'], key: 'editor.findSeed', isModified: () => loadFindSeedPref() !== FIND_SEED_DEFAULT },
-
-  // ---- 编辑器 · 整理与着色 ----
+  // .kojo 预览与整理（预览总闸 → 保存时整理 → 两条整理规则 → 行内标注）
   { id: 'editor.sugarView', section: 'editor', sectionLabel: '编辑器', label: '.kojo 预览', keywords: ['糖 中文表层 ctrl+alt+t'], key: 'editor.sugarView' },
-  { id: 'editor.nameColor', section: 'editor', sectionLabel: '编辑器', label: '定义与调用的名字分色', keywords: ['语义着色 color 名字'], key: 'editor.nameColor', isModified: () => loadNameColorPref() !== NAME_COLOR_DEFAULT },
-  { id: 'editor.treeSitter', section: 'editor', sectionLabel: '编辑器', label: '结构解析器辅助（实验）', keywords: ['tree sitter 结构 折叠'], key: 'editor.treeSitter', isModified: () => loadTreeSitterPref() !== TREE_SITTER_DEFAULT },
-  { id: 'editor.renderWhitespace', section: 'editor', sectionLabel: '编辑器', label: '空白符显示', keywords: ['空格 tab whitespace'], key: 'editor.renderWhitespace', isModified: displayKeyModified('renderWhitespace') },
   { id: 'editor.formatOnSave', section: 'editor', sectionLabel: '编辑器', label: '保存时整理空白', keywords: ['格式化 format on save'], key: 'editor.formatOnSave' },
   { id: 'editor.formatRuleFullWidth', section: 'editor', sectionLabel: '编辑器', label: '折算全角空格', keywords: ['全角 半角 整理规则'], key: 'editor.formatRuleFullWidth', isModified: formatFullWidthChanged },
   { id: 'editor.formatRuleIndent', section: 'editor', sectionLabel: '编辑器', label: '统一 .kojo 缩进写法', keywords: ['缩进 整理规则 tab'], key: 'editor.formatRuleIndent', isModified: formatIndentChanged },
+  { id: 'editor.codeLens', section: 'editor', sectionLabel: '编辑器', label: '标注函数被谁调用', keywords: ['code lens 引用 被用到'], key: 'editor.codeLens', isModified: () => loadCodeLensPref() !== CODE_LENS_DEFAULT },
+  // 着色与解析 / 落盘
+  { id: 'editor.nameColor', section: 'editor', sectionLabel: '编辑器', label: '定义与调用的名字分色', keywords: ['语义着色 color 名字'], key: 'editor.nameColor', isModified: () => loadNameColorPref() !== NAME_COLOR_DEFAULT },
+  { id: 'editor.treeSitter', section: 'editor', sectionLabel: '编辑器', label: '结构解析器辅助（实验）', keywords: ['tree sitter 结构 折叠'], key: 'editor.treeSitter', isModified: () => loadTreeSitterPref() !== TREE_SITTER_DEFAULT },
   { id: 'editor.autosave', section: 'editor', sectionLabel: '编辑器', label: '自动保存', keywords: ['autosave 落盘'], key: 'editor.autosave', isModified: () => loadAutosavePref() !== AUTOSAVE_MODE_DEFAULT },
-
-  // ---- 编辑器 · 滚动与缩略图 ----
+  // 排版四行（LayoutPrefRows 三行 + FindPrefRow 一行）
   { id: 'editor.wordWrap', section: 'editor', sectionLabel: '编辑器', label: '折行', keywords: ['word wrap 换行 滚动'], key: 'editor.wordWrap', isModified: wordWrapChanged },
+  { id: 'editor.multiCursor', section: 'editor', sectionLabel: '编辑器', label: '多光标修饰键', keywords: ['multi cursor alt ctrl 多个光标'], key: 'editor.multiCursor', isModified: multiCursorChanged },
+  { id: 'editor.columnSelection', section: 'editor', sectionLabel: '编辑器', label: '列选择', keywords: ['column selection 方块'], key: 'editor.columnSelection', isModified: columnSelectionChanged },
+  { id: 'editor.findSeed', section: 'editor', sectionLabel: '编辑器', label: '查找词优先', keywords: ['find 查找 选中'], key: 'editor.findSeed', isModified: () => loadFindSeedPref() !== FIND_SEED_DEFAULT },
+  // 显示偏好八行（EditorDisplayRows 的行序，逐行照页面）
+  { id: 'editor.uiFontScale', section: 'editor', sectionLabel: '编辑器', label: '界面字号', keywords: ['ui scale 标签页 侧栏'], key: 'editor.uiFontScale', isModified: displayKeyModified('uiFontScale') },
+  { id: 'editor.lineHeight', section: 'editor', sectionLabel: '编辑器', label: '行高', keywords: ['line height 行距'], key: 'editor.lineHeight', isModified: displayKeyModified('lineHeight') },
+  { id: 'editor.renderWhitespace', section: 'editor', sectionLabel: '编辑器', label: '空白符显示', keywords: ['空格 tab whitespace'], key: 'editor.renderWhitespace', isModified: displayKeyModified('renderWhitespace') },
   { id: 'editor.lineNumbers', section: 'editor', sectionLabel: '编辑器', label: '行号', keywords: ['line numbers 相对行号'], key: 'editor.lineNumbers', isModified: displayKeyModified('lineNumbers') },
   { id: 'editor.minimap', section: 'editor', sectionLabel: '编辑器', label: '缩略图', keywords: ['小地图 minimap 右侧概览'], key: 'editor.minimap', isModified: displayKeyModified('minimap') },
-
-  // ---- 编辑器 · Kojo 2.0 / 直连（锚点在各自组件里，见覆盖率测试的来源清单） ----
+  { id: 'editor.inlayHints', section: 'editor', sectionLabel: '编辑器', label: '行内提示', keywords: ['inlay hints 形参名 内联'], key: 'editor.inlayHints', isModified: displayKeyModified('inlayHints') },
+  { id: 'editor.fontFamily', section: 'editor', sectionLabel: '编辑器', label: '编程字体', keywords: ['font family 字体族 cascadia consolas'], key: 'editor.fontFamily', isModified: displayKeyModified('fontFamily') },
+  // Kojo 2.0 档位（整块在 Kojo2CutoverSettings 里，档位与破例清单各有自己的行）/ 直连
   { id: 'editor.kojo2Stage', section: 'editor', sectionLabel: '编辑器', label: 'Kojo 2.0 档位', keywords: ['kojo2 2.0 破例 恢复出厂 切换'] },
   { id: 'editor.directMode', section: 'editor', sectionLabel: '编辑器', label: '直连模式（就地编辑游戏目录）', keywords: ['direct mode 游戏目录 写权限'], key: 'editor.directMode', isModified: () => loadDirectMode() !== DIRECT_MODE_DEFAULT },
 
@@ -144,17 +148,41 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
 
   // ---- 语言能力 / 快捷键 / 市场 / 关于 ----
   { id: 'language.capabilities', section: 'capabilities', sectionLabel: '语言能力', label: '语言能力', keywords: ['language 语法 支持 矩阵'] },
-  { id: 'keybindings.page', section: 'keybindings', sectionLabel: '快捷键', label: '键盘快捷键', keywords: ['keybinding 快捷键 改键 解绑 撞键 恢复默认'], key: 'keybindings.page', isModified: () => overrideCount() > 0 },
+  // 快捷键一整页：不给 key——那一节里没有"设置行"可指，页面上每个键位行自有 `[data-kb-id]`
+  // 锚点（住在 KeybindingsPage.tsx，不在设置页的 `[data-settings-key]` 体系内）。
+  // 指一枚并不存在的行锚点，等于让点击静默落空；跳节本身就是落到那一页（铁律 4）。
+  { id: 'keybindings.page', section: 'keybindings', sectionLabel: '快捷键', label: '键盘快捷键', keywords: ['keybinding 快捷键 改键 解绑 撞键 恢复默认'], isModified: () => overrideCount() > 0 },
   { id: 'market.endpoint', section: 'market', sectionLabel: '口上市场', label: '包列表来源', keywords: ['market 索引 源 地址'], key: 'market.endpoint' },
   { id: 'about.update', section: 'about', sectionLabel: '关于', label: '检查更新', keywords: ['更新 版本 update'], key: 'about.update' },
+  { id: 'about.developer', section: 'about', sectionLabel: '关于', label: 'GitHub 主页', keywords: ['开发者 poboking 作者'], key: 'about.developer' },
   { id: 'about.contact', section: 'about', sectionLabel: '关于', label: '联系邮箱', keywords: ['邮箱 mail 反馈'], key: 'about.contact' },
   { id: 'about.feedback', section: 'about', sectionLabel: '关于', label: '意见反馈', keywords: ['issue github 反馈'], key: 'about.feedback' },
-  { id: 'about.developer', section: 'about', sectionLabel: '关于', label: 'GitHub 主页', keywords: ['开发者 poboking 作者'], key: 'about.developer' },
 ];
 
 /** 归一（大小写与空白不参与比对；作者敲 `ctrl + k` 也命中 `Ctrl+K`） */
 function normalize(value: string): string {
   return value.toLowerCase().replace(/\s+/g, '');
+}
+
+/**
+ * 「已修改」的**唯一判据**（一处定义）：写了 `isModified` 判据、且当前读数确实偏离默认。
+ * 没写判据的条目永远返回 false——猜出来的"已修改"比没有这条过滤更坏。
+ * 三个消费者都吃它：下面的名单（过滤 + 徽标计数）与结果行上那枚「已改」标记。
+ */
+export function settingsEntryModified(entry: SettingsSearchEntry): boolean {
+  return entry.isModified !== undefined && entry.isModified();
+}
+
+/**
+ * 「已修改」的那一份名单（`settingsEntryModified` 的第一个消费者）。
+ *
+ * 徽标计数与「已修改」过滤**都**吃这个数组 ⇒ "徽标数 = 点数得到的条数"是构造上成立，
+ * 不是两处各写一遍判据碰巧相等（两条各算一份名单时，任一处漏一条就永远对不上）。
+ */
+export function modifiedSettingsEntries(
+  entries: readonly SettingsSearchEntry[] = SETTINGS_SEARCH_INDEX,
+): SettingsSearchEntry[] {
+  return entries.filter((entry) => settingsEntryModified(entry));
 }
 
 /** 一条结果的命中强度：标签子串 > 关键词子串 > 全串子序列 */
@@ -176,19 +204,21 @@ function scoreEntry(entry: SettingsSearchEntry, q: string): number {
 /**
  * 搜索设置项（空串 = 全量）。
  *
- * `modifiedOnly` 只看写了 `isModified` 的条目——没写判据的条目**不会**因为它而被排除掉
- * 之外的地方冒充"已修改"。结果按命中强度分桶、桶内保持索引原序（同输入同输出）。
+ * `modifiedOnly` 走 `modifiedSettingsEntries` 那份名单（与徽标计数同一个数组）——
+ * 没写判据的条目**不会**被算进"已修改"。结果按命中强度分桶、桶内保持索引原序（同输入同输出）。
  */
 export function searchSettings(
   query: string,
   opts: { readonly modifiedOnly?: boolean; readonly entries?: readonly SettingsSearchEntry[] } = {},
 ): SettingsSearchEntry[] {
-  const entries = opts.entries ?? SETTINGS_SEARCH_INDEX;
-  const q = normalize(query.trim());
   const modifiedOnly = opts.modifiedOnly === true;
+  // 名单只从一处取：过滤之后仍按索引原序排（`at` 是名单内的位次，与索引同序）
+  const entries = modifiedOnly
+    ? modifiedSettingsEntries(opts.entries ?? SETTINGS_SEARCH_INDEX)
+    : (opts.entries ?? SETTINGS_SEARCH_INDEX);
+  const q = normalize(query.trim());
   const out: { entry: SettingsSearchEntry; score: number; at: number }[] = [];
   entries.forEach((entry, at) => {
-    if (modifiedOnly && (entry.isModified === undefined || !entry.isModified())) return;
     const score = q === '' ? 0 : scoreEntry(entry, q);
     if (score < 0) return;
     out.push({ entry, score, at });
@@ -197,17 +227,9 @@ export function searchSettings(
   return out.map((x) => x.entry);
 }
 
-/** 「已修改」的条目数（导航栏上那枚计数徽标；判据与过滤逐字同源） */
+/** 「已修改」的条目数（导航栏上那枚计数徽标；与 `searchSettings('', { modifiedOnly })` 同一个数组） */
 export function settingsModifiedCount(
   entries: readonly SettingsSearchEntry[] = SETTINGS_SEARCH_INDEX,
 ): number {
-  return entries.filter((e) => e.isModified !== undefined && e.isModified()).length;
-}
-
-/**
- * 结果的无障碍/文案行：`已修改` 徽标只在真判据上过真时出现。
- * （单独一个函数：设置页与将来的搜索结果渲染都吃这一条口径，不各写一遍。）
- */
-export function settingsEntryModified(entry: SettingsSearchEntry): boolean {
-  return entry.isModified !== undefined && entry.isModified();
+  return modifiedSettingsEntries(entries).length;
 }
