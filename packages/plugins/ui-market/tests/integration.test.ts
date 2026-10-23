@@ -1081,6 +1081,30 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
     expect(html).toContain('正在安装「示例 new.pack」…');
   });
 
+  it('进行中那一行有行级记号（.mk-row.busy + aria-busy + mk-install 档）；闲时行没有（批次十一 L07 三态）', () => {
+    const one = [viewEntry('new.pack', '1.0.1')];
+    const busy = renderView(one, [], {
+      installing: 'kojo-pack/new.pack@1.0.1',
+      note: '正在安装「示例 new.pack」…',
+    });
+    expect(busy).toContain('<div class="mk-row busy" aria-busy="true"');
+    expect(busy).toContain('mk-install" disabled');
+    const idle = renderView(one, []);
+    expect(idle).not.toContain('mk-row busy');
+    expect(idle).not.toContain('aria-busy');
+    // 「可安装」档：闲时的安装按钮带 mk-install 视觉档，文字仍是纯字符串「安装」
+    expect(idle).toContain('<button class="ghost small mk-install">安装</button>');
+  });
+
+  it('长文墙拆行 + 数据时间降级：常驻一行能力句在 details 里，屏上只留「上次同步」、全量在 title', () => {
+    const html = renderView([viewEntry('a.pack', '1.0.0')], []);
+    expect(html).toContain('<details class="mk-hint"><summary>');
+    expect(html).toContain('能拉取注册表列表，浏览与安装。');
+    expect(html).toMatch(/<div class="mk-time" title="数据时间：[^"]*">上次同步 \d\d-\d\d \d\d:\d\d<\/div>/);
+    // 屏面文案里不再有裸 URL：来源地址只活在 title 与来源按钮里
+    expect(html.replace(/title="[^"]*"/g, '')).not.toMatch(/https:\/\/[^<]*index\.json/);
+  });
+
   it('渲染层的主行也不含机器词（展开层没展开 ⇒ 核对码与 id/kind 都不该出现）', () => {
     const html = renderView(packs, installed);
     for (const word of ['index.json', 'sha256', 'manifest', 'schema', 'kind', 'minAppVersion', 'id ', 'zip']) {

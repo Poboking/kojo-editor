@@ -1,19 +1,506 @@
 /* ============================================================================
-   口上市场面板的**条目排版层**（用户反馈 5，2026-10-18）
+   口上市场面板的**全部视觉**——mk 一族 / .panel-market 整域住这一个文件
    ----------------------------------------------------------------------------
-   本文件只叠加"市场条目"的排版与层次，styles.css 里既有的 .mk-* 基础规则原样保留；
-   后加载 ⇒ 同特异性后来者胜，故这里不复制整块旧规则，只补缺的那几笔：
-   ① 卡片 = 市场条目：第一排名字 + 徽章、动作钉右端；第二排轻分隔的事实；
-      摘要最多两行；来源链接弱化但仍可点（一行省略，全量在 title 里）；
-   ② 分组 = 分区：标题吸顶到面板边（负 margin 吃掉列表留白）、计数靠右、
-      已安装组带 accent 竖标，索引组之间以发丝线与更大的间距呼吸；
-   ③ 工具条 = 搜索组 + 动作组两个整体：窄侧栏里动作组整组折行靠右，不挤压搜索框；
-      「发布口上…」用 accent 描边突出（不是大色块）；
-   ④ 只取本仓设计 token（--bg-* / --surface-* / --border-* / --accent* / --fg* /
-      --space-* / --radius-* / --shadow-* / --fs-*），零硬编码颜色，换主题自动跟随；
-   ⑤ 不新增动画/过渡：1px 抬升与投影沿用 styles.css 的 .mk-row:hover，
-      本文件不写 transition，动效降级仍由全局 data-motion / prefers-reduced-motion 压平。
+   ① 批次十一 L07 起，原先散布在 `styles-project.css` 三段里的市场域规则（基础层 /
+      效果推广 A 组 / MK-UI 精修批）**逐字迁入本文件**，按「基础 → 推广 → 精修 → 排版」
+      的到达序排列——同特异性后来者胜的终值与迁移前逐条对拍等价（刻意修正处均有注）。
+      `styles-project.css` 不再保留任何市场域规则 ⇒ 本域不再依赖
+      「styles-project.css → market.css」的跨文件加载顺序撑腰（该懒链保留，只为让
+      css 注入早于 ProjectView 首帧）。
+   ② 只取本仓设计 token（--bg-* / --surface-* / --border-* / --accent* / --fg* /
+      --space-* / --radius-* / --shadow-* / --fs-*），零硬编码颜色，换主题自动跟随。
+   ③ 焦点环只认 `:focus-visible`（键盘导航）；静息按钮零常驻环——「发布口上…」不再
+      用 accent 描边冒充选中态，改由文字色 + hover 淡底给出分量。
+   ④ 动效降级不在这里另写开关：全局 `data-motion='reduced'` 压平一切
+      transition/animation，本域沿用同一口径。
    ============================================================================ */
+
+/* ========================== 口上市场面板（mk-*，KM-3） ========================== */
+/* 视觉基准：专业工具的克制与密度（VSCode 口径）。三条纪律贯穿本块——
+   ① 只用本仓设计 token（--fs-* / --space-* / --radius-* / 语义色 / --dur-1 var(--ease-out)），
+      不发明 token、不留魔法数字（行高这类排版必需值除外）；
+   ② 滚动分层：工具条与状态簇是钉住的「仪表区」，列表体（.mk-body）自滚；
+   ③ 过渡只碰颜色/边框（background-color / border-color / box-shadow / color），不过渡 layout。
+   动效降级不在此另写开关：文件上方 `:root[data-motion='reduced']` 全局规则已把一切
+   transition/animation 压平，本块沿用同一口径（见 UI-5）。 */
+
+.panel-market {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  font-size: var(--fs-1);
+  /* 画布压回 --bg：aux 侧栏本身是 --bg-2，行卡要用 --bg-2 才抬得起来，两层必须错开 */
+  background: var(--bg);
+  /* 缺省（结构尚无 .mk-body）仍可整体滚，绝不裁内容；钉顶分层见下方 :has 规则 */
+  overflow: auto;
+}
+/* 单视图时把面板钉进侧栏可视高度（与 .panel-kojo-projects / .panel-condition-matrix 同规） */
+.sidebar-views:not(.split) > .panel-market {
+  height: 100%;
+}
+/* 有独立滚动体 ⇒ 外层不滚：工具条/状态簇才真钉得住，滚动条也只出现在列表一侧 */
+.panel-market:has(.mk-body) {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ---------- 工具条：一条 chrome，不是列表的第一行 ---------- */
+.mk-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.mk-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-1);
+}
+.mk-search:hover {
+  border-color: var(--accent-dim);
+}
+.mk-search:focus {
+  border-color: var(--focus-ring);
+}
+.mk-search::placeholder {
+  color: var(--fg-dim);
+}
+/* 清除键：与输入框视觉一体的内联小控件——静息无边框，只在 hover 时提亮 */
+.mk-clear {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.5;
+}
+.mk-clear:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* ---------- 状态簇（仪表区）：读起来是读数，不是内容 ---------- */
+.mk-flash {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+/* 兜底：状态行还没被 .mk-flash 包住时（旧结构），也要有仪表区的左右留白与节奏 */
+.panel-market > .mk-status,
+.panel-market > .mk-note,
+.panel-market > .mk-warn,
+.panel-market > .mk-time,
+.panel-market > .mk-hint {
+  margin: var(--space-1) var(--space-3);
+}
+/* 仪表行骨架：左侧 2px 色条 + --bg-2 底 + 统一 padding 节奏（三档语义色在下面分派） */
+.mk-status,
+.mk-note,
+.mk-flash .mk-warn {
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-2);
+  border-left: 2px solid var(--border);
+  border-radius: var(--radius-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* status = 警示（拉取/装卸的异常口径一律走这里，不弹窗） */
+.mk-status {
+  color: var(--amber);
+  border-left-color: var(--amber);
+}
+/* note = 进行中 / 结果 */
+.mk-note {
+  color: var(--fg);
+  border-left-color: var(--accent);
+}
+/* warn = 错误：行内是纯红字，仪表区里才上色条 */
+.mk-warn {
+  color: var(--red);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.mk-flash .mk-warn {
+  border-left-color: var(--red);
+}
+/* 数据时间：常驻读数，等宽数字防止分钟位变化时整行抖动 */
+.mk-time {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+/* 能力边界提示：折叠感的次要句，允许换行但不抢主行 */
+.mk-hint {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 列表体：唯一的滚动容器 ---------- */
+.mk-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* 顶部刻意不留 padding：粘性分区标题要贴住滚动视口上缘，不能留出露内容的缝 */
+  padding: 0 var(--space-3) var(--space-3);
+}
+/* 滚动条口径与本仓其他面板一致（.shell .panel / .container-body 的 8px 细轴） */
+.mk-body::-webkit-scrollbar {
+  width: 8px;
+}
+/* 旧结构兜底：列表/分组直接挂在面板上时补左右留白 */
+.panel-market > .mk-list,
+.panel-market > .mk-group,
+.panel-market > .mk-empty {
+  padding-inline: var(--space-3);
+}
+
+/* ---------- 分区标题：粘性，且必须带实心底 ---------- */
+.mk-grouptitle {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  /* h4 自带 margin 会把粘性盒带出位移，归零后节奏全交给 padding */
+  margin: 0;
+  padding: var(--space-2) var(--space-1) var(--space-1);
+  /* 实心底：否则滚动时标题文字直接叠在行卡上 */
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+}
+.mk-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.mk-list,
+.mk-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 0;
+}
+
+/* ---------- 行 = 卡片：安静底、hover 提亮、展开给导轨而非整圈粗边 ---------- */
+.mk-row {
+  padding: var(--space-1) var(--space-2);
+  background-color: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+/* --hover 是半透明白，当 background-color 会把 --bg-2 顶掉（合成后≈静息色，等于没亮），
+   故以 background-image 叠一层在 token 底之上 */
+.mk-row:hover {
+  background-color: var(--bg-2);
+  background-image: linear-gradient(var(--hover), var(--hover));
+  border-color: var(--accent-dim);
+}
+.mk-row.open {
+  border-color: var(--accent-dim);
+  /* 展开态强调：左侧 2px 内导轨，比整圈 accent 粗边克制得多 */
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* 一张卡两排：第一排名字 + 动作（动作钉右端），第二排次要事实。
+   刻意不做成"一个 wrap 容器排到底"——名字吃掉剩余宽度会把动作挤到第三排，
+   窄侧栏里一张卡就从两行变四行，密度直接垮掉。 */
+.mk-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.mk-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+.mk-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
+}
+/* 行锚点：名字吃掉剩余宽度，长名走省略号（`title` 给全名回读）；事实被动让位 */
+.mk-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-1);
+  font-weight: 600;
+  color: var(--fg);
+}
+.mk-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+/* 徽章：胶囊、无边框（描边徽章是这套视觉里最廉价的一块） */
+.mk-badge {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+}
+
+/* ---------- 动作簇：始终右靠；窄面板换行后仍落在行尾 ---------- */
+.mk-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  flex: none;
+  margin-left: auto;
+}
+.mk-actions > button,
+.mk-head button {
+  flex: none;
+}
+/* 禁用观感统一：透明度沿用全局 button:disabled 口径，只把光标说清楚 */
+.mk-actions button:disabled,
+.mk-toolbar button:disabled,
+.mk-head button:disabled,
+.mk-clear:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* ---------- 子层：摘要/来源（正文侧）与展开层（机器侧） ---------- */
+/* 子行左缘与 .mk-name 起点对齐（行卡自身的 --space-2 内边距即缩进，故不再另给左 padding）；
+   长 URL 靠 overflow-wrap:anywhere 就地断开——来源网址撑破卡片是本面板既有的观感事故 */
+.mk-sub {
+  margin-top: var(--space-1);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* 来源网址可点（已接外链原语）：button 语义、沿用 .mk-sub 的灰字观感，hover 提一下色 */
+.mk-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* 批次十一 L07：迁移前基础层给 --accent、排版层给 --accent-text，两色分歧收敛为一——
+   文字性 hover 一律 --accent-text（品牌 accent 只给非文字元素） */
+.mk-link:hover { color: var(--accent-text); }
+/* 展开层 = 调试抽屉：等宽小字 + 竖线 + 抬一档淡底，不像正文 */
+.mk-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 空态：给存在感，不是贴在左边缘的一行灰字 ---------- */
+/* ui-kit-candidate: KitEmpty——统一空态语言（虚线井 + sunken 底 + 居中一句话），市场侧先落地 */
+.mk-empty {
+  padding: var(--space-3) var(--space-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ---------- 危险动作确认簇：视觉上必须与普通动作分开 ---------- */
+.mk-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--amber);
+  color: var(--amber);
+  font-size: var(--fs-0);
+}
+/* 本仓没有全局 `.danger` 按钮类 ⇒ 不新造全局类，只在确认簇作用域内给危险按钮着色 */
+.mk-confirm > button:first-of-type {
+  background: none;
+  border-color: var(--red);
+  color: var(--red);
+}
+.mk-confirm > button:first-of-type:hover:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--bg);
+}
+
+/* ---------- 键盘可见性：口径与全局 :focus-visible 完全一致（1px accent / offset 1px） ---------- */
+.mk-search:focus-visible,
+.mk-clear:focus-visible,
+.mk-toolbar button:focus-visible,
+.mk-head button:focus-visible,
+.mk-actions button:focus-visible,
+.mk-confirm button:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+
+/* ---------- A. 口上市场（mk-*）：行卡抬起来 + chrome 分层 + 仪表簇 ---------- */
+.mk-row {
+  /* 顶替原 .mk-row 的 transition 清单（同特异性、后来者胜），补 transform/box-shadow 档 */
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-spring);
+}
+.mk-row:hover {
+  /* 既有 hover 提亮（background-image/border-color accent-dim）不动，只叠"抬起来" */
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-1);
+}
+.mk-row:active {
+  transform: translateY(0);
+}
+/* 展开态：左导轨语义保留，叠一层极淡 accent 底（比 --accent-dim 再轻一档） */
+.mk-row.open {
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--bg-2));
+}
+.mk-row.open:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    var(--shadow-1);
+}
+/* 工具条与粘性标题：顶边高光把 chrome 从列表里拔出来；标题另垫一档浮影，
+   滚动时行卡从标题**底下**钻过去的层次一读就明 */
+.mk-toolbar {
+  box-shadow: var(--edge-raise);
+}
+.mk-grouptitle {
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-1);
+}
+/* 仪表区三档语义：底色随色条走极淡同族 tint（静息 --bg-2 的替代，读起来更像仪表） */
+.mk-status {
+  background: color-mix(in srgb, var(--amber) 8%, var(--bg-2));
+}
+.mk-note {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+}
+.mk-flash .mk-warn {
+  background: color-mix(in srgb, var(--red) 8%, var(--bg-2));
+}
+.mk-badge {
+  box-shadow: var(--edge-raise);
+}
+/* 空态：给一个 sunken 井底，虚线框不再只是"一块空白套边框" */
+.mk-empty {
+  background: color-mix(in srgb, var(--surface-sunken) 55%, transparent);
+}
+
+
+/* ============================================================================
+   口上市场 UI 精修批（MK-UI 2026-10-17 · 追加区块：**只追加、不重排、不改语义**）
+   ----------------------------------------------------------------------------
+   承接上批「面板效果推广」的市场面（A 节），把 mk 仪表区补成完整的一块：
+   ① 搜索框落井面（本仓约定"输入比容器暗"：--surface-sunken + --well-edge）；
+   ② 徽章语义色档：可更新 = amber（有事可做）、已装 = green（无事）——带字那句
+      仍由 updatePhrase 单源给出，这里只决定同一句读起来是喜是警；
+   ③ .mk-progress：无文字 hairline 进度条（带字的进度句仍只住 .mk-note 一处），
+      轨道用井面、填充用 --accent；总数未知时根本不渲染（不画假进度）。
+   纪律同上批：只用既有 token；同名选择器靠"块在文件最末 ⇒ 后来者胜"叠加，
+   不覆盖各面板区块的原有语义属性；动效降级交给 :root[data-motion='reduced'] 全局压平。
+   ============================================================================ */
+
+/* ---------- 搜索框落井面 ---------- */
+.mk-search {
+  background: var(--surface-sunken);
+  box-shadow: var(--well-edge);
+}
+
+/* ---------- 徽章语义色档（文案不动，只换读感） ---------- */
+.mk-badge-warn {
+  background: color-mix(in srgb, var(--amber) 14%, var(--bg-2));
+  color: var(--amber);
+}
+.mk-badge-ok {
+  background: color-mix(in srgb, var(--green) 13%, var(--bg-2));
+  color: var(--green);
+}
+
+/* ---------- hairline 进度条：轨道 3px（仪表读数的排版必需值），圆角随胶囊 ---------- */
+.mk-progress {
+  position: relative;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: var(--well-edge);
+  overflow: hidden;
+}
+.mk-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width var(--dur-2) var(--ease-out);
+}
+
 
 /* 面板给容器查询一个锚：窄侧栏的分档按**面板自身宽度**算，不按窗口宽度算。 */
 .panel-market {
@@ -44,16 +531,15 @@
   /* 折行后仍钉在行尾（与卡片动作簇同一条纪律） */
   margin-left: auto;
 }
-/* 发布口上：accent 描边 + 文字提一档，静息仍是幽灵按钮；hover 才给淡 accent 底。
-   `:not(:disabled)` 让全局按钮 hover 底不落在禁用态上（禁用只由全局 opacity 说明）。 */
+/* 发布口上：批次十一 L07 前用 accent 常驻描边——在并排两枚按钮里被读成"当前选中/焦点环"。
+   现在静息回归普通边框，分量交给 accent 文字色；hover 才给淡 accent 底。键盘环只走
+   本文件末尾的 `:focus-visible` 口径。`:not(:disabled)` 让全局按钮 hover 底不落在禁用态上。 */
 .mk-publish {
-  border-color: var(--accent);
-  color: var(--fg);
+  color: var(--accent-text);
 }
 .mk-publish:hover:not(:disabled) {
   background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--fg);
+  color: var(--accent-text);
 }
 
 /* ---------- 卡片：一张市场条目，而不是后台列表的一行 ---------- */
@@ -88,18 +574,15 @@
   white-space: nowrap;
 }
 
-/* 第二排：事实之间用一根发丝线分隔（版本 | 体积 | 作者 | 许可），比连排逗号更像仪表 */
+/* 第三排：元信息合并成一行（版本 · 体积 · 作者 · 许可），分隔用点不用竖线——
+   批次十一 L07：四行小灰字收成一行，竖发丝线在窄侧栏里读成表格栏线，点更轻 */
 .mk-facts {
   column-gap: var(--space-1);
 }
 .mk-meta + .mk-meta::before {
-  content: '';
-  display: inline-block;
-  inline-size: 1px;
-  block-size: 0.85em;
+  content: '·';
   margin-inline-end: var(--space-1);
-  vertical-align: -0.1em;
-  background: var(--border);
+  color: var(--border-strong);
 }
 
 /* 摘要：最多两行省略（长摘要不再把卡片撑成一面墙；全文仍可由作者从来源页看） */
@@ -199,9 +682,74 @@
   .mk-actions {
     gap: var(--space-1);
   }
-  .mk-facts {
-    row-gap: var(--space-1);
-  }
+}
+
+/* ---------- 批次十一 L07 刻意修正（迁移之外的呈现改动；逐条给口径） ---------- */
+/* 元信息一行装：不再换行堆叠成四行小灰字——整行省略号收尾，全文在 .mk-facts 的 title 里。
+   层级由「标题(fs-2) > 摘要(fs-1 dim) > 元信息(fs-0 次级)」给出，密度与呼吸同时保住。 */
+.mk-facts {
+  flex-wrap: nowrap;
+  row-gap: 0;
+  overflow: hidden;
+}
+.mk-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}
+
+/* 安装按钮的三态（文字一律不变，进度仍只住 .mk-note 一处）：
+   ① 可安装 = `mk-install` 静息给 accent 描边 + 文字色，与"详情/卸载"那类次级动作分开；
+   ② 已安装 = 不给按钮，`mk-badge-ok` 胶囊那句已经说尽（见推广段的语义色档）；
+   ③ 进行中/检查中 = 所在行 `.mk-row.busy`（aria-busy 同步）：accent 淡描边 + 左侧进行中导轨，
+      动作簇由既有 disabled 口径变暗。 */
+.mk-row .mk-install:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--accent-text);
+}
+.mk-row .mk-install:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.mk-row.busy {
+  border-color: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent-dim);
+  cursor: progress;
+}
+
+/* 能力说明折叠件：summary 一行是常驻读数，点开才见展开段；
+   去默认三角（本仓视觉里没有原生三角的位置），hover 提一档色示意可点。 */
+.mk-hint > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.mk-hint > summary::-webkit-details-marker {
+  display: none;
+}
+.mk-hint > summary::before {
+  content: '＋';
+  margin-inline-end: var(--space-1);
+  color: var(--border-strong);
+}
+.mk-hint[open] > summary::before {
+  content: '－';
+}
+.mk-hint > summary:hover {
+  color: var(--fg);
+}
+.mk-hint[open] > summary {
+  margin-bottom: var(--space-1);
+}
+.mk-hint-more {
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+
+/* 摘要进了 .mk-main 的排布（标题之下、元信息之上）：纵向节奏交给 .mk-main 的 gap，
+   不再自带 margin-top（那是它挂在 .mk-row 末尾时的旧口径） */
+.mk-main > .mk-sub {
+  margin-top: 0;
 }
 
 /* 主题一致性：全部取语义 token（--surface-raised / --border-subtle / --accent / --accent-dim /
