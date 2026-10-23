@@ -212,6 +212,24 @@ const SELECTOR_SOURCES: ReadonlyArray<{
     why: '标签行的面根（B 组第二处热区）',
   },
   {
+    key: 'problemPanel',
+    file: ['packages', 'app', 'src', 'ui', 'ProblemPanel.tsx'],
+    token: 'data-context-surface="problems"',
+    why: '面板的面根（B 组第三处热区；空面板也要有这层，否则热区挑不到）',
+  },
+  {
+    key: 'problemRow',
+    file: ['packages', 'app', 'src', 'ui', 'problem-menu.ts'],
+    token: 'data-problem-row',
+    why: '问题行的行身份锚点（B 组面板热区优先右击它：有行时行菜单总有可点项）',
+  },
+  {
+    key: 'problemTrigger',
+    file: ['packages', 'app', 'src', 'ui', 'ProblemPanel.tsx'],
+    token: 'sb-problems',
+    why: '状态栏问题格（B 组前置用它把面板打开，见探针的 preparePanel）',
+  },
+  {
     key: 'statusCell',
     file: ['packages', 'app', 'src', 'ui', 'PanelHost.tsx'],
     token: 'data-status-cell',
@@ -294,6 +312,27 @@ describe('CTX-SMOKE ④ 判定收集器唯一、失败不降级', () => {
     const skipLines = bBlock.split('\n').filter((line) => line.includes('true,') && line.includes('跳过'));
     expect(skipLines.length).toBeGreaterThan(0);
     expect(bBlock).toContain('zone.applicable !== true');
+  });
+
+  it('B 组的面板热区由探针自己打开（面板默认收起时不许直接跳过）', () => {
+    const body = runContextMenuProbes.toString();
+    expect(body).toContain('preparePanel');
+    expect(body).toContain(CTX_SMOKE_SELECTORS.problemTrigger);
+    expect(body).toContain('pickPanelTarget');
+    expect(body).toContain(CTX_SMOKE_SELECTORS.problemRow);
+    expect(body).toContain(CTX_SMOKE_SELECTORS.problemPanel);
+    const openAt = body.indexOf('await preparePanel()');
+    const bAt = body.indexOf('await probeHotzones()');
+    expect(openAt).toBeGreaterThan(-1);
+    expect(bAt).toBeGreaterThan(openAt);
+    // 开面板放在 A 之后：A 组要验「右键没把编辑区关掉」，先改布局会把这条判据搅浑
+    expect(body.indexOf('await preparePanel()')).toBeGreaterThan(body.indexOf('await probeEditorFrame()'));
+  });
+
+  it('面板触发按钮真的会打开面板（activate bottom/kojo.problems ⇒ reducer 置 visible）', () => {
+    const shell = read('packages', 'app', 'src', 'ui', 'ShellLayout.tsx');
+    expect(shell).toMatch(/ProblemsStatusItem\s+onClick=\{\(\)\s*=>\s*dispatch\(\{\s*type:\s*'activate',\s*container:\s*'bottom',\s*key:\s*'kojo\.problems'\s*\}\)\}/);
+    expect(read('packages', 'app', 'src', 'ui', 'layout.ts')).toMatch(/case 'activate':[\s\S]{0,220}visible:\s*true/);
   });
 
   it('页内探针自包含（只能靠 toString 序列化，引用模块级常量会在真机上变成 undefined）', () => {

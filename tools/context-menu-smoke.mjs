@@ -78,6 +78,9 @@ export const CTX_SMOKE_SELECTORS = Object.freeze({
   floatingPanel: '.floating-panel',
   fileTreeRow: '[data-context-surface="file-tree"]',
   tabRow: '[role="tab"][data-context-surface="tabs"]',
+  problemPanel: '[data-context-surface="problems"]',
+  problemRow: '[data-problem-row]',
+  problemTrigger: 'button.sb-problems',
   statusCell: '[data-status-cell]',
 });
 
@@ -182,9 +185,18 @@ export function runContextMenuProbes(opts) {
       trace.push('editor-already');
       return;
     }
+    // 先等页面进入可交互态：脚本在 boot 计时之后跑，但真机上「重载取证」那一轮
+    // 有时会拖到 90s 仍在装配（2026-10-23 第四跑实测）——不等就只会在空页上
+    // 采到 no-recent-row，把真问题（页面没起来）伪装成前置缺失。
+    const ready = () => q('.welcome-card') !== null || q('.app-frame') !== null || q('.monaco-editor') !== null;
+    for (let i = 0; i < 160 && !ready(); i++) await sleep(250);
+    if (!ready()) {
+      trace.push('app-not-ready');
+      return;
+    }
     const findOpenRow = () => q(opts.recentRowSel) ?? (opts.resumeRowSel ? q(opts.resumeRowSel) : null);
     let recent = findOpenRow();
-    for (let i = 0; i < 24 && recent === null; i++) {
+    for (let i = 0; i < 80 && recent === null; i++) {
       await sleep(250);
       recent = findOpenRow();
     }
@@ -223,6 +235,47 @@ export function runContextMenuProbes(opts) {
     }
     for (let i = 0; i < 40 && q('.monaco-editor') === null; i++) await sleep(500);
     trace.push(q('.monaco-editor') === null ? 'no-editor' : 'editor-ready');
+  };
+
+  /* -------------------------------------------------------- B 前置：开一处面板 */
+
+  /**
+   * 准备一处面板在屏上。B 组第三处热区是「面板」，但面板容器默认可能是收起的
+   * （`layout.bottom.visible === false`）：这时 `[data-context-surface="panel-tabs"]`
+   * 与 `[data-context-surface="problems"]` 都不在 DOM，热区只能跳过——2026-10-23
+   * 真机首跑就是这么跳过 B 组面板的。**前置状态要自己造，不能等会话碰巧有。**
+   *
+   * 顺序：已有任一面板根 ⇒ 不动；否则点状态栏的问题格（`button.sb-problems`，它的
+   * onClick 走 `activate bottom/kojo.problems`，reducer 会把容器 `visible` 置真），
+   * 再等面板根出现（面板体可能懒加载，先出选项卡再出内容）。
+   *
+   * 与 `prepareEditor` 一样**只记 trace、不下断言**：真打不开时 B 组仍按「热区不在场」
+   * 跳过并打印原因，判定权在 Node 侧。
+   */
+  const preparePanel = async () => {
+    const panelRoot = () =>
+      q('[data-context-surface="problems"]') ||
+      q('[data-context-surface="search-results"]') ||
+      q('[data-context-surface="panel-tabs"]');
+    if (panelRoot() !== null) {
+      trace.push('panel-already');
+      return;
+    }
+    const trigger = q('button.sb-problems');
+    if (trigger === null) {
+      trace.push('no-panel-trigger');
+      return;
+    }
+    trigger.click();
+    trace.push('panel-trigger-clicked');
+    for (let i = 0; i < 40; i++) {
+      if (panelRoot() !== null) {
+        trace.push(q('[data-context-surface="problems"]') !== null ? 'panel-problems-ready' : 'panel-shell-ready');
+        return;
+      }
+      await sleep(100);
+    }
+    trace.push('panel-timeout');
   };
 
   /* --------------------------------------------------- A1：Monaco 里子（原生菜单） */
@@ -269,6 +322,21 @@ export function runContextMenuProbes(opts) {
 
   /* ------------------------------------------------ B：三处热区各自命中对应面 */
 
+  /**
+   * 面板热区的右键目标。**优先内容行**（有行时行菜单总有可点项）；没有行就退到选项卡条。
+   *
+   * 为什么不直接右键面板空白处：面板级菜单在「一条问题都没有 + 没有过滤条件」时会
+   * **正确地**返回 null（整份菜单全灰等于空壳，让兜底菜单接管——这是 `problem-menu`
+   * 的既定语义，不是缺陷）。拿这种状态去断言「不是兜底菜单」会误伤实现。选项卡条
+   * 的口径稳定：只要面板在屏上，关闭 / 隐藏 / 浮动 至少有一项可点。
+   */
+  const pickPanelTarget = () => {
+    const problems = q('[data-context-surface="problems"]');
+    const row = problems === null ? null : problems.querySelector('[data-problem-row]');
+    if (row !== null) return row;
+    return q('[data-context-surface="panel-tabs"]');
+  };
+
   const HOTZONES = [
     {
       key: 'file-tree',
@@ -286,10 +354,7 @@ export function runContextMenuProbes(opts) {
       key: 'panel',
       label: '面板',
       expectId: null, // 三者按当前会话能开哪个用哪个
-      pick: () =>
-        q('[data-context-surface="problems"]') ||
-        q('[data-context-surface="search-results"]') ||
-        q('[data-context-surface="panel-tabs"]'),
+      pick: () => pickPanelTarget(),
     },
   ];
 
@@ -301,7 +366,9 @@ export function runContextMenuProbes(opts) {
         out.push({ key: zone.key, label: zone.label, applicable: false, reason: zone.label + '热区不在场' });
         continue;
       }
-      const surfaceId = el.getAttribute('data-context-surface');
+      // 行元素自己不带面属性（面根在祖先上）：按 closest 取，否则会误记成 null
+      const surfaceEl = el.closest('[data-context-surface]') ?? el;
+      const surfaceId = surfaceEl.getAttribute('data-context-surface');
       rightClick(el);
       await settle();
       const menu = menuEl();
@@ -311,6 +378,11 @@ export function runContextMenuProbes(opts) {
         applicable: true,
         expectId: zone.expectId,
         surfaceId,
+        picked: el.hasAttribute('data-problem-row')
+          ? 'problem-row'
+          : el.hasAttribute('data-panel-tabs-container')
+            ? 'panel-tabs'
+            : surfaceId,
         menu: menu !== null,
         ariaLabel: menu === null ? null : menu.getAttribute('aria-label'),
         items: menu === null ? [] : menuItemTexts(menu),
@@ -403,6 +475,8 @@ export function runContextMenuProbes(opts) {
     await prepareEditor();
     const a1 = await probeMonacoNative();
     const a2 = await probeEditorFrame();
+    // 面板放到 A 之后开：A 组要看的是「右键没把编辑区关掉」，先改布局会把这条判据搅浑
+    await preparePanel();
     const b = await probeHotzones();
     const c = await probeBackdrop();
     const d = await probeStacking();
