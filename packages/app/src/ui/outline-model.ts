@@ -82,6 +82,47 @@ export function locateOutlineRow(
   return -1;
 }
 
+/**
+ * 这一行有没有子节点（先序扁平行的判据：**紧随其后那一行层级更深**）。
+ *
+ * 不查 `symbol.children`：行序已经过排序与扁平化，`depth` 是这条行序自己的事实；
+ * 拿原树再判一次等于第二把尺（排序后相邻关系才是屏幕上看到的相邻关系）。
+ * 参数只要 `depth`，所以菜单侧的行投影（`OutlineMenuRow`）也能直接用。
+ */
+export function outlineHasChildren(rows: readonly { readonly depth: number }[], index: number): boolean {
+  const row = rows[index];
+  if (row === undefined) return false;
+  const next = rows[index + 1];
+  return next !== undefined && next.depth > row.depth;
+}
+
+/**
+ * 折叠投影：**跳过"任一祖先被折叠"的行**（纯函数，折叠状态由调用方持有）。
+ *
+ * 折叠是视图状态（铁律 3：不碰业务语义），所以这里只做一次行序裁剪——
+ * 行对象、`depth`、`id` 一律原样返回，缩进与行身份不因折叠而改变。
+ * `collapsed` 里若混进了没有子节点的 id（旧树的残留），本函数**不生效**（
+ * {@link outlineHasChildren} 守着），不会出现"折了一行却什么都不变"的怪状态。
+ */
+export function visibleOutlineRows<Row extends { readonly id: string; readonly depth: number }>(
+  rows: readonly Row[],
+  collapsed: ReadonlySet<string>,
+): Row[] {
+  if (collapsed.size === 0) return [...rows];
+  const visible: Row[] = [];
+  /** 当前所在折叠子树的层级；`-1` = 不在任何折叠子树内 */
+  let foldedAt = -1;
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i]!;
+    // 比折叠节点更深 = 它的后代 ⇒ 整支跳过（先序相邻性保证"这一支"是连续的一段）
+    if (foldedAt >= 0 && row.depth > foldedAt) continue;
+    foldedAt = -1;
+    visible.push(row);
+    if (collapsed.has(row.id) && outlineHasChildren(rows, i)) foldedAt = row.depth;
+  }
+  return visible;
+}
+
 /** 大纲行序的**等值键**（同键 = 视觉无变化；光标每动一次不该白刷一次 React） */
 export function outlineRowsKey(rows: readonly OutlineRow[]): string {
   return rows

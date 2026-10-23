@@ -7,7 +7,13 @@
 
 import { describe, expect, it } from 'vitest';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
-import { buildOutlineRows, locateOutlineRow, outlineRowsKey } from '../src/ui/outline-model';
+import {
+  buildOutlineRows,
+  locateOutlineRow,
+  outlineHasChildren,
+  outlineRowsKey,
+  visibleOutlineRows,
+} from '../src/ui/outline-model';
 
 const sym = (
   name: string,
@@ -116,8 +122,7 @@ describe('locateOutlineRow · 光标行定位', () => {
   });
 });
 
-describe('outlineRowsKey · 等值键', () => {
-  it('同形树同键；名称 / 层级 / 行号 / 说明任一变化即不同键', () => {
+describe('outlineRowsKey · 等值键', () => {  it('同形树同键；名称 / 层级 / 行号 / 说明任一变化即不同键', () => {
     const base = buildOutlineRows([sym('A', 1, 3), sym('B', 4, 9, [sym('C', 5, 6)])]);
     const same = buildOutlineRows([sym('A', 1, 3), sym('B', 4, 9, [sym('C', 5, 6)])]);
     expect(outlineRowsKey(base)).toBe(outlineRowsKey(same));
@@ -130,5 +135,63 @@ describe('outlineRowsKey · 等值键', () => {
         buildOutlineRows([{ name: 'A', kind: 'block', startLine: 1, endLine: 3, detail: '说明' }]),
       ),
     );
+  });
+});
+
+/**
+ * 折叠投影（1023 缺口批）：面板的折叠是**纯视图状态**，判据全在这两个纯函数里——
+ * "哪些行有子节点"（可折性）与"折了之后看得见哪些行"（投影）。
+ * 组件侧只负责把 Set 递进来、把点击递出去。
+ */
+describe('outlineHasChildren · 可折性只看相邻层级', () => {
+  const nested = buildOutlineRows([
+    sym('父', 1, 20, [sym('子甲', 2, 5), sym('子乙', 6, 9, [sym('孙', 7, 8)])]),
+    sym('兄弟叶', 21, 30),
+  ]);
+
+  it('紧随其后那一行更深 ⇒ 有子节点；叶子行 / 越界 ⇒ 没有', () => {
+    expect(nested.map((_, i) => outlineHasChildren(nested, i))).toEqual([true, false, true, false, false]);
+    expect(outlineHasChildren(nested, 99)).toBe(false);
+    expect(outlineHasChildren([], 0)).toBe(false);
+  });
+
+  it('单层树（ERB 平铺）⇒ 一支都折不了', () => {
+    const flat = buildOutlineRows([sym('ALPHA', 2, 9), sym('BETA', 12, 30)]);
+    expect(flat.map((_, i) => outlineHasChildren(flat, i))).toEqual([false, false]);
+  });
+});
+
+describe('visibleOutlineRows · 折叠投影', () => {
+  const rows = buildOutlineRows([
+    sym('父', 1, 20, [sym('子甲', 2, 5), sym('子乙', 6, 9, [sym('孙', 7, 8)])]),
+    sym('兄弟叶', 21, 30),
+  ]);
+  const names = (collapsed: ReadonlySet<string>): string[] =>
+    visibleOutlineRows(rows, collapsed).map((row) => row.name);
+
+  it('空集 ⇒ 原样全出（连引用都还是那一份行序的拷贝）', () => {
+    expect(names(new Set())).toEqual(['父', '子甲', '子乙', '孙', '兄弟叶']);
+    expect(visibleOutlineRows(rows, new Set())).toEqual([...rows]);
+  });
+
+  it('折父 ⇒ 整支消失，兄弟仍在（先序相邻性 = 一支是连续的一段）', () => {
+    expect(names(new Set([rows[0]!.id]))).toEqual(['父', '兄弟叶']);
+  });
+
+  it('折中间那层 ⇒ 只掉它名下的孙，父与兄弟不受影响', () => {
+    expect(names(new Set([rows[2]!.id]))).toEqual(['父', '子甲', '子乙', '兄弟叶']);
+  });
+
+  it('两层同时折 ⇒ 父收起后孙本来就不在屏上，集合内容不影响结果', () => {
+    expect(names(new Set([rows[0]!.id, rows[2]!.id]))).toEqual(['父', '兄弟叶']);
+  });
+
+  it('叶子行的 id 混进集合 ⇒ 不生效（不会出现"折了一行却什么都不变"）', () => {
+    expect(names(new Set([rows[1]!.id]))).toEqual(['父', '子甲', '子乙', '孙', '兄弟叶']);
+  });
+
+  it('折叠不改行身份与层级（缩进 / 右键认人都不受折叠影响）', () => {
+    const visible = visibleOutlineRows(rows, new Set([rows[2]!.id]));
+    expect(visible.map((row) => `${row.id}:${row.depth}`)).toEqual(['r0:0', 'r1:1', 'r2:1', 'r4:0']);
   });
 });
