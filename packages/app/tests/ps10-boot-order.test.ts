@@ -87,6 +87,10 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
 
   it('项目级插件注册次序逐字冻结（拆分只改时机，不改名单与顺序）', () => {
     const expected = [
+      // 第三个 adapter（eraFL，2026-10-24 批）。与 eraAkumaMaid 同理走项目级：它在欢迎页
+      // 没有任何贡献面，而 `ensureProjectPlugins` 已保证它在 `project.open()` 之前入场。
+      // `FLconfig.xml` 特征与另两个 adapter 无交集 ⇒ 谁排前面都不影响 detect 裁决。
+      'createEraflAdapterPlugin',
       // 第二个 adapter（eraAkumaMaid，2026-10-18 批）。排首位不是"顺手放前面"：
       // `ensureProjectPlugins` 在 `kernel.project.open()` 之前注册全部项目级插件，而
       // 内核的 detect / loadProject 在 open 里就跑——adapter 晚一刻入场就轮不到它认目录。
@@ -109,6 +113,9 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       'createUiSugarEditorPlugin',
       'createKojoMarketPlugin',
       'createUiMarketPlugin',
+      // 口上 XML 面板（2026-10-24 eraFL 批）。末位＝追加，不插队：
+      // 它的 `tryInject` 取 `kojo.xml` 服务，缺席时面板自己降级，次序不参与判定。
+      'createUiKojoXmlPlugin',
     ];
     const found = [...bootstrapSrc.matchAll(/(?:^|\n)\s*[\w.]+.(create[A-Za-z]+Plugin)\(/g)].map((m) => m[1]!);
     expect(found).toEqual(expected);

@@ -360,6 +360,7 @@ export {
 
 export {
   ERB_BODY_EXTENSIONS,
+  ERB_BODY_PRIMARY_EXTENSION,
   ERB_DECLARATION_EXTENSIONS,
   ERB_DIALECT_EXTENSIONS,
   ERB_ENGINE_RESERVED_EXTENSIONS,
@@ -369,6 +370,24 @@ export {
   isErbDialectPath,
 } from './erb-ext';
 export type { ErbDialectExtension } from './erb-ext';
+
+// 口上 XML 契约（2026-10-24 eraFL 适配批）：声明式口上文件的结构模型 + `kojo.xml` 服务。
+// 属性枚举 / com 编号 / kojoPlace 取值域**不在本契约**——那些是游戏知识，归 adapter。
+export type {
+  KojoXmlAttributeSpec,
+  KojoXmlCommand,
+  KojoXmlComSpec,
+  KojoXmlDiagnostic,
+  KojoXmlEncoding,
+  KojoXmlFile,
+  KojoXmlFormat,
+  KojoXmlIndex,
+  KojoXmlPosition,
+  KojoXmlSchema,
+  KojoXmlService,
+  KojoXmlSeverity,
+  KojoXmlSpan,
+} from './kojo-xml';
 
 export type {
   ControlFlowStatement,

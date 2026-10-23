@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, OpJournal, UIPanelContribution } from '@kojo/plugin-api';
-import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands } from '@kojo/plugin-api';
+import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands, WellKnownServices } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
@@ -34,6 +34,8 @@ import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
 import { requestTabCycle } from './tab-cycle';
+import { setKojoXmlSchemaSource } from '../monaco/kojo-xml-providers';
+import type { KojoXmlService } from '@kojo/plugin-api';
 import type { ActiveFileSymbolSource } from './palette-search';
 import type { BatchCloseMode, OpenFileOptions } from './tabs-ops';
 import type { EditorGroupState, GroupsOrientation } from './editor-groups';
@@ -865,6 +867,20 @@ export function ProjectView({
     };
     return StableProblems;
   }, []);
+
+  useEffect(() => {
+    /**
+     * 口上 XML 的**游戏侧规格**接进编辑器（2026-10-24 XML 口上批）。
+     *
+     * 为什么在宿主这里接、而不是让 Monaco 层直接取服务：`monaco/*` 属于"内核 / 宿主
+     * 层"，审计 A 项禁止它出现具体游戏的属性枚举——所以它只认 `KojoXmlSchema` 这个
+     * 形状，由宿主把 adapter 的实现塞进去。取不到（eraTW 工程 / 插件未装）⇒ 撤回，
+     * XML 语言面退化为"只有语法高亮"，补全与枚举诊断都不出现（而不是瞎猜）。
+     */
+    const xml = kernel.services.tryGet<KojoXmlService>(WellKnownServices.KojoXml);
+    setKojoXmlSchemaSource(xml ? () => xml.schema() : null);
+    return () => setKojoXmlSchemaSource(null);
+  }, [kernel]);
 
   /**
    * 替换执行器装配（R7 搜索替换批）：内核 io 通道（读改写保编码 + 原子写 + 备份，

@@ -7,6 +7,12 @@ build/
 target/
 *.tsbuildinfo
 preview/
+# 但**源码里的预览模块不是构建产物**：`preview/` 是"任意层级、名叫 preview 的目录"，
+# 2026-10-24 eraFL 批的 `erafl-adapter/src/preview/**`（口上正文插值的纯函数）与
+# `tests/preview/**` 被上面那条整体吞掉 —— `git add -A` 静默少 6 个文件，测试却在本地
+# 全绿（跑的是工作区，不是索引）。这两条否定规则必须排在后面才生效。
+!packages/plugins/*/src/preview/
+!packages/plugins/*/tests/preview/
 
 # local env / editor
 .env

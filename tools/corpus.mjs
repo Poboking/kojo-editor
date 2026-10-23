@@ -13,6 +13,12 @@
 //   所以 sav 在位是第一判据，ERB 数只作同档次的次级判据。
 // 一个都不命中 → 返回 null，调用方保持既有「缺前置就 SKIP/FAIL」的行为（提示文案须带 KOJO_CORPUS_DIR）。
 // 纪律：本模块**只读**——只 readdir/stat，绝不写语料盘、不建临时文件。
+//
+// 口味（2026-10-24 追加，纯 additive，不改上面任何判据）：
+//   同一条目下存在两种内容形态——默认形态（口上是 .ERB 文本）与「XML 口上形态」
+//   （口上改成 XML 文件、根下多一份外部服务配置）。目录名照旧不可信（同一份内容会改名），
+//   所以口味也按内容判：根下有 FLconfig.xml **且** ERB/口上 是目录 → 'flavor-x'，否则 'default'。
+//   口味只作读数/分流提示，**不参与** resolveCorpusDir 的筛选与多命中裁决（改了就会让基线挑错盘）。
 'use strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,6 +31,11 @@ const DEFAULT_SCAN_ROOTS = ['C:/game'];
 const BASE_DIRS = ['ERB', 'CSV'];
 const CHECKER_REL = ['tool', 'erb_check.py'];
 const SAV_DIR = 'sav';
+// 口味判据（见文件头）：外部服务配置文件名 + 口上目录名；都按内容/结构判，不看外层目录名。
+export const FLAVOR_DEFAULT = 'default';
+export const FLAVOR_XML_KOJO = 'flavor-x';
+const FLAVOR_CONFIG_FILE = 'FLconfig.xml';
+const FLAVOR_KOJO_DIR = '口上';
 
 export class CorpusError extends Error {}
 
@@ -98,6 +109,28 @@ function hasChecker(dir) {
 }
 
 /**
+ * 口味判定：'default'（口上是 .ERB 文本）或 'flavor-x'（XML 口上形态）。
+ * 判据只有两条内容事实：根下有 FLconfig.xml（文件）+ ERB/口上 是目录。
+ * 为什么不用目录名：同一份语料一天内能换两次名，按名字判必然误报。
+ * 非目录 / 不存在 / 无权限一律回落 'default'——口味只是读数，不该让调用方为它处理异常；
+ * 真正「目录成不成立」由 inspectCorpus/resolveCorpusDir 负责。
+ */
+export function detectFlavor(dir) {
+  if (!dir) return FLAVOR_DEFAULT;
+  try {
+    if (!fs.statSync(dir).isDirectory()) return FLAVOR_DEFAULT;
+  } catch { return FLAVOR_DEFAULT; }
+  const cfg = findEntry(dir, FLAVOR_CONFIG_FILE, false);
+  if (!cfg) return FLAVOR_DEFAULT;
+  try {
+    if (!fs.statSync(path.join(dir, cfg)).isFile()) return FLAVOR_DEFAULT;
+  } catch { return FLAVOR_DEFAULT; }
+  const erb = findEntry(dir, 'ERB', true);
+  if (!erb) return FLAVOR_DEFAULT;
+  return findEntry(path.join(dir, erb), FLAVOR_KOJO_DIR, true) ? FLAVOR_XML_KOJO : FLAVOR_DEFAULT;
+}
+
+/**
  * 单个目录的内容体检：全过返回指纹信息，任一不符返回 null（供筛选）。
  * needSaves / needChecker 由调用方加严；explicit 调用方自行保证，不走这里。
  */
@@ -114,7 +147,8 @@ export function inspectCorpus(dir, opts = {}) {
   if (needChecker && !hasCheckerFile) return null;
   const saves = savCount(dir);
   if (needSaves && saves === 0) return null;
-  return { dir: canonical(dir), erbCount: countErb(path.join(dir, dirs.erb)), savCount: saves, hasChecker: hasCheckerFile };
+  // flavor 是附加读数：只多一个字段，不参与排序/筛选，也不改任何既有打印与报错文案。
+  return { dir: canonical(dir), erbCount: countErb(path.join(dir, dirs.erb)), savCount: saves, hasChecker: hasCheckerFile, flavor: detectFlavor(dir) };
 }
 
 /** 扫 scanRoots 下的一级目录，返回按 ①sav ②ERB 数 ③名 排序的候选（指纹全带上）。 */
@@ -206,10 +240,13 @@ export function resolveCorpusDir(opts = {}) {
      node tools/corpus.mjs --print    → 只打目录名（KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)"）
      node tools/corpus.mjs --print-all→ 打**全部**符合内容条件的候选（一行一个，含 KOJO_CORPUS_DIR 那份），
                                         给「写盘前门禁」用：产物掉进任何一个游戏盘都算违规，不只选中那份。
+     node tools/corpus.mjs --print-flavor → 只打口味 token（default / flavor-x），不换行，便于 $(...) 取值。
    退出码：0 有解 / 1 盘上无符合内容的语料 / 2 KOJO_CORPUS_DIR 或 --corpus 指了不成立的路径。 */
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const quiet = process.argv.slice(2).includes('--print');
-  const printAll = process.argv.slice(2).includes('--print-all');
+  const args = process.argv.slice(2);
+  const quiet = args.includes('--print');
+  const printAll = args.includes('--print-all');
+  const printFlavor = args.includes('--print-flavor');
   try {
     if (printAll) {
       const hits = discoverCorpora();
@@ -218,6 +255,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const all = [...new Set([...hits.map((h) => h.dir), ...extra])];
       if (all.length === 0) { console.error(`[FAIL] 盘上未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`); process.exit(1); }
       process.stdout.write(all.join('\n') + '\n');
+      process.exit(0);
+    }
+    if (printFlavor) {
+      // 口味不参与选盘：仍走既有解析（env/扫描/裁决），只在结果上加一次内容判定。
+      const dir = resolveCorpusDir({ print: false });
+      if (!dir) { console.error(`[FAIL] 盘上未发现符合内容条件的语料目录（需 ERB/ 与 CSV/）；${corpusHint()}`); process.exit(1); }
+      process.stdout.write(detectFlavor(dir));
       process.exit(0);
     }
     const dir = resolveCorpusDir({ print: !quiet });

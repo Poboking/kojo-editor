@@ -24,14 +24,14 @@ import ComputeWorker from './compute-worker?worker';
  *   `erb-parser`（App 开机就取 `erb.parser` 服务并订 `kojo.functionChanged`）、
  *   `eratw-adapter`（开任何项目都要它认目录；欢迎页的教程卡片与向导浮层全挂在它的
  *   `ui.overlay` / `ui.tutorial.open` 上）。
- * - **项目级（动态 import + `kernel.registerPlugin`）**＝其余 18 个。它们的可见面
+ * - **项目级（动态 import + `kernel.registerPlugin`）**＝其余 20 个。它们的可见面
  *   （面板 / 命令 / 状态栏 / 编辑器装饰器）只在项目态存在；拆分前的静态图里插件占
  *   2,817 KB 源码，两个常驻项只留 ~650 KB，剩下的没理由在 `boot.welcomeInteractive`
  *   之前被解析、求值。第二个 adapter（eraAkumaMaid）走项目级而非常驻：它在欢迎页
  *   没有任何贡献面（不像 eraTW 那样挂 `ui.overlay` / `ui.tutorial.open`），而
  *   `ensureProjectPlugins` 已保证它在 `project.open()` 之前入场。
  * - **装载时机**＝`App.openProject` 里 `kernel.project.open()` **之前**（见
- *   `ensureProjectPlugins`）：级联一开始 18 个插件就全部在场，所以面板顺序、命令面板
+ *   `ensureProjectPlugins`）：级联一开始 20 个插件就全部在场，所以面板顺序、命令面板
  *   内容、事件扇出、`compute` 任务表与拆分前一字不差——变的是"什么时候装"，不是"装了什么"。
  */
 export async function bootstrapKernel(): Promise<Kernel> {
@@ -65,6 +65,7 @@ export async function bootstrapKernel(): Promise<Kernel> {
  */
 async function loadProjectPlugins(): Promise<Plugin[]> {
   const [
+    eraflAdapter,
     eraakumaAdapter,
     linter,
     extractor,
@@ -83,7 +84,9 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     uiSugarEditor,
     market,
     uiMarket,
+    uiKojoXml,
   ] = await Promise.all([
+    import('@kojo/plugin-erafl-adapter'),
     import('@kojo/plugin-eraakumamaid-adapter'),
     import('@kojo/plugin-convention-linter'),
     import('@kojo/plugin-condition-extractor'),
@@ -102,8 +105,12 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-sugar-editor'),
     import('@kojo/plugin-kojo-market'),
     import('@kojo/plugin-ui-market'),
+    import('@kojo/plugin-ui-kojo-xml'),
   ]);
   return [
+    // eraFL 领域知识（第三个 adapter；`FLconfig.xml` 特征与另两个无交集 ⇒ 注册顺序不影响判定）。
+    // 同样排在前列：内核 detect / loadProject 时 adapter 必须已在场。
+    eraflAdapter.createEraflAdapterPlugin(),
     // eraAkumaMaid 领域知识（第二个 adapter；detect 与 eraTW 无交集 ⇒ 注册顺序不影响判定）。
     // 排首位：`ensureProjectPlugins` 在 `kernel.project.open()` 之前装载全部项目级插件，
     // 内核 detect / loadProject 时 adapter 必须已在场。
@@ -145,6 +152,9 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // 市场面板（ui.panel）：消费 `market` 服务 ⇒ **必须排在 kojo-market 之后**
     // （装配语义照 ui-sugar-lift 的 requires: ['sugar.lift']，不 import 市场插件）
     uiMarket.createUiMarketPlugin({ appVersion: APP_VERSION }),
+    // 口上 XML 面板（2026-10-24）：消费 `kojo.xml` 服务（由 XML 形态的 adapter 提供）。
+    // 服务缺席（ERB 口上形态的工程）⇒ 面板显式降级，不静默空白。
+    uiKojoXml.createUiKojoXmlPlugin(),
   ];
 }
 

@@ -29,6 +29,9 @@ import {
   KOJO2_SOURCE_EXTENSION,
   registerKojo2Language,
 } from '../src/monaco/kojo2-language';
+// 2026-10-24 eraFL 批：descriptor 表多了一枚「口上 XML」。它不是 Kojo 2.0 的面，
+// 但 `registerBuiltinLanguageSurfaces` 按表全量注册 ⇒ 本文件的"表内次序"断言必须看见它。
+import { KOJO_XML_LANGUAGE_ID } from '../src/monaco/xml-language';
 
 type LanguagesModule = typeof import('../src/monaco/languages');
 type RegistryModule = typeof import('../src/monaco/language-registry');
@@ -112,8 +115,22 @@ function fakeMonaco(): { readonly monaco: SurfaceMonaco; readonly captured: Surf
         configs.set(id, config);
         return disposable;
       },
+      // 口上 XML 的 descriptor 在 `register` 里同时挂四枚 provider（它不声明
+      // `languageServices`，那 11 枚 ERB/kojo 面的 provider 与它无关）。替身必须
+      // 有这四格，否则真壳能跑、这里却抛 `not a function`（同 PITFALLS 169 口径：
+      // 替身缺方法要补替身，不是让源码做防御性存在检查）。
+      registerFoldingRangeProvider: (): typeof disposable => disposable,
+      registerHoverProvider: (): typeof disposable => disposable,
+      registerCompletionItemProvider: (): typeof disposable => disposable,
+      registerDocumentSymbolProvider: (): typeof disposable => disposable,
     },
-    editor: { defineTheme: (): void => undefined },
+    editor: {
+      defineTheme: (): void => undefined,
+      // 诊断注册会遍历已有 model 并订"新 model"事件
+      getModels: (): unknown[] => [],
+      onDidCreateModel: (): typeof disposable => disposable,
+      setModelMarkers: (): void => undefined,
+    },
   };
   return { monaco: fake as unknown as SurfaceMonaco, captured: { registered, monarchs, configs } };
 }
@@ -125,6 +142,7 @@ function expectKojo2SurfaceVisible(wire: Wire): void {
     KOJO_LANGUAGE_ID,
     JSON_LANGUAGE_ID,
     KOJO2_LANGUAGE_ID,
+    KOJO_XML_LANGUAGE_ID,
   ]);
 
   const descriptor = wire.registry.descriptorForPath('D:/p/M.kojo2');
@@ -140,6 +158,7 @@ function expectKojo2SurfaceVisible(wire: Wire): void {
     KOJO_LANGUAGE_ID,
     JSON_LANGUAGE_ID,
     KOJO2_LANGUAGE_ID,
+    KOJO_XML_LANGUAGE_ID,
   ]);
   const kojo2 = captured.registered.find((entry) => entry.id === KOJO2_LANGUAGE_ID);
   expect(kojo2?.extensions).toEqual([KOJO2_SOURCE_EXTENSION]);
@@ -270,6 +289,7 @@ describe('descriptor：不硬编未交付的层', () => {
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
       KOJO2_LANGUAGE_ID,
+      KOJO_XML_LANGUAGE_ID,
     ]);
   });
 

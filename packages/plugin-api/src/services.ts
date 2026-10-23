@@ -118,6 +118,16 @@ export const WellKnownServices = {
    * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S5-UI 批建）。
    */
   SugarLiftApply: 'sugar.liftApply',
+  /**
+   * 口上 XML 索引服务（2026-10-24 eraFL 适配批）：声明式口上文件
+   * （`<data><command><contents>` / 旧版 `<kojodef><command><kojo>`）的解析结果
+   * 与全项目索引。**只读**：不写盘（写回走内核 `FileIO` 双闸 + 备份）。
+   *
+   * 归属：实现由**提供该格式的 adapter** 注册（当前 = erafl-adapter）。契约
+   * `plugin-api/kojo-xml.ts` 只存形状，属性枚举与 `com` 编号等游戏知识不进契约。
+   * 消费者：口上 XML 面板 / 诊断面 / 预览面。
+   */
+  KojoXml: 'kojo.xml',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

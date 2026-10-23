@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 坏样本：<contents> 没有闭合就出现 </command>，钉「结构错误」判据；条目数仍按 command 计（读数不该因坏样本归零）。 -->
+<data>
+  <command kojoPlace="TOP" priority="1" com="300" name="会話">
+    <contents>「这句话永远合不上。」
+  </command>
+  <command kojoPlace="TOP" priority="1" com="300" name="会話">
+    <contents>「下一句是完整的。」</contents>
+  </command>
+</data>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- 旧格式（根 <kojodef>，台词在 <kojo> 里，且一个 <command> 可挂多行 <kojo>）：钉「条目数按 command 数、台词行数另计」。 -->
+<kojodef>
+	<command com="300" name="会話">
+		<kojo place="TOP" isMob="FALSE" priority="1">「早上好，昨晚睡得还好吗？」</kojo>
+	</command>
+	<command com="300" name="会話">
+		<kojo place="TOP" isFall="親愛" isMob="FALSE" priority="1">「您来了呀。」</kojo>
+		<kojo place="TOP" isFall="恋慕" isMob="FALSE" priority="2">「我等了您很久哦。」</kojo>
+	</command>
+	<command com="300" name="会話">
+		<kojo place="TOP" isInitiative="無" isMob="FALSE" priority="1">「有什么事吗？」</kojo>
+	</command>
+	<command com="300" name="挨拶">
+		<kojo place="TOP" isMob="FALSE" priority="1">「路上小心，记得回来。」</kojo>
+	</command>
+</kojodef>

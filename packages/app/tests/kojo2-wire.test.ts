@@ -16,6 +16,8 @@ import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { JSON_LANGUAGE_ID } from '../src/monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
+// 2026-10-24 eraFL 批：descriptor 表多了一枚「口上 XML」（按表全量注册）⇒ 名单断言要看见它。
+import { KOJO_XML_LANGUAGE_ID } from '../src/monaco/xml-language';
 import type { Kojo2OpenPorts } from '../src/ui/kojo2-open';
 
 type LanguagesModule = typeof import('../src/monaco/languages');
@@ -108,8 +110,20 @@ function fakeMonaco(): { readonly monaco: SurfaceMonaco; readonly captured: Surf
         configs.set(id, config);
         return disposable;
       },
+      // 口上 XML 的 descriptor 在 `register` 里同时挂四枚 provider（它不声明
+      // `languageServices`）。替身缺这几格时真壳能跑、这里抛 `not a function`
+      // ⇒ 按 PITFALLS 169 口径补替身，不改源码。
+      registerFoldingRangeProvider: (): typeof disposable => disposable,
+      registerHoverProvider: (): typeof disposable => disposable,
+      registerCompletionItemProvider: (): typeof disposable => disposable,
+      registerDocumentSymbolProvider: (): typeof disposable => disposable,
     },
-    editor: { defineTheme: (): void => undefined },
+    editor: {
+      defineTheme: (): void => undefined,
+      getModels: (): unknown[] => [],
+      onDidCreateModel: (): typeof disposable => disposable,
+      setModelMarkers: (): void => undefined,
+    },
   };
   return { monaco: fake as unknown as SurfaceMonaco, captured: { registered, monarchs, configs } };
 }
@@ -162,9 +176,11 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
       KOJO2_LANGUAGE_ID,
+      KOJO_XML_LANGUAGE_ID,
     ]);
     expect(languages.languageForPath('D:/p/M.kojo2')).toBe(KOJO2_LANGUAGE_ID);
     expect(registry.descriptorForPath('D:/p/M.kojo2')?.id).toBe(KOJO2_LANGUAGE_ID);
+    // 只命中 kojo2 一枚：`.kojo2` 是 kojo2 的专属扩展名，口上 XML 的 descriptor 认 `.xml`，不参与
     expect(registry.languageDescriptors().filter((d) => d.matchesPath('D:/p/M.kojo2')).map((d) => d.id)).toEqual([
       KOJO2_LANGUAGE_ID,
     ]);
@@ -196,6 +212,7 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
       KOJO2_LANGUAGE_ID,
+      KOJO_XML_LANGUAGE_ID,
     ]);
     expect(captured.monarchs.has('kojo2')).toBe(true);
     expect(captured.configs.has('kojo2')).toBe(true);
@@ -217,13 +234,14 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
 /* ======================== ② 开关开：语言面同上，路由放行 ======================== */
 
 describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
-  it('表尾仍是 kojo2；`.kojo2` 命中且唯一（大小写不敏感、只认最后一段扩展名）', async () => {
+  it('`.kojo2` 命中且唯一（大小写不敏感、只认最后一段扩展名）', async () => {
     const { registry, languages } = await boot(true);
     expect(registry.languageDescriptors().map((descriptor) => descriptor.id)).toEqual([
       ERB_LANGUAGE_ID,
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
       KOJO2_LANGUAGE_ID,
+      KOJO_XML_LANGUAGE_ID,
     ]);
     expect(languages.languageForPath('D:/p/M.kojo2')).toBe(KOJO2_LANGUAGE_ID);
     expect(languages.languageForPath('D:/p/M.KOJO2')).toBe(KOJO2_LANGUAGE_ID);
@@ -252,6 +270,7 @@ describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
       KOJO2_LANGUAGE_ID,
+      KOJO_XML_LANGUAGE_ID,
     ]);
     const kojo2 = captured.registered.find((entry) => entry.id === KOJO2_LANGUAGE_ID);
     expect(kojo2?.extensions).toEqual(['.kojo2']);
@@ -268,6 +287,7 @@ describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
       KOJO_LANGUAGE_ID,
       JSON_LANGUAGE_ID,
       KOJO2_LANGUAGE_ID,
+      KOJO_XML_LANGUAGE_ID,
     ]);
   });
 

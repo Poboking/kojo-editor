@@ -290,6 +290,21 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     why: 'scaffold-csv：CSV 文本自带 BOM（writer 不再补）',
   },
   {
+    file: 'packages/plugins/erafl-adapter/src/chara-csv.ts',
+    count: 1,
+    why: '读侧剥 BOM（`^\\uFEFF`）：eraFL 的 Chara CSV 有带 BOM 的，剥掉才认首行表头；不产出字节',
+  },
+  {
+    file: 'packages/plugins/erafl-adapter/src/kojo-xml/encoding.ts',
+    count: 1,
+    why: '口上 XML 的 BOM 字节表（读侧判据）：9 份 UTF-16LE 却声明 utf-8 的样本靠 BOM 优先才读得对；不产出字节',
+  },
+  {
+    file: 'packages/plugins/erafl-adapter/src/scaffold.ts',
+    count: 2,
+    why: '新角色脚手架两份产物（`KOJO_DEFINE_K{n}.ERB` + 口上 XML）各带一枚 BOM，与真盘既有文件同形',
+  },
+  {
     file: 'packages/plugins/ui-sugar-editor/src/new-file-flow.ts',
     count: 1,
     why: 'export-file 的唯一加 BOM 调用方：另存 `.kojo` 复刻 workspace-source 缺省',

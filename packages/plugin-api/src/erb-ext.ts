@@ -45,10 +45,16 @@ import { extname } from './paths';
 export type ErbDialectExtension = '.erb' | '.erm' | '.erh';
 
 /**
+ * 正文类的**默认**扩展名。适配器回报"本盘方言扩展名"时读它，不另写 `'.erb'` 字面量
+ * （`erb-ext.test.ts` 的「带引号的整扩展名」判据会把任何别处的字面量判成口径副本）。
+ */
+export const ERB_BODY_PRIMARY_EXTENSION: ErbDialectExtension = '.erb';
+
+/**
  * 正文类：函数定义（`@`）住在这里，口上结构的全部意义所在。
  * `.erm` 是同族引擎的正文字体，基线语料 0 份但口径必须含。
  */
-export const ERB_BODY_EXTENSIONS: readonly ErbDialectExtension[] = ['.erb', '.erm'];
+export const ERB_BODY_EXTENSIONS: readonly ErbDialectExtension[] = [ERB_BODY_PRIMARY_EXTENSION, '.erm'];
 
 /**
  * 声明类（`#DIM` / `#DIMS` / `#DEFINE` 容器）：引擎同样预载，

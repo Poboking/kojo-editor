@@ -10,6 +10,19 @@
 > 在途批次立刻执行：① `git fetch origin --prune`（不 prune 会在已死的 `origin/master` 坐标上开工）；② 新批次分支一律从 `origin/dev` 起；③ 在途分支换底 `git rebase --onto origin/dev <旧 base>`；④ 落地命令改成 `git push origin HEAD:dev`（`tools/git-push.mjs` 与 `tools/tauri-dev-fresh.mjs` 默认值已同步）。
 > **禁止** `git push … :master`——GitHub 会把它当新分支**创建**，提交会漂进一条没人复审的平行主线（详 PITFALLS §133）。`gh pr create` 默认 base 现为 `main`，日常批须显式 `--base dev`。
 
+## 批次十二 · eraFL 适配（2026-10-24，已交付）
+
+> **批次十二 12 路全部交付**（FL-ADAPTER / FL-XML-PARSE / FL-VARSCHEMA / FL-CONV / FL-XML-LANG /
+> FL-XML-PROV / FL-XML-DIAG / FL-UI-PANEL / FL-PREVIEW / FL-CORPUS / FL-ERB-DIALECT / FL-DOCS）
+> + 5 处组长接线（`bootstrap` 两枚插件接线与 app 依赖 / `ProjectView` 注入 `kojo.xml` 规格源 /
+> `ps10-boot-order` 与 `kojo2-surface`·`kojo2-wire` 三处名单随批 / `audit:decoupling` 补 `erafl` 词表
+> 并做变异实测 / `ERB_BODY_PRIMARY_EXTENSION` 收口 `.erb` 字面副本）；完成行已删，回执进提交正文。
+>
+> **实盘读数**（`D:\Game\erafl`，只读、零写入）：`CSV/` 33 项；`ERB/` 2,013 `.ERB` + 112 `.ERH` + 2 `.ERD`；
+> 口上 **293 份 XML / 61,345 条 `<contents>`**（旧 `<kojodef>` 格式 3 份）；**9 份是 UTF-16LE 却声明
+> `encoding="utf-8"`**（按声明解全灭，只有 BOM 优先才读得对）；`@KOJO_XML_REGISTER` 8 处 ⇒
+> **未被注册的 XML 引擎不加载**（可校验）。
+
 ## 在办
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
