@@ -600,4 +600,9 @@ export function KitSkeleton({ lines = 0, width, height, label, className }: KitS
   return <span className={cx('kit-skeleton', className)} style={style} {...statusProps} />;
 }
 
-export { KitGallery } from './KitGallery';
+/**
+ * `KitGallery`（内部对照页）**不从这根桶棒导出**：桶棒被开机图里的组件直接引（SearchPanel、
+ * kojo2-cutover-settings），顺手 re-export 一枚对照页就等于把整页样例挂进首屏依赖图
+ * （`ps10-eager-graph.test.ts` 的体积闸当场叫）。要看对照页：测试直接引
+ * `../src/ui-kit/KitGallery`，将来接路由时走 `import()` 懒装载。
+ */

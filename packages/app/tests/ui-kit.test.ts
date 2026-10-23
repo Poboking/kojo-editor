@@ -23,7 +23,6 @@ import {
   KitCount,
   KitEmpty,
   KitField,
-  KitGallery,
   KitIconButton,
   KitKbd,
   KitRadio,
@@ -32,6 +31,8 @@ import {
   KitSkeleton,
   kbdTokenLabel,
 } from '../src/ui-kit/index';
+// 对照页刻意不在桶棒里（桶棒在开机图上；见 ui-kit/index.tsx 末注），这里直引它自己。
+import { KitGallery } from '../src/ui-kit/KitGallery';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
