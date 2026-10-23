@@ -483,7 +483,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </div>
-            <div className="settings-row static">
+            {/* 锚点 = 搜索结果的落点：这一行在索引里有 `editor.fontZoom`，DOM 上就得有同一枚
+                data-settings-key，否则「点了跳不过去」（判据见 settings-search.test.ts）。 */}
+            <div className="settings-row static" data-settings-key="editor.fontZoom">
               <button className="ghost small" onClick={resetFontZoomPref} disabled={fontZoom === FONT_ZOOM_DEFAULT}>
                 重置缩放
               </button>
@@ -497,7 +499,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 快建议 / 文档词两个总开关（QSUG-2）：真源与订阅在 suggest-pref.ts，
                 这里只排版。默认都开（对标 VS Code / IDEA）；台词 / 旁白 / 注释 / 字符串
                 与只读 / 预览不靠这两个开关降噪，位置门各自负责。 */}
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.quickSuggestions">
               <Switch
                 checked={quickSuggestionsOn}
                 onChange={commitQuickSuggestions}
@@ -511,7 +513,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 </span>
               </span>
             </label>
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.wordSuggestions">
               <Switch
                 checked={wordSuggestionsOn}
                 onChange={commitWordSuggestions}
@@ -528,7 +530,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 补全弹出延迟（SUGGEST-2B）：真源与钳制在 suggest-pref.ts，这里只排版。
                 − / ＋ 每档 100ms；0 显示「立即」= 打字即弹（默认，保持旧体感）。
                 观察者每次排程现读 ⇒ 改完下一次击键即生效，不用重开文件。 */}
-            <div className="settings-row static" role="group" aria-label="补全弹出延迟">
+            <div className="settings-row static" data-settings-key="editor.suggestDelay" role="group" aria-label="补全弹出延迟">
               <span className="settings-stepper">
                 <button
                   className="ghost small"
@@ -592,7 +594,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 行上内联注解（B8，2026-10-16）：往正文里插行的能力，默认关的理由写在
                 `code-lens-pref.ts`。文案刻意不上「CodeLens / 反向索引」这类机器词，
                 并且把"没标注 ≠ 没人用"这条最容易读反的口径当场说清（铁律 4：不静默、也不误导）。 */}
-            <label className="settings-row">
+            <label className="settings-row" data-settings-key="editor.codeLens">
               <Switch checked={codeLensOn} onChange={commitCodeLens} label="标注函数被谁调用" />
               <span>
                 标注函数被谁调用
@@ -655,7 +657,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           {!sealed ? (
             <div className="settings-group">
               <div role="heading" aria-level={4} className="settings-group-title">游戏目录写入</div>
-              <label className="settings-row">
+              <label className="settings-row" data-settings-key="editor.directMode">
                 <Switch checked={directMode} onChange={setDirectMode} label="直连模式（就地编辑游戏目录）" />
                 <span>
                   直连模式（就地编辑游戏目录）
@@ -823,6 +825,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             <div role="heading" aria-level={4} className="settings-group-title">关于</div>
             <a
               className="settings-row settings-link"
+              data-settings-key="about.developer"
               href="https://github.com/Poboking"
               target="_blank"
               rel="noreferrer"
@@ -853,6 +856,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             </a>
             <a
               className="settings-row settings-link"
+              data-settings-key="about.feedback"
               href="https://github.com/Poboking/kojo-editor/issues"
               target="_blank"
               rel="noreferrer"
@@ -944,7 +948,7 @@ function ThemePickerSection(): ReactElement {
 function TreeSitterRow(): ReactElement {
   const on = useTreeSitterPref();
   return (
-    <label className="settings-row">
+    <label className="settings-row" data-settings-key="editor.treeSitter">
       <Switch checked={on} onChange={setTreeSitterPref} label="结构解析器辅助（实验）" />
       <span>
         结构解析器辅助（实验）
@@ -972,7 +976,7 @@ function LayoutPrefRows(): ReactElement {
     <>
       {/* 折行：三选一分段（复用主题分段那套 class，不造第二种分段控件）。
           缺省「跟随体量档」= 今天的行为：5,000 行以内开、50,000 行以上自动关。 */}
-      <div className="settings-row static">
+      <div className="settings-row static" data-settings-key="editor.wordWrap">
         <span className="theme-segment" role="radiogroup" aria-label="折行">
           {WORD_WRAP_CHOICES.map((c) => (
             <button
@@ -997,7 +1001,7 @@ function LayoutPrefRows(): ReactElement {
         </span>
       </div>
       {/* 多光标修饰键：二选一分段。缺省 Ctrl/Cmd 的理由写在 layout-pref.ts 模块头。 */}
-      <div className="settings-row static">
+      <div className="settings-row static" data-settings-key="editor.multiCursor">
         <span className="theme-segment" role="radiogroup" aria-label="多光标修饰键">
           {MULTI_CURSOR_CHOICES.map((c) => (
             <button
@@ -1021,7 +1025,7 @@ function LayoutPrefRows(): ReactElement {
         </span>
       </div>
       {/* 列选择：布尔开关，缺省关（与 Monaco 自己的缺省一致 ⇒ 今天的行为逐字不变）。 */}
-      <label className="settings-row">
+      <label className="settings-row" data-settings-key="editor.columnSelection">
         <Switch checked={pref.columnSelection} onChange={(c) => saveColumnSelectionPref(c)} label="列选择" />
         <span>
           列选择
@@ -1039,7 +1043,7 @@ function LayoutPrefRows(): ReactElement {
 function FindPrefRow(): ReactElement {
   const pref = useFindSeedPref();
   return (
-    <div className="settings-row static">
+    <div className="settings-row static" data-settings-key="editor.findSeed">
       <span className="theme-segment" role="radiogroup" aria-label="查找词优先">
         {FIND_SEED_CHOICES.map((c) => (
           <button
@@ -1363,7 +1367,7 @@ function FormatRulesRows(): ReactElement {
   };
   return (
     <>
-      <label className="settings-row">
+      <label className="settings-row" data-settings-key="editor.formatRuleFullWidth">
         <Switch
           checked={rules.fullWidthSpace}
           onChange={(on) => commit({ fullWidthSpace: on })}
@@ -1378,7 +1382,7 @@ function FormatRulesRows(): ReactElement {
           </span>
         </span>
       </label>
-      <label className="settings-row">
+      <label className="settings-row" data-settings-key="editor.formatRuleIndent">
         <Switch checked={rules.indent} onChange={(on) => commit({ indent: on })} label="统一 .kojo 缩进写法" />
         <span>
           统一 .kojo 缩进写法
