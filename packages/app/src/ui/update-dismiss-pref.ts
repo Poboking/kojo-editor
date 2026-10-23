@@ -17,7 +17,10 @@ import { useMemo, useSyncExternalStore } from 'react';
  * - 免打扰**只对同版本**生效：别的版本发布照提醒；
  * - 只对**当前这一版**在 `UPDATE_NOTICE_QUIET_DAYS` 天内有效，过期自动失效
  *   （读取时判龄，不做事后清理——过期记录被下一次「稍后」覆盖即可）；
- * - `dismissedAt` 在未来（改表/时区）按「刚点过」算有效：判据是 `now - dismissedAt < quietMs`，
+ * - **判龄只用同一把钟**：`dismissedAt` 与 `now` 都是墙钟毫秒。测试注入逻辑时间戳
+ *   （`dismissUpdateVersion(v, 1000)`）时，判龄也必须注入同一把钟；拿本机墙钟去量 1970 年的
+ *   记录必然判成「早过期」，那不是窗口没生效，是基准对不上；
+ * - `dismissedAt` 在未来（改表/时区）仍算免打扰：判据是 `now - dismissedAt < quietMs`，
  *   负数天然通过，不必特判。
  */
 
@@ -54,7 +57,11 @@ export function getUpdateDismissalRaw(): string | null {
   }
 }
 
-/** 写原始存储值；写不进去静默降级为「本次会话内记住」 */
+/**
+ * 写原始存储值；写不进去（隐私模式 / 配额满 / 没有 window）就是**这一层没记住**——
+ * 本会话「点过稍后就不再举卡」由 `useUpdateNotice` 的会话变量兜，两层各管各的，别在这儿
+ * 再起一份内存真源（`isUpdateNoticeQuiet` 的判龄口径要以落盘记录为准）。
+ */
 function writeRaw(value: string): void {
   const s = storage();
   if (!s) return;
