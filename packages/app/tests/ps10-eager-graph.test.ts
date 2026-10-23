@@ -205,7 +205,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 模块都很小，撞不到 3,050"——那句判断是错的，合入插件面契约（plugin-api 的
     // context-surface.ts + market 面 + 宿主转发）后就撞上了，如实记在这里。成员断言仍全绿，
     // 所以性质没变（功能增长，不是回灌）。KB 闸 3,050 → 3,100（+1.6% 余量）。
-    expect(totalKb).toBeLessThanOrEqual(3_100);
+    //
+    // 2026-10-23 再记一笔（合入批次十之后的**同尺三树对照**，用与本文件同一套走图规则量的）：
+    //   老基座 `5b509736`        190 文件 / 2,707 KB
+    //   dev `76673942`（批次十） 193 文件 / 2,786 KB   ← 批次十只 +79 KB
+    //   合流树（本批 + 批次十）  219 文件 / 3,139 KB   ← 本批自己 +432 KB / +29 文件
+    // **增重是本批的，不是批次十的**。逐块点过：增量是菜单数据面与它真实依赖的东西，
+    // 26 个新进图文件的全部重量只有三处成规模——
+    //   context-menu-shell 31.8 KB + context-menu-pages 29.7 KB + context-menu-model 17.7 KB
+    //   （三个面模块本身，右键菜单开机即用，没有懒加载的理由）
+    //   keybindings 22.2 KB（菜单项的快捷键提示要 `keybindingSpecOf`，`context-menu-model:24`）
+    //   editor-options 26.1 / editor-display-prefs 21.7 / settings-search 10.3 KB
+    //   （`context-menu-pages` 的「恢复默认外观」与「按设置项 id 定位」真实用到）
+    // 没有整包回灌：成员断言（插件包只许两个常驻 + 两个已知漏点）仍全绿，且「只在 dev 里」
+    // 的文件集**为空**——本批的图是 dev 的超集，没有把别处的东西换进来、也没藏进懒边。
+    // 已知可减面（本批不做，已立看板行 PS10-MENU-SPLIT）：把 settings / keybindings 两个面
+    // 的按钮搬到各自懒页去注册（约 −58 KB），以及菜单快捷键提示换个不吃整个 keybindings 的接线。
+    // 闸随之 3,100 → 3,200（+1.9% 余量）。文件闸 215→220 保持不变：现读数 219，余量只剩 1，
+    // 下一枚面模块落地前必须先去拆面，**不要**顺手把这个数也抬了。
+    expect(totalKb).toBeLessThanOrEqual(3_200);
     expect(files.length).toBeLessThanOrEqual(220);
   });
 });
