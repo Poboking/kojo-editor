@@ -70,7 +70,11 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
   // ---- 面板与浮窗 ----
   { id: 'search-results', ariaLabel: '搜索结果菜单', area: 'panel' },
   { id: 'problems', ariaLabel: '问题面板菜单', area: 'panel' },
-  { id: 'outline', ariaLabel: '大纲菜单', area: 'panel' },
+  // 这里**没有** `outline`：本仓库不存在大纲面板。`language-capabilities.ts` 里的 `Outline`
+  // 只是语言能力枚举，`document-symbols.ts` 是符号提供者，都没有对应的面板视图（口上导航是
+  // `ui-kojo-navigator` 的面列表，不是大纲）。按铁律 4「能力不存在 ⇒ 整项不显示」——登记一个
+  // 永远没有宿主的面等于在清单里伪造能力，契约测试也会被迫为它开豁免。将来真有大纲面板时
+  // 回来加这一行并挂面属性即可。
   { id: 'call-hierarchy', ariaLabel: '调用层级菜单', area: 'panel' },
   { id: 'file-history', ariaLabel: '文件历史菜单', area: 'panel' },
   { id: 'ops-history', ariaLabel: '操作历史菜单', area: 'panel' },
@@ -276,4 +280,24 @@ declareContextSurface({
           },
         }
       : null,
+});
+
+/**
+ * 兜底面（WP0 自带）：`App.tsx` 根元素挂 `data-context-surface="app-fallback"`，让"没有任何面
+ * 认领"的右键落在一个**显式登记的**面上，而不是依赖"这个 id 查不到 spec"这种偶然状态。
+ *
+ * 它给出的项与三级兜底完全同源（同一个 `buildFallbackMenu`）、分发也接同一个
+ * `runFallbackMenuAction`——**声明它不改变任何动作**，只是把既有行为写明，好让
+ * 「清单里的每个面都有 spec」成立（WP6 契约测试可以硬断言，不必为它开豁免）。
+ */
+declareContextSurface({
+  id: 'app-fallback',
+  ariaLabel: FALLBACK_MENU_ARIA_LABEL,
+  area: 'host',
+  build: (ctx) => ({
+    items: buildFallbackMenu(ctx.target),
+    onSelect: (id) => {
+      runFallbackMenuAction(id, ctx.target);
+    },
+  }),
 });

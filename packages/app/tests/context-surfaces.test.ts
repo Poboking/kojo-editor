@@ -101,20 +101,20 @@ describe('buildContextMenuRoute · 三级策略', () => {
   it('有 build 的面接管右键，并用面的无障碍名', () => {
     const seen: string[] = [];
     declareContextSurface({
-      id: 'outline',
-      ariaLabel: '大纲菜单',
+      id: 'call-hierarchy',
+      ariaLabel: '调用层级菜单',
       area: 'panel',
       build: (ctx) => {
         seen.push(ctx.id);
-        return [{ id: 'outline.copy', label: '复制大纲' }];
+        return [{ id: 'callHierarchy.copy', label: '复制调用层级' }];
       },
     });
-    const child = surfaceRoot('outline');
+    const child = surfaceRoot('call-hierarchy');
     const route = buildContextMenuRoute(child, event());
-    expect(seen).toEqual(['outline']);
-    expect(route?.source).toBe('outline');
-    expect(route?.ariaLabel).toBe('大纲菜单');
-    expect(route?.items.map((i) => i.label)).toEqual(['复制大纲']);
+    expect(seen).toEqual(['call-hierarchy']);
+    expect(route?.source).toBe('call-hierarchy');
+    expect(route?.ariaLabel).toBe('调用层级菜单');
+    expect(route?.items.map((i) => i.label)).toEqual(['复制调用层级']);
   });
 
   it('面返回空菜单 = 这一级不表态，继续往兜底走', () => {
