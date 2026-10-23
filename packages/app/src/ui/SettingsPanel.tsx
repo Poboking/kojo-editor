@@ -72,10 +72,13 @@ import {
 import { isComposingEvent } from './shell-keys';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
+import { isFailureNote, registerSettingsMenuBridge, useMenuNote } from './context-menu-pages';
 import '../settings-search.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
 import './settings-appearance.css';
+// 右键菜单回执那一行的排版（1023 覆盖面批）：与欢迎页 / 快捷键页共用同一份新样式表
+import './context-menu-pages.css';
 
 /** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
 const THEME_LABELS: Record<ThemePref, string> = {
@@ -1045,6 +1048,8 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   const [jump, setJump] = useState<{ readonly key: string; readonly n: number } | null>(null);
   const jumpSeqRef = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
+  /** 右键菜单动作的回执（重置此项 / 复制设置 ID / 复制为 JSON 的成败都说一句） */
+  const [menuNote, setMenuNote] = useMenuNote();
   const searching = query.trim() !== '' || modifiedOnly;
   const results = useMemo(
     () => searchSettings(query, { modifiedOnly }),
@@ -1063,6 +1068,21 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
     void el.offsetWidth; // 重排一次，CSS 入场动画才会重放（同一个目标连点两次）
     el.setAttribute('data-hit', '1');
   }, [jump]);
+
+  /* ---------------- 右键菜单接线（1023 覆盖面批 · 设置页） ---------------- */
+  // 面（`settings`）在 `context-menu-pages.ts` 模块顶层登记；这里只交接线桥——
+  // 「搜索同类设置」要写的是本组件的搜索框状态，菜单侧不碰它的实现。
+  useEffect(() => {
+    registerSettingsMenuBridge({
+      searchSection: (label) => {
+        setModifiedOnly(false);
+        setQuery(label);
+        searchRef.current?.focus();
+      },
+      note: (line) => setMenuNote(line),
+    });
+    return () => registerSettingsMenuBridge(null);
+  }, [setMenuNote]);
 
   const pickResult = (entry: SettingsSearchEntry): void => {
     setActive(entry.section);
@@ -1100,7 +1120,7 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
     // 理论上到不了这里（general 一节恒有内容 ⇒ visible 恒非空）；防御性渲染一个可关闭的空壳，绝不白屏。
     return (
       <div className="overlay-backdrop" onMouseDown={() => onClose()}>
-        <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
           <div className="wizard">
             <h3 className="settings-title">设置</h3>
           </div>
@@ -1124,7 +1144,7 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
 
   return (
     <div className="overlay-backdrop" onMouseDown={() => onClose()}>
-      <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
         {/* 右上 ✕：与遮罩点击、页脚「完成」同一个 onClose 入口；Esc 仍走壳层全局键盘（modal 栈） */}
         <button
           type="button"
@@ -1253,6 +1273,14 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
 
           {/* 单一页脚行，且沿用全站模态房规：primary 恒等于推荐项、排在最右 */}
           <div className="settings-footer">
+            {menuNote !== null ? (
+              <span
+                className={`page-menu-note settings-menu-note${isFailureNote(menuNote) ? ' is-error' : ''}`}
+                role="status"
+              >
+                {menuNote}
+              </span>
+            ) : null}
             <button className="primary small" onClick={() => onClose()}>
               完成
             </button>

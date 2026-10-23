@@ -7,7 +7,10 @@ import type { RecentFileRecord } from './recent-files';
 import { version as APP_VERSION } from '../../package.json';
 import type { AppPhase } from './App';
 import { Icon } from './icons';
+import { revealFailureText, revealInExplorer } from './reveal-explorer';
+import { isFailureNote, registerWelcomeMenuBridge, useMenuNote } from './context-menu-pages';
 import './welcome.css';
+import './context-menu-pages.css';
 
 /** 教程卡片指向的语义 id（与内核事件 `ui.tutorial.open` 的载荷同一词表） */
 export type WelcomeTutorialId = 'kojo' | 'sugar' | 'kojo2' | 'reference';
@@ -232,6 +235,9 @@ export function WelcomeView({
 }: Props): ReactElement {
   // 最近文件（MM-7）：未接线（可选 prop 缺席）时退化为稳定空表——区不显示，不炸
   const files = recentFiles ?? NO_RECENT_FILES;
+  const opening = phase === 'opening';
+  /** 右键菜单动作的回执（复制 / 移除 / 在资源管理器里显示 的成败都上屏，不静默） */
+  const [menuNote, setMenuNote] = useMenuNote();
   // 失效标记（A4）：逐条异步 stat，null = 目录不存在 → 行内灰态标记（仍可点、仍可移除）。
   // 结果按 pathKey+lastOpenedAt 缓存，recent 变化只补扫缓存缺失的键——不每帧重扫。
   const [statCache, setStatCache] = useState<Map<string, FileStat | null>>(new Map());
@@ -292,6 +298,46 @@ export function WelcomeView({
     // fileStatCache 在依赖里：补扫完自然转 idle（pending 为空即早退），不会成环
   }, [kernelReady, files, statPath, fileStatCache]);
 
+  /* ------------------- 右键菜单接线（1023 覆盖面批 · 欢迎页） ------------------- */
+  // 面本身在 `context-menu-pages.ts` 模块顶层登记（welcome / welcome-recent）；
+  // 这里只交一枚「接线桥」：行数据在 DOM（data-recent-root），能力读数（能不能打开、
+  // 有没有桌面壳）与动作回调在这里现算——依赖一变就换桥，菜单不会拿着旧读数。
+  useEffect(() => {
+    registerWelcomeMenuBridge({
+      openBlockedReason: () => {
+        if (!kernelReady) return '内核还在装配，稍等一下';
+        return opening ? '正在打开项目…' : null;
+      },
+      // 在系统资源管理器中显示走 Tauri 的 `show_in_folder`：浏览器壳没有这条能力 ⇒ 整项不显示
+      canReveal: () => tauri,
+      resumeAvailable: () => resumeRoot !== null && crashRecovery === null,
+      hasRecent: () => recent.length > 0,
+      openRecent: (dir) => onOpenRecent(dir),
+      removeRecent: (dir) => onRemoveRecent(dir),
+      reveal: (dir) => {
+        void revealInExplorer(dir).catch((err: unknown) => setMenuNote(revealFailureText(err)));
+      },
+      openDirectory: () => onOpenDirectory(),
+      resumeSession: () => onResumeSession(),
+      clearRecent: () => onClearRecent(),
+      note: (line) => setMenuNote(line),
+    });
+    return () => registerWelcomeMenuBridge(null);
+  }, [
+    kernelReady,
+    opening,
+    tauri,
+    resumeRoot,
+    crashRecovery,
+    recent.length,
+    onOpenRecent,
+    onRemoveRecent,
+    onOpenDirectory,
+    onResumeSession,
+    onClearRecent,
+    setMenuNote,
+  ]);
+
   if (closed) {
     return (
       <ClosedState
@@ -306,12 +352,11 @@ export function WelcomeView({
     );
   }
 
-  const opening = phase === 'opening';
   const canOpen = kernelReady && !opening;
   const tutorialsOpenable = canOpen;
 
   return (
-    <div className="welcome welcome-screen">
+    <div className="welcome welcome-screen" data-context-surface="welcome">
       <div className="welcome-scroll">
         <div className="welcome-stage">
           <div className="welcome-card" role="region" aria-label="欢迎">
@@ -429,7 +474,15 @@ export function WelcomeView({
                     {recent.map((r) => {
                       const missing = recentRowState(statCache.get(recentStatKey(r))) === 'missing';
                       return (
-                        <li key={r.rootDir} className={`welcome-recent-row${missing ? ' is-missing' : ''}`}>
+                        <li
+                          key={r.rootDir}
+                          className={`welcome-recent-row${missing ? ' is-missing' : ''}`}
+                          // 右键面（welcome-recent）：行数据放属性，菜单构建时现读——
+                          // 同一个面在多行之间不需要各自注册，也不会互相覆盖
+                          data-context-surface="welcome-recent"
+                          data-recent-root={r.rootDir}
+                          data-recent-missing={missing ? '1' : undefined}
+                        >
                           <button
                             className="welcome-recent-open"
                             onClick={() => onOpenRecent(r.rootDir)}
@@ -457,6 +510,16 @@ export function WelcomeView({
                   </ul>
                 )}
               </section>
+
+              {/* 右键菜单动作的回执（复制路径 / 移除 / 在资源管理器中显示）：成败都说一句 */}
+              {menuNote !== null ? (
+                <p
+                  className={`page-menu-note welcome-menu-note${isFailureNote(menuNote) ? ' is-error' : ''}`}
+                  role="status"
+                >
+                  {menuNote}
+                </p>
+              ) : null}
 
               {/* 最近文件（MM-7）：跨项目的打开记录。行结构同「最近」项目区
                   （welcome-recent-* 同款类名天然继承样式），探测的是文件本身。 */}

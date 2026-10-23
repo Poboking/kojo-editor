@@ -23,6 +23,13 @@ import {
 import { isComposingEvent, nextRovingIndex } from './shell-keys';
 import { monacoBuiltinRows } from './monaco-builtin-keybindings';
 import { Icon } from './icons';
+import {
+  isFailureNote,
+  keybindingMenuStateOf,
+  registerKeybindingsMenuBridge,
+  useMenuNote,
+} from './context-menu-pages';
+import './context-menu-pages.css';
 
 /**
  * 快捷键设置页（b/kbset/1017 批次）——设置浮层「快捷键」一节的本体。
@@ -84,6 +91,8 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
   const [flashId, setFlashId] = useState<string | null>(null);
   /** 「全部恢复默认」的就地回执（role=status，不抢焦点） */
   const [resetNote, setResetNote] = useState<string | null>(null);
+  /** 右键菜单动作的回执（复制命令 ID / 重置 / 移除键位；到时自动收起） */
+  const [menuNote, setMenuNote] = useMenuNote();
 
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -109,6 +118,26 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
 
   // 当前焦点行夹取到可见范围（过滤后行数变少时不悬空）
   const focusIndex = visible.length === 0 ? -1 : Math.min(activeIndex, visible.length - 1);
+
+  /* ------------------- 右键菜单接线（1023 覆盖面批 · 快捷键页） ------------------- */
+  // 面（`keybindings`）在 `context-menu-pages.ts` 模块顶层登记；这里只交接线桥：
+  // 行读数已由 `buildKeybindingRows` 算好，菜单不重算撞键；改键仍走覆盖表既有 API。
+  useEffect(() => {
+    registerKeybindingsMenuBridge({
+      rowOf: (id) => {
+        const row = rows.find((r) => r.id === id);
+        return row === undefined ? undefined : keybindingMenuStateOf(row);
+      },
+      conflictCount: () => conflictCount,
+      // 「查看同键位冲突」复用页面上那枚「撞键」范围档，不另造一条过滤
+      onlyConflicts: () => {
+        setQuery('');
+        setScope('conflict');
+      },
+      note: (line) => setMenuNote(line),
+    });
+    return () => registerKeybindingsMenuBridge(null);
+  }, [rows, conflictCount, setMenuNote]);
 
   /* --------------------------- 捕获改键（window 捕获阶段） --------------------------- */
   // 焦点可能还在导航栏或搜索框上，挂容器会漏键 ⇒ 挂 window 的**捕获阶段**，
@@ -205,7 +234,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
   });
 
   return (
-    <div className="kb-page" role="region" aria-label="键盘快捷键">
+    <div className="kb-page" role="region" aria-label="键盘快捷键" data-context-surface="keybindings">
       <p className="kb-intro">
         这里列出编辑器认得的每一条命令和它当前的按键。点按键那一格、再按下新的组合即可改键（Esc 取消）。
         两键序列会分成两片，先按前一片再按后一片。也可用 ↑ ↓ 走位、Enter 改键、Delete 移除键位。
@@ -289,6 +318,11 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
       {resetNote !== null ? (
         <div className="kb-resetnote" role="status">
           {resetNote}
+        </div>
+      ) : null}
+      {menuNote !== null ? (
+        <div className={`page-menu-note${isFailureNote(menuNote) ? ' is-error' : ''}`} role="status">
+          {menuNote}
         </div>
       ) : null}
 
