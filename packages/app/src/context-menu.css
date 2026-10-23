@@ -271,6 +271,49 @@
   outline-offset: -1px;
 }
 
+/* ------------------- 一·补、根宿主与新增形态（1023 覆盖面批） ------------------- */
+
+/* 根宿主：右键菜单的**固定层**。各面自己的菜单仍就地渲染（跟随其层叠上下文），
+   这一层只给根路由（`context-menu-host.tsx`）用——它必须盖过模态与提示浮层，故取 1300：
+   styles.css 的 `--z-overlay:1000` / `--z-modal:1100`，styles-project.css 另有一批裸
+   `z-index:1200`（提示类浮层），既有 `.context-menu` 是 `calc(--z-modal + 1)` = 1101。
+   1300 在以上全部之上，且留出一档给将来夹在中间的层。 */
+.context-menu-host {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  pointer-events: none; /* 空白处不挡鼠标；遮罩与菜单各自接管 */
+}
+.context-menu-host > * {
+  pointer-events: auto;
+}
+
+/* 分组小节头：不可聚焦、不进键盘序（不是 menuitem），只给一段动作一个名字 */
+.context-menu-group {
+  padding: 6px 10px 3px;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  user-select: none;
+}
+
+/* 子菜单指示箭头：与快捷键同列右缘 */
+.context-menu .context-menu-arrow {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1;
+}
+
+/* 子菜单：与父菜单同观感，落点由 JS 实测夹取（贴着父项右侧，放不下翻到左侧）。
+   入场不重放淡入——与父菜单同一帧连着两次淡入看起来像闪。 */
+.context-menu.context-menu--submenu {
+  animation: none;
+}
+
 /* --------------------------- 三、质感开关与动效回落 --------------------------- */
 
 /* 老内核不支持 backdrop-filter ⇒ 实心面，绝不破版（与 styles.css 同一条回落口径） */

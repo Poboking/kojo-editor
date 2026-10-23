@@ -142,6 +142,9 @@ import { PanelBody, StatusbarItem } from './PanelHost';
 import { ProblemsStatusItem } from './ProblemPanel';
 // 项目名旁的「更多」菜单（C-1a）：复用全站共享 <ContextMenu>（玻璃观感 + WAI-ARIA 键盘），不另造菜单
 import { ContextMenu, type ContextMenuItem } from './context-menu';
+// 右键菜单（1023 覆盖面批）：根路由挂在 App 壳层，命令注册表在这里——两边靠这根线接头，
+// 兜底菜单里的「命令面板 / 设置 / 检查更新」才按得动（判据与命令面板同一份，不另造）。
+import { registerContextMenuCommandRunner } from './context-menu-model';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
@@ -1001,6 +1004,11 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'layout.toggleFullscreen', title: '切换全屏', category: '工作台', run: () => { void toggleFullscreen(); } },
       { id: 'layout.reset', title: '重置布局', run: () => doResetRef.current() },
       { id: 'layout.openSettings', title: '打开设置', run: () => { setSettingsSection('general'); setSettingsOpen(true); } },
+      // 检查更新（1023 覆盖面批 · 兜底右键菜单的入口）：与设置页「关于」那颗按钮**同一个动作**
+      // （`runUpdateCheck`），菜单不复制任何更新逻辑。检查结果在设置页可见
+      // （检查中… / 已是最新 / 发现新版本），故顺带把设置页定位到「关于」——否则从菜单点下去
+      // 在"已是最新"这条路上什么都看不见（铁律 4 的"不许按了没反应"）。
+      { id: 'workbench.checkUpdates', title: '检查更新', category: '工作台', run: () => { setSettingsSection('about'); setSettingsOpen(true); void runUpdateCheck(); } },
       { id: 'workbench.commandPalette', title: '命令面板', keybinding: effectiveKeybindingOf('workbench.commandPalette'), run: () => setPaletteOpen(true) },
       { id: 'workbench.quickOpen', title: '快速打开文件', keybinding: effectiveKeybindingOf('workbench.quickOpen'), run: () => setQuickOpen(true) },
       // 工作区符号（D2 · Ctrl+T）：按名字找函数定义并跳过去（候选来自
@@ -1144,7 +1152,7 @@ export function ShellLayout(props: Props): ReactElement {
 
   // 工作台 API 注册（编辑器区空态动作按钮反向取 picker/命令入口）
   useEffect(() => {
-    onRegisterWorkbench?.({
+    const api: WorkbenchApi = {
       openQuickOpen: () => setQuickOpen(true),
       openPalette: () => setPaletteOpen(true),
       hasCommand: (id) => registryRef.current.some((c) => c.id === id),
@@ -1160,8 +1168,14 @@ export function ShellLayout(props: Props): ReactElement {
           return false;
         }
       },
-    });
-    return () => onRegisterWorkbench?.(null);
+    };
+    onRegisterWorkbench?.(api);
+    // 同一份判据同时喂给右键菜单（兜底菜单的命令项据此决定「显示/禁用」）
+    registerContextMenuCommandRunner(api);
+    return () => {
+      onRegisterWorkbench?.(null);
+      registerContextMenuCommandRunner(null);
+    };
   }, [onRegisterWorkbench]);
 
   /**

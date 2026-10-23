@@ -103,6 +103,10 @@ import { pruneMru, stepMru, touchMru } from './tab-mru';
 import { subscribeTabCycle, type TabCycleDirection } from './tab-cycle';
 import type { OpenFileOptions } from './tabs-ops';
 import { useShellOverlays } from './shell-overlays';
+// 右键菜单（1023 覆盖面批 · WP0）：根宿主 + 三层路由。App 只挂监听与宿主，
+// 面注册表与兜底策略都在各自模块里（供 13 个面并行接入）。
+import { ContextMenuHost, openContextMenu } from './context-menu-host';
+import { buildContextMenuRoute } from './context-surfaces';
 // K2-MIGRATE-MOUNT：Kojo 2.0 迁移向导的宿主入口（纯逻辑，命令 / 开合 / IO 注入 / 刷新收尾）
 // 与挂载壳。开关关时 `commands()` 返回空数组 ⇒ 命令表零变化（见 kojo2-migrate-entry.ts）。
 import {
@@ -1981,6 +1985,33 @@ export function App(): ReactElement {
   /** 项目态错误（welcome/opening 由 WelcomeView 自己的错误区承担，不重复上屏） */
   const projectError = visibleProjectError(phase, errorBar?.message ?? null);
 
+  /**
+   * 全局右键路由（1023 覆盖面批 · WP0）：壳层根上收口一次，三级策略住在
+   * `context-surfaces.ts`（显式面 → 输入框面 → 兜底）。这里只做三件放行判定 + 一次 preventDefault：
+   *
+   * - **Monaco 内部放行**：编辑器的原生菜单（剪切/复制/粘贴/转到定义/命令面板…）自己管，
+   *   抢过来就是把现成功能做没了；
+   * - **已被别的面处理**（`defaultPrevented`）：各面永远优先，根路由只兜没人管的地方
+   *   ——React 的合成监听挂在 #root 上，冒泡到 window 时 `defaultPrevented` 已经落定；
+   * - **其余一律阻断**：WebView2 的默认菜单把整页当文本框（刷新/另存为/检查…），
+   *   在桌面壳里全是噪音。
+   */
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent): void => {
+      if (!(e.target instanceof Element)) return;
+      if (e.target.closest('.monaco-editor') !== null) return;
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      const target = e.target instanceof HTMLElement ? e.target : e.target.parentElement;
+      if (target === null) return;
+      const route = buildContextMenuRoute(target, e);
+      if (route === null) return;
+      openContextMenu({ x: e.clientX, y: e.clientY, ...route });
+    };
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => window.removeEventListener('contextmenu', onContextMenu);
+  }, []);
+
   const body =
     phase === 'project' && kernel && project ? (
       <ProjectErrorBoundary
@@ -2072,7 +2103,7 @@ export function App(): ReactElement {
   // 正文与所有 fixed overlay 收进 `.app-frame-body`（flex:1; min-height:0），
   // `.welcome` / `.shell` 的 100% 高度由这块确定高度的 flex 舞台承接。
   return (
-    <div className="app-frame">
+    <div className="app-frame" data-context-surface="app-fallback">
       <WindowChrome />
       <div className="app-frame-body">
         {body}
@@ -2126,6 +2157,9 @@ export function App(): ReactElement {
           />
         ) : null}
       </div>
+      {/* 右键菜单根宿主（1023 覆盖面批）：固定层，必须排在所有浮层之后（层级见 CSS）。
+          各面自己的就地菜单不受影响——这一层只接根路由与兜底。 */}
+      <ContextMenuHost />
     </div>
   );
 }

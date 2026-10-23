@@ -69,6 +69,9 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.replaceInFiles', title: '在文件中替换', category: '工作台', keys: 'ctrl+shift+h', rebindable: true },
   { id: 'workbench.problems', title: '问题面板', category: '工作台', keys: 'ctrl+shift+m', rebindable: true },
   { id: 'workbench.keybindings', title: '打开键盘快捷键', category: '工作台', rebindable: true },
+  // 兜底右键菜单的「检查更新」入口（1023 覆盖面批）：无缺省键位，登记在此只为让
+  // 菜单与命令面板共用同一份中文名（`menuItemFromCommand` 从这里取标题）。
+  { id: 'workbench.checkUpdates', title: '检查更新', category: '工作台', rebindable: true },
   // 文字缩放（A1 批给的缺省键位，本批入表 = 可查可改可显示）
   { id: 'editor.fontZoomIn', title: '放大文字', category: '编辑器', keys: 'ctrl+=', rebindable: true },
   { id: 'editor.fontZoomOut', title: '缩小文字', category: '编辑器', keys: 'ctrl+-', rebindable: true },
