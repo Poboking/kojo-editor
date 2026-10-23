@@ -134,6 +134,24 @@ describe('搜索结果 · 命中行菜单', () => {
     expect(idsOf(items)).toEqual([SEARCH_MATCH_MENU_IDS.open, SEARCH_MATCH_MENU_IDS.replace]);
   });
 
+  /**
+   * 回归：禁用原因必须说**真实的那一条**。
+   *
+   * 现象：`canReplace` 是「有结果 / 检索已到完成态 / 没有替换正在写盘」三件事的合成，
+   * 旧文案却只写「替换条件未填写」——作者明明填好了条件，只是上一次替换还在落盘，
+   * 却被告知"条件没填"，于是回头去改输入框（原因说错 = 没原因，铁律 4）。
+   * 判据：文案不许再出现"条件未填写"这个假原因，且必须覆盖两种真实的等待态。
+   * 修法：改常量文案（消费方只引用常量，测试与源码无字面量复制）。
+   */
+  it('回归：替换项的禁用原因不再谎称"条件未填写"', () => {
+    const replace = byId(buildSearchMatchMenu({ ...ALL_CAPS, canReplace: false }), SEARCH_MATCH_MENU_IDS.replace);
+    const reason = replace.disabledReason ?? '';
+    expect(reason).not.toContain('条件未填写');
+    expect(reason).toContain('检索');
+    expect(reason).toContain('替换');
+    expect(isChineseMenuLabel(reason)).toBe(true);
+  });
+
   it('文案全中文（含替换项）', () => {
     expectAllChinese(buildSearchMatchMenu(ALL_CAPS));
     expectAllChinese(buildSearchMatchMenu({ ...ALL_CAPS, canReplace: false }));

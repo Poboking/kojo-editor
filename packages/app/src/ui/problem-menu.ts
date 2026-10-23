@@ -245,8 +245,12 @@ export function buildProblemsSurfaceMenu(target: HTMLElement): ContextSurfaceBui
     itemCount: context.itemCount(),
     filtering: context.filtering(),
   });
-  // 剪贴板缺席 + 没有过滤条件 ⇒ 一项都没有：不表态，让兜底菜单接管（空壳不如通用菜单）
-  if (items.length === 0) return null;
+  // 一项都点不动 ⇒ 不表态，让兜底菜单接管（空壳不如通用菜单）。
+  //
+  // 「项数为 0」只是这条闸的一种情形：剪贴板缺席时「复制全部」根本不画，而没有过滤条件时
+  // 「清除过滤」是**灰着的**——于是面板级菜单会退化成一枚（或两枚）按不动的项。作者右键
+  // 空白处想要的复制 / 全选 / 命令面板全在兜底里，把这一级当成终点等于把他堵在死角。
+  if (!items.some((item) => item.disabled !== true)) return null;
   const handlers = context.handlers;
   return {
     items,

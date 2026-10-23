@@ -46,7 +46,16 @@ export function crumbMenuItems(level: CrumbLevel): ContextMenuItem[] {
     checked: s.name === level.current.name && s.startLine === level.current.startLine,
   }));
   if (level.hidden > 0) {
-    items.push({ id: 'hidden', label: `另有 ${level.hidden} 项未列出`, disabled: true, dividerBefore: true });
+    // 截断必须说清为什么（铁律 4）：灰着不说话的尾行等于"这一条坏了"。
+    // 文案与右键面里那条（`crumbContextMenuItems` 的 `siblings-hidden`）逐字一致——
+    // 同一件事在两条入口上有两种说法，用户会以为是两回事。
+    items.push({
+      id: 'hidden',
+      label: `另有 ${level.hidden} 项未列出`,
+      disabled: true,
+      disabledReason: '同级项太多，只列出当前项附近的一段（在编辑器里搜索可找到其余块）',
+      dividerBefore: true,
+    });
   }
   return items;
 }

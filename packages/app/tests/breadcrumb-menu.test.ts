@@ -18,6 +18,7 @@ import {
   type CrumbMenuItemSpec,
 } from '../src/ui/breadcrumb-path';
 import {
+  crumbMenuItems,
   crumbSurfaceItems,
   setCrumbMenuRuntime,
   type CrumbMenuRuntime,
@@ -138,6 +139,42 @@ describe('面包屑右键 · 文案全中文 / 子菜单 id 编解码', () => {
     expect(crumbSiblingIndex('sibling:3')).toBe(3);
     expect(crumbSiblingIndex('copy-path')).toBeNull();
     expect(crumbSiblingIndex('sibling:x')).toBeNull();
+  });
+});
+
+/* ------------------------------ 回归：灰行必须说话 ------------------------------ */
+
+describe('回归 · 同级下拉的「另有 N 项未列出」必须带原因', () => {
+  /**
+   * 现象：左键点面包屑那枚把手弹出的同级列表里，被窗口截断时尾行是一条 `disabled` 的
+   * 「另有 N 项未列出」，但它**没有 `disabledReason`**——灰着不说话，读屏也只读出
+   * 一个"不可用"（铁律 4 直系违例）。
+   * 判据：`crumbMenuItems` 产出的每一条 disabled 项都必须有中文原因；且这条原因与
+   * 右键面里同一件事（`siblings-hidden`）的说法逐字一致，不许两处两种解释。
+   * 修法：给这条尾行补 `disabledReason`（文案复用右键面那句）。
+   */
+  it('截断尾行带原因，且与右键面里的同一句一致', () => {
+    const list = crumbMenuItems({ ...level(), hidden: 5 });
+    const hiddenRow = list.find((i) => i.id === 'hidden')!;
+    expect(hiddenRow.disabled).toBe(true);
+    expect(hiddenRow.disabledReason).toBeTruthy();
+    expect(isChineseMenuLabel(hiddenRow.disabledReason!)).toBe(true);
+
+    const surface = crumbContextMenuItems({ level: { ...level(), hidden: 5 }, index: 1, levelCount: 2, cap: FULL_CAP });
+    const surfaceRow = surface
+      .find((i) => i.id === 'siblings')!
+      .children!.find((i) => i.id === 'siblings-hidden')!;
+    expect(hiddenRow.disabledReason).toBe(surfaceRow.disabledReason);
+  });
+
+  it('同级下拉里每一条 disabled 项都有中文原因（不止截断那一行）', () => {
+    for (const hidden of [0, 3]) {
+      for (const item of crumbMenuItems({ ...level(), hidden })) {
+        if (item.disabled !== true) continue;
+        expect(item.disabledReason, item.id).toBeTruthy();
+        expect(isChineseMenuLabel(item.disabledReason!), item.id).toBe(true);
+      }
+    }
   });
 });
 
