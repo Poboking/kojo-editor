@@ -13,7 +13,7 @@
  * 模块（`TreeProbMark`）。三层共用同一派生、同一把尺：树里不存在第二份计数。
  */
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
@@ -25,13 +25,14 @@ import {
   type ProblemSummary,
 } from './problem-store';
 import {
+  collapseAll as collapseAllReveal,
+  expandAll as expandAllReveal,
   packageKey,
-  revealMenuLabel,
-  toggleReveal,
   type RevealGroup,
   type RevealResult,
 } from './file-tree-reveal';
 import {
+  COMMAND_PALETTE_COMMAND,
   deleteConfirmText,
   fsLocatePlanOfRoots,
   isUnderPath,
@@ -50,8 +51,10 @@ import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark, type ProbFile } from './file-tree-row';
 import { DirRows } from './file-tree-dir-rows';
-import { FileTreeContextMenu } from './file-tree-menu';
-import type { DirState, EditState, Group, MenuScope, PackageGroup, Props } from './file-tree-types';
+import { setFileTreeMenuRuntime, type FileTreeScope } from './file-tree-menu';
+import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
+import { SHOW_FILE_HISTORY_COMMAND_ID } from './file-history';
+import type { DirState, EditState, Group, PackageGroup, Props } from './file-tree-types';
 import { Icon } from './icons';
 
 /**
@@ -275,8 +278,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   const [subOpen, setSubOpen] = useState<Set<string>>(new Set());
   /** 目录列举缓存（**按绝对路径**键控——子目录也要能展开） */
   const [dirCache, setDirCache] = useState<Map<string, DirState>>(new Map());
-  /** 右键菜单（壳层私有轻量实现） */
-  const [menu, setMenu] = useState<{ x: number; y: number; scope: MenuScope } | null>(null);
   /** 批量展开/收起后的一句可读数（反馈 6：没有反馈的批量动作＝用户读成"点了没反应"） */
   const [revealNote, setRevealNote] = useState<string | null>(null);
   /** 行内编辑（新建 / 重命名；B1/B2） */
@@ -510,8 +511,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   }, [view, project.rootDir, listDir, multiRootFs]);
 
   /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
-  const collectPackages = (scope: MenuScope): Array<{ key: string; dir: string; group: string }> => {
-    const gs = scope.kind === 'group' ? [scope.group] : groups;
+  const collectPackages = (gs: readonly Group[]): Array<{ key: string; dir: string; group: string }> => {
     const out: Array<{ key: string; dir: string; group: string }> = [];
     for (const g of gs) {
       for (const s of g.subs) {
@@ -520,15 +520,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       }
     }
     return out;
-  };
-
-  /** 右键「显示所有文件和文件夹」：按作用域批量展开真实文件夹内容 */
-  const revealAll = (scope: MenuScope): void => {
-    setMenu(null);
-    const pkgs = collectPackages(scope);
-    setOpened((prev) => new Set([...prev, ...pkgs.map((p) => p.group)]));
-    setPkgFolder((prev) => new Set([...prev, ...pkgs.map((p) => p.key)]));
-    for (const p of pkgs) ensureDir(p.dir);
   };
 
   /** 作用域内可展开的组与包（根散文件无包层，不参与"展开"这件事） */
@@ -578,13 +569,14 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    * （§5.84）——某些根没监视上、或平台根本没有监视能力（浏览器开发壳）。那时
    * 自动失效一条都不会到，作者手里必须还有一条不用重开项目的路。
    */
-  const relistShown = (): void => {
-    const dirs = new Set(dirsToRelist(subOpen, pkgFolder, collectPackages({ kind: 'root' })));
+  const relistShown = (): number => {
+    const dirs = new Set(dirsToRelist(subOpen, pkgFolder, collectPackages(groups)));
     // 文件系统视图（B5/D1）：根层全部根一并重列（多根时折叠着的也会被取到顶层——手动
     // 重读是显式动作，宁可多取一层也不留"按了刷新还有根没重列"的疑心）
     if (view === 'fs') for (const r of fsRoots) dirs.add(r);
     // 一次失效 = 一次请求批 = **一帧**（旧实现每份目录响应各排一帧，K 层展开就是 K 帧全树）
     fetchDirs([...dirs]);
+    return dirs.size;
   };
 
   const lastNonce = useRef(refreshNonce);
@@ -594,12 +586,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     relistShown();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshNonce]);
-
-  const openMenu = useCallback((e: ReactMouseEvent, scope: MenuScope): void => {
-    e.preventDefault();
-    e.stopPropagation();
-    setMenu({ x: Math.min(e.clientX, window.innerWidth - 260), y: e.clientY, scope });
-  }, []);
 
   /* ---------------- 文件/目录编辑（B1/B2 文件树编辑批） ---------------- */
 
@@ -799,7 +785,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     );
   };
 
-  const scopePathOf = (scope: MenuScope): string => {
+  /** 作用域自身的路径（文件 / 目录 / 作者包；角色组与空白区没有可复制/可删的路径） */
+  const scopePathOf = (scope: FileTreeScope): string => {
     switch (scope.kind) {
       case 'file':
         return scope.path;
@@ -812,12 +799,82 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     }
   };
 
-  const runMenuAction = (id: MenuItemId, scope: MenuScope): void => {
-    setMenu(null);
+  /**
+   * 刷新（当前作用域）：只重列这一个目录，不动展开态（HK-5 的"手动那条腿"）。
+   * 文件作用域 = 它所在的文件夹；目录 / 作者包 = 它自己。
+   */
+  const refreshScope = (scope: FileTreeScope): void => {
+    const dir =
+      scope.kind === 'file'
+        ? parentDir(scope.path)
+        : scope.kind === 'dir'
+          ? scope.path
+          : scope.kind === 'package'
+            ? scope.dir
+            : '';
+    if (!dir || !listDir) return;
+    fetchDirs([dir]);
+    note(`已重新读取「${baseName(dir)}」`);
+  };
+
+  /**
+   * 展开全部：角色组作用域只展开本组（含组里的作者包——旧工具条只做组那一层，
+   * 用户于是读成"点了没反应"）；其余作用域 = 整棵树。
+   */
+  const expandScope = (scope: FileTreeScope): void => {
+    if (scope.kind === 'group') {
+      const g = groups.find((x) => x.label === scope.label);
+      if (g === undefined) {
+        note('这个角色目录已经不在树里了——可能刚被重命名或删除，先刷新看看');
+        return;
+      }
+      applyReveal([g], expandAllReveal(revealTargets([g]), revealStateOf()));
+      return;
+    }
+    applyReveal(visible, expandAllReveal(revealTargets(visible), revealStateOf()));
+  };
+
+  /** 收起：角色组作用域只收本组；其余作用域收整棵树（含真实文件夹层） */
+  const collapseScope = (scope: FileTreeScope): void => {
+    if (scope.kind === 'group') {
+      const g = groups.find((x) => x.label === scope.label);
+      if (g === undefined) {
+        note('这个角色目录已经不在树里了——可能刚被重命名或删除，先刷新看看');
+        return;
+      }
+      const pkgKeys = g.subs
+        .filter((s): s is PackageGroup & { label: string } => s.label !== null)
+        .map((s) => packageKey(g.label, s.label));
+      setOpened((prev) => {
+        const next = new Set(prev);
+        next.delete(g.label);
+        return next;
+      });
+      setPkgFolder((prev) => {
+        const next = new Set(prev);
+        for (const key of pkgKeys) next.delete(key);
+        return next;
+      });
+      // 组内子目录的展开态一并收（组外的现场不动——收起一个组不该惊动别的组）
+      setSubOpen((prev) => {
+        const next = new Set<string>();
+        for (const dir of prev) if (!isUnderPath(g.prefix, dir)) next.add(dir);
+        return next;
+      });
+      note(`已收起「${g.label}」`);
+      return;
+    }
+    applyReveal(groups, collapseAllReveal());
+  };
+
+  const runMenuAction = (id: MenuItemId, scope: FileTreeScope): void => {
     const path = scopePathOf(scope);
     switch (id) {
       case 'open':
         if (scope.kind === 'file') onOpenFile(scope.path);
+        break;
+      case 'copy-name':
+        if (path) copyText(baseName(path), `已复制文件名「${baseName(path)}」`);
         break;
       case 'copy-path':
         if (path) copyText(path, '已复制完整路径');
@@ -827,6 +884,16 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
         break;
       case 'reveal':
         if (path) onRevealInExplorer?.(path);
+        break;
+      case 'refresh':
+        refreshScope(scope);
+        break;
+      case 'history':
+        // 面板读的是**当前编辑中的文件**（命令 when 判据）：菜单只在这一行就是活动文件时
+        // 才可点（禁用原因见 file-tree-ops.historyItem），这里只负责把命令发出去。
+        if (!runContextMenuCommand(SHOW_FILE_HISTORY_COMMAND_ID)) {
+          note('文件历史打不开：先打开这份文件，再查看它的历史版本');
+        }
         break;
       case 'new-file':
         if (path) beginCreate('file', path);
@@ -843,14 +910,64 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       case 'import':
         if (scope.kind === 'package') onImportPackage?.({ dir: scope.dir, label: scope.label });
         break;
+      case 'expand-all':
+        expandScope(scope);
+        break;
+      case 'collapse-all':
+        collapseScope(scope);
+        break;
+      case 'locate':
+        if (activeFile) setLocateReq({ file: activeFile });
+        break;
+      case 'relist': {
+        const count = relistShown();
+        note(count > 0 ? `已重新扫描 ${count} 个目录` : '没有展开的目录可重扫——展开文件夹后再试');
+        break;
+      }
+      case 'switch-view-kojo':
+        setView('kojo');
+        break;
+      case 'switch-view-fs':
+        // 根层第一层由 `view === 'fs'` 那条既有 effect 惰性取（这里不重复打 IO）
+        setView('fs');
+        break;
+      case 'add-folder':
+        onAddFolder?.();
+        break;
+      case 'command-palette':
+        if (!runContextMenuCommand(COMMAND_PALETTE_COMMAND)) note('命令面板打不开：命令还没注册好');
+        break;
     }
   };
 
+  /**
+   * 菜单能力位（铁律 4：没有通道的项整项不显示，不许灰着不说话）。
+   *
+   * 只有**真实存在**的通道才设位：命令面板 / 文件历史看命令注册表，重列看 `listDir`，
+   * 添加文件夹看宿主回调，剪贴板看 `navigator.clipboard`。
+   */
   const menuCapability: MenuCapability = {
     hasIo: io !== undefined,
     canReveal: onRevealInExplorer !== undefined,
     canImport: onImportPackage !== undefined,
+    canClipboard: typeof navigator !== 'undefined' && navigator.clipboard !== undefined,
+    canRelist: listDir !== undefined,
+    canHistory: canRunContextMenuCommand(SHOW_FILE_HISTORY_COMMAND_ID),
+    canCommandPalette: canRunContextMenuCommand(COMMAND_PALETTE_COMMAND),
+    canAddFolder: onAddFolder !== undefined,
   };
+
+  /**
+   * 把当前现场交给面（行菜单在根宿主里构建时读它）。
+   *
+   * 每次渲染整体替换：视图 / 活动文件 / 能力位 / 分发函数都跟着这一帧的真相走，
+   * 不需要「依赖变了重新声明面」那套（重复声明会告警，也会让两个实例互相覆盖）。
+   * 卸载清空 ⇒ 面拿不到桥就返回 null，右键落回兜底，不弹空壳。
+   */
+  useEffect(() => {
+    setFileTreeMenuRuntime({ view, activeFile, capability: menuCapability, act: runMenuAction });
+  });
+  useEffect(() => () => setFileTreeMenuRuntime(null), []);
 
   /* ---------------- B4：定位当前文件 ---------------- */
 
@@ -974,7 +1091,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     commitEdit,
     cancelEdit,
     toggleSub,
-    openMenu,
     onOpenFile,
   };
 
@@ -1006,11 +1122,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       ),
     };
   }, [edit, editValue, commitEdit, cancelEdit]);
-  /** 平铺 ERB 行右键（B1：文件行也有菜单了） */
-  const onFileContext = useCallback(
-    (e: ReactMouseEvent, path: string): void => openMenu(e, { kind: 'file', path }),
-    [openMenu],
-  );
 
   if (!index && snapPaths === null) {
     // 索引未就绪且快照未到：占位自解释。
@@ -1023,7 +1134,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   return (
     <div
       className="file-tree"
-      onContextMenu={view === 'kojo' ? (e) => openMenu(e, { kind: 'root' }) : undefined}
+      // 空白区面（1023 覆盖面批）：行元素各自带 `file-tree` 面（`closest` 命中最近的那个），
+      // 落在 ul / 状态行 / 内边距上的右键就由这一个接管——菜单走根宿主，不再就地渲染。
+      data-context-surface="file-tree-root"
     >
       {/* 文件系统视图不放过滤框：按名过滤要递归走全树，与惰性加载天然打架（没展开的层根本没数据）
           ——与其给一个「看着在、但只滤已展开层」的鬼状态，不如不显示；找文件靠打开文件时的自动定位。 */}
@@ -1036,8 +1149,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
         />
       ) : null}
       {/* 顶部工具条已撤（用户反馈批）：视图切换 / 添加文件夹 / 展开折叠 / 定位 / 重读六个按钮
-          全部退场——能力仍在（view 机器、extraRoots、applyReveal、relistShown 自动刷新、
-          右键菜单「显示所有文件和文件夹」），只是不再占一条横向按钮带。 */}
+          全部退场——能力仍在，1023 批起全部收进「根 / 角色组」右键菜单（空白区另有一条
+          命令面板），不再占一条横向按钮带。 */}
       {revealNote ? (
         <p className="tree-reveal-note dim" role="status">
           {revealNote}
@@ -1091,8 +1204,12 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                 className="tree-group-btn"
                 title={`${g.label}（右键查看更多）`}
                 data-drop-dir={g.prefix || undefined}
+                // 行面（1023）：行数据放 DOM，面的 build 从 target 读——不放闭包（多实例安全）
+                data-context-surface="file-tree"
+                data-tree-kind="group"
+                data-tree-label={g.label}
+                data-tree-path={g.prefix}
                 onClick={() => toggleGroup(g.label)}
-                onContextMenu={(e) => openMenu(e, { kind: 'group', group: g })}
               >
                 <span className="caret">
                   <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -1115,7 +1232,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                           probs={rowProbs}
                           onOpenFile={onOpenFile}
                           edit={fileEdit}
-                          onFileContext={onFileContext}
                         />
                       );
                     }
@@ -1139,13 +1255,11 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             className="tree-package"
                             title={pkgDir}
                             data-drop-dir={pkgDir}
+                            data-context-surface="file-tree"
+                            data-tree-kind="package"
+                            data-tree-label={label}
+                            data-tree-path={pkgDir}
                             onClick={() => togglePkgFolder(pkgKey, pkgDir)}
-                            onContextMenu={(e) => {
-                              // 包节点右键 = 导入（P-F）+ 目录编辑（B1）；无任何能力时仅阻止冒泡
-                              e.preventDefault();
-                              e.stopPropagation();
-                              openMenu(e, { kind: 'package', dir: pkgDir, label });
-                            }}
                           >
                             <span className="caret">
                               <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -1172,7 +1286,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             probs={rowProbs}
                             onOpenFile={onOpenFile}
                             edit={fileEdit}
-                            onFileContext={onFileContext}
                           />
                         </ul>
                       </li>
@@ -1198,19 +1311,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
           过滤强制全展开 ⇒ 只显示前 {plan.rendered} / {plan.matched} 个命中（点树尾按钮继续加载，或把过滤词写长一点）
         </p>
       ) : null}
-      {menu ? (
-        <FileTreeContextMenu
-          x={menu.x}
-          y={menu.y}
-          scope={menu.scope}
-          capability={menuCapability}
-          revealLabel={() => revealMenuLabel(revealTargets(visible), revealStateOf())}
-          onDismiss={() => setMenu(null)}
-          onToggleReveal={() => applyReveal(visible, toggleReveal(revealTargets(visible), revealStateOf()))}
-          onRevealScope={revealAll}
-          onAction={runMenuAction}
-        />
-      ) : null}
+      {/* 就地渲染的 FileTreeContextMenu 自 1023 批起不再挂在这里：菜单统一由根宿主
+          （`context-menu-host.tsx` 的固定层）渲染，浮层裁剪与遮挡一次收口。那个组件
+          保留在 file-tree-menu.tsx 作兜底实现（根宿主缺席的宿主可自渲染）。 */}
     </div>
   );
 }

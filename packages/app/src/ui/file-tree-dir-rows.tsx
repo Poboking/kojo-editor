@@ -7,7 +7,7 @@
  * 不可能再分叉）。递归没有深度上限（语料里有五层深的包内目录），`depth === 0` 的
  * 去重规则必须与 `visibleEntries` 同一口径。
  */
-import { memo, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { memo, type ReactElement } from 'react';
 import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { BINARY_EXT, erbExt } from './file-tree-model';
@@ -16,7 +16,7 @@ import { ROW_PROB_SCOPE, TreeProbMark } from './file-tree-row';
 import { EditRow } from './file-tree-rows';
 import type { ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
-import type { DirState, EditState, MenuScope } from './file-tree-types';
+import type { DirState, EditState } from './file-tree-types';
 
 export interface DirRowsProps {
   /** 本层目录（绝对路径；缓存键与 key 前缀都用它） */
@@ -36,7 +36,6 @@ export interface DirRowsProps {
   readonly commitEdit: () => void;
   readonly cancelEdit: () => void;
   readonly toggleSub: (dir: string) => void;
-  readonly openMenu: (e: ReactMouseEvent, scope: MenuScope) => void;
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
   /**
    * 文件行诊断表（工包：文件行徽标；与 `FileRowsProps.probs` 同一份表、同一把尺）。
@@ -103,7 +102,6 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     commitEdit,
     cancelEdit,
     toggleSub,
-    openMenu,
     onOpenFile,
     probs,
   } = props;
@@ -161,8 +159,10 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
               style={pad}
               title={d.path}
               data-drop-dir={d.path}
+              data-context-surface="file-tree"
+              data-tree-kind="dir"
+              data-tree-path={d.path}
               onClick={() => toggleSub(d.path)}
-              onContextMenu={(e) => openMenu(e, { kind: 'dir', path: d.path })}
             >
               <span className="caret">
                 <Icon name={subOpen.has(d.path) ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -205,8 +205,10 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             className={`tree-file ${d.path === activeFile ? 'active' : ''} ${erbExt(d.name) ? '' : 'tree-extra-file'}`}
             title={erbExt(d.name) ? d.path : `${d.path}（附加文件，不在口上索引内）`}
             data-locate={d.path}
+            data-context-surface="file-tree"
+            data-tree-kind="file"
+            data-tree-path={d.path}
             onClick={() => onOpenFile(d.path, { preview: true })}
-            onContextMenu={(e) => openMenu(e, { kind: 'file', path: d.path })}
           >
             {glossOf(d.name)}
             {prob ? (

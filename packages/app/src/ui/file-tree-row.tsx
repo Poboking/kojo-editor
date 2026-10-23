@@ -10,7 +10,7 @@
  * 必须留在行这一侧；而它一旦留在行这一侧，组/包那两层也只能复用它——否则就是
  * "同一棵树两种画法"的新分叉（工包 E 留下的洞，本批补上）。
  */
-import { memo, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { memo, type ReactElement } from 'react';
 import { baseName } from './file-tree-model';
 import { PROBLEM_SCOPE, SEVERITY_TINT, type ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
@@ -95,8 +95,6 @@ export interface FileRowProps {
   readonly active: boolean;
   /** 打开（第二参 = 方式：单击给预览态；类型见 tabs-ops.OpenFileOptions） */
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
-  /** 文件行右键（B1；缺省 → 文件行无右键，旧行为） */
-  readonly onFileContext?: (e: ReactMouseEvent, path: string) => void;
   /**
    * 这一行的诊断量（**additive 传值**，工包：文件行徽标）。
    *
@@ -113,12 +111,16 @@ export interface FileRowProps {
  * 只有旧 active 行与新 active 行重画，组内其余行全部跳过——这是点文件这条最高频
  * 路径上从"全组重画"到"两行重画"的那一刀。徽标那一位同样是**值**（见 `FileRowProps.prob`），
  * 加它不会让这一刀变钝。
+ *
+ * 右键自 1023 批起**不再挂事件处理器**：行上写 `data-context-surface` / `data-tree-*`，
+ * 由根路由（`App` 的 window 监听）读出作用域后交给 `file-tree` 面——行级 memo 因此
+ * 少了一位"每帧可能换引用的回调"，右键也不再有 `preventDefault` 顺手 focus 带来的
+ * 选中态变化。
  */
 export const FileRow = memo(function FileRow({
   f,
   active,
   onOpenFile,
-  onFileContext,
   prob,
 }: FileRowProps): ReactElement {
   return (
@@ -126,9 +128,11 @@ export const FileRow = memo(function FileRow({
       className={`tree-file ${active ? 'active' : ''}`}
       title={f}
       data-locate={f}
+      data-context-surface="file-tree"
+      data-tree-kind="file"
+      data-tree-path={f}
       // 单击 = 预览态浏览（VS Code 单击文件树那份手感：斜体、不占新位、再点一下转正）
       onClick={() => onOpenFile(f, { preview: true })}
-      onContextMenu={onFileContext ? (e) => onFileContext(e, f) : undefined}
     >
       {baseName(f)}
       {prob ? <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} /> : null}

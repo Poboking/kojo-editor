@@ -133,3 +133,113 @@ export function crumbLevelsAt(
     return { current: toCrumbs([node])[0]!, siblings, hidden };
   });
 }
+
+/* ============================ 右键菜单（1023 覆盖面批 · WP2.5） ============================ */
+
+/**
+ * 面包屑右键的一条菜单项（渲染侧只需要这几档；数据面在 `context-menu-model`）。
+ *
+ * 与文件树那边同一条纪律：**能力没有就没有这一项**（整项不出现），上下文暂不可用时
+ * `disabled` + `disabledReason` 说人话——灰着不说话等于"点了没反应"。
+ */
+export interface CrumbMenuItemSpec {
+  readonly id: string;
+  readonly label: string;
+  readonly icon?: string;
+  readonly shortcut?: string;
+  readonly dividerBefore?: boolean;
+  readonly disabled?: boolean;
+  readonly disabledReason?: string;
+  readonly checked?: boolean;
+  readonly children?: readonly CrumbMenuItemSpec[];
+}
+
+/** 面包屑能拿到哪些通道（由组件侧探测后传进来，判据留在本纯函数里） */
+export interface CrumbMenuCapability {
+  /** 剪贴板可用 */
+  readonly canClipboard: boolean;
+  /** 当前文件路径已知（复制路径 / 相对路径 / 在资源管理器中显示都要它） */
+  readonly hasFilePath: boolean;
+  /** 项目根已知（复制相对路径要它算前缀） */
+  readonly hasProjectRoot: boolean;
+  /** 桌面壳「在资源管理器中显示」通道 */
+  readonly canReveal: boolean;
+}
+
+/** 同级子菜单项 id 前缀（`sibling:3` = 同级里的第 3 项，下标口径 = `siblings` 数组） */
+export const CRUMB_SIBLING_ID_PREFIX = 'sibling:';
+
+/** 同级里某一项 → 菜单 id */
+export function crumbSiblingId(index: number): string {
+  return `${CRUMB_SIBLING_ID_PREFIX}${index}`;
+}
+
+/** 菜单 id → 同级下标（不是同级项 / 形态不对 ⇒ null，调用侧安静忽略） */
+export function crumbSiblingIndex(id: string): number | null {
+  if (!id.startsWith(CRUMB_SIBLING_ID_PREFIX)) return null;
+  const raw = id.slice(CRUMB_SIBLING_ID_PREFIX.length);
+  return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+
+/**
+ * 面包屑一段的右键菜单（纯函数，可单测）。
+ *
+ * 口径：
+ * - **「复制层级名」复制的是名字**（块名），不是路径——路径那一条另有其项，两者不许混；
+ * - 「复制路径 / 复制相对路径 / 在资源管理器中显示」都落在**当前文件**上（面包屑这一段
+ *   说的是"文件里的哪个块"，没有独立于文件的路径）；路径或项目根拿不到时整项不显示；
+ * - 「选择上级」= 跳到外一层块头；已经是最外层时**禁用并说明**（不是消失：这一项在
+ *   每一段上都在，消失会让人以为菜单坏了）；
+ * - 「同级」走子菜单（`children`）：同级只有一个（就是自己）时整项不显示——点开只有
+ *   自己的空壳不如没有；被窗口截断时如实追加一条禁用说明（铁律 4：截断要说出来）。
+ */
+export function crumbContextMenuItems(input: {
+  readonly level: CrumbLevel;
+  readonly index: number;
+  readonly levelCount: number;
+  readonly cap: CrumbMenuCapability;
+}): CrumbMenuItemSpec[] {
+  const { level, index, levelCount, cap } = input;
+  const items: CrumbMenuItemSpec[] = [];
+  if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制层级名' });
+  if (cap.hasFilePath) {
+    if (cap.canClipboard) items.push({ id: 'copy-path', label: '复制路径' });
+    if (cap.canClipboard && cap.hasProjectRoot) items.push({ id: 'copy-rel-path', label: '复制相对路径' });
+  }
+  if (cap.canReveal && cap.hasFilePath) {
+    items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout', dividerBefore: items.length > 0 });
+  }
+  items.push(
+    index === 0
+      ? {
+          id: 'select-parent',
+          label: '选择上级',
+          dividerBefore: true,
+          disabled: true,
+          disabledReason: '已经是最外一层，没有上级块可跳',
+        }
+      : { id: 'select-parent', label: '选择上级', dividerBefore: true },
+  );
+  if (level.siblings.length > 1) {
+    const children: CrumbMenuItemSpec[] = level.siblings.map((s, i) => ({
+      id: crumbSiblingId(i),
+      label: s.name,
+      shortcut: `第 ${s.startLine} 行`,
+      ...(s.name === level.current.name && s.startLine === level.current.startLine
+        ? { checked: true as const }
+        : {}),
+    }));
+    if (level.hidden > 0) {
+      children.push({
+        id: 'siblings-hidden',
+        label: `另有 ${level.hidden} 项未列出`,
+        disabled: true,
+        disabledReason: '同级项太多，只列出当前项附近的一段（在编辑器里搜索可找到其余块）',
+        dividerBefore: true,
+      });
+    }
+    items.push({ id: 'siblings', label: `选择同级（${level.siblings.length} 项）`, children });
+  }
+  return items;
+}
+

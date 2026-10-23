@@ -18,38 +18,64 @@ import {
  * 组件只接线——判据长在组件里就没法测"菜单为什么少了这一项"。
  */
 
-const FULL_CAP: MenuCapability = { hasIo: true, canReveal: true, canImport: true };
+const FULL_CAP: MenuCapability = {
+  hasIo: true,
+  canReveal: true,
+  canImport: true,
+  canClipboard: true,
+  canRelist: true,
+  canHistory: true,
+  canCommandPalette: true,
+  canAddFolder: true,
+};
 
 /* ------------------------------ 菜单可见性 ------------------------------ */
 
 describe('menuItemsFor · 能力缺项时整项不显示（灰着不说话 = 违反铁律 4）', () => {
-  it('文件菜单全量：打开 | 复制路径、复制相对路径、显示 | 重命名、删除', () => {
+  it('文件菜单全量：打开 | 复制文件名、复制路径、复制相对路径 | 显示 | 刷新、文件历史 | 重命名、删除', () => {
     expect(menuItemsFor('file', FULL_CAP).map((i) => i.id)).toEqual([
       'open',
+      'copy-name',
       'copy-path',
       'copy-rel-path',
       'reveal',
+      'refresh',
+      'history',
       'rename',
       'delete',
     ]);
   });
 
-  it('无 io（浏览器壳/无内核宿主）：盘上动作三项整组消失，复制类保留（剪贴板到处都有）', () => {
-    const ids = menuItemsFor('file', { hasIo: false, canReveal: false, canImport: false }).map((i) => i.id);
+  it('无 io / 无剪贴板 / 无重列 / 无历史（浏览器壳/无内核宿主）：只剩打开与两条既有复制项', () => {
+    const ids = menuItemsFor('file', {
+      hasIo: false,
+      canReveal: false,
+      canImport: false,
+      canClipboard: false,
+      canRelist: false,
+      canHistory: false,
+      canCommandPalette: false,
+      canAddFolder: false,
+    }).map((i) => i.id);
+    // 「复制路径 / 复制相对路径」是既有口径：剪贴板缺席时仍保留（点下去会自己说复制不了），
+    // 新增的「复制文件名」才按能力位收（它没有旧行为要保）。
     expect(ids).toEqual(['open', 'copy-path', 'copy-rel-path']);
   });
 
   it('无「在资源管理器中显示」通道：只有那一项消失，其余不动', () => {
-    const ids = menuItemsFor('file', { hasIo: true, canReveal: false, canImport: false }).map((i) => i.id);
-    expect(ids).toEqual(['open', 'copy-path', 'copy-rel-path', 'rename', 'delete']);
+    const ids = menuItemsFor('file', { ...FULL_CAP, canReveal: false }).map((i) => i.id);
+    expect(ids).toEqual(['open', 'copy-name', 'copy-path', 'copy-rel-path', 'refresh', 'history', 'rename', 'delete']);
   });
 
-  it('目录菜单：新建文件、新建文件夹 | 复制路径 | 显示 | 重命名、删除（无导入、无相对路径）', () => {
+  it('目录菜单：新建文件、新建文件夹 | 复制文件名、复制路径 | 显示 | 刷新、折叠全部 | 重命名、删除（无导入、无相对路径）', () => {
     expect(menuItemsFor('dir', FULL_CAP).map((i) => i.id)).toEqual([
       'new-file',
       'new-dir',
+      'copy-name',
       'copy-path',
       'reveal',
+      'refresh',
+      'collapse-all',
       'rename',
       'delete',
     ]);
@@ -61,14 +87,17 @@ describe('menuItemsFor · 能力缺项时整项不显示（灰着不说话 = 违
       'import',
       'new-file',
       'new-dir',
+      'copy-name',
       'copy-path',
       'reveal',
+      'refresh',
+      'collapse-all',
       'rename',
       'delete',
     ]);
     expect(withImport[1]!.dividerBefore).toBe(true); // 导入与编辑动作之间隔一条线
 
-    const noImport = menuItemsFor('package', { hasIo: true, canReveal: false, canImport: false });
+    const noImport = menuItemsFor('package', { ...FULL_CAP, canReveal: false, canImport: false });
     expect(noImport[0]!.id).toBe('new-file');
     expect(noImport[0]!.dividerBefore).toBeFalsy(); // 首项分隔线由渲染侧吞掉，这里就不该有
   });
@@ -78,6 +107,11 @@ describe('menuItemsFor · 能力缺项时整项不显示（灰着不说话 = 违
     expect(file.find((i) => i.id === 'reveal')!.dividerBefore).toBe(true);
     expect(file.find((i) => i.id === 'rename')!.dividerBefore).toBe(true);
     expect(file.find((i) => i.id === 'delete')!.dividerBefore).toBeFalsy();
+  });
+
+  it('删除永远是危险项（危险色 + 勾选列 ! 提示，不只靠颜色）', () => {
+    expect(menuItemsFor('file', FULL_CAP).find((i) => i.id === 'delete')!.danger).toBe(true);
+    expect(menuItemsFor('package', FULL_CAP).find((i) => i.id === 'delete')!.danger).toBe(true);
   });
 });
 
@@ -191,26 +225,29 @@ describe('relativeToRoot · 复制相对路径', () => {
 
 /* ------------------------------ 删除确认文案 ------------------------------ */
 
-describe('deleteConfirmText · 递归删除的量级提示（必须让用户看清刀多大）', () => {
-  it('文件：给文件名 + 无法撤销', () => {
+describe('deleteConfirmText · 递归删除的量级提示（必须让用户看清刀多大、刀落到哪）', () => {
+  it('文件：给文件名 + 说清是移入回收站（不是永久删）', () => {
     const msg = deleteConfirmText({ name: '事件.ERB', isDir: false });
     expect(msg).toContain('事件.ERB');
-    expect(msg).toContain('无法撤销');
+    expect(msg).toContain('回收站');
+    expect(msg).toContain('文件历史');
     expect(msg).not.toContain('文件夹'); // 文件不用背目录的量级警示
+    // 内核 removeFile/removeDir 自 2026-10-16 起都是移入回收站，"无法撤销"与事实相反
+    expect(msg).not.toContain('无法撤销');
   });
 
-  it('目录 + 现算成功的 N：「将同时删除其中的 N 个文件」', () => {
+  it('目录 + 现算成功的 N：「其中的 N 个文件会一起移入回收站」', () => {
     const msg = deleteConfirmText({ name: '少女之梦', isDir: true, fileCount: 42 });
     expect(msg).toContain('少女之梦');
     expect(msg).toContain('42');
-    expect(msg).toContain('无法撤销');
+    expect(msg).toContain('回收站');
   });
 
-  it('目录 + N 现算失败：数字退场，但「全部内容都会被删除」的警示语必须保留', () => {
+  it('目录 + N 现算失败：数字退场，但「全部内容」的警示语必须保留', () => {
     const msg = deleteConfirmText({ name: '少女之梦', isDir: true, fileCount: undefined });
     expect(msg).not.toContain('undefined');
     expect(msg).toContain('全部内容');
-    expect(msg).toContain('无法撤销');
+    expect(msg).toContain('回收站');
   });
 });
 

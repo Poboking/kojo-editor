@@ -8,9 +8,26 @@
 
 /* ------------------------------ 菜单可见性 ------------------------------ */
 
-/** 右键菜单作用域的轻量形态（只保留可见性判定需要的字段；与 FileTree.MenuScope 对应） */
-export type MenuScopeKind = 'file' | 'dir' | 'package';
+/**
+ * 右键菜单作用域的轻量形态（只保留可见性判定需要的字段；与 FileTree 的 DOM 作用域一一对应）。
+ *
+ * `group` = 角色组标题行，`blank` = 文件树空白区（`file-tree-root` 面）——两者放的是
+ * **树级**动作（视图切换 / 展开折叠 / 定位 / 重读），不碰任何盘上内容。
+ */
+export type MenuScopeKind = 'file' | 'dir' | 'package' | 'group' | 'blank';
 
+/** 菜单所在的视图：口上语义树（角色 → 作者包）/ 文件系统树（真实目录） */
+export type MenuView = 'kojo' | 'fs';
+
+/**
+ * 「命令面板」的命令 id（空白区菜单的最后一条）。
+ *
+ * 收在这里是因为**菜单项与宿主探测要用同一个字面**：两处各写一遍，改一处就漂一处。
+ * 标题与键位仍以键位注册表为准（`menuItemFromCommand`），这里只是 id。
+ */
+export const COMMAND_PALETTE_COMMAND = 'workbench.commandPalette';
+
+/** 菜单动作 id（既有 9 个的语义一字不动，新增项一律追加在后） */
 export type MenuItemId =
   | 'open'
   | 'copy-path'
@@ -20,20 +37,51 @@ export type MenuItemId =
   | 'new-dir'
   | 'rename'
   | 'delete'
-  | 'import';
+  | 'import'
+  // ---- 1023 覆盖面批新增（WP2.1 / WP2.2）----
+  | 'copy-name'
+  | 'refresh'
+  | 'collapse-all'
+  | 'history'
+  | 'expand-all'
+  | 'locate'
+  | 'relist'
+  | 'switch-view-kojo'
+  | 'switch-view-fs'
+  | 'add-folder'
+  | 'command-palette';
 
 export interface MenuItemSpec {
   readonly id: MenuItemId;
+  /**
+   * 面自己的中文文案。**背后是一条已注册命令时以键位注册表的中文标题为准**
+   * （见 `command`）：菜单与命令面板双真源是必然漂移的那种事故，这里只是兜底文案。
+   */
   readonly label: string;
+  /** 该动作背后已注册的命令 id（label / shortcut 以键位注册表为准；缺省 = 面自己的动作） */
+  readonly command?: string;
   /** 内置图标名（icons.tsx 的词表；可选，纯展示）。动作能力不受有无图标影响。 */
   readonly icon?: string;
-  /** 右侧快捷键提示（纯展示；本批未给文件树挂键位，字段留给后续批次，避免提示假键位） */
+  /** 右侧快捷键提示（纯展示；命令项由 `command` 取真实键位，面自己的动作不给假键位） */
   readonly shortcut?: string;
   /** 在这一项**之前**画一条分隔线（首项的分隔线由渲染侧吞掉） */
   readonly dividerBefore?: boolean;
+  /** 破坏性动作（危险色 + 勾选列的 `!` 提示） */
+  readonly danger?: boolean;
+  readonly disabled?: boolean;
+  /** 禁用原因（`disabled: true` 时必填）：灰着不说话 = 违反铁律 4 */
+  readonly disabledReason?: string;
+  /** 选中态（视图切换两项用它表达"现在在哪一视图"） */
+  readonly checked?: boolean;
 }
 
-/** 能力开关：某条通道不存在时对应菜单项**整项不显示**（灰着不说话 = 违反铁律 4） */
+/**
+ * 能力开关：某条通道不存在时对应菜单项**整项不显示**（灰着不说话 = 违反铁律 4）。
+ *
+ * 只收**真实存在宿主通道**的位；没有通道的项（默认程序打开 / 新编辑器组打开 /
+ * 按目录限定检索 / 与磁盘版本比较）连位都不设——设一个永远是 false 的位只会被后人
+ * 当成"待接线"，而真相是这一侧根本没有那条腿。
+ */
 export interface MenuCapability {
   /** 内核文件 IO：新建/重命名/删除这些盘上动作的落地面 */
   hasIo: boolean;
@@ -41,24 +89,121 @@ export interface MenuCapability {
   canReveal: boolean;
   /** 导入作者包通道（既有 P-F 口径） */
   canImport: boolean;
+  /** 剪贴板（复制文件名；既有「复制路径」仍走原口径，不因它缺席而消失） */
+  canClipboard: boolean;
+  /** 目录重列通道（刷新 / 重读的落点；宿主注入了 listDir 才有） */
+  canRelist: boolean;
+  /** 文件历史面板（`kojo.showFileHistory` 已注册；只认当前编辑的文件） */
+  canHistory: boolean;
+  /** 命令面板（空白区菜单的最后一条；命令已注册才出现） */
+  canCommandPalette: boolean;
+  /** 会话级附加根（「添加文件夹…」；宿主注入了 onAddFolder 才有） */
+  canAddFolder: boolean;
+}
+
+/** 构建菜单时的现场（视图 / 当前文件 / 作用域自身的路径） */
+export interface MenuOptions {
+  /** 当前视图（缺省 = 口上视图） */
+  readonly view?: MenuView;
+  /** 当前正在编辑的文件（文件历史只认它；缺省 = 没有打开的文件） */
+  readonly activeFile?: string | null;
+  /** 本作用域自身的路径（文件作用域判"是不是活动文件"用；缺省 = 不知道） */
+  readonly path?: string;
+}
+
+/** 「定位当前文件」——没有活动文件时给禁用 + 原因，而不是让用户点了没反应 */
+function locateItem(activeFile: string | null | undefined): MenuItemSpec {
+  const base = { id: 'locate' as const, label: '定位当前文件', icon: 'target', dividerBefore: true };
+  return activeFile
+    ? base
+    : {
+        ...base,
+        disabled: true,
+        disabledReason: '当前没有打开的文件——先在左侧点开一个文件，再定位它',
+      };
 }
 
 /**
- * 文件 / 目录 / 包三种作用域的菜单项清单（纯函数，可单测）。
- *
- * 顺序与分组：文件 = 打开 | 复制路径、复制相对路径、显示 | 重命名、删除；
- * 目录/包 = [导入] | 新建文件、新建文件夹 | 复制路径、显示 | 重命名、删除。
- * 角色组与根两个作用域沿用既有实现（全展开开关），不在此列。
+ * 「文件历史」：面板读的是**当前编辑中的文件**（命令 when 判据），
+ * 所以右键别的行时只能如实禁用并说清怎么才能用，不许悄悄换成"活动文件的历史"。
  */
-export function menuItemsFor(scope: MenuScopeKind, cap: MenuCapability): MenuItemSpec[] {
+function historyItem(opts: MenuOptions): MenuItemSpec {
+  const isActive =
+    opts.path !== undefined &&
+    opts.activeFile !== null &&
+    opts.activeFile !== undefined &&
+    pkey(opts.path) === pkey(opts.activeFile);
+  const base = { id: 'history' as const, label: '文件历史', icon: 'history', dividerBefore: true };
+  return isActive
+    ? base
+    : {
+        ...base,
+        disabled: true,
+        disabledReason: '文件历史只看当前正在编辑的文件——先打开这一份，再查看它的历史版本',
+      };
+}
+
+/**
+ * 角色组 / 空白区（树级）的菜单项（纯函数，可单测）。
+ *
+ * 这七项是**被撤掉的那条工具条**的完整恢复：视图切换（两项勾选表达"现在在哪"）、
+ * 添加文件夹、展开全部、折叠全部、定位当前文件、重读（重新扫描）。空白区另加命令面板
+ * ——它就是"树里没东西可点"时的兜底入口。
+ *
+ * 文件系统视图没有"展开全部"：那一侧的目录是**按需列举**的，一次展开全部等于把整棵树
+ * 递归读一遍盘（代价由作者在右键里无意间付账）。故整项不显示，只留折叠与逐层点击。
+ */
+function treeMenuItems(scope: 'group' | 'blank', cap: MenuCapability, opts: MenuOptions): MenuItemSpec[] {
+  const view = opts.view ?? 'kojo';
+  const items: MenuItemSpec[] = [
+    { id: 'switch-view-kojo', label: '视图：口上树', checked: view === 'kojo' },
+    { id: 'switch-view-fs', label: '视图：文件系统', checked: view === 'fs' },
+  ];
+  if (cap.canAddFolder) items.push({ id: 'add-folder', label: '添加文件夹…', icon: 'add', dividerBefore: true });
+  if (view === 'kojo') {
+    items.push({ id: 'expand-all', label: scope === 'group' ? '展开本组全部' : '展开全部', icon: 'chevron-down', dividerBefore: true });
+  }
+  items.push({ id: 'collapse-all', label: scope === 'group' ? '收起本组全部' : '折叠全部', icon: 'chevron-right', dividerBefore: view !== 'kojo' });
+  items.push(locateItem(opts.activeFile));
+  if (cap.canRelist) items.push({ id: 'relist', label: '重读（重新扫描）', icon: 'refresh', dividerBefore: true });
+  if (scope === 'blank' && cap.canCommandPalette) {
+    items.push({
+      id: 'command-palette',
+      label: '命令面板',
+      command: COMMAND_PALETTE_COMMAND,
+      dividerBefore: true,
+    });
+  }
+  return items;
+}
+
+/**
+ * 文件 / 目录 / 包 / 角色组 / 空白区五种作用域的菜单项清单（纯函数，可单测）。
+ *
+ * 顺序与分组：
+ * - 文件 = 打开 | 复制文件名、复制路径、复制相对路径 | 显示 | 刷新、文件历史 | 重命名、删除；
+ * - 目录/包 = [导入] | 新建文件、新建文件夹 | 复制文件名、复制路径 | 显示 | 刷新、折叠全部 | 重命名、删除；
+ * - 角色组 / 空白区 = 视图切换 | 添加文件夹 | 展开/折叠全部 | 定位当前文件 | 重读 [| 命令面板]。
+ *
+ * 每一项都有**真实落点**（FileTree 的 relistShown / applyReveal / setView / setLocateReq 或
+ * 宿主注入的回调）：找不到落点的能力在这里没有 id，也不会有"灰着不说为什么"的项。
+ */
+export function menuItemsFor(
+  scope: MenuScopeKind,
+  cap: MenuCapability,
+  opts: MenuOptions = {},
+): MenuItemSpec[] {
+  if (scope === 'group' || scope === 'blank') return treeMenuItems(scope, cap, opts);
   if (scope === 'file') {
-    const items: MenuItemSpec[] = [
-      { id: 'open', label: '打开', icon: 'code' },
-      { id: 'copy-path', label: '复制路径' },
-      { id: 'copy-rel-path', label: '复制相对路径' },
-    ];
+    const items: MenuItemSpec[] = [{ id: 'open', label: '打开', icon: 'code' }];
+    if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制文件名' });
+    items.push({ id: 'copy-path', label: '复制路径' }, { id: 'copy-rel-path', label: '复制相对路径' });
     if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout', dividerBefore: true });
-    if (cap.hasIo) items.push({ id: 'rename', label: '重命名', icon: 'edit', dividerBefore: true }, { id: 'delete', label: '删除' });
+    if (cap.canRelist) items.push({ id: 'refresh', label: '刷新', icon: 'refresh', dividerBefore: true });
+    if (cap.canHistory) items.push(historyItem(opts));
+    if (cap.hasIo) {
+      items.push({ id: 'rename', label: '重命名', icon: 'edit', dividerBefore: true }, { id: 'delete', label: '删除', danger: true });
+    }
     return items;
   }
   const items: MenuItemSpec[] = [];
@@ -66,9 +211,14 @@ export function menuItemsFor(scope: MenuScopeKind, cap: MenuCapability): MenuIte
   if (cap.hasIo) {
     items.push({ id: 'new-file', label: '新建文件', dividerBefore: items.length > 0 }, { id: 'new-dir', label: '新建文件夹' });
   }
-  items.push({ id: 'copy-path', label: '复制路径', dividerBefore: items.length > 0 });
+  if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制文件名', dividerBefore: items.length > 0 });
+  items.push({ id: 'copy-path', label: '复制路径', dividerBefore: !cap.canClipboard && items.length > 0 });
   if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout' });
-  if (cap.hasIo) items.push({ id: 'rename', label: '重命名', icon: 'edit', dividerBefore: true }, { id: 'delete', label: '删除' });
+  if (cap.canRelist) items.push({ id: 'refresh', label: '刷新', icon: 'refresh', dividerBefore: true });
+  items.push({ id: 'collapse-all', label: '折叠全部', icon: 'chevron-right' });
+  if (cap.hasIo) {
+    items.push({ id: 'rename', label: '重命名', icon: 'edit', dividerBefore: true }, { id: 'delete', label: '删除', danger: true });
+  }
   return items;
 }
 
@@ -147,12 +297,18 @@ export function relativeToRoot(path: string, root: string): string {
  *
  * 递归删除是把大刀：目录必须让用户看清刀多大——「将同时删除其中的 N 个文件」。
  * N 现算失败（walkDir 抛）时退化为无数字，但"全部内容都会被删除"的警示语必须保留。
+ *
+ * **删除是移入回收站，不是永久删除**（2026-10-16 undo 批起内核 `removeFile` /
+ * `removeDir` 都走 `{appData}/trash/`，可在文件历史里找回）：确认文案必须说清这一档，
+ * 旧版的"此操作无法撤销"已经与事实相反——按它写，作者会以为删了就没了。
  */
 export function deleteConfirmText(target: { name: string; isDir: boolean; fileCount?: number }): string {
-  if (!target.isDir) return `确定删除文件「${target.name}」吗？此操作无法撤销。`;
+  if (!target.isDir) {
+    return `确定删除文件「${target.name}」吗？它会移入回收站，可以从「文件历史」里找回。`;
+  }
   return typeof target.fileCount === 'number'
-    ? `确定删除文件夹「${target.name}」吗？将同时删除其中的 ${target.fileCount} 个文件，此操作无法撤销。`
-    : `确定删除文件夹「${target.name}」吗？其中的全部内容（含子文件夹）都会被删除，此操作无法撤销。`;
+    ? `确定删除文件夹「${target.name}」吗？其中的 ${target.fileCount} 个文件会一起移入回收站，可以从「文件历史」里找回。`
+    : `确定删除文件夹「${target.name}」吗？其中的全部内容（含子文件夹）都会移入回收站，可以从「文件历史」里找回。`;
 }
 
 /* ------------------------------ B4：定位当前文件 ------------------------------ */

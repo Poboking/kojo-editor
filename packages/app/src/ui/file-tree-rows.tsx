@@ -9,7 +9,7 @@
  * 行级计数可观测）。生效前提在宿主：`FileTree.tsx` 把穿进行组件的回调 useCallback 化、
  * `skip`/`edit`/`probs` 等引用型 props 稳定化，否则每帧新引用 ⇒ memo 形同虚设。
  */
-import { memo, useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { memo, useEffect, useRef, type ReactElement } from 'react';
 import { FileRow } from './file-tree-row';
 import { pkey } from './file-tree-ops';
 import type { ProblemFileCounts } from './problem-store';
@@ -68,8 +68,6 @@ export interface FileRowsProps {
    * 缺省 → 无编辑，旧行为。
    */
   readonly edit?: { readonly path: string; readonly node: ReactElement } | null;
-  /** 文件行右键（B1；缺省 → 文件行无右键，旧行为） */
-  readonly onFileContext?: (e: ReactMouseEvent, path: string) => void;
   /**
    * 文件行诊断表（工包：文件行徽标）。**键 = `pkey(路径)`**，值 = `problem-store` 里那一格。
    *
@@ -81,7 +79,7 @@ export interface FileRowsProps {
   readonly probs?: ReadonlyMap<string, ProblemFileCounts>;
 }
 
-export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpenFile, edit, onFileContext, probs }: FileRowsProps): ReactElement {
+export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpenFile, edit, probs }: FileRowsProps): ReactElement {
   const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
   return (
     <>
@@ -94,7 +92,6 @@ export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpe
               f={f}
               active={f === activeFile}
               onOpenFile={onOpenFile}
-              onFileContext={onFileContext}
               prob={probs?.get(pkey(f))}
             />
           )}
