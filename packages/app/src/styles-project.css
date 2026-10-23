@@ -1597,6 +1597,12 @@ textarea {
   color: var(--amber);
   display: inline-flex;
   align-items: center;
+  /* 恒定占位宽（批次十一 L13）：非脏时这颗零宽，首次打字图标一插 ⇒ 后面整族控件
+     横移一格（"打字首字工具条抖一下"的前半条病因）。脏点走图标四档的 `xs`(12px)，
+     这里按 12 + 1px 余量钉成 13px 常宽，脏与非脏同格；改档位要同步改这一格。 */
+  width: 13px;
+  justify-content: center;
+  flex: none;
 }
 .spacer {
   flex: 1;
@@ -1608,9 +1614,27 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 30vw;
-  /* 同为实测修正：编码 · 换行 · 行数本来只有 140px，却被挤到 68px（clipX 52），
-     半句话都读不到。让位的次序是"目录 → 状态"，不是"状态 → 目录"。 */
+  /* 批次十一 L13 三拆后的口径：编码·换行·行数**已不在这里重打**（底部状态栏独一份），
+     这一格只剩 元信息（空档，留位）/ 瞬时态 / 错误 三档。旧注释里"被挤到 68px"的
+     让位问题随之消失——这里不再承载需要读全的常驻读数。 */
   flex: 0 0 auto;
+}
+/* 三档各有归属（EditorPane 状态位三拆）：
+   · meta   —— 常驻元信息位（当前为空档，`min-width` 在下方右簇规则里留恒定占位）；
+   · flash  —— 瞬时态（保存回执一类），比元信息亮一档，`STATUS_FLASH_MS` 后自动回落；
+   · error  —— 独立语义色 + 字重，与灰掉的事实同屏时它是唯一抢视线的东西（铁律 4）。 */
+.editor-status-meta {
+  display: inline-block;
+}
+.editor-status-flash {
+  color: var(--fg);
+}
+.editor-status-error {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--danger);
+  font-weight: 600;
 }
 /* 工具条按钮不许折行（实机截图看到「保存 / (Ctrl+S)」排成两行，把整条工具条撑到 50px 高，
    编辑器白白少一行多行的高度）。让位的仍然是左侧那段可缩的目录前缀。 */
@@ -1646,35 +1670,80 @@ textarea {
 }
 .editor-toolbar > .editor-status {
   flex: 0 1 auto;
-  min-width: 0;
+  min-width: 16ch; /* 元信息位空档也留恒定占位（批次十一 L13 右簇固定）：瞬时态一句话
+                      出现/回落不再推着「.kojo 预览」开关左右跳 */
+  text-align: right;
 }
 .editor-body {
   flex: 1;
   min-height: 0;
+  /* 批次十一 L13：装载骨架覆盖层的定位根（骨架绝对铺满，不参与 Monaco 测量） */
+  position: relative;
+}
+/* 编辑器装载骨架：Monaco 创建 / 首文件落屏之前顶替纯空白（EditorPane `showEditorSkeleton`）。
+   条子复用效果库 `.skeleton`（扫光），这里只管排布。
+   `z-index: 2` 是**组件内部**的先后（骨架压过 Monaco 自己那层空容器），不是全局层级梯上的一档
+   ——L01 的梯从 `--z-toolbar`(10) 起，凡 <10 的都只在父元素内比个大小，故不占 token 名；
+   若将来要把它抬进正式档，先在 tokens.css 登记再吃。 */
+.editor-body-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+}
+.editor-skeleton-bar {
+  height: 10px;
+  flex: none;
+}
+/* 糖 ↔ 代码切换的 200ms 过渡（批次十一 L13）：阅读态与代码态整屏排版不同，切换硬跳一次；
+   EditorPane 只在糖 model 真上/下屏那一拍挂 `sugar-swapping`。减弱动效由 UI-5 全局段压平。 */
+@keyframes sugar-swap-fade {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.editor-body.sugar-swapping {
+  animation: sugar-swap-fade var(--dur-2) var(--ease-out);
 }
 /* ERB 只读状态徽章（2026-10-12 反馈 5 归一）。
-   原先自造一套度量（11px / 半径 6px / padding 1px 6px），与全站徽章族（.nav-badge 等
-   11px / 半径 4px / padding 0 3px）不一致，看着像另一个系统的控件。现对齐徽章族度量。
-   （尺度已收进 token：字号 `--fs-0`、圆角 `--radius-sm`，见 §5.121 / §5.122。）
-   ⚠ 全站现有 4 套徽章样式（nav-badge / rp-badge / ab-badge / sv-verdict-badge）本就重复，
-   合并成单一 .badge 基类属 UI P4 打磨范围，不在本条顺手改（会波及 4 个插件）。 */
+   批次十一 L13 **度量合一**：这一族（说明徽章 / 「已解锁编辑」按钮 / 「直连可编辑」 /
+   校验暂停与折叠超额两枚通知）此前两套度量并存——只读徽章 `0 4px + --radius-sm`、
+   解锁按钮 `0 10px + --radius-pill + 18px`，同族控件不同级。现全部收进同一基线：
+   `padding 0 10px / --radius-pill / line-height 18px`（取控件感更强的一方作族标准，
+   按钮与徽章互切不再跳尺寸）。
+   注意：2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
+   （与底部状态栏重复），`.erb-mode-hint` 只剩「已解锁编辑」与「直连可编辑」两家——
+   别再把「只读」加回成一枚字符锁图标（图标一律走 `icons.tsx` 的 SVG 通道），
+   也别在工具条重造只读胶囊。 */
 .erb-mode-hint {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1); /* 与图标/文字的缝：吃 4px 语义档，不再写字面量 */
   flex: 0 0 auto;
   font-size: var(--fs-1);
   /* 配色按**风险**给，不按"有没有字"给：只读是游戏目录的安全默认态，作者一开就是
      二十个文件——给它琥珀警示色等于天天喊狼来了，真正该被看见的破例态反被淹掉。
-     故默认中性，`.unlocked` 才用 --warning。
-     ⚠ 2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
-     （与底部状态栏重复），`.erb-mode-hint` 只剩「已解锁编辑」与「直连可编辑」两家——
-     别再把 🔒 加回来，也别在工具条重造只读胶囊。 */
+     故默认中性，`.unlocked` 才用 --warning。 */
   color: var(--fg-dim);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  padding: 0 10px;
+  line-height: 18px;
+  min-height: 18px;
   white-space: nowrap;
+}
+/* 通知档（校验暂停 / 折叠超额）：**恒定占位宽**。两枚徽章按条件插拔，宽度若随文案走，
+   换文件那一拍整条工具条跟着横移；互斥/共存切换时占位恒定（12 CJK @ --fs-1 + 图标 + padding）。 */
+.erb-mode-notice {
+  min-width: 186px;
+  justify-content: center;
 }
 
 /* 预览开关（2026-10-12 语法糖批）：整份 ERB 投影成 .kojo 写法 / 切回原生代码。
@@ -1709,12 +1778,10 @@ textarea {
 }
 
 /* 「可编辑」徽章自身就是回锁入口（原来的「恢复只读」按钮作废，能力没丢）：
-   观感与只读胶囊同族，用 hover 表达可点，不额外加颜色。 */
+   观感与只读胶囊同族，用 hover 表达可点，不额外加颜色。
+   批次十一 L13 度量合一后，padding/圆角/行高都在基类，这里只剩"按钮不要实底"一条。 */
 button.erb-mode-hint.unlocked {
   background: transparent;
-  border-radius: var(--radius-pill);
-  padding: 0 10px;
-  line-height: 18px;
 }
 button.erb-mode-hint.unlocked:hover {
   background: var(--hover);
@@ -1730,6 +1797,45 @@ button.erb-mode-hint.unlocked:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 1 auto;
+}
+
+/* 窄屏「更多」浮层（批次十一 L13 · 降级层级）：≤1280 时次要信息（目录前缀 /
+   校验暂停 / 折叠截断 / 糖摘要）收进这一族，**可取回**而不是 `display:none` 硬藏。
+   按钮只在真有内容时由 EditorPane 出现；浮层挂在按钮下方，外部按下/Esc 收起。 */
+.toolbar-more-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.toolbar-more-pop {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  /* 层级吃 token 梯（L01 单源）：工具条从属浮层走 `--z-overlay`(1000) 档——盖得住编辑器面，
+     但**必须在 `--z-modal`(1100) 之下**：弹着确认框时这一族不该浮在模态上抢答。
+     原写死的 1100 会把次要提示顶到与模态同级，是借来的位不是该站的位。 */
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  max-width: min(520px, 60vw);
+}
+.toolbar-more-pop .erb-mode-notice {
+  min-width: 0; /* 浮层里纵向排布，恒定占位宽只在横排工具条有意义 */
+}
+.toolbar-more-dir {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ------------------------------ modal ------------------------------ */
@@ -8992,7 +9098,11 @@ button.resume-session {
    `.file-label` 的 title 里（EditorPane 那侧 title={filePath} 零改动，悬停即得）。
    目录与文件名之间补「/」分隔，旧版两段裸挨（实测读出「靈夢 靈夢 …」歧义）。
    视图控制（`.kojo 预览` 开关 + 糖摘要）用 flex order 挪过 spacer，
-   归入行右侧的信息区，不再挤在路径中段；保存键行为与 title 原样。 */
+   归入行右侧的信息区，不再挤在路径中段；保存键行为与 title 原样。
+   批次十一 L13 补：这条 `.file-dir` 隐藏是**全宽度的项目相对口径**（绝对长前缀恒在
+   `.file-label` 的 title），不是窄屏让位手法；1280 以下的次要信息让位改走工具条
+   「更多」浮层（`.toolbar-more-pop`，EditorPane `narrowToolbar`）——`.file-dir` 的
+   内容同样能在浮层里取回，降级有层级，不是一藏了之。 */
 .editor-toolbar .file-label .file-dir {
   display: none;
 }
