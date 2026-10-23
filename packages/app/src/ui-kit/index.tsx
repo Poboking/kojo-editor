@@ -369,8 +369,10 @@ export type KitIconSize = 12 | 14 | 16 | 22;
 export interface KitIconButtonProps {
   /** 必传：按钮的无障碍名（同时落 `aria-label` 与缺省 `title`）——无名钮不许存在 */
   label: string;
-  /** 图标内容（推荐 `<Icon name="…" />`，颜色走 currentColor） */
-  children: ReactNode;
+  /** 图标内容（推荐 `<Icon name="…" />`，颜色走 currentColor）。
+   *  可选：无障碍名由必传的 `label` 兜住，缺图标也只是纯文字钮；写成必填会让
+   *  `createElement(KitIconButton, {label}, child)` 在类型上判 children 缺失。 */
+  children?: ReactNode;
   onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   /** toggle 型钮：给了就落 `aria-pressed`，on 态走 accent 语言（ksp-toggle 口径） */
@@ -461,14 +463,12 @@ export interface KitKbdProps {
 
 /** 键位提示统一语言：一枚 `<kbd>`，组合内逐键芯片 + 淡色 `+`，和弦步之间留沟。 */
 export function KitKbd({ combo, className }: KitKbdProps): ReactElement {
-  const chords = (Array.isArray(combo) ? combo : [combo]).map((c) =>
-    c
-      .split('+')
-      .map(kbdTokenLabel)
-      .filter((k) => k !== ''),
-  );
+  // 用 typeof 判串而不是 Array.isArray：后者对 `readonly string[]` 不收窄 false 分支，
+  // 会让 aria-label 与回调参数一起掉成 any。
+  const steps: readonly string[] = typeof combo === 'string' ? [combo] : combo;
+  const chords = steps.map((c: string) => c.split('+').map(kbdTokenLabel).filter((k: string) => k !== ''));
   return (
-    <kbd className={cx('kit-kbd', className)} aria-label={Array.isArray(combo) ? combo.join(' 然后 ') : combo}>
+    <kbd className={cx('kit-kbd', className)} aria-label={steps.join(' 然后 ')}>
       {chords.map((keys, ci) => (
         <span key={ci} className="kit-kbd-chord">
           {keys.map((k, ki) => (

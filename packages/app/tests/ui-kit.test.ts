@@ -3,7 +3,7 @@
  * ui-kit（批次十一 L14）件契约钉。
  *
  * 三族判据：
- * ① **结构与 a11y**：`renderToStaticMarkup` 钉 role/aria-*/tabindex/disabled（真壳验收
+ * ① **结构与 a11y**：`renderToStaticMarkup` 钉 role / aria-属性 / tabindex / disabled（真壳验收
  *    前的静态口径，同 capability-matrix-view.test.ts 路子）；
  * ② **交互**：happy-dom 挂载后走原生事件（checkbox/radio/select 用「置值 + dispatch
  *    change」、按钮用 click、radiogroup 用 keydown），钉 onChange 直接给布尔/字符串
@@ -12,13 +12,11 @@
  *    hex/rgba 字面量，圆角与字号不许裸 px（本 lane 的架构铁律，由测试钉死）。
  *
  * 注：任务书写的是 `ui-kit.test.tsx`，但 vitest include 只收 `*.test.ts`、且 app 的
- * tsconfig 也只 include `tests/**/*.ts`——为让 `pnpm test` 真的跑它（改 include 又违反
+ * tsconfig 也只 include tests 目录下的 .ts——为让 `pnpm test` 真的跑它（改 include 又违反
  * 「只新建文件」），落 `.ts` + `createElement`，件本体（.tsx）覆盖不变。
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, createElement as h, type ReactElement } from 'react';
+import { act, createElement as h, Fragment, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   KitCheck,
@@ -66,10 +64,15 @@ const mount = (el: ReactElement): void => {
 
 /** 原生控件「置值 + change」（checkbox/radio/select 的标准测法，不依赖 click 语义实现差异） */
 const fireChange = (el: HTMLInputElement | HTMLSelectElement, next: boolean | string): void => {
-  if (el instanceof HTMLInputElement) el.checked = next as boolean;
-  else el.value = next as string;
   act(() => {
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (el instanceof HTMLInputElement) {
+      // React 的 checkbox/radio onChange 由原生 click 驱动；直接改 .checked 再派发 change
+      // 会被它的值追踪器判成「没变」而吞掉事件（本批实测红两条就栽在这）。
+      if (el.checked !== next) el.click();
+    } else {
+      el.value = next as string;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
   });
 };
 
@@ -177,7 +180,8 @@ describe('KitSelect', () => {
     const s = html(h(KitSelect, { value: 'lint', onChange: () => undefined, options: opts, ariaLabel: '按来源过滤', title: '来源' }));
     expect(s).toContain('<select');
     expect(s).toContain('aria-label="按来源过滤"');
-    expect(s).toContain('<option value="lint" selected>约定检查</option>');
+    // renderToStaticMarkup 把布尔属性渲成 selected="" / disabled=""，断言按真形态写
+    expect(s).toMatch(/<option value="lint"[^>]*\bselected\b[^>]*>约定检查<\/option>/);
     expect(s).toContain('disabled');
     expect(s).toContain('kit-select-arrow');
   });
@@ -361,7 +365,7 @@ describe('KitEmpty', () => {
     expect(host.querySelector('.kit-empty-stack')).not.toBeNull();
     expect(host.querySelector('.kit-empty-icon')!.getAttribute('aria-hidden')).toBe('true');
     act(() => {
-      host.querySelector('button.kit-empty-action')!.click();
+      host.querySelector<HTMLElement>('button.kit-empty-action')!.click();
     });
     expect(on).toHaveBeenCalledTimes(1);
   });
@@ -416,29 +420,6 @@ describe('KitGallery', () => {
   });
 });
 
-/* ============================ CSS 纪律扫描 ============================ */
-
-describe('ui-kit.css 只吃 token', () => {
-  const raw = readFileSync(fileURLToPath(new URL('../src/ui-kit/ui-kit.css', import.meta.url)), 'utf8');
-  // 剥掉 var(...)（含 `var(--x, 现值)` 的合法兜底形态——兜底真值是 README 登记过的豁免）
-  const stripped = raw.replace(/var\([^()]*\)/g, 'VAR');
-
-  it('var 之外零 hex/rgba/hsla 字面量', () => {
-    expect(stripped).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-    expect(stripped).not.toMatch(/\brgba?\(/);
-    expect(stripped).not.toMatch(/\bhsla?\(/);
-  });
-
-  it('圆角不许裸 px（50%/0 几何豁免）', () => {
-    expect(stripped).not.toMatch(/border-radius:[^;]*\d+px/);
-  });
-
-  it('字号不许裸 px（一律 --fs-*）', () => {
-    expect(stripped).not.toMatch(/font-size:[^;]*\d+(?:\.\d+)?px/);
-  });
-
-  it('动效时长不许裸 ms/s（一律 --dur-*）', () => {
-    expect(stripped).not.toMatch(/animation:[^;]*\d+(?:\.\d+)?m?s/);
-    expect(stripped).not.toMatch(/transition:[^;]*\d+(?:\.\d+)?m?s/);
-  });
-});
+/* ============================ CSS 纪律扫描 ============================
+   判据本体在 ui-kit-css.test.ts：那份挂 happy-dom，而 happy-dom 下
+   `import.meta.url` 不是 file URL，读源码文件会整份收集失败。 */

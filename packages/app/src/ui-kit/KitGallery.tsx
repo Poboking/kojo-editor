@@ -131,7 +131,7 @@ export function KitGallery(): ReactElement {
         <KitCount value={99} tone="accent" />
         <KitCount value={100} tone="warning" />
         <KitCount value={2048} max={9} tone="success" />
-        <cap>点击图标钮计数：</cap>
+        <span className="kit-gallery-cap">点击图标钮计数：</span>
         <KitCount value={count} />
       </Section>
 

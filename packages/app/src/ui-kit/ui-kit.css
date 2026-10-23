@@ -526,7 +526,7 @@
   inset: 0;
   background: linear-gradient(90deg, transparent, var(--hover), transparent);
   transform: translateX(-100%);
-  animation: kit-shimmer 1.4s var(--ease-in-out) infinite;
+  animation: kit-shimmer calc(var(--anim-spin) * 2) var(--ease-in-out) infinite;
 }
 .kit-skeleton-stack {
   display: inline-flex;

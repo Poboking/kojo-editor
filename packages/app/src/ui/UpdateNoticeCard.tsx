@@ -193,8 +193,10 @@ export function useUpdateNotice(phase: UpdatePhase): UseUpdateNoticeResult {
   }, [phase]);
 
   const dialog = dialogOpen ? updateDialogPhase(phase) : null;
+  // idle / checking / latest / failed(check) 这几态根本没有版本号，直接读 .version 会撞联合类型
+  const phaseVersion = 'version' in phase ? phase.version : null;
   return {
-    notice: dialog === null && sessionDismissedRef.current !== phase.version ? decision.notice : null,
+    notice: dialog === null && sessionDismissedRef.current !== phaseVersion ? decision.notice : null,
     forced: decision.forced,
     dialog,
     openDialog,
