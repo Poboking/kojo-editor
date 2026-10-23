@@ -82,19 +82,24 @@ describe('覆盖面契约：清单 ⇄ 声明', () => {
   });
 });
 
-describe('覆盖面契约：两处已移除的面不该被悄悄加回来', () => {
+describe('覆盖面契约：无宿主的面不得只往清单里塞一行字', () => {
   /**
-   * `outline`（大纲面板）与 `market`（市场面板）在本次收口时从清单删除，理由都是
-   * **本仓库没有对应的宿主**：
-   * - 大纲：只有语言能力枚举 `Outline` 与 documentSymbol 提供者，没有面板视图；
-   * - 市场：宿主是插件 `ui-market`，右键走插件通道 + `plugin-panel` 面。
+   * `outline`（大纲面板）在本次收口时从清单删除，理由是**本仓库没有对应的宿主**：
+   * 只有语言能力枚举 `Outline` 与 documentSymbol 提供者，没有面板视图。
    *
    * 这条不是"禁止将来加"，而是**加回来时必须有宿主**：先把面板做出来，再连同
    * `data-context-surface` 一起登记，不要只往清单里塞一行字。
+   *
+   * （`market` 走过同一条路但结局相反：它先因无宿主被移除，随后插件面契约
+   *  `plugin-api/src/context-surface.ts` 落地——插件把 build 交上来、宿主侧声明，
+   *  宿主真的回来了，于是它被登记回清单。判据看的是"有没有宿主"，不是"曾经删没删过"。）
    */
-  it('outline / market 不在清单里', () => {
-    const ids = CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id);
-    expect(ids).not.toContain('outline');
-    expect(ids).not.toContain('market');
+  it('outline 不在清单里（本仓库无大纲面板）', () => {
+    expect(CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id)).not.toContain('outline');
+  });
+
+  it('market 在清单里且真有声明（插件承载、宿主声明）', () => {
+    expect(CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id)).toContain('market');
+    expect(getContextSurface('market')).toBeDefined();
   });
 });
