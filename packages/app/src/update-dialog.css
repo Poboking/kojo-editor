@@ -54,6 +54,10 @@
 .update-dialog[data-phase='done']::before {
   background: linear-gradient(90deg, transparent, var(--success), transparent);
 }
+/* 破坏性更新（批次十一 L05 层三）：found 也吃 danger 光条——顶缘色就是「这次要停下读」的信号 */
+.update-dialog[data-severity='breaking']::before {
+  background: linear-gradient(90deg, transparent, var(--danger), transparent);
+}
 
 /* 程序聚焦到面板时给一圈柔光焦点环（不是键盘 Tab 的落点，但读屏/键盘用户看得见位置） */
 .update-dialog:focus-visible {
@@ -172,6 +176,81 @@
   line-height: 1.8;
 }
 
+/* ---- 语义分组（批次十一 L05：changelog 不再是一屏纯文本行） ---- */
+
+.update-dialog-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.update-dialog-group + .update-dialog-group {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-subtle);
+}
+
+/* 组名前一枚语义点：颜色只吃 token，四组各有语义位（破坏红/新增 accent/修复绿/其它灰） */
+.update-dialog-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-1);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.update-dialog-group-title::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+}
+
+.update-dialog-group[data-group='breaking'] .update-dialog-group-title {
+  color: var(--danger);
+}
+.update-dialog-group[data-group='breaking'] .update-dialog-group-title::before {
+  background: var(--danger);
+}
+.update-dialog-group[data-group='added'] .update-dialog-group-title::before {
+  background: var(--accent);
+}
+.update-dialog-group[data-group='fixed'] .update-dialog-group-title::before {
+  background: var(--success);
+}
+
+/* 抬头里的「破坏性更新」警示牌：小胶囊，不抢标题字号 */
+.update-dialog-severity-tag {
+  margin-left: var(--space-2);
+  padding: 2px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-pill);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* changelog 行内外链：跟随 accent，悬停下划线；长 URL 允许任意位置断行 */
+.update-dialog-note-link {
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.update-dialog-note-link:hover,
+.update-dialog-note-link:focus-visible {
+  text-decoration: underline;
+}
+
 /* 滚动区是键盘落点：用 outline（不参与布局），不用 box-shadow——`--well-raise` 缺省是
    `none`，和 `--shadow-focus` 拼进同一条 box-shadow 会让整条声明失效。 */
 .update-dialog-notes:focus-visible {
@@ -211,6 +290,45 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-1) 0;
+}
+
+/* 下载态的「状态行」：胶囊在正文、动作在页脚——两者物理分开，不再并排误读 */
+.update-dialog-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.update-dialog-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--fg);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 呼吸点：告诉作者这行是活的（reduced-motion 下降级为常亮，见文件末尾） */
+.update-dialog-status-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: update-dialog-pulse 1.2s var(--ease-in-out) infinite;
+}
+
+.update-dialog-status-bytes {
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .update-dialog-progress-track {
@@ -327,10 +445,21 @@
   }
 }
 
+@keyframes update-dialog-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* 系统偏好：入场与不定态都停，但不定态仍留一条静态可见的 38% 光带（不是空白轨道） */
 @media (prefers-reduced-motion: reduce) {
   .update-dialog,
-  .update-dialog-progress-fill {
+  .update-dialog-progress-fill,
+  .update-dialog-status-dot {
     animation: none !important;
     transition: none !important;
   }
@@ -345,7 +474,8 @@
    全局规则会把动画时长压成 0.01ms 且只跑一帧——不定态会停在"已移出视野"的位置，
    所以这里必须显式钉回静态光带，否则进度条看起来是空的。 */
 :root[data-motion='reduced'] .update-dialog,
-:root[data-motion='reduced'] .update-dialog-progress-fill {
+:root[data-motion='reduced'] .update-dialog-progress-fill,
+:root[data-motion='reduced'] .update-dialog-status-dot {
   animation: none !important;
   transition: none !important;
 }
