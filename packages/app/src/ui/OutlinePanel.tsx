@@ -3,10 +3,17 @@ import type { Kernel } from '@kojo/kernel';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
 import { Icon, type IconName } from './icons';
 import { readJumpProbe } from './jump-to-state';
-import { buildOutlineRows, locateOutlineRow, outlineRowsKey, type OutlineRow } from './outline-model';
+import {
+  buildOutlineRows,
+  locateOutlineRow,
+  outlineRowsKey,
+  visibleOutlineRows,
+  type OutlineRow,
+} from './outline-model';
 import {
   OUTLINE_ROW_ATTR,
   OUTLINE_ROW_ID_ATTR,
+  foldableOutlineIds,
   setOutlineMenuContext,
   type OutlineMenuRow,
 } from './outline-menu';
@@ -26,6 +33,20 @@ import {
  *
  * 空态一律**可见**（铁律 4）：没有文件 / 语言服务没答 / 糖视图行号不可用 / 文件里
  * 确实没有符号，各给一句人话，绝不静默留白。
+ *
+ * ## 折叠（1023 缺口批）
+ *
+ * 折叠是**纯视图状态**（铁律 3）：它只决定"这一支画不画"，行对象、`depth`、行 id、
+ * 跳源行为一律不变。三条边界写在这里，因为它们是这份状态的**生命周期**：
+ * - **不落盘**：折叠不是作者的偏好设置，而是"此刻想少看几行"的临时视线；一旦持久化，
+ *   下次打开同一份文件就会被一份谁都没要求过的视角挡住（`autosave-pref` 那种
+ *   偏好存储的语义完全不同，不借）。进程内也只活在这一个面板实例上。
+ * - **换文档就复位**：行 id 是**先序序号**（`r0`/`r1`…，见 `outline-model`），它只保证
+ *   "同一棵树内稳定"。换文件 / 树变了之后同一串 id 指向的是别的行，沿用旧折叠集
+ *   就会折掉新文件里毫不相干的一支。所以折叠集绑定在 `state.shape`（路径 + 行序键）
+ *   上，形一变**当帧即视为空集**，不用等 effect 才纠偏。
+ * - **只折有子节点的行**：叶子行折了什么都不变，这种 id 进集合等于一份看不见的脏状态；
+ *   渲染侧与菜单侧都先问 `outlineHasChildren`。
  */
 
 /** 文档改动后的补读延迟：排在面包屑 250ms 重算之后，直接复用它的树缓存 */
@@ -50,6 +71,8 @@ interface OutlineViewState {
   readonly notice: string | null;
   /** 等值键：位点动了但大纲视觉没变 ⇒ 不 setState */
   readonly key: string;
+  /** 文档形态（路径 + 行序键）：折叠状态的归属标记，形一变折叠集即作废 */
+  readonly shape: string;
 }
 
 const EMPTY_STATE: OutlineViewState = {
@@ -59,7 +82,21 @@ const EMPTY_STATE: OutlineViewState = {
   activeIndex: -1,
   notice: null,
   key: '',
+  shape: '',
 };
+
+/** 空折叠集（模块级常量：复位时引用恒定，比较与"没折过"是同一种东西） */
+const NO_COLLAPSED: ReadonlySet<string> = new Set<string>();
+
+interface OutlineFoldState {
+  /** 这份折叠集属于哪一"形"的文档；与当帧 `shape` 不符 ⇒ 视为空集（换文档即复位） */
+  readonly shape: string;
+  /** 已折叠的行 id（**只含有子节点的行**） */
+  readonly collapsed: ReadonlySet<string>;
+}
+
+/** 初始折叠集：形状键先占一个不可能出现的空串，第一份文档就算"形不对"⇒ 空集 */
+const EMPTY_FOLD: OutlineFoldState = { shape: '', collapsed: NO_COLLAPSED };
 
 /** 符号类别 → 内置图标（不认识的一律回退文件图标，不会画成空白） */
 function iconForKind(kind: EditorDocumentSymbol['kind']): IconName {
@@ -78,10 +115,17 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
   /** 当前符号行（光标走时滚到可见处，与 VS Code 的"跟随"同感） */
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  /**
+   * 折叠集 + 它属于哪一"形"的文档（见文件头「折叠」三条边界）。
+   *
+   * 存成一条 state 而不是 `useEffect` 复位：复位要在**当帧**生效——等 effect 补一刀，
+   * 换文件后的第一帧就会用旧 id 折掉新文件的行，那一瞬间是真错，不是过渡。
+   */
+  const [fold, setFold] = useState<OutlineFoldState>(EMPTY_FOLD);
 
   const refresh = useCallback((): void => {
     const probe = readJumpProbe();
-    let next: Omit<OutlineViewState, 'key'>;
+    let next: Omit<OutlineViewState, 'key' | 'shape'>;
     if (!probe) {
       next = { path: null, symbols: null, rows: [], activeIndex: -1, notice: NO_FILE_HINT };
     } else if (probe.derivedView) {
@@ -102,9 +146,11 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
         };
       }
     }
-    const key = `${next.path ?? ''}\u0000${next.notice ?? ''}\u0000${next.activeIndex}\u0000${outlineRowsKey(next.rows)}`;
+    const rowsKey = outlineRowsKey(next.rows);
+    const key = `${next.path ?? ''}\u0000${next.notice ?? ''}\u0000${next.activeIndex}\u0000${rowsKey}`;
     if (key === lastRef.current.key) return;
-    const committed: OutlineViewState = { ...next, key };
+    // 形状只认"路径 + 行序"：光标在同一份文档里走动不该把作者的折叠掀开
+    const committed: OutlineViewState = { ...next, key, shape: `${next.path ?? ''}\u0000${rowsKey}` };
     lastRef.current = committed;
     setState(committed);
   }, []);
@@ -143,10 +189,53 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
   const rows = state.rows;
 
   /**
+   * 换文档 ⇒ 折叠集真的清掉（渲染期复位，React 会在提交前重渲这一帧）。
+   *
+   * 下面那行"当帧视为空集"已经保证换文件后不会用旧 id 折新行；这里再做一次显式复位，
+   * 是为了让状态本身也是空的——否则 `A → B → A` 回到同一份文档时，旧折叠会"有时候
+   * 又回来了"（取决于中间有没有在新文件里折过）。宁可不恢复，也不要一个说不准的行为。
+   */
+  if (fold.shape !== '' && fold.shape !== state.shape) setFold({ shape: state.shape, collapsed: NO_COLLAPSED });
+
+  /** 当帧生效的折叠集：形状对不上（换文件 / 树变了）⇒ 空集，不等 effect 纠偏 */
+  const collapsed: ReadonlySet<string> = fold.shape === state.shape ? fold.collapsed : NO_COLLAPSED;
+
+  /** 有子节点的行 id 集（叶子行不进折叠集；也决定行上画不画折叠指示） */
+  const foldableIds = useMemo(() => new Set(foldableOutlineIds(rows)), [rows]);
+
+  /** 折叠投影：只裁剪"看得见哪些行"，行对象本身原样（缩进 / 行身份 / 跳源都不变） */
+  const visibleRows = useMemo(() => visibleOutlineRows(rows, collapsed), [rows, collapsed]);
+
+  /**
+   * 折叠 / 展开（菜单与行上的折叠指示共用这一个入口）。
+   *
+   * 收一串 id：单行折叠传一个，「全部折叠 / 全部展开」传全量——面板这边只有一份
+   * Set 写入逻辑，两个入口不会给出两套语义。
+   */
+  const foldRows = useCallback(
+    (ids: readonly string[], folded: boolean): void => {
+      setFold((prev) => {
+        const base = prev.shape === state.shape ? prev.collapsed : NO_COLLAPSED;
+        const next = new Set(base);
+        for (const id of ids) {
+          if (folded) next.add(id);
+          else next.delete(id);
+        }
+        return { shape: state.shape, collapsed: next };
+      });
+    },
+    [state.shape],
+  );
+
+  /** 当前高亮行的 id（`activeIndex` 是全行序里的下标，折叠后可见行序会短一截，按 id 对） */
+  const activeId = state.activeIndex >= 0 ? rows[state.activeIndex]?.id ?? null : null;
+
+  /**
    * 菜单侧的行投影（与 DOM 同一序、同一份 `state.rows`）。
    *
    * 复制项的回执走 `notice` 一条**独立**的短命提示行（不抢空态那句：空态是常驻事实，
    * 回执是刚发生的事）。没有剪贴板能力时三个复制项整项不显示（能力不存在就不摆入口）。
+   * 行投影给的是**全量行**（折叠只影响画什么，不影响"复制这一支 / 复制整份"搬什么）。
    */
   const [flash, setFlash] = useState<string | null>(null);
   const flashTimerRef = useRef<number | null>(null);
@@ -169,10 +258,12 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
     setOutlineMenuContext({
       canCopy,
       rows: menuRows,
+      collapsed,
       handlers: {
         reveal: (row) => {
           if (path !== null) onReveal(path, row.startLine);
         },
+        fold: foldRows,
         copy: (text, okText) => {
           const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
           if (!clipboard?.writeText) {
@@ -208,66 +299,117 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
       </div>
     ) : (
       <div role="tree" aria-label="大纲" style={{ padding: '4px 0' }}>
-        {rows.map((row, index) => {
-          const active = index === state.activeIndex;
+        {visibleRows.map((row) => {
+          const active = row.id === activeId;
           const hovered = row.id === hoverId;
+          const name = row.name.length > 0 ? row.name : '（未命名）';
           const title = row.detail !== null ? `${row.name} — ${row.detail}` : row.name;
+          const foldable = foldableIds.has(row.id);
+          const folded = foldable && collapsed.has(row.id);
           return (
-            <button
+            // 行 = 折叠指示 + 行主体两个**并列**按钮（不嵌套可交互元素：嵌套按钮
+            // 在 HTML 里非法，键盘/读屏都会被浏览器重排成另一个东西）。
+            // 行身份锚点放在这层容器上：右键戳折叠箭头也仍归这一行（`closest` 找得到）。
+            <div
               key={row.id}
-              ref={active ? activeRowRef : null}
-              type="button"
-              role="treeitem"
-              aria-level={row.depth + 1}
-              aria-selected={active}
-              title={title}
-              // 右键菜单靠这两条认出「这一行是谁」（面从 DOM 读 id，再回查现场那份行表）
+              role="none"
               {...{ [OUTLINE_ROW_ATTR]: '', [OUTLINE_ROW_ID_ATTR]: row.id }}
-              onClick={() => {
-                if (state.path !== null) onReveal(state.path, row.startLine);
-              }}
               onMouseEnter={() => setHoverId(row.id)}
               onMouseLeave={() => setHoverId((prev) => (prev === row.id ? null : prev))}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 6,
-                width: '100%',
                 minHeight: 22,
-                padding: `2px 8px 2px ${8 + row.depth * 12}px`,
-                border: 0,
-                borderRadius: 0,
+                paddingLeft: row.depth * 12,
                 background: active ? 'var(--active)' : hovered ? 'var(--hover)' : 'transparent',
-                color: active ? 'var(--fg)' : 'var(--fg-dim)',
-                font: 'inherit',
-                fontSize: 12,
-                lineHeight: '18px',
-                textAlign: 'left',
-                cursor: 'pointer',
                 boxShadow: active ? 'inset 2px 0 0 rgb(var(--accent-rgb))' : 'none',
               }}
             >
-              <span style={{ flex: '0 0 auto', display: 'inline-flex', width: 14, height: 14 }}>
-                <Icon name={iconForKind(row.kind)} size={14} />
-              </span>
-              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {row.name.length > 0 ? row.name : '（未命名）'}
-              </span>
-              {row.detail !== null ? (
-                <span
+              {foldable ? (
+                <button
+                  type="button"
+                  data-outline-fold=""
+                  aria-expanded={!folded}
+                  aria-label={`${folded ? '展开' : '折叠'} ${name}`}
+                  title={folded ? '展开这一支' : '折叠这一支'}
+                  // 折叠指示是**独立 hit target**：点击只折/展，不跳源
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    foldRows([row.id], !folded);
+                  }}
                   style={{
-                    flex: '0 1 auto',
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    opacity: 0.7,
+                    flex: '0 0 auto',
+                    width: 14,
+                    height: 14,
+                    padding: 0,
+                    border: 0,
+                    borderRadius: 0,
+                    background: 'transparent',
+                    color: 'var(--fg-dim)',
+                    font: 'inherit',
+                    fontSize: 10,
+                    lineHeight: '14px',
+                    cursor: 'pointer',
                   }}
                 >
-                  {row.detail}
+                  {folded ? '▸' : '▾'}
+                </button>
+              ) : (
+                // 叶子行留同宽占位：名字不会因为"有没有子节点"而左右跳
+                <span aria-hidden="true" style={{ flex: '0 0 auto', width: 14, height: 14 }} />
+              )}
+              <button
+                ref={active ? activeRowRef : null}
+                type="button"
+                role="treeitem"
+                aria-level={row.depth + 1}
+                aria-selected={active}
+                aria-expanded={foldable ? !folded : undefined}
+                title={title}
+                onClick={() => {
+                  if (state.path !== null) onReveal(state.path, row.startLine);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  flex: '1 1 auto',
+                  minWidth: 0,
+                  minHeight: 22,
+                  padding: '2px 8px 2px 0',
+                  border: 0,
+                  borderRadius: 0,
+                  background: 'transparent',
+                  color: active ? 'var(--fg)' : 'var(--fg-dim)',
+                  font: 'inherit',
+                  fontSize: 12,
+                  lineHeight: '18px',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ flex: '0 0 auto', display: 'inline-flex', width: 14, height: 14 }}>
+                  <Icon name={iconForKind(row.kind)} size={14} />
                 </span>
-              ) : null}
-            </button>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {name}
+                </span>
+                {row.detail !== null ? (
+                  <span
+                    style={{
+                      flex: '0 1 auto',
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      opacity: 0.7,
+                    }}
+                  >
+                    {row.detail}
+                  </span>
+                ) : null}
+              </button>
+            </div>
           );
         })}
       </div>
