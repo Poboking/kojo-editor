@@ -10,7 +10,7 @@ import {
 } from 'react';
 import { pushNotice } from './notice-queue';
 import { Icon } from './icons';
-import { installNoticeMenuHost } from './context-menu-shell';
+import { installNoticeMenuHost } from './notification-menu';
 
 /** 通知动作按钮（如「去授权」）——点击后先关 toast 再执行 */
 export interface NoticeAction {

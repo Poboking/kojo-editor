@@ -11,7 +11,8 @@
  *    `data-context-surface` / `data-*` 锚点必须在位——**面声明对了、锚点掉了**
  *    等于整面静默失灵，而运行期没人会报错（口径同 `shell-info-design.test.ts`）。
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -25,30 +26,42 @@ import { effectiveKeybindingOf, keybindingSpecOf } from '../src/ui/keybindings';
 import {
   ACTIVITY_BAR_ACTION,
   FLOATING_ACTION,
-  NOTIFICATION_ACTION,
   PANEL_SECTION_ACTION,
   PANEL_TABS_ACTION,
   STATUS_BAR_ACTION,
   TOOLBAR_ACTION,
   buildActivityBarMenu,
   buildFloatingWindowMenu,
-  buildNotificationMenu,
   buildPanelSectionMenu,
   buildPanelTabsMenu,
   buildStatusBarMenu,
   buildToolbarMenu,
   defaultFloatRect,
-  installNoticeMenuHost,
   installShellMenuHost,
   isFloatMaximized,
   maximizedFloatRect,
   statusEolActionId,
   type ShellMenuHost,
-  type ShellNoticeView,
 } from '../src/ui/context-menu-shell';
+import {
+  NOTIFICATION_ACTION,
+  buildNotificationMenu,
+  installNoticeMenuHost,
+  type ShellNoticeView,
+} from '../src/ui/notification-menu';
 import { noticeActionsOf } from '../src/ui/NotificationCenter';
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+
+/**
+ * 本包 `src` 根（字符串路径）。
+ *
+ * 不用 `new URL('../src/', import.meta.url)` 推：本文件跑在 happy-dom 环境里，`new URL`
+ * 走的是那份实现，给目录形态的相对路径会得到一个非 `file:` 的 URL，
+ * `fileURLToPath` / `readdirSync` 直接以 "The URL must be of scheme file" 报错。
+ * 把 `import.meta.url` 当**字符串**交给 `fileURLToPath` 就绕开了这个坑。
+ */
+const SRC_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
 /** 七个面的 id（与任务书 WP3.7–4.3 一一对应） */
 const SHELL_SURFACE_IDS = [
@@ -786,5 +799,54 @@ describe('源码守门：面根与数据锚点必须在位', () => {
     const closeAt = shell.indexOf('setActiveOverlay(null)', at);
     expect(closeAt).toBeGreaterThan(at);
     expect(shell.slice(at, closeAt)).toMatch(/isPrimaryButton|button\s*!==\s*0/);
+  });
+});
+
+/* ------------------------------ 源码守门：通知面已拆出壳层菜单 ------------------------------ */
+
+/**
+ * PS10-MENU-SPLIT 的判据：`main.tsx` 静态装着 `NotificationCenter`，它只要通知面。
+ * 一旦通知中心又去 import `context-menu-shell`，整张壳层菜单（七个面 + 命令模型 +
+ * 键位表）就会在**开机图**里回灌——而这件事没有任何运行期表现，只能按源码守。
+ */
+describe('源码守门：通知面独立成模块，不许把壳层菜单拖回开机图', () => {
+  const notifications = read('../src/ui/NotificationCenter.tsx');
+  const shellMenuSrc = read('../src/ui/context-menu-shell.ts');
+  const noticeMenuSrc = read('../src/ui/notification-menu.ts');
+
+  it('NotificationCenter 只 import notification-menu，不碰 context-menu-shell', () => {
+    expect(notifications).toContain(`from './notification-menu'`);
+    expect(notifications).not.toContain(`from './context-menu-shell'`);
+  });
+
+  it('notification-menu 不反向 import 壳层菜单（成环 = 拆了等于没拆）', () => {
+    expect(noticeMenuSrc).not.toMatch(/from '\.\/context-menu-shell'/);
+  });
+
+  it('壳层菜单也不许反向导出通知面（语义颠倒：通知不是壳层菜单的子集）', () => {
+    expect(shellMenuSrc).not.toContain(`from './notification-menu'`);
+  });
+
+  it("全仓 declareContextSurface 里 id: 'notification' 恰好一处，且就在 notification-menu", () => {
+    // 按源码扫，不用运行期注册表：测试之间会重复导入，注册表里"几处"根本数不出来。
+    // 正则只认「声明对象的第一行就是 id」这一形态（清单里的 `{ id: 'notification', … }`
+    // 不跟 declareContextSurface，不会误伤）。
+    const declaration = /declareContextSurface\(\s*\{\s*(?:\/\/[^\n]*\n\s*)?id: 'notification'/;
+    // 源码根用模块加载时算好的字符串路径（见 `SRC_ROOT` 的注释：测试体内 new URL 会踩 happy-dom）
+    const hits: string[] = [];
+    const walk = (dir: string, prefix: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const rel = `${prefix}${entry.name}`;
+        if (entry.isDirectory()) walk(path.join(dir, entry.name), `${rel}/`);
+        else if (
+          /\.tsx?$/.test(entry.name) &&
+          declaration.test(readFileSync(path.join(dir, entry.name), 'utf8'))
+        ) {
+          hits.push(rel);
+        }
+      }
+    };
+    walk(SRC_ROOT, '');
+    expect(hits).toEqual(['ui/notification-menu.ts']);
   });
 });

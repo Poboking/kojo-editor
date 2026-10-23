@@ -237,6 +237,16 @@ export function runContextMenuCommand(id: string): boolean {
   return commandRunner === null ? false : commandRunner.runCommand(id);
 }
 
+/**
+ * 面自己的 id 认完了之后的兜底：这条 id 是不是一条命令，是就走命令通道。
+ *
+ * 各面 `onSelect` 的 `default` 分支共用这一个判据（原来是个私有小函数，通知面拆成
+ * 独立模块后两处都要，于是落到这一层——两边都往下依赖模型，谁也不依赖谁）。
+ */
+export function runMenuItemCommand(id: string): boolean {
+  return canRunContextMenuCommand(id) ? runContextMenuCommand(id) : false;
+}
+
 /* ------------------------------- 三级兜底菜单 ------------------------------- */
 
 /** 剪贴板类动作 id（兜底菜单自己的 id，不是命令——无对应命令，不冒充命令） */
@@ -454,4 +464,46 @@ function execEditCommand(command: string, target: HTMLElement | null): boolean {
   } catch {
     return false;
   }
+}
+
+/* ------------------------------ 剪贴板（各面「复制…」项的公共落点） ------------------------------ */
+
+/**
+ * 复制纯文本（壳层各面的「复制…」项共用：通知 / 工具条 / 状态栏）。
+ *
+ * 优先 `navigator.clipboard`（WebView2 有）；拿不到或被拒时回落到
+ * `<textarea> + execCommand('copy')`——两档都是平台能力，不是壳层自造的剪贴板。
+ * 失败不抛：菜单里按一下没反应已经是既成事实，再弹一个错误框只会更吵。
+ *
+ * 为什么在这一层：通知面拆成 `notification-menu.ts` 之后，它与壳层菜单模块是**同级**的
+ * 两个面模块，共用的东西只能往下放到模型层（不许一面去 import 另一面）。
+ */
+export function copyTextToClipboard(text: string): void {
+  if (text === '') return;
+  const clip = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+  if (clip !== undefined && typeof clip.writeText === 'function') {
+    void clip.writeText(text).catch(() => {
+      fallbackCopy(text);
+    });
+    return;
+  }
+  fallbackCopy(text);
+}
+
+function fallbackCopy(text: string): void {
+  if (typeof document === 'undefined') return;
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '0';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  try {
+    document.execCommand('copy');
+  } catch {
+    // 平台不给就算了（不弹第二个错误）
+  }
+  area.remove();
 }

@@ -29,6 +29,7 @@ import '../src/ui/editor-pane/preview-menu';
 import '../src/ui/tutorial-context-menu';
 import '../src/ui/context-menu-pages';
 import '../src/ui/context-menu-shell';
+import '../src/ui/notification-menu';
 import '../src/ui/tabs-bar';
 import '../src/ui/file-tree-menu';
 import '../src/ui/breadcrumb-bar';
