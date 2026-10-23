@@ -441,7 +441,9 @@ describe('ShellLayout 接线（Ctrl+T 的三条腿）', () => {
     // d13db29 起键位走集中注册表：ShellLayout 只保留 `effectiveKeybindingOf` 间接引用，
     // 默认键字面量（`keys: 'ctrl+t'`）单源住在 keybindings.ts——两处一起钉住。
     expect(src).toContain("keybinding: effectiveKeybindingOf('workbench.workspaceSymbols')");
-    const kb = readFileSync(path.resolve(import.meta.dirname, '../src/ui/keybindings.ts'), 'utf8');
+    // 1023 开机图减重批把纯数据表下沉到 `keybinding-specs.ts`（`keybindings.ts` 只再导出），
+    // 所以这里读新落点；表仍然只有一份。
+    const kb = readFileSync(path.resolve(import.meta.dirname, '../src/ui/keybinding-specs.ts'), 'utf8');
     expect(kb).toContain("id: 'workbench.workspaceSymbols'");
     expect(kb).toContain("keys: 'ctrl+t'");
   });
