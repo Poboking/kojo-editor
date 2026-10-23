@@ -24,6 +24,7 @@ import type {
   ErbParserService,
   FamilyIndexRule,
   PluginContext,
+  PluginContextMenuAnchor,
   UIPanelProps,
 } from '@kojo/plugin-api';
 import { CANDIDATE_BUDGETS, shortPath } from '@kojo/plugin-api';
@@ -46,6 +47,13 @@ import {
 import { dependencyTitle } from './labels';
 import { renderTreeRows } from './tree-rows';
 import type { NavigatorStore } from './navigator-store';
+import {
+  copyNavigatorText,
+  openNavigatorFunctionMenu,
+  openNavigatorGroupMenu,
+  openNavigatorPanelMenu,
+  type NavigatorMenuHost,
+} from './context-menu';
 
 /** 面板依赖（全部由 `index.ts` 的 `activate()` 注入） */
 export interface NavigatorPanelDeps {
@@ -192,13 +200,37 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
         ic('history', 12, '⟲'),
       );
 
+    /**
+     * 右键菜单落点（1023 批）：三条都接回本面板已有的两条意图与刷新，不新增通道。
+     * `menuNote` 是复制失败那类"按了没反应"的回执，挂在状态行下面一行，不另起浮层。
+     */
+    const [menuNote, setMenuNote] = useState('');
+    const menuHost: NavigatorMenuHost = {
+      openFunction: (t) => open(t.filePath, t.startLine, t.name),
+      replayFunction: (name) => requestReplay(name),
+      copy: (text) => {
+        void copyNavigatorText(text).then((ok) => {
+          if (ok) {
+            setMenuNote('已复制');
+            return;
+          }
+          setMenuNote('复制失败：当前环境不允许写剪贴板');
+          ctx.log.warn('函数树复制失败：剪贴板不可用');
+        });
+      },
+      refresh: () => void refresh(),
+    };
+
     // 失败态优先：显示中文原因 + 重试（此前静默停在占位，用户无从判断与自救）。
     // 原始错误串不在第一眼——它进悬停 title，一条技术信息都不丢。
     if (loadError) {
       const copy = navLoadErrorCopy(loadError);
       return createElement(
         'div',
-        { className: 'panel-kojo-nav' },
+        {
+          className: 'panel-kojo-nav',
+          onContextMenu: (e: PluginContextMenuAnchor) => openNavigatorPanelMenu(props, e, menuHost),
+        },
         createElement('div', { className: 'nav-empty err', title: copy.title }, copy.text),
         createElement(
           'button',
@@ -214,7 +246,10 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
       const copy = navIndexPendingCopy(indexState);
       return createElement(
         'div',
-        { className: 'panel-kojo-nav' },
+        {
+          className: 'panel-kojo-nav',
+          onContextMenu: (e: PluginContextMenuAnchor) => openNavigatorPanelMenu(props, e, menuHost),
+        },
         createElement('div', { className: 'nav-empty dim', title: copy.title }, copy.text),
       );
     }
@@ -262,9 +297,13 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
     if (deferredQuery.trim().length >= MIN_QUERY) {
       return createElement(
         'div',
-        { className: 'panel-kojo-nav' },
+        {
+          className: 'panel-kojo-nav',
+          onContextMenu: (e: PluginContextMenuAnchor) => openNavigatorPanelMenu(props, e, menuHost),
+        },
         createElement('div', { className: 'nav-toolbar' }, charaSelect, searchBox),
         statusBar,
+        menuNote === '' ? null : createElement('div', { className: 'nav-status dim' }, menuNote),
         createElement(
           'div',
           { className: 'nav-hits' },
@@ -276,7 +315,17 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
                 ...hits.map((h, i) =>
                   createElement(
                     'li',
-                    { key: `${h.node.filePath}:${h.node.startLine}:${i}` },
+                    {
+                      key: `${h.node.filePath}:${h.node.startLine}:${i}`,
+                      // 搜索命中的行与树里的函数行是同一件事 ⇒ 同一份菜单
+                      onContextMenu: (e: PluginContextMenuAnchor) =>
+                        openNavigatorFunctionMenu(
+                          props,
+                          e,
+                          { name: h.node.name, filePath: h.node.filePath, startLine: h.node.startLine },
+                          menuHost,
+                        ),
+                    },
                     createElement(
                       'button',
                       {
@@ -325,14 +374,31 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
         condBadges,
         replayBadge,
         onOpen: (fn) => open(fn.filePath, fn.startLine, fn.name),
+        onFunctionMenu: (fn, e) =>
+          openNavigatorFunctionMenu(
+            props,
+            e,
+            { name: fn.name, filePath: fn.filePath, startLine: fn.startLine },
+            menuHost,
+          ),
+        onGroupMenu: (target, e) =>
+          openNavigatorGroupMenu(props, e, target, menuHost, () =>
+            target.kind === 'family'
+              ? toggle(setOpenFamilies, target.key)
+              : toggle(setOpenFaces, target.key),
+          ),
       });
     }
 
     return createElement(
       'div',
-      { className: 'panel-kojo-nav' },
+      {
+        className: 'panel-kojo-nav',
+        onContextMenu: (e: PluginContextMenuAnchor) => openNavigatorPanelMenu(props, e, menuHost),
+      },
       createElement('div', { className: 'nav-toolbar' }, charaSelect, searchBox),
       statusBar,
+      menuNote === '' ? null : createElement('div', { className: 'nav-status dim' }, menuNote),
       body,
     );
   }

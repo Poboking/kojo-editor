@@ -8,6 +8,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import { shortPath } from '@kojo/plugin-api';
+import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import { FaceList } from './face-list';
 import { faceLabel, familyLabel } from './labels';
 import { functionTooltip, type CharaNode, type FunctionNode } from './tree';
@@ -30,6 +31,16 @@ export interface TreeRowsArgs {
   readonly replayBadge: (name: string) => ReactNode;
   /** 点击行 = 跳函数意图 */
   readonly onOpen: (fn: FunctionNode) => void;
+  /**
+   * 右键函数行（1023 批，可选）：面板把菜单交给宿主统一渲染。
+   * 可选 ⇒ 旧调用方零改动；不传就是「没有右键菜单」。
+   */
+  readonly onFunctionMenu?: (fn: FunctionNode, event: PluginContextMenuAnchor) => void;
+  /** 右键家族 / 面行（可选）：展开或收起 · 复制名称 */
+  readonly onGroupMenu?: (
+    target: { kind: 'family' | 'face'; key: string; label: string; expanded: boolean; count: number },
+    event: PluginContextMenuAnchor,
+  ) => void;
 }
 
 export function renderTreeRows(args: TreeRowsArgs): ReactNode {
@@ -42,7 +53,25 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
       const fOpen = openFamilies.has(fKey);
       return createElement(
         'div',
-        { key: fKey, className: 'nav-family' },
+        {
+          key: fKey,
+          className: 'nav-family',
+          ...(args.onGroupMenu === undefined
+            ? {}
+            : {
+                onContextMenu: (e: PluginContextMenuAnchor) =>
+                  args.onGroupMenu?.(
+                    {
+                      kind: 'family',
+                      key: fKey,
+                      label: familyLabel(family.family),
+                      expanded: fOpen,
+                      count: family.faces.reduce((n, f) => n + f.functions.length, 0),
+                    },
+                    e,
+                  ),
+              }),
+        },
         createElement(
           'button',
           { className: 'nav-family-btn', onClick: () => args.onToggleFamily(fKey) },
@@ -63,7 +92,25 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
                 const fcOpen = openFaces.has(fcKey);
                 return createElement(
                   'div',
-                  { key: fcKey, className: 'nav-face' },
+                  {
+                    key: fcKey,
+                    className: 'nav-face',
+                    ...(args.onGroupMenu === undefined
+                      ? {}
+                      : {
+                          onContextMenu: (e: PluginContextMenuAnchor) =>
+                            args.onGroupMenu?.(
+                              {
+                                kind: 'face',
+                                key: fcKey,
+                                label: faceLabel(face.face, args.faceLabels()),
+                                expanded: fcOpen,
+                                count: face.functions.length,
+                              },
+                              e,
+                            ),
+                        }),
+                  },
                   createElement(
                     'button',
                     { className: 'nav-face-btn', onClick: () => args.onToggleFace(fcKey) },
@@ -116,6 +163,7 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
                           return badges;
                         },
                         onOpen: args.onOpen,
+                        ...(args.onFunctionMenu === undefined ? {} : { onMenu: args.onFunctionMenu }),
                         tooltip: (fn: FunctionNode) => functionTooltip(fn, shortPath),
                       })
                     : null,

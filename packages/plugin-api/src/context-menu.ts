@@ -85,3 +85,68 @@ export interface PluginContextMenuCapability {
 export function hasCjkLabel(label: string): boolean {
   return /[\u4e00-\u9fff]/.test(label);
 }
+
+/**
+ * 触发点（右键事件里插件需要的全部信息；结构类型，插件 tsconfig 无 DOM lib 也能用）。
+ */
+export interface PluginContextMenuAnchor {
+  readonly clientX: number;
+  readonly clientY: number;
+  preventDefault?(): void;
+}
+
+/**
+ * 「把这份菜单交给宿主」的**唯一**发起口（面板里的 onContextMenu 就调这一条）。
+ *
+ * 三件事一次做对，免得 11 个面板各写一份：
+ * 1. 宿主没注入能力（旧宿主 / 纯渲染环境）⇒ 直接返回 false，**不抛错、不自造浮层**；
+ * 2. 空菜单 ⇒ 不弹（这一级「没话说」等于没按到，空壳菜单比没有更糟）；
+ * 3. 真发起时先 `preventDefault()`——阻断 WebView2 默认菜单与「开不开我们的菜单」是两件事。
+ */
+export function requestPluginMenu(
+  host: { readonly openContextMenu?: (request: PluginContextMenuRequest) => void },
+  anchor: PluginContextMenuAnchor,
+  items: readonly PluginContextMenuItem[],
+  ariaLabel: string,
+  onSelect: (id: string) => void,
+): boolean {
+  if (host.openContextMenu === undefined || items.length === 0) return false;
+  anchor.preventDefault?.();
+  host.openContextMenu({
+    x: anchor.clientX,
+    y: anchor.clientY,
+    items,
+    ariaLabel,
+    onSelect,
+  });
+  return true;
+}
+
+/** 剪贴板写入的最小形状（结构类型：插件 tsconfig 无 DOM lib，也不该为复制引一份 lib） */
+interface ClipboardLike {
+  writeText?(text: string): Promise<void>;
+}
+
+/**
+ * 复制文本到剪贴板（「复制…」类菜单项的唯一落点）。
+ *
+ * 返回是否**真的**写成功：环境没有 `navigator.clipboard`（旧 WebView / 无 DOM 的测试）
+ * 或被权限拒绝 ⇒ `false`。调用方据此给一句人话（铁律 4：按了没反应必须说清为什么）。
+ *
+ * 为什么放在契约层：11 个面板都要「复制路径 / 复制 ID / 复制值」，各写一份
+ * `globalThis.navigator as ...` 的强转必然各自漂（与 `attachGrowSentinel` 同一理由）。
+ */
+export function copyTextToClipboard(text: string): Promise<boolean> {
+  const nav = (globalThis as { navigator?: { clipboard?: ClipboardLike } }).navigator;
+  const clipboard = nav?.clipboard;
+  const write = clipboard?.writeText;
+  if (clipboard === undefined || typeof write !== 'function') return Promise.resolve(false);
+  try {
+    return Promise.resolve(write.call(clipboard, text)).then(
+      () => true,
+      () => false,
+    );
+  } catch {
+    return Promise.resolve(false);
+  }
+}

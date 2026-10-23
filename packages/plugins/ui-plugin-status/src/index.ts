@@ -1,6 +1,19 @@
 import { createElement, useEffect, useState, type ReactElement } from 'react';
-import type { OpJournal, Plugin, PluginRegistry, PluginStateRecord } from '@kojo/plugin-api';
+import type {
+  OpJournal,
+  Plugin,
+  PluginContextMenuAnchor,
+  PluginRegistry,
+  PluginStateRecord,
+  UIPanelProps,
+} from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
+import {
+  copyPluginId,
+  openPluginPanelMenu,
+  openPluginRowMenu,
+  type PluginStatusMenuHost,
+} from './context-menu';
 import {
   opsMaintenanceText,
   opsMaintenanceTone,
@@ -130,9 +143,11 @@ export function createUiStatusPlugin(): Plugin {
       // 不写 optionalRequires：内核 runtime 不消费它（软依赖的生效通道就是 tryInject）。
       const ops = ctx.tryInject<OpJournal>(KernelServices.Ops);
 
-      function StatusPanel(): unknown {
+      function StatusPanel(props: UIPanelProps): unknown {
         const [rows, setRows] = useState<PluginStateRecord[]>(() => registry.list());
         const [maintenance, setMaintenance] = useState<OpsMaintenanceRead | null>(null);
+        /** 右键菜单动作的回执（复制成功/失败一句话；空串 = 没有话要说） */
+        const [note, setNote] = useState('');
 
         useEffect(() => {
           const refresh = (): void => setRows(registry.list());
@@ -161,22 +176,74 @@ export function createUiStatusPlugin(): Plugin {
           };
         }, []);
 
+        /**
+         * 右键菜单的动作落点（1023 批）：能力全在 `PluginRegistry` 上，面板只转发。
+         * 失败一律写进 `note`（一行人话）——「按了没反应」在这块面板上最不可接受：
+         * 作者来这里就是为了查"到底哪里不对"。
+         */
+        const menuHost: PluginStatusMenuHost = {
+          copy: (text) => {
+            void copyPluginId(text).then((ok) => {
+              if (ok) {
+                setNote(`已复制「${text}」`);
+                return;
+              }
+              setNote('复制失败：当前环境不允许写剪贴板');
+              ctx.log.warn('复制插件 ID 失败：剪贴板不可用');
+            });
+          },
+          retry: (id) => {
+            setNote(`正在重试「${id}」…`);
+            void registry.retry(id).then(
+              () => setNote(''),
+              (err: unknown) => {
+                const text = err instanceof Error ? err.message : String(err);
+                setNote(`重试「${id}」没有成功：${text}`);
+                ctx.log.warn(`重试插件 ${id} 失败：${text}`);
+              },
+            );
+          },
+          stop: (id) => {
+            setNote(`正在停用「${id}」…`);
+            void registry.stop(id).then(
+              () => setNote(''),
+              (err: unknown) => {
+                const text = err instanceof Error ? err.message : String(err);
+                setNote(`停用「${id}」没有成功：${text}`);
+                ctx.log.warn(`停用插件 ${id} 失败：${text}`);
+              },
+            );
+          },
+          refresh: () => setRows(registry.list()),
+        };
+
         return createElement(
           'div',
-          { className: 'panel-plugin-status' },
+          {
+            className: 'panel-plugin-status',
+            // 空白处右键（1023 批）：面板级菜单只有一条真能力——重读插件清单
+            onContextMenu: (e: PluginContextMenuAnchor) => openPluginPanelMenu(props, e, menuHost),
+          },
           createElement(
             'div',
             { className: 'panel-header' },
             `插件 (${rows.filter((r) => r.status === 'active').length}/${rows.length} 运行中)`,
           ),
           ops ? opsMaintenanceRow(maintenance) : null,
+          note === '' ? null : createElement('div', { className: 'panel-note dim small' }, note),
           createElement(
             'ul',
             { className: 'plugin-list' },
             ...rows.map((r) =>
               createElement(
                 'li',
-                { key: r.id, className: `plugin-row plugin-${r.status}` },
+                {
+                  key: r.id,
+                  className: `plugin-row plugin-${r.status}`,
+                  // 行级右键：复制 ID / 重试激活 / 停用 / 刷新（按状态决定哪些项存在）
+                  onContextMenu: (e: PluginContextMenuAnchor) =>
+                    openPluginRowMenu(props, e, { id: r.id, status: r.status }, menuHost),
+                },
                 createElement('span', { className: 'plugin-dot', style: { backgroundColor: statusColor(r.status) } }),
                 createElement('span', { className: 'plugin-id', title: r.id }, r.id),
                 createElement(

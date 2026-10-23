@@ -7,6 +7,7 @@ import type {
   FamilyIndexRule,
   GameProject,
   Plugin,
+  PluginContextMenuAnchor,
   ProjectService,
   SlotRegistry,
   UIPanelProps,
@@ -24,6 +25,13 @@ import {
 import { charaDirOwners, type OwnershipDeps } from './ownership';
 import { buildGroupView, GROUP_MODE_LABEL, GROUP_MODES, type GroupMode } from './view';
 import { ISSUE_WINDOW_INITIAL, issueWindowSize, nextIssueWindow } from './panel-logic';
+import {
+  copyConventionText,
+  openConventionPanelMenu,
+  openGroupMenu,
+  openIssueMenu,
+  type ConventionMenuHost,
+} from './context-menu';
 import {
   LINT_PROJECT_COMMAND_CATEGORY,
   LINT_PROJECT_COMMAND_ID,
@@ -112,6 +120,12 @@ export interface IssueListProps {
   readonly onGrow: (groupKey: string, total: number) => void;
   /** 点击条目 = 跳转意图（宿主消费） */
   readonly onOpen: (issue: ConventionIssue) => void;
+  /**
+   * 右键条目（1023 批，可选）：面板把菜单交给宿主统一渲染。
+   *
+   * **可选**：不传 = 没有右键菜单（旧调用方与 SSR 判据零改动）。
+   */
+  readonly onMenu?: (issue: ConventionIssue, event: PluginContextMenuAnchor) => void;
 }
 
 export function IssueList(props: IssueListProps): ReactElement {
@@ -123,7 +137,13 @@ export function IssueList(props: IssueListProps): ReactElement {
     ...issues.slice(0, win).map((issue, i) =>
       createElement(
         'li',
-        { key: issue.key ?? `${props.groupKey}-${i}`, className: 'conv-issue' },
+        {
+          key: issue.key ?? `${props.groupKey}-${i}`,
+          className: 'conv-issue',
+          ...(props.onMenu === undefined
+            ? {}
+            : { onContextMenu: (e: PluginContextMenuAnchor) => props.onMenu?.(issue, e) }),
+        },
         createElement(
           'button',
           {
@@ -311,6 +331,36 @@ export function createUiConventionReportPlugin(): Plugin {
         };
 
         /**
+         * 右键菜单落点（1023 批）：三条都接回上面已有的函数 / 通道，不新增业务。
+         * 复制失败进控制台并留一句面板内提示（`menuNote`）——这面板底部本就有一行图例，
+         * 回执挂在那里，不另起浮层。
+         */
+        const [menuNote, setMenuNote] = useState('');
+        const menuHost: ConventionMenuHost = {
+          openIssue: (t) => {
+            if (!t.filePath) return;
+            ctx.bus.emit('editor.revealLocation', {
+              filePath: t.filePath,
+              ...(t.line === undefined ? {} : { line: t.line }),
+              source: '右键菜单',
+            });
+          },
+          copy: (text) => {
+            void copyConventionText(text).then((ok) => {
+              if (ok) {
+                setMenuNote('已复制');
+                return;
+              }
+              setMenuNote('复制失败：当前环境不允许写剪贴板');
+              ctx.log.warn('约定校验复制失败：剪贴板不可用');
+            });
+          },
+          rerun,
+          stop,
+          setMode: (m) => setMode(m),
+        };
+
+        /**
          * 本轮读数：查了多少个文件 / 用了多久 / 几处问题（跑坏时就是那句原因）。
          * 命令面板那条命令没有打开任何面板，这行 + 状态栏那枚就是它的回响。
          */
@@ -322,7 +372,11 @@ export function createUiConventionReportPlugin(): Plugin {
         if (!report) {
           return createElement(
             'div',
-            { className: 'panel-convention-report' },
+            {
+              className: 'panel-convention-report',
+              onContextMenu: (e: PluginContextMenuAnchor) =>
+                openConventionPanelMenu(props, e, mode, false, menuHost),
+            },
             createElement('div', { className: 'conv-empty dim' }, '尚未运行（打开项目后自动校验）'),
             runLine,
           );
@@ -411,7 +465,19 @@ export function createUiConventionReportPlugin(): Plugin {
                   const isOpen = expanded.has(group.key);
                   return createElement(
                     'li',
-                    { key: group.key, className: 'conv-group' },
+                    {
+                      key: group.key,
+                      className: 'conv-group',
+                      // 分组头右键（1023 批）：展开/收起 · 复制分组名 · 重新校验
+                      onContextMenu: (e: PluginContextMenuAnchor) =>
+                        openGroupMenu(
+                          props,
+                          e,
+                          { title: group.title, expanded: isOpen, count: group.count },
+                          menuHost,
+                          () => toggle(setExpanded, group.key),
+                        ),
+                    },
                     createElement(
                       'button',
                       { className: 'conv-group-btn', onClick: () => toggle(setExpanded, group.key) },
@@ -429,6 +495,19 @@ export function createUiConventionReportPlugin(): Plugin {
                           limit: groupWindows.get(group.key),
                           onGrow: growGroup,
                           onOpen: (issue: ConventionIssue) => open(issue, group.title),
+                          onMenu: (issue: ConventionIssue, e: PluginContextMenuAnchor) =>
+                            openIssueMenu(
+                              props,
+                              e,
+                              {
+                                message: issue.message,
+                                filePath: issue.filePath ?? null,
+                                ...(issue.line === undefined ? {} : { line: issue.line }),
+                                ruleId: issue.ruleId,
+                                severityLabel: SEVERITY_LABEL[issue.severity],
+                              },
+                              menuHost,
+                            ),
                         })
                       : null,
                   );
@@ -437,7 +516,12 @@ export function createUiConventionReportPlugin(): Plugin {
 
         return createElement(
           'div',
-          { className: 'panel-convention-report' },
+          {
+            className: 'panel-convention-report',
+            // 空白处右键（1023 批）：三个分组视角 · 重新校验 · 在跑时可叫停
+            onContextMenu: (e: PluginContextMenuAnchor) =>
+              openConventionPanelMenu(props, e, mode, running, menuHost),
+          },
           header,
           runLine,
           toolbar,
@@ -447,7 +531,8 @@ export function createUiConventionReportPlugin(): Plugin {
           createElement(
             'div',
             { className: 'conv-legend dim' },
-            `严重度：${SEVERITY_LABEL.error} / ${SEVERITY_LABEL.warning} / ${SEVERITY_LABEL.info}`,
+            `严重度：${SEVERITY_LABEL.error} / ${SEVERITY_LABEL.warning} / ${SEVERITY_LABEL.info}` +
+              (menuNote === '' ? '' : ` · ${menuNote}`),
           ),
         );
       }

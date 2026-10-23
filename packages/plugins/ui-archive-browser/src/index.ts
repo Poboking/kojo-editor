@@ -30,6 +30,7 @@ import type {
   ComputePool,
   GameProject,
   Plugin,
+  PluginContextMenuAnchor,
   ProjectService,
   UIPanelProps,
 } from '@kojo/plugin-api';
@@ -44,6 +45,12 @@ import {
   type ArchiveRow,
   type CharacterSummary,
 } from './panel-logic';
+import {
+  copyArchiveText,
+  openArchivePanelMenu,
+  openArchiveRowMenu,
+  type ArchiveMenuHost,
+} from './context-menu';
 
 /** 角色区摘要渲染上限（前 N 个角色名，其余只报总数——防 DOM 爆炸） */
 const CHARA_SUMMARY_CAP = 12;
@@ -214,6 +221,8 @@ export function createUiArchiveBrowserPlugin(): Plugin {
       function ArchiveBrowserPanel(props: UIPanelProps): unknown {
         const [, force] = useState(0);
         const [expanded, setExpanded] = useState<string | null>(null);
+        /** 右键菜单动作的回执（复制失败这类"按了没反应"要有一句人话） */
+        const [note, setNote] = useState('');
 
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
@@ -228,6 +237,31 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         }, []);
 
         const projectNow = project.current();
+
+        /** 复制类菜单动作的唯一落点：失败进状态行（不静默） */
+        const copyText = (text: string): void => {
+          void copyArchiveText(text).then((ok) => {
+            if (ok) {
+              setNote(`已复制：${text}`);
+              return;
+            }
+            setNote('复制失败：当前环境不允许写剪贴板');
+            ctx.log.warn('归档浏览器复制失败：剪贴板不可用');
+          });
+        };
+
+        /** 菜单动作落点（1023 批）：每条都接回面板已有的函数，不新增业务 */
+        const menuHost: ArchiveMenuHost = {
+          open: () => undefined,
+          extract: () => undefined,
+          refresh: () => void refresh(),
+          copy: copyText,
+        };
+        const rowMenuHost = (row: ArchiveRow): ArchiveMenuHost => ({
+          ...menuHost,
+          open: () => toggle(row),
+          extract: (_target, kind) => extract(row, kind),
+        });
 
         const toggle = (row: ArchiveRow): void => {
           if (expanded === row.path) {
@@ -342,7 +376,18 @@ export function createUiArchiveBrowserPlugin(): Plugin {
 
           return createElement(
             'div',
-            { key: row.path, className: `ab-row${isOpen ? ' open' : ''}${row.failed ? ' failed' : ''}` },
+            {
+              key: row.path,
+              className: `ab-row${isOpen ? ' open' : ''}${row.failed ? ' failed' : ''}`,
+              // 档位行右键（1023 批）：打开/收起 · 复制路径 · 取出 · 刷新
+              onContextMenu: (e: PluginContextMenuAnchor) =>
+                openArchiveRowMenu(
+                  props,
+                  e,
+                  { path: row.path, fileName: row.fileName, failed: row.failed, expanded: isOpen },
+                  rowMenuHost(row),
+                ),
+            },
             createElement(
               'button',
               {
@@ -361,7 +406,10 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         if (!projectNow) {
           return createElement(
             'div',
-            { className: 'panel-archive-browser' },
+            {
+              className: 'panel-archive-browser',
+              onContextMenu: (e: PluginContextMenuAnchor) => openArchivePanelMenu(props, e, null, menuHost),
+            },
             createElement('div', { className: 'ab-empty dim' }, DEGRADE_TEXT['no-project']!),
           );
         }
@@ -386,13 +434,19 @@ export function createUiArchiveBrowserPlugin(): Plugin {
 
         return createElement(
           'div',
-          { className: 'panel-archive-browser' },
+          {
+            className: 'panel-archive-browser',
+            // 空白处右键（1023 批）：刷新 · 复制存档目录
+            onContextMenu: (e: PluginContextMenuAnchor) =>
+              openArchivePanelMenu(props, e, projectNow.savDir ?? null, menuHost),
+          },
           createElement(
             'div',
             { className: 'ab-toolbar' },
             createElement('span', { className: 'dim ab-status' }, statusText),
             scanBtn,
           ),
+          note === '' ? null : createElement('div', { className: 'ab-status dim' }, note),
           degrade !== null
             ? emptyState
             : createElement(

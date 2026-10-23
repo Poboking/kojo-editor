@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from 'react';
 import { MORE_ROW_TITLE, attachGrowSentinel } from '@kojo/plugin-api';
+import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import { faceWindowSize, type FunctionNode } from './tree';
 
 /* ------------------------------ 面行窗口 ------------------------------ */
@@ -69,6 +70,11 @@ export interface FaceListProps {
   readonly onOpen: (fn: FunctionNode) => void;
   /** 悬停提示 */
   readonly tooltip: (fn: FunctionNode) => string;
+  /**
+   * 右键函数行（1023 批，可选）：交给宿主统一渲染的菜单。
+   * 缺省 = 没有右键菜单（旧调用方与 SSR 判据零改动）。
+   */
+  readonly onMenu?: (fn: FunctionNode, event: PluginContextMenuAnchor) => void;
 }
 
 export function FaceList(props: FaceListProps): ReactElement {
@@ -81,7 +87,12 @@ export function FaceList(props: FaceListProps): ReactElement {
     ...rows.map((fn) =>
       createElement(
         'li',
-        { key: `${fn.filePath}:${fn.startLine}` },
+        {
+          key: `${fn.filePath}:${fn.startLine}`,
+          ...(props.onMenu === undefined
+            ? {}
+            : { onContextMenu: (e: PluginContextMenuAnchor) => props.onMenu?.(fn, e) }),
+        },
         createElement(
           'button',
           {

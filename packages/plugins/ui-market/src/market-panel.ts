@@ -35,6 +35,13 @@ import {
   type MarketInvalidationHandle,
 } from './reconcile';
 import {
+  copyMarketText,
+  openMarketPanelMenu,
+  openMarketRowMenu,
+  type MarketMenuHost,
+} from './context-menu';
+import {
+  buildGroups,
   indexRowKey,
   installBusyNote,
   installProgressNote,
@@ -252,6 +259,39 @@ export function createMarketPanel(
       requestPublish(deps);
     };
 
+    /**
+     * 右键菜单落点（1023 批）：每条都接回上面已有的函数——菜单与按钮走同一条路，
+     * 才不会有"按钮能装、菜单装不了"的分叉。行数据按 key 从当前快照回查
+     * （快照是唯一真相，菜单不另存一份行）。
+     */
+    const menuHost: MarketMenuHost = {
+      install: (target) => {
+        const row = buildGroups(snapshot.packs, av, '', snapshot.installed)
+          .flatMap((g) => g.rows)
+          .find((r) => indexRowKey(r.entry) === target.key);
+        if (row !== undefined) void doInstall(row);
+      },
+      requestUninstall: (key) => setPending(key),
+      importInstalled: (key) => {
+        const rec = snapshot.installed.find((r) => pendingKey(r) === key);
+        if (rec !== undefined) void doImport(rec);
+      },
+      toggleDetail: (key) => setOpen((prev) => (prev === key ? null : key)),
+      openSource: (url) => deps.bus.emit('ui.openExternal', { url }),
+      pull: () => void pull(),
+      publish: () => doPublish(),
+      copy: (text) => {
+        void copyMarketText(text).then((ok) => {
+          if (ok) {
+            setNote('已复制');
+            return;
+          }
+          setNote('复制失败：当前环境不允许写剪贴板');
+          deps.log.warn('市场面板复制失败：剪贴板不可用');
+        });
+      },
+    };
+
     // 状态与回调住这一层；怎么画、哪一行给不给按钮全在 `MarketPanelView`（可静态渲染判据）
     return createElement(MarketPanelView, {
       snapshot,
@@ -276,6 +316,9 @@ export function createMarketPanel(
       onConfirmUninstall: (key: string) => void doUninstall(key),
       onCancelUninstall: () => setPending(null),
       onToggleDetail: (key: string) => setOpen(open === key ? null : key),
+      // 右键（1023 批）：行级安装/卸载/导入/复制/来源 + 空白处的拉取与发布
+      onRowMenu: (target, event) => openMarketRowMenu(props, event, target, menuHost),
+      onPanelMenu: (event) => openMarketPanelMenu(props, event, menuHost),
     });
   }
 

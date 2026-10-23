@@ -8,7 +8,9 @@
 
 import { createElement, type ReactNode } from 'react';
 import { type InstalledPack } from '@kojo/plugin-api';
+import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import type { MarketSnapshot } from './actions';
+import type { MarketRowTarget } from './context-menu';
 import {
   ACTION_LABEL,
   appVersionRequirement,
@@ -79,6 +81,13 @@ export interface MarketPanelViewProps {
   onConfirmUninstall(key: string): void;
   onCancelUninstall(): void;
   onToggleDetail(key: string): void;
+  /**
+   * 行右键（1023 批，可选）：面板把菜单交给宿主统一渲染（安装 / 卸载 / 导入 / 复制 / 来源）。
+   * 缺省 = 没有右键菜单（旧调用方与静态渲染判据零改动）。
+   */
+  onRowMenu?(target: MarketRowTarget, event: PluginContextMenuAnchor): void;
+  /** 空白处右键（可选）：拉取列表 · 发布口上… */
+  onPanelMenu?(event: PluginContextMenuAnchor): void;
 }
 
 /**
@@ -177,7 +186,27 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         const sourceUrl = e.sourceUrl;
         return createElement(
           'div',
-          { className: 'mk-row', key: indexRowKey(e) },
+          {
+            className: 'mk-row',
+            key: indexRowKey(e),
+            ...(p.onRowMenu === undefined
+              ? {}
+              : {
+                  onContextMenu: (event: PluginContextMenuAnchor) =>
+                    p.onRowMenu?.(
+                      {
+                        kind: 'index',
+                        key: indexRowKey(e),
+                        packId: e.id,
+                        label: e.name,
+                        action: row.action,
+                        ...(e.sourceUrl === undefined ? {} : { sourceUrl: e.sourceUrl }),
+                        expanded: p.open === indexRowKey(e),
+                      },
+                      event,
+                    ),
+                }),
+          },
           main(
             e.name,
             phrase === '' ? null : createElement('span', { className: `mk-badge${badgeTone(row)}` }, phrase),
@@ -220,7 +249,12 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
 
   return createElement(
     'div',
-    { className: 'panel-market' },
+    {
+      className: 'panel-market',
+      ...(p.onPanelMenu === undefined
+        ? {}
+        : { onContextMenu: (event: PluginContextMenuAnchor) => p.onPanelMenu?.(event) }),
+    },
     createElement(
       'div',
       { className: 'mk-toolbar' },
@@ -313,7 +347,19 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
               const confirming = p.pending === key;
               return createElement(
                 'div',
-                { className: expanded ? 'mk-row open' : 'mk-row', key },
+                {
+                  className: expanded ? 'mk-row open' : 'mk-row',
+                  key,
+                  ...(p.onRowMenu === undefined
+                    ? {}
+                    : {
+                        onContextMenu: (event: PluginContextMenuAnchor) =>
+                          p.onRowMenu?.(
+                            { kind: 'installed', key, packId: r.rec.id, label: r.rec.name, expanded },
+                            event,
+                          ),
+                      }),
+                },
                 main(
                   r.rec.name,
                   null,

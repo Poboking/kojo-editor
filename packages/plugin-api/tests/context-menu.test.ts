@@ -8,7 +8,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  copyTextToClipboard,
   hasCjkLabel,
+  requestPluginMenu,
   type PluginContextMenuItem,
   type PluginContextMenuRequest,
   type UIPanelProps,
@@ -109,5 +111,81 @@ describe('hasCjkLabel：中文化判据', () => {
     expect(hasCjkLabel('Copy Path')).toBe(false);
     expect(hasCjkLabel('')).toBe(false);
     expect(hasCjkLabel('——…')).toBe(false);
+  });
+});
+
+describe('requestPluginMenu：面板发起口的三条口径', () => {
+  const items = [{ id: 'copy', label: '复制' }];
+
+  it('宿主没注入能力 ⇒ 返回 false、不抛错（旧宿主降级）', () => {
+    let prevented = false;
+    expect(
+      requestPluginMenu({}, { clientX: 1, clientY: 2, preventDefault: () => (prevented = true) }, items, '菜单', () => undefined),
+    ).toBe(false);
+    expect(prevented).toBe(false); // 没有菜单可开时不该吞掉默认菜单
+  });
+
+  it('空菜单 ⇒ 不发请求（不弹空壳）', () => {
+    const seen: PluginContextMenuRequest[] = [];
+    expect(
+      requestPluginMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, [], '菜单', () => undefined),
+    ).toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('真发起时透传坐标 / 项 / 无障碍名 / 回调，并阻断默认菜单', () => {
+    const seen: PluginContextMenuRequest[] = [];
+    let prevented = false;
+    const ok = requestPluginMenu(
+      { openContextMenu: (r) => seen.push(r) },
+      { clientX: 30, clientY: 40, preventDefault: () => (prevented = true) },
+      items,
+      '面板菜单',
+      () => undefined,
+    );
+    expect(ok).toBe(true);
+    expect(prevented).toBe(true);
+    expect(seen[0]?.x).toBe(30);
+    expect(seen[0]?.y).toBe(40);
+    expect(seen[0]?.ariaLabel).toBe('面板菜单');
+    expect(seen[0]?.items[0]?.label).toBe('复制');
+  });
+});
+
+describe('copyTextToClipboard：复制通道的降级口径', () => {
+  it('环境没有剪贴板 ⇒ 明确返回 false（调用方据此给原因，不假装复制成功）', async () => {
+    const saved = (globalThis as { navigator?: unknown }).navigator;
+    Object.defineProperty(globalThis, 'navigator', { value: undefined, configurable: true });
+    try {
+      await expect(copyTextToClipboard('文本')).resolves.toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, 'navigator', { value: saved, configurable: true });
+    }
+  });
+
+  it('有剪贴板时按写入结果作答（成功 true / 拒绝 false）', async () => {
+    const saved = (globalThis as { navigator?: unknown }).navigator;
+    const writes: string[] = [];
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { clipboard: { writeText: async (t: string) => void writes.push(t) } },
+      configurable: true,
+    });
+    try {
+      await expect(copyTextToClipboard('路径')).resolves.toBe(true);
+      expect(writes).toEqual(['路径']);
+      Object.defineProperty(globalThis, 'navigator', {
+        value: {
+          clipboard: {
+            writeText: async () => {
+              throw new Error('权限被拒');
+            },
+          },
+        },
+        configurable: true,
+      });
+      await expect(copyTextToClipboard('路径')).resolves.toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, 'navigator', { value: saved, configurable: true });
+    }
   });
 });
