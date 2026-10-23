@@ -4,12 +4,17 @@
  * 刻意做小：
  * - **不接 `EditorPane` 热点**，不 import Monaco / 编辑器模型；本组件只吃
  *   `kojo2-migrate-model` 的 dry-run 与 apply 结果，宿主随时可以把它放进任意覆盖层。
- * - **零全局样式**：只用内联样式，避免 `styles.css` 冲突热点；要换成设计系统类名时，
- *   只改样式常量，不动接线。
- * - 三步状态：预演（只读）→ 文件列表 + diff / 台账预览 → 应用（备份 + 回读 + 失败回滚）。
+ * - **零内联样式（批次十一 L11 收编）**：观感全部住 `../kojo2.css` 的 `.kojo2-wizard*`
+ *   一族（此前整块 GitHub 深色字面量内联，绕开 token 与主题翻色）；遮罩与本体说
+ *   `.overlay-backdrop` / `.overlay-host` 的语言，磨砂 / 圆角 / 分层阴影 / 入场动画白拿。
+ *   留在组件里的 `style` 只有**数据驱动的量**（进度条宽度），像素与颜色一律不进 TSX。
+ * - **不改语义**：三步状态机与全部接线逐字保留——
+ *   预演（只读）→ 文件列表 + diff / 台账预览 → 应用（备份 + 回读 + 失败回滚）。
+ *   步骤条与进度轨是这一既有三段的**可见化**（阶段 + 图标 + 色三重区分），零新语义。
  *
  * K2-MIGRATE-MOUNT 起多两块**加法**（旧调用方零改动）：
- * - `Kojo2MigrateWizardHost`：宿主用的挂载壳（`position: fixed` 遮罩 + 居中），样式仍全内联；
+ * - `Kojo2MigrateWizardHost`：宿主用的挂载壳，遮罩挂既有 `.overlay-backdrop`（fixed + 居中，
+ *   样式来自 `styles.css` 的浮层族），本组件不再自带定位；
  * - `applyPlan` / `undoPlan` 两个可选端口：宿主入口（`kojo2-migrate-entry.ts`）把自己的
  *   `apply` / `undo` 交进来，写盘之后的"刷新文件树与已开编辑器"由它收尾——向导不认识
  *   宿主的刷新通道。不给端口 = 直接调模型层，与接线前逐字一致。
@@ -23,10 +28,10 @@ import {
   useEffect,
   useMemo,
   useState,
-  type CSSProperties,
   type ReactElement,
 } from 'react';
 import type { MigrateEventArgs } from '@kojo/kojo-core';
+import { Icon } from './icons';
 import {
   applyMigratePlan,
   dryRunMigrateFiles,
@@ -38,6 +43,7 @@ import {
   type MigrateRewriteView,
   type MigrateUndoResult,
 } from './kojo2-migrate-model';
+import '../kojo2.css';
 
 /** 向导属性：`io` 直接传 `kernel.io`（结构子集即可） */
 export interface Kojo2MigrateWizardProps {
@@ -232,12 +238,99 @@ export function Kojo2MigrateWizard({
   const canApply = plan !== null && plan.ok && phase === 'ready';
   const blockedCount = plan === null ? 0 : plan.summary.blockedCount + plan.summary.readErrorCount;
 
+  /* —— 步骤条与进度轨：三段既有状态（预演 → 复核 → 应用）的**可见化投影**。
+     纯视图派生：不新增状态、不读写任何状态机变量之外的东西；每一步的
+     done/current/blocked/error 用「序号→记号」的形状变化 + 语义色两路同时说。 —— */
+
+  /** 单步视觉档（`data-state` 的取值；undefined = 尚未走到，用基档） */
+  type StepVisualState = 'done' | 'current' | 'blocked' | 'error';
+
+  const step1: StepVisualState | undefined =
+    phase === 'loading' ? 'current' : phase === 'error' ? 'error' : plan !== null ? 'done' : undefined;
+  const step2: StepVisualState | undefined =
+    plan === null || phase === 'loading' || phase === 'error'
+      ? undefined
+      : phase === 'ready'
+        ? plan.ok
+          ? 'current'
+          : 'blocked'
+        : 'done';
+  const step3: StepVisualState | undefined =
+    phase === 'applying' || phase === 'undoing'
+      ? 'current'
+      : phase === 'done'
+        ? 'done'
+        : applyResult !== null && !applyResult.ok
+          ? 'error'
+          : plan !== null && !plan.ok
+            ? 'blocked'
+            : undefined;
+
+  const steps: ReadonlyArray<{ label: string; detail: string; state: StepVisualState | undefined }> = [
+    { label: '预演', detail: '只读扫描，不写盘', state: step1 },
+    {
+      label: '复核',
+      detail: plan === null ? '等待预演结果' : `${plan.files.length} 个文件 · 阻断 ${blockedCount}`,
+      state: step2,
+    },
+    {
+      label: '应用',
+      detail:
+        phase === 'done'
+          ? '已写回，备份保留可撤销'
+          : '先备份再写回，失败自动回滚',
+      state: step3,
+    },
+  ];
+
+  /** 进度 = **阶段完成度**四档（15/50/80/100），不伪造文件级百分比；写盘在途走不定态扫光 */
+  const progressPct =
+    phase === 'error' || phase === 'done'
+      ? 100
+      : phase === 'applying' || phase === 'undoing'
+        ? 80
+        : plan !== null
+          ? 50
+          : 15;
+  const progressState: 'error' | 'done' | 'blocked' | undefined =
+    phase === 'error' || (applyResult !== null && !applyResult.ok && phase === 'ready')
+      ? 'error'
+      : phase === 'done'
+        ? 'done'
+        : plan !== null && !plan.ok
+          ? 'blocked'
+          : undefined;
+  const progressIndeterminate = phase === 'applying' || phase === 'undoing';
+
+  /** 阶段枚胶囊：文案与旧版逐字相同；tone 是同一文案的色形档（busy 档带呼吸点） */
+  const statusLabel =
+    phase === 'loading'
+      ? '预演中'
+      : phase === 'applying'
+        ? '应用中'
+        : phase === 'undoing'
+          ? '撤销中'
+          : plan !== null && plan.ok
+            ? 'dry-run 就绪'
+            : '有阻断';
+  const statusTone =
+    phase === 'loading' || phase === 'applying' || phase === 'undoing'
+      ? 'busy'
+      : plan !== null && plan.ok
+        ? 'ok'
+        : 'warn';
+
   return (
-    <div role="dialog" aria-modal="true" aria-label="Kojo 2.0 迁移向导" style={styles.root}>
-      <header style={styles.header}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Kojo 2.0 迁移向导"
+      className="overlay-host kojo2-wizard"
+    >
+      <header className="kojo2-wizard__head">
         <div>
-          <div style={styles.title}>Kojo 2.0 迁移向导</div>
-          <div style={styles.subtitle}>
+          <div className="kojo2-wizard__title">Kojo 2.0 迁移向导</div>
+          <div className="kojo2-wizard__subtitle">
             {plan === null
               ? '正在读取文件…'
               : `${plan.files.length} 个文件 · 可迁移 ${plan.summary.migratableCount} · 阻断 ${blockedCount} · +${plan.summary.addedLines} / −${plan.summary.removedLines} 行${
@@ -245,51 +338,101 @@ export function Kojo2MigrateWizard({
                 }`}
           </div>
         </div>
-        <span style={plan !== null && plan.ok ? styles.badgeOk : styles.badgeWarn}>
-          {phase === 'loading'
-            ? '预演中'
-            : phase === 'applying'
-              ? '应用中'
-              : phase === 'undoing'
-                ? '撤销中'
-                : plan !== null && plan.ok
-                  ? 'dry-run 就绪'
-                  : '有阻断'}
+        <span className="kojo2-wizard__status" data-tone={statusTone}>
+          {statusLabel}
         </span>
       </header>
 
+      <div className="kojo2-wizard__rail">
+        <ol className="kojo2-wizard__steps">
+          {steps.map((step, index) => (
+            <li
+              key={step.label}
+              className="kojo2-wizard-step"
+              data-state={step.state}
+              aria-current={step.state === 'current' ? 'step' : undefined}
+            >
+              <span className="kojo2-wizard-step__index" aria-hidden="true">
+                {step.state === 'done' ? (
+                  <Icon name="check" size="sm" />
+                ) : step.state === 'blocked' ? (
+                  <Icon name="warning" size="sm" />
+                ) : step.state === 'error' ? (
+                  <Icon name="close" size="sm" />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              <span className="kojo2-wizard-step__body">
+                <span className="kojo2-wizard-step__label">{step.label}</span>
+                <span className="kojo2-wizard-step__detail">{step.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+        <div
+          className="kojo2-wizard__progress"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressIndeterminate ? undefined : progressPct}
+          aria-label="迁移阶段进度"
+          data-state={progressState}
+          data-indeterminate={progressIndeterminate ? '1' : undefined}
+        >
+          <span className="kojo2-wizard__progress-track">
+            <span className="kojo2-wizard__progress-fill" style={{ width: `${progressPct}%` }} />
+          </span>
+          <span className="kojo2-wizard__progress-pct">{progressPct}%</span>
+        </div>
+      </div>
+
       {phase === 'loading' ? (
-        <div style={styles.centerNote}>正在预演（只读，不会写盘）…</div>
+        <div className="kojo2-wizard__loading" role="status" aria-busy="true">
+          <div className="kojo2-wizard__loading-caption">正在预演（只读，不会写盘）…</div>
+          <span className="kojo2-wizard__skeleton-row kojo2-wizard__skeleton-row--mid skeleton" />
+          <span className="kojo2-wizard__skeleton-row skeleton" />
+          <span className="kojo2-wizard__skeleton-row kojo2-wizard__skeleton-row--short skeleton" />
+          <span className="kojo2-wizard__skeleton-row kojo2-wizard__skeleton-row--mid skeleton" />
+        </div>
       ) : phase === 'error' ? (
-        <div style={styles.errorBox}>
-          <strong>预演失败：</strong>
-          {error}
-          <div style={styles.rowGap}>
-            <button style={styles.ghostButton} onClick={close}>
-              关闭
-            </button>
-            <button style={styles.primaryButton} onClick={() => setReloadNonce((n) => n + 1)}>
-              重试
-            </button>
+        <div className="kojo2-wizard__result" data-state="error" role="alert">
+          <span className="kojo2-wizard__result-icon">
+            <Icon name="close" size="md" />
+          </span>
+          <div className="kojo2-wizard__result-body">
+            <div>
+              <strong>预演失败：</strong>
+              {error}
+            </div>
+            <div className="kojo2-wizard__actions">
+              <button type="button" onClick={close}>
+                关闭
+              </button>
+              <button type="button" className="primary" onClick={() => setReloadNonce((n) => n + 1)}>
+                重试
+              </button>
+            </div>
           </div>
         </div>
       ) : plan === null || plan.files.length === 0 ? (
-        <div style={styles.centerNote}>没有可迁移的 v1 `.kojo` 文件。</div>
+        <div className="kojo2-wizard__note">没有可迁移的 v1 `.kojo` 文件。</div>
       ) : (
-        <div style={styles.body}>
-          <nav style={styles.fileList} aria-label="待迁移文件">
+        <div className="kojo2-wizard__body">
+          <nav className="kojo2-wizard__files" aria-label="待迁移文件">
             {plan.files.map((file) => {
               const tone = statusOf(file);
               return (
                 <button
                   key={file.filePath}
                   type="button"
+                  className="kojo2-wizard__file-row"
                   onClick={() => setSelectedPath(file.filePath)}
-                  style={file.filePath === selected?.filePath ? styles.fileRowActive : styles.fileRow}
+                  aria-current={file.filePath === selected?.filePath ? 'true' : undefined}
                   title={file.filePath}
                 >
-                  <span style={styles.fileName}>{fileNameOf(file.filePath)}</span>
-                  <span style={{ ...styles.chip, color: tone.color, borderColor: tone.border }}>
+                  <span className="kojo2-wizard__file-name">{fileNameOf(file.filePath)}</span>
+                  <span className="kojo2-wizard__chip" data-tone={tone.tone}>
                     {tone.label}
                   </span>
                 </button>
@@ -297,67 +440,82 @@ export function Kojo2MigrateWizard({
             })}
           </nav>
 
-          <main style={styles.preview}>
+          <main className="kojo2-wizard__preview">
             {selected === null ? null : (
               <>
-                <div style={styles.previewHead}>
-                  <span style={styles.previewPath} title={selected.filePath}>
+                <div className="kojo2-wizard__preview-head">
+                  <span className="kojo2-wizard__preview-path" title={selected.filePath}>
                     {selected.filePath}
                   </span>
-                  <span style={styles.dim}>
+                  <span className="kojo2-wizard__dim">
                     {selected.sourceEncoding} · {selected.sourceEol.toUpperCase()} · 写盘 preserve
                     {selected.rewrites.length > 0 ? ` · 语义升级 ${selected.rewrites.length} 条` : ''}
                   </span>
                 </div>
 
-                <div style={styles.diff} role="region" aria-label="逐行 diff">
+                <div className="kojo2-wizard__well kojo2-wizard__diff" role="region" aria-label="逐行 diff">
                   {previewLines.map((line, index) => (
-                    <div key={index} style={diffLineStyle(line)}>
+                    <div key={index} className="kojo2-wizard__diff-line" data-diff={diffTone(line)}>
                       {line.length === 0 ? ' ' : line}
                     </div>
                   ))}
                 </div>
 
                 {selected.rewrites.length > 0 ? (
-                  <section style={styles.section} aria-label="语义升级">
-                    <div style={styles.rewriteTitle}>
+                  <section className="kojo2-wizard__section" aria-label="语义升级">
+                    <div className="kojo2-wizard__section-title" data-tone="info">
                       语义升级 · {selected.rewrites.length} 条
-                      <span style={styles.dim}>
+                      <span>
                         下列构造在机械层是 unsupported；语义层证得动，已改写为 2.0（逐条给出原块 → 落点）
                       </span>
                     </div>
                     {selected.rewrites.map((rewrite, index) => (
-                      <div key={`${rewrite.kind}:${rewrite.line}:${index}`} style={styles.rewriteItem}>
-                        <div style={styles.rewriteHead}>
-                          <span style={styles.lineChip}>{rewriteRangeLabel(rewrite)}</span>
+                      <div
+                        key={`${rewrite.kind}:${rewrite.line}:${index}`}
+                        className="kojo2-wizard__item"
+                        data-tone="info"
+                      >
+                        <div className="kojo2-wizard__item-head">
+                          <span className="kojo2-wizard__line-chip">{rewriteRangeLabel(rewrite)}</span>
                           <span>{rewrite.title}</span>
                           {rewrite.declName === null ? null : (
-                            <code style={styles.code}>{rewrite.declName}</code>
+                            <code className="kojo2-wizard__code">{rewrite.declName}</code>
                           )}
                         </div>
-                        <pre style={styles.rewriteDiff}>{rewrite.diffText}</pre>
+                        <pre className="kojo2-wizard__well kojo2-wizard__rewrite-diff">{rewrite.diffText}</pre>
                       </div>
                     ))}
                   </section>
                 ) : null}
 
                 {selected.error !== null ? (
-                  <div style={styles.errorBox}>{selected.error}</div>
+                  <div className="kojo2-wizard__result" data-state="error" role="alert">
+                    <span className="kojo2-wizard__result-icon">
+                      <Icon name="close" size="md" />
+                    </span>
+                    <div className="kojo2-wizard__result-body">{selected.error}</div>
+                  </div>
                 ) : null}
 
                 {selected.unsupported.length > 0 ? (
-                  <section style={styles.section}>
-                    <div style={styles.sectionTitle}>不可迁移 · {selected.unsupported.length} 项</div>
+                  <section className="kojo2-wizard__section">
+                    <div className="kojo2-wizard__section-title" data-tone="warn">
+                      不可迁移 · {selected.unsupported.length} 项
+                    </div>
                     {selected.unsupported.map((item) => (
-                      <div key={`${item.line}:${item.code}`} style={styles.unsupportedItem}>
-                        <div style={styles.unsupportedHead}>
-                          <span style={styles.lineChip}>第 {item.line} 行</span>
+                      <div
+                        key={`${item.line}:${item.code}`}
+                        className="kojo2-wizard__item"
+                        data-tone="warn"
+                      >
+                        <div className="kojo2-wizard__item-head">
+                          <span className="kojo2-wizard__line-chip">第 {item.line} 行</span>
                           <span>{item.construct}</span>
-                          <code style={styles.code}>{item.code}</code>
+                          <code className="kojo2-wizard__code">{item.code}</code>
                         </div>
-                        <div style={styles.hint}>{item.targetHint}</div>
+                        <div className="kojo2-wizard__hint">{item.targetHint}</div>
                         {item.sourceLine.length > 0 ? (
-                          <pre style={styles.sourceLine}>{item.sourceLine}</pre>
+                          <pre className="kojo2-wizard__well kojo2-wizard__source-line">{item.sourceLine}</pre>
                         ) : null}
                       </div>
                     ))}
@@ -365,22 +523,24 @@ export function Kojo2MigrateWizard({
                 ) : null}
 
                 {selected.diagnostics.some((diagnostic) => diagnostic.severity === 'warning') ? (
-                  <section style={styles.section}>
-                    <div style={styles.sectionTitle}>需人工复核 · warning</div>
+                  <section className="kojo2-wizard__section">
+                    <div className="kojo2-wizard__section-title" data-tone="warn">
+                      需人工复核 · warning
+                    </div>
                     {selected.diagnostics
                       .filter((diagnostic) => diagnostic.severity === 'warning')
                       .map((diagnostic, index) => (
-                        <div key={`${diagnostic.code}:${index}`} style={styles.warningItem}>
-                          <span style={styles.lineChip}>
+                        <div key={`${diagnostic.code}:${index}`} className="kojo2-wizard__item-head">
+                          <span className="kojo2-wizard__line-chip">
                             {diagnostic.line === null ? '全文' : `第 ${diagnostic.line} 行`}
                           </span>
-                          <span>{diagnostic.message}</span>
+                          <span className="kojo2-wizard__hint">{diagnostic.message}</span>
                         </div>
                       ))}
                   </section>
                 ) : null}
 
-                <div style={styles.planNote}>
+                <div className="kojo2-wizard__plan-note">
                   {selected.ok
                     ? `应用计划：原地改写（不改扩展名、不删源）——先备份，再以 ${selected.sourceEncoding} / ${selected.sourceEol.toUpperCase()} 原样写回。${selected.backup.rollbackHint}`
                     : '该文件含不可迁移写法：整批默认拒绝写盘，源文件不会被改动。'}
@@ -392,48 +552,56 @@ export function Kojo2MigrateWizard({
       )}
 
       {applyResult !== null ? (
-        <div style={applyResult.ok ? styles.okBox : styles.errorBox}>
-          <strong>{applyResult.message}</strong>
-          {applyResult.files
-            .filter((file) => file.status !== 'applied')
-            .slice(0, 6)
-            .map((file) => (
-              <div key={file.filePath} style={styles.resultLine}>
-                {fileNameOf(file.filePath)}：{file.message}
-              </div>
-            ))}
+        <div className="kojo2-wizard__result" data-state={applyResult.ok ? 'ok' : 'error'} role="status">
+          <span className="kojo2-wizard__result-icon">
+            <Icon name={applyResult.ok ? 'check' : 'close'} size="md" />
+          </span>
+          <div className="kojo2-wizard__result-body">
+            <div className="kojo2-wizard__result-title">{applyResult.message}</div>
+            {applyResult.files
+              .filter((file) => file.status !== 'applied')
+              .slice(0, 6)
+              .map((file) => (
+                <div key={file.filePath} className="kojo2-wizard__result-line">
+                  {fileNameOf(file.filePath)}：{file.message}
+                </div>
+              ))}
+          </div>
         </div>
       ) : null}
 
-      {error !== null && phase !== 'error' ? <div style={styles.errorBox}>{error}</div> : null}
+      {error !== null && phase !== 'error' ? (
+        <div className="kojo2-wizard__result" data-state="error" role="alert">
+          <span className="kojo2-wizard__result-icon">
+            <Icon name="close" size="md" />
+          </span>
+          <div className="kojo2-wizard__result-body">{error}</div>
+        </div>
+      ) : null}
 
-      <footer style={styles.footer}>
-        <span style={styles.dim}>
+      <footer className="kojo2-wizard__footer">
+        <span className="kojo2-wizard__dim">
           {plan !== null && !plan.ok
             ? '存在阻断文件，应用已禁用；请先修正旧写法后重新预演。'
             : '应用前逐文件自动备份；写入失败或回读不一致会自动回滚。'}
         </span>
-        <div style={styles.rowGap}>
-          <button style={styles.ghostButton} onClick={close} disabled={phase === 'applying' || phase === 'undoing'}>
+        <div className="kojo2-wizard__actions">
+          <button type="button" onClick={close} disabled={phase === 'applying' || phase === 'undoing'}>
             取消
           </button>
           {phase === 'done' ? (
             <>
               {applyResult !== null && applyResult.written > 0 ? (
-                <button style={styles.ghostButton} onClick={() => void runUndo()}>
+                <button type="button" onClick={() => void runUndo()}>
                   撤销迁移
                 </button>
               ) : null}
-              <button style={styles.primaryButton} onClick={close}>
+              <button type="button" className="primary" onClick={close}>
                 完成
               </button>
             </>
           ) : (
-            <button
-              style={canApply ? styles.primaryButton : styles.primaryButtonDisabled}
-              onClick={() => void runApply()}
-              disabled={!canApply}
-            >
+            <button type="button" className="primary" onClick={() => void runApply()} disabled={!canApply}>
               {phase === 'applying' ? '正在应用…' : phase === 'undoing' ? '正在撤销…' : '应用迁移'}
             </button>
           )}
@@ -444,18 +612,18 @@ export function Kojo2MigrateWizard({
 }
 
 /**
- * 宿主的**挂载壳**：把向导放进一层盖住窗口的遮罩里（`position: fixed`）。
+ * 宿主的**挂载壳**：把向导放进一层盖住窗口的遮罩里。
  *
  * 为什么单独一层：向导本体（`Kojo2MigrateWizard`）是"一块对话框"，不假设自己被谁包着；
- * 宿主只需要在开的时候渲染这一层。样式全部内联、复用同一份 `styles`，**不碰** `styles.css`
- * （那是冲突热点），也就不需要新的类名。
+ * 宿主只需要在开的时候渲染这一层。遮罩挂既有 `.overlay-backdrop`（磨砂 + 压暗 + 居中 +
+ * `--z-modal`，与教程 / 部署 diff 同一族），**不碰** `styles.css`（那是冲突热点）。
  *
  * 点遮罩**不关**：应用 / 回滚在途时误触空白处就关掉，作者会看不到最终结果（与向导内部
  * 对 Esc 的处理同一条纪律——`applying` / `undoing` 阶段关不掉）。
  */
 export function Kojo2MigrateWizardHost(props: Kojo2MigrateWizardProps): ReactElement {
   return (
-    <div style={styles.backdrop} data-kojo2-migrate-host="">
+    <div className="overlay-backdrop" data-kojo2-migrate-host="">
       <Kojo2MigrateWizard {...props} />
     </div>
   );
@@ -463,17 +631,17 @@ export function Kojo2MigrateWizardHost(props: Kojo2MigrateWizardProps): ReactEle
 
 /* ============================== 呈现小工具 ============================== */
 
+/** 文件状态档：文案 + `data-tone`（色与描边住 kojo2.css，不再由 TS 算字面量色） */
 interface StatusTone {
   readonly label: string;
-  readonly color: string;
-  readonly border: string;
+  readonly tone: 'danger' | 'warn' | 'muted' | 'ok';
 }
 
 function statusOf(file: MigrateFilePlan): StatusTone {
-  if (file.error !== null) return { label: '读取失败', color: '#ffb4ab', border: 'rgba(255,180,171,0.4)' };
-  if (!file.ok) return { label: `阻断 ${file.unsupported.length}`, color: '#ffca8a', border: 'rgba(255,202,138,0.4)' };
-  if (!file.changed) return { label: '已是 2.0', color: '#9aa7b8', border: 'rgba(154,167,184,0.35)' };
-  return { label: `+${file.summary.addedLines} / −${file.summary.removedLines}`, color: '#7ee787', border: 'rgba(126,231,135,0.35)' };
+  if (file.error !== null) return { label: '读取失败', tone: 'danger' };
+  if (!file.ok) return { label: `阻断 ${file.unsupported.length}`, tone: 'warn' };
+  if (!file.changed) return { label: '已是 2.0', tone: 'muted' };
+  return { label: `+${file.summary.addedLines} / −${file.summary.removedLines}`, tone: 'ok' };
 }
 
 /** 语义升级的行范围标签（单行块不写 `–` 空档） */
@@ -483,12 +651,13 @@ function rewriteRangeLabel(rewrite: MigrateRewriteView): string {
     : `第 ${rewrite.line} 行`;
 }
 
-function diffLineStyle(line: string): CSSProperties {
-  if (line.startsWith('+++') || line.startsWith('---')) return { color: '#8ab4f8', fontWeight: 600 };
-  if (line.startsWith('@@')) return { color: '#c792ea' };
-  if (line.startsWith('+')) return { color: '#7ee787', background: 'rgba(46,160,67,0.12)' };
-  if (line.startsWith('-')) return { color: '#ff7b72', background: 'rgba(248,81,73,0.10)' };
-  return { color: '#9aa7b8' };
+/** diff 行档位（旧 `diffLineStyle` 的字面量表 → kojo2.css 的 `data-diff` 语义档） */
+function diffTone(line: string): 'meta' | 'hunk' | 'add' | 'del' | 'context' {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'meta';
+  if (line.startsWith('@@')) return 'hunk';
+  if (line.startsWith('+')) return 'add';
+  if (line.startsWith('-')) return 'del';
+  return 'context';
 }
 
 function fileNameOf(path: string): string {
@@ -499,231 +668,3 @@ function fileNameOf(path: string): string {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-/* ============================== 内联样式（局部，不碰全局样式表） ============================== */
-
-const styles = {
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    zIndex: 'var(--z-modal)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    background: 'rgba(1,4,9,0.62)',
-    backdropFilter: 'blur(2px)',
-  },
-  root: {
-    width: 'min(1080px, 94vw)',
-    height: 'min(720px, 86vh)',
-    display: 'flex',
-    flexDirection: 'column',
-    color: '#e6edf3',
-    background: 'linear-gradient(180deg, #161b22 0%, #0d1117 100%)',
-    border: '1px solid rgba(139,148,158,0.35)',
-    borderRadius: 14,
-    boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
-    overflow: 'hidden',
-    fontFamily: 'system-ui, "Segoe UI", "Microsoft YaHei", sans-serif',
-    fontSize: 13,
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 16,
-    padding: '14px 18px',
-    borderBottom: '1px solid rgba(139,148,158,0.2)',
-    background: 'rgba(22,27,34,0.9)',
-  },
-  title: { fontSize: 16, fontWeight: 700, letterSpacing: 0.2 },
-  subtitle: { marginTop: 4, color: '#9aa7b8', fontSize: 12 },
-  badgeOk: {
-    padding: '3px 10px',
-    borderRadius: 999,
-    fontSize: 11,
-    color: '#7ee787',
-    border: '1px solid rgba(126,231,135,0.4)',
-    background: 'rgba(46,160,67,0.12)',
-    whiteSpace: 'nowrap',
-  },
-  badgeWarn: {
-    padding: '3px 10px',
-    borderRadius: 999,
-    fontSize: 11,
-    color: '#ffca8a',
-    border: '1px solid rgba(255,202,138,0.4)',
-    background: 'rgba(187,128,9,0.14)',
-    whiteSpace: 'nowrap',
-  },
-  body: { display: 'flex', flex: 1, minHeight: 0 },
-  fileList: {
-    width: 280,
-    flexShrink: 0,
-    overflowY: 'auto',
-    borderRight: '1px solid rgba(139,148,158,0.2)',
-    padding: 8,
-    background: 'rgba(13,17,23,0.6)',
-  },
-  fileRow: {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    padding: '8px 10px',
-    marginBottom: 4,
-    color: '#c9d1d9',
-    background: 'transparent',
-    border: '1px solid transparent',
-    borderRadius: 8,
-    cursor: 'pointer',
-    textAlign: 'left',
-    font: 'inherit',
-  },
-  fileRowActive: {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    padding: '8px 10px',
-    marginBottom: 4,
-    color: '#ffffff',
-    background: 'rgba(56,139,253,0.16)',
-    border: '1px solid rgba(56,139,253,0.45)',
-    borderRadius: 8,
-    cursor: 'pointer',
-    textAlign: 'left',
-    font: 'inherit',
-  },
-  fileName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  chip: { flexShrink: 0, padding: '1px 7px', borderRadius: 999, border: '1px solid', fontSize: 10 },
-  preview: { flex: 1, minWidth: 0, overflowY: 'auto', padding: 14 },
-  previewHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 8 },
-  previewPath: { fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12, color: '#c9d1d9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  dim: { color: '#8b949e', fontSize: 11 },
-  diff: {
-    margin: 0,
-    padding: '10px 12px',
-    maxHeight: 300,
-    overflow: 'auto',
-    background: '#010409',
-    border: '1px solid rgba(139,148,158,0.25)',
-    borderRadius: 8,
-    fontFamily: 'ui-monospace, Consolas, monospace',
-    fontSize: 12,
-    lineHeight: 1.55,
-    whiteSpace: 'pre',
-  },
-  section: { marginTop: 14 },
-  sectionTitle: { fontSize: 12, fontWeight: 700, color: '#ffca8a', marginBottom: 6 },
-  rewriteTitle: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 12, fontWeight: 700, color: '#8ab4f8', marginBottom: 6 },
-  rewriteItem: {
-    padding: '8px 10px',
-    marginBottom: 6,
-    border: '1px solid rgba(56,139,253,0.35)',
-    borderRadius: 8,
-    background: 'rgba(56,139,253,0.07)',
-  },
-  rewriteHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', color: '#c9d1d9' },
-  rewriteDiff: {
-    margin: '6px 0 0',
-    padding: '6px 8px',
-    maxHeight: 180,
-    overflow: 'auto',
-    background: '#010409',
-    borderRadius: 6,
-    fontFamily: 'ui-monospace, Consolas, monospace',
-    fontSize: 11,
-    lineHeight: 1.55,
-    whiteSpace: 'pre',
-  },
-  unsupportedItem: {
-    padding: '8px 10px',
-    marginBottom: 6,
-    border: '1px solid rgba(187,128,9,0.35)',
-    borderRadius: 8,
-    background: 'rgba(187,128,9,0.08)',
-  },
-  unsupportedHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  lineChip: {
-    padding: '0 6px',
-    borderRadius: 4,
-    fontSize: 10,
-    color: '#ffca8a',
-    border: '1px solid rgba(255,202,138,0.4)',
-  },
-  code: { marginLeft: 'auto', fontSize: 10, color: '#8b949e' },
-  hint: { marginTop: 4, color: '#c9d1d9' },
-  sourceLine: {
-    margin: '6px 0 0',
-    padding: '4px 8px',
-    background: '#010409',
-    borderRadius: 5,
-    color: '#ff7b72',
-    fontFamily: 'ui-monospace, Consolas, monospace',
-    fontSize: 11,
-    overflowX: 'auto',
-  },
-  warningItem: { display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 4, color: '#c9d1d9' },
-  planNote: { marginTop: 14, color: '#8b949e', fontSize: 11, lineHeight: 1.6 },
-  centerNote: { flex: 1, display: 'grid', placeItems: 'center', color: '#8b949e', padding: 24 },
-  errorBox: {
-    margin: 14,
-    padding: '10px 12px',
-    color: '#ffb4ab',
-    background: 'rgba(248,81,73,0.08)',
-    border: '1px solid rgba(248,81,73,0.4)',
-    borderRadius: 8,
-    lineHeight: 1.6,
-  },
-  okBox: {
-    margin: 14,
-    padding: '10px 12px',
-    color: '#7ee787',
-    background: 'rgba(46,160,67,0.10)',
-    border: '1px solid rgba(126,231,135,0.35)',
-    borderRadius: 8,
-    lineHeight: 1.6,
-  },
-  resultLine: { marginTop: 4, color: '#c9d1d9', fontSize: 11 },
-  footer: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 16,
-    padding: '12px 18px',
-    borderTop: '1px solid rgba(139,148,158,0.2)',
-    background: 'rgba(22,27,34,0.9)',
-  },
-  rowGap: { display: 'flex', alignItems: 'center', gap: 8 },
-  ghostButton: {
-    padding: '6px 14px',
-    color: '#c9d1d9',
-    background: 'transparent',
-    border: '1px solid rgba(139,148,158,0.45)',
-    borderRadius: 7,
-    cursor: 'pointer',
-    font: 'inherit',
-  },
-  primaryButton: {
-    padding: '6px 16px',
-    color: '#ffffff',
-    background: '#238636',
-    border: '1px solid rgba(46,160,67,0.6)',
-    borderRadius: 7,
-    cursor: 'pointer',
-    font: 'inherit',
-  },
-  primaryButtonDisabled: {
-    padding: '6px 16px',
-    color: '#6e7681',
-    background: 'rgba(35,134,54,0.25)',
-    border: '1px solid rgba(46,160,67,0.2)',
-    borderRadius: 7,
-    cursor: 'not-allowed',
-    font: 'inherit',
-  },
-} satisfies Record<string, CSSProperties>;
