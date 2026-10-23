@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { pushNotice } from './notice-queue';
 import { Icon } from './icons';
+import { installNoticeMenuHost } from './context-menu-shell';
 
 /** 通知动作按钮（如「去授权」）——点击后先关 toast 再执行 */
 export interface NoticeAction {
@@ -51,6 +52,17 @@ export const NotifyContext = createContext<Notify>(() => {});
 const INFO_TTL_MS = 6000;
 
 /**
+ * 一条通知身上的可执行动作（`action` 与 `actions` 两代形态按序拼起来）。
+ *
+ * 右键菜单「执行通知里的操作」按这个顺序编号（`notice.run.<index>`）——屏上按钮的
+ * 排列就是 `action` 在前、`actions` 在后，两边同序才不至于「菜单点的」和「按钮点的」
+ * 不是同一件事。导出只为单测（`shell-menus.test.ts` 钉住顺序口径）。
+ */
+export function noticeActionsOf(notice: NoticeInput): readonly NoticeAction[] {
+  return [...(notice.action ? [notice.action] : []), ...(notice.actions ?? [])];
+}
+
+/**
  * 壳层通知中心（2026-10-11 写权限闭环批 P0；定稿 §九-3）。
  *
  * 壳层私有（不进内核事件表）：Provider + toast 渲染一体，任意壳层组件经
@@ -69,6 +81,34 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
   const dismiss = useCallback((id: number) => {
     setNotices((list) => list.filter((n) => n.id !== id));
   }, []);
+
+  /** 一键清掉屏上全部（右键菜单的「清除全部通知」；计时器由下面那个收敛 effect 一并收） */
+  const clearAll = useCallback(() => setNotices([]), []);
+
+  /**
+   * 通知面的右键菜单（WP3.8）：把「屏上有哪几条 + 每条带什么动作」交给菜单数据面，
+   * 动作仍回到这里落地（`dismiss` / `clearAll` / 执行通知自带的 action）。
+   * 菜单不持有第二份通知列表——真源始终是本组件的 `notices`。
+   */
+  useEffect(() => {
+    return installNoticeMenuHost({
+      notices: notices.map((n) => ({
+        id: n.id,
+        message: n.message,
+        ...(n.detail === undefined ? {} : { detail: n.detail }),
+        actions: noticeActionsOf(n).map((a) => a.label),
+      })),
+      dismiss,
+      clearAll,
+      runAction: (id, index) => {
+        const notice = notices.find((n) => n.id === id);
+        const action = notice === undefined ? undefined : noticeActionsOf(notice)[index];
+        // 先收通知再执行：与 toast 上那颗按钮同一顺序（动作可能开面板/弹窗，不该被盖在 toast 下）
+        dismiss(id);
+        action?.run();
+      },
+    });
+  }, [notices, dismiss, clearAll]);
 
   const notify = useCallback<Notify>(
     (input) => {
@@ -103,9 +143,16 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
     <NotifyContext.Provider value={notify}>
       {children}
       {notices.length > 0 ? (
-        <div className="notification-center">
+        <div className="notification-center" data-context-surface="notification">
           {notices.map((n) => (
-            <div key={n.id} className={`toast toast-${n.kind}`} role="alert" title={n.detail}>
+            <div
+              key={n.id}
+              className={`toast toast-${n.kind}`}
+              role="alert"
+              title={n.detail}
+              // 右键菜单认这一条是谁（容器空白处 = 整批「清除全部」）
+              data-notice-id={n.id}
+            >
               <span className="toast-icon" aria-hidden="true">
                 <Icon name={n.kind === 'error' ? 'error' : 'info'} size={16} />
               </span>

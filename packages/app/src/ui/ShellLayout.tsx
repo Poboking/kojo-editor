@@ -23,6 +23,7 @@ import {
   beginLiveResize,
   beginSplitResize,
   defaultLayout,
+  effectiveLocation,
   filterGameScopedPanels,
   gameScopeByPlugin,
   loadLayout,
@@ -145,6 +146,15 @@ import { ContextMenu, type ContextMenuItem } from './context-menu';
 // 右键菜单（1023 覆盖面批）：根路由挂在 App 壳层，命令注册表在这里——两边靠这根线接头，
 // 兜底菜单里的「命令面板 / 设置 / 检查更新」才按得动（判据与命令面板同一份，不另造）。
 import { registerContextMenuCommandRunner } from './context-menu-model';
+// 壳层七面的右键菜单（1023 覆盖面批）：菜单数据面在 context-menu-shell（纯函数 + 面声明），
+// 这里只注入能力面（快照 + 既有布局动作），不把菜单文案写进这个 2269 行的大文件。
+import {
+  defaultFloatRect,
+  installShellMenuHost,
+  maximizedFloatRect,
+  type ShellContainerTarget,
+  type ShellMenuHost,
+} from './context-menu-shell';
 import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
@@ -1392,11 +1402,9 @@ export function ShellLayout(props: Props): ReactElement {
     const n = Object.keys(layoutRef.current.floating).length;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const w = Math.min(960, Math.max(460, Math.round(vw * 0.52)));
-    const h = Math.min(680, Math.max(320, Math.round(vh * 0.62)));
-    const x = Math.max(16, Math.round((vw - w) / 2) + n * 26);
-    const y = Math.max(16, 64 + n * 26);
-    dispatch({ type: 'float', id, geometry: { x, y, w, h } });
+    // 初值公式住在 context-menu-shell（浮窗右键的「重置位置与尺寸」要用同一个数，
+    // 抄一份在这里迟早两边不一样——那正是「重置」看起来没重置的成因）
+    dispatch({ type: 'float', id, geometry: defaultFloatRect(n, { w: vw, h: vh }) });
   }, []);
 
   /** 视口尺寸供应商（拖拽/缩放钳制的基准；每次手势现场取，窗口改变不吃旧值） */
@@ -1585,6 +1593,78 @@ export function ShellLayout(props: Props): ReactElement {
   const toggleCollapse = (panelId: string): void =>
     setCollapsed((prev) => ({ ...prev, [panelId]: !prev[panelId] }));
 
+  /* -------------------- 右键菜单：壳层七面的能力面（WP3.7 / 4.1 / 4.2 / 4.3） -------------------- */
+
+  /**
+   * 菜单动作要读的**当下**状态（活动面板 / 浮窗几何 / 折叠位 / 换行符落地入口）。
+   *
+   * 走 ref 而不是把 layout 塞进 `useMemo` 依赖：宿主对象必须**引用稳定**
+   * （`installShellMenuHost` 只注入一次），而布局每拖一次都换对象——若把 layout 写进依赖，
+   * 每次布局变化都会重装一次宿主，菜单开着时正好点下去就可能落在被卸下的那份上。
+   */
+  const menuStateRef = useRef({ layout, allPanels, org, collapsed, onSwitchEol });
+  menuStateRef.current = { layout, allPanels, org, collapsed, onSwitchEol };
+
+  /** 浮窗几何按当前视口取（最大化判据与重置都现场算，窗口改过尺寸不吃旧值） */
+  const menuViewport = (): { w: number; h: number } => ({ w: window.innerWidth, h: window.innerHeight });
+
+  const shellMenuHost = useMemo<ShellMenuHost>(
+    () => ({
+      snapshot: () => {
+        const state = menuStateRef.current;
+        const status = getShellEditorStatus();
+        return {
+          floating: state.layout.floating,
+          sidebarVisible: state.layout.sidebar.visible,
+          activeViewKey: state.layout.sidebar.active,
+          eol: status === null ? null : status.eol === 'CRLF' ? 'CRLF' : 'LF',
+          canSwitchEol: status?.eolSwitchable === true && state.onSwitchEol !== undefined,
+        };
+      },
+      containerOf: (panelId) => {
+        const panel = menuStateRef.current.allPanels.find((p) => p.id === panelId);
+        if (panel === undefined) return null;
+        return effectiveLocation(panel, menuStateRef.current.layout.panelLocations);
+      },
+      panelsOfView: (viewKey) =>
+        menuStateRef.current.org.views.find((v) => v.key === viewKey)?.panels.map((p) => p.id) ?? [],
+      isCollapsed: (panelId) => menuStateRef.current.collapsed[panelId] === true,
+      closeContainer: (container) => dispatch({ type: 'toggle', container }),
+      float: (panelId) => floatPanel(panelId),
+      dock: (panelId) => dispatch({ type: 'dock', id: panelId }),
+      move: (panelId, to: ShellContainerTarget) => {
+        const panel = menuStateRef.current.allPanels.find((p) => p.id === panelId);
+        if (panel === undefined) return;
+        // 与拖拽停靠同一条意图（viewKey 口径由 planPanelMoves 统一算，不在这里另写一遍）
+        for (const intent of planPanelMoves([panelId], [panel], to)) {
+          dispatch({ type: 'move', id: intent.id, to: intent.to, viewKey: intent.viewKey });
+        }
+      },
+      maximizeFloat: (panelId) => {
+        const rect = maximizedFloatRect(menuViewport());
+        dispatch({ type: 'moveFloating', id: panelId, x: rect.x, y: rect.y });
+        dispatch({ type: 'resizeFloating', id: panelId, w: rect.w, h: rect.h });
+      },
+      resetFloat: (panelId) => {
+        const rect = defaultFloatRect(0, menuViewport());
+        dispatch({ type: 'moveFloating', id: panelId, x: rect.x, y: rect.y });
+        dispatch({ type: 'resizeFloating', id: panelId, w: rect.w, h: rect.h });
+      },
+      toggleCollapse: (panelId) => toggleCollapse(panelId),
+      resetLayout: () => doResetRef.current(),
+      switchEol: (eol) => menuStateRef.current.onSwitchEol?.(eol),
+      toggleSidebarView: (viewKey) =>
+        dispatch(
+          menuStateRef.current.layout.sidebar.visible && menuStateRef.current.layout.sidebar.active === viewKey
+            ? { type: 'toggle', container: 'sidebar' }
+            : { type: 'activate', container: 'sidebar', key: viewKey },
+        ),
+    }),
+    // 全部方法读 ref / 稳定回调（dispatch、floatPanel、doResetRef），宿主因此只注入一次
+    [floatPanel],
+  );
+  useEffect(() => installShellMenuHost(shellMenuHost), [shellMenuHost]);
+
   /* -------- 侧栏多面板弹性分栏（用户反馈：口上文件/函数树默认 50/50，可上下拉伸） -------- */
 
   /** 各视图的分栏权重（会话级，与组内折叠同级不持久化；缺省 = 全 1 等分） */
@@ -1689,6 +1769,8 @@ export function ShellLayout(props: Props): ReactElement {
     <nav
       className={`activitybar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
       aria-label="活动栏"
+      // 右键面根（1023 覆盖面批 · WP4.1）：图标按钮自带 data-view-key，菜单据此认「点的是哪个视图」
+      data-context-surface="activity-bar"
       {...dropProps('sidebar')}
     >
       {abHighFreq.map((v, i) => (
@@ -1696,6 +1778,7 @@ export function ShellLayout(props: Props): ReactElement {
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
           title={`${v.title}（可拖拽到其他容器）`}
+          data-view-key={v.key}
           draggable
           tabIndex={v.key === abTabKey ? 0 : -1}
           onKeyDown={(e) => activityKeyDown(e, i)}
@@ -1718,6 +1801,7 @@ export function ShellLayout(props: Props): ReactElement {
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
           title={`${v.title}（可拖拽到其他容器）`}
+          data-view-key={v.key}
           draggable
           tabIndex={v.key === abTabKey ? 0 : -1}
           onKeyDown={(e) => activityKeyDown(e, abHighFreq.length + i)}
@@ -1763,6 +1847,10 @@ export function ShellLayout(props: Props): ReactElement {
               <button
                 className="sidebar-section-head"
                 title={`${p.title}（可拖拽到其他容器）`}
+                // 右键面根（WP3.7 分区头）：data-panel-id 让菜单知道「是哪一节」；
+                // 「折叠 / 展开」的文案由宿主按会话折叠态给（状态真源仍在 React 这边）
+                data-context-surface="panel-section-header"
+                data-panel-id={p.id}
                 draggable
                 onDragStart={(e) => startPanelDrag(e, [p.id])}
                 onDragEnd={dragEnd}
@@ -1802,7 +1890,15 @@ export function ShellLayout(props: Props): ReactElement {
   );
 
   const tabStrip = (container: 'aux' | 'bottom', items: readonly UIPanelContribution[], activeId: string | null): ReactElement => (
-    <div className="panel-tabs" role="tablist">
+    <div
+      className="panel-tabs"
+      role="tablist"
+      // 右键面根（WP3.7 面板选项卡）：容器写在这里（aux/bottom 共用这一个函数），
+      // 空白处右键按「当前激活的那颗面板」出菜单——与条尾的 ✕ / 浮动按钮同一个受作用者
+      data-context-surface="panel-tabs"
+      data-panel-tabs-container={container}
+      data-active-panel={activeId ?? ''}
+    >
       {items.map((p, i) => (
         <button
           key={p.id}
@@ -1811,6 +1907,7 @@ export function ShellLayout(props: Props): ReactElement {
           tabIndex={p.id === activeId ? 0 : -1}
           className={`panel-tab ${p.id === activeId ? 'active' : ''}`}
           title={`${p.title}（可拖拽到其他容器）`}
+          data-panel-id={p.id}
           draggable
           onKeyDown={(e) => tabStripKeyDown(e, container, items, i)}
           onDragStart={(e) => startPanelDrag(e, [p.id])}
@@ -1843,7 +1940,7 @@ export function ShellLayout(props: Props): ReactElement {
   const projectMenuItems: ContextMenuItem[] = [{ id: 'project.close', label: '关闭项目', danger: true }];
 
   const toolbar = (
-    <header className="toolbar">
+    <header className="toolbar" data-context-surface="toolbar">
       <div className="toolbar-left">
         {commandCtx.project ? (
           <span className="tb-project" title={commandCtx.project.rootDir}>
@@ -1890,6 +1987,9 @@ export function ShellLayout(props: Props): ReactElement {
               key={t.id}
               className="ghost small toolbar-btn"
               title={t.title}
+              // 右键面根（WP4.2 工具条）：「复制命令标题 / 命令 ID」只对挂了命令的贡献按钮成立
+              data-toolbar-command={t.command}
+              data-toolbar-title={t.title}
               disabled={!enabled}
               onClick={() => runToolbarCommand(t.command)}
             >
@@ -1965,7 +2065,7 @@ export function ShellLayout(props: Props): ReactElement {
           : '只读：写权限未批准，点击重新授权';
 
   const statusbar = (
-    <footer className={`statusbar ${layout.zen ? 'zen' : ''}`}>
+    <footer className={`statusbar ${layout.zen ? 'zen' : ''}`} data-context-surface="status-bar">
       <div className="sb-left">
         {writablePill === 'ok' ? (
           <span className="sb-writable ok" title={writablePillTitle}>
@@ -2240,6 +2340,9 @@ export function ShellLayout(props: Props): ReactElement {
             className="floating-panel"
             style={{ left: f.x, top: f.y, width: f.w, height: f.h }}
             aria-label={p.title}
+            // 右键面根（浮窗）：整个窗口（标题栏 + 内容区）都算，菜单认 data-floating-panel-id
+            data-context-surface="floating-window"
+            data-floating-panel-id={p.id}
           >
             <header className="floating-panel-head" onPointerDown={(e) => startFloatDrag(e, p.id)}>
               <Icon name={p.icon ?? 'preview'} size={14} />
