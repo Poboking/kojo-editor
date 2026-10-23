@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
 import { Icon, type IconName } from './icons';
@@ -17,6 +17,7 @@ import {
   setOutlineMenuContext,
   type OutlineMenuRow,
 } from './outline-menu';
+import '../outline-panel.css';
 
 /**
  * 侧栏「大纲」（批次十 S9）——对标 VS Code Outline 的宿主内建面板体。
@@ -47,6 +48,15 @@ import {
  *   上，形一变**当帧即视为空集**，不用等 effect 才纠偏。
  * - **只折有子节点的行**：叶子行折了什么都不变，这种 id 进集合等于一份看不见的脏状态；
  *   渲染侧与菜单侧都先问 `outlineHasChildren`。
+ *
+ * ## 样式（批次十一 L11 收编）
+ *
+ * 住 `../outline-panel.css`（此前整片内联硬编码 `fontSize: 12` / px padding / 12px 每级
+ * 缩进，绕开类系统与 token）。行密度取文件树同一档（22px 行高 / 缩进步进同值口径），
+ * 颜色一律 token；组件里只剩"第几级"这一个**无单位数字**（`--outline-depth`），
+ * 像素步进算式在 CSS。悬停高亮改由 CSS `:hover` 承担——不再为"鼠标在哪一行"起一份
+ * React state（旧 `hoverId` 每移一行就重渲一次，且与 `:hover` 是同一件事的两份真源）；
+ * 当前行以 `is-active` 类挂进行容器，折叠指示 / 占位 / 回执条同理全部走类。
  */
 
 /** 文档改动后的补读延迟：排在面包屑 250ms 重算之后，直接复用它的树缓存 */
@@ -114,7 +124,6 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
   const docTimerRef = useRef<number | null>(null);
   /** 当前符号行（光标走时滚到可见处，与 VS Code 的"跟随"同感） */
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
-  const [hoverId, setHoverId] = useState<string | null>(null);
   /**
    * 折叠集 + 它属于哪一"形"的文档（见文件头「折叠」三条边界）。
    *
@@ -291,17 +300,13 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
 
   const body =
     state.notice !== null ? (
-      <div
-        data-outline-empty=""
-        style={{ padding: '12px 10px', color: 'var(--fg-dim)', fontSize: 12, lineHeight: 1.6 }}
-      >
+      <div data-outline-empty="" className="outline-empty">
         {state.notice}
       </div>
     ) : (
-      <div role="tree" aria-label="大纲" style={{ padding: '4px 0' }}>
+      <div role="tree" aria-label="大纲" className="outline-tree">
         {visibleRows.map((row) => {
           const active = row.id === activeId;
-          const hovered = row.id === hoverId;
           const name = row.name.length > 0 ? row.name : '（未命名）';
           const title = row.detail !== null ? `${row.name} — ${row.detail}` : row.name;
           const foldable = foldableIds.has(row.id);
@@ -313,22 +318,16 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
             <div
               key={row.id}
               role="none"
+              className={active ? 'outline-row is-active' : 'outline-row'}
               {...{ [OUTLINE_ROW_ATTR]: '', [OUTLINE_ROW_ID_ATTR]: row.id }}
-              onMouseEnter={() => setHoverId(row.id)}
-              onMouseLeave={() => setHoverId((prev) => (prev === row.id ? null : prev))}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                minHeight: 22,
-                paddingLeft: row.depth * 12,
-                background: active ? 'var(--active)' : hovered ? 'var(--hover)' : 'transparent',
-                boxShadow: active ? 'inset 2px 0 0 rgb(var(--accent-rgb))' : 'none',
-              }}
+              // 缩进只递"第几级"这一个无单位数字，像素步进与档位都在 outline-panel.css 里
+              style={{ '--outline-depth': row.depth } as CSSProperties}
             >
               {foldable ? (
                 <button
                   type="button"
                   data-outline-fold=""
+                  className="outline-row__fold"
                   aria-expanded={!folded}
                   aria-label={`${folded ? '展开' : '折叠'} ${name}`}
                   title={folded ? '展开这一支' : '折叠这一支'}
@@ -337,31 +336,18 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
                     event.stopPropagation();
                     foldRows([row.id], !folded);
                   }}
-                  style={{
-                    flex: '0 0 auto',
-                    width: 14,
-                    height: 14,
-                    padding: 0,
-                    border: 0,
-                    borderRadius: 0,
-                    background: 'transparent',
-                    color: 'var(--fg-dim)',
-                    font: 'inherit',
-                    fontSize: 10,
-                    lineHeight: '14px',
-                    cursor: 'pointer',
-                  }}
                 >
                   {folded ? '▸' : '▾'}
                 </button>
               ) : (
                 // 叶子行留同宽占位：名字不会因为"有没有子节点"而左右跳
-                <span aria-hidden="true" style={{ flex: '0 0 auto', width: 14, height: 14 }} />
+                <span aria-hidden="true" className="outline-row__fold outline-row__fold--leaf" />
               )}
               <button
                 ref={active ? activeRowRef : null}
                 type="button"
                 role="treeitem"
+                className="outline-row__body"
                 aria-level={row.depth + 1}
                 aria-selected={active}
                 aria-expanded={foldable ? !folded : undefined}
@@ -369,45 +355,12 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
                 onClick={() => {
                   if (state.path !== null) onReveal(state.path, row.startLine);
                 }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  flex: '1 1 auto',
-                  minWidth: 0,
-                  minHeight: 22,
-                  padding: '2px 8px 2px 0',
-                  border: 0,
-                  borderRadius: 0,
-                  background: 'transparent',
-                  color: active ? 'var(--fg)' : 'var(--fg-dim)',
-                  font: 'inherit',
-                  fontSize: 12,
-                  lineHeight: '18px',
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                }}
               >
-                <span style={{ flex: '0 0 auto', display: 'inline-flex', width: 14, height: 14 }}>
+                <span className="outline-row__icon">
                   <Icon name={iconForKind(row.kind)} size={14} />
                 </span>
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {name}
-                </span>
-                {row.detail !== null ? (
-                  <span
-                    style={{
-                      flex: '0 1 auto',
-                      minWidth: 0,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      opacity: 0.7,
-                    }}
-                  >
-                    {row.detail}
-                  </span>
-                ) : null}
+                <span className="outline-row__name">{name}</span>
+                {row.detail !== null ? <span className="outline-row__detail">{row.detail}</span> : null}
               </button>
             </div>
           );
@@ -416,18 +369,11 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
     );
 
   return (
-    <div
-      data-context-surface="outline"
-      style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'auto' }}
-    >
+    <div data-context-surface="outline" className="outline-panel">
       {body}
       {/* 复制回执（菜单动作的唯一可见反馈）：与空态那句分开——一个是常驻事实，一个是刚发生的事 */}
       {flash !== null ? (
-        <div
-          role="status"
-          data-outline-flash=""
-          style={{ padding: '6px 10px', color: 'var(--fg-dim)', fontSize: 12, borderTop: '1px solid var(--border)' }}
-        >
+        <div role="status" data-outline-flash="" className="outline-flash">
           {flash}
         </div>
       ) : null}

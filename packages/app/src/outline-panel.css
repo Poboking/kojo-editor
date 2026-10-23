@@ -1,0 +1,170 @@
+/* ============================================================================
+   侧栏「大纲」面板（批次十 S9 的面板体 + 1023 缺口批的折叠）——样式收编
+   （批次十一 L11-inline-to-class · 2026-10-24 二轮）
+   ============================================================================
+
+   此前 `OutlinePanel.tsx` 整片内联硬编码（`fontSize: 12`、px padding、行高 18px、
+   缩进 12px/级、折叠箭头 10px 字号），绕开类系统与 token，等于文件树旁边又长了
+   一棵"手感不同"的树。本文件把它收回既有 token 尺度，口径照 `palette.css` /
+   `search-panel.css`：
+
+   ① 组件级引入（`OutlinePanel.tsx` 里 `import '../outline-panel.css'`），
+      **`styles.css` / `styles-project.css` 一行未改**（冲突热点）。
+   ② 不写死颜色：面 / 边 / 字 / 选中 / 悬停全取 token。
+   ③ **行密度与文件树对齐**：行高与缩进步进取 `.file-tree` 那两枚局部变量的
+      **同值**（`--tree-row-h: 22px` / `--tree-indent: 14px` 挂在 `.file-tree` 上，
+      大纲面板不在它的子树里、继承不到，故在此按档重申而不是另造一档）。
+      // ui-kit-candidate: KitDenseRow——把这两枚升成全局 `--row-h-dense` / `--indent-step`
+      //                    后，本文件与 `.file-tree` 都改成读全局，一处收口（登记给 L01）。
+   ④ 缩进仍是数据（`depth`）驱动：TSX 只递一个**无单位数字** `--outline-depth`，
+      步进算式住在 CSS 里，像素值不再散进组件。
+   ⑤ 悬停高亮走 `:hover`，当前行走 `is-active` 类——两份原本活在 React state 里的
+      瞬时视觉（`hoverId` / `active` 内联三元）都交还给 CSS 这一个真源。
+   ⑥ 折叠指示与行主体是**并列**两个可点面（对面 5229c023 的形状），两枚按钮都
+      逐项压回基类 `button` 的实心 / 描边 / 高光 / 按压位移（密集行不许缩放）。
+   ============================================================================ */
+
+.outline-panel {
+  --outline-row-h: 22px;
+  --outline-indent: 14px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  font-size: var(--fs-1);
+}
+
+/* 空态一律可见（铁律 4）：一句人话，不静默留白 */
+.outline-empty {
+  padding: var(--space-3) var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+}
+
+.outline-tree {
+  padding: var(--space-1) 0;
+}
+
+/* 行容器：折叠指示 + 行主体两个并列按钮的宿主。高亮（悬停 / 当前行）挂在这层，
+   横贯整行——而不是只盖住按钮各自的底。`--outline-depth` 由 TSX 给（无单位）。 */
+.outline-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--outline-row-h);
+  padding-left: calc(var(--outline-indent) * var(--outline-depth, 0));
+  background: transparent;
+  color: var(--fg-dim);
+}
+.outline-row:hover {
+  background: var(--hover);
+}
+
+/* 当前行：`--active` 底 + 左侧 2px accent 指示条（与标签页 / 树行同一族）。
+   文字转正跨到行主体按钮上（按钮自己不再带色，颜色从容器继承）。 */
+.outline-row.is-active {
+  background: var(--active);
+  box-shadow: inset 2px 0 0 rgb(var(--accent-rgb));
+  color: var(--fg);
+}
+.outline-row.is-active:hover {
+  /* 当前行上的悬停不再换底——accent wash 已经比 `--hover` 重，叠两层读成脏 */
+  background: var(--active);
+}
+
+/* 折叠指示 / 叶子占位：同宽同高的方位，占位条只是不画箭头、不可点 */
+.outline-row__fold {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-4);
+  height: var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: var(--fs-0);
+  line-height: var(--space-4);
+  cursor: pointer;
+}
+.outline-row__fold:hover {
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+.outline-row__fold:active:not(:disabled) {
+  background: var(--press-overlay);
+  box-shadow: none;
+  transform: none;
+}
+.outline-row__fold:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.outline-row__fold--leaf {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 行主体 = 可点按钮 ⇒ 逐项压回基类 `button` 的实心 / 描边 / 高光 / 按压位移
+   （密集行不许缩放：全站按压纪律第③条）。 */
+.outline-row__body,
+.outline-row__body:active:not(:disabled) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--outline-row-h);
+  margin: 0;
+  padding: 0 var(--space-2) 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-1);
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.outline-row__body:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.outline-row__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.outline-row__name,
+.outline-row__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-row__detail {
+  flex: 0 1 auto;
+  opacity: 0.7;
+}
+
+/* 复制回执（菜单动作的唯一可见反馈）：短命状态行，与空态分面 */
+.outline-flash {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}

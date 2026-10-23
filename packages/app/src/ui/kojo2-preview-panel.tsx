@@ -30,8 +30,11 @@
  *
  * ## 样式
  *
- * 全部内联 + 既有设计 token（`--surface-sunken` / `--fg-dim` / `--danger` / `--warning` /
- * `--accent` / `--font-code` / `--fs-1`…），**不改 `styles.css`**。三主题自动跟随。
+ * 类名住 `../kojo2.css` 的 `.kojo2-preview*` 一族（批次十一 L11 收编：此前**整族零
+ * CSS 规则、全靠内联裸 px**，等于在既有设计系统旁边另起第二套样式语言）。颜色一律
+ * 语义 token、尺度一律 `--space-*` / `--fs-*` / `--radius-*`，三主题自动跟随。
+ * 留在内联的只剩**数据驱动的度量**：虚拟化的上下衬垫高度、行高（可注入 metrics）。
+ * `styles.css` 仍然一行未改。
  */
 import {
   useCallback,
@@ -52,6 +55,7 @@ import {
   type Kojo2PreviewModel,
   type Kojo2PreviewRow,
 } from './kojo2-preview-model';
+import '../kojo2.css';
 
 /* ============================== 度量与窗口 ============================== */
 
@@ -275,25 +279,12 @@ export const KOJO2_PREVIEW_UNMAPPED_MARK: Kojo2PreviewKindMark = Object.freeze({
   label: '未登记映射：这一行没有 source map 记录',
 });
 
-/** kind 标记的配色（全部设计 token；未登记行走 dim） */
-const KIND_COLOR: Readonly<Record<SourceMapLineKind, string>> = {
-  source: 'var(--fg-dim)',
-  generated: 'var(--fg-dim)',
-  template: 'var(--accent-text)',
-  pool: 'var(--green)',
-  native: 'var(--amber)',
-};
+/** kind 标记的配色住在 `kojo2.css` 的 `.kojo2-preview__kind[data-kind=…]`（语义 token；
+ *  未登记行更淡一档）。这里不再留一份色表——两份真源迟早分叉。 */
 
 /* ============================== 行渲染 ============================== */
 
-/** 严重级 → 设计 token（error / warning；没有诊断 = null） */
-function severityColor(severity: 'error' | 'warning' | null): string | null {
-  if (severity === 'error') return 'var(--danger)';
-  if (severity === 'warning') return 'var(--warning)';
-  return null;
-}
-
-/** 气泡里的严重级字形（纯文本，读屏与静态渲染都读得出） */
+/** 气泡里的严重级字形（纯文本，读屏与静态渲染都读得出）；配色走 `[data-severity]` */
 const SEVERITY_GLYPH: Readonly<Record<'error' | 'warning', string>> = {
   error: '●',
   warning: '▲',
@@ -310,7 +301,6 @@ export interface Kojo2PreviewRowOptions {
 }
 
 function diagnosticBubble(diagnostic: Kojo2PreviewDiagnostic): ReactElement {
-  const color = severityColor(diagnostic.severity) ?? 'var(--fg-dim)';
   const columns = diagnostic.columns;
   return (
     <span
@@ -321,13 +311,6 @@ function diagnosticBubble(diagnostic: Kojo2PreviewDiagnostic): ReactElement {
       data-column-start={columns?.start}
       data-column-end={columns?.end}
       title={`${diagnostic.severity === 'error' ? '错误' : '警告'} · ${diagnostic.code}\n${diagnostic.message}`}
-      style={{
-        color,
-        fontFamily: 'var(--font-meta)',
-        fontSize: 'var(--fs-0)',
-        lineHeight: '1',
-        opacity: 0.95,
-      }}
     >
       {SEVERITY_GLYPH[diagnostic.severity]}
     </span>
@@ -344,9 +327,7 @@ function previewRowElement(
   const sourceLine = model.sourceLineForPreviewLine(row.line);
   const column = row.kojoRange?.start.column ?? 1;
   const mark = row.kind === null ? KOJO2_PREVIEW_UNMAPPED_MARK : KOJO2_PREVIEW_KIND_MARKS[row.kind];
-  const color = severityColor(row.severity);
   const active = options.activeLine === row.line;
-  const kindColor = row.kind === null ? 'var(--fg-dim)' : KIND_COLOR[row.kind];
   const originCount = row.origins.length;
   const title =
     sourceLine === null
@@ -360,31 +341,10 @@ function previewRowElement(
     options.onJumpToSource(sourceLine, column);
   };
 
-  const rowStyle: CSSProperties = {
-    display: 'grid',
-    gridTemplateColumns: '44px 16px minmax(0, 1fr) auto',
-    alignItems: 'center',
-    gap: '8px',
-    boxSizing: 'border-box',
-    width: '100%',
-    height: `${rowHeight}px`,
-    padding: '0 10px 0 6px',
-    margin: 0,
-    border: 'none',
-    borderLeft: `2px solid ${color ?? (active ? 'var(--accent)' : 'transparent')}`,
-    background: active
-      ? 'color-mix(in srgb, var(--accent) 12%, transparent)'
-      : color !== null
-        ? `color-mix(in srgb, ${color} 8%, transparent)`
-        : 'transparent',
-    color: 'var(--fg)',
-    fontFamily: 'var(--font-meta)',
-    fontSize: 'var(--fs-1)',
-    lineHeight: '1',
-    textAlign: 'left',
-    whiteSpace: 'pre',
-    cursor: sourceLine === null ? 'default' : 'pointer',
-  };
+  // 只有"这一次渲染算出来的高度"留内联；观感（诊断左边条 / 同步高亮底 / 未映射行
+  // 文字色与指针）全在 kojo2.css 里按 `data-severity` / `data-active` / `data-source-line`
+  // 三个既有属性档展开——判据仍是模型给的那一个，不在 CSS 之外重算。
+  const rowStyle: CSSProperties = { height: rowHeight };
 
   return (
     <button
@@ -401,47 +361,12 @@ function previewRowElement(
       onClick={activate}
       style={rowStyle}
     >
-      <span
-        className="kojo2-preview__ln"
-        style={{
-          color: 'var(--fg-dim)',
-          fontFamily: 'var(--font-meta)',
-          fontSize: 'var(--fs-0)',
-          fontVariantNumeric: 'tabular-nums',
-          textAlign: 'right',
-          opacity: active ? 1 : 0.75,
-        }}
-      >
-        {row.line}
-      </span>
-      <span
-        className="kojo2-preview__kind"
-        data-kind={row.kind ?? 'unmapped'}
-        aria-hidden="true"
-        style={{
-          color: kindColor,
-          fontFamily: 'var(--font-meta)',
-          fontSize: 'var(--fs-0)',
-          textAlign: 'center',
-          opacity: row.kind === null ? 0.6 : 0.9,
-        }}
-      >
+      <span className="kojo2-preview__ln">{row.line}</span>
+      <span className="kojo2-preview__kind" data-kind={row.kind ?? 'unmapped'} aria-hidden="true">
         {mark.glyph}
       </span>
-      <span
-        className="kojo2-preview__text"
-        style={{
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          fontFamily: 'var(--font-code)',
-          color: row.kojoRange === null ? 'var(--fg-dim)' : 'var(--fg)',
-        }}
-      >
-        {row.text.length === 0 ? '\u00a0' : row.text}
-      </span>
-      <span className="kojo2-preview__bubbles" style={{ display: 'inline-flex', gap: '4px' }}>
-        {row.diagnostics.map(diagnosticBubble)}
-      </span>
+      <span className="kojo2-preview__text">{row.text.length === 0 ? '\u00a0' : row.text}</span>
+      <span className="kojo2-preview__bubbles">{row.diagnostics.map(diagnosticBubble)}</span>
     </button>
   );
 }
@@ -486,63 +411,6 @@ export interface Kojo2PreviewPanelProps {
   readonly enabled?: boolean;
 }
 
-const PANEL_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  minHeight: 0,
-  width: '100%',
-  height: '100%',
-  boxSizing: 'border-box',
-  background: 'var(--surface-sunken)',
-  color: 'var(--fg)',
-  borderTop: '1px solid var(--border-subtle)',
-  fontFamily: 'var(--font-meta)',
-  fontSize: 'var(--fs-1)',
-};
-
-const HEAD_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '8px',
-  flex: '0 0 auto',
-  padding: '6px 10px',
-  borderBottom: '1px solid var(--border-subtle)',
-  color: 'var(--fg-dim)',
-  fontSize: 'var(--fs-0)',
-  letterSpacing: '0.02em',
-};
-
-const BODY_STYLE: CSSProperties = {
-  position: 'relative',
-  flex: '1 1 auto',
-  minHeight: 0,
-  overflowY: 'auto',
-  overflowX: 'hidden',
-  padding: 0,
-  margin: 0,
-  scrollbarGutter: 'stable',
-};
-
-const FOOTER_STYLE: CSSProperties = {
-  flex: '0 0 auto',
-  maxHeight: '132px',
-  overflowY: 'auto',
-  padding: '6px 10px 8px',
-  borderTop: '1px solid var(--border-subtle)',
-  background: 'var(--surface-raised)',
-  color: 'var(--fg-dim)',
-  fontSize: 'var(--fs-0)',
-};
-
-const UNLOCATED_ITEM_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: '6px',
-  padding: '2px 0',
-  listStyle: 'none',
-  whiteSpace: 'pre-wrap',
-};
-
 /**
  * 未定位诊断的底部清单（每条一行：级别 + 码 + 消息 + 源行号）。
  *
@@ -553,44 +421,31 @@ function unlocatedList(diagnostics: readonly KojoDiagnostic[]): ReactElement {
     <footer
       className="kojo2-preview__unlocated"
       data-count={diagnostics.length}
-      style={FOOTER_STYLE}
       aria-label={`未定位诊断 ${diagnostics.length} 条`}
     >
-      <div style={{ display: 'flex', gap: '6px', alignItems: 'baseline', marginBottom: '2px' }}>
-        <span style={{ color: 'var(--fg)' }}>未定位诊断</span>
+      <div className="kojo2-preview__unlocated-head">
+        <strong>未定位诊断</strong>
         <span data-role="count">{diagnostics.length}</span>
-        <span style={{ opacity: 0.7 }}>落不到产物行 · 详见问题面板</span>
+        <span className="kojo2-preview__muted">落不到产物行 · 详见问题面板</span>
       </div>
-      <ul style={{ margin: 0, padding: 0 }}>
-        {diagnostics.map((diagnostic, index) => {
-          const color = severityColor(diagnostic.severity) ?? 'var(--fg-dim)';
-          return (
-            <li
-              key={`${diagnostic.code}-${index}`}
-              className="kojo2-preview__unlocated-item"
-              data-code={diagnostic.code}
-              data-severity={diagnostic.severity}
-              style={UNLOCATED_ITEM_STYLE}
-            >
-              <span style={{ color, flex: '0 0 auto' }}>
-                {diagnostic.severity === 'error' ? '错误' : '警告'}
-              </span>
-              <code
-                style={{
-                  color: 'var(--accent-text)',
-                  fontFamily: 'var(--font-mono)',
-                  flex: '0 0 auto',
-                }}
-              >
-                {diagnostic.code}
-              </code>
-              <span style={{ minWidth: 0 }}>{diagnostic.message}</span>
-              {diagnostic.span !== null ? (
-                <span style={{ flex: '0 0 auto' }}>第 {diagnostic.span.start.line} 行</span>
-              ) : null}
-            </li>
-          );
-        })}
+      <ul className="kojo2-preview__unlocated-list">
+        {diagnostics.map((diagnostic, index) => (
+          <li
+            key={`${diagnostic.code}-${index}`}
+            className="kojo2-preview__unlocated-item"
+            data-code={diagnostic.code}
+            data-severity={diagnostic.severity}
+          >
+            <span className="kojo2-preview__severity">
+              {diagnostic.severity === 'error' ? '错误' : '警告'}
+            </span>
+            <code className="kojo2-preview__code">{diagnostic.code}</code>
+            <span className="kojo2-preview__message">{diagnostic.message}</span>
+            {diagnostic.span !== null ? (
+              <span className="kojo2-preview__at">第 {diagnostic.span.start.line} 行</span>
+            ) : null}
+          </li>
+        ))}
       </ul>
     </footer>
   );
@@ -708,24 +563,11 @@ export function Kojo2PreviewPanel(props: Kojo2PreviewPanelProps): ReactElement |
     <section
       className="kojo2-preview"
       data-lines={model?.lineCount ?? 0}
-      style={PANEL_STYLE}
       aria-label="Kojo 2.0 编译预览"
     >
-      <header className="kojo2-preview__head" style={HEAD_STYLE}>
-        <span
-          aria-hidden="true"
-          style={{
-            width: '6px',
-            height: '6px',
-            borderRadius: '50%',
-            background: 'var(--accent)',
-            boxShadow: '0 0 0 3px var(--accent-dim)',
-            flex: '0 0 auto',
-          }}
-        />
-        <span className="kojo2-preview__title" style={{ color: 'var(--fg)' }}>
-          编译预览
-        </span>
+      <header className="kojo2-preview__head">
+        <span className="kojo2-preview__dot" aria-hidden="true" />
+        <span className="kojo2-preview__title">编译预览</span>
         <span className="kojo2-preview__count" data-role="lines">
           {model === null ? 0 : model.lineCount} 行产物
         </span>
@@ -737,24 +579,11 @@ export function Kojo2PreviewPanel(props: Kojo2PreviewPanelProps): ReactElement |
       </header>
 
       {built.failure !== null ? (
-        <div
-          className="kojo2-preview__error"
-          role="alert"
-          style={{
-            padding: '10px',
-            color: 'var(--danger)',
-            background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
-            borderLeft: '2px solid var(--danger)',
-            whiteSpace: 'pre-wrap',
-          }}
-        >
+        <div className="kojo2-preview__error" role="alert">
           {built.failure}
         </div>
       ) : model === null ? null : model.lineCount === 0 ? (
-        <div
-          className="kojo2-preview__empty"
-          style={{ padding: '10px', color: 'var(--fg-dim)' }}
-        >
+        <div className="kojo2-preview__empty">
           这份文件没有可预览的产物行（编译没有产出字节）。
         </div>
       ) : (
@@ -765,18 +594,18 @@ export function Kojo2PreviewPanel(props: Kojo2PreviewPanelProps): ReactElement |
           data-window-end={visibleWindow.endLine}
           data-window-count={visibleWindow.count}
           onScroll={handleScroll}
-          style={BODY_STYLE}
         >
+          {/* 只有"这一次渲染算出来的衬垫"留内联：虚拟化像素级占位不是设计常量 */}
           <div
             className="kojo2-preview__pad kojo2-preview__pad--top"
             aria-hidden="true"
-            style={{ height: `${visibleWindow.topPadding}px` }}
+            style={{ height: visibleWindow.topPadding }}
           />
           {rows}
           <div
             className="kojo2-preview__pad kojo2-preview__pad--bottom"
             aria-hidden="true"
-            style={{ height: `${visibleWindow.bottomPadding}px` }}
+            style={{ height: visibleWindow.bottomPadding }}
           />
         </div>
       )}
