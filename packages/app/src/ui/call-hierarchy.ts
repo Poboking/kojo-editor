@@ -1,4 +1,6 @@
 import type { ContextMenuItem } from './context-menu-model';
+/** 跨文件 resolver 的形状（`import type` 只活到编译期：本模块不进开机图） */
+import type { Kojo2CallHierarchyResolvers } from '../monaco/kojo2-callhierarchy';
 
 /**
  * 调用层级 overlay 的宿主状态（2026-10-16 批 E；批次十 2026-10-23 补 kojo2 分派）。
@@ -10,8 +12,11 @@ import type { ContextMenuItem } from './context-menu-model';
  *
  * kojo2 的取数（"位点 → 可调用声明 → 出入边"）不在本模块：它随
  * `monaco/kojo2-callhierarchy.ts` 一起**懒装载**——那边的解析器会让开机图多出一大坨
- * （PS-10 ① 的体积闸），面板首次遇到 kojo2 文件时才走 {@link loadKojo2CallHierarchyPanel}
- * 的动态边；本模块保持零值依赖（`import type` 会被擦除，不进开机图）。
+ * （PS-10 ① 的体积闸），面板首次遇到 kojo2 文件时才走 {@link loadKojo2CallHierarchyPanelBundle}
+ * 的动态边；跨文件 resolver 同理（项目索引住在 `ui/editor-global-providers.ts`）。
+ * 两条腿装好后写回模块级快照 {@link kojo2PanelBundle}：**再打开面板同步取用**，
+ * 不再每次 await（批次十一 CALLHIER-INJECT 的收口点）。本模块保持零值依赖
+ * （`import type` 会被擦除，真正的模块只在动态边里出现，不进开机图）。
  */
 
 /** ui.overlay 贡献 id（`App.tsx` 接线注册；开/关窗走 `ui.overlay.open`/`close`） */
@@ -312,4 +317,63 @@ let kojo2PanelModule: Promise<Kojo2PanelApi> | null = null;
 export function loadKojo2CallHierarchyPanel(): Promise<Kojo2PanelApi> {
   kojo2PanelModule ??= import('../monaco/kojo2-callhierarchy');
   return kojo2PanelModule;
+}
+
+/* ============================== kojo2 分支的就绪面（批次十一） ============================== */
+
+/**
+ * kojo2 分支的就绪上下文：取数模块（provider 工厂 + 取数函数）+ 项目索引交出的跨文件
+ * resolver。
+ *
+ * **缺口**（批次十一定位）：resolver 住在 `ui/editor-global-providers.ts`（项目索引
+ * `kojo2ProjectIndex` 的所在），面板此前从未接上它——`resolveKojo2CallHierarchy` 退到
+ * `createKojo2CallHierarchyProvider()` 的默认腿，只算同文件，跨文件入 / 出边永远不可见。
+ * 两条腿都只能走动态 `import()`（PS-10 ① 开机图闸），所以在这里合成一条 Promise 一起等：
+ * 就位后写模块级快照 {@link kojo2PanelBundle}，**面板第二次打开直接同步取用**，
+ * 首帧只有在真正装载时才显示加载态（不许拿"只同文件"冒充空态）。
+ */
+export interface Kojo2PanelBundle {
+  readonly api: Kojo2PanelApi;
+  readonly resolvers: Kojo2CallHierarchyResolvers;
+}
+
+let kojo2ResolversModule: Promise<Kojo2CallHierarchyResolvers> | null = null;
+let kojo2Bundle: Kojo2PanelBundle | null = null;
+let kojo2BundleModule: Promise<Kojo2PanelBundle> | null = null;
+
+/** 已装载的就绪上下文（同步；`null` = 还没装好——面板据此显示加载态） */
+export function kojo2PanelBundle(): Kojo2PanelBundle | null {
+  return kojo2Bundle;
+}
+
+/**
+ * 懒装载跨文件 resolver（进程内一次；失败不钉死，收起面板重开会重试——与面板文案同一承诺）。
+ *
+ * resolver 由项目索引**现造**、每次查询读实时索引 ⇒ 扫描 / 保存把新文件喂进索引后，
+ * 再次打开面板即可拿到新的跨文件边，不需要重新装载。
+ */
+export function loadKojo2CallHierarchyResolvers(): Promise<Kojo2CallHierarchyResolvers> {
+  kojo2ResolversModule ??= import('./editor-global-providers').then(
+    (host) => host.kojo2CallHierarchyResolvers(),
+    (error: unknown) => {
+      kojo2ResolversModule = null;
+      throw error;
+    },
+  );
+  return kojo2ResolversModule;
+}
+
+/** 两条腿一起等（解析器模块 + 项目索引 resolver）；就绪后写模块级快照。 */
+export function loadKojo2CallHierarchyPanelBundle(): Promise<Kojo2PanelBundle> {
+  kojo2BundleModule ??= Promise.all([
+    loadKojo2CallHierarchyPanel(),
+    loadKojo2CallHierarchyResolvers(),
+  ]).then(
+    ([api, resolvers]) => (kojo2Bundle = { api, resolvers }),
+    (error: unknown) => {
+      kojo2BundleModule = null;
+      throw error;
+    },
+  );
+  return kojo2BundleModule;
 }

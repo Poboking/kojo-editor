@@ -35,10 +35,14 @@
  *
  * - 数字（首字符是 `\p{N}`）；
  * - 函数名（记号后（可隔空白）紧跟 `(` 的调用形）；
- * - ERB 语句/词运算符/字面量（见 `ERB_KEYWORDS`）；
- * - 成员访问与索引链（记号紧邻半/全角冒号，如 `CFLAG:TARGET:100`、`X:NAME`）；
+ * - ERB 语句/词运算符/字面量（见 `ERB_KEYWORDS`）与 Emuera 内置变量名（`ENGINE_BUILTIN_NAMES`）；
+ * - 显示指令行（`PRINT` 全族）——其后的整段是文本，`=` 也不例外；
+ * - 成员访问与索引链（记号紧邻半/全角冒号，冒号两侧**可隔空白**）；
  * - 通配/展开形（成对 `%NAME%`）、`@` 作用域写法、`￥` 具名索引（`FLAG:￥人気`）；
  * - `[[ … ]]` 双括号文本/字符名字面量；
+ * - 名字内符号（`・`/`（）`/`／`/`？`/零宽空格）紧邻的记号——它只是一个更长声明名的一段；
+ * - 字符串型伪变量（含 `STR`/`ARGS`/`TSTR`/`SAVESTR`/`NICKNAME`）赋值的整行；
+ * - 赋值目标以数字开头（Emuera 标识符不许数字开头 ⇒ 那是散文被 `=` 误判）；
  * - CALLFORM 等动态调用行（整行不扫，见上）。
  *
  * 纯函数：文本 + 已知名集进、诊断数组出；不读盘、不碰工程状态。
@@ -124,8 +128,9 @@ const EXPRESSION_STATEMENTS: ReadonlySet<string> = new Set([
  * ERB 语言层关键字 / 字面量 / 词运算符——它们不是变量引用。
  *
  * 只收**跨游戏通用**的词（引擎伪变量、字符对象常量、字面量、`AND/OR/XOR`）；
- * 引擎变量族头（`CFLAG` / `FLAG` / …）与具体常量（`C_PINK` 一类）属于适配器名录，
- * 由 `engineGlobalNames` 注入，这里不抄第二份游戏知识。
+ * 引擎变量族头/内置标量不混进这里——它们是"永远有定义的名"而非关键字，单列在
+ * `ENGINE_BUILTIN_NAMES`；具体常量（`C_PINK` 一类）仍属于适配器名录，由
+ * `engineGlobalNames` 注入，本层不抄第二份游戏知识。
  */
 const ERB_KEYWORD_LIST: readonly string[] = [
   // 语言层伪变量（ARG/ARGS 形参与返回值槽）
@@ -175,8 +180,71 @@ const ERB_KEYWORD_LIST: readonly string[] = [
 
 const ERB_KEYWORDS: ReadonlySet<string> = new Set(ERB_KEYWORD_LIST);
 
-/** 字符串型内置伪变量：赋值右侧可能是无引号文本，整行不扫（见 `collectUndefinedNameDiagnostics`） */
-const STRING_BUILTIN_NAMES: ReadonlySet<string> = new Set(['LOCALS', 'RESULTS', 'NAME', 'CALLNAME', 'MASTERNAME', 'TRAINNAME']);
+/**
+ * Emuera **内置变量 / 疑似変数**名（引擎保留名：任何 era 系作品都不需要 `#DIM`）。
+ *
+ * 依据是引擎语法事实而不是某部作品：`TALENT` / `ITEM` / `EQUIP` / `ABL` / `EXP` 等是
+ * `GETNUM(<変数族>, …)` 第一参的族头（写全名即是合法写法）；`NOITEM` / `TEQUIP` /
+ * `FLAG` / `TCVAR` / `NOWEX` / `STAIN` 等是内置标量/数组；`GAMEBASE_*` 是系统变量。
+ * 语料实测（eraTW 4.980，4,385 份 `.erb`）这二十余枚名字贡献约 440 条误报——它们从未有过
+ * `#DIM` 声明，却永远有定义，按未定义报就是把引擎保留名当作者拼错。
+ *
+ * 只收**实测出现过**的名字（不抄整张 Emuera 变量表）：多收一个就可能掩盖作者对
+ * 同名用户变量的真实拼写错误。
+ */
+const ENGINE_BUILTIN_NAMES: readonly string[] = [
+  // 变量族头（`GETNUM/CSV*` 第一参、也可直接带 `:` 索引）
+  'ABL',
+  'CFLAG',
+  'CDFLAG',
+  'EQUIP',
+  'EX', // `EXP` 族的 Emuera 别名（语料 1,740 处 `EX:…`，全无 #DIM）
+  'EXP',
+  'FLAG',
+  'JUEL',
+  'MARK',
+  'NOWEX',
+  'PALAM',
+  'SOURCE',
+  'STAIN',
+  'TALENT',
+  'TCVAR',
+  'TEQUIP',
+  'TFLAG',
+  // 内置标量 / 数组 / 系统变量
+  'BASENAME',
+  'DRAWLINESTR',
+  'EQUIPNAME',
+  'ABLNAME',
+  'EXPNAME',
+  'GAMEBASE_TITLE',
+  'GAMEBASE_VERSION',
+  'ITEM',
+  'NICKNAME',
+  'NO',
+  'NOITEM',
+  'RAND',
+];
+
+/**
+ * 字符串型内置伪变量：赋值右侧可以是无引号文本，整行不扫（见 `collectUndefinedNameDiagnostics`）。
+ *
+ * 语料实证（eraTW 4.980）：`ARGS = 共通` / `STR:16 = 破旧小屋` / `TSTR:1 = 科技蓝白呼吸`
+ * 这类写法有 150+ 处——右侧的裸词是作者写的**文本**，不是变量引用。
+ */
+const STRING_BUILTIN_NAMES: ReadonlySet<string> = new Set([
+  'LOCALS',
+  'RESULTS',
+  'NAME',
+  'CALLNAME',
+  'MASTERNAME',
+  'TRAINNAME',
+  'NICKNAME',
+  'SAVESTR',
+  'STR',
+  'ARGS',
+  'TSTR',
+]);
 
 /**
  * 赋值形行首：`名字` + 可选索引链（`[..]` / `:..`）+ 赋值运算符。
@@ -196,6 +264,18 @@ const TOKEN_RUN = new RegExp(`${MODEL_TOKEN_CLASS}+`, 'gu');
 
 /** 行首语句关键字（只认 ASCII 字母下划线；与 `visibleCodeLines` 的 CALL 判据同形） */
 const LEADING_WORD_RE = /^[A-Za-z_]+/;
+
+/**
+ * 行首是 Emuera 的显示指令（`PRINT` / `PRINTL` / `PRINTFORM…` / `PRINTBUTTON…` 全族以
+ * `PRINT` 开头）。
+ *
+ * 语料实证：`PRINTL =-._　…` 这类 ASCII 画/台词里带 `=`，会被赋值形预筛当成
+ * "`PRINTL` = 一段表达式"——100 处误报全部来自这一条误判。显示指令之后的整段是文本，
+ * 词法上与变量引用不可区分 ⇒ 整行不扫（与"PRINT 族整行不扫"的既定口径一致）。
+ */
+function isDisplayStatement(lead: string | undefined): boolean {
+  return lead !== undefined && lead.startsWith('PRINT');
+}
 
 /** 行首名字（含 CJK；用于识别赋值目标） */
 const LEADING_NAME_RE = new RegExp(`^[\\t \\u3000]*(${MODEL_TOKEN_CLASS}+)`, 'u');
@@ -225,9 +305,26 @@ const FULLWIDTH_SPACE = 0x3000;
 
 /** 记号紧邻半/全角冒号（变量成员 / 索引链的另一段） */
 function colonAdjacent(text: string, start: number, end: number): boolean {
-  const before = start > 0 ? text.charCodeAt(start - 1) : -1;
-  const after = end < text.length ? text.charCodeAt(end) : -1;
-  return before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL;
+  // 语料实证：Emuera 允许冒号两侧带空白（`TALENT: 恋慕`、`SELECTCASE RAND : 5`）。
+  // 只认零距离会把索引里的 CSV 名与 `RAND`/`TALENT` 这类族头全标成未定义变量。
+  let i = start - 1;
+  while (i >= 0 && isErbSpace(text.charCodeAt(i))) i--;
+  if (i >= 0) {
+    const before = text.charCodeAt(i);
+    if (before === COLON_HALF || before === COLON_FULL) return true;
+  }
+  let j = end;
+  while (j < text.length && isErbSpace(text.charCodeAt(j))) j++;
+  if (j < text.length) {
+    const after = text.charCodeAt(j);
+    if (after === COLON_HALF || after === COLON_FULL) return true;
+  }
+  return false;
+}
+
+/** 行内空白（半角空格 / 制表 / 全角空格）——冒号两侧与显示文本判定共用 */
+function isErbSpace(code: number): boolean {
+  return code === SPACE || code === TAB || code === FULLWIDTH_SPACE;
 }
 
 /**
@@ -252,6 +349,30 @@ function wildAdjacent(text: string, start: number, end: number): boolean {
 
 /** 具名索引 / `[[ … ]]` 字面量区段：记号落在里面就不算变量引用（一次算、多记号查） */
 type Range = readonly [start: number, endExclusive: number];
+
+/**
+ * 名字内部符号（`・` 等）——记号紧邻它们时，说明它只是**一个更长声明名的一段**。
+ *
+ * 语料实证：`#DIM CONST P37夢幻遺跡・一階通路 = 37` 的声明名含 `・`，而记号尺
+ * （`MODEL_TOKEN_CLASS`，与着色同源、不许在本层另开一把）会在 `・` 处切开，
+ * 于是 `P37夢幻遺跡` / `一階通路` 两段都查不到声明——这类误报在语料里成片出现。
+ * ERB 表达式没有 `・` 运算符，故紧邻即"更长名字的一段"是安全判据（宁可漏报）。
+ */
+const NAME_INTERNAL_SYMBOLS: ReadonlySet<number> = new Set([
+  0x30fb, // ・ 中点
+  0xff65, // ･ 半角中点
+  0x200b, // ​ 零宽空格（语料把 `P235​​舞​的房間` 原样声明成名字）
+  0xff08, // （
+  0xff09, // ）
+  0xff0f, // ／
+  0xff1f, // ？
+]);
+
+function nameInternalAdjacent(text: string, start: number, end: number): boolean {
+  const before = start > 0 ? text.charCodeAt(start - 1) : -1;
+  const after = end < text.length ? text.charCodeAt(end) : -1;
+  return NAME_INTERNAL_SYMBOLS.has(before) || NAME_INTERNAL_SYMBOLS.has(after);
+}
 
 /** 索引名字符串的终止符：空白与表达式运算符（`・～／` 这类名字内符号不算） */
 const INDEX_TERMINATORS: ReadonlySet<number> = new Set([
@@ -336,9 +457,9 @@ function callAdjacent(text: string, end: number): boolean {
   return i < text.length && text.charCodeAt(i) === OPEN_PAREN;
 }
 
-/** 声明名归一：去掉尾部数组维度（旧式 `#DIM NAME[10]`）与空白 */
+/** 声明名归一：去 `;` 行注释尾巴、去尾部数组维度（旧式 `#DIM NAME[10]`）与空白 */
 function declaredBaseName(raw: string): string {
-  return raw.replace(/\[[^\]]*\]\s*$/, '').trim();
+  return raw.replace(/;.*$/, '').replace(/\[[^\]]*\]\s*$/, '').trim();
 }
 
 /** 往已知集里并入一批名字（大小写归一；保留首个原形供 did-you-mean 展示） */
@@ -376,6 +497,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
   // ---- 文件级已知名（#DIM + 四类外部名录）----
   const baseDisplay = new Map<string, string>();
   addNames(baseDisplay, ERB_KEYWORD_LIST);
+  addNames(baseDisplay, ENGINE_BUILTIN_NAMES);
   addNames(baseDisplay, input.builtinNames);
   addNames(baseDisplay, input.engineGlobalNames);
   addNames(baseDisplay, input.knownNames);
@@ -416,10 +538,11 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
     if (!raw.includes('=')) continue;
     const lead = LEADING_WORD_RE.exec(raw.trim())?.[0]?.toUpperCase();
     if (lead !== undefined && EXPRESSION_STATEMENTS.has(lead)) continue;
+    if (isDisplayStatement(lead)) continue;
     const code = lineInfo.codeView();
     if (!ASSIGN_LINE_RE.test(code)) continue;
     const lhs = LEADING_NAME_RE.exec(code)?.[1];
-    if (lhs === undefined) continue;
+    if (lhs === undefined || STARTS_WITH_NUMBER.test(lhs)) continue;
     const name = declaredBaseName(lhs);
     if (name.length === 0) continue;
     const upper = name.toUpperCase();
@@ -482,16 +605,18 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
     const lead = LEADING_WORD_RE.exec(trimmed);
     const keyword = lead?.[0]?.toUpperCase();
     const isExpressionLine = keyword !== undefined && EXPRESSION_STATEMENTS.has(keyword);
+    const isDisplay = isDisplayStatement(keyword);
     // 廉价预筛：只有表达式语句或原文带 `=` 的行才需要代码视野（避免全篇逐行刷白）
-    if (!isExpressionLine && !raw.includes('=')) continue;
+    if (!isExpressionLine && (isDisplay || !raw.includes('='))) continue;
     const code = lineInfo.codeView();
     // 表达式语句或赋值形才进入词法扫描；其余行整行不扫（散文 / 函数名 / 动态调用）
-    if (!isExpressionLine && !ASSIGN_LINE_RE.test(code)) continue;
+    if (!isExpressionLine && (isDisplay || !ASSIGN_LINE_RE.test(code))) continue;
     // 字符串型赋值目标的右侧可以是无引号文本（`CNAME = 你这家伙`、地图数组整行文字），
     // 词法上与变量引用不可区分 ⇒ 整行跳过（fail-open）。
     if (!isExpressionLine) {
       const lhs = LEADING_NAME_RE.exec(code)?.[1];
-      if (lhs !== undefined && stringVars.has(lhs.toUpperCase())) continue;
+      if (lhs === undefined || STARTS_WITH_NUMBER.test(lhs)) continue;
+      if (stringVars.has(lhs.toUpperCase())) continue;
     }
 
     // 具名索引链 / `[[ … ]]` 字面量：一次算区段，行内多记号共用
@@ -508,6 +633,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
       const upper = token.toUpperCase();
       if (ERB_KEYWORDS.has(upper) || EXPRESSION_STATEMENTS.has(upper)) continue;
       if (colonAdjacent(code, start, end)) continue;
+      if (nameInternalAdjacent(code, start, end)) continue;
       if (wildAdjacent(code, start, end)) continue;
       if (insideRanges(indexRanges, start, end)) continue;
       if (insideRanges(bracketRanges, start, end)) continue;

@@ -102,6 +102,10 @@ export function useShellOverlays(kernel: Kernel | null): void {
     // 这里只做两件接线：命令面板入口 + overlay 注册。位点现取 `readJumpProbe()`
     // （G1 既有探针——`EditorCommandContext` 没有光标行，不为此扩宿主管道）；
     // 跳转落既有 `editor.revealLocation`，与转到定义同一条通道。
+    // kojo2 的取数模块与**项目索引 resolver** 不在这一格注入：本文件不静态 import
+    // `editor-global-providers`（PS-10 开机图闸），那两条腿由面板内部
+    // `ui/call-hierarchy.ts` 的 `loadKojo2CallHierarchyPanelBundle()` 懒装载、装好后模块级快照同步取用
+    // （批次十一 CALLHIER-INJECT：跨文件入 / 出边由此接上）。
     const parser = (): ErbParserService | undefined => kernel.services.tryGet<ErbParserService>('erb.parser');
     const unRegCallHierarchy = kernel.slots.register('ui.overlay', {
       id: CALL_HIERARCHY_OVERLAY_ID,

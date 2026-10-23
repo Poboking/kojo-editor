@@ -29,10 +29,15 @@ import {
   type Kojo2LanguageModelLike,
 } from './kojo2-model-language';
 import { createEditorModelPool } from './editor-model-pool';
+import { resolveModelLanguage, subscribeLanguageOverride } from './language-mode-pref';
 
-/** 建 model / 重挂共用的语言判据（真源在 `kojo2-model-language.ts`，本文件只转发） */
+/**
+ * 建 model / 重挂共用的语言判据（LANG-OVERRIDE-MODEL）：作者手工选过的语言覆盖 >
+ * 2.0 路由 / 扩展名判据。优先级那一格只有一份（`resolveModelLanguage`），
+ * 本文件与状态栏读数都调它——建 model 与重挂也不会各写一套。
+ */
 function languageIdForModel(path: string, text: string): string {
-  return languageIdForKojo2Model(path, text);
+  return resolveModelLanguage(path, languageIdForKojo2Model(path, text));
 }
 
 /**
@@ -43,7 +48,8 @@ function languageIdForModel(path: string, text: string): string {
  */
 export const kojo2ModelLanguage = createKojo2ModelLanguageController({
   isEnabled: isKojo2CutoverEnabled,
-  resolveLanguage: languageIdForKojo2Model,
+  // 判据与建 model 同一枚（含语言覆盖）：内容变化重判时不能把作者手工选的语言拉回扩展名判据
+  resolveLanguage: languageIdForModel,
   setModelLanguage: (model, languageId) => {
     monaco.editor.setModelLanguage(model as monaco.editor.ITextModel, languageId);
   },
@@ -79,6 +85,21 @@ export const editorModelPool = createEditorModelPool({
   modelUnits: (model) => model.getValueLength(),
   modelVersion: (model) => model.getAlternativeVersionId(),
   writeText: (kernel, path, text) => kernel.io.writeText(path, text),
+  // 覆盖变更时的跟随出口（LANG-OVERRIDE-MODEL）；缺省会让 `retargetLanguage` 静默不动，所以在这里给真身
+  setModelLanguage: (model, languageId) => monaco.editor.setModelLanguage(model, languageId),
+});
+
+/**
+ * 语言模式覆盖变更 ⇒ 该路径在池里的**全部 model** 立即跟随（LANG-OVERRIDE-MODEL）。
+ *
+ * 状态栏那一格只写偏好（同步广播）；订阅在这里装配，判据仍走 {@link languageIdForModel}
+ * ——建 model / 重挂 / 跟随三处同一枚。同一路径不同拼写（大小写 / 分隔符）由池按 `pathKey`
+ * 收口；`null`（撤销）时 `languageIdForModel` 自然回到 descriptor / 2.0 路由。
+ */
+subscribeLanguageOverride((filePath) => {
+  editorModelPool.retargetLanguage(filePath, (model) =>
+    languageIdForModel(filePath, model.getValue()),
+  );
 });
 
 /* ============================== 另存为 / 改名接线（K2-EDITOR-MOUNT ③） ============================== */

@@ -13,6 +13,7 @@ import {
 } from '../monaco/erb-call-hierarchy';
 import type {
   Kojo2CallHierarchyProvider,
+  Kojo2CallHierarchyResolvers,
   Kojo2PanelGroup,
   Kojo2PanelResolution,
   Kojo2PanelSite,
@@ -27,14 +28,17 @@ import {
   getCallHierarchyState,
   readCallHierarchyMenuInput,
   setCallHierarchyState,
-  loadKojo2CallHierarchyPanel,
+  kojo2PanelBundle,
+  loadKojo2CallHierarchyPanelBundle,
   subscribeCallHierarchy,
   type CallHierarchyMenuInput,
   type CallHierarchyRequest,
   type Kojo2PanelApi,
+  type Kojo2PanelBundle,
 } from './call-hierarchy';
 import { declareContextSurface } from './context-surfaces';
 import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-store';
+import { pkey } from './file-tree-ops';
 
 /**
  * 调用层级 overlay（2026-10-16 批 E；批次十 2026-10-23 补 kojo2 分派）——「这个函数被谁
@@ -51,6 +55,15 @@ import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-st
  *
  * 语言判据只有一条：`modelFor(请求文件).getLanguageId()`——没有 model（文件已关 / 旧
  * 宿主）⇒ 逐字退回 ERB 分支的旧行为（additive，不改变任何既有调用方）。
+ *
+ * **两条腿的就绪口径不同**（批次十一 CALLHIER-INJECT 的结论）：
+ * - ERB 分支**没有异步缺口**：`currentIndex()` / `functionAt()` / `indexState()` 每帧同步
+ *   现取，索引未建时走 `callHierarchyIndexCopy` 的可见文案（不静默）；
+ * - kojo2 分支的取数模块与项目索引 resolver 都只能走动态 `import()`（PS-10 ①）。两者
+ *   合成一条 `loadKojo2CallHierarchyPanelBundle()`：装好后写模块级快照，**再打开面板同步取用**；首帧
+ *   没装好就显示加载态、就位后自动刷新——绝不退回"只同文件"的默认腿冒充空态。
+ *   此前面板没接 resolver（`kojo2Provider` 缺席 ⇒ 默认腿），跨文件入 / 出边永远不可见，
+ *   这就是"面板一打开就像没有跨文件调用"的根因。
  *
  * 跳不出 Monaco Peek 的原因（取舍记档案）：Monaco standalone 无 CallHierarchy API
  * （PITFALLS §83），面板形态是审查过的替代而非降级——调用层级天然是"一次看全"
@@ -84,13 +97,19 @@ export interface CallHierarchyDeps {
    * 取数都读它。缺席 / 返回 `null`（文件已关）= 旧行为：一律走 ERB 分支。
    */
   modelFor?(path: string): Monaco.editor.ITextModel | null;
-  /** kojo2 provider（additive 可选；缺席 = 取数模块内的 `createKojo2CallHierarchyProvider()`） */
+  /** kojo2 provider（additive 可选；缺席 = 面板自建：取数模块 + 项目索引 resolver，见 `kojo2Resolvers`） */
   kojo2Provider?(): Kojo2CallHierarchyProvider;
   /**
    * kojo2 取数模块（additive 可选；缺席 = 首次遇到 kojo2 文件时走动态装载）。
-   * 注入口留给测试与预载宿主——默认腿见 `loadKojo2CallHierarchyPanel`（PS-10 ①）。
+   * 注入口留给测试与预载宿主——默认腿见 `loadKojo2CallHierarchyPanelBundle`（PS-10 ①）。
    */
   kojo2Panel?(): Kojo2PanelApi | null;
+  /**
+   * kojo2 跨文件 resolver（additive 可选；缺席 = 随取数模块一起懒装载 `editor-global-providers`）。
+   * 返回 `null` = **还没就绪**：面板显示加载态，等它就位后自动刷新（不拿"只同文件"
+   * 冒充空态——批次十一 CALLHIER-INJECT 的判据）。
+   */
+  kojo2Resolvers?(): Kojo2CallHierarchyResolvers | null;
   reveal(path: string, line: number, column?: number): void;
   close(): void;
 }
@@ -236,24 +255,39 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
     // 语言分派只问一次 model（渲染与装载共用同一枚，避免二次反查；旧 deps 缺席 ⇒ null）。
     const activeModel = requestKey === null ? null : deps.modelFor?.(requestKey.filePath) ?? null;
     const needsKojo2 = activeModel !== null && languageIdOf(activeModel) === KOJO2_LANGUAGE_ID;
-    // kojo2 取数模块是动态边（PS-10 ①）：首次碰到 kojo2 文件时装载一次，失败也记成可见态。
-    const [panelApi, setPanelApi] = useState<Kojo2PanelApi | null>(null);
-    const [panelLoadFailed, setPanelLoadFailed] = useState(false);
+    /**
+     * kojo2 的两条腿（解析器模块 + 项目索引 resolver）走同一条懒装载边（PS-10 ①）：
+     * 初始值直接取模块级快照——装过一次以后再打开面板**同步**就有跨文件取数，不再先掉
+     * 一帧加载态（批次十一定位：此前 resolver 根本没接线，跨文件边永远是"假空"）。
+     * 首帧缺席时由 effect 拉一次；失败记成可见态（不静默）。
+     */
+    const [bundle, setBundle] = useState<Kojo2PanelBundle | null>(() => kojo2PanelBundle());
+    const [bundleFailed, setBundleFailed] = useState(false);
     useEffect(() => {
-      if (!needsKojo2 || deps.kojo2Panel !== undefined || panelApi !== null || panelLoadFailed) return;
+      if (!needsKojo2) return;
+      // 注入口在场（测试 / 预载宿主）= 取数面已接管，面板不再自己拉
+      if (deps.kojo2Panel !== undefined || deps.kojo2Provider !== undefined || deps.kojo2Resolvers !== undefined) return;
+      if (bundle !== null || bundleFailed) return;
       let alive = true;
-      loadKojo2CallHierarchyPanel().then(
-        (api) => {
-          if (alive) setPanelApi(api);
+      loadKojo2CallHierarchyPanelBundle().then(
+        (loaded) => {
+          if (alive) setBundle(loaded);
         },
         () => {
-          if (alive) setPanelLoadFailed(true);
+          if (alive) setBundleFailed(true);
         },
       );
       return () => {
         alive = false;
       };
-    }, [needsKojo2, panelApi, panelLoadFailed, deps.kojo2Panel]);
+    }, [
+      needsKojo2,
+      bundle,
+      bundleFailed,
+      deps.kojo2Panel,
+      deps.kojo2Provider,
+      deps.kojo2Resolvers,
+    ]);
 
     const closeBtn = h(
       'div',
@@ -350,27 +384,107 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
       );
     }
 
+    // 取数上下文：注入口优先（测试 / 预载宿主），否则用懒装载快照；provider 缺席 = 还没就绪。
+    // 只给 kojo2 请求组装（ERB 分支不碰这两条腿）。
+    const api = !needsKojo2 ? null : deps.kojo2Panel?.() ?? bundle?.api ?? null;
+    const provider = !needsKojo2 ? null : kojo2ProviderOf(deps, api, bundle, state.request.filePath);
+
     return renderRequest(
       state.request,
       deps,
       closeBtn,
       sectionWindow,
       notice === null ? null : h('p', { className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
-      // kojo2 分支的装载上下文（批次十）：模型 = 语言判据，api 缺席 = 还在拉 / 拉失败
       {
         model: activeModel,
-        api: deps.kojo2Panel?.() ?? panelApi,
-        loadFailed: panelLoadFailed,
+        api,
+        provider: provider === null ? null : withRequestPath(provider, state.request.filePath),
+        loadFailed: bundleFailed,
       },
     );
   };
 }
 
-/** kojo2 分支的装载上下文（模型 = 语言判据；api 缺席 = 还在拉 / 拉失败） */
+/** kojo2 分支的装载上下文（模型 = 语言判据；api / provider 缺席 = 还在拉 / 拉失败） */
 interface Kojo2PanelContext {
   readonly model: Monaco.editor.ITextModel | null;
   readonly api: Kojo2PanelApi | null;
+  /** 带跨文件 resolver 的 provider；`null` = 取数腿还没就绪（加载态，不是空态） */
+  readonly provider: Kojo2CallHierarchyProvider | null;
   readonly loadFailed: boolean;
+}
+
+/**
+ * 组装 kojo2 provider（批次十一：把项目索引的跨文件 resolver 接进面板）。
+ *
+ * 优先级：注入口 > 懒装载快照。resolver 缺席有两种含义，必须分开：
+ * - 显式注入了 `kojo2Resolvers` 却拿到 `null` ⇒ **还没就绪** → 交 `null`，面板显示加载态；
+ * - 只注入了取数模块（测试 / 预载宿主）⇒ 沿用默认同文件腿（与接线前行为一致）。
+ */
+function kojo2ProviderOf(
+  deps: CallHierarchyDeps,
+  api: Kojo2PanelApi | null,
+  bundle: Kojo2PanelBundle | null,
+  filePath: string | null,
+): Kojo2CallHierarchyProvider | null {
+  const injected = deps.kojo2Provider?.();
+  if (injected !== undefined) return injected;
+  if (api === null) return null;
+  const resolvers =
+    deps.kojo2Resolvers !== undefined ? deps.kojo2Resolvers() : bundle?.resolvers ?? null;
+  if (resolvers === null) {
+    if (deps.kojo2Resolvers !== undefined) return null;
+    return deps.kojo2Panel !== undefined ? api.createKojo2CallHierarchyProvider() : null;
+  }
+  return api.createKojo2CallHierarchyProvider(
+    filePath === null ? resolvers : scopeResolversTo(resolvers, filePath),
+  );
+}
+
+/**
+ * 给 provider 的 prepare 结果盖上请求文件路径（`data.path`）。
+ *
+ * 跨文件取数口靠 `data.path` 认"当前文件"：路径缺席时同文件调用者会被项目索引再扫
+ * 一遍，面板就出现重复组（同一条调用点两行）。这里只补路径键，坐标仍由 provider
+ * 按源文重解析。
+ */
+function withRequestPath(
+  provider: Kojo2CallHierarchyProvider,
+  filePath: string,
+): Kojo2CallHierarchyProvider {
+  return {
+    ...provider,
+    prepareCallHierarchy: (model, position) => {
+      const items = provider.prepareCallHierarchy(model, position);
+      if (items === null) return null;
+      return items.map((item) =>
+        typeof item.data.path === 'string' && item.data.path.length > 0
+          ? item
+          : { ...item, data: { ...item.data, path: filePath } },
+      );
+    },
+  };
+}
+
+/**
+ * 把"当前文件"从 `listCallers` 候选里摘掉：同文件边已由 provider 的源文扫描给出，
+ * 索引里的同一文件（分隔符 / 大小写可能是另一种写法）再扫一遍只会产出重复组。
+ * 判等用文件树同一把尺（`pkey`），不另抄口径。
+ */
+function scopeResolversTo(
+  resolvers: Kojo2CallHierarchyResolvers,
+  filePath: string,
+): Kojo2CallHierarchyResolvers {
+  const listCallers = resolvers.listCallers;
+  if (listCallers === undefined) return resolvers;
+  const key = pkey(filePath);
+  return {
+    ...resolvers,
+    listCallers: (name, kind) =>
+      (listCallers.call(resolvers, name, kind) ?? []).filter(
+        (candidate) => pkey(candidate.path) !== key,
+      ),
+  };
 }
 
 function renderRequest(
@@ -661,13 +775,24 @@ function renderKojo2Request(
   }
 
   if (kojo2.api === null) {
-    // 两种装载态都可见：还在拉（第一次打开要拉解析器）与拉失败（打包 / 磁盘问题）。
+    // 两种装载态都可见：还在拉（第一次打开要拉解析器 + 项目索引 resolver）与拉失败（打包 / 磁盘问题）。
     return panel([
       notice(
         kojo2.loadFailed
-          ? 'kojo2 调用层级的取数模块没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。'
-          : '正在载入 kojo2 调用层级（首次打开要拉解析器，只这一次）…',
+          ? 'kojo2 调用层级的取数模块 / 项目索引 resolver 没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。'
+          : '正在载入 kojo2 调用层级（首次打开要拉解析器与项目索引 resolver，只这一次）…',
         kojo2.loadFailed ? 'k2-load-failed' : 'k2-loading',
+      ),
+    ]);
+  }
+  if (kojo2.provider === null) {
+    // resolver（项目索引）还没就位：明确说"在载入"，绝不先画一份"只同文件"的假空。
+    return panel([
+      notice(
+        kojo2.loadFailed
+          ? 'kojo2 的项目索引取数没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。'
+          : '正在载入项目索引（跨文件入 / 出边），就绪后自动刷新…',
+        kojo2.loadFailed ? 'k2-index-failed' : 'k2-index-loading',
       ),
     ]);
   }
@@ -676,11 +801,7 @@ function renderKojo2Request(
   let resolution: Kojo2PanelResolution;
   try {
     const requestForKojo2 = { line: request.line, column: request.column, path: request.filePath };
-    const provider = deps.kojo2Provider?.();
-    resolution =
-      provider === undefined
-        ? api.resolveKojo2CallHierarchy(model, requestForKojo2)
-        : api.resolveKojo2CallHierarchy(model, requestForKojo2, provider);
+    resolution = api.resolveKojo2CallHierarchy(model, requestForKojo2, kojo2.provider);
   } catch (error) {
     // provider 的失败自己吞了；能漏到这里的只剩真异常——照样可见，不装作空态。
     return panel([
@@ -707,7 +828,7 @@ function renderKojo2Request(
     case 'call-without-declaration':
       return panel([
         notice(
-          '这一格是一次调用，但本文件里没有同名声明（可能是跨文件函数或 adapter 基础库）——跨文件落点要等项目索引接线后才可见。',
+          '这一格是一次调用，但本文件里没有同名声明，项目索引里也还没有它的落点（可能是 adapter 基础库）——索引收进这份文件后可见。',
           'k2-call',
         ),
       ]);
@@ -748,26 +869,26 @@ function renderKojo2Request(
           `@ ${locLabel(view.target.path, view.target.line)}`,
         ),
       ),
-      ...renderSection(
-        `被调用（${view.incoming.length} 个调用者 · ${incomingSites} 处）`,
-        '当前文件里没有别的 @函 / # 模 调用它。',
-        incomingRows,
-        'in',
-        deps,
-        sectionWindow,
-      ),
-      ...renderSection(
-        `调用（${view.outgoing.length} 个目标 · ${outgoingSites} 处）`,
-        '函数体内没有落到本文件的调用（跨文件目标要等项目索引接线）。',
-        outgoingRows,
-        'out',
-        deps,
-        sectionWindow,
-      ),
-      notice(
-        'kojo2 分支按当前文件算出入边：组行 = 跳声明，点位行 = 跳调用处；「处」是清单里的点位行数，不是第二份台账读数。',
-        'k2-tally',
-      ),
+    ...renderSection(
+      `被调用（${view.incoming.length} 个调用者 · ${incomingSites} 处）`,
+      '当前文件里没有别的 @函 / # 模 调用它。',
+      incomingRows,
+      'in',
+      deps,
+      sectionWindow,
+    ),
+    ...renderSection(
+      `调用（${view.outgoing.length} 个目标 · ${outgoingSites} 处）`,
+      '函数体内没有落到本文件的调用（项目索引里也没有这些名字的落点）。',
+      outgoingRows,
+      'out',
+      deps,
+      sectionWindow,
+    ),
+    notice(
+      'kojo2 分支按当前文件与项目索引算出入边：组行 = 跳声明，点位行 = 跳调用处；「处」是清单里的点位行数，不是第二份台账读数。',
+      'k2-tally',
+    ),
     ],
     {
       'data-ch-subject-name': view.target.name,

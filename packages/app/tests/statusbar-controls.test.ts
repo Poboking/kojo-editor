@@ -16,8 +16,10 @@ import {
   LANGUAGE_MODE_BASE_CHOICES,
   languageModeChoices,
   languageOverrideFor,
+  resolveModelLanguage,
   setLanguageOverride,
   clearLanguageOverride,
+  subscribeLanguageOverride,
 } from '../src/ui/language-mode-pref';
 import {
   INDENT_DEFAULT,
@@ -109,6 +111,29 @@ describe('语言模式偏好（language-mode-pref）', () => {
     expect(languageModeChoices(['kojo-sugar', 'json', ''])).toEqual([
       ...LANGUAGE_MODE_BASE_CHOICES,
       'kojo-sugar',
+    ]);
+  });
+
+  it('单一判据 resolveModelLanguage：覆盖 > descriptor，无覆盖原样交回', () => {
+    expect(resolveModelLanguage(WIN_PATH, 'kojo-erb')).toBe('kojo-erb');
+    setLanguageOverride(WIN_PATH, 'json');
+    expect(resolveModelLanguage(WIN_PATH, 'kojo-erb')).toBe('json');
+    clearLanguageOverride(WIN_PATH);
+    expect(resolveModelLanguage(WIN_PATH, 'kojo-erb')).toBe('kojo-erb');
+  });
+
+  it('覆盖变更广播给订阅者（设置值 / 撤销 null 两个方向）；退订后不再收到', () => {
+    const seen: Array<[string, string | null]> = [];
+    const unsubscribe = subscribeLanguageOverride((filePath, languageId) => {
+      seen.push([filePath, languageId]);
+    });
+    setLanguageOverride(WIN_PATH, 'json');
+    clearLanguageOverride(WIN_PATH);
+    unsubscribe();
+    setLanguageOverride(WIN_PATH, 'kojo2');
+    expect(seen).toEqual([
+      [WIN_PATH, 'json'],
+      [WIN_PATH, null],
     ]);
   });
 });

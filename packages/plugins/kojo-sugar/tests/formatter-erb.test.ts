@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
-import { computeFormatEdits, formatText } from '../src/formatter';
+import { applyFormatEdits, computeFormatEdits, computeRangeFormatEdits, formatText } from '../src/formatter';
 
 const FW = FULLWIDTH_SPACE;
 
@@ -166,5 +166,80 @@ describe('ERB 块层级：幂等与内容不变', () => {
 
   it('关 `indent` ⇒ 行首空白一个字符都不动（块缩进也归这条规则管）', () => {
     expect(computeFormatEdits(NESTED_SRC, 'erb', { indent: false })).toEqual([]);
+  });
+});
+
+/* ========================= 区间格式化（选区 + 块前缀） =========================
+ *
+ * 区间腿手里只有选区那几行；前缀（选区之前那几行）只用来把块层级栈补到与整篇一致，
+ * 一个字节都不回写。下面每条用例都同时钉「选区外不动」这条硬判据。
+ */
+
+describe('ERB 区间格式化：块前缀', () => {
+  it('IF 体内的选区不再压平（首行按外层块的块体层缩进）', () => {
+    const prefix = 'IF X\n\tPRINTL 甲\n';
+    const range = 'PRINTL 乙\nENDIF\n';
+    expect(computeRangeFormatEdits(range, 'erb', { prefix })).toEqual([
+      { line: 1, startColumn: 1, endColumn: 9, text: '\tPRINTL 乙' },
+    ]);
+  });
+
+  it('顶层选区（无外层块）：行为与整篇腿逐字一致，一个 edit 都没有', () => {
+    const prefix = 'PRINTL 甲\n';
+    const range = 'PRINTL 乙\n';
+    expect(computeRangeFormatEdits(range, 'erb', { prefix })).toEqual([]);
+    // 无前缀 ⇒ 就是 `computeFormatEdits`（既有行为零改动）
+    const slice = 'IF X\n\tPRINTL 甲\nENDIF\n';
+    expect(computeRangeFormatEdits(slice, 'erb')).toEqual(computeFormatEdits(slice, 'erb'));
+    expect(computeRangeFormatEdits(slice, 'erb', { prefix: '' })).toEqual(computeFormatEdits(slice, 'erb'));
+  });
+
+  it('嵌套两层块：前缀里的 IF + FOR 都要算进栈，首行落在两层块体', () => {
+    const prefix = 'IF X\n\tFOR I, 0, 3\n\t\tPRINTL 甲\n';
+    const range = 'PRINTL 乙\nNEXT\nENDIF\n';
+    expect(computeRangeFormatEdits(range, 'erb', { prefix })).toEqual([
+      { line: 1, startColumn: 1, endColumn: 9, text: '\t\tPRINTL 乙' },
+      { line: 2, startColumn: 1, endColumn: 5, text: '\tNEXT' },
+    ]);
+  });
+
+  it('跨 `@` 函数边界不继承：上一函数欠的块不许把本函数首行缩进', () => {
+    const prefix = 'IF X\n\tPRINTL 甲\n@B\n';
+    const range = 'PRINTL 乙\n';
+    expect(computeRangeFormatEdits(range, 'erb', { prefix })).toEqual([]);
+  });
+
+  it('幂等：按第一批 edits 落回后再算一次，第二轮零 edit', () => {
+    const prefix = 'IF X\n\tPRINTL 甲\n';
+    const range = 'PRINTL 乙\nENDIF\n';
+    const once = applyFormatEdits(range, computeRangeFormatEdits(range, 'erb', { prefix }));
+    expect(once).toBe('\tPRINTL 乙\nENDIF\n');
+    expect(computeRangeFormatEdits(once, 'erb', { prefix })).toEqual([]);
+  });
+
+  it('选区外字节不变：edits 全落在选区内，前缀逐字节原样', () => {
+    const prefix = '@EVENTTRAIN\nIF X\n\tPRINTL 甲\n';
+    const range = 'PRINTL 乙\nENDIF\n';
+    const edits = computeRangeFormatEdits(range, 'erb', { prefix });
+    const rangeLineCount = range.split('\n').length - 1; // 末行带行尾 ⇒ 末尾空串不是行
+    expect(edits.every((e) => e.line >= 1 && e.line <= rangeLineCount)).toBe(true);
+    const nextRange = applyFormatEdits(range, edits);
+    const nextDoc = prefix + nextRange;
+    expect(nextDoc.slice(0, prefix.length)).toBe(prefix);
+    // 与整篇腿同判据：整篇算出来落在选区内的那几条，平移到选区坐标后逐字相等
+    const whole = computeFormatEdits(prefix + range, 'erb').filter((e) => e.line > 3);
+    expect(whole.map((e) => ({ ...e, line: e.line - 3 }))).toEqual(edits);
+  });
+
+  it('前缀里没有缩进证据 ⇒ 单位探测不出 ⇒ 不猜，选区原样（保守边界）', () => {
+    const prefix = 'IF X\n';
+    const range = 'PRINTL 乙\n';
+    expect(computeRangeFormatEdits(range, 'erb', { prefix })).toEqual([]);
+  });
+
+  it('关 `indent` ⇒ 区间腿也不动行首空白（偏好开关同口径）', () => {
+    const prefix = 'IF X\n\tPRINTL 甲\n';
+    const range = 'PRINTL 乙\n';
+    expect(computeRangeFormatEdits(range, 'erb', { prefix }, { indent: false })).toEqual([]);
   });
 });

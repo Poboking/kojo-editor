@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import {
   computeFormatEdits,
+  computeRangeFormatEdits,
   erbBodyRegionAtLineEnd,
   type ErbBodyRegionKind,
   type FormatEdit,
@@ -31,15 +32,17 @@ import {
  *    `559a878` 给 ERB 形长出了跨行的块状态（数据表块体 / 停用死区，见插件 `erbBodyLineMask`），
  *    切片视角看不见窗口起点之上的开词 ⇒ 会把整篇腿明确保护的字节改掉。于是窗口这条腿
  *    多了下面第 3 项那道**前推锚点**的闸（不是放宽判据，是补上切片缺的那一段上下文）。
- *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数) + 一次前缀状态探针
- *    （只在"切片这一腿真的想改字节"时才付；零编辑的单行窗口连探针都不用跑）。
+ *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数) + 一次前缀状态探针 + 一次前缀
+ *    格式化趟（只在"切片这一腿真的想改字节"时才付；零编辑的单行窗口连探针都不用跑）。
  * 2. **编辑绝不越界**：`FormatEdit` 本身永不跨物理行（插件规则第 3 条），所以裁剪
  *    就是行号过滤，天然精确；裁剪后每条编辑都落在 `[startLine, endLine]` 内。
  *    块级对齐超出选区的问题在 ERB 形不存在（ERB 规则本就不跨行对齐）；
  *    若未来出现，答案也是"降级为行内规范化"，不是放宽裁剪。
- * 3. **切片必须与整篇同判据**（本批补的口子）：{@link windowAnchor} 拿"整篇第 1 行到窗口之前"
- *    那段前缀问插件那**同一台**状态机（`erbBodyRegionAtLineEnd`）——末态在区里就把取文起点
- *    **前推到最外层区首标记行**，从那里喂进去时状态机必然处于"区外"，区段轨迹与整篇逐字重合。
+ * 3. **切片必须与整篇同判据**（本批补的口子）：{@link prefixContext} 拿"整篇第 1 行到窗口之前"
+ *    那段整行前缀问插件那**同一台**状态机（`erbBodyRegionAtLineEnd`）——末态在区里就把取文起点
+ *    **前推到最外层区首标记行**，从那里喂进去时状态机必然处于"区外"，区段轨迹与整篇逐字重合；
+ *    末态在区外则把同一段前缀交给插件 `computeRangeFormatEdits` 推块层级（IF 体内的缩进由此
+ *    才与整篇腿一致），前缀只参与判据、一个字节都不进 edits。
  *    问不到（宿主没给前缀腿 / 抛错 / 方言不是 ERB）就**交回整篇那条腿**，绝不"当作区外"放行。
  *    唯一的免检通道：`startLine === endLine` 且切片判零编辑——单行数组喂进状态机时起点必然
  *    在区外（一行之上没有开词），切片掩码恒假 ⇒ "切片没想改" 与 "整篇也不会改" 等价（可证）。
@@ -204,11 +207,14 @@ function windowEdits(
   lineOffset: number,
   startLine: number,
   endLine: number,
+  prefix?: string,
 ): FormatEdit[] {
   // 平移回全文坐标后再裁一次：窗口文本本来就只盖这几行，这道裁剪是"绝不越界"那条
-  // 不变式的显式钉子（规则哪天长出跨行状态时，它先红在这里而不是改到隔壁行）
+  // 不变式的显式钉子（规则哪天长出跨行状态时，它先红在这里而不是改到隔壁行）。
+  // `prefix` = 选区之前的整行前缀（缺省 ⇒ 插件层与 `computeFormatEdits` 逐字等价）。
+  const context = prefix === undefined ? {} : { prefix };
   return clipFormatEditsToLines(
-    offsetFormatEdits(computeFormatEdits(request.text, request.dialect), lineOffset),
+    offsetFormatEdits(computeRangeFormatEdits(request.text, request.dialect, context), lineOffset),
     startLine,
     endLine,
   );
@@ -217,27 +223,38 @@ function windowEdits(
 /** 宿主窗口通道的调用签名（`RangeFormatHandlers.resolveRange` 去掉可选，便于当参数传） */
 type WindowResolveRange = NonNullable<RangeFormatHandlers['resolveRange']>;
 
+/** 选区之前的整行前缀：`text` 喂给插件层补块层级，`region` 是喂完后块状态机的末态 */
+interface PrefixContext {
+  readonly text: string;
+  readonly region: { kind: ErbBodyRegionKind; openLine: number } | null;
+}
+
 /**
- * **窗口起点该从整篇第几行起喂**（前推锚点；本模块唯一的"补上下文"动作）。
+ * 取 `[1, startLine-1]` 这段**整行前缀**（块层级与块末态都从这一段来）。
  *
- * - `startLine === 1` ⇒ 窗口本来就从篇首起，状态机看到的东西与整篇腿一样多 ⇒ 无需前推。
- * - 否则拿 `[1, startLine-1]` 这段前缀问插件那**同一台**块状态机（`erbBodyRegionAtLineEnd`）：
- *   末态在区外 ⇒ 切片判据与整篇腿**可证等价**（切片起点进状态机时也是区外，同输入同轨迹）；
- *   末态在区里 ⇒ 返回那个区**最外层区首标记行**，从它起喂才让切片起点的状态与整篇对齐。
- * - `null` = **问不到**（宿主没给前缀这段 / 交回的不是 ERB）⇒ 调用方交回整篇那条腿。
+ * - `startLine <= 1` ⇒ 空串（选区从篇首起，插件层据此与整篇腿逐字等价）。
+ * - 契约要求前缀末行带行尾，而 `getValueInRange` 止于最后一列 ⇒ 按文档 EOL（`getEOL()`）补一个，
+ *   否则选区首行会被粘到前缀末行上（插件层不猜，见 `RangeFormatContext` 的契约）。
+ * - 块末态在区外 ⇒ 切片判据与整篇腿**可证等价**；在区里 ⇒ `region.openLine` 就是最外层区首，
+ *   调用方从那里起喂才让切片起点的状态与整篇对齐。
+ * - `null` = **问不到**（宿主没给前缀这段 / 交回的不是 ERB）⇒ 调用方交回整篇那条腿；
  *   这里绝不把"问不到"当成"区外"——那正是本批要关的口子。
  */
-function windowAnchor(
+function prefixContext(
   resolveRange: WindowResolveRange,
   model: Monaco.editor.ITextModel,
   startLine: number,
-): number | null {
-  if (startLine <= 1) return 1;
+  needText: boolean,
+): PrefixContext | null {
+  if (startLine <= 1) return { text: '', region: null };
   const prefix = resolveRange(model, 1, startLine - 1);
-  if (!prefix) return null;
-  if (prefix.dialect !== 'erb') return null;
-  const region: { kind: ErbBodyRegionKind; openLine: number } | null = erbBodyRegionAtLineEnd(prefix.text);
-  return region === null ? startLine : region.openLine;
+  if (!prefix || prefix.dialect !== 'erb') return null;
+  const region = erbBodyRegionAtLineEnd(prefix.text);
+  // 单行窗口只问末态（`needText === false`）：拼 `前缀+行尾` 是又一趟 5 万行级的字符串拷贝，
+  // 而这一腿根本不会把它喂给插件层（on-type 每次击键都走，见调用点的成本注）。
+  if (!needText) return { text: '', region };
+  const eol = model.getEOL?.() === '\r\n' ? '\r\n' : '\n';
+  return { text: `${prefix.text}${eol}`, region };
 }
 
 /**
@@ -277,8 +294,10 @@ function computeWindowSafely(
     // 免检通道（可证，不是放宽判据）：单行数组喂进块状态机时起点必然在区外（一行之上没有开词），
     // 所以单行窗口的切片掩码恒假 ⇒ "切片判零编辑" 与 "整篇腿在该行判零编辑" 等价 ⇒ 不必问前缀。
     if (slice.length === 0 && startLine === endLine) return [];
-    const anchor = windowAnchor(resolveRange, model, startLine);
-    if (anchor === null) {
+    // 选区之前的整行前缀：插件的块状态机（层级 / 保护区）与整篇腿同判据的唯一来路。
+    // 问不到 ⇒ 交回整篇那条腿（绝不"当作区外"放行）。
+    const prefix = prefixContext(resolveRange, model, startLine, startLine !== endLine);
+    if (prefix === null) {
       degrade(handlers, stage, {
         where: 'anchor',
         startLine,
@@ -287,11 +306,23 @@ function computeWindowSafely(
       });
       return null;
     }
-    if (anchor === startLine) return slice;
+    // 带上前缀重算：IF/块层级由前缀推出来，选区外的字节仍一个都不进 edits（插件层只回选区行）。
+    // 单行窗口**不吃前缀**：on-type 是每次击键都走的腿，把 5 万行前缀再喂给块状态机会多一趟
+    // 扫描（PS-4 实测 52,601 行 一次击键 21.6 ms > 20 ms 预算）；单行的"块层级"本就在这里
+    // 没有可换的行，维持旧行为（与整篇腿在该行逐字节等价，见 `ps4-provider-seams.perf`）。
+    // 前缀只服务多行选区（Ctrl+K Ctrl+F 那种用户显式动作，一次一击，付得起一趟前缀扫描）。
+    const anchored =
+      startLine === endLine || prefix.text.length === 0
+        ? slice
+        : windowEdits(request, startLine - 1, startLine, endLine, prefix.text);
+    const anchorLine = prefix.region === null ? startLine : prefix.region.openLine;
+    if (anchorLine === startLine) return anchored;
     // 窗口起点落在块体/死区里 ⇒ 取文起点前推到最外层区首，再从那里算（保护区一个字节都不许动）
-    const ctx = resolveRange(model, anchor, endLine);
+    const ctx = resolveRange(model, anchorLine, endLine);
     if (!ctx || ctx.dialect !== 'erb') return null;
-    return windowEdits(ctx, anchor - 1, startLine, endLine);
+    const ctxPrefix = prefixContext(resolveRange, model, anchorLine, true);
+    if (ctxPrefix === null) return null;
+    return windowEdits(ctx, anchorLine - 1, startLine, endLine, ctxPrefix.text);
   } catch (e: unknown) {
     degrade(handlers, stage, { where: 'windowCompute', startLine, endLine, reason: errorText(e) });
     return [];

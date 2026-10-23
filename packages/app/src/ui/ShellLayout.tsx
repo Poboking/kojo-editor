@@ -80,7 +80,7 @@ import { descriptorForPath, FALLBACK_LANGUAGE_ID, languageDescriptors } from '..
 import type * as Monaco from '../monaco/entry';
 import {
   languageModeChoices,
-  languageOverrideFor,
+  resolveModelLanguage,
   setLanguageOverride,
 } from './language-mode-pref';
 import {
@@ -480,12 +480,14 @@ export function EditorStatusReadout({
       for (const subscription of subscriptions) subscription.dispose();
     };
   }, [model]);
-  // 重开恢复（语言）：这份文件存过选择才覆盖，没存过一律交给扩展名判据 / 2.0 路由
+  // 重开恢复（语言）：判据与建 model 共用 `resolveModelLanguage`（覆盖 > descriptor）。
+  // 无覆盖时以 model **当前**语言当描述符答案 ⇒ 目标恒等于现值、这一拍零动作——
+  // 2.0 按正文路由出来的语言不会被这里拉回扩展名判据；有覆盖则强制对齐。
   useEffect(() => {
     if (path === null || !model) return;
-    const override = languageOverrideFor(path);
-    if (override !== null && model.getLanguageId() !== override) {
-      applyModelLanguage(model, override, onErrorRef.current);
+    const desired = resolveModelLanguage(path, model.getLanguageId());
+    if (desired !== model.getLanguageId()) {
+      applyModelLanguage(model, desired, onErrorRef.current);
     }
   }, [path, model]);
   // 重开恢复（缩进）：只有明确存过才写 model 选项（不覆盖 Monaco / 编辑器缺省）
@@ -500,7 +502,7 @@ export function EditorStatusReadout({
     ? model.getLanguageId()
     : path === null
       ? null
-      : languageOverrideFor(path) ?? descriptorForPath(path)?.id ?? FALLBACK_LANGUAGE_ID;
+      : resolveModelLanguage(path, descriptorForPath(path)?.id ?? FALLBACK_LANGUAGE_ID);
   const indentText = model
     ? indentLabelFromOptions(model.getOptions())
     : path === null

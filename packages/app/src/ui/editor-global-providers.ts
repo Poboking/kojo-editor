@@ -128,7 +128,8 @@ import {
 // 那一面走懒装载边（PS-10 ①，`ui/call-hierarchy.ts` 的动态 import），装配点一碰它就会把它
 // 连解析器一起拖进开机图，`language-parity` 的「豁免不过期」也会按"已接线"判红。
 // 本文件只交 resolver 工厂（返回类型由 `createKojo2ProjectCallHierarchyResolvers` 推断），
-// 供面板装配点（`shell-overlays` 的 `kojo2Provider`）在首次打开时经动态 import 现取。
+// 供面板的就绪面（`ui/call-hierarchy.ts` 的 `loadKojo2CallHierarchyPanelBundle`）在首次打开时经动态
+// import 现取，再交给 `createKojo2CallHierarchyProvider(resolvers)`（批次十一 CALLHIER-INJECT）。
 import { installDocumentLinks } from '../monaco/document-links';
 import { createUserSnippetProvider } from '../monaco/user-snippet-completion';
 import { USER_SNIPPET_LANGUAGES, loadUserSnippets } from './user-snippets';
@@ -209,8 +210,10 @@ export function kojo2RenameResolvers(): Kojo2RenameResolvers {
  * 本文件只交工厂，不静态 import 解析器模块——见上方注）。
  *
  * 返回类型由 `createKojo2ProjectCallHierarchyResolvers` 推断（不借懒模块的类型，免得
- * 类型 import 被「豁免不过期」判成已装配）；消费方把它交给
- * `createKojo2CallHierarchyProvider(resolvers)`。
+ * 类型 import 被「豁免不过期」判成已装配）；消费方是 `ui/call-hierarchy.ts` 的
+ * `loadKojo2CallHierarchyPanelBundle()`，它把结果交给 `createKojo2CallHierarchyProvider(resolvers)`。
+ * 索引实时更新（扫描 / 保存都经 `kojo2ProjectIndexUpdate` 喂），resolver 每次查询现读，
+ * 所以索引变化后再次打开面板即可见新边。
  */
 export function kojo2CallHierarchyResolvers() {
   return createKojo2ProjectCallHierarchyResolvers(kojo2ProjectIndex);
@@ -1614,7 +1617,8 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     //
     // 门控口径（批次十 S5，K2-SURFACE-DEFAULT）：本开关**只管写回 / 迁移 / 切解析器**。
     // S18 新增的两面属于语言面，已挂在本门之外（用户片段补全、文档链接，见上方装配段）；
-    // 块内既有服务面的安装器仍各自保留内部 flag 自挡（批次四～九的守线，本批不动）。
+    // 批次十一 K2-STRUCTURE-GATE 再移出两枚**只读呈现面**（折叠 / 大纲，见本块之后的装配段）。
+    // 块内其余安装器仍各自保留内部 flag 自挡（批次四～九的守线，本批不动）。
     if (isKojo2CutoverEnabled()) {
       globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
       // K2 batch-4：三枚语言服务 provider（补全 / 悬停 / 转定义），语言 id 只认 `kojo2`。
@@ -1641,16 +1645,13 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
           },
         }),
       );
-      // K2 batch-6：折叠区间（worker 的 `folds` 查询 → 1 基 `FoldingRange`）与回车缩进
-      // （on-type formatter，`\n` 触发；判据 = core 词法的结构判据，见 `monaco/kojo2-indent.ts`）。
-      // 两枚都只认 `kojo2` 语言 id，且各自再挡一次 flag（导出函数，可能被别的入口直接调用）：
-      // 折叠在 worker 不可用 / 超时 / `folds.scm` 缺席时回 `[]`（不抛、不写 markers）；
+      // K2 batch-6：回车缩进（on-type formatter，`\n` 触发；判据 = core 词法的结构判据，
+      // 见 `monaco/kojo2-indent.ts`）。它**改缓冲内容**，所以仍归切流开关
+      //（K2-STRUCTURE-GATE：只把折叠 / 大纲两枚只读面移出本块，见紧跟的一段）；
       // 缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
-      globalDisposers.push(installKojo2FoldingProvider(monaco));
       globalDisposers.push(installKojo2IndentProvider(monaco));
-      // K2 batch-7：大纲（Ctrl+Shift+O）与面包屑共用同一份符号事实；格式化器只服务
-      // 显式格式化动作（不接保存链路——作者不按 Shift+Alt+F 就不动缓冲内容）。
-      globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));
+      // K2 batch-7：格式化器只服务显式格式化动作（不接保存链路——作者不按 Shift+Alt+F
+      // 就不动缓冲内容）；写面，留在本块。
       globalDisposers.push(installKojo2DocumentFormatter(monaco));
       // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。补全的事件参数形状
       // 与 `faceTemplates` / `hintNames` 都在 `kojo2-providers` 里按 adapter 现取
@@ -1794,6 +1795,20 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         },
       });
     }
+    // K2-STRUCTURE-GATE（批次十一）：折叠区间与文档大纲是**只读呈现面**，挂在上面那个
+    // `isKojo2CutoverEnabled()` 块**之外**——`.kojo2` 一打开就有 gutter 折叠与 Ctrl+Shift+O，
+    // 哪怕阶段还是 `v1-only`（cutover 只管写回 / 迁移 / 切解析器，不管只读呈现）。两枚都只认
+    // `kojo2` 语言 id，Monaco 按语言派发 ⇒ 非 2.0 文件零请求。
+    //
+    // 惰性装载保持原样、启动成本不因这一步上升：注册本身不碰解析链——折叠的 worker 客户端在
+    // 第一次被问时才动态 import（`kojo2-folding.ts` 的 `defaultWorkerClient`），大纲走 core AST
+    // 纯函数随请求现算。失败面照旧：折叠 worker 不可用 / 超时 / `folds.scm` 缺席 ⇒ `[]`，
+    // 大纲异常 ⇒ `[]`（不抛、不写 markers）。
+    //
+    // 位置放在本块之后：注册抛错仍由下面 catch 的"全有或全无"统一回滚；同时不改变既有
+    // "靠前注册抛错时已建立集合"的读数（`editor-global-providers-tables.test.ts`）。
+    globalDisposers.push(installKojo2FoldingProvider(monaco));
+    globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *
      * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，

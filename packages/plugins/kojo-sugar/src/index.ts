@@ -1187,11 +1187,13 @@ export { findGeneratedHeaderLine, resolveKojoDefinition, type KojoDefinitionDeps
 export {
   applyFormatEdits,
   computeFormatEdits,
+  computeRangeFormatEdits,
   erbBodyRegionAtLineEnd,
   formatText,
   type ErbBodyRegionKind,
   type FormatDialect,
   type FormatEdit,
+  type RangeFormatContext,
 } from './formatter';
 
 // 结构化着色（B6，2026-10-16；纯函数，糖 AST 与缓冲区文本进、着色 span 出）

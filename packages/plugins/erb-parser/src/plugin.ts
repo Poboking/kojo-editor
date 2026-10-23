@@ -172,11 +172,15 @@ type BatchTexts = Awaited<ReturnType<FileIO['readTexts']>>;
       Emuera 对少给是**合法**的（缺省按 0 / 空串兜底，函数照样跑），把它画成 error
       等于满屏假红；只有「多出的实参不会传给函数」是引擎明确会报的错。宁 warning
       不 error —— 确定性事实仍要看得见，但不抢 error 预算。
-   2. **未定义名默认不启用。**
-      同一语料在「工程全量 #DIM/#DIMS 已知集」下仍产 2,065 条 warning，抽样绝大多数
-      是引擎变量族头作 `GETNUM(TALENT, …)` 实参、以及赋值右侧的无引号文本（词法上
-      与变量不可区分）——adapter 的变量名录还没接进这一层，先默认关闭比满屏误报好。
-      开关是模块常量；打开后仍走同一去重/排序，宿主问题面板可正常筛 `ERB_UNDEFINED_NAME`。
+   2. **未定义名默认启用（批次十一 UNDEF-NAME-PRECISION 收窄后）。**
+      批次十实测同一语料 2,065 条 warning，主因是四类引擎/语法事实没被建模：
+      `GETNUM(TALENT, …)` 的族头实参、字符串伪变量的无引号右侧、`PRINT` 画/台词里
+      的 `=` 被当成赋值、以及含 `・`/`（`/零宽空格的声明名被记号尺切碎。批次十一按
+      ERB/Emuera 语法事实逐条收窄（清单见 `undefined-name.ts` 头注）后，同口径
+      2,065 → 171；只看活项目目录（`ERB/`，3,818 份 `.erb`）1,860 → 50，剩余可逐条
+      解释：34 条 `Y` / 10 条 `COUNT` / 1 条 `B` 是语料自身从未声明的读（真该报或
+      隐式局部盲区），5 条是 `@"…"` 插值 / `\"` 转义下的 codeView 盲区（`_Nude`、`l`）。
+      已不存在成片误报，故默认开。
 
    规则抛错不在本层吞掉（铁律四）：逐规则 try/catch 收集 `failedRules`，既写
    `ctx.log.warn`（技术侧），又上一条 `ERB_DIAGNOSTICS_RULE_FAILED` warning（作者侧
@@ -191,10 +195,10 @@ export const ERB_DIAGNOSTICS_RULE_FAILED = 'ERB_DIAGNOSTICS_RULE_FAILED';
 /**
  * 未定义名诊断是否默认启用。
  *
- * false 的理由见上方接线注②；打开只需改这里（或调用
- * `collectErbSemanticDiagnostics` 时显式传 `enableUndefinedNames`）。
+ * true 的依据与读数见上方接线注②（批次十一收窄后语料误报可逐条解释）；
+ * 关闭可由调用方显式传 `enableUndefinedNames: false`。
  */
-export const UNDEFINED_NAME_DIAGNOSTICS_ENABLED = false;
+export const UNDEFINED_NAME_DIAGNOSTICS_ENABLED = true;
 
 /** 逐规则失败的记账形状（与校验器 `report.failedRules` 同一语义：不静默） */
 export interface ErbDiagnosticsRuleFailure {
@@ -1280,7 +1284,7 @@ export function createErbParserPlugin(): Plugin {
        第三个装饰贡献。两个纯模块（`arity.ts` / `undefined-name.ts`）在此合并成一个出口：
        同一文件的两路产出统一去重与稳定排序（`collectErbSemanticDiagnostics`）。
        生产口径与真语料取舍写在那个函数上方的接线注里（实参只留「多给」且降为 warning；
-       未定义名默认关闭）。
+       未定义名在批次十一收窄后默认启用）。
 
        规则抛错：helper 返回 `failedRules`，这里逐条写 warn 日志，同时 helper 已把
        `ERB_DIAGNOSTICS_RULE_FAILED` 诊断放进结果——作者在问题面板能看到"这一路本轮

@@ -633,23 +633,32 @@ function detectIndentUnit(entries: readonly SugarEntry[]): string | null {
   return tabs > spaces ? TAB_UNIT : SPACE_UNIT;
 }
 
+/**
+ * ERB 形的整条规则面：掩码 / 单位探测 / 块层级 / 逐行改写，**一趟进、等长出**。
+ *
+ * 整篇腿与区间腿都从这里过（`newContents` 与 `computeRangeFormatEdits`），
+ * 判据只有这一份——区间腿唯一的差别是 `contents` 前面多接了选区之前的行。
+ */
+function erbNewContents(contents: readonly string[], rules: ResolvedRules): (string | null)[] {
+  // 块上下文只在这里进 ERB 形（唯一一处；整篇/区间/on-type 三条腿都从本函数过，判据不分叉）
+  const body = erbBodyLineMask(contents);
+  // 单位探测不出 ⇒ 整条块缩进关掉（同 `.kojo` 的保守门槛），只剩全角折算与空白规则
+  const unit = rules.indent ? detectErbIndentUnit(contents, body) : null;
+  const plan = unit === null ? null : erbIndentPlan(contents, body, unit, rules);
+  const out: (string | null)[] = contents.map(() => null);
+  for (let i = 0; i < contents.length; i++) {
+    out[i] = body[i] ? null : erbNewContent(contents[i]!, rules, plan?.[i] ?? null);
+  }
+  return out;
+}
+
 /** 按方言算出每条物理行的新内容（`null` = 不改） */
 function newContents(text: string, dialect: FormatDialect, rules: ResolvedRules): (string | null)[] {
   const lines = splitPhysical(text);
-  const out: (string | null)[] = lines.map(() => null);
 
-  if (dialect === 'erb') {
-    // 块上下文只在这里进 ERB 形（唯一一处；整篇/区间/on-type 三条腿都从本函数过，判据不分叉）
-    const contents = lines.map((l) => l.content);
-    const body = erbBodyLineMask(contents);
-    // 单位探测不出 ⇒ 整条块缩进关掉（同 `.kojo` 的保守门槛），只剩全角折算与空白规则
-    const unit = rules.indent ? detectErbIndentUnit(contents, body) : null;
-    const plan = unit === null ? null : erbIndentPlan(contents, body, unit, rules);
-    for (let i = 0; i < lines.length; i++) {
-      out[i] = body[i] ? null : erbNewContent(lines[i]!.content, rules, plan?.[i] ?? null);
-    }
-    return out;
-  }
+  if (dialect === 'erb') return erbNewContents(lines.map((l) => l.content), rules);
+
+  const out: (string | null)[] = lines.map(() => null);
 
   // ---- `.kojo`：先按词法器切逻辑行（折行合并、层级、行类全同一条口径）----
   let logicals: LogicalLine[] = [];
@@ -747,6 +756,64 @@ export function computeFormatEdits(
     const content = next[i];
     const original = lines[i];
     if (typeof content !== 'string' || !original || content === original.content) continue;
+    edits.push({ line: i + 1, startColumn: 1, endColumn: original.content.length + 1, text: content });
+  }
+  return edits;
+}
+
+/**
+ * 区间格式化要补的那段上下文（additive）：**选区起始行之前**的原文。
+ *
+ * 为什么必须有它：区间腿手里只有选区那几行，块层级状态机从选区首行起喂就是「无外层块」，
+ * 于是 IF 体内的语句会被压平成 0 级（层级判不准就关规则只能救一部分，救不了"该缩进"）。
+ * 把前缀（整篇第 1 行到选区之前那几行）接在选区文本前面一起喂进**同一台**块状态机，
+ * 栈就与整篇腿逐字一致——前缀只参与推层级/探单位，一个字节都不回写。
+ *
+ * 契约：`prefix` 必须是**整行**前缀（每行带行尾；选区从第 1 行起时传空串）；
+ * 前缀不完整（末行没有行尾）会把选区首行与它粘成一行——这属于调用方违约，本层不猜。
+ */
+export interface RangeFormatContext {
+  readonly prefix?: string;
+}
+
+/** 整行前缀 → 物理行；`splitPhysical` 给行尾收束的文本补的"空尾巴"不是文档里的一行 */
+function splitPrefixLines(prefixText: string): PhysicalLine[] {
+  const lines = splitPhysical(prefixText);
+  const last = lines[lines.length - 1]!;
+  if (last.content.length === 0 && last.eol === '') lines.pop();
+  return lines;
+}
+
+/**
+ * 区间格式化（Monaco `document range formatting` 的窗口腿）：`text` 是**选区文本**，
+ * `context.prefix` 是选区之前的整行前缀，edits 的行号是**选区局部坐标**（第 1 行 = 选区首行）。
+ *
+ * - 判据与整篇腿只有一份：前缀与选区接起来喂 `erbNewContents`，块层级/单位探测/保护区掩码
+ *   都走同一套；只把落在选区内的结果做成 edits ⇒ **前缀与选区外一个字节都不动**。
+ * - 无前缀 ⇒ 与 `computeFormatEdits(text, dialect, options)` 逐字等价（既有行为零改动）；
+ *   顶层选区因此仍然「保留原缩进」。
+ * - `.kojo` 不吃前缀：它的层级由词法器算，词法面是文档级判据，只接半篇文本会把逻辑行
+ *   （`\` 续接）切错——宿主对该方言本就走整篇腿。传了前缀也只按 `text` 自身算。
+ */
+export function computeRangeFormatEdits(
+  text: string,
+  dialect: FormatDialect,
+  context: RangeFormatContext = {},
+  options: FormatRuleOptions = {},
+): FormatEdit[] {
+  const prefixText = context.prefix ?? '';
+  if (dialect !== 'erb' || prefixText.length === 0) return computeFormatEdits(text, dialect, options);
+
+  const prefixLines = splitPrefixLines(prefixText);
+  const rangeLines = splitPhysical(text);
+  const contents = [...prefixLines.map((l) => l.content), ...rangeLines.map((l) => l.content)];
+  const next = erbNewContents(contents, resolveRules(options));
+  const edits: FormatEdit[] = [];
+  for (let i = 0; i < rangeLines.length; i++) {
+    const content = next[prefixLines.length + i];
+    const original = rangeLines[i]!;
+    if (typeof content !== 'string' || content === original.content) continue;
+    // 行号回落成选区局部坐标：前缀的行号绝不进 edits（那是"不许动"的字节）
     edits.push({ line: i + 1, startColumn: 1, endColumn: original.content.length + 1, text: content });
   }
   return edits;

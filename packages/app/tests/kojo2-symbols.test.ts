@@ -11,8 +11,9 @@
  * 5. **确定性**：源码序、两次调用逐字相等、LF / CRLF 同结果；
  * 6. **空 / 坏输入**：`[]`、不抛；
  * 7. **面包屑路径**：`kojo2SymbolPathAt` 的"光标 → 根"、深层块 / 声明区 / 正文 / 越界；
- * 8. **Monaco 面**：`SymbolKind` 映射、`DocumentSymbol` 树形状、flag 关零注册、dispose 幂等、
- *    provider 失败回 `[]`，外加源码断言（Monaco 类型只 type-only、不碰插件包）。
+ * 8. **Monaco 面**：`SymbolKind` 映射、`DocumentSymbol` 树形状、开关关也注册（只读呈现面，
+ *    K2-STRUCTURE-GATE）、dispose 幂等、provider 失败回 `[]`，外加源码断言（Monaco 类型
+ *    只 type-only、不碰插件包、不由 cutover 开关门控）。
  *
  * 夹具 `fixtures/kojo2/symbols.kojo2` 刻意把 `# 幕` 写在最前：这样它后面的声明都落在该幕的
  * 真 span 里，层级与块区间都能在同一份输入上验；另有用例用声明区在幕前的写法验"顶层符号"。
@@ -695,17 +696,20 @@ describe('Monaco 翻译：SymbolKind 映射与 DocumentSymbol 树', () => {
 
 /* ============================== ⑨ 安装 / flag / 失败面 ============================== */
 
-describe('安装：flag 关零注册、只挂 kojo2、dispose 幂等、失败回 []', () => {
-  it('flag 关 ⇒ 一次注册都没发生，句柄可重复 dispose', () => {
+describe('安装：开关关也注册（只读面）、只挂 kojo2、dispose 幂等、失败回 []', () => {
+  it('flag 关 ⇒ 仍恰好一枚注册（K2-STRUCTURE-GATE 改口：旧口径「零注册」作废）', () => {
+    // 大纲是只读呈现面：cutover 只管写回 / 迁移 / 切解析器，关着也必须有 Ctrl+Shift+O。
+    // 保留 stubFlag(false) 正是为了断言"开关确实关着，注册照样发生"。
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2DocumentSymbolProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
+    expect(fake.registrations[0]!.selector).toBe(KOJO2_LANGUAGE_ID);
     expect(() => {
       handle.dispose();
       handle.dispose();
     }).not.toThrow();
-    expect(fake.disposeCalls).toEqual([]);
+    expect(fake.disposeCalls).toHaveLength(1);
   });
 
   it('flag 开 ⇒ 恰好一枚注册，selector 只有 kojo2', () => {
@@ -780,8 +784,10 @@ describe('源码卫生：Monaco 只 type-only、不碰插件包、flag 自身再
     expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
   });
 
-  it('安装器自带 flag 闸（调用点之外的第二道）', () => {
-    expect(source).toMatch(/if \(!isKojo2CutoverEnabled\(\)\) return NOOP_DISPOSABLE;/);
+  it('安装器**不再**由 cutover 开关门控（K2-STRUCTURE-GATE：只读面）', () => {
+    // 旧口径断言的是"安装器自带 flag 闸"，批次十一起折叠 / 大纲移出切流开关：
+    // 断言反过来钉住"门控已拆"，注册行照旧只认 `kojo2`。
+    expect(source).not.toMatch(/isKojo2CutoverEnabled/);
     expect(source).toMatch(/registerDocumentSymbolProvider\(\s*KOJO2_LANGUAGE_ID/);
   });
 });

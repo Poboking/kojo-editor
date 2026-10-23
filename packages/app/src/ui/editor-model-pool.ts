@@ -153,6 +153,11 @@ export interface PoolDeps {
   modelVersion?: (model: Monaco.editor.ITextModel) => number;
   /** 冷档件被程序性改写后的补写盘通道（真身 = kernel.io.writeText，写域强制由内核把关） */
   writeText?: (kernel: Kernel, path: string, text: string) => Promise<void>;
+  /**
+   * 重挂 model 语言（真身 = `monaco.editor.setModelLanguage`）。缺省 ⇒
+   * {@link EditorModelPool.retargetLanguage} 返回 0（纯逻辑测试 / 无 Monaco 环境不假装改过）。
+   */
+  setModelLanguage?: (model: Monaco.editor.ITextModel, languageId: string) => void;
   /** 可见性出口（驱逐 / 钉住 / 超阈告警）；缺省 console.warn（铁律 4：不静默） */
   warn?: (message: string) => void;
 }
@@ -216,6 +221,15 @@ export interface EditorModelPool {
    * （盘改了 ⇒ `file.changed` ⇒ 池弃档，见安全闸③）——不答冷档存在，语义已对。
    */
   liveModel: (path: string) => Monaco.editor.ITextModel | undefined;
+  /**
+   * 语言覆盖变更后的跟随（LANG-OVERRIDE-MODEL）：按 `pathKey` 找池里**所有**同路径
+   * model（活动 + 冷档，含同一路径不同拼写的各一份）逐份按 `resolve` 的目标重挂。
+   *
+   * `resolve` 按 model 现状给目标语言——同一路径的多份 model 正文可以不同（2.0 路由按
+   * 正文判）；同语言跳过（与 2.0 重挂控制器同一条幂等判据：重挂会重置 tokenization /
+   * 装饰 / 折叠状态）。返回真正重挂的份数（观测面 / 测试读数）。
+   */
+  retargetLanguage: (path: string, resolve: (model: Monaco.editor.ITextModel) => string) => number;
 }
 
 export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
@@ -558,6 +572,23 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
         if (rec.refs > 0 && rec.entry && pathKey(p) === want) return rec.entry.model;
       }
       return undefined;
+    },
+
+    retargetLanguage(path, resolve) {
+      if (deps.setModelLanguage === undefined) return 0;
+      const want = pathKey(path);
+      let changed = 0;
+      for (const [recordPath, rec] of pool) {
+        // 池里每个记录至多一份 model（冷档件也在 rec.entry 上）；同一路径的不同拼写
+        // 会各成一条记录——覆盖要落到**全部**份上，否则另一组显示的还是旧语言面
+        if (rec.entry === undefined || pathKey(recordPath) !== want) continue;
+        const model = rec.entry.model;
+        const desired = resolve(model);
+        if (desired === model.getLanguageId()) continue; // 幂等：同语言不重挂
+        deps.setModelLanguage(model, desired);
+        changed += 1;
+      }
+      return changed;
     },
   };
 }
