@@ -3,7 +3,7 @@ import type { EditorCommandContext, EditorDocumentSymbol, EditorWorkspaceSymbol 
 import type { CommandEntry } from './commands';
 import { isTauri } from '../bridge/invoke';
 import { useNotify, type Notify } from './NotificationCenter';
-import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
+import { canRunContextMenuCommand, isPrimaryButton, runContextMenuCommand } from './context-menu-model';
 import { openContextMenu } from './context-menu-host';
 import { buildContextMenuRoute, declareContextSurface, type ContextSurfaceBuildResult } from './context-surfaces';
 import { dirLabelParts } from './path-label';
@@ -376,7 +376,7 @@ function Picker({
       className={`picker-backdrop ${variant === 'palette' ? 'pk pk-mask' : ''}`}
       onMouseDown={(e) => {
         // 只认左键：右键要弹菜单，不能先把调色板关掉——关掉之后面上哪还有菜单可言
-        if (e.button !== 0) return;
+        if (!isPrimaryButton(e)) return;
         onClose();
       }}
     >

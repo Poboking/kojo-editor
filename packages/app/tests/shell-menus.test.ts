@@ -744,6 +744,6 @@ describe('源码守门：面根与数据锚点必须在位', () => {
     expect(at).toBeGreaterThan(-1);
     const closeAt = shell.indexOf('setActiveOverlay(null)', at);
     expect(closeAt).toBeGreaterThan(at);
-    expect(shell.slice(at, closeAt)).toMatch(/button\s*!==\s*0/);
+    expect(shell.slice(at, closeAt)).toMatch(/isPrimaryButton|button\s*!==\s*0/);
   });
 });

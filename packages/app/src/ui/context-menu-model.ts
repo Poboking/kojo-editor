@@ -290,6 +290,21 @@ export function isTextInputTarget(target: HTMLElement | null): boolean {
   return target !== null && editableOf(target) !== null;
 }
 
+/**
+ * 这次按下是不是**主键**（左键）。**全仓唯一判据**，不要在各处手写 `button === 0`。
+ *
+ * 遮罩层的「点外面关掉浮层」只该认左键：右键是**开菜单**的手势，拿它在遮罩上按一下，
+ * 浮层先被关掉、紧接着弹出一个压在空页面上的菜单——用户读到的是「右键把这一页关了」。
+ * 而更糟的是连锁：浮层没了，右键落点上的面也就没了。右键语义归根路由
+ * （`context-surfaces.ts`），关窗语义归遮罩自己。
+ *
+ * 形态收成 `{ button: number }` 而不是 `MouseEvent`：这样 React 合成事件、原生事件、
+ * 以及纯函数的单测入参都能直接喂进来。
+ */
+export function isPrimaryButton(event: { readonly button: number }): boolean {
+  return event.button === 0;
+}
+
 /** 目标内是否有选区（复制 / 剪切的可用性判据） */
 function hasSelectionIn(target: HTMLElement): boolean {
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {

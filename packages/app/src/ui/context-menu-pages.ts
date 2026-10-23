@@ -119,15 +119,11 @@ export function isFailureNote(line: string): boolean {
 }
 
 /**
- * 这次按下是不是**主键**（左键）。
- *
- * 遮罩层的「点外面关掉浮层」只该认左键：右键是**开菜单**的手势，拿它在遮罩上按一下，
- * 浮层先被关掉、紧接着弹出一个压在空页面上的菜单——用户读到的是「右键把这一页关了」。
- * 右键语义归根路由（`context-surfaces.ts`），关窗语义留在这里。
+ * 这次按下是不是**主键**（左键）——实现与文档已上收到数据面 `context-menu-model.ts`
+ * （`isPrimaryButton`）：Palette / ShellLayout / 设置页三处共用同一个判据，
+ * 各写一份 `button === 0` 迟早会漏掉一处。这里保留转发是为了不让既有 import 断掉。
  */
-export function isPrimaryButton(event: { readonly button: number }): boolean {
-  return event.button === 0;
-}
+export { isPrimaryButton } from './context-menu-model';
 
 /* ==========================================================================================
  * 二、欢迎页 · 最近项目行（WP4.4）
