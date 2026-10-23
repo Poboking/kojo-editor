@@ -317,3 +317,56 @@ describe('挂载后可用的完整链路（行 → 面 → 根宿主）', () => 
     expect(request?.items.some((i) => i.id === KEYBINDINGS_COMMAND_ID)).toBe(true);
   });
 });
+
+describe('遮罩的按键语义（右键要给菜单留活口）', () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  let container: HTMLDivElement;
+  let root: Root;
+  const onClose = vi.fn<() => void>(() => undefined);
+
+  beforeEach(async () => {
+    onClose.mockClear();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        createElement(CommandPalette, {
+          commands: [{ id: 'workbench.saveAll', title: '全部保存', run: () => undefined }],
+          commandCtx: {} as unknown as EditorCommandContext,
+          onClose,
+        }),
+      );
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  const backdrop = (): HTMLElement => {
+    const el = container.querySelector<HTMLElement>('.picker-backdrop');
+    expect(el).not.toBeNull();
+    return el!;
+  };
+
+  const press = async (button: number): Promise<void> => {
+    await act(async () => {
+      backdrop().dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button }));
+    });
+  };
+
+  it('右键按下遮罩不关窗（否则面还没弹，菜单就没了落点）', async () => {
+    await press(2);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('左键按下遮罩照旧关窗（点外面收起来是既有行为，不能连带改掉）', async () => {
+    await press(0);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

@@ -374,7 +374,11 @@ function Picker({
   return (
     <div
       className={`picker-backdrop ${variant === 'palette' ? 'pk pk-mask' : ''}`}
-      onMouseDown={onClose}
+      onMouseDown={(e) => {
+        // 只认左键：右键要弹菜单，不能先把调色板关掉——关掉之后面上哪还有菜单可言
+        if (e.button !== 0) return;
+        onClose();
+      }}
     >
       <div
         className={`picker pk ${variant === 'default' ? '' : `pk-${variant}`}`}
