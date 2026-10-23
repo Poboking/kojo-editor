@@ -18,10 +18,23 @@
  * 2. **禁用必须说话**（铁律 4）：`disabled: true` 必须配 `disabledReason`，渲染侧把原因
  *    同时写进 `title` 与 `aria-description`——灰着不说话的项等于「按了没反应」。
  * 3. **菜单不另造第二份文案**：凡「已有命令」的动作一律走 `menuItemFromCommand`，标题与键位
- *    从 `KEYBINDING_SPECS` 取——菜单与命令面板双真源是必然漂移的那种事故。
+ *    从键位**规格表**（`KEYBINDING_SPECS`）取——菜单与命令面板双真源是必然漂移的那种事故。
+ *
+ * ## 键位为什么是注入的（1023 开机图减重批）
+ *
+ * 本模块曾被 `main.tsx → tutorial-context-menu.ts` 静态拉起，而它值导入 `./keybindings`
+ * 只为取「生效键位」——那一个 import 把整包键位运行期（localStorage 覆盖表、持久化、
+ * 订阅广播、React 钩子）带进首屏。现在两条路分开：
+ *
+ * - **标题与缺省键**走 `./keybinding-specs`（零 import 的纯数据叶子，便宜）；
+ * - **生效键位**走注入缝 `registerMenuKeybindingLookup`：壳层（`ShellLayout`，本来就是懒加载的
+ *   那一层）挂载时把 `effectiveKeybindingOf` 递进来。改键后菜单提示跟着变，靠的仍是同一个
+ *   函数，没有第二套解析。
+ *
+ * 未注册时（测试、首屏极早期）退回规格表里的**缺省键位**：宁可先显示出厂键，也不能空白或抛错。
  */
 import { formatKeybinding } from './commands';
-import { effectiveKeybindingOf, keybindingSpecOf } from './keybindings';
+import { defaultKeybindingOf, keybindingSpecOf } from './keybinding-specs';
 
 /** 一条菜单项（数据面：动作由 onSelect 统一接线，组件不认识业务 id） */
 export interface ContextMenuItem {
@@ -183,10 +196,38 @@ function filterInto(
 /* ------------------------------ 命令项适配 ------------------------------ */
 
 /**
+ * 生效键位查找（宿主注入的缝）。返回 `undefined` = 这条命令**当前没有生效键位**
+ * ——包括作者把它解绑的情形；注入方的答案就是权威，菜单不再拿缺省去覆盖它。
+ */
+export type MenuKeybindingLookup = (id: string) => string | undefined;
+
+let keybindingLookup: MenuKeybindingLookup | null = null;
+
+/**
+ * 注册生效键位查找（`null` = 注销，回到缺省键位）。
+ *
+ * 只有壳层知道作者改过什么键（覆盖表在 `./keybindings` 里，而本模块不能值导入它）。
+ * 故由 `ShellLayout` 挂载时递进来、卸载时收回；本模块只留一个函数指针，不持有任何状态。
+ */
+export function registerMenuKeybindingLookup(lookup: MenuKeybindingLookup | null): void {
+  keybindingLookup = lookup;
+}
+
+/**
+ * 菜单该显示的键位串：注册了就看生效键位，没注册就看**缺省键位**。
+ *
+ * 未注册的窗口（测试、首屏极早期）显示出厂键而不是空白：少显示一条提示不会有人来报，
+ * 显示错一条（把作者改掉的键又画出来）才会。
+ */
+function menuKeysOf(id: string): string | undefined {
+  return keybindingLookup === null ? defaultKeybindingOf(id) : keybindingLookup(id);
+}
+
+/**
  * 命令 → 菜单项（菜单侧唯一合法文案来源）。
  *
- * 标题取 `KEYBINDING_SPECS` 的中文 title，快捷键取**生效键位**（含作者改键）后经
- * `formatKeybinding` 展示——菜单里显示的键必须与真按下去的那条一致。
+ * 标题取 `KEYBINDING_SPECS` 的中文 title，快捷键取**生效键位**（含作者改键，经注入的
+ * lookup）后由 `formatKeybinding` 展示——菜单里显示的键必须与真按下去的那条一致。
  * id 未在键位注册表登记 ⇒ 返回 null（调用方整项不显示，铁律 4）。
  */
 export function menuItemFromCommand(
@@ -195,7 +236,7 @@ export function menuItemFromCommand(
 ): ContextMenuItem | null {
   const spec = keybindingSpecOf(id);
   if (spec === undefined) return null;
-  const keys = effectiveKeybindingOf(id);
+  const keys = menuKeysOf(id);
   const shortcut = keys === undefined || keys === '' ? undefined : formatKeybinding(keys);
   return {
     id,

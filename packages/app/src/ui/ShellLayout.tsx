@@ -168,7 +168,11 @@ import { ProblemsStatusItem } from './ProblemPanel';
 import { ContextMenu, type ContextMenuItem } from './context-menu';
 // 右键菜单（1023 覆盖面批）：根路由挂在 App 壳层，命令注册表在这里——两边靠这根线接头，
 // 兜底菜单里的「命令面板 / 设置 / 检查更新」才按得动（判据与命令面板同一份，不另造）。
-import { isPrimaryButton, registerContextMenuCommandRunner } from './context-menu-model';
+import {
+  isPrimaryButton,
+  registerContextMenuCommandRunner,
+  registerMenuKeybindingLookup,
+} from './context-menu-model';
 // 壳层七面的右键菜单（1023 覆盖面批）：菜单数据面在 context-menu-shell（纯函数 + 面声明），
 // 这里只注入能力面（快照 + 既有布局动作），不把菜单文案写进这个 2269 行的大文件。
 import {
@@ -1545,6 +1549,22 @@ export function ShellLayout(props: Props): ReactElement {
       registerContextMenuCommandRunner(null);
     };
   }, [onRegisterWorkbench]);
+
+  /**
+   * 右键菜单的键位注入（1023 开机图减重批）。
+   *
+   * `context-menu-model` 不再值导入 `./keybindings`（那一个 import 把整包键位运行期拖进
+   * 首屏，只为菜单右侧的两根字符串）。生效键位这只眼睛由壳层递进去——它本来就懒加载，
+   * 也本来就握着 `effectiveKeybindingOf`。**注入的是同一个函数**：作者改键后菜单提示
+   * 跟着变，仍然只有一套键位解析，不存在「菜单显示一个键、按下去另一个键」。
+   *
+   * 依赖表为空：`effectiveKeybindingOf` 是模块级函数，读的是模块内的覆盖表。注销放在
+   * 清理函数里，壳层卸载后菜单回到规格表的缺省键（而不是死记着上一次的答案）。
+   */
+  useEffect(() => {
+    registerMenuKeybindingLookup(effectiveKeybindingOf);
+    return () => registerMenuKeybindingLookup(null);
+  }, []);
 
   /**
    * 输入法合成会话标志（2026-10-12 实机缺陷修复）。
