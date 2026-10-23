@@ -1,7 +1,9 @@
 /**
- * 壳层七面的右键菜单（1023 覆盖面批 · WP3.7 / 3.8 / 4.1 / 4.2 / 4.3）。
+ * 壳层六面的右键菜单（1023 覆盖面批 · WP3.7 / 4.1 / 4.2 / 4.3）。
  *
- * 覆盖：面板选项卡 / 面板分区头 / 浮窗 / 通知 / 活动栏 / 工具栏 / 状态栏。
+ * 覆盖：面板选项卡 / 面板分区头 / 浮窗 / 活动栏 / 工具栏 / 状态栏。
+ * 第七面（通知）在 `notification-menu.ts`——`main.tsx` 静态装着通知中心，它只要那一面；
+ * 留在这里会把本文件（含命令模型与整张键位表）拖进开机图（PS10-MENU-SPLIT）。
  *
  * ## 为什么菜单数据住在这里，而不是各组件里
  *
@@ -30,9 +32,9 @@
  *    所以最大化之后一定回得去，不需要再记一份「最大化前的矩形」。
  */
 import {
-  canRunContextMenuCommand,
+  copyTextToClipboard,
   menuItemFromCommand,
-  runContextMenuCommand,
+  runMenuItemCommand,
   type ContextMenuItem,
 } from './context-menu-model';
 import {
@@ -216,55 +218,6 @@ export function buildFloatingWindowMenu(input: FloatingWindowMenuInput): Context
   return items;
 }
 
-/* ------------------------------ 通知（WP3.8） ------------------------------ */
-
-export const NOTIFICATION_ACTION = {
-  COPY: 'notice.copy',
-  DISMISS: 'notice.dismiss',
-  CLEAR_ALL: 'notice.clearAll',
-  /** 通知自带的动作按序号分发（`notice.run.<index>`） */
-  RUN_PREFIX: 'notice.run.',
-} as const;
-
-export interface NotificationMenuInput {
-  /** 这条通知带动作（「去授权」「查看差异」…）——没动作就没有可执行的项 */
-  readonly hasAction: boolean;
-  readonly actionLabels: readonly string[];
-  /** 屏上现有条数（只有一条时「清除全部」没有意义） */
-  readonly total: number;
-}
-
-export function buildNotificationMenu(input: NotificationMenuInput): ContextMenuItem[] {
-  const items: ContextMenuItem[] = [{ id: NOTIFICATION_ACTION.COPY, label: '复制通知内容' }];
-  if (input.hasAction) {
-    const labels = input.actionLabels;
-    if (labels.length === 1) {
-      items.push({ id: `${NOTIFICATION_ACTION.RUN_PREFIX}0`, label: `执行「${labels[0] ?? ''}」` });
-    } else if (labels.length > 1) {
-      items.push({
-        id: 'notice.run',
-        label: '执行通知里的操作',
-        children: labels.map((label, index) => ({
-          id: `${NOTIFICATION_ACTION.RUN_PREFIX}${index}`,
-          label: `执行「${label}」`,
-        })),
-      });
-    }
-  }
-  items.push({ id: NOTIFICATION_ACTION.DISMISS, label: '清除这条通知', dividerBefore: true });
-  items.push(
-    input.total > 1
-      ? { id: NOTIFICATION_ACTION.CLEAR_ALL, label: '清除全部通知' }
-      : {
-          id: NOTIFICATION_ACTION.CLEAR_ALL,
-          label: '清除全部通知',
-          disabled: true,
-          disabledReason: '屏上只有这一条通知，用「清除这条通知」即可',
-        },
-  );
-  return items;
-}
-
 /* ------------------------------ 活动栏（WP4.1） ------------------------------ */
 
 export const ACTIVITY_BAR_ACTION = {
@@ -393,45 +346,6 @@ export function buildStatusBarMenu(input: StatusBarMenuInput): ContextMenuItem[]
   return items;
 }
 
-/* ------------------------------ 剪贴板 ------------------------------ */
-
-/**
- * 复制纯文本（菜单里的「复制…」三项共用）。
- *
- * 优先 `navigator.clipboard`（WebView2 有）；拿不到或被拒时回落到
- * `<textarea> + execCommand('copy')`——两档都是平台能力，不是壳层自造的剪贴板。
- * 失败不抛：菜单里按一下没反应已经是既成事实，再弹一个错误框只会更吵。
- */
-export function copyTextToClipboard(text: string): void {
-  if (text === '') return;
-  const clip = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
-  if (clip !== undefined && typeof clip.writeText === 'function') {
-    void clip.writeText(text).catch(() => {
-      fallbackCopy(text);
-    });
-    return;
-  }
-  fallbackCopy(text);
-}
-
-function fallbackCopy(text: string): void {
-  if (typeof document === 'undefined') return;
-  const area = document.createElement('textarea');
-  area.value = text;
-  area.setAttribute('readonly', '');
-  area.style.position = 'fixed';
-  area.style.top = '0';
-  area.style.opacity = '0';
-  document.body.appendChild(area);
-  area.select();
-  try {
-    document.execCommand('copy');
-  } catch {
-    // 平台不给就算了（不弹第二个错误）
-  }
-  area.remove();
-}
-
 /* ------------------------------ 宿主（由壳层注入） ------------------------------ */
 
 /**
@@ -488,38 +402,7 @@ export function installShellMenuHost(host: ShellMenuHost | null): () => void {
   };
 }
 
-/** 通知面需要的那几格（由 `NotificationCenter` 注入；通知列表的真源在那边） */
-export interface ShellNoticeView {
-  readonly id: number;
-  readonly message: string;
-  readonly detail?: string;
-  readonly actions: readonly string[];
-}
-
-export interface NoticeMenuHost {
-  readonly notices: readonly ShellNoticeView[];
-  dismiss(id: number): void;
-  clearAll(): void;
-  /** 执行第 index 个动作（先收通知再执行，与 toast 上的按钮同序） */
-  runAction(id: number, index: number): void;
-}
-
-let noticeHost: NoticeMenuHost | null = null;
-
-/** 注入 / 撤销通知数据面（`null` = 通知中心卸载） */
-export function installNoticeMenuHost(host: NoticeMenuHost | null): () => void {
-  noticeHost = host;
-  return () => {
-    if (noticeHost === host) noticeHost = null;
-  };
-}
-
 /* ------------------------------ 动作分发 ------------------------------ */
-
-/** 命令项（`id` 就是命令 id）优先走命令通道；面自己的 id 由各面的 switch 接 */
-function runCommandItem(id: string): boolean {
-  return canRunContextMenuCommand(id) ? runContextMenuCommand(id) : false;
-}
 
 function runPanelTabsAction(id: string, panelId: string, container: 'aux' | 'bottom'): void {
   const host = shellHost;
@@ -544,7 +427,7 @@ function runPanelTabsAction(id: string, panelId: string, container: 'aux' | 'bot
       host.closeContainer(container);
       return;
     default:
-      runCommandItem(id);
+      runMenuItemCommand(id);
   }
 }
 
@@ -557,7 +440,7 @@ function runPanelSectionAction(id: string, panelId: string): void {
       host.toggleCollapse(panelId);
       return;
     default:
-      runCommandItem(id);
+      runMenuItemCommand(id);
   }
 }
 
@@ -588,33 +471,7 @@ function runFloatingAction(id: string, panelId: string): void {
       host.resetFloat(panelId);
       return;
     default:
-      runCommandItem(id);
-  }
-}
-
-function runNotificationAction(id: string, noticeId: number | null): void {
-  const host = noticeHost;
-  if (host === null) return;
-  switch (id) {
-    case NOTIFICATION_ACTION.COPY: {
-      const notice = noticeId === null ? undefined : host.notices.find((n) => n.id === noticeId);
-      if (notice === undefined) return;
-      copyTextToClipboard(notice.detail === undefined ? notice.message : `${notice.message}\n${notice.detail}`);
-      return;
-    }
-    case NOTIFICATION_ACTION.DISMISS:
-      if (noticeId !== null) host.dismiss(noticeId);
-      return;
-    case NOTIFICATION_ACTION.CLEAR_ALL:
-      host.clearAll();
-      return;
-    default:
-      if (noticeId !== null && id.startsWith(NOTIFICATION_ACTION.RUN_PREFIX)) {
-        const index = Number.parseInt(id.slice(NOTIFICATION_ACTION.RUN_PREFIX.length), 10);
-        if (Number.isInteger(index)) host.runAction(noticeId, index);
-        return;
-      }
-      runCommandItem(id);
+      runMenuItemCommand(id);
   }
 }
 
@@ -630,7 +487,7 @@ function runActivityBarAction(id: string, viewKey: string): void {
       for (const panelId of host.panelsOfView(viewKey)) host.move(panelId, 'aux');
       return;
     default:
-      runCommandItem(id);
+      runMenuItemCommand(id);
   }
 }
 
@@ -643,7 +500,7 @@ function runToolbarAction(id: string, commandId: string, title: string): void {
       copyTextToClipboard(commandId);
       return;
     default:
-      runCommandItem(id);
+      runMenuItemCommand(id);
   }
 }
 
@@ -661,7 +518,7 @@ function runStatusBarAction(id: string, text: string): void {
       host.switchEol('CRLF');
       return;
     default:
-      runCommandItem(id);
+      runMenuItemCommand(id);
   }
 }
 
@@ -750,40 +607,6 @@ declareContextSurface({
     });
     if (items.length === 0) return null;
     return { items, onSelect: (id) => runFloatingAction(id, panelId) };
-  },
-});
-
-/** 通知（一条 toast；容器空白处 = 整批） */
-declareContextSurface({
-  id: 'notification',
-  ariaLabel: '通知菜单',
-  area: 'panel',
-  build: (ctx: ContextSurfaceBuildContext): ContextSurfaceBuildResult => {
-    const host = noticeHost;
-    if (host === null) return null;
-    const toast = ctx.target.closest<HTMLElement>('[data-notice-id]');
-    if (toast === null) {
-      // 容器空白处：只给整批动作（这里没有「这一条」可复制/可清除）
-      if (host.notices.length === 0) return null;
-      return {
-        items: [{ id: NOTIFICATION_ACTION.CLEAR_ALL, label: '清除全部通知' }],
-        onSelect: (id) => runNotificationAction(id, null),
-      };
-    }
-    const rawId = toast.getAttribute('data-notice-id');
-    const noticeId = rawId === null ? Number.NaN : Number.parseInt(rawId, 10);
-    const notice = Number.isInteger(noticeId)
-      ? host.notices.find((n) => n.id === noticeId)
-      : undefined;
-    // 通知刚被别处清掉（自动消失 / 同屏淘汰）⇒ 这一级不表态，回落下一级
-    if (notice === undefined) return null;
-    const items = buildNotificationMenu({
-      hasAction: notice.actions.length > 0,
-      actionLabels: notice.actions,
-      total: host.notices.length,
-    });
-    if (items.length === 0) return null;
-    return { items, onSelect: (id) => runNotificationAction(id, notice.id) };
   },
 });
 
