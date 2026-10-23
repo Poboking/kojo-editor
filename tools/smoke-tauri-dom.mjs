@@ -54,8 +54,17 @@
  *    idle 预取发生在可点**之后**，不在 cut 内（App.tsx 里「先记标记、再排 rIC」是本断言的
  *    口径依赖，别调换顺序）。
  *
+ * **CTX-SMOKE 四组右键断言（2026-10-23，看板 CTX-SMOKE / 原 WP6.5）**：在 boot 取证之后
+ * （Page.reload 那一轮跑完才动，避免污染断言②的冷开机读数）再走一遍真实交互：
+ * A 编辑区（`.monaco-editor` 里子归 Monaco 原生 zh-cn 菜单、`.editor-toolbar` 外框归我们的面）、
+ * B 三处热区（文件树行 / 标签页 / 面板）各自命中对应面而非兜底、C 遮罩只认左键、D 层叠。
+ * 采集在页内只记事实、判定在 Node 侧纯函数（`tools/context-menu-smoke.mjs`），四组共用一个
+ * 判定收集器。前置要有一个打开的项目 + 文件：探针会点「最近项目」并展开文件树点第一个文件
+ * （写权限弹窗一律「只读浏览」）；**A 组前置不满足时判红**（不假绿），B 组热区不在场时跳过并打印原因。
+ * ⚠ 干净首启面（`KOJO_SMOKE_ISOLATE_APPDATA=1` 且 store 里没有最近项目）没有可点的行 ⇒ A 组会红：
+ *   那是「没东西可测」而不是产品坏——先手工打开过一次项目再跑，或不要隔离 appData。
+ *
  * 用法：node tools/smoke-tauri-dom.mjs [监测秒数，默认 100]
- *       KOJO_SMOKE_VITE_PORT=1432 node tools/smoke-tauri-dom.mjs 110   （换 vite 端口，CDP 仍是 9222）
  *       KOJO_SMOKE_ISOLATE_APPDATA=1 …                                   （独立 appDataDir，干净首启面；可选）
  *       KOJO_BOOT_SETTLE_MS=12000 …                                      （放宽「可点后」观察窗；默认 4000=release 口径。
  *                                                                        dev 形态 vite 不打包，空闲预取排到窗后 ⇒ 判红是量测窗，
@@ -66,7 +75,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import * as net from 'node:net';
 import * as path from 'node:path';
-import { assertPageOrigin, devTarget } from './smoke-lib.mjs';
+import { assertPageOrigin, devTarget, recentOpenRowSel, resumeOpenRowSel } from './smoke-lib.mjs';
+import { judgeContextMenuProbes, runContextMenuProbes } from './context-menu-smoke.mjs';
 import {
   collectBoot,
   judgeBoot,
@@ -289,6 +299,12 @@ const checks = {
   networkTotal: null,
   networkMonacoBefore: null,
   networkMonacoTotal: null,
+  /**
+   * CTX-SMOKE（右键菜单真机冒烟，看板 CTX-SMOKE / 原 WP6.5）：
+   * `ran` = 这一轮到底采到没有；`pass` = 四组全过（跳过档只允许 B 组的"热区不在场"）；
+   * `checks` = 逐条判据（组号 + 名称 + 通过与否 + 屏上读数）。
+   */
+  contextMenu: { ran: false, pass: false, checks: [], skipped: [], readings: null, reason: '' },
 };
 const started = Date.now();
 
@@ -469,6 +485,71 @@ if (checks.boot) {
   for (const line of bootMarkLines(checks.boot)) console.log(line);
 }
 
+/* ============================================================================
+ * CTX-SMOKE：右键菜单四组真机断言（看板 CTX-SMOKE；原 WP6.5 一直没跑）
+ *
+ * 采集（`runContextMenuProbes`）在页内只记事实，判定（`judgeContextMenuProbes`）在 Node
+ * 侧纯函数收口——四组共用**同一个**判定收集器（`checks.push`），没有"某组只 warn 不判"。
+ * 探针与判据的口径见 `tools/context-menu-smoke.mjs` 文件头。
+ *
+ * 位置刻意放在**Network 域取证（Page.reload 那一轮）之后**：本阶段会点「最近项目」把项目
+ * 打开、再点文件树里的第一个文件，页面状态会被改；放在前面会污染断言②的冷开机读数。
+ * ========================================================================== */
+if (checks.cdpUp) {
+  try {
+    let wsUrl = checks.bootWsUrl;
+    if (!wsUrl) {
+      const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
+      const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      wsUrl = page?.webSocketDebuggerUrl ?? '';
+    }
+    if (!wsUrl) throw new Error(`拿不到页面 WS 地址（CDP ${CDP_PORT}）`);
+    console.log(
+      '[smoke] CTX-SMOKE：开始四组右键断言（A 编辑区 · B 三处热区 · C 遮罩只认左键 · D 层叠）…',
+    );
+    const raw = await cdpEval(
+      wsUrl,
+      `(${runContextMenuProbes.toString()})(${JSON.stringify({ recentRowSel: recentOpenRowSel, resumeRowSel: resumeOpenRowSel })})`,
+      // 前置要开项目 + 开文件（写权限弹窗按只读浏览过），给足 4 分钟
+      240000,
+    );
+    if (raw === undefined) {
+      // Runtime.evaluate 抛了异常 / 超时：`cdpEval` 只回 undefined，不当绿
+      throw new Error('页内探针没有返回值（Runtime.evaluate 抛异常或超时；见主机 DevTools 控制台）');
+    }
+    // `returnByValue: true` 下 CDP 把对象**原样**交回来（不是字符串）：探针 resolve 的是
+    // `{ a1, a2, b, c, d, trace }`，所以这里不能无脑 `JSON.parse(String(raw))`——
+    // 那会把对象 String 成 `[object Object]` 再解析失败（2026-10-23 首跑实测）。
+    // 兼容字符串形态：若哪天探针改成返回 JSON 文本（或 CDP 版本差异回字符串），同一条路还能走。
+    const readings = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (readings === null || typeof readings !== 'object') {
+      throw new Error(`页内探针返回了非对象读数（${typeof readings}），无法判定`);
+    }
+    const judged = judgeContextMenuProbes(readings);
+    checks.contextMenu.ran = true;
+    checks.contextMenu.pass = judged.pass;
+    checks.contextMenu.checks = judged.checks;
+    checks.contextMenu.skipped = judged.skipped;
+    checks.contextMenu.readings = readings;
+    // CTX-SMOKE-A 编辑区：里子归 Monaco 原生中文菜单、外框归我们的面（两组各一条）
+    // CTX-SMOKE-B 三处热区：文件树行 / 标签页 / 面板，各自命中对应面而非兜底
+    // CTX-SMOKE-C 遮罩：右键（button=2）不关菜单、左键（button=0）关
+    // CTX-SMOKE-D 层叠：宿主 ≥1300、浮层与就地菜单都在其下、命中测试落在菜单内
+    for (const c of judged.checks) {
+      const tag = c.skipped === true ? '○ 跳过' : c.ok ? '✓' : '✗';
+      console.log(`[smoke] CTX-SMOKE-${c.group} ${tag} ${c.name} — ${c.detail}`);
+    }
+    for (const s of judged.skipped) console.log(`[smoke] CTX-SMOKE 跳过项：${s}`);
+    console.log(`[smoke] CTX-SMOKE 读数：${JSON.stringify(readings).slice(0, 1600)}`);
+  } catch (e) {
+    checks.contextMenu.reason = String(e && e.message ? e.message : e);
+    console.log(`[smoke] CTX-SMOKE 采集失败：${checks.contextMenu.reason.slice(0, 300)}`);
+  }
+} else {
+  checks.contextMenu.reason = `CDP ${CDP_PORT} 未监听，右键菜单冒烟无从采集`;
+  console.log(`[smoke] CTX-SMOKE 跳过：${checks.contextMenu.reason}`);
+}
+
 const passed =
   checks.viteUp &&
   checks.hostLaunched &&
@@ -479,8 +560,16 @@ const passed =
   checks.a1 &&
   checks.a2 &&
   checks.splashGone &&
+  checks.contextMenu.pass &&
   !exited;
-console.log(`[smoke] checks: ${JSON.stringify({ ...checks, boot: undefined, bootWsUrl: undefined })} exited=${exited}`);
+console.log(
+  `[smoke] checks: ${JSON.stringify({
+    ...checks,
+    boot: undefined,
+    bootWsUrl: undefined,
+    contextMenu: { ...checks.contextMenu, readings: undefined },
+  })} exited=${exited}`,
+);
 console.log('[smoke] output tail:\n' + output.slice(-1200));
 
 if (!exited && child.pid) {
@@ -520,6 +609,16 @@ if (!passed) {
               '取出货口径——别直接改判据。'
             : ''),
         checks.bootChecked && !checks.splashGone && '引导层 #boot-splash 未被移除（应在 React 首次提交后撤罩）',
+        !checks.contextMenu.pass &&
+          `CTX-SMOKE 右键菜单四组未全过（${checks.contextMenu.ran ? '已采集' : '未采集'}；` +
+          (checks.contextMenu.ran
+            ? '失败项：' +
+              checks.contextMenu.checks
+                .filter((c) => c.ok !== true)
+                .map((c) => `${c.group}/${c.name}`)
+                .join(' · ')
+            : checks.contextMenu.reason || '原因未记') +
+          '）——逐条读数见上方 CTX-SMOKE 打印行',
         exited && '进程提前退出',
       ]
         .filter(Boolean)

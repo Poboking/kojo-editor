@@ -36,6 +36,7 @@ import { Icon } from './icons';
 import {
   MENU_VIEWPORT_MARGIN,
   clampMenuPosition,
+  isPrimaryButton,
   nextMenuIndex,
   type ContextMenuItem,
   type MenuPoint,
@@ -473,7 +474,14 @@ export function ContextMenu({
     <>
       <div
         className="context-menu-backdrop"
-        onMouseDown={onDismiss}
+        onMouseDown={(e) => {
+          // 遮罩只认左键（`isPrimaryButton`，全仓唯一判据）：右键是**开菜单**的手势，
+          // 拿它在遮罩上按一下就把菜单关掉，接着 `onContextMenu` 又把 contextmenu 吃掉
+          // ⇒ 用户读到的是「右键点外面，菜单没了、新的也不出来」。这条与 Palette /
+          // ShellLayout / SettingsPanel 三处遮罩同一口径（此前本处是漏掉的第四份）。
+          if (!isPrimaryButton(e)) return;
+          onDismiss();
+        }}
         onContextMenu={(e) => e.preventDefault()}
       />
       <MenuPanel

@@ -46,6 +46,10 @@ describe('源码守门：遮罩一律走 isPrimaryButton', () => {
     { file: '../src/ui/Palette.tsx', anchor: 'picker-backdrop' },
     { file: '../src/ui/ShellLayout.tsx', anchor: 'overlay-backdrop' },
     { file: '../src/ui/SettingsPanel.tsx', anchor: 'closeOnBackdrop' },
+    // 第四份漏网（CTX-SMOKE 真机冒烟抓到的）：根宿主菜单自己的遮罩原本写成
+    // `onMouseDown={onDismiss}`——右键在菜单外按一下先关菜单、紧接着 `onContextMenu`
+    // 又把 contextmenu 吃掉 ⇒ 「右键点外面，菜单没了、新的也不出来」。
+    { file: '../src/ui/context-menu.tsx', anchor: 'context-menu-backdrop' },
   ] as const;
 
   for (const { file, anchor } of backdrops) {

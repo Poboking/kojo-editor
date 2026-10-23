@@ -206,6 +206,17 @@ const _wrSel = (k) => `.${WELCOME_RECENT_CLASSES[k]}`;
 export const recentOpenRowSel = `${_wrSel('section')} ${_wrSel('open')}`;
 
 /**
+ * 欢迎页「继续上次会话」按钮（`.welcome-resume`）。
+ *
+ * 与上面的最近项目行是**同一个意图的两个入口**：最近项目区可能为空（列表被清、只留会话
+ * 记录），这时欢迎页只有这一枚按钮可点。真机冒烟要"打开一个项目"时必须两个都认，
+ * 否则整组 A/B 只剩 trace 里的 `no-recent-row`（2026-10-23 首跑实测）。
+ * 这个类名同时被 `App.tsx` 的 `WELCOME_OPEN_INTENT_SELECTOR` 用作点击意图标记，
+ * 不是本工具独有的手抄名。
+ */
+export const resumeOpenRowSel = '.welcome-resume';
+
+/**
  * 页内表达式源：在「最近项目」区里找到 `rootDir` 文本恰好等于 `dirJson`（JSON 编码串）
  * 那行的可点按钮；找不到返回 `undefined`。
  * `recentRowWaitSrc` / `recentRowClickSrc` 都由此派生——选择段在此一处，不在他处重复。
