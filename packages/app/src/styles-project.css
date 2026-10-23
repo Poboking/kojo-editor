@@ -3484,6 +3484,158 @@ button.erb-mode-hint.unlocked:hover {
 .overlay-host:has(.wizard.tutorial) .wizard.tutorial {
   max-height: calc(88vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
 }
+/* ---------------- 批次十一 L12-overlays：浮层族统一外框（ov-*） ----------------
+   五家浮层（比对 / 文件时间线 / 操作历史 / 调用层级 / 快速修复预览）原先各写各的
+   `width: min(1180px, 92vw)` 式自定档：注册 `size` 缺席的宿主只有 560 一档，1180 的
+   内层塞进窄宿主 ⇒ 横向裁切 + 双滚动条（`.kd-host` 是现行案）。本批宽度一律收回宿主
+   三档——默认 560 / `.overlay-host-wide` 920 / 宽版再 `:has(.ov-xl)` 放宽到 1160
+   （与教程同格；比对与预览的 Monaco 井要的就是这道视野）——浮层只声明档位
+   （`overlayFrame` 的 `tier`），错位由宿主消化。`:has` 不可用时退回 920：窄一点，不破版。 */
+.overlay-host-wide:has(.ov-xl) {
+  width: min(1160px, 94vw);
+}
+/* fill 族（比对编辑器 / 快速修复预览）：宿主锁死不滚（教程宿主同款招），
+   滚动只发生在这家的 `.ov-body`；编辑器吃掉剩余高度。 */
+.overlay-host:has(.ov-fill) {
+  max-height: 88vh;
+  overflow: hidden;
+}
+/* 遮罩纵深合一档：只读查询面（`ov-query`）比破坏性确认面（`ov-modal`，维持原档）
+   减淡一档，与 `.floating-panel` 同族观感；点遮罩即关的行为不变。
+   套在 `@supports` 里：不支持磨砂的内核连这条一起撤（遮罩档的减轻依赖磨砂在位）。 */
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .overlay-backdrop:has(.ov-query) {
+    background:
+      radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.34)),
+      rgba(8, 10, 13, 0.28);
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
+    backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
+  }
+}
+/* `overlayFrame` 的骨架：标题栏（定高、不滚）/ 正文（唯一滚动的地方）/ 页脚（钉窗口底部）。 */
+.wizard.ov {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* 档宽收回宿主：外层 `.overlay-host` 已按 size 档给宽，内层吃满内容盒即可 */
+  width: auto;
+  max-height: calc(80vh - 2 * var(--space-4) - 2px);
+}
+.overlay-host:has(.ov-fill) .wizard.ov {
+  height: calc(88vh - 2 * var(--space-4) - 2px);
+  max-height: none;
+}
+.wizard.ov .ov-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.wizard.ov .ov-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* ✕：24×24 可点区与标签条关闭钮同口径；静息比正文弱一档、悬停回正色 */
+.wizard.ov .ov-close {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+.wizard.ov .ov-close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.wizard.ov .ov-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.wizard.ov .wizard-actions.ov-foot {
+  flex: none;
+  margin: 0;
+}
+/* 编辑器井（比对 `.kd-editor` / 预览 `.qfp-editor`）在 fill 面里吃满剩余高度：
+   `.kd-editor` 原 `height: 62vh` 是"宿主自己滚"时代的定高，fill 时代由 flex 给高。 */
+.wizard.ov.ov-fill .ov-body {
+  overflow: hidden;
+}
+.wizard.ov.ov-fill .kd-editor,
+.wizard.ov.ov-fill .qfp-editor {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 240px;
+}
+/* 快速修复预览的编辑器井（P2-14 建了类一直没建样式 ⇒ 零高塌陷，预览读作"没画面"）：
+   非 fill 兜底态也给一口看得见的井。 */
+.qfp-editor {
+  height: 52vh;
+  min-height: 240px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.qfp-hint {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.45;
+}
+/* 装载态（`overlaySpinner` / 骨架）：转圈与骨架行都是"确实在等"的脸 */
+.ov-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+.ov-skeleton-row {
+  height: 14px;
+  border-radius: var(--radius-sm);
+}
+.ov-skeleton-row + .ov-skeleton-row {
+  margin-top: var(--space-1);
+}
+.ov-skeleton-well {
+  height: 52vh;
+  min-height: 240px;
+  margin-top: var(--space-2);
+  border-radius: var(--radius-md);
+}
+/* 退场动画：入场 `overlay-in`（--dur-3 弹簧）的回声，收得比开得快一档。
+   类由 `overlay-chrome.OVERLAY_EXIT_CLASS` 供给；卸载时机在 `ShellLayout.tsx`
+   （本批只备类与动画，挂类接线的施工单见批次回执）。 */
+@keyframes overlay-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+}
+.overlay-host.ov-exiting {
+  animation: overlay-out var(--dur-2) var(--ease-out) forwards;
+}
+.overlay-backdrop:has(.ov-exiting) {
+  animation: fade-in var(--dur-2) var(--ease-out) reverse forwards;
+}
 /* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提）。
    选择器列表与上面主规则逐条同集，一条不落。 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -7127,8 +7279,10 @@ button.primary .hint {
 
 /* ===================== b/hist/1015 独占区块：通用 diff 视图 ===================== */
 /* 并发批次请勿重排本块；新样式在块内追加。 */
+/* 批次十一 L12：档宽收回宿主（见 overlay 区段 `ov-*`）——原 `min(1180px, 92vw)`
+   在 `size:'wide'`（920）的宿主里横向被裁，就是"内层反向撑破外层"的现行案。 */
 .kd-host {
-  width: min(1180px, 92vw);
+  width: auto;
 }
 /* W10 多开栈标签条：单本比对时组件不渲染任何节点 ⇒ 样式侧零占位、零空隙 */
 .kd-tabs {
@@ -7225,18 +7379,23 @@ button.primary .hint {
 .kd-banner.ok {
   margin: 0 0 10px;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: rgba(60, 180, 110, 0.12);
-  color: #7ad39a;
+  border-radius: var(--radius-md);
+  /* 批次十一 L12 语义色归一：原 `#7ad39a` / `rgba(60,180,110,.12)` 是写死的浅色字面，
+     light/mint-dark 主题下不翻色——成功面改吃 `--success`（wash 用 color-mix 同 dev-note 口径）。 */
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
 }
 .kd-error {
   margin: 0 0 8px;
-  color: #e57373;
+  /* 同上：`#e57373` → `--danger`（= `--red`），三主题自动跟随 */
+  color: var(--danger);
   overflow-wrap: anywhere;
 }
 /* —— 部署比对窗（b/hist/1015，同属上块） —— */
+/* L12：`min(1080px, 92vw)` 收进宿主档（920 的 wide 宿主吃满即可）。当前无消费方挂这个类
+   （2026-10-24 全仓 grep 零命中）——样式留着，规则先归一，别让下一个人再抄一次野档位。 */
 .dd-host {
-  width: min(1080px, 92vw);
+  width: auto;
 }
 .dd-table {
   width: 100%;
@@ -7253,16 +7412,18 @@ button.primary .hint {
 .dd-path {
   overflow-wrap: anywhere;
 }
+/* L12 语义色归一：`#e8b86a`→`--warn`、`#9aa4b2`→`--fg-dim`（写死字面不随三主题翻色） */
 .dd-modified .dd-path {
-  color: #e8b86a;
+  color: var(--warn);
 }
 .dd-workspace-only .dd-path,
 .dd-game-only .dd-path {
-  color: #9aa4b2;
+  color: var(--fg-dim);
 }
 /* —— 本地时间线（b/hist/1015，同属独占区块） —— */
+/* L12：860 的半档同样收回宿主（这两家注册都带 `size:'wide'`，吃 920 档） */
 .fh-host {
-  width: min(860px, 92vw);
+  width: auto;
 }
 .fh-path {
   overflow-wrap: anywhere;
@@ -7570,8 +7731,9 @@ button.resume-session {
 }
 
 /* ===== 操作历史（b/undo/1016-batch-undo 独占追加区块：oh-*；同族观感照 fh-*） ===== */
+/* L12：同 `.fh-host`——半档收回宿主（注册带 `size:'wide'`，吃 920 档） */
 .oh-host {
-  width: min(860px, 92vw);
+  width: auto;
 }
 .oh-path {
   overflow-wrap: anywhere;

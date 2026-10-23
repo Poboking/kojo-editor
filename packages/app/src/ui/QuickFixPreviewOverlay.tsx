@@ -1,6 +1,8 @@
 import { createElement as h, useEffect, useRef, useState } from 'react';
 import { cancelPreview, peekPreview, type QuickFixPreviewEntry } from './quick-fix-preview';
 import { CODE_FONT_BASELINE } from './code-font'; // 与主编辑器同一张字面（全站唯一一条栈）
+import { overlayEditorAppearance, overlayLineCount } from './overlay-editor-appearance';
+import { overlayFrame, overlaySkeletonRows, overlaySpinner } from './overlay-chrome';
 import { monacoThemeIdFor } from '../monaco/theme';
 import { loadThemePref, useThemePref } from './theme-pref';
 
@@ -9,7 +11,8 @@ import { loadThemePref, useThemePref } from './theme-pref';
  *
  * 形态照 `DiffViewOverlay.tsx` 同款：工厂注依赖（node 测试环境可静态 import 本模块，
  * Monaco 只在浏览器 effect 里动态 import——monaco 在 node 下加载即炸）、`h(...)`
- * hyperscript、`wizard kd-host` 宿主类名、主题联动、`automaticLayout`。
+ * hyperscript、外框交 `overlay-chrome.overlayFrame`（`wizard ov ov-xl ov-fill kd-host`）、
+ * 主题联动、`automaticLayout`。
  *
  * 里面是一枚**只读** Monaco diff 编辑器（`monaco.editor.createDiffEditor`）：左 =
  * 当前全文快照，右 = edits 应用后的样子（push 时由 `previewTextFor` 算好，与落地的
@@ -71,6 +74,10 @@ export function createQuickFixPreviewOverlay(deps: QuickFixPreviewDeps): () => u
       void (async () => {
         const monaco = await import('../monaco/entry');
         if (disposed || !containerRef.current) return;
+        // 外观与主编辑器同源（留白 / 缩略图 / 粘性滚动 / 当前行高亮）；预览要对照的就是主编辑器
+        // 里那段正文，两套 chrome 并排看会读成"预览那半边是另一款编辑器"。
+        const appearance = await overlayEditorAppearance(overlayLineCount(entry.originalText));
+        if (disposed || !containerRef.current) return;
         const modelA = monaco.editor.createModel(entry.originalText, entry.languageId);
         const modelB = monaco.editor.createModel(entry.previewText, entry.languageId);
         const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
@@ -88,6 +95,8 @@ export function createQuickFixPreviewOverlay(deps: QuickFixPreviewDeps): () => u
           maxComputationTime: 3000,
           maxFileSize: 20,
           ...CODE_FONT_BASELINE,
+          // 外观档：与主编辑器同一张档位表（`wordWrap` 刻意不并——并排 diff 与折行互斥）
+          ...appearance,
         });
         diffEditor.setModel({ original: modelA, modified: modelB });
         editor = {
@@ -125,15 +134,29 @@ export function createQuickFixPreviewOverlay(deps: QuickFixPreviewDeps): () => u
 
     if (!loaded) {
       // 宿主能力（动态 import）装载中的极短一拍：不渲染空态（那一刻其实有条目）
-      return h('div', { className: 'wizard kd-host' }, h('p', { className: 'dim' }, '正在打开修复预览…'));
+      return overlayFrame({
+        hostClass: 'kd-host',
+        title: '修复预览',
+        tier: 'xl',
+        fill: true,
+        onClose: deps.close,
+        children: overlaySpinner('正在打开修复预览…'),
+      });
     }
     if (!entry) {
-      return h(
-        'div',
-        { className: 'wizard kd-host' },
-        h('p', { className: 'dim' }, '没有待确认的修复预览。'),
-        h('div', { className: 'wizard-actions' }, h('button', { className: 'ghost small', onClick: deps.close }, '关闭')),
-      );
+      return overlayFrame({
+        hostClass: 'kd-host',
+        title: '修复预览',
+        tier: 'xl',
+        onClose: deps.close,
+        children: h(
+          'div',
+          null,
+          h('p', { className: 'dim' }, '没有待确认的修复预览。'),
+          overlaySkeletonRows(2),
+        ),
+        footer: h('button', { className: 'ghost small', onClick: deps.close }, '关闭'),
+      });
     }
 
     const apply = (): void => {
@@ -153,26 +176,30 @@ export function createQuickFixPreviewOverlay(deps: QuickFixPreviewDeps): () => u
       deps.close();
     };
 
-    return h(
-      'div',
-      { className: 'wizard kd-host' },
-      h('h3', null, entry.title),
-      h(
-        'div',
-        { className: 'kd-labels' },
-        h('span', { className: 'kd-label' }, '当前内容'),
-        h('span', { className: 'kd-label-arrow' }, '⇒'),
-        h('span', { className: 'kd-label' }, '修复后'),
-      ),
-      h('p', { className: 'dim qfp-hint' }, '确认前不会改动文件；应用后可用 Ctrl+Z 撤销。'),
-      h('div', { ref: containerRef, className: 'qfp-editor' }),
-      miss !== null ? h('p', { className: 'kd-error' }, miss) : null,
-      h(
-        'div',
-        { className: 'wizard-actions' },
-        h('button', { className: 'primary small', autoFocus: true, onClick: apply }, '应用修复（Enter）'),
-        h('button', { className: 'ghost small', onClick: cancel }, '取消（Esc）'),
-      ),
-    );
+    return overlayFrame({
+      hostClass: 'kd-host',
+      title: entry.title,
+      tier: 'xl',
+      fill: true,
+      // ✕ 走「取消」那侧：确认前的关闭**一个字都不落盘**（与页脚那颗同源的一条通道）
+      onClose: cancel,
+      closeHint: '关闭预览（不应用、不改文件）',
+      children: [
+        h(
+          'div',
+          { key: 'labels', className: 'kd-labels' },
+          h('span', { className: 'kd-label' }, '当前内容'),
+          h('span', { className: 'kd-label-arrow' }, '⇒'),
+          h('span', { className: 'kd-label' }, '修复后'),
+        ),
+        h('p', { key: 'hint', className: 'dim qfp-hint' }, '确认前不会改动文件；应用后可用 Ctrl+Z 撤销。'),
+        h('div', { key: 'editor', ref: containerRef, className: 'qfp-editor' }),
+        miss !== null ? h('p', { key: 'miss', className: 'kd-error' }, miss) : null,
+      ],
+      footer: [
+        h('button', { key: 'apply', className: 'primary small', autoFocus: true, onClick: apply }, '应用修复（Enter）'),
+        h('button', { key: 'cancel', className: 'ghost small', onClick: cancel }, '取消（Esc）'),
+      ],
+    });
   };
 }
