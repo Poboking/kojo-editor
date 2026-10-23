@@ -12,6 +12,7 @@
  */
 import { memo, type ReactElement } from 'react';
 import { baseName } from './file-tree-model';
+import { Icon } from './icons';
 import { PROBLEM_SCOPE, SEVERITY_TINT, type ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
 
@@ -52,7 +53,9 @@ export interface TreeProbMarkProps {
 }
 
 /**
- * 一枚诊断徽标（`✕ n` 红 / `⚠ n` 黄）：两档皆空 ⇒ **整个节点不画**，零视觉扰动。
+ * 一枚诊断徽标（`error` 圈叉 + 计数 / `warning` 三角 + 计数，L10 图标批把字符 `✕`/`⚠`
+ * 换成注册表里的状态族 SVG）：两档皆空 ⇒ **整个节点不画**，零视觉扰动。
+ * 每一档的读数格带 `data-prob`（error/warning）——测试与配色口径都按它点名，不再数汉字字形。
  *
  * 只折错误 / 警告两档：只报了 `info` 的文件不在树上说话（那一档面板表头本来就在说，
  * 铺满一棵树就是把注意力花在噪声上）。判据写在画法里而不是写在每个调用点，
@@ -66,7 +69,8 @@ export function TreeProbMark({
   more = 0,
 }: TreeProbMarkProps): ReactElement | null {
   if (error + warning === 0) return null;
-  // 组 / 包那两层点名到人；超出上限的折成「另 n 个」（展开的作者包动辄几十份文件）
+  // 组 / 包那两层点名到人；超出上限的折成「另 n 个」（展开的作者包动辄几十份文件）。
+  // 点名串住在 `title` 属性里——tooltip 只能带纯文本，`✕n`/`⚠n` 字形是它唯一的记法，不改。
   const who =
     files && files.length > 0
       ? `（${files
@@ -84,8 +88,16 @@ export function TreeProbMark({
       title={`${scope}内${PROBLEM_SCOPE.label}文件的诊断：错误 ${error} / 警告 ${warning}${who} · 详见问题面板 (Ctrl+Shift+M)`}
       aria-label={`${scope}有错误 ${error}、警告 ${warning}（仅${PROBLEM_SCOPE.label}文件）`}
     >
-      {error > 0 ? <span style={{ color: SEVERITY_TINT.error }}>✕ {error}</span> : null}
-      {warning > 0 ? <span style={{ color: SEVERITY_TINT.warning }}>⚠ {warning}</span> : null}
+      {error > 0 ? (
+        <span data-prob="error" style={{ color: SEVERITY_TINT.error }}>
+          <Icon name="error" size="xs" /> {error}
+        </span>
+      ) : null}
+      {warning > 0 ? (
+        <span data-prob="warning" style={{ color: SEVERITY_TINT.warning }}>
+          <Icon name="warning" size="xs" /> {warning}
+        </span>
+      ) : null}
     </span>
   );
 }

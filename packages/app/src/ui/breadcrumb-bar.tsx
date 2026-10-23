@@ -264,7 +264,8 @@ export const CrumbBar = memo(function CrumbBar({ levels, onRevealLine }: CrumbBa
           <span key={`${i}-${c.startLine}-${c.name}`} className="editor-crumb-seg" data-crumb-index={i}>
             {i > 0 ? (
               <span className="editor-crumb-sep" aria-hidden="true">
-                ›
+                {/* L10 图标批：字符 `›` 换成注册表的 chevron-right（SVG，吃 currentColor） */}
+                <Icon name="chevron-right" size="xs" />
               </span>
             ) : null}
             <button
@@ -284,7 +285,7 @@ export const CrumbBar = memo(function CrumbBar({ levels, onRevealLine }: CrumbBa
               title="看同级的其它块"
               onClick={(e) => openMenu(e, i)}
             >
-              <Icon name="chevron-down" size={11} />
+              <Icon name="chevron-down" size="xs" />
             </button>
           </span>
         );
