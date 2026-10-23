@@ -1093,7 +1093,8 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
 
 describe('已装行「导入为我的口上项目」的渲染判据', () => {
   const rowOf = (html: string, name: string): string =>
-    html.split('<div class="mk-row">').slice(1).find((s) => s.includes(name))!;
+    // 行上带 `data-market-row` / `data-market-key`（1023 覆盖面：市场面靠它们认行），故不闭合到 `>`
+    html.split('<div class="mk-row"').slice(1).find((s) => s.includes(name))!;
 
   it('只有口上包那一行有导入按钮（字典包 / 模板包不给）；其余按钮照旧', () => {
     const html = renderView(
@@ -1462,7 +1463,7 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
     const opened = MarketPanelView(viewProps([], installed1, { open: key }));
     expect(buttonEl(opened, '收起')!.props['aria-expanded']).toBe(true);
     const openedHtml = renderToStaticMarkup(createElement(MarketPanelView, viewProps([], installed1, { open: key })));
-    expect(openedHtml).toContain('<div class="mk-row open">');
+    expect(openedHtml).toContain('<div class="mk-row open"');
     expect(openedHtml).toContain('kind kojo-pack');
     expect(renderToStaticMarkup(createElement(MarketPanelView, viewProps([], installed1)))).not.toContain('kind');
   });

@@ -5,20 +5,15 @@
  * 菜单不新造业务，只把同一件事换个入口——按钮与菜单指向同一个函数，才不会有"按钮能装、
  * 菜单装不了"的分叉。
  *
+ * 发起口不在这里：市场的右键走**宿主面路由**（`data-context-surface="market"`，面子在
+ * `market-panel.ts` 顶层登记，行身份住 `data-market-row` / `data-market-key`）。
+ * 本模块因此只剩判据（build*）与分发（run*）两张纯函数表，node 侧可直测。
+ *
  * 文案取既有常量（`ACTION_LABEL` / `IMPORT_LABEL`）：市场里"装/更新/导入"这几个词
  * 只许有一份写法，菜单不许自己再编一套。
  */
-import {
-  copyTextToClipboard,
-  requestPluginMenu,
-  type PluginContextMenuItem,
-  type UIPanelProps,
-} from '@kojo/plugin-api';
+import { copyTextToClipboard, type PluginContextMenuItem } from '@kojo/plugin-api';
 import { ACTION_LABEL, IMPORT_LABEL, type PackRowAction } from './market-view';
-
-export const MARKET_INDEX_MENU_ARIA = '市场条目菜单';
-export const MARKET_INSTALLED_MENU_ARIA = '已装包菜单';
-export const MARKET_PANEL_MENU_ARIA = '市场菜单';
 
 /** 索引行（可安装 / 可更新 / 本机已是最新） */
 export interface MarketIndexRowTarget {
@@ -86,6 +81,7 @@ export function buildMarketIndexRowMenu(target: MarketIndexRowTarget): PluginCon
   }
   items.push(
     { id: 'market.copyId', label: '复制插件 ID', dividerBefore: true, group: '条目' },
+    { id: 'market.copyName', label: '复制插件名' },
     detailItem(target.expanded),
   );
   const hasSource = target.sourceUrl !== undefined && target.sourceUrl !== '';
@@ -105,6 +101,7 @@ export function buildMarketInstalledRowMenu(target: MarketInstalledRowTarget): P
   return [
     { id: 'market.import', label: IMPORT_LABEL, icon: 'files', group: '已装' },
     { id: 'market.copyId', label: '复制插件 ID', dividerBefore: true, group: '条目' },
+    { id: 'market.copyName', label: '复制插件名' },
     detailItem(target.expanded),
     { id: 'market.uninstall', label: '卸载…', icon: 'trash', danger: true, dividerBefore: true, group: '危险' },
   ];
@@ -140,6 +137,9 @@ export function runMarketRowAction(
       return true;
     case 'market.copyId':
       host.copy(target.packId);
+      return true;
+    case 'market.copyName':
+      host.copy(target.label);
       return true;
     case 'market.detail':
       host.toggleDetail(target.key);
@@ -180,32 +180,7 @@ export function runMarketPanelAction(id: string, host: MarketMenuHost): boolean 
   }
 }
 
-/** 接线层：行菜单 */
-export function openMarketRowMenu(
-  props: Pick<UIPanelProps, 'openContextMenu'>,
-  anchor: { readonly clientX: number; readonly clientY: number; preventDefault?(): void },
-  target: MarketRowTarget,
-  host: MarketMenuHost,
-): boolean {
-  const aria =
-    target.kind === 'index' ? MARKET_INDEX_MENU_ARIA : MARKET_INSTALLED_MENU_ARIA;
-  return requestPluginMenu(props, anchor, buildMarketRowMenu(target), aria, (id) => {
-    runMarketRowAction(id, target, host);
-  });
-}
-
-/** 接线层：面板空白处菜单 */
-export function openMarketPanelMenu(
-  props: Pick<UIPanelProps, 'openContextMenu'>,
-  anchor: { readonly clientX: number; readonly clientY: number; preventDefault?(): void },
-  host: MarketMenuHost,
-): boolean {
-  return requestPluginMenu(props, anchor, buildMarketPanelMenu(), MARKET_PANEL_MENU_ARIA, (id) => {
-    runMarketPanelAction(id, host);
-  });
-}
-
-/** 复制动作的落点 */
+/** 复制动作的落点（面板注入的 `copy` 走这一条：剪贴板不可用时如实返回 false） */
 export function copyMarketText(text: string): Promise<boolean> {
   return copyTextToClipboard(text);
 }

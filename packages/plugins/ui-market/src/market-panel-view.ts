@@ -8,9 +8,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import { type InstalledPack } from '@kojo/plugin-api';
-import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import type { MarketSnapshot } from './actions';
-import type { MarketRowTarget } from './context-menu';
 import {
   ACTION_LABEL,
   appVersionRequirement,
@@ -81,13 +79,6 @@ export interface MarketPanelViewProps {
   onConfirmUninstall(key: string): void;
   onCancelUninstall(): void;
   onToggleDetail(key: string): void;
-  /**
-   * 行右键（1023 批，可选）：面板把菜单交给宿主统一渲染（安装 / 卸载 / 导入 / 复制 / 来源）。
-   * 缺省 = 没有右键菜单（旧调用方与静态渲染判据零改动）。
-   */
-  onRowMenu?(target: MarketRowTarget, event: PluginContextMenuAnchor): void;
-  /** 空白处右键（可选）：拉取列表 · 发布口上… */
-  onPanelMenu?(event: PluginContextMenuAnchor): void;
 }
 
 /**
@@ -189,23 +180,11 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
           {
             className: 'mk-row',
             key: indexRowKey(e),
-            ...(p.onRowMenu === undefined
-              ? {}
-              : {
-                  onContextMenu: (event: PluginContextMenuAnchor) =>
-                    p.onRowMenu?.(
-                      {
-                        kind: 'index',
-                        key: indexRowKey(e),
-                        packId: e.id,
-                        label: e.name,
-                        action: row.action,
-                        ...(e.sourceUrl === undefined ? {} : { sourceUrl: e.sourceUrl }),
-                        expanded: p.open === indexRowKey(e),
-                      },
-                      event,
-                    ),
-                }),
+            // 行数据面（1023 WP5.4）：市场的右键由**宿主面路由**接管（`data-context-surface="market"`），
+            // 面的 build 是纯 DOM 入口，靠这两个属性回查「刚点的是哪一行」——
+            // 与文件树 `data-tree-kind` / `data-tree-path` 同一套做法。
+            'data-market-row': 'index',
+            'data-market-key': indexRowKey(e),
           },
           main(
             e.name,
@@ -251,9 +230,9 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
     'div',
     {
       className: 'panel-market',
-      ...(p.onPanelMenu === undefined
-        ? {}
-        : { onContextMenu: (event: PluginContextMenuAnchor) => p.onPanelMenu?.(event) }),
+      // 市场的右键面（`CONTEXT_SURFACE_MANIFEST` 的 'market'）：面的 build 由插件模块顶层声明，
+      // 宿主路由按这个属性把右键交给它（行级靠 `data-market-row` / `data-market-key`）。
+      'data-context-surface': 'market',
     },
     createElement(
       'div',
@@ -350,15 +329,9 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                 {
                   className: expanded ? 'mk-row open' : 'mk-row',
                   key,
-                  ...(p.onRowMenu === undefined
-                    ? {}
-                    : {
-                        onContextMenu: (event: PluginContextMenuAnchor) =>
-                          p.onRowMenu?.(
-                            { kind: 'installed', key, packId: r.rec.id, label: r.rec.name, expanded },
-                            event,
-                          ),
-                      }),
+                  // 行数据面（同索引行）：右键盘路由从这里读回行身份
+                  'data-market-row': 'installed',
+                  'data-market-key': key,
                 },
                 main(
                   r.rec.name,

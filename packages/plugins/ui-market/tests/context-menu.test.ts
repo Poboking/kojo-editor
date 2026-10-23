@@ -5,16 +5,11 @@
  * 禁用原因、已装行的卸载（危险）与导入、面板空白处两条真能力、动作分发与降级。
  */
 import { describe, expect, it } from 'vitest';
-import { hasCjkLabel, type PluginContextMenuRequest } from '@kojo/plugin-api';
+import { hasCjkLabel } from '@kojo/plugin-api';
 import {
-  MARKET_INDEX_MENU_ARIA,
-  MARKET_INSTALLED_MENU_ARIA,
-  MARKET_PANEL_MENU_ARIA,
   buildMarketIndexRowMenu,
   buildMarketInstalledRowMenu,
   buildMarketPanelMenu,
-  openMarketPanelMenu,
-  openMarketRowMenu,
   runMarketRowAction,
   type MarketIndexRowTarget,
   type MarketInstalledRowTarget,
@@ -60,6 +55,7 @@ describe('索引行菜单 · 三种动作态', () => {
     expect(ids(buildMarketIndexRowMenu(indexRow()))).toEqual([
       'market.install',
       'market.copyId',
+      'market.copyName',
       'market.detail',
       'market.copyUrl',
       'market.openSource',
@@ -77,6 +73,7 @@ describe('索引行菜单 · 三种动作态', () => {
   it('没有可装动作（本机已最新 / 版本要求不够）：整项不出现，但复制与来源仍在', () => {
     expect(ids(buildMarketIndexRowMenu(indexRow({ action: 'none' })))).toEqual([
       'market.copyId',
+      'market.copyName',
       'market.detail',
       'market.copyUrl',
       'market.openSource',
@@ -111,7 +108,7 @@ describe('索引行菜单 · 三种动作态', () => {
 describe('已装行菜单', () => {
   it('导入 · 复制 ID · 详情 · 卸载（危险动作标出来）', () => {
     const items = buildMarketInstalledRowMenu(installedRow());
-    expect(ids(items)).toEqual(['market.import', 'market.copyId', 'market.detail', 'market.uninstall']);
+    expect(ids(items)).toEqual(['market.import', 'market.copyId', 'market.copyName', 'market.detail', 'market.uninstall']);
     const uninstall = items.find((i) => i.id === 'market.uninstall');
     expect(uninstall?.danger).toBe(true);
     expect(uninstall?.label).toBe('卸载…');
@@ -127,15 +124,16 @@ describe('面板空白处菜单', () => {
 });
 
 describe('动作分发', () => {
-  it('索引行四条', () => {
+  it('索引行六条', () => {
     const host = hostSpy();
     const target = indexRow();
-    for (const id of ['market.install', 'market.copyId', 'market.detail', 'market.copyUrl', 'market.openSource']) {
+    for (const id of ['market.install', 'market.copyId', 'market.copyName', 'market.detail', 'market.copyUrl', 'market.openSource']) {
       expect(runMarketRowAction(id, target, host)).toBe(true);
     }
     expect(host.calls).toEqual([
       'install:kojo-pack|sample|1.0.0',
       'copy:sample',
+      'copy:示例口上',
       'detail:kojo-pack|sample|1.0.0',
       'copy:https://example.invalid/sample.zip',
       'open:https://example.invalid/sample.zip',
@@ -169,39 +167,5 @@ describe('动作分发', () => {
     const host = hostSpy();
     expect(runMarketRowAction('market.openSource', indexRow({ sourceUrl: undefined }), host)).toBe(false);
     expect(host.calls).toEqual([]);
-  });
-});
-
-describe('接线与降级', () => {
-  it('索引行 / 已装行各用各的无障碍名', () => {
-    const seen: PluginContextMenuRequest[] = [];
-    openMarketRowMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, indexRow(), hostSpy());
-    openMarketRowMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, installedRow(), hostSpy());
-    expect(seen[0]?.ariaLabel).toBe(MARKET_INDEX_MENU_ARIA);
-    expect(seen[1]?.ariaLabel).toBe(MARKET_INSTALLED_MENU_ARIA);
-  });
-
-  it('坐标透传 + 选中回调真的分发', () => {
-    const seen: PluginContextMenuRequest[] = [];
-    const host = hostSpy();
-    openMarketRowMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 55, clientY: 66 }, indexRow(), host);
-    expect(seen[0]?.x).toBe(55);
-    seen[0]?.onSelect('market.copyId');
-    expect(host.calls).toEqual(['copy:sample']);
-  });
-
-  it('面板空白处：拉取与发布', () => {
-    const seen: PluginContextMenuRequest[] = [];
-    const host = hostSpy();
-    openMarketPanelMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, host);
-    expect(seen[0]?.ariaLabel).toBe(MARKET_PANEL_MENU_ARIA);
-    seen[0]?.onSelect('market.pull');
-    seen[0]?.onSelect('market.publish');
-    expect(host.calls).toEqual(['pull', 'publish']);
-  });
-
-  it('宿主缺席 ⇒ false，不抛错', () => {
-    expect(openMarketRowMenu({}, { clientX: 1, clientY: 2 }, indexRow(), hostSpy())).toBe(false);
-    expect(openMarketPanelMenu({}, { clientX: 1, clientY: 2 }, hostSpy())).toBe(false);
   });
 });

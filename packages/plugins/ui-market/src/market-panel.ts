@@ -12,8 +12,11 @@
 
 import { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  declarePluginContextSurface,
   type InstalledPack,
   type MarketDownloadProgress,
+  type PluginContextSurfaceBuildContext,
+  type PluginContextSurfaceBuildResult,
   type UIPanelProps,
 } from '@kojo/plugin-api';
 import {
@@ -35,10 +38,13 @@ import {
   type MarketInvalidationHandle,
 } from './reconcile';
 import {
+  buildMarketPanelMenu,
+  buildMarketRowMenu,
   copyMarketText,
-  openMarketPanelMenu,
-  openMarketRowMenu,
+  runMarketPanelAction,
+  runMarketRowAction,
   type MarketMenuHost,
+  type MarketRowTarget,
 } from './context-menu';
 import {
   buildGroups,
@@ -49,6 +55,59 @@ import {
   type PackRow,
 } from './market-view';
 import { MarketPanelView } from './market-panel-view';
+
+/* ==========================================================================================
+ * 市场面（`CONTEXT_SURFACE_MANIFEST` 的 'market'）——登记在模块顶层，动作落到挂载中的面板
+ * ========================================================================================== */
+
+/** 行身份（DOM 上的 `data-market-row` / `data-market-key` 读回来的两个字段） */
+type MarketRowKind = 'index' | 'installed';
+
+/**
+ * 面板挂载期间登记到这里（卸载即 `null`）。
+ *
+ * 为什么要这一层：宿主的面路由是**纯 DOM 入口**（右键事件 → build），拿不到 React 状态；
+ * 而"这一行能不能装 / 展开没展开 / 装到哪一步"全在面板状态里。登记一枚只有回调与读数的
+ * 桥，build 就能把 DOM 上的行身份换成真正的行数据——与设置页那套 `register*MenuBridge`
+ * 同一条口径。
+ */
+export interface MarketSurfaceHost {
+  rowTarget(kind: MarketRowKind, key: string): MarketRowTarget | null;
+  runRow(id: string, target: MarketRowTarget): void;
+  runPanel(id: string): void;
+}
+
+let surfaceHost: MarketSurfaceHost | null = null;
+
+/** 测试用：清掉登记（模块级状态不该跨用例泄漏） */
+export function setMarketSurfaceHost(host: MarketSurfaceHost | null): void {
+  surfaceHost = host;
+}
+
+/** 面的 build：行身份 → 行数据 → 菜单；空白处 → 面板菜单。全是已有能力，不新造动作。 */
+export function buildMarketSurfaceMenu(
+  ctx: PluginContextSurfaceBuildContext,
+): PluginContextSurfaceBuildResult {
+  const host = surfaceHost;
+  if (host === null) return null;
+  const rowEl = ctx.target.closest?.('[data-market-row]') ?? null;
+  const kind = rowEl?.getAttribute?.('data-market-row') ?? null;
+  const key = rowEl?.getAttribute?.('data-market-key') ?? null;
+  if ((kind === 'index' || kind === 'installed') && key !== null) {
+    const target = host.rowTarget(kind, key);
+    // 行已不在快照里（列表刚变 / 行被卸掉）：这一级不表态，交给兜底而不是弹一个错行的菜单
+    if (target === null) return null;
+    return { items: buildMarketRowMenu(target), onSelect: (id) => host.runRow(id, target) };
+  }
+  return { items: buildMarketPanelMenu(), onSelect: (id) => host.runPanel(id) };
+}
+
+declarePluginContextSurface({
+  id: 'market',
+  ariaLabel: '市场菜单',
+  area: 'chrome',
+  build: buildMarketSurfaceMenu,
+});
 
 export function createMarketPanel(
   deps: MarketActionDeps,
@@ -292,6 +351,49 @@ export function createMarketPanel(
       },
     };
 
+    /**
+     * 市场面（`data-context-surface="market"`）的桥：DOM 上的行身份 → 当前快照里的行数据。
+     * 每次渲染刷新闭包（快照 / 展开态 / 忙态都是最新值），登记本身只做一次。
+     */
+    const surfaceRef = useRef<MarketSurfaceHost | null>(null);
+    surfaceRef.current = {
+      rowTarget: (kind, key) => {
+        if (kind === 'index') {
+          const row = buildGroups(snapshot.packs, av, '', snapshot.installed)
+            .flatMap((g) => g.rows)
+            .find((r) => indexRowKey(r.entry) === key);
+          if (row === undefined) return null;
+          const e = row.entry;
+          return {
+            kind: 'index',
+            key,
+            packId: e.id,
+            label: e.name,
+            action: row.action,
+            ...(e.sourceUrl === undefined ? {} : { sourceUrl: e.sourceUrl }),
+            expanded: open === key,
+          };
+        }
+        const rec = snapshot.installed.find((r) => pendingKey(r) === key);
+        if (rec === undefined) return null;
+        return { kind: 'installed', key, packId: rec.id, label: rec.name, expanded: open === key };
+      },
+      runRow: (id, target) => {
+        runMarketRowAction(id, target, menuHost);
+      },
+      runPanel: (id) => {
+        runMarketPanelAction(id, menuHost);
+      },
+    };
+    useEffect(() => {
+      setMarketSurfaceHost({
+        rowTarget: (kind, key) => surfaceRef.current?.rowTarget(kind, key) ?? null,
+        runRow: (id, target) => surfaceRef.current?.runRow(id, target),
+        runPanel: (id) => surfaceRef.current?.runPanel(id),
+      });
+      return () => setMarketSurfaceHost(null);
+    }, []);
+
     // 状态与回调住这一层；怎么画、哪一行给不给按钮全在 `MarketPanelView`（可静态渲染判据）
     return createElement(MarketPanelView, {
       snapshot,
@@ -316,9 +418,8 @@ export function createMarketPanel(
       onConfirmUninstall: (key: string) => void doUninstall(key),
       onCancelUninstall: () => setPending(null),
       onToggleDetail: (key: string) => setOpen(open === key ? null : key),
-      // 右键（1023 批）：行级安装/卸载/导入/复制/来源 + 空白处的拉取与发布
-      onRowMenu: (target, event) => openMarketRowMenu(props, event, target, menuHost),
-      onPanelMenu: (event) => openMarketPanelMenu(props, event, menuHost),
+      // 右键（1023 批）：不再是每条行挂 handler——整块交给 `data-context-surface="market"` 的
+      // 宿主面路由（行身份住 `data-market-row` / `data-market-key`），见上方 `buildMarketSurfaceMenu`。
     });
   }
 
