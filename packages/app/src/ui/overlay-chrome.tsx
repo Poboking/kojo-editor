@@ -1,4 +1,5 @@
 import { createElement as h, type ReactNode } from 'react';
+import { Icon } from './icons';
 
 /**
  * 浮层族统一外框（批次十一 L12-overlays）。
@@ -25,6 +26,16 @@ import { createElement as h, type ReactNode } from 'react';
 
 /** 宿主宽度档（与 `shell-overlays.ts` 注册贡献的 `size` 同族；`xl` 是本批新增的第四档） */
 export type OverlayTier = 'md' | 'wide' | 'xl';
+
+/**
+ * 退场动画类（批次十一 L12）：钉在 `.overlay-host` 上跑 `overlay-out`（`--dur-2` 那一档，
+ * 入场 `--dur-3` 的回声；规则见 `styles-project.css` 的 `ov-*` 区块）。
+ *
+ * **本 lane 只能把类与动画备好**：宿主节点的卸载时机握在 `ShellLayout.tsx` 手里
+ * （Esc 全局键盘 1654 行、点遮罩 2557 行都是直接 `setActiveOverlay(null)`），
+ * 要真退场需要壳层先挂类、等 `--dur-2` 再卸载——那是 L12 边界外的接线，见批次回执。
+ */
+export const OVERLAY_EXIT_CLASS = 'ov-exiting';
 
 /** 遮罩档：确认/破坏性 = `modal`，只读查询 = `query` */
 export type OverlayMode = 'modal' | 'query';
@@ -86,7 +97,9 @@ export function overlayFrame(opts: OverlayFrameOptions): ReactNode {
         ...(opts.closeHint !== undefined ? { title: opts.closeHint } : {}),
         onClick: () => opts.onClose(),
       },
-      '✕',
+      // 批次十一 L12：字符 `✕` 换成内置 `close` SVG（L10 四档刻度里的 `sm`=14）——
+      // 字形随字体族漂移、屏幕阅读器等工具读它也不如带 aria-label 的图形稳。
+      h(Icon, { name: 'close', size: 'sm' }),
     ),
   );
   const cls = [
