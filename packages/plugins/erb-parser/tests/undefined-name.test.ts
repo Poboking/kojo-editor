@@ -182,3 +182,68 @@ describe('collectUndefinedNameDiagnostics · 假阳性（一条都不许报）',
     expect(collect('IF UNDEFINED > 0', { path: '/a.ERB' }).map((d) => d.name)).toEqual(['UNDEFINED']);
   });
 });
+
+/**
+ * 批次十一 UNDEF-NAME-PRECISION：每条收窄都对应一条 ERB/Emuera 语法事实，
+ * 读数见 `plugin.ts` 接线注②（eraTW 4.980 全量：2,065 → 171；活项目 `ERB/`：1,860 → 51）。
+ */
+describe('collectUndefinedNameDiagnostics · 批次十一收窄（每条都有语法依据）', () => {
+  it('Emuera 内置变量名：GETNUM 族头 / 内置标量 / 系统变量不算未定义', () => {
+    expect(collect('IF GETNUM(TALENT, 100) == 0')).toEqual([]);
+    expect(collect('IF GETNUM(ITEM, 100) == ITEM:0')).toEqual([]);
+    expect(collect('IF NOITEM > 0 && TEQUIP == 0')).toEqual([]);
+    expect(collect('IF JUEL == 0 && NOWEX == 0 && STAIN == 0')).toEqual([]);
+    expect(collect('IF MARK > 0 && PALAM == 0 && EQUIP == 0')).toEqual([]);
+    expect(collect('IF GAMEBASE_VERSION > 0 && GAMEBASE_TITLE == NICKNAME')).toEqual([]);
+    expect(collect('FOR i, 0, GETNUM(EX, 100)')).toEqual([]);
+    expect(collect('ELSEIF CFLAG:100 == TALENT')).toEqual([]);
+    expect(collect('IF FLAG;時間停止 == 0')).toEqual([]);
+  });
+
+  it('`;` 是行注释：声明名尾粘连的注释不属于名字（语料 `#DIM IFPf;Prefer`）', () => {
+    expect(collect('#DIM IFPf;Prefer\nIF IFPf > 0')).toEqual([]);
+    expect(collect('#DIM SAVEDATA CNT ; 计数器\nIF CNT > 0')).toEqual([]);
+    expect(collect('#DIM ARR[10];旧式数组\nIF ARR[0] > 0')).toEqual([]);
+  });
+
+  it('名字内符号（`・` `（）` `／` `？` 零宽空格）紧邻的记号只是更长声明名的一段', () => {
+    expect(collect('#DIM CONST P37夢幻遺跡・一階通路 = 37\nIF CFLAG:100 == P37夢幻遺跡・一階通路')).toEqual([]);
+    expect(collect('IF ARG == 楽譜最大数（シリーズ毎）')).toEqual([]);
+    expect(collect('IF CHECK_自室にいるか？_K31(1)')).toEqual([]);
+    expect(collect('IF ARG == P235​​舞​的房間')).toEqual([]);
+    expect(collect('IF ARG == Ｖ／Ａ')).toEqual([]);
+  });
+
+  it('冒号两侧可隔空白（Emuera 允许 `TALENT: 恋慕` / `RAND : 5`）', () => {
+    expect(collect('IF TALENT: 恋慕 == 1')).toEqual([]);
+    expect(collect('SELECTCASE RAND : 5')).toEqual([]);
+    expect(collect('IF CFLAG: 100 > 0')).toEqual([]);
+  });
+
+  it('字符串伪变量的无引号右侧（`ARGS = 共通` / `STR:16 = 破旧小屋`）整行不扫', () => {
+    expect(collect('ARGS = 共通')).toEqual([]);
+    expect(collect('STR:16 = 破旧小屋')).toEqual([]);
+    expect(collect('TSTR:1 = 科技蓝白呼吸')).toEqual([]);
+    expect(collect('NICKNAME:59 = 小恶魔')).toEqual([]);
+    expect(collect('SAVESTR:1 = ・ 这是文本')).toEqual([]);
+  });
+
+  it('`PRINT` 全族之后的整段是文本：画/台词里的 `=` 不当赋值', () => {
+    expect(collect('PRINTL =-._　／＼ ヽ')).toEqual([]);
+    expect(collect('PRINTFORML Ａ = Ｂ')).toEqual([]);
+    expect(collect('PRINTW =_= 这是台词')).toEqual([]);
+  });
+
+  it('赋值目标不许数字开头（Emuera 标识符规则）：更新日志被 `=` 误判时不扫', () => {
+    expect(collect('109行にTCVAR:TARGET:茶 = 1の処理を「x.ERB」から')).toEqual([]);
+  });
+
+  it('收窄不放宽真阳性：未知名照报，且内置名进入 did-you-mean 候选池', () => {
+    expect(collect('IF NOITEN > 0').map((d) => d.name)).toEqual(['NOITEN']);
+    expect(collect('IF NOITEN > 0')[0]?.suggestions).toContain('NOITEM');
+    expect(collect('IF NOSUCHVAR == 0 && ARGS_UNKNOWN > 0').map((d) => d.name)).toEqual([
+      'NOSUCHVAR',
+      'ARGS_UNKNOWN',
+    ]);
+  });
+});

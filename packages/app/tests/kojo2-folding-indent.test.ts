@@ -10,7 +10,8 @@
  *   失败回复若带 `treeId` 则下一版继续增量（与 `kojo2-semantic.ts` 同口径）；
  * - **失败面一律 `[]`**：`unavailable` / `timeout` / `query-unavailable` / 取客户端抛错 /
  *   模型已释放 ⇒ 空结果、不抛、同一 reason 只 warn 一次；
- * - **注册纪律**：flag 关零注册；flag 开只为 `kojo2` 注册一枚；dispose 幂等；
+ * - **注册纪律**（K2-STRUCTURE-GATE 起改口）：折叠是只读呈现面，**开关关也照常注册**（只为
+ *   `kojo2` 一枚）；开关开时行为不变；dispose 幂等；
  * - **真 wasm + 真查询**：用进程内 worker 引擎（`kojo2-worker.ts` 本体 + 真 wasm +
  *   `queries/v2/folds.scm`）走完整链路，读数逐条钉住（区间数、表块、`@原生` 围栏整块）。
  *
@@ -399,16 +400,20 @@ describe('provider · 失败一律空区间、不抛、同一 reason 只 warn �
 /* ============================== 折叠 · 注册纪律 ============================== */
 
 describe('install · 折叠 provider 的注册纪律', () => {
-  it('flag 关 ⇒ 零注册（dispose 也无副作用）', () => {
+  it('flag 关 ⇒ 仍注册一枚（只读呈现面不受写面开关门控；K2-STRUCTURE-GATE）', () => {
+    // 旧口径「flag 关零注册」已作废：cutover 只管写回 / 迁移 / 切解析器，折叠是大纲式只读面。
+    // 这里**保留 stubFlag(false)**：断言的重点正是"开关确实关着，注册仍发生"。
     stubFlag(false);
     const fake = fakeMonaco();
     const disposable = installKojo2FoldingProvider(fake.monaco, {
       getClient: async () => fakeFoldingClient().client,
     });
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['folding', 'kojo2']]);
     disposable.dispose();
     disposable.dispose();
-    expect(fake.registrations).toEqual([]);
+    // dispose 幂等：两次调用只撤一轮
+    expect(fake.dispose).toHaveBeenCalledTimes(1);
+    expect(fake.registrations).toHaveLength(1);
   });
 
   it('flag 开 ⇒ 只为 kojo2 注册一枚 foldingRange；dispose 幂等（只撤一次）', () => {

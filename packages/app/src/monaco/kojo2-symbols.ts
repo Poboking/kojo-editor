@@ -38,7 +38,8 @@
  *   事实 / 名字数组出；零 IO、零 Monaco、零缓存（同输入必同输出）；
  * - {@link kojo2SymbolKindToMonaco} / {@link kojo2DocumentSymbolTree} 是**唯一**把事实翻成
  *   `monaco.languages.DocumentSymbol` 的地方（`SymbolKind` 的映射只此一份）；
- * - {@link installKojo2DocumentSymbolProvider} 只挂 `kojo2` 语言 id；**flag 关 = 零注册**；
+ * - {@link installKojo2DocumentSymbolProvider} 只挂 `kojo2` 语言 id，**不看 cutover 开关**
+ *  （K2-STRUCTURE-GATE，批次十一：大纲是只读呈现面，与写回 / 迁移 / 切解析器解耦）；
  *   provider 内任何异常（坏文件 / 取文抛错 / 模型已释放）一律回 `[]`——Monaco 把 provider
  *   的 throw 吞成"大纲突然空了"，作者看不到任何原因，空数组才是它能读出的唯一形状。
  *
@@ -65,7 +66,6 @@ import {
 } from '@kojo/kojo-core';
 import { kojo2StorageWordOf, kojo2TypeWordOf } from './kojo2-declarations';
 import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */
 
@@ -156,9 +156,6 @@ export interface Kojo2SymbolFact {
 
 /** `detail` 一行上限（大纲一行一项；长表达式截断而不是折行） */
 const DETAIL_MAX = 60;
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /** 字面量的显示形态（字符串带引号；数字按十进制）——与声明索引同一口径 */
 function formatLiteral(value: KojoLiteral): string {
@@ -633,8 +630,8 @@ export function kojo2DocumentSymbolTree(
 /**
  * 为 `kojo2` 语言注册文档符号 provider，返回**幂等**的 disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**；调用点在 `ui/editor-global-providers.ts` 的 2.0 段，
- *   本函数是导出的，所以自身也再挡一次）；
+ * - **不看 cutover 开关**（K2-STRUCTURE-GATE，批次十一）：大纲是只读呈现面，`.kojo2`
+ *   一打开就该有 Ctrl+Shift+O，与"写回 / 迁移 / 切解析器"的切流开关无关；
  * - 只挂 `KOJO2_LANGUAGE_ID`：v1 ERB / `.kojo` 面各由 `kojo-symbols.ts` 的
  *   `registerForLanguageServices` 挂，两边不重叠；
  * - provider 内任何异常回 `[]`（Monaco 把 throw 吞成"大纲突然空了"——空数组至少是
@@ -645,8 +642,6 @@ export function kojo2DocumentSymbolTree(
 export function installKojo2DocumentSymbolProvider(
   monaco: typeof Monaco,
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
-
   const provider: Monaco.languages.DocumentSymbolProvider = {
     displayName: 'kojo2',
     provideDocumentSymbols(model) {

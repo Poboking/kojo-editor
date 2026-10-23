@@ -254,6 +254,9 @@ describe('descriptor：不硬编未交付的层', () => {
 
   it('不声明 structure：kojo2-runtime.ts 没有 StructureLanguageRuntime 适配器（原因见 languages.ts）', async () => {
     const wire = await boot(false);
+    // K2-STRUCTURE-GATE（批次十一）不改这条：折叠 / 大纲走 `.kojo2` 的专属链
+    //（`monaco/kojo2-folding.ts` / `monaco/kojo2-symbols.ts`，由宿主直接装配），
+    // 与"是否向通用结构叠层声明 structure"无关——通用叠层仍不该接管 2.0。
     expect(wire.registry.descriptorForLanguageId(KOJO2_LANGUAGE_ID)?.structure).toBeUndefined();
   });
 

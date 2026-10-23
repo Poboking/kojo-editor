@@ -93,6 +93,7 @@ export function setLanguageOverride(filePath: string, languageId: string): void 
   const table = readTable();
   table[pathKey(filePath)] = languageId;
   writeTable(table);
+  notifyOverride(filePath, languageId);
 }
 
 /** 撤销这份文件的语言选择（回到扩展名判据） */
@@ -101,4 +102,42 @@ export function clearLanguageOverride(filePath: string): void {
   const table = readTable();
   delete table[pathKey(filePath)];
   writeTable(table);
+  notifyOverride(filePath, null);
+}
+
+/* ============================== 单一判据与变更广播（LANG-OVERRIDE-MODEL） ============================== */
+
+/**
+ * 建 model / 状态栏读数**共用**的语言判据：手工覆盖 > `descriptorLanguage`。
+ *
+ * `descriptorLanguage` 由调用方给（真源分别是 `languageIdForKojo2Model` 与 descriptor 表 +
+ * `FALLBACK_LANGUAGE_ID`）——两处各自的"描述符那一格"本来就有自己的兜底，本函数只管
+ * **优先级**：作者明确选过就听作者的，没选过原样交回。判据只有这一份：模型池建 model、
+ * 2.0 重挂、状态栏读数与恢复 effect 都走它，调用点不许再写一套 `override ?? descriptor`。
+ */
+export function resolveModelLanguage(filePath: string, descriptorLanguage: string): string {
+  return languageOverrideFor(filePath) ?? descriptorLanguage;
+}
+
+/** 覆盖变更的监听面（`languageId === null` = 撤销，回到 descriptor 判据） */
+export type LanguageOverrideListener = (filePath: string, languageId: string | null) => void;
+
+const overrideListeners = new Set<LanguageOverrideListener>();
+
+/**
+ * 订阅覆盖变更（返回退订）。
+ *
+ * 状态栏那一格只负责**写偏好**；已存在 model 的跟随由装配层（模型池）订阅这里完成——
+ * 本模块是纯偏好层，只回答"谁被改成了什么"，不反向认识模型池。广播同步发出（写完后
+ * 立即），状态栏不必等下一次 React 渲染。
+ */
+export function subscribeLanguageOverride(listener: LanguageOverrideListener): () => void {
+  overrideListeners.add(listener);
+  return () => {
+    overrideListeners.delete(listener);
+  };
+}
+
+function notifyOverride(filePath: string, languageId: string | null): void {
+  for (const listener of [...overrideListeners]) listener(filePath, languageId);
 }

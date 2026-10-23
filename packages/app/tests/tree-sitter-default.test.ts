@@ -215,7 +215,8 @@ describe('结构层默认开：偏好与判据', () => {
     // 结构层两门语言（判据只认 descriptor 的 structure 声明，不认语言名分支）
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', 20)).toBe(true);
     expect(resolveStructureEnabled(ERB_LANGUAGE_ID, '/w/口上.erb', 20)).toBe(true);
-    // kojo2 面本来就不该由通用叠层接管（它有自己的 worker）
+    // kojo2 面本来就不该由通用叠层接管（它有自己的 worker）——K2-STRUCTURE-GATE 之后
+    // 折叠 / 大纲由宿主直接装配专属 provider，与本叠层是否吞下 kojo2 无关，判定照旧 false。
     expect(resolveStructureEnabled(KOJO2_LANGUAGE_ID, '/w/口上.kojo2', 20)).toBe(false);
     expect(resolveStructureEnabled(JSON_LANGUAGE_ID, '/w/配置.json', 20)).toBe(false);
     // 认不出 = plaintext：不按路径猜

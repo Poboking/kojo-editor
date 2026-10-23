@@ -128,6 +128,14 @@ describe.skipIf(!SMOKE)('行上内联注解 · 真实语料自证', () => {
       let densest = { path: '', lines: 0, lenses: 0, ms: 0 };
       const perFileDefs: number[] = [];
       const overDensityFiles: string[] = [];
+      // 预热一次（不计入读数）：`parseErbText` 的**首笔**调用含 JIT 编译，实测 58–61ms，
+      // 与文件体量无关（热态复跑 0.87–12.76ms）；下面 assert 的"一次 provide 的稳态单价"
+      // 若把这一次算进去，读到的是启动成本而不是每篇成本——与巨型文件那节"单价取热态（首笔含 JIT）"同口径。
+      const warm = [...index.files].find(([, f]) => f.lineCount < LARGE_FILE_LINES);
+      if (warm) {
+        const warmText = await io.readText(warm[0]);
+        lens.provide({ kind: 'codeLens', path: warm[0], text: warmText.text, project: null, lineCount: warm[1].lineCount });
+      }
       for (const [path, file] of index.files) {
         if (file.lineCount >= LARGE_FILE_LINES) continue; // 宿主第一档：这篇整篇不办
         const tf = await io.readText(path);

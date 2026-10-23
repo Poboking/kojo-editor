@@ -35,14 +35,15 @@
  * ## 注册
  *
  * {@link installKojo2FoldingProvider} 只给 `kojo2` 语言 id 注册（v1 的 `.kojo` / `.erb` 面由
- * `kojo-folding.ts` 各挂各的，两边不重叠）；**flag 关时零注册**（调用点在
- * `ui/editor-global-providers.ts` 的 2.0 段里，本函数自身也再挡一次，因为它是导出的）。
+ * `kojo-folding.ts` 各挂各的，两边不重叠）；**不看 cutover 开关**（K2-STRUCTURE-GATE，批次十一）：
+ * 折叠是只读呈现面，`.kojo2` 一打开就该有 gutter 折叠，与"写回 / 迁移 / 切解析器"的切流开关
+ * 解耦。真正贵的那一层本来就是懒的——worker 客户端在**第一次被问**时才动态 import
+ *（见 {@link defaultWorkerClient}），注册本身零装载。
  * disposal 幂等：先撤 provider 注册，再丢本 provider 的版本缓存（worker 客户端是共享单例，
  * **不**在这里 dispose）。
  */
 import type * as Monaco from './entry';
 import { KOJO2_LANGUAGE_ID } from './kojo2-language';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import type {
   Kojo2FoldRange,
   Kojo2FoldsReply,
@@ -54,9 +55,6 @@ type FoldRange = Kojo2FoldRange;
 
 /** 空结果（"这一轮没有折叠"；不 new 数组，Monaco 只读） */
 const EMPTY_RANGES: Monaco.languages.FoldingRange[] = [];
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /* ============================== 0 基 → 1 基 ============================== */
 
@@ -231,7 +229,7 @@ export function createKojo2FoldingProvider(
 }
 
 /**
- * 为 `kojo2` 语言注册折叠 provider（**flag 关 = 零注册**）。
+ * 为 `kojo2` 语言注册折叠 provider（**不看 cutover 开关**：只读呈现面，见模块头「注册」）。
  *
  * 返回的 disposable 幂等：撤掉 Monaco 注册，再丢 provider 的版本缓存（worker 客户端是
  * 共享单例，留给其它结构层消费方，不在这里 dispose）。
@@ -240,9 +238,6 @@ export function installKojo2FoldingProvider(
   monaco: typeof Monaco,
   deps: Kojo2FoldingProviderDeps = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) {
-    return NOOP_DISPOSABLE;
-  }
   const handle = createKojo2FoldingProvider(deps);
   let registration: Monaco.IDisposable;
   try {
