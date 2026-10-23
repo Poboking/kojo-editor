@@ -416,9 +416,11 @@ describe('去重后的占位恒定：瞬时态出现/回落不再推着右簇横
     const re = /([^{}]*)\{([^}]*)\}/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(css)) !== null) {
-      const prelude = m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      const preludeRaw = m[1] ?? '';
+      const body = m[2] ?? '';
+      const prelude = preludeRaw.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       const parts = prelude.split(',').map((s) => s.replace(/\s+/g, ' ').trim());
-      if (parts.includes(selector)) out.push(m[2]);
+      if (parts.includes(selector)) out.push(body);
     }
     return out;
   }
