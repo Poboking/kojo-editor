@@ -244,7 +244,7 @@ function ClosedState({
 
         <div className="welcome-closed-actions">
           <button className="primary big welcome-open" onClick={onOpenDirectory} disabled={!canOpen}>
-            <Icon name="files" size={16} />
+            <Icon name="files" size="md" />
             <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
           </button>
           <button className="ghost" onClick={onReopen} disabled={opening}>
@@ -266,7 +266,7 @@ function NoticeIcon({ kind }: { kind: 'warn' | 'error' | 'info' }): ReactElement
   const name = kind === 'error' ? 'error' : kind === 'warn' ? 'warning' : 'info';
   return (
     <span className="welcome-notice-icon" aria-hidden="true">
-      <Icon name={name} size={15} />
+      <Icon name={name} size="md" />
     </span>
   );
 }
@@ -455,7 +455,7 @@ export function WelcomeView({
               title="关闭欢迎页"
               onClick={onClose}
             >
-              <Icon name="close" size={14} />
+              <Icon name="close" size="sm" />
             </button>
             <main className="welcome-main">
               {/* ── 首屏第 1 件：品牌头（字号档 = display，页内唯一） ── */}
@@ -482,7 +482,8 @@ export function WelcomeView({
                   形状由 tools/tests/welcome-crash-notice-selector.test.ts 钉死。 */}
               {!kernelReady ? (
                 <div className="notice welcome-notice" role="status">
-                  {/* 转圈复用全局 `.spinner`（styles.css，u-spin 700ms）；这里只管占位不重画动画 */}
+                  {/* 转圈复用全局 `.spinner`（动画名 styles.css 单源，时长吃 tokens 的 --anim-spin）；
+                      这里只管占位不重画动画 */}
                   <span className="spinner welcome-notice-icon" aria-hidden="true" />
                   <span className="welcome-notice-copy">内核装配中…</span>
                 </div>
@@ -503,7 +504,7 @@ export function WelcomeView({
                     onClick={onOpenDirectory}
                     disabled={!canOpen}
                   >
-                    <Icon name="files" size={18} />
+                    <Icon name="files" size="md" />
                     <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
                   </button>
                   {!crashRecovery && resumeRoot ? (
@@ -513,7 +514,7 @@ export function WelcomeView({
                       disabled={!canOpen}
                       title={resumeRoot}
                     >
-                      <Icon name="history" size={16} />
+                      <Icon name="history" size="md" />
                       <span className="welcome-resume-label">继续上次会话</span>
                       <span className="welcome-resume-path">{resumeRoot}</span>
                     </button>
@@ -645,7 +646,7 @@ export function WelcomeView({
               <section className="welcome-fold welcome-recent-files" aria-labelledby="welcome-recent-files-title">
                 <details className="welcome-fold-box">
                   <summary className="welcome-fold-summary">
-                    <Icon name="chevron-right" size={13} className="welcome-fold-caret" />
+                    <Icon name="chevron-right" size="sm" className="welcome-fold-caret" />
                     <h2 className="welcome-section-title" id="welcome-recent-files-title">
                       最近文件
                     </h2>
@@ -704,9 +705,9 @@ export function WelcomeView({
               <section className="welcome-fold welcome-tutorials-fold">
                 <details className="welcome-fold-box">
                   <summary className="welcome-fold-summary">
-                    <Icon name="chevron-right" size={13} className="welcome-fold-caret" />
+                    <Icon name="chevron-right" size="sm" className="welcome-fold-caret" />
                     <h2 className="welcome-side-title" id="welcome-tutorials-title">
-                      <Icon name="book" size={16} />
+                      <Icon name="book" size="md" />
                       教程
                     </h2>
                     <span className="welcome-fold-count">{TUTORIAL_COUNT} 篇内置 · 随时可看</span>
@@ -722,14 +723,14 @@ export function WelcomeView({
                         title={!kernelReady ? '内核装配中…' : opening ? '正在打开项目…' : `打开「${t.title}」`}
                       >
                         <span className="welcome-tutorial-icon">
-                          <Icon name={t.icon} size={18} />
+                          <Icon name={t.icon} size="md" />
                         </span>
                         <span className="welcome-tutorial-copy">
                           <span className="welcome-tutorial-title">{t.title}</span>
                           <span className="welcome-tutorial-desc">{t.blurb}</span>
                         </span>
                         <span className="welcome-tutorial-arrow">
-                          <Icon name="chevron-right" size={14} />
+                          <Icon name="chevron-right" size="sm" />
                         </span>
                       </button>
                     ))}
@@ -741,7 +742,7 @@ export function WelcomeView({
                       批次十一：整块默认收起——它讲得清"为什么用这个编辑器"，但不该和首屏抢注意力。 */}
                   <details className="welcome-sample-fold">
                     <summary className="welcome-fold-summary is-sub">
-                      <Icon name="chevron-right" size={12} className="welcome-fold-caret" />
+                      <Icon name="chevron-right" size="xs" className="welcome-fold-caret" />
                       <span className="welcome-sample-caption">看看中文口上怎么变成游戏指令</span>
                     </summary>
                     <figure className="welcome-sample">
@@ -757,7 +758,7 @@ export function WelcomeView({
                       <div className="welcome-sample-flow" aria-hidden="true">
                         {/* 图标位用 SVG（chevron-down），不用文本 `↓`：文本箭头跟字体走，
                             换字号/换字面就歪，且屏幕阅读器会念成"向下箭头"混进正文。 */}
-                        <Icon name="chevron-down" size={14} className="welcome-sample-flow-arrow" />
+                        <Icon name="chevron-down" size="sm" className="welcome-sample-flow-arrow" />
                         <span>自动编译</span>
                       </div>
                       <div className="welcome-sample-pane">

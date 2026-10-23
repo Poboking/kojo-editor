@@ -278,11 +278,12 @@
   color: var(--accent-text);
 }
 
-/* `.spinner` = styles.css 的全局转圈（u-spin 700ms linear infinite，单源）。
-   TODO(L01): var(--anim-spin) —— 本页**不**自写 @keyframes；若 L01 把 700ms 收成
-   `--anim-spin`，只需要动 styles.css 那一处，这里自动跟随。
-   这里只把 16px 定值改成随字号缩放的两档（border-width 保持 2px，别拧成椭圆）。 */
+/* `.spinner` = styles.css 的全局转圈（动画名 u-spin 单源，本页**不**自写 @keyframes）。
+   L01 已合流：时长收成 tokens.css 的 `--anim-spin`——这里显式吃同一个 token，
+   抬/降转速只动 tokens 一处，欢迎页不再跟 700ms 字面量绑死。
+   下面只把 16px 定值改成随字号缩放的两档（border-width 保持 2px，别拧成椭圆）。 */
 .welcome-screen .welcome-notice .spinner {
+  animation-duration: var(--anim-spin);
   width: 1.05em;
   height: 1.05em;
 }
