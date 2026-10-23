@@ -33,6 +33,7 @@ import {
   setCallHierarchyState,
 } from './call-hierarchy';
 import { createCallHierarchyOverlay } from './CallHierarchyOverlay';
+import { openModelAcrossGroups } from './editor-pane-registry';
 import { readJumpProbe } from './jump-to-state';
 
 /**
@@ -94,9 +95,10 @@ export function useShellOverlays(kernel: Kernel | null): void {
         });
       },
     });
-    // 调用层级（批 E，2026-10-16）：宿主自建只读查询面板（Monaco standalone 无
-    // CallHierarchy API，取证见 PITFALLS §83）。判定与收集全在
-    // `monaco/erb-call-hierarchy.ts`（复用 erb.parser 反向索引与 functionAt 通道），
+    // 调用层级（批 E，2026-10-16；批次十 2026-10-23 补语言分派）：宿主自建只读查询面板
+    // （Monaco standalone 无 CallHierarchy API，取证见 PITFALLS §83）。面板按当前 model
+    // 的语言分派取数依赖：`.erb`（及 v1 `.kojo`）走 `monaco/erb-call-hierarchy.ts`（复用
+    // erb.parser 反向索引与 functionAt 通道），kojo2 走 `createKojo2CallHierarchyProvider()`。
     // 这里只做两件接线：命令面板入口 + overlay 注册。位点现取 `readJumpProbe()`
     // （G1 既有探针——`EditorCommandContext` 没有光标行，不为此扩宿主管道）；
     // 跳转落既有 `editor.revealLocation`，与转到定义同一条通道。
@@ -130,6 +132,16 @@ export function useShellOverlays(kernel: Kernel | null): void {
             return null;
           }
         },
+        // 语言分派（批次十）：给面板一份"请求文件的活动 model"。跨组反查走登记簿
+        // （`openModelAcrossGroups` 按宿主键匹配，任一组开着即可）；文件已关 ⇒ null，
+        // 面板逐字退回 ERB 分支的原有空态。只读，不碰任何 ref 写路径。
+        modelFor: (path) => {
+          try {
+            return openModelAcrossGroups(path) ?? null;
+          } catch {
+            return null;
+          }
+        },
         reveal: (path, line, column) =>
           kernel.bus.emit('editor.revealLocation', {
             filePath: path,
@@ -158,7 +170,15 @@ export function useShellOverlays(kernel: Kernel | null): void {
             reason: '现在屏幕上的是派生视图（行号不属于原文）——切回原代码再查看调用层级。',
           });
         } else {
-          setCallHierarchyState({ kind: 'request', request: { filePath: probe.path, line: probe.line } });
+          // 位点带上列（additive）：kojo2 的 prepare 按格子判定，列缺席时面板按行首问
+          setCallHierarchyState({
+            kind: 'request',
+            request: {
+              filePath: probe.path,
+              line: probe.line,
+              ...(probe.column !== undefined ? { column: probe.column } : {}),
+            },
+          });
         }
         kernel.bus.emit('ui.overlay.open', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' });
       },

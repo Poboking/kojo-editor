@@ -69,12 +69,9 @@
 
 > **批次八（2026-10-22，已交付）**：12 路并行——ERB 树层全量 facets（indents/brackets/diagnostics/semantic）、ERB 成员补全、kojo2 引用/重命名/签名/inlay/code lens/高亮扩选/调用层级、缩进括号、补全补位、能力矩阵闸；组长接线 8 枚 provider + 补全注入 + ERB 结构诊断上屏。完成行已删，回执进提交正文。
 
-| K2-LSP-CALLHIER-PANEL | Monaco 0.57 无 `registerCallHierarchyProvider`：宿主自建调用层级面板，消费 `createKojo2CallHierarchyProvider()`（纯模型已交付并测试） | 面板可展开同文件入/出边；`data` 可作跨文件键 | 待认领 |
-
 > **批次九（2026-10-22，在办）**：9 路并行——ERB 两枚 provider 补齐、kojo2 跨文件引用/重命名/调用层级、项目索引、indents 规则消费、补全数据源、真实语料机、体感验收矩阵。provider 注册与矩阵改口由组长统一接线。
 
 
-| K2-INDEX-HOST-FEED | 项目索引的**完整喂养**：当前只喂"打开中的 model"（创建/内容变更 400ms 防抖）；项目扫描结果（未打开文件）与 rename/callhierarchy 的跨文件 resolver 尚未接 `kojo2ProjectIndex`（`declsOf`/`getFile().text`/`refsOf` 映射已在模块头写明） | 未打开文件也进索引；跨文件重命名/调用层级吃到同一份索引 | 待认领 |
 | K2-CORPUS-SOURCE | 真实语料机**没有输入**：本机 eraTW 4.980 基线是纯游戏盘（无 `.kojo`，递归发现 0 份）；`corpus` 工具已就绪（缺席 rc=2 / 0 份 rc=1 不当绿），需把 `KOJO_CORPUS_DIR` 指向含 v1 作者源的工程或迁移快照盘后再重生成 golden | 发现 ≥1 份 `.kojo` 且状态/原因分类可读 | 待认领 |
 
 > **批次九（2026-10-22，已交付）**：9 路并行——ERB 高亮/扩选、ERB 调用层级 provider、kojo2 项目索引+跨文件引用、跨文件重命名/调用层级纯 API、indents 规则消费、补全数据源（adapter 契约 + eraTW 真源）、真实语料机（`corpus` 子命令）、体感验收矩阵；组长接线（ERB 两枚 provider 注册、项目级引用面 + 打开中 model 喂索引、能力矩阵改口、矩阵/单源闸跟随）。完成行已删，回执进提交正文。

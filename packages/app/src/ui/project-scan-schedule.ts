@@ -11,7 +11,10 @@
  *   各面板）一律不许再写 `setTimeout` 轮询或另立触发条件；
  * - **进度不另造状态**：跑了多少、跑不完、失败，全部由采集器写 `setProjectScanCoverage`，
  *   面板那句话（`PROBLEM_SCOPE`）即取该读数——本模块不持有第二份进度；
- * - **只读**：采集链路里没有任何写路径（`kernel.io.readText` + `walkDir`，一个字节都不写）。
+ * - **只读**：采集链路里没有任何写路径（`kernel.io.readText` + `walkDir`，一个字节都不写）；
+ * - **顺带喂索引**：扫描是唯一知道"未打开文件"原文的腿，读到的 `.kojo2` 原文经本模块的
+ *   喂养通道（`onKojo2ProjectFileFeed` / `resetKojo2ProjectFileFeeds`）排队、分拍交给
+ *   `kojo2ProjectIndex`；索引实例与 Monaco 归编辑器侧，本模块不订阅、不写盘。
  *
  * ## 三条触发点（缺一不可）与它们挂在哪些既有事件上
  *
@@ -42,6 +45,7 @@ import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, GameProject } from '@kojo/plugin-api';
 import { isQuickOpenSourcePath } from './commands';
 import { pkey } from './file-tree-ops';
+import { isKojo2Path } from './kojo2-open';
 import {
   SCAN_MAX_FILES_PER_RUN,
   createProjectScanner,
@@ -81,6 +85,63 @@ export const SCAN_TYPING_QUIET_MS = 2_500;
 export const SCAN_INDEX_WAIT_MS = 15_000;
 /** 一轮从复核队列最多取多少个（剩下的留给下一轮，不一次吞整条队列） */
 export const SCAN_RESCAN_TAKE_LIMIT = 64;
+/**
+ * 项目索引喂养的每拍上限（份）：扫描读到的 `.kojo2` 原文先进队列，
+ * 一拍只把这么多份喂给索引（`lex + parse` 的代价），剩下的下一拍再来——
+ * 大项目一次喂几千份会把主线程按住，扫描的"不可阻塞 UI"就成空话。
+ */
+export const KOJO2_INDEX_FEED_CHUNK = 8;
+
+/* ============================== 项目扫描 → 2.0 项目索引：喂养通道 ============================== */
+
+/**
+ * 一份文件事实（`text === null` = 文件删除 / 离开项目）。
+ *
+ * 扫描侧只交它**读到的原文**；"打开中的 model 有未保存文本时以 model 为准"归订阅者
+ * （`ui/editor-global-providers.ts` 的 2.0 装配段），本模块不碰 Monaco。
+ */
+export type Kojo2ProjectFileFeed = (path: string, text: string | null) => void;
+
+const fileFeedListeners = new Set<Kojo2ProjectFileFeed>();
+const feedResetListeners = new Set<() => void>();
+
+/** 订阅扫描侧的文件事实；返回退订（订阅方在 2.0 装配段 dispose 时摘掉） */
+export function onKojo2ProjectFileFeed(listener: Kojo2ProjectFileFeed): () => void {
+  fileFeedListeners.add(listener);
+  return () => {
+    fileFeedListeners.delete(listener);
+  };
+}
+
+/** 订阅"旧项目的索引整份作废"（换项目 / 关项目 / 装配卸载）；返回退订 */
+export function onKojo2ProjectFileFeedReset(listener: () => void): () => void {
+  feedResetListeners.add(listener);
+  return () => {
+    feedResetListeners.delete(listener);
+  };
+}
+
+/** 扫描侧投放一份文件事实（无订阅者 = 无人消费，零动作；逐订阅者隔离） */
+export function feedKojo2ProjectFile(path: string, text: string | null): void {
+  for (const listener of [...fileFeedListeners]) {
+    try {
+      listener(path, text);
+    } catch {
+      /* 索引只是增强面：一枚订阅者失手不影响扫描与其它订阅者 */
+    }
+  }
+}
+
+/** 扫描侧宣告旧项目的索引作废（换项目 / 关项目 / 装配卸载） */
+export function resetKojo2ProjectFileFeeds(): void {
+  for (const listener of [...feedResetListeners]) {
+    try {
+      listener();
+    } catch {
+      /* 同上：清空失败不许把项目开闭路径拖炸 */
+    }
+  }
+}
 
 /** 编辑器"从未活跃"的锚：拿 0 当锚会让假时钟（从 0 起算）一开场就被判成"刚打过字" */
 const NEVER_ACTIVE_AT = Number.NEGATIVE_INFINITY;
@@ -110,6 +171,14 @@ export interface MountProjectScanOptions {
    * 启用判据 / adapter 形态 / 降级口径都归 `kojo2-project-analysis`。
    */
   kojo2Project?: Kojo2ProjectPassOptions;
+  /**
+   * 项目扫描 → 2.0 项目索引的**喂养口**（additive；缺省 = 模块级通道
+   * `feedKojo2ProjectFile`，由编辑器侧的 2.0 装配段订阅并写索引）。
+   *
+   * 扫描读到的 `.kojo2` 原文、`file.changed` 的增量重读、`unlink` 的删除都经这里；
+   * 单测注入 spy / 假索引即可在虚拟文件系统上钉住"未打开文件也进索引"。
+   */
+  kojo2IndexFeed?: Kojo2ProjectFileFeed;
 }
 
 export interface ProjectScanHandle {
@@ -156,6 +225,93 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
   const dropAll = (): void => {
     for (const cancel of timers.values()) cancel();
     timers.clear();
+  };
+
+  /* ---------------- 2.0 项目索引喂养：节流队列（与扫描同一条假时钟） ---------------- */
+
+  const feedIndex = opts.kojo2IndexFeed ?? feedKojo2ProjectFile;
+  const usesDefaultFeed = opts.kojo2IndexFeed === undefined;
+  /** 喂给索引之前先按路径归一键合批（同一份文件一拍只喂最后一次） */
+  const feedQueue = new Map<string, { readonly path: string; readonly text: string | null }>();
+  /** 本世代已经喂过 / 需要清掉的路径（归一键 → 原文路径；reset 时按这一份撤条） */
+  const fedPaths = new Map<string, string>();
+  /**
+   * 代次：换项目 / 关项目 / 卸载时 +1。旧采集器迟到的读盘结果凭它丢弃，
+   * 避免把上一个项目的文本灌进新项目的索引。
+   */
+  let feedEpoch = 0;
+
+  const enqueueKojo2File = (path: string, text: string | null, epoch = feedEpoch): void => {
+    if (epoch !== feedEpoch) return;
+    if (typeof path !== 'string' || path.length === 0) return;
+    if (!isKojo2Path(path)) return; // 索引只吃 2.0 文件：v1 源文不进这张表
+    feedQueue.set(pkey(path), { path, text });
+    arm('kojo2Feed', 0, flushKojo2Feed);
+  };
+
+  /** 一拍最多喂 {@link KOJO2_INDEX_FEED_CHUNK} 份；还有剩的下一拍接着来（不在同一拍吃完整项目） */
+  function flushKojo2Feed(): void {
+    let count = 0;
+    for (const [key, item] of feedQueue) {
+      if (count >= KOJO2_INDEX_FEED_CHUNK) break;
+      feedQueue.delete(key);
+      count++;
+      if (item.text === null) fedPaths.delete(key);
+      else fedPaths.set(key, item.path);
+      try {
+        feedIndex(item.path, item.text);
+      } catch {
+        /* 索引只是增强面：一次喂养失败不许把扫描链路拖炸 */
+      }
+    }
+    if (feedQueue.size > 0) arm('kojo2Feed', 0, flushKojo2Feed);
+  }
+
+  /** `unlink`：排队中的同一路径先撤掉（否则迟到的原文会把删除又写回来） */
+  const removeKojo2File = (path: string): void => {
+    if (!isKojo2Path(path)) return;
+    const key = pkey(path);
+    feedQueue.delete(key);
+    fedPaths.delete(key);
+    try {
+      feedIndex(path, null);
+    } catch {
+      /* 同上 */
+    }
+  };
+
+  /** `file.changed` 的增量重读（保存 / 外部改动都在这一条；读失败等下一轮扫描） */
+  const refillKojo2File = async (path: string): Promise<void> => {
+    if (!isKojo2Path(path) || scanner === null) return;
+    const epoch = feedEpoch;
+    try {
+      const text = (await kernel.io.readText(path)).text;
+      enqueueKojo2File(path, text, epoch);
+    } catch {
+      /* 盘上读不到：真删了会另发 unlink；这里不猜 */
+    }
+  };
+
+  /** 换 / 关项目：先把队列丢掉再宣告旧索引整份作废（迟到读盘结果由 `feedEpoch` 丢弃） */
+  const resetKojo2Feed = (): void => {
+    feedEpoch++;
+    drop('kojo2Feed');
+    feedQueue.clear();
+    if (usesDefaultFeed) {
+      fedPaths.clear();
+      resetKojo2ProjectFileFeeds();
+      return;
+    }
+    // 注入的喂养口未必订阅 reset 通道：按本世代喂过的路径逐条交 `null`。
+    const paths = [...fedPaths.values()];
+    fedPaths.clear();
+    for (const path of paths) {
+      try {
+        feedIndex(path, null);
+      } catch {
+        /* 逐条隔离 */
+      }
+    }
   };
 
   /* ---------------- 宿主读数（全部现问现取，不留影子副本） ---------------- */
@@ -226,13 +382,20 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
     kernel.slots.query('ui.editor.decorator').map((c) => ({ id: c.id, decorate: c.decorate.bind(c) }));
 
   function scannerDeps(): ProjectScannerDeps {
+    // 本世代采集器的读盘归属：换项目后迟到的结果由 `enqueueKojo2File` 的 epoch 判据丢弃。
+    const epoch = feedEpoch;
     return {
       listFiles: listScanFiles,
       roots: rootsOf,
       project: projectOf,
       contributors: contributorsOf,
       // 只读：整条采集链路没有任何写路径（游戏目录整体只读，铁律 5）
-      readFile: (p) => kernel.io.readText(p).then((t) => t.text),
+      readFile: async (p) => {
+        const text = (await kernel.io.readText(p)).text;
+        // 扫描是唯一知道"未打开文件"原文的腿：顺手喂给 2.0 项目索引（排队 + 分拍，不阻塞 UI）
+        enqueueKojo2File(p, text, epoch);
+        return text;
+      },
       publish: setProjectScanProblems,
       onCoverage: setProjectScanCoverage,
       extraPaths: () => takeRescanPaths(SCAN_RESCAN_TAKE_LIMIT),
@@ -305,6 +468,8 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
   function armProject(project: GameProject): void {
     clearProjectScan();
     dropAll();
+    // 换项目（不是首次装配）：旧项目的索引条目整份作废，别让新项目查到上一位的文件
+    if (armed !== null) resetKojo2Feed();
     scanner = buildScanner(scannerDeps());
     armed = project.rootDir;
     lastFullRoundAt = NEVER_ACTIVE_AT;
@@ -327,6 +492,8 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       armed = null;
       dropAll();
       clearProjectScan();
+      // 索引里的这一项目文件不再属于任何项目：整份撤条（含打开中 model 喂进去的那些）
+      resetKojo2Feed();
     }),
     kernel.bus.on('kojo.functionChanged', (ev) => {
       if (scanner === null || ev.projectRoot !== armed) return; // 别的项目的迟到广播不算
@@ -337,7 +504,14 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       if (scanner === null) return;
       if (!insideScanRoots(ev.path)) return; // 与扫描根同口径：根外的改动不该起整轮
       // 盘上没了 ⇒ 那一格的旧结论就是幽灵诊断，就地销账（空数组 = 撤销扫描簇，store 的判据）
-      if (ev.kind === 'unlink') setProjectScanProblems(ev.path, []);
+      if (ev.kind === 'unlink') {
+        setProjectScanProblems(ev.path, []);
+        // 索引同样就地撤条：等到下一轮整扫再删，中间那段时间跨文件引用会落到已删文件上
+        removeKojo2File(ev.path);
+      } else {
+        // 保存 / 外部改动：增量重读这一份（不等 60s 整轮），排队后分拍喂索引
+        void refillKojo2File(ev.path);
+      }
       requestFullRound(false);
     }),
     kernel.bus.on('editor.cursorMoved', () => onEditorActivity()),
@@ -361,6 +535,8 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       scanner = null;
       armed = null;
       clearProjectScan();
+      // 装配卸载 = 这条喂腿退场：队列丢掉、旧条目撤掉（索引实例本身归编辑器侧清理）
+      resetKojo2Feed();
     },
     armedRoot(): string | null {
       return armed;

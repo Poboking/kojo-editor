@@ -8,9 +8,21 @@
  * 2. 某个名字在项目里被声明在哪些文件 / 哪一行（`declsOf`）；
  * 3. 索引里现在有哪些文件、几行、几个符号（`files` / `snapshot`）。
  *
- * 它**不读盘、不观察文件系统、不注册 provider**：文本全部由宿主喂（生产上来自项目扫描
- * `collectKojo2ProjectDocuments` / 打开中的 model），索引只负责建表与查询。写入方每轮把
- * `{ path, text }` 灌进 `updateFile`，删文件 / 关项目用 `removeFile`。
+ * 它**不读盘、不观察文件系统、不注册 provider**：文本全部由宿主喂——**项目扫描**（未打开文件，
+ * 经 `ui/project-scan-schedule` 的喂养通道排队、分拍送入）与**打开中的 model**（未保存文本优先）；
+ * 索引只负责建表与查询。写入方每轮把 `{ path, text }` 灌进 `updateFile`，删文件 / 关项目用
+ * `removeFile`。
+ *
+ * ## 跨文件消费面（同一份索引）
+ *
+ * 引用面（`kojo2-references`）直接吃 {@link Kojo2ProjectIndex}；重命名与调用层级的跨文件口各自
+ * 是一对纯函数 resolver。两者都从这同一张表映射出来，不另建索引、不另扫盘：
+ * - {@link createKojo2ProjectRenameResolvers}：`declsOf` → `listFilesWithSymbol`，
+ *   `getFile().text` → `readSource`；
+ * - {@link createKojo2ProjectCallHierarchyResolvers}：`declsOf` → `resolveDeclaration`，
+ *   `getFile().text` → `readSource`，`refsOf` → `listCallers`。
+ *
+ * 路径判等一律 `pkey`（分隔符折叠 + 小写），扫描侧与 model 侧两种写法落到同一格。
  *
  * ## 一把尺子（本文件最重要的纪律）
  *
@@ -50,11 +62,18 @@
  * 不 import 任何 `@kojo/plugin-*`。
  */
 import { pkey } from '../ui/file-tree-ops';
+import type {
+  Kojo2CallHierarchyCallerCandidate,
+  Kojo2CallHierarchyDeclarationTarget,
+  Kojo2CallHierarchyResolvers,
+  Kojo2CallableDeclarationKind,
+} from './kojo2-callhierarchy';
 import {
   kojo2DocumentOf,
   type Kojo2DeclarationKind,
   type Kojo2Document,
 } from './kojo2-declarations';
+import type { Kojo2RenameResolvers } from './kojo2-rename';
 import {
   kojo2ReferenceCandidatesOf,
   kojo2ReferenceSymbolsOf,
@@ -548,4 +567,111 @@ export function createKojo2ProjectIndex(
   };
 
   return { updateFile, removeFile, getFile, refsOf, declsOf, symbolAt, files, snapshot };
+}
+
+/* ============================== 跨文件 resolver：同一份索引的映射 ============================== */
+
+/** 声明种类 → 可调用种类（调用层级只认 `@函` / `# 模`；其余声明不进这张口） */
+function callableKindOf(kind: Kojo2ReferenceSymbolKind): Kojo2CallableDeclarationKind | null {
+  if (kind === 'function') return 'function';
+  if (kind === 'template') return 'template';
+  return null;
+}
+
+/** 索引里某个名字的**可调用**声明种类（提示缺省时取声明序第一条；没有 ⇒ `null`） */
+function declaredCallableKind(
+  index: Kojo2ProjectIndex,
+  name: string,
+): Kojo2CallableDeclarationKind | null {
+  for (const declaration of index.declsOf(name)) {
+    const kind = callableKindOf(declaration.kind);
+    if (kind !== null) return kind;
+  }
+  return null;
+}
+
+/**
+ * 重命名的跨文件 resolver（`kojo2RenamePlanXFile` 的注入面）。
+ *
+ * 候选文件 = `declsOf(name)` 里**可改名**的声明所在文件（幕 / 事件不在本批改名面）；
+ * `readSource` = `getFile(path)?.text`（`null` = 索引没有这份文件，plan 侧阻断而不是猜）。
+ * 路径与顺序全部沿用索引的规范序，本函数不归一化、不去重之外的改写。
+ */
+export function createKojo2ProjectRenameResolvers(
+  index: Kojo2ProjectIndex,
+): Kojo2RenameResolvers {
+  return {
+    listFilesWithSymbol(name: string): readonly string[] {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const declaration of index.declsOf(name)) {
+        if (declaration.kind === 'scene' || declaration.kind === 'event') continue;
+        const key = pkey(declaration.path);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(declaration.path);
+      }
+      return out;
+    },
+    readSource(path: string): string | null {
+      return index.getFile(path)?.text ?? null;
+    },
+  };
+}
+
+/**
+ * 调用层级的跨文件 resolver（`kojo2IncomingCallsXFile` / 出边口共用的注入面）。
+ *
+ * `resolveDeclaration` 只交**可调用声明**（`@函` / `# 模`）的落点；`listCallers` 由
+ * `refsOf` 的引用文件收口（只给路径与首枚出现点提示，真边由调用层级按源文重扫）。
+ */
+export function createKojo2ProjectCallHierarchyResolvers(
+  index: Kojo2ProjectIndex,
+): Kojo2CallHierarchyResolvers {
+  return {
+    resolveDeclaration(
+      name: string,
+      kind?: Kojo2CallableDeclarationKind,
+    ): Kojo2CallHierarchyDeclarationTarget | null {
+      if (typeof name !== 'string' || name.length === 0) return null;
+      for (const declaration of index.declsOf(name)) {
+        const callable = callableKindOf(declaration.kind);
+        if (callable === null) continue;
+        if (kind !== undefined && callable !== kind) continue;
+        return {
+          path: declaration.path,
+          line: declaration.span.startLine,
+          column: declaration.span.startColumn,
+          kind: callable,
+        };
+      }
+      return null;
+    },
+    readSource(path: string): string | null {
+      return index.getFile(path)?.text ?? null;
+    },
+    listCallers(
+      name: string,
+      kind?: Kojo2CallableDeclarationKind,
+    ): readonly Kojo2CallHierarchyCallerCandidate[] {
+      if (typeof name !== 'string' || name.length === 0) return [];
+      const callable = kind ?? declaredCallableKind(index, name);
+      if (callable === null) return [];
+      const symbolKind: Kojo2ReferenceSymbolKind = callable === 'template' ? 'template' : 'function';
+      const out: Kojo2CallHierarchyCallerCandidate[] = [];
+      const seen = new Set<string>();
+      for (const ref of index.refsOf({ name, kind: symbolKind }).refs) {
+        const key = pkey(ref.path);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          path: ref.path,
+          line: ref.span.startLine,
+          column: ref.span.startColumn,
+          kind: callable,
+        });
+      }
+      return out;
+    },
+  };
 }

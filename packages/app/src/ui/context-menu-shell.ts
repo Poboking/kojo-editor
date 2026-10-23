@@ -667,8 +667,15 @@ function runStatusBarAction(id: string, text: string): void {
 
 /* ------------------------------ DOM 读点 ------------------------------ */
 
-/** 状态栏里「一格」的锚点（点在哪一格就复制哪一格的文字） */
-const STATUS_CELL_SELECTOR = '.sb-editor, .sb-sel, .sb-idx, .sb-dirty, .sb-writable, .sb-slot';
+/**
+ * 状态栏里「一格」的锚点（点在哪一格就复制哪一格的文字）。
+ *
+ * 判据是**显式标记** `data-status-cell`，不是类名清单——2026-10-23 批次十给状态栏
+ * 加了语言模式 / 缩进 / 编码三格，旧的 `.sb-editor, .sb-idx, …` 六类清单把它们全漏在
+ * 菜单外面（右键落到兜底菜单，那句"复制这一格"根本没有格子）。新增一格只需打标记，
+ * 不必回来改这里；`shell-menus.test.ts` 有一条源码守门盯住"别退回类名枚举"。
+ */
+const STATUS_CELL_SELECTOR = '[data-status-cell]';
 
 function textOf(element: HTMLElement | null): string {
   return (element?.textContent ?? '').replace(/\s+/g, ' ').trim();

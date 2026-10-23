@@ -17,11 +17,14 @@ import { languageDescriptors } from './language-registry';
  * 顺序问 provider，别调）。保留面（JSON）不声明该能力，因此不会被挂上空 provider
  * 顶掉 Monaco 的缩进折叠。
  *
- * 不该套本函数的两类注册（各自有理由，别"顺手统一"）：
+ * 不该套本函数的三类注册（各自有理由，别"顺手统一"）：
  * - **只给一门语言**的注册：`.kojo` 的区间格式化 / 回车缩进、ERB 的带闸区间格式化、
  *   两侧改名各一枚。一门语言一枚 provider；双注册会让输出取决于注册表顺序。
  * - 需要把**裸句柄**交回调用方的注册（`installEnterIndenter`、补全 assembly）——
  *   它们的返回值契约不是聚合 IDisposable。
+ * - **同语言增补型**注册（用户片段补全，S18）：与内置补全**并存**而非替换，语言 id 清单由
+ *   作者片段自身定（ERB / kojo2），不跟 descriptor 的 `languageServices` 铺满；套上来会
+ *   把保留面也挂上一枚空 provider。
  *
  * `register` 收到的是**传进来的那个** `monaco` 对象：桩测试只桩它上面的一枚注册函数，
  * 所以注册必须经这个参数取函数，绝不许在别处另引一份 monaco 模块。

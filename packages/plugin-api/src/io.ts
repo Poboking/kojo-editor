@@ -123,6 +123,29 @@ export interface FileIO {
   writeText(path: string, text: string, opts?: WriteTextOptions): Promise<void>;
   writeBytes(path: string, data: Uint8Array): Promise<void>;
   /**
+   * **按调用方显式指定的编码读回文本**（additive，批次十 S2「显式编码读写」；可选能力）。
+   *
+   * 与 `readText` 的唯一差别：解码判据不是探测结果而是入参 `encoding`（"文件其实是 GBK，
+   * 我按 Shift-JIS 看"这类误判现场靠它纠正）。读回后内核编码判据跟着入参走——下一次
+   * `writeText` 的 preserve 不会回退到旧探测编码。读侧不过写闸。
+   *
+   * 缺席该方法的 IO 实现（历史替身）由调用方自解释呈现，不静默降级成探测。
+   */
+  readTextWithEncoding?(path: string, encoding: FileEncoding): Promise<TextFile>;
+  /**
+   * **把模型文本按目标编码编成字节**（additive，批次十 S2；可选能力）：只编码、不写盘。
+   * 换行沿用 `writeText` 的 preserve 判据（逐行还原），UTF-16 补 BOM。
+   * 目标编码不受支持时抛错——绝不静默写成别的编码。
+   */
+  encodeForSave?(path: string, text: string, encoding: FileEncoding): Promise<Uint8Array>;
+  /**
+   * 让内核编码判据**跟随**刚写入的显式编码（additive，批次十 S2；可选能力）：
+   * `writeBytes` 按探测回填，GBK 内容可能被探测成 shift_jis；本方法用 `bytes` 按指定编码
+   * 重解一遍，把编码/EOL 判据、换行指纹与字节快照统一到作者选定的编码。
+   * 调用时机 = 显式编码写盘之后；不写盘、不广播。
+   */
+  adoptEncoding?(path: string, encoding: FileEncoding, bytes: Uint8Array): void;
+  /**
    * 递归创建目录（已存在则幂等成功）。
    *
    * 与 `writeBytes` 同受第一道闸约束：路径不在可写白名单内时拒绝并抛

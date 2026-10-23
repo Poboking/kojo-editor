@@ -13,9 +13,11 @@
  * 逐字一致）；认路判据彼此不重叠，路径解析结果不受顺序影响。JSON 不声明
  * `languageServices`，因此不参与通用语言服务双注册。认不出路径 ⇒ plaintext 兜底。
  *
- * **Kojo 2.0 是开关后的追加项**（K2-EDITOR-WIRE，预演）：开关（`ui/kojo2-flag.ts`，默认关）
- * 关着时本文件行为与收口前逐字一致（仍只有 ERB / Kojo / JSON 三枚）；打开后**在末尾追加**
- * 一枚暂挂 `.kojo2` 的 `kojo2` descriptor，v1 的 `.kojo` descriptor 与注册次序一字不动。
+ * **Kojo 2.0 默认可见**（K2-SURFACE-DEFAULT，批次十 S5）：`.kojo2` 的 descriptor
+ * **无条件登记**（放在表尾），语言面（Monarch 高亮 / 语言配置 / 括号 / 回车与缩进规则）
+ * 与切流阶段无关；切流开关（`ui/kojo2-flag.ts`）只门控**写回 / 迁移 /
+ * 解析器切换**那几条有副作用的语义，不再决定 `.kojo2` 打不打得开。
+ * v1 的 `.kojo` descriptor 与三枚的注册次序一字不动。
  *
  * **一等语言能力矩阵**（LANG-PARITY-GATE）的声明面也住在这里：ERB / kojo2 各填一份
  * `capabilities`（取值 = `monaco/language-capabilities.ts` 的声明表，矩阵的行由同一份对拍生成）。
@@ -24,7 +26,6 @@
  */
 import type * as Monaco from './entry';
 import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
@@ -73,16 +74,22 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
 };
 
 /**
- * Kojo 2.0 的 descriptor（K2-EDITOR-WIRE，**预演**）：只在开关打开时**追加**进表。
+ * Kojo 2.0 的 descriptor（K2-SURFACE-DEFAULT，**默认登记**）：无条件追加在表尾。
  *
- * - 暂挂 `.kojo2`，**不抢** v1 的 `.kojo`（v1 三枚 descriptor 与注册次序逐字不动）；
- * - 与 v1 两门一等语言不同，这里**不声明** `languageServices` / `structure`：2.0 的宿主
- *   语言服务与结构层还没接，声明了只会把 v1 的 provider 挂到 2.0 的语言 id 上
- *   （空结果顶掉 Monaco 内建行为 = 假承诺）。预演要的只是"文件打得开、脸是对的"；
- * - `capabilities`（LANG-PARITY-GATE，additive）是**声明面**，不是注册开关：2.0 的 provider
- *   逐枚自建（`installKojo2*` 各挂各的 `kojo2` id），声明与注册由闸门对账；缺口以矩阵的
- *   `{ exempt }` 记账，不进这一格；
- * - 表是进程级只增表，本行在**模块求值**时按开关定一次；改开关后重载窗口才换表。
+ * - 只认 `.kojo2`，**不抢** v1 的 `.kojo`（v1 三枚 descriptor 与注册次序逐字不动）；
+ * - **不声明 `languageServices`**：通用双注册那 11 枚 provider 是 v1 语义的供方，挂到
+ *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 的 provider 由各枚 `installKojo2*`
+ *   自建、各自只认 `kojo2` 语言 id）；声明面由 `capabilities` 与闸门负责；
+ * - **不声明 `structure`**：`monaco/tree-sitter/kojo2-runtime.ts` 只导出主线程单例
+ *   （`getKojo2TreeSitterRuntime`：parse / captures）与内核类型，**没有**
+ *   `StructureLanguageRuntime`（`runtimeWasmUrl` / `grammarWasmUrl` / `createWorker`）这一层
+ *   适配器；2.0 的结构面走自己的 worker 客户端（`tree-sitter/kojo2-worker-runtime.ts`），
+ *   由 `kojo2-folding` / `kojo2-indent` / `kojo2-semantic` 直接消费。在这里声明 `structure`
+ *   等于要求通用叠层再起一套 worker / 资源接线（与既有那三枚并行、互相重复），所以不硬编；
+ * - `capabilities`（LANG-PARITY-GATE，additive）是**声明面**，不是注册开关：与注册点由闸门
+ *   对账，缺口以矩阵的 `{ exempt }` 记账，不进这一格；
+ * - 表是进程级只增表，本行在**模块求值**时登记一次；开关开 / 关都不再改变注册表
+ *   （K2-SURFACE-DEFAULT：2.0 面不随切流阶段增减）。
  */
 const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   id: KOJO2_LANGUAGE_ID,
@@ -95,8 +102,8 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
 registerLanguage(ERB_DESCRIPTOR);
 registerLanguage(KOJO_DESCRIPTOR);
 registerLanguage(JSON_DESCRIPTOR);
-// 追加式：开关关时这一行整体不执行，上面三枚的注册结果与收口前逐字一致。
-if (isKojo2CutoverEnabled()) registerLanguage(KOJO2_DESCRIPTOR);
+// K2-SURFACE-DEFAULT：无条件登记（切流阶段只管写回 / 迁移 / 解析器切换，不管语言面可不可见）。
+registerLanguage(KOJO2_DESCRIPTOR);
 
 /** 按路径选 Monaco 语言 id（收口前 `languageFor` 的单源） */
 export function languageForPath(filePath: string): string {

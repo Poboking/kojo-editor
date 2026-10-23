@@ -200,8 +200,8 @@ const TIER_SMALL: EditorOptionPatch = {
  * - `colorDecorators:false`——颜色装饰器（`colorExtensionPoint` 那条）对**整篇**逐行找
  *   `#RRGGBB` 与颜色词，内容一变就重算；语料里的 `#DIM` / `#FUNCTION` 前缀正好是它的
  *   误命中形态，白扫一遍还什么都不给；
- * - `folding` 留到 huge 才关（见下）：段折叠是本产品读口上的主要导航手段，5k–50k 档
- *   一次 provider 调用实测远小于其余几条，不值这一刀。
+ * - `folding` 两档都保留：段折叠是本产品读口上的主要导航手段，供给方按内容版本
+ *   记忆化（每次编辑一次，不是每帧），不值这一刀。
  */
 const TIER_LARGE: EditorOptionPatch = {
   // 光标停留即"整篇找同词"——大文件头号隐性开销
@@ -243,32 +243,31 @@ const TIER_LARGE: EditorOptionPatch = {
   links: false,
   colorDecorators: false,
   folding: true,
-  // 折行到 huge 才关：这一档留着（台词长行 + 5k–50k 行的折行成本仍可接受）
+  // 折行两档同值：跟随档时按用户偏好（缺省开），档位表不在这里替作者做决定
   wordWrap: 'on',
 };
 
 /**
- * huge 档 = large 档再削掉一切视口级装饰。
+ * huge 档 = large 档再削掉视口级装饰（**只削视口级，不再碰导航面与折行偏好**）。
  *
- * `wordWrap:'off'`（PS-5 新增，本档最关键的一刀）：折行开着时 Monaco 不能用
- * `SimpleLinesLayout`（等高 ⇒ 滚动位移与行号互为 O(1) 换算），只能维护
- * `LinesLayout` 那份**逐可视行高度前缀和**——行数越长数组越长，且每次内容变化 /
- * 视口宽度变化都要重排。这正是 VS Code 把 `largeFileOptimizations` 的适用条件写成
- * "for large files **without word wrap**" 的那个前提：折行一开，那批降级就失效。
- * 99 万行级盘上这一条决定"能不能滚动"，而关折行的代价只是长行要横向滚——
- * 到这一档的文件本来也不是拿来通读的。
+ * 2026-10-23 重估（批次十 S6）：`stickyScroll` 只按**可见区间**算贴顶行，`wordWrap`
+ * 是**用户偏好**（`layout-pref.ts` 三选一），档位表不该替作者强制关掉；这两条从 huge
+ * 的差异集里撤掉（继承 {@link TIER_LARGE}），强制开关仍由偏好叠层盖在这张表之上。
  *
- * `folding:false`：折叠区间由 `ui.editor.languageService` 的 foldingRange 贡献方
- * **按整篇文本**算（ERB 那路 = parseErbText + scanControlFlow 两遍线性扫描），
- * 每次内容变化重算一遍；50k 行往上不值（要折叠看结构请降到大档或分段打开）。
+ * 但 `folding` 仍关：PS-4 的 52,601 行读数显示，折叠一开就多一次**整篇 copy**
+ * （`ps4-provider-seams.perf.test.ts`：全文 copy 9 → 10），与「档位判在取文之前」的
+ * 不变量冲突；折叠范围供给方的记忆化省的是重复扫描，不是首次取文。有新的实测读数前
+ * 不开回来。
+ *
+ * 这一档仍然关的只有**视口级装饰 + 折叠**：缩略图（逐行算色块）、括号配对查找与整表
+ * 引导线在 99 万行级盘上没有信息价值，留着只是白烧重绘。
  */
 const TIER_HUGE: EditorOptionPatch = {
   ...TIER_LARGE,
   // 99 万行级盘：连视口级的括号配对查找也关（'never' 是 0.57 d.ts 合法值）
   matchBrackets: 'never',
-  // 导航面到这一档才真的关：缩略图逐行算色块、贴顶每次滚动重排可见区，99 万行撑不起
+  // 导航面到这一档才真的关：缩略图逐行算色块，99 万行撑不起
   minimap: { enabled: false },
-  stickyScroll: { enabled: false },
   guides: {
     bracketPairs: false,
     bracketPairsHorizontal: false,
@@ -276,7 +275,7 @@ const TIER_HUGE: EditorOptionPatch = {
     indentation: false,
     highlightActiveIndentation: false,
   },
-  wordWrap: 'off',
+  // PS-4 实测：折叠一开就多一次整篇 copy（9 → 10），与「判档在取文之前」冲突
   folding: false,
 };
 

@@ -1,6 +1,7 @@
 import { createElement as h, useEffect, useState, type ReactElement } from 'react';
 import { basename, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
 import type { ErbFunction, ErbIndex, ErbIndexState } from '@kojo/plugin-api';
+import type * as Monaco from '../monaco/entry';
 import {
   callHierarchyIndexCopy,
   callHierarchyIndexTitle,
@@ -9,8 +10,14 @@ import {
   incomingCalls,
   outgoingCalls,
   resolveEnclosingFunction,
-  type CallSite,
 } from '../monaco/erb-call-hierarchy';
+import type {
+  Kojo2CallHierarchyProvider,
+  Kojo2PanelGroup,
+  Kojo2PanelResolution,
+  Kojo2PanelSite,
+} from '../monaco/kojo2-callhierarchy';
+import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-constants';
 import {
   CALL_HIERARCHY_SURFACE_ID,
   CALL_HIERARCHY_MENU_IDS,
@@ -20,31 +27,42 @@ import {
   getCallHierarchyState,
   readCallHierarchyMenuInput,
   setCallHierarchyState,
+  loadKojo2CallHierarchyPanel,
   subscribeCallHierarchy,
   type CallHierarchyMenuInput,
   type CallHierarchyRequest,
+  type Kojo2PanelApi,
 } from './call-hierarchy';
 import { declareContextSurface } from './context-surfaces';
 import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-store';
 
 /**
- * 调用层级 overlay（2026-10-16 批 E）——「这个函数被谁调用 / 它调用谁」的只读查询面板。
+ * 调用层级 overlay（2026-10-16 批 E；批次十 2026-10-23 补 kojo2 分派）——「这个函数被谁
+ * 调用 / 它调用谁」的只读查询面板。
  *
  * 形态照 `DiffViewOverlay` / `FileHistoryOverlay` 同款（工厂注依赖 + 模块级状态单源）。
- * 判定与收集全在 `monaco/erb-call-hierarchy.ts`（纯函数，假索引可单测），本组件只做
- * 展示与跳转：行点击 → 注入的 `reveal`（宿主落成既有的 `editor.revealLocation`，
- * 与转到定义同一条导航通道），**零写操作**。
+ * **按当前 model 的语言分派取数依赖**：
+ * - `.erb`（及 v1 `.kojo`）⇒ 既有 `monaco/erb-call-hierarchy.ts`（`erb.parser` 的反向索引）；
+ * - `kojo2` ⇒ `createKojo2CallHierarchyProvider()`（纯模型 `monaco/kojo2-callhierarchy.ts`
+ *   的 provider 面，宿主自建面板消费；两个分支的"位点 → 声明 → 出入边"搬运都在
+ *   `ui/call-hierarchy.ts` 的 `resolveKojo2CallHierarchy`）。
+ * 本组件只做展示与跳转：行点击 → 注入的 `reveal`（宿主落成既有的
+ * `editor.revealLocation`，与转到定义同一条导航通道），**零写操作**。
+ *
+ * 语言判据只有一条：`modelFor(请求文件).getLanguageId()`——没有 model（文件已关 / 旧
+ * 宿主）⇒ 逐字退回 ERB 分支的旧行为（additive，不改变任何既有调用方）。
  *
  * 跳不出 Monaco Peek 的原因（取舍记档案）：Monaco standalone 无 CallHierarchy API
  * （PITFALLS §83），面板形态是审查过的替代而非降级——调用层级天然是"一次看全"
  * 的清单视图，列表比 peek 弹窗承载得多。
  *
- * **处数不是这里数的**（W8 收口的第二判据）：面板头的「被调用 · N 处」读
+ * **处数不是这里数的**（W8 收口的第二判据，仅 ERB 分支）：面板头的「被调用 · N 处」读
  * `ui/reference-tally-store` 里 F12 那一次计算的 `tally.nonDefinitionCount`，
  * 差值解释直接交回 `explainReferenceCounts` 的原文（文案也只有一份真源）。
  * 本面板自己那份 `incomingCalls` 只用来**列清单**（哪个调用者、哪一处点位），
  * 组行的「k 处」是"这位调用者名下的点位行数"——列表的形状数据，不是第二把尺子。
  * 没有读数（这个名字还没按过 F12）就明说"处数未读"，不拿清单长度冒充台账读数。
+ * kojo2 没有 F12 台账这条腿，面板只列清单，不为它伪造第二份"处数"。
  */
 
 export interface CallHierarchyDeps {
@@ -61,6 +79,18 @@ export interface CallHierarchyDeps {
    * `null` 通道缺席 ⇒ 数据层退化索引自扫）。
    */
   functionAt(path: string, line: number): ErbFunction | null | undefined;
+  /**
+   * 请求文件的活动 model（**additive 可选**）：语言分派（`getLanguageId()`）与 kojo2
+   * 取数都读它。缺席 / 返回 `null`（文件已关）= 旧行为：一律走 ERB 分支。
+   */
+  modelFor?(path: string): Monaco.editor.ITextModel | null;
+  /** kojo2 provider（additive 可选；缺席 = 取数模块内的 `createKojo2CallHierarchyProvider()`） */
+  kojo2Provider?(): Kojo2CallHierarchyProvider;
+  /**
+   * kojo2 取数模块（additive 可选；缺席 = 首次遇到 kojo2 文件时走动态装载）。
+   * 注入口留给测试与预载宿主——默认腿见 `loadKojo2CallHierarchyPanel`（PS-10 ①）。
+   */
+  kojo2Panel?(): Kojo2PanelApi | null;
   reveal(path: string, line: number, column?: number): void;
   close(): void;
 }
@@ -92,14 +122,12 @@ type Row =
       line: number;
       title: string;
       /** 这一组名下的全部点位（右键「复制调用链」直接从这里拼，不再二次查询） */
-      sites: readonly CallSite[];
+      sites: readonly Kojo2PanelSite[];
     }
-  | { kind: 'site'; site: CallSite; group: string };
+  | { kind: 'site'; site: Kojo2PanelSite; group: string };
 
 /** 把一组出入边折成扁平行序列（组行 = 跳定义，点位行 = 跳调用处），便于统一截断 */
-function flatten(
-  groups: ReadonlyArray<{ name: string; path: string; startLine: number; sites: readonly CallSite[] }>,
-): Row[] {
+function flatten(groups: readonly Kojo2PanelGroup[]): Row[] {
   const rows: Row[] = [];
   for (const g of groups) {
     rows.push({
@@ -118,8 +146,15 @@ function flatten(
   return rows;
 }
 
-function siteLabel(site: CallSite): string {
+function siteLabel(site: Kojo2PanelSite): string {
   return `${basename(site.filePath)}:${site.line}:${site.column}`;
+}
+
+/** 一组出入边的点位总数（清单形状数据，不是台账读数；写法避开 `incoming.reduce`） */
+function totalSites(groups: readonly Kojo2PanelGroup[]): number {
+  let total = 0;
+  for (const group of groups) total += group.sites.length;
+  return total;
 }
 
 function locLabel(path: string, line: number): string {
@@ -197,6 +232,28 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
           return which === 'in' ? { key: requestKey, inEnd: step, outEnd: cur.outEnd } : { key: requestKey, inEnd: cur.inEnd, outEnd: step };
         }),
     };
+
+    // 语言分派只问一次 model（渲染与装载共用同一枚，避免二次反查；旧 deps 缺席 ⇒ null）。
+    const activeModel = requestKey === null ? null : deps.modelFor?.(requestKey.filePath) ?? null;
+    const needsKojo2 = activeModel !== null && languageIdOf(activeModel) === KOJO2_LANGUAGE_ID;
+    // kojo2 取数模块是动态边（PS-10 ①）：首次碰到 kojo2 文件时装载一次，失败也记成可见态。
+    const [panelApi, setPanelApi] = useState<Kojo2PanelApi | null>(null);
+    const [panelLoadFailed, setPanelLoadFailed] = useState(false);
+    useEffect(() => {
+      if (!needsKojo2 || deps.kojo2Panel !== undefined || panelApi !== null || panelLoadFailed) return;
+      let alive = true;
+      loadKojo2CallHierarchyPanel().then(
+        (api) => {
+          if (alive) setPanelApi(api);
+        },
+        () => {
+          if (alive) setPanelLoadFailed(true);
+        },
+      );
+      return () => {
+        alive = false;
+      };
+    }, [needsKojo2, panelApi, panelLoadFailed, deps.kojo2Panel]);
 
     const closeBtn = h(
       'div',
@@ -299,8 +356,21 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
       closeBtn,
       sectionWindow,
       notice === null ? null : h('p', { className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
+      // kojo2 分支的装载上下文（批次十）：模型 = 语言判据，api 缺席 = 还在拉 / 拉失败
+      {
+        model: activeModel,
+        api: deps.kojo2Panel?.() ?? panelApi,
+        loadFailed: panelLoadFailed,
+      },
     );
   };
+}
+
+/** kojo2 分支的装载上下文（模型 = 语言判据；api 缺席 = 还在拉 / 拉失败） */
+interface Kojo2PanelContext {
+  readonly model: Monaco.editor.ITextModel | null;
+  readonly api: Kojo2PanelApi | null;
+  readonly loadFailed: boolean;
 }
 
 function renderRequest(
@@ -310,7 +380,14 @@ function renderRequest(
   sectionWindow: SectionWindow,
   /** 复制一类的轻反馈（有才画；没有这一行也不占位） */
   feedback: ReactElement | null,
+  kojo2: Kojo2PanelContext,
 ): ReactElement {
+  // 语言分派：先问当前文件的 model 是什么语言，再决定取数依赖（kojo2 / 其余 = ERB 旧路）。
+  // model 缺席（文件已关 / 旧宿主）⇒ 不吃掉请求，逐字退回 ERB 分支的原有空态与文案。
+  if (kojo2.model !== null && languageIdOf(kojo2.model) === KOJO2_LANGUAGE_ID) {
+    return renderKojo2Request(request, kojo2, deps, closeBtn, sectionWindow);
+  }
+
   // 索引这一轮的事实（ST-CONSUMERS）：查表得到的那一句**只在既有文案面**上替换原文，
   // 不给本面板新开显示面；查表交回 `null` ⇒ 逐字用回改前那两句。
   const indexState = deps.indexState?.() ?? null;
@@ -387,39 +464,10 @@ function renderRequest(
   const hiddenOut =
     totalOut === 0 ? 0 : Math.max(0, totalOut - windowSize(totalOut, sectionWindow.outEnd, CALL_HIERARCHY_WINDOW));
 
-  const section = (heading: string, emptyText: string, rows: Row[], which: 'in' | 'out'): ReactElement[] => {
-    const out: ReactElement[] = [];
-    if (!referencesAvailable) return out;
-    out.push(h('h4', { key: `${heading}:h` }, heading));
-    if (rows.length === 0) {
-      out.push(h('p', { key: `${heading}:e`, className: 'dim' }, emptyText));
-      return out;
-    }
-    const limit = which === 'in' ? sectionWindow.inEnd : sectionWindow.outEnd;
-    const shown = rows.slice(0, windowSize(rows.length, limit, CALL_HIERARCHY_WINDOW));
-    const hiddenRows = rows.length - shown.length;
-    // 行样式复用检索面板的通用行类（search-rows / search-match / search-loc）——
-    // 同一形态的清单视图，不为它开第二份 CSS。
-    out.push(
-      h('div', { key: `${heading}:rows`, className: 'search-rows' }, rowsToElements(heading, shown, deps, which)),
-    );
-    if (hiddenRows > 0) {
-      // 哨兵是一枚 <button>（与问题面板同一形态）：Tab 得到它、Enter 按得动，
-      // 点一次多画 STEP 行——不再是"另有 N 行未列出"的告别（RENDER_CAP 死顶已除）
-      out.push(
-        h(
-          'button',
-          {
-            key: `${heading}:more`,
-            className: 'ghost small conv-more',
-            onClick: () => sectionWindow.grow(which, rows.length),
-          },
-          `继续显示后面的行（还有 ${hiddenRows} 行，共 ${rows.length} 行）`,
-        ),
-      );
-    }
-    return out;
-  };
+  // 区块绘制抽到模块级 `renderSection`（批次十：两门语言共用同一把窗口尺），
+  // 本函数只留"这条分支有没有反向引用"这一层闸。
+  const section = (heading: string, emptyText: string, rows: Row[], which: 'in' | 'out'): ReactElement[] =>
+    referencesAvailable ? renderSection(heading, emptyText, rows, which, deps, sectionWindow) : [];
 
   return h(
     'div',
@@ -528,3 +576,208 @@ function rowsToElements(
     );
   });
 }
+
+/**
+ * 一段出入边区块（两个语言分支共用同一套窗口 / 行样式；标题、空态文案由分支各给）。
+ * 哨兵是一枚 <button>（与问题面板同一形态）：Tab 得到它、Enter 按得动，点一次多画
+ * STEP 行——不再是"另有 N 行未列出"的告别（RENDER_CAP 死顶已除）。
+ */
+function renderSection(
+  heading: string,
+  emptyText: string,
+  rows: readonly Row[],
+  which: 'in' | 'out',
+  deps: CallHierarchyDeps,
+  sectionWindow: SectionWindow,
+): ReactElement[] {
+  const out: ReactElement[] = [];
+  out.push(h('h4', { key: `${heading}:h` }, heading));
+  if (rows.length === 0) {
+    out.push(h('p', { key: `${heading}:e`, className: 'dim' }, emptyText));
+    return out;
+  }
+  const limit = which === 'in' ? sectionWindow.inEnd : sectionWindow.outEnd;
+  const shown = rows.slice(0, windowSize(rows.length, limit, CALL_HIERARCHY_WINDOW));
+  const hiddenRows = rows.length - shown.length;
+  // 行样式复用检索面板的通用行类（search-rows / search-match / search-loc）——
+  // 同一形态的清单视图，不为它开第二份 CSS。
+  out.push(h('div', { key: `${heading}:rows`, className: 'search-rows' }, rowsToElements(heading, shown, deps, which)));
+  if (hiddenRows > 0) {
+    out.push(
+      h(
+        'button',
+        {
+          key: `${heading}:more`,
+          className: 'ghost small conv-more',
+          onClick: () => sectionWindow.grow(which, rows.length),
+        },
+        `继续显示后面的行（还有 ${hiddenRows} 行，共 ${rows.length} 行）`,
+      ),
+    );
+  }
+  return out;
+}
+
+/** 语言 id 软取（模型被释放时不抛；取不到 ⇒ `null`，退回 ERB 旧路） */
+function languageIdOf(model: Monaco.editor.ITextModel): string | null {
+  try {
+    return typeof model.getLanguageId === 'function' ? model.getLanguageId() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * kojo2 分支（批次十）：取数在 `resolveKojo2CallHierarchy`（纯搬运），本函数只画。
+ *
+ * 五条可见态各有自己的那一句（`erro/unreadable/stale/not-callable/call-without-declaration`）：
+ * 空态与错误态都不许静默——铁律 4「内核不静默」在面板这一层的落点。
+ */
+function renderKojo2Request(
+  request: CallHierarchyRequest,
+  kojo2: Kojo2PanelContext,
+  deps: CallHierarchyDeps,
+  closeBtn: ReactElement,
+  sectionWindow: SectionWindow,
+): ReactElement {
+  /**
+   * kojo2 分支的根（五条可见态共用）：面属性写在根上，理由与 ERB 分支同一个——
+   * 面板换了语言不该换一套右键菜单，掉一个属性就是"同一屏两副面孔"。
+   * `extra` 是就绪态才有的那组读数（主体身份 / 还藏了几行），其余态没有主体可复制。
+   */
+  const panel = (body: ReactElement[], extra?: Readonly<Record<string, string>>): ReactElement =>
+    h(
+      'div',
+      { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID, ...extra },
+      h('h3', null, '调用层级'),
+      ...body,
+      closeBtn,
+    );
+  const notice = (text: string, key: string): ReactElement => h('p', { className: 'dim', key }, text);
+  const model = kojo2.model;
+  if (model === null) {
+    // 分派前已判过；留这一句是给"模型在两帧之间被关掉"的兜底（不静默）。
+    return panel([notice('当前文件没有打开的编辑器模型——先打开这份文件再运行命令。', 'k2-no-model')]);
+  }
+
+  if (kojo2.api === null) {
+    // 两种装载态都可见：还在拉（第一次打开要拉解析器）与拉失败（打包 / 磁盘问题）。
+    return panel([
+      notice(
+        kojo2.loadFailed
+          ? 'kojo2 调用层级的取数模块没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。'
+          : '正在载入 kojo2 调用层级（首次打开要拉解析器，只这一次）…',
+        kojo2.loadFailed ? 'k2-load-failed' : 'k2-loading',
+      ),
+    ]);
+  }
+  const api = kojo2.api;
+
+  let resolution: Kojo2PanelResolution;
+  try {
+    const requestForKojo2 = { line: request.line, column: request.column, path: request.filePath };
+    const provider = deps.kojo2Provider?.();
+    resolution =
+      provider === undefined
+        ? api.resolveKojo2CallHierarchy(model, requestForKojo2)
+        : api.resolveKojo2CallHierarchy(model, requestForKojo2, provider);
+  } catch (error) {
+    // provider 的失败自己吞了；能漏到这里的只剩真异常——照样可见，不装作空态。
+    return panel([
+      notice(
+        `调用层级这一轮没算出来：${error instanceof Error ? error.message : String(error)}——这是取数错误，不是"没有调用关系"。`,
+        'k2-error',
+      ),
+    ]);
+  }
+
+  /* eslint-disable no-case-declarations */
+  switch (resolution.kind) {
+    case 'unreadable':
+      return panel([notice('读不到当前文件的内容（模型可能已关闭或还在载入）——重新打开这份文件后再试。', 'k2-unreadable')]);
+    case 'stale-item':
+      return panel([notice('这枚声明已经不在当前模型里（文件刚被改过？）——收起面板，重新运行命令。', 'k2-stale')]);
+    case 'not-callable':
+      return panel([
+        notice(
+          `第 ${resolution.line} 行不在任何 @函 / # 模 的正文里——把光标放到某个可调用声明的名字或正文中再试。`,
+          'k2-off',
+        ),
+      ]);
+    case 'call-without-declaration':
+      return panel([
+        notice(
+          '这一格是一次调用，但本文件里没有同名声明（可能是跨文件函数或 adapter 基础库）——跨文件落点要等项目索引接线后才可见。',
+          'k2-call',
+        ),
+      ]);
+    case 'ready':
+      break;
+  }
+  /* eslint-enable no-case-declarations */
+
+  const view = resolution.view;
+  const incomingRows = flatten(view.incoming);
+  const outgoingRows = flatten(view.outgoing);
+  // 处数走 `totalSites`：ERB 那一侧的"第二把尺子"卫生检查钉住面板不得用 `incoming.reduce`
+  // 把清单长度冒充台账读数；这里同样只数清单行，且不写回任何"处数"文案。
+  const incomingSites = totalSites(view.incoming);
+  const outgoingSites = totalSites(view.outgoing);
+  // 面板级事实写在根上（口径同 ERB 分支）：模块顶层的 `build` 靠它读"正在看谁 / 还藏了几行"
+  const hiddenIn =
+    incomingRows.length === 0
+      ? 0
+      : Math.max(0, incomingRows.length - windowSize(incomingRows.length, sectionWindow.inEnd, CALL_HIERARCHY_WINDOW));
+  const hiddenOut =
+    outgoingRows.length === 0
+      ? 0
+      : Math.max(0, outgoingRows.length - windowSize(outgoingRows.length, sectionWindow.outEnd, CALL_HIERARCHY_WINDOW));
+  return panel(
+    [
+      h(
+        'p',
+        { key: 'k2-target' },
+        h('span', null, `${view.target.name}　`),
+        h(
+          'button',
+          {
+            className: 'ghost small',
+            title: `转到定义：${view.target.path}:${view.target.line}`,
+            onClick: () => deps.reveal(view.target.path, view.target.line, 1),
+          },
+          `@ ${locLabel(view.target.path, view.target.line)}`,
+        ),
+      ),
+      ...renderSection(
+        `被调用（${view.incoming.length} 个调用者 · ${incomingSites} 处）`,
+        '当前文件里没有别的 @函 / # 模 调用它。',
+        incomingRows,
+        'in',
+        deps,
+        sectionWindow,
+      ),
+      ...renderSection(
+        `调用（${view.outgoing.length} 个目标 · ${outgoingSites} 处）`,
+        '函数体内没有落到本文件的调用（跨文件目标要等项目索引接线）。',
+        outgoingRows,
+        'out',
+        deps,
+        sectionWindow,
+      ),
+      notice(
+        'kojo2 分支按当前文件算出入边：组行 = 跳声明，点位行 = 跳调用处；「处」是清单里的点位行数，不是第二份台账读数。',
+        'k2-tally',
+      ),
+    ],
+    {
+      'data-ch-subject-name': view.target.name,
+      'data-ch-subject-path': view.target.path,
+      'data-ch-subject-line': String(view.target.line),
+      'data-ch-hidden-in': String(hiddenIn),
+      'data-ch-hidden-out': String(hiddenOut),
+      'data-ch-total-in': String(incomingRows.length),
+      'data-ch-total-out': String(outgoingRows.length),
+    },
+  );
+}
+

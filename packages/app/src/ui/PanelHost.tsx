@@ -165,7 +165,7 @@ export const StatusbarItem = memo(function StatusbarItem({
 }): ReactElement {
   const Comp = contribution.component as ComponentType<UIPanelProps>;
   return (
-    <span className={`sb-slot sb-slot-${contribution.id}`}>
+    <span className={`sb-slot sb-slot-${contribution.id}`} data-status-cell="">
       <Comp renderIcon={renderIcon} />
     </span>
   );

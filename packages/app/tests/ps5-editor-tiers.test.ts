@@ -94,16 +94,22 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清
     expect(foldingEnabledForLineCount(LARGE_FILE_LINES)).toBe(true);
   });
 
-  it('huge 档：折行关 + 折叠关，并继承 large 的三条关值', () => {
+  it('huge 档：折叠仍关（PS-4 全文 copy 读数），折行/吸顶保留（2026-10-23 重估），继承 large 的三条关值', () => {
     const o = editorOptionsForLineCount(HUGE_FILE_LINES);
-    expect(o.wordWrap).toBe('off');
+    // 折行是用户偏好（跟随档 = large 同值 'on'），吸顶属低成本项；折叠实测多一次整篇 copy ⇒ 仍关
+    expect(o.wordWrap).toBe('on');
     expect(o.folding).toBe(false);
+    expect(foldingEnabledForLineCount(HUGE_FILE_LINES)).toBe(false);
+    expect(o.stickyScroll).toEqual({ enabled: true, maxLineCount: 3 });
+    // 视口级装饰仍关
+    expect(o.minimap).toEqual({ enabled: false });
+    expect(o.matchBrackets).toBe('never');
+    // 继承 large 的三条关值
     expect(o.selectionHighlight).toBe(false);
     expect(o.links).toBe(false);
     expect(o.colorDecorators).toBe(false);
-    expect(foldingEnabledForLineCount(HUGE_FILE_LINES)).toBe(false);
-    // 99 万行级盘同样走这一档（阈值判据不许在超大读数上漂档）
-    expect(editorOptionsForLineCount(990_000).wordWrap).toBe('off');
+    // 99 万行级盘同样走这一档（阈值判据不许在超大读数上漂档；折行同样尊重偏好层）
+    expect(editorOptionsForLineCount(990_000).wordWrap).toBe('on');
   });
 
   it('往返：huge → small，这一族键**每条都有值**（切标签不"半套恢复"）', () => {
@@ -124,6 +130,7 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清
     const ed = { updateOptions: (o: Record<string, unknown>) => Object.assign(current, o) };
     applySizeTier(ed, 60_000); // 打开一份 huge 原文
     expect(current.formatOnType).toBe(false);
+    // PS-4 实测：折叠一开就多一次整篇 copy，huge 仍关
     expect(current.folding).toBe(false);
     applySizeTier(ed, 120_000, { readOnly: true }); // 挂上 .kojo 投影（比原文更长）
     expect(current.readOnly).toBe(true);
@@ -291,8 +298,8 @@ describe('P2-16 排版偏好：create 路径与三个写入点同源', () => {
   it('叠出来的选项带偏好：huge → 挂更大投影 → 撤下回到小文件，wordWrap 不卡关值', () => {
     const current: Record<string, unknown> = {};
     const ed = { updateOptions: (o: Record<string, unknown>) => Object.assign(current, o) };
-    applySizeTier(ed, 60_000); // 打开一份 huge 原文：档位表关折行
-    expect(current.wordWrap).toBe('off');
+    applySizeTier(ed, 60_000); // 打开一份 huge 原文：重估后跟随档 = large 同值（开）
+    expect(current.wordWrap).toBe('on');
     applySizeTier(ed, 120_000, { readOnly: true }); // 挂上 .kojo 投影（比原文更长）
     applySizeTier(ed, 800); // 撤下投影、按回到屏幕上的那份原文落档
     // 缺省偏好 = 跟随档 ⇒ 补丁给档位表自己的值，不卡 huge 的关值
@@ -313,7 +320,7 @@ describe('P2-16 排版偏好：create 路径与三个写入点同源', () => {
     });
     const current: Record<string, unknown> = {};
     const ed = { updateOptions: (o: Record<string, unknown>) => Object.assign(current, o) };
-    applySizeTier(ed, 60_000); // huge：档位本就 off
+    applySizeTier(ed, 60_000); // huge：跟随档本是 on，强制关盖在这一层之上
     expect(current.wordWrap).toBe('off');
     applySizeTier(ed, 800); // 回到小文件：跟随档本该 on，强制关盖在档位表之后
     expect(current.wordWrap).toBe('off');

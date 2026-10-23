@@ -40,7 +40,7 @@ import type {
 } from '@kojo/plugin-api';
 import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/plugin-kojo-sugar';
-import { ERB_DIRECTIVES, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
+import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
 import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
 import { installHover, type HoverTables } from '../monaco/kojo-hover';
 import {
@@ -119,9 +119,22 @@ import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../mo
 // K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
 // 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、各自再挡 flag，且安装器内零 IO。
 import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references';
-import { createKojo2ProjectIndex } from '../monaco/kojo2-project-index';
+import {
+  createKojo2ProjectCallHierarchyResolvers,
+  createKojo2ProjectIndex,
+  createKojo2ProjectRenameResolvers,
+} from '../monaco/kojo2-project-index';
+// 调用层级解析器（`monaco/kojo2-callhierarchy.ts`）**不在这里 import**（连 `import type` 都不）：
+// 那一面走懒装载边（PS-10 ①，`ui/call-hierarchy.ts` 的动态 import），装配点一碰它就会把它
+// 连解析器一起拖进开机图，`language-parity` 的「豁免不过期」也会按"已接线"判红。
+// 本文件只交 resolver 工厂（返回类型由 `createKojo2ProjectCallHierarchyResolvers` 推断），
+// 供面板装配点（`shell-overlays` 的 `kojo2Provider`）在首次打开时经动态 import 现取。
+import { installDocumentLinks } from '../monaco/document-links';
+import { createUserSnippetProvider } from '../monaco/user-snippet-completion';
+import { USER_SNIPPET_LANGUAGES, loadUserSnippets } from './user-snippets';
 import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-language';
 import { installKojo2RenameProvider } from '../monaco/kojo2-rename';
+import type { Kojo2RenameResolvers } from '../monaco/kojo2-rename';
 import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
 import { installKojo2InlayHintsProvider } from '../monaco/kojo2-inlay';
 import { installKojo2CodeLensProvider } from '../monaco/kojo2-codelens';
@@ -130,6 +143,11 @@ import { installKojo2SelectionRangeProvider } from '../monaco/kojo2-selection-ra
 // 引用计数与引用面同源（code lens 的"本文件 N 处用到"不许自扫一套）。
 import { kojo2ReferencesAt } from '../monaco/kojo2-references';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
+// 项目扫描（未打开文件）→ 项目索引的喂养通道（扫描侧投放，这里订阅后写索引）
+import {
+  onKojo2ProjectFileFeed,
+  onKojo2ProjectFileFeedReset,
+} from './project-scan-schedule';
 import {
   SIGNATURE_LOOKBACK_LINES,
   type ResolvedSignature,
@@ -176,6 +194,40 @@ export function kojo2ProjectIndexUpdate(path: string, text: string | null): void
   if (text === null) kojo2ProjectIndex.removeFile(path);
   else kojo2ProjectIndex.updateFile({ path, text });
 }
+
+/**
+ * 同一份项目索引 → 跨文件重命名的 resolver（S18 接线；纯映射、零 IO，每次现造即可）。
+ *
+ * 只交索引里已有的文件；索引空 = 只有同文件候选（行为与接线前一致）。
+ */
+export function kojo2RenameResolvers(): Kojo2RenameResolvers {
+  return createKojo2ProjectRenameResolvers(kojo2ProjectIndex);
+}
+
+/**
+ * 同一份项目索引 → 调用层级的 resolver（S18 接线；**调用层级面板**的懒装载边用它，
+ * 本文件只交工厂，不静态 import 解析器模块——见上方注）。
+ *
+ * 返回类型由 `createKojo2ProjectCallHierarchyResolvers` 推断（不借懒模块的类型，免得
+ * 类型 import 被「豁免不过期」判成已装配）；消费方把它交给
+ * `createKojo2CallHierarchyProvider(resolvers)`。
+ */
+export function kojo2CallHierarchyResolvers() {
+  return createKojo2ProjectCallHierarchyResolvers(kojo2ProjectIndex);
+}
+
+/**
+ * 用户片段补全 provider（S18；语言面常开，与内置补全**并存**——Monaco 同一语言允许多枚
+ * completion provider，各自出货、互不覆盖）。
+ *
+ * 片段表由 kernel 全局存储域异步读入（见装配段）；设置页保存后调用
+ * `userSnippetProvider.setSnippets(...)` 即可热刷新，不必重装 provider。
+ */
+export const userSnippetProvider = createUserSnippetProvider(USER_SNIPPET_LANGUAGES, {
+  // 存储里的分组键是 `erb`，Monaco 里 ERB 的语言 id 是 `kojo-erb`（`kojo2` 同名）。
+  languageIdFor: (group) =>
+    group === 'erb' ? ERB_LANGUAGE_ID : group === 'kojo2' ? KOJO2_LANGUAGE_ID : group,
+});
 
 /** CodeAction 执行命令 id（宿主统一注册一次；command 参数为 pendingActionsRef 的反查 key） */
 const CODE_ACTION_COMMAND = 'kojo.codeAction.run';
@@ -1559,6 +1611,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // `registerForLanguageServices` 的方言表并行且不重叠（`.kojo2` 不在 v1 方言表里）。
     // flag 关 ⇒ 这一行整体不执行，provider 表与今天逐字一致；flag 开但运行时装载失败 /
     // 超时 ⇒ provider 回空 tokens（不着色），不抛、不写任何 markers。
+    //
+    // 门控口径（批次十 S5，K2-SURFACE-DEFAULT）：本开关**只管写回 / 迁移 / 切解析器**。
+    // S18 新增的两面属于语言面，已挂在本门之外（用户片段补全、文档链接，见上方装配段）；
+    // 块内既有服务面的安装器仍各自保留内部 flag 自挡（批次四～九的守线，本批不动）。
     if (isKojo2CutoverEnabled()) {
       globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
       // K2 batch-4：三枚语言服务 provider（补全 / 悬停 / 转定义），语言 id 只认 `kojo2`。
@@ -1607,7 +1663,15 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
           uriForPath: (path) => monaco.Uri.file(path),
         }),
       );
-      globalDisposers.push(installKojo2RenameProvider(monaco));
+      // 跨文件改名（S18）：把**同一份**项目索引的 resolver 喂给 installer——候选文件与
+      // 请求文件路径都由索引/宿主给，provider 只搬编辑（全或无：任一格被闸 ⇒ 整次取消）。
+      globalDisposers.push(
+        installKojo2RenameProvider(monaco, {
+          resolvers: kojo2RenameResolvers(),
+          pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
+          uriForPath: (path) => monaco.Uri.file(path),
+        }),
+      );
       globalDisposers.push(
         installKojo2SignatureHelpProvider(
           monaco,
@@ -1682,8 +1746,41 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       } catch {
         /* 老桩 monaco 没有模型事件：索引留空（引用面仍可同文件工作） */
       }
+      // K2-INDEX-HOST-FEED：项目扫描把**未打开文件**的原文经通道送进来（分拍节流在扫描侧）。
+      // 同一路径若已有打开中的 2.0 model，以 model 的未保存文本为准——扫描读的是盘，编辑会早于落盘。
+      const openKojo2ModelText = (path: string): string | null => {
+        const want = pathKey(path);
+        try {
+          for (const model of monaco.editor.getModels()) {
+            if (model.getLanguageId() !== KOJO2_LANGUAGE_ID) continue;
+            const candidate = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
+            if (typeof candidate !== 'string' || pathKey(candidate) !== want) continue;
+            return model.isDisposed() ? null : model.getValue();
+          }
+        } catch {
+          /* 模型枚举失败 ⇒ 退回扫描原文 */
+        }
+        return null;
+      };
+      const offScanFeed = onKojo2ProjectFileFeed((path, text) => {
+        try {
+          if (text === null) {
+            kojo2ProjectIndexUpdate(path, null);
+            return;
+          }
+          kojo2ProjectIndexUpdate(path, openKojo2ModelText(path) ?? text);
+        } catch {
+          /* 索引只是增强面：一次喂养失败不拖累扫描 / 编辑器 */
+        }
+      });
+      // 换项目 / 关项目 / 装配卸载：旧项目的文件整份撤条（含 model 喂进去的那些）
+      const offScanReset = onKojo2ProjectFileFeedReset(() => {
+        for (const path of kojo2ProjectIndex.files()) kojo2ProjectIndex.removeFile(path);
+      });
       globalDisposers.push({
         dispose: () => {
+          offScanFeed();
+          offScanReset();
           for (const listener of indexListeners) {
             try {
               listener.dispose();
@@ -1733,6 +1830,27 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     globalDisposers.push(installKojoCompletion(monaco, () => editorTables(requireKernel())));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
     globalDisposers.push(installErbCompletion(monaco, () => editorTables(requireKernel())));
+    // 用户片段补全（S18）：语言面常开（不经过 2.0 切流门控），ERB 与 kojo2 各挂**一枚独立
+    // provider**——Monaco 同一语言允许多枚 completion provider 并存，内置补全不受影响。
+    globalDisposers.push(...userSnippetProvider.install(monaco));
+    // 片段表在 kernel 全局存储域（`_global/user-snippets-v1`）：异步读盘，读到后整表替换；
+    // 坏文件只交一句可见的 warn（读失败 ≠ 首启空表，见 `ui/user-snippets.ts`）。
+    try {
+      void loadUserSnippets(requireKernel().storage.global()).then((result) => {
+        userSnippetProvider.setSnippets(result.snippets);
+        if (result.error !== null) console.warn(`[user-snippets] ${result.error}`);
+      });
+    } catch {
+      /* 内核还没就绪：本帧片段为空；设置页保存后经 `userSnippetProvider` 热刷新 */
+    }
+    // 文档链接（S18）：ERB 与 kojo2 两语言；只给宿主面三件——只读存在性探测、项目根、
+    // 点击命令（缺省复用已注册的 `kojo.codeLens.execute`，本层不新注册命令）。
+    globalDisposers.push(
+      installDocumentLinks(monaco, {
+        existsPath: (path) => requireKernel().io.exists(path),
+        projectRoot: () => requireKernel().project.current()?.rootDir ?? null,
+      }),
+    );
     // ERB 函数重命名（F2，2026-10-16）：判定与编辑收集全在解析器索引（`erb.parser`），
     // 宿主只注入 monaco 拿不到的东西——活动标签判据（同 codeAction 逐字同款）、写权限
     // （`requireKernel().io.isWritable`，与保存同源口径）、已开标签表、未打开文件的 io 落盘通道。

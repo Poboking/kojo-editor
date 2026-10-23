@@ -5,7 +5,7 @@ import { applyNameColorPref, loadNameColorPref, subscribeNameColorPref } from '.
 import { loadTreeSitterPref, subscribeTreeSitterPref } from '../../ui/tree-sitter-pref';
 import { toMonacoFoldingRanges } from '../kojo-folding';
 import { ERB_LANGUAGE_ID } from '../erb-language';
-import { languageDescriptors, type LanguageDescriptor } from '../language-registry';
+import { languageDescriptors, descriptorForLanguageId, descriptorForPath, FALLBACK_LANGUAGE_ID, type LanguageDescriptor } from '../language-registry';
 import { toMonacoLine } from '../positions';
 import { reportStructureDegradation, resetStructureDegradationLedger } from './fallback';
 import { mergeIndentConfig, type BaseIndentPatterns } from './indent';
@@ -27,7 +27,7 @@ import type { KojoStructureFold, KojoStructureSyntaxFault } from './types';
  * 不再互相换轨重解。同一门语言开两份文档时仍按原口径换轨（一条线程一棵树）。
  *
  * 每门语言的 worker 入口、两枚 wasm 与查询由 `descriptor.structure.load()` **按需**
- * 交回——默认关着时这些资源连字符串都不在主线程图里。
+ * 交回——worker 线程仍只在真被问到一篇文档时才起（资源本身按偏好装配）。
  *
  * ## 关 = 逐字不变（这条是硬要求，代码形状就是为它设计的）
  *
@@ -86,6 +86,36 @@ const optionHooks: Monaco.IDisposable[] = [];
 
 /** 结构层这一路的体量闸：与语义着色同一档（全文级开销同开同关，判据只留一处） */
 const STRUCTURE_MAX_LINES = LARGE_FILE_LINES;
+
+/**
+ * 这份文档此刻该不该由结构层顶上（纯判据；测试 `tests/tree-sitter-default.test.ts` 直接打它）。
+ *
+ * 三条腿缺一不可：
+ * - **偏好开**（缺省开；显式 `off` ⇒ 假）——作者关掉后即便 provider 还没被摘除也不许顶上；
+ * - **语言声明了 `structure`**——`kojo2` / JSON / 认不出的 `plaintext` 一律不碰
+ *   （`.kojo2` 的结构面走自己那套 worker，不由通用叠层接管）；
+ * - **没超过体量闸**——超大文件按现有 `LARGE_FILE_LINES` 档跳过，保持回落。
+ *
+ * `path` 只在语言 id 不认识时用来自查 descriptor（模型池还没定语言的那一拍）；
+ * `plaintext` 不按路径猜——与 `language-registry`「认不出不猜 DSL」同一条。
+ *
+ * `prefOn` 只为测试注入；生产取 localStorage 真源。
+ */
+export function resolveStructureEnabled(
+  languageId: string,
+  path: string | null | undefined,
+  lineCount: number,
+  prefOn: boolean = loadTreeSitterPref(),
+): boolean {
+  if (!prefOn) return false;
+  if (!Number.isFinite(lineCount) || lineCount > STRUCTURE_MAX_LINES) return false;
+  // 已装上的结构层 descriptor 也算数（测试替身语言 / 尚未进注册表的语言），再退回按路径认领
+  const descriptor =
+    descriptorForLanguageId(languageId) ??
+    overlays.get(languageId)?.descriptor ??
+    (languageId === FALLBACK_LANGUAGE_ID || !path ? null : descriptorForPath(path));
+  return descriptor?.structure !== undefined;
+}
 
 /** 没有基底规则的语言：`mergeIndentConfig` 要求三条腿齐全，用"永不匹配"占位 */
 const EMPTY_INDENT_BASE: BaseIndentPatterns = {
@@ -162,8 +192,9 @@ function structureSemanticProvider(
     async provideDocumentSemanticTokens(model, _resultId, token) {
       if (!active || model.getLanguageId() !== languageId) return null;
       if (token.isCancellationRequested) return null;
-      if (model.getLineCount() > STRUCTURE_MAX_LINES) {
-        noteSizeSkip('semantic');
+      // 偏好关 / 语言没声明结构面 / 超大文件：一律不顶上（超大那份由 noteSizeSkip 说一次）
+      if (!resolveStructureEnabled(languageId, model.uri?.path, model.getLineCount())) {
+        if (model.getLineCount() > STRUCTURE_MAX_LINES) noteSizeSkip('semantic');
         return null;
       }
       const overlay = overlays.get(languageId);
@@ -206,8 +237,8 @@ function structureFoldingProvider(languageId: string): Monaco.languages.FoldingR
       if (!active || model.getLanguageId() !== languageId) return [];
       const overlay = overlays.get(languageId);
       if (!overlay) return [];
-      if (model.getLineCount() > STRUCTURE_MAX_LINES) {
-        noteSizeSkip('folds');
+      if (!resolveStructureEnabled(languageId, model.uri?.path, model.getLineCount())) {
+        if (model.getLineCount() > STRUCTURE_MAX_LINES) noteSizeSkip('folds');
         return [];
       }
       let folds: readonly KojoStructureFold[] | null;

@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCommandContext, EditorWorkspaceSymbol, ErbParserService, MarketService, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
@@ -73,6 +73,29 @@ import {
   useFontZoomPref,
 } from './font-size-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
+// 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
+// 这里只取「当前活动文件那份 model」并把选择落到 model 上。
+import { openModelAcrossGroups } from './editor-pane-registry';
+import { descriptorForPath, FALLBACK_LANGUAGE_ID, languageDescriptors } from '../monaco/language-registry';
+import type * as Monaco from '../monaco/entry';
+import {
+  languageModeChoices,
+  languageOverrideFor,
+  setLanguageOverride,
+} from './language-mode-pref';
+import {
+  applyIndentPref,
+  indentChoiceFromOptions,
+  indentLabel,
+  indentLabelFromOptions,
+  indentPrefFor,
+  nextIndentChoice,
+  setIndentPref,
+  storedIndentChoiceFor,
+  type IndentTarget,
+} from './indentation-pref';
+// S2 的编码清单是纯模块（只 import type），静态取即可；动作侧走点击时装配（见 createEncodingMenuPort）。
+import { listEncodings } from './encoding-actions';
 import { useAutosavePref } from './autosave-pref';
 import {
   applyMotionPref,
@@ -275,38 +298,165 @@ function LockIcon(): ReactElement {
 /** 状态栏 EOL 两档（与 EditorPane 的 `entry.eol` 同口径，大写） */
 export type EditorEolChoice = 'LF' | 'CRLF';
 
+/** 状态栏轻量弹层（一次只开一个；沿用 `.sb-eol-menu` 那套已有 popover 样式惯例） */
+type StatusMenu = null | 'eol' | 'language' | 'encoding' | 'encoding-reopen' | 'encoding-save';
+
 /**
- * 状态栏右区那三格读数（编码·EOL·行数 ／ 选区 ／ 自动保存时刻）。
+ * 编码菜单一项（真源 = S2 `./encoding-actions` 的 `listEncodings()`）。
+ * 这里只搬 `id`（进内核显式编码入口）与 `label`（给人看）两格。
+ */
+export interface EncodingMenuOption {
+  readonly id: string;
+  readonly label: string;
+}
+
+/**
+ * 编码动作端口（真身 = S2 的 `EncodingActions` + `listEncodings`）。
+ *
+ * 签名照 S2 交付面收口：`listEncodings()` / `reopenWithEncoding(path, enc)` /
+ * `saveWithEncoding(path, enc)`。S2 的 `createEncodingActions` 是**依赖注入**形态
+ * （`kernel.io` + `editorModelPool`），所以真身由本文件的 `createEncodingMenuPort`
+ * 在**点击时**装配——壳层模块图不静态摸 Monaco 运行时。
+ */
+export interface EncodingMenuPort {
+  listEncodings(): readonly EncodingMenuOption[];
+  reopenWithEncoding(path: string, encoding: string): void | Promise<void>;
+  saveWithEncoding(path: string, encoding: string): void | Promise<void>;
+}
+
+/** 没有宿主接线时的兜底（单测直接渲染叶子 / 宿主未传端口）：清单照读，动作明确报告而不是假装成功 */
+const detachedEncodingPort: EncodingMenuPort = {
+  listEncodings: () => listEncodings().map(({ id, label }) => ({ id, label })),
+  reopenWithEncoding: () => {
+    console.warn('[statusbar] 没有宿主编码端口，重开请求被忽略');
+  },
+  saveWithEncoding: () => {
+    console.warn('[statusbar] 没有宿主编码端口，另存请求被忽略');
+  },
+};
+
+/**
+ * 壳层真身端口：清单同步（S2 的纯模块），动作点击时才拉 monaco 模型池并装配
+ * `createEncodingActions({ io: kernel.io, models: editorModelPool })`。
+ */
+function createEncodingMenuPort(kernel: Kernel): EncodingMenuPort {
+  const run = async (kind: EncodingActionKind, path: string, encoding: string): Promise<void> => {
+    const [{ createEncodingActions }, { editorModelPool }] = await Promise.all([
+      import('./encoding-actions'),
+      import('./editor-model-pool-instance'),
+    ]);
+    const actions = createEncodingActions({ io: kernel.io, models: editorModelPool });
+    if (kind === 'reopen') await actions.reopenWithEncoding(path, encoding as FileEncoding);
+    else await actions.saveWithEncoding(path, encoding as FileEncoding);
+  };
+  return {
+    listEncodings: () => listEncodings().map(({ id, label }) => ({ id, label })),
+    reopenWithEncoding: (path, encoding) => run('reopen', path, encoding),
+    saveWithEncoding: (path, encoding) => run('save', path, encoding),
+  };
+}
+
+export type EncodingActionKind = 'reopen' | 'save';
+
+/**
+ * 编码动作前要不要确认（脏文档先确认的**唯一判据**，纯函数便于单测）。
+ *
+ * - 干净文档 ⇒ `null`（不问，直接落地）；
+ * - 脏文档 + 重新打开 ⇒ 说明会丢未保存修改；
+ * - 脏文档 + 按别的编码另存 ⇒ 说明可能丢字（该编码无法表示的字符会被替换）。
+ */
+export function encodingConfirmMessage(
+  kind: EncodingActionKind,
+  encoding: string,
+  dirty: boolean,
+): string | null {
+  if (!dirty) return null;
+  return kind === 'reopen'
+    ? `重新以 ${encoding} 读取会丢弃当前文件的未保存修改，仍要继续？`
+    : `按 ${encoding} 另存可能丢字（无法表示的字符会被替换），仍要继续？`;
+}
+
+/**
+ * 语言模式落地：Monaco 0.57 的公开出口只有 `editor.setModelLanguage`（`ITextModel` 没有
+ * `setLanguage`）。monaco 图**动态取**——壳层与它的状态栏测试都不该静态摸 Monaco 运行时。
+ */
+function applyModelLanguage(
+  model: Monaco.editor.ITextModel,
+  languageId: string,
+  onError?: (message: string) => void,
+): void {
+  void import('../monaco/entry')
+    .then((monaco) => monaco.editor.setModelLanguage(model, languageId))
+    .catch((error: unknown) => {
+      if (onError) onError(`语言模式切换未完成：${errorText(error)}`);
+      else console.warn('[statusbar] 语言模式切换失败：', error);
+    });
+}
+
+/**
+ * 状态栏右区读数（语言模式·缩进·编码·EOL·行数 ／ 选区 ／ 自动保存时刻）。
  *
  * W7-H：EOL 那一格在**可写原文面**变成按钮，点开是 LF / CRLF 两档小菜单
  * （落地由编辑器动作句柄 `switchEol` 负责：`model.pushEOL` + 前后停点 + 标脏，撤销栈上自成一段）。
  * 只读 / 预览 / 没开文件时 `eolSwitchable` 不为 true ⇒ 仍是纯文字（无入口）。
  *
- * 导出是给 `packages/app/tests/status-eol-readout.test.ts` 直接渲染取证用；
- * 生产消费方仍只有本文件的 `statusbar` 一处。
+ * 批次十 S1 增三格（只在有活动文件时出现）：
+ * - **语言模式**：读当前 model 的 `getLanguageId()`，点开是轻量选择（语言注册面 + 四档固定项），
+ *   选中即 `setModelLanguage` + 按路径持久化（`language-mode-pref.ts`），重开时由本组件恢复；
+ * - **缩进**：`Tab` / `Spaces:N`，点击循环，`model.updateOptions` 生效并按路径持久化；
+ * - **编码**：变成按钮，菜单「以其他编码重新打开…」「另存为…编码」，落地走 S2 的编码动作；
+ *   脏文档先确认（重新读取会丢未保存修改 / 按别的编码另存可能丢字）。
+ *
+ * 导出是给 `packages/app/tests/status-eol-readout.test.ts` / `statusbar-controls.test.ts`
+ * 直接渲染取证用；生产消费方仍只有本文件的 `statusbar` 一处。
  */
 export function EditorStatusReadout({
   onSwitchEol,
+  activeFile,
+  dirty = false,
+  encodingActions,
+  confirmAction,
+  onError,
 }: {
   onSwitchEol?: (eol: EditorEolChoice) => void;
+  /** 当前活动文件（语言 / 缩进 / 编码三格的归属路径；缺省 ⇒ 三格都不画） */
+  activeFile?: string | null;
+  /** 当前文件脏态（编码动作前要确认） */
+  dirty?: boolean;
+  /** 编码动作端口（宿主注入真身；缺省 = 只读清单的脱离端口，动作会明确告警不假装成功） */
+  encodingActions?: EncodingMenuPort;
+  /** 确认框（测试注入；缺省 = `window.confirm`） */
+  confirmAction?: (message: string) => boolean;
+  /** 失败出口（宿主 = 通知中心 toast；缺省 = console.warn，不静默） */
+  onError?: (message: string) => void;
 }): ReactElement | null {
   const status = useSyncExternalStore(subscribeShellEditorStatus, getShellEditorStatus, getShellEditorStatus);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menu, setMenu] = useState<StatusMenu>(null);
+  /** 读数刷新信号（model 语言 / 选项变化、本格写入后用；值本身不参与渲染） */
+  const [, refreshReadout] = useState(0);
+  /** 编码清单（同步读，仅弹层打开时才取；null = 还没读到） */
+  const [encodingList, setEncodingList] = useState<readonly EncodingMenuOption[] | null>(null);
+  const path = activeFile ?? null;
+  /** 失败出口 ref（固定身份：恢复 effect 不该因宿主每渲染换一次回调而重跑） */
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  // 当前活动文件那份 model（跨组反查；没有活着的 model ⇒ undefined，读数退化到偏好 / 缺省）
+  const model = path === null ? undefined : openModelAcrossGroups(path);
   const canSwitchEol = status?.eolSwitchable === true && onSwitchEol !== undefined;
-  // 读数消失 / 切到不可切换面（只读、预览）⇒ 菜单不许留在屏上
+  // 读数消失 / 切到不可切换面（只读、预览）⇒ EOL 菜单不许留在屏上
   useEffect(() => {
-    if (!canSwitchEol) setMenuOpen(false);
-  }, [canSwitchEol]);
-  // 轻量 popover 的收场：点别处或 Esc 关掉（不引入新组件库）
+    if (!canSwitchEol && menu === 'eol') setMenu(null);
+  }, [canSwitchEol, menu]);
+  // 轻量 popover 的收场：点别处或 Esc 关掉（不引入新组件库；一次只开一个弹层）
   useEffect(() => {
-    if (!menuOpen) return;
+    if (menu === null) return;
     const onPointerDown = (ev: PointerEvent): void => {
       const target = ev.target as Element | null;
       if (target && target.closest('.sb-eol-wrap')) return;
-      setMenuOpen(false);
+      setMenu(null);
     };
     const onKeyDown = (ev: KeyboardEvent): void => {
-      if (ev.key === 'Escape') setMenuOpen(false);
+      if (ev.key === 'Escape') setMenu(null);
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -314,25 +464,223 @@ export function EditorStatusReadout({
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [menuOpen]);
+  }, [menu]);
+  // model 自身的语言 / 选项变化 ⇒ 读数跟上（effect 只随 model 身份重挂，不跟刷新信号，免得自激）
+  useEffect(() => {
+    if (!model) return;
+    const subscriptions = [
+      model.onDidChangeLanguage(() => refreshReadout((n) => n + 1)),
+      model.onDidChangeOptions(() => refreshReadout((n) => n + 1)),
+    ];
+    return () => {
+      for (const subscription of subscriptions) subscription.dispose();
+    };
+  }, [model]);
+  // 重开恢复（语言）：这份文件存过选择才覆盖，没存过一律交给扩展名判据 / 2.0 路由
+  useEffect(() => {
+    if (path === null || !model) return;
+    const override = languageOverrideFor(path);
+    if (override !== null && model.getLanguageId() !== override) {
+      applyModelLanguage(model, override, onErrorRef.current);
+    }
+  }, [path, model]);
+  // 重开恢复（缩进）：只有明确存过才写 model 选项（不覆盖 Monaco / 编辑器缺省）
+  useEffect(() => {
+    if (path === null || !model) return;
+    const saved = storedIndentChoiceFor(path);
+    if (saved !== null) applyIndentPref(model as unknown as IndentTarget, saved);
+  }, [path, model]);
   if (!status) return null;
+
+  const modelLanguage = model
+    ? model.getLanguageId()
+    : path === null
+      ? null
+      : languageOverrideFor(path) ?? descriptorForPath(path)?.id ?? FALLBACK_LANGUAGE_ID;
+  const indentText = model
+    ? indentLabelFromOptions(model.getOptions())
+    : path === null
+      ? null
+      : indentLabel(indentPrefFor(path));
+
+  /** 失败出口：宿主有 toast 就走 toast，没有才退 console（绝不静默吞掉） */
+  const reportError = (message: string, error: unknown): void => {
+    const report = onErrorRef.current;
+    if (report) report(`${message}${errorText(error)}`);
+    else console.warn(`[statusbar] ${message}`, error);
+  };
+
+  /** 选语言：先落偏好（重开恢复的真源），再落到当前 model，最后把读数刷一次 */
+  const chooseLanguage = (languageId: string): void => {
+    setMenu(null);
+    if (path === null) return;
+    setLanguageOverride(path, languageId);
+    if (model && model.getLanguageId() !== languageId) {
+      applyModelLanguage(model, languageId, onErrorRef.current);
+    }
+    refreshReadout((n) => n + 1);
+  };
+
+  /** 点缩进格：Tab → 2 → 4 → 8 → Tab（认不出的档位按偏好当基准） */
+  const cycleIndent = (): void => {
+    if (path === null) return;
+    const current = model
+      ? indentChoiceFromOptions(model.getOptions()) ?? indentPrefFor(path)
+      : indentPrefFor(path);
+    const next = nextIndentChoice(current);
+    setIndentPref(path, next);
+    applyIndentPref(model as unknown as IndentTarget, next);
+    refreshReadout((n) => n + 1);
+  };
+
+  const resolveEncodingPort = (): Promise<EncodingMenuPort> =>
+    Promise.resolve(encodingActions ?? detachedEncodingPort);
+
+  /** 打开编码清单（两类动作共用一个清单弹层） */
+  const openEncodingList = (kind: 'reopen' | 'save'): void => {
+    setEncodingList(null);
+    setMenu(kind === 'reopen' ? 'encoding-reopen' : 'encoding-save');
+    void resolveEncodingPort()
+      .then((port) => setEncodingList(port.listEncodings()))
+      .catch((error: unknown) => {
+        reportError('编码清单读取失败：', error);
+        setMenu(null);
+      });
+  };
+
+  /** 选定编码：脏文档先确认，再交给编码动作落地 */
+  const runEncoding = (encoding: string): void => {
+    const kind: 'reopen' | 'save' = menu === 'encoding-reopen' ? 'reopen' : 'save';
+    setMenu(null);
+    if (path === null) return;
+    const message = encodingConfirmMessage(kind, encoding, dirty);
+    if (message !== null) {
+      const confirm =
+        confirmAction ?? ((text: string) => typeof window !== 'undefined' && window.confirm(text));
+      if (!confirm(message)) return;
+    }
+    void resolveEncodingPort()
+      .then((port) =>
+        kind === 'reopen' ? port.reopenWithEncoding(path, encoding) : port.saveWithEncoding(path, encoding),
+      )
+      .catch((error: unknown) => {
+        reportError('编码动作未完成：', error);
+      });
+  };
+
   return (
     <>
-      <span className="sb-editor">
-        {status.encoding} ·{' '}
+      {/* 语言模式格（S1）：只在有活动文件时出现；读数 = 当前 model 的语言 id */}
+      {path !== null && modelLanguage !== null ? (
+        <span className="sb-editor sb-lang" data-status-cell="">
+          <span className="sb-eol-wrap">
+            <button
+              type="button"
+              className="sb-eol"
+              data-status-cell=""
+              aria-haspopup="menu"
+              aria-expanded={menu === 'language'}
+              title={`当前语言模式：${modelLanguage}（点击切换）`}
+              onClick={() => setMenu(menu === 'language' ? null : 'language')}
+            >
+              {modelLanguage}
+            </button>
+            {menu === 'language' ? (
+              <span className="sb-eol-menu" role="menu" aria-label="语言模式">
+                {languageModeChoices(languageDescriptors().map((descriptor) => descriptor.id)).map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={modelLanguage === id}
+                    className={`sb-eol-item${modelLanguage === id ? ' on' : ''}`}
+                    onClick={() => chooseLanguage(id)}
+                  >
+                    {id}
+                  </button>
+                ))}
+              </span>
+            ) : null}
+          </span>
+        </span>
+      ) : null}
+      {/* 缩进格（S1）：点击循环 Tab / 2 / 4 / 8 */}
+      {indentText !== null ? (
+        <button
+          type="button"
+          className="sb-eol sb-indent"
+          data-status-cell=""
+          title="缩进：点击在 Tab / 2 / 4 / 8 间切换"
+          onClick={cycleIndent}
+        >
+          {indentText}
+        </button>
+      ) : null}
+      <span className="sb-editor" data-status-cell="">
+        {path !== null ? (
+          <span className="sb-eol-wrap">
+            <button
+              type="button"
+              className="sb-eol"
+              data-status-cell=""
+              aria-haspopup="menu"
+              aria-expanded={menu === 'encoding' || menu === 'encoding-reopen' || menu === 'encoding-save'}
+              title={`当前编码：${status.encoding}（点击转换编码）`}
+              onClick={() => setMenu(menu === 'encoding' ? null : 'encoding')}
+            >
+              {status.encoding}
+            </button>
+            {menu === 'encoding' ? (
+              <span className="sb-eol-menu" role="menu" aria-label="编码">
+                <button type="button" role="menuitem" className="sb-eol-item" onClick={() => openEncodingList('reopen')}>
+                  以其他编码重新打开…
+                </button>
+                <button type="button" role="menuitem" className="sb-eol-item" onClick={() => openEncodingList('save')}>
+                  另存为…编码
+                </button>
+              </span>
+            ) : null}
+            {menu === 'encoding-reopen' || menu === 'encoding-save' ? (
+              <span className="sb-eol-menu" role="menu" aria-label="选择编码">
+                {encodingList === null ? (
+                  <span className="sb-eol-note">读取编码清单…</span>
+                ) : encodingList.length === 0 ? (
+                  <span className="sb-eol-note">没有可用编码</span>
+                ) : (
+                  encodingList.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="menuitem"
+                      className={`sb-eol-item${option.id === status.encoding ? ' on' : ''}`}
+                      title={option.id}
+                      onClick={() => runEncoding(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))
+                )}
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          status.encoding
+        )}{' '}
+        ·{' '}
         {canSwitchEol ? (
           <span className="sb-eol-wrap">
             <button
               type="button"
               className="sb-eol"
+              data-status-cell=""
               aria-haspopup="menu"
-              aria-expanded={menuOpen}
+              aria-expanded={menu === 'eol'}
               title={`当前换行符：${status.eol}（点击切换 LF / CRLF）`}
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => setMenu(menu === 'eol' ? null : 'eol')}
             >
               {status.eol}
             </button>
-            {menuOpen ? (
+            {menu === 'eol' ? (
               <span className="sb-eol-menu" role="menu" aria-label="换行符">
                 {(['LF', 'CRLF'] as const).map((choice) => (
                   <button
@@ -342,7 +690,7 @@ export function EditorStatusReadout({
                     aria-checked={status.eol === choice}
                     className={`sb-eol-item${status.eol === choice ? ' on' : ''}`}
                     onClick={() => {
-                      setMenuOpen(false);
+                      setMenu(null);
                       // 已是目标档：只收菜单，不制造一次无意义的脏
                       if (status.eol !== choice) onSwitchEol?.(choice);
                     }}
@@ -358,10 +706,18 @@ export function EditorStatusReadout({
         )}{' '}
         · {status.lines} 行
       </span>
-      {status.sel ? <span className="sb-sel">{status.sel}</span> : null}
+      {status.sel ? (
+        <span className="sb-sel" data-status-cell="">
+          {status.sel}
+        </span>
+      ) : null}
       {/* 自动保存轻指示（A6）：同一条 onStatusInfo 链路带出的读数，不做第二个协议 */}
       {status.autosavedAt != null ? (
-        <span className="sb-editor" title={`自动保存于 ${new Date(status.autosavedAt).toLocaleTimeString()}`}>
+        <span
+          className="sb-editor"
+          data-status-cell=""
+          title={`自动保存于 ${new Date(status.autosavedAt).toLocaleTimeString()}`}
+        >
           自动保存 {new Date(status.autosavedAt).toLocaleTimeString()}
         </span>
       ) : null}
@@ -529,6 +885,8 @@ export function ShellLayout(props: Props): ReactElement {
   }, [kernel, builtinViews, sealed, activeAdapterId]);
   const toolbarItems = useMemo(() => kernel.slots.query('ui.toolbar'), [kernel]);
   const statusbarItems = useMemo(() => kernel.slots.query('ui.statusbar'), [kernel]);
+  /** 状态栏编码格的落地端口（S2 显式编码读写的真身装配；动作在点击时才拉 monaco 模型池） */
+  const statusEncodingActions = useMemo(() => createEncodingMenuPort(kernel), [kernel]);
   const slotCommands = useMemo(() => kernel.slots.query('editor.command'), [kernel]);
   const overlayItems = useMemo(() => kernel.slots.query('ui.overlay'), [kernel]);
 
@@ -2068,12 +2426,12 @@ export function ShellLayout(props: Props): ReactElement {
     <footer className={`statusbar ${layout.zen ? 'zen' : ''}`} data-context-surface="status-bar">
       <div className="sb-left">
         {writablePill === 'ok' ? (
-          <span className="sb-writable ok" title={writablePillTitle}>
+          <span className="sb-writable ok" data-status-cell="" title={writablePillTitle}>
             可写
           </span>
         ) : (
           // 只读态加锁形图标（C-1a）：琥珀色 + 文字之外再多一档形状线索；命中区 ≥24px 由 CSS 保证
-          <button className="sb-writable ro" title={writablePillTitle} onClick={onReauth}>
+          <button className="sb-writable ro" data-status-cell="" title={writablePillTitle} onClick={onReauth}>
             <LockIcon /> 只读
           </button>
         )}
@@ -2091,13 +2449,13 @@ export function ShellLayout(props: Props): ReactElement {
             //（口径同 `ui-kojo-navigator` 的 `panel-copy.ts`：首句人话，原文进 title）。
             // 2026-10-20 复核：常驻 chrome 只有四个字 + 悬停看原因是**刻意的**（用户认可维持现状），
             // 别把它当成"状态栏信息不足"来补长——同一状态只在通知那一处占格。
-            <span className="sb-idx err" title={`索引失败：${stats.indexError}`}>
+            <span className="sb-idx err" data-status-cell="" title={`索引失败：${stats.indexError}`}>
               索引失败
             </span>
           ) : stats.indexing ? (
-            <span className="sb-idx">索引构建中…</span>
+            <span className="sb-idx" data-status-cell="">索引构建中…</span>
           ) : (
-            <span className="sb-idx">
+            <span className="sb-idx" data-status-cell="">
               {stats.fileCount} 文件 · {stats.fnCount} 函数
             </span>
           ))}
@@ -2110,11 +2468,18 @@ export function ShellLayout(props: Props): ReactElement {
           ))}
         {/* PS-6：这三格读的是壳层状态 store（见 `setShellEditorStatus`），
             光标移动只重渲这一枚小叶子，不再掀整壳。没读数 ⇒ 不画（旧口径一致）。 */}
-        <EditorStatusReadout onSwitchEol={onSwitchEol} />
+        <EditorStatusReadout
+          onSwitchEol={onSwitchEol}
+          activeFile={activeFile ?? null}
+          dirty={dirty}
+          encodingActions={statusEncodingActions}
+          onError={(message) => notify({ kind: 'error', message })}
+        />
         {/* 脏读数（C-1a 语义修正）：只读态下「已保存」是误导——这份文件根本走不了保存；
             没有改动时如实说「未修改」。有未保存改动仍显示「未保存」（那是事实）。 */}
         <span
           className={`sb-dirty ${dirty ? 'on' : ''}`}
+          data-status-cell=""
           title={dirty ? '有未保存修改' : writablePill === 'ro' ? '当前文件只读，没有改动' : '已保存'}
         >
           {dirty ? (

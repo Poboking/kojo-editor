@@ -284,11 +284,11 @@ describe('③ 打开入口闸：开关关零副作用，v1-only 阶段显式 blo
     expect(languages.languageForPath(KOJO2_FILE)).toBe(KOJO2_LANGUAGE_ID);
   });
 
-  it('开关关：同一路径仍是 plaintext（没有任何 2.0 面被挂上，逐字旧行为）', async () => {
+  it('开关关：同一路径仍落到 2.0 只读语言面（语言面常开，开关只门控写回/迁移）', async () => {
     stubFlag(false);
     vi.resetModules();
     const languages = await import('../src/monaco/languages');
-    expect(languages.languageForPath(KOJO2_FILE)).toBe('plaintext');
+    expect(languages.languageForPath(KOJO2_FILE)).toBe(KOJO2_LANGUAGE_ID);
     vi.resetModules();
   });
 });

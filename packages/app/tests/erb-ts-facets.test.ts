@@ -993,7 +993,8 @@ const erbDescriptor = (load: () => Promise<unknown>): LanguageDescriptor => ({
 });
 
 function prefEnv(on: boolean): void {
-  const store = new Map<string, string>(on ? [['kojo.ui.treeSitter.v1', 'on']] : []);
+  // TS-DEFAULT 起默认开：要判关必须显式存 off（空表 = 回默认开）
+  const store = new Map<string, string>([['kojo.ui.treeSitter.v1', on ? 'on' : 'off']]);
   (globalThis as unknown as { window: unknown }).window = {
     localStorage: {
       getItem: (k: string) => store.get(k) ?? null,
@@ -1008,7 +1009,7 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe('ERB 结构叠层的闸门 · 默认关零注册 / 开则只挂 ERB', () => {
+describe('ERB 结构叠层的闸门 · 显式关零注册 / 开则只挂 ERB', () => {
   beforeEach(() => {
     clientStub.indentRules = null;
     clientStub.tokens = [];
@@ -1026,7 +1027,8 @@ describe('ERB 结构叠层的闸门 · 默认关零注册 / 开则只挂 ERB', (
     vi.restoreAllMocks();
   });
 
-  it('偏好关：ERB descriptor 也不触发任何 Monaco 注册 / 资源装载', () => {
+  it('偏好显式关：ERB descriptor 也不触发任何 Monaco 注册 / 资源装载', () => {
+    prefEnv(false);
     const calls: string[] = [];
     const make = (path: string): unknown =>
       new Proxy(() => undefined, {

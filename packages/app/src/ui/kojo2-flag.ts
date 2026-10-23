@@ -1,10 +1,21 @@
 /**
- * Kojo 2.0 **预演开关**（K2-EDITOR-WIRE）—— K2-CUTOVER-STAGE 起**由切换阶段派生**。
+ * Kojo 2.0 **切流开关**（K2-EDITOR-WIRE）—— K2-CUTOVER-STAGE 起**由切换阶段派生**；
+ * K2-SURFACE-DEFAULT 起**只管写回 / 迁移 / 切换语义**，不再门控语言面是否可见。
+ *
+ * ## 管什么、不管什么（K2-SURFACE-DEFAULT，批次十 S5）
+ *
+ * - **不管**：`.kojo2` 的**语言面**（Monarch 高亮 / 语言配置 / 括号 / 回车与缩进规则）。
+ *   `monaco/languages.ts` 的 `kojo2` descriptor **无条件登记**，本开关开或关都看得见；
+ * - **管**：有副作用的切流语义——写回 / 保存链路、迁移入口、`.kojo` 的解析器切换
+ *   （`ui/kojo2-open.ts`、`ui/kojo2-migrate-entry.ts`、`ui/kojo2-storage-service.ts` 等）。
+ *
+ * 因此"开关关 ⇒ `.kojo2` 打开是 plaintext"这条旧口径已经作废：关着只意味着**不写回、
+ * 不迁移、不切解析器**，文件照旧按 2.0 词法上色、照旧可读。
  *
  * ## 单源：阶段说了算
  *
  * 真源是 `ui/kojo2-cutover.ts` 的三态阶段（`v1-only → dual → 2.0-default`）：
- * **`stage !== 'v1-only'` 即"2.0 面开启"**。本模块不再自己存一份布尔，只做三件事：
+ * **`stage !== 'v1-only'` 即切流语义开启**（语言面始终可见，见上）。本模块不再自己存一份布尔，只做三件事：
  * ① 把阶段解析出来（{@link resolveKojo2CutoverStage}）；② 给既有 flag 守卫一个稳定的
  * `isKojo2CutoverEnabled()`；③ 变更订阅（设置页改档 ⇒ 语言重挂 / 派生清单即时反映）。
  *
@@ -31,9 +42,10 @@
  *
  * ## 生效时机：装配那一刻
  *
- * `monaco/languages.ts` / 主题 / 诊断接线在**模块求值**时读一次本开关：descriptor 表是
- * 进程级只增表，跨过 `v1-only` 边界后要重载窗口才换表（设置页把这条提示摆在明处）。
- * 已打开的标签另有一条热路：`kojo2-cutover` 的订阅会 `refreshAll()` 重挂 model 语言。
+ * 主题 / 诊断接线等仍在**模块求值**时读一次本开关；已打开的标签另有一条热路：
+ * `kojo2-cutover` 的订阅会 `refreshAll()` 重挂 model 语言。
+ * **语言面不在这一档**（K2-SURFACE-DEFAULT）：`monaco/languages.ts` 的 `kojo2` descriptor
+ * 无条件登记，改开关既不需要重载窗口、也不会把 `.kojo2` 的能力收回去。
  *
  * ## 作者面文案
  *
@@ -59,7 +71,7 @@ import {
  */
 export const KOJO2_CUTOVER_KEY: string = KOJO2_LEGACY_FLAG_KEY;
 
-/** 缺省 = 关（缺省阶段 `v1-only` ⇒ 2.0 面不挂；见模块头「单源」） */
+/** 缺省 = 关（缺省阶段 `v1-only` ⇒ 写回 / 迁移 / 切换语义不启用；语言面不受影响，见模块头） */
 export const KOJO2_CUTOVER_DEFAULT = false;
 
 /** localStorage 访问器（node 测试环境无 window；隐私模式可能抛错——都不该影响编辑器） */
@@ -119,11 +131,14 @@ export function resolveKojo2CutoverStage(): Kojo2CutoverStage {
 }
 
 /**
- * 开关读数 = **阶段是否允许 2.0 面**（`v1-only` = 关，其余两档 = 开）。
+ * 开关读数 = **阶段是否允许 2.0 的切流语义**（`v1-only` = 关，其余两档 = 开）。
  *
  * 语义与改动前逐字兼容（布尔、缺省关、坏值不翻成开），只是判据换成阶段 ⇒ 设置页把档位
- * 切到 `dual` 后，所有既有 flag 守卫（语言面 / 主题 / 诊断 / 预览 / 拖放 / 快速打开）
+ * 切到 `dual` 后，所有既有 flag 守卫（主题 / 诊断 / 预览 / 写回 / 迁移 / 拖放 / 快速打开）
  * **零改动**地跟着放行。
+ *
+ * **语言面不读这里**（K2-SURFACE-DEFAULT）：`.kojo2` 的 descriptor 无条件登记，本读数
+ * 只决定"要不要写回 / 迁移 / 切解析器"。
  */
 export function isKojo2CutoverEnabled(): boolean {
   return kojo2StageAllowsSurface(resolveKojo2CutoverStage());

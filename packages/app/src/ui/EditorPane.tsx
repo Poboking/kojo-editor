@@ -42,6 +42,8 @@ import { CrumbBar } from './breadcrumb-bar';
 import { useNotify } from './NotificationCenter';
 // FMT-TOAST：格式化让路 → 通知中心的那一条订阅（去重与文案都在台账侧，见该文件头注）
 import { subscribeFormatNotices } from './format-notice-ledger';
+// 批次十 S6：大文件档位降级 → 通知中心（去重与文案都在台账侧，见该文件头注）
+import { reportLargeFileTier, subscribeLargeFileNotices } from './large-file-notice';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { applySizeTier, quickSuggestionsFor } from './editor-options';
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
@@ -400,6 +402,12 @@ export function EditorPane({
    * 多枚标签共用一条订阅，同一条让路只上一条 toast；台账按身份计数，关标签不会撤掉别人的）。
    */
   useEffect(() => subscribeFormatNotices(notify), [notify]);
+  /**
+   * 大文件降级必须可见（批次十 S6，铁律 4）：档位一切换就列出这一档关掉了什么。
+   * 去重与文案住在 `ui/large-file-notice.ts`（按 文件 + 档位 + 原文/预览 记一次性台账，
+   * 同文件同档只提示一遍）；这里只订根通知中心那枚 `notify`，三个落档点各报一次。
+   */
+  useEffect(() => subscribeLargeFileNotices(notify), [notify]);
   /**
    * 主题偏好（反馈 3）：dark / light / mint-dark 三档与 `monaco/theme.ts` 的三套主题
    * 一一对应；偏好一变就把 Monaco 全局主题换过去（同页所有编辑器实例一起换）。
@@ -902,6 +910,12 @@ export function EditorPane({
           // 下一份小文件上，且没有第二次机会纠正（切标签那道档位只在**换文件**时发）。
           const restoreLines = restore.getLineCount();
           applySizeTier(ed, restoreLines, tierOverrides(restoreLines, isErbLike(filePathRef.current), undefined, minimapCtxForPath(filePathRef.current)));
+          // 批次十 S6：撤下预览回到原文这一拍同样是"档位切换"——按原文行数报一次降级提示
+          reportLargeFileTier({
+            path: filePathRef.current,
+            lineCount: restoreLines,
+            isErb: isErbLike(filePathRef.current),
+          });
           // 阅读四件套里 `applySizeTier` 覆盖不到的两位（折行模式/行高/偏好折行值都在它的
           // 补丁里，写回同源）：`wordWrapColumn`（阅读栏宽盖过缺省 80）与上下留白
           // （create 路径那份值）——`updateOptions` 只覆写发过去的键，不写回就漂移。
@@ -1118,6 +1132,8 @@ export function EditorPane({
       quickSuggestions: false,
       quickSuggestionsDelay: loadSuggestDelayPref(),
     }, { preview: true }));
+    // 批次十 S6：投影比原文长 ⇒ 可能落到更保守的一档；预览按自己的身份报一次（不替原文吞掉）
+    reportLargeFileTier({ path, lineCount: sugarTierLines, preview: true });
     // 阅读排版（稿纸化）：盖在档位之后——行距 / 折行栏宽 / 上下留白只对这份投影生效，
     // 撤下时由 `clearSugarView`（还原腿）与档位重落路径按正文口径写回。
     ed.updateOptions(sugarReadTypography(loadFontSizePref()));
@@ -2007,6 +2023,8 @@ export function EditorPane({
         quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
         quickSuggestionsDelay: loadSuggestDelayPref(),
       }, minimapCtxForPath(filePath)));
+      // 批次十 S6：落档即报一次（同文件同档由台账去重，切回小文件不打扰）
+      reportLargeFileTier({ path: filePath, lineCount: tierLines, isErb: isErbLike(filePath) });
       // FIND-STATE-PERSIST 覆盖修复②·读拍**排在 setModel 之前**：换 model 那拍会同步触发光标/滚动
       // 快照与 find 的 searchScope 事件，`switchingModelRef` 只拦得住宿主这一路写存，别的实例或
       // 上一拍仍可能先把本文件的记录洗掉 ⇒ 晚一拍读到的就是别人的词。写拍必须在 setModel 之后

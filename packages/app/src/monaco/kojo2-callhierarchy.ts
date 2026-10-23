@@ -1319,6 +1319,154 @@ export function kojo2OutgoingCallsXFile(
   }
 }
 
+/* ============================== 宿主面板取数（批次十） ============================== */
+
+/** 一处调用点（面板行要的中性事实：文件 + 行列；跨文件时带 `data.path` 那一份） */
+export interface Kojo2PanelSite {
+  readonly filePath: string;
+  readonly line: number;
+  readonly column: number;
+}
+
+/** 一组出入边：一个可调用声明 + 它名下的调用点（源码序由纯模型定） */
+export interface Kojo2PanelGroup {
+  readonly name: string;
+  /** 声明所在文件（同文件边 = 当前文件；跨文件边取 item 的 `data.path`） */
+  readonly path: string;
+  /** 声明头行（1 基） */
+  readonly startLine: number;
+  readonly sites: readonly Kojo2PanelSite[];
+}
+
+/** 面板就绪时的全部视图事实（渲染层只画它，不再判语法） */
+export interface Kojo2PanelView {
+  readonly target: { readonly name: string; readonly path: string; readonly line: number };
+  readonly incoming: readonly Kojo2PanelGroup[];
+  readonly outgoing: readonly Kojo2PanelGroup[];
+}
+
+/**
+ * 面板取数结果：就绪 / 两种可见空态 / 两种可见错误态。
+ *
+ * `null` 与 `[]` 的分工沿用纯模型：`not-callable` = 这一格不是可调用声明；
+ * `call-without-declaration` = 这是一次调用，但本文件没有同名声明（跨文件 / 基础库）。
+ */
+export type Kojo2PanelResolution =
+  | { readonly kind: 'ready'; readonly view: Kojo2PanelView }
+  /** 模型已释放 / 取文抛错：读不到源文 */
+  | { readonly kind: 'unreadable' }
+  /** 这一格不是 `@函` / `# 模`（也不是落在本文件的调用位） */
+  | { readonly kind: 'not-callable'; readonly line: number }
+  /** 是调用，但本文件没有同名声明 */
+  | { readonly kind: 'call-without-declaration' }
+  /** provider 认不出刚交回的 item（模型在中途被替换 / 重置） */
+  | { readonly kind: 'stale-item' };
+
+/**
+ * 光标行所在的可调用声明的**声明头名字位**（面板"当前函数"语义的落点）。
+ *
+ * 与 ERB 面板同一口径：光标落在函数体任意一行时，取最内层可调用声明；找不到 ⇒
+ * `null`（交给光标那一格）。块边界只认 AST（`analyzeCallables`），不按缩进猜。
+ */
+function enclosingCallablePosition(
+  source: string,
+  line: number,
+): Kojo2CallHierarchyPosition | null {
+  let best: CallableFact | null = null;
+  for (const callable of analyzeCallables(source)) {
+    if (line < callable.span.startLine || line > callable.span.endLine) continue;
+    if (best === null || callable.line > best.line) best = callable;
+  }
+  return best === null ? null : { line: best.line, column: best.nameStart };
+}
+
+/** 一枚 item + 一组调用点区间 → 面板组（`data.path` 是跨文件键，缺席时落在当前文件） */
+function panelGroupOf(
+  item: Kojo2CallHierarchyItem,
+  ranges: readonly Kojo2CallHierarchyRange[],
+  fallbackPath: string,
+): Kojo2PanelGroup {
+  const path = item.data.path ?? fallbackPath;
+  return {
+    name: item.name,
+    path,
+    startLine: item.data.line,
+    sites: ranges.map((range) => ({
+      filePath: path,
+      line: range.startLine,
+      column: range.startColumn,
+    })),
+  };
+}
+
+/**
+ * 宿主自建面板的取数（"位点 → 可调用声明 → 出入边"；纯搬运，node 可单测）。
+ *
+ * 顺序与 ERB 面板同一口径：
+ * 1. 光标行落在某个 `@函` / `# 模` 的正文（含声明头）⇒ 取**该声明**；
+ * 2. 否则按光标那一格问 provider（声明名字段 / 调用位）；
+ * 3. `null` = 不是可调用声明，`[]` = 是调用但本文件没有同名声明（两个可见态分开）。
+ *
+ * provider 自带 try/catch（prepare ⇒ `null`、边 ⇒ `[]`）；本层只在边为 `null` 时判
+ * `stale-item`（刚交回的 item 认不出 = 模型中途换了），不拿名字瞎猜。
+ */
+export function resolveKojo2CallHierarchy(
+  model: Monaco.editor.ITextModel,
+  request: {
+    readonly line: number;
+    readonly column?: number;
+    /** 请求文件（目标 item 没有 `data.path` 时的落点） */
+    readonly path?: string;
+  },
+  provider: Kojo2CallHierarchyProvider = createKojo2CallHierarchyProvider(),
+): Kojo2PanelResolution {
+  const source = sourceOf(model);
+  if (source === null) return { kind: 'unreadable' };
+
+  const fallbackPath = pathOfValue(request.path) ?? '';
+  let item: Kojo2CallHierarchyItem | null = null;
+  let sawCallSyntax = false;
+
+  const enclosing = enclosingCallablePosition(source, request.line);
+  if (enclosing !== null) {
+    const prepared = provider.prepareCallHierarchy(model, {
+      lineNumber: enclosing.line,
+      column: enclosing.column,
+    } as Monaco.Position);
+    if (prepared !== null && prepared.length > 0) item = prepared[0] ?? null;
+  }
+  if (item === null) {
+    const prepared = provider.prepareCallHierarchy(model, {
+      lineNumber: request.line,
+      column: request.column !== undefined && request.column >= 1 ? request.column : 1,
+    } as Monaco.Position);
+    if (prepared !== null && prepared.length > 0) item = prepared[0] ?? null;
+    else if (prepared !== null) sawCallSyntax = true;
+  }
+  if (item === null) {
+    return sawCallSyntax
+      ? { kind: 'call-without-declaration' }
+      : { kind: 'not-callable', line: request.line };
+  }
+
+  const incoming = provider.provideCallHierarchyIncomingCalls(model, item);
+  const outgoing = provider.provideCallHierarchyOutgoingCalls(model, item);
+  if (incoming === null || outgoing === null) return { kind: 'stale-item' };
+
+  return {
+    kind: 'ready',
+    view: {
+      target: {
+        name: item.name,
+        path: item.data.path ?? fallbackPath,
+        line: item.data.line,
+      },
+      incoming: incoming.map((group) => panelGroupOf(group.from, group.fromRanges, fallbackPath)),
+      outgoing: outgoing.map((group) => panelGroupOf(group.to, group.fromRanges, fallbackPath)),
+    },
+  };
+}
+
 /* ============================== Monaco 面 ============================== */
 
 /** 取整篇源文；取不到（模型已释放 / 桩 model）⇒ `null`（provider 给空结果） */
@@ -1335,10 +1483,17 @@ function sourceOf(model: Monaco.editor.ITextModel): string | null {
 /**
  * 调用层级 provider（导出给宿主自建面板 / 未来上游 API 共用；**不依赖 Monaco 运行时**）。
  *
+ * `resolvers` 是 additive 注入（批次十 S18：项目索引批的
+ * `createKojo2ProjectCallHierarchyResolvers`）：给了就把入边 / 出边换成跨文件口
+ * （`kojo2IncomingCallsXFile` / `kojo2OutgoingCallsXFile`），当前文件源文仍取 model 的
+ * 未保存文本；不给 ⇒ 与批次八逐字相同（只走同文件）。
+ *
  * 三条腿都自带 try/catch：任何一条抛错只让**那一轮**回空（prepare ⇒ `null`，
  * 入边 / 出边 ⇒ `[]`），不把异常送进 Monaco 的吞异常通道。
  */
-export function createKojo2CallHierarchyProvider(): Kojo2CallHierarchyProvider {
+export function createKojo2CallHierarchyProvider(
+  resolvers?: Kojo2CallHierarchyResolvers | null,
+): Kojo2CallHierarchyProvider {
   return {
     displayName: 'kojo2',
     prepareCallHierarchy(model, position) {
@@ -1357,6 +1512,9 @@ export function createKojo2CallHierarchyProvider(): Kojo2CallHierarchyProvider {
       const source = sourceOf(model);
       if (source === null) return [];
       try {
+        if (resolvers !== undefined && resolvers !== null) {
+          return kojo2IncomingCallsXFile(item, resolvers, { source });
+        }
         return kojo2IncomingCalls(source, item);
       } catch {
         return [];
@@ -1366,6 +1524,9 @@ export function createKojo2CallHierarchyProvider(): Kojo2CallHierarchyProvider {
       const source = sourceOf(model);
       if (source === null) return [];
       try {
+        if (resolvers !== undefined && resolvers !== null) {
+          return kojo2OutgoingCallsXFile(item, resolvers, { source });
+        }
         return kojo2OutgoingCalls(source, item);
       } catch {
         return [];
@@ -1413,6 +1574,7 @@ function callHierarchyRegistrarOf(monaco: typeof Monaco): CallHierarchyRegistrar
  */
 export function installKojo2CallHierarchyProvider(
   monaco: typeof Monaco,
+  resolvers?: Kojo2CallHierarchyResolvers | null,
 ): Monaco.IDisposable {
   if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
   const registrar = callHierarchyRegistrarOf(monaco);
@@ -1420,7 +1582,7 @@ export function installKojo2CallHierarchyProvider(
 
   const registration = registrar.registerCallHierarchyProvider(
     KOJO2_LANGUAGE_ID,
-    createKojo2CallHierarchyProvider(),
+    createKojo2CallHierarchyProvider(resolvers),
   );
   let disposed = false;
   return {

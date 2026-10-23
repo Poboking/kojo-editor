@@ -21,15 +21,23 @@ import {
 import { applyPanelRowNav } from './panel-row-nav';
 import {
   ALL_SEVERITIES,
-  collectRowFix,
+  filterOfPrefs,
   filterProblems,
   groupProblems,
+  isFiltering,
+  loadProblemFilterPrefs,
+  saveProblemFilterPrefs,
+  sourceOptions,
+  type ProblemFilterPrefs,
+  type ProblemSeverity,
+} from './problem-filter';
+import {
+  collectRowFix,
   planLineEdits,
   problemCopyText,
   problemLineDecoration,
   readProblemFixHost,
   rowFixKey,
-  type ProblemSeverity,
 } from './problem-fix';
 import {
   COPY_ALL_DISABLED_REASON,
@@ -58,9 +66,11 @@ import './context-menu-search.css';
  *    过滤后序列的首次出现序（判据与理由见 `groupProblems`）。折叠是**纯视觉**：
  *    渲染窗口按全局过滤序列裁剪，不因折叠而重排——折叠的组少画几行，窗口推进
  *    的口径不变（哨兵数字永远说的是全局序列）。
- * 2. **过滤**：严重级多选 + 文本子串（判据在 `filterProblems`；默认全开 + 空文本 =
- *    与旧版逐字一致）。过滤条件一变，窗口回到首帧上界（换了一把尺就重新从第一屏
- *    看起，旧窗口深度对新结果没有意义）。
+ * 2. **过滤**：严重级多选 + 来源（单选，来源清单见 `sourceOptions`）+ 文本子串（判据在
+ *    `filterProblems`；默认全开 + 全部来源 + 空文本 = 与旧版逐字一致）。过滤条件一变，
+ *    窗口回到首帧上界（换了一把尺就重新从第一屏看起，旧窗口深度对新结果没有意义）。
+ *    **条件会被记住**（S14）：`saveProblemFilterPrefs` / `loadProblemFilterPrefs` 走壳层
+ *    localStorage（`kojo.ui.problemFilter.v1`），无 window / 坏值一律回默认、绝不抛。
  * 3. **行内 fix**：**唯一解才给按钮**（判据＝`collectRowFix`，与 💡 的 `isPreferred`
  *    同一条底座）；点击直接落地（改写计划 `planLineEdits` → 宿主座 `applyRowFix`，
  *    一次编辑调用 = 一个撤销步）。本面板**不出预览 diff**——预览是 💡 那条路的判据
@@ -95,6 +105,12 @@ const SEVERITY_LABEL: Record<ProblemSeverity, string> = {
   warning: '警告',
   info: '提示',
 };
+
+/**
+ * 来源下拉里「全部来源」的哨兵值：与「未标注来源」的键 `''` 必须分开——
+ * 两个选项共用一个空值，选中哪个都是同一份 DOM 值，过滤就再也切不回全部。
+ */
+const ALL_SOURCES_VALUE = '\u0000all';
 
 /**
  * 问题列表的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"）。
@@ -140,10 +156,14 @@ export function ProblemPanel({
   const items = useProblems();
   /** 本次窗口能盖到第几条（`nextWindow` 的产物；没点过哨兵 = 首帧上界） */
   const [windowEnd, setWindowEnd] = useState<number>(PROBLEM_WINDOW.initial);
-  /** 严重级过滤（缺省全开 = 旧口径）；切换产生新数组，作 effect 依赖正合适 */
-  const [sevSel, setSevSel] = useState<readonly ProblemSeverity[]>(ALL_SEVERITIES);
-  /** 文本过滤（空串 = 不过滤） */
-  const [filterText, setFilterText] = useState<string>('');
+  /**
+   * 过滤条件（严重级 + 来源 + 文本；S14 起整体持久化）。
+   * 初值从壳层 localStorage 读（缺省 = 全开 / 全部来源 / 空文本 = 旧口径）。
+   */
+  const [filterPrefs, setFilterPrefs] = useState<ProblemFilterPrefs>(() => loadProblemFilterPrefs());
+  const sevSel = filterPrefs.severities;
+  const sourceSel = filterPrefs.source;
+  const filterText = filterPrefs.text;
   /** 折叠的组（键 = 完整路径；纯视觉，见窗口注） */
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   /** 行级反馈（复制 / 修复的成败，1.8s 自动收起；不静默） */
@@ -157,7 +177,12 @@ export function ProblemPanel({
   // 过滤尺一换，窗口回到首帧上界（旧深度对新结果没有意义）
   useEffect(() => {
     setWindowEnd(PROBLEM_WINDOW.initial);
-  }, [filterText, sevSel]);
+  }, [filterPrefs]);
+
+  // 过滤条件持久化（S14）：选择一变就记一笔，下次打开沿同一把尺；写不进去静默降级
+  useEffect(() => {
+    saveProblemFilterPrefs(filterPrefs);
+  }, [filterPrefs]);
 
   useEffect(
     () => () => {
@@ -176,13 +201,20 @@ export function ProblemPanel({
       ? ({ kind: 'empty' } as const)
       : ({ kind: 'counts', error, warning, info } as const);
 
-  const filtered = filterProblems(items, { severities: new Set(sevSel), text: filterText });
+  /** 面板态 → 纯判据（严重级集合 / 来源集合 / 文本；判据全在 `problem-filter`） */
+  const activeFilter = filterOfPrefs(filterPrefs);
+  const filtered = filterProblems(items, activeFilter);
   const shownCount = windowSize(filtered.length, windowEnd, PROBLEM_WINDOW);
   const hidden = filtered.length - shownCount;
   const groups = groupProblems(filtered);
   /** 组头数字走同一份派生（键 = 原始路径，与 `groupProblems` 的组键逐字同形） */
   const filteredSummary = summarizeProblems(filtered);
-  const filtering = filterText.trim() !== '' || sevSel.length !== ALL_SEVERITIES.length;
+  const filtering = isFiltering(activeFilter);
+  /** 来源过滤下拉的选项（序 = 首次出现序；来源只有一种时不给下拉——没有第二个选项的开关是噪音） */
+  const srcOpts = sourceOptions(items);
+  const clearFilter = (): void => {
+    setFilterPrefs({ severities: ALL_SEVERITIES, source: null, text: '' });
+  };
 
   const showFlash = (key: string, text: string): void => {
     setFlash({ key, text });
@@ -297,12 +329,6 @@ export function ProblemPanel({
     writeClipboard('panel', items.map((p) => problemCopyText(p)).join('\n'), `已复制 ${items.length} 条问题`);
   };
 
-  /** 清除过滤：严重级回全开 + 清空文本（过滤尺一变，既有的窗口复位 effect 会跟上） */
-  const clearFilter = (): void => {
-    setSevSel(ALL_SEVERITIES);
-    setFilterText('');
-  };
-
   /** 菜单里的快速修复：与行内「修复」按钮同一条判据与落地路径 */
   const quickFixProblem = (p: EditorProblem): void => {
     const action = rowFixAction(p);
@@ -333,7 +359,8 @@ export function ProblemPanel({
         reveal: (p) => onReveal(p.path, p.line, problemRevealSpan(p)),
         quickFix: quickFixProblem,
         copyProblem,
-        filterByCode: (code) => setFilterText(code),
+        // 「按此码过滤」只改文本这一维（严重级 / 来源保持原样：菜单项说的是码，不是整把尺）
+        filterByCode: (code) => setFilterPrefs((cur) => ({ ...cur, text: code })),
         copyAll: copyAllProblems,
         clearFilter,
       },
@@ -427,6 +454,9 @@ export function ProblemPanel({
       // 行导航（1020 编辑器体感批）：↑↓ 逐条看，F8/Shift+F8 跳过去并当场打开。
       // 焦点在编辑器里时这一对键仍归 Monaco 的 `marker.nextInFiles`（见「键盘快捷键」页的内建组）；
       // 焦点落到本面板时由这里按**过滤后的可见列表**代跳——被筛掉的条不该用键跳过去。
+      // 回车定位不另接线：每一行本身就是 `<button data-panel-row>`，焦点在行上时
+      // Enter / Space 由浏览器的按钮语义直接触发它的 `onClick`（同一条跳源通道），
+      // 这里再补一次 click 反而会跳两回。
       onKeyDown={(e) => {
         applyPanelRowNav(listRef.current, e);
       }}
@@ -459,26 +489,57 @@ export function ProblemPanel({
                   type="checkbox"
                   checked={sevSel.includes(s)}
                   onChange={() =>
-                    setSevSel((cur) =>
-                      cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s],
-                    )
+                    setFilterPrefs((cur) => ({
+                      ...cur,
+                      // 回填按契约固定序（勾选/取消都不重排工具条上的三个开关）
+                      severities: cur.severities.includes(s)
+                        ? cur.severities.filter((x) => x !== s)
+                        : ALL_SEVERITIES.filter((x) => x === s || cur.severities.includes(x)),
+                    }))
                   }
                 />
                 <span style={{ color: SEVERITY_COLOR[s] }}>{SEVERITY_LABEL[s]}</span>
               </label>
             ))}
+            {srcOpts.length > 1 ? (
+              // 来源过滤（S14）：单一来源时不给下拉——只有一个选项的开关是噪音
+              <select
+                className="prob-filter"
+                aria-label="按诊断来源过滤问题"
+                title="按诊断来源过滤"
+                value={sourceSel === null ? ALL_SOURCES_VALUE : sourceSel}
+                onChange={(e) =>
+                  setFilterPrefs((cur) => ({
+                    ...cur,
+                    source: e.target.value === ALL_SOURCES_VALUE ? null : e.target.value,
+                  }))
+                }
+              >
+                <option value={ALL_SOURCES_VALUE}>全部来源</option>
+                {srcOpts.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}（{o.count}）
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <input
               className="prob-filter"
               type="text"
               value={filterText}
-              placeholder="过滤：消息或诊断码…"
-              aria-label="按消息或诊断码过滤问题"
-              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="过滤：消息 / 诊断码 / 来源 / 路径…"
+              aria-label="按消息、诊断码、来源或路径过滤问题"
+              onChange={(e) => setFilterPrefs((cur) => ({ ...cur, text: e.target.value }))}
             />
             {filtering ? (
-              <span className="prob-filtered-count dim">
-                筛出 {filtered.length}/{items.length}
-              </span>
+              <>
+                <span className="prob-filtered-count dim">
+                  筛出 {filtered.length}/{items.length}
+                </span>
+                <button type="button" className="ghost small" onClick={clearFilter}>
+                  清除过滤
+                </button>
+              </>
             ) : null}
           </div>
         </>
@@ -486,9 +547,10 @@ export function ProblemPanel({
 
       {filtered.length === 0 ? (
         items.length > 0 ? (
-          // 过滤把所有条目筛光了：直说，不留一片"看起来空了"的谜（铁律 4）
+          // 过滤把所有条目筛光了：直说，不留一片"看起来空了"的谜（铁律 4）。
+          // 与"根本没有问题"是两种空态：这里是「过滤后无结果」，顶部还有一枚「清除过滤」。
           <div className="conv-empty dim">
-            没有匹配过滤条件的问题（{items.length} 条被过滤隐藏）
+            没有匹配过滤条件的问题（{items.length} 条被过滤隐藏，点「清除过滤」回到全部）
           </div>
         ) : null
       ) : (
@@ -580,7 +642,7 @@ export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactE
 
   if (items.length === 0) {
     return (
-      <button className="sb-problems" title={PROBLEM_SCOPE.title} onClick={onClick}>
+      <button className="sb-problems" data-status-cell="" title={PROBLEM_SCOPE.title} onClick={onClick}>
         {/* 可见范围标签：同排左边那枚是「项目」（插件的 `.sb-diag`，标签由 CSS 补），
             这一枚数的是**已打开文件**的波浪线——不悬停也该一眼分清，中间由 CSS 画一道分隔。 */}
         <span className="sb-scope-tag">{PROBLEM_SCOPE.label}</span>
@@ -590,7 +652,7 @@ export function ProblemsStatusItem({ onClick }: { onClick: () => void }): ReactE
   }
 
   return (
-    <button className="sb-problems" title={PROBLEM_SCOPE.title} onClick={onClick}>
+    <button className="sb-problems" data-status-cell="" title={PROBLEM_SCOPE.title} onClick={onClick}>
       <span className="sb-scope-tag">{PROBLEM_SCOPE.label}</span>
       <span className="sb-problems-item" style={error > 0 ? { color: SEVERITY_COLOR.error } : undefined}>
         ✕ {error}

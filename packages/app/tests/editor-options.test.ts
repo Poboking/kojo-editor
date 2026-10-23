@@ -109,8 +109,9 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
       highlightActiveIndentation: false,
     });
     expect(o.minimap).toEqual({ enabled: false });
-    // 导航面到 huge 才真的关（99 万行级盘上缩略图逐行算色块、吸顶每次滚动重排可见区）
-    expect(o.stickyScroll).toEqual({ enabled: false });
+    // 2026-10-23 重估（批次十 S6）：吸顶与折叠属低成本项（只按可见区间 / 内容版本算），
+    // huge 档保留；继承 large 的"少贴一行"
+    expect(o.stickyScroll).toEqual({ enabled: true, maxLineCount: 3 });
     // huge 继承 large 的全部降级（不是"回到默认"）
     expect(o.occurrencesHighlight).toBe('off');
     expect(o.smoothScrolling).toBe(false);
@@ -133,14 +134,17 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
   });
 
   it('切回小文件可恢复（同一个函数既给降级也给还原，切标签不会"降级卡死"）', () => {
-    // 缩略图：large 仍是廉价模式，只有 huge 才关；吸顶同样只在 huge 关
+    // 缩略图：large 仍是廉价模式，只有 huge 才关；吸顶在 huge 保留（重估后与 large 同值）
     expect(editorOptionsForLineCount(LARGE_FILE_LINES).minimap).toEqual({
       enabled: true,
       renderCharacters: false,
       maxColumn: 72,
     });
     expect(editorOptionsForLineCount(HUGE_FILE_LINES).minimap).toEqual({ enabled: false });
-    expect(editorOptionsForLineCount(HUGE_FILE_LINES).stickyScroll).toEqual({ enabled: false });
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).stickyScroll).toEqual({
+      enabled: true,
+      maxLineCount: 3,
+    });
     expect(editorOptionsForLineCount(100).minimap).toEqual({
       enabled: true,
       renderCharacters: false,
@@ -231,7 +235,8 @@ describe('find 体验基线（A7）', () => {
 /**
  * 排版偏好叠层（P2-16）：折行三选一 + 多光标修饰键 + 列选择。
  *
- * 钉三件事：① 缺省偏好下与今天**逐字一致**（wordWrap on/on/off；两个新键的缺省值
+ * 钉三件事：① 缺省偏好下与今天**逐字一致**（wordWrap 三档同开——2026-10-23 重估后
+ * huge 也不再强制关；两个新键的缺省值
  * 就是 Monaco 的注册缺省行为——ctrlCmd / false）；② 偏好作为 override **叠在档位表
  * 之后**：「跟随体量档」= 档位表自己的值（等价于不传 override），「强制开 / 强制关」
  * = 盖在表上，huge 档也拦不住用户明说的选择；③ `editorOptionsForLineCount` **现读**
@@ -260,12 +265,12 @@ const stubWindow = (storage: Storage | undefined): void => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('排版偏好叠层（P2-16）', () => {
-  it('layoutPrefPatch：跟随档 = 档位表自己的值（small/large 开、huge 关）', () => {
+  it('layoutPrefPatch：跟随档 = 档位表自己的值（三档同开；huge 不再强制关折行）', () => {
     const tier: LayoutPref = { wordWrap: 'tier', multiCursorModifier: 'ctrlCmd', columnSelection: false };
     expect(layoutPrefPatch(500, tier).wordWrap).toBe('on');
     expect(layoutPrefPatch(LARGE_FILE_LINES, tier).wordWrap).toBe('on');
-    expect(layoutPrefPatch(HUGE_FILE_LINES, tier).wordWrap).toBe('off');
-    expect(layoutPrefPatch(990_000, tier).wordWrap).toBe('off');
+    expect(layoutPrefPatch(HUGE_FILE_LINES, tier).wordWrap).toBe('on');
+    expect(layoutPrefPatch(990_000, tier).wordWrap).toBe('on');
   });
 
   it('layoutPrefPatch：强制开 / 强制关盖在档位表之后（huge 也拦不住明说的选择）', () => {
@@ -282,11 +287,11 @@ describe('排版偏好叠层（P2-16）', () => {
     expect(p.columnSelection).toBe(true);
   });
 
-  it('缺省偏好下 editorOptionsForLineCount 与今天逐字一致：wordWrap on/on/off，新键 = Monaco 缺省行为', () => {
+  it('缺省偏好下 editorOptionsForLineCount 与今天逐字一致：wordWrap 三档同开，新键 = Monaco 缺省行为', () => {
     // node 环境无 window ⇒ loadLayoutPref() 恒回缺省（LAYOUT_PREF_DEFAULT）
     expect(editorOptionsForLineCount(500).wordWrap).toBe('on');
     expect(editorOptionsForLineCount(LARGE_FILE_LINES).wordWrap).toBe('on');
-    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('on');
     for (const n of [1, 4_999, LARGE_FILE_LINES, HUGE_FILE_LINES, 990_000]) {
       const o = editorOptionsForLineCount(n);
       expect(o.multiCursorModifier, String(n)).toBe(LAYOUT_PREF_DEFAULT.multiCursorModifier);
@@ -300,9 +305,9 @@ describe('排版偏好叠层（P2-16）', () => {
     expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
     stubWindow(fakeStorage({ 'kojo.ui.layout.wordWrap.v1': 'on' }));
     expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('on');
-    // 存坏的值不猜：回落缺省（跟随档 ⇒ huge 仍 off）
+    // 存坏的值不猜：回落缺省（跟随档 ⇒ huge 也开）
     stubWindow(fakeStorage({ 'kojo.ui.layout.wordWrap.v1': 'garbage' }));
-    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('off');
+    expect(editorOptionsForLineCount(HUGE_FILE_LINES).wordWrap).toBe('on');
     expect(editorOptionsForLineCount(100).wordWrap).toBe('on');
   });
 });

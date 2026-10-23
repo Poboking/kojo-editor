@@ -659,6 +659,7 @@ describe('浮窗面 / 活动栏面 / 状态栏面：DOM 认人', () => {
     footer.setAttribute('data-context-surface', 'status-bar');
     const cell = document.createElement('span');
     cell.className = 'sb-editor';
+    cell.setAttribute('data-status-cell', '');
     cell.textContent = 'UTF-8 · LF · 12 行';
     footer.appendChild(cell);
     document.body.appendChild(footer);
@@ -730,6 +731,46 @@ describe('源码守门：面根与数据锚点必须在位', () => {
   it('通知中心的容器面根与逐条 id 锚点', () => {
     expect(notifications).toContain('data-context-surface="notification"');
     expect(notifications).toContain('data-notice-id={n.id}');
+  });
+
+  it('状态栏每一格都打了 `data-status-cell`（漏打 = 右键落到兜底菜单，运行期不报错）', () => {
+    // 判据必须是显式标记、不能是类名枚举：2026-10-23 批次十给状态栏加了语言模式 / 缩进 /
+    // 编码三格，旧的 `.sb-editor, .sb-idx, …` 六类清单把它们全漏在菜单外。这条守门按
+    // 「凡是长得像读数格的类名，附近就必须有标记」扫——抓的是"新增一格忘了打标记"。
+    const sources = [
+      ['ShellLayout.tsx', shell],
+      ['ProblemPanel.tsx', read('../src/ui/ProblemPanel.tsx')],
+      ['PanelHost.tsx', read('../src/ui/PanelHost.tsx')],
+    ] as const;
+    /** 容器 / 弹层 / 装饰件：不是"可复制的一格"，本来就不该有标记 */
+    const NOT_A_CELL = new Set([
+      'sb-left',
+      'sb-right',
+      'sb-eol-wrap',
+      'sb-eol-menu',
+      'sb-eol-item',
+      'sb-eol-note',
+      'sb-problems-item',
+      'sb-scope-tag',
+    ]);
+    const misses: string[] = [];
+    for (const [name, src] of sources) {
+      for (const m of src.matchAll(/className="((?:sb-[^"]*)?)"/g)) {
+        const tokens = (m[1] ?? '').split(/\s+/).filter((t) => t.startsWith('sb-'));
+        if (tokens.length === 0) continue;
+        if (tokens.every((t) => NOT_A_CELL.has(t))) continue;
+        // 标记就在同一个开标签里：类名前后 250 字符内必须能看见它
+        const from = Math.max(0, (m.index ?? 0) - 250);
+        const window = src.slice(from, (m.index ?? 0) + 250);
+        if (!window.includes('data-status-cell')) {
+          misses.push(`${name}: className="${m[1] ?? ''}"`);
+        }
+      }
+    }
+    expect(misses).toEqual([]);
+    // 选择器本身也不许退回类名枚举（判据只有一处，改了这里就该有人来看这条注释）
+    const shellMenu = read('../src/ui/context-menu-shell.ts');
+    expect(shellMenu).toContain("const STATUS_CELL_SELECTOR = '[data-status-cell]';");
   });
 
   it('浮层初值公式只有一份（floatPanel 与「重置位置与尺寸」共用 defaultFloatRect）', () => {

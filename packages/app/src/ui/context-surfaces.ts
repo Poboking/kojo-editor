@@ -77,11 +77,11 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
   // ---- 面板与浮窗 ----
   { id: 'search-results', ariaLabel: '搜索结果菜单', area: 'panel' },
   { id: 'problems', ariaLabel: '问题面板菜单', area: 'panel' },
-  // 这里**没有** `outline`：本仓库不存在大纲面板。`language-capabilities.ts` 里的 `Outline`
-  // 只是语言能力枚举，`document-symbols.ts` 是符号提供者，都没有对应的面板视图（口上导航是
-  // `ui-kojo-navigator` 的面列表，不是大纲）。按铁律 4「能力不存在 ⇒ 整项不显示」——登记一个
-  // 永远没有宿主的面等于在清单里伪造能力，契约测试也会被迫为它开豁免。将来真有大纲面板时
-  // 回来加这一行并挂面属性即可。
+  // `outline`：批次十（2026-10-23 S9）落了侧栏大纲面板 `ui/OutlinePanel.tsx`，本批补面。
+  // 此前那一轮**确实**没有宿主——`language-capabilities.ts` 的 `Outline` 只是语言能力枚举、
+  // `document-symbols.ts` 只是符号提供者，登记它等于在清单里伪造能力，故当时移出。
+  // 判据始终是"有没有宿主"，不是"曾经删没删过"：宿主回来了，这一行就回来。
+  { id: 'outline', ariaLabel: '大纲菜单', area: 'panel' },
   { id: 'call-hierarchy', ariaLabel: '调用层级菜单', area: 'panel' },
   { id: 'file-history', ariaLabel: '文件历史菜单', area: 'panel' },
   { id: 'ops-history', ariaLabel: '操作历史菜单', area: 'panel' },

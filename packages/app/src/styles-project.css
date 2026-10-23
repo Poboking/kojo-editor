@@ -3492,7 +3492,10 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
 }
-.sb-editor {
+/* `.sb-eol-note`：状态栏弹层里的那句提示（"读取编码清单…"）。**不是一格读数**，
+   所以不复用 `.sb-editor`——那个类名现在已经等于"可右键复制的一格"。 */
+.sb-editor,
+.sb-eol-note {
   color: var(--fg-dim);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;

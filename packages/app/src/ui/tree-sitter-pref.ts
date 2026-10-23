@@ -1,19 +1,27 @@
 import { useSyncExternalStore } from 'react';
 /**
- * 「结构解析器辅助」偏好（TSIT-M1，2026-10-19 结构层接线批）：**默认关**。
+ * 「结构解析器辅助」偏好（TSIT-M1 接线；批次十 TS-DEFAULT：**默认开**）。
  *
  * 存法照 `semantic-color-pref.ts` / `code-lens-pref.ts` 先例 —— localStorage 真源 +
  * 订阅表，**不新造第二套偏好机制**；设置页一翻，`monaco/tree-sitter/providers.ts`
  * 那枚单例就挂/卸 provider，不重开文件、不重开编辑器。
  *
- * ## 为什么必须默认关（三条都在纸上，不是"新功能都关一遍"的惯性）
+ * ## 为什么现在默认开（原先"默认关"的三条理由都已被后续批次消解）
  *
- * 1. 它**换的是着色与折叠的判据**：同开时结构层的档位会盖在词法层上（Monaco 的语义
- *    token 在覆盖区间优先），作者看惯的配色会跟着动——与「定义与调用的名字分色」同一条理由。
- * 2. 语法层（`@kojo/kojo-syntax-tree`）此刻还在补覆盖与错误恢复，规则表未收口；
- *    判据没稳之前不该成为任何人的默认视图。
- * 3. 载入的是**另一枚 WASM + 一枚 worker**：关着时不该有一字节进主线程静态图，
- *    也不该 spawn 任何线程（装配点用动态 import 守这条，见 `monaco/entry.ts`）。
+ * 1. 结构层是**叠层不是替换**：着色只在真有结果时覆盖区间，折叠是增量，缩进只在真的
+ *    给出规则时才写；拿不到结果一律 `null` / `[]`，Monarch 与转译器那一路逐字不变。
+ * 2. **失败不静默**：worker 起不来 / 超时 / 解析抛错都经 `tree-sitter/fallback.ts`
+ *    台账说一次再回落（`tests/tree-sitter-default.test.ts` 钉这条）。
+ * 3. **大文件有独立闸**：超过 `LARGE_FILE_LINES` 时结构层直接让路、保持回落，
+ *    与语义着色同一档（见 `providers.ts` 的 `STRUCTURE_MAX_LINES`）。
+ *
+ * 资源仍按需装配：`providers.ts` 在 `activate()` 里动态 import，worker 与 wasm 只在
+ * 真的被问到一篇文档时才起——默认开不等于开机就 spawn 线程。
+ *
+ * ## 关掉的方向
+ *
+ * 只有**明确存过 `off`** 才算关；没存过 / 读不到 / 抛错一律回默认（开）。
+ * 脏数据的方向是"多露"而不是"少露"——作者显式关掉的那次必须真的关。
  *
  * ## 作者面文案不许出现机器词
  *
@@ -25,8 +33,8 @@ import { useSyncExternalStore } from 'react';
 /** 偏好键（localStorage；与 `kojo.ui.*.v1` 同一套命名） */
 const PREF_KEY = 'kojo.ui.treeSitter.v1';
 
-/** 缺省 = 关（见模块头「为什么必须默认关」） */
-export const TREE_SITTER_DEFAULT = false;
+/** 缺省 = 开（见模块头「为什么现在默认开」；只有显式 `off` 才算关） */
+export const TREE_SITTER_DEFAULT = true;
 
 /** localStorage 访问器（node 测试环境无 window；隐私模式可能抛错——都不该影响编辑器） */
 function storage(): Storage | null {
@@ -37,12 +45,12 @@ function storage(): Storage | null {
   }
 }
 
-/** 读偏好（只有明确存过 `on` 才算开；读不到 / 抛错一律回默认，绝不抛进渲染链） */
+/** 读偏好（只有明确存过 `off` 才算关；没存过 / 读不到 / 抛错一律回默认开） */
 export function loadTreeSitterPref(): boolean {
   const s = storage();
   if (!s) return TREE_SITTER_DEFAULT;
   try {
-    return s.getItem(PREF_KEY) === 'on';
+    return s.getItem(PREF_KEY) !== 'off';
   } catch {
     return TREE_SITTER_DEFAULT;
   }
@@ -56,8 +64,8 @@ export function setTreeSitterPref(on: boolean): void {
   const s = storage();
   if (s) {
     try {
-      if (on) s.setItem(PREF_KEY, 'on');
-      else s.removeItem(PREF_KEY);
+      // 两个方向都显式落值：缺省是开，只有写下的 `off` 才能跨重启保持关
+      s.setItem(PREF_KEY, on ? 'on' : 'off');
     } catch {
       /* 隐私模式 / 配额满：按"本次会话有效"降级 */
     }

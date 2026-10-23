@@ -43,6 +43,8 @@ import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
 import { callArgumentHints, inlaySlotsOf } from './inlay-hints';
+import { arityParamsOf, collectArityDiagnostics, type ArityCatalog } from './arity';
+import { collectUndefinedNameDiagnostics, type UndefinedNameDiagnosticsInput } from './undefined-name';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -156,6 +158,183 @@ const REFS_WINDOW = 4;
 
 /** 一趟批量读的产出形态（失败位 null，与逐文件 readText 抛错同语义面） */
 type BatchTexts = Awaited<ReturnType<FileIO['readTexts']>>;
+
+/* ---------------- 语义诊断接线（批次十 S19） ----------------
+
+   两个纯模块（`arity.ts` / `undefined-name.ts`）此前只有单元测试消费，没进任何诊断
+   出口 ⇒ 作者看不到。这里把它们并成**一个装饰贡献**（与结构波浪线 / 未定义 CALL 目标
+   同槽、order 22）：同一文件的两路产出统一去重、稳定排序，再交给宿主上屏。
+
+   接线层的两处取舍（都以真语料读数为据，2026-10-23）：
+
+   1. **实参个数只保留「多给」一档，并统一降到 warning。**
+      真语料 4,542 文件抽样：少给 41,924 条 + 省略可选 14,536 条、多给仅 58 条。
+      Emuera 对少给是**合法**的（缺省按 0 / 空串兜底，函数照样跑），把它画成 error
+      等于满屏假红；只有「多出的实参不会传给函数」是引擎明确会报的错。宁 warning
+      不 error —— 确定性事实仍要看得见，但不抢 error 预算。
+   2. **未定义名默认不启用。**
+      同一语料在「工程全量 #DIM/#DIMS 已知集」下仍产 2,065 条 warning，抽样绝大多数
+      是引擎变量族头作 `GETNUM(TALENT, …)` 实参、以及赋值右侧的无引号文本（词法上
+      与变量不可区分）——adapter 的变量名录还没接进这一层，先默认关闭比满屏误报好。
+      开关是模块常量；打开后仍走同一去重/排序，宿主问题面板可正常筛 `ERB_UNDEFINED_NAME`。
+
+   规则抛错不在本层吞掉（铁律四）：逐规则 try/catch 收集 `failedRules`，既写
+   `ctx.log.warn`（技术侧），又上一条 `ERB_DIAGNOSTICS_RULE_FAILED` warning（作者侧
+   看得见"这一路本轮没算成"），其余规则的结果照常上屏。 */
+
+/** 实参「多给」的稳定文案标记（`arity.ts` 的三种消息里只这一档是可证错误） */
+const ARITY_EXTRA_ARG_MARKER = '多出的实参';
+
+/** 规则执行失败的可读诊断码（问题面板可定位；不改写既有两码） */
+export const ERB_DIAGNOSTICS_RULE_FAILED = 'ERB_DIAGNOSTICS_RULE_FAILED';
+
+/**
+ * 未定义名诊断是否默认启用。
+ *
+ * false 的理由见上方接线注②；打开只需改这里（或调用
+ * `collectErbSemanticDiagnostics` 时显式传 `enableUndefinedNames`）。
+ */
+export const UNDEFINED_NAME_DIAGNOSTICS_ENABLED = false;
+
+/** 逐规则失败的记账形状（与校验器 `report.failedRules` 同一语义：不静默） */
+export interface ErbDiagnosticsRuleFailure {
+  readonly rule: 'arity' | 'undefined-name';
+  readonly message: string;
+}
+
+/** 语义诊断的接线选项（默认值即生产口径；测试可覆盖目录/开关） */
+export interface ErbSemanticDiagnosticsOptions {
+  /** 覆盖未定义名默认开关 */
+  readonly enableUndefinedNames?: boolean;
+  /** 覆盖实参目录（测试注入；缺省由索引的 `arityParamsOf` 构造） */
+  readonly arityCatalog?: ArityCatalog;
+  /** 追加给未定义名的已知名集（适配器接入前留的 additive 口） */
+  readonly undefinedNames?: Omit<UndefinedNameDiagnosticsInput, 'text' | 'path'>;
+}
+
+export interface ErbSemanticDiagnosticsResult {
+  readonly decorations: LineDecoration[];
+  readonly failedRules: readonly ErbDiagnosticsRuleFailure[];
+}
+
+/** 工程级声明名（#DIM 族）按索引对象缓存；索引重建即换键，天然失效 */
+const projectNamesCache = new WeakMap<ErbIndex, { dims: string[]; strings: string[] }>();
+
+/**
+ * 从项目索引汇总声明名：`dims` 供"已声明"判定，`strings` 供字符串型赋值整行跳过。
+ *
+ * 跨文件声明是 Emuera 的常态（`DIM.ERH` 集中声明），只看当前文件会成片误报。
+ * 缓存按索引对象（`ErbIndex` 每次重建都是新对象）而不是按路径，避免"文件改了还拿旧名录"。
+ */
+function projectDeclaredNames(index: ErbIndex): { dims: string[]; strings: string[] } {
+  const cached = projectNamesCache.get(index);
+  if (cached !== undefined) return cached;
+  const dims: string[] = [];
+  const strings: string[] = [];
+  for (const file of index.files.values()) {
+    for (const dim of file.dims) {
+      dims.push(dim.name);
+      if (dim.directive === 'DIMS' || dim.directive === 'DIMSTR' || dim.directive === 'DIMCHAR') strings.push(dim.name);
+    }
+  }
+  const names = { dims, strings };
+  projectNamesCache.set(index, names);
+  return names;
+}
+
+const SEVERITY_ORDER: Record<LineDecoration['severity'], number> = { error: 0, warning: 1, info: 2 };
+
+/** 码/文案比较用码元序（不用 localeCompare：排序结果不随运行环境语言变化） */
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * 去重 + 稳定排序：行 → 起始列 → 结束列 → 严重度 → 码 → 文案。
+ *
+ * 两个模块各自的区间口径已一致（1 基、UTF-16、结束列不含端点）；同一位置同一码的
+ * 重复项只留第一条（不同模块理论上不会重合，但索引重建/规则演化的路上留一道闸）。
+ */
+function sortAndDedupe(decorations: readonly LineDecoration[]): LineDecoration[] {
+  const seen = new Set<string>();
+  const out: LineDecoration[] = [];
+  for (const d of decorations) {
+    const key = `${d.line}\u0001${d.startColumn ?? ''}\u0001${d.endColumn ?? ''}\u0001${d.severity}\u0001${d.code ?? ''}\u0001${d.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  out.sort(
+    (a, b) =>
+      a.line - b.line ||
+      (a.startColumn ?? 0) - (b.startColumn ?? 0) ||
+      (a.endColumn ?? 0) - (b.endColumn ?? 0) ||
+      SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
+      compareText(a.code ?? '', b.code ?? '') ||
+      compareText(a.message, b.message),
+  );
+  return out;
+}
+
+/**
+ * 合并两条语义诊断腿（**纯函数**：文本 + 索引 + 选项进、诊断/失败账出）。
+ *
+ * 索引为 null 时实参腿 fail-open（目录不可证 ⇒ 一条不报）；未定义名腿若被显式打开，
+ * 仍可用文本自身的 `#DIM` / 形参判定（与模块缺省语义一致）。
+ */
+export function collectErbSemanticDiagnostics(
+  file: { readonly path: string; readonly text: string },
+  index: ErbIndex | null,
+  options: ErbSemanticDiagnosticsOptions = {},
+): ErbSemanticDiagnosticsResult {
+  if (!isDialect(file.path) || file.text.length === 0) return { decorations: [], failedRules: [] };
+
+  const decorations: LineDecoration[] = [];
+  const failedRules: ErbDiagnosticsRuleFailure[] = [];
+
+  const catalog =
+    options.arityCatalog ?? (index === null ? null : (normalizedName: string) => arityParamsOf(index, normalizedName));
+  if (catalog !== null) {
+    try {
+      for (const d of collectArityDiagnostics({ path: file.path, text: file.text, catalog })) {
+        // 少给（含省略可选）是 Emuera 的合法写法，见接线注①——只留"多给"
+        if (!d.message.includes(ARITY_EXTRA_ARG_MARKER)) continue;
+        decorations.push({ ...d, severity: 'warning' });
+      }
+    } catch (err) {
+      failedRules.push({ rule: 'arity', message: String(err) });
+    }
+  }
+
+  if (options.enableUndefinedNames ?? UNDEFINED_NAME_DIAGNOSTICS_ENABLED) {
+    try {
+      const declared = index === null ? { dims: [], strings: [] } : projectDeclaredNames(index);
+      decorations.push(
+        ...collectUndefinedNameDiagnostics({
+          text: file.text,
+          path: file.path,
+          dimNames: declared.dims,
+          stringNames: declared.strings,
+          ...options.undefinedNames,
+        }),
+      );
+    } catch (err) {
+      failedRules.push({ rule: 'undefined-name', message: String(err) });
+    }
+  }
+
+  // 铁律四：失败要上屏，不能只在控制台留一行后当没发生
+  for (const failure of failedRules) {
+    decorations.push({
+      line: 1,
+      severity: 'warning',
+      message: `诊断规则「${failure.rule}」本轮执行失败，这一类结果已跳过：${failure.message}`,
+      code: ERB_DIAGNOSTICS_RULE_FAILED,
+    });
+  }
+
+  return { decorations: sortAndDedupe(decorations), failedRules };
+}
 
 export function createErbParserPlugin(): Plugin {
   return {
@@ -1093,6 +1272,30 @@ export function createErbParserPlugin(): Plugin {
           const idx = index;
           if (!idx) return []; // fail-open：索引未建零误报
           return erbReferenceDecorations({ path: file.path, text: file.text }, (upper) => idx.byName.has(upper));
+        },
+      });
+
+      /* ---------------- 实参个数 / 未定义名诊断（批次十 S19 接线） ----------------
+
+       第三个装饰贡献。两个纯模块（`arity.ts` / `undefined-name.ts`）在此合并成一个出口：
+       同一文件的两路产出统一去重与稳定排序（`collectErbSemanticDiagnostics`）。
+       生产口径与真语料取舍写在那个函数上方的接线注里（实参只留「多给」且降为 warning；
+       未定义名默认关闭）。
+
+       规则抛错：helper 返回 `failedRules`，这里逐条写 warn 日志，同时 helper 已把
+       `ERB_DIAGNOSTICS_RULE_FAILED` 诊断放进结果——作者在问题面板能看到"这一路本轮
+       没算成"，不是静默少报（铁律四）。 */
+
+      ctx.slots.register('ui.editor.decorator', {
+        id: 'erb-semantics',
+        title: 'ERB 实参与未定义名诊断',
+        order: 22,
+        decorate(file): LineDecoration[] {
+          const result = collectErbSemanticDiagnostics({ path: file.path, text: file.text }, index);
+          for (const failure of result.failedRules) {
+            ctx.log.warn(`ERB diagnostic rule '${failure.rule}' failed for ${file.path}: ${failure.message}`);
+          }
+          return result.decorations;
         },
       });
 
