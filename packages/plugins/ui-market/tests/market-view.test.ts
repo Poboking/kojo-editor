@@ -14,8 +14,11 @@ import {
   appVersionRequirement,
   buildGroups,
   buildInstalledRows,
+  CAPABILITY_DETAIL,
   CAPABILITY_HINT,
   CLEAR_LABEL,
+  dataTimeLine,
+  dataTimeSummary,
   droppedNotice,
   filterEmptyPhrase,
   formatBytes,
@@ -86,12 +89,37 @@ describe('种类与文案', () => {
       for (const w of banned) expect(`${status}:${text}`, w).not.toContain(w);
     }
     expect(statusText('ready')).toBe('');
-    // 能力面说明说清三件事：能浏览列表、**能直接从注册表装**、装不上时该看哪行话
-    // （**作者面口径，不用「本批」这类开发黑话**）
-    expect(CAPABILITY_HINT).toContain('浏览注册表列表');
-    expect(CAPABILITY_HINT).toContain('把注册表上的包装进本机');
-    expect(CAPABILITY_HINT).toContain('不是你的包');
-    for (const jargon of ['本批', 'KM', 'endpoint', 'index']) expect(CAPABILITY_HINT, jargon).not.toContain(jargon);
+    // 能力面说明（批次十一 L07 拆行长文墙）：常驻一行讲"能干什么"，展开段讲"装完去哪、
+    // 装不上先看哪行话"；两段合起来仍是那三件事，且都不带开发黑话。
+    expect(CAPABILITY_HINT).toContain('拉取注册表列表');
+    expect(CAPABILITY_HINT).toContain('浏览');
+    expect(CAPABILITY_HINT).toContain('安装');
+    expect(CAPABILITY_HINT.length, '常驻行不许长成文墙').toBeLessThanOrEqual(30);
+    expect(CAPABILITY_DETAIL).toContain('已安装');
+    expect(CAPABILITY_DETAIL).toContain('不是你的包');
+    for (const jargon of ['本批', 'KM', 'endpoint', 'index']) {
+      expect(CAPABILITY_HINT, jargon).not.toContain(jargon);
+      expect(CAPABILITY_DETAIL, jargon).not.toContain(jargon);
+    }
+  });
+
+  it('数据时间：屏上一行短读数（URL 与生成时刻不进画面），全量读数进 title 口径', () => {
+    // 短读数：有拉取时刻 = 「上次同步 MM-DD HH:mm」
+    const pulled = dataTimeSummary({ fetchedAt: 1_700_000_000_000, generatedAt: '2026-10-16T00:00:00Z' });
+    expect(pulled).toMatch(/^上次同步 \d\d-\d\d \d\d:\d\d$/);
+    expect(pulled).not.toContain('http');
+    // 手工放置（本机没拉过）与还没有数据时间各有各的说法，不许演成"刚同步过"
+    expect(dataTimeSummary({ fetchedAt: null, generatedAt: '2026-10-16T00:00:00Z' })).toBe('手工放置、本机没拉过');
+    expect(dataTimeSummary({ fetchedAt: null, generatedAt: null })).toBe('还没有数据时间');
+    // 全量那一句仍是原口径（数据时间 + 生成时刻 + 来源），只换了住处（title）
+    const full = dataTimeLine({
+      fetchedAt: 1_700_000_000_000,
+      generatedAt: '2026-10-16T00:00:00Z',
+      endpoint: 'https://example.test/index.json',
+    });
+    expect(full).toContain('数据时间：');
+    expect(full).toContain('注册表生成于');
+    expect(full).toContain('来源 https://example.test/index.json');
   });
 
   it('版本要求说成「这个包要求编辑器不低于 x.y.z」', () => {

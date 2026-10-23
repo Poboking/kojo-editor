@@ -7,16 +7,18 @@
  */
 
 import { createElement, type ReactNode } from 'react';
-import { type InstalledPack } from '@kojo/plugin-api';
+import { type InstalledPack, type UIPanelProps } from '@kojo/plugin-api';
 import type { MarketSnapshot } from './actions';
 import {
   ACTION_LABEL,
   appVersionRequirement,
   buildGroups,
   buildInstalledRows,
+  CAPABILITY_DETAIL,
   CAPABILITY_HINT,
   CLEAR_LABEL,
   dataTimeLine,
+  dataTimeSummary,
   droppedNotice,
   filterEmptyPhrase,
   formatBytes,
@@ -42,6 +44,12 @@ import {
  */
 export interface MarketPanelViewProps {
   readonly snapshot: MarketSnapshot;
+  /**
+   * 图标桥（宿主 PanelHost 注入，契约见 `UIPanelProps.renderIcon`）：折叠件那一枚
+   * `chevron-right` 经它渲染成注册表 SVG——**字符不当图标用**（批次十一 L07）。
+   * 可选：无渲染环境（纯函数单测）下不画记号，视觉由 `.mk-hint-toggle:empty` 的 CSS 画出件兜底。
+   */
+  readonly renderIcon?: UIPanelProps['renderIcon'];
   /** 装配层注入的当前应用版本（面板源码不写版本号） */
   readonly appVersion: string;
   readonly query: string;
@@ -82,28 +90,32 @@ export interface MarketPanelViewProps {
 }
 
 /**
- * 一版面的 DOM 契约（样式由 app 侧 `mk-*` 区块实现，本层只负责产出这些类名与层级）：
+ * 一版面的 DOM 契约（样式由 app 侧 `market.css` 整域实现，本层只负责产出这些类名与层级）：
  *
  * ```text
  * .panel-market                 根：列布局，外层不滚
  * ├─ .mk-toolbar                flex:none —— 搜索组（.mk-search-wrap：输入 + 清除）/ 动作组（.mk-toolbar-actions：拉取 + 发布口上）
- * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time .mk-note(aria-live)
- * │                                        .mk-progress(无文字进度) .mk-warn .mk-hint
+ * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time(短读数, title=全量) .mk-note(aria-live)
+ * │                                        .mk-progress(无文字进度) .mk-warn details.mk-hint(> summary[ span.mk-hint-toggle + 一行 ] + .mk-hint-more)
  * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
  *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
- *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row × n（索引）
+ *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row(或 .mk-row.busy + aria-busy) × n（索引）
  *         .mk-row > .mk-main > .mk-head[ span.mk-name | span.mk-badge? | div.mk-actions ]
- *                            + .mk-facts[ span.mk-meta × n ]
- *                  ＋ 行级附属：.mk-warn（版本要求）/ .mk-sub（摘要）/ button.mk-sub.mk-link（来源，可点）/ .mk-detail（展开层）
+ *                            + .mk-sub（摘要，可缺省）
+ *                            + .mk-facts[ span.mk-meta × n，title=整行全文 ]
+ *                  ＋ 行级附属：.mk-warn（版本要求）/ button.mk-sub.mk-link（来源，可点）/ .mk-detail（展开层）
  * ```
  *
  * 四条结构性口径：
- * 1. **两排，不是一排挤到底**——第一排只有名字、徽章与动作（动作钉右端），第二排才是次要事实；
+ * 1. **层级三档，不是一排挤到底**——第一排只有名字、徽章与动作（动作钉右端），
+ *    第二排摘要（标题之下、元信息之上），第三排才是合并成一行的次要事实（`title` 给全文）；
  *    把动作丢进同一个 wrap 容器末尾会让名字吃掉剩余宽度、把动作挤到第三排（窄侧栏密度事故）；
  * 2. **状态与列表分家**——工具条、状态、数据时间、说明住在滚动区之外，
  *    列表长到几十条时作者仍然看得见"这是哪一刻的数据"；
  * 3. **按钮 children 永远是纯字符串**（图标一律不上按钮）：动作判据按标签找按钮、并把 `onClick` 真的调一次；
- * 4. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `mk-*` 区块。
+ *    非按钮位子上要放记号（如折叠件的尖角），走宿主图标桥 `renderIcon(名字, 档位)` 取注册表 SVG——
+ *    **字符不当图标用**（批次十一 L07），本层源码里一个图标字符都不许出现；
+ * 4. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `market.css`。
  */
 export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const { snapshot } = p;
@@ -112,7 +124,9 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const groups = buildGroups(snapshot.packs, p.appVersion, p.query, snapshot.installed);
   const rows = buildInstalledRows(snapshot.installed);
   const line = statusText(snapshot.status, snapshot.reason);
+  // 屏上只留一行短读数（上次同步到分）；全量数据时间 + 注册表生成时刻 + 来源 URL 进 title
   const time = dataTimeLine(snapshot);
+  const timeShort = dataTimeSummary(snapshot);
   const droppedLine = droppedNotice(snapshot.dropped);
   // 过滤态：能力面说明讲的是"这面板能干什么"，与作者此刻正在找的这几条无关 ⇒ 让位不占行；
   // 空态 / 错误态那几句照给——它们说的正是这一屏此刻的事实。
@@ -134,20 +148,29 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
     return s === 'updatable' ? ' mk-badge-warn' : s === 'latest' ? ' mk-badge-ok' : '';
   };
 
-  /** 次要事实（版本 / 体积 / 作者 / 许可…）一律退到第二排 */
-  const meta = (text: string): ReactNode => createElement('span', { className: 'mk-meta' }, text);
-  /** 动作按钮的统一形状：`ghost small` + 进行中禁用；**文字永远不变**（进度只住 `.mk-note` 一处） */
-  const btn = (label: string, onClick: () => void, disabled: boolean): ReactNode =>
-    createElement('button', { className: 'ghost small', disabled, onClick }, label);
+  /**
+   * 动作按钮的统一形状：`ghost small` + 进行中禁用；**文字永远不变**（进度只住 `.mk-note` 一处）。
+   * `cls` 多给一枚视觉档：索引行的装/更新带 `mk-install`——「可安装 / 已安装 / 进行中」
+   * 三态由 app 侧 `market.css` 分档，本层不多写一个字。
+   */
+  const btn = (label: string, onClick: () => void, disabled: boolean, cls = 'ghost small'): ReactNode =>
+    createElement('button', { className: cls, disabled, onClick }, label);
   /** 这一行的全部动作都住这里（名字那一排的右端；`.mk-main` 里不再有裸按钮） */
   const actions = (...buttons: ReactNode[]): ReactNode =>
     createElement('div', { className: 'mk-actions' }, ...buttons);
   /**
-   * 第一排 = 名字 + 徽章 + 动作（动作钉右端）；第二排 = 次要事实。
-   * 分两排而不是把动作丢在同一个 wrap 容器末尾：后者会让"名字吃掉剩余宽度"把动作簇
+   * 卡片体的层级：第一排 = 名字 + 徽章 + 动作（动作钉右端）；第二排 = 摘要（可缺省）；
+   * 第三排 = 次要事实合并成一行（`title` 给整行全文，窄侧栏溢出走省略号，不再逐条各占一行）。
+   * 分排而不是把动作丢在同一个 wrap 容器末尾：后者会让"名字吃掉剩余宽度"把动作簇
    * 挤到第三排，一张卡从两行变四行——窄侧栏里这就是密度事故。
    */
-  const main = (name: string, badge: ReactNode, acts: ReactNode, facts: ReactNode[]): ReactNode =>
+  const main = (
+    name: string,
+    badge: ReactNode,
+    acts: ReactNode,
+    summary: string | null,
+    facts: string[],
+  ): ReactNode =>
     createElement(
       'div',
       { className: 'mk-main' },
@@ -158,7 +181,12 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         badge,
         acts,
       ),
-      createElement('div', { className: 'mk-facts' }, ...facts),
+      summary === null || summary === '' ? null : createElement('div', { className: 'mk-sub' }, summary),
+      createElement(
+        'div',
+        { className: 'mk-facts', title: facts.join(' · ') },
+        ...facts.map((text) => createElement('span', { className: 'mk-meta', key: text }, text)),
+      ),
     );
 
   const indexSection = (g: ReturnType<typeof buildGroups>[number]): ReactNode =>
@@ -175,16 +203,23 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         const e = row.entry;
         const phrase = updatePhrase(row);
         const sourceUrl = e.sourceUrl;
+        const key = indexRowKey(e);
+        // 正在进行的是这一行 ⇒ 行级 busy 记号。安装按钮的三态到这就齐了：
+        // 可安装 = `mk-install`（可点）；已安装 = `mk-badge-ok` 那枚胶囊（不给按钮）；
+        // 进行中/检查中 = `.mk-row.busy` + 禁用动作簇。按钮文字照旧一个字都不变。
+        const busy = p.installing === key;
         return createElement(
           'div',
           {
-            className: 'mk-row',
-            key: indexRowKey(e),
-            // 行数据面（1023 WP5.4）：市场的右键由**宿主面路由**接管（`data-context-surface="market"`），
-            // 面的 build 是纯 DOM 入口，靠这两个属性回查「刚点的是哪一行」——
+            // 行视觉态（busy）与行数据面（右键）各管各的，同一 div 上共存：
+            // 市场的右键由**宿主面路由**接管（`data-context-surface="market"`），
+            // 面的 build 是纯 DOM 入口，靠下面两个属性回查「刚点的是哪一行」——
             // 与文件树 `data-tree-kind` / `data-tree-path` 同一套做法。
+            className: busy ? 'mk-row busy' : 'mk-row',
+            'aria-busy': busy ? true : undefined,
+            key,
             'data-market-row': 'index',
-            'data-market-key': indexRowKey(e),
+            'data-market-key': key,
           },
           main(
             e.name,
@@ -194,19 +229,19 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
             actions(
               row.action === 'none'
                 ? null
-                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting),
+                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting, 'ghost small mk-install'),
             ),
+            e.summary ?? null,
             [
-              meta(`版本 ${e.version}`),
-              meta(`${formatBytes(e.unpackedBytes)} · ${e.fileCount} 个文件`),
-              meta(`作者 ${e.author}`),
-              meta(`许可 ${e.license}`),
+              `版本 ${e.version}`,
+              `${formatBytes(e.unpackedBytes)} · ${e.fileCount} 个文件`,
+              `作者 ${e.author}`,
+              `许可 ${e.license}`,
             ],
           ),
           row.appOk
             ? null
             : createElement('div', { className: 'mk-warn' }, appVersionRequirement(e.minAppVersion)),
-          e.summary === undefined ? null : createElement('div', { className: 'mk-sub' }, e.summary),
           // 来源网址住**子层**（灰色小行），主行纪律不动；已接 `ui.openExternal` 外链原语
           // ——button 语义、`mk-sub` 观感不变，只发意图：闸（https + 主机白名单）在 Rust，
           // 本层不复制白名单、不摸平台（插件够不着）
@@ -281,8 +316,10 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       'div',
       { className: 'mk-flash', role: 'status' },
       line === '' || p.busy ? null : createElement('div', { className: 'mk-status' }, line),
-      // 数据时间与拉取结果**不受 busy 遮掩**：失败态必须一直在屏上（不许"加载中"常驻顶掉它）
-      time === '' ? null : createElement('div', { className: 'mk-time' }, time),
+      // 数据时间与拉取结果**不受 busy 遮掩**：失败态必须一直在屏上（不许"加载中"常驻顶掉它）。
+      // 屏上只给一行「上次同步」短读数，全量数据时间（含注册表生成时刻与来源 URL）退进 title——
+      // URL 不是界面文案（批次十一 L07）
+      time === '' ? null : createElement('div', { className: 'mk-time', title: time }, timeShort),
       // 装 / 卸的进行中与结果全写在这一处（`aria-live` 让读屏跟得上；不弹窗）
       p.note === '' ? null : createElement('div', { className: 'mk-note', 'aria-live': 'polite' }, p.note),
       // 无文字的 hairline 进度条：带字的进度句仍只住 `.mk-note` 一处，这里只给"还剩多少"的形
@@ -304,7 +341,27 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
           ),
       // 被剔除条目的说明：只在这里出声（红色留给"注册表那边的问题"）
       droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
-      filtering ? null : createElement('div', { className: 'mk-hint' }, CAPABILITY_HINT),
+      // 能力面说明：常驻只有一行，长文折进 `<details>`（作者点开才看全；批次十一 L07 拆行长文墙）
+      filtering
+        ? null
+        : createElement(
+            'details',
+            { className: 'mk-hint' },
+            // 折叠记号 = 注册表 SVG（`chevron-right` 的 xs 档），不是字符（批次十一 L07）。
+            // 图标桥缺省（无渲染环境）时这里画成空 span，由 `.mk-hint-toggle:empty` 的 CSS 记号兜底——
+            // 既不留空白，也不把字符当图标用。
+            createElement(
+              'summary',
+              null,
+              createElement(
+                'span',
+                { className: 'mk-hint-toggle', 'aria-hidden': true },
+                (p.renderIcon?.('chevron-right', 'xs') as ReactNode | undefined) ?? null,
+              ),
+              CAPABILITY_HINT,
+            ),
+            createElement('div', { className: 'mk-hint-more' }, CAPABILITY_DETAIL),
+          ),
     ),
     createElement(
       'div',
@@ -370,12 +427,13 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                         )
                       : btn('卸载', () => p.onRequestUninstall(key), acting),
                   ),
+                  null,
                   [
-                    meta(`版本 ${r.rec.version}`),
-                    meta(r.kindLabel),
-                    meta(`来源 ${r.sourceLabel}`),
-                    meta(`作者 ${r.rec.author}`),
-                    meta(`许可 ${r.rec.license}`),
+                    `版本 ${r.rec.version}`,
+                    r.kindLabel,
+                    `来源 ${r.sourceLabel}`,
+                    `作者 ${r.rec.author}`,
+                    `许可 ${r.rec.license}`,
                   ],
                 ),
                 // 展开层 = 机器面：核对码 / 种类 / id 照旧给全（主行不放机器词）

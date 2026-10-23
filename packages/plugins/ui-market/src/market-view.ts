@@ -46,12 +46,16 @@ export const STATUS_TEXT: Record<Exclude<MarketViewStatus, 'ready'>, string> = {
 };
 
 /**
- * 本批能力面说明（索引能拉能看，**装**已经接上了：容器下载 → 校验 → 解压 → 落盘全在面板里）。
- * 这句话仍在的位置是"作者不该以为装不上是自己的包有问题"——真出网要桌面壳，
- * Node/浏览器壳下那两条容器原语没有实现，会明明白白报一句"容器没能取回来"。
+ * 能力面说明（批次十一 L07：长文墙 → 一行 + 折叠详情）。
+ * `CAPABILITY_HINT` 是常驻的那一行（260px 侧栏里必须 ≤ 一两行）；
+ * `CAPABILITY_DETAIL` 收进 `<details>` 折叠，讲的是同一件事——
+ * "装不上时该看哪行话、多数不是你的包的问题"。口径不变，只是不再占五行。
  */
-export const CAPABILITY_HINT =
-  '这里能拉取并浏览注册表列表，也能直接把注册表上的包装进本机（装完就在下面的已装列表里）。装不上时看上面那行话，多数是网络或注册表那边的问题，不是你的包。';
+export const CAPABILITY_HINT = '能拉取注册表列表，浏览与安装。';
+
+/** 折叠后的展开段：装完去哪、装不上先看哪一句（作者面口径，不用「本批」这类开发黑话） */
+export const CAPABILITY_DETAIL =
+  '装完就在下方「已安装」列表里。装不上时看上面的状态行：多数是网络或注册表那边的问题，不是你的包。';
 
 /**
  * 拒码 → 作者面那一句人话（**全仓唯一一张表**：面板只叫 `rejectNote`，别处不再自己拼）。
@@ -222,7 +226,11 @@ export function formatGeneratedAt(iso: string): string {
   return Number.isFinite(ms) ? formatClock(ms) : iso;
 }
 
-/** 数据时间一行（面板主行；`fetchedAt` = 本机拉取时刻，`generatedAt` = 注册表生成时刻） */
+/**
+ * 数据时间一行（批次十一 L07：这一句**降级为 `title`**——注册表生成时刻与来源 URL
+ * 是核对线索，不是界面文案；屏上只留 `dataTimeSummary` 那一行短读数）。
+ * `fetchedAt` = 本机拉取时刻，`generatedAt` = 注册表生成时刻。
+ */
 export function dataTimeLine(o: {
   fetchedAt: number | null;
   generatedAt: string | null;
@@ -233,6 +241,13 @@ export function dataTimeLine(o: {
   const pulled = o.fetchedAt === null ? '手工放置、本机没拉过' : `${formatClock(o.fetchedAt)} 拉取`;
   const made = o.generatedAt === null ? '' : ` · 注册表生成于 ${formatGeneratedAt(o.generatedAt)}`;
   return `数据时间：${pulled}${made}${where}`;
+}
+
+/** 屏上那一行「上次同步」短读数（全量读数进 `title`，URL 不再当界面文案） */
+export function dataTimeSummary(o: { fetchedAt: number | null; generatedAt: string | null }): string {
+  if (o.fetchedAt === null && o.generatedAt === null) return '还没有数据时间';
+  if (o.fetchedAt === null) return '手工放置、本机没拉过';
+  return `上次同步 ${formatClock(o.fetchedAt)}`;
 }
 
 

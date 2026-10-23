@@ -26,17 +26,27 @@ export interface ContributionBase {
 
 /* ------------------------------ ui.panel ------------------------------ */
 
+/**
+ * 图标尺寸**档位名**（additive，批次十一 L07 · 与宿主 `icons.tsx` 的 `ICON_SIZES` 同名词表）。
+ *
+ * 契约侧只认档位，不认像素：`xs / sm / md / lg` 各是多少由宿主决定（现值 12 / 14 / 16 / 22），
+ * 贡献方传数字仍然受理——宿主按就近吸附收敛到档位，但**新调用一律传档位名**，
+ * 免得散装尺寸数字再一次长出来（L10 的刻度纪律）。
+ */
+export type IconSizeTier = 'xs' | 'sm' | 'md' | 'lg';
+
 export interface UIPanelProps {
   /** 渲染器提供的刷新信号（面板可选择忽略并通过事件自行驱动） */
   readonly refreshTick?: number;
   /**
-   * 宿主注入的图标注册表桥（additive，2026-10-13 教程批）：传「图标名 + 像素尺寸」，
+   * 宿主注入的图标注册表桥（additive，2026-10-13 教程批）：传「图标名 + 尺寸档位」，
    * 返回可直接嵌入为子节点的内容（宿主通常返回一枚 SVG）。
    *
-   * **可选**：旧宿主 / 无渲染环境（纯函数单测等）下缺省——贡献方须按「缺省即回退
-   * 纯文本字形」编写；图标是锦上添花，绝不能在缺省时渲染成空白。
+   * **可选**：旧宿主 / 无渲染环境（纯函数单测等）下缺省——贡献方须按「缺省即回退」编写，
+   * 图标是锦上添花，绝不能在缺省时渲染成空白。回退形态自选：文本字形或**纯 CSS 画出的记号**
+   * （批次十一 L07 起，本仓纪律是「字符不当图标用」——画面上的图标一律走本桥取注册表 SVG）。
    */
-  readonly renderIcon?: (name: string, size?: number) => unknown;
+  readonly renderIcon?: (name: string, size?: number | IconSizeTier) => unknown;
   /**
    * 宿主注入的浮窗态（additive，2026-10-14 UI 浮动批）：本面板正渲染在可移动浮窗里时为 true。
    *
