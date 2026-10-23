@@ -8,7 +8,8 @@
  * - 渲染前过中文化守卫：非中文项整项丢弃，丢光就什么都不渲染（不弹空壳）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement as h } from 'react';
+import { act, createElement as h } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   ContextMenuHost,
@@ -16,6 +17,9 @@ import {
   getContextMenuState,
   openContextMenu,
 } from '../src/ui/context-menu-host';
+
+// 空菜单收口要跑 effect ⇒ 必须真挂载（renderToStaticMarkup 不跑 effect）
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const render = (): string => renderToStaticMarkup(h(ContextMenuHost));
 
@@ -132,5 +136,74 @@ describe('ContextMenuHost · 渲染', () => {
     expect(html.match(/role="menuitem"/g)).toHaveLength(1);
     expect(html).toContain('保存');
     warn.mockRestore();
+  });
+});
+
+describe('ContextMenuHost · 空菜单收口（不留下「看不见但开着」的请求）', () => {
+  /** 真挂载：effect 才会跑（renderToStaticMarkup 不跑 effect，看不到收口） */
+  async function mountHost(): Promise<{ container: HTMLDivElement; unmount: () => Promise<void> }> {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(h(ContextMenuHost));
+    });
+    return {
+      container,
+      unmount: async () => {
+        await act(async () => root.unmount());
+        container.remove();
+      },
+    };
+  }
+
+  it('项被中文化守卫滤光 ⇒ onDismiss 到、state 归零、屏上不留空壳', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const onDismiss = vi.fn();
+    const view = await mountHost();
+    try {
+      await act(async () => {
+        openContextMenu({
+          x: 10,
+          y: 10,
+          items: [{ id: 'open', label: 'Open File' }],
+          ariaLabel: '通用菜单',
+          onSelect: () => undefined,
+          onDismiss,
+        });
+      });
+      expect(view.container.innerHTML).toBe('');
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+      expect(getContextMenuState().request).toBeNull();
+      // 收口是幂等的：再关一次不会重复回调
+      closeContextMenu();
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    } finally {
+      await view.unmount();
+      warn.mockRestore();
+    }
+  });
+
+  it('有中文项时宿主照常渲染，且不会误调 onDismiss', async () => {
+    const onDismiss = vi.fn();
+    const view = await mountHost();
+    try {
+      await act(async () => {
+        openContextMenu({
+          x: 10,
+          y: 10,
+          items: [{ id: 'copy', label: '复制' }],
+          ariaLabel: '通用菜单',
+          onSelect: () => undefined,
+          onDismiss,
+        });
+      });
+      expect(view.container.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(getContextMenuState().request).not.toBeNull();
+    } finally {
+      await view.unmount();
+      closeContextMenu();
+    }
   });
 });

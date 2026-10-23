@@ -15,7 +15,7 @@
  * 关闭语义：Esc / 外点 / 选中一项都由 `<ContextMenu>` 自己收口（它调 `onDismiss`），
  * 这里再把 `request.onDismiss` 回调出去——各面据此清理「菜单开着时的临时态」。
  */
-import { useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
 import { ContextMenu } from './context-menu';
 import { filterChineseMenuItems, type ContextMenuItem } from './context-menu-model';
 
@@ -86,14 +86,22 @@ export function openContextMenu(request: ContextMenuRequest): void {
  * 根宿主（挂到 App 的 `.app-frame` 内、所有浮层之后）。
  *
  * 渲染前过一遍中文化守卫：插件 / 语言服务贡献的英文项整项丢弃（宿主是最后一站，
- * 不能指望每个面都记得过滤）。过滤后为空 ⇒ 什么都不渲染（不弹一个空壳）。
+ * 不能指望每个面都记得过滤）。过滤后为空 ⇒ 什么都不渲染（不弹一个空壳），**并把请求真的关掉**：
+ * 只 return null 会让模块级 state 停在「开着」——`onDismiss` 不来，面以为自己还开着，
+ * 下一次右键才被当「顶掉」回调一次，时序全错。收口放在 effect 里（渲染期不改外部 store），
+ * 于是第一次渲染仍返回 null（空壳不上屏），effect 跑完状态归零、面拿到 `onDismiss`。
  */
 export function ContextMenuHost(): ReactElement | null {
   const snapshot = useSyncExternalStore(subscribeContextMenu, getContextMenuState, getContextMenuState);
   const request = snapshot.request;
-  if (request === null) return null;
-  const items = filterChineseMenuItems(request.items);
-  if (items.length === 0) return null;
+  const items = request === null ? [] : filterChineseMenuItems(request.items);
+  const empty = request !== null && items.length === 0;
+  useEffect(() => {
+    // 守卫丢光了（或子菜单整段被丢导致的父项连带丢弃）：按「正常关闭」收口，
+    // 走 closeContextMenu 而不是直接改 state——面要的正是那一次 onDismiss。
+    if (empty) closeContextMenu();
+  }, [empty]);
+  if (request === null || empty) return null;
   return (
     <div className="context-menu-host">
       <ContextMenu
