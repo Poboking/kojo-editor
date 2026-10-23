@@ -20,6 +20,8 @@ import {
   dataTimeLine,
   dataTimeSummary,
   droppedNotice,
+  emblemGlyph,
+  emptyStateCopy,
   filterEmptyPhrase,
   formatBytes,
   groupCountPhrase,
@@ -28,7 +30,9 @@ import {
   importNote,
   indexRowKey,
   installBusyNote,
+  installFailureGuide,
   installProgressNote,
+  INSTALLED_EMPTY,
   installNote,
   installedCountPhrase,
   KIND_LABEL,
@@ -501,5 +505,108 @@ describe('发布入口（用户反馈 4：入口只表达"作者要发布"）', 
     // 机器词与旧名都不上按钮
     expect(PUBLISH_LABEL).not.toContain('发布包');
     expect(PUBLISH_LABEL).not.toContain('zip');
+  });
+});
+
+/* ------------------------- 批次十一 L18：卖相收口的三件纯逻辑 ------------------------- */
+
+describe('占位徽标的首字（「」母题的文本半边）', () => {
+  it('取包名里第一枚字母或数字，拉丁给大写', () => {
+    expect(emblemGlyph('口上示例')).toBe('口');
+    expect(emblemGlyph('demo pack')).toBe('D');
+    expect(emblemGlyph('  第二个词')).toBe('第');
+    // 一升就变两枚字的（'ß' → 'SS'）退回原形：徽标里只许有一枚
+    expect(emblemGlyph('ßbrücke')).toBe('ß');
+  });
+
+  it('徽标里永远不会有表情符号或字形图标：emoji 开头就顺延，全行没字母数字就交空串', () => {
+    expect(emblemGlyph('🎈气球包')).toBe('气');
+    expect(emblemGlyph('🎈✨')).toBe('');
+    expect(emblemGlyph('')).toBe('');
+    expect(emblemGlyph('   ')).toBe('');
+    // 交出去的这一枚过不了 Emoji 判定（`So` 符号类不在 \p{L}|\p{N} 里）
+    for (const n of ['🎈气球包', '🎈✨', '———']) {
+      const g = emblemGlyph(n);
+      expect(g === '' || /[\p{L}\p{N}]/u.test(g), n).toBe(true);
+      expect(g).not.toMatch(/\p{Extended_Pictographic}/u);
+    }
+  });
+});
+
+describe('失败态那第二行（哪一步失败 + 下一步做什么）', () => {
+  it('装包失败那句 ⇒ 认得出是哪一步，并给一句现在就能做的下一步', () => {
+    const guide = installFailureGuide(`「演示口上包」没装成：${REJECT_TEXT['entry-sha256']}`);
+    expect(guide).toContain('失败在「核对」这一步');
+    expect(guide).toContain('下一步：');
+    // 每一个拒码都给得出"哪一步 + 下一步"：步骤表漏一个码 ⇒ 这里就漏出 undefined（运行时判据，
+    // 不靠编译期那张穷尽映射——vitest 不做类型检查）
+    for (const code of Object.keys(REJECT_TEXT) as MarketRejectCode[]) {
+      const g = installFailureGuide(`「演示口上包」没装成：${REJECT_TEXT[code]}`);
+      expect(g, code).toContain('失败在「');
+      expect(g, code).not.toContain('undefined');
+      expect(g.length, code).toBeGreaterThan(12);
+    }
+    // 反查表认得出唯一那一条 ⇒ 这 37 句人话必须互不相同（撞了就没法从句子倒推回那一步）
+    expect(new Set(Object.values(REJECT_TEXT)).size, 'REJECT_TEXT 里有两句一样的话').toBe(
+      Object.keys(REJECT_TEXT).length,
+    );
+  });
+
+  it('认不出拒码的那一句（平台原话 / 没有码的异常）也给下一步——不静默是铁律不是修辞', () => {
+    expect(installFailureGuide('「演示口上包」没装成：对面把门关了')).toContain('点「拉取列表」');
+    expect(installFailureGuide(`「演示口上包」没装成：${REJECT_TEXT['download-failed']}`)).toContain('失败在「取回」');
+  });
+
+  it('不是装包失败（拉取 / 卸掉 / 进行中）⇒ 这一行不出现：不替别的事瞎指路', () => {
+    for (const note of ['', '已装上「演示口上包」（版本 1.0.0）', '正在安装「演示口上包」… 40%', '已卸掉「演示口上包」']) {
+      expect(installFailureGuide(note), note).toBe('');
+    }
+  });
+
+  it('那句引导也是作者面口径：机器词一个都不上', () => {
+    const banned = ['kind', 'manifest', 'index.json', 'sha256', 'schema', 'minAppVersion', 'zip', 'MarketError'];
+    for (const code of Object.keys(REJECT_TEXT) as MarketRejectCode[]) {
+      const g = installFailureGuide(`「演示口上包」没装成：${REJECT_TEXT[code]}`);
+      for (const w of banned) expect(g, `${code} → ${w}`).not.toContain(w);
+    }
+  });
+});
+
+describe('空态与离线态的两句人话', () => {
+  it('过滤空态的主句仍是那句带词的（判据钉的就是它），副句给退路', () => {
+    const copy = emptyStateCopy('ready', '某人');
+    expect(copy.title).toBe(filterEmptyPhrase('某人'));
+    expect(copy.hint).toContain('清除');
+  });
+
+  it('离线那一族（没有列表 / 读不出 / 取不到）各有一句主句 + 一条退路，且不空着演没事', () => {
+    for (const status of ['list-missing', 'list-broken', 'list-unreadable', 'no-packs'] as const) {
+      const copy = emptyStateCopy(status, '');
+      expect(copy.title, status).not.toBe('');
+      expect(copy.hint, status).not.toBe('');
+      expect(copy.hint, status).toContain('拉取列表');
+    }
+    // ready 却没有条目 ⇒ 也说人话（过去只有过滤空了才给一句，其余态下面是死空白）
+    expect(emptyStateCopy('ready', '').title).toBe(STATUS_TEXT['no-packs']);
+  });
+
+  it('已装区空态那句逐字沿用既有主句（判据钉的就是它），副句说清装好之后去哪看', () => {
+    expect(INSTALLED_EMPTY.title).toBe('本机还没有装好的包');
+    expect(INSTALLED_EMPTY.hint).toContain('安装');
+  });
+
+  it('这几句都不带机器词（作者面纪律一路管到空态）', () => {
+    const banned = ['kind', 'id', 'manifest', 'index.json', 'sha256', 'schema', 'minAppVersion', 'zip'];
+    const lines = [
+      ...(['ready', 'list-missing', 'list-broken', 'list-unreadable', 'no-packs'] as const).flatMap((s) => {
+        const c = emptyStateCopy(s, '');
+        return [c.title, c.hint];
+      }),
+      INSTALLED_EMPTY.title,
+      INSTALLED_EMPTY.hint,
+    ];
+    for (const line of lines) {
+      for (const w of banned) expect(line, w).not.toContain(w);
+    }
   });
 });
