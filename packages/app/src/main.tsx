@@ -11,6 +11,12 @@ import './tokens.css';
 // 生命周期协作；教程正文由插件渲染，宿主只能按 DOM 标记认代码块 / 目录条目（见该模块头注）。
 import './ui/tutorial-context-menu';
 import './styles.css';
+// ui-kit 基座（批次十一 L14）：`KitField/KitCheck/KitSelect/KitSegmented/KitIconButton/
+// KitKbd/KitCount/KitEmpty/KitSkeleton` 的样式真源。排在 styles.css 之后、各域切片
+// （problem-panel.css / search-panel.css …）之前——kit 是底座，域切片要能后压它。
+// L14 交付时在 `ui-kit.css` 头注里写了"由 main.tsx 加载"却没真加这行，集成时补上并
+// 用 `deadcss` 口径复扫（只认 import 语句，注释里提到文件名不算接线）。
+import './ui-kit/ui-kit.css';
 // 主题覆盖（2026-10-17 主题系统）：必须在 tokens.css 之后引入，`:root[data-theme=…]` 特异性
 // 才能压过基础 `:root`。缺省 dark 无对应文件块（tokens.css 的基础 :root 即深色），light/mint 各自翻 token。
 import './themes/light.css';
