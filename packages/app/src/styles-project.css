@@ -3251,7 +3251,7 @@ button.erb-mode-hint.unlocked:hover {
   word-break: break-word;
 }
 
-/* ================= 升糖预览面板（lift-*，升糖重定位批） ================= */
+/* ================= 升糖预览面板骨架（行级样式已随死类清理退出；见 git 历史） ================= */
 .panel-sugar-lift {
   display: flex;
   flex-direction: column;
@@ -3260,199 +3260,6 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
-}
-.lift-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-.lift-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.lift-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-.lift-row:hover {
-  background: var(--hover, rgba(128, 128, 128, 0.12));
-}
-.lift-range {
-  flex: 0 0 auto;
-  min-width: 52px;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-0);
-}
-.lift-kind {
-  flex: 0 0 auto;
-  font-weight: 600;
-  font-size: var(--fs-0);
-}
-.lift-sugar {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-0);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lift-warn {
-  flex: 0 0 auto;
-  color: var(--amber);
-  font-size: var(--fs-0);
-  border: 1px solid var(--amber);
-  border-radius: var(--radius-sm);
-  padding: 0 3px;
-}
-.lift-empty,
-.lift-more,
-.lift-hint {
-  font-size: var(--fs-0);
-  padding: 2px;
-}
-.lift-error {
-  color: var(--red);
-  font-size: var(--fs-0);
-  padding: 3px 2px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.lift-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.lift-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-/* --------- 糖视图面板：投影摘要（2026-10-12 语法糖批） --------- */
-/* 「这份文件读懂了多少」——面板的第一眼信息，给足字号与呼吸 */
-.lift-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.lift-coverage {
-  font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--fg);
-}
-.lift-breakdown {
-  font-size: var(--fs-0);
-}
-.lift-reasons {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-top: 2px;
-}
-.lift-reasons-head {
-  font-size: var(--fs-0);
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 2px;
-  margin-bottom: 3px;
-}
-.lift-reason-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-.lift-reason-row:hover {
-  background: var(--hover, rgba(128, 128, 128, 0.12));
-}
-.lift-reason-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lift-reason-count {
-  flex: 0 0 auto;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-0);
-}
-.lift-skips {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.lift-skips-head {
-  font-size: var(--fs-0);
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-  padding: 2px 0;
-}
-.lift-skip-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 1px 4px;
-  font-size: var(--fs-0);
-}
-.lift-skip-reason {
-  flex: 0 0 auto;
-}
-.lift-skip-msg {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-
-/* --------------- 升糖预览 ViewZone（编辑器内就地透镜） --------------- */
-/* Monaco 把 ViewZone 插在行间（绝对定位）；这里给足背景与边界，保证可读 */
-.lift-preview-zone {
-  background: var(--bg-3);
-  border-left: 3px solid var(--accent);
-  padding: 2px 8px 2px 10px;
-  font-size: var(--fs-1);
-  color: var(--fg);
-  overflow: hidden;
-}
-.lift-preview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--accent);
-  font-size: var(--fs-0);
-  line-height: 1.5;
-}
-.lift-preview-close {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-  padding: 0 6px;
-  cursor: pointer;
-}
-.lift-preview-close:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-
-/* 糖写法（打字机逐字填充）；等宽、保留缩进 */
-.lift-preview-sugar {
-  margin: 2px 0 0;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-1);
-  line-height: 1.5;
-  white-space: pre;
-  color: var(--green);
 }
 
 /* --------------------- status bar（P0 简化形态） --------------------- */
@@ -8228,61 +8035,6 @@ button.resume-session {
 .oh-kind-new {
   color: var(--green, #7ec699);
 }
-/* 键盘快捷键对话框（R8）：注册表可查可改的显示面；复用 .modal 骨架 */
-.keybindings-dialog {
-  width: min(640px, 92vw);
-}
-.keybindings-dialog h2 {
-  margin: 0 0 4px;
-  font-size: var(--fs-2);
-}
-.keybindings-list {
-  max-height: 56vh;
-  overflow: auto;
-  margin: 8px 0;
-  border: 1px solid var(--bg-3);
-  border-radius: var(--radius-sm);
-}
-.keybindings-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 8px;
-  font-size: var(--fs-1);
-  border-bottom: 1px solid var(--bg-3);
-}
-.keybindings-row:last-child {
-  border-bottom: none;
-}
-.keybindings-row.capturing {
-  background: var(--accent-dim);
-}
-.keybindings-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.keybinding-chord {
-  flex: none;
-  min-width: 9em;
-  text-align: right;
-  font-family: var(--font-meta);
-  /* 键位串含数字键 ⇒ 等宽数字保右对齐列不抖；捕获态写的是中文「按下新键位…（Esc 取消）」，
-     旧栈在 9em 槽位里混汉字全靠运气。字号原来骑在祖先上，钉成同值档位断开耦合。 */
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-1);
-  color: var(--fg-dim);
-}
-.keybindings-notice {
-  font-size: var(--fs-0);
-  color: var(--accent-text);
-  background: var(--accent-dim);
-  border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  margin: 4px 0;
-}
 
 /* ==== 编辑器组（SPLIT-1 分屏批）：多组并排，每组自带标签条；组间分隔条可拖 ==== */
 .editor-groups {
@@ -8973,8 +8725,6 @@ button.resume-session {
 .pv-row,
 .pv-diag,
 .sv-row,
-.lift-row,
-.lift-reason-row,
 .conv-group-btn,
 .conv-issue-btn {
   transition:
@@ -9009,8 +8759,7 @@ button.resume-session {
 }
 /* 计数芯片/判定条：tint 用 currentColor 派生——色相仍由既有规则分派，零新增语义 */
 .pv-chip.bad,
-.pv-chip.warn,
-.lift-warn {
+.pv-chip.warn {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .sv-verdict {
@@ -9037,11 +8786,10 @@ button.resume-session {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- G. 错误带统一成"警示条"：六面板的 *-error 同一身份 ---------- */
+/* ---------- G. 错误带统一成"警示条"：各面板的 *-error 同一身份 ---------- */
 .rp-error,
 .sv-error,
 .inj-error,
-.lift-error,
 .ab-error,
 .cm-error {
   border-radius: var(--radius-sm);
