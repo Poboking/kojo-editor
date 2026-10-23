@@ -4826,9 +4826,13 @@ button.primary .hint {
   height: 100%;
   overflow: hidden;
 }
-/* 双真相源提示条（常驻）：写保护铁律的 UI 明示面 */
+/* 双真相源提示（可关闭）：写保护铁律的 UI 明示面。正文用人话、整段口径在 title，
+   所以这一行只吃一格高度，不再靠"常驻一整句口号"换注意力。 */
 .kp-notice {
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--fs-1);
   line-height: 1.5;
   color: var(--fg-dim);
@@ -4836,23 +4840,70 @@ button.primary .hint {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+}
+.kp-notice-icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--accent-text);
+}
+.kp-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
   cursor: help;
 }
+.kp-notice-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  border-radius: var(--radius-sm);
+  opacity: 0.7;
+}
+.kp-notice-close:hover {
+  opacity: 1;
+  background: var(--hover);
+}
+/* 工具条：计数（纯文字）在左、三枚动作在右。
+   260px 侧栏实测会把「1 个项/目」「＋ 新/建」「导入项/目」从字中间折断——根因是
+   `space-between` 两头挤 + 标签与按钮都没有 nowrap。这里改成：谁都不许被压缩折断，
+   装不下就整行换行（宁可两行也不撕裂字）。 */
 .kp-toolbar {
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
 }
 .kp-toolbar-label {
+  flex: none;
+  white-space: nowrap;
   font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
 }
 .kp-toolbar-actions {
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-1);
+  margin-left: auto;
+  min-width: 0;
+}
+/* 动作钮：图标 + 文字同一基线，横向永不收缩（换行交给整组，而不是某个字） */
+.kp-toolbar-actions > button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
 .kp-body {
   flex: 1;
@@ -4862,16 +4913,45 @@ button.primary .hint {
   padding-top: var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   animation: fade-in var(--dur-2) var(--ease-out);
 }
-.kp-empty {
-  padding: var(--space-3) var(--space-1);
-  font-size: var(--fs-2);
-  word-break: break-word;
+/* 空态 / 错误态卡片：虚线框说"这里空的"，比一句灰字更像一格可待的位置。
+   ui-kit-candidate: 面板空态卡（虚线框 + 题头 + 一句指引 + 可选 CTA），与各面板同款待收编 */
+.kp-card {
+  flex: none;
+  margin: var(--space-1) var(--space-1) 0;
+  padding: var(--space-4) var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  text-align: center;
 }
-.kp-empty.err {
+.kp-card-err {
+  border-color: var(--danger);
+  border-style: solid;
+}
+.kp-card-title {
+  font-size: var(--fs-2);
+  color: var(--fg);
+}
+.kp-card-err .kp-card-title {
   color: var(--red);
+}
+.kp-card-text {
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.kp-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--space-1);
+  white-space: nowrap;
 }
 .kp-actions {
   padding: 0 var(--space-1);
@@ -4917,6 +4997,11 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 项目行是这一层唯一的"块级入口"，比包行 / 文件行高一格呼吸（密度问题的正解是
+   让可点的东西更可读，而不是把行压扁去塞更多空行） */
+.kp-project-btn {
+  padding: 5px 6px;
+}
 .kp-artifact-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4939,10 +5024,37 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 行尾计数徽标：胶囊底 + tabular-nums，与检索面板 .ksp-file-count 同族，
+   这样"行右侧那枚数字"在全应用只有一个形状。
+   ui-kit-candidate: 行尾计数徽标（胶囊 + 等宽数字），建议收进 ui-kit 与 ksp-file-count 合流 */
 .kp-count {
-  flex: none;
+  flex: 0 0 auto;
   margin-left: auto;
-  font-size: var(--fs-1);
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 分组头：一段列表的点名行（包 / 包之外的目录两段同屏时才出现）。
+   顶线 + 小字 + 行尾计数，与检索面板文件头（.search-file + .ksp-file-count）同一套读法。
+   ui-kit-candidate: 面板内分组头（hairline + 名称 + 计数徽标） */
+.kp-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1) 6px 2px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-0);
+  letter-spacing: 0.02em;
+  color: var(--fg-dim);
+  white-space: nowrap;
 }
 .kp-dir-name,
 .kp-file-name,
@@ -5073,7 +5185,9 @@ button.primary .hint {
 
 /* 教程入口（E6）：常驻面板底部，不进树的滚动区——写不动时抬头就能找到。
    高度可用上方分割线（.kp-splitter）上下拉伸（E9）；min-height 兜住内容，
-   拖到极限也不裁掉两个入口。
+   拖到极限也不裁掉入口。
+   批次十一：默认收成一行题头（.kp-tutorials-head 即展开键），分割线只在展开态存在；
+   收起 = 下面 body 整块 display:none（行留在 DOM，不靠条件渲染）。
    2026-10-18（反馈 1）：行按钮 hover 有 translateX(2px)，而行是 width:100%——水平溢出的
    2px 会让 overflow-x 随 overflow-y:auto 变成 auto，水平滚动条出现 / 消失又改变可用高度，
    悬停就在"丢失 → 恢复"之间无限上下抖。这里两件事一起做：水平方向永不滚（裁剪掉任何残余
@@ -5084,6 +5198,55 @@ button.primary .hint {
   overflow-x: hidden;
   padding-right: 2px;
   min-height: max-content;
+}
+/* 题头即展开键（批次十一）：默认只占一行，四本教程收在里面——把整栏高度还给口上树。
+   折叠走 class（下面 body 用 display:none），行留在 DOM，展开不必重挂。 */
+.kp-tutorials-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kp-tutorials-head:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.kp-tutorials-head:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+.kp-tutorials-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kp-tutorials-body.kp-collapsed {
+  display: none;
+}
+/* 收起态的摘要 chip：只说"里面有几本"，展开后同一事实已在行里，不重复 */
+.kp-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 14px;
 }
 /* 树体 ←→ 教程区的拖拽分割线（E9）：静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer 同族）。
    命中区上下各吃一半布局间隙（负 margin），视觉上仍是贴着树底的一条线。 */
@@ -5108,10 +5271,11 @@ button.primary .hint {
 .kp-splitter.dragging::after {
   background: var(--accent);
 }
+/* 题头里的名字格：内衬交给 .kp-tutorials-head（否则一行里出现两层 padding） */
 .kp-tutorials-title {
+  flex: none;
   font-size: var(--fs-0);
   letter-spacing: 0.04em;
-  padding: 0 6px 2px;
 }
 
 /* --------- 行内新建（反馈 1b）：命名框就长在树里，不弹窗 --------- */
