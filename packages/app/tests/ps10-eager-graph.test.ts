@@ -223,7 +223,21 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 的按钮搬到各自懒页去注册（约 −58 KB），以及菜单快捷键提示换个不吃整个 keybindings 的接线。
     // 闸随之 3,100 → 3,200（+1.9% 余量）。文件闸 215→220 保持不变：现读数 219，余量只剩 1，
     // 下一枚面模块落地前必须先去拆面，**不要**顺手把这个数也抬了。
-    expect(totalKb).toBeLessThanOrEqual(3_200);
-    expect(files.length).toBeLessThanOrEqual(220);
+    //
+    // 2026-10-23 收口 PS10-MENU-SPLIT（同尺，同一套走图规则量的本树）：
+    //   本批合流后          219 文件 / 3,139 KB
+    //   拆面后（本行所在提交）206 文件 / 2,992 KB   ← −13 文件 / −147 KB
+    // 四处减法，全部是"搬到它真正被用到的地方"，没有一处是把功能藏进懒边：
+    //   - context-menu-shell 整模块离开（通知面下沉 notification-menu，−23 KB，净 0 文件）
+    //   - settings / keybindings 两面随 settings-menu.ts 进 SettingsPanel 的懒 chunk
+    //     （−13 文件 / −122 KB：editor-options / editor-display-prefs / settings-search /
+    //     layout-pref / glass-pref / format-pref / sealed / *-pref / word-separators 全部出图）
+    //   - 菜单快捷键提示改吃纯数据叶子 keybinding-specs（keybindings 22.7 KB 离图，
+    //     生效键位由 ShellLayout 挂载时注入，作者改键后菜单提示仍跟着变）
+    //   - 大纲折叠是纯视图状态，不新增任何模块
+    // 闸随之下调：文件 220 → 210，KB 3,200 → 3,050（约 +1.9% 余量）。这两条是**下限纪律**，
+    // 不是"还能再涨 58 KB"的许可：谁要抬，先像上面这样把增量逐块点名。
+    expect(totalKb).toBeLessThanOrEqual(3_050);
+    expect(files.length).toBeLessThanOrEqual(210);
   });
 });
