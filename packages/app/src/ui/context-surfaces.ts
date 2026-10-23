@@ -31,8 +31,15 @@
  * 直接落兜底等于把嵌套声明的意义废掉。
  */
 import {
+  getPluginContextSurface,
+  type PluginContextSurfaceBuildResult,
+  type PluginContextSurfaceMenu,
+} from '@kojo/plugin-api';
+import {
   FALLBACK_MENU_ARIA_LABEL,
   buildFallbackMenu,
+  filterChineseMenuItems,
+  isChineseMenuLabel,
   isTextInputTarget,
   runFallbackMenuAction,
   type ContextMenuItem,
@@ -222,6 +229,47 @@ function trySurface(
   };
 }
 
+/** 插件面的「对象形态」判别（数组 = 只展示；对象 = 带 onSelect 的完整菜单） */
+function isPluginMenuObject(
+  result: PluginContextSurfaceBuildResult,
+): result is PluginContextSurfaceMenu {
+  return result !== null && !Array.isArray(result);
+}
+
+/**
+ * 插件承载的面：把「插件的 build」翻译成本模块的菜单形态（`market` 用这一条）。
+ *
+ * 插件按解耦铁律只能依赖契约包，**不能 import 这个模块**——它的面登记在
+ * `@kojo/plugin-api` 的注册表里。这里做三件事，与本地面逐条同口径：
+ * 文案过中文化闸（`filterChineseMenuItems`）、空菜单/抛错 ⇒ `null`（交给下一级）、
+ * 对象形态才有 `onSelect`（数组形态只展示）。
+ */
+function buildPluginSurfaceMenu(
+  surfaceId: string,
+  target: HTMLElement,
+): ContextSurfaceMenu | null {
+  const spec = getPluginContextSurface(surfaceId);
+  if (spec?.build === undefined) return null;
+  let result: PluginContextSurfaceBuildResult;
+  try {
+    result = spec.build({ id: surfaceId, target });
+  } catch (error: unknown) {
+    console.warn(`[右键菜单] 插件面 '${surfaceId}' 的菜单构建抛错（已回落到下一级）：`, error);
+    return null;
+  }
+  if (result === null) return null;
+  const menu: PluginContextSurfaceMenu = isPluginMenuObject(result) ? result : { items: result };
+  const items = filterChineseMenuItems(menu.items);
+  if (items.length === 0) return null;
+  return {
+    items,
+    ...(menu.ariaLabel !== undefined && isChineseMenuLabel(menu.ariaLabel)
+      ? { ariaLabel: menu.ariaLabel }
+      : {}),
+    ...(menu.onSelect === undefined ? {} : { onSelect: menu.onSelect }),
+  };
+}
+
 /**
  * 三级策略落地（根路由的唯一判据）：给定被右击的元素与原始事件，算出该开哪个菜单。
  *
@@ -303,4 +351,19 @@ declareContextSurface({
       runFallbackMenuAction(id, ctx.target);
     },
   }),
+});
+
+/**
+ * 市场面（`market`）：面板由插件承载（`ui-market`），面在本注册表里**由宿主声明**、
+ * build 转给插件——理由同上面的输入/兜底面：清单里的每个面都得在这张表里看得见，
+ * 而插件的 build 又只能登记在契约包（插件不能 import 本模块）。
+ *
+ * 插件模块没加载（插件被禁用 / 还没激活）时 `buildPluginSurfaceMenu` 返回 `null`，
+ * 这一级自动不表态 ⇒ 落到兜底，而不是给用户一个空壳。
+ */
+declareContextSurface({
+  id: 'market',
+  ariaLabel: '市场菜单',
+  area: 'chrome',
+  build: (ctx) => buildPluginSurfaceMenu('market', ctx.target),
 });
