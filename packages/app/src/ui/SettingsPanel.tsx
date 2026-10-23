@@ -72,7 +72,10 @@ import {
 import { isComposingEvent } from './shell-keys';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
-import { isFailureNote, isPrimaryButton, registerSettingsMenuBridge, useMenuNote } from './context-menu-pages';
+import { isFailureNote, isPrimaryButton, useMenuNote } from './context-menu-pages';
+// 设置面（`settings`）的数据面住在本模块：它依赖设置项索引 / 外观偏好 / 可重置登记表，
+// 而这些东西只有设置浮层打开时才有用。挂在这里 = 进入本面板的懒 chunk，欢迎页不必替它付账。
+import { registerSettingsMenuBridge } from './settings-menu';
 // 语言能力矩阵的只读视图（批次十 S15）：现读 monaco/language-capabilities.ts，零 props、样式全内联。
 import { CapabilityMatrixSection } from './capability-matrix-view';
 import '../settings-search.css';
@@ -1086,8 +1089,8 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   }, [jump]);
 
   /* ---------------- 右键菜单接线（1023 覆盖面批 · 设置页） ---------------- */
-  // 面（`settings`）在 `context-menu-pages.ts` 模块顶层登记；这里只交接线桥——
-  // 「搜索同类设置」要写的是本组件的搜索框状态，菜单侧不碰它的实现。
+  // 面（`settings`）在 `settings-menu.ts` 模块顶层登记（本组件 import 它 ⇒ 同属本面板的懒 chunk）；
+  // 这里只交接线桥——「搜索同类设置」要写的是本组件的搜索框状态，菜单侧不碰它的实现。
   useEffect(() => {
     registerSettingsMenuBridge({
       searchSection: (label) => {

@@ -23,12 +23,10 @@ import {
 import { isComposingEvent, nextRovingIndex } from './shell-keys';
 import { monacoBuiltinRows } from './monaco-builtin-keybindings';
 import { Icon } from './icons';
-import {
-  isFailureNote,
-  keybindingMenuStateOf,
-  registerKeybindingsMenuBridge,
-  useMenuNote,
-} from './context-menu-pages';
+import { isFailureNote, useMenuNote } from './context-menu-pages';
+// 快捷键面（`keybindings`）的数据面与设置面同住 `settings-menu.ts`（本页由 SettingsPanel
+// 静态引入，同属那枚懒 chunk）——键位表与撞键判据只在设置浮层里才有用。
+import { keybindingMenuStateOf, registerKeybindingsMenuBridge } from './settings-menu';
 import './context-menu-pages.css';
 
 /**
@@ -120,7 +118,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
   const focusIndex = visible.length === 0 ? -1 : Math.min(activeIndex, visible.length - 1);
 
   /* ------------------- 右键菜单接线（1023 覆盖面批 · 快捷键页） ------------------- */
-  // 面（`keybindings`）在 `context-menu-pages.ts` 模块顶层登记；这里只交接线桥：
+  // 面（`keybindings`）在 `settings-menu.ts` 模块顶层登记；这里只交接线桥：
   // 行读数已由 `buildKeybindingRows` 算好，菜单不重算撞键；改键仍走覆盖表既有 API。
   useEffect(() => {
     registerKeybindingsMenuBridge({
