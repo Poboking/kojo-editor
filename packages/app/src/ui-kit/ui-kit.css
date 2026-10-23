@@ -1,0 +1,603 @@
+/* ============================================================================
+   ui-kit 控件语言（批次十一 L14 · 全站控件的度量基线）
+
+   两条硬纪律（沿用 search-panel.css 的 ksp- 口径）：
+   ① 类名一律 `kit-` 前缀，不与其他面板的类纠缠；本文件由 main.tsx 在 styles.css
+      族之后加载，元素级默认档（`button` / `input`）由同名类的更高特异性接管。
+   ② **不写死颜色 / 圆角 / 字号 / 动效**：全部取 styles.css `:root` 的 token；
+      新 token 需求以 `var(--xxx, <深色现值>)` 兜底（`:root` 归 L01，缺档见 README）。
+
+   度量基线 = 检索面板 `ksp-*`（全仓最精修的一族）：
+   - 输入井：min-height 26px、bg `--surface-sunken`、边 `--border`、圆角 `--radius-md`、
+     焦点 = `--focus-ring` 边 + `--shadow-focus`；
+   - 图标钮：22 见方静息无框、`::before` 热区补 24×24（WCAG 2.5.8）；
+   - 分段控件：sunken 井 + 2px 内衬 + `--radius-sm` 档钮、选中 accent 淡底 + 1px 内描边；
+   - 计数徽标：pill + `--bg-3` 井底 + `--fs-0` + tabular-nums（ksp-file-count）；
+   - 键位芯片：`--font-meta` + 底边 2px 厚（kb-chip 的"键帽"语言）。
+   ============================================================================ */
+
+/* ================================ KitField ================================ */
+
+.kit-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  max-width: var(--kit-field-max-width, 760px);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+}
+/* 行模板收编自 .settings-row：label 形态整行即点即切 */
+.kit-field-clickable {
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kit-field-clickable:hover {
+  background: var(--hover);
+}
+.kit-field-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+}
+.kit-field-title {
+  color: var(--fg);
+}
+.kit-field-desc {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+/* 控件槽：钉右轴，min-height 兜 WCAG 2.5.8 */
+.kit-field-ctl {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+}
+.kit-field-nested {
+  margin-left: var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  padding-left: var(--space-2);
+}
+.kit-field-inactive {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+.kit-field-inactive:hover {
+  background: none;
+}
+
+/* =============================== KitCheck ================================= */
+/* 结构同 Switch：视觉隐藏的真 input 盖在自绘勾盒上 ⇒ 原生键盘语义（空格可切、
+   受控 checked、读屏可读）零损失，外观进控件语言。 */
+
+.kit-check {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  cursor: pointer;
+  font-size: var(--fs-2);
+}
+.kit-check-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.kit-check-box {
+  position: relative;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+/* 勾：两条 border 折成的 45° 角（零字符、零 svg，颜色吃 token） */
+.kit-check-box::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  opacity: 0;
+}
+.kit-check-input:checked ~ .kit-check-box {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.kit-check-input:checked ~ .kit-check-box::after {
+  opacity: 1;
+}
+.kit-check-input:focus-visible ~ .kit-check-box {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.kit-check-input:disabled {
+  cursor: not-allowed;
+}
+.kit-check-input:disabled ~ .kit-check-box {
+  opacity: var(--disabled-opacity);
+}
+.kit-check:has(.kit-check-input:disabled) {
+  cursor: not-allowed;
+}
+.kit-check-text {
+  min-width: 0;
+  color: var(--fg);
+}
+
+/* ================================ KitRadio ================================ */
+
+.kit-radio {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  cursor: pointer;
+  font-size: var(--fs-2);
+}
+.kit-radio-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.kit-radio-dot {
+  position: relative;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  /* 50% 是几何值，不在圆角尺度内（styles.css §5.122 明文豁免） */
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+.kit-radio-dot::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.kit-radio-input:checked ~ .kit-radio-dot {
+  border-color: var(--accent-strong);
+}
+.kit-radio-input:checked ~ .kit-radio-dot::after {
+  opacity: 1;
+}
+.kit-radio-input:focus-visible ~ .kit-radio-dot {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.kit-radio-input:disabled {
+  cursor: not-allowed;
+}
+.kit-radio-input:disabled ~ .kit-radio-dot {
+  opacity: var(--disabled-opacity);
+}
+.kit-radio:has(.kit-radio-input:disabled) {
+  cursor: not-allowed;
+}
+.kit-radio-text {
+  min-width: 0;
+  color: var(--fg);
+}
+
+/* =============================== KitSelect ================================ */
+
+.kit-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.kit-select-input {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  min-height: 26px;
+  /* 右内衬 = chevron 槽（8 + 8 + 2） */
+  padding: 0 18px 0 8px;
+  background: var(--surface-sunken);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: var(--fs-1);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.kit-select-input:focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.kit-select-input:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+/* 弹层菜单面：Chromium/WebView2 允许给 option 上底色与文字色，token 化后三主题跟切 */
+.kit-select-input option {
+  background-color: var(--surface-overlay);
+  color: var(--fg);
+}
+/* 自绘 chevron：一枚折角（border 右+下旋转 45°），不吃字体不吃图 */
+.kit-select-arrow {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -5px;
+  border: solid var(--fg-dim);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+/* ============================== KitSegmented ============================== */
+/* 度量收编 .theme-segment / .theme-seg-btn（styles-project.css:4234 起） */
+
+.kit-segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.kit-seg-btn {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: var(--fs-1);
+  padding: 3px 10px;
+  min-height: 24px;
+  border-radius: var(--radius-sm);
+}
+.kit-seg-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--hover-soft);
+}
+.kit-seg-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.kit-seg-btn.on,
+.kit-seg-btn.on:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.kit-seg-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+/* ============================== KitIconButton ============================= */
+/* 度量收编 .ksp-icon-btn：22 见方静息无框；`::before` 透明热区补 24×24（P3-2 口径）。
+   `--kit-ib-glyph` = L10 图标四档契约的落点（12 / 14 / 16 / 22）。 */
+
+.kit-icon-btn {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max(22px, calc(var(--kit-ib-glyph, 16px) + 6px));
+  height: max(22px, calc(var(--kit-ib-glyph, 16px) + 6px));
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+}
+.kit-icon-btn[data-size='12'] {
+  --kit-ib-glyph: 12px;
+}
+.kit-icon-btn[data-size='14'] {
+  --kit-ib-glyph: 14px;
+}
+.kit-icon-btn[data-size='16'] {
+  --kit-ib-glyph: 16px;
+}
+.kit-icon-btn[data-size='22'] {
+  --kit-ib-glyph: 22px;
+}
+.kit-icon-btn svg {
+  width: var(--kit-ib-glyph, 16px);
+  height: var(--kit-ib-glyph, 16px);
+}
+.kit-icon-btn:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--fg);
+}
+.kit-icon-btn:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+.kit-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+/* toggle 型 on 态：ksp-toggle 语言（accent 淡底 + 半强度描边 + 文字档色） */
+.kit-icon-btn.on,
+.kit-icon-btn.on:hover:not(:disabled) {
+  border-color: rgb(var(--accent-rgb) / 0.55);
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+.kit-icon-btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+/* 透明热区：22 → 24，只扩命中测试、不参与绘制 */
+.kit-icon-btn::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: transparent;
+}
+
+/* ================================= KitKbd ================================= */
+/* 键帽语言收编 .kb-chip（fs 档 / 底边 2px 厚 / hover-soft 底），读法统一见 README */
+
+.kit-kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-meta);
+  font-style: normal;
+}
+.kit-kbd-chord {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.kit-kbd-key {
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--hover-soft);
+  color: var(--fg);
+  white-space: nowrap;
+}
+.kit-kbd-sep {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+
+/* =============================== KitCount ================================ */
+/* 度量收编 .ksp-file-count：pill + bg-3 井底（不跟 hover 同色）+ tabular-nums */
+
+.kit-count {
+  display: inline-block;
+  flex: none;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.kit-count-accent {
+  color: var(--accent-text);
+}
+.kit-count-danger {
+  color: var(--danger);
+}
+.kit-count-warning {
+  color: var(--warning);
+}
+.kit-count-success {
+  color: var(--success);
+}
+
+/* =============================== KitEmpty ================================ */
+/* stack 档收编 .kb-empty（居中列 + fs-4 标题 + 退路按钮）；
+   inline 档收编 .picker-empty / .settings-results-empty（一行灰字）。 */
+
+.kit-empty-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) 0;
+  text-align: center;
+}
+.kit-empty-inline {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+  font-size: var(--fs-1);
+}
+.kit-empty-icon {
+  display: inline-flex;
+  color: var(--fg-dim);
+  opacity: 0.7;
+}
+.kit-empty-title {
+  color: var(--fg);
+}
+.kit-empty-stack .kit-empty-title {
+  font-size: var(--fs-4);
+}
+.kit-empty-inline .kit-empty-title {
+  color: var(--fg-dim);
+}
+.kit-empty-hint {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.kit-empty-inline .kit-empty-hint {
+  font-size: inherit;
+}
+.kit-empty-action {
+  margin-top: var(--space-1);
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid var(--border);
+  box-shadow: none;
+  color: var(--accent-text);
+  font-size: var(--fs-1);
+}
+.kit-empty-action:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+.kit-empty-action:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.kit-empty-action:disabled {
+  opacity: var(--disabled-opacity);
+}
+
+/* ============================== KitSkeleton ============================== */
+/* 收编 .skeleton（styles.css:1981 / styles-project.css:8731）：sunken 底 + 扫光。
+   浮层加载态从「一句 .dim 文字」升级成不跳布局的占位。 */
+
+.kit-skeleton {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  color: transparent;
+  user-select: none;
+}
+.kit-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--hover), transparent);
+  transform: translateX(-100%);
+  animation: kit-shimmer 1.4s var(--ease-in-out) infinite;
+}
+.kit-skeleton-stack {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 120px;
+}
+/* 行高取字号档（13px）——骨架行与真实 UI 文本行同尺，加载完不跳版 */
+.kit-skeleton-line {
+  height: var(--fs-2);
+}
+.kit-skeleton-line:nth-child(2n) {
+  width: 72%;
+}
+.kit-skeleton-line:last-child {
+  width: 48%;
+}
+@keyframes kit-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+/* 减弱动效：扫光停成静置井面（与 ksp-spinner 同一处理） */
+@media (prefers-reduced-motion: reduce) {
+  .kit-skeleton::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+:root[data-motion='reduced'] .kit-skeleton::after {
+  animation: none;
+  opacity: 0;
+}
+
+/* =============================== KitGallery =============================== */
+/* 内部对照页：只做陈列（分节标题 + 并排行 + 灰注），验收控件语言合一用，不进生产接线 */
+
+.kit-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  overflow: auto;
+}
+.kit-gallery-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.kit-gallery-h {
+  margin: 0;
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--fg);
+}
+.kit-gallery-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.kit-gallery-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  width: 100%;
+}
+.kit-gallery-cap {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
