@@ -449,8 +449,17 @@ export function updateStatus(phase: UpdatePhase): { text: string; tone: UpdateSt
  */
 export type UpdateSeverity = 'normal' | 'breaking';
 
-/** 破坏性判定的唯一词表（分组与严重度共用，口径不许分叉） */
-const UPDATE_BREAKING_RE = /(breaking\s*changes?|破坏性(?:变更|更新)?|不兼容|incompatible)/i;
+/**
+ * 破坏性判定的唯一词表（分组与严重度共用，口径不许分叉）。
+ *
+ * `breaking` 认**裸词**，不只认 `breaking change`：changelog 里 `- breaking: 存储格式变更`
+ * 这类「标记 + 冒号」的写法才是常态（conventional-commits 那一系的破折号标记）。旧词表只匹配
+ * `breaking\s*changes?`，于是这一行既进不了破坏性组（掉进「其它」，把「坏的先说」的展示序
+ * 直接废掉），也判不出 `breaking` 严重度——而严重度是「打开即模态」的唯一许可位，漏判等于
+ * 替作者按下升级。这条是红线词的**扩集**，不是替换：`breaking change` / `破坏性变更` /
+ * `不兼容` / `incompatible` 原样都还认。
+ */
+const UPDATE_BREAKING_RE = /(\bbreaking\b|breaking\s*changes?|破坏性(?:变更|更新)?|不兼容|incompatible)/i;
 
 /** 说明里任何一行命中破坏性词 ⇒ breaking（宁松勿严：误判多给一次确认，漏判是替作者按下升级） */
 export function detectUpdateSeverity(notes: string | undefined): UpdateSeverity {

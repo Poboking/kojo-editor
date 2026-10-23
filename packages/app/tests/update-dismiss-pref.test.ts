@@ -66,12 +66,20 @@ describe('parseUpdateDismissal · 只认干净记录', () => {
 
 describe('isUpdateDismissalActive · 同版本 N 天内不再打扰（纯判龄）', () => {
   const now = Date.UTC(2026, 9, 20, 12);
+  /** 「稍后」是一小时前点的：窗口从 `dismissedAt` 起算，不从查询时刻起算 */
   const record = { version: '0.5.0', dismissedAt: now - HOUR };
+  /**
+   * 到期时刻 = 点稍后 + 7 天。边界照它取（差 1 毫秒就翻面）。
+   * 旧写法把边界挂在 `now` 上，而记录挂在 `now - HOUR`：三条断言合起来等价于要求
+   * 窗口 `608399999 < W ≤ 608400000`（= 7 天 + 1 小时），与同文件那条「窗口就是 7 天」
+   * 的常量钉死直接互斥——钉错的是时钟基准，不是判据。
+   */
+  const deadline = record.dismissedAt + UPDATE_NOTICE_QUIET_MS;
 
   it('同版本且在窗口内 ⇒ 免打扰；跨出窗口 ⇒ 恢复提醒', () => {
     expect(isUpdateDismissalActive(record, '0.5.0', now)).toBe(true);
-    expect(isUpdateDismissalActive(record, '0.5.0', now + UPDATE_NOTICE_QUIET_MS - 1)).toBe(true);
-    expect(isUpdateDismissalActive(record, '0.5.0', now + UPDATE_NOTICE_QUIET_MS)).toBe(false);
+    expect(isUpdateDismissalActive(record, '0.5.0', deadline - 1)).toBe(true);
+    expect(isUpdateDismissalActive(record, '0.5.0', deadline)).toBe(false);
   });
 
   it('免打扰天数是 7 天（常量口径钉住，别被顺手改成"永久"）', () => {
@@ -103,10 +111,17 @@ describe('读写盘 · localStorage 真源', () => {
     stubWindow(s);
     dismissUpdateVersion('0.5.0', 1000);
     expect(JSON.parse(s.getItem(UPDATE_DISMISS_KEY) as string)).toEqual({ version: '0.5.0', dismissedAt: 1000 });
-    expect(isUpdateNoticeQuiet('0.5.0')).toBe(true);
+    // 判龄与落盘必须同一把钟：这里给注入时刻 1000 的一小时后。原先不传 `now` 用本机墙钟，
+    // 而 `dismissedAt: 1000`（1970 年）对墙钟已经过了 7 天窗口的 ~2964 倍 ⇒ 任何按窗口判龄的
+    // 判据都只能给 false。钉错的是这把钟，不是「点完稍后要立刻安静」那条语义。
+    expect(isUpdateNoticeQuiet('0.5.0', 1000 + HOUR)).toBe(true);
+    // 同一份记录跨出 7 天 ⇒ 恢复提醒：存储版判据也吃窗口，不是「存过就永远安静」
+    expect(isUpdateNoticeQuiet('0.5.0', 1000 + UPDATE_NOTICE_QUIET_MS)).toBe(false);
     dismissUpdateVersion('0.6.0', 2000);
     expect(loadUpdateDismissal()).toEqual({ version: '0.6.0', dismissedAt: 2000 });
-    expect(isUpdateNoticeQuiet('0.5.0')).toBe(false);
+    // 2000 这一刻 0.5.0 那条记录本来还在窗口内 ⇒ 它的 false 只能来自「整条覆盖」，不是过期
+    expect(isUpdateNoticeQuiet('0.5.0', 2000)).toBe(false);
+    expect(isUpdateNoticeQuiet('0.6.0', 2000)).toBe(true);
   });
 
   it('clearUpdateDismissal 删键（不留 {version:""} 第三种形态）', () => {
