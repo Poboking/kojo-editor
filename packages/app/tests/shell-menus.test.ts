@@ -732,8 +732,18 @@ describe('源码守门：面根与数据锚点必须在位', () => {
     expect(notifications).toContain('data-notice-id={n.id}');
   });
 
-  it('浮窗初值公式只有一份（floatPanel 与「重置位置与尺寸」共用 defaultFloatRect）', () => {
+  it('浮层初值公式只有一份（floatPanel 与「重置位置与尺寸」共用 defaultFloatRect）', () => {
     expect(shell).toContain('defaultFloatRect(n, { w: vw, h: vh })');
     expect(shell).not.toContain('Math.round(vw * 0.52)');
+  });
+
+  it('浮层遮罩只认左键（右键要留给浮层自己的菜单）', () => {
+    // 遮罩的 onMouseDown 若对三键生效：右键按下先把浮层关掉，根路由随后收到 contextmenu 时
+    // 面已经不在场——菜单永远弹不出来，而这条链路在任何纯函数测试里都不会红。
+    const at = shell.indexOf('overlay-backdrop');
+    expect(at).toBeGreaterThan(-1);
+    const closeAt = shell.indexOf('setActiveOverlay(null)', at);
+    expect(closeAt).toBeGreaterThan(at);
+    expect(shell.slice(at, closeAt)).toMatch(/button\s*!==\s*0/);
   });
 });

@@ -2163,7 +2163,15 @@ export function ShellLayout(props: Props): ReactElement {
         />
       ) : null}
       {overlayContribution ? (
-        <div className="overlay-backdrop" onMouseDown={() => setActiveOverlay(null)}>
+        <div
+          className="overlay-backdrop"
+          onMouseDown={(e) => {
+            // 只认左键：右键要弹浮层自己的菜单，不能先把浮层关掉
+            // ——关掉之后根路由再收到 contextmenu，面已经不在场了
+            if (e.button !== 0) return;
+            setActiveOverlay(null);
+          }}
+        >
           <div
             className={`overlay-host${overlayContribution.size === 'wide' ? ' overlay-host-wide' : ''}`}
             role="dialog"
