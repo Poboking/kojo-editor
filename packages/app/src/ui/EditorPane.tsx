@@ -69,6 +69,8 @@ import { Icon } from './icons';
 // 糖视图阅读模式（.kojo 预览专用）的显示层样式：装饰类 + 工具条开关，组件级引入
 // （照 tab-chip.css / welcome.css 先例；只影响挂在糖 model 上的装饰，不碰普通编辑）
 import './sugar-read.css';
+// 右键面（1023 覆盖面批）：外框 / 预览横幅两个面的样式只进这个新文件（不往常驻样式表里塞）
+import './context-menu-editor-chrome.css';
 import { perf } from '../perf';
 import {
   composeSugarDoc,
@@ -80,6 +82,7 @@ import {
   saveSugarViewPref,
   saveSugarViewPrompted,
   sourceLineToSugar,
+  sugarLineToSource,
   sugarReadDecorations,
   sugarReadTypography,
   SUGAR_READ_MARK_MAX_LINES,
@@ -138,6 +141,17 @@ import {
   useEditorPreferences,
 } from './editor-pane/use-editor-preferences';
 import { useMonacoInstance } from './editor-pane/use-monaco-instance';
+// 右键面（1023 覆盖面批 · WP1.2 / 1.5）：外框三项 + 预览横幅菜单的纯逻辑与面声明
+// 都在那个模块里（`declareContextSurface` 模块顶层登记，本文件只负责喂"此刻事实"）
+import {
+  EDITOR_FRAME_MENU_IDS,
+  PREVIEW_MENU_IDS,
+  setEditorFrameMenuRuntime,
+  setPreviewMenuRuntime,
+  type EditorFrameMenuContext,
+  type PreviewMenuContext,
+} from './editor-pane/preview-menu';
+import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -2230,11 +2244,175 @@ export function EditorPane({
     return kernel.bus.on('editor.fixAll.request', () => applyQuickFixEdits());
   }, [kernel, applyQuickFixEdits]);
 
+  /* ---------------------- 右键面：编辑器外框 + .kojo 预览 ----------------------
+   *
+   * 两个面在 `editor-pane/preview-menu.ts` 模块顶层登记（`editor` / `sugar-preview`），
+   * 这里只做三件事：把「此刻事实」喂进去、把选中项落回**既有**能力、卸载时注销句柄。
+   * 分屏多实例按组分槽（`data-editor-group`）：谁被右击就用谁的上下文。
+   */
+
+  /**
+   * 剪贴板一句话反馈（照 FileTree / tabs-bar 的 copyText 口径）：成功与失败都说话，
+   * 不静默吞掉。预览全文可能几十万字，`navigator.clipboard` 是异步的。
+   */
+  const copyTextForMenu = useCallback(
+    (text: string, done: string): void => {
+      const clip = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+      if (!clip?.writeText) {
+        notify({ kind: 'error', message: '复制失败：当前环境没有可用的剪贴板' });
+        return;
+      }
+      void clip.writeText(text).then(
+        () => notify({ kind: 'info', message: done }),
+        () => notify({ kind: 'error', message: '复制失败：剪贴板不可用' }),
+      );
+    },
+    [notify],
+  );
+
+  /** 外框菜单的"此刻事实"（每次右键现读：路径随标签切换而变） */
+  const readEditorFrameMenuContext = useCallback(
+    (): EditorFrameMenuContext => ({
+      filePath: filePathRef.current || null,
+      canRunCommand: canRunContextMenuCommand,
+    }),
+    [],
+  );
+
+  /** 外框菜单的落地：复制路径走剪贴板，其余两项（命令面板 / 设置）交回命令通道 */
+  const runEditorFrameMenuAction = useCallback(
+    (id: string): void => {
+      if (id === EDITOR_FRAME_MENU_IDS.copyPath) {
+        const path = filePathRef.current;
+        if (!path) return;
+        copyTextForMenu(path, '已复制完整路径');
+        return;
+      }
+      // 命令项按"此刻能不能跑"已在构建时补过禁用原因，这里不再叠一句噪声
+      runContextMenuCommand(id);
+    },
+    [copyTextForMenu],
+  );
+
+  /** 预览菜单的"此刻事实"（选区 / 光标 / 折叠能力都不进 React 状态，只能此刻现读） */
+  const readPreviewMenuContext = useCallback((): PreviewMenuContext => {
+    const ed = editorRef.current;
+    const model = sugarModelRef.current;
+    const position = ed?.getPosition() ?? null;
+    const selection = ed?.getSelection() ?? null;
+    const hasSelection =
+      selection !== null &&
+      (selection.startLineNumber !== selection.endLineNumber ||
+        selection.startColumn !== selection.endColumn);
+    return {
+      previewing: model !== null && !model.isDisposed(),
+      hasPreviewText: model !== null && !model.isDisposed() && model.getValueLength() > 0,
+      hasSelection: model !== null && hasSelection,
+      canJumpToSource:
+        model !== null &&
+        !model.isDisposed() &&
+        position !== null &&
+        sugarLineToSource(sugarLineMapRef.current, position.lineNumber) !== null,
+      canToggleFold:
+        ed !== null &&
+        ed.getAction('editor.foldAll') !== null &&
+        ed.getAction('editor.unfoldAll') !== null,
+      canOpenSettings: canRunContextMenuCommand('layout.openSettings'),
+    };
+  }, []);
+
+  /** 让预览让位：与工具条那颗开关、"预览让位"通知同一条意图通道（宿主是状态所有者） */
+  const switchBackToSource = useCallback((): void => {
+    kernel.bus.emit('editor.sugarView.set', {
+      on: false,
+      ...(filePathRef.current ? { filePath: filePathRef.current } : {}),
+    });
+  }, [kernel]);
+
+  /**
+   * 预览菜单的落地——每一项都落在**既有通道**上，没有新造业务：
+   * 剪贴板 / Monaco 折叠动作 / 预览开关意图（`editor.sugarView.set`，与工具条那颗开关
+   * 和"预览让位"通知同一条路）/ 编辑区定位（`editor.revealLocation`）/ 命令通道。
+   */
+  const runPreviewMenuAction = useCallback(
+    (id: string): void => {
+      const ed = editorRef.current;
+      const model = sugarModelRef.current;
+      switch (id) {
+        case PREVIEW_MENU_IDS.copyAll: {
+          if (model === null) return;
+          copyTextForMenu(model.getValue(), '已复制预览全文');
+          return;
+        }
+        case PREVIEW_MENU_IDS.copySelection: {
+          const selection = ed?.getSelection() ?? null;
+          if (model === null || selection === null) return;
+          copyTextForMenu(model.getValueInRange(selection), '已复制所选内容');
+          return;
+        }
+        case PREVIEW_MENU_IDS.backToSource: {
+          switchBackToSource();
+          return;
+        }
+        case PREVIEW_MENU_IDS.foldAll: {
+          void ed?.getAction('editor.foldAll')?.run();
+          return;
+        }
+        case PREVIEW_MENU_IDS.unfoldAll: {
+          void ed?.getAction('editor.unfoldAll')?.run();
+          return;
+        }
+        case PREVIEW_MENU_IDS.jumpToSource: {
+          const line = ed?.getPosition()?.lineNumber;
+          const sourceLine =
+            line === undefined ? null : sugarLineToSource(sugarLineMapRef.current, line);
+          if (sourceLine === null) return;
+          const path = filePathRef.current;
+          // 先让预览让位、再定位：本组件里"糖视图开关"那个 effect 声明在"定位"effect 之前
+          // ⇒ 同一拍里换回原文在前、`applyReveal` 在后，行号不会被二次映射成预览行。
+          switchBackToSource();
+          if (!path) return;
+          kernel.bus.emit('editor.revealLocation', {
+            filePath: path,
+            line: sourceLine,
+            source: '预览菜单',
+          });
+          return;
+        }
+        default:
+          runContextMenuCommand(id);
+      }
+    },
+    [copyTextForMenu, kernel, switchBackToSource],
+  );
+
+  useEffect(() => {
+    setEditorFrameMenuRuntime(groupId, {
+      context: readEditorFrameMenuContext,
+      run: runEditorFrameMenuAction,
+    });
+    return () => setEditorFrameMenuRuntime(groupId, null);
+  }, [groupId, readEditorFrameMenuContext, runEditorFrameMenuAction]);
+
+  useEffect(() => {
+    setPreviewMenuRuntime(groupId, {
+      context: readPreviewMenuContext,
+      run: runPreviewMenuAction,
+    });
+    return () => setPreviewMenuRuntime(groupId, null);
+  }, [groupId, readPreviewMenuContext, runPreviewMenuAction]);
+
   const labelParts = pathLabelParts(filePath);
 
+  /** 预览是否正挂在屏上（= 横幅面该不该存在，也是 `sugar-stats` 渲染的那一档） */
+  const sugarPreviewing = sugarView && sugarStats !== null;
+
   return (
-    <div className="editor-pane">
-      <div className="editor-toolbar">
+    <div className="editor-pane" data-editor-group={groupId}>
+      {/* 外框面：右键落在工具条这一条上时给「复制文件路径 / 命令面板 / 打开设置」。
+          Monaco 里面的热区（行号槽/小地图/概览标尺/滚动条…）由根路由整片放行，
+          这个属性管不到它们，也不该管。 */}
+      <div className="editor-toolbar" data-context-surface="editor">
         {/* 身份优先（UI P4）：文件名 + 最深一层目录恒显，只有长前缀可缩。
             旧版整条路径交给 CSS 尾部省略，1280 窗口下 969px 塞进 550px ⇒ 裁掉的
             正好是文件名，作者盯着工具条读到的是游戏目录前缀。完整路径留在 title 里。 */}
@@ -2306,7 +2484,12 @@ export function EditorPane({
                 直连可编辑
               </span>
             ) : (
-              <>
+              /* 预览横幅（1023 覆盖面批）：这一簇（开关 + 读数 + 语法标记开关）就是
+                 `sugar-preview` 面的根元素。**只在预览真在屏上时才挂面属性**——预览关着时
+                 这颗按钮只是外框上的普通按钮，右键该归外层面 `editor`（就近路由不会自动
+                 回落到外层，所以属性本身必须跟着状态走）。`display: contents` 见
+                 `context-menu-editor-chrome.css`：包裹层不参与布局，工具条一个字都不动。 */
+              <span className="sugar-banner" data-context-surface={sugarPreviewing ? 'sugar-preview' : undefined}>
                 {/* 预览开关：整份 ERB 投影成 .kojo 写法（只读显示，磁盘一字未动）——
                     本功能的存在理由就是让不熟悉原生语法的人也能把别人的口上当剧本读懂。
                     **默认关**（选择会被记住），发现路径 = 首次打开游戏目录 ERB 时的那一次询问。
@@ -2355,7 +2538,7 @@ export function EditorPane({
                     </button>
                   </>
                 ) : null}
-              </>
+              </span>
             )}
           </>
         ) : null}
