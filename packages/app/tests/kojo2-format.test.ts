@@ -32,6 +32,7 @@ import {
   applyKojo2Format,
   formatKojo2Source,
   installKojo2DocumentFormatter,
+  installKojo2RangeFormatter,
   type Kojo2FormatEdit,
   type Kojo2FormatOptions,
 } from '../src/monaco/kojo2-format';
@@ -672,6 +673,52 @@ describe('⑨`applyKojo2Format` 复用同一枚 `applyTextEdits`（前后各一�
     expect(code).toContain("import type * as Monaco from './entry'");
     expect(code).toContain("import type { applyTextEdits }");
     expect(code).not.toContain("from '@kojo/plugin-");
+  });
+});
+
+/* ============================== ⑩ 区间格式化 provider ============================== */
+
+describe('⑩区间格式化（Ctrl+K Ctrl+F）：provider 存在、只落选中行、选区外零编辑', () => {
+  it('range provider 只挂 kojo2；一条 edit 落在选区内；代回后选区外逐字节不动', () => {
+    stubFlag(true);
+    const registered: { languageId: string; provider: Monaco.languages.DocumentRangeFormattingEditProvider }[] = [];
+    const monacoStub = {
+      languages: {
+        registerDocumentRangeFormattingEditProvider(languageId: string, provider: unknown) {
+          registered.push({
+            languageId,
+            provider: provider as Monaco.languages.DocumentRangeFormattingEditProvider,
+          });
+          return { dispose: () => undefined };
+        },
+      },
+    } as unknown as typeof Monaco;
+    installKojo2RangeFormatter(monacoStub);
+    // provider 存在且只认一门：kojo2（不与 ERB / v1 双注册）
+    expect(registered.map((entry) => entry.languageId)).toEqual([KOJO2_LANGUAGE_ID]);
+
+    const source = '# 池 问候\n  ? 恋慕 < 100\n      「早。」\n  ? 否\n      我：「嗯。」\n';
+    const requestedRange = { startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 12 };
+    const edits = registered[0]!.provider.provideDocumentRangeFormattingEdits(
+      fakeModel(source) as unknown as Monaco.editor.ITextModel,
+      requestedRange as Monaco.Range,
+      {} as Monaco.languages.FormattingOptions,
+      {} as Monaco.CancellationToken,
+    ) as Monaco.languages.TextEdit[];
+
+    // 只改选区：唯一一条 edit 的行范围落在请求的选区内
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.range.startLineNumber).toBe(requestedRange.startLineNumber);
+    expect(edits[0]!.range.endLineNumber).toBe(requestedRange.endLineNumber);
+
+    // 选区外零编辑：把 edit 代回原文，第 1 / 2 / 4 / 5 行逐字节不变
+    const outLines = source.split('\n');
+    outLines.splice(edits[0]!.range.startLineNumber - 1, 1, edits[0]!.text);
+    const beforeLines = source.split('\n');
+    expect(outLines[2]).toBe('        「早。」');
+    for (const index of [0, 1, 3, 4]) {
+      expect(outLines[index], `第 ${index + 1} 行被选区外改动了`).toBe(beforeLines[index]);
+    }
   });
 });
 

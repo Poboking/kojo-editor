@@ -33,7 +33,7 @@
  * 这条口径是**保守**的：`@原生` 围栏里的行（语义层搬运）算"已迁移"（它们真的换了形态），
  * 但块内仍是 v1 写法——所以报告同时给 `rewrites` 读数（语义层改写了哪些块），供人复核。
  */
-import { classifyV1, type V1Kind } from '@kojo/kojo-core';
+import { classifyV1, diagnoseV1IndentMismatch, type V1Kind } from '@kojo/kojo-core';
 
 /* ============================== 1. 公共形状 ============================== */
 
@@ -58,6 +58,8 @@ export interface MigrationDiagnostic {
   readonly code: string;
   readonly severity: string;
   readonly message: string;
+  /** 诊断定位的 1 基行号（additive；旧实现不填 = 读数照旧） */
+  readonly line?: number | null;
 }
 
 /** 编译器输出的最小契约（v1 / 2.0 同形） */
@@ -172,6 +174,8 @@ export interface MigrationCaseReport {
   readonly id: string;
   readonly status: MigrationStatus;
   readonly blockedReason: MigrationBlockedReason | null;
+  /** blocked 的可定位成因（additive；`v1-compile-failed` 且首错为 `indent-mismatch` 时给出） */
+  readonly blockedDetail: string | null;
   /** 与 `expect` 是否相符（无期望 = true，只报告） */
   readonly ok: boolean;
   /** 与期望不符的原因（人话；`ok=true` 时为 null） */
@@ -750,8 +754,31 @@ function runCase(input: RunCaseInput): MigrationCaseReport {
     products: MigrationCaseReport['products'],
   ): MigrationCaseReport => {
     const mismatch = mismatchOf(status, blockedReason);
-    return { id: testCase.id, status, blockedReason, ok: mismatch === null, mismatch, diff, readings, products };
+    return {
+      id: testCase.id,
+      status,
+      blockedReason,
+      blockedDetail: blockedDetailOf(blockedReason),
+      ok: mismatch === null,
+      mismatch,
+      diff,
+      readings,
+      products,
+    };
   };
+
+  /**
+   * blocked 的可定位成因（additive）：只解释 `indent-mismatch`——v1 的同一句报错压了
+   * 四类成因，作者拿到 blocked 也不知道改哪儿。其余 code 原样保留，不抢 v1 的话。
+   */
+  function blockedDetailOf(reason: MigrationBlockedReason | null): string | null {
+    if (reason !== 'v1-compile-failed') return null;
+    const first = v1Errors[0];
+    if (first === undefined || first.code !== 'indent-mismatch') return null;
+    const line = first.line ?? null;
+    if (line === null) return null;
+    return diagnoseV1IndentMismatch(testCase.source, line)?.detail ?? null;
+  }
 
   /* ---- 1. v1 侧（基线）---- */
   let v1Text: string | null = null;
@@ -1487,6 +1514,8 @@ export interface MigrationCliCaseReport {
   readonly id: string;
   readonly status: MigrationStatus;
   readonly blockedReason: MigrationBlockedReason | null;
+  /** blocked 的可定位成因（additive；`null` = 无更细解释） */
+  readonly blockedDetail: string | null;
   readonly ok: boolean;
   readonly diff: {
     readonly removed: number;
@@ -1694,7 +1723,8 @@ export function formatMigrationReport(report: MigrationCliReport, options: { rea
   lines.push('cases:');
   for (const item of report.cases) {
     const blocked = item.blockedReason === null ? '' : `  (${item.blockedReason})`;
-    lines.push(`  ${item.ok ? 'PASS' : 'FAIL'}  ${item.id}  ${item.status}${blocked}`);
+    const detail = item.blockedDetail === null ? '' : `  — ${item.blockedDetail}`;
+    lines.push(`  ${item.ok ? 'PASS' : 'FAIL'}  ${item.id}  ${item.status}${blocked}${detail}`);
     if (item.diff.firstDifference !== null) {
       const first = item.diff.firstDifference;
       const side = first.baseline ?? first.candidate ?? '';
@@ -1803,6 +1833,7 @@ export function runMigrationCli(argv: readonly string[], deps: MigrationCliDeps)
     id: report.id,
     status: report.status,
     blockedReason: report.blockedReason,
+    blockedDetail: report.blockedDetail,
     ok: report.ok,
     diff: {
       removed: report.diff.removed,

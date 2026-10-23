@@ -105,6 +105,41 @@ export function minimapCtxForPath(path: string): MinimapViewContext {
 }
 
 /**
+ * 糖投影 model 的**结构最小面**（语言覆盖跟随只读这两格；真身 `ITextModel` 天然满足）。
+ */
+export interface SugarLanguageModelLike {
+  getLanguageId(): string;
+  isDisposed(): boolean;
+}
+
+/**
+ * 语言模式覆盖变更后，让当前存活的糖投影 model 跟着重挂（LANG-OVERRIDE-MODEL）。
+ *
+ * 判据只剩一处：调用方给 `resolve`（生产 = `resolveModelLanguage(path, KOJO_LANGUAGE_ID)`，
+ * 糖投影的 descriptor 恒为 `.kojo` 语言面）。本函数只做三件事：跳过已 dispose 的投影、
+ * 同语言跳过（重挂会重置 tokenization / 折叠 / 装饰，白挂一次就是可见闪动）、其余交给
+ * 注入的 `setModelLanguage`（真身 = `monaco.editor.setModelLanguage`）。返回真正重挂的份数。
+ *
+ * 分屏多组各自一份 model（URI 按组隔离）⇒ 各组的订阅各自把这一份传进来，互不共享注册表；
+ * 本函数保持纯逻辑，node 测试给假件即可逐条钉住。
+ */
+export function retargetSugarModels<M extends SugarLanguageModelLike>(
+  models: readonly M[],
+  resolve: (model: M) => string,
+  setModelLanguage: (model: M, languageId: string) => void,
+): number {
+  let changed = 0;
+  for (const model of models) {
+    if (model.isDisposed()) continue;
+    const desired = resolve(model);
+    if (desired === model.getLanguageId()) continue;
+    setModelLanguage(model, desired);
+    changed += 1;
+  }
+  return changed;
+}
+
+/**
  * `.kojo` 预览装配判据的项目侧摘要（PS-5 缓存键的一部分）。
  *
  * 段由 `ui.editor.liftPreview` 按 `{path, text, project}` 现算 ⇒ 决定产物的只有

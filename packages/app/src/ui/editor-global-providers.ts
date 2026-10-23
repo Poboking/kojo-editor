@@ -1240,6 +1240,9 @@ export function formatRequestWindowFor(
   const to = Math.min(Math.max(from, Math.trunc(endLine) || from), lineCount);
   return {
     dialect,
+    // P2-14：规则开关与整篇腿同一份偏好、同样**组请求时现读**（区间/打字规范化这两条入口
+    // 此前漏了这一项，关掉的规则在窗口腿上静默失效）。
+    rules: loadFormatRulesPref(),
     text: model.getValueInRange({
       startLineNumber: from,
       startColumn: 1,
@@ -2026,8 +2029,8 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         if (dialect === null) return null;
         // P2-14：规则开关**组请求时现读**（与保存链路"落盘前现读一次偏好"同一纪律，
         // 不存闭包旧值）；`undefined`（缺省全开）与今天逐字等价。窗口腿
-        // （`resolveRange` → `formatRequestWindowFor`）不带规则——区间/打字规范化
-        // 本批保持全开口径（见 kojo-format.ts 头注），这是**明说的边界**不是漏接。
+        // （`resolveRange` → `formatRequestWindowFor`）现读的是**同一份**偏好：区间与
+        // 打字规范化两条入口都不许在偏好关掉某条规则时按全开执行。
         return { text: model.getValue(), dialect, rules: loadFormatRulesPref() };
       },
       resolveRange: (model, startLine, endLine) => formatRequestWindowFor(model, startLine, endLine),

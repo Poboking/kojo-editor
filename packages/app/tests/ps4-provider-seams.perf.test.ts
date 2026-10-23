@@ -341,12 +341,15 @@ describe('PS-4 读数 · on-type 格式化（52,601 行，一次击键）', () =
     const before = medianMs(9, () => computeFormatEdits(model.getValue(), 'erb').filter((e) => e.line === triggerLine));
     const copiesBeforeNewLeg = stats.fullCopies;
     const windowsBeforeNewLeg = stats.windows;
-    const after = medianMs(41, runNew);
+    const AFTER_RUNS = 41;
+    const after = medianMs(AFTER_RUNS, runNew);
     console.info(
       `[PS-4 打字规范化] 52,601 行一次击键（第 ${triggerLine} 行）：改前中位 ${ms(before)}（整篇 copy ${copiesBeforeNewLeg} 次）→ 改后中位 ${ms(after)}（新腿 copy ${stats.fullCopies - copiesBeforeNewLeg} 次、窗口取文 ${stats.windows - windowsBeforeNewLeg} 次、整篇编辑 ${wholeEdits.length} 条）`,
     );
     expect(stats.fullCopies).toBe(copiesBeforeNewLeg);
-    expect(stats.windows).toBeGreaterThan(windowsBeforeNewLeg);
+    // **一次击键 = 窗口取文 1 次**（只有触发行；前缀行直读 `model.getLineContent`，不再取 2.35 MB
+    // 前缀串）。量的是"取文次数"这条观测断言：改前这里每次击键是 2 次窗口取文。
+    expect(stats.windows - windowsBeforeNewLeg).toBe(AFTER_RUNS);
     // 逐字节等价：新路给出的编辑 = 老路裁到这一行的编辑（行号 / 列 / 文本三样都对得上）
     expect(runNew().map((e) => `${e.range.startLineNumber}:${e.range.startColumn}:${e.range.endColumn}:${e.text}`)).toEqual(
       wholeEdits

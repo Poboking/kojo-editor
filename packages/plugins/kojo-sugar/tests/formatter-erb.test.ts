@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
-import { applyFormatEdits, computeFormatEdits, computeRangeFormatEdits, formatText } from '../src/formatter';
+import { applyFormatEdits, computeFormatEdits, computeRangeFormatEdits, erbNewContentWithPrefix, formatText } from '../src/formatter';
 
 const FW = FULLWIDTH_SPACE;
 
@@ -241,5 +241,34 @@ describe('ERB 区间格式化：块前缀', () => {
     const prefix = 'IF X\n\tPRINTL 甲\n';
     const range = 'PRINTL 乙\n';
     expect(computeRangeFormatEdits(range, 'erb', { prefix }, { indent: false })).toEqual([]);
+  });
+});
+
+describe('ERB 单行窗口：前缀行数组（宿主 on-type 腿的入口）', () => {
+  it('IF 体内的单行 ≡ 多行腿把同一行喂进前缀的产物（同一台状态机）', () => {
+    const prefix = 'IF X\n\tPRINTL 甲\n';
+    const range = 'PRINTL 乙\n';
+    const viaLines = erbNewContentWithPrefix(['IF X', '\tPRINTL 甲'], 'PRINTL 乙');
+    const viaPrefixText = computeRangeFormatEdits(range, 'erb', { prefix });
+    expect(viaLines).toBe('\tPRINTL 乙');
+    expect(viaPrefixText).toEqual([{ line: 1, startColumn: 1, endColumn: 9, text: '\tPRINTL 乙' }]);
+    expect(viaLines).toBe(viaPrefixText[0]!.text);
+  });
+
+  it('顶层单行：无外层块 ⇒ 与不带前缀的切片逐字相同', () => {
+    const line = `${FULLWIDTH_SPACE}PRINTL 乙`;
+    expect(erbNewContentWithPrefix(['PRINTL 甲'], line)).toBe('  PRINTL 乙');
+    expect(erbNewContentWithPrefix(['PRINTL 甲'], line)).toBe(computeRangeFormatEdits(line, 'erb')[0]!.text);
+  });
+
+  it('数据表块体内的单行 ⇒ `null`（保护区整行不动，与整篇腿同一条掩码）', () => {
+    expect(erbNewContentWithPrefix(['PRINTDATA', `${FULLWIDTH_SPACE}甲`], `${FULLWIDTH_SPACE}乙`)).toBeNull();
+  });
+
+  it('规则开关同口径：关 `fullWidthSpace` ⇒ 全角原样；关 `indent` ⇒ 块层级不动', () => {
+    expect(erbNewContentWithPrefix(['PRINTL 甲'], `${FULLWIDTH_SPACE}PRINTL 乙`, { fullWidthSpace: false })).toBeNull();
+    expect(
+      erbNewContentWithPrefix(['IF X', '\tPRINTL 甲'], `${FULLWIDTH_SPACE}PRINTL 乙`, { indent: false }),
+    ).toBe('  PRINTL 乙');
   });
 });

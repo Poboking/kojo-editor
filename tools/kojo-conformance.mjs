@@ -122,6 +122,8 @@ function createV1Compiler(sugar, support) {
         code: diagnostic.code,
         severity: diagnostic.severity,
         message: diagnostic.message,
+        // 行号 additive：blocked 成因定位（`indent-mismatch` 的哪一行）
+        line: diagnostic.loc?.line ?? null,
       })),
     };
   };

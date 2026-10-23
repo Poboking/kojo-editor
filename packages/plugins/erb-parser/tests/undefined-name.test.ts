@@ -247,3 +247,28 @@ describe('collectUndefinedNameDiagnostics · 批次十一收窄（每条都有�
     ]);
   });
 });
+
+/**
+ * 批次十二 UNDEF-NAME-RESIDUAL：真语料剩余命中里的两处**字符串词法**误报。
+ *
+ * 共享 `visibleCodeLines().codeView()` 的引号配对是朴素开/闭翻转，两处会跑偏：
+ * ① `\"` 转义（CASE 字符表里的 `"\"", …` 让后续所有引号顺序翻转，`"l"` / `"y"` 泄漏）；
+ * ② `@"…%…%"` 插值串（插值里还能再放字符串，`%COND_STR("_Nude", …)%` 的嵌套引号让串体泄漏）。
+ * 两处都只在**确证是字符串内容**时收窄；反证用例钉住"字符串外 / 插值表达式内照报"。
+ */
+describe('collectUndefinedNameDiagnostics · 批次十二（字符串词法盲区）', () => {
+  it('`\\"` 转义不让引号配对翻转：CASE 字符表里的 ASCII 片段不是变量', () => {
+    expect(collect('CASE "／", "\\"", "l", "y"')).toEqual([]);
+    // 反证：字符串外同样短的名字照报
+    expect(collect('CASE l').map((d) => d.name)).toEqual(['l']);
+    expect(collect('IF y > 0').map((d) => d.name)).toEqual(['y']);
+  });
+
+  it('`@"…%…%"` 插值串：字面量内容（含 `{…}` 与嵌套字符串）不是变量引用', () => {
+    expect(collect('#DIM PAT\n#DIM KNOWN\nIF PAT == @"Start_{LOOP}%COND_STR("_Nude", KNOWN)%"')).toEqual([]);
+    // 反证①：字符串外的未知名仍报
+    expect(collect('IF UNKNOWN == @"Start_{LOOP}"').map((d) => d.name)).toEqual(['UNKNOWN']);
+    // 反证②：插值 `%…%` 之内是表达式（不是字符串内容），未知名仍报
+    expect(collect('IF @"%UNKNOWN + 1%" == 0').map((d) => d.name)).toEqual(['UNKNOWN']);
+  });
+});

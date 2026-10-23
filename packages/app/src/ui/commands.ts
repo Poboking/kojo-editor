@@ -272,7 +272,7 @@ export function createSourceFileCache(walkDir: WalkDirLike): SourceFileCache {
   let entry: Promise<readonly string[]> | null = null;
   return {
     list(roots, nonce) {
-      const nextKey = `${nonce} ${roots.join('\n')}`;
+      const nextKey = `${nonce}\u0000${roots.join('\n')}`;
       if (key === nextKey && entry !== null) return entry;
       const request = listSourceFiles(walkDir, roots);
       key = nextKey;

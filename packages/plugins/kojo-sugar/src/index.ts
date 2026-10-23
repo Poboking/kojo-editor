@@ -1189,6 +1189,9 @@ export {
   computeFormatEdits,
   computeRangeFormatEdits,
   erbBodyRegionAtLineEnd,
+  // 单行窗口的块上下文（additive）：宿主 on-type 腿按**行数组**喂前缀，判据仍只走
+  // `erbBodyLineMask` / `erbIndentPlan` 这一套（`formatter.ts` 里与 `computeRangeFormatEdits` 同源）
+  erbNewContentWithPrefix,
   formatText,
   type ErbBodyRegionKind,
   type FormatDialect,

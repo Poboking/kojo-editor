@@ -709,6 +709,28 @@ describe('formatRequestWindowFor · 窗口取文的应答判据', () => {
     expect(formatRequestWindowFor(doc.model, 0, 0)!.text).toBe('A');
     expect(formatRequestWindowFor(doc.model, 3, 1)!.text).toBe('C');
   });
+
+  it('规则开关随窗口请求走：现读同一份偏好（关掉的规则不许在窗口腿按全开执行）', () => {
+    const store = new Map<string, string>([
+      ['kojo.ui.formatRules.v1', JSON.stringify({ fullWidthSpace: false, indent: true })],
+    ]);
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      },
+    });
+    try {
+      const doc = fakeModel([`${FW}IF X`]);
+      livePanes.set('ps4', fakePane('C:/erb/ps4-规则.ERB', doc.model));
+      expect(formatRequestWindowFor(doc.model, 1, 1)!.rules).toEqual({ fullWidthSpace: false, indent: true });
+      // 偏好读取不许把整篇 copy 带上（窗口腿的单价前提不变）
+      expect(doc.getValueCalls()).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('installRangeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () => {
@@ -799,10 +821,11 @@ describe('installRangeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () =
     expect(out[0]!.range.startLineNumber).toBe(3);
     expect(out[0]!.text).toBe('; 注释 文');
     expect(doc.getValueCalls()).toBe(0);
-    // 2 次窗口取文 = 要算的那一行 + **窗口之前的那段前缀**（`kojo-format-range.ts` 的 `windowAnchor`：
-    // ERB 形有了跨行块状态之后，切片真想改字节就得先问"起点在不在区里"）。
+    // **1 次**窗口取文 = 只有**触发行那一行**。这是"取文次数"那条观测断言（不是行为断言）：
+    // 单行腿的前缀行直接读 `model.getLineContent`，不再为探前缀多取一次窗口——改前这里钉的是 2
+    // （`resolveRange(1, startLine-1)` 拼出 2.35 MB 前缀串随后丢弃，纯白付）。
     // PS-4 要钉的那一条没变：**整篇一次都不 copy**；零编辑的击键仍然只取一行（免检通道）。
-    expect(doc.getValueInRangeCalls()).toBe(2);
+    expect(doc.getValueInRangeCalls()).toBe(1);
   });
 
   it('CRLF 与"最后一行"两个易错点：窗口文本切行后行号平移仍逐字对', () => {

@@ -503,7 +503,10 @@ describe('installRangeFormatter · 窗口腿带块上下文（与整篇腿同判
     const out = asKeys(
       reg[0]!.provideDocumentRangeFormattingEdits(
         doc.model,
-        { startLineNumber: 3, endLineNumber: 3 } as unknown as Monaco.Range,
+        // 取多行窗口：前缀这条腿**只服务多行**。单行（on-type）的前缀行直读 `model.getLineContent`，
+        // 不再向宿主问前缀（见 `ps4-provider-seams.test.ts` 的"窗口取文 1 次"观测断言），
+        // 所以"宿主不给前缀 ⇒ 退回整篇"这条闸在单行上已不适用，这里改钉多行那条仍在用的来路。
+        { startLineNumber: 3, endLineNumber: 4 } as unknown as Monaco.Range,
         formatOpts,
         token,
       ) as Monaco.languages.TextEdit[],

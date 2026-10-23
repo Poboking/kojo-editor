@@ -232,6 +232,10 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
  * Monaco 内建）；`diagnostics` 是 `self`：2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` →
  * `setModelMarkers(..., KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用）。
  *
+ * `format` 一格含两条腿：整篇（`installKojo2DocumentFormatter`，Shift+Alt+F）与区间
+ * （`installKojo2RangeFormatter`，Ctrl+K Ctrl+F）；两枚 provider 都只挂 `kojo2`，装配点
+ * `ui/editor-global-providers.ts` 两枚 installer 都调用（矩阵按注册面记 `self`）。
+ *
  * 剩余两项豁免：`implementation`（明确不做：2.0 里"跳实现"与"转定义"同义，F12 已覆盖）与
  * `callhierarchy`（Monaco 0.57 无该 API；纯模型 `monaco/kojo2-callhierarchy.ts` 已由宿主面板
  * 按语言分派消费，矩阵待装配点接 `installKojo2CallHierarchyProvider` 后改 `self`）。
