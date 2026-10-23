@@ -1,3 +1,7 @@
+// @vitest-environment happy-dom
+import { existsSync, readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -157,5 +161,144 @@ describe('欢迎页 · 关闭态', () => {
     expect(html).toContain('welcome-closed');
     expect(html).toContain('重新打开欢迎页');
     expect(html).not.toContain('welcome-tab');
+  });
+});
+
+/* ==================== 两态重构（批次十一 · 视觉 L04） ==================== */
+
+/**
+ * 体检判定要钉的三件事（缺口 ①「零测试」的补齐）：
+ * ① 首屏同权重信息块从旧版的 10 块平铺降到 **3**（品牌头 / 主 CTA / 最近项目）；
+ * ② 教程入口在欢迎页**只剩一条**折叠（四张卡照常渲染在折叠内——
+ *    上面的既有用例仍按 4 枚 `welcome-tutorial` 计数，这条不许被"折叠=不渲染"顶掉）；
+ * ③ 最近列表不再半行裁切：限高必须是**整数行倍率**（行高单源公式 + `calc(token * 整数)`），
+ *    旧的 `max-height:168px` 定值不许回来。③ 走 CSS 源形状判定——SSR 不带样式表，
+ *    排版数学只能在源里钉（与 tools/tests 两条源形状守卫同一把尺）。
+ */
+
+/**
+ * welcome.css 读数：happy-dom 环境里 `import.meta.url` 不是 file: 协议（fileURLToPath 直接抛），
+ * 所以先试 URL 锚定、再退回从 cwd 逐级上溯找文件——`pnpm test`（root）与 `--filter app`
+ * 两种起跑点都能命中，找不到就明确炸给看，不静默空扫。
+ */
+function readWelcomeCss(): string {
+  const candidates: string[] = [];
+  try {
+    candidates.push(path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', 'src', 'ui', 'welcome.css'));
+  } catch {
+    /* 非 file: 环境：留逐级上溯兜底 */
+  }
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    candidates.push(path.join(dir, 'packages', 'app', 'src', 'ui', 'welcome.css'));
+    candidates.push(path.join(dir, 'src', 'ui', 'welcome.css'));
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  for (const c of candidates) {
+    if (existsSync(c)) return readFileSync(c, 'utf8');
+  }
+  throw new Error(`welcome.css 未找到（cwd=${process.cwd()}）`);
+}
+const cssSrc = readWelcomeCss();
+
+const parse = (html: string): Document => new DOMParser().parseFromString(html, 'text/html');
+
+/** 从元素向上找指定 tagName 的祖先（不依赖 :scope/closest 的差异行为，happy-dom 与浏览器同判） */
+function hasAncestor(el: Element | null, tagName: string): boolean {
+  let p = el?.parentElement ?? null;
+  while (p) {
+    if (p.tagName === tagName) return true;
+    p = p.parentElement;
+  }
+  return false;
+}
+
+describe('欢迎页 · 两态重构：首屏只留三件事', () => {
+  it('main 首屏同权重信息块恰为 3（品牌头 + 主 CTA 区 + 最近项目区），折叠层不计入', () => {
+    const doc = parse(render());
+    const main = doc.querySelector('main.welcome-main');
+    expect(main, 'main.welcome-main 缺席').not.toBeNull();
+    const blocks = Array.from(main!.children).filter(
+      (el) =>
+        (el.tagName === 'HEADER' || el.tagName === 'SECTION') &&
+        !el.classList.contains('welcome-fold'),
+    );
+    expect(
+      blocks.map((el) => el.getAttribute('class')),
+      '首屏信息块的名录与数量必须逐字是这三条',
+    ).toEqual(['welcome-brand', 'welcome-section welcome-start', 'welcome-section welcome-recent']);
+    // 次级层确实还挂在 main 里但不占首屏权重：最近文件是一条 .welcome-fold
+    expect(main!.querySelector('section.welcome-fold.welcome-recent-files')).not.toBeNull();
+  });
+
+  it('教程入口只剩一条：折叠组唯一，四张卡全部收在 <details> 内', () => {
+    const doc = parse(render());
+    expect(doc.querySelectorAll('.welcome-tutorials')).toHaveLength(1);
+    expect(doc.querySelectorAll('summary .welcome-side-title')).toHaveLength(1);
+    const cards = doc.querySelectorAll('.welcome-tutorial');
+    expect(cards).toHaveLength(4); // 折叠是收起不是卸载——这条与上面的 4 枚计数同源
+    for (const c of Array.from(cards)) {
+      expect(
+        hasAncestor(c, 'DETAILS'),
+        `教程卡「${c.querySelector('.welcome-tutorial-title')?.textContent ?? '?'}」不在折叠层里，首屏又平铺回去了`,
+      ).toBe(true);
+    }
+  });
+
+  it('编译样例在教程折叠内再收一层（默认不开），首屏不占位', () => {
+    const doc = parse(render());
+    const sample = doc.querySelector('.welcome-sample');
+    expect(sample, '身份感样例仍要渲染（既有用例数得到内容）').not.toBeNull();
+    // 样例外层是 `details.welcome-sample-fold`，它自己又嵌在教程折叠里 ⇒ 至少两层 DETAILS
+    expect(hasAncestor(sample, 'DETAILS')).toBe(true);
+    const innerFold = sample!.closest('details.welcome-sample-fold');
+    expect(innerFold, '样例没被收成次级折叠').not.toBeNull();
+    expect(hasAncestor(innerFold, 'DETAILS'), '样例折叠没有嵌在教程折叠内').toBe(true);
+  });
+});
+
+describe('欢迎页 · 限高 = 整数行倍率（半行裁切同源修掉）', () => {
+  it('行高与卡高两条单源公式在 .welcome-screen 定义', () => {
+    expect(cssSrc).toMatch(/--welcome-card-h:\s*calc\([^;]+\);/);
+    expect(cssSrc).toMatch(/--welcome-row-h:\s*calc\([^;]+\);/);
+  });
+
+  it('最近文件列表：行高吃 --welcome-row-h，限高是它的整数倍，定值 px 不许回来', () => {
+    const rowRule = cssSrc.match(/\.welcome-recent-files \.welcome-recent-row\s*\{[^}]*\}/);
+    expect(rowRule, '最近文件行高规则缺席').not.toBeNull();
+    expect(rowRule![0]).toContain('height: var(--welcome-row-h)');
+    const listRule = cssSrc.match(/\.welcome-recent-files \.welcome-recent-list\s*\{[^}]*\}/);
+    expect(listRule, '最近文件列表限高规则缺席').not.toBeNull();
+    const mult = listRule![0].match(/max-height:\s*calc\(var\(--welcome-row-h\)\s*\*\s*(\d+)\)/);
+    expect(mult, '限高必须写成 calc(var(--welcome-row-h) * 整数)').not.toBeNull();
+    expect(Number(mult![1])).toBeGreaterThan(0);
+    expect(/max-height:\s*\d+px/.test(listRule![0]), '列表限高里出现定值 px（半行裁切的老病根）').toBe(
+      false,
+    );
+  });
+
+  it('最近项目大卡网格：卡高 = --welcome-card-h，限高 = 整数张卡 + 整道 gap', () => {
+    const cardRule = cssSrc.match(/\.welcome-project-card\s*\{[^}]*\}/);
+    expect(cardRule, '大卡高度规则缺席').not.toBeNull();
+    expect(cardRule![0]).toContain('height: var(--welcome-card-h)');
+    const gridRule = cssSrc.match(/\.welcome-project-grid\s*\{[^}]*\}/);
+    expect(gridRule, '大卡网格限高规则缺席').not.toBeNull();
+    expect(
+      gridRule![0],
+      '网格限高必须是 calc(var(--welcome-card-h) * 整数 + 间距)',
+    ).toMatch(/max-height:\s*calc\(var\(--welcome-card-h\)\s*\*\s*\d+(\s*\+\s*var\(--space-\d+\))?\)/);
+    expect(/max-height:\s*\d+px/.test(gridRule![0]), '网格限高里出现定值 px').toBe(false);
+  });
+
+  it('装配中转圈吃 --anim-spin：欢迎页零处 700ms 字面量、零处自写 spinner keyframes', () => {
+    const spinRule = cssSrc.match(/\.welcome-screen \.welcome-notice \.spinner\s*\{[^}]*\}/);
+    expect(spinRule, '欢迎页 spinner 规则缺席').not.toBeNull();
+    expect(spinRule![0]).toContain('animation-duration: var(--anim-spin)');
+    // 700ms 字面量只准死在值位（动画声明里）；注释里提一嘴历史值不算违规
+    expect(cssSrc).not.toMatch(/animation[^;:]*:\s*[^;]*700ms/);
+    expect(/duration:\s*700ms/.test(spinRule![0])).toBe(false);
+    expect(cssSrc).not.toMatch(/@keyframes\s+u-spin/);
   });
 });

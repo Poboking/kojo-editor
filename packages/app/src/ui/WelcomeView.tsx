@@ -33,6 +33,11 @@ export interface WelcomeTutorialEntry {
  * 卡名逐字取各本教程自己的 title（`Kojo 2.0 语言教程` 就是正文那一本的标题，不许另抄）；
  * 本层只认语义 id，一句教程内容都不写。四张卡共用同一条开合判据（`tutorialsOpenable`）：
  * 内核没装配好 / 项目正在打开时按钮**disabled 且带 title 说明**，不靠"点了没反应"。
+ *
+ * 批次十一（视觉 L04）：四张卡不再常驻首屏——整组收进右栏那**一条**次级入口
+ * 「教程 · 4 篇内置」的折叠里。折叠是 CSS/DOM 层面的收起，**卡片本身照常渲染**
+ * （真壳与 `welcome-layout.test.ts` 都按 4 枚 `welcome-tutorial` 计数），
+ * 于是「教程入口重复三处」里欢迎页这一处只剩一行文字，另外两处不归本 lane。
  */
 export const WELCOME_TUTORIALS: readonly WelcomeTutorialEntry[] = [
   {
@@ -60,6 +65,9 @@ export const WELCOME_TUTORIALS: readonly WelcomeTutorialEntry[] = [
     icon: 'structure',
   },
 ];
+
+/** 「教程 · 4 篇内置」那一条次级入口的字数来源（不许再手抄一个 4） */
+const TUTORIAL_COUNT = WELCOME_TUTORIALS.length;
 
 interface Props {
   phase: AppPhase;
@@ -144,6 +152,56 @@ export function removeRecentOptimistic(list: RecentProject[], rootDir: string): 
   return list.filter((r) => pathKey(r.rootDir) !== key);
 }
 
+/**
+ * 取路径末段当卡片标题（盘符 / 共享名这类"整条路径当标题"读不出项目是谁）。
+ * 分隔符两种都吃；末段为空（根目录）时原样退回整条路径——不猜、不空着。
+ */
+export function pathBaseName(p: string): string {
+  const seg = p.split(/[\\/]/).filter((s) => s.length > 0).pop();
+  return seg && seg.length > 0 ? seg : p;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * 「上次打开」的口语档：同一天 →「今天打开」，往前 昨天 / N 天前 / N 周前 / N 个月前，
+ * 跨年整条退成 `YYYY-MM-DD`（"3 天前"跨过一年后就成了谎话，日期不会）。
+ *
+ * **只用日历整数差**（先归零到 UTC 同日再取天数）：靠毫秒差除 86400000 会在
+ * 「昨天 23:59 → 今天 00:01」这种跨天上算出"0 天前"，正是本函数要避开的。
+ * `now` 由调用方注入 ⇒ 一次渲染内所有行同一个"今天"，纯函数可测。
+ */
+export function formatLastOpened(lastOpenedAt: number, now: number): string {
+  if (!Number.isFinite(lastOpenedAt) || !Number.isFinite(now)) return '上次打开时间未知';
+  const dayIndex = (ms: number): number => {
+    const d = new Date(ms);
+    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  };
+  const diffDays = Math.round((dayIndex(now) - dayIndex(lastOpenedAt)) / DAY_MS);
+  if (diffDays <= 0) return '今天打开';
+  if (diffDays === 1) return '昨天打开';
+  if (diffDays < 7) return `${diffDays} 天前打开`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} 周前打开`;
+  const opened = new Date(lastOpenedAt);
+  const sameYear = opened.getFullYear() === new Date(now).getFullYear();
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const md = `${pad(opened.getMonth() + 1)}-${pad(opened.getDate())}`;
+  return sameYear ? `${md} 打开` : `${opened.getFullYear()}-${md} 打开`;
+}
+
+/**
+ * 最近文件按所属项目根归堆（pathKey 折大小写/分隔符，与内核判等口径一致）。
+ * 卡片上的「N 个最近文件」由此而来——**只用已经传进来的 props**，不为呈现去问内核。
+ */
+export function countFilesByRoot(files: readonly RecentFileRecord[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    const key = pathKey(f.rootDir);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
 /** 关闭后的空态：不让作者对着一屏死白，主动作仍是「打开文件夹…」 */
 function ClosedState({
   phase,
@@ -186,7 +244,7 @@ function ClosedState({
 
         <div className="welcome-closed-actions">
           <button className="primary big welcome-open" onClick={onOpenDirectory} disabled={!canOpen}>
-            <Icon name="files" size={16} />
+            <Icon name="files" size="md" />
             <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
           </button>
           <button className="ghost" onClick={onReopen} disabled={opening}>
@@ -199,14 +257,38 @@ function ClosedState({
 }
 
 /**
- * 欢迎页（用户反馈 9 批再排）：无项目时的整页视图。与 VSCode 不同，本项目必须先用
- * 欢迎页选目录，所以没有工作区标签条可挂——单张卡片在视口内水平垂直居中；
- * 标签视觉保留为**贴在卡片左上缘、向外凸出的装饰性标签**（home +「欢迎」+ ×），
- * 不再承担 tab / tabpanel 语义。卡片本体两栏：左品牌头 +「启动」+「最近」，
- * 右「教程」三张卡片。
+ * 通知条家族（`.notice` 底色由 styles.css 供给；本批只加"图标 + 文案"这层呈现）：
+ * 浏览器环境 = warn 档、内核装配 = 状态档（转圈）、失败 = error 档、崩溃恢复 = 行动档。
+ * 色值不在这里写：`.notice.warn/.error` 目前把 rgba 写死在 styles.css，属 L01 地盘。
+ * // ui-kit-candidate: .notice 家族的行内语义图标位（图标 + 一句人话 + 可选动作）
+ */
+function NoticeIcon({ kind }: { kind: 'warn' | 'error' | 'info' }): ReactElement {
+  const name = kind === 'error' ? 'error' : kind === 'warn' ? 'warning' : 'info';
+  return (
+    <span className="welcome-notice-icon" aria-hidden="true">
+      <Icon name={name} size="md" />
+    </span>
+  );
+}
+
+/**
+ * 欢迎页（批次十一 · 视觉 L04「两态重构」）：无项目时的整页视图。
+ *
+ * **首屏态**只有三件事：品牌头 → 一个主 CTA（打开文件夹…）→ 最近项目大卡。
+ * **展开态**是次级层：右栏一条「教程 · 4 篇内置」的折叠（内含四张卡 + 默认收起的
+ * 编译样例）、左栏一条「最近文件」折叠。折叠一律用原生 `<details>`：收起时内容
+ * 仍在 DOM 里（SSR 与真壳探针都数得到），只是不占首屏注意力。
+ *
+ * 卡面给的是**可决策信息**（项目名 / 适配器 / 上次打开 / 该项目下的最近文件数 /
+ * 完整路径 / 目录是否还在），不是只有一行路径。脏文件数与包数不在 `RecentProject`
+ * 载荷里，要等接线（见批次回执「待组长接线」）。
  *
  * 数据流保持原样：最近列表的读取/写回全部走 App 注入的回调（组件不持有 kernel）；
  * 教程卡片也只把语义 id 交给 App，由 `ui.tutorial.open` 内核事件送进教程提供方。
+ * 结构性类名（`.welcome` / `.welcome-card` / `.welcome-recent` / `.welcome-recent-open`
+ * / `.welcome-recent-path` / `.welcome-resume`）是冒烟 page-object 与 PS-10 意图闸的
+ * 依赖面，**一个字都不动**——改一个就有 tools/tests 的两条源形状守卫红。
+ *
  * overlay 的宿主在 `WelcomeOverlayHost`（App 的无项目分支并列渲染），本组件只管
  * 欢迎页自己的排版与关闭态。
  */
@@ -354,6 +436,11 @@ export function WelcomeView({
 
   const canOpen = kernelReady && !opening;
   const tutorialsOpenable = canOpen;
+  // 一次渲染同一个"今天"：卡片之间的"3 天前 / 昨天"必须互相可比
+  const now = Date.now();
+  const filesByRoot = countFilesByRoot(files);
+  const rowState = (r: RecentProject): RecentRowState => recentRowState(statCache.get(recentStatKey(r)));
+  const missingDirs = recent.reduce((n, r) => n + (rowState(r) === 'missing' ? 1 : 0), 0);
 
   return (
     <div className="welcome welcome-screen" data-context-surface="welcome">
@@ -368,9 +455,10 @@ export function WelcomeView({
               title="关闭欢迎页"
               onClick={onClose}
             >
-              <Icon name="close" size={14} />
+              <Icon name="close" size="sm" />
             </button>
             <main className="welcome-main">
+              {/* ── 首屏第 1 件：品牌头（字号档 = display，页内唯一） ── */}
               <header className="welcome-brand">
                 <h1>
                   kojo-editor <span className="ver">v{APP_VERSION}</span>
@@ -378,35 +466,45 @@ export function WelcomeView({
                 <p className="welcome-tagline">{TAGLINE}</p>
               </header>
 
+              {/* 通知条家族：有事要说才出现，平时零占位。色温沿用 .notice 家族，
+                  本批补语义图标位（原先纯文字，读不出是"提示"还是"出错"）。 */}
               {!tauri ? (
                 <div className="notice warn welcome-notice">
-                  当前运行在浏览器环境：文件系统能力不可用。请通过桌面壳启动（<code>pnpm tauri dev</code>）。
+                  <NoticeIcon kind="warn" />
+                  <span className="welcome-notice-copy">
+                    当前运行在浏览器环境：文件系统能力不可用。请通过桌面壳启动（<code>pnpm tauri dev</code>）。
+                  </span>
                 </div>
               ) : null}
 
+              {/* 「内核装配中…」这一条必须保持 `className="notice welcome-notice" role="status"`
+                  （无修饰类）——DOM 冒烟按 `.notice:not(.crash-recovery)` 判"页面还没挂好"，
+                  形状由 tools/tests/welcome-crash-notice-selector.test.ts 钉死。 */}
               {!kernelReady ? (
                 <div className="notice welcome-notice" role="status">
-                  内核装配中…
+                  {/* 转圈复用全局 `.spinner`（动画名 styles.css 单源，时长吃 tokens 的 --anim-spin）；
+                      这里只管占位不重画动画 */}
+                  <span className="spinner welcome-notice-icon" aria-hidden="true" />
+                  <span className="welcome-notice-copy">内核装配中…</span>
                 </div>
               ) : null}
 
               {error ? (
                 <div className="notice error welcome-notice" role="alert">
-                  {error}
+                  <NoticeIcon kind="error" />
+                  <span className="welcome-notice-copy">{error}</span>
                 </div>
               ) : null}
 
-              <section className="welcome-section welcome-start" aria-labelledby="welcome-start-title">
-                <h2 className="welcome-section-title" id="welcome-start-title">
-                  启动
-                </h2>
+              {/* ── 首屏第 2 件：唯一的主 CTA（不再挂"启动"这类小灰标签；次级动作是"继续上次会话"） ── */}
+              <section className="welcome-section welcome-start" aria-label="打开项目">
                 <div className="welcome-actions">
                   <button
                     className="primary big welcome-open u-sheen u-ripple"
                     onClick={onOpenDirectory}
                     disabled={!canOpen}
                   >
-                    <Icon name="files" size={16} />
+                    <Icon name="files" size="md" />
                     <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
                   </button>
                   {!crashRecovery && resumeRoot ? (
@@ -416,7 +514,7 @@ export function WelcomeView({
                       disabled={!canOpen}
                       title={resumeRoot}
                     >
-                      <Icon name="history" size={16} />
+                      <Icon name="history" size="md" />
                       <span className="welcome-resume-label">继续上次会话</span>
                       <span className="welcome-resume-path">{resumeRoot}</span>
                     </button>
@@ -424,18 +522,23 @@ export function WelcomeView({
                 </div>
                 <p className="welcome-start-hint">
                   {!kernelReady
-                    ? '内核装配完成后即可打开文件夹；打开过的项目会出现在下方「最近」。'
+                    ? '内核装配完成后即可打开文件夹；打开过的项目会出现在下方。'
                     : recent.length > 0
-                      ? '也可以从下方「最近」选择，或把项目文件夹直接拖进窗口。'
-                      : '还没有最近项目——打开过的文件夹会出现在这里，下次一键回来。'}
+                      ? '也可以直接点下方最近项目，或把项目文件夹拖进窗口。'
+                      : '选一个放口上文件的文件夹——打开过的会出现在这里，下次一键回来。'}
                 </p>
               </section>
 
-              {/* 崩溃恢复横幅（退出/崩溃守护批）：克制的一行事由 + 两个动作。 */}
+              {/* 崩溃恢复横幅（退出/崩溃守护批）：一行事由 + 两个动作。
+                  `notice crash-recovery` 两个 token 必须留在同一行——冒烟判据 `.notice:not(.crash-recovery)`
+                  靠它把"有事待处理"从"页面没挂好"里摘出去（源形状守卫钉死）。 */}
               {/* 恢复永不自动写盘——内容只装回编辑器当未保存修改，存不存由用户决定 */}
               {crashRecovery && crashRecovery.root ? (
                 <div className="notice crash-recovery welcome-notice" role="alert">
-                  <p>上次异常退出，{crashRecovery.files} 个文件的未保存内容已自动保留。</p>
+                  <NoticeIcon kind="warn" />
+                  <p className="welcome-notice-copy">
+                    上次异常退出，{crashRecovery.files} 个文件的未保存内容已自动保留。
+                  </p>
                   <div className="crash-recovery-actions">
                     <button className="primary" onClick={onRecoverCrash} disabled={opening}>
                       恢复并打开
@@ -447,19 +550,26 @@ export function WelcomeView({
                 </div>
               ) : null}
 
+              {/* ── 首屏第 3 件：最近项目大卡（次级层里"最近文件"另开一条折叠） ── */}
               <section className="welcome-section welcome-recent" aria-labelledby="welcome-recent-title">
                 <div className="welcome-section-head">
                   <h2 className="welcome-section-title" id="welcome-recent-title">
-                    最近
+                    最近项目
+                    {recent.length > 0 ? <span className="welcome-section-count">{recent.length}</span> : null}
                   </h2>
                   {recent.length > 0 ? (
-                    <button
-                      className="welcome-clear"
-                      onClick={onClearRecent}
-                      title="清空列表记录，不会删除磁盘上的项目文件"
-                    >
-                      清除全部
-                    </button>
+                    <div className="welcome-section-tools">
+                      {missingDirs > 0 ? (
+                        <span className="welcome-section-warn">{missingDirs} 个目录已不在</span>
+                      ) : null}
+                      <button
+                        className="welcome-clear"
+                        onClick={onClearRecent}
+                        title="清空列表记录，不会删除磁盘上的项目文件"
+                      >
+                        清除全部
+                      </button>
+                    </div>
                   ) : null}
                 </div>
 
@@ -470,31 +580,40 @@ export function WelcomeView({
                       : '内核装配完成后，这里会列出最近项目。'}
                   </p>
                 ) : (
-                  <ul className="welcome-recent-list">
+                  <ul className="welcome-recent-list welcome-project-grid">
                     {recent.map((r) => {
-                      const missing = recentRowState(statCache.get(recentStatKey(r))) === 'missing';
+                      const missing = rowState(r) === 'missing';
+                      const fileCount = filesByRoot.get(pathKey(r.rootDir)) ?? 0;
                       return (
                         <li
                           key={r.rootDir}
-                          className={`welcome-recent-row${missing ? ' is-missing' : ''}`}
+                          className={`welcome-recent-row welcome-project-card${missing ? ' is-missing' : ''}`}
                           // 右键面（welcome-recent）：行数据放属性，菜单构建时现读——
                           // 同一个面在多行之间不需要各自注册，也不会互相覆盖
                           data-context-surface="welcome-recent"
                           data-recent-root={r.rootDir}
                           data-recent-missing={missing ? '1' : undefined}
                         >
+                          {/* 整张卡是可点开的按钮；`.welcome-recent-path` 的文本必须逐字 = rootDir
+                              （真壳 page-object 按它找行，见 tools/smoke-lib.mjs） */}
                           <button
                             className="welcome-recent-open"
                             onClick={() => onOpenRecent(r.rootDir)}
                             title={missing ? `${r.rootDir}（目录不存在，点击重试）` : r.rootDir}
                           >
-                            <span className="welcome-recent-path">{r.rootDir}</span>
-                            <span className="welcome-recent-meta">
-                              {missing ? (
-                                <span className="welcome-recent-badge is-missing">目录不存在</span>
-                              ) : null}
+                            <span className="welcome-project-head">
+                              <span className="welcome-project-name">{pathBaseName(r.rootDir)}</span>
                               <span className="welcome-recent-badge">{r.adapterId}</span>
                             </span>
+                            <span className="welcome-project-meta">
+                              <span className="welcome-project-when">{formatLastOpened(r.lastOpenedAt, now)}</span>
+                              {/* 卡面第三条可决策信息：该项目下记到了几个最近文件（0 个就不占位） */}
+                              {fileCount > 0 ? <span className="welcome-project-files">{fileCount} 个最近文件</span> : null}
+                            </span>
+                            <span className="welcome-recent-path">{r.rootDir}</span>
+                            {missing ? (
+                              <span className="welcome-recent-badge is-missing">目录不存在</span>
+                            ) : null}
                           </button>
                           <button
                             className="welcome-recent-remove"
@@ -521,124 +640,146 @@ export function WelcomeView({
                 </p>
               ) : null}
 
-              {/* 最近文件（MM-7）：跨项目的打开记录。行结构同「最近」项目区
-                  （welcome-recent-* 同款类名天然继承样式），探测的是文件本身。 */}
-              <section className="welcome-section welcome-recent-files" aria-labelledby="welcome-recent-files-title">
-                <div className="welcome-section-head">
-                  <h2 className="welcome-section-title" id="welcome-recent-files-title">
-                    最近文件
-                  </h2>
-                </div>
-
-                {files.length === 0 ? (
-                  <p className="welcome-empty">还没有最近文件——打开过的文件会出现在这里。</p>
-                ) : (
-                  <ul className="welcome-recent-list">
-                    {files.map((r) => {
-                      const missing = recentRowState(fileStatCache.get(recentFileStatKey(r))) === 'missing';
-                      const name = r.path.split(/[\\/]/).pop() || r.path;
-                      const projectName = r.rootDir.split(/[\\/]/).pop() || r.rootDir;
-                      return (
-                        <li key={r.path} className={`welcome-recent-row${missing ? ' is-missing' : ''}`}>
-                          <button
-                            className="welcome-recent-open"
-                            onClick={() => onOpenRecentFile?.(r.path, r.rootDir)}
-                            title={
-                              missing
-                                ? `${r.path}（文件不存在，点击重试打开）`
-                                : `${r.path}（属于项目 ${r.rootDir}）`
-                            }
-                          >
-                            <span className="welcome-recent-file">
-                              <span className="welcome-recent-path">{name}</span>
-                              <span className="welcome-recent-sub">{r.path}</span>
-                            </span>
-                            <span className="welcome-recent-meta">
-                              {missing ? (
-                                <span className="welcome-recent-badge is-missing">文件不存在</span>
-                              ) : null}
-                              <span className="welcome-recent-badge" title={r.rootDir}>
-                                {projectName}
+              {/* 最近文件（MM-7）：跨项目的打开记录——次级，默认折叠。
+                  区类名 welcome-recent-files 必须留在列表/空态的**祖先**上（用例按后代关系查），
+                  且不能并进 .welcome-recent（那是 PS-10 的开项目意图面，混了会改预取时机）。 */}
+              <section className="welcome-fold welcome-recent-files" aria-labelledby="welcome-recent-files-title">
+                <details className="welcome-fold-box">
+                  <summary className="welcome-fold-summary">
+                    <Icon name="chevron-right" size="sm" className="welcome-fold-caret" />
+                    <h2 className="welcome-section-title" id="welcome-recent-files-title">
+                      最近文件
+                    </h2>
+                    <span className="welcome-section-count">{files.length}</span>
+                  </summary>
+                  {files.length === 0 ? (
+                    <p className="welcome-empty">还没有最近文件——打开过的文件会出现在这里。</p>
+                  ) : (
+                    <ul className="welcome-recent-list">
+                      {files.map((r) => {
+                        const missing = recentRowState(fileStatCache.get(recentFileStatKey(r))) === 'missing';
+                        const name = pathBaseName(r.path);
+                        const projectName = pathBaseName(r.rootDir);
+                        return (
+                          <li key={r.path} className={`welcome-recent-row${missing ? ' is-missing' : ''}`}>
+                            <button
+                              className="welcome-recent-open"
+                              onClick={() => onOpenRecentFile?.(r.path, r.rootDir)}
+                              title={
+                                missing
+                                  ? `${r.path}（文件不存在，点击重试打开）`
+                                  : `${r.path}（属于项目 ${r.rootDir}）`
+                              }
+                            >
+                              <span className="welcome-recent-file">
+                                <span className="welcome-recent-path">{name}</span>
+                                <span className="welcome-recent-sub">{r.path}</span>
                               </span>
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                              <span className="welcome-recent-meta">
+                                {missing ? (
+                                  <span className="welcome-recent-badge is-missing">文件不存在</span>
+                                ) : null}
+                                <span className="welcome-recent-badge" title={r.rootDir}>
+                                  {projectName}
+                                </span>
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </details>
               </section>
 
+              {/* 一句话讲清"打开即识别 / 默认只读 / 首次保存才申请权限"——黑话（CHARA 映射、
+                  口上域索引）全删：这些是打开后自动发生的事，不需要作者在选目录前理解。 */}
               <p className="welcome-hint">
-                选一个文件夹打开即可：编辑器会自动识别其中的游戏并选择对应的适配器。打开后 CHARA
-                映射与口上域索引自动构建；游戏目录默认只读，首次保存时才请求对可写目录的权限。
+                打开目录即自动识别游戏；游戏目录默认<strong>只读</strong>，第一次保存才申请写入权限。
               </p>
             </main>
 
             <aside className="welcome-side" aria-labelledby="welcome-tutorials-title">
-              <div className="welcome-side-head">
-                <h2 className="welcome-side-title" id="welcome-tutorials-title">
-                  <Icon name="book" size={16} />
-                  教程
-                </h2>
-                <span className="welcome-side-note">内置 · 随时可看</span>
-              </div>
+              {/* 教程收成**一条**次级入口：收起时只占一行字，展开才见四张卡与样例。
+                  四张卡照旧渲染（`welcome-layout.test.ts` 数得到 4 枚）。 */}
+              <section className="welcome-fold welcome-tutorials-fold">
+                <details className="welcome-fold-box">
+                  <summary className="welcome-fold-summary">
+                    <Icon name="chevron-right" size="sm" className="welcome-fold-caret" />
+                    <h2 className="welcome-side-title" id="welcome-tutorials-title">
+                      <Icon name="book" size="md" />
+                      教程
+                    </h2>
+                    <span className="welcome-fold-count">{TUTORIAL_COUNT} 篇内置 · 随时可看</span>
+                  </summary>
 
-              <div className="welcome-tutorials">
-                {WELCOME_TUTORIALS.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className="welcome-tutorial"
-                    onClick={() => onOpenTutorial(t.id)}
-                    disabled={!tutorialsOpenable}
-                    title={!kernelReady ? '内核装配中…' : opening ? '正在打开项目…' : `打开「${t.title}」`}
-                  >
-                    <span className="welcome-tutorial-icon">
-                      <Icon name={t.icon} size={18} />
-                    </span>
-                    <span className="welcome-tutorial-copy">
-                      <span className="welcome-tutorial-title">{t.title}</span>
-                      <span className="welcome-tutorial-desc">{t.blurb}</span>
-                    </span>
-                    <span className="welcome-tutorial-arrow">
-                      <Icon name="chevron-right" size={14} />
-                    </span>
-                  </button>
-                ))}
-              </div>
+                  <div className="welcome-tutorials">
+                    {WELCOME_TUTORIALS.map((t) => (
+                      <button
+                        type="button"
+                        className="welcome-tutorial"
+                        onClick={() => onOpenTutorial(t.id)}
+                        disabled={!tutorialsOpenable}
+                        title={!kernelReady ? '内核装配中…' : opening ? '正在打开项目…' : `打开「${t.title}」`}
+                      >
+                        <span className="welcome-tutorial-icon">
+                          <Icon name={t.icon} size="md" />
+                        </span>
+                        <span className="welcome-tutorial-copy">
+                          <span className="welcome-tutorial-title">{t.title}</span>
+                          <span className="welcome-tutorial-desc">{t.blurb}</span>
+                        </span>
+                        <span className="welcome-tutorial-arrow">
+                          <Icon name="chevron-right" size="sm" />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
 
-              {/* 身份感样例（静态展示，不依赖项目/内核）：一页讲清「作者写中文口上、
-                  工具翻成游戏 ERB」——这就是「结构感知」的日常收益。用词（kojo / 口上 /
-                  ERB 指令名）属跨游戏通用术语与引擎级词汇，解耦口径同 TAGLINE。 */}
-              <figure className="welcome-sample">
-                <figcaption className="welcome-sample-caption">你写中文口上，工具自动翻成游戏读的指令：</figcaption>
-                <div className="welcome-sample-pane">
-                  <span className="welcome-sample-tag">你写的 .kojo</span>
-                  <pre className="welcome-sample-code">
-                    <span className="welcome-sample-kw">如果</span>
-                    {' 她的好感度 >= 50：\n    '}
-                    <span className="welcome-sample-said">「欢迎回来。」</span>
-                  </pre>
-                </div>
-                <div className="welcome-sample-flow" aria-hidden="true">
-                  <span className="welcome-sample-flow-arrow">↓</span>
-                  <span>自动编译</span>
-                </div>
-                <div className="welcome-sample-pane">
-                  <span className="welcome-sample-tag">游戏读的 ERB</span>
-                  <pre className="welcome-sample-code">
-                    <span className="welcome-sample-erb">IF</span>
-                    {' CFLAG:TARGET:好感度 >= 50\n  '}
-                    <span className="welcome-sample-erb">PRINTFORMW</span>
-                    {' 欢迎回来。\n'}
-                    <span className="welcome-sample-erb">ENDIF</span>
-                  </pre>
-                </div>
-              </figure>
+                  {/* 身份感样例（静态展示，不依赖项目/内核）：一页讲清「作者写中文口上、
+                      工具翻成游戏 ERB」——这就是「结构感知」的日常收益。用词（kojo / 口上 /
+                      ERB 指令名）属跨游戏通用术语与引擎级词汇，解耦口径同 TAGLINE。
+                      批次十一：整块默认收起——它讲得清"为什么用这个编辑器"，但不该和首屏抢注意力。 */}
+                  <details className="welcome-sample-fold">
+                    <summary className="welcome-fold-summary is-sub">
+                      <Icon name="chevron-right" size="xs" className="welcome-fold-caret" />
+                      <span className="welcome-sample-caption">看看中文口上怎么变成游戏指令</span>
+                    </summary>
+                    <figure className="welcome-sample">
+                      <figcaption className="welcome-sample-caption">你写中文口上，工具自动翻成游戏读的指令：</figcaption>
+                      <div className="welcome-sample-pane">
+                        <span className="welcome-sample-tag">你写的 .kojo</span>
+                        <pre className="welcome-sample-code">
+                          <span className="welcome-sample-kw">如果</span>
+                          {' 她的好感度 >= 50：\n    '}
+                          <span className="welcome-sample-said">「欢迎回来。」</span>
+                        </pre>
+                      </div>
+                      <div className="welcome-sample-flow" aria-hidden="true">
+                        {/* 图标位用 SVG（chevron-down），不用文本 `↓`：文本箭头跟字体走，
+                            换字号/换字面就歪，且屏幕阅读器会念成"向下箭头"混进正文。 */}
+                        <Icon name="chevron-down" size="sm" className="welcome-sample-flow-arrow" />
+                        <span>自动编译</span>
+                      </div>
+                      <div className="welcome-sample-pane">
+                        <span className="welcome-sample-tag">游戏读的 ERB</span>
+                        <pre className="welcome-sample-code">
+                          <span className="welcome-sample-erb">IF</span>
+                          {' CFLAG:TARGET:好感度 >= 50\n  '}
+                          <span className="welcome-sample-erb">PRINTFORMW</span>
+                          {' 欢迎回来。\n'}
+                          <span className="welcome-sample-erb">ENDIF</span>
+                        </pre>
+                      </div>
+                    </figure>
+                  </details>
+                </details>
+              </section>
 
+              {/* 尾注（原两段长文）收成一行：Esc 关浮层这件事留着，"另一组入口常驻项目面板"删掉
+                  ——入口重复三处正是本批要减的东西。 */}
               <p className="welcome-side-foot">
-                教程浮层不依赖已打开的项目：按 <kbd>Esc</kbd> 或点遮罩即可关闭。同一组入口也常驻在「我的口上项目」面板底部。
+                教程浮层不依赖已打开的项目，按 <kbd>Esc</kbd> 或点遮罩即可关闭。
               </p>
             </aside>
           </div>
