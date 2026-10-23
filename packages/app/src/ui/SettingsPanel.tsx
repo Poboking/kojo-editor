@@ -199,6 +199,15 @@ export interface SettingsPanelProps {
   updateStatusLine: { text: string; tone: UpdateStatusTone } | null;
   runUpdateCheck: () => Promise<void>;
   installUpdate: () => Promise<void>;
+
+  /* ---- 快捷键页双框合一（批次十一 L09）---- */
+  /**
+   * 浮层顶部「搜索设置项」那一条框的当前查询（批次十一把快捷键页页内搜索框并进这一条）。
+   * 纯呈现参数：不落盘、不影响任何偏好，只在「快捷键」一节驱动表格过滤。
+   */
+  searchQuery?: string;
+  /** 清空顶部那一条框（快捷键节空态的退路按钮用；缺省不渲染那颗钮） */
+  onClearSearch?: () => void;
 }
 
 /**
@@ -276,6 +285,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     updateStatusLine,
     runUpdateCheck,
     installUpdate,
+    searchQuery = '',
+    onClearSearch,
   } = props;
 
   return [
@@ -300,7 +311,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             </label>
             {/* 居中限宽只在写作模式下有意义——非写作模式时它**什么都控制不了**，
                 所以不是"灰着好看"，而是不给一个点了没反应的控件。 */}
-            <label className={`settings-row nested${zen ? '' : ' off'}`}>
+            <label className={`settings-row nested${zen ? '' : ' off'}`} data-settings-key="general.zenLimitWidth">
               <Switch
                 checked={zenLimitWidth}
                 disabled={!zen}
@@ -328,8 +339,11 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               <Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />
               <span>
                 显示已封存功能
-                <span className="settings-hint">
-                  .kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。
+                <span
+                  className="settings-hint"
+                  title=".kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。"
+                >
+                  .kojo 转译检查 · 归档浏览器：已封存，勾选可临时恢复。
                 </span>
               </span>
             </label>
@@ -342,8 +356,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                 重置布局
               </button>
               <span>
-                恢复默认的面板位置、尺寸与显隐
-                <span className="settings-hint">不影响任何文件内容</span>
+                重置布局
+                <span className="settings-hint">恢复默认的面板位置、尺寸与显隐；不影响任何文件内容</span>
               </span>
             </div>
           </div>
@@ -370,7 +384,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             />
             <span>
               减弱动效
-              <span className="settings-hint">收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效</span>
+              <span className="settings-hint" title="收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效">
+                收起面板过渡与入场动画，切换更干脆
+              </span>
             </span>
           </label>
           {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
@@ -379,8 +395,11 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
             <span>
               长列表视口化
-              <span className="settings-hint">
-                只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。
+              <span
+                className="settings-hint"
+                title="只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。"
+              >
+                大列表只渲染看得到的行，首开不再卡
               </span>
             </span>
           </label>
@@ -410,12 +429,16 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             </span>
             <span>
               毛玻璃透明度
-              <span className="settings-hint">
-                浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）。
-                调到 0% 即实心、关掉磨砂。只改显示、不动文件
+              <span
+                className="settings-hint"
+                title={`浮层与教程目录的磨砂通透程度，默认 ${GLASS_TRANSPARENCY_DEFAULT}%（每档 ${GLASS_TRANSPARENCY_STEP}%）。调到 0% 即实心、关掉磨砂。`}
+              >
+                浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）
               </span>
             </span>
           </div>
+          {/* 「只改显示、不动文件」在本节多行重复（批次十一文案瘦身）：收成本组一条脚注。 */}
+          <div className="settings-group-note">本节各项只改显示、不动文件。</div>
         </div>
       ),
     },
