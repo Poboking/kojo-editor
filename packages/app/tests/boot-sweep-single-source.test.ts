@@ -33,6 +33,8 @@ const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, im
 
 const htmlSrc = (): string => read('../index.html');
 const cssSrc = (): string => read('../src/styles.css');
+// 视觉批十一 L01：基础 `:root` token 已从 styles.css 收敛到单源 tokens.css
+const tokensSrc = (): string => read('../src/tokens.css');
 const appTsx = (): string => read('../src/ui/App.tsx');
 const lightTheme = (): string => read('../src/themes/light.css');
 const mintTheme = (): string => read('../src/themes/mint-dark.css');
@@ -204,15 +206,15 @@ const NO_TOKENS = new Map<string, string>();
 type ThemeName = 'dark' | 'light' | 'mint-dark';
 const THEMES: readonly ThemeName[] = ['dark', 'light', 'mint-dark'];
 
-/** 每档取色 token 的真源：dark 在 `styles.css` 基础 `:root`，另两档在各自 `themes/*.css` */
+/** 每档取色 token 的真源：dark 在 `tokens.css` 基础 `:root`（L01 单源化前住 styles.css），另两档在各自 `themes/*.css` */
 function themeTokens(theme: ThemeName): Map<string, string> {
-  if (theme === 'dark') return tokenMap(cssSrc(), ':root', 'styles.css');
+  if (theme === 'dark') return tokenMap(tokensSrc(), ':root', 'tokens.css');
   if (theme === 'light') return tokenMap(lightTheme(), ":root[data-theme='light']", 'light.css');
   return tokenMap(mintTheme(), ":root[data-theme='mint-dark']", 'mint-dark.css');
 }
 
 const THEME_SOURCE: Readonly<Record<ThemeName, string>> = {
-  dark: 'styles.css 基础 :root',
+  dark: 'tokens.css 基础 :root',
   light: 'themes/light.css',
   'mint-dark': 'themes/mint-dark.css',
 };
@@ -242,7 +244,7 @@ const COLOR_FACES: readonly Face[] = [
 
 /**
  * 字号面（防同一类 bug：splash→app 接力瞬间字号跳）。`--fs-*` 不在 `themes/*.css` 里逐档重定义
- * ⇒ 真源只有 `styles.css` 基线 `:root` 一档，所以按 `dark`（= 引导层无档位前缀的基线规则）比一次，
+ * ⇒ 真源只有 `tokens.css` 基线 `:root` 一档（L01 单源化前住 styles.css），所以按 `dark`（= 引导层无档位前缀的基线规则）比一次，
  * 不硬造按档断言；前提本身另由下面那条闸钉住。
  */
 const FONT_FACES: readonly Face[] = [
@@ -333,7 +335,7 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
   });
 
   it('两份 .boot-bar / .boot-bar::after 的非取色声明逐字相等（取色是唯一合法差异）', () => {
-    const packedTokens = tokenMap(cssSrc(), ':root', 'styles.css');
+    const packedTokens = tokenMap(tokensSrc(), ':root', 'tokens.css');
     const targets = ['.boot-bar', '.boot-bar::after'] as const;
     for (const selector of targets) {
       const inline = recipeOf(inlineStyle(htmlSrc()), selector, NO_TOKENS, 'index.html');
@@ -358,7 +360,7 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
   });
 
   it('排版镜像：卡容器全配方逐字相等 + 两行文字的 font-weight / letter-spacing 同档（钉住 16px / 600 / 0.02em）', () => {
-    const packedTokens = tokenMap(cssSrc(), ':root', 'styles.css');
+    const packedTokens = tokenMap(tokensSrc(), ':root', 'tokens.css');
 
     /**
      * 顶层选择器的**全部**声明（token 已还原）。不借道 `recipeOf`：它会滤掉取色那几格，
@@ -447,10 +449,10 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     expect(inline).toEqual(['animation-duration: 1.15s !important;', 'animation-iteration-count: infinite !important;']);
   });
 
-  it('内联缓动字面量 == styles.css :root 的 --ease-out 现值，且内联层零 var()（红线：不许单源化取色）', () => {
-    const packedTokens = tokenMap(cssSrc(), ':root', 'styles.css');
+  it('内联缓动字面量 == tokens.css :root 的 --ease-out 现值，且内联层零 var()（红线：不许单源化取色）', () => {
+    const packedTokens = tokenMap(tokensSrc(), ':root', 'tokens.css');
     const easeOut = packedTokens.get('--ease-out');
-    expect(easeOut, 'styles.css :root 的 --ease-out 声明值').toBeDefined();
+    expect(easeOut, 'tokens.css :root 的 --ease-out 声明值').toBeDefined();
 
     const animOf = (decls: Decl[]): string => {
       const hit = decls.find((d) => d.prop === 'animation');
@@ -488,7 +490,7 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     }
   });
 
-  it('字号镜像：引导层两处 font-size 字面量 == styles.css 基线 :root 的 --fs-display / --fs-1', () => {
+  it('字号镜像：引导层两处 font-size 字面量 == tokens.css 基线 :root 的 --fs-display / --fs-1', () => {
     const tokens = themeTokens('dark');
     for (const face of FONT_FACES) expectMirrored('dark', face, tokens);
 

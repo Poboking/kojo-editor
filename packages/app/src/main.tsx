@@ -3,12 +3,16 @@ import { App } from './ui/App';
 import { NotificationCenter } from './ui/NotificationCenter';
 import { ingestInlineBootMarks } from './perf';
 import { installFrontendErrorLog } from './frontend-log';
+// 设计 token 单源（视觉批十一 L01）：必须排在一切样式引入之前——styles.css / styles-project.css
+// 与 themes/*.css 全部经 var() 取它，裸 :root 已从两份副本删除（E 闸钉死，见
+// styles-split.equivalence.test.ts）。
+import './tokens.css';
 // 右键面：教程面（1023 覆盖面批 · WP4.8）。模块加载即登记到面注册表，不需要任何
 // 生命周期协作；教程正文由插件渲染，宿主只能按 DOM 标记认代码块 / 目录条目（见该模块头注）。
 import './ui/tutorial-context-menu';
 import './styles.css';
-// 主题覆盖（2026-10-17 主题系统）：必须在 styles.css 之后引入，`:root[data-theme=…]` 特异性
-// 才能压过基础 `:root`。缺省 dark 无对应文件块（基础 :root 即深色），light/mint 各自翻 token。
+// 主题覆盖（2026-10-17 主题系统）：必须在 tokens.css 之后引入，`:root[data-theme=…]` 特异性
+// 才能压过基础 `:root`。缺省 dark 无对应文件块（tokens.css 的基础 :root 即深色），light/mint 各自翻 token。
 import './themes/light.css';
 import './themes/mint-dark.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的

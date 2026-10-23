@@ -12,7 +12,7 @@
  * 两个工具共用；原先这里抄了一份 collectBoot，靠注释「改一处必须改两处」维系，已收敛。
  * 摘要（逐字口径见 boot-probe.mjs 头注）：
  * ① ≤500ms 内 `#root` 非空 **或** body 计算底色已落到**该 `data-theme` 档源码里的 `--bg`**
- *    （三档真源由 `expectedBootBg(档)` 现读：dark = `styles.css` 基础 `:root`，light / mint-dark =
+ *    （三档真源由 `expectedBootBg(档)` 现读：dark = `tokens.css` 基础 `:root`，light / mint-dark =
  *    `themes/<档>.css`），外加「内联底色 == 该档 `--bg` == 挂载后计算底色」与「#boot-splash 已撤」两枚钉；
  *    **判据不要求深色**——浅色档 `#f6f8fa` 是用户设置，旧「亮度 < 96」硬编码必然假红；
  * ② 欢迎页可点（boot.welcomeInteractive）前不得有 monaco 请求——**取证优先 CDP Network 域**

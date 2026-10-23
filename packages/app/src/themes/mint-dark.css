@@ -93,6 +93,12 @@
   --shadow-focus:
     0 0 0 1px var(--focus-ring),
     0 0 0 4px var(--focus-glow);
+  /* 井面抬升两枚 + 按压罩（视觉批十一 L01）：深色基线的白墨三件套在本档的墨绿面上
+     读成"冷灰贴条/白霜"，一律青白化——井边比 --edge-raise 低半档（凹面受光弱于凸面），
+     井投影掺墨绿（与 --shadow-* 同族），按压罩取青白淡底、比 --hover (.09) 强一档。 */
+  --well-edge: inset 0 1px 0 rgba(205, 255, 232, 0.035);
+  --well-shadow: 0 1px 2px rgb(3 12 8 / 0.28);
+  --press-overlay: rgba(186, 255, 224, 0.15);
 
   /* 玻璃：tint 三元组 = 本档 bg-2/bg-3 预合成（较面值微抬 ~3 级，补偿遮罩暗化后 alpha .85
      的合成落点）；edge 淡青绿白；saturate 1.25→1.2——绿底本身有彩度，泄漏边缘更少彩噪；
