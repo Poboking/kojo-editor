@@ -31,18 +31,37 @@
  * **evaluate 上限一字未改（25s）**——超时若是红，打印的 `[idle]` / `[idx]` 读数会指明
  * 是"主线程被占"还是"页面自己慢"。
  *
- * 用法：node tools/ui-measure.mjs out.json      （它会自己点遍欢迎页 / 四个活动栏视图 /
- *        打开一个 ERB / 快速打开 / 设置浮层 / 新建向导，共十个状态；结果写 out.json 并打印摘要）
+ * 用法：node tools/ui-measure.mjs [out.json] [--theme=dark|light|mint-dark|all]
+ *        （它会自己点遍欢迎页 / 四个活动栏视图 / 打开一个 ERB / 快速打开 / 设置浮层 /
+ *        新建向导，共十个状态；结果写 out.json 并打印摘要）
+ *        --theme 缺省 all：每个状态点在同一水位下**逐档翻 data-theme 各量一遍**
+ *        （token 全走 CSS 级联，翻属性即全场换装，与设置页生效路径同构；Monaco 本就被跳过）。
+ *        兼容性口径（L15，2026-10-28）：无参时既有的每一行（十状态摘要行 / 量测耗时分布 /
+ *        全站字号·圆角·阴影三节 / written）**逐字不动**——深色是名单首档，聚合节仍只对深色取数；
+ *        浅色/薄荷只以**新增分节**报出（逐档七项读数 + 对比度失败清单 + 三档聚合 dump），
+ *        JSON 顶层保持原「状态→深色量数」键不变，另加一枚 `byTheme`（三档全量）。
  * 退出码：0 = 跑完（**不代表通过**，通过与否看摘要里的那几个数）；非 0 = 中途量不上（读数已打印）。
  *
  * 已知边界：跳过 `.monaco-editor` 内部（编辑器语法高亮另有口径）；
- * `input 13×13` 那类原生复选框会进 `smallTargets`，判读时按"表单控件"处理。
+ * `input 13×13` 那类原生复选框会进 `smallTargets`，判读时按"表单控件"处理；
+ * 逐档量测只动 `data-theme` 属性、不动 localStorage 偏好，每个状态量完即按 index.html
+ * 同款归一口径还原（跑完整轮外壳外观与跑前一致）。
  */
 import * as fs from 'node:fs';
 import { recentOpenRowSel } from './smoke-lib.mjs';
 
 const CDP = 'http://127.0.0.1:9222';
-const OUT = process.argv[2] ?? 'ui-measure.json';
+/* L15 档位参数：--theme=dark|light|mint-dark|all（缺省 all）。位置参数仍是 out.json，
+   旧命令行（`node tools/ui-measure.mjs out.json`）解析结果逐字不变。 */
+const ALL_THEME_IDS = ['dark', 'light', 'mint-dark'];
+const argv = process.argv.slice(2);
+const themeArg = argv.find((a) => a.startsWith('--theme='))?.slice('--theme='.length) || 'all';
+const themes = themeArg === 'all' ? ALL_THEME_IDS : [themeArg];
+if (!ALL_THEME_IDS.includes(themeArg) && themeArg !== 'all') {
+  console.error(`未知的 --theme=${themeArg}（允许 dark|light|mint-dark|all）`);
+  process.exit(2);
+}
+const OUT = argv.find((a) => !a.startsWith('--')) ?? 'ui-measure.json';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function pageUrl() {
@@ -173,17 +192,35 @@ const click = (sel, want) => ev(`(() => {
 const waitFor = async (expr, ms = 30000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await ev(expr)) return Math.round(Date.now() - t0); await sleep(400); } return 'TIMEOUT'; };
 
 const results = {};
+const byTheme = {};
+for (const t of themes) byTheme[t] = {};
+/** 主档 = 名单首档（缺省 all ⇒ dark）：`results` 与既有摘要/聚合行继续只对主档取数 */
 const snapTimes = [];
+/* L15 档位切换：与 index.html 早应用脚本 / `applyThemePref` 同构——生效只认根元素一个
+   `data-theme` 属性（token 全走 CSS 级联）；只动属性不动 localStorage，状态量完即还。 */
+const setTheme = (t) => ev(`(() => { document.documentElement.setAttribute('data-theme', ${JSON.stringify(t)}); return document.documentElement.getAttribute('data-theme'); })()`);
+const restoreBootTheme = () => ev(`(() => {
+  let t = 'dark';
+  try { const s = localStorage.getItem('kojo.ui.theme.v1'); if (s === 'light' || s === 'mint-dark') t = s; } catch (e) {}
+  document.documentElement.setAttribute('data-theme', t);
+  return t;
+})()`);
 /**
  * 每个状态：先等主线程水位归零，再量。**判据（那几个数）一字未改**，改的是"什么时候量"。
+ * L15 起每个状态在同一水位快照下逐档各量一遍（dark|light|mint-dark 或 --theme 指定的单档）。
  * 量不上（25s evaluate 上限用尽）时不丢一串栈就走——把当时水位读数与上一拍量测耗时打全，
  * 让人一眼分得清"级联还没完"与"页面真慢/真死"。
  */
 const snap = async (label) => {
   await waitIdle(label);
   const t0 = Date.now();
+  const perTheme = {};
   try {
-    results[label] = await ev(MEASURE);
+    for (const t of themes) {
+      await setTheme(t);
+      perTheme[t] = await ev(MEASURE);
+    }
+    await restoreBootTheme();
   } catch (e) {
     const spent = Date.now() - t0;
     console.log(`\n❌ ${label}：量测在 ${spent}ms 处失败（evaluate 上限 25s 未放宽）——${String(e)}`);
@@ -195,7 +232,9 @@ const snap = async (label) => {
   }
   const ms = Date.now() - t0;
   snapTimes.push({ label, ms });
-  const r = results[label];
+  for (const t of themes) byTheme[t][label] = perTheme[t];
+  const r = perTheme[themes[0]];
+  results[label] = r; // 主档（缺省 all ⇒ dark）——既有聚合口径取这一份
   console.log(label, `→ 量测 ${ms}ms；字号`, r.distinctFontSizes, '圆角', r.distinctRadii, '阴影', r.distinctShadows, '裁剪', r.clipFails.length, '对比度', r.contrastFails.length, '小目标', r.smallTargets.length);
 };
 
@@ -296,13 +335,13 @@ await sleep(1000);
 await snap('07-新建口上文件向导');
 await ev(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
 
-fs.writeFileSync(OUT, JSON.stringify(results, null, 1));
+fs.writeFileSync(OUT, JSON.stringify({ ...results, byTheme }, null, 1));
 /* 实测分布：25s 那条 evaluate 上限就是照这一行定的（不改上限、只把它量出来给人看）。 */
 console.log('\n量测耗时分布（ms）=', snapTimes.map((s) => `${s.label}:${s.ms}`).join('  '),
   '｜最大', Math.max(...snapTimes.map((s) => s.ms)), '｜上限', '25000（未放宽）');
-const agg = (field) => { const m = new Map(); for (const st of Object.values(results)) for (const [k, n] of Object.entries(st[field] ?? {})) m.set(k, (m.get(k) ?? 0) + n); return m; };
-const dump = (title, field, sort) => {
-  const m = agg(field);
+const agg = (field, dataset = results) => { const m = new Map(); for (const st of Object.values(dataset)) for (const [k, n] of Object.entries(st[field] ?? {})) m.set(k, (m.get(k) ?? 0) + n); return m; };
+const dump = (title, field, sort, dataset = results) => {
+  const m = agg(field, dataset);
   console.log(`\n=== ${title}（值 → 元素数）===`);
   console.log([...m.entries()].sort(sort).map(([k, n]) => k + '×' + n).join('  '));
   console.log('档数 =', m.size);
@@ -310,5 +349,34 @@ const dump = (title, field, sort) => {
 dump('全站渲染出来的字号档', 'fontSizes', (a, b) => parseFloat(a[0]) - parseFloat(b[0]));
 dump('全站渲染出来的圆角档', 'radii', (a, b) => b[1] - a[1]);
 dump('全站渲染出来的阴影档', 'shadows', (a, b) => b[1] - a[1]);
+/* ---- 以下全部是 L15 新增分节（逐档七项 + 对比度失败清单 + 非主档聚合）；上方既有行逐字未动 ---- */
+console.log('\n=== L15 逐档七项读数（字号/圆角/阴影/裁切/对比度失败/小目标/字形字符·SVG 图标）===');
+for (const t of themes) {
+  for (const [label, rt] of Object.entries(byTheme[t])) {
+    console.log(`[${t}] ${label}：字号 ${rt.distinctFontSizes} 圆角 ${rt.distinctRadii} 阴影 ${rt.distinctShadows} 裁切 ${rt.clipFails.length} 对比度 ${rt.contrastFails.length} 小目标 ${rt.smallTargets.length} 字形 ${rt.distinctGlyphTexts} svg ${rt.svgIcons}`);
+  }
+}
+console.log('\n=== L15 逐档对比度失败清单（跨状态合并，最差在前；空 = 该档实机零失败）===');
+for (const t of themes) {
+  const merged = new Map();
+  for (const st of Object.values(byTheme[t])) {
+    for (const f of st.contrastFails) {
+      const k = `${f.k} @${f.ratio}`;
+      const cur = merged.get(k) ?? { ...f, n: 0 };
+      cur.n += f.n;
+      merged.set(k, cur);
+    }
+  }
+  const list = [...merged.values()].sort((a, b) => a.ratio - b.ratio);
+  console.log(`[${t}] 对比度失败 ${list.length} 种：`);
+  for (const f of list) console.log(`  ${f.k} → ${f.ratio}（需 ${f.need}）×${f.n}「${f.sample}」`);
+}
+if (themes.length > 1) {
+  for (const t of themes.slice(1)) {
+    dump(`全站渲染出来的字号档 [${t}]`, 'fontSizes', (a, b) => parseFloat(a[0]) - parseFloat(b[0]), byTheme[t]);
+    dump(`全站渲染出来的圆角档 [${t}]`, 'radii', (a, b) => b[1] - a[1], byTheme[t]);
+    dump(`全站渲染出来的阴影档 [${t}]`, 'shadows', (a, b) => b[1] - a[1], byTheme[t]);
+  }
+}
 console.log('\nwritten', OUT);
 ws.close();
