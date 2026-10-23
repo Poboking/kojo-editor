@@ -17,6 +17,7 @@ import {
 } from './file-history';
 import { declareContextSurface } from './context-surfaces';
 import type { ContextMenuItem } from './context-menu-model';
+import { overlayFrame, overlaySkeletonRows, overlaySpinner } from './overlay-chrome';
 
 /**
  * 操作历史 overlay（2026-10-16 undo 批；W11 回收站可见批并入回收站账）。
@@ -358,15 +359,19 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
         if (id === OPS_HISTORY_MENU_IDS.refresh) setReloadNonce((n) => n + 1);
         else if (id === OPS_HISTORY_MENU_IDS.close) deps.close();
       };
-      return h(
-        'div',
-        { className: 'wizard oh-host', 'data-context-surface': OPS_HISTORY_SURFACE_ID },
-        h('h3', null, '操作与回收站时间线'),
-        state.kind === 'loading'
-          ? h('p', { className: 'dim' }, '正在并两本全局账…')
-          : h('p', { className: 'kd-error' }, `读取失败：${state.reason}`),
-        h('div', { className: 'wizard-actions' }, closeButton()),
-      );
+      return overlayFrame({
+        hostClass: 'oh-host',
+        title: '操作与回收站时间线',
+        tier: 'wide',
+        // 这一家有「撤销此批 / 清空回收站」，是破坏性面 ⇒ 遮罩保持 modal 那一档
+        onClose: () => deps.close(),
+        contextSurface: OPS_HISTORY_SURFACE_ID,
+        children:
+          state.kind === 'loading'
+            ? h('div', null, overlaySpinner('正在并两本全局账…'), overlaySkeletonRows(5))
+            : h('p', { className: 'kd-error' }, `读取失败：${state.reason}`),
+        footer: closeButton(),
+      });
     }
 
     const report = (tone: Feedback['tone'], text: string): void => {
@@ -754,32 +759,35 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
       }
     };
 
-    return h(
-      'div',
-      { className: 'wizard oh-host', 'data-context-surface': OPS_HISTORY_SURFACE_ID },
-      h('h3', null, '操作与回收站时间线'),
-      h(
-        'p',
-        { className: 'dim oh-path' },
-        '磁盘侧批操作（脚手架 / .kojo 双文件保存 / 存档注入 / 跨文件全部替换 / 部署 / 市场装卸）与回收站条目按时刻并成一条线。编辑器内的普通编辑走编辑器自己的 Ctrl+Z，不出现在这里；跨文件替换撤销后，已打开标签里的那部分请用编辑器内 Ctrl+Z；某个文件的完整四本账请看「显示当前文件的历史版本」。',
-      ),
-      state.notes.length > 0
-        ? h(
-            'div',
-            { className: 'pv-summary' },
-            ...state.notes.map((n, i) => h('p', { key: `note-${i}`, className: 'pv-chip warn' }, n)),
-          )
-        : null,
-      feedback
-        ? h('p', { className: feedback.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, feedback.text)
-        : null,
-      body,
-      h(
-        'div',
-        { className: 'wizard-actions' },
-        h('button', { className: 'ghost small', onClick: () => setReloadNonce((n) => n + 1) }, '刷新'),
+    return overlayFrame({
+      hostClass: 'oh-host',
+      title: '操作与回收站时间线',
+      tier: 'wide',
+      // 破坏性面（批回滚 / 清空回收站）⇒ 遮罩保持 modal 那一档
+      onClose: () => deps.close(),
+      contextSurface: OPS_HISTORY_SURFACE_ID,
+      children: [
+        h(
+          'p',
+          { key: 'scope', className: 'dim oh-path' },
+          '磁盘侧批操作（脚手架 / .kojo 双文件保存 / 存档注入 / 跨文件全部替换 / 部署 / 市场装卸）与回收站条目按时刻并成一条线。编辑器内的普通编辑走编辑器自己的 Ctrl+Z，不出现在这里；跨文件替换撤销后，已打开标签里的那部分请用编辑器内 Ctrl+Z；某个文件的完整四本账请看「显示当前文件的历史版本」。',
+        ),
+        state.notes.length > 0
+          ? h(
+              'div',
+              { key: 'notes', className: 'pv-summary' },
+              ...state.notes.map((n, i) => h('p', { key: `note-${i}`, className: 'pv-chip warn' }, n)),
+            )
+          : null,
+        feedback
+          ? h('p', { key: 'fb', className: feedback.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, feedback.text)
+          : null,
+        body,
+      ],
+      footer: [
+        h('button', { key: 'reload', className: 'ghost small', onClick: () => setReloadNonce((n) => n + 1) }, '刷新'),
         closeButton(),
-      ),
-    );
+      ],
+    });
   };
 }

@@ -20,6 +20,8 @@ import {
 } from './diff-view';
 import { declareContextSurface } from './context-surfaces';
 import { CODE_FONT_BASELINE } from './code-font'; // 比对面与主编辑器同一张字面（全站唯一一条栈）
+import { overlayEditorAppearance } from './overlay-editor-appearance';
+import { overlayFrame, overlaySkeletonWell, overlaySpinner } from './overlay-chrome';
 import { monacoThemeIdFor } from '../monaco/theme';
 import { loadThemePref, useThemePref } from './theme-pref';
 
@@ -40,6 +42,17 @@ import { loadThemePref, useThemePref } from './theme-pref';
 export interface DiffViewDeps {
   io: FileIO;
   close(): void;
+  /**
+   * 订阅「这一扇浮层被关掉了」的意图（宿主 `ui.overlay.close` 通道；退订交回）。
+   *
+   * 为什么要订：**关闭按钮走 `deps.close()`（里面带 `clearDiff()`），而 Esc 与点遮罩
+   * 走的是壳层自己的 `setActiveOverlay(null)`**——两条通道只有一条清栈，于是"按 Esc 关掉
+   * 比对、下次开窗读到上一次的陈年比对"。本组件订得住自己那枚 id 的关闭事件，
+   * 于是任何一条通道只要最终发了关闭意图，栈就跟着收；`clearDiff()` 幂等，
+   * 按钮那条自己已经清过也不会重复清出第二件事，更不会反过来再发关闭 ⇒ 无回环。
+   * 缺席（旧宿主 / 测试）⇒ 行为与改前逐字一致，只是仍只有按钮那一条通道清栈。
+   */
+  onCloseIntent?(handler: () => void): () => void;
 }
 
 /** 一侧的解析结果：文本已就位，或读取失败（失败可见，不静默） */
@@ -181,6 +194,16 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
   return function DiffViewOverlay(): unknown {
     const [, setTick] = useState(0);
     useEffect(() => subscribeDiff(() => setTick((t) => t + 1)), []);
+    // 关闭意图收栈（见 `DiffViewDeps.onCloseIntent`）：只清栈，**不再发关闭事件**——
+    // 发关闭的那一步归壳层，这里再发一次就成环。deps 由工厂闭包持有，挂载期恒定。
+    useEffect(() => {
+      const subscribe = deps.onCloseIntent;
+      if (subscribe === undefined) return;
+      return subscribe(() => {
+        clearDiff();
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     // 主题联动（反馈 3）：Monaco 的 `setTheme` 是全局的（主编辑器与 diff 一起换），
     // 这里订阅同一偏好——overlay 打开期间翻主题同样立刻跟上，创建时也按偏好落初值。
     const themePref = useThemePref();
@@ -318,6 +341,10 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       void (async () => {
         const monaco = await import('../monaco/entry');
         if (disposed || !containerRef.current) return;
+        // 外观与主编辑器同源（留白 / 缩略图 / 粘性滚动 / 当前行高亮）：按**两侧较大那本**
+        // 的行数取档位表，动态装载、取不到就维持改前的字面基线（见 overlay-editor-appearance）
+        const appearance = await overlayEditorAppearance(Math.max(countLines(textA), countLines(textB)));
+        if (disposed || !containerRef.current) return;
         const langA = languageIdForSide(activeRequest.original);
         const langB = languageIdForSide(activeRequest.modified);
         const modelA = monaco.editor.createModel(textA, langA);
@@ -343,6 +370,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
           hideUnchangedRegions: { enabled: gateLines >= DIFF_COLLAPSE_MIN_LINES },
           // 编程字体：与主编辑器同一份真源（createDiffEditor 也吃 IEditorOptions 这些键）
           ...CODE_FONT_BASELINE,
+          // 外观档：与主编辑器同一张档位表（`wordWrap` 刻意不并——并排 diff 与折行互斥）
+          ...appearance,
         });
         diffEditor.setModel({ original: modelA, modified: modelB });
         // 只把两只手交出去（上一处/下一处差异、并排/内联切换）：编辑器本身仍归本 effect 管
@@ -372,11 +401,18 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       // 这一屏没有可比对的对象：面不表态（右键落到兜底菜单），别拿上一次的旧投影糊弄
       menuSnapshotRef.current = null;
       menuRunRef.current = () => undefined;
-      return h(
-        'div',
-        { className: 'wizard kd-host', 'data-context-surface': DIFF_VIEW_SURFACE_ID },
-        h('p', { className: 'dim' }, '没有要对比的内容。'),
-      );
+      // 空态也带标题栏与 ✕：改前这一格只有一句「没有要对比的内容」，**一个关闭控件都没有**，
+      // 只能靠 Esc——而 Esc 又不走清栈那条通道（见 `onCloseIntent`）。
+      return overlayFrame({
+        hostClass: 'kd-host',
+        title: '比对',
+        tier: 'xl',
+        fill: true,
+        onClose: () => dismissAll(deps),
+        closeHint: '收掉比对窗（比对栈一并清空）',
+        contextSurface: DIFF_VIEW_SURFACE_ID,
+        children: h('p', { className: 'dim' }, '没有要对比的内容。'),
+      });
     }
 
     // 多开：栈里超过一本才出标签条；点标签切过去，点 × 只关那一本
@@ -417,18 +453,16 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     if (active.state.kind === 'rejected') {
       menuSnapshotRef.current = null;
       menuRunRef.current = () => undefined;
-      return h(
-        'div',
-        { className: 'wizard kd-host', 'data-context-surface': DIFF_VIEW_SURFACE_ID },
-        ...tabs,
-        h('h3', null, '无法打开对比'),
-        h('p', { className: 'kd-error' }, active.state.reason),
-        h(
-          'div',
-          { className: 'wizard-actions' },
-          h('button', { className: 'ghost small', onClick: () => dismissAll(deps) }, '关闭'),
-        ),
-      );
+      return overlayFrame({
+        hostClass: 'kd-host',
+        title: '无法打开对比',
+        tier: 'xl',
+        onClose: () => dismissAll(deps),
+        closeHint: '收掉比对窗（比对栈一并清空）',
+        contextSurface: DIFF_VIEW_SURFACE_ID,
+        children: [...tabs, h('p', { key: 'err', className: 'kd-error' }, active.state.reason)],
+        footer: h('button', { className: 'ghost small', onClick: () => dismissAll(deps) }, '关闭'),
+      });
     }
 
     const { request } = active.state;
@@ -493,67 +527,74 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       }
     };
 
-    return h(
-      'div',
-      { className: 'wizard kd-host', 'data-context-surface': DIFF_VIEW_SURFACE_ID },
-      ...tabs,
-      h('h3', null, request.title),
-      h(
-        'div',
-        { className: 'kd-labels' },
-        h('span', { className: 'kd-label' }, request.original.label),
-        h('span', { className: 'kd-label-arrow' }, '⇄'),
-        h('span', { className: 'kd-label' }, request.modified.label),
-      ),
-      banner !== null ? h('p', { className: 'kd-banner ok' }, banner.message) : null,
-      notice === null
-        ? null
-        : h('p', { className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
-      !bothOk && errLine.length === 0 ? h('p', { className: 'dim' }, '正在读取两侧内容…') : null,
-      errLine,
-      // PS-5 体量闸：拦下了就把"拦了什么、代价多大、要不要照样办"一次讲完（不许静默）
-      gated
-        ? h(
-            'div',
-            { className: 'kd-gate' },
-            h(
-              'p',
-              { className: 'kd-banner' },
-              `这两份内容合计约 ${formatCharCount(gateUnits)}字 / ${gateLines.toLocaleString('zh-CN')} 行，` +
-                '一次性对比会把界面卡住好几秒，所以先停下来没有自动开始。',
-            ),
-            h(
-              'div',
-              { className: 'wizard-actions' },
-              h(
-                'button',
-                {
-                  className: 'ghost small',
-                  onClick: () => {
-                    if (activeKey !== null) setForcedKeys((prev) => ({ ...prev, [activeKey]: true }));
-                  },
-                },
-                '仍然对比（可能会卡几秒）',
-              ),
-            ),
-          )
-        : null,
-      bothOk && !identical && !gated ? h('div', { ref: containerRef, className: 'kd-editor' }) : null,
-      h(
-        'div',
-        { className: 'wizard-actions' },
+    return overlayFrame({
+      hostClass: 'kd-host',
+      title: request.title,
+      tier: 'xl',
+      fill: true,
+      // ✕ = 收整扇窗（清栈），页脚那颗 = 只关这一本（栈里还有就回上一本）——分工写在 title 里
+      onClose: () => dismissAll(deps),
+      closeHint: '收掉比对窗（比对栈一并清空）',
+      contextSurface: DIFF_VIEW_SURFACE_ID,
+      children: [
+        ...tabs,
         h(
-          'button',
-          {
-            className: 'ghost small',
-            onClick: () => {
-              // 关当前这格：栈里还有别的比对就回到上一本，栈空才收模态
-              if (closeDiffPane(active.key)) deps.close();
-            },
-          },
-          panes.length > 1 ? `关闭这组比对（还剩 ${panes.length - 1} 组）` : '关闭',
+          'div',
+          { key: 'labels', className: 'kd-labels' },
+          h('span', { className: 'kd-label' }, request.original.label),
+          h('span', { className: 'kd-label-arrow' }, '⇄'),
+          h('span', { className: 'kd-label' }, request.modified.label),
         ),
+        banner !== null ? h('p', { key: 'banner', className: 'kd-banner ok' }, banner.message) : null,
+        // 复制一类的轻反馈（菜单与按钮共用同一份 notice；有才画，没有这一行也不占位）
+        notice === null
+          ? null
+          : h('p', { key: 'feedback', className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
+        // 装载态有脸可读：转圈 + 一句话 + 一口井的骨架（改前只有一句裸 `.dim`，读作"这里什么都没有"）
+        !bothOk && errLine.length === 0
+          ? h('div', { key: 'loading' }, overlaySpinner('正在读取两侧内容…'), overlaySkeletonWell())
+          : null,
+        errLine,
+        // PS-5 体量闸：拦下了就把"拦了什么、代价多大、要不要照样办"一次讲完（不许静默）
+        gated
+          ? h(
+              'div',
+              { key: 'gate', className: 'kd-gate' },
+              h(
+                'p',
+                { className: 'kd-banner' },
+                `这两份内容合计约 ${formatCharCount(gateUnits)}字 / ${gateLines.toLocaleString('zh-CN')} 行，` +
+                  '一次性对比会把界面卡住好几秒，所以先停下来没有自动开始。',
+              ),
+              h(
+                'div',
+                { className: 'wizard-actions' },
+                h(
+                  'button',
+                  {
+                    className: 'ghost small',
+                    onClick: () => {
+                      if (activeKey !== null) setForcedKeys((prev) => ({ ...prev, [activeKey]: true }));
+                    },
+                  },
+                  '仍然对比（可能会卡几秒）',
+                ),
+              ),
+            )
+          : null,
+        bothOk && !identical && !gated ? h('div', { key: 'editor', ref: containerRef, className: 'kd-editor' }) : null,
+      ],
+      footer: h(
+        'button',
+        {
+          className: 'ghost small',
+          onClick: () => {
+            // 关当前这格：栈里还有别的比对就回到上一本，栈空才收模态
+            if (closeDiffPane(active.key)) deps.close();
+          },
+        },
+        panes.length > 1 ? `关闭这组比对（还剩 ${panes.length - 1} 组）` : '关闭',
       ),
-    );
+    });
   };
 }
