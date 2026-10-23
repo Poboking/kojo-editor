@@ -173,16 +173,21 @@ describe('大纲面板 · 折叠一支', () => {
     expect(revealed).toEqual([[DOC_A, 1]]);
   });
 
-  it('再点一次 ⇒ 展开回来（箭头方向跟着状态走）', async () => {
+  it('再点一次 ⇒ 展开回来（箭头方向跟着状态走；箭头是注册图标，不是字符字形）', async () => {
     setJumpProbe(() => ({ path: DOC_A, line: 3, symbols: NESTED, derivedView: false }));
     const { kernel } = fakeKernel();
     await mount(kernel);
 
-    expect(foldButtonOf('r0')?.textContent).toBe('▾');
+    // L19 二轮：折叠指示改吃 `icons.tsx` 的 chevron SVG（与 ProblemPanel 同一条腿）。
+    // 判据跟着换成两半——**箭头里没有文本字形**（字符图标清零）+ **状态跟着翻**。
+    expect(foldButtonOf('r0')?.textContent).toBe('');
+    expect(foldButtonOf('r0')?.querySelector('svg.icon')).not.toBeNull();
+    expect(foldButtonOf('r0')?.getAttribute('aria-expanded')).toBe('true');
     await click(foldButtonOf('r0'));
-    expect(foldButtonOf('r0')?.textContent).toBe('▸');
+    expect(foldButtonOf('r0')?.textContent).toBe('');
+    expect(foldButtonOf('r0')?.getAttribute('aria-expanded')).toBe('false');
     await click(foldButtonOf('r0'));
-    expect(foldButtonOf('r0')?.textContent).toBe('▾');
+    expect(foldButtonOf('r0')?.getAttribute('aria-expanded')).toBe('true');
     expect(rowNames()).toEqual(['父甲', '子一', '子二', '孙', '叶乙']);
   });
 
