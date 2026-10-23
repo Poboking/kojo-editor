@@ -1,0 +1,25 @@
+/* ============================================================================
+ * 标签页 / 标签栏 / 编辑器组右键菜单（1023 覆盖面批 · WP2.3 / 2.4）
+ *
+ * 三个面（`tabs` / `tab-bar-blank` / `editor-group-header`）都走共享根宿主，
+ * 菜单本体的玻璃观感、行高、视口夹取在 `context-menu.css` 与 `styles.css` 里，
+ * **本文件不重钉那些**（11 路并行改共享样式必撞车）。
+ *
+ * 这里只补本路新增面真正需要的一条：`标签列表` 子菜单可能列出整组几十枚标签，
+ * 给它一个可滚动的上限并把长文件名收窄——否则子菜单会长到把父面板顶出视口。
+ *
+ * 钩子用子菜单自己的 `aria-label`：`context-menu.tsx` 里子面板的 ariaLabel
+ * 就是父项的 label（`MenuPanel` 的 depth > 0 分支），而「标签列表」是全站唯一的，
+ * 选择器因此天然只命中这一种子菜单。
+ * ========================================================================== */
+
+.context-menu[aria-label='标签列表'] {
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 文件名不比菜单还长：超出部分由既有的 text-overflow + title 悬停兜住 */
+.context-menu[aria-label='标签列表'] .context-menu-label {
+  max-width: 240px;
+}

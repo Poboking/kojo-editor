@@ -12,6 +12,7 @@ import { act, createElement as h, memo, useMemo, useState, type ReactElement } f
 import { createRoot, type Root } from 'react-dom/client';
 import { TabBar, type TabBarProps } from '../src/ui/tabs-bar';
 import type { TabRowProps } from '../src/ui/tab-row';
+import { buildContextMenuRoute } from '../src/ui/context-surfaces';
 
 const counts = vi.hoisted(() => ({ tabBar: 0, tabRow: 0 }));
 
@@ -117,22 +118,23 @@ describe('TabBar · PS-16 memo（渲染计数）', () => {
     expect(counts.tabRow).toBe(3); // 仅首挂渲染过 3 枚行，翻转帧一枚都不重画
   });
 
-  it('右键菜单开 ⇒ TabBar 内部重渲，TabRow 一枚都不重画', async () => {
+  it('右键 ⇒ 标签栏内部一次都不重渲（1023：菜单改由根宿主渲染，行上不再有本地 state）', async () => {
     root = createRoot(container);
     await act(async () => {
       root.render(h(FlipHarness, { active: 'C:/koa/q.ERB' }));
     });
     const base = { ...counts };
+    const row = container.querySelector('[role="tab"]') as HTMLElement;
     await act(async () => {
-      container.querySelector('[role="tab"]')?.dispatchEvent(
-        new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
-      );
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
     });
-    // 计数器钉在 props 驱动层（mock 外层）：菜单是 TabBar 内部 state，重渲发生在
-    // actual 层——外层计数不增正说明 props 没变；核心判据是行组件一枚都不重画。
+    // 旧实现：右键写本地菜单 state ⇒ TabBar 重渲、行不重画；本批起菜单走根宿主，
+    // TabBar 连自己重渲都不需要了——两枚计数都不动，等于「右键对标签栏零影响」。
     expect(counts.tabBar).toBe(base.tabBar);
     expect(counts.tabRow).toBe(base.tabRow);
-    expect(container.querySelector('.context-menu')).not.toBeNull(); // 菜单真的开了（防假绿）
+    // 防假绿：这条右键确实能被根路由接走（不是"事件没人管"）
+    const route = buildContextMenuRoute(row, new MouseEvent('contextmenu', { bubbles: true }));
+    expect(route?.items.length ?? 0).toBeGreaterThan(0);
   });
 
   it('activeFile 切换 ⇒ 只有新旧两枚标签重画', async () => {

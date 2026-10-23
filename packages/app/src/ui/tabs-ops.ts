@@ -9,7 +9,12 @@
  *   同生命周期，关项目 / 切项目随 resetProjectUiState 一起清；
  * - **pin 只能被用户显式取消**：批量关闭（其他/右侧/全部）绝不清扫固定标签；
  *   拖拽跨分界是显式手势，才允许自动改固定态（见 planReorder）。
+ *
+ * 1023 覆盖面批：右键菜单的**项与可用性**也住这里（`tabMenuItemsFor` /
+ * `groupMenuItemsFor`）——标题与键位一律从键位注册表取（`menuItemFromCommand`），
+ * 组件只负责把选中项接到既有动作上，不再自己写文案。
  */
+import { menuItemFromCommand, type ContextMenuItem } from './context-menu-model';
 
 /** 批量关闭模式：关闭其他 / 关闭右侧 / 关闭全部（锚点 = 右键的那个标签） */
 export type BatchCloseMode = 'others' | 'right' | 'all';
@@ -82,6 +87,29 @@ export function batchCloseEmptyReason(
         ? '固定标签不会被关闭，没有可关闭的标签'
         : '没有打开的标签';
   }
+}
+
+/* ------------------------------ 关闭已保存（1023 覆盖面批） ------------------------------ */
+
+/** 「关闭已保存」没有可关的标签时的那句人话（禁用原因与执行后提示共用一份文案） */
+export const CLOSE_SAVED_EMPTY_REASON = '没有已保存的标签';
+
+/**
+ * 「关闭已保存」的关闭清单（纯函数；只算不动手）。
+ *
+ * **判定不另起一套**：范围与固定标签豁免直接取 `planBatchClose('all')` 的产物，
+ * 这里只在其上再剔一道「有未保存修改的」（本动作的全部语义）——批量关闭的口径
+ * （固定标签绝不被批量清扫）与别处保持同一条。
+ *
+ * 空清单由调用方按 `CLOSE_SAVED_EMPTY_REASON` 说话（铁律 4：按下去必须有响）。
+ */
+export function planCloseSaved(
+  openTabs: readonly string[],
+  anchor: string,
+  pinned: ReadonlySet<string>,
+  dirty: ReadonlySet<string>,
+): readonly string[] {
+  return planBatchClose('all', openTabs, anchor, pinned).toClose.filter((p) => !dirty.has(p));
 }
 
 /* ------------------------------ 固定标签（C2） ------------------------------ */
@@ -205,42 +233,264 @@ export function planReorder(
   return { order, pinChange };
 }
 
-/* ------------------------------ 右键菜单（C1） ------------------------------ */
+/* ------------------------------ 右键菜单（C1；1023 覆盖面批补齐） ------------------------------ */
 
+/**
+ * 标签菜单的动作 id。**语义不许改**：C1 那六条（close / close-others / close-right /
+ * close-all / toggle-pin / copy-path）原样保留，本批只往后追加。
+ */
 export type TabMenuItemId =
   | 'close'
   | 'close-others'
   | 'close-right'
+  | 'close-saved'
   | 'close-all'
   | 'toggle-pin'
-  | 'copy-path';
+  | 'reopen'
+  | 'copy-path'
+  | 'copy-relative'
+  | 'copy-name'
+  | 'reveal'
+  | 'open-in-new-group'
+  | 'split-right'
+  | 'split-down';
 
-export interface TabMenuItemSpec {
-  readonly id: TabMenuItemId;
-  readonly label: string;
-  /** 右侧快捷键提示（纯展示；Ctrl+W 这一条由壳层命令表真实注册，其余动作没有缺省键位） */
-  readonly shortcut?: string;
-  /** 在这一项**之前**画一条分隔线（首项的分隔线由渲染侧吞掉，照 file-tree-ops 口径） */
-  readonly dividerBefore?: boolean;
+/**
+ * 一次标签右键能看到的**事实**（组件从本组状态现算；纯函数只照它出项）。
+ *
+ * 为什么用事实而不是布尔堆参数：菜单项的可见性与禁用原因都要问同一批问题
+ * （有没有可关的已保存标签 / 有没有资源管理器 / 命令通道在不在），
+ * 参数一多，调用点与测试都读不出「这一段在判断什么」。
+ */
+export interface TabMenuFacts {
+  /** 这一枚标签当前是否固定 */
+  readonly pinned: boolean;
+  /** 本组有「已保存且非固定」的标签可关（关闭已保存的可用性判据，见 planCloseSaved） */
+  readonly hasSaved: boolean;
+  /** 「在资源管理器中显示」有落脚点（Tauri 壳；浏览器壳没有这个能力 ⇒ 整项不显示） */
+  readonly canReveal: boolean;
+  /** 「恢复关闭的标签」通道可执行（命令通道不在 ⇒ 整项不显示） */
+  readonly hasReopen: boolean;
+  /** 拆分命令可执行（不可执行 ⇒ 显示但禁用 + 原因） */
+  readonly canSplit: boolean;
+  /** 有项目根 ⇒ 「复制相对路径」才有基准（没有 ⇒ 整项不显示，免得拷出误导的半截路径） */
+  readonly hasRoot: boolean;
 }
 
 /**
- * 标签右键菜单项（纯函数）。全部项恒在（铁律 4：无可作为时按下去由
- * batchCloseEmptyReason 给一句人话，不灰掉不消失）。
- * 固定标签的关闭钮虽已隐藏（防误关），但「关闭」仍可从这里显式发起——与 VSCode 同口径。
+ * 标签右键菜单项（纯函数，按三组排：关闭 | 复制与显示 | 分屏与分组）。
+ *
+ * 口径：
+ * - **关闭类恒在**（铁律 4 的旧口径）：无可作为时按下去由 `batchCloseEmptyReason`
+ *   给一句人话；唯一的例外是「关闭已保存」——它按 `hasSaved` 灰着并明说原因
+ *   （「没有已保存的标签」），因为这个动作「按下去什么都不会发生」是**可预判**的；
+ * - **能力类缺失就整项不显示**：资源管理器（浏览器壳）、恢复关闭的标签（无命令通道）、
+ *   复制相对路径（无项目根）都是「这台机器上没有这个能力」，不给幽灵入口；
+ * - **文案不另造**：凡有命令的动作（关闭当前标签 / 恢复关闭的标签 / 向右 / 向下拆分）
+ *   一律经 `menuItemFromCommand` 取中文标题与**生效键位**，菜单与命令面板同一份；
+ * - 「在新编辑器组打开」没有独立命令，由「激活该标签 + 向右拆分」两个既有动作合成
+ *   （拆分本身就把焦点组的激活标签带进新组），不新造业务逻辑。
  */
-export function tabMenuItemsFor(pinned: boolean): TabMenuItemSpec[] {
-  return [
-    { id: 'close', label: '关闭', shortcut: 'Ctrl+W' },
+export function tabMenuItemsFor(facts: TabMenuFacts): ContextMenuItem[] {
+  const items: ContextMenuItem[] = [];
+
+  // ---- 关闭类 ----
+  const close = menuItemFromCommand('workbench.closeActiveTab', { id: 'close', label: '关闭' });
+  if (close !== null) items.push(close);
+  items.push(
     { id: 'close-others', label: '关闭其他标签' },
     { id: 'close-right', label: '关闭右侧标签' },
+    facts.hasSaved
+      ? { id: 'close-saved', label: '关闭已保存' }
+      : {
+          id: 'close-saved',
+          label: '关闭已保存',
+          disabled: true,
+          disabledReason: CLOSE_SAVED_EMPTY_REASON,
+        },
     { id: 'close-all', label: '关闭全部标签' },
-    { id: 'toggle-pin', label: pinned ? '取消固定' : '固定标签', dividerBefore: true },
-    { id: 'copy-path', label: '复制路径' },
-  ];
+  );
+  if (facts.hasReopen) {
+    // 标题即命令表里的「恢复关闭的标签」（不与命令面板造第二份文案）
+    const reopen = menuItemFromCommand('workbench.reopenClosedTab', { id: 'reopen' });
+    if (reopen !== null) items.push(reopen);
+  }
+
+  // ---- 固定 ----
+  items.push({ id: 'toggle-pin', label: facts.pinned ? '取消固定' : '固定标签', dividerBefore: true });
+
+  // ---- 复制 / 显示类 ----
+  items.push({ id: 'copy-path', label: '复制路径', dividerBefore: true });
+  if (facts.hasRoot) items.push({ id: 'copy-relative', label: '复制相对路径' });
+  items.push({ id: 'copy-name', label: '复制文件名' });
+  if (facts.canReveal) {
+    items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout' });
+  }
+
+  // ---- 分屏 / 分组类 ----
+  // 「移动到其他组」不着陆：App 只有「拆开/关组」的组态纯函数，没有「把标签搬进另一组」
+  // 的动作——按铁律「能力不存在 ⇒ 整项不显示」，这里刻意不画。
+  if (facts.canSplit) {
+    items.push({ id: 'open-in-new-group', label: '在新编辑器组打开', dividerBefore: true });
+  }
+  // 没有「在新编辑器组打开」时（命令通道不在），第一枚拆分项自己带分隔线
+  const firstInGroup = facts.canSplit ? {} : { dividerBefore: true };
+  const splitRight = runnableCommandItem(
+    'workbench.splitEditor',
+    { id: 'split-right', ...firstInGroup },
+    facts.canSplit,
+  );
+  if (splitRight !== null) items.push(splitRight);
+  const splitDown = runnableCommandItem(
+    'workbench.splitEditorDown',
+    { id: 'split-down' },
+    facts.canSplit,
+  );
+  if (splitDown !== null) items.push(splitDown);
+
+  return items;
+}
+
+/* --------------------- 右键菜单：标签栏空白区 / 编辑器组头（1023） --------------------- */
+
+/** 标签栏空白区与编辑器组头共用的动作 id（两处问的是同一组问题，只是触发面不同） */
+export type GroupMenuItemId =
+  | 'split-right'
+  | 'split-down'
+  | 'close-group'
+  | 'save-all'
+  | 'close-group-tabs'
+  | 'tab-list';
+
+/** 标签列表子菜单里最多列几条（再多就不是菜单而是清单了，剩余条数如实说明） */
+export const TAB_LIST_LIMIT = 20;
+
+/** 标签列表子菜单项的固定前缀（含 CJK：中文化守卫不会把它整段丢掉） */
+const TAB_LIST_PREFIX = '切换到 ';
+
+/** 一次组级右键能看到的**事实** */
+export interface GroupMenuFacts {
+  /** 组总数（「关闭编辑器组」只在分屏时有意义） */
+  readonly groupCount: number;
+  /** 本组标签（按标签栏顺序；标签列表子菜单照它出项） */
+  readonly tabs: readonly string[];
+  /** 本组激活标签（打勾 + 批量关闭的锚点） */
+  readonly active: string | null;
+  readonly pinned: ReadonlySet<string>;
+  /** 「关闭编辑器组」有落脚点（宿主回调和分屏同时在） */
+  readonly canCloseGroup: boolean;
+  /** 拆分命令可执行（不可执行 ⇒ 显示但禁用 + 原因） */
+  readonly canSplit: boolean;
+}
+
+/**
+ * 标签栏空白区 / 编辑器组头的菜单项（纯函数）。
+ *
+ * 顺序照批内约定：拆分（右/下）| 关闭组（仅分屏）| 全部保存 + 按组关闭 | 标签列表。
+ * 「按组关闭」不自己算范围：可用性与禁用原因都由 `planBatchClose('all')` /
+ * `batchCloseEmptyReason('all')` 给——固定标签不被批量清扫这条口径只此一份。
+ */
+export function groupMenuItemsFor(facts: GroupMenuFacts): ContextMenuItem[] {
+  const items: ContextMenuItem[] = [];
+
+  const splitRight = runnableCommandItem(
+    'workbench.splitEditor',
+    { id: 'split-right' },
+    facts.canSplit,
+  );
+  if (splitRight !== null) items.push(splitRight);
+  const splitDown = runnableCommandItem(
+    'workbench.splitEditorDown',
+    { id: 'split-down' },
+    facts.canSplit,
+  );
+  if (splitDown !== null) items.push(splitDown);
+
+  // 单组不可关（关了就什么都没有了）⇒ 整项不显示；分屏中才给入口
+  if (facts.canCloseGroup && facts.groupCount > 1) {
+    const closeGroupItem = menuItemFromCommand('workbench.closeEditorGroup', {
+      id: 'close-group',
+      dividerBefore: true,
+    });
+    if (closeGroupItem !== null) items.push(closeGroupItem);
+  }
+
+  const saveAll = menuItemFromCommand('workbench.saveAll', { id: 'save-all', dividerBefore: true });
+  if (saveAll !== null) items.push(saveAll);
+
+  const anchor = facts.active ?? facts.tabs[0] ?? null;
+  if (anchor !== null) {
+    const closable = planBatchClose('all', facts.tabs, anchor, facts.pinned).toClose.length > 0;
+    items.push(
+      closable
+        ? { id: 'close-group-tabs', label: '关闭本组全部标签' }
+        : {
+            id: 'close-group-tabs',
+            label: '关闭本组全部标签',
+            disabled: true,
+            disabledReason: batchCloseEmptyReason('all', facts.tabs, anchor, facts.pinned),
+          },
+    );
+  }
+
+  items.push(tabListMenuItem(facts));
+  return items;
+}
+
+/**
+ * 「标签列表」子菜单（本组标签，点选即切换）。
+ *
+ * 子项 id 用**下标**（`tab-list:0`）而不是路径：路径里带盘符冒号，做 id 既难读又
+ * 容易与 `tab-list:` 前缀的解析撞车；下标在同一次右键会话里恒对应同一枚标签。
+ */
+function tabListMenuItem(facts: GroupMenuFacts): ContextMenuItem {
+  const base = { id: 'tab-list', label: '标签列表', dividerBefore: true } as const;
+  if (facts.tabs.length === 0) {
+    return { ...base, disabled: true, disabledReason: '本组还没有打开的标签' };
+  }
+  const shown = facts.tabs.slice(0, TAB_LIST_LIMIT);
+  const children: ContextMenuItem[] = shown.map((p, i) => ({
+    id: `tab-list:${i}`,
+    label: `${TAB_LIST_PREFIX}${tabName(p)}`,
+    ...(p === facts.active ? { checked: true } : {}),
+  }));
+  const rest = facts.tabs.length - shown.length;
+  if (rest > 0) {
+    children.push({ id: 'tab-list:rest', label: `还有 ${rest} 个标签未列出`, disabled: true, disabledReason: '子菜单只列前 20 个标签' });
+  }
+  return { ...base, children };
+}
+
+/** 标签列表子项 id → 下标（`null` = 不是可点的列表项） */
+export function tabListIndexOf(id: string): number | null {
+  if (!id.startsWith('tab-list:')) return null;
+  const raw = id.slice('tab-list:'.length);
+  if (!/^\d+$/.test(raw)) return null;
+  const index = Number(raw);
+  return Number.isSafeInteger(index) ? index : null;
+}
+
+/**
+ * 命令 → 菜单项，命令不可执行时补禁用原因（命令根本不存在 ⇒ 返回 null，调用方整项不显示）。
+ * 与兜底菜单 `commandItemForFallback` 同一口径：不假装能按，也不静默消失。
+ */
+function runnableCommandItem(
+  commandId: string,
+  overrides: Partial<ContextMenuItem>,
+  runnable: boolean,
+): ContextMenuItem | null {
+  const item = menuItemFromCommand(commandId, overrides);
+  if (item === null) return null;
+  return runnable ? item : { ...item, disabled: true, disabledReason: '未打开项目或命令未就绪' };
 }
 
 /* ------------------------------ 渲染辅助 ------------------------------ */
+
+/** 标签显示名：路径末段（完整路径留 title 悬浮提示；菜单的标签列表子菜单也用它） */
+export function tabName(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return i >= 0 ? path.slice(i + 1) : path;
+}
 
 /** 标签的落点指示（拖拽重排时） */
 export interface TabDropHint {

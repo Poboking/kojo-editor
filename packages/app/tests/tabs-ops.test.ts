@@ -167,21 +167,35 @@ describe('planReorder · 拖拽重排与固定区分界', () => {
 });
 
 describe('tabMenuItemsFor · 标签右键菜单', () => {
-  it('六项恒在，不灰不缺（无可作为时由宿主回一句人话）', () => {
-    const items = tabMenuItemsFor(false);
+  /** 最保守的一组事实（无资源管理器 / 无命令通道 / 无项目根）：只看「恒在」的那几条 */
+  const baseFacts = {
+    pinned: false,
+    hasSaved: true,
+    canReveal: false,
+    hasReopen: false,
+    canSplit: false,
+    hasRoot: false,
+  };
+
+  it('关闭类五项 + 固定 + 三档复制恒在（缺省事实下）', () => {
+    const items = tabMenuItemsFor(baseFacts);
     expect(items.map((i) => i.id)).toEqual([
       'close',
       'close-others',
       'close-right',
+      'close-saved',
       'close-all',
       'toggle-pin',
       'copy-path',
+      'copy-name',
+      'split-right',
+      'split-down',
     ]);
   });
 
   it('固定态切换文案：固定 ⇄ 取消固定；分隔线在切换项之前', () => {
-    expect(tabMenuItemsFor(false).find((i) => i.id === 'toggle-pin')?.label).toBe('固定标签');
-    const pinned = tabMenuItemsFor(true);
+    expect(tabMenuItemsFor(baseFacts).find((i) => i.id === 'toggle-pin')?.label).toBe('固定标签');
+    const pinned = tabMenuItemsFor({ ...baseFacts, pinned: true });
     expect(pinned.find((i) => i.id === 'toggle-pin')?.label).toBe('取消固定');
     expect(pinned.find((i) => i.id === 'toggle-pin')?.dividerBefore).toBe(true);
   });

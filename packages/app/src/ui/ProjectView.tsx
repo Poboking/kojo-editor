@@ -1199,7 +1199,14 @@ export function ProjectView({
                 }}
                 className={focused ? 'editor-group focused' : 'editor-group'}
               >
-                <div className="editor-group-head">
+                {/* 1023 覆盖面批：组头是 `editor-group-header` 面的根（右键面靠
+                    `data-group-id` 找回这一组的菜单桥）；标签栏空白区是它内部的
+                    `tab-bar-blank` 面，标签行自己又是更内层的 `tabs` 面。 */}
+                <div
+                  className="editor-group-head"
+                  data-context-surface="editor-group-header"
+                  data-group-id={g.id}
+                >
                   {g.tabs.length > 0 ? (
                     <TabBar
                       openTabs={g.tabs}
@@ -1207,6 +1214,10 @@ export function ProjectView({
                       dirtyPaths={dirtyPaths}
                       pinnedPaths={pinnedPaths}
                       previewPath={g.preview ?? null}
+                      groupId={g.id}
+                      groupCount={groups.length}
+                      rootDir={project.rootDir}
+                      onCloseGroup={onCloseGroup}
                       onActivateTab={tabCb.onActivateTab}
                       onRequestCloseTab={tabCb.onRequestCloseTab}
                       onReorderTab={tabCb.onReorderTab}
