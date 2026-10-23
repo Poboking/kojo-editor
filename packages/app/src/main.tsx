@@ -15,6 +15,10 @@ import './styles.css';
 // 才能压过基础 `:root`。缺省 dark 无对应文件块（tokens.css 的基础 :root 即深色），light/mint 各自翻 token。
 import './themes/light.css';
 import './themes/mint-dark.css';
+// ui-kit 控件语言（批次十一 L14 的收编件）：类名 `kit-*` 前缀与既有面零碰撞，
+// 按 ui-kit/index.tsx 头注的加载契约排在 styles.css 族之后；kojo2 切换设置（L11）
+// 已直接 import KitRadio 真件，不挂这条链控件就没有样式。
+import './ui-kit/ui-kit.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链

@@ -16,9 +16,10 @@
       的既有口径），于是 light / mint-dark 两档主题翻 `--green/--red/--amber`
       时本文件**自动跟**，不必为主题另写一份覆盖。
    ④ **浮层说 `.overlay-host` 的语言**：迁移向导的遮罩直接挂 `.overlay-backdrop`、
-      本体挂 `.overlay-host .overlay-host-wide`（磨砂面 / 圆角 / 分层阴影 / 入场动画
+      本体挂 `.overlay-host` + `.kojo2-wizard`（磨砂面 / 圆角 / 分层阴影 / 入场动画
       与向导·设置·教程同一族），本文件只补"宽版模态"特有的排布。
    ⑤ 特异性靠**叠类**取胜，不靠引入顺序（`.overlay-host.kojo2-wizard` = (0,2,0)）。
+   ⑥ 单选件用 **ui-kit `KitRadio` 真件**（L14 已合流），本文件只铺"一行一档"的行面。
 
    仍留在 TSX 内联的只剩**数据驱动的度量**：虚拟化的上下衬垫高度、行高（可注入
    metrics）、进度条百分比。这些是"这一次渲染算出来的数"，不是设计常量。
@@ -950,39 +951,46 @@
   color: var(--fg-dim);
 }
 
-/* 分段控件本体复用 `.theme-segment` / `.theme-seg-btn`（**不造第二种分段控件**，
-   与键位页 `.kb-scope` 同一先例）；这里只让它在一列里铺满、字号统一。
-   // ui-kit-candidate: KitSegmented——分段单选控件的观感真源（现为 .theme-seg-btn） */
-.theme-segment.kojo2-cutover__seg {
-  width: 100%;
-  justify-content: stretch;
-}
-.theme-segment.kojo2-cutover__seg .theme-seg-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  justify-content: center;
-}
-
-/* 选中档的人话说明：紧贴分段控件下方（读完再决定，比 tooltip 合适） */
-.kojo2-cutover__detail {
+/* 三档单选：**真件** = ui-kit `KitRadio`（批次十一 L14 已合流；本路直接 import，
+   不再是 candidate 注释）。观感归 ui-kit.css（kit-radio*），这里只管"一行一档"的
+   行面与选中档的行底——原生 `<input type="radio">` 已被 kit 的自绘点 + 隐藏真 input
+   替代（键盘 / 读屏语义仍走原生）。 */
+.kojo2-cutover__stages {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.kojo2-cutover__stage-row {
   padding: var(--space-2);
-  border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: var(--surface-sunken);
-  box-shadow: var(--well-raise);
-  font-size: var(--fs-1);
-  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  transition: border-color var(--dur-1) var(--ease-out);
 }
-.kojo2-cutover__detail-title {
+.kojo2-cutover__stage-row:hover {
+  border-color: var(--border-strong);
+}
+.kojo2-cutover__stage-row[data-kojo2-selected='1'] {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+/* 行内 kit-radio 让点在文字顶端、文案列纵向排（标题+徽章 / 说明两行） */
+.kojo2-cutover__stage-row .kit-radio {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+.kojo2-cutover__stage-row .kit-radio-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+}
+.kojo2-cutover__stage-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-2);
   color: var(--fg);
-  font-weight: 600;
-}
-.kojo2-cutover__detail-hint {
-  color: var(--fg-dim);
 }
 
 .kojo2-cutover__badge {
