@@ -20,6 +20,9 @@ import type * as Monaco from '../../monaco/entry';
 import * as monaco from '../../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../../monaco/erb-language';
+// 1023：语言专属右键项（快速修复 / 一键修复 / 跳转状态 / 切换预览）的 when 判据从这两个
+// 常量拼出来——**不硬编码** `'kojo-erb'` / `'kojo-sugar'`，语言 id 改名时这条自己跟着变。
+import { KOJO_LANGUAGE_ID } from '../../monaco/kojo-language';
 import { monacoThemeIdFor } from '../../monaco/theme';
 import { subscribeFindState } from '../../monaco/find-state-sync'; // FIND-STATE-PERSIST
 import { loadThemePref } from '../theme-pref';
@@ -55,9 +58,28 @@ import { setJumpProbe } from '../jump-to-state';
 import { flushViewStates } from '../view-state-store';
 import { editorModelPool } from '../editor-model-pool-instance';
 import { perf } from '../../perf';
-import { PREVIEW_WRITE_VETO } from './pane-helpers';
+import { PREVIEW_WRITE_VETO, baseNameOf } from './pane-helpers';
 import type { EditorPaneRefs, MutableRef } from './pane-context';
 import type { PreferencesInstaller } from './use-editor-preferences';
+// 1023 右键覆盖面批（WP1.1 / 1.3 / 1.4）：编辑区「应用动作」表是纯数据 + 可用性判定，
+// 本文件只做接线（现取上下文 → addAction → 派发时按当下重算的表判可用性）。
+// 动作表刻意不含 React / Monaco import，单测直接打 `buildEditorContextActions`。
+import {
+  buildEditorContextActions,
+  findEditorContextAction,
+  listAllEditorContextActions,
+  monacoActionIdOf,
+  EDITOR_CONTEXT_GROUP_MENU_ID,
+  type EditorContextActionContext,
+} from './editor-context-actions';
+import { canRunContextMenuCommand, runContextMenuCommand } from '../context-menu-model';
+import { SHOW_FILE_HISTORY_COMMAND_ID } from '../file-history';
+import { revealInExplorer, revealFailureText } from '../reveal-explorer';
+import { relativeToRoot } from '../file-tree-ops';
+import { isInWorkspaceFile } from '../file-area';
+import { isErbLike } from '../lift-preview';
+// 「在资源管理器中显示」只有桌面壳才有（浏览器壳里这条动作整项不注册——铁律 4）
+import { isTauri } from '../../bridge/invoke';
 // K2 batch-3：2.0 诊断接线（flag 关时安装器立即返回空操作，连监听都不挂）。
 // 住在本实例 effect 里而不是 EditorPane：事件源（ed / filePathRef / sugarModelRef）都在
 // 这一拍之后才齐，且退场次序本来就由本 hook 的清账段钉死。
@@ -112,6 +134,16 @@ export interface MonacoInstanceParams {
   ) => () => void;
   /** 壳层通知中心（2.0 诊断失败时发一条 error toast；缺省 = 只进问题面板 + console） */
   notify: Notify;
+  /**
+   * 脏判定（1023 右键覆盖面批）：与组件里那份 `computeDirty` **同一个函数**
+   * （model 版本号 ≠ 已保存基线），不在这里另立第二套判据——右键菜单的
+   * 「重新加载磁盘版本」与状态栏的未保存点必须同时亮/灭。
+   */
+  computeDirty: (path: string) => boolean;
+  /** 「重新加载磁盘版本」的落地通道（组件里那份 reloadFromDisk 的恒稳引用） */
+  reloadFromDiskRef: MutableRef<((path: string) => Promise<void>) | null>;
+  /** 「申请写权限…」的落地通道（组件既有的 `onReauth`：通知中心「去授权」同一入口） */
+  requestWrite: () => void;
 }
 
 export function useMonacoInstance(params: MonacoInstanceParams): void {
@@ -134,6 +166,9 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     installPreferences,
     installBreadcrumb,
     notify,
+    computeDirty,
+    reloadFromDiskRef,
+    requestWrite,
   } = params;
   const {
     editorRef,
@@ -291,6 +326,211 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     });
     // 面包屑：刷新入口 + 光标/model 两条监听（判据与缓存全在 use-breadcrumb.ts）
     const disposeBreadcrumb = installBreadcrumb(ed, pushSelStatus);
+    /* ---------------- 右键「应用动作」（1023 覆盖面批 · WP1.1 / 1.3 / 1.4） ----------------
+     * 语义住在 `editor-pane/editor-context-actions.ts`（纯函数、可单测），本段只做三件事：
+     *   ① 现取上下文（只读 / 预览面 / 脏 / 选区 / 语言 / 通道）；
+     *   ② 全量动作换成一枚枚 `ed.addAction`（注册**一次**，Monaco 每次开菜单读当前 when）；
+     *   ③ 派发时按**当下一拍**重算的表判可用性——不可用就把原因说出来（铁律 4）。
+     *
+     * 为什么可用性不在注册时判：`addAction({ precondition })` 只能表达上下文键
+     * （语言 / 只读 / 选区），**不支持"灰着 + 说原因"**——为假就是整项不出现。
+     * 本批要的恰恰是"能点、点了就知道为什么不行"，所以 enable/disable 一律留给派发时；
+     * 注册时只写**静态**的 when（语言族 / 只读面）——那是"这一项跟这份文件无关"，
+     * 与"此刻暂时不可用"是两件事（公共规程：没话说 ≠ 按不下）。
+     */
+    const KOJO_FAMILY_LANGUAGE_IDS: readonly string[] = [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID];
+    /** 语言族 when（拼自语言常量，不写死 id 字面量：改语言注册时这条自己跟着变） */
+    const KOJO_FAMILY_WHEN = KOJO_FAMILY_LANGUAGE_IDS.map((id) => `editorLangId == '${id}'`).join(' || ');
+    /** 剪贴板**读**能力是会话级事实：没有就没有，右键那一刻再问也变不出来 */
+    const clipboardReadable = (): boolean =>
+      typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function';
+
+    /** 宿主命令通道（全部保存 / 一键修复 / 跳转状态 / 切预览 / 文件历史都走既有的那条腿） */
+    const runHostCommand = (id: string): void => {
+      if (runContextMenuCommand(id)) return;
+      notify({ kind: 'info', message: '这个动作当前不可用（命令通道还没就绪）。' });
+    };
+    /** Monaco 内建动作：动作缺席 = 这门语言没这能力（明说，不静默） */
+    const runEditorAction = (id: string): void => {
+      const action = ed.getAction(id);
+      if (action === null) {
+        notify({ kind: 'info', message: '当前文件类型不支持这个动作。' });
+        return;
+      }
+      void action.run();
+    };
+    /** 复制到剪贴板 + 一句回执（照 tabs-bar / FileTree 既有口径） */
+    const copyToClipboard = (text: string, done: string): void => {
+      const clip = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+      if (clip === undefined) {
+        notify({ kind: 'error', message: '复制失败：当前环境没有可用的剪贴板' });
+        return;
+      }
+      void clip.writeText(text).then(
+        () => notify({ kind: 'info', message: done }),
+        () => notify({ kind: 'error', message: '复制失败：剪贴板不可用' }),
+      );
+    };
+
+    /** 当下的应用动作上下文（每次派发现取：路径 / 只读 / 预览面 / 脏 / 选区 / 语言都是活读数） */
+    const editorContextOf = (): EditorContextActionContext => {
+      const path = filePathRef.current;
+      const model = ed.getModel();
+      const readOnly = ed.getOption(monaco.editor.EditorOption.readOnly) === true;
+      const sugarPreview = sugarModelRef.current !== null;
+      // 糖预览的可用门与 `EditorPane.applySugarView` **等价**（不是第二份判据）：
+      // 那份门 = 方言 ∧ 不在工作区 ∧ 未解锁；而"游戏目录里未解锁的方言文件"正是
+      // 编辑器只读面（`erbReadOnlyGate` 同一个表达式）⇒ `readOnly` 一位就够。
+      // 这样本 hook 不必把 `unlockedPathsRef` 再搬进来一份。
+      const canToggleSugar = isErbLike(path) && !isInWorkspaceFile(kernel, path) && readOnly;
+      return {
+        hasFile: path !== '' && model !== null,
+        readOnly,
+        sugarPreview,
+        dirty: path !== '' && computeDirty(path),
+        hasSelection: ed.getSelection()?.isEmpty() === false,
+        kojoFamily: model !== null && KOJO_FAMILY_LANGUAGE_IDS.includes(model.getLanguageId()),
+        canToggleSugar,
+        canReveal: isTauri(),
+        canFileHistory: canRunContextMenuCommand(SHOW_FILE_HISTORY_COMMAND_ID),
+        canClipboardCompare: clipboardReadable(),
+        // 通道恒在（`onReauth` 是组件的必填 prop），所以这一位表达的是**此刻该不该
+        // 给这条出路**：只读面（含预览面——根因可能是目录本来没授权）才出现
+        canRequestWrite: readOnly,
+        runSave: () => {
+          void saveRef.current();
+        },
+        runSaveAll: () => runHostCommand('workbench.saveAll'),
+        runFormatDocument: () => runEditorAction('editor.action.formatDocument'),
+        runFormatSelection: () => runEditorAction('editor.action.formatSelection'),
+        runQuickFix: () => runEditorAction('editor.action.quickFix'),
+        runFixAll: () => runHostCommand('workbench.fixAll'),
+        runFindReferences: () => runEditorAction('editor.action.goToReferences'),
+        runRename: () => runEditorAction('editor.action.rename'),
+        runJumpToState: () => runHostCommand('workbench.jumpToState'),
+        runToggleSugar: () => runHostCommand('workbench.toggleSugarView'),
+        // 历史版本走**已注册的命令**（`when: activeFile`），不在这里重写"开哪份文件的历史"
+        runFileHistory: () => runHostCommand(SHOW_FILE_HISTORY_COMMAND_ID),
+        runCopyPath: () => copyToClipboard(path, '已复制完整路径'),
+        // 没有项目（还没打开项目）就没有"相对谁"——照 FileTree 的老口径退回完整路径，
+        // 拷一个半截路径给出去只会误导收到的人
+        runCopyRelPath: () => {
+          const project = kernel.project.current();
+          copyToClipboard(
+            project === null ? path : relativeToRoot(path, project.rootDir),
+            '已复制相对路径',
+          );
+        },
+        runReveal: () => {
+          void revealInExplorer(path).catch((error: unknown) => {
+            notify({ kind: 'error', message: revealFailureText(error) });
+          });
+        },
+        runReloadFromDisk: () => {
+          void reloadFromDiskRef.current?.(path);
+        },
+        /**
+         * 与剪贴板比较：两侧都给**内联文本**（左 = 此刻编辑器里的内容，右 = 剪贴板），
+         * 走既有 `ui.diffView.open` 意图 —— 不新造 diff、不读盘（读盘会拿旧字节比新缓冲）。
+         * 剪贴板读取需要系统授权：拒了就说一句人话，不静默。
+         */
+        runCompareClipboard: () => {
+          const clip = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+          if (clip === undefined) return; // 没有读通道时这一项本来就进不了表
+          void clip.readText().then(
+            (text) => {
+              kernel.bus.emit('ui.diffView.open', {
+                title: `与剪贴板比较：${baseNameOf(path)}`,
+                original: { label: `编辑器内容 · ${baseNameOf(path)}`, text: model?.getValue() ?? '' },
+                modified: { label: '剪贴板', text },
+                source: '编辑器右键',
+              });
+            },
+            () =>
+              notify({
+                kind: 'error',
+                message: '读不到剪贴板内容（系统可能未授权）——先复制一段文本再试。',
+              }),
+          );
+        },
+        runRequestWrite: () => requestWrite(),
+      };
+    };
+
+    /**
+     * 静态 when 表（注册面）：只写 Monaco 上下文键**能表达**的那几项。
+     * `editorReadOnly` / `editorLangId` 都是 Monaco 自己维护的键（预览面也是只读 ⇒ 同样在场）。
+     */
+    const CONTEXT_ACTION_WHEN: Readonly<Record<string, string>> = {
+      'quick-fix': KOJO_FAMILY_WHEN,
+      'jump-to-state': KOJO_FAMILY_WHEN,
+      'fix-all': KOJO_FAMILY_WHEN,
+      // 切预览只对"游戏目录、未解锁的方言文件"有意义（那份门里的"只读面"这一位）。
+      // 语言族要连 `.kojo` 一起认：预览面挂着的是**投影 model**（语言 = kojo-sugar），
+      // 只认原语言的话，恰恰在最需要"切回源码"的时候这一项会消失。
+      'toggle-sugar': `${KOJO_FAMILY_WHEN} && editorReadOnly`,
+      'request-write': 'editorReadOnly',
+    };
+    /**
+     * 注册（一次性）：`kojo.ctx.<id>` —— **不占** Monaco 的 `editor.action.*` 命名空间。
+     * 菜单项是全局注册（`MenuRegistry` / `CommandsRegistry`），`ed.dispose()` 不管它们，
+     * 故句柄必须收好、退场逐个 dispose（否则多实例退场后留下指向死编辑器的菜单项）。
+     */
+    const contextActionDisposables: Monaco.IDisposable[] = [];
+    for (const action of listAllEditorContextActions()) {
+      // 桌面壳才有「在资源管理器中显示」：浏览器壳里**整项不注册**（不是灰着）
+      if (action.id === 'reveal' && !isTauri()) continue;
+      const when = CONTEXT_ACTION_WHEN[action.id];
+      contextActionDisposables.push(
+        ed.addAction({
+          id: monacoActionIdOf(action.id),
+          label: action.label,
+          ...(when === undefined ? {} : { precondition: when }),
+          contextMenuGroupId: EDITOR_CONTEXT_GROUP_MENU_ID[action.group],
+          contextMenuOrder: action.order,
+          run: () => {
+            // 菜单是**注册那一刻**的全量清单，可用性是**点下去那一刻**的事实：
+            // 卸载/换文件/进预览都可能在这两者之间发生，所以这里现建一次表。
+            const found = findEditorContextAction(buildEditorContextActions(editorContextOf()), action.id);
+            if (found === undefined) {
+              notify({ kind: 'info', message: '这一项在当前上下文不适用，没有执行。' });
+              return;
+            }
+            if (!found.enabled) {
+              notify({ kind: 'info', message: found.disabledReason ?? '当前不可用。' });
+              return;
+            }
+            found.run();
+          },
+        }),
+      );
+    }
+    /**
+     * WP1.6 右键位置语义（"点在哪儿，动作就作用在哪儿"）：
+     * - 右键落在**非空选区内** ⇒ 一个字节都不动（清选区 = 把作者刚选好要处理的那块弄丢）；
+     * - 右键落在正文 / 行尾留白之外（滚动条、浮层控件里的输入框…）⇒ 不动光标；
+     * - 其余 ⇒ 光标落到右键处，随后的格式化选区 / 重命名 / 快速修复就作用在这一行。
+     *
+     * Monaco 的 contextmenu 贡献内部有同一条规则（vendor：`contextmenu.js` 的
+     * `_onContextMenu` 逐条比 `selections.containsPosition`），这里**再钉一次**的理由是：
+     * 那条规则挂在该贡献"菜单开着"的分支里，而本批的落地动作是我们自己的右键项——
+     * 语义不该依赖另一个贡献的分支条件。
+     */
+    const contextMenuPositionSub = ed.onContextMenu((e) => {
+      const target = e.target;
+      // 只处理"点在正文里"的两类目标（与 Monaco contextmenu 贡献同一分组）：
+      // 滚动条 / 浮层控件（查找框等）/ 注入文本的右键要的是它们自己的菜单，**不动光标**
+      if (
+        target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT &&
+        target.type !== monaco.editor.MouseTargetType.CONTENT_EMPTY
+      ) {
+        return;
+      }
+      const position = target.position;
+      const selection = ed.getSelection();
+      if (selection !== null && !selection.isEmpty() && selection.containsPosition(position)) return;
+      ed.setPosition(position);
+    });
     /**
      * Kojo 2.0 预览面板（K2-EDITOR-MOUNT ①）：入口在这一拍建，**编译成品不在这里算**。
      *
@@ -380,6 +620,10 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     const flushViewOnUnload = (): void => flushViewStates();
     window.addEventListener('beforeunload', flushViewOnUnload);
     return () => {
+      // 1023：菜单项是**全局**注册（MenuRegistry / CommandsRegistry），ed.dispose() 不管它们
+      // ——不逐个 dispose 就会在实例退场后留下指向死编辑器的菜单项
+      for (const disposable of contextActionDisposables) disposable.dispose();
+      contextMenuPositionSub.dispose();
       disposePreferences();
       focusDisposer.dispose();
       disposeBreadcrumb();

@@ -1833,6 +1833,11 @@ export function EditorPane({
     installBreadcrumb: breadcrumb.install,
     // K2 batch-3：2.0 诊断失败要发一条 error toast（可见提示），出口是壳层通知中心
     notify,
+    // 1023 右键覆盖面批（WP1.1）：三条**只透传**的接线——脏判据与重载/授权两处落地
+    // 都住在组件或既有模块里，hook 不复制第二份（右键「重新加载磁盘版本」「申请写权限…」用）
+    computeDirty,
+    reloadFromDiskRef,
+    requestWrite: () => onReauthRef.current(),
   });
 
   // 「标注函数被谁调用」开关（B8）：偏好落地 / 事件订阅 / 退订全在 use-editor-preferences.ts。
