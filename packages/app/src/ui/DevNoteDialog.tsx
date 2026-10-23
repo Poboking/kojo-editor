@@ -85,6 +85,10 @@ export function DevNoteDialog({ onClose, onOpenDirectory }: DevNoteDialogProps):
   };
 
   const onMaskMouseDown = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    // 右键是"要开菜单"，不是"要关浮层"（1023 覆盖面批 · WP4.10）：mousedown 对三键都会
+    // 触发，不拦的话右键落在遮罩上会先把纸条关掉、再弹出菜单压在空页面上。
+    // 只认左键，键盘与 Esc 语义一字未动。
+    if (e.button !== 0) return;
     // 只有按在遮罩本身才关：从纸条里按下、拖到外面松开不算
     if (e.target === e.currentTarget) onClose();
   };

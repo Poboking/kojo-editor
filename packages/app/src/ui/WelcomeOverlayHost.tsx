@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import { PanelBody } from './PanelHost';
 import { isComposingEvent } from './shell-keys';
@@ -92,8 +92,18 @@ export function WelcomeOverlayHost({ kernel }: WelcomeOverlayHostProps): ReactEl
     kernel.bus.emit('ui.overlay.close', { id: contribution.id, source: 'host:welcome' });
   };
 
+  /**
+   * 遮罩上的按下：只认左键（1023 覆盖面批 · WP4.10）。
+   * mousedown 对右键同样会触发，不拦的话在教程外面那块遮罩上按右键，会先关掉教程、
+   * 再弹出根菜单——右键的语义是"开菜单"，不是"关浮层"。
+   */
+  const onBackdropMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    close();
+  };
+
   return (
-    <div className="overlay-backdrop" onMouseDown={close}>
+    <div className="overlay-backdrop" onMouseDown={onBackdropMouseDown}>
       <div
         ref={hostRef}
         className={`overlay-host${contribution.size === 'wide' ? ' overlay-host-wide' : ''}`}

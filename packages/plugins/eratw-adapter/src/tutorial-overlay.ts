@@ -216,9 +216,20 @@ function inlineNodes(nodes: TutorialInlineNode[], keyPrefix: string): ReactNode[
 const inlineText = (text: string, keyPrefix: string): ReactNode[] =>
   inlineNodes(parseTutorialInline(text), keyPrefix);
 
-/** 一个样例：有产物则左右对照（.tutorial-pair 由样式排成三列），没有就单块 */
+/**
+ * 一个样例：有产物则左右对照（.tutorial-pair 由样式排成三列），没有就单块。
+ *
+ * `data-tutorial-code` 是**给宿主右键菜单看的标记**（1023 覆盖面批 · 教程面）：
+ * 教程浮层由本插件渲染，宿主不持有组件树，只能按 DOM 标记认"这是代码块"。
+ * 值恒为空串——宿主只需要"是/不是"，不需要知道是哪一半（左边写法 / 右边产物）。
+ * 标记不参与样式、不参与读屏（无 role / 无 tabIndex，文本照样可选中）。
+ */
 function sampleNode(sample: TutorialSample, key: string): ReactNode {
-  const kojoCode = h('pre', { className: 'tutorial-code' }, h('code', null, sample.kojo));
+  const kojoCode = h(
+    'pre',
+    { className: 'tutorial-code', 'data-tutorial-code': '' },
+    h('code', null, sample.kojo),
+  );
   return h(
     'div',
     { key, className: 'tutorial-sample' },
@@ -232,7 +243,7 @@ function sampleNode(sample: TutorialSample, key: string): ReactNode {
           kojoCode,
           // 中间标「编译为」：读者不用猜哪块是产物（箭头字形由样式按横/竖给，见 .tutorial-arrow）
           h('div', { className: 'tutorial-arrow' }, '编译为'),
-          h('pre', { className: 'tutorial-code' }, h('code', null, sample.erb)),
+          h('pre', { className: 'tutorial-code', 'data-tutorial-code': '' }, h('code', null, sample.erb)),
         )
       : kojoCode,
   );
@@ -279,7 +290,12 @@ function tableNode(table: TutorialTable, key: string): ReactNode {
   );
 }
 
-/** 一条目录项：圈码记号（若有）单列 + 标题纯文本；当前项由 scroll-spy 挂 `aria-current` */
+/**
+ * 一条目录项：圈码记号（若有）单列 + 标题纯文本；当前项由 scroll-spy 挂 `aria-current`。
+ *
+ * `data-tutorial-section="<第几节>"` 同样只服务宿主右键菜单：宿主拿到序号后**点一下这一项**
+ * （`click()` 触发下面的 onClick），跳转逻辑与鼠标左键完全同一条，不另写第二份滚动代码。
+ */
 function tocItemNode(tutorialId: string, heading: string, index: number): ReactNode {
   const { marker, text } = splitHeadingMarker(heading);
   const plain = tutorialInlinePlain(text);
@@ -289,6 +305,7 @@ function tocItemNode(tutorialId: string, heading: string, index: number): ReactN
       key: index,
       type: 'button',
       className: 'tutorial-toc-item',
+      'data-tutorial-section': String(index),
       title: tutorialInlinePlain(heading),
       // 首项默认点亮（未滚动前"读到哪了"= 开头）；其余交给 spyActiveSection
       'aria-current': index === 0 ? 'true' : undefined,
@@ -307,7 +324,13 @@ export function createTutorialOverlay(deps: TutorialOverlayDeps): () => unknown 
 
     return h(
       'div',
-      { className: 'wizard tutorial' },
+      {
+        className: 'wizard tutorial',
+        // 右键面的根标记（1023 覆盖面批 · 教程面）：值 'tutorial' 与宿主
+        // `CONTEXT_SURFACE_MANIFEST` 里登记的面 id 同一词表。插件不认右键，
+        // 只负责把"教程这块地方"标出来，菜单长什么样由宿主那一侧算。
+        'data-context-surface': 'tutorial',
+      },
       h(
         'div',
         { className: 'tutorial-head' },
