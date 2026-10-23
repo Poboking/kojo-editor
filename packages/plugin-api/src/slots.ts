@@ -1,4 +1,5 @@
 import type { Unsubscribe } from './base';
+import type { PluginContextMenuRequest } from './context-menu';
 import type { RevealSpan } from './events';
 import type { GameAdapter } from './game';
 import type { GameProject } from './game';
@@ -51,6 +52,18 @@ export interface UIPanelProps {
    * 即一切偏好缺省时等价于改动前的行为。
    */
   readonly uiPrefs?: UiPrefs;
+  /**
+   * 宿主注入的**右键菜单通道**（additive，1023 批 · 右键覆盖面 WP5.1）。
+   *
+   * 面板把「刚才右击的行 / 单元格的菜单」交给宿主统一渲染（固定层，压过模态与浮动窗），
+   * 面板自己不开浮层——就地渲染的菜单会被自己的层叠上下文裁掉，也会与宿主菜单打架。
+   *
+   * **可选**：旧宿主 / 无渲染环境（纯函数单测）缺省。贡献方必须写成
+   * `props.openContextMenu?.(req)`：缺席即「没有右键菜单」，不抛错、不退化出自造浮层。
+   * 宿主侧还会再过一道中文化闸（非中文项整项丢弃），但插件**应当**自己就保证全中文
+   * （`hasCjkLabel` 可自查）。
+   */
+  readonly openContextMenu?: (request: PluginContextMenuRequest) => void;
 }
 
 /**

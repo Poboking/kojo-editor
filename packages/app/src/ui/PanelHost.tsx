@@ -1,6 +1,7 @@
 import { memo, type ComponentType, type ReactElement } from 'react';
 import type { UIPanelContribution, UIPanelProps } from '@kojo/plugin-api';
 import { Icon } from './icons';
+import { createPluginContextMenuBridge } from './plugin-context-menu-bridge';
 
 /** 宿主下传的 UI 偏好投影类型（从契约字段派生——`UiPrefs` 未从 plugin-api 桶导出） */
 type UiPrefs = NonNullable<UIPanelProps['uiPrefs']>;
@@ -109,9 +110,17 @@ export function panelBodyPropsEqual(a: PanelBodyProps, b: PanelBodyProps): boole
 
 function PanelBodyView({ contribution, floating, uiPrefs }: PanelBodyProps): ReactElement {
   const Comp = contribution.component as ComponentType<UIPanelProps>;
+  // 右键菜单通道（1023 批）：按面板 id 取一个**引用稳定**的桥（`createPluginContextMenuBridge`
+  // 内部复用），面板塞进 effect 依赖数组时不会反复重订阅。
+  const openContextMenu = createPluginContextMenuBridge(contribution.id);
   return (
     <div className={`panel panel-${contribution.id}`}>
-      <Comp renderIcon={renderIcon} {...(floating ? { floating: true } : {})} {...(uiPrefs ? { uiPrefs } : {})} />
+      <Comp
+        renderIcon={renderIcon}
+        openContextMenu={openContextMenu}
+        {...(floating ? { floating: true } : {})}
+        {...(uiPrefs ? { uiPrefs } : {})}
+      />
     </div>
   );
 }

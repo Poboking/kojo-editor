@@ -308,6 +308,14 @@ export type {
 export { WellKnownCommands } from './slots';
 export type { WellKnownCommandId } from './slots';
 
+/* ---- 插件面板右键菜单契约（1023 右键覆盖面 WP5.1 独占追加区块；勿在他处重排） ---- */
+export { hasCjkLabel } from './context-menu';
+export type {
+  PluginContextMenuCapability,
+  PluginContextMenuItem,
+  PluginContextMenuRequest,
+} from './context-menu';
+
 // 光标处标识符整串（跨插件共享的极小纯函数；解耦审计禁插件交叉 import，故住契约层）
 export { symbolTokenAt } from './symbol-token';
 export type { SymbolToken } from './symbol-token';
