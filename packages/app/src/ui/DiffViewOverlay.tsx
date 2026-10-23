@@ -2,17 +2,23 @@ import { createElement as h, useEffect, useRef, useState, type ReactNode } from 
 import type { FileIO } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
 import {
+  buildDiffViewMenu,
   clearDiff,
   closeDiffPane,
+  DIFF_VIEW_MENU_IDS,
+  DIFF_VIEW_SURFACE_ID,
   diffEqualityBanner,
   diffEqualityOf,
+  diffSummaryText,
   focusDiffPane,
   getDiffPanes,
   languageIdForSide,
   subscribeDiff,
   type DiffPane,
   type DiffRequest,
+  type DiffViewMenuInput,
 } from './diff-view';
+import { declareContextSurface } from './context-surfaces';
 import { CODE_FONT_BASELINE } from './code-font'; // 比对面与主编辑器同一张字面（全站唯一一条栈）
 import { monacoThemeIdFor } from '../monaco/theme';
 import { loadThemePref, useThemePref } from './theme-pref';
@@ -135,6 +141,42 @@ function dismissAll(deps: DiffViewDeps): void {
   deps.close();
 }
 
+/* ------------------------------ 右键菜单（WP3.6） ------------------------------ */
+
+/** 剪贴板入口（缺席 ⇒ null：复制项禁用并说清原因） */
+function clipboardApi(): Clipboard | null {
+  return typeof navigator === 'undefined' ? null : (navigator.clipboard ?? null);
+}
+
+/**
+ * 面 ↔ 组件之间的动作桥（面在模块顶层声明，读不到 React 闭包）。
+ *
+ * `snapshot` / `run` 由组件在每次渲染时写进 ref（三个早退分支里写 `null`：这一屏
+ * 没有可复制 / 可跳转的对象，面就不表态，右键落到兜底菜单）。
+ */
+interface DiffViewFaceBridge {
+  readonly clipboardAvailable: boolean;
+  snapshot(): DiffViewMenuInput | null;
+  run(id: string): void;
+}
+
+let faceBridge: DiffViewFaceBridge | null = null;
+
+declareContextSurface({
+  id: DIFF_VIEW_SURFACE_ID,
+  ariaLabel: '差异视图菜单',
+  area: 'panel',
+  build: () => {
+    const bridge = faceBridge;
+    if (bridge === null) return null;
+    const input = bridge.snapshot();
+    if (input === null) return null;
+    const menu = buildDiffViewMenu(input);
+    if (menu === null) return null;
+    return { items: menu.items, onSelect: (id) => bridge.run(id) };
+  },
+});
+
 export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
   return function DiffViewOverlay(): unknown {
     const [, setTick] = useState(0);
@@ -158,6 +200,55 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     const [sidesByKey, setSidesByKey] = useState<Record<string, PaneSides>>({});
     /** PS-5 体量闸：作者**逐格明示**"就是要对比这一对大的"（按格子 key 记，不全局放行） */
     const [forcedKeys, setForcedKeys] = useState<Record<string, boolean>>({});
+    /** 并排 / 内联（只影响布局；`renderSideBySide` 由菜单与创建时共用同一个偏好） */
+    const [sideBySide, setSideBySide] = useState(true);
+    /** 布局偏好的即时值（建编辑器时读它，避免把 sideBySide 塞进创建 effect 的依赖里重建编辑器） */
+    const sideBySideRef = useRef(true);
+    /** 复制一类的轻反馈（成败都上屏） */
+    const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+    /** 差异编辑器的两只手（上一处/下一处、切换布局）；null = 当前没有画出差异 */
+    const diffApiRef = useRef<{
+      goToDiff(target: 'next' | 'previous'): void;
+      updateOptions(options: { renderSideBySide: boolean }): void;
+    } | null>(null);
+    /** 右键菜单的即时投影（每次渲染重写：三个早退分支写 null = 这一面不表态） */
+    const menuSnapshotRef = useRef<DiffViewMenuInput | null>(null);
+    const menuRunRef = useRef<(id: string) => void>(() => undefined);
+
+    const copyToClipboard = (text: string, doneNote: string): void => {
+      const clip = clipboardApi();
+      if (clip === null) {
+        setNotice({ tone: 'err', text: '复制失败：当前环境没有可用的剪贴板' });
+        return;
+      }
+      void clip.writeText(text).then(
+        () => setNotice({ tone: 'ok', text: doneNote }),
+        () => setNotice({ tone: 'err', text: '复制失败：剪贴板拒绝了这次写入' }),
+      );
+    };
+
+    /** 并排/内联切换：只改呈现（`readOnly` 不变，一个字节也不写盘） */
+    const applyLayout = (next: boolean): void => {
+      sideBySideRef.current = next;
+      setSideBySide(next);
+      diffApiRef.current?.updateOptions({ renderSideBySide: next });
+    };
+
+    /**
+     * 右键菜单的动作桥（每次渲染后刷新）。菜单只接既有能力：复制、Monaco 差异编辑器
+     * 自己的 `goToDiff` / `updateOptions`、比对栈既有的关闭出口。
+     */
+    useEffect(() => {
+      const entry: DiffViewFaceBridge = {
+        clipboardAvailable: clipboardApi() !== null,
+        snapshot: () => menuSnapshotRef.current,
+        run: (id) => menuRunRef.current(id),
+      };
+      faceBridge = entry;
+      return () => {
+        if (faceBridge === entry) faceBridge = null;
+      };
+    });
     /** 已发起过读取的格子（StrictMode 二次执行也不重复读盘） */
     const requestedRef = useRef<Set<string>>(new Set());
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -235,7 +326,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
           theme: monacoThemeIdFor(loadThemePref()),
           readOnly: true,
           originalEditable: false,
-          renderSideBySide: true,
+          // 布局偏好由菜单切换；新开一格沿用当前偏好（同一个 ref，不进创建依赖）
+          renderSideBySide: sideBySideRef.current,
           renderOverviewRuler: true,
           // eraTW 缩进有语义（tab 层级），空白差异必须如实可见
           ignoreTrimWhitespace: false,
@@ -253,8 +345,15 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
           ...CODE_FONT_BASELINE,
         });
         diffEditor.setModel({ original: modelA, modified: modelB });
+        // 只把两只手交出去（上一处/下一处差异、并排/内联切换）：编辑器本身仍归本 effect 管
+        const api = {
+          goToDiff: (target: 'next' | 'previous'): void => diffEditor.goToDiff(target),
+          updateOptions: (options: { renderSideBySide: boolean }): void => diffEditor.updateOptions(options),
+        };
+        diffApiRef.current = api;
         editor = {
           dispose: () => {
+            if (diffApiRef.current === api) diffApiRef.current = null;
             diffEditor.dispose();
             modelA.dispose();
             modelB.dispose();
@@ -264,12 +363,20 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       return () => {
         disposed = true;
         editor?.dispose();
+        diffApiRef.current = null;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeKey, original, modified, gated, gateLines]);
 
     if (active === null) {
-      return h('div', { className: 'wizard kd-host' }, h('p', { className: 'dim' }, '没有要对比的内容。'));
+      // 这一屏没有可比对的对象：面不表态（右键落到兜底菜单），别拿上一次的旧投影糊弄
+      menuSnapshotRef.current = null;
+      menuRunRef.current = () => undefined;
+      return h(
+        'div',
+        { className: 'wizard kd-host', 'data-context-surface': DIFF_VIEW_SURFACE_ID },
+        h('p', { className: 'dim' }, '没有要对比的内容。'),
+      );
     }
 
     // 多开：栈里超过一本才出标签条；点标签切过去，点 × 只关那一本
@@ -308,9 +415,11 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         : [];
 
     if (active.state.kind === 'rejected') {
+      menuSnapshotRef.current = null;
+      menuRunRef.current = () => undefined;
       return h(
         'div',
-        { className: 'wizard kd-host' },
+        { className: 'wizard kd-host', 'data-context-surface': DIFF_VIEW_SURFACE_ID },
         ...tabs,
         h('h3', null, '无法打开对比'),
         h('p', { className: 'kd-error' }, active.state.reason),
@@ -333,9 +442,60 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
     if (original.kind === 'error') errLine.push(h('p', { key: 'a', className: 'kd-error' }, original.message));
     if (modified.kind === 'error') errLine.push(h('p', { key: 'b', className: 'kd-error' }, modified.message));
 
+    /* ------------------------------ 右键菜单投影 ------------------------------ */
+
+    const pathOf = (side: { path?: string }): string | null =>
+      typeof side.path === 'string' && side.path.length > 0 ? side.path : null;
+    const leftPath = pathOf(request.original);
+    const rightPath = pathOf(request.modified);
+
+    menuSnapshotRef.current = {
+      title: request.title,
+      leftLabel: request.original.label,
+      rightLabel: request.modified.label,
+      leftPath,
+      rightPath,
+      // 差异编辑器已建才有「上一处 / 下一处」与布局切换（体量闸拦下 / 无差异时它不在）
+      editorReady: diffApiRef.current !== null,
+      sideBySide,
+      paneCount: panes.length,
+      bannerMessage: banner === null ? null : banner.message,
+      clipboardAvailable: clipboardApi() !== null,
+    };
+    menuRunRef.current = (id) => {
+      switch (id) {
+        case DIFF_VIEW_MENU_IDS.copySummary: {
+          const snapshot = menuSnapshotRef.current;
+          if (snapshot !== null) copyToClipboard(diffSummaryText(snapshot), '已复制对比摘要');
+          return;
+        }
+        case DIFF_VIEW_MENU_IDS.copyLeftPath:
+          if (leftPath !== null) copyToClipboard(leftPath, '已复制左侧路径');
+          return;
+        case DIFF_VIEW_MENU_IDS.copyRightPath:
+          if (rightPath !== null) copyToClipboard(rightPath, '已复制右侧路径');
+          return;
+        case DIFF_VIEW_MENU_IDS.prevDiff:
+          diffApiRef.current?.goToDiff('previous');
+          return;
+        case DIFF_VIEW_MENU_IDS.nextDiff:
+          diffApiRef.current?.goToDiff('next');
+          return;
+        case DIFF_VIEW_MENU_IDS.toggleLayout:
+          // 只翻呈现（readOnly 不变）：并排 ⇄ 内联
+          applyLayout(!sideBySideRef.current);
+          return;
+        case DIFF_VIEW_MENU_IDS.closePane:
+          if (closeDiffPane(active.key)) deps.close();
+          return;
+        default:
+          return;
+      }
+    };
+
     return h(
       'div',
-      { className: 'wizard kd-host' },
+      { className: 'wizard kd-host', 'data-context-surface': DIFF_VIEW_SURFACE_ID },
       ...tabs,
       h('h3', null, request.title),
       h(
@@ -346,6 +506,9 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         h('span', { className: 'kd-label' }, request.modified.label),
       ),
       banner !== null ? h('p', { className: 'kd-banner ok' }, banner.message) : null,
+      notice === null
+        ? null
+        : h('p', { className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
       !bothOk && errLine.length === 0 ? h('p', { className: 'dim' }, '正在读取两侧内容…') : null,
       errLine,
       // PS-5 体量闸：拦下了就把"拦了什么、代价多大、要不要照样办"一次讲完（不许静默）

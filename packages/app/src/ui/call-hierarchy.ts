@@ -1,3 +1,5 @@
+import type { ContextMenuItem } from './context-menu-model';
+
 /**
  * 调用层级 overlay 的宿主状态（2026-10-16 批 E）。
  *
@@ -43,4 +45,244 @@ export function setCallHierarchyState(next: CallHierarchyState): void {
 export function subscribeCallHierarchy(cb: () => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);
+}
+
+/* ==================== 右键菜单（WP3.4 · 1023 覆盖面批） ==================== */
+
+/**
+ * 面子 id（= 面板根元素的 `data-context-surface`；已在清单预登记）。
+ *
+ * 菜单**只做入口**：跳转复用面板自己的 `deps.reveal`，重定查询复用
+ * `setCallHierarchyState`（命令面板开这一屏走的就是这条通道），展开更多行复用
+ * 两个 section 的窗口步进——本文件不新增任何查询能力或第二套导航。
+ */
+export const CALL_HIERARCHY_SURFACE_ID = 'call-hierarchy';
+
+/** 菜单项 id（面自己分发；不是命令 id，不冒充命令） */
+export const CALL_HIERARCHY_MENU_IDS = {
+  jump: 'ch.jump',
+  recenter: 'ch.recenter',
+  copyChain: 'ch.copyChain',
+  copyLocation: 'ch.copyLocation',
+  copyList: 'ch.copyList',
+  expandIn: 'ch.expand.in',
+  expandOut: 'ch.expand.out',
+  refresh: 'ch.refresh',
+  close: 'ch.close',
+} as const;
+
+export type CallHierarchySection = 'in' | 'out';
+
+/** 右键命中的一行（组行 = 一个调用者/被调者，点位行 = 一处调用点） */
+export interface CallHierarchyRowRef {
+  readonly kind: 'group' | 'site';
+  readonly section: CallHierarchySection;
+  /** 组行 = 函数名；点位行 = 所属组名（可能为空串） */
+  readonly name: string;
+  readonly path: string;
+  readonly line: number;
+  readonly column: number | null;
+  /** 组行名下点位数 */
+  readonly count: number;
+  /** 组行名下全部点位（`path:line:column`，按渲染顺序） */
+  readonly sites: readonly string[];
+}
+
+/** 一次菜单构建的全部输入（纯数据；测试直接构造） */
+export interface CallHierarchyMenuInput {
+  /** null = 没点在行上（面板级菜单） */
+  readonly row: CallHierarchyRowRef | null;
+  /** 面板正在查看的函数（null = 还没有请求） */
+  readonly subject: { readonly name: string; readonly path: string; readonly line: number } | null;
+  /** 当前环境有没有剪贴板写入口（没有 ⇒ 复制项禁用并说清原因） */
+  readonly clipboardAvailable: boolean;
+  /** 入 / 出两个 section 还有多少行没画出来（0 = 不给「展开更多行」） */
+  readonly hidden: { readonly in: number; readonly out: number };
+  /** 两个 section 各自的总行数（窗口步进要用它算下一档上界） */
+  readonly total: { readonly in: number; readonly out: number };
+  /** 整屏清单的可复制文本（组行逐条成链；空串 ⇒ 复制清单禁用） */
+  readonly listText: string;
+}
+
+/** 一条调用链的可复制文本：`名字（path:line）` + 逐处 `↳ path:line:column` */
+export function callChainText(row: CallHierarchyRowRef): string {
+  const head = `${row.name === '' ? '调用' : row.name}（${row.path}:${row.line}）`;
+  const rest = row.sites.map((site) => `\n  ↳ ${site}`);
+  return rest.length === 0 ? head : head + rest.join('');
+}
+
+/** 点位行的可复制位置 */
+export function callSiteLocationText(row: CallHierarchyRowRef): string {
+  return row.column === null ? `${row.path}:${row.line}` : `${row.path}:${row.line}:${row.column}`;
+}
+
+function copyDisabledReason(clipboardAvailable: boolean): string | undefined {
+  return clipboardAvailable ? undefined : '当前环境没有可用的剪贴板';
+}
+
+/**
+ * 调用层级菜单（纯函数）：输入上下文 → 菜单项。
+ *
+ * 分组：`这一行`（跳转 / 重定查询 / 复制）→ `显示`（展开更多行 / 刷新）→ 末尾关闭。
+ * 行的能力差异：组行给「复制调用链」，点位行给「复制位置」；「查看调用者的调用层级」
+ * 只在入调用侧的点位行出现（出调用侧的点位就在当前函数体内，重定查询等于原地绕圈）。
+ */
+export function buildCallHierarchyMenu(input: CallHierarchyMenuInput): { items: ContextMenuItem[] } | null {
+  const items: ContextMenuItem[] = [];
+  const copyReason = copyDisabledReason(input.clipboardAvailable);
+  const row = input.row;
+
+  if (row !== null) {
+    items.push({
+      id: CALL_HIERARCHY_MENU_IDS.jump,
+      label: row.kind === 'group' ? '跳转到定义' : '跳转到调用处',
+      icon: 'target',
+      group: '这一行',
+    });
+    if (row.kind === 'group' || row.section === 'in') {
+      items.push({
+        id: CALL_HIERARCHY_MENU_IDS.recenter,
+        label: row.kind === 'group' ? '查看此函数的调用层级' : '查看调用者的调用层级',
+        icon: 'search',
+      });
+    }
+    if (row.kind === 'group') {
+      items.push({
+        id: CALL_HIERARCHY_MENU_IDS.copyChain,
+        label: `复制调用链（${row.count} 处）`,
+        icon: 'files',
+        ...(copyReason === undefined ? {} : { disabled: true, disabledReason: copyReason }),
+      });
+    }
+    items.push({
+      id: CALL_HIERARCHY_MENU_IDS.copyLocation,
+      label: '复制位置',
+      icon: 'files',
+      ...(copyReason === undefined ? {} : { disabled: true, disabledReason: copyReason }),
+    });
+  }
+
+  // 面板级：没有"当前查看的函数"时只剩刷新 / 关闭（不摆读不出东西的入口）。
+  // 行上已经给过「查看…的调用层级」时不再重复一条——同 id 两项会让分发认不出是谁
+  if (row === null && input.subject !== null) {
+    items.push({
+      id: CALL_HIERARCHY_MENU_IDS.recenter,
+      label: '查看当前函数的调用层级',
+      icon: 'search',
+      dividerBefore: true,
+      group: '这一屏',
+    });
+  }
+  if (input.listText !== '') {
+    items.push({
+      id: CALL_HIERARCHY_MENU_IDS.copyList,
+      label: '复制调用清单',
+      icon: 'files',
+      dividerBefore: row === null && input.subject === null,
+      ...(copyReason === undefined ? {} : { disabled: true, disabledReason: copyReason }),
+    });
+  }
+
+  if (input.hidden.in > 0) {
+    items.push({
+      id: CALL_HIERARCHY_MENU_IDS.expandIn,
+      label: `展开更多被调用行（还有 ${input.hidden.in} 行）`,
+      icon: 'structure',
+      dividerBefore: true,
+      group: '显示',
+    });
+  }
+  if (input.hidden.out > 0) {
+    items.push({
+      id: CALL_HIERARCHY_MENU_IDS.expandOut,
+      label: `展开更多调用行（还有 ${input.hidden.out} 行）`,
+      icon: 'structure',
+      ...(input.hidden.in > 0 ? {} : { dividerBefore: true, group: '显示' }),
+    });
+  }
+
+  items.push({
+    id: CALL_HIERARCHY_MENU_IDS.refresh,
+    label: '刷新调用层级',
+    icon: 'refresh',
+    // 没有请求时"刷新"没有对象：禁用并说明（不静默）
+    ...(input.subject === null
+      ? { disabled: true, disabledReason: '还没有在查看任何函数，先按一次「查看调用层级」' }
+      : {}),
+    ...(input.hidden.in > 0 || input.hidden.out > 0 ? {} : { dividerBefore: true }),
+  });
+  items.push({ id: CALL_HIERARCHY_MENU_IDS.close, label: '关闭', icon: 'close' });
+  return { items };
+}
+
+/* --------------------------- DOM 读取（面 → 纯输入） --------------------------- */
+
+function attrNumber(el: Element, name: string): number | null {
+  const raw = el.getAttribute(name);
+  if (raw === null || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** 行元素的 `data-ch-*` → 行引用（读不出身份 ⇒ null，面据此回落到面板级菜单） */
+export function readCallHierarchyRow(target: HTMLElement): CallHierarchyRowRef | null {
+  const el = target.closest<HTMLElement>('[data-ch-row]');
+  if (el === null) return null;
+  const kind = el.getAttribute('data-ch-row');
+  const path = el.getAttribute('data-ch-path');
+  const line = attrNumber(el, 'data-ch-line');
+  if ((kind !== 'group' && kind !== 'site') || path === null || line === null) return null;
+  const chain = el.getAttribute('data-ch-chain');
+  return {
+    kind,
+    section: el.getAttribute('data-ch-section') === 'out' ? 'out' : 'in',
+    name: el.getAttribute('data-ch-name') ?? '',
+    path,
+    line,
+    column: attrNumber(el, 'data-ch-column'),
+    count: attrNumber(el, 'data-ch-count') ?? 0,
+    sites: chain === null || chain === '' ? [] : chain.split('\n'),
+  };
+}
+
+/**
+ * 被右击元素 → 菜单输入（DOM 读；面板级事实写在面根元素的 `data-ch-*` 上，
+ * 于是模块顶层的 `build` 不需要 React 闭包也能拿到当前查看对象与两档行数）。
+ */
+export function readCallHierarchyMenuInput(
+  target: HTMLElement,
+  opts: { readonly clipboardAvailable: boolean },
+): CallHierarchyMenuInput {
+  const root =
+    target.closest<HTMLElement>(`[data-context-surface="${CALL_HIERARCHY_SURFACE_ID}"]`) ??
+    target.closest<HTMLElement>('[data-context-surface]');
+  const subjectPath = root?.getAttribute('data-ch-subject-path') ?? null;
+  const subjectLine = root === null ? null : attrNumber(root, 'data-ch-subject-line');
+  const subject =
+    root === null || subjectPath === null || subjectLine === null
+      ? null
+      : { name: root.getAttribute('data-ch-subject-name') ?? '', path: subjectPath, line: subjectLine };
+  // 清单 = 屏上这些组行拼成的层次文本（不多不少，与看到的一致）
+  const groupRows = root === null ? [] : [...root.querySelectorAll<HTMLElement>('[data-ch-row="group"]')];
+  const listText = groupRows
+    .map((el) => {
+      const row = readCallHierarchyRow(el);
+      return row === null ? '' : callChainText(row);
+    })
+    .filter((text) => text !== '')
+    .join('\n\n');
+  return {
+    row: readCallHierarchyRow(target),
+    subject,
+    clipboardAvailable: opts.clipboardAvailable,
+    hidden: {
+      in: root === null ? 0 : (attrNumber(root, 'data-ch-hidden-in') ?? 0),
+      out: root === null ? 0 : (attrNumber(root, 'data-ch-hidden-out') ?? 0),
+    },
+    total: {
+      in: root === null ? 0 : (attrNumber(root, 'data-ch-total-in') ?? 0),
+      out: root === null ? 0 : (attrNumber(root, 'data-ch-total-out') ?? 0),
+    },
+    listText,
+  };
 }

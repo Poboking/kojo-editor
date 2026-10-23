@@ -3,6 +3,7 @@ import { compareContent, type ContentEquality } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
 import { diffPaneKeyOf, pushDiff, type DiffRequest } from './diff-core';
 import { languageFor } from './editor-model-pool';
+import type { ContextMenuItem } from './context-menu-model';
 
 /**
  * 通用 diff 视图的宿主接线（2026-10-15 比对/历史批；W10 第 2 点改多开栈）。
@@ -132,4 +133,110 @@ export function bindDiffView(kernel: Kernel): () => void {
     pushDiff(reason !== null ? { kind: 'rejected', key, reason } : { kind: 'request', key, request });
     kernel.bus.emit('ui.overlay.open', { id: DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' });
   });
+}
+
+/* ==================== 右键菜单（WP3.6 · 1023 覆盖面批） ==================== */
+
+/**
+ * 面子 id（= 差异视图根元素的 `data-context-surface`；已在清单预登记）。
+ *
+ * 本视图是**只读**呈现面：没有「接受 / 拒绝」通道（若真有，它得先有一条写盘语义，
+ * 而这条语义现在不存在），所以那两项**整项不显示**——不拿只读视图假装能改盘。
+ * 菜单只接既有能力：复制（剪贴板）、上一处/下一处差异与并排/内联切换（Monaco 差异
+ * 编辑器自己的 `goToDiff` / `updateOptions`）、关闭这组比对（比对栈既有出口）。
+ */
+export const DIFF_VIEW_SURFACE_ID = 'diff-view';
+
+/** 菜单项 id（面自己分发；不是命令 id，不冒充命令） */
+export const DIFF_VIEW_MENU_IDS = {
+  copySummary: 'dv.copySummary',
+  copyLeftPath: 'dv.copyLeftPath',
+  copyRightPath: 'dv.copyRightPath',
+  prevDiff: 'dv.prevDiff',
+  nextDiff: 'dv.nextDiff',
+  toggleLayout: 'dv.toggleLayout',
+  closePane: 'dv.closePane',
+} as const;
+
+/** 一次菜单构建的全部输入（纯数据；面板状态由组件投影进来） */
+export interface DiffViewMenuInput {
+  readonly title: string;
+  readonly leftLabel: string;
+  readonly rightLabel: string;
+  /** 两侧的盘上路径（内联文本侧没有路径 ⇒ 对应「复制路径」项整项不显示） */
+  readonly leftPath: string | null;
+  readonly rightPath: string | null;
+  /** 差异编辑器已经建起来（上一处 / 下一处、切换布局的前提） */
+  readonly editorReady: boolean;
+  readonly sideBySide: boolean;
+  readonly paneCount: number;
+  /** 判等横幅文案（无差异 / 字节不同）；null = 行级确有差异 */
+  readonly bannerMessage: string | null;
+  readonly clipboardAvailable: boolean;
+}
+
+/** 对比摘要的可复制文本（标题 + 两侧标签与路径 + 判等横幅；一处文案两处用） */
+export function diffSummaryText(input: DiffViewMenuInput): string {
+  const side = (which: string, label: string, path: string | null): string =>
+    path === null ? `${which}：${label}` : `${which}：${label} · ${path}`;
+  const lines = [
+    input.title,
+    side('左', input.leftLabel, input.leftPath),
+    side('右', input.rightLabel, input.rightPath),
+  ];
+  if (input.bannerMessage !== null) lines.push(`判等：${input.bannerMessage}`);
+  return lines.join('\n');
+}
+
+/** 没有画出差异时的统一理由（上一处/下一处、切换布局都吃这一句，别各写一份） */
+const NO_EDITOR_REASON = '当前没有画出差异（两侧内容缺失、行级无差异，或已被体量闸拦下）';
+
+/**
+ * 差异视图菜单（纯函数）：复制类 → 「跳到差异」（上一处 / 下一处、并排/内联切换）→ 关闭。
+ *
+ * 只读面**没有**接受 / 拒绝：那两项不出现（铁律 3：不为凑菜单新造写盘语义）。
+ */
+export function buildDiffViewMenu(input: DiffViewMenuInput): { items: ContextMenuItem[] } | null {
+  const items: ContextMenuItem[] = [];
+  const copyGate = input.clipboardAvailable
+    ? {}
+    : { disabled: true, disabledReason: '当前环境没有可用的剪贴板' };
+
+  items.push({
+    id: DIFF_VIEW_MENU_IDS.copySummary,
+    label: '复制对比摘要',
+    icon: 'files',
+    group: '复制',
+    ...copyGate,
+  });
+  if (input.leftPath !== null) {
+    items.push({ id: DIFF_VIEW_MENU_IDS.copyLeftPath, label: '复制左侧路径', icon: 'files', ...copyGate });
+  }
+  if (input.rightPath !== null) {
+    items.push({ id: DIFF_VIEW_MENU_IDS.copyRightPath, label: '复制右侧路径', icon: 'files', ...copyGate });
+  }
+
+  const jumpGate = input.editorReady ? {} : { disabled: true, disabledReason: NO_EDITOR_REASON };
+  items.push({
+    id: DIFF_VIEW_MENU_IDS.prevDiff,
+    label: '上一处差异',
+    dividerBefore: true,
+    group: '跳到差异',
+    ...jumpGate,
+  });
+  items.push({ id: DIFF_VIEW_MENU_IDS.nextDiff, label: '下一处差异', ...jumpGate });
+  items.push({
+    id: DIFF_VIEW_MENU_IDS.toggleLayout,
+    label: input.sideBySide ? '切换为上下内联视图' : '切换为左右并排视图',
+    icon: 'preview',
+    ...jumpGate,
+  });
+
+  items.push({
+    id: DIFF_VIEW_MENU_IDS.closePane,
+    label: input.paneCount > 1 ? `关闭这组对比（还剩 ${input.paneCount - 1} 组）` : '关闭对比',
+    icon: 'close',
+    dividerBefore: true,
+  });
+  return { items };
 }

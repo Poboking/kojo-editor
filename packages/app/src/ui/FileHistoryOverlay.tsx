@@ -15,6 +15,8 @@ import {
   orderDiffPair,
   registerHistoryIo,
   releaseTrashHold,
+  type TimelineAccount,
+  type TimelineActionKind,
   type TimelineFetchState,
   type TimelineItem,
   getFileHistoryTarget,
@@ -22,6 +24,8 @@ import {
   setFileHistoryTarget,
 } from './file-history';
 import { peekRecoveredContent } from './recovery-store';
+import { declareContextSurface } from './context-surfaces';
+import type { ContextMenuItem } from './context-menu-model';
 
 /**
  * 本地时间线 overlay（F2；2026-10-15 历史批 → W11 回收站可见批改成「四本账一条时间线」）。
@@ -78,6 +82,210 @@ const timeText = (item: TimelineItem): string =>
     ? '时刻不明' // 判据不猜：这本账给不出时刻就如实说不清（该行沉底）
     : formatVersionTime({ takenAtMs: item.atMs, mtimeMs: item.atMs });
 
+/* ==================== 右键菜单（WP3.5 · 1023 覆盖面批） ==================== */
+
+export const FILE_HISTORY_SURFACE_ID = 'file-history';
+
+/** 菜单项 id（面自己分发；不是命令 id，不冒充命令） */
+export const FILE_HISTORY_MENU_IDS = {
+  copySummary: 'fh.copySummary',
+  copyPath: 'fh.copyPath',
+  diffNow: 'fh.diffNow',
+  restore: 'fh.restore',
+  purge: 'fh.purge',
+  refresh: 'fh.refresh',
+  copyTargetPath: 'fh.copyTargetPath',
+  close: 'fh.close',
+} as const;
+
+/** 行身份（从行元素的 `data-fh-*` 读；模块顶层的面不靠 React 闭包） */
+export interface FileHistoryRowRef {
+  readonly key: string;
+  readonly account: TimelineAccount;
+  readonly title: string;
+  readonly timeText: string;
+  readonly keepText: string;
+  /** 可读取的盘上路径（对比 / 复制路径）；null = 这一条没有单个可比对文件 */
+  readonly path: string | null;
+  /** 这一条有可执行的恢复动作（写允许域放行且这条账本来就能动） */
+  readonly hasAction: boolean;
+  readonly actionLabel: string | null;
+  readonly actionKind: TimelineActionKind | null;
+}
+
+/** 一次菜单构建的全部输入（行上的"确认态 / 忙碌"由组件补进来） */
+export interface FileHistoryMenuInput {
+  readonly row: (FileHistoryRowRef & {
+    /** 这一行已经点亮了哪一步确认（菜单不当第二道确认，只如实说明） */
+    readonly pendingAction: 'restore' | 'purge' | null;
+    readonly busy: boolean;
+  }) | null;
+  /** 这一屏的目标文件（面板级「复制路径」用） */
+  readonly targetPath: string | null;
+  readonly clipboardAvailable: boolean;
+}
+
+/** 一条时间线条目 → 可复制摘要（账本 / 时刻 / 标题 / 含义 / 保留期 / 注意） */
+export function timelineSummaryText(item: TimelineItem): string {
+  const lines = [`${TIMELINE_ACCOUNT_LABEL[item.account]} · ${timeText(item)} · ${item.title}`, item.meaning];
+  const keep = keepText(item);
+  if (keep !== '') lines.push(`保留期：${keep}`);
+  for (const warning of item.warnings) lines.push(`注意：${warning}`);
+  return lines.join('\n');
+}
+
+function copyDisabledReason(clipboardAvailable: boolean): string | undefined {
+  return clipboardAvailable ? undefined : '当前环境没有可用的剪贴板';
+}
+
+/**
+ * 文件历史菜单（纯函数）：行级 = 复制摘要 / 复制路径 / 与磁盘对比 | 恢复（点亮确认）| 彻底删除；
+ * 面板级 = 刷新 / 复制目标路径 / 关闭。
+ *
+ * 恢复与彻底删除**只做入口**：菜单项点亮行上既有的二次确认，真正的写盘仍由确认按钮触发
+ * ——菜单不许成为绕开确认链的第二条路。
+ */
+export function buildFileHistoryMenu(input: FileHistoryMenuInput): { items: ContextMenuItem[] } | null {
+  const items: ContextMenuItem[] = [];
+  // 没有目标文件、也没点在行上：这一屏确实没有可做的事，只留关闭（不摆无效的刷新 / 复制）
+  if (input.row === null && input.targetPath === null) {
+    return { items: [{ id: FILE_HISTORY_MENU_IDS.close, label: '关闭', icon: 'close' }] };
+  }
+  const copyReason = copyDisabledReason(input.clipboardAvailable);
+  const copyGate = copyReason === undefined ? {} : { disabled: true, disabledReason: copyReason };
+  const row = input.row;
+
+  if (row !== null) {
+    items.push({
+      id: FILE_HISTORY_MENU_IDS.copySummary,
+      label: '复制这一条摘要',
+      icon: 'files',
+      group: '这一行',
+      ...copyGate,
+    });
+    if (row.path !== null) {
+      items.push({ id: FILE_HISTORY_MENU_IDS.diffNow, label: '与磁盘当前内容对比', icon: 'preview' });
+      items.push({ id: FILE_HISTORY_MENU_IDS.copyPath, label: '复制这一条的路径', icon: 'files', ...copyGate });
+    }
+    if (row.hasAction) {
+      const pendingHint = row.pendingAction === 'restore' ? '（已点亮确认，回行上再点一次才写盘）' : '（需再点一次确认）';
+      items.push({
+        id: FILE_HISTORY_MENU_IDS.restore,
+        label: `${row.actionLabel ?? '恢复这一版'}${pendingHint}`,
+        icon: 'restore',
+        dividerBefore: true,
+        group: '恢复',
+        ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
+      });
+    }
+    if (row.actionKind === 'restoreTrash') {
+      const pendingHint = row.pendingAction === 'purge' ? '（已点亮确认，回行上再点一次才真删）' : '（需再点一次确认）';
+      items.push({
+        id: FILE_HISTORY_MENU_IDS.purge,
+        label: `彻底删除${pendingHint}`,
+        icon: 'trash',
+        danger: true,
+        group: '删除',
+        ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
+      });
+    }
+  }
+
+  items.push({
+    id: FILE_HISTORY_MENU_IDS.refresh,
+    label: '刷新时间线',
+    icon: 'refresh',
+    dividerBefore: row === null,
+  });
+  if (input.targetPath !== null) {
+    items.push({
+      id: FILE_HISTORY_MENU_IDS.copyTargetPath,
+      label: '复制目标文件路径',
+      icon: 'files',
+      ...copyGate,
+    });
+  }
+  items.push({ id: FILE_HISTORY_MENU_IDS.close, label: '关闭', icon: 'close' });
+  return { items };
+}
+
+const TIMELINE_ACTION_KINDS: readonly TimelineActionKind[] = [
+  'restoreBackup',
+  'undoOp',
+  'restoreTrash',
+  'writeBackSnapshot',
+];
+
+const TIMELINE_ACCOUNTS: readonly TimelineAccount[] = ['backup', 'ops', 'trash', 'autosave', 'recovery'];
+
+/** 行元素的 `data-fh-*` → 行身份（读不出 ⇒ null，面回落成面板级菜单） */
+export function readFileHistoryRow(target: HTMLElement): FileHistoryRowRef | null {
+  const el = target.closest<HTMLElement>('[data-fh-key]');
+  if (el === null) return null;
+  const key = el.getAttribute('data-fh-key');
+  const account = el.getAttribute('data-fh-account');
+  if (key === null || key === '' || account === null) return null;
+  if (!(TIMELINE_ACCOUNTS as readonly string[]).includes(account)) return null;
+  const actionKind = el.getAttribute('data-fh-action');
+  const path = el.getAttribute('data-fh-path');
+  const actionLabel = el.getAttribute('data-fh-action-label');
+  return {
+    key,
+    account: account as TimelineAccount,
+    title: el.getAttribute('data-fh-title') ?? '',
+    timeText: el.getAttribute('data-fh-time') ?? '',
+    keepText: el.getAttribute('data-fh-keep') ?? '',
+    path: path === null || path === '' ? null : path,
+    hasAction: (TIMELINE_ACTION_KINDS as readonly string[]).includes(actionKind ?? ''),
+    actionLabel: actionLabel === null || actionLabel === '' ? null : actionLabel,
+    actionKind: (TIMELINE_ACTION_KINDS as readonly string[]).includes(actionKind ?? '')
+      ? (actionKind as TimelineActionKind)
+      : null,
+  };
+}
+
+/** 剪贴板入口（缺席 ⇒ null：复制项禁用并说清原因） */
+function clipboardApi(): Clipboard | null {
+  return typeof navigator === 'undefined' ? null : (navigator.clipboard ?? null);
+}
+
+/**
+ * 面 ↔ 组件的动作桥（面在模块顶层声明，读不到 React 闭包）。
+ *
+ * `run` 的真实实现在组件末尾才装配得齐（要用到早退之后的各本账通道），
+ * 所以这里经一层 ref 转发——**不能**把 `useEffect` 挪到早退之后：那会改 hook 顺序。
+ */
+interface FileHistoryFaceBridge {
+  readonly clipboardAvailable: boolean;
+  readonly busy: boolean;
+  pendingActionOf(key: string): 'restore' | 'purge' | null;
+  run(id: string, row: FileHistoryRowRef | null): void;
+}
+
+let faceBridge: FileHistoryFaceBridge | null = null;
+
+declareContextSurface({
+  id: FILE_HISTORY_SURFACE_ID,
+  ariaLabel: '文件历史菜单',
+  area: 'panel',
+  build: ({ target }) => {
+    const bridge = faceBridge;
+    if (bridge === null) return null;
+    const ref = readFileHistoryRow(target);
+    const input: FileHistoryMenuInput = {
+      row:
+        ref === null
+          ? null
+          : { ...ref, pendingAction: bridge.pendingActionOf(ref.key), busy: bridge.busy },
+      targetPath: getFileHistoryTarget(),
+      clipboardAvailable: bridge.clipboardAvailable,
+    };
+    const menu = buildFileHistoryMenu(input);
+    if (menu === null) return null;
+    return { items: menu.items, onSelect: (id) => bridge.run(id, ref) };
+  },
+});
+
 export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
   // 把 io 句柄登记进账本中转站：「操作历史」那一屏要用回收站账，而装配点 App.tsx 本批不动
   registerHistoryIo(deps.io);
@@ -128,10 +336,47 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       return () => clearInterval(t);
     }, []);
 
+    /** 菜单动作的真实实现（要用到早退之后定义的各本账通道，经 ref 转发给模块顶层的面） */
+    const runFaceActionRef = useRef<(id: string, row: FileHistoryRowRef | null) => void>(() => undefined);
+
+    /** 复制反馈：成败都上屏（剪贴板拒绝时静默 = "点了没反应"，铁律 4） */
+    const copyToClipboard = (text: string, doneNote: string): void => {
+      const clip = clipboardApi();
+      if (clip === null) {
+        setFeedback({ tone: 'err', text: '复制失败：当前环境没有可用的剪贴板' });
+        return;
+      }
+      void clip.writeText(text).then(
+        () => setFeedback({ tone: 'ok', text: doneNote }),
+        () => setFeedback({ tone: 'err', text: '复制失败：剪贴板拒绝了这次写入' }),
+      );
+    };
+
+    /**
+     * 右键菜单的动作桥（每次渲染后刷新）。恢复 / 彻底删除**只点亮行上既有的二次确认**
+     * （`setPending`），真正的写盘仍由确认按钮触发——菜单不绕过确认链。
+     */
+    useEffect(() => {
+      const entry: FileHistoryFaceBridge = {
+        clipboardAvailable: clipboardApi() !== null,
+        busy,
+        pendingActionOf: (key) => (pending !== null && pending.key === key ? pending.action : null),
+        run: (id, row) => runFaceActionRef.current(id, row),
+      };
+      faceBridge = entry;
+      return () => {
+        if (faceBridge === entry) faceBridge = null;
+      };
+    });
+
     if (target === null) {
+      // 这一屏只剩"关闭"一条：菜单也得真的关得掉（不然右键给的是一个死菜单）
+      runFaceActionRef.current = (id) => {
+        if (id === FILE_HISTORY_MENU_IDS.close) deps.close();
+      };
       return h(
         'div',
-        { className: 'wizard fh-host' },
+        { className: 'wizard fh-host', 'data-context-surface': FILE_HISTORY_SURFACE_ID },
         h('p', { className: 'dim' }, '当前没有选中的文件。请在编辑器里打开一个文件再查看其时间线。'),
       );
     }
@@ -165,6 +410,28 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       if (item.account === 'recovery') return { label, text: await snapshotText(item, item.id) };
       throw new Error(`「${label}」没有可读取的内容：这一条既没有盘上文件，也没有进程内快照。`);
     };
+
+    /**
+     * 「与磁盘当前内容对比」的唯一入口（行上按钮与右键菜单共用一份，标题/两侧标签不许两样）。
+     * `diffPath` 为 null 的条目没有单个可比对文件，调用方不提供入口。
+     */
+    const openDiffNow = (item: TimelineItem): void => {
+      const diffPath = item.diffPath;
+      if (diffPath === null) return;
+      deps.requestDiff({
+        title: `${basename(target)} · ${TIMELINE_ACCOUNT_LABEL[item.account]} ${timeText(item)}`,
+        original: {
+          label: `${TIMELINE_ACCOUNT_LABEL[item.account]} · ${timeText(item)}`,
+          path: diffPath,
+        },
+        modified: { label: '磁盘当前内容', path: target },
+      });
+    };
+
+    /** 时间线条目按 `key` 索引（菜单只拿到行上的 key，条目本体从这里取） */
+    const itemsByKey = new Map<string, TimelineItem>(
+      state.kind === 'ready' ? state.bundle.items.map((item) => [item.key, item]) : [],
+    );
 
     /** 两版互比：恰好勾选两条才动（按钮禁用态由 `diffPairButtonState` 说清，这里双保险） */
     const comparePicked = async (): Promise<void> => {
@@ -258,15 +525,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
               key: 'diff',
               className: 'ghost small',
               title: '在对比视图里看这一条与磁盘当前内容的逐行差异',
-              onClick: () =>
-                deps.requestDiff({
-                  title: `${basename(target)} · ${TIMELINE_ACCOUNT_LABEL[item.account]} ${timeText(item)}`,
-                  original: {
-                    label: `${TIMELINE_ACCOUNT_LABEL[item.account]} · ${timeText(item)}`,
-                    path: diffPath,
-                  },
-                  modified: { label: '磁盘当前内容', path: target },
-                }),
+              onClick: () => openDiffNow(item),
             },
             '对比',
           ),
@@ -345,7 +604,19 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
     const rowOf = (item: TimelineItem): ReactNode =>
       h(
         'tr',
-        { key: item.key, className: 'fh-row' },
+        {
+          key: item.key,
+          className: 'fh-row',
+          // 右键菜单靠这些属性认出这一行（模块顶层的面读 DOM，不靠 React 闭包）
+          'data-fh-key': item.key,
+          'data-fh-account': item.account,
+          'data-fh-title': item.title,
+          'data-fh-time': timeText(item),
+          'data-fh-keep': keepText(item),
+          'data-fh-path': item.diffPath ?? '',
+          'data-fh-action': item.action?.kind ?? '',
+          'data-fh-action-label': item.action?.label ?? '',
+        },
         diffCell(item),
         h('td', null, timeText(item)),
         h(
@@ -452,9 +723,47 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
             );
     }
 
+    /**
+     * 菜单动作装配（每次渲染重写一次：行数据、勾选、确认态都可能刚变过）。
+     * 只调既有通道：复制走剪贴板（成败上屏）、对比走 `requestDiff`、恢复 / 彻底删除
+     * 只**点亮**行上的二次确认、刷新走本屏重取、关闭同时撤目标文件。
+     */
+    runFaceActionRef.current = (id, row) => {
+      const item = row === null ? null : itemsByKey.get(row.key) ?? null;
+      switch (id) {
+        case FILE_HISTORY_MENU_IDS.copySummary:
+          if (item !== null) copyToClipboard(timelineSummaryText(item), '已复制这一条摘要');
+          return;
+        case FILE_HISTORY_MENU_IDS.copyPath:
+          copyToClipboard(item?.diffPath ?? target, '已复制路径');
+          return;
+        case FILE_HISTORY_MENU_IDS.copyTargetPath:
+          copyToClipboard(target, '已复制目标文件路径');
+          return;
+        case FILE_HISTORY_MENU_IDS.diffNow:
+          if (item !== null) openDiffNow(item);
+          return;
+        case FILE_HISTORY_MENU_IDS.restore:
+          if (item !== null) setPending({ key: item.key, action: 'restore' });
+          return;
+        case FILE_HISTORY_MENU_IDS.purge:
+          if (item !== null) setPending({ key: item.key, action: 'purge' });
+          return;
+        case FILE_HISTORY_MENU_IDS.refresh:
+          setReloadNonce((n) => n + 1);
+          return;
+        case FILE_HISTORY_MENU_IDS.close:
+          setFileHistoryTarget(null);
+          deps.close();
+          return;
+        default:
+          return;
+      }
+    };
+
     return h(
       'div',
-      { className: 'wizard fh-host' },
+      { className: 'wizard fh-host', 'data-context-surface': FILE_HISTORY_SURFACE_ID },
       h('h3', null, `时间线 —— ${basename(target)}`),
       h('p', { className: 'dim fh-path' }, target),
       h(

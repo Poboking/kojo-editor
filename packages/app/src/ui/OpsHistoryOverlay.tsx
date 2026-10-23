@@ -12,8 +12,11 @@ import {
   keepText,
   registerOpsJournal,
   releaseTrashHold,
+  type TimelineAccount,
   type TimelineItem,
 } from './file-history';
+import { declareContextSurface } from './context-surfaces';
+import type { ContextMenuItem } from './context-menu-model';
 
 /**
  * 操作历史 overlay（2026-10-16 undo 批；W11 回收站可见批并入回收站账）。
@@ -56,6 +59,207 @@ type EntriesCache = Map<string, OpEntryView[]>;
 
 /** 二次确认的行（撤销 / 放回原位 / 彻底删除都要确认，三者后果不同，必须分清） */
 type Pending = { key: string; action: 'undo' | 'restore' | 'purge' } | null;
+
+/* ==================== 右键菜单（WP3.5 · 1023 覆盖面批） ==================== */
+
+export const OPS_HISTORY_SURFACE_ID = 'ops-history';
+
+/** 菜单项 id（面自己分发；不是命令 id，不冒充命令） */
+export const OPS_HISTORY_MENU_IDS = {
+  toggleDetail: 'oh.toggleDetail',
+  copySummary: 'oh.copySummary',
+  copyPath: 'oh.copyPath',
+  undo: 'oh.undo',
+  restore: 'oh.restore',
+  purge: 'oh.purge',
+  refresh: 'oh.refresh',
+  close: 'oh.close',
+} as const;
+
+/** 行身份（从行元素的 `data-oh-*` 读） */
+export interface OpsHistoryRowRef {
+  readonly key: string;
+  readonly account: TimelineAccount;
+  readonly title: string;
+  readonly timeText: string;
+  /** 可读取的盘上路径（回收站里的文件条目才有） */
+  readonly path: string | null;
+  readonly hasAction: boolean;
+  readonly actionLabel: string | null;
+  readonly actionKind: 'undoOp' | 'restoreTrash' | null;
+  /** 批操作那一批的状态（trash 行 = null） */
+  readonly status: OpRecord['status'] | null;
+  readonly fileCount: number;
+  /** 这一行有可展开的文件清单（批操作才有） */
+  readonly expandable: boolean;
+}
+
+/** 一次菜单构建的全部输入（"已展开 / 忙碌 / 已点亮确认"由组件补） */
+export interface OpsHistoryMenuInput {
+  readonly row: (OpsHistoryRowRef & {
+    readonly expanded: boolean;
+    readonly pendingAction: 'undo' | 'restore' | 'purge' | null;
+    readonly busy: boolean;
+  }) | null;
+  readonly clipboardAvailable: boolean;
+}
+
+const OP_ACTION_KINDS: readonly ('undoOp' | 'restoreTrash')[] = ['undoOp', 'restoreTrash'];
+
+/** 一条时间线条目 → 可复制摘要（账本 / 时刻 / 标题 / 含义 / 保留期 / 注意） */
+export function opsSummaryText(item: TimelineItem): string {
+  const time = item.atMs === null ? '时刻不明' : formatOpTime(item.atMs);
+  const lines = [`${TIMELINE_ACCOUNT_LABEL[item.account]} · ${time} · ${item.title}`, item.meaning];
+  const keep = keepText(item);
+  if (keep !== '') lines.push(`保留期：${keep}`);
+  for (const warning of item.warnings) lines.push(`注意：${warning}`);
+  return lines.join('\n');
+}
+
+/**
+ * 操作历史菜单（纯函数）：批操作行给「展开 / 收起文件清单 + 撤销（或重做）」，
+ * 回收站行给「放回原位 + 彻底删除」，两行共用复制类；面板级 = 刷新 / 关闭。
+ *
+ * 撤销 / 放回原位 / 彻底删除**只做入口**：点亮行上既有的两步确认，真正动手仍由
+ * 确认按钮触发——菜单不绕过确认链，也不在这里新造任何写盘语义。
+ */
+export function buildOpsHistoryMenu(input: OpsHistoryMenuInput): { items: ContextMenuItem[] } | null {
+  const items: ContextMenuItem[] = [];
+  const copyGate =
+    input.clipboardAvailable ? {} : { disabled: true, disabledReason: '当前环境没有可用的剪贴板' };
+  const row = input.row;
+
+  if (row !== null) {
+    if (row.expandable) {
+      items.push({
+        id: OPS_HISTORY_MENU_IDS.toggleDetail,
+        label: row.expanded ? '收起文件清单' : '展开文件清单',
+        icon: 'structure',
+        group: '这一行',
+      });
+    }
+    items.push({ id: OPS_HISTORY_MENU_IDS.copySummary, label: '复制这一条摘要', icon: 'files', ...copyGate });
+    if (row.path !== null) {
+      items.push({ id: OPS_HISTORY_MENU_IDS.copyPath, label: '复制这一条的路径', icon: 'files', ...copyGate });
+    }
+    if (row.hasAction && row.actionKind === 'undoOp') {
+      const undoable = row.status === 'committed';
+      const pendingHint = row.pendingAction === 'undo' ? '（已点亮确认，回行上再点一次才动手）' : '（需再点一次确认）';
+      items.push({
+        id: OPS_HISTORY_MENU_IDS.undo,
+        label: `${undoable ? '撤销此操作' : '重做这一批'}${pendingHint}`,
+        icon: 'restore',
+        dividerBefore: true,
+        group: '恢复',
+        ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
+      });
+    }
+    if (row.hasAction && row.actionKind === 'restoreTrash') {
+      const pendingHint = row.pendingAction === 'restore' ? '（已点亮确认，回行上再点一次才放回）' : '（需再点一次确认）';
+      items.push({
+        id: OPS_HISTORY_MENU_IDS.restore,
+        label: `放回原位${pendingHint}`,
+        icon: 'restore',
+        dividerBefore: true,
+        group: '恢复',
+        ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
+      });
+      const purgeHint = row.pendingAction === 'purge' ? '（已点亮确认，回行上再点一次才真删）' : '（需再点一次确认）';
+      items.push({
+        id: OPS_HISTORY_MENU_IDS.purge,
+        label: `彻底删除${purgeHint}`,
+        icon: 'trash',
+        danger: true,
+        group: '删除',
+        ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
+      });
+    }
+  }
+
+  items.push({
+    id: OPS_HISTORY_MENU_IDS.refresh,
+    label: '刷新时间线',
+    icon: 'refresh',
+    dividerBefore: row === null,
+  });
+  items.push({ id: OPS_HISTORY_MENU_IDS.close, label: '关闭', icon: 'close' });
+  return { items };
+}
+
+/** 行元素的 `data-oh-*` → 行身份（读不出 ⇒ null，面回落成面板级菜单） */
+export function readOpsHistoryRow(target: HTMLElement): OpsHistoryRowRef | null {
+  const el = target.closest<HTMLElement>('[data-oh-key]');
+  if (el === null) return null;
+  const key = el.getAttribute('data-oh-key');
+  const account = el.getAttribute('data-oh-account');
+  if (key === null || key === '' || (account !== 'ops' && account !== 'trash')) return null;
+  const actionKind = el.getAttribute('data-oh-action');
+  const path = el.getAttribute('data-oh-path');
+  const actionLabel = el.getAttribute('data-oh-action-label');
+  const status = el.getAttribute('data-oh-status');
+  const fileCount = Number(el.getAttribute('data-oh-file-count') ?? '0');
+  const kind = (OP_ACTION_KINDS as readonly string[]).includes(actionKind ?? '')
+    ? (actionKind as 'undoOp' | 'restoreTrash')
+    : null;
+  return {
+    key,
+    account,
+    title: el.getAttribute('data-oh-title') ?? '',
+    timeText: el.getAttribute('data-oh-time') ?? '',
+    path: path === null || path === '' ? null : path,
+    hasAction: kind !== null,
+    actionLabel: actionLabel === null || actionLabel === '' ? null : actionLabel,
+    actionKind: kind,
+    status: status === 'committed' || status === 'undone' ? status : null,
+    fileCount: Number.isFinite(fileCount) ? fileCount : 0,
+    expandable: el.getAttribute('data-oh-expandable') === '1',
+  };
+}
+
+/** 剪贴板入口（缺席 ⇒ null：复制项禁用并说清原因） */
+function clipboardApi(): Clipboard | null {
+  return typeof navigator === 'undefined' ? null : (navigator.clipboard ?? null);
+}
+
+/**
+ * 面 ↔ 组件的动作桥（面在模块顶层声明，读不到 React 闭包；`run` 的真实实现在组件末尾
+ * 才装配得齐，所以经 ref 转发——不能把 effect 挪到早退之后，那会改 hook 顺序）。
+ */
+interface OpsHistoryFaceBridge {
+  readonly clipboardAvailable: boolean;
+  readonly busy: boolean;
+  pendingActionOf(key: string): 'undo' | 'restore' | 'purge' | null;
+  expandedOf(key: string): boolean;
+  run(id: string, row: OpsHistoryRowRef | null): void;
+}
+
+let faceBridge: OpsHistoryFaceBridge | null = null;
+
+declareContextSurface({
+  id: OPS_HISTORY_SURFACE_ID,
+  ariaLabel: '操作历史菜单',
+  area: 'panel',
+  build: ({ target }) => {
+    const bridge = faceBridge;
+    if (bridge === null) return null;
+    const ref = readOpsHistoryRow(target);
+    const input: OpsHistoryMenuInput = {
+      row:
+        ref === null
+          ? null
+          : {
+              ...ref,
+              expanded: bridge.expandedOf(ref.key),
+              pendingAction: bridge.pendingActionOf(ref.key),
+              busy: bridge.busy,
+            },
+      clipboardAvailable: bridge.clipboardAvailable,
+    };
+    const menu = buildOpsHistoryMenu(input);
+    if (menu === null) return null;
+    return { items: menu.items, onSelect: (id) => bridge.run(id, ref) };
+  },
+});
 
 export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
   // 把批操作句柄登记进账本中转站：「某个文件的四本账」那一屏要用它（App.tsx 本批不动）
@@ -109,13 +313,56 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
       return () => clearInterval(t);
     }, []);
 
+    /** 菜单动作的真实实现（要用到早退之后定义的各条通道，经 ref 转发给模块顶层的面） */
+    const runFaceActionRef = useRef<(id: string, row: OpsHistoryRowRef | null) => void>(() => undefined);
+
+    /** 复制反馈：成败都上屏（剪贴板拒绝时静默 = "点了没反应"，铁律 4） */
+    const copyToClipboard = (text: string, doneNote: string): void => {
+      const clip = clipboardApi();
+      if (clip === null) {
+        setFeedback({ tone: 'err', text: '复制失败：当前环境没有可用的剪贴板' });
+        return;
+      }
+      void clip.writeText(text).then(
+        () => setFeedback({ tone: 'ok', text: doneNote }),
+        () => setFeedback({ tone: 'err', text: '复制失败：剪贴板拒绝了这次写入' }),
+      );
+    };
+
+    /**
+     * 右键菜单的动作桥（每次渲染后刷新）。撤销 / 放回原位 / 彻底删除**只点亮行上既有的
+     * 两步确认**（`setPending`），真正动手仍由确认按钮触发——菜单不绕过确认链。
+     */
+    useEffect(() => {
+      const entry: OpsHistoryFaceBridge = {
+        clipboardAvailable: clipboardApi() !== null,
+        busy,
+        pendingActionOf: (key) => (pending !== null && pending.key === key ? pending.action : null),
+        expandedOf: (key) => {
+          if (state.kind !== 'ready') return false;
+          const item = state.items.find((i) => i.key === key);
+          return item !== undefined && expanded.has(item.id);
+        },
+        run: (id, row) => runFaceActionRef.current(id, row),
+      };
+      faceBridge = entry;
+      return () => {
+        if (faceBridge === entry) faceBridge = null;
+      };
+    });
+
     const closeButton = (): ReactNode =>
       h('button', { className: 'ghost small', onClick: () => deps.close() }, '关闭');
 
     if (state.kind === 'loading' || state.kind === 'error') {
+      // 读不动时菜单只剩刷新 / 关闭：两条都必须真的做得成（刷新 = 重取一次，可当重试用）
+      runFaceActionRef.current = (id) => {
+        if (id === OPS_HISTORY_MENU_IDS.refresh) setReloadNonce((n) => n + 1);
+        else if (id === OPS_HISTORY_MENU_IDS.close) deps.close();
+      };
       return h(
         'div',
-        { className: 'wizard oh-host' },
+        { className: 'wizard oh-host', 'data-context-surface': OPS_HISTORY_SURFACE_ID },
         h('h3', null, '操作与回收站时间线'),
         state.kind === 'loading'
           ? h('p', { className: 'dim' }, '正在并两本全局账…')
@@ -211,7 +458,8 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
 
     const trashCell = (item: TimelineItem): ReactNode => {
       const cells: ReactNode[] = [];
-      if (pending?.key === item.key && pending.action === 'undo') {
+      const isPending = pending?.key === item.key;
+      if (isPending && pending.action === 'undo') {
         cells.push(
           h(
             'button',
@@ -219,7 +467,23 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
             '确认撤销',
           ),
         );
-      } else if (pending?.key === item.key && pending.action === 'purge') {
+      } else if (isPending && pending.action === 'restore') {
+        // 放回原位这一步此前只点亮 `pending`、没有确认分支（`runRestoreTrash` 因此从未被调用）：
+        // 第一次点击给"看清楚了再点一次"的确认态，第二次才真放回（与撤销 / 彻底删除同一条规矩）
+        cells.push(
+          h(
+            'button',
+            {
+              key: 'c',
+              className: 'primary small',
+              disabled: busy,
+              title: '再点一次即放回原位（原位若站着东西会先被让进写前备份账）',
+              onClick: () => void runRestoreTrash(item),
+            },
+            '确认放回原位',
+          ),
+        );
+      } else if (isPending && pending.action === 'purge') {
         cells.push(
           h(
             'button',
@@ -328,7 +592,21 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
       rows.push(
         h(
           'tr',
-          { key: item.key, className: 'oh-row' },
+          {
+            key: item.key,
+            className: 'oh-row',
+            // 右键菜单靠这些属性认出这一行（模块顶层的面读 DOM，不靠 React 闭包）
+            'data-oh-key': item.key,
+            'data-oh-account': item.account,
+            'data-oh-title': item.title,
+            'data-oh-time': item.atMs === null ? '时刻不明' : formatOpTime(item.atMs),
+            'data-oh-path': item.diffPath ?? '',
+            'data-oh-action': item.action?.kind ?? '',
+            'data-oh-action-label': item.action?.label ?? '',
+            'data-oh-status': rec?.status ?? '',
+            'data-oh-file-count': String(rec?.fileCount ?? 0),
+            'data-oh-expandable': rec === undefined ? '0' : '1',
+          },
           h('td', null, item.atMs === null ? '时刻不明' : formatOpTime(item.atMs)),
           h('td', null, account),
           h(
@@ -442,9 +720,45 @@ export function createOpsHistoryOverlay(deps: OpsHistoryDeps): () => unknown {
             h('tbody', null, ...state.items.flatMap(rowsOf)),
           );
 
+    /**
+     * 菜单动作装配（每次渲染重写）：复制走剪贴板（成败上屏）、展开清单走 `toggle`、
+     * 撤销 / 放回原位 / 彻底删除只**点亮**行上既有的两步确认、刷新走本屏重取。
+     */
+    runFaceActionRef.current = (id, row) => {
+      const item = row === null ? null : state.items.find((i) => i.key === row.key) ?? null;
+      switch (id) {
+        case OPS_HISTORY_MENU_IDS.toggleDetail:
+          if (item !== null) void toggle(item.id);
+          return;
+        case OPS_HISTORY_MENU_IDS.copySummary:
+          if (item !== null) copyToClipboard(opsSummaryText(item), '已复制这一条摘要');
+          return;
+        case OPS_HISTORY_MENU_IDS.copyPath:
+          if (item !== null && item.diffPath !== null) copyToClipboard(item.diffPath, '已复制路径');
+          return;
+        case OPS_HISTORY_MENU_IDS.undo:
+          if (item !== null) setPending({ key: item.key, action: 'undo' });
+          return;
+        case OPS_HISTORY_MENU_IDS.restore:
+          if (item !== null) setPending({ key: item.key, action: 'restore' });
+          return;
+        case OPS_HISTORY_MENU_IDS.purge:
+          if (item !== null) setPending({ key: item.key, action: 'purge' });
+          return;
+        case OPS_HISTORY_MENU_IDS.refresh:
+          setReloadNonce((n) => n + 1);
+          return;
+        case OPS_HISTORY_MENU_IDS.close:
+          deps.close();
+          return;
+        default:
+          return;
+      }
+    };
+
     return h(
       'div',
-      { className: 'wizard oh-host' },
+      { className: 'wizard oh-host', 'data-context-surface': OPS_HISTORY_SURFACE_ID },
       h('h3', null, '操作与回收站时间线'),
       h(
         'p',

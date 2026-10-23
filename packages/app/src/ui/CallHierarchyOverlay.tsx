@@ -12,10 +12,19 @@ import {
   type CallSite,
 } from '../monaco/erb-call-hierarchy';
 import {
+  CALL_HIERARCHY_SURFACE_ID,
+  CALL_HIERARCHY_MENU_IDS,
+  buildCallHierarchyMenu,
+  callChainText,
+  callSiteLocationText,
   getCallHierarchyState,
+  readCallHierarchyMenuInput,
+  setCallHierarchyState,
   subscribeCallHierarchy,
+  type CallHierarchyMenuInput,
   type CallHierarchyRequest,
 } from './call-hierarchy';
+import { declareContextSurface } from './context-surfaces';
 import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-store';
 
 /**
@@ -75,8 +84,17 @@ interface SectionWindow {
 }
 
 type Row =
-  | { kind: 'group'; label: string; count: number; path: string; line: number; title: string }
-  | { kind: 'site'; site: CallSite };
+  | {
+      kind: 'group';
+      label: string;
+      count: number;
+      path: string;
+      line: number;
+      title: string;
+      /** 这一组名下的全部点位（右键「复制调用链」直接从这里拼，不再二次查询） */
+      sites: readonly CallSite[];
+    }
+  | { kind: 'site'; site: CallSite; group: string };
 
 /** 把一组出入边折成扁平行序列（组行 = 跳定义，点位行 = 跳调用处），便于统一截断 */
 function flatten(
@@ -91,9 +109,10 @@ function flatten(
       path: g.path,
       line: g.startLine,
       title: `${g.path}:${g.startLine}`,
+      sites: g.sites,
     });
     for (const site of g.sites) {
-      rows.push({ kind: 'site', site });
+      rows.push({ kind: 'site', site, group: g.name });
     }
   }
   return rows;
@@ -106,6 +125,40 @@ function siteLabel(site: CallSite): string {
 function locLabel(path: string, line: number): string {
   return `${basename(path)}:${line}`;
 }
+
+/* ------------------------------ 右键菜单（WP3.4） ------------------------------ */
+
+/** 剪贴板入口（缺席 ⇒ null：复制项禁用并说清原因，不假装能复制） */
+function clipboardApi(): Clipboard | null {
+  return typeof navigator === 'undefined' ? null : (navigator.clipboard ?? null);
+}
+
+/**
+ * 面 ↔ 组件之间的动作桥。
+ *
+ * 面在**模块顶层**声明（`build` 读不到 React 闭包），所以把"这一屏此刻的回调"放在
+ * 这里：每次渲染后刷新一次，卸载时只撤自己那一份（不会把后来者的桥拆掉）。
+ */
+interface CallHierarchyFaceBridge {
+  readonly clipboardAvailable: boolean;
+  run(id: string, input: CallHierarchyMenuInput): void;
+}
+
+let faceBridge: CallHierarchyFaceBridge | null = null;
+
+declareContextSurface({
+  id: CALL_HIERARCHY_SURFACE_ID,
+  ariaLabel: '调用层级菜单',
+  area: 'panel',
+  build: ({ target }) => {
+    const bridge = faceBridge;
+    if (bridge === null) return null;
+    const input = readCallHierarchyMenuInput(target, { clipboardAvailable: bridge.clipboardAvailable });
+    const menu = buildCallHierarchyMenu(input);
+    if (menu === null) return null;
+    return { items: menu.items, onSelect: (id) => bridge.run(id, input) };
+  },
+});
 
 export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unknown {
   return function CallHierarchyOverlay(): unknown {
@@ -151,20 +204,102 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
       h('button', { className: 'ghost small', onClick: deps.close }, '关闭'),
     );
 
+    /** 复制反馈（成败都要上屏——剪贴板拒绝时静默等于"点了没反应"，铁律 4） */
+    const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+    const copyToClipboard = (text: string, doneNote: string): void => {
+      const clip = clipboardApi();
+      if (clip === null) {
+        setNotice({ tone: 'err', text: '复制失败：当前环境没有可用的剪贴板' });
+        return;
+      }
+      void clip.writeText(text).then(
+        () => setNotice({ tone: 'ok', text: doneNote }),
+        () => setNotice({ tone: 'err', text: '复制失败：剪贴板拒绝了这次写入' }),
+      );
+    };
+
+    /**
+     * 右键菜单的动作桥（每次渲染后刷新）。菜单项**只做入口**：
+     * 跳转 → `deps.reveal`（与行点击同一条导航），重定查询 → `setCallHierarchyState`
+     * （命令面板开这一屏走的就是这条通道），展开更多行 → 两个 section 既有的窗口步进。
+     * 刷新 = 把同一份请求再声明一次 ⇒ 订阅表重画并重读索引（不新造取数通道）。
+     */
+    useEffect(() => {
+      const entry: CallHierarchyFaceBridge = {
+        clipboardAvailable: clipboardApi() !== null,
+        run: (id, input) => {
+          const row = input.row;
+          switch (id) {
+            case CALL_HIERARCHY_MENU_IDS.jump:
+              if (row !== null) deps.reveal(row.path, row.line, row.column ?? 1);
+              return;
+            case CALL_HIERARCHY_MENU_IDS.recenter:
+              if (row !== null) {
+                setCallHierarchyState({ kind: 'request', request: { filePath: row.path, line: row.line } });
+              } else if (input.subject !== null) {
+                setCallHierarchyState({
+                  kind: 'request',
+                  request: { filePath: input.subject.path, line: input.subject.line },
+                });
+              }
+              return;
+            case CALL_HIERARCHY_MENU_IDS.copyChain:
+              if (row !== null) copyToClipboard(callChainText(row), '已复制调用链');
+              return;
+            case CALL_HIERARCHY_MENU_IDS.copyLocation:
+              if (row !== null) copyToClipboard(callSiteLocationText(row), '已复制位置');
+              return;
+            case CALL_HIERARCHY_MENU_IDS.copyList:
+              copyToClipboard(input.listText, '已复制调用清单');
+              return;
+            case CALL_HIERARCHY_MENU_IDS.expandIn:
+              sectionWindow.grow('in', input.total.in);
+              return;
+            case CALL_HIERARCHY_MENU_IDS.expandOut:
+              sectionWindow.grow('out', input.total.out);
+              return;
+            case CALL_HIERARCHY_MENU_IDS.refresh:
+              setCallHierarchyState(getCallHierarchyState());
+              return;
+            case CALL_HIERARCHY_MENU_IDS.close:
+              deps.close();
+              return;
+            default:
+              return;
+          }
+        },
+      };
+      faceBridge = entry;
+      return () => {
+        if (faceBridge === entry) faceBridge = null;
+      };
+    });
+
     if (state === null) {
-      return h('div', { className: 'wizard kd-host' }, h('p', { className: 'dim' }, '没有要查看的调用。'), closeBtn);
+      return h(
+        'div',
+        { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
+        h('p', { className: 'dim' }, '没有要查看的调用。'),
+        closeBtn,
+      );
     }
     if (state.kind === 'rejected') {
       return h(
         'div',
-        { className: 'wizard kd-host' },
+        { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
         h('h3', null, '无法查看调用层级'),
         h('p', { className: 'kd-error' }, state.reason),
         closeBtn,
       );
     }
 
-    return renderRequest(state.request, deps, closeBtn, sectionWindow);
+    return renderRequest(
+      state.request,
+      deps,
+      closeBtn,
+      sectionWindow,
+      notice === null ? null : h('p', { className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
+    );
   };
 }
 
@@ -173,6 +308,8 @@ function renderRequest(
   deps: CallHierarchyDeps,
   closeBtn: ReactElement,
   sectionWindow: SectionWindow,
+  /** 复制一类的轻反馈（有才画；没有这一行也不占位） */
+  feedback: ReactElement | null,
 ): ReactElement {
   // 索引这一轮的事实（ST-CONSUMERS）：查表得到的那一句**只在既有文案面**上替换原文，
   // 不给本面板新开显示面；查表交回 `null` ⇒ 逐字用回改前那两句。
@@ -187,7 +324,7 @@ function renderRequest(
   if (!index) {
     return h(
       'div',
-      { className: 'wizard kd-host' },
+      { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
       h('h3', null, '调用层级'),
       notice(blockedCopy ?? 'ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。'),
       closeBtn,
@@ -200,7 +337,7 @@ function renderRequest(
     if (blockedCopy !== null) {
       return h(
         'div',
-        { className: 'wizard kd-host' },
+        { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
         h('h3', null, '调用层级'),
         notice(blockedCopy),
         closeBtn,
@@ -208,7 +345,7 @@ function renderRequest(
     }
     return h(
       'div',
-      { className: 'wizard kd-host' },
+      { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
       h('h3', null, '调用层级'),
       notice(
         `第 ${request.line} 行不在任何 ERB 函数体内（或该文件不在函数索引里）——把光标放到某个 @ 函数的正文中再试。`,
@@ -242,6 +379,14 @@ function renderRequest(
   const incomingCountText = incomingTally === null ? '处数未读' : `${incomingTally.tally.nonDefinitionCount} 处`;
   const outgoingCallCount = outgoing.reduce((n, g) => n + g.sites.length, 0);
 
+  /** 两个 section 的行数与"还没画出来"的行数（右键「展开更多行」的判据，与 `section` 同一把尺） */
+  const totalIn = referencesAvailable ? incomingRows.length : 0;
+  const totalOut = referencesAvailable ? outgoingRows.length : 0;
+  const hiddenIn =
+    totalIn === 0 ? 0 : Math.max(0, totalIn - windowSize(totalIn, sectionWindow.inEnd, CALL_HIERARCHY_WINDOW));
+  const hiddenOut =
+    totalOut === 0 ? 0 : Math.max(0, totalOut - windowSize(totalOut, sectionWindow.outEnd, CALL_HIERARCHY_WINDOW));
+
   const section = (heading: string, emptyText: string, rows: Row[], which: 'in' | 'out'): ReactElement[] => {
     const out: ReactElement[] = [];
     if (!referencesAvailable) return out;
@@ -255,7 +400,9 @@ function renderRequest(
     const hiddenRows = rows.length - shown.length;
     // 行样式复用检索面板的通用行类（search-rows / search-match / search-loc）——
     // 同一形态的清单视图，不为它开第二份 CSS。
-    out.push(h('div', { key: `${heading}:rows`, className: 'search-rows' }, rowsToElements(heading, shown, deps)));
+    out.push(
+      h('div', { key: `${heading}:rows`, className: 'search-rows' }, rowsToElements(heading, shown, deps, which)),
+    );
     if (hiddenRows > 0) {
       // 哨兵是一枚 <button>（与问题面板同一形态）：Tab 得到它、Enter 按得动，
       // 点一次多画 STEP 行——不再是"另有 N 行未列出"的告别（RENDER_CAP 死顶已除）
@@ -276,7 +423,18 @@ function renderRequest(
 
   return h(
     'div',
-    { className: 'wizard kd-host' },
+    {
+      className: 'wizard kd-host',
+      'data-context-surface': CALL_HIERARCHY_SURFACE_ID,
+      // 面板级事实写在根上：模块顶层的 `build` 靠它读"正在看谁 / 还藏了几行"（不靠 React 闭包）
+      'data-ch-subject-name': target.name,
+      'data-ch-subject-path': target.filePath,
+      'data-ch-subject-line': String(target.startLine),
+      'data-ch-hidden-in': String(hiddenIn),
+      'data-ch-hidden-out': String(hiddenOut),
+      'data-ch-total-in': String(totalIn),
+      'data-ch-total-out': String(totalOut),
+    },
     h('h3', null, '调用层级'),
     h(
       'p',
@@ -318,11 +476,17 @@ function renderRequest(
     !referencesAvailable
       ? h('p', { className: 'dim', key: 'no-refs' }, '反向引用索引缺席（解析器还没交出引用台账），出入边不可用。')
       : null,
+    feedback,
     closeBtn,
   );
 }
 
-function rowsToElements(heading: string, shown: readonly Row[], deps: CallHierarchyDeps): ReactElement[] {
+function rowsToElements(
+  heading: string,
+  shown: readonly Row[],
+  deps: CallHierarchyDeps,
+  which: 'in' | 'out',
+): ReactElement[] {
   return shown.map((row, i) => {
     if (row.kind === 'group') {
       return h(
@@ -331,6 +495,14 @@ function rowsToElements(heading: string, shown: readonly Row[], deps: CallHierar
           key: `g:${heading}:${i}`,
           className: 'search-match',
           title: `转到定义：${row.title}`,
+          // 右键菜单靠这四个属性认出这一行（模块顶层的 build 读 DOM，不靠闭包）
+          'data-ch-row': 'group',
+          'data-ch-section': which,
+          'data-ch-name': row.label,
+          'data-ch-path': row.path,
+          'data-ch-line': String(row.line),
+          'data-ch-count': String(row.count),
+          'data-ch-chain': row.sites.map((site) => `${site.filePath}:${site.line}:${site.column}`).join('\n'),
           onClick: () => deps.reveal(row.path, row.line, 1),
         },
         h('span', { className: 'search-loc' }, row.label),
@@ -344,6 +516,12 @@ function rowsToElements(heading: string, shown: readonly Row[], deps: CallHierar
         key: `s:${heading}:${i}`,
         className: 'search-match',
         title: `${site.filePath}:${site.line}:${site.column}`,
+        'data-ch-row': 'site',
+        'data-ch-section': which,
+        'data-ch-name': row.group,
+        'data-ch-path': site.filePath,
+        'data-ch-line': String(site.line),
+        'data-ch-column': String(site.column),
         onClick: () => deps.reveal(site.filePath, site.line, site.column),
       },
       h('span', { className: 'search-loc' }, `↳ ${siteLabel(site)}`),
