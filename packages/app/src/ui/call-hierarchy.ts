@@ -169,7 +169,6 @@ export function buildCallHierarchyMenu(input: CallHierarchyMenuInput): { items: 
       id: CALL_HIERARCHY_MENU_IDS.recenter,
       label: '查看当前函数的调用层级',
       icon: 'search',
-      dividerBefore: true,
       group: '这一屏',
     });
   }
@@ -188,7 +187,6 @@ export function buildCallHierarchyMenu(input: CallHierarchyMenuInput): { items: 
       id: CALL_HIERARCHY_MENU_IDS.expandIn,
       label: `展开更多被调用行（还有 ${input.hidden.in} 行）`,
       icon: 'structure',
-      dividerBefore: true,
       group: '显示',
     });
   }
@@ -197,7 +195,7 @@ export function buildCallHierarchyMenu(input: CallHierarchyMenuInput): { items: 
       id: CALL_HIERARCHY_MENU_IDS.expandOut,
       label: `展开更多调用行（还有 ${input.hidden.out} 行）`,
       icon: 'structure',
-      ...(input.hidden.in > 0 ? {} : { dividerBefore: true, group: '显示' }),
+      ...(input.hidden.in > 0 ? {} : { group: '显示' }),
     });
   }
 

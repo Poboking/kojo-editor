@@ -288,7 +288,6 @@ describe('文件历史菜单', () => {
       FILE_HISTORY_MENU_IDS.close,
     ]);
     const restore = itemOf(menu!.items, FILE_HISTORY_MENU_IDS.restore)!;
-    expect(restore.dividerBefore).toBe(true);
     expect(restore.group).toBe('恢复');
     expect(restore.label).toContain('需再点一次确认');
     expectAllChinese(menu!.items);

@@ -220,7 +220,6 @@ export function buildDiffViewMenu(input: DiffViewMenuInput): { items: ContextMen
   items.push({
     id: DIFF_VIEW_MENU_IDS.prevDiff,
     label: '上一处差异',
-    dividerBefore: true,
     group: '跳到差异',
     ...jumpGate,
   });

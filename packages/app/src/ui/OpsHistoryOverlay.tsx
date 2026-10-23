@@ -149,7 +149,6 @@ export function buildOpsHistoryMenu(input: OpsHistoryMenuInput): { items: Contex
         id: OPS_HISTORY_MENU_IDS.undo,
         label: `${undoable ? '撤销此操作' : '重做这一批'}${pendingHint}`,
         icon: 'restore',
-        dividerBefore: true,
         group: '恢复',
         ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
       });
@@ -160,7 +159,6 @@ export function buildOpsHistoryMenu(input: OpsHistoryMenuInput): { items: Contex
         id: OPS_HISTORY_MENU_IDS.restore,
         label: `放回原位${pendingHint}`,
         icon: 'restore',
-        dividerBefore: true,
         group: '恢复',
         ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
       });

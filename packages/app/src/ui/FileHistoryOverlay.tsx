@@ -173,7 +173,6 @@ export function buildFileHistoryMenu(input: FileHistoryMenuInput): { items: Cont
         id: FILE_HISTORY_MENU_IDS.restore,
         label: `${row.actionLabel ?? '恢复这一版'}${pendingHint}`,
         icon: 'restore',
-        dividerBefore: true,
         group: '恢复',
         ...(row.busy ? { disabled: true, disabledReason: '正在写入，稍后再试' } : {}),
       });
