@@ -1,0 +1,21 @@
+{
+  "name": "@kojo/kojo-lang",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kojo 语言面库：编辑器要知道的判据（符号树 / 声明索引 / source map / 展开视图 / 标识符字符集），纯函数纯数据，零 Monaco、零 React、零 IO。语言层，零游戏名词。",
+  "license": "GPL-3.0-or-later",
+  "main": "./src/index.ts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts",
+    "./name-chars": "./src/name-chars.ts",
+    "./declarations": "./src/declarations.ts",
+    "./sourcemap": "./src/sourcemap.ts",
+    "./expand-view": "./src/expand-view.ts",
+    "./symbols": "./src/symbols.ts"
+  },
+  "dependencies": {
+    "@kojo/kojo-core": "workspace:*"
+  }
+}

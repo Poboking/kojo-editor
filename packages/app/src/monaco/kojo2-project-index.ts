@@ -72,7 +72,7 @@ import {
   kojo2DocumentOf,
   type Kojo2DeclarationKind,
   type Kojo2Document,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import type { Kojo2RenameResolvers } from './kojo2-rename';
 import {
   kojo2ReferenceCandidatesOf,

@@ -33,7 +33,7 @@ import {
   type Kojo2IncomingCall,
   type Kojo2OutgoingCall,
 } from '../src/monaco/kojo2-callhierarchy';
-import { kojo2DocumentOf, type Kojo2DeclarationKind } from '../src/monaco/kojo2-declarations';
+import { kojo2DocumentOf, type Kojo2DeclarationKind } from '@kojo/kojo-lang';
 
 /* ============================== 夹具：三个文件一个环 ============================== */
 

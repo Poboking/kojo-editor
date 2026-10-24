@@ -47,7 +47,7 @@ import {
   type UIEvent,
 } from 'react';
 import type { KojoDiagnostic, SourceMapLineKind } from '@kojo/kojo-core';
-import type { Kojo2SourceMapModel } from '../monaco/kojo2-sourcemap-model';
+import type { Kojo2SourceMapModel } from '@kojo/kojo-lang';
 import {
   buildKojo2PreviewModel,
   type Kojo2PreviewCompileResult,

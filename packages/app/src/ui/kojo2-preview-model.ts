@@ -37,8 +37,8 @@ import type {
   SourceMapLineKind,
   SourceMapOrigin,
 } from '@kojo/kojo-core';
-import type { Kojo2SourceMapModel } from '../monaco/kojo2-sourcemap-model';
-import { splitKojo2GeneratedLines } from '../monaco/kojo2-sourcemap-model';
+import type { Kojo2SourceMapModel } from '@kojo/kojo-lang';
+import { splitKojo2GeneratedLines } from '@kojo/kojo-lang';
 
 /** 编译结果里预览真正需要的两格（core / kojo-sugar 服务结果都结构兼容） */
 export interface Kojo2PreviewCompileResult {

@@ -59,7 +59,7 @@ import {
   type Kojo2DiagnosticsResult,
   type Kojo2MarkerSeveritySource,
 } from '../monaco/kojo2-diagnostics';
-import { buildKojo2SourceMapModel } from '../monaco/kojo2-sourcemap-model';
+import { buildKojo2SourceMapModel } from '@kojo/kojo-lang';
 import type { Kojo2PreviewCompilation } from './kojo2-preview-entry';
 import {
   KOJO2_PROBLEM_DEBOUNCE_MS,

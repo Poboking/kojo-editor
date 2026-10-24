@@ -20,6 +20,8 @@
     "paths": {
       "@kojo/plugin-api": ["../plugin-api/src/index.ts"],
       "@kojo/kojo-core": ["../kojo-core/src/index.ts"],
+      "@kojo/kojo-lang": ["../kojo-lang/src/index.ts"],
+      "@kojo/kojo-lang/*": ["../kojo-lang/src/*.ts"],
       "@kojo/kojo-project-kit": ["../kojo-project-kit/src/index.ts"],
       "@kojo/kernel": ["../kernel/src/index.ts"],
       "@kojo/plugin-erb-parser": ["../plugins/erb-parser/src/index.ts"],

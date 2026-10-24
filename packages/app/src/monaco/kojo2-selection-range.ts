@@ -40,12 +40,12 @@
 import { KOJO_DISPATCH_WORDS, lex, type KojoLexLine } from '@kojo/kojo-core';
 import type * as Monaco from './entry';
 import { isNameChar } from './kojo-completion-position';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   kojo2DocumentSymbols,
   type Kojo2SymbolPosition,
   type Kojo2SymbolRange,
-} from './kojo2-symbols';
+} from '@kojo/kojo-lang';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */

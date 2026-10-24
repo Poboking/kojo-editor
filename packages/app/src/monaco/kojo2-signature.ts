@@ -65,7 +65,7 @@ import {
   kojo2TypeWordOf,
   type Kojo2Declaration,
   type Kojo2Document,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 
 /* ============================== 对外形状 ============================== */
 

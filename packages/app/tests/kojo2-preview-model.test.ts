@@ -14,11 +14,11 @@ import {
   compileKojoSource,
   createSourceMapBuilder,
 } from '@kojo/kojo-core';
-import type { Kojo2SourceMapModel } from '../src/monaco/kojo2-sourcemap-model';
+import type { Kojo2SourceMapModel } from '@kojo/kojo-lang';
 import {
   buildKojo2SourceMapModel,
   splitKojo2GeneratedLines,
-} from '../src/monaco/kojo2-sourcemap-model';
+} from '@kojo/kojo-lang';
 import {
   buildKojo2PreviewModel,
   type Kojo2PreviewModel,

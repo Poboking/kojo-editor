@@ -25,7 +25,7 @@ import {
   buildKojo2SourceMapModel,
   splitKojo2GeneratedLines,
   type Kojo2SourceMapModel,
-} from '../src/monaco/kojo2-sourcemap-model';
+} from '@kojo/kojo-lang';
 import {
   buildKojo2PreviewModel,
   type Kojo2PreviewCompileResult,

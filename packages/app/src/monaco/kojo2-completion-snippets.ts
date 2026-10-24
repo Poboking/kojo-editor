@@ -32,7 +32,7 @@ import {
   KOJO2_DECL_WORD_BY_KIND,
   KOJO2_MACHINE_WORD,
   type Kojo2Query,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import { KOJO2_DISPATCH_WORDS } from './kojo2-lexicon';
 
 /** 表 / 池 / 机 / 巡 的词形（core 词表 / 声明索引派生，不写字形）。 */

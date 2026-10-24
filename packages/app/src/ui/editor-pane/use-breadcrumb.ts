@@ -27,8 +27,8 @@ import {
 } from '../breadcrumb-path';
 import { collectDocumentSymbols } from '../../monaco/kojo-symbols';
 // K2 batch-7：`.kojo2` 的面包屑走 2.0 符号（纯逻辑；与大纲 provider 同源，v1 索引不参与）。
-import { kojo2DocumentSymbols, type Kojo2SymbolFact } from '../../monaco/kojo2-symbols';
-import { KOJO2_LANGUAGE_ID } from '../../monaco/kojo2-constants';
+import { kojo2DocumentSymbols, type Kojo2SymbolFact } from '@kojo/kojo-lang';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { erbParserIndex } from '../editor-global-providers';
 import { documentRequestFields } from '../language-service-request';
 import { LARGE_FILE_LINES } from '../editor-options';

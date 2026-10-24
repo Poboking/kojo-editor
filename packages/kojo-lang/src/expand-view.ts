@@ -50,8 +50,8 @@
  */
 import type { KojoLexLine, KojoPosition, KojoSpan, SourceMapLine } from '@kojo/kojo-core';
 import { KOJO_DECL_WORDS, KOJO_DISPATCH_WORDS, comparePositions, lex } from '@kojo/kojo-core';
-import type { Kojo2SourceMapModel } from './kojo2-sourcemap-model';
-import { splitKojo2GeneratedLines } from './kojo2-sourcemap-model';
+import type { Kojo2SourceMapModel } from './sourcemap';
+import { splitKojo2GeneratedLines } from './sourcemap';
 
 /* ============================== 类型 ============================== */
 

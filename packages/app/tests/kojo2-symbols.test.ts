@@ -23,18 +23,20 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { kojo2DocumentOf } from '../src/monaco/kojo2-declarations';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { kojo2DocumentOf } from '@kojo/kojo-lang';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_SYMBOL_WORD_BY_KIND,
-  installKojo2DocumentSymbolProvider,
-  kojo2DocumentSymbolTree,
   kojo2DocumentSymbols,
-  kojo2SymbolKindToMonaco,
   kojo2SymbolPathAt,
   type Kojo2SymbolFact,
   type Kojo2SymbolKind,
   type Kojo2SymbolPosition,
+} from '@kojo/kojo-lang';
+import {
+  installKojo2DocumentSymbolProvider,
+  kojo2DocumentSymbolTree,
+  kojo2SymbolKindToMonaco,
 } from '../src/monaco/kojo2-symbols';
 
 const HERE = dirname(fileURLToPath(import.meta.url));

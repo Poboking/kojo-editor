@@ -34,7 +34,7 @@
  * model 重新路由（真身已订 `getKojo2CutoverController().subscribe`）。
  */
 
-import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { languageFor } from './editor-model-pool';
 import { getKojo2CutoverController } from './kojo2-cutover';
 import { isKojo2CutoverEnabled } from './kojo2-flag';

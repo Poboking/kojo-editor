@@ -34,8 +34,8 @@ import {
   type Kojo2CallHierarchyPosition,
   type Kojo2CallHierarchyProvider,
 } from '../src/monaco/kojo2-callhierarchy';
-import { kojo2DocumentOf, type Kojo2DeclarationKind } from '../src/monaco/kojo2-declarations';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { kojo2DocumentOf, type Kojo2DeclarationKind } from '@kojo/kojo-lang';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 
 const FIXTURE = readFileSync(
   path.join(import.meta.dirname, 'fixtures', 'kojo2', 'callhierarchy.kojo2'),

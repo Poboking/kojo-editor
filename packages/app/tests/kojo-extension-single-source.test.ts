@@ -169,30 +169,45 @@ describe('② 全仓守门：`.kojo` 的大小写清单只由契约那一份派�
 /**
  * `.kojo2` 是 2.0 的暂挂扩展名。K2-CUTOVER-THEME 之前它有两份：`kojo2-language.ts` 的定义处
  * 与 `ui/kojo2-cutover.ts` 的抄本（后者刻意不 import monaco 语言面，因为那条链拖着糖词表）。
- * 现在字面源下沉到零 import 叶子 `monaco/kojo2-constants.ts`：语言面只 re-export，
+ * 那时字面源下沉到零 import 叶子 `monaco/kojo2-constants.ts`：语言面只 re-export，
  * 路由层直接 import——全仓只此一处可改，抄本归零。
+ *
+ * **B1（2026-10-24）起这个叶子搬进语言面库**（`@kojo/kojo-lang` 的 `constants.ts`）：
+ * 判据与"语言 id 归语言面所有"同源，且它必须与 `kojo2-declarations` 在同一个包里，
+ * 否则语言面库要反过来 import 宿主。不变量一个字没变，只是**地址变了**：
+ * 现在 app/src 里一处都不许有，唯一那处在包内。
  */
 const KOJO2_EXT_LITERAL = /["']\.kojo2["']/;
-const KOJO2_CONSTANTS_FILE = 'packages/app/src/monaco/kojo2-constants.ts';
+const KOJO2_CONSTANTS_FILE = 'packages/kojo-lang/src/constants.ts';
 
-describe('②b `.kojo2` 字面量单源：路由层与语言面都从零依赖叶子取', () => {
-  it('app/src 里带引号的 `.kojo2` 字面量只出现在 kojo2-constants.ts 一处', () => {
+describe('②b `.kojo2` 字面量单源：路由层与语言面都从语言面库取', () => {
+  it('app/src 里带引号的 `.kojo2` 字面量一处都没有（B1 后整枚下沉到 @kojo/kojo-lang）', () => {
     const hits = appSourceFiles()
       .filter((rel) => KOJO2_EXT_LITERAL.test(readFileSync(path.join(ROOT, rel), 'utf8')))
       .sort();
-    expect(hits).toEqual([KOJO2_CONSTANTS_FILE]);
+    expect(hits).toEqual([]);
   });
 
-  it('路由层不再自持字面量，派生自叶子常量', () => {
+  it('全仓唯一那处就在语言面库的零依赖叶子里（地址换了，独一性没换）', () => {
+    const text = readFileSync(path.join(ROOT, KOJO2_CONSTANTS_FILE), 'utf8');
+    expect(text).toMatch(KOJO2_EXT_LITERAL);
+    // 叶子必须真的零 import：它被路由层（零 Monaco）与语言面同时引用，
+    // 一旦它开始 import 东西，那条链就会重新长回开机图里。
+    expect(text).not.toMatch(/^\s*import\s/m);
+  });
+
+  it('路由层不再自持字面量，派生自语言面库的常量', () => {
     const text = read('packages/app/src/ui/kojo2-cutover.ts').join('\n');
-    expect(text).toMatch(/import \{ KOJO2_SOURCE_EXTENSION \} from '\.\.\/monaco\/kojo2-constants'/);
+    expect(text).toMatch(/import \{ KOJO2_SOURCE_EXTENSION \} from '@kojo\/kojo-lang\/constants'/);
     expect(text).toMatch(/export const KOJO2_FILE_EXTENSION: string = KOJO2_SOURCE_EXTENSION;/);
     expect(text).not.toMatch(KOJO2_EXT_LITERAL);
   });
 
-  it('语言面把 id / 扩展名从叶子 re-export（不复制第二份）', () => {
+  it('语言面把 id / 扩展名从语言面库 re-export（不复制第二份）', () => {
     const text = read('packages/app/src/monaco/kojo2-language.ts').join('\n');
-    expect(text).toMatch(/import \{ KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION \} from '\.\/kojo2-constants'/);
+    expect(text).toMatch(
+      /import \{ KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION \} from '@kojo\/kojo-lang\/constants'/,
+    );
     expect(text).toMatch(/export \{ KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION \};/);
     expect(text).not.toMatch(KOJO2_EXT_LITERAL);
     expect(text).not.toMatch(/export const KOJO2_SOURCE_EXTENSION/);

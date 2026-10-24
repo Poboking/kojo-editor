@@ -45,7 +45,7 @@ import {
   KOJO2_DISPATCH_WORDS,
   KOJO2_INDENT_WIDTH,
 } from './kojo2-lexicon';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { KOJO2_BLOCK_HEADER_COLON_RE } from './kojo2-enter';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { lex, parseSource, type KojoLexLine } from '@kojo/kojo-core';

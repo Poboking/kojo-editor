@@ -31,12 +31,12 @@ import {
   type Kojo2ExpandCompilation,
   type Kojo2ExpandView,
   type Kojo2ExpandViewResult,
-} from '../src/monaco/kojo2-expand-view';
+} from '@kojo/kojo-lang';
 import {
   buildKojo2SourceMapModel,
   splitKojo2GeneratedLines,
   type Kojo2SourceMapModel,
-} from '../src/monaco/kojo2-sourcemap-model';
+} from '@kojo/kojo-lang';
 import { kojo2DefinitionLinksOf, kojo2HoverOf } from '../src/monaco/kojo2-providers';
 import {
   kojo2ExpandCompilationFor,

@@ -66,7 +66,7 @@ import {
   type Kojo2DeclarationKind,
   type Kojo2Document,
   type Kojo2Query,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import {
   KOJO2_DISPATCH_WORDS,
   KOJO2_INDENT_WIDTH,

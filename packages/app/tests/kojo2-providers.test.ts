@@ -31,7 +31,7 @@ import {
   kojo2DocumentOf,
   type Kojo2Declaration,
   type Kojo2DeclarationKind,
-} from '../src/monaco/kojo2-declarations';
+} from '@kojo/kojo-lang';
 import {
   KOJO2_COMPLETION_TRIGGER_CHARS,
   installKojo2LanguageProviders,

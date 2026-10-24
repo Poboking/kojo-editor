@@ -72,9 +72,9 @@ import {
   kojo2DocumentOf,
   type Kojo2DeclarationKind,
   type Kojo2Document,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import { isNameChar } from './kojo-completion-position';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import type { Kojo2ProjectIndex, Kojo2ProjectSymbolRef } from './kojo2-project-index';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 

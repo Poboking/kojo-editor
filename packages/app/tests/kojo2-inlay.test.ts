@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import type { GameAdapter } from '@kojo/kojo-core';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_INLAY_HINT_LIMIT,
   installKojo2InlayHintsProvider,

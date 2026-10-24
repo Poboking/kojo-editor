@@ -25,7 +25,7 @@
  * `setFile` / `refresh` 每次重新取一遍编译结果；宿主切文件时旧的编译结果**立即作废**，
  * 不会拿 A 文件的产物去画 B 文件的预览（两份模型不同源时面板另有守卫）。
  */
-import type { Kojo2SourceMapModel } from '../monaco/kojo2-sourcemap-model';
+import type { Kojo2SourceMapModel } from '@kojo/kojo-lang';
 import type { Kojo2PreviewCompileResult } from './kojo2-preview-model';
 import type { Kojo2PreviewMetrics, Kojo2PreviewPanelProps } from './kojo2-preview-panel';
 import { isKojo2CutoverEnabled } from './kojo2-flag';

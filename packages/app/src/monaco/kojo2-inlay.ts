@@ -69,12 +69,12 @@ import {
 } from '@kojo/kojo-core';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   kojo2IsNativeRecord,
   kojo2IsTextSurface,
   kojo2TypeWordOf,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 
 /* ============================== 词形（core 单源） ============================== */
 

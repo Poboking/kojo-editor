@@ -38,37 +38,18 @@ export function isAllBlank(text: string): boolean {
 /**
  * 字符类由各段**码位区间**拼出（与 `kojo-sugar` 的 `identifier-chars.ts` 同口径）：
  * 转义写法在编辑往返里极易错位，码位区间只有一处真相。
+ *
+ * B1 起**标识符字符集搬进语言面库**（`@kojo/kojo-lang` 的 `name-chars`）：它同时是
+ * `kojo2-declarations` 切声明名的判据，而语言面库不能反过来 import 宿主。
+ * 本模块只保留"行内位置"这一层（空白 / 字符串 / 注释 / 插值 / 名字段 / 关键字锚），
+ * `isNameChar` 与 `isCjk` 按原样 re-export，既有 15 个 import 点一字不改。
  */
-type CharRange = readonly [lo: number, hi: number];
-const rangeText = (ranges: readonly CharRange[]): string =>
-  ranges.map(([lo, hi]) => `${String.fromCharCode(lo)}-${String.fromCharCode(hi)}`).join('');
+import { NAME_CHAR_CLASS, isCjk, isNameChar } from '@kojo/kojo-lang/name-chars';
 
-/** 假名 / CJK 扩展 A / 汉字 */
-const CJK_RANGES: readonly CharRange[] = [
-  [0x3040, 0x30ff],
-  [0x3400, 0x4dbf],
-  [0x4e00, 0x9fff],
-];
-/** 全角拉丁（大写段与小写段之间隔着全角符号，不并成一个区间） */
-const FULLWIDTH_LATIN_RANGES: readonly CharRange[] = [
-  [0xff21, 0xff3a],
-  [0xff41, 0xff5a],
-];
+export { isCjk, isNameChar };
 
-/** 标识符字符集：ASCII 字母 / 数字 / 下划线 + `$`（只作后续字符）+ CJK + 全角拉丁 */
-const NAME_CHAR_RE = new RegExp(
-  `[0-9A-Za-z_$${rangeText(CJK_RANGES)}${rangeText(FULLWIDTH_LATIN_RANGES)}]`,
-);
-
-/** CJK 判定（含扩展 A / 假名）；CJK-primary 过滤用（表里有中文名 ⇒ 纯 ASCII 名视作隐藏别名） */
-const CJK_RE = new RegExp(`[${rangeText(CJK_RANGES)}]`);
-
-export function isNameChar(ch: string): boolean {
-  return NAME_CHAR_RE.test(ch);
-}
-
-/** 文档词补全的逐行切词器（字符集与 {@link isNameChar} 同源；`+` = 连续段，入口重置 `lastIndex`） */
-const NAME_WORD_RE = new RegExp(`${NAME_CHAR_RE.source}+`, 'g');
+/** 文档词补全的逐行切词器（字符类与 {@link isNameChar} 同源；`+` = 连续段，入口重置 `lastIndex`） */
+const NAME_WORD_RE = new RegExp(`[${NAME_CHAR_CLASS}]+`, 'g');
 
 /** 一行里的全部连续标识符段（供文档词索引；不判语义、不做长度过滤） */
 export function nameWordsOf(line: string): string[] {
@@ -78,10 +59,6 @@ export function nameWordsOf(line: string): string[] {
     if (m[0].length > 0) out.push(m[0]);
   }
   return out;
-}
-
-export function isCjk(ch: string): boolean {
-  return CJK_RE.test(ch);
 }
 
 /**

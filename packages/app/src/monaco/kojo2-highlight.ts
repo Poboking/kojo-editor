@@ -50,19 +50,19 @@ import {
 } from '@kojo/kojo-core';
 import type * as Monaco from './entry';
 import { insideInterpolation, isNameChar } from './kojo-completion-position';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   kojo2IsCodeSurface,
   kojo2IsNativeRecord,
   kojo2IsTextSurface,
   kojo2TokenSpanAt,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import {
   kojo2DocumentSymbols,
   type Kojo2SymbolFact,
   type Kojo2SymbolPosition,
   type Kojo2SymbolRange,
-} from './kojo2-symbols';
+} from '@kojo/kojo-lang';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */

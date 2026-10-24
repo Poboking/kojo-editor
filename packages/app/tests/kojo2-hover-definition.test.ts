@@ -21,7 +21,7 @@ import {
   type Kojo2Declaration,
   type Kojo2DeclarationKind,
   type Kojo2Query,
-} from '../src/monaco/kojo2-declarations';
+} from '@kojo/kojo-lang';
 import { kojo2HoverAt } from '../src/monaco/kojo2-hover';
 import { kojo2DefinitionAt } from '../src/monaco/kojo2-definition';
 

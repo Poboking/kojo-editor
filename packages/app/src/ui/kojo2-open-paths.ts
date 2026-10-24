@@ -34,7 +34,7 @@ import {
   type Kojo2OpenContext,
   type Kojo2OpenPlan,
 } from './kojo2-open';
-import { KOJO2_SOURCE_EXTENSION } from '../monaco/kojo2-constants';
+import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 
 /**
  * 宿主下传给贡献方的 2.0 面投影（形状即契约 `UiPrefs.kojo2`；契约里那枚接口未从桶导出，

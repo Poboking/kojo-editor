@@ -18,7 +18,7 @@ import type {
   Kojo2PanelResolution,
   Kojo2PanelSite,
 } from '../monaco/kojo2-callhierarchy';
-import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   CALL_HIERARCHY_SURFACE_ID,
   CALL_HIERARCHY_MENU_IDS,

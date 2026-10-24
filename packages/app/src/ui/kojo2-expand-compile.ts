@@ -21,7 +21,7 @@
  * - 读取器抛错 = 这一份取不到（**不抛进 Monaco**）；后登记的先问（面板可重挂，新实例优先）；
  * - 注销只撤自己（面板卸载时不会把后来者的读取器一并撤掉）。
  */
-import type { Kojo2ExpandCompilation } from '../monaco/kojo2-expand-view';
+import type { Kojo2ExpandCompilation } from '@kojo/kojo-lang';
 
 /** 按文件路径取那一份编译成品（`null` = 还没编译 / 编译失败 / 不是本面板的文件） */
 export type Kojo2ExpandCompileSource = (filePath: string) => Kojo2ExpandCompilation | null;

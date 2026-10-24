@@ -30,7 +30,7 @@ import {
   type Kojo2CallHierarchyItem,
   type Kojo2CallHierarchyProvider,
 } from '../src/monaco/kojo2-callhierarchy';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   loadKojo2CallHierarchyPanel,
   setCallHierarchyState,

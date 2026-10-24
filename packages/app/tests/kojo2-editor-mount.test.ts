@@ -31,7 +31,7 @@ import {
   createSourceMapBuilder,
 } from '@kojo/kojo-core';
 import { createKojo2Diagnostics, type Kojo2DiagnosticsInput } from '../src/monaco/kojo2-diagnostics';
-import { buildKojo2SourceMapModel, splitKojo2GeneratedLines } from '../src/monaco/kojo2-sourcemap-model';
+import { buildKojo2SourceMapModel, splitKojo2GeneratedLines } from '@kojo/kojo-lang';
 import { revealLocationOf } from '../src/monaco/reveal-position';
 import {
   KOJO2_COMPILE_CACHE_LIMIT,

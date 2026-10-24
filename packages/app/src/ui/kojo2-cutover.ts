@@ -51,7 +51,7 @@ import {
   type MigrateResult,
 } from '@kojo/kojo-core';
 import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
-import { KOJO2_SOURCE_EXTENSION } from '../monaco/kojo2-constants';
+import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 import {
   buildMigrateDiff,
   formatMigrateDiff,

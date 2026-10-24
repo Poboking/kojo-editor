@@ -24,7 +24,7 @@ import {
   createKojo2ProjectIndex,
   type Kojo2ProjectIndex,
 } from '../src/monaco/kojo2-project-index';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import { setCallHierarchyState } from '../src/ui/call-hierarchy';
 import { createCallHierarchyOverlay, type CallHierarchyDeps } from '../src/ui/CallHierarchyOverlay';
 

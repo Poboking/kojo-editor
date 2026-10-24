@@ -53,7 +53,7 @@ const { ensureGlobalProviders, disposeGlobalProviders } = await import(
   '../src/ui/editor-global-providers'
 );
 const flag = await import('../src/ui/kojo2-flag');
-const { KOJO2_LANGUAGE_ID } = await import('../src/monaco/kojo2-constants');
+const { KOJO2_LANGUAGE_ID } = await import('@kojo/kojo-lang');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '../../..');

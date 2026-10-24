@@ -249,8 +249,11 @@ describe('零抄本：语言面不许手写 2.0 词形', () => {
     expect(hits, `kojo2 语言面出现 2.0 词形手抄字面量（词形只能经 kojo2-lexicon 从 core 来）：\n${hits.join('\n')}`).toEqual([]);
   });
 
-  it('扩展名 `.kojo2` 全仓只有一处字面量（K2-CUTOVER-THEME 后住在零依赖叶子 kojo2-constants.ts）', () => {
-    const files = ['kojo2-constants.ts', 'kojo2-language.ts', 'kojo2-lexicon.ts', 'kojo2-enter.ts'];
+  it('扩展名 `.kojo2` 全仓只有一处字面量（B1 后住在语言面库的零依赖叶子 constants.ts）', () => {
+    // B1（2026-10-24）：字面源随 `kojo2-constants` 搬进 `@kojo/kojo-lang`。
+    // 判据从"宿主 monaco 目录内唯一"改成"宿主这四枚文件内零处 + 包内唯一"——
+    // 不变量（一处可改）没变，只是那一处换了地址。
+    const files = ['kojo2-language.ts', 'kojo2-lexicon.ts', 'kojo2-enter.ts'];
     const occurrences: string[] = [];
     for (const file of files) {
       read(file)
@@ -259,8 +262,13 @@ describe('零抄本：语言面不许手写 2.0 词形', () => {
           if (/["']\.kojo2["']/.test(line)) occurrences.push(`${file}:${index + 1}`);
         });
     }
-    expect(occurrences).toHaveLength(1);
-    expect(occurrences[0]!.startsWith('kojo2-constants.ts:')).toBe(true);
+    expect(occurrences).toEqual([]);
+    // 包内恰好一处，且就在那个零依赖叶子里
+    const pkgLeaf = readFileSync(
+      path.join(ROOT, 'packages', 'kojo-lang', 'src', 'constants.ts'),
+      'utf8',
+    );
+    expect(pkgLeaf.match(/["']\.kojo2["']/g) ?? []).toHaveLength(1);
     // 不许出现"抢 v1 `.kojo`"的字面量（v1 的扩展名清单只住契约层）
     for (const file of files) expect(read(file)).not.toMatch(/["']\.kojo["']/);
   });

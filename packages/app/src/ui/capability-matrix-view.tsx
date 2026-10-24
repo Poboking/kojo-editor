@@ -31,7 +31,7 @@ import {
   type ParityLanguageId,
 } from '../monaco/language-capabilities';
 import { ERB_LANGUAGE_ID } from '../monaco/erb-language';
-import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 
 /* ============================== 作者面标签（只此一份，别处不要抄） ============================== */
 

@@ -68,7 +68,7 @@ import {
   expandViewMarkdown,
   type Kojo2ExpandCompilation,
   type Kojo2ExpandView,
-} from './kojo2-expand-view';
+} from '@kojo/kojo-lang';
 import { kojo2CompletionAt, type Kojo2CompletionCandidate, type Kojo2CompletionOptions, type Kojo2FaceTemplates } from './kojo2-completion';
 import {
   kojo2SnippetCandidatesAt,
@@ -82,7 +82,7 @@ import {
   kojo2TokenSpanAt,
   type Kojo2Declaration,
   type Kojo2DeclarationKind,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 
 /* ============================== 注入面 ============================== */
 

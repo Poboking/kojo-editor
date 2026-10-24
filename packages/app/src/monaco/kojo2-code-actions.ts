@@ -102,7 +102,7 @@ import {
 } from '@kojo/kojo-core';
 import type { EditorTextEdit } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { kojo2DiagnosticsToMarkers } from './kojo2-diagnostics';
 // Monaco `CodeActionKind` 的两个字面量**只有一处定义**（v1 那条宿主适配腿）：
 // 本层引用它们而不是再写一遍 `'quickfix'` / `'refactor'`，避免两套声明漂移。

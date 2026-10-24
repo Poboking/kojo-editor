@@ -27,8 +27,8 @@ import type * as Monaco from '../src/monaco/entry';
 import {
   kojo2DocumentOf,
   type Kojo2Declaration,
-} from '../src/monaco/kojo2-declarations';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+} from '@kojo/kojo-lang';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_REFERENCE_LIMIT,
   installKojo2ReferenceProvider,

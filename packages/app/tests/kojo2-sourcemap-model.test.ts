@@ -19,7 +19,7 @@ import {
   buildKojo2SourceMapModel,
   splitKojo2GeneratedLines,
   type Kojo2SourceMapModel,
-} from '../src/monaco/kojo2-sourcemap-model';
+} from '@kojo/kojo-lang';
 
 const FIXTURE = readFileSync(
   fileURLToPath(new URL('./fixtures/kojo2/sourcemap-preview.kojo2', import.meta.url)),

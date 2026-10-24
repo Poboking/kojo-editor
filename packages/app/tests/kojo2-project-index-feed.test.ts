@@ -16,7 +16,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
-import { kojo2DocumentOf } from '../src/monaco/kojo2-declarations';
+import { kojo2DocumentOf } from '@kojo/kojo-lang';
 import {
   createKojo2ProjectCallHierarchyResolvers,
   createKojo2ProjectIndex,

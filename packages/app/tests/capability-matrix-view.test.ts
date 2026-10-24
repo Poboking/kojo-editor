@@ -26,7 +26,7 @@ import {
   type LanguageCapabilityMatrix,
 } from '../src/monaco/language-capabilities';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 
 /* ============================== 行构建 ============================== */
 

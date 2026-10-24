@@ -47,6 +47,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@kojo/plugin-api': r('../plugin-api/src/index.ts'),
+      // 语言面库的叶子**必须排在桶之前**：alias 的匹配口径是
+      // 「等于 find」或「以 `find + /` 开头」，桶若在前会把 `/constants` 也吃掉。
+      '@kojo/kojo-lang/constants': r('../kojo-lang/src/constants.ts'),
+      '@kojo/kojo-lang/name-chars': r('../kojo-lang/src/name-chars.ts'),
+      '@kojo/kojo-lang/declarations': r('../kojo-lang/src/declarations.ts'),
+      '@kojo/kojo-lang/sourcemap': r('../kojo-lang/src/sourcemap.ts'),
+      '@kojo/kojo-lang/expand-view': r('../kojo-lang/src/expand-view.ts'),
+      '@kojo/kojo-lang/symbols': r('../kojo-lang/src/symbols.ts'),
+      '@kojo/kojo-lang': r('../kojo-lang/src/index.ts'),
       '@kojo/kernel': r('../kernel/src/index.ts'),
       '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),

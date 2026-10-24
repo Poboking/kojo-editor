@@ -98,7 +98,7 @@ import {
   type KojoNarrativeNode,
 } from '@kojo/kojo-core';
 import { errorText } from '@kojo/plugin-api';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DeclarationAt,
@@ -111,7 +111,7 @@ import {
   type Kojo2Declaration,
   type Kojo2DeclarationKind,
   type Kojo2Document,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { reject } from './rename-rejection';
 

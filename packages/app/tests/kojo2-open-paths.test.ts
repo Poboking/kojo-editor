@@ -36,7 +36,7 @@ import {
 import { routeKojo2OpenPath, kojo2StageBlockedReason } from '../src/ui/kojo2-open-paths';
 import { isKojo2Path } from '../src/ui/kojo2-open';
 import { decideKojo2Route, KOJO2_FILE_EXTENSION } from '../src/ui/kojo2-cutover';
-import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang';
 import { removeRecentFiles, sanitizeRecentFiles, upsertRecentFile } from '../src/ui/recent-files';
 import {
   buildKojo2Template,
@@ -479,12 +479,19 @@ function sourceFiles(rel: string): string[] {
 /** 手抄的 `.kojo2` 字面量（引号包住的裸扩展；散文里的反引号不算抄判据） */
 const KOJO2_EXT_LITERAL = /["']\.kojo2["']/i;
 
-describe('⑥ 单源守门：.kojo2 字面量只住在宿主那一处，插件侧零处', () => {
-  it('app/src 里手写 .kojo2 字面量的文件 = 只有 monaco/kojo2-constants.ts 一处', () => {
+describe('⑥ 单源守门：.kojo2 字面量只住在语言面库那一处，宿主与插件侧零处', () => {
+  it('app/src 里手写 .kojo2 字面量 = 零处（B1 后整枚下沉到 @kojo/kojo-lang）', () => {
     const hits = sourceFiles('packages/app/src')
       .filter((rel) => KOJO2_EXT_LITERAL.test(readFileSync(path.join(ROOT, rel), 'utf8')))
       .sort();
-    expect(hits).toEqual(['packages/app/src/monaco/kojo2-constants.ts']);
+    expect(hits).toEqual([]);
+  });
+
+  it('语言面库里恰好一处（地址换了，独一性没换）', () => {
+    const hits = sourceFiles('packages/kojo-lang/src').filter((rel) =>
+      KOJO2_EXT_LITERAL.test(readFileSync(path.join(ROOT, rel), 'utf8')),
+    );
+    expect(hits).toEqual(['packages/kojo-lang/src/constants.ts']);
   });
 
   it('插件侧（ui-sugar-editor）零 .kojo2 字面量：向导只消费宿主下传的扩展名', () => {

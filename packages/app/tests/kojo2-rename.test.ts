@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseSource } from '@kojo/kojo-core';
 import type * as Monaco from '../src/monaco/entry';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   installKojo2RenameProvider,
   kojo2PrepareRename,

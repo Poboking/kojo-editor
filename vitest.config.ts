@@ -12,6 +12,15 @@ export const config = defineConfig({
     alias: {
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
       '@kojo/kojo-core': r('./packages/kojo-core/src/index.ts'),
+      // 语言面库：叶子**必须排在桶之前**（alias 的匹配口径是「等于 find」或
+      // 「以 `find + /` 开头」，桶在前会把 `/constants` 也吃掉）。
+      '@kojo/kojo-lang/constants': r('./packages/kojo-lang/src/constants.ts'),
+      '@kojo/kojo-lang/name-chars': r('./packages/kojo-lang/src/name-chars.ts'),
+      '@kojo/kojo-lang/declarations': r('./packages/kojo-lang/src/declarations.ts'),
+      '@kojo/kojo-lang/sourcemap': r('./packages/kojo-lang/src/sourcemap.ts'),
+      '@kojo/kojo-lang/expand-view': r('./packages/kojo-lang/src/expand-view.ts'),
+      '@kojo/kojo-lang/symbols': r('./packages/kojo-lang/src/symbols.ts'),
+      '@kojo/kojo-lang': r('./packages/kojo-lang/src/index.ts'),
       '@kojo/kojo-conformance': r('./packages/kojo-conformance/src/index.ts'),
       '@kojo/kojo-project-kit': r('./packages/kojo-project-kit/src/index.ts'),
       '@kojo/kernel': r('./packages/kernel/src/index.ts'),

@@ -33,7 +33,7 @@ import {
   kojo2TypeWordOf,
   type Kojo2Declaration,
   type Kojo2Query,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 
 /** 一次悬停的结果：显示名 / 声明种类 / 屏上区间 + 事实正文 + 声明落点。 */
 export interface Kojo2HoverResult {

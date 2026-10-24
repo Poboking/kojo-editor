@@ -77,8 +77,8 @@ import {
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
-import { kojo2IsCodeSurface } from './kojo2-declarations';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
+import { kojo2IsCodeSurface } from '@kojo/kojo-lang';
 
 /* ============================== 词形（core 单源） ============================== */
 

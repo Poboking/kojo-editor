@@ -15,7 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   installKojo2HighlightProvider,
   kojo2DocumentHighlights,
@@ -28,7 +28,7 @@ import {
   kojo2SelectionRangeAt,
   type Kojo2SelectionRange,
 } from '../src/monaco/kojo2-selection-range';
-import type { Kojo2SymbolPosition, Kojo2SymbolRange } from '../src/monaco/kojo2-symbols';
+import type { Kojo2SymbolPosition, Kojo2SymbolRange } from '@kojo/kojo-lang';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '../../..');

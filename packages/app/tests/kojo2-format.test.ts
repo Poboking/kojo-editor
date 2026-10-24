@@ -27,7 +27,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as monaco from '../src/monaco/entry';
 import type * as Monaco from '../src/monaco/entry';
 import { parseSource } from '@kojo/kojo-core';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   applyKojo2Format,
   formatKojo2Source,

@@ -122,10 +122,10 @@ import {
   kojo2IsTextSurface,
   kojo2TokenSpanAt,
   type Kojo2Document,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 import { kojo2DefinitionAt, type Kojo2DefinitionTarget } from './kojo2-definition';
 import { insideInterpolation, insideStringOrComment } from './kojo-completion-position';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 公共形状 ============================== */

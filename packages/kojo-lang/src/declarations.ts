@@ -33,7 +33,7 @@ import {
   type KojoValueType,
   type KojoVarStorage,
 } from '@kojo/kojo-core';
-import { isNameChar } from './kojo-completion-position';
+import { isNameChar } from './name-chars';
 
 /** 可被悬停 / 转定义 / 补全消费的声明种类（`# 视` / `# 机` 不在本批语义面内）。 */
 export type Kojo2DeclarationKind =

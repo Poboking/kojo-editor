@@ -40,13 +40,39 @@
 `@kojo/plugin-kojo-lang` 是 **2.0 的整门语言面**；两者并存到 B5 收尾，届时 sugar 的
 `computeFormatEdits` 归 `kojo-lang`。
 
-### 2.1 `@kojo/kojo-lang`（库，不是插件）
+### 2.1 `@kojo/kojo-lang`（库，不是插件）——**B1 已建**
 
 放**与编辑器无关**的判据：符号表、声明表、project-index、sourcemap-model、expand-view、diagnostics 的纯函数部分、indent/format 的纯算法。判据标准：**能不能在 node 里 import 就跑**。
 
 - 依赖：`@kojo/kojo-core`（唯一真源）、`@kojo/plugin-api`（只取类型）。
 - 不依赖：`monaco-editor`、`react`、`kernel`。
 - 与 `kojo-core` 的界线：core 管"这段文本是什么"（AST/诊断码/编译），lang 管"编辑器要知道什么"（符号树怎么摆、缩进阶梯怎么算、格式化后长什么样）。core 里已有 `incremental.ts`，增量重建留在 core。
+
+**B1 实际建成的样子**（`packages/kojo-lang/src/`，7 个模块）：
+
+| 模块 | 行数 | 来自 |
+|---|---|---|
+| `constants.ts` | 23 | `monaco/kojo2-constants.ts`（整搬，零依赖叶子） |
+| `name-chars.ts` | 78 | 从 `monaco/kojo-completion-position.ts` 抽出（`isNameChar` / `isCjk` / 字符类） |
+| `declarations.ts` | 383 | `monaco/kojo2-declarations.ts`（整搬） |
+| `sourcemap.ts` | 392 | `monaco/kojo2-sourcemap-model.ts`（整搬） |
+| `expand-view.ts` | 583 | `monaco/kojo2-expand-view.ts`（整搬） |
+| `symbols.ts` | 532 | `monaco/kojo2-symbols.ts` 的**纯半边** |
+| `index.ts` | — | 桶 |
+
+**`symbols` 被切成两半**：判据进包（`kojo2DocumentSymbols` / `kojo2SymbolPathAt` + 事实类型），
+Monaco 翻译留宿主（`app/src/monaco/kojo2-symbols.ts`，164 行）。切法不是按行数，是按
+"谁能被插件复用"——插件拿不到 Monaco 实例，不该被迫认识 `SymbolKind`。
+
+**包怎么进构建**（三处必须同步，漂一处就红）：
+`packages/kojo-lang/package.json` 的 `exports`、`tsconfig.json` + `packages/app/tsconfig.json`
+的 `paths`、`vite.config.ts` + `vitest.config.ts` 的 `alias`。**叶子必须排在桶之前**
+（alias 的匹配口径是「等于 find」或「以 `find + /` 开头」，桶在前会把 `/constants` 吃掉）。
+
+**⚠ 一条纪律（B1 踩出来的）**：`kojo-lang` 的桶 re-export 整个语言面（约 85 KB），
+**进首屏的代码只许引叶子**。第一版只给桶，PS-10 读数当场 3,110 → 3,192；
+改叶子后回到 3,110（净 +0.3 KB）。守卫在 `app/tests/ps10-eager-graph.test.ts`
+的「开机图里对语言面库的引用必须是叶子」。
 
 ### 2.2 `@kojo/plugin-kojo-lang`（插件）
 
@@ -117,7 +143,7 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 | 批 | 内容 | 判据（DoD） | 状态 |
 |---|---|---|---|
 | **B0** | 契约：`ui.editor.languageService` 扩 **4** 个 kind + 四条取数腿（纯合并函数，不装 provider） | 双 typecheck；既有贡献方零改动；新增 kind 各有一条"不认就跳过"的单测 | ✅ 2026-10-24 |
-| **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `project-index` / `sourcemap-model` / `expand-view` / `lexicon` / `constants`（约 3.2k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | |
+| **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `sourcemap-model` / `expand-view` / `constants` + 抽出 `name-chars`（约 1.9k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | ✅ 2026-10-24 |
 | **B2** | 建 `@kojo/plugin-kojo-lang`：先接**槽位已支持**的 5 项（definition / references / documentSymbol / foldingRange / inlayHint） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这 5 项**无人应答**（可见退化，不静默） | |
 | **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽** | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | |
 | **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | 主题 token 名不变（`theme-contrast` 三档门禁不破） | |
@@ -134,6 +160,24 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 **B0 刻意不装 provider**：四个能力的宿主原生实现还在跑，此刻再挂一枚 provider，补全会翻倍、
 悬停会出两段、格式化会按注册顺序抢答——那是**改既有行为**，与 B0 的"零改动"判据冲突。
 `install*Provider` 与 `kojo2-*.ts` 的删除必须是**同一步**（B2/B3）。
+
+**B1 的实际交付**（2026-10-24）：
+- 新包 `packages/kojo-lang`（7 模块 / 约 1.9k 行），宿主 61 个文件的 import 改指包；
+- `kojo2-symbols.ts` 切成两半（判据进包 / Monaco 翻译留宿主，164 行）；
+- 新守卫 `packages/kojo-lang/tests/purity.test.ts`（4 项）：零运行时依赖、零 monaco/react/DOM/IO、
+  零游戏名词、文件数钉死（防走空匹配）；
+- PS-10 新增「开机图里对语言面库的引用必须是叶子」（做过变异实测：改回桶即红，读数 3,110 → 3,192）；
+- 三个 `.kojo2` 单源守卫改指新地址（不变量不变，只是那处换了地方）。
+
+**B1 刻意没搬的三块**（初版方案列了 7 个文件 / 3.2k 行，实测只有 5 个能干净搬走）：
+
+| 没搬 | 行数 | 拦路的是什么 | 归哪批 |
+|---|---|---|---|
+| `project-index` | 677 | 运行期依赖 `kojo2-references`（1390 行），而后者 import 宿主的 `ui/kojo2-flag`（cutover 开关）。把开关变成参数＝改行为，不是搬运 | B2/B3（开关随 `programFeatures` 一起进 SDK） |
+| `kojo2-references` | 1390 | 同上 + 与 `project-index` 互为类型引用 | B2/B3 |
+| `kojo2-lexicon` | 98 | 转发 `@kojo/plugin-kojo-sugar` 的中文运算符表。**库依赖插件**是反向分层；正解是让 core 自持运算符表（规范 §5.1 说"沿用现有中文表"，CUTOVER 时迁） | 单独一批（迁运算符表） |
+
+这三块加起来 2,165 行，是 B1 之后宿主里最厚的语言面残留。
 
 ---
 

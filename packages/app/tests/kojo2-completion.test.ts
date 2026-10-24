@@ -38,7 +38,7 @@ import {
   KOJO2_DECL_WORD_BY_KIND,
   KOJO2_MACHINE_WORD,
   type Kojo2Query,
-} from '../src/monaco/kojo2-declarations';
+} from '@kojo/kojo-lang';
 import { KOJO2_DISPATCH_WORDS } from '../src/monaco/kojo2-lexicon';
 
 const FIXTURE = readFileSync(

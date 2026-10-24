@@ -52,7 +52,7 @@ import {
   escapeRegExp,
 } from './kojo2-lexicon';
 import { CJK_WORD_PATTERN } from './word-separators';
-import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 import { KOJO2_THEME_RULES, KOJO2_TOKEN } from './kojo-theme-rules';
 
 /**

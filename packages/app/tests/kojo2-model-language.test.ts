@@ -16,7 +16,7 @@
  * `refreshAll` / `dispose` 的收尾语义。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang';
 import { languageFor } from '../src/ui/editor-model-pool';
 import { getKojo2CutoverController, resetKojo2CutoverController } from '../src/ui/kojo2-cutover';
 import { isKojo2CutoverEnabled } from '../src/ui/kojo2-flag';

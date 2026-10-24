@@ -40,7 +40,7 @@
  * 取，别在别处再抄一份能力名。
  */
 import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 
 /* ============================== 能力枚举 ============================== */
 

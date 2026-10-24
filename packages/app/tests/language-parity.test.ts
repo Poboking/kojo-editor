@@ -51,7 +51,7 @@ import {
   type ParityLanguageId,
 } from '../src/monaco/language-capabilities';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang';
 import { descriptorForLanguageId } from '../src/monaco/language-registry';
 import { languageForPath } from '../src/monaco/languages';
 

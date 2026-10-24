@@ -21,8 +21,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { kojo2DocumentOf } from '../src/monaco/kojo2-declarations';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { kojo2DocumentOf } from '@kojo/kojo-lang';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_PROJECT_REF_LIMIT,
   createKojo2ProjectIndex,

@@ -18,8 +18,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { kojo2DocumentOf } from '../src/monaco/kojo2-declarations';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { kojo2DocumentOf } from '@kojo/kojo-lang';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_CODE_LENS_COMMAND,
   KOJO2_CODE_LENS_DEFAULT_WEAVE_LAYER,

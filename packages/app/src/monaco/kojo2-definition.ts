@@ -23,7 +23,7 @@ import {
   kojo2TokenSpanAt,
   type Kojo2Declaration,
   type Kojo2Query,
-} from './kojo2-declarations';
+} from '@kojo/kojo-lang';
 
 /** 定义落点（同文件；1 基，尾列半开）。 */
 export interface Kojo2DefinitionTarget {

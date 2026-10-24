@@ -269,10 +269,45 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 合尺后闸 3,100 → 3,120（余量约 0.3%）：这是**下限纪律**，
     // 下一枚面模块落地前请先减面（`ui-kit/index.tsx` 按件拆文件约 −12 KB，见上一段），
     // 不要顺手把这个数再抬一格。
+    // 2026-10-24（B1 · 建 `@kojo/kojo-lang`；同尺读数 **3,110 KB / 210 文件，与上一批持平**）：
+    // 五个模块（constants / sourcemap / expand-view / declarations / symbols 的纯半边，
+    // 共约 1.9k 行）搬进包，**开机图一分钱没涨**——旧的 `kojo2-constants.ts`（1.2 KB）换成
+    // 包里的 `constants.ts`（1.5 KB），净 +0.3 KB，四舍五入仍是 3,110。
+    // 但这一批**差点翻车**，记在这里给下一个人看：第一版只给了桶（`@kojo/kojo-lang`），
+    // 读数当场 3,110 → **3,192**（+82 KB，整包 85 KB 全被拖进欢迎页），红的就是下面这条闸。
+    // 根因：开机图里有四枚只想要扩展名/语言 id 的文件（`kojo2-cutover` / `kojo2-open` /
+    // `kojo2-open-paths` / `CallHierarchyOverlay`），它们 import 桶 ⇒ 桶 re-export 了整包。
+    // 修法是给包开子路径导出，开机侧一律引叶子；判据落在本文件末尾那条
+    // 「开机图里对语言面库的引用必须是叶子」上——它比读数更早、更准地指出是谁干的。
+    // 闸不动（3,120 / 210）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤210 文件 / ≤3,120 KB）`);
     expect(totalKb).toBeLessThanOrEqual(3_120);
     expect(files.length).toBeLessThanOrEqual(210);
+  });
+
+  /**
+   * **叶子纪律**（B1 立的，理由见上一条注释里的"差点翻车"）。
+   *
+   * `@kojo/kojo-lang` 的桶 re-export 了整个语言面（约 85 KB）。开机图里任何一枚文件
+   * 引桶，就等于把整包挂上欢迎页。所以：**进首屏的代码只许引叶子**。
+   *
+   * 为什么单独一条而不并进体积闸：读数只能告诉你"涨了 82 KB"，说不清**是谁**；
+   * 这条直接点名文件与 specifier。而且它在涨之前就红——体积闸要等累计够量才响。
+   */
+  it('开机图里对语言面库的引用必须是叶子（不许引桶：桶 = 整包 85 KB）', () => {
+    const offenders: string[] = [];
+    for (const rel of files) {
+      const src = readFileSync(path.join(repoRoot, rel), 'utf8');
+      for (const m of src.matchAll(STATIC_IMPORT_RE)) {
+        if (!hasValueBinding(m[1]!)) continue;
+        if (m[2] === '@kojo/kojo-lang') offenders.push(`${rel} → ${m[2]}`);
+      }
+      for (const m of src.matchAll(EXPORT_FROM_RE)) {
+        if (m[1] === '@kojo/kojo-lang') offenders.push(`${rel} → re-export ${m[1]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

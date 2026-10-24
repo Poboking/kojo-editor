@@ -24,7 +24,7 @@
 import type * as Monaco from './entry';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { CODE_LENS_COMMAND } from './kojo-code-lens';
-import { KOJO2_LANGUAGE_ID } from './kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 
 /** 注释文本中的一段链接候选（offsets 为整篇文本下标，end 不含） */
 export interface LinkCandidate {

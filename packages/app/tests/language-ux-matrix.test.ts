@@ -42,7 +42,7 @@ import {
 // descriptor 在 languages.ts 模块求值时登记（本文件要读 languageServices 声明）
 import '../src/monaco/languages';
 import { languageDescriptors } from '../src/monaco/language-registry';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 
 /* ============================== 取证基建 ============================== */
 

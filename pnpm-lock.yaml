@@ -50,6 +50,9 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../kojo-core
+      '@kojo/kojo-lang':
+        specifier: workspace:*
+        version: link:../kojo-lang
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api
@@ -193,6 +196,12 @@ importers:
         version: link:../kojo-core
 
   packages/kojo-core: {}
+
+  packages/kojo-lang:
+    dependencies:
+      '@kojo/kojo-core':
+        specifier: workspace:*
+        version: link:../kojo-core
 
   packages/kojo-project-kit:
     dependencies:
