@@ -108,9 +108,10 @@
      `query-*` = 只读查询面（比对 / 预览，比破坏性确认面轻一档）；`-picker` = 命令面板那一档；
      `-solid` = 玻璃旋钮 0%（实心档，没有磨砂只剩压暗）；`-nofilter` = 老内核无 backdrop-filter 的
      回落；`rim-1 / rim-solid` = 浮层与本体的实描边（浅色档"边界靠底色 + 一条线认出来"的那条线）。
-     ⚠ 本块登记的是 **dark 档现值**，逐字抄自 `styles.css` / `styles-project.css` 里那五条遮罩规则——
-     那两档仍写自己的字面量（本批无所有权，不许顺手改），所以 dark 档这两族今天是"登记而未消费"：
-     对拍闸逐枚比两侧字符串，谁改了styles 档的遮罩色而忘了这里，当场红。 */
+     本块的值 = **dark 档现值**，逐字抄自 `styles.css` / `styles-project.css` 里那几条遮罩规则。
+     组长收敛（2026-10-24）：那几条规则本身已改吃 `var(--scrim-*)`，三档从此**同一条通路**——
+     `styles*.css` 的裸类 (0,1,0) 基座规则 + `shell-notices.css` ⑤ 的主题收口都只读本族 token，
+     主题侧（`themes/light.css` / `themes/mint-dark.css`）只翻值、不写规则。定义点与消费点各一处。 */
   --scrim-a: rgba(0, 0, 0, 0.28);
   --scrim-b: rgba(0, 0, 0, 0.55);
   --scrim-fill: rgba(8, 10, 13, 0.4);

@@ -9,16 +9,18 @@
  *  ①**防回潮**：切片里不许再有裸 hex / 裸 rgb()/rgba()/hsla() / 裸 px 圆角（`rgb(var(--x-rgb) / .4)`
  *    这种「token 分量 + alpha」算合规，同 `ui-kit-css.test.ts` 的折叠口径）——这是债二的验收面；
  *  ②**证明逐字相等**：把每条规则按档展开（吃 tokens.css + themes 的 `var()` 链）后与
- *    **改前那串字面量**逐字符比对（名单见 EXPECTED，28 条 = 切片里 ⑤ 的每一格 × 每一档）。
+ *    **改前那串字面量**逐字符比对（名单见 EXPECTED，29 条 = 切片里 ⑤ 的每一格 × 每一档）。
  *    只比"看起来差不多"没用：遮罩色是这批反复付过学费的地方（灰泥 / 蓝雾 / 实心档丢边界）。
  *
  * 顺带钉两件事，防止"为了绿而搬空"：
  *  - 切片必须**真在消费**这些 token（消费数下限），删规则逃判据在这里红；
- *  - dark 档那两族登记值必须与 `styles.css` / `styles-project.css` 里**仍在供色**的字面量同值
- *    （那两档本批无所有权、没改，故登记值是"待消费"的账；谁改了遮罩色而忘了 tokens.css，红）。
+ *  - dark 档（`styles.css` / `styles-project.css` 的裸类基座规则）也**必须真在消费**同一族 token：
+ *    组长收敛 2026-10-24 把那里的字面量一并换成 `var(--scrim-*)`，本文件按 dark 档 token 表展开后
+ *    与**收敛前那串字面量**逐字符比对（见 `describe('dark 档…')`）——从此"登记而未消费"这一格没了，
+ *    三档同一条通路：定义点 = tokens.css + themes/*.css（只给值），消费点 = styles*.css 基座 + 切片 ⑤。
  *
- * 账本口径（与组长的尺子一致，便于对 125/146 这两个数）：**非 token CSS**（tokens.css 与
- * themes/*.css 这两个定义点除外）里 `rgb(` / `rgba(` 的原文出现数，含注释。R6 改前 146 → 改后 125。
+ * 账本口径（与组长的尺子一致）：**非 token CSS**（tokens.css 与 themes/*.css 这两个定义点除外）里
+ * `rgb(` / `rgba(` 的原文出现数，含注释。R6 改前 146 → R6 交付 125 → dark 收敛后 105。
  *
  * 本文件待在默认 node 环境（读源码文件）；头注释里不写任何 vitest 环境指令字面量（PITFALLS 183）。
  */
@@ -195,7 +197,7 @@ interface Expected {
   mediaTag?: string;
 }
 
-/** ⑤ 每一格 × 每一档，共 28 条（light 16 / mint-dark 12）；一条不落，漏一格就是"用删规则换绿" */
+/** ⑤ 每一格 × 每一档，共 29 条（light 16 / mint-dark 13）；一条不落，漏一格就是"用删规则换绿" */
 const EXPECTED: readonly Expected[] = [
   // —— light：确认面遮罩（渐变两端 + 实底） ——
   {
@@ -310,7 +312,14 @@ const EXPECTED: readonly Expected[] = [
     prop: 'background',
     before: 'radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.22), rgba(2, 10, 6, 0.42)), rgba(5, 12, 8, 0.34)',
   },
-  // —— mint-dark：实心档遮罩 + 描边（就是 mint-dark.css 154 行注记说反了的那一处） ——
+  // —— mint-dark：命令面板（组长收敛 2026-10-24，改前是 `themes/mint-dark.css` 末尾那条活规则） ——
+  {
+    theme: 'mint-dark',
+    selector: ":root[data-theme='mint-dark'] .picker-backdrop",
+    prop: 'background',
+    before: 'rgba(6, 12, 9, 0.38)',
+  },
+  // —— mint-dark：实心档遮罩 + 描边（就是 `themes/mint-dark.css` 那条「事实纠正」注记说反了的那一处） ——
   {
     theme: 'mint-dark',
     selector: ":root[data-theme='mint-dark'][data-glass='solid'] .overlay-backdrop",
@@ -400,8 +409,8 @@ describe('债二 · shell-notices.css 的 token 纪律（防回潮）', () => {
   });
 
   it(`全仓非 token CSS 的裸 rgba 账本只许降不许涨（R6 改前 146 → 现测 ${ledger}）`, () => {
-    expect(ledger, '账本涨了：新抄的字面量请进 tokens.css / themes/*.css 的定义点').toBeLessThanOrEqual(125);
-    console.log(`[token-hygiene] 非 token CSS 裸 rgba 出现数 = ${ledger}（R5 交付后 146 / R6 目标 125）`);
+    expect(ledger, '账本涨了：新抄的字面量请进 tokens.css / themes/*.css 的定义点').toBeLessThanOrEqual(105);
+    console.log(`[token-hygiene] 非 token CSS 裸 rgba 出现数 = ${ledger}（R5 交付后 146 → R6 125 → dark 收敛 105）`);
   });
 });
 
@@ -424,10 +433,10 @@ describe('债一 · 遮罩色逐字等值（改前字面量当期望值，28 条
     }
   }
 
-  it('名单本身够格（28 条 = ⑤ 的每一格每一档，覆盖不全的"绿"不算数）', () => {
-    expect(EXPECTED.length).toBeGreaterThanOrEqual(28);
+  it('名单本身够格（29 条 = ⑤ 的每一格每一档，覆盖不全的"绿"不算数）', () => {
+    expect(EXPECTED.length).toBeGreaterThanOrEqual(29);
     expect(EXPECTED.filter((e) => e.theme === 'light')).toHaveLength(16);
-    expect(EXPECTED.filter((e) => e.theme === 'mint-dark')).toHaveLength(12);
+    expect(EXPECTED.filter((e) => e.theme === 'mint-dark')).toHaveLength(13);
   });
 
   it('每格都还在（没有靠删规则换绿）', () => {
@@ -443,43 +452,87 @@ describe('债一 · 遮罩色逐字等值（改前字面量当期望值，28 条
     expect(LAYERS['mint-dark'].get('--scrim-fill')).toBe('rgba(5, 12, 8, 0.48)');
     expect(LAYERS.light.get('--rim-1')).toBe('rgba(23, 31, 43, 0.55)');
     expect(LAYERS['mint-dark'].get('--rim-1')).toBe('rgba(191, 232, 210, 0.34)');
-    // dark 档基座不许被主题污染（本批它登记的是 styles 现值）
+    // dark 档基座不许被主题污染（tokens.css 的裸 `:root` 就是 styles 侧那条基座规则读的那一档）
     const dark = new Map(rootDecls(parseRules(tokensRaw), ':root'));
     expect(dark.get('--scrim-fill')).toBe('rgba(8, 10, 13, 0.4)');
     expect(dark.get('--rim-1')).toBe('var(--border)');
   });
 });
 
-describe('dark 档登记值与仍在供色的 styles 两侧同值（漂移即红）', () => {
+describe('dark 档收敛 · styles 的遮罩格吃 token，展开后与收敛前逐字相等', () => {
   const dark = new Map(rootDecls(parseRules(tokensRaw), ':root'));
-  const STYLES = parseRules(stylesRaw);
-  const PROJECT = parseRules(projectRaw);
-  const gradient = (a: string, b: string, fill: string): string =>
-    squash(`radial-gradient(130% 105% at 50% -5%, ${a}, ${b}), ${fill}`);
+  const FILES: readonly [name: string, rules: Rule[]][] = [
+    ['styles.css', parseRules(stylesRaw)],
+    ['styles-project.css', parseRules(projectRaw)],
+  ];
 
-  it('确认面：styles.css 与 styles-project.css 的 .modal-mask / .overlay-backdrop ≡ 基座三枚 scrim', () => {
-    const want = gradient(dark.get('--scrim-a')!, dark.get('--scrim-b')!, dark.get('--scrim-fill')!);
-    for (const rules of [STYLES, PROJECT]) {
-      expect(squash(declOf(rules, '.modal-mask', 'background')!), 'styles 的 .modal-mask 与 tokens.css 基座分叉了').toBe(want);
-      expect(squash(declOf(rules, '.overlay-backdrop', 'background')!), 'styles 的 .overlay-backdrop 与基座分叉了').toBe(want);
+  interface DarkSlot {
+    /** 组选择器拆开后的那一格 */
+    selector: string;
+    /** **收敛前**逐字抄自这两份文件的字面量（两侧当时同值，见 git `68b7c667`） */
+    before: string;
+    /** 这条遮罩格必须吃掉的 token 名：字面量回潮 = 定义点外又冒出一张嘴，当场红 */
+    token: string;
+    mediaTag?: string;
+    /** 轻档没有这一格（拆分时它属于项目态）⇒ 只对懒档判，别拿"轻档找不到"当假红 */
+    projectOnly?: boolean;
+  }
+
+  const SLOTS: readonly DarkSlot[] = [
+    {
+      selector: '.modal-mask',
+      before: 'radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.55)), rgba(8, 10, 13, 0.4)',
+      token: '--scrim-a',
+    },
+    {
+      selector: '.overlay-backdrop',
+      before: 'radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.55)), rgba(8, 10, 13, 0.4)',
+      token: '--scrim-fill',
+    },
+    {
+      selector: '.overlay-backdrop:has(.ov-query)',
+      before: 'radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.34)), rgba(8, 10, 13, 0.28)',
+      token: '--scrim-query-a',
+      mediaTag: '@supports',
+      projectOnly: true,
+    },
+    { selector: '.picker-backdrop', before: 'rgba(8, 10, 13, 0.35)', token: '--scrim-picker', projectOnly: true },
+    { selector: ":root[data-glass='solid'] .modal-mask", before: 'rgba(0, 0, 0, 0.45)', token: '--scrim-solid' },
+    { selector: '.modal-mask', before: 'rgba(0, 0, 0, 0.5)', token: '--scrim-nofilter', mediaTag: '@supports not' },
+  ];
+
+  for (const s of SLOTS) {
+    for (const [name, rules] of FILES) {
+      if (s.projectOnly && name === 'styles.css') continue;
+      it(`${name} 的 \`${s.selector} { background }\` 真吃 ${s.token} 且展开 ≡ 收敛前字面量`, () => {
+        const got = declOf(rules, s.selector, 'background', s.mediaTag ?? '');
+        expect(got, `遮罩格消失了：${name} 里找不到 ${s.selector} { background }`).toBeDefined();
+        expect(got!, `${name} 的 ${s.selector} 没吃 token —— 把字面量抄回 styles 就是重新开第二张口径`).toContain(
+          `var(${s.token})`,
+        );
+        const expanded = expandVars(got!, dark);
+        expect(expanded, `${name} 的 ${s.selector}：var() 展开失败（环 / 无定义且无兜底）`).not.toBeNull();
+        expect(squash(expanded!), `${name} 的 ${s.selector} 展开后与收敛前分叉`).toBe(squash(s.before));
+      });
+    }
+  }
+
+  it('三档同路：token 定义点（themes/*.css）不写遮罩规则，只给值', () => {
+    // 收敛前 light.css 有四条、mint-dark.css 有两条同分遮罩规则，全部被 ⑤ 遮蔽 = 死口径 + 旧值漂移的隐患
+    for (const [name, src] of [
+      ['themes/light.css', lightRaw],
+      ['themes/mint-dark.css', mintRaw],
+    ] as const) {
+      const decls = parseRules(src).filter((r) => /\b(overlay-backdrop|modal-mask|picker-backdrop)\b/.test(r.selector));
+      expect(decls, `${name} 里又出现了遮罩规则（${decls.map((d) => d.selector).join(' / ')}）—— 消费点只有 shell-notices.css ⑤`).toEqual([]);
     }
   });
 
-  it('查询面：styles-project.css 的 `.overlay-backdrop:has(.ov-query)` ≡ 基座 query 三枚', () => {
-    const want = gradient(dark.get('--scrim-query-a')!, dark.get('--scrim-query-b')!, dark.get('--scrim-query-fill')!);
-    expect(squash(declOf(PROJECT, '.overlay-backdrop:has(.ov-query)', 'background', '@supports') ?? '缺查询面规则')).toBe(want);
-  });
-
-  it('命令面板：styles-project.css 的 .picker-backdrop ≡ 基座 --scrim-picker', () => {
-    expect(squash(declOf(PROJECT, '.picker-backdrop', 'background') ?? '缺 picker 遮罩规则')).toBe(dark.get('--scrim-picker'));
-  });
-
-  it('实心档 + 老内核回落：两档文件的遮罩格 ≡ 基座 --scrim-solid / --scrim-nofilter', () => {
-    for (const [name, rules] of [['styles.css', STYLES], ['styles-project.css', PROJECT]] as const) {
-      const solid = declOf(rules, ":root[data-glass='solid'] .modal-mask", 'background');
-      expect(squash(solid ?? `缺 ${name} 的 solid 遮罩格`), `${name}：实心档遮罩与基座分叉`).toBe(dark.get('--scrim-solid'));
-      const nofilter = declOf(rules, '.modal-mask', 'background', '@supports not');
-      expect(squash(nofilter ?? `缺 ${name} 的 @supports 回落`), `${name}：老内核回落与基座分叉`).toBe(dark.get('--scrim-nofilter'));
-    }
+  it('mint 档的 --scrim-picker 不再缺登记；老内核回落仍不给 mint（沿用基座纯黑）', () => {
+    expect(LAYERS['mint-dark'].get('--scrim-picker')).toBe('rgba(6, 12, 9, 0.38)');
+    const mintOwn = rootDecls(parseRules(mintRaw), MINT_SEL);
+    // 这条不许被"补齐对称性"顺手填上：填了就是改设计（老内核的遮罩本来就退回基座黑）
+    expect(mintOwn.has('--scrim-nofilter'), 'mint-dark.css 里登记了 --scrim-nofilter —— 基座纯黑是有意的').toBe(false);
+    expect(LAYERS['mint-dark'].get('--scrim-nofilter')).toBe('rgba(0, 0, 0, 0.5)');
   });
 });

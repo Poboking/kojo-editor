@@ -125,15 +125,19 @@
      身份线：纯黑径向 + 蓝黑底（`rgba(8,10,13)`）在墨绿底上读成"蓝雾"，本档一律换墨绿；
      rim 用淡青白（同 `--glass-edge` 那族），因为墨绿底 + 深色代码面本来就是低反差的一对，
      边界只能靠一条亮线认出来。
-     ⚠ 本档不给 `--scrim-picker / --scrim-nofilter`：命令面板的磨砂遮罩仍由本文件末尾那条
-     `[data-theme='mint-dark'] .picker-backdrop` 规则供色，老内核回落由 dark 档基座兜——
-     两处都不是切片的消费面，此处登记反而成第二张口径（见下条注记的修正）。 */
+     消费方只有 `shell-notices.css` ⑤ 一处：本文件**不写遮罩规则**（原先这里的 `.modal-mask` /
+     `.overlay-backdrop` 绿化字面规则已被 ⑤ 同分后置遮蔽 = 死口径，且它带的是 R5 之前的旧值
+     `.30/.58/.40`，与活的那一套 `.36/.64/.48` 分叉；2026-10-24 由组长删除，定义点只留值）。
+     仍不给 `--scrim-nofilter`：老内核（无 backdrop-filter）的回落遮罩沿用基座纯黑，本档没改它。 */
   --scrim-a: rgba(2, 10, 6, 0.36);
   --scrim-b: rgba(2, 10, 6, 0.64);
   --scrim-fill: rgba(5, 12, 8, 0.48);
   --scrim-query-a: rgba(2, 10, 6, 0.22);
   --scrim-query-b: rgba(2, 10, 6, 0.42);
   --scrim-query-fill: rgba(5, 12, 8, 0.34);
+  /* 命令面板：本档过去由文件末尾那条 (0,3,0) 字面规则供色，现收进 token（值逐字不变），
+     规则本体挪进 `shell-notices.css` ⑤，与 light 档走同一条通路。 */
+  --scrim-picker: rgba(6, 12, 9, 0.38);
   --scrim-solid: rgba(5, 12, 8, 0.56);
   --rim-1: rgba(191, 232, 210, 0.34);
   --rim-solid: rgba(191, 232, 210, 0.42);
@@ -160,28 +164,25 @@
     0 1px 2px rgba(2, 10, 6, 0.5),
     0 0 0 1px rgba(191, 232, 210, 0.4);
 }
-/* 遮罩：纯黑径向 + 蓝黑底（rgba(8,10,13)）在墨绿底上读成"蓝雾"；整体绿化 */
-:root[data-theme='mint-dark'] .modal-mask,
-:root[data-theme='mint-dark'] .overlay-backdrop {
-  background:
-    radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.3), rgba(2, 10, 6, 0.58)),
-    rgba(6, 12, 9, 0.4);
-}
-:root[data-theme='mint-dark'] .picker-backdrop {
-  background: rgba(6, 12, 9, 0.38);
-}
+/* 遮罩不在这里写规则（组长的收敛，2026-10-24）：纯黑径向 + 蓝黑底（`rgba(8,10,13)`）在墨绿底上
+   读成"蓝雾"这件事，现在由上面那一族 `--scrim-* / --rim-*` 的墨绿值解决，消费方只有
+   `shell-notices.css` ⑤ 一条通路（三档同路，见该切片 ⑤）。原先这里的两条字面规则：
+    - `.modal-mask / .overlay-backdrop`：已被 ⑤ 同分后置遮蔽，且带的是 R5 之前的旧值（`.30/.58/.40`
+      对 活的 `.36/.64/.48`）⇒ 死口径，删；
+    - `.picker-backdrop`：**这条今天还活着**（⑤ 当时没管 mint 的命令面板）⇒ 值逐字搬进
+      `--scrim-picker`，规则本体并入 ⑤，行为不变、口径归一。 */
 /* ⚠ 事实纠正（R6 债四 · 2026-10-24；这条注记原先写反了，原文称"老内核 @supports 回落与
    data-glass='solid' 回落两条纯黑遮罩规则特异性均低于上面的 `:root[data-theme] .xxx` 作用域规则
    且在本文件之前载入，绿化自动覆盖到位，无需另写"）。现行级联下**只有前半成立**：
     - 回落一（老内核 `@supports not`）在 `styles.css` / `styles-project.css` 里都是 `.overlay-backdrop`
-      这类裸类 (0,1,0)，确实低于上面的 (0,3,0) 绿化规则 ⇒ 无需另写（这半句至今对）；
+      这类裸类 (0,1,0)，本档不给 `--scrim-nofilter` ⇒ 沿用基座纯黑（与收敛前逐字相同）；
     - 回落二（`data-glass='solid'`）的选择器是 `:root[data-glass='solid'] .overlay-backdrop` = **(0,3,0)，
       与本文件同分**，而它在**懒档** `styles-project.css`（`App.tsx` 的 loadProjectView 链，晚于整条
-      main.tsx 静态链，也就晚于本文件）又出现一次 ⇒ 同分后置者赢，本档的绿化在**项目态**被那条纯黑吃掉。
-   谁在管这件事：`shell-notices.css` ⑤ —— main.tsx 静态链里排在 themes/*.css 之后的那份壳层切片，
-   用 `:root[data-theme='mint-dark'][data-glass='solid'] .…`
-   (0,4,0) 稳压懒档同分规则，并把 solid 终值登记在本文件的 `--scrim-solid / --rim-solid`（R6 债一）。
-   本文件因此**不重复写**那条 solid 规则，也不再指望"自动覆盖到位"。 */
+      main.tsx 静态链，也就晚于本文件）又出现一次 ⇒ 同分后置者赢。
+   两件事今天各自怎么收：懒档那条 solid 规则**已改成吃 `var(--scrim-solid)`**（组长的 dark 收敛），
+   它在 mint 下解析出的就是墨绿 ⇒ "纯黑吃掉绿化"从源头消失；`shell-notices.css` ⑤ 仍保留
+   `:root[data-theme='mint-dark'][data-glass='solid'] .…` (0,4,0) 那条，作为"遮罩只有一处供色"的
+   显式声明点。本文件因此**不重复写**遮罩规则。 */
 /* 欢迎页极光：第二团紫斑（`rgba(124,92,255)` 一族）与薄荷世界观冲突 → 换冰青斑，
    与首团 accent 光斑同族不同调，保留"两团光"的纵深构图 */
 :root[data-theme='mint-dark'] .welcome::before {

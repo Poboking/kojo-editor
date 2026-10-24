@@ -148,9 +148,10 @@
      取色口径（R5 标定，别改设计）：浅色模态压在深色 Monaco 上时，旧遮罩 alpha 只有 ~0.24 +
      saturate 1.15 ⇒ 深色代码被碾成一片中等明度的灰泥。修法是**压深 + 抽掉泄漏的色相**（本族全是
      中性深 slate，不带蓝雾），再给浮层一条实描边让边界靠底色认出来。
-     ⚠ 本文件末尾那几条 `[data-theme='light'] .overlay-backdrop / .modal-mask / .picker-backdrop`
-     字面规则（"残漏收口"节）在本批之后已被同分后置的切片遮蔽，是死口径；这里给的是**活的那一套**，
-     两者同值收敛归组长（不在 R6 所有权内，本批不动它）。 */
+     消费方只有 `shell-notices.css` ⑤ 一处（本文件不写遮罩规则；本档"残漏收口"节里那四条旧字面
+     规则已被 ⑤ 同分后置遮蔽，2026-10-24 由组长删除——定义点只留值，不留第二张嘴）。
+     dark 档不再靠 styles 侧的字面量供色：`styles.css` / `styles-project.css` 的遮罩规则同样改成吃
+     `var(--scrim-*)`，于是三档走的是同一条通路，只有 token 值不同。 */
   --scrim-a: rgba(26, 34, 47, 0.4);
   --scrim-b: rgba(14, 19, 27, 0.62);
   --scrim-fill: rgba(18, 24, 33, 0.5);
@@ -171,31 +172,11 @@
    特异性规则就地修正（0,3,0 稳压基础 0,1,0；同分则靠 light.css 后置赢层叠）。
    ============================================================================ */
 
-/* 遮罩三兄弟：纯黑压暗在浅色主题下像"拉了道闸"——换成冷板岩（slate）dim，
-   顶部浅、边缘深的径向纵深保留；浮层（≈bg-2 的亮面）+ 投影依旧一眼分离。 */
-:root[data-theme='light'] .overlay-backdrop,
-:root[data-theme='light'] .modal-mask {
-  background:
-    radial-gradient(130% 105% at 50% -5%, rgba(45, 60, 80, 0.22), rgba(28, 38, 52, 0.4)),
-    rgba(40, 52, 68, 0.24);
-}
-:root[data-theme='light'] .picker-backdrop {
-  background: rgba(40, 52, 68, 0.2); /* picker 面板自带 shadow-2 + 更亮描边，dim 比 modal 轻一档 */
-}
-/* 实心档（data-glass='solid'）的遮罩现值也是字面黑——(0,4,0) 稳压 styles.css 的 (0,3,0) */
-:root[data-theme='light'][data-glass='solid'] .overlay-backdrop,
-:root[data-theme='light'][data-glass='solid'] .modal-mask,
-:root[data-theme='light'][data-glass='solid'] .picker-backdrop {
-  background: rgba(35, 48, 64, 0.4);
-}
-/* 老内核无 backdrop-filter 回落（正常走不到，兜底一致性） */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root[data-theme='light'] .overlay-backdrop,
-  :root[data-theme='light'] .modal-mask,
-  :root[data-theme='light'] .picker-backdrop {
-    background: rgba(35, 48, 64, 0.45);
-  }
-}
+/* 遮罩 / 描边不在这里写规则（组长的收敛，2026-10-24）：本档的遮罩收口只经 `--scrim-* / --rim-*`
+   供色，消费它的规则**只有一处** = `shell-notices.css` ⑤（静态链里排在本文件之后）。
+   本节原先那四条 `[data-theme='light'] .overlay-backdrop / .modal-mask / .picker-backdrop` 字面规则
+   是 R5 之前的旧口径（alpha ~0.22~0.24 的灰泥值），已被 ⑤ 的同分后置规则整体遮蔽 = 死代码；
+   留着它的代价不是"多几行"，而是**谁动加载顺序就复活一版灰泥**。定义点只许有值，不许有第二张嘴。 */
 
 /* 高光扫过：主按钮在浅色档仍是深蓝实心（#0a5cc2 比深色档的 #2e6fd1 更沉），
    白扫同族成立但发暗——提亮一档让"贵"的那一笔仍看得见。 */

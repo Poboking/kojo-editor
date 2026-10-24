@@ -1846,8 +1846,8 @@ button.erb-mode-hint.unlocked:hover {
   /* 磨砂遮罩（与 .overlay-backdrop 同款思路、幅度更收敛）：把背后虚化 + 压暗，视线收到模态上。
      确认类对话框（保存告警 / 未保存 / 写权限）文字要脆，故只虚化背景、模态本体保持实心。 */
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.55)),
-    rgba(8, 10, 13, 0.4);
+    radial-gradient(130% 105% at 50% -5%, var(--scrim-a), var(--scrim-b)),
+    var(--scrim-fill);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.6)) saturate(1.1);
   backdrop-filter: blur(calc(var(--glass-blur) * 0.6)) saturate(1.1);
   display: grid;
@@ -3271,7 +3271,7 @@ button.erb-mode-hint.unlocked:hover {
   inset: 0;
   z-index: var(--z-overlay);
   /* 命令面板/快速打开的遮罩也走轻磨砂：与 modal/overlay 一致的"背后虚化"纵深 */
-  background: rgba(8, 10, 13, 0.35);
+  background: var(--scrim-picker);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
   backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
   display: flex;
@@ -3414,8 +3414,8 @@ button.erb-mode-hint.unlocked:hover {
      也少了那种生硬切断感。叠一层极淡的顶部径向暗角给纵深。旋钮走到 0%（data-glass=solid）
      时撤掉虚化回到纯压暗（见下方回落二）。 */
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.55)),
-    rgba(8, 10, 13, 0.4);
+    radial-gradient(130% 105% at 50% -5%, var(--scrim-a), var(--scrim-b)),
+    var(--scrim-fill);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(1.15);
   backdrop-filter: blur(calc(var(--glass-blur) * 0.8)) saturate(1.15);
   display: flex;
@@ -3510,8 +3510,8 @@ button.erb-mode-hint.unlocked:hover {
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .overlay-backdrop:has(.ov-query) {
     background:
-      radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.34)),
-      rgba(8, 10, 13, 0.28);
+      radial-gradient(130% 105% at 50% -5%, var(--scrim-query-a), var(--scrim-query-b)),
+      var(--scrim-query-fill);
     -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
     backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
   }
@@ -3657,7 +3657,7 @@ button.erb-mode-hint.unlocked:hover {
   .overlay-backdrop,
   .modal-mask,
   .picker-backdrop {
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--scrim-nofilter);
   }
 }
 /* 回落二：旋钮 0% = 实心档（glass-pref 落 data-glass='solid'）⇒ 撤掉磨砂与半透明，
@@ -3688,7 +3688,7 @@ button.erb-mode-hint.unlocked:hover {
 :root[data-glass='solid'] .overlay-backdrop,
 :root[data-glass='solid'] .modal-mask,
 :root[data-glass='solid'] .picker-backdrop {
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--scrim-solid);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

@@ -229,6 +229,10 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
  * 特异性：基础档 (0,3,0) 与 `themes/light.css` 同分、本文件后置 ⇒ 赢；查询面变体 (0,4,0)、
  * 实心档 (0,4,0) ⇒ 稳压懒档 `styles-project.css` 的 `.overlay-backdrop:has(.ov-query)` (0,3,0)
  * 与 `:root[data-glass='solid'] .overlay-backdrop` (0,3,0)。
+ *
+ * 组长收敛（2026-10-24）：`themes/light.css` / `themes/mint-dark.css` 里那几条同分的旧字面遮罩规则
+ * 已删（它们被本节遮蔽 = 死口径），dark 档 `styles.css` / `styles-project.css` 的遮罩格也改成吃
+ * `var(--scrim-*)` ⇒ **遮罩只有 token 一处定义点、本节一处消费点**，三档同路，改哪一档都不会冒出第二张嘴。
  */
 :root[data-theme='light'] .overlay-backdrop,
 :root[data-theme='light'] .modal-mask {
@@ -299,6 +303,13 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
 :root[data-theme='mint-dark'] .modal,
 :root[data-theme='mint-dark'] .picker {
   border-color: var(--rim-1);
+}
+/* 命令面板（组长收敛 2026-10-24）：这条原先写在 `themes/mint-dark.css` 末尾，是那个文件里唯一
+   还活着的遮罩规则 ⇒ 值逐字进 `--scrim-picker`、规则并入本切片，mint 的三块遮罩与 light 同路。
+   **只给 background**：磨砂参数仍由懒档 `.picker-backdrop` (0,1,0) 那条供（不同属性不互相覆盖），
+   在这里补 blur 等于偷偷改设计。 */
+:root[data-theme='mint-dark'] .picker-backdrop {
+  background: var(--scrim-picker);
 }
 /* 查询面变体：懒档 `.overlay-backdrop:has(.ov-query)` (0,3,0) 后置，同分的绿化规则会被它吃掉
    ⇒ 这里同样按 (0,4,0) 给一档墨绿（只减淡、不改向） */
