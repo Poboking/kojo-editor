@@ -251,7 +251,9 @@ export type {
   VariableSource,
 } from './game';
 // 「谁是当前激活的 adapter」这条判据的唯一实现（原先 14 个消费方各手写一遍）。
-export { activeGameAdapter } from './game';
+// 从 `./active-adapter` 而不是 `./game` 出：桶的值导出决定模块图——指 game.ts 会把
+// 45 KB 的 v1 契约面透传进开机图（B1 桶教训的同形复发，见该文件头注）。
+export { activeGameAdapter } from './active-adapter';
 
 export type {
   ContributionBase,
