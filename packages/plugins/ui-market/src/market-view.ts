@@ -46,12 +46,16 @@ export const STATUS_TEXT: Record<Exclude<MarketViewStatus, 'ready'>, string> = {
 };
 
 /**
- * 本批能力面说明（索引能拉能看，**装**已经接上了：容器下载 → 校验 → 解压 → 落盘全在面板里）。
- * 这句话仍在的位置是"作者不该以为装不上是自己的包有问题"——真出网要桌面壳，
- * Node/浏览器壳下那两条容器原语没有实现，会明明白白报一句"容器没能取回来"。
+ * 能力面说明（批次十一 L07：长文墙 → 一行 + 折叠详情）。
+ * `CAPABILITY_HINT` 是常驻的那一行（260px 侧栏里必须 ≤ 一两行）；
+ * `CAPABILITY_DETAIL` 收进 `<details>` 折叠，讲的是同一件事——
+ * "装不上时该看哪行话、多数不是你的包的问题"。口径不变，只是不再占五行。
  */
-export const CAPABILITY_HINT =
-  '这里能拉取并浏览注册表列表，也能直接把注册表上的包装进本机（装完就在下面的已装列表里）。装不上时看上面那行话，多数是网络或注册表那边的问题，不是你的包。';
+export const CAPABILITY_HINT = '能拉取注册表列表，浏览与安装。';
+
+/** 折叠后的展开段：装完去哪、装不上先看哪一句（作者面口径，不用「本批」这类开发黑话） */
+export const CAPABILITY_DETAIL =
+  '装完就在下方「已安装」列表里。装不上时看上面的状态行：多数是网络或注册表那边的问题，不是你的包。';
 
 /**
  * 拒码 → 作者面那一句人话（**全仓唯一一张表**：面板只叫 `rejectNote`，别处不再自己拼）。
@@ -130,6 +134,9 @@ export function platformFailNote(raw: string): string {
   return matchPlatformFail(raw) ?? raw;
 }
 
+/** 作者面那句"没装成"的前缀（**一处**：`rejectNote` 写它、`installFailureGuide` 认它） */
+const REJECT_PREFIX = '没装成：';
+
 /**
  * 拒因 → 内联状态行那一句（**一处**、不弹窗）。`name` = 包名（作者认得的东西）。
  * 平台侧两个码的原话里埋着具体病因（哪个镜像、超时还是 404）⇒ 认得出就换那句具体人话；
@@ -140,11 +147,103 @@ export function rejectNote(name: string, err: unknown): string {
     if (err.code === 'download-failed' || err.code === 'extract-failed') {
       const phrase = matchPlatformFail(err.message);
       // 认不出 ⇒ 泛句照旧：机器原话不上作者行（它已随 log.warn 落日志），但本机没动这一点两句话都说
-      return `「${name}」没装成：${phrase ?? REJECT_TEXT[err.code]}`;
+      return `「${name}」${REJECT_PREFIX}${phrase ?? REJECT_TEXT[err.code]}`;
     }
-    return `「${name}」没装成：${REJECT_TEXT[err.code]}`;
+    return `「${name}」${REJECT_PREFIX}${REJECT_TEXT[err.code]}`;
   }
-  return `「${name}」没装成：${err instanceof Error ? err.message : String(err)}`;
+  return `「${name}」${REJECT_PREFIX}${err instanceof Error ? err.message : String(err)}`;
+}
+
+/* ---------------- 失败态的第二行：哪一步失败 + 下一步做什么（批次十一 L18） ---------------- */
+
+/**
+ * 装包流水线的**步骤名**（作者面口径，不是机器阶段名）。
+ * `Record<MarketRejectCode, InstallStage>` 是穷尽映射 ⇒ 契约加一个拒码而这张表没跟上，编译期就红
+ * （与 `REJECT_TEXT` 同一条纪律，铁律 4：不许留"不知道错在哪"的哑巴态）。
+ */
+export type InstallStage = '地址' | '取回' | '核对' | '说明' | '条目' | '打开' | '搬进' | '本机' | '版本';
+
+const REJECT_STAGE: Record<MarketRejectCode, InstallStage> = {
+  'endpoint-invalid': '地址',
+  'download-failed': '取回',
+  'container-identity': '核对',
+  'container-bytes': '核对',
+  'container-sha256': '核对',
+  'entry-bytes': '核对',
+  'entry-sha256': '核对',
+  'entry-missing': '核对',
+  'entry-extra': '核对',
+  'manifest-missing': '说明',
+  'manifest-json': '说明',
+  'manifest-shape': '说明',
+  'schema-version': '说明',
+  'kind-unknown': '说明',
+  'id-invalid': '说明',
+  'version-invalid': '说明',
+  'min-app-version-invalid': '说明',
+  'redistribute-denied': '说明',
+  'path-prefix': '条目',
+  'path-absolute': '条目',
+  'path-drive': '条目',
+  'path-backslash': '条目',
+  'path-dotdot': '条目',
+  'path-empty-segment': '条目',
+  'path-windows-unsafe': '条目',
+  'path-depth': '条目',
+  'entry-duplicate': '条目',
+  'entries-limit': '条目',
+  'bytes-limit': '条目',
+  'content-missing': '条目',
+  'source-unreadable': '条目',
+  'extract-failed': '打开',
+  'install-move-failed': '搬进',
+  'id-kind-conflict': '本机',
+  'installed-missing': '本机',
+  'app-version-too-low': '版本',
+};
+
+/** 每一步的下一步做什么（**作者现在就能做的那件事**，不是"稍后再试"这种推托） */
+const STAGE_NEXT: Record<InstallStage, string> = {
+  地址: '到设置页把注册表地址改回能用的那一串，再点「拉取列表」',
+  取回: '看一眼本机网络，然后点「拉取列表」重来一次',
+  核对: '让作者重新发布这一条，或等注册表更新后再拉一次',
+  说明: '这个包的说明不合格，得作者修——本机这边什么都不用动',
+  条目: '包里有内容存放位置不合规范，得作者修——本机没被动过',
+  打开: '点「拉取列表」重取一份；还是打不开就是包本身的问题',
+  搬进: '再点一次「安装」；反复不动就查本机目录的写入权限',
+  本机: '先把本机冲突那一条卸掉，再回来装',
+  版本: '把编辑器升到不低于那句里写的版本，再回来点「安装」',
+};
+
+/** 认不出拒码时（平台原话 / 没有码的异常）仍给一句下一步——不静默是铁律，不是修辞 */
+const UNKNOWN_STAGE_NEXT = '哪一步说不准：照上面那句原话处理，办完点「拉取列表」再看一次';
+
+/**
+ * `REJECT_TEXT` 的**反查表**（同一张表倒过来用，不是第二份文案）：
+ * 那句人话 → 拒码。渲染层只有状态行那句话（`note`）可拿，而"哪一步失败"必须由**同一张表**回答；
+ * 复制一份"步骤话术表"出去就是第二份真相，改天必漂。
+ * 同文案的码只认第一条（现表 37 句各不相同；真撞了也不给第二份说法留位子）。
+ */
+const CODE_BY_REASON: ReadonlyMap<string, MarketRejectCode> = (() => {
+  const m = new Map<string, MarketRejectCode>();
+  for (const [code, text] of Object.entries(REJECT_TEXT) as Array<[MarketRejectCode, string]>) {
+    if (!m.has(text)) m.set(text, code);
+  }
+  return m;
+})();
+
+/**
+ * 失败态那第二行：**「哪一步失败」+「下一步做什么」**。
+ * 非装包失败（拉取 / 卸载 / 导入那几句）返回空串 ⇒ 不硬凑引导，也不在别的事下面瞎指路。
+ */
+export function installFailureGuide(note: string): string {
+  const at = note.indexOf(REJECT_PREFIX);
+  if (at < 0) return '';
+  const reason = note.slice(at + REJECT_PREFIX.length);
+  const code = CODE_BY_REASON.get(reason);
+  if (code === undefined) return UNKNOWN_STAGE_NEXT;
+  const stage = REJECT_STAGE[code];
+  return `失败在「${stage}」这一步 · 下一步：${STAGE_NEXT[stage]}`;
 }
 
 /**
@@ -222,7 +321,11 @@ export function formatGeneratedAt(iso: string): string {
   return Number.isFinite(ms) ? formatClock(ms) : iso;
 }
 
-/** 数据时间一行（面板主行；`fetchedAt` = 本机拉取时刻，`generatedAt` = 注册表生成时刻） */
+/**
+ * 数据时间一行（批次十一 L07：这一句**降级为 `title`**——注册表生成时刻与来源 URL
+ * 是核对线索，不是界面文案；屏上只留 `dataTimeSummary` 那一行短读数）。
+ * `fetchedAt` = 本机拉取时刻，`generatedAt` = 注册表生成时刻。
+ */
 export function dataTimeLine(o: {
   fetchedAt: number | null;
   generatedAt: string | null;
@@ -233,6 +336,13 @@ export function dataTimeLine(o: {
   const pulled = o.fetchedAt === null ? '手工放置、本机没拉过' : `${formatClock(o.fetchedAt)} 拉取`;
   const made = o.generatedAt === null ? '' : ` · 注册表生成于 ${formatGeneratedAt(o.generatedAt)}`;
   return `数据时间：${pulled}${made}${where}`;
+}
+
+/** 屏上那一行「上次同步」短读数（全量读数进 `title`，URL 不再当界面文案） */
+export function dataTimeSummary(o: { fetchedAt: number | null; generatedAt: string | null }): string {
+  if (o.fetchedAt === null && o.generatedAt === null) return '还没有数据时间';
+  if (o.fetchedAt === null) return '手工放置、本机没拉过';
+  return `上次同步 ${formatClock(o.fetchedAt)}`;
 }
 
 
@@ -380,6 +490,64 @@ export function installedCountPhrase(count: number, bytes: number): string {
  */
 export function filterEmptyPhrase(query: string): string {
   return `没有名字或作者里含「${query}」的包`;
+}
+
+/* ---------------- 空态与离线态（批次十一 L18：一句人话 + 一条退路） ---------------- */
+
+/**
+ * 列表区空态的两行话（主句 = 这一格此刻为什么空着，副句 = 这一步作者现在就能做）。
+ *
+ * **为什么不与 `.mk-status` 那行重复**：状态行是钉住的仪表读数，说的是"机器现在怎么样、病因是什么"；
+ * 这一格住列表区，说的是"这里为什么没东西、点哪一下才会长出来"。两处的**分工**不同，
+ * 所以主句在 `ready` 之外刻意**不复述** `STATUS_TEXT` 那三句（照抄就是把同一件事写两遍，改天必漂）；
+ * 副句也不另立判定——它只指工具条上那两枚已经存在的按钮（「拉取列表」/「清除」）。
+ * `no-packs` 是唯一例外：那句 `STATUS_TEXT` 讲的本来就是"这一列没条目"，与主句同一件事 ⇒ 直接用同一句。
+ */
+export function emptyStateCopy(status: MarketViewStatus, query: string): { title: string; hint: string } {
+  if (query !== '') return { title: filterEmptyPhrase(query), hint: '点工具条上的「清除」回到完整列表' };
+  switch (status) {
+    case 'ready':
+    case 'no-packs':
+      // ready 却没有可列的条目 ⇒ 注册表那一份本来就没东西（`no-packs` 那句话正是这一句）
+      return { title: STATUS_TEXT['no-packs'], hint: '注册表这一列没有条目；想再要一次就点「拉取列表」' };
+    case 'list-missing':
+      return { title: '列表区还是空的', hint: '点上面那枚「拉取列表」，本机就有了' };
+    case 'list-broken':
+      return { title: '本机这份列表读不出内容', hint: '还是点「拉取列表」——注册表那一份会盖掉这一份' };
+    case 'list-unreadable':
+      return { title: '这一屏取不到列表', hint: '病因在上面那行红字里；通了再点「拉取列表」' };
+  }
+}
+
+/** 已装区空态那两句（主句逐字沿用既有那句——判据钉的就是它，不另造说法） */
+export const INSTALLED_EMPTY = {
+  title: '本机还没有装好的包',
+  hint: '在上方挑一条点「安装」，装好的会排在这里',
+} as const;
+
+/* ---------------- 封面缺位时的母题徽标（批次十一 L18） ---------------- */
+
+/**
+ * 首字取字母或数字（`\p{L}` / `\p{N}`）：**表情符号不算**（Emoji 属 `So` 符号类），
+ * 名字万一以 emoji 开头就顺延到下一个字母/数字；一个都没有 ⇒ 空串（那一格只剩画出来的引号，
+ * 仍是设计好的母题，不是一块坏图）。按码点迭代，生僻字 / 代理对不被拆成半个字。
+ */
+const EMBLEM_CHAR_RE = /[\p{L}\p{N}]/u;
+
+/**
+ * 占位徽标里的那一枚字：包名的首个字母或数字（拉丁一律大写，两形的字认大写形态）。
+ *
+ * 视觉侧的「」是 `market.css` 用**边框画出来的两枚直角**（`content:''` 的空串形状），
+ * 不是这里的文本——本仓纪律：字符不当图标用（批次十一 L07 已把它写进判据）。
+ * 所以 DOM 里只有这一枚字，读屏也不会念出多余的引号。
+ */
+export function emblemGlyph(name: string): string {
+  for (const ch of name.trim()) {
+    if (!EMBLEM_CHAR_RE.test(ch)) continue;
+    const up = ch.toUpperCase();
+    return up.length === 1 ? up : ch; // 'ß' → 'SS' 这类一升就变两枚字，退回原形
+  }
+  return '';
 }
 
 /** 名称/作者过滤（大小写不敏感、子串匹配；空查询 = 全通过） */

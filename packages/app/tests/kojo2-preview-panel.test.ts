@@ -771,11 +771,18 @@ describe('预览面板 · 模型消费口径', () => {
     expect(PREVIEW.lineCount).toBe(ERB_LINES.length);
   });
 
-  it('不改 styles.css：样式全部内联（组件没有 className 之外的样式入口）', () => {
+  it('观感住 kojo2.css 类族（L11 收编后：内联只剩数据驱动的行高/衬垫，不再带外观属性）', () => {
     const html = renderPanel({ metrics: NARROW });
-    expect(html).toContain('style="');
-    expect(html).toContain('--surface-sunken');
-    expect(html).toContain('--font-code');
+    // 行与面全部走 className；留在 style 里的只有虚拟化算出来的 `height`
+    expect(html).toContain('class="kojo2-preview"');
+    expect(html).toContain('class="kojo2-preview__row"');
+    for (const m of html.matchAll(/style="([^"]*)"/g)) {
+      expect(m[1]).toMatch(/^height:[\d.]+(?:px)?$/);
+    }
+    // 原口径的两枚 token 现由 `../src/kojo2.css` 的类族承载（styles.css 依旧零改动）
+    const css = readFileSync(fileURLToPath(new URL('../src/kojo2.css', import.meta.url)), 'utf8');
+    expect(css).toContain('--surface-sunken');
+    expect(css).toContain('--font-code');
   });
 
   it('诊断叠用的位置与模型一致：列区间落在该行宽度内', () => {

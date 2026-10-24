@@ -1,0 +1,26 @@
+/* ============================================================================
+ * 视觉批十一 L16 切片：标签栏溢出 affordance（滚动箭头 + 「列出全部标签」▾）
+ *
+ * 既有 `.editor-tabs*` / `.tab-save-all` 规则全部留在 `styles-project.css`（本批不搬行，
+ * 搬会红分档等价性三道闸）。这里只有**新类**的增量声明——与重档没有同属性对撞，
+ * 故不需要双类提特异性；`main.tsx` 样式序列尾部引入（`css-slices-wired` 钉接线）。
+ *
+ * 布局口径：工具族是 `.editor-tabs-bar` 的 flex 兄弟（非常驻、不覆盖标签文字），
+ * 出现时挤压滚动区宽度——溢出判据 `scrollWidth > clientWidth` 因此自带滞回
+ * （箭头在窄口测得「不溢出」时，宽口更不溢出），不会来回闪。
+ * ========================================================================= */
+
+.editor-tabs-bar .tab-overflow-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-0);
+  padding: 0 var(--space-1);
+  background: var(--bg-2);
+  border-left: 1px solid var(--border);
+}
+
+/* 左箭头 = `chevron-right` 旋转 180°（icons.tsx 注册表暂无 `chevron-left`，见批次回执） */
+.tab-overflow-flip {
+  transform: rotate(180deg);
+}

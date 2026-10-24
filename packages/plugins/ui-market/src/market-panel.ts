@@ -398,6 +398,8 @@ export function createMarketPanel(
     return createElement(MarketPanelView, {
       snapshot,
       appVersion: av,
+      // 图标桥原样转下去（宿主 PanelHost 注入；视图层只认「名字 + 档位」，不认识图标库）
+      renderIcon: props.renderIcon,
       query,
       busy,
       note,

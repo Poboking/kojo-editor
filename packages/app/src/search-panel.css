@@ -113,6 +113,10 @@
   /* VIS-4：与设置输入 / 快捷键搜索框同一口井焦点口径 */
   box-shadow: var(--shadow-focus);
 }
+/* hover 语言与框内钮同族：静息→悬停→聚焦一条渐进（描边升一档，不动底） */
+.panel-search.ksp .ksp-field:hover:not(:focus-within) {
+  border-color: var(--border-strong);
+}
 
 .panel-search.ksp .ksp-input {
   flex: 1 1 auto;
@@ -138,12 +142,21 @@
   opacity: 1;
 }
 
-/* 框内三枚紧凑 toggle（Aa / 全词 / .*）：不描边、不抢输入文本的宽度 */
+/* 框内三枚紧凑 toggle（Aa / 全词 / .*）：批次十一 L08 起做成**一组分段开关**——
+   共享一层发丝描边 + 相邻分隔线，不再像三个独立小按钮；开关本体尺寸零改动
+   （20px 见方 + ::before 热区，见文末 P3-2 段）。 */
 .panel-search.ksp .ksp-toggles {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
+  padding: 1px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.panel-search.ksp .ksp-toggle + .ksp-toggle {
+  /* 相邻分隔：内描边不占盒、hover 底色之上仍可见 */
+  box-shadow: inset 1px 0 0 var(--border-subtle);
 }
 .panel-search.ksp .ksp-toggle {
   /* P3-2 命中区：视觉 20px 见方不动，热区由文末 `::before` 段扩到 ≥24×24 */
@@ -174,12 +187,15 @@
 .panel-search.ksp .ksp-toggle:active:not(:disabled) {
   background: var(--hover-strong);
 }
-/* 开启态：accent 淡底 + 半强度描边 + 文字档色（与壳层其它已开启控件同语言） */
+/* 开启态（L08 收噪）：accent 淡底 + 文字档 + 半粗——淡底本身已把"开"与 hover
+   的 0.06 浮白拉开五个档位，不再另描一圈 accent 边（三枚同开时满排蓝边过响）。
+   描边保持透明占位，开/关切换不跳字位。 */
 .panel-search.ksp .ksp-toggle.on,
 .panel-search.ksp .ksp-toggle.on:hover {
-  border-color: rgb(var(--accent-rgb) / 0.55);
+  border-color: transparent;
   background: var(--accent-dim);
   color: var(--accent-text);
+  font-weight: 600;
 }
 
 /* 行尾动作：搜索 / 停止（同一坑位，不因状态换宽度） */
@@ -300,7 +316,8 @@
   line-height: 14px;
 }
 .panel-search.ksp .ksp-chip-scope {
-  border-color: rgb(var(--accent-rgb) / 0.4);
+  /* `--accent` 的专职就是描边与高亮（tokens.css §5.102 的分工）——不写手调 alpha */
+  border-color: var(--accent);
   background: var(--accent-dim);
   color: var(--accent-text);
 }
@@ -366,6 +383,13 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+/* `.search-status` 字号基线（真源自 `styles-project.css` 收编进本文件——检索域
+   同名分裂收口批）：`.ksp-note` 等不覆写字号的规则骑在这条上；写在各 ksp 覆写
+   规则之前，后声明的 `.ksp-summary`/`.ksp-hint` 照旧压得过它。 */
+.panel-search.ksp .search-status {
+  font-size: var(--fs-0);
+  line-height: 1.5;
 }
 .panel-search.ksp .ksp-status {
   min-width: 0;
@@ -521,6 +545,11 @@
 
 .panel-search.ksp .ksp-group {
   min-width: 0;
+  /* 结果密度（L08）：文件块挂一条左侧色带（层级锚点），命中行再向内缩一档——
+     「文件头 → 命中行」两级在 260px 侧栏里一眼可辨，折叠态只剩色带 + 文件头。 */
+  margin-left: 6px;
+  padding-left: 2px;
+  border-left: 2px solid var(--border-subtle);
 }
 /* 文件头 = 折叠开关（真 button，键盘可达；aria-expanded 见组件） */
 .panel-search.ksp .search-file {
@@ -578,24 +607,19 @@
   color: var(--fg-dim);
   font-size: var(--fs-0);
 }
+/* 文件头计数：徽标本体语言在 ui-kit 的 `.kit-count`（组件 `KitCount`，含 99+ 溢出形态，
+   井底 bg-3 已随本体给出——文件头 hover 用 hover-soft，不会同色吞掉计数）；
+   这里只留面板差异——右靠。 */
 .panel-search.ksp .ksp-file-count {
-  flex: none;
   margin-left: auto;
-  min-width: 18px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill);
-  /* bg-3 而不是 hover-soft：文件头自身 hover 用的就是 hover-soft，同色会让计数消失 */
-  background: var(--bg-3);
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-  line-height: 15px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
 }
 
-/* 命中行：主按钮铺满整行；替换钮常驻槽位（显隐只改 opacity，行高不跳） */
+/* 命中行：主按钮铺满整行；替换钮常驻槽位（显隐只改 opacity，行高不跳）。
+   L08 密度：命中行整体向内缩一档，与文件头文字（caret 12 + 间距 6 + 内衬 2）
+   大致成线——色带管"哪个文件"，缩进管"这是文件里的一条"。 */
 .panel-search.ksp .search-match-row {
   align-items: stretch;
+  margin-left: 14px;
   padding-right: 2px;
   border-radius: var(--radius-sm);
 }
@@ -647,12 +671,19 @@
   white-space: nowrap;
   line-height: 1.5;
 }
-/* 命中高亮：沿用 accent 淡底（旧规则已是这组值，这里补 1px 内衬与圆角让断字处不发粘连） */
+/* 命中高亮（L08 WCAG 收口）：文字走 `--fg`、accent 只留"底 + 下缘细带"。
+   旧口径是 `--accent-text` 压 accent 淡底——静息 4.83:1 勉强过线，行 hover 抬底后
+   实测跌到 ~3.8:1（正文级需 4.5:1，不达）。换 `--fg` 后三主题最差情形
+   （深色 · 行 hover 合成底）≥6.6:1；浅色 / 薄荷 ≥9:1。高亮不靠颜色靠形态：
+   淡底 + 半粗 + 下缘 1px accent 带，扫读仍然一眼是"命中"。 */
 .panel-search.ksp .search-hit {
   padding: 0 1px;
   border-radius: var(--radius-xs);
   background: var(--accent-dim);
-  color: var(--accent-text);
+  /* 1px 高亮带 = accent 的描边专职（tokens.css §5.102），不吃手调 alpha */
+  box-shadow: inset 0 -1px 0 var(--accent);
+  color: var(--fg);
+  font-weight: 600;
 }
 
 .panel-search.ksp .ksp-row-replace {
@@ -783,3 +814,134 @@
 .panel-search.ksp .search-file::before {
   inset: -1px 0;
 }
+
+/* ============================================================================
+   批次十一 L08 · 空态引导（一行提示 + 可折叠键位速查 + 最近检索 chips）
+
+   旧空态是 4 行说明书 + 整片空白；现在一行引导常驻，键位明细收进折叠区
+   （悬浮/聚焦提示行临时展开，点「键位」钉住——与「选项」区同一套折叠手法），
+   下面给最近检索 chips（数据面 = ↑/↓ 回溯用的同一份 `queryHistory`）。
+   无历史时一句建议范围，不复述说明书。
+   ============================================================================ */
+
+.panel-search.ksp .ksp-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.panel-search.ksp .ksp-empty-line {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+.panel-search.ksp .ksp-help-toggle {
+  /* 与 .ksp-options-toggle 同一族钮语言（无框静息 / hover 浮面 / relative 热区锚） */
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 20px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-help-toggle:hover {
+  background: var(--hover-soft);
+  border-color: transparent;
+  color: var(--fg);
+}
+.panel-search.ksp .ksp-help-toggle:active:not(:disabled) {
+  background: var(--hover);
+}
+/* 键位速查体：默认折叠（`ksp-collapsed`），悬浮/聚焦提示行临时展开，点钮钉住 */
+.panel-search.ksp .ksp-help-body {
+  min-width: 0;
+  padding: 2px 4px 4px 8px;
+  border-left: 2px solid var(--border-subtle);
+}
+.panel-search.ksp .ksp-help-body.ksp-collapsed {
+  display: none;
+}
+.panel-search.ksp .ksp-empty-line:hover + .ksp-help-body.ksp-collapsed,
+.panel-search.ksp .ksp-empty-line:focus-within + .ksp-help-body.ksp-collapsed {
+  display: block;
+}
+.panel-search.ksp .ksp-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+}
+.panel-search.ksp .ksp-help-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.panel-search.ksp .ksp-keys {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* 最近检索 chips：一行胶囊，点 = 再检索（同一 runSearch 通道，非新语义） */
+.panel-search.ksp .ksp-recent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.panel-search.ksp .ksp-recent-label {
+  flex: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-recent-chip {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* P3-2 口径直接达 24：chips 是新件，不做 ::before 补救 */
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-overlay);
+  box-shadow: none;
+  color: var(--fg);
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-recent-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--btn-bg-hover);
+}
+.panel-search.ksp .ksp-recent-chip:active:not(:disabled) {
+  background: var(--btn-bg-active);
+}
+.panel-search.ksp .ksp-suggest {
+  padding: 0 2px;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+}
+
+/* ============================================================================
+   批次十一 L08 · 统一微语言基座 → 已并入 ui-kit（L14 交付，本分支已合流）：
+   键位芯片 = `ui-kit` 的 `KitKbd`（`.kit-kbd`，样式真源 `ui-kit/ui-kit.css`）；
+   计数徽标 = `ui-kit` 的 `KitCount`（`.kit-count`，含 99+ 溢出形态）。
+   本文件不再暂存这两套候选——同一控件语言只许有一份真源。
+   ============================================================================ */
+

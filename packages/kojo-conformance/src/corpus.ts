@@ -40,6 +40,8 @@
  * "v1 编不出且迁移也失败"的份数记在 v1 名下；两个账本分开看，别混）。
  */
 
+import { repairV1Source } from '@kojo/kojo-core';
+
 import {
   runMigrationDifferential,
   type MigrationBlockedReason,
@@ -226,6 +228,8 @@ export interface CorpusCaseReport {
   readonly status: MigrationStatus;
   /** 原始 blocked 原因（`migration.ts` 词表） */
   readonly blockedReason: MigrationBlockedReason | null;
+  /** blocked 的可定位成因（additive；与 migrate-diff 同源） */
+  readonly blockedDetail: string | null;
   /** 语料机分类（`null` = 非 blocked） */
   readonly reason: CorpusBlockedReason | null;
   readonly bytes: number;
@@ -417,7 +421,10 @@ export function runCorpusMigration(options: RunCorpusMigrationOptions): CorpusMi
     try {
       const item = readFacts(options.io, options.sha256, absolute);
       facts.set(rel, item);
-      inputs.push({ id: rel, source: item.text });
+      // BOM 是编码事实（`facts.bom` 已单独记账），不是 v1 正文：v1 前端不剥 BOM，
+      // 首行 `;` 注释会因 BOM 前缀落成"顶层正文"→ 假 `indent-mismatch`。合成语料载入器
+      // （`loadMigrationCorpus`）早就在同一位置剥 BOM；这里补齐同口径（机械唯一解）。
+      inputs.push({ id: rel, source: repairV1Source(item.text).code });
     } catch (error: unknown) {
       problems.push({ id: rel, kind: 'io', message: `读取 ${absolute} 失败：${errorMessage(error)}` });
     }
@@ -445,6 +452,7 @@ export function runCorpusMigration(options: RunCorpusMigrationOptions): CorpusMi
       id: report.id,
       status: report.status,
       blockedReason: report.blockedReason,
+      blockedDetail: report.blockedDetail,
       reason: corpusReasonOf(report.blockedReason),
       bytes: fact.bytes.byteLength,
       sha256: fact.sha256,
@@ -1087,9 +1095,10 @@ export function formatCorpusReport(report: CorpusCliReport, options: { readonly 
     lines.push('cases:');
     for (const item of report.cases) {
       const blocked = item.reason === null ? '' : `  (${item.reason})`;
+      const detail = item.blockedDetail === null ? '' : `  — ${item.blockedDetail}`;
       lines.push(
         `  ${item.status.padEnd(15)} ${item.id}${blocked}  bytes=${item.bytes} sha256=${item.sha256.slice(0, 12)}…` +
-          `  v1=${item.readings.v1.ok ? 'ok' : 'fail'} 2.0=${item.readings.v2.ok ? 'ok' : 'fail'}`,
+          `  v1=${item.readings.v1.ok ? 'ok' : 'fail'} 2.0=${item.readings.v2.ok ? 'ok' : 'fail'}${detail}`,
       );
       if (item.diff.firstDifference !== null) {
         const first = item.diff.firstDifference;

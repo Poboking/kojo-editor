@@ -26,16 +26,19 @@
  *
  * ## 样式
  *
- * 全内联、只用主题 token（`var(--fg)` / `var(--bg-2)` …），**不动 `styles.css`**（冲突热点）。
- * 与 `kojo2-migrate.tsx` 同一先例：要换设计系统类名时只改这里的 `styles` 常量。
+ * 类名住 `../kojo2.css` 的 `.kojo2-cutover*` 一族（批次十一 L11 收编：此前整块内联
+ * 样式常量 + 原生 `<input type="radio">`）。单选件直接用 **ui-kit 的 `KitRadio`**
+ * （L14 已合流的真件，非 candidate）：视觉自绘点 + 隐藏真 radio input，键盘 / 读屏
+ * 语义仍走原生。`ui-kit.css` 经 `main.tsx` 在样式族之后加载。
  */
 import {
   useCallback,
   useEffect,
   useState,
-  type CSSProperties,
   type ReactElement,
 } from 'react';
+import { KitRadio } from '../ui-kit';
+import { Icon } from './icons';
 import {
   getKojo2CutoverController,
   kojo2StageAllowsSurface,
@@ -48,6 +51,7 @@ import {
   clearKojo2CutoverLegacyFlag,
   isKojo2CutoverEnabled,
 } from './kojo2-flag';
+import '../kojo2.css';
 
 /**
  * 本窗口启动时 2.0 面挂没挂（**模块求值读一次**）。
@@ -205,72 +209,75 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
   const needsReload = kojo2StageNeedsReload(snapshot.stage, bootMounted);
 
   return (
-    <div style={styles.group} data-kojo2-cutover="root" data-kojo2-stage={snapshot.stage}>
-      <div role="heading" aria-level={4} style={styles.title}>
+    <div className="kojo2-cutover" data-kojo2-cutover="root" data-kojo2-stage={snapshot.stage}>
+      <div role="heading" aria-level={4} className="kojo2-cutover__title">
         Kojo 2.0
       </div>
-      <div style={styles.lead}>
+      <div className="kojo2-cutover__lead">
         2.0 是新的口上写法；这一档决定编辑器认不认它。切档不动任何文件内容。
       </div>
 
-      <div role="radiogroup" aria-label="Kojo 2.0 档位" style={styles.stageList}>
+      <div role="radiogroup" aria-label="Kojo 2.0 档位" className="kojo2-cutover__stages">
         {KOJO2_CUTOVER_STAGES.map((stage) => {
           const selected = snapshot.stage === stage;
           return (
-            <label
+            <div
               key={stage}
+              className="kojo2-cutover__stage-row"
               data-kojo2-stage={stage}
               data-kojo2-selected={selected ? '1' : '0'}
-              style={selected ? styles.stageRowSelected : styles.stageRow}
             >
-              <input
-                type="radio"
+              <KitRadio
                 name="kojo2-cutover-stage"
                 value={stage}
                 checked={selected}
-                onChange={() => choose(stage)}
-                style={styles.radio}
-              />
-              <span style={styles.stageBody}>
-                <span style={styles.stageTitle}>
+                label={STAGE_TITLES[stage]}
+                onChange={(on) => {
+                  if (on) choose(stage);
+                }}
+              >
+                <span className="kojo2-cutover__stage-title">
                   {STAGE_TITLES[stage]}
-                  {selected ? <span style={styles.currentBadge}>当前</span> : null}
+                  {selected ? <span className="kojo2-cutover__badge">当前</span> : null}
                 </span>
-                <span style={styles.hint}>{STAGE_HINTS[stage]}</span>
-              </span>
-            </label>
+                <span className="kojo2-cutover__hint">{STAGE_HINTS[stage]}</span>
+              </KitRadio>
+            </div>
           );
         })}
       </div>
 
       {needsReload ? (
-        <div style={styles.notice} role="status" data-kojo2-reload-notice="1">
-          {kojo2ReloadNotice(snapshot.stage)}
+        <div className="kojo2-cutover__notice" role="status" data-kojo2-reload-notice="1">
+          <span className="kojo2-cutover__notice-icon" aria-hidden="true">
+            <Icon name="info" size="sm" />
+          </span>
+          <span>{kojo2ReloadNotice(snapshot.stage)}</span>
         </div>
       ) : null}
 
-      <div style={styles.subTitle}>单文件破例</div>
+      <div className="kojo2-cutover__sub-title">单文件破例</div>
       {snapshot.overrides.length === 0 ? (
-        <div style={styles.hint} data-kojo2-overrides="empty">
+        <div className="kojo2-cutover__hint" data-kojo2-overrides="empty">
           还没有任何单文件破例：所有文件都按上面的档位走。
         </div>
       ) : (
-        <ul style={styles.overrideList} data-kojo2-overrides={String(snapshot.overrides.length)}>
+        <ul className="kojo2-cutover__overrides" data-kojo2-overrides={String(snapshot.overrides.length)}>
           {snapshot.overrides.map((entry) => (
             <li
               key={entry.filePath}
-              style={styles.overrideRow}
+              className="kojo2-cutover__override-row"
               data-kojo2-override={entry.filePath}
             >
-              <span style={styles.overridePath} title={entry.filePath}>
+              <span className="kojo2-cutover__override-path" title={entry.filePath}>
                 {entry.filePath}
               </span>
-              <span style={styles.overrideParser}>
+              <span className="kojo2-cutover__override-parser">
                 {entry.parser === 'kojo2' ? '按 2.0' : '按 v1'}
               </span>
               <button
                 type="button"
-                style={styles.linkButton}
+                className="small kojo2-cutover__clear"
                 onClick={() => clearOverride(entry.filePath)}
                 aria-label={`撤销 ${entry.filePath} 的单文件破例`}
               >
@@ -281,171 +288,20 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
         </ul>
       )}
 
-      <div style={styles.footer}>
-        <button type="button" style={styles.ghostButton} onClick={factoryReset}>
+      <div className="kojo2-cutover__footer">
+        <button type="button" className="small" onClick={factoryReset}>
           恢复出厂
         </button>
-        <span style={styles.hint}>
+        <span className="kojo2-cutover__hint">
           回到「只认 v1」并清空全部单文件破例；不动任何文件。
         </span>
       </div>
 
       {snapshot.persisted ? null : (
-        <div style={styles.hint} data-kojo2-persisted="0">
+        <div className="kojo2-cutover__hint" data-kojo2-persisted="0">
           这次改动只在本会话生效：存储不可写（隐私模式 / 空间已满）。
         </div>
       )}
     </div>
   );
 }
-
-/* ============================== 样式（内联 token） ============================== */
-
-const styles = {
-  group: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    marginTop: 14,
-    paddingTop: 12,
-    borderTop: '1px solid var(--border-subtle, #2f363d)',
-  },
-  title: {
-    fontSize: 12,
-    fontWeight: 600,
-    letterSpacing: '0.02em',
-    color: 'var(--fg, #d7dce2)',
-  },
-  lead: {
-    fontSize: 12,
-    lineHeight: 1.5,
-    color: 'var(--fg-dim, #8b949e)',
-  },
-  stageList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  },
-  stageRow: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: '7px 9px',
-    borderRadius: 6,
-    border: '1px solid var(--border-subtle, #2f363d)',
-    background: 'var(--bg-2, #24292f)',
-    cursor: 'pointer',
-  },
-  stageRowSelected: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: '7px 9px',
-    borderRadius: 6,
-    border: '1px solid var(--accent, #4c8bf5)',
-    background: 'var(--accent-dim, rgb(76 139 245 / 0.22))',
-    cursor: 'pointer',
-  },
-  radio: {
-    marginTop: 2,
-    accentColor: 'var(--accent, #4c8bf5)',
-  },
-  stageBody: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 2,
-    minWidth: 0,
-  },
-  stageTitle: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: 13,
-    color: 'var(--fg, #d7dce2)',
-  },
-  currentBadge: {
-    padding: '0 5px',
-    borderRadius: 999,
-    fontSize: 10,
-    lineHeight: '16px',
-    color: 'var(--accent-text, #6ea8ff)',
-    border: '1px solid var(--accent, #4c8bf5)',
-  },
-  notice: {
-    padding: '7px 9px',
-    borderRadius: 6,
-    fontSize: 12,
-    lineHeight: 1.5,
-    color: 'var(--fg, #d7dce2)',
-    background: 'var(--bg-3, #2b3138)',
-    borderLeft: '2px solid var(--accent, #4c8bf5)',
-  },
-  subTitle: {
-    marginTop: 4,
-    fontSize: 12,
-    fontWeight: 600,
-    color: 'var(--fg, #d7dce2)',
-  },
-  hint: {
-    fontSize: 12,
-    lineHeight: 1.5,
-    color: 'var(--fg-dim, #8b949e)',
-  },
-  overrideList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 4,
-    margin: 0,
-    padding: 0,
-    listStyle: 'none',
-  },
-  overrideRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '4px 8px',
-    borderRadius: 6,
-    background: 'var(--bg-2, #24292f)',
-    border: '1px solid var(--border-subtle, #2f363d)',
-  },
-  overridePath: {
-    flex: 1,
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontSize: 12,
-    color: 'var(--fg, #d7dce2)',
-  },
-  overrideParser: {
-    flexShrink: 0,
-    fontSize: 11,
-    color: 'var(--accent-text, #6ea8ff)',
-  },
-  linkButton: {
-    flexShrink: 0,
-    padding: '1px 6px',
-    borderRadius: 5,
-    fontSize: 11,
-    color: 'var(--fg, #d7dce2)',
-    background: 'transparent',
-    border: '1px solid var(--border, #3a424b)',
-    cursor: 'pointer',
-  },
-  footer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-    marginTop: 4,
-  },
-  ghostButton: {
-    padding: '3px 9px',
-    borderRadius: 6,
-    fontSize: 12,
-    color: 'var(--fg, #d7dce2)',
-    background: 'transparent',
-    border: '1px solid var(--border-strong, #4a545f)',
-    cursor: 'pointer',
-  },
-} satisfies Record<string, CSSProperties>;

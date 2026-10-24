@@ -147,7 +147,7 @@ describe('.kojo 预览的入口不再被封存总闸收起', () => {
 
 describe('预览按钮：单色图标 + 恒字标签', () => {
   it('按钮内容 = 注册表里真实存在的图标 + 恒定标签（不是三元换字）', () => {
-    expect(editor).toMatch(/<Icon name="preview" size=\{13\} \/> \.kojo 预览\s*<\/button>/);
+    expect(editor).toMatch(/<Icon name="preview" size="sm" \/> \.kojo 预览\s*<\/button>/);
   });
 
   it('`preview` 确实在图标注册表里（不凭空造名字）', () => {

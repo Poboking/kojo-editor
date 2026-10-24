@@ -237,7 +237,27 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //   - 大纲折叠是纯视图状态，不新增任何模块
     // 闸随之下调：文件 220 → 210，KB 3,200 → 3,050（约 +1.9% 余量）。这两条是**下限纪律**，
     // 不是"还能再涨 58 KB"的许可：谁要抬，先像上面这样把增量逐块点名。
-    expect(totalKb).toBeLessThanOrEqual(3_050);
+    //
+    // 2026-10-24（批次十一 · 视觉批；对照树 = `origin/dev` 尖端 `08814a40`，同尺 206 文件 /
+    // 3,006 KB）：本树 **209 文件 / 3,052 KB**（+46 KB / +3 文件）。增量逐块点名（差集用与本
+    // 文件同一套走图规则量出，脚本在组长临时目录、不入仓）：
+    //   - 新进图三枚，全是"开机即用"的宿主件：`ui-kit/index.tsx` 18.8 KB（SearchPanel 与
+    //     kojo2-cutover-settings 已在用 Kit 原语）、`ui/overlay-chrome.tsx` 7.1 KB（浮层统一
+    //     外框，ShellLayout 的注册表直接引）、`ui/overlay-editor-appearance.ts` 3.7 KB（同批的
+    //     外观档位桥）。
+    //   - 原有文件变重：`WelcomeView` +9.7（欢迎页两态重构）· `icons` +2.5（L10 图标 9 档→4 档
+    //     新增的注册名）· `QuickFixPreviewOverlay` +1.3 · `main.tsx` +1.2（新增的三行样式 import
+    //     与注释；`.css` 本身不在图内）· `shell-overlays` +1.0 · `FileHistoryOverlay` +0.9 ·
+    //     `plugin-api/slots` +0.7 · `kojo2-migrate` +0.5 · `OpsHistoryOverlay` +0.4 ·
+    //     `CallHierarchyOverlay` +0.3；**减项** `kojo2-cutover-settings` −2.7（设置行拆组后模板下沉）。
+    //   - 本批先自己削掉一枚不该在图里的：ui-kit 桶棒原本 re-export 了 `KitGallery`（内部对照页
+    //     6.6 KB / 1 文件），而桶棒住在开机图里 ⇒ 等于把对照页挂上首屏。re-export 已删，对照页
+    //     改由测试直引；将来接路由走 `import()`。
+    // 没有整包回灌：成员断言（插件包只许两个常驻 + 两个已知漏点）仍全绿，涨的是宿主件与文案。
+    // 已知可减面（本批不做，记在这）：`ui-kit/index.tsx` 按件拆文件，让开机侧只为真用到的那几枚
+    // 付费（约 −12 KB），与第二波「ui-kit 采纳迁移」并线。
+    // 闸随之 3,050 → 3,100（+1.6% 余量）；文件闸 210 不动（现读数 209，余量 1）。
+    expect(totalKb).toBeLessThanOrEqual(3_100);
     expect(files.length).toBeLessThanOrEqual(210);
   });
 });

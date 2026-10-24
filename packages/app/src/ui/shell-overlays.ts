@@ -64,6 +64,14 @@ export function useShellOverlays(kernel: Kernel | null): void {
           io: kernel.io,
           close: () =>
             kernel.bus.emit('ui.overlay.close', { id: diffView.DIFF_VIEW_OVERLAY_ID, source: 'host:diff-view' }),
+          // 批次十一 L12（关闭意图合流）：比对栈的收尾 `clearDiff()` 挂在 `deps.close()` 里，
+          // 而 Esc / 点遮罩两条通道在壳层是直卸载宿主（不经过这颗 close）⇒ 只有按钮那条清栈，
+          // 下次开窗读到陈年比对。这里把本 id 的 `ui.overlay.close` 事件回灌给组件；壳层一旦
+          // 把那两条通道也改为**发同一枚总线事件**（见批次回执接线单），三条路就走同一条收账。
+          onCloseIntent: (handler) =>
+            kernel.bus.on('ui.overlay.close', (ev) => {
+              if (ev.id === diffView.DIFF_VIEW_OVERLAY_ID) handler();
+            }),
         }),
       });
       diffViewCleanups.push(() => {
@@ -110,6 +118,10 @@ export function useShellOverlays(kernel: Kernel | null): void {
     const unRegCallHierarchy = kernel.slots.register('ui.overlay', {
       id: CALL_HIERARCHY_OVERLAY_ID,
       order: 42,
+      // 批次十一 L12：面板内层是 `ov-wide`（920）的查询面——`size` 缺席时宿主只有
+      // 560 一档，920 的内层塞进 560 的外框 ⇒ 横向裁切 + 双滚动条（当年 `.kd-host`
+      // 1180 塞窄宿主是同一颗雷）。补上这一行，档位由 `shell-overlays` 与浮层同源声明。
+      size: 'wide',
       component: createCallHierarchyOverlay({
         currentIndex: () => {
           try {

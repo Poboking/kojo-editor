@@ -204,7 +204,7 @@ describe('PS-5 ③ .kojo 预览的装配缓存', () => {
     const toggle = between(
       SOURCE,
       'className={`ghost small sugar-toggle',
-      '<Icon name="preview" size={13} />',
+      '<Icon name="preview" size="sm" />',
     );
     expect(toggle).toContain('sugarToggleTitle({');
     expect(toggle).not.toContain('已开启：当前显示的是');

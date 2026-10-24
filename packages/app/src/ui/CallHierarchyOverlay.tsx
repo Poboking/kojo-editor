@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useState, type ReactElement } from 'react';
+import { createElement as h, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { basename, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
 import type { ErbFunction, ErbIndex, ErbIndexState } from '@kojo/plugin-api';
 import type * as Monaco from '../monaco/entry';
@@ -38,6 +38,7 @@ import {
 } from './call-hierarchy';
 import { declareContextSurface } from './context-surfaces';
 import { referenceTallyFor, subscribeReferenceTally } from './reference-tally-store';
+import { overlayFrame, overlaySpinner } from './overlay-chrome';
 import { pkey } from './file-tree-ops';
 
 /**
@@ -289,12 +290,6 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
       deps.kojo2Resolvers,
     ]);
 
-    const closeBtn = h(
-      'div',
-      { className: 'wizard-actions' },
-      h('button', { className: 'ghost small', onClick: deps.close }, '关闭'),
-    );
-
     /** 复制反馈（成败都要上屏——剪贴板拒绝时静默等于"点了没反应"，铁律 4） */
     const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
     const copyToClipboard = (text: string, doneNote: string): void => {
@@ -366,22 +361,16 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
       };
     });
 
+    const feedback =
+      notice === null
+        ? null
+        : h('p', { key: 'feedback', className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text);
+
     if (state === null) {
-      return h(
-        'div',
-        { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
-        h('p', { className: 'dim' }, '没有要查看的调用。'),
-        closeBtn,
-      );
+      return chFrame(deps, '调用层级', h('p', { className: 'dim' }, '没有要查看的调用。'));
     }
     if (state.kind === 'rejected') {
-      return h(
-        'div',
-        { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
-        h('h3', null, '无法查看调用层级'),
-        h('p', { className: 'kd-error' }, state.reason),
-        closeBtn,
-      );
+      return chFrame(deps, '无法查看调用层级', h('p', { className: 'kd-error' }, state.reason));
     }
 
     // 取数上下文：注入口优先（测试 / 预载宿主），否则用懒装载快照；provider 缺席 = 还没就绪。
@@ -389,20 +378,42 @@ export function createCallHierarchyOverlay(deps: CallHierarchyDeps): () => unkno
     const api = !needsKojo2 ? null : deps.kojo2Panel?.() ?? bundle?.api ?? null;
     const provider = !needsKojo2 ? null : kojo2ProviderOf(deps, api, bundle, state.request.filePath);
 
-    return renderRequest(
-      state.request,
-      deps,
-      closeBtn,
-      sectionWindow,
-      notice === null ? null : h('p', { className: notice.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, notice.text),
-      {
-        model: activeModel,
-        api,
-        provider: provider === null ? null : withRequestPath(provider, state.request.filePath),
-        loadFailed: bundleFailed,
-      },
-    );
+    return renderRequest(state.request, deps, sectionWindow, feedback, {
+      model: activeModel,
+      api,
+      provider: provider === null ? null : withRequestPath(provider, state.request.filePath),
+      loadFailed: bundleFailed,
+    });
   };
+}
+
+/**
+ * 本面板的统一外框（批次十一 L12-overlays）。
+ *
+ * 只读查询面 ⇒ `mode:'query'`（遮罩减淡一档，与 `.floating-panel` 同族）；宽度吃
+ * `wide`（920），**不再借比对方的 `kd-host`**——那格原写 `width: min(1180px…)`，
+ * 而注册没给 `size` ⇒ 1180 的内层塞进 560 的宿主，横向直接被裁。
+ * 标题栏的 ✕ 与页脚那颗「关闭」交的是同一个 `deps.close`。
+ * 面属性（`data-context-surface`）与面板级事实（`data-ch-*`）照批次十的接法钉在外框根上——
+ * 右键菜单的 `build` 从 DOM 读它们，换壳不许让菜单面断线。
+ */
+function chFrame(
+  deps: CallHierarchyDeps,
+  title: ReactNode,
+  children: ReactNode,
+  surfaceData?: Readonly<Record<string, string>>,
+): ReactNode {
+  return overlayFrame({
+    hostClass: 'ch-host',
+    title,
+    tier: 'wide',
+    mode: 'query',
+    onClose: deps.close,
+    contextSurface: CALL_HIERARCHY_SURFACE_ID,
+    surfaceData,
+    children,
+    footer: h('button', { className: 'ghost small', onClick: deps.close }, '关闭'),
+  });
 }
 
 /** kojo2 分支的装载上下文（模型 = 语言判据；api / provider 缺席 = 还在拉 / 拉失败） */
@@ -490,16 +501,15 @@ function scopeResolversTo(
 function renderRequest(
   request: CallHierarchyRequest,
   deps: CallHierarchyDeps,
-  closeBtn: ReactElement,
   sectionWindow: SectionWindow,
   /** 复制一类的轻反馈（有才画；没有这一行也不占位） */
   feedback: ReactElement | null,
   kojo2: Kojo2PanelContext,
-): ReactElement {
+): ReactNode {
   // 语言分派：先问当前文件的 model 是什么语言，再决定取数依赖（kojo2 / 其余 = ERB 旧路）。
   // model 缺席（文件已关 / 旧宿主）⇒ 不吃掉请求，逐字退回 ERB 分支的原有空态与文案。
   if (kojo2.model !== null && languageIdOf(kojo2.model) === KOJO2_LANGUAGE_ID) {
-    return renderKojo2Request(request, kojo2, deps, closeBtn, sectionWindow);
+    return renderKojo2Request(request, kojo2, deps, sectionWindow);
   }
 
   // 索引这一轮的事实（ST-CONSUMERS）：查表得到的那一句**只在既有文案面**上替换原文，
@@ -513,35 +523,21 @@ function renderRequest(
 
   const index = deps.currentIndex();
   if (!index) {
-    return h(
-      'div',
-      { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
-      h('h3', null, '调用层级'),
-      notice(blockedCopy ?? 'ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。'),
-      closeBtn,
-    );
+    return chFrame(deps, '调用层级', notice(blockedCopy ?? 'ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。'));
   }
   const target = resolveEnclosingFunction(index, deps.functionAt, request.filePath, request.line);
   if (!target) {
     // 「第 N 行不在任何函数体内」只在**本轮确实扫出了东西**时才成立：一个位置都没走到 /
     // 扫过但名录为空时，那句是把"索引没内容"污蔑成"你把光标放错了"（同一张表判的相位）
     if (blockedCopy !== null) {
-      return h(
-        'div',
-        { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
-        h('h3', null, '调用层级'),
-        notice(blockedCopy),
-        closeBtn,
-      );
+      return chFrame(deps, '调用层级', notice(blockedCopy));
     }
-    return h(
-      'div',
-      { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID },
-      h('h3', null, '调用层级'),
+    return chFrame(
+      deps,
+      '调用层级',
       notice(
         `第 ${request.line} 行不在任何 ERB 函数体内（或该文件不在函数索引里）——把光标放到某个 @ 函数的正文中再试。`,
       ),
-      closeBtn,
     );
   }
 
@@ -583,24 +579,13 @@ function renderRequest(
   const section = (heading: string, emptyText: string, rows: Row[], which: 'in' | 'out'): ReactElement[] =>
     referencesAvailable ? renderSection(heading, emptyText, rows, which, deps, sectionWindow) : [];
 
-  return h(
-    'div',
-    {
-      className: 'wizard kd-host',
-      'data-context-surface': CALL_HIERARCHY_SURFACE_ID,
-      // 面板级事实写在根上：模块顶层的 `build` 靠它读"正在看谁 / 还藏了几行"（不靠 React 闭包）
-      'data-ch-subject-name': target.name,
-      'data-ch-subject-path': target.filePath,
-      'data-ch-subject-line': String(target.startLine),
-      'data-ch-hidden-in': String(hiddenIn),
-      'data-ch-hidden-out': String(hiddenOut),
-      'data-ch-total-in': String(totalIn),
-      'data-ch-total-out': String(totalOut),
-    },
-    h('h3', null, '调用层级'),
+  return chFrame(
+    deps,
+    '调用层级',
+    [
     h(
       'p',
-      null,
+      { key: 'target' },
       h('span', null, `${target.name}　`),
       h(
         'button',
@@ -639,7 +624,17 @@ function renderRequest(
       ? h('p', { className: 'dim', key: 'no-refs' }, '反向引用索引缺席（解析器还没交出引用台账），出入边不可用。')
       : null,
     feedback,
-    closeBtn,
+    ],
+    // 面板级事实写在外框根上：模块顶层的 `build` 靠它读"正在看谁 / 还藏了几行"（不靠 React 闭包）
+    {
+      'data-ch-subject-name': target.name,
+      'data-ch-subject-path': target.filePath,
+      'data-ch-subject-line': String(target.startLine),
+      'data-ch-hidden-in': String(hiddenIn),
+      'data-ch-hidden-out': String(hiddenOut),
+      'data-ch-total-in': String(totalIn),
+      'data-ch-total-out': String(totalOut),
+    },
   );
 }
 
@@ -751,22 +746,15 @@ function renderKojo2Request(
   request: CallHierarchyRequest,
   kojo2: Kojo2PanelContext,
   deps: CallHierarchyDeps,
-  closeBtn: ReactElement,
   sectionWindow: SectionWindow,
-): ReactElement {
+): ReactNode {
   /**
    * kojo2 分支的根（五条可见态共用）：面属性写在根上，理由与 ERB 分支同一个——
    * 面板换了语言不该换一套右键菜单，掉一个属性就是"同一屏两副面孔"。
    * `extra` 是就绪态才有的那组读数（主体身份 / 还藏了几行），其余态没有主体可复制。
    */
-  const panel = (body: ReactElement[], extra?: Readonly<Record<string, string>>): ReactElement =>
-    h(
-      'div',
-      { className: 'wizard kd-host', 'data-context-surface': CALL_HIERARCHY_SURFACE_ID, ...extra },
-      h('h3', null, '调用层级'),
-      ...body,
-      closeBtn,
-    );
+  const panel = (body: ReactNode[], extra?: Readonly<Record<string, string>>): ReactNode =>
+    chFrame(deps, '调用层级', body, extra);
   const notice = (text: string, key: string): ReactElement => h('p', { className: 'dim', key }, text);
   const model = kojo2.model;
   if (model === null) {
@@ -776,25 +764,29 @@ function renderKojo2Request(
 
   if (kojo2.api === null) {
     // 两种装载态都可见：还在拉（第一次打开要拉解析器 + 项目索引 resolver）与拉失败（打包 / 磁盘问题）。
-    return panel([
-      notice(
-        kojo2.loadFailed
-          ? 'kojo2 调用层级的取数模块 / 项目索引 resolver 没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。'
-          : '正在载入 kojo2 调用层级（首次打开要拉解析器与项目索引 resolver，只这一次）…',
-        kojo2.loadFailed ? 'k2-load-failed' : 'k2-loading',
-      ),
-    ]);
+    // **只有"还在拉"那一支**吃转圈（它确实在等）；拉失败是终态，不给它挂一枚一直转的圈。
+    if (kojo2.loadFailed) {
+      return panel([
+        notice(
+          'kojo2 调用层级的取数模块 / 项目索引 resolver 没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。',
+          'k2-load-failed',
+        ),
+      ]);
+    }
+    return panel([overlaySpinner('正在载入 kojo2 调用层级（首次打开要拉解析器与项目索引 resolver，只这一次）…')]);
   }
   if (kojo2.provider === null) {
     // resolver（项目索引）还没就位：明确说"在载入"，绝不先画一份"只同文件"的假空。
-    return panel([
-      notice(
-        kojo2.loadFailed
-          ? 'kojo2 的项目索引取数没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。'
-          : '正在载入项目索引（跨文件入 / 出边），就绪后自动刷新…',
-        kojo2.loadFailed ? 'k2-index-failed' : 'k2-index-loading',
-      ),
-    ]);
+    // 口径与上面那条装载态一致：还在拉 ⇒ 转圈（role=status 读屏认得），拉失败 ⇒ 终态不挂圈。
+    if (kojo2.loadFailed) {
+      return panel([
+        notice(
+          'kojo2 的项目索引取数没载入（打包或磁盘读失败）——收起面板重开一次；仍然这样就报这个错。',
+          'k2-index-failed',
+        ),
+      ]);
+    }
+    return panel([overlaySpinner('正在载入项目索引（跨文件入 / 出边），就绪后自动刷新…')]);
   }
   const api = kojo2.api;
 

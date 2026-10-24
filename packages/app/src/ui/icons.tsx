@@ -1,10 +1,22 @@
 import type { ReactElement } from 'react';
 
 /**
- * 宿主内置图标（看板 HK-4 · UI 系统化第三轮）。
+ * 宿主内置图标（看板 HK-4 · UI 系统化第三轮；批次十一 L10 定尺寸刻度与 filled 规则）。
  *
- * 统一口径：**16×16 网格、单色、`currentColor`**——颜色永远跟着文字色走
- * （悬停变亮、禁用变暗、`.on` 变 accent 都不用为图标另写规则）。
+ * 统一口径（`packages/app/tests/icons-system.test.ts` 逐条钉住，漂一枚即红）：
+ * - **16×16 网格、单色、`currentColor`**——颜色永远跟着文字色走
+ *   （悬停变亮、禁用变暗、`.on` 变 accent 都不用为图标另写规则）。
+ * - **尺寸只有四档**（`ICON_SIZES`：xs=12 / sm=14 / md=16 / lg=22）。新调用一律传档位名；
+ *   数字 `size` 是历史遗留形态（此前调用侧散装出 9/11/12/13/14/15/16/18/22 共 9 档），
+ *   渲染时**就近吸附到档位**（平局取大档）——宿主未接线文件里的旧数字因此先收敛，
+ *   逐处换成档位名见各批次「待接线」清单。
+ * - **filled 规则：状态族 filled、其余全 stroke。** `fill="currentColor"` 子形只许出现在
+ *   状态族（`FILLED_ICON_NAMES`：circle-filled / warning / info——诊断与未保存这类
+ *   "状态灯"要一眼可读，filled 是它们的语法）；视图 / 动作 / 导航 / 布局 / 窗口 / 教程 /
+ *   联系各族**整条路径纯描边**。批前混用的 structure 实心点、refresh / reset 实心箭头、
+ *   target / wand 实心点已按此改齐。
+ * - 对齐两套场景见 `styles.css` 的 `.icon` 基线规则（flex 行 `align-self:center`；
+ *   行内文字流 `vertical-align:-0.16em`）。
  *
  * `UIPanelContribution.icon` 契约写的是「单字符或内置图标名（渲染器解释）」，
  * 本模块就是那个「渲染器」：命中注册表 → SVG；没命中 → 原样当字形渲染，
@@ -14,9 +26,33 @@ import type { ReactElement } from 'react';
 /** 内置图标名（贡献方与壳层共用这一份词表） */
 export type IconName = keyof typeof ICONS;
 
+/** 四档尺寸刻度：全站图标尺寸只有这四个值（档位名调用，数字仅供吸附兜底）。 // ui-kit-candidate: 图标尺寸四档刻度 */
+export const ICON_SIZES = { xs: 12, sm: 14, md: 16, lg: 22 } as const;
+
+/** 尺寸档位名 */
+export type IconSize = keyof typeof ICON_SIZES;
+
+/** 允许出现 `fill="currentColor"` 子形的状态族图标（filled 规则的白名单，测试据此扫描全表） */
+export const FILLED_ICON_NAMES: readonly string[] = ['circle-filled', 'warning', 'info'];
+
+/**
+ * 把历史遗留的数字尺寸就近吸附到四档刻度（平局取大档：13→14、15→16）。
+ * 档位名与缺省（md）走直取。对外暴露是为了让自检测试能钉住吸附表，而不是只信渲染结果。
+ */
+export function resolveIconSize(size?: IconSize | number): number {
+  if (size === undefined) return ICON_SIZES.md;
+  if (typeof size === 'string') return ICON_SIZES[size];
+  let best: number = ICON_SIZES.xs;
+  for (const tier of Object.values(ICON_SIZES) as number[]) {
+    const d = Math.abs(tier - size);
+    if (d < Math.abs(best - size) || (d === Math.abs(best - size) && tier > best)) best = tier;
+  }
+  return best;
+}
+
 const stroke = (d: string): ReactElement => <path key={d} d={d} />;
 
-const ICONS = {
+export const ICONS = {
   /* --- 视图 --- */
   files: (
     <>
@@ -34,9 +70,9 @@ const ICONS = {
   structure: (
     <>
       {stroke('M5.4 3.6h7.8M5.4 8h7.8M5.4 12.4h7.8')}
-      <circle key="a" cx="2.7" cy="3.6" r="1.05" fill="currentColor" stroke="none" />
-      <circle key="b" cx="2.7" cy="8" r="1.05" fill="currentColor" stroke="none" />
-      <circle key="c" cx="2.7" cy="12.4" r="1.05" fill="currentColor" stroke="none" />
+      <circle key="a" cx="2.7" cy="3.6" r="1.15" />
+      <circle key="b" cx="2.7" cy="8" r="1.15" />
+      <circle key="c" cx="2.7" cy="12.4" r="1.15" />
     </>
   ),
   preview: (
@@ -89,7 +125,7 @@ const ICONS = {
   target: (
     <>
       <circle key="r" cx="8" cy="8" r="5.8" />
-      <circle key="d" cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
+      <circle key="d" cx="8" cy="8" r="2.1" />
     </>
   ),
   history: (
@@ -115,16 +151,18 @@ const ICONS = {
       {stroke('M9.6 4 12 6.4')}
     </>
   ),
+  /* refresh / reset 的箭头头部批前是实心三角（动作族混进 filled），按"状态 filled、其余 stroke"
+     改齐成同坐标的描边三角；16 网格上观感不变（头部本来就贴着小尺寸）。 */
   refresh: (
     <>
       {stroke('M13.2 8A5.2 5.2 0 1 1 8 2.8')}
-      <path key="h" d="M8.2 1.3 10.6 2.8 8.2 4.3z" fill="currentColor" stroke="none" />
+      {stroke('M8.2 1.3 10.6 2.8 8.2 4.3z')}
     </>
   ),
   reset: (
     <>
       {stroke('M2.8 8A5.2 5.2 0 1 0 8 2.8')}
-      <path key="h" d="M7.8 1.3 5.4 2.8 7.8 4.3z" fill="currentColor" stroke="none" />
+      {stroke('M7.8 1.3 5.4 2.8 7.8 4.3z')}
     </>
   ),
   /* 垃圾桶（b/kbset/1017 快捷键页「移除键位」用）：盖沿 + 提手 + 桶身 + 两道竖肋 */
@@ -153,7 +191,7 @@ const ICONS = {
     </>
   ),
 
-  /* --- 状态 --- */
+  /* --- 状态（filled 家族：状态灯要一眼可读，实心是这一族合法的画法） --- */
   'circle-filled': <circle cx="8" cy="8" r="3.2" fill="currentColor" stroke="none" />,
   warning: (
     <>
@@ -224,7 +262,7 @@ const ICONS = {
     <>
       {stroke('M2.8 13.2 11.2 4.8')}
       {stroke('M13 1.8v2M12 2.8h2')}
-      <circle key="s" cx="13.2" cy="5.9" r="0.7" fill="currentColor" stroke="none" />
+      <circle key="s" cx="13.2" cy="5.9" r="1.05" />
     </>
   ),
 
@@ -253,11 +291,12 @@ const ICONS = {
 /** 未命中注册表时按字形文本渲染（兼容第三方贡献的单字符 `icon`） */
 export function Icon({
   name,
-  size = 16,
+  size = 'md',
   className,
 }: {
   name: string;
-  size?: number;
+  /** 档位名（首选）或历史遗留数字（就近吸附到档位） */
+  size?: IconSize | number;
   className?: string;
 }): ReactElement {
   const shape = ICONS[name as IconName];
@@ -268,11 +307,12 @@ export function Icon({
       </span>
     );
   }
+  const px = resolveIconSize(size);
   return (
     <svg
       className={`icon${className ? ` ${className}` : ''}`}
-      width={size}
-      height={size}
+      width={px}
+      height={px}
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"

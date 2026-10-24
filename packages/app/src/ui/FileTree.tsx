@@ -108,6 +108,28 @@ export function escapeAttrValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+/**
+ * 中段省略（L16 美学短板批）：尾部 ellipsis 会把扩展名与末段语义吃掉——
+ * `.ERH` / `.kojo` 这类后缀**就是信息**（`.ERH` 和 `.ERB` 是两种文件，名字头一段还常常相同）。
+ * 纯函数、可单测：超长时保住后缀（最后一个 `.` 起）与头部，裁中段，省略号占一位。
+ *
+ * 口径：`maxChars` 是**结果串**的字符上限（含省略号）；不足 4 没有裁的意义原样返回；
+ * 无扩展名（或以 `.` 开头的隐藏名）退化为保头裁尾。
+ * // ui-kit-candidate: middleEllipsis 值得进 ui-kit（文件树/标签页两处要用）
+ */
+export function middleEllipsis(name: string, maxChars: number): string {
+  if (maxChars < 4 || name.length <= maxChars) return name;
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot) : '';
+  const keepTail = Math.min(ext.length, maxChars - 3);
+  const keepHead = maxChars - 1 - keepTail;
+  if (keepHead < 2) return `${name.slice(0, maxChars - 1)}…`;
+  return `${name.slice(0, keepHead)}…${name.slice(name.length - keepTail)}`;
+}
+
+/** 包名/根名的中段省略上限（行宽自适应需要测量，留给 css 侧兜底；这里是字符数硬闸） */
+const TREE_LABEL_MAX = 24;
+
 /* ---------------- 诊断徽标（工包 E + 本批：树三层都开口，画法只有一枚） ---------------- */
 
 /** 节点 tooltip 最多点名几个文件，其余折成「另 n 个」（展开的作者包动辄几十份文件） */
@@ -1175,7 +1197,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                     <span className="caret">
                       <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
                     </span>
-                    <span className="group-label">{baseName(root)}</span>
+                    <span className="group-label">{middleEllipsis(baseName(root), TREE_LABEL_MAX)}</span>
                   </button>
                   {isOpen ? (
                     <ul className="tree-files">
@@ -1264,7 +1286,8 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             <span className="caret">
                               <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
                             </span>
-                            <span className="tree-package-name">{glossOf(s.label)}</span>
+                            {/* 长包名中段省略（L16）：完整路径已在 title 上，裁的只是显示 */}
+                            <span className="tree-package-name">{middleEllipsis(glossOf(s.label), TREE_LABEL_MAX)}</span>
                             <span className="group-count">{s.files.length}</span>
                             <TreeProblemBadge
                               mark={probMarks.packages.get(pkgKey)}

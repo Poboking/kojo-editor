@@ -1,0 +1,151 @@
+/*
+ * 更新提醒卡（批次十一 L05 · 层一）——右下非阻塞浮层。
+ *
+ * 面由 `.glass` 提供（与 toast 同款玻璃语言），本文件只管卡自己的骨架与槽位。
+ * 两条纪律照旧：颜色只吃 token；动效尊重 `data-motion='reduced'` 与系统偏好。
+ *
+ * 槽位口径：`.notification-center`（styles.css）占 `right:16 bottom:36 z:1200`。
+ * 卡同列靠底、层级略低（瞬时 toast 压在常驻卡上是想要的顺序）；卡出现时把 toast
+ * 列整体抬高一层卡高，两列永不叠字——借 `:has` 从本文件完成，不动 styles.css（L01 的地盘）。
+ */
+
+.update-notice-card {
+  /* 与 toast 同一校准档：提醒面直压亮语法色，不跟毛玻璃旋钮 */
+  --glass-alpha: 0.85;
+  position: fixed;
+  right: 16px;
+  bottom: 36px;
+  z-index: 1180;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    var(--edge-raise),
+    var(--shadow-3);
+  animation: update-notice-in var(--dur-3) var(--ease-spring);
+}
+
+/* 卡在场时，瞬时 toast 让到卡上方（86px ≈ 卡高 + 间距；toast 自身列从 36px 起底） */
+body:has(.update-notice-card) .notification-center {
+  bottom: 122px;
+}
+
+/* 窄窗（<480px）：卡吃满可用宽度，留 16px 安全边——toast 容器没有的媒体查询，卡这边补上 */
+@media (max-width: 480px) {
+  .update-notice-card {
+    left: 16px;
+    width: auto;
+  }
+}
+
+.update-notice-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.update-notice-card-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+
+.update-notice-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--fs-2);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* 版本徽标：pill + accent 洗色，一眼锁定「哪一版」 */
+.update-notice-card-badge {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.update-notice-card-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.update-notice-card .update-notice-card-close:hover {
+  border-color: transparent;
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+
+.update-notice-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  padding-left: 23px; /* 与标题文字基线对齐（图标 15px + gap 8px） */
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-notice-card-meta time {
+  font-family: inherit;
+}
+
+.update-notice-card-meta-sep {
+  opacity: 0.7;
+}
+
+.update-notice-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+@keyframes update-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 两种降动效口径都压平（系统偏好 + 应用内 data-motion 开关），卡静止出现 */
+@media (prefers-reduced-motion: reduce) {
+  .update-notice-card {
+    animation: none !important;
+  }
+}
+
+:root[data-motion='reduced'] .update-notice-card {
+  animation: none !important;
+}

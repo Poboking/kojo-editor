@@ -723,18 +723,27 @@ describe('真实语料：`node tools/corpus.mjs --print` rc=0 才真跑', () => 
     }
   });
 
-  it.skipIf(CORPUS_PRESENT)('语料不在位：`corpus` CLI rc=2 + 「语料不在位」（SKIP 不是绿）', () => {
-    const env = { ...process.env };
-    delete env['KOJO_CORPUS_DIR'];
-    delete env['KOJO_CORPUS_SCAN_DIRS'];
-    const spawned = spawnSync(process.execPath, [path.join(REPO, 'tools', 'kojo-conformance.mjs'), 'corpus', '--json'], {
-      encoding: 'utf8',
-      env,
-      timeout: 90000,
-    });
-    expect(spawned.status).toBe(2);
-    expect(spawned.stderr).toContain('语料不在位');
-    const parsed = JSON.parse(spawned.stderr) as { verdict: string };
-    expect(parsed.verdict).toBe('skip');
-  }, 90000);
+  it.skipIf(CORPUS_PRESENT)(
+    '语料不在位：`corpus` CLI rc=2 + 「语料不在位」（SKIP 不是绿）',
+    () => {
+      const env = { ...process.env };
+      delete env['KOJO_CORPUS_DIR'];
+      delete env['KOJO_CORPUS_SCAN_DIRS'];
+      const spawned = spawnSync(
+        process.execPath,
+        [path.join(REPO, 'tools', 'kojo-conformance.mjs'), 'corpus', '--json'],
+        { encoding: 'utf8', env, timeout: 240_000 },
+      );
+      // 预算 90s→240s 的理由（不是放宽判据）：这条会在满负载的全量池里红——2026-10-24 实测
+      // 该文件 93.8s，spawnSync 被自己的 90s 上限掐掉 ⇒ `status` 变成 `null`（信号杀死），
+      // 断言拿到的是"进程没跑完"而不是"rc 不是 2"。盘扫（认内容不认名，要递归找 ERB/ 与 CSV/）
+      // 在冷缓存 + 几十路 fork 抢 I/O 时就是要两分钟以上。判据三条一条没动：仍要 rc=2、
+      // stderr 有「语料不在位」、verdict=skip。
+      expect(spawned.status, `corpus CLI 被超时杀死或崩了：${spawned.signal ?? spawned.error ?? '无'}`).toBe(2);
+      expect(spawned.stderr).toContain('语料不在位');
+      const parsed = JSON.parse(spawned.stderr) as { verdict: string };
+      expect(parsed.verdict).toBe('skip');
+    },
+    240_000,
+  );
 });

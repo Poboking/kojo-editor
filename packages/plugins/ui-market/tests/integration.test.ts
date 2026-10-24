@@ -1081,6 +1081,53 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
     expect(html).toContain('正在安装「示例 new.pack」…');
   });
 
+  it('进行中那一行有行级记号（.mk-row.busy + aria-busy + mk-install 档）；闲时行没有（批次十一 L07 三态）', () => {
+    const one = [viewEntry('new.pack', '1.0.1')];
+    const busy = renderView(one, [], {
+      installing: 'kojo-pack/new.pack@1.0.1',
+      note: '正在安装「示例 new.pack」…',
+    });
+    expect(busy).toContain('<div class="mk-row busy" aria-busy="true"');
+    expect(busy).toContain('mk-install" disabled');
+    const idle = renderView(one, []);
+    expect(idle).not.toContain('mk-row busy');
+    expect(idle).not.toContain('aria-busy');
+    // 「可安装」档：闲时的安装按钮带 mk-install 视觉档，文字仍是纯字符串「安装」
+    expect(idle).toContain('<button class="ghost small mk-install">安装</button>');
+  });
+
+  it('长文墙拆行 + 数据时间降级：常驻一行能力句在 details 里，屏上只留「上次同步」、全量在 title', () => {
+    const html = renderView([viewEntry('a.pack', '1.0.0')], []);
+    expect(html).toContain('<details class="mk-hint"><summary>');
+    expect(html).toContain('能拉取注册表列表，浏览与安装。');
+    expect(html).toMatch(/<div class="mk-time" title="数据时间：[^"]*">上次同步 \d\d-\d\d \d\d:\d\d<\/div>/);
+    // 屏面文案里不再有裸 URL：来源地址只活在 title 与来源按钮里
+    expect(html.replace(/title="[^"]*"/g, '')).not.toMatch(/https:\/\/[^<]*index\.json/);
+  });
+
+  it('折叠记号走宿主图标桥（名字 + 档位，SVG 进 .mk-hint-toggle），桥缺位时不画字符（批次十一 L07 零字符图标）', () => {
+    // ① 宿主注入图标桥：视图层只传「注册表名字 + 尺寸档位名」，画出来的是宿主给的节点
+    const seen: Array<[string, unknown]> = [];
+    const withBridge = renderView([viewEntry('a.pack', '1.0.0')], [], {
+      renderIcon: (name: string, size?: unknown) => {
+        seen.push([name, size]);
+        return createElement('svg', { 'data-icon': name });
+      },
+    });
+    expect(seen).toEqual([['chevron-right', 'xs']]);
+    expect(withBridge).toContain('<span class="mk-hint-toggle" aria-hidden="true"><svg data-icon="chevron-right"></svg>');
+    // ② 桥缺位（无渲染环境 / 旧宿主）：那一格留空给 CSS 画出的记号，**绝不回退成字符图标**
+    const noBridge = renderView([viewEntry('a.pack', '1.0.0')], []);
+    expect(noBridge).toContain('<span class="mk-hint-toggle" aria-hidden="true"></span>');
+    // ③ 全幅面扫描：这一屏里没有任何"字符当图标"的残留。
+    //    名单只收**图标位**上的字符；`·` 不在列——它出现在元信息句子里（"1.2 MB · 3 个文件"）
+    //    是文本标点，画面上的**条目分隔符**已由 market.css 画成圆点，不是字符（见该文件 L07 段）。
+    for (const glyph of ['▸', '›', '⋯', '✓', '✔', '✕', '＋', '－', '▲', '▼']) {
+      const visible = noBridge.replace(/title="[^"]*"/g, '');
+      expect(visible, glyph).not.toContain(glyph);
+    }
+  });
+
   it('渲染层的主行也不含机器词（展开层没展开 ⇒ 核对码与 id/kind 都不该出现）', () => {
     const html = renderView(packs, installed);
     for (const word of ['index.json', 'sha256', 'manifest', 'schema', 'kind', 'minAppVersion', 'id ', 'zip']) {
@@ -1357,25 +1404,30 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
     expect(byClass(searchWrap, 'mk-clear')).toHaveLength(1);
   });
 
-  it('行的层级：一张卡两排——第一排名字 + 动作（.mk-head），第二排事实（.mk-facts），行本身不是 button', () => {
+  it('行的层级：卡片按档分层——第一排名字 + 动作（.mk-head）、〔摘要排 .mk-sub 可缺省〕、末排事实（.mk-facts），行本身不是 button', () => {
     const tree = MarketPanelView(viewProps(packs2, installed1));
     const rows = byClass(tree, 'mk-row');
     expect(rows).toHaveLength(3);
     for (const r of rows) expect(r.type, '行不许是 button 语义').toBe('div');
     const mains = byClass(tree, 'mk-main');
     expect(mains).toHaveLength(3);
+    let withSummary = 0;
     for (const main of mains) {
       const lines = kids(main).filter(isEl);
-      expect(
-        lines.map((e) => (e.props.className as string).split(/\s+/)[0]),
-        '一张卡恰好两排',
-      ).toEqual(['mk-head', 'mk-facts']);
+      const tiers = lines.map((e) => (e.props.className as string).split(/\s+/)[0]);
+      // 批次十一 L07 的层级口径：头排与事实排恒在，中间至多一排摘要（已装行没摘要 ⇒ 只有两排）
+      expect(tiers[0], '卡片第一排必须是 .mk-head').toBe('mk-head');
+      expect(tiers[tiers.length - 1], '卡片末排必须是 .mk-facts').toBe('mk-facts');
+      const middle = tiers.slice(1, -1);
+      expect(middle.length, '头排与事实排之间至多一排摘要').toBeLessThanOrEqual(1);
+      for (const m of middle) expect(m, '中间排只许是摘要排').toBe('mk-sub');
+      if (middle.length === 1) withSummary += 1;
       const head = lines[0]!;
       const headEls = kids(head).filter(isEl);
       expect((headEls[0]!.props.className as string).split(/\s+/)).toContain('mk-name');
       expect(headEls[headEls.length - 1]!.props.className, '动作簇是第一排的最后一项').toBe('mk-actions');
-      // 事实一律在第二排，且只有事实
-      for (const f of kids(lines[1]!).filter(isEl)) {
+      // 事实一律在末排，且只有事实
+      for (const f of kids(lines[lines.length - 1]!).filter(isEl)) {
         expect((f.props.className as string).split(/\s+/)).toContain('mk-meta');
       }
       const acts = byClass(main, 'mk-actions');
@@ -1383,6 +1435,9 @@ describe('面板结构分层（工具条 / 状态簇 / 自滚列表）', () => {
       // 这一行的按钮一枚都不许落在动作簇之外
       expect(buttonEls(main).length).toBe(buttonEls(acts[0]!).length);
     }
+    // 摘要排不是"人人都有一行"：有 summary 的索引行才有（已装行没有 ⇒ 两排）
+    expect(withSummary, '有摘要的行才多出 .mk-sub 这一排').toBeGreaterThan(0);
+    expect(withSummary, '已装行不该凭空多出摘要排').toBeLessThan(mains.length);
   });
 
   it('组标题给计数：已装组 = 条数 + 服务口径的占用，索引组 = 屏上剩几条（过滤后跟着变，已装组不跟着变）', () => {
@@ -1552,6 +1607,105 @@ describe('「发布口上…」入口', () => {
     click();
     click();
     expect(emits).toEqual(['market.publishRequested', 'market.publishRequested']);
+  });
+});
+
+/* ======================= 批次十一 L18：卖相收口的渲染判据 ======================= */
+
+describe('封面缺位的占位徽标（「」母题走文本，不走图、不走 emoji）', () => {
+  const rows = [
+    viewEntry('a.pack', '1.0.0', { name: '口上示例' }),
+    viewEntry('b.pack', '1.0.0', { name: 'demo pack' }),
+    viewEntry('c.pack', '1.0.0', { name: '🎈气球包' }),
+  ];
+
+  it('每条索引行都带一枚徽标，格子里只有一枚字母或数字（画出来的引号不在 DOM 里）', () => {
+    const html = renderView(rows, []);
+    const emblems = [...html.matchAll(/<span class="mk-emblem" aria-hidden="true">([^<]*)<\/span>/g)];
+    // 组内按包名排（`buildGroups` 的口径），这里只认"三条三枚、各是各自的首字"，不认顺序
+    expect(emblems.map((m) => m[1]).sort()).toEqual(['D', '口', '气'].sort());
+    for (const inner of emblems.map((m) => m[1]!)) {
+      // 母题的文本半边 = 一枚字母/数字；引号那两笔由 market.css 画（见 market-css-single-source 的 D 组）
+      expect(inner).toMatch(/^[\p{L}\p{N}]$/u);
+      expect(inner).not.toMatch(/\p{Extended_Pictographic}/u);
+    }
+  });
+
+  it('零字形图标：徽标格子里不许出现引号字符与图标字符；名字那一档的第一枚仍是 `.mk-name`', () => {
+    const html = renderView(rows, []);
+    for (const m of [...html.matchAll(/<span class="mk-emblem" aria-hidden="true">([^<]*)<\/span>/g)]) {
+      for (const glyph of ['「', '」', '“', '”', '▸', '›', '⋯', '✓', '✔', '✕', '＋', '－', '▲', '▼']) {
+        expect(m[1], glyph).not.toContain(glyph);
+      }
+    }
+    // 层级判据不动：头排第一枚仍是名字（徽标住在名字里面，不是并列的一栏）
+    const head = byClass(MarketPanelView(viewProps(rows, [])), 'mk-head')[0]!;
+    const first = kids(head).filter(isEl)[0]!;
+    expect((first.props.className as string).split(/\s+/)).toContain('mk-name');
+    // 徽标 aria-hidden ⇒ 同一个包名不会被读屏念两遍
+    expect(byClass(MarketPanelView(viewProps(rows, [])), 'mk-emblem')[0]!.props['aria-hidden']).toBe(true);
+  });
+
+  it('已装行同样有徽标（同一屏两套列表不许一种是卡片一种是没有图的框）', () => {
+    const html = renderView([], [viewRec('a.pack', '1.0.0', { name: '本机那条' })]);
+    expect(html).toContain('<span class="mk-emblem" aria-hidden="true">本</span>');
+  });
+});
+
+describe('失败态落在字上，不落在色上（铁律 4 到面板这一层）', () => {
+  it('装包失败 ⇒ 状态行那句之后多一行「哪一步失败 + 下一步做什么」，是文字不是变色', () => {
+    const note = `「示例 a.pack」没装成：${REJECT_TEXT['entry-sha256']}`;
+    const html = renderView([], [], { note });
+    expect(html).toContain('class="mk-guide"');
+    expect(html).toContain('失败在「核对」这一步');
+    expect(html).toContain('下一步：');
+    // 失败那句本身也还在（第二行是补充，不是替代）
+    expect(html).toContain('没装成');
+    // 认不出拒码的那一句（平台原话 / 没有码的异常）同样给下一步
+    expect(renderView([], [], { note: '「示例 a.pack」没装成：对面把门关了' })).toContain('class="mk-guide"');
+  });
+
+  it('不是装包失败（卸掉 / 进行中 / 装成）⇒ 不硬凑引导那一行', () => {
+    for (const note of ['已卸掉「示例 a.pack」', '正在安装「示例 a.pack」… 40%', '已装上「示例 a.pack」（版本 1.0.0）']) {
+      expect(renderView([], [], { note })).not.toContain('mk-guide');
+    }
+  });
+
+  it('进行中那一行多一条骨架（`.mk-busyline` 与 ui-kit 的 `kit-skeleton` 并列）；闲时行没有', () => {
+    const one = [viewEntry('new.pack', '1.0.1')];
+    const busy = renderView(one, [], {
+      installing: 'kojo-pack/new.pack@1.0.1',
+      note: '正在安装「示例 new.pack」…',
+    });
+    expect(busy).toContain('<div class="mk-busyline kit-skeleton" aria-hidden="true"></div>');
+    expect(renderView(one, [])).not.toContain('mk-busyline');
+    // 同一件事不在两处显示：骨架不带字，那句"正在安装…"仍只在 `.mk-note` 一处
+    expect(busy.replace(/class="mk-note"[^>]*>[^<]*/, '')).not.toContain('正在安装');
+  });
+});
+
+describe('空态与离线态（走 ui-kit 的 `KitEmpty` 类名，列表区不再死空白）', () => {
+  it('一条没装 + 列表区有东西 ⇒ 只有已装区那一格，主句仍是那句老话', () => {
+    const html = renderView([viewEntry('a.pack', '1.0.0')], []);
+    expect(html).toContain('本机还没有装好的包');
+    expect(html).toContain('kit-empty kit-empty-stack');
+    expect(html).toContain('在上方挑一条点「安装」');
+  });
+
+  it('本机没有列表 ⇒ 列表区自己说一句人话（过去这里是一片死空白，只有仪表区那行红字）', () => {
+    const props = viewProps([], []);
+    const html = renderToStaticMarkup(
+      createElement(MarketPanelView, { ...props, snapshot: { ...props.snapshot, status: 'list-missing' as const } }),
+    );
+    expect(html).toContain('列表区还是空的');
+    expect(html).toContain('点上面那枚「拉取列表」，本机就有了');
+    expect(byClass(MarketPanelView({ ...props, snapshot: { ...props.snapshot, status: 'list-missing' as const } }), 'kit-empty-stack')).toHaveLength(2);
+  });
+
+  it('过滤空态的主句不变（判据钉的就是那一句），副句给得出退路', () => {
+    const html = renderView([viewEntry('a.pack', '1.0.0')], [], { query: '查无此包' });
+    expect(html).toContain('没有名字或作者里含「查无此包」的包');
+    expect(html).toContain('回到完整列表');
   });
 });
 

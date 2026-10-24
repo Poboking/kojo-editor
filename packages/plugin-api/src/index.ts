@@ -303,6 +303,7 @@ export type {
   UIPanelComponent,
   UIPanelContribution,
   UIPanelProps,
+  IconSizeTier,
 } from './slots';
 
 export { WellKnownCommands } from './slots';

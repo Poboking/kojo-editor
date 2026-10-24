@@ -1,181 +1,6 @@
-:root {
-  --bg: #1e2227;
-  --bg-2: #24292f;
-  --bg-3: #2b3138;
-  --border: #3a424b;
-  /* 描边双档（VSCode 精修批 2026-10-17）：既有 `--border` 是控件描边的中档；密集区分隔
-     （树行 / 表格线 / 面板内 hairline）用更低对比的 `--border-subtle`，悬停与聚焦前的过渡、
-     以及需要"看得见边界"的地方用 `--border-strong`。三档都是非文字元素，发丝线本就低于 3:1
-     （装饰性分隔，不承担可点区识别），故只按视觉层次取，不套文字对比判据。 */
-  --border-subtle: #2f363d;
-  --border-strong: #4a545f;
-  --fg: #d7dce2;
-  --fg-dim: #8b949e;
-  --accent: #4c8bf5;
-  /* 实机对比度量出来的分工（§5.102）：`--accent` (#4c8bf5) 上压白字只有 3.32:1，
-     正文级不达 WCAG AA（4.5:1）——而白字蓝底正是**每一个主按钮**（保存 / 创建并打开 / 完成）。
-     故填色底另给一档更深的 `--accent-strong`（白字 4.87:1），`--accent` 继续留给描边与高亮。
-     注意：`--accent` 当**文字**压在深底上同样不够（code 4.04:1 / 链接式幽灵按钮 4.41:1），
-     那一档（`--accent-text`）涉及 15 处规则，本批刻意没一起动，已登记成看板后续条目。 */
-  --accent-strong: #2e6fd1;
-  /* 反过来：`--accent` 当**文字**压在深底上也不达标（实机：糖视图开关 4.41:1、
-     向导里的 `code` 4.04:1，正文级需 4.5:1）。文字档给亮一点的 `--accent-text`
-     （5.54:1）；描边仍用 `--accent`（非文字元素按 3:1，实测 4.15:1 已过）。 */
-  --accent-text: #6ea8ff;
-  --accent-dim: rgb(var(--accent-rgb) / 0.22);
-  --green: #4fc08d;
-  --red: #e06c75;
-  --amber: #d19a66;
-  /* UI 重设计批 P1 设计 token 扩展（定稿 §十；浅色主题预留，不做实现） */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  /* 圆角尺度（UI P4 · §5.122）：此前散落 12 种字面量（1/3/4/5/6/8/12/14px），
-     而 token 只定义了 2 档、仅 10 处用它。收成 5 档，档位按"件的大小"命名。
-     余两个语义值不进尺度：`50%`（圆点，几何）与 `0`（显式直角）。 */
-  --radius-xs: 2px; /* 细指示条（标签下的高亮条）/ 滚动条 */
-  --radius-sm: 4px; /* 密集控件：树行、菜单项、chip、小按钮 */
-  --radius-md: 6px; /* 中件：工具条按钮、输入框、面板块、状态条 */
-  --radius-lg: 10px; /* 浮层与卡片：picker、overlay、toast、notice、modal、欢迎卡 */
-  --radius-pill: 999px; /* 胶囊徽章 */
-  /* 阴影（UI P4 · §5.122；VSCode 精修批 2026-10-17 改为**分层抬升**）：每档 = 一层贴地
-     接触阴影（近、实、小偏移）+ 一层环境投影（远、虚、大偏移），比单层纯黑更"有厚度"、
-     更像真实光照下浮起来的物件。3 档抬升（轻浮层 → 浮层 → 模态）。
-     边条式 inset 阴影（`.editor-tab.active` 等的 accent 指示条）语义不同，不并入。 */
-  --shadow-1:
-    0 1px 2px rgba(0, 0, 0, 0.32),
-    0 6px 20px rgba(0, 0, 0, 0.45); /* 轻浮层：右键菜单、toast */
-  --shadow-2:
-    0 2px 5px rgba(0, 0, 0, 0.34),
-    0 12px 36px rgba(0, 0, 0, 0.5); /* 浮层：picker、overlay 宿主 */
-  --shadow-3:
-    0 2px 6px rgba(0, 0, 0, 0.36),
-    0 16px 48px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(0, 0, 0, 0.24); /* 模态与欢迎卡：末层 1px 环给浮层与背景一条明确切边 */
-  /* 抬升面顶边高光（VSCode 精修批）：raised/overlay 面挂一条极淡的 inset 顶亮边，
-     是"这块面比后面那块更靠近光源"的最省笔墨的暗示——磨砂玻璃的 `--glass-edge` 同族思路。 */
-  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.045);
-  /* 井面（内嵌 / 代码底）的抬升档：井是"凹面"，受光与投影都比 --edge-raise / --shadow-1
-     低半档（刻意不同值——直接复用会把"凹"读成"凸"）。缺省不抬，要抬的消费方写
-     `--well-raise: var(--well-edge), var(--well-shadow);`。 */
-  --well-edge: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  --well-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  --well-raise: none;
-  /* 焦点环柔光：配 `:focus-visible` 的 box-shadow 用（见下），比硬 outline 更高级、不占布局。 */
-  --shadow-focus:
-    0 0 0 1px var(--focus-ring),
-    0 0 0 4px var(--focus-glow);
-  /* 磨砂玻璃 token（glass）：可复用的毛玻璃面。
-     `--glass-alpha` = 填充不透明度，真源是 `glass-pref.ts`（设置页「外观 · 毛玻璃透明度」），
-     挂载时写到 `<html>`；任意面都能 `style="--glass-alpha:.5"` 局部覆盖，旋钮一动全场面跟着变。
-     **合色标定**（2026-10-17 跨切面统一批）：tint 不是直接抄 `--bg-2`，而是"预合成"值——让 alpha=.85
-     时压在暗化遮罩上的**合成结果**正好等于编辑器自己的 chrome（tint→--bg-2、tint-raise→--bg-3）。
-     于是"拧透明度"只改变背后泄漏多少、**不改色相**，且 `data-glass='solid'` 实心档落 --bg-2 与磨砂档
-     合成色一致（开关只切质感、不跳色）。换主题色时 tint/tint-raise 与 --bg-2/--bg-3 一并重算。
-     blur/saturate 是设计常量、不暴露给用户；edge 是顶边高光（磨砂玻璃的"厚度"）。 */
-  --glass-blur: 16px; /* 20→16：遮罩已在同层先做 0.8× 模糊，串联后 20px 边际收益为 0，只多耗 GPU */
-  --glass-saturate: 1.25; /* 1.5→1.25：底近无彩，1.5 把泄漏边缘推成可察觉彩噪；且与遮罩饱和相乘 */
-  --glass-alpha: 0.85; /* 缺省 15% 通透（= glass-pref 的 GLASS_TRANSPARENCY_DEFAULT，两处同步） */
-  --glass-tint: 40 45 51; /* 预合成：alpha .85 落 --bg-2 */
-  --glass-tint-raise: 48 54 62; /* 预合成：alpha .85 落 --bg-3（玻璃面上的抬升件用） */
-  --glass-edge: rgba(255, 255, 255, 0.07); /* 0.09→0.07：1px 绕一圈，0.09 在面上读成"贴纸白边" */
-  /* 顶缘抬升色的淡出距离：玻璃面的"光从上面来"在多高之内收干净。缺省 96px 是给浮层/模态这种
-     几百高的面；矮面（右键菜单 ~150px）自己覆盖成 56px，否则整面都是渐变、顶边高光读不出来。 */
-  --glass-fade: 96px;
-  /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
-     全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个
-     **按角色取面**的入口（值指向既有档），换主题色时一处联动。`sunken` 比 `--bg` 再低半档，
-     用于输入井 / 内嵌区 / 代码块底——本仓既有约定就是"输入比容器暗"（wizard 输入用 `--bg`）。 */
-  --surface-sunken: #191d22;
-  --surface: var(--bg);
-  --surface-raised: var(--bg-2);
-  --surface-overlay: var(--bg-3);
-  /* 焦点环（VSCode focusBorder 的同位）：键盘焦点专用，比 `--accent` 亮一档（非文字元素，
-     实测 `--focus-ring` 压 `--bg` = 5.72:1，远超 UI 组件 3:1 判据）。`--focus-glow` 是环外那圈
-     柔光，配 `--shadow-focus`（box-shadow）用——比硬 outline 更高级、且不吃布局宽度。 */
-  --focus-ring: #5b9aff;
-  --focus-glow: rgba(91, 154, 255, 0.35);
-  --z-toolbar: 10;
-  --z-overlay: 1000;
-  --z-modal: 1100;
-  /* 字号尺度（UI P4 · §5.121）：**实机渲染出 10 档字号、其中 4 档是半像素**
-     （10 / 11 / 11.5 / 12 / 12.5 / 13 / 14 / 16 / 17 / 26，12.5px 一项就摊到 193 个元素）。
-     半像素不是"更精细"，是各子系统各自微调出来的产物：`.rp-*`/`.ab-*`/`.inj-*` 整族 10.5px，
-     壳层自己的标签页 / 工具条却是 12.5px。CJK 字形在 10.5/11.5 上会被推到子像素网格，
-     看着发糊、行与行轻重不一——这正是"不耐看"的根因。
-     规矩：**只用这 6 档整数**，档位按角色命名不按组件；要新档先说清为什么现有 6 档不够。
-     （对齐现代编辑器：VSCode 的 UI 正文 13px、元信息 11px，同样只有少数几档。） */
-  --fs-0: 11px; /* 元信息：计数、徽章、副行路径、提示 */
-  --fs-1: 12px; /* 密集控件：树行、菜单、输入、工具条 */
-  --fs-2: 13px; /* 正文级 UI：标签页、面板标题、toast */
-  --fs-3: 14px; /* 强调正文：向导标题、picker 输入、#root 基准 */
-  --fs-4: 16px; /* 空态主句 / 大按钮 */
-  --fs-5: 18px; /* 模态标题 */
-  --fs-display: 26px; /* 欢迎页标题（唯一一处 display） */
-  /* 动效 token（ui-polish；VSCode 精修批 2026-10-17 补齐节奏与缓动族）：统一节奏，改一处全局生效。
-     `--dur-3` 是入场/浮层展开的更长档；缓动按角色分工——`--ease-out` 减速（悬停、位移收尾），
-     `--ease-spring` 带一丝回弹（浮层/弹窗入场、开关拨动，"活"但不夸张），`--ease-in-out` 对称
-     （滑块、进度），`--ease-standard` 是 Material 式通用档。全部在 `data-motion='reduced'` 下被压平。 */
-  --dur-1: 120ms;
-  --dur-2: 200ms;
-  --dur-3: 320ms;
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
-  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  /* 按压反馈档位（效果库 `.u-press-*` 与全站高频可点面共用）：
-     --dur-press 比松开档（--dur-1）快，按下才"跟手"；罩层比 hover(.06) 强一档且中性，
-     不占 --active 的"选中"语义（那枚色已被 .tree-file.active 等表示选中，必须让位）。 */
-  --press-dy: 0.5px;
-  --press-overlay: rgba(255, 255, 255, 0.1);
-  --dur-press: 70ms;
-  /* 禁用态统一透明度：按钮 / 菜单项 / 输入框 / 开关同取一档（VIS-4 口径） */
-  --disabled-opacity: 0.5;
-  /* 交互色 token（散落于各面板的 fallback 值收编为唯一来源） */
-  --hover: rgba(255, 255, 255, 0.06);
-  --active: rgb(var(--accent-rgb) / 0.16);
-  /* —— 主题可翻的交互色族（主题系统 2026-10-17 · Phase 0 地基）——
-     把原先散在组件里的白/黑/字面 hex 收成语义 token，浅色/薄荷主题只需在此**同名重定义**，
-     不必逐条 `[data-theme]` 覆盖几十个选择器。默认值 = 既有深色现值，逐字节不变（断言① 稳）。 */
-  /* accent 的 RGB 三元组（= `--accent` #4c8bf5）：所有 accent alpha wash 由它派生，主题翻一处全跟 */
-  --accent-rgb: 76 139 245;
-  --hover-soft: rgba(255, 255, 255, 0.04); /* 最淡底：树组行 / 标签 / kbd chip */
-  --hover-strong: rgba(255, 255, 255, 0.1); /* 关闭钮一类的强底 */
-  --sel-bg: rgb(var(--accent-rgb) / 0.35); /* 文本选区（accent 族） */
-  --scroll-thumb: rgba(255, 255, 255, 0.12);
-  --scroll-thumb-hover: rgba(255, 255, 255, 0.24);
-  --scroll-thumb-active: rgba(255, 255, 255, 0.34);
-  --on-accent: #fff; /* accent 填充上的文字/滑块色（各主题多为白） */
-  /* 按钮/主按钮三态底色（上批的实机值原样搬进 token，值不变、只是可被主题翻） */
-  --btn-bg-hover: #333a42;
-  --btn-bg-active: #262c33;
-  --accent-strong-hover: #3272d4; /* 白字 4.67:1，达 AA */
-  --accent-strong-active: #2a66c0; /* 白字 5.58:1 */
-  --danger: var(--red);
-  --warning: var(--amber);
-  --success: var(--green);
-  /* 等宽面按「这块在读什么」分三档，不按组件分（此前：Monaco 走它自己的平台默认栈、
-     `--font-mono` 一份、散装 `Consolas, 'Cascadia Mono', monospace` 八份，三处口径互不相干）。
-     --font-code    编辑器代码面。**真源是 TS**：`ui/code-font.ts` 的 CODE_FONT_STACK 同时喂
-                    Monaco 与下面这一行（`code-font.test.ts` 逐字比对，改一处必改两处）。
-                    拉丁头是 Cascadia 系（比 Consolas 宽 ~9%）⇒ **凡按 em 标了槽位的规则都不许取它**，
-                    那些面一律走 --font-meta。
-     --font-meta    UI 里的标识与读数面（规则 ID / 路径:行 / 计数 / 诊断码 / 键位串）。拉丁头
-                    与 --font-mono 逐字相同（Consolas 打头 ⇒ 3.4em / 9em 这类槽位零位移），
-                    差别只在 CJK 收尾给的是 **UI 黑体**：这些面要么被 ellipsis 截断、要么承载
-                    标签语义（中文角色名、诊断码短名、「按下新键位…」），从不跨行竖向对齐。
-     --font-console 多行成列的流面（时间戳 | 级别 | 中文消息）。CJK 收尾给**等宽**汉字面
-                    （Windows 必装 MS Gothic / Linux Noto Sans Mono CJK SC）：全角 advance
-                    严格 = 2×ASCII，竖着才对得齐、框线不断列。
-     --font-mono    没分档年代的默认档，值不动（约 30 处既有消费方零改动）；新写的规则一律按
-                    角色取上面三档，任何人不许再抄 Consolas 字面量。 */
-  --font-code: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace;
-  --font-meta: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Microsoft YaHei UI', 'Noto Sans CJK SC', monospace;
-  --font-console: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Noto Sans Mono CJK SC', 'MS Gothic', monospace;
-  --font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;
-  font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
-}
+/* 设计 token 单源已抽到 tokens.css（视觉批十一 L01-tokens）：本文件原先第 1-178 行
+   是它的逐字节副本，已删。加载契约：main.tsx 静态链 tokens.css → 本文件 → themes/*.css；
+   styles-split.equivalence.test.ts 的 E 闸禁止本文件（及其重档副本）再出现裸 :root 定义块。 */
 
 * {
   box-sizing: border-box;
@@ -289,13 +114,21 @@ textarea,
   caret-color: var(--accent);
 }
 
-/* 图标基类（UI P4 · §5.123）：16×16 网格、单色、`currentColor`。
-   颜色一律继承文字色——悬停变亮 / 禁用变暗 / `.on` 变 accent 都不必为图标另写规则，
-   这也是把 emoji 换成 SVG 的主要收益（emoji 不吃 `color`，永远是一群固定色）。
-   `vertical-align` 让裸图标与同行文字对齐；尺寸由调用处的 `size` 属性给，不靠 font-size。 */
+/* 图标基类（UI P4 · §5.123；批次十一 L10 定对齐两套口径）：
+   16×16 网格、单色、`currentColor`。颜色一律继承文字色——悬停变亮 / 禁用变暗 /
+   `.on` 变 accent 都不必为图标另写规则，这也是把 emoji 换成 SVG 的主要收益
+   （emoji 不吃 `color`，永远是一群固定色）。
+   对齐分两套场景，两条规则各管一边、互不打架：
+   - **flex/grid 行内**（按钮、工具条、导航行——绝大多数调用）：`align-self: center`
+     让图标在交叉轴自居中，不依赖行容器是否写了 `align-items: center`；
+     `vertical-align` 对 flex/grid item 天然无效，在这类容器里不参与对齐。
+   - **行内文字流**（图标直接混在文本句里，如状态栏、树徽标）：item 规则不生效，
+     由 `vertical-align: -0.16em` 按文字基线偏移。
+   尺寸由调用处的 `size` 档位给（`icons.tsx` 的 ICON_SIZES 四档），不靠 font-size。 */
 .icon {
   display: inline-block;
   flex: none;
+  align-self: center;
   vertical-align: -0.16em;
 }
 /* 未登记在图标表里的贡献（第三方插件的单字符 icon）按字形回落渲染 */
@@ -1665,123 +1498,30 @@ textarea {
 
 /* --------------------------- problems panel (HK-4 · UI-6) --------------------------- */
 
-/* 底部「问题」面板：复用约定面板视觉语言（.conv-summary/.conv-count/.conv-dot/
-   .conv-issue-btn/.conv-issue-loc/.conv-issue-msg），只补列表容器与诊断码标签。 */
-.panel-problems {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.prob-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  max-height: 320px;
-  overflow: auto;
-}
-.prob-item {
-  margin: 0;
-}
-.prob-code {
-  flex: none;
-  font-family: var(--font-meta);
-  font-size: var(--fs-0);
-}
+/* 底部「问题」面板的全部 `.prob-*` 规则已搬进 `problem-panel.css`（批次十一 L03）：
+   与 `.ksp-*` 检索面板同族的一整套（工具条 / 勾选 / 下拉 / 输入井 / 分组头 / 行密度 /
+   KitCount 计数徽标），双类选择器 `.panel-problems.prob …` 提特异性。
+   这里刻意**一条都不留**——旧档只有四条（`.panel-problems` / `.prob-list max-height:320`
+   / `.prob-item` / `.prob-code`），留着就是"同一个控件两本账"，也正是双重滚动条的出处
+   （滚动已交回 `.container-body`，见本文件「容器级滚动」段）。
+   行体仍复用约定面板的语言（`.conv-summary` / `.conv-count` / `.conv-dot` /
+   `.conv-issue-btn` / `.conv-issue-loc` / `.conv-issue-msg` / `.conv-empty` / `.conv-more`，
+   那些类留在上面那份里，两个面板共用）。 */
 
-/* ---------------------- 侧栏「在文件中搜索」（2026-10-15 检索批） ---------------------- */
 
-/* 结果行沿用问题面板的"位置 + 预览"两栏语言（.conv-issue-loc 同族），
-   只补输入条、三个开关与命中高亮。面板宽度只有一档（侧栏 260px 起），
-   所以预览一律尾部省略——换行会把"一屏几条结果"压到个位数。 */
-.panel-search {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.search-input {
-  flex: 1;
-  min-width: 0;
-}
-.search-toggle {
-  flex: none;
-  padding: 2px 5px;
-  font-size: var(--fs-0);
-  font-family: var(--font-meta);
-  /* 同一族钮上 `Aa`/`.*`（拉丁）与「全词」「全部替换」（汉字）并存：两个 `normal` 行高不同
-     会让一排钮高低不齐，钉死一个值。 */
-  line-height: 1.4;
-}
-/* 开关态：与壳层其它"已开启"控件同色（.on 用 accent 描边 + 淡底） */
-.search-toggle.on {
-  border-color: var(--accent);
-  color: var(--accent-text);
-  background: var(--accent-dim);
-}
-.search-ext-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-0);
-}
-.search-ext {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-0);
-}
-.search-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.search-status {
-  font-size: var(--fs-0);
-  line-height: 1.5;
-}
-.search-error {
-  color: var(--red);
-}
-.search-stopped {
-  color: var(--amber);
-}
+/* ---------------------- 「在文件中搜索」·跨视图通用行类（检索域真源收口批·L08） ---------------------- */
+
+/* 批次十一 L08：检索面板自己的 `.search-*` 视觉真源已全部收进
+   `ui/search-panel.css`（`.panel-search.ksp` 高特异性接管，旧类名仍挂元素上）。
+   这一段只保留**检索面板之外**的消费方——调用层级浮层 `CallHierarchyOverlay`
+   复用 `search-rows / search-match / search-loc`（复用关系归 L12 线，勿动；
+   浮层行不带 `.panel-search.ksp` 祖先，吃的就是这里的单类规则）。 */
 .search-rows {
   display: flex;
   flex-direction: column;
   max-height: 46vh;
   overflow: auto;
   font-size: var(--fs-1);
-}
-.search-file {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 4px 2px 2px;
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  border-top: 1px solid var(--bg-3);
-  position: sticky;
-  top: 0;
-  background: var(--bg);
-}
-.search-file-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.search-file-count {
-  flex: none;
-  font-family: var(--font-meta);
-  /* 命中计数：钉自己的档位（原来骑在祖先的 11px 上，同值但断了耦合）+ 等宽数字，
-     「9 → 10」不抖行尾 */
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-0);
 }
 .search-match {
   width: 100%;
@@ -1805,46 +1545,6 @@ textarea {
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-0);
   min-width: 3.4em;
-}
-.search-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* 命中高亮：不用 <mark> 的浏览器默认黄底——那是浅色底的设计，深色主题下刺眼 */
-.search-hit {
-  background: var(--accent-dim);
-  color: var(--accent-text);
-  border-radius: 2px;
-}
-
-/* 替换行（R7 搜索替换批）：与检索行同构；「全部替换」复用 .search-toggle 尺寸 */
-.search-replace-summary {
-  color: var(--accent-text);
-}
-.search-match-row {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-}
-.search-match-row .search-match {
-  flex: 1;
-  min-width: 0;
-  width: auto;
-}
-.search-replace-one {
-  flex: none;
-  align-self: center;
-  padding: 1px 6px;
-  font-size: var(--fs-0);
-  opacity: 0;
-}
-/* 悬停/键盘聚焦该行时显形：hover 覆盖鼠标，focus-within 覆盖 Tab 导航（UI-4 键盘可达） */
-.search-match-row:hover .search-replace-one,
-.search-match-row:focus-within .search-replace-one {
-  opacity: 1;
 }
 
 /* ------------------------------ editor ------------------------------ */
@@ -1897,6 +1597,12 @@ textarea {
   color: var(--amber);
   display: inline-flex;
   align-items: center;
+  /* 恒定占位宽（批次十一 L13）：非脏时这颗零宽，首次打字图标一插 ⇒ 后面整族控件
+     横移一格（"打字首字工具条抖一下"的前半条病因）。脏点走图标四档的 `xs`(12px)，
+     这里按 12 + 1px 余量钉成 13px 常宽，脏与非脏同格；改档位要同步改这一格。 */
+  width: 13px;
+  justify-content: center;
+  flex: none;
 }
 .spacer {
   flex: 1;
@@ -1908,9 +1614,27 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 30vw;
-  /* 同为实测修正：编码 · 换行 · 行数本来只有 140px，却被挤到 68px（clipX 52），
-     半句话都读不到。让位的次序是"目录 → 状态"，不是"状态 → 目录"。 */
+  /* 批次十一 L13 三拆后的口径：编码·换行·行数**已不在这里重打**（底部状态栏独一份），
+     这一格只剩 元信息（空档，留位）/ 瞬时态 / 错误 三档。旧注释里"被挤到 68px"的
+     让位问题随之消失——这里不再承载需要读全的常驻读数。 */
   flex: 0 0 auto;
+}
+/* 三档各有归属（EditorPane 状态位三拆）：
+   · meta   —— 常驻元信息位（当前为空档，`min-width` 在下方右簇规则里留恒定占位）；
+   · flash  —— 瞬时态（保存回执一类），比元信息亮一档，`STATUS_FLASH_MS` 后自动回落；
+   · error  —— 独立语义色 + 字重，与灰掉的事实同屏时它是唯一抢视线的东西（铁律 4）。 */
+.editor-status-meta {
+  display: inline-block;
+}
+.editor-status-flash {
+  color: var(--fg);
+}
+.editor-status-error {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--danger);
+  font-weight: 600;
 }
 /* 工具条按钮不许折行（实机截图看到「保存 / (Ctrl+S)」排成两行，把整条工具条撑到 50px 高，
    编辑器白白少一行多行的高度）。让位的仍然是左侧那段可缩的目录前缀。 */
@@ -1946,35 +1670,80 @@ textarea {
 }
 .editor-toolbar > .editor-status {
   flex: 0 1 auto;
-  min-width: 0;
+  min-width: 16ch; /* 元信息位空档也留恒定占位（批次十一 L13 右簇固定）：瞬时态一句话
+                      出现/回落不再推着「.kojo 预览」开关左右跳 */
+  text-align: right;
 }
 .editor-body {
   flex: 1;
   min-height: 0;
+  /* 批次十一 L13：装载骨架覆盖层的定位根（骨架绝对铺满，不参与 Monaco 测量） */
+  position: relative;
+}
+/* 编辑器装载骨架：Monaco 创建 / 首文件落屏之前顶替纯空白（EditorPane `showEditorSkeleton`）。
+   条子复用效果库 `.skeleton`（扫光），这里只管排布。
+   `z-index: 2` 是**组件内部**的先后（骨架压过 Monaco 自己那层空容器），不是全局层级梯上的一档
+   ——L01 的梯从 `--z-toolbar`(10) 起，凡 <10 的都只在父元素内比个大小，故不占 token 名；
+   若将来要把它抬进正式档，先在 tokens.css 登记再吃。 */
+.editor-body-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+}
+.editor-skeleton-bar {
+  height: 10px;
+  flex: none;
+}
+/* 糖 ↔ 代码切换的 200ms 过渡（批次十一 L13）：阅读态与代码态整屏排版不同，切换硬跳一次；
+   EditorPane 只在糖 model 真上/下屏那一拍挂 `sugar-swapping`。减弱动效由 UI-5 全局段压平。 */
+@keyframes sugar-swap-fade {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.editor-body.sugar-swapping {
+  animation: sugar-swap-fade var(--dur-2) var(--ease-out);
 }
 /* ERB 只读状态徽章（2026-10-12 反馈 5 归一）。
-   原先自造一套度量（11px / 半径 6px / padding 1px 6px），与全站徽章族（.nav-badge 等
-   11px / 半径 4px / padding 0 3px）不一致，看着像另一个系统的控件。现对齐徽章族度量。
-   （尺度已收进 token：字号 `--fs-0`、圆角 `--radius-sm`，见 §5.121 / §5.122。）
-   ⚠ 全站现有 4 套徽章样式（nav-badge / rp-badge / ab-badge / sv-verdict-badge）本就重复，
-   合并成单一 .badge 基类属 UI P4 打磨范围，不在本条顺手改（会波及 4 个插件）。 */
+   批次十一 L13 **度量合一**：这一族（说明徽章 / 「已解锁编辑」按钮 / 「直连可编辑」 /
+   校验暂停与折叠超额两枚通知）此前两套度量并存——只读徽章 `0 4px + --radius-sm`、
+   解锁按钮 `0 10px + --radius-pill + 18px`，同族控件不同级。现全部收进同一基线：
+   `padding 0 10px / --radius-pill / line-height 18px`（取控件感更强的一方作族标准，
+   按钮与徽章互切不再跳尺寸）。
+   注意：2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
+   （与底部状态栏重复），`.erb-mode-hint` 只剩「已解锁编辑」与「直连可编辑」两家——
+   别再把「只读」加回成一枚字符锁图标（图标一律走 `icons.tsx` 的 SVG 通道），
+   也别在工具条重造只读胶囊。 */
 .erb-mode-hint {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1); /* 与图标/文字的缝：吃 4px 语义档，不再写字面量 */
   flex: 0 0 auto;
   font-size: var(--fs-1);
   /* 配色按**风险**给，不按"有没有字"给：只读是游戏目录的安全默认态，作者一开就是
      二十个文件——给它琥珀警示色等于天天喊狼来了，真正该被看见的破例态反被淹掉。
-     故默认中性，`.unlocked` 才用 --warning。
-     ⚠ 2026-10-13 UI 反馈 1 之后，工具条的**只读**态改用底栏同款胶囊；2026-10-14 那颗也删了
-     （与底部状态栏重复），`.erb-mode-hint` 只剩「已解锁编辑」与「直连可编辑」两家——
-     别再把 🔒 加回来，也别在工具条重造只读胶囊。 */
+     故默认中性，`.unlocked` 才用 --warning。 */
   color: var(--fg-dim);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  padding: 0 10px;
+  line-height: 18px;
+  min-height: 18px;
   white-space: nowrap;
+}
+/* 通知档（校验暂停 / 折叠超额）：**恒定占位宽**。两枚徽章按条件插拔，宽度若随文案走，
+   换文件那一拍整条工具条跟着横移；互斥/共存切换时占位恒定（12 CJK @ --fs-1 + 图标 + padding）。 */
+.erb-mode-notice {
+  min-width: 186px;
+  justify-content: center;
 }
 
 /* 预览开关（2026-10-12 语法糖批）：整份 ERB 投影成 .kojo 写法 / 切回原生代码。
@@ -2009,12 +1778,10 @@ textarea {
 }
 
 /* 「可编辑」徽章自身就是回锁入口（原来的「恢复只读」按钮作废，能力没丢）：
-   观感与只读胶囊同族，用 hover 表达可点，不额外加颜色。 */
+   观感与只读胶囊同族，用 hover 表达可点，不额外加颜色。
+   批次十一 L13 度量合一后，padding/圆角/行高都在基类，这里只剩"按钮不要实底"一条。 */
 button.erb-mode-hint.unlocked {
   background: transparent;
-  border-radius: var(--radius-pill);
-  padding: 0 10px;
-  line-height: 18px;
 }
 button.erb-mode-hint.unlocked:hover {
   background: var(--hover);
@@ -2030,6 +1797,45 @@ button.erb-mode-hint.unlocked:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 1 auto;
+}
+
+/* 窄屏「更多」浮层（批次十一 L13 · 降级层级）：≤1280 时次要信息（目录前缀 /
+   校验暂停 / 折叠截断 / 糖摘要）收进这一族，**可取回**而不是 `display:none` 硬藏。
+   按钮只在真有内容时由 EditorPane 出现；浮层挂在按钮下方，外部按下/Esc 收起。 */
+.toolbar-more-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.toolbar-more-pop {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  /* 层级吃 token 梯（L01 单源）：工具条从属浮层走 `--z-overlay`(1000) 档——盖得住编辑器面，
+     但**必须在 `--z-modal`(1100) 之下**：弹着确认框时这一族不该浮在模态上抢答。
+     原写死的 1100 会把次要提示顶到与模态同级，是借来的位不是该站的位。 */
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  max-width: min(520px, 60vw);
+}
+.toolbar-more-pop .erb-mode-notice {
+  min-width: 0; /* 浮层里纵向排布，恒定占位宽只在横排工具条有意义 */
+}
+.toolbar-more-dir {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ------------------------------ modal ------------------------------ */
@@ -3251,7 +3057,7 @@ button.erb-mode-hint.unlocked:hover {
   word-break: break-word;
 }
 
-/* ================= 升糖预览面板（lift-*，升糖重定位批） ================= */
+/* ================= 升糖预览面板骨架（行级样式已随死类清理退出；见 git 历史） ================= */
 .panel-sugar-lift {
   display: flex;
   flex-direction: column;
@@ -3260,199 +3066,6 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
-}
-.lift-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-.lift-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.lift-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-.lift-row:hover {
-  background: var(--hover, rgba(128, 128, 128, 0.12));
-}
-.lift-range {
-  flex: 0 0 auto;
-  min-width: 52px;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-0);
-}
-.lift-kind {
-  flex: 0 0 auto;
-  font-weight: 600;
-  font-size: var(--fs-0);
-}
-.lift-sugar {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-0);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lift-warn {
-  flex: 0 0 auto;
-  color: var(--amber);
-  font-size: var(--fs-0);
-  border: 1px solid var(--amber);
-  border-radius: var(--radius-sm);
-  padding: 0 3px;
-}
-.lift-empty,
-.lift-more,
-.lift-hint {
-  font-size: var(--fs-0);
-  padding: 2px;
-}
-.lift-error {
-  color: var(--red);
-  font-size: var(--fs-0);
-  padding: 3px 2px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.lift-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.lift-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-/* --------- 糖视图面板：投影摘要（2026-10-12 语法糖批） --------- */
-/* 「这份文件读懂了多少」——面板的第一眼信息，给足字号与呼吸 */
-.lift-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.lift-coverage {
-  font-size: var(--fs-2);
-  font-weight: 600;
-  color: var(--fg);
-}
-.lift-breakdown {
-  font-size: var(--fs-0);
-}
-.lift-reasons {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-top: 2px;
-}
-.lift-reasons-head {
-  font-size: var(--fs-0);
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 2px;
-  margin-bottom: 3px;
-}
-.lift-reason-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-.lift-reason-row:hover {
-  background: var(--hover, rgba(128, 128, 128, 0.12));
-}
-.lift-reason-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lift-reason-count {
-  flex: 0 0 auto;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-0);
-}
-.lift-skips {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.lift-skips-head {
-  font-size: var(--fs-0);
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-  padding: 2px 0;
-}
-.lift-skip-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 1px 4px;
-  font-size: var(--fs-0);
-}
-.lift-skip-reason {
-  flex: 0 0 auto;
-}
-.lift-skip-msg {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-
-/* --------------- 升糖预览 ViewZone（编辑器内就地透镜） --------------- */
-/* Monaco 把 ViewZone 插在行间（绝对定位）；这里给足背景与边界，保证可读 */
-.lift-preview-zone {
-  background: var(--bg-3);
-  border-left: 3px solid var(--accent);
-  padding: 2px 8px 2px 10px;
-  font-size: var(--fs-1);
-  color: var(--fg);
-  overflow: hidden;
-}
-.lift-preview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--accent);
-  font-size: var(--fs-0);
-  line-height: 1.5;
-}
-.lift-preview-close {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-  padding: 0 6px;
-  cursor: pointer;
-}
-.lift-preview-close:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-
-/* 糖写法（打字机逐字填充）；等宽、保留缩进 */
-.lift-preview-sugar {
-  margin: 2px 0 0;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--fs-1);
-  line-height: 1.5;
-  white-space: pre;
-  color: var(--green);
 }
 
 /* --------------------- status bar（P0 简化形态） --------------------- */
@@ -3870,6 +3483,158 @@ button.erb-mode-hint.unlocked:hover {
    （宿主按内容收缩）。选择器与上面同源，:has 不可用时两条一起退回 80vh 那一档。 */
 .overlay-host:has(.wizard.tutorial) .wizard.tutorial {
   max-height: calc(88vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
+}
+/* ---------------- 批次十一 L12-overlays：浮层族统一外框（ov-*） ----------------
+   五家浮层（比对 / 文件时间线 / 操作历史 / 调用层级 / 快速修复预览）原先各写各的
+   `width: min(1180px, 92vw)` 式自定档：注册 `size` 缺席的宿主只有 560 一档，1180 的
+   内层塞进窄宿主 ⇒ 横向裁切 + 双滚动条（`.kd-host` 是现行案）。本批宽度一律收回宿主
+   三档——默认 560 / `.overlay-host-wide` 920 / 宽版再 `:has(.ov-xl)` 放宽到 1160
+   （与教程同格；比对与预览的 Monaco 井要的就是这道视野）——浮层只声明档位
+   （`overlayFrame` 的 `tier`），错位由宿主消化。`:has` 不可用时退回 920：窄一点，不破版。 */
+.overlay-host-wide:has(.ov-xl) {
+  width: min(1160px, 94vw);
+}
+/* fill 族（比对编辑器 / 快速修复预览）：宿主锁死不滚（教程宿主同款招），
+   滚动只发生在这家的 `.ov-body`；编辑器吃掉剩余高度。 */
+.overlay-host:has(.ov-fill) {
+  max-height: 88vh;
+  overflow: hidden;
+}
+/* 遮罩纵深合一档：只读查询面（`ov-query`）比破坏性确认面（`ov-modal`，维持原档）
+   减淡一档，与 `.floating-panel` 同族观感；点遮罩即关的行为不变。
+   套在 `@supports` 里：不支持磨砂的内核连这条一起撤（遮罩档的减轻依赖磨砂在位）。 */
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .overlay-backdrop:has(.ov-query) {
+    background:
+      radial-gradient(130% 105% at 50% -5%, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.34)),
+      rgba(8, 10, 13, 0.28);
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
+    backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(1.1);
+  }
+}
+/* `overlayFrame` 的骨架：标题栏（定高、不滚）/ 正文（唯一滚动的地方）/ 页脚（钉窗口底部）。 */
+.wizard.ov {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* 档宽收回宿主：外层 `.overlay-host` 已按 size 档给宽，内层吃满内容盒即可 */
+  width: auto;
+  max-height: calc(80vh - 2 * var(--space-4) - 2px);
+}
+.overlay-host:has(.ov-fill) .wizard.ov {
+  height: calc(88vh - 2 * var(--space-4) - 2px);
+  max-height: none;
+}
+.wizard.ov .ov-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.wizard.ov .ov-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* ✕：24×24 可点区与标签条关闭钮同口径；静息比正文弱一档、悬停回正色 */
+.wizard.ov .ov-close {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+.wizard.ov .ov-close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.wizard.ov .ov-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.wizard.ov .wizard-actions.ov-foot {
+  flex: none;
+  margin: 0;
+}
+/* 编辑器井（比对 `.kd-editor` / 预览 `.qfp-editor`）在 fill 面里吃满剩余高度：
+   `.kd-editor` 原 `height: 62vh` 是"宿主自己滚"时代的定高，fill 时代由 flex 给高。 */
+.wizard.ov.ov-fill .ov-body {
+  overflow: hidden;
+}
+.wizard.ov.ov-fill .kd-editor,
+.wizard.ov.ov-fill .qfp-editor {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 240px;
+}
+/* 快速修复预览的编辑器井（P2-14 建了类一直没建样式 ⇒ 零高塌陷，预览读作"没画面"）：
+   非 fill 兜底态也给一口看得见的井。 */
+.qfp-editor {
+  height: 52vh;
+  min-height: 240px;
+  border: 1px solid var(--border, #3a4252);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.qfp-hint {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.45;
+}
+/* 装载态（`overlaySpinner` / 骨架）：转圈与骨架行都是"确实在等"的脸 */
+.ov-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+.ov-skeleton-row {
+  height: 14px;
+  border-radius: var(--radius-sm);
+}
+.ov-skeleton-row + .ov-skeleton-row {
+  margin-top: var(--space-1);
+}
+.ov-skeleton-well {
+  height: 52vh;
+  min-height: 240px;
+  margin-top: var(--space-2);
+  border-radius: var(--radius-md);
+}
+/* 退场动画：入场 `overlay-in`（--dur-3 弹簧）的回声，收得比开得快一档。
+   类由 `overlay-chrome.OVERLAY_EXIT_CLASS` 供给；卸载时机在 `ShellLayout.tsx`
+   （本批只备类与动画，挂类接线的施工单见批次回执）。 */
+@keyframes overlay-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+}
+.overlay-host.ov-exiting {
+  animation: overlay-out var(--dur-2) var(--ease-out) forwards;
+}
+.overlay-backdrop:has(.ov-exiting) {
+  animation: fade-in var(--dur-2) var(--ease-out) reverse forwards;
 }
 /* 回落一：老内核不支持 backdrop-filter ⇒ 实心，绝不破版（磨砂只是加分项，不是前提）。
    选择器列表与上面主规则逐条同集，一条不落。 */
@@ -4935,7 +4700,7 @@ button.primary .hint {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 1200;
+  z-index: var(--z-toast);
   max-width: 400px;
 }
 .toast {
@@ -5019,9 +4784,13 @@ button.primary .hint {
   height: 100%;
   overflow: hidden;
 }
-/* 双真相源提示条（常驻）：写保护铁律的 UI 明示面 */
+/* 双真相源提示（可关闭）：写保护铁律的 UI 明示面。正文用人话、整段口径在 title，
+   所以这一行只吃一格高度，不再靠"常驻一整句口号"换注意力。 */
 .kp-notice {
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--fs-1);
   line-height: 1.5;
   color: var(--fg-dim);
@@ -5029,23 +4798,70 @@ button.primary .hint {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+}
+.kp-notice-icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--accent-text);
+}
+.kp-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
   cursor: help;
 }
+.kp-notice-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  border-radius: var(--radius-sm);
+  opacity: 0.7;
+}
+.kp-notice-close:hover {
+  opacity: 1;
+  background: var(--hover);
+}
+/* 工具条：计数（纯文字）在左、三枚动作在右。
+   260px 侧栏实测会把「1 个项/目」「＋ 新/建」「导入项/目」从字中间折断——根因是
+   `space-between` 两头挤 + 标签与按钮都没有 nowrap。这里改成：谁都不许被压缩折断，
+   装不下就整行换行（宁可两行也不撕裂字）。 */
 .kp-toolbar {
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
 }
 .kp-toolbar-label {
+  flex: none;
+  white-space: nowrap;
   font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
 }
 .kp-toolbar-actions {
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-1);
+  margin-left: auto;
+  min-width: 0;
+}
+/* 动作钮：图标 + 文字同一基线，横向永不收缩（换行交给整组，而不是某个字） */
+.kp-toolbar-actions > button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
 .kp-body {
   flex: 1;
@@ -5055,16 +4871,45 @@ button.primary .hint {
   padding-top: var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   animation: fade-in var(--dur-2) var(--ease-out);
 }
-.kp-empty {
-  padding: var(--space-3) var(--space-1);
-  font-size: var(--fs-2);
-  word-break: break-word;
+/* 空态 / 错误态卡片：虚线框说"这里空的"，比一句灰字更像一格可待的位置。
+   ui-kit-candidate: 面板空态卡（虚线框 + 题头 + 一句指引 + 可选 CTA），与各面板同款待收编 */
+.kp-card {
+  flex: none;
+  margin: var(--space-1) var(--space-1) 0;
+  padding: var(--space-4) var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  text-align: center;
 }
-.kp-empty.err {
+.kp-card-err {
+  border-color: var(--danger);
+  border-style: solid;
+}
+.kp-card-title {
+  font-size: var(--fs-2);
+  color: var(--fg);
+}
+.kp-card-err .kp-card-title {
   color: var(--red);
+}
+.kp-card-text {
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.kp-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--space-1);
+  white-space: nowrap;
 }
 .kp-actions {
   padding: 0 var(--space-1);
@@ -5110,6 +4955,11 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 项目行是这一层唯一的"块级入口"，比包行 / 文件行高一格呼吸（密度问题的正解是
+   让可点的东西更可读，而不是把行压扁去塞更多空行） */
+.kp-project-btn {
+  padding: 5px 6px;
+}
 .kp-artifact-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5132,10 +4982,37 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 行尾计数徽标：胶囊底 + tabular-nums，与检索面板 .ksp-file-count 同族，
+   这样"行右侧那枚数字"在全应用只有一个形状。
+   ui-kit-candidate: 行尾计数徽标（胶囊 + 等宽数字），建议收进 ui-kit 与 ksp-file-count 合流 */
 .kp-count {
-  flex: none;
+  flex: 0 0 auto;
   margin-left: auto;
-  font-size: var(--fs-1);
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 分组头：一段列表的点名行（包 / 包之外的目录两段同屏时才出现）。
+   顶线 + 小字 + 行尾计数，与检索面板文件头（.search-file + .ksp-file-count）同一套读法。
+   ui-kit-candidate: 面板内分组头（hairline + 名称 + 计数徽标） */
+.kp-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1) 6px 2px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-0);
+  letter-spacing: 0.02em;
+  color: var(--fg-dim);
+  white-space: nowrap;
 }
 .kp-dir-name,
 .kp-file-name,
@@ -5266,7 +5143,9 @@ button.primary .hint {
 
 /* 教程入口（E6）：常驻面板底部，不进树的滚动区——写不动时抬头就能找到。
    高度可用上方分割线（.kp-splitter）上下拉伸（E9）；min-height 兜住内容，
-   拖到极限也不裁掉两个入口。
+   拖到极限也不裁掉入口。
+   批次十一：默认收成一行题头（.kp-tutorials-head 即展开键），分割线只在展开态存在；
+   收起 = 下面 body 整块 display:none（行留在 DOM，不靠条件渲染）。
    2026-10-18（反馈 1）：行按钮 hover 有 translateX(2px)，而行是 width:100%——水平溢出的
    2px 会让 overflow-x 随 overflow-y:auto 变成 auto，水平滚动条出现 / 消失又改变可用高度，
    悬停就在"丢失 → 恢复"之间无限上下抖。这里两件事一起做：水平方向永不滚（裁剪掉任何残余
@@ -5277,6 +5156,55 @@ button.primary .hint {
   overflow-x: hidden;
   padding-right: 2px;
   min-height: max-content;
+}
+/* 题头即展开键（批次十一）：默认只占一行，四本教程收在里面——把整栏高度还给口上树。
+   折叠走 class（下面 body 用 display:none），行留在 DOM，展开不必重挂。 */
+.kp-tutorials-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.kp-tutorials-head:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.kp-tutorials-head:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+.kp-tutorials-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kp-tutorials-body.kp-collapsed {
+  display: none;
+}
+/* 收起态的摘要 chip：只说"里面有几本"，展开后同一事实已在行里，不重复 */
+.kp-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 14px;
 }
 /* 树体 ←→ 教程区的拖拽分割线（E9）：静息一条细线，悬停 / 拖拽中亮起（与壳层 .resizer 同族）。
    命中区上下各吃一半布局间隙（负 margin），视觉上仍是贴着树底的一条线。 */
@@ -5301,10 +5229,11 @@ button.primary .hint {
 .kp-splitter.dragging::after {
   background: var(--accent);
 }
+/* 题头里的名字格：内衬交给 .kp-tutorials-head（否则一行里出现两层 padding） */
 .kp-tutorials-title {
+  flex: none;
   font-size: var(--fs-0);
   letter-spacing: 0.04em;
-  padding: 0 6px 2px;
 }
 
 /* --------- 行内新建（反馈 1b）：命名框就长在树里，不弹窗 --------- */
@@ -7350,8 +7279,10 @@ button.primary .hint {
 
 /* ===================== b/hist/1015 独占区块：通用 diff 视图 ===================== */
 /* 并发批次请勿重排本块；新样式在块内追加。 */
+/* 批次十一 L12：档宽收回宿主（见 overlay 区段 `ov-*`）——原 `min(1180px, 92vw)`
+   在 `size:'wide'`（920）的宿主里横向被裁，就是"内层反向撑破外层"的现行案。 */
 .kd-host {
-  width: min(1180px, 92vw);
+  width: auto;
 }
 /* W10 多开栈标签条：单本比对时组件不渲染任何节点 ⇒ 样式侧零占位、零空隙 */
 .kd-tabs {
@@ -7448,18 +7379,23 @@ button.primary .hint {
 .kd-banner.ok {
   margin: 0 0 10px;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: rgba(60, 180, 110, 0.12);
-  color: #7ad39a;
+  border-radius: var(--radius-md);
+  /* 批次十一 L12 语义色归一：原 `#7ad39a` / `rgba(60,180,110,.12)` 是写死的浅色字面，
+     light/mint-dark 主题下不翻色——成功面改吃 `--success`（wash 用 color-mix 同 dev-note 口径）。 */
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
 }
 .kd-error {
   margin: 0 0 8px;
-  color: #e57373;
+  /* 同上：`#e57373` → `--danger`（= `--red`），三主题自动跟随 */
+  color: var(--danger);
   overflow-wrap: anywhere;
 }
 /* —— 部署比对窗（b/hist/1015，同属上块） —— */
+/* L12：`min(1080px, 92vw)` 收进宿主档（920 的 wide 宿主吃满即可）。当前无消费方挂这个类
+   （2026-10-24 全仓 grep 零命中）——样式留着，规则先归一，别让下一个人再抄一次野档位。 */
 .dd-host {
-  width: min(1080px, 92vw);
+  width: auto;
 }
 .dd-table {
   width: 100%;
@@ -7476,16 +7412,18 @@ button.primary .hint {
 .dd-path {
   overflow-wrap: anywhere;
 }
+/* L12 语义色归一：`#e8b86a`→`--warn`、`#9aa4b2`→`--fg-dim`（写死字面不随三主题翻色） */
 .dd-modified .dd-path {
-  color: #e8b86a;
+  color: var(--warn);
 }
 .dd-workspace-only .dd-path,
 .dd-game-only .dd-path {
-  color: #9aa4b2;
+  color: var(--fg-dim);
 }
 /* —— 本地时间线（b/hist/1015，同属独占区块） —— */
+/* L12：860 的半档同样收回宿主（这两家注册都带 `size:'wide'`，吃 920 档） */
 .fh-host {
-  width: min(860px, 92vw);
+  width: auto;
 }
 .fh-path {
   overflow-wrap: anywhere;
@@ -7681,27 +7619,10 @@ button.primary .hint {
   opacity: 1;
 }
 
-/* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ---- */
-.search-scope-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-0);
-}
-.search-scope {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-0);
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  padding: 2px 4px;
-}
-.search-scope-empty,
-.search-scope-stale,
-.search-scope-notice {
-  color: var(--amber);
-}
+/* ---- C3 领域限定检索：检索范围选择器（1016 独占追加区块；勿在他处重排） ----
+   批次十一 L08 收口：`.search-scope-row/.search-scope/.search-scope-empty|stale|notice`
+   只被检索面板消费，视觉早已由 `search-panel.css` 的 `ksp-opt-row / ksp-opt-select /
+   ksp-note-warn`（高特异性）接管且逐字节同效——旧基线规则删除，真源单一化。 */
 
 
 /* ==============================================================   G1「看这一行的状态」（2026-10-16 跳到命中状态批）
@@ -7786,386 +7707,7 @@ button.primary .hint {
   white-space: nowrap;
 }
 
-/* ========================== 口上市场面板（mk-*，KM-3） ========================== */
-/* 视觉基准：专业工具的克制与密度（VSCode 口径）。三条纪律贯穿本块——
-   ① 只用本仓设计 token（--fs-* / --space-* / --radius-* / 语义色 / --dur-1 var(--ease-out)），
-      不发明 token、不留魔法数字（行高这类排版必需值除外）；
-   ② 滚动分层：工具条与状态簇是钉住的「仪表区」，列表体（.mk-body）自滚；
-   ③ 过渡只碰颜色/边框（background-color / border-color / box-shadow / color），不过渡 layout。
-   动效降级不在此另写开关：文件上方 `:root[data-motion='reduced']` 全局规则已把一切
-   transition/animation 压平，本块沿用同一口径（见 UI-5）。 */
-
-.panel-market {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  padding: 0;
-  font-size: var(--fs-1);
-  /* 画布压回 --bg：aux 侧栏本身是 --bg-2，行卡要用 --bg-2 才抬得起来，两层必须错开 */
-  background: var(--bg);
-  /* 缺省（结构尚无 .mk-body）仍可整体滚，绝不裁内容；钉顶分层见下方 :has 规则 */
-  overflow: auto;
-}
-/* 单视图时把面板钉进侧栏可视高度（与 .panel-kojo-projects / .panel-condition-matrix 同规） */
-.sidebar-views:not(.split) > .panel-market {
-  height: 100%;
-}
-/* 有独立滚动体 ⇒ 外层不滚：工具条/状态簇才真钉得住，滚动条也只出现在列表一侧 */
-.panel-market:has(.mk-body) {
-  height: 100%;
-  overflow: hidden;
-}
-
-/* ---------- 工具条：一条 chrome，不是列表的第一行 ---------- */
-.mk-toolbar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
-}
-.mk-search {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-1);
-}
-.mk-search:hover {
-  border-color: var(--accent-dim);
-}
-.mk-search:focus {
-  border-color: var(--focus-ring);
-}
-.mk-search::placeholder {
-  color: var(--fg-dim);
-}
-/* 清除键：与输入框视觉一体的内联小控件——静息无边框，只在 hover 时提亮 */
-.mk-clear {
-  flex: none;
-  padding: var(--space-1) var(--space-2);
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-  line-height: 1.5;
-}
-.mk-clear:hover:not(:disabled) {
-  background: var(--hover);
-  border-color: transparent;
-  color: var(--fg);
-}
-
-/* ---------- 状态簇（仪表区）：读起来是读数，不是内容 ---------- */
-.mk-flash {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-}
-/* 兜底：状态行还没被 .mk-flash 包住时（旧结构），也要有仪表区的左右留白与节奏 */
-.panel-market > .mk-status,
-.panel-market > .mk-note,
-.panel-market > .mk-warn,
-.panel-market > .mk-time,
-.panel-market > .mk-hint {
-  margin: var(--space-1) var(--space-3);
-}
-/* 仪表行骨架：左侧 2px 色条 + --bg-2 底 + 统一 padding 节奏（三档语义色在下面分派） */
-.mk-status,
-.mk-note,
-.mk-flash .mk-warn {
-  padding: var(--space-1) var(--space-2);
-  background: var(--bg-2);
-  border-left: 2px solid var(--border);
-  border-radius: var(--radius-xs);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-/* status = 警示（拉取/装卸的异常口径一律走这里，不弹窗） */
-.mk-status {
-  color: var(--amber);
-  border-left-color: var(--amber);
-}
-/* note = 进行中 / 结果 */
-.mk-note {
-  color: var(--fg);
-  border-left-color: var(--accent);
-}
-/* warn = 错误：行内是纯红字，仪表区里才上色条 */
-.mk-warn {
-  color: var(--red);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-.mk-flash .mk-warn {
-  border-left-color: var(--red);
-}
-/* 数据时间：常驻读数，等宽数字防止分钟位变化时整行抖动 */
-.mk-time {
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
-}
-/* 能力边界提示：折叠感的次要句，允许换行但不抢主行 */
-.mk-hint {
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-/* ---------- 列表体：唯一的滚动容器 ---------- */
-.mk-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  /* 顶部刻意不留 padding：粘性分区标题要贴住滚动视口上缘，不能留出露内容的缝 */
-  padding: 0 var(--space-3) var(--space-3);
-}
-/* 滚动条口径与本仓其他面板一致（.shell .panel / .container-body 的 8px 细轴） */
-.mk-body::-webkit-scrollbar {
-  width: 8px;
-}
-/* 旧结构兜底：列表/分组直接挂在面板上时补左右留白 */
-.panel-market > .mk-list,
-.panel-market > .mk-group,
-.panel-market > .mk-empty {
-  padding-inline: var(--space-3);
-}
-
-/* ---------- 分区标题：粘性，且必须带实心底 ---------- */
-.mk-grouptitle {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  /* h4 自带 margin 会把粘性盒带出位移，归零后节奏全交给 padding */
-  margin: 0;
-  padding: var(--space-2) var(--space-1) var(--space-1);
-  /* 实心底：否则滚动时标题文字直接叠在行卡上 */
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--fs-0);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--fg-dim);
-}
-.mk-count {
-  margin-left: auto;
-  font-weight: 400;
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.mk-list,
-.mk-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-height: 0;
-}
-
-/* ---------- 行 = 卡片：安静底、hover 提亮、展开给导轨而非整圈粗边 ---------- */
-.mk-row {
-  padding: var(--space-1) var(--space-2);
-  background-color: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    border-color var(--dur-1) var(--ease-out),
-    box-shadow var(--dur-1) var(--ease-out);
-}
-/* --hover 是半透明白，当 background-color 会把 --bg-2 顶掉（合成后≈静息色，等于没亮），
-   故以 background-image 叠一层在 token 底之上 */
-.mk-row:hover {
-  background-color: var(--bg-2);
-  background-image: linear-gradient(var(--hover), var(--hover));
-  border-color: var(--accent-dim);
-}
-.mk-row.open {
-  border-color: var(--accent-dim);
-  /* 展开态强调：左侧 2px 内导轨，比整圈 accent 粗边克制得多 */
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-/* 一张卡两排：第一排名字 + 动作（动作钉右端），第二排次要事实。
-   刻意不做成"一个 wrap 容器排到底"——名字吃掉剩余宽度会把动作挤到第三排，
-   窄侧栏里一张卡就从两行变四行，密度直接垮掉。 */
-.mk-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.mk-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-2);
-  min-width: 0;
-}
-.mk-facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: var(--space-2);
-  row-gap: var(--space-1);
-}
-/* 行锚点：名字吃掉剩余宽度，长名走省略号（`title` 给全名回读）；事实被动让位 */
-.mk-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-1);
-  font-weight: 600;
-  color: var(--fg);
-}
-.mk-meta {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  overflow-wrap: anywhere;
-}
-/* 徽章：胶囊、无边框（描边徽章是这套视觉里最廉价的一块） */
-.mk-badge {
-  flex: none;
-  padding: 0 var(--space-2);
-  border: none;
-  border-radius: var(--radius-pill);
-  background: var(--accent-dim);
-  color: var(--accent-text);
-  font-size: var(--fs-0);
-  line-height: 1.6;
-}
-
-/* ---------- 动作簇：始终右靠；窄面板换行后仍落在行尾 ---------- */
-.mk-actions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-1);
-  flex: none;
-  margin-left: auto;
-}
-.mk-actions > button,
-.mk-head button {
-  flex: none;
-}
-/* 禁用观感统一：透明度沿用全局 button:disabled 口径，只把光标说清楚 */
-.mk-actions button:disabled,
-.mk-toolbar button:disabled,
-.mk-head button:disabled,
-.mk-clear:disabled {
-  opacity: var(--disabled-opacity);
-  cursor: not-allowed;
-}
-
-/* ---------- 子层：摘要/来源（正文侧）与展开层（机器侧） ---------- */
-/* 子行左缘与 .mk-name 起点对齐（行卡自身的 --space-2 内边距即缩进，故不再另给左 padding）；
-   长 URL 靠 overflow-wrap:anywhere 就地断开——来源网址撑破卡片是本面板既有的观感事故 */
-.mk-sub {
-  margin-top: var(--space-1);
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-/* 来源网址可点（已接外链原语）：button 语义、沿用 .mk-sub 的灰字观感，hover 提一下色 */
-.mk-link {
-  padding: 0;
-  border: none;
-  background: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.mk-link:hover { color: var(--accent); }
-/* 展开层 = 调试抽屉：等宽小字 + 竖线 + 抬一档淡底，不像正文 */
-.mk-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  border-left: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-3);
-  font-family: var(--font-mono);
-  font-size: var(--fs-0);
-  color: var(--fg-dim);
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-/* ---------- 空态：给存在感，不是贴在左边缘的一行灰字 ---------- */
-.mk-empty {
-  padding: var(--space-3) var(--space-2);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
-  color: var(--fg-dim);
-  font-size: var(--fs-1);
-  line-height: 1.6;
-  text-align: center;
-}
-
-/* ---------- 危险动作确认簇：视觉上必须与普通动作分开 ---------- */
-.mk-confirm {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-  flex: none;
-  padding-left: var(--space-2);
-  border-left: 2px solid var(--amber);
-  color: var(--amber);
-  font-size: var(--fs-0);
-}
-/* 本仓没有全局 `.danger` 按钮类 ⇒ 不新造全局类，只在确认簇作用域内给危险按钮着色 */
-.mk-confirm > button:first-of-type {
-  background: none;
-  border-color: var(--red);
-  color: var(--red);
-}
-.mk-confirm > button:first-of-type:hover:not(:disabled) {
-  background: var(--red);
-  border-color: var(--red);
-  color: var(--bg);
-}
-
-/* ---------- 键盘可见性：口径与全局 :focus-visible 完全一致（1px accent / offset 1px） ---------- */
-.mk-search:focus-visible,
-.mk-clear:focus-visible,
-.mk-toolbar button:focus-visible,
-.mk-head button:focus-visible,
-.mk-actions button:focus-visible,
-.mk-confirm button:focus-visible {
-  outline: 1px solid var(--focus-ring);
-  outline-offset: 1px;
-}
+/* ========================== 口上市场面板（mk-*）：整域已迁至 market.css（批次十一 L07）——本文件不再承载市场域规则 ========================== */
 
 /* ==================== 退出/崩溃守护（guard，2026-10-16） ==================== */
 /* 欢迎页两个入口：崩溃恢复横幅 + 继续上次会话。色温沿用 .notice.warn 的琥珀系 */
@@ -8189,8 +7731,9 @@ button.resume-session {
 }
 
 /* ===== 操作历史（b/undo/1016-batch-undo 独占追加区块：oh-*；同族观感照 fh-*） ===== */
+/* L12：同 `.fh-host`——半档收回宿主（注册带 `size:'wide'`，吃 920 档） */
 .oh-host {
-  width: min(860px, 92vw);
+  width: auto;
 }
 .oh-path {
   overflow-wrap: anywhere;
@@ -8227,61 +7770,6 @@ button.resume-session {
 }
 .oh-kind-new {
   color: var(--green, #7ec699);
-}
-/* 键盘快捷键对话框（R8）：注册表可查可改的显示面；复用 .modal 骨架 */
-.keybindings-dialog {
-  width: min(640px, 92vw);
-}
-.keybindings-dialog h2 {
-  margin: 0 0 4px;
-  font-size: var(--fs-2);
-}
-.keybindings-list {
-  max-height: 56vh;
-  overflow: auto;
-  margin: 8px 0;
-  border: 1px solid var(--bg-3);
-  border-radius: var(--radius-sm);
-}
-.keybindings-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 8px;
-  font-size: var(--fs-1);
-  border-bottom: 1px solid var(--bg-3);
-}
-.keybindings-row:last-child {
-  border-bottom: none;
-}
-.keybindings-row.capturing {
-  background: var(--accent-dim);
-}
-.keybindings-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.keybinding-chord {
-  flex: none;
-  min-width: 9em;
-  text-align: right;
-  font-family: var(--font-meta);
-  /* 键位串含数字键 ⇒ 等宽数字保右对齐列不抖；捕获态写的是中文「按下新键位…（Esc 取消）」，
-     旧栈在 9em 槽位里混汉字全靠运气。字号原来骑在祖先上，钉成同值档位断开耦合。 */
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-1);
-  color: var(--fg-dim);
-}
-.keybindings-notice {
-  font-size: var(--fs-0);
-  color: var(--accent-text);
-  background: var(--accent-dim);
-  border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  margin: 4px 0;
 }
 
 /* ==== 编辑器组（SPLIT-1 分屏批）：多组并排，每组自带标签条；组间分隔条可拖 ==== */
@@ -8765,60 +8253,7 @@ button.resume-session {
    同名选择器一律靠"块在文件最末 ⇒ 后来者胜"叠加，不覆盖各面板区块的原有语义属性。
    ============================================================================ */
 
-/* ---------- A. 口上市场（mk-*）：行卡抬起来 + chrome 分层 + 仪表簇 ---------- */
-.mk-row {
-  /* 顶替原 .mk-row 的 transition 清单（同特异性、后来者胜），补 transform/box-shadow 档 */
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    border-color var(--dur-1) var(--ease-out),
-    box-shadow var(--dur-2) var(--ease-out),
-    transform var(--dur-2) var(--ease-spring);
-}
-.mk-row:hover {
-  /* 既有 hover 提亮（background-image/border-color accent-dim）不动，只叠"抬起来" */
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-1);
-}
-.mk-row:active {
-  transform: translateY(0);
-}
-/* 展开态：左导轨语义保留，叠一层极淡 accent 底（比 --accent-dim 再轻一档） */
-.mk-row.open {
-  background-color: color-mix(in srgb, var(--accent) 7%, var(--bg-2));
-}
-.mk-row.open:hover {
-  transform: translateY(-1px);
-  box-shadow:
-    inset 2px 0 0 var(--accent),
-    var(--shadow-1);
-}
-/* 工具条与粘性标题：顶边高光把 chrome 从列表里拔出来；标题另垫一档浮影，
-   滚动时行卡从标题**底下**钻过去的层次一读就明 */
-.mk-toolbar {
-  box-shadow: var(--edge-raise);
-}
-.mk-grouptitle {
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-1);
-}
-/* 仪表区三档语义：底色随色条走极淡同族 tint（静息 --bg-2 的替代，读起来更像仪表） */
-.mk-status {
-  background: color-mix(in srgb, var(--amber) 8%, var(--bg-2));
-}
-.mk-note {
-  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
-}
-.mk-flash .mk-warn {
-  background: color-mix(in srgb, var(--red) 8%, var(--bg-2));
-}
-.mk-badge {
-  box-shadow: var(--edge-raise);
-}
-/* 空态：给一个 sunken 井底，虚线框不再只是"一块空白套边框" */
-.mk-empty {
-  background: color-mix(in srgb, var(--surface-sunken) 55%, transparent);
-}
+/* ---------- A. 口上市场（mk-*）：整组已迁至 market.css（批次十一 L07）；B 组起其余面板照旧 ---------- */
 
 /* ---------- B. 卡片行的同款手感：归档浏览器（ab-*） ---------- */
 .ab-row {
@@ -8973,8 +8408,6 @@ button.resume-session {
 .pv-row,
 .pv-diag,
 .sv-row,
-.lift-row,
-.lift-reason-row,
 .conv-group-btn,
 .conv-issue-btn {
   transition:
@@ -9009,8 +8442,7 @@ button.resume-session {
 }
 /* 计数芯片/判定条：tint 用 currentColor 派生——色相仍由既有规则分派，零新增语义 */
 .pv-chip.bad,
-.pv-chip.warn,
-.lift-warn {
+.pv-chip.warn {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .sv-verdict {
@@ -9037,11 +8469,10 @@ button.resume-session {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- G. 错误带统一成"警示条"：六面板的 *-error 同一身份 ---------- */
+/* ---------- G. 错误带统一成"警示条"：各面板的 *-error 同一身份 ---------- */
 .rp-error,
 .sv-error,
 .inj-error,
-.lift-error,
 .ab-error,
 .cm-error {
   border-radius: var(--radius-sm);
@@ -9247,50 +8678,7 @@ button.resume-session {
   color: var(--note-fg, var(--fg-dim));
 }
 
-/* ============================================================================
-   口上市场 UI 精修批（MK-UI 2026-10-17 · 追加区块：**只追加、不重排、不改语义**）
-   ----------------------------------------------------------------------------
-   承接上批「面板效果推广」的市场面（A 节），把 mk 仪表区补成完整的一块：
-   ① 搜索框落井面（本仓约定"输入比容器暗"：--surface-sunken + --well-edge）；
-   ② 徽章语义色档：可更新 = amber（有事可做）、已装 = green（无事）——带字那句
-      仍由 updatePhrase 单源给出，这里只决定同一句读起来是喜是警；
-   ③ .mk-progress：无文字 hairline 进度条（带字的进度句仍只住 .mk-note 一处），
-      轨道用井面、填充用 --accent；总数未知时根本不渲染（不画假进度）。
-   纪律同上批：只用既有 token；同名选择器靠"块在文件最末 ⇒ 后来者胜"叠加，
-   不覆盖各面板区块的原有语义属性；动效降级交给 :root[data-motion='reduced'] 全局压平。
-   ============================================================================ */
-
-/* ---------- 搜索框落井面 ---------- */
-.mk-search {
-  background: var(--surface-sunken);
-  box-shadow: var(--well-edge);
-}
-
-/* ---------- 徽章语义色档（文案不动，只换读感） ---------- */
-.mk-badge-warn {
-  background: color-mix(in srgb, var(--amber) 14%, var(--bg-2));
-  color: var(--amber);
-}
-.mk-badge-ok {
-  background: color-mix(in srgb, var(--green) 13%, var(--bg-2));
-  color: var(--green);
-}
-
-/* ---------- hairline 进度条：轨道 3px（仪表读数的排版必需值），圆角随胶囊 ---------- */
-.mk-progress {
-  position: relative;
-  height: 3px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-sunken);
-  box-shadow: var(--well-edge);
-  overflow: hidden;
-}
-.mk-progress-fill {
-  height: 100%;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  transition: width var(--dur-2) var(--ease-out);
-}
+/* 口上市场 UI 精修批（MK-UI 2026-10-17）：市场域整族已迁至 market.css（批次十一 L07）。 */
 
 /* ===== 设置浮层左导航栏（b/kbset/1017 批次独占追加区块：settings-nav-*） ===== */
 /* 外壳改「左导航栏 + 右分节面板」后浮层要更宽更高：尺寸一律走 CSS 变量（不散字面量）。
@@ -9872,7 +9260,11 @@ button.resume-session {
    `.file-label` 的 title 里（EditorPane 那侧 title={filePath} 零改动，悬停即得）。
    目录与文件名之间补「/」分隔，旧版两段裸挨（实测读出「靈夢 靈夢 …」歧义）。
    视图控制（`.kojo 预览` 开关 + 糖摘要）用 flex order 挪过 spacer，
-   归入行右侧的信息区，不再挤在路径中段；保存键行为与 title 原样。 */
+   归入行右侧的信息区，不再挤在路径中段；保存键行为与 title 原样。
+   批次十一 L13 补：这条 `.file-dir` 隐藏是**全宽度的项目相对口径**（绝对长前缀恒在
+   `.file-label` 的 title），不是窄屏让位手法；1280 以下的次要信息让位改走工具条
+   「更多」浮层（`.toolbar-more-pop`，EditorPane `narrowToolbar`）——`.file-dir` 的
+   内容同样能在浮层里取回，降级有层级，不是一藏了之。 */
 .editor-toolbar .file-label .file-dir {
   display: none;
 }

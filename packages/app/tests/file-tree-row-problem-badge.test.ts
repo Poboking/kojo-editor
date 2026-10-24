@@ -147,14 +147,20 @@ const rowsSel = 'button.tree-file';
 const badgeOf = (path: string): Element | null =>
   container.querySelector(`button[data-locate="${path}"] .tree-prob-mark`);
 
-/** 「符号 空格 数字」那三枚内层 span 的读数（与 `problem-truth-single-source` 同一把尺） */
-const badgeSpans = (scope: ParentNode, sel: string): string[] =>
-  [...scope.querySelectorAll(`${sel} .tree-prob-mark > span`)]
-    .map((s) => s.textContent ?? '')
-    .filter((t) => t.startsWith('✕') || t.startsWith('⚠'));
+/**
+ * 徽标两档的内层读数格（L10 图标批：`✕ n`/`⚠ n` 字符换成 `data-prob` + 状态族 SVG + 数字；
+ * 与 `problem-truth-single-source` 同一把尺——按 `data-prob` 点名，读数取那格的数）。
+ */
+const badgeParts = (scope: ParentNode, sel: string): number[] =>
+  [...scope.querySelectorAll(`${sel} .tree-prob-mark > span[data-prob]`)].map((s) =>
+    Number((s.textContent ?? '').trim()),
+  );
+
+/** 某档读数格本身（error/warning 各一枚；SVG 上屏后按 data-prob 取，不再数汉字字形） */
+const probPart = (scope: ParentNode | null | undefined, sev: 'error' | 'warning'): Element | null =>
+  scope?.querySelector(`[data-prob="${sev}"]`) ?? null;
 
 const sum = (ns: readonly number[]): number => ns.reduce((a, b) => a + b, 0);
-const num = (t: string): number => Number(t.slice(2));
 
 /** store 里那位（`#e06c75`）落到行上应该长成的样子——DOM 会归一成 rgb */
 function rgbOf(hex: string): string {
@@ -164,7 +170,7 @@ function rgbOf(hex: string): string {
 
 /** 树侧三层各自合计（组标题行 / 包标题行 / 文件行）：三处必等 */
 function threeFaces(): { group: number; pkg: number; row: number; store: number } {
-  const pick = (sel: string): number => sum(badgeSpans(container, sel).map(num));
+  const pick = (sel: string): number => sum(badgeParts(container, sel));
   return {
     group: pick('button.tree-group-btn'),
     pkg: pick('button.tree-package'),
@@ -197,13 +203,15 @@ describe('单条文件行徽标 · 平铺那条腿（FileRows → FileRow）', (
     expect(container.querySelectorAll(`${rowsSel} .tree-prob-mark`)).toHaveLength(0);
   });
 
-  it('错误与警告各一枚（✕ n 红 / ⚠ n 黄），数字就是 store 那一格', async () => {
+  it('错误与警告各一枚（error 圈叉红 / warning 三角黄），数字就是 store 那一格', async () => {
     setProblems(F1, [mk(F1, 3, 'error'), mk(F1, 7, 'error'), mk(F1, 9, 'warning')]);
     await mountTree();
     const badge = badgeOf(F1);
     expect(badge).not.toBeNull();
-    expect(badge?.textContent).toContain('✕ 2');
-    expect(badge?.textContent).toContain('⚠ 1');
+    expect(probPart(badge, 'error')?.textContent).toContain('2');
+    expect(probPart(badge, 'warning')?.textContent).toContain('1');
+    // L10 图标批：读数格里的图标是注册表 SVG（error/warning），不再是 `✕`/`⚠` 字形
+    expect(probPart(badge, 'error')?.querySelector('svg.icon')).not.toBeNull();
     // 配色仍取自 store 的 SEVERITY_TINT（行这一腿不许自带色值；DOM 可能把 hex 归一成 rgb）
     const painted = ((badge?.firstElementChild as HTMLElement).style.color ?? '').toLowerCase();
     expect(painted).oneOf([SEVERITY_TINT.error.toLowerCase(), rgbOf(SEVERITY_TINT.error).toLowerCase()]);
@@ -234,8 +242,8 @@ describe('单条文件行徽标 · 平铺那条腿（FileRows → FileRow）', (
     await mountTree();
     const badge = badgeOf(F2);
     expect(badge).not.toBeNull();
-    expect(badge?.textContent).toContain('✕ 1');
-    expect(badge?.textContent).toContain('⚠ 1');
+    expect(probPart(badge, 'error')?.textContent).toContain('1');
+    expect(probPart(badge, 'warning')?.textContent).toContain('1');
     expect(container.querySelectorAll(`button[data-locate="${F2}"]`)).toHaveLength(1);
     expect(threeFaces().row).toBe(2);
   });
@@ -267,8 +275,8 @@ describe('单条文件行徽标 · DirRows 那条腿（包真实文件夹 / 嵌�
     setProblems(NOTE, [mk(NOTE, 1, 'warning')]);
     setProblems(SUB, [mk(SUB, 2, 'error'), mk(SUB, 3, 'error')]);
     await mountTree();
-    expect(badgeOf(NOTE)?.textContent).toContain('⚠ 1');
-    expect(badgeOf(SUB)?.textContent).toContain('✕ 2');
+    expect(probPart(badgeOf(NOTE), 'warning')?.textContent).toContain('1');
+    expect(probPart(badgeOf(SUB), 'error')?.textContent).toContain('2');
   });
 
   it('与平铺同级的 ERB 只标一枚（skip 去重那条腿照旧生效，不因徽标翻倍）', async () => {
@@ -294,11 +302,11 @@ describe('过滤态：徽标不少报', () => {
     await flush();
     await flush();
     // 命中那一行：自己的两条错误一条不少
-    expect(badgeOf(F1)?.textContent).toContain('✕ 2');
+    expect(probPart(badgeOf(F1), 'error')?.textContent).toContain('2');
     // 组标题行：被过滤掉的那份（F3）照样算进来——少报 = 撒谎
     const groupBadge = container.querySelector('button.tree-group-btn .tree-prob-mark');
     expect(groupBadge?.getAttribute('title') ?? '').toContain('错误 3 / 警告 0');
-    expect(groupBadge?.textContent).toContain('✕ 3');
+    expect(probPart(groupBadge, 'error')?.textContent).toContain('3');
   });
 });
 

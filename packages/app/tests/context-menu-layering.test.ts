@@ -20,7 +20,9 @@ const read = (relative: string): string =>
 
 const HOST_CSS = read('context-menu.css');
 const PROJECT_CSS = read('styles-project.css');
-const BASE_CSS = read('styles.css');
+// 批次十一 L01：裸 `:root` 已从 styles.css / styles-project.css 两份逐字节副本收敛成单源
+// `tokens.css`，所以档位真值只能从它读（从 styles.css 读会拿到 undefined）。
+const TOKENS_CSS = read('tokens.css');
 const HOST_SRC = read('ui/context-menu-host.tsx');
 const MENU_SRC = read('ui/context-menu.tsx');
 
@@ -88,7 +90,7 @@ function declOf(rules: readonly CssRule[], selector: string, prop: string): stri
 
 const HOST_RULES = parseRules(HOST_CSS);
 const PROJECT_RULES = parseRules(PROJECT_CSS);
-const BASE_RULES = parseRules(BASE_CSS);
+const TOKEN_RULES = parseRules(TOKENS_CSS);
 
 describe('CSS 解析器本身（判据的地基）', () => {
   it('剥注释、多行声明、at-rule 内嵌规则都能读出来', () => {
@@ -115,7 +117,7 @@ describe('CSS 解析器本身（判据的地基）', () => {
 describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () => {
   const hostZ = declOf(HOST_RULES, '.context-menu-host', 'z-index');
   const menuZ = declOf(PROJECT_RULES, '.context-menu', 'z-index');
-  const modalVar = declOf(BASE_RULES, ':root', '--z-modal');
+  const modalVar = declOf(TOKEN_RULES, ':root', '--z-modal');
 
   it('主题里 --z-modal 是 1100（下面所有算式都从它出发）', () => {
     expect(modalVar).toBe('1100');
@@ -139,8 +141,14 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
     expect(Number(hostZ) - computed).toBe(199);
   });
 
-  it('源码里确有裸 1200 的浮层档，且三层严格递增', () => {
-    const tier = PROJECT_RULES.filter((rule) => declOf([rule], selectorsOf(rule)[0]!, 'z-index') === '1200');
+  it('浮层档在 1200（L02 把裸 1200 归档成 --z-toast），且三层严格递增', () => {
+    // 原判据钉「源码里确有裸 1200」；批次十一 L02 把它换成语义 token。意图不变：
+    // 仍要求存在一个 1200 档、那一档是提示/通知类浮层、且 1300 > 1200 > 1101。
+    const toastVar = declOf(TOKEN_RULES, ':root', '--z-toast');
+    expect(toastVar).toBe('1200');
+    const tier = PROJECT_RULES.filter(
+      (rule) => declOf([rule], selectorsOf(rule)[0]!, 'z-index') === 'var(--z-toast)',
+    );
     expect(tier.length).toBeGreaterThan(0);
     // 1200 那一档得是「提示 / 通知」类浮层（不是随便哪个组件）
     const selector = selectorsOf(tier[0]!).join(' ');

@@ -435,3 +435,170 @@ export function updateStatus(phase: UpdatePhase): { text: string; tone: UpdateSt
       };
   }
 }
+
+/* ============================================================================
+ * 批次十一 L05（更新体验三层递进）· 纯逻辑增补：严重度 / 语义分组 / 外链切段。
+ *
+ * 全部零 React、零存储、零宿主 API——和上面那台状态机同款可单测。呈现层
+ * （`UpdateDialog.tsx` / `UpdateNoticeCard.tsx`）只消费这里的判定，不再各写各的正则。
+ * ========================================================================== */
+
+/**
+ * 一版更新的严重度。**只有 breaking 允许「打开即模态」**（层三的产品闸门），
+ * 普通更新一律走右下非阻塞卡（层一）。判据取 changelog 文本里那条公认的红线词。
+ */
+export type UpdateSeverity = 'normal' | 'breaking';
+
+/**
+ * 破坏性判定的唯一词表（分组与严重度共用，口径不许分叉）。
+ *
+ * `breaking` 认**裸词**，不只认 `breaking change`：changelog 里 `- breaking: 存储格式变更`
+ * 这类「标记 + 冒号」的写法才是常态（conventional-commits 那一系的破折号标记）。旧词表只匹配
+ * `breaking\s*changes?`，于是这一行既进不了破坏性组（掉进「其它」，把「坏的先说」的展示序
+ * 直接废掉），也判不出 `breaking` 严重度——而严重度是「打开即模态」的唯一许可位，漏判等于
+ * 替作者按下升级。这条是红线词的**扩集**，不是替换：`breaking change` / `破坏性变更` /
+ * `不兼容` / `incompatible` 原样都还认。
+ */
+const UPDATE_BREAKING_RE = /(\bbreaking\b|breaking\s*changes?|破坏性(?:变更|更新)?|不兼容|incompatible)/i;
+
+/** 说明里任何一行命中破坏性词 ⇒ breaking（宁松勿严：误判多给一次确认，漏判是替作者按下升级） */
+export function detectUpdateSeverity(notes: string | undefined): UpdateSeverity {
+  return updateNoteLines(notes).some((line) => UPDATE_BREAKING_RE.test(line)) ? 'breaking' : 'normal';
+}
+
+/** changelog 语义分组（弹窗按组渲染，不再一屏纯文本行） */
+export type UpdateNoteGroupId = 'breaking' | 'added' | 'fixed' | 'other';
+
+/** 分组固定展示序：坏的先说，其次新增、修复，兜底其它（决策价值从高到低） */
+export const UPDATE_NOTE_GROUP_ORDER: readonly UpdateNoteGroupId[] = ['breaking', 'added', 'fixed', 'other'];
+
+export const UPDATE_NOTE_GROUP_LABEL: Record<UpdateNoteGroupId, string> = {
+  breaking: '破坏性变更',
+  added: '新增',
+  fixed: '修复',
+  other: '其它',
+};
+
+/**
+ * 分组关键词表（中英常见 changelog 动词）。breaking 用上面那条唯一红线词。
+ * 判不出的行进「其它」——分组是导读，不是改写，一条内容都不许丢。
+ */
+const UPDATE_NOTE_GROUP_PATTERNS: Record<Exclude<UpdateNoteGroupId, 'other'>, RegExp> = {
+  breaking: UPDATE_BREAKING_RE,
+  added: /(新增|添加|加入|支持|added|feat)/i,
+  fixed: /(修复|修正|解决|fixed|fixes|bugfix|hotfix|\bfix\b)/i,
+};
+
+function classifyUpdateNoteLine(text: string): UpdateNoteGroupId | null {
+  if (UPDATE_NOTE_GROUP_PATTERNS.breaking.test(text)) return 'breaking';
+  if (UPDATE_NOTE_GROUP_PATTERNS.added.test(text)) return 'added';
+  if (UPDATE_NOTE_GROUP_PATTERNS.fixed.test(text)) return 'fixed';
+  return null;
+}
+
+/** Markdown 标题行（`# …` 到 `###### …`），返回去掉 `#` 后的题面 */
+function updateNoteHeading(line: string): string | null {
+  const m = /^#{1,6}\s+(.*)$/u.exec(line);
+  return m === null ? null : (m[1] ?? '').trim();
+}
+
+/** 一个语义分组（标题 + 归到它名下的行，保持原始顺序） */
+export interface UpdateNoteGroup {
+  readonly id: UpdateNoteGroupId;
+  readonly label: string;
+  readonly lines: readonly string[];
+}
+
+/**
+ * 纯文本 changelog → 语义分组。
+ *
+ * 归组判据（两条腿，缺一条都会把常见格式切碎）：
+ * 1. **标题上下文**：`## 新增` 之下、在遇到下一个标题之前的行，整段进该组；
+ *    命中已知词的标题被「消费」（组名即标题，不再重复画一行）；认不出的标题原文进「其它」，
+ *    其下各行也跟着进「其它」（保住 `## 性能` 这类小节的语境）；
+ * 2. **行内关键词**：无标题上下文（裸列表 changelog 很常见）时按行判词。
+ * 行本身命中已知词的，优先按词走（`## 新增` 下的 `- 修复：某崩溃` 归修复）。
+ */
+export function groupUpdateNotes(notes: string | undefined): readonly UpdateNoteGroup[] {
+  const lines = updateNoteLines(notes);
+  const buckets = new Map<UpdateNoteGroupId, string[]>();
+  const push = (id: UpdateNoteGroupId, text: string): void => {
+    const bucket = buckets.get(id);
+    if (bucket === undefined) buckets.set(id, [text]);
+    else bucket.push(text);
+  };
+  let context: UpdateNoteGroupId | null = null;
+  for (const line of lines) {
+    const heading = updateNoteHeading(line);
+    if (heading !== null) {
+      const id = classifyUpdateNoteLine(heading);
+      if (id !== null) {
+        context = id; // 已知小节题：被组名吸收，不重复画行
+        continue;
+      }
+      context = 'other'; // 未知小节题：本行与后续内容都留在「其它」里
+      push('other', heading);
+      continue;
+    }
+    push(classifyUpdateNoteLine(line) ?? context ?? 'other', line);
+  }
+  const groups: UpdateNoteGroup[] = [];
+  for (const id of UPDATE_NOTE_GROUP_ORDER) {
+    const linesOfId = buckets.get(id);
+    if (linesOfId === undefined || linesOfId.length === 0) continue;
+    groups.push({ id, label: UPDATE_NOTE_GROUP_LABEL[id], lines: linesOfId });
+  }
+  return groups;
+}
+
+/** 分组后的显示面：跨组共享同一个行数上限（口径与 `visibleUpdateNoteLines` 一致） */
+export function visibleUpdateNoteGroups(notes: string | undefined): {
+  readonly groups: readonly UpdateNoteGroup[];
+  readonly total: number;
+  readonly truncated: boolean;
+} {
+  const groups = groupUpdateNotes(notes);
+  const total = groups.reduce((sum, g) => sum + g.lines.length, 0);
+  if (total <= UPDATE_NOTE_LINE_LIMIT) return { groups, total, truncated: false };
+  let budget = UPDATE_NOTE_LINE_LIMIT;
+  const capped: UpdateNoteGroup[] = [];
+  for (const g of groups) {
+    if (budget <= 0) break;
+    const lines = g.lines.slice(0, budget);
+    budget -= lines.length;
+    capped.push({ ...g, lines });
+  }
+  return { groups: capped, total, truncated: true };
+}
+
+/** 一行里的文字段：`url` 出现即外链段（弹窗渲染成 `<a>`，其余原样成文） */
+export interface UpdateNoteSegment {
+  readonly text: string;
+  readonly url?: string;
+}
+
+/**
+ * URL 切段：只认 http(s)，行尾的中文标点 / 全角括号 / 空白不算 URL 的一部分
+ * （changelog 里「详见 https://xxx，见上」这种写法很常见，把「，」吞进链接是坏体验）。
+ */
+const UPDATE_NOTE_URL_RE = /https?:\/\/[^\s<>"'`、。！？，；：（）【】《》\u3000-\u303f\uff00-\uffef]+/g;
+
+export function linkifyUpdateNoteLine(line: string): readonly UpdateNoteSegment[] {
+  const segments: UpdateNoteSegment[] = [];
+  let cursor = 0;
+  for (const match of line.matchAll(UPDATE_NOTE_URL_RE)) {
+    const url = match[0];
+    const start = match.index ?? 0;
+    if (start > cursor) segments.push({ text: line.slice(cursor, start) });
+    segments.push({ text: url, url });
+    cursor = start + url.length;
+  }
+  if (cursor < line.length) segments.push({ text: line.slice(cursor) });
+  return segments;
+}
+
+/** 弹窗/卡片统一的「发现新版本 vX」标题（一处措辞，两处消费） */
+export function updateNoticeTitle(release: UpdateRelease): string {
+  return `发现新版本 v${release.version}`;
+}
+

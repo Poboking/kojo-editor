@@ -325,6 +325,11 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     why: '迁移源文本的 BOM 探测与剥离（事实保留，避免二次 BOM）',
   },
   {
+    file: 'packages/kojo-core/src/migrate/indent.ts',
+    count: 1,
+    why: 'v1 缩进失配归因的机械修复：只在首行 BOM 这一唯一解上剥除（startsWith 判据，回写给迁移同一条编码契约；批次十二落地，BOM 属编码事实由 readSource 另行记账）',
+  },
+  {
     file: 'packages/kojo-conformance/src/encoding.ts',
     count: 1,
     why: '一致性套件的编码编解码器：BOM 字节表是读侧判据，再编码时按输入 BOM 事实原样补回（只比对、不写源文件）',

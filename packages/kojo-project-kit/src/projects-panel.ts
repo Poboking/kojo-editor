@@ -6,8 +6,9 @@
  *   「包 = 作者口上包」的游戏解释只住在 adapter（本面板）；
  * - 包内文件**惰性列举**并按目录缓存（缓存在插件闭包，批量展开不刮目录请求风暴）；
  * - 文件点击 → `editor.revealLocation`（宿主消费；面板不持有宿主引用）；
- * - 顶部**常驻**双真相源提示条：工作区为权威 · 游戏目录仅部署目标
- *   （讨论纪要 §2 定调——不明示用户就会困惑「改了哪个才算数」）。
+ * - 顶部一条**可关闭**的双真相源提示：正文只说人话（改的是工作区副本、部署后才进游戏），
+ *   完整口径留在悬停 title（讨论纪要 §2 定调——不明示用户就会困惑「改了哪个才算数」，
+ *   但 260px 侧栏里常驻整句会把树的第一屏挤掉，故给它一个关闭键）。
  *
  * 默认形态克制（口上树简洁约束）：项目行展开即见包标题行；**包默认折叠**，
  * 用户主动展开才列举文件——信息呈现以不杂乱为第一约束。同理，包行上的动作
@@ -15,6 +16,9 @@
  * （控制器见 `package-actions.ts`，无消息时状态条不渲染）。
  *
  * E9 起：教程区与树体之间是可拖拽分割线（`.kp-splitter`），拖拽调整教程区高度。
+ * 批次十一（视觉 L06）起：教程区**默认收成一行**（`.kp-tutorials-head` 展开/收起），
+ * 分割线只在展开态出现；收起用 class 而不是条件渲染（控件留在 DOM，与检索面板
+ * `.ksp-options-body.ksp-collapsed` 同一判据），四本教程的入口一个都没少。
  */
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -151,8 +155,54 @@ export function factsFromMeta(meta: Record<string, unknown>): { charaName: strin
   };
 }
 
-/** 教程区高度下限：兜住内容（「教程」题头 + 两个入口按钮），拖到再近也看得全 */
+/** 教程区高度下限：兜住内容（题头 + 展开后的入口行），拖到再近也看得全 */
 export const TUTORIALS_MIN_H = 80;
+
+/**
+ * 教程入口清单（呈现层的单一事实源：行数即折叠摘要里那个数，不另抄一遍「四本」）。
+ *
+ * 行序＝**阅读顺序**（与欢迎页四卡同一条口径）：工作流 → v1 写法 → 2.0 写法 → 查表；
+ * 行名逐字取各本教程自己的 title（这里不另抄名目）；本层只认语义 id，
+ * 一句教程内容都不许写进来（那是 adapter 的事）。
+ */
+const TUTORIAL_ENTRIES: readonly {
+  id: TutorialId;
+  icon: string;
+  glyph: string;
+  name: string;
+  blurb: string;
+}[] = [
+  {
+    id: 'kojo',
+    icon: 'book',
+    glyph: '▤',
+    name: '口上教程',
+    blurb: '口上从选游戏目录到部署进游戏的全流程（含导出、许可与常见故障查法）',
+  },
+  {
+    id: 'sugar',
+    icon: 'wand',
+    glyph: '✦',
+    name: '.kojo 语言教程',
+    blurb: '.kojo 语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
+  },
+  {
+    id: 'kojo2',
+    icon: 'code',
+    glyph: '❖',
+    name: 'Kojo 2.0 语言教程',
+    blurb:
+      'Kojo 2.0（`.kojo2`）的每一种写法。今天默认档位仍是「只认 v1」，这一本只教 2.0 那一套，不与 v1 混讲',
+  },
+  {
+    id: 'reference',
+    icon: 'structure',
+    glyph: '▦',
+    name: 'kojo 语法全表',
+    blurb: '现行全部写法的对照表：每种写法编译成什么、哪些值不填、写错时的提示原文（两份教程的附录）',
+  },
+];
+
 /** 分割线上限给树体留的可视高度（提示条 / 工具条 / 状态条等固定件都算在里面） */
 const TREE_VIEW_RESERVE = 200;
 
@@ -442,13 +492,23 @@ export function createKojoProjectsPanel(
 
     /* ------------------------------ 项目 → 包 ------------------------------ */
 
-    const renderArtifacts = (p: WorkspaceProject): ReactNode => {
+    const renderArtifacts = (p: WorkspaceProject, withGroupHead: boolean): ReactNode => {
       if (p.artifacts.length === 0) {
         return h('div', { className: 'kp-note dim', style: indent(1) }, '（暂无作者包）');
       }
       return h(
         'div',
         { className: 'kp-artifacts' },
+        // 分组头只在"下面还有别的东西"时出现：包与包外目录两段同屏时，不给标题就会被读成
+        // 「这项目冒出了两批包」；只有一批包时项目行本身已经说了几包，再加一行纯属噪音。
+        // 这里不再重复计数徽标——项目行右端那枚就是这个数，两格之间再说一遍是噪音。
+        withGroupHead
+          ? h(
+              'div',
+              { className: 'kp-group-title', title: 'workspace.json 登记的作者包（可导出 / 部署）' },
+              h('span', null, '作者包'),
+            )
+          : null,
         ...p.artifacts.map((a) => {
           const dir = artifactDir(deps.projectDir(p.id), a);
           const isOpen = openDirs.has(dir);
@@ -531,8 +591,7 @@ export function createKojoProjectsPanel(
      * 只在没有东西可列时整块不渲染（口上树的简洁约束）；有一行就给它一句说明，
      * 免得作者把 `素材` 这类目录误读成"冒出了第二个包"。
      */
-    const renderLooseDirs = (p: WorkspaceProject, pDir: string): ReactNode => {
-      const loose = looseProjectDirs(deps.dirState(pDir), p.artifacts.map((a) => a.dirName));
+    const renderLooseDirs = (pDir: string, loose: DirEntry[]): ReactNode => {
       if (loose.length === 0) return null;
       return h(
         'div',
@@ -540,11 +599,11 @@ export function createKojoProjectsPanel(
         h(
           'div',
           {
-            className: 'kp-note dim',
-            style: indent(1),
+            className: 'kp-group-title',
             title: '这些目录不属于任何作者包（右键项目行新建的平级文件夹住在这里）',
           },
-          `包之外的目录 ${loose.length} 个`,
+          h('span', null, '包之外的目录'),
+          h('span', { className: 'kp-count' }, String(loose.length)),
         ),
         ...loose.map((e) => renderEntry(e, 1)),
       );
@@ -552,24 +611,58 @@ export function createKojoProjectsPanel(
 
     /* ------------------------------ 骨架 ------------------------------ */
 
-    // 双真相源提示条（常驻；讨论纪要 §2——写保护铁律的 UI 明示面）
-    const notice = h(
-      'div',
-      {
-        className: 'kp-notice',
-        title: '编辑以工作区为准：工作区是可写的权威副本；游戏目录只读，仅作为部署目标。直接改游戏目录里的文件不会被工作区感知。',
-      },
-      '工作区为权威 · 游戏目录仅部署目标',
-    );
+    // 双真相源提示（可关闭）：正文用人话，完整口径留在 title。
+    // 「工作区为权威 · 游戏目录仅部署目标」是写给作者的内部口号，15 字压在 260px 侧栏第一行，
+    // 新用户读不懂也读不完；这里换成一句白话，并把整段解释收进悬停——关掉只是本次运行的事。
+    const [hintOpen, setHintOpen] = useState(true);
+    const notice = !hintOpen
+      ? null
+      : h(
+          'div',
+          { className: 'kp-notice' },
+          h('span', { className: 'kp-notice-icon' }, ic('info', 12, 'ⓘ')),
+          h(
+            'span',
+            {
+              className: 'kp-notice-text',
+              title:
+                '编辑以工作区为准：工作区是可写的权威副本；游戏目录只读，仅作为部署目标。直接改游戏目录里的文件不会被工作区感知。',
+            },
+            '改的是工作区副本 · 部署后才进游戏',
+          ),
+          h(
+            'button',
+            {
+              className: 'kp-notice-close',
+              title: '收起这条提示（把第一行让给项目树；换面板再回来）',
+              onClick: () => setHintOpen(false),
+            },
+            ic('close', 12, '×'),
+          ),
+        );
 
     const projects = deps.projects();
     const loading = deps.loading();
     const error = deps.error();
 
+    /**
+     * 工具条一行：计数是纯文字，图标只留给动作。
+     *
+     * 撕裂根因（真壳 260px 侧栏）：`.kp-toolbar` 用 `space-between` 两头挤，而标签与按钮
+     * 都没有 `nowrap` ⇒「1 个项/目」「＋ 新/建」「导入项/目」三处从中间折断。组件侧的配合是
+     * 把动作文字收进独立 span（原来那个 `' 新建'` 前导空格正是折行点），换行交给 CSS 整行处理。
+     */
     const toolbar = h(
       'div',
       { className: 'kp-toolbar' },
-      h('span', { className: 'dim kp-toolbar-label' }, loading ? '读取中…' : `${projects.length} 个项目`),
+      h(
+        'span',
+        {
+          className: 'dim kp-toolbar-label',
+          title: loading ? '正在读取工作区的项目清单' : '工作区里已登记的项目数（游戏目录不计入）',
+        },
+        loading ? '读取中…' : `${projects.length} 个项目`,
+      ),
       h(
         'span',
         { className: 'kp-toolbar-actions' },
@@ -578,7 +671,7 @@ export function createKojoProjectsPanel(
               'button',
               { className: 'ghost small', title: '新建口上项目', onClick: () => deps.openNewWizard!() },
               ic('add', 12, '＋'),
-              ' 新建',
+              h('span', { className: 'kp-act-label' }, '新建'),
             )
           : null,
         // 导入 = 复用命令面板那条 `kojo.importKojoProject`（选目录 → 既有导入向导），
@@ -592,10 +685,15 @@ export function createKojoProjectsPanel(
                 onClick: () => deps.openImportWizard!(),
               },
               ic('module', 12, '▣'),
-              ' 导入项目',
+              h('span', { className: 'kp-act-label' }, '导入项目'),
             )
           : null,
-        h('button', { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() }, ic('refresh', 13, '⟳')),
+        h(
+          'button',
+          { className: 'ghost small', title: '刷新项目列表', onClick: () => deps.refresh() },
+          ic('refresh', 13, '⟳'),
+          h('span', { className: 'kp-act-label' }, '刷新'),
+        ),
       ),
     );
 
@@ -604,17 +702,35 @@ export function createKojoProjectsPanel(
       body = h(
         'div',
         { className: 'kp-body' },
-        h('div', { className: 'kp-empty err', title: error }, `工作区加载失败：${error}`),
-        h('div', { className: 'kp-actions' }, h('button', { className: 'small', onClick: () => deps.refresh() }, '重试')),
+        h(
+          'div',
+          { className: 'kp-card kp-card-err', title: error },
+          h('div', { className: 'kp-card-title' }, '工作区加载失败'),
+          h('div', { className: 'kp-card-text' }, error),
+          h('div', { className: 'kp-actions' }, h('button', { className: 'small', onClick: () => deps.refresh() }, '重试')),
+        ),
       );
     } else if (projects.length === 0) {
       body = h(
         'div',
         { className: 'kp-body' },
-        h('div', { className: 'kp-empty dim' }, loading ? '正在读取工作区…' : '还没有口上项目'),
-        loading
-          ? null
-          : h('div', { className: 'kp-empty dim' }, '可在此新建作品，或用工具条的「导入项目」把既有作者包接进来'),
+        h(
+          'div',
+          { className: 'kp-card' },
+          h('div', { className: 'kp-card-title' }, loading ? '正在读取工作区…' : '这里还没有口上项目'),
+          loading
+            ? h('div', { className: 'kp-card-text dim' }, '第一次打开会列一遍作者工作区。')
+            : h('div', { className: 'kp-card-text dim' }, '新建一个开始写，或用工具条的「导入项目」把既有作者包接进来。'),
+          // 空态直接给一枚 CTA：这面板本来就在工具条上备着同一个入口，空着的那半屏才是要指的地方
+          loading || !deps.openNewWizard
+            ? null
+            : h(
+                'button',
+                { className: 'kp-card-cta small', onClick: () => deps.openNewWizard!() },
+                ic('add', 12, '＋'),
+                h('span', { className: 'kp-act-label' }, '新建口上项目'),
+              ),
+        ),
       );
     } else {
       body = h(
@@ -623,6 +739,11 @@ export function createKojoProjectsPanel(
         ...projects.map((p) => {
           const pOpen = !closedProjects.has(p.id);
           const pDir = deps.projectDir(p.id);
+          /* 包外目录先在这儿挑出来：既给下面那块用，也决定上面要不要分组头——
+             只有"包 + 包外目录"两段同屏时点名才有意义，否则项目行那枚计数就说清了。 */
+          const loose = pOpen
+            ? looseProjectDirs(deps.dirState(pDir), p.artifacts.map((a) => a.dirName))
+            : [];
           return h(
             'div',
             { key: p.id, className: 'kp-project' },
@@ -636,17 +757,17 @@ export function createKojoProjectsPanel(
               },
               h('span', { className: 'caret' }, pOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
               h('span', { className: 'kp-project-name', title: p.name }, p.name),
-              h('span', { className: 'kp-count dim' }, `${p.artifacts.length} 包`),
+              h('span', { className: 'kp-count', title: `这个项目里的作者包数：${p.artifacts.length}` }, `${p.artifacts.length} 包`),
             ),
             /* 项目根自己的行内新建框（UI 反馈 6 的缺陷点）：菜单把草稿指向 projectDir，
                但 draftRow 原先只在 renderDir 里产出，而 renderDir 只跑「包目录」与「包内子目录」
                ——项目根从来没有槽位，于是"新建文件夹"点下去只是把 draft 写进 state，界面上什么都没有。
                放在项目行正下方、且**不受 pOpen 影响**：收起的项目同样要能建东西（与 renderDir 同口径）。 */
             draftRow(pDir, 1),
-            pOpen ? renderArtifacts(p) : null,
+            pOpen ? renderArtifacts(p, loose.length > 0) : null,
             /* 包与包之间的平级目录（反馈 6 的后半条）：建成功了必须在界面上看得见，
                否则"点了没生效"只解决了一半——盘上有了，面上没有。没有这类目录时整块不渲染。 */
-            pOpen ? renderLooseDirs(p, pDir) : null,
+            pOpen ? renderLooseDirs(pDir, loose) : null,
           );
         }),
       );
@@ -695,7 +816,9 @@ export function createKojoProjectsPanel(
                 h(
                   'span',
                   { className: 'check' },
-                  draft && draft.dir === ctxMenu.dir && draft.kind === m.kind ? ic('check', 12, '●') : '',
+                  draft && draft.dir === ctxMenu.dir && draft.kind === m.kind
+                    ? ic('circle-filled', 12, '●')
+                    : '',
                 ),
                 m.label,
               ),
@@ -751,8 +874,12 @@ export function createKojoProjectsPanel(
     /**
      * 树体 ←→ 教程区的分割线（E9）：拖拽调整教程区高度。静息一条细线，悬停 / 拖拽中亮起
      * （视觉语言与壳层 .resizer 同族）；键盘不接——与壳层分栏把手同口径。
+     *
+     * 批次十一：教程区收起时整条不画——没有可拉的东西，一条拉不动的把手只会让人以为是渲染故障，
+     * 顺带把那一格高度还给树体。
      */
-    const splitter = h('div', {
+    const [tutOpen, setTutOpen] = useState(false);
+    const splitter = !tutOpen ? null : h('div', {
       className: `kp-splitter${splitDragging ? ' dragging' : ''}`,
       role: 'separator',
       'aria-orientation': 'horizontal',
@@ -769,6 +896,9 @@ export function createKojoProjectsPanel(
      * 写不下去时抬头就能找到，不藏在菜单里。行按钮与树行同族（度量 / hover /
      * focus-visible 复用 styles.css 的行按钮组）。
      *
+     * 批次十一：默认**收成一行**（题头即展开键），整栏高度让给口上树；折叠走 class
+     * 而不是条件渲染——四行仍在 DOM 里，展开即显、不必重挂（与检索面板选项区同判据）。
+     *
      * 行序＝**阅读顺序**（与欢迎页四卡同一条口径）：工作流 → v1 写法 → 2.0 写法 → 查表。
      * 行名逐字取各本教程自己的 title（这里不另抄名目）；本层只认语义 id，
      * 一句教程内容都不许写进来（那是 adapter 的事）。
@@ -780,51 +910,40 @@ export function createKojoProjectsPanel(
       {
         className: 'kp-tutorials',
         ref: tutRef,
-        style: tutH === null ? undefined : { height: tutH },
+        style: tutH === null || !tutOpen ? undefined : { height: tutH },
       },
-      h('div', { className: 'kp-tutorials-title dim' }, '教程'),
       h(
         'button',
         {
-          className: 'kp-tutorial-btn',
-          title: '口上从选游戏目录到部署进游戏的全流程（含导出、许可与常见故障查法）',
-          onClick: () => openTutorial('kojo'),
+          className: 'kp-tutorials-head',
+          'aria-expanded': tutOpen,
+          title: tutOpen ? '收起教程入口，把这一栏让给口上树' : '展开教程入口（四本教程与语法全表）',
+          onClick: () => setTutOpen((v) => !v),
         },
-        ic('book', 14, '▤'),
-        h('span', { className: 'kp-tutorial-name' }, '口上教程'),
+        h('span', { className: 'caret' }, tutOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
+        h('span', { className: 'kp-tutorials-title' }, '教程'),
+        // 摘要只在收起态出现：展开后同一事实已在下面的行里，重复一遍只是噪音
+        tutOpen ? null : h('span', { className: 'kp-chip' }, `${TUTORIAL_ENTRIES.length} 本`),
       ),
       h(
-        'button',
-        {
-          className: 'kp-tutorial-btn',
-          title: '.kojo 语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
-          onClick: () => openTutorial('sugar'),
-        },
-        ic('wand', 14, '✦'),
-        h('span', { className: 'kp-tutorial-name' }, '.kojo 语言教程'),
-      ),
-      h(
-        'button',
-        {
-          className: 'kp-tutorial-btn',
-          title:
-            'Kojo 2.0（`.kojo2`）的每一种写法。今天默认档位仍是「只认 v1」，这一本只教 2.0 那一套，不与 v1 混讲',
-          onClick: () => openTutorial('kojo2'),
-        },
-        ic('code', 14, '❖'),
-        h('span', { className: 'kp-tutorial-name' }, 'Kojo 2.0 语言教程'),
-      ),
-      h(
-        'button',
-        {
-          className: 'kp-tutorial-btn',
-          title: '现行全部写法的对照表：每种写法编译成什么、哪些值不填、写错时的提示原文（两份教程的附录）',
-          onClick: () => openTutorial('reference'),
-        },
-        ic('structure', 14, '▦'),
-        h('span', { className: 'kp-tutorial-name' }, 'kojo 语法全表'),
+        'div',
+        { className: `kp-tutorials-body${tutOpen ? '' : ' kp-collapsed'}` },
+        ...TUTORIAL_ENTRIES.map((t) =>
+          h(
+            'button',
+            {
+              key: t.id,
+              className: 'kp-tutorial-btn',
+              title: t.blurb,
+              onClick: () => openTutorial(t.id),
+            },
+            ic(t.icon, 14, t.glyph),
+            h('span', { className: 'kp-tutorial-name' }, t.name),
+          ),
+        ),
       ),
     );
+    // ui-kit-candidate: 「一行题头 + 计数摘要 + 展开」的收纳栏，与检索面板 .ksp-options-toggle 同族
 
     return h('div', { className: 'panel-kojo-projects', ref: rootRef }, notice, toolbar, body, splitter, tutorials, statusBar, menu);
   };

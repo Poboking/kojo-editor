@@ -6,7 +6,7 @@ import type {
   EditorSaveChoices,
   EditorSaveWarning,
 } from '@kojo/plugin-api';
-import {errorText,  FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
@@ -94,6 +94,7 @@ import {
   trimSegmentBlanksWithMap,
   type SugarSegmentInput,
 } from './sugar-view';
+import { resolveModelLanguage, subscribeLanguageOverride } from './language-mode-pref';
 import { isSealed, useSealed } from './sealed';
 import { isDirectMode, useDirectMode } from './direct-mode';
 import { isInWorkspaceFile } from './file-area';
@@ -130,6 +131,7 @@ import {
   minimapCtxForPath,
   pickSaveHandler,
   resolveSaveEolOverride,
+  retargetSugarModels,
   sugarStampOf,
   tierOverrides,
   type SugarCacheEntry,
@@ -299,6 +301,18 @@ interface Props {
  * - 波浪线：消费 `ui.editor.decorator` 槽全部贡献（纯函数）→ Monaco markers，
  *   打开即算、编辑停顿去抖重算（v0.3 S6）。
  */
+/**
+ * 编辑器区视觉批（批次十一 L13）的三个模块级常量：
+ * - `STATUS_FLASH_MS`：工具条瞬时态（「已保存 12:34」一类）自动回落元信息位的时限；
+ *   写完不回落 = 陈旧事实与错误同格同醒目度（改前的病灶）。
+ * - `TOOLBAR_NARROW_QUERY`：窄屏判据。1280 以下工具条不再靠 `display:none` 硬藏次要
+ *   信息，而是把它们收进「更多」浮层（降级层级，信息可取回）。
+ * - `EDITOR_SKELETON_WIDTHS`：Monaco 装载期骨架条的宽度错落（纯装饰，不参与测量）。
+ */
+const STATUS_FLASH_MS = 8000;
+const TOOLBAR_NARROW_QUERY = '(max-width: 1280px)';
+const EDITOR_SKELETON_WIDTHS = ['42%', '68%', '55%', '80%', '30%', '64%', '72%', '48%'] as const;
+
 export function EditorPane({
   kernel,
   groupId,
@@ -504,6 +518,25 @@ export function EditorPane({
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   /**
+   * 编辑器区装载骨架的可见性（批次十一 L13）：`editorBooted` = Monaco 实例已创建
+   * （挂载 effect 里 `monaco.editor.create` 之后那一拍翻 true），`firstFileShown` =
+   * 首个文件已落屏（切换 effect 的成功/失败两条腿都翻）。两者都没到之前
+   * `.editor-body` 是纯空白——改由 `.skeleton` 占位条顶着（既有效果库资产，不再空屏）。
+   */
+  const [editorBooted, setEditorBooted] = useState(false);
+  const [firstFileShown, setFirstFileShown] = useState(false);
+  /**
+   * 窄屏工具条的降级层级（批次十一 L13）：≤1280 时徽章/糖摘要不再与主控件抢位，
+   * 整族收进「更多」浮层——信息**可取回**，而不是 `display:none` 硬藏。
+   */
+  const [narrowToolbar, setNarrowToolbar] = useState<boolean>(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(TOOLBAR_NARROW_QUERY).matches
+      : false,
+  );
+  const [toolbarMoreOpen, setToolbarMoreOpen] = useState(false);
+  const toolbarMoreWrapRef = useRef<HTMLSpanElement | null>(null);
+  /**
    * PS-5 校验暂停闸的可见态（键 = 正停着的那条路径；值恒 true）。
    * 由 `markerRunner` 的 `pauseChanged` 在跨界时写入 ⇒ 工具条那一句「文件太大，
    * 错误检查已暂停」与波浪线**同源同时**（不是宿主另算一遍体量，两处不会漂）。
@@ -618,6 +651,48 @@ export function EditorPane({
     },
     [eolSwitchAllowed],
   );
+
+  /**
+   * 瞬时态自动回落（批次十一 L13）：「已保存 12:34」这类一句话过 `STATUS_FLASH_MS` 让位回
+   * 元信息位（工具条的元信息位已去重——编码·EOL·行数只在底部状态栏一份）。
+   * 错误**不走这条通道**（独立 state，持久驻留直到保存成功/换文件复位）——回落只清瞬时。
+   * 定时器比对旧值：8s 内又来新一句时，旧定时器不早清下一句。
+   */
+  useEffect(() => {
+    if (status === '') return;
+    const t = window.setTimeout(() => {
+      setStatus((cur) => (cur === status ? '' : cur));
+    }, STATUS_FLASH_MS);
+    return () => window.clearTimeout(t);
+  }, [status]);
+
+  /** 窄屏判据订阅（matchMedia 而非 resize 轮询：断点翻转才重渲染，跨断点立即反映） */
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(TOOLBAR_NARROW_QUERY);
+    setNarrowToolbar(mq.matches); // 挂载时校正一次（初始值取的是首帧读数）
+    const onChange = (e: MediaQueryListEvent): void => setNarrowToolbar(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  /** 「更多」浮层的退场：外部按下或 Esc（浮层本体是工具条的从属件，不占模态栈） */
+  useEffect(() => {
+    if (!toolbarMoreOpen) return;
+    const onDocDown = (e: PointerEvent): void => {
+      const wrap = toolbarMoreWrapRef.current;
+      if (wrap && !wrap.contains(e.target as Node)) setToolbarMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setToolbarMoreOpen(false);
+    };
+    document.addEventListener('pointerdown', onDocDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDocDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [toolbarMoreOpen]);
 
   /**
    * 全部脏标签的内容快照（autosave 兜底句柄，退出/崩溃守护批）：逐 model 读
@@ -1110,9 +1185,11 @@ export function EditorPane({
     // 只读内存 model：`inmemory://` scheme（**非** `file:`，避免与真文件 model 冲突被复用）。
     // URI 按组隔离（SPLIT-1）：同文件可在两组同时开糖视图——同 URI 的 createModel 会撞车。
     // 换文件 / 关开关时由 clearSugarView dispose。
+    // 语言走单一判据（LANG-OVERRIDE-MODEL）：作者在状态栏选过 ⇒ 挂覆盖语言；没选过 ⇒
+    // 投影自己的描述符（`.kojo` 语言面）。覆盖变更后的跟随见下方订阅 effect。
     const sugarModel = monaco.editor.createModel(
       doc,
-      KOJO_LANGUAGE_ID,
+      resolveModelLanguage(path, KOJO_LANGUAGE_ID),
       monaco.Uri.parse(`inmemory://sugar/${encodeURIComponent(groupId)}/${encodeURIComponent(path)}`),
     );
     sugarModelRef.current = sugarModel;
@@ -1152,6 +1229,47 @@ export function EditorPane({
     // 预览面只读 ⇒ EOL 切换入口随开关收回/恢复（读数同一链路，不新开协议）
     pushSelStatus(true);
   }, [sugarView, applySugarView, pushSelStatus]);
+
+  /**
+   * 糖 ↔ 代码切换的 200ms 过渡（批次十一 L13）：阅读态（行距 1.8 / 栏宽 88 / 留白 24）
+   * 与代码态（留白 6/16）排版差一整屏，切换瞬间整屏跳一次。补一拍淡入把硬跳垫成过渡——
+   * **只动显示**：动画挂在 `.editor-body` 容器上，投影文本 / 装饰 / 档位语义零接触。
+   * 判据用「糖 model 是否真在屏上」而非开关值：零段文件按开关屏上仍是原文，
+   * 那种一拍不淡（淡了反而谎称切了东西）。减弱动效由全局 `data-motion='reduced'`
+   * 压平（styles-project.css UI-5 段），这里不另判。
+   */
+  const sugarOnScreenRef = useRef(false);
+  useEffect(() => {
+    const onScreen = sugarModelRef.current !== null;
+    const host = hostRef.current;
+    const changed = onScreen !== sugarOnScreenRef.current;
+    sugarOnScreenRef.current = onScreen;
+    if (!host || !changed) return;
+    host.classList.remove('sugar-swapping');
+    void host.offsetWidth; // 同一 class 连续切换要重启 CSS 动画：读一次几何强制重排
+    host.classList.add('sugar-swapping');
+    const t = window.setTimeout(() => host.classList.remove('sugar-swapping'), 240);
+    return () => window.clearTimeout(t);
+  }, [sugarView]);
+
+  // 语言模式覆盖变更：糖投影 model 跟着重挂（LANG-OVERRIDE-MODEL）。
+  // 池里的源 model 由 `editor-model-pool-instance` 的订阅跟随；投影是另一份 model
+  // （`inmemory://sugar/`，不进池、只读派生），不接这条订阅就会永远停在建 model 时的语言面。
+  // 判据与创建处同一枚 `resolveModelLanguage(path, KOJO_LANGUAGE_ID)`；同语言跳过由
+  // `retargetSugarModels` 兜住。分屏各组各有自己的订阅，只认自己当前文件。
+  useEffect(() => {
+    return subscribeLanguageOverride((changedPath) => {
+      const model = sugarModelRef.current;
+      const path = filePathRef.current;
+      if (!model || !path) return;
+      if (pathKey(changedPath) !== pathKey(path)) return;
+      retargetSugarModels(
+        [model],
+        () => resolveModelLanguage(path, KOJO_LANGUAGE_ID),
+        (target, languageId) => monaco.editor.setModelLanguage(target, languageId),
+      );
+    });
+  }, []);
 
   // 阅读模式「显示语法标记」：偏好落盘 + 立即重铺装饰（只动显示层，投影零改动；
   // 装饰集挂在当前糖 model 上，所以切档 / 重挂之后还要由 applySugarView 再铺一次）
@@ -1451,8 +1569,9 @@ export function EditorPane({
       // 覆盖位**只在显式切换这一刻置位**：保存链据此知道"这份文件的换行是作者
       // 改的，落盘要整段统一"，而不是把打开时读到的档位误当覆盖（EOL-OVERRIDE-SAVE）
       entry.eolOverride = eol;
+      // 工具条不再重打编码·EOL·行数（批次十一 L13 去重：这份读数只在底部状态栏一处）；
+      // 换档本身由 pushSelStatus 立刻上抛状态栏，屏幕与上报同一拍对齐。
       if (filePathRef.current === path) {
-        setStatus(`${entry.encoding} · ${modelEolOf(entry.model)} · ${entry.model.getLineCount()} 行`);
         // 状态栏读数立刻换档（并顺带重算 eolSwitchable；脏标记由 model 监听上报）
         pushSelStatus(true);
       }
@@ -1860,6 +1979,15 @@ export function EditorPane({
   // **调用点必须留在实例创建之后**：create 时 `codeLens` 先落默认关，这一拍才把偏好覆盖上去。
   useCodeLensPreference(editorRef, kernel);
 
+  /**
+   * 骨架屏退场①（批次十一 L13）：React 的 effect 按声明顺序执行，本位排在
+   * `useMonacoInstance` 的创建 effect 之后 ⇒ 翻 true 时 Monaco 实例必已挂在 host 上。
+   * （退场②在切换 effect：首个文件真正落屏才收骨架，见 `setFirstFileShown`。）
+   */
+  useEffect(() => {
+    setEditorBooted(true);
+  }, []);
+
   // Monarch directive 词表同源化（T5）：判据（基底 ∪ 当前项目 adapter 的指令表、等值去重、
   // 回基底）与实例引用计数都住在 `editor-global-providers.ts`——词表喂的是全局那一份 `.erb`
   // language provider，计数留两处必漂（**项目切换不残留上一项目的词表**：`project.closed` /
@@ -1995,7 +2123,11 @@ export function EditorPane({
           if (recovered && pooled.fromRecovery) dropRecoveredContent(filePath);
         } catch (e: unknown) {
           stopRead(); // 幂等：读盘失败时补记一次采样（正常路径已记过则跳过）
-          if (!cancelled) setError(errorText(e));
+          if (!cancelled) {
+            setError(errorText(e));
+            // 读盘失败 = 这一拍没有内容可上屏：骨架也要退场（错误位独立醒目，见工具条）
+            setFirstFileShown(true);
+          }
           return;
         }
       }
@@ -2055,7 +2187,11 @@ export function EditorPane({
       // 换文件才作废未决的保存告警（避免误对旧文件应用修复）；同文件重跑（依赖抖动 /
       // kernel 换代）不清——否则正弹着的确认框会被静默吞掉，保存意图丢失。
       if (prev !== filePath) setPendingChoice(null);
-      setStatus(`${entry.encoding} · ${modelEolOf(entry.model)} · ${entry.model.getLineCount()} 行`);
+      // 批次十一 L13 去重：编码·EOL·行数**不再写进工具条**（那份读数只在底部状态栏一处，
+      // 由下面的 pushSelStatus 上抛）；换文件这一拍只负责把上一份文件的**瞬时态**清掉，
+      // 让元信息位落回空档——陈旧的一句「已保存 12:34」不许骑到新文件头上。
+      setStatus('');
+      setFirstFileShown(true); // 骨架退场：首个文件已落屏（重复置 true 无副作用）
       // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
@@ -2430,6 +2566,64 @@ export function EditorPane({
   /** 预览是否正挂在屏上（= 横幅面该不该存在，也是 `sugar-stats` 渲染的那一档） */
   const sugarPreviewing = sugarView && sugarStats !== null;
 
+  /* ------------------- 工具条显示层派生（批次十一 L13；纯呈现，零判定语义） ------------------- */
+
+  /** 骨架可见：Monaco 未创建，或首个文件还没落屏（此后切换不再闪骨架） */
+  const showEditorSkeleton = !editorBooted || (filePath !== '' && !firstFileShown);
+  /** 窄屏「更多」浮层有没有东西可收（一样都没有就不出现这颗按钮） */
+  const hasToolbarSecondary =
+    markerPaused[filePath] === true ||
+    Boolean(foldingCap[filePath]) ||
+    (sugarView && Boolean(sugarStats)) ||
+    labelParts.head !== '';
+  /**
+   * 次要徽章族（校验暂停 / 折叠超额）：宽屏直排工具条，窄屏整族进「更多」浮层。
+   * JSX 单例、两个落点互斥渲染（宽屏 inline / 窄屏浮层）——文案只有一个真源。
+   */
+  const toolbarNoticeNodes = (
+    <>
+      {/* PS-5 校验暂停闸的可见性（铁律 4「内核不静默」在宿主这一侧的落点）：
+          波浪线与右侧问题列表停了，就必须有一句话说它为什么停、以及"内容/保存没受影响"。
+          文案走作者口径（不出现 marker / 装饰 / 阈值这类内部词），细节放悬停。
+          盒子复用 `.erb-mode-hint` 那一族徽章度量（工具条里已有两家同款），不另造一档样式。
+          `.erb-mode-notice` 给恒定占位宽：两枚徽章互斥/共存切换不再推着右侧控件横移。 */}
+      {markerPaused[filePath] === true ? (
+        <span
+          className="erb-mode-hint erb-mode-notice"
+          title={
+            '这份文件太大，把整篇重算一遍会让界面卡好几秒，所以这里先不给检查结果（行上没有波浪线，右侧问题列表这一份文件是空的）。' +
+            ' 你的内容和保存都不受影响；换回较小的文件，检查会自动跟上。'
+          }
+        >
+          <Icon name="warning" size="sm" /> 文件太大，错误检查已暂停
+        </span>
+      ) : null}
+      {/* 折叠超额的那句人话（同一族徽章度量，不另造样式）：说的是"少折了"，
+          不是"文件太大所以不给你折"——后者由折叠槽整条不见来表达，两句不许混。 */}
+      {foldingCap[filePath] ? (
+        <span
+          className="erb-mode-hint erb-mode-notice"
+          title={
+            `这份文件里能折起来的地方太多，界面上只折住最靠前的 ${FOLDING_MAX_RANGES} 处，` +
+            `另外 ${foldingCap[filePath].droppedRanges} 处先原样摊着（内容一字未改，往下滚照样能读、能改）。` +
+            ' 换回较短的文件就全部折得动。'
+          }
+        >
+          <Icon name="warning" size="sm" /> 折叠太多，只折前 {FOLDING_MAX_RANGES} 处
+        </span>
+      ) : null}
+    </>
+  );
+  /** 糖摘要（「已收起 N 行」那句）：同样属于次要信息，窄屏收进浮层（全文在 title 里） */
+  const sugarStatsNode = (
+    <span
+      className="sugar-stats dim"
+      title="其余行按原样显示：.kojo 还没覆盖到的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释和空行。文件内容始终没有被改动。"
+    >
+      {sugarStats}
+    </span>
+  );
+
   return (
     <div className="editor-pane" data-editor-group={groupId}>
       {/* 外框面：右键落在工具条这一条上时给「复制文件路径 / 命令面板 / 打开设置」。
@@ -2445,37 +2639,12 @@ export function EditorPane({
           <span className="file-base">{labelParts.base}</span>
         </span>
         <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
-          {dirty ? <Icon name="circle-filled" size={9} /> : null}
+          {dirty ? <Icon name="circle-filled" size="xs" /> : null}
         </span>
-        {/* PS-5 校验暂停闸的可见性（铁律 4「内核不静默」在宿主这一侧的落点）：
-            波浪线与右侧问题列表停了，就必须有一句话说它为什么停、以及"内容/保存没受影响"。
-            文案走作者口径（不出现 marker / 装饰 / 阈值这类内部词），细节放悬停。
-            盒子复用 `.erb-mode-hint` 那一族徽章度量（工具条里已有两家同款），不另造一档样式。 */}
-        {markerPaused[filePath] === true ? (
-          <span
-            className="erb-mode-hint"
-            title={
-              '这份文件太大，把整篇重算一遍会让界面卡好几秒，所以这里先不给检查结果（行上没有波浪线，右侧问题列表这一份文件是空的）。' +
-              ' 你的内容和保存都不受影响；换回较小的文件，检查会自动跟上。'
-            }
-          >
-            <Icon name="warning" size={13} /> 文件太大，错误检查已暂停
-          </span>
-        ) : null}
-        {/* 折叠超额的那句人话（同一族徽章度量，不另造样式）：说的是"少折了"，
-            不是"文件太大所以不给你折"——后者由折叠槽整条不见来表达，两句不许混。 */}
-        {foldingCap[filePath] ? (
-          <span
-            className="erb-mode-hint"
-            title={
-              `这份文件里能折起来的地方太多，界面上只折住最靠前的 ${FOLDING_MAX_RANGES} 处，` +
-              `另外 ${foldingCap[filePath].droppedRanges} 处先原样摊着（内容一字未改，往下滚照样能读、能改）。` +
-              ' 换回较短的文件就全部折得动。'
-            }
-          >
-            <Icon name="warning" size={13} /> 折叠太多，只折前 {FOLDING_MAX_RANGES} 处
-          </span>
-        ) : null}
+        {/* 次要徽章族（校验暂停 / 折叠超额）——JSX 单源在上面 `toolbarNoticeNodes`：
+            宽屏直排，窄屏（≤1280）整族收进「更多」浮层（降级层级，不硬藏）。
+            `.dirty-dot` 恒定占位宽（CSS），非脏→脏的首拍不再推着整条工具条横移。 */}
+        {narrowToolbar ? null : toolbarNoticeNodes}
         {isErbLike(filePath) && !inWorkspace(filePath) ? (
           <>
             {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**
@@ -2495,7 +2664,7 @@ export function EditorPane({
                     : '已破例允许编辑这一份文件（只对本次会话有效，关闭编辑器即失效），.kojo 预览同时关闭——要动手改的原文必须看得见。点击收回这次破例。'
                 }
               >
-                <Icon name="edit" size={13} /> 已解锁编辑
+                <Icon name="edit" size="sm" /> 已解锁编辑
               </button>
             ) : directMode && kernel.io.isWritable(filePath) ? (
               /* 直连模式：已获写权限的目录内文件直接可编辑 → 信息色提示（非警示）。
@@ -2535,16 +2704,12 @@ export function EditorPane({
                       sugarSegments && sugarSegments.path === filePath ? sugarSegments.segments : null,
                   })}
                 >
-                  <Icon name="preview" size={13} /> .kojo 预览
+                  <Icon name="preview" size="sm" /> .kojo 预览
                 </button>
                 {sugarView && sugarStats ? (
                   <>
-                    <span
-                      className="sugar-stats dim"
-                      title="其余行按原样显示：.kojo 还没覆盖到的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释和空行。文件内容始终没有被改动。"
-                    >
-                      {sugarStats}
-                    </span>
+                    {/* 糖摘要节点与浮层共享同一份 JSX（定义在 `sugarStatsNode`）；窄屏让位给「更多」 */}
+                    {narrowToolbar ? null : sugarStatsNode}
                     {/* 阅读模式开关（C-2）：默认阅读态——`续`、`空行`、`等待`、`：` 这类
                         语法标记降到低对比、台词成为主体；打开恢复主题高对比，逐字看清标记。
                         只动显示层（token 装饰），投影文本一字不变。标签恒为「显示语法标记」，
@@ -2567,14 +2732,50 @@ export function EditorPane({
             )}
           </>
         ) : null}
+        {/* 窄屏降级层级（批次十一 L13）：次要信息（目录前缀 / 两枚徽章 / 糖摘要）收进
+            「更多」浮层——1280 以下靠**层级**让位，不再只把 `.file-dir` 一藏了之。
+            按钮只在真有内容时出现；浮层外部按下 / Esc 收起（上方 effect）。 */}
+        {narrowToolbar && hasToolbarSecondary ? (
+          <span className="toolbar-more-wrap" ref={toolbarMoreWrapRef}>
+            <button
+              type="button"
+              className="ghost small toolbar-more"
+              aria-expanded={toolbarMoreOpen}
+              aria-haspopup="true"
+              onClick={() => setToolbarMoreOpen((v) => !v)}
+              title="次要提示（目录前缀 · 检查暂停 · 折叠截断 · 糖摘要）收在这里——窄屏不抢主控件的位置，点开即得全文。"
+            >
+              更多
+            </button>
+            {toolbarMoreOpen ? (
+              <span className="toolbar-more-pop" role="group" aria-label="更多编辑器提示">
+                {labelParts.head !== '' ? (
+                  <span className="toolbar-more-dir" title="完整目录前缀（项目相对口径外的绝对长前缀）">
+                    {labelParts.head}
+                  </span>
+                ) : null}
+                {toolbarNoticeNodes}
+                {sugarView && sugarStats ? sugarStatsNode : null}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
         <span className="spacer" />
-        <span className="editor-status">
+        {/* 工具条状态位三拆（批次十一 L13）：元信息 / 瞬时态 / 错误各自一档——
+            · 元信息：编码·EOL·行数**不再在这里重打**（底部状态栏独一份，去重后元信息位
+              落为空档，`.editor-status` 的 min-width 给它留恒定占位，右簇不横移）；
+            · 瞬时态：「已保存 12:34」一类，`STATUS_FLASH_MS` 后自动回落元信息位；
+            · 错误：独立语义色（--danger）+ 字重，不再与元信息同灰度；持久驻留，
+              保存成功 / 换文件复位。长文案整格省略号截断，全文进 title 悬停。 */}
+        <span className="editor-status" title={error ?? (status !== '' ? status : undefined)}>
           {error ? (
-            <>
-              <Icon name="warning" size={13} /> {error}
-            </>
+            <span className="editor-status-error">
+              <Icon name="warning" size="sm" /> {error}
+            </span>
+          ) : status !== '' ? (
+            <span className="editor-status-flash">{status}</span>
           ) : (
-            status
+            <span className="editor-status-meta" aria-hidden="true" />
           )}
         </span>
         {/* 保存三段式（P3-4）：醒目度跟着「有没有东西可存」走——
@@ -2604,7 +2805,18 @@ export function EditorPane({
           kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });
         }}
       />
-      <div className="editor-body" ref={hostRef} />
+      {/* 装载骨架（批次十一 L13）：Monaco 创建 / 首个文件落屏之前，`.editor-body`
+          不再是纯空白——复用效果库的 `.skeleton` 扫光条顶着这一拍（绝对定位覆盖层，
+          不参与编辑器测量；实例创建照常进行，骨架到点自动退场）。 */}
+      <div className="editor-body" ref={hostRef}>
+        {showEditorSkeleton ? (
+          <div className="editor-body-skeleton" aria-hidden="true">
+            {EDITOR_SKELETON_WIDTHS.map((w, i) => (
+              <div key={i} className="skeleton editor-skeleton-bar" style={{ width: w }} />
+            ))}
+          </div>
+        ) : null}
+      </div>
       {pendingChoice ? <SaveWarningDialog warning={pendingChoice} onDecide={decideSaveWarning} /> : null}
       {introAsk ? <SugarViewIntroDialog onDecide={decideIntro} /> : null}
       {unlockAsk ? (

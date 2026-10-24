@@ -1,5 +1,5 @@
 /* ============================================================================
-   欢迎页（用户反馈 9 批，2026-10-17 再排）—— 居中单卡，本仓 token 落地。
+   欢迎页（批次十一 · 视觉 L04「两态重构」）—— 居中单卡，本仓 token 落地。
 
    为什么不再有标签（用户反馈 2 + 第九批澄清）：VSCode 的欢迎页是"进入工作区后的
    一个编辑器标签"，所以上方那条标签栏成立；本项目必须先选目录才能进编辑器，
@@ -13,12 +13,21 @@
    胜"处理（`.welcome-screen .welcome-card` 之于 `.welcome-card`），因此本文件
    不依赖加载顺序——Vite 按模块图注入 CSS，组件 CSS 可能先于 styles.css 落盘。
 
-   版式：`.welcome-scroll`（flex 列 + overflow:auto）里一枚 `.welcome-stage`
+   版式（批次十一改）：`.welcome-scroll`（flex 列 + overflow:auto）里一枚 `.welcome-stage`
    以 `margin: auto 0` 上下居中（矮窗时 auto 边距归零、滚动区上内边距给装饰标签
-   留净空，顶部永不被裁）；卡片两栏（左：品牌 / 启动 / 最近；右：教程 + 写法对照
-   样例），窄窗（<900px）折成单栏。2026-10-26 首屏呼吸批：外边距与栏间距收小、
-   最近列表限高内滚（168px）、「移除」收进行 hover/focus（键盘可达）、右栏补
-   `.kojo → ERB` 静态对照样例配平留白。动效一律走全局 `data-motion='reduced'` /
+   留净空，顶部永不被裁）；卡片两栏，但两栏**权重不同档**：
+     · 左（主栏）= 首屏三件事：品牌头 → 一个主 CTA → 最近项目大卡；
+       其下只剩两条次级折叠（最近文件）与一行说明。
+     · 右（辅栏）= 一条「教程 · N 篇内置」折叠（展开才见四张卡与编译样例）+ 一行尾注。
+   折叠用原生 `<details>`：收起时内容仍在 DOM（SSR 与真壳探针数得到），只是不占首屏。
+
+   行高数学（本批修掉的实测缺陷）：旧版把最近列表写死 `max-height:168px`，而单行实际
+   高 ≈ 51px ⇒ 最后一行被切掉半截。现在每行的高度 = 由 `--fs-*` / `--space-*` 推出的
+   `--welcome-card-h` / `--welcome-row-h`，限高一律取**整数倍 + 行间距**，且因为公式吃
+   字号 token，界面字号缩放（`uiFontScale` 往根元素写 `--fs-*` 行内值）一改，行高与
+   限高同步缩放，永远不会再冒出半行。
+
+   窄窗（<1000px）折成单栏。动效一律走全局 `data-motion='reduced'` /
    `prefers-reduced-motion` 压平规则（styles.css），本文件不另设开关；
    颜色 100% 取 token，主题可翻。
    ============================================================================ */
@@ -77,9 +86,8 @@
 /* 居中单元：宽度即卡片尺寸（min(1120px, 100%)），本身不画任何东西。
    `flex: none`：列向 flex 里默认 flex-shrink:1 会试图把舞台压矮，卡片内容就会
    溢出而不是让滚动区出滚——关掉收缩，矮窗才能正常向下滚。
-   首屏呼吸：`max-height:100%` 把卡片钉在滚动区可视高内（内容更长时由两栏
-   各自内滚，见下方 .welcome-main / .welcome-side 的 overflow-y），整卡不再撑出
-   视口；矮窄窗（<900px 断点）撤销限高，恢复整页滚动。 */
+   `max-height:100%` 把卡片钉在滚动区可视高内（内容更长时由两栏各自内滚）；
+   矮窄窗（断点内）撤销限高，恢复整页滚动。 */
 .welcome-stage {
   position: relative;
   flex: none;
@@ -119,13 +127,14 @@
   transform: none;
 }
 
-/* ------------------------------ 主体卡（两栏） ------------------------------ */
+/* ------------------------------ 主体卡（主栏 + 辅栏） ------------------------------ */
 
 /* 旧 `.welcome-card` 是单列 620px 卡片；这里用更高的特异性重写成两栏玻璃面：
    背景 / 边框 / 磨砂仍由 styles.css 的 `.welcome-card` 玻璃主规则供给，
    本规则只改布局与尺寸，主题与 `data-glass='solid'` 回落零改动。
    尺寸由 `.welcome-stage` 决定（卡片铺满舞台），居中 / 滚动也交给舞台；
-   入场动画移去舞台（标签与卡片一起入场），这里撤掉旧 `.welcome-card` 的 overlay-in。 */
+   入场动画移去舞台（标签与卡片一起入场），这里撤掉旧 `.welcome-card` 的 overlay-in。
+   批次十一：辅栏收到 300px 定宽——它只剩折叠，不该再和主栏抢首屏注意力。 */
 .welcome-screen .welcome-card {
   position: relative;
   z-index: 1;
@@ -135,7 +144,7 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
   gap: 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--edge-raise), var(--shadow-3);
@@ -158,10 +167,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: var(--space-4);
   padding: 36px 44px 32px;
-  /* 卡片被舞台限高后，左栏在卡内自己滚（首屏之外的内容不再是"整页滚"） */
+  /* 卡片被舞台限高后，主栏在卡内自己滚（首屏之外的内容不再是"整页滚"） */
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .welcome-side {
@@ -175,9 +185,10 @@
   border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
   background: linear-gradient(180deg, var(--hover-soft), transparent 42%);
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
-/* ------------------------------ 品牌头 ------------------------------ */
+/* ------------------------------ 品牌头（层级第 1 档） ------------------------------ */
 
 /* 品牌记号（P3-4）：与标题栏 `ChromeBrandMark` 同一枚「口上/对话框」气泡——
    形状是**内联 SVG data-URI 的 mask**（无图片资源、无依赖），上色走 `--accent`
@@ -213,6 +224,8 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* 与下面那块（通知 / 主 CTA）拉开一档：品牌头是"我在哪"，其余是"我要做什么" */
+  margin-bottom: var(--space-2);
 }
 
 /* 旧 `.welcome-card h1` 是单列卡片的标题尺度；两栏版按基准 token 重排 */
@@ -225,6 +238,7 @@
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.15;
+  color: var(--fg);
 }
 
 /* 版本胶囊沿用 styles.css 的 `.welcome-card h1 .ver`（同一枚 chip），只补一点间距 */
@@ -239,15 +253,66 @@
   line-height: 1.6;
 }
 
-/* ------------------------------ 通知条 ------------------------------ */
+/* ------------------------------ 通知条（图标 + 一句话） ------------------------------ */
 
 .welcome-screen .welcome-notice {
   margin: 0;
   font-size: var(--fs-2);
   line-height: 1.65;
+  /* `.notice` 本体（底色 / 描边 / 圆角 / padding）住在 styles.css，这里只排"图标位 + 文案"
+     并让崩溃横幅的三个部分能在一行里收拢。颜色一律不在这个块里写。 */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 }
 
-/* ------------------------------ 启动 ------------------------------ */
+/* 图标位：吃掉 `.spinner` 的 16px 定值，改成随本条字号缩放的 em 档——
+   界面字号拧大一档，转圈与语义图标一起长大，不会变成"小图配大字"。 */
+.welcome-screen .welcome-notice-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.25em;
+  height: 1.25em;
+  color: var(--accent-text);
+}
+
+/* `.spinner` = styles.css 的全局转圈（动画名 u-spin 单源，本页**不**自写 @keyframes）。
+   L01 已合流：时长收成 tokens.css 的 `--anim-spin`——这里显式吃同一个 token，
+   抬/降转速只动 tokens 一处，欢迎页不再跟 700ms 字面量绑死。
+   下面只把 16px 定值改成随字号缩放的两档（border-width 保持 2px，别拧成椭圆）。 */
+.welcome-screen .welcome-notice .spinner {
+  animation-duration: var(--anim-spin);
+  width: 1.05em;
+  height: 1.05em;
+}
+
+.welcome-screen .notice.warn .welcome-notice-icon {
+  color: var(--warning);
+}
+
+.welcome-screen .notice.error .welcome-notice-icon {
+  color: var(--danger);
+}
+
+/* 崩溃横幅与 warn 同色温（styles.css 已把 `.crash-recovery` 底/边写成琥珀系） */
+.welcome-screen .notice.crash-recovery .welcome-notice-icon {
+  color: var(--warning);
+}
+
+.welcome-screen .welcome-notice .welcome-notice-copy {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+}
+
+/* 崩溃横幅的两个动作贴到行尾：事由在左、决定在右，一条读完 */
+.welcome-screen .notice.crash-recovery .crash-recovery-actions {
+  margin-left: auto;
+}
+
+/* ------------------------------ 主 CTA 区（层级第 2 档） ------------------------------ */
 
 .welcome-section {
   min-width: 0;
@@ -256,12 +321,27 @@
   gap: var(--space-3);
 }
 
+/* 区标题是"层级第 2.5 档"：旧版 fs-1 + --fg-dim + 0.12em 字距，实测在 1440×900 上
+   读不出来（灰到像注释）。收成 fs-3 / 600 / --fg，再加一条 accent 竖杠当锚点。 */
 .welcome-section-title {
   margin: 0;
-  font-size: var(--fs-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-3);
   font-weight: 600;
-  letter-spacing: 0.12em;
-  color: var(--fg-dim);
+  letter-spacing: 0;
+  color: var(--fg);
+  line-height: 1.35;
+}
+
+.welcome-section-title::before {
+  content: '';
+  flex: none;
+  width: calc(var(--space-1) / 2);
+  height: 0.95em;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
 }
 
 .welcome-section-head {
@@ -271,6 +351,31 @@
   gap: var(--space-3);
 }
 
+.welcome-section-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* 计数与"有目录不在"的提醒都是区标题的注脚，不抢标题的对比度 */
+.welcome-section-count {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.welcome-section-warn {
+  color: var(--warning);
+  font-size: var(--fs-0);
+}
+
 .welcome-actions {
   display: flex;
   flex-direction: column;
@@ -278,10 +383,11 @@
   gap: 10px;
 }
 
-/* 主 CTA：铺满主栏、图标 + 文案一行（VSCode 的大按钮），悬停抬 1px 并带 accent 投影 */
+/* 主 CTA：铺满主栏、图标 + 文案一行（VSCode 的大按钮），悬停抬 1px 并带 accent 投影。
+   层级第 2 档——fs-4 / 600 / accent 实底，是全页唯一一枚实心按钮。 */
 .welcome-screen .welcome-open {
   width: 100%;
-  min-height: 46px;
+  min-height: 52px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -305,15 +411,22 @@
   transform: translateY(0);
 }
 
-/* 继续上次会话：一行里放动作 + 目标路径（路径弱化、可省略，鼠标悬停有完整 title） */
+/* 继续上次会话：层级第 3 档（次级动作）——同宽但描边幽灵面、字号降一档，
+   与主 CTA 的实心 accent 一眼分得出主次。一行里放动作 + 目标路径（路径弱化、可省略）。 */
 .welcome-screen .welcome-resume {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
+  min-height: 40px;
   padding: 10px 14px;
   text-align: left;
+  font-size: var(--fs-2);
   color: var(--fg);
+}
+
+.welcome-screen .welcome-resume .icon {
+  color: var(--accent-text);
 }
 
 .welcome-resume-label {
@@ -340,7 +453,7 @@
   line-height: 1.6;
 }
 
-/* ------------------------------ 最近 ------------------------------ */
+/* ------------------------------ 最近项目大卡（首屏第 3 件） ------------------------------ */
 
 .welcome-screen .welcome-clear {
   /* 命中区放大到 ≥24px 高（旧 48×20 低于可用下限）；底色只在悬停时给，保持弱化 */
@@ -373,10 +486,30 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  /* 限高内滚（首屏呼吸）：约 4 行可见，更多在列表内部滚，不把整页撑出视口 */
-  max-height: 168px;
-  overflow: auto;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* 行高单源（本批核心修法）：**每行实际高 = 下面这条公式**，限高一律取整数倍。
+   旧版写死 `max-height:168px` 与 51px 的行高没有约定 ⇒ 最后一行被切半截（真壳截图取证）。
+   公式全部由 `--fs-*` / `--space-*` 推出，界面字号缩放（`uiFontScale` 往根元素覆写 `--fs-*`）
+   一动，行高与限高一起缩放，半行裁切不可能回来。末尾那道 `var(--space-1) / 2` = 2px
+   是给描边/行距的余量（box-sizing: border-box ⇒ 描边算在高度里）。 */
+.welcome-screen {
+  /* 大卡：标题行（fs-3×1.4）+ 上次打开行 + 路径行（各 fs-0×1.6）+ 两道间距 + 上下 16px 内边距 */
+  --welcome-card-h: calc(var(--fs-3) * 1.4 + var(--fs-0) * 1.6 * 2 + var(--space-2) * 2 + var(--space-4) * 2 + var(--space-1) / 2);
+  /* 最近文件行：文件名（fs-2×1.4）+ 完整路径（fs-0×1.5）+ 上下 8px 内边距 + 行内 1px 叠距 */
+  --welcome-row-h: calc(var(--fs-2) * 1.4 + var(--fs-0) * 1.5 + var(--space-2) * 2 + var(--space-1));
+}
+
+.welcome-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-3);
+  border-top: none;
+  /* 整数倍：2 行大卡 + 1 道行间距，多出来的在列表内部滚——永远不会出现半张卡 */
+  max-height: calc(var(--welcome-card-h) * 2 + var(--space-3));
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .welcome-recent-row {
@@ -385,7 +518,11 @@
   align-items: center;
   gap: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
-  transition: background-color var(--dur-1) var(--ease-out);
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 
 /* 左缘 accent 条：悬停 / 键盘聚焦时生长（与旧欢迎页同一条交互语义） */
@@ -420,7 +557,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: 9px 10px;
+  padding: var(--space-2) var(--space-3);
   background: none;
   border: none;
   border-radius: 0;
@@ -458,7 +595,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   padding: 0 8px;
-  line-height: 1.7;
+  line-height: 1.5;
   font-size: var(--fs-0);
   background: var(--surface-sunken);
 }
@@ -509,6 +646,103 @@
   outline-offset: 1px;
 }
 
+/* 大卡本体：三行信息层级（项目名 + 适配器 / 上次打开 + 文件数 / 完整路径）。
+   `height` 取 --welcome-card-h ⇒ 与限高公式严格同值，网格每格等高、行数可整除。 */
+.welcome-project-card {
+  height: var(--welcome-card-h);
+  align-items: stretch;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--edge-raise);
+  overflow: hidden;
+}
+
+.welcome-project-card:hover,
+.welcome-project-card:focus-within {
+  background: var(--surface-overlay);
+  border-color: var(--border-strong);
+  box-shadow: var(--edge-raise), var(--shadow-1);
+}
+
+/* 卡片在限高内滚的网格里，抬 1px 会在容器上缘切出 1px 缝（且破坏整数倍行高）
+   ⇒ 大卡的"被指到"靠描边转强 + 抬升阴影 + 左缘 accent 条，不做 translateY。 */
+
+.welcome-project-card::before {
+  /* 指示条宽度沿用基类那 2px（`--space-1 / 2`），只把内缩改成随间距 token 走 */
+  top: var(--space-3);
+  bottom: var(--space-3);
+}
+
+.welcome-project-card .welcome-recent-open {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-4) calc(var(--space-4) + var(--space-1));
+}
+
+.welcome-project-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* 卡片标题是层级第 3 档（比区标题高一档、比主 CTA 低一档）：fs-3 / 600 / --fg */
+.welcome-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-3);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.welcome-project-card.is-missing .welcome-project-name {
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+
+.welcome-project-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+}
+
+.welcome-project-when {
+  flex: none;
+}
+
+.welcome-project-files {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 大卡里的路径行降为元信息（项目名才是标题）；mono 字面让盘符路径一眼可读 */
+.welcome-project-card .welcome-recent-path {
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+
+/* 「移除」贴卡片右上角：卡片是网格单元，常驻占位会挤掉正文，绝对定位 + hover 显现 */
+.welcome-project-card .welcome-recent-remove {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 2;
+}
+
 /* 最近文件行（MM-7）：左列 = 文件名（主色）+ 完整路径（dim 小字）两行叠放；
    行骨架 / 徽标 / 悬停一律复用上面的 welcome-recent-*，这里只补左列与新字级。 */
 .welcome-recent-file {
@@ -529,16 +763,141 @@
   font-size: var(--fs-0);
 }
 
+/* 次区（最近文件）行高也吃 --welcome-row-h，限高取 4 个整行 ⇒ 半行裁切同源修掉。
+   两行的行高在这里钉死（1.4 / 1.5），正是 --welcome-row-h 公式里那两项；
+   列表本身不再画 border-top（折叠的 summary 已经给了一条切边，1px 顶边会挤掉整数倍）。 */
+.welcome-recent-files .welcome-recent-row {
+  height: var(--welcome-row-h);
+}
+
+.welcome-recent-files .welcome-recent-path {
+  line-height: 1.4;
+}
+
+.welcome-recent-files .welcome-recent-sub {
+  line-height: 1.5;
+}
+
+.welcome-recent-files .welcome-recent-list {
+  border-top: none;
+  max-height: calc(var(--welcome-row-h) * 4);
+  overflow-y: auto;
+}
+
 .welcome-hint {
   margin: 0;
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-subtle);
   color: var(--fg-dim);
-  font-size: var(--fs-0);
-  line-height: 1.8;
+  font-size: var(--fs-1);
+  line-height: 1.7;
 }
 
-/* ------------------------------ 教程（右栏） ------------------------------ */
+.welcome-hint strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ------------------------------ 次级折叠（两栏共用） ------------------------------ */
+
+/* 一条折叠 = 一行字 + 一个计数；展开才出现内容。原生 `<details>`：零 JS、
+   键盘天然可达（Enter 开合），收起时子树仍在 DOM 里（冒烟与 SSR 用例照数得到）。
+   // ui-kit-candidate: details/summary 折叠壳（一行标签 + 计数 + 旋转 caret），
+   //   项目面板 / 设置页的分组都能换成它，不必各自再写一套"展开收起"。 */
+.welcome-fold {
+  min-width: 0;
+}
+
+.welcome-fold-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.welcome-fold-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 38px;
+  padding: 8px var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--fg);
+  cursor: pointer;
+  list-style: none; /* 去掉 UA 的三角 marker：caret 由本层画 SVG，随开合旋转 */
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+
+.welcome-fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.welcome-screen .welcome-fold-summary:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.welcome-screen .welcome-fold-summary:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+
+/* 折叠里的区标题降一档（fs-2 / 600 / --fg）：读得出来，但不与主区标题争锚点 */
+.welcome-fold-summary .welcome-section-title {
+  font-size: var(--fs-2);
+  line-height: 1.4;
+}
+
+.welcome-fold-summary .welcome-section-title::before {
+  height: 0.85em;
+  opacity: 0.55;
+}
+
+.welcome-fold-count {
+  margin-left: auto;
+  flex: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+
+.welcome-fold-caret {
+  flex: none;
+  color: var(--fg-dim);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+/* `[open]` 落在 `<details>` 本体上（summary 只是它的子元素）：caret 随开合转 90° */
+.welcome-fold-box[open] > .welcome-fold-summary .welcome-fold-caret,
+.welcome-sample-fold[open] > .welcome-fold-summary .welcome-fold-caret {
+  transform: rotate(90deg);
+}
+
+/* 嵌套子折叠（编译样例）：再降一档，只留一行灰字 + caret */
+.welcome-sample-fold {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.welcome-fold-summary.is-sub {
+  min-height: 28px;
+  padding: 4px var(--space-2);
+  background: none;
+  border-color: transparent;
+  color: var(--fg-dim);
+}
+
+.welcome-screen .welcome-fold-summary.is-sub:hover {
+  background: var(--hover-soft);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* ------------------------------ 教程（辅栏折叠内） ------------------------------ */
 
 .welcome-side-head {
   display: flex;
@@ -555,6 +914,7 @@
   font-size: var(--fs-2);
   font-weight: 600;
   letter-spacing: 0.02em;
+  color: var(--fg);
 }
 
 .welcome-side-title .icon {
@@ -579,7 +939,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  padding: 14px;
+  padding: 12px;
   text-align: left;
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
@@ -609,8 +969,8 @@
 }
 
 .welcome-tutorial-icon {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: var(--radius-sm);
@@ -659,7 +1019,7 @@
   transform: translateX(2px);
 }
 
-/* ------------------------------ 写法对照样例（右栏 · 身份感） ------------------------------ */
+/* ------------------------------ 写法对照样例（默认折叠） ------------------------------ */
 
 /* 静态的「.kojo → ERB」最小对照：一眼讲清"你写中文口上、工具翻成游戏指令"。
    不上壁纸、不做动画；配色全部取 token（kw=accent-text、ERB 指令=warning、
@@ -727,6 +1087,7 @@
   font-size: var(--fs-0);
 }
 
+/* caret 当"往下编译"的箭头用：SVG 跟随 currentColor 与字号，不再是文本 `↓` */
 .welcome-sample-flow-arrow {
   color: var(--accent-text);
 }
@@ -736,8 +1097,8 @@
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-subtle);
   color: var(--fg-dim);
-  font-size: var(--fs-0);
-  line-height: 1.8;
+  font-size: var(--fs-1);
+  line-height: 1.7;
 }
 
 .welcome-side-foot kbd {
@@ -806,20 +1167,27 @@
 
 /* ------------------------------ 窄窗 / 矮窗 ------------------------------ */
 
-/* 矮窗（高 <700px）与窄窗（宽 <900px）撤销"卡片钉 viewport + 分栏内滚"：
-   折成一栏后内滚两段反而割裂，恢复旧的整页滚动行为。 */
+/* 矮窗（高 <700px）与窄窗（宽 <1000px）撤销"卡片钉 viewport + 分栏内滚"：
+   折成一栏后内滚两段反而割裂，恢复整页滚动；大卡网格收成单列。 */
 @media (max-height: 700px) {
   .welcome-stage {
     max-height: none;
   }
 
   .welcome-main,
-  .welcome-side {
+  .welcome-side,
+  .welcome-project-grid,
+  .welcome-recent-files .welcome-recent-list {
     overflow-y: visible;
+  }
+
+  .welcome-project-grid,
+  .welcome-recent-files .welcome-recent-list {
+    max-height: none;
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1000px) {
   /* 窄窗收边距：卡片可用宽 = 视口 - 32px，与旧断点同口径 */
   .welcome-scroll {
     padding: 24px 16px;
@@ -840,7 +1208,7 @@
   }
 
   .welcome-side {
-    padding: 28px;
+    padding: 24px 28px 28px;
     border-left: none;
     border-top: 1px solid var(--border-subtle);
     border-radius: 0 0 var(--radius-lg) var(--radius-lg);
@@ -864,7 +1232,7 @@
 
   .welcome-main {
     padding: 24px 18px;
-    gap: 24px;
+    gap: var(--space-4);
   }
 
   .welcome-side {
@@ -873,6 +1241,12 @@
 
   .welcome-screen .welcome-brand h1 {
     font-size: var(--fs-5);
+  }
+
+  /* 窄屏一张卡一行：两列会把项目名与路径都挤成省略号，不如一行一条 */
+  .welcome-project-grid {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: calc(var(--welcome-card-h) * 2 + var(--space-3));
   }
 
   .welcome-screen .welcome-recent-open {

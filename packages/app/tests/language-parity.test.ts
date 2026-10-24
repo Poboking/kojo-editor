@@ -449,6 +449,20 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
     }
   });
 
+  it('kojo2 的 format 面两条腿齐：整篇 + 区间 provider 都只挂 kojo2，装配点两枚 installer 都调用', () => {
+    const formatModule = sourceOf('monaco/kojo2-format.ts').text;
+    // 一条能力（format）= 两枚 Monaco provider：document（Shift+Alt+F）+ range（Ctrl+K Ctrl+F）
+    expect(formatModule).toMatch(
+      /registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
+    );
+    expect(formatModule).toMatch(
+      /registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
+    );
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host).toContain('installKojo2DocumentFormatter(monaco)');
+    expect(host).toContain('installKojo2RangeFormatter(monaco)');
+  });
+
   it('注册单源：register-dialects.ts 只按 descriptor.languageServices 挑语言，不写死语言 id', () => {
     const dialects = sourceOf('monaco/register-dialects.ts').text;
     expect(dialects).toContain('descriptor.languageServices === true');

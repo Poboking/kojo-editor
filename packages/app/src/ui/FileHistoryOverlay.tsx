@@ -26,6 +26,7 @@ import {
 import { peekRecoveredContent } from './recovery-store';
 import { declareContextSurface } from './context-surfaces';
 import type { ContextMenuItem } from './context-menu-model';
+import { overlayFrame, overlaySkeletonRows, overlaySpinner } from './overlay-chrome';
 
 /**
  * 本地时间线 overlay（F2；2026-10-15 历史批 → W11 回收站可见批改成「四本账一条时间线」）。
@@ -373,11 +374,21 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       runFaceActionRef.current = (id) => {
         if (id === FILE_HISTORY_MENU_IDS.close) deps.close();
       };
-      return h(
-        'div',
-        { className: 'wizard fh-host', 'data-context-surface': FILE_HISTORY_SURFACE_ID },
-        h('p', { className: 'dim' }, '当前没有选中的文件。请在编辑器里打开一个文件再查看其时间线。'),
-      );
+      // 空态也带 ✕：改前这一格连一颗关闭控件都没有（`fh-host` 的关闭按钮只在主渲染里），
+      // 只能 Esc 或点遮罩——而那两条通道都不走 `deps.close()`。
+      return overlayFrame({
+        hostClass: 'fh-host',
+        title: '时间线',
+        tier: 'wide',
+        mode: 'query',
+        onClose: () => deps.close(),
+        contextSurface: FILE_HISTORY_SURFACE_ID,
+        children: h(
+          'p',
+          { className: 'dim' },
+          '当前没有选中的文件。请在编辑器里打开一个文件再查看其时间线。',
+        ),
+      });
     }
 
     /* ---------------- 动作：全部派回各本账既有的通道 ---------------- */
@@ -647,7 +658,8 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
 
     let body: ReactNode;
     if (state.kind === 'loading') {
-      body = h('p', { className: 'dim' }, '正在并四本账…');
+      // 装载态有脸可读：转圈 + 骨架行（改前一句裸 `.dim`，四本账并起来那几秒屏上像空的）
+      body = h('div', null, overlaySpinner('正在并四本账…'), overlaySkeletonRows(6));
     } else if (state.kind === 'error') {
       body = h('p', { className: 'kd-error' }, `时间线读取失败：${state.reason}`);
     } else {
@@ -760,27 +772,35 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
       }
     };
 
-    return h(
-      'div',
-      { className: 'wizard fh-host', 'data-context-surface': FILE_HISTORY_SURFACE_ID },
-      h('h3', null, `时间线 —— ${basename(target)}`),
-      h('p', { className: 'dim fh-path' }, target),
-      h(
-        'p',
-        { className: 'dim' },
-        '一条时间线，四本账：写前备份 / 批操作快照 / 回收站 / 未保存快照。每行都写明它来自哪本账、恢复它会发生什么；恢复前的磁盘现状一律先落进同一本账，不会被吃掉。勾选任意两行可两版互比（旧版在左）；每行后面的「对比」仍与磁盘当前内容比。',
-      ),
-      feedback
-        ? h('p', { className: feedback.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, feedback.text)
-        : null,
-      body,
-      h(
-        'div',
-        { className: 'wizard-actions' },
-        h('button', { className: 'ghost small', onClick: () => setReloadNonce((n) => n + 1) }, '刷新'),
+    return overlayFrame({
+      hostClass: 'fh-host',
+      title: `时间线 —— ${basename(target)}`,
+      tier: 'wide',
+      mode: 'query',
+      // ✕ 与页脚那颗同一个动作（含 `setFileHistoryTarget(null)` 的收账，别只收窗不清目标）
+      onClose: () => {
+        setFileHistoryTarget(null);
+        deps.close();
+      },
+      contextSurface: FILE_HISTORY_SURFACE_ID,
+      children: [
+        h('p', { key: 'path', className: 'dim fh-path' }, target),
+        h(
+          'p',
+          { key: 'ledger', className: 'dim' },
+          '一条时间线，四本账：写前备份 / 批操作快照 / 回收站 / 未保存快照。每行都写明它来自哪本账、恢复它会发生什么；恢复前的磁盘现状一律先落进同一本账，不会被吃掉。勾选任意两行可两版互比（旧版在左）；每行后面的「对比」仍与磁盘当前内容比。',
+        ),
+        feedback
+          ? h('p', { key: 'fb', className: feedback.tone === 'ok' ? 'kd-banner ok' : 'kd-error' }, feedback.text)
+          : null,
+        body,
+      ],
+      footer: [
+        h('button', { key: 'reload', className: 'ghost small', onClick: () => setReloadNonce((n) => n + 1) }, '刷新'),
         h(
           'button',
           {
+            key: 'close',
             className: 'ghost small',
             onClick: () => {
               setFileHistoryTarget(null);
@@ -789,7 +809,7 @@ export function createFileHistoryOverlay(deps: FileHistoryDeps): () => unknown {
           },
           '关闭',
         ),
-      ),
-    );
+      ],
+    });
   };
 }

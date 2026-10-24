@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
-import { FileTree, walkDialectPaths } from '../src/ui/FileTree';
+import { FileTree, middleEllipsis, walkDialectPaths } from '../src/ui/FileTree';
 import { FileRows } from '../src/ui/file-tree-rows';
 import { buildFileGroups, dirsToRelist, kojoOwners, visibleEntries } from '../src/ui/file-tree-model';
 import {
@@ -463,5 +463,35 @@ describe('FileTree · 文件系统视图（B5，工具条撤除后 SSR 默认态
     const html = render(async () => []);
     expect(html).toContain('tree-filter');
     expect(html).not.toContain('C:/game'); // 项目根路径不出现在默认口上视图里
+  });
+});
+
+describe('middleEllipsis · 长名中段省略保住扩展名（L16）', () => {
+  it('②核心判据：样本名截后**仍含 .ERH**（尾部 ellipsis 吃掉的正是它）', () => {
+    const out = middleEllipsis('长长的目录名/very.long.file.ERH', 16);
+    expect(out).toContain('.ERH');
+    expect(out).toContain('…');
+    expect(out.length).toBeLessThanOrEqual(16);
+    expect(out.startsWith('长长的目录名/')).toBe(true); // 头部保住，裁的是中段
+  });
+
+  it('不超长原样返回；上限小于 4 没有裁的意义也原样返回', () => {
+    expect(middleEllipsis('q.ERB', 24)).toBe('q.ERB');
+    expect(middleEllipsis('恰好等于上限的名字.x'.slice(0, 10), 10)).toBe('恰好等于上限的名字.x'.slice(0, 10));
+    expect(middleEllipsis('很长的名字不该被三位上限吃掉.ERB', 3)).toBe('很长的名字不该被三位上限吃掉.ERB');
+  });
+
+  it('无扩展名：保头裁中，末尾只剩省略号；隐藏名（点开头）不算扩展名', () => {
+    const noExt = middleEllipsis('非常非常长的作者包目录名没有后缀', 10);
+    expect(noExt).toHaveLength(10);
+    expect(noExt.endsWith('…')).toBe(true);
+    const hidden = middleEllipsis('.kojoprofileveryveryverylong', 10);
+    expect(hidden.endsWith('…')).toBe(true); // dot=0 ⇒ 无后缀口径
+  });
+
+  it('后缀比预算还长时先保后缀（.ERH 优先于头部可读性）', () => {
+    const out = middleEllipsis('a.very.long.trailing.kojo', 8);
+    expect(out).toContain('…');
+    expect(out.endsWith('.kojo')).toBe(true);
   });
 });

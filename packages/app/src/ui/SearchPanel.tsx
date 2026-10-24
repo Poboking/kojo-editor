@@ -6,6 +6,7 @@ import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { Icon } from './icons';
 import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { setSearchMenuContext } from './search-menu';
+import { KitCount, KitKbd } from '../ui-kit';
 import {
   clearSearchResult,
   runReplace,
@@ -334,11 +335,17 @@ export function SearchPanel({
   const resultsRef = useRef<HTMLDivElement>(null);
   const optionsBodyId = useId();
   const replaceRowId = useId();
+  const helpBodyId = useId();
 
   /** 替换行展开（UI 局部状态：VSCode 同构——默认收起，命令入口会自动展开） */
   const [replaceOpen, setReplaceOpen] = useState(false);
   /** 「选项」区展开（UI 局部状态；折叠只改 `display`，控件仍在 DOM，展开即用） */
   const [optionsOpen, setOptionsOpen] = useState(false);
+  /**
+   * 空态「键位速查」展开（批次十一 L08，UI 局部状态）：默认折叠成一行，
+   * 悬浮/聚焦提示行时 CSS 临时展开，点「键位」钮则钉住——三径同体，控件仍在 DOM。
+   */
+  const [helpOpen, setHelpOpen] = useState(false);
   /** 折叠的文件块（key = path；局部状态，切视图卸载后回到全展开） */
   const [foldedFiles, setFoldedFiles] = useState<ReadonlySet<string>>(() => new Set());
   /**
@@ -476,10 +483,22 @@ export function SearchPanel({
   const staleScopeText = scopeStaleText(selectedScopeKey, s.appliedScope);
   const extensionSummary = extensionSummaryText(s.extensionText);
 
-  const start = (): void => {
+  /**
+   * 空态引导用的最近检索（批次十一 L08，纯呈现）：最近 6 条、新的在前。
+   * 数据面就是 ↑/↓ 回溯用的同一份 `queryHistory`（store 里 pushSearchHistory 维护），
+   * 不另开第二份账。
+   */
+  const recentQueries = useMemo(() => s.queryHistory.slice(-6).reverse(), [s.queryHistory]);
+
+  /**
+   * 发起检索。`query` 只影响"记住本轮真正发出去的是哪个词"（失败重试判据），
+   * 实际发词由 `setQuery` 先行写入 store——空态最近检索 chips 走这条路
+   * （先落词再发，与手动打字回车同一条 `runSearch` 通道，语义零差异）。
+   */
+  const start = (query?: string): void => {
     // 记下"这一次真正发出去的是哪个词"（自动补搜与手动点的都记）：失败后据此判断
     // 是不是同一个词在原地重试。放在 `start` 首行而不是防抖回调里——手动按钮也走这里。
-    attemptedQueryRef.current = s.query;
+    attemptedQueryRef.current = query ?? s.query;
     // 范围收窄发生在发请求**之前**：扫描代价在原生侧，少扫就是少扫（不是全扫再挑）。
     const narrowing = narrowRoots(roots, selectedScope);
     void runSearch(narrowing.roots, describeAppliedScope(selectedScope, narrowing));
@@ -547,6 +566,12 @@ export function SearchPanel({
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [s.query, liveSearch, s.phase, s.resultQuery]);
+
+  /** 空态 chips：先落词再发（与手动输入回车同一条 `runSearch` 通道） */
+  const runQuery = (q: string): void => {
+    setQuery(q);
+    start(q);
+  };
 
   /** 全部替换 → 盘上事实变了 ⇒ 用同一组条件重跑检索，结果行/计数当场说新真相 */
   const replaceAll = (): void => {
@@ -648,7 +673,7 @@ export function SearchPanel({
             title={replaceOpen ? '收起替换行' : '展开替换行'}
             onClick={() => setReplaceOpen((v) => !v)}
           >
-            <Icon name={replaceOpen ? 'chevron-down' : 'chevron-right'} size={16} />
+            <Icon name={replaceOpen ? 'chevron-down' : 'chevron-right'} size="md" />
           </button>
 
           <div className="ksp-field">
@@ -724,9 +749,9 @@ export function SearchPanel({
               className="primary ksp-go"
               title="搜索（回车触发；Ctrl+Shift+F 聚焦本面板）"
               aria-label="搜索"
-              onClick={start}
+              onClick={() => start()}
             >
-              <Icon name="search" size={14} />
+              <Icon name="search" size="sm" />
             </button>
           )}
         </div>
@@ -780,7 +805,7 @@ export function SearchPanel({
             onClick={() => setOptionsOpen((v) => !v)}
           >
             <span className="ksp-caret" aria-hidden="true">
-              <Icon name={optionsOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+              <Icon name={optionsOpen ? 'chevron-down' : 'chevron-right'} size="xs" />
             </span>
             <span className="ksp-options-label">选项</span>
             {/* 摘要只在折叠时出现：展开后同一事实已在下面的控件里，重复一遍只是噪音。
@@ -1001,8 +1026,79 @@ export function SearchPanel({
               ) : null}
             </>
           ) : (
-            <div className="search-status dim ksp-hint">
-              输入检索词后回车（↑/↓ 回溯最近检索）；点结果行跳转到该位置（回车 / Shift+回车逐项跳，结果区内 ↑↓ 逐行看，F4 跳到下一条并打开）。
+            // 空态（批次十一 L08）：一行引导 + 可折叠键位速查 + 最近检索 chips。
+            // 旧的 4 行说明书收进折叠区——键位提示统一走 `<kbd>` 芯片语言（`KitKbd`），
+            // 不再用文本符号混排（↵ ⇧ ↑↓ F4 各写各的）。行为零改动：chips 只是
+            // "先 setQuery 再 start"，与手动输入回车同一条数据面。
+            <div className="ksp-empty">
+              <div className="ksp-empty-line">
+                <span className="search-status dim ksp-hint">输入检索词后回车开始检索；点结果行可跳转到该位置。</span>
+                <button
+                  type="button"
+                  className="ksp-help-toggle"
+                  aria-expanded={helpOpen}
+                  aria-controls={helpBodyId}
+                  title="键位速查（悬停此行也可临时展开）"
+                  onClick={() => setHelpOpen((v) => !v)}
+                >
+                  <span className="ksp-caret" aria-hidden="true">
+                    <Icon name={helpOpen ? 'chevron-down' : 'chevron-right'} size="xs" />
+                  </span>
+                  键位
+                </button>
+              </div>
+              {/* 折叠用 class（与「选项」区同一手法）：控件留在 DOM，悬浮/聚焦即展开。
+                  键位芯片统一走 ui-kit 的 `KitKbd`（combo 语言：修饰键用词、方向键用符号），
+                  本面板不再自带第二份 Kbd 实现。 */}
+              <div id={helpBodyId} className={`ksp-help-body${helpOpen ? '' : ' ksp-collapsed'}`}>
+                <ul className="ksp-help-list">
+                  <li>
+                    <span className="ksp-keys">
+                      <KitKbd combo="Enter" />
+                    </span>
+                    <span>开始检索；已有结果时逐项跳下一处</span>
+                  </li>
+                  <li>
+                    <span className="ksp-keys">
+                      <KitKbd combo="Shift+Enter" />
+                    </span>
+                    <span>
+                      逐项跳上一处（<KitKbd combo="F4" /> / <KitKbd combo="Shift+F4" /> 同效并当场打开）
+                    </span>
+                  </li>
+                  <li>
+                    <span className="ksp-keys">
+                      <KitKbd combo="↑" />
+                      <KitKbd combo="↓" />
+                    </span>
+                    <span>输入框内回溯最近检索；结果区内逐行移动焦点</span>
+                  </li>
+                  <li>
+                    <span className="ksp-keys">
+                      <KitKbd combo="Ctrl+Shift+F" />
+                    </span>
+                    <span>唤起检索面板并聚焦输入框</span>
+                  </li>
+                </ul>
+              </div>
+              {recentQueries.length > 0 ? (
+                <div className="ksp-recent" role="group" aria-label="最近检索">
+                  <span className="ksp-recent-label">最近检索</span>
+                  {recentQueries.map((q, i) => (
+                    <button
+                      key={`${i}:${q}`}
+                      type="button"
+                      className="ksp-recent-chip"
+                      title={`再次检索「${q}」`}
+                      onClick={() => runQuery(q)}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="ksp-suggest">默认检索整个项目 + 作者工作区；展开「选项」可按类型 / glob / 范围收窄。</div>
+              )}
             </div>
           )}
         </div>
@@ -1034,7 +1130,7 @@ export function SearchPanel({
                   onClick={() => toggleFile(g.path)}
                 >
                   <span className="ksp-file-caret" aria-hidden="true">
-                    <Icon name={folded ? 'chevron-right' : 'chevron-down'} size={12} />
+                    <Icon name={folded ? 'chevron-right' : 'chevron-down'} size="xs" />
                   </span>
                   {/* 可读名 = 完整的末两段路径（AT 与静态渲染判据都吃这一条）；
                       视觉上拆成 文件名 + 目录（dim）两段，两段对 AT 隐藏，避免读两遍 */}
@@ -1047,7 +1143,9 @@ export function SearchPanel({
                       {dir}
                     </span>
                   ) : null}
-                  <span className="search-file-count ksp-file-count">{g.count}</span>
+                  {/* 计数徽标统一语言（批次十一 L08）：本体用 ui-kit 的 `KitCount`
+                      （含 99+ 溢出形态）；`ksp-file-count` 只留面板差异（右靠 + 防 hover 同色的沉底） */}
+                  <KitCount value={g.count} className="search-file-count ksp-file-count" />
                 </button>
 
                 {folded
