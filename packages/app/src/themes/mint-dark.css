@@ -213,9 +213,7 @@
   background: rgba(226, 112, 122, 0.12);
   border-color: rgba(226, 112, 122, 0.55);
 }
-:root[data-theme='mint-dark'] .ro-banner {
-  background: rgba(216, 162, 105, 0.16);
-}
+/* 只读横幅（已随视觉批十三撤掉，`.ro-banner` 无消费方——规则也一并删） */
 /* "可写✓"绿牌：原 wash 是旧语义绿 rgba(79,192,141)——太薄荷，换成新叶绿豆沙同族 */
 :root[data-theme='mint-dark'] .sb-writable.ok {
   background: rgba(98, 199, 118, 0.12);

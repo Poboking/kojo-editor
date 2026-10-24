@@ -1215,15 +1215,9 @@ export function ProjectView({
       panelHostVersions={panelHostVersions}
       activeAdapterId={project.adapterId}
     >
-      {/* 只读横幅（P0 实机反馈修复）：项目级一条，重授权入口常驻可见可点 */}
-      {!writable ? (
-        <div className="ro-banner">
-          <span>当前为只读：写权限未批准，保存不可用。修改仍可浏览与复制。</span>
-          <button className="small" onClick={onReauth}>
-            去授权
-          </button>
-        </div>
-      ) : null}
+      {/* 只读**不再**占一整条横幅（视觉批十三）：游戏目录默认只读是常态，常态不该按事故呈现。
+          权限入口收进状态栏那枚「只读」徽标（可点，`onReauth`），真正保存被拒时由回执通知
+          带「去授权」按钮说明原因（EditorPane 的 WriteNotAllowedError 分支）。 */}
       {/* 编辑器组（SPLIT-1 / MM-9）：每组 = 标签条 + 编辑器/空态；组间分隔条可拖
           （row 调宽、column 调高——由组态 orientation 决定） */}
       <div className="editor-groups" data-orientation={orientation}>

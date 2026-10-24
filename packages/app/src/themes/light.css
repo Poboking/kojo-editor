@@ -246,10 +246,7 @@
   background: color-mix(in srgb, var(--amber) 10%, transparent);
   border-color: color-mix(in srgb, var(--amber) 40%, transparent);
 }
-/* 只读横幅落在 --bg 上：amber 字压 10% amber 合成面 4.85:1（沿用 notice.warn 同档） */
-:root[data-theme='light'] .ro-banner {
-  background: color-mix(in srgb, var(--amber) 10%, transparent);
-}
+/* 只读横幅（已随视觉批十三撤掉，`.ro-banner` 无消费方——规则也一并删） */
 /* 状态栏可写/只读胶囊落在 --bg-2：语义色比深档深，amber 字只能用 8% 档
    （10% 掉到 4.45）——ok 绿谷量大，10% 仍 4.94:1 */
 :root[data-theme='light'] .sb-writable.ok {

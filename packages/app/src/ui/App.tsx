@@ -2104,7 +2104,13 @@ export function App(): ReactElement {
   // `.welcome` / `.shell` 的 100% 高度由这块确定高度的 flex 舞台承接。
   return (
     <div className="app-frame" data-context-surface="app-fallback">
-      <WindowChrome />
+      <WindowChrome
+        title={
+          project
+            ? `${project.rootDir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? project.rootDir} — kojo-editor`
+            : 'kojo-editor'
+        }
+      />
       <div className="app-frame-body">
         {body}
         {/* 项目态错误条（REF-FRONT-PERF）：写允许域注册/清除、授权失败的 error state
