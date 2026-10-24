@@ -30,6 +30,11 @@ import './problem-panel.css';
 // （无同属性对撞），在级联里的位次不改变任何既有终值；`css-slices-wired` 钉死本行存在。
 import './tabs-bar.css';
 import './file-tree.css';
+// 教程浮层的宿主侧 override（视觉批十一 R4 · 按 L19 记号从 dev-note.css 搬成独立切片）：
+// 行内芯片补档 / 代码井凹槽与"还有内容"边 / 目录条目静息只显标题。欢迎页（轻档）与
+// 项目态（重档）都吃得到，所以必须留在**静态链**、且排在 themes/*.css 之后
+// （与 light 档那枚同特异性的井身反相内衬赢平靠位次，判据见切片文件头）。
+import './tutorial-surface.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链
