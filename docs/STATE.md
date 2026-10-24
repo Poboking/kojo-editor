@@ -2,11 +2,11 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结，不再追加）；2026-10-13 起批次回执一律写进提交信息，不在本文堆历史。
 
-## 一、基线（2026-10-24，批次十三并入 eraFL 适配批，合树实测于 `origin/dev` `a75a117e` 之上）
+## 一、基线（2026-10-24，视觉批十一 R1–R6 + L20 字体并入并回窄门；其上已含批次十三 eraFL 适配批）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | **批次十三（2026-10-24，视觉批十一第二波遗留 7 条 + 批次十二自留 2 条，8 路并行，合树于 eraFL 适配批 `a75a117e` 之上）＝功能池 16,580 passed / 0 功能红 / 1 负载红（`kojo2-project-analysis` 万级 @函判定中位 101.58ms > 100ms，隔离单跑 26.45ms 全绿）/ 79 skipped（16,664）· 809 文件过 + 1 红 + 21 跳（832）**；计时池 **289 passed / 17 skipped（306）· 31 文件过 + 4 跳 · 0 failed**；root + app 双 typecheck rc=0；`audit:decoupling` ✅ **22 插件** A–D；真壳 `ui-measure --theme=all`（10 状态 × 3 档）对比度 dark 4 / light 3 / mint **0**（最差 4.13 / 2.11，逐条进 BOARD `VIS-CONTRAST`）；市场等价基线钉 `8518a647`（71 → 104，共 70，漂移 7，意外改动 0）；对上一档 16,577 / 64 skipped（16,641）＝ +3 passed / +15 skipped / +3 文件（eraFL 真盘 22 例因本机缺 `D:/Game/erafl` 转跳）；对 dev 尖端 16,359 ＝本批 +28 passed / +3 文件 |
+| 全量测试 | **视觉批十一收尾合流（2026-10-24：批次十一 R1–R6 五路 + L20 字体多档并入，再并 `origin/dev` 批次十三 eraFL/XML 适配批；窄门落点 `9e55f063`）＝功能池 **16,739 passed / 0 红 / 64 skipped（16,803）· 821 文件全过 + 21 跳（842）· 200.9s**（全池绿态实测于并树提交 `894e78bc`；其上最后一枚提交只加 1 文件 / 3 例＝总数 16,806，以定向闸 4 文件 **95 passed / 1 skipped / 0 failed** + 双 typecheck + audit 收口）· 对批次十三档 16,580 / 79 skipped（16,664）＝ **+159 passed / −15 skipped**（本机 `D:/Game/erafl` 在位 ⇒ 那 22 例真盘跑，不是转跳）；计时池 **289 passed / 17 skipped（306）· 31 文件过 + 4 跳 · 0 failed · 153.1s**；root + app 双 typecheck rc=0；`audit:decoupling` ✅ **22 插件** A–D；真壳 `ui-measure --theme=all`（**14 状态 × 3 档**，在册语料 `eratw4.980-260326-SANY…` 盘，索引水位 2326 文件 · 99154 函数）对比度 dark **3** / light **3** / mint-dark **0**：dark `summary` + `.panel-ops-maintenance-detail` 12px 4.13、`.kp-count` 11px 4.27；light `span` 11px `--amber` 2.11 ×21、那两枚 12px 3.04——逐条进 BOARD `VIS-CONTRAST`；市场等价基线钉 `8518a647`（71 → 104，共 70，漂移 7，意外改动 0）。⚠ 本机两处**负载红**（判据无关，隔离单跑均全绿）：`trash.test.ts` 在 `%TEMP` 里 `renameSync` 撞 `EPERM`；`corpus` 缺席用例的 spawn 在满池里顶穿自身 240s 预算（空闲独跑 36.9s——本批已给它加「缺席快路」，语料不在位时不再载整条真链路，PITFALLS 187） |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | 功能池 **10,516 passed / 8 skipped（10,524）· 0 failed · 595 文件全过**；计时池 **221 passed / 12 skipped（233）· 0 failed**（2026-10-20 冻结值，空闲独跑）。`[idx-state]` 自证：2 根 / 2,325 方言文件 / 名录 99,218 名 / 未读入 0。语料以 `node tools/corpus.mjs --print` 为准（不在 `C:/game` 时用 `KOJO_CORPUS_SCAN_DIRS` 指定扫描根，正斜杠经变量传递）。纪律：挂语料全量必须空闲独跑；计时池若红先按负载假红复跑再判（PITFALLS 146） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（**22** 插件；A–D 四项全绿。`ADAPTER_PLUGIN_DIRS` 豁免：`eratw-adapter` / `eraakumamaid-adapter` / `erafl-adapter`。2026-10-24 eraFL 批把 `erafl` 补进 A/D 词表并做变异实测——通用插件插一行 `'eraFL'` 字面量 D 项即红，还原即全绿） |
