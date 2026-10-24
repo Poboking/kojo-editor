@@ -96,6 +96,9 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 内核的 detect / loadProject 在 open 里就跑——adapter 晚一刻入场就轮不到它认目录。
       // 与 eraTW 的 detect 判据无交集（主路由 + CHARA CSV），两者次序不影响判定。
       'createErakumamaidAdapterPlugin',
+      // 第四个 adapter（era紅魔館，2026-10-25 批）。同样走项目级：欢迎页无贡献面，
+      // 且 `CSV/GameBase.csv` 标题是唯一强特征（与 eraFL 的 `ERB/口上` 目录不冲突）。
+      'createKoumakanAdapterPlugin',
       'createConventionLinterPlugin',
       'createConditionExtractorPlugin',
       'createSavParserPlugin',

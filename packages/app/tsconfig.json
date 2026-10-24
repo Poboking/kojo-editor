@@ -26,6 +26,7 @@
       "@kojo/kernel": ["../kernel/src/index.ts"],
       "@kojo/plugin-erb-parser": ["../plugins/erb-parser/src/index.ts"],
       "@kojo/plugin-eratw-adapter": ["../plugins/eratw-adapter/src/index.ts"],
+      "@kojo/plugin-erakoumakan-adapter": ["../plugins/erakoumakan-adapter/src/index.ts"],
       "@kojo/plugin-ui-status": ["../plugins/ui-plugin-status/src/index.ts"],
       "@kojo/plugin-convention-linter": ["../plugins/convention-linter/src/index.ts"],
       "@kojo/plugin-condition-extractor": ["../plugins/condition-extractor/src/index.ts"],

@@ -31,7 +31,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
  *   `kojoPaths`/`charaIndex`），不在黑名单；
  * - 行尾 `// audit-allow: <理由>` 显式豁免。
  */
-const GAME_WORDS = /\b(eratw|erafl|eraK|eraSQN|eraNAS)\b|M_KOJO|個人口上|\bsav\b/i;
+const GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraNAS)\b|M_KOJO|個人口上|\bsav\b/i;
 
 /** 是否需要跳过该行（注释/文档行） */
 function isCommentLine(line) {
@@ -75,7 +75,12 @@ const PLUGIN_ROOTS = ['packages/plugins'];
  * 适配器插件**豁免名单**（D 项）：这些包**就是**游戏知识的家，允许出现游戏字面量。
  * 以目录名为准（`packages/plugins/<dir>`）。新增 adapter 时在此登记。
  */
-const ADAPTER_PLUGIN_DIRS = new Set(['eratw-adapter', 'eraakumamaid-adapter', 'erafl-adapter']);
+const ADAPTER_PLUGIN_DIRS = new Set([
+  'eratw-adapter',
+  'eraakumamaid-adapter',
+  'erafl-adapter',
+  'erakoumakan-adapter',
+]);
 
 /**
  * D 项的游戏知识字面量黑名单（通用插件禁用）。比 A 项更严——除游戏名/口上前缀外，
@@ -85,7 +90,7 @@ const ADAPTER_PLUGIN_DIRS = new Set(['eratw-adapter', 'eraakumamaid-adapter', 'e
  * 注意：`sav` **不在**此列——它是 emuera 引擎的通用存档容器扩展名（`sav-parser`
  * 是跨游戏一致的引擎级插件），误列会伤及正牌的通用插件。
  */
-const PLUGIN_GAME_WORDS = /\b(eratw|erafl|eraK|eraSQN|eraNAS)\b|M_KOJO|個人口上|DIARY\{|TFLAG:192/i;
+const PLUGIN_GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraNAS)\b|M_KOJO|個人口上|DIARY\{|TFLAG:192/i;
 
 const violations = [];
 

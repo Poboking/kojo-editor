@@ -68,6 +68,9 @@ importers:
       '@kojo/plugin-erafl-adapter':
         specifier: workspace:*
         version: link:../plugins/erafl-adapter
+      '@kojo/plugin-erakoumakan-adapter':
+        specifier: workspace:*
+        version: link:../plugins/erakoumakan-adapter
       '@kojo/plugin-eratw-adapter':
         specifier: workspace:*
         version: link:../plugins/eratw-adapter
@@ -254,6 +257,15 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../../kojo-core
+      '@kojo/kojo-project-kit':
+        specifier: workspace:*
+        version: link:../../kojo-project-kit
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/erakoumakan-adapter:
+    dependencies:
       '@kojo/kojo-project-kit':
         specifier: workspace:*
         version: link:../../kojo-project-kit

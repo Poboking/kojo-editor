@@ -20,6 +20,7 @@
     "@kojo/plugin-convention-linter": "workspace:*",
     "@kojo/plugin-eraakumamaid-adapter": "workspace:*",
     "@kojo/plugin-erafl-adapter": "workspace:*",
+    "@kojo/plugin-erakoumakan-adapter": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-kojo-market": "workspace:*",
