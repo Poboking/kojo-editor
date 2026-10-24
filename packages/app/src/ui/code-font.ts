@@ -3,6 +3,10 @@ import type { EditorOptionPatch } from './editor-options';
 /**
  * 编程字体单一真源：一条栈同时喂 Monaco 与 CSS。
  *
+ * L20 之后这份仍是**缺省档**（`default`）的真源：可选档位表住在 `font-presets.ts`，
+ * 那里每一档代码栈都必须过这里的 `isUsableCodeFontStack` 护栏；`CODE_FONT_STACK` /
+ * `CODE_FONT_CSS_LINE` / `CODE_FONT_BASELINE` 三个出口一字未动（两条逐字闸继续绿）。
+ *
  * 改前实况：Monaco 干脆没设 `fontFamily`（走它自己的平台默认栈）、`--font-mono` 另写一份、
  * 还有八处散装 `Consolas, 'Cascadia Mono', monospace` —— 编辑器字面 / UI 等宽面 / 流面
  * 三处口径互不相干。这里只管第一档：`--font-code`（CSS 侧是它的镜像，见下）。
