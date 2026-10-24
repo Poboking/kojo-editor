@@ -286,7 +286,10 @@ export function createEraflAdapterPlugin(): Plugin {
             adapterId: ERAFL.gameId,
             // 索引吃整棵 ERB：define 壳函数散在根层与各子目录，只扫口上域会漏定义
             kojoPaths: [join(rootDir, ...ERAFL.paths.erbRoot)],
-            // 可写面只批口上域：XML 与 define 壳都在这里，别的一律视为游戏只读区
+            // 可写面只批口上域。**已知边界**：真盘 126 份 define 壳里 125 份在口上域下，
+            // 唯一 1 份（K99）在 `ERB/TRAIN/` 下 ⇒ 编辑器能诊断出它「未注册」，却改不了
+            // 那一处注册点。这是刻意保留的：把 `ERB/TRAIN` 也批进来等于给引擎目录开写权限，
+            // 代价远大于收益（作者要改的是口上 XML，不是引擎的注册表）。
             writablePaths: [kojoRoot],
             charaIndex,
             // 派生缓存判据的一部分：本次加载实际吃进的非 ERB 输入（含变量字典读过的 CSV 正文）

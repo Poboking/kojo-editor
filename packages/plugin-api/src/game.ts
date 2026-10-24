@@ -751,7 +751,6 @@ export interface StateLinePreset {
  *
  * **要么有消费方，要么别加。** 契约不是愿望清单：一个只有实现、没有消费方的可选成员，
  * 每个新 adapter 都要为它写一份白工，还会掩盖「这个能力其实没人做」这个事实。
- * `packages/plugin-api/tests/adapter-slot-usage.test.ts` 把这条判据做成了闸。
  */
 export interface GameAdapter {
   /** 游戏标识（存储域后缀、日志用），如 'mygame' */
@@ -837,9 +836,6 @@ export interface GameAdapter {
  *
  * 参数是**查询结果**而不是 `SlotRegistry`：本函数住在契约层，不认识槽注册表，
  * 也不该把「怎么查」绑进来（查询面属于内核）。
- *
- * 闸：`packages/plugin-api/tests/adapter-slot-usage.test.ts` 钉住
- * 「全仓只有这一处手写 active-adapter 查找」。
  */
 export function activeGameAdapter<T extends { readonly adapter: GameAdapter }>(
   contributions: readonly T[],

@@ -185,8 +185,10 @@ export function createErakumamaidAdapterPlugin(): Plugin {
           // 特征组合：口上域主路由文件 + CHARA CSV 目录（同时存在才成局）
           const routeFile = join(rootDir, ...ERAAKUMA_MAID.detect.kojoRouteFile);
           if (!(await io.exists(routeFile))) return false;
-          const charaDir = join(rootDir, ...ERAAKUMA_MAID.detect.charaCsvDir);
-          return io.exists(charaDir);
+          // 必须是**目录**：只留了一个同名散文件的半截工程不算成局
+          // （`io.exists` 对文件也返回 true，早先这里没判 isDirectory）
+          const charaStat = await io.stat(join(rootDir, ...ERAAKUMA_MAID.detect.charaCsvDir));
+          return charaStat?.isDirectory === true;
         },
 
         async loadProject(rootDir: string): Promise<GameProject> {

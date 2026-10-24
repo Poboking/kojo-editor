@@ -202,7 +202,7 @@ interface GameAdapter {
 }
 ```
 
-**契约面的两条硬判据**（`packages/plugin-api/tests/adapter-slot-usage.test.ts` 立闸）：
+**契约面的两条设计判据**：
 
 1. **要么有消费方，要么别加。** 可选成员必须在 adapter 插件之外至少有一处读取。
    契约不是愿望清单——一个只有实现、没有消费方的成员，每个新 adapter 都要为它写一份
