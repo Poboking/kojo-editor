@@ -37,7 +37,6 @@ import {
   installKojo2LanguageProviders,
   kojo2CompletionItems,
   kojo2CompletionKindOf,
-  kojo2DefinitionLinksOf,
   kojo2HoverMarkdown,
   kojo2HoverOf,
 } from '../src/monaco/kojo2-providers';
@@ -343,8 +342,8 @@ function candidate(overrides: Partial<Kojo2CompletionCandidate>): Kojo2Completio
 
 /* ============================== ① 开关与注册 ============================== */
 
-describe('开关与注册：flag 关零注册，flag 开只挂 kojo2 三枚', () => {
-  it('flag 关 ⇒ 三枚注册函数一次都没被调用（零注册）', () => {
+describe('开关与注册：flag 关零注册，flag 开只挂 kojo2 两枚', () => {
+  it('flag 关 ⇒ 两枚注册函数一次都没被调用（零注册）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2LanguageProviders(fake.monaco, {
@@ -366,25 +365,24 @@ describe('开关与注册：flag 关零注册，flag 开只挂 kojo2 三枚', ()
     }).not.toThrow();
   });
 
-  it('flag 开 ⇒ 恰好三枚（补全 / 悬停 / 转定义），selector 逐枚等于 kojo2', () => {
+  // B3b：转定义已归插件（descriptor 的 `slotServices: ['definition']` 经共享收口挂上），
+  // 本 installer 只剩补全 / 悬停两枚。这条断言跟着数字变，**不是**放宽：
+  // "恰好两枚" 比 "至少两枚" 更紧——多挂一枚 DefinitionProvider 会让 F12 变成多选。
+  it('flag 开 ⇒ 恰好两枚（补全 / 悬停），selector 逐枚等于 kojo2', () => {
     const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    expect(fake.registrations.map((entry) => entry.kind)).toEqual([
-      'completion',
-      'hover',
-      'definition',
-    ]);
+    expect(fake.registrations.map((entry) => entry.kind)).toEqual(['completion', 'hover']);
     for (const entry of fake.registrations) expect(entry.selector).toBe(KOJO2_LANGUAGE_ID);
     expect(completionProviderOf(fake).triggerCharacters).toEqual([
       ...KOJO2_COMPLETION_TRIGGER_CHARS,
     ]);
   });
 
-  it('dispose 幂等：两次只撤一轮，三枚各撤一次', () => {
+  it('dispose 幂等：两次只撤一轮，两枚各撤一次', () => {
     const fake = installForTest();
     const handle = installKojo2LanguageProviders(fake.monaco);
     handle.dispose();
     handle.dispose();
-    expect(fake.disposeCalls).toEqual(['completion', 'hover', 'definition']);
+    expect(fake.disposeCalls).toEqual(['completion', 'hover']);
   });
 
   it('一枚 dispose 抛错不带走其余，也不把错误抛给调用方', () => {
@@ -392,14 +390,15 @@ describe('开关与注册：flag 关零注册，flag 开只挂 kojo2 三枚', ()
     const fake = fakeMonaco({ failDisposeOn: 'hover' });
     const handle = installKojo2LanguageProviders(fake.monaco);
     expect(() => handle.dispose()).not.toThrow();
-    expect(fake.disposeCalls).toEqual(['completion', 'definition']);
+    // 补全撤了、悬停抛错被吞 ⇒ 一轮走完（没有第三枚可撤）
+    expect(fake.disposeCalls).toEqual(['completion']);
   });
 
   it('注册半途抛错 ⇒ 撤回已挂上的那几枚，再把错误外抛（全有或全无）', () => {
     stubFlag(true);
     const fake = fakeMonaco({ failOn: 'hover' });
     expect(() => installKojo2LanguageProviders(fake.monaco)).toThrow(/注册 hover/);
-    // 补全先挂上、随即被撤回；悬停与转定义根本没挂上
+    // 补全先挂上、随即被撤回；悬停根本没挂上
     expect(fake.disposeCalls).toEqual(['completion']);
     expect(fake.registrations.map((entry) => entry.kind)).toEqual(['completion']);
   });
@@ -725,88 +724,20 @@ describe('悬停：Markdown 正文 + 屏上 range', () => {
   });
 });
 
-/* ============================== ⑤ 转定义 ============================== */
-
-describe('转定义：LocationLink 形状与 URI 来源', () => {
-  it('引用 → 声明：uri 来自注入的文件身份，range / targetSelectionRange = 名字段', () => {
-    const path = 'D:/proj/chara/灵梦/开场.kojo2';
-    const fake = installForTest({ getFilePath: () => path });
-    const declaration = declarationOf('pool');
-    const at = atMarker(HOVER_FIXTURE.replace(`! ${declaration.name}`, `! ${declaration.name}|`));
-    const links = definitionAt(fake, at.model, at.position);
-    expect(links).toHaveLength(1);
-    const link = links[0]!;
-    expect(link.uri.fsPath).toBe(path);
-    expect(link.range).toEqual({
-      startLineNumber: declaration.line,
-      startColumn: declaration.nameStart,
-      endLineNumber: declaration.line,
-      endColumn: declaration.nameEnd,
-    });
-    expect(link.targetSelectionRange).toEqual(link.range);
-    const lineText = lineTextOfFixture(at.source, at.line);
-    const start = lineText.indexOf(declaration.name);
-    expect(link.originSelectionRange).toEqual({
-      startLineNumber: at.line,
-      startColumn: start + 1,
-      endLineNumber: at.line,
-      endColumn: start + 1 + declaration.name.length,
-    });
-  });
-
-  it('没有注入文件身份 ⇒ uri 沿用 model.uri', () => {
-    const fake = installForTest();
-    const declaration = declarationOf('function');
-    const at = pointAtDeclaration(declaration);
-    const links = definitionAt(fake, at.model, at.position);
-    expect(links).toHaveLength(1);
-    expect(links[0]!.uri).toBe(at.model.uri);
-  });
-
-  it('注入腿抛错 ⇒ 退回 model.uri（不抛）', () => {
-    const fake = installForTest({
-      getFilePath: () => {
-        throw new Error('桩：取路径失败');
-      },
-    });
-    const declaration = declarationOf('table');
-    const at = pointAtDeclaration(declaration);
-    const links = definitionAt(fake, at.model, at.position);
-    expect(links).toHaveLength(1);
-    expect(links[0]!.uri).toBe(at.model.uri);
-  });
-
-  it('声明处 F12 落在自己（落点 = 同一条声明的名字段）', () => {
-    const fake = installForTest();
-    for (const kind of ['scene', 'variable', 'constant', 'table', 'pool', 'template', 'function'] as const) {
-      const declaration = declarationOf(kind);
-      const at = pointAtDeclaration(declaration);
-      const links = definitionAt(fake, at.model, at.position);
-      expect(links, kind).toHaveLength(1);
-      expect(links[0]!.range.startLineNumber).toBe(declaration.line);
-      expect(links[0]!.range.startColumn).toBe(declaration.nameStart);
-      expect(links[0]!.range.endColumn).toBe(declaration.nameEnd);
-    }
-  });
-
-  it('没有同名声明 ⇒ 空数组（Monaco 自己提示"未找到定义"）', () => {
-    const fake = installForTest();
-    const narration = HOVER_FIXTURE.split(/\r\n|\r|\n/).findIndex((line) =>
-      line.startsWith('> 晨光'),
-    );
-    const at = atPoint(HOVER_FIXTURE, narration + 1, 4);
-    expect(definitionAt(fake, at.model, at.position)).toEqual([]);
-  });
-
-  it('取文抛错 ⇒ 空数组（不抛进 Monaco）', () => {
-    const fake = installForTest();
-    const broken = fakeModel(HOVER_FIXTURE);
-    broken.failGetValue();
-    expect(
-      definitionAt(fake, broken.model, { lineNumber: 1, column: 1 } as Monaco.Position),
-    ).toEqual([]);
-  });
-});
+/* ============================== ⑤ 转定义（B3b 起不在本文件） ==============================
+ *
+ * 这条腿的判据与展开落点已在 B3b 归插件 `@kojo/plugin-kojo-lang`，由 descriptor 的
+ * `slotServices: ['definition']` 经共享收口挂上，`installKojo2LanguageProviders` 不再注册
+ * 任何 `DefinitionProvider`（上面 ① 组的"恰好两枚"钉的就是这一条）。
+ *
+ * 原在此处的六条断言（LocationLink 形状 / uri 来源 / 声明处自跳 / 无声明 / 取文抛错）
+ * 各自有了新的家，判据一条没丢：
+ * - 落点算得对不对 ⇒ `packages/plugins/kojo-lang/tests/plugin.test.ts`（插件供方直测）；
+ * - 落点翻成 LocationLink ⇒ `tests/kojo-definition.test.ts` 的 `toDefinitionLinks` 组；
+ * - 展开体那两条 ⇒ `tests/kojo2-expand-view.test.ts` 的端到端组（插件给 + 宿主翻）。
+ * 留这段空节而不是整段删掉：读到这里的人得知道**判据去哪了**，否则下次会有人
+ * "顺手补一条 definition 测试"从而长出第二份。
+ */
 
 /* ============================== ⑥ 失败面与无 adapter ============================== */
 

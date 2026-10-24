@@ -65,7 +65,11 @@ export function collectDefinitionLocations(
       // 而"同一行、给了列"与"同一行、什么都没给"仍然算两枚（旧口径逐字保持，
       // 见 `tests/kojo-definition.test.ts` 的去重用例）。
       const columnKey = revealSpanOf(location)?.columnStart ?? location.column ?? '';
-      const key = `${location.filePath}\u0000${location.line}\u0000${columnKey}`;
+      // B3b：`range` 在场时键里带上**终点行**——"整段落点"与"起点那一行"是两处不同的
+      // 目标（2.0 的展开体：模板定义段 vs 它自己首行上的声明），只按起点去重会把
+      // 后者并进前者，Peek 列表从此少一条。`range` 缺席 ⇒ 键与加这一格之前逐字相同。
+      const rangeKey = location.range === undefined ? '' : `\u0000r${location.range.endLine}`;
+      const key = `${location.filePath}\u0000${location.line}\u0000${columnKey}${rangeKey}`;
       const at = indexByKey.get(key);
       if (at === undefined) {
         indexByKey.set(key, out.length);
@@ -158,6 +162,44 @@ export function toDefinitionLinks(
       maxColumn: (lineNumber: number) => target.getLineMaxColumn(lineNumber),
       lineText: (lineNumber: number) => target.getLineContent(lineNumber),
     };
+    // B3b（2026-10-24）：`range` 在场 = 落点本身就是**一整段**（2.0 展开体的模板 / 池定义，
+    // 声明头到体末）。这时：
+    // - `range` 用它（Peek 里框住整段，这才是"跳到了"的视觉证据）；
+    // - `targetSelectionRange` 仍是**起点行**那一行——光标只该落在声明头，
+    //   把整段当选区会让编辑器一进去就选中几百行；
+    // - 夹取仍走 `clampRevealPosition`（全仓唯一落点判据），只是分别夹两端。
+    // `range` 缺席 ⇒ 下面整段与加这一格之前**逐字相同**。
+    if (location.range !== undefined) {
+      const start = clampRevealPosition(
+        { line: location.range.startLine, column: location.range.startColumn },
+        geometry,
+      );
+      const end = clampRevealPosition(
+        { line: location.range.endLine, column: location.range.endColumn },
+        geometry,
+      );
+      // 夹取可能把两端收成同一行（原文跨行、模型却短）⇒ 终点不许早于起点
+      const endLine = Math.max(start.lineNumber, end.lineNumber);
+      const endColumn = endLine === start.lineNumber ? Math.max(start.column, end.column) : end.column;
+      const link: Monaco.languages.LocationLink = {
+        uri: target.uri,
+        range: {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: endLine,
+          endColumn,
+        },
+        targetSelectionRange: {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: start.lineNumber,
+          endColumn: start.columnEnd,
+        },
+      };
+      if (originSelectionRange) link.originSelectionRange = originSelectionRange;
+      out.push(link);
+      continue;
+    }
     // 落点判据**只有这一份**：行列与区间一律由 `clampRevealPosition` 夹到 model 真实存在的值
     const landing = clampRevealPosition({ line: location.line, column: location.column, span: location.span }, geometry);
     const endColumn = geometry.maxColumn(landing.lineNumber);
@@ -458,7 +500,14 @@ export function installDefinitionProvider(
     },
   };
   const opener = registerLocationOpener(monaco, handlers);
-  const dialectSubs = registerForLanguageServices(monaco, (m, id) => m.languages.registerDefinitionProvider(id, provider));
+  const dialectSubs = registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerDefinitionProvider(id, provider),
+    // B3b（2026-10-24）：带能力名调用 —— kojo2 的 descriptor 点名了
+    // `slotServices: ['definition']`，共享收口据此也把它挂上（供方是插件）。
+    // 不带这一格时本 installer 只覆盖 v1 两门方言，2.0 就没人应答。
+    'definition',
+  );
   return {
     dispose: () => {
       dialectSubs.dispose();

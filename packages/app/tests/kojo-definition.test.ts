@@ -20,6 +20,7 @@ import type * as Monaco from 'monaco-editor';
 import type { EditorLanguageServiceContribution, EditorSymbolLocation } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   collectDefinitionLocations,
   installDefinitionProvider,
@@ -286,21 +287,114 @@ describe('toDefinitionLinks · 目标 → Monaco LocationLink', () => {
     const origin = { startLineNumber: 2, startColumn: 7, endLineNumber: 2, endColumn: 12 };
     expect(toDefinitionLinks([{ filePath: CURRENT_PATH, line: 1 }], liveModelFor, origin)[0]!.originSelectionRange).toEqual(origin);
   });
+
+  /* ---------------- B3b：跨行段落点（`range`） ---------------- */
+
+  it('`range` 在场 ⇒ `range` 框住整段，`targetSelectionRange` 只落在起点行（别把整段当选区）', () => {
+    const link = toDefinitionLinks(
+      [
+        {
+          filePath: CURRENT_PATH,
+          line: 2,
+          column: 4,
+          range: { startLine: 2, startColumn: 4, endLine: 5, endColumn: 9 },
+        },
+      ],
+      liveModelFor,
+    )[0]!;
+    expect(link.range).toEqual({
+      startLineNumber: 2,
+      startColumn: 4,
+      endLineNumber: 5,
+      endColumn: 9,
+    });
+    expect(link.targetSelectionRange).toEqual({
+      startLineNumber: 2,
+      startColumn: 4,
+      endLineNumber: 2,
+      endColumn: 4,
+    });
+  });
+
+  it('`range` 缺席 ⇒ 与加这一格之前**逐字相同**（range = 整行、选区 = 零宽）', () => {
+    const withRange = toDefinitionLinks(
+      [{ filePath: CURRENT_PATH, line: 2, column: 6 }],
+      liveModelFor,
+    )[0]!;
+    expect(withRange.range).toEqual({
+      startLineNumber: 2,
+      startColumn: 1,
+      endLineNumber: 2,
+      endColumn: 20,
+    });
+  });
+
+  it('`range` 越界 ⇒ 两端各自夹取，且终点绝不早于起点（不画出反向区间）', () => {
+    const link = toDefinitionLinks(
+      [
+        {
+          filePath: CURRENT_PATH,
+          line: 1,
+          column: 1,
+          range: { startLine: 999, startColumn: 999, endLine: 1, endColumn: 1 },
+        },
+      ],
+      liveModelFor,
+    )[0]!;
+    // 起点被夹到最后一行末列；终点被夹回第 1 行首列 ⇒ 收成起点那一行的一个点
+    expect(link.range.startLineNumber).toBe(10);
+    expect(link.range.endLineNumber).toBe(10);
+    expect(link.range.endColumn).toBeGreaterThanOrEqual(link.range.startColumn);
+  });
+
+  it('同一处起点、一份带 `range` 一份不带 ⇒ 去重**不合并**（整段落点与单行落点是两处）', () => {
+    const locations = collectDefinitionLocations(
+      [
+        {
+          id: 'stub',
+          provide: () => ({
+            kind: 'definition' as const,
+            locations: [
+              { filePath: CURRENT_PATH, line: 2, column: 4, span: { columnStart: 4, columnEnd: 4 } },
+              {
+                filePath: CURRENT_PATH,
+                line: 2,
+                column: 4,
+                span: { columnStart: 4, columnEnd: 4 },
+                range: { startLine: 2, startColumn: 4, endLine: 6, endColumn: 3 },
+              },
+            ],
+          }),
+        },
+      ],
+      { kind: 'definition', path: CURRENT_PATH, text: '', project: null, line: 2, column: 4 } as never,
+    );
+    expect(locations).toHaveLength(2);
+  });
 });
 
 /* ============================== Monaco 装配（桩 monaco） ============================== */
 
 describe('installDefinitionProvider · 装配', () => {
-  it('ERB 与 `.kojo` 两个语言 id 各注册一枚 provider，外加一枚 opener；dispose 全部回收', () => {
+  it('ERB / `.kojo` / kojo2 三门语言各注册一枚 provider，外加一枚 opener；dispose 全部回收', () => {
     const { monaco, registered, openers, disposed } = stubMonaco();
     const handle = installDefinitionProvider(monaco, {
       resolve: () => [],
       navigate: () => undefined,
     });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    // B3b（2026-10-24）：带能力名 `'definition'` 调用之后，kojo2 的 descriptor
+    // （`slotServices: ['definition']`）也会被这枚收口挂上——供方是插件
+    // `@kojo/plugin-kojo-lang`，判据不在宿主。注册面多一门零代价（判据全在 resolve 里
+    // 逐次现判），所以这里跟着变的是"几门语言"，不是"几枚 provider 对象"。
+    expect(registered.map((r) => r.languageId).sort()).toEqual(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
+    );
+    expect(new Set(registered.map((r) => r.provider)).size).toBe(1);
     expect(openers).toHaveLength(1);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, 'opener'].sort());
+    expect(disposed.sort()).toEqual(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID, 'opener'].sort(),
+    );
   });
 
   it('腿①同文件：返回真 LocationLink（**不**发事件）——`Alt+F12` 有东西可显示', () => {

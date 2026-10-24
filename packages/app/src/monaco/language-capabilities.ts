@@ -227,8 +227,10 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 已交付的 16 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
- * `ui/editor-global-providers.ts` 的 2.0 段）；`brackets` / `preview` 与 ERB 同档（语言配置 /
+ * 已交付的 15 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * `ui/editor-global-providers.ts` 的 2.0 段）；2 枚 `shared` 是**已交给插件**的两条腿
+ * （`outline` 自 B2、`definition` 自 B3b），宿主只经 `registerForLanguageServices` 带能力名
+ * 挂上、判据全在 `@kojo/plugin-kojo-lang`；`brackets` / `preview` 与 ERB 同档（语言配置 /
  * Monaco 内建）；`diagnostics` 是 `self`：2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` →
  * `setModelMarkers(..., KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用）。
  *
@@ -267,7 +269,10 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     },
     [LanguageCapability.Completion]: 'self',
     [LanguageCapability.Hover]: 'self',
-    [LanguageCapability.Definition]: 'self',
+    // B3b（2026-10-24）：2.0 的转定义改走**共享收口**（`kojo-definition.ts` 的
+    // `installDefinitionProvider`，descriptor 点名 `slotServices: ['definition']`），
+    // 宿主侧零原生 provider；供方 = 插件 `@kojo/plugin-kojo-lang`（含展开体那两条落点）。
+    [LanguageCapability.Definition]: 'shared',
     [LanguageCapability.Diagnostics]: 'self',
     [LanguageCapability.Preview]: 'builtin',
   });

@@ -75,7 +75,6 @@ import {
   type Kojo2CompletionSnippet,
 } from './kojo2-completion-snippets';
 import { kojo2HoverAt, kojo2HoverLines, type Kojo2HoverResult } from './kojo2-hover';
-import { kojo2DefinitionAt } from './kojo2-definition';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DocumentOf,
@@ -488,8 +487,9 @@ function snippetCompletionItemOf(
 /**
  * 这份 model 背后的文件路径（注入的身份优先，其次 `model.uri.fsPath`）。
  *
- * 与 {@link targetUriOf} 分开的原因：展开视图要的是**路径**（去问编译缓存），
- * 转定义要的是 **Uri 对象**（`Uri.file(path)` 可以失败，那就退回 `model.uri`）。
+ * 要的是**路径**（去问编译缓存），不是 Uri 对象——转定义那条腿已经在 B3b 归插件，
+ * 它当年另有一个 `targetUriOf`（`Uri.file(path)` 可以失败，那就退回 `model.uri`），
+ * 随那条腿一起删了。
  * 桩 model 没有 uri ⇒ `null`（展开段不出现，其余腿不受影响）。
  */
 function filePathOfModel(
@@ -611,131 +611,20 @@ export function kojo2HoverOf(
   return { contents, range: expand === null ? undefined : rangeOfSpan(expand.callSite) };
 }
 
-/* ============================== 转定义 ============================== */
-
-/** 落点 URI：注入的文件身份优先（`Uri.file`），否则沿用 `model.uri`；两者都拿不到 ⇒ `undefined` */
-function targetUriOf(
-  monaco: typeof Monaco,
-  model: Monaco.editor.ITextModel,
-  getFilePath: Kojo2FilePathSource | undefined,
-): Monaco.Uri | undefined {
-  if (getFilePath !== undefined) {
-    let path: string | null = null;
-    try {
-      path = getFilePath(model);
-    } catch {
-      path = null;
-    }
-    if (typeof path === 'string' && path.length > 0) {
-      try {
-        if (typeof monaco.Uri?.file === 'function') return monaco.Uri.file(path);
-      } catch {
-        /* 路径不合法 / 桩 monaco：退回 model.uri */
-      }
-    }
-  }
-  const uri = (model as unknown as { uri?: unknown }).uri;
-  return uri !== null && typeof uri === 'object' ? (uri as Monaco.Uri) : undefined;
-}
-
-/**
- * 转定义结果：`LocationLink[]`（比 `Location` 多给两段高亮——`originSelectionRange`
- * = 按住 Ctrl 时被划线的那个词，`targetSelectionRange` = 跳过去后选中的那一段）。
- *
- * **字段名以 Monaco 0.57 的 `languages.LocationLink` 为准**：`uri` / `range` /
- * `targetSelectionRange` / `originSelectionRange`（设计稿里写的 `targetUri` / `targetRange`
- * 是 LSP 的拼法，vendor 在 standalone API 里已并成 `uri` / `range`；取证
- * `editor.api.d.ts` 的 `interface LocationLink` 与运行时 `goToCommands.js` 读的
- * `reference.uri` / `reference.range` / `reference.targetSelectionRange`）。
- * 语义不变：`uri` = 落点文件、`range` = 落点整段（本层 = 名字段）、`targetSelectionRange`
- * = 落点里被选中的那段（本层同名字段）。
- *
- * 纯模型只答同文件落点，所以 `uri` 得由宿主补（见 {@link targetUriOf}）；
- * 落点区间取声明的**名字段**（不是整行）——落下去光标正好压在那个名字上。
- *
- * ## 展开视图的两条附加 Link（K2-EXPAND-VIEW，additive）
- *
- * 光标落在**展开体的源行**上（`view.via === 'definition'`：模板 / 池定义体的一行、
- * 随机块的一条候选）时，在声明落点之后追加两条：
- *
- * 1. **调用处**（`call-site`）——"这一行是被哪个 `! 名` 展开出来的 / 哪个 `@随机` 派生的"；
- * 2. **定义处**（`definition`）——模板 / 池声明头到体末那一段；随机块 = 块本身。
- *
- * 挂在**同一枚** provider 的返回数组里（不新造第二个 `DefinitionProvider`：Monaco 多 provider
- * 的合并顺序不可控，`F12` 到底跳哪一条就变得不可断言）。光标在调用行上时**不加**这两条——
- * 那时作者的意图是"这个名字定义在哪"，与既有声明落点重合，多给两条只会让 F12 变成多选。
- */
-export function kojo2DefinitionLinksOf(
-  monaco: typeof Monaco,
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-  getFilePath: Kojo2FilePathSource | undefined,
-  options: Kojo2ExpandLookupOptions = {},
-): Monaco.languages.LocationLink[] {
-  const source = sourceOf(model);
-  if (source === null) return [];
-  const targetUri = targetUriOf(monaco, model, getFilePath);
-  if (targetUri === undefined) return [];
-  const links: Monaco.languages.LocationLink[] = [];
-
-  const lineText = lineTextOf(model, position.lineNumber);
-  const col0 = Math.min(Math.max(position.column - 1, 0), lineText.length);
-  const originSelectionRange = (): Monaco.IRange | undefined => {
-    const span = kojo2TokenSpanAt(lineText, col0);
-    if (span === null) return undefined;
-    return {
-      startLineNumber: position.lineNumber,
-      startColumn: span.start + 1,
-      endLineNumber: position.lineNumber,
-      endColumn: span.end + 1,
-    };
-  };
-
-  const target = kojo2DefinitionAt({
-    source,
-    line: position.lineNumber,
-    column: position.column,
-  });
-  if (target !== undefined) {
-    const targetRange: Monaco.IRange = {
-      startLineNumber: target.line,
-      startColumn: target.column,
-      endLineNumber: target.line,
-      endColumn: target.endColumn,
-    };
-    const originRange = originSelectionRange();
-    links.push({
-      uri: targetUri,
-      range: targetRange,
-      targetSelectionRange: targetRange,
-      ...(originRange === undefined ? {} : { originSelectionRange: originRange }),
-    });
-  }
-
-  const expand = expandViewFor(model, position, getFilePath, options.getCompile);
-  if (expand !== null && expand.via === 'definition') {
-    const originRange = originSelectionRange();
-    for (const span of [expand.callSite, expand.definition]) {
-      const range = rangeOfSpan(span);
-      links.push({
-        uri: targetUri,
-        range,
-        targetSelectionRange: range,
-        ...(originRange === undefined ? {} : { originSelectionRange: originRange }),
-      });
-    }
-  }
-  return links;
-}
-
 /* ============================== 安装 ============================== */
 
 /**
- * 为 `kojo2` 语言注册**三枚** provider（补全 / 悬停 / 转定义），返回**幂等**的 disposable。
+ * 为 `kojo2` 语言注册**两枚** provider（补全 / 悬停），返回**幂等**的 disposable。
  *
  * flag 关 ⇒ 空操作（零注册）。注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛（宿主那一侧的
- * "全有或全无"回滚才有东西可撤）。三条 provider 腿的错误面收在各自体内：任何一腿抛错都
+ * "全有或全无"回滚才有东西可撤）。两条 provider 腿的错误面收在各自体内：任何一腿抛错都
  * 只让**那一轮**空结果，编辑器不受影响。
+ *
+ * **转定义不在这一批里了**（B3b，2026-10-24）：那条腿的判据与展开落点都已归插件
+ * `@kojo/plugin-kojo-lang`，由 descriptor 的 `slotServices: ['definition']` 经共享收口
+ * （`kojo-definition.ts` 的 `installDefinitionProvider`）挂上。这里**绝不能**再注册一枚
+ * `DefinitionProvider`：Monaco 多 provider 的合并顺序不可控，`F12` 到底跳哪一条就变得
+ * 不可断言——这条理由当年就写在这里，删掉这条腿之后它更硬。
  */
 export function installKojo2LanguageProviders(
   monaco: typeof Monaco,
@@ -779,16 +668,6 @@ export function installKojo2LanguageProviders(
     },
   };
 
-  const definitionProvider: Monaco.languages.DefinitionProvider = {
-    provideDefinition(model, position) {
-      try {
-        return kojo2DefinitionLinksOf(monaco, model, position, getFilePath, { getCompile });
-      } catch {
-        return [];
-      }
-    },
-  };
-
   const registrations: Monaco.IDisposable[] = [];
   try {
     // 语言 selector 形态：只认 `kojo2`（v1 的 `.kojo` / `.erb` 各由 `registerForLanguageServices`
@@ -797,9 +676,6 @@ export function installKojo2LanguageProviders(
       monaco.languages.registerCompletionItemProvider(KOJO2_LANGUAGE_ID, completionProvider),
     );
     registrations.push(monaco.languages.registerHoverProvider(KOJO2_LANGUAGE_ID, hoverProvider));
-    registrations.push(
-      monaco.languages.registerDefinitionProvider(KOJO2_LANGUAGE_ID, definitionProvider),
-    );
   } catch (error) {
     for (const registration of registrations) {
       try {

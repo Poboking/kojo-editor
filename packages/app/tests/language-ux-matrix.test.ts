@@ -241,7 +241,10 @@ const BUILTIN_PROBES: Readonly<
       { rel: 'monaco/find-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
     ],
     [KOJO2_LANGUAGE_ID]: [
-      { rel: 'monaco/kojo2-providers.ts', re: /registerDefinitionProvider\(\s*KOJO2_LANGUAGE_ID/ },
+      // B3b：2.0 的转定义归插件，宿主侧零 `registerDefinitionProvider(… KOJO2_LANGUAGE_ID)`。
+      // 取证点改成"共享收口带能力名 + descriptor 点名"这两处声明。
+      { rel: 'monaco/kojo-definition.ts', re: /'definition',\s*\)/ },
+      { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'definition'/ },
       { rel: 'monaco/kojo2-references.ts', re: /registerReferenceProvider\(\s*KOJO2_LANGUAGE_ID/ },
     ],
   },
@@ -602,7 +605,12 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   jump: [
     { rel: 'monaco/kojo-definition.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDefinitionProvider/ },
-    { rel: 'monaco/kojo2-providers.ts', re: /registerDefinitionProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B3b（2026-10-24）：2.0 的转定义不再由 `kojo2-providers.ts` 自建 provider —— 它改走
+    // 同一枚槽腿（`kojo-definition.ts`），由 descriptor 的 `slotServices` 点名挂上，
+    // 应答来自插件 `@kojo/plugin-kojo-lang`。取证点随之从"那枚原生 provider"变成
+    // "两处声明"：能力名进 `registerForLanguageServices`、语言进 descriptor。
+    { rel: 'monaco/kojo-definition.ts', re: /'definition',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'definition'/ },
     { rel: 'monaco/erb-implementation.ts', re: /registerImplementationProvider/ },
   ],
   refs: [

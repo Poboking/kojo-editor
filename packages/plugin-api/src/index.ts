@@ -22,6 +22,7 @@ export type {
   KernelEventMap,
   KernelEventName,
   PluginEventMap,
+  RevealRange,
   StickyEventName,
 } from './events';
 

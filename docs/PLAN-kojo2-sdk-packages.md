@@ -144,8 +144,8 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 |---|---|---|---|
 | **B0** | 契约：`ui.editor.languageService` 扩 **4** 个 kind + 四条取数腿（纯合并函数，不装 provider） | 双 typecheck；既有贡献方零改动；新增 kind 各有一条"不认就跳过"的单测 | ✅ 2026-10-24 |
 | **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `sourcemap-model` / `expand-view` / `constants` + 抽出 `name-chars`（约 1.9k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | ✅ 2026-10-24 |
-| **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**本批完成 3 项**（definition / documentSymbol / inlayHint）——definition 已写但**未挂**，另 2 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 部分完成（3/5）2026-10-24 |
-| **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽** | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | |
+| **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**已接 4 项**（definition / documentSymbol / inlayHint / definition 的展开落点）——另 2 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 4/5 完成 2026-10-24（references / foldingRange 归 B3） |
+| **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽**。**第一步（B3a/B3b）已做**：`expand-compile` 搬进包、definition 真正切槽 | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | 🟡 进行中 2026-10-24 |
 | **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | 主题 token 名不变（`theme-contrast` 三档门禁不破） | |
 | **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden | |
 
@@ -207,12 +207,11 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 三条口径写进文件头注：零登记零行为（不猜）/ 请求时现取 / 后登记优先、注销只撤自己。
 测试 `packages/kojo-lang/tests/adapter-source.test.ts`（7 项）钉住这几条。
 
-**B2 为什么只做了 3/5**（诚实记账，别当成做完了）：
+**B2 为什么还差 2 项**（诚实记账，别当成做完了）：
 | 没接 | 拦路的是什么 | 归哪批 |
 |---|---|---|
 | `references` | 判据在 `kojo2-references.ts`（1390 行），运行期依赖 `kojo2-project-index`（677 行），后者 import 宿主的 `ui/kojo2-flag` | B3（开关随 `programFeatures` 进 SDK 时一起搬） |
 | `foldingRange` | 判据要 worker 客户端（`tree-sitter/kojo2-worker-runtime` 的 `folds` 查询），而包**不许有 IO / worker**。正解是把"折叠区间"变成 worker 的**纯数据回复**、包只做后处理 | B3（与 B4 的 Monarch 一起，因为都动 worker 边界） |
-| `definition`（已写但**未挂**） | 判据已搬、插件已贡献，但宿主还没把 kojo2 的 definition 腿切到槽上——2.0 的转定义带**展开视图**（`expand-view.ts` 的 `via === 'definition'` 两条追加落点），而编译成品住在宿主的模块级登记表 `ui/kojo2-expand-compile.ts` 里。正解是把它做成一个服务（`kojo2.expandCompile`）让插件 `optionalRequires`，**不能**让插件去 import 宿主模块 | B3 第一步 |
 
 **B2c 补记：inlayHint 那条腿怎么走通的**（2026-10-24）：
 
@@ -228,6 +227,57 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 
 宿主 `kojo2-inlay.ts` 因此从 551 行降到 175 行（只剩 `toMonacoInlayHints` +
 `installKojo2InlayHintsProvider`，判据 re-export 回包）。包侧新增 412 行，插件侧 100 行。
+
+**B3a：`expand-compile` 搬进包**（2026-10-24）
+
+`ui/kojo2-expand-compile.ts` 那张模块级登记表整张搬进 `@kojo/kojo-lang/expand-compile.ts`，
+宿主侧只剩 re-export。**纯搬、零语义变化**，但它解掉了一个死结：这张表的两端原来都在宿主
+（登记方 = 编辑器面板，查询方 = 宿主 provider），而 B3b 之后查询方多了一个**插件**。
+
+三条替代路都被否掉了，理由写进了文件头注：
+
+| 替代 | 为什么不行 |
+|---|---|
+| 插件 `import` 宿主模块 | 包与插件的硬边界（零宿主依赖）当场破掉，且方向是反的 |
+| 让宿主 provide 一个服务键 | 宿主组合根**从不** provide 服务（它只消费槽）；为这一格新开链路等于给"宿主是不是插件"开先例 |
+| 插件自己再收一份成品 | 两份来源必然漂，而"一次编译两处消费"的前提就是同一份 |
+
+判据 10 项（`packages/kojo-lang/tests/expand-compile.test.ts`），其中两条是**形状守卫**：
+`compiled.erb` 不是字符串 / `sourceMapModel` 缺席 ⇒ 跳过。这条不是洁癖——半截对象喂给
+`expandViewAt` 会让每次悬停都抛，而宿主会把它吞成"展开段突然没了"。
+
+**B3b：definition 真正切槽**（2026-10-24）
+
+这一步之后，2.0 的 F12 才真的归插件。四处改动：
+
+1. **契约 additive 一格**：`EditorSymbolLocation.range?: RevealRange`（`events.ts` 新增
+   `RevealRange`：1 基、UTF-16、`endColumn` 不含，多一个行维度）。为什么单独立一格而不是把
+   `span` 扩成两行：`span` 的消费方 `clampRevealPosition` 是六条腿共用的落点判据，扩它会动到
+   引用 / 跳到实现 / 问题面板 / 检索面板 / 回放五条腿。这一格只服务"落点本身就是一整段"
+   （2.0 展开体的模板 / 池定义，声明头到体末）。
+2. **宿主翻译层**：`toDefinitionLinks` 有 `range` 时用它构造 `LocationLink.range`（Peek 里框住
+   整段），`targetSelectionRange` 仍是**起点行**那一行——把整段当选区会让编辑器一进去就选中
+   几百行。夹取仍走 `clampRevealPosition`（分别夹两端）。`range` 缺席 ⇒ 逐字沿用旧路径。
+3. **插件供方**：`provideDefinition` 现在给三条落点（声明 + 展开体的调用处 / 定义段），
+   后两条来自 `kojo2ExpandCompilationFor(request.path)` + `expandViewAt`。**零注册 ⇒ 不追加**。
+4. **宿主装配**：descriptor 加 `slotServices: ['definition']`；`installDefinitionProvider`
+   带能力名 `'definition'` 调用；`installKojo2LanguageProviders` 里的 `definitionProvider`
+   与 `kojo2DefinitionLinksOf` / `targetUriOf` 一并删除。
+
+**门禁跟着改（取证点变了，不是放宽）**：
+
+| 门禁 | 改动 | 为什么不是放宽 |
+|---|---|---|
+| `language-capabilities.ts` | kojo2 `definition` 从 `self` 挪到 `shared` | 档位合计仍是 16（14 self + 2 shared），能力没少 |
+| `language-parity` 档位清单 | 15 self + 1 shared → 14 self + 2 shared | 清单仍是逐项 `toEqual` 锁死 |
+| `language-ux-matrix` 的 `jump` / `preview` 取证 | 从"`kojo2-providers.ts` 里有一行注册"改成"收口带能力名 + descriptor 点名"两处 | 判据换成"这条腿真交出去了"的证据 |
+| `kojo2-providers.test.ts` | "恰好三枚" → "恰好两枚" | **更紧**：多挂一枚 `DefinitionProvider` 会让 F12 变多选 |
+| `kojo2-expand-view.test.ts` 的注册纪律 | `registerDefinitionProvider` 计数 1 → **0** | 这一格归零正是"腿真的交出去了"的判据 |
+| `kojo2-expand-view.test.ts` 第 7 节 | 从测宿主自算改成**端到端**（插件给 + 宿主翻） | 判据逐字保留；插件拿不到成品时这一节会当场红 |
+
+`packages/app/tests/kojo2-providers.test.ts` 里那组"转定义 LocationLink 形状与 URI 来源"
+六条断言**整组删掉**，原位留了一段"判据去哪了"的指路注释（插件供方直测 / `toDefinitionLinks`
+单测 / 端到端三处），否则下次会有人顺手补一条从而长出第二份。
 
 **B1 刻意没搬的三块**（初版方案列了 7 个文件 / 3.2k 行，实测只有 5 个能干净搬走）：
 

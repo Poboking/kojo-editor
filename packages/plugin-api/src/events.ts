@@ -36,6 +36,27 @@ export interface RevealSpan {
   readonly columnEnd: number;
 }
 
+/**
+ * **跨行**矩形区间（additive，B3b 2026-10-24）。
+ *
+ * 与 {@link RevealSpan} 同口径（1 基、UTF-16 码元、`endColumn` **不含**），只是多了一个
+ * 行维度。为什么需要它：有一类落点天然是**一整段**而不是一行——`@巡` 展开体的
+ * 模板 / 池定义（声明头到体末）。用单行 `span` 表达它只有两个下场：要么把整段压成
+ * 起点那一行（Peek 里只剩一条高亮线，视觉上"跳到了但没框住"），要么由调用方
+ * 自己编一个假的列终点（那是猜，且每个调用方猜得不一样）。
+ *
+ * **谁用它**：目前只有 `EditorSymbolLocation.range`（定义 / 跳转落点）。
+ * **谁不用**：`editor.revealLocation.span` 仍是单行——事件通道那条腿的语义是
+ * "把光标放到这一处"，跨行选区不是它的事。所以一条带 `range` 的落点若走了
+ * 事件通道（目标文件没在编辑器里打开），高亮会退化成起点行，**位置不会错**。
+ */
+export interface RevealRange {
+  readonly startLine: number;
+  readonly startColumn: number;
+  readonly endLine: number;
+  readonly endColumn: number;
+}
+
 /** 文件变更类型 */
 export type FileChangeKind = 'add' | 'change' | 'unlink';
 

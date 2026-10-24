@@ -37,7 +37,9 @@ import {
   splitKojo2GeneratedLines,
   type Kojo2SourceMapModel,
 } from '@kojo/kojo-lang';
-import { kojo2DefinitionLinksOf, kojo2HoverOf } from '../src/monaco/kojo2-providers';
+import { kojo2HoverOf } from '../src/monaco/kojo2-providers';
+import { toDefinitionLinks, type DefinitionLocation } from '../src/monaco/kojo-definition';
+import { provideDefinition } from '@kojo/plugin-kojo-lang';
 import {
   kojo2ExpandCompilationFor,
   kojo2ExpandCompileSourceCount,
@@ -175,6 +177,8 @@ function fakeModel(text = FIXTURE): Monaco.editor.ITextModel {
     getValue: () => text,
     getLineContent: (line: number) => rows[line - 1] ?? '',
     getLineCount: () => rows.length,
+    // `toDefinitionLinks` 的落点判据要问行长（`getLineMaxColumn` = 行长度 + 1，Monaco 口径）
+    getLineMaxColumn: (line: number) => (rows[line - 1] ?? '').length + 1,
     isDisposed: () => false,
     uri,
   } as unknown as Monaco.editor.ITextModel;
@@ -536,21 +540,48 @@ describe('Markdown 形状', () => {
   });
 });
 
-/* ============================== 7. definition 两条 Link ============================== */
+/* ============================== 7. definition 两条落点（插件给 + 宿主翻） ==============================
+ *
+ * B3b（2026-10-24）起这条腿的**判据归插件** `@kojo/plugin-kojo-lang`（它经
+ * `ui.editor.languageService` 槽的 `kind: 'definition'` 应答），宿主只做翻译
+ * （`toDefinitionLinks`）。所以本节测的是**整条链**：插件 `provideDefinition` 给契约落点
+ * → 宿主翻成 `LocationLink`。
+ *
+ * 判据与切槽之前**逐字相同**（两条 link、指向同一文件、区间与 core source map 一致），
+ * 变的只有取数路径。为什么值得这样测而不是各测一半：展开落点是"插件能不能真的接管
+ * 转定义"的唯一证据——插件若拿不到编译成品（B3a 之前它确实拿不到），这一节会当场红。
+ *
+ * 唯一的**有意差别**：`targetSelectionRange` 不再等于 `range`。跨行段落点若把整段当选区，
+ * 编辑器一进去就选中几百行；现在 `range` = 整段（Peek 里框住），`targetSelectionRange`
+ * = 起点行那一行（光标落在声明头）。
+ */
 
-describe('转定义：展开体源行 → 调用处 / 定义处两条 LocationLink', () => {
-  const monaco = fakeMonaco();
+describe('转定义：展开体源行 → 调用处 / 定义处两条落点（插件给 + 宿主翻）', () => {
+  const findModel = (path: string): Monaco.editor.ITextModel | undefined =>
+    path === MODEL_PATH ? fakeModel() : undefined;
+
+  /** 按宿主的问法投递（`languageId` 来自 model，这里显式给 `kojo2`） */
+  function locationsAt(line: number, column = 1): DefinitionLocation[] {
+    const result = provideDefinition({
+      kind: 'definition',
+      path: MODEL_PATH,
+      text: FIXTURE,
+      project: null,
+      lineCount: SOURCE_LINES.length,
+      languageId: 'kojo2',
+      version: 1,
+      line,
+      column,
+    } as never);
+    return result?.locations ?? [];
+  }
 
   it('展开体源行给出两条 link（调用处在前、定义处在后），且指向同一文件', () => {
-    const links = kojo2DefinitionLinksOf(monaco, fakeModel(), monacoPosition(POOL_BODY_LINE, 1), undefined, {
-      getCompile: () => COMPILATION,
-    });
+    withCompileSource(() => COMPILATION);
+    const links = toDefinitionLinks(locationsAt(POOL_BODY_LINE), findModel);
     expect(links).toHaveLength(2);
     const view = expandAt(POOL_BODY_LINE);
-    for (const link of links) {
-      expect(link.uri.fsPath).toBe(MODEL_PATH);
-      expect(link.range).toEqual(link.targetSelectionRange);
-    }
+    for (const link of links) expect(link.uri.fsPath).toBe(MODEL_PATH);
     expect(links[0]!.range).toEqual({
       startLineNumber: view.callSite.start.line,
       startColumn: view.callSite.start.column,
@@ -565,42 +596,44 @@ describe('转定义：展开体源行 → 调用处 / 定义处两条 LocationLi
     });
   });
 
+  it('跨行段落点：`range` 框住整段，`targetSelectionRange` 只落在起点行（别把几百行当选区）', () => {
+    withCompileSource(() => COMPILATION);
+    const links = toDefinitionLinks(locationsAt(POOL_BODY_LINE), findModel);
+    const whole = links[1]!;
+    expect(whole.range.endLineNumber).toBeGreaterThan(whole.range.startLineNumber);
+    expect(whole.targetSelectionRange!.startLineNumber).toBe(whole.range.startLineNumber);
+    expect(whole.targetSelectionRange!.endLineNumber).toBe(whole.range.startLineNumber);
+  });
+
   it('随机候选行也给两条 link（跳到块头）', () => {
-    const links = kojo2DefinitionLinksOf(
-      monaco,
-      fakeModel(),
-      monacoPosition(RANDOM_CANDIDATE_LINE, 1),
-      undefined,
-      { getCompile: () => COMPILATION },
-    );
+    withCompileSource(() => COMPILATION);
+    const links = toDefinitionLinks(locationsAt(RANDOM_CANDIDATE_LINE), findModel);
     expect(links).toHaveLength(2);
     expect(links[0]!.range.startLineNumber).toBe(RANDOM_HEAD_LINE);
   });
 
   it('调用行不追加展开 link（那里 F12 该跳声明）', () => {
-    const links = kojo2DefinitionLinksOf(monaco, fakeModel(), monacoPosition(CALL_POOL, 3), undefined, {
-      getCompile: () => COMPILATION,
-    });
+    withCompileSource(() => COMPILATION);
+    const links = toDefinitionLinks(locationsAt(CALL_POOL, 3), findModel);
     expect(links).toHaveLength(1);
     expect(links[0]!.range.startLineNumber).toBe(POOL_DEF_LINE);
   });
 
-  it('没有编译缓存时不追加、不抛（与旧行为一致）', () => {
+  it('没有编译成品时不追加、不抛（与切槽之前一致）', () => {
     let links: Monaco.languages.LocationLink[] = [];
     expect(() => {
-      links = kojo2DefinitionLinksOf(monaco, fakeModel(), monacoPosition(POOL_BODY_LINE, 1), undefined);
+      links = toDefinitionLinks(locationsAt(POOL_BODY_LINE), findModel);
     }).not.toThrow();
     expect(links).toHaveLength(0);
   });
 
-  it('缓存读取端抛错时只是没有展开段，原声明落点照旧', () => {
+  it('成品读取端抛错时只是没有展开段，原声明落点照旧', () => {
+    withCompileSource(() => {
+      throw new Error('桩：缓存读取端炸了');
+    });
     let links: Monaco.languages.LocationLink[] = [];
     expect(() => {
-      links = kojo2DefinitionLinksOf(monaco, fakeModel(), monacoPosition(CALL_POOL, 3), undefined, {
-        getCompile: () => {
-          throw new Error('桩：缓存读取端炸了');
-        },
-      });
+      links = toDefinitionLinks(locationsAt(CALL_POOL, 3), findModel);
     }).not.toThrow();
     expect(links).toHaveLength(1);
     expect(links[0]!.range.startLineNumber).toBe(POOL_DEF_LINE);
@@ -762,9 +795,13 @@ describe('注册纪律：展开段不新造第二个 provider', () => {
     'utf8',
   );
 
-  it('悬停 / 转定义各只有一枚注册点（展开段合并进同一枚，避免多 provider 顺序问题）', () => {
+  it('悬停只有一枚注册点；转定义**零枚**（B3b 起归插件，多挂一枚会让 F12 变多选）', () => {
     expect(providerSource.match(/registerHoverProvider\(/g) ?? []).toHaveLength(1);
-    expect(providerSource.match(/registerDefinitionProvider\(/g) ?? []).toHaveLength(1);
+    // 这条断言在 B3b 之前是"恰好 1"，现在是"恰好 0"——**收紧，不是放宽**：
+    // 转定义由 descriptor 的 `slotServices: ['definition']` 经共享收口挂上（供方是插件），
+    // 本文件再注册一枚就是两个 DefinitionProvider 并存，Monaco 的合并顺序不可控，
+    // `F12` 到底跳哪一条从此不可断言。这一格归零正是"这条腿真的交出去了"的判据。
+    expect(providerSource.match(/registerDefinitionProvider\(/g) ?? []).toHaveLength(0);
   });
 
   it('展开 Markdown 只经 `expandViewMarkdown` 一处进悬停（不写第二份措辞）', () => {

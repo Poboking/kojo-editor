@@ -1,6 +1,6 @@
 import type { Unsubscribe } from './base';
 import type { PluginContextMenuRequest } from './context-menu';
-import type { RevealSpan } from './events';
+import type { RevealRange, RevealSpan } from './events';
 import type { GameAdapter } from './game';
 import type { GameProject } from './game';
 import type { EolStyle } from './io';
@@ -527,6 +527,24 @@ export interface EditorSymbolLocation {
    * 退化判据唯一住在 `app/src/monaco/reveal-position.ts`，**不许在任何供方或宿主里重抄**。
    */
   readonly span?: RevealSpan;
+  /**
+   * 跨行的**整段落点**（**additive 可选**，B3b 2026-10-24）。
+   *
+   * 与 {@link RevealSpan} 同口径（1 基、UTF-16 码元、`endColumn` 不含），多一个行维度；
+   * 形状与 core 的 `KojoSpan` 结构兼容（`{start:{line,column}, end:{…}}` 那边是嵌套的，
+   * 这里摊平，免得契约层为了"少一层大括号"去依赖 core）。
+   *
+   * 为什么单独立一格而不是把 `span` 扩成两行：`span` 的消费方（`clampRevealPosition`，
+   * 六条腿共用的落点判据）只认单行，扩它会动到引用 / 跳到实现 / 问题面板 / 检索面板 /
+   * 回放五条腿。这一格只服务"落点本身就是一整段"的场景（目前 = 2.0 展开体的模板 / 池
+   * 定义），消费方是 `toDefinitionLinks` 一条腿。
+   *
+   * **退化口径**：`range` 缺席 ⇒ 逐字沿用 `line` / `column` / `span`（与加这一格之前相同）。
+   * `range` 在场时 `line` / `column` **仍应给出**（取 `range.startLine` / `range.startColumn`）：
+   * 落点若走了事件通道那条腿（目标文件没打开），它只读得到 `line` / `column`，
+   * 那时高亮退化成起点行、**位置不会错**。
+   */
+  readonly range?: RevealRange;
 }
 
 /** 转到定义响应 */

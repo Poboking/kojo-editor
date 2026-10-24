@@ -51,7 +51,11 @@ const ALLOWED_PACKAGES = new Set([
   '@kojo/kojo-lang/symbols',
   '@kojo/kojo-lang/inlay',
   '@kojo/kojo-lang/adapter-source',
-  // 只取**类型** `GameAdapter`（2.0 adapter 的形状住 core，与 plugin-api 的 v1 形状不同）。
+  // B3a：展开体落点要"那一次编译的成品"，登记表已搬进语言面库。
+  '@kojo/kojo-lang/expand-compile',
+  '@kojo/kojo-lang/expand-view',
+  // 只取**类型** `GameAdapter`（2.0 adapter 的形状住 core，与 plugin-api 的 v1 形状不同），
+  // 以及 `KojoSpan`（展开落点的区间形状，同样是 core 的形状，不在这里另立一份）。
   '@kojo/kojo-core',
 ]);
 
