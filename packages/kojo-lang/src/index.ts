@@ -40,3 +40,4 @@ export * from './symbols';
 export * from './definition';
 export * from './inlay';
 export * from './adapter-source';
+export * from './expand-compile';

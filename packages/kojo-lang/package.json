@@ -17,7 +17,8 @@
     "./symbols": "./src/symbols.ts",
     "./definition": "./src/definition.ts",
     "./inlay": "./src/inlay.ts",
-    "./adapter-source": "./src/adapter-source.ts"
+    "./adapter-source": "./src/adapter-source.ts",
+    "./expand-compile": "./src/expand-compile.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*"
