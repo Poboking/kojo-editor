@@ -239,6 +239,9 @@ importers:
 
   packages/plugins/erafl-adapter:
     dependencies:
+      '@kojo/kojo-core':
+        specifier: workspace:*
+        version: link:../../kojo-core
       '@kojo/kojo-project-kit':
         specifier: workspace:*
         version: link:../../kojo-project-kit

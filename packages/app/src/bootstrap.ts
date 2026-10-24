@@ -160,6 +160,11 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
   ]);
+  // 入口 B：eraFL 的 2.0 数据面（`@kojo/plugin-erafl-adapter` 的 `src/kojo2/`）随本模块
+  // 装载登记进组合根表——键取 v1 的 `gameId` 常量（不写死字面量），与表里 eraTW 那条
+  // 同一判据。时机契约：本函数先于 `kernel.project.open()`（`ensureProjectPlugins`），
+  // Monaco 实例诞生时表已齐；模块级动态 import 全程只求值一次，登记不会重复。
+  registerKojo2Adapter(eraflAdapter.ERAFL.gameId, eraflAdapter.ERAFL_GAME_ADAPTER);
   return [
     // eraFL 领域知识（第三个 adapter；`FLconfig.xml` 特征与另两个无交集 ⇒ 注册顺序不影响判定）。
     // 同样排在前列：内核 detect / loadProject 时 adapter 必须已在场。

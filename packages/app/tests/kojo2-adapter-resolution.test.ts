@@ -10,20 +10,20 @@
  * （`bootstrap.ts` 登记表），本文件钉死判据：
  *
  * 1. 已登记的游戏（eraTW）⇒ 拿到**同一枚**冻结实例（回归：eraTW 工程行为逐字不变）；
- * 2. 未登记 2.0 面的游戏（eraFL，入口 B 之前）⇒ `null` ⇒ 六条腿按契约零候选、不抛；
+ * 2. eraFL 工程 ⇒ 拿到 eraFL 的 2.0 adapter（入口 B 落地后的翻面判据；入口 A 时
+ *    此处是 `null` ⇒ 零候选，正是"先把错误事实掐掉"的那个中间态）；
  * 3. 未知 id / 无项目 ⇒ `null`（不猜，也不默认顶别家）；
  * 4. `registerKojo2Adapter` 扩容口子（入口 B 起 eraFL 的 2.0 面经它登记；同 id 覆盖）；
  * 5. 源码形态守门（照 `debug-surface.test.ts` 先例）：`use-monaco-instance.ts` 不再直引
- *    eraTW 的冻结 adapter，getter 改调 `kojo2AdapterForProject(kernel.project.current())`。
- *
- * 判据 2 在入口 B 落地后会**故意翻面**（`erafl` → eraFL 的 2.0 adapter）：那是入口 B 的
- * 验收，不是本文件的回归——改的时候连注释一起改，别让两份判据互相打架。
+ *    eraTW 的冻结 adapter，getter 改调 `kojo2AdapterForProject(kernel.project.current())`；
+ *    `bootstrap.ts` 在项目级装载处登记 eraFL 的 2.0 adapter（入口 B 接线）。
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { kojo2AdapterForProject, registerKojo2Adapter } from '../src/bootstrap';
+import { ERAFL_GAME_ADAPTER } from '@kojo/plugin-erafl-adapter';
 import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
 import type { GameAdapter } from '@kojo/kojo-core';
 import type { GameProject } from '@kojo/plugin-api';
@@ -42,8 +42,11 @@ describe('kojo2AdapterForProject（2.0 adapter 按当前项目解析）', () => 
     expect(kojo2AdapterForProject(proj('eratw'))).toBe(ERATW_GAME_ADAPTER);
   });
 
-  it('eraFL 工程（入口 B 之前未登记）⇒ null ⇒ 六条腿零候选、不抛', () => {
-    expect(kojo2AdapterForProject(proj('erafl'))).toBeNull();
+  it('eraFL 工程 ⇒ 拿到 eraFL 的 2.0 adapter（入口 B 翻面；入口 A 时此处是 null）', () => {
+    // 生产登记点 = bootstrap.loadProjectPlugins 的模块装载处（下方源码守门钉死）；
+    // 本测试用**真包数据**复现那一步登记，验证"真数据 + 真解析"闭环。
+    registerKojo2Adapter('erafl', ERAFL_GAME_ADAPTER);
+    expect(kojo2AdapterForProject(proj('erafl'))).toBe(ERAFL_GAME_ADAPTER);
   });
 
   it('未知 id / 无项目 ⇒ null（不猜、不默认顶别家）', () => {
@@ -78,5 +81,10 @@ describe('源码形态守门：use-monaco-instance 的 adapter 供给已接线�
 
   it('getter 按当前项目现取', () => {
     expect(src).toMatch(/kojo2AdapterForProject\(kernel\.project\.current\(\)\)/);
+  });
+
+  it('bootstrap 在项目级装载处登记 eraFL 的 2.0 adapter（入口 B 接线，键取 v1 gameId 常量）', () => {
+    const boot = read('packages/app/src/bootstrap.ts');
+    expect(boot).toMatch(/registerKojo2Adapter\(eraflAdapter\.ERAFL\.gameId, eraflAdapter\.ERAFL_GAME_ADAPTER\)/);
   });
 });

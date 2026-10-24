@@ -22,3 +22,7 @@ export {
   createEraflFamilyIndex,
   parseKojoFamily,
 } from './family-index';
+
+/* Kojo 2.0 数据面（入口 B）：宿主组合根按 `project.adapterId` 解析后注入六条语言腿。
+ * 内部 layering 住在 src/kojo2/，包名不出现 kojo2（用户硬指令）。 */
+export { ERAFL_GAME_ADAPTER, ERAFL_GAME_FINGERPRINT } from './kojo2/index';

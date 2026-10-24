@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@kojo/plugin-api": "workspace:*",
-    "@kojo/kojo-project-kit": "workspace:*"
+    "@kojo/kojo-project-kit": "workspace:*",
+    "@kojo/kojo-core": "workspace:*"
   }
 }
