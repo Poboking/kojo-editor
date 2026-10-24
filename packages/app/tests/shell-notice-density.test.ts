@@ -73,11 +73,15 @@ describe('toast 让位模态：改位不降层（层序是另一条闸钉着的�
 });
 
 /**
- * R6 债三：更新提醒卡（1180 档）也压着模态页脚右端，R5 只办了通知列。
- * 口径与上面那条完全一致——**改位不降层**：卡的层序定义留给 `context-menu-layering.test.ts`
- * 那张档位表管，本批只在切片里加让位判据，所以这里既钉"判据在"，也钉"定义没被动过"。
+ * R6 债三（更新提醒卡 1180 档压着模态页脚右端）——**2026-10-24 组长复验后改判处理方式**。
+ * R6 的方案是"照抄 ① 挪到左下"，宽窗成立；但窗口有法定下限（`tauri.conf.json` minWidth 960 /
+ * minHeight 620），实测 1000×640 时设置浮层的**左侧导航列**就落在左下那一格 ⇒ 挪过去反而盖住了
+ * 换页面的入口；而卡自身 z 1180 恒压模态（遮罩 1100 / 宿主 1101），挪到哪一侧都还贴在模态脸上。
+ * 改判：模态在场时这张**可再生**的提醒整块不画（免打扰机制本来就允许它几天不出现，关掉模态自己回来）；
+ * toast 列仍走 ① 的"改位不降层"——那一条承载的是"失败必须看得见"，不许隐。
+ * 本段钉三件事：卡的层序定义没被顺手改、让位判据写在 CSS 而非 JS 数模态、被隐的只有卡。
  */
-describe('更新提醒卡同样给模态让位（改位不降层，机制沿用 R5）', () => {
+describe('更新提醒卡给模态让位（组长改判：整块不画，不是挪到左下）', () => {
   const cardCss = read('../src/update-notice-card.css');
   const CARD_YIELD = 'body:has(.overlay-backdrop, .modal-mask) .update-notice-card';
 
@@ -86,37 +90,36 @@ describe('更新提醒卡同样给模态让位（改位不降层，机制沿用 
     expect(noticesCss).not.toMatch(/update-notice-card[^}]*z-index/);
   });
 
-  it('让位判据在切片里（不在 JS 里数模态），写的是"改锚左下"', () => {
+  it('模态在场 ⇒ 这张卡不画；判据写在 CSS 的 `:has()` 里，不是 JS 数模态', () => {
     expect(noticesCss).toContain(CARD_YIELD);
     const at = noticesCss.indexOf(CARD_YIELD);
     const body = noticesCss.slice(at, noticesCss.indexOf('}', at) + 1);
-    expect(body).toContain('left: 16px');
-    expect(body).toContain('right: auto');
-    expect(body).not.toContain('display: none');
-    expect(body).not.toContain('visibility: hidden');
+    expect(body).toContain('display: none');
+    // 反向红线：承载"失败必须看得见"的通知列绝对不许被整块隐掉
+    expect(noticesCss, '通知列被整块隐藏 = 铁律 4 破防').not.toMatch(/\.notification-center[^{]*\{[^}]*display:\s*none/);
+    // 旧的"挪到左下"方案不许回潮（它才是窄窗盖住导航列的那一手）
+    expect(noticesCss).not.toMatch(/\.update-notice-card\s*\{[^}]*left:\s*16px/);
   });
 
-  it('错误条同屏时逐档抬手：卡抬到 128，toast 列再抬到 214（竖序 = 错误条 → 卡 → toast）', () => {
-    expect(noticesCss).toMatch(
-      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.project-session-error\)\s*\.update-notice-card\s*\{\s*bottom:\s*128px;/,
-    );
-    expect(noticesCss).toMatch(
-      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.update-notice-card\):has\(\.project-session-error\)\s*\.notification-center\.notification-shell\s*\{\s*bottom:\s*214px;/,
-    );
-  });
-
-  it('R5 原有那两条通知列规则原样在（追加更严的一条，不是改写既有口径）', () => {
+  it('通知列仍按 R5 挪到左下（改位不降层那两条原样在——挪的是它，不是卡）', () => {
     expect(noticesCss).toMatch(
       /body:has\(\.overlay-backdrop, \.modal-mask\)\s*\.notification-center\.notification-shell\s*\{\s*left:\s*16px;\s*right:\s*auto;/,
     );
-    expect(noticesCss).toMatch(
-      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.project-session-error\)\s*\.notification-center\.notification-shell\s*\{\s*bottom:\s*128px;/,
-    );
   });
 
-  it('位移过渡两种降动效口径都压平（同通知列那套纪律）', () => {
-    expect(noticesCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.update-notice-card\s*\{\s*transition:\s*none;/);
-    expect(noticesCss).toMatch(/:root\[data-motion='reduced'\] \.update-notice-card\s*\{\s*transition:\s*none;/);
+  it('卡与错误条不再同屏抢位：模态在场没有卡，通知列只需抬过错误条一档', () => {
+    expect(noticesCss).toMatch(
+      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.project-session-error\)\s*\.notification-center\.notification-shell\s*\{\s*bottom:\s*calc\(\s*var\(--notice-slot-bottom\) \+ var\(--notice-err-h\) \+ var\(--notice-gap\)\);/,
+    );
+    // "三件同屏再抬一档卡高"那条随本改判一起删——留着就是给未来的叠字埋雷
+    expect(noticesCss).not.toContain(':has(.update-notice-card):has(.project-session-error)');
+  });
+
+  it('通知列的位移过渡两种降动效口径都压平（卡不再平移，这段只剩通知列）', () => {
+    expect(noticesCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.notification-center\.notification-shell\s*\{\s*transition:\s*none;/,
+    );
+    expect(noticesCss).toMatch(/:root\[data-motion='reduced'\] \.notification-center\.notification-shell\s*\{\s*transition:\s*none;/);
   });
 });
 
@@ -145,5 +148,68 @@ describe('视觉隐藏不许吞掉信息（读屏与右键复制仍要拿得到�
   it('有事故那一格永不收起：靠 `:not([style])` 把内联色那两格挡在收起规则外', () => {
     expect(noticesCss).toContain(':not([style])');
     expect(shellLayout).toContain('data-sb-secondary');
+  });
+});
+
+/**
+ * 底部浮层的竖序抬升（2026-10-24 组长真壳复验补）。
+ *
+ * 为什么单独立一段：R6 交付的 128 / 214 与 L05 的 122 都建立在「卡高 ≈ 86」这个**没量过的数**上，
+ * 真壳（1440×900 / 760×700，卡 CSS 到位后逐枚取 rect）量下来卡实际 **116 高** ⇒ toast 列下沿压在
+ * 卡的上半截，`card_vs_toast` 三档宽度全部重叠。抬升现在由 `tokens.css` 的 `--notice-*` 实测族算出，
+ * 这一段钉三件事：实测余量还在、估算常数没回潮、每条 calc 都含它该含的项（少一项就叠字）。
+ */
+describe('底部浮层抬升 = 实测 token 的算术（不许回到拍来的常数）', () => {
+  const cardCss = read('../src/update-notice-card.css');
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+  const tokenPx = (name: string): number => {
+    const m = new RegExp(`${name}:\\s*(\\d+(?:\\.\\d+)?)px`).exec(tokensCss);
+    expect(m, `tokens.css 里读不到 ${name}（抬升族不许改名或挪走，判据会瞎）`).not.toBeNull();
+    return Number(m![1]);
+  };
+  const SLOT = tokenPx('--notice-slot-bottom');
+  const GAP = tokenPx('--notice-gap');
+  const ERR = tokenPx('--notice-err-h');
+  const CARD = tokenPx('--notice-card-h');
+
+  /** 取某条选择器里 `bottom: calc(...)` 的内容（空白压平，选择器换行不影响定位） */
+  const riseOf = (src: string, selector: string): string => {
+    const at = flat(src).indexOf(flat(selector));
+    expect(at, `选择器不在了：${selector}`).toBeGreaterThanOrEqual(0);
+    const m = /bottom: calc\(([\s\S]*?)\);/.exec(flat(src).slice(at, at + 900));
+    expect(m, `${selector} 的 bottom 不是 calc —— 抬升又变回裸常数了`).not.toBeNull();
+    return m![1].replace(/\s+/g, '');
+  };
+
+  it('实测余量：错误条 ≥ 89、卡 ≥ 116（真壳读数，槽位与间隙都得 > 0）', () => {
+    expect(ERR).toBeGreaterThanOrEqual(89);
+    expect(CARD).toBeGreaterThanOrEqual(116);
+    expect(GAP).toBeGreaterThan(0);
+    expect(SLOT).toBe(36);
+  });
+
+  it('拍来的估算常数（122 / 128 / 214）在两处切片里一处不剩', () => {
+    for (const [name, src] of [
+      ['shell-notices.css', noticesCss],
+      ['update-notice-card.css', cardCss],
+    ] as const) {
+      expect(src, `${name} 又出现写死的抬升常数`).not.toMatch(/bottom:\s*(?:122|128|214)px/);
+    }
+  });
+
+  it('两条抬升各含该含的项：让开谁就把谁的高度加进抬升', () => {
+    // ① 模态 + 错误条：通知列只抬过错误条，不许凭空多抬一档卡高（卡那档已随 ⑥ 改判删掉）
+    const errOnly = riseOf(noticesCss, 'body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notification-center.notification-shell {');
+    expect(errOnly).toContain('var(--notice-err-h)');
+    expect(errOnly).not.toContain('--notice-card-h');
+    // 卡文件的基线（无模态、卡在场）：通知列抬过卡，不涉及错误条
+    const baseRise = riseOf(cardCss, 'body:has(.update-notice-card) .notification-center {');
+    expect(baseRise).toContain('var(--notice-card-h)');
+    expect(baseRise).not.toContain('--notice-err-h');
+  });
+
+  it('抬升算出来真的够（槽位 + 高度 + 间隙 ≥ 被让位者的顶缘）', () => {
+    expect(SLOT + ERR + GAP).toBeGreaterThan(SLOT + 89); // 136 > 错误条顶缘实测 125
+    expect(SLOT + CARD + GAP).toBeGreaterThan(SLOT + 116); // 164 > 卡顶缘实测 152
   });
 });

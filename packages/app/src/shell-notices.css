@@ -117,9 +117,11 @@ body:has(.overlay-backdrop, .modal-mask) .notification-center.notification-shell
   right: auto;
   max-width: min(360px, calc(100vw - 32px));
 }
-/* 左下被项目态错误条占了（`position:absolute; left:16 bottom:36`）⇒ 抬到它上方，两列永不叠字 */
+/* 左下被项目态错误条占了（`position:absolute; left:16 bottom:36`）⇒ 抬到它上方，两列永不叠字。
+   抬升 = 错误条槽位底 + 实测条高 + 一档间隙（`tokens.css` 的 `--notice-*` 族，2026-10-24 真壳量得；
+   原先这里写死 128，比实测条顶缘 125 只多 3px——文案一换行就叠字） */
 body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notification-center.notification-shell {
-  bottom: 128px;
+  bottom: calc(var(--notice-slot-bottom) + var(--notice-err-h) + var(--notice-gap));
 }
 /* 让位是"整列平移"，给一档 `--dur-2`（200ms）的位移过渡；两种降动效口径都压平（同 update-notice-card） */
 .notification-center.notification-shell {
@@ -333,49 +335,23 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
   border-color: var(--rim-solid);
 }
 
-/* =============== ⑥ 更新提醒卡也让模态（本批 R6 债三：R5 只办了通知列） =============== */
+/* =============== ⑥ 模态在场 ⇒ 更新提醒卡不画（组长改判 R6 债三的处理方式） =============== */
 /*
- * 症状：`.update-notice-card`（`update-notice-card.css:18`）那格 1180 压过模态的
- * `calc(var(--z-modal) + 1)` = 1101 与遮罩的 `--z-modal` = 1100 ⇒ 设置浮层开着时，这张常驻卡
- * 照样糊在页脚**右端**——而那正是「确定 / 取消」的命中区（R5 为通知列办过同一件事，注记在 ①）。
+ * R6 的原方案是"照抄 ① 把卡从右下挪到左下"，症状确实办了（不再糊「确定 / 取消」）。
+ * 2026-10-24 组长真壳复验否掉了"挪位"这条路本身：
+ *  - 卡自身 z 1180 **恒压模态**（遮罩 1100 / 宿主 1101），挪到哪一侧都还是在模态脸上；
+ *  - 窗口的法定下限是 960×620（`tauri.conf.json` 的 `minWidth/minHeight`），实测 1000×640 时
+ *    设置浮层的**左侧导航列**就在左下那一格里（导航按钮 bottom 落在卡的纵向区间）⇒ "左下恒空"
+ *    这个前提只在宽窗成立，窄窗反而盖住了换页面的入口；
+ *  - 挪过去还要再和错误条、toast 列排竖序——三件同屏的抬升常数正是 R6 拍错的地方（详见 `--notice-*`）。
  *
- * 口径照抄 R5：**改位不降层**。层级由 `context-menu-layering.test.ts` 与
- * `shell-notice-density.test.ts` 钉着（1300 / 1200 / 1101 / 本卡 1180 各在其位），本批一个字不碰
- * 层序；只把卡从右下挪到左下——页脚带左端对模态而言恒空（居中宿主 + 右对齐按钮）。
+ * 判据：**这张卡不是"必须可见"的那一类**。铁律 4 管的是内核的错误与冲突不许静默（toast 列、
+ * 问题面板），而更新提醒是可再生的：免打扰机制本来就允许它几天不出现（`decideUpdateNotice`），
+ * 关掉模态它就自己回来。于是让它**整块让位**，而不是让模态的正文替它腾地方。
+ * toast 列仍按 ① 处理（那条才是"失败必须看得见"，不许隐）。
  *
- * 挪过去不与别人叠字：`update-notice-card.css:30` 那条「卡在场 ⇒ toast 列抬到 bottom:122」
- * 只认**卡的有无**、不认卡在哪一侧，所以左移后竖序原样成立（卡 36..122、toast 从 122 起）。
- * 错误条（`.project-session-error`：absolute / left:16 / bottom:36）也在左下 ⇒ 三件同屏时
- * 按「错误条 → 卡 → toast 列」逐档抬手，常数与 R5 的 128（错误条顶缘）同源：
- * 卡抬到 128，toast 列抬到 128 + 86（卡高一档）= 214。
- *
- * `:has()` 不可用时整组失效 = 保持本批之前的右下形态（与 ① 同一降级口径，不破版）。
+ * `:has()` 不可用时本条失效 = 回到"卡在右下压着模态"的旧形态（与 ① 同一降级口径，功能不丢）。
  */
 body:has(.overlay-backdrop, .modal-mask) .update-notice-card {
-  left: 16px;
-  right: auto;
-}
-body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .update-notice-card {
-  bottom: 128px;
-}
-/* 三件同屏时 toast 列再抬一档（比上面那条多一个 `:has()` ⇒ (0,5,1) 稳压 R5 的 (0,4,1)，
-   属**追加**更严的一条，R5 那两条一个字没改） */
-body:has(.overlay-backdrop, .modal-mask):has(.update-notice-card):has(.project-session-error)
-  .notification-center.notification-shell {
-  bottom: 214px;
-}
-/* 同 ①：让位是整块平移，给一档位移过渡；两种降动效口径都压平 */
-.update-notice-card {
-  transition:
-    left var(--dur-2) var(--ease-out),
-    right var(--dur-2) var(--ease-out),
-    bottom var(--dur-2) var(--ease-out);
-}
-@media (prefers-reduced-motion: reduce) {
-  .update-notice-card {
-    transition: none;
-  }
-}
-:root[data-motion='reduced'] .update-notice-card {
-  transition: none;
+  display: none;
 }

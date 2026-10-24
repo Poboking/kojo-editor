@@ -26,9 +26,11 @@
   animation: update-notice-in var(--dur-3) var(--ease-spring);
 }
 
-/* 卡在场时，瞬时 toast 让到卡上方（86px ≈ 卡高 + 间距；toast 自身列从 36px 起底） */
+/* 卡在场时，瞬时 toast 让到卡上方。抬升 = 卡的槽位底 36 + 实测卡高 + 间隙，全部取自
+   `tokens.css` 的 `--notice-*` 族（2026-10-24 真壳量得卡 116 高，原先这行写死 122 = "36 + 86"，
+   那个 86 是估的 ⇒ toast 下沿压在卡的上半截）。 */
 body:has(.update-notice-card) .notification-center {
-  bottom: 122px;
+  bottom: calc(var(--notice-slot-bottom) + var(--notice-card-h) + var(--notice-gap));
 }
 
 /* 窄窗（<480px）：卡吃满可用宽度，留 16px 安全边——toast 容器没有的媒体查询，卡这边补上 */
