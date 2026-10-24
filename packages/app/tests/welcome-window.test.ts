@@ -174,7 +174,7 @@ describe('applyEditorWindow：编辑器态（可缩放、可最大化、下限 9
 
 /**
  * 弹窗态没有系统标题栏 ⇒ 右上角必须有「只退应用」的 ×（启动层自带一枚）。
- * 欢迎页自己的 × 仍是「关闭欢迎页」（收起为 ClosedState），两者不许叠在同一点。
+ * 欢迎页原来的「关闭欢迎页」× 与 ClosedState 已删除：窗内只留这一枚关闭动作。
  */
 describe('弹窗退出钮', () => {
   const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -197,7 +197,11 @@ describe('弹窗退出钮', () => {
     expect(chromeCss).toMatch(/\.app-popup-close\s*\{\s*\n\s*z-index: 3;/);
   });
 
-  it('弹窗里欢迎页自己的 × 左移让位，保留「关闭欢迎页」语义', () => {
-    expect(welcomeCss).toMatch(/\.app-frame-popup \.welcome-screen \.welcome-close \{\s*\n\s*right: 52px;/);
+  it('欢迎页不再渲染第二枚 ×，ClosedState 的样式与组件一并删除', () => {
+    const view = read('../src/ui/WelcomeView.tsx');
+    expect(view).not.toContain('welcome-close');
+    expect(view).not.toContain('ClosedState');
+    expect(welcomeCss).not.toContain('welcome-close');
+    expect(welcomeCss).not.toContain('welcome-closed');
   });
 });

@@ -103,10 +103,6 @@ interface Props {
   crashRecovery: { root: string; files: number } | null;
   onRecoverCrash: () => void;
   onDiscardCrash: () => void;
-  /** 欢迎页被「×」关掉（会话内）；App 据此显示空态而不是死白屏 */
-  closed: boolean;
-  onClose: () => void;
-  onReopen: () => void;
   /** 教程卡片只发语义 id；映射与打开由教程提供方（适配器）解释 */
   onOpenTutorial: (tutorial: WelcomeTutorialId) => void;
 }
@@ -202,60 +198,6 @@ export function countFilesByRoot(files: readonly RecentFileRecord[]): Map<string
   return counts;
 }
 
-/** 关闭后的空态：不让作者对着一屏死白，主动作仍是「打开文件夹…」 */
-function ClosedState({
-  phase,
-  error,
-  recent,
-  tauri,
-  kernelReady,
-  onOpenDirectory,
-  onReopen,
-}: Pick<
-  Props,
-  'phase' | 'error' | 'recent' | 'tauri' | 'kernelReady' | 'onOpenDirectory' | 'onReopen'
->): ReactElement {
-  const opening = phase === 'opening';
-  const canOpen = kernelReady && !opening;
-  return (
-    <div className="welcome welcome-screen welcome-closed">
-      <main className="glass welcome-closed-card">
-        <p className="welcome-closed-brand">kojo-editor</p>
-        <p className="welcome-closed-lead">
-          欢迎页已关闭。
-          {recent.length > 0 ? '最近打开的项目还在，重新打开欢迎页即可继续。' : '随时可以重新打开，或直接选择一个项目文件夹。'}
-        </p>
-
-        {!tauri ? (
-          <div className="notice warn welcome-notice">
-            当前运行在浏览器环境：文件系统能力不可用。请通过桌面壳启动（<code>pnpm tauri dev</code>）。
-          </div>
-        ) : null}
-        {!kernelReady ? (
-          <div className="notice welcome-notice" role="status">
-            内核装配中…
-          </div>
-        ) : null}
-        {error ? (
-          <div className="notice error welcome-notice" role="alert">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="welcome-closed-actions">
-          <button className="primary big welcome-open" onClick={onOpenDirectory} disabled={!canOpen}>
-            <Icon name="files" size="md" />
-            <span>{opening ? '正在打开…' : '打开文件夹…'}</span>
-          </button>
-          <button className="ghost" onClick={onReopen} disabled={opening}>
-            重新打开欢迎页
-          </button>
-        </div>
-      </main>
-    </div>
-  );
-}
-
 /**
  * 通知条家族（`.notice` 底色由 styles.css 供给；本批只加"图标 + 文案"这层呈现）：
  * 浏览器环境 = warn 档、内核装配 = 状态档（转圈）、失败 = error 档、崩溃恢复 = 行动档。
@@ -310,9 +252,6 @@ export function WelcomeView({
   crashRecovery,
   onRecoverCrash,
   onDiscardCrash,
-  closed,
-  onClose,
-  onReopen,
   onOpenTutorial,
 }: Props): ReactElement {
   // 最近文件（MM-7）：未接线（可选 prop 缺席）时退化为稳定空表——区不显示，不炸
@@ -420,20 +359,6 @@ export function WelcomeView({
     setMenuNote,
   ]);
 
-  if (closed) {
-    return (
-      <ClosedState
-        phase={phase}
-        error={error}
-        recent={recent}
-        tauri={tauri}
-        kernelReady={kernelReady}
-        onOpenDirectory={onOpenDirectory}
-        onReopen={onReopen}
-      />
-    );
-  }
-
   const canOpen = kernelReady && !opening;
   const tutorialsOpenable = canOpen;
   // 一次渲染同一个"今天"：卡片之间的"3 天前 / 昨天"必须互相可比
@@ -447,16 +372,6 @@ export function WelcomeView({
       <div className="welcome-scroll">
         <div className="welcome-stage">
           <div className="welcome-card" role="region" aria-label="欢迎">
-            {/* 关闭钮贴卡片右上角：欢迎页不再模拟标签，× 只负责收起本页（不是关窗口）。 */}
-            <button
-              type="button"
-              className="welcome-close"
-              aria-label="关闭欢迎页"
-              title="关闭欢迎页"
-              onClick={onClose}
-            >
-              <Icon name="close" size="sm" />
-            </button>
             <main className="welcome-main">
               {/* ── 首屏第 1 件：品牌头（字号档 = display，页内唯一） ── */}
               {/* 弹窗态没有标题栏：品牌头兼任拖动把手（Tauri 只认带属性的**目标元素**，

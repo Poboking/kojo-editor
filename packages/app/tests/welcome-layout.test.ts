@@ -41,9 +41,6 @@ const base = {
   crashRecovery: null,
   onRecoverCrash: () => {},
   onDiscardCrash: () => {},
-  closed: false,
-  onClose: () => {},
-  onReopen: () => {},
   onOpenTutorial: () => {},
 };
 
@@ -68,20 +65,10 @@ describe('欢迎页 · 去标签栏（用户反馈第 2 条）', () => {
   });
 });
 
-describe('欢迎页 · 卡片与关闭钮', () => {
+describe('欢迎页 · 卡片', () => {
   it('卡片有 aria-label="欢迎"（region 语义，替代旧 tabpanel）', () => {
     const html = render();
     expect(html).toContain('class="welcome-card" role="region" aria-label="欢迎"');
-  });
-
-  it('关闭钮在卡片内部（右上角定位），aria-label / title 正确', () => {
-    const html = render();
-    const cardAt = html.indexOf('class="welcome-card"');
-    const closeAt = html.indexOf('class="welcome-close"');
-    expect(cardAt).toBeGreaterThan(-1);
-    expect(closeAt).toBeGreaterThan(cardAt);
-    expect(html).toContain('aria-label="关闭欢迎页"');
-    expect(html).toContain('title="关闭欢迎页"');
   });
 });
 
@@ -152,15 +139,6 @@ describe('欢迎页 · 内容面不缩水', () => {
     const html = render({ recent: [] });
     expect(html).toContain('welcome-empty');
     expect(html).not.toContain('welcome-recent-list');
-  });
-});
-
-describe('欢迎页 · 关闭态', () => {
-  it('closed 时只剩居中空态，不出现任何标签', () => {
-    const html = render({ closed: true });
-    expect(html).toContain('welcome-closed');
-    expect(html).toContain('重新打开欢迎页');
-    expect(html).not.toContain('welcome-tab');
   });
 });
 

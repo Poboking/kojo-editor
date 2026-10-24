@@ -67,7 +67,7 @@
 }
 
 /* 滚动区兼任居中舞台：卡片用 auto 上下边距在**有空间时**垂直居中，空间不足时
-   边距归零、从顶部开始滚（与 `.welcome-closed` 同款做法，顶部永不被裁）。
+   边距归零、从顶部开始滚（顶部永不被裁）。
    上下内边距相等 ⇒ 卡片中心 = 视口中心。 */
 .welcome-scroll {
   position: relative;
@@ -97,34 +97,6 @@
   max-height: 100%;
   margin: auto 0;
   animation: welcome-rise var(--dur-3) var(--ease-spring);
-}
-
-/* 关闭欢迎页（不是关窗口）：贴卡片右上角，弱化到悬停才亮 */
-.welcome-screen .welcome-close {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 3;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  box-shadow: none;
-  color: var(--fg-dim);
-}
-
-.welcome-screen .welcome-close:hover {
-  background: var(--hover-strong);
-  border-color: transparent;
-  color: var(--fg);
-}
-
-.welcome-screen .welcome-close:active {
-  transform: none;
 }
 
 /* ------------------------------ 主体卡（主栏 + 辅栏） ------------------------------ */
@@ -203,18 +175,6 @@
   align-self: center;
   width: 0.8em;
   height: 0.8em;
-  background: var(--accent);
-  -webkit-mask: var(--kojo-brand-glyph) center / contain no-repeat;
-  mask: var(--kojo-brand-glyph) center / contain no-repeat;
-}
-
-.welcome-screen .welcome-closed-brand::before {
-  content: '';
-  display: inline-block;
-  width: 0.9em;
-  height: 0.9em;
-  margin-right: var(--space-2);
-  vertical-align: -0.14em;
   background: var(--accent);
   -webkit-mask: var(--kojo-brand-glyph) center / contain no-repeat;
   mask: var(--kojo-brand-glyph) center / contain no-repeat;
@@ -1112,59 +1072,6 @@
   line-height: 1.6;
 }
 
-/* ------------------------------ 关闭后的空态 ------------------------------ */
-
-/* 关闭态占满整页并居中（覆盖骨架的纵向排布）；不留死白，主动作仍是打开文件夹 */
-.welcome.welcome-screen.welcome-closed {
-  align-items: center;
-  justify-content: flex-start;
-  /* 矮窗可滚：卡片的上下 auto 边距在有空间时居中、不够时归零，顶部永远不会被裁掉 */
-  overflow: auto;
-  padding: 32px;
-}
-
-.welcome-closed-card {
-  width: min(560px, 100%);
-  margin: auto 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-4);
-  padding: 44px 40px;
-  text-align: center;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--edge-raise), var(--shadow-3);
-  animation: welcome-rise var(--dur-3) var(--ease-spring);
-}
-
-.welcome-closed-brand {
-  margin: 0;
-  font-size: var(--fs-5);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.welcome-closed-lead {
-  margin: 0;
-  max-width: 420px;
-  color: var(--fg-dim);
-  font-size: var(--fs-2);
-  line-height: 1.7;
-}
-
-.welcome-closed-card .welcome-notice {
-  width: 100%;
-  text-align: left;
-}
-
-.welcome-closed-actions {
-  width: min(340px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: var(--space-2);
-}
-
 /* ------------------------------ 窄窗 / 矮窗 ------------------------------ */
 
 /* 矮窗（高 <700px）与窄窗（宽 <1000px）撤销"卡片钉 viewport + 分栏内滚"：
@@ -1223,11 +1130,6 @@
 @media (max-width: 560px) {
   .welcome-scroll {
     padding: 24px 16px;
-  }
-
-  .welcome-screen .welcome-close {
-    top: 10px;
-    right: 10px;
   }
 
   .welcome-main {
@@ -1291,12 +1193,6 @@
   max-height: none;
 }
 
-/* 弹窗右上角最外圈是「退出应用」（.app-popup-close）；欢迎页自己的「关闭欢迎页」×
-   左移一枚让位——两个动作不同，不叠在同一点。 */
-.app-frame-popup .welcome-screen .welcome-close {
-  right: 52px;
-}
-
 /* 矮窗媒体查询（max-height:700px）会把两栏改成整页滚；弹窗里仍要「卡片填窗 + 栏内滚」。
    特异性高于媒体查询里的裸 `.welcome-main` / `.welcome-side`，与顺序无关。 */
 .app-frame-popup .welcome-main,
@@ -1312,19 +1208,6 @@
 .app-frame-popup .welcome-recent-files .welcome-recent-list {
   max-height: calc(var(--welcome-row-h) * 4);
   overflow-y: auto;
-}
-
-/* 关闭欢迎页后的空态也住弹窗里：卡片居中，窗口会按它的尺寸收 */
-.app-frame-popup .welcome.welcome-screen.welcome-closed {
-  padding: 0;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.app-frame-popup .welcome-closed-card {
-  width: min(560px, 100%);
-  margin: 0;
 }
 
 /* 量高态：布局副作用里临时挂上，让卡片回到「自然高度」再读矩形；移除后才落窗。

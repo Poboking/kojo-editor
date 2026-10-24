@@ -390,11 +390,6 @@ export function App(): ReactElement {
    */
   const [ProjectViewComponent, setProjectViewComponent] = useState(createProjectView);
   /**
-   * 欢迎页是否被「×」关掉（用户反馈 8 批；只活在本会话）。关闭不改变 phase：
-   * 有项目时本来就不渲染欢迎页，这里只管无项目分支显示欢迎页还是空态。
-   */
-  const [welcomeClosed, setWelcomeClosed] = useState(false);
-  /**
    * 「开发者的碎碎念」纸条（用户反馈 2，2026-10-18）：初值直接问 localStorage——
    * 只有**从未看过**才为 true，于是"下载后第一次启动"自然只弹一次。关闭（Esc / 遮罩 /
    * ✕ / 两个按钮）写 seen 标记；只活在本会话，不参与 phase 判定。
@@ -600,7 +595,7 @@ export function App(): ReactElement {
       frame.classList.add('welcome-popup-measuring');
       let core: DOMRect | null = null;
       try {
-        core = frame.querySelector<HTMLElement>('.welcome-card, .welcome-closed-card')?.getBoundingClientRect() ?? null;
+        core = frame.querySelector<HTMLElement>('.welcome-card')?.getBoundingClientRect() ?? null;
       } finally {
         frame.classList.remove('welcome-popup-measuring');
       }
@@ -618,7 +613,6 @@ export function App(): ReactElement {
   }, [
     phase,
     project,
-    welcomeClosed,
     recent.length,
     recentFiles.length,
     errorBar?.message,
@@ -2235,9 +2229,6 @@ export function App(): ReactElement {
           crashRecovery={crashRecovery}
           onRecoverCrash={recoverCrash}
           onDiscardCrash={discardCrash}
-          closed={welcomeClosed}
-          onClose={() => setWelcomeClosed(true)}
-          onReopen={() => setWelcomeClosed(false)}
           onOpenTutorial={openWelcomeTutorial}
         />
         {/* 无项目时的 overlay 宿主：教程等模态由插件常驻注册，宿主却只在 ShellLayout 里，

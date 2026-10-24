@@ -108,7 +108,6 @@ const baseProps = {
   onDiscardCrash: () => {},
   closed: false,
   onClose: () => {},
-  onReopen: () => {},
   onOpenTutorial: () => {},
 };
 

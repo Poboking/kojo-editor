@@ -83,12 +83,10 @@ describe('P3-4 ③ 品牌记号（欢迎页，welcome.css 品牌区）', () => {
     expect(welcome).toMatch(/\.welcome-screen \{\s*\n\s*--kojo-brand-glyph: url\("data:image\/svg\+xml,/);
   });
 
-  it('两处品牌都挂上：大标题 `.welcome-brand h1::before` 与关闭卡 `.welcome-closed-brand::before`', () => {
-    for (const sel of ['.welcome-screen .welcome-brand h1::before {', '.welcome-screen .welcome-closed-brand::before {']) {
-      const block = cssBlock(welcome, sel);
-      expect(block).toContain('background: var(--accent)');
-      expect(block).toContain('mask: var(--kojo-brand-glyph) center / contain no-repeat');
-    }
+  it('品牌记号挂在大标题 `.welcome-brand h1::before` 上', () => {
+    const block = cssBlock(welcome, '.welcome-screen .welcome-brand h1::before {');
+    expect(block).toContain('background: var(--accent)');
+    expect(block).toContain('mask: var(--kojo-brand-glyph) center / contain no-repeat');
   });
 
   it('尺寸走 em（跟随标题字号，含界面字号档位），不新增全局字号 token', () => {
