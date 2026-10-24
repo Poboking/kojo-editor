@@ -60,7 +60,7 @@ node tools/debug-cli.mjs stop
 
 | 子命令 | 作用 | 备注 |
 |---|---|---|
-| `serve` | 拉起调试宿+vite+浏览器 | `--headless / --no-browser / --record`（console 落盘）/ `--fresh`（清沙盒）/ `--sandbox/--readonly/--port/--vite-port/--cdp-port/--browser` |
+| `serve` | 拉起调试宿+vite+浏览器 | `--headless / --no-browser / --record`（console 落盘）/ `--fresh`（清沙盒）/ `--sandbox/--readonly/--port/--vite-port/--cdp-port/--browser`。**会话按仓库工作树自动隔离**（`<home>/sessions/<树哈希>/`，多 agent 并发互不可见；`KOJO_DEBUG_SESSION_NAME` 显式命名、`KOJO_DEBUG_SESSION` 直指会话文件） |
 | `status` / `stop` / `url` | 会话健康 / 收会话 / 打印编辑器 URL | 会话文件 `%TEMP%/kojo-debug/session.json`（`KOJO_DEBUG_SESSION` 可指别处） |
 | `open-project <dir> [--writable]` | 真实点击链路开项目 | 自动应答目录对话框；`--writable` 批准写权限，缺省只读浏览；已开同项目幂等直过 |
 | `open-file <路径片段>` | 真实点击文件树开文件 | 角色分组→目录逐层展开；等 Monaco 挂载后回编辑器读数 |
@@ -106,11 +106,18 @@ bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snap
 11. **新能力同步补冒烟**：调试面 / 宿新增可断言能力时，`tools/debug-web-smoke.mjs` 补一条断言（那是这套通道的回归网）。
 12. **改了调试模式的验收口径**：`tools/tests/debug-server.test.ts` + `packages/app/tests/debug-surface.test.ts`
     + `debug-dom-snapshot.test.ts` 全绿，且 `node tools/debug-web-smoke.mjs` **真跑** rc=0（纯文档批豁免）。
+13. **多 agent 并发隔离（2026-10-25 反哺立规，PITFALLS 192）**：会话目录＝`sessionDir(仓库根)`
+    （`<home>/sessions/<树哈希>/`，`debug-lib.mjs` 单源）——session.json / sandbox / appdata /
+    browser-profile / console.log 全在房间里；**`stop` 与 `killProcessesMarked` 只许认领本会话目录**
+    （全局杀＝把别人的会话一起收掉）；`status` 首行必须带会话标识（键＋repoRoot），agent 核对
+    「量的是不是自己的树」。跨树要共享或接管时走显式 env（`KOJO_DEBUG_SESSION_NAME` /
+    `KOJO_DEBUG_SESSION`），不做静默兜底。
 
 ## 六、故障定位速查
 
 | 症状 | 先查 |
 |---|---|
+| **量到别人的树**（端口/模块 URL/插件数与本树不符） | 会话已按工作树隔离（PITFALLS 192 已修）：先 `status` 核首行「会话＝<键>（<本树路径>）」；不对就是接管了显式 env 指到的别人的会话。多树并发无需再手工 `KOJO_DEBUG_HOME`，但**旧版工具写的全局 session.json 仍会被旧代码读到**——各树先更新到带隔离的版本 |
 | serve 中途挂 / 某件套没了 | `status` 的「退出记录」带每个子进程的退出码与时间（serve 输出同步打）；宿侧已加大堆（`--max-old-space-size=4096`，重检索 OOM 的主嫌疑）并有 uncaught 落日志不静默死——重检索把 2325 文件全扫约 10 分钟后挂（exit 13）是本条立规的实测 |
 | 点击全被挡 / 白红页 | `eval` 查 `vite-error-overlay` 在不在＝陈旧错误盖屏，`location.reload()` 即清（新 workspace 包没 `pnpm install` 链上时会出现，PITFALLS 192③） |
 | 项目弹回欢迎页 / 命令注册表「未登记」 | PITFALLS 192 的三成因排查链：error-overlay → serve 日志 grep `reloading`（deps 冷发现，新项目态懒依赖要补进 `optimizeDeps.include`）→ 落点 |

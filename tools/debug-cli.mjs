@@ -47,13 +47,18 @@ import {
   freePort,
   killProcessesMarked,
   portOpen,
+  sessionDir,
+  sessionKey,
   sleep,
   waitFor,
 } from './debug-lib.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const DEBUG_DIR = debugHome();
-const SESSION_FILE = process.env.KOJO_DEBUG_SESSION ?? path.join(DEBUG_DIR, 'session.json');
+// 多 agent 并发隔离（2026-10-25，PITFALLS 192）：会话目录按仓库工作树自动分房——
+// 本树的 serve/status/stop 只看得见本树那一间，跨树互不可见、互不可杀。
+const SESS_DIR = sessionDir(REPO);
+const SESSION_FILE = process.env.KOJO_DEBUG_SESSION ?? path.join(SESS_DIR, 'session.json');
 const die = (msg, code = 1) => {
   console.error(String(msg));
   process.exit(code);
@@ -66,7 +71,9 @@ async function readSession() {
     return JSON.parse(await fsp.readFile(SESSION_FILE, 'utf-8'));
   } catch {
     die(
-      `没有在跑的调试会话（${SESSION_FILE} 不存在）。先起一套：\n  node tools/debug-cli.mjs serve`,
+      `本工作树没有在跑的调试会话（${SESSION_FILE} 不存在；多 agent 并发下会话按工作树隔离，` +
+        `看到的只有自己这棵树）。先起一套：\n  node tools/debug-cli.mjs serve` +
+        `\n（要接管别的会话：KOJO_DEBUG_SESSION=<那个 session.json> 或 KOJO_DEBUG_SESSION_NAME=<名>）`,
       2,
     );
   }
@@ -96,11 +103,13 @@ async function cdpForSession(session, { mustHavePage = true } = {}) {
 /* ------------------------------ serve ------------------------------ */
 
 async function cmdServe(args) {
-  fs.mkdirSync(DEBUG_DIR, { recursive: true });
+  fs.mkdirSync(SESS_DIR, { recursive: true });
   const session = {
     createdAt: new Date().toISOString(),
-    sandbox: path.resolve(args.sandbox ?? path.join(DEBUG_DIR, 'sandbox')),
-    appdata: path.join(DEBUG_DIR, 'appdata'),
+    sessionId: sessionKey(REPO),
+    repoRoot: REPO,
+    sandbox: path.resolve(args.sandbox ?? path.join(SESS_DIR, 'sandbox')),
+    appdata: path.join(SESS_DIR, 'appdata'),
     readonly: args.readonly.map((p) => path.resolve(p)),
   };
   if (args.fresh) {
@@ -198,12 +207,12 @@ async function cmdServe(args) {
     } else {
       // profile 每会话独立（实测坑 2026-10-25：共用一个目录时，被锁/清残损坏的旧 profile
       // 会让 Edge 当场退出 code=21）；陈旧 profile 尽力清，清不掉不拦路（killProcessesMarked 已先收进程）
-      const profile = path.join(DEBUG_DIR, `browser-profile-${process.pid}`);
+      const profile = path.join(SESS_DIR, `browser-profile-${process.pid}`);
       fs.mkdirSync(profile, { recursive: true });
       try {
-        for (const name of await fsp.readdir(DEBUG_DIR)) {
+        for (const name of await fsp.readdir(SESS_DIR)) {
           if (name.startsWith('browser-profile-') && name !== path.basename(profile)) {
-            await fsp.rm(path.join(DEBUG_DIR, name), { recursive: true, force: true, maxRetries: 1 }).catch(() => {});
+            await fsp.rm(path.join(SESS_DIR, name), { recursive: true, force: true, maxRetries: 1 }).catch(() => {});
           }
         }
       } catch {}
@@ -244,6 +253,7 @@ async function cmdServe(args) {
 
   console.log('');
   console.log('✅ 调试会话就绪：');
+  console.log(`   会话       ：${session.sessionId}（按工作树隔离；会话目录 ${SESS_DIR}）`);
   console.log(`   编辑器 URL ：${session.url}   ← 浏览器 / agent 打开这个`);
   console.log(`   调试宿     ：http://127.0.0.1:${session.serverPort}/health`);
   console.log(`   沙盒       ：${session.sandbox}${session.readonly.length ? `（只读根：${session.readonly.join('；')}）` : ''}`);
@@ -256,7 +266,7 @@ async function cmdServe(args) {
 /** serve --record：挂一条常驻 CDP 连接，把 console / 异常 / 网络失败落到 .kojo-debug/console.log */
 async function recordConsole(session) {
   const cdp = await cdpForSession(session);
-  const out = fsp.createWriteStream(path.join(DEBUG_DIR, 'console.log'), { flags: 'a' });
+  const out = fsp.createWriteStream(path.join(SESS_DIR, 'console.log'), { flags: 'a' });
   const line = (s) => out.write(`[${new Date().toISOString()}] ${s}\n`);
   await cdp.send('Runtime.enable');
   await cdp.send('Log.enable').catch(() => {});
@@ -310,6 +320,7 @@ async function cmdStatus() {
   console.log(
     JSON.stringify(
       {
+        会话: `${s.sessionId ?? '?'}（${s.repoRoot ?? '?'}）`,
         调试宿: serverOk ? `✅ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `❌ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
         vite: viteOk ? `✅ :${s.vitePort} ${childLine('vite', s.vitePid, alive(s.vitePid))}` : `❌ :${s.vitePort} ${childLine('vite', s.vitePid, alive(s.vitePid))}`,
         浏览器CDP: cdpOk ? `✅ :${s.cdpPort} ${childLine('browser', s.browserPid, alive(s.browserPid))}` : `— ${childLine('browser', s.browserPid, alive(s.browserPid))}`,
@@ -345,10 +356,11 @@ async function cmdStop() {
       try { process.kill(pid, 'SIGTERM'); } catch {}
     }
   }
-  // 兜底：Edge 子进程会逃出树杀（实测锁着 profile ⇒ 目录清不掉）。按会话目录认领再收一轮。
-  killProcessesMarked(DEBUG_DIR);
+  // 兜底：Edge 子进程会逃出树杀（实测锁着 profile ⇒ 目录清不掉）。**只按本会话目录认领**
+  // （多 agent 并发下按 debugHome 全局杀会把别人的会话一起收掉——PITFALLS 192 的教训）。
+  killProcessesMarked(SESS_DIR);
   try { await fsp.rm(SESSION_FILE, { force: true }); } catch {}
-  console.log('🧹 调试会话已收（' + (pids.length ? `pid ${pids.join('/')}` : '无存活 pid') + '；运行时目录 ' + DEBUG_DIR + '）');
+  console.log('🧹 调试会话已收（' + (pids.length ? `pid ${pids.join('/')}` : '无存活 pid') + '；会话目录 ' + SESS_DIR + '）');
 }
 
 async function withCdp(fn) {

@@ -29,6 +29,31 @@ export function debugHome() {
 }
 
 /**
+ * 会话按**仓库工作树**自动隔离（2026-10-25 多 agent 并发反馈，PITFALLS 192）：
+ * `<home>/sessions/<工作树路径短哈希>/`——session.json / sandbox / appdata / browser-profile
+ * 全在其中。同一棵树共享一个会话；**跨工作树互不可见、互不可杀**（本机多 agent 并发的
+ * 「量到别人的树」由构造消除）。`KOJO_DEBUG_SESSION_NAME` 可显式命名（同树第二个会话 /
+ * 跨工具对齐），`KOJO_DEBUG_SESSION` 仍可直接指会话文件（最高优先）。
+ */
+export function sessionKey(repoRoot) {
+  const custom = process.env.KOJO_DEBUG_SESSION_NAME;
+  if (custom && custom.trim() !== '') {
+    return custom.trim().replace(/[^\w.-]/g, '-').slice(0, 40);
+  }
+  // FNV-1a 短哈希：路径小写归一（Windows 大小写不敏感），8 位十六进制够区分且目录名友好
+  let h = 0x811c9dc5;
+  for (const ch of path.resolve(repoRoot).toLowerCase()) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+export function sessionDir(repoRoot) {
+  return path.join(debugHome(), 'sessions', sessionKey(repoRoot));
+}
+
+/**
  * 杀掉「命令行里带 <mark>」的进程（Windows 实测：Edge 的子进程会逃出 taskkill /T
  * 的树，profile 被锁 ⇒ 目录清不掉 ⇒ 下一轮撞 EBUSY）。经临时 .ps1 执行——
  * Git-Bash 里内联 PowerShell 会被 `$_` 展开搅碎（本批实测）。尽力而为，非 Windows 跳过。
