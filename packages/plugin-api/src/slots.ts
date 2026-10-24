@@ -473,9 +473,15 @@ export interface EditorDocumentSymbolRequest extends EditorDocumentIdentity {
 
 /**
  * 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` /
- * `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`；新增能力 additive
- * 追加联合成员，不改旧成员）。**文档型成员一律 `extends EditorDocumentIdentity`**
- * （带 `languageId` / `version`），`workspaceSymbol` 除外——它不钉在任何一份缓冲区上。
+ * `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`，LS-B0 起另有
+ * `completion` / `hover` / `formatting` / `signatureHelp`；
+ * 新增能力 additive 追加联合成员，不改旧成员）。**文档型成员一律 `extends
+ * EditorDocumentIdentity`**（带 `languageId` / `version`），`workspaceSymbol` 除外——
+ * 它不钉在任何一份缓冲区上。
+ *
+ * **`diagnostics` / `codeAction` 刻意不在本联合里**：它们已经各有专用槽
+ * （`ui.editor.decorator` / `ui.editor.codeAction`），再开一个判别成员就是同一能力
+ * 两条路径。理由写在下方 LS-B0 区块头。
  */
 export type EditorLanguageServiceRequest =
   | EditorDefinitionRequest
@@ -486,7 +492,11 @@ export type EditorLanguageServiceRequest =
   | EditorSemanticTokenRequest
   | EditorReferencesRequest
   | EditorRenameRequest
-  | EditorInlayHintRequest;
+  | EditorInlayHintRequest
+  | EditorCompletionRequest
+  | EditorHoverRequest
+  | EditorFormattingRequest
+  | EditorSignatureHelpRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -595,7 +605,11 @@ export type EditorLanguageServiceResult =
   | EditorSemanticTokenResult
   | EditorReferencesResult
   | EditorRenameResult
-  | EditorInlayHintResult;
+  | EditorInlayHintResult
+  | EditorCompletionResult
+  | EditorHoverResult
+  | EditorFormattingResult
+  | EditorSignatureHelpResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -902,6 +916,184 @@ export interface EditorRenameResult {
   readonly rejectReason?: string;
 }
 
+/* ------------------- 编辑器面第二批（LS-B0，2026-10-24）：4 个新 kind ------------------- */
+
+/**
+ * **本批不加的两个能力**（`diagnostics` / `codeAction`）——不是遗漏，是已经各有专用槽：
+ *
+ * - 诊断 = 槽 `ui.editor.decorator`（{@link LineDecoration} 就是 LSP 诊断的形状：
+ *   行 / 列区间 / severity / message / code / source），供方 `decorate()` 直接产出；
+ * - 快速修复 = 槽 `ui.editor.codeAction`（{@link EditorCodeActionContribution}，
+ *   `provideActions` 已经收 `line` / `scope` / `diagnostics` 三个位置判据）。
+ *
+ * 再给这两件事开一个 `languageService` 判别成员，等于**同一能力两条路径**：
+ * 两处各算一份判据，必然漂移（本仓最贵的一类债）。kojo2 现在绕过这两个槽
+ * （`kojo2-diagnostics.ts` 直接 `setModelMarkers`、`kojo2-code-actions.ts` 自带
+ * 一条 command 通道），要改的是**让它们改注册这两个槽**，不是给它们开新路。
+ */
+
+/**
+ * 补全请求（LS-B0 之一）。
+ *
+ * 与 `definition` 同族（文件 + 光标位置），多带**触发字符**：键入 `.` / `:` 这类字符
+ * 引起的补全，候选集与手动触发（`Ctrl+Space`）不同，而"这个字符算不算触发符"是
+ * **语言知识**——宿主只把字符原样递来，不判定。
+ */
+export interface EditorCompletionRequest extends EditorDocumentIdentity {
+  readonly kind: 'completion';
+  readonly path: string;
+  /** 模型全文（补全要看的上下文就在光标前后，不能只看当前行） */
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+  /** 触发字符（键入的那一个字符）；缺省 = 手动触发 */
+  readonly triggerCharacter?: string;
+}
+
+/**
+ * 候选的中性类别（宿主按它挑图标与排序档，**零语言知识**）。
+ * 具体是什么（ERB 函数 / `.kojo` 时机词 / 变量名）由供方决定，写进 `label`。
+ */
+export type EditorCompletionItemKind =
+  | 'keyword'
+  | 'function'
+  | 'variable'
+  | 'value'
+  | 'snippet'
+  | 'text';
+
+/** 一条补全候选 */
+export interface EditorCompletionItem {
+  /** 列表里显示的字面（也是缺省的插入文本） */
+  readonly label: string;
+  readonly kind?: EditorCompletionItemKind;
+  /** 行尾浅色补充（类型 / 形参摘要） */
+  readonly detail?: string;
+  /** 展开的说明文档（纯文本，多行用 `\n`） */
+  readonly documentation?: string;
+  /** 插入文本（缺省 = `label`）；含占位符的走 `snippet` 类别 */
+  readonly insertText?: string;
+  /** 排序权重（字典序，小在前）；缺省 = 宿主按 `label` 排 */
+  readonly sortText?: string;
+}
+
+/** 补全响应；空数组 = 认这个位置但一个候选都没有（**不猜**，宿主不弹窗） */
+export interface EditorCompletionResult {
+  readonly kind: 'completion';
+  readonly items: readonly EditorCompletionItem[];
+}
+
+/**
+ * 悬停请求（LS-B0 之二）——与 `definition` 逐字同族。
+ *
+ * 悬停是**单答**能力：浮层只有一块，两家各说一套只会互相盖住。故宿主按注册顺序问，
+ * **第一家给出 `contents` 的说了算**（与 `rename` 同一条纪律）。
+ */
+export interface EditorHoverRequest extends EditorDocumentIdentity {
+  readonly kind: 'hover';
+  readonly path: string;
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+}
+
+/**
+ * 悬停响应。`contents` 是**纯文本**（多行用 `\n`）：契约不引入 Markdown，
+ * 免得每个供方都要关心宿主怎么渲染；需要强调的地方由供方用行结构表达。
+ * 空串 = 认这个位置但无话可说（宿主不弹浮层，也不去问下一家——见"单答"）。
+ */
+export interface EditorHoverResult {
+  readonly kind: 'hover';
+  readonly contents: string;
+}
+
+/**
+ * 一处文本编辑（`formatting` 用）。
+ *
+ * **与 `EditorTextEdit` 的分工**（别混）：`EditorTextEdit` 是**整行**替换
+ * （`fromLine`..`toLine` 整段换掉，用于 `.kojo` 的语法糖改写，贡献方自带缩进）；
+ * 本类型是**列级**区间替换（可只动行内一段），用于格式化这类需要精确到列的场景
+ * ——与 `EditorRenameEdit` 同族。
+ *
+ * 列缺省口径：`startColumn` 缺省 = 行首，`endColumn` 缺省 = 行尾；
+ * `endLine` 可以与 `startLine` 不同（跨行替换）。**不做"插入到某行之前/之后"的
+ * 特殊形态**——`startLine == endLine` 且两列相同就是零宽插入，一种形态表达全部。
+ */
+export interface EditorRangeEdit {
+  readonly startLine: number;
+  readonly startColumn?: number;
+  readonly endLine: number;
+  readonly endColumn?: number;
+  readonly newText: string;
+}
+
+/**
+ * 格式化请求（LS-B0 之三）——整篇文本。
+ *
+ * **单答**：同一篇文本两份格式化结果只会打架，故第一家给出 `edits` 的说了算
+ * （给出空数组也算"我认这篇、且不需要改"，不再问下一家）。
+ */
+export interface EditorFormattingRequest extends EditorDocumentIdentity {
+  readonly kind: 'formatting';
+  readonly path: string;
+  readonly text: string;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+}
+
+/** 格式化响应：编辑集（按行号升序给出；宿主负责按降序落地，避免坐标位移） */
+export interface EditorFormattingResult {
+  readonly kind: 'formatting';
+  readonly edits: readonly EditorRangeEdit[];
+}
+
+/**
+ * 签名帮助请求（LS-B0 之四）——与 `definition` 同族（文件 + 光标位置）。
+ *
+ * 与 `inlayHint` 的分工（契约里早有记录）：签名帮助是**拉**（光标进括号弹一次浮层），
+ * 行内提示是**常驻**。两者数据源可以同源，呈现面互不替代。
+ *
+ * 为什么需要它（回应 `app/src/monaco/kojo-signature.ts` 头注里"暂不加成员"的旧判断）：
+ * 那条判断的理由是"唯一缺的知识是 `game.adapter` 的槽语义表，其余是引擎级语法"，
+ * 在当时成立。但"引擎级语法"具体指**哪一门语言的**括号 / 逗号 / 引号规则——
+ * kojo2 与 ERB 的实参切分并不相同（跨行收未闭合括号、字符串内逗号、`#DIM` 形参名）。
+ * 只要这段胶水留在宿主，这门语言的签名帮助就**无法整块搬进插件**。故按该注自己
+ * 写明的条件（"将来若插件要交自己的形参表再按 additive 形态加成员"）补上成员。
+ */
+export interface EditorSignatureHelpRequest extends EditorDocumentIdentity {
+  readonly kind: 'signatureHelp';
+  readonly path: string;
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+}
+
+/** 一份签名（`label` 原样显示，宿主不重新拼装） */
+export interface EditorSignature {
+  /** 整串签名（如 `KOJO_DEFINE_KOJO_INFO_K1000(CHARA_ID)`） */
+  readonly label: string;
+  /** 形参名（逐格高亮用；顺序即形参顺序） */
+  readonly parameters: readonly string[];
+  /** 光标落在第几格（0 基；越界由宿主夹取） */
+  readonly activeParameter: number;
+  /** 展开说明（纯文本，可缺省） */
+  readonly documentation?: string;
+}
+
+/** 签名帮助响应；空数组 = 认这个位置但给不出签名 */
+export interface EditorSignatureHelpResult {
+  readonly kind: 'signatureHelp';
+  readonly signatures: readonly EditorSignature[];
+  /** 多份签名时默认高亮哪一份（0 基；缺省 = 0） */
+  readonly activeSignature?: number;
+}
+
 /**
  * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
  *
@@ -919,10 +1111,13 @@ export interface EditorRenameResult {
  * 槽按**注册顺序**交回贡献方，宿主按这个顺序逐家问，**不排序、不投票**：
  *
  * - 集合型（definition / references / documentSymbol / foldingRange / codeLens /
- *   semanticToken / inlayHint / workspaceSymbol）：各家结果**取并集**并按契约字段去重；
+ *   semanticToken / inlayHint / workspaceSymbol / completion）：
+ *   各家结果**取并集**并按契约字段去重；
  *   一家抛错只让这一家缺席（可见 `console.warn`），不让整篇结果消失。
- * - 单答型（rename）：**第一家**给出 `EditorRenameResult` 的说了算，后面的不再问——
- *   "改哪些位置、怎么改"不能被两家并集拼出来。
+ * - 单答型（rename / hover / formatting / signatureHelp）：**第一家**给出对应结果的说了算，
+ *   后面的不再问——"改哪些位置、浮层说哪句话、怎么排版、签名长什么样"都不能被两家并集拼出来。
+ *   给出**空结果**也算作答（`hover.contents === ''` / `formatting.edits === []` /
+ *   `signatureHelp.signatures === []`），同样不再问下一家。
  * - 认不出 / 不服务：返回 `undefined`；宿主把它当"这家弃权"，继续问下一家。
  *   返回空结果则有语义（见三态），**不等于弃权**。
  *

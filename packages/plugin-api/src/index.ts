@@ -629,6 +629,22 @@ export type {
 export type { EditorInlayHint, EditorInlayHintRequest, EditorInlayHintResult } from './slots';
 export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines, unicodeTokenAt } from './semantic-locate';
 
+/* ---- 编辑器面第二批（LS-B0 独占追加区块；勿在他处重排）：4 个新 kind 的请求/响应 ---- */
+export type {
+  EditorCompletionItem,
+  EditorCompletionItemKind,
+  EditorCompletionRequest,
+  EditorCompletionResult,
+  EditorFormattingRequest,
+  EditorFormattingResult,
+  EditorHoverRequest,
+  EditorHoverResult,
+  EditorRangeEdit,
+  EditorSignature,
+  EditorSignatureHelpRequest,
+  EditorSignatureHelpResult,
+} from './slots';
+
 /* ---- W7 NAV-SCOPE 独占追加区块（勿在他处重排）：行→归属 / 范围归属 / 候选排序与预算 ---- */
 export {
   candidateRank,

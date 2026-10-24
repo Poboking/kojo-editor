@@ -257,10 +257,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 已知可减面（本批不做，记在这）：`ui-kit/index.tsx` 按件拆文件，让开机侧只为真用到的那几枚
     // 付费（约 −12 KB），与第二波「ui-kit 采纳迁移」并线。
     // 闸随之 3,050 → 3,100（+1.6% 余量）；文件闸 210 不动（现读数 209，余量 1）。
+    // 2026-10-24（LS-B0 · 语言服务契约扩 4 kind；rebase 到 dev 后的合尺增量）：+9 KB，**零新文件**。
+    // 增量逐块点名（两枚，都在 `@kojo/plugin-api` 上，宿主开机必然 import）：
+    //   - `plugin-api/slots` +8.3 KB：`ui.editor.languageService` 新增 4 个判别成员
+    //     （completion / hover / formatting / signatureHelp）与 `EditorRangeEdit`，
+    //     外加**为什么只加 4 个而不加 6 个**（diagnostics / codeAction 各有专用槽）那段理由。
+    //     增量里九成是中文注释——契约层把"为什么"写在成员旁边是本仓的既定形态，
+    //     不为过闸把理由搬走（搬走就等于下一个改这张表的人看不到它）。
+    //   - `plugin-api/index` +0.4 KB：这 12 个新类型的具名导出。
+    // 没有整包回灌：成员断言（插件包只许两个常驻 + 两个已知漏点）仍全绿；文件闸不动。
+    // 合尺后闸 3,100 → 3,120（余量约 0.3%）：这是**下限纪律**，
+    // 下一枚面模块落地前请先减面（`ui-kit/index.tsx` 按件拆文件约 −12 KB，见上一段），
+    // 不要顺手把这个数再抬一格。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤210 文件 / ≤3,100 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_100);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤210 文件 / ≤3,120 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_120);
     expect(files.length).toBeLessThanOrEqual(210);
   });
 });

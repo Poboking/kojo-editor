@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 |---|---|
 | 日期 | 2026-10-24 |
-| 状态 | **设计稿**：只定包归属与迁移顺序，不动代码 |
+| 状态 | **B0 已落地**（契约 + 取数腿 + 单测）；B1–B5 仍是设计稿，只定包归属与迁移顺序 |
 | 依据 | `docs/KOJO-2.0-LANGUAGE-SPEC.md` §1 分层 / §10 Adapter 契约 / 附录 C.1 SDK 契约补充；`docs/BOARD.md` 的 `K2-D0` / `K2-CONTRACT` / `K2-CORE-PKG` |
 | 一句话 | **语言核心已经是包（`@kojo/kojo-core` 11,060 行）；缺的是「编辑器面」——它现在整块住在宿主里（29 文件 / 17,718 行）。本方案把编辑器面按 SDK 分层切成三个包，并先补契约缺口。** |
 
@@ -25,14 +25,22 @@
 
 ## 2. 目标包布局（三个包 + 一条契约）
 
+> 包名口径：**不出现 `kojo2`**。2.0 语法是 1.0 的**超集**，将来彻底取代 1.0；
+> 在包名上标版本号，等于把"这是另一门语言"写进依赖图——而它其实是同一门语言的
+> 下一版。包名沿用既有 `@kojo/kojo-*`（库）/ `@kojo/plugin-*`（插件）两条线。
+
 ```
-@kojo/kojo2-lang        语言面库（非插件）：纯函数 + 纯数据，不碰 Monaco、不碰 IO
-@kojo/plugin-kojo2      编辑器面插件：把 lang 的实现接到 ui.editor.languageService / ui.monaco.*
-@kojo/kojo2-sdk         adapter 面向的口上 profile 契约（profile / domainSymbols / eventCatalog /
-                        storageClasses / programFeatures / diagnosticNamespace）
+@kojo/kojo-lang          语言面库（非插件）：纯函数 + 纯数据，不碰 Monaco、不碰 IO
+@kojo/plugin-kojo-lang   编辑器面插件：把 lang 的实现接到 ui.editor.languageService / ui.monaco.*
+@kojo/kojo-sdk           adapter 面向的口上 profile 契约（profile / domainSymbols / eventCatalog /
+                         storageClasses / programFeatures / diagnosticNamespace）
 ```
 
-### 2.1 `@kojo/kojo2-lang`（库，不是插件）
+与既有包的相邻关系：`@kojo/plugin-kojo-sugar` 是 **1.0 的糖层**（升糖 / 反糖 / 格式化规则），
+`@kojo/plugin-kojo-lang` 是 **2.0 的整门语言面**；两者并存到 B5 收尾，届时 sugar 的
+`computeFormatEdits` 归 `kojo-lang`。
+
+### 2.1 `@kojo/kojo-lang`（库，不是插件）
 
 放**与编辑器无关**的判据：符号表、声明表、project-index、sourcemap-model、expand-view、diagnostics 的纯函数部分、indent/format 的纯算法。判据标准：**能不能在 node 里 import 就跑**。
 
@@ -40,15 +48,15 @@
 - 不依赖：`monaco-editor`、`react`、`kernel`。
 - 与 `kojo-core` 的界线：core 管"这段文本是什么"（AST/诊断码/编译），lang 管"编辑器要知道什么"（符号树怎么摆、缩进阶梯怎么算、格式化后长什么样）。core 里已有 `incremental.ts`，增量重建留在 core。
 
-### 2.2 `@kojo/plugin-kojo2`（插件）
+### 2.2 `@kojo/plugin-kojo-lang`（插件）
 
 把 lang 的产出接到既有槽位。**能接的立刻接，接不上的先扩契约**（见 §3）。
 
 - 提供：`ui.editor.languageService` 贡献（`languageId: 'kojo2'`）+ `ui.monaco.language` 贡献（Monarch 词法 / 主题 / 缩进规则 / 回车规则）。
-- 依赖：`@kojo/plugin-api`、`@kojo/kojo2-lang`、`@kojo/kojo-core`。
+- 依赖：`@kojo/plugin-api`、`@kojo/kojo-lang`、`@kojo/kojo-core`。
 - 铁律：**不 import 任何 adapter**，游戏事实经 `game.adapter` 槽取（现状已如此）。
 
-### 2.3 `@kojo/kojo2-sdk`（adapter 契约）
+### 2.3 `@kojo/kojo-sdk`（adapter 契约）
 
 规范附录 C.1 的八项（`gameFingerprint` / `encodingPolicy` / `layerPolicy` / `storageClasses` / `programFeatures` / `diagnosticNamespace` / `conformanceSuite` / `capability` / `sourceMap`）目前只有 `kojo-core/src/adapter.ts` 一份**内部形状**，没有任何槽位承载它——`grep KojoAdapter` 在 `kojo-core` 之外**零命中**。
 
@@ -60,38 +68,72 @@
 
 ## 3. 契约缺口（这是真正的拦路石，先解决它）
 
-`ui.editor.languageService` 今天能表达的能力只有 9 种：
+`ui.editor.languageService` 原来能表达的能力只有 9 种：
 `definition` / `references` / `rename` / `documentSymbol` / `foldingRange` / `workspaceSymbol` / `codeLens` / `semanticToken` / `inlayHint`。
 
-kojo2 编辑器面需要、而槽位**没有**的：
+kojo2 编辑器面需要、而槽位**没有**的，实测是 **4 个**（初版方案写的 6 个里有两个是误判，见下）：
 
 | 缺的能力 | 宿主现有实现 | 后果 |
 |---|---|---|
 | `completion` | `kojo2-completion.ts` 862 行 + snippets 154 | 补全只能留在宿主 |
 | `hover` | `kojo2-hover.ts` 198 | 悬停只能留在宿主 |
-| `diagnostics` | `kojo2-diagnostics.ts` 409 | 诊断只能留在宿主（**最伤**：诊断是语言包的核心价值） |
-| `codeAction` | `kojo2-code-actions.ts` 1713 | 快速修复只能留在宿主 |
-| `formatting` / `onTypeFormatting` | `kojo2-format.ts` 777 | 格式化只能留在宿主 |
+| `formatting` | `kojo2-format.ts` 777 | 格式化只能留在宿主 |
 | `signatureHelp` | `kojo2-signature.ts` 752 | 实参提示只能留在宿主 |
 
-**做法**：按 `ui.editor.languageService` 已有的「单槽 + `kind` 判别」形态**additive 扩 6 个 kind**，每个 kind 的形状照既有 `definition` 的三态约定（`undefined` = 不认这个请求 / `{items: []}` = 认但没有 / `{items: [...]}` = 结果）。旧贡献方零改动。
+### 3.1 被排除的两个（**已各有专用槽，不是缺口**）
 
-这一步做完，17.7k 行里 **约 5.5k 行**（completion / hover / diagnostics / codeAction / format / signature）才有地方可去。
+初版把 `diagnostics` 与 `codeAction` 也列成缺口，核对后是**误判**：
+
+| 能力 | 既有槽 | 形状 |
+|---|---|---|
+| 诊断 | `ui.editor.decorator` | `LineDecoration` 就是 LSP 诊断的形状（行 / 列区间 / `severity` / `message` / `code` / `source`），供方 `decorate()` 直接产出；`offloadKind` 还能把它挪进计算池 |
+| 快速修复 | `ui.editor.codeAction` | `provideActions({ path, text, project, line, scope, diagnostics })` 已收齐三个位置判据，`edits` / `run` 两条落地通道都在 |
+
+再给这两件事开 `languageService` 判别成员 = **同一能力两条路径**：两处各算一份判据，
+必然漂移，且漂移表现为"有时候对、有时候不对"，没人会想到去查契约。
+
+kojo2 现在确实**绕过**了这两个槽（`kojo2-diagnostics.ts` 直接 `setModelMarkers`、
+`kojo2-code-actions.ts` 自带一条 command 通道），但要改的是**让它们改注册这两个槽**，
+不是给它们开新路。这一步归 B3。
+
+### 3.2 做法
+
+按 `ui.editor.languageService` 已有的「单槽 + `kind` 判别」形态**additive 扩 4 个 kind**，
+每个 kind 的形状照既有 `definition` 的三态约定（`undefined` = 不认这个请求 /
+空结果 = 认但没有 / 有结果 = 结果）。旧贡献方零改动。
+
+多源口径分两组（写进契约头注）：
+- **集合型**（`completion`）：各家并集 + 按契约字段去重；
+- **单答型**（`hover` / `formatting` / `signatureHelp`）：第一家作答的说了算，
+  **给出空结果也算作答**（`''` / `[]` 不再问下一家），弃权只有 `undefined` 一种写法。
+
+这一步做完，17.7k 行里 **约 2.6k 行**（completion / hover / format / signature）有了去处；
+diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 
 ---
 
 ## 4. 迁移分批（每批可独立合入、可独立回滚）
 
-| 批 | 内容 | 判据（DoD） |
-|---|---|---|
-| **B0** | 契约：`ui.editor.languageService` 扩 6 个 kind（只加类型与宿主转发，无实现搬动） | 双 typecheck；既有贡献方零改动；新增 kind 各有一条"不认就跳过"的宿主单测 |
-| **B1** | 建 `@kojo/kojo2-lang`：搬 `symbols` / `declarations` / `project-index` / `sourcemap-model` / `expand-view` / `lexicon` / `constants`（约 3.2k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react |
-| **B2** | 建 `@kojo/plugin-kojo2`：先接**槽位已支持**的 5 项（definition / references / documentSymbol / foldingRange / inlayHint） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这 5 项**无人应答**（可见退化，不静默） |
-| **B3** | 接 B0 新扩的 6 项（diagnostics 先做，价值最高） | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） |
-| **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | 主题 token 名不变（`theme-contrast` 三档门禁不破） |
-| **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo2-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden |
+| 批 | 内容 | 判据（DoD） | 状态 |
+|---|---|---|---|
+| **B0** | 契约：`ui.editor.languageService` 扩 **4** 个 kind + 四条取数腿（纯合并函数，不装 provider） | 双 typecheck；既有贡献方零改动；新增 kind 各有一条"不认就跳过"的单测 | ✅ 2026-10-24 |
+| **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `project-index` / `sourcemap-model` / `expand-view` / `lexicon` / `constants`（约 3.2k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | |
+| **B2** | 建 `@kojo/plugin-kojo-lang`：先接**槽位已支持**的 5 项（definition / references / documentSymbol / foldingRange / inlayHint） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这 5 项**无人应答**（可见退化，不静默） | |
+| **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽** | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | |
+| **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | 主题 token 名不变（`theme-contrast` 三档门禁不破） | |
+| **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden | |
 
 **为什么这个顺序**：B1 是纯搬（零语义变化，风险最低，先拿掉 3.2k 行）；B2 用**现成槽位**证明"插件接得上"；B3 才动契约扩出来的新面；B4 碰主题（有门禁，放后）；B5 才删宿主。
+
+**B0 的实际交付**（2026-10-24）：
+- 契约：`packages/plugin-api/src/slots.ts` 四个新判别成员 + `EditorRangeEdit`（列级编辑，与整行的 `EditorTextEdit` 分工写明）；
+- 取数腿：`packages/app/src/monaco/kojo-language-service-legs.ts` 四条纯合并函数 + `formattingRequestOf`；
+- 单测：`packages/app/tests/kojo-language-service-legs.test.ts`（19 项）、
+  `packages/plugin-api/tests/language-service-kinds.test.ts`（4 项，钉住"diagnostics / codeAction 不许加回来"）。
+
+**B0 刻意不装 provider**：四个能力的宿主原生实现还在跑，此刻再挂一枚 provider，补全会翻倍、
+悬停会出两段、格式化会按注册顺序抢答——那是**改既有行为**，与 B0 的"零改动"判据冲突。
+`install*Provider` 与 `kojo2-*.ts` 的删除必须是**同一步**（B2/B3）。
 
 ---
 
@@ -101,13 +143,13 @@ eraFL 今天**没有** `.kojo` 文件，所以 B1–B4 对它的直接收益是�
 
 1. 规范附录 C 把 **eraFL 列为第四个 adapter**（验证字符串值 / `RESULTS` 元数据 / `PRINTDATA` 路线）——它**是** kojo2 的验证目标之一，不是"用不上"。
 2. eraFL 的 ERB 侧已经吃到「一切皆插件」的红利（家族索引 / 变量字典 / 指令表 / 约定规则 / 口上 XML 服务全是 adapter 提供的）；kojo2 侧若继续留在宿主，就会出现**同一部游戏两种归属**的分裂。
-3. B5 的 `@kojo/kojo2-sdk` 一旦存在，eraFL 只要写一份 profile 就能让 kojo2 的语法在 eraFL 工程里可用——**这才是"适配更多 era 类游戏"的机制**，而不是给某一部游戏打补丁。
+3. B5 的 `@kojo/kojo-sdk` 一旦存在，eraFL 只要写一份 profile 就能让 kojo2 的语法在 eraFL 工程里可用——**这才是"适配更多 era 类游戏"的机制**，而不是给某一部游戏打补丁。
 
 ---
 
 ## 6. 明确不做
 
 - **不在 D0 裁决前建包**：`K2-D0` / `K2-CONTRACT` 未拍板时建包，等于把待裁决项做成既成事实。
-- **不把 Monaco 类型塞进 `kojo2-lang`**：包一旦 import `monaco-editor`，它就只能被宿主用，插件化立刻倒退。
+- **不把 Monaco 类型塞进 `kojo-lang`**：包一旦 import `monaco-editor`，它就只能被宿主用，插件化立刻倒退。
 - **不为 kojo2 单独发明一套插件机制**：复用 `ui.editor.languageService` 的单槽 + `kind` 判别，只加成员、不加新槽。
 - **不在 B1 顺手"优化"算法**：搬迁批的唯一判据是"行为逐字不变"，优化另开批。
