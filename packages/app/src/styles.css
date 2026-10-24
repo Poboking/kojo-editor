@@ -1231,11 +1231,6 @@ textarea {
 .toast-error .toast-icon {
   color: var(--red);
 }
-.toast-message {
-  flex: 1;
-  line-height: 1.6;
-  padding-top: 1px;
-}
 /* toast 动作按钮：accent 淡底（与关闭叉拉开层级） */
 .toast-action {
   flex: none;

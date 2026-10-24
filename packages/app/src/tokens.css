@@ -99,6 +99,31 @@
   /* 顶缘抬升色的淡出距离：玻璃面的"光从上面来"在多高之内收干净。缺省 96px 是给浮层/模态这种
      几百高的面；矮面（右键菜单 ~150px）自己覆盖成 56px，否则整面都是渐变、顶边高光读不出来。 */
   --glass-fade: 96px;
+  /* 遮罩压暗族（scrim）与浮层实描边族（rim）——视觉批十一 R6 债一：R5 把 light / mint-dark 的遮罩
+     收口写进 `shell-notices.css` 时带进来 20 枚裸 `rgba()`（全仓非 token CSS 的裸 rgba 因此从 125
+     涨到 146）。这里把那些字面量**逐字**收进定义点、切片改吃 `var()`，逐枚终值不变，由新建的
+     `shell-notices-token-discipline.test.ts` 拿改前字面量当期望值钉住（同 `--font-code` 那条
+     "CSS 与 TS 互抄"的对拍口径）。
+     分工：`-a/-b` = 遮罩径向渐变的两端（顶缘浅、边缘深）；`-fill` = 渐变底下的实底；
+     `query-*` = 只读查询面（比对 / 预览，比破坏性确认面轻一档）；`-picker` = 命令面板那一档；
+     `-solid` = 玻璃旋钮 0%（实心档，没有磨砂只剩压暗）；`-nofilter` = 老内核无 backdrop-filter 的
+     回落；`rim-1 / rim-solid` = 浮层与本体的实描边（浅色档"边界靠底色 + 一条线认出来"的那条线）。
+     ⚠ 本块登记的是 **dark 档现值**，逐字抄自 `styles.css` / `styles-project.css` 里那五条遮罩规则——
+     那两档仍写自己的字面量（本批无所有权，不许顺手改），所以 dark 档这两族今天是"登记而未消费"：
+     对拍闸逐枚比两侧字符串，谁改了styles 档的遮罩色而忘了这里，当场红。 */
+  --scrim-a: rgba(0, 0, 0, 0.28);
+  --scrim-b: rgba(0, 0, 0, 0.55);
+  --scrim-fill: rgba(8, 10, 13, 0.4);
+  --scrim-query-a: rgba(0, 0, 0, 0.16);
+  --scrim-query-b: rgba(0, 0, 0, 0.34);
+  --scrim-query-fill: rgba(8, 10, 13, 0.28);
+  --scrim-picker: rgba(8, 10, 13, 0.35);
+  --scrim-solid: rgba(0, 0, 0, 0.45);
+  --scrim-nofilter: rgba(0, 0, 0, 0.5);
+  /* dark 档的浮层描边就是既有控件描边（`--border`）：本族在 dark 档不引入新色相，只给 light / mint
+     一档可翻的槽位（那两档的描边语义反转，见 `themes/light.css` 的 rim 注记）。 */
+  --rim-1: var(--border);
+  --rim-solid: var(--border);
   /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
      全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个
      **按角色取面**的入口（值指向既有档），换主题色时一处联动。`sunken` 比 `--bg` 再低半档，

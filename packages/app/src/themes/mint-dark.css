@@ -118,6 +118,25 @@
   --hover-bg: var(--bg-3);
   --text: var(--fg);
   --text-dim: var(--fg-dim);
+
+  /* —— 遮罩压暗（scrim）与浮层实描边（rim）：本档的收口终值（R6 债一，逐字搬自 R5 写在
+     `shell-notices.css` ⑤ 里的那 9 枚裸 rgba；切片现在只吃 var()，终值一字不变，对拍见
+     `shell-notices-token-discipline.test.ts`）。
+     身份线：纯黑径向 + 蓝黑底（`rgba(8,10,13)`）在墨绿底上读成"蓝雾"，本档一律换墨绿；
+     rim 用淡青白（同 `--glass-edge` 那族），因为墨绿底 + 深色代码面本来就是低反差的一对，
+     边界只能靠一条亮线认出来。
+     ⚠ 本档不给 `--scrim-picker / --scrim-nofilter`：命令面板的磨砂遮罩仍由本文件末尾那条
+     `[data-theme='mint-dark'] .picker-backdrop` 规则供色，老内核回落由 dark 档基座兜——
+     两处都不是切片的消费面，此处登记反而成第二张口径（见下条注记的修正）。 */
+  --scrim-a: rgba(2, 10, 6, 0.36);
+  --scrim-b: rgba(2, 10, 6, 0.64);
+  --scrim-fill: rgba(5, 12, 8, 0.48);
+  --scrim-query-a: rgba(2, 10, 6, 0.22);
+  --scrim-query-b: rgba(2, 10, 6, 0.42);
+  --scrim-query-fill: rgba(5, 12, 8, 0.34);
+  --scrim-solid: rgba(5, 12, 8, 0.56);
+  --rim-1: rgba(191, 232, 210, 0.34);
+  --rim-solid: rgba(191, 232, 210, 0.42);
 }
 
 /* ----------------------------------------------------------------------------
@@ -151,9 +170,19 @@
 :root[data-theme='mint-dark'] .picker-backdrop {
   background: rgba(6, 12, 9, 0.38);
 }
-/* （老内核 @supports 回落与 data-glass='solid' 回落两条纯黑遮罩规则特异性均低于上面的
-   `:root[data-theme] .xxx` 作用域规则且在本文件之前载入，绿化自动覆盖到位，无需另写） */
-/* 欢迎页极光：第二团紫斑（rgba(124,92,255)）与薄荷世界观冲突 → 换冰青斑，
+/* ⚠ 事实纠正（R6 债四 · 2026-10-24；这条注记原先写反了，原文称"老内核 @supports 回落与
+   data-glass='solid' 回落两条纯黑遮罩规则特异性均低于上面的 `:root[data-theme] .xxx` 作用域规则
+   且在本文件之前载入，绿化自动覆盖到位，无需另写"）。现行级联下**只有前半成立**：
+    - 回落一（老内核 `@supports not`）在 `styles.css` / `styles-project.css` 里都是 `.overlay-backdrop`
+      这类裸类 (0,1,0)，确实低于上面的 (0,3,0) 绿化规则 ⇒ 无需另写（这半句至今对）；
+    - 回落二（`data-glass='solid'`）的选择器是 `:root[data-glass='solid'] .overlay-backdrop` = **(0,3,0)，
+      与本文件同分**，而它在**懒档** `styles-project.css`（`App.tsx` 的 loadProjectView 链，晚于整条
+      main.tsx 静态链，也就晚于本文件）又出现一次 ⇒ 同分后置者赢，本档的绿化在**项目态**被那条纯黑吃掉。
+   谁在管这件事：`shell-notices.css` ⑤ —— main.tsx 静态链里排在 themes/*.css 之后的那份壳层切片，
+   用 `:root[data-theme='mint-dark'][data-glass='solid'] .…`
+   (0,4,0) 稳压懒档同分规则，并把 solid 终值登记在本文件的 `--scrim-solid / --rim-solid`（R6 债一）。
+   本文件因此**不重复写**那条 solid 规则，也不再指望"自动覆盖到位"。 */
+/* 欢迎页极光：第二团紫斑（`rgba(124,92,255)` 一族）与薄荷世界观冲突 → 换冰青斑，
    与首团 accent 光斑同族不同调，保留"两团光"的纵深构图 */
 :root[data-theme='mint-dark'] .welcome::before {
   background:
