@@ -70,6 +70,14 @@ const CORPUS_ENTRIES = {
   eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
 };
 
+/**
+ * 缺席快路（`corpus` 且自动发现判定语料不在位）唯一的入口：报告是两个纯函数
+ * （`skipReport` / `formatCorpusReport`），真链路（core / sugar / eratw / main.ts）一行用不上。
+ */
+const CORPUS_ABSENT_ENTRIES = {
+  corpus: '/packages/kojo-conformance/src/corpus.ts',
+};
+
 /** language 子命令需要额外加载的 TS 入口（语言套件纯逻辑 + 可选 eraTW 注入） */
 const LANGUAGE_ENTRIES = {
   language: '/packages/kojo-conformance/src/language.ts',
@@ -81,6 +89,9 @@ const LANGUAGE_ENTRIES = {
  *
  * `configFile` 指向仓库的 `vitest.config.ts`：那份配置是**包别名（`@kojo/*`）的单一真源**，
  * 这里复用它，避免在工具里抄第二份 alias 表（抄了必漂移）。
+ *
+ * `kind === 'corpus-absent'` 时连 `main.ts` 都不载（见 `CORPUS_ABSENT_ENTRIES`）：那枚入口
+ * 把整条真链路拖进 SSR，本机实测单体 67.1s、六枚齐载 137–140s。
  */
 async function loadModules(kind) {
   const server = await createServer({
@@ -91,11 +102,22 @@ async function loadModules(kind) {
     server: { middlewareMode: true },
   });
   try {
-    const main = await server.ssrLoadModule(ENTRY);
-    if (typeof main.main !== 'function') throw new Error('src/main.ts 未导出 main()');
-    const modules = { main };
+    const modules = {};
+    if (kind !== 'corpus-absent') {
+      const main = await server.ssrLoadModule(ENTRY);
+      if (typeof main.main !== 'function') throw new Error('src/main.ts 未导出 main()');
+      modules.main = main;
+    }
     const extra =
-      kind === 'migrate' ? MIGRATE_ENTRIES : kind === 'language' ? LANGUAGE_ENTRIES : kind === 'corpus' ? CORPUS_ENTRIES : null;
+      kind === 'migrate'
+        ? MIGRATE_ENTRIES
+        : kind === 'language'
+          ? LANGUAGE_ENTRIES
+          : kind === 'corpus'
+            ? CORPUS_ENTRIES
+            : kind === 'corpus-absent'
+              ? CORPUS_ABSENT_ENTRIES
+              : null;
     if (extra !== null) {
       for (const [key, entry] of Object.entries(extra)) {
         modules[key] = await server.ssrLoadModule(entry);
@@ -261,12 +283,19 @@ function createCorpusIo(main) {
 
 /** `corpus`：argv → 发现/聚合/抽样（corpus.ts）→ 文本 + 退出码 */
 function runCorpus(modules, argv) {
-  const { corpus, core, sugar, support, eratw, main } = modules;
+  const { corpus, main } = modules;
+  // 缺席快路（`main === undefined`）：io 与三条编译入口在缺席路径上不会被调用——报告是
+  // `skipReport`/`formatCorpusReport` 两个纯函数产的。真被调到了就是判据走偏（或语料在预检
+  // 之后才落盘），当场炸给看，比塞一枚"看起来能用"的空对象诚实。
+  const tripwire = (name) => () => {
+    throw new Error(`corpus 缺席快路用到了 ${name}：预检说语料不在位，却走进了真链路`);
+  };
+  const absent = main === undefined;
   const result = corpus.runCorpusCli(argv, {
-    io: createCorpusIo(main),
-    compileV1: createV1Compiler(sugar, support),
-    compile2: createV2Compiler(core, eratw),
-    migrate: createMigrator(core, eratw),
+    io: absent ? new Proxy({}, { get: () => tripwire('IO') }) : createCorpusIo(main),
+    compileV1: absent ? tripwire('v1 转译') : createV1Compiler(modules.sugar, modules.support),
+    compile2: absent ? tripwire('2.0 编译') : createV2Compiler(modules.core, modules.eratw),
+    migrate: absent ? tripwire('迁移') : createMigrator(modules.core, modules.eratw),
     sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'),
     resolveRoot: createCorpusRootResolver(),
     // 落点固定为仓内真实语料 fixture 目录：不给"任意落点"参数（写盘允许域是声明出来的）
@@ -278,11 +307,23 @@ function runCorpus(modules, argv) {
   return result.exitCode;
 }
 
-/** argv[0] → 需要额外加载的入口组（未知子命令走 main.ts，行为与改动前一致） */
-function moduleKindOf(command) {
+/**
+ * argv[0] → 需要加载的入口组（未知子命令走 main.ts，行为与改动前一致）。
+ *
+ * `corpus` 多一条**缺席快路**：自动发现（显式 `--dir` 不走——那条自己会读盘）判定语料不在位时，
+ * 只载 `corpus.ts`。动因（2026-10-24 合并 eraFL/XML 批后实测）：六枚入口齐载 137–140s（合并前
+ * 同机 65–83s，plugin-api 索引面变大把 `main.ts` 拖到单体 67.1s），全量池里这条「语料不在位」
+ * 用例因此顶穿它自己的 240s spawn 预算，读数变成 `status:null`（进程被掐，不是 rc 不对）。
+ * 判据一个字没动：缺席仍是 rc=2 + stderr「语料不在位」+ `verdict: skip`，文本走同一个格式化函数。
+ */
+function moduleKindFor(argv) {
+  const command = argv[0];
   if (command === MIGRATE_COMMAND) return 'migrate';
   if (command === LANGUAGE_COMMAND) return 'language';
-  if (command === CORPUS_COMMAND) return 'corpus';
+  if (command === CORPUS_COMMAND) {
+    if (argv.includes('--dir')) return 'corpus';
+    return createCorpusRootResolver()().ok ? 'corpus' : 'corpus-absent';
+  }
   return null;
 }
 
@@ -290,7 +331,7 @@ let modules;
 let lastError;
 for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
   try {
-    modules = await loadModules(moduleKindOf(process.argv[2]));
+    modules = await loadModules(moduleKindFor(process.argv.slice(2)));
     break;
   } catch (error) {
     // 本机实测过一次并发起两个 Vite 时的瞬时 transform 错（同一条命令随后单跑即绿）；
