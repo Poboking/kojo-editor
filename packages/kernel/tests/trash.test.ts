@@ -1,7 +1,7 @@
 import { mkdirSync, promises as fs, renameSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, afterEach } from 'vitest';
 import { pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 import { FileIOServiceImpl, TrashManager, TRASH_ID_RE, TRASH_KEEP_DAYS, trashEntryTimeMs } from '../src';
 import { NodeBridge } from './helpers/node-bridge';
@@ -24,6 +24,13 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kojo-trash-'));
   appData = path.join(tmpDir, 'appdata');
   io = new FileIOServiceImpl(new NodeBridge(appData), noopLog);
+});
+
+afterEach(async () => {
+  // fixture 根跑完即清。没有这一句的代价实测过（2026-10-24）：每个用例的
+  // mkdtemp 都在系统 temp 里永久留一个 `kojo-trash-*` 根，日积月累
+  // **3,834 个**（`.mkdtemp` 的本意就是"跑完就没"，清不清是测试自己的责任）。
+  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 const writableDir = (): string => {
