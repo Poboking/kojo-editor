@@ -119,4 +119,36 @@ describe('市场域 CSS 单源（批次十一 L07）', () => {
     const focusRing = leafBlocks(marketSrc()).find((b) => b.selector.includes('.mk-toolbar button:focus-visible'));
     expect(focusRing, '缺 .mk-toolbar button:focus-visible 这一档（发布口的键盘环来源）').toBeTruthy();
   });
+
+  /**
+   * D. 占位徽标（批次十一 L18）：「」母题在 CSS 这一侧是**画出来的**，不是字符、不是图。
+   *    ① 本域声明值里不许出现 emoji / 图形字符（`content:''` 之外的字符图标已由 B 组拦住，
+   *       这里补的是"写在颜色/字体那类声明里的图形字符"这条缝）；
+   *    ② `.mk-emblem` 的两枚角必须存在且只以空串 `content` 存在（画形状），
+   *       且徽标不许拿 `background-image` / `url()` 引图——纯 CSS + 文本，零图片资源。
+   */
+  it('D 占位徽标走画出来的「」母题：零 emoji 声明值、零图片', () => {
+    const emblem = leafBlocks(marketSrc()).filter((b) => /\.mk-emblem/.test(b.selector));
+    expect(emblem.length, '.mk-emblem 这一族必须在册（徽标的视觉全住本域）').toBeGreaterThanOrEqual(3);
+    const corners = emblem.filter((b) => /::(before|after)/.test(b.selector));
+    expect(corners.length, '「」的两枚角必须由 ::before/::after 画出来').toBeGreaterThanOrEqual(2);
+    for (const b of emblem) {
+      expect(b.body, `${b.selector} 引图了：占位徽标不许变成一张坏图`).not.toMatch(/url\(/);
+      for (const m of b.body.matchAll(/(?<![-\w])content\s*:\s*([^;}]+)/g)) {
+        expect(m[1]!.trim(), b.selector).toBe("''");
+      }
+    }
+    // 本域**声明值**里不许有 emoji / 图形字符（注释是散文，不进画面 ⇒ 先剥注释再扫）
+    const pictographic = marketSrc().replace(/\/\*[\s\S]*?\*\//g, '').match(/\p{Extended_Pictographic}/gu) ?? [];
+    expect(pictographic, `市场域 CSS 里出现了图形字符：${pictographic.join('')}`).toEqual([]);
+    // 字号与间距一律走 token：本域声明值里不许出现裸 px 的 font-size / gap / padding
+    const pxOffenders: string[] = [];
+    for (const b of leafBlocks(marketSrc())) {
+      if (!isMarketSelector(b.selector)) continue;
+      for (const m of b.body.matchAll(/(?:font-size|gap|row-gap|column-gap|padding|padding-inline|padding-block|margin|margin-inline|margin-block)\s*:\s*([^;}]+)/g)) {
+        if (/\d*px/.test(m[1]!)) pxOffenders.push(`${b.selector} → ${m[1]!.trim()}`);
+      }
+    }
+    expect(pxOffenders, '字号/间距只许 var(--fs-*) / var(--space-*)（几何件与滚动条轴另说）').toEqual([]);
+  });
 });

@@ -3,7 +3,7 @@
    ----------------------------------------------------------------------------
    ① 批次十一 L07 起，原先散布在 `styles-project.css` 三段里的市场域规则（基础层 = 基线树
       7579 起的 `口上市场面板（mk-*，KM-3）` 段、效果推广 A 组 = 8503 起、MK-UI 精修批 = 8982 起）
-      **逐字迁入本文件**，按「基础 → 推广 → 精修 → 排版」
+      **逐字迁入本文件**，按「基础 → 推广 → 精修 → 排版 → L18 卖相」
       的到达序排列——此前该注释口径失实（说基础层住在本文件，实际整段住在 `styles-project.css`），
       现按实测改齐（行号取基线 `b/misak/1023-visual-batch11`，本批之后行号会漂，认段落标题别认行号）。
       `styles-project.css` 不再保留任何市场域规则 ⇒ 本域不再依赖
@@ -11,6 +11,13 @@
       css 注入早于 ProjectView 首帧）。
       **等价性的证明不靠人工核对**：`node tools/market-css-equivalence.mjs`（对基线树跑同一把
       级联秤，逐条比市场域选择器的最终计算值；漂移/消失/新增三条名单外的任何一条即 rc=1）。
+      注意：文件末尾的 **L18 卖相段**是这架秤之后追加的呈现改动——它刻意只用「新增一档」的手法
+      （`.mk-badge.mk-badge-warn` / `.mk-body > .mk-empty` / `.mk-emblem*` / `.mk-guide` /
+      `.mk-busyline` / `.mk-update*` / `.mk-name-text` / `.mk-main > .mk-sub:not(.mk-link)` /
+      `@container (max-width: 300px) ⊃ …`）去避开已经对过终值的旧键，
+      唯有 ` ⊃ .mk-name` 一条是**必须**的漂移（名字前多一枚徽标 ⇒ 省略号从容器挪到文字格）。
+      落地前请把这一组键登记进该脚本的 `ADDED_OK` / `DRIFT_OK`（理由见 L18 段头，逐条清单见
+      本批交付回执），否则那把秤按定义报红——**红的是台账没跟上，不是级联破了**。
    ② 只取本仓设计 token（--bg-* / --surface-* / --border-* / --accent* / --fg* /
       --space-* / --radius-* / --shadow-* / --fs-*），零硬编码颜色，换主题自动跟随。
    ③ 焦点环只认 `:focus-visible`（键盘导航）；静息按钮零常驻环——「发布口上…」不再
@@ -797,3 +804,198 @@
 /* 主题一致性：全部取语义 token（--surface-raised / --border-subtle / --accent / --accent-dim /
    --fg-dim / --amber…），light 与 mint-dark 各自翻 token 即整块跟随，故这里不写
    `:root[data-theme=…]` 修正——没有需要特判的颜色字面量。 */
+
+
+/* ============================================================================
+   批次十一 L18 · 卖相收口（**只追加、不重排、不改语义**）
+   ----------------------------------------------------------------------------
+   L07 把整域搬进本文件、把层级排成三排，那是**结构**；这一段管**卖相**：
+   ① 层级落到色与字号上——名字（fs-2 / --fg / 600）> 摘要（fs-1 / 近 --fg）> 元信息
+      （fs-0 / --fg-dim）。此前摘要与元信息同档同色 ⇒ 读起来是"平铺的四件事"。
+      **元信息不再往 --fg-dim 之下拧**：11px 文字再降一档就掉出 AA（本仓对比度口径见
+      `styles-project.css` 的实机注释），层级由"摘要提上来"给，而不是由"元信息压下去"给。
+   ② 封面缺位的母题 = `.mk-emblem`：一枚由包名首字生成的「」引号块——本编辑器已有的
+      字形母题（`.kojo` 里 「」 标台词，欢迎页与标题面在用）。两枚直角是**画出来的**
+      （`content:''` + 边框，与 `.mk-hint-toggle:empty` 同一手法），零图片、零 emoji、
+      零字符图标；引号不写进 DOM ⇒ 读屏不会念出多余的标点。
+   ③ 状态面不许只变色：「有更新」那一条的按钮与徽章共用同一套 amber（有事可做），
+      首次安装仍是 accent（添一件新东西）；进行中的那一行多一条**骨架**（`.mk-busyline`）；
+      失败态多**一行字**（`.mk-guide`：哪一步失败 + 下一步做什么）——铁律 4 到面板这一层
+      不许退化成"把同一句话染红"。
+   ④ 空态 / 离线态的度量**交给 ui-kit 的 `KitEmpty`**（面板侧把 `kit-empty kit-empty-stack`
+      并列发类名），本域只补 `KitEmpty` 没有的那一档：带边框的井面。骨架同理走
+      `kit-skeleton`（扫光由 ui-kit 给，尺寸与井底由本域给）。
+   纪律照旧：字号一律 var(--fs-*)、间距一律 var(--space-*)、颜色一律语义 token 或它的
+   color-mix 派生；只有画出来的几何件（引号角的 1.5px  stroke、5px 圆点）用绝对值——
+   与本文件既有的 `3px` 圆点分隔、`8px` 细轴同口径。动效降级仍由 `:root[data-motion='reduced']` 全局压平。
+   ============================================================================ */
+
+/* ---------- ① 名字的容器：徽标 + 文字并排，省略号交回文字那一格 ---------- */
+/* `.mk-name` 原先自己 `overflow:hidden + text-overflow:ellipsis`；现在名字前面多一枚徽标，
+   裁切必须在**文字格**上（否则父级一裁就把引号的右下角削掉），徽标本身永不缩。 */
+.mk-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow: visible;
+  text-overflow: clip;
+}
+.mk-name-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- ② 封面缺位的母题徽标：画出来的「」+ 包名首字 ---------- */
+.mk-emblem {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  /* 1.6em × 本件自己的 fs-0(11px) ≈ 17.6 见方 = 名字那一行的行盒（fs-2 × 1.35）同一高 ⇒
+     加了徽标**不**把卡片第一排撑高（密度是这面板的命门；尺寸档跟着字号走，不另立 px 刻度） */
+  inline-size: 1.6em;
+  block-size: 1.6em;
+  font-size: var(--fs-0);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+/* 两枚直角 = 「」的两笔：左上开口、右下开口（`content:''` 空串 ⇒ 不是字符图标） */
+.mk-emblem::before,
+.mk-emblem::after {
+  content: '';
+  position: absolute;
+  inline-size: 0.5em;
+  block-size: 0.5em;
+  border: 0 solid var(--border-strong);
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+.mk-emblem::before {
+  inset-block-start: 0;
+  inset-inline-start: 0.12em;
+  border-inline-start-width: 1.5px;
+  border-block-start-width: 1.5px;
+  border-start-start-radius: var(--radius-xs);
+}
+.mk-emblem::after {
+  inset-block-end: 0;
+  inset-inline-end: 0.12em;
+  border-inline-end-width: 1.5px;
+  border-block-end-width: 1.5px;
+  border-end-end-radius: var(--radius-xs);
+}
+/* hover 整行才提色：静息是安静的字，不是满屏的彩色方块（多张占位 ⇒ 读的是一套系统，不是坏图） */
+.mk-row:hover .mk-emblem::before,
+.mk-row:hover .mk-emblem::after {
+  border-color: var(--accent-text);
+}
+/* 名字读不出可用的一枚字（整串是符号 / 表情）⇒ 只剩那一对待画的引号：仍是设计好的母题，
+   不是一块缺图的框。DOM 侧不发任何字形字符（见 `emblemGlyph` 的判据）。 */
+.mk-emblem:empty::before,
+.mk-emblem:empty::after {
+  opacity: 0.55;
+}
+
+/* ---------- ① 摘要抬到正文档（层级由"提上来"给，不由"压下去"给） ---------- */
+/* `:not(.mk-link)` 是必需的：来源网址那一行也挂着 `.mk-sub`（复用它的灰字观感），
+   但它仍属子层（fs-0 / --fg-dim，见排版段的 `.mk-sub.mk-link`）——正文档只给真正的摘要。 */
+.mk-main > .mk-sub:not(.mk-link) {
+  font-size: var(--fs-1);
+  /* --fg 与 --fg-dim 之间的一档：比名字轻、比元信息重，两色都是 token，light/mint 各自跟 */
+  color: color-mix(in srgb, var(--fg) 76%, var(--fg-dim));
+}
+
+/* ---------- ③ 「有更新」= 与徽章同一套 amber（首次安装仍是 accent） ---------- */
+/* 选择器另起一枚（`.mk-badge.mk-badge-warn` 而不是改 `.mk-badge`）：L07 那把级联秤按
+   `(media ⊃ selector)` 逐条对拍，多一枚类名 = 新增一档，不去动已经对过终值的旧键。 */
+.mk-badge.mk-badge-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* 有事可做的那一枚：胶囊前加一颗**画**出来的实心点（跟着 currentColor 走 amber，不另定色） */
+.mk-badge.mk-badge-warn::before {
+  content: '';
+  flex: none;
+  inline-size: 5px;
+  block-size: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.mk-row .mk-update:not(:disabled) {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--border));
+  color: var(--amber);
+}
+.mk-row .mk-update:not(:disabled):hover {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 14%, var(--bg-2));
+  color: var(--amber);
+}
+/* 禁用态：`--disabled-opacity` 由全局 button:disabled 给（本域不重画），只把 cursor 说清 */
+.mk-row .mk-update:disabled {
+  cursor: progress;
+}
+
+/* ---------- ③ 进行中的行级骨架：一条跟着行宽铺开的井（字仍只在 .mk-note 一处） ---------- */
+.mk-busyline {
+  block-size: var(--fs-2);
+  margin-block-start: var(--space-2);
+  border-radius: var(--radius-sm);
+  /* ui-kit 的 `.kit-skeleton` 给扫光与透明字；本域给这一条自己的尺寸与井底
+     （ui-kit.css 缺席时仍读作一根安静的骨架条，不退成空白） */
+  background: var(--surface-sunken);
+}
+
+/* ---------- ③ 失败态的第二行：哪一步失败 + 下一步做什么（**是字，不是色**） ---------- */
+/* 住在 `.mk-flash` 里紧跟 `.mk-note`：那一条沟（--space-1）就是两行之间的距离，
+   所以这里只**缩进**、不再自带 block margin——读起来是同一件事的下半句，不是第三条状态。 */
+.mk-guide {
+  margin-inline-start: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--amber) 7%, var(--bg-2));
+  color: var(--fg);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- ④ 空态 / 离线态：度量走 ui-kit 的 `KitEmpty`，本域只补井面这一档 ---------- */
+/* `.kit-empty-stack`（居中列 + fs-4 主句 + dim 副句 + --space-2 沟）已由 ui-kit.css 静态接线给；
+   这里刻意用 `.mk-body > .mk-empty` 这一枚**新增**档去补带边框的井面——
+   不改已经对过终值的 `.mk-empty` 旧键，也不与 kit 抢版式。 */
+.mk-body > .mk-empty {
+  margin-block: var(--space-2);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-sunken) 55%, transparent);
+}
+/* 副句限宽：260px 侧栏里一行长句会贴到井边，30 格后自己折（`text-wrap: pretty` 由 kit 给） */
+.mk-body > .mk-empty .mk-empty-hint {
+  max-inline-size: 30ch;
+}
+
+/* ---------- 窄侧栏：徽标让位给名字，不挤掉那一排的动作 ---------- */
+@container (max-width: 300px) {
+  .mk-name {
+    gap: var(--space-1);
+  }
+  /* 17.6 见方在这一档太占——收到 1.35em；引号角的笔画随 em 走，形状不变（只是整枚小一档） */
+  .mk-emblem {
+    inline-size: 1.35em;
+    block-size: 1.35em;
+  }
+  .mk-emblem::before,
+  .mk-emblem::after {
+    inline-size: 0.6em;
+    block-size: 0.6em;
+  }
+}

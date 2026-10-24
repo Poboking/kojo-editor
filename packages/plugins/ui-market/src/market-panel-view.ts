@@ -20,12 +20,15 @@ import {
   dataTimeLine,
   dataTimeSummary,
   droppedNotice,
-  filterEmptyPhrase,
+  emblemGlyph,
+  emptyStateCopy,
   formatBytes,
   groupCountPhrase,
   IMPORT_LABEL,
   indexRowKey,
   installedCountPhrase,
+  installFailureGuide,
+  INSTALLED_EMPTY,
   pendingKey,
   PUBLISH_LABEL,
   statusText,
@@ -96,18 +99,23 @@ export interface MarketPanelViewProps {
  * .panel-market                 根：列布局，外层不滚
  * ├─ .mk-toolbar                flex:none —— 搜索组（.mk-search-wrap：输入 + 清除）/ 动作组（.mk-toolbar-actions：拉取 + 发布口上）
  * ├─ .mk-flash                  状态簇（role=status）：.mk-status .mk-time(短读数, title=全量) .mk-note(aria-live)
- * │                                        .mk-progress(无文字进度) .mk-warn details.mk-hint(> summary[ span.mk-hint-toggle + 一行 ] + .mk-hint-more)
+ * │                                        .mk-guide(失败态第二行：哪一步 + 下一步) .mk-progress(无文字进度)
+ * │                                        .mk-warn details.mk-hint(> summary[ span.mk-hint-toggle + 一行 ] + .mk-hint-more)
  * └─ .mk-body                   flex:1 自滚 —— 只有列表随滚动移动
- *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）
+ *     ├─ .mk-grouptitle + span.mk-count → .mk-list → .mk-row × n（已装）／ .mk-empty（本机一条没装）
+ *     ├─ .mk-empty（列表区空态 / 离线态：一句主句 + 一句退路；与 ui-kit 的
+ *     │            `kit-empty kit-empty-stack` / `kit-empty-title` / `kit-empty-hint` **类名并列**发出）
  *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row(或 .mk-row.busy + aria-busy) × n（索引）
- *         .mk-row > .mk-main > .mk-head[ span.mk-name | span.mk-badge? | div.mk-actions ]
+ *         .mk-row > .mk-main > .mk-head[ span.mk-name( > span.mk-emblem[aria-hidden] + span.mk-name-text )
+ *                                       | span.mk-badge? | div.mk-actions ]
  *                            + .mk-sub（摘要，可缺省）
  *                            + .mk-facts[ span.mk-meta × n，title=整行全文 ]
- *                  ＋ 行级附属：.mk-warn（版本要求）/ button.mk-sub.mk-link（来源，可点）/ .mk-detail（展开层）
+ *                  ＋ 行级附属：.mk-warn（版本要求）/ button.mk-sub.mk-link（来源，可点）/
+ *                     .mk-busyline.kit-skeleton（进行中的行级骨架条，无字）/ .mk-detail（展开层）
  * ```
  *
- * 四条结构性口径：
- * 1. **层级三档，不是一排挤到底**——第一排只有名字、徽章与动作（动作钉右端），
+ * 六条结构性口径：
+ * 1. **层级三档，不是一排挤到底**——第一排只有徽标 + 名字、徽章与动作（动作钉右端），
  *    第二排摘要（标题之下、元信息之上），第三排才是合并成一行的次要事实（`title` 给全文）；
  *    把动作丢进同一个 wrap 容器末尾会让名字吃掉剩余宽度、把动作挤到第三排（窄侧栏密度事故）；
  * 2. **状态与列表分家**——工具条、状态、数据时间、说明住在滚动区之外，
@@ -115,7 +123,13 @@ export interface MarketPanelViewProps {
  * 3. **按钮 children 永远是纯字符串**（图标一律不上按钮）：动作判据按标签找按钮、并把 `onClick` 真的调一次；
  *    非按钮位子上要放记号（如折叠件的尖角），走宿主图标桥 `renderIcon(名字, 档位)` 取注册表 SVG——
  *    **字符不当图标用**（批次十一 L07），本层源码里一个图标字符都不许出现；
- * 4. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `market.css`。
+ * 4. **占位徽标不是图**：`.mk-emblem` 里只有包名首字那一枚文本（`aria-hidden`），
+ *    「」由 `market.css` 用边框**画**出来（`content:''` 空串形状），零图片、零 emoji、零字形图标；
+ *    它住在 `.mk-name` 里面（名字的装饰，不是并列的一栏），所以头排第一枚仍是 `.mk-name`；
+ * 5. **失败态必须落在文字上**：`.mk-note` 那句之后跟一行 `.mk-guide`（哪一步 + 下一步做什么），
+ *    话从 `REJECT_TEXT` 同一张表反查得到，不复制第二份话术，也不靠"把同一句染红"充数；
+ * 6. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `market.css`；
+ *    与 ui-kit 同族的件（`kit-empty` / `kit-skeleton`）一律**并列发类名**，插件不 import app 源码（铁律 2）。
  */
 export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const { snapshot } = p;
@@ -137,6 +151,13 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   // 进度仍只写 `.mk-note` 一处，按钮文字不变。发布入口只发意图、不占互斥的"忙"位：
   // 向导由消费方开门，本面板此刻没有进行中的发布状态可画。
   const acting = p.installing !== null;
+  /**
+   * 失败态那第二行（哪一步失败 + 下一步做什么）。**由状态行那句话反查同一张 `REJECT_TEXT` 表**
+   * 得到，不是第二份话术；不是装包失败（拉取 / 卸掉 / 导入那几句）时是空串 ⇒ 这一行不出现。
+   */
+  const guide = installFailureGuide(p.note);
+  /** 列表区此刻空着说什么（空态 / 离线态各一句人话，见 `emptyStateCopy` 的口径注释） */
+  const indexEmpty = emptyStateCopy(snapshot.status, p.query);
 
   /**
    * 徽章的语义色档：`updatable` = 有新版可拿（amber，"有事可做"）；`latest` = 已装妥
@@ -149,9 +170,20 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   };
 
   /**
+   * 「有更新」这一条的**动作档**：更新按钮与那枚 amber 徽章同一套语义色（amber = 有事可做），
+   * 首次安装仍是 accent（新增一件东西，不是把本机那份推进）。`mk-install` 一律保留在后
+   * ——三态里"可点的那个按钮"只有一个类名锚，样式侧靠它分档（批次十一 L07 的口径不动）。
+   */
+  const installCls = (action: PackRow['action']): string =>
+    action === 'update' ? 'ghost small mk-update mk-install' : 'ghost small mk-install';
+
+  /**
    * 动作按钮的统一形状：`ghost small` + 进行中禁用；**文字永远不变**（进度只住 `.mk-note` 一处）。
    * `cls` 多给一枚视觉档：索引行的装/更新带 `mk-install`——「可安装 / 已安装 / 进行中」
    * 三态由 app 侧 `market.css` 分档，本层不多写一个字。
+   * ui-kit-candidate: KitButton——`ui-kit` 目前只有 `KitIconButton`（图标钮）与 `KitSegmented`
+   * （分段），**没有带文字的普通按钮原语**，所以这里仍发原生 `<button class="ghost small">`；
+   * 插件侧不能 import app 的 `ui-kit`（铁律 2），要收编得先由宿主把原语经 `UIPanelProps` 注入。
    */
   const btn = (label: string, onClick: () => void, disabled: boolean, cls = 'ghost small'): ReactNode =>
     createElement('button', { className: cls, disabled, onClick }, label);
@@ -159,10 +191,29 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const actions = (...buttons: ReactNode[]): ReactNode =>
     createElement('div', { className: 'mk-actions' }, ...buttons);
   /**
-   * 卡片体的层级：第一排 = 名字 + 徽章 + 动作（动作钉右端）；第二排 = 摘要（可缺省）；
+   * 空态那一格：一句主句 + 一句退路（**类名与 ui-kit 的 `KitEmpty` 并列发出**——
+   * `kit-empty kit-empty-stack` / `kit-empty-title` / `kit-empty-hint`）。
+   *
+   * 为什么发类名而不是直接 `<KitEmpty/>`：`ui-kit/` 住 app 侧，插件 import app 源码破铁律 2
+   * （批次十一 L07 在同一处留的判定，复评照旧）。并列发类名 ⇒ 真壳里 `KitEmpty` 的度量
+   * （居中列 / fs-4 主句 / dim 副句）立刻生效，市场域自己的井面档由 `market.css` 补
+   * （`KitEmpty` 现有两档都没有带边框的井面这一档）。
+   */
+  const emptyBlock = (title: string, hint: string): ReactNode =>
+    createElement(
+      'div',
+      { className: 'mk-empty kit-empty kit-empty-stack' },
+      createElement('span', { className: 'mk-empty-title kit-empty-title' }, title),
+      createElement('span', { className: 'mk-empty-hint kit-empty-hint' }, hint),
+    );
+  /**
+   * 卡片体的层级：第一排 = 徽标 + 名字 + 徽章 + 动作（动作钉右端）；第二排 = 摘要（可缺省）；
    * 第三排 = 次要事实合并成一行（`title` 给整行全文，窄侧栏溢出走省略号，不再逐条各占一行）。
    * 分排而不是把动作丢在同一个 wrap 容器末尾：后者会让"名字吃掉剩余宽度"把动作簇
    * 挤到第三排，一张卡从两行变四行——窄侧栏里这就是密度事故。
+   *
+   * 徽标住在 `.mk-name` **里面**（不是 `.mk-head` 的又一个子元素）：层级判据钉的是
+   * "头排第一枚就是名字"，名字这一档本来就该连着它的门面——占位徽标是名字的装饰，不是并列的一栏。
    */
   const main = (
     name: string,
@@ -177,7 +228,15 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       createElement(
         'div',
         { className: 'mk-head' },
-        createElement('span', { className: 'mk-name', title: name }, name),
+        createElement(
+          'span',
+          { className: 'mk-name', title: name },
+          // 封面缺位时的母题徽标：一枚画出来的「」+ 包名首字（`aria-hidden`——同一个名字
+          // 不给读屏念两遍）。ui-kit-candidate: KitEmblem——「由名字生成的一枚抽象占位徽标」
+          // 是所有列表面板共同的缺口（教程面 / 字典包 / 归档浏览器都会要），不该每处各画一遍。
+          createElement('span', { className: 'mk-emblem', 'aria-hidden': true }, emblemGlyph(name)),
+          createElement('span', { className: 'mk-name-text' }, name),
+        ),
         badge,
         acts,
       ),
@@ -223,13 +282,15 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
           },
           main(
             e.name,
+            // ui-kit-candidate: KitBadge——`KitCount` 只吃数字（计数徽标），**带字的语义胶囊**
+            // （可更新 / 已安装 / 本机更高）没有原语 ⇒ 仍发 `.mk-badge` + 语义色档类名。
             phrase === '' ? null : createElement('span', { className: `mk-badge${badgeTone(row)}` }, phrase),
             // `action === 'none'` ⇒ 这一行没有可点动作（已装最新 / 本机更高 / 版本要求不够），
             // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明（动作簇仍占右端位，行与行不错位）
             actions(
               row.action === 'none'
                 ? null
-                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting, 'ghost small mk-install'),
+                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting, installCls(row.action)),
             ),
             e.summary ?? null,
             [
@@ -257,6 +318,12 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                 },
                 `来源 ${sourceUrl}`,
               ),
+          // 进行中那一行的**行级**状态：一行骨架条（ui-kit 的 `KitSkeleton` 形状，类名并列发出）。
+          // 它不带字——"正在安装「X」…"那句仍在 `.mk-note` 一处（同一件事不在两处显示），
+          // 这一条只回答"这一行到底动没动"：作者滚到列表中段也看得见行在忙。
+          // ui-kit-candidate: KitProgress 的"行内一条"档（现件 `KitSkeleton` 只有 lines / 单块两种形态，
+          // 宽度靠内联 style；面板侧想要的是"跟着这一行的可用宽度自己铺开"的一条）。
+          busy ? createElement('div', { className: 'mk-busyline kit-skeleton', 'aria-hidden': true }) : null,
         );
       }),
     );
@@ -273,6 +340,8 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       'div',
       { className: 'mk-toolbar' },
       // 搜索组：输入吃掉剩余宽度（窄侧栏里动作组整体折到下一行，而不是把搜索框压成一条缝）
+      // ui-kit-candidate: KitInput/KitSearch——ui-kit 有 `KitSelect` / `KitCheck` / `KitSegmented`，
+      // 唯独没有"井面里的一行输入"这件；现在仍是手写原生 `<input type="search">` + `.mk-search` 视觉。
       createElement(
         'div',
         { className: 'mk-search-wrap' },
@@ -322,6 +391,9 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       time === '' ? null : createElement('div', { className: 'mk-time', title: time }, timeShort),
       // 装 / 卸的进行中与结果全写在这一处（`aria-live` 让读屏跟得上；不弹窗）
       p.note === '' ? null : createElement('div', { className: 'mk-note', 'aria-live': 'polite' }, p.note),
+      // 失败态的第二行：哪一步失败、下一步做什么（**文字，不是颜色**——铁律 4「内核不静默」
+      // 到了面板这一层不许退化成"把同一句话染红"）
+      guide === '' ? null : createElement('div', { className: 'mk-guide' }, guide),
       // 无文字的 hairline 进度条：带字的进度句仍只住 `.mk-note` 一处，这里只给"还剩多少"的形
       p.progress == null
         ? null
@@ -342,6 +414,8 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       // 被剔除条目的说明：只在这里出声（红色留给"注册表那边的问题"）
       droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
       // 能力面说明：常驻只有一行，长文折进 `<details>`（作者点开才看全；批次十一 L07 拆行长文墙）
+      // ui-kit-candidate: KitDisclosure——折叠件现在是原生 `<details>/<summary>` + 宿主图标桥那一枚
+      // `chevron-right`；ui-kit 里还没有"一行常驻读数 + 折叠展开段"这件原语（设置页与教程面各写各的）。
       filtering
         ? null
         : createElement(
@@ -373,7 +447,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         installedCount === '' ? null : createElement('span', { className: 'mk-count' }, installedCount),
       ),
       rows.length === 0
-        ? createElement('div', { className: 'mk-empty' }, '本机还没有装好的包')
+        ? emptyBlock(INSTALLED_EMPTY.title, INSTALLED_EMPTY.hint)
         : createElement(
             'div',
             { className: 'mk-list' },
@@ -449,9 +523,10 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
               );
             }),
           ),
-      snapshot.status === 'ready' && groups.length === 0
-        ? createElement('div', { className: 'mk-empty' }, filterEmptyPhrase(p.query))
-        : null,
+      // 列表区空态 / 离线态：一条都没有 ⇒ 这一格说话（过去只有 `ready` 且过滤空了才给一句，
+      // 本机没有列表 / 读不出 / 取不到这三态下列表区是一片死空白——铁律 4 不允许"空着演没事"）。
+      // 上面仪表区那行红字说的是"机器现在怎么样"，这一格说的是"这里为什么没东西、下一步点哪"。
+      groups.length === 0 ? emptyBlock(indexEmpty.title, indexEmpty.hint) : null,
       ...groups.map((g) => indexSection(g)),
     ),
   );
