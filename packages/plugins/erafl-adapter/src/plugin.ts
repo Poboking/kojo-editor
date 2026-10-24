@@ -30,13 +30,16 @@ import type {
   GameProject,
   KojoInstructionTable,
   KojoXmlService,
+  Logger,
   Plugin,
   VariableSchema,
 } from '@kojo/plugin-api';
 import {
   WellKnownServices,
   combineDigests,
+  dirname,
   foldDigest,
+  isErbBodyPath,
   join,
   pathKey,
 } from '@kojo/plugin-api';
@@ -63,6 +66,55 @@ import { createKojoXmlService, type KojoXmlServiceHandle } from './kojo-xml/serv
  * 又短到松手后几乎立刻看到新结果——面板自己订阅索引，刷新是静默的。
  */
 const KOJO_XML_REFRESH_DEBOUNCE_MS = 500;
+
+/** `path` 是否落在 `root` 之下（Windows 大小写不敏感；分隔符统一后再比） */
+function isUnder(path: string, root: string): boolean {
+  const a = path.replaceAll('\\', '/').toLowerCase();
+  const b = root.replaceAll('\\', '/').toLowerCase();
+  return a === b || a.startsWith(b.endsWith('/') ? b : `${b}/`);
+}
+
+/** 文件名去掉最后一段扩展名（`KOJO_DEFINE_K99.ERB` → `KOJO_DEFINE_K99`） */
+function stemOf(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/**
+ * 口上域**之外**的 define 壳目录。
+ *
+ * define 壳（`@KOJO_DEFINE_K{n}` 的宿主文件）是口上的**注册点**。它绝大多数住在口上域里，
+ * 但真盘 126 份里有 1 份在 `ERB/TRAIN/CLOSE_COMBAT/99_戦闘メッセージ/KOJO_DEFINE_K99.ERB`。
+ * 只批口上域的话，编辑器能诊断出「这个角色没有注册点」却改不了那一处——给作者一个死胡同。
+ *
+ * 判据用**文件名**而不是读内容：整棵 ERB 有 2,016 份，逐份读会拖慢打开。命名不规范的
+ * 魔改扫不到，代价只是「少批一个目录」；比无差别放开 `ERB/TRAIN` 写权限安全得多。
+ *
+ * 「是不是 ERB 正文」一律问 `isErbBodyPath`：扩展名口径全仓只有那一处真源，
+ * 这里再写一份正则副本就是给「索引里有、面上开不了」留后门。
+ */
+async function defineShellDirsOutside(
+  io: FileIO,
+  log: Logger,
+  erbRoot: string,
+  kojoRoot: string,
+): Promise<string[]> {
+  try {
+    const entries = await io.walkDir(erbRoot, { includeDirs: false });
+    const dirs = new Set<string>();
+    for (const entry of entries) {
+      if (entry.isDirectory) continue;
+      if (!/^KOJO_DEFINE_K\d+$/i.test(stemOf(entry.name))) continue;
+      if (!isErbBodyPath(entry.path)) continue;
+      const dir = dirname(entry.path);
+      if (!isUnder(dir, kojoRoot)) dirs.add(dir);
+    }
+    return [...dirs].sort();
+  } catch (err) {
+    log.warn(`define 壳目录扫描失败（可写面只批口上域）：${String(err)}`);
+    return [];
+  }
+}
 
 /** 创建 eraFL 适配器插件（供 app 组合根 bootstrap.ts 装配） */
 export function createEraflAdapterPlugin(): Plugin {
@@ -281,16 +333,27 @@ export function createEraflAdapterPlugin(): Plugin {
               `口上根：${kojoRoot}`,
           );
 
+          // ---- 5. 可写面：口上域 + 口上域之外的 define 壳目录 ----
+          // 注册点（`@KOJO_DEFINE_K{n}` 的宿主）不在口上域时，只批口上域会让作者
+          // 「看得见诊断、改不了那一处」——见 `defineShellDirsOutside` 的注。
+          const extraWritable = await defineShellDirsOutside(
+            io,
+            ctx.log,
+            join(rootDir, ...ERAFL.paths.erbRoot),
+            kojoRoot,
+          );
+          if (extraWritable.length > 0) {
+            ctx.log.info(`口上域之外的 define 壳目录（一并批为可写）：${extraWritable.join('；')}`);
+          }
+
           return {
             rootDir,
             adapterId: ERAFL.gameId,
             // 索引吃整棵 ERB：define 壳函数散在根层与各子目录，只扫口上域会漏定义
             kojoPaths: [join(rootDir, ...ERAFL.paths.erbRoot)],
-            // 可写面只批口上域。**已知边界**：真盘 126 份 define 壳里 125 份在口上域下，
-            // 唯一 1 份（K99）在 `ERB/TRAIN/` 下 ⇒ 编辑器能诊断出它「未注册」，却改不了
-            // 那一处注册点。这是刻意保留的：把 `ERB/TRAIN` 也批进来等于给引擎目录开写权限，
-            // 代价远大于收益（作者要改的是口上 XML，不是引擎的注册表）。
-            writablePaths: [kojoRoot],
+            // 可写面 = 口上域 + 实际扫到的域外 define 壳目录（范围由真实文件决定，
+            // 不是无差别放开 `ERB/TRAIN`：没有 define 壳的目录一个都不批）
+            writablePaths: [kojoRoot, ...extraWritable],
             charaIndex,
             // 派生缓存判据的一部分：本次加载实际吃进的非 ERB 输入（含变量字典读过的 CSV 正文）
             inputDigest:

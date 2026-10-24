@@ -14,7 +14,13 @@
  *     同 `com` 保持文档顺序——排序必须确定，否则同一份索引每次渲染都换序。
  */
 
-import type { KojoXmlCommand, KojoXmlFile, KojoXmlIndex, KojoXmlSeverity } from '@kojo/plugin-api';
+import type {
+  KojoXmlCommand,
+  KojoXmlCondition,
+  KojoXmlFile,
+  KojoXmlIndex,
+  KojoXmlSeverity,
+} from '@kojo/plugin-api';
 
 /** 未归属角色组的显示名（`charaNo === null` 的文件） */
 export const UNASSIGNED_LABEL = '未归属';
@@ -45,6 +51,14 @@ export interface PanelCommandNode {
   readonly subtitle: string;
   /** 台词正文（搜索用；原样保留换行与未展开的占位符） */
   readonly text: string;
+  /**
+   * 条目原文（索引里的那一枚，**引用不复制**）。
+   *
+   * 预览要把它交给 `kojo.xml` 服务的 `preview()`，而契约入参就是 `KojoXmlCommand`。
+   * 不在这里带上，面板就得回头再遍历一次索引去找"这一条是哪条"——那等于让渲染层
+   * 认识索引结构，本文件"唯一碰索引的地方"这条界线就破了。
+   */
+  readonly source: KojoXmlCommand;
 }
 
 /** 一份口上 XML 的投影 */
@@ -135,6 +149,20 @@ export function panelStatsLine(tree: PanelTree): string {
 }
 
 /**
+ * 一条命中条件的显示文案。
+ *
+ * 只翻译**契约里已定义的两个维度**（`kind` / `negated`），不认识任何具体属性名：
+ * - `value` 是取值匹配 → `isFall = LOVER` / `isFall ≠ LOVER`；
+ * - `expr` 是表达式 → `eval: TSTR:X == "Y"`（表达式原文照抄，不在面板里重排）。
+ *
+ * `expr` 的 `negated` 按契约无意义（`!` 留在表达式里），故不参与拼装。
+ */
+export function conditionLabel(condition: KojoXmlCondition): string {
+  if (condition.kind === 'expr') return `${condition.source}: ${condition.expression}`;
+  return `${condition.source} ${condition.negated ? '≠' : '='} ${condition.expression}`;
+}
+
+/**
  * 诊断摘要行：`诊断 N 条（error X / warning Y）`。
  *
  * 恒显示（含 0 条）：空着不写等于让作者分不清「没问题」和「没扫」。info 不计入括号，
@@ -189,6 +217,7 @@ function projectCommand(filePath: string, command: KojoXmlCommand): PanelCommand
     label: commandLabel(com, name, command.index),
     subtitle: commandSubtitle(command.attrs),
     text: command.text,
+    source: command,
   };
 }
 

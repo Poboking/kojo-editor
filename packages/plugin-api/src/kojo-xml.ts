@@ -148,6 +148,55 @@ export interface KojoXmlSchema {
 }
 
 /**
+ * 一条口上**条件**（预览 / 条件矩阵共用的最小形状）。
+ *
+ * `attrs` 里哪些属性算条件、逗号多值怎么拆、`!` 前缀是什么语义——**全部是游戏侧知识**，
+ * 由 adapter 的 `preview()` 解释。宿主只渲染这份结构化结果，**不认识任何属性名**。
+ */
+export interface KojoXmlCondition {
+  /** 来源属性名（如 `isFall`；具体有哪些由 adapter 决定） */
+  readonly source: string;
+  /**
+   * `expr` = 表达式（原样交给回放/解释器）；
+   * `value` = 取值匹配（`isFall="LOVER"` 这种）。
+   */
+  readonly kind: 'expr' | 'value';
+  /**
+   * 判据正文：
+   * - `expr`：去掉外层 `{…}` 后的表达式原文；
+   * - `value`：单个取值（已去掉前导 `!`）。
+   */
+  readonly expression: string;
+  /** 是否取反（只对 `value` 有意义；`expr` 的 `!` 留在表达式里，语义才完整） */
+  readonly negated: boolean;
+}
+
+/**
+ * 预览上下文（**全部可选**：缺哪个就在 `unresolved` 里报哪个，绝不编造名字）。
+ *
+ * 这些名字都是「运行期才确定」的事实（主人公名、角色自称、对主人公的称呼），
+ * 编辑器不可能知道 ⇒ 由调用方从工程数据里填，填不出的留给作者看。
+ */
+export interface KojoPreviewContext {
+  /** 主人公名 */
+  readonly playerName?: string;
+  /** 口上角色名 */
+  readonly charaName?: string;
+  /** 该角色对主人公的称呼 */
+  readonly callName?: string;
+  /** 额外方括号变量（键 = 不含 `[$ ]` 的名字）；优先于内置别名 */
+  readonly vars?: Readonly<Record<string, string>>;
+}
+
+/** 预览结果（`lines` 已按原文换行拆开，保留空行） */
+export interface KojoPreviewResult {
+  readonly lines: string[];
+  readonly conditions: KojoXmlCondition[];
+  /** 没能确定下来的记号（去重，保留首次出现顺序） */
+  readonly unresolved: string[];
+}
+
+/**
  * 口上 XML 服务（`kojo.xml`）。
  *
  * 只读：本服务**不写盘**。写回走内核 `FileIO`（双闸 + 备份），由消费方负责。
@@ -162,6 +211,17 @@ export interface KojoXmlService {
   schema(): KojoXmlSchema | null;
   /** 重扫（项目加载后由 adapter 触发；也供面板"刷新"按钮） */
   refresh(): Promise<KojoXmlIndex | null>;
+  /**
+   * 预览一条口上：**它什么时候命中**（条件）、**台词长什么样**（替换后的分行文本）、
+   * **哪些记号没看懂**（未解析清单）。
+   *
+   * 三者来自**同一次调用**：面板各调各的会把同一份文本解释出三种结果。
+   * 纯函数——不读盘、不发事件、不抛异常（畸形输入按空条目处理）。
+   *
+   * 记号语义（`%NAME%` / `[$MNAME]` / `%CALLNAME:…%` …）与条件属性名都是**游戏侧知识**，
+   * 由 adapter 解释；宿主只渲染，不认识任何具体记号或属性。
+   */
+  preview(command: KojoXmlCommand, ctx?: KojoPreviewContext): KojoPreviewResult;
   /** 订阅索引变化（返回取消函数） */
   subscribe(listener: () => void): () => void;
 }

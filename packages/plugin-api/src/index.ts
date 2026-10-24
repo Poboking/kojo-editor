@@ -379,10 +379,15 @@ export type { ErbDialectExtension } from './erb-ext';
 
 // 口上 XML 契约（2026-10-24 eraFL 适配批）：声明式口上文件的结构模型 + `kojo.xml` 服务。
 // 属性枚举 / com 编号 / kojoPlace 取值域**不在本契约**——那些是游戏知识，归 adapter。
+// `preview()` 那三枚（条件 / 上下文 / 结果）是预览的**渲染面**：宿主拿到结构化结果直接画，
+// 记号语义与条件属性名同样归 adapter 解释。
 export type {
+  KojoPreviewContext,
+  KojoPreviewResult,
   KojoXmlAttributeSpec,
   KojoXmlCommand,
   KojoXmlComSpec,
+  KojoXmlCondition,
   KojoXmlDiagnostic,
   KojoXmlEncoding,
   KojoXmlFile,

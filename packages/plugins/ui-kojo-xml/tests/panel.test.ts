@@ -21,6 +21,7 @@ import {
   commandLabel,
   commandSubtitle,
   compareCom,
+  conditionLabel,
   diagnosticRows,
   diagnosticSummary,
   filterPanelTree,
@@ -197,6 +198,37 @@ describe('buildPanelTree：条目排序与行文案', () => {
     expect(command?.line).toBe(8);
     expect(command?.column).toBe(3);
     expect(command?.filePath).toBe('root/1001_a/KOJO_K1001_COM.xml');
+  });
+
+  it('节点带上条目原文（引用同一枚，不复制）：预览要把它交给服务的 preview()', () => {
+    const index = mainFixture();
+    const origin = index.files[0]!.commands[1]!;
+    const tree = buildPanelTree(index, NAMES);
+    const projected = tree.charas[0]?.files[0]?.commands.find((c) => c.com === '300');
+    expect(projected?.source).toBe(origin);
+  });
+});
+
+describe('conditionLabel：条件文案', () => {
+  it('取值匹配拼「属性 = 取值」，取反拼「属性 ≠ 取值」', () => {
+    expect(conditionLabel({ source: 'isFall', kind: 'value', expression: 'LOVER', negated: false })).toBe(
+      'isFall = LOVER',
+    );
+    expect(conditionLabel({ source: 'isFall', kind: 'value', expression: 'LOVER', negated: true })).toBe(
+      'isFall ≠ LOVER',
+    );
+  });
+
+  it('表达式条件拼「属性: 表达式」，表达式原文照抄（面板不重排、不加括号）', () => {
+    expect(
+      conditionLabel({ source: 'eval', kind: 'expr', expression: 'TSTR:X == "Y"', negated: false }),
+    ).toBe('eval: TSTR:X == "Y"');
+  });
+
+  it('expr 的 negated 不参与拼装（契约里 expr 的取反留在表达式内）', () => {
+    expect(conditionLabel({ source: 'eval', kind: 'expr', expression: 'A', negated: true })).toBe(
+      'eval: A',
+    );
   });
 });
 

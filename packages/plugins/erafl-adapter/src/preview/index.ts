@@ -8,14 +8,15 @@
  * 纯函数：不读盘、不发事件、不抛异常（畸形 `cmd` 按空条目处理）。
  */
 
+import type { KojoPreviewContext, KojoPreviewResult } from '@kojo/plugin-api';
 import type { KojoXmlCondition } from './conditions';
 import { extractKojoXmlConditions } from './conditions';
-import type { KojoInterpolateContext } from './interpolate';
 import { interpolateKojoText } from './interpolate';
 
+export type { KojoPreviewContext, KojoPreviewResult };
 export type { KojoXmlCondition } from './conditions';
 export { extractKojoXmlConditions } from './conditions';
-export type { KojoInterpolateContext, KojoInterpolateResult } from './interpolate';
+export type { KojoInterpolateResult } from './interpolate';
 export { interpolateKojoText } from './interpolate';
 
 /**
@@ -25,13 +26,6 @@ export { interpolateKojoText } from './interpolate';
 export interface KojoPreviewCommandLike {
   readonly attrs?: Readonly<Record<string, string>> | null;
   readonly text?: string;
-}
-
-/** 预览结果（`lines` 已按原文换行拆开，保留空行） */
-export interface KojoPreviewResult {
-  readonly lines: string[];
-  readonly conditions: KojoXmlCondition[];
-  readonly unresolved: string[];
 }
 
 /** 换行判据与解析器一致：`\r\n` / `\r` / `\n` 各算一次，不把 CRLF 拆出多余空行 */
@@ -45,7 +39,7 @@ const LINE_BREAK_RE = /\r\n|\r|\n/;
  */
 export function previewKojoCommand(
   cmd: KojoPreviewCommandLike | null | undefined,
-  ctx: KojoInterpolateContext = {},
+  ctx: KojoPreviewContext = {},
 ): KojoPreviewResult {
   const text = typeof cmd?.text === 'string' ? cmd.text : '';
   const { text: rendered, unresolved } = interpolateKojoText(text, ctx);

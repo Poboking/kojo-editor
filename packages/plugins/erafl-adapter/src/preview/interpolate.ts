@@ -21,17 +21,11 @@
  * 单趟扫描 + 对随机首项**显式递归**，才能把"哪些是原文、哪些是替换产物"分清楚。
  */
 
-/** 预览上下文（全部可选：缺哪个就报哪个未解析，不编造名字） */
-export interface KojoInterpolateContext {
-  /** 主人公名（`%NAME%` / `[$MNAME]` / `[$PNAME]`） */
-  readonly playerName?: string;
-  /** 口上角色名（`%CNAME%` / `%CALLNAME:<角色号>%` / `[$KNAME]` / `[$NAME]`） */
-  readonly charaName?: string;
-  /** 角色对主人公的称呼（`%CALLNAME:MASTER%`）——与 `playerName` 是两件事 */
-  readonly callName?: string;
-  /** 额外方括号变量（键 = 不含 `[$ ]` 的名字，如 `{ W: '墙壁' }`）；优先于内置别名 */
-  readonly vars?: Readonly<Record<string, string>>;
-}
+import type { KojoPreviewContext } from '@kojo/plugin-api';
+
+// 上下文的形状真源在契约（`plugin-api/kojo-xml.ts`）：面板要构造它、宿主不能 import
+// adapter。这里只消费，不再维护第二份定义。
+export type { KojoPreviewContext };
 
 /** 预览结果：替换后的文本 + 没能确定下来的记号（去重，保留首次出现顺序） */
 export interface KojoInterpolateResult {
@@ -74,7 +68,7 @@ function resolveName(value: string | undefined, token: string, note: (t: string)
 
 function interpolateInternal(
   text: string,
-  ctx: KojoInterpolateContext,
+  ctx: KojoPreviewContext,
   depth: number,
   note: (token: string) => void,
 ): string {
@@ -148,7 +142,7 @@ function interpolateInternal(
  */
 export function interpolateKojoText(
   text: string,
-  ctx: KojoInterpolateContext = {},
+  ctx: KojoPreviewContext = {},
 ): KojoInterpolateResult {
   if (typeof text !== 'string') return { text: '', unresolved: [] };
   if (text.length === 0) return { text: '', unresolved: [] };

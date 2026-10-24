@@ -2095,6 +2095,62 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-0);
 }
 
+/* 条目行：跳转按钮 + 预览按钮并排（`<button>` 不许嵌套 `<button>`，见 panel.ts 注） */
+.nav-hit-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.nav-hit-row > .nav-hit-btn {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+/* 预览按钮**不复用** `.nav-hit-btn`：那个类带 width:100% + 伸缩，两个都挂上会互相挤 */
+.nav-preview-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.nav-preview-btn:hover {
+  color: var(--fg);
+  background: var(--bg-3, rgba(127, 127, 127, 0.12));
+}
+
+/* ---------------------- 口上预览（ui-kojo-xml） ---------------------- */
+.nav-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 2px 0 6px 28px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border);
+}
+.nav-preview-ctx,
+.nav-preview-conds,
+.nav-preview-miss {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.nav-preview-lines {
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.nav-preview-miss .nav-badge {
+  /* 记号可以很长（一整条随机取项），徽章必须允许折行，否则撑破面板 */
+  white-space: normal;
+  word-break: break-all;
+}
+
 /* ============================ 状态回放面板（rp-*，v0.2 第八批） ============================ */
 .panel-state-replay {
   display: flex;

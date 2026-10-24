@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { FileIO } from '@kojo/plugin-api';
+import type { FileIO, KojoXmlCommand } from '@kojo/plugin-api';
 import { decodeKojoXmlBytes, detectKojoXmlEncoding } from '../src/kojo-xml/encoding';
 import { buildKojoXmlIndex } from '../src/kojo-xml/index-build';
 import { decodeKojoXmlEntities, parseKojoXmlText } from '../src/kojo-xml/parse';
@@ -257,6 +257,59 @@ describe('createKojoXmlService —— 生命周期', () => {
     const svc = createKojoXmlService({ io: partial, log: silentLog, roots: () => [root] });
     const index = await svc.refresh();
     expect(index!.files.length).toBe(1);
+  });
+});
+
+describe('createKojoXmlService —— preview 转接', () => {
+  const root = 'D:/mem/erafl/ERB/口上';
+  const io = memIo({ [`${root}/7_测试/KOJO_K7_COM.xml`]: Buffer.from(DATA_XML, 'utf8') }, [root]);
+
+  /** 契约入参是完整 `KojoXmlCommand`：坐标对预览无意义，但形状必须齐 */
+  function commandOf(attrs: Record<string, string>, text: string): KojoXmlCommand {
+    return {
+      index: 0,
+      span: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } },
+      contentSpan: null,
+      attrs,
+      text,
+    };
+  }
+
+  it('未 refresh 也能预览（纯函数转接：不读盘、不碰索引）', () => {
+    const svc = createKojoXmlService({ io, log: silentLog, roots: () => [root] });
+    expect(svc.index()).toBeNull();
+    const result = svc.preview(commandOf({}, '「你好」'));
+    expect(result.lines).toEqual(['「你好」']);
+    expect(result.conditions).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('从索引里取出的条目：条件 / 分行 / 未解析三者一次给全', async () => {
+    const svc = createKojoXmlService({ io, log: silentLog, roots: () => [root] });
+    await svc.refresh();
+    const command = svc.file(`${root}/7_测试/KOJO_K7_COM.xml`)!.commands[1]!;
+
+    const result = svc.preview(command, { playerName: '无名', charaName: '阿莉丝' });
+    // 条件按原文书写顺序：isFall（取值）在 eval（表达式）之前
+    expect(result.conditions).toEqual([
+      { source: 'isFall', kind: 'value', expression: 'LOVER', negated: false },
+      { source: 'eval', kind: 'expr', expression: 'TSTR:X == "Y"', negated: false },
+    ]);
+    // CRLF 不拆出多余空行
+    expect(result.lines).toEqual(['「第二行」', '「第三行」']);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('不传 ctx 时名字类记号原样留在正文里并进未解析（不编造名字）', () => {
+    const svc = createKojoXmlService({ io, log: silentLog, roots: () => [root] });
+    const result = svc.preview(commandOf({}, '%NAME%：「[$MNAME]」'));
+    expect(result.lines).toEqual(['%NAME%：「[$MNAME]」']);
+    expect(result.unresolved).toEqual(['%NAME%', '[$MNAME]']);
+  });
+
+  it('空正文给空行数组（面板据此显示「没有台词」，不画一行空白）', () => {
+    const svc = createKojoXmlService({ io, log: silentLog, roots: () => [root] });
+    expect(svc.preview(commandOf({}, '')).lines).toEqual([]);
   });
 });
 

@@ -21,6 +21,7 @@ import { decodeKojoXmlBytes } from './encoding';
 import { buildKojoXmlIndex } from './index-build';
 import { parseKojoXmlText } from './parse';
 import { buildKojoXmlSchema } from './schema';
+import { previewKojoCommand } from '../preview';
 
 /** 一次批量读多少份（与内核批量 IO 的分批口径同量级） */
 const READ_BATCH = 64;
@@ -177,6 +178,11 @@ export function createKojoXmlService(deps: KojoXmlServiceDeps): KojoXmlServiceHa
       return buildKojoXmlSchema(extra);
     },
     refresh,
+    /**
+     * 预览一条口上。**纯函数转接**：不读盘、不碰索引，所以未加载 / 已关项目时照样能用
+     * （面板从索引里取到 `KojoXmlCommand` 再传进来，索引没了自然也就没有条目可预览）。
+     */
+    preview: (command, ctx) => previewKojoCommand(command, ctx ?? {}),
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

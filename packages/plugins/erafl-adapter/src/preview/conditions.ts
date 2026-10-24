@@ -29,24 +29,11 @@
  * 本函数不读盘、不抛异常：畸形输入（null / 非对象 / 值不是字符串）一律返回空数组。
  */
 
-/** 一条条件（预览 / 条件矩阵共用的最小形状） */
-export interface KojoXmlCondition {
-  /** 来源属性名（`eval` / `isFall` / `emotion` …） */
-  readonly source: string;
-  /**
-   * `expr` = ERB 表达式（原样交给回放/解释器）；
-   * `value` = 取值匹配（`isFall="LOVER"` 这种）。
-   */
-  readonly kind: 'expr' | 'value';
-  /**
-   * 判据正文：
-   * - `expr`：去掉外层 `{…}` 后的表达式原文；
-   * - `value`：单个取值（已去掉前导 `!`）。
-   */
-  readonly expression: string;
-  /** 是否取反（只对 `value` 有意义；`expr` 的 `!` 留在表达式里，语义才完整） */
-  readonly negated: boolean;
-}
+import type { KojoXmlCondition } from '@kojo/plugin-api';
+
+// 形状的真源在契约（`plugin-api/kojo-xml.ts`）：面板要直接渲染它，宿主不能 import
+// adapter。这里只 re-export，不再维护第二份定义。
+export type { KojoXmlCondition };
 
 /** 逗号多值属性：语料里一个属性并列多个状态（`LOVER,SLAVED_BY`），逐项都是独立判据 */
 const MULTI_VALUE_SOURCES: ReadonlySet<string> = new Set(['isFall', 'emotion']);
