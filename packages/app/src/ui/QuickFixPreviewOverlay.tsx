@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState } from 'react';
 import { cancelPreview, peekPreview, type QuickFixPreviewEntry } from './quick-fix-preview';
-import { CODE_FONT_BASELINE } from './code-font'; // 与主编辑器同一张字面（全站唯一一条栈）
+import { CODE_FONT_BASELINE } from './code-font'; // **缺省基线**；作者所选档位见下面 codeFont
 import { overlayEditorAppearance, overlayLineCount } from './overlay-editor-appearance';
 import { overlayFrame, overlaySkeletonRows, overlaySpinner } from './overlay-chrome';
 import { monacoThemeIdFor } from '../monaco/theme';
@@ -78,6 +78,12 @@ export function createQuickFixPreviewOverlay(deps: QuickFixPreviewDeps): () => u
         // 里那段正文，两套 chrome 并排看会读成"预览那半边是另一款编辑器"。
         const appearance = await overlayEditorAppearance(overlayLineCount(entry.originalText));
         if (disposed || !containerRef.current) return;
+        // 代码字体吃主编辑器同一条解析链的结果（L20 欠账：此前只铺 CODE_FONT_BASELINE，
+        // 作者换了代码档这一屏不跟着变）。走动态装载：本模块静态挂在开机图里，
+        // 静态 import `editor-display-prefs` 会把它连同 editor-options 拽回首屏（PS-10 体积闸）。
+        const { overlayCodeFontPatch } = await import('./editor-display-prefs');
+        const codeFont = overlayCodeFontPatch();
+        if (disposed || !containerRef.current) return;
         const modelA = monaco.editor.createModel(entry.originalText, entry.languageId);
         const modelB = monaco.editor.createModel(entry.previewText, entry.languageId);
         const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
@@ -95,6 +101,8 @@ export function createQuickFixPreviewOverlay(deps: QuickFixPreviewDeps): () => u
           maxComputationTime: 3000,
           maxFileSize: 20,
           ...CODE_FONT_BASELINE,
+          // 档位解析结果叠在基线之后 ⇒ 预览与编辑器吃到**同一串**（见 overlayCodeFontPatch）
+          ...codeFont,
           // 外观档：与主编辑器同一张档位表（`wordWrap` 刻意不并——并排 diff 与折行互斥）
           ...appearance,
         });

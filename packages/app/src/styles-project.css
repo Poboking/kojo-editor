@@ -2008,7 +2008,11 @@ button.erb-mode-hint.unlocked:hover {
 .nav-badge {
   flex: 0 0 auto;
   font-size: var(--fs-0);
-  font-family: var(--font-sans, sans-serif);
+  /* 界面字体的真源是 `ui/font-presets.ts` + tokens.css 的 `--font-ui`（视觉批 L20 落地）。
+     这里原写 `var(--font-sans, sans-serif)`——`--font-sans` 全仓从未定义（幻影 token），
+     于是这一格一直在吃那条死回落，用户选的界面字体档对徽章无效。幻影清零见
+     `tests/css-token-single-source.test.ts`。 */
+  font-family: var(--font-ui);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 0 3px;
@@ -5705,6 +5709,13 @@ button.primary .hint {
  * - 缺口是作者要处理的第一信息：列头、组头、行头三处都给计数徽章；
  * - 表格仍是 `border-collapse: collapse`（10k 格性能红线），视觉分隔靠极淡的
  *   右/下 hairline 与圆角格钮，而不是给每格加边距盒。
+ * - **亚 11px 的微字面（10px / 9px）是这一族刻意留在 --fs-* 之下的那一档**：
+ *   计数徽章（15px 药丸）、缺口小丸（14px 药丸）、22px 方格里的 ✓、行头的规则 ID
+ *   ——它们的高度/宽度是实测过的几何（见 `--cm-cell: 22px` 与行视口化的实测行高），
+ *   且必须比表体基线 `--fs-0`（11px）**小**才读出层次。字号刻度表（tokens.css）当前
+ *   最低档就是 11px ⇒ 折叠上来 = 改实测几何 + 抹掉层次，本批不硬塞（视觉批十一 R2）。
+ *   要收这一族得先在 tokens.css 开一档（如 `--fs-micro: 10px`）并在
+ *   `editor-display-prefs.ts` 的 `UI_FONT_SCALE_TOKENS` 登记同名，两处一起动才算收干净。
  * 本节后于旧 cm-* 规则，逐项覆盖；`.cm-hid` / `.cm-corner-resize` / `.cm-split`
  * 等结构件沿用旧规则，只做观感覆盖。
  * ============================================================================================ */
@@ -6351,7 +6362,7 @@ button.primary .hint {
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--amber) 14%, transparent);
   color: var(--amber);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   vertical-align: 1px;
@@ -6360,7 +6371,7 @@ button.primary .hint {
   margin-left: 4px;
   color: var(--green);
   opacity: 0.65;
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
 }
 .cm-fold {
   margin-right: 3px;
@@ -6377,7 +6388,7 @@ button.primary .hint {
   padding: 2px 6px;
   height: 22px;
   box-sizing: border-box;
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 500;
   color: var(--fg-dim);
   text-align: center;
@@ -6404,7 +6415,7 @@ button.primary .hint {
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--amber) 12%, transparent);
   color: var(--amber);
-  font-size: 9px;
+  font-size: 9px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   vertical-align: 1px;
@@ -6441,7 +6452,7 @@ button.primary .hint {
 .cm-row-key {
   display: inline-block;
   font-family: var(--font-meta);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   color: var(--fg-dim);
 }
 .cm-row-gap {
@@ -6455,7 +6466,7 @@ button.primary .hint {
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--amber) 12%, transparent);
   color: var(--amber);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   vertical-align: middle;
@@ -6474,7 +6485,7 @@ button.primary .hint {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   line-height: 1;
   font-variant-numeric: tabular-nums;
   box-shadow: none;
@@ -6532,7 +6543,7 @@ button.primary .hint {
   border-radius: 50%;
   box-sizing: border-box;
   color: var(--red);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 900;
   line-height: 1;
 }
@@ -6556,7 +6567,7 @@ button.primary .hint {
   box-sizing: border-box;
   background: var(--red);
   color: #fff;
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 900;
   line-height: 1;
 }
@@ -6633,7 +6644,7 @@ button.primary .hint {
 }
 .cm-detail-rowkey {
   font-family: var(--font-meta);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
 }
 .cm-detail-col {
   color: var(--accent-text);
@@ -6673,7 +6684,7 @@ button.primary .hint {
   background: var(--hover-soft);
   color: var(--fg-dim);
   font-family: var(--font-meta);
-  font-size: 10px;
+  font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-variant-numeric: tabular-nums;
 }
 .cm-detail-gap-note {
@@ -6892,7 +6903,8 @@ button.primary .hint {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-code);
-  font-size: 11px;
+  /* 11px 恰是 --fs-0 的档位值（逐字等价，零视觉变化）；同族 .cmfill-copy 本来就吃 --fs-0 */
+  font-size: var(--fs-0);
   line-height: 1.55;
   white-space: pre;
   tab-size: 4;

@@ -13,6 +13,7 @@ import {
   buildKeybindingRows,
   chordToBinding,
   filterKeybindingRows,
+  isKeybindingRowModified,
   keybindingChips,
   overrideCount,
   resetAllKeybindings,
@@ -60,11 +61,11 @@ type Scope = 'all' | 'changed' | 'conflict';
 const CHIP_SEP = '·';
 
 /**
- * 「已改」判据在本页的唯一落点：行数据的 `state`（真源在 `keybindings.ts` 的
- * `bindingStateOf`，与设置索引 `settingsEntryModified` 同吃那张覆盖表）。
- * 页面里凡要问"这行是不是被作者动过"一律经此，不许再抄 `state !== 'default'`。
+ * 「已改」判据不住在这里：它是 `keybindings.ts` 的 `isKeybindingRowModified`
+ * （行数据 `state` 的真源是那张覆盖表，`bindingStateOf` 与设置索引
+ * `settingsEntryModified` 同吃它）。页面与右键菜单两个消费面同吃那一枚谓词——
+ * 判据若在本页再写一遍，就是「同一页两个真相」的起点，静态闸当场红。
  */
-const isRowModified = (row: KeybindingRow): boolean => row.state !== 'default';
 
 /**
  * 一行命令的按键芯片：一步一片，键帽视觉整体交给 `KitKbd`（字号/边框/间距全站一副面孔）。
@@ -124,14 +125,14 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
     [commands, kbVersion],
   );
 
-  const changedCount = useMemo(() => rows.filter(isRowModified).length, [rows]);
+  const changedCount = useMemo(() => rows.filter(isKeybindingRowModified).length, [rows]);
   const conflictCount = useMemo(() => rows.filter((r) => r.conflictWith !== null).length, [rows]);
   const overrides = overrideCount();
 
   // 范围档先切、搜索后滤：`scoped` 是"这一档一共多少条"，`visible` 是"搜索命中多少条"，
   // 读数「N / M 条」正是拿这两个数拼出来的（M 不含搜索、N 含搜索）。
   const scoped = useMemo(() => {
-    if (scope === 'changed') return rows.filter(isRowModified);
+    if (scope === 'changed') return rows.filter(isKeybindingRowModified);
     if (scope === 'conflict') return rows.filter((r) => r.conflictWith !== null);
     return rows;
   }, [rows, scope]);
@@ -402,7 +403,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
                   (capturing ? ' kb-capturing' : '') +
                   (conflicted ? ' kb-conflicted' : '') +
                   (flashId === row.id ? ' kb-flashed' : '');
-                const showReset = isRowModified(row);
+                const showReset = isKeybindingRowModified(row);
                 const showRemove = row.keys !== undefined && row.rebindable;
                 return (
                   <div
