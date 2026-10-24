@@ -281,12 +281,75 @@ export function checkFontStackPresence(
   });
 }
 
-/** 真壳判定源：`document.fonts.check`。没有 DOM 或该 API ⇒ `null`（调用方据此显示"判定不了"） */
+/**
+ * 判定用的**拉丁 + 数字 + 符号**样本。不许换成汉字：CJK 面里全角字的步进几乎恒等于 1em
+ * （同一个 `無` 在宋体 / 黑体 / 等宽面里都是 16px），拿它比宽会把**装了的面**读成"和兜底一样宽"
+ * ⇒ 误报缺装。拉丁 + 比例符号才有区分度（实测见 `measureFontPresence` 注记）。
+ */
+export const PRESENCE_SAMPLE = 'MWil@%3mw0123';
+/** 三把泛型尺：缺装的面在**每一把**尺上都逐字等于该尺自己的兜底宽度 */
+export const PRESENCE_GENERICS = ['sans-serif', 'serif', 'monospace'] as const;
+
+/**
+ * 纯判定核（量尺可注入，单测在这里自证，不依赖真壳）：`measure(cssFontShorthand) => 文本宽度`。
+ *
+ * 判据：**每一把**泛型尺上 `16px "F", G` 与 `16px G` 完全同宽 ⇒ F 根本没被用上 ⇒ 缺装。
+ * 只看一把尺会被巧合骗过去，三把都重合基本只剩"整条栈落到兜底"这一种解释。
+ * 任一次量尺拿不到数（NaN / 0 / 负数 / 抛错）⇒ 返回 `true` = 判定不了就不标注（与 `checkFontStackPresence` 同口径）。
+ *
+ * 实测（真壳 WebView2 `canvas.measureText`，同一段样本，2026-10-24 组长复验）：
+ *  - 装着的：`'Segoe UI'` 103.717 / `'Microsoft YaHei UI'` 112.828，且配任意泛型仍保持自己的宽度；
+ *  - 没装的：`'LXGW WenKai Mono'` / `'Sarasa Mono SC'` / `'JetBrains Mono'` / 生造名——配 sans 逐字等于
+ *    `sans-serif`(106.116)、配 mono 等于 `monospace`(84)、配 serif 等于 `serif`(110.991)。
+ *  - 同一段名单在 `document.fonts.check('12px "…"')` 下**全部返回 true**（Chromium 那个 API 问的是
+ *    "这条字体串能不能渲染"，走兜底也叫能）⇒ 它当不了"装没装"的判据，本函数因此换掉它。
+ */
+export function measureFontPresence(family: string, measure: (cssFontShorthand: string) => number): boolean {
+  const width = (spec: string): number | null => {
+    try {
+      const w = measure(spec);
+      // 0 / 负数 / 非有限数都算"量不到"：一把恒发 0 的尺子会让每格都"三把尺同宽"，
+      // 于是全场误报缺装——判定不了就不标注，宁可不说。
+      return Number.isFinite(w) && w > 0 ? w : null;
+    } catch {
+      return null;
+    }
+  };
+  for (const generic of PRESENCE_GENERICS) {
+    const baseline = width(`16px ${generic}`);
+    const probed = width(`16px "${family}", ${generic}`);
+    if (baseline === null || probed === null) return true;
+    if (baseline !== probed) return true;
+  }
+  return false;
+}
+
+/** 从 CSS `font` 简写串里取家族名（引号收尾优先，退化到最后一个不含逗号的记号；取不到 ⇒ null） */
+function familyFromFontSpec(spec: string): string | null {
+  const quoted = /(["'])([^"']+)\1\s*$/.exec(spec);
+  if (quoted?.[2] !== undefined && quoted[2] !== '') return quoted[2];
+  const last = spec.trim().split(/\s+/).at(-1);
+  if (last === undefined || last === '' || last.includes(',')) return null;
+  return last;
+}
+
+/**
+ * 真壳判定源：**canvas 量宽**（判据与实测见 `measureFontPresence`）。
+ * 没有 DOM / 拿不到 2D 上下文（jsdom 与没装 canvas 依赖的测试环境就是这样）⇒ `null`，
+ * 调用方据此显示"判定不了"，绝不显示"都装了"。
+ */
 export function domFontPresenceChecker(): FontPresenceChecker | null {
   if (typeof document === 'undefined') return null;
-  const faceSets = (document as Document & { fonts?: { check?(font: string): boolean } }).fonts;
-  if (!faceSets || typeof faceSets.check !== 'function') return null;
-  return (fontSpec: string) => faceSets.check!(fontSpec);
+  const ctx = document.createElement('canvas').getContext?.('2d');
+  if (!ctx) return null;
+  return (fontSpec: string): boolean => {
+    const family = familyFromFontSpec(fontSpec);
+    if (family === null) return true;
+    return measureFontPresence(family, (shorthand) => {
+      ctx.font = shorthand;
+      return ctx.measureText(PRESENCE_SAMPLE).width;
+    });
+  };
 }
 
 /** 所见即所得预览样例：全角百分号 + 全角空格 + 中日汉字 + 常被连字糊掉的符号串 */

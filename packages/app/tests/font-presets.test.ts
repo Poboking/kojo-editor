@@ -11,7 +11,9 @@
  *   走 `var(--font-ui)`、默认值与 L20 之前逐字相等。
  *
  * 环境是 node（无 window/document）：localStorage 用假表、字体可用性判定用注入替身——
- * `document.fonts.check` 的真实可用性归组长真壳复验，不在本池自证。
+ * 替身换成的是**判据本体**（`measureFontPresence`：三把泛型尺量宽），真壳那边只负责
+ * "canvas 拿不拿得到"这一格；2026-10-24 组长复验把原口径 `document.fonts.check` 否掉了
+ * （它对装着与没装的面**一律返回 true**，判不了"缺装"），读数记在 `font-presets.ts` 的注记里。
  */
 
 import { readFileSync } from 'node:fs';
@@ -23,14 +25,18 @@ import {
   CUSTOM_CODE_FONT_PRESET_ID,
   CUSTOM_UI_FONT_PRESET_ID,
   FONT_PREVIEW_SAMPLE,
+  PRESENCE_GENERICS,
+  PRESENCE_SAMPLE,
   UI_FONT_CSS_LINE,
   UI_FONT_CSS_TOKEN,
   UI_FONT_PRESETS,
   UI_FONT_SYSTEM_STACK,
   checkFontStackPresence,
+  domFontPresenceChecker,
   fontStackConcreteMembers,
   fontStackMembers,
   isUsableUiFontStack,
+  measureFontPresence,
   resolveCodeFontStack,
   resolveUiFontStack,
   sanitizeUiFontFamily,
@@ -338,6 +344,77 @@ describe('可用性判定（注入替身，不靠真壳）', () => {
 
   it('fontStackConcreteMembers：去引号、去泛型、留顺序', () => {
     expect(fontStackConcreteMembers("'Segoe UI', SimHei, sans-serif")).toEqual(['Segoe UI', 'SimHei']);
+  });
+});
+
+/**
+ * `measureFontPresence` 的替身量尺：三把泛型尺的宽度**逐字取真壳实测值**
+ * （WebView2 `canvas.measureText(PRESENCE_SAMPLE)`，2026-10-24 组长复验读数），
+ * `installed` 里没登记的具体家族一律回落成"当前那把泛型尺的宽度"——这正是浏览器装不上字体时的行为。
+ */
+const GENERIC_WIDTH: Record<string, number> = { 'sans-serif': 106.116, serif: 110.991, monospace: 84 };
+/** 字体串里最后那把泛型尺（`16px sans-serif` 与 `16px "F", sans-serif` 都取到 `sans-serif`） */
+const lastGeneric = (spec: string): string => (spec.split(',').at(-1) ?? spec).trim().split(/\s+/).at(-1)!.trim();
+const fakeRuler =
+  (installed: Record<string, number>) =>
+  (spec: string): number => {
+    const fam = /"([^"]+)"/.exec(spec)?.[1];
+    const generic = lastGeneric(spec);
+    if (fam === undefined) return GENERIC_WIDTH[generic]!;
+    return installed[fam] ?? GENERIC_WIDTH[generic]!;
+  };
+
+describe('缺装判定的判据本体（canvas 量宽的纯核，尺子可注入）', () => {
+  it('装着的面：自己的宽度在三把尺上都不等于兜底 ⇒ 存在', () => {
+    const present = measureFontPresence('Segoe UI', fakeRuler({ 'Segoe UI': 103.717 }));
+    expect(present, '真壳读数是 103.717（≠ 106.116 / 110.991 / 84）').toBe(true);
+  });
+
+  it('没装的面：三把尺全部逐字撞回兜底宽度 ⇒ 判缺装（这才让"本机缺装"那半句话有依据）', () => {
+    expect(measureFontPresence('LXGW WenKai Mono', fakeRuler({}))).toBe(false);
+    expect(measureFontPresence('NoSuchFontXyz9', fakeRuler({}))).toBe(false);
+  });
+
+  it('只在一把尺上巧合同宽不算缺装（单尺判据会被骗，三尺同重合才是"整条栈落到兜底"）', () => {
+    // 撞宽的那一把刻意取**列表里的第一把**（sans-serif）：实现哪天退化成"只看一把尺"，
+    // 这一条必须红——反过来挑 monospace 就咬不到（第一把不同即判存在，永远绿）。
+    const coincides = (spec: string): number => {
+      const generic = lastGeneric(spec);
+      const base = GENERIC_WIDTH[generic]!;
+      if (!spec.includes('"')) return base; // 泛型基线本身
+      if (generic === 'sans-serif') return base; // 只有这一把撞宽
+      return generic === 'serif' ? 110.5 : 105.2;
+    };
+    expect(measureFontPresence('Some Face', coincides)).toBe(true);
+  });
+
+  it('量尺拿不到数（NaN / 0 / 抛错）⇒ 不判定、不标注（与 checkFontStackPresence 的"抛错不误报"同口径）', () => {
+    expect(measureFontPresence('X', () => Number.NaN)).toBe(true);
+    expect(measureFontPresence('X', () => 0)).toBe(true); // 恒发 0 的尺子 = 量不到，全场误报缺装比不说更糟
+    expect(measureFontPresence('X', () => { throw new Error('no ctx'); })).toBe(true);
+  });
+
+  it('样本串是拉丁 + 数字 + 符号，不含 CJK（全角字步进恒等 1em，拿它比宽会把装了的面读成缺装）', () => {
+    expect(PRESENCE_SAMPLE).toMatch(/^[A-Za-z0-9@%.\s]+$/);
+    expect(PRESENCE_GENERICS).toEqual(['sans-serif', 'serif', 'monospace']);
+  });
+
+  it('真壳判定源在没有 canvas 的环境返回 null（node / jsdom 无 canvas 依赖 ⇒ UI 显示"判定不了"）', () => {
+    expect(typeof document).toBe('undefined'); // 本池是 node 环境；这条一旦哪天变成 jsdom，下面这条要跟着改
+    expect(domFontPresenceChecker()).toBeNull();
+  });
+
+  it('main.tsx 冷启动就播种字体档位（欢迎页没有编辑器，不能再等 Monaco 创建才应用）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/main.tsx', import.meta.url)), 'utf8');
+    expect(src, '重启后没人把存的档位落到根元素 ⇒ 欢迎页用系统栈（L20 生效链的最后一格）').toMatch(
+      /applyFontStackCssPrefs\(\)/,
+    );
+    // 但**只许动态引**：静态 import editor-display-prefs 会把 editor-options 那一子树拽进开机图
+    // （实测 +6 文件 / +85 KB，ps10-eager-graph 红），这条就是防止哪天有人"顺手改成静态"。
+    expect(src, 'main.tsx 静态引入了 editor-display-prefs —— 开机图体积闸会红，改回动态 import').not.toMatch(
+      /^import .*from '\.\/ui\/editor-display-prefs'/m,
+    );
+    expect(src).toMatch(/void import\('\.\/ui\/editor-display-prefs'\)/);
   });
 });
 

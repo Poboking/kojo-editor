@@ -1739,7 +1739,9 @@ function FontPresetControl(a: FontPresetControlArgs): ReactElement {
         })}
       </span>
       {fellBackNotice !== null ? <span className="settings-hint">{fellBackNotice}</span> : null}
-      {a.checker === null ? <span className="settings-hint">此环境读不到本机字体清单，缺装与否判定不了（选择本身照常生效）</span> : null}
+      {a.checker === null ? (
+        <span className="settings-hint">此环境量不到字体宽度，缺装与否判定不了（选择本身照常生效）</span>
+      ) : null}
       {/* 所见即所得：这一行用**当前生效栈**渲染，全角 + 中日汉字 + 常被连字糊掉的符号串都在 */}
       <div style={{ fontFamily: a.resolved.stack }} data-font-preview={a.group}>
         {FONT_PREVIEW_SAMPLE}

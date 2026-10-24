@@ -63,3 +63,18 @@ createRoot(container).render(
     <App />
   </NotificationCenter>,
 );
+
+// 字体档位的冷启动播种（批十二 L20 生效链的最后一格，2026-10-24 组长真壳复验补）：
+// 写侧（设置页改档）当场应用早已接好，但**重启后**只有一条路径会把存的档位落到根元素——
+// Monaco 创建时经过 `editorDisplayFontPatch()`。欢迎页没有编辑器 ⇒ 作者选的界面/代码字体在首屏
+// 不生效（实测：reload 停在欢迎页时根元素两个内联变量都是空的、body 仍是系统栈；进项目才恢复）。
+// 为什么走动态 import（同 PS-18 把 market.css 挪出首屏同一把尺）：静态引 `editor-display-prefs`
+// 会把它的依赖子树（editor-options → word-separators / layout-pref / find-pref）一起拽进开机图，
+// 实测 209 文件/3066 KB → 215/3151 KB，`ps10-eager-graph` 当场红 ⇒ 首屏为此多背 85 KB 不值。
+// 代价是欢迎页可能有一帧用系统栈、种子到位后换面——默认档根本不写内联变量（`applyFontStackCssPrefs`
+// 按"等于内置栈即 removeProperty"），没动过字体项的作者一帧都不闪。
+void import('./ui/editor-display-prefs')
+  .then((m) => m.applyFontStackCssPrefs())
+  .catch(() => {
+    // 播种失败 = 首屏沿用内置栈；这条链的失败不该惊动用户（写侧与编辑器 create 仍会各自应用）
+  });
