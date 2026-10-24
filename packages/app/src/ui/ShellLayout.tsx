@@ -943,6 +943,28 @@ export function ShellLayout(props: Props): ReactElement {
   const [activeOverlay, setActiveOverlay] = useState<{ id: string; payload?: unknown } | null>(null);
   const overlayRef = useRef(activeOverlay);
   overlayRef.current = activeOverlay;
+  /**
+   * 浮层退场（视觉批十四）：关闭时先把面板挂 200ms 的 `.ov-exiting` 动画再卸。
+   * CSS `overlay-out` 从批次十一就备着，缺的一直是"挂类"这一步——真机读数是入场
+   * 320ms 弹簧、退场 0ms，关起来像被掐断。只记 id，贡献对象仍从插槽现查（槽换版本时
+   * 退场那一帧也读得到最新那份）。
+   */
+  const [exitingOverlayId, setExitingOverlayId] = useState<string | null>(null);
+  const overlayExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismissOverlay = useCallback(() => {
+    const cur = overlayRef.current;
+    if (cur === null) return;
+    setActiveOverlay(null);
+    setExitingOverlayId(cur.id);
+    if (overlayExitTimer.current !== null) clearTimeout(overlayExitTimer.current);
+    overlayExitTimer.current = setTimeout(() => setExitingOverlayId(null), 200);
+  }, []);
+  useEffect(
+    () => () => {
+      if (overlayExitTimer.current !== null) clearTimeout(overlayExitTimer.current);
+    },
+    [],
+  );
   const pickerRef = useRef(false);
   pickerRef.current = paletteOpen || quickOpen || symbolsOpen;
   /**
@@ -1676,7 +1698,7 @@ export function ShellLayout(props: Props): ReactElement {
           zen: zenRef.current,
         });
         if (hit === 'modal') closeTopModal();
-        else if (hit === 'overlay') setActiveOverlay(null);
+        else if (hit === 'overlay') dismissOverlay();
         else if (hit === 'settings') setSettingsOpen(false);
         else if (hit === 'zen') dispatch({ type: 'exitZen' });
         return;
@@ -2364,7 +2386,7 @@ export function ShellLayout(props: Props): ReactElement {
               setProjectMenuAt({ x: r.left, y: r.bottom + 2 });
             }}
           >
-            <span aria-hidden="true">⋯</span>
+            <Icon name="more-horizontal" size="sm" />
           </button>
         ) : null}
         {onReloadProject ? (
@@ -2580,6 +2602,10 @@ export function ShellLayout(props: Props): ReactElement {
   const overlayContribution = activeOverlay
     ? (overlayItems.find((o) => o.id === activeOverlay.id) ?? null)
     : null;
+  /** 正在退场的那一份（关掉后 200ms 内仍在 DOM 里，挂 `.ov-exiting` 播 `overlay-out`） */
+  const exitingOverlay =
+    exitingOverlayId === null ? null : (overlayItems.find((o) => o.id === exitingOverlayId) ?? null);
+  const shownOverlay = overlayContribution ?? exitingOverlay;
   const overlays = (
     <>
       {paletteOpen ? (
@@ -2606,25 +2632,28 @@ export function ShellLayout(props: Props): ReactElement {
           onClose={() => setSymbolsOpen(false)}
         />
       ) : null}
-      {overlayContribution ? (
+      {shownOverlay ? (
         <div
-          className="overlay-backdrop"
+          className={`overlay-backdrop${overlayContribution === null ? ' ov-closing' : ''}`}
+          aria-hidden={overlayContribution === null ? true : undefined}
           onMouseDown={(e) => {
             // 只认左键：右键要弹浮层自己的菜单，不能先把浮层关掉
             // ——关掉之后根路由再收到 contextmenu，面已经不在场了
-            if (!isPrimaryButton(e)) return;
-            setActiveOverlay(null);
+            if (!isPrimaryButton(e) || overlayContribution === null) return;
+            dismissOverlay();
           }}
         >
           <div
-            className={`overlay-host${overlayContribution.size === 'wide' ? ' overlay-host-wide' : ''}`}
+            className={`overlay-host${overlayContribution?.size === 'wide' ? ' overlay-host-wide' : ''}${
+              overlayContribution === null ? ' ov-exiting' : ''
+            }`}
             role="dialog"
             aria-modal="true"
             onMouseDown={(e) => e.stopPropagation()}
           >
             {/* 浮层与面板同一条偏好通道（`UiPrefs`）：2.0 新建向导是 `ui.overlay` 贡献，
                 它要知道宿主这侧 2.0 面开没开、扩展名是哪个（K2-EDITOR-OPEN-PATHS）。 */}
-            <PanelBody contribution={overlayContribution} uiPrefs={uiPrefs} />
+            <PanelBody contribution={shownOverlay} uiPrefs={uiPrefs} />
           </div>
         </div>
       ) : null}

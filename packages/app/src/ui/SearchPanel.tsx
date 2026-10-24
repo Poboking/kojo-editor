@@ -36,6 +36,7 @@ import {
   searchMatchCounterText,
   searchNoticeText,
   searchProgressText,
+  searchSummaryDetail,
   searchSummaryText,
   shortSearchPath,
   type SearchRow,
@@ -481,6 +482,34 @@ export function SearchPanel({
   const selectedScope = findSearchScope(scopes, s.scopeKey);
   const selectedScopeKey = selectedScope === null ? '' : s.scopeKey;
   const staleScopeText = scopeStaleText(selectedScopeKey, s.appliedScope);
+  /**
+   * 结果态的第二行（视觉批十四）：范围 / 截断 / 陈旧 / 屏内行数原先各占一行，260px 里叠成
+   * 四行 11px 的墙（真机读数）。合并成**一行**（` · ` 连接、超长省略），完整文本逐条进悬停。
+   */
+  const resultNotes: { text: string; title: string; warn: boolean }[] = [];
+  if (result !== null) {
+    if (s.appliedScope !== null) {
+      resultNotes.push({
+        text: scopeStatusText(s.appliedScope),
+        title: scopeRootsTitle(s.appliedScope),
+        warn: false,
+      });
+      if (result.filesScanned === 0) {
+        const empty = scopeEmptyText(s.appliedScope, result.skipped.filtered);
+        resultNotes.push({ text: empty, title: empty, warn: true });
+      }
+    }
+    const notice = searchNoticeText(result);
+    if (notice !== null) resultNotes.push({ text: notice, title: notice, warn: true });
+    if (staleScopeText !== null) resultNotes.push({ text: staleScopeText, title: staleScopeText, warn: true });
+    if (hidden > 0) {
+      resultNotes.push({
+        text: `本屏 ${rows.length}/${totalRowCount} 行`,
+        title: `本屏显示前 ${rows.length} 行 · 共 ${totalRowCount} 行命中；结果区末尾的按钮可继续展开`,
+        warn: false,
+      });
+    }
+  }
   const extensionSummary = extensionSummaryText(s.extensionText);
 
   /**
@@ -962,6 +991,7 @@ export function SearchPanel({
                 <span
                   className={`search-status ksp-summary${result.cancelled ? ' search-stopped' : ''}`}
                   role="status"
+                  title={searchSummaryDetail(result)}
                 >
                   {searchSummaryText(result)}
                 </span>
@@ -991,11 +1021,6 @@ export function SearchPanel({
                   <span className="ksp-progress-text">替换中…（正在写盘）</span>
                 </div>
               ) : null}
-              {s.appliedScope !== null ? (
-                <div className="search-status ksp-note" title={scopeRootsTitle(s.appliedScope)}>
-                  {scopeStatusText(s.appliedScope)}
-                </div>
-              ) : null}
               {s.replaceSummary !== null ? (
                 <div
                   className="search-status search-replace-summary ksp-note ksp-note-replace"
@@ -1005,23 +1030,15 @@ export function SearchPanel({
                   {s.replaceSummary}
                 </div>
               ) : null}
-              {s.appliedScope !== null && result.filesScanned === 0 ? (
-                <div className="search-status search-scope-empty ksp-note ksp-note-warn">
-                  {scopeEmptyText(s.appliedScope, result.skipped.filtered)}
-                </div>
-              ) : null}
-              {searchNoticeText(result) !== null ? (
-                <div className="search-status dim ksp-note">{searchNoticeText(result)}</div>
-              ) : null}
-              {staleScopeText !== null ? (
-                <div className="search-status search-scope-stale ksp-note ksp-note-warn">
-                  {staleScopeText}
-                </div>
-              ) : null}
-              {hidden > 0 ? (
-                // 读数是"这一屏画了多少"，不是"最多只能给你这么多"（下面结果区末尾那枚按钮才是入口）
-                <div className="search-status dim ksp-note">
-                  本屏显示前 {rows.length} 行 · 共 {totalRowCount} 行命中
+              {resultNotes.length > 0 ? (
+                // 四类边角说明合并成一行：超长省略，完整文本逐条进悬停（视觉批十四）
+                <div
+                  className={`search-status ksp-note ksp-notes-line${
+                    resultNotes.some((n) => n.warn) ? ' ksp-note-warn' : ' dim'
+                  }`}
+                  title={resultNotes.map((n) => n.title).join('\n')}
+                >
+                  {resultNotes.map((n) => n.text).join(' · ')}
                 </div>
               ) : null}
             </>

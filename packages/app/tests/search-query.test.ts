@@ -12,6 +12,7 @@ import {
   searchMatchCounterText,
   searchNoticeText,
   searchProgressText,
+  searchSummaryDetail,
   searchSummaryText,
   shortSearchPath,
 } from '../src/ui/search-query';
@@ -145,11 +146,11 @@ describe('search-query · 第 X 项 / 共 Y 项', () => {
 });
 
 describe('search-query · 摘要与边角说明', () => {
-  it('被停止的结果不伪装成"搜完了"', () => {
-    const stopped = searchSummaryText(result({ cancelled: true, totalMatches: 3, filesScanned: 9, elapsedMs: 1200 }));
-    expect(stopped.startsWith('已停止：')).toBe(true);
-    expect(stopped).toContain('3 条结果');
-    expect(stopped).toContain('1.2s');
+  it('被停止的结果不伪装成"搜完了"；摘要走紧凑档、完整句进悬停（视觉批十四）', () => {
+    const r = result({ cancelled: true, totalMatches: 3, files: [], filesScanned: 9, elapsedMs: 1200 });
+    expect(searchSummaryText(r)).toBe('已停止：3 条 · 0 文件 · 1.2s');
+    // 扫描面只在详情句里出现：260px 一行放不下三段读数
+    expect(searchSummaryDetail(r)).toBe('已停止：3 条结果 · 0 个文件 · 扫描 9 个文件 · 1.2s');
   });
 
   it('截断 / 跳过逐项入说明；没有则 null', () => {

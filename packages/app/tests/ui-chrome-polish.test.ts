@@ -57,10 +57,14 @@ describe('视觉批十三 · 壳层打磨的防回退判据', () => {
     expect(results).toContain('20px');
   });
 
-  it('窗口标题带项目身份（不是恒定的 kojo-editor）', () => {
+  it('窗口标题三处同源：自绘标题栏 / document.title / Tauri 系统标题都读同一个算法', () => {
     const app = read('ui/App.tsx');
-    expect(app).toContain('— kojo-editor');
-    expect(app).toContain('project.rootDir');
+    // 算法住在 window-title.ts（纯函数另有一份真值测试）；这里只钉"三条出口都接上了"
+    expect(app).toContain("from './window-title'");
+    expect(app).toContain('windowTitleFor(project?.rootDir');
+    expect(app).toContain('document.title = windowTitle');
+    expect(app).toContain('getCurrentWindow().setTitle(windowTitle)');
+    expect(app).toContain('<WindowChrome title={windowTitle} />');
   });
 });
 

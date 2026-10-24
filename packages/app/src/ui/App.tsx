@@ -15,6 +15,7 @@ import {errorText,  join, pathKey } from '@kojo/plugin-api';
 // K2-MIGRATE-SHAPE：adapter 事件目录 → 迁移期参数形状投影（core 公共入口，宿主只做投影）。
 import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
 import { removeRecentOptimistic } from './WelcomeView';
+import { windowTitleFor } from './window-title';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
 import { AutosaveJournal, HEARTBEAT_INTERVAL_MS, SNAPSHOT_DEBOUNCE_MS } from './autosave-journal';
@@ -365,6 +366,28 @@ export function App(): ReactElement {
    */
   const [errorBar, setErrorBar] = useState<ProjectErrorBar | null>(null);
   const [project, setProject] = useState<GameProject | null>(null);
+  /**
+   * 窗口标题三处同源（视觉批十四）：自绘标题栏、`document.title`（浏览器标签 / 调试宿）、
+   * Tauri 系统标题（任务栏 / Alt-Tab）。只吃项目目录名，算法见 `window-title.ts`。
+   */
+  const windowTitle = useMemo(() => windowTitleFor(project?.rootDir ?? null), [project?.rootDir]);
+  useEffect(() => {
+    document.title = windowTitle;
+    if (!isTauri()) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        if (!cancelled) await getCurrentWindow().setTitle(windowTitle);
+      } catch (error) {
+        // 设置不上不影响使用（自绘标题栏仍对）：记一条，不弹窗打断
+        console.warn('[window-title] 设置系统窗口标题失败：', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [windowTitle]);
   const [index, setIndex] = useState<ErbIndex | null>(null);
   const [indexing, setIndexing] = useState(false);
   /**
@@ -2104,13 +2127,7 @@ export function App(): ReactElement {
   // `.welcome` / `.shell` 的 100% 高度由这块确定高度的 flex 舞台承接。
   return (
     <div className="app-frame" data-context-surface="app-fallback">
-      <WindowChrome
-        title={
-          project
-            ? `${project.rootDir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? project.rootDir} — kojo-editor`
-            : 'kojo-editor'
-        }
-      />
+      <WindowChrome title={windowTitle} />
       <div className="app-frame-body">
         {body}
         {/* 项目态错误条（REF-FRONT-PERF）：写允许域注册/清除、授权失败的 error state

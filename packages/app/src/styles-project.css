@@ -3730,6 +3730,10 @@ button.erb-mode-hint.unlocked:hover {
 .overlay-host.ov-exiting {
   animation: overlay-out var(--dur-2) var(--ease-out) forwards;
 }
+/* 退场那 200ms 里整层不再接事件（否则连点第二下会打到正在淡出的面板上） */
+.overlay-backdrop.ov-closing {
+  pointer-events: none;
+}
 .overlay-backdrop:has(.ov-exiting) {
   animation: fade-in var(--dur-2) var(--ease-out) reverse forwards;
 }
