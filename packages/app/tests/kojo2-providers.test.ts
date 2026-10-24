@@ -816,9 +816,11 @@ describe('宿主注册点与解耦面（读源码断言）', () => {
     expect(source).toMatch(/ensureGlobalProviders\(\{ kojo2Adapter: \(\) =>/);
     // 入口 A：解析走组合根登记簿，按当前项目的 adapterId 取
     expect(source).toContain('kojo2AdapterForProject(kernel.project.current())');
-    // 反向钉住旧 bug 形态：host 里不许再出现写死的某游戏 adapter
-    // （eraFL 工程拿到 eraTW 的 2.0 事实 = 静默错误的根因）
-    expect(source).not.toContain('ERATW_GAME_ADAPTER');
+    // 反向钉住旧 bug 形态：host 里不许再** import ** 某游戏 adapter，getter 也不许直接
+    // 返回它（eraFL 工程拿到 eraTW 的 2.0 事实 = 静默错误的根因）。
+    // 注释里提旧形态的名字不算（头注要写清为什么改），故只钉 import 与 getter 两处。
+    expect(source).not.toMatch(/import\s*\{[^}]*ERATW_GAME_ADAPTER/);
+    expect(source).not.toMatch(/kojo2Adapter:\s*\(\)\s*=>\s*ERATW_GAME_ADAPTER/);
   });
 
   it('语言层（`monaco/kojo2-providers.ts`）不 import 任何插件包、不出现游戏名词', () => {
