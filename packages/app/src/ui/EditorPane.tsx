@@ -6,7 +6,7 @@ import type {
   EditorSaveChoices,
   EditorSaveWarning,
 } from '@kojo/plugin-api';
-import {errorText,  FULLWIDTH_SPACE, WriteNotAllowedError } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
@@ -94,6 +94,7 @@ import {
   trimSegmentBlanksWithMap,
   type SugarSegmentInput,
 } from './sugar-view';
+import { resolveModelLanguage, subscribeLanguageOverride } from './language-mode-pref';
 import { isSealed, useSealed } from './sealed';
 import { isDirectMode, useDirectMode } from './direct-mode';
 import { isInWorkspaceFile } from './file-area';
@@ -130,6 +131,7 @@ import {
   minimapCtxForPath,
   pickSaveHandler,
   resolveSaveEolOverride,
+  retargetSugarModels,
   sugarStampOf,
   tierOverrides,
   type SugarCacheEntry,
@@ -1183,9 +1185,11 @@ export function EditorPane({
     // 只读内存 model：`inmemory://` scheme（**非** `file:`，避免与真文件 model 冲突被复用）。
     // URI 按组隔离（SPLIT-1）：同文件可在两组同时开糖视图——同 URI 的 createModel 会撞车。
     // 换文件 / 关开关时由 clearSugarView dispose。
+    // 语言走单一判据（LANG-OVERRIDE-MODEL）：作者在状态栏选过 ⇒ 挂覆盖语言；没选过 ⇒
+    // 投影自己的描述符（`.kojo` 语言面）。覆盖变更后的跟随见下方订阅 effect。
     const sugarModel = monaco.editor.createModel(
       doc,
-      KOJO_LANGUAGE_ID,
+      resolveModelLanguage(path, KOJO_LANGUAGE_ID),
       monaco.Uri.parse(`inmemory://sugar/${encodeURIComponent(groupId)}/${encodeURIComponent(path)}`),
     );
     sugarModelRef.current = sugarModel;
@@ -1247,6 +1251,25 @@ export function EditorPane({
     const t = window.setTimeout(() => host.classList.remove('sugar-swapping'), 240);
     return () => window.clearTimeout(t);
   }, [sugarView]);
+
+  // 语言模式覆盖变更：糖投影 model 跟着重挂（LANG-OVERRIDE-MODEL）。
+  // 池里的源 model 由 `editor-model-pool-instance` 的订阅跟随；投影是另一份 model
+  // （`inmemory://sugar/`，不进池、只读派生），不接这条订阅就会永远停在建 model 时的语言面。
+  // 判据与创建处同一枚 `resolveModelLanguage(path, KOJO_LANGUAGE_ID)`；同语言跳过由
+  // `retargetSugarModels` 兜住。分屏各组各有自己的订阅，只认自己当前文件。
+  useEffect(() => {
+    return subscribeLanguageOverride((changedPath) => {
+      const model = sugarModelRef.current;
+      const path = filePathRef.current;
+      if (!model || !path) return;
+      if (pathKey(changedPath) !== pathKey(path)) return;
+      retargetSugarModels(
+        [model],
+        () => resolveModelLanguage(path, KOJO_LANGUAGE_ID),
+        (target, languageId) => monaco.editor.setModelLanguage(target, languageId),
+      );
+    });
+  }, []);
 
   // 阅读模式「显示语法标记」：偏好落盘 + 立即重铺装饰（只动显示层，投影零改动；
   // 装饰集挂在当前糖 model 上，所以切档 / 重挂之后还要由 applySugarView 再铺一次）

@@ -700,9 +700,10 @@ export function installKojo2DocumentFormatter(monaco: typeof Monaco): Monaco.IDi
  * 与整篇 provider 同一条纪律：只做"该不该应答 + 形状翻译"，异常收成"这次不格式化"。
  * 规则本体是 {@link formatKojo2Range}（整篇算 + 行映射裁剪），本函数一个缩进判据都不写。
  *
- * **接线请求（本文件不动 `ui/editor-global-providers.ts`）**：2.0 段里与
- * `installKojo2DocumentFormatter` 并排加一行 `globalDisposers.push(installKojo2RangeFormatter(monaco))`。
- * 不给这行 = 选区格式化仍走 v1 的 `.kojo` provider（`kojo-format.ts`），2.0 面不接。
+ * **接线（已接）**：`ui/editor-global-providers.ts` 的 2.0 段与
+ * `installKojo2DocumentFormatter` 并排调用 `installKojo2RangeFormatter(monaco)`（批次八）。
+ * 没有这行 = 选区格式化仍走 v1 的 `.kojo` provider（`kojo-format.ts`），2.0 面不接；
+ * `packages/app/tests/language-parity.test.ts` 与 `kojo2-format.test.ts` 各钉一条。
  */
 export function installKojo2RangeFormatter(monaco: typeof Monaco): Monaco.IDisposable {
   if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;

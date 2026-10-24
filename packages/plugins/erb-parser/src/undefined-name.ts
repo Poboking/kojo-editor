@@ -291,6 +291,9 @@ const HAS_NON_ASCII = /[^\x00-\x7f]/;
 
 const COLON_HALF = 0x3a;
 const COLON_FULL = 0xff1a;
+const DOUBLE_QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const SEMICOLON = 0x3b;
 const PERCENT = 0x25;
 const FULLWIDTH_PERCENT = 0xff05;
 const AT_SIGN = 0x40;
@@ -457,6 +460,95 @@ function callAdjacent(text: string, end: number): boolean {
   return i < text.length && text.charCodeAt(i) === OPEN_PAREN;
 }
 
+/** 从 `open`（指向双引号）跳到闭引号**之后**；`\` 转义跳过下一字符；未闭合返回行尾 */
+function skipQuoted(raw: string, open: number): number {
+  for (let i = open + 1; i < raw.length; i++) {
+    const code = raw.charCodeAt(i);
+    if (code === BACKSLASH) {
+      i++;
+      continue;
+    }
+    if (code === DOUBLE_QUOTE) return i + 1;
+  }
+  return raw.length;
+}
+
+/** 把 `[from, to)` 刷成等长空格（列坐标口径不变） */
+function blankRange(chars: string[], from: number, to: number): void {
+  for (let i = from; i < to; i++) chars[i] = ' ';
+}
+
+/**
+ * 行内字符串的**补齐屏蔽**：只在共享 `codeView()` 的朴素引号配对会跑偏时启用。
+ *
+ * 两处确证跑偏（批次十二，真语料剩余命中的唯一误报类别）：
+ * ① `\"` 转义——CASE 字符表 `"\"", …` 会让其后的开/闭引号整体翻转，`"l"` / `"y"` 泄漏；
+ * ② `@"…%…%"` 插值串——插值里还能再放字符串（`%COND_STR("_Nude", …)%`），嵌套引号同样翻转。
+ *
+ * 判据只收"确证是字符串内容"的位置：`%…%` 之内是**表达式**，其中记号照常参与判定
+ * （见 `undefined-name.test.ts` 的反证用例）。产出与原文**等长**，列坐标不变；
+ * 其它行仍走 `visibleCodeLines().codeView()`（字符串/注释屏蔽的单一真源）。
+ */
+function maskQuotedLiterals(raw: string): string | null {
+  if (!raw.includes('\\"') && !raw.includes('@"')) return null;
+  const chars = raw.split('');
+  let i = 0;
+  while (i < raw.length) {
+    const code = raw.charCodeAt(i);
+    if (code === SEMICOLON) {
+      blankRange(chars, i, raw.length);
+      break;
+    }
+    if (code !== DOUBLE_QUOTE) {
+      i++;
+      continue;
+    }
+    const interpolated = i > 0 && raw.charCodeAt(i - 1) === AT_SIGN;
+    if (!interpolated) {
+      const after = skipQuoted(raw, i);
+      blankRange(chars, i + 1, after);
+      i = after;
+      continue;
+    }
+    // `@"…"`：串体刷白，`%…%` 插值段保留为代码（段内字符串照常刷白）
+    let j = i + 1;
+    let contentStart = j;
+    while (j < raw.length) {
+      const inner = raw.charCodeAt(j);
+      if (inner === BACKSLASH) {
+        j += 2;
+        continue;
+      }
+      if (inner === PERCENT) {
+        blankRange(chars, contentStart, j);
+        j++;
+        while (j < raw.length) {
+          const exprCode = raw.charCodeAt(j);
+          if (exprCode === DOUBLE_QUOTE) {
+            const after = skipQuoted(raw, j);
+            blankRange(chars, j + 1, after);
+            j = after;
+            continue;
+          }
+          j++;
+          if (exprCode === PERCENT) break;
+        }
+        contentStart = j;
+        continue;
+      }
+      if (inner === DOUBLE_QUOTE) {
+        blankRange(chars, contentStart, j);
+        j++;
+        break;
+      }
+      j++;
+    }
+    if (j >= raw.length) blankRange(chars, contentStart, raw.length);
+    i = j;
+  }
+  return chars.join('');
+}
+
 /** 声明名归一：去 `;` 行注释尾巴、去尾部数组维度（旧式 `#DIM NAME[10]`）与空白 */
 function declaredBaseName(raw: string): string {
   return raw.replace(/;.*$/, '').replace(/\[[^\]]*\]\s*$/, '').trim();
@@ -539,7 +631,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
     const lead = LEADING_WORD_RE.exec(raw.trim())?.[0]?.toUpperCase();
     if (lead !== undefined && EXPRESSION_STATEMENTS.has(lead)) continue;
     if (isDisplayStatement(lead)) continue;
-    const code = lineInfo.codeView();
+    const code = maskQuotedLiterals(raw) ?? lineInfo.codeView();
     if (!ASSIGN_LINE_RE.test(code)) continue;
     const lhs = LEADING_NAME_RE.exec(code)?.[1];
     if (lhs === undefined || STARTS_WITH_NUMBER.test(lhs)) continue;
@@ -608,7 +700,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
     const isDisplay = isDisplayStatement(keyword);
     // 廉价预筛：只有表达式语句或原文带 `=` 的行才需要代码视野（避免全篇逐行刷白）
     if (!isExpressionLine && (isDisplay || !raw.includes('='))) continue;
-    const code = lineInfo.codeView();
+    const code = maskQuotedLiterals(raw) ?? lineInfo.codeView();
     // 表达式语句或赋值形才进入词法扫描；其余行整行不扫（散文 / 函数名 / 动态调用）
     if (!isExpressionLine && (isDisplay || !ASSIGN_LINE_RE.test(code))) continue;
     // 字符串型赋值目标的右侧可以是无引号文本（`CNAME = 你这家伙`、地图数组整行文字），

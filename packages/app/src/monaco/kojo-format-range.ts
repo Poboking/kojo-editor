@@ -3,6 +3,7 @@ import {
   computeFormatEdits,
   computeRangeFormatEdits,
   erbBodyRegionAtLineEnd,
+  erbNewContentWithPrefix,
   type ErbBodyRegionKind,
   type FormatEdit,
 } from '@kojo/plugin-kojo-sugar';
@@ -32,20 +33,28 @@ import {
  *    `559a878` 给 ERB 形长出了跨行的块状态（数据表块体 / 停用死区，见插件 `erbBodyLineMask`），
  *    切片视角看不见窗口起点之上的开词 ⇒ 会把整篇腿明确保护的字节改掉。于是窗口这条腿
  *    多了下面第 3 项那道**前推锚点**的闸（不是放宽判据，是补上切片缺的那一段上下文）。
- *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数) + 一次前缀状态探针 + 一次前缀
- *    格式化趟（只在"切片这一腿真的想改字节"时才付；零编辑的单行窗口连探针都不用跑）。
+ *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数) + **一趟** O(前缀行数) 的
+ *    状态机扫描（只在"切片这一腿真的想改字节"时才付；零编辑的单行窗口连扫描都不用跑）。
  * 2. **编辑绝不越界**：`FormatEdit` 本身永不跨物理行（插件规则第 3 条），所以裁剪
  *    就是行号过滤，天然精确；裁剪后每条编辑都落在 `[startLine, endLine]` 内。
  *    块级对齐超出选区的问题在 ERB 形不存在（ERB 规则本就不跨行对齐）；
  *    若未来出现，答案也是"降级为行内规范化"，不是放宽裁剪。
- * 3. **切片必须与整篇同判据**（本批补的口子）：{@link prefixContext} 拿"整篇第 1 行到窗口之前"
- *    那段整行前缀问插件那**同一台**状态机（`erbBodyRegionAtLineEnd`）——末态在区里就把取文起点
- *    **前推到最外层区首标记行**，从那里喂进去时状态机必然处于"区外"，区段轨迹与整篇逐字重合；
- *    末态在区外则把同一段前缀交给插件 `computeRangeFormatEdits` 推块层级（IF 体内的缩进由此
- *    才与整篇腿一致），前缀只参与判据、一个字节都不进 edits。
+ * 3. **切片必须与整篇同判据**（本批补的口子）：
+ *    - **单行**（on-type 每次击键 / 单行选区）：{@link singleLineWindowEdits} 把前缀**按行数组**
+ *      喂进插件 `erbNewContentWithPrefix`，一趟同时拿到末态掩码（块体 / 死区）与块层级——与整篇
+ *      腿的 `erbBodyLineMask` / `erbIndentPlan` 是**同一台**状态机（没有第二份判据），只算目标行。
+ *      前缀行直接读 `model.getLineContent`（**不拼 5 万行大字符串**，也不再为探前缀多取一次窗口），
+ *      于是这一击键的窗口取文就是**触发行那 1 次**。改前这条腿不吃前缀 ⇒ IF/块体里的 on-type
+ *      拿不到层级，缩进规则在该行静默失效（只折全角空白）。
+ *    - **多行**：{@link prefixContext} 拿"整篇第 1 行到窗口之前"那段整行前缀问同一台状态机的
+ *      `erbBodyRegionAtLineEnd` 投影——末态在区里就把取文起点**前推到最外层区首标记行**，从那里
+ *      喂进去时状态机必然处于"区外"，区段轨迹与整篇逐字重合；末态在区外则把同一段前缀交给插件
+ *      `computeRangeFormatEdits` 推块层级，前缀只参与判据、一个字节都不进 edits。
  *    问不到（宿主没给前缀腿 / 抛错 / 方言不是 ERB）就**交回整篇那条腿**，绝不"当作区外"放行。
- *    唯一的免检通道：`startLine === endLine` 且切片判零编辑——单行数组喂进状态机时起点必然
- *    在区外（一行之上没有开词），切片掩码恒假 ⇒ "切片没想改" 与 "整篇也不会改" 等价（可证）。
+ *    唯一的免检通道：`startLine === endLine` 且切片判零编辑——逐行规则一个字节都不会改，于是
+ *    连前缀都不问（PS-4 的单价前提）。**边界**：这种行若落在 IF 块体里且"逐行视角已经规范"，
+ *    整篇腿仍会改成块体缩进，这一小类主动让掉——on-type 的触发字符（`;` / 全角空格）触发时该行
+ *    通常已有切片编辑，会走上面那条带块上下文的腿。
  *
  * on-type 触发字符只有两个，宁缺毋滥：
  * - `;`：ERB 整行注释的成形点（去缩进后以 `;` 开头才算注释，成形即折注释区全角）；
@@ -70,13 +79,23 @@ export function clipFormatEditsToLines(
   return edits.filter((e) => e.line >= startLine && e.line <= endLine);
 }
 
-/** 区间版格式化：同一核心算整篇，按行裁剪（单一真源，见模块头注） */
+/**
+ * 区间版格式化：同一核心算整篇，按行裁剪（单一真源，见模块头注）。
+ *
+ * 规则开关随请求走（`request.rules` 直传插件第三参；`undefined` = 全开，与改前逐字节等价）
+ * ——整篇腿（`kojo-format.ts` 的 `installDocumentFormatter`）早就这么传，本腿此前漏了，
+ * 于是偏好关掉的规则在区间格式化里静默失效。
+ */
 export function formatRangeEdits(
   request: FormatRequest,
   startLine: number,
   endLine: number,
 ): FormatEdit[] {
-  return clipFormatEditsToLines(computeFormatEdits(request.text, request.dialect), startLine, endLine);
+  return clipFormatEditsToLines(
+    computeFormatEdits(request.text, request.dialect, request.rules),
+    startLine,
+    endLine,
+  );
 }
 
 /**
@@ -212,9 +231,13 @@ function windowEdits(
   // 平移回全文坐标后再裁一次：窗口文本本来就只盖这几行，这道裁剪是"绝不越界"那条
   // 不变式的显式钉子（规则哪天长出跨行状态时，它先红在这里而不是改到隔壁行）。
   // `prefix` = 选区之前的整行前缀（缺省 ⇒ 插件层与 `computeFormatEdits` 逐字等价）。
+  // 规则开关同样随请求走（第四参；`undefined` = 全开 ⇒ 与改前逐字节等价）。
   const context = prefix === undefined ? {} : { prefix };
   return clipFormatEditsToLines(
-    offsetFormatEdits(computeRangeFormatEdits(request.text, request.dialect, context), lineOffset),
+    offsetFormatEdits(
+      computeRangeFormatEdits(request.text, request.dialect, context, request.rules),
+      lineOffset,
+    ),
     startLine,
     endLine,
   );
@@ -239,22 +262,72 @@ interface PrefixContext {
  *   调用方从那里起喂才让切片起点的状态与整篇对齐。
  * - `null` = **问不到**（宿主没给前缀这段 / 交回的不是 ERB）⇒ 调用方交回整篇那条腿；
  *   这里绝不把"问不到"当成"区外"——那正是本批要关的口子。
+ *
+ * 这条腿只服务**多行选区**：单行（on-type）走 {@link singleLineWindowEdits}——那边按行数组
+ * 喂块状态机，一趟就拿到末态掩码与层级，不再需要这里的 `region` 探针。
  */
 function prefixContext(
   resolveRange: WindowResolveRange,
   model: Monaco.editor.ITextModel,
   startLine: number,
-  needText: boolean,
 ): PrefixContext | null {
   if (startLine <= 1) return { text: '', region: null };
   const prefix = resolveRange(model, 1, startLine - 1);
   if (!prefix || prefix.dialect !== 'erb') return null;
   const region = erbBodyRegionAtLineEnd(prefix.text);
-  // 单行窗口只问末态（`needText === false`）：拼 `前缀+行尾` 是又一趟 5 万行级的字符串拷贝，
-  // 而这一腿根本不会把它喂给插件层（on-type 每次击键都走，见调用点的成本注）。
-  if (!needText) return { text: '', region };
   const eol = model.getEOL?.() === '\r\n' ? '\r\n' : '\n';
   return { text: `${prefix.text}${eol}`, region };
+}
+
+/**
+ * 单行窗口（on-type 的每一击键 / 单行选区）：**块层级与保护区判据与整篇腿同一套**。
+ *
+ * 改前这条腿不吃前缀：IF/块体里的 on-type 拿不到层级，缩进规则在该行静默失效
+ * （只折全角空白）。现在把前缀按行喂给插件 `erbNewContentWithPrefix`——它内部仍是
+ * `erbBodyLineMask` / `detectErbIndentUnit` / `erbIndentPlan` / `erbNewContent` 一台状态机
+ * （**没有第二份判据**），只算目标行的产物。
+ *
+ * 成本口径：一次 O(前缀行数) 的行数组扫描，**一趟顶两趟**——它同时给出末态掩码与层级；
+ * 前缀行**直接读 model**（`getLineContent`），既不拼 5 万行大字符串，也**不向宿主再要一次
+ * 前缀窗口**（改前那趟 `resolveRange(1, startLine-1)` 拼出的 2.35 MB 串随后被丢弃，纯白付）。
+ * 于是这次击键的窗口取文只有触发行那 **1 次**（见 `ps4-provider-seams.test.ts` 的观测断言）。
+ *
+ * 模型没有逐行取文这条腿（老 model）⇒ 不为了前缀去拼大串，直接交回整篇那条腿（结果等价，
+ * 只是这一次贵一点）；读行 / 计算抛错同样交回，绝不当成"区外"放行。
+ *
+ * `slice` = 不带前缀的单行切片（调用方已算好）：目标行是第 1 行（没有前缀）时它与带前缀
+ * 逐字等价，直接交回，省掉一次空扫描。
+ */
+function singleLineWindowEdits(
+  handlers: RangeFormatHandlers,
+  model: Monaco.editor.ITextModel,
+  request: FormatRequest,
+  lineNumber: number,
+  slice: readonly FormatEdit[],
+  stage: FormatStage,
+): FormatEdit[] | null {
+  if (lineNumber <= 1) return [...slice];
+  if (typeof model.getLineContent !== 'function') {
+    degrade(handlers, stage, {
+      where: 'anchor',
+      startLine: lineNumber,
+      endLine: lineNumber,
+      reason: '模型没有逐行取文这条腿（前缀只能整段拼串）⇒ 交回整篇那条腿',
+    });
+    return null;
+  }
+  try {
+    const prefixLines: string[] = new Array<string>(lineNumber - 1);
+    for (let i = 0; i < lineNumber - 1; i++) prefixLines[i] = model.getLineContent(i + 1);
+    // 窗口文本只该是这一行：行尾（若宿主带了）不属于行内容
+    const content = request.text.replace(/\r\n$|\r$|\n$/, '');
+    const next = erbNewContentWithPrefix(prefixLines, content, request.rules);
+    if (next === null) return [];
+    return [{ line: lineNumber, startColumn: 1, endColumn: content.length + 1, text: next }];
+  } catch (e: unknown) {
+    degrade(handlers, stage, { where: 'anchor', startLine: lineNumber, endLine: lineNumber, reason: errorText(e) });
+    return null;
+  }
 }
 
 /**
@@ -291,12 +364,20 @@ function computeWindowSafely(
   if (request.dialect !== 'erb') return null;
   try {
     const slice = windowEdits(request, startLine - 1, startLine, endLine);
-    // 免检通道（可证，不是放宽判据）：单行数组喂进块状态机时起点必然在区外（一行之上没有开词），
-    // 所以单行窗口的切片掩码恒假 ⇒ "切片判零编辑" 与 "整篇腿在该行判零编辑" 等价 ⇒ 不必问前缀。
+    // 免检通道（保留，PS-4 的单价前提）：单行窗口的切片判零编辑 ⇒ 逐行规则一个字节都不会改。
+    // 边界（诚实写在案）：块层级**能**在这条通道之外再加一刀——一行"逐行视角已经规范"（例如
+    // 半角 2 空格缩进、无全角空白）的语句若落在 IF 块体里，整篇腿会把它改成块体缩进。这种行
+    // 只有真的付一趟 O(前缀) 扫描才判得出；而 on-type 的触发字符是 `;` / 全角空格，触发时该行
+    // 通常已有切片编辑（折全角 / 折注释）⇒ 走下面那条带块上下文的腿。主动让掉的是"零切片编辑
+    // 却在块里"这一小类，代价是击键常态（`;` 注释行、台词里的全角空格）一次扫描都不跑。
     if (slice.length === 0 && startLine === endLine) return [];
+    if (startLine === endLine) {
+      // 单行：块层级 / 保护区要一趟 O(前缀) 扫描，前缀按行直读 model（见 `singleLineWindowEdits`）
+      return singleLineWindowEdits(handlers, model, request, startLine, slice, stage);
+    }
     // 选区之前的整行前缀：插件的块状态机（层级 / 保护区）与整篇腿同判据的唯一来路。
     // 问不到 ⇒ 交回整篇那条腿（绝不"当作区外"放行）。
-    const prefix = prefixContext(resolveRange, model, startLine, startLine !== endLine);
+    const prefix = prefixContext(resolveRange, model, startLine);
     if (prefix === null) {
       degrade(handlers, stage, {
         where: 'anchor',
@@ -307,20 +388,13 @@ function computeWindowSafely(
       return null;
     }
     // 带上前缀重算：IF/块层级由前缀推出来，选区外的字节仍一个都不进 edits（插件层只回选区行）。
-    // 单行窗口**不吃前缀**：on-type 是每次击键都走的腿，把 5 万行前缀再喂给块状态机会多一趟
-    // 扫描（PS-4 实测 52,601 行 一次击键 21.6 ms > 20 ms 预算）；单行的"块层级"本就在这里
-    // 没有可换的行，维持旧行为（与整篇腿在该行逐字节等价，见 `ps4-provider-seams.perf`）。
-    // 前缀只服务多行选区（Ctrl+K Ctrl+F 那种用户显式动作，一次一击，付得起一趟前缀扫描）。
-    const anchored =
-      startLine === endLine || prefix.text.length === 0
-        ? slice
-        : windowEdits(request, startLine - 1, startLine, endLine, prefix.text);
+    const anchored = prefix.text.length === 0 ? slice : windowEdits(request, startLine - 1, startLine, endLine, prefix.text);
     const anchorLine = prefix.region === null ? startLine : prefix.region.openLine;
     if (anchorLine === startLine) return anchored;
     // 窗口起点落在块体/死区里 ⇒ 取文起点前推到最外层区首，再从那里算（保护区一个字节都不许动）
     const ctx = resolveRange(model, anchorLine, endLine);
     if (!ctx || ctx.dialect !== 'erb') return null;
-    const ctxPrefix = prefixContext(resolveRange, model, anchorLine, true);
+    const ctxPrefix = prefixContext(resolveRange, model, anchorLine);
     if (ctxPrefix === null) return null;
     return windowEdits(ctx, anchorLine - 1, startLine, endLine, ctxPrefix.text);
   } catch (e: unknown) {

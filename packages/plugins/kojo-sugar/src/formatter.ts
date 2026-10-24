@@ -820,6 +820,40 @@ export function computeRangeFormatEdits(
 }
 
 /**
+ * 单行窗口的块上下文（additive，宿主 on-type 腿用）：**前缀行数组 + 目标行** → 目标行的新内容
+ * （`null` = 不改）。
+ *
+ * 为什么单行也要前缀：`computeRangeFormatEdits` 那条腿把"前缀文本"整段喂进 `erbNewContents`，
+ * 单行 on-type 每次击键都要跑，一趟 `splitPhysical` 的 5 万行切片太贵（PS-4 实测 37.7 ms）。
+ * 这里改喂**行数组**（宿主 `getLineContent` 逐行取，省掉拼大字符串那一趟），并且**只算目标行**
+ * 的产物——判据仍只走 `erbBodyLineMask` / `detectErbIndentUnit` / `erbIndentPlan` / `erbNewContent`
+ * 这一套（**没有第二份块状态**），差别只在"前缀行的新内容不必算"。
+ *
+ * 前缀必须是**整篇第 1 行到目标行之前**的行（0 基行号就是入参下标），否则块层级/保护区判据
+ * 与整篇腿对不上；目标行是入参 `content`（不含行尾）。
+ *
+ * 与 `computeRangeFormatEdits(…{prefix})` 的关系：两者对"前缀非空且单位探测得到"的同一份输入
+ * 给出同一行结果（`tests/formatter-erb.test.ts` 的"单行窗口：前缀行数组"一节钉住）；后者仍是
+ * 多行选区的唯一入口。
+ */
+export function erbNewContentWithPrefix(
+  prefixLines: readonly string[],
+  content: string,
+  options: FormatRuleOptions = {},
+): string | null {
+  const rules = resolveRules(options);
+  const contents: string[] = [...prefixLines, content];
+  const body = erbBodyLineMask(contents);
+  const target = contents.length - 1;
+  // 目标行落在块体/死区 ⇒ 整行不动（与整篇腿同一条掩码）
+  if (body[target]) return null;
+  // 单位探测 / 块层级与整篇腿同两个函数；前缀行只参与判据，产物不算（它们本来也不回写）
+  const unit = rules.indent ? detectErbIndentUnit(contents, body) : null;
+  const plan = unit === null ? null : erbIndentPlan(contents, body, unit, rules);
+  return erbNewContent(content, rules, plan === null ? null : (plan[target] ?? null));
+}
+
+/**
  * 把 edits 落回文本，**行尾原样保留**（每条 edit 都被夹在同一行内，绝不跨行）。
  * 越界坐标按夹取处理：陈旧行号/列号不该让保存链路抛错。
  */

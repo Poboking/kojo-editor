@@ -1532,5 +1532,7 @@ export function summarizeMigration(result: MigrateResult): {
 /* 供测试与后续批次的导出（不重复造第二份判别表） */
 export { classifyV1, hasWaitMark, isChoiceItem, isKojo2Line, parseDialogueShape, rewriteWaitAlias, TARGET_HINTS } from './classify.js';
 export { readSource } from './source.js';
+export { diagnoseV1IndentMismatch, repairV1Source } from './indent.js';
 export type { Classified, DialogueShape, V1Kind } from './classify.js';
 export type { Eol, V1Line, V1Source } from './source.js';
+export type { V1IndentCause, V1IndentFinding, V1SourceRepair, V1SourceRepairResult } from './indent.js';

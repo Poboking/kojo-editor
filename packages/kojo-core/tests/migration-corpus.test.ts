@@ -79,6 +79,7 @@ const compileV1 = (source: string) => {
       code: diagnostic.code,
       severity: diagnostic.severity,
       message: diagnostic.message,
+      line: diagnostic.loc?.line ?? null,
     })),
   };
 };
