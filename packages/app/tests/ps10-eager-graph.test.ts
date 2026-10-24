@@ -280,6 +280,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 修法是给包开子路径导出，开机侧一律引叶子；判据落在本文件末尾那条
     // 「开机图里对语言面库的引用必须是叶子」上——它比读数更早、更准地指出是谁干的。
     // 闸不动（3,120 / 210）。
+    // 2026-10-24（erafl 线合流 dev；对照树 = `origin/dev` 尖端 `6a998d9c`，同尺 209 文件 /
+    // 3,075 KB）：合流后一度 **210 文件 / 3,135 KB**（+60 KB / +1 文件），增量逐块点名：
+    //   - +45.4 KB `plugin-api/game.ts` **新进图**：erafl 线把 `activeGameAdapter` 收成
+    //     单源实现（替掉 14 处手写判据）并从 type-only 改成桶的值导出 ⇒ 桶的任何值引用
+    //     （`WellKnownServices` 等，开机图里有约十枚）都把 45 KB 的 v1 契约面透传进欢迎页。
+    //     **与 B1 的桶教训同形**（值导出决定模块图，type 导出不会）。修法照 B1 的叶子纪律：
+    //     函数拆进独立模块 `plugin-api/active-adapter.ts`，桶改指它，14 个消费方 import
+    //     路径一字未动（单源性不受影响）；game.ts 重新只剩 type 导出 ⇒ 出图。
+    //     读数 3,135 → 3,093（−45 KB，零文件变化）。**闸因此不抬。**
+    //   - +10.5 KB `plugin-api/slots.ts`：erafl 线 LS-B0/B2/B3 的语言服务契约扩员
+    //     （`ui.editor.languageService` 四判别成员 + `EditorRangeEdit` 等）。
+    //   - +3.8 KB `bootstrap.ts`：erafl v1 装载三处 + 入口 A（2.0 adapter 登记簿与
+    //     按项目解析的 getter）。
+    //   - +1.5 / −1.5 KB：B1 常量搬包（`kojo-lang/constants.ts` 换 `monaco/kojo2-constants.ts`）。
+    //   - +1.1 KB `plugin-api/events.ts` / +0.8 KB `index.ts`：`RevealRange` 类型导出与
+    //     上述导出面调整（type 面，不进图的只有 barrel 那一段）。
+    //   - −2.3 KB `eratw-adapter/plugin.ts`：dev 侧自合流点以来的增长，本线没有（差集减项）。
+    // 合流后现读数 **3,093 KB / 210 文件**（闸 3,120 / 210）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤210 文件 / ≤3,120 KB）`);

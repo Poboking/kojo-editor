@@ -3,7 +3,7 @@ import type { KernelEventMap } from '@kojo/plugin-api';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import { languageFor } from '../src/ui/editor-model-pool';
 import {
   bindDiffView,
