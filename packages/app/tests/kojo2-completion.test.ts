@@ -26,6 +26,7 @@ import {
   type KojoDecl,
 } from '@kojo/kojo-core';
 import { ERATW_EVENT_CATALOG, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
+import { ERAFL_GAME_ADAPTER } from '@kojo/plugin-erafl-adapter';
 import {
   KOJO2_ANCHOR_CHARS,
   kojo2CompletionAt,
@@ -573,6 +574,43 @@ describe('K2-COMPLETE-DATA：eraTW 的补全数据就是 adapter 契约字段', 
   it('未注入（旧 adapter / 无注入）⇒ 表情格与提示名格零候选，不猜', () => {
     expect(kojo2CompletionAt(queryAt(`${BASE}@颜绘 我 |`))).toEqual([]);
     expect(kojo2CompletionAt(queryAt(`${BASE}灵梦：「早安」( |`))).toEqual([]);
+  });
+});
+
+/* ============================================================================ */
+/* K2-COMPLETE-DATA-FL：eraFL 补全腿拿到 eraFL 自己的事实（入口 A/B 翻面判据）     */
+/* ============================================================================ */
+
+describe('K2-COMPLETE-DATA-FL：eraFL 的事件候选就是 ERAFL_GAME_ADAPTER 契约字段', () => {
+  it('`# 机 ` 之后给 eraFL 事件目录（与 eventCatalog 逐项相等，零手抄）', () => {
+    const expected = ERAFL_GAME_ADAPTER.eventCatalog.events.map((spec) => spec.event);
+    // 真盘读数（D:/Game/erafl）：只有 4 个事件是引擎真事件，另 5 个 eraTW 有它没有
+    expect(expected).toEqual(['初见', '读档', '商店', '购买']);
+    expect([...kojo2EventNamesOf(ERAFL_GAME_ADAPTER)]).toEqual(expected);
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}# 机 |`), {
+      adapter: ERAFL_GAME_ADAPTER,
+    });
+    expect(kindsOf(candidates)).toEqual(candidates.map(() => 'event'));
+    expect(labelsOf(candidates)).toEqual(expected);
+  });
+
+  it('eraTW 独有事件不出现在 eraFL 候选里（入口 A 修的就是"串别家游戏事实"）', () => {
+    const eraflEvents = ERAFL_GAME_ADAPTER.eventCatalog.events.map((spec) => spec.event);
+    const eratwOnly = eventNames(ERATW_GAME_ADAPTER).filter((name) => !eraflEvents.includes(name));
+    expect(eratwOnly).toEqual(['训练', '指令', '训练结束', '回合末', '指令结束']);
+    const labels = labelsOf(
+      kojo2CompletionAt(queryAt(`${BASE}# 机 |`), { adapter: ERAFL_GAME_ADAPTER }),
+    );
+    for (const name of eratwOnly) {
+      expect(labels).not.toContain(name);
+    }
+  });
+
+  it('eraFL 事件位按前缀裁剪（`# 机 初|` 只留"初见"）', () => {
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}# 机 初|`), {
+      adapter: ERAFL_GAME_ADAPTER,
+    });
+    expect(labelsOf(candidates)).toEqual(['初见']);
   });
 });
 
