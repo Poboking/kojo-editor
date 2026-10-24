@@ -71,6 +71,11 @@
   --green: #62c776;
   --red: #e2707a;
   --amber: #d8a269;
+  /* 「提示」档（视觉批十二 · 与 tokens.css 的 `--info` 同族）：比 dark 基线再提一档冷蓝，
+     与叶绿豆沙的语义族同明度带——压 bg 8.03 · bg-2 7.38 · bg-3 **6.58** · sunken 8.42 */
+  --info: #8fb0cc;
+  /* 错误文字档：本档 `--red` (#e2707a) 压 bg-3 已有 4.86，同 light 一样不必另抬，跟着 --danger 走 */
+  --danger-text: var(--danger);
 
   /* 焦点环：比 accent 再亮一档的青绿（压 bg 10.21，UI 判据 3:1 的三倍余量） */
   --focus-ring: #45d9ab;

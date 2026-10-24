@@ -79,11 +79,17 @@ const SEVERITY_RANK: Record<EditorProblem['severity'], number> = {
 /**
  * 严重度 → 上屏配色（**唯一一份**）：面板行圆点、面板表头、面板组头、状态栏、文件树徽标
  * 全读这张表。颜色也是口径的一部分——两处各定一色，迟早长成"同一档两种红"。
+ *
+ * 值一律取 CSS 变量而不是裸 hex（视觉批十二 · BOARD `VIS-CONTRAST`）：这张表是内联到 DOM 上的，
+ * 写死 hex 就等于绕开主题——真壳浅色档实测 `#d19a66` 压 `#eaeef2` 只有 **2.11:1**（正文需 4.5），
+ * 而 `--warning` 在浅色档早已翻成沉着的 `#8a5a04`（5.08:1）。三档的颜色真源只在
+ * `tokens.css` + `themes/*.css`，这里只点名角色。错误档点的是 `--danger-text`——
+ * `--danger` (#e06c75) 压在最浅的 `--bg-3` 面上只有 4.11，正文级破线（批十二补的名单条）。
  */
 export const SEVERITY_TINT: Record<EditorProblem['severity'], string> = {
-  error: '#e06c75',
-  warning: '#d19a66',
-  info: '#7f9cc0',
+  error: 'var(--danger-text)',
+  warning: 'var(--warning)',
+  info: 'var(--info)',
 };
 
 /**

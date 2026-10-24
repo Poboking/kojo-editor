@@ -281,6 +281,25 @@ const COMBOS: readonly Combo[] = [
   { fg: '--text-dim', bg: '--surface-sunken', need: 4.5, kind: '正文' },
   { fg: '--accent-text', bg: '--bg', need: 4.5, kind: '正文', note: 'accent 的文字专档' },
   { fg: '--text', bg: '--active', over: '--surface', need: 4.5, kind: '正文', note: '选中行 alpha wash 底（先叠该档实际底色）' },
+  /* —— 视觉批十二补档：真壳三档量测点名的两族，原先**根本不在名单里** ——
+   * ① 组件实际吃的是 `--fg` / `--fg-dim`（不是幻影 `--text*`），而计数徽标 `.kp-count` /
+   *    ui-kit `.kit-count` 的底是 `--bg-3`（= `--surface-overlay`）：dark 旧值 `#8b949e`
+   *    压它就是 **4.27**，破正文级 4.5——名单缺这一行，所以全池一直绿而屏上一直不合格。
+   * ② 语义四档要逐个落在它们真实的底上：插件状态行 / 巡检读数 / 错误详情体都压在
+   *    overlay 面上（面板与芯片），旧名单只判了 `--surface`。`--info` 是本批新立的第四枚
+   *    语义色（三处插件各抄一份 `#7f9cc0` 的历史到此为止），三档逐一求值。 */
+  { fg: '--fg', bg: '--surface-overlay', need: 4.5, kind: '正文', note: '面板/芯片底上的正文（批十二补）' },
+  { fg: '--fg-dim', bg: '--surface', need: 4.5, kind: '正文', note: '次要文字真源（非幻影 --text-dim）' },
+  { fg: '--fg-dim', bg: '--surface-overlay', need: 4.5, kind: '正文', note: '计数徽标那枚芯片底——4.27 破线的就是这一对' },
+  { fg: '--fg-dim', bg: '--surface-sunken', need: 4.5, kind: '正文' },
+  { fg: '--danger-text', bg: '--surface', need: 4.5, kind: '正文', note: '错误文字的专档（批十二新立，理由见 tokens.css 注释）' },
+  { fg: '--danger-text', bg: '--surface-overlay', need: 4.5, kind: '正文', note: '错误行/未知态压在面板面——`--danger` 在这面只有 4.11' },
+  { fg: '--danger-text', bg: '--surface-sunken', need: 4.5, kind: '正文' },
+  { fg: '--warning', bg: '--surface-overlay', need: 4.5, kind: '正文', note: '残留/未激活态压在面板面（批十二补）' },
+  { fg: '--success', bg: '--surface-overlay', need: 4.5, kind: '正文', note: '运行中态压在面板面（批十二补）' },
+  { fg: '--info', bg: '--surface', need: 4.5, kind: '正文', note: '批十二新立的第四枚语义色' },
+  { fg: '--info', bg: '--surface-overlay', need: 4.5, kind: '正文' },
+  { fg: '--info', bg: '--surface-sunken', need: 4.5, kind: '正文' },
   // —— 大字/图形/UI 部件级（≥3.0）——
   { fg: '--on-accent', bg: '--accent', need: 3.0, kind: '大字/UI', note: '反白按钮：名单条目的实际前景是 --on-accent（见头注口径说明）' },
   { fg: '--focus-ring', bg: '--bg', need: 3.0, kind: '大字/UI', note: '焦点环为非文字 UI 部件' },

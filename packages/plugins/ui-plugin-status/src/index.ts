@@ -43,16 +43,23 @@ const STATUS_LABEL: Record<PluginStateRecord['status'], string> = {
   stopped: '已停止',
 };
 
+/**
+ * 状态点／状态行的色（视觉批十二 · BOARD `VIS-CONTRAST`）：只点 CSS 变量的名。
+ *
+ * 原先这里与下面 `TONE_COLOR` 各写一份裸 hex（`#4fc08d/#e06c75/#d19a66/#888`），内联进 DOM
+ * 就绕过了主题——浅色档实测 `#888` 压 `#eaeef2` 只有 **3.04:1**（正文需 4.5），而 `--fg-dim`
+ * 在浅色档是 `#59636e`（5.24:1）。三档色值真源只在 `tokens.css` + `themes/*.css`。
+ */
 function statusColor(status: PluginStateRecord['status']): string {
   switch (status) {
     case 'active':
-      return '#4fc08d';
+      return 'var(--success)';
     case 'error':
-      return '#e06c75';
+      return 'var(--danger-text)';
     case 'inactive':
-      return '#d19a66';
+      return 'var(--warning)';
     default:
-      return '#888';
+      return 'var(--fg-dim)';
   }
 }
 
@@ -76,9 +83,9 @@ export function isQuietStatus(status: PluginStateRecord['status']): boolean {
 
 /** ops journal 读数三态的色（与 `plugin-dot` 同一调色板；`unknown` 用错误色——读不出不等于干净） */
 const TONE_COLOR: Record<OpsMaintenanceTone, string> = {
-  residue: '#d19a66',
-  clean: '#888',
-  unknown: '#e06c75',
+  residue: 'var(--warning)',
+  clean: 'var(--fg-dim)',
+  unknown: 'var(--danger-text)',
 };
 
 /**
@@ -142,7 +149,7 @@ export function pluginErrorNode(error: string | undefined): ReactElement {
       'div',
       {
         className: 'plugin-error-full',
-        style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#e06c75', fontSize: '12px' },
+        style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--danger-text)', fontSize: '12px' },
       },
       full,
     ),

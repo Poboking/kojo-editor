@@ -65,10 +65,18 @@ const SEVERITY_LABEL: Record<ConventionIssue['severity'], string> = {
   info: '提示',
 };
 
+/**
+ * 严重度 → 上屏色（视觉批十二）：值一律点 CSS 变量的名，不点 hex。
+ *
+ * 本插件按铁律不许 import 宿主模块，所以宿主那枚 `SEVERITY_TINT` 借不过来——但**色值真源
+ * 仍是同一份**（`tokens.css` 的 `--danger/--warning/--info` 加三档主题覆盖）。写死 hex 等于
+ * 绕过主题：真壳浅色档实测 `#d19a66` 压 `#eaeef2` 只有 2.11:1，而 `--warning` 在浅色档是
+ * `#8a5a04`（5.08:1）。三处各抄一张 hex 表的历史，到这里为止。
+ */
 const SEVERITY_COLOR: Record<ConventionIssue['severity'], string> = {
-  error: '#e06c75',
-  warning: '#d19a66',
-  info: '#7f9cc0',
+  error: 'var(--danger-text)',
+  warning: 'var(--warning)',
+  info: 'var(--info)',
 };
 
 /* ------------------------------ 条目窗口 ------------------------------ */
