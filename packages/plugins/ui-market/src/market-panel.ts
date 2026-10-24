@@ -121,6 +121,7 @@ export function createMarketPanel(
       installed: [],
       installedBytes: 0,
       dropped: [],
+      coverIgnored: [],
       reason: '',
       fetchedAt: null,
       generatedAt: null,

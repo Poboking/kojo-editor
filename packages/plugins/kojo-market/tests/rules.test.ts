@@ -450,8 +450,11 @@ describe('indexEntryProblem / parseIndex 认 `cover`（R3 additive 契约）', (
     unpackedBytes: 3,
     ...over,
   });
-  const parseWith = (entry: Record<string, unknown>): { index: { packs: unknown[] } | null; dropped: string[] } =>
-    parseIndex({ schema: MARKET_SCHEMA_VERSION, generatedAt: '2026-10-24T00:00:00Z', packs: [entry] });
+  const parseWith = (entry: Record<string, unknown>): {
+    index: { packs: unknown[] } | null;
+    dropped: string[];
+    coverIgnored: string[];
+  } => parseIndex({ schema: MARKET_SCHEMA_VERSION, generatedAt: '2026-10-24T00:00:00Z', packs: [entry] });
 
   it('旧声明零改动：条目不带 cover ⇒ 判据过、parseIndex 照收（dropped 空）——占位照旧那条路一步没动', () => {
     expect(indexEntryProblem(coverBase())).toBeNull();
@@ -467,28 +470,38 @@ describe('indexEntryProblem / parseIndex 认 `cover`（R3 additive 契约）', (
     expect(index?.packs[0]).toMatchObject({ cover: okCover });
   });
 
-  it('非法协议（http / data）⇒ 整条进 dropped 出声，拒因里点明 cover（铁律 4：不许静默丢字段）', () => {
+  it('非法协议（http / data）⇒ **丢字段不丢包**：条目照常呈现，`coverIgnored` 点名 id + 原因', () => {
+    // 组长判（R3 交回时改的口径）：封面只是装饰，注册表里一个 `http://` 缩略图不该把别人的
+    // 作品整条藏掉；但"不合规"也不许静默 ⇒ 单列一条出声。细粒度拒因在 plugin-api 的
+    // `market-cover.test.ts` 逐条钉，这里钉的是**行为**。
     for (const url of ['http://img.example.test/a.png', 'data:image/png;base64,AAAA']) {
-      const why = indexEntryProblem(coverBase({ cover: { url, bytes: 10 } }));
-      expect(why, url).not.toBeNull();
-      expect(why!, url).toContain('cover');
-      const { index, dropped } = parseWith(coverBase({ cover: { url, bytes: 10 } }));
-      expect(dropped, url).toHaveLength(1);
-      expect(dropped[0]!, url).toContain('cover');
-      expect(dropped[0]!, url).toContain('cover.demo');
-      expect(index?.packs, url).toHaveLength(0); // 这一条不呈现、不许装；坏字段没有"悄悄忽略"这一处理
+      expect(indexEntryProblem(coverBase({ cover: { url, bytes: 10 } })), `${url} 不该毙整条`).toBeNull();
+      const r = parseWith(coverBase({ cover: { url, bytes: 10 } }));
+      expect(r.dropped, url).toEqual([]);
+      expect(r.index?.packs, url).toHaveLength(1);
+      expect(r.index?.packs[0], url).not.toMatchObject({ cover: expect.anything() });
+      expect(r.coverIgnored, url).toHaveLength(1);
+      expect(r.coverIgnored[0]!, url).toContain('cover.demo');
+      expect(r.coverIgnored[0]!, url).toContain('cover');
     }
   });
 
-  it('超限也整条拒：url 超长 / bytes 非正整数 / bytes 超封面上限', () => {
-    expect(indexEntryProblem(coverBase({ cover: { url: `https://a.test/${'x'.repeat(2048)}`, bytes: 10 } }))).toContain('超长');
-    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png', bytes: 0 } }))).toContain('bytes');
-    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png', bytes: 1.5 } }))).toContain('bytes');
-    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png', bytes: MARKET_MAX_COVER_BYTES + 1 } }))).toContain('上限');
-  });
-
-  it('cover 形状不是对象 / bytes 不是数 ⇒ 同样出声（这一格只装"要么没有、要么全对"）', () => {
-    expect(indexEntryProblem(coverBase({ cover: 'https://a.test/x.png' }))).toContain('cover');
-    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png' } }))).toContain('bytes');
+  it('超限与形状不合也走同一条路：条目留着、封面去掉、`coverIgnored` 有声', () => {
+    const bads: Record<string, unknown>[] = [
+      { cover: { url: `https://a.test/${'x'.repeat(2048)}`, bytes: 10 } },
+      { cover: { url: 'https://a.test/x.png', bytes: 0 } },
+      { cover: { url: 'https://a.test/x.png', bytes: 1.5 } },
+      { cover: { url: 'https://a.test/x.png', bytes: MARKET_MAX_COVER_BYTES + 1 } },
+      { cover: 'https://a.test/x.png' },
+      { cover: { url: 'https://a.test/x.png' } },
+    ];
+    for (const over of bads) {
+      const base = coverBase(over);
+      expect(indexEntryProblem(base), JSON.stringify(over)).toBeNull();
+      const r = parseWith(base);
+      expect(r.index?.packs, JSON.stringify(over)).toHaveLength(1);
+      expect(r.coverIgnored, JSON.stringify(over)).toHaveLength(1);
+      expect(r.dropped, JSON.stringify(over)).toEqual([]);
+    }
   });
 });

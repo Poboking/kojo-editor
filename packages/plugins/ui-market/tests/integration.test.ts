@@ -954,6 +954,7 @@ function viewProps(
     // 夹具自己加一遍只是给展示层一个输入；产品侧的唯一口径在服务 `installedBytes()`
     installedBytes: installed.reduce((s, r) => s + r.files.reduce((t, f) => t + f.bytes, 0), 0),
     dropped: [],
+    coverIgnored: [],
     reason: '',
     fetchedAt: 1_700_000_000_000,
     generatedAt: '2026-10-16T00:00:00Z',

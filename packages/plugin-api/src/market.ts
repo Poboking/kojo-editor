@@ -373,6 +373,12 @@ export type MarketIndexState =
        * 铁律 4：冲突必须可见——过去它被静默过滤在函数内部）。空数组 = 一条没丢。
        */
       readonly dropped: readonly string[];
+      /**
+       * **封面链接不合规、已去掉 `cover` 照常列出的条目**（id + 原因）。可选 = 老实现零改动。
+       * 与 `dropped` 分开是刻意的：装饰字段没有让一个包从列表里蒸发的权力，但它不合格
+       * 也必须出声（铁律 4 要的是"不许静默"，不是"一律整条毙"）。
+       */
+      readonly coverIgnored?: readonly string[];
       /** 本机这份列表的拉取时刻（epoch ms）；手工放的/从没拉过的 = `null` */
       readonly fetchedAt: number | null;
     };

@@ -250,27 +250,34 @@ export function indexEntryProblem(e: unknown): string | null {
   if (typeof fc !== 'number' || fc < 0) return 'fileCount 不合规';
   const ub = o['unpackedBytes'];
   if (typeof ub !== 'number' || ub < 0) return 'unpackedBytes 不合规';
-  // 封面（R3 additive）：**缺席 = 合法**（面板照旧走「」母题占位）；在册就不合格 ⇒ 整条进
-  // `dropped` 出声（铁律 4：校验规则抛错不许静默丢字段——只丢字段没人看得见，这条与 zip 同类）。
-  const cover = o['cover'];
-  if (cover !== undefined) {
-    const coverWhy = marketCoverProblem(cover);
-    if (coverWhy !== null) return `cover ${coverWhy}`;
-  }
+  // 封面（R3 additive）：**不在这里整条毙**。缺席 = 合法；在册但不合格 ⇒ 由 `parseIndex`
+  // 去掉 `cover` 照常收条、并记进 `coverIgnored` 出声（装饰字段没有让一个包蒸发的权力）。
   return null;
 }
 
 /**
  * 索引校验：整体形状不对 ⇒ `null`（调用方出声）；
  * 单条不对 ⇒ **丢掉这一条**并计数（不让一个坏包把整站打死）。
+ *
+ * 封面是**例外**（组长判，R3 交回时改的口径）：它只是装饰，坏链接不该有让一个包从列表里
+ * 蒸发的权力——注册表里一个 `http://` 缩略图就把别人的作品整条藏掉，罚错了对象也修不好
+ * （消费侧改不了发布方的索引）。所以这里只**丢字段、不丢包**，并单列 `coverIgnored` 出声
+ * （铁律 4 要的是"不许静默"，不是"一律整条毙")。
  */
-export function parseIndex(raw: unknown): { index: MarketIndex | null; dropped: string[] } {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { index: null, dropped: [] };
+export function parseIndex(raw: unknown): {
+  index: MarketIndex | null;
+  dropped: string[];
+  /** 封面链接不合规 ⇒ 该条去掉 cover 照常列出，id + 原因记在这里 */
+  coverIgnored: string[];
+} {
+  const nothing = { index: null, dropped: [], coverIgnored: [] } as const;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ...nothing };
   const o = raw as Record<string, unknown>;
-  if (o['schema'] !== MARKET_SCHEMA_VERSION) return { index: null, dropped: [] };
-  if (typeof o['generatedAt'] !== 'string') return { index: null, dropped: [] };
-  if (!Array.isArray(o['packs'])) return { index: null, dropped: [] };
+  if (o['schema'] !== MARKET_SCHEMA_VERSION) return { ...nothing };
+  if (typeof o['generatedAt'] !== 'string') return { ...nothing };
+  if (!Array.isArray(o['packs'])) return { ...nothing };
   const dropped: string[] = [];
+  const coverIgnored: string[] = [];
   const packs: MarketIndexEntry[] = [];
   for (const e of o['packs']) {
     const why = indexEntryProblem(e);
@@ -279,10 +286,22 @@ export function parseIndex(raw: unknown): { index: MarketIndex | null; dropped: 
       dropped.push(`${typeof rawId === 'string' ? rawId : '(无 id)'}: ${why}`);
       continue;
     }
-    packs.push(e as MarketIndexEntry);
+    const entry = e as MarketIndexEntry;
+    if (entry.cover !== undefined) {
+      const coverWhy = marketCoverProblem(entry.cover);
+      if (coverWhy !== null) {
+        coverIgnored.push(`${entry.id}: ${coverWhy}`);
+        const sanitized: MarketIndexEntry = { ...entry };
+        delete sanitized.cover;
+        packs.push(sanitized);
+        continue;
+      }
+    }
+    packs.push(entry);
   }
   return {
     index: { schema: MARKET_SCHEMA_VERSION, generatedAt: o['generatedAt'], packs },
     dropped,
+    coverIgnored,
   };
 }

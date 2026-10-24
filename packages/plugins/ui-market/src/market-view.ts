@@ -304,6 +304,20 @@ export function droppedNotice(dropped: readonly string[]): string {
   );
 }
 
+/**
+ * 封面不合规 ≠ 包不合规：这些条目**照常列出、照常可装**，只是没图（走「」母题）。
+ * 单独一句说，是为了不把它混进"被剔除"那句话里——那条说的是"没列出、不许装"，
+ * 套在这里就是假告警（作者会以为自己少了一个包）。一条没忽略 ⇒ 空串（不占行）。
+ */
+export function coverIgnoredNotice(ignored: readonly string[]): string {
+  if (ignored.length === 0) return '';
+  return (
+    `有 ${ignored.length} 个包的封面链接不合格，已按无封面列出（包本身不受影响）：` +
+    ignored.slice(0, 3).join('；') +
+    (ignored.length > 3 ? '……' : '')
+  );
+}
+
 /** epoch ms → 本地 `MM-DD HH:mm`（面板只给"数据时间"这种粗粒度，秒是噪声） */
 export function formatClock(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '—';

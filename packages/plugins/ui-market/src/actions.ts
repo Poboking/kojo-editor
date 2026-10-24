@@ -56,6 +56,8 @@ export interface MarketSnapshot {
   readonly installedBytes: number;
   /** 被剔除条目（形状坏 / 同 id 异 kind 冲突）；`absent`/`invalid` 时为空 */
   readonly dropped: readonly string[];
+  /** 封面链接不合规、去掉 `cover` 后照常列出的条目（包没丢，只是没图） */
+  readonly coverIgnored: readonly string[];
   /** `invalid` 的可诊断原因（其余态空串） */
   readonly reason: string;
   /** 本机这份列表的拉取时刻（没拉过 / 手工放的 ⇒ null） */
@@ -81,6 +83,7 @@ function snapOf(
     installed,
     installedBytes,
     dropped: state.state === 'ok' ? state.dropped : [],
+    coverIgnored: state.state === 'ok' ? (state.coverIgnored ?? []) : [],
     reason: state.state === 'invalid' ? state.reason : '',
     fetchedAt: state.state === 'ok' ? state.fetchedAt : null,
     generatedAt: state.state === 'ok' ? state.index.generatedAt : null,
@@ -100,6 +103,7 @@ function failedSnapshot(pullNote: string): MarketSnapshot {
     installed: [],
     installedBytes: 0,
     dropped: [],
+    coverIgnored: [],
     reason: pullNote,
     fetchedAt: null,
     generatedAt: null,

@@ -17,6 +17,7 @@ import {
   CAPABILITY_DETAIL,
   CAPABILITY_HINT,
   CLEAR_LABEL,
+  coverIgnoredNotice,
   dataTimeLine,
   dataTimeSummary,
   droppedNotice,
@@ -152,6 +153,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const time = dataTimeLine(snapshot);
   const timeShort = dataTimeSummary(snapshot);
   const droppedLine = droppedNotice(snapshot.dropped);
+  const coverLine = coverIgnoredNotice(snapshot.coverIgnored);
   // 过滤态：能力面说明讲的是"这面板能干什么"，与作者此刻正在找的这几条无关 ⇒ 让位不占行；
   // 空态 / 错误态那几句照给——它们说的正是这一屏此刻的事实。
   const filtering = p.query !== '';
@@ -447,6 +449,8 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
           ),
       // 被剔除条目的说明：只在这里出声（红色留给"注册表那边的问题"）
       droppedLine === '' ? null : createElement('div', { className: 'mk-warn' }, droppedLine),
+      // 封面不合规：包照常列出，所以这行不是红色告警（红是给"没列出、不许装"的）
+      coverLine === '' ? null : createElement('div', { className: 'mk-note' }, coverLine),
       // 能力面说明：常驻只有一行，长文折进 `<details>`（作者点开才看全；批次十一 L07 拆行长文墙）
       // ui-kit-candidate: KitDisclosure——折叠件现在是原生 `<details>/<summary>` + 宿主图标桥那一枚
       // `chevron-right`；ui-kit 里还没有"一行常驻读数 + 折叠展开段"这件原语（设置页与教程面各写各的）。

@@ -31,6 +31,7 @@ const snap = (over: Partial<MarketSnapshot> = {}): MarketSnapshot => ({
   installed: [],
   installedBytes: 0,
   dropped: [],
+  coverIgnored: [],
   reason: '',
   fetchedAt: 1_700_000_000_000,
   generatedAt: '2026-10-15T00:00:00Z',

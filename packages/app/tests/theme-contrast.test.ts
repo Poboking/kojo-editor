@@ -29,6 +29,8 @@ import { describe, expect, it } from 'vitest';
  * 正文级实心按钮走 `--accent-strong`（tokens.css §5.102 的标定：白字压 `--accent` 只有 3.32:1，
  * 故正文档另有 `--on-accent on --accent-strong` ≥4.5 一条）。因此本条按 UI 部件档 ≥3.0 判
  * `--on-accent on --accent`，正文级由 `--accent-strong` 那条兜住——两条都在名单里，一条不缺。
+ * 组长判：这个口径认。它不是放宽（放宽是"少判一条"，这里是"按实际落在屏上的那对颜色判"），
+ * 且 3.32:1 是标定值而非估的；后来者若把 `--fg` 真落到 accent 底上，本条会当场红，正是要的效果。
  */
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');

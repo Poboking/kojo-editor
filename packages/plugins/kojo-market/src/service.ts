@@ -336,7 +336,12 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
   type ParsedIndex =
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string; readonly detail: string }
-    | { readonly kind: 'parsed'; readonly index: MarketIndex; readonly dropped: readonly string[] };
+    | {
+        readonly kind: 'parsed';
+        readonly index: MarketIndex;
+        readonly dropped: readonly string[];
+        readonly coverIgnored: readonly string[];
+      };
 
   /**
    * 一次刷新周期内共享的「索引读」槽（PERF-10b）。
@@ -362,7 +367,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
         detail: errMessage(err),
       };
     }
-    const { index, dropped } = parseIndex(rawJson);
+    const { index, dropped, coverIgnored } = parseIndex(rawJson);
     if (index === null) {
       return {
         kind: 'invalid',
@@ -370,7 +375,7 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
         detail: indexPath,
       };
     }
-    return { kind: 'parsed', index, dropped };
+    return { kind: 'parsed', index, dropped, coverIgnored };
   }
 
   /**
@@ -405,10 +410,11 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
   async function dropIdKindConflicts(
     index: MarketIndex,
     dropped: readonly string[],
-  ): Promise<{ index: MarketIndex; dropped: string[] }> {
+    coverIgnored: readonly string[],
+  ): Promise<{ index: MarketIndex; dropped: string[]; coverIgnored: readonly string[] }> {
     const refs: PackRef[] = [...index.packs, ...(await readRecords())];
     const ids = packIdKindConflicts(refs);
-    if (ids.length === 0) return { index, dropped: [...dropped] };
+    if (ids.length === 0) return { index, dropped: [...dropped], coverIgnored };
     log.warn(
       `id-kind-conflict：${ids.length} 个包 id 同时挂在多个种类下（索引内部，或索引与已装集相冲），` +
         `这些条目全部不呈现、也不许被装 —— ${ids.join('、')}`,
@@ -432,13 +438,19 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
       log.warn(`注册表索引不可用：${indexPath} —— ${parsed.reason}（${parsed.detail}）`);
       return { state: 'invalid', reason: parsed.reason, detail: parsed.detail };
     }
-    const kept = await dropIdKindConflicts(parsed.index, parsed.dropped);
+    const kept = await dropIdKindConflicts(parsed.index, parsed.dropped, parsed.coverIgnored);
     if (kept.dropped.length > 0) {
       log.warn(
         `注册表索引丢掉了 ${kept.dropped.length} 条（不呈现、不许装）：${kept.dropped.slice(0, 5).join('；')}`,
       );
     }
-    return { state: 'ok', index: kept.index, dropped: kept.dropped, fetchedAt: await readFetchedAt() };
+    return {
+      state: 'ok',
+      index: kept.index,
+      dropped: kept.dropped,
+      coverIgnored: kept.coverIgnored,
+      fetchedAt: await readFetchedAt(),
+    };
   }
 
   /** 生效端点：用户覆盖优先，否则契约默认值（**默认值只住契约常量**） */
