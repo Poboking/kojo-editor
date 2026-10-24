@@ -52,6 +52,8 @@ import {
 } from './chara-csv';
 import { createEraflConventions } from './conventions';
 import { createEraflFamilyIndex } from './family-index';
+import { ERAFL_NAME_GLOSSARY } from './name-glossary';
+import { ERAFL_STATE_LINES } from './state-lines';
 import {
   loadEraflInstructionNames,
   loadEraflVariableSchema,
@@ -209,6 +211,24 @@ export function createEraflAdapterPlugin(): Plugin {
         get kojoInstructionTable() {
           return currentInstructionTable;
         },
+        /**
+         * 文件名/目录名的日→中对照（消费方：`ProjectView` → `FileTree` 的 `gloss`）。
+         *
+         * eraFL 的目录与文件名是日文，正文却已汉化；不对照的话作者在树里对不上号。
+         * 表是**静态**的（不像 `variableSchema` 随工程重建）：它描述的是"这套语料怎么
+         * 命名"，换工程也是同一套命名法；与语料脱节由 `name-glossary.test.ts` 的真盘守卫抓。
+         */
+        nameGlossary: ERAFL_NAME_GLOSSARY,
+        /**
+         * 条件矩阵的剧情线预设。
+         *
+         * 键按**真盘写法**给：eraFL 的 CFLAG 是二维的（`CFLAG:角色:索引`），同一个状态
+         * 在不同函数里写成 `CFLAG:CHARA_ID:好感度` / `CFLAG:対象:好感度` / `CFLAG:LOCAL:好感度`
+         * ——三种拼写是三条不同的依赖键，所以一条线要列全（矩阵按 `keys` 精确匹配行）。
+         * 只收录**真盘有读数**的五条（2026-10-24 实测：好感度 45 / 依存度 27 / 従属度 11 /
+         * 支配度 11 / 面識 16，均以 `CFLAG:CHARA_ID:*` 为主形）；不凭 CSV 里有名字就造线。
+         */
+        stateLinePresets: ERAFL_STATE_LINES,
 
         async detect(rootDir: string): Promise<boolean> {
           // 三者**同时**成立才算 eraFL 工程：

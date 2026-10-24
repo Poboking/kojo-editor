@@ -13,6 +13,8 @@ import { existsSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { FileIO, GameProject } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
+import { ERAFL_NAME_GLOSSARY } from '../src/name-glossary';
+import { ERAFL_STATE_LINES } from '../src/state-lines';
 import { activateAdapter, nodeIo } from './harness';
 
 const GAME_ROOT = 'D:/Game/erafl';
@@ -136,6 +138,29 @@ describe('adapter 的约定规则位（conventions）', () => {
       'erafl.kojo-define.missing-name',
       'erafl.kojo-define.duplicate-number',
       'erafl.kojo-xml.encoding-mismatch',
+    ]);
+  });
+});
+
+/* --------------------- 展示位：nameGlossary / stateLinePresets --------------------- */
+
+describe('adapter 的展示位（名字对照 / 剧情线）', () => {
+  it('nameGlossary 挂在 adapter 上，且是同一份静态表（消费方：FileTree 的 gloss）', () => {
+    const adapter = activateAdapter(nodeIo());
+    // 静态表：不需要工程、不随 loadProject 重建
+    expect(adapter.nameGlossary).toBe(ERAFL_NAME_GLOSSARY);
+    expect(adapter.nameGlossary?.['ティア']).toBe('蒂娅');
+  });
+
+  it('stateLinePresets 挂在 adapter 上（消费方：条件矩阵的剧情线快选）', () => {
+    const adapter = activateAdapter(nodeIo());
+    expect(adapter.stateLinePresets).toBe(ERAFL_STATE_LINES);
+    expect(adapter.stateLinePresets?.map((line) => line.id)).toEqual([
+      'favor',
+      'depend',
+      'servile',
+      'dominate',
+      'acquaint',
     ]);
   });
 });
