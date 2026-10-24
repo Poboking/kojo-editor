@@ -413,22 +413,64 @@ eraFL 的 backend 有一半可以照 eraTW，另一半要重写：
 
 这是本交接件里**唯一需要做设计决策**的一块，也是最有价值的一块。
 
-**现状**：`kojo-xml` 已经是独立语言面（`languages.ts:120`），有解析器、索引、服务、条件抽取、
-记号替换、面板（`@kojo/plugin-ui-kojo-xml`，877 行）。但它是**v1 形态**：宿主给面板喂
-`KojoXmlService`，面板自己渲染。
+#### E-1 已量（2026-10-25，按本件要求「先量再选」）
 
-**问题**：eraFL 作者 90% 的时间在 XML 里，而 2.0 的所有能力（补全/悬停/跳转/诊断/重构）
-目前只服务 `kojo2` 语言 id。⇒ **eraFL 作者享受不到 2.0 的任何收益。**
+2026-10-24 的 XML 口上批已经把 `kojo-xml` 从"解析器 + 面板"推到**一等 Monaco 语言面**，
+本段的旧描述（"v1 形态"）已过期，逐项实测如下——
 
-**方向（建议，不是定论）**：
+| 2.0 语言面的能力 | `kojo-xml` 现状 | 证据（文件:能力） |
+| --- | --- | --- |
+| 语法高亮 | ✅ | `monaco/xml-language.ts`（Monarch） |
+| 补全（属性名 + 枚举值 + `com` 编号） | ✅ | `kojo-xml-providers.ts::registerCompletionItemProvider` |
+| 悬停（属性含义 / 取值域） | ✅ | 同上 `registerHoverProvider` |
+| 文档符号（大纲） | ✅ | 同上 `registerDocumentSymbolProvider` |
+| 折叠 | ✅ | 同上 `registerFoldingRangeProvider`（自建标签配对，无 tree-sitter） |
+| 诊断（未知属性 / 枚举越界 / 正文空） | ✅ | `kojo-xml-diagnostics.ts`，四条误报边界写在头注 |
+| 游戏规格来源 | ✅ **真接进了宿主** | `ProjectView.tsx` 的 effect：`kojo.xml` 服务 → `setKojoXmlSchemaSource` |
+| 口上语义（命中条件 / 记号替换） | ✅ 但**只在面板里** | `KojoXmlService.preview`（`plugin-api/kojo-xml.ts:205`） |
+| **转定义**（记号/编号 → 角色 CSV、被引文件） | ❌ **真缺口** | 全仓 `registerDefinitionProvider` 只挂了 `erb` / `kojo` / `kojo2` |
+| **引用查找**（某角色被哪些口上引用） | ❌ | `find-references.ts` 只挂 `erb` / `kojo2` |
+| 行内提示 / CodeLens（每条口上的命中条件摘要） | ❌ | — |
+| 重命名 | ⛔ 不做 | XML 里改角色号 = 改 CSV 行，不是文本替换 |
 
-1. **先量**：把 `KojoXmlService` 已有的能力（索引/条件/记号）与 2.0 语言面的能力逐项对齐，
-   看哪些**只差一层接线**（比如"XML 里的 `%CALLNAME:K%` 跳转到角色 CSV"其实 `charaIndex` 已有）。
-2. **再决定**：是给 `kojo-xml` 语言 id 挂 Monaco provider（走 `slotServices` 那套点名机制，
-   见 `HANDOFF-kojo2-sdk-packages.md` §3.1），还是把 XML 也编译成 kojo2 的一种视图。
-   **前者便宜、后者正确**；在没量之前不要选。
-3. **绝对不要**把 XML 的语义硬塞进 `@kojo/plugin-kojo-lang`（那是语言面库，
-   它的 `purity.test.ts` 白名单里没有、也不该有 XML 相关依赖）。
+**结论：缺口只剩三面（转定义 / 引用 / 行内信息），且都不是"接线漏了"——
+`KojoXmlService` 的契约里没有"哪个属性值是哪种引用"这条知识。**
+
+#### E-2 决策：挂 provider，不编译成 kojo2 视图
+
+交接件的两个选项，量完选了**前者**，三条理由（都可复核）：
+
+1. **XML 不是 kojo 的另一种写法**。口上 XML 是**声明式数据**（`<command com=… kojoPlace=…>`
+   里放台词），它的语义单位是"元素 + 属性 + 条件"，不是 kojo2 的叙事节点
+   （`# 机` / `@随机` / `@池` / 隐藏槽）。编译成 kojo2 视图等于给一套声明式数据硬套
+   一套过程式 AST：要么丢属性（`priority` / `kojoPlace` / 随机变体），要么把属性
+   降级成注释——那是**信息损失**，不是"2.0 化"。
+2. **面板与编辑器不能有两套真相**。`preview()` 已经从**同一次调用**同时给出
+   条件 / 替换后文本 / 未解析记号（契约头注专门写了理由：各调各的会把同一份文本
+   解释出三种结果）。再编译一份 kojo2 视图 = 第三套解释。
+3. **go 版本对得上**：`kojo-xml` 已是独立语言 id、已挂 4 枚 provider + 诊断，
+   加一枚 provider 是**同层增量**；编译路线要新建一层"XML→kojo2"降糖，
+   而 `@kojo/plugin-kojo-lang` 的 `purity.test.ts` 白名单里**没有、也不该有**
+   XML 依赖（语言面库不吃数据格式）。
+
+#### E-3 下一步（按价值排序，各自需要什么）
+
+1. **转定义**（最高价值，作者最常做的动作）：XML 里 `%CALLNAME:K%` / `[$MNAME]` /
+   `com="310"` 各自该跳到哪，**是游戏知识** ⇒ 需要给 `KojoXmlSchema` 加一条
+   **additive 可选**字段（形如 `references: KojoXmlReferenceSpec[]`：正则/属性名 →
+   目标种类 + 解析方式），由 eraFL adapter 填，宿主 provider 只按 spec → 目标解析。
+   **不要**在宿主里写死 `%CALLNAME:` 前缀。
+2. **行内信息**：每条 `<command>` 上方显示命中条件摘要（直接用 `preview()` 的
+   `conditions`），零契约改动——只差一枚 `registerCodeLensProvider` 或 inlay hints
+   的宿主接线，且必须复用服务、不得自己解析属性。
+3. **引用查找**：反向索引（角色 → 引用它的口上文件）。`KojoXmlIndex` 已按文件建好，
+   缺的是"记号级出现点"；可与 1 共用同一份 spec。
+
+⚠️ 一条**已知**的粗粒度：`KOJO_XML_DESCRIPTOR.matchesPath` 认**所有 `.xml`**
+（`monaco/languages.ts:130`），不区分"口上 XML"与"其它 XML"。今天不出事是因为
+诊断只查 `<command …>` 这一层、且无 schema 时零行为；但做 1 的时候要注意：
+spec 必须自带"只在口上目录/口上文件生效"的判据，否则全工程的 XML 都会开始报"未知记号"。
+
 
 ---
 
