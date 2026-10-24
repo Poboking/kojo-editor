@@ -10,7 +10,7 @@
 import { memo, type ReactElement } from 'react';
 import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
-import { BINARY_EXT, erbExt } from './file-tree-model';
+import { BINARY_EXT, erbExt, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
 import { pkey } from './file-tree-ops';
 import { ROW_PROB_SCOPE, TreeProbMark } from './file-tree-row';
 import { EditRow } from './file-tree-rows';
@@ -122,7 +122,8 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
   }
   const dirs = sorted.dirs;
   const files = visibleFiles;
-  const pad = { paddingLeft: `${depth * 14}px` };
+  /** 缩进步进由 `--tree-indent`（`.file-tree` 上定义，14px）派生：depth 每加一层正好一档 */
+  const pad = { paddingLeft: `calc(var(--tree-indent) * ${depth})` };
   /** 该层正在新建（输入行插在本层最上）；与 rename 行共用 EditRow */
   const creatingHere = edit?.mode === 'create' && edit.dir === dir ? edit : null;
   return [
@@ -210,7 +211,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             data-tree-path={d.path}
             onClick={() => onOpenFile(d.path, { preview: true })}
           >
-            {glossOf(d.name)}
+            {middleEllipsis(glossOf(d.name), TREE_LABEL_MAX)}
             {prob ? (
               <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} />
             ) : null}

@@ -267,6 +267,9 @@ export const ICONS = {
   ),
 
   /* --- 折叠指示 --- */
+  /* 左箭头是右箭头的 x 轴镜像（16 网格上 x → 16 − x）：同一笔折线、同一 stroke 口径，
+     不另造第二套画法（标签栏左滚不再旋转变形）。 */
+  'chevron-left': stroke('M9.8 3.4 5.2 8l4.6 4.6'),
   'chevron-right': stroke('M6.2 3.4 10.8 8l-4.6 4.6'),
   'chevron-down': stroke('M3.4 5.2 8 9.8l4.6-4.6'),
 

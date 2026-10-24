@@ -20,7 +20,5 @@
   border-left: 1px solid var(--border);
 }
 
-/* 左箭头 = `chevron-right` 旋转 180°（icons.tsx 注册表暂无 `chevron-left`，见批次回执） */
-.tab-overflow-flip {
-  transform: rotate(180deg);
-}
+/* 左/右箭头各自用注册表里的 `chevron-left` / `chevron-right`（互镜像），本切片不再需要
+   旋转变形的类。 */

@@ -2,11 +2,11 @@
 
 > 读数字先读本文件，别信记忆和旧文档。历史逐批读数在 `docs/archive/IMPLEMENTATION-LOG.md`（冻结，不再追加）；2026-10-13 起批次回执一律写进提交信息，不在本文堆历史。
 
-## 一、基线（2026-10-24，eraFL 适配批并入视觉批十一第二波，合树实测于 `origin/dev` `fd1d1b5b` 之上）
+## 一、基线（2026-10-24，批次十三并入 eraFL 适配批，合树实测于 `origin/dev` `a75a117e` 之上）
 
 | 项 | 读数 |
 |---|---|
-| 全量测试 | 功能池 **16,577 passed / 0 failed / 64 skipped（16,641）· 808 文件过 + 21 跳（829）**（分段：app 388 文件 / 7,728；plugins 301 过 + 17 跳（318）/ 6,189 + 55 跳；其余 119 过 + 4 跳（123）/ 2,660 + 9 跳；整池本机仍会偶发 `Worker exited unexpectedly`，按假红复跑再判）；计时池 **285 passed / 17 skipped（303）· 1 failed · 30 文件过 + 4 跳**（唯一红＝`kojo2-project-index.perf` 暖机后三次取最快 <8ms：本机空闲单跑 11.2–18.06ms，用例与唯一依赖 `kojo2-project-index.ts` 两侧 `git diff` 均空、远端同树该池 286 全绿 ⇒ 判本机算力低于立闸时，待快机复测，不判回归）；root + app 双 typecheck rc=0；`release-gate --skip-tests` 4/4 PASS（conformance 3/3）；真实语料闸未跑（`C:\game` 不在位） |
+| 全量测试 | **批次十三（2026-10-24，视觉批十一第二波遗留 7 条 + 批次十二自留 2 条，8 路并行，合树于 eraFL 适配批 `a75a117e` 之上）＝功能池 16,580 passed / 0 功能红 / 1 负载红（`kojo2-project-analysis` 万级 @函判定中位 101.58ms > 100ms，隔离单跑 26.45ms 全绿）/ 79 skipped（16,664）· 809 文件过 + 1 红 + 21 跳（832）**；计时池 **289 passed / 17 skipped（306）· 31 文件过 + 4 跳 · 0 failed**；root + app 双 typecheck rc=0；`audit:decoupling` ✅ **22 插件** A–D；真壳 `ui-measure --theme=all`（10 状态 × 3 档）对比度 dark 4 / light 3 / mint **0**（最差 4.13 / 2.11，逐条进 BOARD `VIS-CONTRAST`）；市场等价基线钉 `8518a647`（71 → 104，共 70，漂移 7，意外改动 0）；对上一档 16,577 / 64 skipped（16,641）＝ +3 passed / +15 skipped / +3 文件（eraFL 真盘 22 例因本机缺 `D:/Game/erafl` 转跳）；对 dev 尖端 16,359 ＝本批 +28 passed / +3 文件 |
 | 全量测试（挂语料 `KOJO_SMOKE_PROJECT`） | 功能池 **10,516 passed / 8 skipped（10,524）· 0 failed · 595 文件全过**；计时池 **221 passed / 12 skipped（233）· 0 failed**（2026-10-20 冻结值，空闲独跑）。`[idx-state]` 自证：2 根 / 2,325 方言文件 / 名录 99,218 名 / 未读入 0。语料以 `node tools/corpus.mjs --print` 为准（不在 `C:/game` 时用 `KOJO_CORPUS_SCAN_DIRS` 指定扫描根，正斜杠经变量传递）。纪律：挂语料全量必须空闲独跑；计时池若红先按负载假红复跑再判（PITFALLS 146） |
 | typecheck | root + app **双跑 exit 0**（`pnpm typecheck` + `pnpm --filter @kojo/app typecheck`） |
 | 审计 | `pnpm audit:decoupling` ✅（**22** 插件；A–D 四项全绿。`ADAPTER_PLUGIN_DIRS` 豁免：`eratw-adapter` / `eraakumamaid-adapter` / `erafl-adapter`。2026-10-24 eraFL 批把 `erafl` 补进 A/D 词表并做变异实测——通用插件插一行 `'eraFL'` 字面量 D 项即红，还原即全绿） |

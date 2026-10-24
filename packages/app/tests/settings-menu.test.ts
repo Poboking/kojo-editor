@@ -30,6 +30,7 @@ import {
   SETTINGS_RESET_TABLE,
   buildKeybindingRowMenu,
   buildSettingsRowMenu,
+  isKeybindingRowModified,
   keybindingMenuStateOf,
   registerKeybindingsMenuBridge,
   registerSettingsMenuBridge,
@@ -243,6 +244,30 @@ describe('快捷键页（WP4.6）', () => {
     });
     expect(keybindingMenuStateOf({ ...base, state: 'default' }).hasOverride).toBe(false);
   });
+
+  it('「已改」判据同源：菜单 hasOverride 与页面判据对同一批 row 恒等', () => {
+    const base: KeybindingRow = {
+      id: 'editor.action.rename',
+      title: '重命名符号',
+      category: '编辑器',
+      keys: 'f2',
+      display: 'F2',
+      rebindable: true,
+      note: null,
+      state: 'default',
+      conflictWith: null,
+    };
+    const batch: readonly KeybindingRow[] = [
+      base,
+      { ...base, state: 'overridden' },
+      { ...base, state: 'unbound', keys: undefined },
+    ];
+    for (const row of batch) {
+      expect(keybindingMenuStateOf(row).hasOverride).toBe(isKeybindingRowModified(row));
+    }
+    // 三态里只有两态算「被作者动过」（解绑也算）
+    expect(batch.filter(isKeybindingRowModified).length).toBe(2);
+  });
 });
 
 describe('面注册：settings / keybindings 已登记且无障碍名与清单一致', () => {
@@ -379,27 +404,34 @@ function valueSpecsOf(src: string): string[] {
   return specs;
 }
 
-/** src 下全部 .ts/.tsx（相对 ui 目录的路径 + 源码）：几个守门用例共用一份，只读一次盘 */
+/** 某目录下全部 .ts/.tsx（相对该目录的路径 + 源码） */
+function walkSources(dir: string, prefix = ''): { rel: string; src: string }[] {
+  const out: { rel: string; src: string }[] = [];
+  for (const name of readdirSync(dir)) {
+    const abs = path.join(dir, name);
+    if (statSync(abs).isDirectory()) {
+      out.push(...walkSources(abs, `${prefix}${name}/`));
+      continue;
+    }
+    if (name.endsWith('.ts') || name.endsWith('.tsx')) {
+      out.push({ rel: `${prefix}${name}`, src: readFileSync(abs, 'utf8') });
+    }
+  }
+  return out;
+}
+
+/** ui 下全部 .ts/.tsx（相对 ui 目录的路径 + 源码）：几个守门用例共用一份，只读一次盘 */
 let uiSourceCache: readonly { readonly rel: string; readonly src: string }[] | null = null;
 
 function uiSources(): readonly { readonly rel: string; readonly src: string }[] {
   if (uiSourceCache !== null) return uiSourceCache;
-  const walk = (dir: string, prefix: string): { rel: string; src: string }[] => {
-    const out: { rel: string; src: string }[] = [];
-    for (const name of readdirSync(dir)) {
-      const abs = path.join(dir, name);
-      if (statSync(abs).isDirectory()) {
-        out.push(...walk(abs, `${prefix}${name}/`));
-        continue;
-      }
-      if (name.endsWith('.ts') || name.endsWith('.tsx')) {
-        out.push({ rel: `${prefix}${name}`, src: readFileSync(abs, 'utf8') });
-      }
-    }
-    return out;
-  };
-  uiSourceCache = walk(uiDir(), '');
+  uiSourceCache = walkSources(uiDir());
   return uiSourceCache;
+}
+
+/** `packages/app/src` 下全部 .ts/.tsx（相对 src 的路径 + 源码）：「判据唯一落点」要在全 src 面上扫 */
+function srcSources(): readonly { readonly rel: string; readonly src: string }[] {
+  return walkSources(path.dirname(uiDir()));
 }
 
 describe('源码守门：设置/快捷键两面只在懒 chunk 里', () => {
@@ -453,5 +485,15 @@ describe('源码守门：设置/快捷键两面只在懒 chunk 里', () => {
       expect(where.length, `${id} 的声明处数`).toBe(1);
       expect(where).toEqual(['settings-menu.ts']);
     }
+  });
+
+  it('「已改」判据全 src 只有一处实现（settings-menu.ts），页面只消费', () => {
+    const hits = srcSources()
+      .filter(({ src }) => src.includes("state !== 'default'"))
+      .map(({ rel }) => rel);
+    expect(hits).toEqual(['ui/settings-menu.ts']);
+    const page = readUi('KeybindingsPage.tsx');
+    expect(page).toContain("from './settings-menu'");
+    expect(page).toContain('isKeybindingRowModified');
   });
 });

@@ -283,13 +283,24 @@ export interface KeybindingMenuState {
   readonly conflictWith: string | null;
 }
 
+/**
+ * 「这一行是不是被作者动过」的**唯一判据**：行状态不是 `default`（改键与解绑都算）。
+ *
+ * 快捷键页的「已改」范围档 / 徽标 / 「恢复缺省」可用态，以及右键菜单的 `hasOverride`
+ * （「重置键位」可用态）一律经此。落点选在本模块而非页面：页面已 import 本模块，
+ * 反向 import 会成环；两处各抄一份状态比较则迟早会漂。
+ */
+export function isKeybindingRowModified(row: KeybindingRow): boolean {
+  return row.state !== 'default';
+}
+
 /** `KeybindingRow` → 菜单读数（页面渲染行时顺手算好，交进桥里） */
 export function keybindingMenuStateOf(row: KeybindingRow): KeybindingMenuState {
   return {
     id: row.id,
     title: row.title,
     rebindable: row.rebindable,
-    hasOverride: row.state !== 'default',
+    hasOverride: isKeybindingRowModified(row),
     hasKeys: row.keys !== undefined,
     conflictWith: row.conflictWith,
   };

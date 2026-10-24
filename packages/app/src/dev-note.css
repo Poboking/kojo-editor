@@ -228,9 +228,10 @@
       上下两端给"还有内容"的渐隐提示。**长行仍软折行**（`pre-wrap` 是 2026-10-22 用户反馈
       的修法、由 `tutorial-code-block.test.ts` 钉在两张表上，本路不翻回去），所以"撑破面板"
       的风险在**纵向**与**网格列**那两处：给井封顶的那档不动，网格子项补 `min-width: 0`。
-   ③ **目录条目**：静息只显标题（编号那一格收成一枚 1px 层级线，口径 = 大纲导轨 = 文件树），
-      悬停 / 键盘聚焦 / 当前条目才把编号显出来；当前条目**左边条 + 语义色 + 字重**，
-      撤掉整行 accent 洗色（light 档上那层淡底在窄栏里读成反白块，扫一眼会闪）。
+   ③ **目录条目**：静息只显标题（编号那一格收成一枚 `--rail-w` 层级线，口径 = 大纲导轨
+      = 文件树，三处同吃 tokens.css 的导轨刻度），悬停 / 键盘聚焦 / 当前条目才把编号显出来；
+      当前条目**左边条 + 语义色 + 字重**，撤掉整行 accent 洗色（light 档上那层淡底在窄栏里
+      读成反白块，扫一眼会闪）。
    ============================================================================ */
 
 /* ---------------- ① 行内代码：标题与导语也走芯片档 ---------------- */
@@ -289,17 +290,25 @@
 .wizard.tutorial .tutorial-toc .tutorial-toc-item {
   position: relative;
 }
-/* 层级线：一枚 1px 竖线，正好落在圈码编号那一格的中心（静息时的"编号位"——编号的
+/* 层级线：一枚 `--rail-w` 竖线，正好落在圈码编号那一格的中心（静息时的"编号位"——编号的
    `min-width: 1.2em` 以 `--fs-0` 计，故这里按 `--fs-0` 取半格，而不是按条目自身字号）。
-   口径与大纲导轨、文件树导轨一致：1px + `var(--border)`，要提亮才到 `--border-strong`。 */
+   口径与大纲导轨、文件树导轨一致：宽度 / 颜色取 tokens.css 的导轨刻度，要提亮才到
+   `--rail-color-strong`。 */
 .wizard.tutorial .tutorial-toc .tutorial-toc-item::before {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
   left: calc(var(--space-2) + var(--fs-0) * 0.6);
-  width: 1px;
-  background: var(--border);
+  width: var(--rail-w);
+  background: var(--rail-color);
+}
+/* 没有编号格的条目（语法全表各节、各本的「先说清」导言节）静息不画这条线：线的 x 是按
+   「编号格中心」算的（8px 内衬 + 0.6 × 11px = 14.6px），而无圈码的条目没有那只
+   `min-width: 1.2em` 的格子，标题文本直接从 8px 起排——线会从标题首字中间穿过。
+   有编号的条目配方一字不动（静息只显标题的口径不翻）；窄窗整体撤回见下方 @media。 */
+.wizard.tutorial .tutorial-toc .tutorial-toc-item:not(:has(.tutorial-toc-num))::before {
+  content: none;
 }
 /* 编号静息收掉（层级线顶上那一格 ⇒ 标题的 x 坐标一点不动，悬停时不跳字） */
 .wizard.tutorial .tutorial-toc .tutorial-toc-num {
@@ -314,7 +323,7 @@
 .wizard.tutorial .tutorial-toc .tutorial-toc-item:hover::before,
 .wizard.tutorial .tutorial-toc .tutorial-toc-item:focus-visible::before,
 .wizard.tutorial .tutorial-toc .tutorial-toc-item[aria-current='true']::before {
-  background: var(--border-strong);
+  background: var(--rail-color-strong);
 }
 /* 当前条目：左边条 + 语义色 + 字重抬一档，**不整行反白**（撤掉既有那层 accent 洗色；
    light 档上它读成一块反白，鼠标扫过时最闪）。悬停态因此只改竖条与编号，不改底。 */

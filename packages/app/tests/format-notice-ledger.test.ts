@@ -370,12 +370,12 @@ describe('分层守卫 · 静态扫源码（连注释一起看）', () => {
     expect(SOURCE).not.toMatch(/\bnotify\(/);
   });
 
-  it('宿主侧接线只有两处，且都不新开显示面（安装点接台账 · 编辑器接通知中心）', () => {
+  it('宿主侧接线只有两处安装点，且都不新开显示面（安装点接台账 · 编辑器接通知中心）', () => {
     const providers = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
     const pane = read('packages', 'app', 'src', 'ui', 'EditorPane.tsx');
-    // ① 安装点：`onDegraded` 就挂在那枚既有安装点上，零新调用位点
-    expect(providers.match(/onDegraded: reportFormatDegradation/g) ?? []).toHaveLength(1);
-    expect(providers.match(/reportFormatDegradation/g) ?? []).toHaveLength(2); // import + 上面那一处
+    // ① 安装点：`onDegraded` 挂在两枚既有安装点上（`.kojo` 区间 + ERB 区间），零新调用位点
+    expect(providers.match(/onDegraded: reportFormatDegradation/g) ?? []).toHaveLength(2);
+    expect(providers.match(/reportFormatDegradation/g) ?? []).toHaveLength(3); // import + 上面那两处
     // ② 编辑器：订阅根通知中心那枚 notify，一条一行，不另立状态格 / 徽章
     expect(pane.match(/subscribeFormatNotices\(notify\)/g) ?? []).toHaveLength(1);
     expect(pane).toMatch(/useEffect\(\(\) => subscribeFormatNotices\(notify\), \[notify\]\);/);

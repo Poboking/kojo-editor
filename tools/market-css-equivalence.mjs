@@ -17,8 +17,15 @@
  *   ③ 白名单里写了但实际没漂移的条目也报出来（防止白名单变成藏污处）。
  *
  * 用法：
- *   node tools/market-css-equivalence.mjs                 # 默认基线 b/misak/1023-visual-batch11
+ *   node tools/market-css-equivalence.mjs                 # 默认基线 = 迁移前那版钉死 sha（见下）
  *   node tools/market-css-equivalence.mjs <before-ref>    # 指定基线（组长复拍时可用集成分支）
+ *
+ * 默认基线的选法（2026-10-24 re-baseline）：`8518a647`（`370d71b1^`，批次十一 L08 的合流提交）。
+ * 它是 `370d71b1`（组长代取的 L07 工作树快照 = 实际执行"迁回 market.css"的那一提交）的父提交，
+ * 因此 market.css 仍只有 198 行追加段、基础层还在 styles-project.css（87 行 `.mk-`），
+ * 正是"迁移前"的口径。不用 tag 的原因：`v0.4.2-beta.2` 及更早的 tag 里还没有 `tokens.css`
+ * （四文件级联链是之后才拆出来的），`git show <tag>:tokens.css` 读不到，工具无法对拍；
+ * 该 sha 在 `dev` 上永久可达，不会随短命批次分支删除而失效。
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -26,7 +33,8 @@ import * as path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ARGS = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const BEFORE_REF = ARGS[0] ?? 'b/misak/1023-visual-batch11';
+/** 迁移前那一版（`370d71b1^`，完整 sha 钉死；理由见文件头「默认基线的选法」） */
+const BEFORE_REF = ARGS[0] ?? '8518a6478d2d37bc99fe5fcd9df20c1e93ee2bd9';
 const FILES = ['packages/app/src/tokens.css', 'packages/app/src/styles.css', 'packages/app/src/styles-project.css', 'packages/app/src/market.css'];
 
 /**
@@ -44,6 +52,7 @@ const DRIFT_OK = new Map([
   [' ⊃ .mk-link:hover', 'L07：hover 色改走 --accent-text（与 .mk-sub.mk-link 同一档文字色，--accent 是描边色不是文字色）'],
   [' ⊃ .mk-publish', 'L07：静息零环——不再拿 accent 描边冒充选中态，分量改由文字色 + hover 淡底给'],
   [' ⊃ .mk-publish:hover:not(:disabled)', 'L07：同上（hover 档跟着收 --accent-text，键盘环由 .mk-toolbar button:focus-visible 统一给）'],
+  [' ⊃ .mk-name', 'L18：名字前面多一枚占位徽标 ⇒ 名字这一档改行内 flex，省略号从容器挪到 `.mk-name-text`（overflow hidden→visible、text-overflow ellipsis→clip，加 display/align-items/gap）'],
 ]);
 
 const REMOVED_OK = new Map([
@@ -65,6 +74,26 @@ const ADDED_OK = new Map([
   [' ⊃ .mk-hint[open] > summary', 'L07：展开态与展开段之间的呼吸'],
   [' ⊃ .mk-hint-more', 'L07：折叠展开段（长文的去处）'],
   [' ⊃ .mk-main > .mk-sub', 'L07：摘要进了 .mk-main 的排布（头排之下、事实排之上），旧"挂行尾自带 margin-top"口径作废'],
+  [' ⊃ .mk-name-text', 'L18：名字的文字格——裁切与省略号住在这一格，徽标永不缩'],
+  [' ⊃ .mk-emblem', 'L18：缺封面的「」母题徽标（包名首字 + 画出来的两枚直角；零图片零 emoji）'],
+  [' ⊃ .mk-emblem::before,\n.mk-emblem::after', 'L18：「」的两笔（content:\'\' 形状，不是字符图标）'],
+  [' ⊃ .mk-emblem::before', 'L18：左上角'],
+  [' ⊃ .mk-emblem::after', 'L18：右下角'],
+  [' ⊃ .mk-row:hover .mk-emblem::before,\n.mk-row:hover .mk-emblem::after', 'L18：整行 hover 才提 accent，静息不抢眼'],
+  [' ⊃ .mk-emblem:empty::before,\n.mk-emblem:empty::after', 'L18：名字读不出可用字 ⇒ 只剩半透引号，仍不是坏图'],
+  [' ⊃ .mk-main > .mk-sub:not(.mk-link)', 'L18：摘要抬到 fs-1 近 --fg 给层级；`:not(.mk-link)` 把来源那行留在子层 fs-0/--fg-dim'],
+  [' ⊃ .mk-badge.mk-badge-warn', 'L18：「有更新」那枚胶囊改成 inline-flex（给那颗点让位）'],
+  [' ⊃ .mk-badge.mk-badge-warn::before', 'L18：有事可做的一颗画出来的实心点（跟 currentColor 走 amber）'],
+  [' ⊃ .mk-row .mk-update:not(:disabled)', 'L18：更新按钮与 amber 徽章同套语义色（首装仍 accent）'],
+  [' ⊃ .mk-row .mk-update:not(:disabled):hover', 'L18：同上 hover 档'],
+  [' ⊃ .mk-row .mk-update:disabled', 'L18：忙时这一枚的 cursor 是 progress 不是 not-allowed（此刻真在搬东西）'],
+  [' ⊃ .mk-busyline', 'L18：进行中的行级骨架条（与 ui-kit kit-skeleton 类名并列；字仍只在 .mk-note）'],
+  [' ⊃ .mk-guide', 'L18：失败态第二行「哪一步 + 下一步」——铁律 4 不许退化成只变色'],
+  [' ⊃ .mk-body > .mk-empty', 'L18：空态格的井面档（KitEmpty 没有带边框的这一档；只补井面不抢版式）'],
+  [' ⊃ .mk-body > .mk-empty .mk-empty-hint', 'L18：副句限宽 30ch，260px 侧栏里不贴井边'],
+  ['@container (max-width: 300px) ⊃ .mk-name', 'L18：极窄侧栏里徽标与名字的沟收一档'],
+  ['@container (max-width: 300px) ⊃ .mk-emblem', 'L18：极窄侧栏里整枚徽标小一档（尺寸跟着 em 走，不另立 px）'],
+  ['@container (max-width: 300px) ⊃ .mk-emblem::before,\n  .mk-emblem::after', 'L18：极窄档里两枚角跟着比例走'],
 ]);
 
 const isMarketKey = (key) => /\.mk-|\.panel-market/.test(key);
@@ -136,9 +165,35 @@ function cascade(sheets) {
 
 /* ---------------- 两份级联 ---------------- */
 
-const show = (ref, file) => execFileSync('git', ['show', `${ref}:${file}`], { cwd: ROOT, encoding: 'utf8' });
+/**
+ * 基线 ref 必须先**显式**验存在：`git show` 失败时若被兜成空集，会得出"基线 0 条"的
+ * 假绿（分支/tag 被删后就静默失效）。这里宁可 rc=2 也不产出误导性读数。
+ */
+function assertRefUsable(ref) {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: ROOT, stdio: 'pipe' });
+  } catch {
+    console.error(`[market-css-equivalence] 基线 ref 不存在：${ref}`);
+    console.error('  请换一个存在的 ref（本仓的 tag / 分支 / 完整 commit sha 均可；默认基线见文件头注释）。');
+    process.exit(2);
+  }
+  for (const file of FILES) {
+    try {
+      execFileSync('git', ['cat-file', '-e', `${ref}:${file}`], { cwd: ROOT, stdio: 'pipe' });
+    } catch {
+      console.error(`[market-css-equivalence] 基线 ref 里没有 ${file}：${ref}`);
+      console.error('  这个 ref 太旧（四份样式表还没拆出来）或不是本仓坐标；请换一个存在的 ref。');
+      process.exit(2);
+    }
+  }
+}
+
+function show(ref, file) {
+  return execFileSync('git', ['show', `${ref}:${file}`], { cwd: ROOT, encoding: 'utf8' });
+}
 const work = (file) => readFileSync(path.join(ROOT, file), 'utf8');
 
+assertRefUsable(BEFORE_REF);
 const beforeAll = cascade(FILES.map((f) => show(BEFORE_REF, f)));
 const afterAll = cascade(FILES.map(work));
 

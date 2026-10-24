@@ -16,9 +16,9 @@
       大纲面板不在它的子树里、继承不到，故在此按档重申而不是另造一档）。
       // ui-kit-candidate: KitDenseRow——把这两枚升成全局 `--row-h-dense` / `--indent-step`
       //                    后，本文件与 `.file-tree` 都改成读全局，一处收口（登记给 L01）。
-      // ui-kit-candidate: 层级导轨（1px + var(--border)，悬停/当前行提到 --border-strong）
-      //                    ——L16 正在给文件树做同一形态；**两份实现不共用**，合流时由
-      //                    组长收成一条全局规则（本路只动本文件与 OutlinePanel.tsx）。
+      // ui-kit-candidate: 层级导轨（`--rail-w` + `--rail-color`，悬停/当前行提到
+      //                    `--rail-color-strong`）——视觉批十三已把文件树 / 大纲 / 教程目录
+      //                    三处收到 tokens.css 的同一组值（图样因结构差异未强抽，见 tokens 注释）。
    ④ 缩进仍是数据（`depth`）驱动：TSX 只递一个**无单位数字** `--outline-depth`，
       步进算式住在 CSS 里，像素值不再散进组件。**步进本身也吃刻度**（L19）：
       `--space-3 + --space-0 = 14px`，与文件树同值但由 token 组成，不再是裸 px。
@@ -36,9 +36,10 @@
   --outline-row-h: 22px;
   /* 缩进步进：14px，但由空间刻度组成（12 + 2），与文件树 `--tree-indent` 同值 */
   --outline-indent: calc(var(--space-3) + var(--space-0));
-  /* 导轨横线颜色：静息一档，悬停 / 当前行提到强档（口径与文件树导轨一致：1px + --border） */
-  --outline-guide: var(--border);
-  --outline-guide-strong: var(--border-strong);
+  /* 导轨颜色：两档都指向 tokens.css 的导轨刻度（与文件树 / 教程目录同源）；悬停 / 当前行
+     把局部变量换到强档 */
+  --outline-guide: var(--rail-color);
+  --outline-guide-strong: var(--rail-color-strong);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -104,14 +105,14 @@
   min-height: var(--outline-row-h);
   padding-left: calc(var(--outline-indent) * var(--outline-depth, 0));
   background-color: transparent;
-  /* 缩进导轨：每级一枚 1px 竖线。图样只铺"步进 × 级数"那么宽的一条带（缩进带），
+  /* 缩进导轨：每级一枚 `--rail-w` 竖线。图样只铺"步进 × 级数"那么宽的一条带（缩进带），
      带外不画；带内每走完一个步进落一像素线，于是第 k 级恰好有 k 枚线。
      起点取 `--space-2`（8px = 折叠列 `--space-4` 的一半）⇒ 第 i 枚线正好落在**第 i 级
      祖先折叠箭头的中心**下，读起来是"从箭头底下长下来"，不是随机一根缝。 */
   background-image: repeating-linear-gradient(
     to right,
-    var(--outline-guide) 0 1px,
-    transparent 1px var(--outline-indent)
+    var(--outline-guide) 0 var(--rail-w),
+    transparent var(--rail-w) var(--outline-indent)
   );
   background-size: calc(var(--outline-indent) * var(--outline-depth, 0)) 100%;
   background-position: var(--space-2) 0;

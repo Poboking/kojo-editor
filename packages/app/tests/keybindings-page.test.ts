@@ -14,7 +14,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { KeybindingsPage } from '../src/ui/KeybindingsPage';
 import { KEYBINDING_SPECS, buildKeybindingRows, effectiveKeybindingOf, filterKeybindingRows, resetAllKeybindings, setKeybindingOverride } from '../src/ui/keybindings';
-import { MONACO_BUILTIN_COUNT } from '../src/ui/monaco-builtin-keybindings';
+import { MONACO_BUILTIN_COUNT, monacoBuiltinRows } from '../src/ui/monaco-builtin-keybindings';
+import { isKeybindingRowModified } from '../src/ui/settings-menu';
 import type { CommandEntry } from '../src/ui/commands';
 
 const cmd = (input: { id: string; title: string; category?: string; keybinding?: string }): CommandEntry => ({
@@ -116,6 +117,16 @@ describe('快捷键设置页 · 改过与解绑两态分标', () => {
     const slice = rowSlice(render(), 'workbench.problems');
     expect(slice).toContain('kb-unbound');
     expect(slice).not.toContain('kb-overridden');
+  });
+
+  it('「已改」计数与唯一判据同源（改键与解绑都算，Monaco 内建行不计）', () => {
+    expect(setKeybindingOverride('workbench.problems', 'ctrl+alt+p')).toBe(true);
+    expect(setKeybindingOverride('layout.openSettings', '')).toBe(true);
+    const rows = [...buildKeybindingRows(allCommands()), ...monacoBuiltinRows()];
+    const changed = rows.filter(isKeybindingRowModified).length;
+    expect(changed).toBe(2);
+    const html = render().replaceAll('<!-- -->', '');
+    expect(html).toContain(`已改 (${changed})`);
   });
 });
 

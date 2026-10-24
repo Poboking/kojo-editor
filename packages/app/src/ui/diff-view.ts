@@ -69,6 +69,31 @@ export function languageIdForSide(side: DiffViewSide): string {
   return languageFor(side.path ?? side.label);
 }
 
+/**
+ * 覆盖表的读取面（与 `language-mode-pref.languageOverrideFor` 同形）。
+ *
+ * 形参注入而不是直接 import 偏好层：本文件保持零 React、零 localStorage 依赖，
+ * 单测可以拿一张纯表当覆盖源；生产侧传 `languageOverrideFor` 即可。
+ */
+export type LanguageOverrideLookup = (filePath: string) => string | null;
+
+/**
+ * 差异视图一侧的语言 id：**显式覆盖 > 扩展名判据**（与编辑器侧
+ * `resolveModelLanguage` 同一条优先级，此处不另立第二套判据）。
+ *
+ * 背景（批次十二自留残之二）：作者可在状态栏把某份文件改成别的语言模式（覆盖存于
+ * `language-mode-pref` 的 localStorage 表，键为归一化路径）。主编辑器已按覆盖重挂
+ * model；差异视图此前仍只看扩展名，于是同一份被改成 `.erb` / `kojo2` 的文件在对比
+ * 视图里还是旧着色与旧折叠。这里把覆盖接到两半只读 model 上，回退仍是
+ * `languageIdForSide`（→ `languageFor`），不新增第三份「扩展名 → 语言」映射。
+ *
+ * `overrides(path)` 的键与 `languageIdForSide` 同口径：优先 `side.path`，无路径时用
+ * `side.label`（内联文本侧的历史行为）。
+ */
+export function diffLanguageFor(side: DiffViewSide, overrides: LanguageOverrideLookup): string {
+  return overrides(side.path ?? side.label) ?? languageIdForSide(side);
+}
+
 /* ------------------------------ 判等（W17 DIFF-EQ） ------------------------------ */
 
 /** 一侧已解析的内容证据：文本必有（行态）；路径侧还能拿到原始字节（字节态） */

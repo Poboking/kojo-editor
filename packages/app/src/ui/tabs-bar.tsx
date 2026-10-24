@@ -521,11 +521,11 @@ export const TabBar = memo(function TabBar({
       </div>
       {/* 溢出 affordance（L16）：真溢出才挂这一族；不溢出时 DOM 里零节点。
           箭头是普通 button ⇒ Tab 可达、Enter/Space 原生触发；无障碍名说成人话。
-          左箭头借 `chevron-right` 旋转 180°（icons.tsx 没有 `chevron-left`，本批不擅自加）。 */}
+          左右箭头用注册表里互为镜像的两枚图标，不再靠 CSS 旋转变形。 */}
       {overflowing ? (
         <div className="tab-overflow-tools" role="group" aria-label="标签栏滚动与列表">
           <KitIconButton label="向左滚动标签页" size={14} onClick={() => scrollTabs(-1)}>
-            <Icon name="chevron-right" size={14} className="tab-overflow-flip" />
+            <Icon name="chevron-left" size={14} />
           </KitIconButton>
           <KitIconButton label="向右滚动标签页" size={14} onClick={() => scrollTabs(1)}>
             <Icon name="chevron-right" size={14} />

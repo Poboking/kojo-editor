@@ -76,6 +76,28 @@ export function baseName(p: string): string {
 }
 
 /**
+ * 中段省略（L16 美学短板批）：尾部 ellipsis 会把扩展名与末段语义吃掉——
+ * `.ERH` / `.kojo` 这类后缀**就是信息**（`.ERH` 和 `.ERB` 是两种文件，名字头一段还常常相同）。
+ * 纯函数、可单测：超长时保住后缀（最后一个 `.` 起）与头部，裁中段，省略号占一位。
+ *
+ * 口径：`maxChars` 是**结果串**的字符上限（含省略号）；不足 4 没有裁的意义原样返回；
+ * 无扩展名（或以 `.` 开头的隐藏名）退化为保头裁尾。
+ * // ui-kit-candidate: middleEllipsis 值得进 ui-kit（文件树/标签页两处要用）
+ */
+export function middleEllipsis(name: string, maxChars: number): string {
+  if (maxChars < 4 || name.length <= maxChars) return name;
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot) : '';
+  const keepTail = Math.min(ext.length, maxChars - 3);
+  const keepHead = maxChars - 1 - keepTail;
+  if (keepHead < 2) return `${name.slice(0, maxChars - 1)}…`;
+  return `${name.slice(0, keepHead)}…${name.slice(name.length - keepTail)}`;
+}
+
+/** 树内文件名/包名的中段省略上限（字符数硬闸；标签页另有 `TAB_LABEL_MAX` 同值口径） */
+export const TREE_LABEL_MAX = 24;
+
+/**
  * 角色归属表（charaIndex → 目录前缀；长前缀优先，避免嵌套目录误归属）。
  * 单一来源：索引路径与冷开 walk 快照共用 —— 两边的分组结果才可能逐字一致。
  */

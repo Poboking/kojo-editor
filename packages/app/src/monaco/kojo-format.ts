@@ -8,6 +8,7 @@ import {
 } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
+import type { FormatDegradationNotice, RangeFormatHandlers } from './kojo-format-range';
 import { registerForLanguageServices } from './register-dialects';
 
 /**
@@ -139,6 +140,31 @@ function leadingIndent(text: string): string {
   return text.slice(0, i);
 }
 
+/** 陈旧行号夹进 1..lineCount（口径同 `kojo-format-range.ts`；过期区间不许让命令炸掉） */
+function clampLine(line: number, lineCount: number): number {
+  return Math.min(Math.max(1, Math.trunc(line) || 1), lineCount);
+}
+
+/**
+ * 区间腿的两处让路（`resolve` / `compute`）**不许静默**：`console.warn` + 宿主 `onDegraded`，
+ * `notice` 形状与 `kojo-format-range.ts` 的 `degrade` 逐字同款（同一 `where` 词表、同一 `stage`
+ * 词表 ⇒ `ui/format-notice-ledger.ts` 那一枚台账无需为 `.kojo` 另开一套文案）。
+ */
+function degradeRange(
+  handlers: RangeFormatHandlers,
+  notice: Omit<FormatDegradationNotice, 'stage'>,
+): void {
+  const full: FormatDegradationNotice = { ...notice, stage: 'range' };
+  console.warn(
+    `[kojo-format] ${full.where} 在 ${full.stage} 请求里让了路（第 ${full.startLine}–${full.endLine} 行）：${full.reason}`,
+  );
+  try {
+    handlers.onDegraded?.(full);
+  } catch {
+    /* 呈现面抛错不许打断编辑 */
+  }
+}
+
 /**
  * **区间格式化**（`Ctrl+Shift+I` / 命令面板「格式化选择区域」）：判据读**整篇**，
  * 但只把落在选区行内的 edits 交出去 ⇒ "选一段只重排那一段"。
@@ -146,33 +172,49 @@ function leadingIndent(text: string): string {
  * 为什么不切一段单独喂 `computeFormatEdits`：缩进单位探测与 `@` 原生块状态都是
  * **文档级**判据——片段视角下，块外的行会被当成糖行重排、单位探测会数错多数派。
  * 整篇判定 + 行区间过滤 = 与 `Shift+Alt+F` 逐字同口径，且代价相同（显式命令，一次一篇）。
+ * 这也正是 `kojo-format-range.ts::formatRangeEdits` 对 `.kojo` 的落点（该函数在方言不是 ERB
+ * 时原样交回 `computeFormatEdits`）——两条入口共用插件侧唯一一份规则核心。
  *
- * **只注册 `.kojo`**：ERB 的区间格式化由 `kojo-format-range.ts`（宿主 resolve 判据的
- * **带闸版**，同样只注册 ERB）独家负责。两边都注册 ERB 会让同一语言挂两枚 provider，
- * 选区格式化结果取决于注册表顺序、且带闸版的判据形同虚设——一门语言一枚 provider。
+ * **宿主接线（批次十三）**：`handlers` 与 ERB 区间版共用 `RangeFormatHandlers` 形状——
+ * `resolve` 决定这份 model 该不该应答、`request.rules` 就是偏好现读出来的规则开关、
+ * `onDegraded` 是"这次没格式化"的出口。三项都与整篇 `Shift+Alt+F` 同一份判据，不再有一枚
+ * "无参装配、规则全开"的旁路。区间腿**不吃** `resolveRange`（`.kojo` 的文档级判据切片会数错，
+ * 宿主 `formatRequestWindowFor` 对该方言本来就交回 `null`）。
+ *
+ * **只注册 `.kojo`**：ERB 的区间格式化由 `kojo-format-range.ts`（同一形状的 handlers，同样
+ * 只注册 ERB）独家负责。两边都注册 ERB 会让同一语言挂两枚 provider，选区格式化结果取决于
+ * 注册表顺序——一门语言一枚 provider。
  */
-export function installRangeFormatter(monaco: typeof Monaco): Monaco.IDisposable {
+export function installRangeFormatter(
+  monaco: typeof Monaco,
+  handlers: RangeFormatHandlers,
+): Monaco.IDisposable {
   const provider: Monaco.languages.DocumentRangeFormattingEditProvider = {
     displayName: 'kojo-editor',
     provideDocumentRangeFormattingEdits(model, range) {
-      const dialect = dialectForLanguage(model.getLanguageId());
-      if (!dialect) return [];
-      const lo = Math.min(range.startLineNumber, range.endLineNumber);
-      const hi = Math.max(range.startLineNumber, range.endLineNumber);
+      const lineCount = model.getLineCount();
+      const lo = clampLine(Math.min(range.startLineNumber, range.endLineNumber), lineCount);
+      const hi = clampLine(Math.max(range.startLineNumber, range.endLineNumber), lineCount);
+      let request: FormatRequest | null;
+      try {
+        request = handlers.resolve(model);
+      } catch (e: unknown) {
+        degradeRange(handlers, { where: 'resolve', startLine: 1, endLine: lineCount, reason: errorText(e) });
+        return [];
+      }
+      if (!request) return [];
       let edits: FormatEdit[];
       try {
-        edits = computeFormatEdits(model.getValue(), dialect);
+        // 规则开关随请求走（缺省全开 = 与接线之前逐字等价）；偏好读取在宿主组请求时现读
+        edits = computeFormatEdits(request.text, request.dialect, request.rules);
       } catch (e: unknown) {
-        console.warn(`[kojo-format] 区间格式化抛错：${errorText(e)}`);
+        degradeRange(handlers, { where: 'compute', startLine: lo, endLine: hi, reason: errorText(e) });
         return [];
       }
       return toTextEdits(model, edits.filter((edit) => edit.line >= lo && edit.line <= hi));
     },
   };
-  const subs = [
-    monaco.languages.registerDocumentRangeFormattingEditProvider(KOJO_LANGUAGE_ID, provider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return monaco.languages.registerDocumentRangeFormattingEditProvider(KOJO_LANGUAGE_ID, provider);
 }
 
 /**

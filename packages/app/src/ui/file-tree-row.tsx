@@ -11,7 +11,7 @@
  * "同一棵树两种画法"的新分叉（工包 E 留下的洞，本批补上）。
  */
 import { memo, type ReactElement } from 'react';
-import { baseName } from './file-tree-model';
+import { baseName, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
 import { Icon } from './icons';
 import { PROBLEM_SCOPE, SEVERITY_TINT, type ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
@@ -146,7 +146,7 @@ export const FileRow = memo(function FileRow({
       // 单击 = 预览态浏览（VS Code 单击文件树那份手感：斜体、不占新位、再点一下转正）
       onClick={() => onOpenFile(f, { preview: true })}
     >
-      {baseName(f)}
+      {middleEllipsis(baseName(f), TREE_LABEL_MAX)}
       {prob ? <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} /> : null}
     </button>
   );
