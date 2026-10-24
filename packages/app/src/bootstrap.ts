@@ -3,7 +3,8 @@ import type { Plugin } from '@kojo/plugin-api';
 import { createWorkerTransport, WellKnownServices } from '@kojo/plugin-api';
 import type { ConditionExtractorService, ConventionLinterService } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
+import { createEratwAdapterPlugin, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
+import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
 import { computeTasks } from './compute-tasks';
@@ -11,6 +12,48 @@ import { createCascadeWatermarks } from './cascade-watermarks';
 import { perf } from './perf';
 // vite ?worker：并行计算线程入口（纯 CPU 任务搬出主线程）
 import ComputeWorker from './compute-worker?worker';
+
+/* ============================== 2.0 adapter 登记簿 ============================== */
+
+/**
+ * v1 `gameId` → 2.0 `GameAdapter`（宿主组合根私有）。
+ *
+ * **为什么需要这张表**：2.0 语言面（补全 / 悬停 / 签名 / 行内提示 / 转定义 / 文档符号）
+ * 要的游戏事实住在 2.0 adapter 里，而它是**纯数据对象、不进任何槽**——`game.adapter`
+ * 槽里那枚是 v1 契约对象（`gameId` / `displayName`，没有 `eventCatalog`）。修好以前，
+ * 宿主把 2.0 adapter **写死成 eraTW**：打开任何工程，2.0 面拿到的都是 eraTW 的事实。
+ * 错误的事实不报错，只是"看起来对、其实属于另一个游戏"——比没做更危险。
+ *
+ * 三条口径（与 `@kojo/kojo-lang/adapter-source` 登记表同族）：
+ * - **键用 v1 的 `gameId`**：`project.adapterId` 存的就是它，不是 2.0 的 `id`；
+ * - **查不到 ⇒ `null`**：合法语义（各腿零候选、不抛），**绝不回退到"某一枚"**；
+ * - **eraTW 是常驻项**（静态 import，模块加载即登记）；其余 adapter 走项目级动态
+ *   import，在 {@link loadProjectPlugins} 里当场登记——静态拉进引导图会撑破 PS-10。
+ */
+const kojo2Adapters = new Map<string, Kojo2GameAdapter>();
+
+/** 登记一枚 2.0 adapter（重复登记以最后一次为准；adapter 包装载后由组合根调用） */
+export function registerKojo2Adapter(gameId: string, adapter: Kojo2GameAdapter): void {
+  kojo2Adapters.set(gameId, adapter);
+}
+
+/**
+ * 按当前项目取 2.0 adapter：没开项目 / 没有 `adapterId` / 该游戏没有 2.0 面 ⇒ `null`。
+ * **不猜**：宁可零候选，不借别游戏的事实。
+ *
+ * 参数收结构最小投影（`{ adapterId?: string } | null`）：`GameProject | null`
+ * 天然可传，测试不必造整枚项目。
+ */
+export function kojo2AdapterForProject(
+  project: { readonly adapterId?: string } | null,
+): Kojo2GameAdapter | null {
+  const id = project?.adapterId;
+  if (id === undefined || id === null) return null;
+  return kojo2Adapters.get(id) ?? null;
+}
+
+// eraTW：常驻 adapter（欢迎页 / 无项目态就要它），模块加载即进表。
+registerKojo2Adapter(ERATW.gameId, ERATW_GAME_ADAPTER);
 
 /**
  * 应用引导：装配内核 + 插件清单。
@@ -113,6 +156,14 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
   ]);
+  // eraFL 的 2.0 面：包导出 `ERAFL_GAME_ADAPTER` 即当场进表（键 = v1 gameId）。
+  // 用存在性卫语句读动态 import 的命名空间：2.0 面建成前这个导出不存在，写成直接
+  // 访问会在类型层挂掉；建成后这里自然亮灯，无需再改。建成前 eraFL 工程走 `null`
+  // 语义（零候选、不抛、不借 eraTW 的事实）——这正是"先掐掉错误事实"的中间态。
+  const eraflKojo2Adapter = (eraflAdapter as { ERAFL_GAME_ADAPTER?: Kojo2GameAdapter }).ERAFL_GAME_ADAPTER;
+  if (eraflKojo2Adapter !== undefined) {
+    registerKojo2Adapter(eraflAdapter.ERAFL.gameId, eraflKojo2Adapter);
+  }
   return [
     // eraFL 领域知识（第三个 adapter；`FLconfig.xml` 特征与另两个无交集 ⇒ 注册顺序不影响判定）。
     // 同样排在前列：内核 detect / loadProject 时 adapter 必须已在场。

@@ -97,9 +97,10 @@ import { publishKojo2PreviewEntry } from '../kojo2-preview-host';
 import { registerKojo2ExpandCompileSource } from '../kojo2-expand-compile';
 import { isKojo2DiagnosticsPath } from '../kojo2-diagnostics-gate';
 import { revealLocationOf } from '../../monaco/reveal-position';
-// K2 batch-4：2.0 语言服务（`# 机` 事件目录）的 adapter 注入源。与上一行同一条宿主组合根
-// 豁免口径——语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由此注入。
-import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 2.0 语言服务 adapter 由宿主组合根注入（与 ui/kojo2-problem-wiring.ts 同一豁免口径）
+// K2 batch-4 + 入口 A（2026-10-24）：2.0 语言服务的 adapter 注入源。**不再**静态引用
+// 具体 adapter——改从宿主组合根（bootstrap）的登记簿按当前项目现取（见该处头注）。
+// 语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由组合根注入。
+import { kojo2AdapterForProject } from '../../bootstrap';
 import type { Notify } from '../NotificationCenter';
 
 /** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
@@ -275,9 +276,11 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     setGlobalKernel(kernel); // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
     // K2 batch-4：Kojo 2.0 语言服务（`# 机` 事件目录）要的 adapter 由此注入——它**不是**
     // `game.adapter` 槽位上那枚 v1 契约对象，槽位里没有 2.0 的 `eventCatalog` / `domainSymbols`。
-    // 与 `ui/kojo2-problem-wiring.ts` 的 2.0 adapter 装配同一口径（宿主组合根 + 同一豁免理由）；
     // 全局 provider 只注册一次，getter 每次请求现问，项目开闭不必重装。
-    ensureGlobalProviders({ kojo2Adapter: () => ERATW_GAME_ADAPTER });
+    // 入口 A（2026-10-24）：按**当前项目**的 v1 `adapterId` 从组合根登记簿现取。此前写死
+    // `ERATW_GAME_ADAPTER`——打开 eraFL 工程时 2.0 面拿到的是 eraTW 的事实（不报错、只是错，
+    // 比没做更危险）。取不到 ⇒ `null`（零候选、不抛）：错误事实与"没有事实"从此分开。
+    ensureGlobalProviders({ kojo2Adapter: () => kojo2AdapterForProject(kernel.project.current()) });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });
