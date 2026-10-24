@@ -53,7 +53,7 @@ import { SEALED_DEFAULT, loadSealed, setSealed } from './sealed';
 import { loadThemeChoice, setFollowSystem } from './theme-pref';
 import { AUTOSAVE_MODE_DEFAULT, loadAutosavePref, setAutosavePref } from './autosave-pref';
 import { NAME_COLOR_DEFAULT, loadNameColorPref, setNameColorPref } from './semantic-color-pref';
-import { setKeybindingOverride, type KeybindingRow } from './keybindings';
+import { isKeybindingRowModified, setKeybindingOverride, type KeybindingRow } from './keybindings';
 
 /* ==========================================================================================
  * 一、设置页（WP4.5）
@@ -275,7 +275,11 @@ export interface KeybindingMenuState {
   readonly id: string;
   readonly title: string;
   readonly rebindable: boolean;
-  /** 有覆盖（改过键或解绑过）——「重置键位」的可用判据 */
+  /**
+   * 有覆盖（改过键或解绑过）——「重置键位」的可用判据。
+   * 判据本身不在这里：与快捷键页范围档「已改」同一枚谓词（`keybindings.ts` 的
+   * `isKeybindingRowModified`），两处问的是同一件事，只许有一处定义。
+   */
   readonly hasOverride: boolean;
   /** 当前有键位（解绑后为 false，「移除键位」没得可移） */
   readonly hasKeys: boolean;
@@ -289,7 +293,7 @@ export function keybindingMenuStateOf(row: KeybindingRow): KeybindingMenuState {
     id: row.id,
     title: row.title,
     rebindable: row.rebindable,
-    hasOverride: row.state !== 'default',
+    hasOverride: isKeybindingRowModified(row),
     hasKeys: row.keys !== undefined,
     conflictWith: row.conflictWith,
   };

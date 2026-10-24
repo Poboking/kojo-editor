@@ -167,6 +167,24 @@ export function bindingStateOf(id: string): BindingState {
   return o === '' ? 'unbound' : 'overridden';
 }
 
+/**
+ * 「这一行的键位被作者动过没有」——**全仓唯一定义**。
+ *
+ * 为什么必须是一枚函数而不是各处一遍比较：问这句话的有两处，而且是同一件事的两张面孔——
+ * ① 快捷键页的范围档「已改」与计数读数（`KeybindingsPage.tsx`）；
+ * ② 右键菜单里「重置键位」到底可不可点（`settings-menu.ts` 的 `hasOverride`）。
+ * 改前两处各抄了一份同样的比较，口径漂移在语法上完全合法（谁都不会报错），只有读代码
+ * 的人能发现——正是 `problem-truth-single-source` 那一类事故的形状。判据从此只住这里，
+ * 消费侧一律 import；`tests/keybinding-modified-single-source.test.ts` 把「只有一处定义」
+ * 钉成静态断言。
+ *
+ * 真值仍来自 `bindingStateOf`（localStorage 覆盖表）：三态里除 `default`（原样）都算动过
+ * ——`overridden` 是改了键，`unbound` 是作者明确表达过「这条不要键位」，那也是一次改动。
+ */
+export function isKeybindingRowModified(row: KeybindingRow): boolean {
+  return row.state !== 'default';
+}
+
 /** 覆盖条数（含已解绑——解绑也是作者做过的改动，得计入「有几处不是缺省」） */
 export function overrideCount(): number {
   return Object.keys(overrides).length;

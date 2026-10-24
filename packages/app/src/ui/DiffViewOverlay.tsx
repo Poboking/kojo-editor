@@ -19,7 +19,7 @@ import {
   type DiffViewMenuInput,
 } from './diff-view';
 import { declareContextSurface } from './context-surfaces';
-import { CODE_FONT_BASELINE } from './code-font'; // 比对面与主编辑器同一张字面（全站唯一一条栈）
+import { CODE_FONT_BASELINE } from './code-font'; // 比对面的**缺省基线**；作者所选档位见下面 codeFont
 import { overlayEditorAppearance } from './overlay-editor-appearance';
 import { overlayFrame, overlaySkeletonWell, overlaySpinner } from './overlay-chrome';
 import { monacoThemeIdFor } from '../monaco/theme';
@@ -345,6 +345,13 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         // 的行数取档位表，动态装载、取不到就维持改前的字面基线（见 overlay-editor-appearance）
         const appearance = await overlayEditorAppearance(Math.max(countLines(textA), countLines(textB)));
         if (disposed || !containerRef.current) return;
+        // 代码字体吃主编辑器同一条解析链的结果（L20 欠账：此前只铺 CODE_FONT_BASELINE，
+        // 作者换了代码档这一屏不跟着变，与编辑器并排就是两种字面）。走**动态装载**：
+        // 与快修预览窗同一条形态，而那一家静态挂在开机图里（PS-10 只跟静态的有值依赖），
+        // 两家共用一种接法才不会一边绿一边把 editor-display-prefs 拽回首屏。
+        const { overlayCodeFontPatch } = await import('./editor-display-prefs');
+        const codeFont = overlayCodeFontPatch();
+        if (disposed || !containerRef.current) return;
         const langA = languageIdForSide(activeRequest.original);
         const langB = languageIdForSide(activeRequest.modified);
         const modelA = monaco.editor.createModel(textA, langA);
@@ -370,6 +377,8 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
           hideUnchangedRegions: { enabled: gateLines >= DIFF_COLLAPSE_MIN_LINES },
           // 编程字体：与主编辑器同一份真源（createDiffEditor 也吃 IEditorOptions 这些键）
           ...CODE_FONT_BASELINE,
+          // 档位解析结果叠在基线之后 ⇒ 这一屏与编辑器吃到**同一串**（见 overlayCodeFontPatch）
+          ...codeFont,
           // 外观档：与主编辑器同一张档位表（`wordWrap` 刻意不并——并排 diff 与折行互斥）
           ...appearance,
         });

@@ -596,3 +596,25 @@ export function editorDisplayFontPatch(
   }
   return isUsableCodeFontStack(resolved.stack) ? { fontFamily: resolved.stack } : {};
 }
+
+/**
+ * 浮层编辑器（比对窗 / 快修预览窗）的代码字体补丁——**与主编辑器同串的第二只出口**
+ * （视觉批十二 L20 点名的欠账，路 R2 收）。
+ *
+ * 改前实况：两个浮层只铺 `CODE_FONT_BASELINE`（那张缺省栈），主编辑器却在这条基线之上
+ * 再叠 `editorDisplayFontPatch`。于是作者把代码档换成「更纱黑体等宽」之类时，编辑器里
+ * 换了字、比对窗与预览窗仍是老栈——同一段代码在屏幕上以两种字面并排，读起来像字体坏了。
+ * 这一枚把浮层接回**同一条解析链**（`resolveCodeFontStack`），不另起炉灶。
+ *
+ * 与 `editorDisplayFontPatch` 的差别只有一处：**不顺手做 CSS 播种**
+ * （`applyFontStackCssPrefs` 归编辑器 create 与偏好写入那条链，只读浮层不是它的入口）。
+ * 默认档也原样发一遍生效栈（而不是发空补丁）：浮层的基线垫底、这一格覆盖，
+ * 「三处同串」因此是**构造上成立**，不是两处碰巧算出同一个数。
+ * 栈坏掉（理论不该发生，护栏仍在）⇒ 发空补丁，浮层退回缺省基线，绝不喂半坏值。
+ */
+export function overlayCodeFontPatch(
+  prefs: EditorDisplayPrefs = loadEditorDisplayPrefs(),
+): EditorOptionPatch {
+  const resolved = resolveCodeFontStack(prefs);
+  return isUsableCodeFontStack(resolved.stack) ? { fontFamily: resolved.stack } : {};
+}
