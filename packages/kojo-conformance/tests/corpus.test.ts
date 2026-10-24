@@ -37,6 +37,7 @@ import {
   sampleEvenly,
 } from '../src/corpus.js';
 import type { MigrationCompilerOutput } from '../src/migration.js';
+import { SKIP_EXIT_CODE, renderCorpusSkipText, skipReport } from '../src/corpus-skip.js';
 
 /* ============================== 内存 IO ============================== */
 
@@ -363,6 +364,20 @@ describe('CLI：SKIP / 用法 / 退出码', () => {
     expect(result.text).toContain('语料不在位');
     expect(result.text).toContain('不是绿');
     expect(io.writes).toHaveLength(0);
+  });
+
+  it('缺席文本只有一处实现：工具快路（corpus-skip.ts）与 runCorpusCli 的缺席分支逐字节同形', () => {
+    // 快路省的是**载入**（core 桶单体冷载 63.6s），不是另写一份报告——所以这里对拍的是全文，
+    // 不是"都包含语料不在位"这种松判据。人话档与 --json 档各自对拍一遍。
+    const reason = 'node tools/corpus.mjs --print rc=1：盘上未发现语料';
+    for (const argv of [['corpus'], ['corpus', '--json']] as const) {
+      const result = run([...argv], new MemoryIo(), {
+        resolveRoot: () => ({ ok: false, dir: null, reason }),
+      });
+      const viaShell = renderCorpusSkipText(skipReport('', reason), argv.includes('--json'));
+      expect(result.exitCode).toBe(SKIP_EXIT_CODE);
+      expect(viaShell).toBe(result.text);
+    }
   });
 
   it('SKIP 也可 JSON（机器消费），问题里带解析链原因', () => {

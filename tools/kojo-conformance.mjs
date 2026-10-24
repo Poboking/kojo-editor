@@ -71,11 +71,16 @@ const CORPUS_ENTRIES = {
 };
 
 /**
- * 缺席快路（`corpus` 且自动发现判定语料不在位）唯一的入口：报告是两个纯函数
- * （`skipReport` / `formatCorpusReport`），真链路（core / sugar / eratw / main.ts）一行用不上。
+ * 缺席快路唯一的入口：`corpus-skip.ts` 是**零运行时依赖**的叶子（`import type` 被转译层擦掉），
+ * 缺席报告的两个纯函数（`skipReport` / `renderCorpusSkipText`）就住在那里——文本仍只有一处实现，
+ * `corpus.ts` 的缺席分支调的也是它。
+ *
+ * 为什么不直接载 `corpus.ts`：它静态 import `./migration.js`，后者吃 `@kojo/kojo-core` 的桶入口；
+ * 本机逐枚计时＝桶单体 SSR 冷载 **63.6s**（叶子 `migrate/indent.ts` 2.5s），载完整条缺席路径空闲
+ * 38.0s、在全量池里能顶穿用例自己的 240s 预算（读数退化成 `status:null`）。见 PITFALLS 187。
  */
 const CORPUS_ABSENT_ENTRIES = {
-  corpus: '/packages/kojo-conformance/src/corpus.ts',
+  skip: '/packages/kojo-conformance/src/corpus-skip.ts',
 };
 
 /** language 子命令需要额外加载的 TS 入口（语言套件纯逻辑 + 可选 eraTW 注入） */
@@ -283,19 +288,12 @@ function createCorpusIo(main) {
 
 /** `corpus`：argv → 发现/聚合/抽样（corpus.ts）→ 文本 + 退出码 */
 function runCorpus(modules, argv) {
-  const { corpus, main } = modules;
-  // 缺席快路（`main === undefined`）：io 与三条编译入口在缺席路径上不会被调用——报告是
-  // `skipReport`/`formatCorpusReport` 两个纯函数产的。真被调到了就是判据走偏（或语料在预检
-  // 之后才落盘），当场炸给看，比塞一枚"看起来能用"的空对象诚实。
-  const tripwire = (name) => () => {
-    throw new Error(`corpus 缺席快路用到了 ${name}：预检说语料不在位，却走进了真链路`);
-  };
-  const absent = main === undefined;
+  const { corpus, core, sugar, support, eratw, main } = modules;
   const result = corpus.runCorpusCli(argv, {
-    io: absent ? new Proxy({}, { get: () => tripwire('IO') }) : createCorpusIo(main),
-    compileV1: absent ? tripwire('v1 转译') : createV1Compiler(modules.sugar, modules.support),
-    compile2: absent ? tripwire('2.0 编译') : createV2Compiler(modules.core, modules.eratw),
-    migrate: absent ? tripwire('迁移') : createMigrator(modules.core, modules.eratw),
+    io: createCorpusIo(main),
+    compileV1: createV1Compiler(sugar, support),
+    compile2: createV2Compiler(core, eratw),
+    migrate: createMigrator(core, eratw),
     sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'),
     resolveRoot: createCorpusRootResolver(),
     // 落点固定为仓内真实语料 fixture 目录：不给"任意落点"参数（写盘允许域是声明出来的）
@@ -308,30 +306,55 @@ function runCorpus(modules, argv) {
 }
 
 /**
- * argv[0] → 需要加载的入口组（未知子命令走 main.ts，行为与改动前一致）。
- *
- * `corpus` 多一条**缺席快路**：自动发现（显式 `--dir` 不走——那条自己会读盘）判定语料不在位时，
- * 只载 `corpus.ts`。动因（2026-10-24 合并 eraFL/XML 批后实测）：六枚入口齐载 137–140s（合并前
- * 同机 65–83s，plugin-api 索引面变大把 `main.ts` 拖到单体 67.1s），全量池里这条「语料不在位」
- * 用例因此顶穿它自己的 240s spawn 预算，读数变成 `status:null`（进程被掐，不是 rc 不对）。
- * 判据一个字没动：缺席仍是 rc=2 + stderr「语料不在位」+ `verdict: skip`，文本走同一个格式化函数。
+ * 缺席快路：文本由 `corpus-skip.ts` 那枚**唯一实现**产出，与 `runCorpusCli` 走到缺席分支时
+ * 逐字节同形（相等性由 `packages/kojo-conformance/tests/corpus.test.ts` 钉住，不是"看起来一样"）。
  */
-function moduleKindFor(argv) {
-  const command = argv[0];
-  if (command === MIGRATE_COMMAND) return 'migrate';
-  if (command === LANGUAGE_COMMAND) return 'language';
-  if (command === CORPUS_COMMAND) {
-    if (argv.includes('--dir')) return 'corpus';
-    return createCorpusRootResolver()().ok ? 'corpus' : 'corpus-absent';
-  }
-  return null;
+function runCorpusAbsent(modules, argv, resolution) {
+  const { skip } = modules;
+  const text = skip.renderCorpusSkipText(skip.skipReport(resolution.dir ?? '', resolution.reason), argv.includes('--json'));
+  process.stderr.write(text);
+  return skip.SKIP_EXIT_CODE;
 }
+
+/**
+ * 快路只认**最朴素的两种调用**：`corpus` 与 `corpus --json`。
+ *
+ * 其余形态（`--dir` / `--limit` / `--generate-manifest` / `--help` / 任何未知参数）一律走全量入口，
+ * 由 `corpus.ts` 的 `parseCorpusArgs` 权威地决定是用法错误、help 还是真读盘——这条判据是**保守方向**
+ * 的：将来 corpus.ts 新增旗标而这里没登记，最多是慢一点，绝不会把"用法错误"错报成"语料不在位"。
+ */
+function skipFastEligible(argv) {
+  const rest = argv.slice(1);
+  return rest.length === 0 || (rest.length === 1 && rest[0] === '--json');
+}
+
+/**
+ * argv → 需要加载的入口组（未知子命令走 main.ts，行为与改动前一致）。
+ *
+ * `corpus` 多一条**缺席快路**（见 `CORPUS_ABSENT_ENTRIES` 的计时账）：预检判定语料不在位且调用
+ * 形态是 `skipFastEligible` 那两种时，只载零依赖的叶子 `corpus-skip.ts`。
+ * 判据一个字没动：缺席仍是 rc=2 + stderr「语料不在位」+ `verdict: skip`，且文本与全量路径同出处。
+ */
+function planFor(argv) {
+  const command = argv[0];
+  if (command === MIGRATE_COMMAND) return { kind: 'migrate', resolution: null };
+  if (command === LANGUAGE_COMMAND) return { kind: 'language', resolution: null };
+  if (command === CORPUS_COMMAND) {
+    if (!skipFastEligible(argv)) return { kind: 'corpus', resolution: null };
+    const resolution = createCorpusRootResolver()();
+    return resolution.ok ? { kind: 'corpus', resolution: null } : { kind: 'corpus-absent', resolution };
+  }
+  return { kind: null, resolution: null };
+}
+
+const argv = process.argv.slice(2);
+const plan = planFor(argv);
 
 let modules;
 let lastError;
 for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
   try {
-    modules = await loadModules(moduleKindFor(process.argv.slice(2)));
+    modules = await loadModules(plan.kind);
     break;
   } catch (error) {
     // 本机实测过一次并发起两个 Vite 时的瞬时 transform 错（同一条命令随后单跑即绿）；
@@ -343,10 +366,9 @@ for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
 if (modules === undefined) {
   console.error(`[kojo-conformance] 启动失败：${lastError instanceof Error ? lastError.message : String(lastError)}`);
   process.exitCode = 1;
-} else {
-  const argv = process.argv.slice(2);
-  if (argv[0] === MIGRATE_COMMAND) process.exitCode = runMigrateDiff(modules, argv);
-  else if (argv[0] === LANGUAGE_COMMAND) process.exitCode = runLanguage(modules, argv);
-  else if (argv[0] === CORPUS_COMMAND) process.exitCode = runCorpus(modules, argv);
-  else process.exitCode = modules.main.main(argv);
-}
+} else if (plan.kind === 'corpus-absent') {
+  process.exitCode = runCorpusAbsent(modules, argv, plan.resolution);
+} else if (argv[0] === MIGRATE_COMMAND) process.exitCode = runMigrateDiff(modules, argv);
+else if (argv[0] === LANGUAGE_COMMAND) process.exitCode = runLanguage(modules, argv);
+else if (argv[0] === CORPUS_COMMAND) process.exitCode = runCorpus(modules, argv);
+else process.exitCode = modules.main.main(argv);

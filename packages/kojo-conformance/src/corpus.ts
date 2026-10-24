@@ -42,6 +42,11 @@
 
 import { repairV1Source } from '@kojo/kojo-core';
 
+/* SKIP 那一枚报告的实现住在 `corpus-skip.ts`（零运行时依赖的叶子）：工具外壳在"语料不在位"时
+   只载那一枚就够了，不必为了写一行缺席报告把整条真链路（`@kojo/kojo-core` 桶）拖起来转译。
+   这里与它共用同一枚函数——文本只有一处实现，不是两份实现对拍。 */
+import { emptyReport, renderCorpusSkipText, skipReport } from './corpus-skip.js';
+
 import {
   runMigrationDifferential,
   type MigrationBlockedReason,
@@ -913,35 +918,6 @@ function parseCorpusArgs(argv: readonly string[]): CorpusCliArgs {
   return { dir, limit, json, generateManifest, help: false, error };
 }
 
-function emptySummaryReport(): CorpusSummary {
-  return { cases: 0, identical: 0, normalizedEqual: 0, differs: 0, blocked: 0, blockedByReason: Object.freeze([]) };
-}
-
-function emptyRateReport(): CorpusRateReport {
-  return { total: 0, migratable: 0, rate: 0, unmigratable: 0, unsupportedCases: 0, byReason: Object.freeze([]) };
-}
-
-function emptyReport(verdict: CorpusVerdict, dir: string): CorpusCliReport {
-  return {
-    verdict,
-    dir,
-    discovery: null,
-    summary: emptySummaryReport(),
-    rate: emptyRateReport(),
-    cases: Object.freeze([]),
-    problems: Object.freeze([]),
-    manifest: null,
-    usage: null,
-  };
-}
-
-function skipReport(dir: string, reason: string): CorpusCliReport {
-  return {
-    ...emptyReport('skip', dir),
-    problems: Object.freeze([{ id: '(corpus)', kind: 'corpus' as const, message: reason }]),
-  };
-}
-
 function usageReport(dir: string, reason: string): CorpusCliReport {
   return { ...emptyReport('skip', dir), usage: `${CORPUS_CLI_USAGE}\n\n错误：${reason}` };
 }
@@ -1052,17 +1028,12 @@ function reasonLine(reasons: readonly CorpusReasonCount[]): string {
  */
 export function formatCorpusReport(report: CorpusCliReport, options: { readonly json?: boolean } = {}): string {
   if (report.usage !== null) return `${report.usage}\n`;
+  // 缺席文本（含 `--json` 档）只在 `corpus-skip.ts` 里写一次，工具外壳与人话路径吃同一枚函数
+  if (report.verdict === 'skip') return renderCorpusSkipText(report, options.json === true);
   if (options.json === true) return `${JSON.stringify(report, null, 2)}\n`;
 
   const discovery = report.discovery;
   const lines: string[] = [];
-  if (report.verdict === 'skip') {
-    lines.push(`kojo-conformance corpus · SKIP（语料不在位）· dir=${report.dir || '(未解析)'}`);
-    for (const problem of report.problems) lines.push(`  原因：${problem.message}`);
-    lines.push('这是 SKIP，不是绿：语料缺席不会被记成 0 cases 通过。');
-    lines.push(`用法：node tools/kojo-conformance.mjs corpus --dir <语料根> [--limit N] [--json]`);
-    return `${lines.join('\n')}\n`;
-  }
 
   if (report.manifest !== null) {
     lines.push(
