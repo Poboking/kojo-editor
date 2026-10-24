@@ -110,9 +110,14 @@ export {
   packStaleName,
   MARKET_STALE_SUFFIX,
   packUpdateCheck,
+  /* ---- 封面字段（批次十一 R3 · additive；勿与他批混排） ---- */
+  MARKET_MAX_COVER_URL_CHARS,
+  MARKET_MAX_COVER_BYTES,
+  marketCoverProblem,
 } from './market';
 export type {
   InstalledPack,
+  MarketCover,
   MarketDownloadProgress,
   MarketIndex,
   MarketIndexEntry,

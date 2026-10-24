@@ -1652,6 +1652,65 @@ describe('封面缺位的占位徽标（「」母题走文本，不走图、不�
   });
 });
 
+/* ============ 封面字段（批次十一 R3 · additive）：有图用图，没图/坏图退回母题 ============ */
+
+describe('封面在场与退回（R3：`cover` 可选字段，缺图态永不出现）', () => {
+  const withCover = viewEntry('has.cover', '1.0.0', {
+    cover: { url: 'https://img.example.test/has-cover.png', bytes: 4096 },
+  });
+  const plain = viewEntry('no.cover', '1.0.0');
+  const coverKey = 'kojo-pack/has.cover@1.0.0';
+
+  it('条目带 cover ⇒ 头排第一枚是 `<img class="mk-cover">`，src 原样、alt 空、这一行不再有母题徽标', () => {
+    const html = renderView([withCover, plain], []);
+    expect(html).toContain('<img class="mk-cover" src="https://img.example.test/has-cover.png" alt="" loading="lazy"/>');
+    // 有封面的那一行退回占位的路径不存在（同位互斥）；没封面的那一行照旧有母题——
+    // 三条母题判据里 rows 是三枚，这里两行只数得出**一枚**（封面行让位给图）
+    const emblems = [...html.matchAll(/<span class="mk-emblem" aria-hidden="true">/g)];
+    expect(emblems).toHaveLength(1);
+    // 层级判据不动：封面仍住在 `.mk-name` 里面，头排第一枚仍是 `.mk-name`
+    const head = byClass(MarketPanelView(viewProps([withCover, plain], [])), 'mk-head')[0]!;
+    const first = kids(head).filter(isEl)[0]!;
+    expect((first.props.className as string).split(/\s+/)).toContain('mk-name');
+  });
+
+  it('加载失败（`coverFailedKeys` 命中行键）⇒ 母题在场、图不在场（不许留破图框）', () => {
+    const failed = new Set([coverKey]);
+    const html = renderView([withCover, plain], [], { coverFailedKeys: failed });
+    expect(html).not.toContain('mk-cover');
+    // 两行都回到母题（封面行显示的是包名首字那枚字，不是空格子）
+    expect(html).toContain('<span class="mk-emblem" aria-hidden="true">示</span>');
+    const imgs = byClass(MarketPanelView(viewProps([withCover, plain], [], { coverFailedKeys: failed })), 'mk-cover');
+    expect(imgs).toHaveLength(0);
+    // 失败只作**名单内那一行**：名单外的封面行不许被连坐
+    const second = viewEntry('other.cover', '1.0.0', { cover: { url: 'https://img.example.test/other.png', bytes: 10 } });
+    const both = renderView([withCover, second], [], { coverFailedKeys: new Set([coverKey]) });
+    expect(both).toContain('src="https://img.example.test/other.png"');
+    expect(both).not.toContain('has-cover.png');
+    expect([...both.matchAll(/<img class="mk-cover"/g)]).toHaveLength(1);
+  });
+
+  it("`<img onError>` 只发一个事实：被点名的正是那一行的键（onCoverError 接线）", () => {
+    const failedKeys: string[] = [];
+    const tree = MarketPanelView(
+      viewProps([withCover, plain], [], { onCoverError: (k: string) => { failedKeys.push(k); } }),
+    );
+    const img = byClass(tree, 'mk-cover')[0]!;
+    (img.props.onError as () => void)();
+    expect(failedKeys).toEqual([coverKey]);
+    // 同一份失败名单喂回去 ⇒ 这一枚退回母题（状态→作画只隔一层 props，没有第二份判定）
+    const html = renderView([withCover, plain], [], { coverFailedKeys: new Set(failedKeys) });
+    expect(html).not.toContain('mk-cover');
+    expect(html).toContain('<span class="mk-emblem" aria-hidden="true">示</span>');
+  });
+
+  it('不带 cover 的一切照旧：旧声明零改动（占位母题、已装行、动作按钮都不长新态）', () => {
+    const html = renderView([plain], []);
+    expect(html).not.toContain('mk-cover');
+    expect(html).toContain('<span class="mk-emblem" aria-hidden="true">示</span>');
+  });
+});
+
 describe('失败态落在字上，不落在色上（铁律 4 到面板这一层）', () => {
   it('装包失败 ⇒ 状态行那句之后多一行「哪一步失败 + 下一步做什么」，是文字不是变色', () => {
     const note = `「示例 a.pack」没装成：${REJECT_TEXT['entry-sha256']}`;

@@ -222,6 +222,27 @@ export interface MarketIndexEntry {
   zip: { url: string; sha256: string; bytes: number };
   fileCount: number;
   unpackedBytes: number;
+  /**
+   * 封面图（批次十一 R3 · **additive 可选**，2026-10-24）：注册表条目带这一枚时面板写真图，
+   * **缺席就按既有行为走「」母题占位**（旧索引、旧消费方零改动）。校验口径见
+   * `marketCoverProblem`；不合格 ⇒ 整条进 `dropped` 出声，**不许静默丢字段**。
+   */
+  cover?: MarketCover;
+}
+
+/**
+ * 一条封面图声明（R3 additive）。
+ *
+ * 刻意**只有声明面两个字段**：`url` 是 https 直链（渲染走 webview 的 `<img>`，不经平台
+ * 下载原语 ⇒ 没有落盘、没有暂存、也就没有第二份容器纪律）；`bytes` 是注册表声明的体积，
+ * 只用于**收录闸**（超限 = 索引条目不合格，见 `MARKET_MAX_COVER_BYTES`）——
+ * 真字节由浏览器抓取，本机无法在 `<img>` 这条路上复核，如实承认，不假装有第二把尺。
+ */
+export interface MarketCover {
+  /** https 直链（协议白名单只有 `https:` 一条；见 `marketCoverProblem`） */
+  url: string;
+  /** 注册表声明的图像字节数（收录闸的尺；渲染侧不复核） */
+  bytes: number;
 }
 
 export interface MarketIndex {
@@ -728,6 +749,55 @@ export function endpointProblem(url: string): string | null {
   if (parsed.protocol !== 'https:') return `协议必须是 https（收到 ${parsed.protocol}）`;
   if (parsed.hostname.length === 0) return 'URL 没有主机名';
   if (parsed.username.length > 0 || parsed.password.length > 0) return 'URL 不许带账号信息';
+  return null;
+}
+
+/** 封面 URL 的长度上限（2048 字符 = 各家 webview / CDN 都吃得下的公共下界，超了直接不收） */
+export const MARKET_MAX_COVER_URL_CHARS = 2048;
+
+/**
+ * 封面声明体积上限（256 KiB）。
+ *
+ * 依据：这枚图住在 260px 侧栏的一枚小格里（`.mk-emblem` 同档 ≈ 17.6px 见方的放大版），
+ * 正经封面（几百 px 见方的 png/webp/avif）远到不了这个数；真到了就是有人往索引里塞壁纸
+ * ——与 `MARKET_MAX_INDEX_BYTES` 同一条"索引是索引，不是仓库"的口径。
+ * 这条尺量的是**注册表声明**（收录闸）；`<img>` 抓取的真字节本机复核不了，如实如此。
+ */
+export const MARKET_MAX_COVER_BYTES = 256 * 1024;
+
+/**
+ * 一条封面声明的**形状与字面**闸（纯函数、零网络）：合法返回 `null`，否则给人话原因。
+ *
+ * 口径与 `endpointProblem` 同源但**不复用那句话**——端点那句是"注册表地址"，这句是"封面直链"：
+ * - 协议白名单只有 `https:`（`http:` / `data:` / `blob:` 一律拒：非 https 的图既过不了
+ *   webview 的混合内容口径，`data:` 更等于把字节塞进索引，绕开上一条体积闸）；
+ * - URL 形态照 `endpointProblem`（有主机名、不带 userinfo——封面带账号信息不是笔误就是注入面）；
+ * - `url` ≤ `MARKET_MAX_COVER_URL_CHARS` 字符、`bytes` 为 `1..MARKET_MAX_COVER_BYTES` 的整数。
+ *
+ * 主机可信性**不在本层判**：图像由 webview 直接抓、不过 Rust 的出网闸，这里写一份主机名单
+ * 就是第二份真相（与 `endpointProblem` 的取舍同一口径）；https-only + 体积上限是本契约
+ * 承诺的全部，剩下归注册表 CI。
+ */
+export function marketCoverProblem(cover: unknown): string | null {
+  if (typeof cover !== 'object' || cover === null || Array.isArray(cover)) return '必须是一个对象';
+  const o = cover as Record<string, unknown>;
+  const url = o['url'];
+  if (typeof url !== 'string' || url.length === 0) return 'url 必须是非空字符串';
+  if (url.length > MARKET_MAX_COVER_URL_CHARS) return `url 超长（${url.length} > ${MARKET_MAX_COVER_URL_CHARS} 字符）`;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'url 不是一个合法 URL';
+  }
+  if (parsed.protocol !== 'https:') return `url 协议必须是 https（收到 ${parsed.protocol}）`;
+  if (parsed.hostname.length === 0) return 'url 没有主机名';
+  if (parsed.username.length > 0 || parsed.password.length > 0) return 'url 不许带账号信息';
+  const bytes = o['bytes'];
+  if (typeof bytes !== 'number' || !Number.isInteger(bytes) || bytes <= 0) {
+    return 'bytes 必须是正整数（注册表声明的图像字节数）';
+  }
+  if (bytes > MARKET_MAX_COVER_BYTES) return `bytes 超过封面体积上限（${bytes} > ${MARKET_MAX_COVER_BYTES}）`;
   return null;
 }
 

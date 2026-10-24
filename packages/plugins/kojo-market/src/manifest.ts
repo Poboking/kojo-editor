@@ -12,6 +12,7 @@ import {
   PACK_ID_RE,
   PACK_VERSION_RE,
   SHA256_HEX_RE,
+  marketCoverProblem,
   minAppVersionSatisfied,
   packFilesProblem,
   type MarketIndex,
@@ -249,6 +250,13 @@ export function indexEntryProblem(e: unknown): string | null {
   if (typeof fc !== 'number' || fc < 0) return 'fileCount 不合规';
   const ub = o['unpackedBytes'];
   if (typeof ub !== 'number' || ub < 0) return 'unpackedBytes 不合规';
+  // 封面（R3 additive）：**缺席 = 合法**（面板照旧走「」母题占位）；在册就不合格 ⇒ 整条进
+  // `dropped` 出声（铁律 4：校验规则抛错不许静默丢字段——只丢字段没人看得见，这条与 zip 同类）。
+  const cover = o['cover'];
+  if (cover !== undefined) {
+    const coverWhy = marketCoverProblem(cover);
+    if (coverWhy !== null) return `cover ${coverWhy}`;
+  }
   return null;
 }
 
