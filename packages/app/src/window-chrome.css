@@ -152,3 +152,47 @@
     transition: none;
   }
 }
+
+/* ------------------------------ 启动弹窗的退出钮 ------------------------------ */
+
+/* 启动期没有标题栏（整窗 = 无边框弹窗），右上角只留这一枚 ×。底色/提示/扫光条复用
+   `.boot-skeleton` / `.boot-bar`；这里只补按钮定位与悬停态，颜色走 token。 */
+.boot-screen {
+  position: relative;
+}
+
+.boot-splash-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  cursor: default;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.boot-splash-close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.boot-splash-close:active {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-splash-close {
+    transition: none;
+  }
+}

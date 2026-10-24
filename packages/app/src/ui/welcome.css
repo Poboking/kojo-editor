@@ -1259,3 +1259,83 @@
     justify-content: flex-start;
   }
 }
+
+/* ============================================================================
+   欢迎弹窗（2026-10-25 启动弹窗批）——窗口本身就是欢迎卡核心区，无标题栏/外框。
+
+   `.app-frame-popup` 由 App 在「没有任何项目」时挂到应用根上：启动弹窗与欢迎页
+   共用同一窗口；进项目才换成编辑器窗口（标题栏与 1px 外框只属于编辑器态）。
+   卡片铺满窗口：去掉整页留白，两栏各自内滚——不是把整页放小。
+   ============================================================================ */
+
+.app-frame-popup .welcome-screen {
+  background: var(--bg);
+}
+
+/* 窗口即卡片：页面留白归零，舞台吃满高度 */
+.app-frame-popup .welcome-scroll {
+  padding: 0;
+  overflow: hidden;
+}
+
+.app-frame-popup .welcome-stage {
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.app-frame-popup .welcome-screen .welcome-card {
+  height: 100%;
+  max-height: none;
+}
+
+/* 矮窗媒体查询（max-height:700px）会把两栏改成整页滚；弹窗里仍要「卡片填窗 + 栏内滚」。
+   特异性高于媒体查询里的裸 `.welcome-main` / `.welcome-side`，与顺序无关。 */
+.app-frame-popup .welcome-main,
+.app-frame-popup .welcome-side {
+  overflow-y: auto;
+}
+
+.app-frame-popup .welcome-project-grid {
+  max-height: calc(var(--welcome-card-h) * 2 + var(--space-3));
+  overflow-y: auto;
+}
+
+.app-frame-popup .welcome-recent-files .welcome-recent-list {
+  max-height: calc(var(--welcome-row-h) * 4);
+  overflow-y: auto;
+}
+
+/* 关闭欢迎页后的空态也住弹窗里：卡片居中，窗口会按它的尺寸收 */
+.app-frame-popup .welcome.welcome-screen.welcome-closed {
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.app-frame-popup .welcome-closed-card {
+  width: min(560px, 100%);
+  margin: 0;
+}
+
+/* 量高态：布局副作用里临时挂上，让卡片回到「自然高度」再读矩形；移除后才落窗。
+   舞台宽度钉在欢迎卡的设计宽（1120），避免从编辑器窗口（可能更宽/更窄）量错版式。 */
+.app-frame-popup.welcome-popup-measuring .welcome-scroll {
+  overflow: hidden;
+}
+
+.app-frame-popup.welcome-popup-measuring .welcome-stage {
+  width: 1120px;
+  max-width: none;
+  max-height: none;
+  flex: none;
+  margin: 0;
+}
+
+.app-frame-popup.welcome-popup-measuring .welcome-screen .welcome-card {
+  height: auto;
+  max-height: none;
+}

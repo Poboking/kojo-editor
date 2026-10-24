@@ -21,12 +21,16 @@ import { describe, expect, it } from 'vitest';
  * 自我循环，再也抓不到「改主题忘改引导层」。所以这里的取色差异是**合法的**，被排除在
  * 逐字比对之外，另由「取色镜像」一闸（三档 × 五面，口径照 `themes/light.css` 顶部
  * 「⚠ 锚定不变量」的五格清单）以**跨文件对撞**的方式钉住，漂一枚色即红、一律严格逐字相等；
- * 字号同理会跳（接力瞬间 `--fs-display` / `--fs-1` 两格），故另给两格字号镜像，真源只有基线一档。
+ * 字号同理会跳（接力瞬间 `--fs-1` 一格；`--fs-display` 只留在项目骨架的品牌字上），
+ * 故另给字号镜像，真源只有基线一档。
  *
  * 补一面（2026-10-17）：**排版本身**同样是两处独立手写而先前没钉——卡容器 `index.html` 的
  * `.boot-splash-card` vs `styles.css` 的 `.boot-skeleton-card`（类名不同，「同名配方」那条抓不到）、
- * 两行文字各两格 `font-weight` / `letter-spacing` ⇒ 另挂「排版镜像」一条；只比这几格，
+ * 提示行两格 `font-weight` / `letter-spacing` ⇒ 另挂「排版镜像」一条；只比这几格，
  * `font-size` / `color` 仍归上面两条镜像管，免得同一格两套口径。
+ *
+ * 2026-10-25 启动弹窗批：内联层去掉了品牌字（用户口径「无文字，简约」只保留「正在启动…」），
+ * 品牌字的字号/排版镜像随之退役；项目骨架（ProjectViewSkeleton）里的品牌字不受影响。
  */
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -248,7 +252,6 @@ const COLOR_FACES: readonly Face[] = [
  * 不硬造按档断言；前提本身另由下面那条闸钉住。
  */
 const FONT_FACES: readonly Face[] = [
-  { label: '品牌标题字号', selectors: new Set(['.boot-splash-brand']), prop: 'font-size', token: '--fs-display' },
   { label: '提示文字字号', selectors: new Set(['.boot-splash-tip']), prop: 'font-size', token: '--fs-1' },
 ];
 
@@ -387,10 +390,9 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
       '卡容器配方漂移：index.html 的 .boot-splash-card（内联字面量） vs styles.css 的 .boot-skeleton-card（token 已还原）',
     ).toEqual(seqOf(cardPacked));
 
-    // ② 两行文字的排版两格。font-size / color 归「取色镜像」「字号镜像」两条管，这里不重复钉，免得两套口径
+    // ② 提示行的排版两格。font-size / color 归「取色镜像」「字号镜像」两条管，这里不重复钉，免得两套口径
     const TYPE_CELLS = ['font-weight', 'letter-spacing'] as const;
     const rows = [
-      { label: '品牌标题', inlineSel: '.boot-splash-brand', packedSel: '.boot-skeleton-brand' },
       { label: '提示文字', inlineSel: '.boot-splash-tip', packedSel: '.boot-skeleton-tip' },
     ] as const;
     for (const row of rows) {
@@ -429,6 +431,7 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
       'align-items: center;',
       'gap: 16px;',
     ]);
+    // 品牌字号镜像已随内联层去品牌字退役；ProjectViewSkeleton 仍用它，实值单独钉住
     const brandPacked = declsFor(cssSrc(), '.boot-skeleton-brand', packedTokens, 'styles.css');
     for (const [prop, want] of [
       ['font-weight', '600'],
@@ -436,9 +439,24 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     ] as const) {
       expect(
         cellOf(brandPacked, prop),
-        `防一起漂：styles.css 的 .boot-skeleton-brand { ${prop} } 真值须为 ${want}（内联层 .boot-splash-brand 靠上面的逐字镜像一起钉死）`,
+        `防一起漂：styles.css 的 .boot-skeleton-brand { ${prop} } 真值须为 ${want}（项目骨架的品牌字仍靠这一格）`,
       ).toBe(want);
     }
+  });
+
+  it('启动弹窗（2026-10-25）：内联层只留「正在启动…」+ 扫光条 + 右上角退出，品牌字清零', () => {
+    const html = htmlSrc();
+    expect(html, '启动弹窗必须保留「正在启动…」').toContain('正在启动…');
+    expect(html, '启动弹窗必须有右上角退出入口').toContain('id="boot-splash-close"');
+    expect(html, '内联层不再有品牌字样式').not.toContain('boot-splash-brand');
+    expect(html, '内联层不再渲染产品名').not.toContain('>kojo-editor<');
+  });
+
+  it('React 启动弹窗与内联层同构：同一个 .boot-bar、同一句提示、同一个退出入口', () => {
+    const view = appTsx();
+    expect(view, 'React 启动弹窗必须复用 .boot-bar').toContain('className="boot-bar"');
+    expect(view, 'React 启动弹窗必须保留「正在启动…」').toContain('正在启动…');
+    expect(view, 'React 启动弹窗必须有退出入口').toContain('boot-splash-close');
   });
 
   it('两份系统减动效（@media prefers-reduced-motion）豁免分支的声明也逐字相等', () => {

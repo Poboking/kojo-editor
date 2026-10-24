@@ -116,11 +116,13 @@ export function runContextMenuProbes(opts) {
   /**
    * 在元素上派发一次**右键**。坐标取元素矩形中心附近（Monaco 的 `getTargetAtClientPoint`
    * 需要真实视口坐标；纯 `{clientX:0, clientY:0}` 会落到行号槽/空白之外）。
+   *
+   * ⚠ 内容层（`.view-lines`）的高度 = 全文行数 × 行高：长文件（实测 1.3 万行）的中心
+   * 会落到视口外（yt ≈ 13 万）⇒ Monaco 收不到有效的点、原生菜单不开（PITFALLS 194）。
+   * A1 因此改用 `rightClickAt` + **可见 `.view-line`** 的视口内点；这里保留中心口径给
+   * 其它"元素本身就在视口内"的热区。
    */
-  const rightClick = (el) => {
-    const r = el.getBoundingClientRect();
-    const x = Math.round(r.left + Math.min(Math.max(r.width / 2, 4), r.width - 2));
-    const y = Math.round(r.top + Math.min(Math.max(r.height / 2, 4), r.height - 2));
+  const rightClickAt = (el, x, y) => {
     const cx = Number.isFinite(x) ? x : 4;
     const cy = Number.isFinite(y) ? y : 4;
     el.dispatchEvent(
@@ -135,6 +137,13 @@ export function runContextMenuProbes(opts) {
       }),
     );
     return { x: cx, y: cy };
+  };
+
+  const rightClick = (el) => {
+    const r = el.getBoundingClientRect();
+    const x = Math.round(r.left + Math.min(Math.max(r.width / 2, 4), r.width - 2));
+    const y = Math.round(r.top + Math.min(Math.max(r.height / 2, 4), r.height - 2));
+    return rightClickAt(el, x, y);
   };
 
   /**
@@ -285,7 +294,21 @@ export function runContextMenuProbes(opts) {
     const out = { applicable: editor !== null };
     if (editor === null) return out;
     const surface = q('.monaco-editor .view-lines') || editor;
-    rightClick(surface);
+    // 取一个**可见** `.view-line`：`.view-lines` 的中心在长文件下会落到视口外（PITFALLS 194）
+    const line = all('.monaco-editor .view-line').find((el) => {
+      const b = el.getBoundingClientRect();
+      return b.height > 0 && b.bottom > 0 && b.top < innerHeight && b.right > 0 && b.left < innerWidth;
+    });
+    if (line !== undefined) {
+      const b = line.getBoundingClientRect();
+      rightClickAt(
+        surface,
+        Math.round(Math.min(Math.max(b.left + 24, 4), innerWidth - 8)),
+        Math.round(Math.min(Math.max(b.top + b.height / 2, 4), innerHeight - 8)),
+      );
+    } else {
+      rightClick(surface);
+    }
     await settle();
     await sleep(240); // Monaco 的菜单同步建，但样式表/首帧要一帧
     const native = q('.monaco-menu-container');

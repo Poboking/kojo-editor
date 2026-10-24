@@ -52,14 +52,32 @@
         align-items: center;
         gap: 16px;
       }
-      .boot-splash-brand {
-        font-size: 26px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-      }
       .boot-splash-tip {
         font-size: 12px;
         color: #909aa4;
+      }
+      /* 右上角唯一控件：退出。形态与 React 启动弹窗（boot-splash.css）同构。 */
+      #boot-splash-close {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: #909aa4;
+        font: inherit;
+        font-size: 20px;
+        line-height: 1;
+        cursor: default;
+      }
+      #boot-splash-close:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #d7dce2;
       }
       .boot-bar {
         width: 168px;
@@ -107,6 +125,13 @@
       html[data-theme='light'] .boot-splash-tip {
         color: #59636e;
       }
+      html[data-theme='light'] #boot-splash-close {
+        color: #59636e;
+      }
+      html[data-theme='light'] #boot-splash-close:hover {
+        background: rgba(0, 0, 0, 0.06);
+        color: #1f2328;
+      }
       html[data-theme='light'] .boot-bar {
         background: #dde3ea;
       }
@@ -124,6 +149,13 @@
       html[data-theme='mint-dark'] .boot-splash-tip {
         color: #88a896;
       }
+      html[data-theme='mint-dark'] #boot-splash-close {
+        color: #88a896;
+      }
+      html[data-theme='mint-dark'] #boot-splash-close:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #d9e9df;
+      }
       html[data-theme='mint-dark'] .boot-bar {
         background: #1c2a23;
       }
@@ -134,11 +166,19 @@
   </head>
   <body>
     <div id="boot-splash" aria-hidden="true">
-      <div class="boot-splash-card">
-        <div class="boot-splash-brand">kojo-editor</div>
+      <div class="boot-splash-card" data-tauri-drag-region>
         <div class="boot-splash-tip">正在启动…</div>
         <div class="boot-bar"></div>
       </div>
+      <!-- 启动弹窗唯一的控件：退出。React 挂载前也能用：Tauri 的 IPC 已注入，
+           命令名与窗口权限同 `core:window:allow-close`；浏览器 dev 里静默无效。 -->
+      <button
+        type="button"
+        id="boot-splash-close"
+        aria-label="退出应用"
+        title="退出应用"
+        onclick="try{window.__TAURI_INTERNALS__.invoke('plugin:window|close',{label:'main'})}catch(e){}"
+      >×</button>
     </div>
     <!-- L1-0 引导标记（parse 期落盘，main.tsx 收编进 __kojoPerf；口径见 src/perf.ts bootMark）：
          - htmlParsed：本脚本执行时刻 = 引导层标记已进 DOM（≈可见），自导航起点 ms；

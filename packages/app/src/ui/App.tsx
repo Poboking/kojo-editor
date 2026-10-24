@@ -55,6 +55,15 @@ import { installWindowCloseGuard } from './window-close-guard';
 // 常驻窗口框架（用户反馈第 9 条）：窗口永久无原生装饰，标题栏由 App 根部统一提供，
 // 欢迎页 / 项目态 / 禅模式共用；浏览器 dev 里该组件返回 null（不画假按钮）。
 import { WindowChrome } from './WindowChrome';
+import { Icon } from './icons';
+import {
+  WELCOME_WINDOW_DEFAULT_HEIGHT,
+  WELCOME_WINDOW_WIDTH,
+  applyEditorWindow,
+  applyWelcomeWindow,
+  clampWelcomeWindowSize,
+  closeWindow,
+} from './window-fullscreen';
 import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
 import { DevNoteDialog } from './DevNoteDialog';
 import { loadDevNoteSeen, markDevNoteSeen } from './dev-note-pref';
@@ -249,6 +258,38 @@ function ProjectViewSkeleton(): ReactElement {
         <div className="boot-skeleton-tip">正在装载工作区…</div>
         <div className="boot-bar" />
       </div>
+    </div>
+  );
+}
+
+/**
+ * 启动弹窗（2026-10-25 启动弹窗批）：内核装配期间的唯一可见面。
+ *
+ * 形态（用户口径）：窗口已是「欢迎卡核心区」大小、无边框、无标题栏；里面只有
+ * 主题底色 + 扫光条 + 「正在启动…」+ 右上角一个 ×。品牌字不再出现。
+ * 扫光条与提示行复用 `styles.css` 的 `.boot-bar` / `.boot-skeleton-*`（与
+ * `index.html` 内联首帧层逐字镜像，守卫见 boot-sweep-single-source）；× 的样式
+ * 住在 `window-chrome.css`（与标题栏窗控同一族，不另开样式文件——PS-10 文件数预算）。
+ *
+ * × 走 `closeWindow()`（Tauri 原生 close；启动期没有脏文件，关窗守卫直接放行）；
+ * 浏览器 dev 无壳，`closeWindow` 自身 no-op。
+ */
+function BootSplashView(): ReactElement {
+  return (
+    <div className="boot-skeleton boot-screen" role="status">
+      <div className="boot-skeleton-card" data-tauri-drag-region>
+        <div className="boot-skeleton-tip">正在启动…</div>
+        <div className="boot-bar" />
+      </div>
+      <button
+        type="button"
+        className="boot-splash-close"
+        aria-label="退出应用"
+        title="退出应用"
+        onClick={() => void closeWindow()}
+      >
+        <Icon name="close" size="sm" />
+      </button>
     </div>
   );
 }
@@ -500,6 +541,89 @@ export function App(): ReactElement {
       return next;
     });
   }, []);
+
+  /* --------- 窗口几何（2026-10-25 启动弹窗批）：欢迎弹窗 ↔ 编辑器窗口 --------- */
+
+  /** 应用根节点：量欢迎卡时临时挂 `welcome-popup-measuring`，不落长期状态 */
+  const frameRef = useRef<HTMLDivElement>(null);
+  /** 上次落窗的欢迎弹窗高度：换内容时先按它收窗，再按自然高度量一次，避免来回跳 */
+  const welcomeWindowHeightRef = useRef(WELCOME_WINDOW_DEFAULT_HEIGHT);
+  /** 测量代次：内容连续变化时只让最后一轮落窗 */
+  const welcomeFitSeqRef = useRef(0);
+  /** 当前窗口几何态；只防重复切窗，不参与渲染 */
+  const windowModeRef = useRef<'popup' | 'editor'>('popup');
+  /** 本次进入欢迎弹窗是否还没摆过位置（内容变化只改尺寸、不把作者拖到的位置拽回屏幕中央） */
+  const welcomePlacementRef = useRef<'pending' | 'placed'>('pending');
+
+  /**
+   * 项目非空 = 编辑器窗口（标题栏/外框的渲染条件同这一条），否则欢迎弹窗。
+   * 切项目时 phase 会短暂回到 opening、旧项目还在 ⇒ 保持编辑器窗口，不闪回小弹窗。
+   * 欢迎弹窗的**尺寸**不在这里定：要等欢迎卡渲染完量出来（见下一条 effect）。
+   */
+  useLayoutEffect(() => {
+    const mode = project !== null ? 'editor' : 'popup';
+    if (mode === windowModeRef.current) return;
+    windowModeRef.current = mode;
+    if (mode === 'editor') void applyEditorWindow();
+    else welcomePlacementRef.current = 'pending';
+  }, [project]);
+
+  /**
+   * 欢迎弹窗贴合卡片核心区：
+   * ① 先按目标宽度（1120，受屏幕工作区夹取）和上次高度把窗口收回来；
+   * ② 等 WebView 真的换到新宽度（媒体查询按 viewport 生效，量早了会拿到窄版式）；
+   * ③ 临时把卡片放回自然高度量矩形，再按量到的宽高落窗一次。
+   * 只在「无项目 + phase welcome」跑：启动期用固定首帧尺寸，开项目中不弹跳。
+   */
+  useLayoutEffect(() => {
+    if (phase !== 'welcome' || project !== null) return;
+    const frame = frameRef.current;
+    if (!frame) return;
+    const seq = ++welcomeFitSeqRef.current;
+    let cancelled = false;
+    const center = welcomePlacementRef.current === 'pending';
+    const screen = { width: window.screen.availWidth, height: window.screen.availHeight };
+
+    const fit = async (): Promise<void> => {
+      const provisional = clampWelcomeWindowSize(
+        { width: WELCOME_WINDOW_WIDTH, height: welcomeWindowHeightRef.current },
+        screen,
+      );
+      await applyWelcomeWindow(provisional, { center });
+      if (cancelled || seq !== welcomeFitSeqRef.current) return;
+      // 宽度没到位时媒体查询还是旧版式，量出来的高度不可信
+      const deadline = performance.now() + 400;
+      while (Math.abs(window.innerWidth - provisional.width) > 1 && performance.now() < deadline) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      if (cancelled || seq !== welcomeFitSeqRef.current) return;
+      frame.classList.add('welcome-popup-measuring');
+      let core: DOMRect | null = null;
+      try {
+        core = frame.querySelector<HTMLElement>('.welcome-card, .welcome-closed-card')?.getBoundingClientRect() ?? null;
+      } finally {
+        frame.classList.remove('welcome-popup-measuring');
+      }
+      if (!core) return;
+      const final = clampWelcomeWindowSize(core, screen);
+      welcomeWindowHeightRef.current = final.height;
+      await applyWelcomeWindow(final, { center });
+      if (center) welcomePlacementRef.current = 'placed';
+    };
+    void fit();
+    return () => {
+      cancelled = true;
+      frame.classList.remove('welcome-popup-measuring');
+    };
+  }, [
+    phase,
+    project,
+    welcomeClosed,
+    recent.length,
+    recentFiles.length,
+    errorBar?.message,
+    crashRecovery?.files,
+  ]);
 
   /** 脏标签集合的最新值快照（openProject 换根守卫 / 拖放落地 / 关窗守卫共用，不吃陈旧闭包） */
   const dirtyRef = useRef(dirtyPaths);
@@ -2122,14 +2246,17 @@ export function App(): ReactElement {
       </>
     );
 
-  // 窗口框架常驻：标题栏在 App 根部（不在 ShellLayout 里），欢迎页没有项目时也有；
-  // 正文与所有 fixed overlay 收进 `.app-frame-body`（flex:1; min-height:0），
-  // `.welcome` / `.shell` 的 100% 高度由这块确定高度的 flex 舞台承接。
+  // 窗口框架常驻：标题栏只属于编辑器态（有项目）；无项目时整窗就是欢迎卡核心区的
+  // 无边框弹窗（启动弹窗同尺寸）。正文与所有 fixed overlay 收进 `.app-frame-body`。
   return (
-    <div className="app-frame" data-context-surface="app-fallback">
-      <WindowChrome title={windowTitle} />
+    <div
+      ref={frameRef}
+      className={`app-frame${project === null ? ' app-frame-popup' : ''}`}
+      data-context-surface="app-fallback"
+    >
+      {project !== null ? <WindowChrome title={windowTitle} /> : null}
       <div className="app-frame-body">
-        {body}
+        {phase === 'boot' ? <BootSplashView /> : body}
         {/* 项目态错误条（REF-FRONT-PERF）：写允许域注册/清除、授权失败的 error state
             原先只在欢迎页可见；这里固定左下显示、可关闭、同文案不重复刷屏。
             出路按钮（WRITE-ADMIT-SPLIT 出路①）与文案同一条 state：能走回去的错误才有按钮。 */}
