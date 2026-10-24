@@ -1291,6 +1291,12 @@
   max-height: none;
 }
 
+/* 弹窗右上角最外圈是「退出应用」（.app-popup-close）；欢迎页自己的「关闭欢迎页」×
+   左移一枚让位——两个动作不同，不叠在同一点。 */
+.app-frame-popup .welcome-screen .welcome-close {
+  right: 52px;
+}
+
 /* 矮窗媒体查询（max-height:700px）会把两栏改成整页滚；弹窗里仍要「卡片填窗 + 栏内滚」。
    特异性高于媒体查询里的裸 `.welcome-main` / `.welcome-side`，与顺序无关。 */
 .app-frame-popup .welcome-main,

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EDITOR_MIN_SIZE,
@@ -167,5 +169,35 @@ describe('applyEditorWindow：编辑器态（可缩放、可最大化、下限 9
     });
     await expect(applyEditorWindow(backendOf(async () => win))).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * 弹窗态没有系统标题栏 ⇒ 右上角必须有「只退应用」的 ×（启动层自带一枚）。
+ * 欢迎页自己的 × 仍是「关闭欢迎页」（收起为 ClosedState），两者不许叠在同一点。
+ */
+describe('弹窗退出钮', () => {
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  const app = read('../src/ui/App.tsx');
+  const chromeCss = read('../src/window-chrome.css');
+  const welcomeCss = read('../src/ui/welcome.css');
+
+  it('只在「无项目且非启动相位」渲染，点击走 closeWindow', () => {
+    expect(app).toContain("project === null && phase !== 'boot'");
+    const at = app.indexOf('className="app-popup-close"');
+    expect(at).toBeGreaterThan(-1);
+    const block = app.slice(at - 200, at + 500);
+    expect(block).toContain('aria-label="退出应用"');
+    expect(block).toContain('title="退出应用"');
+    expect(block).toContain('closeWindow()');
+  });
+
+  it('与启动层共用一套钮样式，且压住欢迎卡、低于模态遮罩', () => {
+    expect(chromeCss).toMatch(/\.boot-splash-close,\s*\n\.app-popup-close\s*\{/);
+    expect(chromeCss).toMatch(/\.app-popup-close\s*\{\s*\n\s*z-index: 3;/);
+  });
+
+  it('弹窗里欢迎页自己的 × 左移让位，保留「关闭欢迎页」语义', () => {
+    expect(welcomeCss).toMatch(/\.app-frame-popup \.welcome-screen \.welcome-close \{\s*\n\s*right: 52px;/);
   });
 });

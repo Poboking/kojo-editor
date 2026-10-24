@@ -2307,6 +2307,19 @@ export function App(): ReactElement {
           />
         ) : null}
       </div>
+      {/* 弹窗态的退出钮（启动层自带一枚，这里只管欢迎页 / 关闭态）：无边框窗口没有
+          系统标题栏，右上角必须有「只退应用」的 ×；欢迎页自己的 × 仍只收起本页。 */}
+      {project === null && phase !== 'boot' ? (
+        <button
+          type="button"
+          className="app-popup-close"
+          aria-label="退出应用"
+          title="退出应用"
+          onClick={() => void closeWindow()}
+        >
+          <Icon name="close" size="sm" />
+        </button>
+      ) : null}
       {/* 右键菜单根宿主（1023 覆盖面批）：固定层，必须排在所有浮层之后（层级见 CSS）。
           各面自己的就地菜单不受影响——这一层只接根路由与兜底。 */}
       <ContextMenuHost />

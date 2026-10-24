@@ -161,7 +161,8 @@
   position: relative;
 }
 
-.boot-splash-close {
+.boot-splash-close,
+.app-popup-close {
   position: absolute;
   top: 12px;
   right: 12px;
@@ -182,17 +183,25 @@
     color var(--dur-1) var(--ease-out);
 }
 
-.boot-splash-close:hover {
+.boot-splash-close:hover,
+.app-popup-close:hover {
   background: var(--hover);
   color: var(--fg);
 }
 
-.boot-splash-close:active {
+.boot-splash-close:active,
+.app-popup-close:active {
   transform: none;
 }
 
+/* 欢迎卡片是 `.app-frame-body` 里的后续兄弟：退出钮要压在卡片上，又必须低于模态遮罩 */
+.app-popup-close {
+  z-index: 3;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .boot-splash-close {
+  .boot-splash-close,
+  .app-popup-close {
     transition: none;
   }
 }
