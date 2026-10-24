@@ -1,0 +1,181 @@
+/**
+ * `@kojo/plugin-kojo-lang` 的判据（B2）。
+ *
+ * 六组断言，各自防一种真实退化：
+ * 1. **语言分派**：`languageId` 优先、缺省退回扩展名、大小写不敏感 —— 分派错了，
+ *    要么整门语言哑掉，要么把 ERB 的请求接过来（那会让 ERB 的 F12 跳到一个 2.0 位置）；
+ * 2. **三态**：弃权（`undefined`）与"认了但没话说"（空数组）**不能混** —— 混了之后
+ *    宿主的多源合并会把空结果当成"这家说了没有"，后面的供方永远轮不到；
+ * 3. **定义落点**：命中名字段（不是行首）、区间半开、`column === span.columnStart`；
+ * 4. **大纲树**：`container` 组树、父恒在前、坏 `container` 退顶层（不静默丢结构）；
+ * 5. **类别映射**：2.0 的十种符号压到契约的四个中性类别，**每一种都有归宿**
+ *    （漏一种会静默变成 `declaration`，大纲图标从此全是同一个）；
+ * 6. **插件装配**：两枚贡献都注册、id 稳定、只注册一次。
+ */
+import { describe, expect, it } from 'vitest';
+import type { PluginContext } from '@kojo/plugin-api';
+import { createKojoLangPlugin, isKojo2Request, provideDefinition, provideDocumentSymbols, symbolFactsToTree } from '../src/index';
+
+const SOURCE = [
+  '// 夹具：两幕 + 表 + 池 + 模 + 函 + 织，覆盖全部有结构的种类',
+  '# 幕 神社清晨',
+  '# 变量 今天已触发 整数 = 0 存档',
+  '',
+  '# 表 心情 由 恋慕',
+  '    0..99 疏远',
+  '    否 未知',
+  '',
+  '@函 增加羁绊(目标, 数值=10)',
+  '    @返 数值',
+  '',
+  '> 晨光透过鸟居{今天已触发}。',
+  '# 幕 神社黄昏',
+  '> 夕阳西下。',
+].join('\n');
+
+/** 造一份 `definition` 请求（缺省 languageId = kojo2，模拟宿主真实投递） */
+function defRequest(line: number, column: number, over: Record<string, unknown> = {}) {
+  return {
+    kind: 'definition' as const,
+    path: 'D:/proj/口上/1_测试.kojo2',
+    text: SOURCE,
+    line,
+    column,
+    project: null,
+    languageId: 'kojo2',
+    ...over,
+  } as never;
+}
+
+describe('语言分派（isKojo2Request）', () => {
+  it('有 languageId 就以它为准（哪怕路径扩展名不符）', () => {
+    expect(isKojo2Request({ languageId: 'kojo2', path: 'D:/x/a.erb' })).toBe(true);
+    expect(isKojo2Request({ languageId: 'erb', path: 'D:/x/a.kojo2' })).toBe(false);
+  });
+
+  it('没有 languageId 才退回扩展名，且大小写不敏感', () => {
+    expect(isKojo2Request({ path: 'D:/x/a.kojo2' })).toBe(true);
+    expect(isKojo2Request({ path: 'D:/x/A.KOJO2' })).toBe(true);
+    expect(isKojo2Request({ path: 'D:/x/a.kojo' })).toBe(false);
+    expect(isKojo2Request({ path: 'D:/x/a.kojo2x' })).toBe(false);
+  });
+});
+
+describe('definition 供方', () => {
+  it('声明行上按 F12 ⇒ 落在自己名字段（不是行首）', () => {
+    const result = provideDefinition(defRequest(3, 4));
+    expect(result?.kind).toBe('definition');
+    const first = result!.locations[0]!;
+    expect(first.line).toBe(3);
+    // `# 变量 今天已触发` —— `#` 是第 1 列，空格第 2 列，`变量` 2..4，空格，名字从第 6 列起
+    expect(first.column).toBe(6);
+    expect(first.span?.columnStart).toBe(6);
+    expect(first.span!.columnEnd!).toBeGreaterThan(6);
+  });
+
+  it('台词插值里的名字 ⇒ 跳到声明行的名字段（插值内是代码面）', () => {
+    // 第 12 行 `> 晨光透过鸟居{今天已触发}。`，`{` 在第 9 列 ⇒ 第 11 列落在名字里
+    const result = provideDefinition(defRequest(12, 11));
+    expect(result!.locations[0]!.line).toBe(3);
+    expect(result!.locations[0]!.column).toBe(6);
+  });
+
+  it('台词正文（不在插值里）不跳 —— 那是文本，不是引用', () => {
+    expect(provideDefinition(defRequest(12, 4))).toEqual({ kind: 'definition', locations: [] });
+  });
+
+  it('认这篇但此处没有可跳的声明 ⇒ 空数组（不是弃权）', () => {
+    const result = provideDefinition(defRequest(12, 1));
+    expect(result).toEqual({ kind: 'definition', locations: [] });
+  });
+
+  it('不是 2.0 的请求 ⇒ undefined（弃权，让下一家接手）', () => {
+    expect(provideDefinition(defRequest(3, 4, { languageId: 'erb' }))).toBeUndefined();
+    expect(provideDefinition({ kind: 'documentSymbol' } as never)).toBeUndefined();
+  });
+});
+
+describe('documentSymbol 供方', () => {
+  it('交回嵌套树：第二幕的声明挂在自己那一幕下', () => {
+    const result = provideDocumentSymbols({
+      kind: 'documentSymbol',
+      path: 'D:/proj/a.kojo2',
+      text: SOURCE,
+      project: null,
+      languageId: 'kojo2',
+    } as never);
+    expect(result?.kind).toBe('documentSymbol');
+    const scenes = result!.symbols.filter((s) => s.name === '神社清晨' || s.name === '神社黄昏');
+    expect(scenes).toHaveLength(2);
+    const first = scenes[0]!;
+    expect(first.kind).toBe('section');
+    expect(first.children?.map((c) => c.name)).toEqual(['今天已触发', '心情', '增加羁绊']);
+    // 第二幕没有声明，不该收第一幕的孩子
+    expect(scenes[1]!.children ?? []).toEqual([]);
+  });
+
+  it('不是 2.0 的请求 ⇒ undefined', () => {
+    expect(
+      provideDocumentSymbols({ kind: 'documentSymbol', path: 'a.erb', text: '', project: null, languageId: 'erb' } as never),
+    ).toBeUndefined();
+    expect(provideDefinition({ kind: 'foldingRange' } as never)).toBeUndefined();
+  });
+});
+
+describe('组树（symbolFactsToTree）', () => {
+  const fact = (name: string, container?: number) => ({
+    name,
+    detail: `# ${name}`,
+    kind: 'variable' as const,
+    range: { startLine: 1, startColumn: 1, endLine: 2, endColumn: 1 },
+    selectionRange: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 3 },
+    ...(container === undefined ? {} : { container }),
+  });
+
+  it('container 指向前面的符号 ⇒ 挂成子项', () => {
+    const tree = symbolFactsToTree([fact('a'), fact('b', 0)]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0]!.children?.map((c) => c.name)).toEqual(['b']);
+  });
+
+  it('坏 container（越界 / 负数 / 指向自己或后面）⇒ 退顶层，不静默丢结构', () => {
+    const tree = symbolFactsToTree([fact('a', 5), fact('b', -1), fact('c', 2)]);
+    expect(tree.map((s) => s.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('detail 为空串时不写这一格（大纲不留空副标题）', () => {
+    const tree = symbolFactsToTree([{ ...fact('a'), detail: '' }]);
+    expect('detail' in tree[0]!).toBe(false);
+  });
+});
+
+describe('插件装配', () => {
+  it('注册两枚贡献，id 稳定、order 相同', () => {
+    const registered: { slot: string; item: { id: string; order?: number } }[] = [];
+    const ctx = {
+      pluginId: 'kojo-lang',
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      slots: {
+        register: (slot: string, item: { id: string; order?: number }) => {
+          registered.push({ slot, item });
+          return () => undefined;
+        },
+      },
+    } as unknown as PluginContext;
+
+    createKojoLangPlugin().activate(ctx);
+
+    expect(registered.map((r) => r.item.id)).toEqual(['kojo2-definition', 'kojo2-symbols']);
+    expect(registered.every((r) => r.slot === 'ui.editor.languageService')).toBe(true);
+    expect(new Set(registered.map((r) => r.item.order)).size).toBe(1);
+  });
+
+  it('id 与版本是契约的一部分（改名即断链，存储域也按它分）', () => {
+    const plugin = createKojoLangPlugin();
+    expect(plugin.id).toBe('kojo-lang');
+    expect(plugin.version).toBe('0.0.0');
+    // 零依赖：判据全在 `@kojo/kojo-lang`，不吃任何服务
+    expect(plugin.requires ?? []).toEqual([]);
+    expect(plugin.provides ?? []).toEqual([]);
+  });
+});

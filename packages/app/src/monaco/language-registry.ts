@@ -19,6 +19,21 @@ import type { StructureLanguageRuntime } from './tree-sitter/structure-runtime';
 
 export const FALLBACK_LANGUAGE_ID = 'plaintext';
 
+/**
+ * 可以「只挂槽腿」的**能力名**（B2 起，additive）。
+ *
+ * 取值 = `ui.editor.languageService` 槽里**集合型**的判别成员名（`documentSymbol` /
+ * `definition` / `references` / `foldingRange` / `inlayHint`）。单答型（`hover` /
+ * `formatting` / `signatureHelp` / `rename`）不在其中：它们"第一家说了算"，多语言共用
+ * 一枚 provider 时谁先答取决于注册表顺序——那不是能力声明能决定的事。
+ */
+export type SlotServiceKind =
+  | 'definition'
+  | 'documentSymbol'
+  | 'references'
+  | 'foldingRange'
+  | 'inlayHint';
+
 export interface LanguageDescriptor {
   /** Monaco 语言 id（也是 `ITextModel.getLanguageId()` 的返回值） */
   readonly id: string;
@@ -34,6 +49,20 @@ export interface LanguageDescriptor {
    * JSON 这类只读保留面不挂，免得空结果顶掉 Monaco 的缩进折叠与内建行为。
    */
   readonly languageServices?: boolean;
+  /**
+   * **只挂这几条槽腿**（additive，B2）：与 {@link languageServices} 的分工是**粒度**——
+   * 后者是"v1 语义的 11 枚 provider 全铺"，前者是"只挂点名的这几种能力，应答全来自
+   * `ui.editor.languageService` 槽"。
+   *
+   * 为什么需要它（而不是让 kojo2 直接声明 `languageServices: true`）：那 11 枚里有几枚
+   * 的**空结果会顶掉 Monaco 内建行为**——最典型是折叠：注册了 `FoldingRangeProvider`
+   * 之后 Monaco 的缩进折叠就不再兜底，供方不认这篇时作者会看到"整个文件都不能折叠"。
+   * kojo2 的折叠 / 悬停 / 补全归它自己的插件，宿主不该替它铺满。
+   *
+   * 与 `languageServices` 是**并集**关系：声明了 `languageServices: true` 的语言即使
+   * 不写这一格，也参与全部槽腿（v1 的 ERB / .kojo 就是这种）。
+   */
+  readonly slotServices?: readonly SlotServiceKind[];
   /**
    * 结构层（tree-sitter）资源。**按需加载**：`load()` 里必须用动态 import，
    * 不然 worker / wasm / 查询会跟着主线程静态图一起进首屏，违背"默认关 = 不存在"。

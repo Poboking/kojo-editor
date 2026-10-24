@@ -182,12 +182,17 @@ describe('toMonacoDocumentSymbols · 协议翻译', () => {
 });
 
 describe('installDocumentSymbolProvider · 装配', () => {
-  it('ERB 与 `.kojo` 各注册一枚 provider；dispose 全部回收', () => {
+  // B2（2026-10-24）：这枚 provider 现在多挂一门 `kojo2` —— 它的 descriptor 声明了
+  // `slotServices: ['documentSymbol']`（"只挂点名的槽腿"），供方是插件
+  // `@kojo/plugin-kojo-lang`。所以本文件断言的是**三枚**：两门 v1 一等语言（全铺）
+  // 加 2.0（点名）。这条变化本身就是 B2 的判据：宿主不再自建 2.0 大纲 provider。
+  it('ERB / `.kojo` / `kojo2` 各注册一枚 provider；dispose 全部回收', () => {
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installDocumentSymbolProvider(monaco, { resolve: () => [] });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    const expected = [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, 'kojo2'].sort();
+    expect(registered.map((r) => r.languageId).sort()).toEqual(expected);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(disposed.sort()).toEqual(expected);
   });
 
   it('provider 把宿主给的契约符号翻译成 Monaco 树（模型决定行号上限）', () => {

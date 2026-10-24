@@ -76,6 +76,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     savParser,
     stateReplay,
     sugar,
+    kojoLang,
     uiStatus,
     uiConventionReport,
     uiKojoNavigator,
@@ -97,6 +98,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-sav-parser'),
     import('@kojo/plugin-state-replay'),
     import('@kojo/plugin-kojo-sugar'),
+    import('@kojo/plugin-kojo-lang'),
     import('@kojo/plugin-ui-status'),
     import('@kojo/plugin-ui-convention-report'),
     import('@kojo/plugin-ui-kojo-navigator'),
@@ -131,6 +133,15 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // 语法糖转译（游戏无关；中文表层关键字是跨游戏语言层，住在契约；
     // 时机分野命名模板与变量字典来自当前 adapter —— 纯函数，不触达工程状态）
     sugar.createKojoSugarPlugin(),
+    // Kojo 语言面插件（B2）：definition / documentSymbol 的**唯一供方**，经
+    // `ui.editor.languageService` 槽应答 `languageId: 'kojo2'` 的请求。
+    // 排在这里的理由：它不 require 任何服务（判据全在 `@kojo/kojo-lang`，零 IO、
+    // 零项目状态），所以位置不影响正确性；放在 sugar 之后是保持"语言面在前、
+    // 呈现面在后"的阅读顺序。宿主侧对应的原生 provider 已在 B2 批删除 ⇒
+    // 本插件缺席时这几项能力**无人应答**（可见退化，不是静默兜底）。
+    // 本批只接了 definition / documentSymbol 两项；其余三项（references /
+    // foldingRange / inlayHint）在 B3 批接上（它们各自的判据还没搬进包）。
+    kojoLang.createKojoLangPlugin(),
     // UI：面板（内核状态 + 校验结果 + 函数树导航 + 状态回放 + 归档浏览 + 状态注入）
     uiStatus.createUiStatusPlugin(),
     uiConventionReport.createUiConventionReportPlugin(),

@@ -6,7 +6,7 @@
  * 本文件逐层钉住现行形状：
  * 1. **宿主装配段**（`ui/editor-global-providers.ts`）：两枚只读安装器挂在
  *    `if (isKojo2CutoverEnabled())` 块**之外**，写面安装器仍在块内（源码判据见 ④）；
- * 2. **安装器**（`monaco/kojo2-folding.ts` / `monaco/kojo2-symbols.ts`）：自身不再读开关；
+ * 2. **安装器**（`monaco/kojo2-folding.ts` / 共享收口的大纲腿）：自身不再读开关；
  * 3. **解析链**（worker / core AST）：保持懒装载——注册不拉 worker，首次请求才动态 import。
  *
  * monaco 运行时不进 node（本池 environment = node），故 `../src/monaco/entry` 用 `vi.mock`
@@ -100,16 +100,15 @@ describe('① 开关关（缺省 v1-only）：折叠与大纲仍可用', () => {
 
     expect(kojo2CallsOf(FOLDING)).toHaveLength(1);
     const symbols = kojo2CallsOf(SYMBOLS);
+    // B2（2026-10-24）：大纲 provider 现在来自**共享收口**（`installDocumentSymbolProvider`
+    // 那一枚，按 kojo2 descriptor 的 `slotServices: ['documentSymbol']` 挂上），不再是
+    // `kojo2-symbols.ts` 自建的那一枚。本文件能钉的只有"挂上了、且开关关也挂"——
+    // 它有没有真出符号取决于**槽里有没有供方**，而供方是插件（`@kojo/plugin-kojo-lang`），
+    // 那件事由 `packages/plugins/kojo-lang/tests/plugin.test.ts` 用真夹具钉住。
+    // 在这里硬塞一份假槽贡献只会把"宿主装配"与"插件判据"两件事搅成一件。
     expect(symbols).toHaveLength(1);
-
-    // 大纲不是空壳：provider 吃 `.kojo2` 文本真的出符号（名来自 core AST 的声明）
-    const provider = symbols[0]!.args[1] as Monaco.languages.DocumentSymbolProvider;
-    const model = {
-      isDisposed: () => false,
-      getValue: () => FIXTURE,
-    } as unknown as Monaco.editor.ITextModel;
-    const tree = provider.provideDocumentSymbols(model, TOKEN) as Monaco.languages.DocumentSymbol[];
-    expect(tree.map((node) => node.name)).toEqual(['神社清晨', '神社黄昏']);
+    expect(typeof (symbols[0]!.args[1] as Monaco.languages.DocumentSymbolProvider).provideDocumentSymbols)
+      .toBe('function');
   });
 
   it('折叠 provider 的注册与"是否装了解析链"无关：缺省客户端仍是懒的', () => {
@@ -189,9 +188,10 @@ describe('④ 源码：只读面在 cutover 块之外，安装器自身不再读
     expect(block).toContain('installKojo2CodeActionProvider(monaco');
 
     expect(hostSource).toContain('globalDisposers.push(installKojo2FoldingProvider(monaco));');
-    expect(hostSource).toContain(
-      'globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));',
-    );
+    // B2（2026-10-24）：大纲的原生装配行**已删除** —— 它改由 `installDocumentSymbolProvider`
+    // 那一枚槽腿挂上（kojo2 descriptor 的 `slotServices: ['documentSymbol']`），供方是插件
+    // `@kojo/plugin-kojo-lang`。这里反过来钉住"宿主不再自建 2.0 大纲 provider"。
+    expect(hostSource).not.toContain('installKojo2DocumentSymbolProvider');
   });
 
   it('安装器：两枚都不再读 cutover 开关（不再自挡第二道）', () => {

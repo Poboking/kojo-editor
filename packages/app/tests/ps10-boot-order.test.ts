@@ -101,6 +101,9 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       'createSavParserPlugin',
       'createStateReplayPlugin',
       'createKojoSugarPlugin',
+      // Kojo 语言面插件（B2，2026-10-24）。位置紧随 sugar：两者都是"语言层"，
+      // 且本插件零 require（判据全在 `@kojo/kojo-lang`），次序不参与激活判定。
+      'createKojoLangPlugin',
       'createUiStatusPlugin',
       'createUiConventionReportPlugin',
       'createUiKojoNavigatorPlugin',

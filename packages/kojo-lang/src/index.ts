@@ -32,7 +32,9 @@
  */
 export * from './constants';
 export * from './name-chars';
+export * from './interpolation';
 export * from './declarations';
 export * from './sourcemap';
 export * from './expand-view';
 export * from './symbols';
+export * from './definition';

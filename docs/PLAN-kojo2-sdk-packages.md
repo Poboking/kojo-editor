@@ -144,7 +144,7 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 |---|---|---|---|
 | **B0** | 契约：`ui.editor.languageService` 扩 **4** 个 kind + 四条取数腿（纯合并函数，不装 provider） | 双 typecheck；既有贡献方零改动；新增 kind 各有一条"不认就跳过"的单测 | ✅ 2026-10-24 |
 | **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `sourcemap-model` / `expand-view` / `constants` + 抽出 `name-chars`（约 1.9k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | ✅ 2026-10-24 |
-| **B2** | 建 `@kojo/plugin-kojo-lang`：先接**槽位已支持**的 5 项（definition / references / documentSymbol / foldingRange / inlayHint） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这 5 项**无人应答**（可见退化，不静默） | |
+| **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**本批只完成 2 项**（definition / documentSymbol）——另 3 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 部分完成（2/5）2026-10-24 |
 | **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽** | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | |
 | **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | 主题 token 名不变（`theme-contrast` 三档门禁不破） | |
 | **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden | |
@@ -168,6 +168,28 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
   零游戏名词、文件数钉死（防走空匹配）；
 - PS-10 新增「开机图里对语言面库的引用必须是叶子」（做过变异实测：改回桶即红，读数 3,110 → 3,192）；
 - 三个 `.kojo2` 单源守卫改指新地址（不变量不变，只是那处换了地方）。
+
+**B2 的实际交付**（2026-10-24）：
+- 新包 `packages/plugins/kojo-lang`（`@kojo/plugin-kojo-lang`，5 模块）：
+  `request.ts`（语言分派）/ `definition.ts` / `symbols.ts` / `plugin.ts` / `index.ts`；
+- 语言面库新增 2 模块：`interpolation.ts`（`insideInterpolation` / `insideStringOrComment`，
+  从宿主 `kojo-completion-position.ts` 搬出后原样 re-export）+ `definition.ts`（`kojo2DefinitionAt`）；
+- **宿主侧「只挂点名的槽腿」新机制**：`LanguageDescriptor.slotServices`（additive）+
+  `registerForLanguageServices(monaco, register, kind?)` 的第三个参数。kojo2 声明
+  `slotServices: ['documentSymbol']` ⇒ 那枚 provider 由共享收口挂上，供方是插件；
+- **删掉的宿主装配行**：`globalDisposers.push(installKojo2DocumentSymbolProvider(monaco))`。
+  2.0 大纲从此没有宿主原生实现；
+- 门禁改动（都是"接线变了、取证点跟着变"，不是放宽）：`language-ux-matrix.test.ts` 的
+  `shared` 档位判据从"descriptor 全铺"改成"全铺 **或** 点名了这一格"（`sharedReachable`）；
+  `kojo2-structure-gate.test.ts` 反向钉住"装配层不再出现 `installKojo2DocumentSymbolProvider`"。
+
+**B2 为什么只做了 2/5**（诚实记账，别当成做完了）：
+| 没接 | 拦路的是什么 | 归哪批 |
+|---|---|---|
+| `references` | 判据在 `kojo2-references.ts`（1390 行），运行期依赖 `kojo2-project-index`（677 行），后者 import 宿主的 `ui/kojo2-flag` | B3（开关随 `programFeatures` 进 SDK 时一起搬） |
+| `foldingRange` | 判据要 worker 客户端（`tree-sitter/kojo2-worker-runtime` 的 `folds` 查询），而包**不许有 IO / worker**。正解是把"折叠区间"变成 worker 的**纯数据回复**、包只做后处理 | B3（与 B4 的 Monarch 一起，因为都动 worker 边界） |
+| `inlayHint` | 判据在 `kojo2-inlay.ts`（551 行），混着 Monaco 类型 + `ui/editor-options` 的 `LARGE_FILE_LINES` + cutover 开关 | B3 |
+| `definition`（已写但**未挂**） | 判据已搬、插件已贡献，但宿主还没把 kojo2 的 definition 腿切到槽上——2.0 的转定义带**展开视图**（`expand-view.ts` 的 `via === 'definition'` 两条追加落点），而编译成品住在宿主的模块级登记表 `ui/kojo2-expand-compile.ts` 里。正解是把它做成一个服务（`kojo2.expandCompile`）让插件 `optionalRequires`，**不能**让插件去 import 宿主模块 | B3 第一步 |
 
 **B1 刻意没搬的三块**（初版方案列了 7 个文件 / 3.2k 行，实测只有 5 个能干净搬走）：
 

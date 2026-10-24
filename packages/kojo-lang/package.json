@@ -10,10 +10,12 @@
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
     "./name-chars": "./src/name-chars.ts",
+    "./interpolation": "./src/interpolation.ts",
     "./declarations": "./src/declarations.ts",
     "./sourcemap": "./src/sourcemap.ts",
     "./expand-view": "./src/expand-view.ts",
-    "./symbols": "./src/symbols.ts"
+    "./symbols": "./src/symbols.ts",
+    "./definition": "./src/definition.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*"

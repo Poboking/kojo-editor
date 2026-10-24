@@ -1,78 +1,64 @@
 /**
- * Kojo 2.0 **转到定义**（K2-EDITOR-SEMANTIC）：同文件声明即定义。
+ * Kojo 2.0 **转到定义**的宿主面 —— B2 起只剩两件事：
  *
- * 与 `kojo2-hover.ts` 共用 `kojo2-declarations.ts` 的同一份索引（不各扫一遍源码）：
- * - 声明处：F12 落在自己（`# 变量 好感度` / `# 表 心情` / `@函 …` / `# 幕 …`）；
- * - 引用处：代码面里的同名声明 → 声明行的**名字段**（`! 池 / 模 / 函` 调用同样走这条）；
- * - 台词正文 / `@原生` 体内不跳（那是文本，不是引用）。
+ * 1. **判据**：已搬 `@kojo/kojo-lang` 的 `definition.ts`（`kojo2DefinitionAt`），此处
+ *    re-export，既有 import 点一字不改；
+ * 2. **翻译**：把包交回的 `{line, column, endColumn}` 翻成 Monaco `LocationLink` /
+ *    契约的 `EditorSymbolLocation`（`definitionTargetsToLocations`）。
  *
- * 纯函数：源码 + 1 基行列进，声明落点出；零 IO、零 Monaco、零注册。宿主只把
- * `{line, column, endColumn}` 翻成 Monaco 的 `LocationLink`（注册由 CUTOVER 收口）。
+ * ## 为什么判据必须搬走
+ *
+ * 这条腿的**供方**是插件 `@kojo/plugin-kojo-lang`（它经 `ui.editor.languageService`
+ * 槽的 `kind: 'definition'` 应答）。插件在 `packages/plugins/**`，看不见
+ * `packages/app/src/**`；判据留在宿主 = 插件只能靠复制一份来应答 = 两份判据迟早漂移。
+ *
+ * ## 为什么翻译层留下
+ *
+ * `LocationLink` 是 Monaco 的形状，`EditorSymbolLocation` 是契约的形状，两者都不是
+ * "语言事实"。把它们塞进包里会立刻违反包的三条硬约束（零 Monaco / 零 IO / 零游戏名词）。
+ *
+ * 注：2.0 的**展开视图**那两条追加落点（`expand-view.ts` 的 `via === 'definition'`）
+ * 不在这里判——那是消费方拿到落点之后的 additive 追加，见 `kojo2-providers.ts`。
  */
+import type * as Monaco from './entry';
+import type { EditorSymbolLocation } from '@kojo/plugin-api';
+import { kojo2DefinitionAt, type Kojo2DefinitionTarget } from '@kojo/kojo-lang/definition';
 
-import { insideInterpolation } from './kojo-completion-position';
-import {
-  KOJO2_DECL_WORD_BY_KIND,
-  kojo2DeclarationAt,
-  kojo2DeclarationHeaderAt,
-  kojo2DeclarationNamed,
-  kojo2DocumentOf,
-  kojo2IsCodeSurface,
-  kojo2IsNativeRecord,
-  kojo2IsTextSurface,
-  kojo2TokenSpanAt,
-  type Kojo2Declaration,
-  type Kojo2Query,
-} from '@kojo/kojo-lang';
-
-/** 定义落点（同文件；1 基，尾列半开）。 */
-export interface Kojo2DefinitionTarget {
-  readonly name: string;
-  /** 声明种类文案（`变量` / `表` / `函` …；来自 core 词表） */
-  readonly kind: string;
-  readonly line: number;
-  readonly column: number;
-  readonly endColumn: number;
-}
-
-/** 声明事实 → 定义落点。 */
-function targetOf(declaration: Kojo2Declaration): Kojo2DefinitionTarget {
-  return {
-    name: declaration.name,
-    kind: KOJO2_DECL_WORD_BY_KIND[declaration.kind],
-    line: declaration.line,
-    column: declaration.nameStart,
-    endColumn: declaration.nameEnd,
-  };
-}
+export { kojo2DefinitionAt };
+export type { Kojo2DefinitionTarget };
 
 /**
- * 光标处的定义落点（**纯函数**）。
+ * 同文件定义落点 → 契约位置（**1 基、尾列半开**，与 `EditorSymbolLocation` 同口径）。
  *
- * 位置门与悬停同一套：`@原生` / 注释 / 台词的正文不跳，`{…}` 插值内照常解析。
- * 返回 `undefined` = 此处没有可跳的同文件声明（Monaco 自己会提示"未找到定义"）。
+ * `filePath` 由调用方给：判据只认"本文档里的哪一行哪一列"，"这是哪个文件"是身份问题，
+ * 归宿主（派生 model / 糖投影下它不一定等于 `model.uri`）。
  */
-export function kojo2DefinitionAt(query: Kojo2Query): Kojo2DefinitionTarget | undefined {
-  const document = kojo2DocumentOf(query.source);
-  const record = document.lines[query.line - 1];
-  if (record === undefined) return undefined;
-  if (kojo2IsNativeRecord(record)) return undefined;
-  if (record.kind === 'comment' || record.kind === 'legacy') return undefined;
-  const text = document.physical[query.line - 1]?.text ?? '';
-  const col0 = Math.min(Math.max(query.column - 1, 0), text.length);
-  const interpolated = insideInterpolation(text, col0);
-  if (kojo2IsTextSurface(record) && !interpolated) return undefined;
+export function definitionTargetsToLocations(
+  filePath: string,
+  target: Kojo2DefinitionTarget | undefined,
+): EditorSymbolLocation[] {
+  if (target === undefined) return [];
+  return [
+    {
+      filePath,
+      line: target.line,
+      column: target.column,
+      span: { columnStart: target.column, columnEnd: target.endColumn },
+    },
+  ];
+}
 
-  const atDeclaration = kojo2DeclarationAt(document, query.line, col0);
-  if (atDeclaration !== undefined) return targetOf(atDeclaration);
-  const headerDeclaration = kojo2DeclarationHeaderAt(document, query.line, col0);
-  if (headerDeclaration !== undefined) return targetOf(headerDeclaration);
-
-  if (!kojo2IsCodeSurface(record) && !(kojo2IsTextSurface(record) && interpolated)) {
-    return undefined;
-  }
-  const span = kojo2TokenSpanAt(text, col0);
-  if (span === null) return undefined;
-  const declaration = kojo2DeclarationNamed(document, span.text, query.line);
-  return declaration === undefined ? undefined : targetOf(declaration);
+/** 同文件定义落点 → Monaco `LocationLink`（`targetUri` 由调用方给，缺省 = `model.uri`） */
+export function definitionTargetsToLinks(
+  targetUri: Monaco.Uri,
+  target: Kojo2DefinitionTarget | undefined,
+): Monaco.languages.LocationLink[] {
+  if (target === undefined) return [];
+  const range: Monaco.IRange = {
+    startLineNumber: target.line,
+    startColumn: target.column,
+    endLineNumber: target.line,
+    endColumn: target.endColumn,
+  };
+  return [{ uri: targetUri, range, targetSelectionRange: range }];
 }

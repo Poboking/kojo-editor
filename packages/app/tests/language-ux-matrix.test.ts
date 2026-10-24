@@ -154,12 +154,30 @@ function sharedRegistrationFiles(api: string): readonly string[] {
 }
 
 /** 声明 `languageServices: true` 的语言 id（registerForLanguageServices 实际会挂到的那些） */
-function sharedLanguageIds(): ReadonlySet<string> {
-  return new Set(
-    languageDescriptors()
-      .filter((descriptor) => descriptor.languageServices === true)
-      .map((descriptor) => descriptor.id),
-  );
+/**
+ * 能力 → 允许它走「点名槽腿」的那一格（B2 起）。
+ *
+ * 背景：`shared` 档位原本只有一条通路（descriptor 声明 `languageServices: true`，11 枚
+ * provider 全铺）。B2 之后多了第二条：descriptor 用 `slotServices` **点名**某几条腿
+ * （kojo2 的大纲就是这样挂上的——它的其余能力归自己的插件，不能被 v1 语义的 provider 铺满）。
+ * 两条通路**同一个收口**（`registerForLanguageServices`），所以档位仍是 `shared`；
+ * 只是"能不能挂到这门语言"的判据从"全铺"变成"全铺 或 点名了这一格"。
+ */
+const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
+  [LanguageCapability.Outline]: 'documentSymbol',
+  [LanguageCapability.Definition]: 'definition',
+  [LanguageCapability.References]: 'references',
+  [LanguageCapability.Folding]: 'foldingRange',
+  [LanguageCapability.Inlay]: 'inlayHint',
+};
+
+/** 这门语言对**这一项能力**是否走得到共享收口 */
+function sharedReachable(languageId: string, capability: LanguageCapability): boolean {
+  const descriptor = languageDescriptors().find((entry) => entry.id === languageId);
+  if (descriptor === undefined) return false;
+  if (descriptor.languageServices === true) return true;
+  const kind = SLOT_SERVICE_OF[capability];
+  return kind !== undefined && (descriptor.slotServices ?? []).includes(kind as never);
 }
 
 /* ============================== 专项探针（没有统一注册 API 的面） ============================== */
@@ -256,7 +274,6 @@ function probeProblems(probes: readonly SourceProbe[], owner: string): string[] 
  */
 function capabilityProblems(): string[] {
   const problems: string[] = [];
-  const sharedIds = sharedLanguageIds();
 
   for (const languageId of PARITY_LANGUAGE_IDS) {
     const row = LANGUAGE_CAPABILITY_MATRIX[languageId];
@@ -303,9 +320,9 @@ function capabilityProblems(): string[] {
           }
         }
       } else if (status === 'shared') {
-        if (!sharedIds.has(languageId)) {
+        if (!sharedReachable(languageId, capability)) {
           problems.push(
-            `${owner}：标 shared，但 descriptor 没声明 languageServices: true（共享收口挂不到它）`,
+            `${owner}：标 shared，但 descriptor 既没声明 languageServices: true、也没在 slotServices 里点名这一格（共享收口挂不到它）`,
           );
         }
         const files = sharedRegistrationFiles(api);
@@ -619,7 +636,12 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   outline: [
     { rel: 'monaco/kojo-symbols.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDocumentSymbolProvider/ },
-    { rel: 'monaco/kojo2-symbols.ts', re: /registerDocumentSymbolProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B2（2026-10-24）：2.0 的大纲不再由 `kojo2-symbols.ts` 自建 provider —— 它改走
+    // 同一枚槽腿（`kojo-symbols.ts`），由 descriptor 的 `slotServices` 点名挂上，
+    // 应答来自插件 `@kojo/plugin-kojo-lang`。取证点随之从"那枚原生 provider"变成
+    // "两处声明"：能力名进 `registerForLanguageServices`、语言进 descriptor。
+    { rel: 'monaco/kojo-symbols.ts', re: /'documentSymbol',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\['documentSymbol'\]/ },
   ],
   breadcrumb: [
     { rel: 'ui/breadcrumb-path.ts', re: /export function crumbLevelsAt\(/ },
@@ -708,7 +730,10 @@ const ASSEMBLY_PROBES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   preview: [{ rel: 'ui/shell-overlays.ts', re: /QUICK_FIX_PREVIEW_OVERLAY_ID/ }],
   outline: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo-symbols'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-symbols'/ },
+    // B2：`kojo2-symbols` 不再被装配层 import —— 2.0 大纲改走上面那一枚槽腿。
+    // 取证点取"装配层确实装了槽腿"（`installDocumentSymbolProvider`），
+    // 而不是取"没 import 某文件"（负向断言在源码扫描里太脆，一改注释就假红）。
+    { rel: GLOBAL_PROVIDERS, re: /installDocumentSymbolProvider\(monaco, \{/ },
   ],
   breadcrumb: [
     { rel: 'ui/EditorPane.tsx', re: /useBreadcrumb/ },
@@ -885,7 +910,7 @@ function hasRegistrationSurface(
   const status = LANGUAGE_CAPABILITY_MATRIX[languageId][capability];
   if (isLanguageCapabilityExemption(status)) return true; // 豁免项不要求注册面
   if (status === 'shared') {
-    return sharedLanguageIds().has(languageId) && sharedRegistrationFiles(api).length > 0;
+    return sharedReachable(languageId, capability) && sharedRegistrationFiles(api).length > 0;
   }
   return selfRegistrationFiles(api, languageId).length > 0;
 }

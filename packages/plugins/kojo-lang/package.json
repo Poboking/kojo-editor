@@ -1,0 +1,16 @@
+{
+  "name": "@kojo/plugin-kojo-lang",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kojo 语言面插件：把 @kojo/kojo-lang 的判据接到 ui.editor.languageService 槽（definition / documentSymbol …）。纯函数、零 Monaco、零 IO、零游戏知识。",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/kojo-lang": "workspace:*",
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

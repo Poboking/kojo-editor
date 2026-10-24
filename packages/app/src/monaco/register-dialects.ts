@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import './languages';
-import { languageDescriptors } from './language-registry';
+import { languageDescriptors, type SlotServiceKind } from './language-registry';
 
 /**
  * 一等语言通用语言服务的**唯一收口**：把一枚 provider 依次挂到每一门声明
@@ -32,9 +32,22 @@ import { languageDescriptors } from './language-registry';
 export function registerForLanguageServices(
   monaco: typeof Monaco,
   register: (monaco: typeof Monaco, languageId: string) => Monaco.IDisposable,
+  /**
+   * 本枚 provider 对应的**能力名**（B2，可选、additive）。
+   *
+   * 给了它就顺带把「只声明了这一条槽腿」的语言（`slotServices`，见
+   * `LanguageDescriptor`）也挂上；不给 = 只挂 `languageServices: true` 的语言，
+   * 与 B2 之前**逐字相同**。缺省保持旧行为不是保守，是**必须**：那 11 枚里
+   * 有几枚（折叠最典型）的空结果会顶掉 Monaco 内建行为，谁被挂上必须是写下来的。
+   */
+  kind?: SlotServiceKind,
 ): Monaco.IDisposable {
   const subs = languageDescriptors()
-    .filter((descriptor) => descriptor.languageServices === true)
+    .filter(
+      (descriptor) =>
+        descriptor.languageServices === true ||
+        (kind !== undefined && descriptor.slotServices?.includes(kind) === true),
+    )
     .map((descriptor) => register(monaco, descriptor.id));
   return { dispose: () => subs.forEach((s) => s.dispose()) };
 }

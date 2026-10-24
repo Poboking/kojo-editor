@@ -142,5 +142,11 @@ export function installDocumentSymbolProvider(
       return toMonacoDocumentSymbols(monaco, model, symbols);
     },
   };
-  return registerForLanguageServices(monaco, (m, id) => m.languages.registerDocumentSymbolProvider(id, provider));
+  // B2：带上能力名 —— 声明了 `slotServices: ['documentSymbol']` 的语言（kojo2）
+  // 也挂这一枚。它的供方是插件 `@kojo/plugin-kojo-lang`，宿主侧**零原生实现**。
+  return registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerDocumentSymbolProvider(id, provider),
+    'documentSymbol',
+  );
 }

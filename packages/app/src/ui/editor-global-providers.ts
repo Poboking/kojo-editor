@@ -116,10 +116,10 @@ import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
 // 折叠只多一条**动态** import（worker 客户端仍在第一次真折叠时才装载），缩进是纯判据 + 一枚 provider。
 import { installKojo2FoldingProvider } from '../monaco/kojo2-folding';
 import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
-// K2 batch-7：大纲/面包屑符号（DocumentSymbolProvider）与 2.0 格式化器。
-// 两者都自挡 flag（关 ⇒ 零注册）；格式化走 Monaco 内建 `editor.action.formatDocument`
-//（Shift+Alt+F），本文件不新增命令。
-import { installKojo2DocumentSymbolProvider } from '../monaco/kojo2-symbols';
+// K2 batch-7：2.0 格式化器（自挡 flag；走 Monaco 内建 `editor.action.formatDocument`
+//（Shift+Alt+F），本文件不新增命令）。
+// 注：2.0 的**大纲**注册在 B2 批已删除（改由 `installDocumentSymbolProvider` 的槽腿承担，
+// 供方 = 插件 `@kojo/plugin-kojo-lang`），故这里不再 import `kojo2-symbols`。
 import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
 // K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
 // 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、各自再挡 flag，且安装器内零 IO。
@@ -1815,7 +1815,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 位置放在本块之后：注册抛错仍由下面 catch 的"全有或全无"统一回滚；同时不改变既有
     // "靠前注册抛错时已建立集合"的读数（`editor-global-providers-tables.test.ts`）。
     globalDisposers.push(installKojo2FoldingProvider(monaco));
-    globalDisposers.push(installKojo2DocumentSymbolProvider(monaco));
+    // B2（2026-10-24）：2.0 的**大纲**原生注册已删除 —— 它现在由 `installDocumentSymbolProvider`
+    // 那一枚槽腿挂上（kojo2 的 descriptor 声明了 `slotServices: ['documentSymbol']`），
+    // 应答来自插件 `@kojo/plugin-kojo-lang`。宿主不再认识"2.0 的大纲长什么样"。
     /* G1「跳到命中状态」的位点探针（2026-10-16）。
      *
      * **按下才取**，不挂常驻监听：这条键一秒可能被按一次，而面包屑一次按键要算一次，

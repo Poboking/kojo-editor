@@ -45,8 +45,15 @@ export function isAllBlank(text: string): boolean {
  * `isNameChar` 与 `isCjk` 按原样 re-export，既有 15 个 import 点一字不改。
  */
 import { NAME_CHAR_CLASS, isCjk, isNameChar } from '@kojo/kojo-lang/name-chars';
+/**
+ * B2 起**文本面判读**（插值 / 字符串与注释）也搬进语言面库：转定义、悬停、语义着色、
+ * 调用层级四条腿都要问同一句"这一格是代码还是台词"，而它们正陆续搬进
+ * `@kojo/plugin-kojo-lang`——包看不见宿主，判据必须先在包里。这里原样 re-export，
+ * 既有 import 点一行不动（与 `isNameChar` 搬迁时同一条纪律）。
+ */
+import { insideInterpolation, insideStringOrComment } from '@kojo/kojo-lang/interpolation';
 
-export { isCjk, isNameChar };
+export { isCjk, isNameChar, insideInterpolation, insideStringOrComment };
 
 /** 文档词补全的逐行切词器（字符类与 {@link isNameChar} 同源；`+` = 连续段，入口重置 `lastIndex`） */
 const NAME_WORD_RE = new RegExp(`[${NAME_CHAR_CLASS}]+`, 'g');
@@ -62,29 +69,11 @@ export function nameWordsOf(line: string): string[] {
 }
 
 /**
- * 光标是否落在行内**字符串 / 注释**里（与 `kojo-sugar` 的 `inlineCommentIndex` 同口径：
- * 引号配平后第一个 `;` 起至行尾）。字符串内 / 注释内不给候选。
+ * 光标是否落在行内**字符串 / 注释**里 —— 实现已搬 `@kojo/kojo-lang/interpolation`
+ * （见本文件头注的 import 段），此处不保留第二份。
  */
-export function insideStringOrComment(line: string, col0: number): boolean {
-  let inString = false;
-  const stop = Math.min(col0, line.length);
-  for (let i = 0; i < stop; i++) {
-    const ch = line[i]!;
-    if (ch === '"') inString = !inString;
-    else if (!inString && ch === ';') return true;
-  }
-  return inString;
-}
 
-/** 光标是否在 `{ … }` 插值内（向左找 `{`，途中遇 `}` 即已在插值外）——插值里是变量名的地盘 */
-export function insideInterpolation(line: string, col0: number): boolean {
-  for (let i = col0 - 1; i >= 0; i--) {
-    const ch = line[i]!;
-    if (ch === '}') return false;
-    if (ch === '{') return true;
-  }
-  return false;
-}
+/** 光标是否在 `{ … }` 插值内 —— 实现已搬 `@kojo/kojo-lang/interpolation`。 */
 
 /** 一个名字段（0 基、左含右不含；`prefix` = 光标前已输入部分） */
 export interface KojoNameField {

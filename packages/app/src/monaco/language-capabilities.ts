@@ -243,7 +243,9 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabilityStatus>> =
   Object.freeze({
     [LanguageCapability.Folding]: 'self',
-    [LanguageCapability.Outline]: 'self',
+    // B2（2026-10-24）：2.0 的大纲改走**共享收口**（`registerForLanguageServices` 带能力名），
+    // 宿主侧零原生 provider；供方 = 插件 `@kojo/plugin-kojo-lang`。
+    [LanguageCapability.Outline]: 'shared',
     [LanguageCapability.Format]: 'self',
     [LanguageCapability.Semantic]: 'self',
     [LanguageCapability.Indent]: 'self',

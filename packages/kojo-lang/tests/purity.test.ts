@@ -49,8 +49,9 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // constants / name-chars / declarations / sourcemap / expand-view / symbols / index
-    expect(files).toHaveLength(7);
+    // constants / name-chars / interpolation / declarations / sourcemap / expand-view /
+    // symbols / definition / index（B2 加了 interpolation + definition 两枚）
+    expect(files).toHaveLength(9);
   });
 
   it('只依赖 @kojo/kojo-core，其余一律是本包内相对路径', () => {

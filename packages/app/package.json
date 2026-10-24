@@ -23,6 +23,7 @@
     "@kojo/plugin-eratw-adapter": "workspace:*",
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-kojo-market": "workspace:*",
+    "@kojo/plugin-kojo-lang": "workspace:*",
     "@kojo/plugin-kojo-sugar": "workspace:*",
     "@kojo/plugin-sav-parser": "workspace:*",
     "@kojo/plugin-state-replay": "workspace:*",

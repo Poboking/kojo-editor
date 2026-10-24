@@ -619,7 +619,11 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：16 枚 self（已接线的 2.0 面）、2 枚 builtin、2 项豁免（implementation / callhierarchy）', () => {
+  it('kojo2：15 枚 self、1 枚 shared（大纲走槽腿）、2 枚 builtin、2 项豁免', () => {
+    // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
+    // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
+    // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。**档位变了，能力没少**：
+    // 两侧的合计仍是 15 + 1 = 16。
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
       'codelens',
       'completion',
@@ -631,14 +635,13 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
       'hover',
       'indent',
       'inlay',
-      'outline',
       'refs',
       'rename',
       'selection',
       'semantic',
       'signature',
     ]);
-    expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([]);
+    expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual(['outline']);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'builtin')).toEqual(['brackets', 'preview']);
     expect(exemptionsOf(KOJO2_LANGUAGE_ID).map((entry) => entry.capability).sort()).toEqual([
       'callhierarchy',
