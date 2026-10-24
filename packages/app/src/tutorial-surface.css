@@ -1,0 +1,192 @@
+/*
+ * 教程浮层的宿主侧样式切片（视觉批十一 · R4，按 L19 在 dev-note.css 留的
+ * `// ui-kit-candidate: 教程面独立切片 tutorial-surface.css` 记号搬成独立切片）。
+ *
+ * ## 为什么是独立切片、为什么必须在 main.tsx 静态链
+ *
+ * - 教程 DOM 由插件渲染（`packages/plugins/eratw-adapter/src/tutorial-overlay.ts`，
+ *   本路**禁改**），它的既有样式全在 `styles.css` / `styles-project.css` 两张表里
+ *   （分档等价性闸 A/B/C 钉死，本切片**一行未改那两张表**）。宿主这一侧只剩
+ *   "压过既有"这一条路，合法形态就是**多类选择器**：下面每条都至少 `.wizard.tutorial`
+ *   + 两枚类，与既有单类/双类规则比特异性，不靠到达顺序取胜。
+ * - 欢迎页（轻档）与项目态（重档）都开得到教程浮层，所以本表必须进 main.tsx 的
+ *   **静态链**——这正是把这一段从 dev-note.css 搬出来的理由：那张纸条的表经由
+ *   `App.tsx → DevNoteDialog.tsx` 进图，那条链一旦改懒挂，教程 override 会静默掉档
+ *   （`css-slices-wired.test.ts` 只查"有没有人 import 这张表"，查不出"import 得早晚"）。
+ * - 位次取在 `themes/*.css` 之后：light 档有一条同特异性的
+ *   `:root[data-theme='light'] .tutorial-code code { box-shadow: inset … }`
+ *   （凹陷反相），本表的 `box-shadow: var(--well-edge)` 与之等值同族——赢平靠位次，
+ *   两档结局一致，不造第三套值。
+ *
+ * ## 三件事（L19 记号里的口径，本路收全）
+ *
+ * ① **行内代码与块代码视觉分级**：芯片配方（`.u-chip` 并档）只覆盖 p / td / th / caption，
+ *    标题与导语里的行内 `code` 掉回全局那条扁平档 ⇒ 同一种东西两种长相。补齐到芯片档。
+ * ② **代码井的凹槽与"还有内容"**：井身吃既有 `--well-*` 那一族（不造新色、不裸
+ *    hex/rgba、圆角零裸 px）。长行**软折行**（`pre-wrap` 是 2026-10-22 用户反馈的修法、
+ *    由 `tutorial-code-block.test.ts` 钉在两张表上，本路不翻回去）——所以代码身不存在
+ *    横向溢出，井的"还有内容"提示只有上下两道（local/scroll 四层配方，滚到哪端哪端收干净）。
+ *    真会**横滚**的是语法全表那张井（列不随窗口压扁，窄到放不下整表横滚）：给它四边八层
+ *    配方，右缘那道就是"右边还有内容"。长块撑破面板的其余风险在纵向与网格列：给井封顶的
+ *    那档不动（320px 由闸钉着），网格子项补 `min-width: 0`。
+ * ③ **目录条目**：静息只显标题——编号与层级线都在静息收起（`opacity: 0`，占位不抽走，
+ *    标题的 x 坐标一点不动）；悬停 / 键盘聚焦 / 当前条目才把两者显出来。层级线口径 =
+ *    大纲导轨 = 文件树（1px，静息 `--border`，显出时提 `--border-strong`）。当前条目
+ *    **左边条 + 语义色 + 字重**，撤掉整行 accent 洗色（反白行在 light 档会闪；本批刚把
+ *    三档对比度做到 0 失败，不许为了强调把它打破）。
+ *
+ * 空态/加载态不在本表：那一行「教程正在载入」由插件的懒装载壳给（口径由
+ * `ps10-tutorial-lazy.test.ts` 钉死——正文 223 KB 不进首屏求值，本路零 JS 改动）。
+ *
+ * ≤680px 窄窗：目录塌成横带胶囊，竖线与"静息藏编号"都不成立——胶囊里没地方挂竖线，
+ * 编号也就一直显着；末尾只把上面这两条撤回，别的不碰（与两张表同一断点）。
+ */
+
+/* ---------------- ① 行内代码：标题与导语也走芯片档 ---------------- */
+
+.wizard.tutorial .tutorial-head :is(h3, .tutorial-lead) code,
+.wizard.tutorial .tutorial-section h4 code {
+  /* 与库的 `.u-chip` 同一条配方（缺省值也一并照抄，别在这里另起一档） */
+  background: var(--chip-bg, var(--surface-overlay));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0.06em 0.34em;
+  font-size: 0.9em;
+  color: var(--chip-fg, var(--fg));
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------- ② 代码井：凹槽 + 上下"还有内容" ---------------- */
+
+.wizard.tutorial .tutorial-code code {
+  /* 井身只取 `--well-edge`（1px 内衬顶高光）与表头分界——外层那道 `--well-shadow`
+     井容器自己已经挂过了，在井里再挂一遍会多出一条不存在的投影。 */
+  box-shadow: var(--well-edge);
+  /* 两端渐隐：`local` 层跟着内容走（把到头的阴影盖掉），`scroll` 层贴容器边（这才是
+     "那儿还有行"的信号）——井容器 320px 封顶，口上一段块动辄二十行，没有这两条边就
+     "读到底了还是滚到底了"只能靠猜。软折行在下方两张表里被 `tutorial-code-block` 闸
+     钉死，代码身没有横向溢出，这里就只给上下两道，不给会撒谎的左右提示。 */
+  --tut-well-hint: color-mix(in srgb, var(--fg) 22%, transparent);
+  --tut-well-cover: var(--surface-sunken);
+  background-color: var(--surface-sunken);
+  background-image:
+    linear-gradient(to bottom, var(--tut-well-cover) 0, transparent),
+    linear-gradient(to top, var(--tut-well-cover) 0, transparent),
+    linear-gradient(to bottom, var(--tut-well-hint) 0, transparent),
+    linear-gradient(to top, var(--tut-well-hint) 0, transparent);
+  background-position: top left, bottom left, top left, bottom left;
+  background-size:
+    100% calc(var(--space-4) + var(--space-2)),
+    100% calc(var(--space-4) + var(--space-2)),
+    100% var(--space-4),
+    100% var(--space-4);
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* 语法全表的井是**真横滚**的那一口（列不压扁、放不下时整表横滚，见 styles-project.css
+   的 .tutorial-table-scroll 头注）：四边都给"还有内容"——右缘那道即"右边还有内容"，
+   顶/底对应 460px 封顶的竖滚。配方与上面同源（cover 走 local、hint 走 scroll），
+   层数从 4 到 8：横竖各一对 cover + 一对 hint。表体奇数行无底，hint 从字缝里透出来
+   正是要的效果——它说的是"边缘外还有行/列"，不遮内容。 */
+.wizard.tutorial .tutorial-table-scroll {
+  --tut-table-hint: color-mix(in srgb, var(--fg) 22%, transparent);
+  --tut-table-cover: var(--surface);
+  background-image:
+    linear-gradient(to bottom, var(--tut-table-cover) 0, transparent),
+    linear-gradient(to top, var(--tut-table-cover) 0, transparent),
+    linear-gradient(to right, var(--tut-table-cover) 0, transparent),
+    linear-gradient(to left, var(--tut-table-cover) 0, transparent),
+    linear-gradient(to bottom, var(--tut-table-hint) 0, transparent),
+    linear-gradient(to top, var(--tut-table-hint) 0, transparent),
+    linear-gradient(to right, var(--tut-table-hint) 0, transparent),
+    linear-gradient(to left, var(--tut-table-hint) 0, transparent);
+  background-position:
+    top left, bottom left, top left, top right,
+    top left, bottom left, top left, top right;
+  background-size:
+    100% calc(var(--space-4) + var(--space-2)),
+    100% calc(var(--space-4) + var(--space-2)),
+    calc(var(--space-4) + var(--space-2)) 100%,
+    calc(var(--space-4) + var(--space-2)) 100%,
+    100% var(--space-4),
+    100% var(--space-4),
+    var(--space-4) 100%,
+    var(--space-4) 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, local, local, scroll, scroll, scroll, scroll;
+}
+
+/* 对照网格里的子项必须能缩：井容器自己的 `overflow: hidden` 挡不住"内容比轨道宽"
+   ——grid 子项缺省 `min-width: auto`，会把自己撑到 min-content 并把整张浮层顶宽。 */
+.wizard.tutorial .tutorial-pair > .tutorial-code,
+.wizard.tutorial .tutorial-pair > .tutorial-arrow,
+.wizard.tutorial .tutorial-sample,
+.wizard.tutorial .tutorial-table-block {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ---------------- ③ 目录条目：静息只显标题 ---------------- */
+
+.wizard.tutorial .tutorial-toc .tutorial-toc-item {
+  position: relative;
+}
+/* 层级线：一枚 1px 竖线，正好落在圈码编号那一格的中心（编号的 `min-width: 1.2em` 以
+   `--fs-0` 计，故按 `--fs-0` 取半格，而不是按条目自身字号）。口径与大纲导轨、文件树
+   导轨一致：1px + `var(--border)`，要提亮才到 `--border-strong`。
+   静息**不画**——"悬停/聚焦才显编号与层级线"，标题是静息态唯一的可见物。 */
+.wizard.tutorial .tutorial-toc .tutorial-toc-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-2) + var(--fs-0) * 0.6);
+  width: 1px;
+  background-color: var(--border);
+  opacity: 0;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+/* 编号静息收掉。opacity 不抽走占位（`.tutorial-toc-num` 的 min-width 仍在流里）⇒
+   悬停显号时标题的 x 坐标一点不动，不跳字。 */
+.wizard.tutorial .tutorial-toc .tutorial-toc-num {
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+/* 悬停 / 键盘聚焦 / 当前条目：编号与层级线一起显出来，线同时提亮一档。 */
+.wizard.tutorial .tutorial-toc .tutorial-toc-item:hover .tutorial-toc-num,
+.wizard.tutorial .tutorial-toc .tutorial-toc-item:focus-visible .tutorial-toc-num,
+.wizard.tutorial .tutorial-toc .tutorial-toc-item[aria-current='true'] .tutorial-toc-num {
+  opacity: 1;
+}
+.wizard.tutorial .tutorial-toc .tutorial-toc-item:hover::before,
+.wizard.tutorial .tutorial-toc .tutorial-toc-item:focus-visible::before,
+.wizard.tutorial .tutorial-toc .tutorial-toc-item[aria-current='true']::before {
+  opacity: 1;
+  background-color: var(--border-strong);
+}
+/* 当前条目：左边条 + 语义色 + 字重抬一档，**不整行反白**（撤掉既有那层 accent 洗色；
+   反白行在 light 档会闪，扫一眼就丢读位）。悬停态因此只改竖条与编号，不改底。 */
+.wizard.tutorial .tutorial-toc .tutorial-toc-item[aria-current='true'],
+.wizard.tutorial .tutorial-toc .tutorial-toc-item[aria-current='true']:hover {
+  background: none;
+  color: var(--accent-text);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+/* 窄窗（≤680px，与两张表同一断点）：目录塌成横带胶囊，层级线与"静息藏编号"都不成立
+   —— 胶囊里没地方挂竖线，编号也就一直显着。这里只把上面两条撤回，别的不碰。 */
+@media (max-width: 680px) {
+  .wizard.tutorial .tutorial-toc .tutorial-toc-item::before {
+    content: none;
+  }
+  .wizard.tutorial .tutorial-toc .tutorial-toc-num {
+    opacity: 1;
+  }
+}

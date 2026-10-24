@@ -257,6 +257,9 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 已知可减面（本批不做，记在这）：`ui-kit/index.tsx` 按件拆文件，让开机侧只为真用到的那几枚
     // 付费（约 −12 KB），与第二波「ui-kit 采纳迁移」并线。
     // 闸随之 3,050 → 3,100（+1.6% 余量）；文件闸 210 不动（现读数 209，余量 1）。
+    // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
+    // 交付回执不必靠人肉复算。
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤210 文件 / ≤3,100 KB）`);
     expect(totalKb).toBeLessThanOrEqual(3_100);
     expect(files.length).toBeLessThanOrEqual(210);
   });
