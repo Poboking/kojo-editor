@@ -834,8 +834,13 @@ export interface GameAdapter {
  * `adapterId` 收 `null | undefined` 是为了贴合调用点的真实形状：没开项目时
  * `project.current()?.adapterId` 就是 `undefined`，不必每个调用方先写一次卫语句。
  *
- * 参数是**查询结果**而不是 `SlotRegistry`：本函数住在契约层，不认识槽注册表，
- * 也不该把「怎么查」绑进来（查询面属于内核）。
+ * 参数是**查询结果**而不是 `SlotRegistry`，两个理由：
+ * - **依赖方向**：`slots.ts` 已经 import 本文件的 `GameAdapter`（`GameAdapterContribution`）。
+ *   `GameAdapter` 回答的是「一个适配器是什么」，`SlotRegistry` 回答的是「插件怎么注册与
+ *   查询」——让前者依赖后者，等于说「定义一个 adapter 需要懂槽机制」，不成立。两个都是
+ *   type-only import，编译后都会擦除、不会炸运行时，但概念上的单向依赖要守住。
+ * - **纯函数更好用**：收数组就能用字面量直接测；且「什么时候查、查几次」的决定权留在
+ *   调用方——`editorTables` 就是同一份 contributions 既挑当前那枚、又喂给 `staticTablesFor`。
  */
 export function activeGameAdapter<T extends { readonly adapter: GameAdapter }>(
   contributions: readonly T[],
