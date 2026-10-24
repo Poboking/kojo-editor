@@ -74,6 +74,9 @@ importers:
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
+      '@kojo/plugin-kojo-lang':
+        specifier: workspace:*
+        version: link:../plugins/kojo-lang
       '@kojo/plugin-kojo-market':
         specifier: workspace:*
         version: link:../plugins/kojo-market
@@ -276,6 +279,15 @@ importers:
 
   packages/plugins/erb-parser:
     dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/kojo-lang:
+    dependencies:
+      '@kojo/kojo-lang':
+        specifier: workspace:*
+        version: link:../../kojo-lang
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api
