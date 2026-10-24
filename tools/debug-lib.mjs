@@ -29,6 +29,31 @@ export function debugHome() {
 }
 
 /**
+ * 会话按**仓库工作树**自动隔离（2026-10-25 多 agent 并发反馈，PITFALLS 192）：
+ * `<home>/sessions/<工作树路径短哈希>/`——session.json / sandbox / appdata / browser-profile
+ * 全在其中。同一棵树共享一个会话；**跨工作树互不可见、互不可杀**（本机多 agent 并发的
+ * 「量到别人的树」由构造消除）。`KOJO_DEBUG_SESSION_NAME` 可显式命名（同树第二个会话 /
+ * 跨工具对齐），`KOJO_DEBUG_SESSION` 仍可直接指会话文件（最高优先）。
+ */
+export function sessionKey(repoRoot) {
+  const custom = process.env.KOJO_DEBUG_SESSION_NAME;
+  if (custom && custom.trim() !== '') {
+    return custom.trim().replace(/[^\w.-]/g, '-').slice(0, 40);
+  }
+  // FNV-1a 短哈希：路径小写归一（Windows 大小写不敏感），8 位十六进制够区分且目录名友好
+  let h = 0x811c9dc5;
+  for (const ch of path.resolve(repoRoot).toLowerCase()) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+export function sessionDir(repoRoot) {
+  return path.join(debugHome(), 'sessions', sessionKey(repoRoot));
+}
+
+/**
  * 杀掉「命令行里带 <mark>」的进程（Windows 实测：Edge 的子进程会逃出 taskkill /T
  * 的树，profile 被锁 ⇒ 目录清不掉 ⇒ 下一轮撞 EBUSY）。经临时 .ps1 执行——
  * Git-Bash 里内联 PowerShell 会被 `$_` 展开搅碎（本批实测）。尽力而为，非 Windows 跳过。
@@ -168,6 +193,20 @@ export class Cdp {
     return r.result?.value;
   }
   async screenshot(fullPage = false) {
+    // 反哺修（2026-10-25）：切主题 / Monaco 重绘后直接拍会拿到**缓存帧**（实测两帧 PNG 逐字节
+    // 相同）。拍前两步强制产新帧：① bringToFront 把该页设为活动页；② 双 rAF 等一帧完整
+    // 合成（后台页 rAF 可能停 ⇒ 300ms 兜底竞速，拿不到也不阻塞拍照本身）。
+    await this.send('Page.enable').catch(() => {});
+    await this.send('Page.bringToFront').catch(() => {});
+    await this.evalJs(
+      `new Promise((resolve) => {
+        let done = false;
+        const finish = () => { if (!done) { done = true; resolve(true); } };
+        try { requestAnimationFrame(() => requestAnimationFrame(finish)); } catch { finish(); }
+        setTimeout(finish, 300);
+      })`,
+      3000,
+    ).catch(() => {});
     let clip;
     if (fullPage) {
       const metrics = await this.send('Page.getLayoutMetrics');
@@ -176,17 +215,22 @@ export class Cdp {
     }
     const shot = await this.send('Page.captureScreenshot', {
       format: 'png',
+      fromSurface: true,
       ...(clip ? { captureBeyondViewport: true, clip } : {}),
     });
     return Buffer.from(shot.data, 'base64');
   }
 }
 
-/** 从 CDP /json 里挑页面：优先属于本次 vite 端口的那页 */
+/**
+ * 从 CDP /json 里挑页面：**只认属于本次 vite 端口的那页**，找不到返回 null。
+ * 不做「随便兜第一页」——实测坑（2026-10-25）：旧会话的僵尸浏览器占着 CDP 端口时，
+ * 兜底会抓到别人的死页面，驱动全部落空还查不出原因。调用方对 null 自己显式处理。
+ */
 export async function cdpPage(cdpPort, vitePort) {
   const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
   const pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
-  return pages.find((t) => String(t.url).includes(`:${vitePort}`)) ?? pages[0] ?? null;
+  return pages.find((t) => String(t.url).includes(`:${vitePort}`)) ?? null;
 }
 
 /** 轮询页内表达式直到真值 / 非空串；超时抛错（不静默） */

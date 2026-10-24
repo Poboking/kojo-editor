@@ -52,7 +52,9 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding: var(--space-1) 0 var(--space-2);
+  /* 底部留白 + 渐隐（视觉批十三）：滚到底不切半行；渐隐区只在滚动中途起作用 */
+  padding: var(--space-1) 0 20px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
   font-size: var(--fs-1);
 }
 

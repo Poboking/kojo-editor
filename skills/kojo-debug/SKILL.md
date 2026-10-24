@@ -59,9 +59,12 @@ node tools/debug-web-smoke.mjs   # 9 断言端到端：欢迎页→开项目→�
 
 ## 硬边界（别撞）
 
+- **多 agent 并发**：会话按仓库工作树自动隔离（`<tmp>/kojo-debug/sessions/<树哈希>/`）——`serve/status/stop`
+  只看得见自己这棵树的会话；动手前先 `status` 核首行「会话＝<键>（<你的树路径>）」，别量了别人的树
+  （要接管别的会话用 `KOJO_DEBUG_SESSION=<session.json>`，同树第二会话用 `KOJO_DEBUG_SESSION_NAME`）。
 - `market_*` 联网命令在调试模式显式失败（安全闸在桌面壳 Rust 侧）；shift_jis **写盘**编码不支持（读取不受影响）。
 - 没有本机 Chrome/Edge ⇒ rc=2（设 `KOJO_DEBUG_BROWSER` 指路径）。
 - 仓库内目录 open-project 默认只读；要可写先复制进沙盒（serve 打印的 sandbox 路径）。
-- 运行时落点默认 `%TEMP%/kojo-debug`，**永远别把调试残留写进仓库**（会弄红别的工具，见仓库 PITFALLS 190/191）。
+- 运行时落点默认在系统临时目录的会话房间里，**永远别把调试残留写进仓库**（会弄红别的工具，见仓库 PITFALLS 190-193）。
 - 扩展调试模式本身（加命令 / 加 API）之前，**必读 `docs/DEBUG-MODE.md` §五开发规范**——
-  里面有开机图、帧格式、安全面、落点等十二条纪律与对应守门测试。
+  里面有开机图、帧格式、安全面、落点、多 agent 隔离等十三条纪律与对应守门测试。

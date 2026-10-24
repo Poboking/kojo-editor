@@ -100,6 +100,11 @@ export default defineConfig({
     // HMR 整页刷新（实测：项目被弹回欢迎页、调试面事件环被清空），把调试会话拆碎。
     watch: { ignored: ['**/src-tauri/**', '**/.kojo-debug/**'] },
   },
+  // dev 预打包（2026-10-25 调试模式批反馈）：`web-tree-sitter` 只在项目态的懒边上被加载，
+  // 冷启动的 deps 图里没有它 ⇒ 首次进项目时 vite 才「发现新依赖」并**整页 reload**——
+  // 调试会话里表现为「项目开着开着弹回欢迎页、命令注册表回到未登记」（实测）。
+  // 显式 include 让它启动即预打包；对 build 无影响（optimizeDeps 只作用于 dev）。
+  optimizeDeps: { include: ['web-tree-sitter'] },
   build: {
     target: 'es2022',
     /**

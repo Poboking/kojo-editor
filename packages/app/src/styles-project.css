@@ -716,20 +716,8 @@ textarea {
   min-height: 0;
   display: flex;
 }
-.ro-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  background: rgba(209, 154, 102, 0.14);
-  border-bottom: 1px solid var(--border);
-  color: var(--amber);
-  font-size: var(--fs-2);
-}
-.ro-banner span {
-  flex: 1;
-  min-width: 0;
-}
+/* 只读横幅已撤（视觉批十三）：常态只读不占一整条；入口在状态栏「只读」徽标（可点授权），
+   保存被拒时由回执通知说明原因并带「去授权」。CSS 一并删除，免得留一条无人消费的规则。 */
 .empty-state {
   margin: auto;
   text-align: center;
@@ -988,9 +976,13 @@ textarea {
 .tree-groups {
   list-style: none;
   margin: 0;
-  padding: 0;
+  /* 底部留白 + 渐隐（视觉批十三）：滚到底时最后一行不再被面板沿切掉半个字——
+     留白把整行抬离边缘，mask 只在"还有更多"时把边缘内容压淡（到底后那一行落在
+     渐隐区之外，仍完整可读可点）。 */
+  padding: 0 0 20px;
   overflow: auto;
   flex: 1;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
 }
 .tree-group-btn {
   width: 100%;
@@ -1905,25 +1897,68 @@ button.erb-mode-hint.unlocked:hover {
   gap: 8px;
   align-items: center;
 }
+/* 函数树工具条（视觉批十三）：角色下拉原先直接落浏览器原生样式（`appearance:auto` + 13.33px
+   系统字 + 系统箭头），和旁边自绘的搜索井、问题面板两族。这里收进 kit 井面；箭头用
+   `currentColor` 双渐变画（跟随三档主题与 `--fg`，不在 data-URI 里写死颜色）。 */
 .nav-chara-select {
   flex: 0 0 auto;
   max-width: 55%;
-  background: var(--bg-2);
+  appearance: none;
+  -webkit-appearance: none;
+  height: 26px;
+  padding: 0 22px 0 8px;
+  background-color: var(--surface-sunken);
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) calc(50% - 1px),
+    calc(100% - 9px) calc(50% - 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 4px 6px;
+  font-family: inherit;
   font-size: var(--fs-2);
+  text-overflow: ellipsis;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.nav-chara-select:hover {
+  border-color: var(--border-strong);
+}
+.nav-chara-select:focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 .nav-search {
   flex: 1;
   min-width: 0;
-  background: var(--bg-2);
+  height: 26px;
+  padding: 0 8px;
+  background: var(--surface-sunken);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 4px 8px;
+  font-family: inherit;
   font-size: var(--fs-2);
+  /* `--well-raise` 只在 .well 作用域里定义，落到这里会解析成 none——直接铺两枚全局 token */
+  box-shadow: var(--well-edge), var(--well-shadow);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.nav-search::placeholder {
+  color: var(--fg-dim);
+  opacity: 1;
+}
+.nav-search:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
 }
 .nav-status {
   font-size: var(--fs-1);
@@ -1938,7 +1973,9 @@ button.erb-mode-hint.unlocked:hover {
   min-height: 0;
   overflow-y: auto;
   border-top: 1px solid var(--border);
-  padding-top: 6px;
+  /* 底部留白 + 渐隐（同 `.tree-groups`）：滚到底整行可见，中途边缘压淡示意还有更多 */
+  padding: 6px 0 20px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
 }
 .nav-family,
 .nav-face {

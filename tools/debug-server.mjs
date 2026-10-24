@@ -467,14 +467,15 @@ export async function createDebugServer(options) {
       admitWrite(p);
       await fs.mkdir(p, { recursive: true });
     },
-    export_file: async (args) => {
-      // 对话框即授权的调试形态：落点固定在 sandbox/exports/<文件名>，返回全路径（界面会显示它）
-      const name = path.basename(String(args?.fileName ?? 'export.bin'));
-      const dest = path.join(sandbox, 'exports', name);
-      await fs.writeFile(dest, Buffer.from(String(args?.data ?? ''), 'base64'));
-      state.recordedShellCalls.push({ cmd: 'export_file', path: dest });
-      return dest;
-    },
+  export_file: async (args) => {
+    // 对话框即授权的调试形态：落点固定在 sandbox/exports/<文件名>，返回全路径（界面会显示它）
+    const name = path.basename(String(args?.fileName ?? 'export.bin'));
+    const dest = path.join(sandbox, 'exports', name);
+    await fs.writeFile(dest, Buffer.from(String(args?.data ?? ''), 'base64'));
+    state.recordedShellCalls.push({ cmd: 'export_file', path: dest });
+    if (state.recordedShellCalls.length > 200) state.recordedShellCalls.splice(0, state.recordedShellCalls.length - 200);
+    return dest;
+  },
     list_dir: async (args) => {
       const p = norm(args?.path);
       admitRead(p);
@@ -492,6 +493,7 @@ export async function createDebugServer(options) {
     market_publish: async () => failMarket('market_publish'),
     open_url_external: async (args) => {
       state.recordedShellCalls.push({ cmd: 'open_url_external', url: String(args?.url ?? '') });
+      if (state.recordedShellCalls.length > 200) state.recordedShellCalls.splice(0, state.recordedShellCalls.length - 200);
     },
     path_exists: async (args) => {
       const p = norm(args?.path);
@@ -563,6 +565,7 @@ export async function createDebugServer(options) {
     search_text: async (args) => await searchText(state, args?.request),
     show_in_folder: async (args) => {
       state.recordedShellCalls.push({ cmd: 'show_in_folder', path: String(args?.path ?? '') });
+      if (state.recordedShellCalls.length > 200) state.recordedShellCalls.splice(0, state.recordedShellCalls.length - 200);
     },
     start_watch: async (args) => {
       const paths = (Array.isArray(args?.paths) ? args.paths : []).map(norm);
@@ -777,6 +780,14 @@ function parseArgv(argv) {
 
 // `node tools/debug-server.mjs` 直跑（被 import 时不执行——测试走 createDebugServer）
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  // 反哺修（2026-10-25）：长会话里 uncaught / unhandled rejection 不许无声带走宿——先落日志
+  // 再退（退出码保留给 watchChild 记账；真 OOM 是 Rust/进程级杀，由 CLI 侧 --max-old-space-size 兜）
+  process.on('uncaughtException', (err) => {
+    console.error(`[debug-host] uncaughtException：${err?.stack ?? err}`);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error(`[debug-host] unhandledRejection：${reason?.stack ?? reason}`);
+  });
   const args = parseArgv(process.argv.slice(2));
   // 默认落点在系统临时目录（debugHome）：仓库内的运行时残留会弄红对仓库建 watcher 的
   // 别的工具（PITFALLS 189 姊妹坑，2026-10-24 实测）；要放仓库用 --sandbox/--appdata 显式给。
