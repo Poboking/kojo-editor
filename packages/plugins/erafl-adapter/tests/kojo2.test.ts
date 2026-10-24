@@ -28,8 +28,8 @@ import { ERAFL_GAME_ADAPTER as ROOT_EXPORTED_ADAPTER } from '../src/index';
  * ① **契约自洽**：`validateGameAdapter` 零诊断（装载自检是 core 的事，过不了
  *    它连表都进不了）；
  * ② **逐字段事实**：每个字段的值与头注里的真盘读数对得上（事件只有 4 条、
- *    代词落点是 CHARA_ID/MASTER、编码 utf-8-bom+crlf、color 有落点而
- *    heart/face/options 没有…）；
+ *    代词三轴落点是 XML 记号 [$KNAME]/[$MNAME]/[$TNAME]、编码 utf-8-bom+crlf、
+ *    color 有落点而 heart/face/options 没有…）；
  * ③ **真盘对拍**（`D:/Game/erafl` 不在就 skip——红线 6）：文件:行 级验证
  *    事件定义、CFLAG.CSV 索引、BOM/EOL 分布。合成用例独立成立，不依赖真盘。
  */
@@ -107,20 +107,23 @@ describe('eraFL 2.0 adapter：事件目录（九事件里只有 4 条真定义�
 });
 
 describe('eraFL 2.0 adapter：域符号', () => {
-  it('代词只声明我/你；落点是 eraFL 主形（不是 eraTW 的 TARGET）', () => {
-    expect(ERAFL_DOMAIN_SYMBOLS.pronouns.map((p) => p.pronoun)).toEqual(['我', '你']);
+  it('代词三轴全声明；落点是 eraFL 主形（不是 eraTW 的 CALLNAME:TARGET）', () => {
+    expect(ERAFL_DOMAIN_SYMBOLS.pronouns.map((p) => p.pronoun)).toEqual(['我', '你', '她']);
     const me = ERAFL_DOMAIN_SYMBOLS.pronouns.find((p) => p.role === 'me')!;
     const you = ERAFL_DOMAIN_SYMBOLS.pronouns.find((p) => p.role === 'you')!;
-    // eraFL 说话人主形 = CHARA_ID（壳内 134 处）；eraTW 是 TARGET——不照抄
-    expect(me.engineRef).toBe('%CALLNAME:CHARA_ID%');
+    const her = ERAFL_DOMAIN_SYMBOLS.pronouns.find((p) => p.role === 'her')!;
+    // eraFL 三轴主力形都在 XML 插值记号族（eraTW 是 %CALLNAME:指令族——不照抄）
+    expect(me.engineRef).toBe('[$KNAME]');
     expect(me.requiresView).toBe(true);
     expect(me.viewBound).toBe(true);
-    expect(you.engineRef).toBe('%CALLNAME:MASTER%');
+    expect(you.engineRef).toBe('[$MNAME]');
     expect(you.requiresView).toBe(false);
-  });
-
-  it('{她} 有意不声明（eraFL 没有单一第三方选择器 ⇒ fail-visible）', () => {
-    expect(ERAFL_DOMAIN_SYMBOLS.pronouns.some((p) => p.role === 'her')).toBe(false);
+    expect(her.engineRef).toBe('[$TNAME]');
+    expect(her.requiresView).toBe(true);
+    expect(her.viewBound).toBe(false);
+    for (const pronoun of ERAFL_DOMAIN_SYMBOLS.pronouns) {
+      expect(pronoun.family).toBe('XML-NAME');
+    }
   });
 
   it('五条状态线：CFLAG 编号与 CSV 名表一致、全部可写', () => {
@@ -338,26 +341,29 @@ describe('eraFL 2.0 adapter：真盘对拍（D:/Game/erafl 不在则跳过）', 
     expect(text).toContain('\r\n');
   });
 
-  itReal('代词落点：壳内 %CALLNAME:CHARA_ID% 与 %CALLNAME:MASTER% 都在用（头注计数的下限复算）', () => {
-    // 头注的 134 / 40 是全树读数；这里只扫口上域（说话人与玩家的真实战场），
+  itReal('代词落点：口上 XML 里 [$KNAME]/[$MNAME]/[$TNAME] 三轴都在用（头注计数的下限复算）', () => {
+    // 头注的 2,875 / 6,951 / 740 是全树 XML 读数；这里扫口上域全部 XML，
     // 用下限断言防"表与语料脱节"——读数只会比这更高，不会更低。
     const kojoRoot = nodeJoin(ERAFL_ROOT, 'ERB/口上');
     const walk = (dir: string, out: string[]): string[] => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = nodeJoin(dir, entry.name);
         if (entry.isDirectory()) walk(full, out);
-        else if (/\.ERB$/i.test(entry.name)) out.push(full);
+        else if (/\.xml$/i.test(entry.name)) out.push(full);
       }
       return out;
     };
-    let charaId = 0;
-    let master = 0;
+    const counts = { kname: 0, mname: 0, tname: 0 };
     for (const file of walk(kojoRoot, [])) {
       const text = readFileSync(file, 'utf8');
-      charaId += (text.match(/%CALLNAME:CHARA_ID%/g) ?? []).length;
-      master += (text.match(/%CALLNAME:MASTER%/g) ?? []).length;
+      counts.kname += (text.match(/\[\$KNAME\]/g) ?? []).length;
+      counts.mname += (text.match(/\[\$MNAME\]/g) ?? []).length;
+      counts.tname += (text.match(/\[\$TNAME\]/g) ?? []).length;
     }
-    expect(charaId).toBeGreaterThanOrEqual(100);
-    expect(master).toBeGreaterThanOrEqual(20);
+    expect(counts.kname).toBeGreaterThanOrEqual(1000);
+    expect(counts.mname).toBeGreaterThanOrEqual(1000);
+    expect(counts.tname).toBeGreaterThanOrEqual(100);
+    // 口上域（说话人战场）确实读得到东西——空目录会让上面的断言变成永绿
+    expect(walk(kojoRoot, []).length).toBeGreaterThan(0);
   });
 });

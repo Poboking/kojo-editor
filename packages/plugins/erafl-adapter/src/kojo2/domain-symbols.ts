@@ -5,10 +5,9 @@
  * `{我}` / `{你}`、角色属性、域变量全部查本表。
  *
  * **口径与 eraTW 的根本差异**（交接文档 §2.4 / 入口 B 裁决表）：eraFL 的代词主力
- * 在**口上 XML** 里（`%CALLNAME:…%` / `[$MNAME]` 记号族，见 `preview/interpolate.ts`），
- * ERB 壳函数里也有一整套（本节逐条给语料计数）。eraTW 那套 `TARGET`/`MASTER`
- * 双选择器模型**不照抄**——eraFL 说话人主形是 `CHARA_ID`（壳内 134 处），
- * 不是 `TARGET`。
+ * 在**口上 XML** 里（`[$MNAME]` 记号族，见 `preview/interpolate.ts`），ERB 壳里
+ * 另有一套 `%CALLNAME:…%`。eraTW 那套 `TARGET`/`MASTER` 双选择器模型**不照抄**——
+ * eraFL 三轴各有具名落点（本节逐条给语料计数）。
  *
  * 全部数值 = 2026-10-24 `D:/Game/erafl` 真盘读数。
  */
@@ -23,40 +22,52 @@ import type {
 /* ------------------------------ 代词 ------------------------------ */
 
 /**
- * 两个代词的落点（**只声明两个**，`{她}` 有意不声明，理由见下）：
+ * 三个代词的落点（全部有真盘实证；`engineRef` 写**主力形**，语料计数 =
+ * 2026-10-24 口上域 XML 全树 `.xml` 读数）：
  *
  * - `{我}` = 本口上文件自己的角色。eraFL 的口上按角色分发（`KOJO_DEFINE_K{n}` /
- *   `KOJO_XML_INIT_K{n}(KOJO_CHARA_ID)`，说话人就是这份口上所属的角色），壳内
- *   称呼引用主形是 `%CALLNAME:CHARA_ID%`（口上域 134 处，第一主力形）。
- * - `{你}` = 玩家。Emuera 通用的 `MASTER`；壳内 40 处 / XML 内 145 处
- *   （XML 侧 `%CALLNAME:MASTER%` 是绝对主力）。
+ *   `KOJO_XML_INIT_K{n}(KOJO_CHARA_ID)`，说话人就是这份口上所属的角色），自称
+ *   主形是 XML 插值 `[$KNAME]`（2,875 处，第一主力）。
+ * - `{你}` = 玩家。XML 侧 `[$MNAME]`（6,951 处，绝对主力）；ERB 侧另有
+ *   `%CALLNAME:MASTER%`（XML 内 145 处）——同义两形，记号表以 XML 主力为准。
+ * - `{她}` = 当前交互的第三方角色。XML 侧 `[$TNAME]`（740 处）——eraFL **有**
+ *   这个落点（eraTW 用 `%CALLNAME:TARGET%`，eraFL 用具名记号 `TNAME`，不照抄）。
  *
- * `{她}` **不声明**（不是遗漏）：eraFL 没有单一的"第三方当前角色"选择器——
- * XML 侧第三方引用走具名形 `%CALLNAME:NAME_TO_CHARA("UC_…")%`（5 处）与
- * bracket 变量 `%CALLNAME:[$KC]%`（50 处，运行时作用域变量，不是代词落点），
- * ERB 侧走 `%CALLNAME:奥蕾西娅_ID%` 一类逐角色常量。这些都不是代词能代表的
- * 落点 ⇒ 按"不猜"原则留空：作者在 eraFL 的 2.0 源里写 `{她}` 会得到
- * `core/expr/unknown-symbol` 未声明错误（fail-visible），而不是一个悄悄映射到
- * 错误角色的"能用"代词。
+ * 曾经误判留空、被真盘读数纠正（记在这里防复发）：初版据「壳内 `%CALLNAME:CHARA_ID%`
+ * 134 处」判断 `{她}` 无单一选择器。两点错——134 是**全树**数（口上域仅 4 处），
+ * 且 `CHARA_ID` 是壳函数**形参名**（`@KOJO_DEFINE_KOJO_INFO_K1000(CHARa_ID)`），
+ * 不是引擎变量。第三方引用真形是 `[$TNAME]`（740 处）与
+ * `%CALLNAME:NAME_TO_CHARA("UC_…")%` 具名形；「名字像引擎变量」不等于「是引擎变量」。
  */
 const PRONOUNS: readonly PronounSymbol[] = Object.freeze([
   Object.freeze({
     role: 'me',
     pronoun: '我',
-    engineRef: '%CALLNAME:CHARA_ID%',
+    engineRef: '[$KNAME]',
     // eraFL 的口上文件本身就是角色文件（目录 `{编号}_{名称}` = 角色身份），
     // `# 视` 声明与该角色重合——与 eraTW 的 viewBound 语义同构。
     requiresView: true,
     viewBound: true,
-    family: 'CALLNAME',
+    // 主力形在 XML 插值记号族（不是 Emuera 的 `%CALLNAME:%` 指令族）。
+    family: 'XML-NAME',
   }),
   Object.freeze({
     role: 'you',
     pronoun: '你',
-    engineRef: '%CALLNAME:MASTER%',
+    engineRef: '[$MNAME]',
     requiresView: false,
     viewBound: false,
-    family: 'CALLNAME',
+    family: 'XML-NAME',
+  }),
+  Object.freeze({
+    role: 'her',
+    pronoun: '她',
+    engineRef: '[$TNAME]',
+    // 对象角色轴：口上 XML 的 `<command>` 由 kojoPlace/forMaster 等属性给上下文，
+    // `# 视` 目标不同也成立（与 eraTW 的 viewBound=false 同构）。
+    requiresView: true,
+    viewBound: false,
+    family: 'XML-NAME',
   }),
 ]);
 
