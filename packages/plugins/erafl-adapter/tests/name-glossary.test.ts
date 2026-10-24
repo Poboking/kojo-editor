@@ -20,6 +20,24 @@ const hasCorpus = existsSync(GAME_ROOT);
 /** 平假名 + 片假名（值里出现任何一枚都说明还没译完） */
 const KANA_RE = /[\u3040-\u309f\u30a0-\u30ff]/;
 
+/**
+ * 与 `ProjectView.tsx` 的 `nameGloss` 同一套判据：键长降序、`includes`、已含译名则不重复拼。
+ *
+ * 提到模块级（而不是待在某个 describe 里）是因为「匹配语义」与「覆盖率」两组断言
+ * 必须用**同一个**函数——否则两组各自复刻一份，判据就会悄悄漂移，覆盖率守卫反而
+ * 掩盖消费侧的真实行为。
+ */
+const GLOSS_KEYS: readonly string[] = Object.keys(ERAFL_NAME_GLOSSARY).sort((a, b) => b.length - a.length);
+function glossOf(name: string): string {
+  for (const key of GLOSS_KEYS) {
+    if (!name.includes(key)) continue;
+    const zh = ERAFL_NAME_GLOSSARY[key]!;
+    if (name.includes(zh)) return name;
+    return `${name}（${zh}）`;
+  }
+  return name;
+}
+
 describe('ERAFL_NAME_GLOSSARY —— 形状', () => {
   const entries = Object.entries(ERAFL_NAME_GLOSSARY);
 
@@ -43,18 +61,6 @@ describe('ERAFL_NAME_GLOSSARY —— 形状', () => {
 });
 
 describe('ERAFL_NAME_GLOSSARY —— 匹配语义（复刻 ProjectView 的 gloss 判据）', () => {
-  /** 与 `ProjectView.tsx` 的 `nameGloss` 同一套判据：键长降序、includes、已含译名则不重复拼 */
-  function glossOf(name: string): string {
-    const keys = Object.keys(ERAFL_NAME_GLOSSARY).sort((a, b) => b.length - a.length);
-    for (const key of keys) {
-      if (!name.includes(key)) continue;
-      const zh = ERAFL_NAME_GLOSSARY[key]!;
-      if (name.includes(zh)) return name;
-      return `${name}（${zh}）`;
-    }
-    return name;
-  }
-
   it('口上目录名：日文名后补中文名', () => {
     expect(glossOf('1001_汎用_クール')).toBe('1001_汎用_クール（冷静）');
   });
@@ -89,5 +95,38 @@ describe('ERAFL_NAME_GLOSSARY —— 真盘守卫（D:/Game/erafl 存在才跑�
 
     const missing = Object.keys(ERAFL_NAME_GLOSSARY).filter((key) => !joined.includes(key));
     expect(missing, `这些键在真盘里已找不到（表过期）：\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  /**
+   * **覆盖率守卫（真正该量的那条）**。
+   *
+   * 判据不是「表里有没有这个字符串」——消费方走 `includes`，键不带编号前缀，
+   * 用相等去比会得出「129/129 全缺」的假警报。真正要问的是：**名字里还剩假名的，
+   * 是不是都对照上了**。已经是中文的目录（`10_蒂娅`）不需要对照，不该算欠账。
+   *
+   * 阈值 0.95：真盘现在 129 个口上目录里只有 0 个含假名未命中，留 5% 余量是为了
+   * 游戏加几个新角色时不至于一加就红；掉到 95% 以下说明整块语料换了命名法。
+   */
+  function coverageOf(names: readonly string[]): { total: number; covered: number; miss: string[] } {
+    const stillKana = names.filter((n) => KANA_RE.test(n));
+    const miss = stillKana.filter((n) => !glossOf(n).includes('（'));
+    return { total: stillKana.length, covered: stillKana.length - miss.length, miss };
+  }
+
+  it.skipIf(!hasCorpus)('口上目录：仍含假名的目录 ≥95% 对照上了中文', () => {
+    const names = readdirSync(nodeJoin(GAME_ROOT, 'ERB', '口上'), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+    expect(names.length, '真盘口上目录数量与预期差太多（语料换了？）').toBeGreaterThan(100);
+    const { total, covered, miss } = coverageOf(names);
+    expect(covered / total, `未对照：\n${miss.join('\n')}`).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it.skipIf(!hasCorpus)('角色 CSV：仍含假名的文件名 ≥95% 对照上了中文', () => {
+    const names = readdirSync(nodeJoin(GAME_ROOT, 'CSV', 'CHARA'))
+      .filter((f) => f.endsWith('.csv'))
+      .map((f) => f.replace(/\.csv$/, ''));
+    const { total, covered, miss } = coverageOf(names);
+    expect(covered / total, `未对照：\n${miss.join('\n')}`).toBeGreaterThanOrEqual(0.95);
   });
 });
