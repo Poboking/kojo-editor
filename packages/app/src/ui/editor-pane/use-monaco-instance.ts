@@ -97,9 +97,12 @@ import { publishKojo2PreviewEntry } from '../kojo2-preview-host';
 import { registerKojo2ExpandCompileSource } from '../kojo2-expand-compile';
 import { isKojo2DiagnosticsPath } from '../kojo2-diagnostics-gate';
 import { revealLocationOf } from '../../monaco/reveal-position';
-// K2 batch-4：2.0 语言服务（`# 机` 事件目录）的 adapter 注入源。与上一行同一条宿主组合根
-// 豁免口径——语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由此注入。
-import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 2.0 语言服务 adapter 由宿主组合根注入（与 ui/kojo2-problem-wiring.ts 同一豁免口径）
+// K2 入口 A：2.0 语言服务（`# 机` 事件目录）的 adapter 注入源改由**组合根按当前项目解析**
+// （`bootstrap.ts` 的登记表：v1 `gameId` → 2.0 `GameAdapter`，eraTW 静态登记、eraFL 入口 B
+// 起由项目级装载处登记）——此前这里写死直引 eraTW 那枚冻结数据，开 eraFL 工程时六条 2.0
+// 腿拿到的是 eraTW 的游戏事实。语言层（`monaco/kojo2-providers.ts`）自身仍零游戏名词，
+// 本行因此不再需要 audit-allow 豁免。
+import { kojo2AdapterForProject } from '../../bootstrap';
 import type { Notify } from '../NotificationCenter';
 
 /** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
@@ -273,11 +276,14 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       crumbTreeCacheRef,
     });
     setGlobalKernel(kernel); // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
-    // K2 batch-4：Kojo 2.0 语言服务（`# 机` 事件目录）要的 adapter 由此注入——它**不是**
+    // K2 入口 A：Kojo 2.0 语言服务（`# 机` 事件目录）要的 adapter 由此注入——它**不是**
     // `game.adapter` 槽位上那枚 v1 契约对象，槽位里没有 2.0 的 `eventCatalog` / `domainSymbols`。
-    // 与 `ui/kojo2-problem-wiring.ts` 的 2.0 adapter 装配同一口径（宿主组合根 + 同一豁免理由）；
-    // 全局 provider 只注册一次，getter 每次请求现问，项目开闭不必重装。
-    ensureGlobalProviders({ kojo2Adapter: () => ERATW_GAME_ADAPTER });
+    // 装配口径（K2 batch-4 立、入口 A 收紧）：宿主组合根（`bootstrap.ts` 登记表）按**当前
+    // 项目**现取——项目切换换人；表里没登记的 id（eraFL 在入口 B 之前）⇒ `null` ⇒ `# 机`
+    // 那一路零候选、不抛，绝不拿 eraTW 的事实顶。全局 provider 只注册一次，getter 每次请求
+    // 现问，项目开闭不必重装。诊断腿（`ui/kojo2-problem-wiring.ts`）仍按 eraTW 装配，
+    // 归入口 D 接线，不在本入口范围。
+    ensureGlobalProviders({ kojo2Adapter: () => kojo2AdapterForProject(kernel.project.current()) });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });

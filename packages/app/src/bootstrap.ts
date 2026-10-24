@@ -1,9 +1,10 @@
 import { createKernel, type Kernel } from '@kojo/kernel';
-import type { Plugin } from '@kojo/plugin-api';
+import type { GameProject, Plugin } from '@kojo/plugin-api';
 import { createWorkerTransport, WellKnownServices } from '@kojo/plugin-api';
 import type { ConditionExtractorService, ConventionLinterService } from '@kojo/plugin-api';
+import type { GameAdapter } from '@kojo/kojo-core';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
+import { createEratwAdapterPlugin, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
 import { computeTasks } from './compute-tasks';
@@ -11,6 +12,54 @@ import { createCascadeWatermarks } from './cascade-watermarks';
 import { perf } from './perf';
 // vite ?worker：并行计算线程入口（纯 CPU 任务搬出主线程）
 import ComputeWorker from './compute-worker?worker';
+
+/* ==================== 2.0 adapter 登记表（K2 入口 A：宿主接线） ==================== */
+
+/**
+ * Kojo 2.0 adapter 登记表：v1 `gameId` → 2.0 `GameAdapter`（纯数据、深冻结）。
+ *
+ * 为什么需要它：六条 2.0 语言面（补全 / 悬停 / 签名 / 行内提示 / 转定义 / 文档符号）
+ * 的 adapter 供给一度在 `ui/editor-pane/use-monaco-instance.ts` 里写死成 eraTW——
+ * 开 eraFL 工程时那六条腿拿到的是 **eraTW 的游戏事实**（事件目录 / 域符号 / profile
+ * 全是别家游戏的），而且错得安静：候选照样出，只是内容不对。表现在由组合根按
+ * **当前项目**解析，键值判据（真盘读数，2026-10-24 核）：
+ *
+ * - 键 = `GameProject.adapterId`（`plugin-api/src/game.ts:29`），其值就是各 v1 adapter
+ *   插件 `constants.ts` 里的 `gameId`：eraTW = `'eratw'`
+ *   （`eratw-adapter/src/constants.ts:9`）、eraFL = `'erafl'`
+ *   （`erafl-adapter/src/constants.ts:14`）；
+ * - 值 = 该游戏 2.0 面的冻结数据，其 `id` 与键同值（eraTW：`ERATW_GAME_ADAPTER`，
+ *   即 `eratw-adapter/src/kojo2/index.ts` 里 `freezeAdapter({ id: 'eratw', … })` 的产物）。
+ *
+ * 登记口径（谁在哪登记）：
+ * - **常驻适配器**（eraTW：`bootstrapKernel` 静态名单的成员）在此静态登记——
+ *   `@kojo/plugin-eratw-adapter` 本就在开机静态图里（首屏常驻两项之一），零新增字节；
+ * - **项目级适配器**（eraFL：`loadProjectPlugins` 动态 import 的那批）在模块装载成功后
+ *   由同一函数调 `registerKojo2Adapter` 登记（入口 B 落地时接上）；装载时机
+ *   （`ensureProjectPlugins` 保证赶在 `kernel.project.open()` 之前）⇒ Monaco 实例
+ *   诞生时表已齐，getter 现取即可；
+ * - **表里没有的 id ⇒ `null`**：2.0 面按契约走「零候选 + 不抛」（`# 机` 那一路不猜
+ *   内置事件，见 `editor-global-providers.ts` 的 `GlobalProviderOptions` 头注）——
+ *   绝不静默拿别家游戏的事实顶上（那正是入口 A 要修掉的 bug 本身）。
+ */
+const KOJO2_ADAPTERS = new Map<string, GameAdapter>([['eratw', ERATW_GAME_ADAPTER]]);
+
+/**
+ * 登记 / 覆盖一枚 2.0 adapter（入口 B 起由 `loadProjectPlugins` 的项目级装载处调用；
+ * 同 id 重复登记以最后一次为准——模块级动态 import 全程只求值一次，实战不会重复）。
+ */
+export function registerKojo2Adapter(id: string, adapter: GameAdapter): void {
+  KOJO2_ADAPTERS.set(id, adapter);
+}
+
+/**
+ * 按当前项目解析 2.0 adapter：无项目 / 表里没这个游戏 ⇒ `null`（调用方按契约零候选处理）。
+ * `kernel.project.current()` 是纯字段读取（`kernel/src/project.ts:110`，不抛），
+ * 故本函数不需要 try/catch——**不猜**比**猜错**便宜。
+ */
+export function kojo2AdapterForProject(project: GameProject | null): GameAdapter | null {
+  return project ? (KOJO2_ADAPTERS.get(project.adapterId) ?? null) : null;
+}
 
 /**
  * 应用引导：装配内核 + 插件清单。

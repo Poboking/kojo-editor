@@ -881,7 +881,10 @@ describe('宿主注册点与解耦面（读源码断言）', () => {
 
   it('adapter 由组合根注入（`ui/editor-pane/use-monaco-instance.ts` 传 getter）', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-pane', 'use-monaco-instance.ts');
-    expect(source).toContain('kojo2Adapter: () => ERATW_GAME_ADAPTER');
+    // 入口 A：getter 不再写死 eraTW——改问组合根登记表按**当前项目**现取（eraFL 在
+    // 入口 B 之前 ⇒ null ⇒ 六条腿零候选，而不是拿 eraTW 的事实顶）。判据不变：
+    // 本文件仍只传 getter、仍不认任何游戏名词。
+    expect(source).toContain('kojo2Adapter: () => kojo2AdapterForProject(kernel.project.current())');
     expect(source).toMatch(/ensureGlobalProviders\(\{ kojo2Adapter:/);
   });
 
