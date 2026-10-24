@@ -141,6 +141,29 @@
   --hover-bg: var(--bg-3);
   --text: var(--fg);
   --text-dim: var(--fg-dim);
+
+  /* —— 遮罩压暗（scrim）与浮层实描边（rim）：本档的收口终值（R6 债一，逐字搬自 R5 写在
+     `shell-notices.css` ⑤ 里的那 11 枚裸 rgba；切片现在只吃 var()，终值一字不变，对拍见
+     `shell-notices-token-discipline.test.ts`）。
+     取色口径（R5 标定，别改设计）：浅色模态压在深色 Monaco 上时，旧遮罩 alpha 只有 ~0.24 +
+     saturate 1.15 ⇒ 深色代码被碾成一片中等明度的灰泥。修法是**压深 + 抽掉泄漏的色相**（本族全是
+     中性深 slate，不带蓝雾），再给浮层一条实描边让边界靠底色认出来。
+     ⚠ 本文件末尾那几条 `[data-theme='light'] .overlay-backdrop / .modal-mask / .picker-backdrop`
+     字面规则（"残漏收口"节）在本批之后已被同分后置的切片遮蔽，是死口径；这里给的是**活的那一套**，
+     两者同值收敛归组长（不在 R6 所有权内，本批不动它）。 */
+  --scrim-a: rgba(26, 34, 47, 0.4);
+  --scrim-b: rgba(14, 19, 27, 0.62);
+  --scrim-fill: rgba(18, 24, 33, 0.5);
+  --scrim-query-a: rgba(26, 34, 47, 0.24);
+  --scrim-query-b: rgba(14, 19, 27, 0.44);
+  --scrim-query-fill: rgba(18, 24, 33, 0.36);
+  --scrim-picker: rgba(18, 24, 33, 0.32);
+  --scrim-solid: rgba(18, 24, 33, 0.52);
+  --scrim-nofilter: rgba(18, 24, 33, 0.55);
+  /* rim：浅色下语义反转（白物体在白场景里靠**沉色**边 + 投影分离，不是深色档那条白高光）；
+     实心档没有磨砂可用，边界全靠这一条线 ⇒ 再沉一档。 */
+  --rim-1: rgba(23, 31, 43, 0.55);
+  --rim-solid: rgba(23, 31, 43, 0.62);
 }
 
 /* ============================================================================

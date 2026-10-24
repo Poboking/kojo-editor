@@ -1,19 +1,23 @@
 /* ============================================================================
- * 壳层呈现切片（视觉批十一 R5 · 壳层三件套收尾路）
+ * 壳层呈现切片（视觉批十一 R5 交付 · R6 收尾路接手）
  * ----------------------------------------------------------------------------
- * 只管四件事，全部是**呈现**：
+ * 只管六件事，全部是**呈现**：
  *   ① 通知列的「让位」——模态/浮层在场时改锚左下（不动层级、不动 `--z-toast` 定义）；
  *   ② toast 的文案密度——标题 + 一行摘要 + 细节折进展开态（真壳实测排三行、断在「跨/度」中间）；
  *   ③ 状态栏两组诊断计数分主次——次组（项目级约定计数）静息只留标签与在途状态，三枚数字点开看；
  *   ④ 插件状态行的重复「运行中」退场（绿点已承载同一信息，20 行重复文字是噪音）；
- *   ⑤ light / mint-dark 的模态遮罩——浅色模态压在深色 Monaco 上，磨砂底糊成一片灰带。
+ *   ⑤ light / mint-dark 的模态遮罩——浅色模态压在深色 Monaco 上，磨砂底糊成一片灰带；
+ *   ⑥ 更新提醒卡的「让位」——同 ① 的机制，R5 只办了通知列、卡还糊在模态页脚右端（R6 债三）。
  *
- * 三条纪律：
- *   - **不改 `styles.css` / `styles-project.css` / `tokens.css` / `themes/*.css`**（都有主）。
- *     要压过重档既有表现，一律按本批 L03/L12/L16 的先例**提特异性**（双类 / `:root[data-*]` 作用域）：
- *     本文件由 `main.tsx` 静态引入，位次在 tokens → styles → themes 之后、**懒档
- *     `styles-project.css` 之前** ⇒ 同特异性会输给它，故凡与重档对撞的选择器都 ≥ 它一档。
- *   - 颜色只吃 token 或主题内既有色族（不新增 token、不引新色相）。
+ * 四条纪律：
+ *   - 与重档对撞一律**提特异性**（双类 / `:root[data-*]` 作用域）：本文件由 `main.tsx` 静态引入，
+ *     位次在 tokens → styles → themes 之后、**懒档 `styles-project.css` 之前** ⇒ 同特异性会输给它，
+ *     故凡与重档对撞的选择器都 ≥ 它一档。
+ *   - **颜色只吃 token，本文件内零裸 hex / 零裸 rgba / 零裸 px 圆角**（R6 债一 + 债二的静态闸：
+ *     `tests/shell-notices-token-discipline.test.ts`）。R5 那 20 枚字面量已逐字搬进定义点
+ *     （`tokens.css` 基座 = dark 现值，`themes/light.css` / `themes/mint-dark.css` = 各自翻色），
+ *     本文件只留 `var()`；改设计要动色就动那三处定义点，别在这里抄字面量。
+ *   - **不许动层序档位**（`context-menu-layering.test.ts` 与本文件 ①/⑥ 的判据）：让位一律改位不降层。
  *   - 信息一条不减：被收成一行/收起的读数，DOM 里始终在 ⇒ 读屏念得完、悬停查得到（铁律 4）。
  * ========================================================================== */
 
@@ -25,7 +29,8 @@
 }
 
 /* 正文改成两行形态：标题（人话短句）+ 摘要（剩余句子），图标与动作按钮仍钉第一行。
-   `.toast-message` 这个旧单行随本次形态变更退场（重档那条规则成了死类，归 L01/L02 清）。 */
+   `.toast-message` 这个旧单行随本次形态变更退场：全仓 TS 零消费方（R5 核实），两份重/轻档
+   死规则已由 R6 债四同时删净（只删一边会让 `styles-split.equivalence.test.ts` 的 A/B/C 分叉）。 */
 .notification-shell .toast-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -228,22 +233,22 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
 :root[data-theme='light'] .overlay-backdrop,
 :root[data-theme='light'] .modal-mask {
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(26, 34, 47, 0.4), rgba(14, 19, 27, 0.62)),
-    rgba(18, 24, 33, 0.5);
+    radial-gradient(130% 105% at 50% -5%, var(--scrim-a), var(--scrim-b)),
+    var(--scrim-fill);
   -webkit-backdrop-filter: blur(9px) saturate(0.82);
   backdrop-filter: blur(9px) saturate(0.82);
 }
 /* 只读查询面（比对 / 预览）：比破坏性确认面轻一档，但同样压深、同样去饱和 */
 :root[data-theme='light'] .overlay-backdrop:has(.ov-query) {
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(26, 34, 47, 0.24), rgba(14, 19, 27, 0.44)),
-    rgba(18, 24, 33, 0.36);
+    radial-gradient(130% 105% at 50% -5%, var(--scrim-query-a), var(--scrim-query-b)),
+    var(--scrim-query-fill);
   -webkit-backdrop-filter: blur(8px) saturate(0.85);
   backdrop-filter: blur(8px) saturate(0.85);
 }
 /* 命令面板：轻一档的遮罩也去灰泥（.picker 顶对齐，与通知列本来就不抢位） */
 :root[data-theme='light'] .picker-backdrop {
-  background: rgba(18, 24, 33, 0.32);
+  background: var(--scrim-picker);
   -webkit-backdrop-filter: blur(8px) saturate(0.85);
   backdrop-filter: blur(8px) saturate(0.85);
 }
@@ -251,66 +256,115 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
 :root[data-theme='light'] .overlay-host,
 :root[data-theme='light'] .modal,
 :root[data-theme='light'] .picker {
-  border-color: rgba(23, 31, 43, 0.55);
+  border-color: var(--rim-1);
 }
-/* 实心档（旋钮 0%）：没有磨砂，边界全靠底色差 ⇒ 遮罩取中性深 slate，比旧 rgba(35,48,64,.4) 沉一档；
-   描边同一条规则里补上——懒档 `:root[data-glass='solid'] .overlay-host{border-color}` (0,3,0)
-   后置会吃掉上面那条同分的实描边，实心档正是最需要一道真边界的一档。 */
+/* 实心档（旋钮 0%）：没有磨砂，边界全靠底色差 ⇒ 遮罩取中性深 slate，比收口前的旧值沉一档
+   （旧值见 `themes/light.css` 的 scrim 注记）；描边同一条规则里补上——懒档
+   `:root[data-glass='solid'] .overlay-host{border-color}` (0,3,0) 后置会吃掉上面那条同分的实描边，
+   实心档正是最需要一道真边界的一档。 */
 :root[data-theme='light'][data-glass='solid'] .overlay-backdrop,
 :root[data-theme='light'][data-glass='solid'] .modal-mask,
 :root[data-theme='light'][data-glass='solid'] .picker-backdrop {
-  background: rgba(18, 24, 33, 0.52);
+  background: var(--scrim-solid);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 :root[data-theme='light'][data-glass='solid'] .overlay-host,
 :root[data-theme='light'][data-glass='solid'] .modal,
 :root[data-theme='light'][data-glass='solid'] .picker {
-  border-color: rgba(23, 31, 43, 0.62);
+  border-color: var(--rim-solid);
 }
 /* 老内核无 backdrop-filter 回落：磨砂没了，深一档才分得出边界 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   :root[data-theme='light'] .overlay-backdrop,
   :root[data-theme='light'] .modal-mask,
   :root[data-theme='light'] .picker-backdrop {
-    background: rgba(18, 24, 33, 0.55);
+    background: var(--scrim-nofilter);
   }
 }
 
 /* mint-dark：墨绿底 + 深色代码面本来就是低反差的一对 ⇒ 只补两处——遮罩沉一档、描边给真边界。
    实心档顺带收口：懒档 `:root[data-glass='solid']` 那条纯黑 (0,3,0) 后置压过 mint-dark.css
-   的同分绿化规则（该文件注记以为压不过，实测压得过），这里用 (0,4,0) 把墨绿找回来。 */
+   的同分绿化规则（该文件 154 行的旧注记以为压不过，实测压得过；注记已按现行级联改正——R6 债四），
+   这里用 (0,4,0) 把墨绿找回来。 */
 :root[data-theme='mint-dark'] .overlay-backdrop,
 :root[data-theme='mint-dark'] .modal-mask {
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.36), rgba(2, 10, 6, 0.64)),
-    rgba(5, 12, 8, 0.48);
+    radial-gradient(130% 105% at 50% -5%, var(--scrim-a), var(--scrim-b)),
+    var(--scrim-fill);
   -webkit-backdrop-filter: blur(11px) saturate(0.92);
   backdrop-filter: blur(11px) saturate(0.92);
 }
 :root[data-theme='mint-dark'] .overlay-host,
 :root[data-theme='mint-dark'] .modal,
 :root[data-theme='mint-dark'] .picker {
-  border-color: rgba(191, 232, 210, 0.34);
+  border-color: var(--rim-1);
 }
 /* 查询面变体：懒档 `.overlay-backdrop:has(.ov-query)` (0,3,0) 后置，同分的绿化规则会被它吃掉
    ⇒ 这里同样按 (0,4,0) 给一档墨绿（只减淡、不改向） */
 :root[data-theme='mint-dark'] .overlay-backdrop:has(.ov-query) {
   background:
-    radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.22), rgba(2, 10, 6, 0.42)),
-    rgba(5, 12, 8, 0.34);
+    radial-gradient(130% 105% at 50% -5%, var(--scrim-query-a), var(--scrim-query-b)),
+    var(--scrim-query-fill);
   -webkit-backdrop-filter: blur(9px) saturate(0.95);
   backdrop-filter: blur(9px) saturate(0.95);
 }
 :root[data-theme='mint-dark'][data-glass='solid'] .overlay-backdrop,
 :root[data-theme='mint-dark'][data-glass='solid'] .modal-mask,
 :root[data-theme='mint-dark'][data-glass='solid'] .picker-backdrop {
-  background: rgba(5, 12, 8, 0.56);
+  background: var(--scrim-solid);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 :root[data-theme='mint-dark'][data-glass='solid'] .overlay-host,
 :root[data-theme='mint-dark'][data-glass='solid'] .modal,
 :root[data-theme='mint-dark'][data-glass='solid'] .picker {
-  border-color: rgba(191, 232, 210, 0.42);
+  border-color: var(--rim-solid);
+}
+
+/* =============== ⑥ 更新提醒卡也让模态（本批 R6 债三：R5 只办了通知列） =============== */
+/*
+ * 症状：`.update-notice-card`（`update-notice-card.css:18`）那格 1180 压过模态的
+ * `calc(var(--z-modal) + 1)` = 1101 与遮罩的 `--z-modal` = 1100 ⇒ 设置浮层开着时，这张常驻卡
+ * 照样糊在页脚**右端**——而那正是「确定 / 取消」的命中区（R5 为通知列办过同一件事，注记在 ①）。
+ *
+ * 口径照抄 R5：**改位不降层**。层级由 `context-menu-layering.test.ts` 与
+ * `shell-notice-density.test.ts` 钉着（1300 / 1200 / 1101 / 本卡 1180 各在其位），本批一个字不碰
+ * 层序；只把卡从右下挪到左下——页脚带左端对模态而言恒空（居中宿主 + 右对齐按钮）。
+ *
+ * 挪过去不与别人叠字：`update-notice-card.css:30` 那条「卡在场 ⇒ toast 列抬到 bottom:122」
+ * 只认**卡的有无**、不认卡在哪一侧，所以左移后竖序原样成立（卡 36..122、toast 从 122 起）。
+ * 错误条（`.project-session-error`：absolute / left:16 / bottom:36）也在左下 ⇒ 三件同屏时
+ * 按「错误条 → 卡 → toast 列」逐档抬手，常数与 R5 的 128（错误条顶缘）同源：
+ * 卡抬到 128，toast 列抬到 128 + 86（卡高一档）= 214。
+ *
+ * `:has()` 不可用时整组失效 = 保持本批之前的右下形态（与 ① 同一降级口径，不破版）。
+ */
+body:has(.overlay-backdrop, .modal-mask) .update-notice-card {
+  left: 16px;
+  right: auto;
+}
+body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .update-notice-card {
+  bottom: 128px;
+}
+/* 三件同屏时 toast 列再抬一档（比上面那条多一个 `:has()` ⇒ (0,5,1) 稳压 R5 的 (0,4,1)，
+   属**追加**更严的一条，R5 那两条一个字没改） */
+body:has(.overlay-backdrop, .modal-mask):has(.update-notice-card):has(.project-session-error)
+  .notification-center.notification-shell {
+  bottom: 214px;
+}
+/* 同 ①：让位是整块平移，给一档位移过渡；两种降动效口径都压平 */
+.update-notice-card {
+  transition:
+    left var(--dur-2) var(--ease-out),
+    right var(--dur-2) var(--ease-out),
+    bottom var(--dur-2) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-notice-card {
+    transition: none;
+  }
+}
+:root[data-motion='reduced'] .update-notice-card {
+  transition: none;
 }

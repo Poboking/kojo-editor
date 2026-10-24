@@ -72,6 +72,54 @@ describe('toast 让位模态：改位不降层（层序是另一条闸钉着的�
   });
 });
 
+/**
+ * R6 债三：更新提醒卡（1180 档）也压着模态页脚右端，R5 只办了通知列。
+ * 口径与上面那条完全一致——**改位不降层**：卡的层序定义留给 `context-menu-layering.test.ts`
+ * 那张档位表管，本批只在切片里加让位判据，所以这里既钉"判据在"，也钉"定义没被动过"。
+ */
+describe('更新提醒卡同样给模态让位（改位不降层，机制沿用 R5）', () => {
+  const cardCss = read('../src/update-notice-card.css');
+  const CARD_YIELD = 'body:has(.overlay-backdrop, .modal-mask) .update-notice-card';
+
+  it('卡的层序定义一个字没动：仍是 1180（让位不靠压层糊过去）', () => {
+    expect(cardCss).toMatch(/\.update-notice-card\s*\{[^}]*z-index:\s*1180;/);
+    expect(noticesCss).not.toMatch(/update-notice-card[^}]*z-index/);
+  });
+
+  it('让位判据在切片里（不在 JS 里数模态），写的是"改锚左下"', () => {
+    expect(noticesCss).toContain(CARD_YIELD);
+    const at = noticesCss.indexOf(CARD_YIELD);
+    const body = noticesCss.slice(at, noticesCss.indexOf('}', at) + 1);
+    expect(body).toContain('left: 16px');
+    expect(body).toContain('right: auto');
+    expect(body).not.toContain('display: none');
+    expect(body).not.toContain('visibility: hidden');
+  });
+
+  it('错误条同屏时逐档抬手：卡抬到 128，toast 列再抬到 214（竖序 = 错误条 → 卡 → toast）', () => {
+    expect(noticesCss).toMatch(
+      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.project-session-error\)\s*\.update-notice-card\s*\{\s*bottom:\s*128px;/,
+    );
+    expect(noticesCss).toMatch(
+      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.update-notice-card\):has\(\.project-session-error\)\s*\.notification-center\.notification-shell\s*\{\s*bottom:\s*214px;/,
+    );
+  });
+
+  it('R5 原有那两条通知列规则原样在（追加更严的一条，不是改写既有口径）', () => {
+    expect(noticesCss).toMatch(
+      /body:has\(\.overlay-backdrop, \.modal-mask\)\s*\.notification-center\.notification-shell\s*\{\s*left:\s*16px;\s*right:\s*auto;/,
+    );
+    expect(noticesCss).toMatch(
+      /body:has\(\.overlay-backdrop, \.modal-mask\):has\(\.project-session-error\)\s*\.notification-center\.notification-shell\s*\{\s*bottom:\s*128px;/,
+    );
+  });
+
+  it('位移过渡两种降动效口径都压平（同通知列那套纪律）', () => {
+    expect(noticesCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.update-notice-card\s*\{\s*transition:\s*none;/);
+    expect(noticesCss).toMatch(/:root\[data-motion='reduced'\] \.update-notice-card\s*\{\s*transition:\s*none;/);
+  });
+});
+
 describe('视觉隐藏不许吞掉信息（读屏与右键复制仍要拿得到）', () => {
   /** 取某一处规则体，断言它用的是 clip 配方而不是 `display:none` */
   const hiddenRecipeIsNotDisplayNone = (anchor: string): void => {
