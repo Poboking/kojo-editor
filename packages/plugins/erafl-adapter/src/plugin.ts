@@ -52,6 +52,10 @@ import {
 } from './chara-csv';
 import { createEraflConventions } from './conventions';
 import { createEraflFamilyIndex } from './family-index';
+import {
+  ERAFL_LIBRARY_FUNCTIONS,
+  createEraflLibraryTable,
+} from './library-table';
 import { ERAFL_NAME_GLOSSARY } from './name-glossary';
 import { ERAFL_STATE_LINES } from './state-lines';
 import {
@@ -211,6 +215,14 @@ export function createEraflAdapterPlugin(): Plugin {
         get kojoInstructionTable() {
           return currentInstructionTable;
         },
+        /**
+         * 基础库函数中文化表（消费方：kojo-sugar 降糖 / 宿主反向本地化与正向补全）。
+         *
+         * **静态**表（与 `nameGlossary` 同理由）：它描述的是"eraFL 基础库有哪些函数、
+         * 中文该叫什么"，与具体工程无关；表内 171 条各带定义处证据，换盘由
+         * `tests/library-coverage.corpus.test.ts` 的真盘闸抓（覆盖率 + 逐条存在性）。
+         */
+        kojoLibraryTable: createEraflLibraryTable(ERAFL_LIBRARY_FUNCTIONS),
         /**
          * 文件名/目录名的日→中对照（消费方：`ProjectView` → `FileTree` 的 `gloss`）。
          *

@@ -30,6 +30,12 @@ export {
 } from './family-index';
 export { createEraflConventions, type EraflConventionDeps } from './conventions';
 export {
+  EMPTY_LIBRARY_TABLE,
+  ERAFL_LIBRARY_CONFLICTS,
+  ERAFL_LIBRARY_FUNCTIONS,
+  createEraflLibraryTable,
+} from './library-table';
+export {
   scaffoldEraflKojo,
   type EraflKojoScaffoldInput,
   type EraflKojoScaffoldResult,
