@@ -181,6 +181,9 @@ function createWatchHub(log) {
 /* ------------------------------- 全文检索 ------------------------------- */
 
 const SEARCH_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const SEARCH_CHUNK = 256 * 1024;
+/** 无换行的巨型行不许把「当前行缓冲」撑爆——内存上限 O(最长行) 的护栏 */
+const SEARCH_MAX_LINE_CHARS = 4 * 1024 * 1024;
 
 async function walkFiles(root, out, depthBudget) {
   let dirents;
@@ -200,37 +203,124 @@ async function walkFiles(root, out, depthBudget) {
   }
 }
 
-function decodeForSearch(buf) {
-  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
-    return new TextDecoder('utf-16le').decode(buf.subarray(2));
+/** 首 8KB 探 NUL（二进制判据；跨块累计到 8KB 为止） */
+function chunkHasNul(chunk, state) {
+  for (let i = 0; i < chunk.length && state.checked < 8192; i++, state.checked++) {
+    if (chunk[i] === 0) return true;
   }
-  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
-    return new TextDecoder('utf-16be').decode(buf.subarray(2));
-  }
-  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-    return new TextDecoder('utf-8').decode(buf.subarray(3));
-  }
-  return new TextDecoder('utf-8').decode(buf);
-}
-
-function looksBinary(buf) {
-  const n = Math.min(buf.length, 8192);
-  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
   return false;
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** BOM → 解码器（utf-8 / utf-16le / utf-16be；BOM 由解码器自行剥离） */
+function decoderFor(head) {
+  if (head.length >= 2 && head[0] === 0xff && head[1] === 0xfe) return new TextDecoder('utf-16le');
+  if (head.length >= 2 && head[0] === 0xfe && head[1] === 0xff) return new TextDecoder('utf-16be');
+  return new TextDecoder('utf-8');
+}
+
+/**
+ * 单文件**流式**扫描：逐块读盘、流式解码（`stream:true` 让多字节字符 / CRLF 跨块正确）、
+ * 按行消费即弃——内存上限 O(最长行)，不再整文件落字符串 + 整棵行数组
+ * （旧实现在 2325 文件 / 百 MB 级语料上被实测把宿压到 exit 13，2026-10-25 反馈）。
+ * onMatch 返回 true ⇒ 提前收束（命中上限）。返回 'ok'|'binary'|'too-large'|'unreadable'。
+ */
+function scanFileLines(file, matcher, onMatch) {
+  return new Promise((resolve) => {
+    let stream;
+    try {
+      stream = fss.createReadStream(file, { highWaterMark: SEARCH_CHUNK });
+    } catch {
+      resolve('unreadable');
+      return;
+    }
+    let decoder = null;
+    let carry = '';
+    let bytes = 0;
+    let lineNo = 0;
+    let done = false;
+    const binState = { checked: 0 };
+    const finish = (status) => {
+      if (done) return;
+      done = true;
+      stream.destroy();
+      resolve(status);
+    };
+    stream.on('data', (chunk) => {
+      if (done) return;
+      bytes += chunk.length;
+      if (chunkHasNul(chunk, binState)) {
+        finish('binary');
+        return;
+      }
+      if (decoder === null) decoder = decoderFor(chunk);
+      carry += decoder.decode(chunk, { stream: true });
+      for (;;) {
+        const nl = carry.indexOf('\n');
+        if (nl < 0) break;
+        let line = carry.slice(0, nl);
+        carry = carry.slice(nl + 1);
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        lineNo += 1;
+        matcher.lastIndex = 0;
+        const m = matcher.exec(line);
+        if (m && onMatch(lineNo, line, m)) {
+          finish('ok');
+          return;
+        }
+      }
+      if (bytes > SEARCH_MAX_FILE_BYTES || carry.length > SEARCH_MAX_LINE_CHARS) {
+        finish('too-large');
+        return;
+      }
+    });
+    stream.on('end', () => {
+      if (done) return;
+      carry += (decoder ?? (decoder = decoderFor(Buffer.alloc(0)))).decode(); // 流式收尾
+      if (carry !== '') {
+        let line = carry.endsWith('\r') ? carry.slice(0, -1) : carry;
+        matcher.lastIndex = 0;
+        const m = matcher.exec(line);
+        if (m) onMatch(lineNo + 1, line, m);
+      }
+      finish('ok');
+    });
+    stream.on('error', () => finish('unreadable'));
+  });
+}
+
+const yieldToEventLoop = () => new Promise((r) => setImmediate(r));
+
+/** 小并发池（保持逐项顺序；fn 抛错 ⇒ 整批 fail-loud，与逐个 await 同语义） */
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, Math.max(items.length, 1)) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i], i);
+      }
+    }),
+  );
+  return out;
+}
+
+/** 单次批量读的帧体上限：JSON 信封 + base64 会再放大 ~1.33×，超限 fail-loud 保护两端 */
+const READ_BATCH_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * `search_text` 的 Node 镜像（口径对齐 `bridge/search.ts` 的 SearchResult）：
  * 列 UTF-16 code unit 与 Monaco 同轴；命中行超长以命中为中心开窗（省略号含在串里）。
+ * `admitRead` 由宿实例注入（读域闸在 createDebugServer 的闭包里，这里不复制第二份真相）。
  */
-async function searchText(state, request) {
+async function searchText(state, request, admitRead) {
   const started = Date.now();
   const opts = request?.options ?? {};
   const roots = Array.isArray(request?.roots) ? request.roots.map(norm) : [];
   const query = String(request?.query ?? '');
   if (query === '') throw new HostError('检索词为空');
+  for (const root of roots) admitRead(root); // 读域闸补位：旧实现的 walkFiles 绕过了它
   const extensions = (opts.extensions ?? []).map((e) => String(e).toLowerCase().replace(/^\./, ''));
   let matcher;
   if (opts.isRegex) {
@@ -250,79 +340,67 @@ async function searchText(state, request) {
   let truncated = false;
   const skipped = { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0 };
   let filesScanned = 0;
-  const cancelled = () => state.cancelledSearches.has(Number(request.searchId));
+  const searchId = Number(request.searchId);
+  const cancelled = () => state.cancelledSearches.has(searchId);
+  let openEntry = null; // { path, matches }：当前文件的聚合（首命中才建，无命中零分配）
 
-  for (const root of roots) {
-    const list = [];
-    await walkFiles(root, list, 12);
-    for (const file of list) {
-      if (cancelled()) return finalize(true);
-      if (extensions.length > 0) {
-        const ext = path.extname(file).slice(1).toLowerCase();
-        if (!extensions.includes(ext)) {
-          skipped.filtered += 1;
-          continue;
+  try {
+    outer: for (const root of roots) {
+      const list = [];
+      await walkFiles(root, list, 12);
+      for (const file of list) {
+        if (cancelled()) return finalize(true);
+        if (extensions.length > 0) {
+          const ext = path.extname(file).slice(1).toLowerCase();
+          if (!extensions.includes(ext)) {
+            skipped.filtered += 1;
+            continue;
+          }
         }
-      }
-      filesScanned += 1;
-      if (filesScanned % 200 === 0) await sleep(0); // 让 cancel_search 有机会落进来
-      let buf;
-      try {
-        buf = await fs.readFile(file);
-      } catch {
-        skipped.unreadable += 1;
-        continue;
-      }
-      if (buf.length > SEARCH_MAX_FILE_BYTES) {
-        skipped.tooLarge += 1;
-        continue;
-      }
-      if (looksBinary(buf)) {
-        skipped.binary += 1;
-        continue;
-      }
-      const text = decodeForSearch(buf);
-      const lines = text.split(/\r\n|\r|\n/);
-      const matches = [];
-      for (let li = 0; li < lines.length; li++) {
-        const line = lines[li];
-        matcher.lastIndex = 0;
-        const m = matcher.exec(line);
-        if (!m) continue;
-        if (matches.length >= maxPerFile || totalMatches >= maxResults) {
-          truncated = true;
-          break;
-        }
-        const start = m.index;
-        const end = start + Math.max(1, m[0].length);
-        // 超长行开窗：以命中为中心 ±80 字符
-        let preview = line;
-        let s0 = start;
-        if (line.length > 200) {
-          const winStart = Math.max(0, start - 80);
-          const winEnd = Math.min(line.length, end + 80);
-          preview = `${winStart > 0 ? '…' : ''}${line.slice(winStart, winEnd)}${winEnd < line.length ? '…' : ''}`;
-          s0 = start - winStart + (winStart > 0 ? 1 : 0);
-        }
-        matches.push({
-          line: li + 1,
-          column: start + 1,
-          preview,
-          start: s0,
-          end: s0 + (end - start),
+        filesScanned += 1;
+        if ((filesScanned & 127) === 0) await yieldToEventLoop(); // 让 cancel_search 有机会落进来
+        let fileMatches = 0;
+        openEntry = null;
+        const status = await scanFileLines(file, matcher, (lineNo, line, m) => {
+          if (totalMatches >= maxResults || fileMatches >= maxPerFile) {
+            truncated = true;
+            return true;
+          }
+          const start = m.index;
+          const end = start + Math.max(1, m[0].length);
+          let preview = line;
+          let s0 = start;
+          if (line.length > 200) {
+            const winStart = Math.max(0, start - 80);
+            const winEnd = Math.min(line.length, end + 80);
+            preview = `${winStart > 0 ? '…' : ''}${line.slice(winStart, winEnd)}${winEnd < line.length ? '…' : ''}`;
+            s0 = start - winStart + (winStart > 0 ? 1 : 0);
+          }
+          openEntry ??= { path: file, matches: [] };
+          openEntry.matches.push({
+            line: lineNo,
+            column: start + 1,
+            preview,
+            start: s0,
+            end: s0 + (end - start),
+          });
+          fileMatches += 1;
+          totalMatches += 1;
+          return false;
         });
-        totalMatches += 1;
-        if (!opts.isRegex && !matcher.global) {
-          // 每行只取首个命中（与宿主「逐行首中」口径一致够用；正则带 g 时逐行也只取首中）
+        if (openEntry) files.push(openEntry);
+        if (status === 'binary') skipped.binary += 1;
+        else if (status === 'too-large') skipped.tooLarge += 1;
+        else if (status === 'unreadable') skipped.unreadable += 1;
+        if (totalMatches >= maxResults) {
+          truncated = true;
+          break outer;
         }
-      }
-      if (matches.length > 0) files.push({ path: file, matches });
-      if (totalMatches >= maxResults) {
-        truncated = true;
-        break;
       }
     }
-    if (truncated) break;
+  } finally {
+    // 生命周期收口：取消标记用完即清（旧实现只增不减，长会话里泄漏）
+    state.cancelledSearches.delete(searchId);
   }
   return finalize(false);
 
@@ -470,6 +548,9 @@ export async function createDebugServer(options) {
   export_file: async (args) => {
     // 对话框即授权的调试形态：落点固定在 sandbox/exports/<文件名>，返回全路径（界面会显示它）
     const name = path.basename(String(args?.fileName ?? 'export.bin'));
+    if (name === '' || name === '.' || name === '..') {
+      throw new HostError(`export_file 的文件名不合法：${JSON.stringify(String(args?.fileName ?? ''))}`);
+    }
     const dest = path.join(sandbox, 'exports', name);
     await fs.writeFile(dest, Buffer.from(String(args?.data ?? ''), 'base64'));
     state.recordedShellCalls.push({ cmd: 'export_file', path: dest });
@@ -517,23 +598,28 @@ export async function createDebugServer(options) {
     },
     read_files_raw: async (args) => {
       const paths = Array.isArray(args?.paths) ? args.paths.map(norm) : [];
-      const files = [];
-      for (const p of paths) {
+      const files = await mapPool(paths, 8, async (p) => {
         try {
           admitRead(p);
           const st = await fs.stat(p);
           const data = await fs.readFile(p);
-          files.push({ path: p, status: 'ok', mtimeMs: Math.round(st.mtimeMs), size: st.size, data });
+          return { path: p, status: 'ok', mtimeMs: Math.round(st.mtimeMs), size: st.size, data };
         } catch (err) {
           if (err instanceof HostError) throw err; // 域外是整批拒绝，不是逐文件失败
-          files.push({
+          return {
             path: p,
             status: err?.code === 'ENOENT' ? 'not-found' : 'read-error',
             mtimeMs: null,
             size: null,
             data: Buffer.alloc(0),
-          });
+          };
         }
+      });
+      const total = files.reduce((acc, f) => acc + (f.data?.length ?? 0), 0);
+      if (total > READ_BATCH_MAX_BYTES) {
+        throw new HostError(
+          `单次批量读 ${(total / 1048576).toFixed(1)} MiB 超上限 32 MiB（base64 信封会再放大）——拆小批`,
+        );
       }
       return { __b64: encodeReadFilesFrame(files).toString('base64') };
     },
@@ -562,7 +648,7 @@ export async function createDebugServer(options) {
       await fs.mkdir(path.dirname(to), { recursive: true });
       await fs.rename(from, to);
     },
-    search_text: async (args) => await searchText(state, args?.request),
+    search_text: async (args) => await searchText(state, args?.request, admitRead),
     show_in_folder: async (args) => {
       state.recordedShellCalls.push({ cmd: 'show_in_folder', path: String(args?.path ?? '') });
       if (state.recordedShellCalls.length > 200) state.recordedShellCalls.splice(0, state.recordedShellCalls.length - 200);
@@ -584,17 +670,16 @@ export async function createDebugServer(options) {
     },
     stat_files: async (args) => {
       const paths = Array.isArray(args?.paths) ? args.paths.map(norm) : [];
-      const out = [];
-      for (const p of paths) {
+      const out = await mapPool(paths, 16, async (p) => {
         try {
           admitRead(p);
           const st = await fs.stat(p);
-          out.push({ path: p, exists: true, mtimeMs: Math.round(st.mtimeMs), size: st.size });
+          return { path: p, exists: true, mtimeMs: Math.round(st.mtimeMs), size: st.size };
         } catch (err) {
           if (err instanceof HostError) throw err;
-          out.push({ path: p, exists: false, mtimeMs: null, size: null });
+          return { path: p, exists: false, mtimeMs: null, size: null };
         }
-      }
+      });
       return out;
     },
     stop_watch: async () => {
@@ -681,7 +766,9 @@ export async function createDebugServer(options) {
             json(res, 400, { ok: false, error: '/invoke 应答体不是 JSON' });
             return;
           }
-          const handler = commands[req2?.cmd];
+          const handler = Object.prototype.hasOwnProperty.call(commands, req2?.cmd)
+            ? commands[req2?.cmd]
+            : undefined;
           if (!handler) {
             json(res, 200, { ok: false, error: `调试宿没有实现命令：${String(req2?.cmd)}` });
             return;

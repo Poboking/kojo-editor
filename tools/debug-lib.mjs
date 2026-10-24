@@ -144,7 +144,8 @@ export class Cdp {
     this.ws.onmessage = (ev) => {
       const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
       if (msg.id !== undefined && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
+        const { resolve, reject, timer } = this.pending.get(msg.id);
+        clearTimeout(timer);
         this.pending.delete(msg.id);
         if (msg.error) reject(new Error(`CDP ${msg.error.message}`));
         else resolve(msg.result);
@@ -166,14 +167,14 @@ export class Cdp {
   send(method, params = {}) {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id);
-          reject(new Error(`CDP 命令超时：${method}`));
-        }
+      // 定时器必清（2026-10-25 自审）：成功路径不清会每条命令漏一个 30s timer＋闭包，
+      // 长会话里数万条 send 就是数万个待触发的空拒绝与内存滞留
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP 命令超时：${method}`));
       }, 30000);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
   close() {
@@ -228,7 +229,9 @@ export class Cdp {
  * 兜底会抓到别人的死页面，驱动全部落空还查不出原因。调用方对 null 自己显式处理。
  */
 export async function cdpPage(cdpPort, vitePort) {
-  const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
+  const list = await (
+    await fetch(`http://127.0.0.1:${cdpPort}/json`, { signal: AbortSignal.timeout(3000) })
+  ).json();
   const pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
   return pages.find((t) => String(t.url).includes(`:${vitePort}`)) ?? null;
 }

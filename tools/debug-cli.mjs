@@ -67,13 +67,23 @@ const die = (msg, code = 1) => {
 /* ------------------------------ 小工具 ------------------------------ */
 
 async function readSession() {
+  let raw;
   try {
-    return JSON.parse(await fsp.readFile(SESSION_FILE, 'utf-8'));
+    raw = await fsp.readFile(SESSION_FILE, 'utf-8');
   } catch {
     die(
       `本工作树没有在跑的调试会话（${SESSION_FILE} 不存在；多 agent 并发下会话按工作树隔离，` +
         `看到的只有自己这棵树）。先起一套：\n  node tools/debug-cli.mjs serve` +
         `\n（要接管别的会话：KOJO_DEBUG_SESSION=<那个 session.json> 或 KOJO_DEBUG_SESSION_NAME=<名>）`,
+      2,
+    );
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    die(
+      `会话文件损坏（JSON 解析失败：${err?.message ?? err}）：${SESSION_FILE}\n` +
+        `多半是 serve 与 stop 写入相撞——先 node tools/debug-cli.mjs stop 清掉再重开 serve`,
       2,
     );
   }
@@ -180,12 +190,28 @@ async function cmdServe(args) {
   children.push({ name: 'vite', proc: watchChild('vite', viteProc) });
   session.vitePid = viteProc.pid;
   let viteLog = '';
-  viteProc.stdout.on('data', (d) => { viteLog += d.toString(); process.stdout.write(`[vite] ${d}`); });
-  viteProc.stderr.on('data', (d) => { viteLog += d.toString(); process.stderr.write(`[vite!] ${d}`); });
+  // 封顶（自审 2026-10-25）：vite 长会话的日志原本无界累积——保住报错所需的尾巴即可
+  const appendViteLog = (tag, d) => {
+    viteLog += d.toString();
+    if (viteLog.length > 65536) viteLog = viteLog.slice(-32768);
+    process.stdout.write(`${tag} ${d}`);
+  };
+  viteProc.stdout.on('data', (d) => appendViteLog('[vite]', d));
+  viteProc.stderr.on('data', (d) => appendViteLog('[vite!]', d));
 
   console.log(`[cli] 起调试宿 :${session.serverPort} 与 vite :${session.vitePort} …`);
   const t0 = Date.now();
   while (Date.now() - t0 < 60000) {
+    // 快败（自审 2026-10-25）：起动窗内孩子就退出（端口被抢 / 依赖缺失）时，60s 干等
+    // 是假诊断——watchChild 已记退出码，当场带着读数收工
+    if (sessionExits.length > 0) {
+      const ex = sessionExits[0];
+      die(
+        `起动窗内 ${ex.name} 进程退出（code=${ex.code} signal=${ex.signal ?? '-'}）——` +
+          `多半是端口被占或依赖缺失；日志尾：\n${viteLog.slice(-800)}`,
+        1,
+      );
+    }
     if (!(await portOpen(session.serverPort)) || !(await portOpen(session.vitePort))) {
       await sleep(500);
       continue;
@@ -263,11 +289,20 @@ async function cmdServe(args) {
   await new Promise(() => {}); // 前台驻留（收尾走 SIGINT）
 }
 
-/** serve --record：挂一条常驻 CDP 连接，把 console / 异常 / 网络失败落到 .kojo-debug/console.log */
+/** serve --record：挂一条常驻 CDP 连接，把 console / 异常 / 网络失败落到会话目录 console.log */
 async function recordConsole(session) {
   const cdp = await cdpForSession(session);
   const out = fsp.createWriteStream(path.join(SESS_DIR, 'console.log'), { flags: 'a' });
-  const line = (s) => out.write(`[${new Date().toISOString()}] ${s}\n`);
+  let dropped = 0;
+  const line = (s) => {
+    // 背压护栏（自审 2026-10-25）：写不过来时丢行并计数——刷屏会话别把 serve 内存堆爆
+    if (out.writableLength > 8 * 1024 * 1024) {
+      dropped += 1;
+      if (dropped % 1000 === 1) out.write(`[${new Date().toISOString()}] ⚠ console 记录背压，已丢 ${dropped} 行\n`);
+      return;
+    }
+    out.write(`[${new Date().toISOString()}] ${s}\n`);
+  };
   await cdp.send('Runtime.enable');
   await cdp.send('Log.enable').catch(() => {});
   cdp.on('Runtime.consoleAPICalled', (p) => {
@@ -287,7 +322,11 @@ async function recordConsole(session) {
 
 async function cmdStatus() {
   const s = await readSession();
-  const serverOk = await fetch(`http://127.0.0.1:${s.serverPort}/health`).then((r) => r.ok).catch(() => false);
+  const serverOk = await fetch(`http://127.0.0.1:${s.serverPort}/health`, {
+    signal: AbortSignal.timeout(3000),
+  })
+    .then((r) => r.ok)
+    .catch(() => false);
   const viteOk = await portOpen(s.vitePort);
   let pagePhase = null;
   let cdpOk = false;
@@ -430,6 +469,7 @@ async function cmdOpenProject(args, dir, flags) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chooseDir: abs }),
+      signal: AbortSignal.timeout(3000),
     });
     // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
     //    （ghost=关闭并记「看过」，同一浏览器档案不会再弹）
