@@ -132,8 +132,8 @@ export function createKojoXmlPanel(deps: KojoXmlPanelDeps): (props: UIPanelProps
       return h(
         'div',
         { className: 'panel-kojo-nav panel-kojo-xml' },
-        h('div', { className: 'nav-empty dim' }, '口上 XML 索引尚未就绪'),
-        h('div', { className: 'nav-status dim' }, '正在扫描，或工程还没加载完成；可点「重新扫描」再试。'),
+        h('div', { className: 'nav-empty dim' }, '正在建立口上 XML 索引…'),
+        h('div', { className: 'nav-status dim' }, '首次打开或刚重载项目时要扫描几秒；若长时间没有条目，点「重新扫描」。'),
         note === '' ? null : h('div', { className: 'nav-status dim' }, note),
         refreshButton,
       );

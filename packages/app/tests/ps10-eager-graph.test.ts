@@ -298,11 +298,14 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     上述导出面调整（type 面，不进图的只有 barrel 那一段）。
     //   - −2.3 KB `eratw-adapter/plugin.ts`：dev 侧自合流点以来的增长，本线没有（差集减项）。
     // 合流后现读数 **3,093 KB / 210 文件**（闸 3,120 / 210）。
+    //   - 视觉批十四 +1 文件 `ui/window-title.ts`（窗口标题的唯一算法，App 开机即用）：
+    //     210 → **211 文件**，闸随之上抬 1；KB 面 3,093 → **3,096**（+3：App 里的三处接线），
+    //     KB 闸 3,120 不动（余量 24）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤210 文件 / ≤3,120 KB）`);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤211 文件 / ≤3,120 KB）`);
     expect(totalKb).toBeLessThanOrEqual(3_120);
-    expect(files.length).toBeLessThanOrEqual(210);
+    expect(files.length).toBeLessThanOrEqual(211);
   });
 
   /**

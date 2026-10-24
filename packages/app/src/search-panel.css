@@ -410,7 +410,10 @@
   color: var(--fg);
   font-size: var(--fs-1);
   line-height: 1.5;
-  overflow-wrap: anywhere;
+  /* 摘要固定一行（视觉批十四）：260px 里完整句会折成两行，完整读数改住 title */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .panel-search.ksp .ksp-summary.search-stopped {
   color: var(--amber);
@@ -419,6 +422,13 @@
   padding: 0 2px;
   color: var(--fg-dim);
   overflow-wrap: anywhere;
+}
+/* 边角说明合并行（视觉批十四）：范围 / 截断 / 陈旧 / 屏内行数原先各占一行 ⇒ 一行 + 省略号，
+   完整文本逐条在 title 里（换行分隔） */
+.panel-search.ksp .ksp-notes-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .panel-search.ksp .ksp-note-warn {
   color: var(--amber);

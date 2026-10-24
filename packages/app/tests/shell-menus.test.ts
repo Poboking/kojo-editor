@@ -796,7 +796,9 @@ describe('源码守门：面根与数据锚点必须在位', () => {
     // 面已经不在场——菜单永远弹不出来，而这条链路在任何纯函数测试里都不会红。
     const at = shell.indexOf('overlay-backdrop');
     expect(at).toBeGreaterThan(-1);
-    const closeAt = shell.indexOf('setActiveOverlay(null)', at);
+    // 视觉批十四起关闭走 `dismissOverlay()`（它先播 200ms 退场再卸，内部才置 null）；
+    // 判据不变：遮罩这一段必须先把「只认左键」挡掉，才有任何关闭调用。
+    const closeAt = shell.indexOf('dismissOverlay()', at);
     expect(closeAt).toBeGreaterThan(at);
     expect(shell.slice(at, closeAt)).toMatch(/isPrimaryButton|button\s*!==\s*0/);
   });

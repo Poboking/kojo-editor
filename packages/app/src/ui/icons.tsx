@@ -225,6 +225,15 @@ export const ICONS = {
     </>
   ),
 
+  /* --- 动作：更多（三段圆头短划 = 三个实心点；round cap 让 0.6 的线长读成圆点） --- */
+  'more-horizontal': (
+    <>
+      {stroke('M3.3 8h0.6')}
+      {stroke('M7.7 8h0.6')}
+      {stroke('M12.1 8h0.6')}
+    </>
+  ),
+
   /* --- 布局切换 --- */
   'layout-sidebar-left': (
     <>

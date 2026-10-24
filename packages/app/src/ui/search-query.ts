@@ -265,8 +265,21 @@ export function flattenSearchResults(
   return { rows: rows.slice(0, cap), hidden: rows.length - cap };
 }
 
-/** 结果摘要（停止态与完成态分开说——"停下来的结果"不该看起来像"搜完了"） */
+/**
+ * 结果摘要（停止态与完成态分开说——"停下来的结果"不该看起来像"搜完了"）。
+ *
+ * 260px 侧栏里一行只放得下三个读数（视觉批十四实测：完整句会折成两行，连同两条边角
+ * 说明一共四行 11px 的墙）⇒ 上屏用**紧凑档**，完整句（含扫描文件数）走
+ * `searchSummaryDetail` 挂悬停。
+ */
 export function searchSummaryText(r: SearchResult): string {
+  const prefix = r.cancelled ? '已停止：' : '';
+  const seconds = (r.elapsedMs / 1000).toFixed(1);
+  return `${prefix}${r.totalMatches} 条 · ${r.files.length} 文件 · ${seconds}s`;
+}
+
+/** 摘要的完整句（悬停详情）：扫描面那一段只在 tooltip 里出现 */
+export function searchSummaryDetail(r: SearchResult): string {
   const prefix = r.cancelled ? '已停止：' : '';
   const seconds = (r.elapsedMs / 1000).toFixed(1);
   return `${prefix}${r.totalMatches} 条结果 · ${r.files.length} 个文件 · 扫描 ${r.filesScanned} 个文件 · ${seconds}s`;

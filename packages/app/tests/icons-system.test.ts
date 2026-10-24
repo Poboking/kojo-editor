@@ -60,8 +60,8 @@ describe('ICON_SIZES · 四档刻度是唯一口径', () => {
 });
 
 describe('家族一致 · 每枚图标都是同一口径的 SVG', () => {
-  it('表体 42 枚（扩表请有意识地抬这个数字；R1 批补入 chevron-left，40→41；收尾批补入 save-all，41→42）', () => {
-    expect(names.length).toBe(42);
+  it('表体 43 枚（扩表请有意识地抬这个数字；R1 批补入 chevron-left，40→41；收尾批补入 save-all，41→42；视觉批十四补入 more-horizontal，42→43）', () => {
+    expect(names.length).toBe(43);
   });
 
   for (const name of names) {
