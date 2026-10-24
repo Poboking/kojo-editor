@@ -1,7 +1,7 @@
 # AGENTS.md — kojo-editor 协作总入口
 
 > 面向 eraTW（及后续 era 系游戏）口上作者的结构感知编辑器。
-> pnpm monorepo：Tauri2 壳（Rust 只做 IO 原语）+ React 19 + Monaco；内核零游戏知识；一切皆插件（20 插件）。
+> pnpm monorepo：Tauri2 壳（Rust 只做 IO 原语）+ React 19 + Monaco；内核零游戏知识；一切皆插件（22 插件）。
 > 本文件 = 一切 agent 的第一入口。架构全景 `docs/ARCHITECTURE.md`；用户面 `docs/USER-GUIDE.md`。
 
 ## 一、必读顺序（按需，别全读）
@@ -27,7 +27,7 @@
 pnpm install
 pnpm test                 # 全量（当前基线见 STATE.md；跑全量不要设 KOJO_SMOKE_PROJECT）
 pnpm typecheck            # root；app 另跑：pnpm --filter @kojo/app typecheck（两套都算数）
-pnpm audit:decoupling     # 必须 ✅（20 插件；A–D 四项）
+pnpm audit:decoupling     # 必须 ✅（22 插件；A–D 四项）
 # 改了 Rust 才加跑（cargo 须经 node 起，Git-Bash TMP 坑见 PITFALLS）：
 node -e "require('child_process').execSync('cargo test --lib',{cwd:'packages/app/src-tauri',stdio:'inherit'})"
 # 真实语料集成冒烟（语料目录名会变、也可能整目录暂离 ⇒ **先 `node tools/corpus.mjs --print` 确认 rc=0**，
