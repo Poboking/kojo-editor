@@ -100,7 +100,7 @@ import { revealLocationOf } from '../../monaco/reveal-position';
 // K2 batch-4 + 入口 A（2026-10-24）：2.0 语言服务的 adapter 注入源。**不再**静态引用
 // 具体 adapter——改从宿主组合根（bootstrap）的登记簿按当前项目现取（见该处头注）。
 // 语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由组合根注入。
-import { kojo2AdapterForProject } from '../../bootstrap';
+import { kojo2AdapterForProject, kojo2SurfaceForProject } from '../../bootstrap';
 import type { Notify } from '../NotificationCenter';
 
 /** 首个编辑器实例创建只打一次 boot 探针（模块存活期内一次，与实例退场无关） */
@@ -590,6 +590,11 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       markerHost: monaco,
       severitySource: monaco,
       notify,
+      // 入口 D（2026-10-25）：诊断要的 adapter + backend 也从组合根按项目现取——与上面
+      // 语言服务同一个登记簿、同一把键（v1 `gameId`）。此前诊断链写死 eraTW，
+      // eraFL 工程拿到的是 eraTW 的落点规则（不报错、只是错）。取不到两面 ⇒ 诊断入口抛错，
+      // 问题面板与 toast 亮灯，而不是"这份文件干净"。
+      surfaceFor: kojo2SurfaceForProject,
       // K2 batch-5：把这一轮编译的成品留下（预览唯一的读入口），并通知预览刷新 / 卸载
       compileCache: kojo2CompileCache,
       onCompile: (filePath) => {

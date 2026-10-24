@@ -44,6 +44,8 @@ export * from './presentation.js';
 export * from './storage.js';
 export * from './program.js';
 export * from './capabilities.js';
+// 入口 D：落点面（`KojoEmitBackend` + 落点 profile）。纯函数/纯数据，零 IO。
+export * from './backend.js';
 
 /**
  * 游戏指纹：引擎 / CSV / ERH / 汉化版本四段。换盘或换汉化包时 digest 必须变化，

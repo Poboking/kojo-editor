@@ -3,8 +3,13 @@ import type { Plugin } from '@kojo/plugin-api';
 import { createWorkerTransport, WellKnownServices } from '@kojo/plugin-api';
 import type { ConditionExtractorService, ConventionLinterService } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { createEratwAdapterPlugin, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
-import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
+import { createEratwAdapterPlugin, createEratwEmitBackend, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
+import type {
+  EmitFailure,
+  GameAdapter as Kojo2GameAdapter,
+  KojoEmitBackend,
+  KojoExprText,
+} from '@kojo/kojo-core';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
 import { computeTasks } from './compute-tasks';
@@ -54,6 +59,88 @@ export function kojo2AdapterForProject(
 
 // eraTW：常驻 adapter（欢迎页 / 无项目态就要它），模块加载即进表。
 registerKojo2Adapter(ERATW.gameId, ERATW_GAME_ADAPTER);
+
+/* ============================== 2.0 backend 登记簿（入口 D） ============================== */
+
+/**
+ * `KojoEmitBackend` 工厂的注入面 = **宿主端口 + 文件级上下文**。
+ *
+ * 为什么是工厂而不是成品 backend：backend 里有一腿是宿主注入的
+ * （`compileExpression`：core 给的 2.0 表达式源切片 → 引擎表达式），而这条管线住在
+ * 语言层（v1 `lowerExpression` 一族）。若把成品 backend 存进表，组合根就得自己
+ * 实现表达式编译——那是把语言策略塞进游戏登记簿。工厂把两侧切干净：
+ * **组合根说"哪个游戏用哪个 backend"，宿主说"表达式怎么编译"**。
+ */
+export interface Kojo2BackendDeps {
+  /** **必填**：2.0 表达式源切片 → ERB 表达式；表达不了返回 `EmitFailure`（fail-closed） */
+  readonly compileExpression: (expr: KojoExprText) => string | EmitFailure;
+  /**
+   * 文件级角色号（按 `kojoDir` 前缀推；推不到 ⇒ 不传）。
+   * eraTW 一族把它闭进事件头模板；eraFL 的口上在 XML 侧、不用它——**不用的一方忽略**。
+   */
+  readonly charNo?: string;
+}
+
+/** 游戏 → 落点实现（键与 adapter 表同一把：v1 `gameId`） */
+export type Kojo2BackendFactory = (deps: Kojo2BackendDeps) => KojoEmitBackend;
+
+/**
+ * v1 `gameId` → backend 工厂（宿主组合根私有）。
+ *
+ * 与 {@link kojo2Adapters} **同一把键**、同一条口径：查不到 ⇒ `null`，
+ * **绝不回退到"某一枚"**。理由与 adapter 表逐字同源——用错游戏的事实不报错，
+ * 只是"看起来对、其实属于另一个游戏"。此前诊断链写死 eraTW 后端，打开 eraFL 工程
+ * 时波浪线是拿 eraTW 的落点规则算出来的；本表就是那个洞的堵法。
+ */
+const kojo2Backends = new Map<string, Kojo2BackendFactory>();
+
+/** 登记一枚 backend 工厂（重复登记以最后一次为准；插件装载后由组合根调用） */
+export function registerKojo2Backend(gameId: string, factory: Kojo2BackendFactory): void {
+  kojo2Backends.set(gameId, factory);
+}
+
+/** 按当前项目取 backend 工厂：没开项目 / 没有 `adapterId` / 该游戏没有落点面 ⇒ `null` */
+export function kojo2BackendFactoryForProject(
+  project: { readonly adapterId?: string } | null,
+): Kojo2BackendFactory | null {
+  const id = project?.adapterId;
+  if (id === undefined || id === null) return null;
+  return kojo2Backends.get(id) ?? null;
+}
+
+/** 一份 2.0 诊断/降糖需要的**两面**：游戏事实（adapter）+ 落点（backend） */
+export interface Kojo2GameSurface {
+  readonly adapter: Kojo2GameAdapter;
+  readonly backend: KojoEmitBackend;
+}
+
+/**
+ * 按当前项目取 2.0 的**两面**；任一面缺席 ⇒ `null`。
+ *
+ * **两面必须同源**：adapter 说"这个游戏有哪些事件/符号"，backend 说"它们落成什么字节"。
+ * 一半对一半错比两半都缺更危险——core 会拿 A 游戏的事件目录去问 B 游戏的落点，
+ * 产出一个"语法全对、语义属于另一个游戏"的 ERB。所以本函数只在两表**同一把键**
+ * 都命中时才给结果，不做任何跨表拼装。
+ */
+export function kojo2SurfaceForProject(
+  project: { readonly adapterId?: string } | null,
+  deps: Kojo2BackendDeps,
+): Kojo2GameSurface | null {
+  const adapter = kojo2AdapterForProject(project);
+  if (adapter === null) return null;
+  const factory = kojo2BackendFactoryForProject(project);
+  if (factory === null) return null;
+  return { adapter, backend: factory(deps) };
+}
+
+// eraTW：常驻落点面。`charNo` 只在非空时注入（空串会让事件头模板拼出 `_K` 空尾，
+// 那是"看起来有个函数名"的假产物；eraTW backend 对缺 charNo 是 fail-closed）。
+registerKojo2Backend(ERATW.gameId, (deps) =>
+  createEratwEmitBackend({
+    compileExpression: deps.compileExpression,
+    ...(deps.charNo !== undefined && deps.charNo.length > 0 ? { charNo: deps.charNo } : {}),
+  }),
+);
 
 /**
  * 应用引导：装配内核 + 插件清单。
@@ -163,6 +250,14 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
   const eraflKojo2Adapter = (eraflAdapter as { ERAFL_GAME_ADAPTER?: Kojo2GameAdapter }).ERAFL_GAME_ADAPTER;
   if (eraflKojo2Adapter !== undefined) {
     registerKojo2Adapter(eraflAdapter.ERAFL.gameId, eraflKojo2Adapter);
+  }
+  // eraFL 的落点面（入口 D）：同一条存在性卫语句口径——包导出 `createEraflEmitBackend`
+  // 就当场进表。**adapter 与 backend 分开卫住**：只有一半时 `kojo2SurfaceForProject`
+  // 仍给 `null`（宁缺勿错），不会出现"eraTW 的事件目录 + eraFL 的落点"这种混搭。
+  const eraflEmitBackend = (eraflAdapter as { createEraflEmitBackend?: Kojo2BackendFactory })
+    .createEraflEmitBackend;
+  if (eraflEmitBackend !== undefined) {
+    registerKojo2Backend(eraflAdapter.ERAFL.gameId, eraflEmitBackend);
   }
   return [
     // eraFL 领域知识（第三个 adapter；`FLconfig.xml` 特征与另两个无交集 ⇒ 注册顺序不影响判定）。

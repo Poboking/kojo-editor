@@ -38,11 +38,17 @@
  * ② 经注入的 `notify` 发一条 `error` toast（宿主 UI 的通知中心，非新造 UI）。
  * 两条都有，缺一条都会让"屏上什么都没有"被读成"这份文件是干净的"。
  *
- * ## 装配口径
+ * ## 装配口径（入口 D 改）
  *
- * adapter / backend 按 eraTW 的既有装配方式构造：`ERATW_GAME_ADAPTER` +
- * `createEratwEmitBackend(...)`。两处**已知缺口**写在 {@link createEratwKojo2Diagnose} 上：
- * 表达式端口暂用恒等透传（v1 `lowerExpression` 尚未接进 2.0 面）、角色号只能从
+ * adapter / backend **不在本文件里挑**：两者都由组合根的两张登记簿按
+ * `project.adapterId` 现取（`bootstrap.ts::kojo2SurfaceForProject`），本文件只接一个
+ * `surfaceFor` 端口。此前写死 `ERATW_GAME_ADAPTER` + `createEratwEmitBackend`——
+ * 打开 eraFL 工程时波浪线是拿 eraTW 的落点规则算出来的，不报错、只是错。
+ * 取不到两面 ⇒ **抛错**（走 {@link KOJO2_DIAGNOSTICS_FAILURE_CODE} 那条可见面），
+ * 不给空诊断（空诊断会被读成"这份文件干净"）。
+ *
+ * 剩余两处**已知缺口**写在 {@link createProjectKojo2Diagnose} 上：表达式端口暂用恒等
+ * 透传（v1 `lowerExpression` 尚未接进 2.0 面）、角色号只能从
  * `GameProject.charaIndex[].kojoDir` 的前缀推（推不到时 backend 会如实报
  * `unit/backend-incomplete`，不静默造一个假函数名）。
  */
@@ -50,7 +56,11 @@ import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type { GameProject } from '@kojo/plugin-api';
 import { isPathUnder, pathKey } from '@kojo/plugin-api';
-import { createEratwEmitBackend, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 诊断接线要具体 adapter 的 2.0 数据/backend 面；与 bootstrap.ts 组合根同一豁免口径
+// 只吃**契约类型**（`GameAdapter` / `KojoEmitBackend`），不吃任何具体 adapter：
+// 入口 D（2026-10-25）之前这里静态 import 了 eraTW 的 `ERATW_GAME_ADAPTER` +
+// `createEratwEmitBackend`，于是打开 eraFL 工程时波浪线是拿 eraTW 的落点规则算的
+// ——不报错、只是错。现在两面都从组合根（`bootstrap.ts` 的两张登记簿）按项目现取。
+import type { EmitFailure, GameAdapter, KojoEmitBackend, KojoExprText } from '@kojo/kojo-core';
 import {
   KOJO2_DIAGNOSTICS_SOURCE,
   createKojo2Diagnostics,
@@ -83,58 +93,103 @@ export const KOJO2_DIAGNOSTICS_FAILURE_CODE = 'kojo2/diagnostics-unavailable';
 
 /* ============================== adapter / backend 装配 ============================== */
 
-/** `createEratwKojo2Diagnose` 的依赖（全部可注入，测试不需要真 adapter） */
-export interface Kojo2DiagnoseFactoryOptions {
-  /** Monaco 的 severity 表（宿主传真实例；测试传同形状替身） */
-  readonly severitySource: Kojo2MarkerSeveritySource;
-  /** 文件路径 → 角色号（缺省 = 不注入，`# 机` 会按 backend 的 fail-closed 如实报缺） */
-  readonly charNoForPath?: (filePath: string) => string | undefined;
+/**
+ * 一份 2.0 诊断需要的**两面**（与 `bootstrap.ts` 的 `Kojo2GameSurface` 同形）。
+ *
+ * 为什么不在这里直接 import 某个 adapter：那是入口 A 修掉的 bug 形态——诊断链写死
+ * eraTW 时，打开 eraFL 工程算出来的波浪线拿的是 eraTW 的落点规则，**不报错、只是错**。
+ * 具体游戏由组合根（`kojo2SurfaceForProject`）按 `project.adapterId` 现取，本文件只
+ * 负责"拿到两面之后怎么跑一轮诊断"。
+ */
+export interface Kojo2DiagnoseSurface {
+  readonly adapter: GameAdapter;
+  readonly backend: KojoEmitBackend;
+}
+
+/** 宿主注入的表达式端口签名（`compileTarget` 等可选项由 backend 自己收口） */
+export interface Kojo2SurfaceDeps {
+  readonly compileExpression: (expr: KojoExprText) => string | EmitFailure;
+  /** 文件级角色号（推不到 ⇒ 不传；不用它的 backend 忽略） */
+  readonly charNo?: string;
 }
 
 /**
- * **表达式端口**：恒等透传。
+ * 按项目取两面的端口 = `bootstrap.ts::kojo2SurfaceForProject` 的形状。
+ *
+ * 参数收结构最小投影（`{ adapterId?: string } | null`）：`GameProject | null` 天然可传，
+ * 测试不必造整枚项目，也不必为了"换一枚 adapter"去改宿主。
+ */
+export type Kojo2SurfaceResolver = (
+  project: { readonly adapterId?: string } | null,
+  deps: Kojo2SurfaceDeps,
+) => Kojo2DiagnoseSurface | null;
+
+/**
+ * **表达式端口**：恒等透传（导出给宿主装配用：组合根那张表只差这一个端口）。
  *
  * core 交给 backend 的是表达式源切片（已由 core 做完语法/符号校验）；backend 只负责把它
  * 落成 ERB 表达式。v1 的 `lowerExpression` 尚未接进 2.0 面（切流批的事），所以本批用
  * 恒等透传：**诊断仍然成立**（语法/结构/事件目录/存储期等判据都在 core 与 backend 的
  * 其它腿上），缺的只是"表达式内容在产物里的最终形状"——那不影响波浪线的位置与条数。
  */
-function identityCompileExpression(expr: { readonly text: string }): string {
+export function kojo2IdentityCompileExpression(expr: { readonly text: string }): string {
   return expr.text;
 }
-
-/** backend 按角色号缓存（`createEratwEmitBackend` 会把 charNo 闭包进事件头模板） */
-const BACKEND_CACHE_LIMIT = 32;
 
 /** 同步诊断入口（`createKojo2Diagnostics` 本身是同步纯计算；异步化留给将来的 worker） */
 export type Kojo2SyncDiagnoseFn = (input: Kojo2DiagnosticsInput) => Kojo2DiagnosticsResult;
 
+/** `createProjectKojo2Diagnose` 的依赖（组合根给的两面解析 + Monaco severity 表） */
+export interface Kojo2ProjectDiagnoseOptions {
+  /** Monaco 的 severity 表（宿主传真实例；测试传同形状替身） */
+  readonly severitySource: Kojo2MarkerSeveritySource;
+  /** **当前项目**（每次诊断现取：项目可开可关，不缓存上一个项目的事实） */
+  readonly project: () => GameProject | null;
+  /** 组合根的两面解析（生产传 `kojo2SurfaceForProject` 函数本身） */
+  readonly surfaceFor: Kojo2SurfaceResolver;
+}
+
 /**
- * 造 eraTW 诊断入口。
+ * 造**按项目选 adapter + backend** 的诊断入口（入口 D 的接线面）。
  *
- * 每次诊断按 `filePath` 现取角色号（项目可切换、文件可改名），backend 按角色号缓存
- * （有界：角色号种类远小于上限；到顶整体清空重来，绝不无界增长）。
+ * ## 为什么取不到两面就抛错，而不是给一份空诊断
+ *
+ * `kojo2-problem-sync` 的 `onFailure` 专治这种情况：清旧波浪线 → 问题面板写
+ * `kojo2/diagnostics-unavailable` → 通知中心发 toast。返回"空诊断"会被读成
+ * **这份文件是干净的**——那正是本仓红线 4 禁止的静默降级。抛错则三种可见面齐亮，
+ * 作者看到的是"这个工程还没有 2.0 诊断面"，而不是一片虚假的绿。
+ *
+ * ## 为什么不做 backend 缓存
+ *
+ * backend 构造是纯数据整形（`eraflLoweringProfile()` / `resolveEratwProfile()` 都是几枚
+ * 冻结对象），与同一轮里每拍新建 `createKojo2Diagnostics(...).diagnose` 同阶；而缓存要
+ * 按 `(gameId, charNo)` 建键，**项目中途换游戏时旧 backend 就是错误事实**。这段路
+ * 每 200ms 才走一次，省不下什么，却要背一条失效判据——不设缓存。
  */
-export function createEratwKojo2Diagnose(options: Kojo2DiagnoseFactoryOptions): Kojo2SyncDiagnoseFn {
-  const backends = new Map<string, ReturnType<typeof createEratwEmitBackend>>();
-  const backendFor = (charNo: string | undefined): ReturnType<typeof createEratwEmitBackend> => {
-    const key = charNo ?? '';
-    const cached = backends.get(key);
-    if (cached !== undefined) return cached;
-    const backend = createEratwEmitBackend({
-      compileExpression: identityCompileExpression,
+export function createProjectKojo2Diagnose(options: Kojo2ProjectDiagnoseOptions): Kojo2SyncDiagnoseFn {
+  return (input) => {
+    let project: GameProject | null = null;
+    try {
+      project = options.project();
+    } catch {
+      // 取不到项目 = 没有两面（下面统一抛）；不在诊断链里猜。
+      project = null;
+    }
+    const charNo = charNoForProjectPath(project, input.filePath);
+    const surface = options.surfaceFor(project, {
+      compileExpression: kojo2IdentityCompileExpression,
       ...(charNo !== undefined && charNo.length > 0 ? { charNo } : {}),
     });
-    if (backends.size >= BACKEND_CACHE_LIMIT) backends.clear();
-    backends.set(key, backend);
-    return backend;
-  };
-  return (input) => {
-    const charNo = options.charNoForPath?.(input.filePath);
+    if (surface === null) {
+      throw new Error(
+        `当前项目没有 2.0 诊断面（adapterId = ${project?.adapterId ?? '（无项目）'}）：` +
+          '该游戏未登记 2.0 adapter 或 backend，本文件不做 2.0 诊断（不回退到其它游戏的事实）。',
+      );
+    }
     return createKojo2Diagnostics({
       monaco: options.severitySource,
-      adapter: ERATW_GAME_ADAPTER,
-      backend: backendFor(charNo),
+      adapter: surface.adapter,
+      backend: surface.backend,
     }).diagnose(input);
   };
 }
@@ -148,9 +203,15 @@ export function createEratwKojo2Diagnose(options: Kojo2DiagnoseFactoryOptions): 
  */
 export function charNoForProjectPath(project: GameProject | null, filePath: string): string | undefined {
   if (project === null) return undefined;
+  // 契约上 `charaIndex` 是必填，但 `kernel.project.current()` 交给这里的是**运行期对象**：
+  // 工程正在装载时它可能还是半成品。少了索引就让"这条链路抛 TypeError"顶掉真正的诊断
+  // 结论（`onFailure` 会把 `Cannot read properties of undefined` 原样抖给作者），
+  // 而正确语义是"推不出角色号"——由 backend 的 fail-closed 如实报缺。
+  const index: GameProject['charaIndex'] | undefined = project.charaIndex;
+  if (index === undefined || index === null || typeof index.values !== 'function') return undefined;
   let bestLength = -1;
   let found: string | undefined;
-  for (const chara of project.charaIndex.values()) {
+  for (const chara of index.values()) {
     if (typeof chara.kojoDir !== 'string' || chara.kojoDir.length === 0) continue;
     // 归属判据（分隔符 / 大小写）走契约的 `isPathUnder`，不在这里手写 startsWith——
     // win32 归一化后的分隔符是 `\`，拿 `/` 拼前缀在 Windows 上会恒定判不上。
@@ -165,14 +226,24 @@ export function charNoForProjectPath(project: GameProject | null, filePath: stri
 }
 
 /** 从 kernel 现取项目（项目可开可关；每次诊断再读，不缓存上一个项目的事实） */
-function charNoResolverForKernel(kernel: Kernel): (filePath: string) => string | undefined {
-  return (filePath) => {
-    try {
-      return charNoForProjectPath(kernel.project.current(), filePath);
-    } catch {
-      return undefined;
-    }
-  };
+function projectOfKernel(kernel: Kernel): GameProject | null {
+  try {
+    return kernel.project.current();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 宿主没注入两面解析时的诊断入口：**必抛**。
+ *
+ * 不返回空诊断——那会让问题面板显示"这份文件干净"。抛错走 `onFailure`，三种可见面
+ * （清旧波浪线 / 面板条目 / toast）齐亮，缺了哪一环都是静默降级。
+ */
+function unregisteredSurfaceDiagnose(): never {
+  throw new Error(
+    '宿主没有注入 2.0 两面解析（`surfaceFor`）：本文件不做 2.0 诊断，也不回退到任何游戏的默认事实。',
+  );
 }
 
 /* ============================== 一次编译两处消费（K2-EDITOR-MOUNT ①） ============================== */
@@ -333,8 +404,14 @@ export interface Kojo2ProblemWiringOptions {
   readonly severitySource: Kojo2MarkerSeveritySource;
   /** 宿主通知中心（失败可见）；缺省 = 只写问题面板 + console.error */
   readonly notify?: (notice: NoticeInput) => void;
-  /** 替换诊断入口（测试 / 将来 worker）；缺省 = {@link createEratwKojo2Diagnose} */
+  /** 替换诊断入口（测试 / 将来 worker）；缺省 = 由 {@link surfaceFor} 现造 */
   readonly diagnose?: Kojo2DiagnoseFn;
+  /**
+   * 按当前项目取 2.0 两面（adapter + backend）。生产传组合根的
+   * `kojo2SurfaceForProject` 函数本身；**不给** ⇒ 诊断入口一律抛错（fail-visible：
+   * 面板写 `kojo2/diagnostics-unavailable` + toast），绝不回退到某个游戏的默认事实。
+   */
+  readonly surfaceFor?: Kojo2SurfaceResolver;
   readonly debounceMs?: number;
   readonly scheduler?: Kojo2DebounceScheduler;
   /** 问题面板写入端（缺省 = `problem-store.setProblems`） */
@@ -393,10 +470,13 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
   const debounceMs = Math.max(0, Math.trunc(options.debounceMs ?? KOJO2_PROBLEM_DEBOUNCE_MS));
   const diagnose =
     options.diagnose ??
-    createEratwKojo2Diagnose({
-      severitySource: options.severitySource,
-      charNoForPath: charNoResolverForKernel(kernel),
-    });
+    (options.surfaceFor === undefined
+      ? unregisteredSurfaceDiagnose
+      : createProjectKojo2Diagnose({
+          severitySource: options.severitySource,
+          project: () => projectOfKernel(kernel),
+          surfaceFor: options.surfaceFor,
+        }));
 
   const notify = (notice: NoticeInput): void => {
     if (options.notify) {

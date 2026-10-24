@@ -19,9 +19,10 @@ import { KOJO2_PROBLEM_MARKER_OWNER, type Kojo2DiagnoseFn } from '../src/ui/kojo
 import {
   KOJO2_DIAGNOSTICS_FAILURE_CODE,
   charNoForProjectPath,
-  createEratwKojo2Diagnose,
+  createProjectKojo2Diagnose,
   installKojo2ProblemWiring,
   kojo2ProblemsOf,
+  type Kojo2SurfaceResolver,
 } from '../src/ui/kojo2-problem-wiring';
 import { kojo2OwnsDiagnostics } from '../src/ui/kojo2-diagnostics-gate';
 import type { EditorProblem } from '../src/ui/problem-store';
@@ -35,7 +36,7 @@ afterEach(() => {
 
 const SEVERITY = { Hint: 1, Info: 2, Warning: 4, Error: 8 } as const;
 const SEVERITY_SOURCE = { MarkerSeverity: SEVERITY } as unknown as Parameters<
-  typeof createEratwKojo2Diagnose
+  typeof createProjectKojo2Diagnose
 >[0]['severitySource'];
 
 function stubFlag(on: boolean): void {
@@ -401,7 +402,7 @@ function projectWithCharas(): GameProject {
   } as unknown as GameProject;
 }
 
-describe('adapter / backend 装配（eraTW）', () => {
+describe('adapter / backend 装配（按项目取两面 · 入口 D 改）', () => {
   it('角色号按 `kojoDir` 最长前缀推；不在任何口上目录下 = undefined', () => {
     const project = projectWithCharas();
     expect(charNoForProjectPath(project, 'D:/game/口上/12/场景.kojo2')).toBe('12');
@@ -410,16 +411,52 @@ describe('adapter / backend 装配（eraTW）', () => {
     expect(charNoForProjectPath(null, 'D:/game/口上/12/x.kojo2')).toBeUndefined();
   });
 
-  it('带 charNo 时 `# 机` 能装配（无 error）；缺 charNo 时 backend 如实 fail-closed', () => {
-    const withChar = createEratwKojo2Diagnose({ severitySource: SEVERITY_SOURCE, charNoForPath: () => '12' });
-    const ok = withChar({ source: '# 机 指令 310\n', filePath: 'D:/game/口上/12/x.kojo2' });
+  it('组合根解析出的两面被原样用掉：带 charNo 能装配 `# 机`，缺 charNo 由 backend 如实 fail-closed', async () => {
+    // 这里只验"接线把两面送到了 core"，不验 eraTW 的落点细节（那是 eraTW 自己的测试）。
+    // 用真 eraTW backend 走一遍：它是唯一同时有 `charNo` 语义与 `# 机` 落点的实现，
+    // 换成桩就测不到"charNo 有没有被送进去"这件事。
+    const { createEratwEmitBackend, ERATW_GAME_ADAPTER } = await import('@kojo/plugin-eratw-adapter');
+    const project = projectWithCharas();
+    const surfaceFor: Kojo2SurfaceResolver = (_project, deps) => ({
+      adapter: ERATW_GAME_ADAPTER,
+      backend: createEratwEmitBackend({
+        compileExpression: (expr) => expr.text,
+        ...(deps.charNo !== undefined ? { charNo: deps.charNo } : {}),
+      }),
+    });
+
+    const diagnose = createProjectKojo2Diagnose({
+      severitySource: SEVERITY_SOURCE,
+      project: () => project,
+      surfaceFor,
+    });
+    const ok = diagnose({ source: '# 机 指令 310\n', filePath: 'D:/game/口上/12/x.kojo2' });
     expect(ok.error).toBeNull();
     expect(ok.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
 
-    const withoutChar = createEratwKojo2Diagnose({ severitySource: SEVERITY_SOURCE });
-    const failed = withoutChar({ source: '# 机 指令 310\n', filePath: 'D:/p/x.kojo2' });
+    const failed = diagnose({ source: '# 机 指令 310\n', filePath: 'D:/p/x.kojo2' });
     expect(failed.error).toBeNull();
     expect(failed.errorCount).toBeGreaterThan(0);
     expect(failed.diagnostics.some((item) => String(item.code).startsWith('unit/'))).toBe(true);
+  });
+
+  it('取不到两面 ⇒ **抛错**（不回退到任何游戏的事实、不给空诊断）', () => {
+    const diagnose = createProjectKojo2Diagnose({
+      severitySource: SEVERITY_SOURCE,
+      project: () => ({ adapterId: 'eraakumamaid' } as unknown as GameProject),
+      surfaceFor: () => null,
+    });
+    expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/没有 2\.0 诊断面/);
+  });
+
+  it('取项目时 kernel 抛错 ⇒ 按"没有项目"处理（同样抛错，不静默）', () => {
+    const diagnose = createProjectKojo2Diagnose({
+      severitySource: SEVERITY_SOURCE,
+      project: () => {
+        throw new Error('kernel disposed');
+      },
+      surfaceFor: () => null,
+    });
+    expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/无项目/);
   });
 });

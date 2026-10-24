@@ -15,6 +15,15 @@
 export { createEraflAdapterPlugin } from './plugin';
 export { ERAFL } from './constants';
 export { ERAFL_GAME_ADAPTER, ERAFL_GAME_FINGERPRINT } from './kojo2';
+// 入口 D：2.0 落点面。宿主组合根（`bootstrap.ts`）按 v1 gameId 把工厂登记进
+// backend 登记簿，诊断/预览链按当前项目现取——本包本身不认识宿主。
+export {
+  createEraflEmitBackend,
+  eraflLoweringProfile,
+  type EraflCompileExpression,
+  type EraflCompileTarget,
+  type EraflEmitDeps,
+} from './kojo2';
 export {
   charaNameFromFileName,
   parseCharaCsv,
