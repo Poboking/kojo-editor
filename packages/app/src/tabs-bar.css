@@ -1,5 +1,6 @@
 /* ============================================================================
- * 视觉批十一 L16 切片：标签栏溢出 affordance（滚动箭头 + 「列出全部标签」▾）
+ * 视觉批十一 L16 切片：标签栏溢出 affordance（左右滚动箭头 + 「列出全部标签」，
+ * 三枚一律 `KitIconButton` + `icons.tsx` 注册名：`chevron-left` / `chevron-right` / `chevron-down`）
  *
  * 既有 `.editor-tabs*` / `.tab-save-all` 规则全部留在 `styles-project.css`（本批不搬行，
  * 搬会红分档等价性三道闸）。这里只有**新类**的增量声明——与重档没有同属性对撞，
@@ -18,9 +19,4 @@
   padding: 0 var(--space-1);
   background: var(--bg-2);
   border-left: 1px solid var(--border);
-}
-
-/* 左箭头 = `chevron-right` 旋转 180°（icons.tsx 注册表暂无 `chevron-left`，见批次回执） */
-.tab-overflow-flip {
-  transform: rotate(180deg);
 }
