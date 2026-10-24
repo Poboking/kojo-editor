@@ -257,6 +257,18 @@ try {
   await fsp.mkdir(WORK, { recursive: true });
   await fsp.writeFile(shotPath, shot);
   check('截图落盘', shot.length > 10000, `${shotPath}（${(shot.length / 1024).toFixed(0)} KB）`);
+
+  // ⑩ 反哺回归（2026-10-25）：界面变了截图必须变——两拍之间开「问题」面板，
+  //     字节相同＝captureScreenshot 吃了缓存帧（切主题 / Monaco 重绘同款病）
+  const beforeShot = await cdp.screenshot(false);
+  await cdp.evalJs(`__kojoDebug.commands.run('workbench.problems')`, 30000);
+  await sleep(800);
+  const afterShot = await cdp.screenshot(false);
+  check(
+    '截图不吃缓存帧（界面变化后字节不同）',
+    beforeShot.length > 10000 && !beforeShot.equals(afterShot),
+    `${beforeShot.length} B → ${afterShot.length} B`,
+  );
   if (KEEP) console.log(`[smoke] 截图保留：${shotPath}`);
 } catch (err) {
   check('断言链中途失败', false, String(err?.message ?? err));

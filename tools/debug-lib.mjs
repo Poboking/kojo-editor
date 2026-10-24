@@ -168,6 +168,20 @@ export class Cdp {
     return r.result?.value;
   }
   async screenshot(fullPage = false) {
+    // 反哺修（2026-10-25）：切主题 / Monaco 重绘后直接拍会拿到**缓存帧**（实测两帧 PNG 逐字节
+    // 相同）。拍前两步强制产新帧：① bringToFront 把该页设为活动页；② 双 rAF 等一帧完整
+    // 合成（后台页 rAF 可能停 ⇒ 300ms 兜底竞速，拿不到也不阻塞拍照本身）。
+    await this.send('Page.enable').catch(() => {});
+    await this.send('Page.bringToFront').catch(() => {});
+    await this.evalJs(
+      `new Promise((resolve) => {
+        let done = false;
+        const finish = () => { if (!done) { done = true; resolve(true); } };
+        try { requestAnimationFrame(() => requestAnimationFrame(finish)); } catch { finish(); }
+        setTimeout(finish, 300);
+      })`,
+      3000,
+    ).catch(() => {});
     let clip;
     if (fullPage) {
       const metrics = await this.send('Page.getLayoutMetrics');
@@ -176,17 +190,22 @@ export class Cdp {
     }
     const shot = await this.send('Page.captureScreenshot', {
       format: 'png',
+      fromSurface: true,
       ...(clip ? { captureBeyondViewport: true, clip } : {}),
     });
     return Buffer.from(shot.data, 'base64');
   }
 }
 
-/** 从 CDP /json 里挑页面：优先属于本次 vite 端口的那页 */
+/**
+ * 从 CDP /json 里挑页面：**只认属于本次 vite 端口的那页**，找不到返回 null。
+ * 不做「随便兜第一页」——实测坑（2026-10-25）：旧会话的僵尸浏览器占着 CDP 端口时，
+ * 兜底会抓到别人的死页面，驱动全部落空还查不出原因。调用方对 null 自己显式处理。
+ */
 export async function cdpPage(cdpPort, vitePort) {
   const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
   const pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
-  return pages.find((t) => String(t.url).includes(`:${vitePort}`)) ?? pages[0] ?? null;
+  return pages.find((t) => String(t.url).includes(`:${vitePort}`)) ?? null;
 }
 
 /** 轮询页内表达式直到真值 / 非空串；超时抛错（不静默） */

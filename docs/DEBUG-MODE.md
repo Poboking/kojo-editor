@@ -68,8 +68,8 @@ node tools/debug-cli.mjs stop
 | `state` / `dom` / `events [n]` | 一屏读数 / DOM 结构快照 / 事件旁听 | 全部 JSON，可断言 |
 | `eval "<js>"` | 页内求值（可 await） | 万能逃生口 |
 | `invoke <cmd> [json]` | 直达宿主命令 | 与产品同一条 invoke 路 |
-| `click <sel>` / `type <sel> <文本>` / `key <键> [ctrl+…]` | CDP 真实输入 | click 带 elementFromPoint 自证；key 支持 enter/escape/tab/arrow* |
-| `screenshot <png> [--full]` | 截图 | agent 的「眼睛」 |
+| `click <sel>` / `type [<sel>] <文本>` / `key <键> [ctrl+…]` | CDP 真实输入 | click 带 elementFromPoint 自证；**type 省略选择器＝打到当前焦点元素**（命令面板/搜索框先点开或 `key ctrl+p` 再 type）；key 支持 enter/escape/tab/arrow* |
+| `screenshot <png> [--full]` | 截图 | 拍前自动 `Page.bringToFront` + 双 rAF 强制产帧，**不吃缓存帧**（切主题/Monaco 重绘后也是新帧）；agent 的「眼睛」 |
 
 页内 API（`?kojo-debug=1` 选入后）：`__kojoDebug.{mode, host, state(), kernel(), commands.{list,run},
 bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snapshot}`。
@@ -111,6 +111,9 @@ bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snap
 
 | 症状 | 先查 |
 |---|---|
+| serve 中途挂 / 某件套没了 | `status` 的「退出记录」带每个子进程的退出码与时间（serve 输出同步打）；宿侧已加大堆（`--max-old-space-size=4096`，重检索 OOM 的主嫌疑）并有 uncaught 落日志不静默死——重检索把 2325 文件全扫约 10 分钟后挂（exit 13）是本条立规的实测 |
+| 点击全被挡 / 白红页 | `eval` 查 `vite-error-overlay` 在不在＝陈旧错误盖屏，`location.reload()` 即清（新 workspace 包没 `pnpm install` 链上时会出现，PITFALLS 192③） |
+| 项目弹回欢迎页 / 命令注册表「未登记」 | PITFALLS 192 的三成因排查链：error-overlay → serve 日志 grep `reloading`（deps 冷发现，新项目态懒依赖要补进 `optimizeDeps.include`）→ 落点 |
 | 命令注册表 + 事件旁听**同时**失灵 | HMR 整页刷新拆了会话（PITFALLS 190）：确认落点在 `%TEMP%`、vite watch 忽略 `.kojo-debug` |
 | 别的工具（conformance CLI 等）EBUSY 崩 | 仓库内有调试残留 / Edge 锁 profile：`killProcessesMarked` + 清 `.kojo-debug`（PITFALLS 190） |
 | 端口被占（rc=2） | `node tools/debug-cli.mjs stop`，或 `--vite-port/--port/--cdp-port` 换口 |
