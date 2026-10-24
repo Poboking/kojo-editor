@@ -30,6 +30,9 @@ import './problem-panel.css';
 // （无同属性对撞），在级联里的位次不改变任何既有终值；`css-slices-wired` 钉死本行存在。
 import './tabs-bar.css';
 import './file-tree.css';
+// 视觉批十一 R5 壳层呈现切片（通知让位 / toast 文案密度 / 状态栏次组 / light·mint 遮罩）：
+// 排在 themes/*.css 之后——与主题同分的选择器要后置才赢；压过懒档 styles-project.css 靠自身特异性。
+import './shell-notices.css';
 // 教程浮层的宿主侧 override（视觉批十一 R4 · 按 L19 记号从 dev-note.css 搬成独立切片）：
 // 行内芯片补档 / 代码井凹槽与"还有内容"边 / 目录条目静息只显标题。欢迎页（轻档）与
 // 项目态（重档）都吃得到，所以必须留在**静态链**、且排在 themes/*.css 之后

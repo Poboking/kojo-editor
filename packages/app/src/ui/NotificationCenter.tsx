@@ -37,6 +37,15 @@ export interface NoticeInput {
    * 还是直接放弃我的修改。只留一条按钮等于替用户做了他没同意的那个决定。
    */
   readonly actions?: readonly NoticeAction[];
+  /**
+   * 第一眼标题（additive，视觉批十一 R5）。缺席时由 `message` 的头一句自动派生
+   * （见 {@link splitNoticeMessage}），所以既有调用方零改动。
+   *
+   * 为什么要标题：真壳实测一条「结构着色这次没顶上…」在 400px 的 toast 里排成三行，
+   * 断行断在「跨/度」中间——正文是**数据倾倒**而不是**一句话**。呈现层因此固定成
+   * 「标题 + 一行摘要」，长句折进展开态与悬停，一条都不丢。
+   */
+  readonly title?: string;
 }
 
 export interface Notice extends NoticeInput {
@@ -60,6 +69,53 @@ const INFO_TTL_MS = 6000;
  */
 export function noticeActionsOf(notice: NoticeInput): readonly NoticeAction[] {
   return [...(notice.action ? [notice.action] : []), ...(notice.actions ?? [])];
+}
+
+/**
+ * 消息正文的天然停顿点（先后次序 = 优先切的第一个；找不到就不切）。
+ *
+ * 只认这三个：`：`（「这次选区格式化没有生效：编辑器没能确认…」的因果连接符）、
+ * `⇒`（「取数失败 ⇒ 回到词法层」的结论连接符）、`。`（整句收尾）。
+ * 逗号/顿号不认——切出来的半句当标题比原句更难读。
+ */
+const HEAD_SEPARATORS = ['：', '⇒', '。'] as const;
+
+/** 标题长度上限：超过它的头一句已经不是"标题"了，整条退回摘要那一行 */
+const HEAD_MAX_LEN = 30;
+
+/**
+ * `message` → 第一眼标题 + 一行摘要（纯函数，视觉批十一 R5）。
+ *
+ * 口径：**分割是有损排版、无损信息**——`：`/`⇒` 这类连接符被丢掉（它是语气，不是内容），
+ * `。` 跟在标题里；其余字符一个不删。摘要那一行在屏上只显一行（省略号收尾），
+ * 但整段文本始终在 DOM 里 ⇒ 读屏逐字念得完，悬停 `title` 与展开态也都在（铁律 4 的
+ * 「可见」不许变成「只给一半」）。
+ */
+export function splitNoticeMessage(message: string): { readonly head: string; readonly rest: string } {
+  const text = message.trim();
+  let cut = -1;
+  let sepLen = 0;
+  for (const sep of HEAD_SEPARATORS) {
+    const i = text.indexOf(sep);
+    if (i < 2 || i > HEAD_MAX_LEN) continue;
+    if (cut < 0 || i < cut) {
+      cut = i;
+      sepLen = sep.length;
+    }
+  }
+  if (cut < 0) return { head: text, rest: '' };
+  // `。` 是句末（跟着标题走），`：`/`⇒` 是连接符（丢掉语气，其余字符一个不删）
+  const keepSep = text[cut] === '。';
+  const head = text.slice(0, keepSep ? cut + 1 : cut).trim();
+  const rest = text.slice(keepSep ? cut + 1 : cut + sepLen).trim();
+  return { head, rest };
+}
+
+/** 悬停内容：人话全文 + 逐字技术原文（缺哪个就少哪格，绝不吞掉另一个） */
+function noticeTooltip(notice: NoticeInput): string | undefined {
+  const detail = notice.detail;
+  if (detail === undefined || detail === '') return notice.message;
+  return `${notice.message}\n${detail}`;
 }
 
 /**
@@ -143,48 +199,70 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
     <NotifyContext.Provider value={notify}>
       {children}
       {notices.length > 0 ? (
-        <div className="notification-center" data-context-surface="notification">
-          {notices.map((n) => (
-            <div
-              key={n.id}
-              className={`toast toast-${n.kind}`}
-              role="alert"
-              title={n.detail}
-              // 右键菜单认这一条是谁（容器空白处 = 整批「清除全部」）
-              data-notice-id={n.id}
-            >
-              <span className="toast-icon" aria-hidden="true">
-                <Icon name={n.kind === 'error' ? 'error' : 'info'} size={16} />
-              </span>
-              <span className="toast-message">{n.message}</span>
-              {n.action ? (
-                <button
-                  className="small toast-action"
-                  onClick={() => {
-                    dismiss(n.id);
-                    n.action?.run();
-                  }}
-                >
-                  {n.action.label}
+        <div
+          className="notification-center notification-shell"
+          data-context-surface="notification"
+        >
+          {notices.map((n) => {
+            const given = n.title === undefined ? '' : n.title.trim();
+            const split = splitNoticeMessage(n.message);
+            const head = given === '' ? split.head : given;
+            const summary = given === '' ? split.rest : n.message;
+            const detail = n.detail === undefined ? '' : n.detail.trim();
+            return (
+              <div
+                key={n.id}
+                className={`toast toast-${n.kind}`}
+                role="alert"
+                title={noticeTooltip(n)}
+                // 右键菜单认这一条是谁（容器空白处 = 整批「清除全部」）
+                data-notice-id={n.id}
+              >
+                <span className="toast-icon" aria-hidden="true">
+                  <Icon name={n.kind === 'error' ? 'error' : 'info'} size={16} />
+                </span>
+                <span className="toast-body">
+                  <span className="toast-head">{head}</span>
+                  {summary === '' || summary === head ? null : (
+                    <span className="toast-summary">{summary}</span>
+                  )}
+                  {/* 细节折进展开态：技术原文（机器面）逐字留在这里 + 悬停，正文只有一行人话 */}
+                  {detail === '' ? null : (
+                    <details className="toast-fold">
+                      <summary>详情</summary>
+                      <div className="toast-detail">{detail}</div>
+                    </details>
+                  )}
+                </span>
+                {n.action ? (
+                  <button
+                    className="small toast-action"
+                    onClick={() => {
+                      dismiss(n.id);
+                      n.action?.run();
+                    }}
+                  >
+                    {n.action.label}
+                  </button>
+                ) : null}
+                {(n.actions ?? []).map((a, i) => (
+                  <button
+                    key={`${n.id}:${i}`}
+                    className="small toast-action"
+                    onClick={() => {
+                      dismiss(n.id);
+                      a.run();
+                    }}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+                <button className="ghost small toast-close" title="关闭" onClick={() => dismiss(n.id)}>
+                  <Icon name="close" size={13} />
                 </button>
-              ) : null}
-              {(n.actions ?? []).map((a, i) => (
-                <button
-                  key={`${n.id}:${i}`}
-                  className="small toast-action"
-                  onClick={() => {
-                    dismiss(n.id);
-                    a.run();
-                  }}
-                >
-                  {a.label}
-                </button>
-              ))}
-              <button className="ghost small toast-close" title="关闭" onClick={() => dismiss(n.id)}>
-                <Icon name="close" size={13} />
-              </button>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </NotifyContext.Provider>

@@ -56,6 +56,24 @@ function statusColor(status: PluginStateRecord['status']): string {
   }
 }
 
+/**
+ * 一行的悬停文本（视觉批十一 R5 · 状态文字不再逐行重复上屏）。
+ *
+ * 绿点已经承载了「运行中」这一档（20 行面板里逐行写同一三个汉字是噪音），异常态
+ * 照旧把词写在行末——那些是必须看见的东西。收起来的字一条不丢：整行悬停查得到，
+ * DOM 里的状态词也只做**视觉隐藏**（读屏逐行仍念，见 `shell-notices.css` 的
+ * `.plugin-status-quiet`）。未激活的缺依赖明细原来就写在词后面，现在同样进悬停。
+ */
+export function pluginRowTooltip(r: PluginStateRecord): string {
+  const missing = r.status === 'inactive' && r.missing?.length ? `：缺少依赖 ${r.missing.join('、')}` : '';
+  return `${r.id} · ${STATUS_LABEL[r.status]}${missing}`;
+}
+
+/** 静息档（只有 `active`）：状态文字退成悬停/读屏里的信息，屏上只留点与名字。 */
+export function isQuietStatus(status: PluginStateRecord['status']): boolean {
+  return status === 'active';
+}
+
 /** ops journal 读数三态的色（与 `plugin-dot` 同一调色板；`unknown` 用错误色——读不出不等于干净） */
 const TONE_COLOR: Record<OpsMaintenanceTone, string> = {
   residue: '#d19a66',
@@ -240,20 +258,21 @@ export function createUiStatusPlugin(): Plugin {
                 {
                   key: r.id,
                   className: `plugin-row plugin-${r.status}`,
+                  // 整行悬停 = 「这一行是什么状态」的唯一去处（静息档的状态词不再上屏）
+                  title: pluginRowTooltip(r),
                   // 行级右键：复制 ID / 重试激活 / 停用 / 刷新（按状态决定哪些项存在）
                   onContextMenu: (e: PluginContextMenuAnchor) =>
                     openPluginRowMenu(props, e, { id: r.id, status: r.status }, menuHost),
                 },
                 createElement('span', { className: 'plugin-dot', style: { backgroundColor: statusColor(r.status) } }),
+                // 形态不许拆（`machine-identifier-copy` 的③合法露面台账按这一整行钉 id 上屏的豁免）：
+                // 悬停名字 = 唯一定位符本体；悬停行的其它处 = `pluginRowTooltip` 那句「id · 状态」。
                 createElement('span', { className: 'plugin-id', title: r.id }, r.id),
                 createElement(
                   'span',
                   {
-                    className: 'plugin-status',
-                    title:
-                      r.status === 'inactive' && r.missing?.length
-                        ? `未激活：缺少依赖 ${r.missing.join('、')}`
-                        : STATUS_LABEL[r.status],
+                    // 静息档只把词留给读屏与悬停（类名 → `shell-notices.css` 的 clip 配方）
+                    className: isQuietStatus(r.status) ? 'plugin-status plugin-status-quiet' : 'plugin-status',
                   },
                   STATUS_LABEL[r.status] + (r.status === 'inactive' && r.missing?.length ? `（缺 ${r.missing.join(', ')}）` : ''),
                 ),

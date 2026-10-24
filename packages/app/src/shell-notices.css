@@ -1,0 +1,316 @@
+/* ============================================================================
+ * 壳层呈现切片（视觉批十一 R5 · 壳层三件套收尾路）
+ * ----------------------------------------------------------------------------
+ * 只管四件事，全部是**呈现**：
+ *   ① 通知列的「让位」——模态/浮层在场时改锚左下（不动层级、不动 `--z-toast` 定义）；
+ *   ② toast 的文案密度——标题 + 一行摘要 + 细节折进展开态（真壳实测排三行、断在「跨/度」中间）；
+ *   ③ 状态栏两组诊断计数分主次——次组（项目级约定计数）静息只留标签与在途状态，三枚数字点开看；
+ *   ④ 插件状态行的重复「运行中」退场（绿点已承载同一信息，20 行重复文字是噪音）；
+ *   ⑤ light / mint-dark 的模态遮罩——浅色模态压在深色 Monaco 上，磨砂底糊成一片灰带。
+ *
+ * 三条纪律：
+ *   - **不改 `styles.css` / `styles-project.css` / `tokens.css` / `themes/*.css`**（都有主）。
+ *     要压过重档既有表现，一律按本批 L03/L12/L16 的先例**提特异性**（双类 / `:root[data-*]` 作用域）：
+ *     本文件由 `main.tsx` 静态引入，位次在 tokens → styles → themes 之后、**懒档
+ *     `styles-project.css` 之前** ⇒ 同特异性会输给它，故凡与重档对撞的选择器都 ≥ 它一档。
+ *   - 颜色只吃 token 或主题内既有色族（不新增 token、不引新色相）。
+ *   - 信息一条不减：被收成一行/收起的读数，DOM 里始终在 ⇒ 读屏念得完、悬停查得到（铁律 4）。
+ * ========================================================================== */
+
+/* ============================ ② toast 文案密度 ============================ */
+
+/* 容器上限随视口收口（旧值 400px 定宽，窄窗直接溢出左缘）；特异性 (0,2,0) 稳压重档 (0,1,0)。 */
+.notification-center.notification-shell {
+  max-width: min(400px, calc(100vw - 32px));
+}
+
+/* 正文改成两行形态：标题（人话短句）+ 摘要（剩余句子），图标与动作按钮仍钉第一行。
+   `.toast-message` 这个旧单行随本次形态变更退场（重档那条规则成了死类，归 L01/L02 清）。 */
+.notification-shell .toast-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* **不许词中间断行**：两行可见文本都走 nowrap + 省略号（旧形态是自由换行，
+   「超宽跨度」被切成「跨/度」就是这么来的）。断行不解决任何事，加宽也不解决——
+   真正的修法是把多余的字收进展开态，屏上只留一行。 */
+.notification-shell .toast-head {
+  min-width: 0;
+  font-size: var(--fs-2);
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.notification-shell .toast-summary {
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+/* 展开态（详情）：只有这里才允许折行，且只允许在**词**的边界断
+   （`break-word` = 单个 token 长过一整行才劈开；`break-all`/`anywhere` 会把「跨度」劈开，禁用）。 */
+.notification-shell .toast-fold {
+  margin-top: 2px;
+}
+.notification-shell .toast-fold > summary {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  cursor: pointer;
+  list-style: none;
+}
+.notification-shell .toast-fold > summary::-webkit-details-marker {
+  display: none;
+}
+.notification-shell .toast-fold > summary::before {
+  content: '▸';
+  margin-right: 4px;
+}
+.notification-shell .toast-fold[open] > summary::before {
+  content: '▾';
+}
+.notification-shell .toast-detail {
+  margin-top: var(--space-1);
+  max-height: 40vh;
+  overflow-y: auto;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* ===================== ① 模态在场时通知让位（行为避让 · 改位不降层） ===================== */
+/*
+ * 判据（为什么是「改位」而不是「降层」）：
+ * `tokens.css` 的 `--z-toast` 注记写着「toast 必须盖在模态之上——模态里操作失败的通知若被
+ * 压在遮罩下就违背『内核不静默』」，`context-menu-layering.test.ts` 又把 1300/1200/1101 三层
+ * 钉死 ⇒ 本条**一个字都不碰层级**，只把通知列从右下挪开。
+ *
+ * 为什么挪到**左下**：模态/浮层的动作键恒在页脚**右端**（`.modal-actions` 与
+ * `.wizard-actions` 都是 `justify-content: flex-end`），右下那片正是「点确定/取消」的命中区；
+ * 页脚带的左端是恒空的一侧（居中宿主 + 右对齐按钮），也是项目态错误条的常驻地——
+ * 所以下面第二条规则在错误条在场时再把通知列抬一格。
+ *
+ * `:has()` 不可用时整组失效 = 保持本批之前的右下形态（降级不破版；同 `.update-notice-card`
+ * 与 `.overlay-host-wide:has(.ov-xl)` 的先例）。
+ */
+body:has(.overlay-backdrop, .modal-mask) .notification-center.notification-shell {
+  left: 16px;
+  right: auto;
+  max-width: min(360px, calc(100vw - 32px));
+}
+/* 左下被项目态错误条占了（`position:absolute; left:16 bottom:36`）⇒ 抬到它上方，两列永不叠字 */
+body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notification-center.notification-shell {
+  bottom: 128px;
+}
+/* 让位是"整列平移"，给一档 `--dur-2`（200ms）的位移过渡；两种降动效口径都压平（同 update-notice-card） */
+.notification-center.notification-shell {
+  transition:
+    left var(--dur-2) var(--ease-out),
+    right var(--dur-2) var(--ease-out),
+    bottom var(--dur-2) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .notification-center.notification-shell {
+    transition: none;
+  }
+}
+:root[data-motion='reduced'] .notification-center.notification-shell {
+  transition: none;
+}
+
+/* ========================= ③ 状态栏：两组诊断计数分主次 ========================= */
+/*
+ * 现状（真壳读数）：左簇并排两串三档计数——
+ *   `.sb-diag`（项目级约定计数，含未打开文件）+ `.sb-problems`（已打开文件的波浪线）
+ * 六个数字 + 标签同屏，谁数的是什么反而读不出来（「⚠647」与「⚠2843」挨在一起）。
+ *
+ * 主次：`.sb-problems` 是作者此刻要对的那一本 ⇒ **常驻三档原样**（本文件不碰它）；
+ * `.sb-diag` 是项目级常态账 ⇒ 静息只留「项目」标签（CSS ::before，插件 DOM 不动）与
+ * **在途状态那一格**（扫描中 / 这轮失败的短句），三档数字收进状态栏那颗 ▸ 点开。
+ *
+ * 两条不丢信息的边界：
+ *  - `:not([style])`——插件只给「error > 0 / 这轮失败」那枚数字上内联色 ⇒ 有事故时那一格
+ *    照常上屏，收起的永远是 0 值常态账（铁律 4：不许把醒目的东西一起藏了）；
+ *  - 收起 = **视觉隐藏**（sr-only 那套 clip 配方），不是 `display:none` ⇒ 读屏逐档念得完，
+ *    右键那一格（`data-status-cell`）也还能复制。
+ *
+ * 特异性 (0,5,0) 稳压重档 `.sb-diag` / `.sb-diag-item` (0,1,0) 与其 ::before (0,1,1)。
+ */
+.statusbar[data-sb-secondary='collapsed'] .sb-diag > .sb-diag-item:nth-last-child(-n + 3):not([style]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+/* 收起的那几格是 `position:absolute` 的 1px 剪贴盒 ⇒ 给次组一个定位上下文，别把它们
+   的静态位置留给视口去算（那会给整条状态栏添上看不见的溢出）。 */
+.statusbar[data-sb-secondary] .sb-diag {
+  position: relative;
+}
+/* 展开/收起那颗（壳层绘制，非读数格 ⇒ 不打 `data-status-cell`） */
+.statusbar .shell-sb-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1;
+}
+.statusbar .shell-sb-toggle:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.statusbar .shell-sb-toggle[aria-expanded='true'] {
+  color: var(--accent-text);
+}
+
+/* ========================= ④ 插件行：重复状态文字退场 ========================= */
+/*
+ * 「运行中」在 20 行面板里逐行重复，而同一行左端的绿点已经承载了它（`plugin-dot` 按状态着色）。
+ * 静息行（active）只留点与名字；状态词仍在 DOM（读屏逐行念得到）+ 行悬停 title（查得到）。
+ * 异常态（error / inactive / pending / stopped）**照常上屏**——那些是必须看见的。
+ */
+.panel-plugin-status .plugin-row .plugin-status.plugin-status-quiet {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+/* 同上：给那个 1px 剪贴盒一个定位上下文（行本身是 flex 容器，relative 不改任何布局） */
+.panel-plugin-status .plugin-row {
+  position: relative;
+}
+
+/* ===================== ⑤ light / mint-dark：遮罩不再糊成灰带 ===================== */
+/*
+ * 症状：light 档的模态是浅色玻璃面，背后是深色 Monaco；旧遮罩 alpha 只有 ~0.24、模糊 16px +
+ * saturate 1.15 ⇒ 深色代码被碾成一片中等明度的灰泥，模态边界只能靠投影硬撑。
+ *
+ * 三步（目标 = 边界靠**底色**认出来）：
+ *  1. 遮罩压深（0.24 → ~0.5）并把泄漏的色相**抽掉**（saturate < 1），灰泥变成中性暗底；
+ *  2. 模糊收到 9px——背景留一点可辨的"那是编辑器"的结构，才不像一整块同色泥；
+ *  3. 给浮层本体一条**实描边**（不是阴影）：模态与遮罩之间有一道真边界。
+ *
+ * 特异性：基础档 (0,3,0) 与 `themes/light.css` 同分、本文件后置 ⇒ 赢；查询面变体 (0,4,0)、
+ * 实心档 (0,4,0) ⇒ 稳压懒档 `styles-project.css` 的 `.overlay-backdrop:has(.ov-query)` (0,3,0)
+ * 与 `:root[data-glass='solid'] .overlay-backdrop` (0,3,0)。
+ */
+:root[data-theme='light'] .overlay-backdrop,
+:root[data-theme='light'] .modal-mask {
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(26, 34, 47, 0.4), rgba(14, 19, 27, 0.62)),
+    rgba(18, 24, 33, 0.5);
+  -webkit-backdrop-filter: blur(9px) saturate(0.82);
+  backdrop-filter: blur(9px) saturate(0.82);
+}
+/* 只读查询面（比对 / 预览）：比破坏性确认面轻一档，但同样压深、同样去饱和 */
+:root[data-theme='light'] .overlay-backdrop:has(.ov-query) {
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(26, 34, 47, 0.24), rgba(14, 19, 27, 0.44)),
+    rgba(18, 24, 33, 0.36);
+  -webkit-backdrop-filter: blur(8px) saturate(0.85);
+  backdrop-filter: blur(8px) saturate(0.85);
+}
+/* 命令面板：轻一档的遮罩也去灰泥（.picker 顶对齐，与通知列本来就不抢位） */
+:root[data-theme='light'] .picker-backdrop {
+  background: rgba(18, 24, 33, 0.32);
+  -webkit-backdrop-filter: blur(8px) saturate(0.85);
+  backdrop-filter: blur(8px) saturate(0.85);
+}
+/* 实描边：模态边界靠底色 + 一条线认出来，不靠阴影（浅色档的 rim 语义反转，同 light.css 注记） */
+:root[data-theme='light'] .overlay-host,
+:root[data-theme='light'] .modal,
+:root[data-theme='light'] .picker {
+  border-color: rgba(23, 31, 43, 0.55);
+}
+/* 实心档（旋钮 0%）：没有磨砂，边界全靠底色差 ⇒ 遮罩取中性深 slate，比旧 rgba(35,48,64,.4) 沉一档；
+   描边同一条规则里补上——懒档 `:root[data-glass='solid'] .overlay-host{border-color}` (0,3,0)
+   后置会吃掉上面那条同分的实描边，实心档正是最需要一道真边界的一档。 */
+:root[data-theme='light'][data-glass='solid'] .overlay-backdrop,
+:root[data-theme='light'][data-glass='solid'] .modal-mask,
+:root[data-theme='light'][data-glass='solid'] .picker-backdrop {
+  background: rgba(18, 24, 33, 0.52);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-theme='light'][data-glass='solid'] .overlay-host,
+:root[data-theme='light'][data-glass='solid'] .modal,
+:root[data-theme='light'][data-glass='solid'] .picker {
+  border-color: rgba(23, 31, 43, 0.62);
+}
+/* 老内核无 backdrop-filter 回落：磨砂没了，深一档才分得出边界 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme='light'] .overlay-backdrop,
+  :root[data-theme='light'] .modal-mask,
+  :root[data-theme='light'] .picker-backdrop {
+    background: rgba(18, 24, 33, 0.55);
+  }
+}
+
+/* mint-dark：墨绿底 + 深色代码面本来就是低反差的一对 ⇒ 只补两处——遮罩沉一档、描边给真边界。
+   实心档顺带收口：懒档 `:root[data-glass='solid']` 那条纯黑 (0,3,0) 后置压过 mint-dark.css
+   的同分绿化规则（该文件注记以为压不过，实测压得过），这里用 (0,4,0) 把墨绿找回来。 */
+:root[data-theme='mint-dark'] .overlay-backdrop,
+:root[data-theme='mint-dark'] .modal-mask {
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.36), rgba(2, 10, 6, 0.64)),
+    rgba(5, 12, 8, 0.48);
+  -webkit-backdrop-filter: blur(11px) saturate(0.92);
+  backdrop-filter: blur(11px) saturate(0.92);
+}
+:root[data-theme='mint-dark'] .overlay-host,
+:root[data-theme='mint-dark'] .modal,
+:root[data-theme='mint-dark'] .picker {
+  border-color: rgba(191, 232, 210, 0.34);
+}
+/* 查询面变体：懒档 `.overlay-backdrop:has(.ov-query)` (0,3,0) 后置，同分的绿化规则会被它吃掉
+   ⇒ 这里同样按 (0,4,0) 给一档墨绿（只减淡、不改向） */
+:root[data-theme='mint-dark'] .overlay-backdrop:has(.ov-query) {
+  background:
+    radial-gradient(130% 105% at 50% -5%, rgba(2, 10, 6, 0.22), rgba(2, 10, 6, 0.42)),
+    rgba(5, 12, 8, 0.34);
+  -webkit-backdrop-filter: blur(9px) saturate(0.95);
+  backdrop-filter: blur(9px) saturate(0.95);
+}
+:root[data-theme='mint-dark'][data-glass='solid'] .overlay-backdrop,
+:root[data-theme='mint-dark'][data-glass='solid'] .modal-mask,
+:root[data-theme='mint-dark'][data-glass='solid'] .picker-backdrop {
+  background: rgba(5, 12, 8, 0.56);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-theme='mint-dark'][data-glass='solid'] .overlay-host,
+:root[data-theme='mint-dark'][data-glass='solid'] .modal,
+:root[data-theme='mint-dark'][data-glass='solid'] .picker {
+  border-color: rgba(191, 232, 210, 0.42);
+}

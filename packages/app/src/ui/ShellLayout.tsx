@@ -2444,8 +2444,25 @@ export function ShellLayout(props: Props): ReactElement {
           ? '写权限已批准'
           : '只读：写权限未批准，点击重新授权';
 
+  /**
+   * 状态栏**次组**（项目级约定计数 `.sb-diag`）的展开态（视觉批十一 R5 · 密度分主次）。
+   *
+   * 真壳读数：左簇并排两串三档计数（项目 ⚠2843 / 已打开 ⚠647），六个数字挨在一起，
+   * 反而读不出"谁数的是什么"。口径：`.sb-problems`（作者此刻要对的那一本）常驻原样，
+   * 项目级常态账静息只留「项目」标签 + 在途状态词，三档数字由这颗 ▸ 点开（贴在它前面）。
+   * 收起是**视觉隐藏**（clip 配方在 `shell-notices.css`），DOM 里逐档都在 ⇒ 读屏念得完、
+   * 那一格的右键复制也还在；`error > 0 / 这轮失败`那两格由插件上内联色 ⇒ 永不收起。
+   * 会话级、不进布局持久化：这是一次"看一眼"，不是要记住的偏好。
+   */
+  const [secondaryCountsOpen, setSecondaryCountsOpen] = useState(false);
+  const hasSecondaryCounts = statusbarItems.some((s) => (s.align ?? 'right') === 'left');
+
   const statusbar = (
-    <footer className={`statusbar ${layout.zen ? 'zen' : ''}`} data-context-surface="status-bar">
+    <footer
+      className={`statusbar ${layout.zen ? 'zen' : ''}`}
+      data-context-surface="status-bar"
+      data-sb-secondary={secondaryCountsOpen ? 'open' : 'collapsed'}
+    >
       <div className="sb-left">
         {writablePill === 'ok' ? (
           <span className="sb-writable ok" data-status-cell="" title={writablePillTitle}>
@@ -2457,6 +2474,23 @@ export function ShellLayout(props: Props): ReactElement {
             <LockIcon /> 只读
           </button>
         )}
+        {/* 次组（项目级约定计数）的展开/收起：紧贴它管的那一串，读作「▸ 项目 …」 */}
+        {hasSecondaryCounts ? (
+          <button
+            type="button"
+            className="ghost small shell-sb-toggle"
+            aria-expanded={secondaryCountsOpen}
+            aria-label={secondaryCountsOpen ? '收起项目级约定计数' : '展开项目级约定计数'}
+            title={
+              secondaryCountsOpen
+                ? '收起项目级约定计数（同排右边那三档是已打开文件的波浪线，两本数口径不同）'
+                : '展开项目级约定计数（含未打开文件与整项目结论 ≠ 波浪线计数）；静息只留标签，读数一条不丢'
+            }
+            onClick={() => setSecondaryCountsOpen((v) => !v)}
+          >
+            <Icon name={secondaryCountsOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+          </button>
+        ) : null}
         {statusbarItems
           .filter((s) => (s.align ?? 'right') === 'left')
           .map((s) => (
