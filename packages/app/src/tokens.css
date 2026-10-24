@@ -213,5 +213,10 @@
   --font-meta: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Microsoft YaHei UI', 'Noto Sans CJK SC', monospace;
   --font-console: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Noto Sans Mono CJK SC', 'MS Gothic', monospace;
   --font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;
-  font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
+  /* 界面字体面（视觉批十二 L20）：**真源是 TS**——`ui/font-presets.ts` 的 UI_FONT_SYSTEM_STACK
+     与下面这行逐字镜像（`font-presets.test.ts` 比对，改一处必改两处，同 `--font-code` 那条闸）。
+     用户选档时把解析结果写成根元素**内联** `--font-ui` 盖过这里（缺省 `system` 档一位都不写
+     ⇒ 没动过字体项的作者界面逐字不变）。 */
+  --font-ui: 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
+  font-family: var(--font-ui);
 }

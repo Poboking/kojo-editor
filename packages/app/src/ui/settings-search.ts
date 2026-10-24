@@ -70,6 +70,18 @@ function displayKeyModified(k: keyof EditorDisplayPrefs): () => boolean {
   return () => modifiedEditorDisplayKeys().includes(k);
 }
 
+/** 编程字体一行有两个真源（档位 + 旧自定义文本），「已修改」任一站起即算 */
+const codeFontChanged = (): boolean => {
+  const m = modifiedEditorDisplayKeys();
+  return m.includes('fontFamily') || m.includes('codeFontPreset');
+};
+
+/** 界面字体一行同理（档位 + 自定义栈） */
+const uiFontChanged = (): boolean => {
+  const m = modifiedEditorDisplayKeys();
+  return m.includes('uiFontPreset') || m.includes('uiFontFamily');
+};
+
 const wordWrapChanged = (): boolean =>
   loadLayoutPref().wordWrap !== LAYOUT_PREF_DEFAULT.wordWrap;
 const multiCursorChanged = (): boolean =>
@@ -125,7 +137,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'editor.lineNumbers', section: 'editor', sectionLabel: '编辑器', label: '行号', keywords: ['line numbers 相对行号'], key: 'editor.lineNumbers', isModified: displayKeyModified('lineNumbers') },
   { id: 'editor.minimap', section: 'editor', sectionLabel: '编辑器', label: '缩略图', keywords: ['小地图 minimap 右侧概览'], key: 'editor.minimap', isModified: displayKeyModified('minimap') },
   { id: 'editor.inlayHints', section: 'editor', sectionLabel: '编辑器', label: '行内提示', keywords: ['inlay hints 形参名 内联'], key: 'editor.inlayHints', isModified: displayKeyModified('inlayHints') },
-  { id: 'editor.fontFamily', section: 'editor', sectionLabel: '编辑器', label: '编程字体', keywords: ['font family 字体族 cascadia consolas'], key: 'editor.fontFamily', isModified: displayKeyModified('fontFamily') },
+  { id: 'editor.fontFamily', section: 'editor', sectionLabel: '编辑器', label: '编程字体', keywords: ['font family 字体族 cascadia consolas 档位'], key: 'editor.fontFamily', isModified: codeFontChanged },
   // Kojo 2.0 档位（整块在 Kojo2CutoverSettings 里，档位与破例清单各有自己的行）/ 直连
   { id: 'editor.kojo2Stage', section: 'editor', sectionLabel: '编辑器', label: 'Kojo 2.0 档位', keywords: ['kojo2 2.0 破例 恢复出厂 切换'] },
   { id: 'editor.directMode', section: 'editor', sectionLabel: '编辑器', label: '直连模式（就地编辑游戏目录）', keywords: ['direct mode 游戏目录 写权限'], key: 'editor.directMode', isModified: () => loadDirectMode() !== DIRECT_MODE_DEFAULT },
@@ -139,6 +151,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'appearance.motion', section: 'appearance', sectionLabel: '外观', label: '减弱动效', keywords: ['motion 动画 reduced'], key: 'appearance.motion', isModified: () => loadMotionPref() !== MOTION_PREF_DEFAULT },
   { id: 'appearance.panelVirtualize', section: 'appearance', sectionLabel: '外观', label: '长列表视口化', keywords: ['虚拟滚动 面板'], key: 'appearance.panelVirtualize', isModified: () => loadPanelVirtualize() !== PANEL_VIRTUALIZE_DEFAULT },
   { id: 'appearance.glass', section: 'appearance', sectionLabel: '外观', label: '毛玻璃透明度', keywords: ['glass 磨砂'], key: 'appearance.glass', isModified: () => loadGlassTransparencyPref() !== GLASS_TRANSPARENCY_DEFAULT },
+  // 界面字体（L20）：档位表在 `font-presets.ts`；这一行的"已修改"= 档位或自定义栈任一站起偏离缺省
+  { id: 'appearance.uiFontFamily', section: 'appearance', sectionLabel: '外观', label: '界面字体', keywords: ['ui font 字体 字体族 sans-serif 界面字'], key: 'appearance.uiFontFamily', isModified: uiFontChanged },
 
   // ---- 通用 / 布局 ----
   { id: 'general.zen', section: 'general', sectionLabel: '通用', label: '写作模式', keywords: ['zen ctrl+k z 全屏'], key: 'general.zen' },

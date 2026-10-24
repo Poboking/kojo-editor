@@ -40,7 +40,16 @@
  */
 
 import { useSyncExternalStore } from 'react';
-import { isUsableCodeFontStack } from './code-font';
+import { isUsableCodeFontStack, CODE_FONT_CSS_TOKEN, CODE_FONT_STACK } from './code-font';
+import {
+  CODE_FONT_PRESET_IDS,
+  UI_FONT_PRESET_IDS,
+  UI_FONT_CSS_TOKEN,
+  UI_FONT_SYSTEM_STACK,
+  resolveCodeFontStack,
+  resolveUiFontStack,
+  sanitizeUiFontFamily,
+} from './font-presets';
 import { editorProfileTierForLineCount, type EditorOptionPatch } from './editor-options';
 
 /** Monaco `renderWhitespace` 的登记值（0.57 d.ts 逐字照抄，不另造词汇） */
@@ -80,8 +89,14 @@ export interface EditorDisplayPrefs {
   /** 缩略图三态（`on` 时仍受体量档约束；`follow` 还受 {@link MinimapViewContext} 约束） */
   readonly minimap: MinimapPref;
   readonly lineNumbers: LineNumbersPref;
-  /** 自定义字体族；空串 = 用 `CODE_FONT_STACK` */
+  /** 自定义字体族；空串 = 用档位表解析出的栈（L20 之前 = 用 `CODE_FONT_STACK`）。非空时**它赢**（兼容红线） */
   readonly fontFamily: string;
+  /** 代码字体档位 id（`font-presets.ts` 在册；未知 id 读盘即回落 `default`） */
+  readonly codeFontPreset: string;
+  /** 界面字体档位 id（`system` / `source-han` / `pingfang` / `mono` / `custom`） */
+  readonly uiFontPreset: string;
+  /** 界面字体自定义栈；空串 = 用档位（`custom` 档选而栈空 ⇒ 回落 `system` 且可见） */
+  readonly uiFontFamily: string;
   /** 行内提示总开关（true 时仍受体量档约束） */
   readonly inlayHints: boolean;
   /** 界面外壳文字缩放（%）；100 = 样式表现值，一位都不覆写 */
@@ -94,6 +109,9 @@ export const EDITOR_DISPLAY_PREF_DEFAULT: EditorDisplayPrefs = {
   minimap: 'follow',
   lineNumbers: 'on',
   fontFamily: '',
+  codeFontPreset: 'default',
+  uiFontPreset: 'system',
+  uiFontFamily: '',
   inlayHints: true,
   uiFontScale: 100,
 };
@@ -106,6 +124,11 @@ const MINIMAP_KEY = 'kojo.ui.editor.minimap.v1';
 const MINIMAP_MODE_KEY = 'kojo.ui.editor.minimapMode.v1';
 const LINE_NUMBERS_KEY = 'kojo.ui.editor.lineNumbers.v1';
 const FONT_FAMILY_KEY = 'kojo.ui.editor.fontFamily.v1';
+/** 代码字体档位（L20）：新加的一层；旧 `fontFamily` 文本仍是自定义档的真值（兼容红线） */
+const CODE_FONT_PRESET_KEY = 'kojo.ui.editor.codeFontPreset.v1';
+/** 界面字体档位与自定义栈（L20）：真源在 `font-presets.ts` 的档位表 */
+const UI_FONT_PRESET_KEY = 'kojo.ui.editor.uiFontPreset.v1';
+const UI_FONT_FAMILY_KEY = 'kojo.ui.editor.uiFontFamily.v1';
 const INLAY_HINTS_KEY = 'kojo.ui.editor.inlayHints.v1';
 const UI_FONT_SCALE_KEY = 'kojo.ui.editor.uiFontScale.v1';
 
@@ -280,6 +303,11 @@ function sanitizePrefs(prefs: PrefsInput): EditorDisplayPrefs {
     minimap: normalizeMinimapPref(prefs.minimap) ?? EDITOR_DISPLAY_PREF_DEFAULT.minimap,
     lineNumbers: readEnum(prefs.lineNumbers, LINE_NUMBERS_VALUES, EDITOR_DISPLAY_PREF_DEFAULT.lineNumbers),
     fontFamily: sanitizeFontFamily(prefs.fontFamily),
+    // 档位 id 只认在册表（脏值回落缺省档）；回落事实由 `resolveCodeFontStack`/`resolveUiFontStack`
+    // 在解析层再兜一次（直接喂未清洗 prefs 的调用方也能读出 fellBack）
+    codeFontPreset: readEnum(prefs.codeFontPreset, CODE_FONT_PRESET_IDS, EDITOR_DISPLAY_PREF_DEFAULT.codeFontPreset),
+    uiFontPreset: readEnum(prefs.uiFontPreset, UI_FONT_PRESET_IDS, EDITOR_DISPLAY_PREF_DEFAULT.uiFontPreset),
+    uiFontFamily: sanitizeUiFontFamily(prefs.uiFontFamily),
     inlayHints: prefs.inlayHints !== false,
     uiFontScale: sanitizeUiFontScale(prefs.uiFontScale),
   };
@@ -313,6 +341,9 @@ export function loadEditorDisplayPrefs(): EditorDisplayPrefs {
           EDITOR_DISPLAY_PREF_DEFAULT.lineNumbers,
         ),
         fontFamily: s.getItem(FONT_FAMILY_KEY) ?? '',
+        codeFontPreset: s.getItem(CODE_FONT_PRESET_KEY) ?? EDITOR_DISPLAY_PREF_DEFAULT.codeFontPreset,
+        uiFontPreset: s.getItem(UI_FONT_PRESET_KEY) ?? EDITOR_DISPLAY_PREF_DEFAULT.uiFontPreset,
+        uiFontFamily: s.getItem(UI_FONT_FAMILY_KEY) ?? '',
         inlayHints: s.getItem(INLAY_HINTS_KEY) !== '0',
         uiFontScale: sanitizeUiFontScale(s.getItem(UI_FONT_SCALE_KEY)),
       });
@@ -327,6 +358,9 @@ export function loadEditorDisplayPrefs(): EditorDisplayPrefs {
     snapshotCache.minimap === fresh.minimap &&
     snapshotCache.lineNumbers === fresh.lineNumbers &&
     snapshotCache.fontFamily === fresh.fontFamily &&
+    snapshotCache.codeFontPreset === fresh.codeFontPreset &&
+    snapshotCache.uiFontPreset === fresh.uiFontPreset &&
+    snapshotCache.uiFontFamily === fresh.uiFontFamily &&
     snapshotCache.inlayHints === fresh.inlayHints &&
     snapshotCache.uiFontScale === fresh.uiFontScale
   ) {
@@ -370,8 +404,21 @@ function samePrefs(a: EditorDisplayPrefs, b: EditorDisplayPrefs): boolean {
     a.minimap === b.minimap &&
     a.lineNumbers === b.lineNumbers &&
     a.fontFamily === b.fontFamily &&
+    a.codeFontPreset === b.codeFontPreset &&
+    a.uiFontPreset === b.uiFontPreset &&
+    a.uiFontFamily === b.uiFontFamily &&
     a.inlayHints === b.inlayHints &&
     a.uiFontScale === b.uiFontScale
+  );
+}
+
+/** 字体四键（档位 × 2 + 两段自定义文本）里是否有任何一位变了 */
+function fontFieldsChanged(a: EditorDisplayPrefs, b: EditorDisplayPrefs): boolean {
+  return (
+    a.fontFamily !== b.fontFamily ||
+    a.codeFontPreset !== b.codeFontPreset ||
+    a.uiFontPreset !== b.uiFontPreset ||
+    a.uiFontFamily !== b.uiFontFamily
   );
 }
 
@@ -392,6 +439,9 @@ function write(patch: PrefsInput): EditorDisplayPrefs {
       s.setItem(MINIMAP_KEY, next.minimap === 'off' ? '0' : '1');
       s.setItem(LINE_NUMBERS_KEY, next.lineNumbers);
       s.setItem(FONT_FAMILY_KEY, next.fontFamily);
+      s.setItem(CODE_FONT_PRESET_KEY, next.codeFontPreset);
+      s.setItem(UI_FONT_PRESET_KEY, next.uiFontPreset);
+      s.setItem(UI_FONT_FAMILY_KEY, next.uiFontFamily);
       s.setItem(INLAY_HINTS_KEY, next.inlayHints ? '1' : '0');
       s.setItem(UI_FONT_SCALE_KEY, String(next.uiFontScale));
     } catch {
@@ -402,6 +452,8 @@ function write(patch: PrefsInput): EditorDisplayPrefs {
   // 界面字号缩放的生效路径就这一格（写侧当场落根元素，不用等编辑器重挂）：
   // 与 `theme-pref.ts` 的 setter 同款形态——落盘与应用在同一个入口，谁都不许只写不应用。
   if (next.uiFontScale !== current.uiFontScale) applyUiFontScalePref(next.uiFontScale);
+  // 字体档位/自定义一改，当场把内联 `--font-code` / `--font-ui` 落根元素（与字号缩放同款"写侧即应用"）
+  if (fontFieldsChanged(current, next)) applyFontStackCssPrefs(next);
   bump();
   return next;
 }
@@ -433,8 +485,11 @@ export function modifiedEditorDisplayKeys(
     'minimap',
     'lineNumbers',
     'fontFamily',
+    'codeFontPreset',
     'inlayHints',
     'uiFontScale',
+    'uiFontPreset',
+    'uiFontFamily',
   ];
   return keys.filter((k) => prefs[k] !== EDITOR_DISPLAY_PREF_DEFAULT[k]);
 }
@@ -491,9 +546,53 @@ export function editorDisplayOptionPatch(
   };
 }
 
-/** 字体族补丁：只在 create 路径与偏好变更时使用（空串 = 不发送，保留默认栈） */
+/**
+ * 把解析出的两条栈落到根元素的**内联声明**上（L20 生效链的 CSS 侧，形态照 `applyUiFontScalePref`）：
+ * - 内联样式压过 `:root` 规则，天然就是"用户选了别的"的表达；`styles.css` / `tokens.css` 里的
+ *   `CODE_FONT_CSS_LINE` / `UI_FONT_CSS_LINE` 两条闸逐字不动——默认档**一位都不写**，
+ *   没动过字体项的作者界面与编辑器逐字不变。
+ * - 与 Monaco 侧同串：那一份出自 `editorDisplayFontPatch`（同一对 `resolve*` 函数），
+ *   `font-presets.test.ts` 一条断言读两个出口，防再次分叉。
+ * - 触发点两处：`write()`（设置页改完当场见效）与 `editorDisplayFontPatch()`
+ *   （编辑器 create / 偏好订阅回调都会经过它 ⇒ 下次启动播种，无需动别人模块的接线）。
+ */
+export function applyFontStackCssPrefs(
+  prefs: EditorDisplayPrefs = loadEditorDisplayPrefs(),
+  root: UiFontScaleRoot | null = defaultFontScaleRoot(),
+): void {
+  if (!root) return;
+  const code = resolveCodeFontStack(prefs);
+  if (code.stack === CODE_FONT_STACK) root.style.removeProperty(CODE_FONT_CSS_TOKEN);
+  else root.style.setProperty(CODE_FONT_CSS_TOKEN, code.stack);
+  const ui = resolveUiFontStack(prefs);
+  if (ui.stack === UI_FONT_SYSTEM_STACK) root.style.removeProperty(UI_FONT_CSS_TOKEN);
+  else root.style.setProperty(UI_FONT_CSS_TOKEN, ui.stack);
+}
+
+/**
+ * 字体补丁（Monaco 侧）：**只**在 create 路径与偏好变更时使用（`code-font.ts` 的不变式：
+ * 体量降级集永不含字体键）。
+ *
+ * 返回值口径：
+ * - 全默认（`default` 档 + 空自定义文本 ⇒ 生效栈就是 `CODE_FONT_STACK`）时发空补丁——
+ *   create 路径已 spread `CODE_FONT_BASELINE`，再发一遍同串是零增益噪声（旧测试钉的就是 `{}`）；
+ * - 其余情况发 `resolveCodeFontStack` 的生效栈（档位栈 / 老自由文本，同一出口）；
+ * - 坏栈不发送（`isUsableCodeFontStack` 挡掉后 Monaco 留平台默认，宁缺毋错）。
+ *
+ * 顺手承担 CSS 侧播种（见 `applyFontStackCssPrefs` 头注；node 环境无 `document` ⇒ 空转）。
+ */
 export function editorDisplayFontPatch(
   prefs: EditorDisplayPrefs = loadEditorDisplayPrefs(),
 ): EditorOptionPatch {
-  return prefs.fontFamily === '' ? {} : { fontFamily: prefs.fontFamily };
+  applyFontStackCssPrefs(prefs);
+  const resolved = resolveCodeFontStack(prefs);
+  if (
+    resolved.stack === CODE_FONT_STACK &&
+    !resolved.fellBack &&
+    prefs.codeFontPreset === 'default' &&
+    prefs.fontFamily === ''
+  ) {
+    return {};
+  }
+  return isUsableCodeFontStack(resolved.stack) ? { fontFamily: resolved.stack } : {};
 }

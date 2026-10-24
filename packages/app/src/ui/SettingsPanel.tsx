@@ -69,6 +69,22 @@ import {
   type RenderWhitespacePref,
   type UiFontScalePref,
 } from './editor-display-prefs';
+// 字体档位（视觉批十二 L20）：档位表 / 解析 / 可用性判定的真源全在 font-presets.ts，本页只排版。
+import { KitRadio } from '../ui-kit';
+import {
+  CODE_FONT_PRESETS,
+  CUSTOM_CODE_FONT_PRESET_ID,
+  CUSTOM_UI_FONT_PRESET_ID,
+  FONT_PREVIEW_SAMPLE,
+  UI_FONT_PRESETS,
+  checkFontStackPresence,
+  domFontPresenceChecker,
+  resolveCodeFontStack,
+  resolveUiFontStack,
+  type FontPreset,
+  type FontPresenceChecker,
+  type ResolvedFontStack,
+} from './font-presets';
 import { isComposingEvent } from './shell-keys';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
@@ -437,6 +453,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               </span>
             </span>
           </div>
+          {/* 界面字体（视觉批十二 L20）：档位表真源在 font-presets.ts，生效链与编程字体同一对
+              resolve 函数（写侧当场落根元素内联 --font-ui）。锚点在册 settings-search.ts。 */}
+          <UiFontRow />
           {/* 「只改显示、不动文件」在本节多行重复（批次十一文案瘦身）：收成本组一条脚注。 */}
           <div className="settings-group-note">本节各项只改显示、不动文件。</div>
         </div>
@@ -1478,6 +1497,9 @@ function EditorDisplayRows(): ReactElement {
   const pref = useEditorDisplayPrefs();
   const [fontDraft, setFontDraft] = useState<string>(pref.fontFamily);
   const modifiedCount = modifiedEditorDisplayKeys(pref).length;
+  // 生效链唯一入口：radio 勾哪档、预览用哪条栈，全看 resolve 结果（不是存的原值）
+  const codeResolved = resolveCodeFontStack(pref);
+  const fontChecker = useMemo(() => domFontPresenceChecker(), []);
   // 草稿与生效值同源：改完偏好（含另一处「恢复默认」）后把输入框拉回真值，
   // 免得页面上同时存在"框里一个字体、编辑器另一个字体"两个真相
   useEffect(() => {
@@ -1485,8 +1507,12 @@ function EditorDisplayRows(): ReactElement {
   }, [pref.fontFamily]);
   const fontDirty = fontDraft !== pref.fontFamily;
   const applyFont = (): void => {
-    const next = saveEditorDisplayPrefs({ fontFamily: fontDraft });
-    setFontDraft(next.fontFamily); // 清洗后可能回落到默认栈（空串），框里显示的即是真源
+    // 应用自定义文本 = 显式选自定义档（清洗后可能回落空串 ⇒ 不生效，框里显示的是真源）
+    const next = saveEditorDisplayPrefs({
+      fontFamily: fontDraft,
+      codeFontPreset: fontDraft.trim() !== '' ? CUSTOM_CODE_FONT_PRESET_ID : 'default',
+    });
+    setFontDraft(next.fontFamily);
   };
   return (
     <>
@@ -1583,37 +1609,36 @@ function EditorDisplayRows(): ReactElement {
           </span>
         </span>
       </label>
-      <div className="settings-row static" data-settings-key="editor.fontFamily">
-        <input
-          type="text"
-          className="settings-font-input"
-          value={fontDraft}
-          placeholder="留空 = 用内置字体"
-          aria-label="编程字体"
-          onChange={(e) => setFontDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              applyFont();
-            }
-          }}
+      <div
+        className="settings-row static"
+        data-settings-key="editor.fontFamily"
+        style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
+      >
+        <FontPresetControl
+          presets={CODE_FONT_PRESETS}
+          customId={CUSTOM_CODE_FONT_PRESET_ID}
+          resolved={codeResolved}
+          checker={fontChecker}
+          group="code-font-preset"
+          ariaLabel="编程字体"
+          onPick={(id) =>
+            saveEditorDisplayPrefs(
+              id === CUSTOM_CODE_FONT_PRESET_ID ? { codeFontPreset: id } : { codeFontPreset: id, fontFamily: '' },
+            )
+          }
+          customDraft={fontDraft}
+          onCustomDraft={setFontDraft}
+          onApplyCustom={applyFont}
+          customDirty={fontDirty}
+          onClearCustom={() => saveEditorDisplayPrefs({ fontFamily: '', codeFontPreset: 'default' })}
+          canClearCustom={pref.fontFamily !== EDITOR_DISPLAY_PREF_DEFAULT.fontFamily || pref.codeFontPreset !== 'default'}
+          placeholder="选「自定义」时填一个字体名（如 Consolas）"
+          note="档位来自 font-presets.ts 的表（每张栈都保证末位等宽兜底）；自定义文本非空时说了算（旧口径原样）；末尾自动补等宽兜底，本机没装的字体自动落到栈后面的面。只改显示、不动文件"
         />
-        {/* 房规：没改动 ⇒ 按钮不可点；坏值由偏好侧清洗并回落到内置字体，不静默假装生效 */}
-        <button className="ghost small" disabled={!fontDirty} onClick={applyFont}>
-          应用
-        </button>
-        <button
-          className="ghost small"
-          disabled={pref.fontFamily === EDITOR_DISPLAY_PREF_DEFAULT.fontFamily}
-          onClick={() => saveEditorDisplayPrefs({ fontFamily: '' })}
-        >
-          用回内置
-        </button>
         <span>
           编程字体
           <span className="settings-hint">
-            填一个字体名（如 Consolas），回车或点「应用」；末尾会自动补上等宽兜底。
-            本机没装这个字体会回落到内置那一套。只改显示、不动文件
+            编辑器与比对窗的字面；连字恒关、全角恒占两列（数据编辑器口径，档位只换字形不换规矩）
           </span>
         </span>
       </div>
@@ -1628,5 +1653,174 @@ function EditorDisplayRows(): ReactElement {
         </div>
       ) : null}
     </>
+  );
+}
+
+/* ==========================================================================================
+ * 字体档位控件（视觉批十二 L20）：「编程字体」与「界面字体」两行同款形态——
+ * 档位 radio 列表 + 所见即所得预览（全角 + 中日汉字 + 易连字符号串）+ 本机可用性标注 +
+ * 自定义输入框。真源全在 `font-presets.ts`（表 / 解析 / 判定），本页只排版并调
+ * `saveEditorDisplayPrefs`。
+ *
+ * 可见性口径（铁律 4：不许静默）：
+ * - radio 上勾的是 **resolve 出的生效档**，不是原始存值——老用户存过非空自定义文本 ⇒
+ *   勾显在「自定义」（那是兼容红线：文本赢档位，不许把自定义吃掉）；
+ * - 存的档位 id 不在表里 ⇒ 勾显在回落档并明说"回落了"；
+ * - 每个档位的成员逐个 `document.fonts.check`，缺装的标出来并说清落到哪张兜底；
+ *   判定 API 拿不到 ⇒ 整行显示"判定不了"，不假装"都装了"。
+ *
+ * 点非自定义档会连旧自定义文本一起清掉（`fontFamily: ''`）：文本优先于档位，
+ * 留着它这档就永远不生效——显式点选是用户意志，这不是"吃掉自定义"，是替换自定义。
+ *
+ * `// ui-kit-candidate:` 竖向 radio 组（radiogroup + 逐档说明行 + 可用性角标）目前用内联
+ * flex 布局在设置页本地搭——若后续别处也要"带注解的单选列表"，应升为 ui-kit 原语。
+ * ========================================================================================== */
+
+interface FontPresetControlArgs {
+  readonly presets: readonly FontPreset[];
+  readonly customId: string;
+  /** 生效链解析结果（栈 + 生效档 + 请求档 + 回落事实），来自 `resolveCodeFontStack` / `resolveUiFontStack` */
+  readonly resolved: ResolvedFontStack;
+  readonly checker: FontPresenceChecker | null;
+  /** radio 组的 DOM name（两行各一枚，互不串组） */
+  readonly group: string;
+  readonly ariaLabel: string;
+  readonly onPick: (id: string) => void;
+  readonly customDraft: string;
+  readonly onCustomDraft: (value: string) => void;
+  readonly onApplyCustom: () => void;
+  readonly customDirty: boolean;
+  readonly onClearCustom: () => void;
+  readonly canClearCustom: boolean;
+  readonly placeholder: string;
+  readonly note: string;
+}
+
+function FontPresetControl(a: FontPresetControlArgs): ReactElement {
+  const missingOf = (stack: string): string[] => {
+    if (stack === '') return [];
+    const result = checkFontStackPresence(stack, a.checker);
+    return result === null ? [] : result.filter((e) => !e.present).map((e) => e.family);
+  };
+  const fellBackNotice =
+    a.resolved.fellBack && a.resolved.requestedPresetId !== a.resolved.presetId
+      ? a.presets.some((p) => p.id === a.resolved.requestedPresetId)
+        ? a.resolved.presetId === a.customId
+          ? `自定义文本当前生效，覆盖了所选的「${a.resolved.requestedPresetId}」档——这是旧口径的兼容红线（文本赢）；点上面任一档会连文本一起换掉`
+          : `存的字体档位「${a.resolved.requestedPresetId}」取不到栈，当前生效的是「${a.resolved.presetId}」档——重新选一档即可覆盖`
+        : `存的字体档位「${a.resolved.requestedPresetId}」不在列表里，当前生效的是「${a.resolved.presetId}」档——重新选一档即可覆盖`
+      : null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+      <span
+        role="radiogroup"
+        aria-label={a.ariaLabel}
+        style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}
+      >
+        {a.presets.map((p) => {
+          const missing = missingOf(p.stack);
+          return (
+            <KitRadio
+              key={p.id}
+              name={a.group}
+              value={p.id}
+              checked={a.resolved.presetId === p.id}
+              onChange={() => a.onPick(p.id)}
+              label={p.label}
+            >
+              <span title={p.note}>
+                {p.label}
+                {missing.length > 0 ? (
+                  <em className="settings-hint">（本机缺装：{missing.join('、')}，自动落到栈后面的面）</em>
+                ) : null}
+              </span>
+            </KitRadio>
+          );
+        })}
+      </span>
+      {fellBackNotice !== null ? <span className="settings-hint">{fellBackNotice}</span> : null}
+      {a.checker === null ? <span className="settings-hint">此环境读不到本机字体清单，缺装与否判定不了（选择本身照常生效）</span> : null}
+      {/* 所见即所得：这一行用**当前生效栈**渲染，全角 + 中日汉字 + 常被连字糊掉的符号串都在 */}
+      <div style={{ fontFamily: a.resolved.stack }} data-font-preview={a.group}>
+        {FONT_PREVIEW_SAMPLE}
+      </div>
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          type="text"
+          className="settings-font-input"
+          value={a.customDraft}
+          placeholder={a.placeholder}
+          aria-label={a.ariaLabel}
+          onChange={(e) => a.onCustomDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              a.onApplyCustom();
+            }
+          }}
+        />
+        {/* 房规（沿用旧行）：没改动 ⇒ 按钮不可点；坏值由清洗层回落，不静默假装生效 */}
+        <button className="ghost small" disabled={!a.customDirty} onClick={a.onApplyCustom}>
+          应用
+        </button>
+        <button className="ghost small" disabled={!a.canClearCustom} onClick={a.onClearCustom}>
+          用回内置
+        </button>
+      </span>
+      <span className="settings-hint">{a.note}</span>
+    </div>
+  );
+}
+
+/** 「外观」节的界面字体行：自订阅偏好（照 `TreeSitterRow` 先例，零 props） */
+function UiFontRow(): ReactElement {
+  const pref = useEditorDisplayPrefs();
+  const resolved = resolveUiFontStack(pref);
+  const checker = useMemo(() => domFontPresenceChecker(), []);
+  const [draft, setDraft] = useState<string>(pref.uiFontFamily);
+  // 草稿与生效值同源（同编程字体行的房规）：偏好一变就把框拉回真值
+  useEffect(() => {
+    setDraft(pref.uiFontFamily);
+  }, [pref.uiFontFamily]);
+  return (
+    <div
+      className="settings-row static"
+      data-settings-key="appearance.uiFontFamily"
+      style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
+    >
+      <FontPresetControl
+        presets={UI_FONT_PRESETS}
+        customId={CUSTOM_UI_FONT_PRESET_ID}
+        resolved={resolved}
+        checker={checker}
+        group="ui-font-preset"
+        ariaLabel="界面字体"
+        onPick={(id) =>
+          saveEditorDisplayPrefs(
+            id === CUSTOM_UI_FONT_PRESET_ID ? { uiFontPreset: id } : { uiFontPreset: id, uiFontFamily: '' },
+          )
+        }
+        customDraft={draft}
+        onCustomDraft={setDraft}
+        onApplyCustom={() => {
+          const next = saveEditorDisplayPrefs({
+            uiFontFamily: draft,
+            uiFontPreset: draft.trim() !== '' ? CUSTOM_UI_FONT_PRESET_ID : 'system',
+          });
+          setDraft(next.uiFontFamily); // 清洗后可能回落空串（= 不生效），框里显示真源
+        }}
+        customDirty={draft !== pref.uiFontFamily}
+        onClearCustom={() => saveEditorDisplayPrefs({ uiFontPreset: 'system', uiFontFamily: '' })}
+        canClearCustom={pref.uiFontPreset !== 'system' || pref.uiFontFamily !== ''}
+        placeholder="选「自定义」时填界面字体名（如 Microsoft YaHei）"
+        note="外壳文字（标签页 / 侧栏 / 设置页）用哪张面；「等宽」档跟随上面的编程字体。选系统（现状）就是本来的样子。只改显示、不动文件"
+      />
+      <span>
+        界面字体
+        <span className="settings-hint">
+          与编辑器正文字号（「正文字号」那格）两条轴：这里管**字形**，那里管**大小**
+        </span>
+      </span>
+    </div>
   );
 }
