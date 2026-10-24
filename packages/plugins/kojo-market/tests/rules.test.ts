@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MARKET_MAX_COVER_BYTES,
   MARKET_MAX_FILE_ENTRIES,
   MARKET_MAX_PATH_DEPTH,
   MARKET_MAX_UNPACKED_BYTES,
@@ -17,7 +18,7 @@ import {
   type PackFileEntry,
   type PackManifest,
 } from '@kojo/plugin-api';
-import { parseManifest, packContainerProblem } from '../src/manifest';
+import { indexEntryProblem, parseIndex, parseManifest, packContainerProblem } from '../src/manifest';
 import {
   packUpdateCheck,
   type InstalledPack,
@@ -428,5 +429,66 @@ describe('packUpdateCheck：索引条目 vs 已装集', () => {
     expect(packUpdateCheck(entryRow, [installed('1.0.0')])?.failure).toBeNull();
     expect(packUpdateCheck(entryRow, [installed('2.0.0')])?.failure).toBeNull();
     expect(packUpdateCheck(entryRow, [installed('1.0.1')])?.failure).toBeNull();
+  });
+});
+
+/* ================= 封面字段（批次十一 R3 · additive）：解析层认它，坏了出声 ================= */
+
+describe('indexEntryProblem / parseIndex 认 `cover`（R3 additive 契约）', () => {
+  const okCover = { url: 'https://img.example.test/cover.png', bytes: 4096 };
+  /** 一份恒过其它闸的条目底座（与上面 `entryRow` 同一形状，独立留在这里免得两段互相搬动） */
+  const coverBase = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    kind: 'kojo-pack',
+    id: 'cover.demo',
+    version: '1.0.0',
+    name: '封面示例',
+    author: 'someone',
+    license: 'CC-BY-NC 4.0',
+    minAppVersion: '0.4.0',
+    zip: { url: 'https://github.com/p/p/releases/download/a/a.zip', sha256: HEX, bytes: 1 },
+    fileCount: 1,
+    unpackedBytes: 3,
+    ...over,
+  });
+  const parseWith = (entry: Record<string, unknown>): { index: { packs: unknown[] } | null; dropped: string[] } =>
+    parseIndex({ schema: MARKET_SCHEMA_VERSION, generatedAt: '2026-10-24T00:00:00Z', packs: [entry] });
+
+  it('旧声明零改动：条目不带 cover ⇒ 判据过、parseIndex 照收（dropped 空）——占位照旧那条路一步没动', () => {
+    expect(indexEntryProblem(coverBase())).toBeNull();
+    const { index, dropped } = parseWith(coverBase());
+    expect(dropped).toEqual([]);
+    expect(index?.packs).toHaveLength(1);
+  });
+
+  it('合法 cover ⇒ 整条通过且字段原样留在条目上（不许"校验过了却把字段洗掉"）', () => {
+    expect(indexEntryProblem(coverBase({ cover: okCover }))).toBeNull();
+    const { index, dropped } = parseWith(coverBase({ cover: okCover }));
+    expect(dropped).toEqual([]);
+    expect(index?.packs[0]).toMatchObject({ cover: okCover });
+  });
+
+  it('非法协议（http / data）⇒ 整条进 dropped 出声，拒因里点明 cover（铁律 4：不许静默丢字段）', () => {
+    for (const url of ['http://img.example.test/a.png', 'data:image/png;base64,AAAA']) {
+      const why = indexEntryProblem(coverBase({ cover: { url, bytes: 10 } }));
+      expect(why, url).not.toBeNull();
+      expect(why!, url).toContain('cover');
+      const { index, dropped } = parseWith(coverBase({ cover: { url, bytes: 10 } }));
+      expect(dropped, url).toHaveLength(1);
+      expect(dropped[0]!, url).toContain('cover');
+      expect(dropped[0]!, url).toContain('cover.demo');
+      expect(index?.packs, url).toHaveLength(0); // 这一条不呈现、不许装；坏字段没有"悄悄忽略"这一处理
+    }
+  });
+
+  it('超限也整条拒：url 超长 / bytes 非正整数 / bytes 超封面上限', () => {
+    expect(indexEntryProblem(coverBase({ cover: { url: `https://a.test/${'x'.repeat(2048)}`, bytes: 10 } }))).toContain('超长');
+    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png', bytes: 0 } }))).toContain('bytes');
+    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png', bytes: 1.5 } }))).toContain('bytes');
+    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png', bytes: MARKET_MAX_COVER_BYTES + 1 } }))).toContain('上限');
+  });
+
+  it('cover 形状不是对象 / bytes 不是数 ⇒ 同样出声（这一格只装"要么没有、要么全对"）', () => {
+    expect(indexEntryProblem(coverBase({ cover: 'https://a.test/x.png' }))).toContain('cover');
+    expect(indexEntryProblem(coverBase({ cover: { url: 'https://a.test/x.png' } }))).toContain('bytes');
   });
 });

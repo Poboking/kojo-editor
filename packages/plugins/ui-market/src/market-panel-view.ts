@@ -75,6 +75,14 @@ export interface MarketPanelViewProps {
    * 禁用**只改 `disabled`，不改按钮文字**：进度那一句只住 `.mk-note` 一处。
    */
   readonly installing: string | null;
+  /**
+   * 封面加载失败的行键（R3 additive；键形 = `indexRowKey`）。命中的行**退回「」母题徽标**
+   * （不许留破图框）；缺省 = 一枚都没失败过。带状态组件持有这份状态，本层只按名单作画——
+   * 静态渲染判据因此能直接检"失败 ⇒ 母题在场"。
+   */
+  readonly coverFailedKeys?: ReadonlySet<string>;
+  /** 封面 `<img>` 的 onError 上报口（只发"这一枚没加载出来"这一个事实） */
+  onCoverError?(key: string): void;
   onQuery(q: string): void;
   /** 清空过滤（工具条上那枚「清除」；过滤态下它是空态那句话的唯一出路，不另设弹窗） */
   onClearQuery(): void;
@@ -106,7 +114,7 @@ export interface MarketPanelViewProps {
  *     ├─ .mk-empty（列表区空态 / 离线态：一句主句 + 一句退路；与 ui-kit 的
  *     │            `kit-empty kit-empty-stack` / `kit-empty-title` / `kit-empty-hint` **类名并列**发出）
  *     └─ section.mk-group → h4.mk-grouptitle + span.mk-count → .mk-row(或 .mk-row.busy + aria-busy) × n（索引）
- *         .mk-row > .mk-main > .mk-head[ span.mk-name( > span.mk-emblem[aria-hidden] + span.mk-name-text )
+ *         .mk-row > .mk-main > .mk-head[ span.mk-name( > ( img.mk-cover | span.mk-emblem[aria-hidden] ) + span.mk-name-text )
  *                                       | span.mk-badge? | div.mk-actions ]
  *                            + .mk-sub（摘要，可缺省）
  *                            + .mk-facts[ span.mk-meta × n，title=整行全文 ]
@@ -123,9 +131,11 @@ export interface MarketPanelViewProps {
  * 3. **按钮 children 永远是纯字符串**（图标一律不上按钮）：动作判据按标签找按钮、并把 `onClick` 真的调一次；
  *    非按钮位子上要放记号（如折叠件的尖角），走宿主图标桥 `renderIcon(名字, 档位)` 取注册表 SVG——
  *    **字符不当图标用**（批次十一 L07），本层源码里一个图标字符都不许出现；
- * 4. **占位徽标不是图**：`.mk-emblem` 里只有包名首字那一枚文本（`aria-hidden`），
- *    「」由 `market.css` 用边框**画**出来（`content:''` 空串形状），零图片、零 emoji、零字形图标；
- *    它住在 `.mk-name` 里面（名字的装饰，不是并列的一栏），所以头排第一枚仍是 `.mk-name`；
+ * 4. **封面与占位同位互斥**（R3 additive）：条目带 `cover` ⇒ 头排第一枚是 `<img class="mk-cover">`
+ *    （`alt=""`——名字就在旁边，图是装饰不是第二遍朗读）；条目没带、或这一枚报过加载失败 ⇒
+ *    `.mk-emblem` 母题在场（一枚画出来的「」+ 包名首字，`aria-hidden`）。**任何一行都恰有其一**，
+ *    不许留破图框；占位的「」两枚角仍由 `market.css` 用边框**画**出来（`content:''` 空串形状），
+ *    零字符图标、读屏不念两遍。两种都住在 `.mk-name` 里面，头排第一枚仍是 `.mk-name`；
  * 5. **失败态必须落在文字上**：`.mk-note` 那句之后跟一行 `.mk-guide`（哪一步 + 下一步做什么），
  *    话从 `REJECT_TEXT` 同一张表反查得到，不复制第二份话术，也不靠"把同一句染红"充数；
  * 6. **类名是跨包契约**——本层只产出这些类名与层级，一切视觉（颜色 / 圆角 / 滚动 / 焦点环）住 app 侧 `market.css`；
@@ -207,13 +217,15 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       createElement('span', { className: 'mk-empty-hint kit-empty-hint' }, hint),
     );
   /**
-   * 卡片体的层级：第一排 = 徽标 + 名字 + 徽章 + 动作（动作钉右端）；第二排 = 摘要（可缺省）；
+   * 卡片体的层级：第一排 = 封面（或母题徽标）+ 名字 + 徽章 + 动作（动作钉右端）；第二排 = 摘要（可缺省）；
    * 第三排 = 次要事实合并成一行（`title` 给整行全文，窄侧栏溢出走省略号，不再逐条各占一行）。
    * 分排而不是把动作丢在同一个 wrap 容器末尾：后者会让"名字吃掉剩余宽度"把动作簇
    * 挤到第三排，一张卡从两行变四行——窄侧栏里这就是密度事故。
    *
-   * 徽标住在 `.mk-name` **里面**（不是 `.mk-head` 的又一个子元素）：层级判据钉的是
-   * "头排第一枚就是名字"，名字这一档本来就该连着它的门面——占位徽标是名字的装饰，不是并列的一栏。
+   * 头排第一枚住的是**封面的位子**：条目带 `cover` 且这枚没报过加载失败 ⇒ `<img class="mk-cover">`；
+   * 没有封面或失败过 ⇒ L18 的「」母题徽标（`aria-hidden`，读屏不念两遍）。两种都住在
+   * `.mk-name` **里面**（不是 `.mk-head` 的又一个子元素）：层级判据钉的是
+   * "头排第一枚就是名字"，封面与占位徽标都是名字的装饰，不是并列的一栏。
    */
   const main = (
     name: string,
@@ -221,6 +233,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
     acts: ReactNode,
     summary: string | null,
     facts: string[],
+    cover?: { readonly src: string; readonly reportFailure: () => void },
   ): ReactNode =>
     createElement(
       'div',
@@ -231,10 +244,24 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         createElement(
           'span',
           { className: 'mk-name', title: name },
-          // 封面缺位时的母题徽标：一枚画出来的「」+ 包名首字（`aria-hidden`——同一个名字
-          // 不给读屏念两遍）。ui-kit-candidate: KitEmblem——「由名字生成的一枚抽象占位徽标」
-          // 是所有列表面板共同的缺口（教程面 / 字典包 / 归档浏览器都会要），不该每处各画一遍。
-          createElement('span', { className: 'mk-emblem', 'aria-hidden': true }, emblemGlyph(name)),
+          // 封面（R3 additive）：真图与母题占位**同位互斥**——有图就换图，`onError` 报给
+          // 带状态的那一层（`coverFailedKeys` 记一笔），下一帧这一枚退回母题，不留破图框。
+          // alt="" 而非包名：名字就在旁边一格，图是装饰不是第二遍朗读（母题徽标的 aria-hidden 同理）。
+          cover === undefined
+            ? createElement(
+                'span',
+                { className: 'mk-emblem', 'aria-hidden': true },
+                emblemGlyph(name),
+                // ui-kit-candidate: KitEmblem——「由名字生成的一枚抽象占位徽标」是所有列表面板
+                // 共同的缺口（教程面 / 字典包 / 归档浏览器都会要），不该每处各画一遍「」。
+              )
+            : createElement('img', {
+                className: 'mk-cover',
+                src: cover.src,
+                alt: '',
+                loading: 'lazy',
+                onError: cover.reportFailure,
+              }),
           createElement('span', { className: 'mk-name-text' }, name),
         ),
         badge,
@@ -267,6 +294,12 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
         // 可安装 = `mk-install`（可点）；已安装 = `mk-badge-ok` 那枚胶囊（不给按钮）；
         // 进行中/检查中 = `.mk-row.busy` + 禁用动作簇。按钮文字照旧一个字都不变。
         const busy = p.installing === key;
+        // 封面（R3 additive）：条目没带、或这一枚报过加载失败 ⇒ `undefined`，头排第一枚退回
+        // L18 的母题徽标——缺图不是一块空框，占位永远在场（契约校验保证进来的 url 必是 https）。
+        const cover =
+          e.cover === undefined || (p.coverFailedKeys?.has(key) ?? false)
+            ? undefined
+            : { src: e.cover.url, reportFailure: () => p.onCoverError?.(key) };
         return createElement(
           'div',
           {
@@ -299,6 +332,7 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
               `作者 ${e.author}`,
               `许可 ${e.license}`,
             ],
+            cover,
           ),
           row.appOk
             ? null

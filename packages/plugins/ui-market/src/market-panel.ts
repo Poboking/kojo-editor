@@ -138,6 +138,15 @@ export function createMarketPanel(
     // 装/更新进度读数（0–100 的整数；null = 此刻没有可画的进度。
     // 带字的进度句仍只写 note 一处，这根条只是同一事实的视觉面）
     const [progress, setProgress] = useState<number | null>(null);
+    /**
+     * 加载失败过的封面行键（R3 additive）。`<img onError>` 只上报"这一枚没出来"这一个事实，
+     * 怎么退由视图层判（`coverFailedKeys` 命中 ⇒ 退回「」母题）——视图层零状态，状态住这里。
+     * 行键 = `indexRowKey`（kind/id@version）：列表重取后同一条再失败也不重复记账。
+     */
+    const [coverFailedKeys, setCoverFailedKeys] = useState<ReadonlySet<string>>(new Set());
+    const reportCoverFailure = useCallback((key: string): void => {
+      setCoverFailedKeys((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+    }, []);
     // 后台校对的单调序号：只认最新一次发起的读数——装/卸快速连击时，前一次的校对
     // 可能比后一次晚落，没有这道闸旧事实会倒灌（卸掉的行被"复活"且无后续纠正）
     const readSeq = useRef(0);
@@ -407,6 +416,9 @@ export function createMarketPanel(
       pending,
       open,
       installing,
+      // 封面失败名单与上报口（R3 additive）：命中即退回母题，视图层不持状态
+      coverFailedKeys,
+      onCoverError: reportCoverFailure,
       onQuery: setQuery,
       onClearQuery: () => setQuery(''),
       onPull: () => void pull(),
