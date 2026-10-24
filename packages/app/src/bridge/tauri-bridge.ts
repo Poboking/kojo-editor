@@ -105,6 +105,41 @@ export const tauriBridge: PlatformBridge = {
     // Rust 侧（start_watch）只做"原始事件转发"，去抖与判级在内核（BUG-5 分层口径）。
     // 事件名常量与 src-tauri/src/lib.rs 的 FS_CHANGED_EVENT / FS_WATCH_ERROR_EVENT 成对。
     if (!isTauri()) {
+      // 调试模式批（2026-10-24）：web 调试宿在场时走它的 SSE 事件流（事件名字面与桌面壳
+      // 同一对），让浏览器壳也具备真实文件监视——外部改动 / 盘面重列这类体感判据得以在
+      // 无桌面壳的环境里被自动化。宿不在场则保持既有显式降级。
+      const { webHostActive, onWebHostEvent } = await import('../debug/web-host-transport');
+      if (webHostActive()) {
+        const unChanged = onWebHostEvent('kojo:fs-changed', (payload) => {
+          const ev = payload as { kind: FileChangeKind; path: string } | null;
+          if (ev && typeof ev.kind === 'string' && typeof ev.path === 'string') onEvent(ev.kind, ev.path);
+        });
+        const unError = onWebHostEvent('kojo:fs-watch-error', (payload) => {
+          const ev = payload as { error: string } | null;
+          if (ev && typeof ev.error === 'string') onReport?.({ type: 'error', reason: ev.error });
+        });
+        try {
+          const reply = await invoke<WatchReply>('start_watch', { paths });
+          onReport?.({
+            type: 'started',
+            watched: reply.watched,
+            failures: reply.failed.map((f) => ({ root: f.path, reason: f.error })),
+          });
+        } catch (err) {
+          const reason = errorText(err);
+          onReport?.({ type: 'started', watched: [], failures: paths.map((p) => ({ root: p, reason })) });
+          unChanged();
+          unError();
+          throw err;
+        }
+        return () => {
+          unChanged();
+          unError();
+          void invoke('stop_watch').catch((err: unknown) => {
+            console.warn('[bridge] stop_watch failed:', err);
+          });
+        };
+      }
       // 先自证再抛：让降级消息是"浏览器壳没有监视能力"，而不是 WebView 的一句 undefined
       onReport?.({ type: 'started', watched: [], failures: paths.map((p) => ({ root: p, reason: '浏览器开发壳无文件监视能力（仅 Tauri 桌面壳有）' })) });
       throw new Error('浏览器开发壳无文件监视能力（仅 Tauri 桌面壳有）');

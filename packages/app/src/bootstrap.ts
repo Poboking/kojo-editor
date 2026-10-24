@@ -53,6 +53,10 @@ export async function bootstrapKernel(): Promise<Kernel> {
   installComputeTransport(kernel);
   await kernel.start();
   installPerfProbe(kernel);
+  // 调试面登记（2026-10-24 调试模式批）：`?kojo-debug=1` 时 `window.__kojoDebug.kernel()`
+  // 经登记簿拿到这枚实例；未选入调试模式时登记簿无人读，零开销。
+  // **动态 import 是刻意的**：开机图闸（ps10-eager-graph）文件余量只剩 1，登记簿不许吃它。
+  void import('./debug/debug-registry').then((m) => m.registerDebugKernel(kernel));
   return kernel;
 }
 

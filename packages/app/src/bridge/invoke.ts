@@ -1,7 +1,10 @@
 /**
  * Tauri IPC 封装。
  * - 在 Tauri WebView 中走真实 IPC；
- * - 纯浏览器（vite dev 无壳）中调用即抛错——UI 会展示"需要桌面壳"提示。
+ * - 纯浏览器（vite dev 无壳）中默认调用即抛错——UI 会展示"需要桌面壳"提示；
+ *   **例外**：页面选入了 web 调试模式（`?kojo-debug=1`，见 `debug/web-host-transport.ts`）
+ *   时改走本机调试宿（`tools/debug-server.mjs`）——调试模式批（2026-10-24），
+ *   动态 import 保证调试传输层不进开机图。
  */
 
 export function isTauri(): boolean {
@@ -10,6 +13,9 @@ export function isTauri(): boolean {
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) {
+    const { webHostInvokeIfActive } = await import('../debug/web-host-transport');
+    const route = await webHostInvokeIfActive(cmd, args);
+    if (route.active) return route.value as T;
     throw new Error(`Tauri IPC 不可用（当前为浏览器环境，命令：${cmd}）。请通过桌面壳运行。`);
   }
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');

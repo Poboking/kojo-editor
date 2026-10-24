@@ -1,0 +1,253 @@
+/**
+ * 调试模式共享库（2026-10-24 调试模式批）：`debug-cli.mjs` / `debug-web-smoke.mjs`
+ * 共用的端口探测、浏览器发现、极小 CDP 客户端与「等页内条件」工具。
+ *
+ * 刻意零依赖（node 内置 + 全局 WebSocket/fetch，Node ≥22 自带）——与本仓工具链同口径。
+ * 这里**不含**任何业务判据：只做传输与发现，判定留给消费方。
+ */
+import { spawnSync } from 'node:child_process';
+import * as net from 'node:net';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 调试模式的默认根落点：**系统临时目录**（`<tmp>/kojo-debug/`），不在仓库里。
+ *
+ * 为什么（2026-10-24 实测教训，见 PITFALLS 189 的姊妹坑）：放仓库内时，
+ * 任何对仓库建整树 watcher 的工具（如 conformance CLI 载 vite）都会扫到
+ * browser-profile 里被 Edge 锁住的文件（Cookies EBUSY）直接崩——调试模式的
+ * 残留不该有能力弄红别人的测试。`KOJO_DEBUG_HOME` 可整体搬走（想放仓库时
+ * 记得 `.kojo-debug/` 已在 .gitignore，且 app 的 vite watch 已忽略它）。
+ */
+export function debugHome() {
+  return process.env.KOJO_DEBUG_HOME
+    ? path.resolve(process.env.KOJO_DEBUG_HOME)
+    : path.join(os.tmpdir(), 'kojo-debug');
+}
+
+/**
+ * 杀掉「命令行里带 <mark>」的进程（Windows 实测：Edge 的子进程会逃出 taskkill /T
+ * 的树，profile 被锁 ⇒ 目录清不掉 ⇒ 下一轮撞 EBUSY）。经临时 .ps1 执行——
+ * Git-Bash 里内联 PowerShell 会被 `$_` 展开搅碎（本批实测）。尽力而为，非 Windows 跳过。
+ */
+export function killProcessesMarked(mark) {
+  if (process.platform !== 'win32') return;
+  try {
+    const home = debugHome();
+    fs.mkdirSync(home, { recursive: true });
+    const script = path.join(home, `kill-marked-${process.pid}.ps1`);
+    fs.writeFileSync(
+      script,
+      `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${mark.replace(/'/g, "''")}*' } | ForEach-Object {\n` +
+        `  if ($_.ProcessId -ne $PID) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n` +
+        `}\n`,
+      'utf8',
+    );
+    spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore' });
+    try { fs.rmSync(script, { force: true }); } catch {}
+  } catch {}
+}
+
+/** 两个协议栈都试（vite 在部分 Windows 只绑 ::1，同 §5.117 的教训） */
+export async function portOpen(port) {
+  for (const host of ['127.0.0.1', '::1']) {
+    const ok = await new Promise((resolve) => {
+      const s = net.connect(port, host);
+      s.setTimeout(600);
+      s.on('connect', () => { resolve(true); s.destroy(); });
+      s.on('error', () => resolve(false));
+      s.on('timeout', () => { resolve(false); s.destroy(); });
+    });
+    if (ok) return true;
+  }
+  return false;
+}
+
+export async function freePort(start) {
+  for (let p = start; p < start + 200; p++) {
+    if (!(await portOpen(p))) return p;
+  }
+  throw new Error(`从 ${start} 起 200 个端口都被占用`);
+}
+
+/** Chrome / Edge / Chromium 发现（KOJO_DEBUG_BROWSER 可指定；找不到 ⇒ null，由调用方定退路） */
+export function findBrowser(explicit) {
+  if (explicit) {
+    if (fs.existsSync(explicit)) return explicit;
+    throw new Error(`指定的浏览器不存在：${explicit}`);
+  }
+  if (process.env.KOJO_DEBUG_BROWSER && fs.existsSync(process.env.KOJO_DEBUG_BROWSER)) {
+    return process.env.KOJO_DEBUG_BROWSER;
+  }
+  const cands = [];
+  if (process.platform === 'win32') {
+    const pf = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA]
+      .filter(Boolean);
+    for (const base of pf) {
+      cands.push(
+        path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(base, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      );
+    }
+  } else {
+    for (const name of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'msedge']) {
+      const w = spawnSync('which', [name]);
+      if (w.status === 0) cands.push(w.stdout.toString().trim().split('\n')[0]);
+    }
+  }
+  for (const c of cands) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch {}
+  }
+  return null;
+}
+
+/** 极小 CDP 客户端：一条 WebSocket、id 配对、可选事件订阅 */
+export class Cdp {
+  constructor(wsUrl) {
+    this.wsUrl = wsUrl;
+    this.seq = 0;
+    this.pending = new Map();
+    this.handlers = new Map();
+  }
+  async connect() {
+    this.ws = new WebSocket(this.wsUrl);
+    this.ws.onmessage = (ev) => {
+      const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
+      if (msg.id !== undefined && this.pending.has(msg.id)) {
+        const { resolve, reject } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(`CDP ${msg.error.message}`));
+        else resolve(msg.result);
+      } else if (msg.method && this.handlers.has(msg.method)) {
+        for (const h of this.handlers.get(msg.method)) h(msg.params ?? {});
+      }
+    };
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('CDP WebSocket 连接超时')), 8000);
+      this.ws.onopen = () => { clearTimeout(t); resolve(); };
+      this.ws.onerror = () => { clearTimeout(t); reject(new Error('CDP WebSocket 连接失败')); };
+    });
+    return this;
+  }
+  on(method, handler) {
+    if (!this.handlers.has(method)) this.handlers.set(method, new Set());
+    this.handlers.get(method).add(handler);
+  }
+  send(method, params = {}) {
+    const id = ++this.seq;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+      setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`CDP 命令超时：${method}`));
+        }
+      }, 30000);
+    });
+  }
+  close() {
+    try { this.ws.close(); } catch {}
+  }
+  /** 页内求值（awaitPromise；returnByValue 原样带回对象） */
+  async evalJs(expression, timeoutMs = 20000) {
+    const r = await this.send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+      timeout: timeoutMs,
+    });
+    if (r.exceptionDetails) {
+      throw new Error(`页内求值抛错：${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+    }
+    return r.result?.value;
+  }
+  async screenshot(fullPage = false) {
+    let clip;
+    if (fullPage) {
+      const metrics = await this.send('Page.getLayoutMetrics');
+      const { width, height } = metrics.cssContentSize ?? metrics.contentSize ?? {};
+      clip = { x: 0, y: 0, width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)), scale: 1 };
+    }
+    const shot = await this.send('Page.captureScreenshot', {
+      format: 'png',
+      ...(clip ? { captureBeyondViewport: true, clip } : {}),
+    });
+    return Buffer.from(shot.data, 'base64');
+  }
+}
+
+/** 从 CDP /json 里挑页面：优先属于本次 vite 端口的那页 */
+export async function cdpPage(cdpPort, vitePort) {
+  const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
+  const pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+  return pages.find((t) => String(t.url).includes(`:${vitePort}`)) ?? pages[0] ?? null;
+}
+
+/** 轮询页内表达式直到真值 / 非空串；超时抛错（不静默） */
+export async function waitFor(cdp, expression, { timeoutMs = 30000, intervalMs = 300, label = '' } = {}) {
+  const started = Date.now();
+  let lastErr = '';
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const v = await cdp.evalJs(expression, 5000);
+      if (v === true) return true;
+      if (v !== false && v !== null && v !== undefined && v !== '') return v;
+    } catch (err) {
+      lastErr = String(err?.message ?? err);
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(`等待超时（${timeoutMs}ms）：${label || expression}${lastErr ? `；最后一错：${lastErr}` : ''}`);
+}
+
+/** CDP 真实点击：元素中心 → elementFromPoint 自证（被遮挡时告警不冒充成功）→ Input 派发 */
+export async function cdpClick(cdp, selector) {
+  const center = await cdp.evalJs(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (!center) throw new Error(`页面上没有 ${selector}`);
+  const hit = await cdp.evalJs(
+    `(() => { const el = document.elementFromPoint(${center.x}, ${center.y}); return el ? (el.closest(${JSON.stringify(selector)}) !== null) : false; })()`,
+  );
+  if (!hit) console.warn(`[debug] ⚠ elementFromPoint 未命中 ${selector}（可能被遮挡）——仍按坐标点击`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await cdp.send('Input.dispatchMouseEvent', { type, x: center.x, y: center.y, button: 'left', clickCount: 1 });
+  }
+  return center;
+}
+
+/**
+ * 文件树逐层展开，直到出现文件行（`.tree-file`）或无可再点。
+ * 树的顶层是**角色分组**（`.tree-group-btn`，eraTW 家族视图），展开后才有目录
+ * （`.tree-dir`）与文件行——三种子都按「未点过的先点」逐个展开。
+ * 页内状态 `__kojoDebugTreeClicks` 记已点过的行（按 title），不会把展开的再点回收起。
+ * 返回：'file' / 'no-rows'（既无文件行也无分组、目录可点）。
+ */
+export async function expandTreeUntilFile(cdp, { maxRounds = 16, intervalMs = 250 } = {}) {
+  for (let i = 0; i < maxRounds; i++) {
+    if (await cdp.evalJs('!!document.querySelector(".tree-file")')) return 'file';
+    const step = await cdp.evalJs(`(() => {
+      globalThis.__kojoDebugTreeClicks ??= new Set();
+      const key = (el) => el.getAttribute('title') || el.textContent;
+      const rows = [...document.querySelectorAll('.tree-group-btn, .tree-dir')];
+      const next = rows.find((el) => !globalThis.__kojoDebugTreeClicks.has(key(el)));
+      if (!next) return 'no-rows';
+      globalThis.__kojoDebugTreeClicks.add(key(next));
+      next.scrollIntoView({ block: 'center' });
+      next.click();
+      return 'clicked';
+    })()`);
+    if (step !== 'clicked') return step;
+    await sleep(intervalMs);
+  }
+  return (await cdp.evalJs('!!document.querySelector(".tree-file")')) ? 'file' : 'timeout';
+}

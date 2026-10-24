@@ -1,0 +1,278 @@
+#!/usr/bin/env node
+/**
+ * Web 调试模式无头冒烟（2026-10-24 调试模式批）：不起桌面壳，只用
+ * 「调试宿 + vite + 无头浏览器（CDP）」把编辑器完整跑一遍：
+ *
+ *   欢迎页渲染 → open-project（真实点击链路：目录对话框自动应答 → 写权限审批）→
+ *   文件树在场 → open-file（真实点击）→ Monaco 挂载 → 命令注册表 → 事件旁听 →
+ *   调试宿 invoke 直达 → DOM 结构快照 → 截图落盘。
+ *
+ * 与 `smoke-tauri-dom.mjs` 的分工：那把刀验**桌面壳**（真 IPC / 真机右键），
+ * 这把刀验**浏览器调试模式**（多 agent 无桌面壳时的体感 / UI / 功能验证通道）。
+ * 样例工程 = `fixtures/mini-game` 复制进沙盒（可写域内，保存链路也能测）。
+ *
+ * 用法：node tools/debug-web-smoke.mjs [--keep]   # --keep 保留沙盒与截图便于人工查看
+ * 前置：本机有 Chrome/Edge（KOJO_DEBUG_BROWSER 可指定）；vite 已安装（pnpm install 过）。
+ * 退出码：0 全绿；1 有断言红；2 前置不满足（没浏览器 / vite 不在位）。
+ */
+import { spawn, spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
+import { createDebugServer } from './debug-server.mjs';
+import {
+  Cdp,
+  cdpClick,
+  cdpPage,
+  debugHome,
+  expandTreeUntilFile,
+  findBrowser,
+  freePort,
+  killProcessesMarked,
+  portOpen,
+  sleep,
+  waitFor,
+} from './debug-lib.mjs';
+
+const REPO = path.resolve(import.meta.dirname, '..');
+// 每轮一个唯一工作目录，且**默认在系统临时目录**：browser-profile 里的文件会被 Edge
+// 锁住，任何对仓库建整树 watcher 的工具（conformance CLI 载 vite）扫到就 EBUSY 崩——
+// 调试模式的残留不许有能力弄红别人的测试（2026-10-24 实测，详见 debug-lib 头注）。
+const WORK = path.join(debugHome(), `web-smoke-${process.pid}`);
+const KEEP = process.argv.includes('--keep');
+
+async function rmRetry(target, tries = 3) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      await fsp.rm(target, { recursive: true, force: true });
+      return true;
+    } catch {
+      await sleep(600);
+    }
+  }
+  return false;
+}
+const results = [];
+const check = (name, ok, detail = '') => {
+  results.push({ name, ok, detail });
+  console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ` — ${detail}` : ''}`);
+};
+
+const children = [];
+const cleanupAll = [];
+async function shutdown(code) {
+  for (const fn of cleanupAll.reverse()) {
+    try { await fn(); } catch {}
+  }
+  for (const c of children) {
+    try {
+      if (process.platform === 'win32') spawnSync(`taskkill /PID ${c.pid} /T /F`, { shell: true, stdio: 'ignore' });
+      else c.kill('SIGTERM');
+    } catch {}
+  }
+  // Edge 子进程会逃出树杀、锁着 browser-profile：按工作目录认领再收一轮，才谈得上清理
+  killProcessesMarked(WORK);
+  await sleep(500);
+  if (!KEEP) {
+    await rmRetry(WORK);
+  }
+  // 旧轮次残留（成功轮 / 被杀轮）尽力清；清不掉只提一句，不当红
+  try {
+    const home = debugHome();
+    for (const name of await fsp.readdir(home)) {
+      if (name.startsWith('web-smoke-') && path.join(home, name) !== WORK) {
+        if (!(await rmRetry(path.join(home, name), 1))) {
+          console.warn(`[smoke] 旧目录清不掉（可能被浏览器锁着，稍后自清）：${name}`);
+        }
+      }
+    }
+  } catch {}
+  const failed = results.filter((r) => !r.ok);
+  console.log(failed.length ? `❌ web 调试冒烟 ${failed.length} 项红` : '✅ web 调试冒烟全绿');
+  process.exit(failed.length ? 1 : code === 1 ? 1 : 0);
+}
+process.on('SIGINT', () => shutdown(1));
+
+/* ------------------------------ 前置 ------------------------------ */
+
+const browser = findBrowser(null);
+if (!browser) {
+  console.error('[smoke] 前置不满足：本机没找到 Chrome/Edge（可用 KOJO_DEBUG_BROWSER 指定）——exit 2');
+  process.exit(2);
+}
+const viteBin = path.join(REPO, 'packages', 'app', 'node_modules', 'vite', 'bin', 'vite.js');
+if (!fs.existsSync(viteBin)) {
+  console.error(`[smoke] 前置不满足：vite 不在位（${viteBin}）——先 pnpm install ——exit 2`);
+  process.exit(2);
+}
+console.log(`[smoke] 浏览器：${browser}`);
+
+/* ------------------------------ 环境 ------------------------------ */
+
+await rmRetry(WORK);
+// 上轮锁死的目录不强求（唯一目录名已避开复用冲突）
+const sandbox = path.join(WORK, 'sandbox');
+const appdata = path.join(WORK, 'appdata');
+const project = path.join(sandbox, 'mini-game');
+await fsp.cp(path.join(REPO, 'fixtures', 'mini-game'), project, { recursive: true });
+
+const server = await createDebugServer({ port: 0, sandbox, appdata, log: () => {} });
+cleanupAll.push(() => server.close());
+console.log(`[smoke] 调试宿 :${server.port}`);
+
+const vitePort = await freePort(4273);
+const vite = spawn(process.execPath, [viteBin, '--port', String(vitePort), '--strictPort'], {
+  cwd: path.join(REPO, 'packages', 'app'),
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+children.push(vite);
+let viteLog = '';
+vite.stdout.on('data', (d) => (viteLog += d.toString()));
+vite.stderr.on('data', (d) => (viteLog += d.toString()));
+
+for (let i = 0; i < 120 && !(await portOpen(vitePort)); i++) await sleep(500);
+if (!(await portOpen(vitePort))) {
+  console.error(`[smoke] vite 60s 没就绪：\n${viteLog.slice(-800)}`);
+  await shutdown(1);
+}
+console.log(`[smoke] vite :${vitePort}`);
+
+const cdpPort = await freePort(9533);
+const profile = path.join(WORK, 'browser-profile');
+fs.mkdirSync(profile, { recursive: true });
+const url = `http://127.0.0.1:${vitePort}/?kojo-debug=${server.port}`;
+const browserProc = spawn(
+  browser,
+  [
+    `--remote-debugging-port=${cdpPort}`,
+    `--user-data-dir=${profile}`,
+    '--headless=new',
+    '--no-first-run',
+    '--window-size=1600,900',
+    url,
+  ],
+  { stdio: 'ignore' },
+);
+children.push(browserProc);
+for (let i = 0; i < 60 && !(await portOpen(cdpPort)); i++) await sleep(400);
+if (!(await portOpen(cdpPort))) {
+  console.error('[smoke] 浏览器 CDP 30s 没就绪');
+  await shutdown(1);
+}
+
+/* ------------------------------ 断言链 ------------------------------ */
+
+let page = null;
+for (let i = 0; i < 30 && !page; i++) {
+  page = await cdpPage(cdpPort, vitePort).catch(() => null);
+  if (!page) await sleep(500);
+}
+if (!page) {
+  console.error('[smoke] CDP 页面拿不到');
+  await shutdown(1);
+}
+const cdp = await new Cdp(page.webSocketDebuggerUrl).connect();
+console.log(`[smoke] 页面：${page.url}`);
+
+try {
+  // ① 欢迎页真实渲染（结构判据，不匹配文案）
+  await waitFor(cdp, '!!document.querySelector(".welcome")', { timeoutMs: 30000, label: '欢迎页' });
+  check('欢迎页渲染', true);
+
+  // ② 调试面装载（?kojo-debug 选入 ⇒ __kojoDebug 在场且走 web-debug 模式）
+  await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 15000, label: '__kojoDebug' });
+  const mode = await cdp.evalJs('({mode: __kojoDebug.mode, host: __kojoDebug.host, v: __kojoDebug.appVersion})');
+  check('调试面在场', mode?.mode === 'web-debug' && String(mode?.host).includes('127.0.0.1'), JSON.stringify(mode));
+
+  // ③ 宿主命令走调试宿：app_data_dir 直达 + kernel 装配成功（welcome 有卡片说明内核起来了）
+  const appDir = await cdp.evalJs('__kojoDebug.invoke("app_data_dir")');
+  check(
+    'invoke 直达调试宿',
+    String(appDir ?? '').replace(/\\/g, '/').endsWith('appdata'),
+    String(appDir),
+  );
+  const kernelOk = await cdp.evalJs('__kojoDebug.kernel().then((k) => !!k && typeof k.project.current === "function")');
+  check('内核装配完成', kernelOk === true);
+
+  // ④ open-project：自动应答对话框 + 真实点击「打开项目」+ 写权限审批（批准可写——沙盒内可测保存链路）
+  await fetch(`http://127.0.0.1:${server.port}/policy`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chooseDir: project }),
+  });
+  // 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
+  if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
+    await cdpClick(cdp, '.dev-note-actions .ghost');
+    await sleep(300);
+  }
+  await cdpClick(cdp, '.welcome-open');
+  const modalStep = await waitFor(
+    cdp,
+    `(() => { const m = document.querySelector('.modal[aria-label="写权限确认"]'); return m ? 'yes' : (document.querySelector('.file-tree') ? 'tree' : ''); })()`,
+    { timeoutMs: 60000, intervalMs: 250, label: '写权限审批 / 文件树' },
+  );
+  if (modalStep === 'yes') await cdpClick(cdp, '.modal .primary');
+  const rootDir = await waitFor(cdp, '(__kojoDebug.state().project ?? {}).rootDir ?? ""', {
+    timeoutMs: 90000,
+    label: 'project.rootDir',
+  });
+  check('项目已打开', String(rootDir).replace(/\\/g, '/') === project.replace(/\\/g, '/'), String(rootDir));
+
+  // ⑤ 文件树在场且能点开一个文件（逐层展开目录 → 真实点击 → Monaco 挂载）
+  await waitFor(cdp, `!!document.querySelector('.file-tree')`, { timeoutMs: 60000, label: '文件树' });
+  const expanded = await expandTreeUntilFile(cdp);
+  check('文件树可展开出文件行', expanded === 'file', `expand=${expanded}`);
+  const opened = await cdp.evalJs(`(() => {
+    const row = [...document.querySelectorAll('.tree-file')][0];
+    if (!row) return null;
+    row.scrollIntoView({ block: 'center' });
+    row.click();
+    return row.getAttribute('title') || row.textContent;
+  })()`);
+  await waitFor(cdp, '!!document.querySelector(".monaco-editor")', { timeoutMs: 30000, label: 'Monaco' });
+  await sleep(600);
+  const info = await cdp.evalJs('__kojoDebug.editor.info()');
+  check(
+    '文件打开 + Monaco 挂载',
+    !!info?.path && info.lineCount > 0,
+    `${info?.path ?? '?'} · 行数=${info?.lineCount} · 语言=${info?.languageId}`,
+  );
+
+  // ⑥ 命令注册表：所有功能的可编程入口在场
+  const cmdCount = await cdp.evalJs('__kojoDebug.commands.list().length');
+  check('命令注册表在场', Number(cmdCount) > 10, `${cmdCount} 条命令`);
+
+  // ⑦ 事件旁听：开项目级联必然发过事件
+  await sleep(400);
+  const busCount = await cdp.evalJs('__kojoDebug.bus.recent(200).length');
+  check('事件旁听有读数', Number(busCount) > 0, `${busCount} 条`);
+
+  // ⑧ DOM 结构快照相位正确
+  const snapPhase = await cdp.evalJs('__kojoDebug.dom.snapshot().phase');
+  check('DOM 快照相位=project', snapPhase === 'project', String(snapPhase));
+
+  // ⑨ 截图落盘（agent 的「眼睛」）
+  const shot = await cdp.screenshot(false);
+  const shotPath = path.join(WORK, 'smoke-final.png');
+  await fsp.mkdir(WORK, { recursive: true });
+  await fsp.writeFile(shotPath, shot);
+  check('截图落盘', shot.length > 10000, `${shotPath}（${(shot.length / 1024).toFixed(0)} KB）`);
+  if (KEEP) console.log(`[smoke] 截图保留：${shotPath}`);
+} catch (err) {
+  check('断言链中途失败', false, String(err?.message ?? err));
+  // 失败取证：屏上是什么 + 一张截图——红要红得能定位，不是只留一句超时
+  try {
+    const bodyText = await cdp.evalJs('document.body ? document.body.innerText.slice(0, 500) : "(no body)"');
+    console.error(`[smoke] 失败时屏上文本：${JSON.stringify(bodyText)}`);
+    const shot = await cdp.screenshot(false);
+    const failShot = path.join(WORK, 'smoke-fail.png');
+    await fsp.mkdir(WORK, { recursive: true });
+    await fsp.writeFile(failShot, shot);
+    console.error(`[smoke] 失败截图：${failShot}（${(shot.length / 1024).toFixed(0)} KB）`);
+  } catch (e2) {
+    console.error(`[smoke] 连取证都没拿到：${String(e2?.message ?? e2)}`);
+  }
+}
+
+cdp.close();
+await shutdown(0);

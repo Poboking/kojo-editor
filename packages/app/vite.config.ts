@@ -80,7 +80,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    watch: { ignored: ['**/src-tauri/**'] },
+    // `.kojo-debug/`＝Web 调试模式（2026-10-24 调试模式批）的沙盒 / appData / 截图落点，
+    // 编辑器一开项目就在里面持续写会话与自动保存账本——不忽略的话每次写盘都会触发
+    // HMR 整页刷新（实测：项目被弹回欢迎页、调试面事件环被清空），把调试会话拆碎。
+    watch: { ignored: ['**/src-tauri/**', '**/.kojo-debug/**'] },
   },
   build: {
     target: 'es2022',

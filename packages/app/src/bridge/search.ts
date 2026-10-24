@@ -105,7 +105,9 @@ export interface SearchFilesBatch {
 /**
  * 执行一次检索。`onProgress` 收逐文件进度（由 Rust 侧节流后上报）；
  * `onFiles` 收命中文件增量批次（同一节流点，P2-11）——完成态仍由返回值收口。
- * 非 Tauri 环境**显式失败**（浏览器开发壳没有原生检索能力），不静默返回空结果。
+ * 非 Tauri 环境**显式失败**（浏览器开发壳没有原生检索能力），不静默返回空结果；
+ * 例外：选入 web 调试模式（`?kojo-debug=1`）时改走调试宿——完成态同样由返回值收口，
+ * 进度 / 增量批次事件不订阅（调试宿 v1 不发这两条，检索 UI 一次到位）。
  */
 export async function searchInFiles(
   request: SearchRequest,
@@ -113,6 +115,9 @@ export async function searchInFiles(
   onFiles?: (batch: SearchFilesBatch) => void,
 ): Promise<SearchResult> {
   if (!isTauri()) {
+    const { webHostInvokeIfActive } = await import('../debug/web-host-transport');
+    const route = await webHostInvokeIfActive('search_text', { request });
+    if (route.active) return route.value as SearchResult;
     throw new Error('全文搜索需要桌面壳（浏览器开发壳没有原生检索命令）');
   }
   let unlistenProgress: (() => void) | null = null;
@@ -141,6 +146,11 @@ export async function searchInFiles(
 
 /** 请求取消某条检索（检索线程逐文件检查，命中即提前收尾并如实回报 `cancelled`） */
 export async function cancelSearch(searchId: number): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    // 调试模式下转发给调试宿（宿侧同步取消标记）；未选入则保持既有静默返回
+    const { webHostInvokeIfActive } = await import('../debug/web-host-transport');
+    await webHostInvokeIfActive('cancel_search', { searchId });
+    return;
+  }
   await invoke('cancel_search', { searchId });
 }

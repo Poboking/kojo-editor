@@ -37,6 +37,10 @@ KOJO_SMOKE_PROJECT="$(node tools/corpus.mjs --print)" \
 # 桌面壳冒烟：
 node tools/smoke-tauri-dom.mjs   # DOM 冒烟（弹窗 ~100s 自动关）
 node tools/smoke-tauri-ipc.mjs   # 真实 IPC 双闸 a–e（不传参即按内容自动发现语料目录——名字会变，以 KOJO_CORPUS_DIR 为准；也可 "C:\path\to\语料" 显式传；自动还原 store/文件/备份；~2min）
+# 编辑器调试模式（2026-10-24 调试模式批）——多 agent 无桌面壳的体感/UI/功能验证通道：
+node tools/debug-cli.mjs serve   # 拉起「调试宿+vite+浏览器(CDP)」，打印编辑器 URL（agent 内置浏览器直接开；--headless 无头）
+node tools/debug-cli.mjs <子命令> # open-project <目录> [--writable] · open-file <片段> · commands/run <id>（命令面板全量入口）· state · dom · events · eval · invoke · click/type/key · screenshot <png> · status · stop
+node tools/debug-web-smoke.mjs   # 无头浏览器端到端冒烟（欢迎页→开项目→开文件→Monaco→命令表→事件→截图；没浏览器 rc=2）
 ```
 
 带环境变量跑 vitest 一律 `node node_modules/vitest/vitest.mjs run <file>`——`npx vitest` 会吞环境变量（详 PITFALLS）。

@@ -59,3 +59,6 @@ packages/app/src-tauri/gen/
 # 这一行是兜底——万一还有旧脚本/别的入口往仓库里写同名产物，也不给误吞的机会
 *.generated.map.json
 *.generated.ERB
+
+# Web 调试模式（2026-10-24 调试模式批）的会话/沙盒/截图落点——编辑器会持续写，不入库
+.kojo-debug/

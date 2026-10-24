@@ -1444,6 +1444,29 @@ export function ShellLayout(props: Props): ReactElement {
   const commandCtxRef = useRef(commandCtx);
   commandCtxRef.current = commandCtx;
 
+  // 调试面登记（2026-10-24 调试模式批）：把「命令面板注册表」暴露给 `window.__kojoDebug.commands`
+  // ——只登记读 ref 的通道，注册表本身随渲染重建不受影响；未选入调试模式时登记簿无人读。
+  // 挂载一次（effect 无依赖），通道内每次现读 `registryRef` / `commandCtxRef` 的最新值。
+  // **动态 import 是刻意的**：开机图闸文件余量只剩 1，登记簿不许静态进图。
+  useEffect(() => {
+    void import('../debug/debug-registry').then((m) => {
+      m.registerDebugCommandRunner({
+        list: () =>
+          registryRef.current.map((c) => ({
+            id: c.id,
+            title: c.title,
+            ...(c.category !== undefined ? { category: c.category } : {}),
+            ...(c.keybinding !== undefined ? { keybinding: c.keybinding } : {}),
+          })),
+        run: async (id) => {
+          const entry = registryRef.current.find((c) => c.id === id);
+          if (!entry) throw new Error(`命令不存在：${id}（先 __kojoDebug.commands.list() 看可用命令）`);
+          await entry.run(commandCtxRef.current);
+        },
+      });
+    });
+  }, []);
+
   /* -------------------- D2：工作区符号（Ctrl+T）的宿主接线 -------------------- */
 
   /**

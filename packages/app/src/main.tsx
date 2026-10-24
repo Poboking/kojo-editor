@@ -56,6 +56,18 @@ installFrontendErrorLog();
 // App 内核就绪与 EditorPane 挂载处现场记；口径见 perf.ts 的 bootMark）。
 ingestInlineBootMarks();
 
+// 调试模式（2026-10-24 调试模式批）：页面带 `?kojo-debug` 时装载 `window.__kojoDebug`
+// 调试面（命令注册表 / 内核 / 事件旁听 / 编辑器受控读写 / DOM 结构快照）。
+// 刻意动态 import 且只在选入时装载——开机图闸（ps10-eager-graph）零影响；
+// 不带参数的桌面壳与普通浏览器页永远不执行调试面代码。
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('kojo-debug')) {
+  void import('./debug/install-debug')
+    .then((m) => m.installDebug())
+    .catch((err: unknown) => {
+      console.error('[kojo-debug] 调试面装载失败：', err);
+    });
+}
+
 // 不用 StrictMode：内核 bootstrap 有副作用（建立 IPC / 存储域），开发模式双调用会重复初始化
 // 通知中心在入口层装配：App 自身也是消费者（打开失败 / 授权失败必须可见，否则故障静默）
 createRoot(container).render(
