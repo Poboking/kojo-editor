@@ -4,9 +4,14 @@
  *  ② 尺寸只有四档刻度（xs/sm/md/lg = 12/14/16/22），历史遗留数字一律就近吸附（平局取大），
  *     钉死"9 档散装尺寸"不再回来；
  *  ③ filled 只许住在状态族（`FILLED_ICON_NAMES` 白名单），其余族整条路径纯描边；
- *  ④ 表体量（40 枚）与未命中注册表的字形回退（第三方贡献契约）照旧。
+ *  ④ 表体量（41 枚）与未命中注册表的字形回退（第三方贡献契约）照旧；
+ *  ⑤ 名 ↔ 注册表闭合闸（R1 批）：标签栏溢出三枚 affordance 与标签行的图标名一律
+ *     须在 `ICONS` 在册——CSS 旋转 180° 借来的箭头、`▾`/`‹` 这类字符入面都算违例
+ *     （形态照 `problem-panel-ux.test.ts` 的读源码判据，不造新尺）。
  * 任何一条漂了当场红；扩表是允许的，但要**有意识地**改这里的钉数。
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -55,8 +60,8 @@ describe('ICON_SIZES · 四档刻度是唯一口径', () => {
 });
 
 describe('家族一致 · 每枚图标都是同一口径的 SVG', () => {
-  it('表体 40 枚（扩表请有意识地抬这个数字）', () => {
-    expect(names.length).toBe(40);
+  it('表体 41 枚（扩表请有意识地抬这个数字；R1 批补入 chevron-left，40→41）', () => {
+    expect(names.length).toBe(41);
   });
 
   for (const name of names) {
@@ -92,5 +97,55 @@ describe('字形回退 · 第三方贡献契约不动', () => {
     expect(out).toContain('class="icon-glyph"');
     expect(out).toContain('＋');
     expect(out.startsWith('<svg')).toBe(false);
+  });
+});
+
+describe('名 ↔ 注册表闭合闸 · 标签栏溢出 affordance（R1 批）', () => {
+  /**
+   * 判据形态照 `problem-panel-ux.test.ts`：读**源码**、点名图标位、逐个对册。
+   * 溢出三枚（左/右滚动箭头 + 列出全部标签）必须走 `KitIconButton` + `<Icon name="注册名">`；
+   * 曾经的两条歪腿——左箭头借 `chevron-right` + CSS `rotate(180deg)`、以及以 `▾`/`‹`
+   * 符号字符入面——在这里都算违例。
+   */
+  const read = (rel: string): string =>
+    readFileSync(fileURLToPath(new URL(`../src/ui/${rel}`, import.meta.url)), 'utf8');
+  const tabsBar = read('tabs-bar.tsx');
+  const tabRow = read('tab-row.tsx');
+
+  /** 溢出工具族那一段 JSX：从 `tab-overflow-tools` 起、到「全部保存」钮的 `tab-save-all` 止 */
+  const overflowRegion = (): string => {
+    const from = tabsBar.indexOf('tab-overflow-tools');
+    const to = tabsBar.indexOf('tab-save-all');
+    expect(from, '溢出 affordance 族还在 tabs-bar.tsx').toBeGreaterThan(-1);
+    expect(to, '「全部保存」锚点还在 tabs-bar.tsx').toBeGreaterThan(from);
+    return tabsBar.slice(from, to);
+  };
+
+  it('三枚按钮的图标名逐字在册，且就是 chevron-left / chevron-right / chevron-down 三枚', () => {
+    const region = overflowRegion();
+    const used = [...region.matchAll(/<Icon\s+name="([^"]+)"/g)].map((m) => m[1]!);
+    expect(used.sort(), '溢出族必须恰好三枚注册图标').toEqual([
+      'chevron-down',
+      'chevron-left',
+      'chevron-right',
+    ]);
+    for (const name of used) expect(Object.keys(ICONS)).toContain(name);
+  });
+
+  it('左箭头不再借 CSS 旋转：区域里没有 `tab-overflow-flip`，也不许出现旋转 180° 的写法', () => {
+    const region = overflowRegion();
+    expect(region).not.toContain('tab-overflow-flip');
+    expect(tabsBar).not.toMatch(/rotate\(\s*180deg/);
+  });
+
+  it('字符图标绝迹：溢出族与标签行里没有 ▾ ‹ › ▸ 之类的字形当图标', () => {
+    for (const glyph of ['▾', '‹', '›', '▸', '◂']) {
+      expect([...overflowRegion()].filter((c) => c === glyph), `tabs-bar.tsx 溢出族残留 ${glyph}`).toHaveLength(0);
+      expect([...tabRow].filter((c) => c === glyph), `tab-row.tsx 残留 ${glyph}`).toHaveLength(0);
+    }
+    // 标签行两枚（脏点 / 关闭）同样对册
+    const used = [...tabRow.matchAll(/<Icon\s+name="([^"]+)"/g)].map((m) => m[1]!);
+    expect(used.sort()).toEqual(['circle-filled', 'close']);
+    for (const name of used) expect(Object.keys(ICONS)).toContain(name);
   });
 });

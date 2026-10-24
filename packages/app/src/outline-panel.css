@@ -17,8 +17,9 @@
       // ui-kit-candidate: KitDenseRow——把这两枚升成全局 `--row-h-dense` / `--indent-step`
       //                    后，本文件与 `.file-tree` 都改成读全局，一处收口（登记给 L01）。
       // ui-kit-candidate: 层级导轨（1px + var(--border)，悬停/当前行提到 --border-strong）
-      //                    ——L16 正在给文件树做同一形态；**两份实现不共用**，合流时由
-      //                    组长收成一条全局规则（本路只动本文件与 OutlinePanel.tsx）。
+      //                    ——R1 批已合流：两档住在 `file-tree.css` 的 `.file-tree,
+      //                    .outline-panel` 同一条规则（`--tree-guide` / `--tree-guide-strong`），
+      //                    本文件的 `--outline-guide` 别名层已删；升进全局 tokens.css 后定义点随迁。
    ④ 缩进仍是数据（`depth`）驱动：TSX 只递一个**无单位数字** `--outline-depth`，
       步进算式住在 CSS 里，像素值不再散进组件。**步进本身也吃刻度**（L19）：
       `--space-3 + --space-0 = 14px`，与文件树同值但由 token 组成，不再是裸 px。
@@ -36,9 +37,9 @@
   --outline-row-h: 22px;
   /* 缩进步进：14px，但由空间刻度组成（12 + 2），与文件树 `--tree-indent` 同值 */
   --outline-indent: calc(var(--space-3) + var(--space-0));
-  /* 导轨横线颜色：静息一档，悬停 / 当前行提到强档（口径与文件树导轨一致：1px + --border） */
-  --outline-guide: var(--border);
-  --outline-guide-strong: var(--border-strong);
+  /* 导轨颜色（R1 批合一）：`--outline-guide` 别名层已删——静息 / 强档两枚由
+     `file-tree.css` 里 `.file-tree, .outline-panel` 同一条规则的 `--tree-guide` /
+     `--tree-guide-strong` 驱动，与文件树同一份真源，不再各写一份配色对。 */
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -110,7 +111,7 @@
      祖先折叠箭头的中心**下，读起来是"从箭头底下长下来"，不是随机一根缝。 */
   background-image: repeating-linear-gradient(
     to right,
-    var(--outline-guide) 0 1px,
+    var(--tree-guide) 0 1px,
     transparent 1px var(--outline-indent)
   );
   background-size: calc(var(--outline-indent) * var(--outline-depth, 0)) 100%;
@@ -120,7 +121,7 @@
 }
 .outline-row:hover {
   background-color: var(--hover);
-  --outline-guide: var(--outline-guide-strong);
+  --tree-guide: var(--tree-guide-strong);
 }
 
 /* 当前行：`--active` 底 + 左侧 accent 指示条（与标签页 / 树行同一族）+ 行尾一枚靶心形状
@@ -131,7 +132,7 @@
   box-shadow: inset 2px 0 0 rgb(var(--accent-rgb));
   color: var(--fg);
   /* 当前行把自己的导轨也提到强档：一眼看清"这一行挂在谁名下" */
-  --outline-guide: var(--outline-guide-strong);
+  --tree-guide: var(--tree-guide-strong);
 }
 .outline-row.is-active:hover {
   /* 当前行上的悬停不再换底——accent wash 已经比 `--hover` 重，叠两层读成脏 */

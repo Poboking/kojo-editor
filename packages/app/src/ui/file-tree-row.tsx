@@ -12,6 +12,11 @@
  */
 import { memo, type ReactElement } from 'react';
 import { baseName } from './file-tree-model';
+// 中段省略的单源函数暂住 `FileTree.tsx`（L16 口径：`.ERH` / `.kojo` 后缀就是信息，扩展名必须
+// 留在屏上；上限同取 TREE_LABEL_MAX，与包/根两层一把尺）。`middleEllipsis` 是函数声明、只在
+// 渲染期调用 ⇒ FileTree ⇄ file-tree-row 这条既有 import 环（TreeProbMark 反向）不触 TDZ；
+// 进 ui-kit 后此处与 tab-row.tsx 一并换腿，见 FileTree.tsx 的 `// ui-kit-candidate:` 标注。
+import { middleEllipsis, TREE_LABEL_MAX } from './FileTree';
 import { Icon } from './icons';
 import { PROBLEM_SCOPE, SEVERITY_TINT, type ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
@@ -146,7 +151,7 @@ export const FileRow = memo(function FileRow({
       // 单击 = 预览态浏览（VS Code 单击文件树那份手感：斜体、不占新位、再点一下转正）
       onClick={() => onOpenFile(f, { preview: true })}
     >
-      {baseName(f)}
+      {middleEllipsis(baseName(f), TREE_LABEL_MAX)}
       {prob ? <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} /> : null}
     </button>
   );

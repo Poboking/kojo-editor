@@ -127,8 +127,9 @@ export function middleEllipsis(name: string, maxChars: number): string {
   return `${name.slice(0, keepHead)}…${name.slice(name.length - keepTail)}`;
 }
 
-/** 包名/根名的中段省略上限（行宽自适应需要测量，留给 css 侧兜底；这里是字符数硬闸） */
-const TREE_LABEL_MAX = 24;
+/** 包名/根名/文件行的中段省略上限（行宽自适应需要测量，留给 css 侧兜底；这里是字符数硬闸）。
+ *  R1 批导出：`file-tree-row.tsx` 的单条文件行与包/根两层共用同一把尺，不另造第二个数。 */
+export const TREE_LABEL_MAX = 24;
 
 /* ---------------- 诊断徽标（工包 E + 本批：树三层都开口，画法只有一枚） ---------------- */
 
