@@ -242,15 +242,15 @@ export type {
   KojoFaceTemplate,
   KojoInstructionTable,
   KojoLibraryTable,
-  ScaffoldOptions,
   ScaffoldResult,
   StateLinePreset,
-  StateModel,
   VariableDictionaryStatus,
   VariableInfo,
   VariableSchema,
   VariableSource,
 } from './game';
+// 「谁是当前激活的 adapter」这条判据的唯一实现（原先 14 个消费方各手写一遍）。
+export { activeGameAdapter } from './game';
 
 export type {
   ContributionBase,

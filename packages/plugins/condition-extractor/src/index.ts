@@ -29,7 +29,7 @@ import type {
 } from '@kojo/plugin-api';
 import { EXTRACT_STORE_KEY, decodeBuckets, encodeBuckets, extractExpect } from './snapshot';
 import type { ExtractExpect, FileBucket } from './snapshot';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
 import { EXPR_SYNTAX_DECORATIONS_TASK, conditionExtractorTasks, exprSyntaxDecorations } from './offload';
 import { diagnoseExpression } from './expr';
@@ -55,16 +55,15 @@ export function createConditionExtractorPlugin(): Plugin {
       /** 本插件命名空间的存储域：抽取结果快照的落点（`{appData}/store/condition-extractor/`） */
       const storage = ctx.storage;
 
-      /** 当前适配器的变量语义查询（按 adapterId 精确匹配；多适配器共存天然正确） */
+      /**
+       * 当前适配器的变量语义查询。
+       * 「谁是当前那枚」由契约的 `activeGameAdapter` 认——本插件不重写那条判据
+       * （多适配器共存天然正确，且不会与别处悄悄分叉）。
+       */
       const schemaLookup = (): SchemaLookup | undefined => {
-        const current: GameProject | null = project.current();
-        if (!current) return undefined;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          const vs = contribution.adapter.variableSchema;
-          if (vs) return (name: string, index?: number | string) => vs.lookup(name, index);
-        }
-        return undefined;
+        const vs = activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.variableSchema;
+        if (!vs) return undefined;
+        return (name: string, index?: number | string) => vs.lookup(name, index);
       };
 
       /**

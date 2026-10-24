@@ -23,8 +23,6 @@ import type {
   MarketService,
   Plugin,
   ProjectService,
-  ScaffoldOptions,
-  ScaffoldResult,
   SugarTranspileService,
   VariableSchema,
   WorkspaceArtifact,
@@ -52,7 +50,6 @@ import {
   readRequestToken,
   readSourceAttribution,
   resolveNewItemPath,
-  writeScaffoldFiles,
   type AttributionState,
   type DirListState,
   type KojoCompiler,
@@ -79,7 +76,6 @@ import { createErakumamaidFaceTable } from './face-templates';
 import { AM_LIBRARY_FUNCTIONS, createErakumamaidLibraryTable } from './library-table';
 import { AM_MUTATOR_FAMILIES, createErakumamaidMutatorTable } from './mutator-table';
 import { ERAAKUMA_MAID_NAME_GLOSSARY } from './name-glossary';
-import { scaffoldErakumamaidProject } from './scaffold';
 import { withAmScaffold } from './new-project-wizard';
 import {
   DEPLOY_KOJO_OVERLAY_ID,
@@ -96,7 +92,7 @@ export function createErakumamaidAdapterPlugin(): Plugin {
     requires: ['kernel.io', KernelServices.Project, KernelServices.Workspaces],
     activate(ctx) {
       const io = ctx.inject<FileIO>('kernel.io');
-      /** 当前游戏项目（`scaffold` 的落点解析要用 charaIndex / rootDir） */
+      /** 当前游戏项目（角色搜索域与面板的 `gameProject` 供数要用 charaIndex / rootDir） */
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       /** 作者工作区（「我的口上项目」面板与四个向导的落点） */
       const workspaces = ctx.inject<WorkspaceService>(KernelServices.Workspaces);
@@ -184,39 +180,6 @@ export function createErakumamaidAdapterPlugin(): Plugin {
             keys: ['TALENT:出産経験', 'TALENT:22'],
           },
         ],
-
-        /**
-         * 生成新角色口上骨架并**直接落盘**（契约 v0.3 的 `scaffold` 位）。
-         *
-         * 与 eraTW 的区别是**落点口径**：本游戏的脚手架产物是「游戏根相对路径」
-         * （`ERB/EVENT_K/<n>/*.kojo` + `CSV/CHARA/CHARA<n>.csv`），所以缺省落点是
-         * 项目根，而不是某个角色的口上目录——照搬 eraTW 那套会把文件铺错层。
-         *
-         * `options.targetDir` 可覆盖（例如先落到别处过目）；已存在的文件一律不覆盖。
-         */
-        async scaffold(characterNo: number, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
-          const proj = project.current();
-          if (!proj) throw new Error('当前没有打开的游戏项目，无处生成骨架。');
-          const info = proj.charaIndex.get(characterNo);
-          if (!info) throw new Error(`游戏项目里没有编号 ${characterNo} 的角色。`);
-          const targetDir = options.targetDir ?? proj.rootDir;
-          const built = scaffoldErakumamaidProject({
-            workName: options.displayName ?? `${info.name}口上`,
-            // 契约的 options 没有作者字段；占位而非编造，报告里会点明
-            authorName: '未指定',
-            charaName: info.name,
-            version: '1.0',
-            charaNo: characterNo,
-          });
-          // `options.faces` 收的是文件名干（本游戏形如 `EVENT_K{n}`）；只影响写哪些空壳
-          const only = options.faces === undefined
-            ? undefined
-            : Object.keys(built.files).filter((rel) => {
-                const stem = rel.replace(/\.kojo$/, '').split('/').pop() ?? '';
-                return options.faces!.some((f) => f.replaceAll('{n}', String(characterNo)) === stem);
-              });
-          return writeScaffoldFiles({ io, files: built.files, targetDir, only });
-        },
 
         async detect(rootDir: string): Promise<boolean> {
           // 特征组合：口上域主路由文件 + CHARA CSV 目录（同时存在才成局）

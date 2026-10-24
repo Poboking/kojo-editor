@@ -1,8 +1,9 @@
 /**
  * 条件矩阵对**当前适配器**的查询面（从 `index.ts` 的 `activate()` 原样迁出）。
  *
- * 六件事全部经 `game.adapter` 槽位贡献取（按 `adapterId` 精确匹配，多适配器共存
- * 天然正确）：家族规则、变量语义字典、指令表、面标签、状态键标签、单函数状态依赖。
+ * 六件事全部经 `game.adapter` 槽位贡献取（当前那枚由契约的 `activeGameAdapter` 认，
+ * 多适配器共存天然正确）：家族规则、变量语义字典、指令表、面标签、状态键标签、
+ * 单函数状态依赖。
  *
  * 铁律 3：本模块**不认识任何游戏名词**，也不 import 适配器插件——游戏知识只经
  * 槽位贡献流进来；缺贡献时一律回退 `null` / `undefined`，由消费方原样显示 token。
@@ -12,7 +13,6 @@ import type {
   ConditionExtractorService,
   FamilyIndexRule,
   GameAdapter,
-  GameProject,
   KojoFaceTable,
   KojoInstructionTable,
   ProjectService,
@@ -21,6 +21,7 @@ import type {
   StateLinePreset,
   VariableSchema,
 } from '@kojo/plugin-api';
+import { activeGameAdapter } from '@kojo/plugin-api';
 
 /** 查询面的签名口径见下方实现处的逐条注记（判据、缺省回退都写在那里） */
 export interface AdapterServices {
@@ -45,15 +46,9 @@ export function createAdapterServices(deps: {
 }): AdapterServices {
   const { project, slots, conditionExtractor } = deps;
 
-  /** 当前激活适配器：多适配器共存时按 adapterId 精确匹配（无项目 = undefined） */
-  const currentAdapter = (): GameAdapter | undefined => {
-    const current: GameProject | null = project.current();
-    if (!current) return undefined;
-    for (const contribution of slots.query('game.adapter')) {
-      if (contribution.adapter.gameId === current.adapterId) return contribution.adapter;
-    }
-    return undefined;
-  };
+  /** 当前激活适配器（「谁是当前那枚」由契约的 `activeGameAdapter` 认；无项目 = undefined） */
+  const currentAdapter = (): GameAdapter | undefined =>
+    activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId);
 
   /** 当前激活适配器的家族规则（无规则 = null，消费方据此显式降级） */
   const currentFamilyIndex = (): FamilyIndexRule | null =>

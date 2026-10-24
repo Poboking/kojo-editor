@@ -177,28 +177,48 @@ interface Plugin {
 
 ```ts
 interface GameAdapter {
+  // ---- ① 身份与发现（必填）：内核只认这四项 ----
   readonly gameId: string;                 // 'eratw'
   readonly displayName: string;            // 'eraTW'
-
-  // 工程识别与加载
   detect(rootDir: string): Promise<boolean>;
   loadProject(rootDir: string): Promise<GameProject>;
 
-  // 口上域知识
-  kojoPaths: string[];                     // 口上 ERB 目录（eraTW: ERB/口上・メッセージ関連/個人口上 等）
-  functionFamilyIndex: FamilyIndexRule;    // 函数家族识别规则（M_KOJO_K{n}_XXX → 角色 n、家族 XXX）
-  variableSchema: VariableSchema;          // 口上相关变量字典（CFLAG 位图、TCVAR:50 位表、好感 CFLAG:2 等）
-  conventions: ConventionRule[];           // 可校验的剧本约定（门禁矩阵、KOJO_VERSION 热更新等）
+  // ---- ② 引擎结构知识（可选；缺省 = 本游戏没有该能力） ----
+  readonly functionFamilyIndex?: FamilyIndexRule;   // 函数家族识别（M_KOJO_K{n}_XXX → 角色 n、家族 XXX）
+  readonly variableSchema?: VariableSchema;         // 变量字典（CFLAG 位图、TCVAR:50 位表、好感 CFLAG:2 等）
+  readonly conventions?: readonly ConventionRule[]; // 可校验的剧本约定（门禁矩阵、KOJO_VERSION 热更新等）
 
-  // 脚手架
-  scaffold(characterId: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;
+  // ---- ③ 口上 DSL 知识（可选；糖层 / 补全 / 悬停消费） ----
+  readonly kojoCallProtocol?: KojoCallProtocol;     // 路由层转发实参的槽位语义表
+  readonly kojoFaceTemplates?: KojoFaceTable;       // 分野关键字 → 目标函数名
+  readonly kojoInstructionTable?: KojoInstructionTable;
+  readonly kojoLibraryTable?: KojoLibraryTable;     // 中文函数名 → 原生 ERB 函数名
+  readonly kojoMutatorTable?: KojoMutatorTable;     // 增减族 → 产物形态（CALL 封装 / 直写赋值）
+  readonly kojoCounterTable?: KojoCounterTable;
+  readonly stateLinePresets?: readonly StateLinePreset[];
 
-  // 状态模型（供快照/预览消费）
-  stateModel: StateModel;                  // 哪些变量影响口上分支、取值域、显示名
+  // ---- ④ 展示知识（可选） ----
+  readonly nameGlossary?: Readonly<Record<string, string>>; // 日文名 → 中文名（只影响显示）
 }
 ```
 
-v0 中 eraTW 适配器是唯一实现；2026-10-24 批接入 **eraFL 适配器**（`erafl-adapter`）后成为两个实现。`GameProject` 的通用形状定义见 §5.7，由适配器填充、内核视为不透明载荷。**验收标准：将来接入第二个游戏时内核与解析器插件零改动**——eraFL 接入实测兑现了这条：内核零改动，唯一 additive 面是下面这个 `kojo.xml` 契约与对应服务键。
+**契约面的两条硬判据**（`packages/plugin-api/tests/adapter-slot-usage.test.ts` 立闸）：
+
+1. **要么有消费方，要么别加。** 可选成员必须在 adapter 插件之外至少有一处读取。
+   契约不是愿望清单——一个只有实现、没有消费方的成员，每个新 adapter 都要为它写一份
+   白工，还会掩盖「这个能力其实没人做」这个事实。2026-10-22 契约瘦身批据此删掉两枚
+   死槽位：`stateModel`（三个 adapter 都没实现、全仓零消费方，活了五个批次）与
+   `scaffold`（三个 adapter 都实现了、全仓零调用方，且与「工作区为权威 · 游戏目录仅
+   部署目标」的落点口径冲突；脚手架真正的通道是 `deps.scaffold` —— adapter 供数、
+   共享向导落盘到工作区，各 adapter 的 `scaffold.ts` 纯生成器仍在）。
+2. **「谁是当前那枚」只有一处实现。** 同槽单激活的判据是
+   `contribution.adapter.gameId === project.adapterId`，它只准住在契约的
+   `activeGameAdapter()` 里。此前 14 个消费方各手写一遍，每处都能悄悄长出一点差异
+   （先判 `project` 有无 / 忘了判 / `return` 还是 `continue` / 取整枚还是取一个字段），
+   分叉后的症状是「A 面板认得出这个游戏、B 面板认不出」，没有任何别的东西拦得住。
+
+v0 中 eraTW 适配器是唯一实现；此后陆续接入 **eraAkumaMaid 适配器**（`eraakumamaid-adapter`）
+与 **eraFL 适配器**（`erafl-adapter`），现为三个实现。`GameProject` 的通用形状定义见 §5.7，由适配器填充、内核视为不透明载荷。**验收标准：将来接入新游戏时内核与解析器插件零改动**——eraFL 接入实测兑现了这条：内核零改动，唯一 additive 面是下面这个 `kojo.xml` 契约与对应服务键。
 
 口上不一定是 ERB 函数。eraFL 的口上是**声明式数据文件**（`ERB/口上/{编号}_{名}/*.xml`），
 故契约新增 `kojo.xml` 服务（`KojoXmlService`）承载其结构模型。这是 **additive** 的：

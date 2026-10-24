@@ -89,8 +89,8 @@
 | `kojoCallProtocol` | 主路由 `EVENT_K.ERB` 形态与 eraTW `KOJO_MESSAGE.ERB` 类似 | P2 解析路由表得槽位语义表 |
 | `kojoInstructionTable` | `CSV/Train.csv` 存在（同款 loader 可仿制） | P2 |
 | `kojoFaceTemplates`（.kojo 糖） | 目标函数名形态不同 ⇒ **eraTW 的 37 面表不可用** | 新表（约 20 面）；契约保证缺面 `face-table-missing` fail-closed，**可增量交付** |
-| `stateModel` / sav 注入 | 无 sav | 不设 `savDir`；相关插件自动 inactive-for-project |
-| `scaffold` | 游戏自带模板包 `KOJOPackage_{X1,67,68}` | P4：以模板包为骨架来源 |
+| ~~`stateModel`~~ / sav 注入 | 无 sav | 不设 `savDir`；相关插件自动 inactive-for-project。**2026-10-22 契约瘦身批：`stateModel` 已从契约删除**（零消费方） |
+| ~~`scaffold`~~ | 游戏自带模板包 `KOJOPackage_{X1,67,68}` | 骨架来源仍是模板包；**但落盘走 `deps.scaffold` 通道**（adapter 供数 → 共享向导落到工作区），`GameAdapter.scaffold` 槽位 2026-10-22 已删（零调用方，且会绕过「工作区为权威」） |
 | `nameGlossary` | 日文游戏 | 可选（日→中对照），P4 评估 |
 
 **架构结论**：改动面 = ① 新插件包；② `packages/app/src/bootstrap.ts` 注册一行；③ `tools/audit-decoupling.mjs` 豁免登记一行；④（可选）`WelcomeView.tsx` 品牌文案「eraTW 口上编辑器」→「era 系口上编辑器」评估。**内核 / 契约 / Rust 宿主 diff 为空**——这就是架构铁律的验收时刻。

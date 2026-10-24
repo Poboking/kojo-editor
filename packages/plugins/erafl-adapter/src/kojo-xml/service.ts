@@ -105,6 +105,10 @@ export function createKojoXmlService(deps: KojoXmlServiceDeps): KojoXmlServiceHa
     const mine = ++generation;
     const paths = await listXmlFiles();
     if (paths.length === 0) {
+      // **空结果也是结果，同样不许迟到覆盖**：这一次扫到 0 份（作者刚删光、或扫描发生在
+      // 目录还没建好时），并不代表更新的那次扫描没扫出东西——没有这道闸，一次迟到的空扫
+      // 会把别人刚建好的索引清空，面板就变成"明明有 XML 却显示没有"。
+      if (mine !== generation) return current;
       // 没有 XML 的工程不是错误：清空索引并通知，面板显示"这个工程没有口上 XML"
       current = null;
       byPath = new Map();

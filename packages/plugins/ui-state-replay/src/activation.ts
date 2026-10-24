@@ -2,7 +2,7 @@
  * 回放面板**自己的**激活层（从 `index.ts` 的 `activate()` 原样迁出，语义逐字不变）。
  *
  * 三件事住在这里，都不碰 React：
- *   1. **协议查询** `currentProtocol()` —— 按 `adapterId` 精确匹配 `game.adapter` 槽位贡献；
+ *   1. **协议查询** `currentProtocol()` —— 当前那枚 adapter 由契约的 `activeGameAdapter` 认；
  *   2. **存档清单**（`snapshot.source` 扫描 + 归属守卫 + `project.opened/closed` 订阅）；
  *   3. **待处理回放意图**（`kojo.replayFunction` 订阅在激活层，面板没挂载时先落在
  *      `pending` 里等兑现；带 `locate` 且没人在听时经 `ui.panel.float` 浮起自己）。
@@ -20,6 +20,7 @@ import type {
   SlotRegistry,
   SnapshotSourceService,
 } from '@kojo/plugin-api';
+import { activeGameAdapter } from '@kojo/plugin-api';
 import type { LocateRequest } from './panel-logic';
 
 /** 存档清单项（面板只用到这四个字段，不搬原始 meta） */
@@ -54,16 +55,9 @@ export function createReplayActivation(ctx: PluginContext, deps: {
 }): ReplayActivation {
   const { project, snapshots, slots, panelId } = deps;
 
-  /** 当前适配器的口上调用协议（按 adapterId 精确匹配；多适配器共存天然正确） */
-  const currentProtocol = (): GameAdapter['kojoCallProtocol'] => {
-    const current: GameProject | null = project.current();
-    if (!current) return undefined;
-    for (const contribution of slots.query('game.adapter')) {
-      if (contribution.adapter.gameId !== current.adapterId) continue;
-      return contribution.adapter.kojoCallProtocol;
-    }
-    return undefined;
-  };
+  /** 当前适配器的口上调用协议（当前那枚由契约的 `activeGameAdapter` 认） */
+  const currentProtocol = (): GameAdapter['kojoCallProtocol'] =>
+    activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.kojoCallProtocol;
 
   // ---- React 外部源（面板组件订阅） ----
   const state: ReplayActivation = {

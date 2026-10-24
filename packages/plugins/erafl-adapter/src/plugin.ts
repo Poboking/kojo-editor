@@ -2,10 +2,19 @@
  * eraFL 适配器插件 —— 本包是**唯一**允许知道「eraFL / 口上 XML / Chara CSV」这些
  * 字眼的地方（架构铁律：游戏知识归 adapter，内核零游戏名词）。
  *
- * 本批只交付三件事：工程识别（`detect`）、工程装载（`loadProject`）、家族索引
- * （`functionFamilyIndex`）。`variableSchema` / `conventions` / `kojoCallProtocol`
- * 等语义层由后续批次在 adapter 对象上**追加**；本文件刻意不预置它们的 getter——
- * 空的注入位会和并行改动抢同一处代码，等真实现落地时再加才没有歧义。
+ * 交付面：工程识别（`detect`）、工程装载（`loadProject`）、家族索引
+ * （`functionFamilyIndex`）、约定规则（`conventions`），以及口上 XML 索引服务
+ * （`WellKnownServices.KojoXml`）。
+ *
+ * 为什么 `conventions` 可以直接在装配时接上：eraFL 的五条规则只吃 `io` 的三个
+ * **只读**能力（`readBytes` / `listDir` / `exists`），ERB 正文一律走校验器给的
+ * `ctx.readFile`（整轮记忆化，五条规则共享一次读盘）——不依赖任何工程状态，
+ * 也不碰写侧，所以激活期一次性构造即可，不需要 getter。
+ *
+ * 为什么**没有** `scaffold`：契约层的那个槽位已删（详见 `plugin-api/game.ts` 的
+ * 接口注）。eraFL 的脚手架供数 `scaffoldEraflKojo` 仍在 `./scaffold.ts`（纯函数、
+ * 有测试），等本游戏有「新建口上项目」向导时经 `deps.scaffold` 通道接上——那条通道
+ * 落点是工作区，与现行「工作区为权威 · 游戏目录仅部署目标」的口径一致。
  *
  * eraFL 的结构事实（`D:/Game/erafl` 实测）：
  * - 口上主形态是 **XML**，ERB 侧只有 `KOJO_DEFINE_K{n}` 之类的注册壳函数；
@@ -24,7 +33,13 @@ import type {
   Plugin,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { WellKnownServices, combineDigests, foldDigest, join } from '@kojo/plugin-api';
+import {
+  WellKnownServices,
+  combineDigests,
+  foldDigest,
+  join,
+  pathKey,
+} from '@kojo/plugin-api';
 import { ERAFL } from './constants';
 import {
   charaNameFromFileName,
@@ -32,6 +47,7 @@ import {
   parseCharaNoFromFileName,
   parseKojoDirName,
 } from './chara-csv';
+import { createEraflConventions } from './conventions';
 import { createEraflFamilyIndex } from './family-index';
 import {
   loadEraflInstructionNames,
@@ -39,12 +55,21 @@ import {
 } from './variable-schema';
 import { createKojoXmlService, type KojoXmlServiceHandle } from './kojo-xml/service';
 
+/**
+ * 保存后重建口上 XML 索引的去抖窗口（毫秒）。
+ *
+ * 为什么要去抖：一次保存会连带触发备份、编码探测等多次 `file.changed`，而索引重建
+ * 要重读全部 XML（真盘 293 份）。500ms 是"作者连续敲几次 Ctrl+S 只重建一次"的量级，
+ * 又短到松手后几乎立刻看到新结果——面板自己订阅索引，刷新是静默的。
+ */
+const KOJO_XML_REFRESH_DEBOUNCE_MS = 500;
+
 /** 创建 eraFL 适配器插件（供 app 组合根 bootstrap.ts 装配） */
 export function createEraflAdapterPlugin(): Plugin {
   return {
     id: 'erafl-adapter',
     version: '0.1.0',
-    // 本批只读盘（detect / loadProject），不依赖项目服务与工作区服务
+    // `kernel.io`：detect / loadProject / 约定规则 / 口上 XML 索引共用；
     requires: ['kernel.io'],
     // 装载时对外提供口上 XML 服务（下面 `ctx.provide` 那行）——内核按 provides[] 做依赖排序与
     // 冲突检测，漏声明会在 activate 当场抛错（真壳实测：面板读「插件 (21/22 运行中)」+
@@ -76,10 +101,55 @@ export function createEraflAdapterPlugin(): Plugin {
       ctx.provide(WellKnownServices.KojoXml, kojoXml as KojoXmlService);
       ctx.onDispose(() => kojoXml.dispose());
 
+      /**
+       * 保存后让口上 XML 索引失效。
+       *
+       * 索引原先只在 `loadProject` 与面板「重新扫描」两处重建，于是改完 XML 保存，
+       * 面板 / 诊断仍在看旧索引——用户感知是"保存了没生效"，而这种"重开就好"的问题
+       * 最难被报上来。内核 io 在写盘后发 `file.changed`，本插件订阅它自己收口。
+       *
+       * 判据只做**字符串**比较（不 stat、不列目录）：保存是高频动作，每存一次盘都摸一遍
+       * 目录就变成每存一次一趟 IO。事件路径是平台原样透传（大小写与分隔符都不保证），
+       * 故一律折成 `pathKey` 再比前缀，否则"看着对、永远不命中"。
+       */
+      const underKojoRoot = (path: string): boolean => {
+        const key = pathKey(path).replace(/\\/g, '/');
+        return kojoXmlRoots.some((root) => {
+          const rootKey = pathKey(root).replace(/\\/g, '/').replace(/\/+$/, '');
+          return key === rootKey || key.startsWith(`${rootKey}/`);
+        });
+      };
+
+      /** 去抖句柄（一次保存会连带触发多次 `file.changed`：备份、编码探测各发一条） */
+      let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+      ctx.onDispose(
+        ctx.bus.on('file.changed', (ev) => {
+          // 未加载工程时 `kojoXmlRoots` 为空：直接返回，连字符串都不必比（服务也不该扫盘）
+          if (kojoXmlRoots.length === 0) return;
+          if (!/\.xml$/i.test(ev.path)) return;
+          if (!underKojoRoot(ev.path)) return;
+          if (refreshTimer !== null) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => {
+            refreshTimer = null;
+            // 重建失败只留日志：保存本身已经成功，索引是派生数据，不能反过来让保存报错
+            void kojoXml.refresh().catch((err: unknown) => {
+              ctx.log.warn(`保存后重建口上 XML 索引失败（面板沿用旧索引）：${String(err)}`);
+            });
+          }, KOJO_XML_REFRESH_DEBOUNCE_MS);
+        }),
+      );
+      ctx.onDispose(() => {
+        if (refreshTimer !== null) clearTimeout(refreshTimer);
+        refreshTimer = null;
+      });
+
       const adapter: GameAdapter = {
         gameId: ERAFL.gameId,
         displayName: ERAFL.displayName,
         functionFamilyIndex: createEraflFamilyIndex(),
+        // 约定规则只吃 io 的三个只读能力（读字节判编码、列目录找 XML、探存在判 XML_PATH），
+        // 不依赖工程状态 ⇒ 装配时一次成型，不用 getter（见文件头）
+        conventions: createEraflConventions(io),
         get variableSchema() {
           return currentSchema;
         },
@@ -227,10 +297,6 @@ export function createEraflAdapterPlugin(): Plugin {
               ]) ?? undefined,
           };
         },
-
-        // `scaffold`（生成新角色口上骨架）本批不实现，留 undefined：
-        // eraFL 的产物是「define 壳 ERB + XML 模板」两件套，模板形态要等 XML 语义层
-        // 落地后才有权威来源；先写一套只会产出作者还得手改的骨架。
       };
 
       ctx.slots.register('game.adapter', { id: `${ERAFL.gameId}-adapter`, adapter });

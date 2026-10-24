@@ -1,17 +1,22 @@
 /**
- * 口上 XML 的诊断面（未知属性 / 枚举越界 / 正文为空 / 重复优先级）。
+ * 口上 XML 的诊断面（未知属性 / 枚举越界 / 正文为空）。
  *
  * 归属与纪律同 `kojo-xml-providers.ts`：本文件只做**通用 XML 结构判据**，
  * 属性枚举与 `com` 编号一律查 `currentKojoXmlSchema()` 交来的规格表。
  *
  * 判据口径：只报**可证明**的问题（错一个字符就能说清的那种），风格偏好一律不报
- * ——误报比漏报更伤作者信任。三条边界是刻意的：
+ * ——误报比漏报更伤作者信任。四条边界是刻意的：
  * 1. **只查 `<command …>` 这一层**：同目录还有 `<parts>` / `<color>` / `<quest>` 等
  *    元素，它们的属性（`layer` / `r` / `questId` …）不在口上属性表里，一律不查；
  * 2. **只查标了 `closed: true` 的枚举**：恋爱状态、情绪这类取值域会随游戏版本长，
  *    当封闭集报错等于替游戏宣布"这个值不存在"；
  * 3. **不报"缺 com"**：真语料里 61,545 条 `<command>` 中有 9,595 条没有 `com`
- *    （`name="実行"` 这类），那是合法写法，不是缺陷。
+ *    （`name="実行"` 这类），那是合法写法，不是缺陷；
+ * 4. **不查"同 key 重复"**：eraFL 语料里同 `com`+`kojoPlace`+`priority` 多条是
+ *    **随机变体**的常态（实测 44,809 / 61,562 条、279/293 份文件），属性逐字相同
+ *    而台词不同（`1001_汎用_クール/KOJO_K1001_COM.xml` 第 6、9 行即此形态）。
+ *    判据在这里只能制造噪声。真要查"复制粘贴残留"必须比正文，那是解析器层的活，
+ *    不是逐行扫描器能做的。
  */
 import type * as Monaco from './entry';
 import type { KojoXmlSchema } from '@kojo/plugin-api';
@@ -78,8 +83,6 @@ export function checkKojoXmlText(
   const problems: KojoXmlProblem[] = [];
   if (!schema) return problems;
   const known = schema.attributes.map((a) => a.name);
-  /** `com|place|priority` → 首次出现的行号 */
-  const seen = new Map<string, number>();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -135,28 +138,6 @@ export function checkKojoXmlText(
           message: `\`${attr.name}\` 不接受 \`${token}\`；可用：${spec.values.slice(0, 8).join(' / ')}`,
         });
         break; // 一行一个属性只报一次，免得一个错值刷三条
-      }
-    }
-
-    // ---- 同 com + 同位置 + 同优先级：引擎的选择会不确定 ----
-    const get = (n: string): string | undefined => attrs.find((a) => a.name === n)?.value;
-    const com = get('com');
-    if (com !== undefined) {
-      const place = get('kojoPlace') ?? get('place') ?? '';
-      const priority = get('priority') ?? '';
-      const key = `${com}\u0000${place}\u0000${priority}`;
-      const first = seen.get(key);
-      if (first !== undefined) {
-        problems.push({
-          line: lineNo,
-          startColumn: commandTagStart(line) + 1,
-          endColumn: commandTagStart(line) + 1 + '<command'.length,
-          severity: 'warning',
-          code: 'kojo-xml.command.duplicate-priority',
-          message: `与第 ${first} 行同 \`com\`/\`kojoPlace\`/\`priority\`：命中顺序会变得不确定。`,
-        });
-      } else {
-        seen.set(key, lineNo);
       }
     }
   }

@@ -21,7 +21,7 @@ import type { Kernel } from '@kojo/kernel';
 // 2.0 语言层的 adapter **只是类型**（`GlobalProviderOptions.kojo2Adapter` 的形状）：
 // 具体实例由宿主组合根注入，本文件既不 import 任何 adapter 包，也不认识任何游戏名词。
 import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
-import { errorText, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
+import { activeGameAdapter, errorText, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
 import type {
   EditorCodeAction,
   EditorDocumentSymbol,
@@ -282,10 +282,9 @@ export function erbParserIndex(kernel: Kernel): ErbIndex | null {
  */
 export function editorTables(kernel: Kernel): EditorTables {
   const contributions = kernel.slots.query('game.adapter');
-  const project = kernel.project.current();
-  const matched = project ? contributions.find((c) => c.adapter.gameId === project.adapterId) : undefined;
-  if (matched) {
-    const adapter = matched.adapter;
+  // 「谁是当前那枚」由契约的 `activeGameAdapter` 认（与词典备注台账同一条判据）
+  const adapter = activeGameAdapter(contributions, kernel.project.current()?.adapterId);
+  if (adapter) {
     return {
       ...(adapter.variableSchema
         ? { dictionary: makeLookup(adapter.variableSchema), variableSchema: adapter.variableSchema }

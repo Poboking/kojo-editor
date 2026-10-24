@@ -146,7 +146,8 @@ describe('checkKojoXmlText —— 只报可证明的问题', () => {
     expect(bad.length).toBe(1);
   });
 
-  it('同 com/位置/优先级重复 → warning 指向首次出现的行', () => {
+  it('同 com/位置/优先级多条不报：那是 eraFL 的随机变体常态', () => {
+    // 属性逐字相同、只有台词不同 —— 引擎在一组同等条件里挑一条，作者故意这么写
     const problems = checkKojoXmlText(
       [
         '<command com="300" kojoPlace="TOP" priority="1">',
@@ -155,9 +156,7 @@ describe('checkKojoXmlText —— 只报可证明的问题', () => {
       ],
       SCHEMA,
     );
-    expect(problems.length).toBe(1);
-    expect(problems[0]!.code).toBe('kojo-xml.command.duplicate-priority');
-    expect(problems[0]!.message).toContain('第 1 行');
+    expect(problems).toEqual([]);
   });
 
   it('空正文给 info（不是 warning：空台词可能是刻意占位）', () => {
@@ -189,7 +188,7 @@ describe('真盘误报率（守卫：D:/Game/erafl 存在才跑）', () => {
   const KOJO_ROOT = 'D:/Game/erafl/ERB/口上';
   const hasCorpus = existsSync(KOJO_ROOT);
 
-  it.skipIf(!hasCorpus)('293 份跑完：未知属性 ≤ 30 条、枚举越界 ≤ 30 条（都是真盘拼写错误量级）', () => {
+  it.skipIf(!hasCorpus)('293 份跑完：未知属性/枚举越界 ≤ 30 条，且没有任何 kojo-xml.command.* 诊断', () => {
     // 用 adapter 的真实规格表（跨包 import 在测试里允许：只读纯数据）
     const paths: string[] = [];
     const walk = (dir: string): void => {
@@ -204,6 +203,8 @@ describe('真盘误报率（守卫：D:/Game/erafl 存在才跑）', () => {
 
     let unknown = 0;
     let value = 0;
+    /** 以 `kojo-xml.command.` 开头的诊断（曾经的 duplicate-priority 误报就长这样） */
+    const commandCodes: string[] = [];
     for (const p of paths) {
       const bytes = readFileSync(p);
       const text =
@@ -214,14 +215,19 @@ describe('真盘误报率（守卫：D:/Game/erafl 存在才跑）', () => {
       for (const problem of problems) {
         if (problem.code === 'kojo-xml.attr.unknown') unknown++;
         if (problem.code === 'kojo-xml.attr.value') value++;
+        if (problem.code.startsWith('kojo-xml.command.')) commandCodes.push(problem.code);
       }
     }
-    // 真盘实测（2026-10-24）：未知属性 4 条（`ikojoPlace` / `sExclusive` / `ust` / `date`），
-    // 枚举越界 20 条（全是 `isExclusive="Ture"` 15 + `"ture"` 5 —— 作者手滑的拼写，
-    // 引擎按"非 TRUE"处理 ⇒ 这些条目其实**没有**独占，是真实的静默缺陷）。
+    // 真盘实测（2026-10-24）：未知属性 3 条、枚举越界 20 条（全是 `isExclusive="Ture"` 15
+    // + `"ture"` 5 —— 作者手滑的拼写，引擎按"非 TRUE"处理 ⇒ 这些条目其实**没有**独占，
+    // 是真实的静默缺陷）、`<contents></contents>` 空正文约 200 条（severity = info，
+    // 合法写法，不拦）。
     // 判据留到 30 是为了容忍语料更新，同时守住"不许把合法写法当错"：若哪天暴涨到几百，
     // 说明判据开始查 <parts>/<color> 那一层或把开放枚举当封闭集了。
     expect(unknown).toBeLessThanOrEqual(30);
     expect(value).toBeLessThanOrEqual(30);
+    // 这条是防回归的硬线：同 key 多条在 eraFL 里是随机变体的常态（44,809 / 61,562 条、
+    // 279/293 份文件），任何 `kojo-xml.command.*` 诊断在真语料上出现都只可能是误报。
+    expect(commandCodes).toEqual([]);
   });
 });

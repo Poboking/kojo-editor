@@ -21,7 +21,7 @@ import type {
   UIPanelProps,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { growWindow } from '@kojo/plugin-api';
+import { activeGameAdapter, growWindow } from '@kojo/plugin-api';
 import {
   CELL_WINDOW,
   VAR_WINDOW,
@@ -61,16 +61,9 @@ export interface InjectorPanelDeps {
 /** 构造面板组件：服务与上下文一次性闭包住（槽位注册仍归 `index.ts`） */
 export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelProps) => unknown {
   const { ctx, snapshots, writer, project, slots } = deps;
-  /** 当前适配器的变量语义查询（按 adapterId 精确匹配；与 condition-extractor 同通道） */
-  const schemaLookup = (): VariableSchema | undefined => {
-    const current = project.current();
-    if (!current) return undefined;
-    for (const c of slots.query('game.adapter')) {
-      if (c.adapter.gameId !== current.adapterId) continue;
-      return c.adapter.variableSchema;
-    }
-    return undefined;
-  };
+  /** 当前适配器的变量语义查询（当前那枚由契约的 `activeGameAdapter` 认；与 condition-extractor 同通道） */
+  const schemaLookup = (): VariableSchema | undefined =>
+    activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.variableSchema;
 
   /* ------------------------------ 面板组件 ------------------------------ */
 

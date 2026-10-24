@@ -8,7 +8,7 @@
  * - 谓词明细来自 **condition.extractor**（按需解析，不重复实现表达式解析）；
  * - 存档模型来自 **snapshot.source**（不重复实现二进制协议）；
  * - 具名索引字典（`TALENT:恋慕` → 3）来自 **game adapter** 的 `variableSchema`
- *   经槽位查询 + `project.adapterId` 过滤后提供——本插件只消费，不解释。
+ *   （经契约的 `activeGameAdapter` 认出当前那枚）——本插件只消费，不解释。
  *
  * 近似定位（架构文档 §5.3）：不执行函数、不模拟随机；能力边界全部
  * 降级为显式 `unknown`（原因分类）——置信度三档由此而来。
@@ -23,7 +23,7 @@ import type {
   SlotRegistry,
   SnapshotSourceService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import { StateReplayEngine } from './engine';
 import type { SchemaLookup } from './state-view';
 
@@ -46,16 +46,11 @@ export function createStateReplayPlugin(): Plugin {
       const snapshot = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
       const extractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
 
-      /** 当前适配器的具名索引字典（按 adapterId 精确匹配；多适配器共存天然正确） */
+      /** 当前适配器的具名索引字典（当前那枚由契约的 `activeGameAdapter` 认） */
       const schemaLookup = (): SchemaLookup | undefined => {
-        const current = project.current();
-        if (!current) return undefined;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          const vs = contribution.adapter.variableSchema;
-          if (vs) return (name: string, index?: number | string) => vs.lookup(name, index);
-        }
-        return undefined;
+        const vs = activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.variableSchema;
+        if (!vs) return undefined;
+        return (name: string, index?: number | string) => vs.lookup(name, index);
       };
 
       /**
@@ -64,14 +59,12 @@ export function createStateReplayPlugin(): Plugin {
        * （回放照旧全部 unknown('call-context')，不猜）。
        */
       const callContextResolver = (): ReplayCallContextResolver | undefined => {
-        const current = project.current();
-        if (!current) return undefined;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          const protocol = contribution.adapter.kojoCallProtocol;
-          if (protocol?.deriveCallContext) return (name, charNo) => protocol.deriveCallContext!(name, charNo);
-        }
-        return undefined;
+        const protocol = activeGameAdapter(
+          slots.query('game.adapter'),
+          project.current()?.adapterId,
+        )?.kojoCallProtocol;
+        if (!protocol?.deriveCallContext) return undefined;
+        return (name, charNo) => protocol.deriveCallContext!(name, charNo);
       };
 
       const engine = new StateReplayEngine({

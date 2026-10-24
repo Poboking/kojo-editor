@@ -23,7 +23,13 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join as nodeJoin, relative as nodeRel, resolve as nodeResolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+/**
+ * 本文件每个用例都要**全仓扫几遍**（各 3–5 s）。20 s 缺省超时在单跑时够用，在全量套件
+ * 并行时不够——不是判据变钝了，是同一台机器同时在跑 800 多个测试文件。整文件如实声明慢。
+ */
+vi.setConfig({ testTimeout: 120000 });
 
 const ROOT = nodeResolve(fileURLToPath(new URL('../../../..', import.meta.url)));
 const SELF = nodeJoin(ROOT, 'packages', 'plugins', 'ui-archive-browser', 'tests', 'single-source.test.ts');

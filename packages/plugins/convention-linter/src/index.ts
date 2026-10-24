@@ -24,7 +24,7 @@ import type {
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import { ConventionEngine } from './engine';
 import {
   buildConventionIssueView,
@@ -66,17 +66,12 @@ export function createConventionLinterPlugin(): Plugin {
       /** 本插件命名空间的存储域：校验结果快照的落点（`{appData}/store/convention-linter/`） */
       const storage = ctx.storage;
 
-      const adapterRules = (): readonly ConventionRule[] => {
-        const current: GameProject | null = project.current();
-        if (!current) return [];
-        const out: ConventionRule[] = [];
-        for (const contribution of slots.query('game.adapter')) {
-          // 只取当前激活适配器的规则（多适配器共存时按 adapterId 精确匹配）
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          if (contribution.adapter.conventions) out.push(...contribution.adapter.conventions);
-        }
-        return out;
-      };
+      /**
+       * 当前适配器带来的约定规则。
+       * 「谁是当前那枚」由契约的 `activeGameAdapter` 认（多适配器共存天然正确）。
+       */
+      const adapterRules = (): readonly ConventionRule[] =>
+        activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.conventions ?? [];
 
       /**
        * 结果快照端口（键固定、**三层判据**在快照本体里；坏快照删除而不是"修"）。

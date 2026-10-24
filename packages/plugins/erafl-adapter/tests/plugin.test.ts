@@ -1,9 +1,12 @@
 /**
- * `loadProject` 装载结果。
+ * `loadProject` 装载结果 + adapter 对象的语义位（`conventions`）。
  *
  * 真盘用例以 `D:/Game/erafl` 存在为守卫（断言的是本机实测读数：134 个角色编号）；
  * 合成用例用内存盘钉合并策略——**CSV 名优先、只有目录的补条目**，这条策略换个
  * 工程版本也不会变，故不依赖真盘。
+ *
+ * 约定规则这组钉的是"**接上了**"而不是"算得对不对"：规则本身的判据由
+ * `conventions.test.ts` 钉，这里只证明它在 adapter 对象上。
  */
 
 import { existsSync } from 'node:fs';
@@ -118,5 +121,21 @@ describe('loadProject —— 真盘实测（守卫：D:/Game/erafl 存在才跑�
   it.skipIf(!hasCorpus)('同一工程连读两次 inputDigest 一致（目录枚举顺序不影响判据）', async () => {
     const again = await activateAdapter(nodeIo()).loadProject(GAME_ROOT);
     expect(again.inputDigest).toBe(proj.inputDigest);
+  });
+});
+
+/* ------------------------------ 语义位：conventions ------------------------------ */
+
+describe('adapter 的约定规则位（conventions）', () => {
+  it('五条规则都挂在 adapter 上，id 与 conventions.ts 的常量逐条一致', () => {
+    const adapter = activateAdapter(nodeIo());
+    // 规则是纯读盘能力装配的（io 的三个只读方法），不需要工程 ⇒ 未打开项目也在
+    expect(adapter.conventions?.map((rule) => rule.id)).toEqual([
+      'erafl.kojo-xml.unregistered',
+      'erafl.kojo-xml.missing-file',
+      'erafl.kojo-define.missing-name',
+      'erafl.kojo-define.duplicate-number',
+      'erafl.kojo-xml.encoding-mismatch',
+    ]);
   });
 });

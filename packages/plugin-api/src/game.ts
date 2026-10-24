@@ -254,26 +254,13 @@ export interface VariableSchema {
  */
 export type { ConventionRule } from './conventions';
 
-/** 状态模型（哪些变量影响口上分支；v1.0 快照回放消费） */
-export interface StateModel {
-  readonly dimensions: ReadonlyArray<{
-    key: string;
-    label: string;
-    /** 取值域描述（连续区间 / 枚举） */
-    domain: string;
-  }>;
-}
-
-/** 脚手架选项（v0.3） */
-export interface ScaffoldOptions {
-  familyName?: string;
-  displayName?: string;
-  intro?: string;
-  /** 要接入的时机（缺省 = 起步四件套） */
-  faces?: string[];
-  targetDir?: string;
-}
-
+/**
+ * 脚手架落盘结果（`kojo-project-kit/scaffold-writer.ts` 的返回形状）。
+ *
+ * **不属于 `GameAdapter`**：脚手架走的是「adapter 供数 → 共享向导落盘」这条
+ * `deps.scaffold` 通道（见 `kojo-project-kit`），不是适配器槽位。本类型留在
+ * 契约层只是因为落盘函数在共享层、需要与 adapter 共用一个返回形状。
+ */
 export interface ScaffoldResult {
   createdFiles: string[];
   /** 生成后完整性报告（人类可读行） */
@@ -732,6 +719,39 @@ export interface StateLinePreset {
 /**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
+ * 「谁是当前那枚」的判据只有一处实现：本文件末尾的 `activeGameAdapter()`。
+ *
+ * ## 成员按「能力族」分组（加成员前先读这一节）
+ *
+ * 1. **身份与发现**（必填）：`gameId` / `displayName` / `detect` / `loadProject`。
+ *    内核只认这四项；其余全部可选，缺省 = 本游戏没有该能力。
+ * 2. **引擎结构知识**（可选）：`functionFamilyIndex` / `variableSchema` / `conventions`。
+ *    读侧判据的来源（函数树分组、变量名解析、约定校验），三个消费方各自独立取用、
+ *    互不依赖 ⇒ 保持平铺，不打包成子对象（打包只会让调用点多一层 `.structure.`，
+ *    换不来任何解耦）。
+ * 3. **口上 DSL 知识**（可选）：`kojoCallProtocol` / `kojoFaceTemplates` /
+ *    `kojoInstructionTable` / `kojoLibraryTable` / `kojoMutatorTable` /
+ *    `kojoCounterTable` / `stateLinePresets`。糖层（中文 → 原生代码）与补全/悬停消费；
+ *    缺一项 = 该能力 fail-closed 报诊断（绝不猜）。
+ * 4. **展示知识**（可选）：`nameGlossary`（日文名 → 中文名，只影响显示）。
+ *
+ * ## 两个曾经存在、现已删除的成员（别再往回加）
+ *
+ * - **`stateModel`**：v1.0 预留的「状态维度表」。三个适配器**都没实现**、全仓**零消费方**，
+ *   活了五个批次，唯一效果是让每个新 adapter 多写一份没人读的字段。快照/回放的状态视图
+ *   实际来自 `snapshot.source` + `variableSchema`，不需要它。
+ * - **`scaffold`**：生成新角色口上骨架并**写进游戏目录**。全仓零调用方，而且它与现行
+ *   落点口径冲突——`ui-sugar-editor` 的新建文件向导已明确「工作区为权威 · 游戏目录仅
+ *   部署目标」（Ctrl+N 不再直接写游戏目录，进游戏目录走「部署」）。脚手架真正在用的
+ *   通道是 `deps.scaffold`（adapter 供数 → 共享向导落盘到工作区）。三个 adapter 的
+ *   `scaffold.ts` **纯生成器仍在**（那是向导的供数），去掉的只是 adapter 对象上那层
+ *   没人调、且会绕过「工作区为权威」的薄包装。
+ *
+ * ## 加新槽位的判据
+ *
+ * **要么有消费方，要么别加。** 契约不是愿望清单：一个只有实现、没有消费方的可选成员，
+ * 每个新 adapter 都要为它写一份白工，还会掩盖「这个能力其实没人做」这个事实。
+ * `packages/plugin-api/tests/adapter-slot-usage.test.ts` 把这条判据做成了闸。
  */
 export interface GameAdapter {
   /** 游戏标识（存储域后缀、日志用），如 'mygame' */
@@ -750,8 +770,6 @@ export interface GameAdapter {
   readonly variableSchema?: VariableSchema;
   /** 可校验的剧本约定清单 */
   readonly conventions?: readonly ConventionRule[];
-  /** 状态模型（供快照/预览消费） */
-  readonly stateModel?: StateModel;
   /** 口上调用协议（v0.2 第十批；可选——路由层转发实参的槽位语义表） */
   readonly kojoCallProtocol?: KojoCallProtocol;
   /**
@@ -792,7 +810,44 @@ export interface GameAdapter {
    * 面板只按 `keys` 精确匹配行，语义全在 adapter；缺省 = 不显示剧情线快选。
    */
   readonly stateLinePresets?: readonly StateLinePreset[];
+}
 
-  /** 脚手架（生成新角色口上骨架；v0.3） */
-  scaffold?(characterNo: number, options?: ScaffoldOptions): Promise<ScaffoldResult>;
+/**
+ * 从 `game.adapter` 槽位的查询结果里挑出**当前激活**的那一枚适配器。
+ *
+ * 槽语义是「同一项目同一时刻只有一个激活实现」（见 `GameAdapter` 首段），
+ * 而内核只把结果写成 `GameProject.adapterId` ——「谁是当前那枚」这个判据的
+ * 唯一形态就是 `contribution.adapter.gameId === project.adapterId`。
+ *
+ * ## 为什么值得一个具名函数
+ *
+ * 这条判据原先被 14 个消费方各手写一遍（条件抽取 / 约定校验 / 糖层 / 状态回放 /
+ * 条件矩阵 / 约定报告 / 口上导航 / 快照注入 / 回放面板 / 新建文件向导 / 词典备注
+ * 台账 / Monaco 全局表 / 项目视图）。手写一份的代价不是那三行循环，是**每处都能
+ * 悄悄长出一点差异**：有的先判 `project` 有无、有的忘了判、有的在循环里 `return`
+ * 有的 `continue`、有的取整枚 adapter 有的只取一个字段。判据一旦分叉，症状是
+ * 「A 面板认得出这个游戏、B 面板认不出」——而且没有任何门禁拦得住。
+ *
+ * 现在差异只剩一种：调用方拿整枚 adapter 还是拿其中某个字段。取字段就是
+ * `activeGameAdapter(...)?.variableSchema`，缺省语义自然落在 `undefined` 上
+ * （消费方本来就该显式降级，绝不猜）。
+ *
+ * `adapterId` 收 `null | undefined` 是为了贴合调用点的真实形状：没开项目时
+ * `project.current()?.adapterId` 就是 `undefined`，不必每个调用方先写一次卫语句。
+ *
+ * 参数是**查询结果**而不是 `SlotRegistry`：本函数住在契约层，不认识槽注册表，
+ * 也不该把「怎么查」绑进来（查询面属于内核）。
+ *
+ * 闸：`packages/plugin-api/tests/adapter-slot-usage.test.ts` 钉住
+ * 「全仓只有这一处手写 active-adapter 查找」。
+ */
+export function activeGameAdapter<T extends { readonly adapter: GameAdapter }>(
+  contributions: readonly T[],
+  adapterId: string | null | undefined,
+): GameAdapter | undefined {
+  if (!adapterId) return undefined;
+  for (const contribution of contributions) {
+    if (contribution.adapter.gameId === adapterId) return contribution.adapter;
+  }
+  return undefined;
 }

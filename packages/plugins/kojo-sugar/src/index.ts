@@ -8,7 +8,7 @@
  * - 本插件 = 三段式转译器（行式词法 → AST → codegen）——**引擎级语言知识**
  *   （中文表层关键字是跨游戏语言层，契约 `sugar.ts` 头注已定调），零游戏知识；
  * - 变量字典（`VariableSchema`）/ **时机分野命名模板（`KojoFaceTable`）** 来自
- *   **game adapter**（经槽位查询 + `project.adapterId` 过滤后注入转译器）——
+ *   **game adapter**（经契约的 `activeGameAdapter` 认出当前那枚后注入转译器）——
  *   本插件只消费，不解释；
  * - 编译落盘（S3 批）：`compileToFile` 走**内核 io 第一道闸**（writablePaths）
  *   + 备份 + 回读验证（安全顺序见 `compile.ts` 头注，复刻注入器范式）；
@@ -43,7 +43,7 @@ import type {
   VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, resolveSugarTarget } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter, resolveSugarTarget } from '@kojo/plugin-api';
 import { createSugarTranspileService, type SugarTranspileServiceWithCache } from './service';
 import { createSugarPreviewService } from './preview';
 import { createSugarLiftService } from './lift';
@@ -177,38 +177,20 @@ export function createKojoSugarPlugin(): Plugin {
       const viewOf = (): AdapterView => {
         const current: GameProject | null = project.current();
         if (!current) return emptyView();
-        const v: {
-          adapterId: string;
-          projectRoot: string;
-          inputDigest: string | undefined;
-          variableSchema: VariableSchema | undefined;
-          faceTable: KojoFaceTable | undefined;
-          instructionTable: KojoInstructionTable | undefined;
-          libraryTable: KojoLibraryTable | undefined;
-          mutatorTable: KojoMutatorTable | undefined;
-          counterTable: KojoCounterTable | undefined;
-        } = {
+        // 「谁是当前那枚」由契约的 `activeGameAdapter` 认。六张表**全部取自同一枚**
+        // adapter ⇒ 结构上排除了「A 表来自这枚、B 表来自那枚」的错配。
+        const adapter = activeGameAdapter(slots.query('game.adapter'), current.adapterId);
+        return {
           adapterId: current.adapterId,
           projectRoot: current.rootDir,
           inputDigest: current.inputDigest,
-          variableSchema: undefined,
-          faceTable: undefined,
-          instructionTable: undefined,
-          libraryTable: undefined,
-          mutatorTable: undefined,
-          counterTable: undefined,
+          variableSchema: adapter?.variableSchema,
+          faceTable: adapter?.kojoFaceTemplates,
+          instructionTable: adapter?.kojoInstructionTable,
+          libraryTable: adapter?.kojoLibraryTable,
+          mutatorTable: adapter?.kojoMutatorTable,
+          counterTable: adapter?.kojoCounterTable,
         };
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId !== current.adapterId) continue;
-          // 逐字段首命中（与改前四个独立查询函数逐条同义）
-          v.variableSchema ??= contribution.adapter.variableSchema;
-          v.faceTable ??= contribution.adapter.kojoFaceTemplates;
-          v.instructionTable ??= contribution.adapter.kojoInstructionTable;
-          v.libraryTable ??= contribution.adapter.kojoLibraryTable;
-          v.mutatorTable ??= contribution.adapter.kojoMutatorTable;
-          v.counterTable ??= contribution.adapter.kojoCounterTable;
-        }
-        return v;
       };
 
       /**

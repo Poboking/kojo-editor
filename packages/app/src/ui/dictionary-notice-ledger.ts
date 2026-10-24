@@ -1,5 +1,6 @@
 import type { Kernel } from '@kojo/kernel';
 import type { VariableDictionaryStatus, VariableSchema } from '@kojo/plugin-api';
+import { activeGameAdapter } from '@kojo/plugin-api';
 import type { Notify, NoticeInput } from './NotificationCenter';
 
 /**
@@ -121,14 +122,11 @@ const sessionLedger = new Set<string>();
 
 /**
  * 当前项目那枚适配器的变量字典（**运行时现取**；适配器随项目开闭重建，缓存会带错项目）。
- * 与 `ui/editor-global-providers.ts` 的 `editorTables` 同一条匹配口径：按 `adapterId` 精确匹配
- * `game.adapter` 槽位贡献；没有同 id 的贡献 ⇒ `undefined`（不猜、不跨适配器借表）。
+ * 「谁是当前那枚」由契约的 `activeGameAdapter` 认（与 `ui/editor-global-providers.ts` 的
+ * `editorTables` 同一条判据）；没有同 id 的贡献 ⇒ `undefined`（不猜、不跨适配器借表）。
  */
 export function variableSchemaFor(kernel: Kernel, adapterId: string): VariableSchema | undefined {
-  for (const contribution of kernel.slots.query('game.adapter')) {
-    if (contribution.adapter.gameId === adapterId) return contribution.adapter.variableSchema;
-  }
-  return undefined;
+  return activeGameAdapter(kernel.slots.query('game.adapter'), adapterId)?.variableSchema;
 }
 
 /**

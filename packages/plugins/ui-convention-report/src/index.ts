@@ -14,6 +14,7 @@ import type {
 } from '@kojo/plugin-api';
 import {
   attachGrowSentinel,
+  activeGameAdapter,
   diagnosticDisplay,
   KernelServices,
   MORE_ROW_STYLE,
@@ -202,16 +203,9 @@ export function createUiConventionReportPlugin(): Plugin {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
 
-      /** 当前激活适配器的家族规则（多适配器共存时按 adapterId 精确匹配；与导航树同一取法） */
-      const currentFamilyIndex = (current: GameProject | null): FamilyIndexRule | null => {
-        if (!current) return null;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId === current.adapterId && contribution.adapter.functionFamilyIndex) {
-            return contribution.adapter.functionFamilyIndex;
-          }
-        }
-        return null;
-      };
+      /** 当前激活适配器的家族规则（当前那枚由契约的 `activeGameAdapter` 认；与导航树同一取法） */
+      const currentFamilyIndex = (current: GameProject | null): FamilyIndexRule | null =>
+        activeGameAdapter(slots.query('game.adapter'), current?.adapterId)?.functionFamilyIndex ?? null;
 
       /**
        * 归属判据的三口子（每次取当前值：切项目 / 关项目后不能拿旧表去归属新数据）。

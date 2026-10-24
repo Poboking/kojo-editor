@@ -27,7 +27,7 @@ export interface WriteScaffoldInput {
   files: Readonly<Record<string, string>>;
   /** 绝对路径根（文件按 `files` 的相对路径落在其下） */
   targetDir: string;
-  /** 只写这些相对路径（缺省 = 全写）；用于 `ScaffoldOptions.faces` 一类筛选 */
+  /** 只写这些相对路径（缺省 = 全写）；向导的「只生成点名的面」就靠它筛 */
   only?: readonly string[];
 }
 

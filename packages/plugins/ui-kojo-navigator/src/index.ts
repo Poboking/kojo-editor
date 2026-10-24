@@ -21,12 +21,11 @@ import type {
   ConditionExtractorService,
   ErbParserService,
   FamilyIndexRule,
-  GameProject,
   Plugin,
   ProjectService,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import { createNavigatorPanel } from './navigator-panel';
 import { createNavigatorStore } from './navigator-store';
 
@@ -46,17 +45,9 @@ export function createUiKojoNavigatorPlugin(): Plugin {
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
 
-      /** 当前激活适配器的家族规则（多适配器共存时按 adapterId 精确匹配） */
-      const currentFamilyIndex = (): FamilyIndexRule | null => {
-        const current: GameProject | null = project.current();
-        if (!current) return null;
-        for (const contribution of slots.query('game.adapter')) {
-          if (contribution.adapter.gameId === current.adapterId && contribution.adapter.functionFamilyIndex) {
-            return contribution.adapter.functionFamilyIndex;
-          }
-        }
-        return null;
-      };
+      /** 当前激活适配器的家族规则（当前那枚由契约的 `activeGameAdapter` 认） */
+      const currentFamilyIndex = (): FamilyIndexRule | null =>
+        activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.functionFamilyIndex ?? null;
 
       /** 当前适配器的面 → 中文标签（与家族规则同源；缺省 → 原样显示 token） */
       const currentFaceLabels = (): Readonly<Record<string, string>> | undefined =>

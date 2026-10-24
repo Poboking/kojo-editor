@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, OpJournal, UIPanelContribution } from '@kojo/plugin-api';
-import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
 import { ProblemPanel } from './ProblemPanel';
@@ -735,15 +735,12 @@ export function ProjectView({
    * 名称显示对照（中日对照：日文名 → 中文名）。
    *
    * 词典是**游戏/语言知识**，只住 game.adapter 插件；本壳层只经槽位读字段、绝不
-   * import 任何适配器实现。取当前项目匹配的适配器贡献（`adapter.gameId === project.adapterId`）
-   * 的 `nameGlossary`；无词典 → `undefined`（FileTree 原样显示，即旧行为）。
-   * 命中规则与 eratw 侧同口径：按键长降序、`includes` 命中、名字已含对应中文则不重复。
+   * import 任何适配器实现。当前那枚适配器由契约的 `activeGameAdapter` 认，
+   * 取其 `nameGlossary`；无词典 → `undefined`（FileTree 原样显示，即旧行为）。
+   * 命中规则与各 adapter 侧同口径：按键长降序、`includes` 命中、名字已含对应中文则不重复。
    */
   const nameGloss = useMemo<((name: string) => string) | undefined>(() => {
-    const contribution = kernel.slots
-      .query('game.adapter')
-      .find((c) => c.adapter.gameId === project.adapterId);
-    const dict = contribution?.adapter.nameGlossary;
+    const dict = activeGameAdapter(kernel.slots.query('game.adapter'), project.adapterId)?.nameGlossary;
     if (!dict) return undefined;
     const keys = Object.keys(dict).sort((a, b) => b.length - a.length);
     return (name: string): string => {

@@ -139,22 +139,33 @@ describe('ERAFL_ERD_EXTENSIONS（.ERD 的结论）', () => {
 });
 
 describe.skipIf(!hasCorpus)('真盘守卫（D:/Game/erafl 存在时）', () => {
+  /**
+   * 语料全量读盘（2,016 份）**整组只做一次**：下面两个用例都要这份「行首词计数」，
+   * 各读一遍等于把同一件慢事做两遍——单跑 ~4 s/遍，全量套件并行时两遍都容易越界。
+   * 计数是纯读，共享结果不会让判据变钝。
+   */
+  let lineStartWords: Map<string, number> | null = null;
+  const counts = (): Map<string, number> => {
+    lineStartWords ??= countLineStartWords(listErbFiles(ERB_ROOT));
+    return lineStartWords;
+  };
+
   it('表内 129 条逐条回语料命中：129/129 都有行首出现', () => {
-    const files = listErbFiles(ERB_ROOT);
-    expect(files.length).toBeGreaterThanOrEqual(2000); // 实测 2,016 份
-    const counts = countLineStartWords(files);
-    const missed = ERAFL_EXTRA_DIRECTIVES.filter((w) => (counts.get(w) ?? 0) === 0);
+    expect(listErbFiles(ERB_ROOT).length).toBeGreaterThanOrEqual(2000); // 实测 2,016 份
+    const missed = ERAFL_EXTRA_DIRECTIVES.filter((w) => (counts().get(w) ?? 0) === 0);
     expect(missed).toEqual([]);
     expect(ERAFL_EXTRA_DIRECTIVES.length - missed.length).toBe(129);
-  });
+    // 全量读盘 + 逐条比对：单跑 ~4 s，全量套件并行时会被挤到 20 s 缺省超时之外
+    // （与 `conventions.test.ts` 的真盘守卫同档）。判据没变，只是把"慢"如实声明出来。
+  }, 180000);
 
   it('差集规模量级：行首大写词 ≥200 种、VARI ≥1000 次、DT_ROW_ADD ≥1000 次', () => {
-    const counts = countLineStartWords(listErbFiles(ERB_ROOT));
-    expect(counts.size).toBeGreaterThanOrEqual(200);
-    expect(counts.get('VARI') ?? 0).toBeGreaterThanOrEqual(1000);
-    expect(counts.get('DT_ROW_ADD') ?? 0).toBeGreaterThanOrEqual(1000);
-    expect(counts.get('VARS') ?? 0).toBeGreaterThanOrEqual(1000);
-  });
+    const c = counts();
+    expect(c.size).toBeGreaterThanOrEqual(200);
+    expect(c.get('VARI') ?? 0).toBeGreaterThanOrEqual(1000);
+    expect(c.get('DT_ROW_ADD') ?? 0).toBeGreaterThanOrEqual(1000);
+    expect(c.get('VARS') ?? 0).toBeGreaterThanOrEqual(1000);
+  }, 180000);
 
   it('两份 .ERD 都是「编号,名称」数据表（首字段是数字）⇒ 不是脚本正文', () => {
     const erds = ['EQUIP/CC_TARGETING.ERD', 'EQUIP/EQUIP_MATERIAL_NAME_SHORT.ERD'].map((rel) =>

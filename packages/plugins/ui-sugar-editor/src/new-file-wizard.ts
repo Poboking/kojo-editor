@@ -29,7 +29,6 @@
 
 import { createElement as h, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
-  GameAdapter,
   GameProject,
   KojoFaceTable,
   ProjectService,
@@ -39,7 +38,7 @@ import type {
   WorkspaceArtifact,
   WorkspaceProject,
 } from '@kojo/plugin-api';
-import { join } from '@kojo/plugin-api';
+import { activeGameAdapter, join } from '@kojo/plugin-api';
 import {
   latestArtifact,
   type KojoFileDraft,
@@ -60,14 +59,9 @@ export interface WizardDeps {
   reveal(path: string): void;
 }
 
-/** 当前适配器的分野表（与 kojo-sugar 同源：按 adapterId 精确匹配槽位） */
+/** 当前适配器的分野表（与 kojo-sugar 同源：当前那枚由契约的 `activeGameAdapter` 认） */
 function faceTableOf(slots: SlotRegistry, project: GameProject): KojoFaceTable | undefined {
-  for (const c of slots.query('game.adapter')) {
-    const adapter: GameAdapter = c.adapter;
-    if (adapter.gameId !== project.adapterId) continue;
-    if (adapter.kojoFaceTemplates) return adapter.kojoFaceTemplates;
-  }
-  return undefined;
+  return activeGameAdapter(slots.query('game.adapter'), project.adapterId)?.kojoFaceTemplates;
 }
 
 /** 家族名 → 文件名片段（去路径分隔符与首尾空白；非法字符整体拒绝由 validate 负责） */

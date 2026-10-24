@@ -122,26 +122,72 @@ const LEAK_PHRASES: readonly { readonly phrase: string; readonly why: string }[]
   { phrase: 'int 全 0', why: '槽位类型码 int / str 上屏' },
 ];
 
+/**
+ * 该代码行里**字符串字面量的内容**（单/双/反引号；转义原样带出；未闭合的尾段照收）。
+ *
+ * 给下面第 ⑤ 条形态用：它要问的是「这个内部 API 名是不是**写进了字符串**」，
+ * 而不是「这一行里既出现了引号又出现了这个名字」——后者量的是同一行的共现，
+ * 任何把两句压成一行、或用字符串参数调一个返回该字段的函数都会误报
+ * （契约重构把 `faceTableOf` 收成
+ * `activeGameAdapter(slots.query('game.adapter'), …)?.kojoFaceTemplates` 就撞上了：
+ * 那一行没有任何字符串含这个标识符）。按字面意思量：名字在引号里才叫上屏。
+ */
+function stringLiteralContents(text: string): string[] {
+  const out: string[] = [];
+  let quote: string | null = null;
+  let buf = '';
+  for (let k = 0; k < text.length; k += 1) {
+    const ch = text[k]!;
+    if (quote === null) {
+      if (ch === "'" || ch === '"' || ch === '`') {
+        quote = ch;
+        buf = '';
+      }
+      continue;
+    }
+    if (ch === '\\') {
+      buf += ch + (text[k + 1] ?? '');
+      k += 1;
+      continue;
+    }
+    if (ch === quote) {
+      out.push(buf);
+      quote = null;
+      continue;
+    }
+    buf += ch;
+  }
+  // 跨行模板字面量：本行只有开引号，内容续到下一行——照测已收集到的部分
+  if (quote !== null) out.push(buf);
+  return out;
+}
+
 /** 结构性复发形态：机器 id / kind 直接拼进屏上句子 */
-const LEAK_SHAPES: readonly { readonly re: RegExp; readonly why: string }[] = [
+const LEAK_SHAPES: readonly { readonly hit: (text: string) => boolean; readonly why: string }[] = [
   {
-    re: /KIND_LABELS\[[a-zA-Z]*\]\s*\?\?\s*kind\b/,
+    hit: (text) => /KIND_LABELS\[[a-zA-Z]*\]\s*\?\?\s*kind\b/.test(text),
     why: '未登记 kind 兜底回落到自身 = 把内部类别码原样上屏',
   },
   {
-    re: /KIND_LABELS\[kind\.slice\(5\)\]\s*\?\?\s*kind\.slice\(5\)/,
+    hit: (text) => /KIND_LABELS\[kind\.slice\(5\)\]\s*\?\?\s*kind\.slice\(5\)/.test(text),
     why: 'undo:<kind> 的兜底同样不许把类别码上屏',
   },
   {
-    re: /已撤销「\$\{[^}]*item\.id[^}]*\}」/,
+    hit: (text) => /已撤销「\$\{[^}]*item\.id[^}]*\}」/.test(text),
     why: '回调成功提示里插 op id（`op-<时间戳>-<随机>`）',
   },
   {
-    re: /范围提供方「\$\{(?:owner|contribution\.id)\}/,
+    hit: (text) => /范围提供方「\$\{(?:owner|contribution\.id)\}/.test(text),
     why: '搜索范围提示里插插件 id',
   },
   {
-    re: /["'`][^"'`\n]*(?:kernel\.(?:ops|io)|Monaco\b|appDataDir|functionFamilyIndex|kojoFaceTemplates|registration\.declare)/,
+    // 「内部 API 名被写进了字符串」——量的正是**引号里面**，见 `stringLiteralContents` 的注
+    hit: (text) =>
+      stringLiteralContents(text).some((s) =>
+        /kernel\.(?:ops|io)|Monaco\b|appDataDir|functionFamilyIndex|kojoFaceTemplates|registration\.declare/.test(
+          s,
+        ),
+      ),
     why: '内部 API 名被写进了字符串（上屏文本一律不许出现）',
   },
 ];
@@ -156,7 +202,7 @@ describe('① 旧形态不许复活（剥注释后逐行扫）', () => {
 
   it.each(COPY_FILES)('无结构性复发（id / kind / API 名拼进文案）：%s', (rel) => {
     const hits = codeLines(rel)
-      .filter(({ text }) => LEAK_SHAPES.some(({ re }) => re.test(text)))
+      .filter(({ text }) => LEAK_SHAPES.some(({ hit }) => hit(text)))
       .map(({ at, text }) => `${at} ${text.trim().slice(0, 100)}`);
     expect(hits).toEqual([]);
   });
