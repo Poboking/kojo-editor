@@ -46,6 +46,10 @@ export function createEraflAdapterPlugin(): Plugin {
     version: '0.1.0',
     // 本批只读盘（detect / loadProject），不依赖项目服务与工作区服务
     requires: ['kernel.io'],
+    // 装载时对外提供口上 XML 服务（下面 `ctx.provide` 那行）——内核按 provides[] 做依赖排序与
+    // 冲突检测，漏声明会在 activate 当场抛错（真壳实测：面板读「插件 (21/22 运行中)」+
+    // `Plugin 'erafl-adapter' called provide('kojo.xml') but did not declare it in provides[]`）。
+    provides: [WellKnownServices.KojoXml],
     activate(ctx) {
       const io = ctx.inject<FileIO>('kernel.io');
 
