@@ -71,11 +71,29 @@ async function makeEntry(ws: string, name: string): Promise<string> {
  *
  * **顺序是硬约束**：`removeDir/removeFile` 内部会顺手做一次超期清扫，所以必须
  * "先造条目、后改年龄"——反过来写会让前一条被这一趟顺手清掉（测试自己造的竞态）。
+ *
+ * **为什么对 EPERM 有限重试**：那趟顺手清扫是 fire-and-forget（`moveIntoTrash`
+ * 不等它，见 `trash.ts` `this.sweep = this.purge()`），它与本行的 rename 在
+ * Windows 上撞车时报 `EPERM: operation not permitted`（目录瞬时空窗）。同形先例：
+ * PITFALLS §45（vite `prepare-out-dir` 偶发 EPERM「不是代码问题，重试」）、
+ * §159（Windows 并发 rename 瞬时空窗「重跑即绿」）。2026-10-24 合流批次全量
+ * 两连跑随机红 2/1 条，全命中这一处 fixture rename，被测逻辑（purge 认条目名 /
+ * hold 保护）在同族用例里全绿。
+ * 边界：**只认 EPERM**（真失败是 ENOENT 等别的码，不洗）；只重试本 helper
+ * （被测路径 purge/list/restore 一处都不加）；上限 100ms（20×5ms）。
  */
 function ageEntry(id: string, daysAgo: number): string {
   const stale = shiftIdBack(id, daysAgo);
-  renameSync(entryDirOf(id), entryDirOf(stale));
-  return stale;
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(entryDirOf(id), entryDirOf(stale));
+      return stale;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EPERM' || attempt >= 20) throw err;
+      Atomics.wait(nap, 0, 0, 5); // 让在途的那趟 walk 过去
+    }
+  }
 }
 
 /** 造一个"已经超期"的条目（单条用例的便捷形态：先造后老） */
