@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 结构样本：只为满足「根下存在 FLconfig.xml」这一条口味判据，不含任何真实配置。 -->
+<FLconfig>
+    <external_llm_service>
+        <use_service>false</use_service>
+    </external_llm_service>
+</FLconfig>

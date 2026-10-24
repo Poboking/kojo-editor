@@ -287,7 +287,16 @@ export interface KeybindingMenuState {
   readonly conflictWith: string | null;
 }
 
-/** `KeybindingRow` → 菜单读数（页面渲染行时顺手算好，交进桥里） */
+/**
+ * 「这一行是不是被作者动过」的判据**不住在本模块**：定义点唯一在 `ui/keybindings.ts`
+ * 的 `isKeybindingRowModified`（行状态 `state` 的真源就是那张覆盖表，`bindingStateOf` 与
+ * 设置索引 `settingsEntryModified` 同吃它）。本模块与快捷键页、设置索引三个消费面都从
+ * 那一处 import——判据多一处落点就是「同一页两个真相」的起点，静态闸
+ * `keybinding-modified-single-source.test.ts` 当场红（批次十三曾在本文抄过一枚同体函数，
+ * 合树时删并、消费腿改指 keybindings）。
+ */
+
+/** `KeybindingRow` → 菜单读数（页面渲染行时顺手算好，交进桥里；`hasOverride` 走上面那枚谓词） */
 export function keybindingMenuStateOf(row: KeybindingRow): KeybindingMenuState {
   return {
     id: row.id,

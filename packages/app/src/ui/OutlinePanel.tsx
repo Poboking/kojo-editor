@@ -64,10 +64,10 @@ import '../outline-panel.css';
  * - **缩进步进吃 `--space-*`**：步进 = `--space-3 + --space-0`（14px，与文件树
  *   `--tree-indent` 同值但由刻度组成），并在缩进带里画**层级导轨**
  *   （1px 竖线 / `var(--border)`，悬停与当前行提到 `--border-strong`）。
- *   导轨口径 R1 批已与 L16 文件树合流：静息 / 强档两枚取 `file-tree.css` 里
- *   `.file-tree, .outline-panel` 同一条规则的 `--tree-guide` / `--tree-guide-strong`
- *   （颜色仍落回 `--border` / `--border-strong`）；画法仍各归各切片（树 ::before 竖线 /
- *   大纲缩进带渐变），不把一处的 DOM 形态强加给另一处。
+ *   导轨口径两批合流（R1 并颜色、批次十三升刻度）：宽度与静息 / 强档两枚颜色都取
+ *   `tokens.css` 的 `--rail-w` / `--rail-color` / `--rail-color-strong`，本切片只经
+ *   `--outline-guide*` 局部别名读它（判据见 `indent-rail-single-source.test.ts`）；
+ *   画法仍各归各切片（树 ::before 竖线 / 大纲缩进带渐变），不把一处的 DOM 形态强加给另一处。
  * - **当前符号行 = 四条通道**：左边条（形状）+ 行尾一枚 `target` 图标（形状，色盲可读）
  *   + 名字抬一档字重 + `--active` 底（色），并落 `aria-current="location"`（读屏）。
  *   记号挂在**行尾**而不是行首 ⇒ 缩进带、箭头、名字的 x 坐标一律不动，光标走动不跳字。

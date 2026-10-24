@@ -5,15 +5,14 @@
 > ② 报红格式：现象 + 复现步骤 + 期望 vs 实际 + **屏上原样文案**。跨主机沟通只有这张表——写在别处的反馈等于没写。
 > ③ 人工勾验 / 封存 / 性能线三类行**不设**（用户 2026-10-13 令）；已收行不在此表，历史由 git 保留。
 
-> ⚠️ **分支模型变更（2026-10-19 生效，全组必读）**：`master` 已停用并从远端删除。
+> ⚠️ **分支模型（2026-10-19 生效，全组必读）**：`master` 已停用并从远端删除。
 > **日常落地分支＝`dev`**（一切功能 / 修复 / 文档批的窄门出口），**`main`＝发行版分支**（只在用户点头发版时并入并打 tag）。远端默认分支＝`main`。
-> 在途批次立刻执行：① `git fetch origin --prune`（不 prune 会在已死的 `origin/master` 坐标上开工）；② 新批次分支一律从 `origin/dev` 起；③ 在途分支换底 `git rebase --onto origin/dev <旧 base>`；④ 落地命令改成 `git push origin HEAD:dev`（`tools/git-push.mjs` 与 `tools/tauri-dev-fresh.mjs` 默认值已同步）。
-> **禁止** `git push … :master`——GitHub 会把它当新分支**创建**，提交会漂进一条没人复审的平行主线（详 PITFALLS §133）。`gh pr create` 默认 base 现为 `main`，日常批须显式 `--base dev`。
+> 新批次分支一律从 `origin/dev` 起（先 `git fetch origin --prune`）；落地命令 `git push origin HEAD:dev`。**禁止** `git push … :master`——GitHub 会把它当新分支**创建**（详 PITFALLS §133）。`gh pr create` 日常批须显式 `--base dev`。
 
 ## 在办
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
-| VIS-B11 | **批次十一 · 视觉优化 14 路并行**（组长 misak，基线 `76673942`）：L01 tokens 单源化（`:root` 两份逐字节 8815 字符副本合一 + `--well-edge/--well-shadow/--press-overlay` 补 light/mint 翻色 + `--space-0/-5`/`--anim-*`/`--z-toast` 补刻度）· L02 死类清理（85 个零引用类）与右键菜单真源合一 · L03 问题面板原生 `select/checkbox/input` → `ksp-*` 同族 · L04 欢迎页两态重构（首屏 10 块 → 3 件事）· L05 版本更新三层递进（右下非阻塞卡 / 详情模态 / 强制模态 + `稍后` 跨会话 + 立即重启）· L06 `.kp-toolbar` 换行撕裂与 placeholder 黑话 · L07 `.mk-*` 族迁回 `market.css` 解除"后来者胜" · L08 搜索面板帮助文字/键位语言/空态 · L09 设置「编辑器」25 行拆 4 组 + 行模板 `max-width:760` + 幻影 token 换真值 · L10 图标尺寸 9 档 → 4 档 · L11 内联硬编码整族（`OutlinePanel`/`.kojo2-preview__*`/`kojo2-migrate` GitHub 深色字面）→ 类 + token · L12 浮层族统一（`.qfp-editor` 零高塌陷 / 宿主档 / sticky 标题栏 / 退场动画 / 语义色归一）· L13 编辑器区（`.editor-status` 三区 / 工具条消横移 / 骨架 / 糖↔代码过渡）· L14 新建 `src/ui-kit/` 可复用件基座（`KitField/Check/Radio/Select/Segmented/IconButton/Kbd/Count/Empty/Skeleton` + `KitGallery`） | 判据：**第一波（L01–L14 + FIX-update + FIX-settings）与第二波（L15 light/mint 门禁 · L16 标签溢出+文件树导轨 · L17 快捷键页 · L18 市场面板 · L19 大纲面）均已落 dev**——合树实测 16,359 passed / **0 failed**（794 文件）、双 typecheck rc=0、`audit:decoupling` ✅ 20 插件 A–D、开机图 209 文件 / 3,055 KB（第二波只 +3 KB，两道闸未抬）。light/mint 对比度门禁已建（`theme-contrast.test.ts` 三档 × 16 组合 48 项 0 不达标，改 token 值 0 枚）。**还欠**：真壳截图复验 + `ui-measure --theme=all` 三档七项读数 diff（1420/9222 单例归组长）· L19-B 教程面代码块与目录分级（撞 150 轮上限未完）· 两条缩进导轨收成一条全局规则 · `icons.tsx` 缺 `chevron-left` · `file-tree-row/dir-rows` 的 `depth*14px` 内联与行级中段省略接线 · `settings-menu.ts:292` 与页面「已改」判据两抄 · `market-css-equivalence` re-baseline 与 `MarketIndexEntry.iconUrl?` 契约候选。与 `K2-CUTOVER` 的「主题合并」并线，勿做两遍 | 两波已落 dev · 复验与遗留队列在办 · 认领：misak 2026-10-23 |
+| VIS-CONTRAST | **三档真壳对比度欠账**（2026-10-24 批次十三实测量测；工具侧已修「翻档过渡假红」——量测期把 transition / animation 钉 0，否则同一元素单点复算 8.2 会被批量量到 1.0）：**dark 4 种 / light 3 种 / mint-dark 0 种**。dark：`summary` + `.panel-ops-maintenance-detail` 12px `#888888` on `#24292f` = **4.13**、`.kp-count`/`.kit-count` 11px `#8b949e` on `#2b3138` = **4.27**（AA 正文需 4.5）；light：`span` 11px `#d19a66` on `#eaeef2` = **2.11**（×21）、`summary`/maintenance 12px `#888888` on `#eaeef2` = **3.04**。`#888888` 不在仓内任何 CSS/TS 源（`--fg-dim` 是 `#8b949e` / `#59636e` / `#88a896`）⇒ 先定位来源；`#d19a66` 是 `--amber` 字面，浅色档未翻成沉着语义色 | 判据：`node tools/ui-measure.mjs --theme=all` 三档对比度条目清零，或逐条写明「可接受」理由；改 token 须过 `theme-contrast.test.ts`（三档 × 16 组合）与实机目视 | 待认领 · 来源：批次十三真壳三档量测 |
 | MK-PUB | **市场发布通道**：CF Worker 上传链——编辑器内一键上传 zip → Worker 校验（schema v1 同判据）→ R2 `pending/` → 自动开 PR 到注册表仓（merge=放行，GitHub 网页即审核后台）；Pages/CI/注册表仓保留原职（兼容源 + 第二道闸），拉取双源回退；Worker 独立仓 `<本机>\DSH\kojo-market-worker`（域名 `market.3625735381.xyz`，开发期 workers.dev）；客户端 additive：契约层 publish 意图/进度事件（照 `MarketDownloadProgress` 形态）+ Rust publish 命令（POST+token+Channel 进度）+ 上传主机闸（allowlist 扩 workers.dev 与自定义域）+ ui-market 发布面板（选 zip→本地 `parseManifest` 预校验→上传→状态行）；不动 `MARKET_DEFAULT_INDEX_URL`、不碰 ADR-0007 封闭集（仍只发声明式数据包） | 判据：Worker 侧 curl 全链可验证（签 token→上传→pending 落 R2→PR 开出）+ 本仓全量不回退 + 双 typecheck + `audit:decoupling` ✅ + cargo；新文案一律中文、拒因人话照 `PLATFORM_FAIL_TEXT` 形态 | 进行中 · 认领：claude 2026-10-16 |
 | POS-UTIL | 位置换算分散：tree-sitter 的 0-based 行与 UTF-16 码元、Monaco / plugin-api 的 1-based 行、range 端点各写各的；**否决**前一版建议的 CST↔AST `PositionMapper`（`.erb` 无 CST、`.kojo` 的 tree-sitter 可选且默认关 ⇒ 映射表会空或过期），只收口边界换算 | 判据：所有行列/区间换算走同一模块；边界测试覆盖 CJK、emoji、CRLF、折叠行与生成映射；不新增运行期节点身份映射或第三套坐标系；语义服务与编辑器读数不变 | 进行中 · 认领：lead 2026-10-20 |
 | ERB-PARITY | **ERB 是主用户群的一等语言，不是 Kojo 的附属/实验位**：口上作者可以直接写 `.erb`，`.kojo` 是可选糖而不是入口前提；语言注册、语言服务、树层叠层、默认语言与能力矩阵都不得只给 Kojo | 判据：ERB / Kojo 走同一 descriptor/registry/engine 基础设施；ERB 直写不依赖 `.kojo`；宿主 provider 双语言对齐（`registerForLanguageServices` 口径）；tree-sitter 能力按 descriptor 选择而非语言名硬编码；不得因 Kojo 特性降低 ERB 默认体验 | 进行中 · 认领：lead 2026-10-20（A3/A4 基础设施已拉平；ERB 结构层已接入、pref 默认仍关） |
@@ -21,61 +20,24 @@
 | CMD-NUL-BYTE | `packages/app/src/ui/commands.ts` 是**全仓 1591 个文本文件里唯一带裸 NUL 字节的**（第 275 行缓存键 `` `${nonce}<NUL>${roots.join('\n')}` ``，偏移 12293/12806）⇒ 文件被 `file` 判成二进制、**NUL 之后的行对基于文本扫描的工具失明**（grep/ripgrep/review 脚本一类）；TypeScript 与运行都不受影响，纯卫生与可审性问题 | 判据：一行改动把裸 NUL 换成转义形态（语义逐字节等价，运行期分隔符仍是同一个 `\u0000`）；改完 `node -e "fs.readFileSync(p).includes(0)"` 必须 false，且 `grep -c nonce` 仍数得出 6 处、`ps14-source-cache.test.ts` 全绿。**⚠ 别用 Edit/Write 硬试**：本会话两次尝试都被参数层的 JSON 转义吃掉（一次把 `${nonce}<NUL>` 写成 `${nonce}\u{0}U0000`＝分隔符从 1 字节变 6 字节，一次 0 occurrences），已 `git checkout --` 逐字还原；请用脚本落这一格（见 MEMORY「Edit 工具转义坑」） | 待认领 · 来源：chief 0.4.2-beta.2 实机测试 2026-10-22 |
 | MK-SMOKE-RECAL | `smoke-tauri-market.mjs` 本机 4 红（2026-10-22 发行前实测）：f2/g/h 三条 = **锚点过期**（`ANCHOR_BYTES=1612` / `ANCHOR_SHA256=f1b72c01…` / 期望 2 条包，线上实测 4,141 B / sha `e100bb76ea79` / 6 条包——社区投稿已进注册表，钉的是**会变的外部内容**）；k 一条 = **判据踩在自己的采样噪声面上**（`intervalMs=300` 却判「行消失 ≤ 目录消失 + 300ms」，实测 469ms / 2,013ms 两跑皆红，功能面逐字节与记账全对） | 判据：f2/g/h 改成「schema 合规 + 远程与盘上逐字节自洽」为准、锚点只钉**本仓可控**内容（外部注册表内容不钉 sha，或按 `fetchedAt` 分档）；k 的容差须 > 2×采样间隔，或改钉「同一轮内行消失前无二次轮询」这类与粒度无关的判据——**不许**为凑绿把功能断言写松 | 待认领 · 来源：chief 发行前实机测试 2026-10-22 |
 
-
-
-## 在办 · Kojo 2.0（设计基线 v0.9 · 批次三 2026-10-21）
+## 在办 · Kojo 2.0（设计基线 v0.9）
 
 > **依据**：`docs/KOJO-2.0-LANGUAGE-SPEC.md`（v0.9 设计稿+任务清单合并入库版）。
-> **已定**：开发期双前端并存、发布态单一模式（CUTOVER 单批收口）；旧前端只修会被 2.0 复用的后端面；看板按包/文件粒度拆行。
-> **批次一/二已落 `dev`＝`58f86e7c`**：core 包/前端/降糖/端到端/迁移引擎/适配层/项目层/eraTW backend/Monaco 2.0 语言面/tree-sitter v2。对应行已销，回执在提交正文。批次三 12 路并行（见文末新行）。
+> **已定**：开发期双前端并存、发布态单一模式（CUTOVER 单批收口）；旧前端只修会被 2.0 复用的后端面。
+> **批次一~九已全部落 `dev`**（core 包/程序层/存储·项目·语义接线/迁移引擎含语义升级/切流阶段/编辑器 provider 全量/项目索引/真实语料机/体感验收矩阵），完成行已删、回执在提交信息。
 
 | ID | 任务（落点） | 关键判据 / 已实测事实 | 状态 |
-| K2-D0 | **设计冻结与结构裁决**：D0.1–D0.11 + 4 项结构前置落字；定包归属/审计放行、项目级分析层、存储期分配器、多时机拆文件；定旧前端退役时点 | 决策逐条落字；C1 开工前无悬空结构问题（C1 已按 §4.8/§4.13/§10.3/§10.7 约束实现，待追认） | 进行中 · 认领：lead 2026-10-21 |
+| K2-D0 | **设计冻结与结构裁决**：D0.1–D0.11 + 4 项结构前置落字；定包归属/审计放行、项目级分析层、存储期分配器、多时机拆文件；定旧前端退役时点 | 决策逐条落字；C1 已按 §4.8/§4.13/§10.3/§10.7 约束实现，待追认 | 进行中 · 认领：lead 2026-10-21 |
 | K2-CONTRACT | 2.0 契约面：现落 `@kojo/kojo-core`（AST/诊断码/source-map/GameAdapter），**与设计稿 C1.2「扩 plugin-api」的落点偏离**待 D0 裁决；需评估是否 additive 镜像到 plugin-api | additive、旧消费方零改动；双 typecheck；core 零游戏名词；fixture adapter 仅依赖契约编译 | 进行中 · 认领：lead 2026-10-21 |
 | K2-CORE-PKG | core 包布局与 audit 放行：`packages/kojo-core` 已建（非插件库，B/C 项不拦）；§15.2 复用清单核对与偏离记账 | audit A–D ✅；复用点可核对；单文件转译纯函数 | 进行中 · 认领：lead 2026-10-21 |
-| K2-PROGRAM | 程序层补齐：`@巡` 绑定数据（数组/角色集合/长度机制）、递归深度事实、feature gate 落社区；`@复/@循/@标/@跳` 已 golden | 关闭 feature error 不静默；`@巡 {值}/{下标}` 可落 ERB；越界可证 error；golden | 批次三认领：lead（`K2-FOREACH` 拆出并行） |
-| K2-STORAGE | 存储期分配器 core 已交付（11 类失败接诊断、稳定槽/回收/换盘）；**宿主持久化与接线未做** | 槽位跨构建稳定；换盘 error；写坏存档防御；app 侧注册表端口落地 | 批次三认领：lead（`K2-STORAGE-HOST` 拆出） |
-| K2-PROJECT | 项目级分析 core 已交付（重名/Layer/接管，13.5ms）；**未接入宿主与插件消费面** | 项目级冲突编译期可见；与 convention-linter/condition-extractor 边界写清 | 批次三认领：lead |
-| K2-SEM | 语义与诊断：类型检查、符号解析（表达式 AST 化）、展开视图、迁移码并表 | 诊断快照稳定；错误不产字节；adapter 码 additive | 批次三认领：lead（`K2-SEMANTIC-CORE` 拆出） |
-| K2-MIGRATOR | 迁移引擎机械层已交付（42 tests）；**语义升级（当→#表/分支→#池/初回→@原生）未做** | 不可迁移项经 PITFALLS 双证后转可迁移或维持 fail-closed | 批次三认领：lead（`K2-MIGRATE-SEMANTIC` 拆出） |
-| K2-CUTOVER | 单批切换：app 接线/主题合并/`.kojo` 扩展名/退役旧解析器；**批次三先做预演（feature flag）** | 仓内无旧 golden/旧分支；全量测试不回退；发布态单一模式 | 批次三认领：lead（`K2-CUTOVER-PRE` 拆出） |
-| K2-PRE-REUSE | 旧后端复用面缺陷：①字面量编码器（心形 `@"…"`）②空产物守门被注释穿透 ③写后回读失败不回滚 ④诊断列折回物理行 ⑤CJK 函数头自证 | 每条红→绿用例；只修复用面；全量不回退 | 批次三认领：lead · 来源：语言实现审阅（workbuddy 注 2026-10-22：**②③⑤ 已由本组落 dev**＝`c11cb3d4` 注释穿透 / `08ac046d` 回读回滚 / `51eef191` CJK 函数头，回执与读数在各提交信息；**① 字面量编码器本组认领后遇 429 未开工**，④ 与 POS-UTIL 合流——①④ 留给 lead 批次三收口时定派） |
+| K2-PRE-REUSE | 旧后端复用面缺陷余项：**①字面量编码器（心形 `@"…"`）④诊断列折回物理行（与 POS-UTIL 合流）**。②③⑤ 已落 dev（`c11cb3d4` 注释穿透 / `08ac046d` 回读回滚 / `51eef191` CJK 函数头） | 每条红→绿用例；只修复用面；全量不回退；①④ 由 lead 定派 | 待派 · 来源：语言实现审阅（① 本组认领后遇 429 未开工） |
 | K2-RELEASE | R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真实工程人工验收 | P0 全完成；eraTW 完整体验；反向回滚可用 | 待认领 |
-| K2-INCR-HOLES | 增量已知洞（收口后仍余）：`选项`/BOM 粘性永久全量；整份替换/改 `# 视` 仍整份重建（~200–300ms）；声明单元内编辑 55–75ms；槽族正则只覆盖 `rand/foreach`；构建期自检冷路径 ~300ms。已收口：结构行插入不再永久 degraded（退化判据细分 `lastUnmodelledReason`，25,200 步 fuzz 0 mismatch）、粘贴多行 185→20ms / 跨行删 195→19ms | 每次退化可见；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
-
-> **批次三并行说明（2026-10-21/22）**：17 路子 agent 按互不重叠写域推进（FOREACH/OPTIONS/EDITOR-WIRE/EDITOR-SEMANTIC/EDITOR-MIGRATE-UI/MIGRATE-SEMANTIC/CONFORMANCE/PERF-INCR/TS-RUNTIME/SOURCEMAP-HOST/STORAGE-HOST/CUTOVER-PRE，加接线 OPTIONS-WIRE/FOREACH-WIRE/EDITOR-HOOKUP，加 parser 健壮性修复）。组长统一收口、跑门、提交。完成行按协议删行，回执进提交信息。
-
-## 批次四（2026-10-22，已交付）
-
-> **批次四 17 路全部交付并接主链**（EXPR-AST/SEMA-TYPES/TABLE-SELECTCASE/POOL-SELECTCASE/PROGRAM-RECURSION/FEATURE-GATE-UNIFY/WEAVE-LAYER/SOURCEMAP-SEGMENTS/PERF-INCR-FALLBACK/CONFORMANCE-CLI/STORAGE-PERSIST/EDITOR-PROVIDERS/EDITOR-OPEN-PATHS/MIGRATE-MOUNT/PREVIEW-PANEL/TS-WORKER/CUTOVER-THEME）+ 3 路收口（raw 块字节透传 + lift 回滚、递归闸单源 + domainSymbols.variables、表/池 SELECTCASE 落点契约化）。完成行已删，回执进提交正文。
-
-## 批次五（2026-10-22，已交付）
-
-> **批次五 10 路全部交付**（STORAGE-HOST-FULL / SEMA-WIRING / EDITOR-MOUNT / NATIVE-DEDENT / CUTOVER-STAGE / MIGRATION-DIFFERENTIAL / PROJECT-HOST / CODES / CODE-ACTIONS / RELEASE-GATE）；完成行已删，回执进提交正文。
-
-## 批次六（2026-10-22，已交付）
-
-> **批次六 10 路全部交付**（STORAGE-WIRE / PROJECT-WIRE / NATIVE-COLUMNS / ADAPTER-PROFILE / MIGRATE-SEMANTICS-2 / FOLD-INDENT / INCR-HOLES / CUTOVER-ROUTE / RELEASE-CI / CORPUS-EXPAND）+ 3 处组长接线（App 项目级分析装配、事件面词 `eventNames` 进 app、`@原生` 物理列口径翻转）；完成行已删，回执进提交正文。
-
-## 批次七（2026-10-22，已交付）
-
-> **批次七 8 路全部交付**（MIGRATE-SHAPE / STORAGE-RECYCLED-UI / EXPAND-VIEW / FORMAT-2 / LANG-CONFORMANCE / RELEASE-AUTOMATION / SEMA-QUICKFIX / EDITOR-SYMBOLS）+ 5 处组长接线（大纲/格式化 provider 注册、展开视图编译来源、`eventArgs` 进 app、面包屑 2.0 分支、artifact 阈值重基线）；完成行已删，回执进提交正文。
-
-
-## 编辑器体感对齐（ERB / kojo2 同权 · 2026-10-22）
-
-> **依据**：2026-10-22 体感评审（对标 VS Code 的 LSP 面逐项补齐）。**原则**：ERB 与 kojo2 同为一级语言，能力矩阵由 descriptor 声明 + `LANG-PARITY-GATE` 钉住；禁止"某 provider 只挂一门语言"。来源：组长评审，待认领。
-
-| ID | 任务（落点） | 关键判据 | 状态 |
-|---|---|---|---|
-| LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 批次九认领：lead 2026-10-22 |
-
-> **批次八（2026-10-22，已交付）**：12 路并行——ERB 树层全量 facets（indents/brackets/diagnostics/semantic）、ERB 成员补全、kojo2 引用/重命名/签名/inlay/code lens/高亮扩选/调用层级、缩进括号、补全补位、能力矩阵闸；组长接线 8 枚 provider + 补全注入 + ERB 结构诊断上屏。完成行已删，回执进提交正文。
-
-> **批次九（2026-10-22，在办）**：9 路并行——ERB 两枚 provider 补齐、kojo2 跨文件引用/重命名/调用层级、项目索引、indents 规则消费、补全数据源、真实语料机、体感验收矩阵。provider 注册与矩阵改口由组长统一接线。
-
-
+| K2-INCR-HOLES | 增量已知洞：`选项`/BOM 粘性永久全量；整份替换/改 `# 视` 仍整份重建（~200–300ms）；声明单元内编辑 55–75ms；槽族正则只覆盖 `rand/foreach`；构建期自检冷路径 ~300ms | 每次退化可见；与全量逐字节等价不破 | 待认领 · 认领：lead 2026-10-22 |
 | K2-CORPUS-SOURCE | 真实语料机**没有输入**：本机 eraTW 4.980 基线是纯游戏盘（无 `.kojo`，递归发现 0 份）；`corpus` 工具已就绪（缺席 rc=2 / 0 份 rc=1 不当绿），需把 `KOJO_CORPUS_DIR` 指向含 v1 作者源的工程或迁移快照盘后再重生成 golden | 发现 ≥1 份 `.kojo` 且状态/原因分类可读 | 待认领 |
 
-> **批次九（2026-10-22，已交付）**：9 路并行——ERB 高亮/扩选、ERB 调用层级 provider、kojo2 项目索引+跨文件引用、跨文件重命名/调用层级纯 API、indents 规则消费、补全数据源（adapter 契约 + eraTW 真源）、真实语料机（`corpus` 子命令）、体感验收矩阵；组长接线（ERB 两枚 provider 注册、项目级引用面 + 打开中 model 喂索引、能力矩阵改口、矩阵/单源闸跟随）。完成行已删，回执进提交正文。
+## 在办 · 编辑器体感对齐（ERB / kojo2 同权 · 2026-10-22）
 
+> **原则**：ERB 与 kojo2 同为一级语言，能力矩阵由 descriptor 声明 + `LANG-PARITY-GATE` 钉住；禁止"某 provider 只挂一门语言"。
+
+| ID | 任务（落点） | 关键判据 | 状态 |
+| LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 批次九认领：lead 2026-10-22 |

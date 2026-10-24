@@ -26,9 +26,13 @@ import { monacoBuiltinRows } from './monaco-builtin-keybindings';
 import { Icon } from './icons';
 import { KitKbd } from '../ui-kit';
 import { isFailureNote, useMenuNote } from './context-menu-pages';
-// 快捷键面（`keybindings`）的数据面与设置面同住 `settings-menu.ts`（本页由 SettingsPanel
+// 快捷键面（`keybindings`）的菜单桥与设置面同住 `settings-menu.ts`（本页由 SettingsPanel
 // 静态引入，同属那枚懒 chunk）——键位表与撞键判据只在设置浮层里才有用。
-import { keybindingMenuStateOf, registerKeybindingsMenuBridge } from './settings-menu';
+// 「已改」判据本身不在这里：它住 `./keybindings`（上面已引），本页与菜单两个消费面同源。
+import {
+  keybindingMenuStateOf,
+  registerKeybindingsMenuBridge,
+} from './settings-menu';
 import './context-menu-pages.css';
 // L17 视觉切片：只覆盖 `.kb-page` 子树内的既有 `.kb-*` 规则（双类选择器压过 styles-project 基线，
 // 基线里的 `.kb-*` 行一条不搬——styles-split 等价性闸钉着）。

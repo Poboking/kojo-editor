@@ -20,3 +20,6 @@
   background: var(--bg-2);
   border-left: 1px solid var(--border);
 }
+
+/* 左/右箭头各自用注册表里的 `chevron-left` / `chevron-right`（互镜像），本切片不再需要
+   旋转变形的类。 */

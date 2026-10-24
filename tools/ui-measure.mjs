@@ -147,7 +147,10 @@ const MEASURE = `(() => {
         const need = (px >= 24 || (px >= 18.66 && bold)) ? 3 : 4.5;
         if (got < need) {
           const k = cls(el) + ' ' + px + 'px';
-          const cur = contrast.get(k) ?? { n: 0, got, need, sample: '' };
+          /* 记下实测算用的前景/合成背景（8 位十六进制）：只报比值时无法判断"是配色真的
+             不达标"还是"量到的底色/字色被过渡或时序冻住了"，2026-10-24 三档首测就卡在这里。 */
+          const hex = (c) => '#' + [c.r, c.g, c.b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+          const cur = contrast.get(k) ?? { n: 0, got, need, sample: '', fg: hex(fg), bg: hex(bg) };
           cur.n++; if (!cur.sample) cur.sample = el.textContent.trim().slice(0, 34);
           contrast.set(k, cur);
         }
@@ -178,7 +181,7 @@ const MEASURE = `(() => {
     distinctGlyphTexts: Object.keys(glyph).length,
     svgIcons: document.querySelectorAll('svg.icon').length,
     clipFails: clip.sort((a, b) => b.clip - a.clip).slice(0, 12),
-    contrastFails: [...contrast.entries()].map(([k, v]) => ({ k, ratio: v.got, need: v.need, n: v.n, sample: v.sample })).sort((a, b) => a.ratio - b.ratio).slice(0, 12),
+    contrastFails: [...contrast.entries()].map(([k, v]) => ({ k, ratio: v.got, need: v.need, n: v.n, sample: v.sample, fg: v.fg, bg: v.bg })).sort((a, b) => a.ratio - b.ratio).slice(0, 12),
     smallTargets: [...small.values()].sort((a, b) => b.n - a.n).slice(0, 14),
   };
 })()`;
@@ -198,7 +201,21 @@ for (const t of themes) byTheme[t] = {};
 const snapTimes = [];
 /* L15 档位切换：与 index.html 早应用脚本 / `applyThemePref` 同构——生效只认根元素一个
    `data-theme` 属性（token 全走 CSS 级联）；只动属性不动 localStorage，状态量完即还。 */
-const setTheme = (t) => ev(`(() => { document.documentElement.setAttribute('data-theme', ${JSON.stringify(t)}); return document.documentElement.getAttribute('data-theme'); })()`);
+const setTheme = (t) => ev(`(() => {
+  let freeze = document.getElementById('kojo-measure-freeze');
+  if (!freeze) {
+    freeze = document.createElement('style');
+    freeze.id = 'kojo-measure-freeze';
+    /* 量测期把过渡钉成 0（换色立刻到位）、入场动画钉成"立刻到终态"：
+       否则逐档翻 token 时背景与文字各走各的时长，中间帧量出"浅字压浅底"的假红
+       （2026-10-24 实测：同一元素单点复算 8.2，批量量测同一档能读到 1.0）。
+       只影响量测这一次页面会话，不动任何产品代码。 */
+    freeze.textContent = '*,*::before,*::after{transition-duration:0s!important;transition-delay:0s!important;animation-duration:0s!important;animation-delay:0s!important;animation-fill-mode:forwards!important}';
+    document.head.appendChild(freeze);
+  }
+  document.documentElement.setAttribute('data-theme', ${JSON.stringify(t)});
+  return document.documentElement.getAttribute('data-theme');
+})()`);
 const restoreBootTheme = () => ev(`(() => {
   let t = 'dark';
   try { const s = localStorage.getItem('kojo.ui.theme.v1'); if (s === 'light' || s === 'mint-dark') t = s; } catch (e) {}
@@ -218,6 +235,13 @@ const snap = async (label) => {
   try {
     for (const t of themes) {
       await setTheme(t);
+      /* 翻档后必须等过渡走完再量（2026-10-24 实机抓到的假红）：修前首测 mint 36 种
+         / 值 1.0–1.3，逐元素复验 800ms 后同一元素回到 7.66。成因不是"翻档没生效"
+         （`--bg`/`--fg` 已换），而是**背景在过渡、文字瞬间换色**：文字一跳到位，
+         底色还停在上档（浅→深要 200ms+）⇒ 中间帧量出来就是"浅字压浅底"。
+         80ms 只够一帧、仍会扫到中段（实测 mint 仍 35 种假红），这里给 450ms，
+         覆盖全局 200ms 主题过渡 + 一次重排。 */
+      await sleep(450);
       perTheme[t] = await ev(MEASURE);
     }
     await restoreBootTheme();
@@ -369,7 +393,7 @@ for (const t of themes) {
   }
   const list = [...merged.values()].sort((a, b) => a.ratio - b.ratio);
   console.log(`[${t}] 对比度失败 ${list.length} 种：`);
-  for (const f of list) console.log(`  ${f.k} → ${f.ratio}（需 ${f.need}）×${f.n}「${f.sample}」`);
+  for (const f of list) console.log(`  ${f.k} → ${f.ratio}（需 ${f.need}）×${f.n} ${f.fg}/${f.bg}「${f.sample}」`);
 }
 if (themes.length > 1) {
   for (const t of themes.slice(1)) {

@@ -5,58 +5,55 @@
  * 这里只有**新属性**（position / ::before 导轨 / 共用导轨 token）——与重档没有同属性
  * 对撞，单类即可。`main.tsx` 样式序列尾部引入（`css-slices-wired` 钉接线）。
  *
- * 导轨口径（R1 批合一：L16 文件树与 L19 大纲原本各写一份、已现漂移——大纲多挂了
- * `--outline-guide` 别名层；现两处由下面**同一条规则**的两枚共用 token 驱动，别名删净）：
- * - `--tree-guide` / `--tree-guide-strong`：静息一档取 `var(--border)`、悬停 / 当前行提到
- *   `var(--border-strong)`——颜色真源仍是主题 token，这一层只承载「导轨档位」语义，
- *   两处面板各自消费，不再各抄一份配色对；
- * - 两处 DOM 形态不同、只共口径不共画法：树在真有缩进的 `ul` 上挂 1px `::before` 竖线，
+ * 导轨口径（两条批次在合树处收敛，2026-10-24）：L16 文件树与 L19 大纲原本各写一份、已现漂移
+ * （大纲多挂了 `--outline-guide` 别名层），R1 先把两处并到同一条规则的两枚 `--tree-guide*`；
+ * 批次十三再把**宽度与两档颜色**升到 `tokens.css` 的 `--rail-w / --rail-color /
+ * --rail-color-strong`（教程目录同组消费，判据见 `indent-rail-single-source.test.ts`）。
+ * 于是本切片只剩「画法」，不再持有配色对——`--tree-guide*` 两枚随之内存清零删净
+ * （"登记而未消费"正是这批一直在清的那类账）。
+ * - 两处 DOM 形态不同、只共口径不共画法：树在真有缩进的 `ul` 上挂一条 `--rail-w` 竖线，
  *   大纲把 repeating 渐变铺在行的缩进带上——不把一处的设计强加给另一处；
  * - 只在真有缩进的两级列表上画（角色组内容 `ul.tree-files`、包内容
- *   `.tree-package-node > .tree-files.nested`）——它们的 `padding-left` 都是
- *   `--tree-indent`（定义在 `.file-tree`，styles-project.css），导轨几何一律由它派生，
+ *   `.tree-package-node > .tree-files.nested`、以及 DirRows 递归层的 `li > .tree-files.nested`）
+ *   ——缩进步进全部由 `--tree-indent`（定义在 `.file-tree`，styles-project.css）派生，
  *   本文件不复制任何缩进数字；
- * - `ul.tree-files.nested` 不带 `tree-package-node` 父级时（padding 为 0）不画——
- *   导轨不许骑在行文字上；
- * - DirRows 递归层的行内 padding（R1 批已收编）：住 `file-tree-dir-rows.tsx` 的
- *   `calc(<depth> * var(--tree-indent))`，像素真源在此 `.file-tree` 的 `--tree-indent`
- *   一格（styles-project.css），TS 侧只剩无单位深度数字；更深各层的导轨几何仍照
- *   「每层一条」的既有两档，不越权重排。
+ * - 每层一条 `--rail-w` 竖线，颜色 `--rail-color`；悬停该子树、或选中行（`.tree-file.active`）
+ *   落在该分支时提亮为 `--rail-color-strong`（导轨刻度真源在 tokens.css，与大纲 /
+ *   教程目录共用同一组值）；
+ * - DirRows 的行内缩进是 `calc(var(--tree-indent) * depth)`（住 `file-tree-dir-rows.tsx`，
+ *   数值仍是 14px 的倍数）：递归层 `ul.tree-files.nested` 自身 padding 为 0，子行却各自
+ *   带一层行内缩进 ⇒ 竖线落在那条缩进带的中线（7px），不骑在行文字上。
  * ========================================================================= */
 
-/* 缩进带导轨 · 两处共用口径（文件树 `.file-tree` 与大纲 `.outline-panel` 同时挂上）。
-   // ui-kit-candidate: 导轨两档升进全局 tokens.css 后，本定义点随迁，两切片只读。 */
-.file-tree,
-.outline-panel {
-  --tree-guide: var(--border);
-  --tree-guide-strong: var(--border-strong);
-}
-
 .tree-group > .tree-files,
-.tree-package-node > .tree-files.nested {
+.tree-package-node > .tree-files.nested,
+li > .tree-files.nested {
   position: relative;
 }
 
 .tree-group > .tree-files::before,
-.tree-package-node > .tree-files.nested::before {
+.tree-package-node > .tree-files.nested::before,
+li > .tree-files.nested::before {
   content: '';
   position: absolute;
   top: 0;
   bottom: 0;
   /* 竖线立在缩进带的正中：左边是父级文字，右边是子级文字，两层都借力 */
   left: calc(var(--tree-indent) / 2);
-  width: 1px;
-  background: var(--tree-guide);
+  width: var(--rail-w);
+  background: var(--rail-color);
 }
 
 /* 悬停所在分支提亮（行是 ul 的后代，行上悬停即命中） */
 .tree-group > .tree-files:hover::before,
-.tree-package-node > .tree-files.nested:hover::before {
-  background: var(--tree-guide-strong);
+.tree-package-node > .tree-files.nested:hover::before,
+li > .tree-files.nested:hover::before {
+  background: var(--rail-color-strong);
 }
 
 /* 选中所在分支提亮：:has 沿 DOM 上溯，组层与包层导轨会一起亮（同一条分支） */
 .tree-group > .tree-files:has(.tree-file.active)::before,
-.tree-package-node > .tree-files.nested:has(.tree-file.active)::before {
-  background: var(--tree-guide-strong);
+.tree-package-node > .tree-files.nested:has(.tree-file.active)::before,
+li > .tree-files.nested:has(.tree-file.active)::before {
+  background: var(--rail-color-strong);
 }

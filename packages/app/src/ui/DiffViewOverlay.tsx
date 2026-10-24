@@ -9,15 +9,16 @@ import {
   DIFF_VIEW_SURFACE_ID,
   diffEqualityBanner,
   diffEqualityOf,
+  diffLanguageFor,
   diffSummaryText,
   focusDiffPane,
   getDiffPanes,
-  languageIdForSide,
   subscribeDiff,
   type DiffPane,
   type DiffRequest,
   type DiffViewMenuInput,
 } from './diff-view';
+import { languageOverrideFor } from './language-mode-pref';
 import { declareContextSurface } from './context-surfaces';
 import { CODE_FONT_BASELINE } from './code-font'; // 比对面的**缺省基线**；作者所选档位见下面 codeFont
 import { overlayEditorAppearance } from './overlay-editor-appearance';
@@ -338,6 +339,13 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
       let editor: { dispose(): void } | null = null;
       const textA = original.text;
       const textB = modified.text;
+      // 语言 id 取**打开这一格时的覆盖快照**（`languageOverrideFor` 现读 localStorage 表）。
+      // 取舍：对比视图是一次性只读面，刻意不订阅覆盖变更——打开期间作者改了某路径的语言
+      // 模式，这一组 diff 保持打开时的着色 / 折叠；重开（或换格重读两侧）会走本 effect 重建
+      // model，届时按新覆盖重取。此处模型本来就是每次 effect 新建，无需额外的
+      // `setModelLanguage` / 重建分支。
+      const langA = diffLanguageFor(activeRequest.original, languageOverrideFor);
+      const langB = diffLanguageFor(activeRequest.modified, languageOverrideFor);
       void (async () => {
         const monaco = await import('../monaco/entry');
         if (disposed || !containerRef.current) return;
@@ -352,8 +360,6 @@ export function createDiffViewOverlay(deps: DiffViewDeps): () => unknown {
         const { overlayCodeFontPatch } = await import('./editor-display-prefs');
         const codeFont = overlayCodeFontPatch();
         if (disposed || !containerRef.current) return;
-        const langA = languageIdForSide(activeRequest.original);
-        const langB = languageIdForSide(activeRequest.modified);
         const modelA = monaco.editor.createModel(textA, langA);
         const modelB = monaco.editor.createModel(textB, langB);
         const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {

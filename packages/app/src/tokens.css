@@ -21,6 +21,18 @@
      （装饰性分隔，不承担可点区识别），故只按视觉层次取，不套文字对比判据。 */
   --border-subtle: #2f363d;
   --border-strong: #4a545f;
+  /* 缩进导轨刻度（视觉批十三 · BOARD「两条缩进导轨收成一条全局规则」）：文件树
+     （file-tree.css 的 `.tree-files::before`）、大纲（outline-panel.css 的
+     `.outline-row` 背景渐变）、教程目录（dev-note.css 的 `.tutorial-toc-item::before`）
+     三处画的是同一条 1px 竖线，宽度与颜色只在这里定义。
+     颜色两档是描边族的**别名**（不是独立 hex）：light / mint 各自重定义
+     `--border` / `--border-strong` 时导轨随 var() 链自动翻色，主题文件不必重复声明。
+     图样只收到值这一层：三处结构差得远——前两处是伪元素实心 1px 竖条（定位各不相同），
+     大纲那条是随 `--outline-depth` 伸缩的 repeating-linear-gradient；强行共用同一条
+     background recipe 会改渲染路径，违背"零视觉变化"。 */
+  --rail-w: 1px;
+  --rail-color: var(--border);
+  --rail-color-strong: var(--border-strong);
   --fg: #d7dce2;
   --fg-dim: #8b949e;
   --accent: #4c8bf5;

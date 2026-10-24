@@ -118,8 +118,8 @@ describe('tutorial-surface.css：接线、纪律与三族形态', () => {
   it('⑥ 目录静息只显标题：编号与层级线都是静息 opacity 0，三态才显；防撑破的 min-width 在位', () => {
     const rail = first(sliceSrc(), '.wizard.tutorial .tutorial-toc .tutorial-toc-item::before {');
     expect(rail.get('opacity'), '层级线静息就该收起（静息唯一可见物是标题）').toBe('0');
-    expect(rail.get('width')).toBe('1px');
-    expect(rail.get('background-color')).toBe('var(--border)');
+    expect(rail.get('width'), '层级线宽度改吃导轨刻度（批次十三把宽度与颜色升到 tokens.css）').toBe('var(--rail-w)');
+    expect(rail.get('background-color'), '静息色同理，不再自写 --border').toBe('var(--rail-color)');
     const num = first(sliceSrc(), '.wizard.tutorial .tutorial-toc .tutorial-toc-num {');
     expect(num.get('opacity')).toBe('0');
     const bare = stripComments(sliceSrc());

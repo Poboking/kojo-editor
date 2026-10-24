@@ -3,6 +3,7 @@ import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
 import { FileTree, middleEllipsis, walkDialectPaths } from '../src/ui/FileTree';
+import { DirRows } from '../src/ui/file-tree-dir-rows';
 import { FileRows } from '../src/ui/file-tree-rows';
 import { buildFileGroups, dirsToRelist, kojoOwners, visibleEntries } from '../src/ui/file-tree-model';
 import {
@@ -407,6 +408,50 @@ describe('FileRows · 文件行右键与行内重命名（B1）', () => {
     expect(html.match(/<button class="tree-file/g)).toHaveLength(1);
     expect(html).toContain('data-locate="C:/koa/001/M_KOJO_K2.ERB"');
     expect(html).not.toContain('data-locate="C:/koa/001/M_KOJO_K1.ERB"'); // 编辑中的行不是按钮
+  });
+
+  it('长文件名显示名裁中段保住扩展名，title 仍是完整路径（L16 行级接线）', () => {
+    const long = 'C:/koa/001/M_KOJO_K1_2_超长口上事件脚本测试.ERB';
+    const html = renderToStaticMarkup(
+      h(FileRows, { files: [long], limit: 1, activeFile: null, onOpenFile: () => {} }),
+    );
+    expect(html).toContain('…');
+    expect(html).toContain('.ERB');
+    expect(html).toContain(`title="${long}"`);
+  });
+});
+
+describe('DirRows · 行级文件名中段省略与缩进 token（L16 接线）', () => {
+  const dir = 'C:/game/kojo/001/包';
+  const longName = 'M_KOJO_K1_2_超长口上事件脚本测试.ERB';
+  const props = {
+    dir,
+    depth: 2,
+    skip: new Set<string>(),
+    dirCache: new Map([[dir, [{ name: longName, path: `${dir}/${longName}`, isDirectory: false }]]]),
+    subOpen: new Set<string>(),
+    edit: null,
+    editValue: '',
+    glossOf: (n: string) => n,
+    activeFile: null,
+    setEditValue: () => {},
+    commitEdit: () => {},
+    cancelEdit: () => {},
+    toggleSub: () => {},
+    onOpenFile: () => {},
+  };
+
+  it('缩进 = calc(var(--tree-indent) * depth)（depth 2 仍是 28px 的倍数，不再写死裸 px）', () => {
+    const html = renderToStaticMarkup(h(DirRows, props));
+    expect(html).toContain('calc(var(--tree-indent) * 2)');
+    expect(html).not.toContain('padding-left:28px');
+  });
+
+  it('深层目录里的文件行同样裁中段、title 保完整路径', () => {
+    const html = renderToStaticMarkup(h(DirRows, props));
+    expect(html).toContain('…');
+    expect(html).toContain('.ERB');
+    expect(html).toContain(`title="${dir}/${longName}"`);
   });
 });
 

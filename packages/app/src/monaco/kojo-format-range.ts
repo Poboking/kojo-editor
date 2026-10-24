@@ -29,7 +29,8 @@ import {
  *    而整篇算还保住了跨行上下文（缩进单位探测、`@` 原生块状态），哪天规则长出
  *    跨行语义也不会从这条缝里漏出去。
  *    **这条论证对 `.kojo` 从来就不成立**（缩进单位探测与 `@` 块状态是文档级判据 ⇒ 宿主
- *    侧 `formatRequestWindowFor` 对 `.kojo` 一律交回 `null`），**对 ERB 也不再完全成立**：
+ *    侧 `formatRequestWindowFor` 对 `.kojo` 一律交回 `null`；该方言的区间入口是
+ *    `kojo-format.ts::installRangeFormatter`，走整篇算 + 按行裁剪），**对 ERB 也不再完全成立**：
  *    `559a878` 给 ERB 形长出了跨行的块状态（数据表块体 / 停用死区，见插件 `erbBodyLineMask`），
  *    切片视角看不见窗口起点之上的开词 ⇒ 会把整篇腿明确保护的字节改掉。于是窗口这条腿
  *    多了下面第 3 项那道**前推锚点**的闸（不是放宽判据，是补上切片缺的那一段上下文）。
@@ -415,8 +416,10 @@ function clampLine(line: number, lineCount: number): number {
  *
  * 只注册 `ERB_LANGUAGE_ID`：整篇格式化已覆盖两个语言（`installDocumentFormatter`），
  * 这两个新入口的语义保守面是按 ERB 形（逐行纯）论证的，`.kojo` 不搭这班车。
- * `.kojo` 的区间格式化走 `kojo-format.ts::installRangeFormatter`（一门语言一枚 provider，
- * 两侧不得同时注册 ERB——否则选区结果由注册表顺序决定，本模块的宿主判据会被绕过）。
+ * `.kojo` 的区间格式化走 `kojo-format.ts::installRangeFormatter`——**同一份 `RangeFormatHandlers`**
+ * （宿主 `resolve` 判据 / 规则开关 / `onDegraded` 出口同源），注册面同样在
+ * `ui/editor-global-providers.ts`（一门语言一枚 provider；两侧不得同时注册 ERB——否则选区结果
+ * 由注册表顺序决定，本模块的宿主判据会被绕过）。
  */
 export function installRangeFormatter(
   monaco: typeof Monaco,

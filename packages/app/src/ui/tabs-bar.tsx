@@ -522,9 +522,9 @@ export const TabBar = memo(function TabBar({
       </div>
       {/* 溢出 affordance（L16）：真溢出才挂这一族；不溢出时 DOM 里零节点。
           箭头是普通 button ⇒ Tab 可达、Enter/Space 原生触发；无障碍名说成人话。
-          三枚一律 `KitIconButton` + 注册图标名（左箭头即 `chevron-left`，R1 批注册；
-          不再借 `chevron-right` + CSS 旋转 180°，也不以符号字符入面）——在册闸见
-          `icons-system.test.ts` 的「名 ↔ 注册表闭合闸」。 */}
+          三枚一律 `KitIconButton` + 注册图标名：左右箭头用注册表里互为镜像的两枚图标
+          （`chevron-left` / `chevron-right`），不再借 CSS 旋转 180° 变形，也不以符号字符入面
+          ——在册闸见 `icons-system.test.ts` 的「名 ↔ 注册表闭合闸」。 */}
       {overflowing ? (
         <div className="tab-overflow-tools" role="group" aria-label="标签栏滚动与列表">
           <KitIconButton label="向左滚动标签页" size={14} onClick={() => scrollTabs(-1)}>

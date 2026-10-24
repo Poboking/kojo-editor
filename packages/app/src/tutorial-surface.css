@@ -31,7 +31,7 @@
  *    那档不动（320px 由闸钉着），网格子项补 `min-width: 0`。
  * ③ **目录条目**：静息只显标题——编号与层级线都在静息收起（`opacity: 0`，占位不抽走，
  *    标题的 x 坐标一点不动）；悬停 / 键盘聚焦 / 当前条目才把两者显出来。层级线口径 =
- *    大纲导轨 = 文件树（1px，静息 `--border`，显出时提 `--border-strong`）。当前条目
+ *    大纲导轨 = 文件树（宽度与两档颜色都吃 `tokens.css` 的 `--rail-*` 刻度）。当前条目
  *    **左边条 + 语义色 + 字重**，撤掉整行 accent 洗色（反白行在 light 档会闪；本批刚把
  *    三档对比度做到 0 失败，不许为了强调把它打破）。
  *
@@ -135,9 +135,10 @@
 .wizard.tutorial .tutorial-toc .tutorial-toc-item {
   position: relative;
 }
-/* 层级线：一枚 1px 竖线，正好落在圈码编号那一格的中心（编号的 `min-width: 1.2em` 以
-   `--fs-0` 计，故按 `--fs-0` 取半格，而不是按条目自身字号）。口径与大纲导轨、文件树
-   导轨一致：1px + `var(--border)`，要提亮才到 `--border-strong`。
+/* 层级线：一枚 `--rail-w` 竖线，正好落在圈码编号那一格的中心（编号的 `min-width: 1.2em` 以
+   `--fs-0` 计，故按 `--fs-0` 取半格，而不是按条目自身字号）。口径与大纲导轨、文件树导轨
+   同源：宽度与两档颜色都取 `tokens.css` 的导轨刻度（批次十三升的这组值，判据见
+   `indent-rail-single-source.test.ts`），本切片不再自写 `1px` / `var(--border)` 对。
    静息**不画**——"悬停/聚焦才显编号与层级线"，标题是静息态唯一的可见物。 */
 .wizard.tutorial .tutorial-toc .tutorial-toc-item::before {
   content: '';
@@ -145,12 +146,19 @@
   top: 0;
   bottom: 0;
   left: calc(var(--space-2) + var(--fs-0) * 0.6);
-  width: 1px;
-  background-color: var(--border);
+  width: var(--rail-w);
+  background-color: var(--rail-color);
   opacity: 0;
   transition:
     opacity var(--dur-1) var(--ease-out),
     background-color var(--dur-1) var(--ease-out);
+}
+/* 没有编号格的条目（语法全表各节、各本的「先说清」导言节）静息不画这条线：线的 x 是按
+   「编号格中心」算的（8px 内衬 + 0.6 × 11px = 14.6px），而无圈码的条目没有那只
+   `min-width: 1.2em` 的格子，标题文本直接从 8px 起排——线会从标题首字中间穿过。
+   有编号的条目配方一字不动（静息只显标题的口径不翻）；窄窗整体撤回见下方 @media。 */
+.wizard.tutorial .tutorial-toc .tutorial-toc-item:not(:has(.tutorial-toc-num))::before {
+  content: none;
 }
 /* 编号静息收掉。opacity 不抽走占位（`.tutorial-toc-num` 的 min-width 仍在流里）⇒
    悬停显号时标题的 x 坐标一点不动，不跳字。 */
@@ -168,7 +176,7 @@
 .wizard.tutorial .tutorial-toc .tutorial-toc-item:focus-visible::before,
 .wizard.tutorial .tutorial-toc .tutorial-toc-item[aria-current='true']::before {
   opacity: 1;
-  background-color: var(--border-strong);
+  background-color: var(--rail-color-strong);
 }
 /* 当前条目：左边条 + 语义色 + 字重抬一档，**不整行反白**（撤掉既有那层 accent 洗色；
    反白行在 light 档会闪，扫一眼就丢读位）。悬停态因此只改竖条与编号，不改底。 */

@@ -3,6 +3,7 @@ import type { KernelEventMap } from '@kojo/plugin-api';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-constants';
 import { languageFor } from '../src/ui/editor-model-pool';
 import {
   bindDiffView,
@@ -10,6 +11,7 @@ import {
   DIFF_VIEW_OVERLAY_ID,
   diffEqualityBanner,
   diffEqualityOf,
+  diffLanguageFor,
   diffPaneKeyOf,
   getDiffPanes,
   getDiffState,
@@ -19,6 +21,7 @@ import {
   validateDiffRequest,
   closeDiffPane,
   type DiffRequest,
+  type LanguageOverrideLookup,
 } from '../src/ui/diff-view';
 
 /**
@@ -108,6 +111,43 @@ describe('languageIdForSide ⇄ 编辑器侧 languageFor 对拍（同一份路�
       expect(languageIdForSide({ label: p, path: p }), `对拍 ${p}`).toBe(languageFor(p));
     }
     expect(languageFor('C:\\x\\.erb')).toBe(PLAINTEXT);
+  });
+});
+
+describe('diffLanguageFor（覆盖表 > 扩展名判据；接批次十二的语言覆盖）', () => {
+  const noOverride: LanguageOverrideLookup = () => null;
+
+  it('未命中 ⇒ 回退 languageIdForSide/languageFor（.erb / .kojo2 / .kojo 三档口径不变）', () => {
+    expect(diffLanguageFor({ label: 'C:\\game\\ERB\\口上\\角色.erb' }, noOverride)).toBe(ERB_LANGUAGE_ID);
+    expect(diffLanguageFor({ label: 'D:\\工作区\\事件.kojo2' }, noOverride)).toBe(KOJO2_LANGUAGE_ID);
+    expect(diffLanguageFor({ label: 'D:\\工作区\\事件.kojo' }, noOverride)).toBe(KOJO_LANGUAGE_ID);
+  });
+
+  it('覆盖命中 ⇒ 听作者的，三档扩展名都不再看扩展名', () => {
+    const table: Record<string, string> = {
+      'C:\\game\\ERB\\口上\\角色.erb': KOJO2_LANGUAGE_ID,
+      'D:\\工作区\\事件.kojo2': ERB_LANGUAGE_ID,
+      'D:\\工作区\\事件.kojo': 'plaintext',
+    };
+    const overrides: LanguageOverrideLookup = (p) => table[p] ?? null;
+    expect(diffLanguageFor({ label: '任意标签', path: 'C:\\game\\ERB\\口上\\角色.erb' }, overrides)).toBe(
+      KOJO2_LANGUAGE_ID,
+    );
+    expect(diffLanguageFor({ label: '任意标签', path: 'D:\\工作区\\事件.kojo2' }, overrides)).toBe(
+      ERB_LANGUAGE_ID,
+    );
+    expect(diffLanguageFor({ label: '任意标签', path: 'D:\\工作区\\事件.kojo' }, overrides)).toBe('plaintext');
+  });
+
+  it('覆盖键与回退同口径：路径优先于标签，无路径才用标签查覆盖', () => {
+    const seen: string[] = [];
+    const overrides: LanguageOverrideLookup = (p) => {
+      seen.push(p);
+      return null;
+    };
+    diffLanguageFor({ label: 'x.erb', path: 'C:\\p\\事件.kojo2' }, overrides);
+    diffLanguageFor({ label: 'y.erb' }, overrides);
+    expect(seen).toEqual(['C:\\p\\事件.kojo2', 'y.erb']);
   });
 });
 

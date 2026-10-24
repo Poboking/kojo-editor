@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- 现行格式（根 <data>，台词在 <contents> 里）：钉 eval / isFall / emotion 三类属性都在同一份里出现。 -->
+<data>
+  <command kojoPlace="TOP" priority="1" com="300" name="会話">
+    <contents>「今天的风很舒服呢。」</contents>
+  </command>
+  <command kojoPlace="TOP" priority="1" com="300" name="会話" isFall="恋慕">
+    <contents>「只要您在旁边，哪里都好。」</contents>
+  </command>
+  <command kojoPlace="TOP" priority="2" com="300" name="会話" emotion="POSITIVE">
+    <contents>「嘿嘿，被夸了有点开心。」</contents>
+  </command>
+  <command kojoPlace="TOP" priority="3" com="300" name="会話" eval="{TSTR:天气 == &quot;晴&quot;}">
+    <contents>「太阳这么大，要不要去外面走走？」</contents>
+  </command>
+  <command kojoPlace="TOP" priority="4" com="300" name="会話" isFall="親愛" emotion="NEGATIVE" eval="{TSTR:心情 &lt; 30}">
+    <contents>「……今天不太想说话。」</contents>
+  </command>
+  <command kojoPlace="TOP" priority="1" com="301" name="商談">
+    <contents>「这批货的价钱，我们可以慢慢谈。」</contents>
+  </command>
+</data>

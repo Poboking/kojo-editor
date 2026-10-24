@@ -133,19 +133,20 @@ import 'monaco-editor/editor/common/standaloneStrings.js';
 
 import * as monacoApi from 'monaco-editor/editor/editor.api';
 import { registerJsonLanguage } from './json-language';
-// ZH-D4 回车缩进（on-type 兜底层）与区间格式化：provider 自带语言闸（认不出 id 就沉默），
-// 注册面留在装配点一次性完成；整篇格式化的接线仍在 EditorPane（宿主 resolve 判据不变）。
-import { installEnterIndenter, installRangeFormatter } from './kojo-format';
+// ZH-D4 回车缩进（on-type 兜底层）：provider 自带语言闸（认不出 id 就沉默），注册面留在装配点
+// 一次性完成。格式化三枚 provider（整篇 / 区间 / ERB 区间）都走宿主 resolve 判据，一律由
+// `ui/editor-global-providers.ts` 统一注册——装配点拿不到偏好读取与降级回调，不在这儿另开旁路。
+import { installEnterIndenter } from './kojo-format';
 // 回落台账（纯逻辑、零依赖）：静态引它只为"装载失败也要说出去"这一条路，
 // 结构解析本体（worker + 两枚 wasm）全在下面的动态边界后面
 import { reportStructureDegradation } from './tree-sitter/fallback';
 
 // B 档：`.json` 微型 Monarch（不用 languages/features/json 的 400 KB worker feature）
 registerJsonLanguage(monacoApi);
-// 装配点这两枚 provider 与模块同寿（无宿主判据可依，也不随标签装卸），但**句柄必须留在原地**：
+// 装配点这枚 on-type provider 与模块同寿（无宿主判据可依，也不随标签装卸），但**句柄必须留在原地**：
 // 返回值一旦丢弃，重复装配就会挂两枚 provider 且没有任何回收入口。
-// ERB 的区间格式化不在这里——由宿主带闸的 `kojo-format-range.ts` 独家负责（一门语言一枚 provider）。
-const assemblyDisposables = [installRangeFormatter(monacoApi), installEnterIndenter(monacoApi)];
+// 区间格式化（`.kojo` 与 ERB 两枚）都带宿主 resolve 判据，注册面在 `ui/editor-global-providers.ts`。
+const assemblyDisposables = [installEnterIndenter(monacoApi)];
 void assemblyDisposables; // 与模块同寿：不回收，但句柄在此可见（不往 API 面加导出，entry 的类型面必须与 monaco 一致）
 
 // 结构解析叠层（TSIT-M1，实验特性，**默认关**）：**动态取**装配模块。这一条 `import()`

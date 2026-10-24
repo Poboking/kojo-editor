@@ -41,6 +41,11 @@ import {
   registerLanguage,
   type LanguageDescriptor,
 } from './language-registry';
+import {
+  KOJO_XML_LANGUAGE_ID,
+  KOJO_XML_SOURCE_EXTENSION,
+  registerKojoXmlLanguage,
+} from './xml-language';
 
 const ERB_DESCRIPTOR: LanguageDescriptor = {
   id: ERB_LANGUAGE_ID,
@@ -104,6 +109,25 @@ registerLanguage(KOJO_DESCRIPTOR);
 registerLanguage(JSON_DESCRIPTOR);
 // K2-SURFACE-DEFAULT：无条件登记（切流阶段只管写回 / 迁移 / 解析器切换，不管语言面可不可见）。
 registerLanguage(KOJO2_DESCRIPTOR);
+
+/**
+ * 口上 XML（`kojo-xml`，2026-10-24 eraFL 适配批）：**声明式口上文件**的语言面。
+ *
+ * - 只认 `.xml`；不声明 `languageServices`（理由见 `xml-language.ts` 头注：
+ *   通用双注册会给它挂上 ERB/kojo 那 11 枚 provider，空结果会顶掉内建行为）；
+ * - 不声明 `structure`（没有 tree-sitter 语法，折叠由自建 provider 按标签配对给）；
+ * - `capabilities` 不填：能力矩阵（LANG-PARITY-GATE）当前只覆盖 ERB / kojo2 两门
+ *   一等语言，XML 是**数据格式面**而非作者编程语言，硬拉进同一张矩阵会把矩阵的
+ *   "缺面"语义搅浑。它的面由自己的测试钉住。
+ */
+const KOJO_XML_DESCRIPTOR: LanguageDescriptor = {
+  id: KOJO_XML_LANGUAGE_ID,
+  label: '口上 XML',
+  matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO_XML_SOURCE_EXTENSION,
+  register: registerKojoXmlLanguage,
+};
+
+registerLanguage(KOJO_XML_DESCRIPTOR);
 
 /** 按路径选 Monaco 语言 id（收口前 `languageFor` 的单源） */
 export function languageForPath(filePath: string): string {

@@ -198,7 +198,11 @@ interface GameAdapter {
 }
 ```
 
-v0 中 eraTW 适配器是唯一实现。`GameProject` 的通用形状定义见 §5.7，由适配器填充、内核视为不透明载荷。**验收标准：将来接入第二个游戏时内核与解析器插件零改动。**
+v0 中 eraTW 适配器是唯一实现；2026-10-24 批接入 **eraFL 适配器**（`erafl-adapter`）后成为两个实现。`GameProject` 的通用形状定义见 §5.7，由适配器填充、内核视为不透明载荷。**验收标准：将来接入第二个游戏时内核与解析器插件零改动**——eraFL 接入实测兑现了这条：内核零改动，唯一 additive 面是下面这个 `kojo.xml` 契约与对应服务键。
+
+口上不一定是 ERB 函数。eraFL 的口上是**声明式数据文件**（`ERB/口上/{编号}_{名}/*.xml`），
+故契约新增 `kojo.xml` 服务（`KojoXmlService`）承载其结构模型。这是 **additive** 的：
+`GameAdapter` 不新增必填成员，不提供该服务的适配器照常装载，消费方按「服务缺席」降级。
 
 ### 5.2 解析器服务（`erb.parser`）
 
@@ -335,10 +339,12 @@ kojo-editor/
 │   ├── plugins/
 │   │   ├── erb-parser/        # 声明 requires: ['kernel.io']；v0.2 起订阅 project.opened 自建索引 + scanControlFlow
 │   │   ├── eratw-adapter/     # 声明 requires: ['kernel.io']，eraTW 全部知识在此（家族识别 + conventions + variableSchema）
+│   │   ├── erafl-adapter/     # eraFL 适配器：FLconfig.xml 识别 + Chara CSV / 口上目录索引；口上 XML 索引经 kojo.xml 服务提供
 │   │   ├── convention-linter/ # 声明 requires: ['kernel.io','kernel.project','kernel.slots','erb.parser']
 │   │   ├── condition-extractor/ # ★ 条件谓词抽取（服务 condition.extractor；表达式解析 + 状态依赖聚合 + 本地量赋值收集，语义标注来自 adapter）
 │   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
 │   │   ├── ui-kojo-navigator/ # ★ ui.panel：函数树导航（角色→家族→面→函数 + 条件徽章；家族规则经槽位查询，不 import adapter）
+│   │   ├── ui-kojo-xml/       # ★ ui.panel：口上 XML 面板（角色→文件→<command> 条目；kojo.xml 服务缺席时显式降级）
 │   │   ├── sav-parser/        # ★ 存档二进制解析（服务 snapshot.source）：读（v0.2 第四批，六档实测零残余）+ 写/注入（§5.5，v1.1）
 │   │   ├── state-replay/      # requires: ['kernel.project','kernel.slots','kernel.io','snapshot.source','condition-extractor']（适配器经 `slots.query('game.adapter')` 再按 `adapter.gameId === project.adapterId` 过滤获取——`query` 只有单参，见 ADR-0002；实施记录 §5.11/§5.12（IMPLEMENTATION-LOG））
 │   │   ├── kojo-sugar/          # ★ 语法糖：词法/文法/转译/升糖/编译落盘（服务 sugar.transpile 等）
@@ -350,7 +356,8 @@ kojo-editor/
 │   │   ├── ui-archive-browser/  # ui.panel：归档浏览器
 │   │   └── ui-plugin-status/    # ui.panel：插件状态面板（首个 ui.panel 示例）
 
-> 上表是**实际 16 个插件**（`ls packages/plugins` 可核）。初稿规划的 `runtime/`（受管引擎子进程，
+> 上表列的是主要插件；`ls packages/plugins` 现为 **22 个**目录（上表之外还有 `eraakumamaid-adapter` /
+> `kojo-market` / `ui-market` / `ui-condition-matrix`，完整清单与计数以 `docs/STATE.md` 为准）。初稿规划的 `runtime/`（受管引擎子进程，
 > §5.6）与 `ui-condition-matrix/`（条件矩阵）**未立项**，`preview-renderer/` 的职责由
 > `ui-sugar-preview` 承担 —— 在此说明是为了免得有人回来找这三个目录。
 │   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体

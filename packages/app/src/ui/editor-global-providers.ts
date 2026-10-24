@@ -66,7 +66,12 @@ import {
 import { revealLocationOf } from '../monaco/reveal-position';
 // 大文档档位线的**单一真源**（本模块只引用、不再抄数字，同 codeLens / 着色 / 面包屑各批）
 import { foldingEnabledForLineCount } from './editor-options';
-import { dialectForLanguage, installDocumentFormatter, type FormatRequest } from '../monaco/kojo-format';
+import {
+  dialectForLanguage,
+  installDocumentFormatter,
+  installRangeFormatter as installKojoRangeFormatter,
+  type FormatRequest,
+} from '../monaco/kojo-format';
 import { installRangeFormatter, type RangeFormatHandlers } from '../monaco/kojo-format-range';
 // FMT-TOAST：格式化让路的一次性台账（去重 + 文案都住 `ui/format-notice-ledger.ts`，
 // 本模块只做"把出口接上"这一件事；上屏由 `EditorPane.tsx` 订阅根通知中心完成）
@@ -2036,6 +2041,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       resolveRange: (model, startLine, endLine) => formatRequestWindowFor(model, startLine, endLine),
     };
     globalDisposers.push(installDocumentFormatter(monaco, formatResolve));
+    // `.kojo` 区间格式化（`Ctrl+Shift+I`）：与整篇、ERB 区间三条腿共用**同一份** `resolve`
+    // 判据与规则开关（批次十三把注册面从 `monaco/entry.ts` 的无参装配点搬到这里——那边拿不到
+    // 偏好读取与降级回调）。一门语言一枚 provider：本行只注册 `.kojo`，ERB 归下一行。
+    globalDisposers.push(installKojoRangeFormatter(monaco, { ...formatResolve, onDegraded: reportFormatDegradation }));
     // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）。
     // PS-4：再挂一条**窗口取文腿**（`formatRequestWindowFor`）——一次 `;` 击键只为触发行那一行
     // 取文，不再 copy 整篇；`.kojo` 与糖视图一律退回整篇那条腿（判据见 `RangeFormatHandlers`）。

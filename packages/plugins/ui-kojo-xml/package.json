@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-kojo-xml",
+  "version": "0.1.0",
+  "private": true,
+  "description": "口上 XML 面板（ui.panel 贡献）：角色 -> 文件 -> <command> 条目，点击经 editor.revealLocation 跳转。索引来自 kojo.xml 服务（可能缺席），本插件不读盘、不解释游戏属性。",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}

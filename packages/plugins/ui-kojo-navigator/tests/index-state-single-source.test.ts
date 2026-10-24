@@ -345,10 +345,13 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
     }
   });
 
-  it('补全两枚安装点仍**不接**降级落点；宿主唯一一处 `onDegrade…:` 是格式化那条（本批不许动）', () => {
+  it('补全两枚安装点仍**不接**降级落点；`onDegrade…:` 只出现在两条格式化腿上（补全 / 面包屑不许加）', () => {
     expect(hits(PROVIDERS, /install(?:Kojo|Erb)Completion\(monaco, \(\) => editorTables\(requireKernel\(\)\)\)/)).toHaveLength(2);
     const wired = hits(PROVIDERS, /onDegrade\w*:/);
-    expect(wired, wired.join('\n')).toHaveLength(1);
+    // 批次十三：`.kojo` 区间格式化从装配点的无参注册搬到宿主带闸版 ⇒ 格式化腿由一条变两条
+    // （整篇那条不在此正则里）。判据不变：两处都必须落在格式化腿上，补全 / 面包屑一处都不许有。
+    expect(wired, wired.join('\n')).toHaveLength(2);
+    expect(hits(PROVIDERS, /installKojoRangeFormatter\(monaco, \{ \.\.\.formatResolve, onDegraded: reportFormat/)).toHaveLength(1);
     expect(hits(PROVIDERS, /installRangeFormatter\(monaco, \{ \.\.\.formatResolve, onDegraded: reportFormat/)).toHaveLength(1);
   });
 

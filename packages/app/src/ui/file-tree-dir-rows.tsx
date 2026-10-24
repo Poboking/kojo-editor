@@ -10,7 +10,7 @@
 import { memo, type ReactElement } from 'react';
 import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
-import { BINARY_EXT, erbExt } from './file-tree-model';
+import { BINARY_EXT, erbExt, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
 import { pkey } from './file-tree-ops';
 import { ROW_PROB_SCOPE, TreeProbMark } from './file-tree-row';
 import { EditRow } from './file-tree-rows';
@@ -122,12 +122,9 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
   }
   const dirs = sorted.dirs;
   const files = visibleFiles;
-  // 缩进步进的像素值**不住 TS**（R1 批，L16 遗留的内联 px 收编）：这里只递"第几级"这一个
-  // 无单位数字进 calc()，步进真源是 `.file-tree` 上的 `--tree-indent`（styles-project.css，
-  // DirRows 恒在该子树内 ⇒ 继承得到）。终值与改前的 `depth * 14px` 逐层相等（14px 即该
-  // token 现值），钉法见 `file-tree-rows-ellipsis-indent.test.ts`。口径与 OutlinePanel
-  // 的 `--outline-depth` 同一族：深度是数据，像素算式在 CSS。
-  const pad = { paddingLeft: `calc(${depth} * var(--tree-indent))` };
+  /** 缩进步进由 `--tree-indent`（`.file-tree` 上定义，14px）派生：depth 每加一层正好一档。
+   *  像素真源不住 TS（与 OutlinePanel 的 `--outline-depth` 同族：深度是数据，算式在 CSS）。 */
+  const pad = { paddingLeft: `calc(var(--tree-indent) * ${depth})` };
   /** 该层正在新建（输入行插在本层最上）；与 rename 行共用 EditRow */
   const creatingHere = edit?.mode === 'create' && edit.dir === dir ? edit : null;
   return [
@@ -215,7 +212,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             data-tree-path={d.path}
             onClick={() => onOpenFile(d.path, { preview: true })}
           >
-            {glossOf(d.name)}
+            {middleEllipsis(glossOf(d.name), TREE_LABEL_MAX)}
             {prob ? (
               <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} />
             ) : null}

@@ -59,7 +59,9 @@ describe('DirRows · 递归缩进的像素值不住 TS', () => {
   const code = stripComments(read('../src/ui/file-tree-dir-rows.tsx'));
 
   it('行内 padding 只递无单位深度进 calc()，吃 --tree-indent；`14` 这个数字绝迹', () => {
-    expect(code).toContain('calc(${depth} * var(--tree-indent))');
+    // 算式操作数序与 `file-tree.test.ts` 的宿主侧同一形（`var(--tree-indent) * depth`）：
+    // 两批各自把裸 px 收进 token 时选了同一条式的两个写法，合树统一到对面那一形（CSS 终值相同）
+    expect(code).toContain('calc(var(--tree-indent) * ${depth})');
     expect(code).not.toMatch(/paddingLeft:\s*`\$\{depth\s*\*\s*14\}px`/);
     expect(code).not.toContain('14px');
   });

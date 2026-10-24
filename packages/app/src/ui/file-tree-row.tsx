@@ -11,12 +11,7 @@
  * "同一棵树两种画法"的新分叉（工包 E 留下的洞，本批补上）。
  */
 import { memo, type ReactElement } from 'react';
-import { baseName } from './file-tree-model';
-// 中段省略的单源函数暂住 `FileTree.tsx`（L16 口径：`.ERH` / `.kojo` 后缀就是信息，扩展名必须
-// 留在屏上；上限同取 TREE_LABEL_MAX，与包/根两层一把尺）。`middleEllipsis` 是函数声明、只在
-// 渲染期调用 ⇒ FileTree ⇄ file-tree-row 这条既有 import 环（TreeProbMark 反向）不触 TDZ；
-// 进 ui-kit 后此处与 tab-row.tsx 一并换腿，见 FileTree.tsx 的 `// ui-kit-candidate:` 标注。
-import { middleEllipsis, TREE_LABEL_MAX } from './FileTree';
+import { baseName, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
 import { Icon } from './icons';
 import { PROBLEM_SCOPE, SEVERITY_TINT, type ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';

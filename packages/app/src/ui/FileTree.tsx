@@ -46,7 +46,7 @@ import {
   type MenuCapability,
   type MenuItemId,
 } from './file-tree-ops';
-import { baseName, buildFileGroups, dirsToRelist, kojoOwners, rowKeyOf } from './file-tree-model';
+import { baseName, buildFileGroups, dirsToRelist, kojoOwners, middleEllipsis, rowKeyOf, TREE_LABEL_MAX } from './file-tree-model';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark, type ProbFile } from './file-tree-row';
@@ -56,6 +56,9 @@ import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-
 import { SHOW_FILE_HISTORY_COMMAND_ID } from './file-history';
 import type { DirState, EditState, Group, PackageGroup, Props } from './file-tree-types';
 import { Icon } from './icons';
+
+/** 纯函数与上限常量住模型层；此处再导出保持既有消费方（`tab-row` / 测试）的导入面不变 */
+export { middleEllipsis, TREE_LABEL_MAX };
 
 /**
  * PS-16 稳定化三件模块级常量：穿进行组件的引用型 props 必须同帧同引用，memo 才有得看。
@@ -108,28 +111,9 @@ export function escapeAttrValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/**
- * 中段省略（L16 美学短板批）：尾部 ellipsis 会把扩展名与末段语义吃掉——
- * `.ERH` / `.kojo` 这类后缀**就是信息**（`.ERH` 和 `.ERB` 是两种文件，名字头一段还常常相同）。
- * 纯函数、可单测：超长时保住后缀（最后一个 `.` 起）与头部，裁中段，省略号占一位。
- *
- * 口径：`maxChars` 是**结果串**的字符上限（含省略号）；不足 4 没有裁的意义原样返回；
- * 无扩展名（或以 `.` 开头的隐藏名）退化为保头裁尾。
- * // ui-kit-candidate: middleEllipsis 值得进 ui-kit（文件树/标签页两处要用）
- */
-export function middleEllipsis(name: string, maxChars: number): string {
-  if (maxChars < 4 || name.length <= maxChars) return name;
-  const dot = name.lastIndexOf('.');
-  const ext = dot > 0 ? name.slice(dot) : '';
-  const keepTail = Math.min(ext.length, maxChars - 3);
-  const keepHead = maxChars - 1 - keepTail;
-  if (keepHead < 2) return `${name.slice(0, maxChars - 1)}…`;
-  return `${name.slice(0, keepHead)}…${name.slice(name.length - keepTail)}`;
-}
-
-/** 包名/根名/文件行的中段省略上限（行宽自适应需要测量，留给 css 侧兜底；这里是字符数硬闸）。
- *  R1 批导出：`file-tree-row.tsx` 的单条文件行与包/根两层共用同一把尺，不另造第二个数。 */
-export const TREE_LABEL_MAX = 24;
+// 中段省略（`middleEllipsis` / `TREE_LABEL_MAX`）已下沉到 `file-tree-model.ts`：
+// 文件树的包/根/单条文件行与标签页共用同一把尺，定义点只留一处（口径与"为什么保后缀"
+// 写在模型那一处，`file-tree.test.ts` 钉行为）。
 
 /* ---------------- 诊断徽标（工包 E + 本批：树三层都开口，画法只有一枚） ---------------- */
 
