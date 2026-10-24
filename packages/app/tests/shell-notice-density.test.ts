@@ -202,7 +202,7 @@ describe('底部浮层抬升 = 实测 token 的算术（不许回到拍来的常
     expect(at, `选择器不在了：${selector}`).toBeGreaterThanOrEqual(0);
     const m = /bottom: calc\(([\s\S]*?)\);/.exec(flat(src).slice(at, at + 900));
     expect(m, `${selector} 的 bottom 不是 calc —— 抬升又变回裸常数了`).not.toBeNull();
-    return m![1].replace(/\s+/g, '');
+    return (m?.[1] ?? '').replace(/\s+/g, '');
   };
 
   it('实测余量：错误条 ≥ 89、卡 ≥ 116（真壳读数，槽位与间隙都得 > 0）', () => {

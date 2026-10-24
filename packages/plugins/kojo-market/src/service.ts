@@ -421,9 +421,13 @@ export function createMarketService(deps: MarketServiceDeps): MarketService {
     );
     const blocked = new Set(ids);
     const removed = index.packs.filter((p) => blocked.has(p.id));
+    const removedIds = new Set(removed.map((p) => p.id));
     return {
       index: { ...index, packs: index.packs.filter((p) => !blocked.has(p.id)) },
       dropped: [...dropped, ...removed.map((p) => `${p.id}: id-kind-conflict（同名挂在多个种类下）`)],
+      // 整条被拦下的包，它的"封面不合规"备注一并抹掉——那条注记说的是"照常列出、只丢字段"，
+      // 而这里连包都没了，留着就是两条互相矛盾的话指向同一个 id（备注形如 `<id>: <原因>`）
+      coverIgnored: coverIgnored.filter((c) => !removedIds.has(c.slice(0, c.indexOf(':')))),
     };
   }
 

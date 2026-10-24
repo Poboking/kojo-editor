@@ -270,7 +270,13 @@ export function parseIndex(raw: unknown): {
   /** 封面链接不合规 ⇒ 该条去掉 cover 照常列出，id + 原因记在这里 */
   coverIgnored: string[];
 } {
-  const nothing = { index: null, dropped: [], coverIgnored: [] } as const;
+  // 整体形状不对时的零值（**不许 `as const`**：那会把两个数组钉成 `readonly []`，
+  // 与本函数的公开形状 `string[]` 分叉，tsc 当场红四处）
+  const nothing: { index: null; dropped: string[]; coverIgnored: string[] } = {
+    index: null,
+    dropped: [],
+    coverIgnored: [],
+  };
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ...nothing };
   const o = raw as Record<string, unknown>;
   if (o['schema'] !== MARKET_SCHEMA_VERSION) return { ...nothing };
