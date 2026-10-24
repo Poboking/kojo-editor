@@ -523,8 +523,8 @@ export const TabBar = memo(function TabBar({
       {/* 溢出 affordance（L16）：真溢出才挂这一族；不溢出时 DOM 里零节点。
           箭头是普通 button ⇒ Tab 可达、Enter/Space 原生触发；无障碍名说成人话。
           三枚一律 `KitIconButton` + 注册图标名（左箭头即 `chevron-left`，R1 批注册；
-          不再借 `chevron-right` + CSS 旋转 180°，也不以符号字符入面——在册闸见
-          `tab-overflow-icons.test.ts`）。 */}
+          不再借 `chevron-right` + CSS 旋转 180°，也不以符号字符入面）——在册闸见
+          `icons-system.test.ts` 的「名 ↔ 注册表闭合闸」。 */}
       {overflowing ? (
         <div className="tab-overflow-tools" role="group" aria-label="标签栏滚动与列表">
           <KitIconButton label="向左滚动标签页" size={14} onClick={() => scrollTabs(-1)}>
@@ -544,13 +544,16 @@ export const TabBar = memo(function TabBar({
         </div>
       ) : null}
       {/* 全部保存（C3）：命令面板已有 workbench.saveAll，这里补显性入口——
-          恒在（无脏时弱化不消失，按下去由宿主给一句人话，铁律 4） */}
+          恒在（无脏时弱化不消失，按下去由宿主给一句人话，铁律 4）。
+          图标走专用 `save-all`（软盘），不借 `archive`——那枚 14px 下与 `trash` 同形，
+          屏上被读成"删除"。`title` 只给悬停，读屏要的是无障碍名，两者都给。 */}
       <button
         className={`tab-save-all${hasDirty ? '' : ' idle'}`}
         title="全部保存（Ctrl+Shift+S）"
+        aria-label="全部保存（Ctrl+Shift+S）"
         onClick={onSaveAllClick}
       >
-        <Icon name="archive" size={14} />
+        <Icon name="save-all" size={14} />
       </button>
     </div>
   );
