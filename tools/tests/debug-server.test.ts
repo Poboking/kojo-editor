@@ -300,6 +300,130 @@ describe('调试宿 · search_text', () => {
   });
 });
 
+describe('调试宿 · search_text 流式重写后的不变量（2026-10-25 性能批）', () => {
+  beforeAll(async () => {
+    await fs.mkdir(path.join(sandbox, 'stream'), { recursive: true });
+  });
+
+  const search2 = (overrides: Record<string, unknown>) =>
+    invoke('search_text', {
+      request: {
+        searchId: 7,
+        roots: [path.join(sandbox, 'stream')],
+        query: 'needle',
+        options: { isRegex: false, caseSensitive: true, wholeWord: false, extensions: [] },
+        ...overrides,
+      },
+    });
+
+  it('roots 在读域外 ⇒ 整批拒（walkFiles 绕过读域的洞已补）', async () => {
+    // 用「从未被任何用例登记过」的目录——前面的写域用例会把 outside 加进只读根，复用它就是假绿
+    const neverAdmitted = path.join(tmpRoot, 'never-admitted');
+    await fs.mkdir(neverAdmitted, { recursive: true });
+    const r = await search2({ roots: [neverAdmitted] });
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toContain('读域外');
+  });
+
+  it('CJK 多字节字符跨读块边界仍正确命中（流式解码 stream:true）', async () => {
+    // 在多个潜在块边界（8KB/64KB/128KB/256KB）前 1 字节处放 3 字节 CJK——
+    // 无论实际切块落在哪，词都必须整字命中且列号按 UTF-16 码元计
+    for (const boundary of [8192, 65536, 131072, 262144]) {
+      const file = path.join(sandbox, 'stream', `cjk-${boundary}.ERB`);
+      const head = 'a'.repeat(boundary - 1);
+      await fs.writeFile(file, Buffer.from(`${head}needle好\r\nPRINTL tail\r\n`), 'utf-8');
+    }
+    const r = await invoke('search_text', {
+      request: {
+        searchId: 7,
+        roots: [path.join(sandbox, 'stream')],
+        query: '好',
+        options: { isRegex: false, caseSensitive: true, wholeWord: false, extensions: ['erb'] },
+      },
+    });
+    expect(r.ok).toBe(true);
+    const v = r.value as { files: { path: string; matches: { line: number; column: number }[] }[]; skipped: { filtered: number } };
+    expect(v.files).toHaveLength(4); // 四个边界文件全部命中
+    for (const f of v.files) {
+      const boundary = Number(/cjk-(\d+)\.ERB$/.exec(f.path)?.[1] ?? 0);
+      expect(f.matches).toHaveLength(1);
+      expect(f.matches[0]!.line).toBe(1);
+      expect(f.matches[0]!.column).toBe(boundary + 6); // (boundary−1) 个 'a' + 6 字符 'needle' ⇒ 0 基索引 boundary+5，列号 +1
+    }
+    expect(v.skipped.filtered).toBe(0);
+  });
+
+  it('CRLF 跨块边界不产生幽灵行 / 丢行', async () => {
+    for (const boundary of [8192, 65536, 131072]) {
+      const file = path.join(sandbox, 'stream', `crlf-${boundary}.ERB`);
+      const head = 'a'.repeat(boundary - 1);
+      await fs.writeFile(file, Buffer.from(`${head}\r\nPRINTL needle\r\nPRINTL tail\r\n`), 'utf-8');
+    }
+    const r = await invoke('search_text', {
+      request: {
+        searchId: 7,
+        roots: [path.join(sandbox, 'stream')],
+        query: 'needle',
+        options: { isRegex: false, caseSensitive: true, wholeWord: false, extensions: ['erb'] },
+      },
+    });
+    const v = r.value as { files: { path: string; matches: { line: number }[] }[] };
+    const crlfFiles = v.files.filter((f) => f.path.includes('crlf-'));
+    expect(crlfFiles).toHaveLength(3);
+    for (const f of crlfFiles) {
+      expect(f.matches).toHaveLength(1);
+      expect(f.matches[0]!.line).toBe(2); // 第二行命中；\r\n 被跨块拆开也不许多出一行
+    }
+  });
+
+  it('超 8MB 文件按 tooLarge 跳过（流式截断，不整文件读入）', async () => {
+    const big = path.join(sandbox, 'stream', 'big.ERB');
+    await fs.writeFile(big, Buffer.alloc(8 * 1024 * 1024 + 1024, 0x61)); // 'a' × ~8MB
+    const r = await search2({});
+    expect(r.ok).toBe(true);
+    const v = r.value as { files: { path: string }[]; skipped: { tooLarge: number } };
+    expect(v.skipped.tooLarge).toBeGreaterThanOrEqual(1);
+    expect(v.files.find((f) => f.path.endsWith('big.ERB'))).toBeUndefined(); // 没命中也没被整读
+    await fs.rm(big, { force: true });
+  }, 30000);
+
+  it('无换行巨行触发行缓冲护栏（tooLarge），内存上限 O(最长行) 的兜底', async () => {
+    const oneline = path.join(sandbox, 'stream', 'oneline.ERB');
+    await fs.writeFile(oneline, Buffer.alloc(4 * 1024 * 1024 + 1024, 0x62)); // 单行 4MB+ 无换行
+    const r = await search2({});
+    expect(r.ok).toBe(true);
+    expect((r.value as { skipped: { tooLarge: number } }).skipped.tooLarge).toBeGreaterThanOrEqual(1);
+    await fs.rm(oneline, { force: true });
+  }, 30000);
+});
+
+describe('调试宿 · 命令分发与限额的自审加固（2026-10-25 性能批）', () => {
+  it('原型链上的名字（constructor / __proto__ / hasOwnProperty）不当作命令执行，宿仍健康', async () => {
+    for (const evil of ['constructor', '__proto__', 'hasOwnProperty', 'toString']) {
+      const r = await invoke(evil, {});
+      expect(r.ok, `命令 ${evil} 不该被分发`).toBe(false);
+      expect(String(r.error)).toContain('没有实现命令');
+    }
+    const health = await (await fetch(`${base}/health`)).json();
+    expect(health.ok).toBe(true);
+  });
+
+  it('export_file 文件名为 .. ⇒ 拒（不落沙盒根）', async () => {
+    const r = await invoke('export_file', { fileName: '..', data: '' });
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toContain('文件名不合法');
+  });
+
+  it('read_files_raw 单批超 32 MiB ⇒ fail-loud（信封放大前拦下）', async () => {
+    const big = path.join(sandbox, 'big-batch.bin');
+    await fs.writeFile(big, Buffer.alloc(33 * 1024 * 1024, 0x61));
+    const r = await invoke('read_files_raw', { paths: [big] });
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toContain('超上限');
+    await fs.rm(big, { force: true });
+  }, 60000);
+});
+
 describe('调试宿 · SSE 事件流（文件监视）', () => {
   it('start_watch 后写文件，SSE 推 kojo:fs-changed', async () => {
     const watched = path.join(sandbox, 'watch-dir');
