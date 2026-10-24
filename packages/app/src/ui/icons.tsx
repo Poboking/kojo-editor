@@ -268,6 +268,9 @@ export const ICONS = {
 
   /* --- 折叠指示 --- */
   'chevron-right': stroke('M6.2 3.4 10.8 8l-4.6 4.6'),
+  /* 左向 = chevron-right 沿 x=8 的镜像（同笔画同 4 档尺寸口径）；R1 批：标签栏溢出左箭头
+     不再借 CSS 旋转 180° 实现，方向是图标语义的一部分，注册表里有名字才谈得上在册闸。 */
+  'chevron-left': stroke('M9.8 3.4 5.2 8l4.6 4.6'),
   'chevron-down': stroke('M3.4 5.2 8 9.8l4.6-4.6'),
 
   /* --- 浮动窗口 --- */

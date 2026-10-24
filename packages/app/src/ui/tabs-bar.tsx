@@ -322,7 +322,8 @@ export const TabBar = memo(function TabBar({
 
   /**
    * 横向溢出判定（L16 可发现性批）：`scrollWidth > clientWidth` 是唯一口径。
-   * 溢出时渲染左/右滚动箭头 + 「列出全部标签」▾；**不溢出时一枚都不渲染**
+   * 溢出时渲染左/右滚动箭头 + 「列出全部标签」下箭头钮（全部走注册图标名，R1 批）；
+   * **不溢出时一枚都不渲染**
    * （不许 `visibility:hidden` 留空位——DOM 里没有就是没有）。
    */
   const [overflowing, setOverflowing] = useState(false);
@@ -367,7 +368,7 @@ export const TabBar = memo(function TabBar({
   }, []);
 
   /**
-   * ▾「列出全部标签」：**零新业务路径**——菜单事实与动作全走既有 `tab-bar-blank`
+   * 「列出全部标签」下箭头钮（`chevron-down`，注册图标不是字符）：**零新业务路径**——菜单事实与动作全走既有 `tab-bar-blank`
    * 组的构建链（`groupMenuOf` → `groupMenuItemsFor`），只把「标签列表」子菜单提为
    * 顶层项直接开在根宿主上（固定层，不被 `.editor-group` 的 overflow 裁剪；
    * 子菜单的滚动上限样式在 `context-menu-tabs.css` 早已就位）。
@@ -521,11 +522,13 @@ export const TabBar = memo(function TabBar({
       </div>
       {/* 溢出 affordance（L16）：真溢出才挂这一族；不溢出时 DOM 里零节点。
           箭头是普通 button ⇒ Tab 可达、Enter/Space 原生触发；无障碍名说成人话。
-          左箭头借 `chevron-right` 旋转 180°（icons.tsx 没有 `chevron-left`，本批不擅自加）。 */}
+          三枚一律 `KitIconButton` + 注册图标名（左箭头即 `chevron-left`，R1 批注册；
+          不再借 `chevron-right` + CSS 旋转 180°，也不以符号字符入面——在册闸见
+          `tab-overflow-icons.test.ts`）。 */}
       {overflowing ? (
         <div className="tab-overflow-tools" role="group" aria-label="标签栏滚动与列表">
           <KitIconButton label="向左滚动标签页" size={14} onClick={() => scrollTabs(-1)}>
-            <Icon name="chevron-right" size={14} className="tab-overflow-flip" />
+            <Icon name="chevron-left" size={14} />
           </KitIconButton>
           <KitIconButton label="向右滚动标签页" size={14} onClick={() => scrollTabs(1)}>
             <Icon name="chevron-right" size={14} />

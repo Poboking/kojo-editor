@@ -122,7 +122,12 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
   }
   const dirs = sorted.dirs;
   const files = visibleFiles;
-  const pad = { paddingLeft: `${depth * 14}px` };
+  // 缩进步进的像素值**不住 TS**（R1 批，L16 遗留的内联 px 收编）：这里只递"第几级"这一个
+  // 无单位数字进 calc()，步进真源是 `.file-tree` 上的 `--tree-indent`（styles-project.css，
+  // DirRows 恒在该子树内 ⇒ 继承得到）。终值与改前的 `depth * 14px` 逐层相等（14px 即该
+  // token 现值），钉法见 `file-tree-rows-ellipsis-indent.test.ts`。口径与 OutlinePanel
+  // 的 `--outline-depth` 同一族：深度是数据，像素算式在 CSS。
+  const pad = { paddingLeft: `calc(${depth} * var(--tree-indent))` };
   /** 该层正在新建（输入行插在本层最上）；与 rename 行共用 EditRow */
   const creatingHere = edit?.mode === 'create' && edit.dir === dir ? edit : null;
   return [
