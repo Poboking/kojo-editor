@@ -30,9 +30,21 @@ describe('2.0 adapter 登记簿（入口 A · 按项目选 adapter）', () => {
 
   it('adapterId 缺席 / 未知游戏 ⇒ null（不猜、不借表）', () => {
     expect(kojo2AdapterForProject({})).toBeNull();
-    // eraAkumaMaid 今天没有 2.0 面 ⇒ 查不到 ⇒ null（而不是借 eraTW 的）
+    // eraAkumaMaid 没有 2.0 面 ⇒ 查不到 ⇒ null（而不是借 eraTW 的）
     expect(kojo2AdapterForProject({ adapterId: 'eraakumamaid' })).toBeNull();
-    expect(kojo2AdapterForProject({ adapterId: 'erafl' })).toBeNull();
+  });
+
+  it('eraFL 的 2.0 面：按 v1 gameId 登记后解析到 ERAFL_GAME_ADAPTER（入口 B 的接线契约）', async () => {
+    // 入口 B（erafl-adapter/src/kojo2/）交付后，bootstrap 的懒登记钩子在
+    // `loadProjectPlugins` 里做这件事：键 = `ERAFL.gameId`（v1 的工程识别键，
+    // §6.3：project.adapterId 存的是 v1 gameId，不是 2.0 的 id），值 = 2.0 adapter。
+    // 本测试不触发钩子（不调 loadProjectPlugins），用真对象手工证明这条契约。
+    const erafl = await import('@kojo/plugin-erafl-adapter');
+    registerKojo2Adapter(erafl.ERAFL.gameId, erafl.ERAFL_GAME_ADAPTER);
+    expect(kojo2AdapterForProject({ adapterId: 'erafl' })).toBe(erafl.ERAFL_GAME_ADAPTER);
+    // 键必须是 v1 gameId：用 2.0 的 id 查不到（两个 id 今天恰好同值，但契约上
+    // 查的是 v1 键——写错的表现是"打开项目后 2.0 面全部零候选"且不报错）。
+    expect(kojo2AdapterForProject({ adapterId: erafl.ERAFL.gameId })).toBe(erafl.ERAFL_GAME_ADAPTER);
   });
 
   it('登记后现取 round-trip；重复登记以最后一次为准', () => {
