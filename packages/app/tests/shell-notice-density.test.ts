@@ -53,6 +53,30 @@ describe('splitNoticeMessage：标题 + 一行摘要（有损排版、无损信�
     const s = '读盘失败，稍后自动重试，也可以现在手动再来一次';
     expect(splitNoticeMessage(s)).toEqual({ head: s, rest: '' });
   });
+
+  /**
+   * 真壳 2026-10-24 读数：这条的标题在 262px 的 toast 里被省略号吃掉 24px——
+   * 补充语「（这一面已退回原来的做法）」跟着摘要行走，标题才立得住。
+   */
+  it('补充语 `（…）` 跟着摘要行走（括号是配对符号，一枚字符都不丢）', () => {
+    const msg = '结构着色这次没顶上（这一面已退回原来的做法）：结构着色丢掉 0 条越界行 / 17 条空区间';
+    expect(splitNoticeMessage(msg)).toEqual({
+      head: '结构着色这次没顶上',
+      rest: '（这一面已退回原来的做法）：结构着色丢掉 0 条越界行 / 17 条空区间',
+    });
+    // 这一枚切点是"零丢弃"的：head + rest 逐字还原原句
+    const { head, rest } = splitNoticeMessage(msg);
+    expect(head + rest).toBe(msg);
+  });
+
+  it('括号切点也认独立的短消息（保存失败（磁盘只读）⇒ 标题四字 + 摘要括号）', () => {
+    expect(splitNoticeMessage('保存失败（磁盘只读）')).toEqual({ head: '保存失败', rest: '（磁盘只读）' });
+  });
+
+  it('括号前的头不足 4 字 ⇒ 不切（「这一版」不是标题，是半句话的开头）', () => {
+    const s = '这一版（临时）没有改动';
+    expect(splitNoticeMessage(s)).toEqual({ head: s, rest: '' });
+  });
 });
 
 describe('toast 让位模态：改位不降层（层序是另一条闸钉着的规矩）', () => {

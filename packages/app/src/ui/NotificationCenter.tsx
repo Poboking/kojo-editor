@@ -74,11 +74,27 @@ export function noticeActionsOf(notice: NoticeInput): readonly NoticeAction[] {
 /**
  * 消息正文的天然停顿点（先后次序 = 优先切的第一个；找不到就不切）。
  *
- * 只认这三个：`：`（「这次选区格式化没有生效：编辑器没能确认…」的因果连接符）、
- * `⇒`（「取数失败 ⇒ 回到词法层」的结论连接符）、`。`（整句收尾）。
+ * 认这四个：`：`（「这次选区格式化没有生效：编辑器没能确认…」的因果连接符）、
+ * `⇒`（「取数失败 ⇒ 回到词法层」的结论连接符）、`。`（整句收尾）、`（`（补充语）。
  * 逗号/顿号不认——切出来的半句当标题比原句更难读。
+ *
+ * 每枚切点自带三个行为参数，因为它们的语法身份不同：
+ *  - `headTakesSep`：符号跟谁走（`。` 是句末，留在标题里读得通）；
+ *  - `dropSep`：连接符是**语气**不是内容，可以整枚丢掉；括号是**配对符号**，
+ *    丢了摘要行就从一个半括号起头 ⇒ 必须留；
+ *  - `minHead`：切完之后标题至少几个字。`（` 取 4 而不是 2——「这一版（临时）没有改动」
+ *    切在括号上，标题只剩「这一版」三个字，那不是标题，是半句话的开头。
+ *
+ * `（` 这一枚是 2026-10-24 组长真壳复验补的：实测一条 21 字标题
+ * 「结构着色这次没顶上（这一面已退回原来的做法）」在 262px 宽的 toast 里被省略号吃掉 24px
+ * ⇒ 第一眼标题断在半句上。补充语收进摘要行，标题才立得住（信息一条不减）。
  */
-const HEAD_SEPARATORS = ['：', '⇒', '。'] as const;
+const HEAD_SEPARATORS = [
+  { sep: '：', headTakesSep: false, dropSep: true, minHead: 2 },
+  { sep: '⇒', headTakesSep: false, dropSep: true, minHead: 2 },
+  { sep: '。', headTakesSep: true, dropSep: false, minHead: 2 },
+  { sep: '（', headTakesSep: false, dropSep: false, minHead: 4 },
+] as const;
 
 /** 标题长度上限：超过它的头一句已经不是"标题"了，整条退回摘要那一行 */
 const HEAD_MAX_LEN = 30;
@@ -87,28 +103,27 @@ const HEAD_MAX_LEN = 30;
  * `message` → 第一眼标题 + 一行摘要（纯函数，视觉批十一 R5）。
  *
  * 口径：**分割是有损排版、无损信息**——`：`/`⇒` 这类连接符被丢掉（它是语气，不是内容），
- * `。` 跟在标题里；其余字符一个不删。摘要那一行在屏上只显一行（省略号收尾），
- * 但整段文本始终在 DOM 里 ⇒ 读屏逐字念得完，悬停 `title` 与展开态也都在（铁律 4 的
- * 「可见」不许变成「只给一半」）。
+ * `。` 跟在标题里，`（…）` 整段跟着摘要行；其余字符一个不删。摘要那一行在屏上只显一行
+ * （省略号收尾），但整段文本始终在 DOM 里 ⇒ 读屏逐字念得完，悬停 `title` 与展开态也都在
+ * （铁律 4 的「可见」不许变成「只给一半」）。
  */
 export function splitNoticeMessage(message: string): { readonly head: string; readonly rest: string } {
   const text = message.trim();
   let cut = -1;
-  let sepLen = 0;
-  for (const sep of HEAD_SEPARATORS) {
-    const i = text.indexOf(sep);
-    if (i < 2 || i > HEAD_MAX_LEN) continue;
+  let winner: (typeof HEAD_SEPARATORS)[number] | null = null;
+  for (const rule of HEAD_SEPARATORS) {
+    const i = text.indexOf(rule.sep);
+    if (i < rule.minHead || i > HEAD_MAX_LEN) continue;
     if (cut < 0 || i < cut) {
       cut = i;
-      sepLen = sep.length;
+      winner = rule;
     }
   }
-  if (cut < 0) return { head: text, rest: '' };
-  // `。` 是句末（跟着标题走），`：`/`⇒` 是连接符（丢掉语气，其余字符一个不删）
-  const keepSep = text[cut] === '。';
-  const head = text.slice(0, keepSep ? cut + 1 : cut).trim();
-  const rest = text.slice(keepSep ? cut + 1 : cut + sepLen).trim();
-  return { head, rest };
+  if (cut < 0 || winner === null) return { head: text, rest: '' };
+  // 三档归属：句末号跟着标题走；连接符是语气，整枚丢掉；括号是配对符号，留在摘要行开头
+  const headEnd = winner.headTakesSep ? cut + 1 : cut;
+  const restStart = winner.headTakesSep ? cut + 1 : winner.dropSep ? cut + winner.sep.length : cut;
+  return { head: text.slice(0, headEnd).trim(), rest: text.slice(restStart).trim() };
 }
 
 /** 悬停内容：人话全文 + 逐字技术原文（缺哪个就少哪格，绝不吞掉另一个） */
