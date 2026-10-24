@@ -8,10 +8,19 @@
  * （就近的 `closest` 命中本行 ⇒ 行菜单优先于标签栏空白区菜单）。
  */
 import { memo, type DragEvent as ReactDragEvent, type ReactElement } from 'react';
+import { middleEllipsis } from './FileTree';
 import { Icon } from './icons';
 import { tabClassName, tabName } from './tabs-ops';
 
 export { tabName } from './tabs-ops';
+
+/**
+ * 标签显示名的中段省略上限（L16）：`.ERH` / `.ERB` / `.kojo` 这类后缀就是信息，
+ * 尾部 ellipsis 会把它吃掉；完整路径仍挂在 title 上，裁的只是显示。
+ * 函数本体暂住 `FileTree.tsx`（文件树同一条规则）——两处都用 ⇒ 正是它该进 ui-kit 的理由，
+ * 见该处 `// ui-kit-candidate: middleEllipsis` 标注。
+ */
+const TAB_LABEL_MAX = 24;
 
 export interface TabRowProps {
   readonly p: string;
@@ -68,7 +77,7 @@ export const TabRow = memo(function TabRow({
       }}
     >
       {isPinned ? <span className="tab-pin" title="已固定（右键可取消固定）" /> : null}
-      <span className="tab-label">{tabName(p)}</span>
+      <span className="tab-label">{middleEllipsis(tabName(p), TAB_LABEL_MAX)}</span>
       {dirty ? (
         <span className="tab-dirty" title="未保存">
           <Icon name="circle-filled" size={9} />

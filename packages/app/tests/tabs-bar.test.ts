@@ -100,3 +100,29 @@ describe('TabBar · 全部保存显性入口（C3）', () => {
     expect(render({ hasDirty: true })).toContain('tab-save-all');
   });
 });
+
+describe('TabBar · 溢出 affordance（L16）', () => {
+  /**
+   * ①钉死「不溢出时一枚都不渲染」：SSR 首帧恒为未溢出（溢出与否要测量，测量住在
+   * effect 里）——所以工具族必须**根本不在 DOM 里**，不是渲染出来再 `visibility:hidden`。
+   * 溢出态的真渲染（箭头出现）在 happy-dom 行为测试 `tabs-bar-overflow.test.ts` 钉。
+   */
+  it('未溢出时滚动箭头/▾ 零节点进 DOM（不是隐藏留位）', () => {
+    const html = render();
+    expect(html).not.toContain('tab-overflow-tools');
+    expect(html).not.toContain('kit-icon-btn');
+    expect(html).not.toContain('向左滚动标签页');
+    expect(html).not.toContain('向右滚动标签页');
+    expect(html).not.toContain('列出全部标签');
+    expect(html).not.toContain('visibility');
+  });
+
+  it('长标签名中段省略保住扩展名（tab-row 接线）；24 字符内的名字零改动', () => {
+    const html = render({ openTabs: ['C:/koa/M_KOJO_K1_2_超长口上事件脚本测试.ERB'] });
+    expect(html).toContain('…');
+    expect(html).toContain('.ERB</span>');
+    // title 仍是完整路径（裁的只是显示）
+    expect(html).toContain('title="C:/koa/M_KOJO_K1_2_超长口上事件脚本测试.ERB"');
+    expect(render()).toContain('>q.ERB</span>'); // 旧样本不受影响（short-circuit）
+  });
+});

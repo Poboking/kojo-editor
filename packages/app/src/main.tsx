@@ -25,6 +25,11 @@ import './themes/mint-dark.css';
 // 面板根类 `.prob` + 双类选择器提特异性，故它与"谁先到"无关——放链尾只为让新面板的
 // 覆盖意图读起来明确（`styles-project.css` 里遗留的单类 `.prob-*` 已在同批删净）。
 import './problem-panel.css';
+// 视觉批十一 L16 切片：标签栏溢出 affordance（滚动箭头/▾工具族）`tabs-bar.css` 与
+// 文件树缩进导轨 `file-tree.css`。两条都只声明 styles-project.css 里没有的新类/新属性
+// （无同属性对撞），在级联里的位次不改变任何既有终值；`css-slices-wired` 钉死本行存在。
+import './tabs-bar.css';
+import './file-tree.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链

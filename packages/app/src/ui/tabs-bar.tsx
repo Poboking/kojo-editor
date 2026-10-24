@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type ReactElement } from 'react';
 import { isTauri } from '../bridge/invoke';
+import { KitIconButton } from '../ui-kit';
+import { openContextMenu } from './context-menu-host';
 import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
 import { declareContextSurface, type ContextSurfaceMenu } from './context-surfaces';
 import { relativeToRoot } from './file-tree-ops';
@@ -318,12 +320,75 @@ export const TabBar = memo(function TabBar({
   const tabsRef = useRef<HTMLDivElement | null>(null);
   const [tabDropAt, setTabDropAt] = useState<TabDropHint | null>(null);
 
-  // 活动标签保持可见（标签多到溢出时，点击树中文件也能定位到对应标签）
+  /**
+   * 横向溢出判定（L16 可发现性批）：`scrollWidth > clientWidth` 是唯一口径。
+   * 溢出时渲染左/右滚动箭头 + 「列出全部标签」▾；**不溢出时一枚都不渲染**
+   * （不许 `visibility:hidden` 留空位——DOM 里没有就是没有）。
+   */
+  const [overflowing, setOverflowing] = useState(false);
+  const measureOverflow = useCallback((): void => {
+    const el = tabsRef.current;
+    if (el === null) return;
+    setOverflowing(el.scrollWidth > el.clientWidth);
+  }, []);
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (el === null) return;
+    measureOverflow();
+    // 有 ResizeObserver 就盯滚动口；**没有也不许静默**：退化为 window resize 监听，
+    // 加上面标签数量/活动标签变化时的重测（内容宽度只有这两个来源）。
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => measureOverflow());
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener('resize', measureOverflow);
+    return () => window.removeEventListener('resize', measureOverflow);
+  }, [measureOverflow]);
+  // 标签增减 / 活动切换（加粗改变内容宽）都重测一次——RO 盯的是容器，不是内容。
+  useEffect(() => {
+    measureOverflow();
+  }, [measureOverflow, openTabs.length, activeFile]);
+
+  /** 活动标签保持可见（标签多到溢出时，点击树中文件也能定位到对应标签） */
   useEffect(() => {
     tabsRef.current
       ?.querySelector('.editor-tab.active')
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeFile, openTabs.length]);
+
+  /** 箭头滚动步长：约一屏（0.8 口径），平滑滚动缺失时退化为直写 scrollLeft（可测可退） */
+  const scrollTabs = useCallback((dir: -1 | 1): void => {
+    const el = tabsRef.current;
+    if (el === null) return;
+    const step = Math.max(1, Math.floor(el.clientWidth * 0.8));
+    if (typeof el.scrollBy === 'function') el.scrollBy({ left: dir * step, behavior: 'smooth' });
+    else el.scrollLeft += dir * step;
+  }, []);
+
+  /**
+   * ▾「列出全部标签」：**零新业务路径**——菜单事实与动作全走既有 `tab-bar-blank`
+   * 组的构建链（`groupMenuOf` → `groupMenuItemsFor`），只把「标签列表」子菜单提为
+   * 顶层项直接开在根宿主上（固定层，不被 `.editor-group` 的 overflow 裁剪；
+   * 子菜单的滚动上限样式在 `context-menu-tabs.css` 早已就位）。
+   */
+  const openTabsList = useCallback((anchor: HTMLElement): void => {
+    const tabsEl = tabsRef.current;
+    if (tabsEl === null) return;
+    const menu = groupMenuOf(tabsEl);
+    if (menu === null || menu.onSelect === undefined) return;
+    const list = menu.items.find((item) => item.id === 'tab-list');
+    const children = list?.children;
+    if (children === undefined || children.length === 0) return;
+    const rect = anchor.getBoundingClientRect();
+    openContextMenu({
+      x: rect.left,
+      y: rect.bottom,
+      items: children,
+      ariaLabel: '标签列表',
+      onSelect: menu.onSelect,
+    });
+  }, []);
 
   /** 以下基回调恒定身份（PS-16）：行的 memo 只看值 props，闭包造行参的事留在行内 */
   const onTabDragStart = useCallback((e: ReactDragEvent, p: string): void => {
@@ -454,6 +519,27 @@ export const TabBar = memo(function TabBar({
           />
         ))}
       </div>
+      {/* 溢出 affordance（L16）：真溢出才挂这一族；不溢出时 DOM 里零节点。
+          箭头是普通 button ⇒ Tab 可达、Enter/Space 原生触发；无障碍名说成人话。
+          左箭头借 `chevron-right` 旋转 180°（icons.tsx 没有 `chevron-left`，本批不擅自加）。 */}
+      {overflowing ? (
+        <div className="tab-overflow-tools" role="group" aria-label="标签栏滚动与列表">
+          <KitIconButton label="向左滚动标签页" size={14} onClick={() => scrollTabs(-1)}>
+            <Icon name="chevron-right" size={14} className="tab-overflow-flip" />
+          </KitIconButton>
+          <KitIconButton label="向右滚动标签页" size={14} onClick={() => scrollTabs(1)}>
+            <Icon name="chevron-right" size={14} />
+          </KitIconButton>
+          <KitIconButton
+            label="列出全部标签"
+            size={14}
+            hint="列出本组全部标签（点选即切换）"
+            onClick={(e) => openTabsList(e.currentTarget)}
+          >
+            <Icon name="chevron-down" size={14} />
+          </KitIconButton>
+        </div>
+      ) : null}
       {/* 全部保存（C3）：命令面板已有 workbench.saveAll，这里补显性入口——
           恒在（无脏时弱化不消失，按下去由宿主给一句人话，铁律 4） */}
       <button
