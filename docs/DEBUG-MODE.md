@@ -2,7 +2,8 @@
 
 > 2026-10-24 调试模式批立（`51d0d485`）。本文件是调试模式的**唯一真源**：会用看 §一–§四，
 > 要扩展先读 §五（规范）再动笔。入口命令同时登记在 `AGENTS.md` §三；坑账在 `docs/PITFALLS.md` 190/191。
-> 本机级 skill（`~/.agents/skills/kojo-debug/SKILL.md`）是本手册的蒸馏版，改这里之后顺手同步它。
+> 上手 skill 的源随仓库走：`skills/kojo-debug/SKILL.md`（本手册的蒸馏版）——各 agent 把它同步/链接进
+> 自己的专属 skill 目录（如 `~/.agents/skills/kojo-debug/`）；改手册或 skill 任一侧，都要同步另一侧。
 
 ## 一、是什么、何时用哪把刀
 
