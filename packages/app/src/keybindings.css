@@ -1,0 +1,102 @@
+/* ============================================================================
+ * keybindings.css —— 快捷键设置页视觉切片（批次十一 L17）
+ *
+ * 分工：`styles-project.css` 里既有的 `.kb-*` 行一条不搬（styles-split 等价性闸钉死），
+ * 本切片只**追加覆盖**，且全部收在 `.kb-page` 子树里、以双类选择器取胜（特异性 ≥ 基线，
+ * 与加载顺序无关）。观感主张：
+ *  1. 键位只有一副面孔——组合键的字号/边框/间距整体交给 `ui-kit` 的 `KitKbd`；
+ *     旧的 `.kb-chip` span 退化为判据锚位（`display: contents`，自己不画任何东西）。
+ *  2. 行内动作钮静息隐去，hover / focus / 撞键行才亮（注意力留给键位与命令名）。
+ *  3. 撞键走语义色 `--warning`（值即既有琥珀档），图标 + 「撞键」字样与颜色同场，
+ *     不靠颜色单独承载信息；「清除绑定 / 恢复默认」在行内可达。
+ *  4. 分组标题随表头吸顶（`--kb-head-h` 把表头高度钉死，吸顶点据此对齐），每节带计数；
+ *     搜索读数「N / M 条」由页面渲染，这里只管排版。
+ * 颜色/间距/字号/动效全部取既有 token，零新造色名、零动画新增（复用 kb-chip-in）。
+ * ========================================================================== */
+
+/* 表头高度钉死：分组标题的吸顶线与它严丝合缝（box-sizing 全站 border-box） */
+.kb-page {
+  --kb-head-h: 33px;
+}
+.kb-page .kb-head {
+  height: var(--kb-head-h);
+}
+
+/* ---- 1) 键帽单面孔：kb-chip 只做锚位，视觉整体由 KitKbd 呈现 ---- */
+.kb-page .kb-chip {
+  display: contents;
+}
+/* 不可改键（和弦 / Monaco 内建）：沿用基线口径——"读得出但不给点"靠**去底去描边**表达，
+   文字不转 dim（对比度理由见 styles-project 原注释） */
+.kb-page .kb-locked .kit-kbd-key {
+  border-color: var(--border-subtle);
+  background: none;
+}
+/* 落定入场：wrapper 已 display:contents（无盒、动画无处落），改由 KitKbd 的 kbd 承接；
+   关键帧复用基线的 kb-chip-in，不新造动画 */
+.kb-page .kb-flashed .kit-kbd {
+  animation: kb-chip-in var(--dur-3) var(--ease-spring);
+}
+:root[data-motion='reduced'] .kb-page .kb-flashed .kit-kbd {
+  animation: none;
+}
+
+/* ---- 2) 动作钮：hover / 行焦点（含钮自身被 Tab 到 = focus-within）才亮 ---- */
+.kb-page .kb-icon-btn {
+  opacity: 0;
+}
+.kb-page .kb-row:hover .kb-icon-btn,
+.kb-page .kb-row:focus-within .kb-icon-btn,
+.kb-page .kb-row.kb-capturing .kb-icon-btn,
+/* 撞键行要给"立刻能办事"的通路：动作钮常驻可见（清除绑定 / 恢复默认行内可达） */
+.kb-page .kb-row.kb-conflicted .kb-icon-btn {
+  opacity: 1;
+}
+/* 减弱动效不做特赦：opacity 0 的钮仍在本 tab 序列里，focus-within 立刻点亮，不吞键盘 */
+
+/* ---- 3) 撞键：语义色 + 文字/图标同场（不靠颜色单独说话） ---- */
+.kb-page .kb-conflict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.kb-page .kb-conflict-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+/* 移除钮 hover 转语义 danger（值即既有 --red 档，只换口径名） */
+.kb-page .kb-icon-btn-danger:hover,
+.kb-page .kb-icon-btn-danger:focus-visible {
+  color: var(--danger);
+}
+
+/* ---- 4) 分组标题吸顶 + 每节计数 ---- */
+.kb-page .kb-group {
+  position: sticky;
+  top: var(--kb-head-h);
+  z-index: 1;
+  padding: var(--space-2) var(--space-3);
+  border-top: none;
+  background: var(--surface-raised);
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+.kb-page .kb-group-count {
+  margin-left: var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 搜索读数「N / M 条」与空态文案的排印（文案真源在组件里，这里只管"读起来不晃"） */
+.kb-page .kb-count {
+  font-variant-numeric: tabular-nums;
+}
+.kb-page .kb-empty-hint {
+  max-width: 52ch;
+  text-wrap: pretty;
+}

@@ -23,11 +23,15 @@ import {
 import { isComposingEvent, nextRovingIndex } from './shell-keys';
 import { monacoBuiltinRows } from './monaco-builtin-keybindings';
 import { Icon } from './icons';
+import { KitKbd } from '../ui-kit';
 import { isFailureNote, useMenuNote } from './context-menu-pages';
 // 快捷键面（`keybindings`）的数据面与设置面同住 `settings-menu.ts`（本页由 SettingsPanel
 // 静态引入，同属那枚懒 chunk）——键位表与撞键判据只在设置浮层里才有用。
 import { keybindingMenuStateOf, registerKeybindingsMenuBridge } from './settings-menu';
 import './context-menu-pages.css';
+// L17 视觉切片：只覆盖 `.kb-page` 子树内的既有 `.kb-*` 规则（双类选择器压过 styles-project 基线，
+// 基线里的 `.kb-*` 行一条不搬——styles-split 等价性闸钉着）。
+import '../keybindings.css';
 
 /**
  * 快捷键设置页（b/kbset/1017 批次）——设置浮层「快捷键」一节的本体。
@@ -40,9 +44,13 @@ import './context-menu-pages.css';
  * - **不给一个点了没反应的控件** —— 计数为 0 的范围档、无覆盖时的「全部恢复默认」、
  *   不可改键行的操作格，一律**不渲染**（不是灰着）。
  * - **改键即刻生效** —— 覆盖表一变（`useKeybindingsVersion`）整页重算，命令表由壳层同步重建。
- * - **撞键不静默** —— 撞键行下方就地长一行琥珀提示，指名对方命令（铁律 4）。
+ * - **撞键不静默** —— 撞键行就地长一行语义色（`--warning`）提示，图标 + 「撞键」字样
+ *   与颜色同时在场，指名对方命令（铁律 4）。
  * - **键盘可达** —— 行 roving tabindex、↑↓ 漫游、Enter 改键、Delete 解绑，漫游判据复用
  *   `nextRovingIndex`（与导航栏同一套，不写第二份）。
+ * - **键位只有一副面孔**（视觉批十一 L17）—— 组合键一律经 `ui-kit` 的 `KitKbd` 呈现；
+ *   行内动作钮静息隐去、hover/focus（及撞键行）才亮；分组标题吸顶并带每节计数，
+ *   搜索命中给「N / M 条」读数。样式覆盖全部住 `keybindings.css` 切片，基线 `.kb-*` 不搬。
  */
 
 /** 范围三档：全部 / 已被作者改过（含解绑）/ 撞键 */
@@ -51,7 +59,18 @@ type Scope = 'all' | 'changed' | 'conflict';
 /** 键盘序列的中文读法（芯片之间的 dim 间隔符，非 emoji） */
 const CHIP_SEP = '·';
 
-/** 一行命令的按键芯片：一步一片（`Ctrl+K`），和弦切成多片中间一个 dim 间隔符 */
+/**
+ * 「已改」判据在本页的唯一落点：行数据的 `state`（真源在 `keybindings.ts` 的
+ * `bindingStateOf`，与设置索引 `settingsEntryModified` 同吃那张覆盖表）。
+ * 页面里凡要问"这行是不是被作者动过"一律经此，不许再抄 `state !== 'default'`。
+ */
+const isRowModified = (row: KeybindingRow): boolean => row.state !== 'default';
+
+/**
+ * 一行命令的按键芯片：一步一片，键帽视觉整体交给 `KitKbd`（字号/边框/间距全站一副面孔）。
+ * 外层的 `kb-chip` span 只做**判据锚位**（逐行芯片计数的既有口径挂在它上面），
+ * 在 `keybindings.css` 里被收成 `display: contents` —— 它自己不画任何东西。
+ */
 function KeyChips({ row }: { row: KeybindingRow }): ReactElement {
   const steps = row.keys === undefined ? [] : keybindingChips(row.keys);
   if (steps.length === 0) {
@@ -71,7 +90,9 @@ function KeyChips({ row }: { row: KeybindingRow }): ReactElement {
               {CHIP_SEP}
             </span>
           ) : null}
-          <span className="kb-chip">{keys.join('+')}</span>
+          <span className="kb-chip">
+            <KitKbd combo={keys.join('+')} />
+          </span>
         </Fragment>
       ))}
     </>
@@ -103,16 +124,18 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
     [commands, kbVersion],
   );
 
-  const changedCount = useMemo(() => rows.filter((r) => r.state !== 'default').length, [rows]);
+  const changedCount = useMemo(() => rows.filter(isRowModified).length, [rows]);
   const conflictCount = useMemo(() => rows.filter((r) => r.conflictWith !== null).length, [rows]);
   const overrides = overrideCount();
 
-  const visible = useMemo(() => {
-    let base = rows;
-    if (scope === 'changed') base = base.filter((r) => r.state !== 'default');
-    else if (scope === 'conflict') base = base.filter((r) => r.conflictWith !== null);
-    return filterKeybindingRows(base, query);
-  }, [rows, scope, query]);
+  // 范围档先切、搜索后滤：`scoped` 是"这一档一共多少条"，`visible` 是"搜索命中多少条"，
+  // 读数「N / M 条」正是拿这两个数拼出来的（M 不含搜索、N 含搜索）。
+  const scoped = useMemo(() => {
+    if (scope === 'changed') return rows.filter(isRowModified);
+    if (scope === 'conflict') return rows.filter((r) => r.conflictWith !== null);
+    return rows;
+  }, [rows, scope]);
+  const visible = useMemo(() => filterKeybindingRows(scoped, query), [scoped, query]);
 
   // 当前焦点行夹取到可见范围（过滤后行数变少时不悬空）
   const focusIndex = visible.length === 0 ? -1 : Math.min(activeIndex, visible.length - 1);
@@ -311,7 +334,7 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
       </div>
 
       <div className="kb-count" role="status">
-        {`${visible.length} 条`}
+        {query !== '' ? `${visible.length} / ${scoped.length} 条` : `${visible.length} 条`}
       </div>
       {resetNote !== null ? (
         <div className="kb-resetnote" role="status">
@@ -327,7 +350,11 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
       {visible.length === 0 ? (
         <div className="kb-empty">
           <div className="kb-empty-title">没有匹配的快捷键</div>
-          <div className="kb-empty-hint">换个词，或清空搜索看看全部命令。</div>
+          <div className="kb-empty-hint">
+            {scoped.length === 0
+              ? '这一节本来就没有条目：切回「全部」看看所有命令。'
+              : `这一节有 ${scoped.length} 条，但没有和「${query}」匹配的——换个词，或清空搜索。`}
+          </div>
           <button
             type="button"
             className="ghost small"
@@ -358,10 +385,13 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
               <div className="kb-group" role="row">
                 <span className="kb-group-label" role="cell">
                   {group.category}
+                  {/* 每节计数：搜索时这是"本节命中数"，静息时是"本节条数"（口径同一格读数） */}
+                  <span className="kb-group-count">{`${group.rows.length} 条`}</span>
                 </span>
               </div>
               {group.rows.map(({ row, index }) => {
                 const capturing = capturingId === row.id;
+                const conflicted = row.conflictWith !== null;
                 const rowClass =
                   'kb-row' +
                   (row.state === 'overridden'
@@ -370,8 +400,9 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
                       ? ' kb-unbound'
                       : '') +
                   (capturing ? ' kb-capturing' : '') +
+                  (conflicted ? ' kb-conflicted' : '') +
                   (flashId === row.id ? ' kb-flashed' : '');
-                const showReset = row.state !== 'default';
+                const showReset = isRowModified(row);
                 const showRemove = row.keys !== undefined && row.rebindable;
                 return (
                   <div
@@ -442,9 +473,12 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
                       ) : null}
                     </span>
 
-                    {row.conflictWith !== null ? (
+                    {conflicted ? (
                       <span className="kb-conflict" role="cell">
-                        {`与「${row.conflictWith}」用了同一个按键，两者只会触发排在前面的那一个`}
+                        {/* 撞键不只靠颜色说话：图标 + 「撞键」字样与琥珀色同时在场
+                            （forced-colors / 色觉异常下信息与语义不丢） */}
+                        <Icon name="warning" size="xs" className="kb-conflict-icon" />
+                        <span>{`撞键：与「${row.conflictWith}」用了同一个按键，两者只会触发排在前面的那一个`}</span>
                       </span>
                     ) : null}
                   </div>
