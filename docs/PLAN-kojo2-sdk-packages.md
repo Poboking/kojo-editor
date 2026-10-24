@@ -144,7 +144,7 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 |---|---|---|---|
 | **B0** | 契约：`ui.editor.languageService` 扩 **4** 个 kind + 四条取数腿（纯合并函数，不装 provider） | 双 typecheck；既有贡献方零改动；新增 kind 各有一条"不认就跳过"的单测 | ✅ 2026-10-24 |
 | **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `sourcemap-model` / `expand-view` / `constants` + 抽出 `name-chars`（约 1.9k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | ✅ 2026-10-24 |
-| **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**本批只完成 2 项**（definition / documentSymbol）——另 3 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 部分完成（2/5）2026-10-24 |
+| **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**本批完成 3 项**（definition / documentSymbol / inlayHint）——definition 已写但**未挂**，另 2 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 部分完成（3/5）2026-10-24 |
 | **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽** | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | |
 | **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | 主题 token 名不变（`theme-contrast` 三档门禁不破） | |
 | **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden | |
@@ -170,26 +170,64 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 - 三个 `.kojo2` 单源守卫改指新地址（不变量不变，只是那处换了地方）。
 
 **B2 的实际交付**（2026-10-24）：
-- 新包 `packages/plugins/kojo-lang`（`@kojo/plugin-kojo-lang`，5 模块）：
-  `request.ts`（语言分派）/ `definition.ts` / `symbols.ts` / `plugin.ts` / `index.ts`；
-- 语言面库新增 2 模块：`interpolation.ts`（`insideInterpolation` / `insideStringOrComment`，
-  从宿主 `kojo-completion-position.ts` 搬出后原样 re-export）+ `definition.ts`（`kojo2DefinitionAt`）；
+- 新包 `packages/plugins/kojo-lang`（`@kojo/plugin-kojo-lang`，6 模块）：
+  `request.ts`（语言分派）/ `definition.ts` / `symbols.ts` / `inlay.ts` / `plugin.ts` / `index.ts`；
+- 语言面库新增 4 模块：`interpolation.ts`（`insideInterpolation` / `insideStringOrComment`，
+  从宿主 `kojo-completion-position.ts` 搬出后原样 re-export）+ `definition.ts`（`kojo2DefinitionAt`）
+  + `inlay.ts`（`kojo2InlayHints` 全量纯函数段，412 行）+ `adapter-source.ts`（见下）；
 - **宿主侧「只挂点名的槽腿」新机制**：`LanguageDescriptor.slotServices`（additive）+
   `registerForLanguageServices(monaco, register, kind?)` 的第三个参数。kojo2 声明
-  `slotServices: ['documentSymbol']` ⇒ 那枚 provider 由共享收口挂上，供方是插件；
-- **删掉的宿主装配行**：`globalDisposers.push(installKojo2DocumentSymbolProvider(monaco))`。
-  2.0 大纲从此没有宿主原生实现；
+  `slotServices: ['documentSymbol', 'inlayHint']` ⇒ 那两枚 provider 由共享收口挂上，供方是插件；
+- **删掉的宿主装配行**：`installKojo2DocumentSymbolProvider` 与 `installKojo2InlayHintsProvider`。
+  2.0 大纲与行内提示从此都没有宿主原生实现；
+- **契约 additive 一格**：`EditorInlayHint.kind?: 'type' | 'parameter' | 'text'`，缺省 = `parameter`
+  （与补这一格之前**逐字相同**，既有贡献方零改动）；
+- **`@kojo/kojo-lang/adapter-source`**（B2 期发现的死结，见下「adapter 为什么不能走 `game.adapter`」）；
 - 门禁改动（都是"接线变了、取证点跟着变"，不是放宽）：`language-ux-matrix.test.ts` 的
   `shared` 档位判据从"descriptor 全铺"改成"全铺 **或** 点名了这一格"（`sharedReachable`）；
-  `kojo2-structure-gate.test.ts` 反向钉住"装配层不再出现 `installKojo2DocumentSymbolProvider`"。
+  `kojo2-structure-gate.test.ts` 反向钉住"装配层不再出现 `installKojo2DocumentSymbolProvider`"；
+  `kojo-symbols.test.ts` 的装配断言从两门改三门（ERB / `.kojo` / kojo2）。
 
-**B2 为什么只做了 2/5**（诚实记账，别当成做完了）：
+**adapter 为什么不能走 `game.adapter`**（B2c 的设计发现，别改回去）：
+
+`@巡` 的命名集合绑定名只住在 2.0 `GameAdapter` 里。插件想拿它，最自然的路是
+`ctx.tryInject('game.adapter')`——但那条路是断的，两个原因各自独立、都致命：
+
+1. **全仓没有任何插件 provide 过 `game.adapter`**。v1 adapter 只往**槽**（`ui.game.adapter`）
+   里注册，而插件读不到槽里的东西（槽是"给宿主装配用的"，不是服务）；
+2. **即使拿到，类型也不是一个**。`@kojo/plugin-api` 的 `GameAdapter` 是 v1 形状
+   （`gameId` / `displayName`），2.0 的 `GameAdapter` 住 `@kojo/kojo-core`
+   （`id` / `eventCatalog` / `kojo2.foreachCollections`）。混用是编译错误，不是"差不多能用"。
+
+于是新增 `@kojo/kojo-lang/adapter-source`：一张模块级登记表
+（`registerKojo2AdapterSource(getter)` / `kojo2AdapterNow()` / `kojo2AdapterSourceCount()`），
+范式照抄既有的 `ui/kojo2-expand-compile.ts`。宿主组合根在 `ensureGlobalProviders` 里登记，
+插件在**请求时**现取（不在 `activate` 时缓存——adapter 可能比插件晚激活，且项目开闭会换人）。
+
+三条口径写进文件头注：零登记零行为（不猜）/ 请求时现取 / 后登记优先、注销只撤自己。
+测试 `packages/kojo-lang/tests/adapter-source.test.ts`（7 项）钉住这几条。
+
+**B2 为什么只做了 3/5**（诚实记账，别当成做完了）：
 | 没接 | 拦路的是什么 | 归哪批 |
 |---|---|---|
 | `references` | 判据在 `kojo2-references.ts`（1390 行），运行期依赖 `kojo2-project-index`（677 行），后者 import 宿主的 `ui/kojo2-flag` | B3（开关随 `programFeatures` 进 SDK 时一起搬） |
 | `foldingRange` | 判据要 worker 客户端（`tree-sitter/kojo2-worker-runtime` 的 `folds` 查询），而包**不许有 IO / worker**。正解是把"折叠区间"变成 worker 的**纯数据回复**、包只做后处理 | B3（与 B4 的 Monarch 一起，因为都动 worker 边界） |
-| `inlayHint` | 判据在 `kojo2-inlay.ts`（551 行），混着 Monaco 类型 + `ui/editor-options` 的 `LARGE_FILE_LINES` + cutover 开关 | B3 |
 | `definition`（已写但**未挂**） | 判据已搬、插件已贡献，但宿主还没把 kojo2 的 definition 腿切到槽上——2.0 的转定义带**展开视图**（`expand-view.ts` 的 `via === 'definition'` 两条追加落点），而编译成品住在宿主的模块级登记表 `ui/kojo2-expand-compile.ts` 里。正解是把它做成一个服务（`kojo2.expandCompile`）让插件 `optionalRequires`，**不能**让插件去 import 宿主模块 | B3 第一步 |
+
+**B2c 补记：inlayHint 那条腿怎么走通的**（2026-10-24）：
+
+原方案说 inlay 的拦路虎是"混着 Monaco 类型 + `LARGE_FILE_LINES` + cutover 开关"。实际切了之后
+发现三者都能干净分开，而且分开**本来就是对的**：
+
+| 混在一起的东西 | 拆成什么 | 为什么这么归 |
+|---|---|---|
+| Monaco 的 `InlayHint` / `InlayHintKind` 枚举 | 契约的 `EditorInlayHint` / `EditorInlayHintKind` | 语言包不该认识 Monaco；翻译是宿主的活 |
+| `LARGE_FILE_LINES` 的体量降级 | **留在宿主**，包与插件都不看 | "多少行以上不给提示"是产品决策（同一条线还管粘性滚动 / 面包屑 / codeLens），不是语言事实 |
+| cutover 开关（`ui/kojo2-flag`） | **不搬**——开关决定"挂不挂这枚 provider"，属于装配层 | 判据函数本身不需要知道自己是第几版语法 |
+| adapter 事实 | 经 `adapter` 参数由调用方注入 | 保持 `kojo2InlayHints` 是纯函数（同输入必同输出） |
+
+宿主 `kojo2-inlay.ts` 因此从 551 行降到 175 行（只剩 `toMonacoInlayHints` +
+`installKojo2InlayHintsProvider`，判据 re-export 回包）。包侧新增 412 行，插件侧 100 行。
 
 **B1 刻意没搬的三块**（初版方案列了 7 个文件 / 3.2k 行，实测只有 5 个能干净搬走）：
 

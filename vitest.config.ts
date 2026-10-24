@@ -22,6 +22,8 @@ export const config = defineConfig({
       '@kojo/kojo-lang/expand-view': r('./packages/kojo-lang/src/expand-view.ts'),
       '@kojo/kojo-lang/symbols': r('./packages/kojo-lang/src/symbols.ts'),
       '@kojo/kojo-lang/definition': r('./packages/kojo-lang/src/definition.ts'),
+      '@kojo/kojo-lang/inlay': r('./packages/kojo-lang/src/inlay.ts'),
+      '@kojo/kojo-lang/adapter-source': r('./packages/kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang': r('./packages/kojo-lang/src/index.ts'),
       '@kojo/kojo-conformance': r('./packages/kojo-conformance/src/index.ts'),
       '@kojo/kojo-project-kit': r('./packages/kojo-project-kit/src/index.ts'),

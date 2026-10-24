@@ -49,14 +49,18 @@ const ALLOWED_PACKAGES = new Set([
   '@kojo/kojo-lang/constants',
   '@kojo/kojo-lang/definition',
   '@kojo/kojo-lang/symbols',
+  '@kojo/kojo-lang/inlay',
+  '@kojo/kojo-lang/adapter-source',
+  // 只取**类型** `GameAdapter`（2.0 adapter 的形状住 core，与 plugin-api 的 v1 形状不同）。
+  '@kojo/kojo-core',
 ]);
 
 describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO / 零游戏知识）', () => {
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // request / definition / symbols / plugin / index
-    expect(files).toHaveLength(5);
+    // request / definition / symbols / inlay / plugin / index
+    expect(files).toHaveLength(6);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

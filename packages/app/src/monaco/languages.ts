@@ -85,9 +85,9 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
  * - **不声明 `languageServices`**：通用双注册那 11 枚 provider 是 v1 语义的供方，挂到
  *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 的 provider 由各枚 `installKojo2*`
  *   自建、各自只认 `kojo2` 语言 id）；声明面由 `capabilities` 与闸门负责；
- * - **`slotServices`（B2 起）**：只点名**确实已由插件接管**的那几条腿。今天只有
- *   `documentSymbol` —— 2.0 的原生大纲 provider 已在 B2 批删除，唯一供方是
- *   `@kojo/plugin-kojo-lang`。其余能力（折叠 / 悬停 / 补全 / 引用 / inlay）仍由各枚
+ * - **`slotServices`（B2 起）**：只点名**确实已由插件接管**的那几条腿。今天是
+ *   `documentSymbol`（B2）与 `inlayHint`（B2c）——这两条的原生 provider 已在对应批次删除，
+ *   唯一供方都是 `@kojo/plugin-kojo-lang`。其余能力（折叠 / 悬停 / 补全 / 引用）仍由各枚
  *   `installKojo2*` 自建，**不能**在这里提前声明：声明了就是挂上一枚没人应答的空
  *   provider，而折叠那枚的空结果会顶掉 Monaco 的缩进折叠；
  * - **不声明 `structure`**：`monaco/tree-sitter/kojo2-runtime.ts` 只导出主线程单例
@@ -106,7 +106,7 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   label: 'kojo2',
   matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO2_SOURCE_EXTENSION,
   register: registerKojo2Language,
-  slotServices: ['documentSymbol'],
+  slotServices: ['documentSymbol', 'inlayHint'],
   capabilities: KOJO2_CAPABILITIES,
 };
 

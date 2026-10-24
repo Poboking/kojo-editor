@@ -8,4 +8,5 @@
 export { createKojoLangPlugin } from './plugin';
 export { provideDefinition } from './definition';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
+export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';

@@ -25,6 +25,7 @@ import type {
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
 import { isErbDialectPath, resolveSugarTarget } from '@kojo/plugin-api';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
@@ -151,17 +152,22 @@ const sortedLanguages = (rs: readonly Registration[]): string[] => rs.map((r) =>
 
 /* ---------------------------------------- ① 注册面 ---------------------------------------- */
 
-describe('W6 · 三面各一枚 provider 挂两门语言（开关因此必然是编辑器级）', () => {
-  it('codeLens / inlayHint / semanticToken 的两次注册是**同一个对象引用**', () => {
+describe('W6 · 三面各一枚 provider 挂多门语言（开关因此必然是编辑器级）', () => {
+  it('codeLens / inlayHint / semanticToken 的多次注册是**同一个对象引用**', () => {
     const a = stubMonaco();
     installCodeLensProvider(a.monaco, { resolve: () => [], navigate: () => undefined });
     installInlayHintsProvider(a.monaco, { resolve: () => [] });
     installSemanticTokensProvider(a.monaco, { resolve: () => [] });
     expect(sortedLanguages(a.lens)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
-    expect(sortedLanguages(a.hints)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    // B2c：kojo2 的 descriptor 点名了 `slotServices: ['inlayHint']`，共享收口于是也给它挂上
+    // **同一枚** provider（供方是插件）。这里跟着变的是"几门语言"，不是"几枚 provider"——
+    // 所以下面那三条 `toBe` 的判据（同一对象引用）一个字没改。
+    expect(sortedLanguages(a.hints)).toEqual(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
+    );
     expect(sortedLanguages(a.semantic)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
     expect(a.lens[0]!.provider).toBe(a.lens[1]!.provider);
-    expect(a.hints[0]!.provider).toBe(a.hints[1]!.provider);
+    expect(new Set(a.hints.map((r) => r.provider)).size).toBe(1);
     expect(a.semantic[0]!.provider).toBe(a.semantic[1]!.provider);
   });
 
@@ -174,7 +180,8 @@ describe('W6 · 三面各一枚 provider 挂两门语言（开关因此必然是
     h2.dispose();
     h3.dispose();
     expect(disposed.filter((d) => d.startsWith('lens:'))).toHaveLength(2);
-    expect(disposed.filter((d) => d.startsWith('hints:'))).toHaveLength(2);
+    // 三门语言 ⇒ 三次注册，dispose 一次全收回（多挂一门不许留孤儿订阅）
+    expect(disposed.filter((d) => d.startsWith('hints:'))).toHaveLength(3);
     expect(disposed.filter((d) => d.startsWith('semantic:'))).toHaveLength(2);
     expect(disposed).toContain(`command:${CODE_LENS_COMMAND}`);
   });

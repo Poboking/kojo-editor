@@ -22,6 +22,7 @@ import type { Kernel } from '@kojo/kernel';
 // 具体实例由宿主组合根注入，本文件既不 import 任何 adapter 包，也不认识任何游戏名词。
 import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
 import { activeGameAdapter, errorText, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
+import { registerKojo2AdapterSource } from '@kojo/kojo-lang/adapter-source';
 import type {
   EditorCodeAction,
   EditorDocumentSymbol,
@@ -1435,6 +1436,28 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
   // 置位只为挡住同一批挂载里的重入；抛错路径由下面 catch 撤回（见模块内"全有或全无"注）。
   globalsInstalled = true;
   const kojo2Adapter = options.kojo2Adapter;
+  /**
+   * B2c：把 2.0 adapter 的来源**登记进语言面库**（`@kojo/kojo-lang/adapter-source`）。
+   *
+   * 为什么要有这一行：`game.adapter` 槽里那枚是 v1 契约对象（没有 `eventCatalog` /
+   * `kojo2.foreachCollections`），而那个**服务键**全仓没有任何插件 provide 过——
+   * 于是插件（`@kojo/plugin-kojo-lang`）在"要 2.0 adapter 事实"这件事上无路可走。
+   * 登记表是那条路：宿主是唯一持有者，交出一枚 getter，插件在请求时问一次。
+   *
+   * 与 `kojo2Adapter` 注入面**同源**（同一个 `options`）：一处登记，两条腿（宿主自己的
+   * provider 与插件）拿到的是**同一枚实例**。注销挂在全局 disposer 上，卸载后不留登记。
+   */
+  if (kojo2Adapter !== undefined) {
+    // 登记表交回的是**注销函数**（`() => void`），这里包成 `IDisposable` 与其余句柄同形。
+    const unregister = registerKojo2AdapterSource(() => {
+      try {
+        return kojo2Adapter() ?? null;
+      } catch {
+        return null;
+      }
+    });
+    globalDisposers.push({ dispose: unregister });
+  }
   try {
     // 💡 CodeAction 宿主适配（槽 `ui.editor.codeAction`，P3b）：宿主只做 Monaco 协议
     // 转换（registerCodeActionProvider），动作产出全在插件（纯函数 provideActions）；
@@ -1686,12 +1709,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
           kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
         ),
       );
-      globalDisposers.push(
-        installKojo2InlayHintsProvider(
-          monaco,
-          kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
-        ),
-      );
+      // B2c（2026-10-24）：2.0 的 inlay hints 原生注册**已删除** —— 它现在由
+      // `installInlayHintsProvider` 那一枚槽腿挂上（kojo2 descriptor 声明了
+      // `slotServices: ['inlayHint']`），应答来自插件 `@kojo/plugin-kojo-lang`。
+      // adapter 事实经 `@kojo/kojo-lang/adapter-source` 的登记表交给插件（见本函数开头）。
       globalDisposers.push(
         installKojo2CodeLensProvider(monaco, {
           getFilePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,

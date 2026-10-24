@@ -10,11 +10,23 @@
  * 4. **大纲树**：`container` 组树、父恒在前、坏 `container` 退顶层（不静默丢结构）；
  * 5. **类别映射**：2.0 的十种符号压到契约的四个中性类别，**每一种都有归宿**
  *    （漏一种会静默变成 `declaration`，大纲图标从此全是同一个）；
- * 6. **插件装配**：两枚贡献都注册、id 稳定、只注册一次。
+ * 6. **提示类别映射**：包里三种语言语义（类型 / 绑定 / 表档）→ 契约三种画法
+ *    （`type` / `parameter` / `text`）。**必须三档互不相同**——塌成一档的表现是
+ *    "表档摘要被画成形参色"，作者会以为那是个参数；
+ * 7. **adapter 注入**：命名集合的绑定名只能来自 adapter，注入才给、不注入不猜；
+ * 8. **插件装配**：三枚贡献都注册、id 稳定、只注册一次。
  */
 import { describe, expect, it } from 'vitest';
 import type { PluginContext } from '@kojo/plugin-api';
-import { createKojoLangPlugin, isKojo2Request, provideDefinition, provideDocumentSymbols, symbolFactsToTree } from '../src/index';
+import type { GameAdapter } from '@kojo/kojo-core';
+import {
+  createKojoLangPlugin,
+  isKojo2Request,
+  provideDefinition,
+  provideDocumentSymbols,
+  provideInlayHints,
+  symbolFactsToTree,
+} from '../src/index';
 
 const SOURCE = [
   '// 夹具：两幕 + 表 + 池 + 模 + 函 + 织，覆盖全部有结构的种类',
@@ -149,8 +161,89 @@ describe('组树（symbolFactsToTree）', () => {
   });
 });
 
+describe('inlayHint 供方', () => {
+  /** 夹具：三种提示各一行（类型 / 表档 / 绑定） */
+  const INLAY_SOURCE = [
+    '# 变量 队伍 整数[3]',
+    '# 表 心情 由 恋慕',
+    '    0..99 疏远',
+    '    否 未知',
+    '@巡 队伍',
+  ].join('\n');
+
+  function inlayRequest(over: Record<string, unknown> = {}) {
+    return {
+      kind: 'inlayHint' as const,
+      path: 'D:/proj/a.kojo2',
+      text: INLAY_SOURCE,
+      project: null,
+      languageId: 'kojo2',
+      ...over,
+    } as never;
+  }
+
+  /** 只造 `@巡` 提示要读的两格；其余 adapter 字段与提示无关（cast 保测试短） */
+  function fakeAdapter(
+    collections: readonly { readonly name: string; readonly bindings: readonly string[] }[],
+    arrayRule: { readonly bindings: readonly string[] } | null = null,
+  ): GameAdapter {
+    return { id: 'test', foreachCollections: { collections, arrayRule } } as unknown as GameAdapter;
+  }
+
+  const labelOf = (hints: readonly { label: string }[], needle: string): string | undefined =>
+    hints.find((h) => h.label.includes(needle))?.label;
+
+  it('三种语言语义各自落到不同的画法（塌成一档 = 表档摘要被画成形参色）', () => {
+    const hints = provideInlayHints(inlayRequest())!.hints;
+    const kinds = new Set(hints.map((h) => h.kind));
+    expect(hints).toHaveLength(3);
+    expect(kinds).toEqual(new Set(['type', 'parameter', 'text']));
+    // 逐个钉：类型 → type、绑定 → parameter、表档 → text
+    expect(hints.find((h) => h.label === '整数[3]')?.kind).toBe('type');
+    expect(hints.find((h) => h.label.startsWith('{'))?.kind).toBe('parameter');
+    expect(hints.find((h) => h.label.includes('档'))?.kind).toBe('text');
+  });
+
+  it('坐标与 label 原样透传（`lineNumber` → `line`，零换算）', () => {
+    const hints = provideInlayHints(inlayRequest())!.hints;
+    const type = hints.find((h) => h.kind === 'type')!;
+    expect(type.line).toBe(1);
+    // `# 变量 队伍 整数[3]` 共 13 个字符 ⇒ 提示压在末字之后第 14 列（1 基）
+    expect(type.column).toBe(14);
+    expect(type.label).toBe('整数[3]');
+  });
+
+  it('`paddingLeft` 只在为真时写出（缺省 = 不写，与补 kind 之前逐字一致）', () => {
+    const hints = provideInlayHints(inlayRequest())!.hints;
+    expect(hints.every((h) => h.paddingLeft === true)).toBe(true);
+    expect(hints.every((h) => 'paddingRight' in h)).toBe(false);
+  });
+
+  it('没有 adapter ⇒ 本文件声明的数组照给默认绑定名（`{值} {下标}`），不猜命名集合', () => {
+    const hints = provideInlayHints(inlayRequest())!.hints;
+    expect(labelOf(hints, '{')).toBe('{值} {下标}');
+  });
+
+  it('注入 adapter ⇒ 命名集合用 adapter 的绑定名（`{角} {名}`）', () => {
+    const adapter = fakeAdapter([{ name: '队伍', bindings: ['角', '名'] }]);
+    const hints = provideInlayHints(inlayRequest(), { adapter })!.hints;
+    expect(labelOf(hints, '{')).toBe('{角} {名}');
+  });
+
+  it('adapter 明确不支持 `@巡`（`foreachCollections = null`）⇒ 本文件数组也不给', () => {
+    const adapter = { id: 'test', foreachCollections: null } as unknown as GameAdapter;
+    const hints = provideInlayHints(inlayRequest(), { adapter })!.hints;
+    expect(labelOf(hints, '{')).toBeUndefined();
+  });
+
+  it('不是 2.0 的请求 / 不是 inlayHint ⇒ undefined（弃权）', () => {
+    expect(provideInlayHints(inlayRequest({ languageId: 'erb' }))).toBeUndefined();
+    expect(provideInlayHints({ kind: 'definition' } as never)).toBeUndefined();
+  });
+});
+
 describe('插件装配', () => {
-  it('注册两枚贡献，id 稳定、order 相同', () => {
+  it('注册三枚贡献，id 稳定、order 相同', () => {
     const registered: { slot: string; item: { id: string; order?: number } }[] = [];
     const ctx = {
       pluginId: 'kojo-lang',
@@ -165,7 +258,7 @@ describe('插件装配', () => {
 
     createKojoLangPlugin().activate(ctx);
 
-    expect(registered.map((r) => r.item.id)).toEqual(['kojo2-definition', 'kojo2-symbols']);
+    expect(registered.map((r) => r.item.id)).toEqual(['kojo2-definition', 'kojo2-symbols', 'kojo2-inlay']);
     expect(registered.every((r) => r.slot === 'ui.editor.languageService')).toBe(true);
     expect(new Set(registered.map((r) => r.item.order)).size).toBe(1);
   });

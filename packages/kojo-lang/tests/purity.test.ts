@@ -50,8 +50,9 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
     // constants / name-chars / interpolation / declarations / sourcemap / expand-view /
-    // symbols / definition / index（B2 加了 interpolation + definition 两枚）
-    expect(files).toHaveLength(9);
+    // symbols / definition / inlay / adapter-source / index
+    //（B2 加 interpolation + definition，B2c 加 inlay + adapter-source）
+    expect(files).toHaveLength(11);
   });
 
   it('只依赖 @kojo/kojo-core，其余一律是本包内相对路径', () => {

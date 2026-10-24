@@ -38,3 +38,5 @@ export * from './sourcemap';
 export * from './expand-view';
 export * from './symbols';
 export * from './definition';
+export * from './inlay';
+export * from './adapter-source';

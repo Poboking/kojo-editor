@@ -15,7 +15,9 @@
     "./sourcemap": "./src/sourcemap.ts",
     "./expand-view": "./src/expand-view.ts",
     "./symbols": "./src/symbols.ts",
-    "./definition": "./src/definition.ts"
+    "./definition": "./src/definition.ts",
+    "./inlay": "./src/inlay.ts",
+    "./adapter-source": "./src/adapter-source.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*"

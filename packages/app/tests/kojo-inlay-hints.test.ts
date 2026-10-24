@@ -7,6 +7,11 @@
  * 不同文本保留）；(c) 越界行**丢弃**（不夹取）与列夹到行尾、Monaco 形状（Parameter 种类、
  * tooltip / paddingLeft 缺省不出现）；(d) 注册 ERB + `.kojo` 两门语言、注册与回收成对、
  * resolve 抛错退空不崩。**宿主零判据**：这里没有一条断言认识「形参槽」是什么意思。
+ *
+ * B2c（2026-10-24）起注册面是**三门**语言：kojo2 的 descriptor 点名了
+ * `slotServices: ['inlayHint']`，共享收口于是也给它挂上同一枚 provider（供方是插件
+ * `@kojo/plugin-kojo-lang`）。断言的意图（"注册面拉平、判据全在 resolve 里逐次现判"）
+ * 不变，变的只是数量——所以这里跟着改数字，**不是**放宽。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -16,6 +21,7 @@ import type {
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
 } from '@kojo/plugin-api';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
@@ -162,12 +168,14 @@ describe('installInlayHintsProvider · 注册与回收', () => {
     ),
   };
 
-  it('ERB + `.kojo` 两门语言同供方（注册面拉平，W6）；dispose 成对', () => {
+  it('ERB / `.kojo` / kojo2 三门语言同供方（注册面拉平，W6）；dispose 成对', () => {
     const { monaco, subs, providers, languageIds } = stubMonaco();
     const disposer = installInlayHintsProvider(monaco, handlers);
-    // 判据全在 `resolve` 里逐次现判 ⇒ 注册面多一门语言零代价，`.kojo` 不必回来改这里
-    expect([...languageIds].sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
-    expect(providers).toHaveLength(2);
+    // 判据全在 `resolve` 里逐次现判 ⇒ 注册面多一门语言零代价，`.kojo` / kojo2 都不必回来改这里
+    expect([...languageIds].sort()).toEqual(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
+    );
+    expect(providers).toHaveLength(3);
     disposer.dispose();
     expect(subs.every((s) => s.disposed)).toBe(true);
   });

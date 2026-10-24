@@ -812,6 +812,15 @@ export interface EditorInlayHintRequest extends EditorDocumentIdentity {
 }
 
 /**
+ * 行内提示的**语义类别**（additive，B2c 2026-10-24）。
+ *
+ * 值域刻意只有三格，且与 Monaco `InlayHintKind` 的语义一一对应（`type` / `parameter` /
+ * 无颜色），因为它的**唯一用途**就是让宿主挑一种颜色——多一格就得在宿主里加一张映射表，
+ * 而那张表迟早会与 Monaco 的枚举打架。
+ */
+export type EditorInlayHintKind = 'type' | 'parameter' | 'text';
+
+/**
  * 一条行内提示：画在 `line:column` 所指字符**之前**的一小段文本。
  *
  * 坐标为**模型坐标**（1 基行、1 基 UTF-16 码元列），与 `EditorSemanticTokenSpan` 同一
@@ -827,6 +836,14 @@ export interface EditorInlayHint {
   readonly tooltip?: string;
   /** 提示与前方文字之间留空（Monaco `paddingLeft`；缺省 = 不留） */
   readonly paddingLeft?: boolean;
+  /**
+   * 语义类别（**additive 可选**，B2c）：宿主据此选 `InlayHintKind`（决定颜色 / 图标）。
+   *
+   * 为什么需要它：宿主那条槽腿此前**对全部提示硬写 `Parameter`**——那对 ERB 的形参名
+   * 是对的，对 kojo2 的"类型提示"就是假话（`# 变量 好感度 整数` 行尾那个 `整数` 不是形参）。
+   * 缺省 = `parameter`，与补这一格之前**逐字相同**（旧供方零改动，旧宿主零改动）。
+   */
+  readonly kind?: EditorInlayHintKind;
 }
 
 /** 行内提示响应；空数组 = 认这个文件但这篇没有可证明的提示 */

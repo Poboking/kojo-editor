@@ -641,7 +641,10 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
     // 应答来自插件 `@kojo/plugin-kojo-lang`。取证点随之从"那枚原生 provider"变成
     // "两处声明"：能力名进 `registerForLanguageServices`、语言进 descriptor。
     { rel: 'monaco/kojo-symbols.ts', re: /'documentSymbol',\s*\)/ },
-    { rel: 'monaco/languages.ts', re: /slotServices:\s*\['documentSymbol'\]/ },
+    // 判据是"这个数组里含 `documentSymbol`"，**不是**整条数组逐字相等：B2c 加了
+    // `'inlayHint'` 之后，钉死整条只会让"多接管一条腿"这件事变成红——而多接管正是本方案
+    // 的方向。真该红的是"把 documentSymbol 从这个数组里拿掉"。
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'documentSymbol'/ },
   ],
   breadcrumb: [
     { rel: 'ui/breadcrumb-path.ts', re: /export function crumbLevelsAt\(/ },

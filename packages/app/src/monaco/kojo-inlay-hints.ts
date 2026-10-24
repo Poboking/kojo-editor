@@ -93,6 +93,28 @@ export function collectInlayHints(
  * 这一改动是把 provider 拉回它一直在实现的接口形状。
  * 不给 `range`（老的直接调用方 / 单测）= 整篇照旧交回，行为与本批前逐字一致。
  */
+/**
+ * 契约的中性类别 → Monaco `InlayHintKind`（**唯一映射表**）。
+ *
+ * 缺省 = `Parameter`：这是补 `kind` 这一格**之前**宿主对所有提示硬写的值，保持它等于
+ * 保持旧供方的显示不变（ERB 的形参名提示正是这一档）。`text` 映射成 `undefined` =
+ * 不带类别 ⇒ Monaco 用默认样式（没有"文本类"这个枚举，硬借邻居的颜色是假信息）。
+ */
+function inlayKindOf(
+  monaco: typeof Monaco,
+  kind: EditorInlayHint['kind'],
+): Monaco.languages.InlayHintKind | undefined {
+  const K = monaco.languages.InlayHintKind;
+  switch (kind) {
+    case 'type':
+      return K.Type;
+    case 'text':
+      return undefined;
+    default:
+      return K.Parameter;
+  }
+}
+
 export function toMonacoInlayHints(
   monaco: typeof Monaco,
   model: Monaco.editor.ITextModel,
@@ -110,7 +132,9 @@ export function toMonacoInlayHints(
     out.push({
       position: { lineNumber: line, column },
       label: hint.label,
-      kind: monaco.languages.InlayHintKind.Parameter,
+      // B2c：供方给了类别就用它的（kojo2 的类型提示是 `Type`），缺省仍是 `Parameter`
+      // ——与补这一格之前逐字相同，ERB 的供方零改动。
+      kind: inlayKindOf(monaco, hint.kind),
       ...(hint.tooltip !== undefined ? { tooltip: hint.tooltip } : {}),
       ...(hint.paddingLeft === true ? { paddingLeft: true } : {}),
     });
@@ -155,5 +179,11 @@ export function installInlayHintsProvider(monaco: typeof Monaco, handlers: Inlay
       return { hints: toMonacoInlayHints(monaco, model, hints, range), dispose: () => undefined };
     },
   };
-  return registerForLanguageServices(monaco, (m, id) => m.languages.registerInlayHintsProvider(id, provider));
+  // B2c：带上能力名 —— 声明了 `slotServices: ['inlayHint']` 的语言（kojo2）也挂这一枚。
+  // 它的供方是插件 `@kojo/plugin-kojo-lang`，宿主侧零原生实现。
+  return registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerInlayHintsProvider(id, provider),
+    'inlayHint',
+  );
 }

@@ -57,6 +57,8 @@ export default defineConfig({
       '@kojo/kojo-lang/expand-view': r('../kojo-lang/src/expand-view.ts'),
       '@kojo/kojo-lang/symbols': r('../kojo-lang/src/symbols.ts'),
       '@kojo/kojo-lang/definition': r('../kojo-lang/src/definition.ts'),
+      '@kojo/kojo-lang/inlay': r('../kojo-lang/src/inlay.ts'),
+      '@kojo/kojo-lang/adapter-source': r('../kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang': r('../kojo-lang/src/index.ts'),
       '@kojo/kernel': r('../kernel/src/index.ts'),
       '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
