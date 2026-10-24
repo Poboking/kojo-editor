@@ -370,7 +370,9 @@ describe('CLI：SKIP / 用法 / 退出码', () => {
     // 快路省的是**载入**（core 桶单体冷载 63.6s），不是另写一份报告——所以这里对拍的是全文，
     // 不是"都包含语料不在位"这种松判据。人话档与 --json 档各自对拍一遍。
     const reason = 'node tools/corpus.mjs --print rc=1：盘上未发现语料';
-    for (const argv of [['corpus'], ['corpus', '--json']] as const) {
+    // 别写 `as const`：两枚元组会收成联合，`argv.includes('--json')` 的参数被窄化成字面 'corpus'
+    const invocations: readonly (readonly string[])[] = [['corpus'], ['corpus', '--json']];
+    for (const argv of invocations) {
       const result = run([...argv], new MemoryIo(), {
         resolveRoot: () => ({ ok: false, dir: null, reason }),
       });

@@ -162,10 +162,12 @@ const probPart = (scope: ParentNode | null | undefined, sev: 'error' | 'warning'
 
 const sum = (ns: readonly number[]): number => ns.reduce((a, b) => a + b, 0);
 
-/** store 里那位（`#e06c75`）落到行上应该长成的样子——DOM 会归一成 rgb */
-function rgbOf(hex: string): string {
-  const n = BigInt(`0x${hex.slice(1)}`);
-  return `rgb(${(n >> 16n) & 255n}, ${(n >> 8n) & 255n}, ${n & 255n})`;
+/** store 里那位落到行上应该长成的样子——hex 会被 DOM 归一成 rgb，`var(…)` 则原样留在内联样式里 */
+function paintedForms(value: string): string[] {
+  const v = value.toLowerCase();
+  if (v.startsWith('var(')) return [v];
+  const n = BigInt(`0x${v.slice(1)}`);
+  return [v, `rgb(${(n >> 16n) & 255n}, ${(n >> 8n) & 255n}, ${n & 255n})`];
 }
 
 /** 树侧三层各自合计（组标题行 / 包标题行 / 文件行）：三处必等 */
@@ -212,9 +214,9 @@ describe('单条文件行徽标 · 平铺那条腿（FileRows → FileRow）', (
     expect(probPart(badge, 'warning')?.textContent).toContain('1');
     // L10 图标批：读数格里的图标是注册表 SVG（error/warning），不再是 `✕`/`⚠` 字形
     expect(probPart(badge, 'error')?.querySelector('svg.icon')).not.toBeNull();
-    // 配色仍取自 store 的 SEVERITY_TINT（行这一腿不许自带色值；DOM 可能把 hex 归一成 rgb）
+    // 配色仍取自 store 的 SEVERITY_TINT（行这一腿不许自带色值；token 档原样是 var(…)，hex 档可能被归一成 rgb）
     const painted = ((badge?.firstElementChild as HTMLElement).style.color ?? '').toLowerCase();
-    expect(painted).oneOf([SEVERITY_TINT.error.toLowerCase(), rgbOf(SEVERITY_TINT.error).toLowerCase()]);
+    expect(paintedForms(SEVERITY_TINT.error)).toContain(painted);
   });
 
   it('只有 info 的文件不在行上开口（那一档面板表头本来就在说）', async () => {
