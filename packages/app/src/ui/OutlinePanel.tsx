@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
+import { KitCount, KitEmpty } from '../ui-kit';
 import { Icon, type IconName } from './icons';
 import { readJumpProbe } from './jump-to-state';
 import {
@@ -33,7 +34,8 @@ import '../outline-panel.css';
  * - `editor.activeFileChanged`（sticky）⇒ 立即读（关闭最后一个标签时也要回到空态）。
  *
  * 空态一律**可见**（铁律 4）：没有文件 / 语言服务没答 / 糖视图行号不可用 / 文件里
- * 确实没有符号，各给一句人话，绝不静默留白。
+ * 确实没有符号，各给一句人话，绝不静默留白。四句文案走 `ui-kit` 的统一空态件
+ * `KitEmpty`（标题 + 引导两句），不再是一坨裸灰字。
  *
  * ## 折叠（1023 缺口批）
  *
@@ -49,7 +51,7 @@ import '../outline-panel.css';
  * - **只折有子节点的行**：叶子行折了什么都不变，这种 id 进集合等于一份看不见的脏状态；
  *   渲染侧与菜单侧都先问 `outlineHasChildren`。
  *
- * ## 样式（批次十一 L11 收编）
+ * ## 样式（批次十一 L11 收编 · L19 二轮）
  *
  * 住 `../outline-panel.css`（此前整片内联硬编码 `fontSize: 12` / px padding / 12px 每级
  * 缩进，绕开类系统与 token）。行密度取文件树同一档（22px 行高 / 缩进步进同值口径），
@@ -57,15 +59,51 @@ import '../outline-panel.css';
  * 像素步进算式在 CSS。悬停高亮改由 CSS `:hover` 承担——不再为"鼠标在哪一行"起一份
  * React state（旧 `hoverId` 每移一行就重渲一次，且与 `:hover` 是同一件事的两份真源）；
  * 当前行以 `is-active` 类挂进行容器，折叠指示 / 占位 / 回执条同理全部走类。
+ *
+ * L19 二轮补的四件（都只在**这一只面板**里，不新增持久化、不进内核）：
+ * - **缩进步进吃 `--space-*`**：步进 = `--space-3 + --space-0`（14px，与文件树
+ *   `--tree-indent` 同值但由刻度组成），并在缩进带里画**层级导轨**
+ *   （1px 竖线 / `var(--border)`，悬停与当前行提到 `--border-strong`）。
+ *   导轨与 L16 给文件树做的是**同一口径、两份实现**（各自 CSS 切片，合流时由组长收一枚
+ *   全局 `--indent-step` / `--tree-guide`）；本路**不**共用它的代码。
+ * - **当前符号行 = 四条通道**：左边条（形状）+ 行尾一枚 `target` 图标（形状，色盲可读）
+ *   + 名字抬一档字重 + `--active` 底（色），并落 `aria-current="location"`（读屏）。
+ *   记号挂在**行尾**而不是行首 ⇒ 缩进带、箭头、名字的 x 坐标一律不动，光标走动不跳字。
+ * - **折叠箭头走注册图标名**：`chevron-down` / `chevron-right`（与 ProblemPanel 同一条腿，
+ *   字符箭头绝迹——判据形态照 `problem-panel-ux.test.ts`，本路的钉法在
+ *   `outline-panel-fold.test.ts` 的「箭头方向跟着状态走」那一条）。
+ * - **顶部读数**：`屏上 N / 共 M` 一枚 `KitCount`，纯从 `rows` 与 `visibleRows` 现算，
+ *   不落盘、不进 kernel、不与折叠状态争真源（折叠只影响"屏上"那一半）。
  */
 
 /** 文档改动后的补读延迟：排在面包屑 250ms 重算之后，直接复用它的树缓存 */
 const OUTLINE_DOC_REFRESH_MS = 300;
 
-const NO_FILE_HINT = '还没有打开文件——在左侧打开一份口上文件，大纲会列在这里。';
-const DERIVED_HINT = '现在是转出来的写法视图，行号对不上原文件——按 Ctrl+Alt+T 切回原代码再看大纲。';
-const NO_SYMBOLS_HINT = '语言服务还没给出这份文件的符号——稍等片刻，或切回原代码再试。';
-const EMPTY_TREE_HINT = '这份文件里还没有可列出的符号。';
+/**
+ * 空态文案两档（`KitEmpty` 的 title / hint）：标题承担"这里为什么是空的"，
+ * 引导承担"那我能做什么"。四句各对应一条**可见**事实（铁律 4），绝不静默留白。
+ */
+interface OutlineNotice {
+  readonly title: string;
+  readonly hint: string;
+}
+
+const NO_FILE_NOTICE: OutlineNotice = {
+  title: '还没有打开文件',
+  hint: '在左侧打开一份口上文件，大纲会列在这里。',
+};
+const DERIVED_NOTICE: OutlineNotice = {
+  title: '现在是转出来的写法视图',
+  hint: '行号对不上原文件——按 Ctrl+Alt+T 切回原代码再看大纲。',
+};
+const NO_SYMBOLS_NOTICE: OutlineNotice = {
+  title: '语言服务还没给出这份文件的符号',
+  hint: '稍等片刻，或切回原代码再试。',
+};
+const EMPTY_TREE_NOTICE: OutlineNotice = {
+  title: '这份文件里还没有可列出的符号',
+  hint: '大纲只列语言服务给出的符号；空文件、只有注释的文件都会落在这里。',
+};
 
 export interface OutlinePanelProps {
   readonly kernel: Kernel;
@@ -78,7 +116,7 @@ interface OutlineViewState {
   readonly symbols: readonly EditorDocumentSymbol[] | null;
   readonly rows: readonly OutlineRow[];
   readonly activeIndex: number;
-  readonly notice: string | null;
+  readonly notice: OutlineNotice | null;
   /** 等值键：位点动了但大纲视觉没变 ⇒ 不 setState */
   readonly key: string;
   /** 文档形态（路径 + 行序键）：折叠状态的归属标记，形一变折叠集即作废 */
@@ -136,15 +174,15 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
     const probe = readJumpProbe();
     let next: Omit<OutlineViewState, 'key' | 'shape'>;
     if (!probe) {
-      next = { path: null, symbols: null, rows: [], activeIndex: -1, notice: NO_FILE_HINT };
+      next = { path: null, symbols: null, rows: [], activeIndex: -1, notice: NO_FILE_NOTICE };
     } else if (probe.derivedView) {
-      next = { path: probe.path, symbols: null, rows: [], activeIndex: -1, notice: DERIVED_HINT };
+      next = { path: probe.path, symbols: null, rows: [], activeIndex: -1, notice: DERIVED_NOTICE };
     } else if (probe.symbols === null) {
-      next = { path: probe.path, symbols: null, rows: [], activeIndex: -1, notice: NO_SYMBOLS_HINT };
+      next = { path: probe.path, symbols: null, rows: [], activeIndex: -1, notice: NO_SYMBOLS_NOTICE };
     } else {
       const rows = buildOutlineRows(probe.symbols);
       if (rows.length === 0) {
-        next = { path: probe.path, symbols: probe.symbols, rows, activeIndex: -1, notice: EMPTY_TREE_HINT };
+        next = { path: probe.path, symbols: probe.symbols, rows, activeIndex: -1, notice: EMPTY_TREE_NOTICE };
       } else {
         next = {
           path: probe.path,
@@ -156,7 +194,9 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
       }
     }
     const rowsKey = outlineRowsKey(next.rows);
-    const key = `${next.path ?? ''}\u0000${next.notice ?? ''}\u0000${next.activeIndex}\u0000${rowsKey}`;
+    // 空态文案是一份对象：等值键必须取它的**文字**，否则同一棵空态每次刷新都会 setState
+    const noticeKey = next.notice === null ? '' : `${next.notice.title}\u0001${next.notice.hint}`;
+    const key = `${next.path ?? ''}\u0000${noticeKey}\u0000${next.activeIndex}\u0000${rowsKey}`;
     if (key === lastRef.current.key) return;
     // 形状只认"路径 + 行序"：光标在同一份文档里走动不该把作者的折叠掀开
     const committed: OutlineViewState = { ...next, key, shape: `${next.path ?? ''}\u0000${rowsKey}` };
@@ -240,6 +280,12 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
   const activeId = state.activeIndex >= 0 ? rows[state.activeIndex]?.id ?? null : null;
 
   /**
+   * 顶部读数的第二半（L19）：折着的支数。它是 `collapsed` 的**派生值**，不是第三份状态——
+   * 折叠集本身只活在面板实例里（不落盘、不进 kernel），读数跟着它一起复位。
+   */
+  const foldedCount = collapsed.size;
+
+  /**
    * 菜单侧的行投影（与 DOM 同一序、同一份 `state.rows`）。
    *
    * 复制项的回执走 `notice` 一条**独立**的短命提示行（不抢空态那句：空态是常驻事实，
@@ -300,8 +346,16 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
 
   const body =
     state.notice !== null ? (
+      // 空态一律可见（铁律 4）：本体走 ui-kit 的 KitEmpty（图标 + 标题 + 引导两句）。
+      // 外面这层 div 只服务两件事：`data-outline-empty` 是既有测试与右键面的锚点，
+      // `outline-empty` 给它在面板里的落位（内衬 / 居中），不承担文案样式。
       <div data-outline-empty="" className="outline-empty">
-        {state.notice}
+        <KitEmpty
+          variant="stack"
+          title={state.notice.title}
+          hint={state.notice.hint}
+          icon={<Icon name="structure" size="md" />}
+        />
       </div>
     ) : (
       <div role="tree" aria-label="大纲" className="outline-tree">
@@ -319,8 +373,9 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
               key={row.id}
               role="none"
               className={active ? 'outline-row is-active' : 'outline-row'}
+              data-outline-cursor={active ? '' : undefined}
               {...{ [OUTLINE_ROW_ATTR]: '', [OUTLINE_ROW_ID_ATTR]: row.id }}
-              // 缩进只递"第几级"这一个无单位数字，像素步进与档位都在 outline-panel.css 里
+              // 缩进只递"第几级"这一个无单位数字，像素步进、导轨与档位全在 outline-panel.css 里
               style={{ '--outline-depth': row.depth } as CSSProperties}
             >
               {foldable ? (
@@ -337,7 +392,8 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
                     foldRows([row.id], !folded);
                   }}
                 >
-                  {folded ? '▸' : '▾'}
+                  {/* 折叠箭头 = 注册图标名（与 ProblemPanel 同一条腿），字符箭头已清零 */}
+                  <Icon name={folded ? 'chevron-right' : 'chevron-down'} size="xs" />
                 </button>
               ) : (
                 // 叶子行留同宽占位：名字不会因为"有没有子节点"而左右跳
@@ -350,6 +406,7 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
                 className="outline-row__body"
                 aria-level={row.depth + 1}
                 aria-selected={active}
+                aria-current={active ? 'location' : undefined}
                 aria-expanded={foldable ? !folded : undefined}
                 title={title}
                 onClick={() => {
@@ -361,6 +418,13 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
                 </span>
                 <span className="outline-row__name">{name}</span>
                 {row.detail !== null ? <span className="outline-row__detail">{row.detail}</span> : null}
+                {/* 当前符号行的**形状**记号（靶心图标）：挂在行尾靠右，缩进带与名字一律不动位。
+                    底色 / 左条 / 字重 / 这枚形状 = 四条通道，色觉障碍只靠形状也能认出"光标在这行"。 */}
+                {active ? (
+                  <span aria-hidden="true" className="outline-row__cursor">
+                    <Icon name="target" size="xs" />
+                  </span>
+                ) : null}
               </button>
             </div>
           );
@@ -370,6 +434,22 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
 
   return (
     <div data-context-surface="outline" className="outline-panel">
+      {/* 顶部读数：`屏上 N`（折叠会缩短这一半）+ `共 M`（全量行数）。纯派生、零持久化——
+          折叠状态本身仍是批次十那条"纯视图状态"，这里只是把它读出来给作者看。 */}
+      {state.notice === null && rows.length > 0 ? (
+        <div className="outline-panel__meta" data-outline-meta="">
+          <span className="outline-panel__meta-label">符号</span>
+          <KitCount
+            value={visibleRows.length}
+            max={rows.length}
+            tone={foldedCount > 0 ? 'accent' : 'neutral'}
+            title={`屏上 ${visibleRows.length} / 共 ${rows.length} 个符号`}
+          />
+          {foldedCount > 0 ? (
+            <span className="outline-panel__meta-note">折了 {foldedCount} 支</span>
+          ) : null}
+        </div>
+      ) : null}
       {body}
       {/* 复制回执（菜单动作的唯一可见反馈）：与空态那句分开——一个是常驻事实，一个是刚发生的事 */}
       {flash !== null ? (
