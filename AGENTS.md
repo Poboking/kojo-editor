@@ -39,6 +39,7 @@ node tools/smoke-tauri-dom.mjs   # DOM 冒烟（弹窗 ~100s 自动关）
 node tools/smoke-tauri-ipc.mjs   # 真实 IPC 双闸 a–e（不传参即按内容自动发现语料目录——名字会变，以 KOJO_CORPUS_DIR 为准；也可 "C:\path\to\语料" 显式传；自动还原 store/文件/备份；~2min）
 # 编辑器调试模式（2026-10-24 调试模式批）——多 agent 无桌面壳的体感/UI/功能验证通道：
 node tools/debug-cli.mjs serve   # 拉起「调试宿+vite+浏览器(CDP)」，打印编辑器 URL（agent 内置浏览器直接开；--headless 无头）
+node tools/debug-cli.mjs shell   # 起一台**真桌面壳**带 CDP——启动相位/无边框/窗口几何这类壳专属改动 Web 宿复现不了，用这个验
 node tools/debug-cli.mjs <子命令> # open-project <目录> [--writable] · open-file <片段> · commands/run <id>（命令面板全量入口）· state · dom · events · eval · invoke · click/type/key · screenshot <png> · status · stop
 node tools/debug-web-smoke.mjs   # 无头浏览器端到端冒烟（欢迎页→开项目→开文件→Monaco→命令表→事件→截图；没浏览器 rc=2）
 # 调试模式的使用手册 + 开发规范（唯一真源）：docs/DEBUG-MODE.md——**扩展调试模式前必读其 §五**；

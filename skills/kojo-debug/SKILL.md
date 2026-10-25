@@ -29,6 +29,8 @@ description: >-
 # 1) 拉起整套（调试宿 + vite + 无头浏览器 + CDP），前台驻留，打印编辑器 URL
 node tools/debug-cli.mjs serve --headless          # 真人看屏去掉 --headless；只读挂真实语料加 --readonly "<语料目录>"
 #    ↑ 这条会占住终端；另开终端跑下面的子命令。要测保存链路：把样例复制进它打印的 sandbox 再 open-project 那份
+# 1b) 改的是**壳专属**东西（启动相位 / 无边框 / 窗口几何 / 真 Tauri IPC）？Web 宿复现不了——改用真壳：
+#     node tools/debug-cli.mjs shell   # 真桌面壳带 CDP；子命令照用；验启动相位本身加 --no-debug-api
 # 2) （可选）用自己的浏览器打开它打印的 URL——人与 agent 看同一屏
 # 3) 驱动
 node tools/debug-cli.mjs open-project <目录> [--writable]   # 真实点击链路开项目（对话框自动应答+写权限审批）

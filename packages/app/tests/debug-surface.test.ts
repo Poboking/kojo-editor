@@ -58,6 +58,13 @@ describe('web 调试宿 · 选入解析（显式选入是唯一闸）', () => {
     });
   });
 
+  it('?kojo-debug=api ⇒ 只装调试面、不切 web 宿路由（真桌面壳通道，invoke 仍走真 IPC）', () => {
+    expect(resolveWebHostConfig('?kojo-debug=api', null)).toBeNull();
+    // 不回归：常规选入形态不受影响
+    expect(resolveWebHostConfig('?kojo-debug=1', null)).toEqual({ origin: 'http://127.0.0.1:17777' });
+    expect(resolveWebHostConfig('?kojo-debug=api', 'http://127.0.0.1:19004')).toBeNull();
+  });
+
   it('normalizeOrigin：尾斜杠剥掉、裸端口补回环、非法形态拒绝', () => {
     expect(normalizeOrigin('http://127.0.0.1:1/')).toBe('http://127.0.0.1:1');
     expect(normalizeOrigin('5173')).toBe('http://127.0.0.1:5173');

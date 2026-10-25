@@ -28,7 +28,8 @@ const STORAGE_KEY = 'kojoDebugHost';
 /**
  * 解析调试宿配置（纯函数，可单测）。
  *
- * 优先级：URL `kojo-debug` 参数（`1` / `true` = 默认 origin；否则按 origin 解析，
+ * 优先级：URL `kojo-debug` 参数（`1` / `true` = 默认 origin；`api` = **只装调试面、
+ * 不切 web 宿路由**——真桌面壳里用，invoke 仍走真 Tauri IPC；否则按 origin 解析，
  * 支持 `17777` 端口号形态）> localStorage `kojoDebugHost`。都没有 ⇒ null（不选入）。
  */
 export function resolveWebHostConfig(search: string, storage: string | null): WebHostConfig | null {
@@ -41,6 +42,7 @@ export function resolveWebHostConfig(search: string, storage: string | null): We
   }
   const raw = (params.get('kojo-debug') ?? '').trim();
   if (raw === '' || raw === '1' || raw === 'true') return { origin: DEFAULT_ORIGIN };
+  if (raw === 'api') return null; // 调试面 only：`main.tsx` 见 kojo-debug 键即装载，宿路由不接
   return { origin: normalizeOrigin(raw) ?? DEFAULT_ORIGIN };
 }
 

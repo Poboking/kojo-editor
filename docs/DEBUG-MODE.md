@@ -10,8 +10,9 @@
 | 验证通道 | 工具 | 何时用 |
 |---|---|---|
 | 纯逻辑单测 | `pnpm test`（vitest） | 判据能写成纯函数 / 无 UI |
-| 桌面壳真机 | `tools/smoke-tauri-dom.mjs` / `-ipc.mjs` | 真 Tauri IPC / 真机右键 / 发版判据 |
-| **Web 调试模式（本文件）** | `tools/debug-cli.mjs` + `tools/debug-server.mjs` | **无桌面壳的 agent**；体感 / UI 观感 / 功能链路验证；截图审 UI |
+| **Web 调试模式（本文件主体）** | `tools/debug-cli.mjs serve` + 调试宿 | **无桌面壳的 agent**；体感 / UI 观感 / 功能链路验证；截图审 UI |
+| **真桌面壳通道** | `tools/debug-cli.mjs shell` | 壳专属改动：启动相位 / 无边框 / 窗口几何 / 真 Tauri IPC——Web 调试宿**复现不了**这些，必须起真壳 |
+| 桌面壳真机冒烟 | `tools/smoke-tauri-dom.mjs` / `-ipc.mjs` | 发版判据的一次性全绿（真 IPC / 真机右键） |
 
 Web 调试模式的形态：编辑器在**纯浏览器**里跑（vite dev 页面 + `?kojo-debug=1`），全部宿主命令
 （Rust 那侧的 36 条）由本机 Node 调试宿镜像，页内有 `window.__kojoDebug` 调试面，外面有 CLI 全命令行驱动。
@@ -83,6 +84,23 @@ bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snap
   常驻根 ∪ `register_write_domain` 登记根；域外一律显式报错。对话框＝policy 自动应答（**不开放任意目标路径参数**，
   与铁律 6 同向）；`export_file` 落 sandbox/exports 并回全路径。
 
+## 四b、真桌面壳模式（shell）——壳专属改动的验证通道
+
+```bash
+node tools/debug-cli.mjs shell              # 起真壳（tauri dev）带 CDP；默认把 webview 导航到 ?kojo-debug=api
+node tools/debug-cli.mjs state / commands / eval / screenshot …   # 全套子命令照用（同会话房间）
+node tools/debug-cli.mjs stop
+```
+
+- **`?kojo-debug=api` 形态**：只装 `__kojoDebug` 调试面、**不切** web 宿路由——`invoke` 走**真 Tauri IPC**
+  （实测 `app_data_dir` 回真 `%APPDATA%`）。`?kojo-debug=1` 仍是 web 宿形态，两者别混。
+- 与 serve 互斥（同一会话房间同时只挂一套）；`--isolate` 换 `.smoke` 身份（多台壳并发时避免
+  同 identifier 的 0x8007139F）；`--no-debug-api` 保持 pristine boot——**验启动相位本身**用这个
+  （默认的导航注入会重放开机流程）；冷 cargo 构建首次会久（预算 `KOJO_DEBUG_SHELL_BOOT_MS`，默认 300s）。
+- 边界：CDP 看不到 OS 窗口框——无边框 / 窗口几何的判据以**截图 + DOM**（窗口 chrome 模块的属性）为准；
+  目录选择是原生对话框无法自动应答，`open-project` 在 shell 模式走「最近项目」行（没有最近项目时如实报）。
+- 与 smoke-tauri-dom 的分工：那是发版判据一次性冒烟；这是可驻留、可逐步驱动（eval/events/screenshot）的会话。
+
 ## 五、开发规范（扩展调试模式前必读）
 
 1. **产品路径零语义变化**：`?kojo-debug` 未选入时，`invoke.ts` / `search.ts` / `tauri-bridge.ts`
@@ -117,6 +135,8 @@ bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snap
 
 | 症状 | 先查 |
 |---|---|
+| 壳专属改动（启动相位 / 无边框 / 窗口几何）验不了 | 那本来就不归 Web 调试宿——`debug-cli.mjs shell` 起真壳带 CDP（§四b）；验启动相位本身加 `--no-debug-api` |
+| shell 起不来 / 起来就退（0x8007139F） | 同 identifier 的壳在并发——加 `--isolate`；或 1420 被占（KOJO_SMOKE_VITE_PORT 换口） |
 | **量到别人的树**（端口/模块 URL/插件数与本树不符） | 会话已按工作树隔离（PITFALLS 192 已修）：先 `status` 核首行「会话＝<键>（<本树路径>）」；不对就是接管了显式 env 指到的别人的会话。多树并发无需再手工 `KOJO_DEBUG_HOME`，但**旧版工具写的全局 session.json 仍会被旧代码读到**——各树先更新到带隔离的版本 |
 | serve 中途挂 / 某件套没了 | `status` 的「退出记录」带每个子进程的退出码与时间（serve 输出同步打）；宿侧已加大堆（`--max-old-space-size=4096`，重检索 OOM 的主嫌疑）并有 uncaught 落日志不静默死——重检索把 2325 文件全扫约 10 分钟后挂（exit 13）是本条立规的实测 |
 | 点击全被挡 / 白红页 | `eval` 查 `vite-error-overlay` 在不在＝陈旧错误盖屏，`location.reload()` 即清（新 workspace 包没 `pnpm install` 链上时会出现，PITFALLS 192③） |

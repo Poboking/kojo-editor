@@ -13,6 +13,11 @@
  *   serve [--sandbox DIR] [--readonly DIR]... [--vite-port N] [--port N] [--cdp-port N]
  *         [--browser <exe>] [--headless] [--no-browser] [--record] [--fresh]
  *         # 拉起整套（调试宿 + vite + 浏览器）；前台驻留，Ctrl+C 全收
+ *   shell [--cdp-port N] [--isolate] [--no-debug-api] [--record]
+ *         # 起一台**真桌面壳**（tauri dev）带 CDP——无边框/启动相位/窗口几何这类
+ *         # 壳专属改动 Web 调试宿复现不了，用这个验；页面注入 ?kojo-debug=api
+ *         # 调试面（invoke 走真 Tauri IPC）。--isolate 换 .smoke 身份（多壳并发），
+ *         # --no-debug-api 保持 pristine boot（验启动相位本身）
  *   status                     # 三件套健康 + 页面相位
  *   stop                       # 收掉整套（按 pid 收，端口兜底）
  *   url                        # 编辑器 URL（浏览器 / agent 直接开这个）
@@ -52,6 +57,7 @@ import {
   sleep,
   waitFor,
 } from './debug-lib.mjs';
+import { devTarget, recentOpenRowSel } from './smoke-lib.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const DEBUG_DIR = debugHome();
@@ -114,6 +120,16 @@ async function cdpForSession(session, { mustHavePage = true } = {}) {
 
 async function cmdServe(args) {
   fs.mkdirSync(SESS_DIR, { recursive: true });
+  // 会话房间互斥：web / shell 同树同一时刻只挂一套（真壳与调试宿会抢 vite/端口语义）
+  try {
+    const prev = JSON.parse(await fsp.readFile(SESSION_FILE, 'utf-8'));
+    die(
+      `本工作树已有会话在跑（mode=${prev.mode ?? 'web'}，起于 ${prev.createdAt}）——先 node tools/debug-cli.mjs stop`,
+      2,
+    );
+  } catch (err) {
+    if (err?.code !== 'ENOENT') die(`读旧会话失败：${err?.message ?? err}`, 2);
+  }
   const session = {
     createdAt: new Date().toISOString(),
     sessionId: sessionKey(REPO),
@@ -318,15 +334,144 @@ async function recordConsole(session) {
   line(`=== console 记录开始（页面 ${session.url}）===`);
 }
 
+/* ------------------------------ 真桌面壳通道（shell） ------------------------------ */
+
+/**
+ * 起一台**真桌面壳**（tauri dev）并带上 CDP（2026-10-25 agent 反哺落点）：
+ * 启动页 / 无边框 / 逐相位窗口几何这类**壳专属改动**在 Web 调试宿里复现不了——
+ * 无壳的 agent 要验它们，只能起真壳。本命令把「真壳 + CDP + `?kojo-debug=api` 调试面」
+ * 接进同一套会话（state/commands/eval/screenshot/events 全部照用，invoke 走真 Tauri IPC）。
+ *
+ * 与 smoke-tauri-dom 的分工：那是发版判据的一次性冒烟；这是可驻留、可逐步驱动的会话。
+ * 壳专属的窗口几何读数以截图 + DOM 为准（CDP 看不到 OS 窗口框本身）。
+ */
+async function cmdShell(args, flags) {
+  fs.mkdirSync(SESS_DIR, { recursive: true });
+  // 一个会话房间同一时刻只挂一套：web / shell 互斥，先把旧会话的存亡问清
+  try {
+    const prev = JSON.parse(await fsp.readFile(SESSION_FILE, 'utf-8'));
+    die(
+      `本工作树已有会话在跑（mode=${prev.mode ?? 'web'}，起于 ${prev.createdAt}）——` +
+        `先 node tools/debug-cli.mjs stop 再起 ${prev.mode === 'shell' ? 'web' : 'shell'}`,
+      2,
+    );
+  } catch (err) {
+    if (err?.code !== 'ENOENT') die(`读旧会话失败：${err?.message ?? err}`, 2);
+  }
+
+  let dev;
+  try {
+    dev = devTarget(REPO, { isolateAppData: flags.includes('--isolate') });
+  } catch (err) {
+    die(`真壳 dev 地址解析失败：${err?.message ?? err}`, 2);
+  }
+  const cdpPort = args.cdpPort ?? await freePort(9223); // 9222 是 smoke 专用，别撞
+  const bootMs = Number(process.env.KOJO_DEBUG_SHELL_BOOT_MS ?? 300000); // 冷 cargo 构建就是要几分钟
+  const session = {
+    mode: 'shell',
+    createdAt: new Date().toISOString(),
+    sessionId: sessionKey(REPO),
+    repoRoot: REPO,
+    cdpPort,
+    vitePort: dev.port,
+    serverPort: null, // 真壳没有调试宿——invoke 走真 Tauri IPC
+    shellPid: null,
+    tauriConfigTemp: dev.tauriArgs[1] ?? null,
+    readonly: [],
+  };
+  const debugApiUrl = `${dev.origin}/?kojo-debug=api`;
+  session.url = debugApiUrl;
+
+  const exits = [];
+  const persist = async () => {
+    await fsp.writeFile(SESSION_FILE, JSON.stringify(session, null, 2), 'utf-8');
+  };
+  const shellCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
+  console.log(`[shell] 起真桌面壳：${shellCmd}（CDP :${cdpPort}；冷 cargo 构建首次会久，预算 ${Math.round(bootMs / 1000)}s）`);
+  const child = spawn(shellCmd, {
+    shell: true,
+    cwd: REPO,
+    env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}` },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  session.shellPid = child.pid;
+  let shuttingDown = false;
+  child.on('exit', (code, signal) => {
+    if (shuttingDown) return;
+    const rec = { name: 'shell', pid: child.pid, code, signal: signal ?? null, at: new Date().toISOString() };
+    exits.push(rec);
+    (session.exits ??= []).push(rec);
+    console.warn(`[shell] ⚠ 真壳进程退出（code=${code} signal=${signal ?? '-'} at=${rec.at}）——status 可见`);
+    void persist().catch(() => {});
+  });
+  child.stdout.on('data', (d) => process.stdout.write(`[shell] ${d}`));
+  child.stderr.on('data', (d) => process.stderr.write(`[shell!] ${d}`));
+
+  const cleanup = async () => {
+    shuttingDown = true;
+    try {
+      if (process.platform === 'win32') spawnSync(`taskkill /PID ${child.pid} /T /F`, { shell: true, stdio: 'ignore' });
+      else child.kill('SIGTERM');
+    } catch {}
+    dev.cleanup();
+    try { await fsp.rm(SESSION_FILE, { force: true }); } catch {}
+  };
+  process.on('SIGINT', () => { console.log('\n[shell] 收会话…'); void cleanup().then(() => process.exit(0)); });
+  process.on('SIGTERM', () => { void cleanup().then(() => process.exit(0)); });
+
+  // 等 CDP 上出现**本 dev 端口**的页面（只看端口通会被别人的壳/浏览器骗过）
+  const t0 = Date.now();
+  let page = null;
+  while (Date.now() - t0 < bootMs) {
+    if (exits.length > 0) {
+      await cleanup();
+      die(`真壳起动窗内退出（code=${exits[0].code}）——端口被占 / cargo 失败 / 同 identifier 并发（0x8007139F 时加 --isolate）`, 1);
+    }
+    page = await cdpPage(cdpPort, dev.port).catch(() => null);
+    if (page) break;
+    await sleep(1000);
+  }
+  if (!page) {
+    await cleanup();
+    die(`真壳 ${Math.round(bootMs / 1000)}s 内没就绪（CDP :${cdpPort} 上没有 :${dev.port} 的页面）——冷 cargo 构建会久，KOJO_DEBUG_SHELL_BOOT_MS 可放宽`, 1);
+  }
+  console.log(`[shell] CDP 就绪 :${cdpPort}（页面在 ${dev.origin}）`);
+
+  // 默认把 webview 导航到 ?kojo-debug=api：调试面在场、invoke 仍走真 Tauri IPC。
+  // 验「启动相位」本身要 pristine boot 的，加 --no-debug-api（导航会重放开机流程）。
+  if (!flags.includes('--no-debug-api')) {
+    const cdp = await new Cdp(page.webSocketDebuggerUrl).connect();
+    await cdp.send('Page.navigate', { url: debugApiUrl });
+    await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 30000, label: '__kojoDebug（api 形态）' });
+    const mode = await cdp.evalJs('__kojoDebug.mode');
+    console.log(`[shell] 调试面在场（mode=${mode}，invoke=真 Tauri IPC）`);
+    if (args.record) void recordConsole(session).catch((err) => console.warn(`[shell] console 记录失败：${err?.message ?? err}`));
+    cdp.close();
+  }
+  await persist();
+
+  console.log('');
+  console.log('✅ 真壳调试会话就绪：');
+  console.log(`   会话       ：${session.sessionId}（mode=shell；会话目录 ${SESS_DIR}）`);
+  console.log(`   页面       ：${session.url}（webview 内，浏览器打开无壳行为属正常）`);
+  console.log('   下一步     ：state · commands · eval · screenshot（窗口几何以截图+DOM 为准）· open-project（走最近项目行）');
+  console.log('   收工       ：Ctrl+C 或 node tools/debug-cli.mjs stop');
+  console.log('');
+  await new Promise(() => {});
+}
+
 /* ------------------------------ 其余子命令 ------------------------------ */
 
 async function cmdStatus() {
   const s = await readSession();
-  const serverOk = await fetch(`http://127.0.0.1:${s.serverPort}/health`, {
-    signal: AbortSignal.timeout(3000),
-  })
-    .then((r) => r.ok)
-    .catch(() => false);
+  const isShell = s.mode === 'shell';
+  const serverOk = isShell
+    ? null // 真壳没有调试宿：invoke 走真 Tauri IPC
+    : await fetch(`http://127.0.0.1:${s.serverPort}/health`, {
+        signal: AbortSignal.timeout(3000),
+      })
+        .then((r) => r.ok)
+        .catch(() => false);
   const viteOk = await portOpen(s.vitePort);
   let pagePhase = null;
   let cdpOk = false;
@@ -359,26 +504,28 @@ async function cmdStatus() {
   console.log(
     JSON.stringify(
       {
-        会话: `${s.sessionId ?? '?'}（${s.repoRoot ?? '?'}）`,
-        调试宿: serverOk ? `✅ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `❌ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
-        vite: viteOk ? `✅ :${s.vitePort} ${childLine('vite', s.vitePid, alive(s.vitePid))}` : `❌ :${s.vitePort} ${childLine('vite', s.vitePid, alive(s.vitePid))}`,
-        浏览器CDP: cdpOk ? `✅ :${s.cdpPort} ${childLine('browser', s.browserPid, alive(s.browserPid))}` : `— ${childLine('browser', s.browserPid, alive(s.browserPid))}`,
+        会话: `${s.sessionId ?? '?'}（${s.repoRoot ?? '?'}${isShell ? ' · mode=shell 真桌面壳' : ''}）`,
+        调试宿: serverOk === null ? '—（mode=shell：真 Tauri IPC，无调试宿）' : serverOk ? `✅ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `❌ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
+        vite: `${viteOk ? '✅' : '❌'} :${s.vitePort}${isShell ? '' : ` ${childLine('vite', s.vitePid, alive(s.vitePid))}`}`,
+        浏览器CDP: cdpOk
+          ? `✅ :${s.cdpPort} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`
+          : `— ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
         页面相位: pagePhase,
         退出记录: (s.exits ?? []).slice(-5),
         URL: s.url,
-        sandbox: s.sandbox,
-        readonly: s.readonly,
+        sandbox: s.sandbox ?? null,
+        readonly: s.readonly ?? [],
       },
       null,
       2,
     ),
   );
-  process.exit(serverOk && viteOk ? 0 : 1);
+  process.exit(serverOk === null ? (viteOk ? 0 : 1) : serverOk && viteOk ? 0 : 1);
 }
 
 async function cmdStop() {
   const s = await readSession();
-  const pids = [s.browserPid, s.vitePid, s.serverPid].filter((p) => typeof p === 'number' && p > 0);
+  const pids = [s.browserPid, s.vitePid, s.serverPid, s.shellPid].filter((p) => typeof p === 'number' && p > 0);
   // serve 形态里三个孩子都是 serve 的子进程：按端口认属主收（Windows taskkill 树杀）
   if (process.platform === 'win32') {
     const ns = spawnSync('netstat -ano', { shell: true, encoding: 'utf8' }).stdout ?? '';
@@ -398,8 +545,12 @@ async function cmdStop() {
   // 兜底：Edge 子进程会逃出树杀（实测锁着 profile ⇒ 目录清不掉）。**只按本会话目录认领**
   // （多 agent 并发下按 debugHome 全局杀会把别人的会话一起收掉——PITFALLS 192 的教训）。
   killProcessesMarked(SESS_DIR);
+  // 真壳会话的临时 tauri 覆盖配置（devTarget 产物）一并清
+  if (s.tauriConfigTemp) {
+    try { await fsp.rm(s.tauriConfigTemp, { force: true }); } catch {}
+  }
   try { await fsp.rm(SESSION_FILE, { force: true }); } catch {}
-  console.log('🧹 调试会话已收（' + (pids.length ? `pid ${pids.join('/')}` : '无存活 pid') + '；会话目录 ' + SESS_DIR + '）');
+  console.log('🧹 调试会话已收（' + (pids.length ? `pid ${pids.join('/')}` : '无存活 pid') + `；mode=${s.mode ?? 'web'}；会话目录 ` + SESS_DIR + '）');
 }
 
 async function withCdp(fn) {
@@ -416,7 +567,9 @@ async function withCdp(fn) {
 async function cmdEval(_, expr) {
   if (!expr) die('eval 需要一个表达式：debug-cli.mjs eval "__kojoDebug.state()"', 2);
   await withCdp(async (s, cdp) => {
-    const v = await cdp.evalJs(expr, 60000);
+    // 自动包 async IIFE：顶层 await（如 `await __kojoDebug.invoke(...)`）也能直接写
+    const wrapped = /^\s*(?:await\s|async\s)/.test(expr) ? `;(async () => (${expr}))()` : expr;
+    const v = await cdp.evalJs(wrapped, 60000);
     console.log(typeof v === 'string' ? v : JSON.stringify(v, null, 2));
   });
 }
@@ -465,25 +618,39 @@ async function cmdOpenProject(args, dir, flags) {
       return;
     }
     // 1) 目录对话框的自动应答（真实点击后 UI 会走 choose_directory → 调试宿按 policy 应答）
-    await fetch(`http://127.0.0.1:${s.serverPort}/policy`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chooseDir: abs }),
-      signal: AbortSignal.timeout(3000),
-    });
+    //    真壳（mode=shell）没有调试宿：目录选择是**原生对话框**无法自动应答——改走最近项目行
+    if (s.mode === 'shell') {
+      const hasRecent = await waitFor(cdp, `!!document.querySelector(${JSON.stringify(recentOpenRowSel)})`, {
+        timeoutMs: 15000,
+        label: '最近项目行（真壳模式）',
+      }).catch(() => false);
+      if (!hasRecent) {
+        die('真壳模式下 open-project 走「最近项目」行，但这台机器的壳 appData 里没有最近项目——先手工开过一次，或用 web 模式（serve）驱动', 2);
+      }
+      await cdpClick(cdp, recentOpenRowSel);
+    } else {
+      await fetch(`http://127.0.0.1:${s.serverPort}/policy`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chooseDir: abs }),
+        signal: AbortSignal.timeout(3000),
+      });
+    }
     // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
     //    （ghost=关闭并记「看过」，同一浏览器档案不会再弹）
     if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
       await cdpClick(cdp, '.dev-note-actions .ghost');
       await sleep(300);
     }
-    // 3) 点「打开项目」卡（欢迎相位）——项目相位（换项目）时走命令面板不适用，直接给显式错
+    // 3) 点「打开项目」卡（欢迎相位）——真壳模式已在第 1 步点了最近项目行，跳过
     const phase = await cdp.evalJs('__kojoDebug.state().phase');
-    if (phase === 'welcome') {
-      await waitFor(cdp, `!!document.querySelector('.welcome-open')`, { timeoutMs: 10000, label: '欢迎页打开按钮' });
-      await cdpClick(cdp, '.welcome-open');
-    } else {
-      die(`当前相位是 ${phase}（已开着别的项目）——先 __kojoDebug.commands.run('workbench.closeProject') 或重启会话`, 2);
+    if (s.mode !== 'shell') {
+      if (phase === 'welcome') {
+        await waitFor(cdp, `!!document.querySelector('.welcome-open')`, { timeoutMs: 10000, label: '欢迎页打开按钮' });
+        await cdpClick(cdp, '.welcome-open');
+      } else {
+        die(`当前相位是 ${phase}（已开着别的项目）——先 __kojoDebug.commands.run('workbench.closeProject') 或重启会话`, 2);
+      }
     }
     // 4) 写权限审批弹窗（出现就按 flags 决定；不出现（只读根）就等树）
     const modal = await waitFor(
@@ -656,7 +823,7 @@ function parseArgs(argv) {
     else if (a === '--port') opts.port = Number(argv[++i]);
     else if (a === '--cdp-port') opts.cdpPort = Number(argv[++i]);
     else if (a === '--browser') opts.browser = argv[++i];
-    else if (a === '--headless' || a === '--no-browser' || a === '--record' || a === '--fresh' || a === '--writable' || a === '--full') flags.push(a);
+    else if (a === '--headless' || a === '--no-browser' || a === '--record' || a === '--fresh' || a === '--writable' || a === '--full' || a === '--isolate' || a === '--no-debug-api') flags.push(a);
     else positional.push(a);
   }
   return { flags, opts, positional };
@@ -673,6 +840,11 @@ const commands = {
       noBrowser: flags.includes('--no-browser'),
       record: flags.includes('--record'),
     }),
+  shell: () =>
+    cmdShell(
+      { ...opts, record: flags.includes('--record') },
+      flags,
+    ),
   status: cmdStatus,
   stop: cmdStop,
   url: async () => { const s = await readSession(); console.log(s.url); },
