@@ -791,6 +791,9 @@ textarea {
   overflow-y: hidden;
   background: var(--bg-2);
   scrollbar-width: none;
+  /* 溢出渐隐（视觉批十六）：右侧压淡 16px 作"还有标签在后面"的信号；滚动与列表入口
+     仍是旁边那组 `.tab-overflow-tools` 的按钮，这里不加计数（数量由列表承担）。 */
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
 .editor-tabs::-webkit-scrollbar {
   display: none;
@@ -3311,14 +3314,17 @@ button.erb-mode-hint.unlocked:hover {
   cursor: default;
 }
 .sb-writable.ro {
-  color: var(--amber);
-  background: rgba(209, 154, 102, 0.12);
-  border-color: rgba(209, 154, 102, 0.35);
+  /* 视觉批十六：只读是**常态**，不再是琥珀大牌——与相邻两枚（项目计数 / 诊断计数）同族：
+     透明底 + 发丝边，只有诊断数按严重度着色。悬停才抬一档，表示「可点去授权」。 */
+  color: var(--fg-dim);
+  background: transparent;
+  border-color: var(--border);
   cursor: pointer;
 }
 .sb-writable.ro:hover {
-  background: rgba(209, 154, 102, 0.2);
-  border-color: rgba(209, 154, 102, 0.55);
+  color: var(--fg);
+  background: var(--hover);
+  border-color: var(--border-strong);
 }
 .sb-idx {
   color: var(--fg-dim);

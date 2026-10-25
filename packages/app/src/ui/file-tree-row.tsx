@@ -50,6 +50,13 @@ export interface TreeProbMarkProps {
   /** 组 / 包两层要"点名谁在报"（超出上限的折进 `more`）；文件行不传 */
   readonly files?: readonly ProbFile[];
   readonly more?: number;
+  /**
+   * 紧凑档（视觉批十六）：**只画状态灯、不画数字**。文件行用它——真壳扫描完成后每行尾挂
+   * `⚠ 55` / `⚠ 910`，整棵树是一列红数字墙，第一眼像"项目坏了"；数字聚合到角色组 / 作者包
+   * 那一层（读树的人在那里决定打开哪一瓶），文件行只留"这里有诊断"的红点，
+   * 精确读数继续在 `title` / `aria-label` 里（悬停与读屏一条不丢）。
+   */
+  readonly compact?: boolean;
 }
 
 /**
@@ -67,6 +74,7 @@ export function TreeProbMark({
   warning,
   files,
   more = 0,
+  compact = false,
 }: TreeProbMarkProps): ReactElement | null {
   if (error + warning === 0) return null;
   // 组 / 包那两层点名到人；超出上限的折成「另 n 个」（展开的作者包动辄几十份文件）。
@@ -90,12 +98,17 @@ export function TreeProbMark({
     >
       {error > 0 ? (
         <span data-prob="error" style={{ color: SEVERITY_TINT.error }}>
-          <Icon name="error" size="xs" /> {error}
+          <Icon name="error" size="xs" />
+          {compact ? null : <> {error}</>}
         </span>
       ) : null}
       {warning > 0 ? (
-        <span data-prob="warning" style={{ color: SEVERITY_TINT.warning }}>
-          <Icon name="warning" size="xs" /> {warning}
+        /* 警告档在树上走**中性色**（视觉批十六 · 真壳实测）：扫描完成后角色组行是
+           `33 ⚠432 / 27 ⚠910` 满屏红字，第一眼像"项目坏了"——警告多是 lint 级提示。
+           语义色里只有错误档保留红；精确读数仍在 title / aria 里。 */
+        <span data-prob="warning" style={{ color: 'var(--fg-dim)' }}>
+          <Icon name="warning" size="xs" />
+          {compact ? null : <> {warning}</>}
         </span>
       ) : null}
     </span>
@@ -147,7 +160,9 @@ export const FileRow = memo(function FileRow({
       onClick={() => onOpenFile(f, { preview: true })}
     >
       {middleEllipsis(baseName(f), TREE_LABEL_MAX)}
-      {prob ? <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} /> : null}
+      {prob ? (
+        <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} compact />
+      ) : null}
     </button>
   );
 });

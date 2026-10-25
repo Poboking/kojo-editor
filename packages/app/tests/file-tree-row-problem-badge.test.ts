@@ -205,15 +205,19 @@ describe('单条文件行徽标 · 平铺那条腿（FileRows → FileRow）', (
     expect(container.querySelectorAll(`${rowsSel} .tree-prob-mark`)).toHaveLength(0);
   });
 
-  it('错误与警告各一枚（error 圈叉红 / warning 三角黄），数字就是 store 那一格', async () => {
+  it('文件行只画状态灯、不挂数字；精确读数在 aria-label / title 里（视觉批十六）', async () => {
     setProblems(F1, [mk(F1, 3, 'error'), mk(F1, 7, 'error'), mk(F1, 9, 'warning')]);
     await mountTree();
     const badge = badgeOf(F1);
     expect(badge).not.toBeNull();
-    expect(probPart(badge, 'error')?.textContent).toContain('2');
-    expect(probPart(badge, 'warning')?.textContent).toContain('1');
-    // L10 图标批：读数格里的图标是注册表 SVG（error/warning），不再是 `✕`/`⚠` 字形
+    // 屏上只有灯（数字聚合到角色组 / 作者包那一层，见 `TreeProbMark.compact`）
+    expect(probPart(badge, 'error')?.textContent?.trim()).toBe('');
+    expect(probPart(badge, 'warning')?.textContent?.trim()).toBe('');
     expect(probPart(badge, 'error')?.querySelector('svg.icon')).not.toBeNull();
+    // 读数一条不丢：读屏与悬停仍拿到 store 那一格
+    const label = badge?.getAttribute('aria-label') ?? '';
+    expect(label).toContain('错误 2');
+    expect(label).toContain('警告 1');
     // 配色仍取自 store 的 SEVERITY_TINT（行这一腿不许自带色值；token 档原样是 var(…)，hex 档可能被归一成 rgb）
     const painted = ((badge?.firstElementChild as HTMLElement).style.color ?? '').toLowerCase();
     expect(paintedForms(SEVERITY_TINT.error)).toContain(painted);
@@ -244,10 +248,12 @@ describe('单条文件行徽标 · 平铺那条腿（FileRows → FileRow）', (
     await mountTree();
     const badge = badgeOf(F2);
     expect(badge).not.toBeNull();
-    expect(probPart(badge, 'error')?.textContent).toContain('1');
-    expect(probPart(badge, 'warning')?.textContent).toContain('1');
+    const label = badge?.getAttribute('aria-label') ?? '';
+    expect(label).toContain('错误 1');
+    expect(label).toContain('警告 1');
     expect(container.querySelectorAll(`button[data-locate="${F2}"]`)).toHaveLength(1);
-    expect(threeFaces().row).toBe(2);
+    // 文件行不挂数字（批十六）：两档灯都在，数字合计为 0
+    expect(threeFaces().row).toBe(0);
   });
 
   it('活订阅：清掉诊断 ⇒ 行徽标当场退场（不重挂树）', async () => {
@@ -260,15 +266,19 @@ describe('单条文件行徽标 · 平铺那条腿（FileRows → FileRow）', (
     expect(badgeOf(F1)).toBeNull();
   });
 
-  it('三层同一个数：组标题行 = 包标题行 = 文件行 = store（三层各说一遍，不是数三遍）', async () => {
+  it('聚合层同一个数：组标题行 = 包标题行 = store；文件行只报"有没有"（视觉批十六）', async () => {
     setProblems(F1, [mk(F1, 1, 'error'), mk(F1, 2, 'error'), mk(F1, 3, 'warning')]);
     setProblems(F3, [mk(F3, 4, 'warning')]);
     await mountTree();
     const faces = threeFaces();
     expect(faces.store).toBe(4);
+    // 目录那两层仍逐档报数（读树的人在那里决定打开哪一瓶）
     expect(faces.group).toBe(faces.store);
     expect(faces.pkg).toBe(faces.store);
-    expect(faces.row).toBe(faces.store);
+    // 文件行：灯在、数字不上屏（aria 里仍是精确读数）
+    expect(faces.row).toBe(0);
+    expect(container.querySelectorAll(`${rowsSel} .tree-prob-mark`)).toHaveLength(2);
+    expect(badgeOf(F3)?.getAttribute('aria-label')).toContain('警告 1');
   });
 });
 
@@ -277,8 +287,8 @@ describe('单条文件行徽标 · DirRows 那条腿（包真实文件夹 / 嵌�
     setProblems(NOTE, [mk(NOTE, 1, 'warning')]);
     setProblems(SUB, [mk(SUB, 2, 'error'), mk(SUB, 3, 'error')]);
     await mountTree();
-    expect(probPart(badgeOf(NOTE), 'warning')?.textContent).toContain('1');
-    expect(probPart(badgeOf(SUB), 'error')?.textContent).toContain('2');
+    expect(badgeOf(NOTE)?.getAttribute('aria-label')).toContain('警告 1');
+    expect(badgeOf(SUB)?.getAttribute('aria-label')).toContain('错误 2');
   });
 
   it('与平铺同级的 ERB 只标一枚（skip 去重那条腿照旧生效，不因徽标翻倍）', async () => {
@@ -303,8 +313,8 @@ describe('过滤态：徽标不少报', () => {
     });
     await flush();
     await flush();
-    // 命中那一行：自己的两条错误一条不少
-    expect(probPart(badgeOf(F1), 'error')?.textContent).toContain('2');
+    // 命中那一行：自己那两条错误的灯在，精确数进 aria（行不挂数字）
+    expect(badgeOf(F1)?.getAttribute('aria-label')).toContain('错误 2');
     // 组标题行：被过滤掉的那份（F3）照样算进来——少报 = 撒谎
     const groupBadge = container.querySelector('button.tree-group-btn .tree-prob-mark');
     expect(groupBadge?.getAttribute('title') ?? '').toContain('错误 3 / 警告 0');

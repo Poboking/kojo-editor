@@ -164,6 +164,7 @@ import {
 } from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
 import { useOverlayPresence } from './overlay-chrome';
+import { projectDirName } from './window-title';
 import { ProblemsStatusItem } from './ProblemPanel';
 // 项目名旁的「更多」菜单（C-1a）：复用全站共享 <ContextMenu>（玻璃观感 + WAI-ARIA 键盘），不另造菜单
 import { ContextMenu, type ContextMenuItem } from './context-menu';
@@ -2370,9 +2371,11 @@ export function ShellLayout(props: Props): ReactElement {
   const toolbar = (
     <header className="toolbar" data-context-surface="toolbar">
       <div className="toolbar-left">
+        {/* 项目位显示**目录名**而不是适配器 id（视觉批十六）：`eratw` 是机器名，
+            作者认不出自己打开的是哪一份；完整路径仍进悬停。取不出目录名才退回 adapterId。 */}
         {commandCtx.project ? (
           <span className="tb-project" title={commandCtx.project.rootDir}>
-            {commandCtx.project.adapterId}
+            {projectDirName(commandCtx.project.rootDir) ?? commandCtx.project.adapterId}
           </span>
         ) : null}
         {onCloseProject ? (
