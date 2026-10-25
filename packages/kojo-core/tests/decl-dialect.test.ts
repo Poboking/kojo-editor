@@ -145,8 +145,38 @@ describe('`# 方言` 的参数对 core 是不透明字符串', () => {
   });
 });
 
-/* ============================== 4. 未知词仍然红 ============================== */
+/* ============================== 3.5 唯一性（2026-10-26 批） ============================== */
 
+describe('`# 方言` 查重：一个文件只断言一个方言', () => {
+  it('两条不同的断言 → `core/decl/multiple-dialect`（error），定位在第二条', () => {
+    const source = `${MACHINE}# 方言 erafl\n# 方言 eratw\n> 正文\n`;
+    const file = parseSource(source);
+    const diagnostic = file.diagnostics.find((item) => item.code === 'core/decl/multiple-dialect');
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.severity).toBe('error');
+    expect(diagnostic?.span?.start.line).toBe(3);
+    // 第一条不报错（不是"两条都红"）
+    expect(file.diagnostics.filter((item) => item.code === 'core/decl/multiple-dialect')).toHaveLength(1);
+  });
+
+  it('同一个名字写两遍也报（解析层只消费单值 `fileAssertion`，重复同样是无意义的第二条）', () => {
+    expect(codesOf(`${MACHINE}# 方言 erafl\n# 方言 erafl\n`)).toEqual(['core/decl/multiple-dialect']);
+  });
+
+  it('一条 / 零条都不报（可选、且只断言一次是常态）', () => {
+    expect(codesOf(`${MACHINE}# 方言 erafl\n> 正文\n`)).toEqual([]);
+    expect(codesOf(`${MACHINE}> 正文\n`)).toEqual([]);
+  });
+
+  it('不与 `# 视` / `# 机` 的查重码混用（各管各的槽）', () => {
+    const codes = codesOf(`${MACHINE}# 视 a\n# 视 b\n# 方言 x\n# 方言 y\n`);
+    expect(codes).toContain('core/decl/multiple-view');
+    expect(codes).toContain('core/decl/multiple-dialect');
+    expect(codes.filter((code) => code === 'core/decl/multiple-dialect')).toHaveLength(1);
+  });
+});
+
+/* ============================== 4. 未知词仍然红 ============================== */
 describe('`方言` 进表后未知声明词的判据不变', () => {
   it('未知 `#` 词 → `core/decl/unknown`，且错误信息把当前词表现场拼出来（无第二份抄本）', () => {
     expect(codesOf('# 未知词 x\n')).toContain('core/decl/unknown');

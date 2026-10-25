@@ -77,6 +77,7 @@ import {
   findTopLevelAssignOp,
   isDecimalIntegerLiteral,
   isIdentifier,
+  isIntegerLiteralText,
   isSpaceCode,
   lex,
   matchParenEnd,
@@ -169,6 +170,8 @@ interface ParserState {
   readonly declKinds: Map<string, string>;
   hasMachine: boolean;
   hasView: boolean;
+  /** `# 方言` 是否已经断言过（解析层只消费单值 `fileAssertion`，第二条起报错） */
+  hasDialect: boolean;
   hasExplicitScene: boolean;
   optionsCount: number;
   loopDepth: number;
@@ -193,6 +196,7 @@ export function parse(input: LexResult): KojoFile {
     declKinds: new Map<string, string>(),
     hasMachine: false,
     hasView: false,
+    hasDialect: false,
     hasExplicitScene: false,
     optionsCount: 0,
     loopDepth: 0,
@@ -725,8 +729,9 @@ function parseViewDecl(st: ParserState, header: KojoDeclRecord): void {
  *
  * - 参数是一个裸名字，core 按不透明字符串收下来交给上层对账；这里**不校验**它是不是
  *   某个已知方言（那会把手伸进方言事实，铁律 3）；
- * - 不进文件命名空间（不叫"声明一个名字"），也不查重——`core/dialect/mismatch`
- *   一族的判据与码都属于方言层，不在本层；
+ * - 不进文件命名空间（不叫"声明一个名字"），但**查重**：解析层只消费单值 `fileAssertion`，
+ *   第二条起必有一条被静默丢弃 ⇒ 报 `core/decl/multiple-dialect`（与 `# 视` 同一族纪律）；
+ *   两条断言是不是"同一个方言"不是本层要回答的——冲突判据（`core/dialect/mismatch`）仍在方言层；
  * - 一行只收一个名字，与 `# 视` 同形。
  */
 function parseDialectDecl(st: ParserState, header: KojoDeclRecord): void {
@@ -748,6 +753,15 @@ function parseDialectDecl(st: ParserState, header: KojoDeclRecord): void {
       spanOfLine(st, header),
     );
   }
+  if (st.hasDialect) {
+    reportSpan(
+      st,
+      'core/decl/multiple-dialect',
+      '一个文件只能写一个 `# 方言`：第二条起会被静默丢弃，写下的断言不算数（§3.3）。',
+      spanOfLine(st, header),
+    );
+  }
+  st.hasDialect = true;
   const decl: KojoDialectDecl = { kind: 'dialect', name: tokens[0]!.text, span: spanOfLine(st, header) };
   st.decls.push(decl);
 }
@@ -781,7 +795,11 @@ function parseTypeToken(st: ParserState, token: KojoCallArg): ParsedType | null 
       if (isDecimalIntegerLiteral(size.text)) {
         const n = decodeIntegerLiteral(size.text);
         if (n === null || n <= 0) {
-          reportSpan(st, 'core/decl/bad-array-size', `数组长度必须是正整数：\`${size.text}\` 不合法（§3.4.2）。`, size.span);
+          const reason =
+            n === null
+              ? `超出安全整数范围（±9007199254740991），会被静默舍入`
+              : `必须是正整数`;
+          reportSpan(st, 'core/decl/bad-array-size', `数组长度${reason}：\`${size.text}\` 不合法（§3.4.2）。`, size.span);
         }
       } else if (!isIdentifier(size.text)) {
         reportSpan(
@@ -801,6 +819,24 @@ function parseTypeToken(st: ParserState, token: KojoCallArg): ParsedType | null 
     spanOfToken(st, token),
   );
   return null;
+}
+
+/**
+ * 整数字面量超出安全整数范围（`decodeIntegerLiteral` 已返 null，但形状确实是整数）。
+ *
+ * 诊断码取既有 `core/expr/bad-literal`：这是"这个字面量本身不能承载"（与 NUL / 未配对代理项
+ * 同一族），不是"这里不是字面量"——所以不能借用 `core/decl/bad-initializer` /
+ * `const-not-constant`（那两条指向的修法是"换成字面量"，而作者写的本来就是字面量）。
+ */
+function reportUnsafeInteger(st: ParserState, text: string, span: KojoSpan): boolean {
+  if (!isIntegerLiteralText(text) || decodeIntegerLiteral(text) !== null) return false;
+  reportSpan(
+    st,
+    'core/expr/bad-literal',
+    `整数字面量 \`${text.trim()}\` 超出安全整数范围（±9007199254740991）：会被静默舍入，不能当常量 / 初值 / 表值（§3.4.3）。`,
+    span,
+  );
+  return true;
 }
 
 function parseLiteralToken(
@@ -825,6 +861,7 @@ function parseLiteralToken(
     }
     return int;
   }
+  if (reportUnsafeInteger(st, token.text, spanOfToken(st, token))) return null;
   reportSpan(
     st,
     code,
@@ -1074,12 +1111,13 @@ function parseTableRow(st: ParserState, line: KojoLexLine): KojoTableRow | null 
   const rangeRaw = text.slice(0, sep);
   const valueRaw = text.slice(valueStart);
   const rowSpan = spanOfLine(st, line);
+  const valueOffset = base + valueStart;
 
   if (rangeRaw === KOJO_TABLE_DEFAULT) {
     if (valueRaw.length === 0) {
       reportSpan(st, 'core/table/empty-default', '`否` 行必须有值：`否 未知`（§6.1）。', rowSpan);
     }
-    return { from: null, to: null, value: decodeTableValue(valueRaw), span: rowSpan };
+    return { from: null, to: null, value: decodeTableValue(st, valueRaw, valueOffset), span: rowSpan };
   }
   if (valueRaw.length === 0) {
     reportSpan(st, 'core/table/value-empty', '表行缺值列：`<范围> <值>`（§6.1）。', rowSpan);
@@ -1094,21 +1132,34 @@ function parseTableRow(st: ParserState, line: KojoLexLine): KojoTableRow | null 
     if (from === null && to === null) {
       reportSpan(st, 'core/table/dynamic-endpoint', '范围两端不能同时为空（写 `500..` / `..100` / `0..100`）。', rowSpan);
     }
-    return { from, to, value: decodeTableValue(valueRaw), span: rowSpan };
+    return { from, to, value: decodeTableValue(st, valueRaw, valueOffset), span: rowSpan };
   }
 
   // 精确值 = 两端同值的退化闭区间（与 C2 `table.ts` 对齐）
   const exact = makeExpr(st, rangeRaw, base);
-  return { from: exact, to: exact, value: decodeTableValue(valueRaw), span: rowSpan };
+  return { from: exact, to: exact, value: decodeTableValue(st, valueRaw, valueOffset), span: rowSpan };
 }
 
-function decodeTableValue(raw: string): KojoLiteral {
+/**
+ * 表值列解码（**会报诊断**：值列里恰好是整数写法、但超出安全整数时，不能静默退化成字符串
+ * ——那会把 `# 表` 的整数列整片改成字符串列，作者读到的只是"类型不一致"）。
+ */
+function decodeTableValue(st: ParserState, raw: string, startOffset: number): KojoLiteral {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return '';
   const quoted = decodeQuotedLiteral(trimmed);
   if (quoted !== null) return quoted;
   const int = decodeIntegerLiteral(trimmed);
   if (int !== null) return int;
+  if (isIntegerLiteralText(trimmed)) {
+    report(
+      st,
+      'core/expr/bad-literal',
+      `整数字面量 \`${trimmed}\` 超出安全整数范围（±9007199254740991）：会被静默舍入，不能当表值（§6.1）。`,
+      startOffset,
+      startOffset + trimmed.length,
+    );
+  }
   return trimmed;
 }
 
@@ -1293,7 +1344,15 @@ function parseFunctionDecl(st: ParserState, header: KojoLexLine): void {
           const int = decodeIntegerLiteral(rawDefault);
           if (quoted !== null) defaultValue = quoted;
           else if (int !== null) defaultValue = int;
-          else {
+          else if (isIntegerLiteralText(rawDefault)) {
+            report(
+              st,
+              'core/expr/bad-literal',
+              `整数字面量 \`${rawDefault.trim()}\` 超出安全整数范围（±9007199254740991）：会被静默舍入，不能当默认值（§7.3）。`,
+              defaultOffset,
+              defaultOffset + rawDefault.length,
+            );
+          } else {
             report(
               st,
               'core/decl/bad-initializer',

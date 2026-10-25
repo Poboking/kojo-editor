@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { ERB_NAME_CHAR_CLASS } from '@kojo/kojo-lang/name-chars';
 import { col0Of, lineAt } from './kojo-completion-position';
 
 /**
@@ -19,12 +20,12 @@ import { col0Of, lineAt } from './kojo-completion-position';
  */
 
 /**
- * 名字字符集（正向定义；ASCII 词字符 + 假名 + 汉字 + 全角字母数字 + 半角片假名）——
- * 与 `erb-completion-functions.ts` 的 ERB 方言口径同集。`$` **不在**集内（`$标签` 的
- * `$` 由 {@link ERB_SIGIL_BEFORE} 排除兜住，否则 `$CF` 会被拼进段而漏网）。
+ * 名字字符集（**ERB 侧唯一一份**，与 `erb-completion-context.ts` 的 `NAME_CHAR_RE` 同源：
+ * 都从 `@kojo/kojo-lang/name-chars` 的 `ERB_NAME_CHAR_CLASS` 派生）。
+ * `$` **不在**集内（`$标签` 的 `$` 由 {@link ERB_SIGIL_BEFORE} 排除兜住，否则 `$CF`
+ * 会被拼进段而漏网）；kojo 侧那份含 `$`（`实参$` 后缀），差异见 name-chars 头注。
  */
-const NAME_CHAR_RE =
-  /[0-9A-Za-z_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\uff66-\uff9f]/;
+const NAME_CHAR_RE = new RegExp(`[${ERB_NAME_CHAR_CLASS}]`);
 
 /**
  * token 起点前一枚字符的**排除集**（防守；这些位置的归属主收口在装配层白名单）：

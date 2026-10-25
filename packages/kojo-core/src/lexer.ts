@@ -95,6 +95,8 @@ const BLANK_LINE_RE = /^[ \t\u3000\u00a0]*$/;
 const UPPER_IDENT_RE = /^[A-Z_][A-Z0-9_]*$/;
 const DECIMAL_INT_RE = /^[+-]?\d+$/;
 const DIGITS_ONLY_RE = /^\d+$/;
+/** 整数字面量形状（十进制 / `0x` / 可选符号；只判形状不判范围，见 `isIntegerLiteralText`） */
+const INTEGER_SHAPE_RE = /^[+-]?(?:0[xX][0-9a-fA-F]+|\d+)$/;
 const IDENTIFIER_RE = /^[\p{L}_][\p{L}\p{N}_]*$/u;
 
 /* ============================== 公共工具（parser 复用） ============================== */
@@ -283,7 +285,15 @@ export function isDecimalIntegerLiteral(text: string): boolean {
   return DECIMAL_INT_RE.test(text);
 }
 
-/** 整数字面量解码：十进制 / `0x` 十六进制 / 可选符号；不是字面量返回 null */
+/**
+ * 整数字面量解码：十进制 / `0x` 十六进制 / 可选符号；不是字面量**或超出安全整数范围**返回 null。
+ *
+ * 为什么卡安全整数：2.0 的 `# 常量` / 表端点 / 数组长度都以 JS `number` 承载，
+ * 超过 `Number.MAX_SAFE_INTEGER` 后 `parseInt` 会**静默舍入**（`12345678901234567890`
+ * ⇒ `12345678901234567000`）——作者写进去的数字与产物不是同一个值。下游（`table.ts`
+ * 端点与整数常量表、等值分派）本来就一律按安全整数校验，闸提前到解码口，超界才会成为
+ * 可诊断的 `null`，而不是一个悄悄变形的数。
+ */
 export function decodeIntegerLiteral(text: string): number | null {
   const t = text.trim();
   if (t.length === 0) return null;
@@ -301,13 +311,23 @@ export function decodeIntegerLiteral(text: string): number | null {
     if (b0 === 48 && (b1 === 120 || b1 === 88)) {
       const hex = body.slice(2);
       if (!/^[0-9a-fA-F]+$/.test(hex)) return null;
-      const v = parseInt(hex, 16);
-      return Number.isFinite(v) ? sign * v : null;
+      const value = sign * parseInt(hex, 16);
+      return Number.isSafeInteger(value) ? value : null;
     }
   }
   if (!DIGITS_ONLY_RE.test(body)) return null;
-  const v = parseInt(body, 10);
-  return Number.isFinite(v) ? sign * v : null;
+  const value = sign * parseInt(body, 10);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/**
+ * 文本是不是**整数字面量形状**（十进制 / `0x` / 可选符号）；只判形状、不判范围。
+ *
+ * 与 {@link decodeIntegerLiteral} 的分工：解码返 `null` 之后用它区分两种成因——
+ * "根本不是字面量"（`abc` / `1.5`）与"是字面量但超安全整数"（诊断文案与修法不同）。
+ */
+export function isIntegerLiteralText(text: string): boolean {
+  return INTEGER_SHAPE_RE.test(text.trim());
 }
 
 /** 双引号字符串字面量解码（支持 `\"` `\\` `\{` `\}`）；不是合法字面量返回 null */

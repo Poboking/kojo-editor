@@ -2,6 +2,7 @@ import type * as Monaco from './entry';
 import type { KojoNameField } from './kojo-completion-position';
 import type { VariableSchema } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { isNameChar } from '@kojo/kojo-lang/name-chars';
 
 /**
  * KC-1 · `.kojo` 插值里的**变量 / 属性补全**（`{她的<前缀>}` / `{你的<前缀>}` /
@@ -16,13 +17,13 @@ import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
  * ⇒ 返回 `[]`，**绝不猜、绝不抛**。
  */
 
-/** 名字字符集（正向定义，排除全角标点/运算符等分隔符；含中日文、全角拉丁、全角数字） */
-const NAME_CHAR_RE =
-  /[0-9A-Za-z_\u00c0-\u024f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\uff66-\uff9f]/;
-
-function isNameChar(ch: string): boolean {
-  return NAME_CHAR_RE.test(ch);
-}
+/**
+ * 名字字符集 = 语言面 `@kojo/kojo-lang/name-chars` 的 {@link isNameChar}（**不另抄一份**）。
+ *
+ * 此前本文件自持一套码位区间，与 ERB 侧 / 语言面各差几格（全角数字 / 兼容汉字 / 半角片假名
+ * 有与没有交错，且多了拉丁补充）⇒ 同一个名字在 kojo 侧被切短、在 ERB 侧切全名。
+ * 统一后两门语言共用一张基表；`.kojo` 多出的只有字符串后缀 `$`（见 name-chars 头注）。
+ */
 
 /** 一次补全的"名字段"位置（0 基区间 + 光标前已输入前缀） */
 interface NameContext {

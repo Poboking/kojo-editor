@@ -1,7 +1,7 @@
 /**
  * 注释文档链接（批次十 S12）单测：
- * 识别只落在注释、相对路径按 model 目录与项目根两路解析、存在性裁决只读、跨根回退、
- * 以及 8 类注释噪音不产出链接。
+ * 识别只落在注释（**行注释起头逐语言**：ERB `;` / kojo2 `//`）、相对路径按 model 目录与
+ * 项目根两路解析、存在性裁决只读、跨根回退，以及 8 类注释噪音不产出链接。
  */
 import { describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
@@ -21,9 +21,17 @@ const WINDOWS_CONTEXT = {
   projectRoot: 'C:\\proj',
 };
 
-function fakeModel(text: string, fsPath: string): Monaco.editor.ITextModel {
+const ERB_LANG = 'kojo-erb';
+const KOJO2_LANG = 'kojo2';
+
+function fakeModel(
+  text: string,
+  fsPath: string,
+  languageId: string = ERB_LANG,
+): Monaco.editor.ITextModel {
   return {
     getValue: () => text,
+    getLanguageId: () => languageId,
     getPositionAt: (offset: number) => {
       const before = text.slice(0, Math.max(0, Math.min(offset, text.length)));
       const lines = before.split('\n');
@@ -62,6 +70,7 @@ async function linksFor(
   text: string,
   host: Omit<DocumentLinksHost, 'existsPath'> & { existsPath?: DocumentLinksHost['existsPath'] },
   fsPath = WINDOWS_CONTEXT.modelPath,
+  languageId: string = ERB_LANG,
 ): Promise<Monaco.languages.ILink[]> {
   const { monaco, registrations } = fakeMonaco();
   installDocumentLinks(monaco, {
@@ -70,7 +79,7 @@ async function linksFor(
   });
   const provider = registrations[0]!.provider;
   const list = await Promise.resolve(
-    provider.provideLinks!(fakeModel(text, fsPath), {
+    provider.provideLinks!(fakeModel(text, fsPath, languageId), {
       isCancellationRequested: false,
       onCancellationRequested: () => ({ dispose: () => undefined }),
     } as unknown as Monaco.CancellationToken) as
@@ -80,41 +89,66 @@ async function linksFor(
   return list.links;
 }
 
-describe('识别范围：注释、URL、相对路径', () => {
-  it('行注释 # / // 与块注释都覆盖，台词行不产链接', () => {
+describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () => {
+  it('ERB：`;` 行注释与块注释都覆盖，`#` 预处理行与台词行不产链接', () => {
     const text = [
-      '# 参考 https://example.com/a?b=1 与 ./data/场景.ERB',
-      '// see ../COMMON.ERB',
+      '; 参考 https://example.com/a?b=1 与 ./data/场景.ERB',
       '/* 块注释 foo\\bar.erb */',
+      '#DIM NAME, 1 ; ./directive.erb', // `#` 是预处理指令，不是注释
       '@口上「https://evil.example/x 与 ./台词.ERB」',
     ].join('\n');
-    const found = extractLinkCandidates(text);
-    expect(found.map((c) => [c.kind, c.text])).toEqual([
+    expect(extractLinkCandidates(text, 'erb').map((c) => [c.kind, c.text])).toEqual([
       ['url', 'https://example.com/a?b=1'],
       ['path', './data/场景.ERB'],
-      ['path', '../COMMON.ERB'],
       ['path', 'foo\\bar.erb'],
     ]);
   });
 
-  it('块注释跨行仍识别路径，ERB 行首分号注释也覆盖', () => {
-    const text = ['/* 第一行', ' * ./notes.md', ' */', '; 参考 ./common/COMMON.ERB'].join('\n');
-    expect(extractLinkCandidates(text).map((c) => c.text)).toEqual(['./notes.md', './common/COMMON.ERB']);
+  it('kojo2：整行 `//` 行注释覆盖；`#` 声明行与 `;` 行都不是注释', () => {
+    const text = [
+      '// see ../COMMON.ERB',
+      '# 常量 图 字符串 = "data/立绘.csv"',
+      '; ./legacy.erb',
+      '> 正文里的 ../不认.erb',
+    ].join('\n');
+    expect(extractLinkCandidates(text, 'kojo2').map((c) => c.text)).toEqual(['../COMMON.ERB']);
   });
 
-  it('引号 / 反引号 / 「」「」里的带空格文件名可识别', () => {
-    const text = '# 见 "./data/我的 文件.ERB" 与 `common\\有 空格.erb` 与 「说明 文档.md」';
-    expect(extractLinkCandidates(text).map((c) => c.text)).toEqual([
+  it('`# 常量 图 字符串 = "data/立绘.csv"` 在 kojo2 下零候选（改前是三语并集 ⇒ 长出假链接）', async () => {
+    const text = '# 常量 图 字符串 = "data/立绘.csv"';
+    expect(extractLinkCandidates(text, 'kojo2')).toEqual([]);
+    // 探针全真也不成链（说明是"没被当注释"，不是"存在性没命中"）
+    const links = await linksFor(text, { existsPath: () => true }, WINDOWS_CONTEXT.modelPath, KOJO2_LANG);
+    expect(links).toEqual([]);
+  });
+
+  it('块注释跨行仍识别路径（两种语言同一块注释口径）', () => {
+    const text = ['/* 第一行', ' * ./notes.md', ' */', '; 参考 ./common/COMMON.ERB'].join('\n');
+    expect(extractLinkCandidates(text, 'erb').map((c) => c.text)).toEqual([
+      './notes.md',
+      './common/COMMON.ERB',
+    ]);
+  });
+
+  it('引号 / 反引号 / 「」「」里的带空格文件名可识别（kojo2 注释）', () => {
+    const text = '// 见 "./data/我的 文件.ERB" 与 `common\\有 空格.erb` 与 「说明 文档.md」';
+    expect(extractLinkCandidates(text, 'kojo2').map((c) => c.text)).toEqual([
       './data/我的 文件.ERB',
       'common\\有 空格.erb',
       '说明 文档.md',
     ]);
   });
 
-  it('注释区间只包含注释本身（行尾代码里的 / 不参与）', () => {
-    const spans = scanCommentSpans('# a\nlet x = 1 // 这不是行注释\n/* b */');
-    expect(spans).toHaveLength(2);
-    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb').filter((c) => c.kind === 'path').length).toBe(0);
+  it('行尾 `//` 不是注释（kojo2 只认行首整行注释）', () => {
+    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb', 'kojo2')).toEqual([]);
+    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb', 'erb')).toEqual([]);
+  });
+
+  it('scanCommentSpans 逐语言各一套起头', () => {
+    expect(scanCommentSpans('; a\n// b\n# c', 'erb')).toHaveLength(1);
+    expect(scanCommentSpans('; a\n// b\n# c', 'kojo2')).toHaveLength(1);
+    expect(scanCommentSpans('// a\n# b', 'kojo2')).toHaveLength(1);
+    expect(scanCommentSpans('# a\n; b', 'erb')).toHaveLength(1);
   });
 });
 
@@ -174,7 +208,7 @@ describe('存在性裁决：只读探针、跨根回退、空格回退', () => {
 
 describe('供给器接线：链接形态与命令落点', () => {
   it('URL 用原样 http(s)，相对路径用既有定位命令并收窄区间', async () => {
-    const text = '# 见 ../COMMON.ERB 和 https://example.com/x';
+    const text = '; 见 ../COMMON.ERB 和 https://example.com/x';
     const links = await linksFor(text, {
       projectRoot: () => WINDOWS_CONTEXT.projectRoot,
       existsPath: async (path) => path === 'C:\\proj\\pkg\\COMMON.ERB',
@@ -191,18 +225,25 @@ describe('供给器接线：链接形态与命令落点', () => {
     expect(pathLink.range.endColumn).toBe(5 + '../COMMON.ERB'.length);
   });
 
-  it('只注册 ERB 与 kojo2；不存在的路径不产出链接', async () => {
+  it('只注册 ERB 与 kojo2；不存在的路径不产出链接（两门语言的注释都在供给器里生效）', async () => {
     const { monaco, registrations } = fakeMonaco();
     installDocumentLinks(monaco, { existsPath: () => false, projectRoot: () => 'C:\\proj' });
     expect(registrations).toHaveLength(1);
     expect(registrations[0]!.languages).toEqual(['kojo-erb', 'kojo2']);
-    const links = await linksFor('// ./missing.erb', { existsPath: () => false });
-    expect(links).toEqual([]);
+    expect(await linksFor('; ./missing.erb', { existsPath: () => false })).toEqual([]);
+    // kojo2 的 `//` 行注释经同一个 provider 生效（能走到探针 ⇒ 命中为真时出链接）
+    const hit = await linksFor(
+      '// ./data/one.erb',
+      { existsPath: async (path) => path === 'C:\\proj\\pkg\\a\\data\\one.erb' },
+      WINDOWS_CONTEXT.modelPath,
+      KOJO2_LANG,
+    );
+    expect(hit).toHaveLength(1);
   });
 
   it('非 file 的 model 可由宿主 filePathOf 提供路径', async () => {
     const links = await linksFor(
-      '# ./data/one.erb',
+      '; ./data/one.erb',
       {
         filePathOf: () => WINDOWS_CONTEXT.modelPath,
         projectRoot: () => WINDOWS_CONTEXT.projectRoot,
@@ -224,19 +265,19 @@ describe('供给器接线：链接形态与命令落点', () => {
 
 describe('8 类非链接噪音', () => {
   const noise = [
-    '# 邮箱 foo@example.com',
-    '# 版本 v1.2.3',
-    '# 分数 50/100',
-    '# 时间 12:30',
-    '# 域名 example.com',
-    '# 普通中文词语 你好',
-    '# 指令 #DIM NAME, 1',
-    '# 数学 a+b=c',
+    '; 邮箱 foo@example.com',
+    '; 版本 v1.2.3',
+    '; 分数 50/100',
+    '; 时间 12:30',
+    '; 域名 example.com',
+    '; 普通中文词语 你好',
+    '; 指令 #DIM NAME, 1',
+    '; 数学 a+b=c',
     '@口上 你好//再见',
   ].join('\n');
 
   it('即使存在性探针全部为真，也不把噪音当链接', async () => {
-    expect(extractLinkCandidates(noise)).toEqual([]);
+    expect(extractLinkCandidates(noise, 'erb')).toEqual([]);
     const links = await linksFor(noise, {
       projectRoot: () => WINDOWS_CONTEXT.projectRoot,
       existsPath: () => true,

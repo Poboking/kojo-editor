@@ -3,9 +3,13 @@
  *
  * ## 边界（为什么这样切）
  *
- * - **只认注释**：行注释只认**行首**（首个非空白字符）的 `#` / `//` / `;`，块注释认 `/* … *\/`。
- *   不收行中尾随注释，是为了不把台词里的 `//` 当成注释起点——口上正文才是这个编辑器的主料，
- *   少认一种冷门写法可以接受，误伤一句台词不可接受。块注释的扫描会跳过引号内文本。
+ * - **只认注释**：行注释只认**行首**（首个非空白字符）的注释起头，且**逐语言各一套**
+ *   （{@link LinkLanguage}）：
+ *   - ERB：`;`（Emuera 唯一的行注释；`#` 是预处理指令 `#DIM` / `#FUNCTION`，**不是注释**）；
+ *   - kojo2：整行 `//`（§4.13；`#` 是声明锚，`;` 只允许出现在 `@原生` 里）。
+ *   旧口径把 `#` / `;` / `//` 一律当注释起头（三语并集）⇒ `.kojo2` 的声明行
+ *   `# 常量 图 字符串 = "data/立绘.csv"` 会在字符串上长出可点链接。
+ *   块注释 `/* … *\/` 两门语言都照旧识别（既有行为，本批不动），扫描会跳过引号内文本。
  * - **URL 只认 http(s)**：`DocumentLink.url` 直接交给 Monaco 的 opener（新窗口打开），
  *   不走宿主外链白名单之外的自造通道；其余 `foo://` 一律不当 URL。
  * - **相对路径必须命中磁盘**：按「model 所在目录」→「项目根」两处解析，探针由宿主注入且
@@ -138,12 +142,27 @@ const EXPLICIT_PATH_RE = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/])[^\s'"`「」『』，�
 const PLAIN_FILE_RE = /[^\s\\/'"`「」『』，。；：！？、,;!?]+\.[A-Za-z0-9]{1,8}/g;
 
 /**
- * 扫出整篇文本里的注释区间（块注释可跨行；行注释只认行首）。
+ * 文档语言：链接识别按语言各给一套**行注释起头**（两门语言的注释语法不同，不能取并集）。
+ *
+ * - `'erb'`：`;` 行注释；`#` 是预处理指令（`#DIM` / `#FUNCTION` …），`//` 不是注释；
+ * - `'kojo2'`：整行 `//` 注释；`#` 是声明锚（`# 常量 …`），`;` 只在 `@原生` 里。
+ */
+export type LinkLanguage = 'erb' | 'kojo2';
+
+/** 行首注释起头判据（**逐语言**；位置 = 首个非空白字符的下标） */
+function isLineCommentStart(text: string, index: number, language: LinkLanguage): boolean {
+  const ch = text[index];
+  if (language === 'kojo2') return ch === '/' && text[index + 1] === '/';
+  return ch === ';';
+}
+
+/**
+ * 扫出整篇文本里的注释区间（块注释可跨行；行注释只认行首、且按 {@link LinkLanguage} 分口径）。
  *
  * 状态机只有三件事：行首判注释、跳过引号、块注释吃到 `*\/`。引号串里的 `/*` 不算注释起点；
  * 未闭合的块注释一路吃到文末（与 Monarch 的"坏输入照常上色"同取向）。
  */
-export function scanCommentSpans(text: string): TextSpan[] {
+export function scanCommentSpans(text: string, language: LinkLanguage): TextSpan[] {
   const spans: TextSpan[] = [];
   const len = text.length;
   let i = 0;
@@ -160,7 +179,7 @@ export function scanCommentSpans(text: string): TextSpan[] {
       while (j < len && (text[j] === ' ' || text[j] === '\t')) j++;
       if (j < len) {
         const end = lineEndOffset(text, j);
-        if (isLineCommentStart(text, j)) {
+        if (isLineCommentStart(text, j, language)) {
           spans.push({ start: j, end });
           i = end;
           atLineStart = false;
@@ -188,12 +207,6 @@ export function scanCommentSpans(text: string): TextSpan[] {
   return spans;
 }
 
-function isLineCommentStart(text: string, index: number): boolean {
-  const ch = text[index];
-  if (ch === '#' || ch === ';') return true;
-  return ch === '/' && text[index + 1] === '/';
-}
-
 function lineEndOffset(text: string, from: number): number {
   const nl = text.indexOf('\n', from);
   let end = nl < 0 ? text.length : nl;
@@ -219,14 +232,14 @@ function skipQuoted(text: string, start: number): number {
 }
 
 /**
- * 提取整篇文本里的 URL / 相对路径候选（只看注释区间）。
+ * 提取整篇文本里的 URL / 相对路径候选（只看注释区间；注释起头按 `language` 分口径）。
  *
  * 返回的 offsets 可直接喂给 `model.getPositionAt` 换 Monaco range；URL 候选永远优先于
  * 与它重叠的路径候选（`https://…/x.erb` 只出一个 URL 链接，不会被拆成路径）。
  */
-export function extractLinkCandidates(text: string): LinkCandidate[] {
+export function extractLinkCandidates(text: string, language: LinkLanguage): LinkCandidate[] {
   const collected: LinkCandidate[] = [];
-  for (const span of scanCommentSpans(text)) {
+  for (const span of scanCommentSpans(text, language)) {
     let lineStart = span.start;
     while (lineStart < span.end) {
       const nl = text.indexOf('\n', lineStart);
@@ -471,12 +484,13 @@ export function installDocumentLinks(
   const provider: Monaco.languages.LinkProvider = {
     async provideLinks(model, token) {
       const text = model.getValue();
+      const language = linkLanguageOf(model);
       const context: DocumentLinkContext = {
         modelPath: modelPathOf(model, host),
         projectRoot: safeProjectRoot(host),
       };
       const links: Monaco.languages.ILink[] = [];
-      for (const candidate of extractLinkCandidates(text)) {
+      for (const candidate of extractLinkCandidates(text, language)) {
         if (token.isCancellationRequested) break;
         if (candidate.kind === 'url') {
           links.push({
@@ -499,6 +513,22 @@ export function installDocumentLinks(
     },
   };
   return monaco.languages.registerLinkProvider([ERB_LANGUAGE_ID, KOJO2_LANGUAGE_ID], provider);
+}
+
+/**
+ * model 的语言 → 链接语言口径（行注释起头各一套）。
+ *
+ * 缺 `getLanguageId` 的桩 model / 取值抛错 ⇒ 按 ERB（`;`）处理：ERB 是这两门里
+ * **更严格**的一套（`#` 与 `//` 都不是注释），坏输入只会少标、不会多说。
+ */
+function linkLanguageOf(model: Monaco.editor.ITextModel): LinkLanguage {
+  try {
+    const read = (model as { getLanguageId?: () => string }).getLanguageId;
+    const id = typeof read === 'function' ? read.call(model) : '';
+    return id === KOJO2_LANGUAGE_ID ? 'kojo2' : 'erb';
+  } catch {
+    return 'erb';
+  }
 }
 
 function modelPathOf(model: Monaco.editor.ITextModel, host: DocumentLinksHost): string | null {

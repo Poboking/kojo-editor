@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFileFactsProvider } from '../src/monaco/completion-core';
 import { erbLabelCompletionItems } from '../src/monaco/erb-completion-labels';
+import { erbCompletionGate } from '../src/monaco/erb-completion-context';
 
 /** 合成 Monaco：本纯函数只用到 CompletionItemKind.Reference */
 const monaco = { languages: { CompletionItemKind: { Reference: 21 } } } as unknown as typeof Monaco;
@@ -87,8 +88,12 @@ describe('EC-4 标签补全 · 跳转家族与空白 / 大小写口径（context
     expect(labels(at('@TEST\n$Alpha\n$beta\n\tGOTO BE|'))).toEqual(['beta']);
   });
 
-  it('关键字大小写敏感（承接 erbLabelSlot 单源现状）：`goto ` 不产出', () => {
-    expect(at('@TEST\n$甲\n\tgoto 甲|')).toEqual([]);
+  it('关键字大小写不敏感（2026-10-26 批改）：`goto ` / `Jump ` 同样出货', () => {
+    // 改前读数：`goto 甲|` → []（LABEL_CONTEXT_RE 少了 `i`，同族 CALL 系一直带 `i`）。
+    // Emuera 语句关键字大小写不敏感，小写 goto 是合法 ERB ⇒ 补全必须与 CALL 系同口径。
+    expect(labels(at('@TEST\n$甲\n\tgoto 甲|'))).toEqual(['甲']);
+    expect(labels(at('@TEST\n$甲\n\tJump 甲|'))).toEqual(['甲']);
+    expect(erbCompletionGate('goto ', 6)).toBe('label-target');
   });
 });
 

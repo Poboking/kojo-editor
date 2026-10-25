@@ -20,57 +20,75 @@ import type { KojoSpan } from './ast.js';
  * LAU-D1 批（方言载体契约）additive 扩入**六枚**方言/载体码（`core/dialect/*` 三枚 +
  * `core/event/*` 两枚 + `core/carrier/unowned`），逐枚在声明处写清生产者、与既有码的分工、
  * 级别与消息模板；`# 方言` 词位本身的文法不在此批（本批只把断言当**输入参数**吃）。
+ *
+ * 2026-10-26 批 additive 扩入**一枚** `core/decl/multiple-dialect`（`# 方言` 断言查重；
+ * 解析层只吃单值 `fileAssertion`，多条断言必有一条被静默丢弃）。
  */
-export type CoreDiagnosticCode =
+const CORE_DIAGNOSTIC_CODE_LIST = [
   /* 词法与结构（C1 additive） */
-  | 'core/lex/anchor'
-  | 'core/lex/indent'
-  | 'core/lex/interpolation'
+  'core/lex/anchor',
+  'core/lex/indent',
+  'core/lex/interpolation',
   /* 声明与名字 */
-  | 'core/decl/duplicate-name'
-  | 'core/decl/unknown-type'
-  | 'core/decl/bad-initializer'
-  | 'core/decl/unknown-storage'
-  | 'core/decl/reserved-name'
-  | 'core/decl/unknown-name'
-  | 'core/decl/unknown'
-  | 'core/decl/not-top-level'
-  | 'core/decl/bad-array-size'
-  | 'core/decl/const-cycle'
-  | 'core/decl/const-not-constant'
-  | 'core/decl/missing-machine'
-  | 'core/decl/multiple-machine'
-  | 'core/decl/multiple-view'
+  'core/decl/duplicate-name',
+  'core/decl/unknown-type',
+  'core/decl/bad-initializer',
+  'core/decl/unknown-storage',
+  'core/decl/reserved-name',
+  'core/decl/unknown-name',
+  'core/decl/unknown',
+  'core/decl/not-top-level',
+  'core/decl/bad-array-size',
+  'core/decl/const-cycle',
+  'core/decl/const-not-constant',
+  'core/decl/missing-machine',
+  'core/decl/multiple-machine',
+  'core/decl/multiple-view',
+  /**
+   * **`# 方言` 写了不止一条**（`parser.ts::parseDialectDecl`；2026-10-26 批）。
+   *
+   * `# 方言` 是文件自证断言（§3.3 / LAU §5.3 第 3 级），解析层按 `fileAssertion: 单值`
+   * 消费；两条断言同时存在时必有一条被静默丢掉——而两条不同的名字本身就是互不相容的
+   * 两个说法，不存在"取第一条"这种合法解释。
+   *
+   * 与 `core/dialect/mismatch` 的分工：那条是"文件断言 ≠ 识别链结论"（要方言事实，在
+   * 方言层判定）；本条只看**本文件内部**有几条断言，parser 层就能判，不碰任何方言取值。
+   * 与 `core/decl/multiple-view` / `multiple-machine` 同一族、同一档。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板：`一个文件只能写一个 \`# 方言\`：第二条起会被静默丢弃，写下的断言不算数（§3.3）。`
+   */
+  'core/decl/multiple-dialect',
   /* 类型与表达式 */
-  | 'core/expr/type-mismatch'
-  | 'core/expr/assign-to-constant'
-  | 'core/expr/readonly-target'
-  | 'core/expr/bad-index'
-  | 'core/expr/index-out-of-range'
-  | 'core/expr/divide-by-zero'
-  | 'core/expr/not-expression'
-  | 'core/expr/unknown-symbol'
-  | 'core/expr/bad-literal'
-  | 'core/expr/void-in-expression'
+  'core/expr/type-mismatch',
+  'core/expr/assign-to-constant',
+  'core/expr/readonly-target',
+  'core/expr/bad-index',
+  'core/expr/index-out-of-range',
+  'core/expr/divide-by-zero',
+  'core/expr/not-expression',
+  'core/expr/unknown-symbol',
+  'core/expr/bad-literal',
+  'core/expr/void-in-expression',
   /* 表 */
-  | 'core/table/overlap'
-  | 'core/table/bad-range'
-  | 'core/table/cycle'
-  | 'core/table/missing-default'
-  | 'core/table/empty-default'
-  | 'core/table/type-mismatch'
-  | 'core/table/dynamic-endpoint'
-  | 'core/table/value-empty'
-  | 'core/table/no-rows'
-  | 'core/table/default-not-last'
+  'core/table/overlap',
+  'core/table/bad-range',
+  'core/table/cycle',
+  'core/table/missing-default',
+  'core/table/empty-default',
+  'core/table/type-mismatch',
+  'core/table/dynamic-endpoint',
+  'core/table/value-empty',
+  'core/table/no-rows',
+  'core/table/default-not-last',
   /* 池与模板 */
-  | 'core/pool/no-default'
-  | 'core/pool/empty-branch'
-  | 'core/pool/side-effect'
-  | 'core/pool/no-view'
-  | 'core/pool/unknown-call'
-  | 'core/pool/cycle'
-  | 'core/pool/default-not-last'
+  'core/pool/no-default',
+  'core/pool/empty-branch',
+  'core/pool/side-effect',
+  'core/pool/no-view',
+  'core/pool/unknown-call',
+  'core/pool/cycle',
+  'core/pool/default-not-last',
   /**
    * 等值分派计划里**同一主语下的等值键重复**（`lower/expand/pool-plan.ts`；§7.1 / §16.2 C2.6）。
    * 两档同值无法区分：`IF` 链取第一个命中，等值分派同样会静默取第一个 ⇒ 计划不自洽，
@@ -84,37 +102,37 @@ export type CoreDiagnosticCode =
    * 消息模板：`池「{池名}」的等值键 {整数} 重复出现（第 {i} / {j} 个分支）：等值分派会静默
    * 取第一个，必须改成互不相同的整数（§7.1）。`
    */
-  | 'core/pool/duplicate-case'
-  | 'core/template/missing-slot'
-  | 'core/template/unexpected-slot'
-  | 'core/template/multi-slot'
-  | 'core/template/arg-count'
-  | 'core/template/side-effect'
+  'core/pool/duplicate-case',
+  'core/template/missing-slot',
+  'core/template/unexpected-slot',
+  'core/template/multi-slot',
+  'core/template/arg-count',
+  'core/template/side-effect',
   /* 叙事与等待 */
-  | 'core/narrative/bare-quote'
-  | 'core/narrative/bare-narration'
-  | 'core/narrative/unknown-speaker'
-  | 'core/narrative/bad-hint'
-  | 'core/wait/no-profile'
-  | 'core/color/nested'
-  | 'core/color/no-output'
-  | 'core/color/unsupported'
-  | 'core/face/unsupported'
-  | 'core/face/args'
+  'core/narrative/bare-quote',
+  'core/narrative/bare-narration',
+  'core/narrative/unknown-speaker',
+  'core/narrative/bad-hint',
+  'core/wait/no-profile',
+  'core/color/nested',
+  'core/color/no-output',
+  'core/color/unsupported',
+  'core/face/unsupported',
+  'core/face/args',
   /* 随机 */
-  | 'core/random/one-candidate'
-  | 'core/random/nested'
-  | 'core/random/group-nested'
-  | 'core/random/bare-control'
-  | 'core/random/empty-line'
-  | 'core/random/unsupported'
+  'core/random/one-candidate',
+  'core/random/nested',
+  'core/random/group-nested',
+  'core/random/bare-control',
+  'core/random/empty-line',
+  'core/random/unsupported',
   /* 控制流与程序层 */
-  | 'core/control/break-outside'
-  | 'core/control/continue-outside'
-  | 'core/control/bad-repeat'
-  | 'core/control/constant-condition'
-  | 'core/control/unsupported'
-  | 'core/array/unsupported'
+  'core/control/break-outside',
+  'core/control/continue-outside',
+  'core/control/bad-repeat',
+  'core/control/constant-condition',
+  'core/control/unsupported',
+  'core/array/unsupported',
   /**
    * **数组整体赋值**（`sema/check.ts::checkNameAssign`；§3.4.2 / §9.2）。
    * `队列 = 1` 这类写法：2.0 不支持数组整体赋值（没有数组字面量 / 整体比较 / 切片），
@@ -126,17 +144,17 @@ export type CoreDiagnosticCode =
    * 级别：error（不在 `CORE_WARNING_CODES` 里）。
    * 消息模板：`“{名字}”是数组：2.0 不支持数组整体赋值，请写元素（\`{名字}[下标]\`，§9.2）。`
    */
-  | 'core/array/whole-assign'
-  | 'core/goto/unsupported'
-  | 'core/goto/unknown-label'
-  | 'core/goto/duplicate-label'
-  | 'core/goto/label-in-block'
-  | 'core/goto/cross-unit'
-  | 'core/goto/backward'
-  | 'core/func/return-outside'
-  | 'core/func/return-mixed'
-  | 'core/func/missing-return'
-  | 'core/func/void-value'
+  'core/array/whole-assign',
+  'core/goto/unsupported',
+  'core/goto/unknown-label',
+  'core/goto/duplicate-label',
+  'core/goto/label-in-block',
+  'core/goto/cross-unit',
+  'core/goto/backward',
+  'core/func/return-outside',
+  'core/func/return-mixed',
+  'core/func/missing-return',
+  'core/func/void-value',
   /**
    * **`! 函名(...)` 的实参个数不符**（`sema/check.ts::checkCall`；§7.3）。
    * 两种成因同码：缺必填（形参没有默认值却没给）与多给（实参数超过形参表）。
@@ -151,17 +169,17 @@ export type CoreDiagnosticCode =
    * 这里只给了 {m} 个（§7.3）。`
    * 消息模板（多给）：`函数“{名}”只有 {n} 个形参：多出的 {m-n} 个实参不会传给函数（§7.3）。`
    */
-  | 'core/func/arg-count'
-  | 'core/func/recursion-unsupported'
+  'core/func/arg-count',
+  'core/func/recursion-unsupported',
   /* 原生与织入 */
-  | 'core/native/empty'
-  | 'core/native/indent'
-  | 'core/native/disallowed-location'
-  | 'core/weave/multiple-only'
-  | 'core/weave/modifier-conflict'
-  | 'core/weave/shadowed-listener'
-  | 'core/weave/scene-inside'
-  | 'core/weave/unsupported'
+  'core/native/empty',
+  'core/native/indent',
+  'core/native/disallowed-location',
+  'core/weave/multiple-only',
+  'core/weave/modifier-conflict',
+  'core/weave/shadowed-listener',
+  'core/weave/scene-inside',
+  'core/weave/unsupported',
   /**
    * 事件在 adapter 目录里声明 **`weavable: false`**（`project/weave-layers.ts`；§8.6 / §16.3 A3.9）。
    * 事件形状认得出、`@织` 写法也合法，但这类事件运行期不会被监听调用 ⇒ 挂上去是死代码，
@@ -175,26 +193,26 @@ export type CoreDiagnosticCode =
    * 消息模板：`事件「{事件}」在 adapter 目录里声明为不可被 @织 监听（{落点}）——挂上去
    * 运行期不会执行，已阻断。`
    */
-  | 'core/weave/not-weavable'
+  'core/weave/not-weavable',
   /* 迁移、profile、feature */
-  | 'core/migration/if'
-  | 'core/migration/switch'
-  | 'core/migration/loop'
-  | 'core/migration/call-return'
-  | 'core/migration/ask'
-  | 'core/migration/hidden-timing'
-  | 'core/migration/alias'
-  | 'core/migration/color-option'
-  | 'core/migration/comment'
-  | 'core/migration/version'
-  | 'core/migration/heart'
-  | 'core/migration/color'
-  | 'core/migration/random'
-  | 'core/migration/data'
-  | 'core/migration/branch'
-  | 'core/migration/label'
-  | 'core/migration/raw'
-  | 'core/migration/timing'
+  'core/migration/if',
+  'core/migration/switch',
+  'core/migration/loop',
+  'core/migration/call-return',
+  'core/migration/ask',
+  'core/migration/hidden-timing',
+  'core/migration/alias',
+  'core/migration/color-option',
+  'core/migration/comment',
+  'core/migration/version',
+  'core/migration/heart',
+  'core/migration/color',
+  'core/migration/random',
+  'core/migration/data',
+  'core/migration/branch',
+  'core/migration/label',
+  'core/migration/raw',
+  'core/migration/timing',
   /**
    * **同形歧义的显式台账**（`migrate/index.ts`；K2-MIGRATE-SHAPE，§12.1 / §15.2.3）。
    *
@@ -208,21 +226,21 @@ export type CoreDiagnosticCode =
    * 级别：warning（在 `CORE_WARNING_CODES` 里；迁移器显式标 warning，不进 `ok`）。
    * 消息模板：见 `migrate/index.ts::ambiguousDialogueMessage`。
    */
-  | 'core/migration/ambiguous-dialogue'
-  | 'core/migration/fullwidth-punct'
-  | 'core/migration/wait'
+  'core/migration/ambiguous-dialogue',
+  'core/migration/fullwidth-punct',
+  'core/migration/wait',
   /* 存储期分配（project/storage，fail-closed 完整性面） */
-  | 'core/storage/fingerprint-mismatch'
-  | 'core/storage/snapshot-version'
-  | 'core/storage/invalid-class'
-  | 'core/storage/invalid-declaration'
-  | 'core/storage/unknown-class'
-  | 'core/storage/duplicate-key'
-  | 'core/storage/duplicate-name'
-  | 'core/storage/shape-changed'
-  | 'core/storage/corrupt-snapshot'
-  | 'core/storage/range-changed'
-  | 'core/storage/exhausted'
+  'core/storage/fingerprint-mismatch',
+  'core/storage/snapshot-version',
+  'core/storage/invalid-class',
+  'core/storage/invalid-declaration',
+  'core/storage/unknown-class',
+  'core/storage/duplicate-key',
+  'core/storage/duplicate-name',
+  'core/storage/shape-changed',
+  'core/storage/corrupt-snapshot',
+  'core/storage/range-changed',
+  'core/storage/exhausted',
   /*
    * 方言与载体（LAU-D1；`ARCH-language-unification.md` §5.5）。
    *
@@ -243,7 +261,7 @@ export type CoreDiagnosticCode =
    * （铁律 4「内核不静默」）；与 `core/options/pending` 同档：状态清楚、产物照走。
    * 消息模板：`未绑定方言：识别链没有给出结论（也没有工作区覆盖），事实类服务按无事实降级。`
    */
-  | 'core/dialect/unbound'
+  'core/dialect/unbound',
   /**
    * **方言断言/覆盖与识别链冲突**（§5.3 第 2、3 级；生产者是 `resolveDialectBinding`）。
    * 两种成因同码：① 工作区 `meta` 覆盖 ≠ `detect()` 结论（**以覆盖为准**，冲突仍报）；
@@ -255,7 +273,7 @@ export type CoreDiagnosticCode =
    * 级别：error（不在 `CORE_WARNING_CODES` 里；§5.3「不一致是 error，不是 warning」）。
    * 消息模板：`方言冲突：{来源}声明 {A}，识别链结论 {B}——按 {取值口径} 处理，冲突已阻断。`
    */
-  | 'core/dialect/mismatch'
+  'core/dialect/mismatch',
   /**
    * **响应带的方言与请求的方言不一致**（§5.4 第 2 行「错事实不报错」的执行点）。
    *
@@ -270,7 +288,7 @@ export type CoreDiagnosticCode =
    * 级别：error（不在 `CORE_WARNING_CODES` 里）。
    * 消息模板：`{服务}的响应用的是方言 {响应方言}（事实 {响应版本}），当前工程是 {工程方言}：结果已丢弃。`
    */
-  | 'core/dialect/response-mismatch'
+  'core/dialect/response-mismatch',
   /**
    * **作者写了当前方言事件目录里没有的事件**（§5.5 第 1 行；`# 机` / `@织` / XML `command` 三条落点共用）。
    *
@@ -286,7 +304,7 @@ export type CoreDiagnosticCode =
    * 级别：error（不在 `CORE_WARNING_CODES` 里；「未知事件 = error」是 spec §10.6 的既有口径）。
    * 消息模板：`方言 {方言} 的事件目录里没有“{事件}”。可用事件：{列表}。`
    */
-  | 'core/event/unknown'
+  'core/event/unknown',
   /**
    * **事件写在了错误的载体上**（§5.5 第 2 行）。
    *
@@ -299,7 +317,7 @@ export type CoreDiagnosticCode =
    * 级别：error（不在 `CORE_WARNING_CODES` 里）。
    * 消息模板：`事件“{事件}”属于 {声明载体} 载体，这份文件是 {实际载体}：挪到 {glob} 覆盖的文件里。`
    */
-  | 'core/event/wrong-carrier'
+  'core/event/wrong-carrier',
   /**
    * **这份文件不在方言声明的任何载体归属里**（§5.5 第 6 行；生产者 `resolveDialectBinding`）。
    * 方言声明了 `carriers`，但该文件路径匹配不上任何一条 glob ⇒ 载体归属不明，
@@ -316,10 +334,22 @@ export type CoreDiagnosticCode =
    * 想让方言覆盖它，补一条 `carriers` 即可（数据面改动，不动语法）。
    * 消息模板：`文件 {路径} 不在方言 {方言} 声明的任何载体归属里（carriers 的 glob 都没命中）：该文件的载体级校验跳过。`
    */
-  | 'core/carrier/unowned'
-  | 'core/options/pending'
-  | 'core/profile/missing'
-  | 'core/feature/unsupported';
+  'core/carrier/unowned',
+  'core/options/pending',
+  'core/profile/missing',
+  'core/feature/unsupported',
+] as const;
+
+/** core 诊断码类型（码表的类型面；与运行期闭集 `CORE_DIAGNOSTIC_CODES` 同一份来源） */
+export type CoreDiagnosticCode = (typeof CORE_DIAGNOSTIC_CODE_LIST)[number];
+
+/**
+ * core 诊断码的**运行期闭集**（`isCoreCode` 的判据）。
+ *
+ * 与类型同源：`CoreDiagnosticCode` 就是 `CORE_DIAGNOSTIC_CODE_LIST` 的元素类型，
+ * 所以「码表只增不改」不再靠人抄第二份字符串表——加码只改上面那一处。
+ */
+export const CORE_DIAGNOSTIC_CODES: ReadonlySet<CoreDiagnosticCode> = new Set(CORE_DIAGNOSTIC_CODE_LIST);
 
 /** warning 码（其余 core 码一律 error；码表唯一真源） */
 export const CORE_WARNING_CODES: ReadonlySet<CoreDiagnosticCode> = new Set<CoreDiagnosticCode>([
@@ -351,7 +381,8 @@ export type AdapterDiagnosticCode = `${AdapterDiagnosticNamespace}/${string}`;
 export type DiagnosticCode = CoreDiagnosticCode | AdapterDiagnosticCode;
 
 export function isCoreCode(code: string): code is CoreDiagnosticCode {
-  return code.startsWith('core/');
+  // 查闭集而不是前缀：`core/x` 这类自造串必须过不了类型守卫（否则会被当成 error 级别）。
+  return CORE_DIAGNOSTIC_CODES.has(code as CoreDiagnosticCode);
 }
 
 export function severityOf(code: CoreDiagnosticCode | string): 'error' | 'warning' {

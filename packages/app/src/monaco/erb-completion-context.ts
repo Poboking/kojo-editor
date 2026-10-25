@@ -47,6 +47,7 @@ import { erbBitSlotOpen, topLevelComma } from './erb-completion-bits';
 import type { CompletionNameSlot } from './completion-core';
 import { erbVariableSlotAt } from './erb-completion-variables';
 import { BLANK_CLASS_STR, isAllBlank, isBlank } from './kojo-completion-position';
+import { ERB_NAME_CHAR_CLASS } from '@kojo/kojo-lang/name-chars';
 
 /**
  * 补全位置门（v2 九态；见模块头注）。`'in-string'` 的门名沿用 = 「此处非代码视野」，注释一并复用
@@ -147,9 +148,16 @@ const CALL_STMT_RE = erbCallStatementRe(['func'], false);
 
 /* ============================== 名字槽（定义位 / 调用位共用；原 `erb-completion-functions` 私有件迁入） ============================== */
 
-/** 名字字符集（正向定义；ASCII 词字符 + 假名 + 汉字 + 全角字母数字 + 半角片假名） */
-export const NAME_CHAR_RE =
-  /[0-9A-Za-z_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\uff66-\uff9f]/;
+/**
+ * 名字字符集（正向定义）——**ERB 侧唯一一份**：从语言面 `@kojo/kojo-lang/name-chars` 的
+ * {@link ERB_NAME_CHAR_CLASS} 派生（两门语言共用同一张基表：ASCII 词字符 + 拉丁补充 +
+ * 假名 / 汉字 / 兼容汉字 + 全角数字 / 全角拉丁 + 半角片假名）。
+ *
+ * 为什么**不含 `$`**：ERB 的 `$` 是标签记号（`$标签`），并进名字会让 `CALL $FOO` 把 `$`
+ * 当成函数名的一部分；kojo 侧那份 `NAME_CHAR_CLASS` 含 `$`（`.kojo` 糖的 `实参$` 后缀），
+ * 两门语言的差异只有这一枚，见 `name-chars.ts` 头注。
+ */
+export const NAME_CHAR_RE = new RegExp(`[${ERB_NAME_CHAR_CLASS}]`);
 
 /** 定义位：行首可选空白 + `@`（`@` 之后即函数名）；空白类走 `BLANK_CLASS_STR` 单源 */
 export const DEF_RE = new RegExp(`^[${BLANK_CLASS_STR}]*@`);
@@ -230,11 +238,15 @@ const isLabelChar = (ch: string): boolean => !/[\s;]/.test(ch);
  * 分隔含行首 / 空白 / `;` / 半角 `:` / 全角 `：`（覆盖缩进行首与 `SIF … : GOTO …` 行内形态）；
  * 前缀字符非分隔 ⇒ `TRYCGOTO` 之类的复合词不误触。空白一律 `BLANK_CLASS_STR` 单源
  * （全角空格算分隔——旧 `[ \t]+` 不认）；关键字取 {@link ERB_JUMP_KEYWORDS} 长词在前。
+ *
+ * `i` 标志：Emuera 的语句关键字大小写不敏感（同族 `CALL` 系从 `erbCallStatementRe` 起就带
+ * `i`）——`goto 好感` 是合法 ERB，旧口径只认大写 ⇒ 小写跳转后面零标签候选（2026-10-26 批修）。
  */
 const LABEL_CONTEXT_RE = new RegExp(
   `(?:^|[${BLANK_CLASS_STR};:：])(${[...ERB_JUMP_KEYWORDS]
     .sort((a, b) => b.length - a.length)
     .join('|')})[${BLANK_CLASS_STR}]+(\\$?)([^\\s;]*)$`,
+  'i',
 );
 
 /**

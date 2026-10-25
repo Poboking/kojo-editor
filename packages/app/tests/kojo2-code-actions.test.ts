@@ -250,6 +250,24 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
     );
   });
 
+  it('声明区含 `# 方言`（单行声明）⇒ 提升的 `# 表` 插在它**之后**，不拆散单行声明组', () => {
+    // 改前读数：INSERT 点在 `# 方言` 那一行（= 3），落在块头之前 ⇒ 两段编辑，
+    // 结果 `# 方言` 被挤到「空行 + # 表 块 + 空行」之后，单行声明组被拆散。
+    // 改后：插入点跳过 `# 方言`（与 `# 机` / `# 视` 同为单行声明）⇒ 与块头同行 ⇒ 一段合成编辑。
+    const source =
+      '# 机 开场\n# 视 我\n# 方言 erafl\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
+    const facts = factsOf(source, 5, 9);
+    expect(facts).toHaveLength(1);
+    const fact = facts[0]!;
+    expect(fact.edits).toHaveLength(1);
+    const after = expectParseCleanAfter(fact, source);
+    expect(after).toBe(
+      '# 机 开场\n# 视 我\n# 方言 erafl\n\n# 表 迁移表1 由 数值\n    1 早。\n    否 嗨。\n\n> {迁移表1}\n',
+    );
+    // `# 方言` 仍在单行声明组里（不被新声明隔到后面）
+    expect(after.indexOf('# 方言 erafl')).toBeLessThan(after.indexOf('# 表 迁移表1'));
+  });
+
   it('`分支：` 缺兜底标签 ⇒ core 语义升级层 decline ⇒ 零动作', () => {
     const source = '# 机 开场\n# 视 我\n\n分支：\n    [数值 < 100]\n        「早。」\n';
     expect(factsOf(source, 4, 6)).toEqual([]);

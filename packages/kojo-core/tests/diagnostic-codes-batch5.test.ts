@@ -22,7 +22,7 @@ import { ADAPTER_VALIDATION_CODES } from '../src/adapter.js';
 import type { KojoDecl, KojoFile, KojoSpan, KojoWeaveDecl, KojoWeaveModifier } from '../src/ast.js';
 import { compileKojoSource } from '../src/compile.js';
 import type { CoreDiagnosticCode } from '../src/diagnostics.js';
-import { CORE_WARNING_CODES, isCoreCode, severityOf } from '../src/diagnostics.js';
+import { CORE_DIAGNOSTIC_CODES, CORE_WARNING_CODES, isCoreCode, severityOf } from '../src/diagnostics.js';
 import { FIXTURE_ADAPTER, FIXTURE_BACKEND } from '../src/fixture-adapter.js';
 import { planPoolDispatch } from '../src/lower/expand/pool-plan.js';
 import { parseSource } from '../src/parser.js';
@@ -123,14 +123,23 @@ core/options/pending core/profile/missing core/feature/unsupported
   .trim()
   .split(/\s+/u);
 
+/**
+ * 2026-10-26 批 additive 的一条：`# 方言` 断言查重（`core/decl/multiple-dialect`）。
+ * 与 LAU-D1 的分工：那六枚住方言/事件/载体三格；这条只回答"本文件里有几条断言"，
+ * parser 层即可判定，不碰任何方言取值。
+ */
+const ODD_END_CODES: readonly CoreDiagnosticCode[] = ['core/decl/multiple-dialect'];
+
 /** 从源码文本抽 `CoreDiagnosticCode` 联合里逐字声明的码（类型联合运行期不存在，只能抽文本） */
 function declaredCoreCodes(): string[] {
   const path = fileURLToPath(new URL('../src/diagnostics.ts', import.meta.url));
   const src = readFileSync(path, 'utf8');
-  const block = /export type CoreDiagnosticCode =([\s\S]*?);/.exec(src);
-  if (block === null) throw new Error('抽不到 CoreDiagnosticCode 联合——守卫自身失效，必须查');
+  // 2026-10-26 批：联合改成 `const CORE_DIAGNOSTIC_CODE_LIST = [...] as const` 派生
+  // （类型与运行期闭集同源，见 `isCoreCode`），守卫跟着抽那张数组。
+  const block = /const CORE_DIAGNOSTIC_CODE_LIST = \[([\s\S]*?)\] as const;/.exec(src);
+  if (block === null) throw new Error('抽不到 CORE_DIAGNOSTIC_CODE_LIST——守卫自身失效，必须查');
   const codes = [...block[1]!.matchAll(/'(core\/[a-z0-9/-]+)'/gu)].map((match) => match[1]!);
-  if (codes.length < 100) throw new Error(`只抽到 ${codes.length} 条码：联合格式变了，守卫先修`);
+  if (codes.length < 100) throw new Error(`只抽到 ${codes.length} 条码：码表格式变了，守卫先修`);
   return codes;
 }
 
@@ -147,10 +156,29 @@ describe('码表 · 闭集只增（S5.6）', () => {
     expect(missing, `既有码被删/改名：${missing.join(' / ')}`).toEqual([]);
   });
 
-  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚（多一条/少一条都要过审）', () => {
+  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
-    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES].sort());
+    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES].sort());
+  });
+
+  it('2026-10-26 批的 `core/decl/multiple-dialect` 在闭集里、是 error，且运行期闭集与类型同源', () => {
+    for (const code of ODD_END_CODES) {
+      expect(declared).toContain(code);
+      expect(CORE_WARNING_CODES.has(code)).toBe(false);
+      expect(severityOf(code)).toBe('error');
+      // 运行期闭集（isCoreCode 的判据）与文本抽取的码表逐条相等
+      expect(CORE_DIAGNOSTIC_CODES.has(code)).toBe(true);
+    }
+    expect([...CORE_DIAGNOSTIC_CODES].sort()).toEqual([...declared].sort());
+  });
+
+  it('isCoreCode 查闭集：自造的 `core/x` 过不了类型守卫（不再按前缀放行）', () => {
+    expect(isCoreCode('core/decl/unknown')).toBe(true);
+    expect(isCoreCode('core/x')).toBe(false);
+    expect(isCoreCode('core/')).toBe(false);
+    expect(isCoreCode('unit/unknown')).toBe(false);
+    expect(severityOf('core/x')).toBe('error'); // 非 core 码一律 error 档，但不会被当 core 码消费
   });
 
   it('LAU-D1 六枚都在闭集里，且严重度按声明落位（两枚 warning / 四枚 error）', () => {

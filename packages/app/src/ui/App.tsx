@@ -1062,7 +1062,7 @@ export function App(): ReactElement {
     [migrateCommands, storageCommands],
   );
 
-  // 结构解析叠层（实验，默认关）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通
+  // 结构解析叠层（默认开；只有显式 `off` 才算关，见 `monaco/tree-sitter-pref.ts`）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通
   // 都自动退回原有的着色与折叠，但"退回了"这件事由这里上一条通知。台账按消息去重 ⇒
   // 同一种错一次会话只说一遍（`monaco/tree-sitter/fallback.ts`），不随编辑重复弹。
   useEffect(

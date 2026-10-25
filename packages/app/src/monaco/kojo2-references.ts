@@ -20,6 +20,9 @@
  * - `? <条件>` 的条件表达式、`@巡` / `@循` / `@复` 的头表达式、`@返` 的返回值表达式、
  *   `@着色` 的颜色表达式、`# 变量` 类型里的 `[<数组长度>]`；
  * - `# 表 … 由 <表达式>` 的 `由` 之后（表体行是字面量，不扫）；
+ *   **例外（2026-10-26 批）**：表体行的**范围端点**是表达式位（core AST 的
+ *   `from` / `to`，只允许十进制字面量或整数 `# 常量`）——改名会改写它们，引用就必须能看见；
+ *   值列仍是字面量，不扫。
  * - `@算` / `@函` 块体内的调度语句（赋值两侧、裸调用）；
  * - **跳过**：双引号字符串（含转义）、`对象.成员` 的成员名、纯数字串、注释行、
  *   `@原生` 围栏体、旧写法行、`# 视` / `# 机` 参数 / `@织` 修饰词这类字面词位。
@@ -53,14 +56,17 @@
  * - 跨文件查找有两档归属：本文件有同名声明（或事件挂点）时走同文件判据；本文件没有时走
  *   项目索引的候选位 + `symbolAt`（要求 `options.path`，且项目里这个名字**只有一种**
  *   声明种类）——同名多家族是 core 错误，此时回 `null`，不猜；
- * - 表体行端点（`# 表` 的 `0..99`）在 core 是表达式位，本批不收集（表体行的值列是字面量，
- *   按行扫会把值误当引用；要精确得走 AST 行结构，留给后续批）；
+ * - 表体行端点（`# 表` 的 `0..99`）此前不收集，而 `kojo2-rename.ts` 按 core AST 会改写
+ *   `from` / `to` 里的常量（§6.1 的端点就是表达式位）⇒ 两把尺子不一致。本批让 references
+ *   覆盖同一集合：端点里**名字形态**的标识符（整数常量）进 refs，数字端点与值列不进。
  * - `# 视` 的视角目标、`@跳` / `@标` 的标签名不属本批符号面（没有声明索引可归属）。
  */
 import type * as Monaco from './entry';
 import {
   KOJO_DECL_WORDS,
   KOJO_DISPATCH_WORDS,
+  KOJO_INDENT_WIDTH,
+  KOJO_TABLE_DEFAULT,
   KOJO_TABLE_SUBJECT,
   isSpaceCode,
   skipQuoted,
@@ -603,6 +609,65 @@ function expressionContextOf(enclosing: KojoLexLine | undefined): boolean {
 }
 
 /**
+ * 这一行是不是 `# 表` 体的**数据行**（缩进恰好比表头深一级；§6.1）。
+ *
+ * 判据只看"直接外层块头是 `# 表` + 缩进一级"——与 parser 的 `parseTableRow` 取同一类行
+ * （空行结束表、表内注释被跳过，这两条由 `sitesOf` 的跳过逻辑与缩进栈天然满足）。
+ */
+function isTableBodyRow(enclosing: KojoLexLine | undefined, line: KojoLexLine): boolean {
+  return (
+    enclosing !== undefined &&
+    enclosing.kind === 'decl' &&
+    enclosing.known &&
+    enclosing.word === TABLE_WORD &&
+    line.indent === enclosing.indent + KOJO_INDENT_WIDTH
+  );
+}
+
+/**
+ * 表体一行 → 范围端点的引用位（**值列不扫**）。
+ *
+ * 行形状与 `parser.ts::parseTableRow` 同口径（§6.1）：首个空白前是范围列，`否` 是兜底行；
+ * 否则 `a..b` / `a..` / `..b` / `a` 中的**标识符形态端点**进表达式位。数字端点是字面量，
+ * `scanIdentifiers` 会因首字符是数字而跳过，不必在这里再判。
+ *
+ * 为什么在这里自己切范围列、而不是再 `parseSource` 一遍：项目索引热路径对每份文件已经
+ * 跑过 lex+parse 两趟（`kojo2ReferenceSymbolsOf` / `kojo2ReferenceCandidatesOf`），再加
+ * 一趟整文解析会顶穿 8ms 的预算用例；行形状是 §6.1 的公开文法，判据只有这一处要维护。
+ */
+function collectTableRow(
+  collector: Collector,
+  line: KojoLexLine,
+  text: string,
+): void {
+  const rowText = line.text;
+  let sep = -1;
+  for (let i = 0; i < rowText.length; i++) {
+    if (isSpaceCode(rowText.charCodeAt(i))) {
+      sep = i;
+      break;
+    }
+  }
+  if (sep <= 0) return; // 没有范围列（`否` 单词行等坏输入）：parser 另有诊断，这里不猜
+  const rangeRaw = rowText.slice(0, sep);
+  if (rangeRaw === KOJO_TABLE_DEFAULT) return; // `否 <值>`：没有端点
+  const base = line.contentOffset;
+  const dots = rangeRaw.indexOf('..');
+  const endpoints: Array<{ readonly text: string; readonly at: number }> =
+    dots >= 0
+      ? [
+          { text: rangeRaw.slice(0, dots), at: base },
+          { text: rangeRaw.slice(dots + 2), at: base + dots + 2 },
+        ]
+      : [{ text: rangeRaw, at: base }];
+  for (const endpoint of endpoints) {
+    if (endpoint.text.length === 0) continue;
+    const from = endpoint.at - line.lineOffset;
+    collectRange(collector, text, line.number, { from, to: from + endpoint.text.length });
+  }
+}
+
+/**
  * 全部出现点（源码序）。
  *
  * 缩进栈只回答一件事："这一行的直接外层块头是谁"。空行 / 注释 / `@原生` 体不参与栈
@@ -634,7 +699,12 @@ function sitesOf(
     if (line.kind === 'blank' || line.kind === 'comment' || line.kind === 'native') continue;
     while (stack.length > 0 && stack[stack.length - 1]!.indent >= line.indent) stack.pop();
     const enclosing = stack[stack.length - 1]?.line;
-    collectLine(collector, line, text, expressionContextOf(enclosing));
+    if (isTableBodyRow(enclosing, line)) {
+      // 表体数据行：只把范围端点当表达式位（改名会改写它们，见模块头注）
+      collectTableRow(collector, line, text);
+    } else {
+      collectLine(collector, line, text, expressionContextOf(enclosing));
+    }
     stack.push({ indent: line.indent, line });
   }
 

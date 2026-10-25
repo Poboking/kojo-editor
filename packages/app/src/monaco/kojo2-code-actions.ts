@@ -104,6 +104,7 @@ import type { EditorTextEdit } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { kojo2DiagnosticsToMarkers } from './kojo2-diagnostics';
+import { KOJO2_DECL_WORDS } from './kojo2-lexicon';
 // Monaco `CodeActionKind` 的两个字面量**只有一处定义**（v1 那条宿主适配腿）：
 // 本层引用它们而不是再写一遍 `'quickfix'` / `'refactor'`，避免两套声明漂移。
 import { QUICK_FIX_KIND, REFACTOR_KIND } from './kojo-code-action';
@@ -434,8 +435,29 @@ function escapeRegExp(text: string): string {
 const BLOCK_HEAD_RE =
   /^(?:\?(?:\s|$)|#\s+(?:表|池|模)(?:\s|$)|@(?:算|随机|着色|组|循|巡|复|函|织|原生)(?:\s|$)|选项\s*：?\s*$)/u;
 
-/** 2.0 的**单行声明**（声明区扫描用；`# 幕` 不提升但仍属声明区形状） */
-const SINGLE_DECL_RE = /^#\s+(?:幕|视|机|变量|常量)(?:\s|$)/u;
+/**
+ * 2.0 的**块声明**词（有缩进体的 `# 表` / `# 池` / `# 模`；§3.2）。
+ *
+ * 位序来自 core `KOJO_DECL_WORDS` 的公开契约（`[幕, 视, 机, 变量, 常量, 表, 池, 模, 方言]`，
+ * 与 `kojo2-format.ts` 的下标解构同一份），**词形一个字都不抄**。
+ */
+const BLOCK_DECL_WORDS: ReadonlySet<string> = new Set(
+  [KOJO2_DECL_WORDS[5], KOJO2_DECL_WORDS[6], KOJO2_DECL_WORDS[7]].filter(
+    (word): word is string => word !== undefined,
+  ),
+);
+
+/**
+ * 2.0 的**单行声明**（声明区扫描用）：词表里除块声明外的全部词，从 `KOJO2_DECL_WORDS`
+ * **派生**（单一真源）——`方言` 等新词自动纳入，不必再手抄「幕/视/机/变量/常量」五枚。
+ * 改前手抄五枚 ⇒ 新声明（`# 方言`）被当成正文，提升的 `# 表` 会被插到它前面。
+ */
+const SINGLE_DECL_RE = new RegExp(
+  `^#\\s+(?:${KOJO2_DECL_WORDS.filter((word) => !BLOCK_DECL_WORDS.has(word))
+    .map(escapeRegExp)
+    .join('|')})(?:\\s|$)`,
+  'u',
+);
 
 /** 2.0 叙事文本行（心形块体只接受这两种脸） */
 function isNarrativeTextLine(text: string): boolean {

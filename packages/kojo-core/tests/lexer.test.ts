@@ -3,7 +3,7 @@
  * 转义、插值扫描、旧写法判别、缩进诊断、50k 行单遍。
  */
 import { describe, expect, it } from 'vitest';
-import { lex } from '../src/lexer.js';
+import { decodeIntegerLiteral, isIntegerLiteralText, lex } from '../src/lexer.js';
 import type { KojoInterpSegment, KojoLexLine } from '../src/tokens.js';
 
 function kinds(source: string): string[] {
@@ -419,5 +419,33 @@ describe('lex：单遍性能（50k 行）', () => {
     expect(result.lines.length).toBe(50000);
     expect(result.diagnostics).toEqual([]);
     expect(result.facts.lf).toBe(50000);
+  });
+});
+
+describe('decodeIntegerLiteral · 安全整数闸（2026-10-26 批）', () => {
+  /** 边界值 2^53-1 本身仍可精确表示 ⇒ 解码；再大一律 null（不再静默舍入） */
+  const MAX = Number.MAX_SAFE_INTEGER;
+
+  it('边界内照常解码（十进制 / 带符号 / 十六进制）', () => {
+    expect(decodeIntegerLiteral('9007199254740991')).toBe(MAX);
+    expect(decodeIntegerLiteral('-9007199254740991')).toBe(-MAX);
+    expect(decodeIntegerLiteral('  +42  ')).toBe(42);
+    expect(decodeIntegerLiteral('0x1F')).toBe(31);
+  });
+
+  it('超过 MAX_SAFE_INTEGER ⇒ null（旧行为是 `parseInt` 后的舍入值）', () => {
+    // 改前读数：decodeIntegerLiteral('12345678901234567890') === 12345678901234567000
+    expect(decodeIntegerLiteral('12345678901234567890')).toBeNull();
+    expect(decodeIntegerLiteral('9007199254740992')).toBeNull(); // 2^53
+    expect(decodeIntegerLiteral('-9007199254740992')).toBeNull();
+    expect(decodeIntegerLiteral('0xFFFFFFFFFFFFFFFF')).toBeNull(); // 2^64-1
+  });
+
+  it('isIntegerLiteralText 只判形状：区分"不是字面量"与"是字面量但超界"', () => {
+    expect(isIntegerLiteralText('12345678901234567890')).toBe(true);
+    expect(isIntegerLiteralText('-0x10')).toBe(true);
+    expect(isIntegerLiteralText('1.5')).toBe(false);
+    expect(isIntegerLiteralText('abc')).toBe(false);
+    expect(isIntegerLiteralText('')).toBe(false);
   });
 });

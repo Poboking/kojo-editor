@@ -580,9 +580,23 @@ describe('不误报：正文 / 字符串 / 成员 / 字面量 / 非本批符号'
     expect(refsAt(positionAtOffset(SOURCE, member))).toBeNull();
   });
 
-  it('表体行是字面量（值列与端点都不当引用）', () => {
+  it('表体行：值列不是引用位；范围端点里的常量是（与 rename 的改写集合一致）', () => {
+    // 改前读数：端点也不收集（`refsAt('100..499')` / 端点常量 → null），
+    // 而 `kojo2-rename.ts` 按 core AST 会改写 `from` / `to` 里的常量 ⇒ 两把尺子不一致。
     expect(refsAt(positionAt('疏远'))).toBeNull();
     expect(refsAt(positionAt('100..499'))).toBeNull();
+    const source = [
+      '# 常量 上限 整数 = 499',
+      '# 表 心情 由 上限',
+      '    0..上限 疏远',
+      '    否 未知',
+    ].join('\n');
+    const result = kojo2ReferencesAt(source, positionIn(source, '上限'));
+    expect(result?.symbol.name).toBe('上限');
+    expect(result?.symbol.kind).toBe('constant');
+    // 声明位 + `由` 表达式 + 表体端点
+    expect(result?.refs.map((site) => site.span.startLine)).toEqual([1, 2, 3]);
+    expect(result?.refs.map((site) => site.kind)).toEqual(['decl', 'ref', 'ref']);
   });
 
   it('`# 视` 的名字不属本批符号面', () => {

@@ -630,3 +630,53 @@ describe('parse：单遍性能（50k 行）', () => {
     expect(file.scenes[0]!.items).toHaveLength(50000);
   });
 });
+
+describe('parse：整数超安全范围不静默舍入（2026-10-26 批）', () => {
+  const BIG = '12345678901234567890';
+  const MAX = '9007199254740991';
+
+  it('`# 常量 x 整数 = 超界` → core/expr/bad-literal，且不建出变形常量', () => {
+    const file = parseSource(`${MACHINE}# 常量 x 整数 = ${BIG}\n> 正文\n`);
+    const codes = file.diagnostics.map((diagnostic) => diagnostic.code);
+    expect(codes).toContain('core/expr/bad-literal');
+    expect(codes).not.toContain('core/decl/const-not-constant'); // 它确实是字面量，不能借用"不是字面量"的码
+    const diagnostic = file.diagnostics.find((item) => item.code === 'core/expr/bad-literal')!;
+    expect(diagnostic.severity).toBe('error');
+    expect(diagnostic.message).toContain('安全整数');
+    // 诊断落在数字上（不是整行空白）
+    expect(diagnostic.span?.start.line).toBe(2);
+    // 超界值不进 AST（不会以 12345678901234567000 的形状落进声明表）
+    expect(file.decls.find((decl) => decl.kind === 'const')).toBeUndefined();
+  });
+
+  it('边界值 MAX_SAFE_INTEGER 照常通过', () => {
+    const file = parseSource(`${MACHINE}# 常量 x 整数 = ${MAX}\n> 正文\n`);
+    expect(file.diagnostics).toEqual([]);
+    const decl = file.decls.find((item) => item.kind === 'const');
+    expect(decl?.kind === 'const' ? decl.value : null).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('变量初值超界同样报 bad-literal（不是"初值只允许字面量"）', () => {
+    const file = parseSource(`${MACHINE}# 变量 x 整数 = ${BIG}\n> 正文\n`);
+    const diagnostic = file.diagnostics.find((item) => item.code === 'core/expr/bad-literal');
+    expect(diagnostic?.message).toContain('安全整数');
+    expect(file.diagnostics.map((item) => item.message).join('\n')).not.toContain('初值只允许字面量');
+  });
+
+  it('表值列超界 → bad-literal（不静默退化成字符串列）', () => {
+    const file = parseSource(
+      `${MACHINE}# 表 心情 由 好感\n    0..9 ${BIG}\n    否 未知\n> 正文\n`,
+    );
+    expect(file.diagnostics.map((item) => item.code)).toContain('core/expr/bad-literal');
+    const table = file.decls.find((decl) => decl.kind === 'table');
+    const value = table?.kind === 'table' ? table.rows[0]!.value : null;
+    expect(typeof value).toBe('string'); // 退化前的防线：诊断已报，值不冒充整数
+  });
+
+  it('`# 变量 x 整数[超界]` → bad-array-size（既有码，文案点明超界）', () => {
+    const diagnostic = parseSource(`${MACHINE}# 变量 x 整数[9007199254740993]\n> 正文\n`).diagnostics.find(
+      (item) => item.code === 'core/decl/bad-array-size',
+    );
+    expect(diagnostic?.message).toContain('安全整数');
+  });
+});
