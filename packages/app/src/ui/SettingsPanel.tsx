@@ -1723,12 +1723,14 @@ interface FontPresetControlArgs {
  * `ui/font-presets.ts` 329.8ms，量尺核在 `measureFontPresence`）。而各档位的栈大量重名
  * （Segoe UI / Microsoft YaHei UI 反复出现），每次进节又从头量一遍。
  *
- * 这里只做三件事，判据本身一个字没改：
- * ① **按家族名缓存**（同一会话量一次就够：字体环境在会话内不会变）；
- * ② 缓存全命中时**同步**返回——标注不会先空后补地跳一下；
- * ③ 面板挂载后**空闲分片预热**（每个空闲回调只量一个档位栈，切片自带上限），
- *    用户从「通用」走到「外观 / 编辑器」时早已命中，进节不再有长任务。
- * 判定器拿不到（node / 老壳）⇒ 与从前逐字一致：整块显示"判定不了"。
+ * 纪律（判据本身一个字没改，改的只是"什么时候量"）：
+ * ① **缓存键 = 家族名**（= 需要检测的成员集合的最小单位；会话内字体环境不变，量一次就够）。
+ *    不用"档位 id / 索引"当键：那会把"栈改了但 id 没改"读成命中，静默说谎。
+ * ② **渲染期只读缓存、绝不量**：没量过的家族按"未知"处理（不标注），进节先出内容，
+ *    谁也不会为了一次判定白屏或卡住输入。
+ * ③ 量在**面板打开后的空闲分片**里做（8ms 一片，可中断），每片结束后 bump 一次版本号，
+ *    `FontPresetControl` 订阅它 ⇒ 检测完标注自然点亮。
+ * 判定器拿不到（node / 老壳）⇒ 与从前逐字一致：不标注（缓存永远空）。
  * ========================================================================================== */
 
 /** 家族名 → 本机是否装着（会话级；判据来源仍是 font-presets.ts 的 measureFontPresence） */
@@ -1736,34 +1738,48 @@ const fontPresenceCache = new Map<string, boolean>();
 /** 空闲预热用的判定器（`domFontPresenceChecker()` 每次调用都建 canvas，只建一次） */
 let warmChecker: FontPresenceChecker | null | undefined;
 
+/** 缓存版本号：预热每推进一片就 +1，订阅者据此重渲染（标注"点亮"的唯一信号） */
+let presenceVersion = 0;
+const presenceListeners = new Set<() => void>();
+
+function subscribePresence(listener: () => void): () => void {
+  presenceListeners.add(listener);
+  return () => {
+    presenceListeners.delete(listener);
+  };
+}
+
+const presenceVersionNow = (): number => presenceVersion;
+
+function bumpPresence(): void {
+  presenceVersion += 1;
+  for (const listener of presenceListeners) listener();
+}
+
 function warmPresenceChecker(): FontPresenceChecker | null {
   if (warmChecker === undefined) warmChecker = domFontPresenceChecker();
   return warmChecker;
 }
 
 /**
- * 一枚家族本机装没装（缓存优先）。
+ * 量一枚家族并写进缓存（**只在预热分片里调用**，渲染期一律不调）。
  *
  * 量法仍是 `checkFontStackPresence`（判据唯一来源），只是把"栈"换成**单成员栈**去问——
- * 于是缓存与分片的粒度都是"一枚家族"，跨档位重名的家族（Segoe UI / Microsoft YaHei UI
- * 反复出现）只量一次。
+ * 于是缓存与分片的粒度都是"一枚家族"，跨档位重名的家族只量一次。
  */
-function familyPresent(family: string, checker: FontPresenceChecker): boolean {
-  const cached = fontPresenceCache.get(family);
-  if (cached !== undefined) return cached;
+function measureFamily(family: string, checker: FontPresenceChecker): void {
+  if (fontPresenceCache.has(family)) return;
   const entries = checkFontStackPresence(family, checker);
-  const present = entries?.[0]?.present ?? true;
-  fontPresenceCache.set(family, present);
-  return present;
+  fontPresenceCache.set(family, entries?.[0]?.present ?? true);
 }
 
 /**
- * 一个栈里**缺装的**家族名（缓存优先；未判定的家族就地量一次再入缓存）。
- * 判定器不在场 ⇒ `[]`（= 不标注），与改动前同口径。
+ * 一个栈里**已判定为缺装**的家族名（纯缓存读，渲染期调用，O(成员数)）。
+ * 没量过的家族 = 未知 ⇒ 不标注（`undefined !== false`），进节因此不会被判定拖住。
  */
-function missingFamiliesOf(stack: string, checker: FontPresenceChecker | null): string[] {
-  if (stack === '' || checker === null) return [];
-  return fontStackConcreteMembers(stack).filter((family) => !familyPresent(family, checker));
+function missingFamiliesOf(stack: string): string[] {
+  if (stack === '') return [];
+  return fontStackConcreteMembers(stack).filter((family) => fontPresenceCache.get(family) === false);
 }
 
 /** 空闲回调（没有 requestIdleCallback 的环境退回 setTimeout，语义相同：让出当前帧） */
@@ -1775,36 +1791,39 @@ function onIdle(callback: () => void): void {
 }
 
 /**
- * 分片预热：把两行档位表里**所有具体家族**按 8ms 一片量完（已缓存的跳过）。
+ * 分片预热：把两行档位表里**所有具体家族**按 8ms 一片量完（已缓存的跳过），每片结束 bump
+ * 一次版本号让标注点亮。可中断：预算到点就换任务，输入永远不会被它占住。
  *
  * 为什么按时间预算而不是"一任务一枚家族"：`setTimeout` 每次都有约 4ms 的排程下限，
- * 三十来枚家族一枚一任务光排程就上百毫秒；用户若在打开后一秒内点进「编辑器」，
- * 预热还没走完，那一次点击就得在渲染期兜底补量剩下的十几枚（正是本批要灭的长任务）。
- * 8ms 一片能在一秒内走完，单片也远在 50ms 长任务线之下。
- * 链式续片用 `setTimeout(step, 0)` 而不是再排空闲回调：空闲回调若在同一个 deadline 里被连续
- * 调度，浏览器会把好几片挤进**同一个任务**（实测挤成一条 75ms 长任务，与本意相反）。
+ * 三十来枚家族一枚一任务光排程就上百毫秒。
+ * 为什么不再排空闲回调续片：空闲回调若在同一个 deadline 里被连续调度，浏览器会把好几片
+ * 挤进**同一个任务**（实测挤成一条 75ms 长任务，与本意相反）；`setTimeout` 一定换任务。
  */
 function warmFontPresence(presets: readonly FontPreset[]): void {
   const checker = warmPresenceChecker();
-  if (checker === null) return; // 判定不了：不白花时间，UI 照旧显示"判定不了"
+  if (checker === null) return; // 判定不了：不白花时间，也永远不会点亮（口径同改动前）
   const unique = new Set<string>();
   for (const preset of presets) for (const family of fontStackConcreteMembers(preset.stack)) unique.add(family);
   const queue = [...unique].filter((family) => !fontPresenceCache.has(family));
+  if (queue.length === 0) return;
   const now = (): number => (typeof performance === 'undefined' ? 0 : performance.now());
   let index = 0;
   const step = (): void => {
     const startedAt = now();
     while (index < queue.length) {
-      familyPresent(queue[index++]!, checker);
+      measureFamily(queue[index++]!, checker);
       if (now() - startedAt >= 8) break; // 一片最多 8ms（单枚量不完的那一次不切）
     }
+    bumpPresence(); // 这一片的结果点亮出去（订阅者重渲染，标注出现）
     if (index < queue.length) setTimeout(step, 0);
   };
   onIdle(step); // 首片落在面板刚打开后的空闲时段，不跟首帧抢
 }
 
 function FontPresetControl(a: FontPresetControlArgs): ReactElement {
-  const missingOf = (stack: string): string[] => missingFamiliesOf(stack, a.checker);
+  // 订阅缓存版本：预热每推进一片就重渲染一次，缺装标注随之点亮（渲染期本身不量任何字宽）
+  useSyncExternalStore(subscribePresence, presenceVersionNow, presenceVersionNow);
+  const missingOf = (stack: string): string[] => missingFamiliesOf(stack);
   const fellBackNotice =
     a.resolved.fellBack && a.resolved.requestedPresetId !== a.resolved.presetId
       ? a.presets.some((p) => p.id === a.resolved.requestedPresetId)
