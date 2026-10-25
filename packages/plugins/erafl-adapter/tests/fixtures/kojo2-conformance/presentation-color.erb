@@ -1,0 +1,9 @@
+;作者手写的等价物：着色配对（SETCOLOR 1,932 处 / RESETCOLOR 841 处是真盘读数）
+;配对由 core 自动补 RESETCOLOR，作者手写时也得自己收尾——少一行就是行为不同
+@EVENTFIRST
+#LATER
+    SETCOLOR 0xFF8080
+    PRINTFORMW 这行是红的。
+    PRINTFORMW 她的耳朵也红了。
+    RESETCOLOR
+    PRINTFORMW 这行回到作者色。

@@ -1,0 +1,14 @@
+;kojo2: # 机 初见
+@EVENTFIRST
+#LATER
+#DIM __kojo_table_心情
+#DIMS __kojo_table_心情__value
+    __kojo_table_心情 = 依存度
+    IF __kojo_table_心情 >= 0 && __kojo_table_心情 <= 99
+    __kojo_table_心情__value = "疏远"
+    ELSEIF __kojo_table_心情 >= 100
+    __kojo_table_心情__value = "亲近"
+    ELSE
+    __kojo_table_心情__value = "未知"
+    ENDIF
+    PRINTFORMW 现在是%__kojo_table_心情__value%。

@@ -1,0 +1,13 @@
+;kojo2: # 机 初见
+@EVENTFIRST
+#LATER
+    WHILE 体力恢复 < 4
+    体力恢复 += 1
+    IF 体力恢复 == 2
+    PRINTFORMW 好一些了。
+    CONTINUE
+    ELSEIF 体力恢复 > 3
+    PRINTFORMW 完全恢复了。
+    BREAK
+    ENDIF
+    WEND

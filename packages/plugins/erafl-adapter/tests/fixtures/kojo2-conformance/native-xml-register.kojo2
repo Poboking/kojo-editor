@@ -1,0 +1,5 @@
+# 机 初见
+
+@原生
+    ;成对注册：XML 与 define 壳缺一个，引擎根本不开这份口上
+    CALL KOJO_XML_REGISTER("ERB/口上/10_蒂娅/KOJO_K10_COM.xml", 10, XMLID_KOJO_CLASS_COM)
