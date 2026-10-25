@@ -13,6 +13,11 @@ import { describe, expect, it } from 'vitest';
  * 口径（2026-10-21 实测，`node tools/build-v2.mjs` 复跑）：
  *   `tree-sitter build --wasm`（clang -Os）后再 `wasm-opt -Oz`，产出 47,116 B / gzip(9) 13,061 B。
  * 只降不升：抬阈值 = 体积回退，要组长点头并在提交信息里写清涨在哪（grammar 规则 / 外部记号 / 查询）。
+ *
+ * **2026-10-25 组长（krosama）批准抬到 48,057 B**（LAU §5.3 的 `# 方言` 词位，LAU-DIALECT 批）：
+ *   涨因只有一枚——词表多一个 `decl(word)`，即 **TOKEN 50→51、SYMBOL 70→71、STATE 83 不变**，
+ *   涨在 token/symbol 表本体（实测把 `$.dialect_decl` 挪到 choice 中间位重跑，48,057 一字节不差，
+ *   瘦不回）。gzip(9) 13,061 → 13,290。不抬就得回退用户已拍板的语法决策，故按本协议记账。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +25,7 @@ const pkgRoot = resolve(here, '..');
 const wasmPath = join(pkgRoot, 'tree-sitter-kojo2.wasm');
 
 /** 棘轮阈值：出货 wasm 允许的最大原始字节数（只降不升）。 */
-const MAX_WASM_BYTES = 47_116;
+const MAX_WASM_BYTES = 48_057;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo2.wasm）', () => {
   const bytes = readFileSync(wasmPath);

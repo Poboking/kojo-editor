@@ -300,10 +300,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "dialect_decl"
-        },
-        {
-          "type": "SYMBOL",
           "name": "event_decl"
         },
         {
@@ -313,6 +309,10 @@
         {
           "type": "SYMBOL",
           "name": "constant_decl"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "dialect_decl"
         },
         {
           "type": "SYMBOL",
