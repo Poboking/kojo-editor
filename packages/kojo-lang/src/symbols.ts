@@ -59,6 +59,7 @@ import {
   parse,
   splitSpaces,
   type KojoDecl,
+  type KojoDialectDecl,
   type KojoLexLine,
   type KojoLiteral,
   type KojoSpan,
@@ -239,8 +240,12 @@ function rangeOfSpan(span: KojoSpan): Kojo2SymbolRange {
 
 /* ============================== AST → 种类 / detail ============================== */
 
-/** AST 声明节点 → 符号种类（9 种声明；`# 幕` 由 `scenes` 单独出） */
-function symbolKindOfDecl(decl: KojoDecl): Kojo2SymbolKind {
+/** AST 声明节点 → 符号种类（9 种可导航声明；`# 幕` 由 `scenes` 单独出）
+ *
+ * `# 方言` **不在内**：它只断言这份文件属于哪个方言，不声明任何可被引用的名字
+ * （spec §3.3 / LAU §5.3），所以大纲里没有它——入参见调用点的 `dialect` 过滤。
+ */
+function symbolKindOfDecl(decl: Exclude<KojoDecl, KojoDialectDecl>): Kojo2SymbolKind {
   switch (decl.kind) {
     case 'view':
       return 'view';
@@ -287,7 +292,7 @@ function modifierWordOf(modifier: KojoWeaveModifier): string {
  * 分支数 / 参数 / 修饰词）。读不到的事实不写（与悬停同一条"不编默认值"纪律：
  * `# 表` 的 `由` 表达式若因语法错误为空，就不写"由"，只写行数）。
  */
-function detailOfDecl(decl: KojoDecl): string {
+function detailOfDecl(decl: Exclude<KojoDecl, KojoDialectDecl>): string {
   switch (decl.kind) {
     case 'view':
       return VIEW_WORD;
@@ -442,6 +447,8 @@ export function kojo2DocumentSymbols(source: string): Kojo2SymbolFact[] {
       });
     }
     for (const decl of file.decls) {
+      // `# 方言` 是断言、不声明可导航的名字 ⇒ 大纲里没有它（spec §3.3 / LAU §5.3）。
+      if (decl.kind === 'dialect') continue;
       const kind = symbolKindOfDecl(decl);
       const line = lexed.lines[decl.span.start.line - 1];
       if (line === undefined || !headerLineMatches(kind, line)) continue;

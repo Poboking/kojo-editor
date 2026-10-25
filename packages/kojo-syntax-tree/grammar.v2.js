@@ -182,6 +182,7 @@ module.exports = grammar({
         $.event_decl,
         $.variable_decl,
         $.constant_decl,
+        $.dialect_decl,
         // ---- `@` 调度（单行指令）----
         $.face_command,
         $.return_stmt,
@@ -220,6 +221,13 @@ module.exports = grammar({
     event_decl: () => decl('机'),
     variable_decl: () => decl('变量'),
     constant_decl: () => decl('常量'),
+    /**
+     * `# 方言 <名字>`（LAU §5.3 / spec §3.3）：本方案**唯一新增的词位**，形态与 `# 视`
+     * 同构（一个裸名字）。它只是"这份文件自证属于哪个方言"的**断言**，不赋值、不产生
+     * 第二真源；名字对文法与 core 都是不透明字符串 ⇒ 词表里**不许**出现任何方言取值，
+     * 也不许为某个方言单开规则（D10：方言差异一律不进语法）。
+     */
+    dialect_decl: () => decl('方言'),
 
     /** 块声明的块头行（体由 block 挂）：`# 表 <名> 由 <表达式>`（§6.1）。 */
     table_head: () => decl('表'),

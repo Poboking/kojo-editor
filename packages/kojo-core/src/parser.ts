@@ -22,6 +22,7 @@ import type {
   KojoConditionChain,
   KojoConstDecl,
   KojoDecl,
+  KojoDialectDecl,
   KojoDispatchCondition,
   KojoDispatchNode,
   KojoExprCallStmt,
@@ -88,6 +89,7 @@ import {
 import type { PositionIndex } from './positions.js';
 import {
   KOJO_DEFAULT_STORAGE,
+  KOJO_DECL_WORDS,
   KOJO_DOMAIN_SYMBOL_SET,
   KOJO_FACE_MAX_ARGS,
   KOJO_INT_TYPE,
@@ -583,7 +585,7 @@ function parseDeclaration(st: ParserState, header: KojoLexLine): void {
     reportSpan(
       st,
       'core/decl/unknown',
-      `未知声明词 \`# ${header.word}\`：2.0 只认 幕/视/机/变量/常量/表/池/模（§3.3）。`,
+      `未知声明词 \`# ${header.word}\`：2.0 只认 ${KOJO_DECL_WORDS.join('/')}（§3.3）。`,
       spanOfLine(st, header),
     );
     skipLineAndSubtree(st);
@@ -601,6 +603,10 @@ function parseDeclaration(st: ParserState, header: KojoLexLine): void {
     case '视':
       st.i++;
       parseViewDecl(st, header);
+      return;
+    case '方言':
+      st.i++;
+      parseDialectDecl(st, header);
       return;
     case '变量':
       st.i++;
@@ -711,6 +717,38 @@ function parseViewDecl(st: ParserState, header: KojoDeclRecord): void {
   }
   st.hasView = true;
   const decl: KojoViewDecl = { kind: 'view', target: tokens[0]!.text, span: spanOfLine(st, header) };
+  st.decls.push(decl);
+}
+
+/**
+ * `# 方言 <名字>`：只建形状，**不解释内容**（LAU §5.3 第 3 级 / spec §3.3）。
+ *
+ * - 参数是一个裸名字，core 按不透明字符串收下来交给上层对账；这里**不校验**它是不是
+ *   某个已知方言（那会把手伸进方言事实，铁律 3）；
+ * - 不进文件命名空间（不叫"声明一个名字"），也不查重——`core/dialect/mismatch`
+ *   一族的判据与码都属于方言层，不在本层；
+ * - 一行只收一个名字，与 `# 视` 同形。
+ */
+function parseDialectDecl(st: ParserState, header: KojoDeclRecord): void {
+  const tokens = splitSpaces(header.rest, header.restOffset);
+  if (tokens.length === 0) {
+    reportSpan(
+      st,
+      'core/lex/anchor',
+      '`# 方言` 缺被断言的名字（形如 `# 方言 <名字>`；§3.3）。',
+      spanOfLine(st, header),
+    );
+    return;
+  }
+  if (tokens.length > 1) {
+    reportSpan(
+      st,
+      'core/lex/anchor',
+      '`# 方言` 只断言一个名字，多余内容请删掉（§3.3）。',
+      spanOfLine(st, header),
+    );
+  }
+  const decl: KojoDialectDecl = { kind: 'dialect', name: tokens[0]!.text, span: spanOfLine(st, header) };
   st.decls.push(decl);
 }
 

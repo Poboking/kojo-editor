@@ -184,6 +184,10 @@
           "named": true
         },
         {
+          "type": "dialect_decl",
+          "named": true
+        },
+        {
           "type": "else_head",
           "named": true
         },
@@ -409,6 +413,10 @@
         },
         {
           "type": "continue_stmt",
+          "named": true
+        },
+        {
+          "type": "dialect_decl",
           "named": true
         },
         {
@@ -664,6 +672,10 @@
   },
   {
     "type": "dedent",
+    "named": true
+  },
+  {
+    "type": "dialect_decl",
     "named": true
   },
   {

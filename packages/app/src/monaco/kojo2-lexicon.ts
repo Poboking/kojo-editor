@@ -33,7 +33,16 @@ import { sugarEditorLexicon } from '@kojo/plugin-kojo-sugar';
 /** 2.0 一级缩进（空格数）；栏头缩进阶梯与 `@原生` 体判定都按它算（core 同一常量）。 */
 export const KOJO2_INDENT_WIDTH = KOJO_INDENT_WIDTH;
 
-/** `#` 声明词（幕 / 视 / 机 / 变量 / 常量 / 表 / 池 / 模）。 */
+/**
+ * `#` 声明词（幕 / 视 / 机 / 变量 / 常量 / 表 / 池 / 模 / 方言）。
+ *
+ * 末位 `方言`（LAU §5.3）＝ 方言**断言**词位，真源在 core `tokens.ts`，本文件只转发 ⇒
+ * Monarch 的 `@declWords` 分支（`kojo2-language.ts` 的 `DECL_LINE`）自动把它接进
+ * `KOJO2_TOKEN.declaration`，**不新造 token 名**（角色表是 LAU-2 的事）。
+ *
+ * ⚠ 位序是公开契约：`kojo2-format.ts` 按下标取词（`slice(0, 5)` 与
+ * `[, , , , , TABLE, POOL, TEMPLATE]`）⇒ core 侧只能在**尾部追加**。
+ */
 export const KOJO2_DECL_WORDS: readonly string[] = KOJO_DECL_WORDS;
 
 /** `@` 调度词（算 / 着色 / 颜绘 / … / 原生 / 织）。 */

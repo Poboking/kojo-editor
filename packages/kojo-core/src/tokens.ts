@@ -27,8 +27,18 @@ export const KOJO_BLANK_LINE = '空行';
 /** `空行 等待` 的强制等待词 */
 export const KOJO_BLANK_WAIT = '等待';
 
-/** `#` 声明词（§3.3） */
-export const KOJO_DECL_WORDS = ['幕', '视', '机', '变量', '常量', '表', '池', '模'] as const;
+/**
+ * `#` 声明词（§3.3）。
+ *
+ * ⚠ **位序是公开契约，只能追加在尾部**：下游按位置取词（`kojo2-format.ts` 的
+ * `slice(0, 5)` 与 `[, , , , , TABLE, POOL, TEMPLATE]`、`kojo-lang` 的 declarations /
+ * symbols / inlay、`kojo2-highlight` / `codelens` / `references` / `indent`），插队会**静默**
+ * 改判这些模块的行为。
+ *
+ * 末位 `方言`（LAU §5.3）＝ 方言**断言**词位：它不指向任何游戏事实，参数对 core 是不透明
+ * 字符串（core 不解释、不校验它属于哪个方言）；词表里**不许**出现任何方言名取值。
+ */
+export const KOJO_DECL_WORDS = ['幕', '视', '机', '变量', '常量', '表', '池', '模', '方言'] as const;
 export type KojoDeclWord = (typeof KOJO_DECL_WORDS)[number];
 /** 声明词集合（词表单源；parser 只查这一份） */
 export const KOJO_DECL_WORD_SET: ReadonlySet<string> = new Set<string>(KOJO_DECL_WORDS);
@@ -221,7 +231,7 @@ export interface KojoNativeRecord extends KojoLineBase {
 /** `#` 声明行的词法切分；是不是合法声明词由 parser 判 */
 export interface KojoDeclRecord extends KojoLineBase {
   readonly kind: 'decl';
-  /** `#` 与空白之后的词（`幕`/`视`/`机`/`变量`/`常量`/`表`/`池`/`模`，或未知词原样） */
+  /** `#` 与空白之后的词（`KOJO_DECL_WORDS` 各项，或未知词原样） */
   readonly word: string;
   /** 词之后的原文（已去前导空白、已去行尾空白） */
   readonly rest: string;

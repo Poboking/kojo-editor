@@ -73,8 +73,20 @@ const [
   NATIVE_WORD = '',
 ] = KOJO2_DISPATCH_WORDS;
 
+/**
+ * `# 方言` 的声明词（core 词表**尾格**，位序契约见 `tokens.ts`）。
+ *
+ * 它是单行声明（一个裸名字、不开体），所以并进 {@link SINGLE_DECL_WORDS}；
+ * 上面那行 `slice(0, 5)` **一个字都没动**——前五枚的位序判据原样保留，
+ * 新词只从尾格单独取，不参与任何位置解构。
+ */
+const DIALECT_WORD = KOJO2_DECL_WORDS[8];
+
 /** 单行声明：连续写、之间不空行、整组与正文之间空一行（§3.2）。 */
-const SINGLE_DECL_WORDS: ReadonlySet<string> = new Set(KOJO2_DECL_WORDS.slice(0, 5));
+const SINGLE_DECL_WORDS: ReadonlySet<string> = new Set([
+  ...KOJO2_DECL_WORDS.slice(0, 5),
+  ...(DIALECT_WORD === undefined ? [] : [DIALECT_WORD]),
+]);
 
 /** 块声明：前后各空一行（§3.2）。 */
 const BLOCK_DECL_WORDS: ReadonlySet<string> = new Set([TABLE_WORD, POOL_WORD, TEMPLATE_WORD]);

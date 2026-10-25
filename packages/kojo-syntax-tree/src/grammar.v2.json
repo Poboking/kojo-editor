@@ -300,6 +300,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "dialect_decl"
+        },
+        {
+          "type": "SYMBOL",
           "name": "event_decl"
         },
         {
@@ -437,6 +441,13 @@
       "content": {
         "type": "PATTERN",
         "value": "#[ \\t\\u3000]+常量(?:[ \\t\\u3000][^\\n]*)?"
+      }
+    },
+    "dialect_decl": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "#[ \\t\\u3000]+方言(?:[ \\t\\u3000][^\\n]*)?"
       }
     },
     "table_head": {

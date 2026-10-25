@@ -60,6 +60,23 @@ export interface KojoMachineDecl {
   readonly span: KojoSpan;
 }
 
+/**
+ * `# 方言 <名字>`：这份文件**自证**属于哪个方言（LAU §5.3 第 3 级；spec §3.3）。
+ *
+ * 三条约束（① 可选 ② **只断言不赋值** ③ 错配是 error）里，core 只负责形状：
+ * - `name` 是作者写的**不透明字符串**——core 不解释它、不校验它是不是某个已知方言，
+ *   词表里也**不许**出现任何方言名取值（零游戏名词铁律）；
+ * - 与解析链结论（`detect()` → `project.adapterId`）的对账、以及
+ *   `core/dialect/mismatch` / `core/dialect/unbound` 都**不在本层**（方言层的事）；
+ * - 不进文件命名空间：它不声明一个可被引用的名字（`declNameOf` 归 unnamed 一路）。
+ */
+export interface KojoDialectDecl {
+  readonly kind: 'dialect';
+  /** 被断言的方言名字原文（已 trim；对 core 不透明） */
+  readonly name: string;
+  readonly span: KojoSpan;
+}
+
 /** `# 变量 <名> <类型> [= <初值>] [场景|存档|会话]` */
 export interface KojoVarDecl {
   readonly kind: 'var';
@@ -158,6 +175,7 @@ export interface KojoPoolDecl {
 export type KojoDecl =
   | KojoViewDecl
   | KojoMachineDecl
+  | KojoDialectDecl
   | KojoVarDecl
   | KojoConstDecl
   | KojoTableDecl
