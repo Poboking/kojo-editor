@@ -313,11 +313,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （不进图，−0.4 KB）。净 +3 KB ⇒ 现读数 **3,121 KB / 211 文件**，
     //     KB 闸随之上抬 3,120 → **3,130**（本闸是粗闸：抓整包回灌，不追 KB 级抖动；
     //     文件数闸 211 不动——新文件一个都没进开机图）。
+    //   - 首屏性能批（2026-10-25 上游 `8a9fee1c`：浮层 / 确认框 / kojo2 存储族改懒装载）
+    //     把 **24 个模块挪出开机图** ⇒ 合流后现读数 **187 文件 / 2,741 KB**。两枚闸随现值
+    //     **下调**（211 → 187 文件、3,130 → 2,750 KB）：降闸不必写理由，抬闸才要——
+    //     上面那笔 3,120 → 3,130 的归因留档，是因为它解释"为什么曾要抬"，不是留着当现值。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤211 文件 / ≤3,130 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_130);
-    expect(files.length).toBeLessThanOrEqual(211);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤187 文件 / ≤2,750 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_750);
+    expect(files.length).toBeLessThanOrEqual(187);
   });
 
   /**
