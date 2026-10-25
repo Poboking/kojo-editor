@@ -41,3 +41,19 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 | LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 批次九认领：lead 2026-10-22 |
+
+## 在办 · 语言面统一（LAU · 2026-10-25，组长 krosama，七路车道并行）
+
+> 规格来源 `docs/ARCH-language-unification.md` **v1.1**（附录 A 有 v1.0→v1.1 的 21 条逐项对照）。
+> 七路各在自己 worktree 与 `b/krosama/1025-*` 分支上，**只推自己分支**；dev 由组长逐路 rebase 合流、
+> 全量闸一批只跑一次、闸期不动树。别的路数请勿开同一批文件（各路的"禁改清单"就是这些行）。
+
+| ID | 任务（落点） | 关键判据 | 状态 |
+| LAU-1a | 宿主去 eraTW 化：`App.tsx:237-249,406,421` 三处惰性装载按当前项目取（取不到给 `null`/`undefined`，**绝不回落 eraTW**）；`kojo2-project-scan-adapter.ts:48-51` 同改；`bootstrap.ts:250-263` 的 `'erafl'` 字面量泛化成对 `adapter-manifest.ts` 的循环（条目已带 `load()` / `auditWord`） | eraFL 工程的迁移向导 / 存储注入 / 项目扫描拿到 eraFL 事实或 `null`；四个无 2.0 面的适配器仍给 `null` 不借 eraTW；六枚注册结果与改前逐一致；`packages/app/src` 里游戏名只剩 manifest + `audit-allow` 行；全量不回退 + 双 typecheck + `audit:decoupling` ✅ | 进行中 · 认领：krosama/L1 2026-10-25 |
+| LAU-GATE | `tools/audit-language.mjs` + `audit:language` 脚本：把设计稿 §9 的"grep 零命中"判据做成**棘轮**（继承 `audit-decoupling` 的 `audit-allow` / 注释行 / 组合根三条豁免口径），基线 JSON 钉今日实测：`monaco/` 按语言 id 分支 257 行、`app/src` 游戏名与引擎词汇 62 行 | 三族各注入一条违规 ⇒ 必红（闸只认真能红）；今日树绿；不改任何产品码 | 进行中 · 认领：krosama/L2 2026-10-25 |
+| LAU-2a | 角色表色彩可行性探针 `tools/color-feasibility.mjs`：按 `kojo2-theme.test.ts` 的 ΔE76 ≥ 12 与对比度 ≥ 4.5 口径，求 §4.2 的 18 档在 6 套主题底色下是否可解 | 出读数：18 档可解/不可解、每套底色最大可解档数、全局上限、现状 12 色余量参照；**LAU-2 的档数按这份读数控** | 进行中 · 认领：krosama/L3 2026-10-25 |
+| LAU-6a | `@原生` 注入可行性探针 `tools/inject-probe.mjs`：用**已出货**两枚 wasm 实测 `ParseOptions.includedRanges`（`native_body` 定位、字节区间 vs 整行对齐、`[SKIPSTART]` 嵌套、深缩进） | 判决三取一（可排 / 须整行对齐 / 不可行）+ 支撑读数；顺带核 `237c62c9` 改过 `erb-syntax-tree/grammar.js` 后出货 wasm 是否同步（该提交未含 wasm/parser.c，存疑） | 进行中 · 认领：krosama/L4 2026-10-25 |
+| LAU-SYNTAX | `# 方言` 词位（用户 2026-10-25 定名）：`KOJO_DECL_WORDS` **尾部**追加（`kojo2-format.ts:55,77` 按位置解构）+ `grammar.v2.js:218-229` 词表 + `build-v2.mjs` 重生成 `parser.v2.c` / `grammar.v2.json` / `node-types.v2.json` / `tree-sitter-kojo2.wasm` + Monarch 词表 + spec §3 一行 | core/宿主零游戏名词（`erafl` 只是作者写的字符串）；wasm 造不出来 ⇒ 整批判 BLOCKED，**不许提交文法改了而 wasm 没跟上的半套**；v1 文法与 wasm 一件不碰 | 进行中 · 认领：krosama/L5 2026-10-25 |
+| LAU-FIXTURE | eraFL 的 2.0 面补 conformance 夹具（`HANDOFF-erafl-adapter.md:275-281` 记录它缺夹具）——方言矩阵缺第二列 | 交付＝"eraFL 真支持的子集全绿 + 明确红名单"，**不是全绿**；夹具事实源必须是 eraFL 自己声明的数据（抄 eraTW 就失去"错配必红"的意义）；禁 skip / 放宽断言凑绿 | 进行中 · 认领：krosama/L6 2026-10-25 |
+| LAU-D1a | 方言契约片（**D13：不新造第三套契约**）：`kojo-core/adapter.ts` additive 加 `CarrierBinding` + `carriers?`；`EventDispatchModel` 扩 `'metadata'`（**不动 `LayerMode`/`LayerTarget`**，spec §10.5）；diagnostics 加 6 枚 core 码；`slots.ts` 的 `EditorDocumentIdentity.dialect?` 纯 additive；`resolveDialectBinding()` 纯函数 | 六枚旧适配器零改动仍绿；未绑定 ⇒ 空事实 + `core/dialect/unbound`；覆盖与 `detect()` 冲突 ⇒ `core/dialect/mismatch` 且以覆盖为准；`event/unknown` 与 `unit/*` 已被自检占用、不复用不改语义；真源仍是 `project.adapterId`（不引入新清单文件） | 进行中 · 认领：krosama/L7 2026-10-25 |
+| LAU-BLOCKED | **未排的两枚，卡在人不在码**：LAU-1（协议 v3）与 LAU-D1b（方言解析链上屏）都要等 **K2-CONTRACT / D0** 定契约落点（`plugin-api` vs `kojo-core`，本表第 30-31 行 lead 认领）；LAU-3 / LAU-4 与本表 ERB-PARITY、SDK B4/B5 同文件，须串行 | 落点定了才开实现批；在此之前谁动 `structure-protocol.ts` / `semantic-roles.ts` 的落点都是抢裁 | 待 D0 裁决 · krosama 2026-10-25 |
