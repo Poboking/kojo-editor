@@ -1,8 +1,7 @@
 import type { ErbStructureIssue } from '@kojo/plugin-api';
 import { ERB_SKIP_MARKERS, erbPreprocRoleOf } from '@kojo/plugin-api';
-import { erbCodeBodyOf } from './scanner';
 import { checkDeclarationIssues } from './declarations';
-import { closerNameForPair, forEachControlFlowLine, parseFunctionDefinition } from './scanner';
+import { erbCodeBodyOf, closerNameForPair, forEachControlFlowLine, parseFunctionDefinition } from './scanner';
 
 /**
  * ERB 结构体检（2026-10-13 UI 反馈 7）：只报**可证明**的配对错误。
@@ -119,6 +118,66 @@ export function preprocRoleOf(lineText: string): 'open' | 'branch' | 'close' | n
 }
 
 /**
+ * 一行预处理器标记的完整读数（A5「分支变灰」的判据入口）。
+ *
+ * `macro` 的语义是**引擎的判据**，不是我们的发明：Emuera `ErbLoader.PPState.AddKeyWord`
+ * 里 `[IF xxx]` 走 `Disabled = GlobalStatic.IdentifierDictionary.GetMacro(token2) == null`，
+ * 而 `[IF_DEBUG]` / `[IF_NDEBUG]` 走 `Disabled = !Program.DebugMode`（另一条腿）。
+ * 两者形状只差一个下划线，判据却完全不同——所以这里必须把"有没有宏名"和"角色"分开答。
+ *
+ * `text` 是标记原词（`[IF DEBUG]` 这样，大小写按原文），给悬停说明与死区读数用。
+ */
+export interface PreprocMarkerRead {
+  readonly role: 'open' | 'branch' | 'close';
+  /** 宏名（大写归一）；`null` = 该标记不是宏测试（`[IF_DEBUG]` / `[IF_NDEBUG]` / `[ELSE]` / `[ENDIF]`） */
+  readonly macro: string | null;
+  /** 标记原词（方括号内含，尾随空白已去） */
+  readonly text: string;
+}
+
+/** 宏名的字符判据（对应引擎 `IdentifierDictionary.badSymbolAsIdentifier` 那张黑表） */
+const BAD_MACRO_CHAR = /[+\-*/%=!<>&|^~"'(){}\[\],.:\\@$#?;\s]/;
+
+/**
+ * 宏名是否**可判**：只有一个裸标识符时才答，其余一律 `null`（= 不判）。
+ *
+ * 为什么这么严：引擎读 `token2` 用 `ReadSingleIdentifier`（读到空白/符号为止）。
+ * `[IF A B]` 在引擎里只取 `A`，随后 `st.Current != ']'` 报 "IgnoreAfterPreprosessor"
+ * 并把该行剩余部分丢掉——那已经是写法错误，不该由装饰层替作者猜他想测哪个宏。
+ * 中文宏名照收（基线语料 `#DEFINE 時間帯` / `天候` 是常见形态），只有黑表里的符号与空白拒收。
+ */
+function macroOf(arg: string): string | null {
+  const name = arg.trim();
+  if (name.length === 0) return null;
+  if (BAD_MACRO_CHAR.test(name)) return null;
+  if (/^[0-9]/.test(name)) return null; // 引擎读标识符不吞数字开头 ⇒ 那不是宏名
+  return name.toUpperCase();
+}
+
+/**
+ * 标记里的**条件实参**（`[IF xxx]` / `[ELSEIF xxx]` 的 `xxx`）。
+ *
+ * 这里**不重新判"这是不是标记"**——那件事的唯一真源是契约层的 `erbPreprocRoleOf`
+ * （`@kojo/plugin-api` 的 `ERB_PREPROC_PATTERNS`），本模块不再自己写整行判据。
+ * 本函数只做"剥关键字、取剩下那段"：`IF_DEBUG` / `IF_NDEBUG` / `ELSE` / `ENDIF`
+ * 关键字后面没有空白，天然取不到实参——与引擎"只有 `[IF xxx]` / `[ELSEIF xxx]` 才读宏"
+ * 同一个形状，不是另立一条规则。
+ */
+function macroArgOf(text: string): string | null {
+  const body = text.slice(1, text.lastIndexOf(']')).trim();
+  const m = /^(?:IF|ELSEIF)\s+(.+)$/i.exec(body);
+  return m === null ? null : macroOf(m[1]!);
+}
+
+/** 一行是不是预处理器标记；是的话给出角色 + 宏名（结构体检与分支判定共用这一处解析） */
+export function preprocMarkerAt(lineText: string): PreprocMarkerRead | null {
+  const role = erbPreprocRoleOf(lineText);
+  if (role === null) return null;
+  const text = lineText.trim();
+  return { role, macro: role === 'close' ? null : macroArgOf(text), text: markerOf(text) };
+}
+
+/**
  * 预处理条件块的配对体检（**独立栈**，与 ERB 控制流互不污染）。
  *
  * 为什么必须独立：被裁掉的那一支可以合法地**不配平**（`[IF_DEBUG]` 里开 `IF`、
@@ -195,6 +254,176 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
 function markerOf(trimmed: string): string {
   const end = trimmed.indexOf(']');
   return end < 0 ? trimmed : trimmed.slice(0, end + 1);
+}
+
+// ---------------------------------------------------------------------------
+// 预处理条件块 · 被裁支（A5 / P0-3 尾巴：分支变灰）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一段被预处理器**裁掉**的分支正文（1 基、含端点）。
+ *
+ * 区间**不含标记行本身**：`[IF XXX]` / `[ELSE]` / `[ELSEIF XXX]` 是结构骨架，作者要看得见
+ * 才读得懂"为什么下面这段是灰的"；压暗的只有引擎不会编译的正文。
+ */
+export interface PreprocDeadRange {
+  /** 正文首行（标记行的下一行） */
+  readonly fromLine: number;
+  /** 正文末行（下一个分支/闭合标记的前一行） */
+  readonly toLine: number;
+  /** 把这一支裁掉的标记原词（`[IF DEBUG]` / `[ELSEIF FOO]` / `[ELSE]`） */
+  readonly marker: string;
+  /** 标记里的宏名（大写归一）；`[ELSE]` 被裁时为空串（它没有宏名） */
+  readonly macro: string;
+}
+
+/** 一个还开着的条件块（`collectPreprocDeadRanges` 的栈元素） */
+interface PreprocFrame {
+  /** 本块内是否已有一支**必定执行**（宏命中）——它之后的支一律被裁（引擎的 `done`） */
+  taken: boolean;
+  /** 当前支的死区起点（1 基）；-1 = 当前支不判死 */
+  deadFrom: number;
+  /** 把当前支判死的标记原词与宏名（写进 {@link PreprocDeadRange}） */
+  deadMarker: string;
+  deadMacro: string;
+}
+
+/**
+ * 找出**引擎一定会裁掉**的预处理分支正文（纯函数，编辑器装饰层的唯一数据源）。
+ *
+ * ## 判据（逐条对得上 Emuera `ErbLoader.PPState.AddKeyWord`）
+ * | 标记 | 引擎 | 这里 |
+ * |---|---|---|
+ * | `[IF X]` | `Disabled = GetMacro(X) == null` | X 不在 `definedMacros` ⇒ 该支死 |
+ * | `[IF_DEBUG]` | `Disabled = !Program.DebugMode` | **不判**（调试模式不可知） |
+ * | `[IF_NDEBUG]` | `Disabled = Program.DebugMode` | **不判**（同上） |
+ * | `[ELSEIF X]` | `Disabled = done \|\| GetMacro(X) == null` | 前面已有支确定执行，或 X 不在集 ⇒ 死 |
+ * | `[ELSE]` | `Disabled = done` | 前面已有支确定执行 ⇒ 死 |
+ *
+ * `[IF_DEBUG]` 与 `[ELSE]` 的"前面"只要**有可能**执行就不判死（`[IF_DEBUG]…[ELSE]` 两支
+ * 互斥但都可能，压错一边就是撒谎）；而 `[ELSEIF X]` 的条件是**我们自己的判据**，
+ * 前面那支是否执行不影响"X 未定义 ⇒ 这一支没机会"，所以照判。
+ *
+ * ## 为什么 `[IF DEBUG]`（带空格）**照判**
+ * 形状上它和文档里的宏测试一模一样，但真实语料里它承担的是"调试打印"的角色
+ * （eraTW 4.980：`[IF DEBUG]` 40 处 / `[IF_DEBUG]` 41 处并存，块内清一色
+ * `PRINTFORMW See the debugger for output.` 这类调试输出）。引擎侧**没有**给 `DEBUG`
+ * 这个名字开特例（`GetMacro("DEBUG")` 照样查 `#DEFINE` 表），两个语料盘也都没有
+ * `#DEFINE DEBUG` ⇒ 这 41 支在引擎里**任何模式都不会执行**。
+ * 于是这里的选择只有两个：按引擎事实压暗（并让作者看见"该写 `[IF_DEBUG]`"），
+ * 或者假装它们是活的。前者是真相，后者是替作者圆一个不存在的语义。
+ *
+ * ## 什么情况下**一个都不判**
+ * `definedMacros` 为 `null` / `undefined` ⇒ 直接空数组（没索引就没有"项目里有哪些宏"
+ * 这个事实，猜一次就是成片压错）。**空集不在此列**：索引在手、项目确实一个 `#DEFINE`
+ * 都没有时，"`[IF X]` 必被裁"仍是可证明的。
+ *
+ * ## 已知的保守偏差（方向都是"少压"，不会多压）
+ * - `#DEFINE` 的可见性在引擎里还受**加载顺序**约束（先加载的文件看不到后定义的宏），
+ *   这里按**项目全集**判 ⇒ 顺序上晚定义的宏被当成"已定义" ⇒ 少压一支，不误压；
+ * - 大小写按 `IgnoreCase=true` 归一（Emuera 默认档）；盘上若关了这个开关且作者大小写
+ *   不一致，同样是"少压"这一侧；
+ * - `[SKIPSTART]` 区间整体跳过（引擎那段根本不编译，里面的标记不参与配对，与
+ *   `checkPreprocStructure` 同口径）；
+ * - 标记行带尾随正文（`[IF DEBUG]PRINTL …`）不认（正则要求整行只有标记）——引擎会
+ *   丢尾随部分并告警，那是写法错误，不在装饰层兜底。
+ */
+export function collectPreprocDeadRanges(
+  text: string,
+  definedMacros: ReadonlySet<string> | null | undefined,
+): PreprocDeadRange[] {
+  if (definedMacros === null || definedMacros === undefined) return [];
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const stack: PreprocFrame[] = [];
+  const raw: PreprocDeadRange[] = [];
+  let inSkipBlock = false;
+
+  /** 收掉一帧里还开着的死区（`upto` = 死区最后一个可能行，1 基） */
+  const closeDead = (frame: PreprocFrame, upto: number): void => {
+    if (frame.deadFrom < 0) return;
+    if (upto >= frame.deadFrom) {
+      raw.push({
+        fromLine: frame.deadFrom,
+        toLine: upto,
+        marker: frame.deadMarker,
+        macro: frame.deadMacro,
+      });
+    }
+    frame.deadFrom = -1;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = erbCodeBodyOf((lines[i] ?? '').trim());
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (!trimmed.startsWith('[')) continue;
+    const marker = preprocMarkerAt(trimmed);
+    if (marker === null) continue;
+    const line = i + 1;
+
+    if (marker.role === 'close') {
+      const frame = stack.pop();
+      if (frame !== undefined) closeDead(frame, line - 1);
+      continue;
+    }
+
+    if (marker.role === 'branch') {
+      const frame = stack[stack.length - 1];
+      if (frame === undefined) continue; // 孤儿分支：结构体检负责报，这里不判
+      closeDead(frame, line - 1);
+      const dead = marker.macro === null ? frame.taken : frame.taken || !definedMacros.has(marker.macro);
+      if (!dead && marker.macro !== null) frame.taken = true; // 宏命中 ⇒ 这一支必定执行
+      if (dead) {
+        frame.deadFrom = line + 1;
+        frame.deadMarker = marker.text;
+        frame.deadMacro = marker.macro ?? '';
+      }
+      continue;
+    }
+
+    // 开块
+    let dead = false;
+    if (marker.macro !== null) dead = !definedMacros.has(marker.macro);
+    const frame: PreprocFrame = {
+      taken: marker.macro !== null && !dead,
+      deadFrom: dead ? line + 1 : -1,
+      deadMarker: marker.text,
+      deadMacro: marker.macro ?? '',
+    };
+    stack.push(frame);
+  }
+
+  // 未闭合的块：死区一直延伸到文件末尾（配对错误由结构体检单独报，这里只管显示）
+  for (const frame of stack) closeDead(frame, lines.length);
+
+  return mergeDeadRanges(raw);
+}
+
+/**
+ * 重叠死区合并（嵌套块落在外层死区里时必然重叠）。
+ *
+ * 只并**重叠**、不并相邻：相邻两段来自不同分支（`[IF A]` 死 + `[ELSE]` 死），
+ * 合成一段就会把两条不同的悬停说明挤成一条。
+ */
+function mergeDeadRanges(ranges: readonly PreprocDeadRange[]): PreprocDeadRange[] {
+  if (ranges.length < 2) return [...ranges];
+  const sorted = [...ranges].sort((a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine);
+  const out: PreprocDeadRange[] = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last !== undefined && r.fromLine <= last.toLine) {
+      if (r.toLine > last.toLine) out[out.length - 1] = { ...last, toLine: r.toLine };
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
 }
 
 /** 向栈内找**最近**的匹配层（与 `scanControlFlow` 同一条查找方向：自顶向下） */

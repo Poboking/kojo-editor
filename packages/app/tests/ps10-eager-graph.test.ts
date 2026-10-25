@@ -358,15 +358,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     +3.6 KB（K5 批 11 枚语句词与归因），`erb-parser/structure.ts` −0.3 KB（自带三枚正则
     //     删除、改委托真源）。KB 闸随现值抬到下面那条 expect；文件闸 **191 不动且只剩 0 余量**
     //     ——下一批再往常驻面加文件，必须先减面（`ui-kit/index.tsx` 拆分那条）。
-    // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
-    // 交付回执不必靠人肉复算。
     //   - **语言面缺陷批（2026-10-26，本批）**：增量 +2 KB，全落在既有常驻文件、零新模块
     //     （文件数 191 不动，与上一档逐字相同）：· `bootstrap.ts` +1 KB —— 2.0 登记表核
     //     `facts.id === entry.id` 的对账与可见诊断；· `ui/editor-global-providers.ts` +1 KB
     //     —— 2.0 语言面安装器搬出切流开关块，装配段变长。现值 2,823 KB ≤ 闸 2,830，
     //     **本批不动闸**（余量只剩 7 KB：下一枚进图的东西必须先挪一个模块出去）。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,830 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_830);
+    //   - **A5 被裁支压暗批（2026-10-26，与上两批合流后重钉）**：现读数
+    //     **191 文件 / 2,835 KB**，文件闸 191 **不动**（读数一枚没涨），KB 闸
+    //     2,830 → **2,840**（合流后读数顶穿上游那档 2,830 五个 KB，粗闸只剩 +0.2% 余量：
+    //     下一枚进图的东西必须先挪一个模块出去）。
+    //     逐块点名（读数 +10 KB；实量为下面两个字节数，其余改动全在图外）：
+    //     · +10.6 KB `erb-parser/structure.ts`：预处理器标记读数（`preprocMarkerAt`，把角色 +
+    //       宏名一次读全）与被裁支区间（`collectPreprocDeadRanges`，逐条对 Emuera
+    //       `ErbLoader.PPState.AddKeyWord`）。**没有可挪的动态边**：`checkPreprocStructure`
+    //       本来就要这份标记解析，函数与被它替代的旧分支判据同住一枚文件，拆出去只会多一条
+    //       静态边（`structure.ts` 仍要 import 它）；而 erb-parser 是开机常驻两包之一。
+    //       体量九成是中文注释（引擎判据表、语料读数、保守偏差清单）。
+    //     · +0.2 KB `erb-parser/index.ts`：导出面（宿主装饰层与单测的入口）。
+    //     · 宿主两枚新模块（`monaco/erb-preproc-dim.ts` / `erb-preproc-defines.ts`）**不在开机图**：
+    //       它们的唯一消费者 `ui/editor-global-providers.ts` 随 EditorPane 走懒 chunk，
+    //       所以这两枚一枚文件、一个字节都没进欢迎页（这正是文件闸不动的原因，不是漏数）。
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,840 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_840);
     expect(files.length).toBeLessThanOrEqual(191);
   });
 

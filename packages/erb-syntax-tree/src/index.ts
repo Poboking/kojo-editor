@@ -81,6 +81,12 @@ export interface FoldRange {
  * （`[ELSE]` / `[ELSEIF …]`）另给"上一段起点 → 分支前一行"的段区间，`[ENDIF]` 再补末段
  * （末段只在真出现过分支时给，无分支块的段区间与整块只差收束行，重复给没有意义）。
  * 未配对一律**不产**（栈空遇到分支/收束 = 不动栈、不发区间；走到文件尾仍开着的块不产）。
+ *
+ * **分支级"哪一支被裁"不在这里**（A5 · P0-3 尾巴）：那条判据要问"项目里有没有
+ * `#DEFINE` 这个宏"，而语言包**没有索引**（也不该依赖插件）。真源落在
+ * `@kojo/plugin-erb-parser` 的 `collectPreprocDeadRanges()`（与 Emuera
+ * `ErbLoader.PPState` 逐条对齐），宿主 `monaco/erb-preproc-dim.ts` 把它变成压暗装饰。
+ * 这一层只答"块从哪到哪"，不答"哪一支是死的"。
  */
 export function foldRanges(query: Query, tree: Tree): FoldRange[] {
   const out: FoldRange[] = [];

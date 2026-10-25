@@ -44,6 +44,7 @@ import { makeLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
 import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
 import { installHover, type HoverTables } from '../monaco/kojo-hover';
+import { installErbPreprocDim } from '../monaco/erb-preproc-dim';
 import {
   PROVIDED_CODE_ACTION_KINDS,
   actionDiagnostics,
@@ -1531,6 +1532,14 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 第三参 = 本文件身份的换算：投影那份 `inmemory://sugar/…` 的 URI 在索引里对不到任何文件，
     // `#DIM` 声明那一路于是在预览面上静默；原文面回 `null` ⇒ 沿用 `model.uri`，逐字不变。
     globalDisposers.push(installHover(monaco, () => editorTables(requireKernel()), previewSourcePathOf));
+    // 预处理条件块「被裁支压暗」（A5 / P0-3 尾巴）：判据在插件
+    // （`collectPreprocDeadRanges`，与 Emuera `ErbLoader.PPState` 逐条对齐），
+    // 宿主这一层只把区间翻成装饰，**不重新解释 `[IF xxx]`**。
+    // 索引重建 / 项目切换后重算一次：宏集是从索引的 `#DEFINE` 来的，索引一换就得重判。
+    const erbPreprocDim = installErbPreprocDim({ index: () => erbParserIndex(requireKernel()) });
+    globalDisposers.push(erbPreprocDim);
+    const unsubPreprocDim = requireKernel().bus.on('kojo.functionChanged', () => erbPreprocDim.refresh());
+    globalDisposers.push({ dispose: unsubPreprocDim });
     // 转到定义（2026-10-15 语言服务批）：宿主只做 Monaco 协议翻译——光标位置进、目标位置出；
     // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
     // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，

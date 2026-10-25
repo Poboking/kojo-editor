@@ -17,6 +17,13 @@ export {
 } from './scanner';
 // 结构体检（2026-10-13 反馈 7；纯函数，配对表仍单源于 scanner.ts）
 export { MAX_STRUCTURE_ISSUES, checkControlFlowStructure, checkPreprocStructure, checkStructure, preprocRoleOf } from './structure';
+// 预处理条件块的「被裁支」区间（A5 / P0-3 尾巴：分支变灰；判据逐条对 Emuera PPState）
+export {
+  collectPreprocDeadRanges,
+  preprocMarkerAt,
+  type PreprocDeadRange,
+  type PreprocMarkerRead,
+} from './structure';
 // 内建式中函数静态签名表（exmeth）与实参诊断（A1；静态数据，不进索引契约）
 export {
   BUILTIN_ARGS_CODE,

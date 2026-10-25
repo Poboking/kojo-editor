@@ -1,0 +1,18 @@
+/**
+ * ERB 预处理条件块 · 被裁支（`collectPreprocDeadRanges` 的区间）的显示层。
+ *
+ * 三条纪律与 `sugar-read.css` 同源：
+ * 1. **只命中装饰区间**：类名单一真源在 `monaco/erb-preproc-dim.ts` 的
+ *    `ERB_PREPROC_DEAD_CLASS`，普通正文一个字节都不改；
+ * 2. **不改字号/字重**：等宽网格一动，命中测试与折行都会跟着歪——"弱化"只走颜色；
+ * 3. 颜色走主题 token（`--fg-dim`），三套主题各自给值，本文件零十六进制。
+ *
+ * 特异性 `.monaco-editor .view-lines .erb-preproc-dead`（0,3,0）压过 Monarch 运行时
+ * 注入的裸 `.mtk*`（0,1,0）——与糖视图阅读档同一打法，不需要 `!important`。
+ * 对比度：`--fg-dim` 在深/浅两档都过 AA（见 `sugar-read.css` 头注的实算），
+ * 所以它是"可用的低对比"，不是把代码擦掉。
+ */
+.monaco-editor .view-lines .erb-preproc-dead {
+  color: var(--fg-dim);
+  font-style: normal;
+}
