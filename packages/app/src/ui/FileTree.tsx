@@ -7,23 +7,16 @@
  * `file-tree-menu`（右键菜单 JSX）。本文件只剩：状态与它的两条异步通道（冷开快照 /
  * 目录列举 + 失效重列）、展开与编辑动作、定位 effect，以及把上面几块接起来的渲染。
  *
- * 诊断可见性（工包 E + 本批）：本文件订阅 `problem-store` 并把计数折到**角色组 / 作者包**两层
- * 标题行（`treeProblemMarks`），单条文件行那一枚由 `file-tree-row.tsx` / `file-tree-dir-rows.tsx`
- * 自己画——宿主只**传值**（`probs` = `summarizeProblems().byKey`，pkey 键），画法与配色留在行
- * 模块（`TreeProbMark`）。三层共用同一派生、同一把尺：树里不存在第二份计数。
+ * 诊断可见性（工包 E + 本批）：折到**角色组 / 作者包**两层的聚合留在 `file-tree-problem-view`
+ * （`treeProblemMarks`），但**订阅下沉到节点**——组头 / 包头 / 单条文件行各自订阅
+ * `problem-store`，宿主不再订阅诊断版本号。旧写法把 `probs` / `probMarks` 当引用型 props 穿
+ * 进来，诊断版本一翻（切标签就会翻）整棵树被迫重画；现在版本翻新的代价只剩"每个徽标做一次
+ * `Map.get` + 字符串比较"。画法与配色仍只有一枚（`TreeProbMark`），树里不存在第二份计数。
  */
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
-import {
-  currentVersion,
-  snapshot as problemSnapshot,
-  subscribe as subscribeProblems,
-  summarizeProblems,
-  type ProblemFileCounts,
-  type ProblemSummary,
-} from './problem-store';
 import {
   collapseAll as collapseAllReveal,
   expandAll as expandAllReveal,
@@ -49,8 +42,10 @@ import {
 import { baseName, buildFileGroups, dirsToRelist, kojoOwners, middleEllipsis, rowKeyOf, TREE_LABEL_MAX } from './file-tree-model';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import { EditRow, FileRows } from './file-tree-rows';
-import { TreeProbMark, type ProbFile } from './file-tree-row';
+import { TreeProbMark } from './file-tree-row';
 import { DirRows } from './file-tree-dir-rows';
+import { getActivePath, setActivePath, subscribeActivePath } from './file-tree-selection';
+import { useNodeProblems } from './file-tree-problem-view';
 import { setFileTreeMenuRuntime, type FileTreeScope } from './file-tree-menu';
 import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
 import { SHOW_FILE_HISTORY_COMMAND_ID } from './file-history';
@@ -70,6 +65,8 @@ export { middleEllipsis, TREE_LABEL_MAX };
  */
 const IDENTITY_GLOSS = (n: string): string => n;
 const EMPTY_SKIP: ReadonlySet<string> = new Set();
+/** 未传附加根时的恒等空数组（旧写法宿主每帧 `extraRoots ?? []` 造新数组 ⇒ 内部 memo 必失效） */
+const EMPTY_EXTRA_ROOTS: readonly string[] = [];
 const erbKeysCache = new WeakMap<PackageGroup, ReadonlySet<string>>();
 
 /** 目录缓存上界（超界先淘汰未展开的最旧条目；全在展开则原样保留——展开态是作者的现场） */
@@ -115,120 +112,39 @@ export function escapeAttrValue(value: string): string {
 // 文件树的包/根/单条文件行与标签页共用同一把尺，定义点只留一处（口径与"为什么保后缀"
 // 写在模型那一处，`file-tree.test.ts` 钉行为）。
 
-/* ---------------- 诊断徽标（工包 E + 本批：树三层都开口，画法只有一枚） ---------------- */
-
-/** 节点 tooltip 最多点名几个文件，其余折成「另 n 个」（展开的作者包动辄几十份文件） */
-const MARK_FILE_CAP = 6;
-
-/** 组 / 包 tooltip 里点名的一个文件（形状即 `TreeProbMark` 的输入，不另造第二份） */
-export type TreeProblemFile = ProbFile;
-
-/** 一个树节点（角色组 / 作者包）折到的诊断量 */
-export interface TreeProblemMark {
-  readonly error: number;
-  readonly warning: number;
-  /** 该节点下**有错误/警告**的文件（错误多的在前，超出 `MARK_FILE_CAP` 的折进 `more`） */
-  readonly files: readonly TreeProblemFile[];
-  readonly more: number;
-}
-
-export interface TreeProblemMarks {
-  /** 键 = 角色组标签（`Group.label`） */
-  readonly groups: ReadonlyMap<string, TreeProblemMark>;
-  /** 键 = 作者包键（`packageKey(组, 包)`） */
-  readonly packages: ReadonlyMap<string, TreeProblemMark>;
-}
-
-const EMPTY_MARKS: TreeProblemMarks = { groups: new Map(), packages: new Map() };
+/* ---------------- 诊断徽标（工包 E：树三层都开口，画法只有一枚） ---------------- */
 
 /**
- * 把「已打开文件的诊断汇总」折到树的**两层节点标题**上（纯函数，可单测）。
- *
- * 数据源是 `problem-store.summarizeProblems`——与状态栏那颗、面板表头、面板组头、**单条文件行**
- * 徽标**同一次遍历的同一份结果**（工包 E 判据：不许两处各算一套）。查表走 `byKey`（`pkey` 归一）：
- * 树里这一行的路径来自索引/磁盘列举，与注册表键可能差个分隔符方向或大小写，
- * 按字面比对就会漏标（同一个文件两种写法 ≠ 两个文件）。
- *
- * 这一层只管**标题行**（组 / 包）的聚合；单条文件行不吃这份聚合——宿主直接把 `byKey` 那张表
- * 传给行组件（`probs`），行按自己的路径查一格。折两层是"一眼看见哪块脏了"，行那一枚是
- * "脏的是哪一份"，两者读的都是同一份计数，所以谁也不会跟谁对不上。
- *
- * 只折错误 / 警告两档：只报了 `info` 的文件不在树上说话（那一档面板表头本来就在说，
- * 铺满一棵树就是把注意力花在噪声上）。
+ * 折叠函数的公共出口留在文件树模块（既有消费方按这个名字与这个路径导入）；实现与
+ * 节点级订阅同住 `file-tree-problem-view`，共用同一份缓存。
  */
-export function treeProblemMarks(
-  groups: readonly Group[],
-  summary: ProblemSummary,
-): TreeProblemMarks {
-  if (summary.files.length === 0) return EMPTY_MARKS;
-  interface MutableMark {
-    error: number;
-    warning: number;
-    files: TreeProblemFile[];
-  }
-  const byGroup = new Map<string, MutableMark>();
-  const byPackage = new Map<string, MutableMark>();
-  const bump = (m: MutableMark, f: ProblemFileCounts): void => {
-    m.error += f.error;
-    m.warning += f.warning;
-    m.files.push({ name: baseName(f.path), error: f.error, warning: f.warning });
-  };
-  const slot = (
-    map: Map<string, MutableMark>,
-    key: string,
-  ): MutableMark => {
-    let m = map.get(key);
-    if (m === undefined) {
-      m = { error: 0, warning: 0, files: [] };
-      map.set(key, m);
-    }
-    return m;
-  };
-  for (const g of groups) {
-    for (const s of g.subs) {
-      const pkgKey = s.label === null ? null : packageKey(g.label, s.label);
-      for (const file of s.files) {
-        const hit = summary.byKey.get(pkey(file));
-        if (hit === undefined || hit.error + hit.warning === 0) continue;
-        bump(slot(byGroup, g.label), hit);
-        if (pkgKey !== null) bump(slot(byPackage, pkgKey), hit);
-      }
-    }
-  }
-  const freeze = (map: ReadonlyMap<string, MutableMark>): ReadonlyMap<string, TreeProblemMark> => {
-    const out = new Map<string, TreeProblemMark>();
-    for (const [key, m] of map) {
-      // 错误多 → 警告多 → 名字码位序（不用 localeCompare：CJK 分区域，钉值会变红）
-      const sorted = [...m.files].sort(
-        (a, b) => b.error - a.error || b.warning - a.warning || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
-      );
-      out.set(key, {
-        error: m.error,
-        warning: m.warning,
-        files: sorted.slice(0, MARK_FILE_CAP),
-        more: Math.max(0, sorted.length - MARK_FILE_CAP),
-      });
-    }
-    return out;
-  };
-  return { groups: freeze(byGroup), packages: freeze(byPackage) };
-}
+export { treeProblemMarks } from './file-tree-problem-view';
 
 /**
- * 组 / 包标题行末尾的两档徽标。
+ * 组 / 包标题行末尾的两档徽标（**节点自己订阅诊断**，PERF 批）。
+ *
+ * 旧形态由宿主算好聚合表再当 prop 穿进来 ⇒ 宿主必须订阅诊断版本号，而 `problem-store`
+ * 的版本号**每切一次标签就 +1**（活动文件的诊断重新登记）⇒ 一次切换就把整棵树（60 个组头
+ * + 全部可见行）重画一遍。现在这一层自己订阅：快照是**字符串**，这一格的内容没变 ⇒
+ * React 不为它排重渲染，宿主对诊断完全无感。
  *
  * 画法不在这里：`✕ n` / `⚠ n` 的字面、`SEVERITY_TINT` 那三个色、tooltip 与 aria 的措辞
  * 全住 `file-tree-row.tsx` 的 `TreeProbMark`（单条文件行用的就是同一枚）。宿主这一层只
  * 负责把聚合结果换成它的入参——配色与句式一旦在两个模块各写一遍，就迟早长成
  * "同一档两种红"或"同一个数两种说法"。
  */
-function TreeProblemBadge({
-  mark,
+const NodeProblemBadge = memo(function NodeProblemBadge({
+  groups,
+  kind,
+  nodeKey,
   scope,
 }: {
-  mark: TreeProblemMark | undefined;
-  scope: string;
+  readonly groups: readonly Group[];
+  readonly kind: 'group' | 'package';
+  readonly nodeKey: string;
+  readonly scope: string;
 }): ReactElement | null {
+  const mark = useNodeProblems(groups, kind, nodeKey);
   if (mark === undefined) return null;
   return (
     <TreeProbMark
@@ -239,7 +155,7 @@ function TreeProblemBadge({
       more={mark.more}
     />
   );
-}
+});
 
 /**
  * 口上文件树：角色 → 作者包 → 口上文件（默认平铺共存，c087db9 形态）。
@@ -263,7 +179,82 @@ function TreeProblemBadge({
  * （不闪空白）。此前 `dirCache` 没有任何失效通道 ⇒ 外面丢进一个文件，树里不出现，
  * 除非重开项目——实机线在 §5.87 里把这条明记为"留给能做 GUI 的那一批"。
  */
-export function FileTree({ project, index, activeFile, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder }: Props): ReactElement {
+/** 内部本体的 props：**没有** `activeFile`（选中态走模块级订阅，见 `file-tree-selection`） */
+export type FileTreeBodyProps = Omit<Props, 'activeFile'>;
+
+/**
+ * 文件树对外组件 = **同步选中态的外壳** + 本体（`FileTreeBody`，memo）。
+ *
+ * 为什么要分成两层（PERF 批实测的病灶）：`activeFile` 是宿主的 prop，换了它，本组件
+ * 必然重画；旧实现里本体与外壳是同一个函数 ⇒ 换一次活动文件就把整棵树的 JSX 重新
+ * 造一遍（60 个角色组头 + 全部可见文件行），真壳实测「最长帧 70–93ms / (render) 桶
+ * 100 ms 级」，而其中真正该变的东西只有两行。
+ *
+ * 现在外壳只做一件事：把 `activeFile` 灌进模块级 store（`setActivePath`，同值幂等），
+ * 然后渲染 memo 化的本体。本体对选中态一无所知 ⇒ 换活动文件时它的 props 逐个相等、
+ * 整棵树的 JSX 一个都不重建，只有订阅了 store 的那两行翻转自己的布尔快照。
+ *
+ * 为什么写在 `useLayoutEffect` 而**不是**渲染期：渲染期写外部 store 会去通知
+ * 已在渲染的另一批组件（React 会报 "Cannot update a component while rendering"），
+ * 这条路径必须保持纯。layout effect 在提交阶段、绘制之前跑，行订阅收到的更新是同步
+ * 提交的 ⇒ 上屏仍是新选中态；挂载那一拍本体先按上一帧的值渲染一次（通常就是 null），
+ * 随后由行订阅的挂载自检补齐——与骨架无关，且不会漏掉任何一次选中切换。
+ */
+export function FileTree(props: Props): ReactElement {
+  const { activeFile, ...rest } = props;
+  useLayoutEffect(() => setActivePath(activeFile), [activeFile]);
+  /**
+   * 回调型 props 走一层恒等转发（PERF 批）。
+   *
+   * 宿主那侧（`ProjectView` 的 `fileTreeArgsRef` 桥）每帧都把 `onAddExtraRoot` 之类重新
+   * 塞一次，其中若干个是**没有 useCallback 的闭包** ⇒ 引用每帧都换 ⇒ 本体 memo 被击穿，
+   * 切一次标签整棵树重画一遍。树对这些回调只有"调用"一种用法（从不拿身份做渲染判据，
+   * 唯一的例外是"有没有这个能力"—— 菜单项整项显示/不显示），所以用固定转发函数接住、
+   * 调用时打到最新那一份：行为等价，引用恒定。
+   *
+   * 存在性跟着 prop 走：宿主没给能力 ⇒ 转发函数也**是 undefined** ⇒ 菜单口径逐字不变。
+   */
+  const onOpenFile = useLatestCallback(rest.onOpenFile)!;
+  const listDir = useLatestCallback(rest.listDir);
+  const walkDir = useLatestCallback(rest.walkDir);
+  const onImportPackage = useLatestCallback(rest.onImportPackage);
+  const onRevealInExplorer = useLatestCallback(rest.onRevealInExplorer);
+  const guardFileOp = useLatestCallback(rest.guardFileOp);
+  const onFilesGone = useLatestCallback(rest.onFilesGone);
+  const onAddFolder = useLatestCallback(rest.onAddFolder);
+  return (
+    <FileTreeBody
+      {...rest}
+      onOpenFile={onOpenFile}
+      listDir={listDir}
+      walkDir={walkDir}
+      onImportPackage={onImportPackage}
+      onRevealInExplorer={onRevealInExplorer}
+      guardFileOp={guardFileOp}
+      onFilesGone={onFilesGone}
+      onAddFolder={onAddFolder}
+      extraRoots={rest.extraRoots && rest.extraRoots.length > 0 ? rest.extraRoots : EMPTY_EXTRA_ROOTS}
+    />
+  );
+}
+
+/** 见 `FileTree` 里那段注释：恒等稳定的"转发到最新一份"回调；缺省保持缺省 */
+function useLatestCallback<T extends (...args: never[]) => unknown>(fn: T | undefined): T | undefined {
+  const latest = useRef(fn);
+  latest.current = fn;
+  const present = fn !== undefined;
+  return useMemo(
+    () => (present ? (((...args: never[]) => (latest.current as T)(...args)) as T) : undefined),
+    [present],
+  );
+}
+
+/**
+ * 文件树本体（state + 异步 IO + 事件接线 + 渲染）。
+ *
+ * 与外壳同一份实现，只差一件事：**不再收 `activeFile`**（见 `FileTree` 的注释）。
+ */
+const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder }: FileTreeBodyProps): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为；IDENTITY_GLOSS 模块级 ⇒ 引用恒定） */
   const glossOf = gloss ?? IDENTITY_GLOSS;
   const [filter, setFilter] = useState('');
@@ -290,8 +281,14 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   /** 行内编辑（新建 / 重命名；B1/B2） */
   const [edit, setEdit] = useState<EditState | null>(null);
   const [editValue, setEditValue] = useState('');
-  /** B4 定位请求（activeFile 变化时的自动定位；落地后由定位 effect 自己清空） */
-  const [locateReq, setLocateReq] = useState<{ file: string } | null>(null);
+  /**
+   * B4 定位请求（选中文件变化时的自动定位；落地后自己清空）。
+   *
+   * **ref 而不是 state**（PERF 批）：定位是"一次事件 + 一次 DOM 动作"，不是渲染输入。
+   * 旧写法把它放 state（`locateReq`）⇒ 每次切标签多一次 setState → 整树重画 → 再跑一个
+   * effect，一次切换里出现两批 DOM 变动。
+   */
+  const locateTarget = useRef<string | null>(null);
   /** 树滚动容器（定位时在其内找 data-locate 行；scrollIntoView 用 nearest 不拽容器） */
   const treeBodyRef = useRef<HTMLUListElement | null>(null);
 
@@ -335,33 +332,17 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   }, [index, snapPaths, project]);
 
   /**
-   * 诊断汇总（工包 E）：只订阅 `problem-store` 的**版本号**，派生留给 `useMemo`——
-   * 无诊断时 `summarizeProblems` 返回同一个常量对象 ⇒ 标题行聚合与行徽标那两条 memo
-   * 全部命中，树不会因为"有一次空发布"就重画。
+   * 诊断：**宿主不订阅**（PERF 批）。
    *
-   * 口径诚实：注册表里只有**已打开文件**的诊断（未打开文件的项目级诊断根本没有上账的腿，
-   * 接线点见回报），所以徽标说的是"这一层/这一行里已打开的文件有诊断"，tooltip 里那句范围标签
-   * 与状态栏那颗取自同一个 `PROBLEM_SCOPE`（句式住在 `TreeProbMark`）。
-   */
-  const problemVersion = useSyncExternalStore(subscribeProblems, currentVersion, currentVersion);
-  const problemSummary = useMemo(() => summarizeProblems(problemSnapshot()), [problemVersion]);
-  /**
-   * 按**完整分组**折，不按 `visible`：过滤词只是筛显示，不该让徽标跟着少报（少报 = 撒谎）。
+   * 旧写法在这里 `useSyncExternalStore(problem-store)` 拿版本号、再把汇总表当引用型 props
+   * 穿下去；而版本号**每切一次标签就 +1**（活动文件的诊断重新登记）⇒ 一次切换把整棵树重画。
+   * 现在组头 / 包头 / 单条文件行各自订阅（`file-tree-problem-view`），版本翻新只让"内容真的
+   * 变了"的那几个节点重渲染，宿主这一帧与诊断无关。
    *
-   * 代价说清：只有 `summary.files` 非空（= 真的有人报错）才扫一遍分组文件；空表直接退场。
-   * 也就是说这条腿的成本只在"有诊断"这段现场里付，而那段现场正是需要它的时候
-   * （`marker-pool` 的版本记忆化让同内容重发根本不产生新版本 ⇒ 编辑途中不会白扫）。
+   * 口径诚实：注册表里只有**已打开文件**的诊断（未打开文件的项目级诊断没有上账的腿），
+   * 所以徽标说的是"这一层/这一行里已打开的文件有诊断"，tooltip 里那句范围标签与状态栏那颗
+   * 取自同一个 `PROBLEM_SCOPE`（句式住在 `TreeProbMark`）。
    */
-  const probMarks = useMemo(
-    () => treeProblemMarks(groups, problemSummary),
-    [groups, problemSummary],
-  );
-  /**
-   * 单条文件行徽标的入参 = `byKey` **那一格本身**（宿主不再造第二张表、不再抄第二个数）。
-   * `summarizeProblems` 按入参数组身份缓存 ⇒ 同一诊断版本内这张表（以及它的每个值）引用恒定，
-   * PS-16 的行级/层级 memo 因此照旧挡得住无关帧；诊断一换版本引用必换 ⇒ 徽标跟着真相走。
-   */
-  const rowProbs = problemSummary.byKey;
 
   const visible = useMemo(() => {
     if (!deferredFilter) return groups;
@@ -495,6 +476,24 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     setSubOpen((prev) => toggleIn(prev)(dir));
     if (willOpen) ensureDir(dir);
   }, [subOpen, ensureDir]);
+
+  /**
+   * 幂等的"打开"三件套（PERF 批：定位不再造多余渲染）。
+   *
+   * 旧写法 `setOpened((prev) => new Set(prev).add(x))` 无论**是否已展开**都换一个新 Set
+   * ⇒ React 认定 state 变了 ⇒ 整棵树重画一次。自动定位每次切标签都会走这条路，
+   * 于是「已经展开好的分组」也被迫重画。这里在归约函数里先判一遍：已展开直接返回原引用，
+   * React 的 `Object.is` 判等就会跳过这次提交。
+   */
+  const openGroup = (label: string): void => {
+    setOpened((prev) => (prev.has(label) ? prev : new Set(prev).add(label)));
+  };
+  const openPackage = (key: string): void => {
+    setPkgFolder((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+  };
+  const openSubDir = (dir: string): void => {
+    setSubOpen((prev) => (prev.has(dir) ? prev : new Set(prev).add(dir)));
+  };
 
   /**
    * fs 视图的根层清单（D1 会话级附加根）：项目根恒在首位，附加根按加入顺序并列。
@@ -923,9 +922,11 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
       case 'collapse-all':
         collapseScope(scope);
         break;
-      case 'locate':
-        if (activeFile) setLocateReq({ file: activeFile });
+      case 'locate': {
+        const current = getActivePath();
+        if (current) requestLocate(current);
         break;
+      }
       case 'relist': {
         const count = relistShown();
         note(count > 0 ? `已重新扫描 ${count} 个目录` : '没有展开的目录可重扫——展开文件夹后再试');
@@ -972,26 +973,21 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
    * 卸载清空 ⇒ 面拿不到桥就返回 null，右键落回兜底，不弹空壳。
    */
   useEffect(() => {
-    setFileTreeMenuRuntime({ view, activeFile, capability: menuCapability, act: runMenuAction });
+    setFileTreeMenuRuntime({ view, activeFile: getActivePath(), capability: menuCapability, act: runMenuAction });
   });
   useEffect(() => () => setFileTreeMenuRuntime(null), []);
 
   /* ---------------- B4：定位当前文件 ---------------- */
 
-  /** 自动定位：activeFile 变化时展开到所在组/包并滚到那一行（首次挂载不算"变化"） */
-  const firstActiveRef = useRef(true);
-  useEffect(() => {
-    if (firstActiveRef.current) {
-      firstActiveRef.current = false;
-      return;
-    }
-    if (activeFile) setLocateReq({ file: activeFile });
-  }, [activeFile]);
-
   /**
    * 在树体内找 data-locate 行并滚到刚好可见。比对走归一键（pkey）：
    * 文件系统视图的行路径来自磁盘列举（DirEntry.path），与 activeFile 的写法可能差个
    * 分隔符/大小写——按字面比对会漏滚，归一后 Windows 两种写法都命中。
+   *
+   * 目标行**已经整行可见**时直接返回（PERF 批）：旧实现无条件 `scrollIntoView`，
+   * 于是每次切标签都要读一遍几何、算一次滚动——而绝大多数切换的目标行本来就在视口里
+   * （同一个作者包、相邻的几个面文件）。判据用容器矩形与行矩形比，留 1px 余量给
+   * 亚像素取整。
    */
   const scrollLocate = (targetPath: string): void => {
     requestAnimationFrame(() =>
@@ -1005,7 +1001,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
           `button[data-locate="${escapeAttrValue(targetPath)}"]`,
         );
         if (direct) {
-          direct.scrollIntoView({ block: 'nearest' });
+          scrollLocateIntoRow(body, direct);
           return;
         }
         // 点不到才退回归一比对：磁盘列举的行与 activeFile 的写法可能差个分隔符/大小写
@@ -1013,7 +1009,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
         const key = pkey(targetPath);
         for (const el of body.querySelectorAll<HTMLElement>('button[data-locate]')) {
           if (pkey(el.dataset.locate ?? '') === key) {
-            el.scrollIntoView({ block: 'nearest' });
+            scrollLocateIntoRow(body, el);
             break;
           }
         }
@@ -1021,57 +1017,123 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     );
   };
 
-  useEffect(() => {
-    if (!locateReq) return;
+  /**
+   * 滚到"刚好可见"——**已在视口内就一个像素都不动**。
+   *
+   * `scrollIntoView({block:'nearest'})` 本身只做最小滚动，但它仍是一次几何读取 + 一次
+   * 滚动意图（合成层会跟着动、容器可能带 scroll-behavior 动画）。命中率最高的情形
+   * （目标行就在当前视口里）根本不需要它，所以先自己判一次。
+   */
+  const scrollLocateIntoRow = (body: HTMLElement, row: HTMLElement): void => {
+    const rowRect = row.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const visible =
+      rowRect.top >= bodyRect.top - 1 &&
+      rowRect.bottom <= bodyRect.bottom + 1 &&
+      rowRect.left >= bodyRect.left - 1 &&
+      rowRect.right <= bodyRect.right + 1;
+    if (visible) return;
+    row.scrollIntoView({ block: 'nearest' });
+  };
+
+  /**
+   * 落一次定位请求（读**当前现场**，不产生任何 state 更新）。
+   *
+   * 旧实现在这里用了 `locateReq` state + effect：切标签 ⇒ setState ⇒ 整树重画 ⇒
+   * effect ⇒ 展开态 setState ⇒ 又一棵树重画 ⇒ 才滚。现在改成"订阅回调直接调本函数"，
+   * 一次切换里 locate 这条腿最多只做真正必要的展开（已展开的分组不 setState——
+   * 归约函数返回原引用，React 直接跳过）。
+   *
+   * 三种"还不能完成"的情形都**留着** `locateTarget`：目录列举在途（等 dirCache effect
+   * 再试）、过滤态（等抖动的过滤词落定）、未归属（等分组变化）——与旧 effect 的
+   * 依赖集一一对应，但都不再需要一次渲染来驱动。
+   */
+  const runLocate = (): void => {
+    const target = locateTarget.current;
+    if (target === null) return;
     if (view === 'fs') {
       // 文件系统视图：locatePlanOf 是语义树口径，不适用——退化为「从所属根到 activeFile
       // 逐级展开」（D1：fsRoots 逐根算归属，附加根内的文件同样定位得到）。
-      // 目录列举是异步的：父层清单没回来时先不清请求也不硬滚（dirCache 变化会重跑本 effect），
+      // 目录列举是异步的：父层清单没回来时先不清请求也不硬滚（dirCache 变化会重跑），
       // 回来后行已挂载，两拍 rAF 再滚（nearest 只滚到刚好可见，不拽容器乱跳）。
-      const plan = fsLocatePlanOfRoots(fsRoots, locateReq.file);
+      const plan = fsLocatePlanOfRoots(fsRoots, target);
       if (!plan) {
-        setLocateReq(null); // 不在任何根下：安静放弃，不报错
+        locateTarget.current = null; // 不在任何根下：安静放弃，不报错
         return;
       }
       if (multiRootFs) {
         // 多根形态：先把所属根的分组头打开（单根形态没有分组头，根层本来就铺开）
-        setSubOpen((prev) => new Set(prev).add(plan.root));
+        openSubDir(plan.root);
         ensureDir(plan.root);
       }
       for (const d of plan.dirs) {
-        setSubOpen((prev) => new Set(prev).add(d));
+        openSubDir(d);
         ensureDir(d);
       }
       const parent = plan.dirs[plan.dirs.length - 1] ?? plan.root;
       const st = dirCache.get(parent);
       if (st === undefined || st === 'loading') return; // 等列举回来
       if (st === 'error') {
-        setLocateReq(null); // 列不动就不硬撑（失败行已在树上自解释）
+        locateTarget.current = null; // 列不动就不硬撑（失败行已在树上自解释）
         return;
       }
-      scrollLocate(locateReq.file);
-      setLocateReq(null);
+      scrollLocate(target);
+      locateTarget.current = null;
       return;
     }
     if (deferredFilter) {
       // 过滤态：结果被渲染窗口截断、强制全展开也不是用户的现场——自动定位安静放弃；
-      // 手动定位等过滤词清空（deferred 追上）后由本 effect 重跑。
+      // 手动定位等过滤词清空（deferred 追上）后再试。
       return;
     }
-    const plan: LocatePlan | null = locatePlanOf(groups, locateReq.file, (prefix, label) =>
+    const plan: LocatePlan | null = locatePlanOf(groups, target, (prefix, label) =>
       joinPath(prefix, label),
     );
     if (!plan) return; // 未归属 / 不在索引里：安静放弃，不报错
-    setOpened((prev) => new Set(prev).add(plan.groupLabel));
+    openGroup(plan.groupLabel);
     if (plan.pkg) {
-      setPkgFolder((prev) => new Set(prev).add(plan.pkg!.key));
-      ensureDir(plan.pkg!.dir);
+      openPackage(plan.pkg.key);
+      ensureDir(plan.pkg.dir);
     }
     // DOM 提交后再滚：两拍 rAF 保证新展开的行已挂载
     scrollLocate(plan.targetPath);
-    setLocateReq(null);
+    locateTarget.current = null;
+  };
+  /** 订阅回调与 effect 都走这一格：闭包每帧刷新，避免读到上一帧的现场 */
+  const runLocateRef = useRef(runLocate);
+  runLocateRef.current = runLocate;
+
+  /**
+   * 选中变化 ⇒ 记下目标并就地尝试（**不 setState**）。
+   *
+   * 挂载那一次不会走到这里：外壳在渲染期就把当时的 `activeFile` 灌进 store 了
+   * （见 `FileTree` 的注释），订阅装好时选中态已经是对的 ⇒ 旧实现里那条
+   * "首次挂载不算变化"的特判（`firstActiveRef`）在这里自然消失。
+   */
+  useEffect(
+    () =>
+      subscribeActivePath((path) => {
+        if (path === null) return;
+        locateTarget.current = path;
+        runLocateRef.current();
+      }),
+    [],
+  );
+
+  /**
+   * 现场变了就再试一次（目录列举回来 / 分组换了 / 视图切了 / 过滤词落定）。
+   * 读的是 ref，没有待办就立刻返回——这条 effect 不会自己触发渲染。
+   */
+  useEffect(() => {
+    if (locateTarget.current !== null) runLocateRef.current();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locateReq, groups, deferredFilter, view, dirCache]);
+  }, [groups, deferredFilter, view, dirCache]);
+
+  /** 记一次定位请求（右键菜单「定位到当前文件」走这条，与自动定位同一个落点） */
+  function requestLocate(file: string): void {
+    locateTarget.current = file;
+    runLocateRef.current();
+  }
 
   /**
    * 该包本次渲染的行数（PERF-6 过滤窗口）。
@@ -1083,8 +1145,9 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
   /**
    * `DirRows` 的宿主侧接线（口上视图的包层与文件系统视图的根层复用同一套行渲染）。
    *
-   * 目录缓存、展开集合、行内编辑态、诊断表全部由本组件持有——行渲染只是被画出来的那一层，
-   * 现场仍在树里（切视图/重渲染不丢展开态）。dir / depth / skip 在调用点各自覆盖。
+   * 目录缓存、展开集合、行内编辑态由本组件持有——行渲染只是被画出来的那一层，现场仍在树里
+   * （切视图/重渲染不丢展开态）。选中态与诊断量**不在这里**（行自己订阅，见
+   * `file-tree-selection` / `file-tree-problem-view`）。dir / depth / skip 在调用点各自覆盖。
    */
   const dirRowsBase = {
     dirCache,
@@ -1092,8 +1155,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
     edit,
     editValue,
     glossOf,
-    activeFile,
-    probs: rowProbs,
     setEditValue,
     commitEdit,
     cancelEdit,
@@ -1223,7 +1284,7 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                 </span>
                 <span className="group-label">{g.label}</span>
                 <span className="group-count">{g.total}</span>
-                <TreeProblemBadge mark={probMarks.groups.get(g.label)} scope="角色目录" />
+                <NodeProblemBadge groups={groups} kind="group" nodeKey={g.label} scope="角色目录" />
               </button>
               {isOpen ? (
                 <ul className="tree-files">
@@ -1235,8 +1296,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                           key={`${g.label}::(根散文件)`}
                           files={s.files}
                           limit={renderLimitOf(g, s)}
-                          activeFile={activeFile}
-                          probs={rowProbs}
                           onOpenFile={onOpenFile}
                           edit={fileEdit}
                         />
@@ -1274,8 +1333,10 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                             {/* 长包名中段省略（L16）：完整路径已在 title 上，裁的只是显示 */}
                             <span className="tree-package-name">{middleEllipsis(glossOf(s.label), TREE_LABEL_MAX)}</span>
                             <span className="group-count">{s.files.length}</span>
-                            <TreeProblemBadge
-                              mark={probMarks.packages.get(pkgKey)}
+                            <NodeProblemBadge
+                              groups={groups}
+                              kind="package"
+                              nodeKey={pkgKey}
                               scope={`作者包 ${label}`}
                             />
                           </button>
@@ -1290,8 +1351,6 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
                           <FileRows
                             files={s.files}
                             limit={renderLimitOf(g, s)}
-                            activeFile={activeFile}
-                            probs={rowProbs}
                             onOpenFile={onOpenFile}
                             edit={fileEdit}
                           />
@@ -1324,4 +1383,4 @@ export function FileTree({ project, index, activeFile, onOpenFile, listDir, walk
           保留在 file-tree-menu.tsx 作兜底实现（根宿主缺席的宿主可自渲染）。 */}
     </div>
   );
-}
+});

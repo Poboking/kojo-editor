@@ -32,7 +32,7 @@ describe('FileRow · 文件名吃中段省略单源函数', () => {
   it('长名上屏：中段省略、扩展名留在屏上；title 仍是完整路径（裁的只是显示）', () => {
     const long = 'C:/game/kojo/001/M_KOJO_RM_01_少女夢中長期イベントテスト用.ERB';
     const html = renderToStaticMarkup(
-      h(FileRow, { f: long, active: false, onOpenFile: () => {} }),
+      h(FileRow, { f: long, onOpenFile: () => {} }),
     );
     const shown = middleEllipsis(
       long.slice(long.lastIndexOf('/') + 1),
@@ -48,7 +48,7 @@ describe('FileRow · 文件名吃中段省略单源函数', () => {
 
   it('短名零扰动：不超上限时逐字原样（省略闸不许自己变成新的信息损失）', () => {
     const html = renderToStaticMarkup(
-      h(FileRow, { f: 'C:/koa/q.ERH', active: false, onOpenFile: () => {} }),
+      h(FileRow, { f: 'C:/koa/q.ERH', onOpenFile: () => {} }),
     );
     expect(html).toContain('>q.ERH<');
     expect(html).not.toContain('…');

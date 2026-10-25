@@ -2,19 +2,23 @@
  * 目录真实内容行（递归渲染）——文件树唯一的"一行行怎么画"出口
  * （FE-REF ⑤ 自 `FileTree.tsx` 的 `dirRows` 逐字搬出，闭包变量改为显式 props）。
  *
- * 本组件**无状态**：目录缓存、展开集合、行内编辑态、诊断表一律由宿主传入，因此口上视图的
+ * 本组件**无状态**：目录缓存、展开集合、行内编辑态一律由宿主传入，因此口上视图的
  * 包层与文件系统视图的根层复用**同一套**渲染（两条视图线的行样式/权限标记/诊断徽标/右键口径
  * 不可能再分叉）。递归没有深度上限（语料里有五层深的包内目录），`depth === 0` 的
  * 去重规则必须与 `visibleEntries` 同一口径。
+ *
+ * 选中态与诊断量**不进 props**（PERF 批）：两者都由行组件自己订阅模块级 store，
+ * 本组件因此对"谁被选中""谁有诊断"一无所知——切标签时不重画任何一层。
  */
-import { memo, type ReactElement } from 'react';
+import { memo, useSyncExternalStore, type ReactElement } from 'react';
 import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { BINARY_EXT, erbExt, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
+import { isRowActive, subscribeSelection } from './file-tree-selection';
+import { useRowProblems } from './file-tree-problem-view';
 import { pkey } from './file-tree-ops';
 import { ROW_PROB_SCOPE, TreeProbMark } from './file-tree-row';
 import { EditRow } from './file-tree-rows';
-import type { ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
 import type { DirState, EditState } from './file-tree-types';
 
@@ -31,21 +35,11 @@ export interface DirRowsProps {
   readonly edit: EditState | null;
   readonly editValue: string;
   readonly glossOf: (name: string) => string;
-  readonly activeFile: string | null;
   readonly setEditValue: (v: string) => void;
   readonly commitEdit: () => void;
   readonly cancelEdit: () => void;
   readonly toggleSub: (dir: string) => void;
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
-  /**
-   * 文件行诊断表（工包：文件行徽标；与 `FileRowsProps.probs` 同一份表、同一把尺）。
-   * 键 = `pkey(路径)`，值 = `problem-store` 那一格；引用由宿主 `useMemo` 持有 ⇒ 本层 memo
-   * 不因它放行。缺省 → 这条腿不标（旧行为）。
-   *
-   * 压缩包/资源那类附加文件行（`BINARY_EXT` 命中）不画徽标：它们在编辑器里根本打不开，
-   * 注册表里就没有键——给没有数据的地方留一枚徽章位就是造假（铁律 4 的反面）。
-   */
-  readonly probs?: ReadonlyMap<string, ProblemFileCounts>;
 }
 
 /**
@@ -70,6 +64,47 @@ function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; f
   sortedByEntries.set(entries, out);
   return out;
 }
+
+/**
+ * 文件系统视图里的一条**文件行**（从 `DirRows` 的 `files.map` 里提出来，PERF 批）。
+ *
+ * 提出来只为一件事：选中态与诊断量都由行自己订阅（`file-tree-selection` /
+ * `file-tree-problem-view`），不再从 `DirRows` 的 props 穿进来。`DirRows` 因此对
+ * "谁是活动文件""谁有诊断"一无所知 ⇒ 切标签 / 诊断版本翻新时整层目录行零重画，
+ * 只有真变了的那一行翻自己的快照。
+ *
+ * props 全是值（`label` 已在调用点裁好）⇒ `memo` 浅比较能挡住同层其它行的重画；
+ * 压缩包/资源那一档根本不走这里（见 `BINARY_EXT` 分支）：它们在编辑器里打不开，
+ * 注册表里没有键——给没有数据的地方留一枚徽章位就是造假。
+ */
+const DirFileRow = memo(function DirFileRow(props: {
+  path: string;
+  isErb: boolean;
+  label: string;
+  onOpenFile: (path: string, opts?: OpenFileOptions) => void;
+}): ReactElement {
+  const active = useSyncExternalStore(
+    subscribeSelection,
+    () => isRowActive(props.path),
+    () => isRowActive(props.path),
+  );
+  const prob = useRowProblems(props.path);
+  return (
+    <button
+      className={`tree-file ${active ? 'active' : ''} ${props.isErb ? '' : 'tree-extra-file'}`}
+      aria-current={active ? 'true' : undefined}
+      title={props.isErb ? props.path : `${props.path}（附加文件，不在口上索引内）`}
+      data-locate={props.path}
+      data-context-surface="file-tree"
+      data-tree-kind="file"
+      data-tree-path={props.path}
+      onClick={() => props.onOpenFile(props.path, { preview: true })}
+    >
+      {props.label}
+      {prob ? <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} /> : null}
+    </button>
+  );
+});
 
 /**
  * 一个目录的真实内容行（递归）。目录可再展开；文件按类型给不同处置。
@@ -97,13 +132,11 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     edit,
     editValue,
     glossOf,
-    activeFile,
     setEditValue,
     commitEdit,
     cancelEdit,
     toggleSub,
     onOpenFile,
-    probs,
   } = props;
   const state = dirCache.get(dir);
   if (state === undefined) return [];
@@ -182,8 +215,6 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     }),
     ...files.map((d) => {
       const renaming = edit?.mode === 'rename' && !edit.isDir && edit.path === d.path;
-      // 一次归一查表（`pkey` 与 `skip` 那把尺同源）；徽标要不要画由 `TreeProbMark` 判
-      const prob = probs?.get(pkey(d.path));
       if (renaming) {
         return (
           <li key={d.path} style={pad}>
@@ -203,20 +234,12 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
         </li>
       ) : (
         <li key={d.path} style={pad}>
-          <button
-            className={`tree-file ${d.path === activeFile ? 'active' : ''} ${erbExt(d.name) ? '' : 'tree-extra-file'}`}
-            title={erbExt(d.name) ? d.path : `${d.path}（附加文件，不在口上索引内）`}
-            data-locate={d.path}
-            data-context-surface="file-tree"
-            data-tree-kind="file"
-            data-tree-path={d.path}
-            onClick={() => onOpenFile(d.path, { preview: true })}
-          >
-            {middleEllipsis(glossOf(d.name), TREE_LABEL_MAX)}
-            {prob ? (
-              <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} />
-            ) : null}
-          </button>
+          <DirFileRow
+            path={d.path}
+            isErb={erbExt(d.name)}
+            label={middleEllipsis(glossOf(d.name), TREE_LABEL_MAX)}
+            onOpenFile={onOpenFile}
+          />
         </li>
       );
     }),

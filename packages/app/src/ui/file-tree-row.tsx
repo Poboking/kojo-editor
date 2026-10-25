@@ -10,18 +10,16 @@
  * 必须留在行这一侧；而它一旦留在行这一侧，组/包那两层也只能复用它——否则就是
  * "同一棵树两种画法"的新分叉（工包 E 留下的洞，本批补上）。
  */
-import { memo, type ReactElement } from 'react';
+import { memo, useSyncExternalStore, type ReactElement } from 'react';
 import { baseName, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
+import { isRowActive, subscribeSelection } from './file-tree-selection';
+import { useRowProblems, type ProbFile } from './file-tree-problem-view';
 import { Icon } from './icons';
-import { PROBLEM_SCOPE, SEVERITY_TINT, type ProblemFileCounts } from './problem-store';
+import { PROBLEM_SCOPE, SEVERITY_TINT } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
 
 /** 组 / 包 tooltip 里点名用的一个文件（行徽标不点名：行本身就是那个文件） */
-export interface ProbFile {
-  readonly name: string;
-  readonly error: number;
-  readonly warning: number;
-}
+export type { ProbFile };
 
 /** 单条文件行徽标的口径主语（两条行装配线共用同一个词，不各写一句中文） */
 export const ROW_PROB_SCOPE = '本文件';
@@ -115,42 +113,50 @@ export function TreeProbMark({
   );
 }
 
+/**
+ * 行级选中判据（PERF 批：`activeFile` 不再走 props）。
+ *
+ * 旧形态把 `active` 当 prop：宿主一换活动文件，`FileRows` 的 memo 就按浅比较放行，
+ * 整组行重新 `createElement`（行数越多越贵）。改成行自己订阅模块级的外部 store 后，
+ * 只有**两行**（旧的、新的）拿到翻转后的布尔快照 ⇒ 其余行连 `render` 都不进。
+ *
+ * 第三参是 SSR 快照：`renderToStaticMarkup` 没有 store 通知，读当时的值即可，
+ * 这样"高亮当前文件"这条行为在服务端渲染下逐字不变。
+ */
+function useActiveRow(path: string): boolean {
+  return useSyncExternalStore(subscribeSelection, () => isRowActive(path), () => isRowActive(path));
+}
+
 export interface FileRowProps {
   readonly f: string;
-  readonly active: boolean;
   /** 打开（第二参 = 方式：单击给预览态；类型见 tabs-ops.OpenFileOptions） */
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
-  /**
-   * 这一行的诊断量（**additive 传值**，工包：文件行徽标）。
-   *
-   * 宿主给的是 `problem-store.summarizeProblems()` 的 `byKey` 里 `pkey(行路径)` 那一格
-   * （同一份 summary 版本内引用恒定 ⇒ 行级 memo 的浅比较照旧挡得住；诊断一换版本引用必换
-   * ⇒ 徽标跟着真相走，不需要第二条订阅腿）。缺省 = 树上不标；只有 `info` 的那一格由
-   * `TreeProbMark` 吞掉。
-   */
-  readonly prob?: ProblemFileCounts;
 }
 
 /**
- * 单条 ERB 平铺行（PS-16 行级 memo）：props 全是值/恒定回调 ⇒ `activeFile` 切换时
- * 只有旧 active 行与新 active 行重画，组内其余行全部跳过——这是点文件这条最高频
- * 路径上从"全组重画"到"两行重画"的那一刀。徽标那一位同样是**值**（见 `FileRowProps.prob`），
- * 加它不会让这一刀变钝。
+ * 单条 ERB 平铺行：props 全是值/恒定回调（选中态与诊断量**都不在 props 里**，见
+ * `useActiveRow` / `useRowProblems`）⇒ 组内任何一次父级重画、任何一次选中切换、任何一次
+ * 诊断版本翻新，没变的那一行都整行跳过。
+ *
+ * 诊断为什么不走 props（PERF 批）：`problem-store` 的版本号每切一次标签就 +1，汇总表随之
+ * 整份重建 ⇒ 当 prop 传进来的表引用必换 ⇒ 全部行重画。改成行自己订阅之后，快照是
+ * **字符串**，内容没变的行连 `render` 都不进。
  *
  * 右键自 1023 批起**不再挂事件处理器**：行上写 `data-context-surface` / `data-tree-*`，
  * 由根路由（`App` 的 window 监听）读出作用域后交给 `file-tree` 面——行级 memo 因此
  * 少了一位"每帧可能换引用的回调"，右键也不再有 `preventDefault` 顺手 focus 带来的
  * 选中态变化。
+ *
+ * `aria-current` 只挂在选中的那一行（读屏的"当前项"语义；与 `.active` 同一个布尔，
+ * 不许出现两份判据）。
  */
-export const FileRow = memo(function FileRow({
-  f,
-  active,
-  onOpenFile,
-  prob,
-}: FileRowProps): ReactElement {
+export const FileRow = memo(function FileRow({ f, onOpenFile }: FileRowProps): ReactElement {
+  const active = useActiveRow(f);
+  const prob = useRowProblems(f);
   return (
     <button
       className={`tree-file ${active ? 'active' : ''}`}
+      aria-current={active ? 'true' : undefined}
       title={f}
       data-locate={f}
       data-context-surface="file-tree"

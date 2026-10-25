@@ -137,18 +137,40 @@ describe('FileTree · PS-16 行组件 memo（渲染计数）', () => {
     expect(counts.dirRows).toBe(base.dirRows);
   });
 
-  it('activeFile 切换 ⇒ 全树只有新旧两行重画（FileRow 行级 memo）', async () => {
+  it('activeFile 切换 ⇒ 行元素零创建，树内只有新旧两行被改属性（PERF 批判据）', async () => {
     root = await mountTree(container, 'C:/koa/001/包A/M_KOJO_K1_a.ERB');
     const base = { ...counts };
+    // 选中态自 PERF 批起走模块级订阅（不进 props）⇒ 父级连"整组重画"都不该发生：
+    // 三条装配线（两条 FileRows + DirRows 根层）的 memo 全部命中，行元素一个都不重建。
+    const touched = new Set<string>();
+    const mo = new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target as HTMLElement;
+        if (el.classList?.contains('tree-file')) touched.add(el.getAttribute('data-tree-path') ?? '');
+      }
+    });
+    mo.observe(container.querySelector('.file-tree') as Element, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['class', 'aria-current'],
+    });
     await act(async () => {
       root.render(h(FileTree, { ...treeProps, activeFile: 'C:/koa/001/包A/M_KOJO_K1_c.ERB' }));
     });
-    // 行级：a 失活 + c 激活 = 恰好两行；散落.ERB 与 b.ERB 一律跳过
-    expect(counts.fileRow - base.fileRow).toBe(2);
-    // 组级：activeFile 穿 FileRows props ⇒ 每组放行一次（2 组 = 2 次），仍远小于"每行一次"
-    expect(counts.fileRows - base.fileRows).toBe(2);
-    // DirRows 无行级 memo（取舍：嵌套 children 引用不稳定）：根层放行一次
-    expect(counts.dirRows - base.dirRows).toBe(1);
+    mo.disconnect();
+    expect(counts.fileRows - base.fileRows).toBe(0); // 组级：零放行
+    expect(counts.fileRow - base.fileRow).toBe(0); // 行级：零元素创建
+    expect(counts.dirRows - base.dirRows).toBe(0);
+    // DOM 那面：恰好两行（旧选中 a、新选中 c）被改过，其余行一个属性都没动
+    expect([...touched].sort()).toEqual([
+      'C:/koa/001/包A/M_KOJO_K1_a.ERB',
+      'C:/koa/001/包A/M_KOJO_K1_c.ERB',
+    ]);
+    // 行为不变：选中仍恰好一行，且是新那行
+    const active = container.querySelectorAll('.tree-file.active');
+    expect(active).toHaveLength(1);
+    expect(active[0]?.getAttribute('data-tree-path')).toBe('C:/koa/001/包A/M_KOJO_K1_c.ERB');
+    expect(container.querySelectorAll('.tree-file[aria-current="true"]')).toHaveLength(1);
   });
 
   it('包层 ERB 键集（skip）引用恒定 ⇒ 连续无关帧不换新 Set', async () => {

@@ -323,7 +323,7 @@ describe('过滤态：徽标不少报', () => {
 });
 
 describe('PS-16 前提不破（渲染计数）', () => {
-  it('有诊断时右键菜单翻动 ⇒ 行组件一次都不执行（probs 是稳定引用）', async () => {
+  it('有诊断时右键菜单翻动 ⇒ 行组件一次都不执行（诊断不进 props）', async () => {
     setProblems(F1, [mk(F1, 1, 'error')]);
     setProblems(SUB, [mk(SUB, 1, 'warning')]);
     await mountTree();
@@ -339,13 +339,40 @@ describe('PS-16 前提不破（渲染计数）', () => {
     expect(counts.dirRows).toBe(base.dirRows);
   });
 
-  it('activeFile 切换 ⇒ 仍只有新旧两行重画（prob 传的是值，不是每帧新引用）', async () => {
+  it('activeFile 切换 ⇒ 行元素零重建，徽标仍在（徽标走行级订阅，不靠 props 传表）', async () => {
     setProblems(F1, [mk(F1, 1, 'error')]);
     setProblems(F3, [mk(F3, 1, 'warning')]);
     await mountTree(F1);
     const base = { ...counts };
     await rerender(F3);
-    expect(counts.fileRow - base.fileRow).toBe(2);
+    // 选中态不进 props（PERF 批）⇒ 行组件连"放行"都不该有；徽标跟着 DOM 里那一行走
+    expect(counts.fileRow - base.fileRow).toBe(0);
+    const active = container.querySelector('.tree-file.active');
+    expect(active?.getAttribute('data-tree-path')).toBe(F3);
+    expect(active?.querySelector('.tree-prob-mark')).not.toBeNull();
+  });
+
+  /**
+   * PERF 批主判据钉在这里：`problem-store` 的版本号**每切一次标签就 +1**，旧写法由树本体订阅
+   * 它、再把汇总表当 props 穿下去 ⇒ 一次切换整棵树重画。现在宿主不订阅，节点各查自己那一格
+   * ⇒ 树上没有任何一格的内容变化时，DOM 一个字节都不动。
+   */
+  it('诊断版本翻新但树上一个数都没变 ⇒ 整棵树零 DOM 变动（宿主不订阅版本号）', async () => {
+    setProblems(F1, [mk(F1, 1, 'error')]);
+    await mountTree();
+    const touched: string[] = [];
+    const mo = new MutationObserver((records) => {
+      for (const r of records) touched.push(`${r.type}:${(r.target as Element).nodeName ?? ''}`);
+    });
+    mo.observe(container, { attributes: true, characterData: true, childList: true, subtree: true });
+    await act(async () => {
+      // 树里根本没有这份文件（模拟"切标签时别的文件重新登记诊断"）：版本 +1，内容不变
+      setProblems(`${PKG_DIR}/M_KOJO_K1_other.ERB`, [mk(`${PKG_DIR}/M_KOJO_K1_other.ERB`, 1, 'warning')]);
+    });
+    mo.disconnect();
+    expect(touched).toEqual([]);
+    // 徽标仍如实停在原来的数上（不是"没重画"换来的漏报）
+    expect(badgeOf(F1)?.getAttribute('aria-label')).toContain('错误 1');
   });
 });
 
@@ -354,6 +381,8 @@ describe('静态闸：画法与句式都只有一条腿', () => {
   const rows = read('../src/ui/file-tree-rows.tsx');
   const dir = read('../src/ui/file-tree-dir-rows.tsx');
   const tree = read('../src/ui/FileTree.tsx');
+  /** 诊断订阅下沉到节点之后，查表（`pkey` 归一）与快照串都住这里 */
+  const view = read('../src/ui/file-tree-problem-view.ts');
 
   it('`.tree-prob-mark` 那枚 DOM 只在行模块造一次（宿主与两条装配线只复用）', () => {
     expect((row.match(/className="tree-prob-mark"/g) ?? []).length).toBe(1);
@@ -385,13 +414,14 @@ describe('静态闸：画法与句式都只有一条腿', () => {
       ['file-tree-rows.tsx', rows],
       ['file-tree-dir-rows.tsx', dir],
       ['FileTree.tsx', tree],
+      ['file-tree-problem-view.ts', view],
     ] as const) {
       expect((src.match(/#[0-9a-f]{6}/gi) ?? []).length, `${name}: 写死了色值`).toBe(0);
       expect(src, `${name}: 树上只许按 pkey 查表`).not.toContain('byPath');
       expect(src.match(/severity === 'error'/g) ?? [], `${name}: 又抄了一份计数循环`).toHaveLength(0);
     }
-    // 归一那把尺只有一把：行组件的查表必须走 pkey
-    expect(rows).toContain('pkey(f)');
+    // 归一那把尺只有一把：查表必须走 pkey（行级的键在视图层算一次，`skip` 去重仍按行路径）
+    expect(view).toContain('pkey(path)');
     expect(dir).toContain('pkey(d.path)');
   });
 });

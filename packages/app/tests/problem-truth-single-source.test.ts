@@ -492,16 +492,20 @@ describe('PROBLEM_SCOPE · 合并之后的说法必须两头都不冒充', () =>
 describe('静态闸：计数与配色都不许有第二条腿', () => {
   const panel = read('../src/ui/ProblemPanel.tsx');
   const tree = read('../src/ui/FileTree.tsx');
+  /** PERF 批：树侧的计数与折表搬到「按节点订阅」的视图层（宿主不再碰诊断） */
+  const view = read('../src/ui/file-tree-problem-view.ts');
   const store = read('../src/ui/problem-store.ts');
 
   it('消费面不再自己数严重度（逐条 `severity === ...` 的折算只许住在 store 里）', () => {
     for (const [name, src] of [
       ['ProblemPanel.tsx', panel],
       ['FileTree.tsx', tree],
+      ['file-tree-problem-view.ts', view],
     ] as const) {
       expect(src.match(/severity === 'error'/g) ?? [], `${name}: 又抄了一份计数循环`).toHaveLength(0);
-      expect(src, `${name}: 计数只许来自 summarizeProblems`).toContain('summarizeProblems');
     }
+    expect(panel, 'ProblemPanel: 计数只许来自 summarizeProblems').toContain('summarizeProblems');
+    expect(view, 'file-tree-problem-view: 计数只许来自 summarizeProblems').toContain('summarizeProblems');
     expect(store).toContain('export function summarizeProblems');
     expect(store).toContain('counts[it.severity]++');
   });

@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, afterEach } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
 import { FileTree, middleEllipsis, walkDialectPaths } from '../src/ui/FileTree';
 import { DirRows } from '../src/ui/file-tree-dir-rows';
 import { FileRows } from '../src/ui/file-tree-rows';
+import { resetSelectionForTest, setActivePath } from '../src/ui/file-tree-selection';
 import { buildFileGroups, dirsToRelist, kojoOwners, visibleEntries } from '../src/ui/file-tree-model';
 import {
   FILTER_WINDOW_INITIAL,
@@ -313,23 +314,28 @@ describe('filterRenderPlan · 强制全展开时的每帧渲染预算', () => {
 describe('FileRows · 过滤态 DOM 行树上界（SSR 真实产出的行数）', () => {
   const many = Array.from({ length: 3000 }, (_, i) => `C:/koa/0/M_KOJO_K1_${i}.ERB`);
   const count = (markup: string): number => (markup.match(/class="tree-file/g) ?? []).length;
+  // 选中态自 PERF 批起走模块级订阅（不再穿 props）：SSR 没有 store 通知，按渲染时那一刻的值算
+  afterEach(() => resetSelectionForTest());
 
   it('3000 个命中只挂 FILTER_WINDOW_INITIAL 行（旧实现：强制全展开 ⇒ 3000 行一起挂）', () => {
-    const html = renderToStaticMarkup(h(FileRows, { files: many, limit: FILTER_WINDOW_INITIAL, activeFile: null, onOpenFile: () => {} }));
+    const html = renderToStaticMarkup(h(FileRows, { files: many, limit: FILTER_WINDOW_INITIAL, onOpenFile: () => {} }));
     expect(count(html)).toBe(FILTER_WINDOW_INITIAL);
   });
 
   it('limit ≥ 文件数 ⇒ 全量渲染（非过滤态行为逐字不变）', () => {
-    const html = renderToStaticMarkup(h(FileRows, { files: many, limit: many.length, activeFile: null, onOpenFile: () => {} }));
+    const html = renderToStaticMarkup(h(FileRows, { files: many, limit: many.length, onOpenFile: () => {} }));
     expect(count(html)).toBe(3000);
   });
 
   it('高亮当前文件不丢（PERF 不许改的那条行为）', () => {
     const files = ['C:/a.ERB', 'C:/b.ERB'];
-    const html = renderToStaticMarkup(h(FileRows, { files, limit: 120, activeFile: 'C:/b.ERB', onOpenFile: () => {} }));
+    setActivePath('C:/b.ERB');
+    const html = renderToStaticMarkup(h(FileRows, { files, limit: 120, onOpenFile: () => {} }));
     expect(html).toContain('class="tree-file active"');
     expect(html.match(/class="tree-file active"/g)).toHaveLength(1);
     expect(html).toContain('title="C:/b.ERB"');
+    // 读屏语义只有一行（`aria-current` 与 `.active` 同一个布尔，不许两份判据）
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1);
   });
 
   it('首帧渲染数 = 计划的 rendered（计划与渲染同一条预算，两处不许各算各的）', () => {
@@ -343,7 +349,7 @@ describe('FileRows · 过滤态 DOM 行树上界（SSR 真实产出的行数）'
     const files = many;
     const render = (limit: number): number => {
       const t0 = performance.now();
-      renderToStaticMarkup(h(FileRows, { files, limit, activeFile: null, onOpenFile: () => {} }));
+      renderToStaticMarkup(h(FileRows, { files, limit, onOpenFile: () => {} }));
       return performance.now() - t0;
     };
     for (let i = 0; i < 5; i++) {
@@ -375,7 +381,6 @@ describe('FileRows · 文件行右键与行内重命名（B1）', () => {
   const base = {
     files,
     limit: 10,
-    activeFile: null,
     onOpenFile: () => {},
   };
 
@@ -413,7 +418,7 @@ describe('FileRows · 文件行右键与行内重命名（B1）', () => {
   it('长文件名显示名裁中段保住扩展名，title 仍是完整路径（L16 行级接线）', () => {
     const long = 'C:/koa/001/M_KOJO_K1_2_超长口上事件脚本测试.ERB';
     const html = renderToStaticMarkup(
-      h(FileRows, { files: [long], limit: 1, activeFile: null, onOpenFile: () => {} }),
+      h(FileRows, { files: [long], limit: 1, onOpenFile: () => {} }),
     );
     expect(html).toContain('…');
     expect(html).toContain('.ERB');

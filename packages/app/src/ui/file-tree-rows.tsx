@@ -7,12 +7,15 @@
  * PS-16 memo 化：`EditRow` / `FileRows` 组件级 memo（树内无关 state——菜单、批注、定位——
  * 翻动时整组行不再重画）；单行 `FileRow` 行级 memo 在 `file-tree-row.tsx`（拆模块 ⇒
  * 行级计数可观测）。生效前提在宿主：`FileTree.tsx` 把穿进行组件的回调 useCallback 化、
- * `skip`/`edit`/`probs` 等引用型 props 稳定化，否则每帧新引用 ⇒ memo 形同虚设。
+ * `skip`/`edit` 等引用型 props 稳定化，否则每帧新引用 ⇒ memo 形同虚设。
+ *
+ * 选中态与诊断量**都不进 props**（PERF 批）：旧写法收 `activeFile` 与 `probs` 表，宿主一换
+ * 活动文件 / 诊断版本一翻，这层 memo 必然放行 ⇒ 每行重新 `createElement` + 查一次诊断表，
+ * 成本随文件数线性涨。现在两者都由行自己订阅（`file-tree-selection` /
+ * `file-tree-problem-view`），本组件对"谁被选中""谁有诊断"一无所知，也永不因此重画。
  */
 import { memo, useEffect, useRef, type ReactElement } from 'react';
 import { FileRow } from './file-tree-row';
-import { pkey } from './file-tree-ops';
-import type { ProblemFileCounts } from './problem-store';
 import type { OpenFileOptions } from './tabs-ops';
 
 
@@ -60,7 +63,6 @@ export interface FileRowsProps {
   readonly files: readonly string[];
   /** 本次最多渲染的行数（≥ files.length 即全量 = 改动前行为） */
   readonly limit: number;
-  readonly activeFile: string | null;
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
   /**
    * 行内重命名（B1）：与 path 匹配的那行改画输入框（node 由宿主造好塞进来，
@@ -68,33 +70,15 @@ export interface FileRowsProps {
    * 缺省 → 无编辑，旧行为。
    */
   readonly edit?: { readonly path: string; readonly node: ReactElement } | null;
-  /**
-   * 文件行诊断表（工包：文件行徽标）。**键 = `pkey(路径)`**，值 = `problem-store` 里那一格。
-   *
-   * 传表而不是逐行传 ReactElement：表由宿主的 `useMemo` 持有（同一份 summary 版本 = 同一个
-   * 引用），所以这一位穿进来不碰 PS-16 的 memo 前提；而查表必须按归一键——行路径来自索引，
-   * 注册表键来自编辑器，Windows 两种写法是同一个文件，字面比对就会漏标。
-   * 缺省 → 整组不标（旧行为）。
-   */
-  readonly probs?: ReadonlyMap<string, ProblemFileCounts>;
 }
 
-export const FileRows = memo(function FileRows({ files, limit, activeFile, onOpenFile, edit, probs }: FileRowsProps): ReactElement {
+export const FileRows = memo(function FileRows({ files, limit, onOpenFile, edit }: FileRowsProps): ReactElement {
   const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
   return (
     <>
       {rows.map((f) => (
         <li key={f}>
-          {edit && edit.path === f ? (
-            edit.node
-          ) : (
-            <FileRow
-              f={f}
-              active={f === activeFile}
-              onOpenFile={onOpenFile}
-              prob={probs?.get(pkey(f))}
-            />
-          )}
+          {edit && edit.path === f ? edit.node : <FileRow f={f} onOpenFile={onOpenFile} />}
         </li>
       ))}
     </>
