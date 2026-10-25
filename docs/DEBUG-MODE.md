@@ -50,6 +50,10 @@ node tools/debug-cli.mjs stop
 ### 常用配方
 
 - **UI 观感检查**：`serve --headless` → `run` 各视图命令逐个 → `screenshot` 每屏一张 → 看图（PNG 可直接读）。
+- **卡顿体检（可开关探针）**：`perf start` → 驱动交互（`type`/`run`/切主题）→ `perf stop` 出报告（帧率分档
+  >32/50/100ms、长任务≥50ms 带总线事件 hint、交互延迟>100ms 带 target、逐源码文件的帧耗时归因）；
+  `perf quick [ms]` 一条龙。真机读数示例：189 帧 p50=16.7ms max=74.1ms；人为注入 120ms 帧被精确钉住。
+  探针关着零开销；`bySource` 空＝无 >50ms 渲染帧（阴性也是答案），真卡时长帧的 scripts 会带 vite 源码 URL。
 - **功能健全验证**：`commands` 找到目标命令 id → `run <id>` → `state`/`events` 断言副作用（相位 / 面板 / 事件名）。
 - **编辑链路**：`open-file` → `eval "__kojoDebug.editor.type('PRINTL x')"` → `eval "__kojoDebug.editor.markers()"`
   → 保存后 `eval "__kojoDebug.invoke('read_file_bytes_raw',{path:'…'})"` 与盘上内容对拍。
@@ -71,10 +75,13 @@ node tools/debug-cli.mjs stop
 | `invoke <cmd> [json]` | 直达宿主命令 | 与产品同一条 invoke 路 |
 | `click <sel>` / `type [<sel>] <文本>` / `key <键> [ctrl+…]` | CDP 真实输入 | click 带 elementFromPoint 自证；**type 省略选择器＝打到当前焦点元素**（命令面板/搜索框先点开或 `key ctrl+p` 再 type）；key 支持 enter/escape/tab/arrow* |
 | `screenshot <png> [--full]` | 截图 | 拍前自动 `Page.bringToFront` + 双 rAF 强制产帧，**不吃缓存帧**（切主题/Monaco 重绘后也是新帧）；agent 的「眼睛」 |
+| `perf <start\|stop\|quick [ms]>` | UI 卡顿体检（可开关探针） | start/stop 跨命令存活（探针在页内）；报告四路：帧分档 / 长任务×事件 hint / 交互延迟 / 逐源码帧耗时 |
 
 页内 API（`?kojo-debug=1` 选入后）：`__kojoDebug.{mode, host, state(), kernel(), commands.{list,run},
-bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snapshot}`。
-写动作（setValue/type）显式命名；`type` 走 executeEdits 进撤销栈＝「像真人一样改」。
+bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snapshot,
+perf.{start,stop,isRunning,lastReport,summary}}`。
+写动作（setValue/type）显式命名；`type` 走 executeEdits 进撤销栈＝「像真人一样改」；
+`perf.*` 见 §二 卡顿体检配方（关着零开销）。
 
 ## 四、调试宿（debug-server.mjs）速览
 

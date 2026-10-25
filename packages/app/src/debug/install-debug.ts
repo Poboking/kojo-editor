@@ -15,6 +15,8 @@
  * - `editor.*`：焦点编辑器的读数与受控写（经 editor-pane-registry 的登记簿，
  *   不碰 EditorPane 源码）：info / setValue / type / setCursor / markers；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
+ * - `perf.*`：UI 卡顿体检探针（可开关；帧分档 / 长任务×事件相关性 / 交互延迟 /
+ *   逐源码文件的帧耗时归因——口径与阈值见 `perf-probe-core.ts`）；
  * - `dom.snapshot()`：结构快照（`dom-snapshot.ts` 的口径）。
  */
 import { invoke, isTauri } from '../bridge/invoke';
@@ -24,6 +26,8 @@ import type { Kernel } from '@kojo/kernel';
 import { getDebugCommandRunner, whenDebugKernel } from './debug-registry';
 import { webHostActive, webHostOrigin } from './web-host-transport';
 import { snapshotDocument, type DomSnapshot } from './dom-snapshot';
+import { createPerfProbe, type PerfProbe } from './perf-probe';
+import { summarizeReport } from './perf-probe-core';
 // 编辑器登记簿（只 import 这一个轻模块；Monaco 运行时按需再动态取）
 import { focusedCtx } from '../ui/editor-pane-registry';
 
@@ -55,6 +59,15 @@ export interface KojoDebugApi {
     markers(): Promise<{ resource: string; severity: number; message: string; line: number }[]>;
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** UI 卡顿体检（可开关；关着零开销）：start → 交互 → stop 出报告 */
+  perf: {
+    start(opts?: { blockingSampleMs?: number }): { started: true; note: string };
+    stop(): ReturnType<PerfProbe['stop']>;
+    isRunning(): boolean;
+    lastReport(): ReturnType<PerfProbe['lastReport']>;
+    /** 上一轮报告的人读摘要行（无报告 ⇒ null） */
+    summary(): string[] | null;
+  };
   dom: { snapshot(): DomSnapshot };
 }
 
@@ -113,6 +126,9 @@ export function installDebug(): KojoDebugApi {
       kernel.bus.on(name as KernelEventName, (payload: unknown) => recordBus(name, slimPayload(payload)));
     }
   });
+
+  // 性能探针（关着零开销；bus 相关性在 stop 时从环形缓冲取，不在采集期加订阅）
+  const probe = createPerfProbe({ getBusRecent: (n) => busRing.slice(-n) });
 
   const api: KojoDebugApi = {
     mode: isTauri() ? 'shell' : 'web-debug',
@@ -222,6 +238,16 @@ export function installDebug(): KojoDebugApi {
     },
     invoke(cmd, args) {
       return invoke(cmd, args);
+    },
+    perf: {
+      start: (opts) => probe.start(opts),
+      stop: () => probe.stop(),
+      isRunning: () => probe.isRunning(),
+      lastReport: () => probe.lastReport(),
+      summary: () => {
+        const r = probe.lastReport();
+        return r ? summarizeReport(r) : null;
+      },
     },
     dom: {
       snapshot() {

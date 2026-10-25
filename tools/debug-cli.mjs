@@ -817,6 +817,53 @@ async function cmdInvoke(args, cmd, jsonArgs) {
   });
 }
 
+/**
+ * perf <start|stop|quick [ms]>——UI 卡顿体检（2026-10-25 调试模式批）：
+ * start 开探针（页内持续采集，跨 CLI 调用存活）→ 中间随便驱动（run/click/type/切主题）→
+ * stop 出结构化报告；quick N = start+睡 N ms+stop 一条龙。报告四路读数：
+ * 帧率/掉帧分档、长任务(≥50ms)、交互延迟(>100ms)、逐源码文件的帧耗时归因
+ * （long-animation-frame；运行时不支持会如实标注）。
+ */
+async function cmdPerf(args, sub, msArg) {
+  await withCdp(async (s, cdp) => {
+    await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
+    const mode = sub ?? 'quick';
+    if (mode === 'start') {
+      const ack = await cdp.evalJs('__kojoDebug.perf.start()');
+      console.log(ack?.note ?? JSON.stringify(ack));
+      return;
+    }
+    if (mode === 'stop') {
+      await printProbeReport(cdp);
+      return;
+    }
+    if (mode === 'quick') {
+      const ms = Math.max(500, Number(msArg ?? 3000) || 3000);
+      await cdp.evalJs('__kojoDebug.perf.start()');
+      console.log(`[perf] 采样 ${ms}ms …`);
+      await sleep(ms);
+      await printProbeReport(cdp);
+      return;
+    }
+    die('perf 子形态：start / stop / quick [ms]（缺省 quick 3000）', 2);
+  });
+}
+
+async function printProbeReport(cdp) {
+  // stop() 同步返回报告（探针是页内对象，无异步链）——try/catch 形态统一吃两种实现
+  const report = await cdp.evalJs(
+    `(() => { try { return __kojoDebug.perf.stop(); } catch (e) { return { __err: String(e && e.message || e) }; } })()`,
+    30000,
+  );
+  if (report && report.__err) die(`探针 stop 失败：${report.__err}`, 1);
+  if (!report) die('探针没有返回报告', 1);
+  // 人读摘要（口径行自带）+ 全量 JSON（可断言/落盘）
+  const summary = await cdp.evalJs('__kojoDebug.perf.summary()');
+  for (const line of summary ?? []) console.log(line);
+  console.log('---- report(json) ----');
+  console.log(JSON.stringify(report, null, 2));
+}
+
 /* ------------------------------ main ------------------------------ */
 
 function parseArgs(argv) {
@@ -869,6 +916,7 @@ const commands = {
   dom: cmdDom,
   events: () => cmdEvents(positional, positional[0]),
   invoke: () => cmdInvoke(positional, positional[0], positional[1]),
+  perf: () => cmdPerf(positional, positional[0], positional[1]),
 };
 if (!rawCmd || !commands[rawCmd]) {
   console.log('用法：node tools/debug-cli.mjs <子命令> […]\n  ' + [...Object.keys(commands)].join(' · '));

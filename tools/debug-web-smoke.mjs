@@ -269,6 +269,31 @@ try {
     beforeShot.length > 10000 && !beforeShot.equals(afterShot),
     `${beforeShot.length} B → ${afterShot.length} B`,
   );
+
+  // ⑪ 性能探针（2026-10-25 卡顿体检批）：start → 开合面板制造交互 → stop 出报告，
+  //     帧采样与报告结构必须就位（long-animation-frame 支持性如实回，不强求条目非空）
+  await cdp.evalJs('__kojoDebug.perf.start()');
+  await cdp.evalJs(`__kojoDebug.commands.run('workbench.problems')`, 30000);
+  await sleep(1200);
+  const probeReport = await cdp.evalJs(
+    `(() => { try { return __kojoDebug.perf.stop(); } catch (e) { return { __err: String(e && e.message || e) }; } })()`,
+    30000,
+  );
+  const probeOk =
+    probeReport &&
+    !probeReport.__err &&
+    probeReport.kind === 'perf-probe' &&
+    probeReport.frames.total > 5 &&
+    typeof probeReport.frames.p50 === 'number' &&
+    Array.isArray(probeReport.bySource) &&
+    typeof probeReport.capabilities.longAnimationFrame === 'boolean';
+  check(
+    '性能探针可开关且出结构化报告',
+    probeOk === true,
+    probeOk
+      ? `帧 ${probeReport.frames.total}（p50=${probeReport.frames.p50}ms max=${probeReport.frames.max}ms）· bySource ${probeReport.bySource.length} 项 · laf=${probeReport.capabilities.longAnimationFrame}`
+      : JSON.stringify(probeReport).slice(0, 160),
+  );
   if (KEEP) console.log(`[smoke] 截图保留：${shotPath}`);
 } catch (err) {
   check('断言链中途失败', false, String(err?.message ?? err));

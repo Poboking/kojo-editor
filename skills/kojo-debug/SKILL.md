@@ -42,6 +42,8 @@ node tools/debug-cli.mjs state            # 一屏读数（相位/项目/标签/
 node tools/debug-cli.mjs dom              # DOM 结构快照（只认结构锚，不含文案判据）
 node tools/debug-cli.mjs events 30        # 内核事件旁听（最近 30 条）
 node tools/debug-cli.mjs screenshot out.png [--full]
+node tools/debug-cli.mjs perf quick 5000  # UI 卡顿体检：采样 5s 出报告（帧分档/长任务/交互延迟/逐源码帧耗时）
+#    ↑ 想边驱动边量：perf start →（type/run/切主题…）→ perf stop；报告 bySource 告诉你哪个源码文件在吃帧
 node tools/debug-cli.mjs eval "__kojoDebug.editor.markers()"   # 万能逃生口：页内求值，可 await
 # 5) 收工（必做：会按命令行认领杀掉逃逸的 Edge 子进程）
 node tools/debug-cli.mjs stop
