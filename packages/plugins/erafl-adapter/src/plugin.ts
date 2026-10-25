@@ -24,6 +24,7 @@
  */
 
 import type {
+  AdapterDetectResult,
   CharaInfo,
   FileIO,
   GameAdapter,
@@ -242,15 +243,23 @@ export function createEraflAdapterPlugin(): Plugin {
          */
         stateLinePresets: ERAFL_STATE_LINES,
 
-        async detect(rootDir: string): Promise<boolean> {
+        async detect(rootDir: string): Promise<AdapterDetectResult> {
           // 三者**同时**成立才算 eraFL 工程：
           // 1) FLconfig.xml —— eraFL 独有（普通 Emuera 没有这份外部服务配置）；
           // 2) ERB/口上 是**目录** —— 排除只留了一个同名散文件的半截工程；
           // 3) CSV/CFLAG.CSV —— 证明这是可玩的工程而不是只有配置的空壳。
-          if (!(await io.exists(join(rootDir, ...ERAFL.detect.configFile)))) return false;
-          if (!(await io.exists(join(rootDir, ...ERAFL.detect.charaFlagCsv)))) return false;
+          if (!(await io.exists(join(rootDir, ...ERAFL.detect.configFile)))) return { matched: false };
+          if (!(await io.exists(join(rootDir, ...ERAFL.detect.charaFlagCsv)))) return { matched: false };
           const kojoStat = await io.stat(join(rootDir, ...ERAFL.detect.kojoDir));
-          return kojoStat?.isDirectory === true;
+          if (kojoStat?.isDirectory !== true) return { matched: false };
+          return {
+            matched: true,
+            evidence: [
+              `${ERAFL.detect.configFile.join('/')} 在位`,
+              `${ERAFL.detect.charaFlagCsv.join('/')} 在位`,
+              `${ERAFL.detect.kojoDir.join('/')} 是目录`,
+            ],
+          };
         },
 
         async loadProject(rootDir: string): Promise<GameProject> {

@@ -717,6 +717,19 @@ export interface StateLinePreset {
 }
 
 /**
+ * `detect` 的结果。
+ * 老适配器可直接返回 `boolean`（等价于 `{ matched }`）；新适配器带上证据，
+ * 多适配器同时认领时内核能把「谁因为什么认领」原样抛给宿主。
+ * `evidence` 只用于诊断展示，**不参与取舍**——取舍只有「零命中 / 单命中 / 多命中报冲突」。
+ */
+export interface AdapterDetection {
+  readonly matched: boolean;
+  readonly evidence?: readonly string[];
+}
+
+export type AdapterDetectResult = boolean | AdapterDetection;
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  * 「谁是当前那枚」的判据只有一处实现：本文件末尾的 `activeGameAdapter()`。
@@ -759,7 +772,7 @@ export interface GameAdapter {
   readonly displayName: string;
 
   /** 工程识别（黑盒；适配器内部可自由使用 ctx.io） */
-  detect(rootDir: string): Promise<boolean>;
+  detect(rootDir: string): Promise<AdapterDetectResult>;
   /** 加载工程（黑盒；内核不感知内部步骤） */
   loadProject(rootDir: string): Promise<GameProject>;
 

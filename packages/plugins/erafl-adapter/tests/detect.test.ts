@@ -9,6 +9,7 @@
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { FileIO } from '@kojo/plugin-api';
+import { normalizeAdapterDetection } from '@kojo/plugin-api';
 import { activateAdapter, nodeIo } from './harness';
 
 const GAME_ROOT = 'D:/Game/erafl';
@@ -39,32 +40,32 @@ const KOJO_DIR = `${ROOT}/ERB/口上`;
 
 describe('detect —— 真盘实测（守卫：D:/Game/erafl 存在才跑）', () => {
   it.skipIf(!hasCorpus)('真盘命中：FLconfig.xml + ERB/口上 目录 + CSV/CFLAG.CSV 三者齐备', async () => {
-    expect(await activateAdapter(nodeIo()).detect(GAME_ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await activateAdapter(nodeIo()).detect(GAME_ROOT)).matched).toBe(true);
   });
 
   it.skipIf(!hasCorpus)('子目录 D:/Game/erafl/ERB 不命中：根上缺 FLconfig.xml', async () => {
-    expect(await activateAdapter(nodeIo()).detect(`${GAME_ROOT}/ERB`)).toBe(false);
+    expect(normalizeAdapterDetection(await activateAdapter(nodeIo()).detect(`${GAME_ROOT}/ERB`)).matched).toBe(false);
   });
 });
 
 describe('detect —— 合成工程（三者缺一即不认）', () => {
   it('三者齐备 → 命中', async () => {
     const adapter = activateAdapter(fakeIo([CONFIG, CFLAG], [KOJO_DIR]));
-    expect(await adapter.detect(ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(true);
   });
 
   it('缺 FLconfig.xml → 不命中（普通 Emuera 工程不该被认成 eraFL）', async () => {
     const adapter = activateAdapter(fakeIo([CFLAG], [KOJO_DIR]));
-    expect(await adapter.detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(false);
   });
 
   it('缺 CSV/CFLAG.CSV → 不命中（只有配置与口上目录的空壳工程）', async () => {
     const adapter = activateAdapter(fakeIo([CONFIG], [KOJO_DIR]));
-    expect(await adapter.detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(false);
   });
 
   it('ERB/口上 是文件而不是目录 → 不命中', async () => {
     const adapter = activateAdapter(fakeIo([CONFIG, CFLAG, KOJO_DIR], []));
-    expect(await adapter.detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(false);
   });
 });

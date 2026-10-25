@@ -9,7 +9,7 @@ import type {
   SlotMap,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { ProjectDetectionError } from '@kojo/plugin-api';
+import { AdapterConflictError, ProjectDetectionError, normalizeAdapterDetection } from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
 
 /**
@@ -47,55 +47,68 @@ export class ProjectServiceImpl implements ProjectService {
       throw new ProjectDetectionError(rootDir, []);
     }
 
-    const hits: Array<{ project: GameProject; adapterId: string }> = [];
-    const failures: string[] = [];
+    // 先把「谁认领」全部收齐再决定——detect 是只读探测，loadProject 才可能有副作用。
+    const matches: Array<{
+      adapterId: string;
+      displayName: string;
+      evidence: readonly string[];
+      adapter: (typeof candidates)[number]['adapter'];
+    }> = [];
     for (const entry of candidates) {
       const adapter = entry.adapter;
-      let detected = false;
       try {
-        detected = await adapter.detect(rootDir);
+        const detection = normalizeAdapterDetection(await adapter.detect(rootDir));
+        if (!detection.matched) continue;
+        matches.push({
+          adapterId: adapter.gameId,
+          displayName: adapter.displayName,
+          evidence: detection.evidence ?? [],
+          adapter,
+        });
       } catch (err) {
         this.deps.log.warn(`Adapter '${adapter.gameId}' detect() threw: ${String(err)}`);
-        continue;
-      }
-      if (!detected) continue;
-      try {
-        const project = await adapter.loadProject(rootDir);
-        hits.push({ project, adapterId: adapter.gameId });
-      } catch (err) {
-        failures.push(`${adapter.gameId}: ${String(err)}`);
-        this.deps.log.warn(`Adapter '${adapter.gameId}' detected '${rootDir}' but loadProject() threw: ${String(err)}`);
       }
     }
 
-    if (hits.length === 0) {
-      if (failures.length > 0) {
-        throw new Error(`Detection matched but project failed to load: ${failures.join('; ')}`);
-      }
+    if (matches.length === 0) {
       throw new ProjectDetectionError(rootDir, candidates.map((c) => c.adapter.gameId));
     }
+    if (matches.length > 1) {
+      this.deps.log.error(
+        `Adapter conflict for '${rootDir}': ${matches.map((m) => m.adapterId).join(', ')}`,
+      );
+      throw new AdapterConflictError(
+        rootDir,
+        matches.map(({ adapterId, displayName, evidence }) => ({ adapterId, displayName, evidence })),
+      );
+    }
 
-    // query 已按 order 排序；多命中取第一个并告警（不静默）
-    const chosen = hits[0]!;
-    if (hits.length > 1) {
-      this.deps.log.warn(
-        `Multiple adapters matched '${rootDir}': ${hits.map((h) => h.adapterId).join(', ')}; ` +
-          `using '${chosen.adapterId}' (lowest order).`,
+    const chosen = matches[0]!;
+    let project: GameProject;
+    try {
+      project = await chosen.adapter.loadProject(rootDir);
+    } catch (err) {
+      throw new Error(`Detection matched but project failed to load: ${chosen.adapterId}: ${String(err)}`);
+    }
+    if (project.adapterId !== chosen.adapterId) {
+      throw new Error(
+        `Adapter '${chosen.adapterId}' returned a project tagged '${project.adapterId}'; ` +
+          `adapterId must equal gameId (${rootDir})`,
       );
     }
 
     if (this.currentProject) await this.close();
 
-    this.currentProject = chosen.project;
-    await this.pushRecent(chosen.project);
-    await this.applyApprovedWritable(chosen.project);
+    this.currentProject = project;
+    await this.pushRecent(project);
+    await this.applyApprovedWritable(project);
 
-    this.deps.bus.emit('project.opened', { project: chosen.project });
+    this.deps.bus.emit('project.opened', { project });
     this.deps.log.info(
-      `Project opened via '${chosen.adapterId}': ${chosen.project.rootDir} ` +
-        `(${chosen.project.charaIndex.size} characters, ${chosen.project.kojoPaths.length} kojo roots)`,
+      `Project opened via '${chosen.adapterId}': ${project.rootDir} ` +
+        `(${project.charaIndex.size} characters, ${project.kojoPaths.length} kojo roots)`,
     );
-    return chosen.project;
+    return project;
   }
 
   async close(): Promise<void> {

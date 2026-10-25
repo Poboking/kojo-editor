@@ -1,4 +1,4 @@
-import type { GameProject } from './game';
+import type { AdapterDetection, AdapterDetectResult, GameProject } from './game';
 
 /** 最近打开的项目记录（内核通用持久化，不感知游戏概念） */
 export interface RecentProject {
@@ -53,5 +53,37 @@ export class ProjectDetectionError extends Error {
         : `No registered game adapter recognized the directory: ${rootDir} (candidates: ${candidates.join(', ')})`,
     );
     this.name = 'ProjectDetectionError';
+  }
+}
+
+/** `detect()` 的 boolean / 证据对象两形归一（老适配器零改动） */
+export function normalizeAdapterDetection(result: AdapterDetectResult): AdapterDetection {
+  return typeof result === 'boolean' ? { matched: result } : result;
+}
+
+export interface AdapterConflictCandidate {
+  readonly adapterId: string;
+  readonly displayName: string;
+  readonly evidence: readonly string[];
+}
+
+/**
+ * 多个适配器同时认领同一目录。
+ * 这不是「取 order 最小者」能解决的：任意取舍都会让另一枚适配器的领域面板静默错位，
+ * 所以内核在 loadProject 之前就停下，把全部认领者与证据交给宿主显式呈现。
+ */
+export class AdapterConflictError extends Error {
+  constructor(
+    public readonly rootDir: string,
+    public readonly candidates: readonly AdapterConflictCandidate[],
+  ) {
+    super(
+      `Multiple game adapters recognized the directory: ${rootDir} (` +
+        candidates
+          .map((c) => `${c.adapterId}${c.evidence.length > 0 ? ` [${c.evidence.join('; ')}]` : ''}`)
+          .join(' | ') +
+        ')',
+    );
+    this.name = 'AdapterConflictError';
   }
 }

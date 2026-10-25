@@ -11,12 +11,14 @@ import {
   UNREADABLE_REASON,
   UNKNOWN_FILE_REASON,
   classifyDrop,
+  adapterConflictMessage,
   copyDroppedFiles,
   copyExistsReason,
   dragDropImportHintMessage,
   dropTargetDirFrom,
   formatRejections,
   importRequestedPayload,
+  isAdapterConflictError,
   isProjectDetectionError,
   nextDropOverlay,
   notGameDirMessage,
@@ -638,6 +640,42 @@ describe('检测失败文案：内部英文术语绝不上屏，取目录末段�
     expect(msg).toContain('蛙蛙投稿');
     expect(msg).toContain('导入项目');
     expect(msg).not.toMatch(/No registered game adapter|candidates|adapter|ProjectDetectionError/);
+  });
+});
+
+describe('适配器冲突：名字来自错误载荷，内部英文不上屏', () => {
+  const dir = 'C:\\Users\\123\\Desktop\\某游戏';
+
+  it('只认 name；普通错误 / 检测错误不算冲突', () => {
+    const e = new Error('Multiple game adapters recognized the directory: X');
+    e.name = 'AdapterConflictError';
+    expect(isAdapterConflictError(e)).toBe(true);
+    expect(isAdapterConflictError(new Error('boom'))).toBe(false);
+    expect(isAdapterConflictError(null)).toBe(false);
+    const detection = new Error('ProjectDetectionError');
+    detection.name = 'ProjectDetectionError';
+    expect(isAdapterConflictError(detection)).toBe(false);
+  });
+
+  it('点名双方 displayName，含目录末段，不透传英文原文', () => {
+    const e = new Error('Multiple game adapters recognized the directory: X (a [marker] | b)');
+    e.name = 'AdapterConflictError';
+    (e as unknown as { candidates: unknown }).candidates = [
+      { adapterId: 'a', displayName: '游戏甲', evidence: ['marker'] },
+      { adapterId: 'b', displayName: '游戏乙', evidence: [] },
+    ];
+    const msg = adapterConflictMessage(e, dir);
+    expect(msg).toContain('某游戏');
+    expect(msg).toContain('游戏甲、游戏乙');
+    expect(msg).toContain('反馈给作者');
+    expect(msg).not.toMatch(/Multiple game adapters|evidence|adapterId|candidates/);
+  });
+
+  it('载荷缺 displayName 时回落 adapterId；全缺也不崩', () => {
+    const e1 = new Error('x');
+    (e1 as unknown as { candidates: unknown }).candidates = [{ adapterId: 'a' }, { adapterId: 'b' }];
+    expect(adapterConflictMessage(e1, dir)).toContain('a、b');
+    expect(adapterConflictMessage(new Error('x'), dir)).toContain('多个游戏适配器');
   });
 });
 

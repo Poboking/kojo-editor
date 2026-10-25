@@ -1,4 +1,5 @@
 import type {
+  AdapterDetectResult,
   CharaInfo,
   FileIO,
   GameAdapter,
@@ -518,12 +519,19 @@ export function createEratwAdapterPlugin(): Plugin {
           },
         ],
 
-        async detect(rootDir: string): Promise<boolean> {
+        async detect(rootDir: string): Promise<AdapterDetectResult> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）
           const kojoRoot = join(rootDir, ...ERATW.detect.kojoRoot);
-          if (!(await io.exists(kojoRoot))) return false;
+          if (!(await io.exists(kojoRoot))) return { matched: false };
           const charaDir = join(rootDir, ...ERATW.detect.charaCsvDir);
-          return io.exists(charaDir);
+          if (!(await io.exists(charaDir))) return { matched: false };
+          return {
+            matched: true,
+            evidence: [
+              `${ERATW.detect.kojoRoot.join('/')} 在位`,
+              `${ERATW.detect.charaCsvDir.join('/')} 在位`,
+            ],
+          };
         },
 
         async loadProject(rootDir: string): Promise<GameProject> {

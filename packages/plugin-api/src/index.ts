@@ -139,8 +139,12 @@ export type {
   PackUpdateState,
 } from './market';
 
-export { ProjectDetectionError } from './project';
-export type { ProjectService, RecentProject } from './project';
+export {
+  AdapterConflictError,
+  ProjectDetectionError,
+  normalizeAdapterDetection,
+} from './project';
+export type { AdapterConflictCandidate, ProjectService, RecentProject } from './project';
 
 export { WORKSPACE_MANIFEST_FILE } from './workspace';
 export type {
@@ -231,6 +235,8 @@ export type {
 } from './snapshot';
 
 export type {
+  AdapterDetection,
+  AdapterDetectResult,
   CharaInfo,
   FamilyIndexRule,
   FamilyMatch,

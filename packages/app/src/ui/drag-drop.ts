@@ -85,6 +85,25 @@ export function dragDropImportHintMessage(dir: string): string {
 }
 
 /**
+ * 判定是否 `AdapterConflictError`：同样只认 `name`。
+ * 多适配器同时认领是**程序性冲突**（识别规则重叠），不是用户选错目录，文案必须分开。
+ */
+export function isAdapterConflictError(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { name?: unknown }).name === 'AdapterConflictError';
+}
+
+/** 适配器冲突的人话：点名「谁和谁」（displayName 来自适配器，宿主不内置游戏名） */
+export function adapterConflictMessage(e: unknown, dir: string): string {
+  const candidates = (e as { candidates?: Array<{ displayName?: unknown; adapterId?: unknown }> })
+    ?.candidates;
+  const names = (Array.isArray(candidates) ? candidates : [])
+    .map((c) => (typeof c?.displayName === 'string' ? c.displayName : String(c?.adapterId ?? '')))
+    .filter((name) => name.length > 0);
+  const who = names.length > 0 ? names.join('、') : '多个游戏适配器';
+  return `「${basename(dir)}」同时被 ${who} 认领，无法确定该用哪一套规则。请把这一屏反馈给作者。`;
+}
+
+/**
  * `workspace.importRequested` 载荷（口径对齐 eratw-adapter 的 kojo.importKojoProject 命令）：
  * 末段名做预填建议；根目录（`/`、`C:\`）没有末段 → 不带 suggestedName 键，
  * 绝不让空串混进事件载荷，由导入向导按自己的回退链取名。

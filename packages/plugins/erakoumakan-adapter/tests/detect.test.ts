@@ -1,3 +1,4 @@
+import { normalizeAdapterDetection } from '@kojo/plugin-api';
 /**
  * 工程识别（`detect`）判据。
  *
@@ -31,40 +32,40 @@ function project(title: string, opts: { cflag?: boolean; kojoAsFile?: boolean } 
 
 describe('detect —— 合成工程（三者缺一即不认）', () => {
   it('标题 + 口上目录 + CFLAG 齐备 → 命中', async () => {
-    expect(await adapterOf(project('era紅魔館protoNTR')).detect(ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(project('era紅魔館protoNTR')).detect(ROOT)).matched).toBe(true);
   });
 
   it('标题对不上（eraFL 也有 ERB/口上）→ 不命中', async () => {
-    expect(await adapterOf(project('eraFL')).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(project('eraFL')).detect(ROOT)).matched).toBe(false);
   });
 
   it('缺 CSV/CFLAG.csv（只有标题与口上目录的空壳）→ 不命中', async () => {
-    expect(await adapterOf(project('era紅魔館protoNTR', { cflag: false })).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(project('era紅魔館protoNTR', { cflag: false })).detect(ROOT)).matched).toBe(false);
   });
 
   it('ERB/口上 是文件而不是目录 → 不命中', async () => {
-    expect(await adapterOf(project('era紅魔館protoNTR', { kojoAsFile: true })).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(project('era紅魔館protoNTR', { kojoAsFile: true })).detect(ROOT)).matched).toBe(false);
   });
 
   it('标题匹配宽容日文旧字 / 英文目录名', async () => {
-    expect(await adapterOf(project('era红魔館protoNTR')).detect(ROOT)).toBe(true);
-    expect(await adapterOf(project('eraKoumakan')).detect(ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(project('era红魔館protoNTR')).detect(ROOT)).matched).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(project('eraKoumakan')).detect(ROOT)).matched).toBe(true);
   });
 
   it('GameBase 读不出来 → 不命中（不抛）', async () => {
     // 只给目录，不给 GameBase 文件：exists 为 false
     const io = memIo({ [CFLAG]: '2,好感度\n' }, [`${ROOT}/CSV`, `${ROOT}/ERB`, KOJO_DIR]);
-    expect(await adapterOf(io).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(io).detect(ROOT)).matched).toBe(false);
   });
 });
 
 describe('detect —— 真盘实测（守卫：D:/Game/eraKoumakan 存在才跑）', () => {
   it.skipIf(!hasCorpus)('真盘命中：GameBase 标题 + ERB/口上 目录 + CSV/CFLAG.csv', async () => {
-    expect(await adapterOf(nodeIo()).detect(GAME_ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(nodeIo()).detect(GAME_ROOT)).matched).toBe(true);
   });
 
   it.skipIf(!hasCorpus)('子目录 D:/Game/eraKoumakan/ERB 不命中：根上缺 GameBase', async () => {
-    expect(await adapterOf(nodeIo()).detect(`${GAME_ROOT}/ERB`)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(nodeIo()).detect(`${GAME_ROOT}/ERB`)).matched).toBe(false);
   });
 
   it.skipIf(!hasCorpus)('识别常量与真盘一致（标题正则 / 路径）', () => {

@@ -20,6 +20,7 @@
  */
 
 import type {
+  AdapterDetectResult,
   CharaInfo,
   FileIO,
   GameAdapter,
@@ -98,27 +99,36 @@ export function createErasqcAdapterPlugin(): Plugin {
         // 条件矩阵剧情线预设（键按真盘原文）
         stateLinePresets: ERASQC_STATE_LINES,
 
-        async detect(rootDir: string): Promise<boolean> {
+        async detect(rootDir: string): Promise<AdapterDetectResult> {
           // 1) 游戏自述表必须在位且标题对得上——本作唯一强特征；eraAkumaMaid 也有
           //    `ERB/EVENT_K` 目录，只看目录会把两个游戏认混。
           const gameBase = join(rootDir, ...ERASQC.detect.gameBaseCsv);
-          if (!(await io.exists(gameBase))) return false;
+          if (!(await io.exists(gameBase))) return { matched: false };
           try {
             const tf = await io.readText(gameBase);
-            if (!ERASQC.detect.titlePattern.test(tf.text)) return false;
+            if (!ERASQC.detect.titlePattern.test(tf.text)) return { matched: false };
           } catch (err) {
             ctx.log.debug(`GameBase 读取失败（按不命中处理）：${gameBase} — ${String(err)}`);
-            return false;
+            return { matched: false };
           }
           // 2) 口上主路由必须是文件（半截工程只剩目录不算成局）
-          if (!(await io.exists(join(rootDir, ...ERASQC.detect.kojoRouteFile)))) return false;
+          if (!(await io.exists(join(rootDir, ...ERASQC.detect.kojoRouteFile)))) return { matched: false };
           // 3) 引擎变量字典主表在位：证明这是可玩的 Emuera 工程，不是只有标题的空壳
-          return findCsv(
+          const hasCflag = await findCsv(
             io,
             join(rootDir, ...ERASQC.paths.csvDir),
             /^cflag\.csv$/i,
             ERASQC.detect.charaFlagCsv[1],
           );
+          if (!hasCflag) return { matched: false };
+          return {
+            matched: true,
+            evidence: [
+              `GameBase 标题匹配 ${ERASQC.detect.titlePattern.source}`,
+              `${ERASQC.detect.kojoRouteFile.join('/')} 在位`,
+              `${ERASQC.detect.charaFlagCsv.join('/')} 在位`,
+            ],
+          };
         },
 
         async loadProject(rootDir: string): Promise<GameProject> {

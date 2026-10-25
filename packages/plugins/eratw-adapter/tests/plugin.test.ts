@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileIO, GameAdapter, GameAdapterContribution, PluginContext } from '@kojo/plugin-api';
+import { normalizeAdapterDetection } from '@kojo/plugin-api';
 import { createEratwAdapterPlugin } from '../src/plugin';
 
 /** 伪文件树：记录目录（值 'DIR'）与文本文件（值 = 内容） */
@@ -100,21 +101,21 @@ function standardTree(): Tree {
 describe('eraTW adapter · detect', () => {
   it('特征目录齐备 → true', async () => {
     const { adapter } = activate(fakeIO(standardTree()));
-    expect(await adapter.detect(ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(true);
   });
 
   it('缺口上域目录 → false', async () => {
     const tree = standardTree();
     delete tree[`${ROOT}/ERB/口上・メッセージ関連`];
     const { adapter } = activate(fakeIO(tree));
-    expect(await adapter.detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(false);
   });
 
   it('缺 CHARA CSV 目录 → false', async () => {
     const tree = standardTree();
     delete tree[`${ROOT}/CSV/Chara`];
     const { adapter } = activate(fakeIO(tree));
-    expect(await adapter.detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapter.detect(ROOT)).matched).toBe(false);
   });
 });
 

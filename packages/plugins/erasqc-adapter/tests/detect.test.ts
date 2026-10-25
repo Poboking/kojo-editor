@@ -1,3 +1,4 @@
+import { normalizeAdapterDetection } from '@kojo/plugin-api';
 /**
  * 工程识别（`detect`）判据。
  *
@@ -30,24 +31,24 @@ function project(
 
 describe('detect —— 合成工程（三者缺一即不认）', () => {
   it('标题 + 口上路由 + Cflag 齐备 → 命中', async () => {
-    expect(await adapterOf(project('erasqn汉化魔改版_返')).detect(ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(project('erasqn汉化魔改版_返')).detect(ROOT)).matched).toBe(true);
   });
 
   it('标题对不上（eraAkumaMaid 也有 ERB/EVENT_K）→ 不命中', async () => {
-    expect(await adapterOf(project('eraAkumaMaid')).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(project('eraAkumaMaid')).detect(ROOT)).matched).toBe(false);
   });
 
   it('缺 CSV/Cflag.csv（只有标题与口上的空壳）→ 不命中', async () => {
-    expect(await adapterOf(project('erasqn汉化魔改版_返', { cflag: false })).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(project('erasqn汉化魔改版_返', { cflag: false })).detect(ROOT)).matched).toBe(false);
   });
 
   it('缺 ERB/EVENT_K/EVENT_K.ERB → 不命中', async () => {
-    expect(await adapterOf(project('erasqn汉化魔改版_返', { route: false })).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(project('erasqn汉化魔改版_返', { route: false })).detect(ROOT)).matched).toBe(false);
   });
 
   it('标题匹配宽容 eraSQC / eraSQN / 大小写与空格', async () => {
     for (const title of ['eraSQC', 'eraSQN', 'era sqc', 'ERASQC']) {
-      expect(await adapterOf(project(title)).detect(ROOT), title).toBe(true);
+      expect(normalizeAdapterDetection(await adapterOf(project(title)).detect(ROOT)).matched, title).toBe(true);
     }
   });
 
@@ -57,7 +58,7 @@ describe('detect —— 合成工程（三者缺一即不认）', () => {
       `${ROOT}/ERB`,
       `${ROOT}/ERB/EVENT_K`,
     ]);
-    expect(await adapterOf(io).detect(ROOT)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(io).detect(ROOT)).matched).toBe(false);
   });
 
   it('Cflag 文件名大小写不敏感（魔改版可能写 CFLAG.CSV）', async () => {
@@ -65,17 +66,17 @@ describe('detect —— 合成工程（三者缺一即不认）', () => {
       { [GAMEBASE]: 'タイトル,eraSQC\n', [`${ROOT}/CSV/CFLAG.CSV`]: '995,是乳牛\n', [ROUTE]: '@KOJO_MESSAGE_COM\n' },
       [`${ROOT}/CSV`, `${ROOT}/ERB`, `${ROOT}/ERB/EVENT_K`],
     );
-    expect(await adapterOf(io).detect(ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(io).detect(ROOT)).matched).toBe(true);
   });
 });
 
 describe('detect —— 真盘实测（守卫：C:/game/eraSQC 存在才跑）', () => {
   it.skipIf(!hasCorpus)('真盘命中：GameBase 标题 + EVENT_K.ERB + Cflag.csv', async () => {
-    expect(await adapterOf(nodeIo()).detect(GAME_ROOT)).toBe(true);
+    expect(normalizeAdapterDetection(await adapterOf(nodeIo()).detect(GAME_ROOT)).matched).toBe(true);
   });
 
   it.skipIf(!hasCorpus)('子目录 C:/game/eraSQC/ERB 不命中：根上缺 GameBase', async () => {
-    expect(await adapterOf(nodeIo()).detect(`${GAME_ROOT}/ERB`)).toBe(false);
+    expect(normalizeAdapterDetection(await adapterOf(nodeIo()).detect(`${GAME_ROOT}/ERB`)).matched).toBe(false);
   });
 
   it.skipIf(!hasCorpus)('识别常量与真盘一致（标题正则 / 路径）', () => {

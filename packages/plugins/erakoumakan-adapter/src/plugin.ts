@@ -17,6 +17,7 @@
  */
 
 import type {
+  AdapterDetectResult,
   CharaInfo,
   FileIO,
   GameAdapter,
@@ -82,23 +83,33 @@ export function createKoumakanAdapterPlugin(): Plugin {
         // 条件矩阵剧情线预设（键按真盘原文，含作用域 / 无作用域两形）
         stateLinePresets: ERAKOUMAKAN_STATE_LINES,
 
-        async detect(rootDir: string): Promise<boolean> {
+        async detect(rootDir: string): Promise<AdapterDetectResult> {
           // 1) 游戏自述表必须在位且标题对得上——本作唯一强特征；eraFL 也有
           //    `ERB/口上`，只看目录会把两个游戏认混。
           const gameBase = join(rootDir, ...ERAKOUMAKAN.detect.gameBaseCsv);
-          if (!(await io.exists(gameBase))) return false;
+          if (!(await io.exists(gameBase))) return { matched: false };
           try {
             const tf = await io.readText(gameBase);
-            if (!ERAKOUMAKAN.detect.titlePattern.test(tf.text)) return false;
+            if (!ERAKOUMAKAN.detect.titlePattern.test(tf.text)) return { matched: false };
           } catch (err) {
             ctx.log.debug(`GameBase 读取失败（按不命中处理）：${gameBase} — ${String(err)}`);
-            return false;
+            return { matched: false };
           }
           // 2) 口上域必须是**目录**：只留了一个同名散文件的半截工程不算成局
           const kojoStat = await io.stat(join(rootDir, ...ERAKOUMAKAN.detect.kojoDir));
-          if (kojoStat?.isDirectory !== true) return false;
+          if (kojoStat?.isDirectory !== true) return { matched: false };
           // 3) 引擎变量字典主表在位：证明这是可玩的工程而不是只有标题的空壳
-          return io.exists(join(rootDir, ...ERAKOUMAKAN.detect.charaFlagCsv));
+          if (!(await io.exists(join(rootDir, ...ERAKOUMAKAN.detect.charaFlagCsv)))) {
+            return { matched: false };
+          }
+          return {
+            matched: true,
+            evidence: [
+              `GameBase 标题匹配 ${ERAKOUMAKAN.detect.titlePattern.source}`,
+              `${ERAKOUMAKAN.detect.kojoDir.join('/')} 是目录`,
+              `${ERAKOUMAKAN.detect.charaFlagCsv.join('/')} 在位`,
+            ],
+          };
         },
 
         async loadProject(rootDir: string): Promise<GameProject> {

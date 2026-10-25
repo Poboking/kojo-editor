@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameProject, Logger, Plugin } from '@kojo/plugin-api';
-import { ProjectDetectionError } from '@kojo/plugin-api';
+import { AdapterConflictError, ProjectDetectionError } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
 import { MemoryStorageBackend } from './helpers/memory-storage';
 import type { PlatformBridge } from '@kojo/plugin-api';
@@ -249,11 +249,11 @@ describe('Kernel 组装级', () => {
     await kernel3.stop();
   });
 
-  it('多适配器命中：取 order 最小者并告警（不静默）', async () => {
+  it('多适配器命中：抛 AdapterConflictError（不取舍、不 loadProject）', async () => {
     const calls1 = { detect: [] as string[], load: [] as string[] };
     const calls2 = { detect: [] as string[], load: [] as string[] };
-    const warnings: string[] = [];
-    const logger: Logger = { ...noopLogger, warn: (m) => warnings.push(m) };
+    const errors: string[] = [];
+    const logger: Logger = { ...noopLogger, error: (m) => errors.push(m) };
 
     const p1 = makeFakeAdapterPlugin(calls1);
     const p2: Plugin = {
@@ -265,7 +265,7 @@ describe('Kernel 组装级', () => {
           displayName: 'Fake Game 2',
           detect: async () => {
             calls2.detect.push('x');
-            return true;
+            return { matched: true, evidence: ['second marker'] };
           },
           loadProject: async (rootDir: string): Promise<GameProject> => ({
             rootDir,
@@ -286,9 +286,46 @@ describe('Kernel 组装级', () => {
       storageBackend: new MemoryStorageBackend(),
     });
     await kernel.start();
-    const project = await kernel.project.open('C:\\valid-root\\game');
-    expect(project.adapterId).toBe('fake-game'); // order 缺省 0 < 10
-    expect(warnings.some((w) => w.includes('Multiple adapters matched'))).toBe(true);
+
+    const err = await kernel.project.open('C:\\valid-root\\game').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdapterConflictError);
+    const conflict = err as AdapterConflictError;
+    expect(conflict.candidates.map((c) => c.adapterId)).toEqual(['fake-game', 'fake-game-2']);
+    expect(conflict.candidates[1]?.evidence).toEqual(['second marker']);
+    expect(conflict.message).toContain('fake-game-2 [second marker]');
+    // 冲突在 loadProject 之前就停下：任何一方都不该有副作用
+    expect(calls1.load).toEqual([]);
+    expect(calls2.load).toEqual([]);
+    expect(errors.some((m) => m.includes('Adapter conflict'))).toBe(true);
+    await kernel.stop();
+  });
+
+  it('adapter 返回的 project.adapterId 与 gameId 不一致 → 打开失败（不静默错位）', async () => {
+    const plugin: Plugin = {
+      id: 'fake-adapter-mismatch',
+      version: '1.0.0',
+      activate(ctx) {
+        ctx.slots.register('game.adapter', {
+          id: 'fake-game-mismatch-adapter',
+          adapter: {
+            gameId: 'fake-game',
+            displayName: 'Fake Game',
+            detect: async () => true,
+            loadProject: async (rootDir: string): Promise<GameProject> => ({
+              rootDir,
+              adapterId: 'someone-else',
+              kojoPaths: [],
+              writablePaths: [],
+              charaIndex: new Map(),
+            }),
+          },
+        });
+      },
+    };
+    const kernel = await bootKernel([plugin]);
+    await expect(kernel.project.open('C:\\valid-root\\game')).rejects.toThrow(
+      /adapterId must equal gameId/,
+    );
     await kernel.stop();
   });
 });

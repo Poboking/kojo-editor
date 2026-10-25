@@ -14,8 +14,10 @@ import { invoke, isTauri } from '../bridge/invoke';
 import type { RevealTarget } from '../monaco/reveal-position';
 import type { AppPhase } from './App';
 import {
+  adapterConflictMessage,
   dragDropImportHintMessage,
   importRequestedPayload,
+  isAdapterConflictError,
   isProjectDetectionError,
   notGameDirMessage,
 } from './drag-drop';
@@ -356,7 +358,13 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         //（放在成功路径末尾：打开失败走下面的 catch，绝不顺带打开文件）
         if (opts?.pendingOpenFile) requestOpenFileRef.current?.(opts.pendingOpenFile);
       } catch (e: unknown) {
-        if (isProjectDetectionError(e)) {
+        if (isAdapterConflictError(e)) {
+          // 两个适配器都认领同一目录 = 识别规则重叠（程序性冲突），不是用户选错目录。
+          // 点名「谁和谁」但不透传内核英文原文；错误条与通知同时可见。
+          const message = adapterConflictMessage(e, dir);
+          raiseError(message);
+          notify({ kind: 'error', message });
+        } else if (isProjectDetectionError(e)) {
           // 检测失败（拖进来 / 打开的目录不是可识别的游戏目录）：内部英文术语绝不上屏。
           // 拖拽这条路径顺势引导去「导入项目」向导（emit 意图，adapter 消费后弹窗，
           // 用户选目标/改名才真正字节复制，不静默写盘）；其它入口只做人话化报错。
