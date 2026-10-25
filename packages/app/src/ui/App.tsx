@@ -63,8 +63,11 @@ import {
   WELCOME_WINDOW_WIDTH,
   applyEditorWindow,
   applyWelcomeWindow,
+  canStartWindowDragFrom,
   clampWelcomeWindowSize,
   closeWindow,
+  prepareWindowDrag,
+  type WindowDragStarter,
 } from './window-fullscreen';
 import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
 import { DevNoteDialog } from './DevNoteDialog';
@@ -584,6 +587,36 @@ export function App(): ReactElement {
     if (mode === 'editor') void applyEditorWindow();
     else welcomePlacementRef.current = 'pending';
   }, [project]);
+
+  /**
+   * 欢迎弹窗整窗拖动：弹窗里除交互控件、滚动条、打开的模态外，任意位置按下都能拖。
+   * 只靠 `data-tauri-drag-region` 时只有品牌文字那一小块生效（它只认事件目标元素本身），
+   * 大面积留白按下去没反应；编辑器态由 WindowChrome 自己的拖拽区负责，这里不挂。
+   */
+  useEffect(() => {
+    if (project !== null || phase === 'boot') return;
+    const frame = frameRef.current;
+    if (frame === null) return;
+    // 原生拖动必须在 mousedown 栈里同步发起 ⇒ 窗口对象在挂载时预载，不在这里 await
+    let startDrag: WindowDragStarter | null = null;
+    let cancelled = false;
+    void prepareWindowDrag().then((starter) => {
+      if (!cancelled) startDrag = starter;
+    });
+    const onMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!canStartWindowDragFrom(target, event.clientX, event.clientY)) return;
+      event.preventDefault();
+      startDrag?.();
+    };
+    frame.addEventListener('mousedown', onMouseDown);
+    return () => {
+      cancelled = true;
+      frame.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [project, phase]);
 
   /**
    * 欢迎弹窗贴合卡片核心区：

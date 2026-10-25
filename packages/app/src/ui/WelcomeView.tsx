@@ -374,13 +374,13 @@ export function WelcomeView({
           <div className="welcome-card" role="region" aria-label="欢迎">
             <main className="welcome-main">
               {/* ── 首屏第 1 件：品牌头（字号档 = display，页内唯一） ── */}
-              {/* 弹窗态没有标题栏：品牌头兼任拖动把手（Tauri 只认带属性的**目标元素**，
-                  所以 h1 / tagline 也各挂一份；整栏都在窗口左上，拖动不会碰到控件）。 */}
-              <header className="welcome-brand" data-tauri-drag-region>
-                <h1 data-tauri-drag-region>
+              {/* 弹窗拖动由 App 的整窗 mousedown 接管（除控件/滚动条/模态外任意位置可拖），
+                  这里不再挂 data-tauri-drag-region，免得同一次按下触发两遍原生拖动。 */}
+              <header className="welcome-brand">
+                <h1>
                   kojo-editor <span className="ver">v{APP_VERSION}</span>
                 </h1>
-                <p className="welcome-tagline" data-tauri-drag-region>{TAGLINE}</p>
+                <p className="welcome-tagline">{TAGLINE}</p>
               </header>
 
               {/* 通知条家族：有事要说才出现，平时零占位。色温沿用 .notice 家族，

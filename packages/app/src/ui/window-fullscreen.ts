@@ -363,3 +363,69 @@ export async function applyEditorWindow(
     await win.center();
   });
 }
+
+/* --------- 欢迎弹窗拖拽（2026-10-25 反馈：只有品牌那一小块能拖，不符常见习惯） --------- */
+
+/** 这些控件上的按下归控件自己（按钮 / 链接 / 输入 / 折叠头 / 右键菜单项…） */
+const DRAG_BLOCKERS = [
+  'button',
+  'a',
+  'input',
+  'textarea',
+  'select',
+  'summary',
+  'label',
+  '[role="button"]',
+  '[role="menuitem"]',
+  '[contenteditable="true"]',
+  '[data-no-drag]',
+].join(', ');
+
+/**
+ * 弹窗里一次按下是否该发起窗口拖动：
+ * - 交互控件 / 打开的模态或右键菜单 / 滚动条上都不拖（其余任意位置都能拖）；
+ * - `data-tauri-drag-region` 只认**事件目标元素本身**，欢迎卡的大面积空白没有属性，
+ *   所以不能靠给容器挂属性覆盖整窗，改由这里统一判定。
+ */
+export function canStartWindowDragFrom(target: Element, clientX: number, clientY: number): boolean {
+  if (target.closest(DRAG_BLOCKERS) !== null) return false;
+  const doc = target.ownerDocument;
+  if (doc.querySelector('.modal-mask, .overlay-backdrop, .context-menu-backdrop') !== null) return false;
+  const view = doc.defaultView;
+  if (view === null) return true;
+  // 滚动条上的按下是滚动，不是拖窗：找出真正可滚的祖先，按 client 边缘判
+  for (let node: Element | null = target; node !== null; node = node.parentElement) {
+    const style = view.getComputedStyle(node);
+    const scrollY = /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+    const scrollX = /(auto|scroll)/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
+    if (!scrollY && !scrollX) continue;
+    const rect = node.getBoundingClientRect();
+    if (scrollY && clientX >= rect.left + node.clientWidth) return false;
+    if (scrollX && clientY >= rect.top + node.clientHeight) return false;
+  }
+  return true;
+}
+
+/** 同步发起器：在 mousedown 处理栈里直接调，不能再 await（异步会让原生拖动丢手势） */
+export type WindowDragStarter = () => void;
+
+/**
+ * 预载原生拖动入口。`start_dragging` 必须**同步**发起：动态 import 等一拍再调用，
+ * 系统已经离开按下手势，窗口不动（真壳实测）。所以挂载时先取好窗口对象，
+ * mousedown 时只做一次同步调用；浏览器 dev 返回 no-op。
+ */
+export async function prepareWindowDrag(): Promise<WindowDragStarter> {
+  if (!isTauri()) return () => {};
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const win = getCurrentWindow();
+    return () => {
+      void win.startDragging().catch((error: unknown) => {
+        console.warn('[window-drag] startDragging 失败：', error);
+      });
+    };
+  } catch (error) {
+    console.warn('[window-drag] 预载窗口拖动失败：', error);
+    return () => {};
+  }
+}
