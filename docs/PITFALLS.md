@@ -276,3 +276,11 @@
 200. **新接一个 adapter 会踩两处「单包全绿、全量才红」的闸**（2026-10-25 eratohoK 批实测）：① `packages/kojo-project-kit/tests/encoding-policy.test.ts` 的 `BOM_EMIT_SITES` 按**文件 + 处数**钉死，adapter 的 `chara-csv.ts` 只要写了读侧剥 BOM 的 `/^\uFEFF/`（真盘 Chara CSV 全是 UTF-8-BOM，不剥认不出首行键）就算多一处产出具——表里不登记即红，而报错只说「多了一处」不点名，得自己按 `packages/**/src` 的 `\uFEFF`（**大写**；`\ufeff` 是词法空白类，不算）反查；② `packages/app/tests/ps10-boot-order.test.ts` 钉的是组合根里 adapter 的**装载次序**，`bootstrap.ts` 加了 import 而次序清单没加，红在 app 包、不在 adapter 包。⇒ 接入清单六件事：`tools/audit-decoupling.mjs` 的 `ADAPTER_PLUGIN_DIRS` + `GAME_WORDS`/`PLUGIN_GAME_WORDS` 双词表、`encoding-policy` 的 BOM 表、`ps10-boot-order` 的次序清单、四处 alias（root `tsconfig.json` / `packages/app/tsconfig.json` / `vitest.config.ts` / `packages/app/package.json`）——漏一条都只有全量才暴露。
 
 201. **在调试会话里 `eval "location.reload()"` 会把 CDP 目标连带浏览器一起带走——之后每条子命令都报「浏览器 CDP 不在」，`status` 三个 pid 全「不在」**（2026-10-25 问题面板性能批实测，7 路并发下必现）：想"冷启重载"验首帧，**别在无头会话里 reload**；要么整会话 `stop` + `serve` 重开（首帧口径就按新会话第一轮量），要么用 `?fresh`。同批附两条并发口径：① 默认端口 `17777/4173/9333` 在多 lane 同机会互相抢，起服务时给独立 `--port/--vite-port/--cdp-port`；② 用 `KOJO_DEBUG_SESSION_NAME=<名>` 起服务后，**后续每条 CLI 都要带同一个 env**，否则它按默认会话名找不到 session.json、报「本工作树没有在跑的调试会话」（看着像被杀了，其实是查错了房间）。
+
+> **调试宿易踩一族（201–203，按症状认领）**：进程还在但子命令全报「CDP 不在」→ 201①；CLI 连到了别人的页面/日志出现别的树的 sandbox 路径 → 201②；按键没反应但命令有回执 → 202；`status` 三个 pid 全「不在」且 serve 输出停在某个 `read_file_bytes_raw` → 203。
+
+202. **`debug-cli key <键>` 的键名必须用浏览器 `event.key` 字面量，且大小写敏感——`key f4` 是空按（不是"unbound"，只是什么都没发生、也无报错）**（2026-10-25 性能批实测）：功能键要写 `key F4` / `key Escape` / `key ArrowDown`。用错大小写时命令照样打印成功回执，只有屏上不动——很容易被误判成"功能坏了/虚拟列表把键盘导航弄丢了"。⇒ 排查键位类改动时，先确认按的是不是同一个 `event.key`，再看代码。
+
+203. **合成语料缺 `plugins/tw_csv_chs.xml` 会把整套调试宿顶死——不是超时、不是 OOM，是进程退出**（2026-10-25 性能批实测，7 路里至少 4 路中过）：`eratw-adapter` 读这份汉化词典时路径落到调试宿外壳的读域闸，`serve` 输出停在 `read_file_bytes_raw: 文件不存在` 后整会话消失，表象是 `open-project` 60s 超时 + `status` 三个 pid 全「不在」。⇒ 自建语料必须补齐仓库 `packages/kernel/tests/helpers/synth-eratw-corpus.ts` 里那份 `<root/>` 占位；一旦见到这个症状，**别怀疑并发/资源**，先 `Test-Path <sandbox>\perf-game\plugins\tw_csv_chs.xml`。
+
+204. **性能读数的可比性前提：合成语料与真语料的文件体量分布不同，毫秒数只在"同体量档"内可比**（2026-10-25 性能批实测）：`synth-eratw-corpus.ts` 的 `K39` 合成成 846 行，而真语料同名文件 54 行（跨 16 倍）⇒ 拿合成语料的读数直接对真机体验下结论会系统性偏移。⇒ 报性能读数必须同时给三件事：**语料来源**（合成 / 真盘 / 哪份工程）、**档位**（行数或字节区间）、**改前改后是否同会话同语料**；跨批横比时缺任一项即视为不可比。
