@@ -194,13 +194,18 @@ export function mapKojo2Captures(
  * 区间 → Monaco `SemanticTokens.data`（每 token 五个 `uint32`：
  * `deltaLine` / `deltaStart` / `length` / `tokenType` / `tokenModifiers`）。
  *
- * 编码口径与 Monaco 的 `toMultilineTokens2` 逐字对齐（取证
+ * 编码口径与 Monaco 的 `toMultilineTokens2` 对齐（取证
  * `semanticTokensProviderStyling.js`：`lastLineNumber = 1`、`lastStartCharacter = 0`）：
- * - **首 token** 的 `deltaLine` 是 1 基绝对行、`deltaStart` 是 1 基绝对列；
- * - 换行时 `deltaStart` 取绝对列；同一行时取相对上一 token 起始列的差；
+ * - **绝对分量是 0 基**：首 token 与换行后的 token 写 `line - 1` / `startColumn - 1`
+ *   （解码器把 `deltaLine` 加到 `lastLineNumber = 1` 上、把 `deltaCharacter` 当 0 基字符位）；
+ * - **同行增量**（`deltaLine === 0` 时）是相对上一 token 起始列的差——两点之差与基数无关，
+ *   照旧用 1 基相减；
  * - 必须按 (行, 起始列) 升序（tokenizer 已保证，这里再排一次防御直接调用方）；
  * - 同行重叠保留先到的（Monaco 按到达顺序覆盖；重叠只会让颜色画错而不是消失）；
  * - 零宽区间、legend 之外的类型不进数据。
+ *
+ * 旧版头注把"首 token 的 `deltaLine` 是 1 基绝对行"当成 Monaco 的口径写死，真机结果是
+ * 整篇结构色**下移一行**（2026-10-26 坐标错位批）；自写解码器与编码器同为 1 基，闸一直绿。
  */
 export function encodeKojo2SemanticTokens(
   spans: readonly Kojo2TokenSpan[],
@@ -231,9 +236,12 @@ export function encodeKojo2SemanticTokens(
     const line = Math.trunc(span.line);
     const startColumn = Math.trunc(span.startColumn);
     if (line === previousLine && startColumn < lastEndOnLine) continue;
+    const first = out.length === 0;
+    const sameLine = !first && line === previousLine;
     out.push(
-      line - previousLine,
-      line === previousLine ? startColumn - previousStart : startColumn,
+      // 绝对分量必须 0 基（见头注）；同行增量与基无关。
+      first ? line - 1 : line - previousLine,
+      sameLine ? startColumn - previousStart : startColumn - 1,
       length,
       typeIndex,
       0,

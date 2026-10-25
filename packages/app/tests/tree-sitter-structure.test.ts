@@ -19,6 +19,7 @@ import {
 } from '../src/monaco/tree-sitter/types';
 import { applyEdit, commonEdit, pointAt } from '../src/monaco/tree-sitter/edit';
 import { compilePattern, mergeIndentConfig, type BaseIndentPatterns } from '../src/monaco/tree-sitter/indent';
+import { decodeWithMonaco } from './helpers/monaco-semantic-decode';
 import {
   degradationNoticeText,
   onStructureDegradation,
@@ -271,21 +272,20 @@ const token = (over: Partial<KojoStructureToken>): KojoStructureToken => ({
   ...over,
 });
 
-/** 把 5 元增量数据读回来（编码错了这里就歪，歪了就红） */
-function decode(data: Uint32Array, legend: readonly string[]): Array<{ line: number; startColumn: number; length: number; tier: string }> {
-  const out: Array<{ line: number; startColumn: number; length: number; tier: string }> = [];
-  let line = 0;
-  let column = 0;
-  for (let i = 0; i < data.length; i += 5) {
-    const deltaLine = data[i]!;
-    const deltaStart = data[i + 1]!;
-    const length = data[i + 2]!;
-    const typeIndex = data[i + 3]!;
-    line += deltaLine;
-    column = deltaLine === 0 ? column + deltaStart : deltaStart;
-    out.push({ line, startColumn: column, length, tier: legend[typeIndex] ?? '<越界>' });
-  }
-  return out;
+/**
+ * 把 5 元增量数据读回来（**Monaco 自己的解码器**：`toMultilineTokens2`；编码错了这里就歪，歪了就红）。
+ * 以前这里自写"从 line = 0 起算"的循环，与编码器同为 1 基 ⇒ 两边一起错、闸一直绿。
+ */
+async function decode(
+  data: Uint32Array,
+  legend: readonly string[],
+): Promise<Array<{ line: number; startColumn: number; length: number; tier: string }>> {
+  return (await decodeWithMonaco(data)).map((decoded) => ({
+    line: decoded.line,
+    startColumn: decoded.startColumn,
+    length: decoded.endColumn - decoded.startColumn,
+    tier: legend[decoded.type] ?? '<越界>',
+  }));
 }
 
 describe('encodeStructureTokens · 与词法同色、坐标夹到模型现实', () => {
@@ -300,10 +300,10 @@ describe('encodeStructureTokens · 与词法同色、坐标夹到模型现实', 
     expect(warn.mock.calls[0]![0]).toContain('sugar.nope');
   });
 
-  it('跨行节点拆成逐行段：首行到行尾、中间整行、末行到结束列', () => {
+  it('跨行节点拆成逐行段：首行到行尾、中间整行、末行到结束列', async () => {
     const lines = [';注释第一行', '第二行内容', '第三行尾'];
     const encoded = encodeStructureTokens([token({ startRow: 0, startCol: 1, endRow: 2, endCol: 4 })], geometry(lines));
-    const decoded = decode(encoded.data, structureLegendTypes());
+    const decoded = await decode(encoded.data, structureLegendTypes());
     expect(decoded.map((d) => d.line)).toEqual([1, 2, 3]);
     expect(decoded[0]).toMatchObject({ startColumn: 2, length: lines[0]!.length - 1 });
     expect(decoded[1]).toMatchObject({ startColumn: 1, length: lines[1]!.length });
@@ -331,22 +331,22 @@ describe('encodeStructureTokens · 与词法同色、坐标夹到模型现实', 
     expect(result.spans).toHaveLength(0);
   });
 
-  it('同行重叠留先到的，后者丢掉并报数', () => {
+  it('同行重叠留先到的，后者丢掉并报数', async () => {
     const encoded = encodeStructureTokens(
       [token({ startCol: 0, endCol: 3 }), token({ startCol: 1, endCol: 2 })],
       geometry(['abcdef']),
     );
     expect(encoded.droppedOverlaps).toBe(1);
-    expect(decode(encoded.data, structureLegendTypes())).toHaveLength(1);
+    expect(await decode(encoded.data, structureLegendTypes())).toHaveLength(1);
   });
 
-  it('按行、列升序编码（deltaLine 不得为负）', () => {
+  it('按行、列升序编码（deltaLine 不得为负）', async () => {
     const encoded = encodeStructureTokens(
       [token({ startRow: 2, startCol: 0, endRow: 2 }), token({ startRow: 0, startCol: 1, endRow: 0, endCol: 2 }), token({ startRow: 0, startCol: 0, endRow: 0, endCol: 1 })],
       geometry(['ab', 'cd', 'ef']),
     );
     for (let i = 0; i < encoded.data.length; i += 5) expect(encoded.data[i]).toBeGreaterThanOrEqual(0);
-    expect(decode(encoded.data, structureLegendTypes()).map((d) => [d.line, d.startColumn])).toEqual([
+    expect((await decode(encoded.data, structureLegendTypes())).map((d) => [d.line, d.startColumn])).toEqual([
       [1, 1],
       [1, 2],
       [3, 1],

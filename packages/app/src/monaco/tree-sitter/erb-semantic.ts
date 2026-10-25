@@ -184,6 +184,10 @@ export function splitErbStructureTokens(
 /**
  * 逐行区间 → Monaco `SemanticTokens.data`（每条 5 个 uint32）。
  * 纪律与 `semantic.ts` 同源：按（行，起始列）升序、零宽不进数据、有上限。
+ *
+ * **绝对分量是 0 基**（与 `semantic.ts` 同一条纠正）：区间是 1 基模型坐标，而 Monaco 0.57 的
+ * `toMultilineTokens2` 从 `lastLineNumber = 1` 起算，首 token / 换行后的 token 必须写
+ * `line - 1` / `startColumn - 1`；同行增量与基数无关。
  */
 export function encodeErbStructureTokens(
   tokens: readonly KojoStructureToken[],
@@ -202,8 +206,8 @@ export function encodeErbStructureTokens(
       break;
     }
     const sameLine = span.line === previousLine && written > 0;
-    data[written * 5] = written === 0 ? span.line : span.line - previousLine;
-    data[written * 5 + 1] = sameLine ? span.startColumn - previousStart : span.startColumn;
+    data[written * 5] = written === 0 ? span.line - 1 : span.line - previousLine;
+    data[written * 5 + 1] = sameLine ? span.startColumn - previousStart : span.startColumn - 1;
     data[written * 5 + 2] = length;
     data[written * 5 + 3] = span.typeIndex;
     data[written * 5 + 4] = 0; // 本层不用修饰（图例的 tokenModifiers 为空）

@@ -26,6 +26,14 @@ import {
  * 2. 同行不得重叠：留先到的，后者丢掉并说一次；
  * 3. 零宽不进数据。
  *
+ * ## 基数是 0，不是 1（2026-10-26 坐标错位批）
+ *
+ * `splitStructureTokensToSpans` 交的是模型坐标（1 基行 / 1 基列），但 `SemanticTokens.data`
+ * 的协议口径是 0 基：Monaco 0.57 的 `toMultilineTokens2` 从 `lastLineNumber = 1` 起算，
+ * `lineNumber = lastLineNumber + deltaLine`。所以**绝对**分量要减一（首 token 与换行后的
+ * token 写 `line - 1` / `startColumn - 1`），**同行增量**（两点之差）与基数无关。
+ * 闸只认真 Monaco 解码器：`tests/helpers/monaco-semantic-decode.ts`。
+ *
  * ## 跨行节点先拆成逐行段
  *
  * 一份查询捕获可能盖好几行（围栏块、写长的台词行）。语义数据按"行 + 宽度"编码，
@@ -179,8 +187,9 @@ export function encodeStructureTokens(tokens: readonly KojoStructureToken[], geo
       continue;
     }
     const sameLine = span.line === previousLine && written > 0;
-    data[written * 5] = written === 0 ? span.line : span.line - previousLine;
-    data[written * 5 + 1] = sameLine ? span.startColumn - previousStart : span.startColumn;
+    // 绝对分量必须 0 基（见头注）；同行增量与基无关，用 1 基相减即可。
+    data[written * 5] = written === 0 ? span.line - 1 : span.line - previousLine;
+    data[written * 5 + 1] = sameLine ? span.startColumn - previousStart : span.startColumn - 1;
     data[written * 5 + 2] = length;
     data[written * 5 + 3] = span.typeIndex;
     data[written * 5 + 4] = 0; // 本层不用修饰（图例的 tokenModifiers 为空）

@@ -4,6 +4,10 @@
  * 桩 monaco（只给注册函数）+ 桩 model（只给行数与行长），口径同 `kojo-folding.test.ts`。
  * 钉死的是**协议翻译**这一层：编码错一位 Monaco 就会把整篇颜色画歪，而歪法肉眼难归因，
  * 所以 delta 的每条边界（首 token、换行、同行相对、重叠）都单独一条断言。
+ *
+ * **解码器是 Monaco 自己的**（`tests/helpers/monaco-semantic-decode.ts` 调 `toMultilineTokens2`）：
+ * 这里以前各写一份"从 line = 0 起算"的解码器，与编码器同为 1 基 ⇒ 两边一起错、闸一直绿
+ * （2026-10-26 真机：整篇结构色下沉一行）。落行读数只认 Monaco 的，不再自洽。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -26,6 +30,7 @@ import {
   semanticTokenTypeIndex,
   shouldComputeSemanticTokens,
 } from '../src/monaco/kojo-semantic-tokens';
+import { decodeWithMonaco } from './helpers/monaco-semantic-decode';
 
 const REQUEST: EditorLanguageServiceRequest = {
   kind: 'semanticToken',
@@ -52,19 +57,6 @@ const span = (
   tokenType,
   ...(modifiers ? { modifiers } : {}),
 });
-
-/** 五元组解码（断言写给下一个读代码的人：直接读 Uint32Array 是看不出画歪在哪的） */
-function decode(data: Uint32Array): { line: number; startColumn: number; length: number; type: number; bits: number }[] {
-  const out: { line: number; startColumn: number; length: number; type: number; bits: number }[] = [];
-  let line = 0;
-  let start = 0;
-  for (let i = 0; i < data.length; i += 5) {
-    line += data[i]!;
-    start = data[i] === 0 ? start + data[i + 1]! : data[i + 1]!;
-    out.push({ line, startColumn: start, length: data[i + 2]!, type: data[i + 3]!, bits: data[i + 4]! });
-  }
-  return out;
-}
 
 /* ============================== legend ============================== */
 
@@ -201,43 +193,47 @@ describe('encodeSemanticTokens · delta 编码', () => {
     expect(encodeSemanticTokens([])).toEqual(new Uint32Array(0));
   });
 
-  it('首 token 的 deltaLine 是绝对行号；换行时 deltaStart 也换成绝对列', () => {
+  it('首 token 的 deltaLine 是 0 基行、换行时 deltaStart 是 0 基绝对列（Monaco 解码器把 deltaLine 加到 lastLineNumber=1 上）', async () => {
     const data = encodeSemanticTokens([span(7, 3, 6, 'function'), span(9, 5, 8, 'variable', ['declaration'])]);
-    expect(decode(data)).toEqual([
-      { line: 7, startColumn: 3, length: 3, type: 0, bits: 0 },
-      { line: 9, startColumn: 5, length: 3, type: 1, bits: 1 },
+    expect(await decodeWithMonaco(data)).toEqual([
+      { line: 7, startColumn: 3, endColumn: 6, type: 0, bits: 0 },
+      { line: 9, startColumn: 5, endColumn: 8, type: 1, bits: 1 },
     ]);
-    expect(Array.from(data.slice(0, 5))).toEqual([7, 3, 3, 0, 0]);
-    expect(Array.from(data.slice(5, 10))).toEqual([2, 5, 3, 1, 1]); // 行差 2、新行取绝对列 5
+    expect(Array.from(data.slice(0, 5))).toEqual([6, 2, 3, 0, 0]); // 行 7-1、列 3-1
+    expect(Array.from(data.slice(5, 10))).toEqual([2, 4, 3, 1, 1]); // 行差 2、新行取 0 基绝对列 5-1
   });
 
-  it('同行多 token：第二个的 deltaStart 是相对前一起始列的差（可负）', () => {
+  it('同行多 token：第二个的 deltaStart 是相对前一起始列的差（可负；与基数无关）', async () => {
     const data = encodeSemanticTokens([span(4, 2, 5, 'function'), span(4, 8, 11, 'function')]);
     expect(Array.from(data.slice(5, 10))).toEqual([0, 6, 3, 0, 0]); // 4-4=0 行差、8-2=6
+    expect(await decodeWithMonaco(data)).toEqual([
+      { line: 4, startColumn: 2, endColumn: 5, type: 0, bits: 0 },
+      { line: 4, startColumn: 8, endColumn: 11, type: 0, bits: 0 },
+    ]);
   });
 
-  it('输入乱序也稳定：按 (行, 起始列) 升序编码，同起点长区间在前', () => {
+  it('输入乱序也稳定：按 (行, 起始列) 升序编码，同起点长区间在前', async () => {
     const data = encodeSemanticTokens([
       span(10, 4, 7, 'function'),
       span(2, 9, 12, 'variable'),
       span(2, 2, 8, 'parameter'),
     ]);
-    expect(decode(data)).toEqual([
-      { line: 2, startColumn: 2, length: 6, type: 2, bits: 0 },
-      { line: 2, startColumn: 9, length: 3, type: 1, bits: 0 },
-      { line: 10, startColumn: 4, length: 3, type: 0, bits: 0 },
+    expect(await decodeWithMonaco(data)).toEqual([
+      { line: 2, startColumn: 2, endColumn: 8, type: 2, bits: 0 },
+      { line: 2, startColumn: 9, endColumn: 12, type: 1, bits: 0 },
+      { line: 10, startColumn: 4, endColumn: 7, type: 0, bits: 0 },
     ]);
   });
 
-  it('同行重叠：保留先到的、丢后者并告警（两枚贡献方口径打架时不画双份）', () => {
+  it('同行重叠：保留先到的、丢后者并告警（两枚贡献方口径打架时不画双份）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const data = encodeSemanticTokens([span(3, 2, 8, 'function'), span(3, 5, 9, 'variable')]);
-    expect(decode(data)).toEqual([{ line: 3, startColumn: 2, length: 6, type: 0, bits: 0 }]);
+    expect(await decodeWithMonaco(data)).toEqual([{ line: 3, startColumn: 2, endColumn: 8, type: 0, bits: 0 }]);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 
-  it('legend 之外的类别整条不进数据（数据长度仍是 5 的倍数）', () => {
+  it('legend 之外的类别整条不进数据（数据长度仍是 5 的倍数）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const data = encodeSemanticTokens([
       span(1, 1, 4, 'function'),
@@ -245,12 +241,26 @@ describe('encodeSemanticTokens · delta 编码', () => {
       span(3, 1, 4, 'parameter'),
     ]);
     expect(data.length).toBe(10);
-    expect(decode(data).map((t) => t.type)).toEqual([0, 2]);
+    expect((await decodeWithMonaco(data)).map((t) => t.type)).toEqual([0, 2]);
     warn.mockRestore();
   });
 
   it('零宽区间不进数据', () => {
     expect(encodeSemanticTokens([span(1, 4, 4, 'function')])).toEqual(new Uint32Array(0));
+  });
+
+  it('真机回归：第 10 / 11 / 12 行的 token 各自落回本行第 1 列（旧码整篇下移一行、列再右移一格）', async () => {
+    // 真机症状：第 11 行 `IF LOCAL` 的结构色画到了第 10 行第 2 列起（整行注释那条 token 跨行落位）。
+    const data = encodeSemanticTokens([
+      span(10, 1, 4, 'function'),
+      span(11, 1, 20, 'variable'),
+      span(12, 1, 9, 'parameter'),
+    ]);
+    expect((await decodeWithMonaco(data)).map((t) => [t.line, t.startColumn])).toEqual([
+      [10, 1],
+      [11, 1],
+      [12, 1],
+    ]);
   });
 });
 
@@ -324,7 +334,8 @@ describe('installSemanticTokensProvider · 装配', () => {
       null,
       {} as Monaco.CancellationToken,
     ) as Monaco.languages.SemanticTokens;
-    expect(Array.from(value.data)).toEqual([1, 1, 5, 0, 1]);
+    // 第 1 行第 1 列 ⇒ 0 基 delta (0, 0)；终点夹到 getLineMaxColumn(1)=6 ⇒ 宽度 5
+    expect(Array.from(value.data)).toEqual([0, 0, 5, 0, 1]);
   });
 
   it('宿主 resolve 抛错 → 空数据、不崩（着色不许掀桌子）', () => {

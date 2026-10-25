@@ -46,6 +46,7 @@ import {
   getKojo2TreeSitterRuntime,
   type Kojo2RuntimeDeps,
 } from '../src/monaco/tree-sitter/kojo2-runtime';
+import { decodeWithMonaco } from './helpers/monaco-semantic-decode';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** packages/app/tests → 仓库根 */
@@ -214,33 +215,7 @@ function capture(name: string, startRow: number, startCol: number, endRow: numbe
   return { name, startPosition: { row: startRow, column: startCol }, endPosition: { row: endRow, column: endCol } };
 }
 
-/* ============================== 解码（断言用；与 Monaco 的 lastLineNumber=1 同口径） ============================== */
-
-interface DecodedToken {
-  readonly line: number;
-  readonly startColumn: number;
-  readonly length: number;
-  readonly type: number;
-  readonly bits: number;
-}
-
-function decode(data: Uint32Array): DecodedToken[] {
-  const out: DecodedToken[] = [];
-  let line = 0;
-  let start = 0;
-  for (let i = 0; i < data.length; i += 5) {
-    line += data[i]!;
-    start = data[i] === 0 ? start + data[i + 1]! : data[i + 1]!;
-    out.push({
-      line,
-      startColumn: start,
-      length: data[i + 2]!,
-      type: data[i + 3]!,
-      bits: data[i + 4]!,
-    });
-  }
-  return out;
-}
+/* ============================== 解码（断言用；Monaco 自己的 toMultilineTokens2） ============================== */
 
 /** provider 的返回是 `SemanticTokens | SemanticTokensEdits`；本 provider 只发整份 data */
 function dataOf(result: unknown): Uint32Array {
@@ -331,22 +306,22 @@ describe('encodeKojo2SemanticTokens · delta 编码', () => {
     expect(encodeKojo2SemanticTokens([])).toEqual(new Uint32Array(0));
   });
 
-  it('首 token 绝对行 / 绝对列；换行后 deltaStart 取绝对列；同行取相对列', () => {
+  it('首 token 的 deltaLine 是 0 基行、deltaStart 是 0 基绝对列；换行后取 0 基绝对列；同行取相对列', async () => {
     const keyword = KOJO2_TOKEN.keyword;
     const data = encodeKojo2SemanticTokens([
       span(3, 5, 9, keyword),
       span(3, 12, 14, keyword),
       span(7, 2, 6, keyword),
     ]);
-    expect(decode(data)).toEqual([
-      { line: 3, startColumn: 5, length: 4, type: 1, bits: 0 },
-      { line: 3, startColumn: 12, length: 2, type: 1, bits: 0 },
-      { line: 7, startColumn: 2, length: 4, type: 1, bits: 0 },
+    expect(await decodeWithMonaco(data)).toEqual([
+      { line: 3, startColumn: 5, endColumn: 9, type: 1, bits: 0 },
+      { line: 3, startColumn: 12, endColumn: 14, type: 1, bits: 0 },
+      { line: 7, startColumn: 2, endColumn: 6, type: 1, bits: 0 },
     ]);
-    expect(Array.from(data.slice(0, 5))).toEqual([3, 5, 4, 1, 0]);
+    expect(Array.from(data.slice(0, 5))).toEqual([2, 4, 4, 1, 0]); // 行 3-1、列 5-1
   });
 
-  it('零宽 / 未知 tokenType / 同行重叠：都不进数据（先到的留下）', () => {
+  it('零宽 / 未知 tokenType / 同行重叠：都不进数据（先到的留下）', async () => {
     const keyword = KOJO2_TOKEN.keyword;
     const data = encodeKojo2SemanticTokens([
       span(2, 1, 1, keyword), // 零宽
@@ -354,7 +329,7 @@ describe('encodeKojo2SemanticTokens · delta 编码', () => {
       span(2, 5, 7, keyword), // 与先到的重叠 ⇒ 丢
       span(2, 12, 15, 'no-such-type'), // legend 外
     ]);
-    expect(decode(data)).toEqual([{ line: 2, startColumn: 3, length: 6, type: 1, bits: 0 }]);
+    expect(await decodeWithMonaco(data)).toEqual([{ line: 2, startColumn: 3, endColumn: 9, type: 1, bits: 0 }]);
   });
 });
 
@@ -417,9 +392,9 @@ describe('provider · capture → 5 元组', () => {
     const result = await handle.provider.provideDocumentSemanticTokens(fake.model, null, {} as never);
     const keywordAt = KOJO2_SEMANTIC_TOKEN_TYPES.indexOf(KOJO2_TOKEN.keyword);
     const speakerAt = KOJO2_SEMANTIC_TOKEN_TYPES.indexOf(KOJO2_TOKEN.speaker);
-    expect(decode(dataOf(result))).toEqual([
-      { line: 1, startColumn: 1, length: 2, type: keywordAt, bits: 0 },
-      { line: 1, startColumn: 4, length: 2, type: speakerAt, bits: 0 },
+    expect(await decodeWithMonaco(dataOf(result))).toEqual([
+      { line: 1, startColumn: 1, endColumn: 3, type: keywordAt, bits: 0 },
+      { line: 1, startColumn: 4, endColumn: 6, type: speakerAt, bits: 0 },
     ]);
   });
 });

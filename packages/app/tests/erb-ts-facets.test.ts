@@ -46,6 +46,7 @@ import type {
   KojoStructureReply,
   KojoStructureToken,
 } from '../src/monaco/tree-sitter/types';
+import { decodeWithMonaco } from './helpers/monaco-semantic-decode';
 
 /**
  * ERB-TS-FULL：ERB 结构层的四面（折叠 + 语义着色 + 缩进 + 结构诊断）。
@@ -161,24 +162,20 @@ const FIXTURE = [
 ].join('\n') + '\n';
 const FIXTURE_LINES = FIXTURE.split('\n');
 
-/** 把 5 元增量数据读回来（编码错了这里就歪） */
-function decode(
+/**
+ * 把 5 元增量数据读回来（**Monaco 自己的解码器**：`toMultilineTokens2`；编码错了这里就歪）。
+ * 以前这里自写"从 line = 0 起算"的循环，与编码器同为 1 基 ⇒ 两边一起错、闸一直绿。
+ */
+async function decode(
   data: Uint32Array,
   legend: readonly string[],
-): Array<{ line: number; startColumn: number; length: number; tier: string }> {
-  const out: Array<{ line: number; startColumn: number; length: number; tier: string }> = [];
-  let line = 0;
-  let column = 0;
-  for (let i = 0; i < data.length; i += 5) {
-    const deltaLine = data[i]!;
-    const deltaStart = data[i + 1]!;
-    const length = data[i + 2]!;
-    const typeIndex = data[i + 3]!;
-    line += deltaLine;
-    column = deltaLine === 0 ? column + deltaStart : deltaStart;
-    out.push({ line, startColumn: column, length, tier: legend[typeIndex] ?? '<越界>' });
-  }
-  return out;
+): Promise<Array<{ line: number; startColumn: number; length: number; tier: string }>> {
+  return (await decodeWithMonaco(data)).map((decoded) => ({
+    line: decoded.line,
+    startColumn: decoded.startColumn,
+    length: decoded.endColumn - decoded.startColumn,
+    tier: legend[decoded.type] ?? '<越界>',
+  }));
 }
 
 const token = (over: Partial<KojoStructureToken>): KojoStructureToken => ({
@@ -555,17 +552,17 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('编码：单行为区间按（行，列）升序，坐标从 1 起', () => {
+  it('编码：单行为区间按（行，列）升序，坐标从 1 起', async () => {
     const encoded = encodeErbStructureTokens([token({ startRow: 0, startCol: 0, endRow: 0, endCol: 5, tier: 'comment' })], {
       lineCount: 1,
       maxColumn: () => 12,
     });
-    expect(decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
+    expect(await decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
       { line: 1, startColumn: 1, length: 5, tier: 'comment' },
     ]);
   });
 
-  it('编码：内层优先——串里的插值不被整枚串吞掉，外层切开补写', () => {
+  it('编码：内层优先——串里的插值不被整枚串吞掉，外层切开补写', async () => {
     const encoded = encodeErbStructureTokens(
       [
         token({ startRow: 0, startCol: 0, endRow: 0, endCol: 20, tier: 'string' }),
@@ -573,7 +570,7 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
       ],
       { lineCount: 1, maxColumn: () => 21 },
     );
-    const decoded = decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes);
+    const decoded = await decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes);
     expect(decoded.map((d) => [d.startColumn, d.length, d.tier])).toEqual([
       [1, 5, 'string'],
       [6, 5, 'sugar.interp'],
@@ -590,7 +587,7 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     }
   });
 
-  it('编码：完全被覆盖的重叠区间丢掉并计数', () => {
+  it('编码：完全被覆盖的重叠区间丢掉并计数', async () => {
     const encoded = encodeErbStructureTokens(
       [
         token({ startRow: 0, startCol: 2, endRow: 0, endCol: 8, tier: 'comment' }),
@@ -599,7 +596,7 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
       { lineCount: 1, maxColumn: () => 10 },
     );
     expect(encoded.droppedOverlaps).toBe(1);
-    expect(decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toHaveLength(1);
+    expect(await decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toHaveLength(1);
   });
 
   it('编码：结尾落在下一行第 0 列（裸控制词吃了换行）⇒ 收回上一行，不多铺一行', () => {
@@ -713,7 +710,7 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
       | { data: Uint32Array }
       | null;
     expect(result).not.toBeNull();
-    expect(decode(result!.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
+    expect(await decode(result!.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
       { line: 1, startColumn: 1, length: 5, tier: 'comment' },
     ]);
   });

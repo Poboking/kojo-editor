@@ -204,6 +204,23 @@ export function normalizeSemanticSpans(spans: readonly EditorSemanticTokenSpan[]
  *    直接合掉；同类别不同区间的重叠说明两枚贡献方口径打架，丢后者并告警）；
  * 3. 长度为 0 的区间不进数据（编码上 `length` 是 token 宽度，0 宽 = 无意义）。
  *
+ * ## 基数是 0，不是 1（2026-10-26 坐标错位批）
+ *
+ * 本函数吃的是**模型坐标**（1 基行、1 基 UTF-16 码元列，契约 `slots.ts` 原文），但
+ * `SemanticTokens.data` 的协议口径是 **0 基**：Monaco 0.57 的解码器
+ * （`esm/vs/editor/common/services/semanticTokensProviderStyling.js` 的
+ * `toMultilineTokens2`）从 `lastLineNumber = 1` / `lastStartCharacter = 0` 起算，
+ * `lineNumber = lastLineNumber + deltaLine`、`startCharacter = deltaLine === 0 ?
+ * lastStartCharacter + deltaCharacter : deltaCharacter`。所以：
+ *
+ * - **绝对**分量必须减一：首 token 与每个换行后的 token 写 `line - 1`、`startColumn - 1`；
+ * - **同行增量**是两点之差，与基数无关，照旧 `startColumn - previousStart`（两者同基）。
+ *
+ * 旧版把 1 基值原样写进去，真机症状（调试宿、同一 ERB、只翻结构解析器）：第 11 行
+ * `IF LOCAL` 的结构色整体落到第 10 行、并从第 2 列起——下游 `tests/` 里自写的解码器
+ * 也从 `line = 0` 起算，两边一起错，闸一直是绿的。**闸只认真 Monaco 解码器**，
+ * 见 `tests/helpers/monaco-semantic-decode.ts`。
+ *
  * 空输入返回**长度 0 的数组**（= "认这个文件，但整篇没有要着色的名字"）。
  */
 export function encodeSemanticTokens(spans: readonly EditorSemanticTokenSpan[]): Uint32Array {
@@ -226,8 +243,9 @@ export function encodeSemanticTokens(spans: readonly EditorSemanticTokenSpan[]):
       continue; // 与已写入的同行区间重叠：保留先到的，丢后者
     }
     const sameLine = span.line === previousLine && written > 0;
-    const deltaLine = written === 0 ? span.line : span.line - previousLine;
-    const deltaStart = sameLine ? span.startColumn - previousStart : span.startColumn;
+    // 绝对分量必须 0 基（见头注）；同行增量与基无关，用 1 基相减即可。
+    const deltaLine = written === 0 ? span.line - 1 : span.line - previousLine;
+    const deltaStart = sameLine ? span.startColumn - previousStart : span.startColumn - 1;
     data[written * 5] = deltaLine;
     data[written * 5 + 1] = deltaStart;
     data[written * 5 + 2] = length;
