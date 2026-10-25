@@ -268,6 +268,7 @@ async function main() {
   const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
   const child = spawn(devCmd, {
     shell: true,
+    windowsHide: true,
     cwd: ROOT,
     env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}` },
     stdio: ['ignore', 'pipe', 'pipe'],

@@ -200,7 +200,7 @@ function runEngine(label, { measure = true, mode = 'load' } = {}) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     const exe = path.join(opts.workdir, path.basename(opts.engine));
-    const p = spawn(exe, ['--CliDebug'], { cwd: opts.workdir, stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(exe, ['--CliDebug'], { cwd: opts.workdir, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const lines = [];
     let id = 0, loadDone = false, loadReportedSec = null, loadWallMs = null, quitSent = false, dialogCount = 0, waitCount = 0, timedOut = false, titleWaits = 0;
     const send = (o) => { try { p.stdin.write(JSON.stringify(o) + '\n'); } catch { /* 引擎已退出 */ } };

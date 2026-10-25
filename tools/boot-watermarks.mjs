@@ -111,7 +111,7 @@ try { fs.rmSync(WV2, { recursive: true, force: true }); } catch {}
 
 const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
 const child = spawn(devCmd, {
-  cwd: ROOT, shell: true,
+  cwd: ROOT, shell: true, windowsHide: true,
   env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, WEBVIEW2_USER_DATA_FOLDER: WV2 },
   stdio: ['ignore', 'pipe', 'pipe'],
 });

@@ -154,7 +154,7 @@ function fnLines(erbText, fn) {
 // ── 驱动引擎（单场景单启动）：PRINTFORMW 每行一个 wait，全部 END 后才 quit，否则逐个推输入（300 上限） ──
 function runEngine(dir, nCalls, sceneName) {
   return new Promise((resolve) => {
-    const p = spawn(path.join(dir, path.basename(EXE)), ['--CliDebug'], { cwd: dir, stdio: ['pipe', 'pipe', 'ignore'] });
+    const p = spawn(path.join(dir, path.basename(EXE)), ['--CliDebug'], { cwd: dir, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     const lines = [];
     const tsBegin = new Map(), tsEnd = new Map();
     let id = 0, stray = 0, stateErr = false, resolved = false;

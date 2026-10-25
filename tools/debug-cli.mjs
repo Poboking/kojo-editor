@@ -167,7 +167,7 @@ async function cmdServe(args) {
       sessionExits.push(rec);
       (session.exits ??= []).push(rec);
       console.warn(
-        `[cli] ⚠ ${name} 进程退出（pid=${proc.pid} code=${code} signal=${signal ?? '-'} at=${rec.at}）——status 可见；` +
+        `[cli] [warn] ${name} 进程退出（pid=${proc.pid} code=${code} signal=${signal ?? '-'} at=${rec.at}）——status 可见；` +
           `需要浏览器就重开 serve（或换 --headless/--browser 排查）`,
       );
       void persistSession().catch(() => {});
@@ -200,6 +200,7 @@ async function cmdServe(args) {
   const viteBin = path.join(REPO, 'packages', 'app', 'node_modules', 'vite', 'bin', 'vite.js');
   if (!fs.existsSync(viteBin)) die(`vite 不在位（${viteBin}）——先 pnpm install`, 2);
   const viteProc = spawn(process.execPath, [viteBin, '--port', String(session.vitePort), '--strictPort'], {
+      windowsHide: true,
     cwd: path.join(REPO, 'packages', 'app'),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -244,7 +245,7 @@ async function cmdServe(args) {
   if (!args.noBrowser) {
     const exe = findBrowser(args.browser);
     if (!exe) {
-      console.warn('[cli] ⚠ 没找到 Chrome/Edge——跳过浏览器（页面 URL 仍可用，agent 内置浏览器直接开）');
+      console.warn('[cli] [warn] 没找到 Chrome/Edge——跳过浏览器（页面 URL 仍可用，agent 内置浏览器直接开）');
       session.browserPid = null;
     } else {
       // profile 每会话独立（实测坑 2026-10-25：共用一个目录时，被锁/清残损坏的旧 profile
@@ -285,16 +286,16 @@ async function cmdServe(args) {
         console.log(`[cli] 浏览器 CDP 就绪 :${session.cdpPort}（${args.headless ? '无头' : '有窗'}）`);
         if (args.record) void recordConsole(session).catch((err) => console.warn(`[cli] console 记录失败：${err?.message ?? err}`));
       } else if (await portOpen(session.cdpPort)) {
-        console.warn(`[cli] ⚠ :${session.cdpPort} 有 CDP 但没有本会话页面——大概率被旧会话僵尸浏览器占着；先 stop / 清残留再重开`);
+        console.warn(`[cli] [warn] :${session.cdpPort} 有 CDP 但没有本会话页面——大概率被旧会话僵尸浏览器占着；先 stop / 清残留再重开`);
       } else {
-        console.warn('[cli] ⚠ 浏览器起了但 CDP 30s 没就绪（无头标志或策略拦截？）；继续无 CDP 模式');
+        console.warn('[cli] [warn] 浏览器起了但 CDP 30s 没就绪（无头标志或策略拦截？）；继续无 CDP 模式');
       }
     }
   }
   await fsp.writeFile(SESSION_FILE, JSON.stringify(session, null, 2), 'utf-8');
 
   console.log('');
-  console.log('✅ 调试会话就绪：');
+  console.log('[ok] 调试会话就绪：');
   console.log(`   会话       ：${session.sessionId}（按工作树隔离；会话目录 ${SESS_DIR}）`);
   console.log(`   编辑器 URL ：${session.url}   ← 浏览器 / agent 打开这个`);
   console.log(`   调试宿     ：http://127.0.0.1:${session.serverPort}/health`);
@@ -314,7 +315,7 @@ async function recordConsole(session) {
     // 背压护栏（自审 2026-10-25）：写不过来时丢行并计数——刷屏会话别把 serve 内存堆爆
     if (out.writableLength > 8 * 1024 * 1024) {
       dropped += 1;
-      if (dropped % 1000 === 1) out.write(`[${new Date().toISOString()}] ⚠ console 记录背压，已丢 ${dropped} 行\n`);
+      if (dropped % 1000 === 1) out.write(`[${new Date().toISOString()}] [warn] console 记录背压，已丢 ${dropped} 行\n`);
       return;
     }
     out.write(`[${new Date().toISOString()}] ${s}\n`);
@@ -389,6 +390,7 @@ async function cmdShell(args, flags) {
   const shellCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
   console.log(`[shell] 起真桌面壳：${shellCmd}（CDP :${cdpPort}；冷 cargo 构建首次会久，预算 ${Math.round(bootMs / 1000)}s）`);
   const child = spawn(shellCmd, {
+      windowsHide: true,
     shell: true,
     cwd: REPO,
     env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}` },
@@ -401,7 +403,7 @@ async function cmdShell(args, flags) {
     const rec = { name: 'shell', pid: child.pid, code, signal: signal ?? null, at: new Date().toISOString() };
     exits.push(rec);
     (session.exits ??= []).push(rec);
-    console.warn(`[shell] ⚠ 真壳进程退出（code=${code} signal=${signal ?? '-'} at=${rec.at}）——status 可见`);
+    console.warn(`[shell] [warn] 真壳进程退出（code=${code} signal=${signal ?? '-'} at=${rec.at}）——status 可见`);
     void persist().catch(() => {});
   });
   child.stdout.on('data', (d) => process.stdout.write(`[shell] ${d}`));
@@ -451,7 +453,7 @@ async function cmdShell(args, flags) {
   await persist();
 
   console.log('');
-  console.log('✅ 真壳调试会话就绪：');
+  console.log('[ok] 真壳调试会话就绪：');
   console.log(`   会话       ：${session.sessionId}（mode=shell；会话目录 ${SESS_DIR}）`);
   console.log(`   页面       ：${session.url}（webview 内，浏览器打开无壳行为属正常）`);
   console.log('   下一步     ：state · commands · eval · screenshot（窗口几何以截图+DOM 为准）· open-project（走最近项目行）');
@@ -496,19 +498,19 @@ async function cmdStatus() {
   };
   const exitOf = (name) => (s.exits ?? []).filter((e) => e.name === name).slice(-1)[0] ?? null;
   const childLine = (name, pid, ok) => {
-    if (ok === true) return `✅ pid=${pid}`;
+    if (ok === true) return `[ok] pid=${pid}`;
     const ex = exitOf(name);
-    if (ex) return `❌ pid=${ex.pid} 已退出 code=${ex.code} signal=${ex.signal ?? '-'} at=${ex.at}（serve 输出有同期日志）`;
-    return ok === false ? `❌ pid=${pid} 不在（无退出记录——serve 进程可能已死，整会话作废重开）` : '—（未起）';
+    if (ex) return `[FAIL] pid=${ex.pid} 已退出 code=${ex.code} signal=${ex.signal ?? '-'} at=${ex.at}（serve 输出有同期日志）`;
+    return ok === false ? `[FAIL] pid=${pid} 不在（无退出记录——serve 进程可能已死，整会话作废重开）` : '—（未起）';
   };
   console.log(
     JSON.stringify(
       {
         会话: `${s.sessionId ?? '?'}（${s.repoRoot ?? '?'}${isShell ? ' · mode=shell 真桌面壳' : ''}）`,
-        调试宿: serverOk === null ? '—（mode=shell：真 Tauri IPC，无调试宿）' : serverOk ? `✅ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `❌ :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
-        vite: `${viteOk ? '✅' : '❌'} :${s.vitePort}${isShell ? '' : ` ${childLine('vite', s.vitePid, alive(s.vitePid))}`}`,
+        调试宿: serverOk === null ? '—（mode=shell：真 Tauri IPC，无调试宿）' : serverOk ? `[ok] :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `[FAIL] :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
+        vite: `${viteOk ? '[ok]' : '[FAIL]'} :${s.vitePort}${isShell ? '' : ` ${childLine('vite', s.vitePid, alive(s.vitePid))}`}`,
         浏览器CDP: cdpOk
-          ? `✅ :${s.cdpPort} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`
+          ? `[ok] :${s.cdpPort} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`
           : `— ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
         页面相位: pagePhase,
         退出记录: (s.exits ?? []).slice(-5),
@@ -550,7 +552,7 @@ async function cmdStop() {
     try { await fsp.rm(s.tauriConfigTemp, { force: true }); } catch {}
   }
   try { await fsp.rm(SESSION_FILE, { force: true }); } catch {}
-  console.log('🧹 调试会话已收（' + (pids.length ? `pid ${pids.join('/')}` : '无存活 pid') + `；mode=${s.mode ?? 'web'}；会话目录 ` + SESS_DIR + '）');
+  console.log('[clean] 调试会话已收（' + (pids.length ? `pid ${pids.join('/')}` : '无存活 pid') + `；mode=${s.mode ?? 'web'}；会话目录 ` + SESS_DIR + '）');
 }
 
 async function withCdp(fn) {
@@ -601,7 +603,7 @@ async function cmdRun(_, id) {
     await cdp.evalJs(`__kojoDebug.commands.run(${JSON.stringify(id)})`, 30000);
     await sleep(300);
     const phase = await cdp.evalJs('__kojoDebug.state().phase');
-    console.log(`✅ 已执行命令 ${id}（当前相位：${phase}）`);
+    console.log(`[ok] 已执行命令 ${id}（当前相位：${phase}）`);
   });
 }
 
@@ -614,7 +616,7 @@ async function cmdOpenProject(args, dir, flags) {
     // 0) 已开着同一个项目 ⇒ 幂等直过
     const cur = await cdp.evalJs('(__kojoDebug.state().project ?? {}).rootDir ?? null');
     if (cur && path.resolve(String(cur)) === abs) {
-      console.log(`✅ 项目已开着：${abs}`);
+      console.log(`[ok] 项目已开着：${abs}`);
       return;
     }
     // 1) 目录对话框的自动应答（真实点击后 UI 会走 choose_directory → 调试宿按 policy 应答）
@@ -667,7 +669,7 @@ async function cmdOpenProject(args, dir, flags) {
     await waitFor(cdp, `!!document.querySelector('.file-tree')`, { timeoutMs: 90000, label: '文件树' });
     const st = await waitFor(cdp, `(__kojoDebug.state().project ?? {}).rootDir ?? ''`, { timeoutMs: 90000, label: 'project.rootDir' });
     const state = await cdp.evalJs('__kojoDebug.state()');
-    console.log(`✅ 项目已开：${st}`);
+    console.log(`[ok] 项目已开：${st}`);
     console.log(`   adapter=${state.project?.adapterId ?? '?'} · 标签=${state.tabs.count} · 通知=${state.notices.count}`);
     for (const n of state.notices.items ?? []) console.log(`   notice: ${n}`);
   });
@@ -696,7 +698,7 @@ async function cmdOpenFile(args, frag) {
     await waitFor(cdp, `!!document.querySelector('.monaco-editor')`, { timeoutMs: 30000, label: 'Monaco 挂载' });
     await sleep(400);
     const info = await cdp.evalJs('__kojoDebug.editor.info()');
-    console.log(`✅ 已打开：${info?.path ?? found}`);
+    console.log(`[ok] 已打开：${info?.path ?? found}`);
     console.log(`   语言=${info?.languageId} 行数=${info?.lineCount} EOL=${info?.eol}`);
   });
 }
@@ -705,7 +707,7 @@ async function cmdClick(args, selector) {
   if (!selector) die('click 需要选择器', 2);
   await withCdp(async (s, cdp) => {
     const c = await cdpClick(cdp, selector);
-    console.log(`✅ 已点击 ${selector}（坐标 ${c.x},${c.y}）`);
+    console.log(`[ok] 已点击 ${selector}（坐标 ${c.x},${c.y}）`);
   });
 }
 
@@ -738,7 +740,7 @@ async function cmdType(args, selector, text) {
     }
     await cdp.send('Input.insertText', { text });
     console.log(
-      `✅ 已输入 ${text.length} 字符${selector ? ` 到 ${selector}` : `（焦点元素 ${focusInfo?.tag ?? ''}.${focusInfo?.cls ?? ''}）`}`,
+      `[ok] 已输入 ${text.length} 字符${selector ? ` 到 ${selector}` : `（焦点元素 ${focusInfo?.tag ?? ''}.${focusInfo?.cls ?? ''}）`}`,
     );
   });
 }
@@ -764,7 +766,7 @@ async function cmdKey(args, key, mod = '') {
     // 实测坑：char 里带着 'p' 会把字面字母插进刚打开的命令面板输入框（inputVal 变 "p问题"）。
     if (keyDef.text && modifiers === 0) await cdp.send('Input.dispatchKeyEvent', { type: 'char', modifiers, ...keyDef });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers, ...keyDef });
-    console.log(`✅ 已发送键 ${mods.length ? mods.join('+') + '+' : ''}${key}`);
+    console.log(`[ok] 已发送键 ${mods.length ? mods.join('+') + '+' : ''}${key}`);
   });
 }
 
@@ -776,7 +778,7 @@ async function cmdScreenshot(args, out) {
     const buf = await cdp.screenshot(full);
     const dest = path.resolve(out);
     await fsp.writeFile(dest, buf);
-    console.log(`📸 截图已存：${dest}（${full ? '整页' : '视口'}，${(buf.length / 1024).toFixed(0)} KB）`);
+    console.log(`[shot] 截图已存：${dest}（${full ? '整页' : '视口'}，${(buf.length / 1024).toFixed(0)} KB）`);
   });
 }
 

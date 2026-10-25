@@ -253,6 +253,7 @@ console.log(
 const devCmd = ['pnpm --filter @kojo/app tauri dev', ...dev.tauriArgs.map((a) => `"${a}"`)].join(' ');
 const child = spawn(devCmd, {
   shell: true,
+  windowsHide: true,
   cwd: ROOT,
   env: {
     ...process.env,

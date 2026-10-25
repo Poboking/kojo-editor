@@ -64,7 +64,7 @@ function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     const command = [cmd, ...args.map(q)].join(' ');
     const p = spawn(command, {
-      cwd: opts.cwd, env: process.env, shell: true,
+      cwd: opts.cwd, env: process.env, shell: true, windowsHide: true,
       stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     });
     let out = '';
@@ -193,7 +193,7 @@ fs.mkdirSync(dest, { recursive: true });
 console.log('[5/5] CliDebug 冒烟…');
 {
   const exe = path.join(dest, EXE_NAME);
-  const p = spawn(exe, ['--CliDebug'], { cwd: dest });
+  const p = spawn(exe, ['--CliDebug'], { cwd: dest, windowsHide: true });
   let hello = null; let ready = false; let id = 0;
   const send = (o) => { try { p.stdin.write(JSON.stringify(o) + '\n'); } catch { /* 进程已退出 */ } };
   const closed = new Promise((res) => {
