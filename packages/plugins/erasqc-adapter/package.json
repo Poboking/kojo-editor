@@ -1,0 +1,14 @@
+{
+  "name": "@kojo/plugin-erasqc-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eraSQC game adapter: GameBase title detection, Chara CSV index, ERB/EVENT_K kojo naming (KOJO_MESSAGE_*_{no}_{mode}), variable schema and project conventions. All eraSQC-specific knowledge lives here; the kernel stays game-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*",
+    "@kojo/kojo-project-kit": "workspace:*"
+  }
+}

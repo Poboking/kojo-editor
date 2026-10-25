@@ -218,7 +218,7 @@ interface GameAdapter {
    分叉后的症状是「A 面板认得出这个游戏、B 面板认不出」，没有任何别的东西拦得住。
 
 v0 中 eraTW 适配器是唯一实现；此后陆续接入 **eraAkumaMaid 适配器**（`eraakumamaid-adapter`）、
-**eraFL 适配器**（`erafl-adapter`）与 **era紅魔館 适配器**（`erakoumakan-adapter`，2026-10-25），现为四个实现。`GameProject` 的通用形状定义见 §5.7，由适配器填充、内核视为不透明载荷。**验收标准：将来接入新游戏时内核与解析器插件零改动**——eraFL 与 era紅魔館 接入实测都兑现了这条：内核零改动，eraFL 的唯一 additive 面是下面这个 `kojo.xml` 契约与对应服务键，era紅魔館 则完全不新增契约面（识别靠 `CSV/GameBase.csv` 标题，口上仍是 ERB 函数）。
+**eraFL 适配器**（`erafl-adapter`）、**era紅魔館 适配器**（`erakoumakan-adapter`，2026-10-25）与 **eraSQC 适配器**（`erasqc-adapter`，2026-10-25），现为五个实现。`GameProject` 的通用形状定义见 §5.7，由适配器填充、内核视为不透明载荷。**验收标准：将来接入新游戏时内核与解析器插件零改动**——eraFL、era紅魔館 与 eraSQC 接入实测都兑现了这条：内核零改动，eraFL 的唯一 additive 面是下面这个 `kojo.xml` 契约与对应服务键，era紅魔館 与 eraSQC 则完全不新增契约面（识别靠 `CSV/GameBase.csv` 标题，口上仍是 ERB 函数）。
 
 口上不一定是 ERB 函数。eraFL 的口上是**声明式数据文件**（`ERB/口上/{编号}_{名}/*.xml`），
 故契约新增 `kojo.xml` 服务（`KojoXmlService`）承载其结构模型。这是 **additive** 的：
@@ -361,6 +361,7 @@ kojo-editor/
 │   │   ├── eratw-adapter/     # 声明 requires: ['kernel.io']，eraTW 全部知识在此（家族识别 + conventions + variableSchema）
 │   │   ├── erafl-adapter/     # eraFL 适配器：FLconfig.xml 识别 + Chara CSV / 口上目录索引；口上 XML 索引经 kojo.xml 服务提供
 │   │   ├── erakoumakan-adapter/ # era紅魔館 适配器：GameBase 标题识别 + 编号口上目录 / 家族索引 / 变量表 / 约定；口上是 ERB 函数
+│   │   ├── erasqc-adapter/    # eraSQC 适配器：GameBase 标题识别 + ERB/EVENT_K 扁平口上文件 / 家族索引 / 变量表 / 约定；无每角色目录
 │   │   ├── convention-linter/ # 声明 requires: ['kernel.io','kernel.project','kernel.slots','erb.parser']
 │   │   ├── condition-extractor/ # ★ 条件谓词抽取（服务 condition.extractor；表达式解析 + 状态依赖聚合 + 本地量赋值收集，语义标注来自 adapter）
 │   │   ├── ui-convention-report/ # ui.panel：校验结果面板（点击 → editor.revealLocation）
@@ -377,8 +378,8 @@ kojo-editor/
 │   │   ├── ui-archive-browser/  # ui.panel：归档浏览器
 │   │   └── ui-plugin-status/    # ui.panel：插件状态面板（首个 ui.panel 示例）
 
-> 上表列的是主要插件；`ls packages/plugins` 现为 **24 个**目录（上表之外还有 `eraakumamaid-adapter` /
-> `erakoumakan-adapter` / `kojo-lang` / `kojo-market` / `ui-market` / `ui-condition-matrix`，完整清单与计数以 `docs/STATE.md` 为准）。初稿规划的 `runtime/`（受管引擎子进程，
+> 上表列的是主要插件；`ls packages/plugins` 现为 **25 个**目录（上表之外还有 `eraakumamaid-adapter` /
+> `erakoumakan-adapter` / `erasqc-adapter` / `kojo-lang` / `kojo-market` / `ui-market` / `ui-condition-matrix`，完整清单与计数以 `docs/STATE.md` 为准）。初稿规划的 `runtime/`（受管引擎子进程，
 > §5.6）与 `ui-condition-matrix/`（条件矩阵）**未立项**，`preview-renderer/` 的职责由
 > `ui-sugar-preview` 承担 —— 在此说明是为了免得有人回来找这三个目录。
 │   └── app/               # 壳：Tauri（Rust 宿主）+ Monaco 编辑器主体

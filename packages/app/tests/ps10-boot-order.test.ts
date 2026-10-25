@@ -95,6 +95,9 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 第四个 adapter（era紅魔館，2026-10-25 批）。同样走项目级：欢迎页无贡献面，
       // 且 `CSV/GameBase.csv` 标题是唯一强特征（与 eraFL 的 `ERB/口上` 目录不冲突）。
       'createKoumakanAdapterPlugin',
+      // 第五个 adapter（eraSQC，2026-10-25 批）。同样走项目级；`CSV/GameBase.csv`
+      // 标题是唯一强特征（与 eraAkumaMaid 的 `ERB/EVENT_K` 目录不冲突）。
+      'createErasqcAdapterPlugin',
       'createConventionLinterPlugin',
       'createConditionExtractorPlugin',
       'createSavParserPlugin',

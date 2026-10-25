@@ -305,6 +305,11 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     why: '读侧剥 BOM（`^\\uFEFF`）：真盘 18 份 `Chara{n}.csv` 全部 UTF-8-BOM，剥掉才认首行键；不产出字节',
   },
   {
+    file: 'packages/plugins/erasqc-adapter/src/chara-csv.ts',
+    count: 1,
+    why: '读侧剥 BOM（`^\\uFEFF`）：真盘 63 份 `Chara{n}.csv` 全部 UTF-8-BOM，剥掉才认首行 `番号`；不产出字节',
+  },
+  {
     file: 'packages/plugins/erafl-adapter/src/scaffold.ts',
     count: 2,
     why: '新角色脚手架两份产物（`KOJO_DEFINE_K{n}.ERB` + 口上 XML）各带一枚 BOM，与真盘既有文件同形',

@@ -197,13 +197,19 @@ async function cmdServe(args) {
   children[0].proc.stderr.on('data', (d) => process.stderr.write(`[host!] ${d}`));
 
   // 2) vite（编辑器页面；--port 覆盖配置里的 1420，strictPort 只对自己的端口严格）
+  //    --host 127.0.0.1：CLI / 会话文件里的编辑器 URL 一律写 127.0.0.1（见下 session.url），
+  //    而 vite 缺省绑 localhost——Windows 上 localhost 常只解析到 ::1，浏览器会 ERR_CONNECTION_REFUSED。
   const viteBin = path.join(REPO, 'packages', 'app', 'node_modules', 'vite', 'bin', 'vite.js');
   if (!fs.existsSync(viteBin)) die(`vite 不在位（${viteBin}）——先 pnpm install`, 2);
-  const viteProc = spawn(process.execPath, [viteBin, '--port', String(session.vitePort), '--strictPort'], {
+  const viteProc = spawn(
+    process.execPath,
+    [viteBin, '--port', String(session.vitePort), '--strictPort', '--host', '127.0.0.1'],
+    {
       windowsHide: true,
-    cwd: path.join(REPO, 'packages', 'app'),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+      cwd: path.join(REPO, 'packages', 'app'),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
   children.push({ name: 'vite', proc: watchChild('vite', viteProc) });
   session.vitePid = viteProc.pid;
   let viteLog = '';

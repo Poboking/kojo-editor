@@ -202,6 +202,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     eraflAdapter,
     eraakumaAdapter,
     erakoumakanAdapter,
+    erasqcAdapter,
     linter,
     extractor,
     savParser,
@@ -225,6 +226,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-erafl-adapter'),
     import('@kojo/plugin-eraakumamaid-adapter'),
     import('@kojo/plugin-erakoumakan-adapter'),
+    import('@kojo/plugin-erasqc-adapter'),
     import('@kojo/plugin-convention-linter'),
     import('@kojo/plugin-condition-extractor'),
     import('@kojo/plugin-sav-parser'),
@@ -272,6 +274,9 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // era紅魔館 领域知识（第四个 adapter；`CSV/GameBase.csv` 标题是唯一强特征——
     // 它与 eraFL 共用 `ERB/口上` 目录名，只看目录会认混，故顺序不影响判定）。
     erakoumakanAdapter.createKoumakanAdapterPlugin(),
+    // eraSQC 领域知识（第五个 adapter；`CSV/GameBase.csv` 标题为主特征——
+    // 它与 eraAkumaMaid 共用 `ERB/EVENT_K` 目录名，只看目录会认混，故顺序不影响判定）。
+    erasqcAdapter.createErasqcAdapterPlugin(),
     // 约定校验引擎（游戏无关）+ 结果为面板呈现
     linter.createConventionLinterPlugin(),
     // 条件谓词抽取（游戏无关；变量语义来自当前 adapter 的 variableSchema）
