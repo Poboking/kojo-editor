@@ -55,6 +55,25 @@ import { beginFloatDrag, beginFloatResize } from './float-drag';
 import { loadSugarViewPref, saveSugarViewPref } from './sugar-view';
 // 保存时整理空白（E2）：偏好真源在 localStorage（`format-pref.ts`），保存链路每次现读
 import { loadFormatOnSavePref, saveFormatOnSavePref } from './format-pref';
+// 状态栏即时开关（B 批）：自动换行三档（layout-pref）与空白符五档（editor-display-prefs）
+// 的真源与展示词汇都在各自纯模块里；这里只取投影 + 写值，落 Monaco 由既有订阅通路负责。
+import {
+  loadLayoutPref,
+  nextWordWrapToggle,
+  saveWordWrapPref,
+  subscribeLayoutPref,
+  WORD_WRAP_CHOICES,
+  WORD_WRAP_LABELS,
+} from './layout-pref';
+import { layoutPrefPatch } from './editor-options';
+import {
+  loadEditorDisplayPrefs,
+  nextRenderWhitespaceToggle,
+  RENDER_WHITESPACE_CHOICES,
+  RENDER_WHITESPACE_LABELS,
+  saveEditorDisplayPrefs,
+  useEditorDisplayPrefs,
+} from './editor-display-prefs';
 // 行上内联注解（B8）：同一份偏好形态，默认关；开关真源在 localStorage，这里只写值 + 发意图
 import { loadCodeLensPref, saveCodeLensPref } from './code-lens-pref';
 import { useNameColorPref } from './semantic-color-pref';
@@ -310,7 +329,16 @@ function LockIcon(): ReactElement {
 export type EditorEolChoice = 'LF' | 'CRLF';
 
 /** 状态栏轻量弹层（一次只开一个；沿用 `.sb-eol-menu` 那套已有 popover 样式惯例） */
-type StatusMenu = null | 'eol' | 'language' | 'encoding' | 'encoding-reopen' | 'encoding-save';
+type StatusMenu =
+  | null
+  | 'eol'
+  | 'language'
+  | 'encoding'
+  | 'encoding-reopen'
+  | 'encoding-save'
+  // B 批两格：自动换行 / 空白符显示（各自 popover，复用同一套 `.sb-eol-menu` 轻量弹层）
+  | 'wordWrap'
+  | 'whitespace';
 
 /**
  * 编码菜单一项（真源 = S2 `./encoding-actions` 的 `listEncodings()`）。
@@ -384,6 +412,57 @@ export function encodingConfirmMessage(
     : `按 ${encoding} 另存可能丢字（无法表示的字符会被替换），仍要继续？`;
 }
 
+/** 状态栏两个即时开关命令体需要的最小编辑器面（结构化：宿主传真编辑器，单测传假对象） */
+export interface ToggleCommandTarget {
+  getModel(): { getLineCount(): number } | null;
+}
+
+/**
+ * `workbench.toggleWordWrap` 的命令体（**单源可测**：宿主命令表与快捷键都调它，不各写一份）。
+ *
+ * 作用于**当前焦点编辑器**：只写 `layout-pref.ts` 的真源（`saveWordWrapPref`），活编辑器由
+ * `use-editor-preferences.ts` 的 `layoutUnsub` 订阅现读 `layoutPrefPatch` 补发
+ * （`updateOptions`）——**同一条偏好通路**，不另开只有状态栏会走的写选项路径；后续打开的文件
+ * 走 create options / `applySizeTier` 同源。没有编辑器 / 无活动文件 ⇒ 中文通知（铁律 4），不静默。
+ *
+ * **Alt+Z 与三档偏好的互操作**（判据在 `layout-pref.nextWordWrapToggle`，此处只说契约）：
+ * 按一下在**「开 / 关」两个显式值**间翻转；`tier`（跟随档）视为「跟随体量档」，被显式切换
+ * 即离开——切向由**此刻屏幕上那份文档**在档位表上的生效值（`layoutPrefPatch(lineCount).wordWrap`）
+ * 决定：生效 `on` ⇒ 写 `off`，生效 `off` ⇒ 写 `on`。`tier` 这一档**不删**（它仍是"没存过键"
+ * 与"跟随体量档"的既有真源，作者可在状态栏 / 设置页调回跟随档）。判据自洽、可测、可持久化。
+ */
+export function applyToggleWordWrap(
+  target: ToggleCommandTarget | null,
+  notify: (message: string) => void,
+): void {
+  const model = target?.getModel() ?? null;
+  if (!model) {
+    notify('当前没有可用的编辑器：先在编辑区点一下再切换自动换行。');
+    return;
+  }
+  const current = loadLayoutPref().wordWrap;
+  const tierEffective: 'on' | 'off' = layoutPrefPatch(model.getLineCount()).wordWrap === 'on' ? 'on' : 'off';
+  saveWordWrapPref(nextWordWrapToggle(current, tierEffective));
+}
+
+/**
+ * `workbench.toggleRenderWhitespace` 的命令体：切向 `none ↔ all`（细粒度档留给状态栏 /
+ * 设置页五档），其余口径与 {@link applyToggleWordWrap} 逐字同款——写 `editor-display-prefs.ts`
+ * 真源、活编辑器经 `displayUnsub` 补发、无编辑器给中文通知。
+ */
+export function applyToggleRenderWhitespace(
+  target: ToggleCommandTarget | null,
+  notify: (message: string) => void,
+): void {
+  if ((target?.getModel() ?? null) === null) {
+    notify('当前没有可用的编辑器：先在编辑区点一下再切换空白符显示。');
+    return;
+  }
+  saveEditorDisplayPrefs({
+    renderWhitespace: nextRenderWhitespaceToggle(loadEditorDisplayPrefs().renderWhitespace),
+  });
+}
+
 /**
  * 语言模式落地：Monaco 0.57 的公开出口只有 `editor.setModelLanguage`（`ITextModel` 没有
  * `setLanguage`）。monaco 图**动态取**——壳层与它的状态栏测试都不该静态摸 Monaco 运行时。
@@ -439,6 +518,10 @@ export function EditorStatusReadout({
   onError?: (message: string) => void;
 }): ReactElement | null {
   const status = useSyncExternalStore(subscribeShellEditorStatus, getShellEditorStatus, getShellEditorStatus);
+  // 两格即时开关的真源投影（写值只落偏好模块，活编辑器由各自的订阅通路 updateOptions；
+  // 本格订阅同一张表 ⇒ 值一变就重渲，与编辑器读数同源、不各拿一份）
+  const layoutPref = useSyncExternalStore(subscribeLayoutPref, loadLayoutPref, loadLayoutPref);
+  const displayPrefs = useEditorDisplayPrefs();
   const [menu, setMenu] = useState<StatusMenu>(null);
   /** 读数刷新信号（model 语言 / 选项变化、本格写入后用；值本身不参与渲染） */
   const [, refreshReadout] = useState(0);
@@ -716,6 +799,82 @@ export function EditorStatusReadout({
         )}{' '}
         · {status.lines} 行
       </span>
+      {/* 自动换行格（B 批）：展示并切换 `layout-pref` 三档（跟随档 / 开 / 关）。
+          写值 = 偏好真源，活编辑器与后续打开的文件都走同一条订阅通路即时生效；
+          无活动文件时整格不渲染（与相邻三格同一判据）。 */}
+      {path !== null ? (
+        <span className="sb-eol-wrap">
+          <button
+            type="button"
+            className="sb-eol sb-wordwrap"
+            data-status-cell=""
+            aria-haspopup="menu"
+            aria-expanded={menu === 'wordWrap'}
+            title={`自动换行：${WORD_WRAP_LABELS[layoutPref.wordWrap]}（点击切换）`}
+            onClick={() => setMenu(menu === 'wordWrap' ? null : 'wordWrap')}
+          >
+            {WORD_WRAP_LABELS[layoutPref.wordWrap]}
+          </button>
+          {menu === 'wordWrap' ? (
+            <span className="sb-eol-menu" role="menu" aria-label="自动换行">
+              {WORD_WRAP_CHOICES.map((choice) => (
+                <button
+                  key={choice}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={layoutPref.wordWrap === choice}
+                  className={`sb-eol-item${layoutPref.wordWrap === choice ? ' on' : ''}`}
+                  onClick={() => {
+                    setMenu(null);
+                    if (layoutPref.wordWrap !== choice) saveWordWrapPref(choice);
+                  }}
+                >
+                  {WORD_WRAP_LABELS[choice]}
+                </button>
+              ))}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+      {/* 空白符显示格（B 批）：展示并切换 `editor-display-prefs` 的五档（Monaco 登记值，
+          标签只做中文展示、落 Monaco 前零翻译）；写值即真源、订阅通路即时生效，
+          无活动文件时整格不渲染。 */}
+      {path !== null ? (
+        <span className="sb-eol-wrap">
+          <button
+            type="button"
+            className="sb-eol sb-whitespace"
+            data-status-cell=""
+            aria-haspopup="menu"
+            aria-expanded={menu === 'whitespace'}
+            title={`空白符显示：${RENDER_WHITESPACE_LABELS[displayPrefs.renderWhitespace]}（点击切换）`}
+            onClick={() => setMenu(menu === 'whitespace' ? null : 'whitespace')}
+          >
+            {RENDER_WHITESPACE_LABELS[displayPrefs.renderWhitespace]}
+          </button>
+          {menu === 'whitespace' ? (
+            <span className="sb-eol-menu" role="menu" aria-label="空白符显示">
+              {RENDER_WHITESPACE_CHOICES.map((choice) => (
+                <button
+                  key={choice}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={displayPrefs.renderWhitespace === choice}
+                  className={`sb-eol-item${displayPrefs.renderWhitespace === choice ? ' on' : ''}`}
+                  onClick={() => {
+                    setMenu(null);
+                    if (displayPrefs.renderWhitespace !== choice) {
+                      saveEditorDisplayPrefs({ renderWhitespace: choice });
+                    }
+                  }}
+                >
+                  {RENDER_WHITESPACE_LABELS[choice]}
+                </button>
+              ))}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
       {status.sel ? (
         <span className="sb-sel" data-status-cell="">
           {status.sel}
@@ -1393,6 +1552,35 @@ export function ShellLayout(props: Props): ReactElement {
   // 键位不再写死在这里：缺省值与用户改键覆盖统一从键位注册表取（R8），
   // `kbVersion` 变化即重建——改键即刻生效，无需重启。
   const kbVersion = useKeybindingsVersion();
+
+  /**
+   * 让位读数发射口（KEY-YIELD-VISIBLE）：走既有通知中心 toast，不新造提示通道。
+   * ref 只为一件事——全局 keydown 监听器挂载一次（依赖表为空），闭包里不能抓着
+   * 会变的身份不放；`notify` 本身在 NotificationCenter 里是 useCallback 稳定值。
+   *
+   * B 批起这两行**上移**到命令表之前：状态栏那两个即时开关命令在无编辑器时也要发中文
+   * 通知（铁律 4），必须与全局键处理共用同一枚稳定 ref，不得各留一份。
+   */
+  const notify = useNotify();
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+
+  /**
+   * 状态栏两格的命令体（B 批）：只写偏好真源（`layout-pref` / `editor-display-prefs`），
+   * 活编辑器与后续打开的文件由既有订阅通路即时反映；无编辑器 / 无活动文件时给中文通知，
+   * 不静默。命令体是 `ShellLayout` 导出的纯函数（单源可测，见 `applyToggleWordWrap`）。
+   */
+  const toggleWordWrap = useCallback((): void => {
+    applyToggleWordWrap(focusedCtx()?.editorRef.current ?? null, (message) =>
+      notifyRef.current({ kind: 'info', message }),
+    );
+  }, []);
+  const toggleRenderWhitespace = useCallback((): void => {
+    applyToggleRenderWhitespace(focusedCtx()?.editorRef.current ?? null, (message) =>
+      notifyRef.current({ kind: 'info', message }),
+    );
+  }, []);
+
   const shellCommands = useMemo<readonly ShellCommandSpec[]>(
     () => [
       { id: 'layout.toggleSidebar', title: '切换主侧栏', keybinding: effectiveKeybindingOf('layout.toggleSidebar'), run: () => dispatch({ type: 'toggle', container: 'sidebar' }) },
@@ -1456,11 +1644,15 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'editor.fontZoomIn', title: '放大文字', keybinding: effectiveKeybindingOf('editor.fontZoomIn'), run: () => stepFontZoomPref(1) },
       { id: 'editor.fontZoomOut', title: '缩小文字', keybinding: effectiveKeybindingOf('editor.fontZoomOut'), run: () => stepFontZoomPref(-1) },
       { id: 'editor.fontZoomReset', title: '重置文字缩放', keybinding: effectiveKeybindingOf('editor.fontZoomReset'), run: () => resetFontZoomPref() },
+      // 状态栏即时开关（B 批）：与状态栏那两格同一个动作（都落偏好真源、走既有订阅通路），
+      // 命令面板可搜、键位页可改；`alt+z` 与 VSCode 一致，空白符不占缺省键（见键位表登记处）。
+      { id: 'workbench.toggleWordWrap', title: '切换自动换行', keybinding: effectiveKeybindingOf('workbench.toggleWordWrap'), run: () => toggleWordWrap() },
+      { id: 'workbench.toggleRenderWhitespace', title: '切换空白符显示', keybinding: effectiveKeybindingOf('workbench.toggleRenderWhitespace'), run: () => toggleRenderWhitespace() },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [extraCommands, kbVersion],
+    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace],
   );
   /**
    * Monaco 内建动作的宿主命令入口（1026 编辑器内核批）。
@@ -1677,14 +1869,6 @@ export function ShellLayout(props: Props): ReactElement {
    */
   const composingRef = useRef(false);
 
-  /**
-   * 让位读数发射口（KEY-YIELD-VISIBLE）：走既有通知中心 toast，不新造提示通道。
-   * ref 只为一件事——全局 keydown 监听器挂载一次（依赖表为空），闭包里不能抓着
-   * 会变的身份不放；`notify` 本身在 NotificationCenter 里是 useCallback 稳定值。
-   */
-  const notify = useNotify();
-  const notifyRef = useRef(notify);
-  notifyRef.current = notify;
 
   // 全局快捷键（统一注册表驱动；Ctrl+K Z 和弦特例；Esc 优先级见 shell-keys 的 ESC_PRIORITY）
   useEffect(() => {

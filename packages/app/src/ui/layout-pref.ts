@@ -51,6 +51,31 @@ const COLUMN_SELECTION_KEY = 'kojo.ui.layout.columnSelection.v1';
 /** 折行缺省 = 跟随体量档（见模块头「三个缺省值」） */
 export const WORD_WRAP_DEFAULT: WordWrapPref = 'tier';
 
+/** 三档展示序（状态栏 popover：跟随档 → 开 → 关） */
+export const WORD_WRAP_CHOICES: readonly WordWrapPref[] = ['tier', 'on', 'off'];
+
+/** 三档中文标签（状态栏那格与菜单同词，与设置页「折行」一项同口径） */
+export const WORD_WRAP_LABELS: Record<WordWrapPref, string> = {
+  tier: '跟随档',
+  on: '开',
+  off: '关',
+};
+
+/**
+ * Alt+Z 的切向（**状态栏 / 命令 / 快捷键三条入口共用的互操作判据单源**）：
+ * 永远在「开 / 关」两个显式值之间翻转，三档里的 `tier`（跟随档）被显式切换即离开。
+ * - `on → off`；`off → on`；
+ * - `tier →` 看**此刻屏幕上那份文档**在档位表上的生效值 `tierEffective`（调用方经
+ *   `layoutPrefPatch(lineCount).wordWrap` 现算）：生效开 ⇒ 写 `off`，生效关 ⇒ 写 `on`。
+ *
+ * `tier` 这一档**不许删**：它仍是「没存过键」与「跟随体量档」的既有真源（见模块头），
+ * 显式翻过之后作者仍能在状态栏 / 设置页把它调回跟随档。
+ */
+export function nextWordWrapToggle(current: WordWrapPref, tierEffective: 'on' | 'off'): WordWrapPref {
+  const effective = current === 'tier' ? tierEffective : current;
+  return effective === 'on' ? 'off' : 'on';
+}
+
 /** 多光标修饰键缺省 = ctrlCmd（产品决策，理由见模块头） */
 export const MULTI_CURSOR_MODIFIER_DEFAULT: MultiCursorModifierPref = 'ctrlCmd';
 

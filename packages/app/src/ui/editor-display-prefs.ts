@@ -139,6 +139,27 @@ const RENDER_WHITESPACE_VALUES: readonly RenderWhitespacePref[] = [
   'trailing',
   'all',
 ];
+
+/** 五档展示序（= Monaco 登记序；状态栏 popover 与设置页同序，不另造词汇） */
+export const RENDER_WHITESPACE_CHOICES: readonly RenderWhitespacePref[] = RENDER_WHITESPACE_VALUES;
+
+/** 五档中文标签（状态栏那格与菜单同词；取值就是 Monaco 登记值，落 Monaco 前零翻译） */
+export const RENDER_WHITESPACE_LABELS: Record<RenderWhitespacePref, string> = {
+  none: '不显示',
+  boundary: '边界处',
+  selection: '仅选区',
+  trailing: '仅行尾',
+  all: '全部',
+};
+
+/**
+ * 空白符命令的切向（`workbench.toggleRenderWhitespace`）：`none ↔ all` 两态翻转，
+ * 其余档（boundary / selection / trailing）按**非 none** 处理 ⇒ 落到 `none`。
+ * 细粒度档（哪一处显示）留给状态栏 / 设置页的五档选择，命令只当"一眼看懂的总开关"。
+ */
+export function nextRenderWhitespaceToggle(current: RenderWhitespacePref): RenderWhitespacePref {
+  return current === 'none' ? 'all' : 'none';
+}
 const LINE_NUMBERS_VALUES: readonly LineNumbersPref[] = ['on', 'off', 'relative', 'interval'];
 const MINIMAP_VALUES: readonly MinimapPref[] = ['follow', 'on', 'off'];
 export const UI_FONT_SCALE_VALUES: readonly UiFontScalePref[] = [100, 110, 125];
