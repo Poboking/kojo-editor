@@ -27,12 +27,12 @@ export type AdapterDetectResult = boolean | AdapterDetection;
  * 行为仍由 `indexKind` 决定；这里回答的是「作者看到的这个尾号到底是什么」——
  * 同一个 `{i}` 在 A 游戏是指令编号、在 B 游戏可能是 `CFLAG` 里的口上模式。
  * 展示层只照原文打印，不解释、不据此做任何换算。
+ *
+ * 只登记 `{i}`：`{n}` 在 era 生态里恒为角色号，说出来不增加信息。
  */
 export interface KojoSlotSemantics {
   /** `{i}` 槽 */
   readonly index?: { readonly label: string; readonly detail?: string };
-  /** `{n}` 槽 */
-  readonly chara?: { readonly label: string; readonly detail?: string };
 }
 
 /**

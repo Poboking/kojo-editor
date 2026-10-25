@@ -21,7 +21,6 @@ describe('分野模板', () => {
   it('全表声明尾号语义：CFLAG:209 口上模式（不是指令号）', () => {
     expect(table.slotSemantics?.index?.label).toBe('CFLAG:209 口上模式');
     expect(table.slotSemantics?.index?.detail).toContain('不是指令号');
-    expect(table.slotSemantics?.chara?.label).toBe('角色号');
   });
 
   it('主链路模板逐字钉住', () => {

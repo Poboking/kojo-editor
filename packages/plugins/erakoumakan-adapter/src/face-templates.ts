@@ -37,7 +37,6 @@ import type { KojoFaceTable } from '@kojo/plugin-api';
 /** 构建 era紅魔館 分野表（冻结纯数据，无 IO）。 */
 export function createKoumakanFaceTable(): KojoFaceTable {
   return {
-    slotSemantics: { chara: { label: '角色号' } },
     faces: {
       指令: {
         template: 'KOJO_MESSAGE_COM_K{n}_{i}',

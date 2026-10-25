@@ -57,7 +57,6 @@ const LOCALS_SEGMENTS: Readonly<Record<string, string>> = {
 export function createEratwFaceTable(): KojoFaceTable {
   return {
     slotSemantics: {
-      chara: { label: '角色号' },
       index: { label: '时机编号' },
     },
     faces: {

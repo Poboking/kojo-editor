@@ -49,7 +49,6 @@ export function createErasqcFaceTable(): KojoFaceTable {
         label: 'CFLAG:209 口上模式',
         detail: 'EVENTTRAIN 里逐角色选择的模式号，不是指令号',
       },
-      chara: { label: '角色号' },
     },
     faces: {
       指令: { template: 'KOJO_MESSAGE_COM_{n}_{i}', indexKind: 'literal' },
