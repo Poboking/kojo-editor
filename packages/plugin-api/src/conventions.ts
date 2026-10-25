@@ -69,6 +69,26 @@ export interface ConventionIssue {
 }
 
 /**
+ * 内置通用规则的**静默策略**（additive；只对声明它的适配器生效）。
+ *
+ * 为什么需要：有些族的「同名函数多处定义」是引擎语义的一部分（逐角色各写一份），
+ * 全报成 info 会把真正需要作者处理的重复淹掉。策略是**声明式数据**，不是回调：
+ * 规则 id + 名字集 + 理由；引擎只按名字判等，不读正文、不认游戏。
+ */
+export interface ConventionSuppression {
+  /** 被收敛的规则 id（内置通用规则，如 `erb.duplicate-function`） */
+  readonly ruleId: string;
+  /** 归一化函数名精确集（`ErbFunctionRef.normalizedName` 口径，大小写不敏感） */
+  readonly names?: readonly string[];
+  /** 或按名字正则（与 `names` 任一命中即收敛；写正则时请加锚点） */
+  readonly namePattern?: string;
+  /** 人类可读理由（**必填**：报告里照原话汇总，不静默） */
+  readonly reason: string;
+}
+
+export type ConventionPolicy = readonly ConventionSuppression[];
+
+/**
  * 校验运行上下文 —— 引擎构造、规则消费。
  * **刻意不暴露**：适配器对象、家族解析规则、任何游戏常量。
  * 游戏知识规则住在适配器内部，自带私有工具，无需经上下文下发。
@@ -80,6 +100,8 @@ export interface ConventionCheckContext {
   /** 读文件文本（UTF-8 内部表示、换行归一化）；引擎在一次运行内记忆化，规则可放心重复调用 */
   readFile(path: string): Promise<string>;
   readonly log: Logger;
+  /** 当前适配器声明的静默策略（通用数据，不含适配器对象；缺省 = 不静默） */
+  readonly policy?: ConventionPolicy;
 }
 
 /**

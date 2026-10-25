@@ -56,6 +56,10 @@ const LOCALS_SEGMENTS: Readonly<Record<string, string>> = {
  */
 export function createEratwFaceTable(): KojoFaceTable {
   return {
+    slotSemantics: {
+      chara: { label: '角色号' },
+      index: { label: '时机编号' },
+    },
     faces: {
       /* ---- v1 开放糖写法的 11 个入口（规范 §3.2 高频表 / 附录 C 的 v1 列） ---- */
 
@@ -70,7 +74,13 @@ export function createEratwFaceTable(): KojoFaceTable {
       // `日常`（DAIRY_EV2/4/12）、`特殊事件`（SP_EVENT 引擎 id 1..7）、`撞见`
       // （ONABARE_1/2/3）、`推倒许可`（PERMISSION 1..4）、`自定义事件`（场景 id）
       // 的编号是**引擎键值**，不可挪用。
-      事件: { template: 'M_KOJO{t}_EVENT_K{n}_{i}', autoIndex: true },
+      事件: {
+        template: 'M_KOJO{t}_EVENT_K{n}_{i}',
+        autoIndex: true,
+        slotSemantics: {
+          index: { label: '事件编号', detail: '本文件内作者自管序号，省略时自动补最小未用号' },
+        },
+      },
 
       // 附录 C #5：指令口上 `M_KOJO{t}_MESSAGE_{COM|SCOM}_K{n}_{LOCAL}`
       // `{i}` 消费编号；`${com}` 段由 `类型:` 决定（COM/SCOM/CUSTOM_*）。
@@ -80,6 +90,7 @@ export function createEratwFaceTable(): KojoFaceTable {
         success: { template: 'M_KOJO{t}_SUCCESS_${com}_K{n}_{i}' },
         segments: { com: LOCALS_SEGMENTS },
         messageCheck: { template: 'M_KOJO{t}_MESSAGE_MESSAGECHECK_${com}_K{n}_{i}' },
+        slotSemantics: { index: { label: '指令编号', detail: '按指令名表换算' } },
       },
 
       // 附录 C #6：计数器 `KOJO_MESSAGE_SEND_COUNTER` 转交；
@@ -90,6 +101,7 @@ export function createEratwFaceTable(): KojoFaceTable {
         template: 'M_KOJO{t}_MESSAGE_COUNTER_K{n}_{i}',
         indexKind: 'counter',
         messageCheck: { template: 'M_KOJO{t}_MESSAGE_COUNTER_MESSAGECHECK_K{n}_{i}' },
+        slotSemantics: { index: { label: '计数器编号', detail: '按计数器名表换算' } },
       },
 
       // 附录 C #7 PALAM：射精 A2 / 绝顶 B（v1 只开放这两个子类）
@@ -195,6 +207,7 @@ export function createEratwFaceTable(): KojoFaceTable {
       图像: {
         template: 'M_KOJO{t}_IMAGE_K{n}_{i}',
         indexKind: 'literal',
+        slotSemantics: { index: { label: '运行期形态名', detail: '原样拼接，不查任何表' } },
       },
       // 同一 `CASE` 里的 `IMAGE_EX`（`:1107`）：本包实测 0 定义，但引擎真有该面，
       // 且作者可自定（对 `IMAGE2.ERB` 系立绘替换）——按 A4 口径 additive 一并补上。

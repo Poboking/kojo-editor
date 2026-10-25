@@ -37,16 +37,38 @@ import type { KojoFaceTable } from '@kojo/plugin-api';
 /** 构建 era紅魔館 分野表（冻结纯数据，无 IO）。 */
 export function createKoumakanFaceTable(): KojoFaceTable {
   return {
+    slotSemantics: { chara: { label: '角色号' } },
     faces: {
-      指令: { template: 'KOJO_MESSAGE_COM_K{n}_{i}' },
-      射精: { template: 'KOJO_MESSAGE_SCOM_K{n}_{i}' },
-      事件: { template: 'KOJO_EVENT_K{n}_{i}', indexKind: 'literal' },
-      计数器: { template: 'KOJO_MESSAGE_COUNTER_K{n}_{i}', indexKind: 'literal' },
-      参数变动: { template: 'KOJO_MESSAGE_PALAMCNG_A_K{n}_{i}', indexKind: 'literal' },
+      指令: {
+        template: 'KOJO_MESSAGE_COM_K{n}_{i}',
+        slotSemantics: { index: { label: '指令号', detail: '按 CSV/Train.csv 换算' } },
+      },
+      射精: {
+        template: 'KOJO_MESSAGE_SCOM_K{n}_{i}',
+        slotSemantics: { index: { label: '指令号', detail: '按 CSV/Train.csv 换算' } },
+      },
+      事件: {
+        template: 'KOJO_EVENT_K{n}_{i}',
+        indexKind: 'literal',
+        slotSemantics: { index: { label: '引擎事件号', detail: '没有名称表，直接写数字' } },
+      },
+      计数器: {
+        template: 'KOJO_MESSAGE_COUNTER_K{n}_{i}',
+        indexKind: 'literal',
+        slotSemantics: { index: { label: '计数器号' } },
+      },
+      参数变动: {
+        template: 'KOJO_MESSAGE_PALAMCNG_A_K{n}_{i}',
+        indexKind: 'literal',
+        slotSemantics: { index: { label: 'TCVAR:50 位号' } },
+      },
       刻印: { template: 'KOJO_MESSAGE_MARKCNG_K{n}' },
       结局: { template: 'KOJO_MESSAGE_ENDING_K{n}' },
       称呼: { template: 'CALLNAME_K{n}' },
-      NTR指令: { template: 'NTR_KOJO_MESSAGE_COM_K{n}_{i}' },
+      NTR指令: {
+        template: 'NTR_KOJO_MESSAGE_COM_K{n}_{i}',
+        slotSemantics: { index: { label: '指令号', detail: '按 CSV/Train.csv 换算' } },
+      },
     },
   };
 }

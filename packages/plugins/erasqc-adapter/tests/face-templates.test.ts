@@ -18,6 +18,12 @@ describe('分野模板', () => {
     }
   });
 
+  it('全表声明尾号语义：CFLAG:209 口上模式（不是指令号）', () => {
+    expect(table.slotSemantics?.index?.label).toBe('CFLAG:209 口上模式');
+    expect(table.slotSemantics?.index?.detail).toContain('不是指令号');
+    expect(table.slotSemantics?.chara?.label).toBe('角色号');
+  });
+
   it('主链路模板逐字钉住', () => {
     expect(table.faces['指令']?.template).toBe('KOJO_MESSAGE_COM_{n}_{i}');
     expect(table.faces['独白']?.template).toBe('SELF_KOJO_K{n}_{i}');

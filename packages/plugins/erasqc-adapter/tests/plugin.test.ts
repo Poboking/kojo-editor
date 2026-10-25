@@ -134,6 +134,15 @@ describe('adapter 的语义位与展示位（不依赖工程）', () => {
     expect(adapter.conventions?.every((rule) => rule.scope === 'file')).toBe(true);
   });
 
+  it('重复函数收敛策略只点名逐角色分发器（EVENTTRAIN / EVENTEND）且理由非空', () => {
+    const { adapter } = activateAdapter(nodeIo());
+    expect(adapter.conventionPolicy).toHaveLength(1);
+    const policy = adapter.conventionPolicy![0]!;
+    expect(policy.ruleId).toBe('erb.duplicate-function');
+    expect(policy.names).toEqual(['EVENTTRAIN', 'EVENTEND']);
+    expect(policy.reason).toContain('每个角色');
+  });
+
   it('家族索引 / 面标签 / 指令承载面为空', () => {
     const { adapter } = activateAdapter(nodeIo());
     expect(adapter.functionFamilyIndex?.name).toBe('erasqc-family-index');

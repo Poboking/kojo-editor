@@ -255,6 +255,12 @@ function faceCandidates(
     if (tpl && tpl.template) {
       item.detail = tpl.template;
       const doc = [`**${face}** · 函数名模板 \`${tpl.template}\``];
+      const slot = tpl.template.includes('{i}')
+        ? (tpl.slotSemantics?.index ?? faceTable.slotSemantics?.index)
+        : undefined;
+      if (slot !== undefined) {
+        doc.push(`编号含义：${slot.label}${slot.detail !== undefined ? `（${slot.detail}）` : ''}`);
+      }
       if (tpl.success?.template) doc.push(`成否模板 \`${tpl.success.template}\``);
       if (tpl.messageCheck?.template) doc.push(`MESSAGECHECK 模板 \`${tpl.messageCheck.template}\``);
       item.documentation = { value: doc.join('\n\n') };

@@ -15,6 +15,7 @@ import type {
   CacheExpect,
   ComputePool,
   ConventionLinterService,
+  ConventionPolicy,
   ConventionRule,
   ConventionRunOptions,
   ErbParserService,
@@ -72,6 +73,9 @@ export function createConventionLinterPlugin(): Plugin {
        */
       const adapterRules = (): readonly ConventionRule[] =>
         activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.conventions ?? [];
+      /** 适配器声明的「预期重复」等收敛策略（通用数据；缺省不收敛） */
+      const adapterPolicy = (): ConventionPolicy | undefined =>
+        activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.conventionPolicy;
 
       /**
        * 结果快照端口（键固定、**三层判据**在快照本体里；坏快照删除而不是"修"）。
@@ -97,8 +101,16 @@ export function createConventionLinterPlugin(): Plugin {
       };
 
       const snapshotPort = {
-        expectFor({ project: p, rules }: { project: GameProject; rules: readonly ConventionRule[] }) {
-          return lintExpect({ project: p, rules });
+        expectFor({
+          project: p,
+          rules,
+          policy,
+        }: {
+          project: GameProject;
+          rules: readonly ConventionRule[];
+          policy?: ConventionPolicy;
+        }) {
+          return lintExpect({ project: p, rules, policy });
         },
         async load(expect: CacheExpect): Promise<LintCache | null> {
           try {
@@ -194,6 +206,7 @@ export function createConventionLinterPlugin(): Plugin {
           return tfs.map((tf) => tf?.text ?? null);
         },
         getAdapterRules: adapterRules,
+        getAdapterPolicy: adapterPolicy,
         snapshot: snapshotPort,
       });
 

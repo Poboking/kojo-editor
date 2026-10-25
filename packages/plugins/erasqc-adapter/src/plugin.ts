@@ -88,6 +88,15 @@ export function createErasqcAdapterPlugin(): Plugin {
         displayName: ERASQC.displayName,
         functionFamilyIndex: createErasqcFamilyIndex(),
         conventions: createErasqcConventions(),
+        // 本作每个角色的 EVENT_K 文件都各写一份同名分发器 EVENTTRAIN / EVENTEND，
+        // 函数体内按目标角色分派 —— 逐角色重复是结构，不是作者写错。
+        conventionPolicy: [
+          {
+            ruleId: 'erb.duplicate-function',
+            names: ['EVENTTRAIN', 'EVENTEND'],
+            reason: '每个角色的 EVENT_K 文件各写一份同名分发器（体内按目标角色分派）',
+          },
+        ],
         get variableSchema() {
           return currentSchema;
         },

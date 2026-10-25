@@ -144,6 +144,7 @@ function harness(args: { compute?: ComputePool; manual: boolean }): Harness {
       return text;
     },
     getAdapterRules: () => [rule],
+    getAdapterPolicy: () => undefined,
     snapshot: {
       expectFor: () => EXPECT,
       load: async () => {

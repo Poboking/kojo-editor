@@ -804,6 +804,12 @@ export function faceDetail(label: string, faceTable: KojoFaceTable | undefined):
   if (tpl === undefined) return undefined;
   const facts: string[] = [`函数名模板 \`${tpl.template}\``];
   if (tpl.indexKind !== undefined) facts.push(`编号槽 ${INDEX_KIND_LABEL[tpl.indexKind] ?? tpl.indexKind}`);
+  const slot = tpl.template.includes('{i}')
+    ? (tpl.slotSemantics?.index ?? faceTable?.slotSemantics?.index)
+    : undefined;
+  if (slot !== undefined) {
+    facts.push(`编号含义：${slot.label}${slot.detail !== undefined ? `（${slot.detail}）` : ''}`);
+  }
   if (tpl.autoIndex === true) facts.push('省略编号时按本文件最小未用号自动分配');
   const successTpl = tpl.success?.template;
   if (successTpl !== undefined) facts.push(`成否模板 \`${successTpl}\``);

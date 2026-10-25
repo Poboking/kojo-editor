@@ -17,6 +17,7 @@ const monaco = {
 } as unknown as typeof Monaco;
 
 const faceTable: KojoFaceTable = {
+  slotSemantics: { index: { label: '时机编号' } },
   faces: {
     初见: { template: 'M_KOJO{t}_ENCOUNTER_K{n}' },
     事件: { template: 'M_KOJO{t}_EVENT_K{n}_{i}' },
@@ -25,6 +26,7 @@ const faceTable: KojoFaceTable = {
       success: { template: 'M_KOJO{t}_SUCCESS_${com}_K{n}_{i}' },
       segments: { com: { COM: 'COM', SCOM: 'SCOM' } },
       messageCheck: { template: 'M_KOJO{t}_MESSAGE_MESSAGECHECK_${com}_K{n}_{i}' },
+      slotSemantics: { index: { label: '指令编号', detail: '按指令名表换算' } },
     },
     绝顶恶作剧: { template: 'M_KOJO{t}_MESSAGE_PALAMCNG_B2_K{n}' },
   },
@@ -62,6 +64,15 @@ describe('时机分野补全 · 行首 `时机 ` → 全量分野', () => {
     const doc = byKind['指令']!.documentation as { value: string };
     expect(doc.value).toContain('SUCCESS');
     expect(doc.value).toContain('MESSAGECHECK');
+    expect(doc.value).toContain('编号含义：指令编号（按指令名表换算）');
+  });
+
+  it('占位符语义：逐面覆盖表级默认；无 `{i}` 的面不显示编号含义', () => {
+    const byKind = Object.fromEntries(callAt('时机 |').map((i) => [i.insertText, i]));
+    const eventDoc = (byKind['事件']!.documentation as { value: string }).value;
+    expect(eventDoc).toContain('编号含义：时机编号');
+    const firstDoc = (byKind['初见']!.documentation as { value: string }).value;
+    expect(firstDoc).not.toContain('编号含义');
   });
 
   it('行首容许多个空白 / 半角空格', () => {

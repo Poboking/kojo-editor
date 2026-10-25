@@ -87,6 +87,7 @@ function harness2(args: {
     },
     ...(args.readFiles ? { readFiles: args.readFiles } : {}),
     getAdapterRules: () => args.adapterRules,
+    getAdapterPolicy: () => undefined,
     snapshot: {
       expectFor: () => EXPECT,
       load: async () => {

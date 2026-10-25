@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   CacheExpect,
   ConventionIssue,
+  ConventionPolicy,
   ConventionRule,
   ErbFile,
   ErbFunctionRef,
@@ -74,6 +75,8 @@ function harness(opts: {
   snapshot?: Partial<Pick<SnapshotPort, 'load' | 'save'>> & { expectFor?: () => CacheExpect | null };
   /** 批量读通道（2026-10-16 批量 IO 批）；缺省 = 不提供（走逐文件 readFile） */
   readFiles?: (paths: readonly string[]) => Promise<Array<string | null>>;
+  /** 适配器静默策略；缺省 = 不收敛 */
+  policy?: ConventionPolicy;
 }): Harness {
   const readCalls: string[] = [];
   const rules: ConventionRule[] = opts.adapterRules ?? [];
@@ -90,6 +93,7 @@ function harness(opts: {
     },
     ...(opts.readFiles ? { readFiles: opts.readFiles } : {}),
     getAdapterRules: () => rules,
+    getAdapterPolicy: () => opts.policy,
     snapshot: opts.snapshot
       ? {
           expectFor: opts.snapshot.expectFor ?? (() => ({ projectRoot: '/p', adapterId: 'test', fingerprint: 'fp' })),
@@ -276,6 +280,46 @@ describe('ConventionEngine', () => {
     const dups = rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function');
     expect(dups).toHaveLength(1);
     expect(dups[0]!.severity).toBe('info');
+  });
+
+  it('内置规则：适配器策略命中的重复不逐条报，汇总成一条 info（不静默）', async () => {
+    const index = makeIndex({
+      '/p/a.ERB': '@EVENTTRAIN\nPRINTL 1\n@OTHER\nPRINTL 1\n',
+      '/p/b.ERB': '@eventtrain\nPRINTL 2\n@OTHER\nPRINTL 2\n',
+      '/p/c.ERB': '@EVENTTRAIN\nPRINTL 3\n',
+    });
+    const { engine } = harness({
+      index,
+      policy: [
+        {
+          ruleId: 'erb.duplicate-function',
+          names: ['EVENTTRAIN'],
+          reason: '逐角色各写一份分发器',
+        },
+      ],
+    });
+    const rep = await engine.run();
+    const dups = rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function');
+    // OTHER 的一条逐条报 + EVENTTRAIN 的一条汇总（2 处被收敛）
+    expect(dups).toHaveLength(2);
+    expect(dups.some((i) => i.message.includes('已按适配器策略收敛 2 处预期重复'))).toBe(true);
+    expect(dups.some((i) => i.message.includes('逐角色各写一份分发器'))).toBe(true);
+    expect(dups.some((i) => i.message.includes('「OTHER」'))).toBe(true);
+  });
+
+  it('策略只收敛声明的规则 id / 名字：未命中项照旧逐条报', async () => {
+    const index = makeIndex({
+      '/p/a.ERB': '@EVENTTRAIN\n@KEEP\n',
+      '/p/b.ERB': '@EVENTTRAIN\n@KEEP\n',
+    });
+    const { engine } = harness({
+      index,
+      policy: [{ ruleId: 'other.rule', names: ['EVENTTRAIN'], reason: '别的规则' }],
+    });
+    const rep = await engine.run();
+    const dups = rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function');
+    expect(dups).toHaveLength(2); // EVENTTRAIN 1 + KEEP 1
+    expect(dups.every((i) => !i.message.includes('收敛'))).toBe(true);
   });
 
   it('subscribe 立即回调当前值，并在运行后推送新报告', async () => {
@@ -975,6 +1019,7 @@ describe('投机预取只在同引擎连续轮生效（PERF-12c）', () => {
         return paths.map((p) => pf[p] ?? null);
       },
       getAdapterRules: () => [textRule],
+    getAdapterPolicy: () => undefined,
       snapshot: {
         expectFor: () => EXPECT,
         load: async () => {

@@ -5,7 +5,7 @@
  * 内容（eraTW / eraK / … 的全部领域知识）只在各 game.adapter 插件中。
  */
 
-import type { ConventionRule } from './conventions';
+import type { ConventionPolicy, ConventionRule } from './conventions';
 import type { ReplayCallContext } from './replay';
 
 /** 角色条目（由适配器从游戏数据填充；内核只透传） */
@@ -322,6 +322,20 @@ export interface KojoCallProtocol {
  */
 export type KojoIndexKind = 'command' | 'literal' | 'counter';
 
+/**
+ * 占位符的**人类可读语义**（additive；只影响显示，不改变拼接行为）。
+ *
+ * 行为仍由 `indexKind` 决定；这里回答的是「作者看到的这个尾号到底是什么」——
+ * 同一个 `{i}` 在 A 游戏是指令编号、在 B 游戏可能是 `CFLAG` 里的口上模式。
+ * 展示层只照原文打印，不解释、不据此做任何换算。
+ */
+export interface KojoSlotSemantics {
+  /** `{i}` 槽 */
+  readonly index?: { readonly label: string; readonly detail?: string };
+  /** `{n}` 槽 */
+  readonly chara?: { readonly label: string; readonly detail?: string };
+}
+
 export interface KojoFaceTemplate {
   /**
    * 函数名模板。占位符（与 `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` §5.5 同口径）：
@@ -396,6 +410,8 @@ export interface KojoFaceTemplate {
    *   → `M_KOJO{t}_…_MESSAGECHECK_K{n}[_{i}]`。
    */
   readonly messageCheck?: { readonly template: string };
+  /** 本面的占位符语义（覆盖表级 `slotSemantics`；只影响显示） */
+  readonly slotSemantics?: KojoSlotSemantics;
 }
 
 /**
@@ -408,6 +424,8 @@ export interface KojoFaceTemplate {
 export interface KojoFaceTable {
   /** 分野关键字 → 模板（键为表层关键字原文，转译器不解释其含义） */
   readonly faces: Readonly<Record<string, KojoFaceTemplate>>;
+  /** 全表的占位符语义默认值（逐面 `slotSemantics` 可覆盖；只影响显示） */
+  readonly slotSemantics?: KojoSlotSemantics;
   /**
    * 登记 / 配色 / 开关**三件套**函数名模板（规范 §5.5：**不带家族段**，
    * 只有角色号）。缺省 = 该游戏无此三件套概念（转译器跳过对应产物）。
@@ -782,6 +800,11 @@ export interface GameAdapter {
   readonly variableSchema?: VariableSchema;
   /** 可校验的剧本约定清单 */
   readonly conventions?: readonly ConventionRule[];
+  /**
+   * 内置通用规则的静默策略（可选；如「逐角色各写一份」是有意重复的族）。
+   * 只影响通用规则的 info 噪声，不改变适配器自有规则；命中数会在报告里汇总说明。
+   */
+  readonly conventionPolicy?: ConventionPolicy;
   /** 口上调用协议（v0.2 第十批；可选——路由层转发实参的槽位语义表） */
   readonly kojoCallProtocol?: KojoCallProtocol;
   /**

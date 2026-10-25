@@ -146,6 +146,25 @@ describe('rulesDigest：规则清单摘要必须含 scope', () => {
     expect(lintExpect({ project: { rootDir: '/p', adapterId: 'eratw', inputDigest: '' }, rules })).toBeNull();
   });
 
+  it('策略摘要进全局判据：加/改/删策略都换 fingerprint；空策略不等于任意策略', () => {
+    const rules = [rule({})];
+    const project = { rootDir: '/p', adapterId: 'erasqc', inputDigest: 'csv-1' };
+    const base = lintExpect({ project, rules })!.fingerprint;
+    const withPolicy = lintExpect({
+      project,
+      rules,
+      policy: [{ ruleId: 'erb.duplicate-function', names: ['EVENTTRAIN'], reason: '逐角色' }],
+    })!.fingerprint;
+    const withPolicy2 = lintExpect({
+      project,
+      rules,
+      policy: [{ ruleId: 'erb.duplicate-function', names: ['EVENTTRAIN', 'EVENTEND'], reason: '逐角色' }],
+    })!.fingerprint;
+    expect(withPolicy).not.toBe(base);
+    expect(withPolicy2).not.toBe(withPolicy);
+    expect(lintExpect({ project, rules, policy: [] })!.fingerprint).toBe(base);
+  });
+
   it('inputDigest 变 ⇒ 判据变（改 CSV 描述不能继续吐旧结论）', () => {
     const rules = [rule({})];
     const p = (digest: string) => ({ rootDir: '/p', adapterId: 'eratw', inputDigest: digest }) as unknown as GameProject;

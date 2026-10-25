@@ -30,6 +30,7 @@ import type {
   ConventionCheckContext,
   ConventionIssue,
   ConventionLinterService,
+  ConventionPolicy,
   ConventionProjectUnitEntry,
   ConventionReport,
   ConventionRule,
@@ -196,6 +197,8 @@ export interface ConventionEngineDeps {
   readFiles?(paths: readonly string[]): Promise<Array<string | null>>;
   /** 当前激活适配器提供的规则（按 project.adapterId 过滤后的结果） */
   getAdapterRules(): readonly ConventionRule[];
+  /** 当前激活适配器的通用规则静默策略（缺省 = 不静默） */
+  getAdapterPolicy(): ConventionPolicy | undefined;
   /**
    * 结果快照端口（2026-10-12「体感丝滑」批 →「按文件增量」批；缺省 = 不缓存）。
    *
@@ -204,7 +207,11 @@ export interface ConventionEngineDeps {
    * `save` 收到的是**本次实际拿到的结果**（复用 + 新算），且**不含**任何抛错规则/文件的结论。
    */
   snapshot?: {
-    expectFor(args: { project: GameProject; rules: readonly ConventionRule[] }): CacheExpect | null;
+    expectFor(args: {
+      project: GameProject;
+      rules: readonly ConventionRule[];
+      policy?: ConventionPolicy;
+    }): CacheExpect | null;
     load(expect: CacheExpect): Promise<LintCache | null>;
     save(cache: LintCache, expect: CacheExpect): void;
     /**
@@ -366,10 +373,17 @@ export class ConventionEngine implements ConventionLinterService {
         return p;
       },
       log: this.deps.log,
+      policy: this.deps.getAdapterPolicy(),
     };
 
     /** 全局判据（不含 ERB 指纹）；null ⇒ 既不还原也不落盘 */
-    const expect = this.deps.snapshot ? this.deps.snapshot.expectFor({ project, rules }) : null;
+    const expect = this.deps.snapshot
+      ? this.deps.snapshot.expectFor({
+          project,
+          rules,
+          policy: this.deps.getAdapterPolicy(),
+        })
+      : null;
     const files = [...index.files.values()];
 
     /**

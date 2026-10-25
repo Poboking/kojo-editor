@@ -20,7 +20,11 @@ describe('分野表形状与证据', () => {
     expect(Object.keys(faces).sort()).toEqual(
       ['事件', '称呼', '参数变动', '射精', '结局', '计数器', '指令', '刻印', 'NTR指令'].sort(),
     );
-    expect(faces['指令']).toEqual({ template: 'KOJO_MESSAGE_COM_K{n}_{i}' });
+    expect(faces['指令']?.template).toBe('KOJO_MESSAGE_COM_K{n}_{i}');
+    expect(faces['指令']?.slotSemantics?.index?.label).toBe('指令号');
+    expect(faces['事件']?.slotSemantics?.index?.label).toBe('引擎事件号');
+    expect(faces['计数器']?.slotSemantics?.index?.label).toBe('计数器号');
+    expect(faces['参数变动']?.slotSemantics?.index?.label).toBe('TCVAR:50 位号');
     expect(faces['射精']?.template).toBe('KOJO_MESSAGE_SCOM_K{n}_{i}');
     expect(faces['事件']?.indexKind).toBe('literal');
     expect(faces['计数器']?.indexKind).toBe('literal');

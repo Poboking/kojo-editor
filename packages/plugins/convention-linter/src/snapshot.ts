@@ -41,6 +41,7 @@ import { combineDigests, foldDigest } from '@kojo/plugin-api';
 import type {
   CacheExpect,
   ConventionIssue,
+  ConventionPolicy,
   ConventionRule,
   ConventionSeverity,
   GameProject,
@@ -198,18 +199,35 @@ export function rulesDigest(rules: readonly ConventionRule[]): string {
 }
 
 /**
+ * 静默策略摘要：策略改变 issue 输出，必须进全局判据，否则换策略后仍复用旧结果。
+ * 只认「规则 id + 名字集 + 正则 + 理由」——理由进摘要是有意的：报告文案会跟着变。
+ */
+export function policyDigest(policy: ConventionPolicy | undefined): string | null {
+  if (policy === undefined || policy.length === 0) return null;
+  return foldDigest(
+    policy.map(
+      (s) => `${s.ruleId}\u0000${(s.names ?? []).join(',')}\u0000${s.namePattern ?? ''}\u0000${s.reason}`,
+    ),
+  );
+}
+
+/**
  * 全局层判据（**不含 ERB 指纹**：那一项现在只约束整项目层，见 `LintCache.erbFingerprint`）。
  * 缺 `inputDigest` 或规则清单为空 ⇒ null ⇒ 不缓存（判据不全就不缓存）。
  */
 export function lintExpect(args: {
   project: Pick<GameProject, 'rootDir' | 'adapterId' | 'inputDigest'>;
   rules: readonly ConventionRule[];
+  policy?: ConventionPolicy;
 }): CacheExpect | null {
-  const fingerprint = combineDigests([
+  const parts: Array<string | null | undefined> = [
     args.project.inputDigest,
     `fmt${LINT_SNAPSHOT_FORMAT}`,
     args.rules.length > 0 ? rulesDigest(args.rules) : null,
-  ]);
+  ];
+  const pd = policyDigest(args.policy);
+  if (pd !== null) parts.push(pd);
+  const fingerprint = combineDigests(parts);
   if (!fingerprint) return null;
   return { projectRoot: args.project.rootDir, adapterId: args.project.adapterId, fingerprint };
 }

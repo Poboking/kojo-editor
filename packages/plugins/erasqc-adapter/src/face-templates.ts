@@ -43,6 +43,14 @@ import type { KojoFaceTable } from '@kojo/plugin-api';
 /** 构建 eraSQC 分野表（冻结纯数据，无 IO）。 */
 export function createErasqcFaceTable(): KojoFaceTable {
   return {
+    // 全表同一口径：尾号 = CFLAG:209 口上模式（不是指令号 / 事件号）
+    slotSemantics: {
+      index: {
+        label: 'CFLAG:209 口上模式',
+        detail: 'EVENTTRAIN 里逐角色选择的模式号，不是指令号',
+      },
+      chara: { label: '角色号' },
+    },
     faces: {
       指令: { template: 'KOJO_MESSAGE_COM_{n}_{i}', indexKind: 'literal' },
       指令前: { template: 'KOJO_MESSAGE_BEFORE_COM_{n}_{i}', indexKind: 'literal' },

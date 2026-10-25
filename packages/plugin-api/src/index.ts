@@ -158,6 +158,8 @@ export type {
 export { CONVENTION_SEVERITY_ORDER } from './conventions';
 export type {
   ConventionCheckContext,
+  ConventionPolicy,
+  ConventionSuppression,
   ConventionIssue,
   ConventionLinterService,
   ConventionProjectPartition,
@@ -247,6 +249,7 @@ export type {
   KojoCallSlot,
   KojoFaceTable,
   KojoFaceTemplate,
+  KojoSlotSemantics,
   KojoInstructionTable,
   KojoLibraryTable,
   ScaffoldResult,

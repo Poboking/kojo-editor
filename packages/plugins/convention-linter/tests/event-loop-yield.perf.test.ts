@@ -81,6 +81,7 @@ function harness(compute?: ComputePool): ConventionEngine {
     },
     readFiles: async (paths: readonly string[]) => paths.map((p) => texts[p] ?? null),
     getAdapterRules: () => [],
+    getAdapterPolicy: () => undefined,
     snapshot: {
       expectFor: () => ({ projectRoot: '/p', adapterId: 'test', fingerprint: 'fp-yield' }),
       load: async () => null,

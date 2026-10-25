@@ -138,6 +138,7 @@ function engineWith(opts: {
       return t;
     },
     getAdapterRules: () => [],
+    getAdapterPolicy: () => undefined,
     ...(opts.snapshot
       ? {
           snapshot: {
