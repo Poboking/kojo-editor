@@ -29,8 +29,10 @@ import { describe, expect, it } from 'vitest';
  * 提示行两格 `font-weight` / `letter-spacing` ⇒ 另挂「排版镜像」一条；只比这几格，
  * `font-size` / `color` 仍归上面两条镜像管，免得同一格两套口径。
  *
- * 2026-10-25 启动弹窗批：内联层去掉了品牌字（用户口径「无文字，简约」只保留「正在启动…」），
- * 品牌字的字号/排版镜像随之退役；项目骨架（ProjectViewSkeleton）里的品牌字不受影响。
+ * 2026-10-25 启动弹窗批复审：启动帧读起来像空窗/坏窗，品牌锁（logo + 字标 + 版本）放回进度条
+ * 上方。内联层与 React 启动弹窗共用 `.boot-splash-lock/-mark/-name/-ver` 四个类名，配方逐字镜像；
+ * 版本号由 `vite.config.ts` 的 `transformIndexHtml` 从 `package.json` 注入（内联层留占位符），
+ * 三处版本仍只有包清单一处真源。
  */
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -242,6 +244,8 @@ const COLOR_FACES: readonly Face[] = [
   { label: '底色', selectors: new Set(['html', 'body', '#boot-splash']), prop: 'background', token: '--bg' },
   { label: '文字', selectors: new Set(['#boot-splash']), prop: 'color', token: '--fg' },
   { label: '提示文字', selectors: new Set(['.boot-splash-tip']), prop: 'color', token: '--fg-dim' },
+  { label: '品牌记号', selectors: new Set(['.boot-splash-mark']), prop: 'color', token: '--accent' },
+  { label: '版本文字', selectors: new Set(['.boot-splash-ver']), prop: 'color', token: '--fg-dim' },
   { label: '进度轨道', selectors: new Set(['.boot-bar']), prop: 'background', token: '--bg-3' },
   { label: '进度滑块', selectors: new Set(['.boot-bar::after']), prop: 'background', token: '--accent' },
 ];
@@ -253,6 +257,8 @@ const COLOR_FACES: readonly Face[] = [
  */
 const FONT_FACES: readonly Face[] = [
   { label: '提示文字字号', selectors: new Set(['.boot-splash-tip']), prop: 'font-size', token: '--fs-1' },
+  { label: '品牌字标字号', selectors: new Set(['.boot-splash-name']), prop: 'font-size', token: '--fs-display' },
+  { label: '版本字号', selectors: new Set(['.boot-splash-ver']), prop: 'font-size', token: '--fs-1' },
 ];
 
 /**
@@ -431,7 +437,7 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
       'align-items: center;',
       'gap: 16px;',
     ]);
-    // 品牌字号镜像已随内联层去品牌字退役；ProjectViewSkeleton 仍用它，实值单独钉住
+    // 项目骨架（ProjectViewSkeleton）的品牌字仍用 `.boot-skeleton-brand`，与启动品牌锁不是同一类；实值单独钉住
     const brandPacked = declsFor(cssSrc(), '.boot-skeleton-brand', packedTokens, 'styles.css');
     for (const [prop, want] of [
       ['font-weight', '600'],
@@ -444,19 +450,44 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     }
   });
 
-  it('启动弹窗（2026-10-25）：内联层只留「正在启动…」+ 扫光条 + 右上角退出，品牌字清零', () => {
+  it('启动弹窗（2026-10-25 复审）：品牌锁 + 「正在启动…」+ 扫光条 + 右上角退出', () => {
     const html = htmlSrc();
+    expect(html, '启动弹窗必须有品牌锁容器').toContain('class="boot-splash-lock"');
+    expect(html, '启动弹窗必须有品牌记号').toContain('class="boot-splash-mark"');
+    expect(html, '启动弹窗必须渲染产品名').toContain('>kojo-editor</span>');
+    expect(html, '启动弹窗必须有版本位').toContain('v%KOJO_APP_VERSION%');
     expect(html, '启动弹窗必须保留「正在启动…」').toContain('正在启动…');
     expect(html, '启动弹窗必须有右上角退出入口').toContain('id="boot-splash-close"');
-    expect(html, '内联层不再有品牌字样式').not.toContain('boot-splash-brand');
-    expect(html, '内联层不再渲染产品名').not.toContain('>kojo-editor<');
   });
 
-  it('React 启动弹窗与内联层同构：同一个 .boot-bar、同一句提示、同一个退出入口', () => {
+  it('品牌锁四件配方逐字镜像：index.html 内联字面量 vs styles.css（token 已还原）', () => {
+    const packedTokens = tokenMap(tokensSrc(), ':root', 'tokens.css');
+    for (const selector of ['.boot-splash-lock', '.boot-splash-mark', '.boot-splash-name', '.boot-splash-ver']) {
+      expect(
+        recipeOf(inlineStyle(htmlSrc()), selector, NO_TOKENS, 'index.html'),
+        `${selector} 配方漂移：index.html vs styles.css`,
+      ).toEqual(recipeOf(cssSrc(), selector, packedTokens, 'styles.css'));
+    }
+  });
+
+  it('React 启动弹窗与内联层同构：同一套品牌锁类名、同一个 .boot-bar、同一句提示、同一个退出入口', () => {
     const view = appTsx();
+    expect(view, 'React 启动弹窗必须有品牌锁').toContain('className="boot-splash-lock"');
+    expect(view, 'React 启动弹窗必须有品牌记号').toContain('className="boot-splash-mark"');
+    expect(view, 'React 启动弹窗必须渲染产品名').toContain('className="boot-splash-name"');
+    expect(view, 'React 启动弹窗必须有版本位').toContain('v{APP_VERSION}');
     expect(view, 'React 启动弹窗必须复用 .boot-bar').toContain('className="boot-bar"');
     expect(view, 'React 启动弹窗必须保留「正在启动…」').toContain('正在启动…');
     expect(view, 'React 启动弹窗必须有退出入口').toContain('boot-splash-close');
+  });
+
+  it('版本号构建期注入：内联层留占位符、React 走包清单、vite 插件负责替换', () => {
+    expect(htmlSrc(), '内联层版本位必须是构建期占位符').toContain('v%KOJO_APP_VERSION%');
+    expect(htmlSrc(), '内联层不许写死版本号').not.toMatch(/v\d+\.\d+\.\d+/);
+    expect(appTsx(), 'React 启动弹窗的版本必须来自包清单').toContain("import { version as APP_VERSION } from '../../package.json'");
+    const vite = read('../vite.config.ts');
+    expect(vite, 'vite 配置必须提供 transformIndexHtml 注入').toContain('transformIndexHtml');
+    expect(vite, 'vite 注入必须替换同一个占位符').toContain("'%KOJO_APP_VERSION%'");
   });
 
   it('两份系统减动效（@media prefers-reduced-motion）豁免分支的声明也逐字相等', () => {
@@ -501,14 +532,14 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
     expect(inlineAll, '内联引导层出现了 var()：单源化会掏空桌面壳断言①').not.toContain('var(');
   });
 
-  it('取色镜像：三档 × 五面引导层字面量 == 该档主题源对应 token（严格逐字相等，不许例外）', () => {
+  it('取色镜像：三档 × 七面引导层字面量 == 该档主题源对应 token（严格逐字相等，不许例外）', () => {
     for (const theme of THEMES) {
       const tokens = themeTokens(theme);
       for (const face of COLOR_FACES) expectMirrored(theme, face, tokens);
     }
   });
 
-  it('字号镜像：引导层两处 font-size 字面量 == tokens.css 基线 :root 的 --fs-display / --fs-1', () => {
+  it('字号镜像：引导层三处 font-size 字面量 == tokens.css 基线 :root 的 --fs-display / --fs-1', () => {
     const tokens = themeTokens('dark');
     for (const face of FONT_FACES) expectMirrored('dark', face, tokens);
 

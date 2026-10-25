@@ -7674,6 +7674,29 @@ button.primary .hint {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+/* 启动品牌锁（logo + 字标 + 版本）：与 index.html 内联层同构，非取色声明由
+   boot-sweep-single-source.test.ts 逐字镜像。 */
+.boot-splash-lock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.boot-splash-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  color: var(--accent);
+}
+.boot-splash-name {
+  font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.boot-splash-ver {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+}
 .boot-skeleton-tip {
   font-size: var(--fs-1);
   color: var(--fg-dim);

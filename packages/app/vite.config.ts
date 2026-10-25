@@ -1,8 +1,25 @@
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+/**
+ * 引导层品牌锁的版本号：内联 `index.html` 等不到 `styles.css` / 模块图，但版本又必须与
+ * `package.json` 单一真源一致 ⇒ 构建期（dev + build）把占位符换成包清单现值。
+ * 内联层其余内容仍手写；只有这一格走注入，免得版本三处漂移。
+ */
+const APP_VERSION = (JSON.parse(readFileSync(r('./package.json'), 'utf8')) as { version: string }).version;
+
+function injectAppVersion(): Plugin {
+  return {
+    name: 'kojo:inject-app-version',
+    transformIndexHtml(html) {
+      return html.replaceAll('%KOJO_APP_VERSION%', APP_VERSION);
+    },
+  };
+}
 
 /**
  * 把 `web-tree-sitter` 里两条 **node 专用** 的动态 import 就地换成抛错的 promise。
@@ -43,7 +60,7 @@ function stubNodeOnlyDynamicImports(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), injectAppVersion()],
   resolve: {
     alias: {
       '@kojo/plugin-api': r('../plugin-api/src/index.ts'),

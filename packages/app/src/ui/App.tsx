@@ -15,6 +15,8 @@ import {errorText,  join, pathKey } from '@kojo/plugin-api';
 // K2-MIGRATE-SHAPE：adapter 事件目录 → 迁移期参数形状投影（core 公共入口，宿主只做投影）。
 import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
 import { removeRecentOptimistic } from './WelcomeView';
+// 版本号单一真源 = app 包清单（启动品牌锁与欢迎页同一条路）
+import { version as APP_VERSION } from '../../package.json';
 import { windowTitleFor } from './window-title';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
@@ -278,6 +280,26 @@ function BootSplashView(): ReactElement {
   return (
     <div className="boot-skeleton boot-screen" role="status">
       <div className="boot-skeleton-card" data-tauri-drag-region>
+        {/* 品牌锁：与内联引导层同构（logo + 字标 + 版本）。没有它这屏读起来像空窗/坏窗 */}
+        <div className="boot-splash-lock">
+          <svg
+            className="boot-splash-mark"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            fillRule="evenodd"
+            aria-hidden="true"
+            focusable="false"
+            data-tauri-drag-region
+          >
+            <path d="M3 1.6h10a2.4 2.4 0 0 1 2.4 2.4v5a2.4 2.4 0 0 1-2.4 2.4H7.3L4 14.1v-2.7H3A2.4 2.4 0 0 1 .6 9V4A2.4 2.4 0 0 1 3 1.6Zm1.45 4.9a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Zm2.5 0a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Zm2.5 0a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Z" />
+          </svg>
+          <span className="boot-splash-name" data-tauri-drag-region>
+            kojo-editor
+          </span>
+          <span className="boot-splash-ver" data-tauri-drag-region>
+            v{APP_VERSION}
+          </span>
+        </div>
         <div className="boot-skeleton-tip">正在启动…</div>
         <div className="boot-bar" />
       </div>
