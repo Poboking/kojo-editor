@@ -105,6 +105,7 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     scope: 'project',
     auditWord: 'erasqc',
     load: () => import('@kojo/plugin-erasqc-adapter'),
+    kojo2AdapterExport: 'ERASQC_GAME_ADAPTER',
   },
   {
     id: 'eratohok',

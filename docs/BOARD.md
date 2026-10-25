@@ -56,3 +56,4 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 | LAU-BLOCKED | **未排的两枚，卡在人不在码**：LAU-1（协议 v3）与 LAU-D1b（方言解析链上屏）都要等 **K2-CONTRACT / D0** 定契约落点（`plugin-api` vs `kojo-core`，本表第 30-31 行 lead 认领）；LAU-3 / LAU-4 与本表 ERB-PARITY、SDK B4/B5 同文件，须串行 | 落点定了才开实现批；在此之前谁动 `structure-protocol.ts` / `semantic-roles.ts` 的落点都是抢裁 | 待 D0 裁决 · krosama 2026-10-25 |
+| LAU-ADAPTER-4 | **四作 2.0 事实面补齐**（eraSQC / eraTohoK / eraKoumakan / eraAkumaMaid）：建 `src/kojo2/` 纯数据面 + 清单 `kojo2AdapterExport`，adapter-only、不建 backend | `validateGameAdapter` 零诊断；逐作真盘/源码证据；全量/双 typecheck/audit 绿 | 认领：workbuddy 2026-10-26 |
