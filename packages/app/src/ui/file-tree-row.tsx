@@ -13,6 +13,12 @@
 import { memo, useSyncExternalStore, type ReactElement } from 'react';
 import { baseName, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
 import { isRowActive, subscribeSelection } from './file-tree-selection';
+import {
+  isRowSelected,
+  setSelected,
+  subscribeMultiSelection,
+  toggleSelected,
+} from './file-tree-multi-selection';
 import { useRowProblems, type ProbFile } from './file-tree-problem-view';
 import { Icon } from './icons';
 import { PROBLEM_SCOPE, SEVERITY_TINT } from './problem-store';
@@ -127,6 +133,21 @@ function useActiveRow(path: string): boolean {
   return useSyncExternalStore(subscribeSelection, () => isRowActive(path), () => isRowActive(path));
 }
 
+/**
+ * 行级多选判据（D 批：勾选态同样走订阅，不进 props）。
+ *
+ * 快照是布尔 ⇒ 勾一个文件时只有"旧的两行 + 新的一行"翻转，其余行连 render 都不进。
+ * SSR 第三参读当时值，服务端渲染下"已被勾选"这条行为与改前一致（改前根本没有勾选，
+ * 服务端读到的就是空集 ⇒ 不画多选高亮）。
+ */
+function useRowSelected(path: string): boolean {
+  return useSyncExternalStore(
+    subscribeMultiSelection,
+    () => isRowSelected(path),
+    () => isRowSelected(path),
+  );
+}
+
 export interface FileRowProps {
   readonly f: string;
   /** 打开（第二参 = 方式：单击给预览态；类型见 tabs-ops.OpenFileOptions） */
@@ -152,18 +173,30 @@ export interface FileRowProps {
  */
 export const FileRow = memo(function FileRow({ f, onOpenFile }: FileRowProps): ReactElement {
   const active = useActiveRow(f);
+  const selected = useRowSelected(f);
   const prob = useRowProblems(f);
   return (
     <button
-      className={`tree-file ${active ? 'active' : ''}`}
+      className={`tree-file ${active ? 'active' : ''} ${selected && !active ? 'multi-selected' : ''}`}
       aria-current={active ? 'true' : undefined}
+      // 多选态给读屏 / 测试一个稳定挂点（不与 aria-current 的"当前项"语义抢位）
+      data-multi-selected={selected ? 'true' : undefined}
       title={f}
       data-locate={f}
       data-context-surface="file-tree"
       data-tree-kind="file"
       data-tree-path={f}
-      // 单击 = 预览态浏览（VS Code 单击文件树那份手感：斜体、不占新位、再点一下转正）
-      onClick={() => onOpenFile(f, { preview: true })}
+      onClick={(e) => {
+        // Ctrl / Cmd + 单击 = 勾选（不打开）；纯单击 = 把多选集收回这一份并照旧预览打开。
+        // 两条腿合起来就能选中**恰好两个**文件，右侧「比较已选文件」据此出现。
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          toggleSelected(f);
+          return;
+        }
+        setSelected([f]);
+        onOpenFile(f, { preview: true });
+      }}
     >
       {middleEllipsis(baseName(f), TREE_LABEL_MAX)}
       {prob ? (

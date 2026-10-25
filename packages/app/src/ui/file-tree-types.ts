@@ -70,6 +70,13 @@ export interface Props {
   extraRoots?: readonly string[];
   /** 「添加文件夹…」入口（对话框与去重都在宿主 App；缺省 → 按钮不显示） */
   onAddFolder?: () => void;
+  /**
+   * 「比较已选文件」（D 批）：在多选集恰为两个文件、且右击的行在其中时，菜单项出现，
+   * 落地交给宿主——由它把 `ui.diffView.open` 发进总线（树不认识 diff 视图，也不读盘）。
+   *
+   * 缺省 → 该项整项不显示（没有落地通道就不摆一个点了没反应的项，铁律 4）。
+   */
+  onCompareFiles?: (left: string, right: string) => void;
 }
 
 /** 作者包子目录（角色目录下的一层子文件夹 = 作者版本号包目录） */

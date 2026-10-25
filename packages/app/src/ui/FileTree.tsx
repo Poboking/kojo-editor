@@ -26,6 +26,7 @@ import {
 } from './file-tree-reveal';
 import {
   COMMAND_PALETTE_COMMAND,
+  compareSelectionPair,
   deleteConfirmText,
   fsLocatePlanOfRoots,
   isUnderPath,
@@ -45,6 +46,7 @@ import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark } from './file-tree-row';
 import { DirRows } from './file-tree-dir-rows';
 import { getActivePath, setActivePath, subscribeActivePath } from './file-tree-selection';
+import { clearSelected, getSelectedPaths } from './file-tree-multi-selection';
 import { useNodeProblems } from './file-tree-problem-view';
 import { setFileTreeMenuRuntime, type FileTreeScope } from './file-tree-menu';
 import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
@@ -222,6 +224,7 @@ export function FileTree(props: Props): ReactElement {
   const guardFileOp = useLatestCallback(rest.guardFileOp);
   const onFilesGone = useLatestCallback(rest.onFilesGone);
   const onAddFolder = useLatestCallback(rest.onAddFolder);
+  const onCompareFiles = useLatestCallback(rest.onCompareFiles);
   return (
     <FileTreeBody
       {...rest}
@@ -233,6 +236,7 @@ export function FileTree(props: Props): ReactElement {
       guardFileOp={guardFileOp}
       onFilesGone={onFilesGone}
       onAddFolder={onAddFolder}
+      onCompareFiles={onCompareFiles}
       extraRoots={rest.extraRoots && rest.extraRoots.length > 0 ? rest.extraRoots : EMPTY_EXTRA_ROOTS}
     />
   );
@@ -254,7 +258,7 @@ function useLatestCallback<T extends (...args: never[]) => unknown>(fn: T | unde
  *
  * 与外壳同一份实现，只差一件事：**不再收 `activeFile`**（见 `FileTree` 的注释）。
  */
-const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder }: FileTreeBodyProps): ReactElement {
+const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onCompareFiles }: FileTreeBodyProps): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为；IDENTITY_GLOSS 模块级 ⇒ 引用恒定） */
   const glossOf = gloss ?? IDENTITY_GLOSS;
   const [filter, setFilter] = useState('');
@@ -888,6 +892,24 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       case 'copy-rel-path':
         if (scope.kind === 'file') copyText(relativeToRoot(scope.path, project.rootDir), '已复制相对路径');
         break;
+      case 'compare-selected': {
+        // 菜单只在"恰选 2 个文件且这一行在其中"时给出这一项（判据在 file-tree-ops），
+        // 这里再判一次是防"集合在右键与点击之间被改动"的极小窗口——拿不到就照实说一句。
+        const pair = compareSelectionPair(
+          getSelectedPaths(),
+          scope.kind === 'file' ? scope.path : undefined,
+        );
+        if (pair === null) {
+          note('要比较两个文件：按住 Ctrl 点第二个文件，再右键「比较已选文件」');
+          break;
+        }
+        if (onCompareFiles === undefined) {
+          note('当前环境打不开比较视图（差异视图通道不可用）');
+          break;
+        }
+        onCompareFiles(pair[0], pair[1]);
+        break;
+      }
       case 'reveal':
         if (path) onRevealInExplorer?.(path);
         break;
@@ -973,9 +995,31 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    * 卸载清空 ⇒ 面拿不到桥就返回 null，右键落回兜底，不弹空壳。
    */
   useEffect(() => {
-    setFileTreeMenuRuntime({ view, activeFile: getActivePath(), capability: menuCapability, act: runMenuAction });
+    setFileTreeMenuRuntime({
+      view,
+      activeFile: getActivePath(),
+      capability: menuCapability,
+      // 多选集现读（不是注册这帧的快照）：勾选不引起树重渲，快照会过期（见 file-tree-menu）
+      selection: getSelectedPaths,
+      act: runMenuAction,
+    });
   });
   useEffect(() => () => setFileTreeMenuRuntime(null), []);
+
+  /**
+   * 换项目 / 树卸载时清多选集（D 批）。
+   *
+   * 多选集是模块级单例，活得比一次挂载久：不清，换项目后可能拿上一个项目的两份路径去
+   * 「比较已选文件」（读了旧项目的盘、还以为是当前项目）。清在"项目身份变了"与"卸载"两拍，
+   * 与 `file-tree-selection` 的"卸载不清活动文件"刻意不同——活动文件由宿主 prop 每帧同步，
+   * 本集合没有那条同步腿，只能自己收。
+   */
+  useEffect(() => {
+    clearSelected();
+    return () => clearSelected();
+    // 只认项目根：同一项目重载（索引重建 / 重开同目录）不该清掉作者的勾选——
+    // 勾的是"这一份项目里的文件"，根没变，勾选就仍有意义。
+  }, [project.rootDir]);
 
   /* ---------------- B4：定位当前文件 ---------------- */
 

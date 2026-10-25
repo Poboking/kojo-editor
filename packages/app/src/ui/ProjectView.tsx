@@ -10,6 +10,7 @@ import { OutlinePanel } from './OutlinePanel';
 import { kojo2PreviewBottomView } from './kojo2-preview-host';
 import { affectsKojoTree, createEventCoalescer } from './external-change';
 import { FileTree } from './FileTree';
+import { compareSelectedRequest } from './file-tree-compare';
 import { revealInExplorer } from './reveal-explorer';
 import { ShellLayout, setShellEditorStatus, type EditorStatusInfo, type WorkbenchApi } from './ShellLayout';
 import { hostVersionStep, type HostVersionState } from './PanelHost';
@@ -732,6 +733,19 @@ export function ProjectView({
     [kernel],
   );
   /**
+   * 「比较已选文件」（D 批）：树只发两条路径，宿主把 `ui.diffView.open` 发进总线。
+   *
+   * 载荷构造住在 `file-tree-compare.compareSelectedRequest`（纯函数、可单测）：两侧只给
+   * **盘上路径**、不给内联文本 ⇒ 差异视图读的是磁盘版本，与「与剪贴板比较」读屏上 model 不同。
+   * 宿主本层不读盘、不写盘——读盘由差异视图自己的 `resolveSide` 经内核 io 走。
+   */
+  const compareSelectedFiles = useCallback(
+    (left: string, right: string) => {
+      kernel.bus.emit('ui.diffView.open', compareSelectedRequest(left, right, project.rootDir));
+    },
+    [kernel, project.rootDir],
+  );
+  /**
    * 名称显示对照（中日对照：日文名 → 中文名）。
    *
    * 词典是**游戏/语言知识**，只住 game.adapter 插件；本壳层只经槽位读字段、绝不
@@ -790,8 +804,8 @@ export function ProjectView({
     };
   }, [kernel, treeWatchRoots]);
 
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], onAddExtraRoot: undefined as (() => void) | undefined });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], onAddExtraRoot };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], onAddExtraRoot: undefined as (() => void) | undefined, onCompareFiles: compareSelectedFiles });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], onAddExtraRoot, onCompareFiles: compareSelectedFiles };
   /**
    * 桥换了内容就得有人告诉 memo（PS-6 正确性修复）。
    *
@@ -816,6 +830,7 @@ export function ProjectView({
     onFilesGone,
     extraRoots,
     onAddExtraRoot,
+    compareSelectedFiles,
   ]);
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
@@ -837,6 +852,7 @@ export function ProjectView({
           gloss={a.gloss}
           extraRoots={a.extraRoots}
           onAddFolder={a.onAddExtraRoot}
+          onCompareFiles={a.onCompareFiles}
         />
       );
     };

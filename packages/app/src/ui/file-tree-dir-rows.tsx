@@ -15,6 +15,12 @@ import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { BINARY_EXT, erbExt, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
 import { isRowActive, subscribeSelection } from './file-tree-selection';
+import {
+  isRowSelected,
+  setSelected,
+  subscribeMultiSelection,
+  toggleSelected,
+} from './file-tree-multi-selection';
 import { useRowProblems } from './file-tree-problem-view';
 import { pkey } from './file-tree-ops';
 import { ROW_PROB_SCOPE, TreeProbMark } from './file-tree-row';
@@ -88,17 +94,32 @@ const DirFileRow = memo(function DirFileRow(props: {
     () => isRowActive(props.path),
     () => isRowActive(props.path),
   );
+  const selected = useSyncExternalStore(
+    subscribeMultiSelection,
+    () => isRowSelected(props.path),
+    () => isRowSelected(props.path),
+  );
   const prob = useRowProblems(props.path);
   return (
     <button
-      className={`tree-file ${active ? 'active' : ''} ${props.isErb ? '' : 'tree-extra-file'}`}
+      className={`tree-file ${active ? 'active' : ''} ${selected && !active ? 'multi-selected' : ''} ${props.isErb ? '' : 'tree-extra-file'}`}
       aria-current={active ? 'true' : undefined}
+      data-multi-selected={selected ? 'true' : undefined}
       title={props.isErb ? props.path : `${props.path}（附加文件，不在口上索引内）`}
       data-locate={props.path}
       data-context-surface="file-tree"
       data-tree-kind="file"
       data-tree-path={props.path}
-      onClick={() => props.onOpenFile(props.path, { preview: true })}
+      onClick={(e) => {
+        // 与 `file-tree-row.FileRow` 同一口径：Ctrl / Cmd = 勾选（不打开），纯单击 = 收回单选并预览。
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          toggleSelected(props.path);
+          return;
+        }
+        setSelected([props.path]);
+        props.onOpenFile(props.path, { preview: true });
+      }}
     >
       {props.label}
       {prob ? <TreeProbMark scope={ROW_PROB_SCOPE} error={prob.error} warning={prob.warning} /> : null}

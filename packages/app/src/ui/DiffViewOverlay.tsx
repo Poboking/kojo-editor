@@ -57,7 +57,7 @@ export interface DiffViewDeps {
 }
 
 /** 一侧的解析结果：文本已就位，或读取失败（失败可见，不静默） */
-type SideResolved =
+export type SideResolved =
   | { kind: 'loading' }
   | { kind: 'ok'; text: string; bytes?: Uint8Array }
   | { kind: 'error'; message: string };
@@ -132,8 +132,11 @@ export function formatCharCount(units: number): string {
  * 游戏目录 / 备份目录同样读得到）。路径侧顺手取原始字节——判等核的**字节态**
  * 要靠它（行同字节不同 = 编码/换行差异，必须在横幅里说出来）。字节取不到时
  * 只降级字节态（行态照判），不拿"没取到"冒充"相同"。
+ *
+ * 导出（D 批 · 双文件比较）：让"路径侧怎么读、读不读得到字节"这条判据能在 node 环境
+ * 直接单测（不必挂 Monaco）——两侧内容来源口径（盘上版本 + 字节态）因此可被钉住。
  */
-async function resolveSide(side: { text?: string; path?: string }, io: FileIO): Promise<SideResolved> {
+export async function resolveSide(side: { text?: string; path?: string }, io: FileIO): Promise<SideResolved> {
   if (typeof side.text === 'string') return { kind: 'ok', text: side.text };
   if (typeof side.path === 'string' && side.path.length > 0) {
     try {

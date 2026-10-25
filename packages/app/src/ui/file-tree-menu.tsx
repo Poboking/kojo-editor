@@ -134,6 +134,16 @@ export interface FileTreeMenuRuntime {
   readonly view: MenuView;
   readonly activeFile: string | null;
   readonly capability: MenuCapability;
+  /**
+   * 多选集**现读**（不是注册那一帧的快照）。
+   *
+   * 为什么是函数而不是值：勾选只惊动"翻转快照的那两行"（见 `file-tree-multi-selection`），
+   * `FileTreeBody` 自己不订阅 ⇒ 不会因为勾了文件而重渲 ⇒ 注册时抓的值会过期。
+   * 现读一次只是一趟数组扫描，换的是"菜单永远是此刻的真话"（与 `liveCapability` 同一条）。
+   *
+   * **可选**（additive）：旧消费方不传 ⇒ 视为空集，「比较已选文件」整项不出现。
+   */
+  readonly selection?: () => readonly string[];
   /** 分发一条动作（幂等；组件已卸载时是空操作） */
   readonly act: (id: MenuItemId, scope: FileTreeScope) => void;
 }
@@ -154,6 +164,7 @@ export function fileTreeSurfaceMenu(
     view: rt.view,
     activeFile: rt.activeFile,
     ...(scopePathOf(scope) === undefined ? {} : { path: scopePathOf(scope) }),
+    ...(rt.selection === undefined ? {} : { selection: rt.selection() }),
   });
   return specs.map(toContextMenuItem);
 }

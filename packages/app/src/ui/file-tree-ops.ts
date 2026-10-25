@@ -49,7 +49,9 @@ export type MenuItemId =
   | 'switch-view-kojo'
   | 'switch-view-fs'
   | 'add-folder'
-  | 'command-palette';
+  | 'command-palette'
+  // ---- D 批（双文件比较）----
+  | 'compare-selected';
 
 export interface MenuItemSpec {
   readonly id: MenuItemId;
@@ -109,6 +111,14 @@ export interface MenuOptions {
   readonly activeFile?: string | null;
   /** 本作用域自身的路径（文件作用域判"是不是活动文件"用；缺省 = 不知道） */
   readonly path?: string;
+  /**
+   * 文件树的多选集（D 批 · 双文件比较）：一个有序的文件路径清单。
+   *
+   * **缺省 = 空集**（旧消费方零改动）：没有多选集就没有「比较已选文件」这一项。
+   * 只有文件行会进这个集合（目录行不勾选，见 `file-tree-multi-selection`），
+   * 所以"集合里每一项都是文件"这条由来源保证，本层不再逐项判种类。
+   */
+  readonly selection?: readonly string[];
 }
 
 /** 「定位当前文件」——没有活动文件时给禁用 + 原因，而不是让用户点了没反应 */
@@ -178,10 +188,34 @@ function treeMenuItems(scope: 'group' | 'blank', cap: MenuCapability, opts: Menu
 }
 
 /**
+ * 「比较已选文件」的**出现判据**（纯函数，可单测）：多选集恰为两项、且被右击的这一行
+ * 就在集合里 ⇒ 返回那一对（左 = 先勾的，右 = 后勾的）；否则 `null`（**整项不返回**）。
+ *
+ * 口径钉死为「≠2 时整项不返回」（含 1 个、3+ 个）：
+ * - 1 个 / 0 个：没有"另一个"可比，给一项只会让作者点了没反应；
+ * - 3+ 个：VSCode 的 Compare Selected 也只吃两个——多出来的谁跟谁比没有答案，
+ *   与其弹一句"请只选两个"不如让这一项**根本不在**（铁律 4：没有能力的东西不许以灰态出现）。
+ * - 被右击的行不在集合里 ⇒ 也不出现：在 A、B 已选中时右键第三份 C，不该跳出"比较 A 和 B"。
+ * - 两项按 `pkey` 判重：大小写 / 分隔符写法不同的同一份文件选两次 = 没有可比的，照样不出现。
+ */
+export function compareSelectionPair(
+  selection: readonly string[] | undefined,
+  clickedPath: string | undefined,
+): readonly [string, string] | null {
+  if (selection === undefined || selection.length !== 2 || clickedPath === undefined) return null;
+  const [left, right] = selection;
+  if (left === undefined || right === undefined) return null;
+  if (pkey(left) === pkey(right)) return null;
+  const clicked = pkey(clickedPath);
+  if (pkey(left) !== clicked && pkey(right) !== clicked) return null;
+  return [left, right];
+}
+
+/**
  * 文件 / 目录 / 包 / 角色组 / 空白区五种作用域的菜单项清单（纯函数，可单测）。
  *
  * 顺序与分组：
- * - 文件 = 打开 | 复制文件名、复制路径、复制相对路径 | 显示 | 刷新、文件历史 | 重命名、删除；
+ * - 文件 = 打开 | 复制文件名、复制路径、复制相对路径 [| 比较已选文件（恰选 2 个文件时）] | 显示 | 刷新、文件历史 | 重命名、删除；
  * - 目录/包 = [导入] | 新建文件、新建文件夹 | 复制文件名、复制路径 | 显示 | 刷新、折叠全部 | 重命名、删除；
  * - 角色组 / 空白区 = 视图切换 | 添加文件夹 | 展开/折叠全部 | 定位当前文件 | 重读 [| 命令面板]。
  *
@@ -198,6 +232,9 @@ export function menuItemsFor(
     const items: MenuItemSpec[] = [{ id: 'open', label: '打开', icon: 'code' }];
     if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制文件名' });
     items.push({ id: 'copy-path', label: '复制路径' }, { id: 'copy-rel-path', label: '复制相对路径' });
+    if (compareSelectionPair(opts.selection, opts.path) !== null) {
+      items.push({ id: 'compare-selected', label: '比较已选文件', icon: 'files', dividerBefore: true });
+    }
     if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout', dividerBefore: true });
     if (cap.canRelist) items.push({ id: 'refresh', label: '刷新', icon: 'refresh', dividerBefore: true });
     if (cap.canHistory) items.push(historyItem(opts));

@@ -57,3 +57,16 @@ li > .tree-files.nested:hover::before {
 li > .tree-files.nested:has(.tree-file.active)::before {
   background: var(--rail-color-strong);
 }
+/* ============================================================================
+ * D 批 · 双文件比较：多选行（`.tree-file.multi-selected`）
+ *
+ * 与「活动文件」（`.tree-file.active`：实心 `--active` 底 + 亮 `--accent` 条）分层：
+ * 多选（且非活动的那一份）用更淡的 `--accent-soft` 底 + 更暗的 `--accent-dim` 条——
+ * 两行同屏时一眼分得清"正打开的"（亮）与"勾上要比较的"（淡）。
+ *
+ * 只挂在新类上，不碰既有行样式；两个 token 都是既有值（tokens.css），不引入第二份配色。
+ * ========================================================================= */
+.tree-file.multi-selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent-dim);
+}
