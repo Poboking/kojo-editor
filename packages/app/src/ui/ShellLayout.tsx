@@ -181,6 +181,8 @@ import {
 } from './Palette';
 import type { ActiveFileSymbolSource } from './palette-search';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
+// 文档内书签（1026 编辑器体感 C 批）：判据与存取全在 ./bookmarks（纯逻辑），这里是命令层
+import { clearFileBookmarks, nextBookmark, prevBookmark, toggleBookmark } from './bookmarks';
 import {
   collectWorkspaceSymbols,
   workspaceSymbolNotice,
@@ -1581,6 +1583,70 @@ export function ShellLayout(props: Props): ReactElement {
     );
   }, []);
 
+  /**
+   * 书签命令族（C 批）：四条命令只做「取当前焦点编辑器 / 当前文件」的接线，判据与行号集合
+   * 全在 `./bookmarks`（纯逻辑、可单测）。三条取不到目标的路径一律给中文通知，不静默（铁律 4）：
+   * 无编辑器 / 无活动文件 / **预览面**（投影文本的行号不是原文行号，在它上面加书签只会错位）。
+   */
+  const toggleBookmarkAtCursor = useCallback((): void => {
+    const ctx = focusedCtx();
+    const ed = ctx?.editorRef.current ?? null;
+    const path = ctx?.filePathRef.current ?? '';
+    if (ed === null || ed.getModel() === null || path === '') {
+      notifyRef.current({ kind: 'info', message: '先打开一个文件，再切换书签。' });
+      return;
+    }
+    if ((ctx?.sugarModelRef.current ?? null) !== null) {
+      notifyRef.current({ kind: 'info', message: '预览面是投影文本，书签只挂在原文上：先切回源码再加。' });
+      return;
+    }
+    const line = ed.getPosition()?.lineNumber;
+    if (line === undefined) {
+      notifyRef.current({ kind: 'info', message: '当前没有光标位置，书签没有可挂的行。' });
+      return;
+    }
+    // 切换书签的可见回执就是 glyph：加/删当场出现在行首，不另弹提示（照 VSCode 书签扩展）
+    toggleBookmark(path, line);
+  }, []);
+
+  /** 书签间跳转（`direction`：1 = 下一个，-1 = 上一个）——回绕语义在 bookmarks 的 next/prev */
+  const jumpToBookmark = useCallback((direction: 1 | -1): void => {
+    const ctx = focusedCtx();
+    const ed = ctx?.editorRef.current ?? null;
+    const path = ctx?.filePathRef.current ?? '';
+    if (ed === null || ed.getModel() === null || path === '') {
+      notifyRef.current({ kind: 'info', message: '先打开一个文件，再在书签间跳。' });
+      return;
+    }
+    if ((ctx?.sugarModelRef.current ?? null) !== null) {
+      notifyRef.current({ kind: 'info', message: '预览面是投影文本，书签只在原文上跳：先切回源码。' });
+      return;
+    }
+    const from = ed.getPosition()?.lineNumber ?? 1;
+    const line = direction === 1 ? nextBookmark(path, from) : prevBookmark(path, from);
+    if (line === null) {
+      notifyRef.current({ kind: 'info', message: '本文件还没有书签：先在要记的行按「切换书签」加一个。' });
+      return;
+    }
+    ed.setPosition({ lineNumber: line, column: 1 });
+    ed.revealLineInCenter(line);
+    ed.focus();
+  }, []);
+
+  /** 清除本文件全部书签（无书签时也出声——按下去屏上没有任何变化才是静默） */
+  const clearFileBookmarksCmd = useCallback((): void => {
+    const ctx = focusedCtx();
+    const ed = ctx?.editorRef.current ?? null;
+    const path = ctx?.filePathRef.current ?? '';
+    if (ed === null || ed.getModel() === null || path === '') {
+      notifyRef.current({ kind: 'info', message: '先打开一个文件，再清除它的书签。' });
+      return;
+    }
+    if (clearFileBookmarks(path) === 0) {
+      notifyRef.current({ kind: 'info', message: '本文件没有书签，无需清除。' });
+    }
+  }, []);
+
   const shellCommands = useMemo<readonly ShellCommandSpec[]>(
     () => [
       { id: 'layout.toggleSidebar', title: '切换主侧栏', keybinding: effectiveKeybindingOf('layout.toggleSidebar'), run: () => dispatch({ type: 'toggle', container: 'sidebar' }) },
@@ -1648,11 +1714,17 @@ export function ShellLayout(props: Props): ReactElement {
       // 命令面板可搜、键位页可改；`alt+z` 与 VSCode 一致，空白符不占缺省键（见键位表登记处）。
       { id: 'workbench.toggleWordWrap', title: '切换自动换行', keybinding: effectiveKeybindingOf('workbench.toggleWordWrap'), run: () => toggleWordWrap() },
       { id: 'workbench.toggleRenderWhitespace', title: '切换空白符显示', keybinding: effectiveKeybindingOf('workbench.toggleRenderWhitespace'), run: () => toggleRenderWhitespace() },
+      // 文档内书签（C 批）：命令面板可搜、键位页可改（缺省键登记在键位表，选择依据见登记处注释）。
+      // 四条命令体都作用于**当前焦点编辑器**（focusedCtx），无编辑器 / 预览面给中文通知。
+      { id: 'bookmarks.toggle', title: '切换书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.toggle'), run: () => toggleBookmarkAtCursor() },
+      { id: 'bookmarks.next', title: '跳到下一个书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.next'), run: () => jumpToBookmark(1) },
+      { id: 'bookmarks.prev', title: '跳到上一个书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.prev'), run: () => jumpToBookmark(-1) },
+      { id: 'bookmarks.clearFile', title: '清除本文件书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.clearFile'), run: () => clearFileBookmarksCmd() },
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace],
+    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace, toggleBookmarkAtCursor, jumpToBookmark, clearFileBookmarksCmd],
   );
   /**
    * Monaco 内建动作的宿主命令入口（1026 编辑器内核批）。

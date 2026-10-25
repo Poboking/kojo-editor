@@ -71,6 +71,8 @@ import { Icon } from './icons';
 // 糖视图阅读模式（.kojo 预览专用）的显示层样式：装饰类 + 工具条开关，组件级引入
 // （照 tab-chip.css / welcome.css 先例；只影响挂在糖 model 上的装饰，不碰普通编辑）
 import './sugar-read.css';
+// 文档内书签的边栏装饰样式（C 批）：glyph 角标 + 整行淡底，只命中书签装饰类
+import './bookmark-gutter.css';
 // 右键面（1023 覆盖面批）：外框 / 预览横幅两个面的样式只进这个新文件（不往常驻样式表里塞）
 import './context-menu-editor-chrome.css';
 import { perf } from '../perf';

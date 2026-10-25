@@ -74,6 +74,8 @@ import {
 } from './editor-context-actions';
 import { canRunContextMenuCommand, runContextMenuCommand } from '../context-menu-model';
 import { SHOW_FILE_HISTORY_COMMAND_ID } from '../file-history';
+// C 批：文档内书签的装饰层（安装器形态照 use-breadcrumb；判据全在 ../bookmarks 纯逻辑）
+import { installBookmarkDecorations } from './use-bookmarks';
 import { revealInExplorer, revealFailureText } from '../reveal-explorer';
 import { relativeToRoot } from '../file-tree-ops';
 import { isInWorkspaceFile } from '../file-area';
@@ -329,6 +331,12 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     });
     // 面包屑：刷新入口 + 光标/model 两条监听（判据与缓存全在 use-breadcrumb.ts）
     const disposeBreadcrumb = installBreadcrumb(ed, pushSelStatus);
+    // 书签装饰（C 批）：路径与派生面判据都取本实例持有的 ref 壳，与面包屑同一拍安装。
+    // 换标签 / 挂撒糖预览 / 销毁三条边界由安装器内部的监听与卸载函数兜住。
+    const disposeBookmarks = installBookmarkDecorations(ed, {
+      getPath: () => filePathRef.current,
+      isDerivedView: () => sugarModelRef.current !== null,
+    });
     /* ---------------- 右键「应用动作」（1023 覆盖面批 · WP1.1 / 1.3 / 1.4） ----------------
      * 语义住在 `editor-pane/editor-context-actions.ts`（纯函数、可单测），本段只做三件事：
      *   ① 现取上下文（只读 / 预览面 / 脏 / 选区 / 语言 / 通道）；
@@ -635,6 +643,8 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       disposePreferences();
       focusDisposer.dispose();
       disposeBreadcrumb();
+      // 书签装饰：退订两条监听 + 清装饰集合（清单里 collection.clear 由安装器负责）
+      disposeBookmarks();
       disposeKojo2Problems();
       // K2 batch-5：预览入口先摘桥再 dispose（撤下后面板不再拿到半死的句柄）；
       // 次序与诊断同段：面板数据源（缓存）随实例一起走，不留上一实例的产物。

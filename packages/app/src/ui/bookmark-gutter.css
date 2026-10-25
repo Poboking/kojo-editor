@@ -1,0 +1,44 @@
+/**
+ * 文档内书签（C 批）的边栏装饰样式。
+ *
+ * 独立成文件（组件级 `import './bookmark-gutter.css'`，照 `sugar-read.css` 先例），
+ * **不进 `styles.css` / `styles-project.css`**：那两只要过 `styles-split.equivalence`
+ * 闸（轻档行序列 ⊆ 重档行序列），为两百字节装饰样式去同步两份样式表不值。
+ *
+ * 三条纪律：
+ * 1. 类名单源在 `bookmarks.ts` 的 `BOOKMARK_GLYPH_CLASS` / `BOOKMARK_LINE_CLASS`——
+ *    这里手抄的字面量只是 CSS 的落点，改名时改一处两处都要跟上（本文件顶部注明）。
+ * 2. 颜色一律走主题 token（`--accent` / `--accent-rgb`），三套主题由 `themes/*.css`
+ *    各自给值，本文件零十六进制。
+ * 3. **只命中书签装饰类**：普通编辑、糖预览投影一份都不沾（投影面根本不铺书签装饰，
+ *    见 `editor-pane/use-bookmarks.ts`）。
+ */
+
+/* glyph margin 上的书签角标：一枚下凹的小书签形状（纯 CSS，无图标字体）。
+   Monaco 把 `glyphMarginClassName` 加在 margin 层的装饰元素上，元素已由运行时定位，
+   这里只用相对定位在其内部居中画形状。 */
+.monaco-editor .kojo-bookmark-glyph::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 11px;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
+  border-radius: 1px;
+}
+
+/* 整行书签的极淡底色（`isWholeLine` 行装饰落在 view-overlays 的行元素上）。
+   透明度取 0.08：够看见"这一行标了"，又不至于压过选区高亮。 */
+.monaco-editor .view-overlays .kojo-bookmark-line {
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+/* 尊重系统减弱动效：这两处装饰没有过渡，本条只为与 `sugar-read.css` 同款收口留痕。 */
+@media (prefers-reduced-motion: reduce) {
+  .monaco-editor .kojo-bookmark-glyph::after {
+    transition: none;
+  }
+}

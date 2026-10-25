@@ -107,6 +107,18 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'editor.internal.save', title: '保存当前文件', category: '编辑器', keys: 'ctrl+s', rebindable: false, note: '编辑器内生效，暂不支持改键' },
   // A7「在选定内容中查找」：有选区时把选中文本灌进 find 并把搜索域钉在选区（无选区不动作）
   { id: 'editor.internal.findInSelection', title: '在选定内容中查找', category: '编辑器', keys: 'ctrl+alt+f', rebindable: false, note: '编辑器内生效；先选中文本再按' },
+  // ---- 文档内书签（1026 编辑器体感 C 批）----
+  // 键位选择依据（登记之前逐条核过冲突，见提交信息）：
+  // - F2 / Ctrl+F2 / Ctrl+Shift+F2 / Ctrl+K F2 均被 Monaco 占（重命名 / 多光标 / 联动编辑 / 速览引用），
+  //   故取 F2 族唯一空位 Alt+F2 做切换；
+  // - F3 / Shift+F3 / Ctrl+F3 / Ctrl+Shift+F3 被 Monaco 查找族占，取 Alt+F3 与 Ctrl+Alt+F3
+  //   做「下一个 / 上一个」，同键加减一个 Ctrl 表方向；
+  // - 刻意不用 Alt+Shift 组合（Windows 输入法语言切换高发，与 `layout-pref.ts` 避开 Alt 的取舍同源）。
+  // 书签是纯内存态（不落盘、不越写盘闸），命令面板可搜、键位页可改。
+  { id: 'bookmarks.toggle', title: '切换书签', category: '书签', keys: 'alt+f2', rebindable: true, note: '当前行；同键再按取消' },
+  { id: 'bookmarks.next', title: '跳到下一个书签', category: '书签', keys: 'alt+f3', rebindable: true, note: '本文件内；到末尾回绕到第一个' },
+  { id: 'bookmarks.prev', title: '跳到上一个书签', category: '书签', keys: 'ctrl+alt+f3', rebindable: true, note: '本文件内；到开头回绕到最后一个' },
+  { id: 'bookmarks.clearFile', title: '清除本文件书签', category: '书签', rebindable: true },
   // ---- 内核动作（1026 编辑器内核批）----
   // id 与 `ui/monaco-command-specs.ts` 一一对应（测试钉住）；本表只登记「命令面板入口」——
   // 这些动作的键由 Monaco 自己处理（内建键），宿主**不覆写、不劫持**，故一律不给缺省键
@@ -159,6 +171,8 @@ export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   '工作台',
   '布局',
   '编辑器',
+  // 文档内书签（1026 编辑器体感 C 批）：命令面板与 `ShellLayout` 的 shellCommands 同分类名
+  '书签',
   // 内核动作（1026 编辑器内核批）：命令面板与 `ui/monaco-command-specs.ts` 的中文分类逐字相同
   '折叠',
   '文本变换',
