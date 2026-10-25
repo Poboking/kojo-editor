@@ -213,8 +213,12 @@ interface GameAdapter {
 2. **注册只有一处名单**。`packages/app/src/adapter-manifest.ts` 登记每枚适配器的
    id / 目录 / 包名 / 工厂名 / 装载时机 / 审计词表；组合根按清单装载，审计脚本从
    清单派生游戏名词，适配器豁免名单由磁盘上的 `*-adapter` 目录派生。
-   散点（路径别名、app 包依赖、导出名）由 `packages/app/tests/adapter-manifest.test.ts`
-   双向自证——接新游戏只改「清单 + 适配器包」。
+   余下散点由 `packages/app/tests/adapter-manifest.test.ts` 双向自证（app 包依赖 /
+   导出面上的工厂名 / 审计词表 / 别名陈旧项与跨文件漂移 / 开机次序）；别名本身仍要
+   手工补三处，但漏了 typecheck 当场红，不是「别的机器上才炸」。
+   **接新游戏只改「清单 + 适配器包」**——本批落地当天，第六枚适配器 eratohoK 由另一条线
+   按旧六处接入并入 `dev`，收编进清单时适配器包零改动（`detect` 仍返回裸 `boolean`，
+   联合类型接得住）。
 3. **占位符语义由适配器声明**。`KojoFaceTable.slotSemantics`（表级默认 + 逐面覆盖）
    说明 `{i}` 到底是「指令编号」还是「`CFLAG:209` 口上模式」；只影响补全 / 悬停的
    展示文案，不改拼接行为（拼接口径仍由 `indexKind` 决定）。
@@ -230,6 +234,9 @@ interface GameAdapter {
    `scaffold`（三个 adapter 都实现了、全仓零调用方，且与「工作区为权威 · 游戏目录仅
    部署目标」的落点口径冲突；脚手架真正的通道是 `deps.scaffold` —— adapter 供数、
    共享向导落盘到工作区，各 adapter 的 `scaffold.ts` 纯生成器仍在）。
+   多游戏适配批自查同法删掉**本批自己刚加**的 `KojoSlotSemantics.chara`：三张分野表都
+   声明了「`{n}` = 角色号」，而展示层只读 `index`——零消费方，且 `{n}` 在 era 生态里
+   恒为角色号，逐条补全里再说一遍只是噪声。
 2. **「谁是当前那枚」只有一处实现。** 同槽单激活的判据是
    `contribution.adapter.gameId === project.adapterId`，它只准住在契约的
    `activeGameAdapter()` 里。此前 14 个消费方各手写一遍，每处都能悄悄长出一点差异
