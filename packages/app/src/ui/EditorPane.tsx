@@ -12,7 +12,7 @@ import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
 import { registerBuiltinLanguageSurfaces } from '../monaco/languages';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers } from '../monaco/kojo-language';
-import { monacoThemeIdFor } from '../monaco/theme';
+import { applyMonacoTheme } from '../monaco/theme';
 import { useThemePref } from './theme-pref';
 import { fixAllSummary, runFixAll } from '../monaco/kojo-fix-all';
 import {
@@ -426,10 +426,11 @@ export function EditorPane({
    * 主题偏好（反馈 3）：dark / light / mint-dark 三档与 `monaco/theme.ts` 的三套主题
    * 一一对应；偏好一变就把 Monaco 全局主题换过去（同页所有编辑器实例一起换）。
    * 创建实例时另按 `loadThemePref()` 现取（见下方 `monaco.editor.create`）。
+   * 两段式（性能批 S5）：主界面当帧变，Monaco 延一帧，理由见 `applyMonacoTheme`。
    */
   const themePref = useThemePref();
   useEffect(() => {
-    monaco.editor.setTheme(monacoThemeIdFor(themePref));
+    applyMonacoTheme(monaco, themePref);
   }, [themePref]);
   /** 装饰重算定时器（编辑停顿去抖） */
   const markerTimerRef = useRef<number | null>(null);

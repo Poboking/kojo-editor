@@ -61,6 +61,38 @@ export function monacoThemeIdFor(pref: MonacoThemePref): MonacoThemeId {
   return THEME_ID_BY_PREF[pref] ?? 'kojo-dark';
 }
 
+/* ------------------------------ 换主题的两段式 ------------------------------ */
+
+/**
+ * 换主题拆两帧：`data-theme`（整页 style recalc）当帧由 `ui/theme-pref.ts` 同步落，
+ * Monaco 的重活（`setTheme` ⇒ 重算 token 色 + 重绘视口 + 缩略图）延一帧再落；同帧连切
+ * 合并成最后一次。理由、读数与帧策略取舍写在 `tests/theme-switch-defer.test.ts` 头注
+ * ——本文件在开机静态图里，注释也占包体。
+ */
+
+/** 换主题需要的最小 Monaco 面（只要求一个方法 ⇒ 本模块不 import entry，node 单测直接给替身） */
+export interface MonacoThemeSink {
+  readonly editor: { setTheme(themeName: string): void };
+}
+
+let pending: MonacoThemeId | null = null;
+let armed = false;
+
+/** 消费方唯一入口（主编辑器与 overlay 共用一条队列 ⇒ 一次换主题只落一次 `setTheme`） */
+export function applyMonacoTheme(sink: MonacoThemeSink, pref: MonacoThemePref): void {
+  pending = monacoThemeIdFor(pref);
+  if (armed) return; // 已排过一帧：只覆盖目标档，不再排第二次
+  armed = true;
+  const run = (): void => {
+    armed = false;
+    const id = pending;
+    pending = null;
+    if (id !== null) sink.editor.setTheme(id);
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 0); // node / 老内核：退化为宏任务，请求绝不丢
+}
+
 /* ------------------------------ 规则构建 ------------------------------ */
 
 interface BaseRuleSpec {
