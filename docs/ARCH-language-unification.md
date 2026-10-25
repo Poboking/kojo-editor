@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.1（设计稿，未实现；实现按 §8 批次推进）。v1.0 → v1.1 = **LAU-0 事实修订批**：11 处读数 / 出处 / 节点名改正，§4.1 保留差集通道，§5.2 由「新造 `dialect.ts`」改为「既有 2.0 `GameAdapter` 的只读投影」，§5.3 真源改为已上线的 `detect()` 链，§8 增五枚批（LAU-0 / 1a / 2a / 3b / 6a），§9 判据改成 audit 同形态。**逐条对照见附录 A**；设计主张（§2 决策表 / §3 六纪律）未变，只增 D13 |
+| 文档版本 | v1.1（设计稿；§8 的七路前置批已落 dev，逐枚落点见下行「状态」）。v1.0 → v1.1 = **LAU-0 事实修订批**：11 处读数 / 出处 / 节点名改正，§4.1 保留差集通道，§5.2 由「新造 `dialect.ts`」改为「既有 2.0 `GameAdapter` 的只读投影」，§5.3 真源改为已上线的 `detect()` 链，§8 增五枚批（LAU-0 / 1a / 2a / 3b / 6a），§9 判据改成 audit 同形态。**逐条对照见附录 A**；设计主张（§2 决策表 / §3 六纪律）未变，只增 D13。**七路交付批的落点与实测改口见 §8.1 + 附录 B（8 条）** |
 | 日期 | 2026-10-25（v1.0）· 2026-10-25（v1.1 修订，逐条带 file:line 取证） |
-| 状态 | 设计稿。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`。**但 LAU-1 / LAU-D1 暂不可开工**，两个前置未决：① 契约落点（`plugin-api` vs `kojo-core`）挂在 BOARD 的 **K2-CONTRACT / D0 裁决**上，LAU 不替它拍板（§4 抬头）；② LAU-3/4 与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。可先做的是 LAU-0（＝本批）/ LAU-1a / LAU-2a / LAU-6a；LAU-3b 待 §6 的"语言 id 改不改"二选一定案 |
+| 状态 | **v1.1 交付状态（2026-10-25 七路批已落 dev）**：LAU-0 `ebf8e03c` · GATE `6ca3c4c3` · 2a `f006547c` · D1a `875b05d3` · 1a `4c1487c4` · 6a `45d18791` · SYNTAX `3a76d857`＋`87b7e26c` · FIXTURE `b9e87b2e`（交付回执在各提交信息，基线读数见 `STATE.md` §一）。设计主张仍是设计稿——未落地的批次按 §8 推进。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`（**词位已入表并过 wasm 棘轮，但消费方尚未接线**——`# 方言` 现在只被词法/文法/Monarch 三面认出，解析链要等 LAU-D1b）。**但 LAU-1 / LAU-D1b 暂不可开工**，两个前置未决：① 契约落点（`plugin-api` vs `kojo-core`）挂在 BOARD 的 **K2-CONTRACT / D0 裁决**上，LAU 不替它拍板（§4 抬头）；② LAU-3/4 与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。已做完的是 LAU-0（＝v1.1 文档批）/ LAU-1a / LAU-2a / LAU-6a + GATE / SYNTAX / FIXTURE / D1a；LAU-3b 待 §6 的"语言 id 改不改"二选一定案 |
 | 范围 | ① ERB / kojo v1（封存）/ kojo2 三条并行结构栈收成一套：**一份协议、一份角色表、一个槽位契约**；② 多 era 适配收进**方言层**（§5），语法不分叉 |
 | 前置 | `KOJO-2.0-LANGUAGE-SPEC.md` §0.2（单一模式）/ §5.3 / §12.1（旧拼写 error+迁移）/ §10（adapter 契约，**§10.1 十五格就是本方案的事实面**）；`HANDOFF-kojo2-sdk-packages.md` B0–B5；`HANDOFF-erafl-adapter.md`（多 era 事实）；**BOARD 在办批次**：`K2-CONTRACT`（契约落点待 D0 裁决）、`ERB-PARITY`（同文件，串行）、`POS-UTIL`（坐标换算收口，§4.6 的 `includedRanges` 归它管） |
 | 不做 | 不改 2.0 语法；不动 `EDITOR_SEMANTIC_TOKEN_TYPES`；不新增 workspace 包；**不为任何 era 分叉语法** |
@@ -27,8 +27,12 @@ LAU 就是把它们逐条剥出去。
 
 > **新增一个 era，宿主与语法零改动**，只加一个方言包（数据）。反例今天仍在，只是**位置变了**——
 > 2.0 主入口那处 eraTW 写死已于 2026-10-24（`ab1c5146`，入口 A）改成按当前项目现取、取不到给 `null`；
-> 但**迁移向导的事件目录、存储注入的指纹、项目扫描的默认装载器**三处仍无条件取 eraTW 事实，
-> 另有 `bootstrap.ts` 用 `'erafl'` 字面量挑包 ⇒ "加一个 era 要改宿主"依然成立（清单见 §5.1）。
+> ~~但**迁移向导的事件目录、存储注入的指纹、项目扫描的默认装载器**三处仍无条件取 eraTW 事实，
+> 另有 `bootstrap.ts` 用 `'erafl'` 字面量挑包~~ ⇒ ✅ **这四处已由 LAU-1a `4c1487c4` 全部收掉**
+> （三处改按当前项目取、字面量分支泛化成对 `adapter-manifest.ts` 的循环）。
+> **"加一个 era 要改宿主"仍然成立，但原因换了**：方言级**数据**（事件目录内容、载体归属、变量族清单）
+> 还写在各适配器包里，宿主侧不再认得具体 era≠数据侧已收成包 ⇒ 判据真要在 LAU-D4「方言包」落地那天才闭合
+> （清单见 §5.1，§9-10 已按此改写）。
 
 ---
 
@@ -41,7 +45,7 @@ LAU 就是把它们逐条剥出去。
 | 结构层 | `StructureClient`（`tree-sitter/client.ts:127`）+ `erb-ts.worker`，协议 v2 = `KOJO_STRUCTURE_PROTOCOL = 2`（`types.ts:33`，握手校验 `worker-bootstrap.ts:59-65`） | 同一条路（`kojo-ts.worker`，共用 `startStructureWorker`） | `Kojo2WorkerClient`（`kojo2-worker-runtime.ts:91`）+ `kojo2-ts.worker`（`kojo2-worker-protocol.ts`，**无协议常量、无握手**） |
 | 捕获→颜色 | `ERB_SEMANTIC_CAPTURE_TIERS`（`erb-tiers.ts:31-41`，**9 支**） | `KOJO_STRUCTURE_CAPTURE_TIERS`（`types.ts:230-234`，3 支）+ 节点级 `KOJO_STRUCTURE_NODE_TIERS`（`:261-280`） | `KOJO2_CAPTURE_TOKEN_TYPES`（`kojo2-semantic.ts:85-101`，15 支） |
 | 主题 | 并进 `kojo-dark/light/mint-dark`（`theme.ts:48,601-613`） | 同左 | 并进同一批（带开关，`kojo2-theme.ts:8-9`、`theme.ts:295`）+ 三套独立 `kojo2-dark/light/mint-dark`（`kojo2-theme.ts:50-56`） |
-| 文法 wasm（字节 / MiB） | 1,030,545 B（0.98 MiB）＝`erb-syntax-tree/tree-sitter-erb.wasm` | 821,724 B（0.78 MiB）＝`kojo-syntax-tree/tree-sitter-kojo.wasm` | 47,116 B（0.045 MiB）＝`kojo-syntax-tree/tree-sitter-kojo2.wasm` |
+| 文法 wasm（字节 / MiB） | 1,030,545 B（0.98 MiB）＝`erb-syntax-tree/tree-sitter-erb.wasm` | 821,724 B（0.78 MiB）＝`kojo-syntax-tree/tree-sitter-kojo.wasm` | **48,057 B**（0.046 MiB）＝`kojo-syntax-tree/tree-sitter-kojo2.wasm`（LAU-SYNTAX 加 `# 方言` 词位后；v1.1 取证时 47,116 B） |
 
 > ⚠ **单位口径（PITFALLS 204 的同一课）**：v1.0 写 ERB「0.98 MB」、§4.6 写「1.03 MB」，指的是**同一枚文件**
 > （0.98 MiB = 1.03 MB 十进制）。本稿一律给**字节数**，不再用 MB。
@@ -90,9 +94,9 @@ LAU 沿着这条既有路线走，不另起炉灶——**但 B4/B5 尚未开工*
 | **D9** | **适配的单元是方言（dialect），不是语言**：语法 / 载体 / 方言三条轴正交 | 每来一个 era 就"再适配一遍语言"：语法层被游戏事实污染，N 个 era = N 份分支 |
 | **D10** | **方言不进 wasm、不进 worker、不改语法**：只进"事实类"服务（补全 / 悬停 / 诊断 / 符号 / 跳转） | 让方言影响 tree-sitter 查询：每个 era 一份文法或一份查询，回归面乘 N |
 | **D11** | **方言的真源是已上线的识别链**：`detect()` 轮询 → `project.adapterId`（带 `ProjectDetectionError` / `AdapterConflictError` 双闸）；工程清单（**作者工作区** `workspace.json` 的 `meta`，additive）只做**覆盖**，文件里的 `# 方言` 只做**断言**，三者不一致即 error | v1.0 定的「工程根 `kojo.project.json` 为唯一真源」**无落点**：游戏目录整体只读（铁律 5），`detect()` 打开的盘上不会有也不该有编辑器写的清单；而另立一份真源会与 `detect()` 结论漂移（§5.3） |
-| **D12** | **未绑定方言 = 明确降级，绝不回落到某个默认方言** | 2.0 面今天**已经是这个语义**（`kojo2AdapterForProject` 取不到给 `null`，`bootstrap.ts:52-58`）；还差的是三处无项目门的惰性装载（§5.1 清单），它们才是"错误事实不报错"的现存点 |
+| **D12** | **未绑定方言 = 明确降级，绝不回落到某个默认方言** | 2.0 面今天**已经是这个语义**（`kojo2AdapterForProject` 取不到给 `null`，`bootstrap.ts:52-58`）；~~还差的是三处无项目门的惰性装载~~（✅ **已由 LAU-1a `4c1487c4` 补齐项目门**，见 §5.1 第 1 条的改口表）⇒ 这条决策**今天全线成立**，剩下的活是 LAU-D2 接线时**别把它弄回去** |
 | **D13**<br>（v1.1 新增） | **方言契约 = 既有 2.0 `GameAdapter`（`kojo-core/src/adapter.ts:40`）的只读投影，不新造第三套**。真正新增的只有 `carrier` 归属一格与 `EditorDocumentIdentity.dialect?` 的传递；事实面的字段名、结构、fail-closed 旋钮一律沿用 spec §10.1 那十五格 | 新造独立 `DialectFacts`：与 `kojo-core` 的 2.0 `GameAdapter`、`plugin-api/src/game.ts:755` 的 v1 `GameAdapter` 并存成**三套**，且是前者的**有损**重投影——丢 `domainSymbols.unknown:'error'\|'raw'`（`:239`，`checkSymbol` `:1325-1338` 读的正是它，即"错事实必须报错"的旋钮）、丢四枚 presentation 结构、丢 `encodingPolicy`/`layerPolicy`/`capability`/`sourceMap`/`conformanceSuite`/`diagnosticNamespace`，对 v1 十二个可选槽**零覆盖**（§5.2 逐格对照） |
-| **D14** | **`@原生` 体内注入子语言**：descriptor 声明 `injections`，宿主按声明转发（`includedRanges`，坐标天然对齐） | 文法内嵌 ERB：kojo2 文法从 47,116 B 涨到 MB 级，且 kojo1 退役期两边一起改 |
+| **D14** | **`@原生` 体内注入子语言**：descriptor 声明 `injections`，宿主按声明转发（`includedRanges`，坐标天然对齐） | 文法内嵌 ERB：kojo2 文法从 48,057 B 涨到 MB 级，且 kojo1 退役期两边一起改。⚠ "MB 级"是**推算不是读数**（`# 方言` 一枚词位实测 +941 B，内嵌整门 ERB 未实测）；LAU-6a `45d18791` 给出的实证更硬——注入路**零文法改动**就能跑通四面，内嵌路要先造一具新 wasm |
 
 ---
 
@@ -129,6 +133,9 @@ LAU 沿着这条既有路线走，不另起炉灶——**但 B4/B5 尚未开工*
   `ui/editor-pane/use-breadcrumb.ts:248`、`pane-helpers.ts:104`、`use-editor-preferences.ts:130`、
   `ui/kojo2-model-language.ts:60`。⇒ R1 是**终态**判据（LAU-4 + SDK B4/B5 之后才成立），
   **不得当任何单批的 DoD**；逐批的 DoD 见 §8，§9-1 的 grep 已按此改写。
+  ⚠ 别与另一族混：上面列的全是**语言 id 分支**（审计的 M2），宿主里还有一族是**游戏名/引擎词汇**（M1）——
+  那三处按 eraTW 硬装载的惰性点（`App.tsx:237-249,406,421`、`kojo2-project-scan-adapter.ts:48-51`）
+  **已由 LAU-1a `4c1487c4` 改成按当前项目取、取不到给 `null`**，不在本条的存量里。
 - **R2 一门语言 = 一枚 descriptor**：加语言不改 model 池、EditorPane、provider 接线（今天已基本做到，LAU 补完 `syntaxPresenter` 与 `availability` 两个缺口）。
 - **R3 协议一份、带版本、失败即数据**：worker 永不 reject，也永不"半吊子继续答"。
 - **R4 颜色一份**：屏幕上有几档由角色表说，色值由主题规则说，两者一一对应且在模块加载期对账。
@@ -420,11 +427,13 @@ export const LEGACY_ROLE_ALIASES: Readonly<Record<string, SemanticRole>> = {
    `kojo2-theme.ts:135-168` 的既有纪律：双向抛——token 缺规则 `:148,152`、规则没登记的 token `:157-165`，
    import 期即评 `:176-178`；ERB / v1 那两侧今天还没有这枚闸，LAU-2 顺手补齐）；
 2. **任意两档 ΔE ≥ 12、对底色对比度 ≥ 4.5**（沿用 `kojo2-theme.test.ts:238,249-253,260-269` 的现有指标，
-   换成角色表跑）。⚠ **可行性未验，先跑 LAU-2a**：今天 kojo2 去重后只有 **12 个唯一色**就已经卡在这两个
-   阈值边上（该测试 `:262-263` 就是在数去重后的色数），而 `SEMANTIC_ROLES` 是 **18 档**，且要同时铺进
-   **6 套主题**（`kojo-dark/light/mint-dark` + `kojo2-dark/light/mint-dark`）。18 档 × 两两 ΔE ≥ 12 × 对底色
-   ≥ 4.5 能不能解，必须先用一枚色彩可行性脚本算过再定档数——否则 LAU-2 只会卡在"降阈值"或"减档"，
-   而两条都违反本节约束；
+   换成角色表跑）。✅ **可行性已由 LAU-2a `f006547c` 算过（读数全表见 §8）**：18 档在 6 套主题（实为
+   `#1e2227` / `#f6f8fa` / `#0f1713` 三个底色）上**全部可解**，最严格底色下的最大可解档数下界 233 档
+   ⇒ **档数不是限制项，LAU-2 不必在"降阈值"与"减档"之间二选一**。但两条留给实现批：
+   ① 现役 12 唯一色在这两个阈值上的**余量本来就薄**（min 两两 ΔE 余量 1.8/2.7，min 对比度暗底只剩
+   **0.08**）——铺到 18 档时"数学可解"的见证色组未经可读性/语义联想评审，**定稿色卡要人工看过**，
+   探针只否掉了"档数不够"这一条；② "跨底色同档同色"是比现闸更强的约束（现口径只要求**同主题内**两两
+   ΔE），本批未验，若 LAU-2 采纳它须自己重跑 `tools/color-feasibility.mjs` 出数；
 3. **`LEGACY_ROLE_ALIASES` 的每个值都必须是 `SEMANTIC_ROLES` 成员**，且别名表只允许出现在一个文件里
    （断言走 `tools/audit-language.mjs`，不用裸 grep，见 §9 抬头）。
 
@@ -579,18 +588,33 @@ readonly injections?: readonly InjectionSpec[];
 （API 可用性已核：`web-tree-sitter@0.27.1`，`node_modules/web-tree-sitter/web-tree-sitter.d.ts:93,111,193`
 的 `ParseOptions.includedRanges?: Range[]`。）
 
-**⚠ 必须先探针（LAU-6a）——ERB 文法对行边界是硬依赖**（v1.1 补，本节最大的未知）：
-`includedRanges` 可用不等于"任意字节区间都能解"。ERB 侧三条事实决定子区间**必须整行对齐**：
+**✅ 探针已跑（LAU-6a 已交付，`tools/inject-probe.mjs`，dev `45d18791`）——判决：LAU-6 可排，但区间口径必须写死**：
+`includedRanges` 可用不等于"任意字节区间都能解"。ERB 侧三条事实决定子区间的取法——
+① `_newline` 是**结构 token**（`erb-syntax-tree/src/grammar.js:207`），函数体必须以 `_newline` 开头（`:213-219`）；
+② `[SKIPSTART]` / `[SKIPEND]` 只被 external scanner 在**行首**整行吞掉（`src/scanner.c:15,52-68,100-142`、`skip-marker.h`）；
+③ 注释行与指令行的规则按 `[^\r\n]*` 限定（`grammar.js:311,313`）。
 
-1. `_newline` 是**结构 token**（`erb-syntax-tree/src/grammar.js:207`），函数体必须以 `_newline` 开头（`:213-219`）；
-2. `[SKIPSTART]` / `[SKIPEND]` 只被 external scanner 在**行首**整行吞掉（`src/scanner.c:15,52-68,100-142`、
-   `skip-marker.h`）；
-3. 注释行与指令行的规则按 `[^\r\n]*` 限定（`grammar.js:311,313`）。
+实测 8 个语境 × 5 种取法 = **40 组**（语料不在位 ⇒ 6 份夹具 + 仓内真 ERB 2 份：`valid-structure.erb` 62 行、
+`eratw-adapter/src/scaffold` 里的 `日常指令.erb`），合格线 = ERROR / 坐标错位 / 越界 / 与"去缩进当纯 .erb 解析"基准的
+MISSING·类型计数·缩进面偏差**全为 0**：
 
-⇒ 注入区间的取法是「`native_body` 首行第 0 列 → 末行行尾」，不是「body 节点的字节起止」。
-v1.0 表里"前导空白被 extras 吃掉、行节点照常匹配"与"`[SKIPSTART]` 嵌套同样生效"两句都是**推断、未实测**，
-下面已标注。LAU-6a 的判据：一份真 `@原生` 语料（含 `[SKIPSTART]` 嵌套与深缩进两个用例）跑通四面并出读数；
-探针不过，LAU-6 不排批。
+| 取法 | 结果 | 现象 |
+|---|---|---|
+| ① body 节点原始字节区间 | **✗** | kojo2 的 `native_body` **恒不含末行换行** ⇒ 末行收束词（`ENDIF`）落 MISSING，三个语境各中一处 |
+| ② 同一区间、仅在末行换行后收口 | **✗** | 起点不在第 0 列，行首假设仍破 |
+| ③ 整行对齐（体首行第 0 列 → 末行行尾含换行） | **✗（差一口气）** | 唯一不过的是"body 直达 EOF 且文件无末行换行"那一枚用例 |
+| ④ **整行对齐 ＋ EOF 无换行时补虚拟换行** | **✓ 全绿** | 与基准逐项相等（ERROR 0 / MISSING 偏差 0 / 类型差 0 / 缩进面偏差 0） |
+| ⑤ 任意字节切（首行正文 +2 / 末行正文 −3） | **✗** | 结构塌陷：`skip_block` 解体、区内 `@` 行被当 `function_block`，类型计数差 **52** |
+
+⇒ **写死成规格**：注入区间 = `native_body` 体首行第 0 列 → 体末行行尾**含换行**；体直达文档尾且无末行换行时，
+按宿主 `parseStructureText` 的既有口径**补一枚虚拟换行**（④ 就是③ ＋ 这一步，缺它就不是全绿）。
+其余四条读数：坐标 **40 组全 0 错位、0 越界** ⇒ 子树坐标天然等于主文档绝对坐标、**不平移**（D14 的核心主张证真）；
+含代理对的语境 UTF-16=26 / UTF-8=54 仍 0 错位 ⇒ **`StructureRange` 用 UTF-16 码元口径**（与 Monaco 一致，不许按字节换算）；
+`[SKIPSTART]` 嵌套与深缩进（8/12 列）两个风险用例**证真**（体内照常成 `skip_block`；extras 吃空白后与基准相等）；
+着色/折叠/缩进/残缺**四面**都在注入子树上跑通（一枚语境 highlights 57 / folds 22 / indents 37）。
+另核掉一条悬案：**出货 `tree-sitter-erb.wasm` 与 `grammar.js` 是同步的**（现算 wasm/parser.c/grammar.json 同指
+`5b509736`；`5b509736..HEAD` 只有 `237c62c9` 动过 `grammar.js`，那 7 行**全为注释**；97 条可见规则 0 缺失于 wasm 类型表，
+三条行为探针各 ✓）⇒ 没有重生成欠账。工具本身退出会撞 V8 Zone OOM（固定 rc=3，判读以 stdout 为准），见 PITFALLS 209。
 
 **协议改动（additive，不改形状）**：
 
@@ -610,8 +634,8 @@ v1.0 表里"前导空白被 extras 吃掉、行节点照常匹配"与"`[SKIPSTAR
 | 额外 parse | 只解析 body 区间（通常几十行），比主树小一个量级 |
 | 合并 | 区间覆盖，O(tokens)；子树优先，主树 `role.raw` 兜底 |
 | 只影响编辑器面 | 着色 / 折叠 / 缩进 / 残缺。**编译产物仍按 spec §8.5（`:1045-1073`）的五条去缩进规则走，injection 不参与 codegen** |
-| 缩进 | `@原生` 体内的前导空白**预期**被 ERB 文法的 extras 吃掉、行节点照常匹配（⇒ 不需要先去缩进）——**推断，LAU-6a 待实测** |
-| `[SKIPSTART]` | ERB 文法内部已有 `skip_block`（external scanner 一次吞掉，`scanner.c:52-68,100-142`）；嵌套在 `@原生` 里是否同样生效**取决于行首对齐**，**LAU-6a 待实测** |
+| 缩进 | `@原生` 体内的前导空白**实测**被 ERB 文法的 extras 吃掉、行节点与"去缩进基准"逐项相等（深缩进 8/12 列两例皆 ✓，LAU-6a）⇒ **不需要先去缩进** |
+| `[SKIPSTART]` | ERB 文法内部已有 `skip_block`（external scanner 一次吞掉，`scanner.c:52-68,100-142`）；**实测**嵌套在 `@原生` 里同样生效（LAU-6a 用例 D/G），前提是区间整行对齐——按任意字节切会解体（用例⑤） |
 | 不做递归注入 | `@原生` 里不再出现 kojo——逃生舱里不该有逃生舱 |
 
 **验收**（LAU-6 的 DoD）：
@@ -630,7 +654,8 @@ v1.0 表里"前导空白被 extras 吃掉、行节点照常匹配"与"`[SKIPSTAR
 
 ## 5. 根因：适配的单元选成了「语言」
 
-四条实测事实（v1.1：出处逐条标注——第 1 条是 `ab1c5146` 的**修前**状态与**现存**三处同类点，
+四条实测事实（v1.1：出处逐条标注——第 1 条是 `ab1c5146` 的**修前**状态与当时**现存**的三处同类点
+（**该三处已由 LAU-1a `4c1487c4` 收掉，改口见其下**），
 第 2、3 条出自 `HANDOFF-erafl-adapter.md`，第 4 条是适配器盘点），
 一个都不是"还没做"，而是"做错了"或"只做了一半"：
 
@@ -641,19 +666,27 @@ v1.0 表里"前导空白被 extras 吃掉、行节点照常匹配"与"`[SKIPSTAR
    按**当前项目**的 v1 `adapterId` 从组合根登记簿现取，取不到 ⇒ `null`
    （`bootstrap.ts:45-58`，注释原话"不猜：宁可零候选，不借别游戏的事实"）；
    `plugins/kojo-lang/src/plugin.ts:73-77` 还会再按 `adapter.id === request.project.adapterId` 复核一次。
-   **但同一类 bug 还剩三处**，形态都是"动态 import 了、却没有项目门"——这才是 LAU-D1 的真实工作量：
+   ~~**但同一类 bug 还剩三处**~~ ⇒ ✅ **三处已由 LAU-1a `4c1487c4` 收掉**，形态统一成
+   "组合根按当前项目取 2.0 事实的端口，取不到给 `null`/`undefined`，绝不回落 eraTW"：
 
-   | 位置 | 今天的行为 | 后果 |
+   | 位置 | v1.1 记的行为 → **今天的实现** | 后果（已消） |
    |---|---|---|
-   | `ui/App.tsx:406` / `:421`（`loadKojo2MigrateEventNames` / `loadKojo2MigrateEventArgs`） | 无条件 `import('@kojo/plugin-eratw-adapter')` 取 `ERATW_EVENT_NAMES` / `projectEventArgs(ERATW_EVENT_CATALOG)` | 给 eraFL 工程做 v1→2.0 迁移时，事件面词白名单与参数形状用的是 **eraTW 的九事件目录** |
-   | `ui/App.tsx:237-249`（`loadKojo2StorageAdapter`） | 无条件取 `ERATW_GAME_ADAPTER.storageClasses` 与 `gameFingerprint.digest` | 存储注入的槽位与指纹与所开项目无关 |
-   | `ui/kojo2-project-scan-adapter.ts:48-51`（默认装载器 `loadEratwGameAdapter`） | 无条件 eraTW | 2.0 项目扫描对**所有盘**都用 eraTW 事实 |
+   | `ui/App.tsx:406` / `:421`（迁移向导） | 无条件 `import('@kojo/plugin-eratw-adapter')` 取 eraTW 九事件 ⇒ **改调 `kojo2MigrateEventNames(project)` / `kojo2MigrateEventArgs(project)`**（`App.tsx:2384-2385`，键＝当前项目的 `adapterId`） | 给 eraFL 工程做 v1→2.0 迁移时用的是 eraTW 词白名单与参数形状 |
+   | `ui/App.tsx:237-249`（存储注入） | 无条件 `ERATW_GAME_ADAPTER.storageClasses` 与 `gameFingerprint.digest` ⇒ **改调 `kojo2StorageFacts(project)`**（`App.tsx:250`） | 存储注入的槽位与指纹与所开项目无关 |
+   | `ui/kojo2-project-scan-adapter.ts:48-51`（默认装载器） | 无条件 `loadEratwGameAdapter` ⇒ **改走 `loadAdapter: () => kojo2AdapterForProject(kernel.project.current()) ?? undefined`**；另新增 additive 的 `kojo2ProjectFactory`，扫描器按项目重组而非按模块单例 | 2.0 项目扫描对**所有盘**都用 eraTW 事实 |
 
-   另有 `bootstrap.ts:250-263` 用 `'erafl'` **字面量**挑 `ERAFL_GAME_ADAPTER` / `createEraflEmitBackend`。
-   这条不是错事实（存在性卫语句、宁缺勿错，口径是对的），但它让"加一个 era 要改宿主"成立；
-   而 `adapter-manifest.ts:49-103` 每枚条目**已经带** `load()` 与 `auditWord`，把这段卫语句写成对 manifest
-   的循环即可泛化——游戏名从此只住在 manifest（那是 `tools/audit-decoupling.mjs:69,78-85` 的法定落点）。
-   错误的事实**不报错**，只给出"看起来对、其实属于另一个游戏"的提示——比"没做"危险，这句判断照旧成立。
+   ✅ `bootstrap.ts` 的 `'erafl'` **字面量**也已泛化：改成对 `adapter-manifest.ts` 的循环（条目自带
+   `load()` / `auditWord` + 导出存在性卫语句），"宁缺勿错"的语义逐字保留，游戏名从此只住在清单
+   （`tools/audit-decoupling.mjs:69,78-85` 的法定落点）。⚠ **这条从来不是错事实**（v1.1 的判断照旧成立：
+   它是"加一个 era 要改宿主"的形态问题，不是"给错事实不报错"的语义问题），别把它记成 bug 修复。
+   无 2.0 面的四家适配器在这三个端口上**拿到 `null`/`undefined`**（不借 eraTW），各有一条测试钉住。
+   错误的事实**不报错**、只给出"看起来对、其实属于另一个游戏"的提示——这句判断仍然对，只是
+   **今天已经没有这样的落点**；下一批要防的是 LAU-D2 接线时把它重新引进来。
+
+   （v1.1 原文如下，保留作对照：`ui/App.tsx:406` / `:421` 无条件 `import('@kojo/plugin-eratw-adapter')` 取
+   `ERATW_EVENT_NAMES` / `projectEventArgs(ERATW_EVENT_CATALOG)`；`ui/App.tsx:237-249` 无条件取
+   `ERATW_GAME_ADAPTER.storageClasses` 与 `gameFingerprint.digest`；
+   `ui/kojo2-project-scan-adapter.ts:48-51` 默认装载器 `loadEratwGameAdapter` 无条件 eraTW。）
 2. **eraFL 的口上主战场是 XML**（`<command com="300" name="会話" kojoPlace="TOP">`，出处
    `HANDOFF-erafl-adapter.md:51`），ERB 侧只剩一个注册壳。于是 2.0 的 `# 机` / `@织` / `# 表` / `# 池` / `选项`
    在作者真正写东西的地方**没有落点**；照抄 eraTW 那 16 件，作者打开口上 XML 会发现"什么也没变"。
@@ -672,7 +705,7 @@ v1.0 表里"前导空白被 extras 吃掉、行节点照常匹配"与"`[SKIPSTAR
    | 适配器 | v1 行数 | `src/kojo2/` | 2.0 状态 |
    |---|---|---|---|
    | eratw | 11,167 | 16 文件 / 2,666 行 | 全量（事件目录 / 领域符号 / 演出 / profile+resolve / 存储 / 程序特性 / 集合 / 表·池·选项·foreach 落点 / backend / capabilities），静态注册 `bootstrap.ts:61,138` |
-   | erafl | 2,858 | 9 文件 / 1,205 行 | 刻意最小（backend / capabilities / domain-symbols / event-catalog / presentation / profile / program / storage）；**无**集合·表·池·选项·foreach 落点，**无 conformance 夹具**（handoff `:275-281`） |
+   | erafl | 2,858 | 9 文件 / **1,211** 行（v1.1 取证时 1,205；`e196d384` 改 `kojo2/capabilities.ts` +6） | 刻意最小（backend / capabilities / domain-symbols / event-catalog / presentation / profile / program / storage）；**无**集合·表·池·选项·foreach 落点；~~无 conformance 夹具~~ **已由 LAU-FIXTURE `b9e87b2e` 补上**（38 例 / 128 断言 + 43 份夹具，见 §5.6 判据 2；handoff `:275-281` 那行已销） |
    | eraakumamaid | 4,160 | **无** | 仅 v1 |
    | erakoumakan | 1,611 | **无** | 仅 v1 |
    | erasqc | 1,432 | **无** | 仅 v1 |
@@ -721,8 +754,8 @@ profile、存储类、程序特性、编码策略、分层策略、能力、源�
 | `domainSymbols.unknown: 'error' \| 'raw'` | `adapter.ts:239` | `checkSymbol`（`:1325-1338`）读的正是它——**「错事实必须报错」的 fail-closed 旋钮**。丢了它，§5.4 第 2 行那条解法就没有执行点 |
 | `PronounSymbol{role,engineRef,requiresView,viewBound,family}` / `AttributeSymbol{family,index,valueKind,readonly}` / `NameFunctionSymbol{engine,args,returns}` / `DomainVariableSymbol{valueKind,arraySize,elementKind}` / `speakers: SpeakerSource` | `:146-160` / `:163-170` / `:209-214` / `:196-206` / `:221` | 代词落点、属性族、名字函数各有各的结构；塌成 `{name,kind,target}` 之后「`{她}` 落到哪」「这个族有没有索引位」都答不出来 |
 | `HeartPresentation` / `ColorPresentation` / `FacePresentation`（含 `calls: FaceCall[]`、`maxArgs`、`placeholder`）/ `OptionsPresentation` / `faceTemplates` / `hintNames` | `:284-293` / `:295-302` / `:304-323` / `:325-337` / `:348-357` / `:378` | v1.0 的 `DialectPresentation.target: string` **一格装不下**这四种结构（心形分对白/旁白 × wait/continue，颜绘带调用表与占位，选项带 status/button/input/result/maxPerScene） |
-| `StorageClasses{classes: StorageClassSpec[], slotStability}` | `:56,384-405` | 值集与 v1.0 提案相同（`scene/save/session`，见 `ast.ts:35`），但 `engine/init/persisted/slotPrefix/description` 与 `slotStability` 全丢——`App.tsx:237-249` 今天就在读 `classes[].period` |
-| `GameFingerprint{digest, entries: FingerprintEntry[]{kind,value}}` | `:84-99` | v1.0 塌成 `string` 之后，「换盘 / 换汉化检测」（v1.0 自己写的用途）失去依据；`App.tsx:246` 读的是 `.digest` |
+| `StorageClasses{classes: StorageClassSpec[], slotStability}` | `:56,384-405` | 值集与 v1.0 提案相同（`scene/save/session`，见 `ast.ts:35`），但 `engine/init/persisted/slotPrefix/description` 与 `slotStability` 全丢——`App.tsx` 的存储注入今天就在读它（LAU-1a 后走 `kojo2StorageFacts(project)`，`App.tsx:247-262`；宿主只保留 adapter 真声明过的存储期，没声明的**绝不替它补**） |
+| `GameFingerprint{digest, entries: FingerprintEntry[]{kind,value}}` | `:84-99` | v1.0 塌成 `string` 之后，「换盘 / 换汉化检测」（v1.0 自己写的用途）失去依据；`App.tsx` 的存储注入读的是 `.gameFingerprint`（LAU-1a 后经 `kojo2StorageFacts(project)` 交出，`App.tsx:260`） |
 | `encodingPolicy` / `layerPolicy` / `diagnosticNamespace` / `capability` / `sourceMap` / `conformanceSuite` / `foreachCollections` / `AdapterProfile.features` | `:68` / `:70` / `:72` / `:74` / `:76` / `:78` / `:66` / `:275` | 整块丢失。其中 `encodingPolicy`（eraFL 是 UTF-8 BOM）与 `layerPolicy` 正是 eraFL 能接进来的前提 |
 | `EventSpec` 的 `engine` / `priority` / `forced` / `weavable`、`EventCatalog.defaultEvent`、`EventArgumentSpec.required` | `:125,128,132,134` / `:140` / `:110-114` | v1.0 的 `DialectEvent` 只留了 `name/carrier/dispatch/params/guards`，把优先级模型与"必填实参"这类校验依据一起丢了 |
 
@@ -839,22 +872,29 @@ export interface EditorDocumentIdentity {
 > ① 可选；② **只断言不赋值**（不产生第二真源）；③ 与解析结果不一致是 **error**，不是 warning。
 > 其余一切方言差异**都不进语法**——这是"根源性"与"又分叉一次"的分界线。
 >
-> ⚠ **它的代价要说清（v1.1 补，与 D10 / R6 的措辞直接相关）**：`方言` 这个词位确实未被占用
+> ⚠ **它的代价要说清（v1.1 补，与 D10 / R6 的措辞直接相关；✅ 已由 LAU-SYNTAX `3a76d857` 照此兑现）**：
+> `方言` 这个词位确实未被占用
 > （core 侧 `kojo-core/src/tokens.ts:31 KOJO_DECL_WORDS = ['幕','视','机','变量','常量','表','池','模']`，
 > 未登记的 `#` 词今天会报 `core/decl/unknown`，`diagnostics.ts:32`），但它在 kojo2 侧是**编译进文法**的：
 > `kojo-syntax-tree/grammar.v2.js:218-229` 逐词生成 `decl(word)`，词被烧进 RegExp token（`:70`）⇒
 > 加它**必须重跑 `packages/kojo-syntax-tree/tools/build-v2.mjs` 重生成 `tree-sitter-kojo2.wasm`**
-> （今日 47,116 B）。第三个消费方是 Monarch 词表（`app/src/monaco/kojo2-lexicon.ts:37` →
+> （改前 47,116 B ⇒ **改后 48,057 B，棘轮随组长点头抬到该值**，＋941 B＝一条 `dialect_decl` 规则 + 词表；
+> 归因写在 `v2-wasm-size.test.ts` 注释与提交信息里，照的是该测试自己定的规矩）。
+> 第三个消费方是 Monarch 词表（`app/src/monaco/kojo2-lexicon.ts:37` →
 > `kojo2-language.ts:308 declWords`）；另注意 `kojo2-format.ts:55,77` 按**位置**解构这个数组
 > （`[, , , , , TABLE_WORD, POOL_WORD, TEMPLATE_WORD]` 与 `.slice(0,5)`）⇒ **只能追加在尾部**，
-> 插队会静默改格式化行为。spec §12.3（`:1837`）另有「不在六部语料没有证据时引入语法方言」这条边界——
-> `# 方言` 是**跨方言共用的断言记号**、不是某个方言的语法，需要在 spec 里把这句区分写明，否则会被这条挡住。
+> 插队会静默改格式化行为——落地按此办理（`方言`＝下标 8，`DIALECT_WORD = KOJO2_DECL_WORDS[8]`，
+> 前五格与 `slice(0,5)` 一字未动）。重跑还顺手抓出一处**产物陈旧**：`src/grammar.v2.json` 的词表顺序
+> 落后于 `grammar.v2.js`，`wasm` / `parser.v2.c` / `node-types.v2.json` 三件则逐字节可复现（`87b7e26c`）。
+> spec §12.3（`:1837`）另有「不在六部语料没有证据时引入语法方言」这条边界——
+> `# 方言` 是**跨方言共用的断言记号**、不是某个方言的语法，需要在 spec 里把这句区分写明，否则会被这条挡住
+> （**这句区分仍未写进 spec，属 LAU-D1b 的前置**）。
 
 ### 5.4 五个根因 → 五条语言层解法
 
 | # | 问题 | 根因 | 语言层解法 | 落点 |
 |---|---|---|---|---|
-| 1 | 宿主按 eraTW 取事实（**主入口已修**，剩三处无项目门的惰性装载） | 方言没被当成"工程属性"下传，装载点各自 `import` 了一枚具体适配器 | 方言由识别链解析（`detect()` → `project.adapterId`）、随每次请求下传（请求今天已带 `project`）；`dialect` 缺省即未绑定 | `dialect-resolver.ts`（薄壳，只做解析与对账）；改 `App.tsx:406,421,237-249` 与 `kojo2-project-scan-adapter.ts:48-51` 三处按当前项目取；`bootstrap.ts:250-263` 的 `'erafl'` 字面量泛化成对 `adapter-manifest.ts` 的循环 |
+| 1 | 宿主按 eraTW 取事实（**主入口 `ab1c5146` 已修；三处惰性装载 + `'erafl'` 字面量也已由 LAU-1a `4c1487c4` 收掉**） | 方言没被当成"工程属性"下传，装载点各自 `import` 了一枚具体适配器 | 方言由识别链解析（`detect()` → `project.adapterId`）、随每次请求下传（请求今天已带 `project`）；`dialect` 缺省即未绑定 | ✅ `App.tsx:237-249,406,421` 与 `kojo2-project-scan-adapter.ts:48-51` 改按当前项目取（端口：`kojo2StorageFacts` / `kojo2MigrateEventNames` / `kojo2MigrateEventArgs` / `kojo2AdapterForProject`）；`bootstrap.ts` 的 `'erafl'` 字面量泛化成对 `adapter-manifest.ts` 的循环。**未做**：`dialect-resolver.ts` 已存在（D1a `875b05d3`）但**还没有消费方**——解析链上屏＝LAU-D1b |
 | 2 | 错事实不报错 | 供方拿不到"该用哪套事实"，也无从自证 | 每个事实类响应带 `dialect` + `factsVersion`；宿主对账，不一致即诊断。**并把 `domainSymbols.unknown='error'` 当默认**（`adapter.ts:239`，`checkSymbol` `:1325-1338` 已实现）——这枚 fail-closed 旋钮是"错事实必报错"的执行点，v1.0 的投影把它丢了 | `core/dialect/response-mismatch`（诊断码需先扩闭集，见 §5.5） |
 | 3 | eraFL 主战场是 XML，2.0 无落点 | 叙事面被绑死在"ERB 内联" | `carriers` 声明 + XML 载体的**等价面**：`command` / `name` / `kojoPlace` 由方言的事件目录校验 | `GameAdapter.carriers?`（additive）；`kojo-xml` descriptor 接 `dialect`；XML 面今天的事实源是 `plugin-api/src/kojo-xml.ts` + `WellKnownServices.KojoXml`，接线要对齐它 |
 | 4 | 事件架构因 era 而异 | 事件目录是 adapter 内部实现，不是语言面 | `eventCatalog` 进语言面：`# 机` / `@织` 的名字由方言校验，未知即 error；同名多定义是否合法由**分层**决定 | `EventCatalog`（`adapter.ts:137-141`，已有）+ `EventDispatchModel` additive 扩 `'metadata'`（`:104`）；**不要**动 `LayerMode` / `LayerTarget`（`:436-437`，spec §10.5 明令三者不混） |
@@ -887,6 +927,11 @@ export interface EditorDocumentIdentity {
 `core/carrier/unowned`、`core/dialect/unbound`、`core/dialect/mismatch`、`core/dialect/response-mismatch`）
 并同步 `isCoreCode` 与严重度表；第 7 枚 `core/injection/child-failed` 归 LAU-6。
 「只增不改」意味着一旦加进去就不能改名，所以这一批要先过 D0 的契约裁决（§4 抬头）。
+✅ **这六枚已随 LAU-D1a `875b05d3` 加进闭集**（`diagnostics.ts:246-307`，逐枚在声明处写清生产者与
+同义既有码的分工，`core/event/unknown` 与自检码 `event/unknown` **并存、语义不同**；
+`isCoreCode` 与严重度表同步：`core/dialect/unbound` 与 `core/carrier/unowned` 进 `CORE_WARNING_CODES`
+（`:312-325`，降级面不阻断但必须可见），其余四枚（方言冲突 / 响应错配 / 未知事件 / 事件落点错）刻意留在 error 档）。**这是本批唯一抢在 D0 之前的落点选择**，
+理由与代价见 §8.1 的偏差 1；改名窗口已关闭，后续批只能在这六枚的语义上写检查。
 
 **呈现纪律**：按 `(诊断码, 方言)` **聚合**成一条 + 可展开明细，不是把 400 条同类波浪线糊满屏幕。
 这条纪律与 `fallback.ts` 的去重键同一思路（数字归一），只是粒度按方言事实。
@@ -900,16 +945,24 @@ export interface EditorDocumentIdentity {
    **不用裸 grep**，且必须继承 `tools/audit-decoupling.mjs` 的三条既有豁免口径：
    ① 行尾 `// audit-allow: <理由>` 豁免（`:133`）；② **注释行豁免**（`:37-47`）；
    ③ 组合根 / 适配器清单豁免（`:69,78-85`，本仓即 `adapter-manifest.ts` 与 `bootstrap.ts` 的装载点）。
-   不豁免就永远红——**今日基线**：`packages/app/src` 里 `eratw|erafl|TALENT|CFLAG` 命中 **62 行**，
-   其中 `eratw` 16 行 / 10 文件，而 `TALENT`/`CFLAG` 的命中几乎全在注释与补全说明里
-   （如 `erb-completion-bits.ts:25`、`erb-completion-families.ts:6-14`）。
-   另一条真正的漏点顺手一起收：`monaco/erb-language.ts:159` 的 Monarch 正则**硬写了整串 era 变量族**
+   不豁免就永远红——**闸已落地（LAU-GATE `6ca3c4c3`+`7540b9ed`），基线现值＝M1 游戏名·引擎词汇 7 行 /
+   M2 语言 id 分支 134 行 / M3 旧 token 名 163 行**（钉在 `tools/audit-language-baseline.json`，只降不升）。
+   v1.1 草稿那句"裸 grep 命中 62 行（`eratw` 16 行 / 10 文件）"是**计数口径不同**：棘轮只数**代码行**，
+   注释与 `audit-allow` 行不进账（`TALENT`/`CFLAG` 的命中几乎全在注释与补全说明里，如
+   `erb-completion-bits.ts:25`、`erb-completion-families.ts:6-14`）。
+   LAU-1a `4c1487c4` 已把 M1 打到 7 行——剩下的都在组合根装载点与 `erb-*` 语言面里。
+   另一条真正的漏点没收（仍留给 LAU-D2）：`monaco/erb-language.ts:159` 的 Monarch 正则**硬写了整串 era 变量族**
    （`CFLAG|CDFLAG|…|MASTER|…|JUEL|CUP|…`），`plugins/erb-parser/src/undefined-name.ts:148-240`
-   还有一份同族白名单——这两处是"引擎词汇住在语言面"的实证，LAU-D2 要把它们外提到方言数据
+   还有一份同族白名单——这两处是"引擎词汇住在语言面"的实证，要把它们外提到方言数据
    （`domainSymbols` / `variableSchema`），审计才谈得上零命中。
 2. **方言 A 的 facts 喂给方言 B 的夹具 ⇒ 必须给出诊断，不许静默通过**（这是"错事实不报错"那类 bug 的
-   回归测试）。**N 起步只能是 2**：有 2.0 面的只有 eraTW（全量）与 eraFL（最小面，无 conformance 夹具，
-   见 §5.1 事实 4 与 handoff `:275-281`）⇒ 矩阵第一批要先给 eraFL 补夹具，否则第二列没有可比对象。
+   回归测试）。**N 起步只能是 2**：有 2.0 面的只有 eraTW（全量）与 eraFL（最小面）——
+   ✅ **eraFL 那列的夹具已由 LAU-FIXTURE `b9e87b2e` 补上**（`packages/plugins/erafl-adapter/tests/kojo2-conformance.test.ts`
+   38 例 / 128 断言 + 43 份夹具，事实源取 eraFL 自己声明的 `eventCatalog` / `domainSymbols` / `storageClasses`，
+   不是抄 eraTW；handoff `:275-281` 记的"缺夹具"已销）。⚠ 交付口径按本节要求＝
+   **"eraFL 真支持的子集全绿 + 明确红名单"，不是全绿**；四枚真盘用例走环境变量 `KOJO_ERAFL_DIR`，
+   未设时跳过（仓库不写死本机游戏目录）。第二列有了可比对象 ⇒ 矩阵可以排批，`tests/dialect-matrix.test.ts`
+   本身仍属 LAU-D2。
 3. **未绑定 ⇒ 事实类服务全空 + 一条 `core/dialect/unbound`**，且**不得**回落到任何默认方言。
 4. **v1 十二个可选槽不退化（v1.1 新增）**：eraakumamaid / erakoumakan / erasqc / eratohok 四家**没有 2.0 面**，
    它们的补全 / 悬停 / 规约 / 条件矩阵 / 糖今天全靠 v1 槽（`plugin-api/src/game.ts:782-831`）经
@@ -931,7 +984,7 @@ export interface EditorDocumentIdentity {
 
 | 项 | 取值 |
 |---|---|
-| 语言 id | `kojo-legacy`。⚠ v1 今天的 id 是 **`kojo-sugar`**（`monaco/kojo-language.ts:35 KOJO_LANGUAGE_ID`），改 id 与改扩展名是**两笔独立代价**：所有按 id 注册 provider / 分支 / 存设置项的地方都要跟着走（§9-1 基线里那 257 行命中大部分就是这类 id 引用）。若只为封存，**保留 `kojo-sugar` 这个 id、只加 `availability:'legacy'`** 是更便宜的一条路，LAU-3 开工前二选一定案 |
+| 语言 id | `kojo-legacy`。⚠ v1 今天的 id 是 **`kojo-sugar`**（`monaco/kojo-language.ts:35 KOJO_LANGUAGE_ID`），改 id 与改扩展名是**两笔独立代价**：所有按 id 注册 provider / 分支 / 存设置项的地方都要跟着走（§9-1 的闸基线＝M2「语言 id 分支」134 行，里面大部分就是这类 id 引用）。若只为封存，**保留 `kojo-sugar` 这个 id、只加 `availability:'legacy'`** 是更便宜的一条路，LAU-3 开工前二选一定案 |
 | 扩展名 | `.kojo1`（见 §6.1；今天 `.kojo` 的单一真源是 `plugin-api/src/sugar.ts:1214 KOJO_SOURCE_EXTENSION`，2.0 是 `kojo-lang/src/constants.ts:23`） |
 | `availability` | `legacy` |
 | `settingKey` | `ui.legacy-kojo-syntax`，**默认 false** |
@@ -1057,29 +1110,66 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 
 ## 8. 批次与 DoD
 
-**排期纪律（v1.1）**：三枚前置批（LAU-0 / LAU-1a / LAU-2a / LAU-6a）不依赖任何未决裁决，可立即开工；
-**LAU-1 与 LAU-D1 必须等 §4 抬头的两个前置**（K2-CONTRACT / D0 的契约落点裁决）；
+**排期纪律（v1.1）**：三枚前置批（LAU-0 / LAU-1a / LAU-2a / LAU-6a）不依赖任何未决裁决——**已按此开工并落 dev**（逐枚落点见本表与 §8.1）；
+**LAU-1 与 LAU-D1b 必须等 §4 抬头的两个前置**（K2-CONTRACT / D0 的契约落点裁决）——
+**D1a 契约片按 §8.1 偏差 1 的理由先行**（additive、零消费方、不落进待裁决的那两个文件）；
 **LAU-3 / LAU-4 必须与 ERB-PARITY（lead 在办）和 SDK B4 / B5 串行**，不得并行改
 `tree-sitter/providers.ts` / `language-registry.ts` / `languages.ts`（AGENTS §六 冲突热点纪律）。
 每批的验收口径照 §三：测试数不回退 + 双 typecheck + `audit:decoupling` ✅；纯文档批豁免测试面。
 
 | 批 | 内容 | DoD（可执行） | 回滚点 |
 |---|---|---|---|
-| **LAU-0** 事实修订<br>（= v1.1 本批，纯文档） | §1 / §4 / §5 的读数、出处、节点名逐条改正并带 `file:line`；§9 判据改成 audit 同形态；§8 增前置批 | 本文档每条事实主张都有 `file:line`；无实现改动（`git diff --stat packages` 为空） | 文档批，`git revert` 即可 |
-| **LAU-1a** 宿主去 eraTW 化<br>（**独立，今天可做**） | ① `App.tsx:406,421`（迁移向导事件目录 / 参数形状）、`App.tsx:237-249`（存储注入的 `storageClasses` + 指纹）、`kojo2-project-scan-adapter.ts:48-51`（默认装载器）三处改成**按当前项目取**，取不到给 `null`／`undefined`（沿用 `kojo2AdapterForProject` 的"宁缺勿错"语义）；② `bootstrap.ts:250-263` 的 `'erafl'` 字面量分支泛化成对 `adapter-manifest.ts` 的循环（用条目自带的 `load()` + 导出存在性卫语句）；③ 新增 `tools/audit-language.mjs`（继承 `audit-decoupling` 的三条豁免口径） | `pnpm audit:language` ✅：`packages/app/src` 里游戏名只出现在 `adapter-manifest.ts` 与带 `audit-allow` 的组合根装载点；eraFL 工程下迁移向导 / 存储注入 / 项目扫描拿到的是 eraFL 事实或 `null`，**绝不出现 eraTW 事实**（各一条测试）；六适配器注册行为不变（`plugin.statusChanged` 与既有注册测试全绿）；全量测试数不回退 + 双 typecheck | 每处一个 commit，逐个可回；三处都是"动态 import 换目标"，不动契约 |
-| **LAU-2a** 色彩可行性探针<br>（**独立，纯脚本**） | 一枚离线脚本：给定 `SEMANTIC_ROLES` 的档数与 6 套主题的底色，求"两两 ΔE ≥ 12 且对底色 ≥ 4.5"是否可解，并给出可行档数上限与一组候选色 | 出一份读数：18 档可解 / 不可解（不可解则给最大可解档数）；**LAU-2 的档数按这份读数控**，不靠会上拍 | 纯脚本，不进产品码 |
+| **LAU-0** 事实修订<br>（= v1.1 本批，纯文档）**✅ `ebf8e03c`** | §1 / §4 / §5 的读数、出处、节点名逐条改正并带 `file:line`；§9 判据改成 audit 同形态；§8 增前置批 | 本文档每条事实主张都有 `file:line`；无实现改动（`git diff --stat packages` 为空） | 文档批，`git revert` 即可 |
+| **LAU-1a** 宿主去 eraTW 化<br>（**✅ `4c1487c4`**） | ① `App.tsx:406,421`（迁移向导事件目录 / 参数形状）、`App.tsx:237-249`（存储注入的 `storageClasses` + 指纹）、`kojo2-project-scan-adapter.ts:48-51`（默认装载器）三处改成**按当前项目取**，取不到给 `null`／`undefined`（沿用 `kojo2AdapterForProject` 的"宁缺勿错"语义）；② `bootstrap.ts:250-263` 的 `'erafl'` 字面量分支泛化成对 `adapter-manifest.ts` 的循环（用条目自带的 `load()` + 导出存在性卫语句）；③ 新增 `tools/audit-language.mjs`（继承 `audit-decoupling` 的三条豁免口径） | `pnpm audit:language` ✅：`packages/app/src` 里游戏名只出现在 `adapter-manifest.ts` 与带 `audit-allow` 的组合根装载点；eraFL 工程下迁移向导 / 存储注入 / 项目扫描拿到的是 eraFL 事实或 `null`，**绝不出现 eraTW 事实**（各一条测试）；六适配器注册行为不变（`plugin.statusChanged` 与既有注册测试全绿）；全量测试数不回退 + 双 typecheck | 每处一个 commit，逐个可回；三处都是"动态 import 换目标"，不动契约 |
+| **LAU-2a** 色彩可行性探针<br>（**✅ `f006547c`，读数见下**） | 一枚离线脚本：给定 `SEMANTIC_ROLES` 的档数与 6 套主题的底色，求"两两 ΔE ≥ 12 且对底色 ≥ 4.5"是否可解，并给出可行档数上限与一组候选色 | 出一份读数：18 档可解 / 不可解（不可解则给最大可解档数）；**LAU-2 的档数按这份读数控**，不靠会上拍。**实测（N=18／ΔE≥12／对比≥4.5／RGB 步长 8 网格 35,937 候选，度量逐字复用 `kojo2-theme.test.ts:71-113`，全程无随机）＝6 套主题（实为 3 个不同底色）全部 18 档可解**；每底色最大可解档数 `#1e2227` 316 / `#f6f8fa` 233 / `#0f1713` 354（下界，DFS 预算内未穷尽），全局上限取最严格底色 ≥233 档 ⇒ **18 档远未触顶，不构成开工障碍**。参照系＝现役 12 唯一色：min 两两 ΔE 13.8/14.7（闸 12 ⇒ 余量 1.8/2.7），min 对比度 4.58/4.62/5.21（闸 4.5 ⇒ **暗底余量只剩 0.08**）。⚠ 「数学可解」≠「可用」：探针输的三组 18 档见证色组未经可读性/语义评审，**LAU-2 定稿色卡仍需人工评审**，本读数只否掉"档数不够"这一条 | 纯脚本，不进产品码 |
 | **LAU-1** 协议 v3<br>（**等 D0 落点裁决**） | `structure-protocol.ts`（落点随 D0）；`StructureClient` 按 v3 重写成薄壳；`erb-ts.worker` / `kojo-ts.worker` / `worker-bootstrap` / `engine` 跟着改；**保留差集**（`parse` 走 `text` \| `edit` 二选一）；两档预算 + **连续 3 次失败判死**的账本（D8）；kojo2 侧补 `open` 握手与协议常量 | 协议表测试（形状 / `reason` 闭集 / 版本不符即拒 / `text` 与 `edit` 同给即 `invalid-input`）全绿；**新旧 worker 双跑一批**（`protocol-mismatch` 能降级到旧路，不整档哑火）；ERB 首帧 `open→ready` 与 `ready→首屏着色` 两个数写进 `BASELINES.md`；`tree-sitter-*` 五个测试文件全过；**差集路不退化**：6,003 行档每键的 worker 侧文本量与改前同量级（一条读数） | 单批一个 commit；`types.ts` 旧类型保留为别名 + 双跑窗口内可随时切回 |
 | **LAU-2** 角色表 | `semantic-roles.ts` + 别名表（**覆盖三侧全部 45 个现役 token 名**）；三份捕获表翻到角色；三套主题规则改 `token: role.*`；Monarch 的 token 名换一遍 | `pnpm audit:language` 的角色项 ✅（旧 token 名只出现在别名表一处，判定排除注释与 `audit-allow`）；主题对账测试全绿（每档有且只有一条规则 / ΔE / 对比度，指标沿用 `kojo2-theme.test.ts`）；**档数按 LAU-2a 的读数定** | 别名表在，旧名仍能取色 |
 | **LAU-3** 描述符 v2 + 封存层<br>（**与 ERB-PARITY 串行**） | `availability` / `settingKey` / `presentSyntax`+`clearSyntax`；`services` 那格按 §4.3 的 ① 走 additive（`slotServices` 原位保留）；新增 `kojo-legacy` descriptor 与设置项；删 `tree-sitter/providers.ts:378,385` 两处 `if (ERB)`；**门开关不重认领已打开的 model** | 封存层默认关：`.kojo1` → `plaintext`；开启后四面齐全；关设置项时在编文件语言 id 不变、新开的落 `plaintext`（一条测试）；`providers.ts` 里零 `ERB_LANGUAGE_ID`；`language-parity` 取证表同批更新且全绿 | 设置项默认 false，等价于没有这一层 |
 | **LAU-3b** 扩展名交接工具<br>（**独立批，§6.1 代价 4**） | 一键 `.kojo` → `.kojo1` 改名工具：逐目录走 `writablePaths` 批准、写前备份、改名清单先过目、只改名不改内容；同批扩 `kojo-extension-single-source` 闸把 `corpus.ts:66` 与各测试字面量纳进来 | 工具在只读域上**拒绝**未批准的写入（一条测试）；改名前后 `KOJO_SOURCE_EXTENSION` 单一真源闸全绿；`kojo2-cutover.ts:361-390` 的判据翻面已改写并有测试 | 不改名即无影响（封存层默认关） |
 | **LAU-4** ERB 进槽<br>（**依赖 SDK B4/B5，与 ERB-PARITY 合流**） | ERB 的 11 枚 provider 搬成插件供方（依赖 B0–B5 的槽位契约） | ERB 与 kojo2 走同一条 `ui.editor.languageService`；宿主 `monaco/` 下不再有 ERB 判据（§9-1 的终态判据在此批才成立） | 插件可卸载，回落到 `legacyBridge` |
 | **LAU-5** 单 worker 池（可选） | 一个 structure worker 池共用 `Parser.init`，语言懒 `Language.load` | 冷启动省一次 runtime 初始化 + 少两条线程；内存峰值不升。⚠ v1.0 写的"实测 15.7ms"**在本仓无出处**（`STATE.md` / `BASELINES.md` 零命中）⇒ 这批要先自己出读数，别引一个查不到的数 | 池关掉即回到"每语言一条线程" |
-| **LAU-6a** 注入探针<br>（**独立，LAU-6 的前置**） | 一份真 `@原生` 语料（含 `[SKIPSTART]` 嵌套与深缩进两用例），用**整行对齐**的 `includedRanges` 向 ERB runtime 发子 parse，读四面 | 四面各有读数；两个用例各有结论（过 / 不过 + 现象）。**不过 ⇒ LAU-6 退回设计** | 纯探针，不进产品码 |
-| **LAU-6** `@原生` 注入 | descriptor 加 `injections`（`hostNode: 'native_body'`）；协议加 `includedRanges`（已在 §4.1）；宿主按声明转发子 parse；子树 tokens 区间覆盖主树 `role.raw`；`core/injection/child-failed` 进 core 闭集 | §4.6 五条 DoD 全绿；无 `@原生` 的文件零 wasm 请求；子树失败不拖垮主树 | `injections` 置空即回到"整块不透明" |
-| **LAU-D1** 方言解析链<br>（**等 D0 落点裁决**；可与 LAU-1/2 并行） | **不新造 `dialect.ts`**（D13）：`GameAdapter` additive 加 `carriers?`；`EditorDocumentIdentity.dialect?`；`dialect-resolver`（识别链 → binding，`workspace.json` 的 `meta` 只做覆盖）；状态栏显示方言。**注意 LAU-1a 已经把三处错事实点收掉了，这批不再包含它们** | 打开 eraFL 工程，状态栏显示 `erafl`；未绑定时事实类服务返回空 + 一条 `core/dialect/unbound`，**不出现任何 eraTW 事实**；覆盖与 `detect()` 不一致 ⇒ `core/dialect/mismatch`（error）且以覆盖为准；`pnpm audit:language` ✅ | `carriers` 与 `dialect?` 都是可选格，删掉即回滚（adapter 本来就从插件取） |
-| **LAU-D2** 事实面接线 + `dialect lint` | **只动 2.0 语言面**（v1 十二个可选槽一行不改，见 §5.2 尾注）：补全 / 悬停 / 签名 / 符号 / 跳转 / 诊断改吃当前项目的 `GameAdapter`；`# 机` / `@织` 的事件名按 `eventCatalog` 校验；`dialect lint` 七项；**先给 core 闭集加 6 枚码**（§5.5）；把 `erb-language.ts:159` 与 `erb-parser/src/undefined-name.ts:148-240` 的引擎变量族外提到方言数据 | 方言矩阵（eraTW + eraFL，**eraFL 需先补 conformance 夹具**）同一组断言全绿；把 eraTW 的事实喂给 eraFL 夹具 ⇒ **必红**；**四个只有 v1 面的适配器读数列不变**（§5.6 判据 4） | 每类事实一个 commit，逐个可回 |
+| **LAU-6a** 注入探针<br>（**已交付，dev `45d18791`**） | 一份 `@原生` 语境 ×8（含 `[SKIPSTART]` 嵌套与深缩进两用例）× 五种区间取法，用 `includedRanges` 向 ERB runtime 发子 parse，读四面 | ✅ 判决 **可排**，但区间必须「整行对齐 ＋ 末行换行收口 ＋ EOF 无换行补虚拟换行」（④ 唯一全绿，③差那一口气）；坐标 40 组 0 错位 ⇒ Range 用 UTF-16 码元；顺带证清 erb wasm 与 grammar.js 同步、无重生成欠账 | 纯探针，不进产品码（`tools/inject-probe.mjs`） |
+| **LAU-6** `@原生` 注入 | descriptor 加 `injections`（`hostNode: 'native_body'`）；协议加 `includedRanges`（已在 §4.1）；宿主按声明转发子 parse；子树 tokens 区间覆盖主树 `role.raw`；`core/injection/child-failed` 进 core 闭集 | §4.6 五条 DoD 全绿（区间口径按 LAU-6a 写死：整行对齐 ＋ 末行换行 ＋ EOF 补虚拟换行）；无 `@原生` 的文件零 wasm 请求；子树失败不拖垮主树；`tools/inject-probe.mjs` 的 ④ 口径转为回归用例 | `injections` 置空即回到"整块不透明" |
+| **LAU-D1** 方言解析链<br>（**契约片 ✅ `875b05d3`＝LAU-D1a；上屏片 D1b 等 D0 落点裁决**；可与 LAU-1/2 并行） | **不新造 `dialect.ts`**（D13）：`GameAdapter` additive 加 `carriers?`；`EditorDocumentIdentity.dialect?`；`dialect-resolver`（识别链 → binding，`workspace.json` 的 `meta` 只做覆盖）；状态栏显示方言。**注意 LAU-1a 已经把三处错事实点收掉了，这批不再包含它们** | 打开 eraFL 工程，状态栏显示 `erafl`；未绑定时事实类服务返回空 + 一条 `core/dialect/unbound`，**不出现任何 eraTW 事实**；覆盖与 `detect()` 不一致 ⇒ `core/dialect/mismatch`（error）且以覆盖为准；`pnpm audit:language` ✅ | `carriers` 与 `dialect?` 都是可选格，删掉即回滚（adapter 本来就从插件取） |
+| **LAU-D2** 事实面接线 + `dialect lint` | **只动 2.0 语言面**（v1 十二个可选槽一行不改，见 §5.2 尾注）：补全 / 悬停 / 签名 / 符号 / 跳转 / 诊断改吃当前项目的 `GameAdapter`；`# 机` / `@织` 的事件名按 `eventCatalog` 校验；`dialect lint` 七项；~~先给 core 闭集加 6 枚码~~（**已由 LAU-D1a `875b05d3` 加好**，§5.5 尾注，本批直接从"发码"起步）；把 `erb-language.ts:159` 与 `erb-parser/src/undefined-name.ts:148-240` 的引擎变量族外提到方言数据 | 方言矩阵（eraTW + eraFL，**夹具已就位 `b9e87b2e`**，见 §5.6 判据 2）同一组断言全绿；把 eraTW 的事实喂给 eraFL 夹具 ⇒ **必红**；**四个只有 v1 面的适配器读数列不变**（§5.6 判据 4） | 每类事实一个 commit，逐个可回 |
 | **LAU-D3** 多载体（eraFL 的 XML 面） | `carriers` 归属；`kojo-xml` descriptor 接方言：`command` / `name` / `kojoPlace` 由 `eventCatalog` 校验（对齐既有 `plugin-api/src/kojo-xml.ts` + `WellKnownServices.KojoXml`）；ERB 壳函数得到"这条事件在 xml"的提示 | 打开 eraFL 口上 XML：`command` 有补全、未登记 `command` 报 `core/event/unknown`；`event/wrong-carrier` 能把"eraFL 的 `会話` 写在 ERB 里"判出来；ERB 壳函数不再被当成"没实现的口上" | 载体绑定是数据，删掉即回到"XML 只是数据格式面" |
 | **LAU-D4** 方言包 + 翻译表<br>（**与 SDK B5 合并派工**） | eraTW / eraFL 两枚方言数据（**纯数据**，即 spec §10.1 十五格的取值）；日文原名走 aliases；`conformance` 夹具。⚠ `HANDOFF-kojo2-sdk-packages.md:226` 已把「eraFL 写自己的 2.0 profile」分给 B5——**同一件事不要派两次**，两批合并 | 新增第三个 era 只加一个包：宿主零改动、语法零改动，矩阵自动跑第三列 | 包可卸载 |
+
+**七路批的落点与偏差（2026-10-25，组长 krosama；逐枚回执在各自提交信息里）**
+
+三枚批是派工时从本表里**拆出来先做**的，不在 v1.1 的编号里：
+
+- **LAU-GATE** `6ca3c4c3`+`7540b9ed`＝§9 的判据可执行化（本表 LAU-1a 的 ③ 独立成批）。
+  `tools/audit-language.mjs` + `audit:language`，M1 游戏名·引擎词汇 **7** 行 / M2 语言 id 分支 **134** 行 /
+  M3 旧 token 名 **163** 行——
+  **注意这与本表 LAU-1a DoD 里"游戏名只出现在 manifest"不矛盾**：终态是零命中，但棘轮只认真能红，
+  基线钉当日实测、只降不升。三族各注入一条违规的变异实测在 `tools/tests/audit-language.test.ts`。
+- **LAU-SYNTAX** `3a76d857`+`87b7e26c`＝`# 方言` 词位（§5.3 的"断言"那一路）。
+  **`KOJO_DECL_WORDS` 尾部追加**（位置是公开契约：`kojo2-format.ts` 按 `slice` 取段，插中间就翻面）；
+  v2 文法 + 四件产物重生成，**wasm 棘轮由 47,116 抬到 48,057 B**（＋941 B，涨幅＝一条 `dialect_decl`
+  规则 + 词表，归因写在 `v2-wasm-size.test.ts`）。⚠ §5.3 预估的"这一条要重跑 `build-v2.mjs` 并动棘轮"
+  已兑现，但**体积代价只有 +2%**——真正的成本在"产物四件套必须同源"（`grammar.v2.json` 本轮就发现过
+  顺序陈旧，重跑 `build-v2.mjs` 才对齐），不在字节数。**消费方未接线**（词位只被三面认出）。
+- **LAU-FIXTURE** `e196d384`+`b9e87b2e`+`743e5558`＝§5.6 判据要求的方言矩阵第二列（本表挂在 LAU-D2 的
+  括号里）。eraFL 的 2.0 面 38 例 / 128 断言 + 43 份夹具，事实源取 eraFL 自己声明的数据。
+  **真盘根走环境变量 `KOJO_ERAFL_DIR`**，未设时 4 枚真盘用例跳过——仓库里不写死本机游戏目录（AGENTS §五）。
+
+两处与本表文字不符的**实现侧改口**（实现是对的，按 §五 文档纪律算一行）：
+
+1. **LAU-D1a 落到了 `kojo-core`，没等 D0**。裁决是"契约片可以先行"：**additive 且零消费方**的
+   `CarrierBinding` / `carriers?` / `EditorDocumentIdentity.dialect?` 不落进任何要 D0 裁决的既有文件，
+   就抢不了裁——`plugin-api` 那侧只加了一格可选 `dialect?`，`structure-protocol.ts` / `semantic-roles.ts`
+   **一件未动**。⚠ 但有一处确实**先于裁决选了边**：六枚诊断码进了 `kojo-core/src/diagnostics.ts`
+   （§5.5 说的"要先过 D0"就是针对这一步）。选它的理由是 **core 族码表（`CoreDiagnosticCode` +
+   `CORE_WARNING_CODES` + `isCoreCode`）今天只住在 `kojo-core/src/diagnostics.ts`**——`plugin-api` 侧只有
+   糖层自己的 `SugarDiagnosticCode` / `DiagnosticCodeKey`（`plugin-api/src/diagnostic-copy.ts`），
+   没有 core 码的家可搬；而 core 码是**闭集、只增不改**的公共名词表，加一半再搬比不加更难收拾。
+   代价是**改名窗口从此关闭**——若 D0 最终判
+   "语言级事实不落 `kojo-core`"，这六枚要跟着契约一起搬。D1b（解析链上屏 + 状态栏）仍等 D0。
+2. **LAU-1a 的三处错事实点收成了"按当前项目取"的端口**，另外多修一处：
+   `ps10-boot-order.test.ts` 里那枚逐字钉 App 侧 bootstrap 进口的测试会随任何合法新增进口变红，
+   改成对**进口形状**取证（只留一枚 `../bootstrap` 进口、名单含 `bootstrapKernel`/`prefetchProjectPlugins`、
+   不含 `ensureProjectPlugins`）。判据没搬家，只是不再钉拼写。
 
 ## 9. 验收线
 
@@ -1090,8 +1180,9 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 > 这样"红"是相对基线收敛，而不是一句永远达不到的口号。
 
 1. **零语言知识（终态，LAU-4 之后才成立）**：`packages/app/src/monaco/` 里按具体语言 id 分支的代码
-   只允许出现在 descriptor 自身与别名表。**今日基线：257 行命中、散布 30+ 文件**
-   （除 `providers.ts:378,385` 外还有 §3-R1 列的九处），所以这条**不得当 LAU-1/2/3 的 DoD**。
+   只允许出现在 descriptor 自身与别名表。**闸已落地（LAU-GATE `6ca3c4c3`），基线＝M2「语言 id 分支」
+   代码行命中 134 行 / 38 文件**（v1.1 草稿写的 257 行是**裸 grep 计数**，含注释与 `audit-allow` 行，
+   棘轮口径不数——差在口径不在代码），所以这条**不得当 LAU-1/2/3 的 DoD**。
 2. **一门假语言**（`tests/fixtures/language-probe/`）：只靠公开契约接入（descriptor + runtime + 一份小 wasm），四面（着色 / 折叠 / 缩进 / 残缺）全绿，宿主零改动。**这是 SDK 与 LAU 的共同验收**。
 3. **首帧读数**：ERB 冷启动 `open→ready` 与 `ready→首屏着色` 各一个数，写进 `BASELINES.md`。
    ⚠ 顺手把 §1 代价 2 那句"ERB 首帧慢的根因是超时策略"证真或证伪——v1.0 未取证。
@@ -1099,13 +1190,20 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 5. **协议闸**：形状不符 / 版本不符 / 迟到回复 / 换轨串号 / `text` 与 `edit` 同给，五类各一条测试。
 6. **封存层边界**：默认关闭时不产生任何 wasm 请求（网络面板断言），开启后不参与 `language-parity` 矩阵。
 7. **方言零硬编码**：`packages/app/src` 里游戏名与引擎变量族只出现在法定落点。
-   **今日基线：`eratw\|erafl\|TALENT\|CFLAG` 命中 62 行**（`eratw` 16 行 / 10 文件，其余多为注释）；
-   LAU-1a 之后应收敛到 `adapter-manifest.ts` + 带 `audit-allow` 的组合根行，LAU-D2 之后
+   **基线（LAU-GATE，`tools/audit-language-baseline.json` 现值）＝M1「游戏名·引擎词汇」代码行命中
+   **7 行**（`bootstrap.ts` 2 行＝组合根装载点 + 清单循环，`monaco/erb-*` 4 行，`WelcomeView.tsx` 1 行），
+   另有 **M3「旧 token 名」163 行**（三侧现役 Monarch/主题 token 字面量，LAU-2 的别名表就是冲它去的）；
+   v1.1 草稿的"62 行"同样是裸 grep 口径（`eratw` 16 行 / 10 文件，其余多为注释）。
+   LAU-1a 之后 M1 已收敛到 `adapter-manifest.ts` + 带 `audit-allow` 的组合根行；LAU-D2 之后
    `erb-language.ts:159` 与 `erb-parser/src/undefined-name.ts:148-240` 那两份引擎变量族清单外提，才算真零。
 8. **错配必红**：方言 A 的事实喂给方言 B 的夹具，必须给出诊断，不许静默通过——这是"错事实不报错"那类 bug 的回归测试。
 9. **未绑定不猜**：`dialect` 缺省时事实类服务全空 + 一条 `core/dialect/unbound`，且不得回落到任何默认方言。
 10. **加 era 只加数据**：新增第三个方言包时，`git diff --stat packages/app` 应为空。
-    ⚠ 这条今天**不成立**：`bootstrap.ts:250-263` 用 `'erafl'` 字面量挑包 ⇒ LAU-1a 的 manifest 泛化是它的前置。
+    ⚠ v1.1 写的"这条今天不成立（`bootstrap.ts:250-263` 用 `'erafl'` 字面量挑包）"**已由 LAU-1a `4c1487c4` 解掉**：
+    那段泛化成了对 `adapter-manifest.ts` 的循环（条目自带 `load()` / `auditWord` / 导出存在性卫语句），
+    `packages/app/src` 里除清单与 `audit-allow` 组合根行之外零游戏名。剩下一格没解：
+    **2.0 事实面**现在按当前项目取（取不到给 `null`），但**方言级数据**（`carriers` 的取值、事件目录
+    的 eraFL 内容）仍写在各自适配器包里——那正是 LAU-D4「方言包」要做的事，做完这条才是真判据。
 11. **v1 面不退化（v1.1 新增）**：eraakumamaid / erakoumakan / erasqc / eratohok 四家没有 2.0 面，
     LAU-D2 前后它们在 v1 十二个可选槽上的读数（补全候选数 / 悬停命中 / 规约条数 / 条件矩阵格数）**逐格相等**。
     这条是"兼容更多 era"不被架构统一反噬的唯一硬保证。
@@ -1115,7 +1213,8 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 - 不改 2.0 语法（`?` 链、`# 表`、程序层一个字不动）；表达式条件只做诊断（选项 ①）。
   **唯一例外**是 `# 方言` 一枚词位（§5.3）——它是一次性、跨方言共用的**断言记号**，
   代价是必须重生成 `tree-sitter-kojo2.wasm` 且只能追加在 `KOJO_DECL_WORDS` 尾部（`kojo2-format.ts` 按位置解构）。
-- **`@原生` 体内要做注入**（§4.6 / LAU-6）：从"整块不透明"改为按 descriptor 声明注入 ERB（先过 LAU-6a 探针）。
+- **`@原生` 体内要做注入**（§4.6 / LAU-6）：从"整块不透明"改为按 descriptor 声明注入 ERB
+  （**LAU-6a 探针已过 `45d18791`**：判决可排，区间口径按 §4.6 写死）。
 - 不把叙事层从 tree-sitter 上摘下来（极端解 ③ 已搁置）。
 - 不合并 `EDITOR_SEMANTIC_TOKEN_TYPES`。
 - **不新增第三套游戏事实契约（D13，v1.1 新增）**：不写 `DialectFacts` / `DialectEvent` / `DialectSymbol` /
@@ -1169,3 +1268,19 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | 19 | B | §6.1 方案 A 只写"一键改名工具" | 补四笔代价：50 处引用 / 18 文件、cutover 判据**翻面**、常量外字面量、工具不存在且要写**只读域**（须走 `writablePaths` 批准） | `sugar.ts:1214`、`kojo2-cutover.ts:162,361-390`、`corpus.ts:66`、`migrate/*` |
 | 20 | B | §6 语言 id 直接改 `kojo-legacy` | 指出改 id 与改扩展名是两笔代价，给出"保留 `kojo-sugar` + `availability:'legacy'`"的更便宜选项，LAU-3 前定案 | `kojo-language.ts:35` |
 | 21 | B | §5.6 矩阵三条判据 | 增第 4 条「**v1 面不退化**」：四个只有 v1 面的适配器读数逐格相等（§9-11 同源） | §5.1 事实 4 的适配器盘点表 |
+
+## 附录 B · v1.1 → 七路交付批的文档改口（逐条带取证）
+
+> 本节只记**文档与实测不符**处——按 AGENTS §五 的口径"实现与文档冲突且实现是对的，改一行算一行"。
+> v1.1 的 21 条修订是**纸上取证**，下面 8 条是**跑出来的**；两类都算数，但只有后者能钉住。
+
+| # | 落点 | v1.1 写的 | 交付批实测 | 取证 |
+|---|---|---|---|---|
+| 1 | §1 表 / §2 D14 / §5.3 | kojo2 出货 wasm **47,116 B** | **48,057 B**（`# 方言` 一条 `dialect_decl` 规则 + 词表＝＋941 B，约 +2%）；棘轮随组长点头同抬 | `packages/kojo-syntax-tree/tree-sitter-kojo2.wasm`、`tests/v2-wasm-size.test.ts`、`3a76d857`+`87b7e26c` |
+| 2 | §9-1 / §9-7 / §5.6-1 / §6 表 | 今日基线"裸 grep **257** 行 / **62** 行" | 棘轮口径只数**代码行**（注释与 `audit-allow` 不进账）⇒ **M1 7 / M2 134 / M3 163**。差在口径不在代码，两处都已在原文标注 | `tools/audit-language-baseline.json`、`tools/audit-language.mjs` |
+| 3 | §5.1 事实 4 / §5.6-2 / §8 LAU-D2 | eraFL「**无** conformance 夹具」⇒ 矩阵第二列没有可比对象 | 已补：**38 例 / 128 断言 / 43 份夹具**，事实源取 eraFL 自己的声明；erafl `src/kojo2/` 由 1,205 → **1,211** 行（`e196d384` 改 `capabilities.ts` 一致性套件声明） | `packages/plugins/erafl-adapter/tests/kojo2-conformance.test.ts`、`b9e87b2e` |
+| 4 | §5.5 尾 / §8 LAU-D2 | 6 枚 core 码「一旦加进去就不能改名 ⇒ **要先过 D0**」 | **已先于 D0 加进闭集**（本批唯一一次选边）。理由：core 码表只住在 `kojo-core`，`plugin-api` 侧只有糖层自己的码表；代价与回滚难度见 §8.1 偏差 1 | `kojo-core/src/diagnostics.ts:246-325`、`875b05d3` |
+| 5 | §9-10 | 「加 era 只加数据」今天**不成立**（`bootstrap.ts` 用 `'erafl'` 字面量挑包） | 字面量分支已泛化成对 `adapter-manifest.ts` 的循环 ⇒ 该缺口**换了位置**：2.0 事实按项目取已通，方言级**数据**仍在各适配器包内，真判据要等 LAU-D4 | `packages/app/src/bootstrap.ts`、`adapter-manifest.ts`、`4c1487c4` |
+| 6 | §4.2 硬约束 2 | 18 档 × ΔE≥12 × 对比≥4.5 能否解"**未验**" | 6 套主题（3 个底色）**全可解**，最大可解档数下界 233/316/354 ⇒ 档数不是限制项。⚠ 现役 12 色的对比度余量只有 **0.08–0.12**；"可解"≠"可用"，色卡仍需人工评审；"跨底色同档同色"这一更强约束**未验** | `tools/color-feasibility.mjs`、`f006547c` |
+| 7 | §4.6 | ERB 对行边界的三条硬依赖是**推断、未实测** | 8 语境 × 5 取法 **40 组**实测：只有「整行对齐＋末行换行＋EOF 补虚拟换行」全绿，按字节切的四路全解体；坐标口径＝UTF-16 码元；`[SKIPSTART]` 嵌套与深缩进**证真**；erb wasm 与 `grammar.js` **同步**（`237c62c9` 那 7 行全是注释，无重生成欠账） | `tools/inject-probe.mjs`、§4.6 判决表、`45d18791` |
+| 8 | §8 批次表 | 只有 LAU-0…D4 编号 | 派工时另拆出三枚不在编号里的批：**GATE / SYNTAX / FIXTURE**；两处实现侧改口（D1a 落点、PS-10 次序钉改形状取证）见 §8.1 | §8.1 全段 |
