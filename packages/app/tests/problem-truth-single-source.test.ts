@@ -259,12 +259,16 @@ describe('文件树徽标 · SSR 实际画出来', () => {
     // （文件行那一枚由 `file-tree-row` 那一路接上，2026-10-20 那条线加的）。
     // 判据不变：三枚全读同一次派生的同一个值 —— 谁也不许自己再数一遍。
     expect(badges).toHaveLength(3);
-    for (const b of badges) {
-      // L10 图标批：`✕ n`/`⚠ n` 字符换成状态族 SVG（error/warning）+ 数字，读数按 data-prob 格取
+    // 目录两层挂数字（读数按 data-prob 格取）；文件行只画灯（视觉批十六），精确数进 aria
+    for (const b of badges.filter((x) => x.closest('.tree-file') === null)) {
       expect(b.querySelector('svg.icon')).not.toBeNull();
       expect(b.querySelector('[data-prob="error"]')?.textContent).toBe(' 1');
       expect(b.querySelector('[data-prob="warning"]')?.textContent).toBe(' 1');
     }
+    const rowBadge = container.querySelector('.tree-file .tree-prob-mark');
+    expect(rowBadge?.querySelector('[data-prob="error"]')?.textContent).toBe('');
+    expect(rowBadge?.getAttribute('aria-label')).toContain('错误 1');
+    expect(rowBadge?.getAttribute('aria-label')).toContain('警告 1');
     // 活订阅：诊断换了（这里是清掉），徽标当场退场——不重挂树也得跟着真相走
     await act(async () => {
       clearAllProblems();
