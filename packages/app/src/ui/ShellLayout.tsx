@@ -2371,7 +2371,7 @@ export function ShellLayout(props: Props): ReactElement {
   const toolbar = (
     <header className="toolbar" data-context-surface="toolbar">
       <div className="toolbar-left">
-        {/* 项目位显示**目录名**而不是适配器 id（视觉批十六）：`eratw` 是机器名，
+        {/* 项目位显示**目录名**而不是适配器 id（视觉批十六）：适配器 id 是机器名，
             作者认不出自己打开的是哪一份；完整路径仍进悬停。取不出目录名才退回 adapterId。 */}
         {commandCtx.project ? (
           <span className="tb-project" title={commandCtx.project.rootDir}>

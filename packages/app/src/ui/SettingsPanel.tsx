@@ -1611,11 +1611,15 @@ function EditorDisplayRows(): ReactElement {
           </span>
         </span>
       </label>
-      <div
-        className="settings-row static"
-        data-settings-key="editor.fontFamily"
-        style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
-      >
+      {/* `stacked`：控件块（档位列表 + 预览 + 输入框）自己就是整行内容，没有右轴控件列。
+          不许退回两列栅格——标签 span 固定占 1/1，控件 div 无格位会被自动塞进第 2 列。 */}
+      <div className="settings-row static stacked" data-settings-key="editor.fontFamily">
+        <span>
+          编程字体
+          <span className="settings-hint">
+            编辑器与比对窗的字面；连字恒关、全角恒占两列（数据编辑器口径，档位只换字形不换规矩）
+          </span>
+        </span>
         <FontPresetControl
           presets={CODE_FONT_PRESETS}
           customId={CUSTOM_CODE_FONT_PRESET_ID}
@@ -1637,12 +1641,6 @@ function EditorDisplayRows(): ReactElement {
           placeholder="选「自定义」时填一个字体名（如 Consolas）"
           note="档位来自 font-presets.ts 的表（每张栈都保证末位等宽兜底）；自定义文本非空时说了算（旧口径原样）；末尾自动补等宽兜底，本机没装的字体自动落到栈后面的面。只改显示、不动文件"
         />
-        <span>
-          编程字体
-          <span className="settings-hint">
-            编辑器与比对窗的字面；连字恒关、全角恒占两列（数据编辑器口径，档位只换字形不换规矩）
-          </span>
-        </span>
       </div>
       {modifiedCount > 0 ? (
         <div className="settings-row static">
@@ -1787,11 +1785,13 @@ function UiFontRow(): ReactElement {
     setDraft(pref.uiFontFamily);
   }, [pref.uiFontFamily]);
   return (
-    <div
-      className="settings-row static"
-      data-settings-key="appearance.uiFontFamily"
-      style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
-    >
+    <div className="settings-row static stacked" data-settings-key="appearance.uiFontFamily">
+      <span>
+        界面字体
+        <span className="settings-hint">
+          与编辑器正文字号（「正文字号」那格）两条轴：这里管字形，那里管大小
+        </span>
+      </span>
       <FontPresetControl
         presets={UI_FONT_PRESETS}
         customId={CUSTOM_UI_FONT_PRESET_ID}
@@ -1819,12 +1819,6 @@ function UiFontRow(): ReactElement {
         placeholder="选「自定义」时填界面字体名（如 Microsoft YaHei）"
         note="外壳文字（标签页 / 侧栏 / 设置页）用哪张面；「等宽」档跟随上面的编程字体。选系统（现状）就是本来的样子。只改显示、不动文件"
       />
-      <span>
-        界面字体
-        <span className="settings-hint">
-          与编辑器正文字号（「正文字号」那格）两条轴：这里管**字形**，那里管**大小**
-        </span>
-      </span>
     </div>
   );
 }

@@ -4063,6 +4063,16 @@ button.erb-mode-hint.unlocked:hover {
 .settings-row.static:hover {
   background: none;
 }
+/* 通栏堆叠行（编程字体 / 界面字体）：控件块自己就是整行内容（档位 radio + 预览 + 输入框），
+   没有"右轴控件列"这回事。**必须离开两列栅格**：标签 span 被上面那条钉死在 1/1 格，
+   控件 div 没有显式格位 ⇒ 自动排进第 2 列（auto 列吃 max-content），文字列被压到 0 宽，
+   于是标签一字一行竖排（用户反馈截图）。 */
+.settings-row.stacked {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
 /* 字号 / 透明度步进器（A1）：sunken 井 + 边框，内含「− 读数 ＋」三格；读数定宽防跳动。
    flex-direction 这条是**修 bug**：`.settings-row > span` 的 column 方向特异性更高，
    一直把它压成竖排（0,1,1 > 0,1,0）。顶边高光让它从井里"抬"起来一点。 */
