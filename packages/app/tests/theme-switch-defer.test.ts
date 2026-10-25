@@ -120,7 +120,7 @@ describe('applyMonacoTheme：同帧合并', () => {
 });
 
 describe('applyMonacoTheme：多消费方共用一条队列', () => {
-  it('主编辑器 + overlay 同帧各调一次（同一枚 monaco 面）只落一次 setTheme', async () => {
+  it('同一枚 monaco 面上同帧多次调用只落一次 setTheme（主路径；浮层尚未接入）', async () => {
     vi.useFakeTimers();
     const { applyMonacoTheme: apply } = await freshModule();
     const { sink, calls } = fakeSink();

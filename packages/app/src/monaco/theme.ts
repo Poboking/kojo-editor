@@ -78,7 +78,7 @@ export interface MonacoThemeSink {
 let pending: MonacoThemeId | null = null;
 let armed = false;
 
-/** 消费方唯一入口（主编辑器与 overlay 共用一条队列 ⇒ 一次换主题只落一次 `setTheme`） */
+/** 主路径唯一排队点（浮层仍各自直调）：同帧只落一次 `setTheme` */
 export function applyMonacoTheme(sink: MonacoThemeSink, pref: MonacoThemePref): void {
   pending = monacoThemeIdFor(pref);
   if (armed) return; // 已排过一帧：只覆盖目标档，不再排第二次
