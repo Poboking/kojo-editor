@@ -17,6 +17,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   ProblemPanel,
   PROBLEM_WINDOW_INITIAL,
+  moreButtonText,
   planVisibleEntries,
 } from '../src/ui/ProblemPanel';
 import { type ProblemGroup } from '../src/ui/problem-filter';
@@ -98,6 +99,24 @@ describe('planVisibleEntries：组头与行同队吃预算', () => {
     const plan = planVisibleEntries(groups, new Set(), 1_000);
     expect(plan.shownEntries).toBe(plan.totalEntries);
     expect(plan.shownRows).toBe(10);
+  });
+});
+
+describe('哨兵两态：补齐中 ≠ 真到底（诚实性，不是性能）', () => {
+  it('补齐中说"正在补齐…还剩 N 条待上屏"，不说"继续显示"', () => {
+    const text = moreButtonText({ filling: true, hiddenRows: 941, hiddenEntries: 941, total: 1_000 });
+    expect(text).toContain('正在补齐');
+    expect(text).not.toContain('继续显示');
+  });
+
+  it('补齐完收敛到终态：说人话的行数 + 总数', () => {
+    const text = moreButtonText({ filling: false, hiddenRows: 941, hiddenEntries: 941, total: 1_000 });
+    expect(text).toBe('继续显示后面的问题（还有 941 条，共 1000 条）');
+  });
+
+  it('只差组头（全部折叠加只画了一部分组头）⇒ 改说"分组"，不谎报 0 条', () => {
+    const text = moreButtonText({ filling: false, hiddenRows: 0, hiddenEntries: 12, total: 240 });
+    expect(text).toBe('继续显示后面的文件分组（还有 12 组）');
   });
 });
 

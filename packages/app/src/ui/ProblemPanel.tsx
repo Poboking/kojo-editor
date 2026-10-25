@@ -193,6 +193,11 @@ const ALL_SOURCES_VALUE = '\u0000all';
  *
  * 首帧 60 条是按实测定的：底栏 `.container-body` 可视高约 170px、每行 22px ⇒ 一屏 7–8 行，
  * 60 条（约 8 屏）足够"扫一眼 + 往下滚两下"而不至于拉一下就到底；再大就把首帧又喂回长任务。
+ *
+ * **调这个数前先算代价**（1025 批裁决：保留 60，但不许后人拍脑袋抬）：`initial` 是**条目数**
+ * （组头也占额），代价近似**每 10 条 ≈ 80 节点**（10 行 = 80；若这 10 条全是组头则 ≈ 260）。
+ * 底栏被用户拉高（可视 400px+）时确实会显得"一屏就没了"，但那属于"把底栏拉多大"的偏好，
+ * 不是首帧预算该背的账——抬高它会把打开面板那一条长任务又养回来。
  */
 const PROBLEM_WINDOW: RenderWindow = { initial: 60, step: 120 };
 /** 首帧最多画多少条**条目**（旧导出名沿用：测试与面板按它钉首帧上界） */
@@ -251,6 +256,29 @@ export function planVisibleEntries(
     out.push({ group: g, rows });
   }
   return { totalEntries, shownEntries: used, shownRows, groups: out };
+}
+
+/**
+ * 哨兵那枚按钮的**文案**（纯函数）：分片补齐中与"真的到底等下一次点击"必须是两种话说。
+ *
+ * 为什么这不是性能问题而是诚实性问题（1025 批裁决第 3 条）：分片把"一次提交建 120 条"
+ * 摊成三帧，于是从点下到补齐有几十毫秒里，列表**看起来**已经到底而实际还在长。若这期间
+ * 仍写「继续显示后面的问题（还有 N 条）」，读到的是"你点了没反应、还是那一句"，作者会
+ * 以为按钮坏了；写成补齐中文案 + `aria-busy`，再自动收敛到终态（补齐后
+ * `windowEnd === windowTarget` ⇒ `filling` 自落），才既说真话又不骗手。
+ */
+export function moreButtonText(state: {
+  readonly filling: boolean;
+  readonly hiddenRows: number;
+  readonly hiddenEntries: number;
+  readonly total: number;
+}): string {
+  if (state.filling) return `正在补齐后面的问题…（还剩 ${state.hiddenEntries} 条待上屏）`;
+  // 说人话用行数（作者数的是问题）；只差组头时（全部组都折叠着）改说"分组"
+  if (state.hiddenRows > 0) {
+    return `继续显示后面的问题（还有 ${state.hiddenRows} 条，共 ${state.total} 条）`;
+  }
+  return `继续显示后面的文件分组（还有 ${state.hiddenEntries} 组）`;
 }
 
 function useProblems(): readonly EditorProblem[] {
@@ -430,6 +458,11 @@ export function ProblemPanel({
   const hiddenEntries = plan.totalEntries - plan.shownEntries;
   /** 还差多少**行**（哨兵说人话用行数；只差组头时那句话改说"分组"） */
   const hiddenRows = filtered.length - plan.shownRows;
+  /**
+   * 分片补齐中（已提交 < 目标）：哨兵换一套文案，补齐后自动收敛（判据见 `moreButtonText`）。
+   * 过滤尺一换两个数一起回落，这里自然为 false。
+   */
+  const filling = windowEnd < windowTarget;
   /** 组头数字走同一份派生（键 = 原始路径，与 `groupProblems` 的组键逐字同形） */
   const filteredSummary = summarizeProblems(filtered);
   const filtering = isFiltering(activeFilter);
@@ -841,16 +874,21 @@ export function ProblemPanel({
       {hiddenEntries > 0 ? (
         // 哨兵在末尾：Tab 得到它、Enter 按得动；点一次把**目标**抬 step 条，分片泵
         // 一帧补 `ENTRY_CHUNK` ——— 连点几下也只是把目标抬高，不会有一次性大提交。
+        // `filling`（已提交 < 目标）期间换一套文案 + `aria-busy`：补齐中别让作者以为"点了没反应"。
         <button
           type="button"
           className="ghost small conv-more prob-more"
+          aria-busy={filling}
           onClick={() =>
             setWindowTarget((cur) => nextWindow(cur, plan.totalEntries, PROBLEM_WINDOW))
           }
         >
-          {hiddenRows > 0
-            ? `继续显示后面的问题（还有 ${hiddenRows} 条，共 ${filtered.length} 条）`
-            : `继续显示后面的文件分组（还有 ${hiddenEntries} 组）`}
+          {moreButtonText({
+            filling,
+            hiddenRows,
+            hiddenEntries,
+            total: filtered.length,
+          })}
         </button>
       ) : null}
     </div>
