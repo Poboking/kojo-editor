@@ -12,8 +12,6 @@ import {
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, FileStat, FileWatchStatus, GameProject, RecentProject } from '@kojo/plugin-api';
 import {errorText,  join, pathKey } from '@kojo/plugin-api';
-// K2-MIGRATE-SHAPE：adapter 事件目录 → 迁移期参数形状投影（core 公共入口，宿主只做投影）。
-import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
 import { removeRecentOptimistic } from './WelcomeView';
 // 版本号单一真源 = app 包清单（启动品牌锁与欢迎页同一条路）
 import { version as APP_VERSION } from '../../package.json';
@@ -33,7 +31,17 @@ import {
 } from './recent-files';
 import { clearRecoveredContents, setRecoveredContents } from './recovery-store';
 import { resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
-import { bootstrapKernel, prefetchProjectPlugins } from '../bootstrap';
+// LAU-1a（2026-10-25）：2.0 事实的**按项目取**端口全部收在组合根（bootstrap）——
+// 本文件不再直接动态 import 任何适配器包；无项目 / 该项目没有 2.0 面 ⇒ null/undefined，
+// 各消费腿沿用各自既有 fail-soft 形态（迁移只判面词不猜参数、存储本轮不写账本并说人话）。
+import {
+  bootstrapKernel,
+  kojo2AdapterForProject,
+  kojo2MigrateEventArgs,
+  kojo2MigrateEventNames,
+  kojo2StorageFacts,
+  prefetchProjectPlugins,
+} from '../bootstrap';
 import { perf } from '../perf';
 import { revealTargetOf, type RevealSpan, type RevealTarget } from '../monaco/reveal-position';
 import { degradationNoticeText, onStructureDegradation } from '../monaco/tree-sitter/fallback';
@@ -135,9 +143,10 @@ import type { EditorPaneActions } from './EditorPane';
 import { openModelAcrossGroups } from './editor-pane-registry';
 // 整项目诊断扫描的装配与调度（判据一份，全住在那模块里；这里只递宿主事实）
 import { mountProjectScan } from './project-scan-schedule';
-// K2-PROJECT-WIRE：2.0 项目级分析的装配面（惰性 adapter，动态 import 不进开机图；
-// flag 关时工厂内部零动作，调用点无分支）。
-import { installKojo2ProjectScan } from './kojo2-project-scan-adapter';
+// K2-PROJECT-WIRE：2.0 项目级分析的装配面（adapter 事实按当前项目现取，LAU-1a；
+// flag 关时工厂内部零动作，调用点无分支）。装配面**每项目重造**——分析侧按 getter
+// 函数实例缓存事实，换项目换实例才不会把上一个项目的事实带到下一个。
+import { createLazyKojo2ProjectOptions } from './kojo2-project-scan-adapter';
 // K2-STORAGE-SERVICE：项目打开后唯一的槽位账本装配点（React 无关的服务；这里只负责
 // 项目开/关两拍与把 adapter 事实惰性递进去）。
 //
@@ -221,45 +230,44 @@ const LazyUnsavedFilesConfirmDialog = lazy(() =>
 );
 
 /**
- * 槽位账本的 adapter 事实（K2-STORAGE-SERVICE）。
+ * 槽位账本的 adapter 事实（K2-STORAGE-SERVICE · LAU-1a 改按项目取）。
  *
- * `import()` 留在动态边上：adapter 插件包不进开机静态图（与
- * `ui/kojo2-project-scan-adapter.ts` 同一条 PS-10 纪律）。装载失败**不静默**：
- * 交一句人话给宿主，本轮不建服务（零写），项目其余功能照常。
+ * 事实来源是组合根的 2.0 登记簿（`kojo2StorageFacts(project)`，键 = 当前项目的
+ * `adapterId`）：**不再无条件动态 import 某一枚具体适配器**（旧实现即 §5.1 漏点表
+ * 第二行——开别的工程拿的是那一枚常驻适配器的事实）。取不到（无项目 / 该项目没有
+ * 2.0 面）⇒ `null` 并交一句人话给宿主（本轮不建服务、零写，项目其余功能照常）；
+ * **绝不借别游戏的事实**。
  *
- * `storageClasses`：A3.6 的落点名/初始化语义在 `ERATW_GAME_ADAPTER.storageClasses`，
- * 但那份契约目前只有引擎落点（`SAVEDATA`/`TCVAR`/`LOCAL`）与槽前缀，**没有槽位编号
- * 区段**；宿主先用 `KOJO2_STORAGE_DEFAULT_CLASSES` 的现口径（0..4095）顶数值，
- * 但**只保留 adapter 真声明过的存储期**——adapter 没声明的存储期绝不替它补，
- * 声明用了就会在 core 的规划闸报 `core/storage/unknown-class`。adapter 补出数值
- * 区段后只改这一行映射。
+ * `storageClasses`：契约目前只有引擎落点与槽前缀，**没有槽位编号区段**；宿主先用
+ * `KOJO2_STORAGE_DEFAULT_CLASSES` 的现口径（0..4095）顶数值，但**只保留 adapter 真
+ * 声明过的存储期**——adapter 没声明的存储期绝不替它补，声明用了就会在 core 的规划闸
+ * 报 `core/storage/unknown-class`。adapter 补出数值区段后只改这一行映射。
  */
 async function loadKojo2StorageAdapter(
+  project: GameProject | null,
   onUnavailable: (reason: string) => void,
 ): Promise<Kojo2StorageServiceAdapter | null> {
-  try {
-    const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 宿主组合根的惰性 adapter 装载点；与 ui/kojo2-project-scan-adapter.ts 同一豁免口径（动态 import 不进开机静态图）
-    const declared = new Set(
-      mod.ERATW_GAME_ADAPTER.storageClasses.classes.map((spec) => spec.period),
+  const facts = kojo2StorageFacts(project);
+  if (facts === null) {
+    onUnavailable(
+      project === null
+        ? '当前未开项目，没有 2.0 存储期事实（不猜、不借）'
+        : `项目适配器 '${project.adapterId ?? '未知'}' 没有 2.0 存储面（不借别游戏的事实）`,
     );
-    return {
-      gameFingerprint: mod.ERATW_GAME_ADAPTER.gameFingerprint.digest,
-      storageClasses: KOJO2_STORAGE_DEFAULT_CLASSES.filter((spec) =>
-        declared.has(spec.storage),
-      ),
-      /**
-       * 仓库还没有「编辑器声明账本键」（注册表头注说的跨构建稳定键）⇒ 先用
-       * `(文件, 名字)` 近似：**搬行不搬槽**（位置键会随插入一行就把整段槽位判成
-       * 删除+新增，回收闸会被日常编辑频繁触发）。`pathKey` 归一化盘符大小写/分隔符，
-       * 同一文件从两种写法进来仍认成同一声明。改名按新声明处理（旧槽 retire），
-       * 若新声明回收了旧槽，服务会零写阻断、等作者显式放行——那是真该问人的时候。
-       */
-      declarationKey: (input) => `${pathKey(input.uri)}\u0000${input.name}`,
-    };
-  } catch (error) {
-    onUnavailable(errorText(error));
     return null;
   }
+  return {
+    gameFingerprint: facts.gameFingerprint,
+    storageClasses: KOJO2_STORAGE_DEFAULT_CLASSES.filter((spec) => facts.declaredPeriods.has(spec.storage)),
+    /**
+     * 仓库还没有「编辑器声明账本键」（注册表头注说的跨构建稳定键）⇒ 先用
+     * `(文件, 名字)` 近似：**搬行不搬槽**（位置键会随插入一行就把整段槽位判成
+     * 删除+新增，回收闸会被日常编辑频繁触发）。`pathKey` 归一化盘符大小写/分隔符，
+     * 同一文件从两种写法进来仍认成同一声明。改名按新声明处理（旧槽 retire），
+     * 若新声明回收了旧槽，服务会零写阻断、等作者显式放行——那是真该问人的时候。
+     */
+    declarationKey: (input) => `${pathKey(input.uri)}\u0000${input.name}`,
+  };
 }
 
 /**
@@ -394,35 +402,14 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * K2-EVENT-FACEWORD 的宿主接线：迁移向导的事件目录（adapter `eventCatalog` 的名字投影）。
- *
- * 动态 `import()`：插件包不进开机静态图（与 `kojo2-project-scan-adapter` / storage loader
- * 同一条 PS-10 纪律）；装载失败返回 `undefined` ⇒ 迁移器退回 v1 形状判定（不猜目录、
- * 不阻断预演），事件面词白名单只是"更早、更准"的那一层。
+ * K2-EVENT-FACEWORD / K2-MIGRATE-SHAPE 的宿主接线（LAU-1a 改按项目取）：
+ * 迁移向导的事件目录名字投影与参数形状投影都走组合根
+ * `bootstrap.ts::kojo2MigrateEventNames / kojo2MigrateEventArgs`（键 = 当前项目的
+ * `adapterId`）。取不到 ⇒ `undefined`：迁移器只判面词、不猜参数形状（既有 fail-soft
+ * 形态）——**绝不拿别游戏的事件目录冒充**（旧实现无条件取那一枚常驻适配器的事实，
+ * 属 §5.1 漏点表第一行）。向导只在项目态渲染，`project` 随渲染闭包现值传入；
+ * 无项目态本就开不了向导。
  */
-async function loadKojo2MigrateEventNames(): Promise<readonly string[] | undefined> {
-  try {
-    const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 宿主组合根的惰性 adapter 装载点（动态 import 不进开机静态图，口径同 kojo2-project-scan-adapter）
-    return mod.ERATW_EVENT_NAMES;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * K2-MIGRATE-SHAPE 的宿主接线：事件**参数形状**投影（`projectEventArgs(eventCatalog)`）。
- *
- * 与上面同一条动态 import 纪律；投影本身是 core 的纯函数，宿主不解释事件目录。
- * 失败/缺席 ⇒ `undefined`：迁移器只判面词、不猜参数形状（旧行为固定）。
- */
-async function loadKojo2MigrateEventArgs(): Promise<MigrateEventArgs | undefined> {
-  try {
-    const mod = await import('@kojo/plugin-eratw-adapter'); // audit-allow: 同上（动态 import，不进开机静态图）
-    return projectEventArgs(mod.ERATW_EVENT_CATALOG);
-  } catch {
-    return undefined;
-  }
-}
 
 export function App(): ReactElement {
   const [kernel, setKernel] = useState<Kernel | null>(null);
@@ -842,9 +829,14 @@ export function App(): ReactElement {
       kernel,
       extraRoots: () => extraRootsRef.current,
       onNotice: (message) => notify({ kind: 'info', message }),
-      // 2.0 项目级分析（K2-PROJECT-WIRE）：flag 关时这个对象不存在、扫描器连 `.kojo2`
-      // 判据都不调；adapter 由工厂动态 import，失败降级为「无 adapter 的织面回退」。
-      ...installKojo2ProjectScan(),
+      // 2.0 项目级分析（K2-PROJECT-WIRE · LAU-1a）：flag 关时工厂内部零动作，扫描器连
+      // `.kojo2` 判据都不调；adapter 事实经组合根登记簿**按当前项目现取**（取不到 ⇒
+      // `undefined` = 本轮拿不到，织面退回"无 adapter"的可见降级，绝不借别游戏的事实）。
+      // 工厂形态 = 每装配一个项目新建一份 getter：分析侧按 getter 实例缓存，换项目自然重解析。
+      kojo2ProjectFactory: () =>
+        createLazyKojo2ProjectOptions({
+          loadAdapter: async () => kojo2AdapterForProject(kernel.project.current()) ?? undefined,
+        }),
     });
     return () => handle.dispose();
   }, [kernel, notify]);
@@ -967,10 +959,10 @@ export function App(): ReactElement {
       ]);
       const initial = await collectDocuments();
       if (cancelled) return;
-      const adapter = await loadKojo2StorageAdapter((reason) =>
+      const adapter = await loadKojo2StorageAdapter(project, (reason) =>
         notifyRef.current({
           kind: 'error',
-          message: `Kojo 2.0 存储期事实装载失败，本次不写槽位账本（项目其余功能不受影响）：${reason}`,
+          message: `Kojo 2.0 存储期事实不可用，本次不写槽位账本（项目其余功能不受影响）：${reason}`,
         }),
       );
       if (cancelled || adapter === null) return;
@@ -2389,8 +2381,8 @@ export function App(): ReactElement {
               io={kernel.io}
               filePaths={migrateState.filePaths}
               speaker={migrateEntry.speaker()}
-              loadEventNames={loadKojo2MigrateEventNames}
-              loadEventArgs={loadKojo2MigrateEventArgs}
+              loadEventNames={async () => kojo2MigrateEventNames(project)}
+              loadEventArgs={async () => kojo2MigrateEventArgs(project)}
               onClose={() => migrateEntry.close()}
               applyPlan={migrateEntry.apply}
               undoPlan={migrateEntry.undo}

@@ -8,9 +8,11 @@
  * 2. 失败降级：分析照常跑（跨文件结论仍在）、`stats.adapterUnavailable = true`、织面退回
  *    `analyzeProject`（`weaveLayers:false`、`weaveUnits:[]`），未配置 adapter 不算失败。
  * 3. `createLazyKojo2ProjectOptions` / `installKojo2ProjectScan`：工厂零副作用、flag 关零动作、
- *    装载器成功/失败两态、源码里只有动态 import（不进开机静态图、带 audit-allow）。
- * 4. 扫描器透传：`MountProjectScanOptions.kojo2Project` 原样进 `scannerDeps`；端到端一轮里
- *    惰性 adapter 成功 ⇒ 织面读数与项目级问题都上账，失败 ⇒ 整轮不崩、v1 照旧、降级可见。
+ *    装载器成功/失败两态、缺省装载器 = "本轮拿不到"（LAU-1a：本文件零适配器 import，
+ *    装载目标由宿主按当前项目注入）。
+ * 4. 扫描器透传：`MountProjectScanOptions.kojo2Project` 原样进 `scannerDeps`；
+ *    `kojo2ProjectFactory` 每次 `armProject` 新建装配面（换项目 ⇒ 新 getter ⇒ 重解析）；
+ *    端到端一轮里惰性 adapter 成功 ⇒ 织面读数与项目级问题都上账，失败 ⇒ 整轮不崩、v1 照旧、降级可见。
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -310,6 +312,31 @@ describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
     await expect(lazyOf(options)()).resolves.toBeUndefined();
   });
 
+  it('缺省装载器（未注入 loadAdapter）＝"本轮拿不到"：getter 交 undefined，不取任何游戏的事实', async () => {
+    // LAU-1a：旧实现在这里无条件动态 import eraTW——打开任何盘 2.0 扫描都吃它的事实。
+    // 现在缺省即缺席：分析器会把它折成 `stats.adapterUnavailable` 的可见降级。
+    const options = createLazyKojo2ProjectOptions({ isEnabled: () => true });
+    await expect(lazyOf(options)()).resolves.toBeUndefined();
+  });
+
+  it('按项目注入的装载器（宿主生产口径的替身）：eraFL 项目拿到 eraFL 事实，绝不落回 eraTW', async () => {
+    const { kojo2AdapterForProject, registerKojo2Adapter } = await import('../src/bootstrap');
+    const erafl = await import('@kojo/plugin-erafl-adapter');
+    const eraTW = await import('@kojo/plugin-eratw-adapter');
+    registerKojo2Adapter(erafl.ERAFL.gameId, erafl.ERAFL_GAME_ADAPTER);
+    const load = vi.fn(async () => kojo2AdapterForProject({ adapterId: 'erafl' }) ?? undefined);
+    const options = createLazyKojo2ProjectOptions({ isEnabled: () => true, loadAdapter: load });
+    const facts = await lazyOf(options)();
+    expect(facts).toBe(erafl.ERAFL_GAME_ADAPTER);
+    expect(facts).not.toBe(eraTW.ERATW_GAME_ADAPTER);
+    // 没有 2.0 面的项目 ⇒ undefined（同一装载器、同一口径，不借表）
+    const loadNoSurface = vi.fn(
+      async () => kojo2AdapterForProject({ adapterId: 'eraakumamaid' }) ?? undefined,
+    );
+    const degraded = createLazyKojo2ProjectOptions({ isEnabled: () => true, loadAdapter: loadNoSurface });
+    await expect(lazyOf(degraded)()).resolves.toBeUndefined();
+  });
+
   it('installKojo2ProjectScan：返回可直接摊进 mountProjectScan 的一格，可注入 flag / loader', async () => {
     const load = vi.fn(async () => ADAPTER);
     const wiring = installKojo2ProjectScan({ isEnabled: () => true, loadAdapter: load });
@@ -319,12 +346,12 @@ describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it('源码：只有动态 import（带 audit-allow），没有静态插件 import', () => {
+  it('源码：本接线文件零适配器 import（连动态边与豁免标记都不该有）', () => {
     const source = read('packages/app/src/ui/kojo2-project-scan-adapter.ts');
-    expect(source).toContain("import('@kojo/plugin-eratw-adapter')");
-    expect(source).toContain('audit-allow:');
-    expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-eratw-adapter['"]/);
-    // 接线文件不许被调度器静态拉进来（否则动态边白设）：只允许 type import。
+    expect(source).not.toMatch(/@kojo\/plugin-[a-z0-9-]+-adapter/);
+    expect(source).not.toMatch(/audit-allow/);
+    expect(source).not.toMatch(/eratw|erafl/i);
+    // 接线文件不许被调度器静态拉进来（否则装配面工厂白设）：只允许 type import。
     const schedule = read('packages/app/src/ui/project-scan-schedule.ts');
     expect(schedule).not.toMatch(/from\s+['"]\.\/kojo2-project-scan-adapter['"]/);
   });
@@ -418,6 +445,94 @@ describe('扫描器透传 · mountProjectScan → scannerDeps → 采集器', ()
       expect(mounted.deps.kojo2Project).toBeUndefined();
     } finally {
       mounted.dispose();
+    }
+  });
+
+  it('kojo2ProjectFactory：每次 armProject 新建装配面（换项目 ⇒ 新 getter ⇒ adapter 重解析）', () => {
+    // LAU-1a 的换项目口径：装配面若跨项目共用一份，分析侧按 getter 实例缓存的 adapter
+    // 事实会跟着上一个项目走——工厂形态让每次重装配拿到全新 getter。
+    const built: Kojo2ProjectPassOptions[] = [];
+    const factory = vi.fn((): Kojo2ProjectPassOptions => {
+      const options = createLazyKojo2ProjectOptions({ isEnabled: () => true, loadAdapter: async () => ADAPTER });
+      built.push(options);
+      return options;
+    });
+    const handlers = new Map<string, (ev: unknown) => void>();
+    const projectB = { ...project, rootDir: 'D:/kojo2-wire-b' } as unknown as GameProject;
+    let current: GameProject | null = project;
+    const kernel = {
+      bus: {
+        on: (ev: string, cb: (payload: unknown) => void) => {
+          handlers.set(ev, cb);
+          return () => handlers.delete(ev);
+        },
+      },
+      io: {
+        readText: async () => ({ text: '', encoding: 'utf-8', eol: 'lf', mtimeMs: 0 }),
+        walkDir: async () => [],
+      },
+      slots: { query: () => [] },
+      services: { tryGet: () => undefined },
+      project: { current: () => current },
+      compute: { yieldToMain: async () => {} },
+      workspaces: { roots: () => [] },
+    } as unknown as ScanKernel;
+    const depsSeen: ProjectScannerDeps[] = [];
+    const handle = mountProjectScan({
+      kernel,
+      kojo2ProjectFactory: factory,
+      createScanner: (deps) => {
+        depsSeen.push(deps);
+        return createProjectScanner(deps);
+      },
+      schedule: () => () => {},
+    });
+    try {
+      // 挂载补真相（项目已在场）⇒ 第一份装配面
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(depsSeen[0]?.kojo2Project).toBe(built[0]);
+      // 换项目 ⇒ armProject 重装配 ⇒ 工厂再叫一次，装配面是新实例
+      current = projectB;
+      handlers.get('project.opened')?.({ project: projectB });
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(built[1]).not.toBe(built[0]);
+      expect(depsSeen[1]?.kojo2Project).toBe(built[1]);
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it('kojo2Project 与 kojo2ProjectFactory 同时给出时静态那份优先（additive 不退化旧消费方）', () => {
+    const factory = vi.fn(() => createLazyKojo2ProjectOptions({ isEnabled: () => true }));
+    const options = createLazyKojo2ProjectOptions({ isEnabled: () => true, loadAdapter: async () => ADAPTER });
+    const captured: ProjectScannerDeps[] = [];
+    const kernel = {
+      bus: { on: () => () => {} },
+      io: {
+        readText: async () => ({ text: '', encoding: 'utf-8', eol: 'lf', mtimeMs: 0 }),
+        walkDir: async () => [],
+      },
+      slots: { query: () => [] },
+      services: { tryGet: () => undefined },
+      project: { current: () => project },
+      compute: { yieldToMain: async () => {} },
+      workspaces: { roots: () => [] },
+    } as unknown as ScanKernel;
+    const handle = mountProjectScan({
+      kernel,
+      kojo2Project: options,
+      kojo2ProjectFactory: factory,
+      createScanner: (deps) => {
+        captured.push(deps);
+        return createProjectScanner(deps);
+      },
+      schedule: () => () => {},
+    });
+    try {
+      expect(captured[0]?.kojo2Project).toBe(options);
+      expect(factory).not.toHaveBeenCalled();
+    } finally {
+      handle.dispose();
     }
   });
 

@@ -3,13 +3,15 @@ import type { Plugin } from '@kojo/plugin-api';
 import { createWorkerTransport, WellKnownServices } from '@kojo/plugin-api';
 import type { ConditionExtractorService, ConventionLinterService } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { createEratwAdapterPlugin, createEratwEmitBackend, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
+import { createEratwAdapterPlugin, createEratwEmitBackend, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 组合根的 eraTW 常驻静态装载点（PS-10 口径，欢迎页就要它）
+import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
 import type {
   EmitFailure,
   GameAdapter as Kojo2GameAdapter,
   KojoEmitBackend,
   KojoExprText,
 } from '@kojo/kojo-core';
+import type { AdapterManifestEntry } from './adapter-manifest';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
 import { computeTasks } from './compute-tasks';
@@ -55,6 +57,58 @@ export function kojo2AdapterForProject(
   const id = project?.adapterId;
   if (id === undefined || id === null) return null;
   return kojo2Adapters.get(id) ?? null;
+}
+
+/**
+ * 按当前项目取 2.0 事实的**最小投影**（LAU-1a，2026-10-25）：迁移向导与槽位账本原先
+ * 各自动态 `import()` 那一枚**常驻适配器**并无条件拿它的事实——打开别的工程时
+ * 事件面词/参数形状/存储期与指纹全是它的（§5.1 漏点表的同族 bug）。这三个
+ * helper 与 {@link kojo2AdapterForProject} 同一条口径：
+ *
+ * - **键 = 当前项目的 `adapterId`**（无项目态 / 该项目没有 2.0 面 ⇒ 各自的空形态）；
+ * - **绝不回落"某一枚"**（D12：未绑定 = 明确降级，不猜）；
+ * - 失败形态沿用各消费点的既有 fail-soft：迁移腿给 `undefined`（只判面词、不猜参数形状）、
+ *   存储腿给 `null`（本轮不写账本，宿主报一句人话）、扫描腿由宿主交 `undefined`（可见降级）。
+ */
+
+/** 迁移向导的事件面词名单（adapter `eventCatalog` 的名字投影）；无 2.0 面 ⇒ `undefined` */
+export function kojo2MigrateEventNames(
+  project: { readonly adapterId?: string } | null,
+): readonly string[] | undefined {
+  const adapter = kojo2AdapterForProject(project);
+  if (adapter === null) return undefined;
+  // 派生式与常驻包里的名单常量逐字同构（`events.map(spec => spec.event)`）：
+  // 换成从登记簿现取后，原常驻适配器工程的名录一字不变，别的工程拿到的是自己的事件目录。
+  return Object.freeze(adapter.eventCatalog.events.map((spec) => spec.event));
+}
+
+/** 迁移向导的事件参数形状投影（core 纯函数 `projectEventArgs`）；无 2.0 面 ⇒ `undefined` */
+export function kojo2MigrateEventArgs(
+  project: { readonly adapterId?: string } | null,
+): MigrateEventArgs | undefined {
+  const adapter = kojo2AdapterForProject(project);
+  if (adapter === null) return undefined;
+  return projectEventArgs(adapter.eventCatalog);
+}
+
+/** 槽位账本要的两格事实（存储期声明 + 游戏指纹）；无 2.0 面 ⇒ `null`（本轮不建账本） */
+export interface Kojo2StorageFacts {
+  readonly gameFingerprint: string;
+  /** adapter 真声明过的存储期集合——没声明的绝不替它补（`core/storage/unknown-class` 的源头） */
+  readonly declaredPeriods: ReadonlySet<string>;
+}
+
+export function kojo2StorageFacts(
+  project: { readonly adapterId?: string } | null,
+): Kojo2StorageFacts | null {
+  const adapter = kojo2AdapterForProject(project);
+  if (adapter === null) return null;
+  return Object.freeze({
+    gameFingerprint: adapter.gameFingerprint.digest,
+    declaredPeriods: Object.freeze(
+      new Set<string>(adapter.storageClasses.classes.map((spec) => spec.period)),
+    ),
+  });
 }
 
 // eraTW：常驻 adapter（欢迎页 / 无项目态就要它），模块加载即进表。
@@ -106,6 +160,45 @@ export function kojo2BackendFactoryForProject(
   const id = project?.adapterId;
   if (id === undefined || id === null) return null;
   return kojo2Backends.get(id) ?? null;
+}
+
+/**
+ * 按**适配器清单**登记项目级 adapter 的 2.0 两面（LAU-1a，2026-10-25）。
+ *
+ * 这是原先写死 `'erafl'` 那段特例的泛化：游戏名与导出名不再住在组合根的分支里，
+ * 而是清单条目自带的 `kojo2AdapterExport` / `kojo2BackendFactoryExport`（`adapter-manifest.ts`
+ * 是审计钦定的游戏名法定落点）——**加一个 era 只加数据**（§5.6 判据 10：新增第三个
+ * 方言包时宿主源码零改动）。
+ *
+ * 口径与逐字保留的原实现一致：
+ * - **存在性卫语句**：条目没声明导出名、或包没导出那个名字 ⇒ 跳过（该项目走 `null`
+ *   语义：零候选、不抛、不借别游戏的事实）；
+ * - **adapter 与 backend 分开卫住**：只有一半时 `kojo2SurfaceForProject` 仍给 `null`
+ *   （宁缺勿错），不会出现"A 游戏的事件目录 + B 游戏的落点"这种混搭；
+ * - **键 = `entry.id`（= v1 `gameId`）**：与 `project.adapterId` 同一把；原实现取的
+ *   `ERAFL.gameId` 与之逐字相等（清单头注即钉这一点）。
+ *
+ * eraTW 是 `scope:'boot'` 常驻项，走模块加载即进表的静态路径（上方两行
+ * `registerKojo2*`），不经本函数——这条静态路径是 PS-10 开机图既有口径，保持不变。
+ */
+export function registerKojo2SurfacesFromModules(
+  entries: readonly AdapterManifestEntry[],
+  modules: readonly (Record<string, unknown> | undefined)[],
+): void {
+  for (const [index, entry] of entries.entries()) {
+    const mod = modules[index];
+    if (mod === undefined) continue;
+    const adapterExport = entry.kojo2AdapterExport;
+    if (adapterExport !== undefined) {
+      const facts = mod[adapterExport];
+      if (facts !== undefined) registerKojo2Adapter(entry.id, facts as Kojo2GameAdapter);
+    }
+    const backendExport = entry.kojo2BackendFactoryExport;
+    if (backendExport !== undefined) {
+      const factory = mod[backendExport];
+      if (typeof factory === 'function') registerKojo2Backend(entry.id, factory as Kojo2BackendFactory);
+    }
+  }
 }
 
 /** 一份 2.0 诊断/降糖需要的**两面**：游戏事实（adapter）+ 落点（backend） */
@@ -243,25 +336,11 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
   ]);
-  // eraFL 的 2.0 面：包导出 `ERAFL_GAME_ADAPTER` 即当场进表（键 = v1 gameId）。
-  // 用存在性卫语句读动态 import 的命名空间：2.0 面建成前这个导出不存在，写成直接
-  // 访问会在类型层挂掉；建成后这里自然亮灯，无需再改。建成前 eraFL 工程走 `null`
-  // 语义（零候选、不抛、不借 eraTW 的事实）——这正是"先掐掉错误事实"的中间态。
-  const eraflModule = adapterModules[adapterEntries.findIndex((e) => e.id === 'erafl')] as
-    | { ERAFL_GAME_ADAPTER?: Kojo2GameAdapter; ERAFL: { gameId: string } }
-    | undefined;
-  const eraflKojo2Adapter = eraflModule?.ERAFL_GAME_ADAPTER;
-  if (eraflKojo2Adapter !== undefined && eraflModule !== undefined) {
-    registerKojo2Adapter(eraflModule.ERAFL.gameId, eraflKojo2Adapter);
-  }
-  // eraFL 的落点面（入口 D）：同一条存在性卫语句口径——包导出 `createEraflEmitBackend`
-  // 就当场进表。**adapter 与 backend 分开卫住**：只有一半时 `kojo2SurfaceForProject`
-  // 仍给 `null`（宁缺勿错），不会出现"eraTW 的事件目录 + eraFL 的落点"这种混搭。
-  const eraflEmitBackend = (eraflModule as { createEraflEmitBackend?: Kojo2BackendFactory } | undefined)
-    ?.createEraflEmitBackend;
-  if (eraflEmitBackend !== undefined && eraflModule !== undefined) {
-    registerKojo2Backend(eraflModule.ERAFL.gameId, eraflEmitBackend);
-  }
+  // 项目级 adapter 的 2.0 两面：**清单驱动**登记（LAU-1a，泛化原 erafl 特例）——
+  // 导出名住在 `adapter-manifest.ts`，组合根只见清单不见游戏名（口径见
+  // {@link registerKojo2SurfacesFromModules}）。没有 2.0 面的适配器（四家）自然不进表，
+  // 其工程走 `null` 语义：零候选、不抛、不借 eraTW 的事实。
+  registerKojo2SurfacesFromModules(adapterEntries, adapterModules);
   return [
     // 适配器（清单顺序 = 注册顺序）：内核 detect / loadProject 时 adapter 必须已在场。
     // 次序不再承担「谁赢」的责任——多枚适配器同时认领会报冲突（见 `AdapterConflictError`）。

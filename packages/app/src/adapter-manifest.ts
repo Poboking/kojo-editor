@@ -38,6 +38,16 @@ export interface AdapterManifestEntry {
   readonly auditWord: string;
   /** 动态装载（仅项目级需要；常驻包由组合根静态 import，理由见各自注释） */
   readonly load?: () => Promise<Record<string, unknown>>;
+  /**
+   * 2.0 事实面（`GameAdapter`）在包里的**导出名**（可选；LAU-1a 泛化）。
+   *
+   * 组合根装载该包后按存在性卫语句登记进 2.0 登记簿（键 = `id` = v1 `gameId`）：
+   * 导出缺席 ⇒ 跳过（该项目走 `null` 语义），**绝不借别游戏的事实**。
+   * 导出名写在清单里而不是在循环里猜命名约定：加一个 era 只加数据（D9 / §5.6 判据）。
+   */
+  readonly kojo2AdapterExport?: string;
+  /** 2.0 落点面（`KojoEmitBackend` 工厂）在包里的**导出名**（可选；口径与上一条逐字相同） */
+  readonly kojo2BackendFactoryExport?: string;
 }
 
 /**
@@ -48,6 +58,9 @@ export interface AdapterManifestEntry {
  */
 export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
   {
+    // eraTW 是 `scope:'boot'` 常驻项：v1 插件与 2.0 两面（adapter / backend）都在
+    // `bootstrap.ts` 静态 import、模块加载即进表，**不走**下面两条清单驱动的懒登记路
+    // （静态路径是 PS-10 开机图的既有口径，本批保持不变）。
     id: 'eratw',
     dir: 'eratw-adapter',
     packageName: '@kojo/plugin-eratw-adapter',
@@ -63,6 +76,8 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     scope: 'project',
     auditWord: 'erafl',
     load: () => import('@kojo/plugin-erafl-adapter'),
+    kojo2AdapterExport: 'ERAFL_GAME_ADAPTER',
+    kojo2BackendFactoryExport: 'createEraflEmitBackend',
   },
   {
     id: 'eraakumamaid',

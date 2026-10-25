@@ -166,11 +166,22 @@ export interface MountProjectScanOptions {
   /**
    * Kojo 2.0 项目级分析的装配面（**additive**；缺省 = 不跑）。
    *
-   * 生产由宿主经 `installKojo2ProjectScan()` 注入（惰性 adapter，不进开机静态图）；
+   * 生产由宿主经 `kojo2ProjectFactory`（LAU-1a 起的按项目形态；旧 `kojo2Project` 一格
+   * 仍支持，两者都给时以静态那份为准）注入；惰性 adapter 不进开机静态图。
    * 本模块只**原样透传**给采集器（`scannerDeps`），不读它的字段、不另立默认值——
    * 启用判据 / adapter 形态 / 降级口径都归 `kojo2-project-analysis`。
    */
   kojo2Project?: Kojo2ProjectPassOptions;
+  /**
+   * 2.0 装配面的**按项目工厂**（additive，LAU-1a；与 {@link MountProjectScanOptions.kojo2Project}
+   * 二选一，两者都给时以静态那份为准——既有消费方零改动）。
+   *
+   * 存在的理由：分析侧把 adapter 解析结果按 **getter 函数实例**缓存（一次装配只装载一次）。
+   * adapter 事实改为"按当前项目现取"之后，静态注入的一份装配面会把第一个项目的事实
+   * 带到换后的项目上——那正是本批要修的错事实。工厂在每次 `armProject` 时新建装配面
+   * ⇒ 新 getter 实例 ⇒ 换项目自然重解析。
+   */
+  kojo2ProjectFactory?: () => Kojo2ProjectPassOptions;
   /**
    * 项目扫描 → 2.0 项目索引的**喂养口**（additive；缺省 = 模块级通道
    * `feedKojo2ProjectFile`，由编辑器侧的 2.0 装配段订阅并写索引）。
@@ -384,6 +395,9 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
   function scannerDeps(): ProjectScannerDeps {
     // 本世代采集器的读盘归属：换项目后迟到的结果由 `enqueueKojo2File` 的 epoch 判据丢弃。
     const epoch = feedEpoch;
+    // 2.0 装配面：静态那份优先（既有消费方零改动）；工厂形态**每次装配新建**，
+    // 换项目 ⇒ 新 getter 实例 ⇒ 分析侧缓存自然重来（LAU-1a 的按项目现取，见字段注释）。
+    const kojo2Pass = opts.kojo2Project ?? opts.kojo2ProjectFactory?.();
     return {
       listFiles: listScanFiles,
       roots: rootsOf,
@@ -403,7 +417,7 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       yieldBetween: () => kernel.compute.yieldToMain(),
       maxFiles: SCAN_MAX_FILES_PER_RUN,
       // 原样透传：装配面缺席 ⇒ 采集器连 `.kojo2` 判据都不调（v1 行为逐字不变）
-      ...(opts.kojo2Project === undefined ? {} : { kojo2Project: opts.kojo2Project }),
+      ...(kojo2Pass === undefined ? {} : { kojo2Project: kojo2Pass }),
     };
   }
 
