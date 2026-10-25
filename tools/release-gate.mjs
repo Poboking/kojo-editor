@@ -398,6 +398,12 @@ export async function inspectArtifacts({ root = ROOT, readDist = defaultReadDist
   const measured = measureArtifacts({ files: dist.files ?? [], indexHtml: dist.indexHtml ?? '', limits: ARTIFACT_LIMITS });
   const distMiB = Math.round((measured.distBytes / MIB) * 100) / 100;
   const entryKB = measured.entryBytes === null ? null : Math.round(measured.entryBytes / 1000);
+  // 上界三个数**只从 `ARTIFACT_LIMITS` 渲染**：此前这里手抄过一份「40 件 / 8 MiB」，
+  // 而闸早已改成 85 件 / 10.5 MiB ⇒ summary 长期在报一个不存在的上界（2026-10-25 件数批修正）。
+  // 判据一个字没动，改的只是这句话的取值来源。
+  const limitFiles = ARTIFACT_LIMITS.files;
+  const limitMiB = Math.round((ARTIFACT_LIMITS.distBytes / MIB) * 100) / 100;
+  const limitEntryKB = Math.round(ARTIFACT_LIMITS.entryBytes / 1000);
   const readings = {
     present: true,
     files: measured.files,
@@ -406,10 +412,10 @@ export async function inspectArtifacts({ root = ROOT, readDist = defaultReadDist
     entry: measured.entry,
     entryBytes: measured.entryBytes,
     entryKB,
-    limits: { entryKB: 1100, distMiB: 10.5, files: 85 },
+    limits: { entryKB: limitEntryKB, distMiB: limitMiB, files: limitFiles },
     exceeded: measured.exceeded,
   };
-  const summary = `[artifact-audit] 实测：${measured.files} 件 / dist ${distMiB} MiB / 入口 ${measured.entry ?? '（认不出）'} ${entryKB === null ? '—' : `${entryKB} kB`}（上限 40 件 / 8 MiB / 1,100 kB）`;
+  const summary = `[artifact-audit] 实测：${measured.files} 件 / dist ${distMiB} MiB / 入口 ${measured.entry ?? '（认不出）'} ${entryKB === null ? '—' : `${entryKB} kB`}（上限 ${limitFiles} 件 / ${limitMiB} MiB / ${limitEntryKB.toLocaleString('en-US')} kB）`;
   if (measured.exceeded.length === 0) return { rc: 0, readings, tail: summary };
 
   const lines = ['[artifact-audit] FAIL：产物超出上界'];
