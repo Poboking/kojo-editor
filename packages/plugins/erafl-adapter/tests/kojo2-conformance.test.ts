@@ -46,7 +46,8 @@
  *
  * ## 真盘用例
  *
- * §E 的盘面分层核对只在 `D:/Game/erafl` 在位时跑（红线 6；本机在位 ⇒ 本批实际跑过）。
+ * §E 的盘面分层核对只在环境变量 `KOJO_ERAFL_DIR` 指到的真盘在位时跑（红线 6；组长改：真盘根
+ * 不写死进仓库，口径同 `KOJO_SMOKE_PROJECT` / `KOJO_CORPUS_DIR`。本批实跑时该变量已指向本机 erafl 盘）。
  * 合成用例不依赖真盘，独立成立。
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -939,8 +940,13 @@ const ERAFL_ABSENT_ENGINES: readonly string[] = Object.freeze([
   'EVENTCOMEND',
 ]);
 
-const ERAFL_ROOT = 'D:/Game/erafl';
-const hasRealDisk = (): boolean => existsSync(ERAFL_ROOT);
+/**
+ * 真盘根目录**不写死进仓库**（组长改）：口径同 `packages/kernel/tests/integration-plugins.test.ts:39-42`
+ * 与 `tools/corpus.mjs`——真实游戏数据不入库，靠环境变量指路。缺变量 ⇒ 这四枚跳过（不是失败，
+ * 也不是"跑过了"）；本机要实跑就设 `KOJO_ERAFL_DIR=<本机 erafl 盘根>` 再跑本文件。
+ */
+const ERAFL_ROOT = process.env.KOJO_ERAFL_DIR ?? '';
+const hasRealDisk = (): boolean => ERAFL_ROOT !== '' && existsSync(ERAFL_ROOT);
 
 describe('eraFL 2.0 conformance · §E 事件三层结构', () => {
   it('层1：2.0 目录只有四条引擎事件（eraTW 的另五条一条都不声明）', () => {
@@ -977,7 +983,7 @@ describe('eraFL 2.0 conformance · §E 事件三层结构', () => {
   });
 });
 
-describe('eraFL 2.0 conformance · §E2 真盘盘面分层核对（D:/Game/erafl 不在则跳过）', () => {
+describe('eraFL 2.0 conformance · §E2 真盘盘面分层核对（`KOJO_ERAFL_DIR` 未指到盘则跳过）', () => {
   const itReal = hasRealDisk() ? it : it.skip;
 
   /** 口上域（作者写口上的战场）全部 `.ERB` 的逐行读数；口径写清楚，不冒充全树 */
