@@ -96,6 +96,7 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     scope: 'project',
     auditWord: 'erakoumakan',
     load: () => import('@kojo/plugin-erakoumakan-adapter'),
+    kojo2AdapterExport: 'ERAKOUMAKAN_GAME_ADAPTER',
   },
   {
     id: 'erasqc',

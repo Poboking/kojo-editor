@@ -6,8 +6,9 @@
  *
  * 导出面 = 工程识别 / 装载 + Chara 表解析 + 家族索引 + 约定规则集 +
  * 变量字典 / 指令表装载 + 展示位（名字对照 / 剧情线）+ 时机分野模板。
- * 本版**不提供** 2.0 adapter（宿主按「该游戏没有 2.0 面」走 null 语义：
- * 零候选、不抛、绝不借 eraTW 的事实）。
+ * 2.0 面：本包提供纯数据 `ERAKOUMAKAN_GAME_ADAPTER`（`src/kojo2/`，事实与计数见
+ * 该目录头注），由宿主组合根按 `adapter-manifest.ts` 的 `kojo2AdapterExport`
+ * 懒登记；**本包不建 backend**（发射面是下一批的事）。
  */
 export { createKoumakanAdapterPlugin } from './plugin';
 export { ERAKOUMAKAN } from './constants';
@@ -34,3 +35,4 @@ export {
 export { ERAKOUMAKAN_NAME_GLOSSARY } from './name-glossary';
 export { ERAKOUMAKAN_STATE_LINES } from './state-lines';
 export { createKoumakanFaceTable } from './face-templates';
+export * from './kojo2/index.js';
