@@ -16,6 +16,7 @@ import { LAYOUT_PREF_DEFAULT, type LayoutPref } from '../src/ui/layout-pref';
 // —— C-1b 追加用例的依赖（缩略图偏好层与档位表的分层；同样只加行）——
 import {
   applySizeTier,
+  flushDeferredTierOptions,
   sizeTierKeys,
   sizeTierKeysMissingFromSmall,
   type EditorOptionPatch,
@@ -349,5 +350,109 @@ describe('缩略图：档位表与偏好层的分层（C-1b）', () => {
   it('档位表关掉的键 small 都写回（缩略图这条新增判据不许破那条不变式）', () => {
     expect(sizeTierKeysMissingFromSmall()).toEqual([]);
     expect(sizeTierKeys()).toContain('minimap');
+  });
+});
+
+/**
+ * 1025 切文件批：`applySizeTier` 改发**差集**（`editor-options.ts` 的 {@link applySizeTier}）。
+ *
+ * 三条判据，全部是"读数可复现"而不是"看着顺眼"：
+ * ① **同档同值 ⇒ 零 `updateOptions`**（小文件↔小文件切标签的热路径；改前每次重发 24 键）；
+ * ② **跨档只发变动键**（`find` / 词分隔符 / 缩进这些逐档同值的键一次都不发）；
+ * ③ **`detectIndentation` 留到下一帧**（模型级扫描：Monaco 会给每份活着的 model 重扫缓冲区），
+ *    且"下一帧"之前目标又变了的话旧拍作废——否则旧档那格会在新档落定之后偷偷盖回来。
+ *
+ * 假编辑器无 rAF ⇒ 模块退回 0ms 定时器；对账用 `flushDeferredTierOptions`（等价于那一帧到了）。
+ */
+describe('applySizeTier 差集（1025 切文件批：同档零发 / 跨档只发变动 / 模型级键延后一帧）', () => {
+  const fakeEditor = (): { calls: EditorOptionPatch[]; updateOptions(o: EditorOptionPatch): void } => {
+    const calls: EditorOptionPatch[] = [];
+    return { calls, updateOptions: (o: EditorOptionPatch) => void calls.push(o) };
+  };
+
+  it('同档同值连落两次：第二次一次 updateOptions 都不发', () => {
+    const ed = fakeEditor();
+    applySizeTier(ed, 900);
+    flushDeferredTierOptions(ed);
+    const first = ed.calls.length;
+    expect(first, '第一次落档至少要有一次真实写入').toBeGreaterThan(0);
+    applySizeTier(ed, 950); // 同档（都 < 5000）、同偏好 ⇒ 目标补丁逐键相同
+    expect(ed.calls.length, '同档切标签不该再动配置').toBe(first);
+    // 换到另一档则必须发
+    applySizeTier(ed, LARGE_FILE_LINES);
+    expect(ed.calls.length).toBeGreaterThan(first);
+  });
+
+  it('跨档只发变动键：逐档同值的 find / 词分隔符 / 缩进一次都不发', () => {
+    const ed = fakeEditor();
+    applySizeTier(ed, 800);
+    flushDeferredTierOptions(ed);
+    const before = ed.calls.length;
+    applySizeTier(ed, 12_000);
+    const patch = ed.calls[before]!;
+    // 变动的那几条真在补丁里（**门禁类**：必须在 model 挂上去之前就对）
+    for (const k of ['occurrencesHighlight', 'matchBrackets', 'bracketPairColorization', 'guides', 'selectionHighlight', 'links', 'colorDecorators'] as const) {
+      expect(patch, `跨档要发 ${k}`).toHaveProperty(k);
+    }
+    // 逐档同值的键一条都不该发（发了就是让 Monaco 白重算一遍配置）
+    for (const k of ['find', 'wordSeparators', 'unicodeHighlight', 'tabSize', 'insertSpaces', 'wordBasedSuggestions'] as const) {
+      expect(Object.keys(patch), `逐档同值的 ${k} 不该在差集里`).not.toContain(k);
+    }
+    // 首帧不需要的那几条（模型级探测 + 纯视觉节奏）**不在同步这一发里**，见下一条用例
+    for (const k of ['detectIndentation', 'cursorBlinking', 'smoothScrolling', 'renderLineHighlight'] as const) {
+      expect(Object.keys(patch), `${k} 应当留到下一帧`).not.toContain(k);
+    }
+  });
+
+  it('延后那一拍收集的正是"首帧不需要"的五格，且一次发完（不是五发）', () => {
+    const ed = fakeEditor();
+    applySizeTier(ed, 12_000); // small → large：这五格全变
+    const sync = ed.calls[0]!;
+    flushDeferredTierOptions(ed);
+    expect(ed.calls.length, '延后键合批成一次 updateOptions').toBe(2);
+    const deferred = ed.calls[1]!;
+    expect(Object.keys(deferred).sort()).toEqual(
+      ['cursorBlinking', 'cursorSmoothCaretAnimation', 'detectIndentation', 'renderLineHighlight', 'renderLineHighlightOnlyWhenFocus', 'smoothScrolling'].sort(),
+    );
+    // 门禁类键一条都不许挤进延后那一拍
+    for (const k of ['bracketPairColorization', 'occurrencesHighlight', 'selectionHighlight', 'links', 'colorDecorators'] as const) {
+      expect(Object.keys(deferred), `${k} 不许延后`).not.toContain(k);
+      expect(sync, `${k} 必须在同步那一发里`).toHaveProperty(k);
+    }
+  });
+
+  it('detectIndentation 排到下一帧：同步那一发里没有它，flush 后才落（值 = 目标档）', () => {
+    const ed = fakeEditor();
+    applySizeTier(ed, 12_000); // large：档位表值 false
+    expect(Object.keys(ed.calls[0]!)).not.toContain('detectIndentation');
+    flushDeferredTierOptions(ed);
+    expect(ed.calls.map((c) => c.detectIndentation)).toContain(false);
+    // 回小档：目标变 true ⇒ 又排一拍
+    const before = ed.calls.length;
+    applySizeTier(ed, 800);
+    expect(Object.keys(ed.calls[before]!)).not.toContain('detectIndentation');
+    flushDeferredTierOptions(ed);
+    expect(ed.calls[ed.calls.length - 1]?.detectIndentation).toBe(true);
+  });
+
+  it('延后键还没落地时目标又变了：旧的那一拍作废，只落地最后的目标', () => {
+    const ed = fakeEditor();
+    applySizeTier(ed, 12_000); // large → 排队 detectIndentation:false
+    applySizeTier(ed, 800); // 还没 flush 就回到小档 → 旧的一拍作废，重排 true
+    flushDeferredTierOptions(ed);
+    const di = ed.calls.map((c) => c.detectIndentation).filter((v) => v !== undefined);
+    expect(di, '只该有一次真正落地的探测档，且是最新目标').toEqual([true]);
+  });
+
+  it('记忆体按实例分开：两枚编辑器各自落档互不吞键（分屏两组不许共用一份）', () => {
+    const a = fakeEditor();
+    const b = fakeEditor();
+    applySizeTier(a, 12_000);
+    applySizeTier(b, 12_000);
+    expect(a.calls.length).toBe(1);
+    expect(b.calls.length).toBe(1);
+    expect(a.calls[0]).not.toBe(b.calls[0]);
+    // b 是全新实例 ⇒ 它拿到的必须是完整补丁（不是"以为已经落过"的空差集）
+    expect(Object.keys(b.calls[0]!).length).toBeGreaterThan(10);
   });
 });

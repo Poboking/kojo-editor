@@ -27,7 +27,8 @@
  * 实测核实（IEditorOptions / IGlobalEditorOptions / IGuidesOptions）。
  *
  * **纯函数**（`editorOptionsForLineCount`）便于单测；宿主在**每次切文件**时调用并
- * `editor.updateOptions(...)`，切回小文件即恢复（补丁是全量重发、不卡死）。
+ * `editor.updateOptions(...)`，切回小文件即恢复（补丁按差集发：同档零发、跨档只发变动键——
+ * 口径与读数见 {@link applySizeTier}）。
  *
  * ## 这一张表是体量轴的**唯一真源**（1020 止血批立的两条规矩）
  *
@@ -446,6 +447,72 @@ export interface SizeTierTarget {
 }
 
 /**
+ * 落档时**留到下一帧**再写的键（两类，都是"首帧不需要、且换档时白烧一次"的）：
+ *
+ * ① `detectIndentation`——**模型级**判据。Monaco 收到它会给活着的 model 重扫缓冲区
+ *    （`TextModel.detectIndentation` → `guessIndentation`），翻回 false 那侧则改
+ *    `tabSize/insertSpaces`，折行开着 ⇒ 整篇重排。实测 4,800–6,000 行文件上这一格
+ *    值 5–17ms（1025 切文件批读数，波动随机器）。它只影响 Tab / 回车行为。
+ * ② 四个**纯视觉节奏**键：光标闪烁 / 光标平滑动画 / 平滑滚动 / 整行高亮（含"仅聚焦时"）。
+ *    它们没有任何文档级建立成本（viewport 级，改一次 ≈ 1ms），但换档时必变，四条叠起来
+ *    仍在同步段里占 3–6ms；晚一帧只是"光标从闪烁切到常亮"这种看不出来的差别。
+ *
+ * 反过来，**门禁类**的键一个都不许延后：`bracketPairColorization` / `occurrencesHighlight` /
+ * `selectionHighlight` / `links` / `colorDecorators` / `minimap` / `folding` / `matchBrackets`
+ * —— 它们必须在 model 挂上去之前就是对的，否则新 model 会先按旧档建一遍全文结构再被拆掉
+ * （对 99 万行档是灾难，且这正是"档位闸"本身要拦的开销）。
+ */
+const DEFERRED_TIER_KEYS: ReadonlySet<string> = new Set([
+  'detectIndentation',
+  'cursorBlinking',
+  'cursorSmoothCaretAnimation',
+  'smoothScrolling',
+  'renderLineHighlight',
+  'renderLineHighlightOnlyWhenFocus',
+]);
+
+/** 一次落档的记忆：上一次发出去的**完整**补丁 + 可能还排着队的延后键 */
+interface TierApplyMemory {
+  patch: EditorOptionPatch;
+  deferred: { patch: Record<string, unknown>; cancel: () => void; apply: () => void } | null;
+}
+
+/**
+ * 每枚编辑器实例各记一份（`WeakMap`：编辑器销毁即随 GC 走，不用手工清）。
+ *
+ * 为什么记在实例上而不是模块级单变量：分屏多组各有自己的编辑器，共用一份记忆会让
+ * 两组的档位互相"以为已落过"（B 组切大文件时 A 组那格仍是小档值，差集就漏发）。
+ */
+const tierApplyMemory = new WeakMap<SizeTierTarget, TierApplyMemory>();
+
+/** 顶层选项值相等判定（对象值逐字段递归：本表的对象选项都是扁平小对象，比一遍 < 0.02ms） */
+function optionValueEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  const keys = Object.keys(ra);
+  if (keys.length !== Object.keys(rb).length) return false;
+  for (const k of keys) if (!optionValueEquals(ra[k], rb[k])) return false;
+  return true;
+}
+
+/**
+ * 把延后那一拍排到**下一个宏任务**（`setTimeout 0`），而不是 `requestAnimationFrame`。
+ *
+ * 差别在实测里是可见的：切文件那一帧里 Monaco 自己已经用 rAF 排了"新 model 的首次渲染"
+ * （6,000 行文件实测 35–45ms），再挤进我们这一发就等于把它们并进**同一个长任务**；
+ * 用宏任务就把这 3–6ms 挪到独立的一小段里，长任务只剩渲染那一条。
+ *
+ * 视觉上无差：宏任务与 rAF 都在下一次绘制之前跑完，用户看到的第一帧已是终态。
+ * node 单测同样落到这条路径（`flushDeferredTierOptions` 可同步收口）。
+ */
+function scheduleAfterTask(run: () => void): () => void {
+  const timer = setTimeout(run, 0);
+  return () => clearTimeout(timer);
+}
+
+/**
  * 体量档位落到编辑器上的**唯一出口**：屏幕上此刻挂的是哪份文档，就按**那份文档的行数**落档，
  * 再叠调用方那层与体量无关的补丁（可写态 / 快建议——两轴正交，但一次 `updateOptions` 发完，
  * 切标签是热路径，发两遍就是让 Monaco 重算两遍配置）。
@@ -460,11 +527,86 @@ export interface SizeTierTarget {
  * 写入点一个都不必单独读偏好——它们走的 `editorOptionsForLineCount` 已经读了。于是
  * 「切回小文件不卡在 huge 档的关值」对偏好层同样成立：跟随档时按**回到屏幕上的那份
  * 文档**重取档位值，不会卡在上一手的强制值上。
+ *
+ * ## 1025 切文件批：**只发与上一次不同的键**（同档切换 = 一次 `updateOptions` 都不发）
+ *
+ * 改前每次切标签都把 24 个顶层键（连嵌套 ≈117 个）整份重发。实测同实例连发同一份补丁
+ * 只要 0.9ms，但**跨档**那一发要 17–34ms（Monaco 逐键比对后触发各自的重算：缩略图重建、
+ * 整篇重排、模型重探测），而其中大头 `detectIndentation` 是**模型级**扫描，见
+ * {@link DEFERRED_TIER_KEYS}。
+ *
+ * 记忆体 {@link tierApplyMemory} 记"上次发给这枚编辑器的完整补丁"，本函数发**差集**：
+ * - 同档同值（小文件↔小文件、同一份文件重落档）⇒ 零 `updateOptions`；
+ * - 跨档 ⇒ 只发真正变化的十几条键，外加"上一拍还排着队的延后键"的目标值变了就作废旧拍。
+ *
+ * 合法性的根据是**唯一出口**：{@link applySizeTier} 是档位写入的唯一出口（既有静态用例钉着
+ * 三个写入点），而别的写入者（只读态 / 偏好订阅 / 字号）写的键要么不在本表里、要么读的是
+ * 同一份偏好真源 ⇒ 差集的"上一手值"不会与屏上实况打架。
  */
 export function applySizeTier(
   ed: SizeTierTarget,
   lineCount: number,
   overrides?: EditorOptionPatch,
 ): void {
-  ed.updateOptions({ ...editorOptionsForLineCount(lineCount), ...(overrides ?? {}) });
+  const desired: Record<string, unknown> = { ...editorOptionsForLineCount(lineCount), ...(overrides ?? {}) };
+  const mem = tierApplyMemory.get(ed);
+  // 上一拍排进下一帧的键：本次目标都没变 ⇒ 让它照原样落地（不必重发）；有一个变了 ⇒ 作废旧的那一拍，
+  // 否则旧档的值会在新档落定之后偷偷盖回来（延后执行的唯一一条硬边）。
+  if (mem?.deferred) {
+    const stale = Object.keys(mem.deferred.patch).some((key) => !optionValueEquals(mem.deferred!.patch[key], desired[key]));
+    if (stale) {
+      mem.deferred.cancel();
+      mem.deferred = null;
+    }
+  }
+  const next: TierApplyMemory = mem ?? { patch: {}, deferred: null };
+  const before = next.patch as Record<string, unknown>;
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(desired)) {
+    if (Object.prototype.hasOwnProperty.call(before, key) && optionValueEquals(before[key], desired[key])) continue;
+    patch[key] = desired[key];
+  }
+  // 记忆体记"完整目标"（含刚排进下一帧的那一格）：它回答的是「这个实例最终应当是什么」，
+  // 不是「此刻已经写进去的是什么」——延后键由 `deferred.cancel/apply` 那一对负责收口。
+  next.patch = desired as EditorOptionPatch;
+  tierApplyMemory.set(ed, next);
+
+  const deferredPatch: Record<string, unknown> = {};
+  for (const key of Object.keys(patch)) {
+    if (!DEFERRED_TIER_KEYS.has(key)) continue;
+    deferredPatch[key] = patch[key];
+    delete patch[key];
+  }
+  if (Object.keys(patch).length > 0) ed.updateOptions(patch as EditorOptionPatch);
+  if (Object.keys(deferredPatch).length > 0) {
+    if (next.deferred) next.deferred.cancel();
+    const apply = (): void => {
+      try {
+        ed.updateOptions(deferredPatch as EditorOptionPatch);
+      } catch {
+        // 编辑器已销毁（关标签 / 换组）：这一拍作废，不做静默之外的补救——档位随实例一起没了
+      }
+    };
+    const entry: TierApplyMemory['deferred'] = { patch: deferredPatch, cancel: () => {}, apply };
+    entry.cancel = scheduleAfterTask(() => {
+      if (next.deferred === entry) next.deferred = null;
+      apply();
+    });
+    next.deferred = entry;
+  }
+}
+
+/**
+ * 立刻落地本实例排进下一帧的模型级键（见 {@link DEFERRED_TIER_KEYS}）。
+ *
+ * 两个用途：① 单测要在同步断言里对账"最终选项"，不能等定时器；② 将来若有人在销毁编辑器
+ * 之前想按最终态收口（当前宿主不需要：实例没了，选项也没了）。幂等：没排队就什么都不做。
+ */
+export function flushDeferredTierOptions(ed: SizeTierTarget): void {
+  const mem = tierApplyMemory.get(ed);
+  const pending = mem?.deferred;
+  if (!mem || !pending) return;
+  pending.cancel();
+  mem.deferred = null;
+  pending.apply();
 }

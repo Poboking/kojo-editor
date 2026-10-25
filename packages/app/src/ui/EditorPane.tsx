@@ -313,6 +313,26 @@ const STATUS_FLASH_MS = 8000;
 const TOOLBAR_NARROW_QUERY = '(max-width: 1280px)';
 const EDITOR_SKELETON_WIDTHS = ['42%', '68%', '55%', '80%', '30%', '64%', '72%', '48%'] as const;
 
+/**
+ * 把一次"切文件即算"的装饰刷新排到**下一个宏任务**（1025 切文件批）。
+ *
+ * 为什么不在切文件那一拍照旧同步发起：冷开大文件时这要在同一个任务里跑完整篇装饰
+ * （实测 4,800 行 30–40ms），把"切过去"的帧一起撑成长任务。装饰不是首帧必需——文本、
+ * 光标位、滚动位都已落定，波浪线晚一拍出现用户看不见。
+ *
+ * 为什么是宏任务而不是 `requestAnimationFrame`：切文件那一帧里 Monaco 自己已经用 rAF
+ * 排了"新 model 首次渲染"（实测 35–45ms），挤进去等于并成同一个长任务；宏任务单独成段。
+ *
+ * 取消语义与切文件 effect 的 `cancelled` 对齐：下一拍打断本拍（连点两个文件 / 关标签）时
+ * 这一发不发——下一拍会自己发一次，发旧的只是白算一遍再被覆盖。
+ */
+function scheduleMarkerRefresh(isCancelled: () => boolean, run: () => void): () => void {
+  const timer = window.setTimeout(() => {
+    if (!isCancelled()) run();
+  }, 0);
+  return () => window.clearTimeout(timer);
+}
+
 export function EditorPane({
   kernel,
   groupId,
@@ -434,6 +454,8 @@ export function EditorPane({
   }, [themePref]);
   /** 装饰重算定时器（编辑停顿去抖） */
   const markerTimerRef = useRef<number | null>(null);
+  /** 切文件那一发装饰被挪到了下一个宏任务：取消句柄（见 {@link scheduleMarkerRefresh}） */
+  const markerFrameRef = useRef<(() => void) | null>(null);
   /** 装饰刷新函数（ref 化，供只注册一次的 model 监听调用） */
   const refreshMarkersRef = useRef<((model: Monaco.editor.ITextModel, path: string) => void) | null>(null);
   /** CodeAction 待执行动作表（Monaco command 参数须可序列化 → 以 id 反查动作本体） */
@@ -2193,10 +2215,14 @@ export function EditorPane({
       // 让元信息位落回空档——陈旧的一句「已保存 12:34」不许骑到新文件头上。
       setStatus('');
       setFirstFileShown(true); // 骨架退场：首个文件已落屏（重复置 true 无副作用）
-      // 打开/切换即算一次装饰（不等用户编辑）——首屏就能看到波浪线
       if (markerTimerRef.current !== null) window.clearTimeout(markerTimerRef.current);
       markerTimerRef.current = null;
-      refreshMarkers(entry.model, filePath);
+      // 打开/切换即算一次装饰（不等用户编辑）——但**首拍不发起**（1025 切文件批）：
+      // 冷开一份 4,800 行文件时这一发要在本任务里同步跑完几路装饰（实测 30–40ms，最大的一路
+      // 是整篇表达式诊断），它会把"切过去"那一帧一起撑成 90ms 级的长任务。装饰不是首帧
+      // 必需（字、光标位、滚动位都已落定），挪到下一个宏任务再发起：波浪线仍在同一屏期内出现，
+      // 用户看不到时序差，而切文件那一拍只剩 `setModel` + 落档。
+      markerFrameRef.current = scheduleMarkerRefresh(() => cancelled, () => refreshMarkers(entry.model, filePath));
       applySugarView(); // 预览：整份 ERB 投影成 .kojo 写法（默认关；`.kojo` 自动跳过）
       // EOL 切换入口的可用性要按**最终上屏的 model** 上报（预览可能刚挂上只读糖 model）⇒
       // 这一报必须排在 applySugarView 之后
@@ -2209,6 +2235,9 @@ export function EditorPane({
     })();
     return () => {
       cancelled = true;
+      // 尚未落地的那一拍装饰随本拍作废（下一拍会自己发；见 scheduleMarkerRefresh）
+      markerFrameRef.current?.();
+      markerFrameRef.current = null;
     };
   }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
 

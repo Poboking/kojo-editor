@@ -26,6 +26,7 @@ import {
   FIND_BASELINE,
   applySizeTier,
   editorOptionsForLineCount,
+  flushDeferredTierOptions,
   foldingEnabledForLineCount,
   formatOnTypeForDocument,
   sizeTierKeys,
@@ -135,6 +136,9 @@ describe('PS-5 档位补齐：每条体量轴的键都必须逐档有值（**清
     applySizeTier(ed, 120_000, { readOnly: true }); // 挂上 .kojo 投影（比原文更长）
     expect(current.readOnly).toBe(true);
     applySizeTier(ed, 800); // 撤下投影、按回到屏幕上的那份原文落档
+    // 1025 切文件批：`detectIndentation` 是模型级扫描（Monaco 会给每份活着的 model 重扫缓冲区），
+    // 落档把它排到下一帧；对账"最终选项"前先把它落地（与宿主行为一致，不是绕过判据）。
+    flushDeferredTierOptions(ed);
     const small = editorOptionsForLineCount(800) as Record<string, unknown>;
     for (const k of KEYS) expect(current[k], `切回 800 行后 ${k} 还留在上一档`).toEqual(small[k]);
     expect(current.formatOnType).toBe(true);
