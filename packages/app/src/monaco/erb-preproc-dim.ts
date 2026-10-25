@@ -26,8 +26,8 @@
 import type * as Monaco from './entry';
 import * as monaco from './entry';
 import type { ErbIndex } from '@kojo/plugin-api';
+import { isErbDialectPath } from '@kojo/plugin-api';
 import { collectPreprocDeadRanges } from '@kojo/plugin-erb-parser';
-import { ERB_LANGUAGE_ID } from './erb-language';
 import { definedMacrosOf } from './erb-preproc-defines';
 import './erb-preproc-dim.css';
 
@@ -89,8 +89,11 @@ export function installErbPreprocDim(deps: { index: () => ErbIndex | null }): Er
       clearOf(entry);
       return;
     }
-    // 糖预览 / diff 侧的派生 model：不对投影判死支（行号也可能对不上）
-    if (model.getLanguageId() !== ERB_LANGUAGE_ID || model.uri.scheme !== 'file') {
+    // 糖预览 / diff 侧的派生 model：不对投影判死支（行号也可能对不上）。
+    // 判据走**路径扩展名**（ERB 方言三件套）而不是 model 语言 id：语言 id 分支是
+    // LAU-2 起要收敛的形态（`audit-language` M2），而"哪些扩展名属 ERB"本来就由契约
+    // `ERB_DIALECT_EXTENSIONS` 一处回答。
+    if (model.uri.scheme !== 'file' || !isErbDialectPath(model.uri.fsPath)) {
       clearOf(entry);
       return;
     }
