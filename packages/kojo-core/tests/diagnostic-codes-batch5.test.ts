@@ -4,7 +4,8 @@
  * 钉三件事：
  * 1. **码表是闭集、只增不改**：`diagnostics.ts` 的 `CoreDiagnosticCode` 联合相对 batch-4
  *    基线只多出 batch-5 四条 + batch-7 一条（`core/migration/ambiguous-dialogue`，迁移期
- *    warning）；既有码逐条仍在（一条都不许删/改名）；无重复；batch-5 新码全部 error。
+ *    warning）+ LAU-D1 六枚（方言/事件/载体；`core/dialect/*` 三枚 + `core/event/*` 两枚 +
+ *    `core/carrier/unowned`）；既有码逐条仍在（一条都不许删/改名）；无重复；batch-5 新码全部 error。
  * 2. **生产者真的用新码**（不是只写进表）：`pool-plan.ts` / `sema/check.ts` /
  *    `project/weave-layers.ts` 各自的正反例——正例必须命中新码，反例必须不命中，
  *    且**不再借用**此前那张借来的码（`core/expr/not-expression` /
@@ -17,10 +18,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import type { GameAdapter } from '../src/adapter.js';
+import { ADAPTER_VALIDATION_CODES } from '../src/adapter.js';
 import type { KojoDecl, KojoFile, KojoSpan, KojoWeaveDecl, KojoWeaveModifier } from '../src/ast.js';
 import { compileKojoSource } from '../src/compile.js';
 import type { CoreDiagnosticCode } from '../src/diagnostics.js';
-import { CORE_WARNING_CODES, severityOf } from '../src/diagnostics.js';
+import { CORE_WARNING_CODES, isCoreCode, severityOf } from '../src/diagnostics.js';
 import { FIXTURE_ADAPTER, FIXTURE_BACKEND } from '../src/fixture-adapter.js';
 import { planPoolDispatch } from '../src/lower/expand/pool-plan.js';
 import { parseSource } from '../src/parser.js';
@@ -47,6 +49,24 @@ const BATCH5_CODES: readonly CoreDiagnosticCode[] = [
  * 它不在 batch-5 的四条里，故单列一张表；下面的"差集"断言把两批一起算。
  */
 const BATCH7_CODES: readonly CoreDiagnosticCode[] = ['core/migration/ambiguous-dialogue'];
+
+/**
+ * LAU-D1（方言载体契约）additive 的六枚（`ARCH-language-unification.md` §5.5 的码表落地批）。
+ * 与 batch-5 的分工：那四条是"计划面/语义面"的补码，这六枚全部住在**方言/事件/载体**三格，
+ * 且刻意**不复用** `event/*` `unit/*` 那两族适配器自检码（语义不同：那两族 = 适配器数据不合格）。
+ * 严重度：`core/dialect/unbound` 与 `core/carrier/unowned` 是降级面 ⇒ warning；其余四枚 error。
+ */
+const LAUD1_CODES: readonly CoreDiagnosticCode[] = [
+  'core/dialect/unbound',
+  'core/dialect/mismatch',
+  'core/dialect/response-mismatch',
+  'core/event/unknown',
+  'core/event/wrong-carrier',
+  'core/carrier/unowned',
+];
+
+/** LAU-D1 里的 warning 两枚（降级不阻断，但必须可见） */
+const LAUD1_WARNING_CODES: readonly CoreDiagnosticCode[] = ['core/dialect/unbound', 'core/carrier/unowned'];
 
 /**
  * batch-4 收工时的全表（`git show <batch-4>/diagnostics.ts`）。
@@ -127,10 +147,31 @@ describe('码表 · 闭集只增（S5.6）', () => {
     expect(missing, `既有码被删/改名：${missing.join(' / ')}`).toEqual([]);
   });
 
-  it('本批相对基线的差集恰为四条新码（多一条/少一条都要过审）', () => {
+  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
-    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES].sort());
+    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES].sort());
+  });
+
+  it('LAU-D1 六枚都在闭集里，且严重度按声明落位（两枚 warning / 四枚 error）', () => {
+    for (const code of LAUD1_CODES) {
+      expect(declared, `${code} 不在 CoreDiagnosticCode 联合里`).toContain(code);
+      const expectWarning = LAUD1_WARNING_CODES.includes(code);
+      expect(CORE_WARNING_CODES.has(code), `${code} 的 warning 归属不符`).toBe(expectWarning);
+      expect(severityOf(code), `${code} 的严重度不符`).toBe(expectWarning ? 'warning' : 'error');
+    }
+    // error 四枚逐条点名（防止有人顺手把冲突也降成 warning）
+    for (const code of ['core/dialect/mismatch', 'core/dialect/response-mismatch', 'core/event/unknown', 'core/event/wrong-carrier']) {
+      expect(severityOf(code), `${code} 必须是 error`).toBe('error');
+    }
+  });
+
+  it('LAU-D1 不吃适配器自检码：`event/unknown` 仍是 `event/*` 族、语义与级别不动', () => {
+    expect(ADAPTER_VALIDATION_CODES.eventUnknown).toBe('event/unknown');
+    expect(isCoreCode(ADAPTER_VALIDATION_CODES.eventUnknown)).toBe(false);
+    expect(LAUD1_CODES).toContain('core/event/unknown');
+    // 作者面码与自检码是两条串，聚合时才分得开
+    expect(LAUD1_CODES.map(String)).not.toContain('event/unknown');
   });
 
   it('batch-7 的同形歧义码是 warning（迁移期保留现状，不阻断）', () => {

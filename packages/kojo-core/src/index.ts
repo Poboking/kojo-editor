@@ -37,6 +37,8 @@ export * from './incremental.js';
 /* 适配层契约与 fixture */
 export * from './adapter.js';
 export * from './fixture-adapter.js';
+/* 方言解析（LAU-D1）：识别链结论 + 工作区覆盖 + 文件断言 → 载体绑定（薄壳，零 IO，不做第二真源） */
+export * from './dialect-resolver.js';
 /* 项目级：冲突/Layer/接管 + 存储期分配 */
 export * from './project/index.js';
 /* 表达式 AST（K2-EXPR-AST）：ExprText 的结构化解析/打印/对拍，供语义服务与类型检查 */

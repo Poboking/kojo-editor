@@ -412,6 +412,40 @@ export type WellKnownCommandId = (typeof WellKnownCommands)[keyof typeof WellKno
 /* -------------------- ui.editor.languageService -------------------- */
 
 /**
+ * 一份文档所属的**载体**（`ARCH-language-unification.md` §5.1 三轴之一：语法 / 载体 / 方言）。
+ * 取值与 `@kojo/kojo-core` 的 `DialectCarrier` 逐字相同——**这里刻意不 import 那个包**：
+ * plugin-api 是插件唯一的共享 API，零依赖（`packages/plugin-api/package.json` 没有 dependencies），
+ * 让它反向依赖 kojo-core 会把"契约层"拖进语言核心的实现里。结构一致就够：
+ * TS 按形状赋值，宿主把 core 的 `DialectBinding` 原样递进来即成立。
+ */
+export type DialectCarrierKind = 'erb' | 'xml' | 'inline';
+
+/**
+ * 方言上下文的**最小结构**（LAU-D1，additive；§5.2 ③）。
+ *
+ * 为什么不把 2.0 的 `GameAdapter` 整枚塞进来：那一格的类型住在 `@kojo/kojo-core`，
+ * 而本包**不许**依赖它（依赖方向：kernel → plugin-api，插件 → plugin-api；
+ * kojo-core 与 plugin-api 今天互不 import，造出环就没有窄门可守）。
+ * 所以这里只留三格**便利**字段，事实由供方自己取：
+ *
+ * - `dialect`：方言 id，**口径 = `request.project.adapterId`**（真源是识别链
+ *   `detect()` → 恰一命中 → `loadProject`，内核并强制 `project.adapterId === gameId`）。
+ *   ⚠ 这一格只是把"宿主已解析一次"显式化，**不是第二真源**：与 `project.adapterId` 分叉
+ *   即 `core/dialect/response-mismatch`（宿主对账后丢弃该响应），供方**不许**拿它覆盖工程事实；
+ * - `factsVersion`：事实版本（= 那枚 `GameAdapter.version`），方言包升级 ⇒ 供方缓存自行失效；
+ * - `carrier`：这份文件的载体归属；`null` = 该方言未声明 `carriers` 或这份文件不在任何 glob 里。
+ *
+ * **没有默认方言这一格**（D12）：缺省（`undefined`）= 未绑定 ⇒ 事实类服务必须按"无事实"降级
+ * （返回空 + 一条 `core/dialect/unbound`），**绝不回落到任何默认方言**——借别游戏的事实出提示，
+ * 比不给提示更危险（它看起来是对的）。
+ */
+export interface DialectContext {
+  readonly dialect: string;
+  readonly factsVersion: string;
+  readonly carrier: DialectCarrierKind | null;
+}
+
+/**
  * 一份文档在语言服务请求里的**模型身份**（LANG-CONTRACT，2026-10-20，additive 可选两格）。
  *
  * 为什么不是每个能力各写一份：按语言分派、按版本判陈旧是**所有**文档型请求的共同前提；
@@ -431,6 +465,17 @@ export type WellKnownCommandId = (typeof WellKnownCommands)[keyof typeof WellKno
 export interface EditorDocumentIdentity {
   readonly languageId?: string;
   readonly version?: number;
+  /**
+   * 这份文档的方言上下文（LAU-D1，**additive 可选**）。
+   *
+   * 13 处语言服务请求今天就带 `readonly project: GameProject | null`——`project.adapterId`
+   * 已经是方言 id 的口径，供方也已经在按它失败关闭。这一格的作用是让宿主把
+   * "已解析的归属 + 事实版本"随请求一次性下传，供方**不必**再各自去猜载体；
+   * 既有 13 处请求与所有旧供方**零改动**（缺省 = 未绑定 = 旧行为）。
+   *
+   * 见 {@link DialectContext} 的分叉纪律：它不得与 `project.adapterId` 分叉。
+   */
+  readonly dialect?: DialectContext;
 }
 
 /**

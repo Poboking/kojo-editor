@@ -16,6 +16,10 @@ import type { KojoSpan } from './ast.js';
  * `core/array/whole-assign`、`core/weave/not-weavable`——每条都在声明处写清生产者、
  * 分工与消息模板；`core/decl/bad-array-size` 早已在表内（`# 变量 x 整数[0]` 仍按设计稿
  * §3.4.2「N 必须是正整数」拒收，不新增码、不放开 0 长）。
+ *
+ * LAU-D1 批（方言载体契约）additive 扩入**六枚**方言/载体码（`core/dialect/*` 三枚 +
+ * `core/event/*` 两枚 + `core/carrier/unowned`），逐枚在声明处写清生产者、与既有码的分工、
+ * 级别与消息模板；`# 方言` 词位本身的文法不在此批（本批只把断言当**输入参数**吃）。
  */
 export type CoreDiagnosticCode =
   /* 词法与结构（C1 additive） */
@@ -219,6 +223,88 @@ export type CoreDiagnosticCode =
   | 'core/storage/corrupt-snapshot'
   | 'core/storage/range-changed'
   | 'core/storage/exhausted'
+  /*
+   * 方言与载体（LAU-D1；`ARCH-language-unification.md` §5.5）。
+   *
+   * 两族纪律先说清：`unit/*` 与 `event/*` 是**适配器数据自己不合格**的自检码
+   * （`ADAPTER_VALIDATION_CODES`），**作者写错了**走下面的 `core/…`。
+   * 尤其 `event/unknown` 这个串今天已被 `validateGameAdapter` 与 `checkEvent` 占用，
+   * 语义与级别都不动——下面那枚 `core/event/unknown` 是同义的**作者面**码，两者并存。
+   */
+  /**
+   * **方言未绑定**（`dialect-resolver.ts::resolveDialectBinding`；§5.3 第 4 级）。
+   * 识别链（`detect()` → `project.adapterId`）与工作区覆盖**都**拿不到，或拿到的方言
+   * 没有 2.0 事实面 ⇒ 事实类服务按"无事实"降级（空结果 + 本码）。
+   *
+   * **绝不回落到任何默认方言**（D12）：回落 = 用另一个游戏的事实给当前文件出提示，
+   * 那正是 §5.1 事实 1 里"错误的事实不报错"的病根。
+   *
+   * 级别：warning（在 `CORE_WARNING_CODES` 里）——降级本身不阻断编译，但必须可见
+   * （铁律 4「内核不静默」）；与 `core/options/pending` 同档：状态清楚、产物照走。
+   * 消息模板：`未绑定方言：识别链没有给出结论（也没有工作区覆盖），事实类服务按无事实降级。`
+   */
+  | 'core/dialect/unbound'
+  /**
+   * **方言断言/覆盖与识别链冲突**（§5.3 第 2、3 级；生产者是 `resolveDialectBinding`）。
+   * 两种成因同码：① 工作区 `meta` 覆盖 ≠ `detect()` 结论（**以覆盖为准**，冲突仍报）；
+   * ② 文件内 `# 方言 <id>` 的断言 ≠ 解析结果（断言只自证、不产生真源）。
+   *
+   * 与 `core/dialect/unbound` 的分工：那边是"什么都没有"，本码是"有两个说法、且互不相容"。
+   * `# 方言` 词位本身的文法/词表不在本批（由 L5 车道的文法实现产生断言值，本批只吃注入的字符串）。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里；§5.3「不一致是 error，不是 warning」）。
+   * 消息模板：`方言冲突：{来源}声明 {A}，识别链结论 {B}——按 {取值口径} 处理，冲突已阻断。`
+   */
+  | 'core/dialect/mismatch'
+  /**
+   * **响应带的方言与请求的方言不一致**（§5.4 第 2 行「错事实不报错」的执行点；LAU-D2 接线时发射）。
+   * 供方在响应里自证 `dialect` + `factsVersion`，宿主与 `request.project.adapterId` 对账，
+   * 分叉即本码——`EditorDocumentIdentity.dialect` 只是便利下传，**不是第二真源**，
+   * 因此分叉一定是供方/宿主接线错了，而不是"两个都对"。
+   *
+   * 与 `core/dialect/mismatch` 的分工：那条发生在**解析期**（工程/文件级的方言来源互相冲突）；
+   * 本条发生在**响应期**（解析已定，某次语言服务响应用错了方言）。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板：`{服务}的响应用的是方言 {响应方言}（事实 {响应版本}），当前工程是 {工程方言}：结果已丢弃。`
+   */
+  | 'core/dialect/response-mismatch'
+  /**
+   * **作者写了当前方言事件目录里没有的事件**（§5.5 第 1 行；`# 机` / `@织` / XML `command` 三条落点共用）。
+   *
+   * 与既有 `event/unknown`（`ADAPTER_VALIDATION_CODES.eventUnknown`）的分工：那条是**适配器族**，
+   * 今天同时被 `validateGameAdapter`（默认事件不在表里）与 `checkEvent` 使用，**语义与级别一律不动**；
+   * 本码是**作者面**的稳定码，供 `dialect lint`（LAU-D2）按 `(码, 方言)` 聚合，
+   * 不与自检码混在一张表里，否则聚合与错配断言都会失真。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里；「未知事件 = error」是 spec §10.6 的既有口径）。
+   * 消息模板：`方言 {方言} 的事件目录里没有“{事件}”。可用事件：{列表}。`
+   */
+  | 'core/event/unknown'
+  /**
+   * **事件写在了错误的载体上**（§5.5 第 2 行；LAU-D3 的 XML 面发射）。
+   * 事件名在目录里存在，但 `carriers[]` 声明它属于另一个载体——写在 ERB 里就落不到引擎的派发点。
+   *
+   * 与 `core/event/unknown` 的分工：那条是"没有这个事件"（名字面）；本条是"事件有、地方错"
+   * （载体面），修法完全不同（改名 vs 把这段挪进对应载体）。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里）。
+   * 消息模板：`事件“{事件}”属于 {声明载体} 载体，这份文件是 {实际载体}：挪到 {glob} 覆盖的文件里。`
+   */
+  | 'core/event/wrong-carrier'
+  /**
+   * **这份文件不在方言声明的任何载体归属里**（§5.5 第 6 行；生产者 `resolveDialectBinding`）。
+   * 方言声明了 `carriers`，但该文件路径匹配不上任何一条 glob ⇒ 载体归属不明，
+   * 事实类校验只能整面跳过（**不猜**它属于哪个载体）。
+   *
+   * 与 `core/event/wrong-carrier` 的分工：那条"知道载体、且载体写错了"；本条"连载体都判不出来"。
+   * 与 `core/dialect/unbound` 的分工：那边是方言没绑定，这边方言是绑定的、只有文件归属缺。
+   *
+   * 级别：warning（在 `CORE_WARNING_CODES` 里）——归属缺失不否定已有事实，只是这一面的校验落空；
+   * 想让方言覆盖它，补一条 `carriers` 即可（数据面改动，不动语法）。
+   * 消息模板：`文件 {路径} 不在方言 {方言} 声明的任何载体归属里（carriers 的 glob 都没命中）：该文件的载体级校验跳过。`
+   */
+  | 'core/carrier/unowned'
   | 'core/options/pending'
   | 'core/profile/missing'
   | 'core/feature/unsupported';
@@ -232,6 +318,10 @@ export const CORE_WARNING_CODES: ReadonlySet<CoreDiagnosticCode> = new Set<CoreD
   'core/options/pending',
   // 迁移期专用：同形歧义只能保留现状并提示（不阻断迁移）。见码声明处的分工说明。
   'core/migration/ambiguous-dialogue',
+  // LAU-D1：方言/载体归属的**降级面**（不阻断，但必须可见）；四枚 error 档
+  // （方言冲突、响应错配、未知事件、事件落点错）刻意不进这张表，见各码声明处的级别说明。
+  'core/dialect/unbound',
+  'core/carrier/unowned',
 ]);
 
 /** adapter 诊断命名空间（additive，不覆盖 core 码） */

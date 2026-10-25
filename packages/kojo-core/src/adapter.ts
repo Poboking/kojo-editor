@@ -76,6 +76,20 @@ export interface GameAdapter {
   readonly sourceMap: SourceMapPolicy;
   /** 一致性套件：golden + differential + smoke + encoding */
   readonly conformanceSuite: ConformanceSuite;
+  /**
+   * 载体归属（**additive 可选**；LAU-D1，§5.2 ③）：这个方言的口上写在哪些文件里、
+   * 每个载体上校验哪几类事实。
+   *
+   * 口径写死，别扩：
+   * - **省略 / `undefined` = 未声明** ⇒ 完全合法，`validateGameAdapter` 零诊断
+   *   （今天所有既有适配器都不声明这一格，一行不改也不报错）；
+   * - 空数组 = 声明了"零条归属"，同样合法（只有内联面的方言就是这么表达的）；
+   * - 只有**给了的形状**才进校验：载体名、glob 非空、`validates` 值域、同一 `(carrier, glob)`
+   *   不重复（重复 = 一条路径两个落点，归属要靠猜，本仓不许猜）。
+   *
+   * 校验落点见 `dialect-resolver.ts`；宿主只用它做归属，不用它解释内容。
+   */
+  readonly carriers?: readonly CarrierBinding[];
 }
 
 /* ============================== 2. 指纹 ============================== */
@@ -100,8 +114,17 @@ export interface GameFingerprint {
 
 /* ============================== 3. 事件目录 ============================== */
 
-/** 事件调用方式：引擎分发 / 标签分发 / 钩子（adapter 事实，core 只读） */
-export type EventDispatchModel = 'engine-dispatch' | 'label-dispatch' | 'hook';
+/**
+ * 事件调用方式：引擎分发 / 标签分发 / 钩子（adapter 事实，core 只读）。
+ *
+ * `metadata`（LAU-D1 additive）＝**由数据表派发**：引擎自己不认识这个事件，
+ * 派发靠一份运行期可读的元数据表（登记行 → 表里查处理函数）。
+ * ⚠ 这一格只回答"事件怎么被找到"（dispatch 模型），**不是**分层模型：
+ * `LayerMode`（unique / shared-hook / overlay）与 `LayerTarget` 讲的是"同层多定义算不算冲突"，
+ * spec §10.5 明令「事件监听的多定义、函数的同名、口上的覆盖层，三者不要混为一谈」⇒
+ * 本批**一个字都不动**那两者，也不把 `dispatch` 挪到事件粒度去取代 `LayerRule.mode`。
+ */
+export type EventDispatchModel = 'engine-dispatch' | 'label-dispatch' | 'hook' | 'metadata';
 
 /** 优先级模型；`emuera-buckets` 时 `@织 之前/之后/接管` 才有落点（§8.6） */
 export type EventPriorityModel = 'emuera-buckets' | 'load-order' | 'none';
@@ -496,6 +519,67 @@ export interface ConformanceSuite {
   readonly required: readonly ConformanceKind[];
 }
 
+/* ============================== 9.5 方言绑定（LAU-D1 additive） ============================== */
+
+/**
+ * 方言标识。**取值口径 = 项目识别链给出的那枚 id**（`GameProject.adapterId`，
+ * 由内核 `detect()` 恰一命中后强制 `project.adapterId === gameId`），
+ * core 不另立一套 id、不做第二真源、也不按文件内容嗅探。
+ */
+export type DialectId = string;
+
+/**
+ * 载体：这段文字**写在哪**（ERB 内联 / XML / 未来的别的）。
+ * 与"语法"和"方言"两轴正交（§5.1）：着色·折叠·缩进只认语法，事实只认方言，
+ * 载体只决定"这份文件归谁校验"。
+ */
+export type DialectCarrier = 'erb' | 'xml' | 'inline';
+
+/**
+ * 载体上可被方言校验的**事实类**（`carriers[].validates` 的值域）。
+ * 四格与 `GameAdapter` 的四个事实面一一对应，不新造概念。
+ */
+export type DialectFactKind = 'event' | 'symbol' | 'presentation' | 'storage';
+
+/**
+ * 载体归属规则：**一条"哪些文件算这个载体"的数据**（§5.2 ③，本批唯一真正新增的格）。
+ *
+ * 为什么必须是数据：同一门语言里，作者写口上的地方可以换（一种方言的主战场在内联 ERB，
+ * 另一种在 XML，注册壳只剩个空函数）。归属规则写进宿主就是"每加一个 era 改一次宿主"，
+ * 落在 `carriers` 里才是"加一个方言包"。宿主只用它判归属，**不解释内容**。
+ *
+ * `glob` 相对**项目根**（= `detect()` 认下的那个目录），分隔符写正斜杠；
+ * 匹配子集见 `dialect-resolver.ts::carrierGlobMatches`（`*` 不跨段、`**` 跨段、`?` 单字）。
+ */
+export interface CarrierBinding {
+  readonly carrier: DialectCarrier;
+  readonly glob: string;
+  /** 该载体上哪些事实类由方言校验；**省略 = 全部事实类**（不猜，也不默认关掉某一类） */
+  readonly validates?: readonly DialectFactKind[];
+}
+
+/**
+ * 一次语言服务请求的方言上下文：**宿主解析一次，供方只读**（§5.2 ③）。
+ *
+ * - `facts` 就是既有 2.0 `GameAdapter` 本体（**不重定义字段、不投影成新契约**——
+ *   D13 的红线：仓里只许有两套游戏事实契约，v1 与 2.0，不得长第三套）；
+ * - `factsVersion` 沿用 `GameAdapter.version`：方言包升级 ⇒ 供方缓存自行失效，不必重启；
+ * - `carrier` = 这份文件的归属；`null` = 该方言没声明 `carriers`，或这份文件不在任何 glob 里
+ *   （后者由 `resolveDialectBinding` 另报 `core/carrier/unowned`，不静默）；
+ * - **没有 `fallbackDialect`**：这一格不存在的唯一语义就是"未绑定"，绝不回落到默认方言（D12）。
+ *
+ * 与 `GameProject.adapterId` 的关系：`dialect` 只是把"宿主已解析"这件事**显式化**的便利，
+ * 不是新真源；两者分叉即 `core/dialect/response-mismatch`（§5.4 第 2 行）。
+ */
+export interface DialectBinding {
+  readonly dialect: DialectId;
+  readonly facts: GameAdapter;
+  readonly factsVersion: string;
+  readonly carrier: DialectCarrier | null;
+  /** 命中归属时带上该载体的校验范围（省略 = 全部事实类）；未归属 ⇒ `undefined` */
+  readonly validates?: readonly DialectFactKind[];
+}
+
 /* ============================== 10. 常量集合 ============================== */
 
 const NARRATION_COLORS: readonly NarrationColorPolicy[] = Object.freeze(['author', 'default', 'auto'] as const);
@@ -522,6 +606,7 @@ const DISPATCH_MODELS: readonly EventDispatchModel[] = Object.freeze([
   'engine-dispatch',
   'label-dispatch',
   'hook',
+  'metadata',
 ] as const);
 const PRIORITY_MODELS: readonly EventPriorityModel[] = Object.freeze(['emuera-buckets', 'load-order', 'none'] as const);
 const CONFORMANCE_KINDS: readonly ConformanceKind[] = Object.freeze([
@@ -538,6 +623,15 @@ const ADAPTER_NAMESPACES: readonly AdapterDiagnosticNamespace[] = Object.freeze(
   'variant',
   'overlay',
   'raw',
+] as const);
+/** `carriers[].carrier` 的值域（§5.1 载体轴；**只增不改**，改词表要同时改 descriptor 侧） */
+const CARRIER_KINDS: readonly DialectCarrier[] = Object.freeze(['erb', 'xml', 'inline'] as const);
+/** `carriers[].validates[]` 的值域（四格 = `GameAdapter` 的四个事实面） */
+const DIALECT_FACT_KINDS: readonly DialectFactKind[] = Object.freeze([
+  'event',
+  'symbol',
+  'presentation',
+  'storage',
 ] as const);
 /** 域符号变量允许的值类型（叶子；`unknown` 不登记——声明了变量就等于声明了类型） */
 const DOMAIN_VARIABLE_KINDS: readonly DomainVariableSymbol['valueKind'][] = Object.freeze([
@@ -1201,6 +1295,71 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
       }
       if (!required.has(item.kind)) {
         push(ADAPTER_VALIDATION_CODES.conformance, `验收用例“${item.name}”的 kind 不在 required 里。`);
+      }
+    }
+  }
+
+  /*
+   * --- carriers（LAU-D1 additive；**缺省 = 未声明 ⇒ 零诊断**）---
+   *
+   * 只校验"给了的形状"，**绝不把缺省判成不合格**：既有适配器都不声明这一格，
+   * 一旦在这里要求 carriers，就是让旧适配器集体变红（§六 additive 契约、旧消费方零改动）。
+   * 形状坏 → incomplete（不能猜归属）；同一 (carrier, glob) 重复 → inconsistent。
+   */
+  const rawCarriers: unknown = adapter.carriers;
+  if (rawCarriers !== undefined) {
+    if (!Array.isArray(rawCarriers)) {
+      push(
+        ADAPTER_VALIDATION_CODES.incomplete,
+        'carriers 必须是数组（省略 = 未声明载体归属；空数组 = 声明了但零条归属，同样合法）。',
+      );
+    } else {
+      const seen = new Set<string>();
+      for (const raw of rawCarriers as readonly unknown[]) {
+        const binding = raw as Partial<CarrierBinding> | null;
+        if (binding === null || typeof binding !== 'object') {
+          push(ADAPTER_VALIDATION_CODES.incomplete, 'carriers 含非对象条目：每条归属都要声明载体与 glob。');
+          continue;
+        }
+        const carrierOk = isOneOf(binding.carrier, CARRIER_KINDS);
+        if (!carrierOk) {
+          push(
+            ADAPTER_VALIDATION_CODES.incomplete,
+            `carriers 含未知载体“${String(binding.carrier)}”（erb / xml / inline）。`,
+          );
+        }
+        if (!isText(binding.glob)) {
+          push(
+            ADAPTER_VALIDATION_CODES.incomplete,
+            `载体“${String(binding.carrier)}”的 glob 为空：归属必须写清落在哪些文件（相对项目根、正斜杠）。`,
+          );
+          continue;
+        }
+        const key = `${carrierOk ? binding.carrier : '?'}\u0000${binding.glob}`;
+        if (seen.has(key)) {
+          push(
+            ADAPTER_VALIDATION_CODES.inconsistent,
+            `carriers 对载体“${String(binding.carrier)}”的 glob“${binding.glob}”重复声明：一条路径只能有一个归属。`,
+          );
+        } else seen.add(key);
+        const validates: unknown = binding.validates;
+        if (validates !== undefined) {
+          if (!Array.isArray(validates)) {
+            push(
+              ADAPTER_VALIDATION_CODES.incomplete,
+              `载体“${String(binding.carrier)}”的 validates 必须是数组（省略 = 该载体上全部事实类都校验）。`,
+            );
+          } else {
+            for (const kind of validates as readonly unknown[]) {
+              if (!isOneOf(kind, DIALECT_FACT_KINDS)) {
+                push(
+                  ADAPTER_VALIDATION_CODES.incomplete,
+                  `载体“${String(binding.carrier)}”的 validates 含未知事实类“${String(kind)}”（event / symbol / presentation / storage）。`,
+                );
+              }
+            }
+          }
+        }
       }
     }
   }

@@ -806,3 +806,6 @@ export type {
   ScaffoldStubSpec,
   ScaffoldTemplateHint,
 } from './scaffold';
+
+/* ---- LAU-D1 方言上下文（krosama 1025 独占追加区块；勿在他处重排） ---- */
+export type { DialectCarrierKind, DialectContext } from './slots';
