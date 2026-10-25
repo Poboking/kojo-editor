@@ -168,7 +168,14 @@ describe('诊断码中文显示名：无孤儿条目', () => {
 
   it('结构类闭集与 erb.ts 的 kind 联合逐一对账', () => {
     expect([...NATIVE_STRUCTURE_CODES].sort()).toEqual(
-      ['erb.dim-invalid', 'erb.orphan-branch', 'erb.orphan-close', 'erb.return-form', 'erb.unclosed-open'].sort(),
+      [
+        'erb.dim-invalid',
+        'erb.erh-invalid',
+        'erb.orphan-branch',
+        'erb.orphan-close',
+        'erb.return-form',
+        'erb.unclosed-open',
+      ].sort(),
     );
   });
 });

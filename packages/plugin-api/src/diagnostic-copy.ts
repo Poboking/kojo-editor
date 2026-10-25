@@ -98,6 +98,7 @@ export const NATIVE_STRUCTURE_CODES = [
   'erb.orphan-branch',
   'erb.dim-invalid',
   'erb.return-form',
+  'erb.erh-invalid',
 ] as const;
 
 /** 表达式诊断码闭集（词法错 / 语法错两类） */
@@ -189,6 +190,10 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'erb.orphan-branch': { name: '分支无人归属', detail: '这条分支语句前面没有它要归属的开块。' },
   'erb.dim-invalid': { name: '变量声明不合规', detail: '这条 #DIM 声明违反引擎规则，加载时会让整个文件失败。' },
   'erb.return-form': { name: '函数收尾形态不对', detail: '#FUNCTION 函数要用 RETURNF 收尾，裸 RETURN 带不出返回值。' },
+  'erb.erh-invalid': {
+    name: '头文件里写了引擎不认的行',
+    detail: '.ERH 只允许 #DIM / #DIMS / #DEFINE；这一行会让 Emuera 中止整轮头文件加载。',
+  },
   'erb.expr-lexical': { name: '表达式有无法识别的字符', detail: '条件表达式里存在词法层面读不懂的内容。' },
   'erb.expr-syntax': { name: '表达式结构不对', detail: '条件表达式的括号、操作数或冒号写法不成立。' },
 

@@ -393,11 +393,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       "变量名 / 宏名"）+ 表头语料读数（8 盘 143,167 行 0 命中）。
     //     · +0.2 KB `erb-parser/index.ts`：导出 `ERB_INSTRUCTION_NAMES` / `isInstructionName`
     //       （宿主与单测取表的入口）。
+    //   - **A4 头文件形态批（2026-10-26，本批）**：现读数 **193 文件 / 2,860 KB**，两枚闸随现值
+    //     上抬（192 → **193** 文件、2,850 → **2,870** KB）。增量逐块点名（+1 文件 / +15 KB；
+    //     图内源码实量合计 +14.1 KB，另 1 KB 是两次四舍五入）：
+    //     · +10.4 KB `erb-parser/erh.ts`（**新进图**）：`.ERH` 形态判据（`checkHeaderIssues`）
+    //       ——行可见性口径（空行 / 注释 / `;!;` 前缀 / `{}` 行连接）与引擎
+    //       `ErhLoader.loadHeaderFile` + `EraStreamReader.ReadEnabledLine` 逐条对齐，
+    //       白名单 `#DIM` / `#DIMS` / `#DEFINE`。由 `structure.ts` 静态引用；erb-parser 是
+    //       `bootstrap.ts` 两个常驻插件之一，**没有可挪的动态边**——判据必须活在装饰器那次
+    //       调用里，挪去宿主就得把引擎口径复制一份。体量九成是中文注释（引擎源码逐字引用、
+    //       行可见性三条、少报一侧的说明）。
+    //     · +1.3 KB `plugin-api/erb.ts`：`checkStructure?` 的可选 `path` 契约说明 +
+    //       `erh-invalid` 进 kind 联合。
+    //     · +1.3 KB `erb-parser/structure.ts`：第三趟分派（`isErbDeclarationPath`）与按行去重。
+    //     · +0.6 KB `erb-parser/offload.ts`：装饰通道从 `checkControlFlowStructure` 切到全量
+    //       入口——声明面两类与头文件形态此前只到服务面，编辑器**一条都看不到**。
+    //     · +0.2 KB `plugin-api/diagnostic-copy.ts`：`erb.erh-invalid` 的中文名。
+    //     · +0.1 KB `erb-parser/plugin.ts` / `index.ts`：服务面透传 `path` 与导出面。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤192 文件 / ≤2,850 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_850);
-    expect(files.length).toBeLessThanOrEqual(192);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤193 文件 / ≤2,870 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_870);
+    expect(files.length).toBeLessThanOrEqual(193);
   });
 
   /**

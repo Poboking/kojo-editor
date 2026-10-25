@@ -28,7 +28,7 @@ import type {
 } from '@kojo/plugin-api';
 import { isErbDialectPath } from '@kojo/plugin-api';
 import { parseErbText, scanControlFlow } from './scanner';
-import { checkControlFlowStructure } from './structure';
+import { checkStructure } from './structure';
 import { structureDiagnostic } from './structure-fix';
 import { scanFileRefs, type FileRefs } from './references';
 
@@ -163,12 +163,19 @@ export function scanRefsNamesOf(namesFp: number, names: Iterable<string>): ScanR
  *
  * 两处各写一遍必然漂移——漂移的表现是"有并行通道时波浪线一种、通道挂了另一种"，
  * 那种不一致比慢十倍更糟。适用性判据（方言扩展名 / 空文本）也在这一份里。
+ *
+ * **走的是全量入口 `checkStructure(text, path)` 而不是只跑配对那一趟**（2026-10-26 A4）：
+ * 声明面两类（`#DIM` 硬规则 / `#FUNCTION` 收尾）与头文件形态此前只到服务面，编辑器
+ * 一条都看不到——`checkStructure` 的头注写着"宿主只认一个答案"，而当时宿主根本没调它。
+ * 判据（`dim-invalid` / `return-form` / `erh-invalid`）都已按"只在拿得准的地方说话"
+ * 收过真语料（8 盘：`#DIM` 族 143,167 行 0 命中、`.ERH` 648 份 0 命中），
+ * 所以这里不会把假红带上屏。带 `path` 的另一个用途：`.ERH` 的专属判据要靠扩展名分派。
  */
 export function erbStructureDecorations({ path, text }: EditorDecoratePayload): LineDecoration[] {
   if (!isErbDialectPath(path) || text.length === 0) return [];
   // 逐字段的形状只住在 `structureDiagnostic` 一处：💡 那边给出的"我修的是哪条诊断"
   // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）
-  return checkControlFlowStructure(text).map(structureDiagnostic);
+  return checkStructure(text, path).map(structureDiagnostic);
 }
 
 /** 本插件导出的可搬运任务表（宿主与 worker 侧共用） */

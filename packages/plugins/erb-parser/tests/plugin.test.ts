@@ -368,6 +368,25 @@ describe('erb-parser 插件 · ui.editor.decorator（ERB 结构波浪线）', ()
     expect(typeof svc.checkStructure).toBe('function');
     expect(svc.checkStructure!(broken).map((i) => i.kind)).toEqual(['unclosed-open']);
   });
+
+  it('checkStructure 收可选 path：`.ERH` 才判头文件形态（单参调用语义不变）', () => {
+    const { services } = activatePlugin(fakeIO({}));
+    const svc = services.get('erb.parser') as ErbParserService;
+    const header = ['#DIM X, 10', 'PRINTL 甲'].join('\n');
+    expect(svc.checkStructure!(header, 'C:/game/ERB/DIM.ERH').map((i) => i.kind)).toEqual(['erh-invalid']);
+    expect(svc.checkStructure!(header, 'C:/game/ERB/MAIN.ERB')).toEqual([]);
+    expect(svc.checkStructure!(header)).toEqual([]);
+  });
+
+  it('.ERH 里写普通语句 ⇒ 一条 erh-invalid 装饰（A4：声明面判据真正上屏）', () => {
+    const decorations = decorator()!.decorate!({
+      path: 'C:/game/ERB/DIM.ERH',
+      text: ['#DIM X, 10', 'PRINTL 甲'].join('\n'),
+      project: null,
+    }) as Array<{ line: number; severity: string; code?: string }>;
+    expect(decorations).toHaveLength(1);
+    expect(decorations[0]).toMatchObject({ line: 2, severity: 'error', code: 'erb.erh-invalid' });
+  });
 });
 
 /* ============ 💡 一键补齐缺失的闭合语句（2026-10-13 反馈 7 第二步） ============ */

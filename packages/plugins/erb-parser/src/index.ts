@@ -17,6 +17,8 @@ export {
 } from './scanner';
 // 结构体检（2026-10-13 反馈 7；纯函数，配对表仍单源于 scanner.ts）
 export { MAX_STRUCTURE_ISSUES, checkControlFlowStructure, checkPreprocStructure, checkStructure, preprocRoleOf } from './structure';
+// `.ERH` 头文件形态体检（A4 / P1-4 第七条：只允许 #DIM / #DIMS / #DEFINE；判据对 ErhLoader）
+export { ERH_ALLOWED_DIRECTIVES, checkHeaderIssues } from './erh';
 // 预处理条件块的「被裁支」区间（A5 / P0-3 尾巴：分支变灰；判据逐条对 Emuera PPState）
 export {
   collectPreprocDeadRanges,

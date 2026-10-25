@@ -167,17 +167,21 @@ export interface ControlFlowStatement {
  * 这一张是**配对失败的证据**。两者共用 `erb-parser/scanner.ts` 里的同一份配对表——
  * 各抄一份表就必然漂移，漂移的表现是"波浪线指的行骨架里根本没有"。
  *
- * 闭集五类，且**只报可证明的**（口径：错标比不标危险）：
+ * 闭集六类，且**只报可证明的**（口径：错标比不标危险）：
  * - `orphan-close`：闭合语句找不到对应开块（多写了 `ENDIF`）；
  * - `unclosed-open`：走到函数边界（`@` 行）或文件结尾仍有开块没闭合；
  * - `orphan-branch`：`ELSE` / `CASE` / `CATCH` 这类分支语句前面没有它要归属的开块；
  * - `dim-invalid`：`#DIM` 族声明违反引擎硬规则（维数 / CONST / REF / 初值个数）——
  *   这类错误的后果是**整个文件加载失败**，所以提前到打字时（2026-10-25 P1-4）；
- * - `return-form`：`#FUNCTION` 式中函数用裸 `RETURN` 收尾（返回值静默丢失；P1-3）。
+ * - `return-form`：`#FUNCTION` 式中函数用裸 `RETURN` 收尾（返回值静默丢失；P1-3）；
+ * - `erh-invalid`：`.ERH` 头文件里出现了引擎不认的行或指令——引擎的头文件加载器只认
+ *   `#DIM` / `#DIMS` / `#DEFINE`，一遇其它形状就**中止整轮**（连后面的 `.ERH` 也不再读，
+ *   见 `ErhLoader.loadHeaderFiles` 的 `if (!noError) break`）。2026-10-26 A4 · P1-4 第七条。
+ *   只有 `.ERH` 会被判（`checkStructure` 拿到路径才跑这一趟，见该方法注）。
  * 未知变量名、未知函数名、表达式语法**不在这一层**（要全项目语义或表达式解析器）。
  */
 export interface ErbStructureIssue {
-  readonly kind: 'orphan-close' | 'unclosed-open' | 'orphan-branch' | 'dim-invalid' | 'return-form';
+  readonly kind: 'orphan-close' | 'unclosed-open' | 'orphan-branch' | 'dim-invalid' | 'return-form' | 'erh-invalid';
   /** 1 基行号（与 `ControlFlowStatement.line` 同一坐标系） */
   readonly line: number;
   /** 出问题的语句原词（`ENDIF` / `IF` / `ELSE`…）；未闭合类给的是那个**开块**的原词 */
@@ -373,11 +377,21 @@ export interface ErbParserService {
    * 两者共用 `erb-parser/scanner.ts` 的同一份配对表与同一套行过滤规则，所以不会出现
    * "波浪线指的行骨架里没有"。纯文本入、纯数据出（编辑器每 250ms 去抖后调一次，不能读盘）。
    *
+   * **`path` 是 additive 的可选第二参**（2026-10-26 A4）：不传 = 与旧语义逐字相同
+   * （配对 + 预处理块 + 声明面两类），传了才按**文件种类**多跑一趟——目前只有 `.erh`
+   * 有专属判据（`erh-invalid`：头文件只允许 `#DIM` / `#DIMS` / `#DEFINE`）。
+   *
+   * 为什么不另开一个 `checkHeader?(text)`：宿主只认"这一份文本有什么问题"这一个答案，
+   * 按文件种类分派是自己这层的事；多一个方法就把"该调哪个"变成每个调用方的知识，
+   * 漏调的表现是"头文件里写错一行，编辑器一声不响"——而那正是这条规则要防的事故。
+   * 为什么是可选而不是必填：老实现与测试替身不该为一次加派陪跑（契约演进的 additive
+   * 纪律，HANDOFF §十一）；提供方缺省时行为与从前一致。
+   *
    * **为什么是可选**：波浪线是新增能力，缺了它编辑器只是不出提示（= 现状），
    * 不该逼着所有实现者同批改完——契约演进的 additive 纪律（HANDOFF §十一）。
    * 消费方（`ui.editor.decorator` 贡献者）必须在方法缺席时返回空装饰。
    */
-  checkStructure?(text: string): ErbStructureIssue[];
+  checkStructure?(text: string, path?: string): ErbStructureIssue[];
   /**
    * 当前已构建的索引（未构建 / 未打开项目时为 null）。
    * 解析器订阅 `project.opened` 自动构建并在完成后发 `kojo.functionChanged`，

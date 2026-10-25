@@ -1,6 +1,7 @@
 import type { ErbStructureIssue } from '@kojo/plugin-api';
-import { ERB_SKIP_MARKERS, erbPreprocRoleOf } from '@kojo/plugin-api';
+import { ERB_SKIP_MARKERS, erbPreprocRoleOf, isErbDeclarationPath } from '@kojo/plugin-api';
 import { checkDeclarationIssues } from './declarations';
+import { checkHeaderIssues } from './erh';
 import { erbCodeBodyOf, closerNameForPair, forEachControlFlowLine, parseFunctionDefinition } from './scanner';
 
 /**
@@ -546,12 +547,27 @@ function mergeByLine(a: ErbStructureIssue[], b: ErbStructureIssue[]): ErbStructu
 }
 
 /**
- * 编辑器 `checkStructure` 服务的**全量入口**：配对三类 + 预处理块 + 声明面两类。
+ * 编辑器 `checkStructure` 服务的**全量入口**：配对三类 + 预处理块 + 声明面两类，
+ * 拿到路径且是 `.ERH` 时再加头文件形态一趟（2026-10-26 A4）。
  *
  * 为什么在这里合成而不是让宿主分别调：宿主只认一个"这一份文本有什么问题"的答案，
  * 三条判据各自有序、合并后仍要按行升序（波浪线列表与 💡 菜单都按行读）。
  * 上限 `MAX_STRUCTURE_ISSUES` 只在合并后截一次，避免"各趟都截 50 条"变成 150 条。
+ *
+ * **`path` 是 additive 可选第二参**：单参调用（旧宿主 / 测试替身 / 消费方）语义逐字不变，
+ * 只跑前两趟；传了路径才按文件种类分派——这是契约层 `checkStructure?` 的同一口径，
+ * 判据本身住在 `erh.ts`（出处与行可见性口径都写在那个文件头上）。
+ *
+ * 头文件一趟与另外两趟**按行去重**：同一行既被配对/声明面点过名、又是"头文件不许写"的，
+ * 只留前一条（更具体的那条）。`.ERH` 里出现 `IF` 就是这种形状——两条一起上屏会让作者
+ * 以为有两个错，其实删掉那块就都好了。
  */
-export function checkStructure(text: string): ErbStructureIssue[] {
-  return mergeByLine(checkControlFlowStructure(text), checkDeclarationIssues(text)).slice(0, MAX_STRUCTURE_ISSUES);
+export function checkStructure(text: string, path?: string): ErbStructureIssue[] {
+  const base = mergeByLine(checkControlFlowStructure(text), checkDeclarationIssues(text));
+  if (path === undefined || !isErbDeclarationPath(path)) return base.slice(0, MAX_STRUCTURE_ISSUES);
+  // 同一行已经被配对 / 声明面点过名，就不再叠一条"这行不是头文件能写的"：
+  // 两条都在说"这一行不对"，叠上去只会让作者以为有两个错（`.ERH` 里写 `IF` 就是这种形状）。
+  const flagged = new Set(base.map((i) => i.line));
+  const header = checkHeaderIssues(text).filter((i) => !flagged.has(i.line));
+  return mergeByLine(base, header).slice(0, MAX_STRUCTURE_ISSUES);
 }
