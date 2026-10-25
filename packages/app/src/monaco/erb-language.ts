@@ -116,29 +116,122 @@ function erbSkipRule(marker: string): RegExp {
 }
 
 /**
- * 内联**文本形三元** `\@<条件>?<真文>#<假文>\@` → 整形状正则 + 群组发射（串内 `str` 态与裸文本行
- * root 态共用一份形状，唯一差别 `extraForbid`：root 态多禁 `;`——引号外行尾注释起界，
- * 形状不许跨；串里的 `;` 是正文（codeViewOf 的注释隔离），照旧允许）。
+ * 内联三元的**词法单一真源**：分段单元（unit）的正则片段。形状前瞻（guard）、root 态那条整形状
+ * 与三个相位状态表全从这里派生 ⇒ "guard 说成的形状"与"相位机一路能吃的字符"天生同一把尺子
+ * （分叉就是涂错）。
  *
- * 形状判据从语义真源 `condition-extractor/src/inline.ts`（两形内联三元）派生，**取更窄口径**：
+ * `extraForbid` 只有 root 态用得到（`;`）：引号外行尾注释起界，形状不许跨；串里的 `;` 是正文
+ * （`codeViewOf` 的注释隔离），照旧允许。**两套状态共用同一份单元表**，只差这一枚 `extraForbid`
+ * ——上一版给 root 留的"窄口径"（`% { }` 一律禁越）本批撤了：真语料里裸文本行的三元占比很高
+ * （实测 1,334 枚样本行里过半在 root 态），窄着等于把大片已成形的色继续丢掉；而 root 态的 `%`/`{`
+ * 本来就没有插值层可回退（`tests/erb-ternary-paint.corpus.test.ts` 的①分母只数**串内**边界，
+ * 正是为了让这条口径差可核）。
+ *
+ * `forbid` 是**分段**附加禁集（cond 禁 `?#`、true 禁 `#`、false 不禁）——`?`/`#` 只在该段顶层算界。
+ *
+ * - `plain`：段内裸字符。`"` `\` 出现 = 形状被串边界/转义打断 ⇒ 弃；`% { } ( ) [ ]` 出现 =
+ *   必须由下面的整块单元吃，裸出现即弃（这样 guard 的"顶层"口径永远可判定，不必数深度）。
+ * - `pct`：`%…%` 一枚整块。**段禁集在里面照样算界**——真源 `findTopLevel` 只追 `{} () []` 三种深度，
+ *   **不追 `%`**（`inline.ts` L50-57），所以 `%A?B%` 里那枚 `?` 在真源眼里就是顶层界；guard 若把它
+ *   当整块吃，就会把界认到后面一枚 `?` 上 ⇒ 着色层与语义层分叉。照真源写：`%` 段内含 `?`/`#` 即弃涂。
+ * - `brace` / `paren` / `square`：`{…}` 与配平的 `(…)` `[…]`（同类括号嵌套给到**四层**，见下面
+ *   `nestLeaf` 那段的实测口径）里面 `?`/`#` 只是内容——与 `findTopLevel` 的深度计数同调；
+ *   五层及以上弃涂（比真源窄，不构成回退）。
+ */
+function erbTernaryVocab(extraForbid: string) {
+  const never = `"\\\\%{}()\\[\\]${extraForbid}`;
+  const plain = (forbid: string): string => `[^${never}${forbid}]`;
+  const pct = (forbid: string): string => `%[^"%\\\\${forbid}]*%`;
+  const brace = `\\{[^"}\\\\]*\\}`;
+  /**
+   * 括号体：**不**吃 `%`/`{`——插值一律由段级单元或 `strStr` / `strExpr` 层认。实测理由：
+   * 括号里坐着插值（`ON({CFLAG:CHARATRANS:差し替え適用})`）时整块吞进段色，会把 `{…}` 的
+   * `string.escape` 边界吃掉 ⇒ 那是**回退**不是补色（真语料 2 例，被①零回退闸当场抓到），
+   * 这种形状本层照旧整枚弃涂。
+   *
+   * 但**跨类嵌套要认**：`\@ 充填率([[慧音]],3) >= 5 ? … # …\@` 是 `()` 里坐 `[[ ]]` 双平方括号
+   * （`UNLOCK_KYOUKASHITU` 一带的惯用写法）。旧写法括号体只吃普通字符 ⇒ 这类全数弃涂
+   * （真语料样本里"没涂上"的主因之一）。现在给一层跨类嵌套：`( … [ … ] … )` 与 `[ … ( … ) … ]`。
+   * **深度上限实测＝四层**（`tests/erb-highlight.test.ts` ③b/③c 两侧各钉一枚：`((((A))))` 涂、
+   * `(((((A)))))` 弃）——`nestLeaf` 自身含两层同类，`pair` 外壳再夹一层。真源 `findTopLevel` 一路追
+   * 深度、不设限，所以第五层起是**本层单向取窄**（不构成回退）；每加一层同类嵌套就是指数级回溯面，
+   * 而真语料里深过四层的形状读数只有 1 枚，不值得为它抬风险。
+   *
+   * 段禁集在括号内**不生效**：真源 `findTopLevel` 追 `()[]{}` 深度，括号里的 `?`/`#` 属内容。
+   */
+  const nestLeaf =
+    `(?:${plain('')}|\\[(?:[^\\[\\]]|\\[[^\\[\\]]*\\])*\\]|\\((?:[^()]|\\([^()]*\\))*\\))`;
+  const pair = (open: string, close: string): string =>
+    `\\${open}(?:${nestLeaf}*(?:\\${open}${nestLeaf}*\\${close})?${nestLeaf}*)\\${close}`;
+  const paren = pair('(', ')');
+  const square = pair('[', ']');
+  const unit = (forbid: string): string =>
+    `(?:${plain(forbid)}|${pct(forbid)}|${brace}|${paren}|${square})`;
+  /**
+   * **条件段**专用：`.trim()` 后必须非空——真源 `scanTextTernaries` 判的是 `cond.length > 0`
+   * （在 `.trim()` 之后），所以 `\@ ?a#b\@` 这种"段里全是空白"真源**不认**，着色层也不许认
+   * （上一批这格反而比真源宽，是唯一一处"涂 ⊄ 认"，本批堵掉）。
+   * 写法刻意避开"界前一个字符非空白"那种偷懒判据：` ? ` 的排版在真语料里是**主流写法**
+   * （`\@ STRLENS(nDesc) ? %nDesc% #…\@`），`(?<!\\s)` 会把这一大片的色一并取消——
+   * 首跑就撞上了，覆盖率从 0.738 掉到 0.245，故这里按"段内含至少一枚非空白单元"正面表达。
+   */
+  const ws = '[ \\t]';
+  const plainNoWs = (forbid: string): string => `[^${never}${forbid}\\s]`;
+  const unitNoWs = (forbid: string): string =>
+    `(?:${plainNoWs(forbid)}|${pct(forbid)}|${brace}|${paren}|${square})`;
+  const cond = (forbid: string): string =>
+    `(?:${ws})*${unitNoWs(forbid)}(?:${ws}|${unitNoWs(forbid)})*`;
+  return { never, plain, pct, brace, paren, square, unit, cond };
+}
+
+/**
+ * `str` 态用的**相位机**词表（ERB-PAINT-21：把上一批整枚弃涂的 `%…%` / `{…}` / 括号内含界记号
+ * 那 21.3% 拿下，同时让插值层一条着色都不回退）。
+ *
+ * 三个相位状态的边界就是形状的三个记号，换态一律用 `switchTo`（**换栈顶不压栈**）：
+ * `cond --?--> true --#--> false --\@--> @pop 回 str`。为什么不能压栈：Monarch 的 `next:'@state'`
+ * 是 push，闭合处要一次弹三层，而编译器动作词表里没有"弹 n 层"（实测 `monarchCompile.js`
+ * L250-296 只认 `token/next/bracket/goBack/switchTo/log/nextEmbedded`）；`switchTo` 的语义
+ * （`monarchLexer.js` L574-586 `stack.switchTo(s) = create(this.parent, s)`）正是"换层保父"。
+ * 测试基座 `tests/monarch-harness.ts` 同批补齐了这条动作，判据对着同版本源码抄。
+ */
+function erbTernaryPhases(vocab: ReturnType<typeof erbTernaryVocab>) {
+  const { plain, paren, square } = vocab;
+  /** 相位内的"吃一整段正文直到下一个界"跑动（`eol` 收口，绝不让相位状态越行界） */
+  const run = (forbid: string, token: string) => ({
+    mid: { regex: new RegExp(`${plain(forbid)}+`), token },
+    eol: { regex: new RegExp(`${plain(forbid)}+$`), token },
+  });
+  /** `%…%` 开层：与 guard 的 pct 同一前瞻，交给 `strStr` 层（边界 escape + 内容 variable 照旧） */
+  const pctOpen = (forbid: string): RegExp => new RegExp(`%(?=[^"%\\\\${forbid}]*%)`);
+  return {
+    run,
+    pctOpen,
+    parenRun: new RegExp(paren),
+    squareRun: new RegExp(square),
+    braceOpen: new RegExp(`\\{(?=[^"}\\\\]*\\})`),
+  };
+}
+
+/**
+ * 内联**文本形三元** `\@<条件>?<真文>#<假文>\@` 的形状判据（词表 = `erbTernaryVocab`，两套状态共用）：
+ *
+ * - **root 态（裸文本行）= 整形状一次匹配的群组发射**（本函数返回的 `regex` + `emit`）：root 没有
+ *   插值层可复用，一次吃全最简单；多禁 `;`（注释界）。
+ * - **`str` 态 = 相位机**（`ERB_TERN_GUARD` + `erbTernaryPhases` 的三张状态表）：段内的 `%…%` / `{…}`
+ *   必须交给既有 ④⑤ 两层，才能保证"补色不回退"（一次匹配做不到，见 `erbTernaryPhases` 头注）。
+ *
+ * 形状判据从语义真源 `condition-extractor/src/inline.ts` 派生，**处处只许比它窄**：
  * - 开记号 `\@`、界记号 `?`、分隔记号 `#`、收记号 `\@` **必须整形状一次认全**——缺 `#`、缺 `?`、
  *   未闭合 `\@`、空条件一律整体不成配 ⇒ 落回 `str` 态规则 ①（`\` 吃一字符 = 普通转义）与
  *   ⑩/⑨ 普通串文本，**不产一枚结构档**（宁可不涂也不误导，与 `erbPreprocRule` 的整行严格等值同向）；
- * - 界记号只在**顶层**认（inline.ts `findTopLevel` 同一句法事实）：本工包用"整形状原子匹配"实现顶层判据
- *   ——任何未配平的 `(` `[` `{` 引号反斜杠出现在段内即整体弃涂，涂出去的一半必误导。
- *   为何不做 cond→text→回收 的**状态机相位**：Monarch 的 `next` push/`@pop` 表达不了"退一层再进
- *   下一相位"（一步里 pop 后 push 不可），monarchLexer 的 `switchTo` 又不被本仓测试基座
- *   `tests/monarch-harness.ts` 的动作解析覆盖（`resolveAction` 只认 token/next/group/test）——
- *   整形状群组是唯一在基座与真实 lexer 两边都稳定的形态，代价（无 else 残形 `\@C?真\@` 不涂、
- *   真源认它）记在"窄子集"方向，由 lead 的跨面对拍测试兜两边一致；
- * - **字符类（各段共通的禁越集 + 分段附加）**：`"` `\` 出现 = 形状被串边界/转义打断 ⇒ 弃；
- *   `%` `{` `}` 出现 = 撞上 `str` 态自己的插值层（规则 ④⑤，`string.escape`+`variable` 两档），
- *   整形状把它们一口吞进段色会**回退既有插值着色** ⇒ 撞上即整体弃涂（`str` 态文档纪律 A 的同族口径）；
- *   一级**配平**的 `(…)` / `[…]` 允许成段内容（`\@(A||B)&&C?…`、`\@CFLAG[1]==2?…` 高频形；
- *   串里 `(`/`[` 今天本就是普通 string 字符、吞进段色**不丢着色层**，与 `%`/`{` 有别），两层嵌套弃；
- *   `?`/`#` 在 `<条件>` 段禁（首个顶层 `?` 就是界、`#` 是分隔——提前出现 = 形状不整或条件不透明）；
- *   `#` 在 `<真文>` 段禁（分隔符之前见 `#` ⇒ 哪枚才是分隔有歧义，弃）；`?` 允许在真/假段（正文疑问句）；
- *   `<假文>` 段不禁 `#`（分隔之后全是假文，与引擎"首个顶层 `#` 切分"口径一致）。
+ * - 条件段**含至少一枚非空白单元**（`erbTernaryVocab` 的 `cond()`）：`inline.ts` 的 cond 是
+ *   `slice(...).trim()` 后判 `length > 0`，所以 `\@ ?a#b\@` 这种"段里全是空白"真源**不认**，
+ *   本层也不涂——上一批在这格反而比真源**宽**（唯一一处涂 ⊄ 认，本批堵掉；由
+ *   `tests/erb-ternary-paint.corpus.test.ts` 的真语料活闸与 `tests/erb-highlight.test.ts` ③c 双向钉）；
+ *   但 ` ? ` 的排版是主流写法（`\@ STRLENS(nDesc) ? %nDesc% #…\@`），所以判据只能正面写
+ *   "段内含非空白"，不能偷懒成"界前一字符非空白"——后者首跑把覆盖率从 0.787 打到 0.245，实测撞出来的；
+ * - 段内 `"` `\` 出现 = 形状被串边界/转义打断 ⇒ 整枚弃涂（相位机不进入，走 ①-⑩ 老路）。
  *
  * **档位（全部复用 `theme.ts::BASE_RULE_SPECS` 既有三档，零新造、不动 theme/CSS）**：
  * - `\@` 开闭 / `?` / `#` → `string.escape`：本文件既有"串内嵌结构层边界"档（`{`/`}`/`%` 开闭同用它）；
@@ -151,17 +244,73 @@ function erbSkipRule(marker: string): RegExp {
  *   （`tests/erb-highlight.test.ts` ④ 的静态对账当场可验）。
  */
 function erbInlineTernaryShape(extraForbid: string): { regex: RegExp; emit: string[] } {
-  const never = `"\\\\%{}()\\[\\]${extraForbid}`;
-  const unit = (forbid: string): string => {
-    const atom = `[^${never}${forbid}]`;
-    return `(?:${atom}|\\(${atom}*\\)|\\[${atom}*\\])`;
-  };
-  const source = `(\\\\@)(${unit('?#')}+)(\\?)(${unit('#')}*)(#)(${unit('')}*)(\\\\@)`;
+  const v = erbTernaryVocab(extraForbid);
+  const source = `(\\\\@)(${v.cond('?#')})(\\?)(${v.unit('#')}*)(#)(${v.unit('')}*)(\\\\@)`;
   return {
     regex: new RegExp(source),
     emit: ['string.escape', 'variable', 'string.escape', 'string', 'string.escape', 'string', 'string.escape'],
   };
 }
+
+/**
+ * `str` 态的**开记号守卫**：只有从当前位置起整枚形状成立才进相位机（前瞻一次判全，
+ * 与 root 态那条整形状**同一份词表**，只差 `extraForbid`）。前瞻体 = `\@` 之后的
+ * `cond（含非空白单元） ? true* # false* \@`。
+ */
+const ERB_TERN_GUARD = (() => {
+  const v = erbTernaryVocab('');
+  return new RegExp(`\\\\@(?=${v.cond('?#')}\\?${v.unit('#')}*#${v.unit('')}*\\\\@)`);
+})();
+
+/** 相位机的三张状态表（`cond` / `true` / `false`；换态 `switchTo`，收尾 `@pop` 回 `str`） */
+const ERB_TERN_STATES: Record<string, Monaco.languages.IMonarchLanguageRule[]> = (() => {
+  const v = erbTernaryVocab('');
+  const phases = erbTernaryPhases(v);
+  const cond = phases.run('?#', 'variable');
+  const truePhase = phases.run('#', 'string');
+  const falsePhase = phases.run('', 'string');
+  const pctOpen = phases.pctOpen;
+  const braceOpen = phases.braceOpen;
+  const parenRun = phases.parenRun;
+  const squareRun = phases.squareRun;
+  return {
+    // `<条件>`：真谓词段 ⇒ variable；`?` 是唯一的界（`#` 由 guard 禁在这段之前）
+    erbTernCond: [
+      [/\?/, { token: 'string.escape', switchTo: 'erbTernTrue' }],
+      [pctOpen('?#'), { token: 'string.escape', next: '@strStr' }],
+      [braceOpen, { token: 'string.escape', next: '@strExpr' }],
+      [parenRun, 'variable'],
+      [squareRun, 'variable'],
+      [/\\@/, 'string'], // 理论到不了这里（guard 的段字符类不吃 `\`）；留着当"越界即退化"的兜底
+      [cond.eol.regex, { token: cond.eol.token, next: '@popall' }],
+      [cond.mid.regex, cond.mid.token],
+      [/[^]+$/, { token: 'string', next: '@popall' }], // 任何意外字符：本行内出栈，绝不带过行界
+    ],
+    // `<真文>`：输出文本 ⇒ string；`#` 是分隔（`?` 在这段是正文疑问句）
+    erbTernTrue: [
+      [/#/, { token: 'string.escape', switchTo: 'erbTernFalse' }],
+      [pctOpen('#'), { token: 'string.escape', next: '@strStr' }],
+      [braceOpen, { token: 'string.escape', next: '@strExpr' }],
+      [parenRun, 'string'],
+      [squareRun, 'string'],
+      [/\\@/, 'string'],
+      [truePhase.eol.regex, { token: truePhase.eol.token, next: '@popall' }],
+      [truePhase.mid.regex, truePhase.mid.token],
+      [/[^]+$/, { token: 'string', next: '@popall' }],
+    ],
+    // `<假文>`：`?` `#` 都是正文；只有闭合 `\@` 退栈回串
+    erbTernFalse: [
+      [/\\@/, { token: 'string.escape', next: '@pop' }],
+      [pctOpen(''), { token: 'string.escape', next: '@strStr' }],
+      [braceOpen, { token: 'string.escape', next: '@strExpr' }],
+      [parenRun, 'string'],
+      [squareRun, 'string'],
+      [falsePhase.eol.regex, { token: falsePhase.eol.token, next: '@popall' }],
+      [falsePhase.mid.regex, falsePhase.mid.token],
+      [/[^]+$/, { token: 'string', next: '@popall' }],
+    ],
+  };
+})();
 
 /**
  * 变量多段引用的**族头名单**（显示层；`ERB_VARIABLE_REF_PATTERN` 的唯一词形来源）。
@@ -236,11 +385,8 @@ export const ERB_VARIABLE_REF_PATTERN: RegExp = new RegExp(
   `\\b(?:${ERB_VARIABLE_FAMILY_HEADS.map(escapeRegExp).join('|')})\\b(?::[^\\s,()\\[\\]{}'"+\\-*/%<>=!&|;]+)*`,
 );
 
-/** `str` 态用：`;` 不算边界（串里的 `;` 是正文，与 root 态"引号外 `;` 起注释"同一纪律） */
-const ERB_INLINE_TERNARY_STR = erbInlineTernaryShape('');
-
-
-/** root 态（裸文本行：`PRINTDATA` 体等无引号位）用：段内禁 `;` */
+/** root 态（裸文本行：`PRINTDATA` 体等无引号位）用：段内禁 `;`。
+ *  `str` 态自 ERB-PAINT-21 批起走 `ERB_TERN_GUARD` + `ERB_TERN_STATES` 的相位机，不再吃这条。 */
 const ERB_INLINE_TERNARY_ROOT = erbInlineTernaryShape(';');
 
 /**
@@ -294,8 +440,12 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // 行内尾注释：引号外的 `;` 起注释到行末。`str` 态是另一状态、串里进不了 root，
         // 所以这条不会把 PRINTL "a;b" 的 `;` 当注释；语义层 codeViewOf 同一判据。
         [/;.*$/, 'comment'],
-        // 行首函数定义 @NAME / @NAME(...)
-        [/^(\s*)(@)([^\s(;]+)/, ['', 'keyword', 'entity.name.function']],
+        // 行首函数定义 @NAME / @NAME(...)。**禁集里有 `"`**：ERB 的函数名不许含引号，而真语料里
+        // 压在我这条规则位置上的其实是「多参数调用折行」——`CALL PRINTBUTTON_EX,` 的实参 `@"…"`
+        // 单独起一行（本盘取样 22 行，全是这形）。旧写法 `[^\s(;]+` 把 `"` 也当名字字符 ⇒ 整行
+        // 吞成 `entity.name.function`，串层根本进不去 ⇒ 那行的 `%…%`/`{…}`/`\@…\@` 一律无色。
+        // 禁掉 `"` 后该形落到下面的 `"` 规则进 `str` 态（`@` 无规则命中 ⇒ 不发射，与基座一致）。
+        [/^(\s*)(@)([^\s(;"]+)/, ['', 'keyword', 'entity.name.function']],
         // 行首跳转标签 $LABEL
         [/^(\s*)(\$)([^\s;]+)/, ['', 'keyword', 'label']],
         // 预处理指令 #DIM / #FUNCTION 等（含修饰词）
@@ -434,11 +584,19 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
       //      无规则可配 ⇒ 无色；同时不许它顺手把闭合引号吞进上一层（旧 `%` 层正是这么丢引号的）。
       //    ⑧ 闭合引号 `@pop`；⑨⑩ 行尾出栈（`$` 形须排在无锚 catch-all 之前）。
       str: [
-        // ⓪ 内联文本形三元 `\@<条件>?<真文>#<假文>\@`（形状/字符类/档位取舍全部写在
-        //    `erbInlineTernaryShape` 头注；语义真源 `condition-extractor/src/inline.ts`）。
-        //    **必须排在 ① 之前**：① 把 `\@` 吃成普通转义——那正是形状判据不满足时的回退路径；
-        //    满足时整形状一次发射七段（群组动作、**不动状态栈**），①-⑩ 一条不改、次序不变。
-        [ERB_INLINE_TERNARY_STR.regex, ERB_INLINE_TERNARY_STR.emit],
+        // ⓪ 内联文本形三元 `\@<条件>?<真文>#<假文>\@` 的**开记号**（ERB-PAINT-21 起改相位机）。
+        //
+        // 前瞻一次判全形状才进 `erbTernCond`（词表与 root 态那条整形状同一来源，判据处处只许比
+        // `inline.ts` 窄）；进不来就落回下面的 ①（`\` 吃一字符 = 普通转义）——残形零枚结构档的老
+        // 纪律靠这条前瞻保证，不靠相位机自己判。
+        //
+        // 为什么要相位机而不是继续整枚群组发射：段内撞 `%…%` / `{…}` 时，整枚吞进段色会**回退
+        // `str` 态既有的插值着色**（④⑤ 那两层 escape+variable），所以上一批的处置是"撞上即弃涂"
+        // ——语料实测这就是 21.3% 未上色的主因。相位机把 `%`/`{` 交给 ④⑤ 同一对层
+        // （`strStr` / `strExpr`，push 后由它们 `@pop` 回本相位），既上色又不回退。
+        //
+        // **必须排在 ① 之前**（次序即判据）；①-⑩ 一条不改。
+        [ERB_TERN_GUARD, { token: 'string.escape', next: '@erbTernCond' }],
         [/\\./, 'string'], // ①
         // ②③ 本行既等不到闭合记号、也等不到闭合引号 ⇒ 残段留在 string 层并出栈
         //（`"台词{未闭合`、记号正好压在行尾的 `"台词{`、`"前段%` 都不许把 strExpr / strStr 带过行界）
@@ -459,15 +617,26 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         [/\\$/, { token: 'string', next: '@popall' }],
       ],
       strExpr: [
+        // 插值层里再坐一枚内联三元 ⇒ 同样交给相位机（真语料实测形如
+        // `@"%\@ プール > 0 ? ＋ # － \@%{ABS(プール)}枚"`：三元整枚嵌在 `%…%` 里，
+        // 层级判据（`strStr` 的 `[^%]+` 一路吃到闭合 `%`）会把它当纯文本吞掉。
+        // 相位机收尾用 `@pop` ⇒ 弹回**推它的那一层**（这里是 `strStr`），不是弹回 `str`。
+        [ERB_TERN_GUARD, { token: 'string.escape', next: '@erbTernCond' }],
         [/[^}]+$/, { token: 'variable', next: '@popall' }],
         [/\}/, { token: 'string.escape', next: '@pop' }],
         [/[^}]+/, 'variable'],
       ],
       strStr: [
+        [ERB_TERN_GUARD, { token: 'string.escape', next: '@erbTernCond' }],
         [/[^%]+$/, { token: 'variable', next: '@popall' }],
         [/%/, { token: 'string.escape', next: '@pop' }],
         [/[^%]+/, 'variable'],
       ],
+      // 内联三元的三个相位（ERB-PAINT-21）：`cond --?--> true --#--> false --\@--> @pop` 回 `str`。
+      // 表体由 `erbTernaryPhases` 从 `erbTernaryVocab('')`（wide 口径）派生，与 `ERB_TERN_GUARD`
+      // 同一把尺子——guard 允许吃进的字符，相位里必须有一条规则接得住，否则相位会一路走到
+      // 行尾兜底那条 `@popall`（那是兜底，不是常规路径；由 `tests/erb-ternary-phases.test.ts` 钉）。
+      ...ERB_TERN_STATES,
       /**
        * `[SKIPSTART]` 后的原样块：逐行整块吃成 `keyword.raw`，只有**整行等值**的
        * `[SKIPEND]` 退栈（与开头进入判据同一把尺子）。块内 `IF` / `;` / `"…"` /

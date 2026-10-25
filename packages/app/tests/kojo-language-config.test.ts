@@ -219,7 +219,9 @@ describe('comments 格 = 词法真源（Monarch 注释判据同源）', () => {
 
   it('Monarch：行首 `;` 整行 comment（缩进一并入注释，与 classifyLine 同判）', async () => {
     const emitted = await driveKojo('  ; 说明');
-    expect(emitted).toEqual([{ text: '  ; 说明', token: 'comment.kojo-sugar' }]);
+    // `start: 0` 一并钉住：这枚断言拿整枚 `Emit` 做全等，字段随基座（ERB-PAINT-21 加的列坐标）加长——
+    // 0 也正说明"缩进进了注释"这条判据本身
+    expect(emitted).toEqual([{ text: '  ; 说明', token: 'comment.kojo-sugar', start: 0 }]);
   });
 
   it('Monarch：行尾 `;` 起整段 comment，`A = 1` 仍是原档；注释尾巴不许二次发射', async () => {

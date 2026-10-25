@@ -62,7 +62,7 @@ export interface MonarchRule {
 
 export type MonarchAction =
   | string
-  | { token: string; next?: string }
+  | { token: string; next?: string; switchTo?: string; goBack?: number }
   | { test: (id: string, matches: string[], state: string, eos: boolean) => unknown }
   | MonarchAction[];
 
@@ -76,6 +76,13 @@ export interface CompiledLexer {
 export interface Emit {
   readonly text: string;
   readonly token: string;
+  /**
+   * 该 token 在**整行**里的起始列（0 基）。ERB-PAINT-21 批加：列坐标判据（涂 ⊆ 认的对拍、
+   * 插值边界落点）以前只能拿 `line.indexOf(token)` 反推，而 lexer 对"没规则命中的字符"
+   * **不发射任何 token**——一旦有跳字，反推就整段漂移。驱动器本来就知道 `pos`，直接带出来。
+   * 既有消费方按 `text`/`token` 断言，零改动。
+   */
+  readonly start?: number;
 }
 
 /** 编译一份 Monarch def（语言 id 决定缺省 `tokenPostfix`，与运行时一致） */
@@ -95,6 +102,10 @@ interface Piece {
 interface Resolved {
   readonly tokens: Emit[];
   readonly next?: string;
+  /** `{ token, switchTo }`：换当前态**不压栈**（monarchLexer L574-586 的 `stack.switchTo`） */
+  readonly switchTo?: string;
+  /** `{ token, goBack }`：发射后把游标回退 n 个字符（monarchLexer L571-573） */
+  readonly goBack?: number;
   /** 群组：逐段受理（monarchLexer 的 groupMatching 迭代语义） */
   readonly pieces?: readonly Piece[];
 }
@@ -118,6 +129,8 @@ function resolveAction(action: MonarchAction, matched: string, exec: RegExpExecA
     const actionObj = a as {
       token?: string;
       next?: string;
+      switchTo?: string;
+      goBack?: number;
       group?: unknown[];
       test?: (id: string, matches: string[], state: string, eos: boolean) => unknown;
     } | null | undefined;
@@ -138,7 +151,14 @@ function resolveAction(action: MonarchAction, matched: string, exec: RegExpExecA
       return { tokens: [], pieces };
     }
     const token = actionObj.token ?? '';
-    return token === '' ? { tokens: [] } : { tokens: [{ text: matched, token }], next: actionObj.next };
+    // 空 token 在真实 lexer 里**只是不样式化**，状态转移照做（monarchLexer L571-620 的转移段
+    // 不看 token 空不空）——旧写法在这里直接 `return { tokens: [] }` 会把 `next` / `switchTo` 一起吞掉。
+    return {
+      tokens: token === '' ? [] : [{ text: matched, token }],
+      next: actionObj.next,
+      switchTo: actionObj.switchTo,
+      goBack: actionObj.goBack,
+    };
   }
   return { tokens: [] };
 }
@@ -173,8 +193,8 @@ export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly
   // Monaco 屏上真发的是 token 名 + tokenPostfix（编译器按语言 id 默认补 `.kojo-sugar`），
   // 主题规则按点分段前缀匹配 —— 驱动器同样补上，断言走完整前缀口径
   const lexerPostfix = lexer.tokenPostfix;
-  const emitInto = (tokens: readonly Emit[]): void => {
-    for (const t of tokens) out.push({ text: t.text, token: t.token === '' ? '' : `${t.token}${lexerPostfix}` });
+  const emitInto = (tokens: readonly Emit[], start: number): void => {
+    for (const t of tokens) out.push({ text: t.text, token: t.token === '' ? '' : `${t.token}${lexerPostfix}`, start });
   };
   let pos = 0;
   let pending: readonly Piece[] = [];
@@ -188,9 +208,10 @@ export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly
       pending = [];
       for (const piece of pieces) {
         if (piece.matched.length === 0) continue; // 空子段免发射（monarchLexer 691-694 的组数变化判）
+        const pieceStart = pos;
         pos += piece.matched.length;
         const r = resolveAction(piece.action, piece.matched, null);
-        emitInto(r.tokens);
+        emitInto(r.tokens, pieceStart);
         if (r.next) throw new Error('群组子段带 next：判据行形态不支持');
       }
       continue;
@@ -217,6 +238,7 @@ export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly
       pos += 1;
       continue;
     }
+    const matchStart = pos;
     pos += matched.length;
     const r = resolveAction(action, matched, exec);
     if (r.pieces) {
@@ -224,9 +246,20 @@ export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly
       pos -= matched.length; // 群组受理从子段重计（monarchLexer 672 同调）
       continue;
     }
-    emitInto(r.tokens);
-    // 4) 状态转移（monarchLexer 589-622 的 next 分支）
-    if (r.next !== undefined) {
+    emitInto(r.tokens, matchStart);
+    // 4) 状态转移（monarchLexer 571-622：`goBack` 先调游标，`switchTo` 与 `next` 是 else-if 关系
+    // ——同一条动作里两者都在时只有 switchTo 生效，基座照抄这个优先级，别自创第三套）
+    if (r.goBack !== undefined) {
+      pos = Math.max(0, pos - r.goBack);
+    }
+    if (r.switchTo !== undefined) {
+      // `stack.switchTo(s) = create(this.parent, s)`：换掉栈顶一层，父栈原样保留
+      const target = r.switchTo.startsWith('@') ? r.switchTo.slice(1) : r.switchTo;
+      if (!lexer.tokenizer[target]) {
+        throw new Error(`switchTo 指向没有规则表的状态 ${target}（真实 lexer 在此同样抛错）`);
+      }
+      stack[stack.length - 1] = target;
+    } else if (r.next !== undefined) {
       if (r.next === '@pop') stack.pop();
       else if (r.next === '@push') stack.push(state);
       else if (r.next === '@popall') {

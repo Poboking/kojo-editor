@@ -260,6 +260,28 @@ describe('高亮不回退（词法分层仍然成立）', () => {
     expect(label.emitted.find((e) => e.text === 'LOOP_TOP')?.token.startsWith('label.')).toBe(true);
   });
 
+  /**
+   * ERB-PAINT-21 顺手收掉的一格：root 行首函数规则的禁集此前不含 `"`，于是「实参折行到行首」的
+   * `@"…"`（真语料取样 22 行，全形如 `@"\@ STRLENS(x) ? %x% #…\@",60,LEFT…`）被整行吞成
+   * `entity.name.function`——串层进不去，插值与三元一枚色都没有。现在 `"` 起串，两侧各钉一枚。
+   */
+  it('行首 `@"…"` 不是函数名：进 `str` 态，串内插值与内联三元照旧成档（禁集加 `"` 的那一格）', async () => {
+    const lexer = await erbLexer();
+    const post = lexer.tokenPostfix;
+    const head = driveLine(lexer, '@"台\\@A?有#无\\@尾"');
+    const joined = head.emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
+    expect(
+      head.emitted.some((e) => e.token.startsWith('entity.name.function.')),
+      `行首 @" 仍被函数规则吞掉：${joined}`,
+    ).toBe(false);
+    expect(head.emitted.find((e) => e.text === '"')?.token, joined).toBe(`string.quote${post}`);
+    expect(head.emitted.some((e) => e.text === '?' && e.token.startsWith('string.escape.')), joined).toBe(true);
+    expect(head.stack).toEqual(['root']);
+    // 反方向不许松动：真函数名（不含引号）照旧走 entity 档
+    const def = await emitErb('@PRINT_STATE');
+    expect(def.emitted.find((e) => e.text === 'PRINT_STATE')?.token.startsWith('entity.name.function.')).toBe(true);
+  });
+
   it('#DIM / #DEFINE / #FUNCTION 与 [SKIPSTART] 仍为 keyword.preprocessor（大小写两形态）', async () => {
     for (const line of ['#DIM 口上セレクタ', '#DEFINE FOO', '#FUNCTION', '#dim x', '[SKIPSTART]']) {
       const { emitted } = await emitErb(line);
@@ -728,18 +750,25 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     expect(line.stack).toEqual(['root']);
   });
 
-  it('①b 一级配平 `(…)`/`[…]` 段块与一枚串里多形并存：真假段里的 `?` 是正文、不吃边界档', async () => {
+  it('①b 配平 `(…)`/`[…]` 段块与一枚串里多形并存：真假段里的 `?` 是正文、不吃边界档', async () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "a\\@(A||B)&&C?是(真)?#否\\@b\\@CFLAG[1]==2?y#n\\@c"');
     const post = lexer.tokenPostfix;
     const of = tokenMap(line.emitted);
-    expect(of('(A||B)&&C'), `括号条件段实发 ${of('(A||B)&&C')}`).toBe(`variable${post}`);
-    expect(of('是(真)?'), '真段整枚（含正文问号）归 string').toBe(`string${post}`);
-    expect(of('CFLAG[1]==2'), `方括号条件段实发 ${of('CFLAG[1]==2')}`).toBe(`variable${post}`);
+    // ERB-PAINT-21 起 `str` 态走相位机：条件段按"正文跑动 / 括号整块"分段发射，**同归 variable 一档**
+    // （上一批的整形状群组一次吐一整枚 `(A||B)&&C`；分段只是把同一颜色切成几块，不是降级）
+    expect(of('(A||B)'), `括号条件块实发 ${of('(A||B)')}`).toBe(`variable${post}`);
+    expect(of('&&C'), `括号后的条件跑动实发 ${of('&&C')}`).toBe(`variable${post}`);
+    expect(of('是'), '真段归 string').toBe(`string${post}`);
+    expect(of('(真)'), '真段里的括号整块仍是 string').toBe(`string${post}`);
+    expect(of('CFLAG'), `方括号条件段首块实发 ${of('CFLAG')}`).toBe(`variable${post}`);
+    expect(of('[1]'), `方括号整块实发 ${of('[1]')}`).toBe(`variable${post}`);
+    // 真段正文问号：`是(真)?` 的那枚 `?` 不是分隔符 ⇒ 出 string、绝不出 escape
+    const plainQuestion = line.emitted.filter((e) => e.text === '?' && !e.token.startsWith('string.escape.'));
+    expect(plainQuestion, '真段正文里的 `?` 必须存在且不占边界档').toHaveLength(1);
     // 两枚三元共 8 枚边界（4×`\@` + 2×`?` + 2×`#`）全部 string.escape，别无 escape 发射
-    const bounds = line.emitted.filter((e) => ['\\@', '?', '#'].includes(e.text));
+    const bounds = line.emitted.filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'));
     expect(bounds.map((e) => e.text).join(''), '\\@?#\\@\\@?#\\@');
-    expect(bounds.every((e) => e.token === `string.escape${post}`)).toBe(true);
     expect(line.emitted.filter((e) => e.token === `string.escape${post}`)).toHaveLength(8);
     expect(line.stack).toEqual(['root']);
   });
@@ -783,32 +812,65 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     }
   });
 
-  /** 嵌套结构顶回顶层判据：形状整体弃涂；同时既有 `{…}` 插值着色必须原样活着（不回退） */
-  const nested: readonly { line: string; brace: boolean }[] = [
-    { line: 'PRINTL "台\\@{LOCAL:1}>1?a#b\\@尾"', brace: true }, // 条件段带 {}
-    { line: 'PRINTL "x\\@A?{N}#b\\@y"', brace: true }, // 真段带 {}
-    { line: 'PRINTL "x\\@A%B?c#d\\@y"', brace: false }, // 条件段带 %
-    { line: 'PRINTL "x\\@f(A?B)?c#d\\@y"', brace: false }, // 括号内含 ?（该枚不该算顶层界）
-    { line: 'PRINTL "x\\@A?b(c#d)#e\\@y"', brace: false }, // 真段括号内含 #（分隔符歧义）
+  /**
+   * **ERB-PAINT-21 翻面档**（2026-10-26）：这几形上一批是"整枚弃涂"，本批起相位机吃下——
+   * 段内 `%…%` / `{…}` 交给 `strStr` / `strExpr` 既有两层（边界 escape + 内容 variable，
+   * 一条着色都不回退），括号内的 `?` / `#` 是真源 `findTopLevel` 追深度管到的内容。
+   */
+  const nowPainted: readonly { line: string; brace: boolean }[] = [
+    { line: 'PRINTL "台\\@{LOCAL:1}>1?a#b\\@尾"', brace: true }, // 条件段带 {} 插值
+    { line: 'PRINTL "x\\@A?{N}#b\\@y"', brace: true }, // 真段带 {} 插值
+    { line: 'PRINTL "x\\@f(A?B)?c#d\\@y"', brace: false }, // 括号内含 ?：真源追深度 ⇒ 界在括号后那枚
+    { line: 'PRINTL "x\\@A?b(c#d)#e\\@y"', brace: false }, // 真段括号内含 #：同理，分隔符是括号后那枚
     { line: 'PRINTL "x\\@((A))?b#c\\@y"', brace: false }, // 两层嵌套括号
+    { line: 'PRINTL "x\\@(((A)))?b#c\\@y"', brace: false }, // 三层
+    { line: 'PRINTL "x\\@((((A))))?b#c\\@y"', brace: false }, // 四层＝本层上限（`pair` 外壳 + `nestLeaf` 内两层再夹一枚）
   ];
-  it('③b 段内嵌套结构 ⇒ 整枚弃涂（`?`/`#`/`\\@` 零枚 escape）；`{…}` 形回退后既有插值层仍出 escape+variable', async () => {
+  it('③b 段内插值 / 括号内含界记号 ⇒ **现在成色**（相位机），且插值层 escape+variable 一条不少', async () => {
     const lexer = await erbLexer();
-    for (const { line: src, brace } of nested) {
+    const post = lexer.tokenPostfix;
+    for (const { line: src, brace } of nowPainted) {
+      const line = driveLine(lexer, src);
+      const bounds = line.emitted.filter(
+        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
+      );
+      expect(bounds.length, `「${src}」应涂出边界档（实发 ${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeGreaterThan(0);
+      // 每枚三元三枚边界：开 `\@` + `?` + `#` + 收 `\@` = 4
+      expect(bounds.map((e) => e.text).join(''), `「${src}」边界序列`).toBe('\\@?#\\@');
+      if (brace) {
+        // 插值层照旧出 `{`/`}` escape + 层内 variable ⇒ 既有着色一层不少（本批判据的硬约束）
+        expect(line.emitted.some((e) => ['{', '}'].includes(e.text) && e.token === `string.escape${post}`), `「${src}」花括号插值层被波及`).toBe(true);
+      }
+      expect(line.emitted.some((e) => e.token === `variable${post}`), `「${src}」没有 variable 发射`).toBe(true);
+      expect(line.stack, `「${src}」栈必须出干净`).toEqual(['root']);
+    }
+  });
+
+  /**
+   * 拒收名册（相位机**照样不涂**的形状，一枚边界档都不许产）：这几形真源要么不认、
+   * 要么本层刻意取窄。`%`/`{` 未配对 / 括号深过四层 / 段内反斜杠 / 界前全空白。
+   */
+  const stillRefused: readonly string[] = [
+    'PRINTL "x\\@A%B?c#d\\@y"', // `%` 没配对：guard 吃不下，落 ① 普通转义
+    'PRINTL "x\\@(((((A)))))?b#c\\@y"', // 五层括号：本层给到四层（真源认，方向=窄）
+    'PRINTL "x\\@A{B?c#d\\@y"', // 未配平的 `{`：guard 吃不下 ⇒ ② 那条"本行等不到闭合就出栈"照旧兜住
+    'PRINTL "x\\@A\\\\B?c#d\\@y"', // 段内撞反斜杠
+    'PRINTL "a\\@ ?b#c\\@d"', // 界前全空白 ⇒ `inline.ts` 的 cond trim 后为空，**真源也不认**
+  ];
+  it('③c 拒收名册照样零枚 escape（含"段内全空白"——上一批这格反而比真源宽，本批按 `cond` 含非空白堵掉）', async () => {
+    const lexer = await erbLexer();
+    for (const src of stillRefused) {
       const line = driveLine(lexer, src);
       const boundary = line.emitted.filter(
         (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
       );
-      expect(boundary, `「${src}」嵌套形不该产三元边界档：${boundary.map((e) => e.text).join('')}`).toHaveLength(0);
-      if (brace) {
-        // 弃涂走的是老路 ④⑤：`{`/`}` 仍 escape、层内仍 variable——既有着色一层不少
-        expect(line.emitted.some((e) => e.text === '{' && e.token.startsWith('string.escape.')), `「${src}」花括号插值层被波及`).toBe(true);
-        expect(line.emitted.some((e) => e.token.startsWith('variable.'))).toBe(true);
-      } else {
-        expect(line.emitted.filter((e) => e.token.startsWith('string.escape.')), `「${src}」不该出 escape`).toHaveLength(0);
-      }
+      expect(boundary, `「${src}」拒收形产了边界档：${boundary.map((e) => e.text).join('')}`).toHaveLength(0);
       expect(line.stack, `「${src}」栈必须出干净`).toEqual(['root']);
     }
+    // 反证真源同向不认：`\@ ?b#c\@` 的 cond trim 后为空 ⇒ `scanTextTernaries` 也不产这一枚
+    expect(scanTextTernaries('a\\@ ?b#c\\@d')).toHaveLength(0);
+    // 而真源认得 `\@(((((A)))))?b#c\@`（括号深度它一路追）⇒ 本层弃涂是**单向取窄**，不是漏涂口径错
+    expect(scanTextTernaries('x\\@(((((A)))))?b#c\\@y').map((c) => c.column)).toEqual([1]);
   });
 
   it('④ 裸文本行（PRINTDATA 体位）同形状同档位；行尾 `;` 注释与未闭合残形都不被形状吞', async () => {
@@ -860,7 +922,8 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
       '\\@CFLAG:0>0?是#否\\@',
       '\\@A?a#b\\@ ;注',
       ...malformed,
-      ...nested.map((n) => n.line),
+      ...nowPainted.map((n) => n.line),
+      ...stillRefused,
       'PRINTFORM "#text"',
     ];
     for (const src of samples) {

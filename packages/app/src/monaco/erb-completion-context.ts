@@ -270,7 +270,7 @@ export function erbLabelSlot(line: string, column: number): ErbLabelSlot | null 
 /* ============================== 位置门（v2 九态） ============================== */
 
 /** 代码视野三态（{@link erbCodeViewOf} 的内部口径）：普通代码 / 串内 / `;` 注释内 */
-type ErbCodeView = 'code' | 'string' | 'comment';
+export type ErbCodeView = 'code' | 'string' | 'comment';
 
 /**
  * 光标之前（`[0, col0)`）处于哪种**代码视野**：普通代码 / 字符串字面量内 / `;` 行注释内。
@@ -282,8 +282,12 @@ type ErbCodeView = 'code' | 'string' | 'comment';
  *   **中间**时，数引号的旧口径会算出"偶数 ⇒ 串外"从而在字符串里弹代码补全）；单个 `"` ⇒ 出串；
  * - 引号未闭合 ⇒ 「到行尾都是串」（与 `erb-parser` 的 `codeViewOf` 同方向的保守选择：那种文本
  *   引擎本来就编译不过）。
+ *
+ * 自 ERB-PAINT-21 批起**导出**：真语料活闸 `tests/erb-ternary-paint.corpus.test.ts` 用它判
+ * "这一枚 `%`/`{` 是不是在串里"（插值着色零回退的分母），与补全门共用同一把尺子——不另写第二份
+ * 引号/注释扫描。
  */
-function erbCodeViewOf(lineText: string, col0: number): ErbCodeView {
+export function erbCodeViewOf(lineText: string, col0: number): ErbCodeView {
   let inString = false;
   let i = 0;
   while (i < col0) {
