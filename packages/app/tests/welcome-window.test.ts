@@ -173,6 +173,28 @@ describe('applyEditorWindow：编辑器态（可缩放、可最大化、下限 9
   });
 });
 
+/**
+ * 启动窗边缘：无边框小窗的「面板感」= 内圈发丝线 + 顶缘品牌光。
+ * 内联层写主题字面量、React 层走 token，两侧各钉真值（漂一枚即红）。
+ */
+describe('启动窗边缘', () => {
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  const html = read('../index.html');
+  const css = read('../src/window-chrome.css');
+
+  it('React 层：内圈 1px 边框 + 顶缘 accent 光', () => {
+    expect(css).toMatch(/\.boot-screen::before\s*\{[\s\S]*?inset 0 0 0 1px var\(--border\)/);
+    expect(css).toMatch(/\.boot-screen::after\s*\{[\s\S]*?rgb\(var\(--accent-rgb\) \/ 0\.75\) 50%/);
+  });
+
+  it('内联层同构（字面量取该档主题值）：暗色档发丝线 #3a424b、顶光 rgba(76, 139, 245, .75)', () => {
+    expect(html).toMatch(/#boot-splash::before\s*\{[\s\S]*?inset 0 0 0 1px #3a424b/);
+    expect(html).toMatch(/#boot-splash::after\s*\{[\s\S]*?rgba\(76, 139, 245, 0\.75\) 50%/);
+    expect(html).toMatch(/html\[data-theme='light'\] #boot-splash::before\s*\{[\s\S]*?inset 0 0 0 1px #d0d7de/);
+    expect(html).toMatch(/html\[data-theme='mint-dark'\] #boot-splash::before\s*\{[\s\S]*?inset 0 0 0 1px #2b3f35/);
+  });
+});
+
 // 启动帧：初始窗口与品牌锁相称；窗口底色先于 HTML 生效，消掉 WebView 默认白闪。
 describe('启动弹窗初始帧', () => {
   const conf = JSON.parse(
@@ -222,6 +244,30 @@ describe('弹窗退出钮', () => {
   it('与启动层共用一套钮样式，且压住欢迎卡、低于模态遮罩', () => {
     expect(chromeCss).toMatch(/\.boot-splash-close,\s*\n\.app-popup-close\s*\{/);
     expect(chromeCss).toMatch(/\.app-popup-close\s*\{\s*\n\s*z-index: 3;/);
+  });
+
+  it('红底退出钮：常显淡红、悬停实心红、焦点环内收（不再出现压 UI 的灰框）', () => {
+    expect(chromeCss).toMatch(/border: 1px solid color-mix\(in srgb, var\(--red\) 45%, transparent\)/);
+    // 全局 button:hover 会改写 border-color（(0,1,1) 压过裸类规则）⇒ 悬停/按下必须显式重声明
+    expect(chromeCss).toMatch(
+      /\.boot-splash-close:hover,\s*\n\.app-popup-close:hover\s*\{[\s\S]*?border-color: var\(--red\);[\s\S]*?background: var\(--red\);/,
+    );
+    // 按下态要压过全局 `button:active:not(:disabled)`（(0,2,1)）⇒ 选择器带一层 .app-frame
+    expect(chromeCss).toMatch(
+      /\.app-frame \.boot-splash-close:active,\s*\n\.app-frame \.app-popup-close:active\s*\{[\s\S]*?background: var\(--red\);[\s\S]*?border-color: color-mix\(in srgb, var\(--red\) 70%, var\(--on-accent\)\)/,
+    );
+    expect(chromeCss).toMatch(
+      /\.boot-splash-close:focus-visible,\s*\n\.app-popup-close:focus-visible\s*\{[\s\S]*?outline: none;[\s\S]*?inset 0 0 0 2px var\(--focus-ring\)/,
+    );
+  });
+
+  it('内联启动层的退出钮与 React 同形：14px 描边叉 + 红底（撤罩换手不跳形）', () => {
+    const html = read('../index.html');
+    expect(html).toContain('class="boot-splash-x"');
+    expect(html).toContain('stroke-width="1.5"');
+    expect(html).toContain('d="M4 4l8 8M12 4l-8 8"');
+    expect(html).toMatch(/#boot-splash-close:hover\s*\{[\s\S]*?background: #e06c75;/);
+    expect(html).toMatch(/#boot-splash-close:focus-visible\s*\{[\s\S]*?outline: none;/);
   });
 
   it('欢迎页不再渲染第二枚 ×，ClosedState 的样式与组件一并删除', () => {

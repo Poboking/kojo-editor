@@ -166,37 +166,89 @@
   position: relative;
 }
 
+/* 启动窗边缘：内圈发丝线 + 顶部品牌光 + 品牌锁上方极淡的 accent 辉光。
+   无边框小窗不再是一块平板；与 index.html 内联层同构（内联层写字面量，此处走 token）。 */
+.boot-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(115% 85% at 50% -20%, rgb(var(--accent-rgb) / 0.16), transparent 64%);
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    var(--edge-raise);
+}
+
+.boot-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--accent-rgb) / 0.5) 16%,
+    rgb(var(--accent-rgb) / 0.75) 50%,
+    rgb(var(--accent-rgb) / 0.5) 84%,
+    transparent
+  );
+}
+
+/* 红底退出钮：常显语义色（淡红底 + 红描边），悬停才整颗实心。
+   `:hover` / `:active` 必须显式重声明 border-color——全局 `button:hover` 是
+   `button:hover { border-color: var(--border-strong) }`（(0,1,1)），会压过本类规则的
+   `border: 1px solid transparent`，于是悬停时冒出一个灰方框压住相邻 UI（用户反馈）。 */
 .boot-splash-close,
 .app-popup-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 10px;
+  right: 10px;
   z-index: 2;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--fg-dim);
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  box-shadow: var(--edge-raise);
+  color: color-mix(in srgb, var(--red) 72%, var(--fg));
   cursor: default;
   transition:
     background-color var(--dur-1) var(--ease-out),
-    color var(--dur-1) var(--ease-out);
+    border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
 }
 
 .boot-splash-close:hover,
 .app-popup-close:hover {
-  background: var(--hover);
-  color: var(--fg);
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--on-accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--red) 20%, transparent),
+    0 6px 16px color-mix(in srgb, var(--red) 32%, transparent);
 }
 
-.boot-splash-close:active,
-.app-popup-close:active {
+/* 加一层 `.app-frame`：全局 `button:active:not(:disabled)` 是 (0,2,1)，裸 `.类:active`
+   只有 (0,2,0)——不加就会被它按回灰底 + 0.5px 下沉（按下态读成"掉色"）。 */
+.app-frame .boot-splash-close:active,
+.app-frame .app-popup-close:active {
+  background: var(--red);
+  border-color: color-mix(in srgb, var(--red) 70%, var(--on-accent));
+  color: var(--on-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 26%, transparent);
   transform: none;
+}
+
+/* 焦点环内收：键盘可见性照样有，但不向外画方框（不压邻接面板） */
+.boot-splash-close:focus-visible,
+.app-popup-close:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
 }
 
 /* 欢迎卡片是 `.app-frame-body` 里的后续兄弟：退出钮要压在卡片上，又必须低于模态遮罩 */
