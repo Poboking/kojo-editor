@@ -34,9 +34,11 @@ import {
 } from '../src/monaco/tree-sitter/erb-diagnostics';
 import { StructureEngine, type StructureEngineAssets } from '../src/monaco/tree-sitter/engine';
 import {
+  degradationNoticeText,
   onStructureDegradation,
   resetStructureDegradationLedger,
 } from '../src/monaco/tree-sitter/fallback';
+import { lostStructureSpans } from '../src/monaco/tree-sitter/structure-runtime';
 import { disposeStructureOverlay, installStructureOverlay, structureOverlayLanguageStates } from '../src/monaco/tree-sitter/providers';
 import type { LanguageDescriptor } from '../src/monaco/language-registry';
 import type {
@@ -405,6 +407,24 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
     expect(stringToken?.startCol).toBe(19);
   });
 
+  it('编码：真语法下裸控制词（ENDIF / RETURN）不再白记空区间', async () => {
+    const text = 'IF X\n  PRINTL hi\nENDIF\nRETURN 1\n';
+    const { replies } = await runEngine(text);
+    const semantic = lastReply(replies, 'semantic');
+    if (!semantic) throw new Error('没有 semantic 回话');
+    const lines = text.split('\n');
+    const encoded = encodeErbStructureTokens(semantic.tokens, {
+      lineCount: lines.length,
+      maxColumn: (lineNumber) => (lines[lineNumber - 1] ?? '').length + 1,
+    });
+    console.log(
+      `[erb-ts-facets] 编码：spans=${encoded.data.length / 5} droppedEmpty=${encoded.droppedEmpty} lost=${lostStructureSpans(encoded)}`,
+    );
+    expect(encoded.data.length).toBeGreaterThan(0);
+    expect(encoded.droppedEmpty).toBe(0);
+    expect(lostStructureSpans(encoded)).toBe(0);
+  });
+
   it('缩进：begin/end/enter 翻成关键字行首锚（不把条件原文写进规则）', async () => {
     const { replies } = await runEngine(FIXTURE);
     const indent = lastReply(replies, 'indent');
@@ -559,7 +579,9 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
       [6, 5, 'sugar.interp'],
       [11, 10, 'string'],
     ]);
-    expect(encoded.droppedOverlaps).toBe(1);
+    // 切开是**设计内的补写**（一段都没丢）⇒ 不许计入"丢弃"：算进去就变成每份带插值的口上都
+    // 报一条"结构着色没顶上"（2026-10-25 修掉的那条误报）
+    expect(encoded.droppedOverlaps).toBe(0);
     // 同一行不重叠（Monaco 的硬要求）：逐条校验
     let end = 0;
     for (const span of decoded) {
@@ -578,6 +600,28 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     );
     expect(encoded.droppedOverlaps).toBe(1);
     expect(decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toHaveLength(1);
+  });
+
+  it('编码：结尾落在下一行第 0 列（裸控制词吃了换行）⇒ 收回上一行，不多铺一行', () => {
+    const result = splitErbStructureTokens(
+      [token({ startRow: 6, startCol: 0, endRow: 7, endCol: 0, tier: 'keyword.erb' })],
+      { lineCount: 10, maxColumn: (lineNumber) => (lineNumber === 7 ? 5 : 9) },
+    );
+    // 修前：endRow 直接换行号 ⇒ 多铺第 8 行（宽度 0）⇒ droppedEmpty 1 条、每份口上都白报一次
+    expect(result.droppedEmpty).toBe(0);
+    expect(result.droppedRows).toBe(0);
+    expect(result.spans).toHaveLength(1);
+    expect(result.spans[0]).toMatchObject({ line: 7, startColumn: 1, endColumn: 5 });
+  });
+
+  it('编码：文件以裸控制词 + 换行结尾时不再判越界（收回后正好落在末行）', () => {
+    const result = splitErbStructureTokens([token({ startRow: 2, startCol: 0, endRow: 3, endCol: 0, tier: 'keyword.erb' })], {
+      lineCount: 3,
+      maxColumn: () => 8,
+    });
+    expect(result.droppedRows).toBe(0);
+    expect(result.droppedEmpty).toBe(0);
+    expect(result.spans).toHaveLength(1);
   });
 
   it('编码：行越界丢弃、列越界夹取', () => {
@@ -672,6 +716,45 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     expect(decode(result!.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
       { line: 1, startColumn: 1, length: 5, tier: 'comment' },
     ]);
+  });
+
+  it('provider：裸控制词的换行尾不再触发回落（真文件的常态不许报"没顶上"）', async () => {
+    resetStructureDegradationLedger();
+    const notices: string[] = [];
+    const unsubscribe = onStructureDegradation((d) => notices.push(d.message));
+    const provider = createErbSemanticTokensProvider({
+      languageId: ERB_LANGUAGE_ID,
+      tokens: async () => [
+        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'keyword.erb' }),
+        token({ startRow: 1, startCol: 0, endRow: 2, endCol: 0, tier: 'keyword.erb' }),
+      ],
+    });
+    const result = (await provider.provideDocumentSemanticTokens!(
+      fakeModel(['IF X', 'ENDIF', 'RETURN 1']),
+      null,
+      noCancel,
+    )) as { data: Uint32Array } | null;
+    unsubscribe();
+    expect(result).not.toBeNull();
+    expect(notices).toEqual([]);
+  });
+
+  it('provider：真有段没涂上时文案说"几段没涂上"，不许说"这一面退回了原来的做法"', async () => {
+    resetStructureDegradationLedger();
+    const notices: string[] = [];
+    const unsubscribe = onStructureDegradation((d) => notices.push(degradationNoticeText(d)));
+    const provider = createErbSemanticTokensProvider({
+      languageId: ERB_LANGUAGE_ID,
+      tokens: async () => [
+        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'comment' }),
+        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'string' }), // 整段被先到的盖住
+      ],
+    });
+    await provider.provideDocumentSemanticTokens!(fakeModel(['IF X']), null, noCancel);
+    unsubscribe();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('有几段没涂上');
+    expect(notices[0]).not.toContain('退回了原来的做法');
   });
 
   it('provider：取数抛错 ⇒ null + 回落台账说一次', async () => {

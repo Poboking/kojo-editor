@@ -10,6 +10,17 @@ export interface StructureSemanticFacet {
 }
 
 /**
+ * 编码结果里**真的没涂上**的段数（宿主据此决定要不要报回落；判据只此一处）。
+ *
+ * `droppedEmpty` **不算**：它记的是"这一行本来就没字可涂"（空行、行尾零宽），是常态而不是
+ * 降级。混进判据的代价实测过——2026-10-25，ERB 每个文件都因此报一条"结构着色这次没顶上"，
+ * 而屏上一段没少（成因见 `erb-semantic.ts::splitErbStructureTokens` 的"下一行第 0 列"）。
+ */
+export function lostStructureSpans(result: StructureEncodeResult): number {
+  return result.droppedRows + result.droppedWide + result.droppedOverlaps;
+}
+
+/**
  * 一门语言的**结构层运行时**（A4 语言无关化）。
  *
  * 由 `LanguageDescriptor.structure.load()` 按需交回：worker 入口、wasm 与查询资源只在

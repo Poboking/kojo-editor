@@ -3,7 +3,7 @@ import { toMonacoColumn, toMonacoLine } from '../positions';
 import { ERB_SEMANTIC_CAPTURE_TIERS, erbSemanticTiers } from './erb-tiers';
 import { reportStructureDegradation } from './fallback';
 import type { StructureEncodeResult, StructureGeometry } from './semantic';
-import type { StructureSemanticFacet } from './structure-runtime';
+import { lostStructureSpans, type StructureSemanticFacet } from './structure-runtime';
 import { KOJO_STRUCTURE_MAX_TOKENS, type KojoStructureToken } from './types';
 
 /**
@@ -27,7 +27,9 @@ import { KOJO_STRUCTURE_MAX_TOKENS, type KojoStructureToken } from './types';
  *
  * 这里的口径是：**窄的（内层）先写，宽的（外层）按已占区间切开后补写剩下的段**。
  * 于是串的正文与插值各自拿到自己的档位，且同一行不重叠（Monaco 的硬要求）。
- * 被切掉的部分计入 `droppedOverlaps`（丢多少必须能报出去）。
+ * 切开是**设计内的补写**、一段都不丢，所以不进 `droppedOverlaps`——只有整段被内层盖住
+ * （真的一段没涂上）才计。这条界线 2026-10-25 才划清：混着算时，任何带插值的口上都会
+ * 报一条"结构着色没顶上"，而屏上其实一段没少。
  *
  * ## 失败面：一律回 `null`，不抛
  *
@@ -96,6 +98,15 @@ function uncovered(start: number, end: number, covered: readonly (readonly [numb
  *
  * 行越界**丢弃**（陈旧数据夹到别的行 = 在错的位置涂色，比不涂危险）；列越界**夹取**。
  * 处理顺序按"同一行里先窄后宽"（结束列升序、起始列降序），内层先占位，外层被切开。
+ *
+ * ## 结尾落在"下一行第 0 列"= 上一行的行尾
+ *
+ * 裸控制词行（`ENDIF` / `NEXT` / `WEND` …）在语法里把行尾换行吃进了 token
+ * （`erb-syntax-tree/grammar.js` 的 `w + [ \t\u3000]*\r?\n` 那一支），跨度长这样：
+ * `6:0 → 7:0`。那一位是**上一行的末尾**，不是"下一行的开头"——按 `endRow` 逐行铺色会
+ * 多铺一行，宽度 0，于是每一条裸控制词都白记一次 `droppedEmpty`，把真回落报表淹掉
+ * （2026-10-25 实测：16 行的 `.erb` 报 2 条、285 行报 29 条，而着色一段没少）。
+ * 修正与 `engine.ts::foldSlot` 同一条：结尾落在行首 ⇒ 收回上一行，末行铺到行尾。
  */
 export function splitErbStructureTokens(
   tokens: readonly KojoStructureToken[],
@@ -112,8 +123,9 @@ export function splitErbStructureTokens(
     }
     const typeIndex = TYPE_INDEX.get(token.tier);
     if (typeIndex === undefined) continue; // legend 与档位表同源，理论到不了这里
+    const endsAtLineStart = token.endRow > token.startRow && token.endCol === 0;
     const startLine = toMonacoLine(token.startRow);
-    const endLine = toMonacoLine(token.endRow);
+    const endLine = toMonacoLine(endsAtLineStart ? token.endRow - 1 : token.endRow);
     if (
       !Number.isFinite(startLine) ||
       !Number.isFinite(endLine) ||
@@ -131,7 +143,8 @@ export function splitErbStructureTokens(
     for (let line = startLine; line <= endLine; line++) {
       const cap = geometry.maxColumn(line);
       const from = line === startLine ? toMonacoColumn(token.startCol) : 1;
-      const to = line === endLine ? toMonacoColumn(token.endCol) : cap;
+      // 结尾落在下一行行首时，末行（= 收回后的那一行）铺到行尾，不再取 endCol
+      const to = line === endLine && !endsAtLineStart ? toMonacoColumn(token.endCol) : cap;
       const startColumn = Math.min(Math.max(1, Math.trunc(from) || 1), cap);
       const endColumn = Math.min(Math.max(startColumn, Math.trunc(to) || startColumn), cap);
       if (endColumn <= startColumn) {
@@ -153,11 +166,9 @@ export function splitErbStructureTokens(
     const covered = coveredByLine.get(span.line) ?? [];
     const pieces = uncovered(span.startColumn, span.endColumn, covered);
     if (pieces.length === 0) {
+      // 整段被更窄的（内层）盖住 = 真的这一段没涂上；部分切开不算（见文件头注）
       droppedOverlaps++;
       continue;
-    }
-    if (pieces.length > 1 || pieces[0]![0] !== span.startColumn || pieces[0]![1] !== span.endColumn) {
-      droppedOverlaps++;
     }
     for (const [startColumn, endColumn] of pieces) {
       spans.push({ line: span.line, startColumn, endColumn, typeIndex: span.typeIndex });
@@ -296,11 +307,13 @@ export function createErbSemanticTokensProvider(
         lineCount: model.getLineCount(),
         maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
       });
-      if (encoded.droppedRows + encoded.droppedEmpty + encoded.droppedWide + encoded.droppedOverlaps > 0) {
+      const lost = lostStructureSpans(encoded);
+      if (lost > 0) {
         reportStructureDegradation({
           capability: 'semantic',
           stage: 'parse',
-          message: `ERB 结构着色丢掉 ${encoded.droppedRows} 条越界行 / ${encoded.droppedEmpty} 条空区间 / ${encoded.droppedWide} 条超宽跨度 / ${encoded.droppedOverlaps} 条重叠`,
+          partial: encoded.data.length > 0,
+          message: `丢掉 ${lost} 段（越界行 ${encoded.droppedRows} / 超宽跨度 ${encoded.droppedWide} / 完全被覆盖 ${encoded.droppedOverlaps}）`,
         });
       }
       return encoded.data.length === 0 ? null : { data: encoded.data };

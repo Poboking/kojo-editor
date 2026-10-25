@@ -10,8 +10,11 @@ import type { KojoStructureCapability, KojoStructureErrorStage } from './types';
  *
  * ## 两条口径
  *
- * - **一次性**：去重键 = `capability|stage|消息前缀`。同一句话在同一次会话里只走一次，
- *   所以每敲一次键不会重复报；换一种错（不同 stage / 不同消息）还是会说。
+ * - **一次性**：去重键 = `capability|stage|消息前缀`，且**数字先归一成 `#`**。同一句话在同一次
+ *   会话里只走一次，所以每敲一次键不会重复报；换一种错（不同 stage / 不同消息）还是会说。
+ *   数字归一这一步不是洁癖：回落文案几乎都带报数（丢了几段、第几版），按原文去重等于
+ *   "每换一份文档就再说一次"——那正是本台账要治的刷屏（2026-10-25 实测：ERB 每开一个文件
+ *   多一条，因为空区间条数各不相同）。
  *   台账有界（超过 100 条整表换新），不让长跑的会话把内存喂给一张只增的表。
  * - **不静默**：每条都同时做两件事——`console.warn`（开发者面，带机器可对齐的前缀）与
  *   递给订阅者（作者面：`ui/App.tsx` 把它翻成一条通知）。订阅者缺席也不许抛回来，
@@ -24,6 +27,13 @@ export interface StructureDegradation {
   readonly stage: KojoStructureErrorStage;
   /** worker / 宿主给出的原始原因（上屏时按阶段配一句人话，原始原因跟在后面） */
   readonly message: string;
+  /**
+   * 只是**丢了几段**，这一面其余照常上屏（例：编码器丢掉了越界行 / 超宽跨度的少数区间）。
+   *
+   * 缺省 = 整面失效（provider 拆掉、回词法层）。两件事的文案必须分开：把"少涂了几段"
+   * 说成"这一面退回了原来的做法"，作者会以为整层着色没了，然后去查一个不存在的故障。
+   */
+  readonly partial?: boolean;
 }
 
 /** 整档回落（回词法层）与单面回落的人话说法；作者面不出现任何机器词 */
@@ -38,6 +48,10 @@ const CAPABILITY_LABEL: Record<KojoStructureCapability, string> = {
 /** 上屏文案：说清"哪一面退回原样"与"原样是什么"，并带上原因（裸英文不进正文，只在括号里） */
 export function degradationNoticeText(degradation: StructureDegradation): string {
   const label = CAPABILITY_LABEL[degradation.capability] ?? '结构解析';
+  // 只丢了几段（其余照常上屏）≠ 整面退回：两种说法不许混用（见 `StructureDegradation.partial`）
+  if (degradation.partial === true) {
+    return `${label}有几段没涂上（其余照常着色）：${degradation.message}`;
+  }
   const back = degradation.capability === 'all' ? '已退回原来的配色与折叠' : '这一面已退回原来的做法';
   return `${label}这次没顶上（${back}）：${degradation.message}`;
 }
@@ -46,7 +60,8 @@ let reported = new Set<string>();
 const listeners = new Set<(degradation: StructureDegradation) => void>();
 
 function keyOf(degradation: StructureDegradation): string {
-  return `${degradation.capability}\u0000${degradation.stage}\u0000${degradation.message.slice(0, 200)}`;
+  const prefix = degradation.message.slice(0, 200).replace(/\d+/g, '#');
+  return `${degradation.capability}\u0000${degradation.stage}\u0000${prefix}`;
 }
 
 /**

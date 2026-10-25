@@ -12,7 +12,7 @@ import { mergeIndentConfig, type BaseIndentPatterns } from './indent';
 import { createStructureSyntaxPresenter } from './syntax-decorations';
 import { erbStructureDiagnostics, ERB_DIAGNOSTIC_SOURCE } from './erb-diagnostics';
 import type { StructureClient, StructureStatus } from './client';
-import type { StructureLanguageRuntime, StructureSemanticFacet } from './structure-runtime';
+import { lostStructureSpans, type StructureLanguageRuntime, type StructureSemanticFacet } from './structure-runtime';
 import type { StructureSyntaxPresenter } from './syntax-decorations';
 import type { KojoStructureFold, KojoStructureSyntaxFault } from './types';
 
@@ -217,11 +217,15 @@ function structureSemanticProvider(
         lineCount: model.getLineCount(),
         maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
       });
-      if (encoded.droppedRows + encoded.droppedEmpty + encoded.droppedWide + encoded.droppedOverlaps > 0) {
+      // 只有"真的没涂上"才算回落（空区间是常态，见 `lostStructureSpans`）
+      const lost = lostStructureSpans(encoded);
+      if (lost > 0) {
         reportStructureDegradation({
           capability: 'semantic',
           stage: 'parse',
-          message: `结构着色丢掉 ${encoded.droppedRows} 条越界行 / ${encoded.droppedEmpty} 条空区间 / ${encoded.droppedWide} 条超宽跨度 / ${encoded.droppedOverlaps} 条同行重叠`,
+          // 一段都没剩下 = 整面确实没顶上；还剩几段 = 只是少涂了几段
+          partial: encoded.data.length > 0,
+          message: `丢掉 ${lost} 段（越界行 ${encoded.droppedRows} / 超宽跨度 ${encoded.droppedWide} / 完全被覆盖 ${encoded.droppedOverlaps}）`,
         });
       }
       if (encoded.data.length === 0) return null;
