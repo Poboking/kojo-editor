@@ -1,6 +1,17 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+} from 'react';
 import type { SearchMatch, SearchProgress } from '../bridge/search';
-import { errorText, nextWindow, type RenderWindow } from '@kojo/plugin-api';
+import { errorText } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import { Icon } from './icons';
@@ -28,7 +39,6 @@ import {
 } from './search-store';
 import {
   DEFAULT_SEARCH_EXTENSIONS,
-  flattenSearchResults,
   isValidSearchQuery,
   matchLocationLabel,
   parseExtensions,
@@ -39,10 +49,19 @@ import {
   searchSummaryDetail,
   searchSummaryText,
   shortSearchPath,
-  type SearchRow,
 } from './search-query';
+import {
+  sameRowWindow,
+  SEARCH_ROW_HEIGHTS_FALLBACK,
+  searchRowOffsets,
+  searchRowWindow,
+  searchRowsOf,
+  type SearchRow,
+  type SearchRowHeights,
+  type SearchRowWindow,
+} from './search-rows';
 import { SEARCH_SORT_OPTIONS, sortSearchFiles, type SearchSortMode } from './search-stream';
-import { applyPanelRowNav } from './panel-row-nav';
+import { rowNavDecision } from './panel-row-nav';
 import {
   describeAppliedScope,
   findSearchScope,
@@ -81,20 +100,26 @@ import './context-menu-search.css';
  */
 
 /**
- * 结果区的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"）。
+ * 结果区的渲染窗口（PERF 批：从"死顶 / 逐步加长"改成**真虚拟列表**）。
  *
- * 旧实现 `flattenSearchResults(files, 300)` 是个**够不着的上限**：真实一次全项目检索
- * 出 2,870 条命中（真语料壳内读数，25 个文件），面板只画 300 行、其余 2,570 条
- * 一句"未列出"就把作者挡在外面——点不到、也 Tab 不到（内核铁律 4：不许静默）。
+ * 旧实现是 `flattenSearchResults(files, 120)` + 末尾一枚「继续显示」：DOM 行数封在
+ * 120，但 120 行仍是**一次全建**——真语料一次全项目检索出 2,000 条命中（本项目
+ * 2,325 文件）时，出结果那一帧实测 50–82ms（`bySource` 归 `(render)`），每按一次
+ * 「继续显示」再付一遍。命中上万条时这个数会继续长。
  *
- * 现在与仓里其余长列表同一把尺（契约层的 `RenderWindow`；文件树过滤窗、状态回放、
- * 糖预览共用同一套数学）：首帧上界 120 行（**比旧实现的 300 行还轻**），
- * 末尾那枚「继续显示」是一枚真 `<button>` ⇒ Tab 得到它、Enter 按得动，
- * 每次 +240 直到全量可达。折叠/分组形态一字未动。
+ * 现在与文件树过滤窗同一套思路的**升级版**：按视口算窗口，只挂载可见行 + 上下各
+ * `SEARCH_VROW_OVERSCAN_PX` 的行，两侧用留白顶起滚动高度 ⇒
+ *   ① DOM 行数不随命中数长（可见 ~25 行 + overscan ≤ 60 行，含文件头）；
+ *   ② 全量可达不再是"按 N 次继续显示"，滚到哪画到哪（2,000 条与 20 万条同价）；
+ *   ③ 窗口数学住 `search-rows` 的纯函数里（`searchRowOffsets` / `searchRowWindow`），
+ *      不靠"行高相等"的假设——文件头与命中行是两档高度，会累积漂。
+ *
+ * 首次提交（含服务端渲染 / happy-dom 这类量不到布局的环境）还不知道视口多高：
+ * 先画**前 40 行**（`SEARCH_VROWS_FALLBACK`），挂载后量到真视口再收口。
  */
-const SEARCH_WINDOW: RenderWindow = { initial: 120, step: 240 };
-/** 首帧最多画多少行（导出给测试钉首帧行数） */
-export const SEARCH_WINDOW_INITIAL = SEARCH_WINDOW.initial;
+export const SEARCH_VROWS_FALLBACK = 40;
+/** 视口上下各多画多少像素（滚动时新行已在位，不闪白） */
+const SEARCH_VROW_OVERSCAN_PX = 240;
 
 /**
  * 打字即搜的防抖毫秒（P2-11）。
@@ -248,6 +273,28 @@ export function searchMatchSpan(match: SearchMatch): RevealSpan | undefined {
   return { columnStart: start.columnStart, columnEnd: start.columnStart + width };
 }
 
+/**
+ * 最近的**可滚动祖先**（虚拟列表的视口 = 它，而不是结果区自己）。
+ *
+ * 为什么不能只看结果区：侧栏是单列滚动容器（`.sidebar-views`，overflow auto），
+ * 结果区的 `overflow-y:auto` 在高度不受限时**永远不会自己滚**——实测
+ * `clientHeight === scrollHeight === 3130px`，真正滚的是祖先。硬编码那个类名
+ * 等于把面板焊死在当前壳层布局上，所以这里按"能滚的那个祖先是哪个"现找。
+ * 量不到（服务端渲染 / happy-dom）⇒ `null`，调用方回落到首屏 N 行。
+ */
+function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  if (typeof getComputedStyle !== 'function') return null;
+  let node = el.parentElement;
+  while (node !== null && node !== document.body && node !== document.documentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
 /* ================================ 组件 ================================ */
 
 export interface SearchPanelProps {
@@ -276,15 +323,22 @@ export interface SearchPanelProps {
 function SearchMatchRow({
   path,
   match,
+  ordinal,
   replaceDisabled,
   onReveal,
   onReplace,
 }: {
   path: string;
   match: SearchMatch;
+  /**
+   * 这条命中在**显示序的命中行**里排第几（0 基，与 `data-panel-row` 名单同序）。
+   * 行导航按它做绝对定位：虚拟列表只挂载窗口内的行，DOM 序不再等于全量序。
+   */
+  ordinal: number;
   replaceDisabled: boolean;
   onReveal: SearchPanelProps['onReveal'];
-  onReplace: () => void;
+  /** 替换这一处（**收路径 + 命中**：回调要能被面板做成稳定身份，见 `replaceOneStable`） */
+  onReplace: (path: string, match: SearchMatch) => void;
 }): ReactElement {
   return (
     <div
@@ -299,6 +353,7 @@ function SearchMatchRow({
         type="button"
         className="search-match ksp-row-main"
         data-panel-row=""
+        data-ksp-row={ordinal}
         title={`${path}:${match.line}`}
         onClick={() => {
           // F4 的行导航也是敲这枚按钮（`panel-row-nav`）⇒ 鼠标与键盘同一条
@@ -315,7 +370,7 @@ function SearchMatchRow({
         className="search-replace-one ksp-row-replace"
         title="替换这一处（文本已变化时会跳过并说明）"
         disabled={replaceDisabled}
-        onClick={onReplace}
+        onClick={() => onReplace(path, match)}
       >
         替换
       </button>
@@ -334,6 +389,10 @@ export function SearchPanel({
   const replaceInputRef = useRef<HTMLInputElement>(null);
   /** 结果区（行导航只在这一段里找行：工具条不参与漫游，见 `panel-row-nav`） */
   const resultsRef = useRef<HTMLDivElement>(null);
+  /** 结果区里的虚拟列表本体（行都挂在它下面；它的 rect 就是"内容坐标 0"） */
+  const vlistRef = useRef<HTMLDivElement>(null);
+  /** 控制区（sticky）：算可见区间时要把它挡住的那一段扣掉 */
+  const headRef = useRef<HTMLDivElement>(null);
   const optionsBodyId = useId();
   const replaceRowId = useId();
   const helpBodyId = useId();
@@ -436,19 +495,10 @@ export function SearchPanel({
 
   const result = s.result;
   /**
-   * 渲染窗口挂在**一次检索的身份**（`searchId`）上：在途流式累积 → 完成态之间
-   * **不重置**（P2-11：批次一个个到，窗口若在收口时被清回首帧，会把作者已展开的
-   * 视野没收）；换一次检索 ⇒ 新 id ⇒ 自动回落到首帧，也不会出现"旧窗口套到
-   * 新结果上"的中间帧。
-   */
-  const [resultWin, setResultWin] = useState<{ readonly key: number; readonly end: number } | null>(null);
-  const windowEnd = resultWin?.key === s.searchId ? resultWin.end : SEARCH_WINDOW_INITIAL;
-  /**
-   * 结果行族的派生量（PS-15）全部 memo 化：`flattenSearchResults`（扁平化+截窗）与
-   * `groupSearchRows` / `locationGutterCh`（分段+量列宽）只随**投影出的清单**与窗口上界变。
+   * 结果行族的派生量（PS-15）全部 memo 化：扁平化 / 行高账本 / 列宽只随**投影出的清单**变。
    * 此前每次渲染重算一遍——输入框每打一个字（`s` 换新对象）、切一个文件折叠，
    * 全项目检索的上万行扁平化就白算一次。`rows` 引用稳定也顺带给下游
-   * `useEffect` / 行组件的依赖比较省了一层。
+   * `useLayoutEffect` / 行组件的依赖比较省了一层。
    *
    * P2-11 流式：清单来源 = 完成态优先，在途取累积批次（`displayFiles`）——
    * 每个批次到达都会重算一次投影，这正是"随到随画"要付的代价（排序 + 扁平化
@@ -463,13 +513,191 @@ export function SearchPanel({
           : null,
     [result, s.phase, s.streamFiles, s.sortMode],
   );
-  const { rows, hidden } = useMemo(
-    () => (displayFiles ? flattenSearchResults(displayFiles, windowEnd) : { rows: [], hidden: 0 }),
-    [displayFiles, windowEnd],
+  /**
+   * 扁平行清单 = **全量**（不截断）且已按折叠裁决裁掉命中行。
+   * 虚拟列表要的是"这份清单有多长"，所以折叠必须在投影层完成（见 `searchRowsOf`）。
+   */
+  const rows = useMemo<SearchRow[]>(
+    () => (displayFiles === null ? [] : searchRowsOf(displayFiles, foldedFiles)),
+    [displayFiles, foldedFiles],
   );
-  /** 这批结果一共多少行（含没画的）：`flattenSearchResults` 的 `hidden` 就是差额 ⇒ 全量可达 */
-  const totalRowCount = rows.length + hidden;
-  const groups = useMemo(() => groupSearchRows(rows), [rows]);
+  /**
+   * 行高的**真源是量出来的自然高度**（文件头 23 / 命中行 25.6 @12px，随 `--fs-*` 缩放变）。
+   * 写死常量会在字号缩放后把窗口算错；"行高相等"的假设又会从第一个文件头之后开始漂。
+   *
+   * 住 ref 而不是 state：行高只参与**窗口计算**，不参与渲染（渲染只读 `vwin` 的留白），
+   * 所以不需要为它再提交一帧——这一帧正是出结果那个热路径上最不该多付的。
+   */
+  const heightsRef = useRef<SearchRowHeights>(SEARCH_ROW_HEIGHTS_FALLBACK);
+  /**
+   * 上一次量到的可见区（坐标相对虚拟列表顶边）。
+   *
+   * 为什么留一份：**新结果到达时那一帧也要画对**。渲染期不能去量布局（量一次就是一次
+   * 强制 flush），只好拿"上次量到的可见区"当估算——估算对了，`computeWindow` 随后算出的
+   * 窗口与它同形，`sameRowWindow` 直接吞掉那次 setState ⇒ **一次提交出结果**。
+   * 没有这个缓存时是两次提交（先按首屏缺省窗口画 40 行，再按真窗口重画），
+   * 实测那一帧 28–35ms，砍掉后 20ms 上下。
+   */
+  const viewportRef = useRef<{ readonly top: number; readonly height: number } | null>(null);
+  /**
+   * 当前渲染窗口（视口 → `[start, end)` + 上下留白）。
+   *
+   * 记成"跟着哪份清单算的"（`rows` 身份）：换了一份结果（新检索 / 新批次 / 折叠变化）⇒
+   * 立刻按缓存的可见区重算，绝不留上一份结果的窗口（那会把旧的行套到新结果上）。
+   * 一份结果里，窗口由 `computeWindow` 写回；写回前渲染读的是这里算出的估算值。
+   */
+  const [vwinState, setVwinState] = useState<{
+    readonly rows: readonly SearchRow[];
+    readonly win: SearchRowWindow;
+  } | null>(null);
+  /** 上一次渲染**真的画出去**的窗口（`commitWindow` 据此判断"要不要再提交一帧"） */
+  const renderedWinRef = useRef<SearchRowWindow | null>(null);
+  const vwin = useMemo<SearchRowWindow>(() => {
+    if (vwinState !== null && vwinState.rows === rows) return vwinState.win;
+    // 首屏 / 量不到布局（服务端渲染、happy-dom）⇒ 画前 `SEARCH_VROWS_FALLBACK` 行
+    const vp = viewportRef.current;
+    const { offsets, total } = searchRowOffsets(rows, heightsRef.current);
+    if (vp === null) {
+      const end = Math.min(rows.length, SEARCH_VROWS_FALLBACK);
+      return { start: 0, end, topPad: 0, bottomPad: total, total };
+    }
+    return searchRowWindow(offsets, vp.top, vp.height, SEARCH_VROW_OVERSCAN_PX);
+  }, [rows, vwinState]);
+  // 记下这一帧画出去的窗口（纯记账，不参与渲染决策；供 `commitWindow` 判"同形"）
+  renderedWinRef.current = vwin;
+  /** 写窗口（同形不写：滚动时大量帧的窗口根本没变） */
+  const commitWindow = useCallback(
+    (win: SearchRowWindow) => {
+      // 与**已经画在屏上**的窗口同形 ⇒ 一个 setState 都不发。
+      // 这条是本批热路径的关键：新结果到达时渲染期已按缓存的可见区算对了窗口，
+      // 这里若再写一次就是"同一份 DOM 再渲染一遍"（实测多 6–10ms）。
+      if (renderedWinRef.current !== null && sameRowWindow(renderedWinRef.current, win)) return;
+      setVwinState({ rows, win });
+    },
+    [rows],
+  );
+  /**
+   * 行导航要去的那一行**不在窗口里**时先记这儿（`null` = 没有待办）。
+   * 虚拟列表只挂载可见行 ⇒ `focus()` 够不着第 900 行；先把窗口挪过去、下一帧再聚焦。
+   * 用 state 而不是 ref：窗口要跟着它重算（ref 不会触发渲染）。
+   */
+  const [navTarget, setNavTarget] = useState<number | null>(null);
+  /** 这一趟导航要不要顺手"打开"（F4 / F8）；`navTarget` 落定后由聚焦 effect 消费 */
+  const navPendingOpen = useRef(false);
+  /**
+   * 行高 / 视口 / 滚动位置的**唯一**重算入口（layout effect 与滚动监听共用）。
+   *
+   * 纪律：这一个函数里**先把所有几何读光，再决定写什么**。读之间一旦夹了写
+   * （`setState` → 提交 → DOM 变更），下一次读就得重新 flush 一遍布局——
+   * 52,000px 高的滚动容器上，一次强制 flush 实测 4–5ms，夹三次就是十几毫秒。
+   */
+  const computeWindow = useCallback(() => {
+    const el = resultsRef.current;
+    const list = vlistRef.current;
+    if (el === null || list === null) return;
+    // —— 读：行高（已挂载的行是自然高度，面板不下发行高）+ 各层 rect
+    const headerH = list.querySelector('.ksp-vrow-file')?.getBoundingClientRect().height ?? 0;
+    const matchH = list.querySelector('.ksp-vrow-match')?.getBoundingClientRect().height ?? 0;
+    const listRect = list.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const headRect = headRef.current?.getBoundingClientRect() ?? null;
+    const scroller = scrollParentOf(el);
+    const scRect = scroller?.getBoundingClientRect() ?? null;
+    // —— 算
+    const prev = heightsRef.current;
+    const heights: SearchRowHeights = {
+      file: headerH > 0 ? headerH : prev.file,
+      match: matchH > 0 ? matchH : prev.match,
+    };
+    if (Math.abs(heights.file - prev.file) > 0.01 || Math.abs(heights.match - prev.match) > 0.01) {
+      heightsRef.current = heights;
+    }
+    const { offsets, total } = searchRowOffsets(rows, heightsRef.current);
+    const headBottom = headRect === null ? elRect.top : headRect.bottom;
+    // 可见区 = 结果区 ∩（可滚动祖先 / 视口）再扣掉 sticky 控制区挡住的那一段
+    const viewportTop =
+      scRect === null ? Math.max(elRect.top, headBottom) : Math.max(elRect.top, scRect.top, headBottom);
+    const viewportBottom = scRect === null ? elRect.bottom : Math.min(elRect.bottom, scRect.bottom);
+    const height = viewportBottom - viewportTop;
+    // 缓存给"下一份结果到达时那一帧"用（相对虚拟列表顶边，与滚动位置无关）
+    viewportRef.current = { top: viewportTop - listRect.top, height: Math.max(0, height) };
+    let next: SearchRowWindow;
+    if (!(height > 0) || !(listRect.height > 0)) {
+      // 量不到布局（服务端渲染 / happy-dom）或结果区整个在视口外：退回首屏 N 行
+      const end = Math.min(rows.length, SEARCH_VROWS_FALLBACK);
+      next = { start: 0, end, topPad: 0, bottomPad: total, total };
+    } else {
+      next = searchRowWindow(offsets, viewportTop - listRect.top, height, SEARCH_VROW_OVERSCAN_PX);
+      // 行导航的目标行可能落在窗口外：把窗口撑到它（多带入一行即可，`focus()` 会把它滚进视口）
+      if (navTarget !== null && (navTarget < next.start || navTarget >= next.end)) {
+        const start = Math.min(next.start, navTarget);
+        const end = Math.max(next.end, navTarget + 1);
+        next = {
+          start,
+          end,
+          topPad: offsets[start]!,
+          bottomPad: total - offsets[end]!,
+          total,
+        };
+      }
+    }
+    commitWindow(next);
+  }, [rows, navTarget, commitWindow]);
+
+  /**
+   * 窗口重算：**只在结果清单 / 导航目标变化后**跑一次（不是每次提交都跑）。
+   * 这里不能把 `vwin` 放进依赖：窗口本来就是这一步算出来的，再依赖它就成了
+   * "写一帧 → 重新量 → 再写一帧"的自激环——每次提交多付一次强制布局。
+   */
+  useLayoutEffect(() => {
+    computeWindow();
+  }, [computeWindow]);
+  useEffect(() => {
+    let raf = 0;
+    const onScroll = (): void => {
+      if (raf !== 0) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        computeWindow();
+      });
+    };
+    // 滚动事件不冒泡，但**捕获**相能拿到全部后代滚动容器（侧栏滚的是祖先，不是结果区自己）
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+      if (raf !== 0) cancelAnimationFrame(raf);
+    };
+  }, [computeWindow]);
+
+  /** 命中行在扁平行里的位置（行导航按**绝对序号**走，DOM 序只覆盖窗口） */
+  const matchRowFlat = useMemo(() => {
+    const out: number[] = [];
+    for (let i = 0; i < rows.length; i += 1) if (rows[i]!.kind === 'match') out.push(i);
+    return out;
+  }, [rows]);
+  /** 扁平行下标 → 该行是第几条命中（-1 = 不是命中行）；渲染时给每行贴号 */
+  const ordinalOf = useMemo(() => {
+    const out = new Int32Array(rows.length).fill(-1);
+    for (let i = 0; i < matchRowFlat.length; i += 1) out[matchRowFlat[i]!] = i;
+    return out;
+  }, [rows.length, matchRowFlat]);
+  /**
+   * 行导航落定：窗口里已经有那一行了就聚焦（`open` = F4，顺手敲它自己的 onClick）。
+   * 放在 layout effect 里：`navTarget` 一变，这一帧的窗口已经把它带进来了才对得上号。
+   */
+  useLayoutEffect(() => {
+    if (navTarget === null) return;
+    const host = resultsRef.current;
+    const el = host?.querySelector<HTMLElement>(`[data-panel-row][data-ksp-row="${navTarget}"]`);
+    if (el === undefined || el === null) return; // 窗口还没跟上：下一次提交再试
+    el.focus();
+    if (navPendingOpen.current) el.click();
+    navPendingOpen.current = false;
+    setNavTarget(null);
+  }, [navTarget, vwin.start, vwin.end]);
+
   const gutterCh = useMemo(() => locationGutterCh(rows), [rows]);
   const progressPercent = searchProgressPercent(s.progress);
   /**
@@ -483,8 +711,9 @@ export function SearchPanel({
   const selectedScopeKey = selectedScope === null ? '' : s.scopeKey;
   const staleScopeText = scopeStaleText(selectedScopeKey, s.appliedScope);
   /**
-   * 结果态的第二行（视觉批十四）：范围 / 截断 / 陈旧 / 屏内行数原先各占一行，260px 里叠成
+   * 结果态的第二行（视觉批十四）：范围 / 截断 / 陈旧原先各占一行，260px 里叠成
    * 四行 11px 的墙（真机读数）。合并成**一行**（` · ` 连接、超长省略），完整文本逐条进悬停。
+   * （"本屏 X/Y 行"那条随虚拟列表退场：现在滚到哪画到哪，全量一直可达，没有"未列出"要交代。）
    */
   const resultNotes: { text: string; title: string; warn: boolean }[] = [];
   if (result !== null) {
@@ -502,13 +731,6 @@ export function SearchPanel({
     const notice = searchNoticeText(result);
     if (notice !== null) resultNotes.push({ text: notice, title: notice, warn: true });
     if (staleScopeText !== null) resultNotes.push({ text: staleScopeText, title: staleScopeText, warn: true });
-    if (hidden > 0) {
-      resultNotes.push({
-        text: `本屏 ${rows.length}/${totalRowCount} 行`,
-        title: `本屏显示前 ${rows.length} 行 · 共 ${totalRowCount} 行命中；结果区末尾的按钮可继续展开`,
-        warn: false,
-      });
-    }
   }
   const extensionSummary = extensionSummaryText(s.extensionText);
 
@@ -616,14 +838,27 @@ export function SearchPanel({
     });
   };
 
-  const toggleFile = (path: string): void => {
+  /**
+   * 行组件的两个稳定回调（身份不许每次渲染都换）。
+   *
+   * 理由：结果区是**整个 memo 出去**的（见下方 `resultsBody`）。打字时面板每敲一个字
+   * 都重渲染一次，但结果区与它无关——只要依赖没变，React 拿到同一个元素引用就整棵跳过
+   * （一行都不重建）。这条豁免的代价是回调身份必须稳：所以实现走 ref 现取，
+   * 壳函数只在首次渲染时建一次。
+   */
+  const replaceOneRef = useRef(replaceOne);
+  replaceOneRef.current = replaceOne;
+  const replaceOneStable = useCallback((path: string, match: SearchMatch) => {
+    replaceOneRef.current(path, match);
+  }, []);
+  const toggleFile = useCallback((path: string) => {
     setFoldedFiles((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
-  };
+  }, []);
 
   /* ---------------------- 右键菜单面（1023 覆盖面批 · WP3.1） ---------------------- */
 
@@ -635,9 +870,11 @@ export function SearchPanel({
    */
   const matchesByPath = useMemo(() => {
     const map = new Map<string, SearchMatch[]>();
-    for (const g of groups) map.set(g.path, [...g.matches]);
+    // 源是**全量投影**（不是屏上挂载的那几十行）：右键菜单要能对着滚出视口的行动作，
+    // 虚拟列表不该把"这一屏"当成"这份结果"。
+    if (displayFiles !== null) for (const f of displayFiles) map.set(f.path, [...f.matches]);
     return map;
-  }, [groups]);
+  }, [displayFiles]);
 
   /**
    * 每次提交后刷新菜单上下文（`useEffect` 无依赖 = 每次渲染后重灌）。
@@ -677,19 +914,149 @@ export function SearchPanel({
     });
   });
 
+  /**
+   * 结果行导航（↑↓ 移焦点 / F4·F8 移过去并打开）在**虚拟列表**上的落地。
+   *
+   * 旧版直接调 `applyPanelRowNav`：它按**已挂载的 DOM 行**取名单，而虚拟列表只挂 40 行左右
+   * ⇒ 走到窗口末尾时会长回第一行（`nextRovingIndex` 的回绕），F4 从此再也走不到第 41 条。
+   * 所以这里把"该去哪一行"仍交给同一条判据（`rowNavDecision`：键位语义、回绕、下拉框让位
+   * 全在那一处），只是名单换成**全量命中行**（`matchRowFlat`）：
+   *   - 目标行已在窗口里 ⇒ 直接聚焦（与旧行为逐字相同）；
+   *   - 目标行在窗口外 ⇒ 记成 `navTarget`，渲染时把窗口撑过去，下一帧再聚焦
+   *     （`focus()` 自己会把它滚进视口）。
+   * 返回 `true` = 这一下已消费。
+   */
+  const handleRowNav = (e: ReactKeyboardEvent<HTMLDivElement>): boolean => {
+    const target = e.target as { closest?: (sel: string) => Element | null } | null;
+    if (typeof target?.closest !== 'function') return false;
+    const owner = target.closest('[data-panel-row]');
+    const current = owner === null ? -1 : Number((owner as HTMLElement).dataset.kspRow ?? '-1');
+    const decision = rowNavDecision({
+      key: e.key,
+      shiftKey: e.shiftKey,
+      current,
+      count: matchRowFlat.length,
+      inField: target.closest('select, textarea') !== null,
+    });
+    if (decision === null) return false;
+    const flatIndex = matchRowFlat[decision.index];
+    if (flatIndex === undefined) return false;
+    e.preventDefault();
+    navPendingOpen.current = decision.open;
+    const mounted = resultsRef.current?.querySelector<HTMLElement>(
+      `[data-panel-row][data-ksp-row="${decision.index}"]`,
+    );
+    if (mounted !== null && mounted !== undefined) {
+      mounted.focus();
+      if (decision.open) mounted.click();
+      navPendingOpen.current = false;
+      return true;
+    }
+    setNavTarget(decision.index);
+    return true;
+  };
+
+  /**
+   * 结果区（虚拟列表）整块 memo。
+   *
+   * 依赖只有"真的会改变屏上那几十行"的几样：清单身份、窗口、折叠集合、行号槽宽、
+   * 替换在途（替换钮 disabled）、跳转回调。输入框每敲一个字、进度 tick、切选项
+   * 都不在这份依赖里 ⇒ React 拿到同一个元素引用，整棵子树直接跳过。
+   * 这也是"逐字输入不掉帧"的落脚点：打字的主线程成本从"重建 34 行"降到"改一个字符"。
+   */
+  const resultsBody = useMemo<ReactElement | null>(() => {
+    if (rows.length === 0) return null;
+    return (
+      <div
+        ref={resultsRef}
+        className="search-rows ksp-results"
+        // 结果区的右键面（1023 批）：命中行 / 文件头由下面的 `data-search-*` 认领，
+        // 空白处本面不表态（走兜底通用菜单）
+        data-context-surface="search-results"
+        style={{ '--ksp-gutter': String(gutterCh) } as CSSProperties}
+      >
+        <div
+          ref={vlistRef}
+          className="ksp-vlist"
+          // 上下留白 = 窗口外那些行的总高：滚动高度与"全量都画出来"逐像素一致，
+          // 滚动条不撒谎、滚到底就是最后一行（不留半截空白）。
+          style={{ paddingTop: vwin.topPad, paddingBottom: vwin.bottomPad }}
+          data-ksp-vrows={rows.length}
+        >
+          {rows.slice(vwin.start, vwin.end).map((row, i) => {
+            const index = vwin.start + i;
+            const isFirst = index === 0;
+            if (row.kind === 'file') {
+              const folded = foldedFiles.has(row.path);
+              const { base, dir } = splitSearchPath(row.path);
+              return (
+                <div
+                  key={index}
+                  className={`ksp-group ksp-vrow ksp-vrow-file${isFirst ? ' ksp-vrow-first' : ''}`}
+                  data-ksp-index={index}
+                >
+                  <button
+                    type="button"
+                    className="search-file ksp-file"
+                    title={row.path}
+                    aria-expanded={!folded}
+                    // 右键菜单的文件组身份（见 `search-menu` 的 `SEARCH_FILE_ATTR`）
+                    data-search-file=""
+                    data-search-path={row.path}
+                    onClick={() => toggleFile(row.path)}
+                  >
+                    <span className="ksp-file-caret" aria-hidden="true">
+                      <Icon name={folded ? 'chevron-right' : 'chevron-down'} size="xs" />
+                    </span>
+                    {/* 可读名 = 完整的末两段路径（AT 与静态渲染判据都吃这一条）；
+                        视觉上拆成 文件名 + 目录（dim）两段，两段对 AT 隐藏，避免读两遍 */}
+                    <span className="ksp-sr">{shortSearchPath(row.path)}</span>
+                    <span className="ksp-file-base" aria-hidden="true">
+                      {base}
+                    </span>
+                    {dir !== '' ? (
+                      <span className="ksp-file-dir" aria-hidden="true">
+                        {dir}
+                      </span>
+                    ) : null}
+                    {/* 计数徽标统一语言（批次十一 L08）：本体用 ui-kit 的 `KitCount`
+                        （含 99+ 溢出形态）；`ksp-file-count` 只留面板差异（右靠 + 防 hover 同色的沉底） */}
+                    <KitCount value={row.count} className="search-file-count ksp-file-count" />
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <div key={index} className="ksp-group ksp-vrow ksp-vrow-match" data-ksp-index={index}>
+                <SearchMatchRow
+                  path={row.path}
+                  match={row.match}
+                  ordinal={ordinalOf[index] ?? 0}
+                  replaceDisabled={s.replaceRunning}
+                  onReveal={onReveal}
+                  onReplace={replaceOneStable}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }, [rows, vwin, foldedFiles, ordinalOf, gutterCh, s.replaceRunning, onReveal, toggleFile, replaceOneStable]);
+
   return (
     <div
       className="panel-search ksp"
       role="search"
       aria-label="在文件中搜索"
       // 行导航（1020 编辑器体感批）：↑↓ 在可见结果行之间移焦点，F4/Shift+F4 移过去并当场打开。
-      // 判据与问题面板共用 `panel-row-nav`（两处各写一套必漂）。
+      // 判据与问题面板共用 `panel-row-nav.rowNavDecision`；名单换成全量命中行（虚拟列表，见 handleRowNav）。
       onKeyDown={(e) => {
-        applyPanelRowNav(resultsRef.current, e);
+        handleRowNav(e);
       }}
     >
       {/* 控制区 + 状态区：单面板侧栏里整块 sticky（结果滚走、条件与读数常驻） */}
-      <div className="ksp-head">
+      <div className="ksp-head" ref={headRef}>
         <div className="ksp-row ksp-search-row">
           {/* 替换行开关：VSCode 同位（最左 chevron），展开/收起是纯 UI 状态 */}
           <button
@@ -1121,82 +1488,10 @@ export function SearchPanel({
         </div>
       </div>
 
-      {/* 结果区：分组 + 文件头折叠。行号槽宽由本屏最长读数定（CSS 自定义属性，一处写全列表） */}
-      {rows.length > 0 ? (
-        <div
-          ref={resultsRef}
-          className="search-rows ksp-results"
-          // 结果区的右键面（1023 批）：命中行 / 文件头由下面的 `data-search-*` 认领，
-          // 空白处本面不表态（走兜底通用菜单）
-          data-context-surface="search-results"
-          style={{ '--ksp-gutter': String(gutterCh) } as CSSProperties}
-        >
-          {groups.map((g) => {
-            const folded = foldedFiles.has(g.path);
-            const { base, dir } = splitSearchPath(g.path);
-            return (
-              <div key={g.path} className="ksp-group">
-                <button
-                  type="button"
-                  className="search-file ksp-file"
-                  title={g.path}
-                  aria-expanded={!folded}
-                  // 右键菜单的文件组身份（见 `search-menu` 的 `SEARCH_FILE_ATTR`）
-                  data-search-file=""
-                  data-search-path={g.path}
-                  onClick={() => toggleFile(g.path)}
-                >
-                  <span className="ksp-file-caret" aria-hidden="true">
-                    <Icon name={folded ? 'chevron-right' : 'chevron-down'} size="xs" />
-                  </span>
-                  {/* 可读名 = 完整的末两段路径（AT 与静态渲染判据都吃这一条）；
-                      视觉上拆成 文件名 + 目录（dim）两段，两段对 AT 隐藏，避免读两遍 */}
-                  <span className="ksp-sr">{shortSearchPath(g.path)}</span>
-                  <span className="ksp-file-base" aria-hidden="true">
-                    {base}
-                  </span>
-                  {dir !== '' ? (
-                    <span className="ksp-file-dir" aria-hidden="true">
-                      {dir}
-                    </span>
-                  ) : null}
-                  {/* 计数徽标统一语言（批次十一 L08）：本体用 ui-kit 的 `KitCount`
-                      （含 99+ 溢出形态）；`ksp-file-count` 只留面板差异（右靠 + 防 hover 同色的沉底） */}
-                  <KitCount value={g.count} className="search-file-count ksp-file-count" />
-                </button>
-
-                {folded
-                  ? null
-                  : g.matches.map((m, i) => (
-                      <SearchMatchRow
-                        key={`${g.path}:${m.line}:${m.column}:${i}`}
-                        path={g.path}
-                        match={m}
-                        replaceDisabled={s.replaceRunning}
-                        onReveal={onReveal}
-                        onReplace={() => replaceOne(g.path, m)}
-                      />
-                    ))}
-              </div>
-            );
-          })}
-          {displayFiles !== null && hidden > 0 ? (
-            /* 「继续显示」是一枚真按钮，挂在结果末尾（PS-6 第 5 项）：
-               Tab 顺序就在最后一行之后、Enter 按得动、每按一次多画 STEP 行，
-               按到没有为止 ⇒ 上一批"硬截 300 行"挡在外面的那两千条现在全部可达。
-               P2-11 起在途流式结果也挂这枚按钮（投影清单非空即可展开）。 */
-            <button
-              type="button"
-              className="ghost small ksp-more"
-              onClick={() =>
-                setResultWin({ key: s.searchId, end: nextWindow(windowEnd, totalRowCount, SEARCH_WINDOW) })
-              }
-            >
-              继续显示后面的命中（还有 {hidden} 行）
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      {/* 结果区：**虚拟列表**（只挂视口内的行 + overscan，两侧留白顶起滚动高度）。
+          行号槽宽由整份结果的最长读数定（CSS 自定义属性，一处写全列表）。
+          整块 memo 出去：打字 / 切开关 / 进度 tick 都只重渲染控制区，结果区一行都不重建。 */}
+      {resultsBody}
     </div>
   );
 }

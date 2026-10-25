@@ -957,3 +957,15 @@
    本文件不再暂存这两套候选——同一控件语言只许有一份真源。
    ============================================================================ */
 
+/* ---------------------- 虚拟列表（PERF 搜索批） ----------------------
+   行由 `SearchPanel` 按视口挂载，每行外面套一个 `.ksp-group`（左侧色带逐行接续，
+   与整块分组的观感一致）。`.ksp-group:first-child > .search-file` 那条"首块不画顶线"
+   的规则在虚拟列表里会误伤**滚到中途时挂载的第一行**（它同样是 `:first-child`），
+   所以改由组件给的 `ksp-vrow-first`（= 全量第 0 行）说了算。 */
+.panel-search.ksp .ksp-vlist > .ksp-vrow:not(.ksp-vrow-first) > .search-file {
+  border-top-color: var(--border-subtle);
+}
+.panel-search.ksp .ksp-vlist > .ksp-vrow-first > .search-file {
+  border-top-color: transparent;
+}
+

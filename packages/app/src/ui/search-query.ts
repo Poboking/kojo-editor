@@ -243,33 +243,19 @@ export function matchLocationLabel(m: SearchMatch): string {
   return `${m.line}:${m.column}`;
 }
 
-/** 扁平化后的结果行：文件头 + 其下各命中（渲染层按此列表画，不需再懂结构） */
-export type SearchRow =
-  | { kind: 'file'; path: string; count: number }
-  | { kind: 'match'; path: string; match: SearchMatch };
-
 /**
- * 结果 → 扁平行列表（`cap` 是渲染上限：上万行 DOM 会拖垮面板，与问题面板同精神）。
- * 文件头也算一行——被裁掉的可能是整块的命中，界面要能说清"还有多少没显示"。
+ * 扁平行与虚拟列表几何搬到了**叶子模块** `search-rows.ts`（PERF 搜索批）：
+ * 本文件在开机图里（`search-store` 静态引它），而那份几何只有懒加载的检索面板用得上。
+ * 这里只留一条 **type** 再导出，既有调用方的 import 路径不用改，也不给开机图添边。
  */
-export function flattenSearchResults(
-  files: readonly { path: string; matches: readonly SearchMatch[] }[],
-  cap: number,
-): { rows: SearchRow[]; hidden: number } {
-  const rows: SearchRow[] = [];
-  for (const f of files) {
-    rows.push({ kind: 'file', path: f.path, count: f.matches.length });
-    for (const m of f.matches) rows.push({ kind: 'match', path: f.path, match: m });
-  }
-  if (rows.length <= cap) return { rows, hidden: 0 };
-  return { rows: rows.slice(0, cap), hidden: rows.length - cap };
-}
+export type { SearchRow } from './search-rows';
 
 /**
  * 结果摘要（停止态与完成态分开说——"停下来的结果"不该看起来像"搜完了"）。
  *
  * 260px 侧栏里一行只放得下三个读数（视觉批十四实测：完整句会折成两行，连同两条边角
  * 说明一共四行 11px 的墙）⇒ 上屏用**紧凑档**，完整句（含扫描文件数）走
+
  * `searchSummaryDetail` 挂悬停。
  */
 export function searchSummaryText(r: SearchResult): string {

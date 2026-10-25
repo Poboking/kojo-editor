@@ -3,7 +3,6 @@ import type { SearchMatch, SearchResult } from '../src/bridge/search';
 import {
   DEFAULT_EXTENSION_TEXT,
   DEFAULT_SEARCH_EXTENSIONS,
-  flattenSearchResults,
   formatExtensions,
   isValidSearchQuery,
   matchLocationLabel,
@@ -16,6 +15,7 @@ import {
   searchSummaryText,
   shortSearchPath,
 } from '../src/ui/search-query';
+import { flattenSearchResults } from '../src/ui/search-rows';
 
 /**
  * 检索面板纯逻辑单测（2026-10-15 检索批）。

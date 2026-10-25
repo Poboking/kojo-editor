@@ -172,7 +172,12 @@ describe('两只面板的行导航接线', () => {
   it('检索面板：结果行带行标记，面板根接住键盘', () => {
     const src = UI('SearchPanel.tsx');
     expect(src).toContain(`${PANEL_ROW_ATTR}=""`);
-    expect(src).toContain('applyPanelRowNav(resultsRef.current');
+    // PERF 搜索批（虚拟列表）后这条接线换了形态：`applyPanelRowNav` 按**已挂载的 DOM 行**
+    // 取名单，虚拟列表只挂几十行 ⇒ 走到窗口末尾就回绕，F4 再也到不了第 41 条。
+    // 所以面板自己驱动，但**判据仍是同一份** `rowNavDecision`（键位语义 / 回绕 / 让位
+    // 全在 `panel-row-nav.ts` 里），名单换成全量命中行。这条断言问的就是"还在同一把尺子上"。
+    expect(src).toContain('rowNavDecision({');
+    expect(src).toContain('matchRowFlat');
   });
 
   it('问题面板：同一套（F8 那一条腿），行标记 + 键盘接线', () => {
