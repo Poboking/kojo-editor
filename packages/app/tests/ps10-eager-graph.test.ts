@@ -345,10 +345,23 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       上提，内建诊断与用户函数个数诊断共用一把尺子（不写第二份扫描）；
     //     · +1.2 KB `erb-parser/plugin.ts` / +0.6 KB `index.ts`：诊断腿接线（独立 try/catch，
     //       失败进 `failedRules`）与导出面。
+    //   - **ERB 体感批 v2（2026-10-26，本批）**：现读数 **191 文件 / 2,821 KB**，文件数与上一档
+    //     逐字相同（**零新常驻模块**，本批纪律），KB 闸随现值 2,810 → **2,830**（+0.3% 余量，粗闸）。
+    //     增量全部落在既有常驻文件（源码字节差 ≈ +45 KB，图内 ≈ +21 KB，九成是中文注释与派生
+    //     名单）：`monaco/erb-language.ts` +14.2 KB（预处理器三条行首规则 + 内联三元形状构建器
+    //     + 族头名单收口成 `ERB_VARIABLE_FAMILY_FORMS` 单源）、`monaco/erb-completion-context.ts`
+    //     +8.0 KB（九态门新增 `interp-expr` 与串内插值区判据 `erbInterpRegionAt`）、
+    //     `erb-parser/folding.ts` +7.2 KB（预处理块折叠接进 `erbFoldingRanges` ⇒ 上屏）、
+    //     `monaco/erb-completion.ts` +4.7 KB（`[` 位候选与行中关键字改派生）、
+    //     `plugin-api/erb.ts` +4.4 KB（预处理器标记的契约真源一张表）、`kojo-sugar/index.ts`
+    //     +3.8 KB（`ENGINE_VARIABLE_FAMILIES` 收 `MASTERNAME` / `ITEM`）、`monaco/erb-directives.ts`
+    //     +3.6 KB（K5 批 11 枚语句词与归因），`erb-parser/structure.ts` −0.3 KB（自带三枚正则
+    //     删除、改委托真源）。KB 闸随现值抬到下面那条 expect；文件闸 **191 不动且只剩 0 余量**
+    //     ——下一批再往常驻面加文件，必须先减面（`ui-kit/index.tsx` 拆分那条）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,810 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_810);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,830 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_830);
     expect(files.length).toBeLessThanOrEqual(191);
   });
 

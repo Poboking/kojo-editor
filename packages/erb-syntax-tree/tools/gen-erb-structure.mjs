@@ -2,8 +2,9 @@
 /**
  * gen-erb-structure.mjs —— ERB 结构语法（tree-sitter）的**构建期投影**。
  *
- * 真源（只读，绝不回写）：`packages/plugins/erb-parser/src/scanner.ts`。
- * 它已经是 ERB 行式结构的唯一实现（函数头 / 控制流配对 / `[SKIPSTART]` 区间 / `#DIM` 族），
+ * 真源（只读，绝不回写）两枚：`packages/plugins/erb-parser/src/scanner.ts`（行式结构）与
+ * `packages/plugin-api/src/erb.ts`（预处理器标记的语言事实）。
+ * scanner.ts 已经是 ERB 行式结构的唯一实现（函数头 / 控制流配对 / `[SKIPSTART]` 区间 / `#DIM` 族），
  * 本包不另抄第二份关键字表：
  *
  * - **控制流配对**：直接 import 真源模块（Node >= 22.18 的类型擦除），用其公开面
@@ -13,6 +14,14 @@
  *   `trimmed === '…'` 的等值判据（`parseErbText` / `forEachControlFlowLine` 两处），
  *   公开面没有导出 ⇒ 从源码文本抽 `trimmed === '…'`，并按紧随其后的
  *   `inSkipBlock = true|false` 判开/收。抽不到恰好一对就抛（fail-closed）。
+ * - **预处理条件块三枚正则**（`[IF …]` / `[ELSEIF …]` / `[ELSE]` / `[ENDIF]`）：真源是
+ *   `packages/plugin-api/src/erb.ts` 的 `ERB_PREPROC_PATTERNS`（语言事实的**唯一**落点）。
+ *   语言包**不许**运行期 import 插件，也不该 import 契约 barrel（把整张契约面拖进动态块），
+ *   所以走同一条构建期通道：抽三枚正则的 **pattern 源 + 标志**写进 `structure.json` 的
+ *   `preproc` 段，`src/index.ts` 用 `new RegExp(source, flags)` 重建。抽不到三枚、
+ *   标志不一致、带 `g`/`y`（`test()` 变有状态、共享实例就会漂）一律抛。
+ *   文法侧不吃这一段（预处理条件块在 grammar 里**故意不建块**，见 grammar.js 头注），
+ *   所以加这一格**不触碰 parser 产物**。
  * - **`#DIM` 族**：真源的 `DIM_RE` 是 `/^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i`。
  *   本脚本只投影它的一级分支与 `i` 标志，由 grammar 逐字母展开大小写（tree-sitter 记号正则
  *   没有 `/i`），不投影 `(.*)$`——那是"行内容"不是"结构"。
@@ -33,6 +42,8 @@ const pkgRoot = resolve(here, '..');
 const repoRoot = resolve(pkgRoot, '..', '..');
 const SCANNER_REL = 'packages/plugins/erb-parser/src/scanner.ts';
 const SCANNER_ABS = join(repoRoot, SCANNER_REL);
+const PREPROC_SOURCE_REL = 'packages/plugin-api/src/erb.ts';
+const PREPROC_SOURCE_ABS = join(repoRoot, PREPROC_SOURCE_REL);
 const OUT = join(pkgRoot, 'src', 'structure.json');
 const HEADER_OUT = join(pkgRoot, 'src', 'skip-marker.h');
 
@@ -69,6 +80,90 @@ export function projectMarkers(scannerSource) {
     throw new Error(`真源整行等值标记应恰为 1 开 1 收，实测开 ${starts.join('/') || '无'}、收 ${ends.join('/') || '无'}`);
   }
   return { skipStart: starts[0], skipEnd: ends[0] };
+}
+
+/**
+ * 预处理条件块三枚正则的真源声明（`packages/plugin-api/src/erb.ts`）。
+ * 语言事实的唯一落点是契约层 `ERB_PREPROC_PATTERNS`；这里只**读它的源码文本**，
+ * 不在构建期 import（那会把整张契约 barrel 拉进语言包的装载面）。
+ */
+const PREPROC_DECL = 'export const ERB_PREPROC_PATTERNS';
+
+/** 契约层的三种角色（与 `ErbPreprocRole` 同集合） */
+const PREPROC_ROLES = ['open', 'branch', 'close'];
+
+/** 一行一枚的形态：`role: /patternSource/flags,` */
+const PREPROC_ENTRY_RE = /^(open|branch|close)\s*:\s*\/((?:\\.|[^/\\])+?)\/([a-z]*)\s*,?\s*$/;
+
+/** 对象字面量的收尾（`});` / `})` / `}`） */
+const PREPROC_OBJECT_END_RE = /^\}\s*\)?\s*;?\s*$/;
+
+/** 声明之后最多扫几行（超过 = 形态不是"三行一枚"，fail-closed） */
+const PREPROC_SCAN_LIMIT = 40;
+
+/**
+ * 从 `plugin-api/src/erb.ts` 的源码文本抽 `ERB_PREPROC_PATTERNS` 的三枚 pattern 源与标志。
+ *
+ * 为什么走投影而不是运行期 import：语言包不许依赖插件，也不该在动态装载面上 import 契约
+ * barrel；`src/index.ts` 拿到的仍是**同一份语言事实的字节**，只是搬运发生在构建期。
+ *
+ * fail-closed 四条：抽不到三枚 / 有行不是"一行一枚"形态 / 三枚标志不一致（投影只有
+ * `flags` 一格）/ 标志含 `g` 或 `y`（共享实例的 `test()` 会变有状态）。
+ * 任一条都抛，绝不静默回退成脚本里手抄的正则——那正是本批要消灭的"第二处落地"。
+ */
+export function projectPreproc(erbSource) {
+  if (typeof erbSource !== 'string' || erbSource.length === 0) {
+    throw new Error(`projectPreproc 需要 ${PREPROC_SOURCE_REL} 的源码文本（真源缺失 = 投影不能猜正则）`);
+  }
+  const start = erbSource.indexOf(PREPROC_DECL);
+  if (start < 0) {
+    throw new Error(`真源里找不到 \`${PREPROC_DECL}\`——投影脚本与 ${PREPROC_SOURCE_REL} 已漂移`);
+  }
+  const lines = erbSource.slice(start).split('\n');
+  /** @type {Map<string, { source: string, flags: string }>} */
+  const found = new Map();
+  for (let i = 1; i < lines.length && i <= PREPROC_SCAN_LIMIT; i++) {
+    const line = (lines[i] ?? '').trim();
+    if (line === '' || line.startsWith('//') || line.startsWith('/*') || line.startsWith('*')) continue;
+    if (PREPROC_OBJECT_END_RE.test(line)) break;
+    const m = PREPROC_ENTRY_RE.exec(line);
+    if (!m) {
+      throw new Error(
+        `${PREPROC_SOURCE_REL} 的 ERB_PREPROC_PATTERNS 里有一行不是 \`role: /源/标志,\` 形态：${line}——形态变了请同步 projectPreproc`,
+      );
+    }
+    const [, role, source, flags] = m;
+    if (found.has(role)) throw new Error(`ERB_PREPROC_PATTERNS 的 ${role} 出现两次——投影只认一枚`);
+    found.set(role, { source, flags });
+  }
+  const missing = PREPROC_ROLES.filter((r) => !found.has(r));
+  if (missing.length > 0) {
+    throw new Error(
+      `ERB_PREPROC_PATTERNS 没抽到 ${missing.join('/')}（声明形态不是"紧跟对象字面量的三行等值"）——先同步 projectPreproc 再重跑`,
+    );
+  }
+  const flagSet = new Set([...found.values()].map((v) => v.flags));
+  if (flagSet.size !== 1) {
+    const detail = [...found].map(([r, v]) => `${r}="${v.flags}"`).join(' ');
+    throw new Error(`三枚预处理器正则的标志不一致（${detail}）——投影只有 flags 一格，请改契约层后重跑`);
+  }
+  const flags = [...flagSet][0];
+  for (const bad of ['g', 'y']) {
+    if (flags.includes(bad)) {
+      throw new Error(`预处理器正则带 ${bad} 标志：三处消费面共享同一枚实例，lastIndex 会让 test() 变成有状态判据`);
+    }
+  }
+  const preproc = { open: '', branch: '', close: '', flags };
+  for (const role of PREPROC_ROLES) {
+    const entry = found.get(role);
+    try {
+      new RegExp(entry.source, flags);
+    } catch (e) {
+      throw new Error(`预处理正则 ${role} 的源重建失败：${entry.source}（${e?.message ?? e}）`);
+    }
+    preproc[role] = entry.source;
+  }
+  return preproc;
 }
 
 /** 从源码抽 `DIM_RE` 的一级分支（`#` 之后、`\s+` 之前的那组择一分支）与标志。 */
@@ -162,14 +257,16 @@ export function projectControlFlow(words, classify) {
 }
 
 /** 全部投影的纯函数形态（测试注入/变异用）。 */
-export function buildStructure({ scannerSource, words, classify }) {
+export function buildStructure({ scannerSource, erbSource, words, classify }) {
   const markers = projectMarkers(scannerSource);
+  const preproc = projectPreproc(erbSource);
   const dim = projectDimDirectives(scannerSource);
   const dimMods = projectDimModifiers(scannerSource);
   const flow = projectControlFlow(words, classify);
   return {
-    source: { scanner: SCANNER_REL },
+    source: { scanner: SCANNER_REL, preproc: PREPROC_SOURCE_REL },
     markers,
+    preproc,
     dimDirectives: dim.patterns,
     dimFlags: dim.flags,
     dimModifiers: dimMods.patterns,
@@ -202,14 +299,15 @@ export function serializeSkipHeader(structure) {
   ].join('\n');
 }
 
-/** 真源加载（活模块；Node 原生类型擦除）。 */
+/** 真源加载（活模块 + 两份源码文本；Node 原生类型擦除）。 */
 export async function loadTruth() {
   const mod = await import(pathToFileURL(SCANNER_ABS).href);
   const scannerSource = readFileSync(SCANNER_ABS, 'utf8');
+  const erbSource = readFileSync(PREPROC_SOURCE_ABS, 'utf8');
   if (!Array.isArray(mod.ERB_CONTROL_STATEMENTS) || typeof mod.classifyControlFlow !== 'function') {
     throw new Error('scanner.ts 公开面缺 ERB_CONTROL_STATEMENTS / classifyControlFlow——投影契约变了');
   }
-  return { scannerSource, words: mod.ERB_CONTROL_STATEMENTS, classify: mod.classifyControlFlow };
+  return { scannerSource, erbSource, words: mod.ERB_CONTROL_STATEMENTS, classify: mod.classifyControlFlow };
 }
 
 async function main() {
@@ -228,7 +326,9 @@ async function main() {
       throw new Error(`产物不存在：${OUT} / ${HEADER_OUT}；先跑 node tools/gen-erb-structure.mjs`);
     }
     if (current !== serialized) {
-      throw new Error('control-flow / 标记 / #DIM 投影与 scanner.ts 不一致——重跑 node tools/gen-erb-structure.mjs');
+      throw new Error(
+        'control-flow / 标记 / #DIM 投影与 scanner.ts 不一致，或 preproc 段与 plugin-api/src/erb.ts 不一致——重跑 node tools/gen-erb-structure.mjs',
+      );
     }
     if (currentHeader !== header) {
       throw new Error('external scanner 的 [SKIPEND] 标记头与投影不一致——重跑 node tools/gen-erb-structure.mjs');
@@ -241,7 +341,7 @@ async function main() {
   const s = JSON.parse(serialized);
   const pairCount = Object.keys(s.controlFlow.pairs).length;
   console.log(
-    `[gen-erb-structure] 已写 ${OUT} + ${HEADER_OUT}：控制词 ${Object.keys(s.controlFlow.open).length + Object.keys(s.controlFlow.branch).length + Object.keys(s.controlFlow.close).length + s.controlFlow.leaf.length} 枚 / ${pairCount} 个配对类别 / 标记 ${s.markers.skipStart}…${s.markers.skipEnd} / #DIM 族 ${s.dimDirectives.length} 枚 / #DIM 修饰词 ${s.dimModifiers.length} 枚`,
+    `[gen-erb-structure] 已写 ${OUT} + ${HEADER_OUT}：控制词 ${Object.keys(s.controlFlow.open).length + Object.keys(s.controlFlow.branch).length + Object.keys(s.controlFlow.close).length + s.controlFlow.leaf.length} 枚 / ${pairCount} 个配对类别 / 标记 ${s.markers.skipStart}…${s.markers.skipEnd} / 预处理正则 3 枚（标志 "${s.preproc.flags}"）/ #DIM 族 ${s.dimDirectives.length} 枚 / #DIM 修饰词 ${s.dimModifiers.length} 枚`,
   );
 }
 

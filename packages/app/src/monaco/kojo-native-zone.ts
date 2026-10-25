@@ -99,7 +99,7 @@ export function kojoNativeZoneAt(model: Monaco.editor.ITextModel, lineNumber: nu
  * `CALL ` / `#D` / `CFLAG:` / `GOTO ` / `SETBIT CFLAG:1,` 这些**名字位**才值得主动弹；
  * 串内 / 注释内 / 普通表达式中间不打扰作者。
  *
- * 门的八态语义与白名单在 `erb-completion-context.ts` 单一真源；本函数只做"非空槽"判断，
+ * 门的九态语义与白名单在 `erb-completion-context.ts` 单一真源；本函数只做"非空槽"判断，
  * 不复制任何名字位判据。
  */
 export function kojoNativeSlotAt(model: Monaco.editor.ITextModel, position: Monaco.Position): boolean {

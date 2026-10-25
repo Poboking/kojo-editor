@@ -439,6 +439,14 @@ export {
   erbCodePrefixLength,
   isErbCommentLine,
 } from './erb-code-prefix';
+// 预处理器 `[...]` 标记与停用区标记（2026-10-25 ERB 体感批：三处副本收口成一份真源）
+export {
+  ERB_PREPROC_CANDIDATES,
+  ERB_PREPROC_PATTERNS,
+  ERB_SKIP_MARKERS,
+  erbPreprocRoleOf,
+} from './erb';
+export type { ErbPreprocCandidate, ErbPreprocRole } from './erb';
 // 索引状态事实（2026-10-19 additive，IDX-STATE 批独占追加）
 export type {
   ErbIndexCoverage,

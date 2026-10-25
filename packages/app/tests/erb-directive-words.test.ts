@@ -10,9 +10,17 @@
  *   真源 = 叶子模块 `erb-directives.ts`）；
  * ② `.kojo` 侧 `ERB_COMMANDS` ≡ `ERB_DIRECTIVES` 去族头（派生恒等式，无第二份清单）；
  * ③ 宿主源码零手抄扫描守卫：kojo-language / erb-language 的字面量里不许出现指令词抄本。
+ *
+ * K5 批追加（2026-10-25，eraTW 4.980 语料档）：证据表按频次插位 +11 行（≥10 档全收）、
+ * 3~9 档 32 词拒收名单钉墙、逐词原样语句样例经同一判据回扫、`.kojo` 派生面逐词点名。
+ *
+ * 活语料闸分母升级（同批，lead 裁决）：「每词 ≥1 命中」从**单盘**改成**跨证据三层**
+ * （主盘 → 其余在盘语料 → 引擎二进制串面，三层全无照旧红），并钉死四枚 eraNAS 口径词
+ * 各走第几层。判据是**加层不是放宽**：层 2/3 用与主盘同一把真语句判据，层 1 逐字保留。
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
@@ -179,9 +187,15 @@ describe('ERB_COMMANDS 派生自 erb-directives 真源（无第二份清单）',
 /* ============================== P1-1 第二批：行首语句口径的频次闸 ============================== */
 
 /**
- * 2026-10-25 词表扩容的**证据表**（eraNAS 4,398,019 行实测，只读）。
+ * 词表扩容的**证据表**（两批测量共用一张表，判据同一把尺）：
+ * - P1-1 批 59 行：eraNAS 4,398,019 行实测；
+ * - K5 批 11 行：eraTW 画蛇添足版 4.980（ERB 全树 3,971 份 / 4,126,929 行，实测全 UTF-8、
+ *   3,920 份带 BOM；有效语句行 2,571,686、行首标识词 257 枚；显示词表已认 206 枚 ⇒
+ *   剩余缺口 107 词 / 426 次，其中 ≥10 次恰为这 11 词 / 188 次）。
+ * 两份都只读；K5 行按频次**插位**进本表（表全局单调不增），跨语料的数值不互比高下——
+ * "按频次收 Top N" 的纪律在每份测量内部成立即可，行尾 `K5` 注释标出处。
  *
- * 口径（本批新立的判据，写在这里当文档）：行首词之后**不得**是赋值 / 自增
+ * 口径（P1-1 批新立的判据，写在这里当文档）：行首词之后**不得**是赋值 / 自增
  * （`=` `'=` `+=` `-=` `*=` … `++` `--`），也不得紧跟 `(`；否则那行是**变量语句**
  * 而不是语句词——上一批用粗口径把 `LOCAL = …` / `PAGE ++` 也算了进去，才得出
  * "缺 2,389 个 / 109,279 次"的虚高读数；按真语句口径收敛到 143 个 / 7,454 次。
@@ -200,16 +214,21 @@ const CORPUS_STATEMENT_GAPS: readonly (readonly [string, number])[] = [
   ['PRINTPLAINFORM', 102], ['TRYCALLF', 81], ['PRINTFORMSL', 76], ['ARRAYCOPY', 75],
   ['SETBGCOLOR', 73], ['SPRITECREATE', 65], ['PRINTPLAIN', 64], ['DT_SELECT', 62],
   ['RESETBGCOLOR', 59], ['ARRAYREMOVE', 53], ['GDRAWSPRITE', 45], ['ARRAYSHIFT', 43],
-  ['PRINTBUTTONLC', 41], ['DT_ROW_REMOVE', 40], ['GDISPOSE', 39], ['REPLACE', 34],
-  ['DRAWLINEFORM', 31], ['SPRITEDISPOSE', 31], ['DT_CREATE', 31], ['GCREATE', 31],
-  ['PRINTSL', 30], ['DT_RELEASE', 29], ['CBGCLEAR', 27], ['GCREATEFROMFILE', 26],
-  ['GDRAWTEXT', 25], ['GSETFONT', 24], ['GSETPEN', 24], ['ARRAYSORT', 15],
-  ['CHKDATA', 14], ['RESET_STAIN', 14], ['STOPSOUND', 13], ['FINDELEMENT', 12],
-  ['GCLEAR', 12], ['SETANIMETIMER', 12], ['DOTRAIN', 11], ['PRINTSINGLEFORMS', 10],
-  ['SUBSTRING', 10], ['CBGSETG', 10], ['GETDEFCOLOR', 10],
+  ['PRINTBUTTONLC', 41], ['DT_ROW_REMOVE', 40], ['GDISPOSE', 39],
+  ['TONEINPUTS', 39], // K5·eraTW
+  ['REPLACE', 34], ['DRAWLINEFORM', 31], ['SPRITEDISPOSE', 31], ['DT_CREATE', 31],
+  ['GCREATE', 31], ['PRINTSL', 30], ['DT_RELEASE', 29], ['CBGCLEAR', 27],
+  ['GCREATEFROMFILE', 26], ['XML_GET', 26], // K5·eraTW
+  ['GDRAWTEXT', 25], ['GSETFONT', 24], ['GSETPEN', 24],
+  ['MAP_SET', 20], ['GDRAWG', 19], ['TOOLTIP_SETDELAY', 16], ['MAP_CREATE', 16], // K5·eraTW
+  ['ARRAYSORT', 15], ['CHKDATA', 14], ['RESET_STAIN', 14], ['STOPSOUND', 13],
+  ['FINDELEMENT', 12], ['GCLEAR', 12], ['SETANIMETIMER', 12], ['DOTRAIN', 11],
+  ['XML_ADDNODE', 11], ['AWAIT', 11], // K5·eraTW
+  ['PRINTSINGLEFORMS', 10], ['SUBSTRING', 10], ['CBGSETG', 10], ['GETDEFCOLOR', 10],
+  ['PRINT_RECT', 10], ['GETCOLOR', 10], ['BINPUT', 10], // K5·eraTW
 ];
 
-/** 本批的收录阈值（次）：低于它的词不收（下一档 SUBSTRINGU 9 / QUIT 8 / PRINT_RECT 8 …） */
+/** 收录阈值（次）：两批测量共用一把尺，低于它的一律不收（eraTW 3~9 档 32 词的拒收名单钉在下方 K5 闸） */
 const STATEMENT_GAP_THRESHOLD = 10;
 
 describe('P1-1 词表扩容闸（证据表 ↔ 词表，双向对账）', () => {
@@ -245,6 +264,84 @@ describe('P1-1 词表扩容闸（证据表 ↔ 词表，双向对账）', () => 
     const control = new Set(ERB_CONTROL_STATEMENTS.map((w) => w.toUpperCase()));
     const backfilled = CORPUS_STATEMENT_GAPS.filter(([w]) => control.has(w.toUpperCase())).map(([w]) => w);
     expect(backfilled, `本批混入控制流词：${backfilled.join(', ')}`).toEqual([]);
+  });
+});
+
+/* ============================== K5 批（eraTW 4.980）：样例回扫 / .kojo 派生 / 拒收档 ============================== */
+
+/**
+ * K5 批 11 枚：词 / 频次（须与上方证据表逐词相等）/ **一条原样语句**（真语料行首语句行，
+ * 已去行首缩进与行尾空白，`"` 原样保留）/ 出处文件（相对 `ERB/` 根）。
+ * 样例不是装饰：下面的断言用与语料闸**同一把**真语句判据回扫每条样例，
+ * 挡「贴注释行 / 函数调用形 / 赋值形冒充证据」的收词姿势——证明「作者真在写」写到可执行。
+ *
+ * 引擎侧佐证（本机无引擎沙盒，`KOJO_CLIDBG_DIR` 未设，PITFALLS §103 双证的"跑起来"一腿缺；
+ * 11 枚全部有 Emuera.EM+EE 参考手册语句表点名 + 基线盘 `Emuera_LazyLoadingV3.0` 二进制串面命中
+ * 或同族在仓佐证），把握不足的记号本批一个没收。`GDRAWG` 是按判据单文件货（19 次全在
+ * `ステータス表示関連\縁取り.ERB` 且 skip 区外；`SHOP関連\TEST.ERB` 的另外 9 行整块住在
+ * `[SKIPSTART]…[SKIPEND]` 演示区、且写作 `GDRAWG ++i, …` 形，被双重判据正确排除在计数外）——
+ * 收，取舍与掉线删除纪律见 `erb-directives.ts` 头部 K5 段。
+ */
+const K5_BATCH: readonly (readonly [word: string, count: number, sample: string, source: string])[] = [
+  ['TONEINPUTS', 39, 'TONEINPUTS 制限時間, "p", 1', 'BATTLE.ERB'],
+  ['XML_GET', 26, 'XML_GET L_ENKAI_XML , @"/ROOT/ENKAI[{CNT}]/ENKAI_WEIGHT/text()" , RESULTS', 'イベント関連\\宴会.ERB'],
+  ['MAP_SET', 20, 'MAP_SET O_MAP, LOCALS, TOSTR(LOCAL)', '魔改内容\\qol\\qol_OBJ.ERB'],
+  ['GDRAWG', 19, 'GDRAWG L_G_RESULT , TOINT(ARG_SPR) , 0 , 0 , L_WIDTH , L_HEIGHT , 0 , 0 , L_WIDTH , L_HEIGHT', 'ステータス表示関連\\縁取り.ERB'],
+  ['TOOLTIP_SETDELAY', 16, 'TOOLTIP_SETDELAY 400', '魔改内容\\示例函数\\PLAY_GOMOKU.ERB'],
+  ['MAP_CREATE', 16, 'MAP_CREATE CSV_MAP', 'SYSTEM.ERB'],
+  ['XML_ADDNODE', 11, 'XML_ADDNODE L_ENKAI_XML , @"/ROOT" , @"<ENKAI />"', 'イベント関連\\宴会.ERB'],
+  ['AWAIT', 11, 'AWAIT 40', '魔改内容\\PRINT系\\PRINT_SAMPLE.ERB'],
+  ['PRINT_RECT', 10, 'PRINT_RECT 0, 30, L_W, 20', '魔改内容\\PRINT系\\UI_Components_&_Tables.ERB'],
+  ['GETCOLOR', 10, 'GETCOLOR', 'コマンド関連\\COMF\\日常系\\COMF483 ムシバトル.ERB'],
+  ['BINPUT', 10, 'BINPUT 1,1,0', '口上・メッセージ関連\\個人口上\\059 Koakuma [小悪魔]\\魅影之花\\M_KOJO_K59_2_事件系.ERB'],
+];
+
+/**
+ * eraTW 实测 3~9 次的 32 词（合计 159 次）——本批口径（≥10）下**一律不收**，钉成拒收闸。
+ * 抬档收词的前提是重新取证并同批把它们移进证据表，不是把这里删空了再塞。
+ * （1~2 档 64 词同为噪声带不收，名单未存档，纪律同 §erb-directives.ts 头部 K5 段。）
+ */
+const CORPUS_UNCOLLECTED_TIER_3TO9: readonly string[] = [
+  'STRLENFORM', 'DEBUGPRINTFORM', 'QUIT', 'TOOLTIP_SETDURATION', 'MAP_GETKEYS', 'ISNUMERIC',
+  'TOINT', 'BITMAP_CACHE_ENABLE', 'LIMIT', 'DEBUGPRINTL', 'MAP_CLEAR', 'DUMPRAND', 'INITRAND',
+  'SUBSTRINGU', 'SETTEXTBOX', 'XML_ADDATTRIBUTE', 'ARG_LEN', 'STOPBGM', 'PRINTSDL', 'ARG',
+  'ARRAYMSORT', 'SPRITEANIMEADDFRAME', 'SAVECHARA', 'MAP_RELEASE', 'LOADCHARA',
+  'HTML_POPPRINTINGSTR', 'PRINT_SPACE', 'DEBUGCLEAR', 'SETSOUNDVOLUME', 'ARRAYMSORTEX',
+  'SPRITEANIMECREATE', 'PRINTSW',
+];
+
+describe('K5 批（eraTW 4.980，11 枚）证据 ↔ 词表 ↔ 派生面', () => {
+  it('K5 频次与证据表逐词对账（两处数字不许漂移）', () => {
+    const table = new Map(CORPUS_STATEMENT_GAPS);
+    for (const [w, n] of K5_BATCH) expect(table.get(w), `证据表 ${w} 频次 ≠ K5 名单 ${n}`).toBe(n);
+    expect(CORPUS_STATEMENT_GAPS.length).toBe(59 + K5_BATCH.length);
+  });
+
+  it('逐词一条原样语句，经同一真语句判据回扫成立（行首语句形，非注释 / 赋值 / 函数调用）', () => {
+    for (const [w, , line] of K5_BATCH) {
+      const m = /^([A-Z][A-Z0-9_]*)(?=[\s(=]|$)/.exec(line);
+      expect(m, `样例不是行首语句词形：${line}`).not.toBeNull();
+      expect(m![1], `样例起手词应为 ${w}`).toBe(w);
+      const rest = line.slice(m![1]!.length);
+      expect(isVariableStatement(rest), `样例落进变量语句判据：${line}`).toBe(false);
+      expect(rest.startsWith('('), `样例是函数调用形：${line}`).toBe(false);
+    }
+  });
+
+  it('K5 11 枚进手写清单，且非族头者经派生进 `.kojo` 指令档（派生面跟变）', () => {
+    const family = new Set(ERB_FAMILY_HEADS);
+    for (const [w] of K5_BATCH) {
+      expect(ERB_STATEMENT_DIRECTIVES, `手写清单缺 ${w}`).toContain(w);
+      expect(family.has(w), `${w} 若是族头须走族头档（本批预期非族头）`).toBe(false);
+      expect(ERB_COMMANDS, `.kojo 指令档缺 ${w}（派生断裂）`).toContain(w);
+    }
+  });
+
+  it('3~9 档 32 词一枚未收（拒收名单钉墙；收词必须先重新取证）', () => {
+    const shown = new Set(ERB_DIRECTIVES.map((w) => w.toUpperCase()));
+    const leaked = CORPUS_UNCOLLECTED_TIER_3TO9.filter((w) => shown.has(w));
+    expect(leaked, `低于阈值的词混进显示词表：${leaked.join(', ')}`).toEqual([]);
+    expect(CORPUS_UNCOLLECTED_TIER_3TO9.length).toBe(32);
   });
 });
 
@@ -306,8 +403,30 @@ describe('宿主源码零手抄指令串（kojo-language / erb-language 一律�
  *
  * 它挡的是这一类退化：为了"族完整"塞进 `PRINTLW` / `DEBUGPRINTL` 这种作者根本不写的词。
  * 语料不在位（`KOJO_SMOKE_PROJECT` 未设）⇒ 整组跳过，与其余 `*.corpus.test.ts` 同纪律。
+ *
+ * 分母口径（本批升级，2026-10-25）：**"每词 ≥1 命中"不再等于"主盘 ≥1 命中"**。
+ * 证据表 70 词来自两批测量——P1-1 批 59 词是 **eraNAS**（4,398,019 行）口径，K5 批 11 词是
+ * eraTW 4.980 基线口径；eraNAS 不在盘时，单盘判据会把 `TRYCALLF` / `DT_SELECT` / `CBGCLEAR` /
+ * `CBGSETG` 四枚**有跨盘证据**的词误判成死词（`pnpm test` 全量不设 `KOJO_SMOKE_PROJECT`，
+ * 这枚闸一直没进分母，所以这条红从 P1-1 落地起就潜伏着）。改法是把判据**加层**而不是放宽：
+ * 主盘 → 其余在盘语料 → 引擎二进制串面，三层全无照旧红。
  */
 const CORPUS_ROOT = process.env.KOJO_SMOKE_PROJECT;
+
+/** 仓库根：`tools/corpus.mjs` 从这里拼，语料目录名一概不落进本文件 */
+const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
+
+/**
+ * 一个词的三层取证结果。`layer` 取到哪一层就是它过闸的**唯一**理由：
+ * 1 主盘命中 / 2 他盘命中（读数记出处盘）/ 3 仅引擎串面（语料未用）/ 0 三层全无（红）。
+ */
+interface WordEvidence {
+  word: string;
+  layer: 0 | 1 | 2 | 3;
+  primary: number;
+  others: { dir: string; count: number }[];
+  engines: string[];
+}
 
 /** 递归收集 `.erb` / `.erh`（跳符号链接，结果排序保证确定性） */
 function collectErbFiles(root: string): string[] {
@@ -368,14 +487,242 @@ function statementWordCounts(root: string): Map<string, number> {
   return counts;
 }
 
+/** 盘上语料（认内容不认名）与引擎串面的缓存：同一轮内绝不重复扫盘 / 重复读 exe */
+let cachedCorporaOnDisk: string[] | undefined;
+const engineBufCache = new Map<string, Buffer>();
+const cachedScans = new Map<string, Map<string, number>>();
+let cachedEvidence: Map<string, WordEvidence> | undefined;
+
+/**
+ * 盘上**全部**符合内容判据的语料目录（不止被 `KOJO_SMOKE_PROJECT` 选中的那枚）。
+ * 判据不在本文件重抄：直接调 `node tools/corpus.mjs --print-all`
+ * （= ERB/ 与 CSV/ 都在位、`KOJO_CORPUS_SCAN_DIRS` 优先、默认扫 `C:/game`；目录名一概不看）。
+ * 解析链 rc≠0（盘上一枚都没有）⇒ 空数组：层 2 直接不可用，逐词读数会写清"未扫到他盘"。
+ */
+function corporaOnDisk(): string[] {
+  if (cachedCorporaOnDisk) return cachedCorporaOnDisk;
+  const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'tools', 'corpus.mjs'), '--print-all'], {
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  cachedCorporaOnDisk = r.status === 0
+    ? r.stdout.split(/\r?\n/).map((s) => s.trim()).filter((s) => s.length > 0)
+    : [];
+  return cachedCorporaOnDisk;
+}
+
+const dirKey = (p: string) => path.resolve(p).toLowerCase().replace(/[\\/]+$/, '');
+
+/** 除主盘之外的在盘语料（大小写/尾斜杠归一后去重，排序保证确定性） */
+function otherCorpora(primary: string): string[] {
+  const key = dirKey(primary);
+  return corporaOnDisk().filter((d) => dirKey(d) !== key).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * 以**与主盘同一把**真语句判据扫一枚盘，只对 `pending` 里的词计数。
+ * 成本闸：`pending` 全部拿到 ≥1 命中就立刻收摊不再读盘（`TRYCALLF` 这类六盘全 0 的词
+ * 才会让这一枚盘走完，这是判据本身要求的代价）。结果按盘缓存。
+ */
+function scanCorpusFor(root: string, pending: readonly string[]): Map<string, number> {
+  const key = dirKey(root);
+  const cacheKey = `${key}::${[...pending].sort().join(',')}`;
+  const hit = cachedScans.get(cacheKey);
+  if (hit) return hit;
+  const wanted = new Set(pending);
+  const counts = new Map<string, number>();
+  let missing = wanted.size;
+  let inSkip = false;
+  for (const file of collectErbFiles(root)) {
+    if (missing === 0) break;
+    const text = decodeWithProbe(readFileSync(file)).text;
+    for (const raw of text.split(/\r?\n/)) {
+      const t = raw.trim();
+      if (inSkip) {
+        if (t === '[SKIPEND]') inSkip = false;
+        continue;
+      }
+      if (t === '[SKIPSTART]') {
+        inSkip = true;
+        continue;
+      }
+      if (t.length === 0) continue;
+      if (t.startsWith(';') || t.startsWith('@') || t.startsWith('#') || t.startsWith('$') || t.startsWith('[')) continue;
+      const m = /^([A-Z][A-Z0-9_]*)(?=[\s(=]|$)/.exec(t);
+      if (!m || !wanted.has(m[1]!)) continue;
+      const rest = t.slice(m[1]!.length);
+      if (isVariableStatement(rest) || rest.startsWith('(')) continue;
+      if ((counts.get(m[1]!) ?? 0) === 0) missing--;
+      counts.set(m[1]!, (counts.get(m[1]!) ?? 0) + 1);
+    }
+  }
+  cachedScans.set(cacheKey, counts);
+  return counts;
+}
+
+/**
+ * 层 3：引擎二进制串面证据（各语料根目录下的一级 `*.exe`，一次读入内存做 `includes`）。
+ * **latin1 与 utf16le 各扫一遍**——.NET 的字符串堆是 UTF-16，只扫 ASCII 会把"有"判成"没有"。
+ * 惰性：没有任何词落到层 3 时一枚 exe 都不必读。
+ */
+function engineStringHits(words: readonly string[], roots: readonly string[]): Map<string, string[]> {
+  const out = new Map<string, string[]>(words.map((w) => [w, [] as string[]]));
+  if (words.length === 0) return out;
+  const probes = new Map<string, readonly [Buffer, Buffer]>(
+    words.map((w) => [w, [Buffer.from(w, 'latin1'), Buffer.from(w, 'utf16le')] as const]),
+  );
+  for (const dir of roots) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isFile() || !/\.exe$/i.test(ent.name)) continue;
+      const p = path.join(dir, ent.name);
+      let buf = engineBufCache.get(p);
+      if (!buf) {
+        try {
+          buf = readFileSync(p);
+        } catch {
+          continue;
+        }
+        engineBufCache.set(p, buf);
+      }
+      for (const w of words) {
+        const [l1, u16] = probes.get(w)!;
+        if (buf.includes(l1) || buf.includes(u16)) out.get(w)!.push(`${path.basename(dir)}/${ent.name}`);
+      }
+    }
+  }
+  return out;
+}
+
+/** 层 2 本轮**真的扫过**了几枚他盘（早退时可能少于在位数；读数要说实话） */
+let layer2DisksScanned = 0;
+
+/**
+ * 三层取证（一次跑完、两处断言共用；这就是"判据升级不是放宽"的实现）：
+ *  1. 主盘（`KOJO_SMOKE_PROJECT`）命中 ≥1 ⇒ 过（**既有行为逐字保留**）；
+ *  2. 主盘 0 ⇒ 只把**这批 0 命中词**送去扫其余在盘语料，任一盘 ≥1 ⇒ 过（读数点名出处盘）；
+ *  3. 全部在盘语料都 0 ⇒ 引擎二进制串面 ⇒ 过（读数记「仅引擎背书·语料未用」）；
+ *  4. 三层全无 ⇒ 记 `layer: 0`，照旧红（挡"为族完整塞冷门货"）。
+ */
+function collectEvidence(primary: string, words: readonly string[]): Map<string, WordEvidence> {
+  if (cachedEvidence) return cachedEvidence;
+  const primaryCounts = statementWordCounts(primary);
+  const others = otherCorpora(primary);
+  const ev = new Map<string, WordEvidence>(
+    words.map((w) => [w, { word: w, layer: (primaryCounts.get(w) ?? 0) > 0 ? 1 : 0, primary: primaryCounts.get(w) ?? 0, others: [], engines: [] } as WordEvidence]),
+  );
+  let pending = words.filter((w) => ev.get(w)!.primary === 0);
+  layer2DisksScanned = 0;
+  for (const dir of others) {
+    if (pending.length === 0) break;
+    layer2DisksScanned++;
+    const counts = scanCorpusFor(dir, pending);
+    const still: string[] = [];
+    for (const w of pending) {
+      const n = counts.get(w) ?? 0;
+      if (n > 0) {
+        const e = ev.get(w)!;
+        e.others.push({ dir, count: n });
+        e.layer = 2;
+      } else still.push(w);
+    }
+    pending = still;
+  }
+  if (pending.length > 0) {
+    const hits = engineStringHits(pending, [primary, ...others]);
+    for (const w of pending) {
+      const e = ev.get(w)!;
+      e.engines = hits.get(w) ?? [];
+      if (e.engines.length > 0) e.layer = 3;
+    }
+  }
+  cachedEvidence = ev;
+  return ev;
+}
+
+/** 失败读数：逐词把三层的**各自读数**写全，绝不只甩一个空数组 */
+function describeEvidence(e: WordEvidence): string {
+  const l2 = e.others.length > 0
+    ? e.others.map((o) => `${path.basename(o.dir)} ${o.count} 行`).join(' + ')
+    : `0（本轮已扫 ${layer2DisksScanned} 枚他盘）`;
+  const l3 = e.engines.length > 0 ? e.engines.join(', ') : '无';
+  return `${e.word}｜主盘 ${e.primary}｜他盘 ${l2}｜引擎串面 ${l3}`;
+}
+
+/**
+ * 钉档（2026-10-25 本机实测）：证据表 70 词里**唯一**四枚主盘 0 命中的词，逐枚点名它靠第几层过闸。
+ * 这四枚是 P1-1 批按 **eraNAS**（4,398,019 行）口径取的，eraNAS 不在盘 ⇒ 主盘（eraTW 4.980 基线）
+ * 必然 0 命中；判据若仍写死单盘，这枚活闸在 `KOJO_SMOKE_PROJECT` 跑法下就是红的。
+ * 钉这一条是为了**防层 3 被写成万能通行证**：①越过层 1 的词集合只能是钉档这四枚的子集
+ * （新增词若不先在主盘 0 命中就别想走层 2/3）；②逐词层号对账；③层 3 只许落在"主盘 0 且
+ * 全部在盘语料 0"的词上且必须确有串面；④人造词必须三层皆空（层 3 读的是真盘字节）。
+ * 他盘整枚不在盘时这几行会因证据降级而红——那是如实读数：把盘放回扫描根或重新取证，
+ * **不许改这几行凑绿**（红消息里会列出在位/实扫盘数）。
+ * 成本：层 2 只扫"主盘 0 命中"这一小批词、每盘拿到证据即早退、结果按盘缓存；
+ * 人造词与真词同扫一遍盘（不多花一遍）；exe 只在确有词落到层 3 时才读（本机实测整组 ~89s）。
+ */
+const EXPECTED_EVIDENCE_LAYER: readonly (readonly [word: string, layer: 2 | 3, note: string])[] = [
+  ['DT_SELECT', 2, 'eraFL 105 行（`DT_SELECT "GMAPDATA",,, nodeDID`），其余在盘语料 0'],
+  ['CBGSETG', 2, 'eraAkumaMaid 75 行（eraFL 1 / eratw魔王改版 1 同证）'],
+  ['CBGCLEAR', 2, 'eraAkumaMaid·eraFL·eratw魔王改版 各 1 行——lead 的 cross-corpus 探针记 0，是它要求词后必跟 [\\s(=]，裸形 `CBGCLEAR`（整行只有词）被漏；本闸用主盘那把判据（`(?=[\\s(=]|$)`），认得到'],
+  ['TRYCALLF', 3, '六枚在盘语料全 0，仅引擎串面（latin1）背书——真·"仅引擎背书·语料未用"'],
+];
+
+/** 人造冷门词：三层都该是零。用来证明层 3 有牙（不是"扫不到也算引擎背书"） */
+const FABRICATED_WORD = 'QZZZNOSUCHDIRECTIVE';
+
+const GAP_WORDS = CORPUS_STATEMENT_GAPS.map(([w]) => w);
+
 describe.skipIf(!CORPUS_ROOT)('语料闸：词表里的新增词在真语料里仍能命中（`KOJO_SMOKE_PROJECT` 守门）', () => {
-  it('本批 59 个词逐个 ≥1 次命中（挡"为族完整塞冷门货"）', () => {
-    const counts = statementWordCounts(CORPUS_ROOT!);
-    const dead = CORPUS_STATEMENT_GAPS.filter(([w]) => (counts.get(w) ?? 0) === 0).map(([w]) => w);
-    expect(dead, `语料零命中（不该收）：${dead.join(', ')}`).toEqual([]);
+  it('闸表 70 词（P1-1 批 59 + K5 批 11）逐个 ≥1 次命中（挡"为族完整塞冷门货"）——跨证据三层：主盘 → 他盘 → 引擎串面', () => {
+    const others = otherCorpora(CORPUS_ROOT!);
+    const ev = collectEvidence(CORPUS_ROOT!, [...GAP_WORDS, FABRICATED_WORD]);
+    const escalated = GAP_WORDS.filter((w) => ev.get(w)!.layer !== 1);
+    // 升级判据的可见性：凡不靠主盘过闸的词，读数里点名它走的是哪一层、出处是哪枚盘
+    if (escalated.length > 0) {
+      console.info(`[语料闸·跨证据] 主盘 ${path.basename(CORPUS_ROOT!)} 0 命中 ${escalated.length} 词（他盘在位 ${others.length} 枚 / 本轮实扫 ${layer2DisksScanned} 枚）：\n`
+        + escalated.map((w) => `  · ${describeEvidence(ev.get(w)!)}`).join('\n'));
+    }
+    const dead = GAP_WORDS.filter((w) => ev.get(w)!.layer === 0);
+    expect(dead.length, `三层全无（不该收）：\n${dead.map((w) => `  · ${describeEvidence(ev.get(w)!)}`).join('\n') || '（无）'}`).toBe(0);
   }, 900_000);
 
-  it('剩余缺口收敛：未收词的总命中次数 < 1,000（本批 7,454 → 594）', () => {
+  it('钉档：四枚 eraNAS 口径词逐枚点名走第几层；超出这四枚的任何词不许走出主盘证据（层 3 不是通行证）', () => {
+    const others = otherCorpora(CORPUS_ROOT!);
+    const ev = collectEvidence(CORPUS_ROOT!, [...GAP_WORDS, FABRICATED_WORD]);
+    const pinned = new Set(EXPECTED_EVIDENCE_LAYER.map(([w]) => w));
+    // ① 越界即红：证据表里需要"主盘以外证据"的词，必须恰好是钉档这四枚的子集
+    const escalated = GAP_WORDS.filter((w) => ev.get(w)!.layer !== 1).filter((w) => !pinned.has(w));
+    expect(escalated, `主盘 0 命中却不在钉档里的词（新增词必须同批钉层号；他盘在位 ${others.length} 枚 / 实扫 ${layer2DisksScanned} 枚）：${escalated.join(', ')}`).toEqual([]);
+    // ② 逐词层号对账
+    for (const [w, layer, note] of EXPECTED_EVIDENCE_LAYER) {
+      const e = ev.get(w);
+      expect(e, `钉档词 ${w} 不在证据表里`).toBeDefined();
+      if (!e) continue;
+      if (e.primary > 0) {
+        expect(e.layer, `${w}：钉档前提是主盘 0 命中（主盘换成含它的盘请重新取证），实际主盘 ${e.primary}`).toBe(1);
+        continue;
+      }
+      expect(e.layer, `${w} 走的层号与钉档不符（钉 ${layer}）——${note}\n  本轮读数：${describeEvidence(e)}`).toBe(layer);
+    }
+    // ③ 层 3 的准入条件必须真的成立：只有"主盘 0 且全部在盘语料 0"的词才许用它，且必须确有串面
+    for (const e of [...ev.values()].filter((x) => x.layer === 3)) {
+      expect(e.primary, `${e.word} 层 3 但主盘有命中（判据顺序写坏了）`).toBe(0);
+      expect(e.others, `${e.word} 层 3 但他盘有命中（判据顺序写坏了）`).toEqual([]);
+      expect(e.engines.length, `${e.word} 层 3 却零串面证据（层 3 被写成免检）`).toBeGreaterThan(0);
+    }
+    // ④ 负空间：人造词三层皆空 ⇒ 红（层 3 读的是真盘字节，不是"默认放行"）
+    const fake = ev.get(FABRICATED_WORD)!;
+    expect(describeEvidence(fake), `人造词竟然过闸了（层 ${fake.layer}）——层 3 已被写成万能通行证`).toContain('引擎串面 无');
+    expect(fake.layer, `人造词竟然过闸了：${describeEvidence(fake)}`).toBe(0);
+  }, 900_000);
+
+  it('剩余缺口收敛：未收词的总命中次数 < 1,000（P1-1 批读数 7,454 → 594；K5 批再吃 11 词 / 活语料实测 188 次，只降不升）【主盘口径，未随三层改动】', () => {
     const counts = statementWordCounts(CORPUS_ROOT!);
     const known = new Set(ERB_HIGHLIGHT_WORDS.map((w) => w.toUpperCase()));
     let restHits = 0;
@@ -383,3 +730,4 @@ describe.skipIf(!CORPUS_ROOT)('语料闸：词表里的新增词在真语料里�
     expect(restHits).toBeLessThan(1_000);
   }, 900_000);
 });
+

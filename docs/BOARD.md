@@ -41,6 +41,13 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 | LANG-UX-MATRIX | 真壳体感验收矩阵：两语言逐项（折叠/跳转/引用/重命名/补全/格式化/诊断/预览/大纲/面包屑/展开/peek）读数进 STATE；壳冒烟纳入 `release-gate --shell` | 每项有实测读数；不回退 | 批次九认领：lead 2026-10-22 |
+| ERB-PAINT-21 | 内联三元 `\@…?…#…\@` 的 Monarch 着色**只是真源的窄子集**：真语料（画蛇添足 4.980，3,971 份）形状完整者 9,248 枚，上色 7,282 枚（78.7%），**弃涂 1,966 枚（21.3%）**——弃涂几乎全是段内撞 `%CALLNAME%` 一类插值（整形状一口吞会回退既有插值着色）。落点 `monaco/erb-language.ts::erbInlineTernaryShape`（相位化）或给 `tests/monarch-harness.ts` 补 `switchTo` 动作覆盖后改状态机 | 判据：覆盖率只升不降且 `%…%`/`{…}` 既有插值着色零回退；把 `.local` 那套量法固化成一枚 `tools/` 读数脚本（本批脚本在 gitignore 目录，不作长期判据） | 待认领 · 来源：ERB 体感批 v2 2026-10-26 |
+| ERB-HTML-TAG | FORM 串里的 HTML 标签无档：`<font>` 758 / `<br>` 684 / `<button>` 315 / `<nobr>` 143（合计 2,404 次 / 194 份文件），作者看到的是整段串色；`HTML_PRINT` 行 436 次 / 71 份 | 判据：只复用既有 token 档（本批纪律：不新造档不动 theme），ASCII 画里的尖括号不误伤；与 `erb-preproc-single-source.test.ts` 同风格补一条四向对拍 | 待认领 · 来源：ERB 体感批 v2 语料取证 2026-10-26 |
+| AUDIT-LANGFACE | 审计 A 项两处口径缺口：①walk 后缀只收 `.ts/.tsx/.rs/.mjs` ⇒ 新在册的 `packages/erb-syntax-tree/src` 实覆盖 1 枚文件，`grammar.js`/`structure.json`/`parser.c`/`scanner.c` 不在射程；②`packages/kojo-lang/src` 自陈「语言层，零游戏名词」却仍不在 NEUTRAL_DIRS | 判据：扩面是**收紧**，须先把全仓扫一遍红面清干净再抬闸；在册后立刻红就说明真混进游戏词——报红、别加 `audit-allow` 凑绿 | 待认领 · 来源：K4 批 2026-10-26 |
+| FAMILY-JVEL-TUTORIAL | 族头名单两处脱钩：①`ENGINE_VARIABLE_FAMILIES` 里的 `JVEL` 疑为 `JUEL` 历史拼误（语料 `JVEL` 0 份 / `JUEL` 114 份，引擎名字堆 0 / 8），台账 `erb-family-single-source.test.ts` 钉住未擅改；②`eratw-adapter/src/tutorial-reference-expr.ts:89,92`「认账的族头（共 20 个）」列 20 名，真源现已 22 | 判据：改拼写会动转译器族归属与**使用者面**教程文案 ⇒ 一名一读数一起核；改完台账那行必须删（台账只许收窄） | 待认领 · 来源：K6 批 2026-10-26 |
+| FAMILY-EXPLV | `EXPLV` 具名索引 389 处 / 69 份且 eratw-adapter 已认，但 Monarch 名单与 `ENGINE_VARIABLE_FAMILIES` 两处都没有（比本批拒收的 `CHILDNAME` 证据硬）；反向：`STAIN_1`/`STAIN_2`/`LOSEBASE` 语料 0 命中（`LOSEBASE` 有引擎串面 ⇒ 留） | 判据：逐枚拿「语料形态 + 引擎名字堆 + 是否 `#DIM` 自造」三件说话；游戏自造名一律归 adapter 不进语言层 | 待认领 · 来源：K6/K6b 批 2026-10-26 |
+| PREPROC-PREFIX-CASE | `;!;[IF x]` 形态：折叠服务侧认（剥代码前缀后判角色），文法侧把整行当注释不折 ⇒ 两侧口径差（本盘实测 **0 行**，暂不触闸）。若将来出现在 <5,000 行的文件里，`fold-compare --gate` 会报「未包含」 | 判据：先取证（语料有无真形）再决定让哪一侧跟；不许为省事把服务侧的剥前缀判据删掉 | 待认领 · 来源：K7 批 2026-10-26 |
+| CORPUS-GATE-COST | 活语料闸三层化（主盘→他盘→引擎名字堆）后成本从 5.6s 涨到暖盘 33s / 冷盘 89s，主因 `decodeWithProbe` 在日文盘反复重解 | 判据：压成本要给层 2 换 latin1 字节快路，那是**第二把尺**——除非同时把它钉成与主盘同判据的对拍，否则不压 | 待认领 · 来源：K5b 批 2026-10-26 |
 
 ## 在办 · 语言面统一（LAU · 2026-10-25，组长 krosama）
 

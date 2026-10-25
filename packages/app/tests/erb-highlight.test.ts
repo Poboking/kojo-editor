@@ -9,8 +9,9 @@ import {
 import { ERB_COMMANDS, ERB_FAMILY_HEADS, ERB_HIGHLIGHT_COMMANDS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { registerErbLanguage, setErbDirectiveWords } from '../src/monaco/erb-language';
 import { ERB_CONTROL_STATEMENTS, classifyControlFlow } from '@kojo/plugin-erb-parser';
+import { scanTextTernaries } from '@kojo/plugin-condition-extractor';
 import { CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
-import { compileMonarch, driveLexer, driveLine, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
+import { compileMonarch, driveLexer, driveLine, driveLines, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**
  * `.ERB` 关键字高亮验收（SUGGEST-2C）——**真 Monarch 编译 + 逐词发射**，不手搓解析器。
@@ -208,11 +209,33 @@ describe('ERB 高亮补集（控制流 + 引擎内建单行语句）', () => {
 
 describe('高亮不回退（词法分层仍然成立）', () => {
   it('变量多段引用整段 variable：CFLAG:ARG:口上セレクタ / 小写 cflag:arg / rand:2（指令同名词的索引形态）', async () => {
-    for (const line of ['CFLAG:ARG:口上セレクタ = 1', 'cflag:arg = 1', 'rand:2']) {
+    for (const line of ['CFLAG:ARG:口上セレクタ = 1', 'cflag:arg = 1', 'rand:2', 'mastername:arg = 1']) {
       const { emitted } = await emitErb(line);
       const variable = emitted.find((e) => e.token.startsWith('variable.') && e.text.startsWith(line.split(' ')[0]!));
       expect(variable, `「${line}」没有整段 variable（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeDefined();
     }
+  });
+
+  // K6 批（2026-10-25）：语料实测「有词无档」的两枚引擎词进名单后的回归位。
+  // 证据与取舍口径写在 `erb-language.ts` 的 `ERB_VARIABLE_FAMILY_HEADS` 头注
+  // （`MASTERNAME` 两处都收 / `PLAYER` 只收显示层 / `CHILDNAME` 不收），
+  // 名单 ⇄ 补全表的双向对拍在 `tests/erb-family-single-source.test.ts`。
+  it('K6：`MASTERNAME:1 = 亲爱的` 与 `%MASTERNAME%` 裸形整段 variable（三形态大小写不敏感）', async () => {
+    for (const line of ['MASTERNAME:1 = 亲爱的', 'mastername:1 = 达令', 'MasterNAME:ARG =']) {
+      const { emitted } = await emitErb(line);
+      const head = line.split(' ')[0]!;
+      const variable = emitted.find((e) => e.token.startsWith('variable.') && e.text === head);
+      expect(variable, `「${line}」的「${head}」没进 variable（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeDefined();
+    }
+  });
+
+  it('K6：`PLAYER` 作裸标量与作中段作用域都归 variable，且中段不许另起一枚（`TALENT:PLAYER:2` 一整枚）', async () => {
+    const bare = await emitErb('IF TFLAG:103 == PLAYER');
+    expect(bare.emitted.find((e) => e.text === 'PLAYER')?.token.startsWith('variable.'), '裸 PLAYER 没进 variable').toBe(true);
+    const mid = await emitErb('TALENT:PLAYER:2 & 2');
+    const texts = mid.emitted.map((e) => e.text);
+    expect(texts, `中段被切碎：${texts.join(' / ')}`).not.toContain('PLAYER');
+    expect(mid.emitted.find((e) => e.text === 'TALENT:PLAYER:2')?.token.startsWith('variable.')).toBe(true);
   });
 
   it('字符串里的指令词不染 keyword（FORM 串内仍是 string）', async () => {
@@ -585,3 +608,280 @@ describe('P2 边角着色（`;!;` / `;#;` 代码前缀、`\'=` 赋值运算符�
     expect(line.emitted.find((e) => e.text === 'ABC')?.token.startsWith('string.')).toBe(true);
   });
 });
+
+/* ============================== ⑨ 预处理器条件块 `[IF…]`/`[ELSE]`/`[ENDIF]` 着色 ==============================
+
+/**
+ * ERB 体感批 K1：`[...]` 预处理条件块此前显示层完全没跟上——`[IF_DEBUG]` 整行白字、
+ * `[IF x]` 里的 `IF` 反被 `standaloneKeyword` 当 ERB 控制词着色。判据从契约真源
+ * （`plugin-api/erb.ts` 的 `ERB_PREPROC_PATTERNS`）派生，档位复用既有 `keyword.preprocessor`。
+ * 三条规则排在 SKIP 两条之后、`standaloneKeyword` 之前；整行严格等值才认（ASCII 画里的
+ * 方括号行、裸 `[IF]` 不误伤）。走真 Monarch 编译逐词发射（⑦⑧ 同一基座）。
+ */
+describe('ERB 预处理器条件块着色（整行 → keyword.preprocessor；判据取契约真源）', () => {
+  /** 正例：大写 / 小写 / 混合 + 前导缩进 / 行尾空白，各应整行出一枚 keyword.preprocessor */
+  const recognized: readonly string[] = [
+    '[IF x]',
+    '[IF_DEBUG]',
+    '[IF_NDEBUG]',
+    '[ELSE]',
+    '[ELSEIF y]',
+    '[ENDIF]',
+    '[if x]',
+    '[If_Debug]',
+    '[endif]',
+    '[elseif z]',
+    '  [IF a]  ', // 前导缩进 + 行尾空白（真源 trim 后等值 → Monarch 靠 `^\s*…\s*$` 放行）
+    '\t[ENDIF]\t',
+  ];
+  for (const line of recognized) {
+    it(`「${JSON.stringify(line)}」整行出 keyword.preprocessor（一条规则吃下，无二次发射）`, async () => {
+      const { emitted } = await emitErb(line);
+      expect(
+        emitted.every((e) => e.token.startsWith('keyword.preprocessor.')),
+        `「${line}」实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
+      ).toBe(true);
+      expect(emitted, `「${line}」应恰一枚发射（整行一条规则）`).toHaveLength(1);
+      expect(emitted[0]!.text, `「${line}」匹配体应是整行原样`).toBe(line);
+    });
+  }
+
+  it('`[IF x]` 里的 `IF` 不被控制词档截胡：整行一枚、不单独成词', async () => {
+    const { emitted } = await emitErb('[IF CALL]');
+    // 内层 `IF` / `CALL` 不再作为独立发射点出现（整行被预处理器规则吃掉）
+    expect(emitted.some((e) => e.text === 'IF' || e.text === 'CALL'), `漏出发射：${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]!.token.startsWith('keyword.preprocessor.')).toBe(true);
+    // 反向兜底：确认裸 `IF`（不带方括号）仍走控制词档——本规则只吃 `[` 起手整行等值形
+    const bareIf = await emitErb('IF 1');
+    expect(bareIf.emitted.find((e) => e.text === 'IF')?.token.startsWith('keyword.')).toBe(true);
+    expect(bareIf.emitted.find((e) => e.text === 'IF')?.token.startsWith('keyword.preprocessor.')).toBe(false);
+  });
+
+  /** 反面：非整行等值形一律不算块（ASCII 方括号画 / 裸形 / 缺参数 / 粘连词），绝不出 preprocessor 档 */
+  const rejected: readonly string[] = [
+    '[ 1 2 3 ]', // ASCII 画里的方括号行
+    '[IF]', // 裸形：open 要 `IF\s+…\S`，无空格无参数 ⇒ 不成块
+    '[IF ]', // 只有空格、无条件参数
+    '[ENDIF ]', // `]` 前有杂质
+    '[ELSEIFFY]', // 粘连词，非 ELSEIF/ELSE
+  ];
+  for (const line of rejected) {
+    it(`「${JSON.stringify(line)}」不是预处理器块标记（不误伤 ASCII / 裸形）`, async () => {
+      const { emitted } = await emitErb(line);
+      expect(
+        emitted.some((e) => e.token.startsWith('keyword.preprocessor.')),
+        `「${line}」被误判为块：${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
+      ).toBe(false);
+    });
+  }
+
+  it('预处理器标记落在 [SKIPSTART] 块内仍走 raw 不透明档（块内是死代码，着色层不认块边界）', async () => {
+    const lexer = await erbLexer();
+    const per = driveLines(lexer, ['[SKIPSTART]', '[IF x]', '[ENDIF]', '[SKIPEND]']);
+    // 块内两行整体 raw（skip 态的 `.*$` 吃掉整行，root 的预处理器规则进不来）
+    expect(per[1]!.every((e) => e.token.startsWith('keyword.raw')), `块内 [IF x] 实发 ${per[1]!.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(true);
+    expect(per[2]!.every((e) => e.token.startsWith('keyword.raw'))).toBe(true);
+    // [SKIPEND] 退回 root：块外 [ENDIF] 恢复 keyword.preprocessor
+    const after = driveLines(lexer, ['[SKIPSTART]', '[ENDIF]', '[SKIPEND]', '[ENDIF]']);
+    expect(after[3]![0]?.token.startsWith('keyword.preprocessor.')).toBe(true);
+  });
+});
+
+/* ============================== ⑩ 内联文本形三元 `\@条件?真#假\@` 边界着色 ==============================
+
+/**
+ * ERB 体感批（接 K1 显示层）：`\@…\@` 此前整段落在 `string` 里**没有任何结构感**。本节钉四件事：
+ * ① 整形状才涂——开闭 `\@`/`?`/`#` 落既有 `string.escape`（`{}`/`%%` 插值边界同档），
+ *    `<条件>` 落 `variable`（`strExpr` 层内同档），真/假文落 `string`（inline.ts："真 / 假两段
+ *    只是**输出文本**"），三档全部现成、零新造、theme/CSS 未动；
+ * ② 残形不涂——缺 `?` / 缺 `#` / 未闭合 `\@` / 空条件，一枚边界档都不产（落 ① 普通转义回退）；
+ * ③ 顶层判据不越——段内撞 `"` `\` `%` `{` `}` 或未配平括号 ⇒ 整体弃涂；**既有 `{…}`/`%…%`
+ *    插值着色零回退**（弃涂后走 ④⑤ 老路），`PRINTFORM "#text"` 的 `#` 不受影响；
+ * ④ 保守对拍方向——着色层涂出的每一枚开记号，语义真源 `scanTextTernaries` 必在同一列认得
+ *    （涂 ⊆ 认；反方向"认全"由 K2 插值门 + lead 跨面对拍兜，本层宁窄）。
+ * 走真 Monarch 编译逐词发射（⑦⑧⑨ 同一基座）。
+ */
+describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 string.escape / variable / string 三档）', () => {
+  /** 逐词表：`text → token`（同名多次出现按序取） */
+  function tokenMap(emitted: readonly Emit[]): (text: string, nth?: number) => string {
+    return (text, nth = 0) => {
+      const hits = emitted.filter((e) => e.text === text);
+      return hits[nth]?.token ?? '<none>';
+    };
+  }
+
+  it('① 串内整形状：七段各归其档，条件段一整枚 variable（不被变量族/运算符切碎），闭合回根态', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "台词\\@CFLAG:0>0?是#否\\@尾巴"');
+    const post = lexer.tokenPostfix;
+    const of = tokenMap(line.emitted);
+    expect(of('\\@'), `开记号实发 ${of('\\@')}`).toBe(`string.escape${post}`);
+    expect(of('\\@', 1), '收记号应与开记号同档').toBe(`string.escape${post}`);
+    expect(of('CFLAG:0>0'), '条件段必须一整枚 variable').toBe(`variable${post}`);
+    expect(of('?')).toBe(`string.escape${post}`);
+    expect(of('#')).toBe(`string.escape${post}`);
+    expect(of('是')).toBe(`string${post}`);
+    expect(of('否')).toBe(`string${post}`);
+    expect(of('台词')).toBe(`string${post}`);
+    expect(of('尾巴')).toBe(`string${post}`);
+    expect(line.stack).toEqual(['root']);
+  });
+
+  it('①b 一级配平 `(…)`/`[…]` 段块与一枚串里多形并存：真假段里的 `?` 是正文、不吃边界档', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "a\\@(A||B)&&C?是(真)?#否\\@b\\@CFLAG[1]==2?y#n\\@c"');
+    const post = lexer.tokenPostfix;
+    const of = tokenMap(line.emitted);
+    expect(of('(A||B)&&C'), `括号条件段实发 ${of('(A||B)&&C')}`).toBe(`variable${post}`);
+    expect(of('是(真)?'), '真段整枚（含正文问号）归 string').toBe(`string${post}`);
+    expect(of('CFLAG[1]==2'), `方括号条件段实发 ${of('CFLAG[1]==2')}`).toBe(`variable${post}`);
+    // 两枚三元共 8 枚边界（4×`\@` + 2×`?` + 2×`#`）全部 string.escape，别无 escape 发射
+    const bounds = line.emitted.filter((e) => ['\\@', '?', '#'].includes(e.text));
+    expect(bounds.map((e) => e.text).join(''), '\\@?#\\@\\@?#\\@');
+    expect(bounds.every((e) => e.token === `string.escape${post}`)).toBe(true);
+    expect(line.emitted.filter((e) => e.token === `string.escape${post}`)).toHaveLength(8);
+    expect(line.stack).toEqual(['root']);
+  });
+
+  /** 残形名册：缺 `?` / 缺 `#`（inline.ts 认、着色层取窄）/ 未闭合 / 空条件——一枚边界档都不许产 */
+  const malformed: readonly string[] = [
+    'PRINTL "a\\@b\\@c"', // 缺 ?
+    'PRINTL "a\\@?b#c\\@d"', // 空条件
+    'PRINTL "a\\@b?c\\@d"', // 缺 #（无 else 形）
+    'PRINTL "a\\@b?c#d"', // 未闭合 \@（本行没有收记号）
+    'PRINTL "a\\@b?c#d\\@e', // 未闭合引号 + 已闭合三元 ⇒ 形状认，但残引号闸照常
+  ];
+  it('② 残形不产结构档：`?`/`#`/`\\@` 零枚 escape、条件不冒充 variable（未闭合引号吸收不破坏）', async () => {
+    const lexer = await erbLexer();
+    for (const src of malformed.slice(0, 4)) {
+      const line = driveLine(lexer, src);
+      const boundary = line.emitted.filter(
+        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
+      );
+      expect(boundary, `「${src}」残形产了边界档：${boundary.map((e) => e.text).join('')}`).toHaveLength(0);
+      expect(line.stack, `「${src}」状态栈必须出干净`).toEqual(['root']);
+    }
+    // 第 5 条形本身完整 ⇒ 边界照涂，但行尾未闭合引号仍被 ⑨ 吸收、栈出干净（纪律②③ 的闸不松）
+    const tail = driveLine(lexer, malformed[4]!);
+    expect(tail.emitted.some((e) => e.text === '?' && e.token.startsWith('string.escape.'))).toBe(true);
+    expect(tail.stack).toEqual(['root']);
+    const next = driveLine(lexer, 'PRINTL 正常', tail.stack);
+    expect(next.emitted.some((e) => e.token.startsWith('string.')), '残引号不许把下一行染成串').toBe(false);
+  });
+
+  it('③a `PRINTFORM "#text"` 的 `#` 与串内孤立 `#`/`?` 不受影响（`#` 只在整形状认过 `?` 之后才算分隔）', async () => {
+    const lexer = await erbLexer();
+    for (const src of ['PRINTFORM "#text"', 'PRINTL "#没有三元"', 'PRINTL "a?b#c"']) {
+      const line = driveLine(lexer, src);
+      expect(
+        line.emitted.filter((e) => e.token.startsWith('string.escape.')),
+        `「${src}」不该产任何结构边界档`,
+      ).toHaveLength(0);
+      expect(line.emitted.filter((e) => e.token.startsWith('variable.'))).toHaveLength(0);
+      expect(line.stack).toEqual(['root']);
+    }
+  });
+
+  /** 嵌套结构顶回顶层判据：形状整体弃涂；同时既有 `{…}` 插值着色必须原样活着（不回退） */
+  const nested: readonly { line: string; brace: boolean }[] = [
+    { line: 'PRINTL "台\\@{LOCAL:1}>1?a#b\\@尾"', brace: true }, // 条件段带 {}
+    { line: 'PRINTL "x\\@A?{N}#b\\@y"', brace: true }, // 真段带 {}
+    { line: 'PRINTL "x\\@A%B?c#d\\@y"', brace: false }, // 条件段带 %
+    { line: 'PRINTL "x\\@f(A?B)?c#d\\@y"', brace: false }, // 括号内含 ?（该枚不该算顶层界）
+    { line: 'PRINTL "x\\@A?b(c#d)#e\\@y"', brace: false }, // 真段括号内含 #（分隔符歧义）
+    { line: 'PRINTL "x\\@((A))?b#c\\@y"', brace: false }, // 两层嵌套括号
+  ];
+  it('③b 段内嵌套结构 ⇒ 整枚弃涂（`?`/`#`/`\\@` 零枚 escape）；`{…}` 形回退后既有插值层仍出 escape+variable', async () => {
+    const lexer = await erbLexer();
+    for (const { line: src, brace } of nested) {
+      const line = driveLine(lexer, src);
+      const boundary = line.emitted.filter(
+        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
+      );
+      expect(boundary, `「${src}」嵌套形不该产三元边界档：${boundary.map((e) => e.text).join('')}`).toHaveLength(0);
+      if (brace) {
+        // 弃涂走的是老路 ④⑤：`{`/`}` 仍 escape、层内仍 variable——既有着色一层不少
+        expect(line.emitted.some((e) => e.text === '{' && e.token.startsWith('string.escape.')), `「${src}」花括号插值层被波及`).toBe(true);
+        expect(line.emitted.some((e) => e.token.startsWith('variable.'))).toBe(true);
+      } else {
+        expect(line.emitted.filter((e) => e.token.startsWith('string.escape.')), `「${src}」不该出 escape`).toHaveLength(0);
+      }
+      expect(line.stack, `「${src}」栈必须出干净`).toEqual(['root']);
+    }
+  });
+
+  it('④ 裸文本行（PRINTDATA 体位）同形状同档位；行尾 `;` 注释与未闭合残形都不被形状吞', async () => {
+    const lexer = await erbLexer();
+    const bare = driveLine(lexer, '\\@CFLAG:0>0?是#否\\@');
+    const post = lexer.tokenPostfix;
+    const of = tokenMap(bare.emitted);
+    expect(of('CFLAG:0>0')).toBe(`variable${post}`);
+    expect(of('是')).toBe(`string${post}`);
+    expect(of('#')).toBe(`string.escape${post}`);
+    expect(of('\\@', 1)).toBe(`string.escape${post}`);
+    // 整口吃掉 = 条件段一整枚（无规则时变量族会在 `>` 处把 `CFLAG:0` 切碎先行发射——碎片不许出现）
+    expect(bare.emitted.some((e) => e.text === 'CFLAG:0'), `条件被变量族切碎：${bare.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
+    expect(bare.stack).toEqual(['root']);
+
+    const withComment = driveLine(lexer, '\\@A?a#b\\@ ;注');
+    expect(withComment.emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';注');
+    expect(withComment.emitted.some((e) => e.text === '?' && e.token.startsWith('string.escape.'))).toBe(true);
+
+    const acrossSemi = driveLine(lexer, '\\@A;B?a#b\\@'); // root 段禁 `;`：形状不许跨注释界
+    expect(acrossSemi.emitted.filter((e) => e.token.startsWith('string.escape.')), `实发 ${acrossSemi.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toHaveLength(0);
+
+    const unclosed = driveLine(lexer, '\\@CFLAG:0?a#b'); // 未闭合裸形：零枚 escape
+    expect(unclosed.emitted.filter((e) => e.token.startsWith('string.escape.'))).toHaveLength(0);
+
+    const inSkip = driveLines(lexer, ['[SKIPSTART]', '\\@A?a#b\\@', '[SKIPEND]']);
+    expect(inSkip[1]!.every((e) => e.token.startsWith('keyword.raw')), '停用块内的同形文本仍是死代码 raw').toBe(true);
+  });
+
+  it('⑤ 一枚串两层混排：`{插值}` 与 `\\@三元\\@` 各自成档互不干扰', async () => {
+    const lexer = await erbLexer();
+    const line = driveLine(lexer, 'PRINTL "前{ITEM:45}中\\@A>1?有#无\\@后"');
+    const of = tokenMap(line.emitted);
+    expect(of('ITEM:45')).toBe('variable' + lexer.tokenPostfix); // strExpr 老档
+    expect(of('{')).toBe(`string.escape${lexer.tokenPostfix}`);
+    expect(of('A>1')).toBe('variable' + lexer.tokenPostfix); // 三元条件新档
+    expect(of('?')).toBe(`string.escape${lexer.tokenPostfix}`);
+    expect(of('后')).toBe('string' + lexer.tokenPostfix);
+    expect(line.stack).toEqual(['root']);
+  });
+
+  it('⑥ 保守对拍（语义真源）：每一枚涂出的三元（`\@`+条件+`?` 相邻三发射），真源 `scanTextTernaries` 必认得同文条件（涂 ⊆ 认）', async () => {
+    const lexer = await erbLexer();
+    const post = lexer.tokenPostfix;
+    const samples = [
+      'PRINTL "台词\\@CFLAG:0>0?是#否\\@尾巴"',
+      'PRINTL "a\\@(A||B)&&C?是(真)?#否\\@b\\@CFLAG[1]==2?y#n\\@c"',
+      'PRINTL "前{ITEM:45}中\\@A>1?有#无\\@后"',
+      '\\@CFLAG:0>0?是#否\\@',
+      '\\@A?a#b\\@ ;注',
+      ...malformed,
+      ...nested.map((n) => n.line),
+      'PRINTFORM "#text"',
+    ];
+    for (const src of samples) {
+      const { emitted } = driveLine(lexer, src);
+      // 开记号/条件/界记号是整形状的相邻三发射；孤立 variable（如 `{ITEM:45}` 层内）不满足邻居条件
+      const paintedConds = emitted
+        .filter(
+          (e, i) =>
+            e.token === `variable${post}` &&
+            emitted[i - 1]?.text === '\\@' && emitted[i - 1]?.token === `string.escape${post}` &&
+            emitted[i + 1]?.text === '?' && emitted[i + 1]?.token === `string.escape${post}`,
+        )
+        .map((e) => e.text.trim());
+      const recognized = scanTextTernaries(src).map((c) => c.text);
+      for (const cond of paintedConds) {
+        expect(
+          recognized.includes(cond),
+          `「${src}」着色层把条件「${cond}」认成三元，真源 scanTextTernaries 却不认（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`,
+        ).toBe(true);
+      }
+    }
+  });
+});
+

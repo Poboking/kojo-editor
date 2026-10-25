@@ -1,4 +1,5 @@
 import { Language, Parser, Query, type Node, type Tree } from 'web-tree-sitter';
+import structure from './structure.json' with { type: 'json' };
 
 /**
  * ERB 结构语法的**装载面**（不是语义层）。
@@ -67,12 +68,19 @@ export interface FoldRange {
  * 此时 `endPosition` 停在下一行行首（column 0）⇒ 回退一行，否则折叠会把下一条 `@` 行也藏进去。
  * 零跨度区间（空函数 / 空块）不返回：没有可隐藏的行。
  *
- * ## 预处理条件块（2026-10-25 ERB 语法缺口批 P0-3）
+ * ## 预处理条件块（2026-10-25 ERB 语法缺口批 P0-3 · 分支段 K3）
  * `[IF XXX]` / `[IF_DEBUG]` / `[IF_NDEBUG]` … `[ENDIF]` 的折叠**不走查询**，由
  * `collectPreprocFolds()` 在 CST 上配对补出。原因写在 grammar 头注：这批块在引擎里是
  * "按条件裁剪后才编译"的，块内可以有**不配平**的 `IF…ENDIF`；若在文法里建块，
  * 每份这类文件都会落 MISSING（整篇红），而真语料 3,980 份的 `0 ERROR / 0 MISSING`
- * 是硬门槛。配对只认"严格等值"的整行标记（见 `PREPROC_*`），残形一律不配对。
+ * 是硬门槛。配对只认契约真源那三枚"严格等值"整行正则（判据见下方 `PREPROC_*`），
+ * 残形一律不配对。
+ *
+ * 区间形状与 ERB 控制流块**同款**（对齐 `erb-parser/src/folding.ts` 的
+ * `controlFlowFoldingRanges`）：整块区间（开块行 → `[ENDIF]` 行）照旧给；分支行
+ * （`[ELSE]` / `[ELSEIF …]`）另给"上一段起点 → 分支前一行"的段区间，`[ENDIF]` 再补末段
+ * （末段只在真出现过分支时给，无分支块的段区间与整块只差收束行，重复给没有意义）。
+ * 未配对一律**不产**（栈空遇到分支/收束 = 不动栈、不发区间；走到文件尾仍开着的块不产）。
  */
 export function foldRanges(query: Query, tree: Tree): FoldRange[] {
   const out: FoldRange[] = [];
@@ -96,16 +104,28 @@ export function foldRanges(query: Query, tree: Tree): FoldRange[] {
 // ---------------------------------------------------------------------------
 
 /**
- * 三个开块形共用一枚 `[ENDIF]`（引擎事实：`[IF xxx]` / `[IF_DEBUG]` / `[IF_NDEBUG]`
- * 都靠 `[ENDIF]` 收尾）⇒ 配对表按"开块族"认，不做词一一映射。
+ * 三枚判据**不在本文件手写**（此前这里是那份语言事实的第二处落地）：pattern 源与标志取自
+ * `src/structure.json` 的 `preproc` 段，而该段由 `tools/gen-erb-structure.mjs` 从契约真源
+ * `packages/plugin-api/src/erb.ts` 的 `ERB_PREPROC_PATTERNS` **构建期投影**而来。
  *
- * 匹配**严格等值**（整行只有标记，允许尾随空白）：与 `[SKIPSTART]` 的判据同一条纪律——
- * 宁可漏认一行，也不要把 ASCII 画里的 `[IF …]` 当成块边界。大小写不敏感：预处理器命令
- * 在语料里三种大小写都出现过（`[IF_DEBUG]` 41 / `[IF DEBUG]` 40 同盘并存）。
+ * 为什么绕一道投影而不是直接 import 契约层：语言包不许依赖插件（本包既有纪律），也不该在
+ * 动态装载面上 import 契约 barrel——那会把整张契约面拖进"只在开 ERB 时才走"的那条路径。
+ * 通道与文法侧同形（grammar.js 同样只吃 structure.json）：投影与真源漂移由
+ * `tests/projection-single-source.test.ts` 判红，两侧判据对拍由插件侧
+ * `erb-parser/tests/preproc-block.test.ts` 钉住。
+ *
+ * 语言事实本身（严格等值、大小写不敏感、三个开块形共用一枚收束）的理由写在契约层注释里，
+ * 这里不复述第二遍。正则**无 `g`/`y` 标志**（投影带这两枚会直接抛），`test()` 无状态，
+ * 模块级共享实例安全。
  */
-const PREPROC_OPEN = /^\[(?:IF\s+[^\]]*\S|IF_DEBUG|IF_NDEBUG)\]\s*$/i;
-const PREPROC_BRANCH = /^\[(?:ELSEIF\s+[^\]]*\S|ELSE)\]\s*$/i;
-const PREPROC_CLOSE = /^\[ENDIF\]\s*$/i;
+if (!structure.preproc) {
+  // 缺段 = 生成脚本没跑 / 产物被手改（与 grammar.js 的 `need` 同一条 fail-closed 纪律）
+  throw new Error('structure.json 缺 preproc 段——重跑 node packages/erb-syntax-tree/tools/gen-erb-structure.mjs');
+}
+const PREPROC_FLAGS = structure.preproc.flags;
+const PREPROC_OPEN = new RegExp(structure.preproc.open, PREPROC_FLAGS);
+const PREPROC_BRANCH = new RegExp(structure.preproc.branch, PREPROC_FLAGS);
+const PREPROC_CLOSE = new RegExp(structure.preproc.close, PREPROC_FLAGS);
 
 /** `[` 行的三种预处理器角色；不是预处理器标记 ⇒ null */
 export function preprocRoleOf(lineText: string): 'open' | 'branch' | 'close' | null {
@@ -116,22 +136,47 @@ export function preprocRoleOf(lineText: string): 'open' | 'branch' | 'close' | n
   return null;
 }
 
-/** 文档序遍历 `bracket_line`，把 `[IF*]`…`[ENDIF]` 配成折叠区间（未配对的开块不产区间） */
+/** 一个还开着的预处理块：开块行（整块折叠起点）+ 当前分支段起点 + 是否出现过分支 */
+interface PreprocFrame {
+  readonly openRow: number;
+  segmentRow: number;
+  sawBranch: boolean;
+}
+
+/**
+ * 文档序遍历 `bracket_line`，把 `[IF*]`…`[ENDIF]` 配成折叠区间（整块 + 分支段，形状见
+ * `foldRanges` 头注）。栈只在开块时压、收束时弹；分支行只移动栈顶帧的段起点、**不改栈深**。
+ *
+ * 容错口径与 `erb-parser/src/folding.ts` 逐字一致：孤儿 `[ELSE]` / `[ENDIF]`（栈空）不动栈、
+ * 不发区间；走到文件尾仍开着的块不产区间（不许折到文末把整篇吞掉）；零跨度段不产。
+ */
 function collectPreprocFolds(root: Node, out: FoldRange[]): void {
-  const openRows: number[] = [];
+  const stack: PreprocFrame[] = [];
+  const top = (): PreprocFrame | undefined => stack[stack.length - 1];
   const walk = (n: Node): void => {
     if (n.type === 'bracket_line') {
       const role = preprocRoleOf(n.text);
+      const row = n.startPosition.row;
       if (role === 'open') {
-        openRows.push(n.startPosition.row);
+        stack.push({ openRow: row, segmentRow: row, sawBranch: false });
+      } else if (role === 'branch') {
+        const frame = top();
+        if (frame !== undefined) {
+          // 上一段起点 → 分支前一行（首个分支到来时这一段就是"块头段"，即 `[IF …]` 的体）
+          if (row - 1 > frame.segmentRow) out.push({ startRow: frame.segmentRow, endRow: row - 1 });
+          frame.segmentRow = row;
+          frame.sawBranch = true;
+        }
       } else if (role === 'close') {
-        const startRow = openRows.pop();
-        if (startRow !== undefined) {
-          const endRow = n.startPosition.row;
-          if (endRow > startRow) out.push({ startRow, endRow });
+        const frame = stack.pop();
+        if (frame !== undefined) {
+          // 末段只在真出现过分支时补（无分支块的段区间与整块只差收束行，重复给没有意义）
+          if (frame.sawBranch && row - 1 > frame.segmentRow) {
+            out.push({ startRow: frame.segmentRow, endRow: row - 1 });
+          }
+          if (row > frame.openRow) out.push({ startRow: frame.openRow, endRow: row });
         }
       }
-      // 分支行不改栈深（`[ELSEIF]` / `[ELSE]` 不另立折叠区间；分支级折叠后置）
       return;
     }
     for (const child of n.namedChildren) walk(child);

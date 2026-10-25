@@ -408,7 +408,7 @@ describe('折叠查询 folds.scm', () => {
     tree.delete();
   });
 
-  it('预处理条件块 `[IF*]`…`[ENDIF]` 走 CST 配对补出折叠（P0-3）', () => {
+  it('预处理条件块 `[IF*]`…`[ENDIF]` 走 CST 配对补出折叠（P0-3），分支行另出段区间（K3-2）', () => {
     const text = [
       '@F', // 0
       '[IF_DEBUG]', // 1
@@ -423,8 +423,77 @@ describe('折叠查询 folds.scm', () => {
     ].join('\n');
     const tree = parse(text);
     const ranges = foldRanges(foldsQuery, tree);
+    // 整块区间照旧给（无分支的块只给这一条，形状与 P0-3 一致）
     expect(ranges).toContainEqual({ startRow: 1, endRow: 3 });
     expect(ranges).toContainEqual({ startRow: 4, endRow: 9 });
+    // 分支段与 ERB 控制流块同款：段起于分支行、止于下一分支/收束**前一行**
+    expect(ranges).toContainEqual({ startRow: 5, endRow: 6 });
+    expect(ranges).toContainEqual({ startRow: 7, endRow: 8 });
+    // 分支行不改栈深：`[ELSEIF]` 段不许越过 `[ELSE]`，`[ELSE]` 段不许把 `[ENDIF]` 吃进末段
+    expect(ranges.some((r) => r.startRow === 5 && r.endRow > 6), 'ELSEIF 段越界').toBe(false);
+    expect(ranges.some((r) => r.startRow === 7 && r.endRow > 8), 'ELSE 末段越界').toBe(false);
+    // 块头段 `[IF XXX]`（4）到 `[ELSEIF]`（5）前一行是零跨度 ⇒ 不产（与"空块不折"同口径）
+    expect(ranges.some((r) => r.startRow === 4 && r.endRow === 4), '零跨度段不该产').toBe(false);
+    expect(ranges.every((r) => r.endRow > r.startRow)).toBe(true);
+    // 无分支的块不补末段（段区间与整块只差收束行，重复给没有意义）
+    expect(ranges.some((r) => r.startRow === 1 && r.endRow === 2), '无分支块不该再给一条段').toBe(false);
+    tree.delete();
+  });
+
+  it('预处理块的块头段 / 末段与整块并存（有内容时才产，形状同 `erb-parser/folding.ts`）', () => {
+    const tree = parse(['[IF AAA]', 'PRINTL A', 'PRINTL B', '[ELSE]', 'PRINTL C', '[ENDIF]'].join('\n'));
+    const ranges = foldRanges(foldsQuery, tree);
+    expect(ranges).toContainEqual({ startRow: 0, endRow: 2 }); // 块头段：开块行 → 分支前一行
+    expect(ranges).toContainEqual({ startRow: 3, endRow: 4 }); // 末段：分支行 → 收束前一行
+    expect(ranges).toContainEqual({ startRow: 0, endRow: 5 }); // 整块：开块行 → 收束行
+    tree.delete();
+  });
+
+  it('预处理块嵌套：内层整块 + 外层块头段（外层头段含内层整块），与文法侧嵌套同形状', () => {
+    const tree = parse(
+      [
+        '[IF AAA]', // 0
+        'PRINTL A', // 1
+        '[IF BBB]', // 2
+        'PRINTL B', // 3
+        '[ELSE]', // 4
+        'PRINTL C', // 5
+        '[ENDIF]', // 6
+        '[ELSE]', // 7
+        'PRINTL D', // 8
+        '[ENDIF]', // 9
+      ].join('\n'),
+    );
+    const ranges = foldRanges(foldsQuery, tree);
+    expect(ranges).toContainEqual({ startRow: 2, endRow: 3 }); // 内层块头段
+    expect(ranges).toContainEqual({ startRow: 4, endRow: 5 }); // 内层末段
+    expect(ranges).toContainEqual({ startRow: 2, endRow: 6 }); // 内层整块
+    expect(ranges).toContainEqual({ startRow: 0, endRow: 6 }); // 外层块头段（把内层整段包住）
+    expect(ranges).toContainEqual({ startRow: 7, endRow: 8 }); // 外层末段
+    expect(ranges).toContainEqual({ startRow: 0, endRow: 9 }); // 外层整块
+    expect(ranges.every((r) => r.endRow > r.startRow)).toBe(true);
+    tree.delete();
+  });
+
+  it('预处理分支的容错：无主分支 / 孤儿收束不动栈，未闭合块不产区间（宁少折不折错）', () => {
+    const text = [
+      '[ELSE]', // 0 无主分支：栈空 ⇒ 不动、不产
+      '[IF AAA]', // 1
+      'PRINTL A', // 2
+      '[ELSE]', // 3 产块头段 1..2；随后 4..3 的末段是零跨度 ⇒ 不产
+      '[ENDIF]', // 4
+      '[ENDIF]', // 5 孤儿收束：栈已空 ⇒ 不产
+      '[IF BBB]', // 6 到文件尾仍未闭合 ⇒ 不产（不许折到文末吞掉全篇）
+      'PRINTL B', // 7
+    ].join('\n');
+    const tree = parse(text);
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    const ranges = foldRanges(foldsQuery, tree);
+    expect(ranges).toContainEqual({ startRow: 1, endRow: 2 }); // 块头段（分支行到来时产）
+    expect(ranges).toContainEqual({ startRow: 1, endRow: 4 }); // 整块
+    expect(ranges.filter((r) => r.startRow === 0)).toEqual([]); // 无主分支不产
+    expect(ranges.filter((r) => r.startRow === 5)).toEqual([]); // 孤儿收束不产
+    expect(ranges.filter((r) => r.startRow === 6)).toEqual([]); // 未闭合不产
     tree.delete();
   });
 

@@ -57,6 +57,19 @@ describe('ERB-FAMILY 族头补全 · 出货面', () => {
   it('前缀无任何族命中 ⇒ []（不猜）', () => {
     expect(at('PRINTFORML ZZZ|')).toEqual([]);
   });
+
+  // K6 批（2026-10-25）：`MASTERNAME` 进 `ENGINE_VARIABLE_FAMILIES` 后的出货位——
+  // 取证与取舍见 `erb-language.ts` 的 `ERB_VARIABLE_FAMILY_HEADS` 头注；
+  // 名单 ⇄ 本表的双向对拍闸在 `tests/erb-family-single-source.test.ts`。
+  it('K6：`MASTER|` ⇒ MASTERNAME（引擎内建"主人名"族头，此前有颜色无补全的反向漂移）', () => {
+    expect(labels(at('PRINTFORML MASTER|'))).toEqual(['MASTERNAME']);
+    expect(labels(at('PRINTFORML master|'))).toEqual(['MASTERNAME']);
+  });
+
+  it('K6：`PLAYER|` / `CHILDNAME|` ⇒ []（前者是执行上下文标量不是族头，后者是作品 #DIMS 自造名）', () => {
+    expect(at('PRINTFORML PLAYER|')).toEqual([]);
+    expect(at('PRINTFORML CHILDNAME|')).toEqual([]);
+  });
 });
 
 describe('ERB-FAMILY 族头补全 · 条目形态', () => {

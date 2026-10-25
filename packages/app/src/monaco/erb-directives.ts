@@ -38,6 +38,35 @@
  * `DATA` 122 次单列说明：它是 `PRINTDATA` / `STRDATA` 块里的**数据行**关键字，不是变量，
  * 结构扫描器不建模它（块内行不配对），所以必须走手写清单。
  *
+ * ### 2026-10-25 K5 第三批：**同一真语句判据**换 eraTW 4.980 基线语料重测（阈值 ≥10 不变，收 11 枚）
+ * 口径 = 上一批立下的真语句判据（行首词后非赋值 / 非自增 / 非 `(`），测量脚本
+ * `.local/erb-gap/measure.mjs`（读数 `.local/erb-gap/out.json`），语料换成本仓基线盘
+ * **eraTW 画蛇添足版 4.980**（`ERB` 全树 3,971 份 / 4,126,929 行，实测全 UTF-8、3,920 份带 BOM；
+ * 有效语句行 2,571,686、行首标识词 257 枚）。显示词表已认 206 枚 ⇒ 剩余缺口收敛到
+ * **107 词 / 426 次**，分档：≥10 次 = **11 词 / 188 次**；3~9 次 = 32 词 / 159 次；1~2 次 = 64 词。
+ * 本批收 ≥10 档全部 11 枚（逐词频次与**原样语句样例**都钉在测试闸表里）：
+ * TONEINPUTS 39 / XML_GET 26 / MAP_SET 20 / GDRAWG 19 / TOOLTIP_SETDELAY 16 /
+ * MAP_CREATE 16 / XML_ADDNODE 11 / AWAIT 11 / PRINT_RECT 10 / GETCOLOR 10 / BINPUT 10。
+ * 上一批按 eraNAS 口径拒收的 PRINT_RECT（当时 8 次），在新语料实测 10 次达标，本批随档收入。
+ *
+ * **3~9 档 32 词 / 159 次与 1~2 档 64 词一律不收**，理由：①阈值是本词表唯一的收录纪律
+ * （≥10），改档去迁就词就是改闸——`CORPUS_STATEMENT_GAPS` 的「最小频次 ≥ 阈值」断言会红，
+ * 这条不许动；②3~9 档平均一词才 5 次、多为单份口上的私货与同族低频兄弟
+ * （MAP_GETKEYS 7 / MAP_CLEAR 6 / TOOLTIP_SETDURATION 7 / XML_ADDATTRIBUTE 4 等——同族不是收录理由，
+ * 「作者真在写且写到线上」才是）；③1~2 档 64 词若收，补全候选被噪声稀释，违背「口上高频子集」口径。
+ * 测试里的 `CORPUS_UNCOLLECTED_TIER_3TO9` 把拒收名单也钉成闸：谁想收谁先重新取证抬档。
+ *
+ * `GDRAWG` 19 次但按判据只集中在 1 份文件（`ステータス表示関連\縁取り.ERB`，skip 区外的真代码；
+ * `SHOP関連\TEST.ERB` 的另外 9 行整块住在 `[SKIPSTART]…[SKIPEND]` 演示区、且写作
+ * `GDRAWG ++i, …` 形，被双重判据正确排除在计数外）——**收**。取舍理由：判据口径是「作者真在写」，
+ * 19 条语句行全部落在系统级显示文件而非私货口上；引擎那一腿有公开手册（Emuera.EM+EE 参考手册的
+ * GDRAW 家族点名 `GDRAWG` / `GDRAWGWITHMASK`，仓内已收 GDRAWTEXT / GCREATE 同族）+ 基线盘自带引擎
+ * `Emuera_LazyLoadingV3.0` 二进制串面点名。单文件货若后续重测掉线，按闸表整行删除。
+ *
+ * 本机无引擎沙盒（`KOJO_CLIDBG_DIR` 未设，PITFALLS §103 双证里「跑起来」那一腿缺）⇒
+ * 本批 11 枚全部有**语句行原样 + 手册点名**可查；把握不足的记号一个没收（待 lead 决为空白）。
+ * 控制流词照旧**禁止**回填进手写清单（`ERB_CONTROL_STATEMENTS` 派生，测试零交集断言把闸）。
+ *
  * 族头词（CFLAG / DOWNBASE …）在此照收不误：`.erb` 侧统一 keyword 档即正确；`.kojo` 侧
  * 由 `FAMILY_HEAD_SET` 滤出另立 `keyword.erb.family` 档（`kojo-language.ts` 派生处）。
  */
@@ -94,6 +123,16 @@ export const ERB_STATEMENT_DIRECTIVES: readonly string[] = [
   'SPLIT', 'REPLACE', 'SUBSTRING',
   // 调用 / 数据 / 杂项
   'TRYCALLF', 'CHKDATA', 'RESET_STAIN', 'FINDELEMENT', 'SETANIMETIMER', 'DOTRAIN', 'GETDEFCOLOR',
+  // —— 2026-10-25 K5 第三批（eraTW 4.980 基线语料、同一真语句判据、频次 ≥10 的 11 枚；
+  //    逐词频次与**原样语句样例**见测试闸表 CORPUS_STATEMENT_GAPS / K5_BATCH）——
+  // 输入族（TONEINPUTS：ONEINPUT/TINPUT 系扩展；BINPUT：按钮输入，结果落 RESULT）
+  'TONEINPUTS', 'BINPUT',
+  // XML 文档操作（XML_DOCUMENT 系列；配合 HTML/STRCDATA 用）
+  'XML_GET', 'XML_ADDNODE',
+  // 字符串键值 Map 集合
+  'MAP_SET', 'MAP_CREATE',
+  // 图形 / 颜色 / 提示气泡 / 等待（GDRAW 家族；GETCOLOR 与 SETCOLOR/RESETCOLOR 相对）
+  'GDRAWG', 'PRINT_RECT', 'GETCOLOR', 'TOOLTIP_SETDELAY', 'AWAIT',
 ];
 
 /** 大小写归一去重（先出现者保留原样），保持插入顺序 */

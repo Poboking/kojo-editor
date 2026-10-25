@@ -1,9 +1,15 @@
 import type * as Monaco from './entry';
 import type { ErbIndex } from '@kojo/plugin-api';
-import { builtinSignatureOf } from '@kojo/plugin-erb-parser';
+import { builtinSignatureOf, classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
+import { ERB_PREPROC_CANDIDATES, ERB_SKIP_MARKERS } from '@kojo/plugin-api';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords } from './erb-language';
 import { erbBitCompletionItems } from './erb-completion-bits';
-import { erbCompletionGate, ERB_GATE_SOURCE_WHITELIST, ERB_JUMP_KEYWORDS } from './erb-completion-context';
+import {
+  ERB_CALL_STATEMENTS,
+  erbCompletionGate,
+  ERB_GATE_SOURCE_WHITELIST,
+  ERB_JUMP_KEYWORDS,
+} from './erb-completion-context';
 import { erbDeclaredCompletionItems } from './erb-completion-declared';
 import { erbFamilyCompletionItems } from './erb-completion-families';
 import { erbFunctionCompletionItems, erbFunctionNameSlot } from './erb-completion-functions';
@@ -49,7 +55,7 @@ import {
  *
  * 1. **候选源集合** `ERB_COMPLETION_SOURCES`（可扩展数组，新增能力 = 追加一项）；
  * 2. **位置判定**：{@link erbTokenRange}（记号级替换区间）、{@link isLineHeadContext}（行首 / 行中分野）、
- *    {@link erbCompletionGate}（八态位置门 v2：串内置空、名字位收窄）与**按候选源白名单**的
+ *    {@link erbCompletionGate}（九态位置门 v2：串内置空但**闭合插值区放行**、名字位收窄）与**按候选源白名单**的
  *    keep 滤器（数据 = `ERB_GATE_SOURCE_WHITELIST`，位置侧单源；`default` 不过滤）；
  * 3. **回表口径**：`resolveErbCompletionDetail`（变量 / 项目函数 / 系统函数三条路）与
  *    **括号调用形态**名单（只有 `erb-system-functions` 一路插 `名字(`）。
@@ -208,8 +214,9 @@ export function isLineHeadContext(model: Monaco.editor.ITextModel, position: Mon
  * （`call-target` / `def-slot` / …）只留该位认的 source。旧口径按候选 **kind** 过滤
  * （`Function` / `Method`）分不开「同 kind 不同源」——系统函数与项目函数同为 `Function`，
  * 旧口径在 `CALL` / `@` / `#` / `[` / `JUMP` 位漏进整张系统函数表（缺陷 2 的根因）。
- * `default` / `in-string` 不设名单（`in-string` 由 {@link ERB_COMPLETION_ASSEMBLY.locate}
- * 整轮置空）。
+ * `default` / `in-string` / `interp-expr` 不设名单（`in-string` 由 {@link ERB_COMPLETION_ASSEMBLY.locate}
+ * 整轮置空；`interp-expr` 缺键 = 不过滤，与 `default` 同一份表达式候选口径——串内插值区放行是
+ * K2-3 / 缺陷 ③ 的修法，`locate` 的置空分支只认 `in-string`，不为新门态加分支）。
  */
 function gateKeepFor(
   gate: ReturnType<typeof erbCompletionGate>,
@@ -243,29 +250,88 @@ const ERB_PREPROCESSOR_DIRECTIVES = [
   // 收进来让作者至少补得到正确拼写（`#ONLY` 本就在上表，故这里不重复）。
   '#PRI', '#LATER', '#SINGLE',
 ];
-/** **必须行首**的区间标记行（`[SKIPSTART]` 起、`[SKIPEND]` 止）。 */
-const ERB_BRACKET_DIRECTIVES = ['[SKIPSTART]', '[SKIPEND]'];
+/**
+ * **必须行首**的 `[` 记号标记行（区间停用标记 + 预处理器条件块标记）。
+ *
+ * K2-1 / 缺陷 ①：旧形态手抄 `['[SKIPSTART]','[SKIPEND]']` 两枚，`[IF …]` 一族整个补不出来。
+ * 现**全量派生**自契约真源（`@kojo/plugin-api`）：`ERB_PREPROC_CANDIDATES` 六枚骨架形
+ * （`[IF ` / `[ELSEIF ` 带尾随空格 = 必带条件才成块，作者直接续写条件；裸 `[IF]` 按严格
+ * 等值判据不是开块标记，故不给）+ `ERB_SKIP_MARKERS` 两枚。从此 `[` 位加标记只改契约层
+ * 一处，本表自动跟随（**禁止再抄第二份清单**）。detail 沿用 `指令行`：两类同为「整行严格
+ * 等值才成立的标记行」，同一档。
+ */
+const ERB_BRACKET_DIRECTIVES: readonly string[] = [
+  ...ERB_PREPROC_CANDIDATES.map((c) => c.label),
+  ERB_SKIP_MARKERS.start,
+  ERB_SKIP_MARKERS.end,
+];
 
 /**
- * 「行中」可出现的**关键字子集**（可出现在表达式 / 实参里）：控制流分支与闭合、循环、
- * 调用 / 跳转、`PRINT*` 家族。`PRINT*` 从 `ERB_DIRECTIVES` **派生**（单一真源，不手抄）；
- * 跳转家族从 {@link ERB_JUMP_KEYWORDS} **单源展开**（与位置门 / 标签位判据同一份清单
- * ——手写的 `'JUMP'` / `'TRYJUMP'` 两个字面量此前漏收了 `GOTO` / `TRYGOTO`，行中补不到）。
+ * 「行中」可出现的**控制流关键字**——由 scanner 配对表真源**派生**（K2-2 / 缺陷 ②：旧手抄
+ * 30 词缺了 `FOR` / `NEXT` / `DO` / `LOOP` / `REPEAT` / `REND` / `CATCH` / `ENDCATCH` /
+ * `ENDDATA` / `ENDFUNC` / `NOSKIP` / `ENDNOSKIP` / `DATALIST` / `ENDLIST` / `STRDATA` /
+ * `TRYC*` 一整批）。
+ *
+ * 收录口径 = 「**结构认 ⇒ 行中也补**」（与 `erb-directives.ts` P0-2 的「结构认的词着色/补全
+ * 也认、一个来源」同一条纪律）：`ERB_CONTROL_STATEMENTS` 全词进集，`classifyControlFlow` 作
+ * 守卫闸（分不出档的词 = 配对表与本表漂移，不收）。
+ *
+ * **open 词进不进（契约留给取证后定）：进**。三条依据：
+ * 1. 基线行中表本就含 `IF` / `WHILE` / `SELECTCASE` 三枚 open-role 词（测试钉着），整批排除
+ *    open 词即回退；
+ * 2. 「按角色裁一刀」本身就是第二份手抄交集表——配对表加一词还得回来改裁法，正是本卡要根治
+ *    的漂移源；行首（全表 `ERB_DIRECTIVES`）与行中（本集）各持一表、同源派生，词的地位同权；
+ * 3. 真实语料取证（画蛇添足 4.980，ERB/ 全树，latin1 字节层 `^\s*词` 行首计数）：
+ *    `FOR` 3,985 / `NEXT` 3,988 / `ENDDATA` 4,173 / `DATALIST` 2,579 / `ENDLIST` 2,579 /
+ *    `WHILE` 274 / `WEND` 274 / `DO` 266 / `LOOP` 266 / `STRDATA` 205 / `REPEAT` 98 /
+ *    `REND` 97 / `NOSKIP` 3 / `ENDNOSKIP` 3 / `CATCH` 200 / `ENDCATCH` 200——每个开块词与
+ *    其闭合词成对都有活用法；语料零命中的少数词（`TRYCGOTO` / `TRYCALLLIST` / `ENDFUNC` 等）
+ *    收录依据是**配对表成员身份**（该表逐条对齐引擎 `FunctionIdentifier.cs` funcMatch，
+ *    BUG-2 批已按引擎侧证过），不是词频——本机没有引擎二腿，宁窄的口径落在「不进配对表的词
+ *    不收」（见 {@link ERB_MIDLINE_EXTRA_KEYWORDS} 注），而不是在派生集上再手砍。
+ */
+const ERB_MIDLINE_CONTROL_KEYWORDS: readonly string[] = ERB_CONTROL_STATEMENTS.filter(
+  (word) => classifyControlFlow(word) !== null,
+);
+
+/**
+ * 「行中」的**直系调用 / FORM 形态**语句词：位置门单源清单 {@link ERB_CALL_STATEMENTS}
+ * 去掉 `'label'` 槽（跳转族另走 {@link ERB_JUMP_KEYWORDS} 既有派生，口径不动）后的 `kw` 展开。
+ * 旧手抄的 `CALL` / `CALLF` / `CALLL` / `TRYCALL` / `*FORM*` 十个词与该集**逐词相等**，
+ * 从此加一条调用语句只改门侧清单。
+ */
+const ERB_MIDLINE_CALL_KEYWORDS: readonly string[] = ERB_CALL_STATEMENTS
+  .filter((s) => s.slot !== 'label')
+  .map((s) => s.kw);
+
+/**
+ * **未进任何真源表**的单行流程语句——行中表最后一撮手抄词：配对表 `classifyControlFlow`
+ * 对这三枚给 `null`（引擎不做块配对、结构扫描器不建模），调用 / 跳转清单也不含它们。
+ * 保留依据 = 基线既有出货（删词即回退）；**往这里加词要先让词进配对表或调用表**，
+ * 否则就是又开一份手抄清单。
+ */
+const ERB_MIDLINE_EXTRA_KEYWORDS: readonly string[] = ['RETURN', 'BREAK', 'CONTINUE'];
+
+/**
+ * 「行中」可出现的**关键字子集**（可出现在表达式 / 实参里）：控制流词派生自配对表真源（见上注，
+ * `TRYCCALLFORM` 这类跨清单重合词由 `push` 的大小写不敏感去重兜住）、调用形态派生自
+ * {@link ERB_CALL_STATEMENTS}、跳转家族从 {@link ERB_JUMP_KEYWORDS} **单源展开**（手写的
+ * `'JUMP'` / `'TRYJUMP'` 此前漏收 `GOTO` / `TRYGOTO`，行中补不到）、`PRINT*` 从 `ERB_DIRECTIVES`
+ * **派生**（单一真源，不手抄），外加 {@link ERB_MIDLINE_EXTRA_KEYWORDS} 三枚已注明的手抄保留。
+ * `#DIM` 这类必须行首的指令不在本集（由 `isLineHeadContext` 分野）。
  */
 const ERB_MIDLINE_KEYWORDS: readonly string[] = [
-  'IF', 'ELSEIF', 'ELSE', 'ENDIF', 'SIF',
-  'WHILE', 'WEND',
-  'SELECTCASE', 'CASE', 'CASEELSE', 'ENDSELECT',
-  'RETURN', 'BREAK', 'CONTINUE',
-  'CALL', 'CALLF', 'CALLL', 'CALLFORM', 'CALLFORML', 'CALLFORMF',
+  ...ERB_MIDLINE_CONTROL_KEYWORDS,
+  ...ERB_MIDLINE_CALL_KEYWORDS,
   ...ERB_JUMP_KEYWORDS,
-  'TRYCALL', 'TRYCALLFORM', 'TRYCALLFORMF', 'TRYCCALLFORM',
+  ...ERB_MIDLINE_EXTRA_KEYWORDS,
   ...ERB_DIRECTIVES.filter((d) => d.startsWith('PRINT')),
 ];
 
 /**
- * 指令 / 关键字补全：**行首**给 `ERB_DIRECTIVES` + adapter 指令名 + 预处理指令 + 区间标记行
- * （按全记号前缀收窄）；**行中**只给表达式 / 实参可出现的关键字子集（`#DIM` 这类必须行首的不出现）。
+ * 指令 / 关键字补全：**行首**给 `ERB_DIRECTIVES` + adapter 指令名 + 预处理指令 + `[` 标记行
+ * （停用区间 + 预处理器条件块骨架，全量派生自契约真源；按全记号前缀收窄）；**行中**只给表达式 /
+ * 实参可出现的关键字子集（`#DIM` 这类必须行首的不出现）。
  *
  * 词表来自 `erb-language.ts` 的 `ERB_DIRECTIVES`（高亮与补全**同一份清单**，不另抄）；
  * adapter 指令名（`instructionTable.names()`，可选能力）经 `mergeDirectiveWords` 并入
@@ -434,7 +500,8 @@ const MEMBERS_SOURCE: ErbCompletionSource = {
  * 开关住在 `tables.wordBasedSuggestions`（宿主注入设置页偏好）；缺席 = 不供。
  * 专用名槽（`CALL` 目标 / `@` 定义 / `$` 标签 / 变量末段 / 位号 / 指令记号）由位置门的
  * `keep` 白名单**整路滤掉**本 source（它不在任何白名单里）⇒ 不会把词混进"只出自己的源"的槽位。
- * 字符串 / `;` 注释在 `locate` 已整轮零候选。
+ * 字符串（非插值位）/ `;` 注释在 `locate` 已整轮零候选；`interp-expr`（串内闭合插值区）与
+ * `default` 同口径放行（K2-3）。
  */
 const WORDS_SOURCE: ErbCompletionSource = {
   id: 'erb-words',
@@ -524,9 +591,9 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
   callForm: { sourceIds: ERB_CALL_FORM_SOURCE_IDS },
   locate(_monaco, model, position) {
     const line = model.getLineContent(position.lineNumber);
-    // 位置门（T6 · v2）：串内 / 注释内不给代码补全；其余门类按**候选源白名单**过滤
-    // （数据 = `ERB_GATE_SOURCE_WHITELIST`，位置侧单源；`default` 不过滤）。判定先于
-    // range（串内零候选，不劳各 source 出货一遍）。
+    // 位置门（T6 · v2）：注释内 / 串内**非插值位**不给代码补全；其余门类按**候选源白名单**过滤
+    // （数据 = `ERB_GATE_SOURCE_WHITELIST`，位置侧单源；`default` 与 `interp-expr`（串内闭合
+    // 插值区，K2-3）不过滤）。判定先于 range（串内零候选，不劳各 source 出货一遍）。
     const gate = erbCompletionGate(line, position.column);
     if (gate === 'in-string') return undefined;
     const range = erbTokenRange(model, position);
@@ -573,7 +640,8 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
  * `@` 函数定义头（函数名候选）、`$` 标签目标（`JUMP $-` / `GOTO $-` 一族）、
  * `.` 点号成员位（`erb-members` 的函数族成员；R4 之前没有源由 `.` 触发）。
  * 这些字符 Monaco 默认词法都不含（词分隔符），不弹窗就只剩手打全名一条路；
- * 其余位置由 `locate` 的位置门挡掉（串内 / 注释内零候选），不会打扰常规输入。
+ * 其余位置由 `locate` 的位置门挡掉（注释内 / 串内非插值位零候选；串内**闭合插值区**按
+ * `interp-expr` 放行表达式候选，K2-3），不会打扰常规输入。
  * `getTables` 每次补全时才调用（表按当前项目 adapter 实时取，同 hover 纪律）。
  * 返回可释放句柄——宿主在编辑器卸载时 `dispose()`。
  *

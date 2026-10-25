@@ -565,4 +565,89 @@ export interface ErbIndexState {
   readonly error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// 预处理器 `[...]` 标记（语言事实的唯一落点）
+// ---------------------------------------------------------------------------
+
+/**
+ * 预处理器条件块的三种角色。
+ *
+ * `[IF …]` / `[IF_DEBUG]` / `[IF_NDEBUG]` 开块，`[ELSEIF …]` / `[ELSE]` 分支，`[ENDIF]` 收束
+ * ——三个开块形共用一枚 `[ENDIF]`（引擎按"宏是否 #DEFINE / 是否调试模式"裁剪），所以配对
+ * 按**开块族**认，不做词一一映射。
+ */
+export type ErbPreprocRole = 'open' | 'branch' | 'close';
+
+/**
+ * 三张**整行严格等值**正则（允许尾随空白）——ERB 预处理器标记的唯一真源。
+ *
+ * 判据两条，都是实测逼出来的：
+ * - **严格等值**：整行只有标记才认。宁可漏认一行，也不要把 ASCII 画里的方括号行当块边界
+ *   （与 `[SKIPSTART]` 同一条纪律）。
+ * - **大小写不敏感**（`i` 标志）：同一份语料里 `[IF_DEBUG]`（41 行）与 `[IF DEBUG]`（40 行）
+ *   并存，预处理器命令本身不区分大小写。
+ *
+ * 本表落地前，这份事实存在**三处副本**：`erb-parser/src/structure.ts` 的 `PREPROC_*`、
+ * `erb-syntax-tree/src/index.ts` 的 `PREPROC_*`、以及显示层**根本没有**（`[IF_DEBUG]` 整行白字、
+ * `[IF x]` 里的 `IF` 反被当成 ERB 控制词着色、`[` 位补全只有 SKIP 两枚）。三处副本靠对拍表钉住
+ * 只能防漂移，防不了"第三处从来没写"——现在显示层与结构层都从这里派生，写一处即处处。
+ *
+ * 消费面：结构体检（`erb-parser/src/structure.ts`）、CST 折叠（`erb-syntax-tree` 走
+ * `structure.json` 的构建期投影，文法侧不吃运行期 import）、Monarch 着色与 `[` 位补全
+ * （`packages/app/src/monaco/`）。正则**无 `g` 标志**，`test()` 无状态，可安全共享。
+ */
+export const ERB_PREPROC_PATTERNS: Readonly<Record<ErbPreprocRole, RegExp>> = Object.freeze({
+  open: /^\[(?:IF\s+[^\]]*\S|IF_DEBUG|IF_NDEBUG)\]\s*$/i,
+  branch: /^\[(?:ELSEIF\s+[^\]]*\S|ELSE)\]\s*$/i,
+  close: /^\[ENDIF\]\s*$/i,
+});
+
+/**
+ * `[` 行的预处理器角色；不是预处理器标记 ⇒ `null`。
+ *
+ * 判定顺序固定为 **close → branch → open**（与两枚原实现逐字同序：`[ENDIF]` 里的 `IF` 形态
+ * 不参与匹配，但顺序换了会给将来的 `IFEND` 一类新词留出踩脚面）。
+ */
+export function erbPreprocRoleOf(lineText: string): ErbPreprocRole | null {
+  const text = lineText.trim();
+  if (ERB_PREPROC_PATTERNS.close.test(text)) return 'close';
+  if (ERB_PREPROC_PATTERNS.branch.test(text)) return 'branch';
+  if (ERB_PREPROC_PATTERNS.open.test(text)) return 'open';
+  return null;
+}
+
+/** 一条 `[` 位补全候选：`label` 是上屏文本，`needsArgument` 标记"作者还得补一段"的骨架形 */
+export interface ErbPreprocCandidate {
+  readonly label: string;
+  readonly role: ErbPreprocRole;
+  readonly needsArgument: boolean;
+}
+
+/**
+ * `[` 行的**补全候选表**（由 {@link ERB_PREPROC_PATTERNS} 的同一批词形导出，显示层不再手抄）。
+ *
+ * `[IF ` / `[ELSEIF ` 带尾随空格 = 骨架形：这两枚标记**必须**带条件表达式才成块，
+ * 补全插入后作者直接写条件即可（严格等值判据意味着裸 `[IF]` 不是开块标记，不能给）。
+ */
+export const ERB_PREPROC_CANDIDATES: readonly ErbPreprocCandidate[] = Object.freeze([
+  { label: '[IF ', role: 'open', needsArgument: true },
+  { label: '[IF_DEBUG]', role: 'open', needsArgument: false },
+  { label: '[IF_NDEBUG]', role: 'open', needsArgument: false },
+  { label: '[ELSEIF ', role: 'branch', needsArgument: true },
+  { label: '[ELSE]', role: 'branch', needsArgument: false },
+  { label: '[ENDIF]', role: 'close', needsArgument: false },
+]);
+
+/**
+ * 停用区标记（`[SKIPSTART]`…`[SKIPEND]`，区间内原文引擎不编译）。
+ *
+ * 与预处理器条件块同属"`[` 起手的整行严格等值标记"，故并列在同一份真源里：显示层
+ * （Monarch 的两条 SKIP 规则 + `[` 位补全）与结构层（scanner 的 `trimmed === '[SKIPSTART]'`）
+ * 从此共用同一条字符串，改一处不会只改到一半。
+ */
+export const ERB_SKIP_MARKERS: Readonly<{ start: string; end: string }> = Object.freeze({
+  start: '[SKIPSTART]',
+  end: '[SKIPEND]',
+});
+
 

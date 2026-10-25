@@ -1,4 +1,5 @@
 import type { ErbStructureIssue } from '@kojo/plugin-api';
+import { ERB_SKIP_MARKERS, erbPreprocRoleOf } from '@kojo/plugin-api';
 import { erbCodeBodyOf } from './scanner';
 import { checkDeclarationIssues } from './declarations';
 import { closerNameForPair, forEachControlFlowLine, parseFunctionDefinition } from './scanner';
@@ -105,26 +106,16 @@ function hasPair(stack: readonly OpenBlock[], pair: string): boolean {
  * 三个开块形共用一枚 `[ENDIF]`（引擎事实：预处理器按"宏是否 #DEFINE / 是否调试模式"
  * 裁剪，`[ELSEIF]` / `[ELSE]` 是同一块内的分支）⇒ 配对按**开块族**认，不做词一一映射。
  *
- * 匹配**严格等值**：整行只有标记（允许尾随空白）。与 `[SKIPSTART]` 同一条纪律——
- * 宁可漏认，也不要把 ASCII 画里的方括号行当块边界。大小写不敏感：同一份语料里
- * `[IF_DEBUG]`（41 行）与 `[IF DEBUG]`（40 行）并存，预处理器命令本身不区分大小写。
- *
- * ⚠ 本串与 `packages/erb-syntax-tree/src/index.ts` 的 `PREPROC_*` 是**同一份语言事实的两处
- * 落地**（插件不得依赖语言包，语言包也不该反向依赖插件）。两边一致性由
- * `packages/plugins/erb-parser/tests/preproc-block.test.ts` 的对拍表钉住：
- * 改一处不改另一处 ⇒ 那条测试直接红。
+ * 匹配**严格等值**（整行只有标记，允许尾随空白）+ 大小写不敏感：判据与理由全部写在契约
+ * 真源 `@kojo/plugin-api` 的 `ERB_PREPROC_PATTERNS`（本模块**不再自己写正则**）。
+ * 此前这份语言事实在三处落地——这里一枚、`packages/erb-syntax-tree/src/index.ts` 一枚、
+ * 显示层**根本没有**（`[IF_DEBUG]` 整行白字、`[` 位补全只有 SKIP 两枚）。插件不得依赖语言包，
+ * 语言包也不该反向依赖插件，所以共同的上界是契约层：两侧都从 `plugin-api` 派生
+ * （语法侧经 `structure.json` 的构建期投影），`tests/preproc-block.test.ts` 的对拍表
+ * 从此升级为"真源唯一"的正向断言。
  */
-const PREPROC_OPEN = /^\[(?:IF\s+[^\]]*\S|IF_DEBUG|IF_NDEBUG)\]\s*$/i;
-const PREPROC_BRANCH = /^\[(?:ELSEIF\s+[^\]]*\S|ELSE)\]\s*$/i;
-const PREPROC_CLOSE = /^\[ENDIF\]\s*$/i;
-
-/** `[` 行的预处理器角色；不是预处理器标记 ⇒ null（供结构体检与对拍测试共用） */
 export function preprocRoleOf(lineText: string): 'open' | 'branch' | 'close' | null {
-  const text = lineText.trim();
-  if (PREPROC_CLOSE.test(text)) return 'close';
-  if (PREPROC_BRANCH.test(text)) return 'branch';
-  if (PREPROC_OPEN.test(text)) return 'open';
-  return null;
+  return erbPreprocRoleOf(lineText);
 }
 
 /**
@@ -149,10 +140,10 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
     // （判据单源 `code-prefix.ts`）
     const trimmed = erbCodeBodyOf((lines[i] ?? '').trim());
     if (inSkipBlock) {
-      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      if (trimmed === ERB_SKIP_MARKERS.end) inSkipBlock = false;
       continue;
     }
-    if (trimmed === '[SKIPSTART]') {
+    if (trimmed === ERB_SKIP_MARKERS.start) {
       inSkipBlock = true;
       continue;
     }

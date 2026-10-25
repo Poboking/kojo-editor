@@ -732,6 +732,41 @@ export function createKojoSugarPlugin(): Plugin {
  *   **收录判定三层都算**（含 `'const'`）：拼错名检测受益于常量表——作者写在 `.ERH`
  *   里的名字是真名，不是拼错。
  */
+
+/**
+ * **本清单的入库口径 = "具名索引族"**：作者会把名字写在冒号后面的那些引擎族头
+ * （名字→编号换算、`族:具名` 核对、`.erb` 族头补全候选、`.kojo` 族头档都吃这一张）。
+ * 显示层名单另有其表：`packages/app/src/monaco/erb-language.ts` 的
+ * `ERB_VARIABLE_FAMILY_HEADS`（比本表宽——它还收引擎作用域/上下文标量），两边的差集由
+ * `packages/app/tests/erb-family-single-source.test.ts` 双向对拍钉住，只许收窄不许再漂。
+ *
+ * **K6 批（2026-10-25）新增 `MASTERNAME`，并在此记两条"实测过但不收"**：
+ * - 收 `MASTERNAME`（`主人名`，引擎内建字符串族，与已在册的 `CALLNAME`/`NAME` 同形：索引是角色号、
+ *   **没有**具名表，所以 `CHECKED_FAMILY_NAME_TABLES` 不登记它）。语料实测族头形 `MASTERNAME:<角色号>`
+ *   12,272 处 / 149 份文件（`MASTERNAME:1 = 亲爱的` / `%MASTERNAME:1%`），全树 0 处 `#DIM` 系声明，
+ *   引擎二进制名字堆有 `_MASTERNAME`（与 `_CALLNAME` 同段）；仓内 `state-replay` 的
+ *   `CHARA_STR_SCALAR`、`erb-parser` 的引擎内置名单、`eratw-adapter` 的 `ENGINE_FAMILIES`/`FAMILY_ALIASES`
+ *   三处独立知识也都认它 ⇒ 引擎内建成立。此前两处名单都不认 = 口上最常说的"称呼"族既无颜色也无补全。
+ * - **不收 `PLAYER`**：语料 4,126,929 行里 `PLAYER` **0 处**族头形（`PLAYER:`），6,444 处裸读 +
+ *   8,533 处 `TALENT:PLAYER:2` 式中段作用域 ⇒ 它是执行上下文标量，不是"名字挂在冒号后"的族头；
+ *   `eratw-adapter` 的 `ENGINE_FAMILIES` 头注同样把它划在表外。它只进显示层名单（着色）。
+ * - **不收 `CHILDNAME`**：5,045 处族头形 / 103 份看着像族头，实为**作品自造**的存档字符串数组——
+ *   `ERB/DIM.ERH:465` `#DIMS CHARADATA SAVEDATA CHILDNAME, 101`（被作品 `#DIMS` 声明的名不可能是
+ *   引擎保留名）、`出産経過.ERB:35` 用 `VARSIZE("CHILDNAME")` 取其 DIM 尺寸、引擎二进制 0 命中、
+ *   仓内 `ENGINE_FAMILIES` 无它。开项目时它经 adapter 的 `*.ERH` 声明名表面进补全，语言层不收。
+ *
+ * **K6 收尾裁决批（2026-10-25，lead 复实测语料后补记）——补进 `ITEM`、钉死三枚拒收**：
+ * - 收 `ITEM`（裁决规则"零回退优先"：`ITEM:` 语料 **1,713 行 / 507 份**重度在用、引擎二进制串面点名有，
+ *   且**具名索引形坐实**——非数字索引 1,200 处（`CASINO/CASINO.ERB` `IF !ITEM:紅魔賭場VIP会員証`），
+ *   名表在盘（`CSV/Item.csv` 主表 + `Item.als` 追加表），adapter `ENGINE_FAMILIES`/`FAMILY_LABELS`（`道具`）
+ *   本已认它 ⇒ 符合本表"具名索引族"入库口径，走方案①进字典侧，`.erb` 族头补全跟着认）。
+ *   **不进** `CHECKED_FAMILY_NAME_TABLES`：本批未做该族 warn 面全量取证（ALS 线判据），登记核对越界。
+ *   追加在清单**末尾**：`resolveFamily` / 名称索引建表都是"族表顺序即优先级、首中胜"，
+ *   末尾位保证零归属反转（存量名不会从既有族被 ITEM 抢走）。
+ * - **拒收三枚反证钉**（`MONSTER_ACTION` / `MONSTER_EXPLV` / `DUMMY_EXT`）：引擎二进制串面**查无** +
+ *   语料 `NAME:` 形 **0 行** ⇒ 唯一拿到"非内建"反证、许删的三项（`family-counts.mjs` / `engine-strings3.mjs`
+ *   可复跑）；`erb-family-single-source.test.ts` 把它们和 `CHILDNAME` 一起钉成"不许顺手加回来"。
+ */
 export const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'CFLAG',
   'TALENT',
@@ -753,6 +788,10 @@ export const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'GOTJUEL',
   'NOWEX',
   'SOURCE',
+  // K6 批（2026-10-25）：引擎内建字符串族，与 `CALLNAME` / `NAME` 同形（无具名表 ⇒ 不进核对台账）
+  'MASTERNAME',
+  // K6 收尾裁决（2026-10-25 lead）：引擎内建道具族（见下方头注"裁决补进一枚"）
+  'ITEM',
 ];
 
 /**

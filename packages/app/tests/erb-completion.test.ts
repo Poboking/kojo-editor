@@ -14,6 +14,9 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFunctionRef, ErbIndex, KojoInstructionTable, VariableSchema } from '@kojo/plugin-api';
+import { ERB_PREPROC_CANDIDATES, ERB_SKIP_MARKERS } from '@kojo/plugin-api';
+import { ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
+import { ERB_CALL_STATEMENTS } from '../src/monaco/erb-completion-context';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
@@ -727,5 +730,119 @@ describe('P2-4 · `#LOCALSIZE` / `#LOCALSSIZE` / 事件属性行首补全', () =
     installErbCompletion(monaco, () => ({}));
     const item = provide(registered[0]!.provider, '#LOCALSSIZE', 11).find((i) => labelText(i.label) === '#LOCALSSIZE');
     expect(item?.insertText).toBe('#LOCALSSIZE');
+  });
+});
+
+/* ============================== K2-1 · `[` 行位候选派生自契约真源 ============================== */
+
+describe('K2-1 · `[` 行位候选（ERB_PREPROC_CANDIDATES + ERB_SKIP_MARKERS 派生，缺陷 ①）', () => {
+  const { monaco, registered } = stubMonaco();
+  installErbCompletion(monaco, () => ({}));
+  const provider = registered[0]!.provider;
+
+  it('派生同一性：裸 `[` 行首候选集 == 真源 labels ++ SKIP 两枚（真源加词本表自动跟随，禁第二份清单；序由装配 sortText 定，按名对拍）', () => {
+    expect(provide(provider, '[', 2).map((i) => labelText(i.label)).sort()).toEqual(
+      [...ERB_PREPROC_CANDIDATES.map((c) => c.label), ERB_SKIP_MARKERS.start, ERB_SKIP_MARKERS.end].sort(),
+    );
+  });
+
+  it('八枚全出且同档 `指令行`：条件块 `[IF ` / `[IF_DEBUG]` / `[IF_NDEBUG]` / `[ELSEIF ` / `[ELSE]` / `[ENDIF]` + 停用区两枚', () => {
+    const items = provide(provider, '[', 2);
+    const labels = items.map((i) => labelText(i.label));
+    for (const l of ['[IF ', '[IF_DEBUG]', '[IF_NDEBUG]', '[ELSEIF ', '[ELSE]', '[ENDIF]', '[SKIPSTART]', '[SKIPEND]'])
+      expect(labels, `缺 ${l}`).toContain(l);
+    expect(items.every((i) => i.detail === '指令行')).toBe(true);
+  });
+
+  it('前缀 `[IF` 收窄（替换区间吞并 `[`）：只出三枚 `[IF*`，`[ELSE]` / `[ENDIF]` 不抢；骨架 `[IF ` 的 insertText 带尾随空格', () => {
+    const items = provide(provider, '[IF', 4);
+    const labels = items.map((i) => labelText(i.label));
+    expect(labels).toContain('[IF ');
+    expect(labels).toContain('[IF_DEBUG]');
+    expect(labels).toContain('[IF_NDEBUG]');
+    expect(labels).not.toContain('[ELSE]');
+    expect(labels).not.toContain('[ENDIF]');
+    expect(labels).not.toContain('[SKIPSTART]');
+    expect(items.find((i) => labelText(i.label) === '[IF ')!.insertText).toBe('[IF ');
+  });
+
+  it('前缀 `[E` 收窄：`[ELSEIF ` / `[ELSE]` / `[ENDIF]` 出货（分支 + 闭合同屏）', () => {
+    const labels = provide(provider, '[E', 3).map((i) => labelText(i.label));
+    expect(labels).toEqual(expect.arrayContaining(['[ELSEIF ', '[ELSE]', '[ENDIF]']));
+    expect(labels.some((l) => l.startsWith('[IF'))).toBe(false);
+  });
+
+  it('`[SKIP` 基线钉不动：`[SKIPSTART]` detail=指令行（旧手抄两枚的既有行为零回退）', () => {
+    expect(provide(provider, '[SKIP', 6).find((i) => labelText(i.label) === '[SKIPSTART]')!.detail).toBe('指令行');
+  });
+});
+
+/* ============================== K2-2 · 行中关键字表派生自配对表真源 ============================== */
+
+describe('K2-2 · 行中关键字派生（ERB_CONTROL_STATEMENTS + classifyControlFlow，缺陷 ②）', () => {
+  const { monaco, registered } = stubMonaco();
+  installErbCompletion(monaco, () => ({}));
+  const midLabels = new Set(provide(registered[0]!.provider, MID, 5).map((i) => labelText(i.label)));
+
+  it('`ERB_CONTROL_STATEMENTS` 全词都在行中候选（结构认 ⇒ 行中也补；手抄 30 词子集废弃）', () => {
+    for (const word of ERB_CONTROL_STATEMENTS) expect(midLabels.has(word), `行中缺控制词 ${word}`).toBe(true);
+  });
+
+  it('此前整批漏收的词 spot-check 全在：FOR / NEXT / DO / LOOP / REPEAT / REND / CATCH / ENDCATCH / ENDDATA / ENDFUNC / NOSKIP / ENDNOSKIP / DATALIST / ENDLIST / STRDATA / TRYCCALLFORM / TRYCALLLIST', () => {
+    for (const w of [
+      'FOR', 'NEXT', 'DO', 'LOOP', 'REPEAT', 'REND', 'CATCH', 'ENDCATCH', 'ENDDATA', 'ENDFUNC',
+      'NOSKIP', 'ENDNOSKIP', 'DATALIST', 'ENDLIST', 'STRDATA', 'TRYCCALLFORM', 'TRYCALLLIST',
+    ])
+      expect(midLabels.has(w), `行中缺 ${w}`).toBe(true);
+  });
+
+  it('调用族 = `ERB_CALL_STATEMENTS` 非 label 槽全集（与门单源同表；基线十字 CALL 系零丢失）', () => {
+    for (const s of ERB_CALL_STATEMENTS) {
+      if (s.slot === 'label') continue;
+      expect(midLabels.has(s.kw), `行中缺调用词 ${s.kw}`).toBe(true);
+    }
+  });
+
+  it('基线行为零回退：行中仍无 `#DIM` / `[SKIPSTART]`，`ELSE` / `PRINTFORM` / `CALL` / `GOTO` / `TRYGOTO` / `RETURN` / `BREAK` / `CONTINUE` 照出', () => {
+    for (const w of ['ELSE', 'PRINTFORM', 'CALL', 'GOTO', 'TRYGOTO', 'RETURN', 'BREAK', 'CONTINUE', 'IF', 'WHILE', 'SELECTCASE'])
+      expect(midLabels.has(w), `行中缺 ${w}`).toBe(true);
+    expect(midLabels.has('#DIM')).toBe(false);
+    expect(midLabels.has('[SKIPSTART]')).toBe(false);
+  });
+});
+
+/* ============================== K2-3 · FORM 串内插值区端到端放行 ============================== */
+
+describe('K2-3 · 串内插值区候选（interp-expr 经装配放行）', () => {
+  it('行中关键字进 `{…}` 区（旧口径一票否决整轮零候选）：`"今天{CF}心情"` 非空且不进串的行首限定候选', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const items = provide(registered[0]!.provider, 'PRINTFORML "今天{CF}心情"', 18);
+    expect(items.length).toBeGreaterThan(0);
+    const labels = items.map((i) => labelText(i.label));
+    expect(labels).toContain('ELSE'); // 与 default 同口径：行中关键字全集
+    expect(labels).not.toContain('#DIM');
+    expect(labels).not.toContain('[SKIPSTART]');
+  });
+
+  it('`"%CFLAG:好%"` 变量候选经 interp-expr 出货（表达式候选 = 本卡核心体感项）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ variableSchema: fakeSchema() }));
+    const items = provide(registered[0]!.provider, 'PRINTFORM "%CFLAG:好%"', 20);
+    expect(items.some((i) => labelText(i.label) === '好感度')).toBe(true);
+  });
+
+  it('未闭合区照旧零候选（保守口径端到端）：`"%CFLAG:好` 单枚 `%` 不算插值', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({ variableSchema: fakeSchema() }));
+    expect(provide(registered[0]!.provider, 'PRINTFORM "%CFLAG:好', 19)).toEqual([]);
+  });
+
+  it('内联三元 `\\@…\\@` 区内同样放行', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const items = provide(registered[0]!.provider, 'PRINTFORM "\\@CFLAG:好?是#否\\@"', 19);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.map((i) => labelText(i.label))).toContain('ELSE');
   });
 });

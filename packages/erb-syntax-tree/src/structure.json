@@ -1,10 +1,17 @@
 {
   "source": {
-    "scanner": "packages/plugins/erb-parser/src/scanner.ts"
+    "scanner": "packages/plugins/erb-parser/src/scanner.ts",
+    "preproc": "packages/plugin-api/src/erb.ts"
   },
   "markers": {
     "skipStart": "[SKIPSTART]",
     "skipEnd": "[SKIPEND]"
+  },
+  "preproc": {
+    "open": "^\\[(?:IF\\s+[^\\]]*\\S|IF_DEBUG|IF_NDEBUG)\\]\\s*$",
+    "branch": "^\\[(?:ELSEIF\\s+[^\\]]*\\S|ELSE)\\]\\s*$",
+    "close": "^\\[ENDIF\\]\\s*$",
+    "flags": "i"
   },
   "dimDirectives": [
     "DIMCHAR",

@@ -7,15 +7,30 @@
  * - 被裁掉的那一支**可以合法不配平**（引擎裁剪后才编译）⇒ 体检必须用独立栈，
  *   不能把它并进 ERB 控制流那张栈，否则一条正确写法会刷出两条假缺陷。
  *
- * 本文件还钉住"两处落地同一份语言事实"（插件侧 `structure.ts` 与语言包
- * `erb-syntax-tree/src/index.ts` 的折叠配对）——对拍表不一致即红。
+ * 本文件钉的是"**真源唯一**"：判据的三份消费面（契约层 `@kojo/plugin-api`、本插件的波浪线、
+ * 语言包 `erb-syntax-tree` 的折叠）必须给同一个答案。此前这里是"两处副本互相对拍"——
+ * 那只能防漂移，防不了显示层从来没写、也防不了两处一起抄错。现在契约层是真源：
+ * - 本插件的 `preprocRoleOf` 直接委托 `erbPreprocRoleOf`（`src/structure.ts`）；
+ * - 语言包不 import 契约（动态装载面不吃 barrel），走 `structure.json` 的**构建期投影**，
+ *   它与真源逐枚相等由 `packages/erb-syntax-tree/tests/projection-single-source.test.ts` 判红。
+ * 这里的样本集与那条投影守卫用同一张表，两侧任一偏离真源即红。
  */
 import { describe, expect, it } from 'vitest';
+import { ERB_PREPROC_PATTERNS, erbPreprocRoleOf } from '@kojo/plugin-api';
 import { checkControlFlowStructure, checkPreprocStructure, preprocRoleOf } from '../src/structure';
 // 语言包走相对路径：插件不得依赖语言包（audit C），但**测试**要能把两处判据对拍起来
 import { preprocRoleOf as preprocRoleOfLanguage } from '../../../erb-syntax-tree/src/index';
 
 const lines = (...rows: string[]): string => rows.join('\n');
+
+/** 对拍样本集（与 `erb-syntax-tree/tests/projection-single-source.test.ts` (b4) 同表） */
+const ROLE_SAMPLES = [
+  '[IF XXX]', '[IF 口上]', '[IF_DEBUG]', '[IF_NDEBUG]', '[if xxx]', '[If_Debug]',
+  '[ELSEIF XXX]', '[ELSE]', '[else]', '[ENDIF]', '[endif]',
+  '[IF]', '[ENDIF] 尾巴', '[SKIPSTART]', '[RANDOMIZE]', '[[跳蛋]]', '[IF_DEBUG] 注',
+  'IF X', 'ENDIF', '', '[IF_DEBUGX]', '[IF_DEBUG X]',
+  '[ IF XXX]', '[ENDIF]\t', '[ELSEIF ]', '[elseif a]',
+];
 
 describe('preprocRoleOf · 三种角色与严格等值判据', () => {
   it('开块三形：`[IF XXX]` / `[IF_DEBUG]` / `[IF_NDEBUG]`（大小写不敏感）', () => {
@@ -36,14 +51,23 @@ describe('preprocRoleOf · 三种角色与严格等值判据', () => {
     }
   });
 
-  it('对拍：语言包（折叠配对）与本插件（波浪线）同一份判据', () => {
-    const samples = [
-      '[IF XXX]', '[IF 口上]', '[IF_DEBUG]', '[IF_NDEBUG]', '[if xxx]', '[If_Debug]',
-      '[ELSEIF XXX]', '[ELSE]', '[else]', '[ENDIF]', '[endif]',
-      '[IF]', '[ENDIF] 尾巴', '[SKIPSTART]', '[RANDOMIZE]', '[[跳蛋]]', '[IF_DEBUG] 注',
-      'IF X', 'ENDIF', '', '[IF_DEBUGX]', '[IF_DEBUG X]',
-    ];
-    for (const s of samples) expect(preprocRoleOfLanguage(s), s).toBe(preprocRoleOf(s));
+  it('对拍升级：插件侧与语言包侧**都等于契约真源**（不是两处副本互相对拍）', () => {
+    for (const s of ROLE_SAMPLES) {
+      const truth = erbPreprocRoleOf(s);
+      expect(preprocRoleOf(s), `插件侧（波浪线）偏离真源：${s}`).toBe(truth);
+      expect(preprocRoleOfLanguage(s), `语言包侧（折叠，经 structure.json 投影）偏离真源：${s}`).toBe(truth);
+    }
+    // 真源自己的角色分布非空（防"三枚正则一起写坏 + 两条委托一起跟随"的假绿）
+    expect(new Set(ROLE_SAMPLES.map((s) => erbPreprocRoleOf(s)))).toEqual(new Set(['open', 'branch', 'close', null]));
+  });
+
+  it('真源三枚正则的形态：整行锚定 + 大小写不敏感 + 无 `g`/`y`（共享实例必须无状态）', () => {
+    for (const role of ['open', 'branch', 'close'] as const) {
+      const re = ERB_PREPROC_PATTERNS[role];
+      expect(re.source, `${role} 应整行锚定`).toMatch(/^\^.*\$$/);
+      expect(re.flags, `${role} 应含 i`).toContain('i');
+      expect(/[gy]/.test(re.flags), `${role} 的标志里有状态位`).toBe(false);
+    }
   });
 });
 

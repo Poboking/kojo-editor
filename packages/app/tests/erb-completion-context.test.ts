@@ -1,7 +1,7 @@
 /**
  * T6 · `.erb` 补全位置门 v2（`erbCompletionGate` 纯函数 + 白名单数据 + provider 接线）单测。
  *
- * 纯函数部分零 Monaco 依赖（行文本 + 列 → 门类）：八态判定顺序（串内 → 位坑 → 指令记号 →
+ * 纯函数部分零 Monaco 依赖（行文本 + 列 → 门类）：九态判定顺序（串内/插值 → 位坑 → 指令记号 →
  * `@` 定义位 → CALL 名字位 → 标签位 → 变量位 → default）；接线部分用**桩 monaco**（同
  * `erb-completion.test.ts` 口径）钉住**按候选源白名单过滤**的终态：CALL / `@` / `#` / `[` 位
  * 不得出现系统函数（与项目函数同为 `Function` kind——旧口径按 kind 过滤漏掉的正是这一点）、
@@ -18,6 +18,7 @@ import {
   ERB_JUMP_KEYWORDS,
   erbCallKeywords,
   erbCompletionGate,
+  erbInterpRegionAt,
   erbLabelSlot,
   type ErbCallSlotKind,
   type ErbCompletionGate,
@@ -53,10 +54,11 @@ describe('erbCompletionGate（纯函数：行文本 + 列 → 门类）', () => 
     expect(gate('JUMP |')).toBe('label-target');
   });
 
-  it('字符串 / FORM 串内 → in-string（引号配平为奇；与 CALL 前缀无关）', () => {
-    expect(gate('PRINTFORM "%CALLNAME:MAS|TER%看到"')).toBe('in-string');
+  it('字符串内 → in-string（引号配平为奇；与 CALL 前缀无关）；K2-3 后 FORM 串**闭合插值区**改走 `interp-expr`（见下节）', () => {
     expect(gate('PRINTV "abc|')).toBe('in-string');
     expect(gate('CALL "a(b|')).toBe('in-string');
+    expect(gate('PRINTFORM "%CALLNAME:MAS|TER%看到"')).toBe('interp-expr'); // 旧钉用例（K2-3 核心场景）：闭合 `%…%` 顶层区
+    expect(gate('PRINTFORM "%CALLNAME:MAS|TER')).toBe('in-string'); // 单枚 `%` 未配对：未闭合区不算插值（宁少不错）
   });
 
   it('引号配平之后的 CALL 行：字符串已闭合 → 名字段照常 call-target', () => {
@@ -112,6 +114,65 @@ describe('缺陷 1 · 代码视野扫描（一次线性扫描按状态推进，�
     expect(gate('PRINTFORMW "含"|""转义"的文字')).toBe('in-string');
     expect(gate('PRINTFORMW "含""转义|"的文字')).toBe('in-string');
     expect(gate('PRINTFORMW "含""转义"|的文字')).toBe('default'); // 第三个引号是闭合引号
+  });
+});
+
+/* ============================== K2-3 · interp-expr（串内插值区放行门） ============================== */
+
+describe('K2-3 · interp-expr（FORM 串内**闭合插值区**：`%…%` / `{…}` / `\\@…\\@`）', () => {
+  it('闭合 `%…%` 顶层区 → interp-expr（缺陷 ③ 核心场景；紧贴开分隔符也算区内）', () => {
+    expect(gate('PRINTFORM "%|CALLNAME:MASTER%"')).toBe('interp-expr');
+    expect(gate('PRINTFORM "%a|%b"')).toBe('interp-expr');
+    expect(gate('PRINTFORMW "{条件?真#假|}"')).toBe('interp-expr');
+  });
+  it('花括号条件段与内联三元 `\\@…?…#…\\@`（condition-extractor inline.ts 同字形）→ interp-expr', () => {
+    expect(gate('PRINTFORML "今天{CF|}心情"')).toBe('interp-expr');
+    expect(gate('PRINTFORML "{CFLAG:TARGET:|}是"')).toBe('interp-expr');
+    expect(gate('PRINTFORM "\\@CFLAG:好|?是#否\\@"')).toBe('interp-expr');
+    // 光标嵌在 `\@…\@` 区内（`%…%` 与之互斥不另计区，靠外区放行——记号配对口径同 inline.ts）
+    expect(gate('PRINTFORMW "\\@A?%CALLNAME:MAS|TER%#否\\@"')).toBe('interp-expr');
+  });
+  it('未闭合区不算插值（保守口径）：单枚 `%` / 未合 `{` / 未合 `\\@` / 配对后悬尾一枚 → in-string', () => {
+    expect(gate('PRINTFORML "{CF|')).toBe('in-string'); // `{` 未闭合
+    expect(gate('PRINTFORML "{CF|"')).toBe('in-string'); // 串闭合但 `{` 未闭合
+    expect(gate('PRINTFORM "\\@CFLAG:好|?是#否')).toBe('in-string'); // 无收尾 `\@`
+    expect(gate('PRINTFORM "%a%b|%c"')).toBe('in-string'); // 第三枚 `%` 悬空：光标在闭合区之外、下一开记号之前
+  });
+  it('非串视角不问插值：串外 `{…}` 走原门链；注释尾巴 `;` 之后照旧 in-string', () => {
+    expect(gate('X = {A|}')).toBe('default');
+    expect(gate('PRINTL 台词 ; "{a|}"')).toBe('in-string');
+  });
+  it('区内括号不打断花括号区（`{(A)}` 仍是顶层 `{}` 区）；串内取模形态的单枚 `%` 不构成区', () => {
+    expect(gate('PRINTFORM "{(A|))}"')).toBe('interp-expr');
+    expect(gate('PRINTFORM "A = 100 % 3|!"')).toBe('in-string');
+  });
+  it('`""` 转义不吞插值判据：转义串段内闭合 `%…%` 照样 interp-expr', () => {
+    expect(gate('PRINTFORMW "含""转义""%CF|}%尾"')).toBe('interp-expr');
+  });
+  it('函数实参括号**不取消**插值资格（真语料 CASINO 形；与 inline.ts 深度口径的有意分歧）', () => {
+    // 规格夹具出处：CASINO/駒草の賭場.ERB 原样行——整条 `@"…"` 挂在 `COLORMESSAGE(` 的实参括号里，
+    // 旧版把 findTopLevel 的括号深度抄来当"顶层"守卫 ⇒ 串内 `\@…\@` 被判非顶层、in-string 零候选。
+    const casino = '\tCALL COLORMESSAGE(@"%\\@ プール > 0 ? ＋ # － \\@%{ABS(プール)}枚", 表示色, 1, 1)';
+    // 光标 = `\@` 开字形之后一列（1 基列 25，即语义面 cond.column+3）：区内
+    expect(erbInterpRegionAt(casino, 25)).toBe(true);
+    expect(erbCompletionGate(casino, 25)).toBe('interp-expr');
+    // 同形极简回归：`(…)` 里只有一层调用括号的 `%…%` 照样放行
+    expect(gate('CALL FOO("名前%CFL|AG%"')).toBe('interp-expr');
+    // `{…}` 区内仍是表达式视野（分歧 2 保留）：花括号未闭合时区内 `%` 不另成区
+    expect(gate('PRINTFORM "{A %B|%"')).toBe('in-string');
+  });
+  it('串未闭合而 `%…%` 自身配对 ⇒ 照算插值区（区判据优先于行破损）；右闭记号尾后一列含、再越一列不含', () => {
+    // 作者真实打字序：先写 `%A%` 再补收尾引号——光标紧贴右闭 `%` 之后那一刻最需要候选
+    const broken = '\tPRINTFORM "%A%B';
+    expect(erbInterpRegionAt(broken, 16)).toBe(true); // col0=15：紧贴闭 `%`（开 12 / 闭 14）尾后一列 = hi，含
+    expect(erbCompletionGate(broken, 16)).toBe('interp-expr');
+    expect(erbInterpRegionAt(broken, 17)).toBe(false); // col0=16：再越过尾后一格（`B` 之后、行尾），不含
+    expect(erbInterpRegionAt(broken, 14)).toBe(true); // col0=13：紧贴开 `%` 之后一列 = lo，含
+    expect(erbInterpRegionAt(broken, 13)).toBe(false); // col0=12：停在开记号之前（串文本位），不含
+    // `\@…\@` 双字符字形同口径：闭字形（占 15-16）尾后一列（col0=17 = hi）含，再越一格不含
+    const at = '\tPRINTFORM "\\@a\\@x';
+    expect(erbInterpRegionAt(at, 18)).toBe(true);
+    expect(erbInterpRegionAt(at, 19)).toBe(false);
   });
 });
 
@@ -258,9 +319,12 @@ describe('ERB_GATE_SOURCE_WHITELIST（门 → 只留这些 source）', () => {
     expect(ERB_GATE_SOURCE_WHITELIST['directive-token']).toEqual(new Set(['erb-directives']));
   });
 
-  it('`default` / `in-string` 不设名单（缺键 = 不过滤）；键集恰好 = 六个白名单门', () => {
+  it('`default` / `in-string` / `interp-expr` 不设名单（缺键 = 不过滤）；键集恰好 = 六个白名单门', () => {
     expect(ERB_GATE_SOURCE_WHITELIST['default']).toBeUndefined();
     expect(ERB_GATE_SOURCE_WHITELIST['in-string']).toBeUndefined();
+    // K2-3：`interp-expr` **刻意不加新项**——契约口径 = "走 default 的白名单"（不过滤的表达式
+    // 候选全集）；给它配一份名单就是把 default 抄成第二份真相。
+    expect(ERB_GATE_SOURCE_WHITELIST['interp-expr']).toBeUndefined();
     expect(Object.keys(ERB_GATE_SOURCE_WHITELIST).sort()).toEqual([
       'bit-slot',
       'call-target',
@@ -381,9 +445,18 @@ describe('T6 · provider 接线（门是过滤不是重排）', () => {
     expect(items.some((i) => labelText(i.label) === 'GETBIT')).toBe(true);
   });
 
-  it('字符串 / FORM 串内：零候选（不给代码补全）', () => {
+  it('字符串内（非插值位）：零候选——未闭合 `%` / 未闭合引号都不放行（K2-3 保守口径）', () => {
     expect(provide(provider, 'PRINTV "abc', 12)).toEqual([]);
     expect(provide(provider, 'PRINTFORM "%CALLNAME:MAS', 25)).toEqual([]);
+  });
+
+  it('K2-3 端到端：串内闭合 `{…}` 区拿到表达式候选（旧口径一票否决零候选）', () => {
+    const items = provide(provider, 'PRINTFORML "今天{CF}心情"', 18);
+    expect(items.length).toBeGreaterThan(0);
+    const labels = items.map((i) => labelText(i.label));
+    expect(labels).toContain('ELSE'); // interp-expr = default 口径不过滤
+    expect(labels).not.toContain('#DIM'); // 行首限定候选仍不进串
+    expect(labels).not.toContain('[SKIPSTART]');
   });
 
   it('实参位维持现行为：`CALL FOO, ` 之后关键字照常出（门只认名字段）', () => {

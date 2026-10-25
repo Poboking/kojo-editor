@@ -86,3 +86,91 @@ describe('audit-decoupling · B 项（插件禁依赖内核）', () => {
     expect(dynamic.code).toBe(1);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * A 项语言包在册清单（2026-10-25 K4 批）
+ *
+ * 语言包 = tree-sitter 语法层（`packages/<语言>-syntax-tree`），与内核/契约同属
+ * 「零游戏名词」面。背景：`packages/kojo-syntax-tree/src` 2026-10-19 就收编进
+ * NEUTRAL_DIRS，而 `packages/erb-syntax-tree/src` 一直漏册——那个包在 package.json
+ * 与 grammar.js 里自陈「语言层，零游戏名词」，却没有任何机器判据兑这个承诺。
+ *
+ * 三面钉子：
+ *  1. 两门一等语言（.kojo / ERB）都在册（点名，防再次漏一门）；
+ *  2. 凡磁盘上存在 `packages/*-syntax-tree/src` 就必须在册（将来加第三门语言时，
+ *     漏加目录清单当场判红，而不是等某天泄漏了才发现没闸）；在册的语法层目录
+ *     也必须真实存在（目录搬家 ⇒ 闸变哑炮）；
+ *  3. 在册不是「脚本源码里多一个字符串」——夹具里真跑审计，游戏名词进语言包必须
+ *     真判 A 项红，干净的语言层文件（ERB 控制词）不得误伤。
+ * ------------------------------------------------------------------ */
+
+/** 仓库根（测试在 tools/tests/，审计脚本在 tools/） */
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/** 从审计脚本源码抽出 NEUTRAL_DIRS 的字面量条目（注释行不参与解析）。 */
+async function neutralDirsFromScript(): Promise<string[]> {
+  const source = await fs.readFile(SCRIPT, 'utf8');
+  const block = /const NEUTRAL_DIRS\s*=\s*\[([\s\S]*?)\n\];/.exec(source);
+  if (!block) throw new Error('audit-decoupling.mjs 里没解析到 NEUTRAL_DIRS —— 本钉子失去判据');
+  const body = block[1]
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n');
+  return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1] as string);
+}
+
+/** 磁盘上现有/新增的语言包源码目录：`packages/<语言>-syntax-tree/src`（src 不存在的不算）。 */
+async function languagePackageSrcDirs(): Promise<string[]> {
+  const packagesDir = path.join(REPO_ROOT, 'packages');
+  const entries = await fs.readdir(packagesDir, { withFileTypes: true });
+  const out: string[] = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || !e.name.endsWith('-syntax-tree')) continue;
+    const rel = `packages/${e.name}/src`;
+    try {
+      const st = await fs.stat(path.join(REPO_ROOT, rel));
+      if (st.isDirectory()) out.push(rel);
+    } catch {
+      /* 只有清单没有实体 ⇒ 不算在册义务（由反向检查拦） */
+    }
+  }
+  return out.sort();
+}
+
+describe('audit-decoupling · A 项语言包在册清单（两门一等语言都要有闸）', () => {
+  it('两门一等语言的语言包（.kojo / ERB）都在 NEUTRAL_DIRS 册上', async () => {
+    const dirs = await neutralDirsFromScript();
+    expect(dirs).toContain('packages/kojo-syntax-tree/src');
+    expect(dirs).toContain('packages/erb-syntax-tree/src');
+  });
+
+  it('packages/*-syntax-tree/src 与在册清单双向对账（新语言漏册 / 目录搬家都拦）', async () => {
+    const [dirs, onDisk] = await Promise.all([neutralDirsFromScript(), languagePackageSrcDirs()]);
+    const notRegistered = onDisk.filter((d) => !dirs.includes(d));
+    expect(notRegistered).toEqual([]);
+    const notOnDisk = dirs.filter((d) => /-syntax-tree\/src$/.test(d) && !onDisk.includes(d));
+    expect(notOnDisk).toEqual([]);
+  });
+
+  it('语言包在册即真判红：游戏名词进语言层 = A 项违规；ERB 控制词不误伤', async () => {
+    const langs = await languagePackageSrcDirs();
+    expect(langs.length).toBeGreaterThanOrEqual(2);
+    for (const dir of langs) {
+      const leak = await runAudit({
+        // packages/plugins 必须非空，否则审计脚本读 adapter 豁免名单即崩（同 B 项夹具）
+        'packages/plugins/probe/src/index.ts': 'export const marker = 1;\n',
+        [`${dir}/index.ts`]: "export const GAME_PREFIX = 'M_KOJO';\n",
+      });
+      expect(leak.code).toBe(1);
+      expect(leak.output).toContain('A(内核零游戏知识)');
+      expect(leak.output).toContain(dir);
+    }
+    // 反例：语言层自己的控制词（ERB 与 Kojo 同级、非游戏约定）必须继续放行
+    const clean = await runAudit({
+      'packages/plugins/probe/src/index.ts': 'export const marker = 1;\n',
+      'packages/erb-syntax-tree/src/index.ts': "export const CLOSE_LINE = /^[\\[ENDIF\\]]\\s*$/i.source;\n",
+    });
+    expect(clean.code).toBe(0);
+    expect(clean.output).toContain('全部通过');
+  });
+});

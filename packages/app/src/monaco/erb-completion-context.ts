@@ -3,7 +3,13 @@
  *
  * 门类（{@link ErbCompletionGate}；判定顺序见 {@link erbCompletionGate}，严格）：
  * - `'in-string'`：光标**不在代码视野**里——落在字符串字面量内部（引号配平为奇；FORM 串同形，
- *   `""` 是 Emuera 的字面引号转义），或落在 `;` 起、到行尾的**行注释**里 ⇒ 整轮零候选；
+ *   `""` 是 Emuera 的字面引号转义）且**不在闭合插值区**，或落在 `;` 起、到行尾的**行注释**里
+ *   ⇒ 整轮零候选；
+ * - `'interp-expr'`（K2-3）：光标在字符串字面量内部、且处在**闭合的** `%…%` / `{…}` / `\@…\@`
+ *   插值区里（判据 {@link erbInterpRegionAt}，字形集与 `condition-extractor/src/inline.ts` 一致、
+ *   **深度口径有意分歧**——串内容本就是文本视野，代码侧括号不取消插值资格，分歧理由见该注）
+ *   ⇒ 与 `default` 同口径不过滤（表达式候选）——ERB 作者写表达式最常落的位置就在 FORM 串里面，
+ *   一票否决零候选是缺陷 ③；
  * - `'bit-slot'`：位原语（`GETBIT` / `SETBIT` / `CLEARBIT` / `INVERTBIT`）第二实参坑**开着且空**
  *   （{@link erbBitSlotOpen}）⇒ 只留 `erb-bits`；
  * - `'directive-token'`：行首 `#…` / `[…]` 记号位（token 起点之前全空白、记号前一枚字符为
@@ -21,7 +27,8 @@
  * 混进 CALL 位，`@` / `#` / `[` 位混入系统函数与行中关键字，`JUMP` / `GOTO` 位混入函数名。v2 把
  * 过滤口径改为**按候选源白名单**（数据 = {@link ERB_GATE_SOURCE_WHITELIST}；消费方 = 装配层
  * `erb-completion.ts` 的 keep 滤器，按 `sourceId` 执行）：门是**过滤**不是重排——各 source 自带的
- * 排序语义原样不动；`default` / `in-string` 不设名单（不新增过滤）。
+ * 排序语义原样不动；`default` / `in-string` / `interp-expr` 不设名单（不新增过滤——`interp-expr` 的口径
+ * 就是"走 default 的表达式候选全集"，给它配名单反而是第二份收窄真相）。
  *
  * 分工纪律：
  * - 逗号 / 字符串扫描**复用** `erb-completion-bits` 的既有解析件（`topLevelComma`；位坑判据
@@ -42,8 +49,9 @@ import { erbVariableSlotAt } from './erb-completion-variables';
 import { BLANK_CLASS_STR, isAllBlank, isBlank } from './kojo-completion-position';
 
 /**
- * 补全位置门（v2 八态；见模块头注）。`'in-string'` 的门名沿用 = 「此处非代码视野」，注释一并复用
- * ——消费方 `erb-completion.ts` 的 `locate`（`in-string` ⇒ 整轮零候选）不必新增分支。
+ * 补全位置门（v2 九态；见模块头注）。`'in-string'` 的门名沿用 = 「此处非代码视野」，注释一并复用
+ * ——消费方 `erb-completion.ts` 的 `locate`（`in-string` ⇒ 整轮零候选）不必新增分支；
+ * `'interp-expr'` 与 `default` 同样**不进** `locate` 的置空分支（串内插值区给表达式候选）。
  */
 export type ErbCompletionGate =
   | 'call-target'
@@ -53,6 +61,7 @@ export type ErbCompletionGate =
   | 'bit-slot'
   | 'directive-token'
   | 'in-string'
+  | 'interp-expr'
   | 'default';
 
 /**
@@ -246,10 +255,13 @@ export function erbLabelSlot(line: string, column: number): ErbLabelSlot | null 
   return { start, end, prefix };
 }
 
-/* ============================== 位置门（v2 八态） ============================== */
+/* ============================== 位置门（v2 九态） ============================== */
+
+/** 代码视野三态（{@link erbCodeViewOf} 的内部口径）：普通代码 / 串内 / `;` 注释内 */
+type ErbCodeView = 'code' | 'string' | 'comment';
 
 /**
- * 光标之前（`[0, col0)`）是否**不在代码视野**里：落在字符串字面量内，或落在 `;` 行注释里。
+ * 光标之前（`[0, col0)`）处于哪种**代码视野**：普通代码 / 字符串字面量内 / `;` 行注释内。
  *
  * 一次线性扫描、**按状态推进**（普通 → 串内 → 注释），不是"先数引号再看分号"——
  * `;` 也会出现在字符串里（`PRINT "a;b"`），两种顺序给出的答案不同（缺陷 1 的根因）。口径：
@@ -259,7 +271,7 @@ export function erbLabelSlot(line: string, column: number): ErbLabelSlot | null 
  * - 引号未闭合 ⇒ 「到行尾都是串」（与 `erb-parser` 的 `codeViewOf` 同方向的保守选择：那种文本
  *   引擎本来就编译不过）。
  */
-function erbCodeViewBlocked(lineText: string, col0: number): boolean {
+function erbCodeViewOf(lineText: string, col0: number): ErbCodeView {
   let inString = false;
   let i = 0;
   while (i < col0) {
@@ -267,7 +279,8 @@ function erbCodeViewBlocked(lineText: string, col0: number): boolean {
     if (inString) {
       if (ch === '"') {
         if (lineText[i + 1] === '"') {
-          i += 2; // Emuera 转义：一个字面引号，仍是串内
+          // 引擎的字面引号转义：消费两个字符、状态不变（见文件头口径）
+          i += 2;
           continue;
         }
         inString = false;
@@ -275,18 +288,125 @@ function erbCodeViewBlocked(lineText: string, col0: number): boolean {
     } else if (ch === '"') {
       inString = true;
     } else if (ch === ';') {
-      return true; // 注释态：此处起不给代码补全
+      return 'comment'; // 注释态：此处起不给代码补全
     }
     i++;
   }
-  return inString;
+  return inString ? 'string' : 'code';
+}
+
+/**
+ * 光标是否落在 FORM 串内一个**闭合插值区**（`%…%` / `{…}` / `\@…\@`；纯函数，
+ * `column` = Monaco 的 1 基列）。K2-3 / 缺陷 ③：串内不再一律零候选——ERB 作者写表达式
+ * 最常落的位置就在串里的插值段内（`{条件?真#假}`、`%…%`、内联三元 `\@条件?真#假\@`）。
+ *
+ * 本函数是 `packages/plugins/condition-extractor/src/inline.ts` 判据的**第二实现**（契约禁
+ * 跨插件 import；一致性由 lead 的规格测试 `erb-interp-single-source.test.ts` 兜底），但两面的
+ * **深度口径有意分歧**，不是抄漏——分歧是裁决过的，逐条如下：
+ * - **一致（字形集）**：`\@` 是两字符字形（`\` 后随 `@`，同 `atTextOpen`）、按出现序两两配对；
+ *   `{…}` **引号盲视**且嵌套感知（同 `matchBrace`——FORM 串里的 `"` 是要输出的字面量，
+ *   `{}` 插值在引号内外一律照插值处理）；只有**最外层**闭合 `{}` 区间算区（`{a{b}}` 的
+ *   光标进内层也算进了外层区内）；**未闭合区不算插值**（同 `scanTextTernaries` 的「未闭合：
+ *   不猜」保守方向；串已闭合而未遇配对记号 ⇒ 该枚开记号丢弃）。
+ * - **分歧 1（括号深度不参与判据，旧版抄错用途已纠正）**：`findTopLevel` 数 `()[]{}` 深度，
+ *   是为了在三元段**内部**找 `?`/`#`/`\@` 边界——那里三元段被当表达式文本，内层括号是分组；
+ *   本函数回答的却是「光标是否落在一个可出候选的插值区」——**串里的内容本来就是文本视野**，
+ *   串在代码侧被包了几层括号与串内区是不是插值无关。真语料 `CASINO/駒草の賭場.ERB`：
+ *   `CALL COLORMESSAGE(@"%\@ プール > 0 ? ＋ # － \@%{ABS(プール)}枚", 表示色, 1, 1)` 整条
+ *   `@"…"` 是函数实参（外着一层 `(`），串内 `\@…\@` 仍是作者正写的内联三元——旧口径把它判成
+ *   非顶层 ⇒ in-string 零候选，是缺陷不是保守。⇒ 圆/方括号深度不再计入任何记号守卫。
+ * - **分歧 2（花括号深度保留）**：`%` / `\@` 只在 `{…}` 区**外**认——`{…}` 区内是表达式视野
+ *   （`{A % B}` 的 `%` 是取模），该区的光标本来由 `{…}` 区自己放行，这一点与 inline.ts
+ *   「深度内一律是文本」同向。
+ * - **分歧 3（`%…%` 为补全面独有）**：inline.ts 根本不扫 `%…%`（纯取值插值不是谓词，扫了会
+ *   凭空造依赖）；补全面刻意宽于依赖抽取——规格测试「口径宽窄差」节把这一格钉成了断言。
+ * - **边界口径（测试钉死）**：光标可停区间 = [开记号之后一列, 闭记号尾之后一列]，含两端
+ *   （`lo <= col0 <= hi`，`hi` = 闭记号末字符的下一列）。作者打字序就是「先 `%…%` 再补收尾
+ *   引号」——光标紧贴右闭记之后那一刻正是最需要候选的时刻 ⇒ 含；再越过一格（回到普通
+ *   串文本）⇒ 不含。
+ *
+ * 串状态机与 {@link erbCodeViewOf} 同形（`""` 转义消费两字符不改状态）；`;` 起注释尾巴之后
+ * 的字形不参与配对。函数只答"区间含不含光标"，调用方（位置门）保证只在串形态下问它。
+ */
+export function erbInterpRegionAt(lineText: string, column: number): boolean {
+  if (!Number.isFinite(column) || column < 1) return false;
+  const col0 = Math.min(column - 1, lineText.length);
+  // 闭合插值区的**光标可停区间** [lo, hi]（0 基 caret 列）：lo = 开记号尾后一列，
+  // hi = 闭记号尾后一列（边界含，见头注「边界口径」）；区内判据 = lo <= col0 <= hi
+  const regions: { lo: number; hi: number }[] = [];
+  let inString = false;
+  let braceDepth = 0; // { 深度（matchBrace 引号盲视：串内外一律计数）；括号深度**不**参与，见头注分歧 1
+  let topBraceOpen = -1; // 当前最外层 `{` 的索引（深度回 0 时产出闭合区）
+  let pctOpen = -1; // 未配对 `%` 的索引（串闭合即丢弃）
+  let atOpen = -1; // 未配对 `\@` 字形的起始索引（`\` 位；串闭合即丢弃）
+  let i = 0;
+  while (i < lineText.length) {
+    const ch = lineText[i]!;
+    if (inString) {
+      if (ch === '"') {
+        if (lineText[i + 1] === '"') {
+          // 引擎的字面引号转义：消费两个字符、状态不变
+          i += 2;
+          continue;
+        }
+        inString = false;
+        pctOpen = -1; // 串闭合：未配对的开记号 = 未闭合区，不算插值
+        atOpen = -1;
+        i += 1;
+        continue;
+      }
+      if (ch === '\\' && lineText[i + 1] === '@') {
+        if (braceDepth === 0 && pctOpen < 0) {
+          if (atOpen < 0) atOpen = i;
+          else {
+            regions.push({ lo: atOpen + 2, hi: i + 2 }); // 闭字形 `\@` 占 i..i+1：尾后一列含入
+            atOpen = -1;
+          }
+        }
+        i += 2;
+        continue;
+      }
+      if (ch === '%' && braceDepth === 0 && atOpen < 0) {
+        if (pctOpen < 0) pctOpen = i;
+        else {
+          regions.push({ lo: pctOpen + 1, hi: i + 1 });
+          pctOpen = -1;
+        }
+        i += 1;
+        continue;
+      }
+      // 落穿：串内的 `{` `}` 照下面计数（matchBrace 引号盲视）；`(` `)` `[` `]` 只是文本
+    } else if (ch === '"') {
+      inString = true;
+      i += 1;
+      continue;
+    } else if (ch === ';') {
+      break; // 注释尾巴：此点之后的字形不参与插值配对
+    }
+    if (ch === '{') {
+      if (braceDepth === 0) topBraceOpen = i;
+      braceDepth += 1;
+    } else if (ch === '}') {
+      if (braceDepth > 0) {
+        braceDepth -= 1;
+        if (braceDepth === 0 && topBraceOpen >= 0) {
+          regions.push({ lo: topBraceOpen + 1, hi: i + 1 });
+          topBraceOpen = -1;
+        }
+      }
+    }
+    i += 1;
+  }
+  return regions.some((r) => col0 >= r.lo && col0 <= r.hi);
 }
 
 /**
  * 判定光标处的补全门类（**纯函数**；`column` = Monaco 的 1 基列）。判定顺序**严格**：
  *
  * a) 非法列 ⇒ `default`；
- * b) 代码视野（串内 / 注释）⇒ `in-string`——此时不再看语句前缀，串与注释里没有语句；
+ * b) 代码视野（串内 / 注释）：注释或「串内且不在闭合插值区」⇒ `in-string`（整轮零候选）；
+ *    串内且光标停在 `{…}` / `%…%` / `\@…\@` **闭合区**里 ⇒ `interp-expr`（走 default 的
+ *    表达式候选口径，K2-3 / 缺陷 ③）——此时不再看语句前缀，串与注释里没有语句；
  * c) 位坑（{@link erbBitSlotOpen}：位原语第二实参坑开着且空）⇒ `bit-slot`；
  * d) 行首页首 `#…` / `[…]` 记号位 ⇒ `directive-token`（token 起点 = 从光标向左吃名字字符；
  *    起点之前全空白、记号前一枚字符为 `#` 或 `[`——`PRINT #DIM` 这类行中形态不认）；
@@ -303,9 +423,17 @@ export function erbCompletionGate(lineText: string, column: number): ErbCompleti
   if (!Number.isFinite(column) || column < 1) return 'default';
   const col0 = Math.min(column - 1, lineText.length);
 
-  // b) 代码视野（缺陷 1）：串内（含 `""` 转义）/ `;` 注释 ⇒ 不给代码补全；
-  //    扫描按状态推进，注释里的孤立半角引号不得再把同行代码位一票否决。
-  if (erbCodeViewBlocked(lineText, col0)) return 'in-string';
+  // b) 代码视野（缺陷 1）：注释 / 串内非插值位 ⇒ 不给代码补全；扫描按状态推进，
+  //    注释里的孤立半角引号不得再把同行代码位一票否决。K2-3（缺陷 ③）例外分支：光标在
+  //    串内**闭合插值区**（`%…%` / `{…}` / `\@…\@`，判据 {@link erbInterpRegionAt}，
+  //    字形集与 condition-extractor 的 inline.ts 一致、深度口径**有意分歧**见该注）⇒
+  //    `interp-expr`，与 default 同口径不过滤——FORM 串里的表达式位从此拿得到候选；
+  //    未闭合区不算插值（宁少不错）；串未闭合但配对记号自身闭合 ⇒ 照算（区判据优先于行破损）。
+  const view = erbCodeViewOf(lineText, col0);
+  if (view !== 'code') {
+    if (view === 'string' && erbInterpRegionAt(lineText, column)) return 'interp-expr';
+    return 'in-string';
+  }
 
   // c) 位坑：位原语第二实参坑「开着且空」（判据与位候选同源，零 Monaco 依赖）
   if (erbBitSlotOpen(lineText, column)) return 'bit-slot';
@@ -347,8 +475,10 @@ export function erbCompletionGate(lineText: string, column: number): ErbCompleti
 /**
  * 门 → **只留这些 source** 的白名单（装配层 `erb-completion.ts` 的 keep 滤器消费；缺键 = 不过滤）。
  *
- * 语义：白名单门只保留名单内 source 的候选；`default` / `in-string` **不设**（`in-string` 本就
- * 整轮零候选）。门是过滤不是重排——各 source 的排序 / 去重语义原样不动。
+ * 语义：白名单门只保留名单内 source 的候选；`default` / `in-string` / `interp-expr` **不设**
+ * （`in-string` 本就整轮零候选；`interp-expr` = 契约口径"走 default 的白名单"，即不过滤的表达式
+ * 候选全集——**刻意不加新项**：给它配一份名单就是把 default 抄成第二份真相）。
+ * 门是过滤不是重排——各 source 的排序 / 去重语义原样不动。
  */
 export const ERB_GATE_SOURCE_WHITELIST: Readonly<Partial<Record<ErbCompletionGate, ReadonlySet<string>>>> = {
   'call-target': new Set(['erb-functions']),
