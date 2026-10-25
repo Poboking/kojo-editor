@@ -20,7 +20,7 @@ import {
   type EditorStatusInfo,
   type ToggleCommandTarget,
 } from '../src/ui/ShellLayout';
-import { defaultKeybindingOf, keybindingSpecOf } from '../src/ui/keybinding-specs';
+import { defaultKeybindingOf, keybindingSpecOf } from '../src/ui/keybindings';
 import { loadLayoutPref, saveWordWrapPref } from '../src/ui/layout-pref';
 import { loadEditorDisplayPrefs, saveEditorDisplayPrefs } from '../src/ui/editor-display-prefs';
 

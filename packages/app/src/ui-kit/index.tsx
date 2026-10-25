@@ -136,50 +136,8 @@ export function KitCheck({
 
 /* ------------------------------- KitRadio ------------------------------- */
 
-export interface KitRadioProps {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  label: string;
-  children?: ReactNode;
-  /** 同组互斥的 DOM name（一组 KitRadio 共用一枚） */
-  name?: string;
-  value?: string;
-  disabled?: boolean;
-  id?: string;
-  className?: string;
-}
-
-/** 自绘单选点：视觉隐藏的真 `<input type="radio">` + 圆环芯（替掉 kojo2-cutover 的原生档）。 */
-export function KitRadio({
-  checked,
-  onChange,
-  label,
-  children,
-  name,
-  value,
-  disabled = false,
-  id,
-  className,
-}: KitRadioProps): ReactElement {
-  const Wrapper = children !== undefined ? 'label' : 'span';
-  return (
-    <Wrapper className={cx('kit-radio', className)}>
-      <input
-        id={id}
-        type="radio"
-        className="kit-radio-input"
-        name={name}
-        value={value}
-        checked={checked}
-        disabled={disabled}
-        aria-label={children === undefined ? label : undefined}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="kit-radio-dot" aria-hidden="true" />
-      {children !== undefined ? <span className="kit-radio-text">{children}</span> : null}
-    </Wrapper>
-  );
-}
+// 单品叶子（PS-10 减面批）：实现搬去 `./kit-radio`，这里只 re-export——桶棒导出面一字不变。
+export { KitRadio, type KitRadioProps } from './kit-radio';
 
 /* ------------------------------- KitSelect ------------------------------- */
 
@@ -601,8 +559,11 @@ export function KitSkeleton({ lines = 0, width, height, label, className }: KitS
 }
 
 /**
- * `KitGallery`（内部对照页）**不从这根桶棒导出**：桶棒被开机图里的组件直接引（SearchPanel、
- * kojo2-cutover-settings），顺手 re-export 一枚对照页就等于把整页样例挂进首屏依赖图
- * （`ps10-eager-graph.test.ts` 的体积闸当场叫）。要看对照页：测试直接引
+ * `KitGallery`（内部对照页）**不从这根桶棒导出**：随手 re-export 一枚对照页就等于把整页
+ * 样例挂上首屏依赖图（`ps10-eager-graph.test.ts` 的体积闸当场叫）。要看对照页：测试直接引
  * `../src/ui-kit/KitGallery`，将来接路由时走 `import()` 懒装载。
+ *
+ * 同理（PS-10 减面批）：桶棒里**开机图真用到的那几件**拆成单品叶子、由消费方直引——
+ * `KitRadio` 即如此（`kojo2-cutover-settings.tsx` 直引 `./kit-radio`，不再引桶棒），
+ * 桶棒整份因此出图、省下未被用到的九件。新增图内消费方照此办：引叶子，别引桶棒。
  */

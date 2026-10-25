@@ -67,13 +67,7 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'editor.fontZoomIn', title: '放大文字', category: '编辑器', keys: 'ctrl+=', rebindable: true },
   { id: 'editor.fontZoomOut', title: '缩小文字', category: '编辑器', keys: 'ctrl+-', rebindable: true },
   { id: 'editor.fontZoomReset', title: '重置文字缩放', category: '编辑器', keys: 'ctrl+0', rebindable: true },
-  // 状态栏即时开关（B 批）：自动换行 / 空白符显示——与状态栏那两格**同一个动作**
-  // （`ShellLayout` 的 `applyToggleWordWrap` / `applyToggleRenderWhitespace`），
-  // 落偏好真源、走既有订阅通路。`alt+z` 与 VSCode 一致；空白符**不给缺省键**：
-  // 多占一个 Alt 组合会与 Windows 输入法切换抢键（与 `layout-pref.ts` 里多光标修饰键
-  // 选 ctrlCmd 同一条理由），只做命令面板 + 状态栏入口，作者可在键位页自绑。
-  { id: 'workbench.toggleWordWrap', title: '切换自动换行', category: '编辑器', keys: 'alt+z', rebindable: true },
-  { id: 'workbench.toggleRenderWhitespace', title: '切换空白符显示', category: '编辑器', rebindable: true },
+
   { id: 'workbench.closeActiveTab', title: '关闭当前标签', category: '工作台', keys: 'ctrl+w', rebindable: true },
   { id: 'workbench.saveAll', title: '全部保存', category: '工作台', keys: 'ctrl+shift+s', rebindable: true },
   { id: 'workbench.fixAll', title: '一键修复当前文件', category: '工作台', keys: 'ctrl+shift+y', rebindable: true },
@@ -107,52 +101,10 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'editor.internal.save', title: '保存当前文件', category: '编辑器', keys: 'ctrl+s', rebindable: false, note: '编辑器内生效，暂不支持改键' },
   // A7「在选定内容中查找」：有选区时把选中文本灌进 find 并把搜索域钉在选区（无选区不动作）
   { id: 'editor.internal.findInSelection', title: '在选定内容中查找', category: '编辑器', keys: 'ctrl+alt+f', rebindable: false, note: '编辑器内生效；先选中文本再按' },
-  // ---- 文档内书签（1026 编辑器体感 C 批）----
-  // 键位选择依据（登记之前逐条核过冲突，见提交信息）：
-  // - F2 / Ctrl+F2 / Ctrl+Shift+F2 / Ctrl+K F2 均被 Monaco 占（重命名 / 多光标 / 联动编辑 / 速览引用），
-  //   故取 F2 族唯一空位 Alt+F2 做切换；
-  // - F3 / Shift+F3 / Ctrl+F3 / Ctrl+Shift+F3 被 Monaco 查找族占，取 Alt+F3 与 Ctrl+Alt+F3
-  //   做「下一个 / 上一个」，同键加减一个 Ctrl 表方向；
-  // - 刻意不用 Alt+Shift 组合（Windows 输入法语言切换高发，与 `layout-pref.ts` 避开 Alt 的取舍同源）。
-  // 书签是纯内存态（不落盘、不越写盘闸），命令面板可搜、键位页可改。
-  { id: 'bookmarks.toggle', title: '切换书签', category: '书签', keys: 'alt+f2', rebindable: true, note: '当前行；同键再按取消' },
-  { id: 'bookmarks.next', title: '跳到下一个书签', category: '书签', keys: 'alt+f3', rebindable: true, note: '本文件内；到末尾回绕到第一个' },
-  { id: 'bookmarks.prev', title: '跳到上一个书签', category: '书签', keys: 'ctrl+alt+f3', rebindable: true, note: '本文件内；到开头回绕到最后一个' },
-  { id: 'bookmarks.clearFile', title: '清除本文件书签', category: '书签', rebindable: true },
-  // ---- 内核动作（1026 编辑器内核批）----
-  // id 与 `ui/monaco-command-specs.ts` 一一对应（测试钉住）；本表只登记「命令面板入口」——
-  // 这些动作的键由 Monaco 自己处理（内建键），宿主**不覆写、不劫持**，故一律不给缺省键
-  // （keys 留空）。作者想另配宿主键可在此页改键；不改就照 Monaco 内建键用（只读页另列一份）。
-  // 分类名与 monaco-command-specs 的中文名逐字相同（命令面板同分组）。
-  { id: 'editor.builtin.foldAll', title: '全部折叠', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+0 为 Monaco 内建' },
-  { id: 'editor.builtin.unfoldAll', title: '全部展开', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+J 为 Monaco 内建' },
-  { id: 'editor.builtin.foldRecursively', title: '递归折叠（连子层一起）', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+[ 为 Monaco 内建' },
-  { id: 'editor.builtin.unfoldRecursively', title: '递归展开', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+] 为 Monaco 内建' },
-  { id: 'editor.builtin.toggleFold', title: '切换当前折叠', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+L 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel1', title: '折叠到第 1 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+1 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel2', title: '折叠到第 2 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+2 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel3', title: '折叠到第 3 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+3 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel4', title: '折叠到第 4 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+4 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel5', title: '折叠到第 5 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+5 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel6', title: '折叠到第 6 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+6 为 Monaco 内建' },
-  { id: 'editor.builtin.foldLevel7', title: '折叠到第 7 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+7 为 Monaco 内建' },
-  { id: 'editor.builtin.transformToUppercase', title: '转为大写', category: '文本变换', rebindable: true },
-  { id: 'editor.builtin.transformToLowercase', title: '转为小写', category: '文本变换', rebindable: true },
-  { id: 'editor.builtin.transformToTitlecase', title: '转为标题大小写', category: '文本变换', rebindable: true },
-  { id: 'editor.builtin.sortLinesAscending', title: '选中行升序排序', category: '行操作', rebindable: true },
-  { id: 'editor.builtin.sortLinesDescending', title: '选中行降序排序', category: '行操作', rebindable: true },
-  { id: 'editor.builtin.removeDuplicateLines', title: '删除重复行', category: '行操作', rebindable: true },
-  { id: 'editor.builtin.trimTrailingWhitespace', title: '去掉行尾空白', category: '行操作', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+X 为 Monaco 内建' },
-  { id: 'editor.builtin.insertLineAfter', title: '在下方插入一行', category: '行操作', rebindable: true, note: '编辑器内 Ctrl+Enter 为 Monaco 内建' },
-  { id: 'editor.builtin.insertLineBefore', title: '在上方插入一行', category: '行操作', rebindable: true, note: '编辑器内 Ctrl+Shift+Enter 为 Monaco 内建' },
-  { id: 'editor.builtin.smartSelectExpand', title: '扩大选择范围', category: '选择', rebindable: true, note: '编辑器内 Shift+Alt+→ 为 Monaco 内建' },
-  { id: 'editor.builtin.smartSelectShrink', title: '缩小选择范围', category: '选择', rebindable: true, note: '编辑器内 Shift+Alt+← 为 Monaco 内建' },
-  { id: 'editor.builtin.selectAll', title: '全选', category: '选择', rebindable: true, note: '编辑器内 Ctrl+A 为 Monaco 内建' },
-  { id: 'editor.builtin.addCommentLine', title: '添加行注释', category: '注释', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+C 为 Monaco 内建' },
-  { id: 'editor.builtin.removeCommentLine', title: '移除行注释', category: '注释', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+U 为 Monaco 内建' },
-  { id: 'editor.builtin.clipboardCut', title: '剪切', category: '剪贴板', rebindable: true, note: '编辑器内 Ctrl+X 为 Monaco 内建' },
-  { id: 'editor.builtin.clipboardCopy', title: '复制', category: '剪贴板', rebindable: true, note: '编辑器内 Ctrl+C 为 Monaco 内建' },
-  { id: 'editor.builtin.clipboardPaste', title: '粘贴', category: '剪贴板', rebindable: true, note: '编辑器内 Ctrl+V 为 Monaco 内建' },
+  // 命令面板入口型条目（内核动作 / 书签 / 状态栏开关）不在这张**开机图内**的基础表里：
+  // 它们不吃右键菜单那面（宿主菜单清单里一枚都没有），只在命令面板与键位页露面——
+  // 两者都住懒 chunk。故这批移去 `./keybinding-specs-commands`，由 `./keybindings` 合并
+  // 出键位页看到的完整表。本表只留「右键菜单同步可查」的那部分（PS-10 减面批）。
 ];
 
 /** 缺省键位索引（只收有缺省键的条目） */

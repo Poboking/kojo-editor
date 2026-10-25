@@ -37,7 +37,7 @@ import {
   useState,
   type ReactElement,
 } from 'react';
-import { KitRadio } from '../ui-kit';
+import { KitRadio } from '../ui-kit/kit-radio';
 import { Icon } from './icons';
 import {
   getKojo2CutoverController,

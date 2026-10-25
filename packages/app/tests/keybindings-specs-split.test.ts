@@ -7,8 +7,10 @@
  * 的叶子），生效键位改由壳层注入。
  *
  * 钉五件事：
- * 1. **表只有一份**：`KEYBINDING_SPECS` 定义在 specs 模块，`keybindings` 只是再导出
- *    （同一个数组引用，不是第二份副本）；
+ * 1. **表只有一份真源**：静态基础表（右键菜单同步可查）定义在 specs 模块、`keybindings`
+ *    不写任何表项字面量；完整表 = 基础段（逐项同引用）∪ 懒供给扩展段
+ *    （`keybinding-specs-commands`，PS-10 减面批把命令面板入口型 35 条搬去懒面）——
+ *    两段都不是手抄第二份（基础段来自叶子、扩展段来自派生器）；
  * 2. **减重的那根线断了**：`context-menu-model` 对 `./keybindings` 无值导入；
  * 3. 未注册 lookup：菜单显示规格表里的**缺省键位**（首屏极早期也不空白、不抛错）；
  * 4. 注册 lookup：菜单显示**作者改过的键**，且与真按下去的那条是同一个读数；
@@ -21,10 +23,7 @@ import keybindingsSource from '../src/ui/keybindings.ts?raw';
 import specsSource from '../src/ui/keybinding-specs.ts?raw';
 import { formatKeybinding } from '../src/ui/commands';
 import { menuItemFromCommand, registerMenuKeybindingLookup } from '../src/ui/context-menu-model';
-import {
-  KEYBINDING_SPECS as SPECS_FROM_SPECS,
-  keybindingSpecOf as specOfFromSpecs,
-} from '../src/ui/keybinding-specs';
+import { KEYBINDING_SPECS as SPECS_FROM_SPECS } from '../src/ui/keybinding-specs';
 import {
   KEYBINDING_SPECS,
   effectiveKeybindingOf,
@@ -55,21 +54,27 @@ function importSpecs(src: string): string[] {
 }
 
 describe('键位规格表 · 单一真源', () => {
-  it('specs 模块里表只定义一次；keybindings 只再导出，不留字面量', () => {
+  it('specs 模块里基础表只定义一次；keybindings 不留任何表项字面量', () => {
     expect(specsSource.match(/export const KEYBINDING_SPECS\b/g)).toHaveLength(1);
-    expect(keybindingsSource).not.toMatch(/export const KEYBINDING_SPECS\b/);
     // keybindings 里一条表项都不许留（有表项 = 悄悄养了第二份真相）
     expect(keybindingsSource).not.toMatch(/\{\s*id:\s*'/);
     // 表项数 = 表长：specs 里的字面量与导出面一一对应（没漏在注释里/没多写一行脏数据）
     expect(specsSource.match(/\{\s*id:\s*'/g)).toHaveLength(SPECS_FROM_SPECS.length);
   });
 
-  it('再导出的是同一个东西（数组同引用、函数同引用），不是复制出来的第二份', () => {
-    expect(KEYBINDING_SPECS).toBe(SPECS_FROM_SPECS);
-    expect(keybindingSpecOf).toBe(specOfFromSpecs);
-    // 锚点：查表结果仍是同一条规格（标题/缺省键没在搬运中掉包）
+  it('完整表 = 基础表（逐项同引用）∪ 懒供给扩展段，基础段没在搬运中掉包', () => {
+    const base = SPECS_FROM_SPECS;
+    // 基础段逐项同引用（不是复制的第二份）
+    expect(KEYBINDING_SPECS.slice(0, base.length)).toEqual(base);
+    for (let i = 0; i < base.length; i++) expect(KEYBINDING_SPECS[i]).toBe(base[i]);
+    // 扩展段（懒供给）确实拼在了后面
+    expect(KEYBINDING_SPECS.length).toBeGreaterThan(base.length);
+    // 锚点：基础段查表结果仍是同一条规格（标题/缺省键没在搬运中掉包）
     expect(keybindingSpecOf('workbench.commandPalette')?.title).toBe('命令面板');
     expect(keybindingSpecOf('workbench.commandPalette')?.keys).toBe('ctrl+shift+p');
+    // 扩展段的缺省键仍生效（书签 Alt+F2 / 状态栏 Alt+Z —— 功能零退化的锚点）
+    expect(keybindingSpecOf('bookmarks.toggle')?.keys).toBe('alt+f2');
+    expect(keybindingSpecOf('workbench.toggleWordWrap')?.keys).toBe('alt+z');
   });
 
   it('specs 是零 import 的叶子（谁都能安全 import，不牵出 storage / React）', () => {

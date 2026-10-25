@@ -159,7 +159,7 @@ describe('L11 · 迁移向导与切换设置的形状', () => {
 
   it('切换设置用 ui-kit 真件 KitRadio，原生 radio 已退役', () => {
     const cutoverCode = stripComments(cutover);
-    expect(cutoverCode).toContain("import { KitRadio } from '../ui-kit'");
+    expect(cutoverCode).toContain("import { KitRadio } from '../ui-kit/kit-radio'");
     expect(cutoverCode).toContain('<KitRadio');
     expect(cutoverCode).not.toContain('<input');
     // 既有测试钉住的行锚点属性还在

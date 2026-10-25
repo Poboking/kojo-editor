@@ -9,10 +9,10 @@ import {
 } from './commands';
 import {
   KEYBINDING_CATEGORY_ORDER,
-  KEYBINDING_SPECS,
-  defaultKeybindingOf,
-  keybindingSpecOf,
+  KEYBINDING_SPECS as HOST_KEYBINDING_SPECS,
+  type KeybindingSpec,
 } from './keybinding-specs';
+import { COMMAND_PANEL_KEYBINDING_SPECS } from './keybinding-specs-commands';
 
 /**
  * 集中键位注册表（R8 快捷键批）——宿主层单一真源。
@@ -49,15 +49,40 @@ import {
  * 调用方一行不用改；**表仍只有一份**，本文件不再持有任何键位字面量。
  */
 
-// 纯数据与纯查表函数住在 `./keybinding-specs`（零 import 的叶子模块）。这里再导出，
-// 是为了让既有 `import { keybindingSpecOf } from './keybindings'` 的调用面保持不变。
-export {
-  KEYBINDING_CATEGORY_ORDER,
-  KEYBINDING_SPECS,
-  defaultKeybindingOf,
-  keybindingSpecOf,
-};
+/**
+ * 键位表（**完整**，键位页与命令面板看到的这一份）= 静态基础表 ∪ 命令面板入口型条目。
+ *
+ * - 静态基础段（`./keybinding-specs` 的 `KEYBINDING_SPECS`，逐项**同引用**，不复制）：
+ *   开机图内、零 import 的叶子——右键菜单数据面（`context-menu-model.ts`）要同步查它；
+ * - 扩展段（`./keybinding-specs-commands`，懒装载）：内核动作 / 书签 / 状态栏开关，只服务
+ *   命令面板与键位页这两个懒面，不进开机图（PS-10 减面批）。
+ *
+ * 命名与导出面保持旧样（`KEYBINDING_SPECS` / `keybindingSpecOf` / `defaultKeybindingOf`），
+ * 既有 `import { … } from './keybindings'` 的调用方一行不用改；**表仍只有一份真源**——
+ * 基础段来自叶子、扩展段来自派生器，本文件不持有任何键位字面量。
+ */
+export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
+  ...HOST_KEYBINDING_SPECS,
+  ...COMMAND_PANEL_KEYBINDING_SPECS,
+];
+
+export { KEYBINDING_CATEGORY_ORDER };
 export type { KeybindingSpec } from './keybinding-specs';
+
+/** 缺省键位索引（合并表；有 `keys` 的条目才在册） */
+const DEFAULTS: ReadonlyMap<string, string> = new Map(
+  KEYBINDING_SPECS.filter((s) => s.keys !== undefined).map((s) => [s.id, s.keys!]),
+);
+
+/** 缺省键位（不在注册表 = undefined）；只回答「出厂是什么」，不回答「现在生效什么」 */
+export function defaultKeybindingOf(id: string): string | undefined {
+  return DEFAULTS.get(id);
+}
+
+/** 注册表条目（展示用）；未登记 = undefined */
+export function keybindingSpecOf(id: string): KeybindingSpec | undefined {
+  return KEYBINDING_SPECS.find((s) => s.id === id);
+}
 
 /** 键位现状三态：原样 / 被改过 / 被作者关掉（解绑） */
 export type BindingState = 'default' | 'overridden' | 'unbound';
