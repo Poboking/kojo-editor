@@ -4,7 +4,6 @@ import {
   errorText,
   shortPath,
   nextWindow,
-  windowSize,
   type RenderWindow,
 } from '@kojo/plugin-api';
 import type { EditorCodeAction } from '@kojo/plugin-api';
@@ -29,6 +28,7 @@ import {
   saveProblemFilterPrefs,
   sourceOptions,
   type ProblemFilterPrefs,
+  type ProblemGroup,
   type ProblemSeverity,
 } from './problem-filter';
 import {
@@ -170,24 +170,88 @@ function SeverityCount({
 const ALL_SOURCES_VALUE = '\u0000all';
 
 /**
- * 问题列表的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"）。
+ * 问题列表的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"；1025 性能批改口径）。
  *
  * 旧实现硬截 300 条 + 一句「仅显示前 300 条（共 N 条）」——第 301 条**没有任何入口可达**，
  * 全项目校验一轮报上千条时，作者看到的就是一个到不了的谎（内核铁律 4：不许静默）。
- * 现在与仓里其余面板同一把尺（`plugin-api` 的 `RenderWindow`，文件树过滤窗、
- * 状态回放面板、糖预览面板共用）：首帧上界 120 行，点一次哨兵 +240，直到全量可达。
+ * 现在与仓里其余面板同一把尺（`plugin-api` 的 `RenderWindow`）：点一次哨兵 +step，直到全量可达。
  *
- * 哨兵是一枚 `<button>`（不是"滚到底自动加"那种隐形机制）⇒ 键盘 Tab 得到它、
- * Enter 按得动，结果行的可达性不因为换了窗口化而掉一档（UI-4 那条口径）。
+ * ## 1025 性能批：预算单位从「行」改成「条目（组头也算一条）」
  *
- * P2-13 起窗口裁的是**过滤后的全局问题序列**（不是"每组各 120 条"也不是"组头
- * 占名额"）：组头不占窗口额度、恒可见（组数 ≤ 问题数，成本可忽略；组头常可见
- * 让"哪些文件有问题"一屏可读），行按全局下标进窗——同一路径的多个严重级段
- * 分属不同组，组内条目在全局序列里不连续，裁剪判据只能逐行算（`indices`）。
+ * 真机实测（eratw 语料 2,633 条 / 62 个文件分组，调试宿 CDP 探针）：打开面板最长帧
+ * **137ms**、两条长任务（124 / 77ms），一次提交建 **2,533** 个 DOM 节点。拆开看：
+ * 每行 8 个节点 × 120 行 = 960，**每个组头 26 个节点 × 62 = 1,612**——旧注释里
+ * 「组头成本可忽略」是错的：三枚计数徽标（`.prob-count` = span + SVG path + 数字腿 +
+ * 读数腿）比一行还重三倍，62 个组头就吃掉了首帧六成预算。
+ *
+ * 于是预算改成**条目**：组头 1 条、行 1 条，同一个预算里排队——首帧上界 60 条
+ * （典型形态 ≈ 1 个组头 + 59 行 ≈ 500 节点，最坏形态全组头 ≈ 1,020 节点，两头都在
+ * 800/1,200 的目标内），点哨兵按 step 增长。代价是「所有组头恒可见」这条旧口径
+ * 退成「窗口内可见」：62 个组头本身就要 1,612 节点，跟"首帧只建最小可见集"直接冲突，
+ * 而这批的判据是体感（不卡），不是"组头一屏看全"。**可达性一根没掉**——哨兵照旧
+ * 是一枚 `<button>`（Tab 得到、Enter 按得动），点到底就是全量。
+ *
+ * 首帧 60 条是按实测定的：底栏 `.container-body` 可视高约 170px、每行 22px ⇒ 一屏 7–8 行，
+ * 60 条（约 8 屏）足够"扫一眼 + 往下滚两下"而不至于拉一下就到底；再大就把首帧又喂回长任务。
  */
-const PROBLEM_WINDOW: RenderWindow = { initial: 120, step: 240 };
-/** 首帧最多画多少条（旧导出名沿用，测试与面板按它钉首帧行数） */
+const PROBLEM_WINDOW: RenderWindow = { initial: 60, step: 120 };
+/** 首帧最多画多少条**条目**（旧导出名沿用：测试与面板按它钉首帧上界） */
 export const PROBLEM_WINDOW_INITIAL = PROBLEM_WINDOW.initial;
+
+/**
+ * 增窗的分片粒度（条目数）：哨兵 / 滚动增窗一次要加 `step` 条，但**一帧只建 40 条**
+ * （≈ 320 节点），余下的在 `requestIdleCallback`（无该 API 时退回 `setTimeout(0)`）
+ * 里接着补。一批建完 = 一次大提交 = 一条长任务，那正是本批要消掉的东西。
+ */
+const ENTRY_CHUNK = 40;
+
+/** 一次「该画哪些条目」的纯判据产物（`planVisibleEntries` 的返回；可单测） */
+export interface ProblemEntryPlan {
+  /** 全部条目数（每组 1 条组头 + 未折叠组的每行 1 条） */
+  readonly totalEntries: number;
+  /** 本帧实际画出的条目数 */
+  readonly shownEntries: number;
+  /** 本帧实际画出的行数（哨兵的「还有 N 条」说行数，不说条目数——作者数的是问题） */
+  readonly shownRows: number;
+  /** 本帧要画的分组（预算用尽的那些组不在名单里，也不再占节点） */
+  readonly groups: readonly {
+    readonly group: ProblemGroup;
+    readonly rows: readonly { readonly idx: number; readonly p: EditorProblem }[];
+  }[];
+}
+
+/**
+ * 分组 + 折叠集 + 条目预算 → 这一帧到底画什么（**纯函数**，不碰 React / DOM）。
+ *
+ * 组头与行在同一条预算里排队，按组序逐条扣（组序 = 过滤后首次出现序，见 `groupProblems`）。
+ * 折叠组的行不占预算（它们本来就不画），于是"折叠一切"会立刻把预算全让给组头。
+ */
+export function planVisibleEntries(
+  groups: readonly ProblemGroup[],
+  collapsed: ReadonlySet<string>,
+  budget: number,
+): ProblemEntryPlan {
+  let totalEntries = 0;
+  for (const g of groups) totalEntries += 1 + (collapsed.has(g.path) ? 0 : g.items.length);
+  let used = 0;
+  let shownRows = 0;
+  const out: { group: ProblemGroup; rows: { idx: number; p: EditorProblem }[] }[] = [];
+  for (const g of groups) {
+    if (used >= budget) break;
+    used += 1; // 组头
+    const rows: { idx: number; p: EditorProblem }[] = [];
+    if (!collapsed.has(g.path)) {
+      const room = Math.max(0, budget - used);
+      for (let i = 0; i < g.items.length && i < room; i++) {
+        rows.push({ idx: g.indices[i]!, p: g.items[i]! });
+      }
+    }
+    used += rows.length;
+    shownRows += rows.length;
+    out.push({ group: g, rows });
+  }
+  return { totalEntries, shownEntries: used, shownRows, groups: out };
+}
 
 function useProblems(): readonly EditorProblem[] {
   const [items, setItems] = useState<readonly EditorProblem[]>(() => snapshot());
@@ -206,6 +270,14 @@ interface RowFixEntry {
 
 /** 过滤工具条的输入井占位（与检索面板的 `ksp-field` 同一族，见 `problem-panel.css`） */
 const FILTER_INPUT_PLACEHOLDER = '过滤：消息 / 诊断码 / 来源 / 路径…';
+
+/**
+ * 过滤条件的比对指纹（"没变不写 localStorage"用）。字段与 `saveProblemFilterPrefs` 的
+ * 落盘形状逐字同形——两边各写一份就是下次加字段时漏一处。
+ */
+function prefsSignature(prefs: ProblemFilterPrefs): string {
+  return JSON.stringify({ severities: prefs.severities, source: prefs.source, text: prefs.text });
+}
 
 /**
  * 自绘勾选控件：真 `<input type="checkbox">` 只把外观换成画出来的方框，语义一格不动
@@ -249,8 +321,14 @@ export function ProblemPanel({
   onReveal: (path: string, line: number, span?: RevealSpan) => void;
 }): ReactElement {
   const items = useProblems();
-  /** 本次窗口能盖到第几条（`nextWindow` 的产物；没点过哨兵 = 首帧上界） */
+  /**
+   * 窗口的**已提交**条目数（渲染按它裁；分片补窗时一帧只推进 `ENTRY_CHUNK` 条）。
+   * 旧实现只有 `windowEnd` 一个数——点一次哨兵一帧建完 240 行，等于把首帧的长任务
+   * 原样搬到第二次点击上；拆成"意图 / 已提交"两个数才分得开片。
+   */
   const [windowEnd, setWindowEnd] = useState<number>(PROBLEM_WINDOW.initial);
+  /** 窗口的**目标**条目数（点哨兵涨这里；分片泵把它追平后自己停下） */
+  const [windowTarget, setWindowTarget] = useState<number>(PROBLEM_WINDOW.initial);
   /**
    * 过滤条件（严重级 + 来源 + 文本；S14 起整体持久化）。
    * 初值从壳层 localStorage 读（缺省 = 全开 / 全部来源 / 空文本 = 旧口径）。
@@ -272,10 +350,53 @@ export function ProblemPanel({
   // 过滤尺一换，窗口回到首帧上界（旧深度对新结果没有意义）
   useEffect(() => {
     setWindowEnd(PROBLEM_WINDOW.initial);
+    setWindowTarget(PROBLEM_WINDOW.initial);
   }, [filterPrefs]);
 
-  // 过滤条件持久化（S14）：选择一变就记一笔，下次打开沿同一把尺；写不进去静默降级
+  /**
+   * 分片补窗：`windowTarget > windowEnd` 时，每次空闲（`requestIdleCallback`；
+   * 没有该 API 的环境退回 `setTimeout(0)`）补 `ENTRY_CHUNK` 条，直到追平。
+   *
+   * 为什么要 rIC 而不是 `requestAnimationFrame`：这一批补的是**屏外的行**，
+   * 与下一帧画面无关——rIC 会把活儿塞进浏览器的空闲段，滚动 / 输入优先；rAF 则会
+   * 抢在下一帧前跑，帧预算只有 16.7ms，补满 120 条正好把它撑爆。
+   * 卸载即取消（标签切走 / 面板关掉时不留半截定时器）。
+   */
   useEffect(() => {
+    if (windowEnd >= windowTarget) return;
+    const host = globalThis as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    let cancelled = false;
+    let idle: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const step = (): void => {
+      if (cancelled) return;
+      setWindowEnd((cur) => Math.min(windowTarget, cur + ENTRY_CHUNK));
+    };
+    if (typeof host.requestIdleCallback === 'function') {
+      // timeout 兜底：一直有活干（滚动 / 输入）时也必须补齐，否则哨兵按了没反应
+      idle = host.requestIdleCallback(step, { timeout: 200 });
+    } else {
+      timer = setTimeout(step, 0);
+    }
+    return () => {
+      cancelled = true;
+      if (idle !== null && typeof host.cancelIdleCallback === 'function') host.cancelIdleCallback(idle);
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [windowEnd, windowTarget]);
+
+  // 过滤条件持久化（S14）：选择一变就记一笔，下次打开沿同一把尺；写不进去静默降级。
+  // **首帧不写**（1025 性能批）：挂载时写回的必然是刚读出来的同一份值，而 WebView 的
+  // localStorage 首写实测 39ms（CDP 采样 `setItem` selfTime）——它落在打开面板那一条
+  // 长任务里，纯属白花。用"序列化后比对"把"没变不写"钉住（初值 = 刚读出来的那份）。
+  const lastSavedPrefsRef = useRef<string>(prefsSignature(filterPrefs));
+  useEffect(() => {
+    const next = prefsSignature(filterPrefs);
+    if (next === lastSavedPrefsRef.current) return;
+    lastSavedPrefsRef.current = next;
     saveProblemFilterPrefs(filterPrefs);
   }, [filterPrefs]);
 
@@ -299,9 +420,16 @@ export function ProblemPanel({
   /** 面板态 → 纯判据（严重级集合 / 来源集合 / 文本；判据全在 `problem-filter`） */
   const activeFilter = filterOfPrefs(filterPrefs);
   const filtered = filterProblems(items, activeFilter);
-  const shownCount = windowSize(filtered.length, windowEnd, PROBLEM_WINDOW);
-  const hidden = filtered.length - shownCount;
   const groups = groupProblems(filtered);
+  /**
+   * 这一帧该画什么（条目预算，判据见 `planVisibleEntries`）。
+   * 组头与行同队排队 ⇒ 首帧不再一次建 62 个组头 + 120 行。
+   */
+  const plan = planVisibleEntries(groups, collapsed, windowEnd);
+  /** 还差多少条目没画（0 = 全量到屏，不出哨兵） */
+  const hiddenEntries = plan.totalEntries - plan.shownEntries;
+  /** 还差多少**行**（哨兵说人话用行数；只差组头时那句话改说"分组"） */
+  const hiddenRows = filtered.length - plan.shownRows;
   /** 组头数字走同一份派生（键 = 原始路径，与 `groupProblems` 的组键逐字同形） */
   const filteredSummary = summarizeProblems(filtered);
   const filtering = isFiltering(activeFilter);
@@ -670,16 +798,12 @@ export function ProblemPanel({
         ) : null
       ) : (
         <ul ref={listRef} className="prob-list">
-          {groups.map((g) => {
+          {plan.groups.map(({ group: g, rows }) => {
             const isCollapsed = collapsed.has(g.path);
             // 组头数字来自 `filteredSummary`（与表头 / 状态栏 / 树徽标同一次遍历）；
             // `g.counts` 仍留在 `groupProblems` 的产物里供别处用，但**不再上屏**——
             // 上屏的第二把尺子就是分叉的开始。
             const gc = filteredSummary.byPath.get(g.path)!;
-            // 组内行与全局下标同序配对（`indices` 与 `items` 一一同序），再按窗口裁
-            const rows = g.indices
-              .map((idx, i) => ({ idx, p: g.items[i]! }))
-              .filter(({ idx }) => idx < shownCount);
             return (
               <li key={g.path} className="prob-group">
                 <button
@@ -703,7 +827,7 @@ export function ProblemPanel({
                     {gc.info > 0 ? <SeverityCount severity="info" count={gc.info} /> : null}
                   </span>
                 </button>
-                {!isCollapsed && rows.length > 0 ? (
+                {rows.length > 0 ? (
                   <ul className="prob-group-rows">
                     {rows.map(({ p, idx }) => renderRow(p, idx))}
                   </ul>
@@ -714,14 +838,19 @@ export function ProblemPanel({
         </ul>
       )}
 
-      {hidden > 0 ? (
-        // 哨兵在末尾：Tab 得到它、Enter 按得动；点一次多画 STEP 条，直到全量画完
+      {hiddenEntries > 0 ? (
+        // 哨兵在末尾：Tab 得到它、Enter 按得动；点一次把**目标**抬 step 条，分片泵
+        // 一帧补 `ENTRY_CHUNK` ——— 连点几下也只是把目标抬高，不会有一次性大提交。
         <button
           type="button"
           className="ghost small conv-more prob-more"
-          onClick={() => setWindowEnd((cur) => nextWindow(cur, filtered.length, PROBLEM_WINDOW))}
+          onClick={() =>
+            setWindowTarget((cur) => nextWindow(cur, plan.totalEntries, PROBLEM_WINDOW))
+          }
         >
-          继续显示后面的问题（还有 {hidden} 条，共 {filtered.length} 条）
+          {hiddenRows > 0
+            ? `继续显示后面的问题（还有 ${hiddenRows} 条，共 ${filtered.length} 条）`
+            : `继续显示后面的文件分组（还有 ${hiddenEntries} 组）`}
         </button>
       ) : null}
     </div>

@@ -180,13 +180,20 @@ describe('问题面板 · 1,000 条同样可达（旧实现：300 条封顶）',
     clearAllProblems();
     setProblems('C:/game/ERB/001/M_KOJO_K1_0.ERB', mkProblems(1_000));
     const markup = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));
-    expect((markup.match(/class="prob-item"/g) ?? []).length).toBe(PROBLEM_WINDOW_INITIAL);
-    expect(markup).toContain('继续显示后面的问题（还有 880 条，共 1000 条）');
+    // 1025 性能批：预算单位是**条目**（组头 1 条 + 行 1 条，理由见 ProblemPanel 的
+    // `PROBLEM_WINDOW` 注）。本用例每条问题占一个独立 path ⇒ 一千个组：
+    // 首帧 60 条 = 30 组头 + 30 行，条目总数到上界、行数是一半。
+    const heads = (markup.match(/class="prob-group-head"/g) ?? []).length;
+    const rows = (markup.match(/class="prob-item"/g) ?? []).length;
+    expect(rows + heads).toBe(PROBLEM_WINDOW_INITIAL);
+    expect(heads).toBe(PROBLEM_WINDOW_INITIAL / 2);
+    expect(rows).toBe(PROBLEM_WINDOW_INITIAL / 2);
+    expect(markup).toContain(`继续显示后面的问题（还有 ${1_000 - rows} 条，共 1000 条）`);
     expect(markup).toContain('prob-more');
     clearAllProblems();
   });
 
-  it('不到 120 条 ⇒ 完全不画哨兵（小面板零扰动）', () => {
+  it('不到窗口上界 ⇒ 完全不画哨兵（小面板零扰动）', () => {
     clearAllProblems();
     setProblems('C:/game/ERB/001/M_KOJO_K1_0.ERB', mkProblems(9));
     const markup = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));
