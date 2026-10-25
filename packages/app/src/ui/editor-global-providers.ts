@@ -1535,11 +1535,31 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 预处理条件块「被裁支压暗」（A5 / P0-3 尾巴）：判据在插件
     // （`collectPreprocDeadRanges`，与 Emuera `ErbLoader.PPState` 逐条对齐），
     // 宿主这一层只把区间翻成装饰，**不重新解释 `[IF xxx]`**。
+    //
     // 索引重建 / 项目切换后重算一次：宏集是从索引的 `#DEFINE` 来的，索引一换就得重判。
-    const erbPreprocDim = installErbPreprocDim({ index: () => erbParserIndex(requireKernel()) });
+    // 这枚订阅**必须惰性**——`ensureGlobalProviders` 在没有内核实例的场合也会被调用
+    // （接线层单测、欢迎页早注册），注册期 `requireKernel()` 会把整批 provider 一起带崩
+    // （正是本文件缺陷 ②「半途抛错 = 全有或全无」那种失效）。`index` 只在真出现编辑器、
+    // 真算装饰时才被叫，那时内核一定在 ⇒ 订阅挂在它首次被取用那一刻，之后幂等。
+    let unsubPreprocDim: (() => void) | null = null;
+    const erbPreprocDim = installErbPreprocDim({
+      index: () => {
+        const kernel = requireKernel();
+        if (unsubPreprocDim === null) {
+          unsubPreprocDim = kernel.bus.on('kojo.functionChanged', () => erbPreprocDim.refresh());
+        }
+        return erbParserIndex(kernel);
+      },
+    });
     globalDisposers.push(erbPreprocDim);
-    const unsubPreprocDim = requireKernel().bus.on('kojo.functionChanged', () => erbPreprocDim.refresh());
-    globalDisposers.push({ dispose: unsubPreprocDim });
+    // 拆毁时把"已订阅"这道闸复位：回滚 / 重挂（缺陷 ② 的重试路径）之后要能重新订一次，
+    // 否则新一枚 provider 永远收不到 `kojo.functionChanged`，压暗会停在旧宏集上。
+    globalDisposers.push({
+      dispose: () => {
+        unsubPreprocDim?.();
+        unsubPreprocDim = null;
+      },
+    });
     // 转到定义（2026-10-15 语言服务批）：宿主只做 Monaco 协议翻译——光标位置进、目标位置出；
     // "那个名字是什么、定义在哪"全在 `ui.editor.languageService` 槽（ERB 由解析器答、
     // `.kojo` 由糖线答）。跨文件跳转不新造机制：发 `editor.revealLocation`（宿主既有通道，

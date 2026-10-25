@@ -168,7 +168,15 @@ export function installErbPreprocDim(deps: { index: () => ErbIndex | null }): Er
     refreshSoon(entryFor(editor), editor);
   };
 
-  for (const editor of monaco.editor.getEditors()) hook(editor);
+  // 已存在的编辑器补挂一遍（挂载顺序不保证这枚 provider 一定先到）。**只认数组**：
+  // 这是全局 provider 链上的一枚，而接线层契约是「半途抛错 ⇒ 整批 provider 回滚、本次不重试」
+  // （`ui/editor-global-providers.ts` 缺陷 ②）——为一次补挂便利把补全 / 悬停 / 改名一起带下去不值。
+  // 非数组（宿主单测的万能桩会把任意调用记成一枚 disposable，返回的就不是数组）按
+  // "当前没有已存在实例"处理——新实例由下面那条订阅兜住，功能不缺，只是补挂晚一拍。
+  const existing: unknown = monaco.editor.getEditors();
+  if (Array.isArray(existing)) {
+    for (const editor of existing as Monaco.editor.ICodeEditor[]) hook(editor);
+  }
   const createSub = monaco.editor.onDidCreateEditor(hook);
 
   return {

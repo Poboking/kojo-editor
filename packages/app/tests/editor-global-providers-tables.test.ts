@@ -52,7 +52,26 @@ const stub = vi.hoisted(() => {
       return state.created.map((r) => r.path);
     },
   };
+
+  /**
+   * 查询型调用表（`path → 该方法的真返回值形状`）。
+   *
+   * 真 monaco 的这几个方法只读当前实例集合、不返回 disposable；桩必须照形状回值且**不记账**，
+   * 否则「回滚必须全拆」「dispose 后一物不剩」这类断会假红（多出一枚没人拆的账）。
+   */
+  const QUERY_RESULTS = new Map<string, () => unknown>([
+    ['monaco.editor.getEditors', () => []],
+    ['monaco.editor.getModels', () => []],
+  ]);
   const invoke = (path: string): unknown => {
+    // **查询不算注册**：`monaco.editor.getEditors()` / `getModels()` 只读现有实例，建出来的
+    // 东西没人有义务拆（叶子 provider 是 `for…of` 遍历它，不是收下当 disposable）。记账会让
+    // 「回滚必须全拆」那条断言假红——A5 的 `erb-preproc-dim` 是第一个在 install 期查
+    // `getEditors` 的 provider，2.0 语言面"无条件装配"则在 install 期查 `getModels` 补色。
+    // 返回空数组即"当前没有已存在的编辑器 / 模型"，与真机冷启动一致。
+    // 新的查询型调用（命名 `get*` / `is*` / `has*`）请加进这张表，别让它进账本。
+    const queried = QUERY_RESULTS.get(path);
+    if (queried !== undefined) return queried();
     if (!state.recording) {
       // 录制窗口之外：给一枚拆不动任何账的假 disposable
       return { dispose: () => undefined };
