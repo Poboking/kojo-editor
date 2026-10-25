@@ -442,7 +442,8 @@ describe('2.0 规则无条件并入 v1 三套（K2-SURFACE-DEFAULT）', () => {
     const mintTail = themes.get('kojo-mint-dark')!.rules.slice(V1_RULE_TOKENS.length);
     const lightTail = themes.get('kojo-light')!.rules.slice(V1_RULE_TOKENS.length);
     expect(darkTail).toEqual([...KOJO2_THEME_RULES]);
-    expect(mintTail).toEqual([...KOJO2_THEME_RULES]);
+    // 墨绿有自己的盘（色值批：暗色表落墨绿底剩 4 对撞色）⇒ 只保证"是 2.0 的 15 档"
+    expect(mintTail.map((rule) => rule.token)).toEqual(KOJO2_THEME_RULES.map((rule) => rule.token));
     expect(lightTail).toEqual([...KOJO2_LIGHT_THEME_RULES]);
     const darkByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule.foreground]));
     for (const rule of lightTail) {
