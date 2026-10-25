@@ -74,6 +74,9 @@ importers:
       '@kojo/plugin-erasqc-adapter':
         specifier: workspace:*
         version: link:../plugins/erasqc-adapter
+      '@kojo/plugin-eratohok-adapter':
+        specifier: workspace:*
+        version: link:../plugins/eratohok-adapter
       '@kojo/plugin-eratw-adapter':
         specifier: workspace:*
         version: link:../plugins/eratw-adapter
@@ -277,6 +280,15 @@ importers:
         version: link:../../plugin-api
 
   packages/plugins/erasqc-adapter:
+    dependencies:
+      '@kojo/kojo-project-kit':
+        specifier: workspace:*
+        version: link:../../kojo-project-kit
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/eratohok-adapter:
     dependencies:
       '@kojo/kojo-project-kit':
         specifier: workspace:*

@@ -31,7 +31,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
  *   `kojoPaths`/`charaIndex`），不在黑名单；
  * - 行尾 `// audit-allow: <理由>` 显式豁免。
  */
-const GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraSQC|eraNAS)\b|M_KOJO|個人口上|\bsav\b/i;
+const GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraSQC|eraNAS|eratohok)\b|M_KOJO|個人口上|\bsav\b/i;
 
 /** 是否需要跳过该行（注释/文档行） */
 function isCommentLine(line) {
@@ -81,6 +81,7 @@ const ADAPTER_PLUGIN_DIRS = new Set([
   'erafl-adapter',
   'erakoumakan-adapter',
   'erasqc-adapter',
+  'eratohok-adapter',
 ]);
 
 /**
@@ -91,7 +92,7 @@ const ADAPTER_PLUGIN_DIRS = new Set([
  * 注意：`sav` **不在**此列——它是 emuera 引擎的通用存档容器扩展名（`sav-parser`
  * 是跨游戏一致的引擎级插件），误列会伤及正牌的通用插件。
  */
-const PLUGIN_GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraSQC|eraNAS)\b|M_KOJO|個人口上|DIARY\{|TFLAG:192/i;
+const PLUGIN_GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraSQC|eraNAS|eratohok)\b|M_KOJO|個人口上|DIARY\{|TFLAG:192/i;
 
 const violations = [];
 

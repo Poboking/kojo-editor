@@ -1,0 +1,14 @@
+{
+  "name": "@kojo/plugin-eratohok-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eratohoK game adapter: GameBase title detection, Chara CSV index (CSV/Chara), kojo-directory binding (ERB/口上) and KOJO/KOJO_DAILY family parsing, variable schema and project-wide conventions. All eratohoK-specific knowledge lives here; the kernel stays game-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*",
+    "@kojo/kojo-project-kit": "workspace:*"
+  }
+}
