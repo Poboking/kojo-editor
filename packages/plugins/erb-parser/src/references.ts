@@ -10,6 +10,7 @@ import type {
   SymbolToken,
 } from '@kojo/plugin-api';
 import { isErbDialectPath, MODEL_TOKEN_CLASS, unicodeTokenAt } from '@kojo/plugin-api';
+import { erbCodePrefixLength } from './scanner';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -287,7 +288,11 @@ export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
-    const trimmed = raw.trim();
+    const outer = raw.trim();
+    // 代码前缀（`;!;` / `;#;`）剥掉后再判可见性：这两种前缀之后是真代码（判据单源
+    // `code-prefix.ts`）。`prefixLen` 只用来修列坐标，正文比原串短这么多。
+    const prefixLen = erbCodePrefixLength(outer);
+    const trimmed = prefixLen === 0 ? outer : outer.slice(prefixLen);
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;
@@ -317,8 +322,9 @@ export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
       else break;
     }
     const isCallLine = leadLen > 0 && CALL_FAMILY.has(trimmed.slice(0, leadLen).toUpperCase());
-    // 名字槽起点（行内 0 基偏移）= 缩进 + 关键字长度；缩进只算行首空白（trailing 会干扰差值）
-    const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + leadLen : -1;
+    // 名字槽起点（行内 0 基偏移）= 缩进 + 代码前缀宽 + 关键字长度；缩进只算行首空白
+    // （trailing 会干扰差值）
+    const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + prefixLen + leadLen : -1;
     let codeCache: string | undefined;
     yield {
       line: i + 1,

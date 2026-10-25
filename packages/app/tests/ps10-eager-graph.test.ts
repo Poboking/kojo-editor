@@ -317,11 +317,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     把 **24 个模块挪出开机图** ⇒ 合流后现读数 **187 文件 / 2,741 KB**。两枚闸随现值
     //     **下调**（211 → 187 文件、3,130 → 2,750 KB）：降闸不必写理由，抬闸才要——
     //     上面那笔 3,120 → 3,130 的归因留档，是因为它解释"为什么曾要抬"，不是留着当现值。
+    //   - **ERB 语法缺口批（2026-10-25）**：现读数 **190 文件 / 2,779 KB**，两枚闸随之上抬
+    //     （187 → 190 文件、2,750 → 2,790 KB）。增量逐块点名（+3 文件 / +38 KB）：
+    //     · +12.1 KB `erb-parser/declarations.ts`（**新进图**）：`#DIM` 族五条硬规则 +
+    //       `#FUNCTION` 裸 `RETURN` 体检，由 `structure.ts` 的 `checkStructure` 直接调；
+    //     · +5.4 KB `condition-extractor/inline.ts`（**新进图**）：`\@条件?真#假\@` 与
+    //       `{…?…#…}` 的内联三元扫描器，由 `extract.ts` 直接调；
+    //     · +4.1 KB `plugin-api/erb-code-prefix.ts`（**新进图**）：`;!;` / `;#;` 行首代码前缀
+    //       判据（`condition-extractor` 与宿主都要用，而插件之间禁止互相 import ⇒ 只能住契约层）；
+    //     · +17 KB 既有文件变重（约 426 行，九成是中文注释）：`structure.ts` +140 行
+    //       （预处理条件块配对体检）、`extract.ts` +111（内联谓词归并）、`erb-directives.ts` +94
+    //       （Top 59 词表与频次归因）、`scanner.ts` +65（代码前缀 + 前缀宽度的列坐标修正）。
+    //     这三枚文件都是**常驻插件的核心逻辑**（`erb-parser` / `condition-extractor` 都在
+    //     `bootstrap.ts` 的静态入口名单里），没有可挪的动态边——真要减面只能走上面记着的
+    //     `ui-kit/index.tsx` 按件拆分那条（约 −12 KB），与 ERB 面无关。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤187 文件 / ≤2,750 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_750);
-    expect(files.length).toBeLessThanOrEqual(187);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤190 文件 / ≤2,790 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_790);
+    expect(files.length).toBeLessThanOrEqual(190);
   });
 
   /**

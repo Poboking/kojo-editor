@@ -1,4 +1,6 @@
 import type { ErbStructureIssue } from '@kojo/plugin-api';
+import { erbCodeBodyOf } from './scanner';
+import { checkDeclarationIssues } from './declarations';
 import { closerNameForPair, forEachControlFlowLine, parseFunctionDefinition } from './scanner';
 
 /**
@@ -93,6 +95,115 @@ function isFunctionBoundary(trimmed: string): boolean {
 /** 栈里是否压着某一类的开块（用于 CATCH 的"归属存疑就不报"判据） */
 function hasPair(stack: readonly OpenBlock[], pair: string): boolean {
   return stack.some((b) => b.pair === pair);
+}
+
+// ---------------------------------------------------------------------------
+// 预处理条件块（`[IF xxx]` / `[IF_DEBUG]` / `[IF_NDEBUG]` … `[ENDIF]`）
+// ---------------------------------------------------------------------------
+
+/**
+ * 三个开块形共用一枚 `[ENDIF]`（引擎事实：预处理器按"宏是否 #DEFINE / 是否调试模式"
+ * 裁剪，`[ELSEIF]` / `[ELSE]` 是同一块内的分支）⇒ 配对按**开块族**认，不做词一一映射。
+ *
+ * 匹配**严格等值**：整行只有标记（允许尾随空白）。与 `[SKIPSTART]` 同一条纪律——
+ * 宁可漏认，也不要把 ASCII 画里的方括号行当块边界。大小写不敏感：同一份语料里
+ * `[IF_DEBUG]`（41 行）与 `[IF DEBUG]`（40 行）并存，预处理器命令本身不区分大小写。
+ *
+ * ⚠ 本串与 `packages/erb-syntax-tree/src/index.ts` 的 `PREPROC_*` 是**同一份语言事实的两处
+ * 落地**（插件不得依赖语言包，语言包也不该反向依赖插件）。两边一致性由
+ * `packages/plugins/erb-parser/tests/preproc-block.test.ts` 的对拍表钉住：
+ * 改一处不改另一处 ⇒ 那条测试直接红。
+ */
+const PREPROC_OPEN = /^\[(?:IF\s+[^\]]*\S|IF_DEBUG|IF_NDEBUG)\]\s*$/i;
+const PREPROC_BRANCH = /^\[(?:ELSEIF\s+[^\]]*\S|ELSE)\]\s*$/i;
+const PREPROC_CLOSE = /^\[ENDIF\]\s*$/i;
+
+/** `[` 行的预处理器角色；不是预处理器标记 ⇒ null（供结构体检与对拍测试共用） */
+export function preprocRoleOf(lineText: string): 'open' | 'branch' | 'close' | null {
+  const text = lineText.trim();
+  if (PREPROC_CLOSE.test(text)) return 'close';
+  if (PREPROC_BRANCH.test(text)) return 'branch';
+  if (PREPROC_OPEN.test(text)) return 'open';
+  return null;
+}
+
+/**
+ * 预处理条件块的配对体检（**独立栈**，与 ERB 控制流互不污染）。
+ *
+ * 为什么必须独立：被裁掉的那一支可以合法地**不配平**（`[IF_DEBUG]` 里开 `IF`、
+ * `[ENDIF]` 之后才 `ENDIF`）。把它塞进控制流那张栈，一条本来正确的写法会同时刷出
+ * "IF 未闭合" + "ENDIF 孤儿"两条假缺陷——错标比不标危险。
+ *
+ * 也不按 `@` 行清栈：`[IF]` 区块在引擎里是**文件级**裁剪，可以横跨函数定义。
+ *
+ * 停用区（`[SKIPSTART]`…`[SKIPEND]`）里的标记不算：那段引擎根本不编译。
+ */
+export function checkPreprocStructure(text: string): ErbStructureIssue[] {
+  const issues: ErbStructureIssue[] = [];
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const open: { kind: string; line: number }[] = [];
+  let inSkipBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    // 代码前缀（`;!;` / `;#;`）剥掉：`;!;[SKIPSTART]` 与 `;!;[ENDIF]` 是真标记
+    // （判据单源 `code-prefix.ts`）
+    const trimmed = erbCodeBodyOf((lines[i] ?? '').trim());
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (!trimmed.startsWith('[')) continue;
+    const role = preprocRoleOf(trimmed);
+    if (role === 'open') {
+      open.push({ kind: markerOf(trimmed), line: i + 1 });
+    } else if (role === 'branch') {
+      if (open.length === 0 && issues.length < MAX_STRUCTURE_ISSUES) {
+        issues.push({
+          kind: 'orphan-branch',
+          line: i + 1,
+          statement: markerOf(trimmed),
+          message: `${markerOf(trimmed)} 不在条件块里——上面没有开着的 [IF …]。`,
+        });
+      }
+    } else if (role === 'close') {
+      if (open.length === 0) {
+        if (issues.length < MAX_STRUCTURE_ISSUES) {
+          issues.push({
+            kind: 'orphan-close',
+            line: i + 1,
+            statement: '[ENDIF]',
+            message: '[ENDIF] 找不到对应的条件块——多半是多写了一个，或上面少写了 [IF …]。',
+          });
+        }
+      } else {
+        open.pop();
+      }
+    }
+  }
+
+  // 未闭合：报告在开块那一行（与 ERB 控制流同口径），修复点在文件末尾
+  for (const b of open) {
+    if (issues.length >= MAX_STRUCTURE_ISSUES) break;
+    issues.push({
+      kind: 'unclosed-open',
+      line: b.line,
+      statement: b.kind,
+      message: `${b.kind}（第 ${b.line} 行）到这里还没有闭合，缺 [ENDIF]。`,
+      closer: '[ENDIF]',
+      fixBeforeLine: lines.length + 1,
+    });
+  }
+  return issues;
+}
+
+/** 行首标记原词（`[IF_DEBUG]` / `[ELSE]` …）：只取方括号内，尾随空白与大小写按原文保留 */
+function markerOf(trimmed: string): string {
+  const end = trimmed.indexOf(']');
+  return end < 0 ? trimmed : trimmed.slice(0, end + 1);
 }
 
 /** 向栈内找**最近**的匹配层（与 `scanControlFlow` 同一条查找方向：自顶向下） */
@@ -194,5 +305,33 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
   });
 
   flushOpen(stack, lastLine + 1);
-  return issues;
+  // 预处理条件块是**另一张栈**（见 checkPreprocStructure 头注）：两趟各自有序，按行归并。
+  return mergeByLine(issues, checkPreprocStructure(text)).slice(0, MAX_STRUCTURE_ISSUES);
+}
+
+/** 两趟发现按行号归并（同源稳定：控制流在前、预处理器在后），超出上限一并截断 */
+function mergeByLine(a: ErbStructureIssue[], b: ErbStructureIssue[]): ErbStructureIssue[] {
+  if (b.length === 0) return a;
+  if (a.length === 0) return b;
+  const out: ErbStructureIssue[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i]!.line <= b[j]!.line) out.push(a[i++]!);
+    else out.push(b[j++]!);
+  }
+  while (i < a.length) out.push(a[i++]!);
+  while (j < b.length) out.push(b[j++]!);
+  return out;
+}
+
+/**
+ * 编辑器 `checkStructure` 服务的**全量入口**：配对三类 + 预处理块 + 声明面两类。
+ *
+ * 为什么在这里合成而不是让宿主分别调：宿主只认一个"这一份文本有什么问题"的答案，
+ * 三条判据各自有序、合并后仍要按行升序（波浪线列表与 💡 菜单都按行读）。
+ * 上限 `MAX_STRUCTURE_ISSUES` 只在合并后截一次，避免"各趟都截 50 条"变成 150 条。
+ */
+export function checkStructure(text: string): ErbStructureIssue[] {
+  return mergeByLine(checkControlFlowStructure(text), checkDeclarationIssues(text)).slice(0, MAX_STRUCTURE_ISSUES);
 }

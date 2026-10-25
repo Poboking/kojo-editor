@@ -146,7 +146,8 @@ export function extractFileBucket(
     const cond = extractFunctionConditions(
       { normalizedName: fn.normalizedName, filePath: payload.path, startLine: fn.startLine },
       slice,
-      { lines },
+      // endLine 供文本内联三元（`\@…?…#…\@`）划界：函数体区间外的一律不算本函数
+      { lines, endLine: fn.endLine },
     );
     if (cond) {
       conds.push(cond);

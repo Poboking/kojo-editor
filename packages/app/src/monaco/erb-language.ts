@@ -1,12 +1,11 @@
 import type * as Monaco from './entry';
-import { ERB_DIRECTIVES } from './erb-directives';
+import { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { erbEnterRulePatterns, ERB_LINE_COMMENT } from './erb-enter';
 import { toMonacoEnterConfig } from './enter-rules';
 import { erbMonacoExtensions } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
-
 /**
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。
  *
@@ -27,12 +26,16 @@ import { CJK_WORD_PATTERN } from './word-separators';
  */
 
 /**
- * 指令词表单一真源在叶子模块 `erb-directives.ts`（零 import——kojo 侧要同一份清单，
+ * 指令词表单一真源在叶子模块 `erb-directives.ts`（零 app 内依赖——kojo 侧要同一份清单，
  * 走本文件会踩 `erb-language → theme → kojo-language` 模块环的 TDZ）。
  * 此处**原样 re-export**：既有 import 点（`erb-completion` / `editor-global-providers` /
  * 测试）逐字零改动，引用的是同一数组本体。
+ *
+ * 2026-10-25 P0-2 起该模块导出两份：`ERB_STATEMENT_DIRECTIVES`（手写常用语句）与
+ * `ERB_DIRECTIVES`（= 手写 ∪ 结构真源派生的控制流词）；两者都从这里转出，消费方不必
+ * 直接摸叶子模块。
  */
-export { ERB_DIRECTIVES };
+export { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES };
 
 export const ERB_LANGUAGE_ID = 'kojo-erb';
 
@@ -125,6 +128,11 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
     highlightWords,
     tokenizer: {
       root: [
+        // 行首**代码前缀** `;!;` / `;#;`（Emuera 有效代码，不是注释）——必须排在
+        // 行首注释规则**之前**，否则整行会被下面的 `^\s*;.*$` 吞成注释。
+        // 只吃前缀本身（3 个字符），其后的正文继续交给本状态的其余规则按代码着色；
+        // 判据与语义层同源（`plugin-api` 的 `ERB_CODE_PREFIXES`），此处只做字形匹配。
+        [/^\s*(?:;!;|;#;)/, 'keyword.preprocessor.comment-code'],
         // 行首注释（Emuera 语义：行首 ; 整行注释）
         [/^\s*;.*$/, 'comment'],
         // 行内尾注释：引号外的 `;` 起注释到行末。`str` 态是另一状态、串里进不了 root，
@@ -159,6 +167,12 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         [/\b(?:CFLAG|CDFLAG|CSTR|TCVAR|TSTR|TFLAG|TALENT|MARK|EXP|BASE|MAXBASE|ABL|TALENT|RELATION|RESULTS|LOCALS|LOCAL|ARGS|ARG|FLAG|DAY|TIME|MONEY|NAME|CALLNAME|MASTER|TARGET|ASSI|NO|RAND|SELECTCOM|TFLAG|PALAM|JUEL|GOTJUEL|UP|DOWN|LOSEBASE|CUP|CDOWN|DOWNBASE|SOURCE|NOWEX|EQUIP|TEQUIP|EX|PALAMLV|STAIN|STAIN_1|STAIN_2)\b(?::[^\s,()\[\]{}'"+\-*/%<>=!&|;]+)*/, 'variable'],
         // 数值常量
         [/\b\d+\b/, 'number'],
+        // `'=` 字符串表达式赋值（Emuera ver1813+）：`STR '= TSTR:0 + "ABC"`。
+        // `'` 在 ERB 里**只**作为这个运算符的首字符出现（没有单引号字符串），所以单独一条
+        // 规则是精确的；排在通用运算符规则之前（后者不含 `'`，但把 `'=` 先收掉可以避免
+        // `'` 落空 token）。语义层早就是赋值（`undefined-name.ts` 的 `ASSIGN_LINE_RE`
+        // 收了 `'`），此前只有着色不认——同一行两侧口径分叉。
+        [/'=/, 'operator'],
         // 运算符
         [/[+\-*/%<>!=&|^~?:.,]/, 'operator'],
         // 指令 / 函数调用标识符

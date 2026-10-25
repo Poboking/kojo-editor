@@ -33,7 +33,7 @@ import {
   type ScanRefsPayload,
 } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
-import { checkControlFlowStructure } from './structure';
+import { checkStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
@@ -1133,7 +1133,8 @@ export function createErbParserPlugin(): Plugin {
 
         // 结构体检（2026-10-13 UI 反馈 7）：与骨架扫描共用 scanner 的配对表与行过滤规则，
         // 纯文本入、纯数据出——编辑器去抖后经 ui.editor.decorator 调它，不读盘也不碰索引。
-        checkStructure: (text: string) => checkControlFlowStructure(text),
+        // 2026-10-25 起还并上声明面两类（`#DIM` 硬规则 / `#FUNCTION` 收尾形态）。
+        checkStructure: (text: string) => checkStructure(text),
 
         // 走计算池的并行通道（无通道/失败自动内联）；消费方不需要知道 kind 与 worker
         scanControlFlowOffloaded: (text: string) =>

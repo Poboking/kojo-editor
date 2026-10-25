@@ -9,6 +9,9 @@
 ;   · branch_block   = 分支行（ELSE / ELSEIF / CASE / CASEELSE / CATCH）→ 下一分支或收束前一行
 ;   · <pair>_block   = 开块行 → 收束行；配对类别由 `src/structure.json` 的投影决定
 ;   · skip_block     = `[SKIPSTART]` → `[SKIPEND]`（区间内原文不解析）
+;   · 预处理条件块   = `[IF xxx]` / `[IF_DEBUG]` / `[IF_NDEBUG]` → `[ENDIF]`
+;                      **不在本查询里**：文法不建块（被裁支可以不配平，建块会让真语料整篇 MISSING），
+;                      配对由 `src/index.ts` 的 `collectPreprocFolds()` 在 CST 上补出。
 ;
 ; 本清单与 projection 的一致性由 `tests/projection-single-source.test.ts` (e) 钉住：新增配对类别而没进这里 ⇒ 红。
 ; 查询本身能被编译、`@fold` 能捕到节点，由 `tests/parse-structure.test.ts` 的折叠用例钉住。

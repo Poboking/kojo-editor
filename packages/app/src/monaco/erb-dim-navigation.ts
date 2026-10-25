@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
+import { erbCodeBodyOf } from '@kojo/plugin-api';
 import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
 import { livePanes, sourceModelOf, sugarOwningPaneOf, sugarSourceOf, type PaneCtx } from '../ui/editor-pane-registry';
 import { isDimNameChar, normalizePathKey, spanAround } from './kojo-hover';
@@ -340,7 +341,8 @@ function* codeLinesOf(text: string): Generator<{ line: number; view: string }> {
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
-    const trimmed = raw.trim();
+    // 代码前缀（`;!;` / `;#;`）之后是真代码（判据单源 `plugin-api`），不算注释行
+    const trimmed = erbCodeBodyOf(raw.trim());
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;

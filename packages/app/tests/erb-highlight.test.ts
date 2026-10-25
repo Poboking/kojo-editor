@@ -145,18 +145,29 @@ const REPORTED_GAPS: readonly string[] = [
 ];
 
 describe('ERB 高亮补集（控制流 + 引擎内建单行语句）', () => {
-  it('报告点名的语句全部有 keyword 来源（指令表或补集，22 词逐个钉）', () => {
+  it('报告点名的语句全部有 keyword 来源，且两路各归其位（22 词逐个钉）', () => {
     const highlighted = new Set(ERB_HIGHLIGHT_WORDS);
     const extra = new Set(ERB_HIGHLIGHT_EXTRA_WORDS);
+    const directives = new Set(ERB_DIRECTIVES);
+    const control = new Set(ERB_CONTROL_STATEMENTS);
     for (const word of REPORTED_GAPS) {
       expect(highlighted.has(word), `报告词 ${word} 没有任何 keyword 来源`).toBe(true);
+      // 控制流词由结构真源派生进指令表（2026-10-25 P0-2 起）；引擎内建单行语句仍在补集
+      if (control.has(word)) expect(directives.has(word), `控制流词 ${word} 未进派生指令表`).toBe(true);
+      else expect(extra.has(word), `引擎语句 ${word} 不在补集`).toBe(true);
     }
-    // TRYCALLFORM 原本就在口上高频子集里，其余 21 词是本次新增的高亮补集
-    expect(REPORTED_GAPS.filter((w) => extra.has(w)).length).toBeGreaterThanOrEqual(REPORTED_GAPS.length - 1);
+  });
+
+  it('补集 = 引擎内建单行语句 − 指令表（控制流词已由结构真源派生，不再占补集）', () => {
+    const directives = new Set(ERB_DIRECTIVES.map((w) => w.toUpperCase()));
+    const expected = [...new Set(ERB_ENGINE_EXTRA_STATEMENTS.map((w) => w.toUpperCase()))]
+      .filter((w) => !directives.has(w))
+      .sort();
+    expect([...ERB_HIGHLIGHT_EXTRA_WORDS].map((w) => w.toUpperCase()).sort()).toEqual(expected);
   });
 
   it('补集每词三形态 × 行首/行中全出 keyword（不点名，补集自扩自动覆盖）', async () => {
-    expect(ERB_HIGHLIGHT_EXTRA_WORDS.length).toBeGreaterThan(REPORTED_GAPS.length);
+    expect(ERB_HIGHLIGHT_EXTRA_WORDS.length).toBeGreaterThan(0);
     for (const word of ERB_HIGHLIGHT_EXTRA_WORDS) {
       for (const form of caseForms(word)) {
         for (const { where, line } of positions(form)) {
@@ -539,5 +550,38 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
     expect(line.emitted.find((e) => e.text === '转义')?.token.startsWith('string.'), '转义 应仍是串内 string').toBe(true);
     expect(line.emitted.find((e) => e.text === '的文字')?.token.startsWith('identifier.'), '的文字 应在串外').toBe(true);
     expect(line.stack).toEqual(['root']);
+  });
+});
+
+/* ============================== P2 边角：代码前缀与 `'=` 运算符 ============================== */
+
+describe('P2 边角着色（`;!;` / `;#;` 代码前缀、`\'=` 赋值运算符）', () => {
+  it('`;!;` / `;#;` 行不是注释：前缀单独成档、其后整行按代码着色', async () => {
+    for (const prefix of [';!;', ';#;']) {
+      const line = driveLine(await erbLexer(), `${prefix}PRINTL あ`);
+      const head = line.emitted[0];
+      expect(head?.text, `${prefix} 的首个发射点应是前缀本身`).toBe(prefix);
+      expect(head?.token, `${prefix} 应落预处理档（与 #DIM 同色），不是 comment`).toMatch(/^keyword\.preprocessor/);
+      expect(
+        line.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith('keyword.'),
+        `${prefix} 之后的语句应仍是关键字色`,
+      ).toBe(true);
+      expect(line.emitted.some((e) => e.token.startsWith('comment')), `${prefix} 行不许整行染成注释`).toBe(false);
+    }
+  });
+
+  it('普通 `;` 行仍是整行注释（前缀规则不得放宽）', async () => {
+    const line = driveLine(await erbLexer(), ';PRINTL あ');
+    expect(line.emitted.some((e) => e.token.startsWith('comment'))).toBe(true);
+    // 整行一枚注释 token：不许漏出任何 keyword（`PRINTL` 在注释里不是指令）
+    expect(line.emitted.some((e) => e.token.startsWith('keyword')), '注释行漏出关键字色').toBe(false);
+  });
+
+  it('`\'=` 是运算符：`STR \'= TSTR:0 + "ABC"` 里 `\'=` 单独一枚 operator，`+` 口径不变', async () => {
+    const line = driveLine(await erbLexer(), 'STR \'= TSTR:0 + "ABC"');
+    expect(line.emitted.find((e) => e.text === "'=")?.token.startsWith('operator'), "'= 应是 operator").toBe(true);
+    expect(line.emitted.find((e) => e.text === '+')?.token.startsWith('operator')).toBe(true);
+    // 回归：`STR` 之后的串照旧进 string，`'=` 没把引号吃掉
+    expect(line.emitted.find((e) => e.text === 'ABC')?.token.startsWith('string.')).toBe(true);
   });
 });

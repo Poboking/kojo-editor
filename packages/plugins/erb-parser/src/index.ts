@@ -16,7 +16,15 @@ export {
   scanControlFlow,
 } from './scanner';
 // 结构体检（2026-10-13 反馈 7；纯函数，配对表仍单源于 scanner.ts）
-export { MAX_STRUCTURE_ISSUES, checkControlFlowStructure } from './structure';
+export { MAX_STRUCTURE_ISSUES, checkControlFlowStructure, checkPreprocStructure, checkStructure, preprocRoleOf } from './structure';
+export { checkDeclarationIssues, parseDimLine, dimLineViolations, type DimLine } from './declarations';
+export {
+  ERB_CODE_PREFIXES,
+  ERB_CODE_PREFIX_LENGTH,
+  erbCodeBodyOf,
+  erbCodePrefixLength,
+  isErbCommentLine,
+} from './scanner';
 export {
   applyStructureFix,
   buildStructureFixes,

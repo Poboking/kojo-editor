@@ -432,6 +432,13 @@ export type {
 export type { ErbReference, ErbReferenceIndex, ErbReferenceKind } from './erb';
 // $ 标签定义（2026-10-16 additive，语言服务批独占追加）
 export type { ErbLabel } from './erb';
+export {
+  ERB_CODE_PREFIXES,
+  ERB_CODE_PREFIX_LENGTH,
+  erbCodeBodyOf,
+  erbCodePrefixLength,
+  isErbCommentLine,
+} from './erb-code-prefix';
 // 索引状态事实（2026-10-19 additive，IDX-STATE 批独占追加）
 export type {
   ErbIndexCoverage,

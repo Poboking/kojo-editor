@@ -45,7 +45,9 @@ export interface ErbStructureFix {
 export function structureDiagnostic(issue: ErbStructureIssue): LineDecoration {
   return {
     line: issue.line,
-    severity: 'error',
+    // 声明面两类要分档：`#DIM` 硬规则 = error（文件加载失败）、`#FUNCTION` 收尾 = warning。
+    // 缺省（配对三类）仍是 error——它们都是"这一块读不通"。
+    severity: issue.severity ?? 'error',
     message: issue.message,
     code: structureIssueCode(issue),
   };

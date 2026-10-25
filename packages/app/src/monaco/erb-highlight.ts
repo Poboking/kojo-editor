@@ -241,6 +241,26 @@ export interface ErbStructure {
 const SKIP_START = '[SKIPSTART]';
 const SKIP_END = '[SKIPEND]';
 
+/**
+ * 行首**代码前缀** `;!;` / `;#;`（Emuera 有效代码，不是注释；2026-10-25 P2-1）。
+ *
+ * 为什么这里再写一遍字形判据、而不是 import `plugin-api` 的 `erbCodePrefixLength`：
+ * 本文件被 `erb-highlight-selection.test.ts` 的**源码卫生守卫**钉住"零插件包 import"
+ * （这两个 provider 刻意与插件层解耦），所以本层保留一份字形判据——与上面
+ * `SKIP_START` / `SKIP_END` 的处理是同一条纪律。**两处同值由测试对拍**：
+ * `packages/plugins/erb-parser/tests/code-prefix.test.ts` 拿本文件源码与 `plugin-api`
+ * 的前缀表逐项比对，改一处不改另一处当场红。
+ */
+const CODE_PREFIXES: readonly string[] = [';!;', ';#;'];
+
+/** 行首代码前缀宽度（0 = 没有前缀）；与 `plugin-api` 的 `erbCodePrefixLength` 同值 */
+function codePrefixLength(trimmed: string): number {
+  for (const prefix of CODE_PREFIXES) {
+    if (trimmed.startsWith(prefix)) return prefix.length;
+  }
+  return 0;
+}
+
 /** 水平空白集（空格 / TAB / 全角空格——与 `scanUndefinedCallTargets` 同一集） */
 const BLANK_RE = /[ \t\u3000]/;
 
@@ -346,8 +366,14 @@ export function erbStructureOf(source: string): ErbStructure {
 
   for (let index = 0; index < rawLines.length; index++) {
     const raw = rawLines[index] ?? '';
-    const trimmed = raw.trim();
-    const indent = raw.length - raw.trimStart().length;
+    const outer = raw.trim();
+    /**
+     * 代码前缀（`;!;` / `;#;`）之后是真代码，不是注释（判据单源 `plugin-api` 的
+     * 本文件的 `codePrefixLength`）。这里剥掉前缀再分类，`indent` 跟着把前缀宽度算进列坐标。
+     */
+    const prefixLen = codePrefixLength(outer);
+    const trimmed = prefixLen === 0 ? outer : outer.slice(prefixLen);
+    const indent = raw.length - raw.trimStart().length + prefixLen;
     const line = index + 1;
 
     if (inDeadZone) {

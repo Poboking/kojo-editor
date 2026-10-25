@@ -11,6 +11,7 @@
  */
 
 import type {
+  FunctionPredicate,
   FunctionPredicates,
   FunctionReplay,
   Logger,
@@ -79,6 +80,9 @@ export interface StateReplayEngineDeps {
   viewCacheMax?: number;
 }
 
+/** 控制流语句谓词（回放口径的四类；`INLINE` 不在其中） */
+type ControlPredicate = FunctionPredicate & { kind: 'IF' | 'ELSEIF' | 'SIF' | 'CASE' };
+
 /** 谓词明细 → 回放结果（纯函数；测试可直用）。
  *  `overlay`：本地量数据流 + 调用上下文叠加（v0.2 第六批；可省略 = 纯视图求值）。
  *  `resolveCall`：用户函数内联通道（v0.2 第七批；缺省 = 调用一律 unknown('call')）。 */
@@ -88,30 +92,35 @@ export function replayPredicates(
   overlay?: OverlayReader,
   resolveCall?: CallResolver,
 ): FunctionReplay {
-  const predicates: PredicateReplay[] = detail.predicates.map((p) => {
-    const at: OverlayPosition = { line: p.line, context: p.context ?? [] };
-    const base: ValueReader = (ref) => (overlay ? (overlay(ref, at) ?? read(ref)) : read(ref));
-    const ctx: EvalContext = {
-      // 谓词来源上下文伪变量：__LINE__ = 1 基来源行（引擎 Debug__LINE__Token 语义）。
-      // 已知近似：内联函数体内的 __LINE__ 取调用点行（本解释器不逐帧建模来源行）。
-      read: (ref) =>
-        ref.name === '__LINE__'
-          ? ref.indices.length > 0
-            ? { kind: 'unknown', unknown: { code: 'too-many-args', message: '__LINE__ 为标量，不接受索引' } }
-            : { kind: 'value', value: p.line }
-          : base(ref),
-      ...(resolveCall ? { resolveCall } : {}),
-    };
-    const outcome = judgeCondition(p.expr, ctx);
-    return {
-      kind: p.kind,
-      text: p.text,
-      line: p.line,
-      expr: p.expr,
-      ...(p.conjunction ? { conjunction: p.conjunction } : {}),
-      outcome,
-    };
-  });
+  // 只回放**控制流语句**的谓词（IF / ELSEIF / SIF / CASE）：本服务的产物是"分支链走向"，
+  // 分支链由 `detail.statements` 建、谓词按行匹配成员。文本内联三元（`INLINE`，P0-1）
+  // 没有开/闭配对、不构成链，它属于条件矩阵的视野；混进这里只会把命中率的分母算歪。
+  const predicates: PredicateReplay[] = detail.predicates
+    .filter((p): p is ControlPredicate => p.kind !== 'INLINE')
+    .map((p) => {
+      const at: OverlayPosition = { line: p.line, context: p.context ?? [] };
+      const base: ValueReader = (ref) => (overlay ? (overlay(ref, at) ?? read(ref)) : read(ref));
+      const ctx: EvalContext = {
+        // 谓词来源上下文伪变量：__LINE__ = 1 基来源行（引擎 Debug__LINE__Token 语义）。
+        // 已知近似：内联函数体内的 __LINE__ 取调用点行（本解释器不逐帧建模来源行）。
+        read: (ref) =>
+          ref.name === '__LINE__'
+            ? ref.indices.length > 0
+              ? { kind: 'unknown', unknown: { code: 'too-many-args', message: '__LINE__ 为标量，不接受索引' } }
+              : { kind: 'value', value: p.line }
+            : base(ref),
+        ...(resolveCall ? { resolveCall } : {}),
+      };
+      const outcome = judgeCondition(p.expr, ctx);
+      return {
+        kind: p.kind,
+        text: p.text,
+        line: p.line,
+        expr: p.expr,
+        ...(p.conjunction ? { conjunction: p.conjunction } : {}),
+        outcome,
+      };
+    });
 
   let hit = 0;
   let miss = 0;

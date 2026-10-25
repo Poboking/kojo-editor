@@ -2,16 +2,16 @@ import { ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
 import { ERB_DIRECTIVES } from './erb-directives';
 
 /**
- * ERB 高亮**补集**（2026-10-18 SUGGEST-2C）。
+ * ERB 高亮**补集**（2026-10-18 SUGGEST-2C；2026-10-25 P0-2 收窄）。
  *
  * 为什么需要补集：`ERB_DIRECTIVES` 是「口上高频子集」，口径服务于**补全候选**
  * （低频语句不该塞进补全列表冲淡热门项）。高亮是另一件事——作者在文件里写下的
- * 引擎语句无论频次都该有颜色，否则 `ENDCATCH` / `NOSKIP` / `SETVAR` 这类词在屏上
- * 就是白字。两个口径共用**同一份真源**，只是消费面不同：
+ * 引擎语句无论频次都该有颜色，否则 `SETVAR` / `REDRAW` 这类词在屏上就是白字。
+ * 两个口径共用**同一份真源**，只是消费面不同：
  *
- * - 控制流语句：`@kojo/plugin-erb-parser` 的 `ERB_CONTROL_STATEMENTS`
- *   （由 scanner 的开/分支/闭合配对表派生，配对表以引擎 `FunctionIdentifier.cs`
- *   funcMatch 为准——补全不消费它）；
+ * - 控制流语句：**P0-2 起已并入 `ERB_DIRECTIVES` 的派生面**（`erb-directives.ts`
+ *   从 `ERB_CONTROL_STATEMENTS` 追加），所以这里不再需要为它们兜底——结构认的词
+ *   现在补全也认、着色也认，一个来源；
  * - 结构扫描器**不建模**的引擎内建单行语句：`ERB_ENGINE_EXTRA_STATEMENTS`
  *   （本模块是这批词的单一真源；出处 = 引擎 `FunctionIdentifier.cs` 的语句组，
  *   eraTW 4.980 语料词频：HTML_PRINT 519 / REDRAW 307 / FORCEWAIT 162）。

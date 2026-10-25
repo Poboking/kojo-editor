@@ -167,20 +167,29 @@ export interface ControlFlowStatement {
  * 这一张是**配对失败的证据**。两者共用 `erb-parser/scanner.ts` 里的同一份配对表——
  * 各抄一份表就必然漂移，漂移的表现是"波浪线指的行骨架里根本没有"。
  *
- * 闭集三类，且**只报可证明的**（口径：错标比不标危险）：
+ * 闭集五类，且**只报可证明的**（口径：错标比不标危险）：
  * - `orphan-close`：闭合语句找不到对应开块（多写了 `ENDIF`）；
  * - `unclosed-open`：走到函数边界（`@` 行）或文件结尾仍有开块没闭合；
- * - `orphan-branch`：`ELSE` / `CASE` / `CATCH` 这类分支语句前面没有它要归属的开块。
+ * - `orphan-branch`：`ELSE` / `CASE` / `CATCH` 这类分支语句前面没有它要归属的开块；
+ * - `dim-invalid`：`#DIM` 族声明违反引擎硬规则（维数 / CONST / REF / 初值个数）——
+ *   这类错误的后果是**整个文件加载失败**，所以提前到打字时（2026-10-25 P1-4）；
+ * - `return-form`：`#FUNCTION` 式中函数用裸 `RETURN` 收尾（返回值静默丢失；P1-3）。
  * 未知变量名、未知函数名、表达式语法**不在这一层**（要全项目语义或表达式解析器）。
  */
 export interface ErbStructureIssue {
-  readonly kind: 'orphan-close' | 'unclosed-open' | 'orphan-branch';
+  readonly kind: 'orphan-close' | 'unclosed-open' | 'orphan-branch' | 'dim-invalid' | 'return-form';
   /** 1 基行号（与 `ControlFlowStatement.line` 同一坐标系） */
   readonly line: number;
   /** 出问题的语句原词（`ENDIF` / `IF` / `ELSE`…）；未闭合类给的是那个**开块**的原词 */
   readonly statement: string;
   /** 给作者看的中文一句话（说清缺谁、在哪儿，不复述引擎术语） */
   readonly message: string;
+  /**
+   * 波浪线严重级（additive，2026-10-25）：缺省 `'error'`（配对错误都是硬错）。
+   * 声明面两类要分档——`#DIM` 违反硬规则 = `'error'`（文件加载失败），
+   * `#FUNCTION` 收尾形态 = `'warning'`（能跑，但返回值静默丢失）。
+   */
+  readonly severity?: 'error' | 'warning';
   /**
    * 缺失的闭合语句原词（`ENDIF` / `ENDSELECT` …）。**只有 `unclosed-open` 才给**，
    * 且配对表说不出闭合词时也不给（`''` 的情形一律省略）。additive：缺省 = 现状。

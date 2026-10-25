@@ -14,6 +14,13 @@
  *   声明词 / 修饰词 / 名字 / 尾部各自成节点）、`label_line`（`$` 起）、
  *   `bracket_line`（`[` 起的其余整行，含 `[IF_DEBUG]` 一类条件跳过标记）、
  *   `statement_line`（兜底语句/文本行）。
+ *   **预处理条件块 `[IF xxx]`…`[ENDIF]` 故意不建块**（2026-10-25 P0-3 取证）：这批块
+ *   在引擎里是"按宏/调试位裁剪后才编译"的，被裁掉的那一支可以**不配平**
+ *   （`[IF_DEBUG]` 里开 `IF`、`[ENDIF]` 外才 `ENDIF`）；文法一旦建块，这类文件整篇落
+ *   MISSING，而真语料 3,980 份的 `0 ERROR / 0 MISSING` 是硬门槛。配对与折叠改在
+ *   `src/index.ts` 的 `collectPreprocFolds()`（严格等值配对，未配对不产区间），
+ *   波浪线在 `@kojo/plugin-erb-parser` 的 `checkControlFlowStructure`（独立栈，不与
+ *   ERB 控制流互相污染）。
  * - **函数**：`function_block` = `function_head` + 直到下一条 `@` 行（或 EOF）的行。
  *   头支持裸形 `@NAME`、括号形 `@NAME(A, B:1 = 3)`、逗号形 `@NAME, A, B`；
  *   形参已切分为 `parameter` 节点（修饰词 / 名字 / 维度 / 默认值），不解释默认值语义。

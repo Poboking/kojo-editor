@@ -197,7 +197,8 @@ export function createConditionExtractorPlugin(): Plugin {
 }
 
 export { ConditionEngine, type ConditionEngineDeps } from './engine';
-export { extractFunctionConditions, extractFunctionPredicates, collectPredicates, collectReturns, collectAssignments, applySchemaLookup } from './extract';
+export { extractFunctionConditions, extractFunctionPredicates, collectPredicates, collectInlinePredicates, collectReturns, collectAssignments, applySchemaLookup } from './extract';
+export { scanTextTernaries, scanBraceTernaries, type InlineCondition } from './inline';
 export { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
 export { diagnoseExpression } from './expr';
 export type { ExprDiagnostic } from './expr';

@@ -28,8 +28,9 @@ import type {
   StateDependency,
   VariableInfo,
 } from '@kojo/plugin-api';
-import { dependencyKey } from '@kojo/plugin-api';
+import { dependencyKey, erbCodeBodyOf, erbCodePrefixLength } from '@kojo/plugin-api';
 import { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
+import { scanBraceTernaries, scanTextTernaries } from './inline';
 
 /** ERB 语言级局部量（Emuera 内置；不作为状态依赖收录） */
 const LANGUAGE_LOCAL_NAMES = new Set(['LOCAL', 'LOCALS', 'LOCALSS', 'ARG', 'ARGS', 'RESULT', 'RESULTS', 'COUNT']);
@@ -307,7 +308,8 @@ export function collectAssignments(
 
   for (let i = startLine; i <= endLine && i <= lines.length; i++) {
     const raw = lines[i - 1] ?? '';
-    const trimmed = raw.trim();
+    // 代码前缀（`;!;` / `;#;`）之后是真代码：`;!;LOCAL = 1` 是一条真赋值（判据单源 code-prefix.ts）
+    const trimmed = erbCodeBodyOf(raw.trim());
 
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
@@ -346,6 +348,11 @@ export interface ExtractFunctionOptions {
   lookup?: SchemaLookup;
   /** 原始行（additive）：提供时把 `{`…`}` 多行条件拼接后再解析；缺省行为不变 */
   lines?: readonly string[];
+  /**
+   * 函数体末行（1 基，含；additive）。与 `lines` 同时提供才扫文本内联三元——
+   * 没有区间就不猜（宁可少收，不把邻函数的 `\@` 算到本函数头上）。
+   */
+  endLine?: number;
 }
 
 export interface FunctionIdentity {
@@ -367,7 +374,7 @@ export function collectReturns(
   let inSkipBlock = false;
   for (let i = startLine; i <= endLine && i <= lines.length; i++) {
     const raw = lines[i - 1] ?? '';
-    const trimmed = raw.trim();
+    const trimmed = erbCodeBodyOf(raw.trim());
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;
@@ -506,6 +513,74 @@ export function collectPredicates(
   return preds;
 }
 
+/**
+ * 从函数体原文收集**文本内联三元**的条件（P0-1；Emuera 三元两形）。
+ *
+ * 与 `collectPredicates`（控制流骨架）是两条独立来源：骨架只有"行首是哪个控制词"
+ * 的视野，`\@条件?真#假\@` 与 `{条件 ? 真 # 假}` 整段落在文本里、进不了骨架。
+ * 但它们的条件半边是真谓词——"这句话在这个状态下才出现"。
+ *
+ * 保守口径（与 `collectAssignments` / `collectReturns` 同族）：
+ * - 跳过空行 / `;` 注释 / `#` 指令 / `@` 头 / `$` 标签行；
+ * - 跳过 `[SKIPSTART]`…`[SKIPEND]` 停用区（引擎不编译，里面的 `\@` 是死文本）；
+ * - 残句（缺 `?` 或缺收尾 `\@`）一律不产谓词；条件解析失败 → `opaque`（计入未解析，
+ *   绝不猜）。
+ *
+ * @param startLine 函数体首行（1 基，含）；调用方传"头行 + 1"
+ * @param endLine   函数体末行（1 基，含）
+ * @param contextOf 提供时填分支上下文（明细视图）；`depth` 取上下文段数
+ */
+export function collectInlinePredicates(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+  contextOf?: (line: number) => string[],
+): FunctionPredicate[] {
+  const out: FunctionPredicate[] = [];
+  let inSkipBlock = false;
+
+  for (let i = Math.max(1, startLine); i <= endLine && i <= lines.length; i++) {
+    const raw = lines[i - 1] ?? '';
+    /**
+     * 代码前缀（`;!;` / `;#;`）之后是真代码；本处要算**列坐标**，所以不能只取正文——
+     * 记下前缀宽度，扫描时按 `scanFrom` 平移回原文坐标。
+     */
+    const trimmed = raw.trim();
+    const scanFrom = raw.length - raw.trimStart().length + erbCodePrefixLength(trimmed);
+    const codeLine = scanFrom === 0 ? raw : raw.slice(scanFrom);
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (trimmed.length === 0) continue;
+    if (trimmed.startsWith(';') || trimmed.startsWith('#') || trimmed.startsWith('@') || trimmed.startsWith('$')) continue;
+    // `\@` 是 FORM 串的转义，只可能出现在正文行；先按最廉价的存在性筛掉绝大多数行
+    if (!codeLine.includes('\\@') && !codeLine.includes('{')) continue;
+
+    const found = [
+      ...scanTextTernaries(codeLine),
+      ...scanBraceTernaries(codeLine, parseExpression),
+    ].sort((a, b) => a.column - b.column);
+    if (found.length === 0) continue;
+    const context = contextOf ? contextOf(i) : undefined;
+    for (const c of found) {
+      out.push({
+        kind: 'INLINE',
+        text: c.text,
+        expr: parseExpression(c.text),
+        line: i,
+        depth: context ? context.length : 0,
+        ...(context ? { context } : {}),
+      });
+    }
+  }
+  return out;
+}
+
 /** 明细抽取的数据源（聚合路径不提供 → 不收集赋值 / 不填上下文） */
 export interface PredicateSourceLines {
   /** 函数体结束行（1 基，含） */
@@ -515,8 +590,25 @@ export interface PredicateSourceLines {
 }
 
 /**
+ * 两路谓词按行号归并（同源稳定：骨架在前、内联在后）。
+ * 骨架已按行升序，内联同样升序 ⇒ 一次归并即可，不重排既有顺序（回放/矩阵按序展示）。
+ */
+function mergeByLine(base: FunctionPredicate[], extra: FunctionPredicate[]): FunctionPredicate[] {
+  if (extra.length === 0) return base;
+  const out: FunctionPredicate[] = [];
+  let j = 0;
+  for (const p of base) {
+    while (j < extra.length && extra[j]!.line <= p.line) out.push(extra[j++]!);
+    out.push(p);
+  }
+  while (j < extra.length) out.push(extra[j++]!);
+  return out;
+}
+
+/**
  * 抽取单函数谓词明细（含控制流骨架；**不聚合**——供快照回放逐条求值）。
- * 提供 `source` 时同时收集本地量赋值并填充谓词分支上下文（v0.2 第六批）。
+ * 提供 `source` 时同时收集本地量赋值并填充谓词分支上下文（v0.2 第六批），
+ * 以及文本内联三元的条件（P0-1）。
  */
 export function extractFunctionPredicates(
   fn: FunctionIdentity,
@@ -524,16 +616,20 @@ export function extractFunctionPredicates(
   source?: PredicateSourceLines,
 ): FunctionPredicates {
   const contextOf = source ? buildContextLookup(stmts) : null;
+  const base = collectPredicates(stmts, {
+    ...(contextOf ? { contextOf } : {}),
+    ...(source ? { lines: source.lines } : {}),
+  });
+  const inline = source
+    ? collectInlinePredicates(source.lines, fn.startLine + 1, source.endLine, contextOf ?? undefined)
+    : [];
   return {
     normalizedName: fn.normalizedName,
     filePath: fn.filePath,
     startLine: fn.startLine,
     endLine: source?.endLine ?? fn.startLine,
     statements: [...stmts],
-    predicates: collectPredicates(stmts, {
-      ...(contextOf ? { contextOf } : {}),
-      ...(source ? { lines: source.lines } : {}),
-    }),
+    predicates: mergeByLine(base, inline),
     assignments: source
       ? collectAssignments(source.lines, fn.startLine + 1, source.endLine, contextOf!)
       : [],
@@ -567,7 +663,13 @@ export function extractFunctionConditions(
   stmts: readonly ControlFlowStatement[],
   opts: ExtractFunctionOptions = {},
 ): FunctionConditions | null {
-  const preds = collectPredicates(stmts, opts.lines ? { lines: opts.lines } : {});
+  const base = collectPredicates(stmts, opts.lines ? { lines: opts.lines } : {});
+  // 文本内联三元（P0-1）：只在给了函数体区间时才扫（见 ExtractFunctionOptions.endLine）
+  const inline =
+    opts.lines && opts.endLine !== undefined
+      ? collectInlinePredicates(opts.lines, fn.startLine + 1, opts.endLine)
+      : [];
+  const preds = mergeByLine(base, inline);
 
   if (preds.length === 0) return null;
 

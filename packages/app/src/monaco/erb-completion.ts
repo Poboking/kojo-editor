@@ -235,6 +235,14 @@ const ERB_PREPROCESSOR_DIRECTIVES = [
   '#DIM', '#DIM CONST', '#DIM SAVEDATA', '#DIM GLOBAL',
   '#DIMS', '#DIMSTR', '#DIMCHAR',
   '#FUNCTION', '#FUNCTIONS', '#DEFINE', '#INCLUDE', '#ONLY',
+  // 2026-10-25 P2：函数局部规模声明。`#LOCALSSIZE` 在基线语料 8,536 行（口上函数几乎必写），
+  // `#LOCALSIZE` 37 行——比表里任何一条都常见，此前却只能靠 `#\w+` 通配着色、补不出来。
+  // 形状：`#LOCALSIZE <名>, <元素数>`（名与规模都可省，故不给带实参的骨架）。
+  '#LOCALSIZE', '#LOCALSSIZE',
+  // 2026-10-25 P2：事件函数属性（唯一执行 / 优先 / 延后 / 单次）。
+  // 语料：#PRI 10 / #LATER 14 / #ONLY 0 / #SINGLE 0——量小但都是"写错了引擎静默换语义"的那类，
+  // 收进来让作者至少补得到正确拼写（`#ONLY` 本就在上表，故这里不重复）。
+  '#PRI', '#LATER', '#SINGLE',
 ];
 /** **必须行首**的区间标记行（`[SKIPSTART]` 起、`[SKIPEND]` 止）。 */
 const ERB_BRACKET_DIRECTIVES = ['[SKIPSTART]', '[SKIPEND]'];

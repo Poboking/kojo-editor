@@ -701,3 +701,31 @@ describe('装配收口 · erb-declared（`#DIM` 声明名，解析器事实通�
     expect(erbFactsPathOf({ uri: { fsPath: '', path: '/p/c' } } as unknown as Monaco.editor.ITextModel)).toBe('/p/c');
   });
 });
+
+/* ============================== P2-4 · 函数局部规模 / 事件属性补全 ============================== */
+
+describe('P2-4 · `#LOCALSIZE` / `#LOCALSSIZE` / 事件属性行首补全', () => {
+  it('`#LOCAL` ⇒ 只出两条局部规模声明（detail = 预处理指令）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const items = provide(registered[0]!.provider, '#LOCAL', 7);
+    const labels = items.map((i) => labelText(i.label));
+    expect(labels).toContain('#LOCALSIZE');
+    expect(labels).toContain('#LOCALSSIZE');
+    expect(items.every((i) => i.detail === '预处理指令')).toBe(true);
+  });
+
+  it('`#` 行首全量里含 `#PRI` / `#LATER` / `#SINGLE`（事件函数属性）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const labels = provide(registered[0]!.provider, '#', 2).map((i) => labelText(i.label));
+    for (const w of ['#PRI', '#LATER', '#SINGLE', '#ONLY']) expect(labels, `缺 ${w}`).toContain(w);
+  });
+
+  it('`#LOCALSIZE` 不给带实参的骨架（名与规模都可省，替作者猜反而添乱）', () => {
+    const { monaco, registered } = stubMonaco();
+    installErbCompletion(monaco, () => ({}));
+    const item = provide(registered[0]!.provider, '#LOCALSSIZE', 11).find((i) => labelText(i.label) === '#LOCALSSIZE');
+    expect(item?.insertText).toBe('#LOCALSSIZE');
+  });
+});

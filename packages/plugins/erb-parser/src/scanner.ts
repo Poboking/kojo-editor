@@ -1,6 +1,56 @@
 import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbLabel, ErbParam } from '@kojo/plugin-api';
 
 /**
+ * 行首「代码前缀」`;!;` / `;#;`（2026-10-25 ERB 语法缺口批 P2-1）。
+ *
+ * 语法事实：这两种前缀之后是**有效代码**，不是注释——`;!;` 是"Emuera 专用语句"
+ * （eramaker 跳过、Emuera 执行），`;#;` 是"仅调试模式执行"（Era Wiki `Emuera/exetc`）。
+ * 当注释吞掉的后果不止"少着一点色"：`;!;[SKIPSTART]` 与对称的 `[SKIPEND]` 会**失配**，
+ * 之后整篇文件的行可见性全错（索引 / 波浪线 / 条件矩阵一起歪）。
+ *
+ * ## 为什么判据写在这里、而不是 import 一个共享模块
+ *
+ * 本文件被 `packages/erb-syntax-tree/tools/gen-erb-structure.mjs` 用**裸 node** 动态
+ * import（要 `ERB_CONTROL_STATEMENTS` / `classifyControlFlow` 的运行时值）。裸 node 的
+ * ESM 解析有两条硬约束：① 相对导入必须带扩展名；② 指向 plugin-api 的**值**导入会真的去
+ * 加载 `plugin-api/src/index.ts`，而它内部用的是无扩展名相对导入（`from './events'`）⇒
+ * 直接失败。`import type` 会被类型擦除整条删掉，所以本文件此前一直只有类型导入。
+ * 本批先按"单源"写成从 plugin-api 值导入，`projection-single-source` 的字节闸立刻红；
+ * 改成相对导入 `./code-prefix` 也红（缺扩展名）⇒ 结论：**本文件不许有任何值导入**。
+ *
+ * ## 一致性
+ *
+ * 契约层的真源是 `@kojo/plugin-api` 的 `erb-code-prefix.ts`（`condition-extractor` 与宿主
+ * 都要用，而插件之间禁止互相 import）。本文件是它的字形镜像，`tests/code-prefix.test.ts`
+ * 的对拍一节把两处 `ERB_CODE_PREFIXES` 逐项比对——改一处不改另一处当场红。
+ */
+export const ERB_CODE_PREFIXES: readonly string[] = [';!;', ';#;'];
+
+/** 三种前缀的长度（`;!;` / `;#;` 同为 3） */
+export const ERB_CODE_PREFIX_LENGTH = 3;
+
+/** 行首代码前缀的**长度**（0 = 没有前缀）；口径与 `plugin-api` 版逐字相同 */
+export function erbCodePrefixLength(trimmed: string): number {
+  if (trimmed.length < ERB_CODE_PREFIX_LENGTH) return 0;
+  const head = trimmed.slice(0, ERB_CODE_PREFIX_LENGTH);
+  for (const prefix of ERB_CODE_PREFIXES) {
+    if (head === prefix) return ERB_CODE_PREFIX_LENGTH;
+  }
+  return 0;
+}
+
+/** 去掉行首代码前缀后的**代码正文**（无前缀 ⇒ 原样返回，零分配） */
+export function erbCodeBodyOf(trimmed: string): string {
+  const len = erbCodePrefixLength(trimmed);
+  return len === 0 ? trimmed : trimmed.slice(len);
+}
+
+/** 是否**真注释行**（`;` 起头，且不是 `;!;` / `;#;` 代码前缀） */
+export function isErbCommentLine(trimmed: string): boolean {
+  return trimmed.startsWith(';') && erbCodePrefixLength(trimmed) === 0;
+}
+
+/**
  * ERB 结构扫描器（宽容解析，不做完整语法检查）。
  *
  * 只承诺"结构感知"（架构文档 §5.2 / 设计方案 §2）：
@@ -286,7 +336,14 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
-    const trimmed = raw.trim();
+    /**
+     * 行首代码前缀（`;!;` / `;#;`）在**这里**一次剥掉，下游所有判据（`[SKIPSTART]` 等值、
+     * 整行 `;`、`#` / `$` / `@` 行、控制流词）因此自动看见"真代码"，不需要各自再写一遍
+     * 前缀判据。判据本体见 `code-prefix.ts`（七个消费面共用一份）。
+     */
+    const outer = raw.trim();
+    const prefixLen = erbCodePrefixLength(outer);
+    const trimmed = prefixLen === 0 ? outer : outer.slice(prefixLen);
 
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
@@ -367,13 +424,13 @@ export function parseErbText(text: string, path = '<memory>'): ErbFile {
           startLine: i + 1,
           endLine: lineCount, // 稍后收紧
           filePath: path,
-          // 名字起点列（1 基、UTF-16 码元）= 行首前导空白宽度 + 名字在 trimmed 内的偏移。
-          // 前导宽度用 `raw.length - raw.trimStart().length`（与 `references.ts` 的
+          // 名字起点列（1 基、UTF-16 码元）= 行首前导空白宽度 + 代码前缀宽度 + 名字在 trimmed
+          // 内的偏移。前导宽度用 `raw.length - raw.trimStart().length`（与 `references.ts` 的
           // `keywordEnd` 同一条算式）；`@` 与名字之间的空白已由 `def.nameOffset` 计过。
           // 本趟里 `raw` 恒在 ⇒ 列恒算得出；算不出（旧盘快照）由 snapshot 侧留空，**不补 1**。
           // 字段位次与 `snapshot.toFunction` 的还原**逐字对齐**（快照对拍比的是 JSON 串，
           // 同一份索引里"刚解析的"与"复用条还原的"两份函数对象键序不同就会红）。
-          nameColumn: raw.length - raw.trimStart().length + def.nameOffset + 1,
+          nameColumn: raw.length - raw.trimStart().length + prefixLen + def.nameOffset + 1,
           isExpressionFunction: pendingMarkerBeforeNext,
           ...(doc !== undefined ? { docComment: doc } : {}),
         });
@@ -621,7 +678,10 @@ export function forEachControlFlowLine(text: string, visit: (l: ControlFlowLine)
   const lines = normalizeEol(text).split('\n');
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i]!.trim();
+    // 代码前缀（`;!;` / `;#;`）先剥掉：`;!;[SKIPSTART]` 要真的开停用区，
+    // `;!;IF x` 要真的进控制流栈（判据单源 `code-prefix.ts`）
+    const outer = lines[i]!.trim();
+    const trimmed = erbCodeBodyOf(outer);
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
       continue;

@@ -112,8 +112,16 @@ export interface ConditionIndex {
   };
 }
 
-/** 谓词来源语句类别（CASE 展开后的谓词标记其来源语句） */
-export type PredicateSourceKind = 'IF' | 'ELSEIF' | 'SIF' | 'CASE';
+/**
+ * 谓词来源类别（CASE 展开后的谓词标记其来源语句）。
+ *
+ * - `IF` / `ELSEIF` / `SIF` / `CASE`：控制流语句条件（骨架扫描产物）；
+ * - `INLINE`：**文本内联三元**的条件半边——Emuera 的 `\@条件?真#假\@` 与
+ *   `{条件 ? 真 # 假}` 两形。它不是控制流块（没有开/闭配对、不构成分支链），
+ *   但对"这句话在什么状态下才这么写"是**真条件**：口上语料里"一句话分两支"
+ *   全靠它，条件矩阵缺了它等于漏掉整整一类分支。
+ */
+export type PredicateSourceKind = 'IF' | 'ELSEIF' | 'SIF' | 'CASE' | 'INLINE';
 
 /**
  * 单条谓词明细（`functionPredicates` 按需解析产物；不入全量索引——

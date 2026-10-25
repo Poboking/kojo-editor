@@ -407,4 +407,39 @@ describe('折叠查询 folds.scm', () => {
     expect(ranges.every((r) => r.endRow > r.startRow)).toBe(true);
     tree.delete();
   });
+
+  it('预处理条件块 `[IF*]`…`[ENDIF]` 走 CST 配对补出折叠（P0-3）', () => {
+    const text = [
+      '@F', // 0
+      '[IF_DEBUG]', // 1
+      'PRINTL A', // 2
+      '[ENDIF]', // 3
+      '[IF XXX]', // 4
+      '[ELSEIF YYY]', // 5
+      'PRINTL B', // 6
+      '[ELSE]', // 7
+      'PRINTL C', // 8
+      '[ENDIF]', // 9
+    ].join('\n');
+    const tree = parse(text);
+    const ranges = foldRanges(foldsQuery, tree);
+    expect(ranges).toContainEqual({ startRow: 1, endRow: 3 });
+    expect(ranges).toContainEqual({ startRow: 4, endRow: 9 });
+    tree.delete();
+  });
+
+  it('预处理块未配对 / 被裁支不配平：不产折叠、也不制造 ERROR（文法不建块）', () => {
+    const text = ['@F', '[IF_DEBUG]', 'IF X', 'PRINTL A', '[ENDIF]', 'ENDIF'].join('\n');
+    const tree = parse(text);
+    // 结构层：`[IF_DEBUG]` 仍是 bracket_line，不参与 ERB 控制流配对 ⇒ 零残缺
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    const ranges = foldRanges(foldsQuery, tree);
+    expect(ranges).toContainEqual({ startRow: 1, endRow: 4 });
+    // 未闭合的 `[IF]` 不产区间（不猜），但也不报错
+    const open = parse('@F\n[IF XXX]\nPRINTL A\n');
+    expect(faultsOf(open.rootNode)).toEqual([]);
+    expect(foldRanges(foldsQuery, open).some((r) => r.startRow === 1)).toBe(false);
+    tree.delete();
+    open.delete();
+  });
 });
