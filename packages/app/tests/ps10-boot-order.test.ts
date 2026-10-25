@@ -50,8 +50,24 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
     // 只有项目生命周期 hook 会注册项目级插件（别的入口不许另起一套时机）
     expect(sessionSrc.match(/await ensureProjectPlugins\(kernel\)/g)?.length).toBe(1);
     expect(appSrc.match(/await ensureProjectPlugins\(kernel\)/g)).toBeNull();
-    // App 只保留开机预取这一个 bootstrap 进口；项目级注册的进口在 hook 里
-    expect(appSrc).toContain("import { bootstrapKernel, prefetchProjectPlugins } from '../bootstrap';");
+    // App 那一趟 bootstrap 进口里必须有开机预取，且**绝不能**有项目级注册（那条进口在 hook 里）。
+    // ⚠ 判据形态改过（LAU-1a，2026-10-25）：原样是一条整串字面量
+    //   `import { bootstrapKernel, prefetchProjectPlugins } from '../bootstrap';`，
+    //   而 LAU-1a 把"2.0 事实按项目取"的端口也收在组合根 ⇒ App 的进口名表合法地变长、
+    //   并被 Prettier 折成多行。整串比对会把**设计内的加名字**判成违规，故改成对进口形状取证：
+    //   ① 只此一枚来自 '../bootstrap' 的进口（不许另起第二处）；② 内含这两个开机必需的名字；
+    //   ③ 内含 `ensureProjectPlugins`  ⇒ 红（那正是这条用例的本体）。
+    const appBootstrapImports = [...appSrc.matchAll(/import\s*\{([^}]*)\}\s*from\s*'\.\.\/bootstrap'/g)]
+      .map((m) => m[1]!)
+      .map((names) => names.split(',').map((n) => n.trim()).filter((n) => n !== ''));
+    expect(appBootstrapImports.length, 'App 只能有一枚来自 ../bootstrap 的进口').toBe(1);
+    const appBootstrapNames = appBootstrapImports[0] ?? [];
+    expect(appBootstrapNames).toContain('bootstrapKernel');
+    expect(appBootstrapNames).toContain('prefetchProjectPlugins');
+    expect(
+      appBootstrapNames.filter((n) => n === 'ensureProjectPlugins'),
+      '项目级注册的进口必须留在 use-project-session，不许进 App',
+    ).toEqual([]);
     expect(sessionSrc).toContain("import { ensureProjectPlugins } from '../bootstrap';");
     // App 确实委托给 hook（而不是偷偷留了第二份 openProject）
     expect(appSrc).toContain('useProjectSession({');

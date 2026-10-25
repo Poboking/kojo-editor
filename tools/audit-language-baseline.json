@@ -2,9 +2,9 @@
   "_readme": "tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数，只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。",
   "checks": {
     "M1(游戏名·引擎词汇)": {
-      "total": 12,
+      "total": 7,
       "files": {
-        "packages/app/src/bootstrap.ts": 7,
+        "packages/app/src/bootstrap.ts": 2,
         "packages/app/src/monaco/erb-completion-context.ts": 1,
         "packages/app/src/monaco/erb-completion-variables.ts": 1,
         "packages/app/src/monaco/erb-directives.ts": 1,
