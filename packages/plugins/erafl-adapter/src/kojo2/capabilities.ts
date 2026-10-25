@@ -107,21 +107,27 @@ export const ERAFL_SOURCE_MAP: SourceMapPolicy = Object.freeze({
 
 /**
  * 一致性套件：golden / differential / smoke / encoding 四面各有产物要求。
- * `fixture` 是**符号引用**（SDK 层零 IO，不在这里读盘）；eraFL 的 fixture 语料
- * 由后续批搭（入口 E 之后），现在只声明验收面本身——缺一面装载自检就红。
+ * `fixture` 是**符号引用**（SDK 层零 IO，不在这里读盘），实体夹具在
+ * `tests/fixtures/kojo2-conformance/`（`.kojo2` + `.golden.erb` + `.erb` 基线），
+ * 由 `tests/kojo2-conformance.test.ts` 挂进 `runAdapterConformance` 跑：
+ * 支持子集 52 枚用例全绿，缺面逐枚红在诊断码上（红名单在同一文件的 §F）。
+ *
+ * 口径修正（2026-10-25 夹具批）：golden / differential 两面钉的是 **ERB 侧**产物——
+ * 口上 XML 不编译成 2.0 视图（交接文档 §5 E-2 的决策：XML 走 provider，不走降糖），
+ * 原来的"口上 XML 叙事 golden"这个名与引用会把人往一条不存在的路引。
  */
 export const ERAFL_CONFORMANCE_SUITE: ConformanceSuite = Object.freeze({
   required: Object.freeze(['golden', 'differential', 'smoke', 'encoding'] as const),
   cases: Object.freeze([
     Object.freeze({
       kind: 'golden' as const,
-      name: '口上 XML 叙事 golden',
-      fixture: 'kojo2/golden/erafl-xml-kojo',
+      name: 'ERB 壳函数叙事 golden',
+      fixture: 'kojo2/golden/erafl-erb-shell',
     }),
     Object.freeze({
       kind: 'differential' as const,
-      name: '与既有 XML 产物逐行对拍',
-      fixture: 'kojo2/differential/erafl-xml-kojo',
+      name: '与手写 ERB 等价物逐行对拍',
+      fixture: 'kojo2/differential/erafl-erb-shell',
     }),
     Object.freeze({
       kind: 'smoke' as const,
