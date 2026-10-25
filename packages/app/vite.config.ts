@@ -59,6 +59,109 @@ function stubNodeOnlyDynamicImports(): Plugin {
   };
 }
 
+/**
+ * vendor 分桶（2026-10-25 拆包批）：把「首屏必然要、但自己很少变」的依赖从入口块里摘出去，
+ * 入口只留宿主自己的 UI 代码。
+ *
+ * 口径来自一次 `generateBundle` 逐模块体积报表（实测入口块 1,029.9 kB 字符 / 289 模块）：
+ *   react-dom 638 KB(28.9%) · 工作区包 839 KB(38.0%) · 宿主自身 656 KB(29.7%)
+ * —— 入口块的 2/3 与"改一行 UI"无关。分组按**依赖方向**切，不按大小切：`react` 无内部依赖、
+ * 且全部在开机图上；`vendor-kojo-core`（kernel / kojo-lang / plugin-api / kojo-project-kit）
+ * 只被插件依赖；插件一枚一块、只依赖前两者（audit B/C 已在源码层禁掉插件互引），
+ * 故所有边单向、不可能成环（构建无循环 chunk 警告，实测见提交信息）。
+ *
+ * 刻意**不**把 monaco 并进来：它本来就由 `monaco/entry.ts` 的动态 `import()` 边界自成一块
+ * （4,078 kB），且不在开机图里（ps10-eager-graph 的成员断言钉住）。
+ *
+ * ⚠ **只搬开机图上那一半**（这一条是量出来的）：manualChunks 是"整包认领"，认了
+ * `packages/plugins/eratw-adapter/` 就等于把它连**懒边上**的模块一起拉进一个开机即 preload
+ * 的块。不做这个过滤的一版实测首屏 JS **1,150 kB → 1,541 kB**（+34%）——入口块是小了、
+ * 首屏反而更慢。所以先自己走一遍从入口出发的静态图（判定器见 `createEagerProbe` 头注里
+ * 那两个坑），只对本就在图里的模块认领；懒边上的模块一律交回 rollup 按 `import()` 自然切分。
+ *
+ * 代价（如实记）：首屏 JS 从 1 个块变成 6 个（入口 + react + kojo-core + 三个常驻插件），
+ * 它们全是入口的**静态**依赖 ⇒ Vite 各生成一条 `<link rel=modulepreload>`，与入口并行取。
+ * 但**字节不是零成本**：实测 1,150.25 kB → 1,265.39 kB（+115 kB / +10%），且已排除重复
+ * （全 bundle 逐模块去重，dup=0）——差额是跨块引用的固有代价（跨块导出的符号名改不掉、
+ * 也内联不了）。换句话说：这一批买到的是「入口块 1,150 → 388 kB」与"改宿主 UI 不再让
+ * react 那 222 kB 重新哈希"，付出的代价是首屏多背 10% 的代码。
+ */
+/** rollup 传给 `manualChunks` 的第二参（只声明本文件用到的那几个成员） */
+interface ChunkGraphApi {
+  getModuleIds(): Iterable<string>;
+  getModuleInfo(id: string): {
+    isEntry: boolean;
+    isIncluded: boolean | null;
+    importedIds: readonly string[];
+    dynamicallyImportedIds: readonly string[];
+  } | null;
+}
+
+/**
+ * 建一枚「是否在开机图里」的判定器：从入口模块出发，只沿**留得下的静态边**走一遍。
+ *
+ * 三条都是实测踩出来的，缺一条就会把懒模块拽上首屏（第一版两条都缺，首屏 JS 从
+ * 1,150 kB 涨到 1,515 kB）：
+ * 1. `importedIds` 是**该模块声明的全部 source**，动态 `import()` 也在里头 —— 必须减去
+ *    `dynamicallyImportedIds`，否则等于把 24 条懒边一起跟了（kojo-core 的 `lower/**`
+ *    整包从懒块 `service-*.js` 被搬进开机预取的块）；
+ * 2. 被**树摇掉**的模块不往下走（`isIncluded === false`）：`@kojo/kojo-core` 的桶就是这种——
+ *    它自己的代码一枚都没留下（产物里根本没有 `kojo-core/src/index.ts` 这一块），但它的
+ *    re-export 清单仍挂在模块图上，顺着它走会把「只有懒消费者真用到」的 `compile` /
+ *    `lower/expand/**` 当成开机依赖；
+ * 3. 走不到 ⇒ `false`。宁可少搬（那块留在入口）也不能多搬（把懒模块拽到首屏）。
+ *
+ * 结果缓存一次：`manualChunks` 每个模块调一次，图走一遍就够。
+ */
+function createEagerProbe(api: ChunkGraphApi): (id: string) => boolean {
+  let eager: Set<string> | null = null;
+  return (id) => {
+    if (eager === null) {
+      eager = new Set<string>();
+      const stack: string[] = [];
+      for (const m of api.getModuleIds()) if (api.getModuleInfo(m)?.isEntry === true) stack.push(m);
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        if (eager.has(cur)) continue;
+        eager.add(cur);
+        const info = api.getModuleInfo(cur);
+        if (info === null || !info.isIncluded) continue; // 树摇掉的桶：它的 re-export 不构成开机依赖
+        const lazy = new Set(info.dynamicallyImportedIds);
+        for (const dep of info.importedIds) if (!lazy.has(dep)) stack.push(dep);
+      }
+    }
+    return eager.has(id);
+  };
+}
+
+function createManualChunks(): (id: string, api: ChunkGraphApi) => string | undefined {
+  let isEager: ((id: string) => boolean) | null = null;
+  return (id, api) => {
+    isEager ??= createEagerProbe(api);
+    if (!isEager(id)) return undefined; // 懒边上的模块一律不碰（见上面 ⚠ 那段实测）
+
+    const p = id.replaceAll('\\', '/');
+    if (p.includes('/node_modules/')) {
+      // pnpm 的真实落点一定含 `/node_modules/<pkg>/`（`.pnpm/<pkg>@<ver>/node_modules/<pkg>/`），
+      // 尾部那个 `/` 保证 `react` 不会吃掉 `react-dom`、更不会误伤 `react-*` 系第三方包。
+      if (/\/node_modules\/(?:react|react-dom|scheduler)\//.test(p)) return 'vendor-react';
+      return undefined; // 其余第三方（@tauri-apps 等）体量小，跟着使用方走
+    }
+    // 工作区包：`packages/<dir>/…`。`app` 是宿主自己 ⇒ 不进 vendor（它才是入口块的正主）。
+    // 插件路径比别的工作区包多一层目录（`packages/plugins/<name>/…`），得单独认。
+    // 为什么插件一枚一块而不是并成一坨（试过：并完 1,261 kB，踩了本批 800 kB 的桶上限）：
+    // 插件本来就由 `bootstrap.ts` 的 24 条动态 `import()` 各成一块，并成一坨省的是几十个
+    // 请求、丢的是"改哪个插件只失效哪块"。开机图里只有三个插件（erb-parser /
+    // eratw-adapter / condition-extractor，见 ps10-eager-graph 的成员断言），其余 21 个
+    // 因为 `isEager` 为假，产物形态与拆分前一字不差。
+    const plugin = /\/packages\/plugins\/([^/]+)\//.exec(p);
+    if (plugin) return `plugin-${plugin[1]}`;
+    const pkg = /\/packages\/([^/]+)\//.exec(p);
+    if (pkg && pkg[1] !== 'app' && pkg[1] !== 'plugins') return 'vendor-kojo-core';
+    return undefined;
+  };
+}
+
 export default defineConfig({
   plugins: [react(), injectAppVersion()],
   resolve: {
@@ -132,11 +235,19 @@ export default defineConfig({
      *   的浏览器补的探测垫片，而本壳的唯一运行时是 WebView2（Chromium evergreen，
      *   原生支持）⇒ 入口里那段运行时检测与额外 chunk 是白拿。关掉后 `index.html`
      *   少一枚 preload 标签、入口块少一截垫片（实测见交付读数）。
-     * 刻意**不动** `manualChunks`：懒分割已经由动态 `import()` 边界决定，插件块
-     * 由 Rollup 按 18 个动态入口自然切分；再叠一层手工分桶需要先量首屏与开项目
-     * 两段的往返数，本批没有这个预算。
+     * - `manualChunks` 见文件上方 `createManualChunks` —— 2026-10-25 拆包批起才有（此前那句
+     *   「刻意不动 manualChunks」的理由是"没预算量"，本批把逐模块体积报表量完了）。
+     * - `chunkSizeWarningLimit: 4200`：唯一的超标块是 monaco（4,078 kB，由
+     *   `monaco/entry.ts` 的动态 import 自成一块、开文件时才取）。默认 500 kB 的这条
+     *   警告因此**永远**在响——天天响的警告等于没有警告，所以把闸抬到刚好盖住它，
+     *   让"别的块突然变大"重新变成可见信号。入口块的上界另有硬闸：
+     *   `tools/release-gate.mjs` 的 artifact-audit（上限 1,100 kB，本批实测 388 kB）。
      */
     reportCompressedSize: false,
     modulePreload: { polyfill: false },
+    chunkSizeWarningLimit: 4200,
+    rollupOptions: {
+      output: { manualChunks: createManualChunks() },
+    },
   },
 });
