@@ -18,6 +18,19 @@ import { describe, expect, it } from 'vitest';
  *   涨因只有一枚——词表多一个 `decl(word)`，即 **TOKEN 50→51、SYMBOL 70→71、STATE 83 不变**，
  *   涨在 token/symbol 表本体（实测把 `$.dialect_decl` 挪到 choice 中间位重跑，48,057 一字节不差，
  *   瘦不回）。gzip(9) 13,061 → 13,290。不抬就得回退用户已拍板的语法决策，故按本协议记账。
+ *
+ * **2026-10-26 抬到 48,835 B**（用户反馈批：`否` 起头的名字不能被兜底 `否` 吞掉）：
+ *   tree-sitter 的 token 正则**不支持 lookaround / 词边界**（实测报 "look-around … is not
+ *   supported"），所以"`否` 之后必须空白或行尾"只能靠**同档最长匹配**：`否定` 必须有一条比
+ *   单字 `否` 更长的候选路径，否则 `? 否定的变量 == 1` 被劈成 `(else_head)(assignment)`、
+ *   表端点 `否定 0` 被劈成 range=`否`/value=`定 0`（两条都静默，hasError=false）。
+ *   实测拆账（同一台机器、同一 binaryen，均在 48,057 基线上加）：
+ *     * 只加 condition_head 的 `否[IDP]` 路径 ⇒ 48,718 B（+661）；
+ *     * 只加 TABLE_ENDPOINT 的 `否[IDP]+` ⇒ 48,367 B（+310）；
+ *     * 两处一起 ⇒ 48,835 B（+778；表体有交叠，故小于两者之和）。
+ *   STATE 83 / SYMBOL 71 / TOKEN 51 **三项都没变**（`tree-sitter generate` 实测）：涨在
+ *   词法字符集多出一条 `否`+标识符续字符的路径（小表与 lex modes 跟着重排），不是加了规则。
+ *   gzip(9) 13,290 → 13,432。不抬就得留着"合法行被静默劈开"的缺陷，故按本协议记账。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,7 +38,7 @@ const pkgRoot = resolve(here, '..');
 const wasmPath = join(pkgRoot, 'tree-sitter-kojo2.wasm');
 
 /** 棘轮阈值：出货 wasm 允许的最大原始字节数（只降不升）。 */
-const MAX_WASM_BYTES = 48_057;
+const MAX_WASM_BYTES = 48_835;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo2.wasm）', () => {
   const bytes = readFileSync(wasmPath);

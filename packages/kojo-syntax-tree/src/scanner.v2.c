@@ -7,8 +7,11 @@
  *   TOKEN_DEDENT       块体收：下一正文行缩进回到当前层或更浅。同样具名。
  *   TOKEN_NATIVE_LINE  `@原生` 体内一条 raw 行（含行首空白与 Tab，止于换行之前）。
  *
- * 缩进口径（§4.13）：一级 = 4 空格；Tab **不算**结构缩进（结构区出现 Tab ⇒ 本扫描器
- * 不认那里的缩进记号，内部词法随即在 Tab 上落 ERROR）；全角空格同理不认。
+ * 缩进口径（§4.13）：一级 = 4 空格；Tab **按一级记账**（等价 4 空格）——core 只允许 Tab
+ * 出现在 `@原生` 块体里（`lexer.ts` 的 Tab 口径、`parser.ts` 的「Tab 原样」），而本扫描器
+ * 不分上下文，只能一律当缩进看：这样 `@原生` 块体用 Tab 缩进也能正常开栏、raw 行照常吃满；
+ * 结构区若作者用 Tab 缩进，缩进照样算，但 Tab **不在 extras 里** ⇒ 内部词法在 Tab 上无记号
+ * 可中，错误只落在那一行（`broken-tab-indent.kojo2` 钉住）。全角空格不认。
  * 空行不参与缩进计算。
  *
  * 记号边界：`indent` / `dedent` 一律零宽——扫描器为看下一行会向前推进 lexer，但
@@ -114,8 +117,10 @@ bool tree_sitter_kojo2_external_scanner_scan(void *payload, TSLexer *lexer, cons
       spaces++;
       lexer->advance(lexer, false);
     } else if (c == '\t') {
-      if (saw_newline) break; /* 结构缩进里 Tab 非法：不当空白，交给内部词法落 ERROR */
-      tabs++;                 /* 行首（blank_line 之后）的 Tab 属于 raw 行内容 */
+      /* Tab = 一级（见文件头缩进口径）。这里不 break：`@原生` 块体若用 Tab 开栏，
+         结构扫描必须照样算得出 level（否则围栏开不了、raw 行无处落脚）。
+         结构区的 Tab 由内部词法落 ERROR —— Tab 不在 extras 里。 */
+      tabs++;
       lexer->advance(lexer, false);
     } else {
       break; /* 正文首字符 */

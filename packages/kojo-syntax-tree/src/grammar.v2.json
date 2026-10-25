@@ -587,7 +587,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "\\?(?:[ \\t\\u3000]+(?:[^否\\n][^\\n]*|[ \\t\\u3000]*))?"
+        "value": "\\?(?:否[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9][^\\n]*|[ \\t\\u3000]+(?:(?:[^否\\n]|否[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9])[^\\n]*|[ \\t\\u3000]*))?"
       }
     },
     "else_head": {
@@ -902,7 +902,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "(?:(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+)\\.\\.(?:(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+))?|\\.\\.(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+)|(?:[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+))"
+        "value": "(?:(?:否[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]+|[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+)\\.\\.(?:(?:否[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]+|[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+))?|\\.\\.(?:否[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]+|[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+)|(?:否[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]+|[A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u5425\\u5427-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A][A-Za-z_\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uFF21-\\uFF3A\\uFF41-\\uFF5A0-9]*|[0-9]+))"
       }
     },
     "table_else": {

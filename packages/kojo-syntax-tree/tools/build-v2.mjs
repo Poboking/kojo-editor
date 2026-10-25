@@ -1,22 +1,32 @@
 #!/usr/bin/env node
 /**
- * build-v2.mjs —— Kojo 2.0（kojo2）tree-sitter 语法的一键构建。
+ * build-v2.mjs —— Kojo 2.0（kojo2）tree-sitter 语法的一键构建（**原子**：全绿才换货）。
  *
- * 三步，产物路径全部带 v2 名，**绝不覆盖 v1 的 grammar.js / src/parser.c / wasm**：
- *   1. `tree-sitter generate` → 落到 `tmp/v2-gen/`，再把三件生成物搬成
- *      `src/parser.v2.c` / `src/grammar.v2.json` / `src/node-types.v2.json`；
+ * 四步，产物路径全部带 v2 名，**绝不覆盖 v1 的 grammar.js / src/parser.c / wasm**：
+ *   1. `tree-sitter generate` → 落到 `tmp/v2-gen/`；生成物先抄进 `tmp/v2-out/`，
+ *      **此时一个字节都不写 `src/`**；
  *   2. 在 `tmp/v2-build/` 铺一个一次性 grammar 目录（parser.c + scanner.c + tree_sitter 头
- *      + package.json 的 tree-sitter 配置），`tree-sitter build --wasm` 编译成
- *      `tree-sitter-kojo2.wasm`（首次运行会由 CLI 自己下载 wasi-sdk / binaryen 到用户缓存目录；
- *      网络需要代理时在 shell 里先设 HTTPS_PROXY/HTTP_PROXY，本脚本不写死任何代理）；
- *   3. 若机器上能找到 binaryen 的 `wasm-opt`（CLI 缓存或 `TREE_SITTER_BINARYEN_PATH`），
- *      再跑一遍 `-Oz`（CLI 自带的是 `-Os`）把体积压到最小档——这就是本包体积棘轮的出货口径。
+ *      + package.json 的 tree-sitter 配置），`tree-sitter build --wasm` 的 `-Os` 产物也落在
+ *      `tmp/v2-out/`（`tree-sitter-kojo2.os.wasm`）——**不直接覆盖出货 wasm**；
+ *   3. `wasm-opt -Oz` 从 `-Os` 临时件读、写**另一个**临时件（`tree-sitter-kojo2.wasm`），
+ *      绝不就地覆写。binaryen 找不到 ⇒ **构建失败**（`-Oz` 是体积棘轮的出货口径，
+ *      "静默出货更大的 -Os 产物"等于让棘轮对不上账）；`-Oz` rc≠0 同样失败。
+ *      首次运行会由 CLI 自己下载 wasi-sdk / binaryen 到用户缓存目录；网络需要代理时
+ *      在 shell 里先设 HTTPS_PROXY/HTTP_PROXY，本脚本不写死任何代理；
+ *   4. **发布 = 最后一次 rename**：四件产物（`src/parser.v2.c` / `src/grammar.v2.json` /
+ *      `src/node-types.v2.json` / `tree-sitter-kojo2.wasm`）在临时目录全部就绪、验过
+ *      非空与 wasm 魔数之后，才逐个 `rename` 到位（同盘 rename 是原子的：要么旧文件、
+ *      要么新文件，绝无半截）。
+ *
+ * 为什么不是"边生成边落盘"（2026-10-26 改）：旧版先把三件 src 产物 copy 进 `src/`，再编
+ * wasm——编译一失败就留下"新 parser.c + 旧 wasm"的半套；`wasm-opt -Oz` 还就地覆写出货
+ * wasm，rc≠0 时文件已被截断，"保留 -Os 产物"是假的。
  *
  * 用法（本包目录，或仓库根加包路径）：
  *   node tools/build-v2.mjs
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,6 +36,7 @@ const repoRoot = join(pkgRoot, '..', '..');
 const cliJs = join(repoRoot, 'node_modules', 'tree-sitter-cli', 'cli.js');
 const genDir = join(pkgRoot, 'tmp', 'v2-gen');
 const stageDir = join(pkgRoot, 'tmp', 'v2-build');
+const outDir = join(pkgRoot, 'tmp', 'v2-out');
 const srcDir = join(pkgRoot, 'src');
 const outWasm = join(pkgRoot, 'tree-sitter-kojo2.wasm');
 
@@ -34,12 +45,12 @@ if (!existsSync(cliJs)) {
   process.exit(1);
 }
 
-/** 跑 tree-sitter CLI（经 node 起，Windows 下也稳）；失败即停。 */
+/** 跑 tree-sitter CLI（经 node 起，Windows 下也稳）；失败即停（此时 src/ 与出货 wasm 原封不动）。 */
 function ts(args, cwd = pkgRoot) {
   console.log(`\n$ tree-sitter ${args.join(' ')}`);
   const r = spawnSync(process.execPath, [cliJs, ...args], { cwd, stdio: 'inherit', env: process.env });
   if (r.status !== 0) {
-    console.error(`tree-sitter ${args[0]} 失败（rc=${r.status}）`);
+    console.error(`tree-sitter ${args[0]} 失败（rc=${r.status}）——出货产物未改动`);
     process.exit(r.status ?? 1);
   }
 }
@@ -48,17 +59,38 @@ function rmrf(p) {
   rmSync(p, { recursive: true, force: true });
 }
 
-// ---- 1) generate ---------------------------------------------------------
+/** 发布前的最后一道验：存在、非空（防 0 字节/半截蒙过去）。 */
+function assertArtifact(path, what) {
+  if (!existsSync(path)) {
+    console.error(`${what} 没产出：${path}——出货产物未改动`);
+    process.exit(1);
+  }
+  const size = statSync(path).size;
+  if (size === 0) {
+    console.error(`${what} 是 0 字节：${path}——出货产物未改动`);
+    process.exit(1);
+  }
+  return size;
+}
+
+// ---- 0) 清临时区（src/ 与出货 wasm 此刻仍原封不动）----------------------
 rmrf(genDir);
+rmrf(outDir);
 mkdirSync(genDir, { recursive: true });
+mkdirSync(outDir, { recursive: true });
+
+// ---- 1) generate → tmp，生成物只暂存到 tmp/v2-out -------------------------
 ts(['generate', '-o', genDir, join(pkgRoot, 'grammar.v2.js')]);
 
-copyFileSync(join(genDir, 'parser.c'), join(srcDir, 'parser.v2.c'));
-copyFileSync(join(genDir, 'grammar.json'), join(srcDir, 'grammar.v2.json'));
-copyFileSync(join(genDir, 'node-types.json'), join(srcDir, 'node-types.v2.json'));
-console.log('\n生成物 → src/parser.v2.c / src/grammar.v2.json / src/node-types.v2.json');
+const stagedParserC = join(outDir, 'parser.v2.c');
+const stagedGrammar = join(outDir, 'grammar.v2.json');
+const stagedNodeTypes = join(outDir, 'node-types.v2.json');
+copyFileSync(join(genDir, 'parser.c'), stagedParserC);
+copyFileSync(join(genDir, 'grammar.json'), stagedGrammar);
+copyFileSync(join(genDir, 'node-types.json'), stagedNodeTypes);
+console.log('\n生成物已暂存 tmp/v2-out/（尚未动 src/）');
 
-// ---- 2) build --wasm -----------------------------------------------------
+// ---- 2) build --wasm（-Os）→ tmp/v2-out --------------------------------
 rmrf(stageDir);
 mkdirSync(join(stageDir, 'src'), { recursive: true });
 copyFileSync(join(genDir, 'parser.c'), join(stageDir, 'src', 'parser.c'));
@@ -81,21 +113,49 @@ writeFileSync(
   )}\n`,
 );
 
-ts(['build', '--wasm', '-o', outWasm, stageDir]);
+const osWasm = join(outDir, 'tree-sitter-kojo2.os.wasm');
+ts(['build', '--wasm', '-o', osWasm, stageDir]);
+const osBytes = assertArtifact(osWasm, 'wasm（-Os 档）');
 
-// ---- 3) -Oz 等价后处理（binaryen）---------------------------------------
+// ---- 3) wasm-opt -Oz：读临时件、写另一个临时件（绝不就地覆写）---------------
 const wasmOpt = findWasmOpt();
-if (wasmOpt) {
-  const before = statSync(outWasm).size;
-  console.log(`\n$ wasm-opt -Oz（${wasmOpt}）`);
-  const r = spawnSync(wasmOpt, [outWasm, '-Oz', '-o', outWasm], { stdio: 'inherit', env: process.env });
-  if (r.status !== 0) {
-    console.error(`wasm-opt -Oz 失败（rc=${r.status}）——保留 CLI 的 -Os 产物`);
-  } else {
-    console.log(`体积：${before} B（-Os）→ ${statSync(outWasm).size} B（-Oz）`);
-  }
-} else {
-  console.log('\n未找到 wasm-opt（binaryen）⇒ 保留 CLI 的 -Os 产物；-Oz 档只在体积账里备注');
+if (!wasmOpt) {
+  console.error(
+    '\n未找到 wasm-opt（binaryen）⇒ 构建失败：`-Oz` 是出货体积口径（tests/v2-wasm-size.test.ts 的棘轮），' +
+      '缺它就等于静默出货更大的 -Os 产物。装 binaryen 或设 TREE_SITTER_BINARYEN_PATH 后重跑；' +
+      '出货产物未改动。',
+  );
+  process.exit(1);
+}
+const ozWasm = join(outDir, 'tree-sitter-kojo2.wasm');
+console.log(`\n$ wasm-opt -Oz（${wasmOpt}）`);
+const r = spawnSync(wasmOpt, [osWasm, '-Oz', '-o', ozWasm], { stdio: 'inherit', env: process.env });
+if (r.status !== 0) {
+  console.error(`wasm-opt -Oz 失败（rc=${r.status}）——构建失败，出货产物未改动（不拿 -Os 顶 -Oz）`);
+  process.exit(r.status ?? 1);
+}
+const ozBytes = assertArtifact(ozWasm, 'wasm（-Oz 档）');
+// 魔数验一遍：wasm-opt 写坏了能被棘轮之外的所有测试继承，这里先拦。
+const magic = [...readFileSync(ozWasm).subarray(0, 4)];
+if (magic.join(',') !== '0,97,115,109') {
+  console.error(`-Oz 产物不是 wasm（魔数 ${magic.join(',')}）——出货产物未改动`);
+  process.exit(1);
+}
+console.log(`体积：${osBytes} B（-Os）→ ${ozBytes} B（-Oz）`);
+
+// ---- 4) 发布：四件产物一次 rename（同盘 rename 原子）--------------------
+const plan = [
+  [stagedParserC, join(srcDir, 'parser.v2.c'), 'src/parser.v2.c'],
+  [stagedGrammar, join(srcDir, 'grammar.v2.json'), 'src/grammar.v2.json'],
+  [stagedNodeTypes, join(srcDir, 'node-types.v2.json'), 'src/node-types.v2.json'],
+  [ozWasm, outWasm, 'tree-sitter-kojo2.wasm'],
+];
+// 先把四件全部验完再动第一个 rename：任何一件不合规都不发布。
+for (const [from, , what] of plan) assertArtifact(from, what);
+console.log('\n发布（rename）：');
+for (const [from, to, what] of plan) {
+  renameSync(from, to);
+  console.log(`  ${what} ← tmp（${statSync(to).size} B）`);
 }
 
 const bytes = statSync(outWasm).size;
