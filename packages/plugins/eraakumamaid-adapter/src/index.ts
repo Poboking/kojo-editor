@@ -44,3 +44,4 @@ export {
   type AMScaffoldFileSpec,
   type ErakumamaidScaffoldOptions,
 } from './scaffold';
+export * from './kojo2/index.js';

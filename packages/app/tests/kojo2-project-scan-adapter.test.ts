@@ -329,9 +329,9 @@ describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
     const facts = await lazyOf(options)();
     expect(facts).toBe(erafl.ERAFL_GAME_ADAPTER);
     expect(facts).not.toBe(eraTW.ERATW_GAME_ADAPTER);
-    // 没有 2.0 面的项目 ⇒ undefined（同一装载器、同一口径，不借表）
+    // 本文件未登记 / 清单外项目 ⇒ undefined（同一装载器、同一口径，不借表）
     const loadNoSurface = vi.fn(
-      async () => kojo2AdapterForProject({ adapterId: 'eraakumamaid' }) ?? undefined,
+      async () => kojo2AdapterForProject({ adapterId: 'no-such-game' }) ?? undefined,
     );
     const degraded = createLazyKojo2ProjectOptions({ isEnabled: () => true, loadAdapter: loadNoSurface });
     await expect(lazyOf(degraded)()).resolves.toBeUndefined();

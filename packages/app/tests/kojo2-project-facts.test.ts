@@ -7,10 +7,11 @@
  *
  * ① eraFL 工程：迁移向导的事件面词/参数形状、存储注入的指纹/存储期、项目扫描的
  *    adapter 事实 ⇒ 全部拿到 **eraFL 的**或空形态，响应里**一个 eraTW 事实名都不许出现**；
- * ② 四个没有 2.0 面的适配器（eraakumamaid / erakoumakan / erasqc / eratohok）⇒
- *    null/undefined，**不借 eraTW**（D12：未绑定 = 明确降级，绝不回落默认方言）；
- * ③ 六枚适配器的 2.0 登记结果与改前**逐一致**（eraTW 走 boot 静态路径、eraFL 走
- *    清单驱动的泛化登记、其余四家不进表）；
+ * ② 四家新 2.0 面（eraakumamaid / erakoumakan / erasqc / eratohok）⇒ 按项目各拿到
+ *    **各自**的事实，**不借 eraTW**（D12：未绑定 = 明确降级，绝不回落默认方言）；
+ * ③ 六枚适配器的 2.0 登记结果（eraTW 走 boot 静态路径、其余五家走清单驱动的泛化登记
+ *    ⇒ adapter 全在表）；**发射面**仍只有 eraTW / eraFL 两条（其余四家的 backend
+ *    导出未交付 ⇒ null 是可见降级）；
  * ④ 无项目态（欢迎页）⇒ 全腿空形态（迁移 undefined / 存储 null / 扫描 undefined）；
  * ⑤ 源码闸：游戏名退出 App.tsx 与扫描接线文件；bootstrap 不再出现 `'erafl'` 字面量
  *    （erafl 的导出名从此只住在 `adapter-manifest.ts`——审计钦定的法定落点）。
@@ -91,28 +92,33 @@ describe('LAU-1a ① · eraFL 项目拿到 eraFL 事实，零 eraTW 泄漏', () 
   });
 });
 
-describe('LAU-1a ② · 无 2.0 面的四家适配器 ⇒ 空形态，不借 eraTW', () => {
-  const noKojo2Surface = ADAPTER_MANIFEST.filter(
-    (entry) => entry.scope === 'project' && entry.kojo2AdapterExport === undefined,
-  ).map((entry) => entry.id);
+describe('LAU-1a ② · 四家新 2.0 面：按项目拿到各自事实，不借 eraTW', () => {
+  const NEW_SURFACE_IDS = ['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok'] as const;
 
-  it('清单里确有这四家没有 2.0 面（eraakumamaid / erakoumakan / erasqc / eratohok）', () => {
-    expect(noKojo2Surface.sort()).toEqual(['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok']);
+  it('四家清单条目都已登记 2.0 面（kojo2AdapterExport 在场）', () => {
+    for (const id of NEW_SURFACE_IDS) {
+      expect(ADAPTER_MANIFEST.find((entry) => entry.id === id)?.kojo2AdapterExport).toBeDefined();
+    }
   });
 
-  for (const id of noKojo2Surface) {
-    it(`adapterId='${id}' 的工程：登记簿给 null，三条腿都是各自的空形态`, () => {
+  for (const id of NEW_SURFACE_IDS) {
+    it(`adapterId='${id}' 的工程：拿到自己的 adapter 事实（三条腿不借 eraTW）`, () => {
       // eraTW 常驻在场也不借（"错误事实不报错"正是这类 bug 的病灶）
-      expect(kojo2AdapterForProject({ adapterId: id })).toBeNull();
-      expect(kojo2BackendFactoryForProject({ adapterId: id })).toBeNull();
-      expect(kojo2MigrateEventNames({ adapterId: id })).toBeUndefined();
-      expect(kojo2MigrateEventArgs({ adapterId: id })).toBeUndefined();
-      expect(kojo2StorageFacts({ adapterId: id })).toBeNull();
+      const adapter = kojo2AdapterForProject({ adapterId: id });
+      expect(adapter).not.toBeNull();
+      expect(adapter).not.toBe(ERATW_GAME_ADAPTER);
+      expect(adapter!.id).toBe(id);
+      expect(kojo2MigrateEventNames({ adapterId: id })).toEqual(
+        adapter!.eventCatalog.events.map((spec) => spec.event),
+      );
+      const facts = kojo2StorageFacts({ adapterId: id });
+      expect(facts).not.toBeNull();
+      expect(facts!.gameFingerprint).toBe(adapter!.gameFingerprint.digest);
     });
   }
 });
 
-describe('LAU-1a ③ · 六枚适配器的登记结果与改前逐一致', () => {
+describe('LAU-1a ③ · 六枚适配器的 2.0 登记结果：adapter 全在表，backend 仍只有两家', () => {
   it('eraTW（boot 静态路径）：adapter 与 backend 都在表里，且与改前同为包导出本体', () => {
     expect(kojo2AdapterForProject({ adapterId: 'eratw' })).toBe(ERATW_GAME_ADAPTER);
     expect(typeof kojo2BackendFactoryForProject({ adapterId: 'eratw' })).toBe('function');
@@ -124,10 +130,11 @@ describe('LAU-1a ③ · 六枚适配器的登记结果与改前逐一致', () =>
     expect(typeof kojo2BackendFactoryForProject({ adapterId: 'erafl' })).toBe('function');
   });
 
-  it('其余四家（仅 v1 面）：两面都不在表里', () => {
+  it('四家新面：adapter 在表，backend 仍缺席（发射面未交付 ⇒ null 是可见降级）', () => {
     for (const id of ['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok']) {
-      expect(kojo2AdapterForProject({ adapterId: id })).toBeNull();
+      expect(kojo2AdapterForProject({ adapterId: id })).not.toBeNull();
       expect(kojo2BackendFactoryForProject({ adapterId: id })).toBeNull();
+      expect(ADAPTER_MANIFEST.find((entry) => entry.id === id)?.kojo2BackendFactoryExport).toBeUndefined();
     }
   });
 
