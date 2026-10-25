@@ -94,38 +94,32 @@ const CTX = { currentRoot: CURRENT_ROOT, projectOpen: true } as const;
 
 /* ───────────────────────── ① 拖放：清单与分类 ───────────────────────── */
 
-describe('① 拖放清单：flag 关 = 逐字不变，flag 开 = 追加 .kojo2', () => {
-  it('flag 关：openableExtensions() 与 OPENABLE_EXT 逐项相同（基线清单没有被就地改大）', () => {
+describe('① 拖放清单：恒含 2.0 扩展名（看得见文件是语言面），v1 那几类一字不动', () => {
+  it('恒含：openableExtensions() = 基线清单 + 2.0 扩展名（基线清单没有被就地改大）', () => {
     stubFlag(false);
-    expect(openableExtensions()).toEqual(OPENABLE_EXT);
+    expect(openableExtensions()).toEqual([...OPENABLE_EXT, KOJO2_SOURCE_EXTENSION]);
     expect(OPENABLE_EXT).toEqual([KOJO_SOURCE_EXTENSION, '.erb', '.erm', '.erh', '.md', '.txt']);
   });
 
-  it('flag 关：悬停文案与改动前逐字相同（erh-open-surface 也钉着这一句）', () => {
+  it('悬停文案由同一份清单派生（含 2.0 扩展名，不另抄一句）', () => {
     stubFlag(false);
-    expect(dropHintText()).toBe(`松手就能打开：${OPENABLE_EXT.join(' / ')}`);
-  });
-
-  it('flag 关：拖入 .kojo2 仍按"这类文件本软件打不开"拒绝（不静默、也不放行）', () => {
-    stubFlag(false);
-    expect(classifyDrop(['D:/proj/a.kojo2'])).toEqual({
-      files: [],
-      rejected: [{ path: 'D:/proj/a.kojo2', reason: UNKNOWN_FILE_REASON }],
-    });
-  });
-
-  it('flag 开：清单末尾追加 .kojo2，文案跟着变（派生自同一份清单）', () => {
-    stubFlag(true);
-    expect(openableExtensions()).toEqual([...OPENABLE_EXT, KOJO2_SOURCE_EXTENSION]);
     expect(dropHintText()).toContain(KOJO2_SOURCE_EXTENSION);
     expect(dropHintText()).toBe(`松手就能打开：${[...OPENABLE_EXT, KOJO2_SOURCE_EXTENSION].join(' / ')}`);
   });
 
-  it('flag 开：拖入 .kojo2 / .KOJO2 都收得下，v1 那几类一字不动', () => {
-    stubFlag(true);
+  it('拖入 .kojo2 / .KOJO2 收得下（开关关也一样：文件在磁盘上，看得见才打得开）', () => {
+    stubFlag(false);
     const dropped = classifyDrop(['D:/proj/a.kojo2', 'D:/proj/b.KOJO2', 'D:/proj/c.kojo', 'D:/proj/d.md']);
     expect(dropped.files).toEqual(['D:/proj/a.kojo2', 'D:/proj/b.KOJO2', 'D:/proj/c.kojo', 'D:/proj/d.md']);
     expect(dropped.rejected).toEqual([]);
+  });
+
+  it('开关开 / 关两份清单与文案逐字相同（可见性不随切流变）', () => {
+    stubFlag(false);
+    const off = { ext: openableExtensions(), hint: dropHintText() };
+    stubFlag(true);
+    expect(openableExtensions()).toEqual(off.ext);
+    expect(dropHintText()).toBe(off.hint);
   });
 });
 
@@ -145,38 +139,34 @@ describe('② 快速打开与项目扫描：后缀判据同一份、项目扫描
     return opts?.filter === undefined ? entries : entries.filter((e) => opts.filter!(e));
   };
 
-  it('flag 关：quickOpenSourceExtensions() 与基线清单逐项相同', () => {
+  it('quickOpenSourceExtensions() = 基线清单 + 2.0 扩展名', () => {
     stubFlag(false);
-    expect(quickOpenSourceExtensions()).toEqual(QUICK_OPEN_SOURCE_EXTENSIONS);
-  });
-
-  it('flag 关：.kojo2 不是源文件（Ctrl+P 与项目扫描都看不见它）', () => {
-    stubFlag(false);
-    expect(isQuickOpenSourcePath('D:/proj/b.kojo2')).toBe(false);
-    expect(isQuickOpenSourcePath('D:/proj/a.kojo')).toBe(true);
-  });
-
-  it('flag 关：listSourceFiles（项目扫描那条列举）不含 .kojo2', async () => {
-    stubFlag(false);
-    await expect(listSourceFiles(fakeWalk, [CURRENT_ROOT])).resolves.toEqual([`${CURRENT_ROOT}/a.kojo`]);
-  });
-
-  it('flag 开：.kojo2 与 .KOJO2 都算源文件，清单末尾追加', () => {
-    stubFlag(true);
-    expect(isQuickOpenSourcePath('D:/proj/b.kojo2')).toBe(true);
-    expect(isQuickOpenSourcePath('D:/proj/B.KOJO2')).toBe(true);
     expect(quickOpenSourceExtensions()).toEqual([
       ...QUICK_OPEN_SOURCE_EXTENSIONS,
       KOJO2_SOURCE_EXTENSION,
     ]);
   });
 
-  it('flag 开：项目扫描看得见 .kojo2（扫描侧取的是同一枚 isQuickOpenSourcePath）', async () => {
-    stubFlag(true);
+  it('2.0 文件是源文件（Ctrl+P 与项目扫描都看得见它；开关关也一样）', () => {
+    stubFlag(false);
+    expect(isQuickOpenSourcePath('D:/proj/b.kojo2')).toBe(true);
+    expect(isQuickOpenSourcePath('D:/proj/B.KOJO2')).toBe(true);
+    expect(isQuickOpenSourcePath('D:/proj/a.kojo')).toBe(true);
+  });
+
+  it('listSourceFiles（项目扫描那条列举）含 2.0 文件，md 仍不收', async () => {
+    stubFlag(false);
     await expect(listSourceFiles(fakeWalk, [CURRENT_ROOT])).resolves.toEqual([
       `${CURRENT_ROOT}/a.kojo`,
       `${CURRENT_ROOT}/b.kojo2`,
     ]);
+  });
+
+  it('开关开 / 关两份清单逐字相同（扫描面不随切流变）', () => {
+    stubFlag(false);
+    const off = quickOpenSourceExtensions();
+    stubFlag(true);
+    expect(quickOpenSourceExtensions()).toEqual(off);
   });
 });
 

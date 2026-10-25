@@ -98,14 +98,18 @@ export function isKojo2Path(filePath: string): boolean {
 }
 
 /**
- * 开关打开时该补进**按后缀收文件**的那几张清单的条目；关着时是空数组。
+ * 该补进**按后缀收文件**的那几张清单的条目（K2-SURFACE-DEFAULT 起恒为 2.0 扩展名一项）。
  *
- * 拖放（`OPENABLE_EXT`）、快速打开（`QUICK_OPEN_SOURCE_EXTENSIONS`）、项目扫描这些地方
- * 只需要 `[...既有清单, ...kojo2SourceExtensions()]` 追加一次，flag 判断与扩展名都不必在
- * 每个调用点各写一份（开关仍只在一处读）。
+ * 拖放（`OPENABLE_EXT`）、快速打开（`QUICK_OPEN_SOURCE_EXTENSIONS`）、项目扫描、文件树这些
+ * 地方只需要 `[...既有清单, ...kojo2SourceExtensions()]` 追加一次，扩展名不必在每个调用点
+ * 各写一份。
+ *
+ * 为什么不再看开关：**看得见文件是语言面**。切流开关管的是写回 / 迁移 / 老扩展名的解析器，
+ * 而 2.0 文件是磁盘上已经存在的文件——把它从文件树与 Ctrl+P 里藏起来，等于"没切流就当作
+ * 没有这份文件"（实测：缺省档位下 2.0 文件在快速打开里根本不出现）。
  */
 export function kojo2SourceExtensions(): readonly string[] {
-  return isKojo2CutoverEnabled() ? [KOJO2_SOURCE_EXTENSION] : [];
+  return [KOJO2_SOURCE_EXTENSION];
 }
 
 /** 把可缺省的 root 归成"有根 / 无根"（空串是历史口径里的"没有项目"，别当成一个根） */

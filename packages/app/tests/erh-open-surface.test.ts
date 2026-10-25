@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ERB_DIALECT_EXTENSIONS, erbMonacoExtensions, isErbDialectPath } from '@kojo/plugin-api';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { erbReadOnlyGate, isErbLike } from '../src/ui/lift-preview';
-import { classifyDrop, dropHintText, processDroppedFiles } from '../src/ui/drag-drop';
+import { classifyDrop, dropHintText, openableExtensions, processDroppedFiles } from '../src/ui/drag-drop';
 
 /**
  * `.ERH` 覆盖面自证（FT-2，2026-10-14）。
@@ -32,7 +32,8 @@ describe('① 拖得开：.ERH 进拖入白名单，提示文案由同一份清�
     for (const ext of ['.kojo', ...ERB_DIALECT_EXTENSIONS, '.md', '.txt']) {
       expect(hint, `提示应含 ${ext}`).toContain(ext);
     }
-    expect(hint).toBe(`松手就能打开：${['.kojo', ...ERB_DIALECT_EXTENSIONS, '.md', '.txt'].join(' / ')}`);
+    // 期望值取自**同一份清单**（含 2.0 扩展名；ERH 批管的是"文案与清单同源"，不是列全名录）
+    expect(hint).toBe(`松手就能打开：${openableExtensions().join(' / ')}`);
   });
 
   it('落地链路照旧零写盘：拖入 .ERH 只 stat + 开标签', async () => {

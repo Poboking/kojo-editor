@@ -798,9 +798,9 @@ describe('副作用面：默认档仍关闭（源码守卫 + 行为断言）', (
     }
   });
 
-  it('默认档行为：打开 `.kojo2` 的 2.0 路由返回 off（一个 port 都不碰），扩展名清单为空', () => {
-    // 缺省阶段 v1-only：这批开关只放行写面语义，语言面另有 unconditional 装配
-    expect(kojo2SourceExtensions()).toEqual([]);
+  it('默认档行为：`.kojo2` 在候选清单里可见（看得见 = 语言面），但 2.0 专属开项目路由仍返回 off', () => {
+    // 缺省阶段 v1-only：文件可见是语言面；"切项目再排队打开"那条腿属切流面，保持 off
+    expect(kojo2SourceExtensions()).toEqual(['.kojo2']);
     const plan = planKojo2Open(
       { path: 'D:/p/M.kojo2' },
       { currentRoot: 'D:/p', projectOpen: true },

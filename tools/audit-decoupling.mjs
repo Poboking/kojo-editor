@@ -19,6 +19,7 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { manifestAuditWords, withManifestWords } from './adapter-manifest-words.mjs';
+import { licenseOf } from './lib/audit-allow.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -42,7 +43,9 @@ try {
  * - 硬禁：具体游戏名（eratw / eraK / …）与游戏特有前缀（M_KOJO）、日文路径（個人口上）；
  * - `口上` / `kojo` / `chara`：era 生态通用术语（架构文档 §5.7 钦定于契约字段
  *   `kojoPaths`/`charaIndex`），不在黑名单；
- * - 行尾 `// audit-allow: <理由>` 显式豁免。
+ * - 行尾 `// audit-allow: <理由>` 显式豁免（判据与 `audit-language` 同一实现：
+ *   `tools/lib/audit-allow.mjs`——必须落在注释位且带非空理由；`'audit-allow: …'`
+ *   这类字符串里的同名串、光秃秃的空理由都不算）。
  */
 const GAME_WORDS = withManifestWords(
   '\\b(eraK|eraSQN|eraNAS)\\b|M_KOJO|個人口上|\\bsav\\b',
@@ -151,7 +154,7 @@ for (const dirRel of NEUTRAL_DIRS) {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (isCommentLine(line)) continue;
-      if (/audit-allow:/.test(line)) continue;
+      if (licenseOf(line) !== null) continue;
       if (GAME_WORDS.test(line)) {
         violations.push({ rule: 'A(内核零游戏知识)', file: r, line: i + 1, text: line.trim().slice(0, 120) });
       }
@@ -207,7 +210,7 @@ for (const proot of PLUGIN_ROOTS) {
         }
       }
       // D: 通用插件不得含游戏知识字面量（adapter 与测试豁免）
-      if (!isTest && !isAdapter && !isCommentLine(line) && !/audit-allow:/.test(line)) {
+      if (!isTest && !isAdapter && !isCommentLine(line) && licenseOf(line) === null) {
         if (PLUGIN_GAME_WORDS.test(line)) {
           violations.push({ rule: 'D(通用插件零游戏知识)', file: r, line: i + 1, text: line.trim().slice(0, 120) });
         }

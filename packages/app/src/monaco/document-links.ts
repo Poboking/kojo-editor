@@ -28,7 +28,8 @@
 import type * as Monaco from './entry';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { CODE_LENS_COMMAND } from './kojo-code-lens';
-import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
+import { extname } from '@kojo/plugin-api';
+import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 
 /** 注释文本中的一段链接候选（offsets 为整篇文本下标，end 不含） */
 export interface LinkCandidate {
@@ -484,9 +485,10 @@ export function installDocumentLinks(
   const provider: Monaco.languages.LinkProvider = {
     async provideLinks(model, token) {
       const text = model.getValue();
-      const language = linkLanguageOf(model);
+      const modelPath = modelPathOf(model, host);
+      const language = linkLanguageOf(modelPath);
       const context: DocumentLinkContext = {
-        modelPath: modelPathOf(model, host),
+        modelPath,
         projectRoot: safeProjectRoot(host),
       };
       const links: Monaco.languages.ILink[] = [];
@@ -516,16 +518,19 @@ export function installDocumentLinks(
 }
 
 /**
- * model 的语言 → 链接语言口径（行注释起头各一套）。
+ * 路径 → 链接语言口径（行注释起头各一套）。
  *
- * 缺 `getLanguageId` 的桩 model / 取值抛错 ⇒ 按 ERB（`;`）处理：ERB 是这两门里
- * **更严格**的一套（`#` 与 `//` 都不是注释），坏输入只会少标、不会多说。
+ * 判据走**扩展名**（`KOJO2_SOURCE_EXTENSION`），不走 model 的语言 id：语言 id 分支是
+ * LAU-2 起要收敛的形态（宿主里每多一处 `*_LANGUAGE_ID` 比较就多一条要维护的分叉），
+ * 而 `.kojo2` 这个扩展名本身就是"这份文件用哪门语言"的声明。
+ *
+ * 没有路径 / 坏输入 ⇒ 按 ERB（`;`）处理：ERB 是这两门里**更严格**的一套
+ * （`#` 与 `//` 都不是注释），坏输入只会少标、不会多说。
  */
-function linkLanguageOf(model: Monaco.editor.ITextModel): LinkLanguage {
+function linkLanguageOf(modelPath: string | null): LinkLanguage {
+  if (modelPath === null) return 'erb';
   try {
-    const read = (model as { getLanguageId?: () => string }).getLanguageId;
-    const id = typeof read === 'function' ? read.call(model) : '';
-    return id === KOJO2_LANGUAGE_ID ? 'kojo2' : 'erb';
+    return extname(modelPath).toLowerCase() === KOJO2_SOURCE_EXTENSION ? 'kojo2' : 'erb';
   } catch {
     return 'erb';
   }

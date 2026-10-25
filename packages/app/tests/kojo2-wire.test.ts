@@ -409,9 +409,9 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
     expect(open.isKojo2Path('D:/p/.kojo2')).toBe(false);
   });
 
-  it('按后缀收文件的清单只多一项：开关关 = 空、开 = `.kojo2`', async () => {
+  it('按后缀收文件的清单恒含 `.kojo2`（看得见文件是语言面，不看开关）', async () => {
     const off = await boot(false);
-    expect(off.open.kojo2SourceExtensions()).toEqual([]);
+    expect(off.open.kojo2SourceExtensions()).toEqual(['.kojo2']);
     const on = await boot(true);
     expect(on.open.kojo2SourceExtensions()).toEqual(['.kojo2']);
   });

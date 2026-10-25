@@ -18,6 +18,8 @@ const run = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../audit-decoupling.mjs', import.meta.url));
 /** 审计脚本的清单读取助手（脚本 import 它；夹具必须一起复制，否则脚本加载即崩） */
 const WORDS_HELPER = fileURLToPath(new URL('../adapter-manifest-words.mjs', import.meta.url));
+/** `audit-allow` 判据（与 audit-language 共用；同上，不复制就 MODULE_NOT_FOUND） */
+const ALLOW_HELPER = fileURLToPath(new URL('../lib/audit-allow.mjs', import.meta.url));
 
 async function runAudit(files: Record<string, string>): Promise<{ code: number; output: string }> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'kojo-audit-'));
@@ -25,6 +27,8 @@ async function runAudit(files: Record<string, string>): Promise<{ code: number; 
     await fs.mkdir(path.join(tmp, 'tools'), { recursive: true });
     await fs.copyFile(SCRIPT, path.join(tmp, 'tools', 'audit-decoupling.mjs'));
     await fs.copyFile(WORDS_HELPER, path.join(tmp, 'tools', 'adapter-manifest-words.mjs'));
+    await fs.mkdir(path.join(tmp, 'tools', 'lib'), { recursive: true });
+    await fs.copyFile(ALLOW_HELPER, path.join(tmp, 'tools', 'lib', 'audit-allow.mjs'));
     // A 项对 NEUTRAL_DIRS 里的单文件条目（bootstrap.ts / adapter-manifest.ts）无条件
     // readFile：夹具必须提供它们，否则脚本 ENOENT 崩溃——退出码 1 但报告是堆栈而非
     // B 项文本，三个用例全废。清单里的 auditWord 决定审计词表（读不到就判红）。
@@ -172,5 +176,34 @@ describe('audit-decoupling · A 项语言包在册清单（两门一等语言都
     });
     expect(clean.code).toBe(0);
     expect(clean.output).toContain('全部通过');
+  });
+});
+
+describe('audit-decoupling · audit-allow 判据与 audit-language 同一实现（2026-10-26 收紧）', () => {
+  it('注释位 + 非空理由 ⇒ 豁免（既有写法不许被收紧误伤）', async () => {
+    const { code, output } = await runAudit({
+      'packages/plugins/probe/src/index.ts': 'export const marker = 1;\n',
+      'packages/kernel/src/index.ts': "export const X = 'M_KOJO'; // audit-allow: 组合根示例行\n",
+    });
+    expect(code).toBe(0);
+    expect(output).toContain('全部通过');
+  });
+
+  it('字符串里的同名串不算豁免（行中随手写就免责是那条缝）', async () => {
+    const { code, output } = await runAudit({
+      'packages/plugins/probe/src/index.ts': 'export const marker = 1;\n',
+      'packages/kernel/src/index.ts': "export const X = 'M_KOJO'; export const NOTE = 'audit-allow: 字符串里不算';\n",
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('A(内核零游戏知识)');
+  });
+
+  it('光秃秃的空理由不算豁免（占位不许生效）', async () => {
+    const { code, output } = await runAudit({
+      'packages/plugins/probe/src/index.ts': 'export const marker = 1;\n',
+      'packages/kernel/src/index.ts': "export const X = 'M_KOJO'; // audit-allow:\n",
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('A(内核零游戏知识)');
   });
 });

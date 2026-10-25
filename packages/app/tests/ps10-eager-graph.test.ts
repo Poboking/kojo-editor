@@ -412,6 +412,13 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · +0.1 KB `erb-parser/plugin.ts` / `index.ts`：服务面透传 `path` 与导出面。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
+    //   - **语言面缺陷批（2026-10-26，合流后重钉）**：读数见下面那条 console（现读数由闸
+    //     当场打印）；本批净增全落在既有常驻文件、零新模块：`ui/editor-global-providers.ts`
+    //     （2.0 语言面安装器搬出切流开关块）、`monaco/theme.ts` + `kojo-theme-rules.ts`
+    //     （2.0 规则无条件并入三套 v1 主题；`kojo2-theme.ts` 因删自抄色表同时缩水）、
+    //     `bootstrap.ts`（2.0 登记表核 `facts.id === entry.id` 的对账与可见诊断）、
+    //     `monaco/erb-preproc-dim.ts`（语言判据改扩展名，净增几十字节）。两枚闸随上游现值
+    //     走（本批不再抬闸）。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤193 文件 / ≤2,870 KB）`);
     expect(totalKb).toBeLessThanOrEqual(2_870);
     expect(files.length).toBeLessThanOrEqual(193);

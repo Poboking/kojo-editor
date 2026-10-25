@@ -76,6 +76,12 @@ const stub = vi.hoisted(() => {
       // 录制窗口之外：给一枚拆不动任何账的假 disposable
       return { dispose: () => undefined };
     }
+    // 只记**注册**调用：读面调用（`editor.getModels()` 这类装机时顺手取一次状态的）返回的
+    // 不是注册，接线层也不该把它塞进 `globalDisposers`——记进来会让"每枚都被拆"的断言
+    // 把一次读取当成漏拆（2026-10-26 语言面批：2.0 安装器搬出开关块后，装配段会在装机时
+    // 读一次 `getModels()`）。
+    const method = path.slice(path.lastIndexOf('.') + 1);
+    if (!method.startsWith('register')) return { dispose: () => undefined };
     if (path === state.failRegisterOn) throw new Error(`桩：注册 '${path}' 抛错`);
     const rec: Rec = { path, disposed: false, failOnDispose: false };
     state.created.push(rec);

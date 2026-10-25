@@ -23,6 +23,11 @@ const WINDOWS_CONTEXT = {
 
 const ERB_LANG = 'kojo-erb';
 const KOJO2_LANG = 'kojo2';
+/**
+ * 2.0 文件的路径。供给器的语言口径按**扩展名**判（不看 model 语言 id），所以"走 kojo2
+ * 注释口径"的用例必须给 `.kojo2` 路径——语言 id 与路径不一致时以路径为准。
+ */
+const KOJO2_MODEL_PATH = 'C:\\proj\\pkg\\a\\foo.kojo2';
 
 function fakeModel(
   text: string,
@@ -118,7 +123,7 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
     const text = '# 常量 图 字符串 = "data/立绘.csv"';
     expect(extractLinkCandidates(text, 'kojo2')).toEqual([]);
     // 探针全真也不成链（说明是"没被当注释"，不是"存在性没命中"）
-    const links = await linksFor(text, { existsPath: () => true }, WINDOWS_CONTEXT.modelPath, KOJO2_LANG);
+    const links = await linksFor(text, { existsPath: () => true }, KOJO2_MODEL_PATH, KOJO2_LANG);
     expect(links).toEqual([]);
   });
 
@@ -231,14 +236,18 @@ describe('供给器接线：链接形态与命令落点', () => {
     expect(registrations).toHaveLength(1);
     expect(registrations[0]!.languages).toEqual(['kojo-erb', 'kojo2']);
     expect(await linksFor('; ./missing.erb', { existsPath: () => false })).toEqual([]);
-    // kojo2 的 `//` 行注释经同一个 provider 生效（能走到探针 ⇒ 命中为真时出链接）
+    // kojo2 的 `//` 行注释经同一个 provider 生效（扩展名判语言 ⇒ `.kojo2` 路径才走 2.0 口径）
     const hit = await linksFor(
       '// ./data/one.erb',
       { existsPath: async (path) => path === 'C:\\proj\\pkg\\a\\data\\one.erb' },
-      WINDOWS_CONTEXT.modelPath,
+      KOJO2_MODEL_PATH,
       KOJO2_LANG,
     );
     expect(hit).toHaveLength(1);
+    // 反例：语言 id 是 kojo2、但路径是 `.erb` ⇒ 按 ERB 口径（`//` 不是注释，零链接）
+    expect(
+      await linksFor('// ./data/one.erb', { existsPath: async () => true }, WINDOWS_CONTEXT.modelPath, KOJO2_LANG),
+    ).toEqual([]);
   });
 
   it('非 file 的 model 可由宿主 filePathOf 提供路径', async () => {
