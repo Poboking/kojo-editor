@@ -13,6 +13,8 @@
  *    只自证、不赋值：与解析结果不一致同样报 `core/dialect/mismatch`，
  *    解析结果**不因断言而改变**（否则就是第三真源）；
  * 4. 三者都拿不到 ⇒ **未绑定**：`binding = null` + 一条 `core/dialect/unbound`。
+ * 5. **事实对账**：`factsFor(effective)` 交回的事实 `GameAdapter.id` 必须等于 `effective`；
+ *    不等 ⇒ `core/dialect/response-mismatch`（error）并**按未绑定返回**（不给半个事实）。
  *
  * ⚠ 本文件**没有** `fallbackDialect` 这一格，也不写任何默认方言常量（D12）：
  * 未绑定就交出空事实，绝不借别方言的事实给当前文件出提示。
@@ -42,6 +44,9 @@ export interface ResolveDialectBindingInput {
    * 方言 id → 事实（`GameAdapter`）的**查询函数**，由宿主注册表提供。
    * 返回 `null` / `undefined` = 该方言没有 2.0 事实面（今天有四枚只有 v1 面的适配器）⇒
    * 按未绑定处理，**不猜**、不借别方言的表。
+   *
+   * 交回的事实必须**自证同源**：`GameAdapter.id === dialect`。不等 ⇒
+   * `core/dialect/response-mismatch` 并按未绑定返回（查询表映错键时绝不静默通过）。
    */
   readonly factsFor?: (dialect: DialectId) => GameAdapter | null | undefined;
   /**
@@ -63,7 +68,10 @@ export type DialectBindingResolution =
       readonly resolvedDialect: DialectId;
       readonly diagnostics: readonly KojoDiagnostic[];
     }
-  /** 未绑定：没有可用方言 id，或有 id 但该方言没有 2.0 事实面 ⇒ 事实类一律降级 */
+  /**
+   * 未绑定：没有可用方言 id，或有 id 但该方言没有 2.0 事实面，或交回的事实自证的是
+   * **另一个**方言（`core/dialect/response-mismatch`）⇒ 事实类一律降级（绝不返回半个事实）。
+   */
   | {
       readonly kind: 'unbound';
       readonly binding: null;
@@ -73,13 +81,6 @@ export type DialectBindingResolution =
 
 /* ============================== 2. glob 归属（纯函数） ============================== */
 
-/** glob 里需要转义的正则元字符（`*` / `?` 由本层自己展开，不进这里） */
-const GLOB_META = /[.^$+{}()|[\]\\]/g;
-
-function escapeLiteral(ch: string): string {
-  return ch.replace(GLOB_META, '\\$&');
-}
-
 /**
  * 载体 glob 的**匹配子集**（口径写死，别扩）：
  * - 分隔符固定 `/`；glob 与路径都先过 `normalizePath`（反斜杠 → 正斜杠、剥开头的 `./`），
@@ -87,42 +88,66 @@ function escapeLiteral(ch: string): string {
  * - `*` = 不跨段的一串；`?` = 段内单字；`**` = 跨段；`**` 紧跟一个分隔符时额外吞掉自己那一段（可缺省）；
  * - **大小写敏感**（归属是数据不是宽恕：盘上的路径大小写不一致就该判不出来，而不是悄悄并档）；
  * - 不支持花括号展开——需要两枚落点就写两条 `carriers`（数据比语法好读）。
+ *
+ * ## 实现口径（别改回正则展开）
+ *
+ * 旧实现把跨段量词展成正则交给引擎：失配时要试遍组合切分，实测指数级（读数见
+ * `tests/dialect-carriers.test.ts` 头注）。这里改成**按字符的记忆化 DP**，
+ * 每条 `(模式位置, 路径位置)` 只算一次，O(|glob| × |path|)，语义逐字同义。
+ * 非字符串入参（宿主装载从不跑 `validateGameAdapter`）按**不命中**返回，绝不抛。
  */
 export function carrierGlobMatches(glob: string, path: string): boolean {
-  const normalized = normalizePath(path);
-  let pattern = '';
-  let i = 0;
-  const source = normalizePath(glob);
-  while (i < source.length) {
-    const ch = source[i]!;
+  if (typeof glob !== 'string' || typeof path !== 'string') return false;
+  const pattern = normalizePath(glob);
+  const target = normalizePath(path);
+  const plen = pattern.length;
+  const tlen = target.length;
+  const stride = tlen + 1;
+  /** `match(pi, si)` 的记忆表；`star(...)` 单独一张（键空间不同，不能混） */
+  const matchMemo = new Map<number, boolean>();
+  const starMemo = new Map<number, boolean>();
+
+  /**
+   * 星号（`*` 或 `**`）：吞 ≥0 个字符后从 `np` 继续。
+   * `cross` = 跨段（`**`）时可吞 `/`；否则遇到 `/` 就得停（`*` 不跨段）。
+   */
+  const star = (np: number, si: number, cross: boolean): boolean => {
+    const key = (np * stride + si) * 2 + (cross ? 1 : 0);
+    const hit = starMemo.get(key);
+    if (hit !== undefined) return hit;
+    let value = match(np, si);
+    if (!value && si < tlen && (cross || target[si] !== '/')) value = star(np, si + 1, cross);
+    starMemo.set(key, value);
+    return value;
+  };
+
+  const match = (pi: number, si: number): boolean => {
+    if (pi === plen) return si === tlen;
+    if (si > tlen) return false;
+    const key = pi * stride + si;
+    const hit = matchMemo.get(key);
+    if (hit !== undefined) return hit;
+    let value: boolean;
+    const ch = pattern[pi]!;
     if (ch === '*') {
-      const double = source[i + 1] === '*';
-      i += double ? 2 : 1;
-      if (double && source[i] === '/') {
-        i += 1;
-        pattern += '(?:.*/)?';
+      const double = pattern[pi + 1] === '*';
+      const afterStars = pi + (double ? 2 : 1);
+      if (double) {
+        // `**/`：自己那一段可缺省（旧口径 `(?:.*/)?` 的零段分支）
+        value = (pattern[afterStars] === '/' && match(afterStars + 1, si)) || star(afterStars, si, true);
       } else {
-        pattern += double ? '.*' : '[^/]*';
+        value = star(afterStars, si, false);
       }
-      continue;
+    } else if (ch === '?') {
+      value = si < tlen && target[si] !== '/' && match(pi + 1, si + 1);
+    } else {
+      value = si < tlen && target[si] === ch && match(pi + 1, si + 1);
     }
-    if (ch === '?') {
-      pattern += '[^/]';
-      i += 1;
-      continue;
-    }
-    pattern += escapeLiteral(ch);
-    i += 1;
-  }
-  let re: RegExp;
-  try {
-    re = new RegExp(`^${pattern}$`, 'u');
-  } catch {
-    // 归一化后的 pattern 理论上不会失配；真失配就当"不命中"——判不出归属比判错归属好，
-    // 且调用方会因未命中而报 `core/carrier/unowned`，不会静默。
-    return false;
-  }
-  return re.test(normalized);
+    matchMemo.set(key, value);
+    return value;
+  };
+
+  return match(0, 0);
 }
 
 /** 路径归一：反斜杠 → 正斜杠、剥掉开头的 `./`（大小写**不动**） */
@@ -139,18 +164,49 @@ export function factKindsOf(binding: CarrierBinding): readonly DialectFactKind[]
   return binding.validates ?? ['event', 'symbol', 'presentation', 'storage'];
 }
 
+/** 载体声明的**形状读数**（宿主装载从不跑 `validateGameAdapter`，所以这里必须自己防） */
+interface CarrierDeclaration {
+  /** `carriers` 字段出现过（**含空数组**）⇒ 声明过；`undefined` = 未声明 */
+  readonly declared: boolean;
+  /** 可参与归属的条目（`glob` 是字符串的那些，保持声明顺序） */
+  readonly usable: readonly CarrierBinding[];
+  /** 形状坏、被跳过的条目数（`carriers` 不是数组时记 1） */
+  readonly skipped: number;
+}
+/**
+ * 读 `carriers` 的声明面（**"声明过"的判据是 `!== undefined`，不是 `length > 0`**）：
+ * 空数组 = 声明了"零条归属"（`adapter.ts` 口径），要为每个文件报 `core/carrier/unowned`；
+ * 未声明 = 一概不问。坏条目按"不命中"跳过并计数，由调用方报成一条 warning（不静默）。
+ */
+function readCarrierDeclaration(adapter: GameAdapter): CarrierDeclaration {
+  const raw: unknown = adapter.carriers;
+  if (raw === undefined) return { declared: false, usable: [], skipped: 0 };
+  if (!Array.isArray(raw)) return { declared: true, usable: [], skipped: 1 };
+  const usable: CarrierBinding[] = [];
+  let skipped = 0;
+  for (const item of raw as readonly unknown[]) {
+    const binding = item as Partial<CarrierBinding> | null;
+    if (binding !== null && typeof binding === 'object' && typeof binding.glob === 'string') {
+      usable.push(binding as CarrierBinding);
+    } else {
+      skipped += 1;
+    }
+  }
+  return { declared: true, usable, skipped };
+}
+
 /**
  * 找出这份文件的载体归属（声明顺序 = 优先顺序，第一条命中即返回）。
- * 该方言**没声明** `carriers` 时返回 `undefined`，与"声明了但没命中"是两件事——
- * 后者要报 `core/carrier/unowned`，前者什么都不报（未声明 = 合法缺省）。
+ * 没声明（或声明了零条）`carriers` ⇒ `undefined`，与"声明了但没命中"是两件事：
+ * 后者要报 `core/carrier/unowned`，前者什么都不报。坏条目一律跳过不抛。
  */
 export function findCarrierBinding(
   adapter: GameAdapter,
   filePath: string,
 ): CarrierBinding | undefined {
-  const carriers = adapter.carriers;
-  if (carriers === undefined || carriers.length === 0) return undefined;
-  return carriers.find((binding) => carrierGlobMatches(binding.glob, filePath));
+  return readCarrierDeclaration(adapter).usable.find((binding) =>
+    carrierGlobMatches(binding.glob, filePath),
+  );
 }
 
 /* ============================== 3. 诊断构造（不静默） ============================== */
@@ -176,7 +232,10 @@ function usableDialect(value: DialectId | null | undefined): DialectId | null {
  * 2. 断言只做**对账**：与 `effective` 不符 ⇒ `core/dialect/mismatch`；`effective` 为空时
  *    断言同样**不能**把方言绑上（只断言不赋值），此时也是 mismatch + 未绑定；
  * 3. `effective` 非空但查不到事实 ⇒ 未绑定（带该方言名的 `core/dialect/unbound`）；
- * 4. 绑上了且给了 `filePath` ⇒ 按 `carriers` 定载体；声明了却没命中 ⇒ `core/carrier/unowned`。
+ * 4. **交回的事实必须属于这个方言**：`facts.id !== effective` ⇒ `core/dialect/response-mismatch`
+ *    （error）并**按未绑定返回**（不给"方言 A + 事实 B"的半个结果）；
+ * 5. 绑上了且给了 `filePath` ⇒ 按 `carriers` 定载体；**声明过**（含空数组）却没命中 ⇒
+ *    `core/carrier/unowned`；坏条目跳过并各报一条同码 warning。
  *
  * 任何分支都**不回落默认方言**，也不返回"半个事实"。
  */
@@ -241,18 +300,45 @@ export function resolveDialectBinding(input: ResolveDialectBindingInput): Dialec
     return freeze({ kind: 'unbound', binding: null, resolvedDialect: effective, diagnostics });
   }
 
+  /*
+   * ③.5 事实对账（§5.4 第 2 行「错事实不报错」的**执行点**）：登记表把 `erafl` 映到一份
+   * `id` 别家的事实上时，此前会写出"方言=erafl + 别家事实"的绑定并静默通过。分叉一定是
+   * 供方/宿主接线错了（`facts.id` 是自证，不是第二真源）⇒ error + **按未绑定返回**。
+   */
+  if (facts.id !== effective) {
+    diagnostics.push(
+      make(
+        'core/dialect/response-mismatch',
+        `方言响应错配：本次要的是方言 ${effective}，交回的事实自证为方言 ${String(facts.id)}` +
+          `（契约版本 ${String(facts.version)}）⇒ 按未绑定处理，结果已丢弃（不借错方言的事实）。`,
+      ),
+    );
+    return freeze({ kind: 'unbound', binding: null, resolvedDialect: effective, diagnostics });
+  }
+
   /* ④ 载体归属 */
   let carrier: DialectBinding['carrier'] = null;
   let validates: readonly DialectFactKind[] | undefined;
   const filePath = typeof input.filePath === 'string' ? normalizePath(input.filePath) : null;
-  const declaredCarriers = facts.carriers ?? [];
-  if (filePath !== null && declaredCarriers.length > 0) {
-    const matched = findCarrierBinding(facts, filePath);
+  const carriers = readCarrierDeclaration(facts);
+  if (filePath !== null && carriers.declared) {
+    // 声明了却读不成条目（宿主装载不跑 validateGameAdapter）⇒ 可见的 warning，不抛
+    if (carriers.skipped > 0) {
+      diagnostics.push(
+        make(
+          'core/carrier/unowned',
+          `方言 ${effective} 的 carriers 里有 ${carriers.skipped} 条归属形状坏了（条目不是对象，或 glob 不是字符串）` +
+            '：这些条目**按不命中跳过**，它们名下文件的载体级校验会落空——请检查适配器数据。',
+        ),
+      );
+    }
+    const matched = carriers.usable.find((binding) => carrierGlobMatches(binding.glob, filePath));
     if (matched === undefined) {
       diagnostics.push(
         make(
           'core/carrier/unowned',
-          `文件 ${filePath} 不在方言 ${effective} 声明的任何载体归属里（carriers 的 glob 都没命中）` +
+          `文件 ${filePath} 不在方言 ${effective} 声明的任何载体归属里` +
+            `${carriers.usable.length === 0 ? '（carriers 声明了零条归属）' : '（carriers 的 glob 都没命中）'}` +
             '：这一面的载体级校验跳过。',
         ),
       );

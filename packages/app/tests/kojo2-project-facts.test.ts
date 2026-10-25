@@ -26,11 +26,13 @@ import { projectEventArgs } from '@kojo/kojo-core';
 import { ERATW_EVENT_NAMES, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
 import { ERAFL, ERAFL_GAME_ADAPTER } from '@kojo/plugin-erafl-adapter';
 import { ADAPTER_MANIFEST, projectAdapters } from '../src/adapter-manifest';
+import type { AdapterManifestEntry } from '../src/adapter-manifest';
 import {
   kojo2AdapterForProject,
   kojo2BackendFactoryForProject,
   kojo2MigrateEventArgs,
   kojo2MigrateEventNames,
+  kojo2RegistrationIssues,
   kojo2StorageFacts,
   registerKojo2SurfacesFromModules,
 } from '../src/bootstrap';
@@ -185,5 +187,61 @@ describe('LAU-1a ⑤ · 源码闸：游戏名退出被修的四处', () => {
     const source = read('packages/app/src/ui/kojo2-project-scan-adapter.ts');
     expect(source).not.toMatch(/@kojo\/plugin-[a-z0-9-]+-adapter/);
     expect(source).not.toMatch(/eratw|erafl/i);
+  });
+});
+
+/* ============================== ⑥ 登记期事实对账（1026 批） ============================== */
+
+describe('LAU-1a ⑥ · 2.0 登记循环核 facts.id：键与事实必须同源', () => {
+  /** 一枚自证 id 与清单键不符的"事实面"（模拟登记表/清单写错） */
+  function miswiredEntry(id: string): AdapterManifestEntry {
+    return {
+      id,
+      dir: 'erafl-adapter',
+      packageName: '@kojo/plugin-erafl-adapter',
+      factory: 'createEraflAdapterPlugin',
+      scope: 'project',
+      auditWord: 'erafl',
+      kojo2AdapterExport: 'ERAFL_GAME_ADAPTER',
+    };
+  }
+
+  it('facts.id ≠ entry.id ⇒ 跳过该条 + 一条可见诊断（旧码：静默登记，工程拿到别家事实）', () => {
+    const before = kojo2RegistrationIssues().length;
+    const mismatchedId = 'mis-wired-game';
+    const liar = { ...ERAFL_GAME_ADAPTER, id: 'eratw' };
+    registerKojo2SurfacesFromModules([miswiredEntry(mismatchedId)], [{ ERAFL_GAME_ADAPTER: liar }]);
+
+    // 不落表：查这个键拿不到任何事实（宁缺勿错）
+    expect(kojo2AdapterForProject({ adapterId: mismatchedId })).toBeNull();
+
+    const issues = kojo2RegistrationIssues();
+    expect(issues.length).toBe(before + 1);
+    const issue = issues[issues.length - 1]!;
+    expect(issue.code).toBe('core/dialect/response-mismatch');
+    expect(issue.severity).toBe('error');
+    expect(issue.message).toContain(mismatchedId);
+    expect(issue.message).toContain('eratw');
+  });
+
+  it('导出根本不是对象（没有 id）⇒ 同样跳过并报诊断，不抛', () => {
+    const before = kojo2RegistrationIssues().length;
+    const oddId = 'odd-facts-shape';
+    expect(() =>
+      registerKojo2SurfacesFromModules([miswiredEntry(oddId)], [{ ERAFL_GAME_ADAPTER: { notAnId: 1 } }]),
+    ).not.toThrow();
+    expect(kojo2AdapterForProject({ adapterId: oddId })).toBeNull();
+    expect(kojo2RegistrationIssues().length).toBe(before + 1);
+  });
+
+  it('正例：eraFL 的真实 facts.id 与清单键同值 ⇒ 登记成功且不新增诊断', () => {
+    const before = kojo2RegistrationIssues().length;
+    expect(ERAFL_GAME_ADAPTER.id).toBe('erafl');
+    registerKojo2SurfacesFromModules(
+      [ADAPTER_MANIFEST.find((entry) => entry.id === 'erafl')!],
+      [{ ERAFL_GAME_ADAPTER, createEraflEmitBackend: undefined }],
+    );
+    expect(kojo2AdapterForProject({ adapterId: 'erafl' })).toBe(ERAFL_GAME_ADAPTER);
+    expect(kojo2RegistrationIssues().length).toBe(before);
   });
 });

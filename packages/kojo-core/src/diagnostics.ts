@@ -257,13 +257,15 @@ export type CoreDiagnosticCode =
    */
   | 'core/dialect/mismatch'
   /**
-   * **响应带的方言与请求的方言不一致**（§5.4 第 2 行「错事实不报错」的执行点；LAU-D2 接线时发射）。
-   * 供方在响应里自证 `dialect` + `factsVersion`，宿主与 `request.project.adapterId` 对账，
-   * 分叉即本码——`EditorDocumentIdentity.dialect` 只是便利下传，**不是第二真源**，
-   * 因此分叉一定是供方/宿主接线错了，而不是"两个都对"。
+   * **响应带的方言与请求的方言不一致**（§5.4 第 2 行「错事实不报错」的执行点）。
    *
-   * 与 `core/dialect/mismatch` 的分工：那条发生在**解析期**（工程/文件级的方言来源互相冲突）；
-   * 本条发生在**响应期**（解析已定，某次语言服务响应用错了方言）。
+   * **当前生产者（已接线）**：`dialect-resolver.ts::resolveDialectBinding` —— 解析期的事实对账：
+   * `factsFor(effective)` 交回的 `GameAdapter.id` ≠ `effective` 时发本码（error）并**按未绑定返回**。
+   * **尚未接线的另一半**：响应期由宿主对账供方响应自证的 `dialect` + `factsVersion`
+   * （LAU-D2）。`EditorDocumentIdentity.dialect` 只是便利下传，**不是第二真源**。
+   *
+   * 与 `core/dialect/mismatch` 的分工：那条是解析期各方言来源互相冲突（以覆盖为准）；
+   * 本条是"解析已定，交回/响应用错了方言"（结果丢弃）。
    *
    * 级别：error（不在 `CORE_WARNING_CODES` 里）。
    * 消息模板：`{服务}的响应用的是方言 {响应方言}（事实 {响应版本}），当前工程是 {工程方言}：结果已丢弃。`
@@ -271,6 +273,10 @@ export type CoreDiagnosticCode =
   | 'core/dialect/response-mismatch'
   /**
    * **作者写了当前方言事件目录里没有的事件**（§5.5 第 1 行；`# 机` / `@织` / XML `command` 三条落点共用）。
+   *
+   * ⚠ **当前零生产者**（`grep` 只命中码表与本文件的枚举/注释）：作者面这条要等 LAU-D2
+   * 的 `dialect lint` 接上才会发射；**别当成"已启用"**。今天作者看到的事件提示仍来自
+   * 适配器族的 `event/unknown`（见下一条分工），两者语义同源、表不合并。
    *
    * 与既有 `event/unknown`（`ADAPTER_VALIDATION_CODES.eventUnknown`）的分工：那条是**适配器族**，
    * 今天同时被 `validateGameAdapter`（默认事件不在表里）与 `checkEvent` 使用，**语义与级别一律不动**；
@@ -282,7 +288,9 @@ export type CoreDiagnosticCode =
    */
   | 'core/event/unknown'
   /**
-   * **事件写在了错误的载体上**（§5.5 第 2 行；LAU-D3 的 XML 面发射）。
+   * **事件写在了错误的载体上**（§5.5 第 2 行）。
+   *
+   * ⚠ **当前零生产者**：等 LAU-D3 的 XML 面接上才会发射；**别当成"已启用"**。
    * 事件名在目录里存在，但 `carriers[]` 声明它属于另一个载体——写在 ERB 里就落不到引擎的派发点。
    *
    * 与 `core/event/unknown` 的分工：那条是"没有这个事件"（名字面）；本条是"事件有、地方错"
@@ -296,6 +304,10 @@ export type CoreDiagnosticCode =
    * **这份文件不在方言声明的任何载体归属里**（§5.5 第 6 行；生产者 `resolveDialectBinding`）。
    * 方言声明了 `carriers`，但该文件路径匹配不上任何一条 glob ⇒ 载体归属不明，
    * 事实类校验只能整面跳过（**不猜**它属于哪个载体）。
+   *
+   * "声明过"的判据是 `carriers !== undefined`（**不是 `length > 0`**）：空数组 = 显式声明
+   * "零条归属"，同样要为每个文件报本码；`carriers` 缺席 = 未声明，一概不问。
+   * 同一枚码也承载"条目形状坏"（glob 非字符串的条目按不命中跳过、**各报一条 warning**）。
    *
    * 与 `core/event/wrong-carrier` 的分工：那条"知道载体、且载体写错了"；本条"连载体都判不出来"。
    * 与 `core/dialect/unbound` 的分工：那边是方言没绑定，这边方言是绑定的、只有文件归属缺。

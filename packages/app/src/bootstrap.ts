@@ -163,6 +163,34 @@ export function kojo2BackendFactoryForProject(
 }
 
 /**
+ * 登记期的**可见诊断**（宿主没有 core 的 DiagnosticSink，这里只收这一族）。
+ *
+ * 唯一成因：清单条目的 `id`（= 登记键 = v1 `gameId`）与该包导出的 2.0 事实 `GameAdapter.id`
+ * 不等——键与事实必须同源，否则某工程会拿到别家事实（§5.1 事实 1 的病根）。
+ * 码取 `core/dialect/response-mismatch`：给错了就丢弃。机器可读面 = {@link kojo2RegistrationIssues}。
+ */
+export interface Kojo2RegistrationIssue {
+  readonly code: 'core/dialect/response-mismatch';
+  readonly severity: 'error';
+  readonly message: string;
+}
+
+const registrationIssues: Kojo2RegistrationIssue[] = [];
+
+/** 登记期诊断快照（只读副本） */
+export function kojo2RegistrationIssues(): readonly Kojo2RegistrationIssue[] {
+  return Object.freeze([...registrationIssues]);
+}
+
+/** 记录一条登记期诊断：进快照 + 上 console */
+function reportRegistrationIssue(message: string): void {
+  registrationIssues.push(
+    Object.freeze({ code: 'core/dialect/response-mismatch' as const, severity: 'error' as const, message }),
+  );
+  console.warn('[kojo2]', message);
+}
+
+/**
  * 按**适配器清单**登记项目级 adapter 的 2.0 两面（LAU-1a，2026-10-25）。
  *
  * 这是原先写死 `'erafl'` 那段特例的泛化：游戏名与导出名不再住在组合根的分支里，
@@ -173,6 +201,8 @@ export function kojo2BackendFactoryForProject(
  * 口径与逐字保留的原实现一致：
  * - **存在性卫语句**：条目没声明导出名、或包没导出那个名字 ⇒ 跳过（该项目走 `null`
  *   语义：零候选、不抛、不借别游戏的事实）；
+ * - **事实对账**（1026 批）：事实自证的 `GameAdapter.id` 必须等于 `entry.id`，不等就跳过该条
+ *   并报一条可见诊断（此前只当键用，映射写错会静默拿到别家事实）；
  * - **adapter 与 backend 分开卫住**：只有一半时 `kojo2SurfaceForProject` 仍给 `null`
  *   （宁缺勿错），不会出现"A 游戏的事件目录 + B 游戏的落点"这种混搭；
  * - **键 = `entry.id`（= v1 `gameId`）**：与 `project.adapterId` 同一把；原实现取的
@@ -191,7 +221,18 @@ export function registerKojo2SurfacesFromModules(
     const adapterExport = entry.kojo2AdapterExport;
     if (adapterExport !== undefined) {
       const facts = mod[adapterExport];
-      if (facts !== undefined) registerKojo2Adapter(entry.id, facts as Kojo2GameAdapter);
+      if (facts !== undefined) {
+        // 防御式读 id：装载器不认识"事实面"的形状，`facts` 可能根本不是对象
+        const factsId = (facts as { id?: unknown } | null)?.id;
+        if (typeof factsId === 'string' && factsId === entry.id) {
+          registerKojo2Adapter(entry.id, facts as Kojo2GameAdapter);
+        } else {
+          reportRegistrationIssue(
+            `2.0 事实面拒绝登记：条目“${entry.id}”的事实用自证 id “${String(factsId)}”` +
+              '——键与事实必须同源，已跳过该条目。',
+          );
+        }
+      }
     }
     const backendExport = entry.kojo2BackendFactoryExport;
     if (backendExport !== undefined) {

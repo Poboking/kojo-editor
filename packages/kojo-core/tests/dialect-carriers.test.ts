@@ -14,6 +14,16 @@
  *    `core/carrier/unowned`；**没声明 carriers ⇒ 不报归属**（没问就不判）。
  * 6. `EditorDocumentIdentity.dialect?`（plugin-api）纯 additive：core 的 `DialectBinding`
  *    结构上即可赋给 `DialectContext`（**plugin-api 不 import kojo-core，没有环**）。
+ *
+ * 1026 批（契约执行点）补钉四件事（原 32 例一条不少）：
+ * 7. **错事实必报错**：`factsFor` 交回的事实 `GameAdapter.id` ≠ 请求方言 ⇒
+ *    `core/dialect/response-mismatch`（error）+ **按未绑定返回**（不给半个事实）。
+ *    旧码读数：`kind='bound'`、零诊断、`binding.dialect='erafl'` 而 `facts.id='eratw'`——静默通过。
+ * 8. **`carriers: []` = 声明了零条归属**（不是"没声明"）⇒ 每个文件一条 `core/carrier/unowned`。
+ *    旧码读数：零诊断（`unowned` 永不发）。
+ * 9. **glob 坏条目不抛 + 线性化**：非字符串 glob 按"不命中"跳过并报一条 warning；
+ *    跨段量词（`**` 紧跟 `/`）× 14 个、60 段失配 < 50ms（旧实现正则展开实测 8×20 失配 56ms、
+ *    9×22 1.5s、10×24 10.9s、14×60 两分钟不返回）。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -39,9 +49,10 @@ function fixtureWith(overrides: Partial<GameAdapter>): GameAdapter {
 const codesOf = (adapter: GameAdapter): string[] => validateGameAdapter(adapter).map((d) => String(d.code));
 const messagesOf = (adapter: GameAdapter): string[] => validateGameAdapter(adapter).map((d) => d.message);
 
-/** 一枚"口上写在 XML 里"的方言：只改 carriers 与事件 dispatch，其余沿用 fixture */
+/** 一枚"口上写在 XML 里"的方言：只改 id 与 carriers，其余沿用 fixture */
 function xmlDialect(extra: Partial<GameAdapter> = {}): GameAdapter {
   return fixtureWith({
+    id: 'b',
     carriers: [
       { carrier: 'xml', glob: 'kojo/**/dialog_*.xml' },
       { carrier: 'erb', glob: 'kojo/*.erb', validates: ['symbol', 'storage'] },
@@ -223,11 +234,11 @@ describe('诊断码 · LAU-D1 六枚', () => {
 
 /* ============================== 4. resolveDialectBinding：解析链是唯一真源 ============================== */
 
-/** 三枚"方言"：都从 fixture 派生，只改 id 与版本，避免引入任何真实游戏事实 */
-const DIALECT_A = fixtureWith({ carriers: [{ carrier: 'erb', glob: 'kojo/*.erb' }] });
+/** 三枚"方言"：都从 fixture 派生，只改 id 与 carriers，避免引入任何真实游戏事实 */
+const DIALECT_A = fixtureWith({ id: 'a', carriers: [{ carrier: 'erb', glob: 'kojo/*.erb' }] });
 const DIALECT_B = xmlDialect();
 /** 一枚**不声明 carriers** 的方言（今天所有既有适配器的形状）：归属问题一概不问 */
-const DIALECT_PLAIN = FIXTURE_ADAPTER;
+const DIALECT_PLAIN = fixtureWith({ id: 'plain' });
 const REGISTRY: Readonly<Record<string, GameAdapter>> = Object.freeze({
   a: DIALECT_A,
   b: DIALECT_B,
@@ -432,5 +443,146 @@ describe('plugin-api · dialect 格是便利不是真源', () => {
     };
     expect(withDialect.dialect?.dialect).toBe('b');
     expect(withDialect.dialect?.factsVersion).toBe(FIXTURE_ADAPTER.version);
+  });
+});
+
+/* ============================== 7. 错事实必报错（§5.4 第 2 行的执行点） ============================== */
+
+describe('resolveDialectBinding · 事实对账（旧码：别家 facts 照样通过）', () => {
+  /** 宿主登记表的错法：`erafl` 这个键下挂着一份自证 `id: 'eratw'` 的事实 */
+  const miswired = (): GameAdapter => fixtureWith({ id: 'eratw' });
+  const factsForMiswired = (): GameAdapter => miswired();
+
+  it('facts.id ≠ 请求方言 ⇒ core/dialect/response-mismatch（error）+ 按未绑定返回', () => {
+    const result = resolveDialectBinding({ detectedDialect: 'erafl', factsFor: factsForMiswired });
+    expect(result.kind).toBe('unbound');
+    expect(result.binding).toBeNull();
+    expect(codes(result.diagnostics)).toEqual(['core/dialect/response-mismatch']);
+    expect(result.diagnostics[0]!.severity).toBe('error');
+    // 文案说清「要的是 X、给的是 Y」
+    expect(result.diagnostics[0]!.message).toContain('要的是方言 erafl');
+    expect(result.diagnostics[0]!.message).toContain('eratw');
+    // 按未绑定返回的那一格：resolvedDialect 仍是请求方言（不是错事实的 id）
+    expect(Object.keys(result)).toEqual(['kind', 'binding', 'resolvedDialect', 'diagnostics']);
+    if (result.kind !== 'unbound') throw new Error('unreachable');
+    expect(result.resolvedDialect).toBe('erafl');
+  });
+
+  it('错事实 + 给了 filePath 也不产载体归属/不叠 unowned（不给半个事实）', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: 'erafl',
+      filePath: 'kojo/a.erb',
+      factsFor: factsForMiswired,
+    });
+    expect(result.kind).toBe('unbound');
+    expect(codes(result.diagnostics)).toEqual(['core/dialect/response-mismatch']);
+  });
+
+  it('事实 id 与方言同值 ⇒ 照常绑定（对账不误伤）', () => {
+    const exact = fixtureWith({ id: 'erafl' });
+    const result = resolveDialectBinding({ detectedDialect: 'erafl', factsFor: () => exact });
+    expect(result.kind).toBe('bound');
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+/* ============================== 8. carriers: [] 是"声明了零条归属" ============================== */
+
+describe('resolveDialectBinding · 空 carriers（旧码：被当成没声明，unowned 永不发）', () => {
+  const inlineOnly = fixtureWith({ id: 'inline-only', carriers: [] });
+
+  it('`carriers: []` + 给 filePath ⇒ bound + core/carrier/unowned（warning）', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: 'inline-only',
+      filePath: 'kojo/a.erb',
+      factsFor: () => inlineOnly,
+    });
+    expect(result.kind).toBe('bound');
+    if (result.kind !== 'bound') throw new Error('unreachable');
+    expect(result.binding.carrier).toBeNull();
+    expect(codes(result.diagnostics)).toEqual(['core/carrier/unowned']);
+    expect(result.diagnostics[0]!.severity).toBe('warning');
+    expect(result.diagnostics[0]!.message).toContain('零条归属');
+  });
+
+  it('`carriers: []` 但没给 filePath ⇒ 不问不判（零诊断）', () => {
+    const result = resolveDialectBinding({ detectedDialect: 'inline-only', factsFor: () => inlineOnly });
+    expect(result.kind).toBe('bound');
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('`carriers` 缺省（undefined）仍是"没声明"：有 filePath 也零诊断', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: 'plain',
+      filePath: 'anything/else.txt',
+      factsFor,
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+/* ============================== 9. 坏 glob（宿主装载不跑 validateGameAdapter）+ 回溯线性化 ============================== */
+
+describe('carriers · 坏条目不抛 + glob 线性匹配', () => {
+  const broken = fixtureWith({
+    id: 'broken',
+    carriers: [
+      { carrier: 'erb', glob: undefined as unknown as string },
+      { carrier: 'xml', glob: 'kojo/*.xml' },
+    ],
+  });
+
+  it('glob 非字符串 ⇒ 跳过该条、报一条 warning，其余条目照常归属（旧码：TypeError）', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: 'broken',
+      filePath: 'kojo/a.xml',
+      factsFor: () => broken,
+    });
+    expect(result.kind).toBe('bound');
+    if (result.kind !== 'bound') throw new Error('unreachable');
+    expect(result.binding.carrier).toBe('xml');
+    expect(codes(result.diagnostics)).toEqual(['core/carrier/unowned']);
+    expect(result.diagnostics[0]!.severity).toBe('warning');
+    expect(result.diagnostics[0]!.message).toContain('形状坏');
+  });
+
+  it('carrierGlobMatches 的非字符串入参一律"不命中"，不抛', () => {
+    expect(carrierGlobMatches(undefined as unknown as string, 'a/b.erb')).toBe(false);
+    expect(carrierGlobMatches('a/*.erb', undefined as unknown as string)).toBe(false);
+  });
+
+  it('findCarrierBinding 跳过坏条目；carriers 不是数组时也不抛（返回空）', () => {
+    expect(findCarrierBinding(broken, 'kojo/a.xml')?.carrier).toBe('xml');
+    const notArray = fixtureWith({ id: 'not-array', carriers: {} as unknown as readonly CarrierBinding[] });
+    expect(findCarrierBinding(notArray, 'kojo/a.erb')).toBeUndefined();
+    const result = resolveDialectBinding({
+      detectedDialect: 'not-array',
+      filePath: 'kojo/a.erb',
+      factsFor: () => notArray,
+    });
+    expect(result.kind).toBe('bound');
+    expect(codes(result.diagnostics)).toEqual(['core/carrier/unowned', 'core/carrier/unowned']);
+  });
+
+  it('14 个 `**/` × 60 段失配 < 50ms（旧实现正则展开两分钟不返回）', () => {
+    const glob = '**/'.repeat(14) + 'none.erb';
+    const path = Array.from({ length: 60 }, (_, i) => `s${i}`).join('/') + '/x.erb';
+    // 用 Date.now()（毫秒粒度足够：新实现实测 < 1ms，预算是它的数十倍）而**不用**
+    // `performance.now` 一族——那会让 `tools/perf-suite.mjs` 把整个文件判进串行计时池，
+    // 本文件的验收命令就跑不到它了（分池谓词见该文件头注）。
+    const started = Date.now();
+    expect(carrierGlobMatches(glob, path)).toBe(false);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  it('语义不变：`**/` 可缺省自己那一段、`*` 不跨段、`?` / 大小写敏感', () => {
+    expect(carrierGlobMatches('kojo/**/dialog_*.xml', 'kojo/dialog_1.xml')).toBe(true);
+    expect(carrierGlobMatches('kojo/**/dialog_*.xml', 'kojo/a/b/dialog_1.xml')).toBe(true);
+    expect(carrierGlobMatches('**/x.erb', 'x.erb')).toBe(true);
+    expect(carrierGlobMatches('a/**b', 'a/x/b')).toBe(true); // `**` 嵌在段内仍跨段（旧口径 `a/.*b`）
+    expect(carrierGlobMatches('kojo/**', 'kojo')).toBe(false);
+    expect(carrierGlobMatches('KOJO/*.erb', 'kojo/a.erb')).toBe(false);
+    expect(carrierGlobMatches('kojo/*.erb', 'kojo/a/b.erb')).toBe(false);
   });
 });
