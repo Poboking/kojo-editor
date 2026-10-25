@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { projectAdapters } from '../src/adapter-manifest';
 
 /**
  * PS-10 ②③ 的两条**次序契约**闸（源码级，形态照 `boot-sweep-single-source.test.ts`）。
@@ -101,6 +102,18 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 第六个 adapter（eratohoK，2026-10-25 批）。同样走项目级；`CSV/GameBase.csv`
       // 标题是唯一强特征（与 eraFL / era紅魔館 的 `ERB/口上` 目录不冲突）。
       'createTohokAdapterPlugin',
+    ];
+    // 适配器的名单与次序搬进**单一清单**（`src/adapter-manifest.ts`）：这里逐字钉住它。
+    const manifest = projectAdapters();
+    expect(manifest.map((e) => e.factory)).toEqual(expected);
+    // 组合根不再逐个 import 适配器——清单是唯一入口（漏改一处＝这里红）
+    expect(bootstrapSrc).toContain('projectAdapters()');
+    expect(bootstrapSrc).not.toMatch(/import\('@kojo\/plugin-era[a-z]*-adapter'\)/);
+    expect(bootstrapSrc).toContain('createAdapterPlugin(entry, adapterModules[idx]!)');
+  });
+
+  it('非适配器的项目级插件次序逐字冻结（拆分只改时机，不改名单与顺序）', () => {
+    const expected = [
       'createConventionLinterPlugin',
       'createConditionExtractorPlugin',
       'createSavParserPlugin',

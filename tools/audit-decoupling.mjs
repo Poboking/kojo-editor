@@ -18,8 +18,21 @@
  */
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { manifestAuditWords, withManifestWords } from './adapter-manifest-words.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+
+/**
+ * 适配器清单里的游戏名词（新增 adapter 不用再改本脚本）。
+ * 清单读不到就判红（fail-closed）——「读不到就当没有游戏名」等于放行。
+ */
+let manifestWords = [];
+try {
+  manifestWords = manifestAuditWords(ROOT);
+} catch (err) {
+  console.error(`审计中止：读不到适配器清单的游戏名词（${String(err)}）`);
+  process.exit(1);
+}
 
 /**
  * 游戏名词黑名单（对内核/宿主层生效）——只查**代码行**（注释行跳过：注释里的
@@ -31,7 +44,10 @@ const ROOT = path.resolve(import.meta.dirname, '..');
  *   `kojoPaths`/`charaIndex`），不在黑名单；
  * - 行尾 `// audit-allow: <理由>` 显式豁免。
  */
-const GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraSQC|eraNAS|eratohok)\b|M_KOJO|個人口上|\bsav\b/i;
+const GAME_WORDS = withManifestWords(
+  '\\b(eraK|eraSQN|eraNAS)\\b|M_KOJO|個人口上|\\bsav\\b',
+  manifestWords,
+);
 
 /** 是否需要跳过该行（注释/文档行） */
 function isCommentLine(line) {
@@ -56,6 +72,7 @@ const NEUTRAL_DIRS = [
   'packages/app/src-tauri/src',
   'packages/app/src/bridge',
   'packages/app/src/bootstrap.ts', // 例外说明：bootstrap 是宿主组合根，见下方豁免
+  'packages/app/src/adapter-manifest.ts', // 同上：适配器清单＝注册元数据（游戏 id / 包名），不是游戏知识
   'packages/app/src/ui', // 2026-10-11 解耦批：宿主 UI 层收编进 A 项（此前 eraTW 文案绑死游戏无门禁可拦）
   'packages/app/src/monaco', // 同上：Monaco 语言层（引擎级词汇可，具体游戏约定不可）
   // tree-sitter 语法层（.kojo 表层 DSL 的 CST，语言级词汇可、游戏约定不可）。2026-10-19 TSIT 批收编。
@@ -66,23 +83,21 @@ const NEUTRAL_DIRS = [
 ];
 
 /** 组合根豁免：app 的 bootstrap/UI 可以引用具体插件（那是宿主的接线职责） */
-const EXEMPT_FILES = new Set(['packages/app/src/bootstrap.ts']);
+const EXEMPT_FILES = new Set(['packages/app/src/bootstrap.ts', 'packages/app/src/adapter-manifest.ts']);
 
 /** 插件目录（B/C 项检查对象） */
 const PLUGIN_ROOTS = ['packages/plugins'];
 
 /**
  * 适配器插件**豁免名单**（D 项）：这些包**就是**游戏知识的家，允许出现游戏字面量。
- * 以目录名为准（`packages/plugins/<dir>`）。新增 adapter 时在此登记。
+ * 以目录名为准（`packages/plugins/<dir>`）。名单从磁盘目录派生——
+ * 新建 `*-adapter` 目录即自动豁免，不必再回来改这份脚本。
  */
-const ADAPTER_PLUGIN_DIRS = new Set([
-  'eratw-adapter',
-  'eraakumamaid-adapter',
-  'erafl-adapter',
-  'erakoumakan-adapter',
-  'erasqc-adapter',
-  'eratohok-adapter',
-]);
+const ADAPTER_PLUGIN_DIRS = new Set(
+  (await fs.readdir(path.join(ROOT, 'packages/plugins'), { withFileTypes: true }))
+    .filter((e) => e.isDirectory() && e.name.endsWith('-adapter'))
+    .map((e) => e.name),
+);
 
 /**
  * D 项的游戏知识字面量黑名单（通用插件禁用）。比 A 项更严——除游戏名/口上前缀外，
@@ -92,7 +107,10 @@ const ADAPTER_PLUGIN_DIRS = new Set([
  * 注意：`sav` **不在**此列——它是 emuera 引擎的通用存档容器扩展名（`sav-parser`
  * 是跨游戏一致的引擎级插件），误列会伤及正牌的通用插件。
  */
-const PLUGIN_GAME_WORDS = /\b(eratw|erafl|eraK|eraKoumakan|eraSQN|eraSQC|eraNAS|eratohok)\b|M_KOJO|個人口上|DIARY\{|TFLAG:192/i;
+const PLUGIN_GAME_WORDS = withManifestWords(
+  '\\b(eraK|eraSQN|eraNAS)\\b|M_KOJO|個人口上|DIARY\\{|TFLAG:192',
+  manifestWords,
+);
 
 const violations = [];
 

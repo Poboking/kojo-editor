@@ -12,6 +12,7 @@ import type {
 } from '@kojo/kojo-core';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
+import { createAdapterPlugin, projectAdapters } from './adapter-manifest';
 import { computeTasks } from './compute-tasks';
 import { createCascadeWatermarks } from './cascade-watermarks';
 import { perf } from './perf';
@@ -198,12 +199,11 @@ export async function bootstrapKernel(): Promise<Kernel> {
  * 正是"次序与展开时机同轴"）。动态 `import()` 只推迟解析与求值，不改这份名单的含义。
  */
 async function loadProjectPlugins(): Promise<Plugin[]> {
+  // 适配器走**单一清单**（`./adapter-manifest`）：身份 / 次序 / 工厂名都在那一份里，
+  // 组合根不再逐个 import——接新游戏只改清单 + 适配器包。
+  const adapterEntries = projectAdapters();
+  const adapterModules = await Promise.all(adapterEntries.map((entry) => entry.load!()));
   const [
-    eraflAdapter,
-    eraakumaAdapter,
-    erakoumakanAdapter,
-    erasqcAdapter,
-    eratohokAdapter,
     linter,
     extractor,
     savParser,
@@ -224,11 +224,6 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     uiMarket,
     uiKojoXml,
   ] = await Promise.all([
-    import('@kojo/plugin-erafl-adapter'),
-    import('@kojo/plugin-eraakumamaid-adapter'),
-    import('@kojo/plugin-erakoumakan-adapter'),
-    import('@kojo/plugin-erasqc-adapter'),
-    import('@kojo/plugin-eratohok-adapter'),
     import('@kojo/plugin-convention-linter'),
     import('@kojo/plugin-condition-extractor'),
     import('@kojo/plugin-sav-parser'),
@@ -253,35 +248,25 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
   // 用存在性卫语句读动态 import 的命名空间：2.0 面建成前这个导出不存在，写成直接
   // 访问会在类型层挂掉；建成后这里自然亮灯，无需再改。建成前 eraFL 工程走 `null`
   // 语义（零候选、不抛、不借 eraTW 的事实）——这正是"先掐掉错误事实"的中间态。
-  const eraflKojo2Adapter = (eraflAdapter as { ERAFL_GAME_ADAPTER?: Kojo2GameAdapter }).ERAFL_GAME_ADAPTER;
-  if (eraflKojo2Adapter !== undefined) {
-    registerKojo2Adapter(eraflAdapter.ERAFL.gameId, eraflKojo2Adapter);
+  const eraflModule = adapterModules[adapterEntries.findIndex((e) => e.id === 'erafl')] as
+    | { ERAFL_GAME_ADAPTER?: Kojo2GameAdapter; ERAFL: { gameId: string } }
+    | undefined;
+  const eraflKojo2Adapter = eraflModule?.ERAFL_GAME_ADAPTER;
+  if (eraflKojo2Adapter !== undefined && eraflModule !== undefined) {
+    registerKojo2Adapter(eraflModule.ERAFL.gameId, eraflKojo2Adapter);
   }
   // eraFL 的落点面（入口 D）：同一条存在性卫语句口径——包导出 `createEraflEmitBackend`
   // 就当场进表。**adapter 与 backend 分开卫住**：只有一半时 `kojo2SurfaceForProject`
   // 仍给 `null`（宁缺勿错），不会出现"eraTW 的事件目录 + eraFL 的落点"这种混搭。
-  const eraflEmitBackend = (eraflAdapter as { createEraflEmitBackend?: Kojo2BackendFactory })
-    .createEraflEmitBackend;
-  if (eraflEmitBackend !== undefined) {
-    registerKojo2Backend(eraflAdapter.ERAFL.gameId, eraflEmitBackend);
+  const eraflEmitBackend = (eraflModule as { createEraflEmitBackend?: Kojo2BackendFactory } | undefined)
+    ?.createEraflEmitBackend;
+  if (eraflEmitBackend !== undefined && eraflModule !== undefined) {
+    registerKojo2Backend(eraflModule.ERAFL.gameId, eraflEmitBackend);
   }
   return [
-    // eraFL 领域知识（第三个 adapter；`FLconfig.xml` 特征与另两个无交集 ⇒ 注册顺序不影响判定）。
-    // 同样排在前列：内核 detect / loadProject 时 adapter 必须已在场。
-    eraflAdapter.createEraflAdapterPlugin(),
-    // eraAkumaMaid 领域知识（第二个 adapter；detect 与 eraTW 无交集 ⇒ 注册顺序不影响判定）。
-    // 排首位：`ensureProjectPlugins` 在 `kernel.project.open()` 之前装载全部项目级插件，
-    // 内核 detect / loadProject 时 adapter 必须已在场。
-    eraakumaAdapter.createErakumamaidAdapterPlugin(),
-    // era紅魔館 领域知识（第四个 adapter；`CSV/GameBase.csv` 标题是唯一强特征——
-    // 它与 eraFL 共用 `ERB/口上` 目录名，只看目录会认混，故顺序不影响判定）。
-    erakoumakanAdapter.createKoumakanAdapterPlugin(),
-    // eraSQC 领域知识（第五个 adapter；`CSV/GameBase.csv` 标题为主特征——
-    // 它与 eraAkumaMaid 共用 `ERB/EVENT_K` 目录名，只看目录会认混，故顺序不影响判定）。
-    erasqcAdapter.createErasqcAdapterPlugin(),
-    // eratohoK 领域知识（第六个 adapter；`CSV/GameBase.csv` 标题为主特征——
-    // 它与 eraFL / era紅魔館 共用 `ERB/口上` 目录名，只看目录会认混，故顺序不影响判定）。
-    eratohokAdapter.createTohokAdapterPlugin(),
+    // 适配器（清单顺序 = 注册顺序）：内核 detect / loadProject 时 adapter 必须已在场。
+    // 次序不再承担「谁赢」的责任——多枚适配器同时认领会报冲突（见 `AdapterConflictError`）。
+    ...adapterEntries.map((entry, idx) => createAdapterPlugin(entry, adapterModules[idx]!)),
     // 约定校验引擎（游戏无关）+ 结果为面板呈现
     linter.createConventionLinterPlugin(),
     // 条件谓词抽取（游戏无关；变量语义来自当前 adapter 的 variableSchema）
