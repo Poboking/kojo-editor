@@ -101,14 +101,19 @@ export function frameStats(deltas: readonly number[]): FrameStats {
 
 /**
  * 长任务 ↔ 内核事件相关性：取与任务窗口 [t, t+dur] 相交的**最近一条**总线事件名做 hint。
+/**
+ * 长任务 ↔ 内核事件相关性：取与任务窗口 [t, t+dur] 相交的**最近一条**总线事件名做 hint。
  * 空环 / 无相交 ⇒ null。这是「卡的那 200ms 里在跑什么」的线索，不是因果证明。
+ *
+ * 时基（口径修②，2026-10-25 反馈）：任务 startTime 与 bus 事件的 t **同为 performance.now()
+ * 页内域**（recordBus 已改同钟）——直接比绝对值，不再做「相对探针起点」的换算
+ * （旧实现把两者混成两个域，hint 恒 null；实测三条长任务全 null）。
  */
-export function hintForTask(taskT: number, taskDur: number, bus: readonly BusEventLike[], probeStart: number): string | null {
-  const absT = probeStart + taskT;
+export function hintForTask(taskT: number, taskDur: number, bus: readonly BusEventLike[]): string | null {
   let best: BusEventLike | null = null;
   for (const ev of bus) {
-    if (ev.t <= absT + taskDur && ev.t >= absT - 200) {
-      if (best === null || Math.abs(ev.t - absT) < Math.abs(best.t - absT)) best = ev;
+    if (ev.t <= taskT + taskDur && ev.t >= taskT - 200) {
+      if (best === null || Math.abs(ev.t - taskT) < Math.abs(best.t - taskT)) best = ev;
     }
   }
   return best ? best.name : null;
@@ -139,17 +144,24 @@ export interface LongFrameLike {
 /**
  * 逐源码文件的帧耗时归因：long-animation-frame 条目 × 其 scripts[].sourceURL 聚合。
  * scriptMs 用脚本 duration 合计（条目自身 duration 含渲染），frames＝该文件出现的长帧数。
+ * **render 型长帧单独成桶**（口径修③，2026-10-25 反馈）：scriptMs=0 / sources 空的长帧
+ * 是样式/布局/绘制在吃时间（没有脚本可归因）——记进 `(render)`，否则这类帧会被误读成
+ * 「无长帧」（实测 67–75ms 渲染帧整批隐身）。
  */
 export function aggregateBySource(frames: readonly LongFrameLike[]): SourceCostReading[] {
   const map = new Map<string, SourceCostReading & { scriptMs: number; frames: number }>();
   for (const f of frames) {
     const scripts = Array.isArray(f.script) ? f.script : [];
     const perFrame = new Map<string, number>();
+    let scriptMsTotal = 0;
     for (const s of scripts) {
+      scriptMsTotal += s?.duration ?? 0;
       const name = sourceName(s?.sourceURL ?? '');
       perFrame.set(name, (perFrame.get(name) ?? 0) + (s?.duration ?? 0));
     }
-    for (const [name, ms] of perFrame) {
+    const keys: [string, number][] = [...perFrame.entries()];
+    if (scriptMsTotal < 1) keys.push(['(render)', Math.max(0, f.duration - scriptMsTotal)]);
+    for (const [name, ms] of keys) {
       const cur = map.get(name) ?? { source: name, scriptMs: 0, frames: 0 };
       cur.scriptMs += ms;
       cur.frames += 1;
@@ -211,15 +223,23 @@ export function buildReport(input: {
   bus: readonly BusEventLike[];
   hasLongAnimationFrame: boolean;
 }): ProbeReport {
-  const longTasks: LongTaskReading[] = [...input.longTasks]
+  // 窗口过滤（口径修①的第二道保险，2026-10-25 反馈）：startTime 落在 [startedAt, endedAt]
+  // 之外的条目一律不进报告——即便采集侧误开了 buffered（历史条目补发）也混不进来
+  const inWindow = (e: { startTime: number }): boolean =>
+    e.startTime >= input.startedAt - 1 && e.startTime <= input.endedAt + 1;
+  const windowTasks = input.longTasks.filter(inWindow);
+  const windowEvents = input.events.filter(inWindow);
+  const windowFrames = input.longFrames.filter(inWindow);
+
+  const longTasks: LongTaskReading[] = [...windowTasks]
     .sort((a, b) => b.duration - a.duration)
     .slice(0, 30)
     .map((task) => ({
       t: Math.round(task.startTime),
       durationMs: Math.round(task.duration),
-      hint: hintForTask(task.startTime, task.duration, input.bus, input.startedAt),
+      hint: hintForTask(task.startTime, task.duration, input.bus),
     }));
-  const eventLatency: EventLatencyReading[] = [...input.events]
+  const eventLatency: EventLatencyReading[] = [...windowEvents]
     .filter((e) => e.duration > EVENT_LATENCY_MS.notable)
     .sort((a, b) => b.duration - a.duration)
     .slice(0, 30)
@@ -236,8 +256,8 @@ export function buildReport(input: {
     frames: frameStats(input.frameDeltas),
     longTasks,
     eventLatency,
-    bySource: aggregateBySource(input.longFrames),
-    longFrames: longFrameReadings(input.longFrames),
+    bySource: aggregateBySource(windowFrames),
+    longFrames: longFrameReadings(windowFrames),
     blocking: input.blocking,
     capabilities: { longAnimationFrame: input.hasLongAnimationFrame },
     thresholds: { frame: FRAME_JANK_MS, event: EVENT_LATENCY_MS },
@@ -260,7 +280,7 @@ export function summarizeReport(r: ProbeReport): string[] {
   } else {
     lines.push(
       r.capabilities.longAnimationFrame
-        ? '逐源码帧耗时：本窗口无长帧（没有 >50ms 的动画帧）'
+        ? '逐源码帧耗时：本窗口无长渲染帧（long-animation-frame 无条目；仅脚本外的掉帧看帧分档与阻塞采样）'
         : '逐源码帧耗时：本运行时不支持 long-animation-frame（换新版 Chrome/Edge 可得逐文件归因）',
     );
   }

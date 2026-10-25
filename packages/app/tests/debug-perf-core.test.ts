@@ -45,14 +45,14 @@ describe('perf-probe · 帧分档与百分位', () => {
 });
 
 describe('perf-probe · 长任务 × 总线事件相关性', () => {
-  const probeStart = 1000;
-  it('窗口相交的最近事件作 hint；不相交 ⇒ null', () => {
+  it('窗口相交的最近事件作 hint（同域 performance.now 时基）；不相交 ⇒ null', () => {
     const bus = [
       { t: 1050, name: 'kojo.functionChanged' }, // 任务窗口 [1060,1260] 之前 10ms ⇒ 相交（-200 容差内）
       { t: 2000, name: 'editor.activeFileChanged' }, // 远处不相交
     ];
-    expect(hintForTask(60, 200, bus, probeStart)).toBe('kojo.functionChanged');
-    expect(hintForTask(900, 50, [], probeStart)).toBeNull();
+    expect(hintForTask(1060, 200, bus)).toBe('kojo.functionChanged');
+    expect(hintForTask(2900, 50, bus)).toBeNull();
+    expect(hintForTask(900, 50, [])).toBeNull();
   });
 });
 
@@ -94,10 +94,11 @@ describe('perf-probe · 报告拼装与摘要', () => {
       startedAt: 1000,
       endedAt: 4000,
       frameDeltas: [...Array(60).fill(16.7), 120],
-      longTasks: [{ startTime: 200, duration: 300 }],
+      // 任务与事件都落在窗口内（口径修①后 buildReport 会滤掉窗外条目——见下一条用例）
+      longTasks: [{ startTime: 1200, duration: 300 }],
       events: [
-        { startTime: 10, duration: 40, name: 'click', target: { tagName: 'BUTTON' } },
-        { startTime: 20, duration: 210, name: 'pointerdown', target: { tagName: 'INPUT', className: 'picker-input x' } },
+        { startTime: 1010, duration: 40, name: 'click', target: { tagName: 'BUTTON' } },
+        { startTime: 1020, duration: 210, name: 'pointerdown', target: { tagName: 'INPUT', className: 'picker-input x' } },
       ],
       longFrames: [],
       blocking: { samples: 30, over50: 2, worstMs: 90 },
@@ -114,6 +115,32 @@ describe('perf-probe · 报告拼装与摘要', () => {
     const lines = summarizeReport(r);
     expect(lines.some((l) => l.includes('p95='))).toBe(true);
     expect(lines.some((l) => l.includes('逐源码帧耗时'))).toBe(true);
+  });
+
+  it('口径修①：start 之前的历史条目（buffered 补发形态）不进报告', () => {
+    const r = buildReport({
+      startedAt: 1000,
+      endedAt: 4000,
+      frameDeltas: [16, 17],
+      longTasks: [
+        { startTime: 300, duration: 485 }, // 页面加载期的历史长任务（反馈实测形态）
+        { startTime: 2500, duration: 120 }, // 窗口内
+      ],
+      events: [],
+      longFrames: [{ startTime: 350, duration: 90, script: [] }, { startTime: 2600, duration: 70, script: [] }],
+      blocking: { samples: 5, over50: 0, worstMs: 0 },
+      bus: [],
+      hasLongAnimationFrame: true,
+    });
+    expect(r.longTasks).toHaveLength(1);
+    expect(r.longTasks[0]!.durationMs).toBe(120);
+    expect(r.longFrames.every((f) => f.durationMs === 70)).toBe(true);
+    expect(r.bySource.some((s) => s.source === '(render)' && s.frames === 1)).toBe(true); // 无脚本的渲染帧单独立桶
+  });
+
+  it('口径修③：纯渲染型长帧（scriptMs=0）进 (render) 桶，不再隐身', () => {
+    const out = aggregateBySource([{ startTime: 0, duration: 75, script: [] }]);
+    expect(out).toEqual([{ source: '(render)', scriptMs: 75, frames: 1 }]);
   });
 
   it('无 long-animation-frame 支持时摘要如实说明（不是静默缺数）', () => {

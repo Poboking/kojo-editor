@@ -94,7 +94,11 @@ const busRing: BusRecord[] = [];
 let kernelNow: Kernel | null = null;
 
 function recordBus(name: string, payload: unknown): void {
-  busRing.push({ t: Date.now(), name, payload });
+  // 时基与探针同域（口径修②，2026-10-25 反馈）：performance.now() 与
+  // PerformanceObserver 条目的 startTime 同钟——hintForTask 才能对上；
+  // Date.now() 是墙钟，两域混用 ⇒ 长任务 hint 恒 null（实测三条全 null）。
+  // 消费方（bus.recent 的展示）只相对排序，无墙钟依赖。
+  busRing.push({ t: performance.now(), name, payload });
   if (busRing.length > BUS_RING_LIMIT) busRing.splice(0, busRing.length - BUS_RING_LIMIT);
 }
 

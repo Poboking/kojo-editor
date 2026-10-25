@@ -112,7 +112,10 @@ export function createPerfProbe(deps: { getBusRecent: (n: number) => readonly Bu
       for (const [type, cb] of collect) {
         try {
           const ob = new PerformanceObserver(cb);
-          ob.observe({ type, buffered: true } as PerformanceObserverInit);
+          // buffered:false（口径修①，2026-10-25 反馈）：buffered:true 会把 start 之前
+          // 的历史条目整包补发（实测把页面加载期的 485ms 长任务算进新窗口）——探针
+          // 只量自己窗口内发生的事。buildReport 侧另有 startedAt 过滤兜底（双保险）。
+          ob.observe({ type, buffered: false } as PerformanceObserverInit);
           observers.push(ob);
         } catch {
           /* 单路缺位不拦整轮采集 */

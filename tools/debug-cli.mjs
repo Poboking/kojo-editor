@@ -32,6 +32,8 @@
  *   type [<选择器>] <文本>     # 选择器可省＝打到当前焦点元素（命令面板/搜索框先点开再 type）
  *   key <键> [ctrl|alt|shift]  # 真实键事件（enter/escape/tab/arrowdown/…，可带修饰键）
  *   screenshot <out.png> [--full]   # 整页截图（agent 可直接看 PNG）
+ *   perf <start|stop|quick [ms]>    # UI 卡顿体检（探针四路；跨命令存活）
+ *   profile <run [ms]>              # CPU 采样归因（函数级热点 selfTime Top25；KOJO_PROFILE_OUT 落 .cpuprofile）
  *   dom                        # DOM 结构快照（相位/标签/面板/通知/状态栏）
  *   events [n]                 # 内核事件旁听（最近 n 条，默认 40）
  *   invoke <命令> [JSON参数]   # 直达宿主命令（调试宿或桌面壳 IPC 同一入口）
@@ -800,9 +802,11 @@ async function cmdEvents(args, nArg) {
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
     const list = await cdp.evalJs(`__kojoDebug.bus.recent(${n})`);
-    for (const e of list ?? []) {
-      console.log(`${new Date(e.t).toISOString().slice(12, 23)} ${e.name} ${JSON.stringify(e.payload).slice(0, 160)}`);
-    }
+      // e.t 与探针同域（performance.now() 页内钟，口径修②）——不再是墙钟：相对首条的偏移毫秒展示
+      const firstT = list?.[0]?.t;
+      for (const e of list ?? []) {
+        console.log(`+${Math.max(0, Math.round(e.t - firstT))}ms ${e.name} ${JSON.stringify(e.payload).slice(0, 160)}`);
+      }
     console.log(`（最近 ${list?.length ?? 0} 条）`);
   });
 }
@@ -864,6 +868,92 @@ async function printProbeReport(cdp) {
   console.log(JSON.stringify(report, null, 2));
 }
 
+/**
+ * profile <start|stop|run [ms]>——CDP Profiler 归因（2026-10-25 反馈④，把「自己在 %TEMP%
+ * 写 CDP 脚本」变成常规通道）：性能探针的 long-animation-frame 只给长帧内的 sourceURL；
+ * **自用时归因**（函数级热点、selfTime）要 CPU 采样器。分工：perf 答「卡不卡、卡在哪帧」；
+ * profile 答「热点函数是谁」。
+ *
+ * ⚠ Profiler 会话绑定 CDP **连接**：连接断开采样即丢（实测 "No recording profiles found"）。
+ * 因此 start/stop 必须同一条连接——CLI 每次调用独立连接 ⇒ 跨调用 start→stop 拿不到数据。
+ * 常规用法是 `profile run [ms]`（一次连接内 start→睡→stop 一条龙）；`KOJO_PROFILE_OUT`
+ * 可同时落完整 .cpuprofile（Chrome DevTools 火焰图）。
+ */
+async function cmdProfile(args, sub, msArg) {
+  await withCdp(async (s, cdp) => {
+    const mode = sub ?? 'run';
+    if (mode === 'start') {
+      die(
+        'profile start/stop 跨 CLI 调用拿不到数据（Profiler 绑定 CDP 连接，连接断采样即丢——实测）。\n' +
+          '用一次连接内完成的形式：node tools/debug-cli.mjs profile run [ms]（缺省 3000）',
+        2,
+      );
+    }
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 100 }).catch(() => {});
+    const runMs = mode === 'run' ? Math.max(300, Number(msArg ?? 3000) || 3000) : 0;
+    if (mode === 'run') {
+      await cdp.send('Profiler.start');
+      // 同连接内可选负载：--eval "<js>"（Profiler 会话绑连接，CLI 跨调用 start→stop 拿不到
+      // 数据 ⇒ 代码级负载必须在同一条连接的窗口里跑；页内交互可由真人/并行 CLI 驱动）
+      const evalIdx = args.indexOf('--eval');
+      const loadExpr = evalIdx >= 0 ? args[evalIdx + 1] : null;
+      console.log(`[profile] 采样 ${runMs}ms …${loadExpr ? '（含 --eval 负载）' : '（这段窗口内去驱动界面）'}`);
+      if (loadExpr) {
+        const until = Date.now() + runMs;
+        while (Date.now() < until) {
+          // 每次迭代包 IIFE：负载里的 const/let 不留在页内全局（重复求值会撞重声明）
+          await cdp.evalJs(`(() => { ${loadExpr} })()`, 30000).catch((err) =>
+            console.warn(`[profile] eval 失败：${String(err?.message ?? err).slice(0, 120)}`),
+          );
+        }
+      } else {
+        await sleep(runMs);
+      }
+    }
+    const { profile } = await cdp.send('Profiler.stop');
+    await printProfileSummary(profile);
+  });
+}
+
+async function printProfileSummary(profile) {
+  const nodes = profile.nodes ?? [];
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const self = new Map(); // nodeId → selfTime µs
+  let totalUs = 0;
+  for (const [i, sample] of (profile.samples ?? []).entries()) {
+    const dt = profile.timeDeltas?.[i] ?? 0; // µs（timeDeltas[i] = 第 i-1→i 个样本的间隔）
+    if (dt <= 0) continue;
+    totalUs += dt;
+    self.set(sample, (self.get(sample) ?? 0) + dt);
+  }
+  const rows = [...self.entries()]
+    .map(([id, us]) => {
+      const n = byId.get(id) ?? {};
+      const cf = n.callFrame ?? {};
+      const url = String(cf.url ?? '');
+      const file = url ? url.split('/').slice(-2).join('/') : '(vm)';
+      const fn = cf.functionName || '(anonymous)';
+      return { where: `${file}:${cf.lineNumber ?? '?'} ${fn}`, selfMs: us / 1000 };
+    })
+    // 过滤阈值按 µs 算（此前 >1ms 会把 100µs 采样档的绝大多数样本滤掉，只剩 3ms 假读数）
+    .filter((r) => r.selfMs > 0.2)
+    .sort((a, b) => b.selfMs - a.selfMs)
+    .slice(0, 25);
+  console.log(`[profile] 采样总时长 ${(totalUs / 1000).toFixed(0)}ms；按 selfTime 降序 Top ${rows.length}：`);
+  for (const r of rows) {
+    console.log(`  ${r.selfMs.toFixed(1)}ms  ${r.where}`);
+  }
+  if (rows.length === 0) console.log('  （采样窗口太短或无热点——窗口拉长点再试）');
+  const dest = process.env.KOJO_PROFILE_OUT;
+  if (dest) {
+    await fsp.writeFile(path.resolve(dest), JSON.stringify(profile));
+    console.log(`[profile] 完整 profile 已存：${path.resolve(dest)}（可拖进 Chrome DevTools 的 Performance 面板看火焰图）`);
+  } else {
+    console.log('[profile] 提示：设 KOJO_PROFILE_OUT=<路径> 可同时落完整 .cpuprofile（DevTools 火焰图）');
+  }
+}
+
 /* ------------------------------ main ------------------------------ */
 
 function parseArgs(argv) {
@@ -917,6 +1007,7 @@ const commands = {
   events: () => cmdEvents(positional, positional[0]),
   invoke: () => cmdInvoke(positional, positional[0], positional[1]),
   perf: () => cmdPerf(positional, positional[0], positional[1]),
+  profile: () => cmdProfile(positional, positional[0]),
 };
 if (!rawCmd || !commands[rawCmd]) {
   console.log('用法：node tools/debug-cli.mjs <子命令> […]\n  ' + [...Object.keys(commands)].join(' · '));

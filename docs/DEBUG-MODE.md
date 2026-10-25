@@ -53,7 +53,13 @@ node tools/debug-cli.mjs stop
 - **卡顿体检（可开关探针）**：`perf start` → 驱动交互（`type`/`run`/切主题）→ `perf stop` 出报告（帧率分档
   >32/50/100ms、长任务≥50ms 带总线事件 hint、交互延迟>100ms 带 target、逐源码文件的帧耗时归因）；
   `perf quick [ms]` 一条龙。真机读数示例：189 帧 p50=16.7ms max=74.1ms；人为注入 120ms 帧被精确钉住。
-  探针关着零开销；`bySource` 空＝无 >50ms 渲染帧（阴性也是答案），真卡时长帧的 scripts 会带 vite 源码 URL。
+  探针关着零开销。**口径（2026-10-25 反馈批修正）**：报告只含探针窗口内的条目（buffered 已关＋
+  startedAt 双保险，页面加载期的历史长任务混不进来）；bySource 空＝无**渲染型**长帧（纯脚本长帧会
+  记进 `(render)` 桶的反面——脚本帧带源码名，样式/布局帧归 `(render)`）；hint 只认任务窗口 ±200ms 内
+  的总线事件（内核事件与任务要真正同窗，分两次 CLI 调用隔太久就是 null——那是语义不是 bug）。
+- **函数级热点归因**：`profile run [ms] [--eval "<js>"]`（CDP CPU 采样器；⚠ Profiler 绑 CDP 连接，
+  跨 CLI 调用 start→stop 拿不到数据——代码级负载用 `--eval` 同连接跑，页内交互在窗口内驱动）；
+  输出 selfTime 降序 Top25，`KOJO_PROFILE_OUT=<路径>` 同时落完整 .cpuprofile（DevTools 火焰图）。
 - **功能健全验证**：`commands` 找到目标命令 id → `run <id>` → `state`/`events` 断言副作用（相位 / 面板 / 事件名）。
 - **编辑链路**：`open-file` → `eval "__kojoDebug.editor.type('PRINTL x')"` → `eval "__kojoDebug.editor.markers()"`
   → 保存后 `eval "__kojoDebug.invoke('read_file_bytes_raw',{path:'…'})"` 与盘上内容对拍。
@@ -75,7 +81,8 @@ node tools/debug-cli.mjs stop
 | `invoke <cmd> [json]` | 直达宿主命令 | 与产品同一条 invoke 路 |
 | `click <sel>` / `type [<sel>] <文本>` / `key <键> [ctrl+…]` | CDP 真实输入 | click 带 elementFromPoint 自证；**type 省略选择器＝打到当前焦点元素**（命令面板/搜索框先点开或 `key ctrl+p` 再 type）；key 支持 enter/escape/tab/arrow* |
 | `screenshot <png> [--full]` | 截图 | 拍前自动 `Page.bringToFront` + 双 rAF 强制产帧，**不吃缓存帧**（切主题/Monaco 重绘后也是新帧）；agent 的「眼睛」 |
-| `perf <start\|stop\|quick [ms]>` | UI 卡顿体检（可开关探针） | start/stop 跨命令存活（探针在页内）；报告四路：帧分档 / 长任务×事件 hint / 交互延迟 / 逐源码帧耗时 |
+| `perf <start\|stop\|quick [ms]>` | UI 卡顿体检（可开关探针） | start/stop 跨命令存活（探针在页内）；报告四路：帧分档 / 长任务×事件 hint / 交互延迟 / 逐源码帧耗时（render 型长帧归 `(render)` 桶） |
+| `profile <run [ms]> [--eval "<js>"]` | CPU 采样归因（函数级热点） | selfTime Top25；⚠ 绑 CDP 连接——start/stop 跨调用无效，用 run 一条龙；KOJO_PROFILE_OUT 落 .cpuprofile |
 
 页内 API（`?kojo-debug=1` 选入后）：`__kojoDebug.{mode, host, state(), kernel(), commands.{list,run},
 bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snapshot,
