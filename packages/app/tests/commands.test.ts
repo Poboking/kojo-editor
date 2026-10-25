@@ -137,6 +137,27 @@ describe('命令注册表合并', () => {
     const reg = buildCommandRegistry(shell, []);
     expect(() => reg[0]!.run({ project: null })).not.toThrow();
   });
+
+  it('第三参（内核动作）并入注册表，与槽贡献同构；缺省空数组 ⇒ 旧两参调用零变化（additive）', () => {
+    expect(buildCommandRegistry(shell, [])).toHaveLength(shell.length);
+    const reg = buildCommandRegistry(shell, [], [
+      { id: 'editor.builtin.foldAll', title: '全部折叠', category: '折叠', run: () => undefined },
+    ]);
+    expect(reg).toHaveLength(shell.length + 1);
+    const entry = reg.find((c) => c.id === 'editor.builtin.foldAll');
+    expect(entry?.category).toBe('折叠');
+    expect(entry?.title).toBe('全部折叠');
+  });
+
+  it('优先级：槽贡献 > 内核动作 > 壳层（同 id 后者覆盖前者）', () => {
+    const override = buildCommandRegistry(
+      [{ id: 'x', title: '壳层版', run: () => undefined }],
+      [{ id: 'x', title: '插件版', run: () => undefined }],
+      [{ id: 'x', title: '内核版', run: () => undefined }],
+    );
+    expect(override).toHaveLength(1);
+    expect(override[0]!.title).toBe('插件版');
+  });
 });
 
 describe('when 求值', () => {

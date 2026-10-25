@@ -100,6 +100,40 @@ export const KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   { id: 'editor.internal.save', title: '保存当前文件', category: '编辑器', keys: 'ctrl+s', rebindable: false, note: '编辑器内生效，暂不支持改键' },
   // A7「在选定内容中查找」：有选区时把选中文本灌进 find 并把搜索域钉在选区（无选区不动作）
   { id: 'editor.internal.findInSelection', title: '在选定内容中查找', category: '编辑器', keys: 'ctrl+alt+f', rebindable: false, note: '编辑器内生效；先选中文本再按' },
+  // ---- 内核动作（1026 编辑器内核批）----
+  // id 与 `ui/monaco-command-specs.ts` 一一对应（测试钉住）；本表只登记「命令面板入口」——
+  // 这些动作的键由 Monaco 自己处理（内建键），宿主**不覆写、不劫持**，故一律不给缺省键
+  // （keys 留空）。作者想另配宿主键可在此页改键；不改就照 Monaco 内建键用（只读页另列一份）。
+  // 分类名与 monaco-command-specs 的中文名逐字相同（命令面板同分组）。
+  { id: 'editor.builtin.foldAll', title: '全部折叠', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+0 为 Monaco 内建' },
+  { id: 'editor.builtin.unfoldAll', title: '全部展开', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+J 为 Monaco 内建' },
+  { id: 'editor.builtin.foldRecursively', title: '递归折叠（连子层一起）', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+[ 为 Monaco 内建' },
+  { id: 'editor.builtin.unfoldRecursively', title: '递归展开', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+] 为 Monaco 内建' },
+  { id: 'editor.builtin.toggleFold', title: '切换当前折叠', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+L 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel1', title: '折叠到第 1 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+1 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel2', title: '折叠到第 2 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+2 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel3', title: '折叠到第 3 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+3 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel4', title: '折叠到第 4 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+4 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel5', title: '折叠到第 5 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+5 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel6', title: '折叠到第 6 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+6 为 Monaco 内建' },
+  { id: 'editor.builtin.foldLevel7', title: '折叠到第 7 层', category: '折叠', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+7 为 Monaco 内建' },
+  { id: 'editor.builtin.transformToUppercase', title: '转为大写', category: '文本变换', rebindable: true },
+  { id: 'editor.builtin.transformToLowercase', title: '转为小写', category: '文本变换', rebindable: true },
+  { id: 'editor.builtin.transformToTitlecase', title: '转为标题大小写', category: '文本变换', rebindable: true },
+  { id: 'editor.builtin.sortLinesAscending', title: '选中行升序排序', category: '行操作', rebindable: true },
+  { id: 'editor.builtin.sortLinesDescending', title: '选中行降序排序', category: '行操作', rebindable: true },
+  { id: 'editor.builtin.removeDuplicateLines', title: '删除重复行', category: '行操作', rebindable: true },
+  { id: 'editor.builtin.trimTrailingWhitespace', title: '去掉行尾空白', category: '行操作', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+X 为 Monaco 内建' },
+  { id: 'editor.builtin.insertLineAfter', title: '在下方插入一行', category: '行操作', rebindable: true, note: '编辑器内 Ctrl+Enter 为 Monaco 内建' },
+  { id: 'editor.builtin.insertLineBefore', title: '在上方插入一行', category: '行操作', rebindable: true, note: '编辑器内 Ctrl+Shift+Enter 为 Monaco 内建' },
+  { id: 'editor.builtin.smartSelectExpand', title: '扩大选择范围', category: '选择', rebindable: true, note: '编辑器内 Shift+Alt+→ 为 Monaco 内建' },
+  { id: 'editor.builtin.smartSelectShrink', title: '缩小选择范围', category: '选择', rebindable: true, note: '编辑器内 Shift+Alt+← 为 Monaco 内建' },
+  { id: 'editor.builtin.selectAll', title: '全选', category: '选择', rebindable: true, note: '编辑器内 Ctrl+A 为 Monaco 内建' },
+  { id: 'editor.builtin.addCommentLine', title: '添加行注释', category: '注释', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+C 为 Monaco 内建' },
+  { id: 'editor.builtin.removeCommentLine', title: '移除行注释', category: '注释', rebindable: true, note: '编辑器内 Ctrl+K Ctrl+U 为 Monaco 内建' },
+  { id: 'editor.builtin.clipboardCut', title: '剪切', category: '剪贴板', rebindable: true, note: '编辑器内 Ctrl+X 为 Monaco 内建' },
+  { id: 'editor.builtin.clipboardCopy', title: '复制', category: '剪贴板', rebindable: true, note: '编辑器内 Ctrl+C 为 Monaco 内建' },
+  { id: 'editor.builtin.clipboardPaste', title: '粘贴', category: '剪贴板', rebindable: true, note: '编辑器内 Ctrl+V 为 Monaco 内建' },
 ];
 
 /** 缺省键位索引（只收有缺省键的条目） */
@@ -114,7 +148,18 @@ const DEFAULTS: ReadonlyMap<string, string> = new Map(
  * 同一张表在两台机器上两种顺序 ⇒ 作者记住「编辑器在第三位」就不可靠。
  * 新增分类**必须同时**加进这里，否则该分类会被排到最后（漏了也不会炸，只是靠后）。
  */
-export const KEYBINDING_CATEGORY_ORDER: readonly string[] = ['工作台', '布局', '编辑器'];
+export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
+  '工作台',
+  '布局',
+  '编辑器',
+  // 内核动作（1026 编辑器内核批）：命令面板与 `ui/monaco-command-specs.ts` 的中文分类逐字相同
+  '折叠',
+  '文本变换',
+  '行操作',
+  '选择',
+  '注释',
+  '剪贴板',
+];
 
 /** 缺省键位（不在注册表 = undefined）；只回答「出厂是什么」，不回答「现在生效什么」 */
 export function defaultKeybindingOf(id: string): string | undefined {

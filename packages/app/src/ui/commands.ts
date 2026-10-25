@@ -63,8 +63,8 @@ export function chordEquals(a: KeyChord, b: KeyChord): boolean {
  */
 const ARROW_KEY_LABELS: Readonly<Record<string, string>> = { arrowleft: '←', arrowright: '→' };
 
-/** keybinding 的人读展示（命令面板右侧 hint） */
-export function formatKeybinding(binding: string): string {
+/** 单个和弦的人读展示（`ctrl+shift+p` → `Ctrl+Shift+P`） */
+function formatSingleChord(binding: string): string {
   const c = parseKeybinding(binding);
   if (!c) return binding;
   const mods: string[] = [];
@@ -76,6 +76,25 @@ export function formatKeybinding(binding: string): string {
   const key =
     c.key.length === 1 || /^f\d+$/.test(c.key) ? c.key.toUpperCase() : (ARROW_KEY_LABELS[c.key] ?? c.key);
   return [...mods, key].join('+');
+}
+
+/**
+ * keybinding 的人读展示（命令面板右侧 hint / 键位页芯片）。
+ *
+ * **空格分隔 = 和弦序列**（如 Monaco 折叠族的 `ctrl+k ctrl+0`）：逐段各自格式化再以空格相连，
+ * 展示成「Ctrl+K Ctrl+0」。不含空格时走单段，与改动前逐字相同（既有单键展示一字未动）。
+ * 为什么必须有这条：拆前 `parseKeybinding` 只认单和弦，把 `ctrl+k ctrl+0` 整串当主键解析会
+ * 丢掉前半段——键位页会画出一条读不出意思的芯片。
+ */
+export function formatKeybinding(binding: string): string {
+  if (binding.includes(' ') || binding.includes('\t')) {
+    return binding
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(formatSingleChord)
+      .join(' ');
+  }
+  return formatSingleChord(binding);
 }
 
 /** 注册表中的统一命令项（壳层命令 + 槽贡献同构） */
@@ -98,10 +117,17 @@ export interface ShellCommandSpec {
   run(): void;
 }
 
-/** 合并壳层命令与槽贡献为统一注册表（同 id 时槽贡献优先——插件可覆盖壳层默认） */
+/**
+ * 合并壳层命令、内核动作与槽贡献为统一注册表。
+ *
+ * 优先级：**同 id 时槽贡献优先**（插件可覆盖壳层默认 / 内核动作）；内核动作又覆盖壳层同名。
+ * 第三参 `editorActions`（1026 编辑器内核批，additive）：Monaco 内建动作的宿主命令入口，
+ * 形状与槽贡献同构（id/title/category/keybinding/when/run）——旧调用方两参不动（缺省空数组）。
+ */
 export function buildCommandRegistry(
   shellCommands: readonly ShellCommandSpec[],
   slotCommands: readonly EditorCommandContribution[],
+  editorActions: readonly EditorCommandContribution[] = [],
 ): CommandEntry[] {
   const map = new Map<string, CommandEntry>();
   for (const s of shellCommands) {
@@ -109,13 +135,16 @@ export function buildCommandRegistry(
     if (s.keybinding !== undefined) (entry as { keybinding?: string }).keybinding = s.keybinding;
     map.set(s.id, entry);
   }
-  for (const c of slotCommands) {
+  /** 槽贡献与内核动作形状同构，共用一条合并腿；后写覆盖（顺序即优先级） */
+  const mergeContribution = (c: EditorCommandContribution): void => {
     const entry: CommandEntry = { id: c.id, title: c.title, run: (ctx) => c.run(ctx) };
     if (c.category !== undefined) (entry as { category?: string }).category = c.category;
     if (c.keybinding !== undefined) (entry as { keybinding?: string }).keybinding = c.keybinding;
     if (c.when !== undefined) (entry as { when?: typeof c.when }).when = c.when;
     map.set(c.id, entry);
-  }
+  };
+  for (const a of editorActions) mergeContribution(a);
+  for (const c of slotCommands) mergeContribution(c);
   return [...map.values()];
 }
 

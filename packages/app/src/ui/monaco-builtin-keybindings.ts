@@ -17,6 +17,8 @@
  */
 import { formatKeybinding } from './commands';
 import type { KeybindingRow } from './keybindings';
+// 1026 编辑器内核批：内核动作里有 Monaco 缺省键的那批从单源清单生成，不在这里手抄第二份
+import { monacoCommandsWithBuiltinKey } from './monaco-command-specs';
 
 /** Monaco 内建键位的分类名（快捷键页的分组标题；也是 `KEYBINDING_CATEGORY_ORDER` 未登记 ⇒ 恒排最后） */
 export const MONACO_BUILTIN_CATEGORY = 'Monaco 内建';
@@ -63,6 +65,21 @@ const BUILTIN_SPECS: readonly BuiltinSpec[] = [
 ];
 
 /**
+ * 内核动作里**有 Monaco 缺省键**的那批（1026 编辑器内核批）——从不手抄，
+ * 直接从 `ui/monaco-command-specs.ts` 单源生成：`id` = `monaco.` + `monacoActionId`，
+ * `title` 复用命令面板的中文名，`keys` 是 Monaco 的 Windows 缺省键（含 `Ctrl+K` 和弦）。
+ * 取证与命令 id 的核证全在那边（`vendorFile` 字段），测试回 vendor 逐条对账。
+ */
+const BRIDGED_BUILTIN_SPECS: readonly BuiltinSpec[] = monacoCommandsWithBuiltinKey().map((s) => ({
+  id: `monaco.${s.monacoActionId}`,
+  title: s.title,
+  keys: s.keybinding!,
+}));
+
+/** 只读页的完整清单：既有 1020 批 30 条 + 1026 批桥进来的内核动作 */
+const ALL_BUILTIN_SPECS: readonly BuiltinSpec[] = [...BUILTIN_SPECS, ...BRIDGED_BUILTIN_SPECS];
+
+/**
  * 只读行（`rebindable:false` ⇒ 页面上不出现"改键 / 解绑"的操作格；
  * `state:'default'` ⇒ 「已改」范围里不出现，因为作者根本改不了它）。
  *
@@ -71,7 +88,7 @@ const BUILTIN_SPECS: readonly BuiltinSpec[] = [
  * `keybindings.ts` 的 `keybindingConflictWith` 守着，本表不参与。
  */
 export function monacoBuiltinRows(): KeybindingRow[] {
-  return BUILTIN_SPECS.map((s) => ({
+  return ALL_BUILTIN_SPECS.map((s) => ({
     id: s.id,
     title: s.title,
     category: MONACO_BUILTIN_CATEGORY,
@@ -85,7 +102,7 @@ export function monacoBuiltinRows(): KeybindingRow[] {
 }
 
 /** 内建键位条数（测试与页面读数用，不手抄数字） */
-export const MONACO_BUILTIN_COUNT = BUILTIN_SPECS.length;
+export const MONACO_BUILTIN_COUNT = ALL_BUILTIN_SPECS.length;
 
 /** 这条内建键的鼠标手势说明（列选择不是按键，不进表；设置页那一行仍归排版偏好管） */
 export const COLUMN_SELECT_GESTURE =

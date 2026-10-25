@@ -34,13 +34,29 @@ const KEY_CODE: Record<string, number> = {
   space: 10,
   arrowup: 16,
   arrowdown: 18,
+  arrowleft: 15,
+  arrowright: 17,
+  enter: 3,
   a: 31,
+  c: 33,
   d: 34,
   f: 36,
   g: 37,
+  j: 40,
   k: 41,
   l: 42,
   o: 45,
+  u: 51,
+  v: 52,
+  x: 54,
+  '0': 21,
+  '1': 22,
+  '2': 23,
+  '3': 24,
+  '4': 25,
+  '5': 26,
+  '6': 27,
+  '7': 28,
   '/': 90,
   '[': 92,
   ']': 94,
@@ -58,10 +74,26 @@ function primaryValue(chord: string): number {
   return parts.slice(0, -1).reduce((acc, m) => acc + (MOD_BIT[m] ?? 0), 0) + code!;
 }
 
+/** 空格分隔的和弦（`'ctrl+k ctrl+0'`）⇒ 两段各自的数字和 */
+function chordPairOf(keys: string): [number, number] {
+  const parts = keys.split(/\s+/);
+  expect(parts, `和弦应正好两段：${keys}`).toHaveLength(2);
+  return [primaryValue(parts[0]!), primaryValue(parts[1]!)];
+}
+
 /** 该文件里出现过的全部 primary 数字和 */
 function primariesIn(src: string): number[] {
   return [...src.matchAll(/primary:\s*([0-9]+(?:\s*\|\s*[0-9]+)*)/g)].map((m) =>
     m[1]!.split('|').reduce((acc, part) => acc + Number(part.trim()), 0),
+  );
+}
+
+/** 该文件里出现过的全部 `KeyChord(a, b)` 数字对（两参数都是纯数字表达式；foldLevel 的 `(21+i)` 不匹配，单列） */
+function keyChordsIn(src: string): Array<[number, number]> {
+  const sum = (s: string | undefined): number =>
+    (s ?? '0').split('|').reduce((acc, part) => acc + Number(part.trim()), 0);
+  return [...src.matchAll(/KeyChord\(\s*([0-9]+(?:\s*\|\s*[0-9]+)*)\s*,\s*([0-9]+(?:\s*\|\s*[0-9]+)*)\s*\)/g)].map(
+    (m) => [sum(m[1]), sum(m[2])] as [number, number],
   );
 }
 
@@ -97,6 +129,31 @@ const PROOFS: Readonly<Record<string, readonly [string, string]>> = {
   'monaco.editor.action.marker.prev': ['editor.action.marker.prev', 'editor/contrib/gotoError/browser/gotoError.js'],
   'monaco.editor.action.marker.nextInFiles': ['editor.action.marker.nextInFiles', 'editor/contrib/gotoError/browser/gotoError.js'],
   'monaco.editor.action.marker.prevInFiles': ['editor.action.marker.prevInFiles', 'editor/contrib/gotoError/browser/gotoError.js'],
+  // ---- 1026 编辑器内核批：从 monaco-command-specs 桥进来的内核动作（有 Monaco 缺省键的那些） ----
+  'monaco.editor.foldAll': ['editor.foldAll', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.unfoldAll': ['editor.unfoldAll', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldRecursively': ['editor.foldRecursively', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.unfoldRecursively': ['editor.unfoldRecursively', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.toggleFold': ['editor.toggleFold', 'editor/contrib/folding/browser/folding.js'],
+  // foldLevel1..7 由 vendor 循环注册（`FoldLevelAction.ID(i)`，无字面量 id）→ 见下面单列的证据块
+  'monaco.editor.foldLevel1': ['editor.foldLevel1', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldLevel2': ['editor.foldLevel2', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldLevel3': ['editor.foldLevel3', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldLevel4': ['editor.foldLevel4', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldLevel5': ['editor.foldLevel5', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldLevel6': ['editor.foldLevel6', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.foldLevel7': ['editor.foldLevel7', 'editor/contrib/folding/browser/folding.js'],
+  'monaco.editor.action.trimTrailingWhitespace': ['editor.action.trimTrailingWhitespace', 'editor/contrib/linesOperations/browser/linesOperations.js'],
+  'monaco.editor.action.insertLineAfter': ['editor.action.insertLineAfter', 'editor/contrib/linesOperations/browser/linesOperations.js'],
+  'monaco.editor.action.insertLineBefore': ['editor.action.insertLineBefore', 'editor/contrib/linesOperations/browser/linesOperations.js'],
+  'monaco.editor.action.smartSelect.expand': ['editor.action.smartSelect.expand', 'editor/contrib/smartSelect/browser/smartSelect.js'],
+  'monaco.editor.action.smartSelect.shrink': ['editor.action.smartSelect.shrink', 'editor/contrib/smartSelect/browser/smartSelect.js'],
+  'monaco.editor.action.selectAll': ['editor.action.selectAll', 'editor/browser/editorExtensions.js'],
+  'monaco.editor.action.addCommentLine': ['editor.action.addCommentLine', 'editor/contrib/comment/browser/comment.js'],
+  'monaco.editor.action.removeCommentLine': ['editor.action.removeCommentLine', 'editor/contrib/comment/browser/comment.js'],
+  'monaco.editor.action.clipboardCutAction': ['editor.action.clipboardCutAction', 'editor/contrib/clipboard/browser/clipboard.js'],
+  'monaco.editor.action.clipboardCopyAction': ['editor.action.clipboardCopyAction', 'editor/contrib/clipboard/browser/clipboard.js'],
+  'monaco.editor.action.clipboardPasteAction': ['editor.action.clipboardPasteAction', 'editor/contrib/clipboard/browser/clipboard.js'],
 };
 
 describe('行形状（快捷键页的判据不许漂）', () => {
@@ -139,21 +196,53 @@ describe('每条键位回 vendor 对账（不许凭记忆写）', () => {
     for (const id of Object.keys(PROOFS)) expect(ids.has(id), `出处表里多了不在表上的 ${id}`).toBe(true);
   });
 
-  it('逐条命中：该文件里确有那个命令 id，且确有等于这一串修饰 + 主键的 primary', () => {
-    const cache = new Map<string, { has: (needle: string) => boolean; primaries: number[] }>();
+  it('逐条命中：该文件里确有那个命令 id，且确有等于这一串的 primary（单键）/ KeyChord（和弦）', () => {
+    const cache = new Map<
+      string,
+      { has: (needle: string) => boolean; primaries: number[]; chords: Array<[number, number]> }
+    >();
     for (const r of rows) {
+      // foldLevel 无字面量 id（vendor 用 ID(i) 循环注册）→ 单列证据，见下一个 it
+      if (r.id.startsWith('monaco.editor.foldLevel')) continue;
       const [vendorId, file] = PROOFS[r.id]!;
       let scanned = cache.get(file);
       if (!scanned) {
         const src = vendor(file);
-        scanned = { has: (needle: string) => src.includes(needle), primaries: primariesIn(src) };
-        expect(scanned.primaries, `${file} 里找不到任何 primary 注册`).not.toHaveLength(0);
+        scanned = {
+          has: (needle: string) => src.includes(needle),
+          primaries: primariesIn(src),
+          chords: keyChordsIn(src),
+        };
+        expect(
+          scanned.primaries.length + scanned.chords.length,
+          `${file} 里找不到任何 primary / KeyChord 注册`,
+        ).not.toBe(0);
         cache.set(file, scanned);
       }
       expect(scanned.has(`'${vendorId}'`), `${file} 里没有命令 ${vendorId}`).toBe(true);
-      const want = primaryValue(r.keys!);
-      expect(scanned.primaries.includes(want), `${r.id}（${r.keys}）期望 primary=${want}，${file} 没有这一串`).toBe(true);
+      if (r.keys!.includes(' ')) {
+        // 和弦（如 Ctrl+K Ctrl+0）：vendor 里写 `KeyChord(a, b)`，比对两个数字和
+        const [a, b] = chordPairOf(r.keys!);
+        expect(
+          scanned.chords.some(([ca, cb]) => ca === a && cb === b),
+          `${r.id}（${r.keys}）期望 KeyChord(${a}, ${b})，${file} 没有这一对`,
+        ).toBe(true);
+      } else {
+        const want = primaryValue(r.keys!);
+        expect(scanned.primaries.includes(want), `${r.id}（${r.keys}）期望 primary=${want}，${file} 没有这一串`).toBe(true);
+      }
     }
+  });
+
+  it('折叠到第 N 层 7 档：vendor 用 ID_PREFIX + 循环批量注册（无字面量 id，故单列证据）', () => {
+    const src = vendor('editor/contrib/folding/browser/folding.js');
+    expect(src).toContain("this.ID_PREFIX = 'editor.foldLevel';");
+    expect(src).toContain('this.ID = (level) => FoldLevelAction.ID_PREFIX + level;');
+    expect(src).toContain('for (let i = 1; i <= 7; i++)');
+    expect(src).toContain('FoldLevelAction.ID(i)');
+
+    const levels = rows.filter((r) => r.id.startsWith('monaco.editor.foldLevel'));
+    expect(levels).toHaveLength(7);
   });
 
   it('宿主注册表没有抢走这些内建键（抢了就不是"内建"而是我们覆写了）', () => {

@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCommandContext, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
@@ -75,7 +75,7 @@ import {
 import { fileWritableArea, writablePillTone } from './file-area';
 // 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
 // 这里只取「当前活动文件那份 model」并把选择落到 model 上。
-import { openModelAcrossGroups } from './editor-pane-registry';
+import { focusedCtx, openModelAcrossGroups } from './editor-pane-registry';
 import { descriptorForPath, FALLBACK_LANGUAGE_ID, languageDescriptors } from '../monaco/language-registry';
 import type * as Monaco from '../monaco/entry';
 import {
@@ -152,6 +152,8 @@ import {
   parseKeybinding,
   type ShellCommandSpec,
 } from './commands';
+// 内核动作清单（1026 编辑器内核批）：Monaco 内建动作的宿主命令入口，纯数据
+import { MONACO_COMMAND_SPECS } from './monaco-command-specs';
 import {
   CommandPalette,
   QuickOpen,
@@ -1460,9 +1462,58 @@ export function ShellLayout(props: Props): ReactElement {
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
     [extraCommands, kbVersion],
   );
+  /**
+   * Monaco 内建动作的宿主命令入口（1026 编辑器内核批）。
+   *
+   * 执行腿与编辑器的 `runEditorAction`（`use-monaco-instance.ts`）同一条：跨实例取
+   * **当前焦点编辑器**（`focusedCtx()` 是全仓唯一的「焦点实例」来源）再 `getAction(id)`。
+   * 两条失败路径都给一句中文通知、不静默（铁律 4）：
+   *   ① 没有可用编辑器（还没打开文件 / 焦点不在编辑器）——先点一下再执行；
+   *   ② `getAction` 返回 null（这门语言没这个动作）——与编辑器右键那条口径逐字一致。
+   *
+   * 依赖表为空：`notifyRef` 是稳定 ref（每次渲染指向最新 notify），`focusedCtx` 是模块函数；
+   * 被 `editorActionCommands` 记忆化引用，不随每次渲染换身份。
+   */
+  const runMonacoBuiltinAction = useCallback((monacoActionId: string): void => {
+    const ed = focusedCtx()?.editorRef.current;
+    if (!ed) {
+      notifyRef.current({ kind: 'info', message: '当前没有可用的编辑器：先在编辑区点一下再执行。' });
+      return;
+    }
+    const action = ed.getAction(monacoActionId);
+    if (action === null) {
+      notifyRef.current({ kind: 'info', message: '当前文件类型不支持这个动作。' });
+      return;
+    }
+    void action.run();
+  }, []);
+  /**
+   * 内核动作 → 宿主命令项（形状与槽贡献同构）。
+   *
+   * `keybinding` 只取**宿主生效键**（`effectiveKeybindingOf`）——作者在内核动作行改的键才显示；
+   * 不改就没有（Monaco 内建键在只读页另列，不在这里冒充宿主键）。
+   * `when`：这些动作都要求「有活动编辑器」，用 `requiresFile` 数据位驱动（无焦点编辑器 ⇒ 面板里灰）。
+   */
+  const editorActionCommands = useMemo<EditorCommandContribution[]>(
+    () =>
+      MONACO_COMMAND_SPECS.map((s) => {
+        const keybinding = effectiveKeybindingOf(s.id);
+        return {
+          id: s.id,
+          title: s.title,
+          category: s.category,
+          ...(keybinding !== undefined ? { keybinding } : {}),
+          ...(s.requiresFile
+            ? { when: () => focusedCtx()?.editorRef.current?.getModel() != null }
+            : {}),
+          run: () => runMonacoBuiltinAction(s.monacoActionId),
+        };
+      }),
+    [kbVersion, runMonacoBuiltinAction],
+  );
   const registry = useMemo(
-    () => buildCommandRegistry(shellCommands, slotCommands),
-    [shellCommands, slotCommands],
+    () => buildCommandRegistry(shellCommands, slotCommands, editorActionCommands),
+    [shellCommands, slotCommands, editorActionCommands],
   );
   // 最新注册表 / 上下文 ref（全局键盘处理器闭包外读取）
   const registryRef = useRef(registry);
