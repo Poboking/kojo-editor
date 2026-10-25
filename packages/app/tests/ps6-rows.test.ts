@@ -8,14 +8,20 @@
  *
  * ⚠ 检索面板那一段（"2,870 条命中 / 120 行 + 继续显示"）已随 PERF 搜索批（2026-10-25）
  * 迁到 `search-virtual-rows.test.ts`：列表改虚拟化后"首帧正好 120 行 + 哨兵按钮"不再成立，
- * 判据换成窗口切片与 DOM 上限。ProblemPanel 那两条不动。
+ * 判据换成窗口切片与 DOM 上限。
+ *
+ * ⚠ 问题面板那两条也随 1025 A 线（同日）变了口径：上一版的"首帧 60 条目 + 哨兵「继续显示」
+ * 后面的问题"已退场——真窗口化后全量由滚动可达（几何账本钉在
+ * `problem-virtual-rows.test.ts`，首帧节点预算钉在 `problem-panel-first-paint.test.ts`）。
+ * 这里改成钉同一件事的两条底线：**首帧只挂窗口缺省条目数**（与总量无关）、
+ * **总量写在 DOM 上且不再有分页哨兵**。"不到上界就不画哨兵"那条原样保留。
  */
 
 import { describe, expect, it } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { DirEntry } from '@kojo/plugin-api';
-import { ProblemPanel, PROBLEM_WINDOW_INITIAL } from '../src/ui/ProblemPanel';
+import { ProblemPanel, PROBLEM_VROWS_FALLBACK } from '../src/ui/ProblemPanel';
 import { setProblems, clearAllProblems, type EditorProblem } from '../src/ui/problem-store';
 import { DirRows } from '../src/ui/file-tree-dir-rows';
 import type { DirState } from '../src/ui/file-tree-types';
@@ -55,25 +61,25 @@ const mkProblems = (n: number): EditorProblem[] =>
     message: `第 ${i} 条问题`,
   }));
 
-describe('问题面板 · 1,000 条同样可达（旧实现：300 条封顶）', () => {
-  it('首帧挂窗口上界条数 + 一句"还有多少"，并且给了按钮', () => {
+describe('问题面板 · 1,000 条同样可达（旧实现：300 条封顶；上一版：哨兵分页）', () => {
+  it('首帧只挂窗口缺省条目数（与总量无关），总量写进 DOM、分页哨兵退场', () => {
     clearAllProblems();
     setProblems('C:/game/ERB/001/M_KOJO_K1_0.ERB', mkProblems(1_000));
     const markup = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));
-    // 1025 性能批：预算单位是**条目**（组头 1 条 + 行 1 条，理由见 ProblemPanel 的
-    // `PROBLEM_WINDOW` 注）。本用例每条问题占一个独立 path ⇒ 一千个组：
-    // 首帧 60 条 = 30 组头 + 30 行，条目总数到上界、行数是一半。
-    const heads = (markup.match(/class="prob-group-head"/g) ?? []).length;
+    // 虚拟列表：条目 = 组头 1 + 行 1。本用例每条问题占一个独立 path ⇒ 一千个组、
+    // 两千条目；首帧只画 `PROBLEM_VROWS_FALLBACK` 条（组头/行交替）。
+    const heads = (markup.match(/class="prob-vrow-group/g) ?? []).length;
     const rows = (markup.match(/class="prob-item"/g) ?? []).length;
-    expect(rows + heads).toBe(PROBLEM_WINDOW_INITIAL);
-    expect(heads).toBe(PROBLEM_WINDOW_INITIAL / 2);
-    expect(rows).toBe(PROBLEM_WINDOW_INITIAL / 2);
-    expect(markup).toContain(`继续显示后面的问题（还有 ${1_000 - rows} 条，共 1000 条）`);
-    expect(markup).toContain('prob-more');
+    expect(rows + heads).toBe(PROBLEM_VROWS_FALLBACK);
+    expect(heads).toBe(PROBLEM_VROWS_FALLBACK / 2);
+    expect(rows).toBe(PROBLEM_VROWS_FALLBACK / 2);
+    // 总量（2,000 条目）写在列表上：滚动高度与读数同源，全量靠滚动可达
+    expect(markup).toContain('data-prob-vrows="2000"');
+    expect(markup).not.toContain('prob-more');
     clearAllProblems();
   });
 
-  it('不到窗口上界 ⇒ 完全不画哨兵（小面板零扰动）', () => {
+  it('不到窗口上界 ⇒ 完全画满、不画哨兵（小面板零扰动）', () => {
     clearAllProblems();
     setProblems('C:/game/ERB/001/M_KOJO_K1_0.ERB', mkProblems(9));
     const markup = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));

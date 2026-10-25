@@ -183,6 +183,10 @@ describe('两只面板的行导航接线', () => {
   it('问题面板：同一套（F8 那一条腿），行标记 + 键盘接线', () => {
     const src = UI('ProblemPanel.tsx');
     expect(src).toContain(`${PANEL_ROW_ATTR}=""`);
-    expect(src).toContain('applyPanelRowNav(listRef.current');
+    // 1025 A 线（问题面板真窗口化）后与检索面板同形：面板自己驱动，但**判据仍是同一份**
+    // `rowNavDecision`（键位语义 / 回绕 / 让位全在 `panel-row-nav.ts` 里），名单换成
+    // 全量问题行（`itemRowFlat`）——按已挂载的 DOM 行走，跨窗口就回绕到第一行。
+    expect(src).toContain('rowNavDecision({');
+    expect(src).toContain('itemRowFlat');
   });
 });

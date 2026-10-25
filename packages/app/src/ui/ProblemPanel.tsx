@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import {
-  diagnosticDisplay,
-  errorText,
-  shortPath,
-  nextWindow,
-  type RenderWindow,
-} from '@kojo/plugin-api';
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+} from 'react';
+import { diagnosticDisplay, errorText, shortPath } from '@kojo/plugin-api';
 import type { EditorCodeAction } from '@kojo/plugin-api';
 import { revealSpanOf, type RevealSpan } from '../monaco/reveal-position';
 import {
@@ -17,7 +21,7 @@ import {
   PROBLEM_SCOPE,
   type EditorProblem,
 } from './problem-store';
-import { applyPanelRowNav } from './panel-row-nav';
+import { rowNavDecision } from './panel-row-nav';
 import {
   ALL_SEVERITIES,
   filterOfPrefs,
@@ -28,7 +32,6 @@ import {
   saveProblemFilterPrefs,
   sourceOptions,
   type ProblemFilterPrefs,
-  type ProblemGroup,
   type ProblemSeverity,
 } from './problem-filter';
 import {
@@ -39,6 +42,18 @@ import {
   readProblemFixHost,
   rowFixKey,
 } from './problem-fix';
+import {
+  PROBLEM_ROW_HEIGHTS_FALLBACK,
+  problemItemRowIndex,
+  problemOrdinalMap,
+  problemRowOffsets,
+  problemRowWindow,
+  problemRowsOf,
+  sameProblemRowWindow,
+  type ProblemRow,
+  type ProblemRowHeights,
+  type ProblemRowWindow,
+} from './problem-rows';
 import {
   COPY_ALL_DISABLED_REASON,
   setProblemsMenuContext,
@@ -66,12 +81,12 @@ import { Icon } from './icons';
  * ## P2-13（2026-10-19）四件事
  *
  * 1. **按文件分组（可折叠）**：组头 = 短路径 + 按严重级分色的计数徽标；组序 =
- *    过滤后序列的首次出现序（判据与理由见 `groupProblems`）。折叠是**纯视觉**：
- *    渲染窗口按全局过滤序列裁剪，不因折叠而重排——折叠的组少画几行，窗口推进
- *    的口径不变（哨兵数字永远说的是全局序列）。
+ *    过滤后序列的首次出现序（判据与理由见 `groupProblems`）。折叠在**投影层**减行
+ *    （`problemRowsOf` 不把折叠组的行放进清单）——账本按这份清单算偏移，若只在渲染时
+ *    跳过，行高账本会多出一整块空白（滚到后面全是空气）。组头一律保留（折叠态要能点开）。
  * 2. **过滤**：严重级多选 + 来源（单选，来源清单见 `sourceOptions`）+ 文本子串（判据在
  *    `filterProblems`；默认全开 + 全部来源 + 空文本 = 与旧版逐字一致）。过滤条件一变，
- *    窗口回到首帧上界（换了一把尺就重新从第一屏看起，旧窗口深度对新结果没有意义）。
+ *    滚动**回到列表头**（换了一把尺就重新从第一屏看起，旧深度对新结果没有意义）。
  *    **条件会被记住**（S14）：`saveProblemFilterPrefs` / `loadProblemFilterPrefs` 走壳层
  *    localStorage（`kojo.ui.problemFilter.v1`），无 window / 坏值一律回默认、绝不抛。
  * 3. **行内 fix**：**唯一解才给按钮**（判据＝`collectRowFix`，与 💡 的 `isPreferred`
@@ -170,116 +185,29 @@ function SeverityCount({
 const ALL_SOURCES_VALUE = '\u0000all';
 
 /**
- * 问题列表的渲染窗口（PS-6 第 5 项：把"死顶"换成"可长"；1025 性能批改口径）。
+ * 问题列表的渲染窗口：**真虚拟列表**（1025 性能批 A 线，2026-10-25）。
  *
- * 旧实现硬截 300 条 + 一句「仅显示前 300 条（共 N 条）」——第 301 条**没有任何入口可达**，
- * 全项目校验一轮报上千条时，作者看到的就是一个到不了的谎（内核铁律 4：不许静默）。
- * 现在与仓里其余面板同一把尺（`plugin-api` 的 `RenderWindow`）：点一次哨兵 +step，直到全量可达。
+ * 沿革（三版，别再往回退）：
+ *  ① PS-6：硬截 300 条 + 「仅显示前 300 条」——第 301 条没有任何入口可达（铁律 4）。
+ *  ② 1025 上一批：预算单位从「行」改成「条目（组头也占一条）」，首帧 60 条 + 哨兵
+ *     + rIC 分片补窗。首帧从 137ms 降到 53ms，但**滚动/连点仍慢**：哨兵连点实测
+ *     52/90/109ms，基数越大越慢（59 行 31.5ms → 296 行 99ms → 648 行 100–160ms）；
+ *     perf 报告 `scriptMs 0 / renderMs 159` —— 行组件 memo 化确实把"渲染次数"降了，
+ *     **墙钟不动**：钱付在布局上，不是付在 JS 上。
+ *  ③ 本批：照检索面板（`search-rows` + `SearchPanel`，`0bcad61c`）的模板改成**真窗口化**：
+ *     DOM 只保留视口内的行 + 上下 overscan，两侧用留白顶起滚动高度。
+ *     DOM 行数与总诊断数**解耦**（2,641 条与 26 条同价），布局成本封在"一屏 + 两圈缓冲"。
  *
- * ## 1025 性能批：预算单位从「行」改成「条目（组头也算一条）」
+ * 代价（诚实记账）：组头不再恒可见（与上一批同一条取舍）、行导航要按**全量行**而不是
+ * DOM 名单走（判据仍住 `panel-row-nav.rowNavDecision`，只是名单换了，见 `handleRowNav`）。
+ * 可达性一根没掉：全量靠滚动可达，滚动高度 = 全量行高之和（账本在 `problem-rows`）。
  *
- * 真机实测（eratw 语料 2,633 条 / 62 个文件分组，调试宿 CDP 探针）：打开面板最长帧
- * **137ms**、两条长任务（124 / 77ms），一次提交建 **2,533** 个 DOM 节点。拆开看：
- * 每行 8 个节点 × 120 行 = 960，**每个组头 26 个节点 × 62 = 1,612**——旧注释里
- * 「组头成本可忽略」是错的：三枚计数徽标（`.prob-count` = span + SVG path + 数字腿 +
- * 读数腿）比一行还重三倍，62 个组头就吃掉了首帧六成预算。
- *
- * 于是预算改成**条目**：组头 1 条、行 1 条，同一个预算里排队——首帧上界 60 条
- * （典型形态 ≈ 1 个组头 + 59 行 ≈ 500 节点，最坏形态全组头 ≈ 1,020 节点，两头都在
- * 800/1,200 的目标内），点哨兵按 step 增长。代价是「所有组头恒可见」这条旧口径
- * 退成「窗口内可见」：62 个组头本身就要 1,612 节点，跟"首帧只建最小可见集"直接冲突，
- * 而这批的判据是体感（不卡），不是"组头一屏看全"。**可达性一根没掉**——哨兵照旧
- * 是一枚 `<button>`（Tab 得到、Enter 按得动），点到底就是全量。
- *
- * 首帧 60 条是按实测定的：底栏 `.container-body` 可视高约 170px、每行 22px ⇒ 一屏 7–8 行，
- * 60 条（约 8 屏）足够"扫一眼 + 往下滚两下"而不至于拉一下就到底；再大就把首帧又喂回长任务。
- *
- * **调这个数前先算代价**（1025 批裁决：保留 60，但不许后人拍脑袋抬）：`initial` 是**条目数**
- * （组头也占额），代价近似**每 10 条 ≈ 80 节点**（10 行 = 80；若这 10 条全是组头则 ≈ 260）。
- * 底栏被用户拉高（可视 400px+）时确实会显得"一屏就没了"，但那属于"把底栏拉多大"的偏好，
- * 不是首帧预算该背的账——抬高它会把打开面板那一条长任务又养回来。
+ * 首帧还不认识视口（服务端渲染 / happy-dom / 第一次挂载）：先画前
+ * `PROBLEM_VROWS_FALLBACK` 条，挂载后由 layout effect 量到真视口再收口（与检索面板同法）。
  */
-const PROBLEM_WINDOW: RenderWindow = { initial: 60, step: 120 };
-/** 首帧最多画多少条**条目**（旧导出名沿用：测试与面板按它钉首帧上界） */
-export const PROBLEM_WINDOW_INITIAL = PROBLEM_WINDOW.initial;
-
-/**
- * 增窗的分片粒度（条目数）：哨兵 / 滚动增窗一次要加 `step` 条，但**一帧只建 40 条**
- * （≈ 320 节点），余下的在 `requestIdleCallback`（无该 API 时退回 `setTimeout(0)`）
- * 里接着补。一批建完 = 一次大提交 = 一条长任务，那正是本批要消掉的东西。
- */
-const ENTRY_CHUNK = 40;
-
-/** 一次「该画哪些条目」的纯判据产物（`planVisibleEntries` 的返回；可单测） */
-export interface ProblemEntryPlan {
-  /** 全部条目数（每组 1 条组头 + 未折叠组的每行 1 条） */
-  readonly totalEntries: number;
-  /** 本帧实际画出的条目数 */
-  readonly shownEntries: number;
-  /** 本帧实际画出的行数（哨兵的「还有 N 条」说行数，不说条目数——作者数的是问题） */
-  readonly shownRows: number;
-  /** 本帧要画的分组（预算用尽的那些组不在名单里，也不再占节点） */
-  readonly groups: readonly {
-    readonly group: ProblemGroup;
-    readonly rows: readonly { readonly idx: number; readonly p: EditorProblem }[];
-  }[];
-}
-
-/**
- * 分组 + 折叠集 + 条目预算 → 这一帧到底画什么（**纯函数**，不碰 React / DOM）。
- *
- * 组头与行在同一条预算里排队，按组序逐条扣（组序 = 过滤后首次出现序，见 `groupProblems`）。
- * 折叠组的行不占预算（它们本来就不画），于是"折叠一切"会立刻把预算全让给组头。
- */
-export function planVisibleEntries(
-  groups: readonly ProblemGroup[],
-  collapsed: ReadonlySet<string>,
-  budget: number,
-): ProblemEntryPlan {
-  let totalEntries = 0;
-  for (const g of groups) totalEntries += 1 + (collapsed.has(g.path) ? 0 : g.items.length);
-  let used = 0;
-  let shownRows = 0;
-  const out: { group: ProblemGroup; rows: { idx: number; p: EditorProblem }[] }[] = [];
-  for (const g of groups) {
-    if (used >= budget) break;
-    used += 1; // 组头
-    const rows: { idx: number; p: EditorProblem }[] = [];
-    if (!collapsed.has(g.path)) {
-      const room = Math.max(0, budget - used);
-      for (let i = 0; i < g.items.length && i < room; i++) {
-        rows.push({ idx: g.indices[i]!, p: g.items[i]! });
-      }
-    }
-    used += rows.length;
-    shownRows += rows.length;
-    out.push({ group: g, rows });
-  }
-  return { totalEntries, shownEntries: used, shownRows, groups: out };
-}
-
-/**
- * 哨兵那枚按钮的**文案**（纯函数）：分片补齐中与"真的到底等下一次点击"必须是两种话说。
- *
- * 为什么这不是性能问题而是诚实性问题（1025 批裁决第 3 条）：分片把"一次提交建 120 条"
- * 摊成三帧，于是从点下到补齐有几十毫秒里，列表**看起来**已经到底而实际还在长。若这期间
- * 仍写「继续显示后面的问题（还有 N 条）」，读到的是"你点了没反应、还是那一句"，作者会
- * 以为按钮坏了；写成补齐中文案 + `aria-busy`，再自动收敛到终态（补齐后
- * `windowEnd === windowTarget` ⇒ `filling` 自落），才既说真话又不骗手。
- */
-export function moreButtonText(state: {
-  readonly filling: boolean;
-  readonly hiddenRows: number;
-  readonly hiddenEntries: number;
-  readonly total: number;
-}): string {
-  if (state.filling) return `正在补齐后面的问题…（还剩 ${state.hiddenEntries} 条待上屏）`;
-  // 说人话用行数（作者数的是问题）；只差组头时（全部组都折叠着）改说"分组"
-  if (state.hiddenRows > 0) {
-    return `继续显示后面的问题（还有 ${state.hiddenRows} 条，共 ${state.total} 条）`;
-  }
-  return `继续显示后面的文件分组（还有 ${state.hiddenEntries} 组）`;
-}
+export const PROBLEM_VROWS_FALLBACK = 40;
+/** 视口上下各多画多少像素（滚动时新行已在位，不闪白；底栏可视高约 170px） */
+const PROBLEM_VROW_OVERSCAN_PX = 240;
 
 function useProblems(): readonly EditorProblem[] {
   const [items, setItems] = useState<readonly EditorProblem[]>(() => snapshot());
@@ -305,6 +233,28 @@ const FILTER_INPUT_PLACEHOLDER = '过滤：消息 / 诊断码 / 来源 / 路径�
  */
 function prefsSignature(prefs: ProblemFilterPrefs): string {
   return JSON.stringify({ severities: prefs.severities, source: prefs.source, text: prefs.text });
+}
+
+/**
+ * 最近的**可滚动祖先**（虚拟列表的视口 = 它，而不是列表自己）。
+ *
+ * 为什么不能只看列表：底部面板的滚动交回壳层容器 `.container-body`（`overflow:auto`），
+ * `.prob-list` 自己 `overflow: visible`——实测 `clientHeight === scrollHeight === 1384px`，
+ * 真正滚的是祖先。硬编码那个类名等于把面板焊死在当前壳层布局上，所以这里按
+ * "能滚的那个祖先是哪个"现找（与检索面板 `scrollParentOf` 同一条判据）。
+ * 量不到（服务端渲染 / happy-dom）⇒ `null`，调用方回落到首屏 N 行。
+ */
+function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  if (typeof getComputedStyle !== 'function') return null;
+  let node = el.parentElement;
+  while (node !== null && node !== document.body && node !== document.documentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
 }
 
 /**
@@ -350,14 +300,6 @@ export function ProblemPanel({
 }): ReactElement {
   const items = useProblems();
   /**
-   * 窗口的**已提交**条目数（渲染按它裁；分片补窗时一帧只推进 `ENTRY_CHUNK` 条）。
-   * 旧实现只有 `windowEnd` 一个数——点一次哨兵一帧建完 240 行，等于把首帧的长任务
-   * 原样搬到第二次点击上；拆成"意图 / 已提交"两个数才分得开片。
-   */
-  const [windowEnd, setWindowEnd] = useState<number>(PROBLEM_WINDOW.initial);
-  /** 窗口的**目标**条目数（点哨兵涨这里；分片泵把它追平后自己停下） */
-  const [windowTarget, setWindowTarget] = useState<number>(PROBLEM_WINDOW.initial);
-  /**
    * 过滤条件（严重级 + 来源 + 文本；S14 起整体持久化）。
    * 初值从壳层 localStorage 读（缺省 = 全开 / 全部来源 / 空文本 = 旧口径）。
    */
@@ -372,49 +314,13 @@ export function ProblemPanel({
   /** 行内 fix 问询缓存（判据见模块头） */
   const fixCacheRef = useRef<Map<string, RowFixEntry>>(new Map());
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 列表区（行导航只在这一段里找行：过滤框与勾选框不参与漫游，见 `panel-row-nav`） */
-  const listRef = useRef<HTMLUListElement>(null);
-
-  // 过滤尺一换，窗口回到首帧上界（旧深度对新结果没有意义）
-  useEffect(() => {
-    setWindowEnd(PROBLEM_WINDOW.initial);
-    setWindowTarget(PROBLEM_WINDOW.initial);
-  }, [filterPrefs]);
-
   /**
-   * 分片补窗：`windowTarget > windowEnd` 时，每次空闲（`requestIdleCallback`；
-   * 没有该 API 的环境退回 `setTimeout(0)`）补 `ENTRY_CHUNK` 条，直到追平。
-   *
-   * 为什么要 rIC 而不是 `requestAnimationFrame`：这一批补的是**屏外的行**，
-   * 与下一帧画面无关——rIC 会把活儿塞进浏览器的空闲段，滚动 / 输入优先；rAF 则会
-   * 抢在下一帧前跑，帧预算只有 16.7ms，补满 120 条正好把它撑爆。
-   * 卸载即取消（标签切走 / 面板关掉时不留半截定时器）。
+   * 列表区（= 虚拟列表本体：行都挂在它下面，它的 rect 就是"内容坐标 0"）。
+   * 行导航也只在这一段里找行：过滤框与勾选框不参与漫游，见 `panel-row-nav`。
    */
-  useEffect(() => {
-    if (windowEnd >= windowTarget) return;
-    const host = globalThis as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-    let cancelled = false;
-    let idle: number | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const step = (): void => {
-      if (cancelled) return;
-      setWindowEnd((cur) => Math.min(windowTarget, cur + ENTRY_CHUNK));
-    };
-    if (typeof host.requestIdleCallback === 'function') {
-      // timeout 兜底：一直有活干（滚动 / 输入）时也必须补齐，否则哨兵按了没反应
-      idle = host.requestIdleCallback(step, { timeout: 200 });
-    } else {
-      timer = setTimeout(step, 0);
-    }
-    return () => {
-      cancelled = true;
-      if (idle !== null && typeof host.cancelIdleCallback === 'function') host.cancelIdleCallback(idle);
-      if (timer !== null) clearTimeout(timer);
-    };
-  }, [windowEnd, windowTarget]);
+  const listRef = useRef<HTMLUListElement>(null);
+  /** 常驻头（sticky）：算可见区间时要把它挡住的那一段扣掉 */
+  const headRef = useRef<HTMLDivElement>(null);
 
   // 过滤条件持久化（S14）：选择一变就记一笔，下次打开沿同一把尺；写不进去静默降级。
   // **首帧不写**（1025 性能批）：挂载时写回的必然是刚读出来的同一份值，而 WebView 的
@@ -445,32 +351,226 @@ export function ProblemPanel({
       ? ({ kind: 'empty' } as const)
       : ({ kind: 'counts', error, warning, info } as const);
 
-  /** 面板态 → 纯判据（严重级集合 / 来源集合 / 文本；判据全在 `problem-filter`） */
-  const activeFilter = filterOfPrefs(filterPrefs);
-  const filtered = filterProblems(items, activeFilter);
-  const groups = groupProblems(filtered);
   /**
-   * 这一帧该画什么（条目预算，判据见 `planVisibleEntries`）。
-   * 组头与行同队排队 ⇒ 首帧不再一次建 62 个组头 + 120 行。
+   * 面板态 → 纯判据（严重级集合 / 来源集合 / 文本；判据全在 `problem-filter`）。
+   *
+   * 三步都 memo（1025 批新增）：虚拟列表每滚一帧就要重算窗口，而 `items` 的进度 tick /
+   * 面板自身 state 都会让组件重渲染——`filterProblems` + `groupProblems` 是 O(n)，
+   * 2,600 条上每次提交白算两遍就是每帧的纯浪费。引用稳定同时让下游
+   * `rows` / `offsets` / `vwin` 的 useMemo 真正生效（这是"滚动不掉帧"的地基）。
    */
-  const plan = planVisibleEntries(groups, collapsed, windowEnd);
-  /** 还差多少条目没画（0 = 全量到屏，不出哨兵） */
-  const hiddenEntries = plan.totalEntries - plan.shownEntries;
-  /** 还差多少**行**（哨兵说人话用行数；只差组头时那句话改说"分组"） */
-  const hiddenRows = filtered.length - plan.shownRows;
-  /**
-   * 分片补齐中（已提交 < 目标）：哨兵换一套文案，补齐后自动收敛（判据见 `moreButtonText`）。
-   * 过滤尺一换两个数一起回落，这里自然为 false。
-   */
-  const filling = windowEnd < windowTarget;
+  const activeFilter = useMemo(() => filterOfPrefs(filterPrefs), [filterPrefs]);
+  const filtered = useMemo(() => filterProblems(items, activeFilter), [items, activeFilter]);
+  const groups = useMemo(() => groupProblems(filtered), [filtered]);
+  /** 扁平行清单 = **全量**（组头 + 未折叠组的行；折叠在投影层就减行，见 `problem-rows`） */
+  const rows = useMemo(() => problemRowsOf(groups, collapsed), [groups, collapsed]);
   /** 组头数字走同一份派生（键 = 原始路径，与 `groupProblems` 的组键逐字同形） */
-  const filteredSummary = summarizeProblems(filtered);
+  const filteredSummary = useMemo(() => summarizeProblems(filtered), [filtered]);
   const filtering = isFiltering(activeFilter);
   /** 来源过滤下拉的选项（序 = 首次出现序；来源只有一种时不给下拉——没有第二个选项的开关是噪音） */
   const srcOpts = sourceOptions(items);
   const clearFilter = (): void => {
     setFilterPrefs({ severities: ALL_SEVERITIES, source: null, text: '' });
   };
+
+  /* ------------------------- 虚拟列表：视口 → 渲染窗口 ------------------------- */
+
+  /**
+   * 行高的**真源是量出来的自然高度**（组头 25 / 问题行 22 @12px，随 `--fs-*` 缩放变）。
+   * 写死常量会在字号缩放后把窗口算错；"行高相等"的假设又会从第一个组头之后开始漂。
+   *
+   * 住 ref 而不是 state：行高只参与**窗口计算**，不参与渲染（渲染只读 `vwin` 的留白），
+   * 所以不需要为它再提交一帧——那一帧正是打开面板那个热路径上最不该多付的。
+   */
+  const heightsRef = useRef<ProblemRowHeights>(PROBLEM_ROW_HEIGHTS_FALLBACK);
+  /**
+   * 上一次量到的可见区（坐标相对列表顶边）。
+   *
+   * 为什么留一份：**新清单（过滤 / 折叠 / 诊断刷新）到达时那一帧也要画对**。渲染期不能
+   * 去量布局（量一次就是一次强制 flush），只好拿"上次量到的可见区"当估算——估算对了，
+   * `problemRowWindow` 随后算出的窗口与它同形，`sameProblemRowWindow` 直接吞掉那次
+   * setState ⇒ **一次提交出结果**（与检索面板同法）。
+   */
+  const viewportRef = useRef<{ readonly top: number; readonly height: number } | null>(null);
+  /**
+   * 当前渲染窗口，记成"跟着哪份清单算的"（`rows` 身份）：换清单（过滤 / 折叠 / 诊断刷新）
+   * ⇒ 立刻按缓存的可见区重算，绝不留上一份清单的窗口（那会把旧的行套到新结果上）。
+   */
+  const [vwinState, setVwinState] = useState<{
+    readonly rows: readonly ProblemRow[];
+    readonly win: ProblemRowWindow;
+  } | null>(null);
+  /** 上一次渲染**真的画出去**的窗口（`commitWindow` 据此判断"要不要再提交一帧"） */
+  const renderedWinRef = useRef<ProblemRowWindow | null>(null);
+  const vwin = useMemo<ProblemRowWindow>(() => {
+    if (vwinState !== null && vwinState.rows === rows) return vwinState.win;
+    // 首屏 / 量不到布局（服务端渲染、happy-dom）⇒ 画前 `PROBLEM_VROWS_FALLBACK` 条
+    const vp = viewportRef.current;
+    const { offsets, total } = problemRowOffsets(rows, heightsRef.current);
+    if (vp === null) {
+      const end = Math.min(rows.length, PROBLEM_VROWS_FALLBACK);
+      return { start: 0, end, topPad: 0, bottomPad: total, total };
+    }
+    return problemRowWindow(offsets, vp.top, vp.height, PROBLEM_VROW_OVERSCAN_PX);
+  }, [rows, vwinState]);
+  // 记下这一帧画出去的窗口（纯记账，不参与渲染决策；供 `commitWindow` 判"同形"）
+  renderedWinRef.current = vwin;
+  /** 写窗口（同形不写：滚动时大量帧的窗口根本没变，这一条省掉的是每帧一次 setState） */
+  const commitWindow = useCallback(
+    (win: ProblemRowWindow) => {
+      if (renderedWinRef.current !== null && sameProblemRowWindow(renderedWinRef.current, win)) return;
+      setVwinState({ rows, win });
+    },
+    [rows],
+  );
+  /**
+   * 行导航要去的那一行**不在窗口里**时先记这儿（`null` = 没有待办）。
+   * 虚拟列表只挂载可见行 ⇒ `focus()` 够不着第 900 行；先把窗口挪过去、下一帧再聚焦。
+   * 用 state 而不是 ref：窗口要跟着它重算（ref 不会触发渲染）。
+   */
+  const [navTarget, setNavTarget] = useState<number | null>(null);
+  /** 这一趟导航要不要顺手"打开"（F4 / F8）；`navTarget` 落定后由聚焦 effect 消费 */
+  const navPendingOpen = useRef(false);
+  /**
+   * 行高 / 视口 / 滚动位置的**唯一**重算入口（layout effect 与滚动监听共用）。
+   *
+   * 纪律：这一个函数里**先把所有几何读光，再决定写什么**。读之间一旦夹了写
+   * （`setState` → 提交 → DOM 变更），下一次读就得重新 flush 一遍布局——
+   * 59,000px 高的滚动容器上，一次强制 flush 是实打实的钱。
+   */
+  const computeWindow = useCallback(() => {
+    const list = listRef.current;
+    if (list === null) return;
+    // —— 读：两档行高（已挂载的行是自然高度，面板不下发行高）+ 各层 rect
+    const groupH = list.querySelector('.prob-vrow-group')?.getBoundingClientRect().height ?? 0;
+    const itemH = list.querySelector('.prob-item')?.getBoundingClientRect().height ?? 0;
+    const listRect = list.getBoundingClientRect();
+    const headRect = headRef.current?.getBoundingClientRect() ?? null;
+    const scroller = scrollParentOf(list);
+    const scRect = scroller?.getBoundingClientRect() ?? null;
+    // —— 算
+    const prev = heightsRef.current;
+    const heights: ProblemRowHeights = {
+      group: groupH > 0 ? groupH : prev.group,
+      item: itemH > 0 ? itemH : prev.item,
+    };
+    if (Math.abs(heights.group - prev.group) > 0.01 || Math.abs(heights.item - prev.item) > 0.01) {
+      heightsRef.current = heights;
+    }
+    const { offsets, total } = problemRowOffsets(rows, heightsRef.current);
+    const headBottom = headRect === null ? listRect.top : headRect.bottom;
+    // 可见区 = 列表区 ∩（可滚动祖先 / 视口）再扣掉 sticky 控制区挡住的那一段
+    const viewportTop =
+      scRect === null ? Math.max(listRect.top, headBottom) : Math.max(listRect.top, scRect.top, headBottom);
+    const viewportBottom = scRect === null ? listRect.bottom : Math.min(listRect.bottom, scRect.bottom);
+    const height = viewportBottom - viewportTop;
+    // 缓存给"下一份清单到达时那一帧"用（相对列表顶边，与滚动位置无关）
+    viewportRef.current = { top: viewportTop - listRect.top, height: Math.max(0, height) };
+    let next: ProblemRowWindow;
+    if (!(height > 0) || !(listRect.height > 0)) {
+      // 量不到布局（服务端渲染 / happy-dom）或列表整个在视口外：退回首屏 N 条
+      const end = Math.min(rows.length, PROBLEM_VROWS_FALLBACK);
+      next = { start: 0, end, topPad: 0, bottomPad: total, total };
+    } else {
+      next = problemRowWindow(offsets, viewportTop - listRect.top, height, PROBLEM_VROW_OVERSCAN_PX);
+      // 行导航的目标行可能落在窗口外：把窗口撑到它（多带入一行即可，`focus()` 会把它滚进视口）
+      if (navTarget !== null && (navTarget < next.start || navTarget >= next.end)) {
+        const start = Math.min(next.start, navTarget);
+        const end = Math.max(next.end, navTarget + 1);
+        next = {
+          start,
+          end,
+          topPad: offsets[start]!,
+          bottomPad: total - offsets[end]!,
+          total,
+        };
+      }
+    }
+    commitWindow(next);
+  }, [rows, navTarget, commitWindow]);
+
+  /**
+   * 窗口重算：**只在清单 / 导航目标变化后**跑一次（不是每次提交都跑）。
+   * 这里不能把 `vwin` 放进依赖：窗口本来就是这一步算出来的，再依赖它就成了
+   * "写一帧 → 重新量 → 再写一帧"的自激环——每次提交多付一次强制布局。
+   */
+  useLayoutEffect(() => {
+    computeWindow();
+  }, [computeWindow]);
+  useEffect(() => {
+    let raf = 0;
+    const onScroll = (): void => {
+      if (raf !== 0) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        computeWindow();
+      });
+    };
+    // 滚动事件不冒泡，但**捕获**相能拿到全部后代滚动容器（底栏滚的是祖先，不是列表自己）
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    /**
+     * 底栏是**可拖高**的（`.bottombar` 上直接写 inline height）：拉高 / 拉低既不产生
+     * `scroll` 也不产生 `window.resize`，窗口就会停在旧高度上——列表下方留一段空白
+     * （实测从 170px 拉到 590px 留 171px）。观察滚动容器自己的尺寸，量到变化就重算。
+     * 观察的是**祖先**而不是 `.prob-list`：列表高度本身就是窗口的产物，观察它会
+     * 变成"写一帧 → 观察回调 → 再量一帧"的自激环。
+     */
+    const scroller = listRef.current === null ? null : scrollParentOf(listRef.current);
+    const ro =
+      typeof ResizeObserver === 'undefined' || scroller === null
+        ? null
+        : new ResizeObserver(() => onScroll());
+    if (ro !== null && scroller !== null) ro.observe(scroller);
+    return () => {
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+      ro?.disconnect();
+      if (raf !== 0) cancelAnimationFrame(raf);
+    };
+  }, [computeWindow]);
+
+  /** 问题行在扁平清单里的位置（行导航按**绝对序号**走，DOM 序只覆盖窗口） */
+  const itemRowFlat = useMemo(() => problemItemRowIndex(rows), [rows]);
+  /** 扁平行下标 → 该行是第几条问题（-1 = 组头）；渲染时给每行贴号 */
+  const ordinalOf = useMemo(() => problemOrdinalMap(rows), [rows]);
+  /**
+   * 行导航落定：窗口里已经有那一行了就聚焦（`open` = F4，顺手敲它自己的 onClick）。
+   * 放在 layout effect 里：`navTarget` 一变，这一帧的窗口已经把它带进来了才对得上号。
+   */
+  useLayoutEffect(() => {
+    if (navTarget === null) return;
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-panel-row][data-prob-ordinal="${navTarget}"]`,
+    );
+    if (el === undefined || el === null) return; // 窗口还没跟上：下一次提交再试
+    el.focus();
+    if (navPendingOpen.current) el.click();
+    navPendingOpen.current = false;
+    setNavTarget(null);
+  }, [navTarget, vwin.start, vwin.end]);
+
+  /**
+   * 过滤尺一换，**滚回列表头**（旧实现的"窗口回到首帧上界"在虚拟列表里的等价物）。
+   *
+   * 不这么做的话：作者在 600 条深处打了个过滤词，新清单只有 5 行，滚动位置被浏览器
+   * 夹到末尾——屏幕上是一小截尾部，看起来像"过滤出一条都没有"。这里直接把容器滚到
+   * 列表顶边（扣掉 sticky 头），与"换一把尺就重新从第一屏看"同一个意思。
+   */
+  const prevFilterSigRef = useRef<string>(prefsSignature(filterPrefs));
+  useEffect(() => {
+    const sig = prefsSignature(filterPrefs);
+    if (prevFilterSigRef.current === sig) return;
+    prevFilterSigRef.current = sig;
+    const list = listRef.current;
+    if (list === null) return;
+    const scroller = scrollParentOf(list);
+    if (scroller === null) return;
+    const headH = headRef.current?.getBoundingClientRect().height ?? 0;
+    const top =
+      list.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - headH;
+    scroller.scrollTo({ top: Math.max(0, top) });
+  }, [filterPrefs]);
 
   const showFlash = (key: string, text: string): void => {
     setFlash({ key, text });
@@ -632,7 +732,14 @@ export function ProblemPanel({
     });
   });
 
-  const renderRow = (p: EditorProblem, globalIndex: number): ReactElement => {
+  /**
+   * 一条问题行。
+   *
+   * `flatIndex` = 它在**扁平清单**里的下标（`data-prob-index`，切片自检用）；
+   * `ordinal` = 它是第几条问题（`data-prob-ordinal`，行导航按这个绝对序号跨窗口走）；
+   * `globalIndex` = 过滤后全序下标（渲染 key 与回执键的一部分，窗口换了也不变）。
+   */
+  const renderRow = (p: EditorProblem, flatIndex: number, ordinal: number, globalIndex: number): ReactElement => {
     // ZH-D2：码位第一眼给**中文短名**，原码逐字留在悬停 title——真源在契约层
     // （`plugin-api/diagnostic-copy.ts`），本面板**不自带映射**（两处口径必分叉）。
     const code = p.code ? diagnosticDisplay(p.code) : null;
@@ -642,6 +749,7 @@ export function ProblemPanel({
       <li
         key={`${rowKey}:${globalIndex}`}
         className="prob-item"
+        data-prob-index={flatIndex}
         // 右键菜单的行身份（1023 覆盖面批）：只存"是哪一条"，问题本体由面的上下文回查
         data-problem-row=""
         data-problem-path={p.path}
@@ -651,6 +759,7 @@ export function ProblemPanel({
         <button
           className="conv-issue-btn prob-row"
           data-panel-row=""
+          data-prob-ordinal={ordinal}
           // 严重级只以 CSS 自定义属性下传一次（圆点 + hover 导轨共用它），值仍取自
           // `SEVERITY_TINT` 那一份——面板不自带色值（静态闸 `problem-truth-single-source` 钉着）。
           style={{ '--prob-tint': SEVERITY_COLOR[p.severity] } as CSSProperties}
@@ -706,6 +815,47 @@ export function ProblemPanel({
     });
   };
 
+  /**
+   * 行导航（↑↓ 移焦点 / F4·F8 移过去并打开）在**虚拟列表**上的落地。
+   *
+   * 旧版直接调 `applyPanelRowNav`：它按**已挂载的 DOM 行**取名单，而虚拟列表只挂几十行
+   * ⇒ 走到窗口末尾时会长回第一行（`nextRovingIndex` 的回绕），F4 / ↑↓ 从此再也走不到
+   * 窗口外的那一条。所以"该去哪一行"仍交给同一份判据（`rowNavDecision`：键位语义、回绕、
+   * 下拉框让位全在那一处，本文件不改语义），只是名单换成**全量问题行**（`itemRowFlat`）：
+   *   - 目标行已在窗口里 ⇒ 直接聚焦（与旧行为逐字相同）；
+   *   - 目标行在窗口外 ⇒ 记成 `navTarget`，渲染时把窗口撑过去，下一帧再聚焦
+   *     （`focus()` 自己会把它滚进视口）。
+   * 返回 `true` = 这一下已消费。
+   */
+  const handleRowNav = (e: ReactKeyboardEvent<HTMLDivElement>): boolean => {
+    const target = e.target as { closest?: (sel: string) => Element | null } | null;
+    if (typeof target?.closest !== 'function') return false;
+    const owner = target.closest('[data-panel-row]');
+    const current = owner === null ? -1 : Number((owner as HTMLElement).dataset.probOrdinal ?? '-1');
+    const decision = rowNavDecision({
+      key: e.key,
+      shiftKey: e.shiftKey,
+      current,
+      count: itemRowFlat.length,
+      inField: target.closest('select, textarea') !== null,
+    });
+    if (decision === null) return false;
+    if (itemRowFlat[decision.index] === undefined) return false;
+    e.preventDefault();
+    navPendingOpen.current = decision.open;
+    const mounted = listRef.current?.querySelector<HTMLElement>(
+      `[data-panel-row][data-prob-ordinal="${decision.index}"]`,
+    );
+    if (mounted !== null && mounted !== undefined) {
+      mounted.focus();
+      if (decision.open) mounted.click();
+      navPendingOpen.current = false;
+      return true;
+    }
+    setNavTarget(decision.index);
+    return true;
+  };
+
   return (
     <div
       className="panel-problems prob"
@@ -719,7 +869,9 @@ export function ProblemPanel({
       // Enter / Space 由浏览器的按钮语义直接触发它的 `onClick`（同一条跳源通道），
       // 这里再补一次 click 反而会跳两回。
       onKeyDown={(e) => {
-        applyPanelRowNav(listRef.current, e);
+        // 名单是全量问题行（`itemRowFlat`），不是已挂载的 DOM 行：虚拟列表只挂窗口内的
+        // 几十行，按 DOM 名单走会从窗口末尾回绕到第一行（见 `handleRowNav`）。
+        handleRowNav(e);
       }}
     >
       {header.kind === 'empty' ? (
@@ -730,7 +882,7 @@ export function ProblemPanel({
       ) : (
         // 表头 + 工具条合成一块 sticky 头：列表的滚动交回容器（`.container-body`）之后，
         // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"（与 `ksp-head` 同一处理）。
-        <div className="prob-head">
+        <div className="prob-head" ref={headRef}>
           <div className="conv-summary">
             <span className="conv-count" style={{ color: SEVERITY_COLOR.error }}>
               错误 {error}
@@ -830,15 +982,37 @@ export function ProblemPanel({
           </div>
         ) : null
       ) : (
-        <ul ref={listRef} className="prob-list">
-          {plan.groups.map(({ group: g, rows }) => {
+        // 虚拟列表：只挂窗口内的行 + 上下留白。`paddingTop + Σ行高 + paddingBottom`
+        // 恒等于全量行高之和（账本在 `problem-rows`）⇒ 滚动高度与"全量都画出来"逐像素一致，
+        // 滚动条不撒谎、滚到底就是最后一条（不留半截空白）。
+        //
+        // 这里的 `<li>` 序列是**扁平的**：组头也是一项（`prob-vrow-group`）。虚拟窗口可以从
+        // 任意一行开始（甚至从某个组的中段），嵌套的"组容器"在跨窗口截断时必然留下半截组。
+        <ul
+          ref={listRef}
+          className="prob-list"
+          data-prob-vrows={rows.length}
+          style={{ paddingTop: vwin.topPad, paddingBottom: vwin.bottomPad }}
+        >
+          {rows.slice(vwin.start, vwin.end).map((row, i) => {
+            const index = vwin.start + i;
+            if (row.kind === 'item') {
+              return renderRow(row.problem, index, ordinalOf[index]!, row.itemIndex);
+            }
+            const g = row.group;
             const isCollapsed = collapsed.has(g.path);
             // 组头数字来自 `filteredSummary`（与表头 / 状态栏 / 树徽标同一次遍历）；
             // `g.counts` 仍留在 `groupProblems` 的产物里供别处用，但**不再上屏**——
             // 上屏的第二把尺子就是分叉的开始。
             const gc = filteredSummary.byPath.get(g.path)!;
             return (
-              <li key={g.path} className="prob-group">
+              <li
+                key={`g:${g.path}`}
+                // 组头兼作组分隔线（border 计入行高，账本量的是 rect，含它）；
+                // 全量第 0 行不画线（顶线交给 sticky 头那条，不画双线）
+                className={`prob-vrow-group${index === 0 ? ' prob-vrow-first' : ''}`}
+                data-prob-index={index}
+              >
                 <button
                   type="button"
                   className="prob-group-head"
@@ -860,37 +1034,11 @@ export function ProblemPanel({
                     {gc.info > 0 ? <SeverityCount severity="info" count={gc.info} /> : null}
                   </span>
                 </button>
-                {rows.length > 0 ? (
-                  <ul className="prob-group-rows">
-                    {rows.map(({ p, idx }) => renderRow(p, idx))}
-                  </ul>
-                ) : null}
               </li>
             );
           })}
         </ul>
       )}
-
-      {hiddenEntries > 0 ? (
-        // 哨兵在末尾：Tab 得到它、Enter 按得动；点一次把**目标**抬 step 条，分片泵
-        // 一帧补 `ENTRY_CHUNK` ——— 连点几下也只是把目标抬高，不会有一次性大提交。
-        // `filling`（已提交 < 目标）期间换一套文案 + `aria-busy`：补齐中别让作者以为"点了没反应"。
-        <button
-          type="button"
-          className="ghost small conv-more prob-more"
-          aria-busy={filling}
-          onClick={() =>
-            setWindowTarget((cur) => nextWindow(cur, plan.totalEntries, PROBLEM_WINDOW))
-          }
-        >
-          {moreButtonText({
-            filling,
-            hiddenRows,
-            hiddenEntries,
-            total: filtered.length,
-          })}
-        </button>
-      ) : null}
     </div>
   );
 }

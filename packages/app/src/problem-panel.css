@@ -279,27 +279,50 @@
 
 /* ------------------------------ 列表容器 ------------------------------ */
 
-/* 双重滚动条收掉：高度与滚动都交回 `.container-body`（容器级滚动，定稿 §十） */
+/* 双重滚动条收掉：高度与滚动都交回 `.container-body`（容器级滚动，定稿 §十）。
+
+   1025 性能批 A 线（问题面板真窗口化）：列表改**虚拟**——DOM 只挂视口内的行 + overscan，
+   两侧用 `paddingTop / paddingBottom` 顶起滚动高度。为此布局从 flex 换成 block：
+
+   flex 的 `gap` 只存在于**已挂载**的相邻行之间，窗口一换 gap 数就变；而滚动高度的账本
+   （`ui/problem-rows.ts`）是按"每行一个高度"累加的——1px 的 gap 会让
+   `paddingTop + Σ行高 + paddingBottom` 与 scrollHeight 差出 (窗口行数 − 1) px，
+   滚到底就会露出半截空白。行间距改由组头的 `border-top`（组分隔线，计入该行 rect 高度）
+   表达，行内缩进改由 `.prob-item` 自己的左右内衬承担（原 `.prob-group-rows` 的等价物）。 */
 .panel-problems.prob .prob-list {
   list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  display: block;
   min-width: 0;
   margin: 0;
   padding: 0;
   max-height: none;
   overflow: visible;
+  /* 虚拟列表的**隔离带**（1025 A 线实测）：列表被留白顶到 59,000px 高，窗口一换
+     （每段滚动都要改 paddingTop/paddingBottom + 换掉几十行）会让浏览器把整棵子树
+     标记为脏 —— 不隔离时实测有一段滚动的帧 35–47ms（长任务 0，`renderMs` 占满），
+     加 `contain: layout paint` 后同一组 6 段滚动最长帧 **17–18ms**。
+     `layout` 让子树布局不外溢、`paint` 把重绘收在列表盒内（没有可见溢出：
+     `.prob-flash` 挂在行内 `position: relative` 的 `.prob-item` 上）。 */
+  contain: layout paint;
 }
-.panel-problems.prob .prob-group {
+
+/* 扁平列表项：组头与问题行都是 `.prob-list` 的直接子项（虚拟窗口可以从任意一行开始，
+   甚至从某个组的中段——嵌套的"组容器"一旦跨窗口截断就会留半截组）。 */
+.panel-problems.prob .prob-vrow-group {
   list-style: none;
   min-width: 0;
   margin: 0;
   padding: 0;
-}
-/* 组与组之间一条发丝线；首组的顶线交给 sticky 头那条，不画双线 */
-.panel-problems.prob .prob-group + .prob-group {
+  /* 组与组之间一条发丝线；首项不画（顶线交给 sticky 头那条，不画双线） */
   border-top: 1px solid var(--border-subtle);
+}
+.panel-problems.prob .prob-vrow-group.prob-vrow-first {
+  border-top-color: transparent;
+}
+/* 组内行缩进一档，读成"这组的孩子"（原 `.prob-group-rows` 的左内衬，扁平移到这里） */
+.panel-problems.prob .prob-list > .prob-item {
+  padding-left: var(--space-3);
+  padding-right: var(--space-1);
 }
 
 /* 分组头 = 折叠开关（真 button，`aria-expanded` 在组件上） */
@@ -358,16 +381,7 @@
   flex: none;
   margin-left: auto;
 }
-/* 组内行：整体缩进一档，读成"这组的孩子" */
-.panel-problems.prob .prob-group-rows {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  margin: 0;
-  padding: 0 var(--space-1) var(--space-1) var(--space-3);
-}
+/* 组内行：缩进见上一条 `.prob-list > .prob-item`（扁平化后不再有组容器） */
 
 /* ------------------------ KitCount：一枚计数徽标 ------------------------ */
 /* ui-kit-candidate: KitCount —— 全仓计数徽标现存四套（`.conv-count` / `.ksp-file-count` /
@@ -559,25 +573,6 @@
   font-size: var(--fs-1);
   line-height: 1.6;
   overflow-wrap: anywhere;
-}
-.panel-problems.prob .prob-more {
-  align-self: flex-start;
-  min-height: 24px;
-  padding: 2px var(--space-2);
-  margin-top: var(--space-1);
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  color: var(--fg-dim);
-  font-size: var(--fs-1);
-}
-.panel-problems.prob .prob-more:hover {
-  border-color: transparent;
-  background: var(--hover);
-  color: var(--fg);
-}
-.panel-problems.prob .prob-more:active:not(:disabled) {
-  background: var(--hover-strong);
 }
 
 /* ============================================================================
