@@ -5,6 +5,7 @@ import {
   EDITOR_MIN_SIZE,
   EDITOR_WINDOW_SIZE,
   WELCOME_MIN_SIZE,
+  WELCOME_WINDOW_WIDTH,
   applyEditorWindow,
   applyWelcomeWindow,
   clampWelcomeWindowSize,
@@ -169,6 +170,32 @@ describe('applyEditorWindow：编辑器态（可缩放、可最大化、下限 9
     });
     await expect(applyEditorWindow(backendOf(async () => win))).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 启动帧：初始窗口与品牌锁相称；窗口底色先于 HTML 生效，消掉 WebView 默认白闪。
+describe('启动弹窗初始帧', () => {
+  const conf = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../src-tauri/tauri.conf.json', import.meta.url)), 'utf8'),
+  ) as {
+    app: { windows: { width: number; height: number; backgroundColor?: string; decorations?: boolean; resizable?: boolean; center?: boolean }[] };
+  };
+  const win = conf.app.windows[0];
+
+  it('初始窗口 440×280，比欢迎弹窗窄（内容与品牌锁相称）', () => {
+    expect(win?.width).toBe(440);
+    expect(win?.height).toBe(280);
+    expect(win?.width ?? 0).toBeLessThan(WELCOME_WINDOW_WIDTH);
+  });
+
+  it('窗口底色在 HTML 之前生效（#1e2227，与引导层深色底一致）', () => {
+    expect(win?.backgroundColor?.toLowerCase()).toBe('#1e2227');
+  });
+
+  it('无边框 / 不可缩放 / 居中', () => {
+    expect(win?.decorations).toBe(false);
+    expect(win?.resizable).toBe(false);
+    expect(win?.center).toBe(true);
   });
 });
 

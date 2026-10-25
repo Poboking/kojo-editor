@@ -13,15 +13,16 @@
     "windows": [
       {
         "title": "kojo-editor · 口上编辑器",
-        "width": 1120,
-        "height": 510,
+        "width": 440,
+        "height": 280,
         "minWidth": 320,
         "minHeight": 200,
         "center": true,
         "resizable": false,
         "maximizable": false,
         "decorations": false,
-        "shadow": true
+        "shadow": true,
+        "backgroundColor": "#1e2227"
       }
     ],
     "security": {
