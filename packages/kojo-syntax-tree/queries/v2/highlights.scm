@@ -15,10 +15,13 @@
 (comment) @comment
 (blank_line) @none
 
-; ---- `#` 声明：幕 / 视 / 机 / 变量 / 常量（单行）与 表 / 池 / 模（块头）----
+; ---- `#` 声明：幕 / 视 / 机 / 方言 / 变量 / 常量（单行）与 表 / 池 / 模（块头）----
+; 九枚词位一枚不少：`# 方言` 虽只做事后断言、不赋值，但它同样是"整行声明"档，
+; 漏一枚的表现就是那一行完全不上色（v2 曾漏 `dialect_decl`，见 tests/v2-queries.test.ts 覆盖闸）。
 (scene_decl) @keyword
 (view_decl) @keyword
 (event_decl) @keyword
+(dialect_decl) @keyword
 (variable_decl) @keyword
 (constant_decl) @keyword
 (table_head) @keyword

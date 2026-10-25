@@ -1,5 +1,5 @@
 {
-  "_readme": "tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数，只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。",
+  "_readme": "tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。",
   "checks": {
     "M1(游戏名·引擎词汇)": {
       "total": 6,
@@ -9,10 +9,16 @@
         "packages/app/src/monaco/erb-directives.ts": 1,
         "packages/app/src/monaco/erb-language.ts": 1,
         "packages/app/src/ui/WelcomeView.tsx": 1
+      },
+      "exempt": {
+        "total": 1,
+        "files": {
+          "packages/app/src/bootstrap.ts": 1
+        }
       }
     },
     "M2(语言id分支)": {
-      "total": 134,
+      "total": 164,
       "files": {
         "packages/app/src/monaco/document-links.ts": 3,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
@@ -51,7 +57,23 @@
         "packages/app/src/monaco/suggest-context-trigger.ts": 7,
         "packages/app/src/monaco/tree-sitter/providers.ts": 5,
         "packages/app/src/monaco/tree-sitter/syntax-decorations.ts": 2,
-        "packages/app/src/monaco/xml-language.ts": 5
+        "packages/app/src/monaco/xml-language.ts": 5,
+        "packages/app/src/ui/CallHierarchyOverlay.tsx": 3,
+        "packages/app/src/ui/capability-matrix-view.tsx": 4,
+        "packages/app/src/ui/editor-global-providers.ts": 6,
+        "packages/app/src/ui/editor-pane/pane-helpers.ts": 2,
+        "packages/app/src/ui/editor-pane/use-breadcrumb.ts": 2,
+        "packages/app/src/ui/editor-pane/use-editor-preferences.ts": 2,
+        "packages/app/src/ui/editor-pane/use-monaco-instance.ts": 4,
+        "packages/app/src/ui/EditorPane.tsx": 3,
+        "packages/app/src/ui/kojo2-model-language.ts": 2,
+        "packages/app/src/ui/ShellLayout.tsx": 2
+      },
+      "exempt": {
+        "total": 1,
+        "files": {
+          "packages/app/src/bootstrap.ts": 1
+        }
       }
     },
     "M3(旧token名)": {
@@ -77,6 +99,12 @@
         "packages/app/src/ui/kojo2-storage-retry-command.ts": 1,
         "packages/app/src/ui/project-diagnostics.ts": 8,
         "packages/app/src/ui/sugar-view.ts": 8
+      },
+      "exempt": {
+        "total": 1,
+        "files": {
+          "packages/app/src/bootstrap.ts": 1
+        }
       }
     }
   }

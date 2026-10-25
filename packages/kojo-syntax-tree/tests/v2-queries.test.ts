@@ -14,7 +14,10 @@ import { Language, Parser, Query, type Node } from 'web-tree-sitter';
  *  3. highlights 的捕获名全部是官方命名约定下的档位，且每档在 full.kojo2 上都有命中
  *     （"capture 名有档位"不是写了就算——得真落在节点上）；
  *  4. indents（K2-INDENT-BRACKETS 起）有真捕获：`indent.increase` 只落开体行，
- *     `indent.align` 只落并列容器，且没有任何捕获落在 `@原生` 体内。
+ *     `indent.align` 只落并列容器，且没有任何捕获落在 `@原生` 体内；
+ *  5. highlights 的**节点覆盖**：`src/node-types.v2.json` 里每个具名节点都要有捕获，
+ *     容器 / 零宽记号例外但必须逐条写理由（白名单）。原先只查"档位名存在"⇒ 漏掉
+ *     `(dialect_decl) @keyword` 也全绿，`# 方言 erafl` 那一行完全不上色而闸毫无反应。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -139,6 +142,93 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
     expect(countOf('string.special')).toBeGreaterThanOrEqual(5); // 插值 + 表演提示
     expect(countOf('embedded')).toBeGreaterThanOrEqual(5); // @原生 raw 行
     expect(countOf('number')).toBeGreaterThanOrEqual(3); // 表范围
+    q.delete();
+  });
+});
+
+/* ============================== highlights 节点覆盖闸 ============================== */
+
+/**
+ * 明确允许**不上色**的具名节点：只有两类——容器（子节点各自上色）与零宽记号
+ * （scanner 产出的 `indent`/`dedent`、闭合记号，本身没有可视文本）。每条都必须写理由。
+ *
+ * 白名单**不许**收语义行节点（`*_decl` / `*_head` / `*_stmt`）：那一族是"整行是哪一档"的
+ * 上游判据，漏一枚的表现就是整行无色——只能补捕获，不能免责。
+ */
+const NO_HIGHLIGHT_WHITELIST: Readonly<Record<string, string>> = {
+  source_file: '根容器：整文件不对应任何可视行，子节点各自上色',
+  block: '块容器：块头（*_head）与体内各行各自上色，容器本身没有独立文本',
+  block_body: '块体容器：体内每一行都有自己的捕获',
+  table_body: '`# 表` 体容器：表行由 table_row 及其子节点上色',
+  table_row: '表行容器：范围 table_range / 默认分支 table_else / 值列 table_value 已各自捕获',
+  narration: '旁白容器：narration_marker（`>`）与 narration_text 已各自捕获',
+  speech: '台词容器：speaker 与 speech_string 已各自捕获',
+  bare_speech: '池内无符号台词容器：其 text 字段是 speech_string（已捕获）',
+  speech_text: '台词正文字段：随整个 speech_string 一起上 @string，不单独拆色',
+  speech_close: '台词收尾记号：零宽，无可视文本',
+  interp_body: '插值体内文：整个 interpolation 已上 @string.special，内部不拆（语义层再涂）',
+  interp_close: '插值右花括号记号：零宽，无可视文本',
+  native_body: '`@原生` 围栏体容器：体内逐行由 native_line 上 @embedded',
+  indent: '缩进记号：scanner 产出的零宽节点，无可视文本',
+  dedent: '回退缩进记号：scanner 产出的零宽节点，无可视文本',
+};
+
+const V2_NODE_TYPES = (
+  JSON.parse(readFileSync(join(pkgRoot, 'src', 'node-types.v2.json'), 'utf8')) as Array<{
+    type: string;
+    named: boolean;
+  }>
+).filter((n) => n.named);
+
+/** 从 scm 源文本里读"被捕获的节点名"（`(node) @capture` 形态，判据是静态覆盖而非命中率）。 */
+function capturedNodeTypes(source: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of source.matchAll(/^\s*\(([A-Za-z_][\w]*)\)\s*@/gm)) out.add(m[1]!);
+  return out;
+}
+
+const HIGHLIGHTS_SOURCE = readFileSync(join(QUERY_DIR, 'highlights.scm'), 'utf8');
+const SEMANTIC_LINE_RE = /_(?:decl|head|stmt)$/;
+
+describe('highlights 覆盖：node-types.v2.json 的每个具名节点都有捕获或白名单理由', () => {
+  it('语义行节点（*_decl / *_head / *_stmt）一枚不许漏，且不许靠白名单免责', () => {
+    const lineish = V2_NODE_TYPES.map((n) => n.type).filter((t) => SEMANTIC_LINE_RE.test(t));
+    expect(lineish.length, '语义行节点少得离谱 ⇒ 读法失效').toBeGreaterThanOrEqual(25);
+    const captured = capturedNodeTypes(HIGHLIGHTS_SOURCE);
+    const missing = lineish.filter((t) => !captured.has(t));
+    expect(missing, `highlights 漏了语义行节点（整行不上色）：${missing.join(', ')}`).toEqual([]);
+    const excused = Object.keys(NO_HIGHLIGHT_WHITELIST).filter((t) => SEMANTIC_LINE_RE.test(t));
+    expect(excused, '语义行节点只许补捕获，白名单只给容器/零宽记号用').toEqual([]);
+  });
+
+  it('具名节点全集：既没捕获也不在白名单的节点 ⇒ 红；白名单不许有僵尸项 / 空理由', () => {
+    const named = V2_NODE_TYPES.map((n) => n.type);
+    const captured = capturedNodeTypes(HIGHLIGHTS_SOURCE);
+    const missing = named.filter((t) => !captured.has(t) && !(t in NO_HIGHLIGHT_WHITELIST));
+    expect(missing, `既没捕获也没白名单理由：${missing.join(', ')}`).toEqual([]);
+    const namedSet = new Set(named);
+    const stale = Object.keys(NO_HIGHLIGHT_WHITELIST).filter((t) => !namedSet.has(t));
+    expect(stale, `白名单里这些节点已不在 node-types.v2.json：${stale.join(', ')}`).toEqual([]);
+    const alreadyCaptured = Object.keys(NO_HIGHLIGHT_WHITELIST).filter((t) => captured.has(t));
+    expect(alreadyCaptured, `这些节点已有捕获，白名单项该删：${alreadyCaptured.join(', ')}`).toEqual([]);
+    const blankReasons = Object.entries(NO_HIGHLIGHT_WHITELIST)
+      .filter(([, reason]) => reason.trim().length === 0)
+      .map(([t]) => t);
+    expect(blankReasons, '白名单理由不许为空').toEqual([]);
+  });
+
+  it('`# 方言 erafl` 真上色（不是只把节点名写进 capture 表）', () => {
+    const q = loadQuery('highlights');
+    const tree = parser.parse('# 方言 erafl\n');
+    if (!tree) throw new Error('`# 方言 erafl` 解析失败');
+    const hits: Array<{ type: string; name: string }> = [];
+    for (const m of q.matches(tree.rootNode)) {
+      for (const c of m.captures) hits.push({ type: c.node.type, name: c.name });
+    }
+    expect(hits, '`# 方言` 那一行一个捕获都没有 ⇒ 该行完全不上色').toContainEqual({
+      type: 'dialect_decl',
+      name: 'keyword',
+    });
     q.delete();
   });
 });
