@@ -9,11 +9,13 @@
  *
  * 1. **`#DIM` 族硬规则**（`dim-invalid`，error）——违反的后果是 Emuera **加载期直接
  *    拒绝整个文件**：
+ *    · 名字撞引擎保留名（指令 / 内建式中函数，见下）；
  *    · 维数最多 3 维；
  *    · `CONST` 必须有初值，且不能与 `GLOBAL`/`SAVEDATA`/`REF`/`DYNAMIC` 并用；
  *    · `REF` 的元素数必须写 0（多格空槽 `,,` 与 `, 0, 0` 都是合法写法）；
  *    · 初值个数不得多于元素数。
- *    出处：Era Wiki `Emuera/UserVars`、`Emuera/ERH`。
+ *    出处：Era Wiki `Emuera/UserVars`、`Emuera/ERH`；名字撞车一条另对引擎源码
+ *    （见 `reservedNameViolation`）。
  * 2. **`#FUNCTION` 收尾形态**（`return-form`，warning）——式中函数必须用 `RETURNF`
  *    收尾；裸 `RETURN` 在式中函数里**带不出返回值**（调用方静默拿到 0）。
  *    出处：Era Wiki `Emuera/exfunc` §#FUNCTION。
@@ -27,11 +29,17 @@
  * 真语料实测（eraNAS 4,780 文件 / 35,870 行 `#DIM` 族 / 7,092 个式中函数）：
  * **0 条误报**（唯一 3 处裸 `RETURN` 全在 `[SKIPSTART]` 停用区内，本模块不编译那段）。
  *
- * 不做：`变量名不得与指令同名`——那需要"引擎指令全集"，本仓目前没有它的单一真源
- * （宿主 `ERB_DIRECTIVES` 是口上高频子集，不是全集），另抄一份就是重犯双源漂移。
+ * ## 名字撞引擎保留名（2026-10-25 批 A3 · P1-4 第六条）
+ *
+ * 曾因"本仓没有指令全集真源"而搁置；现补上 `instructions.ts`（301 条，出处可复现），
+ * 与既有 `builtins.ts`（170 个式中函数名）并在一条规则里判。语料口径：**8 个盘 /
+ * 18,149 文件 / 143,167 行 `#DIM` 族，0 命中**——这条规则在真代码上是静音的，
+ * 只在作者真撞上时说话。
  */
 
 import type { ErbStructureIssue } from '@kojo/plugin-api';
+import { builtinSignatureOf } from './builtins';
+import { isInstructionName } from './instructions';
 import { erbCodeBodyOf } from './scanner';
 import { parseFunctionDefinition } from './scanner';
 
@@ -54,6 +62,8 @@ const CONST_INCOMPATIBLE = new Set(['GLOBAL', 'SAVEDATA', 'REF', 'DYNAMIC']);
 
 /** 一条 `#DIM` 族声明切出来的结构 */
 export interface DimLine {
+  /** 头指令名（大写：`DIM` / `DIMS` / `DEFINE` …）——措辞要分"变量名"与"宏名" */
+  directive: string;
   modifiers: string[];
   name: string;
   /** `NAME:a:b:c` 的维度段（不含名字本身） */
@@ -191,6 +201,7 @@ export function parseDimLine(rawLine: string): DimLine | null {
     }
   }
   return {
+    directive: head[1]!.toUpperCase(),
     modifiers,
     name,
     dims,
@@ -200,12 +211,39 @@ export function parseDimLine(rawLine: string): DimLine | null {
 }
 
 /**
+ * 名字撞引擎保留名（指令 / 内建式中函数）⇒ 一条违规描述，否则 null。
+ *
+ * 判据出处（Emuera `IdentifierDictionary`）：`nameDic` 里 `SystemInstrument`
+ * （指令，来自 `FunctionIdentifier.GetInstructionNameDic()`）与 `SystemMethod`
+ * （内建式中函数）**都是致命档**——`CheckUserPrivateVarName` / `CheckUserVarName` /
+ * `CheckUserMacroName` 三处一律 `warnLevel = 2` 后 `return/break`，随后
+ * `LogicalLineParser` 的 `#DIM` 分支因 `AddPrivateVariable` 失败 `return false`，
+ * **整个文件加载失败**。注释原话：「代入文が使えなくなるために命令名との衝突は致命的。」
+ *
+ * 两张词表各管自己的出处：指令见 `instructions.ts`（`FunctionCode` 枚举，301 条），
+ * 式中函数见 `builtins.ts`（exmeth，170 条）。这里只做并集判断，不重抄任何名字。
+ */
+function reservedNameViolation(dim: DimLine): string | null {
+  const what = dim.directive === 'DEFINE' ? '宏名' : '变量名';
+  if (isInstructionName(dim.name)) {
+    return `「${dim.name}」是引擎内建指令名——拿它当${what}会让 Emuera 加载失败（整个文件被拒绝）。`;
+  }
+  if (builtinSignatureOf(dim.name) !== null) {
+    return `「${dim.name}」是引擎内建式中函数名——拿它当${what}会让 Emuera 加载失败（整个文件被拒绝）。`;
+  }
+  return null;
+}
+
+/**
  * 一条声明行的硬规则检查（导出供单测直接打点）。
  * @returns 违规描述列表（空 = 通过）
  */
 export function dimLineViolations(dim: DimLine): string[] {
   const out: string[] = [];
   const mods = new Set(dim.modifiers);
+
+  const reserved = reservedNameViolation(dim);
+  if (reserved !== null) out.push(reserved);
 
   if (dim.dims.length > 3) {
     out.push(`「${dim.name}」声明了 ${dim.dims.length} 维——Emuera 最多 3 维，超出的部分会让整个文件加载失败。`);

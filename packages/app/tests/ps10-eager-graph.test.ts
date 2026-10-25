@@ -378,9 +378,26 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 宿主两枚新模块（`monaco/erb-preproc-dim.ts` / `erb-preproc-defines.ts`）**不在开机图**：
     //       它们的唯一消费者 `ui/editor-global-providers.ts` 随 EditorPane 走懒 chunk，
     //       所以这两枚一枚文件、一个字节都没进欢迎页（这正是文件闸不动的原因，不是漏数）。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,840 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_840);
-    expect(files.length).toBeLessThanOrEqual(191);
+    //   - **A3 指令名撞车批（2026-10-26，与前两批合流后重钉）**：现读数
+    //     **192 文件 / 2,845 KB**，两枚闸随现值上抬（191 → **192** 文件、2,840 → **2,850** KB）。
+    //     增量逐块点名（+1 文件 / +10 KB）：
+    //     · +7.7 KB `erb-parser/instructions.ts`（**新进图**）：引擎指令名全集 301 条
+    //       （Emuera `enum FunctionCode` 305 成员 − `__NULL__` / `SET` / `VARS` / `VARI`）
+    //       + `isInstructionName`。由 `declarations.ts` 静态引用（`#DIM` 名不得与指令同名）；
+    //       erb-parser 是 `bootstrap.ts` 两个常驻插件之一，**没有可挪的动态边**——真要挪只能是
+    //       把判据挪到宿主，但那要带着整张表过 `plugin-api` 契约，反而把口径拆成两份。
+    //       体量就是那 301 个名字本身 + 表头出处（为什么不能从 wiki 交替式抄、四个剔掉的名字
+    //       各是什么理由）。
+    //     · +2.1 KB `erb-parser/declarations.ts`：撞名规则（`reservedNameViolation`，指令与
+    //       exmeth 两张表在规则处并集，不重抄任何名字）+ `DimLine.directive`（措辞要分
+    //       "变量名 / 宏名"）+ 表头语料读数（8 盘 143,167 行 0 命中）。
+    //     · +0.2 KB `erb-parser/index.ts`：导出 `ERB_INSTRUCTION_NAMES` / `isInstructionName`
+    //       （宿主与单测取表的入口）。
+    // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
+    // 交付回执不必靠人肉复算。
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤192 文件 / ≤2,850 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_850);
+    expect(files.length).toBeLessThanOrEqual(192);
   });
 
   /**

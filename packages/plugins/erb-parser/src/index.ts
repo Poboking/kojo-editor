@@ -40,6 +40,8 @@ export {
 } from './builtins';
 // 实参个数（用户函数；纯函数，目录查询）
 export { ARITY_MISMATCH_CODE, arityParamsOf, collectArityDiagnostics, erbCallSitesOf, type ArityCatalog, type ArityInput, type ArgSpan, type ErbCallSite } from './arity';
+// 引擎指令名全集（A3；出处 = Emuera `enum FunctionCode`，静态数据，不进索引契约）
+export { ERB_INSTRUCTION_NAMES, isInstructionName } from './instructions';
 export { checkDeclarationIssues, parseDimLine, dimLineViolations, type DimLine } from './declarations';
 export {
   ERB_CODE_PREFIXES,
