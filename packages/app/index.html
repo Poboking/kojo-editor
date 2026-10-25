@@ -105,8 +105,8 @@
         font-size: 12px;
         color: #909aa4;
       }
-      /* 右上角唯一控件：退出。红底语义钮，形态与 React 启动层（window-chrome.css）同构：
-         淡红底 + 红描边常显，悬停整颗实心；焦点环内收，不向外画压 UI 的方框。 */
+      /* 右上角唯一控件：退出。静止时与背景同色，只在悬停 / 按下变红底（形态与
+         React 启动层 window-chrome.css 同构）；焦点环内收，不向外画压 UI 的方框。 */
       #boot-splash-close {
         position: absolute;
         top: 10px;
@@ -116,11 +116,11 @@
         display: grid;
         place-items: center;
         padding: 0;
-        border: 1px solid rgba(224, 108, 117, 0.45);
+        border: 1px solid transparent;
         border-radius: 9px;
-        background: rgba(224, 108, 117, 0.16);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
-        color: #e88b92;
+        background: transparent;
+        box-shadow: none;
+        color: #909aa4;
         font: inherit;
         line-height: 1;
         cursor: default;
@@ -222,10 +222,7 @@
         );
       }
       html[data-theme='light'] #boot-splash-close {
-        border-color: rgba(180, 35, 46, 0.42);
-        background: rgba(180, 35, 46, 0.1);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
-        color: #b4232e;
+        color: #59636e;
       }
       html[data-theme='light'] #boot-splash-close:hover {
         background: #b4232e;
@@ -285,10 +282,7 @@
         );
       }
       html[data-theme='mint-dark'] #boot-splash-close {
-        border-color: rgba(226, 112, 122, 0.45);
-        background: rgba(226, 112, 122, 0.16);
-        box-shadow: inset 0 1px 0 rgba(205, 255, 232, 0.05);
-        color: #ef9aa2;
+        color: #88a896;
       }
       html[data-theme='mint-dark'] #boot-splash-close:hover {
         background: #e2707a;

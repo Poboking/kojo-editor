@@ -246,8 +246,10 @@ describe('弹窗退出钮', () => {
     expect(chromeCss).toMatch(/\.app-popup-close\s*\{\s*\n\s*z-index: 3;/);
   });
 
-  it('红底退出钮：常显淡红、悬停实心红、焦点环内收（不再出现压 UI 的灰框）', () => {
-    expect(chromeCss).toMatch(/border: 1px solid color-mix\(in srgb, var\(--red\) 45%, transparent\)/);
+  it('退出钮静止与背景同色，悬停/按下才红底（不再出现压 UI 的灰框）', () => {
+    expect(chromeCss).toMatch(
+      /\.boot-splash-close,\s*\n\.app-popup-close\s*\{[\s\S]*?border: 1px solid transparent;[\s\S]*?background: transparent;[\s\S]*?color: var\(--fg-dim\);/,
+    );
     // 全局 button:hover 会改写 border-color（(0,1,1) 压过裸类规则）⇒ 悬停/按下必须显式重声明
     expect(chromeCss).toMatch(
       /\.boot-splash-close:hover,\s*\n\.app-popup-close:hover\s*\{[\s\S]*?border-color: var\(--red\);[\s\S]*?background: var\(--red\);/,
@@ -261,11 +263,12 @@ describe('弹窗退出钮', () => {
     );
   });
 
-  it('内联启动层的退出钮与 React 同形：14px 描边叉 + 红底（撤罩换手不跳形）', () => {
+  it('内联启动层的退出钮与 React 同形：14px 描边叉；静止透明、悬停才红', () => {
     const html = read('../index.html');
     expect(html).toContain('class="boot-splash-x"');
     expect(html).toContain('stroke-width="1.5"');
     expect(html).toContain('d="M4 4l8 8M12 4l-8 8"');
+    expect(html).toMatch(/#boot-splash-close\s*\{[\s\S]*?background: transparent;[\s\S]*?color: #909aa4;/);
     expect(html).toMatch(/#boot-splash-close:hover\s*\{[\s\S]*?background: #e06c75;/);
     expect(html).toMatch(/#boot-splash-close:focus-visible\s*\{[\s\S]*?outline: none;/);
   });

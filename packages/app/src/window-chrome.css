@@ -195,10 +195,11 @@
   );
 }
 
-/* 红底退出钮：常显语义色（淡红底 + 红描边），悬停才整颗实心。
+/* 退出钮：**静止时与背景同色**（透明底 + 透明描边 + 弱图标），只在悬停 / 按下变红底。
+   用户反馈：常显淡红块太突兀。
    `:hover` / `:active` 必须显式重声明 border-color——全局 `button:hover` 是
    `button:hover { border-color: var(--border-strong) }`（(0,1,1)），会压过本类规则的
-   `border: 1px solid transparent`，于是悬停时冒出一个灰方框压住相邻 UI（用户反馈）。 */
+   `border: 1px solid transparent`，于是悬停时冒出一个灰方框压住相邻 UI。 */
 .boot-splash-close,
 .app-popup-close {
   position: absolute;
@@ -210,11 +211,11 @@
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: color-mix(in srgb, var(--red) 16%, transparent);
-  box-shadow: var(--edge-raise);
-  color: color-mix(in srgb, var(--red) 72%, var(--fg));
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
   cursor: default;
   transition:
     background-color var(--dur-1) var(--ease-out),

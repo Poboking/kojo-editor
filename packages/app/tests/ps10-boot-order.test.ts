@@ -64,25 +64,21 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
     expect(mark).toBeLessThan(nthIndex(appSrc, 'void prefetchProjectPlugins()'));
   });
 
-  it('预取由空闲抢跑改成意图触发：意图选择器 + 兜底闸都在，且兜底赶在取证窗口之前', () => {
+  it('预取只认意图：无点击不预取；反空匹配自证由探针模拟一次 pointerdown', () => {
     expect(appSrc).toContain(`const WELCOME_OPEN_INTENT_SELECTOR = '.welcome-recent, .welcome-resume'`);
-    const ms = appSrc.match(/const PREFETCH_FALLBACK_MS\s*=\s*([\d_]+)\s*;/)?.[1];
-    expect(ms).toBeTruthy();
-    const fallbackMs = Number(ms!.replace(/_/g, ''));
-    // 下限：远晚于"开机就点最近项目"那一下（旧接线是空闲一帧就抢跑）
-    expect(fallbackMs).toBeGreaterThanOrEqual(1_500);
-    // 上限：**从探针源码现读**，不抄第二份数。`captureBootNetwork` 在采到可点标记后只等
-    // `settleMs` 就切 Network 域读数，而它的反空匹配自证要求「可点之后看得见 monaco」；
-    // 兜底晚于这个窗口 ⇒ 整轮 monaco 计数为 0 ⇒ `judgeNetwork` 判 unproven（断言②不可自证）。
-    const probeSrc = read('tools/boot-probe.mjs');
-    const settle = Number(probeSrc.match(/settleMs\s*=\s*([\d_]+)/)?.[1]);
-    expect(settle, 'boot-probe 的 settleMs 默认值读不到，判据会退化成空匹配').toBeGreaterThan(0);
-    // 两个调用方（smoke-tauri-dom / boot-marks）都没另传 settleMs ⇒ 默认值就是真窗口
-    expect(probeSrc).not.toMatch(/captureBootNetwork\(\{[^}]*settleMs/s);
-    expect(fallbackMs).toBeLessThan(settle);
+    // 2026-10-25 性能批：无人兜底预取已删（真壳实测它在欢迎页可点后顶出 54ms / 106ms 长任务）
+    expect(appSrc).not.toMatch(/PREFETCH_FALLBACK_MS/);
+    expect(appSrc).not.toContain('fallbackTimer');
+    expect(appSrc).not.toContain('requestIdleCallback(fire');
     // 意图触发面确实挂在 pointerdown 上（不是只留了个常量）
     expect(appSrc).toContain("window.addEventListener('pointerdown', onPointer, true)");
     expect(appSrc).toContain('target.closest(WELCOME_OPEN_INTENT_SELECTOR)');
+    // 取证侧：boot-probe 必须自己派发合成 pointerdown（否则「可点后见得到 monaco」无法自证），
+    // 且意图选择器从 smoke-lib 的类名单源拼出来（welcome-recent-selector 守卫禁止手抄类名）
+    const probeSrc = read('tools/boot-probe.mjs');
+    expect(probeSrc).toContain("new PointerEvent('pointerdown'");
+    expect(probeSrc).toContain("import { WELCOME_RECENT_CLASSES, resumeOpenRowSel } from './smoke-lib.mjs'");
+    expect(probeSrc).toContain('WELCOME_INTENT_SELECTOR = `.${WELCOME_RECENT_CLASSES.section}, ${resumeOpenRowSel}`');
   });
 
   it('项目级插件注册次序逐字冻结（拆分只改时机，不改名单与顺序）', () => {

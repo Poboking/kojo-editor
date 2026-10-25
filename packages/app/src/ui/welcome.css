@@ -1191,6 +1191,10 @@
 .app-frame-popup .welcome-screen .welcome-card {
   height: 100%;
   max-height: none;
+  /* 卡片铺满窗口时背后只有本页自己的渐变（没有内容可透）：整面 backdrop-filter
+     纯烧 GPU，还会让入场动画与两次落窗逐帧重算模糊 ⇒ 弹窗态关掉磨砂，只留玻璃底色。 */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* 矮窗媒体查询（max-height:700px）会把两栏改成整页滚；弹窗里仍要「卡片填窗 + 栏内滚」。

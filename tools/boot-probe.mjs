@@ -38,7 +38,7 @@
  *     它会被资源时间线缓冲上限截断，dev 形态 monaco 模块图 ~1338 条，组长实测出现过 `total=29`
  *     这种明显数不全的读数 ⇒ 单靠它判绿是假绿。故本工具把 Network 域采到与否、两条口径的
  *     条目数差**一律打印出来**，采不到才退回时间线并在结论里标注口径。
- *  3. **反「空匹配」自证**：可点**之后**必须真的看得到 monaco 请求（idle 预取会拉 ProjectView chunk）。
+ *  3. **反「空匹配」自证**：可点**之后**必须真的看得到 monaco 请求（探针派发一次合成 pointerdown 触发意图预取，拉 ProjectView chunk）。
  *     整轮一条 monaco 都没有 = 匹配面失效，此时**不许判绿**（否则断言②退化成恒真）。
  *
  * ## 匹配面（MONACO_HINT_RE）
@@ -49,8 +49,14 @@
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { WELCOME_RECENT_CLASSES, resumeOpenRowSel } from './smoke-lib.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
+
+/** 开项目意图面（与 App.tsx 的 `WELCOME_OPEN_INTENT_SELECTOR` 同口径；类名单源在 smoke-lib） */
+const WELCOME_INTENT_SELECTOR = `.${WELCOME_RECENT_CLASSES.section}, ${resumeOpenRowSel}`;
+/** 没有既有意图面时挂的临时 fixture 类名（同源，不手抄） */
+const WELCOME_INTENT_FIXTURE_CLASS = resumeOpenRowSel.replace(/^\./, '');
 
 /** monaco 请求特征（口径见文件头「匹配面」） */
 export const MONACO_HINT_RE = /monaco-editor|ProjectView|EditorPane|editor\.worker/i;
@@ -434,7 +440,7 @@ export function assignRelTimes(events, timelineEntries, anchorTs, timeOrigin) {
  * 2. 可点前**确实有请求**（`beforeCount > 0`）——文档与入口脚本必然在可点前取；一条都没有
  *    只能说明事件归属或时基错了，此时「可点前零 monaco」是**恒真的假绿**（实测踩过：
  *    按页内 `timeOrigin` 直接切分时 `beforeCount` 会整轮归零）；
- * 3. 可点前零 monaco，且可点**之后**见得到 monaco（idle 预取必然拉到 ProjectView chunk；
+ * 3. 可点前零 monaco，且可点**之后**见得到 monaco（意图预取 / 探针模拟 pointerdown 必然拉到 ProjectView chunk；
  *    整轮零 monaco = 匹配面失效，同样不许判绿）。
  */
 export function judgeNetwork(cap) {
@@ -641,7 +647,29 @@ export async function captureBootNetwork(opts) {
     }
     if (!page) return { ok: false, reason: `重跑一轮开机后 ${Math.round(waitMs / 1000)}s 内仍未采到 boot.welcomeInteractive` };
 
-    // 可点后 settleMs：等 idle 预取真的把 ProjectView chunk 发出去（反空匹配自证要看到它）
+    // 反空匹配自证（2026-10-25 性能批）：产品侧已删「无人点击兜底预取」（它在欢迎页可点后
+    // 制造 100ms 级长任务），改为**探针模拟一次意图**——派发 pointerdown，不产生 click，
+    // 不会真开项目。没有既有意图面时挂一枚临时 .welcome-resume fixture，保证任何欢迎页
+    // 形态都能触发同一条预取路径；派发后立刻摘掉。
+    try {
+      const intent = await cdp.evalText(`(() => {
+        const real = document.querySelector(${JSON.stringify(WELCOME_INTENT_SELECTOR)});
+        let el = real;
+        if (!el) {
+          el = document.createElement('div');
+          el.className = ${JSON.stringify(WELCOME_INTENT_FIXTURE_CLASS)};
+          el.style.display = 'none';
+          document.body.appendChild(el);
+        }
+        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+        if (!real) el.remove();
+        return real ? 'real' : 'fixture';
+      })()`);
+      log(`[cdp] 已模拟开项目意图（${String(intent)}），取证「可点后见得到 monaco」…`);
+    } catch {
+      /* 派发失败就保持 unproven 口径，不硬判绿 */
+    }
+    // 可点后 settleMs：等这发意图预取真的把 ProjectView chunk 发出去（反空匹配自证要看到它）
     await sleep(settleMs);
     try {
       const raw = await cdp.evalText(`(${collectBoot.toString()})()`);

@@ -168,7 +168,7 @@ import { discardRecoveryJournal } from './crash-recovery';
 /**
  * L1-A 首屏分割（2026-10-16 首屏批）：项目视图的静态链会把 monaco 全图（~1338 模块 /
  * 入口块 ~4.5 MB）拖进欢迎页关键路径——这里改按需 chunk。加载器独立成函数：
- * `React.lazy` 与 idle 预取**共用同一个 import promise**（浏览器模块缓存去重，
+ * `React.lazy` 与意图预取**共用同一个 import promise**（浏览器模块缓存去重，
  * 预取完再进项目零等待）。
  *
  * PS-18（2026-10-18）：styles.css 拆「欢迎页轻档（main.tsx 静态链）/ 项目重档
@@ -243,18 +243,12 @@ async function loadKojo2StorageAdapter(
  */
 const WELCOME_OPEN_INTENT_SELECTOR = '.welcome-recent, .welcome-resume';
 
-/**
- * 无人点击时的兜底预取延迟（ms）。**上限被取证口径钉死**，不是随手数：
- * `tools/boot-probe.mjs` 的 `captureBootNetwork` 在采到 `boot.welcomeInteractive` 之后只等
- * `settleMs`（默认 4000ms，`smoke-tauri-dom` / `boot-marks` 都没另传）就切 Network 域读数，
- * 而它的**反空匹配自证**要求「可点之后必须真的看得到 monaco 请求」——兜底若晚于这个窗口，
- * 整轮 monaco 计数归零 ⇒ `judgeNetwork` 判 `unproven` ⇒ 断言②无法自证（假绿同罪）。
- * 下限则要远晚于"开机就点最近项目"的那一下（旧接线是空闲一帧就抢跑，正是被堵住的用户）。
- * 真点击走 `pointerdown` 意图触发，与本常量无关；这里只管"停在欢迎页不点"的兜底。
- */
-const PREFETCH_FALLBACK_MS = 2_500;
+/* 2026-10-25 性能批：欢迎页的无人兜底预取已删除——用户不点就一个字节都不拉。
+   真壳实测那发空闲预取（ProjectView ~4 MB Monaco + 项目插件）会在欢迎页可点后
+   3.7s / 4.7s 各顶出一个 54ms / 106ms 长任务、掉两帧；且真开项目本来就会自己拉。
+   取证侧（boot-probe 的反假绿自证）改由探针派发一次合成 pointerdown 触发，不靠产品兜底。 */
 
-/** 项目视图 chunk 装载期间的骨架（与内联引导层同构；idle 预取命中时基本见不到） */
+/** 项目视图 chunk 装载期间的骨架（与内联引导层同构；意图预取命中时基本见不到） */
 function ProjectViewSkeleton(): ReactElement {
   return (
     <div className="boot-skeleton" aria-hidden="true">
@@ -639,8 +633,11 @@ export function App(): ReactElement {
         { width: WELCOME_WINDOW_WIDTH, height: welcomeWindowHeightRef.current },
         screen,
       );
-      await applyWelcomeWindow(provisional, { center });
-      if (cancelled || seq !== welcomeFitSeqRef.current) return;
+      // 宽度已到位（欢迎页回访 / 重载）就别再落一次窗：少一整轮 resize + center 的整页重排。
+      if (Math.abs(window.innerWidth - provisional.width) > 1) {
+        await applyWelcomeWindow(provisional, { center });
+        if (cancelled || seq !== welcomeFitSeqRef.current) return;
+      }
       // 宽度没到位时媒体查询还是旧版式，量出来的高度不可信
       const deadline = performance.now() + 400;
       while (Math.abs(window.innerWidth - provisional.width) > 1 && performance.now() < deadline) {
@@ -768,31 +765,19 @@ export function App(): ReactElement {
     prefetched.current = true;
     perf.bootMark('boot.welcomeInteractive', undefined, '自导航起点 ms；内核就绪 ⇒ 欢迎页主按钮可点（提交时刻）');
 
-    /* PS-10 ③：预取从"空闲即抢跑"改成"**有意图才飞**"。
-     *
-     * 旧接线是 `requestIdleCallback(…, { timeout: 4000 })`——timeout 只是**上限**，
-     * 第一个空闲帧就执行 ⇒ 开机 1–2s 就把 ProjectView（静态链上挂着 ~4 MB Monaco）连同
-     * 项目级插件整块取回并**求值**，正好和用户最快那一下「继续上次会话」抢同一根主线程。
-     * 推迟字节不等于推迟求值，所以这里把触发条件换成意图：
-     *  - 首选＝最近项目区 / 「继续上次会话」上的第一次 `pointerdown`（此时取回+求值本来就是
-     *    开项目的前置，并行预热只赚不亏）；
-     *  - 兜底＝`PREFETCH_FALLBACK_MS` 内没人碰（读者停在欢迎页）才在空闲里补一发。
-     *    这发兜底同时保住 boot-probe 断言②的反假绿自证——「整轮零 monaco 请求 = 匹配面可疑」，
-     *    取证那一轮没有人点击，口径必须仍然看得到 monaco（窗口＝可点后 `settleMs` 4s，
-     *    取值见上面那个常量的注释，别往后挪）。
-     *  - 撤防＝`openProject` 一入口就取消：真开项目会自己拉这两块，抢跑没有意义。
+    /* PS-10 ③：预取**只认意图**——最近项目区 / 「继续上次会话」的第一次 `pointerdown`
+     * （此时取回 + 求值本来就是开项目的前置，并行预热只赚不亏）。无点击兜底见上方常量位注释：
+     * 它在欢迎页可点后制造 100ms 级长任务，2026-10-25 已删。
+     * 撤防＝`openProject` 一入口就取消：真开项目会自己拉这两块，抢跑没有意义。
      */
     let done = false;
-    let fallbackTimer = 0;
     const disarm = (): void => {
       done = true;
-      window.clearTimeout(fallbackTimer);
       window.removeEventListener('pointerdown', onPointer, true);
       cancelPrefetchRef.current = null;
     };
     const fire = (): void => {
       if (done) return;
-      // 先到先得：意图触发或兜底触发都只执行一次，撤防后不再起飞
       disarm();
       // 预取尽力而为：失败不打扰（真加载失败由 lazy 的 Suspense 路径呈现）
       void loadProjectView().catch(() => undefined);
@@ -803,10 +788,6 @@ export function App(): ReactElement {
       if (typeof target?.closest === 'function' && target.closest(WELCOME_OPEN_INTENT_SELECTOR)) fire();
     }
     window.addEventListener('pointerdown', onPointer, true);
-    fallbackTimer = window.setTimeout(() => {
-      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(fire, { timeout: 4000 });
-      else fire();
-    }, PREFETCH_FALLBACK_MS);
     cancelPrefetchRef.current = disarm;
   }, [kernel]);
 
