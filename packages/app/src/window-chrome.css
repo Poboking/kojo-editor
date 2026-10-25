@@ -85,6 +85,11 @@
 
 .window-chrome-title {
   flex: none;
+  /* 限宽 + 省略（视觉批十五）：游戏目录名动辄 45 字符，实测吃掉标题栏一半宽。
+     完整标题进 `title`（悬停可见），这里只负责不挤走右侧动作区。 */
+  max-width: min(42vw, 520px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--fg-dim);
   font-size: var(--fs-1);
   letter-spacing: 0.02em;

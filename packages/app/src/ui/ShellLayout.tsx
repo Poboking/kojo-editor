@@ -163,6 +163,7 @@ import {
   WORKSPACE_SYMBOL_RENDER_LIMIT,
 } from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
+import { useOverlayPresence } from './overlay-chrome';
 import { ProblemsStatusItem } from './ProblemPanel';
 // 项目名旁的「更多」菜单（C-1a）：复用全站共享 <ContextMenu>（玻璃观感 + WAI-ARIA 键盘），不另造菜单
 import { ContextMenu, type ContextMenuItem } from './context-menu';
@@ -975,6 +976,8 @@ export function ShellLayout(props: Props): ReactElement {
   const [projectMenuAt, setProjectMenuAt] = useState<{ x: number; y: number } | null>(null);
   // 设置 overlay（P4；壳层私有——设置项全是容器语义，不经 ui.overlay 槽）
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 设置浮层也要退场（视觉批十五）：与 `ui.overlay` 族同一个 200ms 时机，别一半有一半没有 */
+  const settingsPresence = useOverlayPresence(settingsOpen);
   // 打开设置时定位到哪一节：「打开设置」恒回 general（不记住上次在哪节），
   // 「打开键盘快捷键」直达快捷键节。SettingsPanel 每次开浮层都重新挂载 ⇒ 该值即初始选中节。
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('general');
@@ -2657,8 +2660,9 @@ export function ShellLayout(props: Props): ReactElement {
           </div>
         </div>
       ) : null}
-      {settingsOpen ? (
+      {settingsPresence.mounted ? (
         <SettingsPanel
+          exiting={settingsPresence.exiting}
           onClose={() => setSettingsOpen(false)}
           initialSection={settingsSection}
           commands={registry}

@@ -146,6 +146,8 @@ const FIND_SEED_CHOICES: readonly { value: FindSeedPref; label: string }[] = [
  * settings 层）承接，本组件不自建监听。
  */
 export interface SettingsPanelProps {
+  /** 退场中（壳层用 `useOverlayPresence` 保活 200ms；挂上就不接事件、只播 overlay-out） */
+  exiting?: boolean;
   /** 关闭浮层：遮罩点击、右上 ✕ 与页脚「完成」共用这一个入口（开关真源仍是壳层的 settingsOpen） */
   onClose: () => void;
   /**
@@ -1102,7 +1104,7 @@ const tabIdOf = (id: SettingsSectionId): string => `settings-nav-tab-${id}`;
  * always-mounted 的 effect 决定，Esc 关窗仍由壳层全局键盘承接。
  */
 export function SettingsPanel(props: SettingsPanelProps): ReactElement {
-  const { onClose, initialSection = 'general' } = props;
+  const { onClose, initialSection = 'general', exiting = false } = props;
   const navRef = useRef<HTMLDivElement>(null);
   /** 唯一允许的内部状态：当前看哪一节（不落盘、不影响任何偏好） */
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
@@ -1195,8 +1197,8 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   if (!activeEntry) {
     // 理论上到不了这里（general 一节恒有内容 ⇒ visible 恒非空）；防御性渲染一个可关闭的空壳，绝不白屏。
     return (
-      <div className="overlay-backdrop" onMouseDown={closeOnBackdrop}>
-        <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
+      <div className={`overlay-backdrop${exiting ? ' ov-closing' : ''}`} onMouseDown={closeOnBackdrop}>
+        <div className={`overlay-host settings-host${exiting ? ' ov-exiting' : ''}`} role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
           <div className="wizard">
             <h3 className="settings-title">设置</h3>
           </div>
@@ -1219,8 +1221,8 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   };
 
   return (
-    <div className="overlay-backdrop" onMouseDown={closeOnBackdrop}>
-      <div className="overlay-host settings-host" role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
+    <div className={`overlay-backdrop${exiting ? ' ov-closing' : ''}`} onMouseDown={closeOnBackdrop}>
+      <div className={`overlay-host settings-host${exiting ? ' ov-exiting' : ''}`} role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
         {/* 右上 ✕：与遮罩点击、页脚「完成」同一个 onClose 入口；Esc 仍走壳层全局键盘（modal 栈） */}
         <button
           type="button"

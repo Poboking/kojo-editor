@@ -1,5 +1,37 @@
-import { createElement as h, type ReactNode } from 'react';
+import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './icons';
+
+/**
+ * 浮层「在场」钩子（视觉批十五）：`open` 落下后再留 `ms` 毫秒才真正卸载，期间
+ * `exiting = true`——宿主把 `.ov-exiting` 挂在面板根上就播 `overlay-out`。
+ * 设置浮层与 `ui.overlay` 族共用这一份时机，免得"一半浮层有退场、一半没有"。
+ */
+export function useOverlayPresence(open: boolean, ms = 200): { mounted: boolean; exiting: boolean } {
+  const [state, setState] = useState<{ mounted: boolean; exiting: boolean }>({
+    mounted: open,
+    exiting: false,
+  });
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (open) {
+      setState({ mounted: true, exiting: false });
+      return;
+    }
+    setState((cur) => (cur.mounted ? { mounted: true, exiting: true } : cur));
+    timer.current = setTimeout(() => setState({ mounted: false, exiting: false }), ms);
+  }, [open, ms]);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    },
+    [],
+  );
+  return state;
+}
 
 /**
  * 浮层族统一外框（批次十一 L12-overlays）。

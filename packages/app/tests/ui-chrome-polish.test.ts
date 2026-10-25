@@ -57,6 +57,24 @@ describe('视觉批十三 · 壳层打磨的防回退判据', () => {
     expect(results).toContain('20px');
   });
 
+  it('浮层退场覆盖设置面：壳层保活 + 两处渲染都挂 `.ov-exiting`', () => {
+    const shell = read('ui/ShellLayout.tsx');
+    expect(shell).toContain('useOverlayPresence(settingsOpen)');
+    expect(shell).toContain('exiting={settingsPresence.exiting}');
+    // 设置面板自带 backdrop/host，两处返回都要能挂类（防御性空壳 + 正常面）
+    const settings = read('ui/SettingsPanel.tsx');
+    expect(settings.match(/ov-exiting/g)?.length).toBe(2);
+    expect(settings.match(/ov-closing/g)?.length).toBe(2);
+    expect(settings).toContain('exiting?: boolean');
+  });
+
+  it('窗口标题限宽：长目录名省略、完整标题进 title', () => {
+    const chrome = read('ui/WindowChrome.tsx');
+    expect(chrome).toContain('title={title}');
+    const css = readFileSync(fileURLToPath(new URL('../src/window-chrome.css', import.meta.url)), 'utf8');
+    expect(css).toContain('max-width: min(42vw, 520px)');
+    expect(css).toContain('text-overflow: ellipsis');
+  });
   it('窗口标题三处同源：自绘标题栏 / document.title / Tauri 系统标题都读同一个算法', () => {
     const app = read('ui/App.tsx');
     // 算法住在 window-title.ts（纯函数另有一份真值测试）；这里只钉"三条出口都接上了"

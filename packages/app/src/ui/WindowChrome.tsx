@@ -186,7 +186,7 @@ export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps):
       <span className="window-chrome-mark" aria-hidden="true" data-tauri-drag-region>
         <ChromeBrandMark />
       </span>
-      <span className="window-chrome-title" data-tauri-drag-region>
+      <span className="window-chrome-title" data-tauri-drag-region title={title}>
         {title}
       </span>
       <div className="window-chrome-drag" data-tauri-drag-region />
