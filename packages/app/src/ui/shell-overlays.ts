@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { Suspense, createElement as h, lazy, useEffect, type ComponentType } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbParserService, OpJournal } from '@kojo/plugin-api';
+import type { ErbParserService, OpJournal, UIPanelProps } from '@kojo/plugin-api';
 import { KernelServices } from '@kojo/plugin-api';
 // P2-14 / PS-10 断链：diff view 一格整体走**动态装载**。这一格经
 // `diff-view.ts → monaco/erb-language → theme → monaco/kojo-language →
@@ -18,23 +18,53 @@ const diffViewChunk: Promise<
 // 世界（PS-10 开机图闸的真判据），预览确认是低频路径——apply / activePaneId 都走
 // 点击那一刻的动态 import（overlay 的 deps 本就收 Promise）。
 import { QUICK_FIX_PREVIEW_OVERLAY_ID } from './quick-fix-preview';
-import { createQuickFixPreviewOverlay } from './QuickFixPreviewOverlay';
 import {
   FILE_HISTORY_OVERLAY_ID,
   setFileHistoryTarget,
   SHOW_FILE_HISTORY_COMMAND_ID,
 } from './file-history';
-import { createFileHistoryOverlay } from './FileHistoryOverlay';
 import { OPS_HISTORY_OVERLAY_ID, SHOW_OPS_HISTORY_COMMAND_ID } from './ops-history';
-import { createOpsHistoryOverlay } from './OpsHistoryOverlay';
 import {
   CALL_HIERARCHY_COMMAND_ID,
   CALL_HIERARCHY_OVERLAY_ID,
   setCallHierarchyState,
 } from './call-hierarchy';
-import { createCallHierarchyOverlay } from './CallHierarchyOverlay';
+import { overlaySkeletonRows, overlaySpinner } from './overlay-chrome';
 import { openModelAcrossGroups } from './editor-pane-registry';
 import { readJumpProbe } from './jump-to-state';
+
+/**
+ * 一层 `lazy` 壳（S7-首屏字节）：浮层的**注册**照旧同步做（槽位 id / `order` / `size`、
+ * 命令表条目、`when` 判据全在 effect 里一次到位），只有**渲染**推到第一次开窗——
+ * 浮层模块到那一刻才装载。
+ *
+ * 为什么不照 diff view 那格把整段注册搬进 `.then`：那条路会让命令面板在装载窗口里
+ * 少几项；这里注册保持同步，行为面零变化（命令点了照样开窗，只是首次要多等一次本地
+ * chunk 读取）。
+ *
+ * fallback 用**同档 `ov` 外框 + 骨架行**占位：外框宽度由宿主 `.overlay-host`（按注册的
+ * `size` 档）给、内层 `.wizard.ov` 是 `width:auto` 吃满，所以占位与真身同宽同外框，
+ * 装载到位后原地换内容，不产生布局跳动。挂 `data-overlay-loading` 让运行时验收能认出
+ * "这一刻是懒装载占位"而不是白屏。
+ */
+function lazyOverlay(load: () => Promise<() => unknown>): (props: UIPanelProps) => unknown {
+  // 工厂的返回类型是 `() => unknown`（各家都这么签的），React 的 `lazy` 只认组件类型；
+  // 转换只在这里发生一次，调用侧不必各写一遍 `as unknown as`。
+  const Lazy = lazy(async () => ({ default: (await load()) as unknown as ComponentType<UIPanelProps> }));
+  return function OverlayLazyShell(props: UIPanelProps) {
+    return h(
+      Suspense,
+      {
+        fallback: h(
+          'div',
+          { className: 'wizard ov ov-wide ov-query', 'data-overlay-loading': '' },
+          h('div', { className: 'ov-body' }, overlaySpinner('正在打开…'), overlaySkeletonRows(6)),
+        ),
+      },
+      h(Lazy, props),
+    );
+  };
+}
 
 /**
  * 覆盖层 + 命令槽位的主机接线（2026-10-15 比对/历史批、批 E 调用层级、2026-10-16 undo 批）。
@@ -83,12 +113,16 @@ export function useShellOverlays(kernel: Kernel | null): void {
       id: FILE_HISTORY_OVERLAY_ID,
       order: 41,
       size: 'wide',
-      component: createFileHistoryOverlay({
-        io: kernel.io,
-        requestDiff: (p) => kernel.bus.emit('ui.diffView.open', { ...p, source: 'host:file-history' }),
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: FILE_HISTORY_OVERLAY_ID, source: 'host:file-history' }),
-      }),
+      component: lazyOverlay(() =>
+        import('./FileHistoryOverlay').then((m) =>
+          m.createFileHistoryOverlay({
+            io: kernel.io,
+            requestDiff: (p) => kernel.bus.emit('ui.diffView.open', { ...p, source: 'host:file-history' }),
+            close: () =>
+              kernel.bus.emit('ui.overlay.close', { id: FILE_HISTORY_OVERLAY_ID, source: 'host:file-history' }),
+          }),
+        ),
+      ),
     });
     const unRegHistoryCommand = kernel.slots.register('editor.command', {
       id: SHOW_FILE_HISTORY_COMMAND_ID,
@@ -122,52 +156,56 @@ export function useShellOverlays(kernel: Kernel | null): void {
       // 560 一档，920 的内层塞进 560 的外框 ⇒ 横向裁切 + 双滚动条（当年 `.kd-host`
       // 1180 塞窄宿主是同一颗雷）。补上这一行，档位由 `shell-overlays` 与浮层同源声明。
       size: 'wide',
-      component: createCallHierarchyOverlay({
-        currentIndex: () => {
-          try {
-            return parser()?.currentIndex() ?? null;
-          } catch {
-            return null;
-          }
-        },
-        functionAt: (path, line) => {
-          try {
-            const service = parser();
-            // 三态：通道不存在（服务/方法缺席）⇒ null（数据层退化到索引自扫）；
-            // 在场则它的 undefined 是权威的"不在此函数内"
-            return service?.functionAt ? service.functionAt(path, line) : null;
-          } catch {
-            return null;
-          }
-        },
-        // ST-CONSUMERS：索引这一轮的可查事实（原样转述，宿主不代判形状；缺席 ⇒ 旧句）
-        indexState: () => {
-          try {
-            return parser()?.indexState?.() ?? null;
-          } catch {
-            return null;
-          }
-        },
-        // 语言分派（批次十）：给面板一份"请求文件的活动 model"。跨组反查走登记簿
-        // （`openModelAcrossGroups` 按宿主键匹配，任一组开着即可）；文件已关 ⇒ null，
-        // 面板逐字退回 ERB 分支的原有空态。只读，不碰任何 ref 写路径。
-        modelFor: (path) => {
-          try {
-            return openModelAcrossGroups(path) ?? null;
-          } catch {
-            return null;
-          }
-        },
-        reveal: (path, line, column) =>
-          kernel.bus.emit('editor.revealLocation', {
-            filePath: path,
-            line,
-            ...(column !== undefined ? { column } : {}),
-            source: '调用层级',
+      component: lazyOverlay(() =>
+        import('./CallHierarchyOverlay').then((m) =>
+          m.createCallHierarchyOverlay({
+            currentIndex: () => {
+              try {
+                return parser()?.currentIndex() ?? null;
+              } catch {
+                return null;
+              }
+            },
+            functionAt: (path, line) => {
+              try {
+                const service = parser();
+                // 三态：通道不存在（服务/方法缺席）⇒ null（数据层退化到索引自扫）；
+                // 在场则它的 undefined 是权威的"不在此函数内"
+                return service?.functionAt ? service.functionAt(path, line) : null;
+              } catch {
+                return null;
+              }
+            },
+            // ST-CONSUMERS：索引这一轮的可查事实（原样转述，宿主不代判形状；缺席 ⇒ 旧句）
+            indexState: () => {
+              try {
+                return parser()?.indexState?.() ?? null;
+              } catch {
+                return null;
+              }
+            },
+            // 语言分派（批次十）：给面板一份"请求文件的活动 model"。跨组反查走登记簿
+            // （`openModelAcrossGroups` 按宿主键匹配，任一组开着即可）；文件已关 ⇒ null，
+            // 面板逐字退回 ERB 分支的原有空态。只读，不碰任何 ref 写路径。
+            modelFor: (path) => {
+              try {
+                return openModelAcrossGroups(path) ?? null;
+              } catch {
+                return null;
+              }
+            },
+            reveal: (path, line, column) =>
+              kernel.bus.emit('editor.revealLocation', {
+                filePath: path,
+                line,
+                ...(column !== undefined ? { column } : {}),
+                source: '调用层级',
+              }),
+            close: () =>
+              kernel.bus.emit('ui.overlay.close', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' }),
           }),
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: CALL_HIERARCHY_OVERLAY_ID, source: 'host:call-hierarchy' }),
-      }),
+        ),
+      ),
     });
     const unRegCallHierarchyCommand = kernel.slots.register('editor.command', {
       id: CALL_HIERARCHY_COMMAND_ID,
@@ -207,11 +245,15 @@ export function useShellOverlays(kernel: Kernel | null): void {
           id: OPS_HISTORY_OVERLAY_ID,
           order: 43,
           size: 'wide',
-          component: createOpsHistoryOverlay({
-            ops: opsService,
-            close: () =>
-              kernel.bus.emit('ui.overlay.close', { id: OPS_HISTORY_OVERLAY_ID, source: 'host:ops-history' }),
-          }),
+          component: lazyOverlay(() =>
+            import('./OpsHistoryOverlay').then((m) =>
+              m.createOpsHistoryOverlay({
+                ops: opsService,
+                close: () =>
+                  kernel.bus.emit('ui.overlay.close', { id: OPS_HISTORY_OVERLAY_ID, source: 'host:ops-history' }),
+              }),
+            ),
+          ),
         })
       : undefined;
     const unRegOpsCommand = opsService
@@ -233,12 +275,16 @@ export function useShellOverlays(kernel: Kernel | null): void {
       id: QUICK_FIX_PREVIEW_OVERLAY_ID,
       order: 44,
       size: 'wide',
-      component: createQuickFixPreviewOverlay({
-        apply: (actionId) => import('./editor-global-providers').then((m) => m.applyQuickFixEdits(actionId)),
-        activePaneId: () => import('./editor-global-providers').then((m) => m.focusedPaneIdOf()),
-        close: () =>
-          kernel.bus.emit('ui.overlay.close', { id: QUICK_FIX_PREVIEW_OVERLAY_ID, source: 'host:quick-fix-preview' }),
-      }),
+      component: lazyOverlay(() =>
+        import('./QuickFixPreviewOverlay').then((m) =>
+          m.createQuickFixPreviewOverlay({
+            apply: (actionId) => import('./editor-global-providers').then((m) => m.applyQuickFixEdits(actionId)),
+            activePaneId: () => import('./editor-global-providers').then((m) => m.focusedPaneIdOf()),
+            close: () =>
+              kernel.bus.emit('ui.overlay.close', { id: QUICK_FIX_PREVIEW_OVERLAY_ID, source: 'host:quick-fix-preview' }),
+          }),
+        ),
+      ),
     });
     return () => {
       // diff view 一格：装载未到位就置闩（到位的 `.then` 会自行跳过注册）；

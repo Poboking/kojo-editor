@@ -94,8 +94,11 @@ import {
   storedIndentChoiceFor,
   type IndentTarget,
 } from './indentation-pref';
-// S2 的编码清单是纯模块（只 import type），静态取即可；动作侧走点击时装配（见 createEncodingMenuPort）。
-import { listEncodings } from './encoding-actions';
+// S2 的编码清单是纯模块（只 import type），静态取即可；动作侧原本想走"点击时装配"，
+// 但 `encoding-actions` 既然已经为清单静态进开机图，那条 `import('./encoding-actions')`
+// 一个字节也省不下，只会换来 rollup 的「动态+静态混用」警告（S7-首屏清账）⇒ 一并静态引。
+// 真正重的那半（monaco 模型池 `editor-model-pool-instance`）仍是点击时的动态装载。
+import { createEncodingActions, listEncodings } from './encoding-actions';
 import { useAutosavePref } from './autosave-pref';
 import {
   applyMotionPref,
@@ -347,10 +350,7 @@ const detachedEncodingPort: EncodingMenuPort = {
  */
 function createEncodingMenuPort(kernel: Kernel): EncodingMenuPort {
   const run = async (kind: EncodingActionKind, path: string, encoding: string): Promise<void> => {
-    const [{ createEncodingActions }, { editorModelPool }] = await Promise.all([
-      import('./encoding-actions'),
-      import('./editor-model-pool-instance'),
-    ]);
+    const { editorModelPool } = await import('./editor-model-pool-instance');
     const actions = createEncodingActions({ io: kernel.io, models: editorModelPool });
     if (kind === 'reopen') await actions.reopenWithEncoding(path, encoding as FileEncoding);
     else await actions.saveWithEncoding(path, encoding as FileEncoding);

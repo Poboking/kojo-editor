@@ -51,8 +51,6 @@ import {
   type DropOverlayState,
 } from './drag-drop';
 import { useNotify } from './NotificationCenter';
-import { UnsavedConfirmDialog } from './UnsavedConfirmDialog';
-import { UnsavedFilesConfirmDialog } from './UnsavedFilesConfirmDialog';
 import { installWindowCloseGuard } from './window-close-guard';
 // 常驻窗口框架（用户反馈第 9 条）：窗口永久无原生装饰，标题栏由 App 根部统一提供，
 // 欢迎页 / 项目态 / 禅模式共用；浏览器 dev 里该组件返回 null（不画假按钮）。
@@ -70,10 +68,8 @@ import {
   type WindowDragStarter,
 } from './window-fullscreen';
 import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
-import { DevNoteDialog } from './DevNoteDialog';
 import { loadDevNoteSeen, markDevNoteSeen } from './dev-note-pref';
 import { WelcomeOverlayHost } from './WelcomeOverlayHost';
-import { WritableApprovalDialog } from './WritableApprovalDialog';
 import { planAddExtraRoot } from './workspace-roots';
 import { getKojo2CutoverController } from './kojo2-cutover';
 // K2-CUTOVER-STAGE：阶段切换后的宿主效果注入口（设置页只负责改档，不认识 Monaco）
@@ -129,7 +125,6 @@ import {
   type Kojo2MigrateEntry,
   type Kojo2MigrateEntrySnapshot,
 } from './kojo2-migrate-entry';
-import { Kojo2MigrateWizardHost } from './kojo2-migrate';
 import { listSourceFiles, type ShellCommandSpec } from './commands';
 import {
   fileOpGuardMessage,
@@ -145,15 +140,18 @@ import { mountProjectScan } from './project-scan-schedule';
 import { installKojo2ProjectScan } from './kojo2-project-scan-adapter';
 // K2-STORAGE-SERVICE：项目打开后唯一的槽位账本装配点（React 无关的服务；这里只负责
 // 项目开/关两拍与把 adapter 事实惰性递进去）。
-import {
-  createKojo2StorageService,
-  type Kojo2StorageServiceAdapter,
-} from './kojo2-storage-service';
+//
+// S7-首屏字节（2026-10-25）：服务本体 + 持久化 + 声明刷新 + 回收重试命令（约 93 KB 源码）
+// 原先随 App 静态进开机图，但这条链**只在 `isKojo2CutoverEnabled()` 为真且项目已开**时才
+// 用得上（默认 `v1-only` ⇒ 那片 effect 直接返回）。改为在 effect 里 `await import()` 三件
+// 套，默认路径上零解析；这里只剩类型（`import type` 会被擦除）。
+import type { Kojo2StorageService, Kojo2StorageServiceAdapter } from './kojo2-storage-service';
 // K2-STORAGE-RECYCLED-UI（缺口②）：会话内 `.kojo2` 变更 → 防抖 → refreshDeclarations。
 // 调度判据全住在这个零 React 模块里；App 只递「文档怎么重列」与事件路径。
-import { createKojo2DeclRefresh, type Kojo2DeclRefresh } from './kojo2-storage-refresh';
+import type { Kojo2DeclRefresh } from './kojo2-storage-refresh';
 // 回收阻断的命令表出口（toast 动作之外的二次入口；开关关 = effect 不建服务 ⇒ 零注册）
-import { createKojo2StorageRetryCommand } from './kojo2-storage-retry-command';
+// `KOJO2_STORAGE_DEFAULT_CLASSES` 仍静态引：注册表被 `kojo2-project-analysis`（项目级
+// 扫描，开机图常驻）用着，这里改懒边只会平白多一条"动态+静态混用"警告，省不下字节。
 import { KOJO2_STORAGE_DEFAULT_CLASSES } from './kojo2-storage-registry';
 import { isKojo2Path } from './kojo2-open';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
@@ -194,6 +192,33 @@ const loadProjectView = (): Promise<{ default: typeof import('./ProjectView')['P
 function createProjectView() {
   return lazy(loadProjectView);
 }
+
+/**
+ * 只在**特定状态/动作**下才上屏的宿主件（S7-首屏字节）：迁移向导与四扇确认框原先
+ * 随 App 静态进开机图，但它们在欢迎页一个像素都不画——迁移向导要等作者显式发起迁移
+ * （`migrateState.status === 'open'`）、三扇确认框要等真有未保存改动 / 写权限待批。
+ * 这里各加一层 `lazy(() => import(...))` 壳，模块到那一刻才装载。
+ *
+ * fallback 一律是**与真身同外层**的空壳（`overlay-backdrop` / `modal-mask`）：
+ * 遮罩铺满窗口、尺寸由 CSS 给，装载到位后原地换内容，不出现"先空一帧再蹦出对话框"
+ * 的跳动，也不会在白屏期间漏点出底层可点区域。
+ *
+ * 注：迁移向导的**入口/状态机**（`kojo2-migrate-entry`）仍在开机图上——它是命令表与
+ * 文件路由的一部分，只有**呈现**被推迟。
+ */
+const loadKojo2MigrateWizard = (): Promise<{ default: typeof import('./kojo2-migrate')['Kojo2MigrateWizardHost'] }> =>
+  import('./kojo2-migrate').then((m) => ({ default: m.Kojo2MigrateWizardHost }));
+const LazyKojo2MigrateWizardHost = lazy(loadKojo2MigrateWizard);
+const LazyDevNoteDialog = lazy(() => import('./DevNoteDialog').then((m) => ({ default: m.DevNoteDialog })));
+const LazyWritableApprovalDialog = lazy(() =>
+  import('./WritableApprovalDialog').then((m) => ({ default: m.WritableApprovalDialog })),
+);
+const LazyUnsavedConfirmDialog = lazy(() =>
+  import('./UnsavedConfirmDialog').then((m) => ({ default: m.UnsavedConfirmDialog })),
+);
+const LazyUnsavedFilesConfirmDialog = lazy(() =>
+  import('./UnsavedFilesConfirmDialog').then((m) => ({ default: m.UnsavedFilesConfirmDialog })),
+);
 
 /**
  * 槽位账本的 adapter 事实（K2-STORAGE-SERVICE）。
@@ -858,6 +883,11 @@ export function App(): ReactElement {
    * 关闭 / 换项目 = effect 清理：先停刷新、摘监听、撤命令，再等还在飞的 open 落地后
    * `closeProject()`（flush 后丢弃实例；flush 失败由服务自己上屏）。`cancelled` 防的是
    * 「项目已经关了、文档才读完」的迟到装配。
+   *
+   * ⑤（S7-首屏字节）整族改走 `await import()`：服务本体 + 持久化 + 声明刷新 + 回收重试
+   *    命令约 93 KB 源码原先随 App 静态进开机图，而这条链**只在 flag 打开且项目已开**时
+   *    才用得上；默认 `v1-only` 路径上一个字节都不解析。装配次序一字未改，只多一次本地
+   *    chunk 读取；`cancelled` 同时挡住"装载途中项目就关了"的迟到建服。
    */
   const [storageCommands, setStorageCommands] = useState<readonly ShellCommandSpec[]>([]);
   useEffect(() => {
@@ -869,18 +899,12 @@ export function App(): ReactElement {
       setStorageCommands([]);
       return;
     }
-    const service = createKojo2StorageService({
-      kernel,
-      notify: (notice) => notifyRef.current(notice),
-    });
-    // 回收阻断的二次入口：与 toast 动作同一个 retryWithRecycledAllowed（不新造通知系统）
-    setStorageCommands([
-      createKojo2StorageRetryCommand({
-        service,
-        notify: (notice) => notifyRef.current(notice),
-      }),
-    ]);
     let cancelled = false;
+    /**
+     * 服务体在模块到位后才建（S7-首屏字节）。清理可能早于装载 ⇒ `null` 即"没建过、
+     * 也没有什么要关"，不会漏掉一个已 opened 的实例。
+     */
+    let service: Kojo2StorageService | null = null;
     /** 本次装配的 open promise：清理时要等它落地再关，否则 close 会拿到 busy 而漏掉实例 */
     let opening: Promise<void> | null = null;
     /** 会话内声明刷新器（打开之后才建；清理时先 dispose，迟到的 collect 不会写账本） */
@@ -921,6 +945,26 @@ export function App(): ReactElement {
     };
 
     void (async () => {
+      // 三件套一次性并行装载：服务本体、声明刷新器、回收重试命令。三者同属一族（服务是
+      // 另两个的入参），拆成三条懒边只会多两次请求，不会多省一个字节。
+      const [storageService, declRefresh, retryCommand] = await Promise.all([
+        import('./kojo2-storage-service'),
+        import('./kojo2-storage-refresh'),
+        import('./kojo2-storage-retry-command'),
+      ]);
+      if (cancelled) return;
+      const svc = storageService.createKojo2StorageService({
+        kernel,
+        notify: (notice) => notifyRef.current(notice),
+      });
+      service = svc;
+      // 回收阻断的二次入口：与 toast 动作同一个 retryWithRecycledAllowed（不新造通知系统）
+      setStorageCommands([
+        retryCommand.createKojo2StorageRetryCommand({
+          service: svc,
+          notify: (notice) => notifyRef.current(notice),
+        }),
+      ]);
       const initial = await collectDocuments();
       if (cancelled) return;
       const adapter = await loadKojo2StorageAdapter((reason) =>
@@ -930,7 +974,7 @@ export function App(): ReactElement {
         }),
       );
       if (cancelled || adapter === null) return;
-      opening = service
+      opening = svc
         .openProject({
           projectKey: pathKey(project.rootDir),
           documents: initial.documents,
@@ -941,8 +985,8 @@ export function App(): ReactElement {
       await opening;
       if (cancelled) return;
       // 打开之后再挂刷新：不要在装配途中的 file.changed 上抢跑（那时还没有实例可刷新）
-      const controller = createKojo2DeclRefresh({
-        service,
+      const controller = declRefresh.createKojo2DeclRefresh({
+        service: svc,
         collect: collectDocuments,
         isKojo2Path,
         onFailure: (message) => notifyRef.current({ kind: 'error', message }),
@@ -965,7 +1009,7 @@ export function App(): ReactElement {
         // 不留没有 flush 的实例，也不让一次 300ms 内的刷新把 close 挤成 busy。
         if (opening !== null) await opening.catch(() => undefined);
         if (refresh !== null) await refresh.whenIdle();
-        await service.closeProject();
+        await service?.closeProject();
       })();
     };
   }, [kernel, project?.rootDir]);
@@ -2297,41 +2341,61 @@ export function App(): ReactElement {
         {/* 首启动纸条（用户反馈 2）：只在欢迎页弹（进了项目就不打扰），且只在从未看过时。
             「去绑定游戏根目录」先收纸条再走欢迎页那个同一个目录选择入口。 */}
         {devNoteOpen && phase === 'welcome' ? (
-          <DevNoteDialog
-            onClose={closeDevNote}
-            onOpenDirectory={() => {
-              closeDevNote();
-              void chooseAndOpen();
-            }}
-          />
+          <Suspense fallback={<div className="modal-mask" data-lazy-mount="dev-note" />}>
+            <LazyDevNoteDialog
+              onClose={closeDevNote}
+              onOpenDirectory={() => {
+                closeDevNote();
+                void chooseAndOpen();
+              }}
+            />
+          </Suspense>
         ) : null}
         {dropHint === 'shown' ? (
           <div className="drop-hint">{dropHintText()}</div>
         ) : null}
-        {pendingApproval ? <WritableApprovalDialog project={pendingApproval} onDecide={decideApproval} /> : null}
+        {pendingApproval ? (
+          <Suspense fallback={<div className="modal-mask" data-lazy-mount="approval" />}>
+            <LazyWritableApprovalDialog project={pendingApproval} onDecide={decideApproval} />
+          </Suspense>
+        ) : null}
         {pendingClose ? (
-          <UnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
+          <Suspense fallback={<div className="modal-mask" data-lazy-mount="unsaved" />}>
+            <LazyUnsavedConfirmDialog filePath={pendingClose} context="close" onDecide={decideClose} />
+          </Suspense>
         ) : null}
         {pendingProjectClose ? (
-          <UnsavedFilesConfirmDialog paths={pendingProjectClose} onDecide={decideProjectClose} />
+          <Suspense fallback={<div className="modal-mask" data-lazy-mount="unsaved-files" />}>
+            <LazyUnsavedFilesConfirmDialog paths={pendingProjectClose} onDecide={decideProjectClose} />
+          </Suspense>
         ) : null}
         {pendingProjectSwitch ? (
-          <UnsavedFilesConfirmDialog context="switch" paths={pendingProjectSwitch.paths} onDecide={decideProjectSwitch} />
+          <Suspense fallback={<div className="modal-mask" data-lazy-mount="unsaved-files" />}>
+            <LazyUnsavedFilesConfirmDialog
+              context="switch"
+              paths={pendingProjectSwitch.paths}
+              onDecide={decideProjectSwitch}
+            />
+          </Suspense>
         ) : null}
         {/* Kojo 2.0 迁移向导（K2-MIGRATE-MOUNT）：只在入口状态为 open 时挂载，
             与其余模态同在根舞台（遮罩自己 fixed 铺满窗口）。应用 / 撤销后的刷新由入口
-            经 `file.changed` 收尾，这里不重复接线。 */}
+            经 `file.changed` 收尾，这里不重复接线。
+            S7-首屏：向导本体走 `loadKojo2MigrateWizard` 的懒边，fallback 是同一层
+            `overlay-backdrop`（向导自己也挂在它上面），装载窗口里遮罩已在位。 */}
         {kernel !== null && migrateEntry !== null && migrateState?.status === 'open' ? (
-          <Kojo2MigrateWizardHost
-            io={kernel.io}
-            filePaths={migrateState.filePaths}
-            speaker={migrateEntry.speaker()}
-            loadEventNames={loadKojo2MigrateEventNames}
-            loadEventArgs={loadKojo2MigrateEventArgs}
-            onClose={() => migrateEntry.close()}
-            applyPlan={migrateEntry.apply}
-            undoPlan={migrateEntry.undo}
-          />
+          <Suspense fallback={<div className="overlay-backdrop" data-lazy-mount="kojo2-migrate" />}>
+            <LazyKojo2MigrateWizardHost
+              io={kernel.io}
+              filePaths={migrateState.filePaths}
+              speaker={migrateEntry.speaker()}
+              loadEventNames={loadKojo2MigrateEventNames}
+              loadEventArgs={loadKojo2MigrateEventArgs}
+              onClose={() => migrateEntry.close()}
+              applyPlan={migrateEntry.apply}
+              undoPlan={migrateEntry.undo}
+            />
+          </Suspense>
         ) : null}
       </div>
       {/* 弹窗态的退出钮（启动层自带一枚，这里只管欢迎页 / 关闭态）：无边框窗口没有
