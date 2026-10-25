@@ -115,6 +115,7 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     scope: 'project',
     auditWord: 'eratohok',
     load: () => import('@kojo/plugin-eratohok-adapter'),
+    kojo2AdapterExport: 'ERATOHOK_GAME_ADAPTER',
   },
 ];
 
