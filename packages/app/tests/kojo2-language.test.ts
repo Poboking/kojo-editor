@@ -16,6 +16,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { compileMonarch, driveLine, driveLines, stubMonaco, type CompiledLexer } from './monarch-harness';
 import { CJK_WORD_PATTERN } from '../src/monaco/word-separators';
+import { KOJO_DARK_COLORS } from '../src/monaco/theme';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
 import {
   KOJO2_LANGUAGE_ID,
@@ -359,7 +360,9 @@ describe('档位与配色：一档一色、与 v1 不撞名', () => {
       return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
     };
     const fg = lum(hex);
-    const bg = lum('1e1e1e'); // vs-dark 基底（theme inherit）
+    // 底色从主题取（`inherit: false`，真底是 kojo-dark 的 editor.background `#1e2227`）；
+    // 旧口径写死 vs-dark 基底的 1e1e1e，量出的读数系统性虚高（同 kojo-token-tiers 的旧 bug）
+    const bg = lum(KOJO_DARK_COLORS['editor.background']!.replace('#', ''));
     const [light, dark] = fg > bg ? [fg, bg] : [bg, fg];
     return (light + 0.05) / (dark + 0.05);
   }

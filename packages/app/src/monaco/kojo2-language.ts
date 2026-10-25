@@ -93,7 +93,16 @@ export interface Kojo2TokenTier {
 export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   { tier: '锚点', tokens: [KOJO2_TOKEN.anchor], why: '五锚点是句子的第一眼，必须先看见' },
   { tier: '声明与调度词', tokens: [KOJO2_TOKEN.declaration], why: '`#`/`@` 后的词决定这一行是不是声明' },
-  { tier: '保留词', tokens: [KOJO2_TOKEN.keyword, KOJO2_TOKEN.delimiter], why: '`由`/`否`/`续`/类型词改的是语义，标点只是骨架' },
+  // 2026-10-26 色值批：标点从"保留词"档拆出来独立成档——同一枚 `「`（`：`）必须与 v1 的
+  // `sugar.speech.delimiter` 同色（`theme.ts` 头注写死的跨语言不变量），而 v1 的保留词与
+  // 分隔符本来就是两档（`c678dd` vs `7f9cc0`）。档位表 = "一档一色"的验收清单，拆档才是
+  // 事实：拆前这格是"一档两色"，测试会当场红。
+  { tier: '保留词', tokens: [KOJO2_TOKEN.keyword], why: '`由`/`否`/`续`/类型词改的是语义' },
+  {
+    tier: '结构性标点',
+    tokens: [KOJO2_TOKEN.delimiter],
+    why: '`：`/`「」`/括号只是骨架，且与 v1 同色（同一枚 `「` 两门语言同色）',
+  },
   { tier: '说话人', tokens: [KOJO2_TOKEN.speaker], why: '谁在说话与说了什么必须两层' },
   { tier: '台词与字面文本', tokens: [KOJO2_TOKEN.speech, KOJO2_TOKEN.string], why: '作者写的字，语法层要退到后面' },
   { tier: '旁白', tokens: [KOJO2_TOKEN.narration], why: '旁白与台词是两种脸（一个 `>` 一个 `角色：`）' },

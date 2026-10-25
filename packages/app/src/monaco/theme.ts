@@ -11,6 +11,7 @@ import {
   KOJO_SUGAR_THEME_RULES,
   KOJO_SEMANTIC_THEME_RULES,
   KOJO2_LIGHT_THEME_RULES,
+  KOJO2_MINT_THEME_RULES,
   KOJO2_THEME_RULES,
 } from './kojo-theme-rules';
 // K2 batch-3：2.0 三套主题的注册闸。flag 模块零依赖（只读 localStorage），静态引它
@@ -36,13 +37,19 @@ import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
  * **比注释强且肉眼可分**（CIE76 ΔE ≥ 12，判据同 `kojo-token-tiers.test.ts` 的"撞色 = 假分层"），
  * 且**不引入新色相**——三套各取本套既有的"冷色结构族"一档：
  * dark `7f9cc0`、mint `8fb3c9` 即本套的标点/分隔符族（与 `sugar.speech.delimiter`/`sugar.colon`
- * 同色：同一枚 `「` 在两门语言里必须同色）；light 的分隔符族 `5b6b7f` 与其注释色 `57606a`
- * ΔE 只有 7.6（肉眼同色 ⇒ 台词标点会读成注释），故 light 取同族更深一档 `35526f`
- * （ΔE 对全部基线档 ≥ 12）。三套的 operator 彩度都低于各自关键字档 ⇒ 运算符不抢关键字。
+ * 同色：同一枚 `「` 在两门语言里必须同色）；light 的分隔符族 2026-10-26 色值批从 `5b6b7f`
+ * 抬到同族更蓝的 `335f96`（旧值与其注释色 `57606a` ΔE 只有 7.6 ⇒ 台词标点会读成注释），
+ * 于是 light 的 operator 取同族更深一档 `35526f`（与分隔符 ΔE 16.6，对全部基线档 ≥ 12）。
+ * 三套的 operator 彩度都低于各自关键字档 ⇒ 运算符不抢关键字。
  *
  * `inherit: false`：三套都写全规则，不从基底主题借色（避免切到 light 时残留 vs-dark 的
  * 深色 token / 部件色）。dark 的糖与语义规则**对象原样复用**（`kojo-token-tiers.test.ts`
  * 有同引用断言），light/mint 只按 token 换前景，token 集合因此永远同源。
+ *
+ * **底色口径（2026-10-26 判据批）**：`inherit: false` 意味着 `editor.background` 就是量
+ * 对比度的那块底（dark `#1e2227` / light `#f6f8fa` / mint `#0f1713`），**不是** vs-dark 基底
+ * 的 `#1e1e1e`。判据一律从 `colors['editor.background']` 取值（`kojo-token-tiers.test.ts` /
+ * `theme-color-gates.test.ts`），不许再写字面量。
  */
 
 export type MonacoThemeId = 'kojo-dark' | 'kojo-light' | 'kojo-mint-dark';
@@ -153,9 +160,14 @@ function retint(
 
 /* ------------------------------ 语法色 ------------------------------ */
 
-/** 既有 dark 词法基线（与改造前 `kojo-dark` 逐字同色，不改观感） */
+/**
+ * 既有 dark 词法基线（与改造前 `kojo-dark` 逐字同色，只改了 `comment` 一枚——见下）。
+ */
 const DARK_BASE_PALETTE: Readonly<Record<string, string>> = {
-  comment: '6a737d',
+  // 2026-10-26 对比度批：注释色 6a737d 压真底 #1e2227 只有 3.32（此前按 vs-dark #1e1e1e
+  // 量出 3.46，两笔都不够 4.5）。提亮到中性灰 879098（4.93），色相不动；
+  // 同时把 2.0 注释 6a8f9a 并到同一个灰上（"注释"在两门语言里是一档）。
+  comment: '879098',
   keyword: 'c678dd',
   'keyword.preprocessor': 'e5c07b',
   'entity.name.function': '61afef',
@@ -180,8 +192,10 @@ const LIGHT_BASE_PALETTE: Readonly<Record<string, string>> = {
   string: '116329',
   number: '953800',
   label: '0a6b73',
-  // 同一支冷色结构族，但**不能**直取本套分隔符档 5b6b7f——它与浅底注释色 57606a 的
-  // CIE76 ΔE 只有 7.6（肉眼同色），台词标点会读成注释；取同族更深一档，ΔE 对全部基线档 ≥ 12
+  // 同一支冷色结构族，但**不能**直取本套分隔符档——旧 5b6b7f 与浅底注释色 57606a
+  // 的 CIE76 ΔE 只有 7.6（肉眼同色），台词标点会读成注释；取同族更深一档 35526f
+  // （ΔE 对全部基线档 ≥ 12）。2026-10-26 色值批把分隔符本身抬到 335f96（见下），
+  // 于是这枚算子档与它差 16.6，两档都留在"冷色结构族"。
   operator: '35526f',
   identifier: '24292f',
   'string.escape': 'b35900',
@@ -195,14 +209,19 @@ const LIGHT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
   'sugar.cont': '953800',
   'sugar.pronoun': 'b4232e',
   'sugar.speech': '116329',
-  'sugar.speech.delimiter': '5b6b7f',
+  // 2026-10-26 色值批：5b6b7f 与注释 57606a 差 7.6、与别名 6e6a86 差 9.1（两对撞色）。
+  // 抬到同族的钢蓝 335f96（对全部档 ≥ 16.5，对比度 6.13）；2.0 的 kojo2.keyword.delimiter
+  // 跟着取同一枚（「」两门语言同色）。
+  'sugar.speech.delimiter': '335f96',
   'sugar.interp': 'b35900',
   'sugar.interp.delimiter': 'b35900',
-  'sugar.colon': '5b6b7f',
+  'sugar.colon': '335f96',
   'sugar.slot': '0e6b5c',
   'keyword.raw': '57606a',
   'keyword.erb': 'bf3989',
-  'keyword.erb.family': '6639ba',
+  // 族头 6639ba 与关键字 8250df 只差 11.7（撞色），且与 2.0 声明 512da8 差 6.5；
+  // 移到同族更紫的一档 8e44ad（对全部档 ≥ 12）
+  'keyword.erb.family': '8e44ad',
 };
 
 const LIGHT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
@@ -217,7 +236,9 @@ const LIGHT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
 const MINT_BASE_PALETTE: Readonly<Record<string, string>> = {
   comment: '8aa99a',
   keyword: 'c9a7f5',
-  'keyword.preprocessor': 'e3c08d',
+  // 2026-10-26 色值批：沙金 e3c08d 与 number/interp 的 f0b98a 只差 8.6（撞色），
+  // 提纯到金黄 dca023（ΔE 36.9；色相不动，仍是"暖金"族）
+  'keyword.preprocessor': 'dca023',
   'entity.name.function': '7cc7ff',
   variable: 'ff9ba3',
   string: '9ccf9a',
@@ -234,7 +255,7 @@ const MINT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
   'sugar.keyword.alias': '9a8fb8',
   'sugar.system-function': '7cc7ff',
   'sugar.operator': '74d6d0',
-  'sugar.cont': 'e3c08d',
+  'sugar.cont': 'dca023',
   'sugar.pronoun': 'ff9ba3',
   'sugar.speech': '9ccf9a',
   'sugar.speech.delimiter': '8fb3c9',
@@ -242,17 +263,19 @@ const MINT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
   'sugar.interp.delimiter': 'f0b98a',
   'sugar.colon': '8fb3c9',
   'sugar.slot': '67dcc0',
-  'keyword.raw': 'a5b8ad',
+  // 原生直通：与注释 8aa99a 只差 8.3（撞色），移到暖灰 ada18a（ΔE 17.1，仍是"不解释的原文"灰）
+  'keyword.raw': 'ada18a',
   'keyword.erb': 'ff9ccf',
-  'keyword.erb.family': 'bfa0ff',
+  // 族头 bfa0ff 与关键字 c9a7f5 只差 9.6（撞色），提纯到 af8cff（ΔE 22.4；仍是紫）
+  'keyword.erb.family': 'af8cff',
 };
 
 const MINT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
   function: '7cc7ff',
   'function.declaration': '7cc7ff',
   parameter: 'f0b98a',
-  'variable.declaration': 'e3c08d',
-  'variable.declaration.readonly': 'e3c08d',
+  'variable.declaration': 'dca023',
+  'variable.declaration.readonly': 'dca023',
 };
 
 /**
@@ -292,8 +315,10 @@ function mintRules(mergeKojo2: boolean): Monaco.editor.ITokenThemeRule[] {
     ...rulesFromPalette(BASE_RULE_SPECS, MINT_BASE_PALETTE),
     ...retint(KOJO_SUGAR_THEME_RULES, MINT_SUGAR_PALETTE),
     ...retint(KOJO_SEMANTIC_THEME_RULES, MINT_SEMANTIC_PALETTE),
-    // 墨绿底色与 kojo2-dark 同族，沿用暗色 2.0 规则（与 kojo2-mint-dark 同一选择）
-    ...(mergeKojo2 ? KOJO2_THEME_RULES : []),
+    // 墨绿有自己的 2.0 调色板：原始态直接并暗色表是 10 对撞色（最小 4.4）；修完 v1 侧仍剩
+    // 4 对（含"原生直通""标点"两对必须同色的同义档）。`KOJO2_MINT_THEME_RULES` 逐档落到
+    // 墨绿盘既有的语义近邻色，不引入第 16 枚色（理由见该表头注）。
+    ...(mergeKojo2 ? KOJO2_MINT_THEME_RULES : []),
   ];
 }
 
@@ -303,8 +328,14 @@ function mintRules(mergeKojo2: boolean): Monaco.editor.ITokenThemeRule[] {
  * 部件色三套同一张键表（值各配各的）：编辑器背景/前景、行号、当前行、选区、光标、
  * 缩进参考线、括号匹配、浮层（widget/suggest/hover）、查找、缩略图、滚动条、概览尺、
  * diff 四色与粘性滚动。浅色档全部落在浅色面，不留 vs-dark 的深色块。
+ *
+ * **导出给 `kojo2-theme.ts`**（2026-10-26 部件色批）：2.0 三套主题的 `colors` 不再自己
+ * 抄 32 键（`inherit: false` 下未列的 59 键会掉回 Monaco 默认的 `menu.*` / `editorHoverWidget.*`
+ * / `badge.*` / `editorBracketMatch.*` 等，切主题时露出一块基底色）。2.0 直接复用本表的
+ * **同一批 values**：同一主题族里 v1 与 2.0 的部件色逐键相等、缺键 0（闸见
+ * `theme-color-gates.test.ts`）。
  */
-const KOJO_DARK_COLORS: Readonly<Record<string, string>> = {
+export const KOJO_DARK_COLORS: Readonly<Record<string, string>> = {
   'editor.background': '#1e2227',
   'editor.foreground': '#d7dce2',
   'editorLineNumber.foreground': '#7d8794',
@@ -400,7 +431,7 @@ const KOJO_DARK_COLORS: Readonly<Record<string, string>> = {
   'diffEditorOverview.removedForeground': '#e06c75cc',
 };
 
-const KOJO_LIGHT_COLORS: Readonly<Record<string, string>> = {
+export const KOJO_LIGHT_COLORS: Readonly<Record<string, string>> = {
   'editor.background': '#f6f8fa',
   'editor.foreground': '#1f2328',
   'editorLineNumber.foreground': '#6e7781',
@@ -495,7 +526,7 @@ const KOJO_LIGHT_COLORS: Readonly<Record<string, string>> = {
   'diffEditorOverview.removedForeground': '#b4232ecc',
 };
 
-const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
+export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
   'editor.background': '#0f1713',
   'editor.foreground': '#d9e9df',
   'editorLineNumber.foreground': '#6f8c7d',
@@ -519,7 +550,7 @@ const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
   'editorBracketHighlight.foreground1': '#c9a7f5',
   'editorBracketHighlight.foreground2': '#7cc7ff',
   'editorBracketHighlight.foreground3': '#74d6d0',
-  'editorBracketHighlight.foreground4': '#e3c08d',
+  'editorBracketHighlight.foreground4': '#dca023',
   'editorBracketHighlight.foreground5': '#ff9ba3',
   'editorBracketHighlight.foreground6': '#9ccf9a',
   'editorBracketHighlight.unexpectedBracket.foreground': '#ff9ba3',

@@ -15,6 +15,7 @@ import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_THEME_RULES, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
 import {
   KOJO2_LIGHT_THEME_RULES,
+  KOJO2_MINT_THEME_RULES,
   KOJO2_THEME_RULES as LEAF_THEME_RULES,
   KOJO2_TOKEN as LEAF_TOKEN,
   KOJO_SEMANTIC_THEME_RULES,
@@ -243,7 +244,7 @@ describe('配色质量：对比度 ≥ 4.5、任意两档 ΔE ≥ 12', () => {
   }[] = [
     { name: 'dark', side: 'dark', theme: kojo2DarkTheme },
     { name: 'light', side: 'light', theme: kojo2LightTheme },
-    { name: 'mint-dark', side: 'dark', theme: kojo2MintDarkTheme },
+    { name: 'mint-dark', side: 'mint', theme: kojo2MintDarkTheme },
   ];
 
   it.each(SIDES)('$name：每档前景对底色对比度 ≥ 4.5', ({ theme, side }) => {
@@ -255,12 +256,14 @@ describe('配色质量：对比度 ≥ 4.5、任意两档 ΔE ≥ 12', () => {
   });
 
   it.each([
-    { name: 'dark', theme: kojo2DarkTheme },
-    { name: 'light', theme: kojo2LightTheme },
-  ])('$name：任意两档 CIE76 ΔE ≥ 12（一档一色，不许假分层）', ({ theme }) => {
+    // 去重后剩几枚独立色 = 15 档减去"同档共用色"的对数：
+    // 暗色共用 {台词/字面, 数字/十六进制} 2 对 ⇒ 13；亮色再多一对 {原生/注释} ⇒ 12。
+    // （标点 2026-10-26 批起与 v1 同色 7f9cc0，不再与保留词共用 ⇒ 暗色 12 → 13。）
+    { name: 'dark', theme: kojo2DarkTheme, unique: 13 },
+    { name: 'light', theme: kojo2LightTheme, unique: 12 },
+  ])('$name：任意两档 CIE76 ΔE ≥ 12（一档一色，不许假分层）', ({ theme, unique: expected }) => {
     const unique = [...new Set(theme.rules.map((rule) => rule.foreground!))];
-    // 同档共用色的（keyword/delimiter、speech/string、number/hex）去重后正好 12 个独立色
-    expect(unique.length).toBe(12);
+    expect(unique.length).toBe(expected);
     for (let i = 0; i < unique.length; i += 1) {
       for (let j = i + 1; j < unique.length; j += 1) {
         expect(
@@ -433,10 +436,12 @@ describe('2.0 规则并入 v1 三套：flag 开才追加，flag 关逐字不变'
     }
   });
 
-  it('flag 开 · kojo-mint-dark：追加暗色 2.0 规则（与 kojo2-mint-dark 同一选择）', () => {
+  it('flag 开 · kojo-mint-dark：追加墨绿 2.0 规则（与 kojo2-mint-dark 同一选择）', () => {
     stubFlag(true);
     const mint = captureThemes().get('kojo-mint-dark')!;
-    expect(mint.rules.slice(V1_RULE_TOKENS.length)).toEqual([...KOJO2_THEME_RULES]);
+    expect(mint.rules.slice(V1_RULE_TOKENS.length)).toEqual([...KOJO2_MINT_THEME_RULES]);
+    // 墨绿不再复用暗色表：那五枚与本盘近邻色只差 4.4–11.7（撞色），已换成墨绿语义近邻色
+    expect(KOJO2_MINT_THEME_RULES).not.toEqual(KOJO2_THEME_RULES);
   });
 
   it('flag 关 · 三套一个 `kojo2.*` 都没有，规则数 = v1 基线 31', () => {

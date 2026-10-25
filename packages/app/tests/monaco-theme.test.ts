@@ -206,30 +206,19 @@ function contrastRatio(foreground: string, background: string): number {
   return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
 }
 
-interface ContrastExemption {
-  readonly min: number;
-  readonly why: string;
-}
-
-/**
- * 暗色既有弱档白名单：这两档的前景是 `kojo-dark` 的原观感（`KOJO_SUGAR_THEME_RULES`
- * 同引用 + `kojo-token-tiers.test.ts` 以 vs-dark `#1e1e1e` 钉住 4.46 档位判据），
- * 本批只把底色换成 app 的 `#1e2227`（比 #1e1e1e 略亮半档），规则色一律不动。
+/*
+ * 暗色弱档白名单**已清空**（2026-10-26 判据批）。
+ *
+ * 原先这里挂着两枚豁免：`comment`（`#6a737d` 压 `#1e2227` 3.32，白名单放到 3.0）与
+ * `sugar.keyword.alias`（`#8b7bb8` 4.28，放到 4.0）。两者的理由都是"底色从 vs-dark 的
+ * `#1e1e1e` 换成 app 的 `#1e2227`，规则色本批不动"——即拿旧基底当尺子量新底，等于承认
+ * 这两档在真底上不可读。本批把两枚色提到过线（`879098` 4.93 / `9687be` 4.95），
+ * 白名单随之取消：**三套主题的每一条规则都必须 ≥ 4.5**，没有例外。
  */
-const DARK_CONTRAST_EXEMPTIONS: Readonly<Record<string, ContrastExemption>> = {
-  comment: {
-    min: 3.0,
-    why: '#6a737d 是既有 kojo-dark 注释色（本批不改暗色规则）；压 #1e2227 读数 ≈3.32',
-  },
-  'sugar.keyword.alias': {
-    min: 4.0,
-    why: '#8b7bb8 是既有暗色别名弱档（受 kojo-token-tiers 同引用断言约束）；压 #1e2227 读数 ≈4.28，仍过 4.0 弱档线',
-  },
-};
 
 describe('规则前景对主题背景的 WCAG 对比度', () => {
   for (const [id, theme] of themes) {
-    it(`${id}：全部规则 ≥ 4.5:1（暗色既有弱档见白名单）`, () => {
+    it(`${id}：全部规则 ≥ 4.5:1（无白名单）`, () => {
       const background = theme.colors['editor.background'];
       if (!background) throw new Error(`${id} 没有 editor.background`);
       expect(background).toMatch(/^#[0-9a-fA-F]{6}$/);
@@ -238,18 +227,10 @@ describe('规则前景对主题背景的 WCAG 对比度', () => {
         if (!foreground) throw new Error(`${id}/${rule.token} 没有 foreground`);
         expect(foreground, `${id}/${rule.token}`).toMatch(/^[0-9a-fA-F]{6}$/);
         const ratio = contrastRatio(foreground, background);
-        const exemption = id === 'kojo-dark' ? DARK_CONTRAST_EXEMPTIONS[rule.token] : undefined;
-        if (exemption) {
-          expect(
-            ratio,
-            `${id}/${rule.token} #${foreground} 对比度 ${ratio.toFixed(2)}:1 < 白名单下限 ${exemption.min}：${exemption.why}`,
-          ).toBeGreaterThanOrEqual(exemption.min);
-        } else {
-          expect(
-            ratio,
-            `${id}/${rule.token} #${foreground} 对比度 ${ratio.toFixed(2)}:1 < 4.5`,
-          ).toBeGreaterThanOrEqual(4.5);
-        }
+        expect(
+          ratio,
+          `${id}/${rule.token} #${foreground} 对比度 ${ratio.toFixed(2)}:1 < 4.5（底 ${background}）`,
+        ).toBeGreaterThanOrEqual(4.5);
       }
     });
   }

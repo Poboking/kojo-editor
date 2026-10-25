@@ -26,11 +26,15 @@ import { compileMonarch, driveLexer, stubMonaco, type Emit, type MonarchAction }
  *    Monarch 真发出来（"配了色却永远不出的 token"= 假档）。
  * ④ 主题接线：不走"测试里 import 色值自己再抄一份"的旁路，而是真装配
  *    `registerErbLanguage`——`kojo-dark` 主题 rules 里糖档规则每个对象**原样在场**。
- * ⑤ 深底可读：对 vs-dark 基底 `#1e1e1e` 算 WCAG 对比度（全部档位 ≥ 4.46:1；本词表
- *    最低档 `sugar.keyword.alias` 读数 4.47），任意两档前景按 CIE76 Lab 色差矩阵算
- *    （全部 ≥ 12；当前读数最小值 12.6 —— `sugar.system-function` #61afce ↔
+ * ⑤ 深底可读：对比度的底色**从主题取**（`kojoDark.colors['editor.background']`，真值
+ *    `#1e2227`），不再写死 vs-dark 基底的 `#1e1e1e`——三套主题都是 `inherit: false`，
+ *    底色由各自的 `colors` 决定，拿 `#1e1e1e` 量等于量错底（旧读数把 `sugar.keyword.alias`
+ *    虚高成 4.46/4.47，真值 4.28）。判据：全部档位 ≥ 4.5:1；任意两档前景按 CIE76 Lab
+ *    色差算，全部 ≥ 12（当前读数最小值 12.6 —— `sugar.system-function` #61afce ↔
  *    `sugar.operator` #56b6c2，这两档先于本批存在，即本线继承的基线）。分层的意义
  *    是"屏上一眼分层"，撞色 = 假分层，故按色差判，不按"手数对了"判。
+ *    （主题内**全部**生效规则——v1 31 档 + 2.0 15 档——的同类判据在
+ *    `theme-color-gates.test.ts`；本文件只判糖的 13 个档位。）
  */
 
 const LEX = sugarEditorLexicon();
@@ -240,7 +244,13 @@ describe('KOJO_TOKEN_TIERS 档位表（作者可见的分层口径）', () => {
 
 /* ============================== 深底可读：对比度 + 两两色差 ============================== */
 
-const BG = '1e1e1e'; // vs-dark 基底背景（theme inherit: true）
+/**
+ * 判据底色 = **主题自己的 `editor.background`**（三套主题都 `inherit: false`，底色不由
+ * vs-dark 基底决定）。旧口径写死 `#1e1e1e`，而 `kojo-dark` 的真底是 `#1e2227` —— 同一枚
+ * 前景在略亮的底上读数更低（`sugar.keyword.alias` 4.28，旧口径虚高成 4.46）。
+ */
+const BG = kojoDark.colors['editor.background']!.replace('#', '');
+if (!/^[0-9a-f]{6}$/.test(BG)) throw new Error(`kojo-dark 的 editor.background 不是 6 位 hex：${BG}`);
 
 const srgb = (hex: string): [number, number, number] => {
   const v = parseInt(hex, 16);
@@ -251,7 +261,7 @@ const luminance = (hex: string): number => {
   const [r, g, b] = srgb(hex).map(linear) as [number, number, number];
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
-/** WCAG 2.x 对比度（前景 vs 深底） */
+/** WCAG 2.x 对比度（前景 vs 本主题的 editor.background） */
 function contrast(fg: string): number {
   const l1 = luminance(BG);
   const l2 = luminance(fg);
@@ -304,10 +314,12 @@ describe('档位配色：一档一色 + 深底可读', () => {
     }
   });
 
-  it('深底对比度 ≥ 4.46:1（既有档位最弱档 keyword.alias，基线读数 4.47）', () => {
+  it('深底对比度 ≥ 4.5:1（底色取 kojo-dark 的 editor.background，不写死 vs-dark 基底）', () => {
+    // 反假绿地板：底色必须真取到主题值，且不是 vs-dark 基底的那一格
+    expect(BG, '判据底色退回了 vs-dark 基底的 #1e1e1e').not.toBe('1e1e1e');
     for (const t of KOJO_TOKEN_TIERS) {
       const fg = tierColor(t);
-      expect(contrast(fg), `档「${t.tier}」#${fg} 对比度 ${contrast(fg).toFixed(2)}:1 < 4.46：不可读`).toBeGreaterThanOrEqual(4.46);
+      expect(contrast(fg), `档「${t.tier}」#${fg} 对比度 ${contrast(fg).toFixed(2)}:1 < 4.5（底色 #${BG}）：不可读`).toBeGreaterThanOrEqual(4.5);
     }
   });
 

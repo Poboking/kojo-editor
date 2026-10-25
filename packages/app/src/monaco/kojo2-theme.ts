@@ -12,23 +12,35 @@
  *
  * ## token 名的单一真源
  *
- * token 名与两套（暗 / 亮）规则表的**定义处**是零 import 叶子 `kojo-theme-rules.ts`
- * （`KOJO2_TOKEN` / `KOJO2_THEME_RULES` / `KOJO2_LIGHT_THEME_RULES`）；本文件只按
- * `KOJO2_TOKEN` 建 token → 样式的映射。任何一侧少一格 / 多一格，{@link KOJO2_THEME_TOKEN_MAP}
- * 在**模块加载期**当场抛（与 `theme.ts` 的 `retint` 同一纪律：少配一档在加载期变红，
- * 而不是静默掉色）。`kojo2-theme.test.ts` 再用两张规则表与 `KOJO2_TOKEN` 双向交叉断言，防将来漂移。
+ * token 名与三套（暗 / 亮 / 墨绿）规则表的**定义处**是零 import 叶子 `kojo-theme-rules.ts`
+ * （`KOJO2_TOKEN` / `KOJO2_THEME_RULES` / `KOJO2_LIGHT_THEME_RULES` /
+ * `KOJO2_MINT_THEME_RULES`）；本文件只按 `KOJO2_TOKEN` 建 token → 样式的映射。任何一侧
+ * 少一格 / 多一格，{@link KOJO2_THEME_TOKEN_MAP} 在**模块加载期**当场抛（与 `theme.ts` 的
+ * `retint` 同一纪律：少配一档在加载期变红，而不是静默掉色）。`kojo2-theme.test.ts` 再用
+ * 规则表与 `KOJO2_TOKEN` 双向交叉断言，防将来漂移。
  *
  * ## 取色口径
  *
  * - **暗**：原样沿用叶子里的 `KOJO2_THEME_RULES`（不重定义、不改一个色值），
  *   底色取 app 的 `--bg` `#1e2227`（与 `kojo-dark` 同底，切过来不跳）；
- * - **亮**：叶子里的 `KOJO2_LIGHT_THEME_RULES`（紫=声明、青=关键字、橙棕=说话人、绿=台词、
- *   蓝=旁白、金=插值、红=提示、暖灰=原生、紫灰=注释、紫=数字、石板=运算符、品红=锚点）；
- * - **墨绿**：暗色 token 规则 + 墨绿底 `#0f1713`（与 `kojo-mint-dark` 同底）。
+ * - **亮**：叶子里的 `KOJO2_LIGHT_THEME_RULES`（2026-10-26 批：八档同义档落到 v1 亮色盘
+ *   同名档，锚点品红 / 声明靛两档自带，理由见该表头注；紫=声明、棕=说话人、绿=台词、
+ *   蓝=旁白、红=提示、钢蓝=标点）；
+ * - **墨绿**：叶子里的 `KOJO2_MINT_THEME_RULES`（逐档落到墨绿盘既有的语义近邻色）
+ *   + 墨绿底 `#0f1713`（与 `kojo-mint-dark` 同底）。
  * 三套都不 `inherit`（不从基底借色，切主题不残留上一套的 token 色）。
  *
- * 硬指标（`kojo2-theme.test.ts` 复跑）：每档前景对各自底色对比度 ≥ 4.5；**任意两档**
- * CIE76 ΔE ≥ 12（"看起来两档其实一色"是假分层）。
+ * **部件色不再各配一套**（2026-10-26 部件色批）：三套 `colors` 直接复用 `theme.ts` 的
+ * `KOJO_DARK_COLORS` / `KOJO_LIGHT_COLORS` / `KOJO_MINT_COLORS` 同一批 values。原先是
+ * 一份 32 键的私有表，`inherit: false` 下漏列的 59 键（`menu.*` / `editorHoverWidget.*` /
+ * `badge.*` / `editorBracketMatch.*` / `editorSuggestWidget.foreground` …）会掉回 Monaco
+ * 默认色——切主题时露出一块基底灰。同一主题族里 v1 与 2.0 的部件色现在逐键相等、缺键 0
+ * （闸见 `theme-color-gates.test.ts`）。
+ *
+ * 硬指标（`theme-color-gates.test.ts` / `kojo2-theme.test.ts` 复跑）：每档前景对主题自己的
+ * `editor.background` 对比度 ≥ 4.5；**主题内全部生效规则**（v1 31 档 + 2.0 15 档，不只
+ * 2.0 单族）两两 CIE76 ΔE ≥ 12（"看起来两档其实一色"是假分层）；跨语言同义档（`「」` 标点 /
+ * 台词 / 字面 / 注释 / 原生）与 v1 同名档同色。
  *
  * ## 幂等注册
  *
@@ -39,10 +51,14 @@
 import type * as Monaco from './entry';
 import {
   KOJO2_LIGHT_THEME_RULES,
+  KOJO2_MINT_THEME_RULES,
   KOJO2_THEME_RULES,
   KOJO2_TOKEN,
   type Kojo2TokenName,
 } from './kojo-theme-rules';
+// 部件色复用 v1 三套（同一主题族逐键相等；`theme.ts` 对本文件的引用是**动态 import**，
+// 所以这条静态反向依赖不成环）。
+import { KOJO_DARK_COLORS, KOJO_LIGHT_COLORS, KOJO_MINT_COLORS } from './theme';
 
 /* ============================== 三套主题的身份 ============================== */
 
@@ -91,8 +107,8 @@ export interface Kojo2TokenStyle {
   readonly fontStyle?: 'bold' | 'italic';
 }
 
-/** 主题两侧（暗 / 亮；墨绿复用暗色 token 规则，只换部件底色） */
-export type Kojo2TokenThemeSide = 'dark' | 'light';
+/** 主题三侧（暗 / 亮 / 墨绿；墨绿有自己的 2.0 规则表，不再复用暗色侧） */
+export type Kojo2TokenThemeSide = 'dark' | 'light' | 'mint';
 
 /** 把 `ITokenThemeRule` 的 `fontStyle: string` 收窄成本模块允许的两档（越界即抛） */
 function toStyle(rule: Monaco.editor.ITokenThemeRule): Kojo2TokenStyle {
@@ -126,51 +142,58 @@ function indexRules(
 }
 
 /**
- * 组装 token → 两套样式；两侧都必须与叶子的规则表**逐格同源**。
+ * 组装 token → 三套样式（暗 / 亮 / 墨绿）；三侧都必须与叶子的规则表**逐格同源**。
  *
- * 校验顺序：先按 `KOJO2_TOKEN` 逐 token 取暗 / 亮规则（缺 = 抛），再反向查两张表有没有
+ * 校验顺序：先按 `KOJO2_TOKEN` 逐 token 取三侧规则（缺 = 抛），再反向查三张表有没有
  * 未登记的 token（多 = 抛）。这样"词法加了新档忘了配主题"与"配了色但词法不发这个 token"
  * 两个方向都在导入期变红。
  */
 function buildTokenMap(): Readonly<
   Record<Kojo2TokenName, Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>>
 > {
-  const darkByToken = indexRules(KOJO2_THEME_RULES, '暗色');
-  const lightByToken = indexRules(KOJO2_LIGHT_THEME_RULES, '亮色');
+  const bySide: Readonly<Record<Kojo2TokenThemeSide, Map<string, Kojo2TokenStyle>>> = {
+    dark: indexRules(KOJO2_THEME_RULES, '暗色'),
+    light: indexRules(KOJO2_LIGHT_THEME_RULES, '亮色'),
+    mint: indexRules(KOJO2_MINT_THEME_RULES, '墨绿'),
+  };
+  const tableName: Readonly<Record<Kojo2TokenThemeSide, string>> = {
+    dark: 'KOJO2_THEME_RULES',
+    light: 'KOJO2_LIGHT_THEME_RULES',
+    mint: 'KOJO2_MINT_THEME_RULES',
+  };
 
   const map = {} as Record<
     Kojo2TokenName,
     Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>
   >;
   for (const token of Object.values(KOJO2_TOKEN)) {
-    const dark = darkByToken.get(token);
-    if (dark === undefined) {
-      throw new Error(`[kojo2-theme] 词法 token「${token}」在 KOJO2_THEME_RULES 里没有配色`);
+    const styles = {} as Record<Kojo2TokenThemeSide, Kojo2TokenStyle>;
+    for (const side of ['dark', 'light', 'mint'] as const) {
+      const style = bySide[side].get(token);
+      if (style === undefined) {
+        throw new Error(
+          `[kojo2-theme] 词法 token「${token}」在 ${tableName[side]} 里没有配色`,
+        );
+      }
+      styles[side] = style;
     }
-    const light = lightByToken.get(token);
-    if (light === undefined) {
-      throw new Error(`[kojo2-theme] 词法 token「${token}」在 KOJO2_LIGHT_THEME_RULES 里没有配色`);
-    }
-    map[token] = { dark, light };
+    map[token] = styles;
   }
   const known = Object.keys(map).length;
-  if (darkByToken.size !== known) {
-    throw new Error(
-      `[kojo2-theme] KOJO2_THEME_RULES 里有 ${darkByToken.size - known} 档未在 KOJO2_TOKEN 登记`,
-    );
-  }
-  if (lightByToken.size !== known) {
-    throw new Error(
-      `[kojo2-theme] KOJO2_LIGHT_THEME_RULES 里有 ${lightByToken.size - known} 档未在 KOJO2_TOKEN 登记`,
-    );
+  for (const side of ['dark', 'light', 'mint'] as const) {
+    if (bySide[side].size !== known) {
+      throw new Error(
+        `[kojo2-theme] ${tableName[side]} 里有 ${bySide[side].size - known} 档未在 KOJO2_TOKEN 登记`,
+      );
+    }
   }
   return map;
 }
 
 /**
- * 词法 token → 两套主题的样式。
+ * 词法 token → 三套主题的样式（暗 / 亮 / 墨绿）。
  *
- * 键集合**必须**等于 `Object.values(KOJO2_TOKEN)`：两侧都从叶子的规则表派生；任一缺格 /
+ * 键集合**必须**等于 `Object.values(KOJO2_TOKEN)`：三侧都从叶子的规则表派生；任一缺格 /
  * 多格在模块加载期抛。
  */
 export const KOJO2_THEME_TOKEN_MAP: Readonly<
@@ -219,167 +242,40 @@ export const KOJO2_THEME_CATEGORIES: readonly Kojo2ThemeCategory[] = [
 /* ============================== 部件色 ============================== */
 
 /**
- * 三套主题的部件色**同一张键表**（值各配各的）：只收"切过来第一眼会看出不对"的那批——
- * 编辑器底/前景、行号、当前行、选区、缩进参考线、光标、错误/警告/信息、焦点框、输入框、
- * 补全与悬停浮层、查找框、缩略图、滚动条、diff 两色。
+ * 三套主题的部件色**直接复用 v1 的同一批 values**（2026-10-26 部件色批）：编辑器底/前景、
+ * 行号、当前行、选区、光标、缩进参考线、括号匹配、浮层（menu / suggest / hover / widget）、
+ * 徽章、查找、缩略图、滚动条、概览尺、diff 四色与粘性滚动。
  *
- * 键表共用是结构性的：{@link kojo2ColorsFor} 按这张表取值，所以三套主题的 `colors`
- * 键集合永远相等（少配一个在加载期抛，不会出现"浅色主题里漏配深色 widget"）。
+ * 为什么不再自持一份：`inherit: false` 下**未列的键落 Monaco 默认色**。旧表只有 32 键，
+ * 漏了 59 键（`menu.*` / `editorHoverWidget.*` / `badge.*` / `editorBracketMatch.*` /
+ * `editorSuggestWidget.foreground` / `editorWidget.foreground` …），切到 `kojo2-*` 时那些
+ * 浮层露出一块与主题无关的基底灰。共有键的值与 v1 **逐字相等**（0 漂移），所以键集合
+ * 直接取 v1 那张表——同一主题族里 v1 与 2.0 的部件色从此结构性地同源（闸见
+ * `theme-color-gates.test.ts`：共有键相等 + 缺键 0）。
  */
-export const KOJO2_COLOR_KEYS = [
-  'editor.background',
-  'editor.foreground',
-  'editorLineNumber.foreground',
-  'editorLineNumber.activeForeground',
-  'editorCursor.foreground',
-  'editor.lineHighlightBackground',
-  'editor.selectionBackground',
-  'editorIndentGuide.background1',
-  'editorIndentGuide.activeBackground1',
-  'editorWhitespace.foreground',
-  'editorGutter.background',
-  'editorOverviewRuler.background',
-  'editorError.foreground',
-  'editorWarning.foreground',
-  'editorInfo.foreground',
-  'focusBorder',
-  'input.background',
-  'input.border',
-  'input.foreground',
-  'list.activeSelectionBackground',
-  'list.activeSelectionForeground',
-  'list.hoverBackground',
-  'list.highlightForeground',
-  'widget.border',
-  'editorWidget.background',
-  'editorWidget.border',
-  'editorSuggestWidget.background',
-  'editorSuggestWidget.selectedBackground',
-  'minimap.background',
-  'scrollbarSlider.background',
-  'diffEditor.insertedTextBackground',
-  'diffEditor.removedTextBackground',
-] as const;
+export const KOJO2_COLOR_KEYS: readonly string[] = Object.freeze(Object.keys(KOJO_DARK_COLORS));
 
 export type Kojo2ColorKey = (typeof KOJO2_COLOR_KEYS)[number];
 
-/** 部件色三套（值与 `theme.ts` 同底：切主题时外壳与编辑器不跳色） */
-const KOJO2_DARK_COLORS: Readonly<Record<Kojo2ColorKey, string>> = {
-  'editor.background': '#1e2227',
-  'editor.foreground': '#d7dce2',
-  'editorLineNumber.foreground': '#7d8794',
-  'editorLineNumber.activeForeground': '#d7dce2',
-  'editorCursor.foreground': '#6ea8ff',
-  'editor.lineHighlightBackground': '#24292f',
-  'editor.selectionBackground': '#4c8bf559',
-  'editorIndentGuide.background1': '#2f363d',
-  'editorIndentGuide.activeBackground1': '#4a545f',
-  'editorWhitespace.foreground': '#3a424b',
-  'editorGutter.background': '#1e2227',
-  'editorOverviewRuler.background': '#1e2227',
-  'editorError.foreground': '#e06c75',
-  'editorWarning.foreground': '#d19a66',
-  'editorInfo.foreground': '#6ea8ff',
-  focusBorder: '#4c8bf5',
-  'input.background': '#2b3138',
-  'input.border': '#4a545f',
-  'input.foreground': '#d7dce2',
-  'list.activeSelectionBackground': '#2b3138',
-  'list.activeSelectionForeground': '#e6edf3',
-  'list.hoverBackground': '#2b3138',
-  'list.highlightForeground': '#6ea8ff',
-  'widget.border': '#3a424b',
-  'editorWidget.background': '#24292f',
-  'editorWidget.border': '#3a424b',
-  'editorSuggestWidget.background': '#24292f',
-  'editorSuggestWidget.selectedBackground': '#2b3138',
-  'minimap.background': '#1e2227',
-  'scrollbarSlider.background': '#ffffff1f',
-  'diffEditor.insertedTextBackground': '#4fc08d2e',
-  'diffEditor.removedTextBackground': '#e06c752e',
-};
-
-const KOJO2_LIGHT_COLORS: Readonly<Record<Kojo2ColorKey, string>> = {
-  'editor.background': '#f6f8fa',
-  'editor.foreground': '#1f2328',
-  'editorLineNumber.foreground': '#6e7781',
-  'editorLineNumber.activeForeground': '#1f2328',
-  'editorCursor.foreground': '#0550ae',
-  'editor.lineHighlightBackground': '#eaeef2',
-  'editor.selectionBackground': '#0a5cc248',
-  'editorIndentGuide.background1': '#d8dee4',
-  'editorIndentGuide.activeBackground1': '#afb8c1',
-  'editorWhitespace.foreground': '#d0d7de',
-  'editorGutter.background': '#f6f8fa',
-  'editorOverviewRuler.background': '#f6f8fa',
-  'editorError.foreground': '#b4232e',
-  'editorWarning.foreground': '#8a5a04',
-  'editorInfo.foreground': '#0550ae',
-  focusBorder: '#0a5cc2',
-  'input.background': '#ffffff',
-  'input.border': '#d0d7de',
-  'input.foreground': '#1f2328',
-  'list.activeSelectionBackground': '#dde3ea',
-  'list.activeSelectionForeground': '#1f2328',
-  'list.hoverBackground': '#eaeef2',
-  'list.highlightForeground': '#0550ae',
-  'widget.border': '#d0d7de',
-  'editorWidget.background': '#ffffff',
-  'editorWidget.border': '#d0d7de',
-  'editorSuggestWidget.background': '#ffffff',
-  'editorSuggestWidget.selectedBackground': '#dde3ea',
-  'minimap.background': '#f6f8fa',
-  'scrollbarSlider.background': '#091e421f',
-  'diffEditor.insertedTextBackground': '#0e6b2c26',
-  'diffEditor.removedTextBackground': '#b4232e26',
-};
-
-const KOJO2_MINT_COLORS: Readonly<Record<Kojo2ColorKey, string>> = {
-  'editor.background': '#0f1713',
-  'editor.foreground': '#d9e9df',
-  'editorLineNumber.foreground': '#6f8c7d',
-  'editorLineNumber.activeForeground': '#d9e9df',
-  'editorCursor.foreground': '#45d9ab',
-  'editor.lineHighlightBackground': '#15201a',
-  'editor.selectionBackground': '#35d0a052',
-  'editorIndentGuide.background1': '#243a30',
-  'editorIndentGuide.activeBackground1': '#3d5a4b',
-  'editorWhitespace.foreground': '#2b3f35',
-  'editorGutter.background': '#0f1713',
-  'editorOverviewRuler.background': '#0f1713',
-  'editorError.foreground': '#e2707a',
-  'editorWarning.foreground': '#d8a269',
-  'editorInfo.foreground': '#7cc7ff',
-  focusBorder: '#45d9ab',
-  'input.background': '#1c2a23',
-  'input.border': '#3d5a4b',
-  'input.foreground': '#d9e9df',
-  'list.activeSelectionBackground': '#1c2a23',
-  'list.activeSelectionForeground': '#d9e9df',
-  'list.hoverBackground': '#1c2a23',
-  'list.highlightForeground': '#55dcb0',
-  'widget.border': '#2b3f35',
-  'editorWidget.background': '#15201a',
-  'editorWidget.border': '#2b3f35',
-  'editorSuggestWidget.background': '#15201a',
-  'editorSuggestWidget.selectedBackground': '#1c2a23',
-  'minimap.background': '#0f1713',
-  'scrollbarSlider.background': '#35d0a02e',
-  'diffEditor.insertedTextBackground': '#62c77626',
-  'diffEditor.removedTextBackground': '#e2707a26',
-};
-
-/** 按共用键表把一套部件色展开成 Monaco 的 `colors` 记录（键集合由键表钉死） */
-function kojo2ColorsFor(palette: Readonly<Record<Kojo2ColorKey, string>>): Record<string, string> {
-  const colors: Record<string, string> = {};
+/**
+ * 部件色 → Monaco `colors`（**拷贝 + 逐键校验**）。
+ *
+ * 拷贝：Monaco 的 `colors` 是可写记录，不把 v1 那张只读表本体交给它（防宿主改写 v1 主题）；
+ * 校验：每个值必须是 6/8 位十六进制——少配 / 配错在加载期抛，不静默掉色（本文件既有纪律）。
+ */
+function kojo2ColorsFor(colors: Readonly<Record<string, string>>): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const key of KOJO2_COLOR_KEYS) {
-    const value = palette[key];
+    const value = colors[key];
     if (value === undefined) {
       throw new Error(`[kojo2-theme] 部件色调色板缺少「${key}」`);
     }
-    colors[key] = value;
+    if (!/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
+      throw new Error(`[kojo2-theme] 部件色「${key}」不是合法十六进制色：${value}`);
+    }
+    out[key] = value;
   }
-  return colors;
+  return out;
 }
 
 /* ============================== 主题字面量 ============================== */
@@ -394,7 +290,7 @@ export const kojo2DarkTheme: Monaco.editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: false,
   rules: [...KOJO2_THEME_RULES],
-  colors: kojo2ColorsFor(KOJO2_DARK_COLORS),
+  colors: kojo2ColorsFor(KOJO_DARK_COLORS),
 };
 
 /** 2.0 亮色主题（`vs` 基底、不继承；token 规则 = 叶子的 `KOJO2_LIGHT_THEME_RULES` 浅拷贝） */
@@ -402,15 +298,15 @@ export const kojo2LightTheme: Monaco.editor.IStandaloneThemeData = {
   base: 'vs',
   inherit: false,
   rules: [...KOJO2_LIGHT_THEME_RULES],
-  colors: kojo2ColorsFor(KOJO2_LIGHT_COLORS),
+  colors: kojo2ColorsFor(KOJO_LIGHT_COLORS),
 };
 
-/** 2.0 墨绿暗色主题（token 规则同暗色，底色换 `#0f1713`） */
+/** 2.0 墨绿暗色主题（token 规则 = 叶子的 `KOJO2_MINT_THEME_RULES`；底色 `#0f1713`） */
 export const kojo2MintDarkTheme: Monaco.editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: false,
-  rules: [...KOJO2_THEME_RULES],
-  colors: kojo2ColorsFor(KOJO2_MINT_COLORS),
+  rules: [...KOJO2_MINT_THEME_RULES],
+  colors: kojo2ColorsFor(KOJO_MINT_COLORS),
 };
 
 /** 主题 id → 字面量（注册器与测试共用一张表；顺序与 {@link KOJO2_THEME_IDS} 一致） */
