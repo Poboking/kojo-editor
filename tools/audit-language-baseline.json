@@ -18,16 +18,15 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 167,
+      "total": 164,
       "files": {
-        "packages/app/src/monaco/document-links.ts": 4,
+        "packages/app/src/monaco/document-links.ts": 3,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
         "packages/app/src/monaco/erb-completion-members.ts": 2,
         "packages/app/src/monaco/erb-completion-words.ts": 2,
         "packages/app/src/monaco/erb-completion.ts": 2,
         "packages/app/src/monaco/erb-highlight.ts": 2,
         "packages/app/src/monaco/erb-language.ts": 6,
-        "packages/app/src/monaco/erb-preproc-dim.ts": 2,
         "packages/app/src/monaco/erb-rename.ts": 5,
         "packages/app/src/monaco/erb-selection-range.ts": 2,
         "packages/app/src/monaco/json-language.ts": 5,
