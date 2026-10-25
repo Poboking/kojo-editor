@@ -79,6 +79,7 @@ import {
   UI_FONT_PRESETS,
   checkFontStackPresence,
   domFontPresenceChecker,
+  fontStackConcreteMembers,
   resolveCodeFontStack,
   resolveUiFontStack,
   type FontPreset,
@@ -1152,6 +1153,18 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   }, [setMenuNote]);
 
   /**
+   * 字体可用性判定的空闲预热（见 `warmFontPresence` 的头注）。
+   *
+   * 为什么在**面板打开时**而不是进「外观 / 编辑器」时：这两行不在首节，作者总要过一次
+   * 左导航；趁看「通用」的这几百毫秒把两行档位表的家族量完，进节时就是纯缓存命中
+   * ——既没有 168ms 长任务，也不会出现"先不标注、过一会儿补上"的跳动。
+   * 分片粒度 = 一枚家族（`warmFontPresence` 里每个任务只量一枚，跨档位重名只量一次）。
+   */
+  useEffect(() => {
+    warmFontPresence([...CODE_FONT_PRESETS, ...UI_FONT_PRESETS]);
+  }, []);
+
+  /**
    * 点遮罩关设置——**只认左键**。
    *
    * 右键在遮罩上按一下，若也走关窗，就会「先关掉设置、再弹出一个压在空页面上的右键菜单」；
@@ -1185,17 +1198,22 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
     }
   };
 
-  /* 先算一次 render：既用于「空节不显示」的判据，也作为右面板内容——避免调用两次。 */
-  const visible = SETTINGS_SECTIONS(props)
-    .map((sec) => ({ sec, el: sec.render() }))
-    .filter((r): r is { sec: SettingsSection; el: ReactElement } => r.el !== null);
-
-  const rawIndex = visible.findIndex((r) => r.sec.id === active);
+  /* 节的清单 + **只构建当前这一节**（2026-10-25 设置页性能批）。
+     此前这里是 `.map((sec) => ({ sec, el: sec.render() }))`：为了判「哪一节是空的」，
+     把七节的 JSX 元素树**全搭一遍**，再用掉其中一节。导航栏只需要 id / label / icon，
+     另外六节没有任何理由被构造——实测那部分是每次渲染的固定成本（敲一次键也付一遍）。
+     现在：`sections` 只造对象与闭包；`activeEl` 只为当前节调一次 `render()`。
+     两个 `useMemo` 都以 **props 的身份**为界：在设置页里敲搜索词不改 props ⇒ 两份都命中
+     ⇒ `activeEl` 引用不变 ⇒ React 对整节子树 bailout，敲字只重排右侧搜索结果列。 */
+  const sections = useMemo(() => SETTINGS_SECTIONS(props), [props]);
+  const rawIndex = sections.findIndex((sec) => sec.id === active);
   const activeIndex = rawIndex >= 0 ? rawIndex : 0;
-  const activeEntry = visible[activeIndex];
+  const activeSection: SettingsSection | undefined = sections[activeIndex];
+  const activeEl = useMemo(() => (activeSection ? activeSection.render() : null), [activeSection]);
 
-  if (!activeEntry) {
-    // 理论上到不了这里（general 一节恒有内容 ⇒ visible 恒非空）；防御性渲染一个可关闭的空壳，绝不白屏。
+  if (!activeSection || activeEl === null) {
+    // 理论上到不了这里（七节 render 恒非 null，由 tests/settings-panel-lazy-sections.test.ts 钉住）；
+    // 防御性渲染一个可关闭的空壳，绝不白屏。
     return (
       <div className={`overlay-backdrop${exiting ? ' ov-closing' : ''}`} onMouseDown={closeOnBackdrop}>
         <div className={`overlay-host settings-host${exiting ? ' ov-exiting' : ''}`} role="dialog" aria-modal="true" aria-label="设置" data-context-surface="settings" onMouseDown={(e) => e.stopPropagation()}>
@@ -1210,12 +1228,12 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   /* 方向键漫游：↑↓（及 ←→）在栏内移动焦点并即时切节（roving tabindex，口径同活动栏 / 标签条）。
      Enter/Space 由 <button> 原生激活，Tab 原样让位——nextRovingIndex 对非漫游键返回 null。 */
   const onNavKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
-    const next = nextRovingIndex(index, visible.length, e.key);
+    const next = nextRovingIndex(index, sections.length, e.key);
     if (next === null) return;
     e.preventDefault();
-    const entry = visible[next];
+    const entry = sections[next];
     if (!entry) return;
-    setActive(entry.sec.id);
+    setActive(entry.id);
     const tabs = navRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     tabs?.[next]?.focus();
   };
@@ -1315,37 +1333,38 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
               aria-orientation="vertical"
               ref={navRef}
             >
-              {visible.map((r, i) => (
+              {sections.map((sec, i) => (
                 <button
-                  key={r.sec.id}
+                  key={sec.id}
                   type="button"
                   role="tab"
-                  id={tabIdOf(r.sec.id)}
+                  id={tabIdOf(sec.id)}
                   aria-selected={i === activeIndex}
                   aria-controls={SETTINGS_PANEL_ID}
                   tabIndex={i === activeIndex ? 0 : -1}
                   className={`settings-nav-item${i === activeIndex ? ' on' : ''}`}
-                  onClick={() => setActive(r.sec.id)}
+                  onClick={() => setActive(sec.id)}
                   onKeyDown={(e) => onNavKeyDown(e, i)}
                 >
-                  <Icon name={r.sec.icon} size={16} className="settings-nav-icon" />
-                  <span className="settings-nav-label">{r.sec.label}</span>
+                  <Icon name={sec.icon} size={16} className="settings-nav-icon" />
+                  <span className="settings-nav-label">{sec.label}</span>
                 </button>
               ))}
             </div>
             )}
 
             {/* key={节 id} ⇒ 切节时面板整块重建，滚动位置天然归零（每节各自独立滚动，
-                不共享一条滚到一半的滚动条），无需额外 effect。 */}
+                不共享一条滚到一半的滚动条），无需额外 effect。
+                `activeEl` 的引用在 props 不变时恒定 ⇒ 过滤输入不重建这一节（见上方 useMemo）。 */}
             <div
               className="settings-nav-panel"
               id={SETTINGS_PANEL_ID}
               role="tabpanel"
-              aria-labelledby={tabIdOf(activeEntry.sec.id)}
+              aria-labelledby={tabIdOf(activeSection.id)}
               tabIndex={0}
-              key={activeEntry.sec.id}
+              key={activeSection.id}
             >
-              <div className="settings-body">{activeEntry.el}</div>
+              <div className="settings-body">{activeEl}</div>
             </div>
           </div>
 
@@ -1696,12 +1715,96 @@ interface FontPresetControlArgs {
   readonly note: string;
 }
 
-function FontPresetControl(a: FontPresetControlArgs): ReactElement {
-  const missingOf = (stack: string): string[] => {
-    if (stack === '') return [];
-    const result = checkFontStackPresence(stack, a.checker);
-    return result === null ? [] : result.filter((e) => !e.present).map((e) => e.family);
+/* ==========================================================================================
+ * 字体可用性判定缓存（2026-10-25 设置页性能批）
+ *
+ * `checkFontStackPresence` 对栈里每一枚具体家族要按三把泛尺各量一次宽（canvas measureText），
+ * 一个档位栈五六个成员 ⇒ 一次进节的实测长任务 **168ms**（profile selfTime 归因
+ * `ui/font-presets.ts` 329.8ms，量尺核在 `measureFontPresence`）。而各档位的栈大量重名
+ * （Segoe UI / Microsoft YaHei UI 反复出现），每次进节又从头量一遍。
+ *
+ * 这里只做三件事，判据本身一个字没改：
+ * ① **按家族名缓存**（同一会话量一次就够：字体环境在会话内不会变）；
+ * ② 缓存全命中时**同步**返回——标注不会先空后补地跳一下；
+ * ③ 面板挂载后**空闲分片预热**（每个空闲回调只量一个档位栈，切片自带上限），
+ *    用户从「通用」走到「外观 / 编辑器」时早已命中，进节不再有长任务。
+ * 判定器拿不到（node / 老壳）⇒ 与从前逐字一致：整块显示"判定不了"。
+ * ========================================================================================== */
+
+/** 家族名 → 本机是否装着（会话级；判据来源仍是 font-presets.ts 的 measureFontPresence） */
+const fontPresenceCache = new Map<string, boolean>();
+/** 空闲预热用的判定器（`domFontPresenceChecker()` 每次调用都建 canvas，只建一次） */
+let warmChecker: FontPresenceChecker | null | undefined;
+
+function warmPresenceChecker(): FontPresenceChecker | null {
+  if (warmChecker === undefined) warmChecker = domFontPresenceChecker();
+  return warmChecker;
+}
+
+/**
+ * 一枚家族本机装没装（缓存优先）。
+ *
+ * 量法仍是 `checkFontStackPresence`（判据唯一来源），只是把"栈"换成**单成员栈**去问——
+ * 于是缓存与分片的粒度都是"一枚家族"，跨档位重名的家族（Segoe UI / Microsoft YaHei UI
+ * 反复出现）只量一次。
+ */
+function familyPresent(family: string, checker: FontPresenceChecker): boolean {
+  const cached = fontPresenceCache.get(family);
+  if (cached !== undefined) return cached;
+  const entries = checkFontStackPresence(family, checker);
+  const present = entries?.[0]?.present ?? true;
+  fontPresenceCache.set(family, present);
+  return present;
+}
+
+/**
+ * 一个栈里**缺装的**家族名（缓存优先；未判定的家族就地量一次再入缓存）。
+ * 判定器不在场 ⇒ `[]`（= 不标注），与改动前同口径。
+ */
+function missingFamiliesOf(stack: string, checker: FontPresenceChecker | null): string[] {
+  if (stack === '' || checker === null) return [];
+  return fontStackConcreteMembers(stack).filter((family) => !familyPresent(family, checker));
+}
+
+/** 空闲回调（没有 requestIdleCallback 的环境退回 setTimeout，语义相同：让出当前帧） */
+function onIdle(callback: () => void): void {
+  const idle = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number })
+    .requestIdleCallback;
+  if (typeof idle === 'function') idle(callback, { timeout: 500 });
+  else setTimeout(callback, 0);
+}
+
+/**
+ * 分片预热：把两行档位表里**所有具体家族**按 8ms 一片量完（已缓存的跳过）。
+ *
+ * 为什么按时间预算而不是"一任务一枚家族"：`setTimeout` 每次都有约 4ms 的排程下限，
+ * 三十来枚家族一枚一任务光排程就上百毫秒；用户若在打开后一秒内点进「编辑器」，
+ * 预热还没走完，那一次点击就得在渲染期兜底补量剩下的十几枚（正是本批要灭的长任务）。
+ * 8ms 一片能在一秒内走完，单片也远在 50ms 长任务线之下。
+ * 链式续片用 `setTimeout(step, 0)` 而不是再排空闲回调：空闲回调若在同一个 deadline 里被连续
+ * 调度，浏览器会把好几片挤进**同一个任务**（实测挤成一条 75ms 长任务，与本意相反）。
+ */
+function warmFontPresence(presets: readonly FontPreset[]): void {
+  const checker = warmPresenceChecker();
+  if (checker === null) return; // 判定不了：不白花时间，UI 照旧显示"判定不了"
+  const unique = new Set<string>();
+  for (const preset of presets) for (const family of fontStackConcreteMembers(preset.stack)) unique.add(family);
+  const queue = [...unique].filter((family) => !fontPresenceCache.has(family));
+  const now = (): number => (typeof performance === 'undefined' ? 0 : performance.now());
+  let index = 0;
+  const step = (): void => {
+    const startedAt = now();
+    while (index < queue.length) {
+      familyPresent(queue[index++]!, checker);
+      if (now() - startedAt >= 8) break; // 一片最多 8ms（单枚量不完的那一次不切）
+    }
+    if (index < queue.length) setTimeout(step, 0);
   };
+  onIdle(step); // 首片落在面板刚打开后的空闲时段，不跟首帧抢
+}
+
+function FontPresetControl(a: FontPresetControlArgs): ReactElement {
+  const missingOf = (stack: string): string[] => missingFamiliesOf(stack, a.checker);
   const fellBackNotice =
     a.resolved.fellBack && a.resolved.requestedPresetId !== a.resolved.presetId
       ? a.presets.some((p) => p.id === a.resolved.requestedPresetId)

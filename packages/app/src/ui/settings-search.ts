@@ -181,6 +181,42 @@ function normalize(value: string): string {
 }
 
 /**
+ * 预建好的匹配面（2026-10-25 设置页性能批）。
+ *
+ * 索引是**模块级常量**，归一化结果因此在同一次会话里是常量——此前每次按键都要对全部
+ * 条目重算 `toLowerCase().replace()` 三趟（label / haystack / compact），纯属重复劳动。
+ * 这里在**首次查询时**把三串算一次并挂到条目数组上（`WeakMap` 以数组为键 ⇒ 测试传进来的
+ * 临时数组也各自有自己的一份，互不串味；常量索引只付一次）。
+ */
+interface PreparedEntry {
+  readonly entry: SettingsSearchEntry;
+  /** `label` 的归一串（第 0 档：标签子串命中） */
+  readonly labelNorm: string;
+  /** `label + keywords` 的归一串（第 1 档：关键词子串命中） */
+  readonly haystackNorm: string;
+  /** `haystack + 节名` 的归一串（第 2 档：全串子序列兜底） */
+  readonly compactNorm: string;
+}
+
+const preparedCache = new WeakMap<readonly SettingsSearchEntry[], readonly PreparedEntry[]>();
+
+function prepareEntries(entries: readonly SettingsSearchEntry[]): readonly PreparedEntry[] {
+  const cached = preparedCache.get(entries);
+  if (cached !== undefined) return cached;
+  const prepared = entries.map((entry) => {
+    const haystack = `${entry.label} ${entry.keywords?.join(' ') ?? ''}`;
+    return {
+      entry,
+      labelNorm: normalize(entry.label),
+      haystackNorm: normalize(haystack),
+      compactNorm: normalize(`${haystack} ${entry.sectionLabel}`),
+    };
+  });
+  preparedCache.set(entries, prepared);
+  return prepared;
+}
+
+/**
  * 「已修改」的**唯一判据**（一处定义）：写了 `isModified` 判据、且当前读数确实偏离默认。
  * 没写判据的条目永远返回 false——猜出来的"已修改"比没有这条过滤更坏。
  * 三个消费者都吃它：下面的名单（过滤 + 徽标计数）与结果行上那枚「已改」标记。
@@ -201,16 +237,13 @@ export function modifiedSettingsEntries(
   return entries.filter((entry) => settingsEntryModified(entry));
 }
 
-/** 一条结果的命中强度：标签子串 > 关键词子串 > 全串子序列 */
-function scoreEntry(entry: SettingsSearchEntry, q: string): number {
-  const label = normalize(entry.label);
-  if (label.includes(q)) return 0;
-  const haystack = normalize(`${entry.label} ${entry.keywords?.join(' ') ?? ''}`);
-  if (haystack.includes(q)) return 1;
-  const compact = normalize(`${haystack} ${entry.sectionLabel}`);
+/** 一条结果的命中强度：标签子串 > 关键词子串 > 全串子序列（吃预建好的归一串） */
+function scoreEntry(entry: PreparedEntry, q: string): number {
+  if (entry.labelNorm.includes(q)) return 0;
+  if (entry.haystackNorm.includes(q)) return 1;
   let i = 0;
   for (const ch of q) {
-    const at = compact.indexOf(ch, i);
+    const at = entry.compactNorm.indexOf(ch, i);
     if (at < 0) return -1;
     i = at + 1;
   }
@@ -222,22 +255,29 @@ function scoreEntry(entry: SettingsSearchEntry, q: string): number {
  *
  * `modifiedOnly` 走 `modifiedSettingsEntries` 那份名单（与徽标计数同一个数组）——
  * 没写判据的条目**不会**被算进"已修改"。结果按命中强度分桶、桶内保持索引原序（同输入同输出）。
+ *
+ * 归一化在 `prepareEntries` 里做一次就长期复用（见那里的头注）；`modifiedOnly` 的名单
+ * 只是**同一份预建表上的过滤**，因此不会因为名单每次是新数组而让缓存失效。
  */
 export function searchSettings(
   query: string,
   opts: { readonly modifiedOnly?: boolean; readonly entries?: readonly SettingsSearchEntry[] } = {},
 ): SettingsSearchEntry[] {
   const modifiedOnly = opts.modifiedOnly === true;
-  // 名单只从一处取：过滤之后仍按索引原序排（`at` 是名单内的位次，与索引同序）
-  const entries = modifiedOnly
-    ? modifiedSettingsEntries(opts.entries ?? SETTINGS_SEARCH_INDEX)
-    : (opts.entries ?? SETTINGS_SEARCH_INDEX);
+  const source = opts.entries ?? SETTINGS_SEARCH_INDEX;
+  const prepared = prepareEntries(source);
+  // 名单只从一处取（`modifiedSettingsEntries`，与徽标计数同一份判据）：这里只把它换成一枚
+  // 按 id 的集合，好在**同一份预建表**上过滤——顺序仍由预建表（= 索引原序）决定。
+  const allowed = modifiedOnly
+    ? new Set(modifiedSettingsEntries(source).map((entry) => entry.id))
+    : null;
+  const pool = allowed === null ? prepared : prepared.filter((p) => allowed.has(p.entry.id));
   const q = normalize(query.trim());
   const out: { entry: SettingsSearchEntry; score: number; at: number }[] = [];
-  entries.forEach((entry, at) => {
-    const score = q === '' ? 0 : scoreEntry(entry, q);
+  pool.forEach((p, at) => {
+    const score = q === '' ? 0 : scoreEntry(p, q);
     if (score < 0) return;
-    out.push({ entry, score, at });
+    out.push({ entry: p.entry, score, at });
   });
   out.sort((a, b) => a.score - b.score || a.at - b.at);
   return out.map((x) => x.entry);
