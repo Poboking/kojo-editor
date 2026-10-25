@@ -144,7 +144,17 @@ export {
   ProjectDetectionError,
   normalizeAdapterDetection,
 } from './project';
-export type { AdapterConflictCandidate, ProjectService, RecentProject } from './project';
+export type { ProjectService, RecentProject } from './project';
+
+/** 适配器契约新增类型（type-only 叶子，见 `./adapter-contract`） */
+export type {
+  AdapterConflictCandidate,
+  AdapterDetection,
+  AdapterDetectResult,
+  ConventionPolicy,
+  ConventionSuppression,
+  KojoSlotSemantics,
+} from './adapter-contract';
 
 export { WORKSPACE_MANIFEST_FILE } from './workspace';
 export type {
@@ -158,8 +168,6 @@ export type {
 export { CONVENTION_SEVERITY_ORDER } from './conventions';
 export type {
   ConventionCheckContext,
-  ConventionPolicy,
-  ConventionSuppression,
   ConventionIssue,
   ConventionLinterService,
   ConventionProjectPartition,
@@ -237,8 +245,6 @@ export type {
 } from './snapshot';
 
 export type {
-  AdapterDetection,
-  AdapterDetectResult,
   CharaInfo,
   FamilyIndexRule,
   FamilyMatch,
@@ -249,7 +255,6 @@ export type {
   KojoCallSlot,
   KojoFaceTable,
   KojoFaceTemplate,
-  KojoSlotSemantics,
   KojoInstructionTable,
   KojoLibraryTable,
   ScaffoldResult,

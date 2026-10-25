@@ -12,7 +12,6 @@ import type {
 } from '@kojo/kojo-core';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
-import { createAdapterPlugin, projectAdapters } from './adapter-manifest';
 import { computeTasks } from './compute-tasks';
 import { createCascadeWatermarks } from './cascade-watermarks';
 import { perf } from './perf';
@@ -199,8 +198,8 @@ export async function bootstrapKernel(): Promise<Kernel> {
  * 正是"次序与展开时机同轴"）。动态 `import()` 只推迟解析与求值，不改这份名单的含义。
  */
 async function loadProjectPlugins(): Promise<Plugin[]> {
-  // 适配器走**单一清单**（`./adapter-manifest`）：身份 / 次序 / 工厂名都在那一份里，
-  // 组合根不再逐个 import——接新游戏只改清单 + 适配器包。
+  // 适配器走**单一清单**（`./adapter-manifest`，动态取，不占开机静态图）。
+  const { projectAdapters, createAdapterPlugin } = await import('./adapter-manifest');
   const adapterEntries = projectAdapters();
   const adapterModules = await Promise.all(adapterEntries.map((entry) => entry.load!()));
   const [

@@ -5,8 +5,19 @@
  * 内容（eraTW / eraK / … 的全部领域知识）只在各 game.adapter 插件中。
  */
 
-import type { ConventionPolicy, ConventionRule } from './conventions';
+import type { ConventionRule } from './conventions';
+import type { AdapterDetectResult, ConventionPolicy, KojoSlotSemantics } from './adapter-contract';
 import type { ReplayCallContext } from './replay';
+
+/** 新增契约类型（type-only 叶子；运行期不占字节，也不在开机静态图上） */
+export type {
+  AdapterDetection,
+  AdapterDetectResult,
+  AdapterConflictCandidate,
+  ConventionPolicy,
+  ConventionSuppression,
+  KojoSlotSemantics,
+} from './adapter-contract';
 
 /** 角色条目（由适配器从游戏数据填充；内核只透传） */
 export interface CharaInfo {
@@ -321,20 +332,6 @@ export interface KojoCallProtocol {
  * `@kojo/plugin-api` 的 `index-slot.ts` 三枚纯函数（见该模块头注）。
  */
 export type KojoIndexKind = 'command' | 'literal' | 'counter';
-
-/**
- * 占位符的**人类可读语义**（additive；只影响显示，不改变拼接行为）。
- *
- * 行为仍由 `indexKind` 决定；这里回答的是「作者看到的这个尾号到底是什么」——
- * 同一个 `{i}` 在 A 游戏是指令编号、在 B 游戏可能是 `CFLAG` 里的口上模式。
- * 展示层只照原文打印，不解释、不据此做任何换算。
- */
-export interface KojoSlotSemantics {
-  /** `{i}` 槽 */
-  readonly index?: { readonly label: string; readonly detail?: string };
-  /** `{n}` 槽 */
-  readonly chara?: { readonly label: string; readonly detail?: string };
-}
 
 export interface KojoFaceTemplate {
   /**
@@ -733,19 +730,6 @@ export interface StateLinePreset {
   /** 归属该线的规范化状态键（精确匹配矩阵行键） */
   readonly keys: readonly string[];
 }
-
-/**
- * `detect` 的结果。
- * 老适配器可直接返回 `boolean`（等价于 `{ matched }`）；新适配器带上证据，
- * 多适配器同时认领时内核能把「谁因为什么认领」原样抛给宿主。
- * `evidence` 只用于诊断展示，**不参与取舍**——取舍只有「零命中 / 单命中 / 多命中报冲突」。
- */
-export interface AdapterDetection {
-  readonly matched: boolean;
-  readonly evidence?: readonly string[];
-}
-
-export type AdapterDetectResult = boolean | AdapterDetection;
 
 /**
  * 游戏适配器（槽位 `game.adapter` 的负载）。

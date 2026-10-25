@@ -112,7 +112,7 @@ export const WRITE_ENCODING_POLICY = {
     bom: 'as-authored',
     eol: 'crlf',
     trailingNewline: 'guaranteed',
-    writer: 'packages/plugins/eraakumamaid-adapter/src/scaffold.ts::buildErakumamaidCharaCsv（文本自带）+ 同一个 writeScaffoldFiles', // audit-allow: 记录产出方是哪枚适配器（编码策略表的一列，非游戏知识）
+    writer: 'packages/plugins/eraakumamaid-adapter/src/scaffold.ts::buildErakumamaidCharaCsv（文本自带）+ 同一个 writeScaffoldFiles', // audit-allow: 产出方归属
     note: '游戏自带 CSV 全是 UTF-8-BOM + CRLF ⇒ 文本自己带一次前导 U+FEFF 与 `\\r\\n`；writer 不补不剥（走 writeText 就会补成双 BOM）。',
   },
   'export-file': {

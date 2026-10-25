@@ -1,4 +1,5 @@
-import type { AdapterDetection, AdapterDetectResult, GameProject } from './game';
+import type { AdapterConflictCandidate, AdapterDetection, AdapterDetectResult } from './adapter-contract';
+import type { GameProject } from './game';
 
 /** 最近打开的项目记录（内核通用持久化，不感知游戏概念） */
 export interface RecentProject {
@@ -59,12 +60,6 @@ export class ProjectDetectionError extends Error {
 /** `detect()` 的 boolean / 证据对象两形归一（老适配器零改动） */
 export function normalizeAdapterDetection(result: AdapterDetectResult): AdapterDetection {
   return typeof result === 'boolean' ? { matched: result } : result;
-}
-
-export interface AdapterConflictCandidate {
-  readonly adapterId: string;
-  readonly displayName: string;
-  readonly evidence: readonly string[];
 }
 
 /**

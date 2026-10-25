@@ -16,16 +16,25 @@ import { describe, expect, it } from 'vitest';
 
 const run = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../audit-decoupling.mjs', import.meta.url));
+/** 审计脚本的清单读取助手（脚本 import 它；夹具必须一起复制，否则脚本加载即崩） */
+const WORDS_HELPER = fileURLToPath(new URL('../adapter-manifest-words.mjs', import.meta.url));
 
 async function runAudit(files: Record<string, string>): Promise<{ code: number; output: string }> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'kojo-audit-'));
   try {
     await fs.mkdir(path.join(tmp, 'tools'), { recursive: true });
     await fs.copyFile(SCRIPT, path.join(tmp, 'tools', 'audit-decoupling.mjs'));
-    // A 项对 NEUTRAL_DIRS 里的单文件条目（bootstrap.ts）无条件 readFile：夹具必须提供它，
-    // 否则脚本 ENOENT 崩溃——退出码 1 但报告是堆栈而非 B 项文本，三个用例全废。
+    await fs.copyFile(WORDS_HELPER, path.join(tmp, 'tools', 'adapter-manifest-words.mjs'));
+    // A 项对 NEUTRAL_DIRS 里的单文件条目（bootstrap.ts / adapter-manifest.ts）无条件
+    // readFile：夹具必须提供它们，否则脚本 ENOENT 崩溃——退出码 1 但报告是堆栈而非
+    // B 项文本，三个用例全废。清单里的 auditWord 决定审计词表（读不到就判红）。
     await fs.mkdir(path.join(tmp, 'packages', 'app', 'src'), { recursive: true });
     await fs.writeFile(path.join(tmp, 'packages', 'app', 'src', 'bootstrap.ts'), '// 组合根占位\n', 'utf8');
+    await fs.writeFile(
+      path.join(tmp, 'packages', 'app', 'src', 'adapter-manifest.ts'),
+      "export const ADAPTER_MANIFEST = [{ auditWord: 'fakegame' }];\n",
+      'utf8',
+    );
     for (const [rel, content] of Object.entries(files)) {
       const abs = path.join(tmp, rel);
       await fs.mkdir(path.dirname(abs), { recursive: true });
