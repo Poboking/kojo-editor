@@ -111,6 +111,15 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
+/** 真等一段墙钟（只用在"越过某张等待票的原始计时器"这类判据上） */
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 开发面的一行（`console.debug`；正常丢弃只落这里，不进作者面台账） */
+const debugLines = (spy: ReturnType<typeof vi.spyOn>): string[] =>
+  (spy.mock.calls as unknown[][]).map((call) => String(call[0] ?? '')).filter((line) => line.length > 0);
+
 const sentTypes = (worker: InstanceType<typeof harness.FakeWorker>): string[] =>
   worker.sent.map((m) => (m as { type: string }).type);
 
@@ -220,12 +229,15 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
   let fatalMessages: string[];
   let notices: string[];
   let unsubscribe: (() => void) | null = null;
+  /** 正常丢弃只落开发面（`console.debug`）：收进来当读数，也不让它糊测试输出 */
+  let debug: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     harness.FakeWorker.reset();
     fakeWindowTimers();
     resetStructureDegradationLedger();
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
     fatalMessages = [];
     notices = [];
     unsubscribe = onStructureDegradation((d) => notices.push(`${d.capability}/${d.stage} ${d.message}`));
@@ -238,8 +250,8 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
     vi.restoreAllMocks();
   });
 
-  function readyClient(): { client: StructureClient; worker: InstanceType<typeof harness.FakeWorker> } {
-    const client = new StructureClient({ runtime: RUNTIME, timeoutMs: 250, onFatal: (m) => fatalMessages.push(m) });
+  function readyClient(timeoutMs = 250): { client: StructureClient; worker: InstanceType<typeof harness.FakeWorker> } {
+    const client = new StructureClient({ runtime: RUNTIME, timeoutMs, onFatal: (m) => fatalMessages.push(m) });
     client.start();
     const worker = harness.FakeWorker.instances.at(-1)!;
     worker.reply({ type: 'ready', version: 0 });
@@ -261,7 +273,9 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
     void tokensB.then(() => (bSettled = true));
     await flush();
     expect(bSettled).toBe(false); // A 的回复没放行 B 的等待者，更没进 B 的缓存
-    expect(notices.filter((n) => n.startsWith('semantic/parse') && n.includes('文档 1'))).toHaveLength(1);
+    // 换轨后的迟到回复是**正常丢弃**：作者面零通知（那是 error 弹窗），开发面一条 debug
+    expect(notices).toHaveLength(0);
+    expect(debugLines(debug).filter((line) => line.includes('文档 1'))).toHaveLength(1);
     // B 自己的回复才放行，且拿到的就是 B 的 tokens
     worker.reply({ type: 'semantic', doc: 2, version: 1, tokens: [TOKEN_B] });
     expect(await tokensB).toEqual([TOKEN_B]);
@@ -289,7 +303,7 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
     client.dispose();
   });
 
-  it('(b3) 同文档的过期版本仍按既有口径丢弃（版本闸没有被 doc 闸取代）', async () => {
+  it('(b3) 同文档的过期版本仍按既有口径丢弃（版本闸没有被 doc 闸取代），且只落开发面', async () => {
     const { client, worker } = readyClient();
     const model = fakeModel('A 文本');
     const pending = client.tokens(model);
@@ -302,8 +316,145 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
     expect(worker.sent.at(-1)).toMatchObject({ type: 'change', doc: 1, version: 2 });
     worker.reply({ type: 'semantic', doc: 1, version: 1, tokens: [TOKEN_B] });
     await flush();
-    expect(notices.filter((n) => n.includes('收到版本 1'))).toHaveLength(1);
+    // 正常丢弃 ≠ 回落：作者面一条通知都没有（旧码：一条「结构着色这次没顶上」的 error），
+    // 开发面留一行 debug 供查时序
+    expect(notices).toHaveLength(0);
+    expect(debugLines(debug).filter((line) => line.includes('收到版本 1'))).toHaveLength(1);
     expect(client.state).toBe('ready');
+    client.dispose();
+  });
+});
+
+/* ================== 等待票按文档对号 · 正常丢弃 · 版本读点 ================== */
+
+/**
+ * 四件事的共同点：**回话的时序**。桩 worker 只负责"什么时候回、回哪一版"，
+ * 判据全在 client 自己的账上（谁在等、等的是哪份文档、缓存里的结果是哪一版）。
+ *
+ * (c1) 等待票必须带它等的那份文档：A 的计时器在换到 B 之后才响，不许把 dead 打在 B 头上；
+ * (c2) 跨文档 / 版本落后 = 正常丢弃（快速打字必然发生），只落开发面 debug，不进作者面台账；
+ *      真失败（worker 报错）照旧说出去；
+ * (c3) 已有结果但版本落后 ⇒ Monaco 取数要**等**当前版本（`FacetResult.version` 的读点）。
+ */
+describe('等待票 / 正常丢弃 / 版本读点', () => {
+  let fatalMessages: string[];
+  let notices: string[];
+  let unsubscribe: (() => void) | null = null;
+  /** 正常丢弃只落开发面（`console.debug`）：收进来当读数，也不让它糊测试输出 */
+  let debug: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    harness.FakeWorker.reset();
+    fakeWindowTimers();
+    resetStructureDegradationLedger();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    fatalMessages = [];
+    notices = [];
+    unsubscribe = onStructureDegradation((d) => notices.push(`${d.capability}/${d.stage} ${d.message}`));
+  });
+
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
+    delete (globalThis as unknown as { window?: unknown }).window;
+    vi.restoreAllMocks();
+  });
+
+  function readyClient(timeoutMs = 250): { client: StructureClient; worker: InstanceType<typeof harness.FakeWorker> } {
+    const client = new StructureClient({ runtime: RUNTIME, timeoutMs, onFatal: (m) => fatalMessages.push(m) });
+    client.start();
+    const worker = harness.FakeWorker.instances.at(-1)!;
+    worker.reply({ type: 'ready', version: 0 });
+    return { client, worker };
+  }
+
+  it('(c1) 换轨后旧文档的计时器到点不把 dead 打给新文档（曾经：B 的 semantic 面被误判停用）', async () => {
+    const { client, worker } = readyClient(120);
+    const modelA = fakeModel('A 文本');
+    const pendingA = client.tokens(modelA);
+    await flush();
+    await sleep(80); // A 的票走掉大半
+    // 换轨：A 的在飞票当场结掉（旧码：要等 A 的计时器到点，且那一下把 dead 打在 B 头上）
+    const modelB = fakeModel('B 文本');
+    const pendingB = client.tokens(modelB);
+    expect(await pendingA).toBeNull();
+    // 越过 A 那一票的原始截止时刻（t≈120），但仍在 B 自己的窗口内（t≈200）
+    await sleep(60);
+    expect(client.state).toBe('ready');
+    // B 自己的结果到达：必须放行（旧码：B 已被 A 的计时器判 dead ⇒ 这里拿 null）
+    worker.reply({ type: 'semantic', doc: 2, version: 1, tokens: [TOKEN_B] });
+    expect(await pendingB).toEqual([TOKEN_B]);
+    // B 这一面没被判死：再问一次直接吃缓存（旧码：dead ⇒ null）
+    expect(await client.tokens(modelB)).toEqual([TOKEN_B]);
+    expect(notices).toHaveLength(0); // A 的超时没被记成"这一面没顶上"
+    expect(fatalMessages).toHaveLength(0);
+    client.dispose();
+  });
+
+  it('(c2) 快速打字：落后一版的回复是正常丢弃——作者面零通知，真失败仍照旧通知', async () => {
+    const { client, worker } = readyClient();
+    const model = fakeModel('A 文本');
+    const pending = client.tokens(model);
+    await flush();
+    worker.reply({ type: 'semantic', doc: 1, version: 1, tokens: [TOKEN_A] });
+    expect(await pending).toEqual([TOKEN_A]);
+
+    // 连打两下：版本 3；worker 的 v1 / v2 回复此时才到（必然落后，这不是故障）
+    model.edit('A 文本!');
+    model.edit('A 文本!!');
+    await flush();
+    worker.reply({ type: 'semantic', doc: 1, version: 1, tokens: [TOKEN_A] });
+    worker.reply({ type: 'folds', doc: 1, version: 2, folds: [{ startRow: 0, endRow: 1 }] });
+    await flush();
+    expect(notices).toHaveLength(0); // 旧码：每面一条「结构着色这次没顶上…」
+    const lines = debugLines(debug);
+    expect(lines.filter((line) => line.includes('收到版本 1'))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes('收到版本 2'))).toHaveLength(1);
+
+    // 真失败那一路不许被同一条静音带走：worker 报错仍然进作者面
+    worker.reply({ type: 'error', version: 3, stage: 'query', capability: 'semantic', message: 'highlights 查询没写捕获（桩）' });
+    expect(notices).toEqual(['semantic/query highlights 查询没写捕获（桩）']);
+    client.dispose();
+  });
+
+  it('(c3) 已有结果但版本落后：取数等当前版本，不把旧 tokens 直接交上去', async () => {
+    const { client, worker } = readyClient();
+    const model = fakeModel('A 文本');
+    const first = client.tokens(model);
+    await flush();
+    worker.reply({ type: 'semantic', doc: 1, version: 1, tokens: [TOKEN_A] });
+    expect(await first).toEqual([TOKEN_A]);
+
+    // 编辑 ⇒ 版本 2（change 已发出）；缓存里只有 v1 的结果
+    model.edit('A 文本!');
+    await flush();
+    let settled = false;
+    const second = client.tokens(model);
+    void second.then(() => (settled = true));
+    await flush();
+    expect(settled).toBe(false); // 旧码：缓存非空 ⇒ 当场把 v1 的旧 tokens 交上去
+
+    worker.reply({ type: 'semantic', doc: 1, version: 2, tokens: [TOKEN_B] });
+    expect(await second).toEqual([TOKEN_B]);
+    // 版本对齐之后又走缓存：不再多等一轮
+    expect(await client.tokens(model)).toEqual([TOKEN_B]);
+    expect(notices).toHaveLength(0);
+    client.dispose();
+  });
+
+  it('(c3b) 等不到当前版本（超时）：这一面这次不顶上，但不许把上一版的旧 tokens 交上去', async () => {
+    const { client, worker } = readyClient(40);
+    const model = fakeModel('A 文本');
+    const first = client.tokens(model);
+    await flush();
+    worker.reply({ type: 'semantic', doc: 1, version: 1, tokens: [TOKEN_A] });
+    expect(await first).toEqual([TOKEN_A]);
+
+    model.edit('A 文本!');
+    await flush();
+    expect(await client.tokens(model)).toBeNull(); // 版本 2 的结果始终没来 ⇒ null（旧码：旧 tokens）
+    expect(notices.filter((n) => n.startsWith('semantic/parse'))).toHaveLength(1);
     client.dispose();
   });
 });

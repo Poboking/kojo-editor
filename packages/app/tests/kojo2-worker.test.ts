@@ -43,6 +43,7 @@ import {
 import {
   createKojo2WorkerEngine,
   foldsFromCaptures,
+  KOJO2_RUNTIME_LOAD_ATTEMPTS,
   type Kojo2WorkerEngine,
 } from '../src/monaco/tree-sitter/kojo2-worker';
 import {
@@ -462,6 +463,87 @@ describe('客户端 · 启动失败 / 线程崩溃 / 业务失败都是可判别
       expect(capturesResult.reason).toBe('query-unavailable');
       expect(capturesResult.treeId).toBe('tree-survives');
     }
+  });
+});
+
+/* ============================ 运行时装载：失败一次不判死 ============================ */
+
+/**
+ * 一条 worker 生命周期里运行时只该装一次——但**失败不许缓存**：一次 fetch / 解压 / 超时的
+ * 抖动之后，这条 worker 就再也起不来，等于把一次抖动升级成"这一整份文档都没有结构层"。
+ * 这里钉"允许一次重试"：第二次起来就正常干活；第二次仍失败才算真的失败（说清已重试过一次），
+ * 且不会无限重试（`KOJO2_RUNTIME_LOAD_ATTEMPTS` 是上限，用调用次数直接量）。
+ */
+describe('worker 引擎 · 运行时装载失败一次不判死（重试一次，不无限重试）', () => {
+  const parseRequest = (id: number, text: string) => ({ id, type: 'parse' as const, text, version: id });
+
+  it('第一次装载失败 ⇒ 回 unavailable；第二次调用重试并真正起来（旧码：这一辈子都 unavailable）', async () => {
+    let calls = 0;
+    const engine = createKojo2WorkerEngine({
+      loadRuntime: async () => {
+        calls += 1;
+        if (calls === 1) return { ok: false, reason: 'unavailable', message: 'fetch 抖动（桩）' };
+        return getKojo2TreeSitterRuntime(realRuntimeDeps());
+      },
+    });
+    engines.push(engine);
+
+    const first = await engine.handle(parseRequest(1, '> 第一版。\n'));
+    expect(first.ok).toBe(false);
+    if (!first.ok) expect(first.reason).toBe('unavailable');
+    expect(calls).toBe(1);
+
+    const second = await engine.handle(parseRequest(2, '> 第二版。\n'));
+    expect(calls).toBe(2); // 缓存住的失败被清掉 ⇒ 真的又装载了一次
+    expect(second.ok, second.ok ? '' : second.message).toBe(true);
+    if (second.ok) expect(second.type).toBe('parse');
+  });
+
+  it('两次都失败 ⇒ 持续失败、不无限重试，且台账说清"已重试一次仍失败"', async () => {
+    let calls = 0;
+    const engine = createKojo2WorkerEngine({
+      loadRuntime: async () => {
+        calls += 1;
+        return { ok: false as const, reason: 'unavailable' as const, message: `wasm 解压失败（桩，第 ${calls} 次）` };
+      },
+    });
+    engines.push(engine);
+
+    const first = await engine.handle(parseRequest(1, '> 一。\n'));
+    expect(first.ok).toBe(false);
+    if (!first.ok) expect(first.message).not.toContain('已重试一次仍失败'); // 第一次只是抖，不夸大口径
+    expect(calls).toBe(1);
+
+    const second = await engine.handle(parseRequest(2, '> 二。\n'));
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.reason).toBe('unavailable');
+      expect(second.message).toContain('已重试一次仍失败');
+    }
+    expect(calls).toBe(KOJO2_RUNTIME_LOAD_ATTEMPTS); // 第二次就是上限
+
+    const third = await engine.handle(parseRequest(3, '> 三。\n'));
+    expect(third.ok).toBe(false);
+    expect(calls).toBe(KOJO2_RUNTIME_LOAD_ATTEMPTS); // 不再试第三回（无限重试会打爆 CPU）
+  });
+
+  it('装载抛错也走同一条重试口径（异常不许变成永久 unavailable）', async () => {
+    let calls = 0;
+    const engine = createKojo2WorkerEngine({
+      loadRuntime: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('解压抛错（桩）');
+        return getKojo2TreeSitterRuntime(realRuntimeDeps());
+      },
+    });
+    engines.push(engine);
+
+    const first = await engine.handle(parseRequest(1, '> 一。\n'));
+    expect(first.ok).toBe(false);
+    if (!first.ok) expect(first.message).toContain('解压抛错（桩）');
+    const second = await engine.handle(parseRequest(2, '> 二。\n'));
+    expect(calls).toBe(2);
+    expect(second.ok, second.ok ? '' : second.message).toBe(true);
   });
 });
 

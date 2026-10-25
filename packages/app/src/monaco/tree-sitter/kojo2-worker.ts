@@ -41,6 +41,7 @@ import type { Node as SyntaxNode, Tree } from 'web-tree-sitter';
 import type { Kojo2Capture } from './kojo2-tokenizer';
 import type {
   Kojo2QueryKind,
+  Kojo2RuntimeFailure,
   Kojo2RuntimeResult,
   Kojo2TreeSitterRuntime,
 } from './kojo2-runtime-core';
@@ -62,6 +63,11 @@ import {
 
 /** 树缓存上限：正常编辑只用到 1 棵；8 棵给左右分屏 / 迟到请求留余量 */
 export const KOJO2_WORKER_MAX_TREES = 8;
+/**
+ * 运行时装载最多试几次（本批）：一次 `fetch` / 解压 / 超时抖动不该把这条 worker 判死一辈子，
+ * 但重试也只给一次——无限重试会在 wasm 起不来时把 CPU 打满。
+ */
+export const KOJO2_RUNTIME_LOAD_ATTEMPTS = 2;
 /** 折叠区间上限：5k 行文档的 `block` 数量远小于此；病态文档不许把数组撑爆 */
 export const KOJO2_WORKER_MAX_FOLDS = 4_000;
 
@@ -279,22 +285,48 @@ export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo
   const trees = new Map<string, CachedTree>();
   let treeSeq = 0;
   let runtimePromise: Promise<Kojo2RuntimeResult> | null = null;
+  let runtimeAttempts = 0;
   let runtime: Kojo2TreeSitterRuntime | null = null;
   let disposed = false;
   let queue: Promise<void> = Promise.resolve();
 
+  /**
+   * 装载运行时（**成功才缓存**）。
+   *
+   * 失败不进 `runtimePromise`：缓存住的失败等于"一次抖动 ⇒ 这条 worker 这一辈子都起不来"
+   * （作者在一个文件里打字，worker 线程就一直活着，直到换文件 / 重开才重建）。故失败时清空
+   * promise，下一次请求会再试一次；`KOJO2_RUNTIME_LOAD_ATTEMPTS` 是硬上限（不做无限重试：
+   * wasm 真的起不来时，无限重试只会把 CPU 与网络打满）。第二次起仍失败就真的持续失败，
+   * 且消息里写清"已重试一次仍失败"——台账上不能让人误以为是第一次抖。
+   */
   const loadRuntime = (): Promise<Kojo2RuntimeResult> => {
     if (runtimePromise !== null) return runtimePromise;
+    const attempt = runtimeAttempts + 1;
+    runtimeAttempts = attempt;
+    const giveUp = (result: Kojo2RuntimeFailure): Kojo2RuntimeResult => {
+      if (attempt < KOJO2_RUNTIME_LOAD_ATTEMPTS) {
+        runtimePromise = null; // 还有一次机会 ⇒ 别把这次失败钉在这一线程上
+        return result;
+      }
+      return { ...result, message: `${result.message}（已重试一次仍失败）` };
+    };
     runtimePromise = options.loadRuntime().then(
       (result) => {
-        if (result.ok) runtime = result.runtime;
+        if (!result.ok) return giveUp(result);
+        if (disposed) {
+          // 装载在 dispose 之后才回来：当场释放，不给 wasm 留一条没人负责的引用
+          result.runtime.dispose();
+          return { ok: false, reason: 'disposed', message: '结构解析 worker 已释放 ⇒ 调用方降级到词法层' };
+        }
+        runtime = result.runtime;
         return result;
       },
-      (error: unknown): Kojo2RuntimeResult => ({
-        ok: false,
-        reason: 'unavailable',
-        message: `结构解析运行时装载抛错：${describeError(error)}`,
-      }),
+      (error: unknown): Kojo2RuntimeResult =>
+        giveUp({
+          ok: false,
+          reason: 'unavailable',
+          message: `结构解析运行时装载抛错：${describeError(error)}`,
+        }),
     );
     return runtimePromise;
   };

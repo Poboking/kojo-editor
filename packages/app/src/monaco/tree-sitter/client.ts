@@ -33,6 +33,18 @@ import {
  * 的在途结果不许污染新文档（真实踩过：A 的 tokens 冒充 B 的结果被缓存上屏并滞留）。
  * 左右分屏同时开两份 `.kojo` 时会来回重解，代价是多解一次，这条边界写明而不是藏着。
  *
+ * ## 等谁、等的是哪份文档（等待票）
+ *
+ * 取数（provider）等结果这件事按**票**登记：票上带它等的那一份文档与它自己的计时器。
+ * 回话到达、换轨 / 停用、到点，三条出路都清计时器；到点那一支只按票上的文档判 `dead`
+ * ——现读 `this.doc` 会把 A 的超时记到 B 头上（B 自己的结果随后到达也被拒掉）。
+ *
+ * ## 丢弃 ≠ 回落
+ *
+ * 跨文档对不上号、版本落后一版，都是**正常丢弃**（快速打字必然发生），只落 `console.debug`；
+ * 进 `fallback.ts` 台账的只有真失败（协议不符 / wasm / 线程崩 / 超时停用 / 整档停用），
+ * 因为台账的另一头是作者面的 error 通知。
+ *
  * ## 装配期的门控
  *
  * `start()` 只发 `init`，**不发 parse**——worker 要 await 两枚 wasm 才算装配完成，
@@ -71,6 +83,15 @@ import {
 /** 一面最多等多久（线程卡住时不许把 provider 的 promise 挂到天荒地老） */
 export const STRUCTURE_REQUEST_TIMEOUT_MS = 4_000;
 
+/**
+ * 一次取数最多追几轮"当前版本"的结果。
+ *
+ * 每一轮 = **一条回话**或**一次超时**（不空转），所以正常只有一轮；给 3 轮是给连打时
+ * "回话到达与版本推进交错"留余量。打字不停时不把 provider 的 promise 无限挂在链上
+ * （Monaco 那边看到的就是"这次还没结果"，屏上保持上一版，不会画错）。
+ */
+const FACET_READ_ROUNDS = 3;
+
 export type StructureStatus = 'idle' | 'starting' | 'ready' | 'dead';
 
 type FacetName = 'semantic' | 'folds';
@@ -107,6 +128,22 @@ interface TrackedDocument {
   syntaxDead: boolean;
 }
 
+/**
+ * 一次在飞的等待。票上带着**它等的那一份文档**：
+ *
+ * 超时回调只许按票上的文档判——曾经这里现读 `this.doc`，于是 A 文档的计时器在换到 B 之后
+ * 才响，`dead` 打在 B 头上，B 自己的结果随后到达也被当成"这一面停了"拒掉。换轨 / 停用时
+ * 按票上的文档结算（`abortWaits`），计时器当场清掉，不会 4s 后凭空再响一下。
+ */
+interface WaitTicket {
+  readonly name: FacetName;
+  readonly doc: TrackedDocument;
+  /** `window.setTimeout` 的句柄（结票时清） */
+  handle: number;
+  /** 结票：清计时器 + 从两本账里摘掉 + 放行等待者（幂等） */
+  settle: () => void;
+}
+
 export interface StructureClientOptions {
   /** 这一门语言的结构层运行时（worker 入口 / 两枚 wasm；由 descriptor 按需交回） */
   readonly runtime: StructureLanguageRuntime;
@@ -129,7 +166,10 @@ export class StructureClient {
   private doc: TrackedDocument | null = null;
   private status: StructureStatus = 'idle';
   private latestIndent: FacetResult<KojoStructureIndentRules> | null = null;
-  private readonly waiters = new Map<FacetName, Set<() => void>>();
+  /** 按面分桶的等待者（回话到达时按面 `flush`） */
+  private readonly waiters = new Map<FacetName, Set<WaitTicket>>();
+  /** 全部在飞票（换轨 / 停用时按票上的文档结算：这是清计时器的唯一入口） */
+  private readonly tickets = new Set<WaitTicket>();
   private readonly runtime: StructureLanguageRuntime;
   private readonly timeoutMs: number;
   private readonly onFatal: (message: string) => void;
@@ -191,17 +231,17 @@ export class StructureClient {
   async tokens(model: Monaco.editor.ITextModel): Promise<readonly KojoStructureToken[] | null> {
     const doc = this.track(model);
     if (doc === null || doc.dead.semantic) return null;
-    if (doc.semantic === null) await this.waitFor('semantic');
+    const tokens = await this.awaitFresh(doc, 'semantic', () => doc.semantic);
     if (this.doc !== doc || doc.dead.semantic) return null;
-    return doc.semantic?.value ?? null;
+    return tokens;
   }
 
   async foldingRanges(model: Monaco.editor.ITextModel): Promise<readonly KojoStructureFold[] | null> {
     const doc = this.track(model);
     if (doc === null || doc.dead.folds) return null;
-    if (doc.folds === null) await this.waitFor('folds');
+    const folds = await this.awaitFresh(doc, 'folds', () => doc.folds);
     if (this.doc !== doc || doc.dead.folds) return null;
-    return doc.folds?.value ?? null;
+    return folds;
   }
 
   dispose(): void {
@@ -252,6 +292,8 @@ export class StructureClient {
     const doc = this.doc;
     if (doc === null) return;
     doc.subscription.dispose();
+    // 换轨 / 停用：这一份文档的在飞票当场结掉（计时器一起清，见 `abortWaits`）
+    this.abortWaits(doc);
     // 换轨 / 停用 = 这一份文档的结构波浪线到此为止（留着就是"波浪线指着已经不在眼前的内容"）
     this.safeSyntaxClear(doc.model);
     this.doc = null;
@@ -307,45 +349,98 @@ export class StructureClient {
     this.worker?.postMessage(request);
   }
 
-  /** 等某一面出结果；超时 = 这一面停用（装配都没完成时升级为整档停用） */
-  private waitFor(name: FacetName): Promise<void> {
+  /**
+   * 等这一面**当前版本**的结果；超时 = 这一面停用（装配都没完成时升级为整档停用）。
+   *
+   * 每一轮先看缓存：`FacetResult.version` 就是在这里被读的（此前它只写不读——于是缓存里有
+   * 上一版结果时，Monaco 来取数会当场拿到**旧 tokens** 上屏；而新结果到达时又没有等待者，
+   * 屏上就一直停在那份旧色上，直到下一次编辑）。版本落后一轮同样要走等待，兜底仍是同一个
+   * 超时：等不到就不交旧数据（`null` = 这一面这次不顶上），绝不拿过期结构给新文本着色。
+   *
+   * 一轮 = 一条回话或一次超时，不空转；最多 `FACET_READ_ROUNDS` 轮（见该常量）。
+   */
+  private async awaitFresh<T>(
+    doc: TrackedDocument,
+    name: FacetName,
+    read: () => FacetResult<T> | null,
+  ): Promise<T | null> {
+    for (let round = 0; round < FACET_READ_ROUNDS; round += 1) {
+      const result = read();
+      if (result !== null && result.version >= doc.version) return result.value;
+      await this.waitFor(name, doc);
+      if (this.doc !== doc || doc.dead[name]) return null;
+    }
+    return null;
+  }
+
+  /**
+   * 挂一张等待票（票上带文档：见 {@link WaitTicket}）。
+   *
+   * 出票的三条出路都会清计时器并从两本账里摘掉：回话到达（`flush`）、换轨 / 停用
+   * （`abortWaits`）、到点（本函数里的回调）。到点那一支只按**票上的文档**判：
+   * 已经不是当前文档 ⇒ 什么都不判（换轨不是这一面失败），还是当前文档才落 `dead`。
+   */
+  private waitFor(name: FacetName, doc: TrackedDocument): Promise<void> {
     return new Promise<void>((resolve) => {
-      const finish = () => {
-        window.clearTimeout(handle);
-        this.waiters.get(name)?.delete(finish);
-        resolve();
+      const ticket: WaitTicket = {
+        name,
+        doc,
+        handle: 0,
+        settle: () => {
+          window.clearTimeout(ticket.handle);
+          this.tickets.delete(ticket);
+          this.waiters.get(name)?.delete(ticket);
+          resolve();
+        },
       };
-      const handle = window.setTimeout(() => {
-        this.waiters.get(name)?.delete(finish);
-        if (this.status !== 'ready') {
-          this.fatal(`结构解析装配始终没有完成（${this.timeoutMs}ms 内无 ready/结果）⇒ 整档停用`);
-        } else {
-          reportStructureDegradation({
-            capability: name,
-            stage: 'parse',
-            message: `结构解析 ${this.timeoutMs}ms 内没有回话 ⇒ 这一面这次不顶上（下一份文档再试）`,
-          });
-          const doc = this.doc;
-          if (doc !== null) doc.dead[name] = true;
-        }
+      ticket.handle = window.setTimeout(() => {
+        this.tickets.delete(ticket);
+        this.waiters.get(name)?.delete(ticket);
+        this.expireWait(name, doc);
         resolve();
       }, this.timeoutMs);
+      this.tickets.add(ticket);
       let bucket = this.waiters.get(name);
       if (!bucket) {
         bucket = new Set();
         this.waiters.set(name, bucket);
       }
-      bucket.add(finish);
+      bucket.add(ticket);
     });
+  }
+
+  /**
+   * 一张票到点了。三支按次序判：
+   * 1. 装配始终没完成（status 非 ready）⇒ 线程本身不可用，整档停用（与哪份文档无关）；
+   * 2. 此刻跟踪的已不是这张票的文档 ⇒ **什么都不判**（换轨是正常操作，不是这一面失败）；
+   * 3. 否则这一面落 `dead`（别再白等）并进台账说一次——这条是真的回落，作者面该看见。
+   */
+  private expireWait(name: FacetName, doc: TrackedDocument): void {
+    if (this.status !== 'ready') {
+      this.fatal(`结构解析装配始终没有完成（${this.timeoutMs}ms 内无 ready/结果）⇒ 整档停用`);
+      return;
+    }
+    if (this.doc !== doc) return;
+    reportStructureDegradation({
+      capability: name,
+      stage: 'parse',
+      message: `结构解析 ${this.timeoutMs}ms 内没有回话 ⇒ 这一面这次不顶上（下一份文档再试）`,
+    });
+    doc.dead[name] = true;
+  }
+
+  /** 换轨 / 停用：把这一份文档的在飞票当场结掉（不清计时器 = 4s 后凭空再响一下，还认错文档） */
+  private abortWaits(doc: TrackedDocument): void {
+    for (const ticket of [...this.tickets]) {
+      if (ticket.doc === doc) ticket.settle();
+    }
   }
 
   /** 放行某一面的全部等待者 */
   private flush(name: FacetName): void {
     const bucket = this.waiters.get(name);
     if (bucket === undefined || bucket.size === 0) return;
-    const pending = [...bucket];
-    bucket.clear();
-    for (const finish of pending) finish();
+    for (const ticket of [...bucket]) ticket.settle();
   }
 
   private fatal(message: string): void {
@@ -370,6 +465,25 @@ export class StructureClient {
     if (doc === null || !doc.pendingParse) return;
     doc.pendingParse = false;
     this.postParse(doc);
+  }
+
+  /**
+   * **正常丢弃**（不是回落）：换轨后旧文档的迟到回复、快速打字时落后一版的回复，都属于
+   * "我们主动不要它"。这两件事**每敲一次键都会发生**，若进 `fallback.ts` 台账，作者面就会
+   * 收到一条「结构着色这次没顶上」的 error——那是真故障才该说的话（与静默同罪的另一面：
+   * 把常态说成故障）。
+   *
+   * 故只落开发面：一行 `console.debug`，带上哪一面、哪一份文档、哪一版，供排查时序。
+   * 真失败的几条路（协议不符 / wasm / 线程崩 / 超时停用 / worker 报错）一律照旧进台账。
+   */
+  private noteDiscarded(
+    name: KojoStructureCapability,
+    reason: string,
+    doc: TrackedDocument | null,
+  ): void {
+    console.debug(
+      `[kojo-structure] ${name}/parse 正常丢弃：${reason}（当前文档 ${doc?.seq ?? '无'}／版本 ${doc?.version ?? '无'}）`,
+    );
   }
 
   private receive(data: unknown): void {
@@ -404,19 +518,19 @@ export class StructureClient {
     this.promoteToReady();
     const doc = this.doc;
     if (doc === null || data.doc !== doc.seq) {
-      reportStructureDegradation({
-        capability: capabilityOfReply(data.type),
-        stage: 'parse',
-        message: `收到文档 ${data.doc} 的结果而当前跟踪的是文档 ${doc?.seq ?? '无'} ⇒ 这条丢掉（旧文档的结构着到新文档上比不着色危险）`,
-      });
+      this.noteDiscarded(
+        capabilityOfReply(data.type),
+        `收到文档 ${data.doc} 的结果而当前跟踪的是文档 ${doc?.seq ?? '无'} ⇒ 这条丢掉（旧文档的结构着到新文档上比不着色危险）`,
+        doc,
+      );
       return;
     }
     if (data.version < doc.version) {
-      reportStructureDegradation({
-        capability: capabilityOfReply(data.type),
-        stage: 'parse',
-        message: `收到版本 ${data.version} 的结果而当前版本是 ${doc.version} ⇒ 这条丢掉（拿过期结构给新文本着色比不着色危险）`,
-      });
+      this.noteDiscarded(
+        capabilityOfReply(data.type),
+        `收到版本 ${data.version} 的结果而当前版本是 ${doc.version} ⇒ 这条丢掉（拿过期结构给新文本着色比不着色危险）`,
+        doc,
+      );
       return;
     }
     if (data.type === 'semantic') {
