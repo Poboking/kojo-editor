@@ -134,13 +134,100 @@ function createEagerProbe(api: ChunkGraphApi): (id: string) => boolean {
   };
 }
 
+/**
+ * 懒边上的**插件族**（2026-10-25 件数批）：三个族，判据只有一条——
+ * **它们在 `bootstrap.ts` 的同一个 `Promise.all` 里被一起取**。
+ *
+ * 为什么合并是"零延迟成本"的（这一条是读 `loadProjectPlugins` 读出来的，不是猜的）：
+ * 19 个项目级插件是**同一条 `await Promise.all([...19 个 import()])`** 取回来的，改动前
+ * 就是 19 个并行请求、同一时刻发出、同一时刻等齐；并成三块之后仍是同一时刻发出，只是
+ * 请求数从 23 降到 3。也就是说：**合并省掉的是请求数，代价为零**——没有"打开 A 面板却
+ * 装了 B 面板字节"的问题，因为 B 的字节本来就在同一拍里落地。
+ *
+ * 为什么是**三**族而不是一族（并成一坨也能量到更少的件数，但那是为了数字好看）：
+ * 三族对应三条真实的维护边界——**适配器**（游戏事实）/ **引擎**（游戏无关的解析与转译）/
+ * **UI 面**（面板与菜单贡献）。改一个面板不必让 340 kB 的引擎块重新哈希，反之亦然。
+ * 分族口径与 `bootstrap.ts` 里的注释分组逐条对齐。
+ *
+ * 三条硬约束（违反任何一条这批就白做）：
+ * 1. **只碰懒边**：由下面的 `isEager` 先分流，开机图上的模块走原路，族表不参与；
+ * 2. **不跨装载拍**：`eratw-adapter` 的 `tutorial-*` 是"用户点开教程浮层"才 `import()` 的
+ *    另一拍（122 kB 文案），**不在本表里**，仍是自己的块——否则开项目就白背一份教程正文；
+ * 3. **不碰 CSS / worker / asset-url**：样式有既定的到达顺序（`styles-project.css` →
+ *    `market.css`，见 `App.tsx`），worker 与 `?url` 模块各有自己的装配方式。
+ */
+const LAZY_PLUGIN_FAMILIES: ReadonlyArray<{ readonly name: string; readonly test: RegExp }> = [
+  // 五个项目级适配器（eraTW 是常驻的，不在此列）：`adapter-manifest` 的清单逐条 load()
+  {
+    name: 'lazy-plugin-adapter',
+    test: /\/packages\/plugins\/(?:eraakumamaid|erafl|erakoumakan|erasqc|eratohok)-adapter\//,
+  },
+  // 游戏无关的引擎侧（含 kojo-sugar 的 parser/lexer 共享块 `service-*`，它只被懒消费者 import）
+  {
+    name: 'lazy-plugin-engine',
+    test:
+      /\/packages\/plugins\/(?:condition-extractor|convention-linter|kojo-lang|kojo-market|kojo-sugar|sav-parser|state-replay)\//,
+  },
+  // 面板 / 菜单 / 状态栏这些呈现面
+  { name: 'lazy-plugin-ui', test: /\/packages\/plugins\/ui-[^/]+\// },
+];
+
+/**
+ * 懒边上的**碎叶子**（2026-10-25 件数批）：一枚模块一枚产物、单块 0.06–1.6 kB、合计 **9.6 kB**
+ * 却占了 12 个文件名 / 12 个请求。
+ *
+ * 为什么可以并：它们全是"偏好 / 小工具"级的共享叶子（`theme-pref` / `code-font` / `modal-stack`
+ * 被多个浮层共享，`language-mode-pref` / `tree-sitter-pref` / `semantic-color-pref` 被设置面与
+ * 编辑器两侧共享，`kojo-lang` 的三枚是语言面叶子）。Rollup 把"被 ≥2 个动态入口共享的模块"
+ * 各切一块，于是产物里出现一串 0.1 kB 的文件——**这不是懒加载粒度，这是切块税**。
+ * 并成一枚 `lazy-pin` 之后，任何一枚的加载方多背的字节 = 这张表的总额（9.6 kB，实测产物
+ * 11.8 kB，差额是 `editor-options` 这类只被 pin 成员用到的邻居被顺带并了进来）。
+ *
+ * 白名单而不是"小于 N kB 就并"：`manualChunks` 拿到的是模块 id，看不到渲染后体积，想按体积
+ * 判就得先构建一遍。这张表是**量出来**的（`generateBundle` 逐块报表），加减条目都要重量。
+ *
+ * ⚠ **monaco 侧那七枚碎叶子（`word-separators` / `positions` / `tree-sitter/types` /
+ * `tree-sitter/indent` / `kojo-folding` / `kojo-code-action` / `kojo-completion-position`，
+ * 合计 4.5 kB）试过、**退回来了**：把它们也放进本表之后，`lazy-pin` 块会被入口块**静态**引用
+ * （首屏 6 块 → 8 块、1,051.7 → 1,466.6 kB，`lazy-plugin-engine` 也被一起拽上来）。
+ * 逐块报表显示被卷进来的是"整条 `languages` 块 + 整条 `theme` 块 + 入口块里的
+ * `kojo2-cutover` / `kojo2-migrate-model`"，而 `isEager` 对这几枚叶子自始至终判"懒"
+ * （用 `KOJO_TRACE_EAGER` 逐模块打过），所以这不是判定器的漏点，是 **Rollup 的合并策略**在
+ * 手工 chunk 变多时的连带效应——机制没查清之前不硬上。留 7 枚共 4.5 kB 的碎块，比首屏多背
+ * 415 kB 划算得多。
+ */
+const LAZY_PIN_SUFFIXES: readonly string[] = [
+  '/packages/app/src/ui/code-font.ts',
+  '/packages/app/src/ui/contact.ts',
+  '/packages/app/src/ui/index-state-copy.ts',
+  '/packages/app/src/ui/language-mode-pref.ts',
+  '/packages/app/src/ui/modal-stack.ts',
+  '/packages/app/src/ui/reference-tally-store.ts',
+  '/packages/app/src/ui/semantic-color-pref.ts',
+  '/packages/app/src/ui/theme-pref.ts',
+  '/packages/app/src/ui/tree-sitter-pref.ts',
+  '/packages/kojo-lang/src/adapter-source.ts',
+  '/packages/kojo-lang/src/definition.ts',
+  '/packages/kojo-lang/src/expand-compile.ts',
+];
+
 function createManualChunks(): (id: string, api: ChunkGraphApi) => string | undefined {
   let isEager: ((id: string) => boolean) | null = null;
   return (id, api) => {
     isEager ??= createEagerProbe(api);
-    if (!isEager(id)) return undefined; // 懒边上的模块一律不碰（见上面 ⚠ 那段实测）
-
     const p = id.replaceAll('\\', '/');
+    if (!isEager(id)) {
+      // 懒边：只有**同族合并**，没有跨拍搬运（见上面两张表的头注）。
+      if (p.endsWith('.css') || p.includes('?worker') || p.includes('?url')) return undefined;
+      // `@tauri-apps/api` 的四枚（core / dpi / event / window）是同一拍：`window.js` 自己
+      // **静态**引另外三枚，所以任何一次 window / event 调用都会把四枚一起取回来
+      // （实测：四块合计 17.7 kB，合并后打开窗口标题这条路少三个请求）。
+      if (p.includes('/node_modules/@tauri-apps/api/')) return 'lazy-vendor-tauri';
+      for (const family of LAZY_PLUGIN_FAMILIES) if (family.test.test(p)) return family.name;
+      if (LAZY_PIN_SUFFIXES.some((suffix) => p.endsWith(suffix))) return 'lazy-pin';
+      return undefined;
+    }
+
     if (p.includes('/node_modules/')) {
       // pnpm 的真实落点一定含 `/node_modules/<pkg>/`（`.pnpm/<pkg>@<ver>/node_modules/<pkg>/`），
       // 尾部那个 `/` 保证 `react` 不会吃掉 `react-dom`、更不会误伤 `react-*` 系第三方包。
@@ -149,11 +236,11 @@ function createManualChunks(): (id: string, api: ChunkGraphApi) => string | unde
     }
     // 工作区包：`packages/<dir>/…`。`app` 是宿主自己 ⇒ 不进 vendor（它才是入口块的正主）。
     // 插件路径比别的工作区包多一层目录（`packages/plugins/<name>/…`），得单独认。
-    // 为什么插件一枚一块而不是并成一坨（试过：并完 1,261 kB，踩了本批 800 kB 的桶上限）：
-    // 插件本来就由 `bootstrap.ts` 的 24 条动态 `import()` 各成一块，并成一坨省的是几十个
-    // 请求、丢的是"改哪个插件只失效哪块"。开机图里只有三个插件（erb-parser /
-    // eratw-adapter / condition-extractor，见 ps10-eager-graph 的成员断言），其余 21 个
-    // 因为 `isEager` 为假，产物形态与拆分前一字不差。
+    // **开机图里的**插件仍是一枚一块：这里的三个常驻项（erb-parser / eratw-adapter /
+    // condition-extractor，见 ps10-eager-graph 的成员断言）都是项目态到来之前就要用的，
+    // 各自失效面清楚。（曾经写成"插件一枚一块"当通则，2026-10-25 件数批改了口径：
+    // **懒边上的**插件按族合并，理由与量测见上方 `LAZY_PLUGIN_FAMILIES` 头注。
+    // 早先那版"并成一坨 1,261 kB"的教训针对的是**把懒边一起并进开机块**，与本批无关。）
     const plugin = /\/packages\/plugins\/([^/]+)\//.exec(p);
     if (plugin) return `plugin-${plugin[1]}`;
     const pkg = /\/packages\/([^/]+)\//.exec(p);
