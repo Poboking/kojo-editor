@@ -84,9 +84,7 @@ const stub = vi.hoisted(() => {
     if (!method.startsWith('register')) return { dispose: () => undefined };
     if (path === state.failRegisterOn) throw new Error(`桩：注册 '${path}' 抛错`);
     const rec: Rec = { path, disposed: false, failOnDispose: false };
-    // 只记真注册（`register*` 家族的返回值才是 disposable）：装配期也会读 `monaco.editor.getModels()`，
-    // 那次调用的返回值不是可拆账，记进来会让"total - 1 全拆"的判据凭空少一枚。
-    if (path.includes('register')) state.created.push(rec);
+    state.created.push(rec);
     return {
       dispose: () => {
         if (rec.failOnDispose) throw new Error(`桩：dispose '${path}' 抛错`);
