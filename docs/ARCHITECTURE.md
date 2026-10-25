@@ -180,13 +180,14 @@ interface GameAdapter {
   // ---- ① 身份与发现（必填）：内核只认这四项 ----
   readonly gameId: string;                 // 'eratw'
   readonly displayName: string;            // 'eraTW'
-  detect(rootDir: string): Promise<boolean>;
+  detect(rootDir: string): Promise<AdapterDetectResult>;  // boolean | { matched, evidence }
   loadProject(rootDir: string): Promise<GameProject>;
 
   // ---- ② 引擎结构知识（可选；缺省 = 本游戏没有该能力） ----
   readonly functionFamilyIndex?: FamilyIndexRule;   // 函数家族识别（M_KOJO_K{n}_XXX → 角色 n、家族 XXX）
   readonly variableSchema?: VariableSchema;         // 变量字典（CFLAG 位图、TCVAR:50 位表、好感 CFLAG:2 等）
   readonly conventions?: readonly ConventionRule[]; // 可校验的剧本约定（门禁矩阵、KOJO_VERSION 热更新等）
+  readonly conventionPolicy?: ConventionPolicy;     // 内置通用规则的收敛策略（如「逐角色各写一份」）
 
   // ---- ③ 口上 DSL 知识（可选；糖层 / 补全 / 悬停消费） ----
   readonly kojoCallProtocol?: KojoCallProtocol;     // 路由层转发实参的槽位语义表
@@ -201,6 +202,24 @@ interface GameAdapter {
   readonly nameGlossary?: Readonly<Record<string, string>>; // 日文名 → 中文名（只影响显示）
 }
 ```
+
+**多游戏适配的三条落地面（2026-10-25 eraSQC 复盘批）**：
+
+1. **识别不再靠「谁排前面谁赢」**。`detect` 可返回证据（`{ matched, evidence }`），
+   内核轮询**全部**候选后再裁决：零命中 → `ProjectDetectionError`；多命中 →
+   `AdapterConflictError`（列出双方 displayName 与证据，**在 `loadProject` 之前**就停下，
+   不产生副作用）。另加一条断言：适配器返回的 `project.adapterId` 必须等于
+   `gameId`，否则直接失败（否则下游按 id 查领域面板会静默错位）。
+2. **注册只有一处名单**。`packages/app/src/adapter-manifest.ts` 登记每枚适配器的
+   id / 目录 / 包名 / 工厂名 / 装载时机 / 审计词表；组合根按清单装载，审计脚本从
+   清单派生游戏名词，适配器豁免名单由磁盘上的 `*-adapter` 目录派生。
+   散点（路径别名、app 包依赖、导出名）由 `packages/app/tests/adapter-manifest.test.ts`
+   双向自证——接新游戏只改「清单 + 适配器包」。
+3. **占位符语义由适配器声明**。`KojoFaceTable.slotSemantics`（表级默认 + 逐面覆盖）
+   说明 `{i}` 到底是「指令编号」还是「`CFLAG:209` 口上模式」；只影响补全 / 悬停的
+   展示文案，不改拼接行为（拼接口径仍由 `indexKind` 决定）。
+   通用规则的噪声由 `conventionPolicy` 收敛：命中项不逐条报，而是**汇总成一条 info**
+   （说清按谁的理由略过了几处），并进 lint 快照的全局判据（换策略即换缓存）。
 
 **契约面的两条设计判据**：
 
@@ -310,8 +329,9 @@ interface SavInjector {
 
 ```
 用户选目录（app 级通用 UI）
-→ 内核对全部已注册的 game.adapter 候选轮询 detect(dir)
-→ 命中的适配器执行 loadProject(dir)（黑盒，内核不感知内部步骤）
+→ 内核对全部已注册的 game.adapter 候选轮询 detect(dir)（可带证据）
+→ 零命中 → ProjectDetectionError；多命中 → AdapterConflictError（点名双方 + 证据，**不取舍**）
+→ 唯一命中的适配器执行 loadProject(dir)（黑盒，内核不感知内部步骤）
 → 内核持有不透明载荷 GameProject，发出 project.opened 事件
 → 各插件各自响应，内核编排到此为止
 ```
