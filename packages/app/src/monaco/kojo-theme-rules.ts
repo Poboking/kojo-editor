@@ -33,8 +33,8 @@ import type * as Monaco from './entry';
  * 下沉到本零 import 叶子，`kojo2-language.ts` 与 `kojo2-theme.ts` 各自 `export ... from`
  * 同一对象本体。
  *
- * **flag 关时 `theme.ts` 不并入它们**（逐字不变量见 `theme.ts::defineMonacoThemes`）：
- * 数据住在叶子 ≠ 数据生效，判据仍在装配点。
+ * **`theme.ts` 无条件并入它们**（K2-SURFACE-DEFAULT，见 `theme.ts::defineMonacoThemes`）：
+ * `.kojo2` 的语言面永远可见，配色不该等切流；数据住在叶子只是断链，不影响生效时机。
  */
 
 /**
@@ -156,8 +156,9 @@ export type Kojo2TokenName = (typeof KOJO2_TOKEN)[keyof typeof KOJO2_TOKEN];
  *   `89b4fa↔61afef` 9.9、`ff79c6↔ff7ab2` 11.0、`bd93f9↔9d7bea` 11.3、`66d9c8↔5cc9a8` 10.7、
  *   `9aa0a6↔abb2bf` 7.8）。
  *
- * **合并点**：`theme.ts` 在 flag 开时把本数组追加进 `kojo-dark` 的 `rules`（v1 规则一格不动，
- * 只在尾部追加；flag 关时不追加）。
+ * **合并点**：`theme.ts` 把本数组追加进 `kojo-dark` 的 `rules`（v1 规则一格不动，只在尾部
+ * 追加）；K2-SURFACE-DEFAULT 起**无条件追加**（2.0 语言面恒可见，开关只管写回 / 迁移 /
+ * `.kojo` 解析器）。`kojo-mint-dark` 并的是 `KOJO2_MINT_THEME_RULES`（墨绿自己的盘）。
  */
 export const KOJO2_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = [
   { token: KOJO2_TOKEN.anchor, foreground: 'ff41b9', fontStyle: 'bold' },

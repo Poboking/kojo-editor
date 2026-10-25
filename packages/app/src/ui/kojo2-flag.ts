@@ -17,7 +17,8 @@
  * 真源是 `ui/kojo2-cutover.ts` 的三态阶段（`v1-only → dual → 2.0-default`）：
  * **`stage !== 'v1-only'` 即切流语义开启**（语言面始终可见，见上）。本模块不再自己存一份布尔，只做三件事：
  * ① 把阶段解析出来（{@link resolveKojo2CutoverStage}）；② 给既有 flag 守卫一个稳定的
- * `isKojo2CutoverEnabled()`；③ 变更订阅（设置页改档 ⇒ 语言重挂 / 派生清单即时反映）。
+ * `isKojo2CutoverEnabled()`；③ 变更订阅（设置页改档 ⇒ `.kojo` 的解析器重判 / 存储与迁移入口
+ * 即时反映；`.kojo2` 的语言面不随它增减）。
  *
  * 解析顺序（**写死**，`kojo2-cutover-stage.test.ts` 逐条钉住）：
  *
@@ -42,10 +43,23 @@
  *
  * ## 生效时机：装配那一刻
  *
- * 主题 / 诊断接线等仍在**模块求值**时读一次本开关；已打开的标签另有一条热路：
- * `kojo2-cutover` 的订阅会 `refreshAll()` 重挂 model 语言。
- * **语言面不在这一档**（K2-SURFACE-DEFAULT）：`monaco/languages.ts` 的 `kojo2` descriptor
- * 无条件登记，改开关既不需要重载窗口、也不会把 `.kojo2` 的能力收回去。
+ * 存储服务装配 / 迁移入口 / `.kojo` 的解析器路由在**装配那一刻**读一次本开关；已打开的标签
+ * 另有一条热路：`kojo2-cutover` 的订阅会 `refreshAll()` 重判 model 语言（只影响 `.kojo`）。
+ * **语言面与主题不在这一档**（K2-SURFACE-DEFAULT）：`monaco/languages.ts` 的 `kojo2`
+ * descriptor 无条件登记，v1 三套主题的 rules 也无条件并入 2.0 配色，语言服务 / 诊断 / 缩进 /
+ * 格式化在 `ui/editor-global-providers.ts` 里无条件装配——改开关既不需要重载窗口、也不会把
+ * `.kojo2` 的能力收回去。
+ *
+ * ## 今天还读本开关的地方（每一处都有副作用）
+ *
+ * - `ui/kojo2-storage-service.ts` / `ui/App.tsx`：2.0 存储服务与它的命令族；
+ * - `ui/kojo2-migrate-entry.ts`：迁移入口；
+ * - `monaco/kojo2-code-actions.ts` 的宿主装配行：一键迁移 code action（改缓冲的迁移动作）；
+ * - `.kojo` 的解析器切换（`ui/kojo2-open*.ts` / `ui/kojo2-cutover.ts` 的 content 指纹那两档）
+ *   与按扩展名收文件的清单（拖放 / 快速打开）。
+ *
+ * 其余任何"只读呈现"（着色 / 补全 / 悬停 / 引用 / 改名 / 签名 / 行上注解 / 高亮 / 扩选 /
+ * 折叠 / 大纲 / 诊断 / 缩进 / 格式化）**都不许**在这里再长出一枚守卫。
  *
  * ## 作者面文案
  *
@@ -134,8 +148,8 @@ export function resolveKojo2CutoverStage(): Kojo2CutoverStage {
  * 开关读数 = **阶段是否允许 2.0 的切流语义**（`v1-only` = 关，其余两档 = 开）。
  *
  * 语义与改动前逐字兼容（布尔、缺省关、坏值不翻成开），只是判据换成阶段 ⇒ 设置页把档位
- * 切到 `dual` 后，所有既有 flag 守卫（主题 / 诊断 / 预览 / 写回 / 迁移 / 拖放 / 快速打开）
- * **零改动**地跟着放行。
+ * 切到 `dual` 后，所有既有 flag 守卫（写回 / 迁移 / `.kojo` 解析器 / 存储服务 / 拖放 /
+ * 快速打开）**零改动**地跟着放行。
  *
  * **语言面不读这里**（K2-SURFACE-DEFAULT）：`.kojo2` 的 descriptor 无条件登记，本读数
  * 只决定"要不要写回 / 迁移 / 切解析器"。

@@ -126,7 +126,6 @@ import {
 import { kojo2DefinitionAt, type Kojo2DefinitionTarget } from './kojo2-definition';
 import { insideInterpolation, insideStringOrComment } from './kojo-completion-position';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 公共形状 ============================== */
 
@@ -340,7 +339,7 @@ interface WalkState {
 const IDENT_START = /[\p{L}_]/u;
 const IDENT_PART = /[\p{L}\p{N}_]/u;
 
-/** flag 关 / 无注册位时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
+/** 无注册位时交回的句柄（Monaco 0.57 没有该 API；调用方照常 `dispose()`，什么也不会发生） */
 const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /* ============================== 小工具 ============================== */
@@ -1566,7 +1565,7 @@ function callHierarchyRegistrarOf(monaco: typeof Monaco): CallHierarchyRegistrar
 /**
  * 为 `kojo2` 语言注册调用层级 provider，返回**幂等** disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**；本函数自身再挡一次，调用点在 CUTOVER 收口）；
+ * - **不读切流开关**（K2-SURFACE-DEFAULT）：调用层级是只读呈现面；
  * - Monaco 0.57 没有 `registerCallHierarchyProvider`（PITFALLS §83）⇒ **零注册**并交回
  *   幂等句柄：宿主用 {@link createKojo2CallHierarchyProvider} 走自建面板，两者同一份实现；
  * - 只挂 `KOJO2_LANGUAGE_ID`（v1 `.kojo` / `.erb` 各挂各的，不重不漏）；
@@ -1576,7 +1575,6 @@ export function installKojo2CallHierarchyProvider(
   monaco: typeof Monaco,
   resolvers?: Kojo2CallHierarchyResolvers | null,
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
   const registrar = callHierarchyRegistrarOf(monaco);
   if (registrar === null) return NOOP_DISPOSABLE;
 

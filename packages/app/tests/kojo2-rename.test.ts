@@ -600,18 +600,18 @@ function providerOf(fake: FakeMonaco): Monaco.languages.RenameProvider {
 const AT = (line: number, column: number): Monaco.Position =>
   ({ lineNumber: line, column }) as Monaco.Position;
 
-describe('安装器：flag 关零注册；flag 开只挂 kojo2 一枚；dispose 幂等', () => {
-  it('flag 关 ⇒ 注册函数一次都没被调用（零注册），句柄可重复 dispose', () => {
+describe('安装器：不读开关（语言面），只挂 kojo2 一枚；dispose 幂等', () => {
+  it('缺省档（v1-only）⇒ 照样注册一枚，句柄可重复 dispose（只撤一次）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2RenameProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
     expect(fake.disposeCalls()).toBe(0);
     expect(() => {
       handle.dispose();
       handle.dispose();
     }).not.toThrow();
-    expect(fake.disposeCalls()).toBe(0);
+    expect(fake.disposeCalls()).toBe(1);
   });
 
   it('flag 开 ⇒ 恰好一枚 rename provider，selector 逐字等于 `kojo2`（v1 面零注册）', () => {

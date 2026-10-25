@@ -482,16 +482,17 @@ describe('provider 与安装：flag 闸、0.57 无注册位、只挂 kojo2、异
     expect(typeof provider.provideCallHierarchyOutgoingCalls).toBe('function');
   });
 
-  it('flag 关 ⇒ 一注册都没发生，句柄可重复 dispose', () => {
+  it('缺省档（v1-only）⇒ 照样注册一枚（只读呈现面，不再读开关）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2CallHierarchyProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
     expect(() => {
       handle.dispose();
       handle.dispose();
     }).not.toThrow();
-    expect(fake.disposeCalls).toEqual([]);
+    // 注册是真发生的 ⇒ 两次 dispose 只撤一次（幂等）
+    expect(fake.disposeCalls).toHaveLength(1);
   });
 
   it('flag 开 + 注册位存在 ⇒ 恰好一枚注册，selector 只有 kojo2', () => {
@@ -626,8 +627,8 @@ describe('源码卫生：Monaco 只 type-only、不碰插件包、安装器自�
     expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
   });
 
-  it('安装器自带 flag 闸，并结构性探测 CallHierarchy 注册位（0.57 没有它）', () => {
-    expect(source).toMatch(/if \(!isKojo2CutoverEnabled\(\)\) return NOOP_DISPOSABLE;/);
+  it('安装器不读切流开关（语言面），并结构性探测 CallHierarchy 注册位（0.57 没有它）', () => {
+    expect(source).not.toMatch(/isKojo2CutoverEnabled/);
     expect(source).toMatch(/registerCallHierarchyProvider\(\s*KOJO2_LANGUAGE_ID/);
     expect(source).toMatch(/typeof register !== 'function'/);
   });

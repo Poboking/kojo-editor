@@ -6,8 +6,8 @@
  *    （盘上计划 → 旧布尔键 → 控制器 → `v1-only`）；
  * ② 旧键兼容：`'on'` ⇒ 视作 `dual`（迁移规则）；`setKojo2CutoverEnabled` 仍写/删旧键，
  *    宿主开机 `attachStorage` 把 `'on'` 就地迁移成计划（一次）；
- * ③ 阶段联动：改档 ⇒ `refreshAll()` 恰一次、`.kojo2` 打开闸按新阶段放行 / 拦下、诊断
- *    入口即时重判；
+ * ③ 阶段联动：改档 ⇒ `refreshAll()` 恰一次、`.kojo` 显式钉 2.0 的 override 在 v1-only 仍被拦
+ *    （`.kojo2` 各档照开——K2-SURFACE-DEFAULT：扩展名即声明，语言面不看阶段）、诊断面恒开、
  * ④ 订阅：阶段变化经控制器桥通知 flag 订阅者（只通知真变化，取消即静默）；
  * ⑤ 设置页：三态单选 / 每档人话 / override 清单（可撤）/ 恢复出厂 / 需重载提示。
  *
@@ -286,13 +286,18 @@ describe('② 旧键兼容：写死的迁移规则 + 开机迁移一次', () => 
 /* ============================== ③ 阶段联动 ============================== */
 
 describe('③ 阶段联动：改档即重挂 / 打开闸 / 诊断入口按新阶段重判', () => {
-  it('旧 bug 面：旧键 `on` 单靠 flag 不能替阶段放行（闸看阶段），迁移到 dual 后立即放行', () => {
+  it('阶段闸只剩切流语义：`.kojo2` 各档照开，老 `.kojo` 钉 2.0 的 override 在 v1-only 仍被拦', () => {
     stubWindow(new MemoryStorage().seedLegacy('on'));
     expect(isKojo2CutoverEnabled()).toBe(true);
-    expect(kojo2StageBlockedReason(KOJO2_FILE)).toContain('v1-only');
+    // K2-SURFACE-DEFAULT：扩展名即声明，阶段不再拦 `.kojo2`
+    expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toBeNull();
+
+    const v1File = 'D:/proj/chara/M_KOJO_K12_指令.kojo';
+    getKojo2CutoverController().setOverride(v1File, 'kojo2');
+    expect(kojo2StageBlockedReason(v1File, { enabled: true })).toContain('v1-only');
 
     commitKojo2CutoverStage('dual');
-    expect(kojo2StageBlockedReason(KOJO2_FILE)).toBeNull();
+    expect(kojo2StageBlockedReason(v1File, { enabled: true })).toBeNull();
   });
 
   it('交接缺口回归：batch-4 基线计划( v1-only ) + 旧键 on ⇒ 开机迁移后 `.kojo2` 直接打得开', () => {
@@ -333,23 +338,24 @@ describe('③ 阶段联动：改档即重挂 / 打开闸 / 诊断入口按新阶
     expect(commitKojo2CutoverStage('v1-only', { effects }).stage).toBe('v1-only');
     expect(controller.canRollback()).toBe(false);
     expect(refreshAll).toHaveBeenCalledTimes(3);
-    // 退回 v1-only：`.kojo2` 又被拦下，提示逐字取 cutover 那一句（显式 enabled 绕开
-    // "开关关 = 闸恒 null" 的既有短路，专测阶段那一格）
-    expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toContain('v1-only');
+    // 退回 v1-only：切流开关关了，但 `.kojo2` 不是"切流"，照旧打得开（语言面无条件）
+    expect(isKojo2CutoverEnabled()).toBe(false);
+    expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toBeNull();
   });
 
-  it('诊断入口即时重判：v1-only 关、dual 开（`kojo2OwnsDiagnostics` 同一枚开关）', () => {
+  it('诊断面恒开（语言面）；归属仍逐文件按路由：`.kojo2` 归 2.0、`.kojo` 归 v1', () => {
     stubWindow();
-    expect(kojo2DiagnosticsEnabled()).toBe(false);
-    expect(kojo2OwnsDiagnostics(KOJO2_FILE)).toBe(false);
-
-    commitKojo2CutoverStage('dual');
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_FILE)).toBe(true);
     expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo')).toBe(false);
 
+    // 阶段改来改去不改变"诊断面开"这件事（开关只管写回 / 迁移 / `.kojo` 解析器）
+    commitKojo2CutoverStage('dual');
+    expect(kojo2DiagnosticsEnabled()).toBe(true);
     commitKojo2CutoverStage('v1-only');
-    expect(kojo2DiagnosticsEnabled()).toBe(false);
+    expect(kojo2DiagnosticsEnabled()).toBe(true);
+    expect(kojo2OwnsDiagnostics(KOJO2_FILE)).toBe(true);
+    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo')).toBe(false);
   });
 
   it('显式注入的控制器/效果也能走同一条路（设置页测试用独立实例，不碰单例）', () => {

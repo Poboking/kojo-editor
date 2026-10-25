@@ -12,7 +12,7 @@
  *   零 IO、零 Monaco、零注册、零缓存（同输入必同输出）；
  * - {@link kojo2HighlightKindToMonaco} 是唯一把 `'text' | 'read' | 'write'` 翻成
  *   `DocumentHighlightKind` 的地方；
- * - {@link installKojo2HighlightProvider} 只挂 `kojo2` 语言 id；**flag 关 = 零注册**；
+ * - {@link installKojo2HighlightProvider} 只挂 `kojo2` 语言 id；**无条件注册**（只读呈现面）；
  *   provider 内任何异常（坏文件 / 取文抛错 / 模型已释放）一律回 `[]`——Monaco 把 provider
  *   的 throw 吞成"高亮突然没了"，作者看不到任何原因。
  *
@@ -63,7 +63,6 @@ import {
   type Kojo2SymbolPosition,
   type Kojo2SymbolRange,
 } from '@kojo/kojo-lang';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */
 
@@ -101,9 +100,6 @@ interface OffsetSpan {
   readonly start: number;
   readonly end: number;
 }
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /** 档位排序（同一行同一起点只可能是同一处；此序只为确定性） */
 const KIND_ORDER: Readonly<Record<Kojo2HighlightKind, number>> = Object.freeze({
@@ -534,14 +530,13 @@ export function kojo2HighlightKindToMonaco(
 /**
  * 为 `kojo2` 语言注册文档高亮 provider，返回**幂等**的 disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**；调用点在 `ui/editor-global-providers.ts` 的 2.0 段，
- *   本函数是导出的，所以自身也再挡一次）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT）：同符号高亮是只读呈现面，切流阶段 `v1-only`
+ *   下也照常可见（开关只管写回 / 迁移 / 解析器切换）；
  * - 只挂 `KOJO2_LANGUAGE_ID`：v1 ERB / `.kojo` 面各由自己的 provider 挂，两边不重叠；
  * - provider 内任何异常回 `[]`；
  * - 注册失败原样外抛（只有一枚注册，没有半成品要回滚；宿主那侧的全有或全无才有东西可撤）。
  */
 export function installKojo2HighlightProvider(monaco: typeof Monaco): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   const provider: Monaco.languages.DocumentHighlightProvider = {
     provideDocumentHighlights(model, position) {

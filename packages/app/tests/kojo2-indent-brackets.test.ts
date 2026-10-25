@@ -521,13 +521,14 @@ describe('④ 围栏内自动闭合守卫：只删 Monaco 自动补出来的闭�
     expect(fake.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it('flag 关 ⇒ 零注册（围栏守卫与回车缩进同一枚 provider，一起不挂）', () => {
+  it('flag 关 ⇒ 照挂（缩进是语言面，不看切流阶段）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2IndentProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['onType', KOJO2_LANGUAGE_ID]]);
     handle.dispose();
-    expect(fake.registrations).toEqual([]);
+    handle.dispose();
+    expect(fake.dispose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -639,15 +640,15 @@ describe('⑤ formatRange：规则复用整篇、落点只在选中行', () => {
 
 /* ============================== ⑥ 区间格式化 provider 注册纪律 ============================== */
 
-describe('⑥ installKojo2RangeFormatter：flag 关零注册 / 只认 kojo2 / dispose 幂等', () => {
-  it('flag 关 ⇒ 零注册（dispose 无副作用）', () => {
+describe('⑥ installKojo2RangeFormatter：恒挂 / 只认 kojo2 / dispose 幂等', () => {
+  it('flag 关 ⇒ 照挂（区间格式化是语言面，不看切流阶段）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2RangeFormatter(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['range', KOJO2_LANGUAGE_ID]]);
     handle.dispose();
     handle.dispose();
-    expect(fake.registrations).toEqual([]);
+    expect(fake.dispose).toHaveBeenCalledTimes(1);
   });
 
   it('flag 开 ⇒ 只为 kojo2 注册一枚 range provider；dispose 只撤一次', () => {

@@ -426,20 +426,21 @@ describe('高亮：确定性、CRLF、档位映射', () => {
 
 /* ============================== ④ 高亮 provider ============================== */
 
-describe('高亮 provider：只挂 kojo2、flag 关零注册、dispose 幂等、异常回空', () => {
-  it('flag 关 ⇒ 一次注册都没发生，句柄可重复 dispose', () => {
+describe('高亮 provider：只挂 kojo2、不读开关、dispose 幂等、异常回空', () => {
+  it('缺省档（v1-only）⇒ 两枚各注册一枚，句柄可重复 dispose', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const highlight = installKojo2HighlightProvider(fake.monaco);
     const selection = installKojo2SelectionRangeProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(2);
     expect(() => {
       highlight.dispose();
       highlight.dispose();
       selection.dispose();
       selection.dispose();
     }).not.toThrow();
-    expect(fake.disposeCalls).toEqual([]);
+    // 两枚真注册 ⇒ 各撤一次（重复 dispose 不再加账）
+    expect(fake.disposeCalls).toHaveLength(2);
   });
 
   it('flag 开 ⇒ 一枚注册，selector 只有 kojo2', () => {
@@ -762,9 +763,9 @@ describe('源码卫生：Monaco 只 type-only、不碰插件包、flag 自身再
     }
   });
 
-  it('安装器自带 flag 闸，且只挂 KOJO2_LANGUAGE_ID', () => {
-    expect(highlightSource).toMatch(/if \(!isKojo2CutoverEnabled\(\)\) return NOOP_DISPOSABLE;/);
-    expect(selectionSource).toMatch(/if \(!isKojo2CutoverEnabled\(\)\) return NOOP_DISPOSABLE;/);
+  it('安装器不读切流开关，且只挂 KOJO2_LANGUAGE_ID', () => {
+    expect(highlightSource).not.toMatch(/isKojo2CutoverEnabled/);
+    expect(selectionSource).not.toMatch(/isKojo2CutoverEnabled/);
     expect(highlightSource).toMatch(
       /registerDocumentHighlightProvider\(\s*KOJO2_LANGUAGE_ID/,
     );

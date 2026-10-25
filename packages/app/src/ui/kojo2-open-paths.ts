@@ -6,9 +6,9 @@
  * 真正的路由判据（当前项目内直接开 / 先开项目再排队 / 新建 / 被拒的人话）已经住在
  * `ui/kojo2-open.ts`（batch-3）。本模块只补两件它按下不表的：
  *
- * 1. **阶段闸**：`kojo2-cutover` 的三态阶段（`v1-only → dual → 2.0-default`）里，`v1-only`
- *    下 `.kojo2` 是**显式 blocked**（语言面还没挂，拿 v1 词法去啃 2.0 文本等于整篇错色）。
- *    这条判定与它的人话（`hint`）都只有 `kojo2-cutover` 一份，这里**取**、不另写；
+ * 1. **阶段闸**：`kojo2-cutover` 的三态阶段里，`v1-only` **不再拦 `.kojo2`**（K2-SURFACE-DEFAULT：
+ *    扩展名即声明、语言面无条件注册），只剩"把老 `.kojo` 显式钉成 2.0"的 override 在
+ *    `v1-only` 下被拦（切流语义）。判定与人话都只有 `kojo2-cutover` 一份，这里**取**、不另写；
  *    被拦下时走 `notify` 说一句人话——绝不开一张空编辑器（铁律 4：不静默）。
  * 2. **`UiPrefs.kojo2` 投影**：新建向导是**插件**（只许依赖 `@kojo/plugin-api`），
  *    它要产出"扩展名与模板语言一致"的文件，就需要宿主告诉它 2.0 面开没开、扩展名是哪个。
@@ -22,18 +22,9 @@
  * `routeKojo2Open` 的 `off`（一个 port 都不碰）⇒ 调用方照旧走改动前那一条路。
  */
 import { useMemo, useSyncExternalStore } from 'react';
-import {
-  decideKojo2Route,
-  getKojo2CutoverController,
-  type Kojo2CutoverStage,
-} from './kojo2-cutover';
+import { getKojo2CutoverController, type Kojo2CutoverStage } from './kojo2-cutover';
 import { isKojo2CutoverEnabled, subscribeKojo2Cutover } from './kojo2-flag';
-import {
-  isKojo2Path,
-  routeKojo2Open,
-  type Kojo2OpenContext,
-  type Kojo2OpenPlan,
-} from './kojo2-open';
+import { routeKojo2Open, type Kojo2OpenContext, type Kojo2OpenPlan } from './kojo2-open';
 import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 
 /**
@@ -69,10 +60,13 @@ export interface Kojo2OpenPathOptions {
 }
 
 /**
- * 阶段闸：该 `.kojo2` 现在**打不开**时返回人话，否则 `null`。
+ * 阶段闸：该文件**打不开**时返回人话，否则 `null`。
  *
- * 判据顺序：开关闸 → 是不是 2.0 文件 → `kojo2-cutover` 的 blocked 判定（人话直接取它）。
- * 只有 `v1-only` 阶段会真的返回一句话；`dual` / `2.0-default` 下 `.kojo2` 一律放行。
+ * K2-SURFACE-DEFAULT 之后 `.kojo2` **在任何阶段都打得开**（扩展名即声明，语言面无条件注册），
+ * 所以这里不再有"`v1-only` 拦 `.kojo2`"这一格。现在还剩下的唯一 hard block 是**切流语义**：
+ * 作者把某个老 `.kojo` 显式钉成 2.0（override），而阶段还在 `v1-only`——那条判定仍住在
+ * `decideKojo2Route`，这里经 `controller.routeAt()` 取（存好的 override 由控制器统一持有，
+ * 不另拼一份），人话直接用它的 `hint`。
  */
 export function kojo2StageBlockedReason(
   filePath: string,
@@ -80,9 +74,9 @@ export function kojo2StageBlockedReason(
 ): string | null {
   const enabled = opts?.enabled ?? isKojo2CutoverEnabled();
   if (!enabled) return null;
-  if (!isKojo2Path(filePath)) return null;
-  const stage = opts?.stage ?? getKojo2CutoverController().getStage();
-  const decision = decideKojo2Route({ stage, filePath });
+  const controller = getKojo2CutoverController();
+  const stage = opts?.stage ?? controller.getStage();
+  const decision = controller.routeAt(stage, { filePath });
   return decision.kind === 'blocked' ? decision.hint : null;
 }
 

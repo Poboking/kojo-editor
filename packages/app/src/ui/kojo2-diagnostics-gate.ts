@@ -35,9 +35,11 @@
  * `kojo2OwnsDiagnostics(path)` 也能读到同一份结论；没有结论时**不接管**（`needs-content`
  * 不是"2.0 的"，失败方向 = 不抢 v1 的活）。
  *
- * ## flag 关 / 阶段 v1-only
+ * ## 诊断是语言面（K2-SURFACE-DEFAULT）
  *
- * 恒 `false`：v1 行为逐字不变（不装监听、不让路、一个端口都不碰、一次存储之外的东西都不读）。
+ * 波浪线是**只读呈现**：`.kojo2` 一打开就归 2.0 管，阶段 `v1-only` 也一样（开关只管写回 /
+ * 迁移 / `.kojo` 的解析器切换）。真正的归属判据只有路由：`.kojo2` 恒为 2.0；`.kojo` 在
+ * `v1-only` / `dual` 下按 v1（v1 的装饰轮照旧发布，2.0 不让路）。
  */
 import {
   KOJO_V1_FILE_EXTENSION,
@@ -50,12 +52,18 @@ import {
   type Kojo2Parser,
   type Kojo2RouteDecision,
 } from './kojo2-cutover';
-import { isKojo2CutoverEnabled, resolveKojo2CutoverStage } from './kojo2-flag';
+import { resolveKojo2CutoverStage } from './kojo2-flag';
 import { isKojo2Path } from './kojo2-open';
 
-/** flag 开没开（与语言面 / 主题同一口径：阶段 `v1-only` = 关） */
+/**
+ * 2.0 诊断面开没开 —— **恒 true**（K2-SURFACE-DEFAULT：波浪线是语言面）。
+ *
+ * 保留这枚函数是为了不给"诊断接线"单独开一条装配分支：调用方照旧问它，答案不再由切流
+ * 阶段决定。归属仍逐文件判（{@link kojo2OwnsDiagnostics}）：`.kojo2` 恒归 2.0，`.kojo`
+ * 在 `v1-only` / `dual` 下按 v1。
+ */
 export function kojo2DiagnosticsEnabled(): boolean {
-  return isKojo2CutoverEnabled();
+  return true;
 }
 
 /**

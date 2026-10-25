@@ -791,17 +791,15 @@ describe('④ `@原生` 体内零规则（真 wasm + 真查询）', () => {
 /* ============================== ⑤ flag / dispose ============================== */
 
 describe('⑤ flag / dispose / 健壮性', () => {
-  it('flag 关 ⇒ install 交回 noop 句柄：零请求、零配置，dispose 无副作用', async () => {
+  it('flag 关 ⇒ 缩进照挂（语言面不读切流开关）：install 仍零请求，首次 request 才拉规则并写配置', async () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const { client, calls } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = installKojo2IndentConfigFromWorker(fake.monaco, { getClient: async () => client });
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
     expect(calls).toHaveLength(0);
     expect(fake.writes).toHaveLength(0);
+    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(true);
     handle.dispose();
-    handle.dispose();
-    expect(fake.disposedCount()).toBe(0);
   });
 
   it('flag 开 ⇒ 惰性：install 之后零请求，第一次 request 才拉规则并写配置', async () => {
@@ -1042,16 +1040,15 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
     handle.dispose();
   });
 
-  it('flag 关 ⇒ 语义与缩进一起不挂（零注册、零配置）', () => {
+  it('flag 关 ⇒ 语义照挂（语言面）：注册一枚 provider、零配置写入', () => {
     stubFlag(false);
     const fake = fakeSemanticMonaco();
     const handle = installKojo2SemanticTokensProvider(fake.monaco, {
       getClient: async () => ({ captures: async () => capturesReply() }),
       warn: () => undefined,
     });
-    expect(fake.registrations).toHaveLength(0);
+    expect(fake.registrations.length).toBeGreaterThan(0);
     expect(fake.writes).toHaveLength(0);
     handle.dispose();
-    expect(fake.disposedCount()).toBe(0);
   });
 });

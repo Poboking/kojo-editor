@@ -457,8 +457,9 @@ export function pathOfKojo2Model(model: Monaco.editor.ITextModel, fallback: stri
 /**
  * 装上 2.0 诊断接线，返回**幂等**的退场函数。
  *
- * flag 关 ⇒ 立即返回空操作（零监听、零定时器、零端口）。flag 是"装配那一刻"读的：
- * 与语言面 / 主题同一条口径（本批不提供运行时热切换，改开关后重载窗口才生效）。
+ * 诊断是**语言面**（K2-SURFACE-DEFAULT）：`.kojo2` 一打开就归 2.0 管，不看切流阶段。
+ * 保留 {@link kojo2DiagnosticsEnabled} 这一拍只是让装配处只有一个门（调用方零改动），
+ * 它现在恒 `true`；真正的归属逐文件判（`kojo2OwnsDiagnostics`）。
  */
 export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): () => void {
   if (!kojo2DiagnosticsEnabled()) return () => undefined;

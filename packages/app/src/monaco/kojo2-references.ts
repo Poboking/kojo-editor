@@ -36,7 +36,7 @@
  * ## 分层
  *
  * - {@link kojo2ReferencesAt}：纯逻辑，零 IO、零 Monaco、零注册；不可识别位置 → `null`；
- * - {@link installKojo2ReferenceProvider}：只挂 `kojo2` 语言 id，flag 关**零注册**，dispose 幂等，
+ * - {@link installKojo2ReferenceProvider}：只挂 `kojo2` 语言 id，无条件注册（只读语言面），dispose 幂等，
  *   provider 内任何异常回 `[]`（Monaco 把 throw 吞成"引用面板突然空了"，空数组才是它能读出
  *   的形状）；注册半途抛错原样外抛（只有一枚注册，没有半成品要回滚，宿主那侧的"全有或全无"
  *   才有机会收口）；
@@ -76,7 +76,6 @@ import {
 import { isNameChar } from './kojo-completion-position';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import type { Kojo2ProjectIndex, Kojo2ProjectSymbolRef } from './kojo2-project-index';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */
 
@@ -199,9 +198,6 @@ export interface Kojo2ReferenceProviderOptions extends Kojo2ReferenceOptions {}
 
 /** 单次结果的条数上限；超出部分按源码序截掉并置 `truncated` */
 export const KOJO2_REFERENCE_LIMIT = 500;
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /* ============================== 内部事实 ============================== */
 
@@ -1037,7 +1033,7 @@ function installKojo2Provider(
 /**
  * 为 `kojo2` 语言注册 ReferenceProvider（Shift+F12），返回**幂等**的 disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT：查找引用是只读语言面，不读切流开关）；
  * - 只挂 `KOJO2_LANGUAGE_ID`：v1 的 `.kojo` / `.erb` 面各由 `find-references.ts` 的
  *   `registerForLanguageServices` 挂，两边不重叠；
  * - `includeDeclaration === false`（Monaco 清点"不含声明"时）⇒ 只交 `ref` / `call`；
@@ -1048,7 +1044,6 @@ export function installKojo2ReferenceProvider(
   monaco: typeof Monaco,
   options: Kojo2ReferenceProviderOptions = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   return installKojo2Provider(monaco, {
     provideReferences(model, position, context) {
@@ -1332,7 +1327,7 @@ function uriForProjectPath(
 /**
  * 为 `kojo2` 语言注册**跨文件** ReferenceProvider（Shift+F12），返回**幂等** disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT：查找引用是只读语言面，不读切流开关）；
  * - 只挂 `KOJO2_LANGUAGE_ID`，与 {@link installKojo2ReferenceProvider} 二选一（同时装会得到
  *   两份结果，宿主按批次切换，不在这里替宿主去重）；
  * - 索引 getter 抛错 / 回 `null` ⇒ 只是没有跨文件这一半，本文件结果照旧交出；
@@ -1343,7 +1338,6 @@ export function installKojo2ProjectReferenceProvider(
   monaco: typeof Monaco,
   options: Kojo2ProjectReferenceProviderOptions = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   return installKojo2Provider(monaco, {
     provideReferences(model, position, context) {

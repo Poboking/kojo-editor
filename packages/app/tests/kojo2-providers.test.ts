@@ -342,20 +342,19 @@ function candidate(overrides: Partial<Kojo2CompletionCandidate>): Kojo2Completio
 
 /* ============================== ① 开关与注册 ============================== */
 
-describe('开关与注册：flag 关零注册，flag 开只挂 kojo2 两枚', () => {
-  it('flag 关 ⇒ 两枚注册函数一次都没被调用（零注册）', () => {
+describe('开关与注册：不读开关（语言面），只挂 kojo2 两枚', () => {
+  it('缺省档（v1-only）⇒ 照样注册两枚，dispose 逐枚撤', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2LanguageProviders(fake.monaco, {
       adapter: ERATW_GAME_ADAPTER,
     });
-    expect(fake.registrations).toEqual([]);
-    expect(fake.disposeCalls).toEqual([]);
+    expect(fake.registrations).toHaveLength(2);
     handle.dispose();
-    expect(fake.disposeCalls).toEqual([]);
+    expect(fake.disposeCalls).toHaveLength(2);
   });
 
-  it('flag 关的句柄是可重复 dispose 的空操作（不抛）', () => {
+  it('dispose 幂等：句柄可重复 dispose（不抛）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2LanguageProviders(fake.monaco);
@@ -801,13 +800,17 @@ describe('宿主注册点与解耦面（读源码断言）', () => {
   const read = (...segments: string[]): string =>
     readFileSync(resolve(REPO_ROOT, ...segments), 'utf8');
 
-  it('`editor-global-providers` 在 flag 守卫块里注册三枚 provider（与语义着色同一块）', () => {
+  it('`editor-global-providers` 在 flag 守卫块**之外**注册语义着色与两枚语言服务', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
     expect(source).toContain("from '../monaco/kojo2-providers'");
-    // 同一个 `if (isKojo2CutoverEnabled()) { … }` 块里既有语义着色、也有三枚语言服务
-    expect(source).toMatch(
-      /if \(isKojo2CutoverEnabled\(\)\) \{[\s\S]{0,1500}?installKojo2SemanticTokensProvider\(monaco\)[\s\S]{0,800}?installKojo2LanguageProviders\(/,
-    );
+    expect(source).toContain('installKojo2SemanticTokensProvider(monaco)');
+    expect(source).toContain('installKojo2LanguageProviders(');
+    // K2-SURFACE-DEFAULT：语言面无条件装配 ⇒ 两个安装器都不许落在切流块里
+    const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
+    const blockEnd = source.indexOf('\n    }', start);
+    const block = source.slice(start, blockEnd);
+    expect(block).not.toContain('installKojo2SemanticTokensProvider');
+    expect(block).not.toContain('installKojo2LanguageProviders');
   });
 
   it('adapter 由组合根按项目解析（`use-monaco-instance.ts` 传 getter，不写死某游戏）', () => {

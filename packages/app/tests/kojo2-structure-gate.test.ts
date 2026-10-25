@@ -1,11 +1,12 @@
 /**
- * K2-STRUCTURE-GATE（批次十一）：`.kojo2` 的**折叠**与**大纲**是只读呈现面，已从
- * `ui/kojo2-flag.ts` 的 cutover 开关里解耦——开关关（缺省 `v1-only`）时照样可用；
- * 写面（迁移 / 写回 / 缩进落字 / 格式化 / code action）仍受开关门控。
+ * K2-SURFACE-DEFAULT（本批，接续 K2-STRUCTURE-GATE 的批次十一）：`.kojo2` 的**语言面**
+ * （折叠 / 大纲 / 着色 / 补全 / 悬停 / 引用 / 改名 / 签名 / codelens / 高亮 / 扩选 / 诊断 /
+ * 缩进落字 / 格式化）全部从 cutover 开关解耦——开关关（缺省 `v1-only`）时照样可用；
+ * 只剩**有副作用**的迁移 code action（以及存储 / 迁移入口 / `.kojo` 解析器切换）仍受门控。
  *
  * 本文件逐层钉住现行形状：
- * 1. **宿主装配段**（`ui/editor-global-providers.ts`）：两枚只读安装器挂在
- *    `if (isKojo2CutoverEnabled())` 块**之外**，写面安装器仍在块内（源码判据见 ④）；
+ * 1. **宿主装配段**（`ui/editor-global-providers.ts`）：语言面安装器全挂在
+ *    `if (isKojo2CutoverEnabled())` 块**之外**，块内只剩迁移 code action（源码判据见 ④）；
  * 2. **安装器**（`monaco/kojo2-folding.ts` / 共享收口的大纲腿）：自身不再读开关；
  * 3. **解析链**（worker / core AST）：保持懒装载——注册不拉 worker，首次请求才动态 import。
  *
@@ -65,6 +66,35 @@ const SYMBOLS = 'monaco.languages.registerDocumentSymbolProvider';
 const CODE_ACTION = 'monaco.languages.registerCodeActionProvider';
 const ON_TYPE = 'monaco.languages.registerOnTypeFormattingEditProvider';
 const DOC_FORMAT = 'monaco.languages.registerDocumentFormattingEditProvider';
+const RANGE_FORMAT = 'monaco.languages.registerDocumentRangeFormattingEditProvider';
+const SEMANTIC = 'monaco.languages.registerDocumentSemanticTokensProvider';
+const COMPLETION = 'monaco.languages.registerCompletionItemProvider';
+const HOVER = 'monaco.languages.registerHoverProvider';
+const REFERENCE = 'monaco.languages.registerReferenceProvider';
+const RENAME = 'monaco.languages.registerRenameProvider';
+const SIGNATURE = 'monaco.languages.registerSignatureHelpProvider';
+const CODELENS = 'monaco.languages.registerCodeLensProvider';
+const HIGHLIGHT = 'monaco.languages.registerDocumentHighlightProvider';
+const SELECTION = 'monaco.languages.registerSelectionRangeProvider';
+const INLAY = 'monaco.languages.registerInlayHintsProvider';
+
+/** 语言面：默认档下必须各挂一枚（只认 `kojo2`）的注册 API */
+const SURFACE_APIS: readonly string[] = [
+  FOLDING,
+  SEMANTIC,
+  COMPLETION,
+  HOVER,
+  REFERENCE,
+  RENAME,
+  SIGNATURE,
+  CODELENS,
+  HIGHLIGHT,
+  SELECTION,
+  ON_TYPE,
+  DOC_FORMAT,
+  RANGE_FORMAT,
+  INLAY,
+];
 
 const TOKEN = {
   isCancellationRequested: false,
@@ -134,29 +164,37 @@ describe('② 开关开：两枚只读面照旧各注册一枚', () => {
   });
 });
 
-/* ==================== ③ 写面仍受开关门控 ==================== */
+/* ==================== ③ 写面只剩迁移 code action 受门控 ==================== */
 
-describe('③ 写面（缩进 / 格式化 / code action）仍受开关门控', () => {
-  it('开关关 ⇒ 三枚一枚都不挂', () => {
+describe('③ 默认档：语言面全挂，只剩迁移 code action 不挂', () => {
+  it('开关关 ⇒ 14 枚语言面注册 API 全都挂着（缩进 / 格式化也算语言面），code action 零挂', () => {
     expect(flag.isKojo2CutoverEnabled()).toBe(false);
     mount();
-    expect(kojo2CallsOf(CODE_ACTION)).toHaveLength(0);
-    expect(kojo2CallsOf(ON_TYPE)).toHaveLength(0);
-    expect(kojo2CallsOf(DOC_FORMAT)).toHaveLength(0);
+    for (const api of SURFACE_APIS) {
+      // `>= 1`：同一语言允许多枚 provider 并存（补全另有用户片段那一枚）
+      expect(
+        kojo2CallsOf(api).length,
+        `${api} 在默认档下没挂（语言面被门控了）`,
+      ).toBeGreaterThanOrEqual(1);
+    }
+    expect(kojo2CallsOf(CODE_ACTION), '一键迁移 code action 属迁移入口，默认档不该挂').toHaveLength(
+      0,
+    );
   });
 
-  it('开关开 ⇒ 三枚各挂一枚（门控本身没被拆掉）', () => {
+  it('开关开 ⇒ 语言面数量不变，code action 恰好挂一枚（门控本身没被拆掉）', () => {
     flag.setKojo2CutoverEnabled(true);
     mount();
+    for (const api of SURFACE_APIS) {
+      expect(kojo2CallsOf(api).length, api).toBeGreaterThanOrEqual(1);
+    }
     expect(kojo2CallsOf(CODE_ACTION)).toHaveLength(1);
-    expect(kojo2CallsOf(ON_TYPE)).toHaveLength(1);
-    expect(kojo2CallsOf(DOC_FORMAT)).toHaveLength(1);
   });
 });
 
 /* ==================== ④ 三层门控的源码形状 ==================== */
 
-describe('④ 源码：只读面在 cutover 块之外，安装器自身不再读开关', () => {
+describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再读开关', () => {
   const hostSource = readFileSync(
     resolve(REPO_ROOT, 'packages', 'app', 'src', 'ui', 'editor-global-providers.ts'),
     'utf8',
@@ -179,13 +217,14 @@ describe('④ 源码：只读面在 cutover 块之外，安装器自身不再读
     return source.slice(start, start + offset + 5);
   }
 
-  it('宿主：折叠 / 大纲在块外，缩进 / 格式化 / code action 仍在块内', () => {
+  it('宿主：切流块里只剩 code action；折叠 / 大纲 / 缩进 / 格式化全在块外', () => {
     const block = cutoverBlock(hostSource);
+    expect(block).toContain('installKojo2CodeActionProvider(monaco');
     expect(block).not.toContain('installKojo2FoldingProvider');
     expect(block).not.toContain('installKojo2DocumentSymbolProvider');
-    expect(block).toContain('installKojo2IndentProvider(monaco)');
-    expect(block).toContain('installKojo2DocumentFormatter(monaco)');
-    expect(block).toContain('installKojo2CodeActionProvider(monaco');
+    expect(block).not.toContain('installKojo2IndentProvider');
+    expect(block).not.toContain('installKojo2DocumentFormatter');
+    expect(block).not.toContain('installKojo2SemanticTokensProvider');
 
     expect(hostSource).toContain('globalDisposers.push(installKojo2FoldingProvider(monaco));');
     // B2（2026-10-24）：大纲的原生装配行**已删除** —— 它改由 `installDocumentSymbolProvider`
@@ -194,9 +233,28 @@ describe('④ 源码：只读面在 cutover 块之外，安装器自身不再读
     expect(hostSource).not.toContain('installKojo2DocumentSymbolProvider');
   });
 
-  it('安装器：两枚都不再读 cutover 开关（不再自挡第二道）', () => {
+  it('安装器：语言面都不再读 cutover 开关（不再自挡第二道）', () => {
     expect(foldingSource).not.toMatch(/isKojo2CutoverEnabled/);
     expect(symbolsSource).not.toMatch(/isKojo2CutoverEnabled/);
+    for (const rel of [
+      'kojo2-semantic.ts',
+      'kojo2-highlight.ts',
+      'kojo2-format.ts',
+      'kojo2-codelens.ts',
+      'kojo2-indent.ts',
+      'kojo2-providers.ts',
+      'kojo2-references.ts',
+      'kojo2-rename.ts',
+      'kojo2-signature.ts',
+      'kojo2-selection-range.ts',
+      'kojo2-callhierarchy.ts',
+    ]) {
+      const source = readFileSync(
+        resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', rel),
+        'utf8',
+      );
+      expect(source, `${rel} 仍读切流开关`).not.toMatch(/isKojo2CutoverEnabled/);
+    }
   });
 
   it('解析链保持懒载：折叠的缺省客户端仍是动态 import', () => {

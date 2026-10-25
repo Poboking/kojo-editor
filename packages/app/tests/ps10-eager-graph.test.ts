@@ -360,6 +360,11 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ——下一批再往常驻面加文件，必须先减面（`ui-kit/index.tsx` 拆分那条）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
+    //   - **语言面缺陷批（2026-10-26，本批）**：增量 +2 KB，全落在既有常驻文件、零新模块
+    //     （文件数 191 不动，与上一档逐字相同）：· `bootstrap.ts` +1 KB —— 2.0 登记表核
+    //     `facts.id === entry.id` 的对账与可见诊断；· `ui/editor-global-providers.ts` +1 KB
+    //     —— 2.0 语言面安装器搬出切流开关块，装配段变长。现值 2,823 KB ≤ 闸 2,830，
+    //     **本批不动闸**（余量只剩 7 KB：下一枚进图的东西必须先挪一个模块出去）。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,830 KB）`);
     expect(totalKb).toBeLessThanOrEqual(2_830);
     expect(files.length).toBeLessThanOrEqual(191);

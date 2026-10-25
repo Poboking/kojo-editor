@@ -326,14 +326,20 @@ describe('三套 rules 覆盖词法基线 + 全部糖/语义 token', () => {
     });
   }
 
-  it('light / mint 不复用任何暗色规则前景（浅色下暗色高亮必然对比不足）', () => {
+  it('light / mint 不复用任何暗色 v1 规则前景（浅色下暗色高亮必然对比不足）', () => {
     const dark = themes.get('kojo-dark');
     if (!dark) throw new Error('没有捕获到 kojo-dark 主题');
-    const darkForegrounds = new Set(dark.rules.map((r) => r.foreground?.toLowerCase()));
+    // `kojo2.*` 是 2.0 的专属调色板：`kojo-mint-dark` 刻意沿用暗色 2.0 规则（与 `kojo2-mint-dark`
+    // 同一选择），亮色那套自带浅底版本——它们不参与"暗色 v1 前景不许出现在浅底"这条判据。
+    const isKojo2 = (token: string): boolean => token.startsWith('kojo2.');
+    const darkForegrounds = new Set(
+      dark.rules.filter((r) => !isKojo2(r.token)).map((r) => r.foreground?.toLowerCase()),
+    );
     for (const id of ['kojo-light', 'kojo-mint-dark'] as const) {
       const theme = themes.get(id);
       if (!theme) throw new Error(`没有捕获到 ${id}`);
       for (const rule of theme.rules) {
+        if (isKojo2(rule.token)) continue;
         expect(
           darkForegrounds.has(rule.foreground?.toLowerCase()),
           `${id}/${rule.token} 复用了暗色前景 #${rule.foreground}`,

@@ -45,12 +45,13 @@ import { isKojo2CutoverEnabled } from './kojo2-flag';
  * 一份文件该挂哪个 Monaco 语言 id（建 model 与重挂**共用****这一枚**）。
  *
  * 判据顺序与 `editor-model-pool-instance` 收口前逐字一致：
- * 1. flag 关 ⇒ 恒等于 `languageFor(path)`（与没有任何 2.0 面时逐字等价）；
- * 2. flag 开 ⇒ 交给切换控制器路由：
- *    - `resolved` 且 parser 是 `kojo2` ⇒ `kojo2`；
+ * 1. 切流阶段停在 `v1-only`（开关关）⇒ 恒等于 `languageFor(path)`：`.kojo2` 照样是
+ *    `kojo2`（descriptor 无条件登记），只是不走**内容指纹**那条 `.kojo` 切换；
+ * 2. 开关开 ⇒ 交给切换控制器路由：
+ *    - `resolved` 且 parser 是 `kojo2` ⇒ `kojo2`（`.kojo2` 在所有阶段都走这一条）；
  *    - `resolved` 且 parser 是 v1 / `ambiguous` / `needs-content` / `not-kojo` ⇒ `languageFor(path)`；
- *    - `blocked`（`v1-only` 阶段的 `.kojo2`）⇒ `plaintext`：不把 2.0 文件塞给 v1 词法
- *      （那会把整篇标成错误），也不假装 2.0 面存在。
+ *    - `blocked`（`v1-only` 下把 `.kojo` 显式钉成 2.0）⇒ `plaintext`：不拿 v1 词法去啃
+ *      2.0 文本（那会把整篇标成错误），也不假装那条解析器切换已经可用。
  */
 export function languageIdForKojo2Model(filePath: string, text: string): string {
   if (!isKojo2CutoverEnabled()) return languageFor(filePath);

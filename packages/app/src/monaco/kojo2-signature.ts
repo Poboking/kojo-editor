@@ -55,7 +55,6 @@ import {
   type KojoValueType,
 } from '@kojo/kojo-core';
 import { KOJO2_LANGUAGE_ID } from './kojo2-language';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import {
   kojo2DeclarationNamed,
   kojo2DocumentOf,
@@ -146,9 +145,6 @@ const BINDING_SOURCE_WORDS: Readonly<Record<ForeachBindingSource, string>> = Obj
   key: '键',
   name: '名字',
 });
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /* ============================== 小工具（全部不抛） ============================== */
 
@@ -709,7 +705,7 @@ export function kojo2SignatureHelpOf(
  * 为 **`kojo2` 语言 id** 注册签名帮助 provider（v1 的 `.kojo` / `.erb` 面由
  * `kojo-signature.ts` 各挂各的，互不重叠）。
  *
- * - **flag 关 ⇒ 零注册**（读 `ui/kojo2-flag.ts`，与语义着色 / 语言面同一条纪律）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT：签名帮助是只读语言面，不读切流开关）；
  * - 触发字符固定 `['(', ',']`，可用 `extraTriggerCharacters` 追加（合并去重）；
  * - 任何一轮解析抛错 ⇒ `undefined`（Monaco 会继续问下一家 / 收起提示，不让异常冒到击键路径）；
  * - 句柄 **dispose 幂等**，重复调用只撤一次；撤不掉也不外抛。
@@ -718,7 +714,6 @@ export function installKojo2SignatureHelpProvider(
   monaco: typeof Monaco,
   options: Kojo2SignatureProviderOptions = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   const provider: Monaco.languages.SignatureHelpProvider = {
     signatureHelpTriggerCharacters: mergeTriggerCharacters(

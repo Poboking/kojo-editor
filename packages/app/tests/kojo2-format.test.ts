@@ -495,14 +495,15 @@ describe('⑦edits：行数不变逐行最小 / 行数变了整篇一条', () =>
 
 /* ============================== ⑧ 注册纪律 ============================== */
 
-describe('⑧注册：flag 关零注册；flag 开只给 `kojo2` 一枚 provider', () => {
-  it('flag 关 ⇒ 一次注册都不发生，dispose 空操作', () => {
+describe('⑧注册：不读开关（语言面）；只给 `kojo2` 一枚 provider', () => {
+  it('缺省档（v1-only）⇒ 照样注册一枚，dispose 幂等', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2DocumentFormatter(fake.monaco);
-    expect(fake.registered).toEqual([]);
+    expect(fake.registered).toHaveLength(1);
     handle.dispose();
-    expect(fake.disposed).toEqual([]);
+    handle.dispose();
+    expect(fake.disposed).toEqual([KOJO2_LANGUAGE_ID]);
   });
 
   it('flag 开 ⇒ 恰好一枚 provider、语言 id 是 `kojo2`；dispose 幂等', () => {
@@ -559,13 +560,12 @@ describe('⑧注册：flag 关零注册；flag 开只给 `kojo2` 一枚 provider
     expect(edits).toEqual([]);
   });
 
-  it('源码钉子：flag 守卫先于注册；本层不出现 executeEdits / pushUndoStop', () => {
+  it('源码钉子：直接注册、不读开关；本层不出现 executeEdits / pushUndoStop', () => {
     const code = codeOf(LAYER_SOURCE);
     const body = sliceBetween('export function installKojo2DocumentFormatter(', '\n}\n', code);
-    const guard = body.indexOf('isKojo2CutoverEnabled()');
     const register = body.indexOf('registerDocumentFormattingEditProvider');
-    expect(guard).toBeGreaterThanOrEqual(0);
-    expect(register).toBeGreaterThan(guard);
+    expect(register).toBeGreaterThanOrEqual(0);
+    expect(code).not.toContain('isKojo2CutoverEnabled');
     expect(code).not.toContain('executeEdits');
     expect(code).not.toContain('pushUndoStop');
     // 区间格式化（K2-INDENT-BRACKETS）另有一枚 installer：整篇这一枚不许抢它的注册

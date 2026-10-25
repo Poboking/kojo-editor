@@ -27,7 +27,6 @@
 import type * as Monaco from './entry';
 import type { GameAdapter } from '@kojo/kojo-core';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { kojo2InlayHints } from '@kojo/kojo-lang/inlay';
 import type { Kojo2InlayHint } from '@kojo/kojo-lang/inlay';
@@ -69,9 +68,6 @@ export function toMonacoInlayHints(
 }
 
 /* ============================== 安装 ============================== */
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /** 空结果（每次新建：Monaco 会消费/持有这个数组，不共享一份可变的空表） */
 function emptyInlayResult(): { hints: Monaco.languages.InlayHint[]; dispose: () => void } {
@@ -120,7 +116,7 @@ function overBudget(model: Monaco.editor.ITextModel): boolean {
 /**
  * 为 `kojo2` 语言注册 inlay hints provider，返回**幂等**的 disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**；调用点在宿主 2.0 段，本函数再挡一道）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT：行内提示是只读呈现面，不读切流开关）；
  * - 只挂 {@link KOJO2_LANGUAGE_ID}：v1 的 ERB / `.kojo` 面由 `kojo-inlay-hints.ts` 的
  *   `registerForLanguageServices` 各挂各的，两边不重叠；
  * - 体量档判在请求之前（`LARGE_FILE_LINES` 同一条线）：超长文件里行内提示整体让路，
@@ -132,7 +128,6 @@ export function installKojo2InlayHintsProvider(
   monaco: typeof Monaco,
   options: Kojo2InlayProviderOptions = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   const adapterSource = options.adapter;
 

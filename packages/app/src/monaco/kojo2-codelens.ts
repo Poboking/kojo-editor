@@ -27,7 +27,7 @@
  *
  * - {@link kojo2CodeLenses}：源码文本 → 注解事实（**纯函数**，零 IO、零 Monaco、零缓存）；
  * - {@link toMonacoCodeLenses}：事实 → `monaco.languages.CodeLens`（唯一翻译点）；
- * - {@link installKojo2CodeLensProvider}：只挂 `kojo2` 语言 id；flag 关 = 零注册。
+ * - {@link installKojo2CodeLensProvider}：只挂 `kojo2` 语言 id；无条件注册（只读呈现面）。
  *
  * ## `@函` 的计数口径（为什么是「本文件」+「调用点」）
  *
@@ -76,7 +76,6 @@ import {
 } from '@kojo/kojo-core';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { kojo2IsCodeSurface } from '@kojo/kojo-lang';
 
@@ -562,12 +561,6 @@ export interface Kojo2CodeLensHandle extends Monaco.IDisposable {
   refresh(): void;
 }
 
-/** flag 关时交回的句柄（调用方照常 `refresh()` / `dispose()`，什么也不会发生） */
-const NOOP_HANDLE: Kojo2CodeLensHandle = {
-  refresh: () => undefined,
-  dispose: () => undefined,
-};
-
 /** `provideCodeLenses` 的空结果（每轮新建一个，Monaco 只读） */
 function emptyList(): { lenses: Monaco.languages.CodeLens[]; dispose: () => void } {
   return { lenses: [], dispose: () => undefined };
@@ -601,7 +594,7 @@ function filePathOfModel(
 /**
  * 为 `kojo2` 语言注册行上注解 provider，返回**幂等**的句柄。
  *
- * - flag 关 ⇒ 空操作（**零注册**；调用点在宿主 2.0 段，本函数自己也再挡一次，因为它是导出的）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT）：行上注解是只读呈现面，阶段 `v1-only` 下照样可见；
  * - 只挂 `KOJO2_LANGUAGE_ID`：v1 的 `.kojo` / `.erb` 面由 `kojo-code-lens.ts` 的
  *   `registerForLanguageServices` 挂，两边不重叠；
  * - provider 内任何异常（取文抛错 / 模型已释放 / 纯函数抛错 / 翻译抛错）一律回空列表：
@@ -613,7 +606,6 @@ export function installKojo2CodeLensProvider(
   monaco: typeof Monaco,
   options: Kojo2CodeLensProviderOptions = {},
 ): Kojo2CodeLensHandle {
-  if (!isKojo2CutoverEnabled()) return NOOP_HANDLE;
 
   const listeners = new Set<(provider: Monaco.languages.CodeLensProvider) => unknown>();
 

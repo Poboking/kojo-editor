@@ -33,8 +33,8 @@
  * - **空文件 / 纯空白 / 越界位点（行或列不在源文里）/ 非法坐标** ⇒ 显式空：整次调用回
  *   `[]`，或该位点不产链（**不夹取、不猜**：夹到边界会把扩选落到别的块上）；
  * - provider 内任何异常一律回 `[]`（Monaco 把 throw 吞成"扩选突然没了"）；
- * - {@link installKojo2SelectionRangeProvider} 只挂 `kojo2`；**flag 关 = 零注册**；
- *   dispose 幂等，注册失败原样外抛（宿主那侧全有或全无）。
+ * - {@link installKojo2SelectionRangeProvider} 只挂 `kojo2`；**无条件注册**（结构化扩选是
+ *   只读呈现面，阶段 `v1-only` 下也照常可见）；dispose 幂等，注册失败原样外抛（宿主那侧全有或全无）。
  */
 
 import { KOJO_DISPATCH_WORDS, lex, type KojoLexLine } from '@kojo/kojo-core';
@@ -46,7 +46,6 @@ import {
   type Kojo2SymbolPosition,
   type Kojo2SymbolRange,
 } from '@kojo/kojo-lang';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /* ============================== 词形（core 单源） ============================== */
 
@@ -79,9 +78,6 @@ export interface Kojo2SelectionRange {
   readonly range: Monaco.IRange;
   readonly parent?: Kojo2SelectionRange;
 }
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /* ============================== 源文行表 ============================== */
 
@@ -418,7 +414,7 @@ function flattenChain(chain: Kojo2SelectionRange): Monaco.languages.SelectionRan
 /**
  * 为 `kojo2` 语言注册选择范围 provider，返回**幂等**的 disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**；本函数自身再挡一次，因为它是导出的）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT：结构化扩选是只读呈现面，不读切流开关）；
  * - 只挂 `KOJO2_LANGUAGE_ID`；
  * - provider 内任何异常回 `[]`；
  * - 注册失败原样外抛（只有一枚注册，没有半成品要回滚）。
@@ -426,7 +422,6 @@ function flattenChain(chain: Kojo2SelectionRange): Monaco.languages.SelectionRan
 export function installKojo2SelectionRangeProvider(
   monaco: typeof Monaco,
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   const provider: Monaco.languages.SelectionRangeProvider = {
     provideSelectionRanges(model, positions) {

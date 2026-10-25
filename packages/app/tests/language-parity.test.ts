@@ -54,6 +54,7 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang';
 import { descriptorForLanguageId } from '../src/monaco/language-registry';
 import { languageForPath } from '../src/monaco/languages';
+import { kojo2SourceExtensions, planKojo2Open } from '../src/ui/kojo2-open';
 
 /* ============================== 取证基建 ============================== */
 
@@ -186,6 +187,33 @@ function exemptionsOf(
   }
   return out;
 }
+
+/** 一份源码里导出的安装器函数名（`export function installXxx(`） */
+function installerNamesOf(file: SourceFile): readonly string[] {
+  return [...file.text.matchAll(/export function (install[A-Za-z0-9_]+)\(/g)].map(
+    (match) => match[1]!,
+  );
+}
+
+/**
+ * `if (isKojo2CutoverEnabled()) { … }` 的整段（按块尾那行 4 空格 `}` 收口）。
+ *
+ * 装配点只许**有副作用**的安装器留在这一段里；语言面必须在段外（无条件装配）。
+ */
+function cutoverBlock(source: string): string {
+  const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
+  expect(start).toBeGreaterThan(-1);
+  const offset = source.slice(start).search(/^    \}$/m);
+  expect(offset).toBeGreaterThan(-1);
+  return source.slice(start, start + offset + 5);
+}
+
+/** kojo2 的 `shared` 能力 → 共享收口要点的槽服务名（`registerForLanguageServices` 第三参） */
+const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
+  [LanguageCapability.Outline]: 'documentSymbol',
+  [LanguageCapability.Definition]: 'definition',
+  [LanguageCapability.Inlay]: 'inlayHint',
+};
 
 /* ============================== 矩阵形状 ============================== */
 
@@ -619,13 +647,14 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：14 枚 self、2 枚 shared（大纲 / 转定义走槽腿）、2 枚 builtin、2 项豁免', () => {
+  it('kojo2：13 枚 self、3 枚 shared（大纲 / 转定义 / 行内提示走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。
     // B3b（2026-10-24）：`definition` 同理挪到 shared —— 判据与展开体那两条落点都归插件，
     // 宿主 `installKojo2LanguageProviders` 不再注册任何 `DefinitionProvider`。
-    // **档位变了，能力没少**：两侧的合计仍是 14 + 2 = 16。
+    // B2c（2026-10-24）：`inlay` 同批挪到 shared —— 原生安装器已不在装配路径上。
+    // **档位变了，能力没少**：两侧的合计仍是 13 + 3 = 16。
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
       'codelens',
       'completion',
@@ -635,19 +664,148 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
       'highlight',
       'hover',
       'indent',
-      'inlay',
       'refs',
       'rename',
       'selection',
       'semantic',
       'signature',
     ]);
-    expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual(['definition', 'outline']);
+    expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([
+      'definition',
+      'inlay',
+      'outline',
+    ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'builtin')).toEqual(['brackets', 'preview']);
     expect(exemptionsOf(KOJO2_LANGUAGE_ID).map((entry) => entry.capability).sort()).toEqual([
       'callhierarchy',
       'implementation',
     ]);
+  });
+});
+
+/* ============================== 注册面对账（声明有 ⇒ 真的注册了） ============================== */
+
+/**
+ * 这一组是 K2-SURFACE-DEFAULT 的对账：矩阵每一格必须落到**真实注册面**上。
+ *
+ * 旧闸只查"注册行 + import"，于是两种假话都能过关：① 模块被 import 但安装器从没被调用
+ * （死代码，今天 `monaco/kojo2-inlay.ts` 就是这种）；② 安装器被调用、但自己又读切流开关，
+ * 默认档下实际零注册。两条都在下面被拦住。
+ */
+describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', () => {
+  const host = sourceOf(GLOBAL_PROVIDERS).text;
+
+  it('kojo2 的 self 面：装配点**真调了**安装器，且安装器自己不读切流开关', () => {
+    for (const capability of capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')) {
+      const api = CAPABILITY_PROVIDER_API[capability];
+      if (api === undefined) continue; // diagnostics：上屏腿，专用用例
+      const files = selfRegistrationFiles(capability, KOJO2_LANGUAGE_ID).filter((file) =>
+        importedByGlobal(file.rel),
+      );
+      expect(files.map((file) => file.rel), `kojo2/${capability} 没有已装配的注册模块`).not.toEqual(
+        [],
+      );
+      for (const file of files) {
+        const called = installerNamesOf(file).filter((name) =>
+          new RegExp(String.raw`${name}\s*\(\s*monaco`).test(host),
+        );
+        expect(
+          called,
+          `${file.rel} 导出的安装器没有一个在 ${GLOBAL_PROVIDERS} 里被调用（import 了没人调 = 死代码）`,
+        ).not.toEqual([]);
+        expect(
+          file.text,
+          `${file.rel} 是只读呈现面，不许再读 isKojo2CutoverEnabled（K2-SURFACE-DEFAULT）`,
+        ).not.toContain('isKojo2CutoverEnabled');
+      }
+    }
+  });
+
+  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / definition / inlayHint）在行内', () => {
+    for (const capability of capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')) {
+      const files = sharedRegistrationFiles(capability).filter((file) => importedByGlobal(file.rel));
+      expect(
+        files.map((file) => file.rel),
+        `kojo2/${capability} 没有 registerForLanguageServices 收口`,
+      ).not.toEqual([]);
+      const slot = SLOT_SERVICE_OF[capability];
+      if (slot === undefined) continue;
+      for (const file of files) {
+        expect(
+          file.text,
+          `${file.rel} 的共享收口没点 '${slot}'（kojo2 descriptor 声明了它，却被别的语言独占）`,
+        ).toContain(`'${slot}'`);
+      }
+    }
+  });
+
+  it('切流开关块里只剩**有副作用**的安装器（一键迁移 code action），语言面全在块外', () => {
+    const block = cutoverBlock(host);
+    expect(block).toContain('installKojo2CodeActionProvider');
+    // 迁移 code action 属迁移入口：它是唯一允许留在块里的 2.0 安装器
+    const installersInBlock = [...block.matchAll(/installKojo2[A-Za-z0-9_]+/g)].map(
+      (match) => match[0],
+    );
+    expect(new Set(installersInBlock)).toEqual(new Set(['installKojo2CodeActionProvider']));
+    // 语言面逐项在块外（块外的装配行由上面两条用例按能力逐项取证，这里反向点名）
+    for (const installer of [
+      'installKojo2SemanticTokensProvider',
+      'installKojo2LanguageProviders',
+      'installKojo2IndentProvider',
+      'installKojo2DocumentFormatter',
+      'installKojo2RangeFormatter',
+      'installKojo2ProjectReferenceProvider',
+      'installKojo2RenameProvider',
+      'installKojo2SignatureHelpProvider',
+      'installKojo2CodeLensProvider',
+      'installKojo2HighlightProvider',
+      'installKojo2SelectionRangeProvider',
+      'installKojo2FoldingProvider',
+    ]) {
+      expect(block, `${installer} 不该留在切流开关块里`).not.toContain(installer);
+      expect(host, `${installer} 没有出现在装配点`).toContain(installer);
+    }
+  });
+
+  it('诊断是语言面：`kojo2DiagnosticsEnabled()` 恒 true，归属逐文件按路由判', () => {
+    const gate = sourceOf('ui/kojo2-diagnostics-gate.ts').text;
+    expect(gate).not.toContain('isKojo2CutoverEnabled');
+    expect(gate).toMatch(/export function kojo2DiagnosticsEnabled\(\): boolean \{\s*return true;/);
+  });
+});
+
+/* ============================== 副作用面仍门控（守门） ============================== */
+
+/**
+ * 解门只许发生在一处：**只读呈现面**。写回 / 迁移入口 / `.kojo` 解析器切换 / 存储服务
+ * 必须继续读 `isKojo2CutoverEnabled()`（默认档行为不变），否则"语言面可见"会顺手把
+ * 写面也放出来。
+ */
+describe('副作用面：默认档仍关闭（源码守卫 + 行为断言）', () => {
+  it('存储服务 / 迁移入口 / `.kojo` 打开与解析器切换的源码都仍读切流开关', () => {
+    const guarded: readonly string[] = [
+      'ui/kojo2-storage-service.ts',
+      'ui/kojo2-migrate-entry.ts',
+      'ui/kojo2-open.ts',
+      'ui/kojo2-open-paths.ts',
+      'ui/kojo2-model-language.ts',
+      'monaco/kojo2-code-actions.ts',
+    ];
+    for (const rel of guarded) {
+      expect(sourceOf(rel).text, `${rel} 不再读 isKojo2CutoverEnabled（写面被放出来了）`).toContain(
+        'isKojo2CutoverEnabled',
+      );
+    }
+  });
+
+  it('默认档行为：打开 `.kojo2` 的 2.0 路由返回 off（一个 port 都不碰），扩展名清单为空', () => {
+    // 缺省阶段 v1-only：这批开关只放行写面语义，语言面另有 unconditional 装配
+    expect(kojo2SourceExtensions()).toEqual([]);
+    const plan = planKojo2Open(
+      { path: 'D:/p/M.kojo2' },
+      { currentRoot: 'D:/p', projectOpen: true },
+    );
+    expect(plan).toEqual({ kind: 'off' });
   });
 });
 

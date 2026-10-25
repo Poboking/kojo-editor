@@ -253,7 +253,7 @@ describe('③ 打开入口闸：开关关零副作用，v1-only 阶段显式 blo
     expect(calls.projects).toEqual([]);
   });
 
-  it('v1-only 阶段：blocked，人话与 kojo2-cutover 的 blocked hint 逐字相同，且不开空编辑器', () => {
+  it('v1-only 阶段：`.kojo2` 不再 blocked（语言面无条件），照常打开', () => {
     stubFlag(true);
     const { calls, ports } = makePorts();
     const plan = routeKojo2OpenPath({ path: KOJO2_FILE, rootDir: CURRENT_ROOT }, CTX, ports, {
@@ -261,18 +261,15 @@ describe('③ 打开入口闸：开关关零副作用，v1-only 阶段显式 blo
       stage: 'v1-only',
     });
     const decision = decideKojo2Route({ stage: 'v1-only', filePath: KOJO2_FILE });
-    expect(decision.kind).toBe('blocked');
-    const hint = decision.kind === 'blocked' ? decision.hint : '';
-    expect(hint).toContain('v1-only');
-    expect(plan).toEqual({ kind: 'blocked', reason: hint });
-    expect(calls.notes).toEqual([hint]);
-    expect(calls.files).toEqual([]);
-    expect(calls.projects).toEqual([]);
+    expect(decision.kind).toBe('resolved');
+    expect(plan.kind).not.toBe('blocked');
+    expect(calls.notes).toEqual([]);
   });
 
-  it('默认阶段（未动过控制器）= v1-only：阶段闸给出的就是那一句 blocked 提示', () => {
+  it('阶段闸只拦「把 .kojo 显式钉成 2.0」：`.kojo2` 在任何阶段都不给 blocked 提示', () => {
     stubFlag(true);
-    expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toContain('v1-only');
+    expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toBeNull();
+    expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true, stage: 'v1-only' })).toBeNull();
     expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true, stage: 'dual' })).toBeNull();
   });
 

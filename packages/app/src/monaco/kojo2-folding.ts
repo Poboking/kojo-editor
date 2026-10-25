@@ -122,7 +122,7 @@ function warnOnce(warn: (message: string) => void, key: string, message: string)
 export interface Kojo2FoldingProviderDeps {
   /**
    * 取 worker 客户端（缺省 = 动态 import `kojo2-worker-runtime` 的单例）。
-   * 动态 import 让**主线程静态图里连薄客户端都不出现**：flag 关 / 没人要结构层时，
+   * 动态 import 让**主线程静态图里连薄客户端都不出现**：没人要结构层时，
    * `?worker` 入口与协议模块一个字节都不装载。
    */
   readonly getClient?: () => Kojo2FoldingWorkerClient | Promise<Kojo2FoldingWorkerClient>;

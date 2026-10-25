@@ -53,15 +53,13 @@
  *
  * ## 注册
  *
- * {@link installKojo2SemanticTokensProvider} 只给 `kojo2` 语言 id 注册，**flag 关时零注册**
- * （调用点在 `ui/editor-global-providers.ts` 的既有 helper 序列里；本函数自身也再挡一次，
- * 因为它是导出的、可能被别的入口直接调用）。disposal 幂等：先撤 provider 注册，再丢本
+ * {@link installKojo2SemanticTokensProvider} 只给 `kojo2` 语言 id 注册，**无条件装配**
+ * （K2-SURFACE-DEFAULT：着色是只读呈现面）。disposal 幂等：先撤 provider 注册，再丢本
  * provider 的缓存（worker 客户端是共享单例，**不**在这里 dispose）。
  */
 import type * as Monaco from './entry';
 import { KOJO2_LANGUAGE_ID, KOJO2_TOKEN, type Kojo2TokenName } from './kojo2-language';
 import { KOJO2_THEME_TOKEN_MAP } from './kojo2-theme';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import {
   installKojo2IndentConfigFromWorker,
   type Kojo2IndentConfigHandle,
@@ -269,7 +267,7 @@ export interface Kojo2SemanticWorkerClient {
 export interface Kojo2SemanticProviderDeps {
   /**
    * 取 worker 客户端（缺省 = 动态 import `kojo2-worker-runtime` 的单例）。
-   * 动态 import 让**主线程静态图里连薄客户端都不出现**：flag 关 / 没人要结构层时，
+   * 动态 import 让**主线程静态图里连薄客户端都不出现**：没人要结构层时，
    * `?worker` 入口与协议模块一个字节都不装载。
    */
   readonly getClient?: () => Kojo2SemanticWorkerClient | Promise<Kojo2SemanticWorkerClient>;
@@ -430,12 +428,13 @@ export function createKojo2SemanticTokensProvider(
 }
 
 /**
- * 为 `kojo2` 语言注册语义着色 provider（**flag 关 = 零注册**）。
+ * 为 `kojo2` 语言注册语义着色 provider（**无条件**：着色是只读呈现面，与切流阶段无关）。
  *
  * 本安装器同时是 **K2-INDENT-WIRE 的宿主挂点**：它持有
  * `installKojo2IndentConfigFromWorker(...)` 的句柄，并把 `syncIndentConfig` 注入 provider
  * ——于是"结构规则进语言配置"这件事与"结构着色"共用同一个 model / 版本号 / worker 客户端，
- * 不新开挂点、也不在 `editor-global-providers.ts` 里多一行。flag 关时两者一起不挂。
+ * 不新开挂点、也不在 `editor-global-providers.ts` 里多一行。缩进规则同样是语言面
+ * （K2-SURFACE-DEFAULT：改缓冲的回车缩进算语言面），两者一起无条件挂。
  *
  * 返回的 disposable 幂等：撤掉 Monaco 注册 → 丢 provider 的版本缓存 → 撤掉本层写过的语言
  * 配置（worker 客户端是共享单例，留给其它结构层消费方，不在这里 dispose）。
@@ -444,9 +443,6 @@ export function installKojo2SemanticTokensProvider(
   monaco: typeof Monaco,
   deps: Kojo2SemanticProviderDeps = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) {
-    return { dispose: () => undefined };
-  }
   // 语言配置的账：**只有这一枚**（Monaco 没有缩进 provider 接口，规则只能写进语言配置）
   const semanticGetClient = deps.getClient;
   const indentConfig: Kojo2IndentConfigHandle = installKojo2IndentConfigFromWorker(monaco, {

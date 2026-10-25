@@ -5,8 +5,8 @@ import type * as Monaco from './entry';
 // 直接 import 老家就等于把糖包静态挂回开机图。叶子与两个老家的关系见叶子头注。
 //
 // K2-CUTOVER-THEME：2.0 的 token 规则表也住在同一叶子（同一理由——不能经
-// `kojo2-language.ts` 取，那条链拖糖词表）。flag 打开时把它们**追加**进三套 v1 主题，
-// 于是分屏双轨期 `.kojo2` 文件在 `kojo-*` 主题下也上色，不必整窗切主题。
+// `kojo2-language.ts` 取，那条链拖糖词表）。它们**无条件追加**进三套 v1 主题
+// （K2-SURFACE-DEFAULT），于是 `.kojo2` 文件在 `kojo-*` 主题下也上色，不必整窗切主题。
 import {
   KOJO_SUGAR_THEME_RULES,
   KOJO_SEMANTIC_THEME_RULES,
@@ -286,39 +286,41 @@ const MINT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
  * （`kojo-semantic-tokens → register-dialects → erb-language → 本文件` 造成的
  * TDZ 风险）从这条静态边走不到了，`defineMonacoThemes` 任何时候调用绑定都已就绪。
  *
- * K2-CUTOVER-THEME：`mergeKojo2` 是**装配那一刻**的 flag 判据。为 true 时在 v1 规则
- * **之后追加** 2.0 的 token 规则（`kojo2.*` 与 `sugar.*` 不撞名，追加不影响任何既有档）；
- * 为 false 时一个 2.0 规则都不进数组——"flag 关 ⇒ v1 三套逐字不变"是硬判据。
+ * K2-SURFACE-DEFAULT：2.0 的 token 规则**无条件**追加在 v1 规则之后（`kojo2.*` 与
+ * `sugar.*` 不撞名，追加不影响任何既有档，也不重排 v1 一格）。理由：`.kojo2` 的语言面
+ * 永远可见，切流开关只管写回 / 迁移 / `.kojo` 的解析器切换——默认档打开 `.kojo2` 不该
+ * 是一坨没有配色的灰字。三套 `kojo2-*` 独立主题仍按 flag 注册（见 `defineMonacoThemes`）。
  */
-function darkRules(mergeKojo2: boolean): Monaco.editor.ITokenThemeRule[] {
+function darkRules(): Monaco.editor.ITokenThemeRule[] {
   return [
     ...rulesFromPalette(BASE_RULE_SPECS, DARK_BASE_PALETTE),
     // 同引用：既有暗色糖/语义规则对象原样并入（tokens 单一真源，测试钉住）
     ...KOJO_SUGAR_THEME_RULES,
     ...KOJO_SEMANTIC_THEME_RULES,
-    ...(mergeKojo2 ? KOJO2_THEME_RULES : []),
+    ...KOJO2_THEME_RULES,
   ];
 }
 
-function lightRules(mergeKojo2: boolean): Monaco.editor.ITokenThemeRule[] {
+function lightRules(): Monaco.editor.ITokenThemeRule[] {
   return [
     ...rulesFromPalette(BASE_RULE_SPECS, LIGHT_BASE_PALETTE),
     ...retint(KOJO_SUGAR_THEME_RULES, LIGHT_SUGAR_PALETTE),
     ...retint(KOJO_SEMANTIC_THEME_RULES, LIGHT_SEMANTIC_PALETTE),
     // 亮底用它自己的 2.0 调色板（暗色规则落在 #f6f8fa 上对比度不足）
-    ...(mergeKojo2 ? KOJO2_LIGHT_THEME_RULES : []),
+    ...KOJO2_LIGHT_THEME_RULES,
   ];
 }
 
-function mintRules(mergeKojo2: boolean): Monaco.editor.ITokenThemeRule[] {
+function mintRules(): Monaco.editor.ITokenThemeRule[] {
   return [
     ...rulesFromPalette(BASE_RULE_SPECS, MINT_BASE_PALETTE),
     ...retint(KOJO_SUGAR_THEME_RULES, MINT_SUGAR_PALETTE),
     ...retint(KOJO_SEMANTIC_THEME_RULES, MINT_SEMANTIC_PALETTE),
     // 墨绿有自己的 2.0 调色板：原始态直接并暗色表是 10 对撞色（最小 4.4）；修完 v1 侧仍剩
     // 4 对（含"原生直通""标点"两对必须同色的同义档）。`KOJO2_MINT_THEME_RULES` 逐档落到
-    // 墨绿盘既有的语义近邻色，不引入第 16 枚色（理由见该表头注）。
-    ...(mergeKojo2 ? KOJO2_MINT_THEME_RULES : []),
+    // 墨绿盘既有的语义近邻色，不引入第 16 枚色（理由见该表头注）。初版曾按切流开关决定
+    // 并/不并（`mergeKojo2`），K2-SURFACE-DEFAULT 之后 2.0 语言面恒可见 ⇒ 恒并。
+    ...KOJO2_MINT_THEME_RULES,
   ];
 }
 
@@ -626,25 +628,24 @@ export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
 
 /** 一次性定义三套主题（幂等；`registerErbLanguage` 末尾调用） */
 export function defineMonacoThemes(monaco: typeof Monaco): void {
-  // K2-CUTOVER-THEME：flag 在**装配这一刻**读一次。关 ⇒ 三套 v1 主题的 rules 与收口前
-  // 逐字相同（不追加、不重排、不改一个色值）；开 ⇒ 追加 2.0 的 token 规则。
-  const mergeKojo2 = isKojo2CutoverEnabled();
+  // K2-SURFACE-DEFAULT：v1 三套**无条件**带 2.0 token 规则（见 `darkRules` 上方头注）——
+  // 默认档打开 `.kojo2` 就有配色，不必先切流。部件色与 v1 规则一格未动。
   monaco.editor.defineTheme('kojo-dark', {
     base: 'vs-dark',
     inherit: false,
-    rules: darkRules(mergeKojo2),
+    rules: darkRules(),
     colors: KOJO_DARK_COLORS,
   });
   monaco.editor.defineTheme('kojo-light', {
     base: 'vs',
     inherit: false,
-    rules: lightRules(mergeKojo2),
+    rules: lightRules(),
     colors: KOJO_LIGHT_COLORS,
   });
   monaco.editor.defineTheme('kojo-mint-dark', {
     base: 'vs-dark',
     inherit: false,
-    rules: mintRules(mergeKojo2),
+    rules: mintRules(),
     colors: KOJO_MINT_COLORS,
   });
   // Kojo 2.0 三套主题（K2 batch-3，flag 守卫）：与 v1 三套**不同 id**（`kojo2-*`），
@@ -653,7 +654,7 @@ export function defineMonacoThemes(monaco: typeof Monaco): void {
   // 为什么仍是**动态 import**：`kojo2-theme` 里那两张规则表虽已下沉到零 import 叶子
   // （K2-CUTOVER-THEME），但整套 `colors` 字面量 + 组装逻辑 ~15 KB 只在"真的要切到
   // `kojo2-*` 主题"时才有意义；`kojo2-*` 目前没有任何消费方（用户面切的仍是 v1 三套，
-  // 而 v1 三套此时已各自带上了 2.0 规则）。flag 关时连这一份都不加载。
+  // 而 v1 三套此时已各自带上了 2.0 规则）。flag 关时连这一份都不加载（独立主题是切流面）。
   // 失败不静默：v1 三套已经定义完，这里只少 2.0 那三套，用一条 warn 说出来。
   if (isKojo2CutoverEnabled()) {
     void import('./kojo2-theme')

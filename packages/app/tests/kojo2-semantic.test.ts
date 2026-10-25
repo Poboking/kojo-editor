@@ -469,17 +469,17 @@ describe('provider · 失败一律空 tokens、不抛、只 warn 一次', () => 
 
 /* ============================== 注册纪律 ============================== */
 
-describe('install · flag 关时零注册，flag 开只给 kojo2 注册一次', () => {
-  it('flag 关 ⇒ 一个注册调用都不发生（dispose 也无副作用）', () => {
+describe('install · 不读开关（语言面），只给 kojo2 注册一次', () => {
+  it('缺省档（v1-only）⇒ 照样注册一枚（dispose 幂等）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const disposable = installKojo2SemanticTokensProvider(fake.monaco, {
       getClient: async () => ({ captures: async () => failed('disposed', '不该被调用') }),
     });
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
     disposable.dispose();
     disposable.dispose();
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
   });
 
   it('flag 开 ⇒ 只为 kojo2 注册；dispose 幂等（注册只撤一次）', () => {

@@ -230,25 +230,22 @@ function baseWiring(
 
 /* ============================== 门 ============================== */
 
-describe('门：flag 关零接线，flag 开只认 `.kojo2`', () => {
-  it('flag 关 ⇒ 零监听、零诊断、零面板写入', async () => {
+describe('门：语言面不读切流开关，只认 `.kojo2`', () => {
+  it('默认档（flag 关）也接线：装上即诊断一次，只服务 `.kojo2`', async () => {
     stubFlag(false);
-    const fake = fakeEditor(fakeModel('D:/p/a.kojo2', '# 幕\n').model);
+    const model = fakeModel('D:/p/a.kojo2', '# 幕\n');
+    const fake = fakeEditor(model.model);
     const diagnose = diagnoseReturning([MARKER]);
-    const wiring = baseWiring(fake, { diagnose, path: 'D:/p/a.kojo2' });
-    expect(fake.contentListeners()).toBe(0);
-    expect(fake.modelListeners()).toBe(0);
-    fake.fireContent();
+    const wiring = baseWiring(fake, { diagnose, path: model.path });
     await flushMicrotasks();
-    expect(diagnose).not.toHaveBeenCalled();
-    expect(wiring.markerCalls).toEqual([]);
-    expect(wiring.written).toEqual([]);
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(wiring.markerCalls[0]!.owner).toBe(KOJO2_PROBLEM_MARKER_OWNER);
     wiring.dispose();
   });
 
-  it('kojo2OwnsDiagnostics：flag 开 + `.kojo2` 才 true（大小写不敏感）', () => {
+  it('kojo2OwnsDiagnostics：只认 `.kojo2`（大小写不敏感），与切流开关无关', () => {
     stubFlag(false);
-    expect(kojo2OwnsDiagnostics('D:/p/a.kojo2')).toBe(false);
+    expect(kojo2OwnsDiagnostics('D:/p/a.kojo2')).toBe(true);
     stubFlag(true);
     expect(kojo2OwnsDiagnostics('D:/p/a.kojo2')).toBe(true);
     expect(kojo2OwnsDiagnostics('D:/p/A.KOJO2')).toBe(true);

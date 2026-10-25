@@ -266,10 +266,10 @@ describe('analyzeKojo2ProjectAsync · 惰性 adapter 成功与降级', () => {
 /* ============================== 3. 薄接线工厂 ============================== */
 
 describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
-  it('缺省启用判据 = 既有 2.0 诊断开关（node 无 window ⇒ 关）', () => {
+  it('缺省启用判据 = 无条件开（语言面不读切流开关；没有 `.kojo2` 的文件本就不会产生一轮分析）', () => {
     const options = createLazyKojo2ProjectOptions();
-    expect(options.enabled?.()).toBe(false);
-    expect(kojo2ProjectPassEnabled(options)).toBe(false);
+    expect(options.enabled?.()).toBe(true);
+    expect(kojo2ProjectPassEnabled(options)).toBe(true);
   });
 
   it('工厂本身零副作用：创建时不装载、不调 isEnabled', () => {

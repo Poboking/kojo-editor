@@ -217,10 +217,10 @@ describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', (
     expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1')).toBe('kojo-sugar');
   });
 
-  it('flag 开 + v1-only：`.kojo2` 落 plaintext（不打不开，也不塞给 v1 词法）', () => {
+  it('flag 开 + v1-only：`.kojo2` 仍是 kojo2（语言面无条件），不被降成 plaintext', () => {
     stubFlag(true);
     expect(getKojo2CutoverController().getStage()).toBe('v1-only');
-    expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe('plaintext');
+    expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
   });
 
   it('flag 开 + 2.0-default：`.kojo` 由正文指纹定解析器（同一路径两种结论）', () => {

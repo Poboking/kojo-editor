@@ -339,14 +339,20 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
 /* ============================== 路由 ============================== */
 
 describe('文件路由：override 当家，扩展名先说，阶段定老文件', () => {
-  it('v1-only：`.kojo` 按 v1；`.kojo2` 显式 blocked（2.0 面还没挂，绝不拿 v1 词法硬啃）', () => {
+  it('v1-only：`.kojo` 按 v1；`.kojo2` 照样归 2.0（扩展名即声明，语言面不看阶段）', () => {
     expect(route('v1-only', KOJO_FILE, KOJO2_SAMPLE)).toMatchObject({
       kind: 'resolved',
       parser: 'kojo-v1',
       reason: 'stage-v1-only',
       fingerprint: null,
     });
-    const blocked = route('v1-only', KOJO2_FILE);
+    expect(route('v1-only', KOJO2_FILE)).toMatchObject({
+      kind: 'resolved',
+      parser: 'kojo2',
+      reason: 'extension-kojo2',
+    });
+    // 阶段拦的是**切流**：把老 `.kojo` 显式钉成 2.0 的 override 在 v1-only 下仍被拦
+    const blocked = route('v1-only', KOJO_FILE, undefined, 'kojo2');
     expect(blocked).toMatchObject({ kind: 'blocked', reason: 'stage-disables-kojo2' });
     expect(blocked.kind === 'blocked' ? blocked.hint : '').toContain('v1-only');
   });

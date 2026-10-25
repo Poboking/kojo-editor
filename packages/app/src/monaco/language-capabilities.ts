@@ -227,16 +227,23 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 已交付的 15 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
- * `ui/editor-global-providers.ts` 的 2.0 段）；2 枚 `shared` 是**已交给插件**的两条腿
- * （`outline` 自 B2、`definition` 自 B3b），宿主只经 `registerForLanguageServices` 带能力名
- * 挂上、判据全在 `@kojo/plugin-kojo-lang`；`brackets` / `preview` 与 ERB 同档（语言配置 /
- * Monaco 内建）；`diagnostics` 是 `self`：2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` →
- * `setModelMarkers(..., KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用）。
+ * 13 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
+ * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
+ * 3 枚 `shared` 是**已交给插件**的三条腿（`outline` 自 B2、`definition` 自 B3b、`inlay` 自 B2c），
+ * 宿主只经 `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/plugin-kojo-lang`；
+ * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
+ * 2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` → `setModelMarkers(...,
+ * KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用），同样属语言面
+ * （`kojo2DiagnosticsEnabled()` 恒 true，归属逐文件按路由判）。
  *
  * `format` 一格含两条腿：整篇（`installKojo2DocumentFormatter`，Shift+Alt+F）与区间
  * （`installKojo2RangeFormatter`，Ctrl+K Ctrl+F）；两枚 provider 都只挂 `kojo2`，装配点
  * `ui/editor-global-providers.ts` 两枚 installer 都调用（矩阵按注册面记 `self`）。
+ *
+ * 本表记的是**注册面实际状态**：`self` 项必须在装配点真有一行无条件调用、`shared` 项必须
+ * 真有一枚带能力名的 `registerForLanguageServices` 挂它——`language-parity.test.ts` 的
+ * "对账"用例把每一格落到这两条形状上，声明有、注册无（例如只剩一个没人调的 import）当场红。
  *
  * 剩余两项豁免：`implementation`（明确不做：2.0 里"跳实现"与"转定义"同义，F12 已覆盖）与
  * `callhierarchy`（Monaco 0.57 无该 API；纯模型 `monaco/kojo2-callhierarchy.ts` 已由宿主面板
@@ -255,7 +262,11 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.References]: 'self',
     [LanguageCapability.Rename]: 'self',
     [LanguageCapability.Signature]: 'self',
-    [LanguageCapability.Inlay]: 'self',
+    // B2c（2026-10-24）起 `inlay` 走**共享收口**：`kojo-inlay-hints.ts` 的
+    // `installInlayHintsProvider` 带能力名 `inlayHint` 挂上（kojo2 descriptor 点名
+    // `slotServices: ['inlayHint']`），供方是插件；`monaco/kojo2-inlay.ts` 的原生安装器
+    // 已不再是装配路径（只留纯翻译层 `toMonacoInlayHints` 与它的单测）。
+    [LanguageCapability.Inlay]: 'shared',
     [LanguageCapability.CodeLens]: 'self',
     [LanguageCapability.Implementation]: {
       exempt:

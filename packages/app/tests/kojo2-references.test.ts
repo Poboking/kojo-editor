@@ -762,16 +762,16 @@ describe('provider：只挂 kojo2 / flag / dispose / 失败面', () => {
     expect(provideReferences(fake, model, positionAt('心情不错'))).toEqual([]);
   });
 
-  it('flag 关 → 零注册；交回的句柄 dispose 什么也不做且幂等', () => {
+  it('缺省档（v1-only）→ 照样注册一枚；句柄 dispose 幂等', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const disposable = installKojo2ReferenceProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(0);
+    expect(fake.registrations).toHaveLength(1);
     expect(() => {
       disposable.dispose();
       disposable.dispose();
     }).not.toThrow();
-    expect(fake.disposeCount()).toBe(0);
+    expect(fake.disposeCount()).toBe(1);
   });
 
   it('dispose 幂等：重复 dispose 只撤一次', () => {

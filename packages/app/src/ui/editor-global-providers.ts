@@ -117,13 +117,13 @@ import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
 // 折叠只多一条**动态** import（worker 客户端仍在第一次真折叠时才装载），缩进是纯判据 + 一枚 provider。
 import { installKojo2FoldingProvider } from '../monaco/kojo2-folding';
 import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
-// K2 batch-7：2.0 格式化器（自挡 flag；走 Monaco 内建 `editor.action.formatDocument`
+// K2 batch-7：2.0 格式化器（走 Monaco 内建 `editor.action.formatDocument`
 //（Shift+Alt+F），本文件不新增命令）。
 // 注：2.0 的**大纲**注册在 B2 批已删除（改由 `installDocumentSymbolProvider` 的槽腿承担，
 // 供方 = 插件 `@kojo/plugin-kojo-lang`），故这里不再 import `kojo2-symbols`。
 import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
 // K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
-// 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、各自再挡 flag，且安装器内零 IO。
+// 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、不读切流开关，且安装器内零 IO。
 import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references';
 import {
   createKojo2ProjectCallHierarchyResolvers,
@@ -143,7 +143,6 @@ import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-language';
 import { installKojo2RenameProvider } from '../monaco/kojo2-rename';
 import type { Kojo2RenameResolvers } from '../monaco/kojo2-rename';
 import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
-import { installKojo2InlayHintsProvider } from '../monaco/kojo2-inlay';
 import { installKojo2CodeLensProvider } from '../monaco/kojo2-codelens';
 import { installKojo2HighlightProvider } from '../monaco/kojo2-highlight';
 import { installKojo2SelectionRangeProvider } from '../monaco/kojo2-selection-range';
@@ -1640,26 +1639,26 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         });
       },
     }));
-    // Kojo 2.0 语义着色（K2 batch-3）：**只给 `kojo2` 语言 id** 注册，与上面 v1 那条
-    // `registerForLanguageServices` 的方言表并行且不重叠（`.kojo2` 不在 v1 方言表里）。
-    // flag 关 ⇒ 这一行整体不执行，provider 表与今天逐字一致；flag 开但运行时装载失败 /
-    // 超时 ⇒ provider 回空 tokens（不着色），不抛、不写任何 markers。
+    // Kojo 2.0 的**语言面**（K2-SURFACE-DEFAULT，本批）：语义着色 / 补全 / 悬停 / 缩进 / 格式化 /
+    // 引用 / 改名 / 签名 / 行上注解 / 高亮 / 扩选**一律无条件装配**——它们只读呈现或只改缓冲
+    // （可撤销），与"切没切流"无关；`.kojo2` 是只读可看的既有文件，作者不该因为还没切流就看见
+    // 一坨灰字。注册面与矩阵（`monaco/language-capabilities.ts`）是同一份事实：
+    // `language-parity.test.ts` 逐格对拍"声明有 ⇒ 装配点真调了、且安装器自己不读开关"。
     //
-    // 门控口径（批次十 S5，K2-SURFACE-DEFAULT）：本开关**只管写回 / 迁移 / 切解析器**。
-    // S18 新增的两面属于语言面，已挂在本门之外（用户片段补全、文档链接，见上方装配段）；
-    // 批次十一 K2-STRUCTURE-GATE 再移出两枚**只读呈现面**（折叠 / 大纲，见本块之后的装配段）。
-    // 块内其余安装器仍各自保留内部 flag 自挡（批次四～九的守线，本批不动）。
+    // 切流开关（`ui/kojo2-flag.ts`）只管**有副作用**的语义：写回 / 保存链路、迁移入口、
+    // `.kojo` 的解析器切换、存储服务。本装配点今天只剩一枚安装器留在开关里：K2 batch-5 的
+    // **一键迁移 code action**（见下）——它的每个动作都把 v1 写法改写进缓冲，属迁移入口。
+    globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
+    // K2 batch-4：三枚语言服务 provider（补全 / 悬停 / 转定义），语言 id 只认 `kojo2`。
+    // adapter 走组合根注入的 getter —— 项目切换 / 槽位变化都不必重装 provider；
+    // 没注入 / 取不到 ⇒ 只有 `# 机` 那一路零候选（同文件语义照常工作）。
+    globalDisposers.push(
+      installKojo2LanguageProviders(
+        monaco,
+        kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
+      ),
+    );
     if (isKojo2CutoverEnabled()) {
-      globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
-      // K2 batch-4：三枚语言服务 provider（补全 / 悬停 / 转定义），语言 id 只认 `kojo2`。
-      // adapter 走组合根注入的 getter —— 项目切换 / 槽位变化都不必重装 provider；
-      // 没注入 / 取不到 ⇒ 只有 `# 机` 那一路零候选（同文件语义照常工作）。
-      globalDisposers.push(
-        installKojo2LanguageProviders(
-          monaco,
-          kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
-        ),
-      );
       // K2 batch-5：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 / 心形 / 着色 / 随机 /
       // 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进），语言 id 只认 `kojo2`。
       // 改写规则全在 core 迁移器（本层只做定位 + 搬运 + 校验）；**落地走同一条**
@@ -1675,166 +1674,165 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
           },
         }),
       );
-      // K2 batch-6：回车缩进（on-type formatter，`\n` 触发；判据 = core 词法的结构判据，
-      // 见 `monaco/kojo2-indent.ts`）。它**改缓冲内容**，所以仍归切流开关
-      //（K2-STRUCTURE-GATE：只把折叠 / 大纲两枚只读面移出本块，见紧跟的一段）；
-      // 缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
-      globalDisposers.push(installKojo2IndentProvider(monaco));
-      // K2 batch-7：格式化器只服务显式格式化动作（不接保存链路——作者不按 Shift+Alt+F
-      // 就不动缓冲内容）；写面，留在本块。
-      globalDisposers.push(installKojo2DocumentFormatter(monaco));
-      // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。补全的事件参数形状
-      // 与 `faceTemplates` / `hintNames` 都在 `kojo2-providers` 里按 adapter 现取
-      //（本层仍零游戏名词；旧 adapter 缺字段 ⇒ 对应候选位零候选，不猜）。
-      // K2 batch-9：引用面换成**项目级**（`kojo2ProjectIndex` 由宿主喂；索引空时自动退回同文件）。
-      globalDisposers.push(
-        installKojo2ProjectReferenceProvider(monaco, {
-          getIndex: () => kojo2ProjectIndex,
-          pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
-          uriForPath: (path) => monaco.Uri.file(path),
-        }),
-      );
-      // 跨文件改名（S18）：把**同一份**项目索引的 resolver 喂给 installer——候选文件与
-      // 请求文件路径都由索引/宿主给，provider 只搬编辑（全或无：任一格被闸 ⇒ 整次取消）。
-      globalDisposers.push(
-        installKojo2RenameProvider(monaco, {
-          resolvers: kojo2RenameResolvers(),
-          pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
-          uriForPath: (path) => monaco.Uri.file(path),
-        }),
-      );
-      globalDisposers.push(
-        installKojo2SignatureHelpProvider(
-          monaco,
-          kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
-        ),
-      );
-      // B2c（2026-10-24）：2.0 的 inlay hints 原生注册**已删除** —— 它现在由
-      // `installInlayHintsProvider` 那一枚槽腿挂上（kojo2 descriptor 声明了
-      // `slotServices: ['inlayHint']`），应答来自插件 `@kojo/plugin-kojo-lang`。
-      // adapter 事实经 `@kojo/kojo-lang/adapter-source` 的登记表交给插件（见本函数开头）。
-      globalDisposers.push(
-        installKojo2CodeLensProvider(monaco, {
-          getFilePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
-          countReferences: (query) => {
-            const result = kojo2ReferencesAt(query.source, {
-              line: query.line,
-              column: query.column,
-            });
-            if (result === null) return 0;
-            return result.refs.filter((site) => site.kind !== 'decl').length;
-          },
-        }),
-      );
-      globalDisposers.push(installKojo2HighlightProvider(monaco));
-      globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
-      globalDisposers.push(installKojo2RangeFormatter(monaco));
-      // K2 batch-9：把打开中的 `.kojo2` model 喂给项目索引（跨文件引用面要它）。
-      // 创建时立即入索引、内容变更 400ms 防抖后更新；本段 dispose 时全部摘监听并清空索引
-      //（索引是 module 单例，换工作区不许串数据）。取不到路径 / 取文抛错 ⇒ 这一篇不进索引。
-      const indexTimers = new Map<string, ReturnType<typeof setTimeout>>();
-      const indexListeners: { dispose: () => void }[] = [];
-      const feedIndexModel = (model: Monaco.editor.ITextModel): void => {
-        try {
-          const path = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
-          if (typeof path !== 'string' || path.length === 0) return;
-          kojo2ProjectIndexUpdate(path, model.getValue());
-          indexListeners.push(
-            model.onDidChangeContent(() => {
-              const previous = indexTimers.get(path);
-              if (previous !== undefined) clearTimeout(previous);
-              indexTimers.set(
-                path,
-                setTimeout(() => {
-                  indexTimers.delete(path);
-                  try {
-                    kojo2ProjectIndexUpdate(
-                      path,
-                      model.isDisposed() ? null : model.getValue(),
-                    );
-                  } catch {
-                    /* 索引只是增强面：取文失败就保持旧条目 */
-                  }
-                }, 400),
-              );
-            }),
-          );
-        } catch {
-          /* 桩 model / 取文失败：这一篇不进索引（引用面自动退回同文件） */
-        }
-      };
+    }
+    // K2 batch-6：回车缩进（on-type formatter，回车触发；判据 = core 词法的结构判据，
+    // 见 `monaco/kojo2-indent.ts`）。它**改缓冲内容**，但改的是回车那一刻的缩进、整个动作
+    // 可撤销——K2-SURFACE-DEFAULT 把它算**语言面**（作者不该因为没切流就缩不进去），因此
+    // 无条件装配。缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
+    globalDisposers.push(installKojo2IndentProvider(monaco));
+    // K2 batch-7：格式化器只服务显式格式化动作（不接保存链路——作者不按 Shift+Alt+F /
+    // Ctrl+K Ctrl+F 就不动缓冲内容）；格式化属语言面，无条件装配。
+    globalDisposers.push(installKojo2DocumentFormatter(monaco));
+    // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。补全的事件参数形状
+    // 与 `faceTemplates` / `hintNames` 都在 `kojo2-providers` 里按 adapter 现取
+    //（本层仍零游戏名词；旧 adapter 缺字段 ⇒ 对应候选位零候选，不猜）。
+    // K2 batch-9：引用面换成**项目级**（`kojo2ProjectIndex` 由宿主喂；索引空时自动退回同文件）。
+    globalDisposers.push(
+      installKojo2ProjectReferenceProvider(monaco, {
+        getIndex: () => kojo2ProjectIndex,
+        pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
+        uriForPath: (path) => monaco.Uri.file(path),
+      }),
+    );
+    // 跨文件改名（S18）：把**同一份**项目索引的 resolver 喂给 installer——候选文件与
+    // 请求文件路径都由索引/宿主给，provider 只搬编辑（全或无：任一格被闸 ⇒ 整次取消）。
+    globalDisposers.push(
+      installKojo2RenameProvider(monaco, {
+        resolvers: kojo2RenameResolvers(),
+        pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
+        uriForPath: (path) => monaco.Uri.file(path),
+      }),
+    );
+    globalDisposers.push(
+      installKojo2SignatureHelpProvider(
+        monaco,
+        kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
+      ),
+    );
+    // B2c（2026-10-24）：2.0 的 inlay hints 原生注册**已删除** —— 它现在由
+    // `installInlayHintsProvider` 那一枚槽腿挂上（kojo2 descriptor 声明了
+    // `slotServices: ['inlayHint']`），应答来自插件 `@kojo/plugin-kojo-lang`。
+    // adapter 事实经 `@kojo/kojo-lang/adapter-source` 的登记表交给插件（见本函数开头）。
+    globalDisposers.push(
+      installKojo2CodeLensProvider(monaco, {
+        getFilePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
+        countReferences: (query) => {
+          const result = kojo2ReferencesAt(query.source, {
+            line: query.line,
+            column: query.column,
+          });
+          if (result === null) return 0;
+          return result.refs.filter((site) => site.kind !== 'decl').length;
+        },
+      }),
+    );
+    globalDisposers.push(installKojo2HighlightProvider(monaco));
+    globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
+    globalDisposers.push(installKojo2RangeFormatter(monaco));
+    // K2 batch-9：把打开中的 `.kojo2` model 喂给项目索引（跨文件引用面要它）。
+    // 创建时立即入索引、内容变更 400ms 防抖后更新；本段 dispose 时全部摘监听并清空索引
+    //（索引是 module 单例，换工作区不许串数据）。取不到路径 / 取文抛错 ⇒ 这一篇不进索引。
+    const indexTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const indexListeners: { dispose: () => void }[] = [];
+    const feedIndexModel = (model: Monaco.editor.ITextModel): void => {
       try {
-        for (const model of monaco.editor.getModels()) {
-          if (model.getLanguageId() === KOJO2_LANGUAGE_ID) feedIndexModel(model);
-        }
-        globalDisposers.push(
-          monaco.editor.onDidCreateModel((model) => {
-            if (model.getLanguageId() === KOJO2_LANGUAGE_ID) feedIndexModel(model);
+        const path = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
+        if (typeof path !== 'string' || path.length === 0) return;
+        kojo2ProjectIndexUpdate(path, model.getValue());
+        indexListeners.push(
+          model.onDidChangeContent(() => {
+            const previous = indexTimers.get(path);
+            if (previous !== undefined) clearTimeout(previous);
+            indexTimers.set(
+              path,
+              setTimeout(() => {
+                indexTimers.delete(path);
+                try {
+                  kojo2ProjectIndexUpdate(
+                    path,
+                    model.isDisposed() ? null : model.getValue(),
+                  );
+                } catch {
+                  /* 索引只是增强面：取文失败就保持旧条目 */
+                }
+              }, 400),
+            );
           }),
         );
       } catch {
-        /* 老桩 monaco 没有模型事件：索引留空（引用面仍可同文件工作） */
+        /* 桩 model / 取文失败：这一篇不进索引（引用面自动退回同文件） */
       }
-      // K2-INDEX-HOST-FEED：项目扫描把**未打开文件**的原文经通道送进来（分拍节流在扫描侧）。
-      // 同一路径若已有打开中的 2.0 model，以 model 的未保存文本为准——扫描读的是盘，编辑会早于落盘。
-      const openKojo2ModelText = (path: string): string | null => {
-        const want = pathKey(path);
-        try {
-          for (const model of monaco.editor.getModels()) {
-            if (model.getLanguageId() !== KOJO2_LANGUAGE_ID) continue;
-            const candidate = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
-            if (typeof candidate !== 'string' || pathKey(candidate) !== want) continue;
-            return model.isDisposed() ? null : model.getValue();
-          }
-        } catch {
-          /* 模型枚举失败 ⇒ 退回扫描原文 */
-        }
-        return null;
-      };
-      const offScanFeed = onKojo2ProjectFileFeed((path, text) => {
-        try {
-          if (text === null) {
-            kojo2ProjectIndexUpdate(path, null);
-            return;
-          }
-          kojo2ProjectIndexUpdate(path, openKojo2ModelText(path) ?? text);
-        } catch {
-          /* 索引只是增强面：一次喂养失败不拖累扫描 / 编辑器 */
-        }
-      });
-      // 换项目 / 关项目 / 装配卸载：旧项目的文件整份撤条（含 model 喂进去的那些）
-      const offScanReset = onKojo2ProjectFileFeedReset(() => {
-        for (const path of kojo2ProjectIndex.files()) kojo2ProjectIndex.removeFile(path);
-      });
-      globalDisposers.push({
-        dispose: () => {
-          offScanFeed();
-          offScanReset();
-          for (const listener of indexListeners) {
-            try {
-              listener.dispose();
-            } catch {
-              /* 逐枚隔离 */
-            }
-          }
-          for (const timer of indexTimers.values()) clearTimeout(timer);
-          indexTimers.clear();
-          for (const path of kojo2ProjectIndex.files()) kojo2ProjectIndex.removeFile(path);
-        },
-      });
+    };
+    try {
+      for (const model of monaco.editor.getModels()) {
+        if (model.getLanguageId() === KOJO2_LANGUAGE_ID) feedIndexModel(model);
+      }
+      globalDisposers.push(
+        monaco.editor.onDidCreateModel((model) => {
+          if (model.getLanguageId() === KOJO2_LANGUAGE_ID) feedIndexModel(model);
+        }),
+      );
+    } catch {
+      /* 老桩 monaco 没有模型事件：索引留空（引用面仍可同文件工作） */
     }
-    // K2-STRUCTURE-GATE（批次十一）：折叠区间与文档大纲是**只读呈现面**，挂在上面那个
-    // `isKojo2CutoverEnabled()` 块**之外**——`.kojo2` 一打开就有 gutter 折叠与 Ctrl+Shift+O，
-    // 哪怕阶段还是 `v1-only`（cutover 只管写回 / 迁移 / 切解析器，不管只读呈现）。两枚都只认
-    // `kojo2` 语言 id，Monaco 按语言派发 ⇒ 非 2.0 文件零请求。
+    // K2-INDEX-HOST-FEED：项目扫描把**未打开文件**的原文经通道送进来（分拍节流在扫描侧）。
+    // 同一路径若已有打开中的 2.0 model，以 model 的未保存文本为准——扫描读的是盘，编辑会早于落盘。
+    const openKojo2ModelText = (path: string): string | null => {
+      const want = pathKey(path);
+      try {
+        for (const model of monaco.editor.getModels()) {
+          if (model.getLanguageId() !== KOJO2_LANGUAGE_ID) continue;
+          const candidate = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
+          if (typeof candidate !== 'string' || pathKey(candidate) !== want) continue;
+          return model.isDisposed() ? null : model.getValue();
+        }
+      } catch {
+        /* 模型枚举失败 ⇒ 退回扫描原文 */
+      }
+      return null;
+    };
+    const offScanFeed = onKojo2ProjectFileFeed((path, text) => {
+      try {
+        if (text === null) {
+          kojo2ProjectIndexUpdate(path, null);
+          return;
+        }
+        kojo2ProjectIndexUpdate(path, openKojo2ModelText(path) ?? text);
+      } catch {
+        /* 索引只是增强面：一次喂养失败不拖累扫描 / 编辑器 */
+      }
+    });
+    // 换项目 / 关项目 / 装配卸载：旧项目的文件整份撤条（含 model 喂进去的那些）
+    const offScanReset = onKojo2ProjectFileFeedReset(() => {
+      for (const path of kojo2ProjectIndex.files()) kojo2ProjectIndex.removeFile(path);
+    });
+    globalDisposers.push({
+      dispose: () => {
+        offScanFeed();
+        offScanReset();
+        for (const listener of indexListeners) {
+          try {
+            listener.dispose();
+          } catch {
+            /* 逐枚隔离 */
+          }
+        }
+        for (const timer of indexTimers.values()) clearTimeout(timer);
+        indexTimers.clear();
+        for (const path of kojo2ProjectIndex.files()) kojo2ProjectIndex.removeFile(path);
+      },
+    });
+    // K2-STRUCTURE-GATE（批次十一）/ K2-SURFACE-DEFAULT：折叠区间是**只读呈现面**，无条件装配
+    // ——`.kojo2` 一打开就有 gutter 折叠，哪怕阶段还是 `v1-only`（cutover 只管写回 / 迁移 /
+    // 切解析器，不管只读呈现）。只认 `kojo2` 语言 id，Monaco 按语言派发 ⇒ 非 2.0 文件零请求。
     //
     // 惰性装载保持原样、启动成本不因这一步上升：注册本身不碰解析链——折叠的 worker 客户端在
     // 第一次被问时才动态 import（`kojo2-folding.ts` 的 `defaultWorkerClient`），大纲走 core AST
     // 纯函数随请求现算。失败面照旧：折叠 worker 不可用 / 超时 / `folds.scm` 缺席 ⇒ `[]`，
     // 大纲异常 ⇒ `[]`（不抛、不写 markers）。
     //
-    // 位置放在本块之后：注册抛错仍由下面 catch 的"全有或全无"统一回滚；同时不改变既有
-    // "靠前注册抛错时已建立集合"的读数（`editor-global-providers-tables.test.ts`）。
+    // 位置放在 2.0 语言服务之后：注册抛错仍由下面 catch 的"全有或全无"统一回滚；同时不改变
+    // 既有"靠前注册抛错时已建立集合"的读数（`editor-global-providers-tables.test.ts`）。
     globalDisposers.push(installKojo2FoldingProvider(monaco));
     // B2（2026-10-24）：2.0 的**大纲**原生注册已删除 —— 它现在由 `installDocumentSymbolProvider`
     // 那一枚槽腿挂上（kojo2 的 descriptor 声明了 `slotServices: ['documentSymbol']`），

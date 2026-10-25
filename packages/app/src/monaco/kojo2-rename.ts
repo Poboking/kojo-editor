@@ -81,8 +81,8 @@
  * ## 失败面
  *
  * provider 体内任何抛错都收成"拒绝理由"（Monaco 把 throw 吞成"功能突然没了"，作者看不到
- * 原因）；注册半途抛错原样外抛（只有一枚注册，没有半成品要回滚）；flag 关 ⇒ 立即返回空操作
- * （**零注册**），dispose 幂等且逐枚隔离。
+ * 原因）；注册半途抛错原样外抛（只有一枚注册，没有半成品要回滚），dispose 幂等且逐枚隔离。
+ * 改名是**语言面**（K2-SURFACE-DEFAULT）：不读切流开关，阶段 `v1-only` 下也照常可用。
  */
 import type * as Monaco from './entry';
 import {
@@ -112,7 +112,6 @@ import {
   type Kojo2DeclarationKind,
   type Kojo2Document,
 } from '@kojo/kojo-lang';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { reject } from './rename-rejection';
 
 /* ============================== 公共形状 ============================== */
@@ -1155,9 +1154,6 @@ export function kojo2RenamePlanXFile(
 
 /* ============================== Monaco 翻译层 ============================== */
 
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
-
 /** 零宽区间（拒绝时 Monaco 要一枚 range 才肯显示理由；不选中任何文字）。 */
 function zeroRange(line: number, column: number): Monaco.IRange {
   return {
@@ -1249,7 +1245,7 @@ function renamePathOf(
 /**
  * 为 `kojo2` 语言注册 RenameProvider（**只此一枚**），返回**幂等** disposable。
  *
- * - flag 关 ⇒ 空操作（**零注册**）；
+ * - **无条件注册**（K2-SURFACE-DEFAULT：改名是语言服务，不读切流开关）；
  * - selector 只有 `KOJO2_LANGUAGE_ID`：v1 `.kojo` 的 F2 由 `kojo-rename` 另挂，两边不重叠；
  * - `resolveRenameLocation` 在任何拒绝路径上都给 `rejectReason`（Monaco 0.57 见理由就丢掉
  *   输入框并就近提示——作者看得到"为什么不能改"）；
@@ -1262,7 +1258,6 @@ export function installKojo2RenameProvider(
   monaco: typeof Monaco,
   options: Kojo2RenameInstallOptions = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   const provider: Monaco.languages.RenameProvider = {
     resolveRenameLocation(model, position) {

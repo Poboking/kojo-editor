@@ -115,18 +115,18 @@ afterEach(() => {
 /* ============================== ① 单入口 ============================== */
 
 describe('① 单入口：path+source → route 只有一处', () => {
-  it('flag 关（没有计划、没有旧键）⇒ `.kojo2` blocked、`.kojo` 按 v1，归属恒 false', () => {
+  it('flag 关（没有计划、没有旧键）⇒ `.kojo2` 照归 2.0、`.kojo` 按 v1', () => {
     stubWindow();
     getKojo2CutoverController(); // 惰性单例 = v1-only
-    expect(kojo2DiagnosticsEnabled()).toBe(false);
+    expect(kojo2DiagnosticsEnabled()).toBe(true);
     const kojo2 = kojo2RouteForPath(KOJO2_PATH);
-    expect(kojo2).toMatchObject({ kind: 'blocked', reason: 'stage-disables-kojo2' });
+    expect(kojo2).toMatchObject({ kind: 'resolved', parser: 'kojo2', reason: 'extension-kojo2' });
     expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({
       kind: 'resolved',
       parser: 'kojo-v1',
       reason: 'stage-v1-only',
     });
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(false);
+    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
     expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
   });
 
@@ -185,12 +185,12 @@ describe('① 单入口：path+source → route 只有一处', () => {
 
 /* ============================== ② `.kojo2` 各阶段 ============================== */
 
-describe('② `.kojo2` 各阶段：v1-only 恒不归，dual / 2.0-default 恒归', () => {
-  it('v1-only：`.kojo2` blocked（带 2.0 正文也不归）', () => {
+describe('② `.kojo2` 各阶段：恒归（语言面无条件），阶段只管 `.kojo`', () => {
+  it('v1-only：`.kojo2` 照归（语言面无条件）', () => {
     boot('v1-only');
-    expect(kojo2DiagnosticsEnabled()).toBe(false);
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(false);
-    expect(kojo2OwnsDiagnostics({ path: KOJO2_PATH, source: KOJO2_SAMPLE })).toBe(false);
+    expect(kojo2DiagnosticsEnabled()).toBe(true);
+    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
+    expect(kojo2OwnsDiagnostics({ path: KOJO2_PATH, source: KOJO2_SAMPLE })).toBe(true);
   });
 
   it('dual：`.kojo2` 恒归（扩展名先说话，正文不参与）', () => {
@@ -393,13 +393,14 @@ describe('④ 只有路径（EditorPane）：带正文的结论进备忘，needs
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
   });
 
-  it('flag 关 ⇒ 即使刚判过 2.0，归属也恒 false（硬判据）', () => {
+  it('控制器重置回 v1-only ⇒ `.kojo` 的 2.0 归属回落（`.kojo2` 不受影响）', () => {
     boot('2.0-default');
     expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    // 摘掉存储 + 重置控制器 = "这次开机 2.0 面根本没挂"
+    // 摘掉存储 + 重置控制器 = 阶段回到 v1-only
     vi.unstubAllGlobals();
     resetKojo2CutoverController();
-    expect(kojo2DiagnosticsEnabled()).toBe(false);
+    expect(kojo2DiagnosticsEnabled()).toBe(true);
+    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
     expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
   });
@@ -714,14 +715,14 @@ describe('⑤ 诊断接线：活动 model 判定按路由', () => {
     wiring.dispose();
   });
 
-  it('flag 关 ⇒ 零监听 / 零诊断（v1 行为逐字不变）', async () => {
+  it('flag 关 ⇒ 接线照挂，但 `.kojo` 零诊断（v1 行为逐字不变）', async () => {
     stubWindow();
     getKojo2CutoverController();
     const model = fakeModel(KOJO_PATH, KOJO2_SAMPLE);
     const fake = fakeEditor(model.model);
     const wiring = wire(fake, { path: model.path });
-    expect(fake.contentListeners()).toBe(0);
-    expect(fake.modelListeners()).toBe(0);
+    expect(fake.contentListeners()).toBe(1);
+    expect(fake.modelListeners()).toBe(1);
     fake.fireContent();
     await flushMicrotasks();
     expect(wiring.diagnose).not.toHaveBeenCalled();
@@ -729,15 +730,14 @@ describe('⑤ 诊断接线：活动 model 判定按路由', () => {
     wiring.dispose();
   });
 
-  it('v1-only ⇒ 零监听 / 零诊断（`.kojo2` 也不接管）', async () => {
+  it('v1-only ⇒ `.kojo2` 照常诊断（语言面无条件）', async () => {
     boot('v1-only');
     const model = fakeModel(KOJO2_PATH, KOJO2_SAMPLE);
     const fake = fakeEditor(model.model);
     const wiring = wire(fake, { path: model.path });
-    expect(fake.contentListeners()).toBe(0);
-    expect(fake.modelListeners()).toBe(0);
+    expect(fake.contentListeners()).toBe(1);
     await flushMicrotasks();
-    expect(wiring.diagnose).not.toHaveBeenCalled();
+    expect(wiring.diagnose).toHaveBeenCalled();
     wiring.dispose();
   });
 });

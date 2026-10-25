@@ -507,17 +507,17 @@ describe('Monaco 翻译：种类映射与 padding 透传', () => {
   });
 });
 
-describe('安装：只挂 kojo2、flag 关零注册、dispose 幂等、异常回空', () => {
-  it('flag 关 ⇒ 一次注册都没发生，句柄可重复 dispose', () => {
+describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空', () => {
+  it('缺省档（v1-only）⇒ 照样注册一枚，句柄可重复 dispose', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2InlayHintsProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
     expect(() => {
       handle.dispose();
       handle.dispose();
     }).not.toThrow();
-    expect(fake.disposeCalls).toEqual([]);
+    expect(fake.disposeCalls).toHaveLength(1);
   });
 
   it('flag 开 ⇒ 恰好一枚注册，selector 只有 kojo2', () => {
@@ -661,7 +661,7 @@ describe('源码卫生：Monaco 只 type-only、不碰插件包、安装器自�
   });
 
   it('安装器自带 flag 闸，且注册 selector 只有 KOJO2_LANGUAGE_ID', () => {
-    expect(source).toMatch(/if \(!isKojo2CutoverEnabled\(\)\) return NOOP_DISPOSABLE;/);
+    expect(source).not.toMatch(/isKojo2CutoverEnabled/);
     expect(source).toMatch(/registerInlayHintsProvider\(\s*KOJO2_LANGUAGE_ID/);
   });
 });

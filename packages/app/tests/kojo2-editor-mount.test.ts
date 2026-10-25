@@ -9,8 +9,8 @@
  *    （对象同一性 + 诊断调用计数都不许涨）；缓存有界、按 `pathKey` 命中、能撤下；
  * 3. **刷新链**：编辑器事件 → 诊断 → `onCompile` → 入口 `refresh`/`setFile` → 面板 props；
  * 4. **真壳冒烟**（假 Monaco + 假编辑器 + **真 core 编译** + 真诊断接线 + 真预览入口 +
- *    真面板渲染）：只出 2.0 来源、切标签撤条、失败 toast 一次、面板挂载/卸载、flag 关
- *    零挂载；
+ *    真面板渲染）：只出 2.0 来源、切标签撤条、失败 toast 一次、面板挂载/卸载、flag 关时
+ *    预览面板不挂（切流面）而诊断照跑（语言面）；
  * 5. **retarget**：另存为 / 改名后仍活着的 model 立刻重判语言面（判据纯函数、可单测）。
  *
  * 仓库测试环境是 node（无 jsdom）：面板渲染走 `react-dom/server` 静态渲染（与
@@ -693,21 +693,18 @@ describe('真壳冒烟：假 Monaco + 假编辑器 + 真 core 编译', () => {
     harness.dispose();
   });
 
-  it('flag 关 ⇒ 零监听 / 零编译 / 零缓存 / 无入口 / 宿主 0 字节', async () => {
+  it('flag 关 ⇒ 预览面板仍不挂（切流面）；但 `.kojo2` 诊断照跑（语言面无条件）', async () => {
     const harness = mountHarness({ flagOn: false });
     await flushMicrotasks();
-    expect(harness.entry).toBeNull();
-    expect(harness.fake.contentListeners()).toBe(0);
-    expect(harness.fake.modelListeners()).toBe(0);
-    expect(harness.fake.cursorListeners()).toBe(0);
-    expect(harness.compiled).toEqual([]);
-    expect(harness.cache.size).toBe(0);
-    expect(harness.markerCalls).toEqual([]);
+    // 预览面板属于切流面（编译成品给作者看，只随切流打开）：开关关 = 没有入口、宿主 0 字节
     expect(harness.entry).toBeNull();
     expect(renderHost()).toBe('');
+    // 诊断是语言面：`.kojo2` 一打开就归 2.0 管，不看阶段
+    expect(harness.fake.contentListeners()).toBe(1);
     harness.fake.fireContent();
     await flushMicrotasks();
-    expect(harness.compiled).toEqual([]);
+    expect(harness.compiled).toEqual([KOJO2_PATH]);
+    expect(harness.cache.size).toBe(1);
     harness.dispose();
   });
 

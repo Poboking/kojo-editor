@@ -23,9 +23,9 @@
  *
  * 本文件零 Monaco 运行时：`formatKojo2Source` 只依赖 core 词法（`lex`，行类 / 缩进 / 围栏状态的
  * 唯一真源）、core 文法（`parseSource`，只做上面的可解析闸）与 `kojo2-lexicon` 的词表。
- * {@link installKojo2DocumentFormatter} 是 `Shift+Alt+F` 的 provider 接线（flag 关 = 零注册）；
+ * {@link installKojo2DocumentFormatter} 是 `Shift+Alt+F` 的 provider 接线（**无条件注册**：格式化是语言面）；
  * {@link formatKojo2Range} / {@link installKojo2RangeFormatter} 是**区间格式化**（K2-INDENT-BRACKETS
- * 加的 additive 腿）：同一台 `runKojo2Format` 整篇算、按行映射只落选中行，provider 同样 flag 关零注册。
+ * 加的 additive 腿）：同一台 `runKojo2Format` 整篇算、按行映射只落选中行，provider 同样无条件注册。
  * {@link applyKojo2Format} 是给命令 / 保存链路用的**落地端口**，它**动态** import 宿主既有的
  * `applyTextEdits`（前后各一颗 undo 停点，CODEACTION-UNDO-STACK 口径）——本文件**不出现**
  * `executeEdits` / `pushUndoStop`，也不另造第二套编辑应用机制。
@@ -47,7 +47,6 @@ import {
 } from './kojo2-lexicon';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { KOJO2_BLOCK_HEADER_COLON_RE } from './kojo2-enter';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { lex, parseSource, type KojoLexLine } from '@kojo/kojo-core';
 
 /* ============================== 词表位序（不写字形） ============================== */
@@ -655,9 +654,6 @@ export const formatRange = formatKojo2Range;
 
 /* ============================== 宿主接线 1：Shift+Alt+F ============================== */
 
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
-
 /** 只看模型形状（provider 测试用假 model 也测得动） */
 interface FormatModelShape {
   getValue(): string;
@@ -665,14 +661,16 @@ interface FormatModelShape {
 }
 
 /**
- * `Shift+Alt+F` 的 2.0 provider（**只注册 `kojo2` 语言 id**；flag 关 = 零注册）。
+ * `Shift+Alt+F` 的 2.0 provider（**只注册 `kojo2` 语言 id**；K2-SURFACE-DEFAULT 起无条件注册）。
+ *
+ * 格式化是**语言面**：切流阶段 `v1-only` 下也照常可用（开关只管写回 / 迁移 / 解析器切换）。
+ * 它只服务显式格式化动作——作者不按 Shift+Alt+F 就不动缓冲内容。
  *
  * Monaco 把返回的 edits 一次 `executeEdits('formatEditsCommand', …)` 落地 ⇒ 天然一个撤销步；
  * 这里只做"该不该应答 + 形状翻译"，不碰 undo 停点（那是 {@link applyKojo2Format} 的事）。
  * 体内任何异常都收成"这次不格式化"，绝不把 throw 送进命令面板。
  */
 export function installKojo2DocumentFormatter(monaco: typeof Monaco): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
   const provider: Monaco.languages.DocumentFormattingEditProvider = {
     displayName: 'kojo-editor',
     provideDocumentFormattingEdits(model: FormatModelShape): Monaco.languages.TextEdit[] {
@@ -707,10 +705,11 @@ export function installKojo2DocumentFormatter(monaco: typeof Monaco): Monaco.IDi
 /* ============================== 宿主接线 1b：区间格式化（Ctrl+Shift+I） ============================== */
 
 /**
- * 选中行格式化的 2.0 provider（**只注册 `kojo2` 语言 id**；flag 关 = 零注册）。
+ * 选中行格式化的 2.0 provider（**只注册 `kojo2` 语言 id**；K2-SURFACE-DEFAULT 起无条件注册）。
  *
- * 与整篇 provider 同一条纪律：只做"该不该应答 + 形状翻译"，异常收成"这次不格式化"。
- * 规则本体是 {@link formatKojo2Range}（整篇算 + 行映射裁剪），本函数一个缩进判据都不写。
+ * 与整篇 provider 同一条纪律：格式化属语言面（阶段 `v1-only` 下也照常可用），只做
+ * "该不该应答 + 形状翻译"，异常收成"这次不格式化"。规则本体是 {@link formatKojo2Range}
+ * （整篇算 + 行映射裁剪），本函数一个缩进判据都不写。
  *
  * **接线（已接）**：`ui/editor-global-providers.ts` 的 2.0 段与
  * `installKojo2DocumentFormatter` 并排调用 `installKojo2RangeFormatter(monaco)`（批次八）。
@@ -718,7 +717,6 @@ export function installKojo2DocumentFormatter(monaco: typeof Monaco): Monaco.IDi
  * `packages/app/tests/language-parity.test.ts` 与 `kojo2-format.test.ts` 各钉一条。
  */
 export function installKojo2RangeFormatter(monaco: typeof Monaco): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
   const provider: Monaco.languages.DocumentRangeFormattingEditProvider = {
     displayName: 'kojo-editor',
     provideDocumentRangeFormattingEdits(model: FormatModelShape, range): Monaco.languages.TextEdit[] {

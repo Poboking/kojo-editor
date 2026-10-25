@@ -63,7 +63,9 @@ import {
 /**
  * 三态切换阶段（字符串字面量就是持久化口径；`2.0-default` 带点，读代码时一眼认出）。
  *
- * - `v1-only`：只有 v1。`.kojo` 按 v1，`.kojo2` **不接管**（语言面也没注册，返回 `blocked`）。
+ * - `v1-only`：只有 v1 的**切流语义**。`.kojo` 按 v1；`.kojo2` 的**语言面照旧可见**
+ *   （descriptor 无条件登记，见 `monaco/languages.ts`），解析器也恒为 2.0——扩展名不是
+ *   "切流意图"，不需要开关批准。`blocked` 只留给"把 `.kojo` 显式钉成 2.0"的 override。
  * - `dual`：双轨。老扩展名 `.kojo` 仍按 v1（作者的老工程一行都不用动），新扩展名 `.kojo2` 按 2.0。
  * - `2.0-default`：2.0 默认。`.kojo2` 按 2.0；`.kojo` 交给**内容指纹**判——已是 2.0 写法的
  *   老文件按 2.0 开，还是 v1 写法的仍按 v1，判不出来就报 `ambiguous`（不静默猜）。
@@ -105,8 +107,9 @@ export const KOJO2_LEGACY_FLAG_KEY = 'kojo.ui.kojo2Cutover.v1';
 /**
  * 这一档允不允许挂 2.0 面（`v1-only` = 不允许；`dual` / `2.0-default` = 允许）。
  *
- * 这是 `isKojo2CutoverEnabled()` 的**唯一**语义来源：所有既有 flag 守卫（语言面 / 主题 /
- * 诊断 / 预览 / 拖放清单）零改动，只是背后的判据从"布尔键"换成了"阶段"。
+ * 这是 `isKojo2CutoverEnabled()` 的**唯一**语义来源：所有既有 flag 守卫（写回 / 迁移 /
+ * `.kojo` 解析器 / 存储服务 / 拖放清单）零改动，只是背后的判据从"布尔键"换成了"阶段"。
+ * 语言面（着色 / 语言服务 / 诊断 / 缩进 / 格式化 / 折叠…）**不读**本判据。
  */
 export function kojo2StageAllowsSurface(stage: Kojo2CutoverStage): boolean {
   return stage !== 'v1-only';
@@ -323,9 +326,9 @@ const AMBIGUOUS_HINT =
 const NEEDS_CONTENT_HINT =
   '2.0 默认阶段下 `.kojo` 要看正文才能定解析器：把文件内容一起传进来（打开后再判），不要只按路径猜。';
 
-/** `v1-only` 阶段碰到 `.kojo2` 的提示 */
+/** `v1-only` 阶段被要求"把 `.kojo` 按 2.0 解析"时的提示（`.kojo2` 不适用：它恒归 2.0） */
 const STAGE_BLOCKED_HINT =
-  '当前是 v1-only 阶段：2.0 语言面还没挂，`.kojo2` 现在打不开。切到 dual 或 2.0-default 再开。';
+  '当前是 v1-only 阶段：老 `.kojo` 仍按 v1 解析，不吃 2.0 解析器（`.kojo2` 不受影响，照常打开）。切到 dual 或 2.0-default 再切。';
 
 /** 取路径最后一段扩展名（小写、含点；`x.kojo.bak` → `.bak`，无扩展名 → 空串） */
 export function extensionOf(filePath: string): string {
@@ -352,9 +355,10 @@ export interface Kojo2RouteInput {
  *
  * 口诀：**override 当家，扩展名先说，阶段定老文件，内容只在 2.0-default 里断 `.kojo`。**
  *
- * 为什么 `.kojo2` 在 `v1-only` 下是 `blocked` 而不是"当 v1 开"：2.0 的面在这个阶段根本
- * 没注册（`languages.ts` 按开关决定），拿 v1 词法去啃 2.0 文本等于把整篇染成错色——
- * 宁可显式报"现在打不开"，也不静默降级。
+ * `.kojo2` **在任何阶段都归 2.0**（K2-SURFACE-DEFAULT）：2.0 的语言面无条件注册，扩展名
+ * 本身就是"这份文件用 2.0 写法"的声明，与"切没切流"无关。开关管的只是**老 `.kojo`** 的
+ * 解析器切换（`2.0-default` 的内容指纹）与"把 `.kojo` 显式钉成 2.0"的 override——后者在
+ * `v1-only` 阶段仍是 `blocked`（那是切流语义，不是语言面）。
  */
 export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
   const { stage, filePath } = input;
@@ -374,9 +378,7 @@ export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
   }
 
   if (extension === KOJO2_FILE_EXTENSION) {
-    if (stage === 'v1-only') {
-      return { kind: 'blocked', filePath, reason: 'stage-disables-kojo2', hint: STAGE_BLOCKED_HINT };
-    }
+    // K2-SURFACE-DEFAULT：扩展名自带"这是 2.0 文件"的声明，语言面无条件注册 ⇒ 与阶段无关。
     return {
       kind: 'resolved',
       filePath,

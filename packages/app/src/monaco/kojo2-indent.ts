@@ -54,8 +54,7 @@
  * ## 注册
  *
  * {@link installKojo2IndentProvider} 只给 `kojo2` 语言 id 注册 on-type formatter，
- * **flag 关时零注册**（调用点在 `ui/editor-global-providers.ts` 的 2.0 段里，本函数自身
- * 也再挡一次）。触发字符两族：`\n`（回车缩进，跟随 v1 `installEnterIndenter`）与
+ * **无条件装配**（K2-SURFACE-DEFAULT：改缓冲的回车缩进也算语言面）。触发字符两族：`\n`（回车缩进，跟随 v1 `installEnterIndenter`）与
  * `KOJO2_PAIRS` 里的开括号（围栏内自动闭合守卫）。**必须同一枚 provider**：Monaco 只派发
  * 注册表里第一枚 provider 的触发字符（`format.js::getOnTypeFormattingEdits`），拆成两枚会让
  * 其中一族静默失效。
@@ -73,7 +72,6 @@
  */
 import type * as Monaco from './entry';
 import { KOJO2_LANGUAGE_ID, KOJO2_PAIRS } from './kojo2-language';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { KOJO2_BLOCK_HEADER_COLON_RE, KOJO2_INDENT_UNIT, KOJO2_NATIVE_HEADER_RE, kojo2IndentationRules } from './kojo2-enter';
 import { KOJO2_INDENT_WIDTH, KOJO2_NATIVE_FENCE_WORD } from './kojo2-lexicon';
 import {
@@ -150,9 +148,6 @@ const BODY_DISPATCH_WORDS: ReadonlySet<string> = new Set([
 /** 「下一行仍是同级兄弟」的容器：`# 表` 的两列行、`@随机` 的候选、`@组` 的组体 */
 const PEER_DECL_WORDS: ReadonlySet<string> = new Set([TABLE_WORD]);
 const PEER_DISPATCH_WORDS: ReadonlySet<string> = new Set([RANDOM_WORD, GROUP_WORD]);
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /**
  * on-type 触发字符：只有换行。跟随 v1 `installEnterIndenter` 的同一条口径——
@@ -456,7 +451,7 @@ export interface Kojo2IndentRulesSource {
 export interface Kojo2IndentConfigDeps {
   /**
    * 取 worker 客户端（缺省 = 动态 import `kojo2-worker-runtime` 的单例）。
-   * 动态 import 让**主线程静态图里连薄客户端都不出现**：flag 关 / 没人要结构层时，
+   * 动态 import 让**主线程静态图里连薄客户端都不出现**：没人要结构层时，
    * `?worker` 入口与协议模块一个字节都不装载。
    */
   readonly getClient?: () => Kojo2IndentRulesSource | null | Promise<Kojo2IndentRulesSource | null>;
@@ -533,7 +528,7 @@ function absorbPatterns(target: Set<string>, patterns: readonly string[], limit:
  * - **不抛进 Monaco**：所有异常只让这一轮不写配置；
  * - {@link Kojo2IndentConfigHandle.dispose} 幂等：只撤一次自己写过的那枚配置。
  *
- * flag 关 ⇒ 交回的句柄什么都不做（零请求、零配置，见 {@link installKojo2IndentConfigFromWorker}）。
+ * 与切流开关无关（K2-SURFACE-DEFAULT：缩进属语言面）；规则只依赖 worker 的 `indents` 查询是否可用。
  */
 export function createKojo2IndentConfigSync(
   monaco: typeof Monaco,
@@ -742,18 +737,14 @@ export function createKojo2IndentConfigSync(
   };
 }
 
-/** flag 关时交回的句柄（调用方照常 `request` / `dispose`，什么也不会发生） */
-function noopIndentConfigHandle(): Kojo2IndentConfigHandle {
-  const never = (): Promise<boolean> => Promise.resolve(false);
-  return { request: never, applyFor: never, dispose: () => undefined };
-}
-
 /**
  * 宿主挂点：把 worker `indents` 回复经 {@link kojo2IndentConfigWith} 送进
  * `setLanguageConfiguration('kojo2', { onEnterRules, indentationRules })`。
  *
- * **不注册 provider**（所以 flag 关时天然"零注册"）；宿主在语义着色 provider 成功拿到捕获
+ * **不注册 provider**（所以它天生是"零注册"）；宿主在语义着色 provider 成功拿到捕获
  * 之后调 `request(model)` 惰性触发（挂点在 `kojo2-semantic.ts` 的 `install` 里）。
+ *
+ * 缩进属**语言面**（K2-SURFACE-DEFAULT：改缓冲的回车缩进也算语言面）⇒ 不读切流开关。
  *
  * 为什么不做成 provider：Monaco 没有"缩进规则 provider"接口，规则只能写进语言配置；
  * 而语言配置是语言级的——本函数因此只持有那一枚 disposable 的账。
@@ -762,17 +753,15 @@ export function installKojo2IndentConfigFromWorker(
   monaco: typeof Monaco,
   deps: Kojo2IndentConfigDeps = {},
 ): Kojo2IndentConfigHandle {
-  if (!isKojo2CutoverEnabled()) return noopIndentConfigHandle();
   return createKojo2IndentConfigSync(monaco, deps);
 }
 
 /**
- * 为 `kojo2` 语言注册回车缩进 formatter（**flag 关 = 零注册**）。
+ * 为 `kojo2` 语言注册回车缩进 formatter（**无条件**：缩进是语言面，阶段 `v1-only` 也照常生效）。
  *
  * 返回的 disposable 幂等（注册只撤一次）；provider 体内任何异常都只让**这一轮**不改缩进。
  */
 export function installKojo2IndentProvider(monaco: typeof Monaco): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
   const provider: Monaco.languages.OnTypeFormattingEditProvider = {
     // 一枚 provider 两条腿：`\n` 走回车缩进，开括号走围栏内自动闭合守卫（见两个触发字符常量的注释）
     autoFormatTriggerCharacters: [

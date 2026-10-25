@@ -898,16 +898,15 @@ describe('provider：只挂 kojo2 / 跨文件 Uri / 失败面', () => {
     expect(provideReferences(fake, model, positionIn(MAIN, '晨光透过鸟居'))).toEqual([]);
   });
 
-  it('flag 关 → 零注册；dispose 幂等且不抛', () => {
+  it('默认档也注册（语言面不读开关）；dispose 幂等且不抛', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const disposable = installKojo2ProjectReferenceProvider(fake.monaco, { getIndex: baseIndex });
-    expect(fake.registrations).toHaveLength(0);
+    expect(fake.registrations.length).toBeGreaterThan(0);
     expect(() => {
       disposable.dispose();
       disposable.dispose();
     }).not.toThrow();
-    expect(fake.disposeCount()).toBe(0);
   });
 
   it('flag 开：dispose 幂等（只撤一次）；注册句柄 dispose 抛错 → 不炸', () => {

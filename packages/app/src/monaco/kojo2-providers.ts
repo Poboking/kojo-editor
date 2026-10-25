@@ -24,7 +24,7 @@
  *
  * 编译成品由 `ui/kojo2-expand-compile.ts` 的模块级登记表提供（面板挂载时登记自己的
  * `compileCache.getLastCompile`）：**绝不二次编译**，也不缓存第二份 source map。登记表空
- * （或 flag 关）⇒ 两处行为与 batch-4 逐字一致。
+ * （或这份文件还没编译成功）⇒ 两处行为与 batch-4 逐字一致。
  *
  * ## 零游戏知识（audit A 的硬约束）
  * 本文件**不 import 任何 adapter 包**：事件名住在 `# 机` 的候选里，而候选由
@@ -46,9 +46,8 @@
  *
  * ## 开关与 disposal
  *
- * 安装器在**装配那一刻**读 `ui/kojo2-flag.ts`（与语义着色 / 语言面同一条纪律，不提供运行时
- * 热切换）：flag 关 ⇒ 立即返回空操作，**零注册**。返回的 disposable 幂等，且逐枚 try/catch
- * ——一枚撤不掉不许带走其余。
+ * 补全 / 悬停是**只读语言面**（K2-SURFACE-DEFAULT）：不读切流开关，装配即注册。返回的
+ * disposable 幂等，且逐枚 try/catch——一枚撤不掉不许带走其余。
  *
  * ## 已知边界（真壳才验得到）
  *
@@ -61,7 +60,6 @@
 import type * as Monaco from './entry';
 import { projectEventArgs, type GameAdapter } from '@kojo/kojo-core';
 import { KOJO2_LANGUAGE_ID } from './kojo2-language';
-import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 import { kojo2ExpandCompilationFor, type Kojo2ExpandCompileSource } from '../ui/kojo2-expand-compile';
 import {
   expandViewAt,
@@ -145,9 +143,6 @@ export const KOJO2_COMPLETION_TRIGGER_CHARS: readonly string[] = Object.freeze([
   // `(`：行尾表演提示组 `(心形)` 的提示名位（K2-COMPLETE-ARGS-FACE）。
   '(',
 ]);
-
-/** flag 关时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /** 没有可查的声明索引时用的空表（避免每轮都建一份） */
 const NO_DECLARATIONS: ReadonlyMap<string, Kojo2Declaration> = new Map<string, Kojo2Declaration>();
@@ -516,7 +511,7 @@ function filePathOfModel(
  *
  * 编译成品是**诊断那一轮**的缓存（`compileCache.getLastCompile`）：这里绝不二次编译——
  * 展开视图要显示的产物行与屏上预览、波浪线必须是同一份字节。缓存里没有这一份 ⇒ `null`
- * （作者还没停手 / 这份文件没编译成功 / flag 关着）。
+ * （作者还没停手 / 这份文件还没编译成功）。
  */
 function expandViewFor(
   model: Monaco.editor.ITextModel,
@@ -616,7 +611,7 @@ export function kojo2HoverOf(
 /**
  * 为 `kojo2` 语言注册**两枚** provider（补全 / 悬停），返回**幂等**的 disposable。
  *
- * flag 关 ⇒ 空操作（零注册）。注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛（宿主那一侧的
+ * **无条件注册**（K2-SURFACE-DEFAULT：补全 / 悬停是只读语言面）。注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛（宿主那一侧的
  * "全有或全无"回滚才有东西可撤）。两条 provider 腿的错误面收在各自体内：任何一腿抛错都
  * 只让**那一轮**空结果，编辑器不受影响。
  *
@@ -630,7 +625,6 @@ export function installKojo2LanguageProviders(
   monaco: typeof Monaco,
   options: Kojo2ProviderOptions = {},
 ): Monaco.IDisposable {
-  if (!isKojo2CutoverEnabled()) return NOOP_DISPOSABLE;
 
   const adapterSource: Kojo2AdapterSource = options.adapter;
   const getFilePath = options.getFilePath;

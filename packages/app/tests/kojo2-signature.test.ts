@@ -607,17 +607,17 @@ describe('CRLF / 中文：同一份源码换 EOL 后读数不变', () => {
 
 /* ============================== ⑥ provider ============================== */
 
-describe('provider：只挂 kojo2、触发字符、dispose、flag 关零注册', () => {
-  it('flag 关 ⇒ 零注册；句柄可重复 dispose（空操作）', () => {
+describe('provider：只挂 kojo2、触发字符、dispose、不读开关', () => {
+  it('缺省档（v1-only）⇒ 照样注册一枚；句柄可重复 dispose（只撤一次）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const handle = installKojo2SignatureHelpProvider(fake.monaco, { adapter: ADAPTER });
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations).toHaveLength(1);
     expect(() => {
       handle.dispose();
       handle.dispose();
     }).not.toThrow();
-    expect(fake.disposeCalls).toBe(0);
+    expect(fake.disposeCalls).toBe(1);
   });
 
   it('flag 开 ⇒ 恰好一枚注册，selector = kojo2', () => {

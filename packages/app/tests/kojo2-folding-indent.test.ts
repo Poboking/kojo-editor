@@ -838,14 +838,14 @@ describe('kojo2IndentEditsAt · 只改新行的行首空白', () => {
 /* ============================== 缩进 · 注册纪律 ============================== */
 
 describe('install · 回车缩进 provider 的注册纪律', () => {
-  it('flag 关 ⇒ 零注册（dispose 也无副作用）', () => {
+  it('flag 关 ⇒ 照挂（回车缩进是语言面，不看切流阶段）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
     const disposable = installKojo2IndentProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
+    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['onType', 'kojo2']]);
     disposable.dispose();
     disposable.dispose();
-    expect(fake.registrations).toEqual([]);
+    expect(fake.dispose).toHaveBeenCalledTimes(1);
   });
 
   it('flag 开 ⇒ 只为 kojo2 注册一枚 on-type，触发字符只有换行；dispose 幂等', () => {
