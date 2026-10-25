@@ -26,6 +26,9 @@
  *   ③ 组合根/清单豁免（本仓即 adapter-manifest.ts 整文件 + 其余落点靠 audit-allow 行）。
  * 因此本闸的行数与 §9 引用的**裸 grep 数**（257 / 62）口径不同：那是对全部行的 grep，
  * 本闸只数"代码行"（注释与豁免行不进基线）。
+ * 交付批实测（feef111a）：kojo-lang/src 与 erb-syntax-tree/src 纳入扫描面后**代码行命中
+ * 为 0**（此前 grep 到的 `kojo2.` 一处落在块注释里，按上述口径豁免）——即"纳入即红"的
+ * 担忧未兑现，基线 M1/M3 里这两目录无条目；若未来它们真进代码行，棘轮会当场拦下。
  *
  * 用法：
  *   node tools/audit-language.mjs                 # 跑闸（pnpm audit:language）
