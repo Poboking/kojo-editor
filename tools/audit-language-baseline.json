@@ -18,9 +18,9 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 164,
+      "total": 165,
       "files": {
-        "packages/app/src/monaco/document-links.ts": 3,
+        "packages/app/src/monaco/document-links.ts": 4,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
         "packages/app/src/monaco/erb-completion-members.ts": 2,
         "packages/app/src/monaco/erb-completion-words.ts": 2,
