@@ -225,6 +225,33 @@ describe('大小写 / 换行 / BOM / 容错', () => {
     tree.delete();
   });
 
+  it('停用区：行首代码前缀 `;!;` / `;#;` 先剥再比（与真源 `erbCodePrefixLength` 对拍）', async () => {
+    /** 真源（`packages/plugins/erb-parser/src/scanner.ts`）的前缀表：本用例直接 import 它，
+     *  上游加/改前缀 ⇒ 这里当场红（C 扫描器里那三字节字形是手抄，靠这条对拍钉住）。 */
+    const { ERB_CODE_PREFIXES } = await import('../../plugins/erb-parser/src/scanner.ts');
+    expect([...ERB_CODE_PREFIXES].sort()).toEqual([';!;', ';#;']);
+
+    for (const prefix of ERB_CODE_PREFIXES) {
+      // 真源口径：trim → 剥三字节前缀 → 逐字等值 ⇒ 前缀写法照样是标记行
+      const tree = parse(`${prefix}[SKIPSTART]\n@BROKEN "x\n${prefix}[SKIPEND]\n`);
+      expect(faultsOf(tree.rootNode)).toEqual([]);
+      expect(allOf(tree.rootNode, 'skip_block'), `${prefix}[SKIPSTART] 必须开区间`).toHaveLength(1);
+      expect(allOf(tree.rootNode, 'skip_end'), `${prefix}[SKIPEND] 必须收区间`).toHaveLength(1);
+      // 区内 `@BROKEN "x` 是死代码：不许被建成 function_block / string
+      expect(allOf(tree.rootNode, 'function_block'), `${prefix} 区内的 @ 行被当成函数了`).toEqual([]);
+      expect(allOf(tree.rootNode, 'skip_body')[0]!.text, `${prefix} 区内原文必须整段进 skip_body`).toContain('@BROKEN "x');
+      tree.delete();
+    }
+
+    // 剥完前缀**不再 trim** ⇒ 前缀后夹空白不是标记行；半截 `;` 也不是（真源剥不到三字节）
+    for (const text of [';!; [SKIPSTART]\nraw\n[SKIPEND]\n', ';[SKIPSTART]\nraw\n[SKIPEND]\n']) {
+      const tree = parse(text);
+      expect(faultsOf(tree.rootNode)).toEqual([]);
+      expect(allOf(tree.rootNode, 'skip_block'), `${JSON.stringify(text)} 不该开区间`).toEqual([]);
+      tree.delete();
+    }
+  });
+
   it('停用区：空体 / 尾注不收 / EOF 无收区标记都不崩', () => {
     const empty = parse('[SKIPSTART]\n[SKIPEND]\n');
     expect(faultsOf(empty.rootNode)).toEqual([]);

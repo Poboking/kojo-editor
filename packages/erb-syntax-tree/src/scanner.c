@@ -24,6 +24,12 @@
  * ## 口径
  * - 只有 `trim` 后逐字等于标记的行才认（与真源 `trimmed === '[SKIPEND]'` 同判：
  *   大小写变体、尾注、`[skipend]` 都不认）；
+ * - 行首**代码前缀** `;!;` / `;#;` 先剥再比（真源 `parseErbText` 的 `erbCodePrefixLength`
+ *   同一顺序：trim → 剥三字节 → 逐字等值）。所以 `;!;[SKIPSTART]` / `;#;[SKIPEND]` 是标记行，
+ *   而 `;!; [SKIPSTART]`（前缀后夹空白）不是——真源剥完前缀**不再 trim**。
+ *   以 `;` 起手却不是代码前缀的行一定不是标记行（标记以 `[` 起手）。
+ *   前缀表本身仍以真源 `ERB_CODE_PREFIXES` 为唯一真源，`tests/parse-structure.test.ts`
+ *   的对拍一节直接 import 该常量逐项验（上游加第三种前缀 ⇒ 对拍当场红）；
  * - 体 token 的 mark_end 停在收区行**之前**（含上一行换行）⇒ 收区行归 skip_end，行号不乱；
  * - EOF 无收区标记时体一直吃到 EOF（grammar 的 close 可选），同时把 in_skip 复位，
  *   避免残缺文件影响后续解析；
@@ -46,14 +52,34 @@ static bool is_hspace(int32_t c) {
 }
 
 /**
- * 当前位置是否是一整行标记（标记字符串 + 行尾只剩水平空白）。
- * 会消费水平空白与标记本身；调用方负责 mark_end。
+ * 吃掉行首**代码前缀** `;!;` / `;#;`（与真源 `ERB_CODE_PREFIXES` 同字形：`;` + `!`/`#` + `;`）。
+ * 成功返回 true（已前进三字节）；不是前缀返回 false（已前进的字节不 mark_end ⇒ 由 tree-sitter 复位）。
+ */
+static bool consume_code_prefix(TSLexer *lexer) {
+  if (lexer->eof(lexer) || lexer->lookahead != ';') return false;
+  lexer->advance(lexer, false);
+  if (lexer->eof(lexer)) return false;
+  const int32_t mid = lexer->lookahead;
+  if (mid != '!' && mid != '#') return false;
+  lexer->advance(lexer, false);
+  if (lexer->eof(lexer) || lexer->lookahead != ';') return false;
+  lexer->advance(lexer, false);
+  return true;
+}
+
+/**
+ * 当前位置是否是一整行标记（[代码前缀] + 标记字符串 + 行尾只剩水平空白）。
+ * 会消费水平空白、可选代码前缀与标记本身；调用方负责 mark_end。
  */
 static bool line_is_marker(TSLexer *lexer, const char *marker) {
   while (!lexer->eof(lexer) && is_hspace(lexer->lookahead)) {
     lexer->advance(lexer, false);
   }
   if (lexer->eof(lexer)) return false;
+
+  /* 行首代码前缀：真源先剥前缀再比标记。标记以 `[` 起手 ⇒ 以 `;` 起手却不是前缀的行
+     一定不是标记行，直接判否（也省得把比较起点停在剥了一半的位置）。 */
+  if (lexer->lookahead == ';' && !consume_code_prefix(lexer)) return false;
 
   const size_t n = strlen(marker);
   for (size_t i = 0; i < n; i++) {
