@@ -17,6 +17,22 @@ export {
 } from './scanner';
 // 结构体检（2026-10-13 反馈 7；纯函数，配对表仍单源于 scanner.ts）
 export { MAX_STRUCTURE_ISSUES, checkControlFlowStructure, checkPreprocStructure, checkStructure, preprocRoleOf } from './structure';
+// 内建式中函数静态签名表（exmeth）与实参诊断（A1；静态数据，不进索引契约）
+export {
+  BUILTIN_ARGS_CODE,
+  BUILTIN_ARG_TYPE_CODE,
+  BUILTIN_FUNCTION_NAMES,
+  BUILTIN_SIGNATURES,
+  builtinSignatureLabel,
+  builtinSignatureOf,
+  collectBuiltinArgDiagnostics,
+  type BuiltinArgDiagnosticsInput,
+  type BuiltinParam,
+  type BuiltinParamType,
+  type BuiltinSignature,
+} from './builtins';
+// 实参个数（用户函数；纯函数，目录查询）
+export { ARITY_MISMATCH_CODE, arityParamsOf, collectArityDiagnostics, erbCallSitesOf, type ArityCatalog, type ArityInput, type ArgSpan, type ErbCallSite } from './arity';
 export { checkDeclarationIssues, parseDimLine, dimLineViolations, type DimLine } from './declarations';
 export {
   ERB_CODE_PREFIXES,

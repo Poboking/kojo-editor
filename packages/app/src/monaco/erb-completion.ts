@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import type { ErbIndex } from '@kojo/plugin-api';
-import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import { builtinSignatureOf } from '@kojo/plugin-erb-parser';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords } from './erb-language';
 import { erbBitCompletionItems } from './erb-completion-bits';
 import { erbCompletionGate, ERB_GATE_SOURCE_WHITELIST, ERB_JUMP_KEYWORDS } from './erb-completion-context';
@@ -9,7 +9,7 @@ import { erbFamilyCompletionItems } from './erb-completion-families';
 import { erbFunctionCompletionItems, erbFunctionNameSlot } from './erb-completion-functions';
 import { erbLabelCompletionItems } from './erb-completion-labels';
 import { erbMemberCompletionItems, erbMemberSlotAt } from './erb-completion-members';
-import { erbSystemFunctionCompletionItems } from './erb-completion-system-functions';
+import { erbSystemFunctionCompletionItems, systemFunctionDocumentation } from './erb-completion-system-functions';
 import { erbVariableCompletionItems } from './erb-completion-variables';
 import { erbWordCompletionItems } from './erb-completion-words';
 import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
@@ -123,14 +123,13 @@ export function erbSlotsForCallee(
   return slotsForCallee(protocol, keys, ERB_LOG_TAG);
 }
 
-/** 系统函数候选的详情：中文名（语言层反向表）+ 调用签名（ERB 独有的一路） */
+/** 系统函数候选的详情：中文别名 + 引擎签名（exmeth 静态表）+ 调用签名（ERB 独有的一路） */
 function systemFunctionDetail(label: string, tables: ErbCompletionTables): ErbCompletionResolution | undefined {
-  const cn = SYSTEM_FUNCTION_REVERSE.get(label);
-  if (cn === undefined) return undefined;
+  if (builtinSignatureOf(label) === null) return undefined;
   const facts = [signatureLine(label, [label], tables.callProtocol, ERB_LOG_TAG)].filter(
     (s): s is string => s !== undefined,
   );
-  return { documentation: { value: [`**${label}** ↔ ${cn}`, ...facts].join('\n\n') } };
+  return { documentation: { value: [systemFunctionDocumentation(label), ...facts].join('\n\n') } };
 }
 
 /**
@@ -361,8 +360,9 @@ const LABELS_SOURCE: ErbCompletionSource = {
 };
 
 /**
- * 系统函数名补全（EC-5）：英文名（`GETBIT(`），词表**只读派生**自 kojo-sugar 的
- * `SYSTEM_FUNCTION_REVERSE`（与 `.kojo` 侧同一张表，反向：那边插中文名、这边插英文名）。
+ * 系统函数名补全（EC-5）：英文名（`GETBIT(`），词表**只读派生**自 erb-parser 的
+ * 内建式中函数签名表（Emuera `exmeth`，与实参诊断同一张表；`.kojo` 侧中文函数名
+ * 另住 kojo-sugar 别名表，两门语言两张表、不是双源）。
  * 纯函数内已排除行首指令位 / 注释行 / 字符串内。
  */
 const SYSTEM_FUNCTIONS_SOURCE: ErbCompletionSource = {

@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
-import { ENGINE_VARIABLE_FAMILIES, SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { BUILTIN_FUNCTION_NAMES } from '@kojo/plugin-erb-parser';
 import { MAX_NAME_CANDIDATES, rankKey, type CompletionTables } from './completion-core';
 import { erbCompletionGate, NAME_CHAR_RE } from './erb-completion-context';
 import { erbDeclaredNameSlot, ERB_SIGIL_BEFORE } from './erb-completion-families';
@@ -22,7 +23,8 @@ import { col0Of, lineAt } from './kojo-completion-position';
  *    点号在这里只当**族查询键**用：作者写 `receiver.` 就是问"这个名字族里有哪些成员"。
  *    候选 = 两本**既有名录**里的同族名字，按装配核的排名键做**模糊排序**：
  *    - 项目函数族（`ErbIndex` 派生的 `tables.erbFunctionNames`）：`receiver_*`；
- *    - 系统函数族（`SYSTEM_FUNCTION_REVERSE` 的键）：`receiver*`（接收者至少两字符）。
+ *    - 系统函数族（`BUILTIN_FUNCTION_NAMES`——erb-parser 的 exmeth 静态签名表）：
+ *      `receiver*`（接收者至少两字符）。
  *    两路都是**命名约定推断**（不是引擎语义）⇒ `confidence: 'heuristic'`。
  *
  * 3. **字段 / 属性位**（`CFLAG:|` / `CSTR:名|` 这类 `族:…` 的**名字段**）：
@@ -314,14 +316,14 @@ function projectFamilyMembers(names: readonly string[] | undefined, receiver: st
 }
 
 /**
- * 系统函数族成员（`receiver*`，来自既有反向表；接收者至少两字符——单字母会把整张系统函数表
+ * 系统函数族成员（`receiver*`，来自 erb-parser 的内建签名表；接收者至少两字符——单字母会把整张系统函数表
  * 抖进候选，那是噪声不是族）。`name === receiver` 本身不算成员（同一枚名字没有"成员"可言）。
  */
 function systemFamilyMembers(receiver: string): readonly string[] {
   const needle = receiver.toUpperCase();
   if (needle.length < 2) return [];
   const out: string[] = [];
-  for (const name of SYSTEM_FUNCTION_REVERSE.keys()) {
+  for (const name of BUILTIN_FUNCTION_NAMES) {
     if (name === needle) continue;
     if (name.startsWith(needle)) out.push(name);
   }

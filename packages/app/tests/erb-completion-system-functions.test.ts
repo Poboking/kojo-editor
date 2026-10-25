@@ -1,11 +1,13 @@
 /**
  * EC-5 · `.erb` 系统函数名补全（`erbSystemFunctionCompletionItems`）单测。
  *
- * 不需要语料：词表真源 `SYSTEM_FUNCTION_REVERSE`（`kojo-sugar` 派生）在测试里真实生效。
+ * 不需要语料：词表真源 `BUILTIN_FUNCTION_NAMES`（erb-parser 的 exmeth 静态签名表）
+ * 在测试里真实生效。
  * 覆盖：表达式位 `GET` → 命中 `GETBIT`（`insertText` = `GETBIT(`、`kind` = Function、
- * `documentation` = `**英文名** ↔ 中文名`、替换范围 = 已输入词）；同表覆盖（`MATCH` /
- * `GETNUM` / `STRCOUNT` / `RAND` / `SETBIT` 在列）；前缀精确优先；注释行 / 指令行首（含
- * U+3000 全角空白缩进）/ 字符串内 / 词紧前 `$` → `[]`；空 model / 非法位置不抛。
+ * `documentation` = 糖层中文别名 + 引擎签名、替换范围 = 已输入词）；同表覆盖（`MATCH` /
+ * `GETNUM` / `STRCOUNT` / `RAND` / `SETBIT` / `FIRSTTIME` 在列）；前缀精确优先；注释行 /
+ * 指令行首（含 U+3000 全角空白缩进）/ 字符串内 / 词紧前 `$` → `[]`；空 model /
+ * 非法位置不抛。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -54,9 +56,24 @@ describe('EC-5 · 表达式位命中', () => {
     expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Function);
   });
 
-  it('`documentation` = `**英文名** ↔ 中文名`（带同源中文对照）', () => {
-    expect(itemOf(at('PRINTFORML GET|'), 'GETBIT')!.documentation).toBe('**GETBIT** ↔ 获取标记');
-    expect(itemOf(at('PRINTFORML STR|'), 'STRCOUNT')!.documentation).toBe('**STRCOUNT** ↔ 出现次数');
+  it('`documentation` = 糖层中文别名（若有）+ 引擎签名（exmeth 静态表）', () => {
+    expect(itemOf(at('PRINTFORML GET|'), 'GETBIT')!.documentation).toBe(
+      '**GETBIT** ↔ 获取标记\n\nGETBIT(int, int) → int',
+    );
+    expect(itemOf(at('PRINTFORML STR|'), 'STRCOUNT')!.documentation).toBe(
+      '**STRCOUNT** ↔ 出现次数\n\nSTRCOUNT(str, str) → int',
+    );
+  });
+
+  it('分支扩展名无签名可挂：只给名字（+中文别名若有）', () => {
+    expect(itemOf(at('PRINTFORML FIRST|'), 'FIRSTTIME')!.documentation).toBe('**FIRSTTIME** ↔ 首次');
+    expect(itemOf(at('PRINTFORML SETB|'), 'SETBIT')!.documentation).toBe('**SETBIT** ↔ 设置标记');
+  });
+
+  it('糖层无中文别名的 exmeth 名：头段只有英文名', () => {
+    expect(itemOf(at('PRINTFORML CBGCLEAR|'), 'CBGCLEAR')!.documentation).toBe(
+      '**CBGCLEAR**\n\nCBGCLEAR() → int',
+    );
   });
 
   it('大小写不敏感：`get` → 命中 `GETBIT`（ERB 命令大小写不敏感）', () => {

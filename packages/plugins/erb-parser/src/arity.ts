@@ -62,8 +62,14 @@ export interface ArityInput {
   readonly catalog: ArityCatalog;
 }
 
-/** 一处调用点（1 基行号；列均为**行内 0 基**，输出时再换算 1 基） */
-interface CallSite {
+/**
+ * 一处调用点（1 基行号；列均为**行内 0 基**，输出时再换算 1 基）。
+ *
+ * `collectArityDiagnostics`（用户函数个数）与 `builtins.ts` 的内建实参诊断
+ * （个数 + 类型）共用这一形状——两处各写一遍扫描就是第二判据，漂移的表现是
+ * "同一行调用，一边报一边不报"。
+ */
+export interface ErbCallSite {
   readonly line: number;
   /** 调用点原样函数名（消息里按作者写法显示，不做大写改写） */
   readonly name: string;
@@ -75,10 +81,12 @@ interface CallSite {
   readonly argFirst: number;
   /** 末个非空实参终点（0 基、不含）；-1 = 全部为空 */
   readonly argLast: number;
+  /** 逐实参槽（与 `given` 同源；类型判据按槽位对签名） */
+  readonly spans: readonly ArgSpan[];
 }
 
 /** 一个实参槽的行内 0 基半开区间 */
-interface ArgSpan {
+export interface ArgSpan {
   readonly start: number;
   readonly end: number;
 }
@@ -209,9 +217,9 @@ function makeSite(
   nameStart: number,
   nameEnd: number,
   spans: readonly ArgSpan[],
-): CallSite {
+): ErbCallSite {
   const bounds = argBounds(raw, spans);
-  return { line, name, nameStart, nameEnd, given: spans.length, argFirst: bounds.first, argLast: bounds.last };
+  return { line, name, nameStart, nameEnd, given: spans.length, argFirst: bounds.first, argLast: bounds.last, spans };
 }
 
 /**
@@ -221,7 +229,7 @@ function makeSite(
  * 只许空白、变量成员访问占槽不算。名字之后只认两种实参形（括号形 / 逗号形），
  * 其余（FORM 拼接、单独的成员访问）⇒ `null`，整行不判。
  */
-function callSiteOf(line: VisibleCodeLine, code: string): CallSite | null {
+function callSiteOf(line: VisibleCodeLine, code: string): ErbCallSite | null {
   if (!line.isCallLine) return null;
   const raw = line.raw;
   const indent = raw.length - raw.trimStart().length;
@@ -269,9 +277,9 @@ function callSiteOf(line: VisibleCodeLine, code: string): CallSite | null {
  * 成员访问（`VAR:MEMBER(…)`）按 `colonAdjacent` 退出。`skipStarts` 是同一行上
  * CALL 名字槽的起点集合——`CALL FOO(a)` 的 `FOO` 已按调用面判过，这里不重复。
  */
-function expressionSites(line: VisibleCodeLine, code: string, skipStarts: ReadonlySet<number>): CallSite[] {
+function expressionSites(line: VisibleCodeLine, code: string, skipStarts: ReadonlySet<number>): ErbCallSite[] {
   const raw = line.raw;
-  const out: CallSite[] = [];
+  const out: ErbCallSite[] = [];
   TOKEN_RUN.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = TOKEN_RUN.exec(code)) !== null) {
@@ -314,7 +322,7 @@ function requiredCount(params: readonly ErbParam[]): number {
 }
 
 /** 一处调用点 → 一条诊断（正常个数 ⇒ null） */
-function issueOf(site: CallSite, params: readonly ErbParam[]): LineDecoration | null {
+function issueOf(site: ErbCallSite, params: readonly ErbParam[]): LineDecoration | null {
   if (hasVariableSlot(params)) return null;
   const total = params.length;
   const required = requiredCount(params);
@@ -386,6 +394,25 @@ export function arityParamsOf(index: ErbIndex, normalizedName: string): readonly
 }
 
 /**
+ * 单可见行的调用点扫描（**纯函数**）：CALL 直系族名字槽 + 表达式里的 `名字(`。
+ *
+ * 判据与 `collectArityDiagnostics` 此前的行内逻辑逐字相同（CALL 名字槽优先、
+ * 同一名字不进表达式结果、成员访问/FORM 拼接不判）；抽出来只为让内建实参诊断
+ * 复用同一把尺子。产出顺序 = CALL 名字槽在前、表达式位按列升序。
+ */
+export function erbCallSitesOf(line: VisibleCodeLine, code: string): readonly ErbCallSite[] {
+  const out: ErbCallSite[] = [];
+  const call = callSiteOf(line, code);
+  const skip = new Set<number>();
+  if (call !== null) {
+    skip.add(call.nameStart);
+    out.push(call);
+  }
+  for (const site of expressionSites(line, code, skip)) out.push(site);
+  return out;
+}
+
+/**
  * 收集整篇缓冲区的实参个数诊断（**纯函数**：文本 + 目录进、波浪线数据出）。
  *
  * 非 ERB 方言路径与空文本 ⇒ 空数组（与 `erbReferenceDecorations` 同一条门）。
@@ -397,17 +424,7 @@ export function collectArityDiagnostics(input: ArityInput): LineDecoration[] {
   for (const line of visibleCodeLines(input.text)) {
     if (line.isDefinition) continue;
     const code = line.codeView();
-    const call = callSiteOf(line, code);
-    const skip = new Set<number>();
-    if (call !== null) {
-      skip.add(call.nameStart);
-      const params = input.catalog(normalizedUpper(call.name));
-      if (params) {
-        const issue = issueOf(call, params);
-        if (issue !== null) out.push(issue);
-      }
-    }
-    for (const site of expressionSites(line, code, skip)) {
+    for (const site of erbCallSitesOf(line, code)) {
       const params = input.catalog(normalizedUpper(site.name));
       if (!params) continue;
       const issue = issueOf(site, params);

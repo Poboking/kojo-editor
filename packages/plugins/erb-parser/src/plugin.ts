@@ -44,6 +44,7 @@ import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
 import { callArgumentHints, inlaySlotsOf } from './inlay-hints';
 import { arityParamsOf, collectArityDiagnostics, type ArityCatalog } from './arity';
+import { collectBuiltinArgDiagnostics } from './builtins';
 import { collectUndefinedNameDiagnostics, type UndefinedNameDiagnosticsInput } from './undefined-name';
 import {
   SNAPSHOT_VERSION,
@@ -202,7 +203,7 @@ export const UNDEFINED_NAME_DIAGNOSTICS_ENABLED = true;
 
 /** 逐规则失败的记账形状（与校验器 `report.failedRules` 同一语义：不静默） */
 export interface ErbDiagnosticsRuleFailure {
-  readonly rule: 'arity' | 'undefined-name';
+  readonly rule: 'arity' | 'undefined-name' | 'builtin-args';
   readonly message: string;
 }
 
@@ -325,6 +326,28 @@ export function collectErbSemanticDiagnostics(
     } catch (err) {
       failedRules.push({ rule: 'undefined-name', message: String(err) });
     }
+  }
+
+  /* ---------------- 内建函数实参诊断（A1 · exmeth 静态签名表） ----------------
+
+     第三条腿，与用户函数两条腿的差异都是有意的：
+
+     1. **不依赖索引**：签名表是静态数据 ⇒ 未打开项目 / 索引还没建好也判
+        （`collectErbSemanticDiagnostics` 的索引可空，这一腿照常出）；
+     2. **影子函数让位**：项目里存在同名用户函数时该名字整体不判——用户定义优先，
+         猜错边就是满屏假红（`isUserFunction` 由调用点按索引现读）；
+     3. **独立诊断码**（`ERB_BUILTIN_ARGS` / `ERB_BUILTIN_ARG_TYPE`）：问题面板可按码
+         过滤，也不与用户函数那一路的接线注①（多给降 warning 的抗噪口径）互相污染。 */
+  try {
+    decorations.push(
+      ...collectBuiltinArgDiagnostics({
+        path: file.path,
+        text: file.text,
+        ...(index === null ? {} : { isUserFunction: (upper: string) => index.byName.has(upper) }),
+      }),
+    );
+  } catch (err) {
+    failedRules.push({ rule: 'builtin-args', message: String(err) });
   }
 
   // 铁律四：失败要上屏，不能只在控制台留一行后当没发生

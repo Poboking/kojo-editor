@@ -312,7 +312,7 @@ describe('EC-2..EC-5 · 四个 source 经 provider 端到端出货（装配接�
     expect(hit!.detail).toBe('标签（本文件）');
   });
 
-  it('EC-5：行中表达式位弹系统函数英文名（insertText 带 `(`，中文名进 documentation）', () => {
+  it('EC-5：行中表达式位弹系统函数英文名（insertText 带 `(`，签名/中文名进 documentation）', () => {
     const hit = provide(provider, 'IF A', 5).find((i) => labelText(i.label) === 'GETBIT');
     expect(hit).toBeDefined();
     expect(hit!.kind).toBe(monaco.languages.CompletionItemKind.Function);

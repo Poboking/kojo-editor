@@ -133,7 +133,11 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     expect(leaked).toEqual([]);
   });
 
-  it('反空匹配自证：同一条链只要**允许**跟动态边，正文就必须出现在图里', () => {
+  // 动态闭包 = 整棵懒装载面（几百枚文件逐个读 + 正则走图），并行池 CPU 争用时超过
+  // 20s 默认预算（2026-10-25 实测：隔离 3.5s，功能池争用 25s+ 被默认超时杀）。
+  // 本用例断言的是**图内容**（教程正文在动态图上），不是耗时——显式给预算不属于
+  // 放宽判据，只是不让争用把内容断言染成假红。
+  it('反空匹配自证：同一条链只要**允许**跟动态边，正文就必须出现在图里', { timeout: 120_000 }, () => {
     // 上面那条"零命中"完全可能因为路径拼错而恒真——这里用同一份正则、同一个入口，
     // 只把判据换成"静态 + 动态都跟"，命中就必须出现，且命中的正是懒装载的那两坨。
     const withDynamic = [...eagerClosure('packages/app/src/main.tsx', { followDynamic: true }).keys()];
@@ -331,11 +335,21 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     这三枚文件都是**常驻插件的核心逻辑**（`erb-parser` / `condition-extractor` 都在
     //     `bootstrap.ts` 的静态入口名单里），没有可挪的动态边——真要减面只能走上面记着的
     //     `ui-kit/index.tsx` 按件拆分那条（约 −12 KB），与 ERB 面无关。
+    //   - **A1 内建实参校验批（2026-10-25）**：现读数 **191 文件 / 2,800 KB**，两枚闸随现值
+    //     上抬（190 → 191 文件、2,790 → 2,810 KB）。增量逐块点名（+1 文件 / +21 KB）：
+    //     · +17.9 KB `erb-parser/builtins.ts`（**新进图**）：exmeth 静态签名表 170 名
+    //       （154 wiki 载明 + 16 分支扩展名）+ 内建实参个数/类型诊断；由 `plugin.ts` 的诊断腿
+    //       与宿主补全（`erb-completion-system-functions.ts` / `erb-completion-members.ts`）
+    //       静态引用——erb-parser 是 `bootstrap.ts` 两个常驻插件之一，没有可挪的动态边；
+    //     · +0.9 KB `erb-parser/arity.ts`：调用点共用扫描器（`ErbCallSite` / `erbCallSitesOf`）
+    //       上提，内建诊断与用户函数个数诊断共用一把尺子（不写第二份扫描）；
+    //     · +1.2 KB `erb-parser/plugin.ts` / +0.6 KB `index.ts`：诊断腿接线（独立 try/catch，
+    //       失败进 `failedRules`）与导出面。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤190 文件 / ≤2,790 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_790);
-    expect(files.length).toBeLessThanOrEqual(190);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤191 文件 / ≤2,810 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_810);
+    expect(files.length).toBeLessThanOrEqual(191);
   });
 
   /**
