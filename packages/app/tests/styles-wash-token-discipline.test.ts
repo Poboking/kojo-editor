@@ -42,6 +42,9 @@ const FILES = [
   ['styles.css', read('../src/styles.css')],
   ['styles-project.css', read('../src/styles-project.css')],
 ] as const;
+/* 1027 玻璃档批的射程（下面 `玻璃 blur 半径` 那一节用）：遮罩收口切片 + F1 命令面板切片 */
+const noticesRaw = read('../src/shell-notices.css');
+const paletteRaw = read('../src/ui/palette.css');
 
 /* ------------------------------ ① 微型 CSS / token 解析（照 shell-notices 先例） ------------------------------ */
 
@@ -513,5 +516,149 @@ describe('B-1 · 间距刻度落地（--space-6 立档必须真被消费）', ()
     const rules = parseRules(read('../src/styles-project.css'));
     expect(declOf(rules, '.tree-filter', 'font-size')).toBe('var(--fs-1)');
     expect(declOf(rules, '.tree-filter', 'font-family')).toBe('inherit');
+  });
+});
+
+/* ------------------------------ 1027 玻璃档批 · blur 半径按用途归档 ------------------------------ */
+
+/**
+ * 形态照上面 ② 的先例（**改前那串字面量**当期望值，两侧都展开再比），对象换成几何：
+ * `--scrim-* / --rim-*` 那两族当年收的是"色"，这一轮收的是遮罩的**虚化半径**——它有 12 行写成裸 px
+ * （六条规则 × `-webkit-` 双写：`shell-notices.css` ⑤ 的五条 + `ui/palette.css` 的 `.pk-mask`），
+ * 于是 light / mint 号称能翻浓度，实际只翻得动 tint / alpha / saturate，半径永远追不上 ⇒ 三档不一致。
+ *
+ * 立档口径（名字跟途走、不跟序号走）：`--glass-blur-scrim`（破坏性确认面）/ `--glass-blur-scrim-query`
+ * （只读查询面）/ `--glass-blur-picker`（命令面板遮罩）/ `--glass-blur-palette`（F1 的 `.pk-mask`，
+ * 同一条遮罩路上再收 1px）。dark 档缺省写成主路那条 `calc(var(--glass-blur) × n)` 的**原文**，
+ * 所以下面每一格展开后与改前逐字相等 = 零终值漂移；mint 的命令面板**不给** picker 档（它那里
+ * `.picker-backdrop` 只供 background，见 `shell-notices.css` ⑤ 的 mint 注记）。
+ *
+ * ⚠ `before` 连 `saturate(…)` 一起抄：饱和不带 px、不是"翻不动浓度"那一件事，仍留在消费侧；
+ * 对拍把它比上，才不会被后来人借本批偷偷改设计。
+ */
+interface BlurSlot {
+  /** 取哪一档的 token 表（dark = tokens.css 的裸 `:root`） */
+  tier: 'dark' | 'light' | 'mint-dark';
+  file: 'shell-notices.css' | 'palette.css';
+  selector: string;
+  /** 改前的声明原文（逐字抄自这两份文件） */
+  before: string;
+  /** 这一格必须改吃的档位 token */
+  token: string;
+}
+
+const TIER_MAP = { dark: DARK, light: LIGHT, 'mint-dark': MINT } as const;
+const BLUR_FILES: Record<BlurSlot['file'], string> = { 'shell-notices.css': noticesRaw, 'palette.css': paletteRaw };
+
+const BLUR_SLOTS: readonly BlurSlot[] = [
+  // —— light ⑤：确认面 9px / 查询面 8px / 命令面板 8px ——
+  { tier: 'light', file: 'shell-notices.css', selector: ":root[data-theme='light'] .overlay-backdrop", before: 'blur(9px) saturate(0.82)', token: '--glass-blur-scrim' },
+  { tier: 'light', file: 'shell-notices.css', selector: ":root[data-theme='light'] .modal-mask", before: 'blur(9px) saturate(0.82)', token: '--glass-blur-scrim' },
+  { tier: 'light', file: 'shell-notices.css', selector: ":root[data-theme='light'] .overlay-backdrop:has(.ov-query)", before: 'blur(8px) saturate(0.85)', token: '--glass-blur-scrim-query' },
+  { tier: 'light', file: 'shell-notices.css', selector: ":root[data-theme='light'] .picker-backdrop", before: 'blur(8px) saturate(0.85)', token: '--glass-blur-picker' },
+  // —— mint ⑤：确认面 11px / 查询面 9px（墨绿底与代码面同色相，半径比 light 深一档仍不糊成灰泥）——
+  { tier: 'mint-dark', file: 'shell-notices.css', selector: ":root[data-theme='mint-dark'] .overlay-backdrop", before: 'blur(11px) saturate(0.92)', token: '--glass-blur-scrim' },
+  { tier: 'mint-dark', file: 'shell-notices.css', selector: ":root[data-theme='mint-dark'] .modal-mask", before: 'blur(11px) saturate(0.92)', token: '--glass-blur-scrim' },
+  { tier: 'mint-dark', file: 'shell-notices.css', selector: ":root[data-theme='mint-dark'] .overlay-backdrop:has(.ov-query)", before: 'blur(9px) saturate(0.95)', token: '--glass-blur-scrim-query' },
+  // —— palette：F1 的 `.pk-mask` 是全主题通路 ⇒ 三档各测一遍（三档都填 7px，谁抄成别的数就红）——
+  { tier: 'dark', file: 'palette.css', selector: 'html:root .picker-backdrop.pk-mask', before: 'blur(7px) saturate(1.05)', token: '--glass-blur-palette' },
+  { tier: 'light', file: 'palette.css', selector: 'html:root .picker-backdrop.pk-mask', before: 'blur(7px) saturate(1.05)', token: '--glass-blur-palette' },
+  { tier: 'mint-dark', file: 'palette.css', selector: 'html:root .picker-backdrop.pk-mask', before: 'blur(7px) saturate(1.05)', token: '--glass-blur-palette' },
+];
+
+/** 展开串里抠出 `blur( … )` 的半径参数（允许一层嵌套：`calc(16px * 0.8)`） */
+const radiusOf = (decl: string): string | null => {
+  const m = /blur\(((?:[^()]|\([^()]*\))*)\)/.exec(squash(decl));
+  return m ? squash(m[1]!) : null;
+};
+
+describe('1027 玻璃档批 · 遮罩虚化半径按用途归档', () => {
+  const LADDER = ['--glass-blur-scrim', '--glass-blur-scrim-query', '--glass-blur-picker', '--glass-blur-palette'] as const;
+
+  it('名单够格（10 格 = 被收编的每一条遮罩 / 键盘面规则 × 它所在的档，覆盖不全的"绿"不算数）', () => {
+    expect(BLUR_SLOTS.length).toBe(10);
+    expect(BLUR_SLOTS.filter((s) => s.file === 'shell-notices.css').length).toBe(7);
+    expect(LADDER.length).toBe(4);
+  });
+
+  it('每格都还在，且两侧展开后与改前逐字相等：0 格漂移（`-webkit-` 双写一起换，漏一条就是老 WebKit 还在吃裸值）', () => {
+    const missing: string[] = [];
+    const bad: string[] = [];
+    for (const s of BLUR_SLOTS) {
+      const rules = parseRules(BLUR_FILES[s.file]);
+      for (const prop of ['backdrop-filter', '-webkit-backdrop-filter'] as const) {
+        const got = declOf(rules, s.selector, prop);
+        if (got === undefined) {
+          missing.push(`${s.tier}: ${s.file} ${s.selector} { ${prop} }`);
+          continue;
+        }
+        if (!got.includes(`var(${s.token})`)) {
+          bad.push(`${s.tier}: ${s.selector} { ${prop}: ${got} } —— 没吃 ${s.token}（字面量回潮 = 定义点外第二张嘴）`);
+          continue;
+        }
+        const after = expandVars(got, TIER_MAP[s.tier]);
+        if (after === null) {
+          bad.push(`${s.tier}: ${s.selector} { ${prop} } —— var() 展开失败（环 / 无定义且无兜底）`);
+          continue;
+        }
+        if (squash(after) !== squash(s.before)) {
+          bad.push(`${s.tier}: ${s.selector} { ${prop} }\n      改前 ${squash(s.before)}\n      现值 ${squash(after)}`);
+        }
+      }
+    }
+    expect(missing, `规则消失了（不许靠删规则换绿）：\n${missing.join('\n')}`).toEqual([]);
+    expect(bad, `终值漂移 ${bad.length} 格：\n${bad.join('\n')}`).toEqual([]);
+  });
+
+  it('dark 档零漂移：三枚遮罩档的缺省展开后 = 主路懒档（styles-project.css）真正在用的那个半径', () => {
+    const project = parseRules(read('../src/styles-project.css'));
+    const MAIN: readonly [string, string][] = [
+      ['--glass-blur-scrim', '.overlay-backdrop'],
+      ['--glass-blur-scrim-query', '.overlay-backdrop:has(.ov-query)'],
+      ['--glass-blur-picker', '.picker-backdrop'],
+    ];
+    for (const [token, selector] of MAIN) {
+      const expanded = expandVars(`blur(${DARK.get(token)})`, DARK);
+      expect(expanded, `${token} 在 dark 档展开失败`).not.toBeNull();
+      const got = expandVars(declOf(project, selector, 'backdrop-filter') ?? '', DARK);
+      if (got === null || got === '') {
+        // 查询面那条懒档住在 `@supports` 里，declOf 只看顶层（口径同 ①）⇒ 直接钉 calc 原文
+        expect(DARK.get(token), `${token} 的 dark 缺省不是主路的 calc 原文`).toBe('calc(var(--glass-blur) * 0.5)');
+        continue;
+      }
+      expect(radiusOf(expanded!), `${token} 解析不出半径`).not.toBeNull();
+      expect(radiusOf(expanded!), `${token} 与主路 ${selector} 的 dark 半径分叉`).toBe(radiusOf(got));
+    }
+  });
+
+  it('档位表就位：tokens.css 四枚定义点、light 补四格 / mint 补三格，主题侧只翻值不写规则', () => {
+    for (const t of LADDER) expect(tokensRaw, `${t} 没有 dark 定义点`).toMatch(new RegExp(`${t}:`));
+    const lightOwn = rootDecls(parseRules(lightRaw), ":root[data-theme='light']");
+    const mintOwn = rootDecls(parseRules(mintRaw), ":root[data-theme='mint-dark']");
+    for (const t of LADDER) expect(lightOwn.has(t), `light.css 少 ${t} 这一格`).toBe(true);
+    for (const t of ['--glass-blur-scrim', '--glass-blur-scrim-query', '--glass-blur-palette'] as const) {
+      expect(mintOwn.has(t), `mint-dark.css 少 ${t} 这一格`).toBe(true);
+    }
+    for (const [label, raw] of [['light.css', lightRaw], ['mint-dark.css', mintRaw]] as const) {
+      const decls = parseRules(raw)
+        .flatMap((r) => r.body.split(';').map(squash))
+        .filter((d) => /(?:-webkit-)?backdrop-filter\s*:/.test(d));
+      expect(decls, `${label} 又开始自带遮罩规则（消费点只有 ⑤ 与 palette）：\n${decls.join('\n')}`).toEqual([]);
+    }
+  });
+
+  it('反查：这两份切片的 blur( 后面只出现 --glass-blur* 档（本批 12 行裸 px → 0）', () => {
+    const bare: string[] = [];
+    for (const [name, raw] of Object.entries(BLUR_FILES)) {
+      for (const m of stripComments(raw).matchAll(/(?:^|[;{\s])(?:-webkit-)?backdrop-filter[ \t]*:[ \t]*([^;{}]*)/g)) {
+        const value = squash(m[1]!);
+        if (!/blur\(/.test(value) || value === 'none') continue;
+        if (!/blur\(\s*var\(--glass-blur/.test(value)) bare.push(`${name}: backdrop-filter: ${value}`);
+      }
+    }
+    const tierUses = (noticesRaw.match(/blur\(var\(--glass-blur/g) ?? []).length + (paletteRaw.match(/blur\(var\(--glass-blur/g) ?? []).length;
+    console.log(`[glass-blur] 两切片吃档位的声明格数 = ${tierUses}（本批收编 12 行裸 px），裸值 = ${bare.length}`);
+    expect(bare, `这些格还在自己抄半径：\n${bare.join('\n')}`).toEqual([]);
+    expect(tierUses, '档位消费数少于 12 = 有人删了规则而不是搬 token').toBeGreaterThanOrEqual(12);
   });
 });

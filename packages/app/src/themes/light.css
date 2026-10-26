@@ -131,12 +131,24 @@
      tint-raise 走**更亮**的白（浅色下"从上方被打光"= 更亮，与深色档方向相反）。
      --glass-alpha 默认抬到 0.9：半透明白磨砂在浅底上最容易"发灰"，实心一档保住文字脆度
      （真源仍是 glass-pref 旋钮的内联值，用户可拧回；此处只是主题自带的缺省意图）。
-     saturate 1.25→1.15：浅色泄漏的是灰蓝不是色噪，低饱和更干净；blur 常量不动。 */
+     saturate 1.25→1.15：浅色泄漏的是灰蓝不是色噪，低饱和更干净；面的 blur 常量不动，
+     罩 / 键盘面那几档见下面的 `--glass-blur-*` 用途档。 */
   --glass-tint: 246 249 251;
   --glass-tint-raise: 251 253 255;
   --glass-alpha: 0.9;
   --glass-saturate: 1.15;
   --glass-blur: 16px;
+  /* 虚化用途档（1027 玻璃档批）：这四个数原先是写在 `shell-notices.css` ⑤ / `ui/palette.css` 规则里的
+     **裸 px**（9 / 8 / 8 / 7），本档的"去灰泥"标定连半径带色一起调过，规则却把半径咬死 ⇒ 主题翻不动。
+     现在值搬进本档、规则只 `var()`，逐字等值由 `styles-wash-token-discipline.test.ts` 拿改前字面量对拍。
+     取数：遮罩 9px 是 R5 的标定（"背景留一点可辨的结构才不像一整块同色泥"），查询面比确认面再轻一档
+     到 8px，命令面板 8px、F1 的 `.pk-mask` 收到 7px（浅色底下 8px 会把整页正文糊成一片）。
+     `--glass-blur: 16px` 与基座同值——写在这一行不是抄一遍，是给本档留一个**能翻的槽位**
+     （`--glass-blur-palette` 同理：本档与 dark 都是 7px，但哪天只想动一档时不必再去改规则）。 */
+  --glass-blur-scrim: 9px;
+  --glass-blur-scrim-query: 8px;
+  --glass-blur-picker: 8px;
+  --glass-blur-palette: 7px;
   /* 玻璃边缘：浅色下白色"厚度边"会融进白面板——切边靠沉色 hairline（白物体在白场景里
      靠深色边缘 + 投影分离，这是浅色主题与深色主题在 rim 上的语义反转）。 */
   --glass-edge: rgba(35, 48, 64, 0.22);

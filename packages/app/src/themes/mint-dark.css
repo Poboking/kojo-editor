@@ -109,13 +109,25 @@
 
   /* 玻璃：tint 三元组 = 本档 bg-2/bg-3 预合成（较面值微抬 ~3 级，补偿遮罩暗化后 alpha .85
      的合成落点）；edge 淡青绿白；saturate 1.25→1.2——绿底本身有彩度，泄漏边缘更少彩噪；
-     blur/alpha 沿用设计常量，旋钮语义不动 */
+     alpha 沿用设计常量，旋钮语义不动 */
   --glass-tint: 24 36 29;
   --glass-tint-raise: 32 48 40;
   --glass-edge: rgba(186, 255, 224, 0.075);
   --glass-alpha: 0.85;
   --glass-saturate: 1.2;
   --glass-blur: 16px;
+  /* 虚化用途档（1027 玻璃档批）：这三枚数原先是裸 px 写在规则里——`shell-notices.css` ⑤ 的 mint
+     规则挂着 11 / 9，`ui/palette.css` 的 `.pk-mask` 挂着 7，与 light 的 9 / 8 / 7 各一套，
+     正是"三档各自翻浓度"该翻的东西，却卡在源码里 ⇒ 主题永远追不上。
+     墨绿底与深色代码面同色相、本来就是低反差的一对，虚化比 light 深一档也不会糊成灰泥（11 / 9 对
+     light 的 9 / 8），留的是"背后那块面板还在"的可辨识度。
+     只立本档真被消费的三档：`--glass-blur-picker` **不给**——mint 的命令面板遮罩只给 background
+     （`shell-notices.css` ⑤ 的 mint `.picker-backdrop` 注记：磨砂参数仍由懒档 `.picker-backdrop` 供，
+     这里补一档等于凭空给 mint 立一条第二张嘴）。`--glass-blur-palette` 与 dark 同值 7px，
+     槽位照立：F1 那条 `html:root .picker-backdrop.pk-mask` 是全主题通路，本档要翻就来这里翻。 */
+  --glass-blur-scrim: 11px;
+  --glass-blur-scrim-query: 9px;
+  --glass-blur-palette: 7px;
 
   /* —— 插件独占区的本地兜底 token（与 light.css 同构，缺则回落深蓝灰冷岛）——
      styles.css 里 `.editor-crumb` / `.oh-detail` 一族用 `var(--panel-bg, #232834)` 等

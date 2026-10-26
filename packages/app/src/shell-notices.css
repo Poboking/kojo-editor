@@ -253,6 +253,10 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
  * 三步（目标 = 边界靠**底色**认出来）：
  *  1. 遮罩压深（0.24 → ~0.5）并把泄漏的色相**抽掉**（saturate < 1），灰泥变成中性暗底；
  *  2. 模糊收到 9px——背景留一点可辨的"那是编辑器"的结构，才不像一整块同色泥；
+ *     （1027 玻璃档批：半径不写在这里，吃 `--glass-blur-scrim` / `--glass-blur-scrim-query` /
+ *      `--glass-blur-picker` 三枚用途档——9 / 8 / 8 逐字进 `themes/light.css`、11 / 9 进
+ *      `themes/mint-dark.css`，F1 那枚 7px 见 `ui/palette.css` 的 `--glass-blur-palette`；
+ *      本切片只留几何通路，浓度归档位表翻。）
  *  3. 给浮层本体一条**实描边**（不是阴影）：模态与遮罩之间有一道真边界。
  *
  * 特异性：基础档 (0,3,0) 与 `themes/light.css` 同分、本文件后置 ⇒ 赢；查询面变体 (0,4,0)、
@@ -268,22 +272,22 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
   background:
     radial-gradient(130% 105% at 50% -5%, var(--scrim-a), var(--scrim-b)),
     var(--scrim-fill);
-  -webkit-backdrop-filter: blur(9px) saturate(0.82);
-  backdrop-filter: blur(9px) saturate(0.82);
+  -webkit-backdrop-filter: blur(var(--glass-blur-scrim)) saturate(0.82);
+  backdrop-filter: blur(var(--glass-blur-scrim)) saturate(0.82);
 }
 /* 只读查询面（比对 / 预览）：比破坏性确认面轻一档，但同样压深、同样去饱和 */
 :root[data-theme='light'] .overlay-backdrop:has(.ov-query) {
   background:
     radial-gradient(130% 105% at 50% -5%, var(--scrim-query-a), var(--scrim-query-b)),
     var(--scrim-query-fill);
-  -webkit-backdrop-filter: blur(8px) saturate(0.85);
-  backdrop-filter: blur(8px) saturate(0.85);
+  -webkit-backdrop-filter: blur(var(--glass-blur-scrim-query)) saturate(0.85);
+  backdrop-filter: blur(var(--glass-blur-scrim-query)) saturate(0.85);
 }
 /* 命令面板：轻一档的遮罩也去灰泥（.picker 顶对齐，与通知列本来就不抢位） */
 :root[data-theme='light'] .picker-backdrop {
   background: var(--scrim-picker);
-  -webkit-backdrop-filter: blur(8px) saturate(0.85);
-  backdrop-filter: blur(8px) saturate(0.85);
+  -webkit-backdrop-filter: blur(var(--glass-blur-picker)) saturate(0.85);
+  backdrop-filter: blur(var(--glass-blur-picker)) saturate(0.85);
 }
 /* 实描边：模态边界靠底色 + 一条线认出来，不靠阴影（浅色档的 rim 语义反转，同 light.css 注记） */
 :root[data-theme='light'] .overlay-host,
@@ -325,8 +329,8 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
   background:
     radial-gradient(130% 105% at 50% -5%, var(--scrim-a), var(--scrim-b)),
     var(--scrim-fill);
-  -webkit-backdrop-filter: blur(11px) saturate(0.92);
-  backdrop-filter: blur(11px) saturate(0.92);
+  -webkit-backdrop-filter: blur(var(--glass-blur-scrim)) saturate(0.92);
+  backdrop-filter: blur(var(--glass-blur-scrim)) saturate(0.92);
 }
 :root[data-theme='mint-dark'] .overlay-host,
 :root[data-theme='mint-dark'] .modal,
@@ -346,8 +350,8 @@ body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notificati
   background:
     radial-gradient(130% 105% at 50% -5%, var(--scrim-query-a), var(--scrim-query-b)),
     var(--scrim-query-fill);
-  -webkit-backdrop-filter: blur(9px) saturate(0.95);
-  backdrop-filter: blur(9px) saturate(0.95);
+  -webkit-backdrop-filter: blur(var(--glass-blur-scrim-query)) saturate(0.95);
+  backdrop-filter: blur(var(--glass-blur-scrim-query)) saturate(0.95);
 }
 :root[data-theme='mint-dark'][data-glass='solid'] .overlay-backdrop,
 :root[data-theme='mint-dark'][data-glass='solid'] .modal-mask,
