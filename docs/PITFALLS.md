@@ -329,3 +329,7 @@
 
 227. **折叠对拍的 `--gate` 在 A2 之前就是红的：erafl 基线 19 条"服务侧未被包含"里有 5 条与文法无关**（2026-10-26 A2 批实测）：4 条是**空函数体**（`@NAME` 后面没有体，服务侧给 `23..24` 这种"没有可隐藏的行"的区间，语法侧 `foldRanges` 按零跨度过滤掉——两侧口径差，不是漏折），1 条是 `CONFIG_DATA_EDIT.ERB` 的函数尾部空行（`1668..1726` 的末行是空行）。⇒ 纪律：① 报"对拍从 19 涨到 109"之前先用**同一份 wasm + 同一份 folds.scm** 取基线（改过 `folds.scm` 的话旧 wasm 连查询都编译不过，会得到"全 0 读数"的假绿）；② 判"有没有引入回归"看**集合包含关系**（新残留 ⊆ 旧残留 + 每条逐点同源），不看总数——本批 A2 的后 5 条逐点都是基线那 5 条；③ 空函数体这条口径差留作已知（`foldRanges` 的零跨度过滤是既定语义，改它要另开一卡）。
 
+
+228. **三盘主路由同名 `EVENT_K.ERB`，`detect` 只比文件名就是三个游戏互相串认**（2026-10-26 多游戏适配批实测）：eraAV 住在 `ERB/EVENT/EVENT_K.ERB`、eraAkumaMaid 住在 `ERB/EVENT_K/EVENT_K.ERB`、eratohoReverse 住在 `ERB/口上/EVENT_K.ERB`，而 `ERB/口上` 这个目录名 eraFL / era紅魔館 / eratohoK 也都有。内核在 `project.open()` 轮询全部候选、**多命中即抛 `AdapterConflictError`**（`packages/kernel/src/project.ts:80`），报错不说是哪两枚撞的 ⇒ 新适配器的判据必须**连父目录一起钉**，并过 `packages/app/tests/adapter-cross-detect.test.ts`（每个真实盘恰好一枚适配器命中）。
+
+229. **口上是扁平文件的盘，不许把公共父目录塞进 `CharaInfo.kojoDir`**（2026-10-26 eraAV 批）：eraAV 的 `ERB/Lines/` 下是 17 份 `EVENT_K{nn}_{名}.ERB` 散文件，没有角色目录。`kojoDir` 的契约语义是「该角色在口上域下的目录」，拿 `ERB/Lines` 充数会让 `search.scope` 的「按角色收窄」变成「按整个 Lines 搜」——**给出错结果比少一个功能更坏**（作者以为筛过了）。缺省即按契约降级；角色与口上文件的对应关系只进 `inputDigest`。

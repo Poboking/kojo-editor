@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-eraav-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eraAV game adapter: GameBase-title detection, Chara CSV index (CSV/Chara), flat kojo-file binding (ERB/Lines), the three-kind kojo function naming of this title and variable-name tables. All eraAV-specific knowledge lives here; the kernel stays game-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

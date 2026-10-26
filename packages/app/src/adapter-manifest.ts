@@ -119,6 +119,28 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     load: () => import('@kojo/plugin-eratohok-adapter'),
     kojo2AdapterExport: 'ERATOHOK_GAME_ADAPTER',
   },
+  {
+    // eraAV（2026-10-26 批，P0+P1）。**本批不声明 `kojo2AdapterExport`**：2.0 事实面
+    // （encoding / eventCatalog / presentation …）还没有逐项真盘裁决，导出缺席即走
+    // `null` 语义（该项目 2.0 面零候选、不报错），**绝不借别游戏的事实**。
+    id: 'eraav',
+    dir: 'eraav-adapter',
+    packageName: '@kojo/plugin-eraav-adapter',
+    factory: 'createEraavAdapterPlugin',
+    scope: 'project',
+    auditWord: 'eraav',
+    load: () => import('@kojo/plugin-eraav-adapter'),
+  },
+  {
+    // eratohoReverse（2026-10-26 批，P0+P1）。留口口径与 eraAV 逐字相同（无 2.0 面）。
+    id: 'eratohoreverse',
+    dir: 'eratohoreverse-adapter',
+    packageName: '@kojo/plugin-eratohoreverse-adapter',
+    factory: 'createEratohoreverseAdapterPlugin',
+    scope: 'project',
+    auditWord: 'eratohoreverse',
+    load: () => import('@kojo/plugin-eratohoreverse-adapter'),
+  },
 ];
 
 /** 项目级适配器（组合根装载的就是这一批） */

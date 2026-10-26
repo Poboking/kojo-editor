@@ -23,6 +23,8 @@
     "@kojo/plugin-erakoumakan-adapter": "workspace:*",
     "@kojo/plugin-erasqc-adapter": "workspace:*",
     "@kojo/plugin-eratohok-adapter": "workspace:*",
+    "@kojo/plugin-eraav-adapter": "workspace:*",
+    "@kojo/plugin-eratohoreverse-adapter": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-kojo-market": "workspace:*",
