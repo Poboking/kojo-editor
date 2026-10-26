@@ -65,6 +65,5 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LAUNCH-L0 | 归档守卫抽取 + 三缺口收紧：新 `src-tauri/src/archive_guard.rs`，`market.rs` 改调用；保留设备名 / 尾点尾空格 / ADS **两侧同批**并进 `fixtures/zip-roundtrip/contract.json` | 纯重构：拒绝码字面与判定顺序逐字不变、`market_tests.rs` 零改；收紧后两侧对拍全绿、在册内容包零误杀 | 进行中 · 认领：qoder-l0 2026-10-26 |
 | LAUNCH-PROBE | 进程原语探针：`CREATE_SUSPENDED` → Assign Job(`KILL_ON_JOB_CLOSE`) → Resume、孙进程收尸、日志泵、env 白名单 | `cargo test --lib` 绿且探针断言孙进程消失；真坑一行进 PITFALLS，其余结论进提交信息 | 进行中 · 认领：qoder-probe 2026-10-26 |
 | LAUNCH-GATE | 闸与通道复核：懒加载新视图是否动开机图；`smoke-tauri-ipc` / `debug-cli shell` 可用性与 launcher 判据插入点 | 开机图读数逐字引用；通道 rc 实测；零生产码改动 | 进行中 · 认领：qoder-gate 2026-10-26 |
