@@ -2,6 +2,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -189,7 +190,7 @@ import {
   WORKSPACE_SYMBOL_RENDER_LIMIT,
 } from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
-import { useOverlayPresence } from './overlay-chrome';
+import { motionIsFlat, useOverlayPresence } from './overlay-chrome';
 import { projectDirName } from './window-title';
 import { ProblemsStatusItem } from './ProblemPanel';
 // 项目名旁的「更多」菜单（C-1a）：复用全站共享 <ContextMenu>（玻璃观感 + WAI-ARIA 键盘），不另造菜单
@@ -997,6 +998,77 @@ const AUTO_UPDATE_CHECK_DELAY_MS = 3000;
  */
 let dismissedUpdateVersionInSession: string | null = null;
 
+/* ==================== 布局动效（1026-b 动效批） ==================== */
+
+/**
+ * 浮层退场的等待时长 = `--dur-2`（见 `styles-project.css` 的
+ * `.overlay-host.ov-exiting { animation: overlay-out var(--dur-2) … }`）。
+ * 这个数**必须与那条规则一致**：短了淡出被截断，长了面板已经卸了还白等。
+ * 不做 `getComputedStyle` 现读——根元素上取自定义属性要强制样式解算，而这里
+ * 每个浮层关一次就要问一次，收益只有"改 token 能自动跟上"一项。
+ */
+const OVERLAY_EXIT_MS = 200;
+/**
+ * 侧栏 / 底部区的收放时长，同样必须与 `motion-layout.css` 的过渡逐档一致
+ * （`--dur-1` 120 / `--dur-2` 200）。侧栏是"每会话上百次的命令"，取短档；
+ * 底部区一次动 200px 高，短档会读成"被切掉"。
+ */
+const SIDEBAR_MOTION_MS = 120;
+const BOTTOMBAR_MOTION_MS = 200;
+/** zen 换场的整壳淡入时长（= `--dur-2`，见 `motion-layout.css` 的 `mtn-shell-in`） */
+const ZEN_MOTION_MS = 200;
+
+/**
+ * 布局容器的「在场」保活：关掉后先留在 DOM 里把宽度/高度过渡跑完，再真卸载。
+ *
+ * 三种相位各有一件正事（对齐 `motion-layout.css` 的同名类）：
+ * - `mounted`：节点在不在树上。`false` ⇒ 渲染处整块不挂。
+ * - `closing`：正在收起。渲染处把尺寸写成 0 并挂 `.mtn-closing`（不接指针），
+ *   于是 `.sidebar { transition: width }` 从原尺寸插值到 0 —— 这一条**只在命令/按钮
+ *   触发的开合**上成立；拖拽把手那一路由 `data-resizing` 把过渡关掉（跟手优先）。
+ * - `entering`：收起动画跑完、节点已经真卸掉了，再打开时**新节点没有起点可插值**
+ *   （`transition` 需要同一节点的前后两个值），所以挂一次性入场关键帧 `.mtn-enter`。
+ *   首帧（`prev === open`）不发这个标记：项目刚打开时侧栏本来就在场，
+ *   不该在 Monaco 初始化那一帧再抖一次宽度。
+ *
+ * `ms` 取 `--dur-1`（侧栏 120）/ `--dur-2`（底部区 200），与 CSS 同档。
+ */
+function useLayoutPresence(open: boolean, ms: number): { mounted: boolean; closing: boolean; entering: boolean } {
+  const [state, setState] = useState({ mounted: open, closing: false, entering: false });
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    const prev = wasOpen.current;
+    wasOpen.current = open;
+    if (prev === open) return;
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (open) {
+      setState((cur) =>
+        cur.mounted
+          ? { mounted: true, closing: false, entering: false }
+          : { mounted: true, closing: false, entering: true },
+      );
+      return;
+    }
+    setState((cur) => (cur.mounted ? { mounted: true, closing: true, entering: false } : cur));
+    if (motionIsFlat()) {
+      setState({ mounted: false, closing: false, entering: false });
+      return;
+    }
+    timer.current = setTimeout(() => setState({ mounted: false, closing: false, entering: false }), ms);
+  }, [open, ms]);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    },
+    [],
+  );
+  return state;
+}
+
 export function ShellLayout(props: Props): ReactElement {
   const {
     kernel,
@@ -1099,6 +1171,30 @@ export function ShellLayout(props: Props): ReactElement {
   const zenRef = useRef(layout.zen);
   zenRef.current = layout.zen;
 
+  /**
+   * zen 换场（B5）：进 / 出全禅模式是**换整棵树**（`.shell zen` 与 `.shell` 是同一位置上
+   * 两种不同元素，React 直接卸载重建，连 Monaco 都换了一份），任何逐元素收放都跨不过这次
+   * 重建。能诚实做到的是"接得住"：新挂上的那层壳 200ms 淡入，整屏元素不至于啪地换掉。
+   *
+   * 标记落在 `useLayoutEffect` 而不是 `useEffect`：layout 阶段的状态更新会在浏览器第一次
+   * 绘制**之前**同步重渲 ⇒ 新壳的第一帧就带着淡入类。换成 useEffect 会先画一帧全亮的壳、
+   * 再从头淡入，读起来是一下闪光。
+   * 打开项目时不动它（首帧 `zenWas` 与 `layout.zen` 相等 ⇒ 不发标记），首屏不必再淡一次。
+   */
+  const [shellEnter, setShellEnter] = useState(false);
+  const zenWas = useRef(layout.zen);
+  useLayoutEffect(() => {
+    if (zenWas.current === layout.zen) return;
+    zenWas.current = layout.zen;
+    if (motionIsFlat()) {
+      setShellEnter(false);
+      return;
+    }
+    setShellEnter(true);
+    const timer = setTimeout(() => setShellEnter(false), ZEN_MOTION_MS);
+    return () => clearTimeout(timer);
+  }, [layout.zen]);
+
   /* -------------------- P2：命令注册表 + picker/overlay 状态 -------------------- */
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -1109,20 +1205,42 @@ export function ShellLayout(props: Props): ReactElement {
   const overlayRef = useRef(activeOverlay);
   overlayRef.current = activeOverlay;
   /**
-   * 浮层退场（视觉批十四）：关闭时先把面板挂 200ms 的 `.ov-exiting` 动画再卸。
-   * CSS `overlay-out` 从批次十一就备着，缺的一直是"挂类"这一步——真机读数是入场
-   * 320ms 弹簧、退场 0ms，关起来像被掐断。只记 id，贡献对象仍从插槽现查（槽换版本时
-   * 退场那一帧也读得到最新那份）。
+   * 正在退场的那一扇（只记 id，贡献对象仍从插槽现查——槽换版本时退场那一帧也读得到
+   * 最新那份；CSS `overlay-out` 从批次十一就备着，缺的一直是"挂类"这一步）。
    */
   const [exitingOverlayId, setExitingOverlayId] = useState<string | null>(null);
   const overlayExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dismissOverlay = useCallback(() => {
+  /**
+   * 浮层退场（视觉批十四起 · 1026 动效批收口成**唯一**关闭通道）：
+   * 关的时候先把面板挂 `.ov-exiting` 播 200ms 的 `overlay-out`，再卸 DOM。
+   *
+   * 四条路都必须进这里，漏一条就是"三条有退场、一条硬切"：
+   * ① Esc（全局键盘 `resolveEscLayer` 判到 `overlay` 那一层）；
+   * ② 点遮罩（`onMouseDown`，只认左键）；
+   * ③ 浮层自己的 ✕ / 页脚按钮 —— 它们并不直接调这个函数，而是发
+   *    `kernel.bus.emit('ui.overlay.close', { id })`（`shell-overlays.ts` 给五家注的
+   *    `close`）；`ui.overlay.close` 的订阅者（下面 useEffect）把它转成本函数。
+   *    当年那条订阅是**直接** `setActiveOverlay(null)`，于是"按钮关 = 零退场"，
+   *    现在补上同一口。
+   * ④ 打开/关闭意图事件本身。
+   *
+   * `id` 是"关的是哪一扇"的闸：浮层甲的收尾动作不该把刚开的乙关掉。
+   * `data-motion='reduced'` / 系统 prefers-reduced-motion 下**同步卸载**——
+   * 动画已被 CSS 压平，再等 200ms 就只是空窗（见 `motionIsFlat`）。
+   */
+  const dismissOverlay = useCallback((id?: string) => {
     const cur = overlayRef.current;
     if (cur === null) return;
+    if (id !== undefined && id !== cur.id) return;
     setActiveOverlay(null);
-    setExitingOverlayId(cur.id);
     if (overlayExitTimer.current !== null) clearTimeout(overlayExitTimer.current);
-    overlayExitTimer.current = setTimeout(() => setExitingOverlayId(null), 200);
+    if (motionIsFlat()) {
+      overlayExitTimer.current = null;
+      setExitingOverlayId(null);
+      return;
+    }
+    setExitingOverlayId(cur.id);
+    overlayExitTimer.current = setTimeout(() => setExitingOverlayId(null), OVERLAY_EXIT_MS);
   }, []);
   useEffect(
     () => () => {
@@ -1536,19 +1654,21 @@ export function ShellLayout(props: Props): ReactElement {
   // 弹窗只在 found / downloading / done / failed(install) 出现；别的态连节点都不挂
   const updateDialog = updateDialogOpen ? updateDialogPhase(updatePhase) : null;
 
-  // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）
+  // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）。
+  // 关闭意图走 `dismissOverlay`（而不是直接 `setActiveOverlay(null)`）：五家浮层自己的 ✕ /
+  // 页脚按钮发的正是这枚事件，绕过去就等于"按钮关硬切、Esc 关有退场"。
   useEffect(() => {
     const unOpen = kernel.bus.on('ui.overlay.open', (ev) => {
       setActiveOverlay({ id: ev.id, ...(ev.payload !== undefined ? { payload: ev.payload } : {}) });
     });
     const unClose = kernel.bus.on('ui.overlay.close', (ev) => {
-      setActiveOverlay((cur) => (cur && cur.id === ev.id ? null : cur));
+      dismissOverlay(ev.id);
     });
     return () => {
       unOpen();
       unClose();
     };
-  }, [kernel]);
+  }, [kernel, dismissOverlay]);
 
   // 壳层布局命令（定稿 §五-3：合法容器语义）与槽命令合并为统一注册表。
   // 键位不再写死在这里：缺省值与用户改键覆盖统一从键位注册表取（R8），
@@ -2092,8 +2212,17 @@ export function ShellLayout(props: Props): ReactElement {
       const handle = e.currentTarget;
       const pointerId = e.pointerId;
       handle.setPointerCapture?.(pointerId);
+      const target = shellElsRef.current[container] ?? null;
+      /**
+       * 拖拽期把宽度/高度过渡**关掉**（`data-resizing` → `motion-layout.css` 里
+       * `transition: none`）：命令触发的开合走 120/200ms 收放，拖拽把手必须**逐帧跟手**。
+       * 不关的话每写一次 inline 尺寸都会从上一帧的过渡终值重新起播，指针走了 40px
+       * 而容器还在追，读起来是"橡皮筋"——比没有动效更糟。
+       * 标志在 pointerdown 就挂上（第一帧移动之前），松手 / 取消时摘掉。
+       */
+      target?.setAttribute('data-resizing', '');
       const session = beginLiveResize({
-        target: shellElsRef.current[container] ?? undefined,
+        target: target ?? undefined,
         container,
         startSize: layoutRef.current[container].size,
         startPos: horizontal ? e.clientX : e.clientY,
@@ -2109,6 +2238,7 @@ export function ShellLayout(props: Props): ReactElement {
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);
         if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+        target?.removeAttribute('data-resizing');
         // 松手一次 commit：值就是拖拽期最后写进 inline 的那个数 ⇒ 视觉零 delta，不跳一下
         const size = session.finish();
         if (size !== null) dispatch({ type: 'resize', container, size });
@@ -2323,6 +2453,19 @@ export function ShellLayout(props: Props): ReactElement {
   const activeView = org.views.find((v) => v.key === layout.sidebar.active) ?? org.views[0] ?? null;
   const activeAux = org.aux.find((p) => p.id === layout.aux.active) ?? org.aux[0] ?? null;
   const activeBottom = org.bottom.find((p) => p.id === layout.bottom.active) ?? org.bottom[0] ?? null;
+
+  /**
+   * 侧栏 / 底部区的开合相位（B1 / B3）。
+   *
+   * 这两块原先是"要么全宽、要么不在树上"——命令一按，同一帧从 260 跳到 0，编辑器区
+   * 同时换宽（Monaco 一次 layout）。现在收起时先保活一个时长把宽度/高度插值到 0 再摘节点
+   * （`useLayoutPresence`）；**拖拽把手那一路不进来**：它写在 `data-resizing` 上的
+   * `transition: none` 让尺寸逐帧跟手，两者的判据都在 CSS 里，JS 这边不分工。
+   */
+  const sidebarOpen = layout.sidebar.visible && activeView !== null;
+  const sidebarPresence = useLayoutPresence(sidebarOpen, SIDEBAR_MOTION_MS);
+  const bottomOpen = layout.bottom.visible && activeBottom !== null;
+  const bottomPresence = useLayoutPresence(bottomOpen, BOTTOMBAR_MOTION_MS);
 
   /** 侧栏组内折叠状态（会话级，不持久化——定稿 §七持久化清单不含组内折叠） */
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -2560,9 +2703,15 @@ export function ShellLayout(props: Props): ReactElement {
     </nav>
   );
 
+  /*
+   * 视图切换的交叉淡入（B2）：`key={activeView.key}` 让"换视图"= 换节点，于是
+   * `motion-layout.css` 里挂在 `.sidebar-views` 上的 120ms 淡入 + 4px 上移自然重播——
+   * 不用 Transition Group、不用手写 presence。反过来同视图内换面板（多面板折叠等）
+   * 不动 key，不会跟着抖一下。
+   */
   const sidebarView = activeView && activeView.panels.length > 1 ? (
     /* 多面板视图：弹性分栏（默认等分；把手上下拉伸；折叠的头只占标题行） */
-    <div ref={splitRef} className="sidebar-views split">
+    <div key={activeView.key} ref={splitRef} className="sidebar-views split">
       {activeView.panels.map((p, i) => {
         const isCollapsed = collapsed[p.id] === true;
         const weights = splitWeights[activeView.key] ?? activeView.panels.map(() => 1);
@@ -2614,7 +2763,7 @@ export function ShellLayout(props: Props): ReactElement {
       })}
     </div>
   ) : (
-    <div className="sidebar-views">
+    <div key={activeView?.key ?? 'empty'} className="sidebar-views">
       {activeView && activeView.panels[0] ? (
         <PanelBody
           contribution={activeView.panels[0]}
@@ -3027,7 +3176,7 @@ export function ShellLayout(props: Props): ReactElement {
 
   if (layout.zen) {
     return (
-      <div className="shell zen">
+      <div className={`shell zen${shellEnter ? ' mtn-shell-in' : ''}`}>
         <div className="zen-editor">
           <div className={`zen-editor-inner ${layout.zenLimitWidth ? '' : 'no-limit'}`}>{children}</div>
         </div>
@@ -3040,28 +3189,39 @@ export function ShellLayout(props: Props): ReactElement {
   /* ------------------------------ 常规形态 ------------------------------ */
 
   return (
-    <div className="shell">
+    <div className={`shell${shellEnter ? ' mtn-shell-in' : ''}`}>
       {toolbar}
       <div className="shell-main">
         {activityBar}
-        {layout.sidebar.visible && activeView ? (
+        {sidebarPresence.mounted && activeView ? (
           <>
             <aside
-              className={`sidebar ${dropTarget === 'sidebar' ? 'drop-target' : ''}`}
+              className={`sidebar ${dropTarget === 'sidebar' ? 'drop-target' : ''}${
+                sidebarPresence.closing ? ' mtn-closing' : ''
+              }${sidebarPresence.entering ? ' mtn-enter' : ''}`}
               ref={(node) => {
                 shellElsRef.current.sidebar = node;
               }}
-              style={{ width: layout.sidebar.size }}
+              // 收起那一档写 0（而不是保持原尺寸）：`transition: width` 才有终点可插值，
+              // 到了 0 再等 presence 把节点摘掉。展开时本行就是常规尺寸。
+              style={{ width: sidebarOpen ? layout.sidebar.size : 0 }}
+              // 收起那 120ms 里这块面已经"不在场"：不可聚焦、读屏也跳过去。
+              // 用 `inert` 而不是只挂 `aria-hidden`——后者在"焦点还在里面"时会被 Chromium
+              // 直接忽略并在控制台告警，正好是最需要它生效的那一刻（Ctrl+B 时焦点常在树里）。
+              inert={!sidebarOpen}
               {...dropProps('sidebar')}
             >
               {sidebarView}
             </aside>
-            <div
-              className="resizer resizer-x"
-              role="separator"
-              aria-label="调整主侧栏宽度"
-              onPointerDown={(e) => startDrag(e, 'sidebar', true, 1)}
-            />
+            {/* 把手跟着开合走：收起动画那 120ms 里不该还能拖动一条正在消失的缝 */}
+            {sidebarOpen ? (
+              <div
+                className="resizer resizer-x"
+                role="separator"
+                aria-label="调整主侧栏宽度"
+                onPointerDown={(e) => startDrag(e, 'sidebar', true, 1)}
+              />
+            ) : null}
           </>
         ) : null}
         <main className="editor-area">{children}</main>
@@ -3093,20 +3253,25 @@ export function ShellLayout(props: Props): ReactElement {
           </>
         ) : null}
       </div>
-      {layout.bottom.visible && activeBottom ? (
+      {bottomPresence.mounted && activeBottom ? (
         <>
-          <div
-            className="resizer resizer-y"
-            role="separator"
-            aria-label="调整底部区高度"
-            onPointerDown={(e) => startDrag(e, 'bottom', false, -1)}
-          />
+          {bottomOpen ? (
+            <div
+              className="resizer resizer-y"
+              role="separator"
+              aria-label="调整底部区高度"
+              onPointerDown={(e) => startDrag(e, 'bottom', false, -1)}
+            />
+          ) : null}
           <section
-            className={`bottombar ${dropTarget === 'bottom' ? 'drop-target' : ''}`}
+            className={`bottombar ${dropTarget === 'bottom' ? 'drop-target' : ''}${
+              bottomPresence.closing ? ' mtn-closing' : ''
+            }${bottomPresence.entering ? ' mtn-enter' : ''}`}
             ref={(node) => {
               shellElsRef.current.bottom = node;
             }}
-            style={{ height: layout.bottom.size }}
+            style={{ height: bottomOpen ? layout.bottom.size : 0 }}
+            inert={!bottomOpen}
             {...dropProps('bottom')}
           >
             {tabStrip('bottom', org.bottom, layout.bottom.active)}

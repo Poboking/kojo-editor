@@ -2,9 +2,32 @@ import { createElement as h, useEffect, useRef, useState, type ReactNode } from 
 import { Icon } from './icons';
 
 /**
+ * 「动效已被压平」的运行时判据（1026 动效批）：应用内 `data-motion='reduced'`（`motion-pref.ts`
+ * 写在 `<html>` 上）或系统 `prefers-reduced-motion`，任一成立即"别演了"。
+ *
+ * 为什么 JS 也要问一句：CSS 那两条全局规则（`styles-project.css` 5412 / 7365）只把
+ * `animation/transition` 的 duration 压到 0.01ms——**动画没了，可我们这边的等待还在**：
+ * 浮层要等 200ms 才卸、侧栏要等 120ms 才摘 DOM，开着「减弱动效」的作者换来的是一段
+ * 什么都没有的空窗（点一下，小半秒后界面才变）。时序归 JS，动画归 CSS，两边都得知道。
+ *
+ * 落点说明：本模块是"保活时机"的种子点（`useOverlayPresence` 在这里），壳层的布局保活
+ * 也从这里取同一份判据——一条规则两处消费，不许各写一份 matchMedia。真源那侧的纯逻辑
+ * 节点是 `motion-pref.ts`，但本批改动面不含它，故先住在这里（与 presence 同生共死）。
+ */
+export function motionIsFlat(): boolean {
+  if (typeof document === 'undefined') return true;
+  if (document.documentElement.getAttribute('data-motion') === 'reduced') return true;
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+}
+
+/**
  * 浮层「在场」钩子（视觉批十五）：`open` 落下后再留 `ms` 毫秒才真正卸载，期间
  * `exiting = true`——宿主把 `.ov-exiting` 挂在面板根上就播 `overlay-out`。
  * 设置浮层与 `ui.overlay` 族共用这一份时机，免得"一半浮层有退场、一半没有"。
+ *
+ * 减弱动效下**同步卸载**（`motionIsFlat`）：动画已被压平，再等 `ms` 只是空窗。
  */
 export function useOverlayPresence(open: boolean, ms = 200): { mounted: boolean; exiting: boolean } {
   const [state, setState] = useState<{ mounted: boolean; exiting: boolean }>({
@@ -19,6 +42,10 @@ export function useOverlayPresence(open: boolean, ms = 200): { mounted: boolean;
     }
     if (open) {
       setState({ mounted: true, exiting: false });
+      return;
+    }
+    if (motionIsFlat()) {
+      setState({ mounted: false, exiting: false });
       return;
     }
     setState((cur) => (cur.mounted ? { mounted: true, exiting: true } : cur));
