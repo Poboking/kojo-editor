@@ -2248,15 +2248,20 @@ PluginManager.list → 取该插件 manifest 与 ownedFiles
   `declared_entries_problem` + `cap_staging_limits` 的硬顶；
 - 解压流式写盘、超限立刻中止：`stream_capped` / `advance_byte_cap` 已有，照抄调用形态。
 
-**真正要新增的（实树的已知缺口，别写成「已有」）**：
+**三处口径差异（v0.4 复核更正；L0 批已补齐，见下表「已补」）**：
 
-- **Windows 保留设备名段**：TS 侧已判（`zip.ts::isWindowsReservedDeviceNameSegment` →
-  `entry-name-encoding`），**宿主解包器同名缺口是 TS 注释自己记的「边界外待补」**。
-  启动器在宿主解压必须在 `archive_guard.rs` 补这一条，并把判据写进共享表 + 补两侧对拍。
-- **尾点 / 尾空格**：两侧**都还没有**（`normalizeEntryName` 与 `staging_component_problem`
-  都不判）。要判就两侧各加一处实现 + 表里加一行，只在一侧加会当场红。
-- **ADS（`file.txt:stream`）**：字符集闸 `[a-z0-9._-]` 只盖容器名 / 暂存名，不盖**条目路径**
-  （`entry_path_problem` 的码表里没有 ADS 专码；TS 只拦盘符前缀）。要做就按新码两侧同批补。
+| 判据 | 宿主解包器（`archive_guard.rs`） | 清单侧 `market.ts::packEntryPathProblem` | 容器闸 `zip.ts::zipEntryContractProblem` |
+|---|---|---|---|
+| 尾点 / 尾空格 | 早有（`path-windows-unsafe`） | 早有 | **原缺 → 已补（复用同码）** |
+| ADS（段内 `:`） | 早有（`path-drive`，注释即写明 ADS） | 早有（`path-drive`） | **原缺 → 已补（复用同码）** |
+| Windows 保留设备名段 | **原缺 → 已补（`entry-name-encoding`）** | **仍缺**（输入是清单声明，另记后续对齐） | 早有 |
+
+- **没有新造任何拒绝码**：`path-windows-unsafe` 与 `path-drive` 原本就在 `MarketRejectCode` 里，
+  只是没进 `ZipContractCode` 与容器闸实现；保留名归既有 `entry-name-encoding`。
+- 两侧判定顺序已统一为：空 → NUL → 盘符 → 段内 `:` → 反斜杠 → 绝对 → 空段 → `..` →
+  尾点尾空格 → 保留名 → depth；共享表 `entryNames` / `tampers` 各加行钉住。
+- 启动器**复用** `archive_guard.rs` 与这张共享表，不另写第二份；清单侧保留名的缺口
+  （「清单放行、容器拒」的不对称）记为后续对齐项——容器是执法点，不对称不会放行危险条目。
 
 **限额的单源（v0.4 更正）**：
 
@@ -2378,7 +2383,7 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 | 插件/前端传任意 exe 路径 | 宿主只有 `launcher_start(instanceId)`；exe 路径在创建时固定为实例内相对路径 | 契约测试：不存在接受 exePath 的命令 |
 | exe 被替换成恶意程序 | 信任记录 SHA-256；每次启动复算；变化即 `TRUST_CHANGED` | 篡改 fixture → 启动被拒 |
 | 路径逃逸（`..`/符号链接/junction） | 规范化 + 逐段拒绝 reparse point + 前缀包含校验 | Windows junction fixture |
-| ZIP slip / 炸弹 | 四重守卫 + 条目路径闸 + 大小写折叠；**保留名 / 尾点尾空格 / ADS 在宿主侧是已知缺口，须按 §10.7 同批补并进共享表** | zip bomb / slip / casefold / reserved-name fixture（两侧各一份） |
+| ZIP slip / 炸弹 | 四重守卫 + 条目路径闸 + 大小写折叠；尾点尾空格 / ADS / 保留名**两侧同判**（共享表钉住，archive_guard 批补齐） | zip bomb / slip / casefold / reserved-name fixture（两侧各一份） |
 | 命令行注入 | argv 数组，不经过 shell；拒绝 NUL 与超长参数 | 参数含 `&`、竖线、引号 → 原样作为参数 |
 | 环境变量泄露令牌 | 宿主 `env_clear` + 最小白名单；只允许实例显式追加 | 快照测试：不出现 `HTTP_PROXY`/`TOKEN` |
 | 子进程逃出杀树 | Job Object + `CREATE_SUSPENDED` + 禁止 breakaway | 孙进程测试：stop 后两者都消失 |
@@ -2544,7 +2549,7 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
    显式强制安装后插件标 `incompatible`，启动前有警告；
 7. 安装中途取消/断电模拟 → 重启后实例无半成品、无 ownership 悬空；
 8. ZIP slip / 炸弹 / 大小写折叠 / **保留名 / 尾点尾空格 / ADS** fixture 全部拒绝，且暂存被清空
-   （后三项在宿主侧是已知缺口，须按 §10.7 两侧同批补、共享表同步加行）；
+   （后三项已由 archive_guard 批两侧同判并进共享表；启动器复用同一实现）；
 9. 存档备份 → 改动 → 恢复 → 逐文件哈希等于备份；
 10. `shared` 实例未授权时装插件/恢复存档被拒；逐根授权后成功，且授权范围不扩散；
 11. Shift-JIS 日志跨块解码正确（不出现半字符）；10k 行/秒压测 UI 不冻结；
