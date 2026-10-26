@@ -117,11 +117,13 @@ set_order / diagnose` 的载荷里没有插件语义，宿主只认 `archivePath
 在 1 / 2 未落地之前，`launcher.service` 的消费方只有 `launcher-core` 与宿主自身；
 任何第三方插件要调用它，先改本 ADR。
 
-### 7. 需要并入铁律的一句话（**待并入 `AGENTS.md`，由组长落地**；本 ADR 不改 `AGENTS.md`）
+### 7. 需要并入铁律的一句话（**已并入 `AGENTS.md` 铁律 7（2026-10-26）**；本段即该条引用源，措辞逐字保留）
 
 > **启动器写授权是第三张表，且与内核 `writablePaths`、`exportFile` 互不继承**：实例 × `rootId`
 > 逐根授权只由原生目录对话框写入 `launcher/approvals.json`（对话框与登记同一 Rust 命令），
 > 启动器安装 / 恢复前必须复验目标落在已授权根内；JS 不拿落点决定权，也不得把游戏根写进内核 `writablePaths`。
+
+并入落点：`AGENTS.md` §二 第 7 条（压缩为一条，语义逐项对齐本段）。
 
 ## 备选方案（为何不选）
 
