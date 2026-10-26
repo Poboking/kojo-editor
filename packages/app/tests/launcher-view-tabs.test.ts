@@ -11,6 +11,8 @@
  *    导出按钮走 `service.saves.exportArchive(instanceId, {})`，回执路径原样上屏；
  * 4. 宿主没有 `pickArchive`：两块面板照旧能开，但安装 / 导入按钮**禁用**并写明
  *    「宿主未提供选择器」——不假装能选。
+ * 5. 「游戏插件」（UI-PLUGINS 车道）：第 4 个分区能开、`plugins.list` 收到当前实例 id；
+ *    默认屏同样不挂载它（零插件 IPC）。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement as h } from 'react';
@@ -341,5 +343,35 @@ describe('LauncherView · 详情分区接线', () => {
     expect(importButton!.disabled).toBe(true);
     expect(container.textContent).toContain('这一层没有给导入入口');
     expect(recorded.exports).toEqual([]);
+  });
+
+  it('第 4 个分区「游戏插件」能开，取数命中当前实例；默认屏仍不挂载它', async () => {
+    const entry = instance();
+    const { service, recorded } = fakeService(entry);
+    const pluginList: string[] = [];
+    const withPlugins = {
+      ...service,
+      plugins: {
+        list: async (instanceId: string) => {
+          pluginList.push(instanceId);
+          return [];
+        },
+      },
+    } as unknown as LauncherService;
+    await mount(kernelWith(withPlugins));
+
+    // 默认屏（概览）不挂载插件面板：一次 plugins.list 都没有
+    expect(pluginList).toEqual([]);
+    expect(tab('游戏插件').getAttribute('aria-selected')).toBe('false');
+
+    await click(tab('游戏插件'));
+    await waitFor(
+      () => container.querySelector('section[aria-label="游戏插件"]') !== null,
+      '插件面板',
+    );
+    expect(pluginList).toEqual(['i-1']);
+    expect(recorded.contentList).toEqual([]);
+    expect(recorded.savesList).toEqual([]);
+    expect(container.textContent).toContain('还没有安装游戏插件');
   });
 });

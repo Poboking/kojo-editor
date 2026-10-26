@@ -16,10 +16,11 @@
  * 失败面：错误码**原样**显示、原文不改写；四类常见启动错误另给「为什么 + 下一步」
  * （`launchErrorAdvice`）。拿不到 `launcher.service` 时仍说清缺哪一块，不吞异常。
  *
- * 详情分区（组长接线，UI-CONTENT / UI-SAVES 两块面板的挂载点）：`概览` = 只读事实三块
- * （路径 / 运行时 / 信任，默认分区）；`内容包` = `ContentPanel`；`存档` = `SavesPanel`。
- * 两块面板**只在自己那一屏才挂载**（组件自取数，挂着就多两轮 IPC），且只拿到
- * `host.pickArchive` / `service.saves.exportArchive` 两条回调——视图不开第二条授权路径。
+ * 详情分区（组长接线，UI-CONTENT / UI-SAVES / UI-PLUGINS 三块面板的挂载点）：`概览` = 只读事实
+ * 三块（路径 / 运行时 / 信任，默认分区）；`内容包` = `ContentPanel`；`存档` = `SavesPanel`；
+ * `游戏插件` = `PluginsPanel`。三块面板**只在自己那一屏才挂载**（组件自取数，挂着就多几轮
+ * IPC），且只拿到 `host.pickArchive` / `service.saves.exportArchive` 两条回调——视图不开第二条
+ * 授权路径（插件面板同样只吃父层给的 `onPickArchive`）。
  *
  * 装载纪律（PS-10）：本组件只经 `App.tsx` 的 `lazy(() => import('./launcher/LauncherView'))`
  * 进入，插件本体由 `bootstrap.ts::ensureLauncherPlugin` 的字面量动态 import 装载
@@ -47,6 +48,7 @@ import type {
 } from '@kojo/plugin-api';
 import { Icon } from '../ui/icons';
 import { ContentPanel } from './content-panel';
+import { PluginsPanel } from './plugins-panel';
 import { SavesPanel } from './saves-panel';
 import {
   ISOLATION_CHOICES,
@@ -185,21 +187,22 @@ function FactBlock({
   );
 }
 
-/** 详情分区：概览（只读事实）/ 内容包 / 存档——两块面板按需挂载，不抢首帧 */
-type DetailTab = 'overview' | 'content' | 'saves';
+/** 详情分区：概览（只读事实）/ 内容包 / 存档 / 游戏插件——面板按需挂载，不抢首帧 */
+type DetailTab = 'overview' | 'content' | 'saves' | 'plugins';
 
 const DETAIL_TABS: readonly { readonly id: DetailTab; readonly label: string }[] = [
   { id: 'overview', label: '概览' },
   { id: 'content', label: '内容包' },
   { id: 'saves', label: '存档' },
+  { id: 'plugins', label: '游戏插件' },
 ];
 
 /**
  * 详情页的分区容器。
  *
- * 两块面板（`ContentPanel` / `SavesPanel`）只在对应分区被点开时才挂载：
- * 它们的取数由组件自己发起（`service.content.*` / `service.saves.*`），
- * 挂在 `概览` 那一屏上就会白白多打两轮 IPC。
+ * 三块面板（`ContentPanel` / `SavesPanel` / `PluginsPanel`）只在对应分区被点开时才挂载：
+ * 它们的取数由组件自己发起（`service.content.*` / `service.saves.*` / `service.plugins.*`），
+ * 挂在 `概览` 那一屏上就会白白多打几轮 IPC。
  *
  * `host` 只在这里被读一次，转成面板要的两条回调形状：
  * - `onPickArchive`：`host.pickArchive` 缺席（Web 壳 / 极早相位）⇒ 传 `undefined`，
@@ -266,6 +269,10 @@ function DetailTabs({
             service.saves.exportArchive(instance.id, req)
           }
         />
+      ) : null}
+
+      {tab === 'plugins' ? (
+        <PluginsPanel service={service} instanceId={instance.id} onPickArchive={onPickArchive} />
       ) : null}
     </>
   );
