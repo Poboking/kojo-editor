@@ -60,6 +60,7 @@ import {
 } from './settings-search';
 import {
   EDITOR_DISPLAY_PREF_DEFAULT,
+  LINE_HEIGHT_PRESETS,
   modifiedEditorDisplayKeys,
   resetEditorDisplayPrefs,
   saveEditorDisplayPrefs,
@@ -1447,17 +1448,18 @@ function FormatRulesRows(): ReactElement {
  * 订阅回调都只 spread 同一份补丁（见 `editor-display-prefs.ts` 头注）。
  *
  * 缺省值 = 这批改动之前硬编码的那几份读数 ⇒ 没动过设置的作者，读代码时逐字不变
- * （唯一有意变化：长文与 `.kojo` 正文/预览不再画缩略图，那一条正是 C-1b 要灭的噪声）。
+ * （有意变化两处：长文与 `.kojo` 正文/预览不再画缩略图，那一条正是 C-1b 要灭的噪声；
+ * 行高缺省 0（自动 19px）→ 1.5（21px），C2 的 CJK 阅读面，迁移口径见 `editor-display-prefs.ts`）。
  * ========================================================================================== */
 
-const LINE_HEIGHT_CHOICES: readonly { value: number; label: string }[] = [
-  { value: 0, label: '自动' },
-  { value: 18, label: '18' },
-  { value: 20, label: '20' },
-  { value: 22, label: '22' },
-  { value: 24, label: '24' },
-  { value: 28, label: '28' },
-];
+/**
+ * 行高三档（C2）：值**直接从 `editor-display-prefs` 的 `LINE_HEIGHT_PRESETS` 搬**，
+ * 本页不抄第二份数字（缺省也是那一份的 1.5）。标签只给档名——实际像素是"字号 × 倍数"，
+ * 把某个字号下的像素值印在按钮上，字号一改就成了假精确；倍数写在下面那行说明里。
+ */
+const LINE_HEIGHT_CHOICES: readonly { value: number; label: string }[] = LINE_HEIGHT_PRESETS.map(
+  (preset) => ({ value: preset.value, label: preset.label }),
+);
 
 /** 值 = Monaco 的登记名；标签 = 作者面（"boundary" 这种词不上屏） */
 const RENDER_WHITESPACE_CHOICES: readonly { value: RenderWhitespacePref; label: string }[] = [
@@ -1563,7 +1565,9 @@ function EditorDisplayRows(): ReactElement {
         <span>
           行高
           <span className="settings-hint">
-            一行占多高。「自动」按字号算（今天的写法）；选一档数字就是每行固定这么高。
+            一行占多高。三档都是「按字号算的倍数」（紧凑 1.35× / 舒适 1.5× / 宽松 1.7×）——
+            上面把正文字号改大改小，行距跟着一起走，不会出现「字放大了、行贴死了」。
+            默认舒适（14px 字号下约 21px，中日文台词读起来不粘连）；紧凑档就是改造前的观感。
             只改显示、不动文件
           </span>
         </span>
