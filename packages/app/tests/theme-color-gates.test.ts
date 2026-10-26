@@ -21,12 +21,12 @@ import {
  *  - `kojo-token-tiers.test.ts` 只量糖的 13 个档位，且拿 vs-dark 基底 `#1e1e1e` 当底
  *    （真底是主题自己的 `editor.background`）；
  *  - `kojo2-theme.test.ts` 只量 2.0 单族的 12/13 色；
- *  - 合并视图（v1 31 档 + 2.0 15 档 = 46 条规则同一屏）里**跨族撞色**正是前者都看不见的
+ *  - 合并视图（v1 32 档 + 2.0 16 档 = 48 条规则同一屏）里**跨族撞色**正是前者都看不见的
  *    那一段：原读数 kojo-mint-dark 10 对、kojo-light 8 对、kojo-dark 5 对 CIE76 ΔE < 12，
  *    最小 4.4（`c9a7f5` vs `d6acff`）。
  *
  * 本文件钉四件事（flag 开 = 双轨期真实装配态）：
- * 1. **可读**：46 条规则每一档对主题自己的 `editor.background` 对比度 ≥ 4.5；
+ * 1. **可读**：48 条规则每一档对主题自己的 `editor.background` 对比度 ≥ 4.5；
  * 2. **不撞色**：主题内去重后的前景两两 CIE76 ΔE ≥ 12（撞色 = 假分层）；
  * 3. **跨语言同义档同色**：同一段源文本被两门语法同时着色的五组（`「」`/`：` 标点、
  *    台词正文、字符串字面量、注释、原生直通）在 v1 与 2.0 两侧必须**逐字同色**——
@@ -128,9 +128,10 @@ const THEMES = captureMergedThemes();
 
 const THEME_IDS = ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const;
 
-/** v1 基线 31 条（词法 11 + 糖 15 + 语义 5）；其余是 2.0 的 15 条 */
-const V1_RULE_COUNT = 31;
-const ALL_RULE_COUNT = 46;
+/** v1 基线 32 条（词法 12 + 糖 15 + 语义 5）；其余是 2.0 的 16 条
+ * （2026-10-27 第三色批：词法基线 +`support.type`、2.0 +`kojo2.type`，两枚同色） */
+const V1_RULE_COUNT = 32;
+const ALL_RULE_COUNT = 48;
 
 function themeOf(id: string): CapturedTheme {
   const theme = THEMES.get(id);
@@ -155,7 +156,7 @@ afterEach(() => {
 /* ============================== ① 可读性 ============================== */
 
 describe('主题内全部生效规则：对主题自己的 editor.background ≥ 4.5', () => {
-  it('三套都真的合并了 46 条（31 v1 + 15 2.0），一个 kojo2 都不少（反假绿地板）', () => {
+  it('三套都真的合并了 48 条（32 v1 + 16 2.0），一个 kojo2 都不少（反假绿地板）', () => {
     for (const id of THEME_IDS) {
       const theme = themeOf(id);
       expect(theme.rules.length, `${id} 规则数`).toBe(ALL_RULE_COUNT);
@@ -166,7 +167,7 @@ describe('主题内全部生效规则：对主题自己的 editor.background ≥
     }
   });
 
-  it.each(THEME_IDS)('%s：逐档点名（46 条）', (id) => {
+  it.each(THEME_IDS)('%s：逐档点名（48 条）', (id) => {
     const theme = themeOf(id);
     const background = theme.colors['editor.background']!.slice(1);
     const weak = theme.rules
@@ -251,6 +252,29 @@ describe('跨语言同义档：同一段文本在两门语言里同色', () => {
       }
     }
     expect(bad.join('\n'), `${id} 的同义档不同色：\n${bad.join('\n')}`).toBe('');
+  });
+});
+
+/* ============================== ③b 第三色档：两门语言同色 ============================== */
+
+/**
+ * 类型 / 结构名（2026-10-27 第三色批）。
+ *
+ * 这一组**不在**上面那五组里——五组的判据是"同一段源文本被两条语法各发一枚 token"，
+ * 而 v1 侧的 `support.type` 打的是 `.ERB` 的 `#DIM` 型/存储限定词、2.0 侧的 `kojo2.type`
+ * 打的是 `# 表`/`# 池`/`# 模` 头与类型词，**字形不同、语义同一档**。所以这里判的是
+ * "同一类东西同一个色"那一半承诺：两门语言的"类型"在每一套主题里必须逐字同色，
+ * 不许出现"ERB 的 olive 与 2.0 的另一种绿"。
+ */
+describe('第三色档：v1 `support.type` 与 2.0 `kojo2.type` 每套主题逐字同色', () => {
+  it.each(THEME_IDS)('%s：两枚都在，且色值相等', (id) => {
+    const fg = foregroundByToken(themeOf(id));
+    const v1 = fg.get('support.type');
+    const k2 = fg.get(KOJO2_TOKEN.type);
+    expect(v1, `${id} 缺 v1 侧 support.type 的前景`).toBeDefined();
+    expect(k2, `${id} 缺 2.0 侧 kojo2.type 的前景`).toBeDefined();
+    expect(k2, `${id}: support.type=#${v1} 与 kojo2.type=#${k2} 漂移`).toBe(v1);
+    expect(v1).toMatch(/^[0-9a-fA-F]{6}$/);
   });
 });
 

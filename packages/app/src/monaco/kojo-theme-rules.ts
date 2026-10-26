@@ -132,6 +132,17 @@ export const KOJO2_TOKEN = {
   hex: 'kojo2.number.hex',
   /** 运算符（ASCII 符号与中文运算符词） */
   operator: 'kojo2.operator',
+  /**
+   * **类型 / 结构名**（2026-10-27 第三色批）：`# 表` / `# 池` / `# 模` 三枚**结构定义头**
+   * 与 `# 变量` / `# 常量` 行里的类型词（`整数` / `字符串`）。
+   *
+   * 与 v1 侧的 `support.type` 是**同一档语义、同一枚色**（三套主题逐字相等，见下面三张表）
+   * ——两门语言里的"类型"不该有两种绿。为什么只有 2.0 有结构定义头：v1 `.kojo` 是 ERB 之上的
+   * 糖层，没有用户自定义类型；`.ERB` 侧可判的类型位是 `#DIM` 的型/存储限定词
+   * （`CONST` / `DYNAMIC` / `CHARA` …），由结构层发 `support.type`（判据见
+   * `tree-sitter/erb-tiers.ts` 与本查询的头注）。
+   */
+  type: 'kojo2.type',
 } as const;
 
 export type Kojo2TokenName = (typeof KOJO2_TOKEN)[keyof typeof KOJO2_TOKEN];
@@ -141,7 +152,7 @@ export type Kojo2TokenName = (typeof KOJO2_TOKEN)[keyof typeof KOJO2_TOKEN];
  *
  * 取色纪律：**一档一色** + 深底对比度 ≥ 4.5 + 任意两档 CIE Lab 色差 ≥ 12（判据复跑见
  * `theme-color-gates.test.ts`：底色取主题 `editor.background`，且算的是**主题内全部生效
- * 规则**——v1 的 31 档 + 本节 15 档，不再只看 2.0 单族 12 色）。
+ * 规则**——v1 的 32 档 + 本节 16 档，不再只看 2.0 单族 12 色）。
  * 语义族：紫=声明、青=保留词、橙=说话人、绿=台词/字面、蓝=旁白、
  * 黄=插值、粉=提示、暖灰=原生、中性灰=注释、淡紫=数字、青绿=运算符；锚点用最亮的粉紫。
  *
@@ -177,6 +188,9 @@ export const KOJO2_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = [
   { token: KOJO2_TOKEN.number, foreground: 'd6acff' },
   { token: KOJO2_TOKEN.hex, foreground: 'd6acff' },
   { token: KOJO2_TOKEN.operator, foreground: '56b6c2' },
+  // 类型 / 结构名 = 与 v1 `support.type` 逐字同色（第三色族：暗底用偏黄的橄榄，
+  // 与本套的草绿台词 `98c379` 差 ΔE 25.4，不会读成"又一个绿"）
+  { token: KOJO2_TOKEN.type, foreground: 'b3bd47' },
 ];
 
 /**
@@ -214,6 +228,8 @@ export const KOJO2_LIGHT_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] =
   { token: KOJO2_TOKEN.number, foreground: '953800' },
   { token: KOJO2_TOKEN.hex, foreground: '953800' },
   { token: KOJO2_TOKEN.operator, foreground: '35526f' },
+  // 类型 / 结构名 = 与 v1 `support.type` 逐字同色（浅底取深橄榄，对白底 5.44、对台词绿 ΔE 24.6）
+  { token: KOJO2_TOKEN.type, foreground: '5f6b2a' },
 ];
 
 /**
@@ -250,4 +266,9 @@ export const KOJO2_MINT_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = 
   { token: KOJO2_TOKEN.number, foreground: 'f0b98a' },
   { token: KOJO2_TOKEN.hex, foreground: 'f0b98a' },
   { token: KOJO2_TOKEN.operator, foreground: '74d6d0' },
+  // 类型 / 结构名 = 与 v1 / 暗色的 `support.type` 同一支色族（墨绿上的暖橄榄，对底 7.78、
+  // 对最近的台词绿 `9ccf9a` ΔE 23.9）。上面那句"再进一枚新色必然撞色"说的是**把 2.0 十五档
+  // 逐档并进既有绿盘**那一路（每档都另起一枚色 = 第 16–20 枚，枚枚挤在本族色旁边）；
+  // 2026-10-27 第三色批量过：墨绿盘的**黄绿 / 橄榄**那一块本来就是空的，一枚也不撞。
+  { token: KOJO2_TOKEN.type, foreground: '96b458' },
 ];

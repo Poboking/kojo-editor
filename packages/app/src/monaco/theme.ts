@@ -46,6 +46,14 @@ import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
  * 深色 token / 部件色）。dark 的糖与语义规则**对象原样复用**（`kojo-token-tiers.test.ts`
  * 有同引用断言），light/mint 只按 token 换前景，token 集合因此永远同源。
  *
+ * **`support.type` 档住哪儿**（2026-10-27 第三色批）：外部建议点名的"类型用第三色"，本仓此前
+ * 只有紫（关键字）与蓝（函数名，粗）两层，结构名一直没有自己的色。三套各取一支**黄绿／橄榄**
+ * （dark `b3bd47` / light `5f6b2a` / mint `96b458`）——这条色相带在三套盘里都是空的，所以对每套
+ * 最近的一枚（都是台词绿）都拉开到 ΔE ≥ 24，对比度 5.4–7.9。它**不加 fontStyle**：分层靠色相，
+ * 不靠伪斜体（CJK 斜体会糊，与 `keyword` 同一口径）。消费方两条链都默认开：
+ * `.ERB` 结构层的 `#DIM` 型/存储限定词（`tree-sitter/erb-tiers.ts`）与 2.0 的结构定义头
+ * （`kojo2.type`，逐字同色，两门语言的"类型"不许有两种绿）。
+ *
  * **底色口径（2026-10-26 判据批）**：`inherit: false` 意味着 `editor.background` 就是量
  * 对比度的那块底（dark `#1e2227` / light `#f6f8fa` / mint `#0f1713`），**不是** vs-dark 基底
  * 的 `#1e1e1e`。判据一律从 `colors['editor.background']` 取值（`kojo-token-tiers.test.ts` /
@@ -113,6 +121,11 @@ const BASE_RULE_SPECS: readonly BaseRuleSpec[] = [
   { token: 'keyword' },
   { token: 'keyword.preprocessor' },
   { token: 'entity.name.function', fontStyle: 'bold' },
+  // 类型 / 结构名（2026-10-27 第三色批）：本仓第一枚**独立于关键字与函数名**的结构前景档。
+  // 消费方是两条默认开的链：`.ERB` 结构层的 `#DIM` 型/存储限定词（`erb-tiers.ts` 的 `type` 档）
+  // 与 2.0 的结构定义头（`kojo2.type` 与本档逐字同色）。**不加 fontStyle**：
+  // 与 `keyword` 同理——CJK 环境里的斜体是伪斜体，糊；这一档靠色相分层，不靠字形。
+  { token: 'support.type' },
   { token: 'variable' },
   { token: 'string' },
   { token: 'number' },
@@ -171,6 +184,9 @@ const DARK_BASE_PALETTE: Readonly<Record<string, string>> = {
   keyword: 'c678dd',
   'keyword.preprocessor': 'e5c07b',
   'entity.name.function': '61afef',
+  // 类型 / 结构名（第三色）：暗底上取偏黄的橄榄 `b3bd47`——对底 `#1e2227` 对比 7.83，
+  // 对全表最近的一枚（台词草绿 `98c379`）ΔE 25.4，与关键字紫 / 函数蓝三色分立。
+  'support.type': 'b3bd47',
   variable: 'e06c75',
   string: '98c379',
   number: 'd19a66',
@@ -188,6 +204,9 @@ const LIGHT_BASE_PALETTE: Readonly<Record<string, string>> = {
   keyword: '8250df',
   'keyword.preprocessor': '953800',
   'entity.name.function': '0550ae',
+  // 类型 / 结构名（第三色）：浅底取深橄榄 `5f6b2a`——对底 `#f6f8fa` 对比 5.44，
+  // 对台词绿 `116329` ΔE 24.6（浅底可读区间窄，这一支是量出来的，不是猜的）。
+  'support.type': '5f6b2a',
   variable: 'b4232e',
   string: '116329',
   number: '953800',
@@ -240,6 +259,10 @@ const MINT_BASE_PALETTE: Readonly<Record<string, string>> = {
   // 提纯到金黄 dca023（ΔE 36.9；色相不动，仍是"暖金"族）
   'keyword.preprocessor': 'dca023',
   'entity.name.function': '7cc7ff',
+  // 类型 / 结构名（第三色）：墨绿底上的暖橄榄 `96b458`——对底 `#0f1713` 对比 7.78，
+  // 对最近的台词绿 `9ccf9a` ΔE 23.9。墨绿盘的黄绿／橄榄那一块原本是空的（不是"第 16 枚必撞"），
+  // 2.0 侧的 `kojo2.type` 与本档逐字同色。
+  'support.type': '96b458',
   variable: 'ff9ba3',
   string: '9ccf9a',
   number: 'f0b98a',

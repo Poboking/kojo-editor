@@ -256,11 +256,12 @@ describe('配色质量：对比度 ≥ 4.5、任意两档 ΔE ≥ 12', () => {
   });
 
   it.each([
-    // 去重后剩几枚独立色 = 15 档减去"同档共用色"的对数：
-    // 暗色共用 {台词/字面, 数字/十六进制} 2 对 ⇒ 13；亮色再多一对 {原生/注释} ⇒ 12。
-    // （标点 2026-10-26 批起与 v1 同色 7f9cc0，不再与保留词共用 ⇒ 暗色 12 → 13。）
-    { name: 'dark', theme: kojo2DarkTheme, unique: 13 },
-    { name: 'light', theme: kojo2LightTheme, unique: 12 },
+    // 去重后剩几枚独立色 = 16 档减去"同档共用色"的对数：
+    // 暗色共用 {台词/字面, 数字/十六进制} 2 对 ⇒ 14；亮色再多一对 {原生/注释} ⇒ 13。
+    // （标点 2026-10-26 批起与 v1 同色 7f9cc0，不再与保留词共用 ⇒ 暗色 12 → 13；
+    //  类型档 2026-10-27 批各套都是一枚新色，不与任何档共用 ⇒ 暗 13 → 14、亮 12 → 13。）
+    { name: 'dark', theme: kojo2DarkTheme, unique: 14 },
+    { name: 'light', theme: kojo2LightTheme, unique: 13 },
   ])('$name：任意两档 CIE76 ΔE ≥ 12（一档一色，不许假分层）', ({ theme, unique: expected }) => {
     const unique = [...new Set(theme.rules.map((rule) => rule.foreground!))];
     expect(unique.length).toBe(expected);
@@ -376,14 +377,17 @@ describe('defineMonacoThemes · Kojo 2.0 主题只在 flag 开时注册', () => 
 
 /**
  * v1 三套主题的**规则词表契约**（本测试自持一份，不 import `theme.ts` 的实现细节）：
- * 词法基线 11 档 + 糖 15 档 + 语义 5 档 = 31 条。flag 关时三套 rules 必须**逐字**就是这
- * 31 条（K2-CUTOVER-THEME 的硬判据）；flag 开时这 31 条仍在原位，2.0 规则只许**追加**。
+ * 词法基线 12 档 + 糖 15 档 + 语义 5 档 = 32 条。flag 关时三套 rules 必须**逐字**就是这
+ * 32 条（K2-CUTOVER-THEME 的硬判据）；flag 开时这 32 条仍在原位，2.0 规则只许**追加**。
  */
 const V1_BASE_TOKENS: readonly string[] = [
   'comment',
   'keyword',
   'keyword.preprocessor',
   'entity.name.function',
+  // 类型 / 结构名（2026-10-27 第三色批）：位序与 `theme.ts` 的 BASE_RULE_SPECS 逐字对齐——
+  // 本表是"原序在前"那条判据的尺子，插错一格当场红。
+  'support.type',
   'variable',
   'string',
   'number',
@@ -415,7 +419,7 @@ describe('2.0 规则无条件并入 v1 三套（K2-SURFACE-DEFAULT）', () => {
     vi.unstubAllGlobals();
   });
 
-  it('默认档（不设任何 stage）：v1 31 条原序在前，15 条 2.0 规则逐格追加在后', () => {
+  it('默认档（不设任何 stage）：v1 32 条原序在前，16 条 2.0 规则逐格追加在后', () => {
     // 不 stub 任何东西 = 缺省阶段 `v1-only`（切流语义关闭）——配色是语言面，照样并入
     const themes = captureThemes();
     for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
@@ -425,10 +429,10 @@ describe('2.0 规则无条件并入 v1 三套（K2-SURFACE-DEFAULT）', () => {
     }
   });
 
-  it('默认档：15/15 个 `kojo2.*` token 全部有配色（三套主题各 15 条）', () => {
+  it('默认档：16/16 个 `kojo2.*` token 全部有配色（三套主题各 16 条）', () => {
     const themes = captureThemes();
     const expected = Object.values(KOJO2_TOKEN);
-    expect(expected).toHaveLength(15);
+    expect(expected).toHaveLength(16);
     for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
       const tokens = new Set(tokensOf(themes.get(id)!));
       const missing = expected.filter((token) => !tokens.has(token));
@@ -442,7 +446,7 @@ describe('2.0 规则无条件并入 v1 三套（K2-SURFACE-DEFAULT）', () => {
     const mintTail = themes.get('kojo-mint-dark')!.rules.slice(V1_RULE_TOKENS.length);
     const lightTail = themes.get('kojo-light')!.rules.slice(V1_RULE_TOKENS.length);
     expect(darkTail).toEqual([...KOJO2_THEME_RULES]);
-    // 墨绿有自己的盘（色值批：暗色表落墨绿底剩 4 对撞色）⇒ 只保证"是 2.0 的 15 档"
+    // 墨绿有自己的盘（色值批：暗色表落墨绿底剩 4 对撞色）⇒ 只保证"是 2.0 的 16 档"
     expect(mintTail.map((rule) => rule.token)).toEqual(KOJO2_THEME_RULES.map((rule) => rule.token));
     expect(lightTail).toEqual([...KOJO2_LIGHT_THEME_RULES]);
     const darkByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule.foreground]));

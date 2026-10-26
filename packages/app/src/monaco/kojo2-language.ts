@@ -48,6 +48,7 @@ import {
   KOJO2_RESERVED_WORDS,
   KOJO2_TABLE_DEFAULT_WORD,
   KOJO2_TEMPLATE_SLOT,
+  KOJO2_TYPE_WORDS,
   KOJO2_WAIT_CONTINUE,
   escapeRegExp,
 } from './kojo2-lexicon';
@@ -97,7 +98,7 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   // `sugar.speech.delimiter` 同色（`theme.ts` 头注写死的跨语言不变量），而 v1 的保留词与
   // 分隔符本来就是两档（`c678dd` vs `7f9cc0`）。档位表 = "一档一色"的验收清单，拆档才是
   // 事实：拆前这格是"一档两色"，测试会当场红。
-  { tier: '保留词', tokens: [KOJO2_TOKEN.keyword], why: '`由`/`否`/`续`/类型词改的是语义' },
+  { tier: '保留词', tokens: [KOJO2_TOKEN.keyword], why: '`由`/`否`/`续`/存储期词/织入修饰词改的是语义' },
   {
     tier: '结构性标点',
     tokens: [KOJO2_TOKEN.delimiter],
@@ -112,6 +113,13 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   { tier: '注释', tokens: [KOJO2_TOKEN.comment], why: '不参与演出的说明' },
   { tier: '数字', tokens: [KOJO2_TOKEN.number, KOJO2_TOKEN.hex], why: '字面量在表达式里要能扫读' },
   { tier: '运算符', tokens: [KOJO2_TOKEN.operator], why: '中文运算符词与符号同档，判定位一眼可辨' },
+  // 2026-10-27 第三色批：本仓此前只有紫（保留/关键字）与蓝（声明调度词）两层，"这一列存什么"
+  // 一直没有自己的色。两个发射点：类型词（`整数` / `字符串`，Monarch）与结构定义头
+  // （`# 表` / `# 池` / `# 模`，worker 的 highlights 查询）。与 v1 侧的 `support.type` 逐字同色。
+  // ⚠ 叠层默认开时，`# 变量 … 整数 …` 整行由 `(variable_decl)` 一档盖住（叶子节点，语法层
+  // 没给类型词单独的子记号节点 ⇒ 判不出来就不硬拆），那一行的类型色只在叠层关时露出；
+  // 结构定义头那一档两条链都发同一个色，默认态可见。
+  { tier: '类型与结构名', tokens: [KOJO2_TOKEN.type], why: '`整数`/`字符串` 说这一列存什么，`# 表`/`池`/`模` 定义一个结构——都不改判定，改的是形状' },
 ];
 
 /* ============================== 词法状态机 ============================== */
@@ -283,12 +291,15 @@ function buildRoot(): Rule[] {
     // ---- 字面量 ----
     [/\b0[xX][0-9a-fA-F]+\b/, KOJO2_TOKEN.hex],
     [/\b\d+\b/, KOJO2_TOKEN.number],
-    // ---- 中文词形：运算符 / 保留词 / 域符号各一档，其余是名字（不上色）----
+    // ---- 中文词形：运算符 / **类型词** / 保留词 / 域符号各一档，其余是名字（不上色）----
+    // 类型词必须排在 `@keywords` 之前：`整数` / `字符串` 同时也在保留词表里（core 的
+    // `KOJO2_RESERVED_WORDS` 逐项拼出来就含它们），cases 卫兵取先命中的一档，反序就永远不出类型档。
     [
       /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+/,
       {
         cases: {
           '@operators': KOJO2_TOKEN.operator,
+          '@typeWords': KOJO2_TOKEN.type,
           '@keywords': KOJO2_TOKEN.keyword,
           '@domainSymbols': KOJO2_TOKEN.speaker,
           '@default': '',
@@ -317,6 +328,8 @@ export const KOJO2_MONARCH: Monaco.languages.IMonarchLanguage = {
   declWords: KOJO2_DECL_WORDS,
   dispatchWords: KOJO2_DISPATCH_WORDS,
   keywords: KOJO2_RESERVED_WORDS,
+  // 类型词单独一档（2026-10-27 第三色批）；词表原样转发自 core `KOJO_TYPE_WORDS`，零抄本
+  typeWords: KOJO2_TYPE_WORDS,
   domainSymbols: KOJO2_DOMAIN_SYMBOLS,
   operators: KOJO2_OPERATOR_WORDS,
   tokenizer: {
