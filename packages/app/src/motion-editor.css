@@ -1,0 +1,143 @@
+/**
+ * 编辑器动效切片（motion-editor · 2026-10-26 阅读面批 C1/C4/C5）
+ *
+ * **为什么单开一份，而不是往 `styles.css` 里加**：`styles.css` 是首屏轻档，它与
+ * `styles-project.css`（全量副本）由 `tests/styles-split.equivalence.test.ts` 的 A/B/C 三闸
+ * 钉成「轻档行序列 ⊆ 重档行序列 + 级联终态逐键相等」。往轻档手写一行重档没有的新规则，
+ * 闸当场红；补齐就得同时改重档两个文件、动到外壳的样式面。而这一份里全是 **Monaco 自己的
+ * DOM**（`.monaco-*`、`::-webkit-scrollbar-*`）与外壳版式零交集 —— 单开一份既不动那三闸，
+ * 也不必为两档各维护一份拷贝。
+ *
+ * **三条纪律**（与全局动效口径一致，别在这一份里破例）：
+ * ① **只动 DOM 已经切好的状态类**。Monaco 自己按交互切 `.scrollbar.visible / .invisible`、
+ *    自己按 hover 切折叠标号的 opacity；本文件只负责"这些状态长什么样"，不参与"该不该显"
+ *    的判定 —— 显隐时机永远只有一处真源（vendor 的控制器）。
+ * ② **只碰不触发重排的属性**（opacity / 伪元素 / 动画）。编辑器的每次重排都落在视口上，
+ *    动一下就是一个整屏的 layout 与重绘。
+ * ③ **时长一律走 `--dur-*`**：减弱动效那两条全局规则（`@media (prefers-reduced-motion)` 与
+ *    `:root[data-motion='reduced']`）把所有 animation / transition 压到 0.01ms，本条文件
+ *    因此不必自设开关，也不许写死毫秒把那条规则顶掉。
+ */
+
+/* ==========================================================================================
+ * C1 · 当前行：左缘 2px 指示条
+ *
+ * 行号槽里每一行的 `<div class="line-numbers …">` 是 `position: absolute` 的一格，
+ * 当前行那一格多一个 `.active-line-number`（`lineNumbers.js` 的 extraClassNames）。
+ * 它比另外两条候选更稳：
+ * - `.current-line-margin` 只在 `renderLineHighlight` 含 gutter 时才渲染 —— 大档是 `'line'`，
+ *   那条指示会在大文件上**整片消失**；
+ * - `.view-overlays .current-line` 随横向滚动一起漂，滚到右边就看不见了。
+ * 而 `.active-line-number` 三种档位都画、横向滚动不动（行号槽固定），所以左缘这一条挂在它身上。
+ *
+ * 观感口径：2px + 半透明 accent。读到的是"我在这一行"，**不是**"这一行被选中" ——
+ * 整行 accent wash 才是选中的语言，所以抬升只用主题里那一级中性台阶（`theme.ts` 的
+ * `editor.lineHighlightBackground`），这里只补一道"指到这儿"的竖笔。
+ * ========================================================================================== */
+
+.monaco-editor .margin-view-overlays .line-numbers.active-line-number::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ==========================================================================================
+ * C4 · Monaco 内部滚动条 overlay 化
+ *
+ * 现状（改造前实测）：`scrollbar.vertical` 缺省就是 `'auto'`，Monaco 因此**确实**在按交互切
+ * `.visible` / `.invisible fade`（`base/browser/ui/scrollbar/scrollbarVisibilityController.js`），
+ * 但 `scrollbars.css` 只为背景与滑块上色、**没给这两个类写 opacity** —— 切了等于没切，
+ * 10–12px 的滑轨于是永久常驻，这是"网页感"最重的一处。
+ *
+ * 补上的就是那一层（显隐判定仍在 vendor 手里，这里只定状态的样子）：
+ * - `.invisible`（不带 `fade`）= "根本不溢出"，保持不可见；
+ * - `.invisible.fade` = **静止**，压到 0.35 —— 看得见"还能滚多远"，但不抢眼；
+ * - `.visible` = 悬停 / 滚动 / 拖拽中，回到 1。
+ * 0.35 是"退到背景里但还数得清长度"的那一档；再低就与"没有滚动条"分不清了（判据：静止时
+ * 拇指仍能读出行文总量的比例）。
+ * ========================================================================================== */
+
+.monaco-scrollable-element > .scrollbar {
+  transition: opacity var(--dur-2) var(--ease-out);
+}
+
+.monaco-scrollable-element > .scrollbar.invisible {
+  opacity: 0;
+}
+
+.monaco-scrollable-element > .scrollbar.invisible.fade {
+  opacity: 0.35;
+}
+
+.monaco-scrollable-element > .scrollbar.visible {
+  opacity: 1;
+}
+
+/* ==========================================================================================
+ * C4 · 外壳滚动条：静止半透明，指针进到这一区就显形
+ *
+ * 领的判据是"静止时可见但不抢眼"。真要做"滚动时显形、静止 800ms 后淡出"必须有滚动检测
+ * （`scroll` 事件 + 定时器），本批白名单里没有一个能挂监听的地方（`main.tsx` 只许加一行
+ * import），CSS 也无法表达"距上次滚动多久"。这里退一档、可证伪地达成同一件事：
+ * **指针在这个滚动容器里（正在读、正在滚）⇒ 满色；指针离开 ⇒ 退到 0.55**。
+ * 滚动是鼠标在容器内做的动作，所以"滚的时候看得见"这条覆盖到了；差别只在"松手后停在原地
+ * 不淡出"（指针还在，容器仍 hover）。
+ *
+ * 选择器前缀 `html *` 只为把特异性抬到 (0,0,1)：`styles.css` / `styles-project.css` 里那条
+ * 裸 `::-webkit-scrollbar-thumb` 是 (0,0,0)，而重档那份要等项目视图才懒加载到达，
+ * 位次靠不住 —— 只靠"后到者胜"会在进出项目时闪一次。
+ * ========================================================================================== */
+
+html *::-webkit-scrollbar-thumb {
+  opacity: 0.55;
+  transition: opacity var(--dur-2) var(--ease-out);
+}
+
+html *:hover::-webkit-scrollbar-thumb {
+  opacity: 1;
+}
+
+/* ==========================================================================================
+ * C5 · 括号匹配：120ms 淡入
+ *
+ * `.bracket-match` 是 bracketMatching 的 decoration 渲染出来的（每次光标移动都重建那一格），
+ * 因此一条入场动画 = 每次命中都是"亮起来"而不是"啪一下多出一块白"。只动 opacity：
+ * 底色与描边是 `editorBracketMatch.background / .border` 两枚主题色，真源在 `theme.ts`。
+ * ========================================================================================== */
+
+.monaco-editor .bracket-match {
+  animation: kojo-bracket-in var(--dur-1) var(--ease-out);
+}
+
+@keyframes kojo-bracket-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ==========================================================================================
+ * C5 · 折叠标号：淡入节奏从 0.5s 压到 `--dur-1`（120ms）
+ *
+ * Monaco 自带 `opacity: 0` + `transition: opacity 0.5s`，靠 `.margin-view-overlays:hover`
+ * 显形（`contrib/folding/browser/folding.css`）。0.5s 在"移过去想折一段"这个动作上偏黏，
+ * 压到 `--dur-1`（120ms）；显隐判定仍归 vendor（含 `alwaysShowFoldIcons` 那条常显例外），
+ * 这里只改节奏。
+ *
+ * 特异性 (0,4,0) 压过 vendor 的 (0,3,0) —— 它的样式是运行时注入的，位次永远在本文之后。
+ */
+
+.monaco-editor .margin-view-overlays .codicon.codicon-folding-expanded,
+.monaco-editor .margin-view-overlays .codicon.codicon-folding-collapsed,
+.monaco-editor .margin-view-overlays .codicon.codicon-folding-manual-expanded,
+.monaco-editor .margin-view-overlays .codicon.codicon-folding-manual-collapsed {
+  transition: opacity var(--dur-1) var(--ease-out);
+}

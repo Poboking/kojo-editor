@@ -38,6 +38,9 @@ import './shell-notices.css';
 // 项目态（重档）都吃得到，所以必须留在**静态链**、且排在 themes/*.css 之后
 // （与 light 档那枚同特异性的井身反相内衬赢平靠位次，判据见切片文件头）。
 import './tutorial-surface.css';
+// 编辑器动效切片（1026 阅读面批 C1/C4/C5）：只含 `.monaco-*` / 滚动条选择器，不归两份样式表的
+// 「轻档 ⊆ 重档」三闸管（理由与三条纪律见该文件头注）。
+import './motion-editor.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链

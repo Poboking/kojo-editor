@@ -168,7 +168,9 @@ const TIER_SMALL: EditorOptionPatch = {
   // 粘性滚动（B3）：贴顶行给的就是大纲项（当前函数 / 当前时机块）
   stickyScroll: { enabled: true, maxLineCount: 4 },
   smoothScrolling: true,
-  cursorBlinking: 'blink',
+  // 光标呼吸（C3）：`blink` 是硬切闪（亮→灭一瞬间），在深底上看久了刺眼；`smooth` 是淡入淡出。
+  // 大档仍 `solid`（持续重绘源，见 TIER_LARGE）——这一条是"小档专属的舒适度"，不是全局默认。
+  cursorBlinking: 'smooth',
   cursorSmoothCaretAnimation: 'on',
   // 偶尔混排的空格文件跟内容走（探测只扫文件头，代价可忽略）
   detectIndentation: true,
