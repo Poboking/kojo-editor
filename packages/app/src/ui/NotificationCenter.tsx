@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { pushNotice } from './notice-queue';
 import { Icon } from './icons';
+import { motionIsReduced } from './motion-pref';
 import { installNoticeMenuHost } from './notification-menu';
 
 /** 通知动作按钮（如「去授权」）——点击后先关 toast 再执行 */
@@ -59,25 +60,6 @@ export const NotifyContext = createContext<Notify>(() => {});
 /** toast 同屏上限与淘汰规则住在 `notice-queue.ts`（纯函数可单测，HK-8 裁决批） */
 /** info 自动消失时长；error 常驻到用户处理（与 VSCode 一致：错误不自动消失） */
 const INFO_TTL_MS = 6000;
-
-/**
- * 是否该"别等动画"。
- *
- * **两条都判**（`data-motion` 与系统偏好），少判一条就会漏：应用内开关是用户显式选的、
- * 写在 `<html data-motion>` 上（`motion-pref.ts`）但它**不改** `window.matchMedia` 的结果；
- * 系统那条是 OS 级设置，只影响 media query 不影响 dataset。反之亦然。
- * 任意一条为真 ⇒ 退场直接生效：一条正在消失的提示不该让作者多等 200ms 才能看到下一屏。
- */
-function skipsExitMotion(): boolean {
-  if (typeof document !== 'undefined' && document.documentElement.dataset.motion === 'reduced') {
-    return true;
-  }
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
-}
 
 /**
  * 退场动画的实际时长（ms），**从计算样式读**而不是在 TS 里再抄一份 200。
@@ -208,7 +190,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
    */
   const dismiss = useCallback(
     (id: number) => {
-      if (skipsExitMotion()) {
+      if (motionIsReduced()) {
         drop(id);
         return;
       }
@@ -217,9 +199,15 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
     [drop],
   );
 
-  /** 一键清掉屏上全部（右键菜单的「清除全部通知」；计时器由下面那个收敛 effect 一并收） */
+  /**
+   * 一键清掉屏上全部（右键菜单的「清除全部通知」；计时器由下面那个收敛 effect 一并收）。
+   *
+   * 与单条 `dismiss` 同一条语义：非减弱档**保留 `notices`**、只把每条标进 `exiting`，
+   * 于是 DOM 还在、`.toast-out` 能真跑满 200ms，到点由 `drop` 逐个摘——批量清除也是
+   * 一片淡出而不是"啪"地全没。减弱档才直接清空。
+   */
   const clearAll = useCallback(() => {
-    if (skipsExitMotion() || notices.length === 0) {
+    if (motionIsReduced() || notices.length === 0) {
       setExiting([]);
       setNotices([]);
       return;

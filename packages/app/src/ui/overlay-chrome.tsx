@@ -1,26 +1,17 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './icons';
+import { motionIsReduced } from './motion-pref';
 
 /**
- * 「动效已被压平」的运行时判据（1026 动效批）：应用内 `data-motion='reduced'`（`motion-pref.ts`
- * 写在 `<html>` 上）或系统 `prefers-reduced-motion`，任一成立即"别演了"。
+ * 「动效已被压平」的运行时判据 —— **真源在 `motion-pref.ts` 的 `motionIsReduced()`**。
  *
- * 为什么 JS 也要问一句：CSS 那两条全局规则（`styles-project.css` 5412 / 7365）只把
- * `animation/transition` 的 duration 压到 0.01ms——**动画没了，可我们这边的等待还在**：
- * 浮层要等 200ms 才卸、侧栏要等 120ms 才摘 DOM，开着「减弱动效」的作者换来的是一段
- * 什么都没有的空窗（点一下，小半秒后界面才变）。时序归 JS，动画归 CSS，两边都得知道。
+ * 本模块只做转出：1026 动效批两条线原本各写了一份同义判定（这里一份、通知中心一份），
+ * 且在「无 `document` 时算什么」上分叉。收口后全仓只剩 `motion-pref` 那一份，
+ * 名字沿用 `motionIsFlat` 是为了不动壳层那 4 处调用点与既有测试。
  *
- * 落点说明：本模块是"保活时机"的种子点（`useOverlayPresence` 在这里），壳层的布局保活
- * 也从这里取同一份判据——一条规则两处消费，不许各写一份 matchMedia。真源那侧的纯逻辑
- * 节点是 `motion-pref.ts`，但本批改动面不含它，故先住在这里（与 presence 同生共死）。
+ * @deprecated 新代码直接 `import { motionIsReduced } from './motion-pref'`。
  */
-export function motionIsFlat(): boolean {
-  if (typeof document === 'undefined') return true;
-  if (document.documentElement.getAttribute('data-motion') === 'reduced') return true;
-  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    : false;
-}
+export const motionIsFlat = motionIsReduced;
 
 /**
  * 浮层「在场」钩子（视觉批十五）：`open` 落下后再留 `ms` 毫秒才真正卸载，期间

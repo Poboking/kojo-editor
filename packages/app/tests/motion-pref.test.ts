@@ -3,6 +3,7 @@ import {
   MOTION_PREF_DEFAULT,
   applyMotionPref,
   loadMotionPref,
+  motionIsReduced,
   saveMotionPref,
 } from '../src/ui/motion-pref';
 
@@ -30,6 +31,22 @@ function fakeStorage(initial: Record<string, string> = {}): Storage {
 /** 以假 window 替换全局（只带 localStorage 一件我们真正用到的能力） */
 function stubWindow(storage: Storage | undefined): void {
   vi.stubGlobal('window', storage === undefined ? {} : { localStorage: storage });
+}
+
+/** 以假 document 替换全局：`motionIsReduced` 只读 `documentElement` 的一个属性 */
+function stubDocument(dataMotion: 'reduced' | 'full' | null): void {
+  vi.stubGlobal('document', {
+    documentElement: {
+      getAttribute: (name: string) => (name === 'data-motion' ? dataMotion : null),
+    },
+  });
+}
+
+/** 假 window：只带 matchMedia，`matches` 就是系统「减弱动效」的答案 */
+function stubSystemPrefersReduced(matches: boolean): void {
+  vi.stubGlobal('window', {
+    matchMedia: (q: string) => ({ matches: q === '(prefers-reduced-motion: reduce)' ? matches : false }),
+  });
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -94,6 +111,45 @@ describe('saveMotionPref：写入与静默降级', () => {
   it('localStorage 不可用时不抛（只影响下次启动）', () => {
     stubWindow(undefined);
     expect(() => saveMotionPref('reduced')).not.toThrow();
+  });
+});
+
+describe('motionIsReduced：JS 侧的唯一判据', () => {
+  /**
+   * 1026 动效批两条线原本各写一份同义判定（`overlay-chrome.motionIsFlat` /
+   * `NotificationCenter.skipsExitMotion`），在「无 document 时算什么」上当场分叉。
+   * 这组用例把收口后的四条边界钉死。
+   */
+  it('无 document（node / 裸环境）→ 当压平：没有 DOM 就没有动画可等', () => {
+    vi.unstubAllGlobals();
+    expect(typeof document).toBe('undefined');
+    expect(motionIsReduced()).toBe(true);
+  });
+
+  it('应用内开关 data-motion="reduced" → 真（系统偏好为假也照真）', () => {
+    stubDocument('reduced');
+    stubSystemPrefersReduced(false);
+    expect(motionIsReduced()).toBe(true);
+  });
+
+  it('系统偏好为真、应用内为 full → 真（两条各自独立生效，缺一不可）', () => {
+    stubDocument('full');
+    stubSystemPrefersReduced(true);
+    expect(motionIsReduced()).toBe(true);
+  });
+
+  it('两条都为假 → 假', () => {
+    stubDocument('full');
+    stubSystemPrefersReduced(false);
+    expect(motionIsReduced()).toBe(false);
+  });
+
+  it('无 matchMedia（老内核）→ 只看 data-motion，不抛', () => {
+    stubDocument('full');
+    stubWindow(undefined);
+    expect(motionIsReduced()).toBe(false);
+    stubDocument('reduced');
+    expect(motionIsReduced()).toBe(true);
   });
 });
 
