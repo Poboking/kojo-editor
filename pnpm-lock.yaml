@@ -365,6 +365,12 @@ importers:
         specifier: workspace:*
         version: link:../erb-parser
 
+  packages/plugins/launcher-core:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
   packages/plugins/sav-parser:
     dependencies:
       '@kojo/plugin-api':

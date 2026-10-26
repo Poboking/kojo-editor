@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-launcher-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Launcher core (service launcher.service): instance orchestration, process supervision, task center and log decoding on top of the zero-logic host bridge (kernel.launcher). Persistence, path assembly and every privileged primitive stay in the Rust host; this plugin owns the domain flows only and never touches the file system itself.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}
