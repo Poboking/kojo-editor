@@ -163,6 +163,19 @@ const TIER_SMALL: EditorOptionPatch = {
     highlightActiveIndentation: true,
   },
   minimap: { enabled: true, renderCharacters: false, maxColumn: 72 },
+  // 书签的 **glyph margin 槽位**（VIS-62，1026 编辑器体感 E1）：monaco-editor 这一档的缺省
+  // 是 `false`（`monaco.d.ts:3580`「Defaults to true in vscode and to false in monaco-editor」），
+  // 而 C 批的装饰层只写了 `glyphMarginClassName` / `glyphMarginHoverMessage`
+  // （`editor-pane/use-bookmarks.ts:46-47`）——全仓**没有任何一处**开过 `glyphMargin`（取证
+  // `grep -rn "glyphMargin" packages/app/src` 只有那两行）⇒ 角标与那句 hover 文案从未画过，
+  // `bookmark-gutter.css` 的 `.kojo-bookmark-glyph` 一支是死样式。
+  //
+  // **三档同值 = 开**，判据与 `folding` / `minimap` 走的是同一条口径：这一格是**视口级**渲染
+  // （`viewParts/glyphMargin` 只为可见行铺装饰，代价随视口行数，不随文档长度），书签集合本身
+  // 稀疏（装饰层按行号造 Range，没有全文扫描）⇒ 它不属于"随文件长度增长"那一族，大档没有
+  // 理由砍它；而它是作者亲手钉的**导航面**，5,000 行以上悄悄消失就是铁律 4 的静默削功能。
+  // "开档 ⇒ 样式表真有消费方"这一条由 `tests/editor-glyph-slot.test.ts` 钉住，防它再变死样式。
+  glyphMargin: true,
   renderLineHighlight: 'all',
   renderLineHighlightOnlyWhenFocus: false,
   // 粘性滚动（B3）：贴顶行给的就是大纲项（当前函数 / 当前时机块）
@@ -246,6 +259,10 @@ const TIER_LARGE: EditorOptionPatch = {
   folding: true,
   // 折行两档同值：跟随档时按用户偏好（缺省开），档位表不在这里替作者做决定
   wordWrap: 'on',
+  // 书签槽位同理**逐档同值**：机理与判据见 `TIER_SMALL` 那一格（视口级渲染 + 稀疏装饰，
+  // 不在"随文件长度增长"那一族里）。huge 档 spread 这一行 ⇒ 三档全开，大文件里作者的
+  // 书签不会因为体量档而消失。
+  glyphMargin: true,
 };
 
 /**

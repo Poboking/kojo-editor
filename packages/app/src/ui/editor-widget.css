@@ -1,0 +1,381 @@
+/**
+ * Monaco 弹层的宿主侧接管（VIS-63 · 1026 编辑器体感 E1 批）。
+ *
+ * 一句话：补全框与 hover 是**全站最后两块出厂档**。外壳 chrome 已经收到 0.5px 位移
+ * （`--press-dy`），这两块还穿着 vendor 的 `--vscode-*` 外衣——圆角走 monaco 自己的
+ * `cornerRadius.large`、抬升是一层单薄的 `0 2px 8px`、选中行是一整条实色底 + 一圈对比
+ * 描边、meta 列靠 `opacity: .4/.6` 两档灰阶凑——于是"编辑器里弹出来的那一格"和
+ * "外壳的任何一个浮层"读成两个产品。本文件把这两格拉回同一套浮层语言。
+ *
+ * ## 三条口径（改动前先读完）
+ *
+ * ① **对齐度量，不重画**。`ui-kit/README.md` §一自陈「Monaco 弹层……参照本文件度量，
+ *    不强行改写」——所以这里做的是**度量对齐**：底 `--surface-overlay`、边 `--border`、
+ *    角 `--radius-lg`、抬升 `--shadow-2`、meta `--fg-dim`、滚动条 `--scroll-thumb*`、
+ *    UI 条字号 `--fs-0`，**零十六进制、零裸 px 字号**。颜色仍由 `monaco/theme.ts` 那三张
+ *    表决定（本批刻意不动配色，对拍闸归另一条车道）。刻意**不上玻璃**：补全框永远压在
+ *    自己的代码上，半透明底让候选行的可读性随背后代码密度漂，是负收益。
+ *
+ * ② **靠特异性取胜，不靠注入顺序**。vendor 的弹层样式有两份：`editor.main.css` 族
+ *    （构建期注入，位置随 chunk 变）与 list 控件运行时
+ *    `createStyleSheet(this.view.domNode)` 追加的那一份（`listWidget.js:1152`，文档树里
+ *    **排在所有 head 样式之后**）。平级选择器会输给"排后面"那一份，所以每条规则都：
+ *    前缀 `:root`（类级 +1）→ 需要时对根类**写两遍**（`.x.x` 再 +1）→ 行/标签那一族把
+ *    vendor 的类链整条抄齐再补 `.monaco-list-rows`。每条头注标了 vendor 的 `(0,b,c)`
+ *    读数，改选择器先把数对上，别靠"看着能生效"。同款先例见 `context-menu.css` §二。
+ *
+ * ③ **零布局抖动**（仓库既有纪律）：选中态只走 `box-shadow: inset` + 背景色 + 文字色，
+ *    过渡只列 `background-color` / `box-shadow` / `color`——**本文件不出现 width / height /
+ *    padding / margin 过渡**，也不覆写行的像素高度（那一格由 list 的虚拟滚动按
+ *    `editor.suggest.lineHeight` 内联算死，取证 `suggestWidget.js:849`
+ *    `clamp(getOption(suggestLineHeight) || fontInfo.lineHeight, 8, 1000)`）。这里只调
+ *    **文字基线**（无单位 `line-height`），行盒高度一位不发。
+ *
+ * ## 为什么不覆写字号
+ *
+ * 需求那一条写的是"字号只吃 `--fs-*` 六档整数"，本文件遵守的方式是**只在 UI 条上写字号**
+ * （status bar 那一格：vendor 给的是 `80%` / `12px` 两处各自漂移的字面量 ⇒ 收进 `--fs-0`）。
+ * 候选行的标签**刻意不覆写**：它显示的是标识符，字号必须跟着作者的代码字号走
+ * （`font-size-pref.ts` + EditorZoom），把它钉成 `--fs-1` 会让"字小、行高却按代码行高算"
+ * 的错位随之出现，而行高不能动（口径 ③）。同理标签的字体族留给编辑器继承，不换成 `--font-ui`。
+ *
+ * ## 减弱动效
+ *
+ * 节奏全部走文件末那一对局部变量（`--ew-dur` / `--ew-dur-enter`），
+ * `:root[data-motion='reduced']` 与 `@media (prefers-reduced-motion: reduce)` 两条各自
+ * 把它们压成 `0ms`。全局那条 `styles.css:1354` 的 `!important` 本来就能压平，这里仍自带
+ * 豁免——组件级样式自己负责自己，不赌全局那条一直在册。
+ */
+
+/* ---------------------------- 〇、局部节奏变量 ---------------------------- */
+/* 只在本文件的作用域里挂（`.monaco-editor` 是两枚弹层的共同祖先：补全 widget 走
+   content/overlay widget、hover 走 content widget，都在这棵树内 ⇒ 继承得到）。 */
+:root .monaco-editor {
+  --ew-dur: var(--dur-press); /* 交互节奏（选中条、thumb）——按压档，跟手 */
+  --ew-dur-slow: var(--dur-1); /* 松手 / 颜色回落 */
+  --ew-dur-enter: var(--dur-1); /* 入场（hover 淡入） */
+  --ew-ease: var(--ease-out);
+}
+
+/* --------------------------- 一、补全 widget 的面 --------------------------- */
+/* vendor `.monaco-editor .suggest-widget, .monaco-editor .suggest-details` (0,2,0)
+   与 `.monaco-editor .suggest-widget { width: 430px }` 同族 (0,2,0) —— 下面这两条 (0,3,0) 稳赢。
+   宽度仍由 monaco 的行内 layout 决定，这里一个像素都不写。 */
+:root .monaco-editor .suggest-widget,
+:root .monaco-editor .suggest-details {
+  background-color: var(--surface-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  /* vendor 那份是 `0 2px 8px var(--vscode-widget-shadow)`——单层纯黑，读成"贴纸"。
+     --shadow-2 是全站浮层那一档（接触阴影 + 环境投影）。 */
+  box-shadow: var(--shadow-2);
+  color: var(--fg);
+  font-family: inherit;
+}
+
+/* 列表的面与角：外层已有 1px 描边 ⇒ 内层取同心圆角（10 − 1 = 9）。
+   vendor `.monaco-editor .suggest-widget .monaco-list` (0,3,0) → 这条 (0,4,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list {
+  background-color: transparent;
+  border-radius: calc(var(--radius-lg) - 1px);
+}
+
+/* 行容器交给 widget 自己那层面（list 的行底由 list 运行时生成的
+   `.monaco-list.list_id_N .monaco-list-rows` (0,3,0) 给 ⇒ 这条 (0,5,0) 压住它，
+   免得主题表那一份 `list.background` 哪天在册时在内角画出一块方角底）。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows {
+  background-color: transparent;
+}
+
+/* 滚动宿主：monaco 可能往这里写行内 background/color（standalone 主题没那些键 ⇒ 失效），
+   真失效不了时靠这条夺回，圆角随外层裁切。vendor 无同名规则，(0,4,0) 只是留余量。 */
+:root .monaco-editor .suggest-widget > .tree > .monaco-scrollable-element,
+:root .monaco-editor .suggest-details > .monaco-scrollable-element,
+:root .monaco-editor .monaco-hover > .monaco-scrollable-element {
+  background-color: transparent;
+  color: inherit;
+  border-radius: inherit;
+}
+
+/* ------------------------------ 二、候选行 ------------------------------ */
+/* vendor `.monaco-editor .suggest-widget .monaco-list .monaco-list-row` (0,4,0)
+   ⇒ 这条把链抄齐再补 `.monaco-list-rows`：(0,6,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row {
+  /* 只给文字基线（无单位 ⇒ 跟着继承字号走），行盒像素高度不动（见文件路口径 ③）。
+     默认 `normal` 在 CJK 等宽栈上是 1.3–1.5，逐机器漂；钉成一档才谈得上"行节奏"。 */
+  line-height: 1.4;
+  color: var(--fg);
+  transition:
+    background-color var(--ew-dur-slow) var(--ew-ease),
+    box-shadow var(--ew-dur) var(--ew-ease);
+}
+
+/* 左衬：行内容贴着重画后的 9px 内角会挤，让出 4px（vendor `.contents` (0,5,0) ⇒ 这条 (0,7,0)）。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents {
+  padding-left: var(--space-1);
+}
+
+/* 图标 / 标签 / meta 三段垂直居中（vendor 的 `.main` 是 flex 但没对齐项，
+   靠 line-height 碰运气）：`.monaco-editor .suggest-widget .monaco-list .monaco-list-row
+   > .contents > .main` (0,6,0) ⇒ 这条 (0,8,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents > .main {
+  align-items: center;
+  min-height: 100%;
+}
+
+/* 选中条：键盘焦点那一格。走 inset 阴影 + 弱 wash，**不再画一圈 outline**
+   （vendor 给的是 `--vscode-editorSuggestWidget-focusOutline` 的 1px 全环 (0,5,0)，
+   全站没有第二个浮层用全环表示"当前项"——右键菜单、结果行、树行一律是左侧竖条）。
+   焦点本来就住在 list 元素上，不在行上，摘掉环不损失键盘可读性；竖条 + 底色就是指示物。
+   对手：vendor (0,5,0) 与生成的 `.monaco-list.list_id_N .monaco-list-row.focused` (0,4,0)
+   与它的 `:hover` 变体 (0,5,0) ⇒ 这条 (0,7,0) 三条全压。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused {
+  background-color: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+  outline: none;
+  color: var(--fg);
+}
+
+/* 指针悬停非选中行：与菜单同一档中性底。
+   生成规则 `.monaco-list.list_id_N:not(.drop-target):not(.dragging) .monaco-list-row:hover
+   :not(.selected):not(.focused)` = (0,8,0) ⇒ 这条 (0,9,0)（`:not()` 按参数计一级）。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row:hover:not(.selected):not(.focused) {
+  background-color: var(--hover);
+}
+
+/* 命中前缀（模糊匹配的加粗段）与 kind 图标：颜色交回 token，不跟主题表的那两枚 highlight。
+   vendor 标签链 (0,8,0) / 选中态 (0,9,0) ⇒ 下面两条 (0,10,0) / (0,11,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents > .main .monaco-highlighted-label .highlight {
+  color: var(--accent-text);
+}
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused > .contents > .main .monaco-highlighted-label .highlight {
+  color: var(--accent-text);
+}
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row .codicon {
+  color: var(--fg-dim);
+}
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused .codicon {
+  color: var(--accent-text);
+}
+
+/* 标签本体的色：vendor 在 `.monaco-icon-label` 这一级另写了一次
+   （`.monaco-editor .suggest-widget .monaco-list .monaco-list-row:not(.focused) > .contents
+   > .main .monaco-icon-label` (0,8,0)）——只把色给行是**无效**的，标签自己那一条会盖回来。
+   所以这一族必须打在同一个落点上：这条 (0,9,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents > .main .monaco-icon-label {
+  color: var(--fg);
+}
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused > .contents > .main .monaco-icon-label {
+  color: var(--fg);
+}
+
+/* --------------------- 三、meta 列弱化（右侧类型 / 限定 / 签名） --------------------- */
+/* vendor 用 `opacity: .4` / `.6` 两档灰阶凑层次（叠在不同主题底色上会各自漂），
+   这里换成色档 `--fg-dim` + opacity 归一：层次由色给，不由透明度给。
+   对手 `.monaco-editor .suggest-widget .monaco-list .monaco-list-row > .contents > .main
+   > .right > .details-label` (0,8,0) ⇒ 这条 (0,10,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents > .main > .right > .details-label,
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents > .main > .left > .signature-label,
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row > .contents > .main > .left > .qualifier-label {
+  color: var(--fg-dim);
+  opacity: 1;
+}
+/* 选中行把 meta 抬回正文档（弱化的意思是"次要"，不是"选中时消失"）：(0,11,0) > vendor (0,9,0)。 */
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused > .contents > .main > .right > .details-label,
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused > .contents > .main > .left > .signature-label,
+:root .monaco-editor .suggest-widget .monaco-list .monaco-list-rows .monaco-list-row.focused > .contents > .main > .left > .qualifier-label {
+  color: var(--fg);
+}
+
+/* 空态 / 加载那一句（`.suggest-widget > .message`）：vendor (0,3,0) ⇒ 这条 (0,4,0)。 */
+:root .monaco-editor .suggest-widget > .message {
+  color: var(--fg-dim);
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  text-align: center;
+}
+
+/* 底部状态条（`editor.suggest.showStatusBar` 开着才在场）：vendor 给 `font-size: 80%`
+   这一处相对字面量 ⇒ 收进刻度（这一格是 UI 读数条，不是标识符，吃 `--fs-0` 不脱钩）。
+   vendor `.monaco-editor .suggest-widget .suggest-status-bar` (0,3,0) ⇒ 这条 (0,4,0)。 */
+:root .monaco-editor .suggest-widget .suggest-status-bar {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ------------------------- 四、补全文档面板（.suggest-details） ------------------------- */
+/* 类型行（右上角那一枚 `header > .type`）：vendor 靠 `opacity: .7` 弱化 (0,6,0) ⇒ 这条 (0,7,0)。 */
+:root .monaco-editor .suggest-details > .monaco-scrollable-element > .body > .header > .type {
+  color: var(--fg-dim);
+  opacity: 1;
+  padding: var(--space-1) var(--space-2);
+}
+:root .monaco-editor .suggest-details > .monaco-scrollable-element > .body > .docs {
+  padding: 0 var(--space-2) var(--space-1);
+}
+/* 文档里的行内代码：井面而不是主题表的 textCodeBlock 字面量。
+   vendor `.monaco-editor .suggest-details code` (0,2,1) ⇒ 这条 (0,3,1)。 */
+:root .monaco-editor .suggest-details code {
+  background-color: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+}
+:root .monaco-editor .suggest-details a {
+  color: var(--accent-text);
+}
+
+/* ------------------------------ 五、hover 面 ------------------------------ */
+/* 0.57 的内容 hover 是**两层**：`.monaco-resizable-hover`（可拖尺寸的外壳，vendor 就画在这
+   一层）套 `.monaco-hover`（内容层，vendor 给它的规则是
+   `.monaco-editor .monaco-resizable-hover > .monaco-hover` (0,3,0)，`border: none`）。
+   面只画一层：外壳在场时由外壳画、内容层退让；外壳不在场（glyph hover / 不可拖拽的
+   marker hover）由内容层自己画。两条各用双类抬到 (0,4,0)/(0,5,0)，**与注入顺序彻底无关**。 */
+:root .monaco-editor .monaco-hover.monaco-hover {
+  background-color: var(--surface-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  color: var(--fg);
+  /* vendor 1.5em ⇒ 与全站正文浮层同一档散文节奏（无单位：跟着继承字号走） */
+  line-height: 1.6;
+}
+:root .monaco-editor .monaco-resizable-hover.monaco-resizable-hover {
+  background-color: var(--surface-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  color: var(--fg);
+}
+:root .monaco-editor .monaco-resizable-hover.monaco-resizable-hover > .monaco-hover {
+  background-color: transparent;
+  border: none;
+  border-radius: inherit;
+  box-shadow: none;
+  color: inherit;
+}
+
+/* 行本身不再各自圆角：外层 `.monaco-hover` 已 `overflow: hidden`（hoverWidget.css:9），
+   行再圆一次会在正文两端啃出缺口。vendor (0,3,0) ⇒ 这条 (0,4,0)。 */
+:root .monaco-editor .monaco-hover .hover-row {
+  border-radius: 0;
+}
+
+/* 内容内衬：vendor 的 `4px 8px` 本来就是 `--space-1 / --space-2` 的档位值
+   （逐字等价、零视觉变化），收进 token。vendor (0,4,0)（含 `:not()` 那一级）⇒ 这条 (0,5,0)。 */
+:root .monaco-editor .monaco-hover .hover-contents:not(.html-hover-contents) {
+  padding: var(--space-1) var(--space-2);
+}
+
+/* 底部动作条 / 提示条：与菜单的 keybinding 同一语言（弱字 + 井底 + 发丝分隔线）。
+   vendor `.monaco-editor .monaco-hover .hover-row .actions` (0,4,0)、
+   `.hover-row.status-bar .actions`（hoverWidget.css (0,3,0)）与整行的 `font-size: 12px`
+   `.hover-row.status-bar` (0,2,0) ⇒ 下面这一族全是 (0,5,0) 起。
+   `line-height: 22px` 那一格**刻意不覆写**：条高由它给，跟着字号缩就成了布局抖动。 */
+:root .monaco-editor .monaco-hover .hover-row .actions,
+:root .monaco-editor .monaco-hover .hover-row.status-bar .actions {
+  background-color: var(--surface-sunken);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+:root .monaco-editor .monaco-hover .hover-row.status-bar .info {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+:root .monaco-editor .monaco-hover .hover-row .actions .action-container .action {
+  color: var(--fg-dim);
+}
+:root .monaco-editor .monaco-hover .hover-row .actions .action-container:hover .action {
+  color: var(--fg);
+}
+:root .monaco-editor .monaco-hover .hover-row .actions .action-container.disabled {
+  opacity: var(--disabled-opacity);
+}
+
+/* 0.57 新增的 verbosity 侧栏（提示详略三档切换那一列）：分隔线走发丝档。
+   vendor `.monaco-editor .monaco-hover .hover-row .verbosity-actions` (0,4,0) ⇒ 这条 (0,5,0)。 */
+:root .monaco-editor .monaco-hover .hover-row .verbosity-actions {
+  border-right: 1px solid var(--border-subtle);
+}
+:root .monaco-editor .monaco-hover .hover-row .verbosity-actions-inner .codicon.enabled {
+  color: var(--accent-text);
+}
+
+/* 链接与行内代码：颜色交回 token 族。
+   vendor `.monaco-editor .monaco-hover a` 与 `… .monaco-hover code` 各 (0,2,1) ⇒ 这两条 (0,3,1)。 */
+:root .monaco-editor .monaco-hover a {
+  color: var(--accent-text);
+}
+:root .monaco-editor .monaco-hover code {
+  background-color: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+}
+:root .monaco-editor .monaco-hover hr {
+  border-color: var(--border-subtle);
+  margin-left: calc(var(--space-2) * -1);
+  margin-right: calc(var(--space-2) * -1);
+}
+
+/* 复制按钮（0.57 的 hover-row-with-copy）：井底 + 焦点环，静息仍由 opacity 管。 */
+:root .monaco-editor .monaco-hover .hover-copy-button:hover {
+  background-color: var(--hover-strong);
+}
+:root .monaco-editor .monaco-hover .hover-copy-button:focus {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* 入场淡入：`fadein` 这套 keyframes 由 vendor 的 `codelensWidget.css:56` 提供
+   （本仓 entry.ts 引了 codelens 贡献 ⇒ 一直在册）；时长从字面量 100ms 收进 token。
+   vendor `.monaco-editor .monaco-hover.fade-in` (0,3,0) ⇒ 这条 (0,4,0)。 */
+:root .monaco-editor .monaco-hover.fade-in {
+  animation: fadein var(--ew-dur-enter) var(--ew-ease);
+}
+
+/* --------------------- 六、弹层自己的滚动条（不是原生那条） --------------------- */
+/* Monaco 用自绘 thumb（`.monaco-scrollable-element > .scrollbar > .slider`），
+   全站那族 `::-webkit-scrollbar` 规则**管不到它**（这是本切片要单独收的一格）。
+   几何（宽度 / top / height）由 `Scrollbar.writeDomStyles` 内联算，CSS 不去抢——
+   抢了就是布局抖动。vendor 三条各 (0,3,0) ⇒ 下面这一族全是 (0,5,0) 起。 */
+:root .monaco-editor .suggest-widget .monaco-scrollable-element > .scrollbar,
+:root .monaco-editor .suggest-details .monaco-scrollable-element > .scrollbar,
+:root .monaco-editor .monaco-hover .monaco-scrollable-element > .scrollbar {
+  background-color: transparent;
+}
+:root .monaco-editor .suggest-widget .monaco-scrollable-element > .scrollbar > .slider,
+:root .monaco-editor .suggest-details .monaco-scrollable-element > .scrollbar > .slider,
+:root .monaco-editor .monaco-hover .monaco-scrollable-element > .scrollbar > .slider {
+  background: var(--scroll-thumb);
+  border-radius: var(--radius-xs);
+  transition: background-color var(--ew-dur) var(--ew-ease);
+}
+:root .monaco-editor .suggest-widget .monaco-scrollable-element > .scrollbar > .slider:hover,
+:root .monaco-editor .suggest-details .monaco-scrollable-element > .scrollbar > .slider:hover,
+:root .monaco-editor .monaco-hover .monaco-scrollable-element > .scrollbar > .slider:hover {
+  background: var(--scroll-thumb-hover);
+}
+:root .monaco-editor .suggest-widget .monaco-scrollable-element > .scrollbar > .slider.active,
+:root .monaco-editor .suggest-details .monaco-scrollable-element > .scrollbar > .slider.active,
+:root .monaco-editor .monaco-hover .monaco-scrollable-element > .scrollbar > .slider.active {
+  background: var(--scroll-thumb-active);
+}
+
+/* --------------------------- 七、减弱动效（自带豁免） --------------------------- */
+/* 两条豁免各压一次（`:root:root` / `:root[data-motion] :root` 只是把特异性抬到基础那条
+   `(0,2,0)` 之上，与声明顺序解耦）：变量归零 ⇒ 上面每一处 transition / animation 一起没了，
+   不必逐条再列一遍落点。 */
+:root[data-motion='reduced']:root .monaco-editor {
+  --ew-dur: 0ms;
+  --ew-dur-slow: 0ms;
+  --ew-dur-enter: 0ms;
+  --ew-ease: linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:root .monaco-editor {
+    --ew-dur: 0ms;
+    --ew-dur-slow: 0ms;
+    --ew-dur-enter: 0ms;
+    --ew-ease: linear;
+  }
+}

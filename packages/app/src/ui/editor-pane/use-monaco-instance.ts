@@ -76,6 +76,10 @@ import { canRunContextMenuCommand, runContextMenuCommand } from '../context-menu
 import { SHOW_FILE_HISTORY_COMMAND_ID } from '../file-history';
 // C 批：文档内书签的装饰层（安装器形态照 use-breadcrumb；判据全在 ../bookmarks 纯逻辑）
 import { installBookmarkDecorations } from './use-bookmarks';
+// VIS-63（1026 编辑器体感 E1）：补全 / hover 弹层的宿主侧样式。住在**本文件**而不是
+// EditorPane.tsx——这一格是"编辑器实例存在 ⇒ 弹层样式在册"的最小充分条件，且本文件
+// 独占、不与 chrome 那条热文件抢行（`css-slices-wired.test.ts` 只认真 import）。
+import '../editor-widget.css';
 import { revealInExplorer, revealFailureText } from '../reveal-explorer';
 import { relativeToRoot } from '../file-tree-ops';
 import { isInWorkspaceFile } from '../file-area';
@@ -215,6 +219,13 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       // （文本块模式：不逐字符渲染——口上文本为长行文，色块更干净也更省性能）。
       fontSize: loadFontSizePref(),
       lineNumbers: 'on',
+      // VIS-62：书签的 **glyph margin 槽位**。monaco-editor 这一档的缺省是 **false**
+      // （`monaco.d.ts:3580`「Defaults to true in vscode and to false in monaco-editor」），
+      // 而 C 批的装饰层只写了 `glyphMarginClassName` ⇒ 角标与 `glyphMarginHoverMessage`
+      // 从来没画过（`bookmark-gutter.css` 那一族是死样式）。槽位与体量两轴正交，真源在
+      // 档位表（`editor-options.ts` 的三档同值 + 注释），这一格只是 create 那一路的对齐
+      // ——与 `formatOnType: true` 同一条纪律：创建时就对，不等第一次落档补写。
+      glyphMargin: true,
       renderWhitespace: 'none',
       scrollBeyondLastLine: false,
       // 折行不在这里硬编码（P2-16）：走下面的排版偏好补丁（layoutPrefPatch），与切文件

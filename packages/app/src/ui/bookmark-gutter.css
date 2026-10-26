@@ -12,6 +12,12 @@
  *    各自给值，本文件零十六进制。
  * 3. **只命中书签装饰类**：普通编辑、糖预览投影一份都不沾（投影面根本不铺书签装饰，
  *    见 `editor-pane/use-bookmarks.ts`）。
+ * 4. **槽位开着，这一族才是活样式**（VIS-62）：`.kojo-bookmark-glyph` 画在 glyph margin 上，
+ *    而 monaco-editor 的 `glyphMargin` 缺省是 **false**（`monaco.d.ts:3580`）——本文件落地时
+ *    全仓没有一处开它，角标与 `glyphMarginHoverMessage` 一直没画过。真源现在是
+ *    `editor-options.ts` 的三档表（逐档 `glyphMargin: true`）+ `use-monaco-instance.ts` 的
+ *    create 那一格；"哪一档开了 ⇒ 本文件就有对应消费方"由 `tests/editor-glyph-slot.test.ts`
+ *    钉住（类名改一处而另一处没跟上，那条就红）。
  */
 
 /* glyph margin 上的书签角标：一枚下凹的小书签形状（纯 CSS，无图标字体）。
