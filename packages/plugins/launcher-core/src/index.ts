@@ -3,7 +3,7 @@
  *
  * 启动器内核面（服务 `launcher.service`；契约 `plugin-api/launcher.ts` §6.2）。
  *
- * ## 本批范围（L4 · P0 骨架 + L6a 内容包编排）
+ * ## 本批范围（L4 · P0 骨架 + L6a 内容包编排 + L7a 插件门禁）
  *
  * | 子服务 | 状态 |
  * |---|---|
@@ -13,14 +13,15 @@
  * | `logs` 日志 | ✅ 装配（流式解码 + 环形缓冲 + 诊断包请求编排） |
  * | `saves` 存档 | ✅ 装配（宿主有 `launcher_save_*` 八条命令时；否则仍拒绝，见下） |
  * | `content` 内容包 | ✅ 装配（只读预检裁决 + 两阶段记账 + 每实例单飞 + 任务/取消，见 `content-manager.ts`） |
- * | `runtimes` / `plugins` / `pluginProjects` | ❌ 未装配（见下） |
+ * | `plugins` 游戏插件 | ✅ 装配（五道逻辑门禁 + 计划台账 + 单飞；落盘/卸载/启停/排序/诊断委托内容包管线，见 `plugin-manager.ts`） |
+ * | `runtimes` / `pluginProjects` | ❌ 未装配（见下） |
  * | `updates`（P2） | ❌ 缺席（契约里本就是可选字段） |
  *
- * **未装配的三条只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_pick_archive` /
+ * **未装配的两条只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_pick_archive` /
  * `launcher_project_hash`。本层不造空实现假装能用——每条方法都抛
  * `LAUNCHER_PLATFORM_UNSUPPORTED` 并说清是哪一块没接（不静默、不返回空数组让 UI 以为
  * 「这里就是没有」）。它们随 P1 宿主命令与对应编排一起补，届时只换桩，不动其余服务。
- * 存档与内容包同样按能力探测：宿主还没有对应命令时保持"走到探测再拒绝"的桩，
+ * 存档、内容包与插件同样按能力探测：宿主还没有对应命令时保持"走到探测再拒绝"的桩，
  * 不降级成半套实现在中途断链。)
  *
  * ## 两条硬边界
@@ -33,9 +34,9 @@
  */
 
 import type {
+  GameAdapter,
   LauncherService,
   Plugin,
-  PluginManager,
   PluginProjectService,
   RuntimeManager,
   SaveManager,
@@ -47,6 +48,7 @@ import type { DecodeBytes } from './log-service';
 import { ContentManagerImpl } from './content-manager';
 import { InstanceStoreImpl } from './instance-store';
 import { LogServiceImpl } from './log-service';
+import { PluginManagerImpl } from './plugin-manager';
 import { ProcessSupervisorImpl } from './process-supervisor';
 import { SaveManagerImpl } from './save-manager';
 import { saveHostFrom } from './save-host';
@@ -88,6 +90,16 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
       const adapterOf = (adapterId: string) => {
         if (!slots) return undefined;
         return activeGameAdapter(slots.query('game.adapter'), adapterId)?.launch;
+      };
+
+      /**
+       * 插件的两条游戏侧知识：`launch.pluginRules`（清单名 / 顺序来源 / 能力支持面 /
+       * 函数分析回调）与 `adapter.conventionPolicy`（「有意重复」的唯一判据）。
+       * 两者都只从 adapter 取，本层不认识任何具体游戏。
+       */
+      const pluginSurfacesOf = (adapterId: string): GameAdapter | undefined => {
+        if (!slots) return undefined;
+        return activeGameAdapter(slots.query('game.adapter'), adapterId);
       };
 
       const tasks = new TaskCenterImpl({
@@ -161,6 +173,30 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         ...(options.now === undefined ? {} : { now: options.now }),
       });
 
+      /**
+       * 游戏插件门禁（L7a）：文件级计划与落盘走同一组宿主命令，list / uninstall / setEnabled /
+       * setOrder / diagnose 委托上面这台内容包管线；插件独有的五道闸住 `plugin-manager.ts`。
+       *
+       * 两处**故意留空**的注入位（组合根按需接上，本层不猜）：
+       * - `baseFunctionIndexOf`：宿主要先能枚举基础游戏的脚本文件，本批没有这条命令，
+       *   故函数级冲突只比对已装插件，并在预检 warnings 里如实说明；
+       * - `gameVersionOf`：`LauncherInstance` 没有游戏版本字段、宿主也没有对应命令，
+       *   缺席时声明版本只展示不拦（`PluginCompatibility.reasons` 写明「未校验」）。
+       */
+      const plugins = new PluginManagerImpl({
+        content,
+        host,
+        tasks,
+        processes,
+        getInstance: (instanceId) => instances.get(instanceId),
+        pluginRulesOf: (adapterId) => pluginSurfacesOf(adapterId)?.launch?.pluginRules,
+        conventionPolicyOf: (adapterId) => pluginSurfacesOf(adapterId)?.conventionPolicy,
+        // 存档备份通道只在宿主真有 `launcher_save_*` 时接上：桩不能当通道（桩会抛错，
+        // 那等于把「没有备份能力」伪装成「备份失败」）。
+        ...(saveHost ? { saves } : {}),
+        ...(options.now === undefined ? {} : { now: options.now }),
+      });
+
       /** 宿主事件 → 各自的服务（事件是宿主推来的真相，命令返回值只是"我这一步的结果"） */
       const disposers = [
         host.onProcess((event) => processes.applyEvent(event)),
@@ -189,6 +225,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
       /** `dispose()`：停任务、断事件；**不杀游戏进程**（宿主 app-exit 统一收尸） */
       const shutdown = async (): Promise<void> => {
         for (const dispose of disposers) dispose();
+        plugins.dispose();
         content.dispose();
         tasks.dispose();
         logs.dispose();
@@ -203,7 +240,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         tasks,
         runtimes: NOT_ASSEMBLED.runtimes,
         content,
-        plugins: NOT_ASSEMBLED.plugins,
+        plugins,
         pluginProjects: NOT_ASSEMBLED.pluginProjects,
         saves,
         initialize,
@@ -223,7 +260,6 @@ const refuse = (label: string) => (): Promise<never> => Promise.reject(notAssemb
 
 const NOT_ASSEMBLED: {
   readonly runtimes: RuntimeManager;
-  readonly plugins: PluginManager;
   readonly pluginProjects: PluginProjectService;
   readonly saves: SaveManager;
 } = {
@@ -234,16 +270,6 @@ const NOT_ASSEMBLED: {
     resolve: refuse('运行时解析'),
     verify: refuse('运行时校验'),
     remove: refuse('运行时删除'),
-  },
-  plugins: {
-    list: refuse('游戏插件列表'),
-    planInstall: refuse('游戏插件安装预检'),
-    applyInstall: refuse('游戏插件安装'),
-    uninstall: refuse('游戏插件卸载'),
-    setEnabled: refuse('游戏插件启停'),
-    setOrder: refuse('游戏插件排序'),
-    diagnose: refuse('游戏插件诊断'),
-    openSource: refuse('插件源码项目'),
   },
   pluginProjects: {
     list: refuse('插件项目列表'),
@@ -293,6 +319,19 @@ export {
 } from './errors';
 export { InstanceStoreImpl } from './instance-store';
 export { ContentManagerImpl } from './content-manager';
+export { PluginManagerImpl } from './plugin-manager';
+export type {
+  HostPluginPlan,
+  HostPluginStaging,
+  PluginDecision,
+  PluginDiagnosisReport,
+  PluginHostCommands,
+  PluginInstalledView,
+  PluginManagerOptions,
+  PluginSaveGuard,
+  PluginTaskSink,
+  PluginTrustRecord,
+} from './plugin-manager';
 export { ProcessSupervisorImpl, idleStatus } from './process-supervisor';
 export { SaveManagerImpl, DEFAULT_SAVE_BACKUP_KEEP, DEFAULT_IMPORT_PLAN_TTL_MS } from './save-manager';
 export type { SaveManagerOptions, SaveProcessControl, SaveTaskSink } from './save-manager';

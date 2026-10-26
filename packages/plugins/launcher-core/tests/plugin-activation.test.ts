@@ -106,8 +106,11 @@ describe('launcher-core · P0 未装配的子服务', () => {
     await expect(service.content.planInstall('i1', 'C:/tmp/x.zip')).rejects.toMatchObject({
       code: 'LAUNCHER_PLATFORM_UNSUPPORTED',
     });
-    await expect(service.plugins.diagnose('i1')).rejects.toMatchObject({
+    // 插件服务已装配（L7a），但内容管线在宿主缺 `launcher_content_*` 时如实拒绝——
+    // 这里断的是「装配好了、缺命令就拒绝」，不是「没实现」。
+    await expect(service.plugins.list('i1')).rejects.toMatchObject({
       code: 'LAUNCHER_PLATFORM_UNSUPPORTED',
+      detail: expect.stringContaining('launcher_content_list'),
     });
     await expect(service.pluginProjects.build('p1')).rejects.toMatchObject({
       code: 'LAUNCHER_PLATFORM_UNSUPPORTED',
