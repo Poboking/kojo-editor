@@ -21,12 +21,22 @@ import type {
   ExecutableTrust,
   GameAdapter,
   GameLaunchAdapter,
+  HostLogChunk,
+  HostLogPage,
+  InstanceOpenTarget,
   InstancePatch,
   LauncherError,
   LauncherErrorCode,
+  LauncherHostBridge,
   LauncherInstance,
+  LauncherInstanceEvent,
+  LauncherLogEvent,
+  LauncherProcessEvent,
   LauncherService,
+  LauncherTaskEvent,
   LauncherUpdateService,
+  LaunchProfile,
+  PlatformBridge,
   PluginInstallPlan,
   PluginManager,
   PluginSourceManifest,
@@ -150,17 +160,9 @@ describe('启动器契约 · 没有命令接受目标程序路径（§13.3 边�
    * 描述，调用方给不了任何路径。这条边界只能用类型钉——`start('C:/somewhere/game.exe')`
    * 在运行期完全「合法」（就是个字符串），只有类型面能证明它不成立。
    *
-   * `LauncherHostBridge` 只在这里**按契约形状**复述宿主 P0 命令集（§7.2）：
-   * 每个方法的第一参数都是 id 类标识，没有 exe / path / 绝对路径位。
+   * L1b 起 `LauncherHostBridge` 是**契约里真有的类型**（§7）：这里不再按 §7.2 复述一份
+   * 影子接口，直接钉真类型——影子接口会漂，真类型不会。
    */
-  interface LauncherHostBridge {
-    instanceList(): Promise<readonly unknown[]>;
-    instanceGet(instanceId: string): Promise<unknown>;
-    start(instanceId: string): Promise<ProcessStatus>;
-    stop(instanceId: string, opts?: { readonly force?: boolean }): Promise<ProcessStatus>;
-    trustExecutable(instanceId: string): Promise<unknown>;
-  }
-
   it('`start` 的参数表只有一格，且是实例 id 字符串', () => {
     expectTypeOf<Parameters<LauncherHostBridge['start']>>().toEqualTypeOf<[instanceId: string]>();
     expectTypeOf<Parameters<LauncherHostBridge['start']>[0]>().toEqualTypeOf<string>();
@@ -210,3 +212,57 @@ describe('启动器契约 · 没有命令接受目标程序路径（§13.3 边�
     expectTypeOf<SaveEntry['rootId']>().toEqualTypeOf<string>();
   });
 });
+
+describe('启动器契约 · 宿主桥（L1b 补齐的 §7 形状）', () => {
+  it('创建实例是**两格**参数：request + profile（宿主编译不出启动描述）', () => {
+    // 宿主零领域判断（§4.2）：exe 相对路径 / argv / 存档根全由 adapter 编译，
+    // 宿主只落盘与守卫 ⇒ 命令载荷必须带 profile，而不是让宿主去猜 exe 在哪。
+    expectTypeOf<Parameters<LauncherHostBridge['instanceCreate']>>().toEqualTypeOf<
+      [request: CreateInstanceRequest, profile: LaunchProfile]
+    >();
+    // 领域面仍是一格（adapter 在 core 侧取）：两层的差别有据可查，不是手滑
+    expectTypeOf<Parameters<LauncherService['instances']['create']>>().toEqualTypeOf<
+      [req: CreateInstanceRequest]
+    >();
+  });
+
+  it('日志过桥的是**原始字节**，不是解码后的行（§12.1 单源）', () => {
+    expectTypeOf<LauncherHostBridge['logTail']>().returns.toEqualTypeOf<Promise<HostLogPage>>();
+    expectTypeOf<LauncherHostBridge['logRead']>().returns.toEqualTypeOf<Promise<HostLogPage>>();
+    // 原始块只有三格：时刻 / 流 / base64 字节——没有 text，宿主不做第二套编码探测
+    expectTypeOf<HostLogChunk>().toEqualTypeOf<{
+      readonly ts: number;
+      readonly stream: 'stdout' | 'stderr' | 'system';
+      readonly bytesBase64: string;
+    }>();
+    // 宿主页**没有** lines（解码后的形状是 LogService 的 LogPage，两者不许混）
+    expectTypeOf<'lines' extends keyof HostLogPage ? true : false>().toEqualTypeOf<false>();
+    expectTypeOf<HostLogPage['truncated']>().toEqualTypeOf<boolean>();
+  });
+
+  it('四条事件载荷都带严格递增 seq（乱序/重复靠它丢）', () => {
+    expectTypeOf<LauncherProcessEvent['seq']>().toEqualTypeOf<number>();
+    expectTypeOf<LauncherLogEvent['seq']>().toEqualTypeOf<number>();
+    expectTypeOf<LauncherTaskEvent['seq']>().toEqualTypeOf<number>();
+    expectTypeOf<LauncherInstanceEvent['seq']>().toEqualTypeOf<number>();
+    // 事件走字节：日志事件里同样只有 base64，没有解码后的文本
+    expectTypeOf<LauncherLogEvent['bytesBase64']>().toEqualTypeOf<string>();
+    expectTypeOf<'text' extends keyof LauncherLogEvent ? true : false>().toEqualTypeOf<false>();
+    // 实例事件复用领域面的 change kind（两处枚举不许漂成两套）
+    expectTypeOf<LauncherInstanceEvent['kind']>().toEqualTypeOf<'created' | 'updated' | 'removed' | 'state'>();
+  });
+
+  it('打开目录/写授权只吃枚举与 id，没有自由落点', () => {
+    expectTypeOf<Parameters<LauncherHostBridge['openInstanceFolder']>>().toEqualTypeOf<
+      [instanceId: string, which: InstanceOpenTarget]
+    >();
+    expectTypeOf<InstanceOpenTarget>().toEqualTypeOf<'root' | 'game' | 'saves' | 'logs' | 'backups'>();
+    // 写授权粒度 = 实例 × rootId（不是整个游戏根、也不是单个文件）
+    expectTypeOf<Parameters<Required<LauncherHostBridge>['pickWriteRoot']>>().toEqualTypeOf<
+      [instanceId: string, rootId: string]
+    >();
+    // 平台桥上的启动器是**一个可选子对象**：缺席 = 该平台没有这个能力面（不降级）
+    expectTypeOf<PlatformBridge['launcher']>().toEqualTypeOf<LauncherHostBridge | undefined>();
+  });
+});
+

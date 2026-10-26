@@ -1614,3 +1614,153 @@ export interface VerifyReport {
   readonly mismatched: readonly string[];
   readonly repairable: boolean;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * §7 宿主桥与事件载荷（L1b 补齐：2026-10-26）
+ *
+ * 这一节回答的是「TS 侧怎么调宿主」，不是「插件的领域面长什么样」——
+ * `LauncherService` / `InstanceStore` 那些是**消费方**看的形状，这里是**实现方**
+ * （内核零逻辑透传 + 桌面壳桥）必须对齐的形状。两者刻意分开：
+ *
+ * - 领域面可以说「返回 `LogPage`（已解码的行）」；宿主面只能说「返回原始字节块」，
+ *   因为 §12.1 把解码钉死在 TS 侧（内核单源 `decodeWithProbe`），宿主再解一遍就是第二套口径；
+ * - 领域面没有任何方法接受「目标程序路径」；宿主面同样没有——启动只认 `instanceId`，
+ *   信任只认 `instanceId`，落点只有「宿主按 appData 现算」与「原生对话框即授权」两种形态。
+ *
+ * 事件载荷（§7.3）此前只有文字描述，没有 TS 形状；四条都在下面，`seq` 是**宿主严格递增**
+ * 的序号，消费方按它丢弃乱序与重复（断线重连后宿主从当前值继续，不从 0 重来）。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** `launcher_instance_open_folder` 的 `which`（枚举，**不接受任意子路径**） */
+export type InstanceOpenTarget = 'root' | 'game' | 'saves' | 'logs' | 'backups';
+
+/**
+ * 一段**未解码**的日志字节。
+ *
+ * `ts` / `stream` 由宿主给（它知道读到的是什么流、什么时候读到的）；`bytesBase64` 是原始
+ * 字节——宿主不做任何编码探测，解码由 `logs.tail/read` 在 TS 侧完成（§12.1）。
+ */
+export interface HostLogChunk {
+  /** 宿主读到该块的时刻（epoch ms） */
+  readonly ts: number;
+  readonly stream: LogLine['stream'];
+  readonly bytesBase64: string;
+}
+
+/** 宿主返回的一页日志：会话元数据 + 编码后的原始块 + 截断标记 */
+export interface HostLogPage {
+  readonly session: LogSession;
+  readonly chunks: readonly HostLogChunk[];
+  /** 因 `maxLines` / `maxBytes` 被截断（UI 不能把截断当「只有这些」） */
+  readonly truncated: boolean;
+}
+
+/** `kojo:launcher-process` */
+export interface LauncherProcessEvent {
+  readonly instanceId: string;
+  readonly status: ProcessStatus;
+  readonly seq: number;
+}
+
+/** `kojo:launcher-log`（宿主节流：≥64 KiB 或 ≥100 ms 合并一次） */
+export interface LauncherLogEvent {
+  readonly instanceId: string;
+  readonly sessionId: string;
+  readonly stream: LogLine['stream'];
+  readonly seq: number;
+  readonly bytesBase64: string;
+}
+
+/** `kojo:launcher-task` */
+export interface LauncherTaskEvent {
+  readonly task: LauncherTask;
+  readonly seq: number;
+}
+
+/** `kojo:launcher-instance` */
+export interface LauncherInstanceEvent {
+  readonly kind: InstanceChange['kind'];
+  readonly instanceId: string;
+  readonly seq: number;
+}
+
+/**
+ * 宿主原语的零逻辑透传（服务键 `kernel.launcher` / 平台桥 `PlatformBridge.launcher`）。
+ *
+ * 方法名 = 命令名的 camelCase 投影（`launcher_instance_list` → `instanceList`），一个方法只对应
+ * 一条命令：本层**不拼路径、不做持久化、不解释限额**（§4.2：宿主零领域判断、core 零磁盘操作）。
+ *
+ * 可选方法（`?`）= 规格里标 P1 的命令：缺席时透传层给一句人话（照 `exportFile` /
+ * `chooseWorkspaceRoot` 的既有口径），**不降级、不造假数据**。
+ */
+export interface LauncherHostBridge {
+  /* ---- 实例（launcher_instance_*） ---- */
+
+  /** `launcher_instance_list` */
+  instanceList(): Promise<readonly LauncherInstance[]>;
+  /** `launcher_instance_get`（返回概况；`InstanceStore.get` 从里面取 `instance`） */
+  instanceInspect(instanceId: string): Promise<InstanceInspection>;
+  /**
+   * `launcher_instance_create`：**两个参数**。
+   *
+   * 宿主不认识 adapter，编译不出 `LaunchProfile`；`probe` → `buildProfile` 全在 TS 侧
+   * （adapter 的游戏知识），宿主只负责落盘与守卫。所以命令载荷是 `{ request, profile }`，
+   * 而不是让宿主去猜 exe 在哪。
+   */
+  instanceCreate(request: CreateInstanceRequest, profile: LaunchProfile): Promise<InstanceCreation>;
+  /** `launcher_instance_update`（可改字段白名单由宿主复核） */
+  instanceUpdate(instanceId: string, patch: InstancePatch): Promise<LauncherInstance>;
+  /** `launcher_instance_remove`（宿主先停进程、再删实例根） */
+  instanceRemove(instanceId: string, opts: RemoveInstanceOptions): Promise<void>;
+  /** `launcher_instance_duplicate`（P1） */
+  instanceDuplicate?(instanceId: string, name?: string): Promise<InstanceCreation>;
+
+  /* ---- 目录（原生对话框即授权） ---- */
+
+  /** `launcher_pick_source_root`：确认后在**同一命令内**写入「来源根批准表」 */
+  pickSourceRoot(title?: string): Promise<string | null>;
+  /** `launcher_pick_write_root`（P1）：确认后在同一命令内登记 实例 × rootId 的写授权 */
+  pickWriteRoot?(instanceId: string, rootId: string): Promise<string | null>;
+  /** `launcher_pick_archive`（P1）：只选不读不写 */
+  pickArchive?(title?: string): Promise<string | null>;
+  /** `launcher_instance_open_folder`：`which` 是枚举，不接受子路径 */
+  openInstanceFolder(instanceId: string, which: InstanceOpenTarget): Promise<void>;
+
+  /* ---- 进程（launcher_start / launcher_stop / launcher_process_*） ---- */
+
+  /** `launcher_start`：校验链在宿主内（实例就绪 → 程序合法 → 信任哈希 → 运行时 → 每实例锁） */
+  start(instanceId: string): Promise<ProcessStatus>;
+  /** `launcher_stop` */
+  stop(instanceId: string, opts?: StopOptions): Promise<ProcessStatus>;
+  /** `launcher_process_status` */
+  processStatus(instanceId: string): Promise<ProcessStatus>;
+  /** `launcher_process_list` */
+  processList(): Promise<readonly ProcessStatus[]>;
+  /** `launcher_trust_executable`：宿主算哈希并在**同一命令内**弹原生确认框 */
+  trustExecutable(instanceId: string): Promise<ExecutableTrust>;
+
+  /* ---- 日志（launcher_log_*） ---- */
+
+  /** `launcher_log_tail`（返回**原始块**，解码归 core） */
+  logTail(instanceId: string, query?: LogQuery): Promise<HostLogPage>;
+  /** `launcher_log_sessions` */
+  logSessions(instanceId: string): Promise<readonly LogSession[]>;
+  /** `launcher_log_read`（sessionId 归属校验在宿主） */
+  logRead(sessionId: string, query?: LogQuery): Promise<HostLogPage>;
+  /** `launcher_log_export`（P1：原生保存对话框 + 写盘同命令，路径脱敏在宿主） */
+  logExport?(instanceId: string, sessionId?: string): Promise<string | null>;
+
+  /* ---- 任务（launcher_task_*） ---- */
+
+  /** `launcher_task_list` */
+  taskList(): Promise<readonly LauncherTask[]>;
+  /** `launcher_task_cancel`（只取消可取消任务；回滚由任务自身完成） */
+  taskCancel(taskId: string): Promise<void>;
+
+  /* ---- 事件（§7.3） ---- */
+
+  onProcess(listener: (event: LauncherProcessEvent) => void): Unsubscribe;
+  onLog(listener: (event: LauncherLogEvent) => void): Unsubscribe;
+  onTask(listener: (event: LauncherTaskEvent) => void): Unsubscribe;
+  onInstance(listener: (event: LauncherInstanceEvent) => void): Unsubscribe;
+}

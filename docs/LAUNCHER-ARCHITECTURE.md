@@ -1622,7 +1622,7 @@ export interface VerifyReport {
 | `launcher_pick_source_root` | `{ title? }` | `string \| null` | P0 | 原生目录对话框；确认后把该根写入「来源根批准表」 |
 | `launcher_instance_list` | — | `LauncherInstance[]` | P0 | 只读注册表 |
 | `launcher_instance_get` | `{ instanceId }` | `InstanceInspection` | P0 | 路径现算 |
-| `launcher_instance_create` | `{ request }` | `InstanceCreation` | P0 | 来源根已批准；exe 相对路径在根内；copy 入任务队列 |
+| `launcher_instance_create` | `{ request, profile }` | `InstanceCreation` | P0 | 来源根已批准；exe 相对路径在根内；copy 入任务队列（`profile` 由 TS 侧 `buildProfile` 产出，宿主不认识 adapter） |
 | `launcher_instance_update` | `{ instanceId, patch }` | `LauncherInstance` | P0 | 不允许 patch 改 `sourceRoot`/`id`/`isolation` |
 | `launcher_instance_remove` | `{ instanceId, deleteFiles, keepBackups? }` | `void` | P0 | 先停进程；删除只在实例根内 |
 | `launcher_instance_duplicate` | `{ instanceId, name? }` | `InstanceCreation` | P1 | 目标名只影响显示，不参与路径 |
@@ -1655,9 +1655,9 @@ export interface VerifyReport {
 | `launcher_save_import` | `{ instanceId, archivePath }` | `SaveImportPlan` | P1 | ZIP 守卫；先解到暂存并预检 |
 | `launcher_save_apply_import` | `{ planId, resolutions? }` | `LauncherTask` | P1 | 同 restore 守卫 |
 | `launcher_save_export` | `{ instanceId, req }` | `string \| null` | P1 | 原生保存对话框 + 写盘同命令 |
-| `launcher_log_tail` | `{ instanceId, query? }` | `LogPage` | P0 | 读实例日志目录；上限截断 |
+| `launcher_log_tail` | `{ instanceId, query? }` | `HostLogPage`（原始块，见 §7.4） | P0 | 读实例日志目录；上限截断 |
 | `launcher_log_sessions` | `{ instanceId }` | `LogSession[]` | P0 | — |
-| `launcher_log_read` | `{ sessionId, query? }` | `LogPage` | P0 | sessionId 必须属于某实例 |
+| `launcher_log_read` | `{ sessionId, query? }` | `HostLogPage`（原始块，见 §7.4） | P0 | sessionId 必须属于某实例 |
 | `launcher_log_export` | `{ instanceId, sessionId?, includeDiagnostics? }` | `string \| null` | P1 | 原生保存对话框；路径脱敏 |
 | `launcher_task_list` | — | `LauncherTask[]` | P0 | — |
 | `launcher_task_cancel` | `{ taskId }` | `void` | P0 | 只取消可取消任务；回滚由任务自己完成 |
@@ -1699,6 +1699,22 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
 | `kojo:launcher-task` | `{ task, seq }` | 进度节流（≥100 ms） | 任务创建/进度/终态 |
 | `kojo:launcher-instance` | `{ kind, instanceId, seq }` | 变更时 | 实例增删改（UI 局部刷新，不整表重拉） |
 | `kojo:launcher-activate` | `{ instanceId }` | 用户点击通知/托盘时 | 可选：P2 托盘/文件关联唤起 |
+
+载荷的 TS 形状**只住一处**：`packages/plugin-api/src/launcher.ts` 的 `LauncherProcessEvent` /
+`LauncherLogEvent` / `LauncherTaskEvent` / `LauncherInstanceEvent`（上表是同一形状的文字版，
+字段漂移由契约测试 `launcher-contract.test.ts` 钉住）。`seq` 由宿主**严格递增**，消费方按它
+丢弃乱序与重复；断线重连后宿主从当前值继续，**不从 0 重来**。
+
+### 7.4 宿主桥（TS 侧形状）
+
+`plugin-api` 同时导出 `LauncherHostBridge` —— 内核 `kernel.launcher`（零逻辑透传）与
+桌面壳平台桥（`PlatformBridge.launcher?`）实现的就是这一个接口。两条硬约束写进类型而不是注释：
+
+- `launcher_instance_create` 是 **`{ request, profile }` 两格**：宿主不认识 adapter、编译不出
+  `LaunchProfile`，所以 exe 相对路径 / argv / 存档根由 TS 侧的 `buildProfile` 产出后随请求传下去；
+- 日志命令返回 `HostLogPage`（`chunks[].bytesBase64` **原始字节**），不是解码后的 `LogPage`——
+  §12.1 的解码单源在 TS 侧，宿主再解一遍就是第二套探测。
+
 
 ---
 

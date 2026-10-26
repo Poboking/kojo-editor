@@ -438,9 +438,17 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       桶棒整份随之下图（懒面既有 `from '../ui-kit'` 一字未改、导出面不变）。
     //     实测 **193 文件 / 2,852 KB**（本档上游变基后读数，含本批减面；较同树未减面低 13 KB），文件闸 193 不动（现读数 193，顶格 0 余量）；
     //     KB 闸随现值 **2,870 → 2,860**（降闸不写理由）。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤193 文件 / ≤2,860 KB）`);
+    //   - **启动器契约补齐批（2026-10-26，L1b）**：现读数 **194 文件 / 2,860 KB**，文件闸随现值
+    //     上抬 **193 → 194**（KB 闸不动：总量没变，只是这一枚文件的字节落进了既有余量）。
+    //     增量逐块点名：`packages/kernel/src/launcher.ts` **+1 文件 / ≈+8 KB**——`kernel.launcher`
+    //     的零逻辑透传（平台桥 `PlatformBridge.launcher?` 的实现方）。它与 `kernel/src/remote.ts`
+    //     同族、同体量：都是「一种能力一个服务键」的内核表面，**不是**插件或视图被顺带拖进首屏；
+    //     插件侧（`launcher-core`）与视图侧（`app/src/launcher`）仍然全在动态边上，图里不可见。
+    //     想把它挪出图只能改成 `start()` 里的 `import()`——那只是把同一次解析挪到首屏之后几毫秒，
+    //     反而让闸看不见真实成本，故不取。
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,860 KB）`);
     expect(totalKb).toBeLessThanOrEqual(2_860);
-    expect(files.length).toBeLessThanOrEqual(193);
+    expect(files.length).toBeLessThanOrEqual(194);
   });
 
   /**

@@ -9,6 +9,7 @@ import type {
   CreateInstanceRequest,
   ExecutableTrust,
   InstanceInspection,
+  InstanceOpenTarget,
   InstancePatch,
   LaunchProfile,
   LauncherInstance,
@@ -141,6 +142,8 @@ export class FakeHost implements LauncherHostBridge {
   logPages = new Map<string, HostLogPage>();
   sessionLists = new Map<string, LogSession[]>();
   exportResult: string | null = 'C:/tmp/diagnostics.zip';
+  /** 来源根对话框的返回值（null = 用户取消，授权表一个字节都不动） */
+  sourceRootPick: string | null = 'C:/games/fake-src';
 
   /** 旋钮：缺省 = 直接进 running */
   startImpl: (instanceId: string) => Promise<ProcessStatus> = async (instanceId) =>
@@ -221,6 +224,19 @@ export class FakeHost implements LauncherHostBridge {
   async instanceRemove(instanceId: string, opts: { deleteFiles: boolean; keepBackups?: boolean }): Promise<void> {
     this.calls.push(`instanceRemove:${opts.deleteFiles}`);
     this.instances = this.instances.filter((item) => item.id !== instanceId);
+  }
+
+  /* --------------------------- 目录 / 授权 --------------------------- */
+
+  /** 来源根批准：默认返回一个可辨识的假路径；`sourceRootPick` 设 null 即演练"用户取消" */
+  async pickSourceRoot(title?: string): Promise<string | null> {
+    this.calls.push(`pickSourceRoot:${title ?? ''}`);
+    return this.sourceRootPick;
+  }
+
+  /** 打开实例目录：只记录枚举值（本层不接受子路径，测试也不该造一份） */
+  async openInstanceFolder(instanceId: string, which: InstanceOpenTarget): Promise<void> {
+    this.calls.push(`openInstanceFolder:${instanceId}:${which}`);
   }
 
   async start(instanceId: string): Promise<ProcessStatus> {

@@ -2,6 +2,7 @@ import type {
   ComputePool,
   EventBus,
   FileIO,
+  LauncherHostBridge,
   Logger,
   PlatformBridge,
   Plugin,
@@ -17,6 +18,7 @@ import { createComputePool } from './compute';
 import { ServiceContainer } from './container';
 import { FileIOServiceImpl } from './io';
 import { OpsJournalImpl } from './journal';
+import { LauncherHostImpl } from './launcher';
 import { ProjectServiceImpl } from './project';
 import { PluginRuntime } from './runtime';
 import { RemoteServiceImpl } from './remote';
@@ -58,6 +60,11 @@ export interface Kernel {
    * 同时也是服务键 `kernel.compute`（插件经 `inject` 取用）。
    */
   readonly compute: ComputePool;
+  /**
+   * 启动器宿主原语（2026-10-26 启动器落地批）：平台桥的零逻辑透传。
+   * 平台无此能力（Node 桥 / Web 宿）时每个方法调用即抛人话，面板自解释呈现。
+   */
+  readonly launcherHost: LauncherHostBridge;
   /**
    * 文件监视控制器（BUG-5，2026-10-13）：宿主在 project.opened 起、project.closed 停。
    *
@@ -119,6 +126,9 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   container.provide(KernelServices.Compute, compute, 'kernel');
   // 远程取文本：桥的零逻辑透传（判定不住内核；见 `remote.ts`）
   container.provide(KernelServices.Remote, new RemoteServiceImpl(opts.platform), 'kernel');
+  // 启动器宿主原语：同样是零逻辑透传（实例/进程/日志/信任全在宿主；见 `launcher.ts`）
+  const launcherHost = new LauncherHostImpl(opts.platform);
+  container.provide(KernelServices.LauncherHost, launcherHost, 'kernel');
   // 批操作 journal（2026-10-16 undo 批，additive）：操作级 undo/批回滚的唯一真源。
   // 宿主与插件都经服务键 `kernel.ops` 取用（可选能力，缺席方降级自有行为）。
   const ops = new OpsJournalImpl({ bridge: opts.platform, io, log: kernelLog });
@@ -186,6 +196,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     project,
     workspaces,
     compute,
+    launcherHost,
     fileWatch,
     services: {
       tryGet: <T = unknown>(key: string): T | undefined => container.tryGet<T>(key),

@@ -950,4 +950,13 @@ export type {
   LauncherUpdateService,
   UpdateCheckResult,
   VerifyReport,
+  /* §7 宿主桥与事件载荷（L1b 补齐：内核透传 / 桌面壳桥的实现方形状） */
+  InstanceOpenTarget,
+  HostLogChunk,
+  HostLogPage,
+  LauncherProcessEvent,
+  LauncherLogEvent,
+  LauncherTaskEvent,
+  LauncherInstanceEvent,
+  LauncherHostBridge,
 } from './launcher';

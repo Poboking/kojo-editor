@@ -1,5 +1,6 @@
 import type { FileChangeKind } from './events';
 import type { Unsubscribe } from './base';
+import type { LauncherHostBridge } from './launcher';
 import type {
   MarketDownloadProgress,
   MarketPublishManifestSummary,
@@ -460,6 +461,18 @@ export interface PlatformBridge {
   ): Promise<MarketPublishOutcome>;
   /** 换设备令牌（语义见 `RemoteService.marketDeviceToken`）；additive 可选，缺席语义同上 */
   marketDeviceToken?(endpoint?: string): Promise<string>;
+  /**
+   * 启动器宿主原语（2026-10-26 启动器落地批，additive 可选）。
+   *
+   * 为什么是**一个子对象**而不是二十几个平铺方法：启动器是一整个能力面（进程 / 实例 /
+   * 日志 / 信任），平铺进 `PlatformBridge` 会让"要读盘的人顺带看见要起进程的人"这层
+   * 边界彻底糊掉；子对象缺席 = 该平台没有启动器能力，内核透传层给一句人话
+   * （照 `exportFile` / `chooseWorkspaceRoot` 的既有口径），**不降级**。
+   *
+   * 形状见 `LauncherHostBridge`：没有任何方法接受「目标程序路径」，也没有任何方法
+   * 接受「写到这里的路径」——落点只有 appData 现算与「对话框即授权」两种。
+   */
+  launcher?: LauncherHostBridge;
   /**
    * 字节 → 字符串（按标签解码，不探测）。两桥实现逐字同形：
    * `new TextDecoder(DECODE_LABEL[encoding]).decode(bytes)`——探测判序在上层
