@@ -57,6 +57,4 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LAUNCH-UI-PLUGINS | 视图「游戏插件」面板：已装列表 / 风险与兼容徽标 / 信任 / 启停 / 顺序 / 冲突解决 / 源码项目入口 | 高风险未受信不得安装；函数级冲突按「预期重复」分档展示；面板只在对应分区挂载（detail tabs，ps10 不涨） | 待派（依赖已齐：L1C 与 L7a 均已落 dev；L7b 的源码项目入口缺哪块就在面板上写明缺哪块） |
-| LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_project_hash` / `launcher_runtime_*` 两条宿主命令目前**不在** Rust 侧，须先补 | 待派（依赖 L7A 的清单类型，已落） |
-| LAUNCH-L9 | 端到端联调（真壳）：隔离 appData 里种一个夹具实例（宿主现算哈希的信任记录）→ 启动 → 日志有行 → 停止 → 无孙进程；再把 launcher 判据插进 `smoke-tauri-ipc` | 真壳读数（非 Web 调试宿）；不碰真游戏目录；`launcher-smoke` 的 5 件判据逐条落地；失败路径逐条可见 | 待派（依赖 L1C / L3D 已落） |
+| LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_project_hash` / `launcher_runtime_*` 两条宿主命令目前**不在** Rust 侧，须先补；插件面板的「打开源码」已接 `plugins.openSource`，源码项目本体仍只能读、不能建 | 待派（依赖 L7A 的清单类型，已落） |
