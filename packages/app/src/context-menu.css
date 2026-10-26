@@ -15,6 +15,9 @@
  *
  * 颜色只用既有 token（`--glass-*` / `--hover*` / `--fg*` / `--border*` / `--danger` …），
  * 不写死色值；`data-glass='solid'` 与 `prefers-reduced-motion` 各有明确回落。
+ * 质感只有一层：颗粒噪点单源在下面的「〇.五」节（`--grain-noise`），两套 DOM 共用同一张图，
+ * 全仓不再另存副本（原先 `styles.css` / `styles-project.css` 那两份 `.u-grain` 是零消费方的死码，
+ * 2026-10-27 噪点了断批删净；判据见 `tests/grain-noise-consumer.test.ts`）。
  * ========================================================================== */
 
 /* ------------------------- 〇、几何（轻档也必须成立） ------------------------- */
@@ -54,20 +57,53 @@
   animation: fade-in var(--dur-1) var(--ease-out);
 }
 
+/* ------------------------- 〇.五、质感：颗粒噪点（单源） ------------------------- */
+/* 一张 140×140 的 feTurbulence 分形噪点，作为**背景层**叠在两枚菜单的玻璃面上（全站最高频的浮面），
+   压掉「半透明实色 + 顶缘高光渐变」在暗底上那股塑料感。透明度烤进 SVG 的 rect（0.035 = 当年
+   `styles.css` 里 `.u-grain` 标定的档位，只许降不许涨），所以配方全仓只有这一处，消费方各写
+   `var(--grain-noise)`——不再有"轻档一份、重档一份"的双写税（那两副本已随本批清干净）。
+
+   为什么不走 `.u-grain::after` 那种「绝对定位伪元素 + `mix-blend-mode: overlay`」：
+   ① 伪元素 = 每个浮层多一枚合成层，还要读回它背后那一叠像素。菜单是"按下右键才出现"的东西，
+       低端机与长列表白付这一笔；背景层不新增图层，混合只发生在元素自己的背景栈里。
+   ② `.context-menu` 本身就是滚动宿主（`max-height: 72vh`）：`inset: 0` 的绝对伪元素吃的是
+       **滚动原点**那一格 padding box ⇒ 菜单一滚，颗粒只盖住上半截、下半截裸着。
+   ③ 背景层默认 `attachment: scroll` = 钉在边框盒上，滚动不脱位，且天然被 `border-radius` 裁圆。
+   ④ `overlay` 在这里是"提对比"而不是"抹灰"：深底不抬黑、浅底（light 档 `--glass-tint` 近白）
+       不显尘——这正是渐变给不出的那层颗粒，也是它与欢迎页素雅档的点阵（`ui/welcome.css`）不冲突、
+       也不该被并进同一处配方的原因：一个是"纸面"，一个是"磨砂玻璃上的浮尘"。
+
+   两条"关掉装饰"的出口都是免费的（见文末「三、质感开关与动效回落」）：`data-glass='solid'`
+   （设置页旋钮拧到 0%）与 `@supports not (backdrop-filter)`（老内核）都把整条 `background` 简写
+   换成实色 ⇒ 噪点层连同 `background-blend-mode` 一起被复位。
+
+   强度实测（真壳 Chromium，把 tile 画进 canvas 逐像素解出 α 与色后按 overlay 算）：深色玻璃上
+   RMS 0.32/255、峰值 0.92/255；浅色玻璃上 0.07 与 0.21/255。也就是说它的本职是**把顶缘高光那段
+   渐变的带状断层抖散**（断层本身约 1–3/255），顺带压掉一点塑料感，而不是画"看得见的砂粒"；浅色
+   档几乎不吃得到 ⇒ 不会白玻璃上显尘。要更重的颗粒请改配方，别偷偷抬 opacity——判据会红。 */
+.context-menu.context-menu,
+:root .context-view.monaco-menu-container {
+  --grain-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
 /* ------------------------------ 一、自定义菜单 ------------------------------ */
 
 /* 玻璃面（与 styles.css 的 .glass 组合同值；这里重钉一次是为了与加载顺序解耦）。
    圆角 / 外阴影 / 内衬仍走 styles.css 的 `.context-menu` 主线——那是实测校准过的一整套
-   （含 1px 切边环），不在本文件抄第二份，免得两处真源各自漂移。 */
+   （含 1px 切边环），不在本文件抄第二份，免得两处真源各自漂移。
+   层序：噪点（顶）→ 顶缘高光 → 着色底。`background` 简写只留实色，图像层与混合模式在它**之后**
+   走长声明——同块里简写会把两者复位，写反了就是"噪点悄悄没了"。 */
 .context-menu.context-menu {
   --glass-fade: 56px;
-  background:
+  background: rgb(var(--glass-tint) / var(--glass-alpha));
+  background-image:
+    var(--grain-noise, none),
     linear-gradient(
       180deg,
       rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0,
       transparent var(--glass-fade)
-    ),
-    rgb(var(--glass-tint) / var(--glass-alpha));
+    );
+  background-blend-mode: overlay, normal;
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-edge);
@@ -171,19 +207,23 @@
    `var(--vscode-menu-foreground)` 等 workbench 变量，standalone 主题没有这些键 ⇒
    声明在计算值阶段失效，不会盖掉下面的规则）。 */
 
-/* 玻璃面：容器本身负责圆角 / 切边 / 投影，滚动内容只负责行 */
+/* 玻璃面：容器本身负责圆角 / 切边 / 投影，滚动内容只负责行。
+   颗粒与自定义菜单同一份配方（本文件的立命口径就是"两套 DOM 一份观感"）：容器不随滚动，
+   噪点层同样钉在边框盒上，两套菜单并排看不会一边有砂一边没有。 */
 :root .context-view.monaco-menu-container {
   --glass-fade: 56px;
   color: var(--fg) !important; /* .context-view.fixed 的 all:initial 会把它重置成黑色 */
   font-family: inherit;
   font-size: var(--fs-1);
-  background:
+  background: rgb(var(--glass-tint) / var(--glass-alpha));
+  background-image:
+    var(--grain-noise, none),
     linear-gradient(
       180deg,
       rgb(var(--glass-tint-raise) / var(--glass-alpha)) 0,
       transparent var(--glass-fade)
-    ),
-    rgb(var(--glass-tint) / var(--glass-alpha));
+    );
+  background-blend-mode: overlay, normal;
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-edge);
@@ -354,7 +394,9 @@
 
 /* --------------------------- 三、质感开关与动效回落 --------------------------- */
 
-/* 老内核不支持 backdrop-filter ⇒ 实心面，绝不破版（与 styles.css 同一条回落口径） */
+/* 老内核不支持 backdrop-filter ⇒ 实心面，绝不破版（与 styles.css 同一条回落口径）。
+   走 `background` 简写而不是只补一条 `background-image: none`：噪点层与
+   `background-blend-mode` 一起被复位 ⇒ 低端机不会为颗粒多付任何东西。 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .context-menu.context-menu,
   :root .context-view.monaco-menu-container {
@@ -363,7 +405,9 @@
   }
 }
 
-/* 设置页「毛玻璃透明度」拧到 0%：撤掉磨砂与半透明（质感开关不跳色，落 --bg-2） */
+/* 设置页「毛玻璃透明度」拧到 0%：撤掉磨砂与半透明（质感开关不跳色，落 --bg-2）。
+   这一条特异性 (0,4,0) 压得过上面两节的 (0,2,0)/(0,3,0)，所以**实心档连颗粒一起没有**——
+   装饰开关是真开关，不是只调透明度；减弱动效档不关颗粒（它是静态背景层，本来就不动画）。 */
 :root[data-glass='solid'] .context-menu.context-menu,
 :root[data-glass='solid'] .context-view.monaco-menu-container {
   background: var(--bg-2);
