@@ -41,7 +41,8 @@
  *   直接命中，不重跑 `lex + parse`，也不重扫出现点；路径只改了写法（大小写 / 斜杠）而文本
  *   没变时同样命中（只换显示路径）。
  * - 单文件更新是一次 `lex + parse` + 一次全篇扫描（与 `kojo2ReferencesAt` 的代价同阶）。
- *   5k 行夹具的预算见 `tests/kojo2-project-index.test.ts`（< 8ms）。
+ *   5k 行夹具的预算见 `tests/kojo2-project-index.perf.test.ts`（< 8ms；计时池串行跑，
+ *   并行主池会互相饿红，见 `docs/PITFALLS.md` §72）。
  * - 查询不重扫源文：只遍历已建好的符号表（`refsOf` 的代价 ≈ 结果条数）。
  *
  * ## 上限

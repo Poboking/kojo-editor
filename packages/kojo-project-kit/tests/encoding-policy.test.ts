@@ -400,12 +400,15 @@ function bomEmitSites(): Map<string, number> {
 }
 
 describe('② BOM 产出具：豁免表钉到文件 + 处数（多一处少一处都红）', () => {
+  // 这一条扫**整个仓库**的源码（`bomEmitSites()` 递归读盘），单跑 ~2.2 s；满载并行池里
+  // 被挤过默认 20 s 就报 `Test timed out in 20000ms`——看着像豁免表漂了，其实是没给 IO 预算。
+  // 按本仓既有口径给显式预算（`docs/PITFALLS.md` §81）：判据与豁免表一条没动。
   it('全仓扫描结果 == 豁免表（一个文件一处不差）', () => {
     const hits = bomEmitSites();
     const actual = [...hits.entries()].map(([file, count]) => `${file} × ${count}`).sort();
     const expected = BOM_EMIT_SITES.map((e) => `${e.file} × ${e.count}`).sort();
     expect(actual).toEqual(expected);
-  });
+  }, 120_000);
 
   it('豁免表每一条的「为什么」都写清楚了（杜绝"顺手加一行豁免"）', () => {
     for (const e of BOM_EMIT_SITES) expect(e.why.length, e.file).toBeGreaterThan(10);

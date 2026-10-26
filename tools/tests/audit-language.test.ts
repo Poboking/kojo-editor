@@ -207,10 +207,14 @@ describe('audit-language · 棘轮与 fail-closed', () => {
     expect(output).toContain('读不到基线');
   });
 
+  // 真跑两次子进程（`--selftest` 七向 + 主闸），单跑 ~6.8 s；满载并行池里会被挤过默认
+  // 20 s 而**假红**（2026-10-26 全量跑实测：报错是 `Test timed out in 20000ms`，不是断言失败）。
+  // 重 IO / 子进程用例给显式预算，是本仓既有口径（`docs/PITFALLS.md` §81）：
+  // 别把"机器忙"读成"闸坏了"。判据与断言一条没动，只给时间。
   it('仓库真跑：--selftest 七向全过（三族红 + 合法绿 + 收紧豁免两红），主闸对真基线绿', async () => {
     const self = await run('node', [SCRIPT, '--selftest']);
     expect(self.stdout).toContain('自证通过');
     const main = await run('node', [SCRIPT]);
     expect(main.stdout).toContain('✅ 语言面审计：三类检查均未超出基线。');
-  });
+  }, 120_000);
 });

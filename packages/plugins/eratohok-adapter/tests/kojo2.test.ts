@@ -322,7 +322,23 @@ describe('eratohoK 2.0 adapter：非功能性面', () => {
 /* ------------------------------ 真盘对拍（skipIf 守卫） ------------------------------ */
 
 describe('eratohoK 2.0 adapter：真盘对拍（KOJO_ERATOHOK_DIR 不在则跳过）', () => {
-  const itReal = hasRealDisk() ? it : it.skip;
+  /**
+   * 真盘用例：盘不在就跳过，盘在就给**显式 IO 预算**。
+   *
+   * 这五条都要扫真盘（2500+ 份 ERB / 174 份 CSV，单跑 1.4–4.2 s）。满载并行池里会被挤过
+   * vitest 默认 20 s 而**假红**：2026-10-26 全量跑实测报的是 `Test timed out in 20000ms`，
+   * 不是断言失败——单跑本文件 89 例全过。重 IO 用例给显式预算是本仓既有口径
+   * （`docs/PITFALLS.md` §81；同批 `erafl-adapter` / `erb-parser` 的语料用例是 120–180 s）。
+   * 120 s ≈ 单跑最慢一条的 28 倍余量：既容得下满载抖动，也不会把真挂住吞掉。
+   */
+  const REAL_DISK_TIMEOUT = 120_000;
+  const itReal: (name: string, fn: () => void) => void = hasRealDisk()
+    ? (name, fn) => {
+        it(name, fn, REAL_DISK_TIMEOUT);
+      }
+    : (name, fn) => {
+        it.skip(name, fn);
+      };
 
   itReal('九事件的文件:行 上确有 `@EVENT…` 定义（含两处共享钩子）', () => {
     const expected: ReadonlyArray<readonly [string, string, number]> = [

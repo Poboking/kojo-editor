@@ -39,7 +39,17 @@ describe('kojo2 项目索引 · 5k 行整篇更新预算', () => {
     expect(source.split('\n')).toHaveLength(LINES);
     const index = createKojo2ProjectIndex();
     // 暖机：同一量级的整篇更新（含 lex / parse / 两趟扫描的 JIT），不计入护栏。
-    index.updateFile({ path: 'D:/proj/big.kojo2', text: source });
+    //
+    // **必须是 5 次，不能是 1 次**（2026-10-26 实测，5k 行夹具，同一台机器）：
+    //   暖机 1 次 → 最快 12.13ms（红）；2 次 → 4.15ms；3 次 → 3.04ms；5 次 → 3.27ms；8 次 → 2.95ms
+    // 1 次暖机等于没暖：`lex` 是个大分支函数，V8 要到第 2–3 次调用才分层编译完，那两次读到的
+    // 是**编译开销**，不是索引开销。本用例的口径（上一段注释）写的就是"含 JIT 的暖机不计入
+    // 护栏"，1 次没做到这件事——红的是 JIT，不是索引。5 次留一倍余量，暖机本身只花 ~17ms。
+    //
+    // 暖机文本每轮都不同：命中缓存就假暖了（`updateFile` 按文本逐字比对走缓存，不重解析）。
+    for (let warm = 0; warm < 5; warm++) {
+      index.updateFile({ path: 'D:/proj/big.kojo2', text: `${source}\n// 暖机 ${warm}` });
+    }
 
     const samples: number[] = [];
     for (let round = 0; round < 3; round++) {
