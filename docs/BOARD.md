@@ -20,6 +20,15 @@
 | MK-SMOKE-RECAL | `smoke-tauri-market.mjs` 本机 4 红（2026-10-22 发行前实测）：f2/g/h 三条 = **锚点过期**（`ANCHOR_BYTES=1612` / `ANCHOR_SHA256=f1b72c01…` / 期望 2 条包，线上实测 4,141 B / sha `e100bb76ea79` / 6 条包——社区投稿已进注册表，钉的是**会变的外部内容**）；k 一条 = **判据踩在自己的采样噪声面上**（`intervalMs=300` 却判「行消失 ≤ 目录消失 + 300ms」，实测 469ms / 2,013ms 两跑皆红，功能面逐字节与记账全对） | 判据：f2/g/h 改成「schema 合规 + 远程与盘上逐字节自洽」为准、锚点只钉**本仓可控**内容（外部注册表内容不钉 sha，或按 `fetchedAt` 分档）；k 的容差须 > 2×采样间隔，或改钉「同一轮内行消失前无二次轮询」这类与粒度无关的判据——**不许**为凑绿把功能断言写松 | 待认领 · 来源：chief 发行前实机测试 2026-10-22 |
 | FIX-SUGARJIT | **.kojo 预览开启后恶性崩坏四联**：①编辑界面异常抖动 ②鼠标指针在文本/指针样式间高频抽搐 ③编辑区无法上下滚动 ④语法高亮全灭全白；用户跟进：**所有文件都无法编辑**且抖动既现 ⇒ 疑似编辑器反复重挂载 / readOnly 循环级渲染环 | 判据：四联全消（不抖动 / 指针不抽搐 / 可上下滚动 / 高亮正常）且所有文件可编辑 | 进行中 · 认领：gvm 2026-10-17（dev 基线重建时从旧 master 线迁入：git log 未见交付、dev 看板原未登记） |
 
+## 在办 · 多游戏适配（eraAV + eratohoReverse · 2026-10-26，chief）
+
+> **任务**：把编辑器适配到两款新 era 游戏，验证「加一个 era 只加数据」这条路（`adapter-manifest.ts` 单一清单 + 内核零改动）。
+> **P0 布线 + P1 识别与导航**为一批；2.0 事实面（`kojo2/`）、发射面（backend）、conventions、糖面留给后续批。
+
+| ID | 任务 | 关键判据 / 已实测事实 | 状态 |
+| ADP-ERAAV | **eraAV 适配**（新包 `packages/plugins/eraav-adapter`，语料 `C:\game\eraAV`＝gitgud `era-games-zh/original/erAV`，`README.md:11` 自述 `erAV_HoX_pre2_ZH`）：口上住 `ERB/Lines/` **17 份扁平 `EVENT_K{nn}_{名}.ERB`（无角色子目录）**，主路由 `ERB/EVENT/EVENT_K.ERB`（109 行，5 条 TRYCALLFORM + 2 兜底，另有 `TRYCCALLFORM` 6 处）；**第三种命名**＝主族后缀裸号 `KOJO_MESSAGE_{家族}_{n}`、`SELF_KOJO_K{n}`、工具族**前缀**零填充 `K{nn}_KOJO2`；`CSV/Chara` 120 份；无 `sav/` | 判据：六家现有 detect 对本盘**实测零命中**（最险处＝eraAkumaMaid 主路由同名 `EVENT_K.ERB`，靠父目录 `ERB/EVENT` vs `ERB/EVENT_K` 区分）⇒ 不触 `AdapterConflictError`；**指令号尾槽全盘 0 个**（2,279 个 `@` 定义，指令分流在函数体 `IF SELECTCOM ==` 长链）；缺 `CFLAG/SOURCE/TEQUIP/EQUIP` 四表而 `CFLAG:` 引用 17,400 处；`附件/` 12 份 ERB（7 份与活盘同名 + `KX1` 模板树）必须落在 `erbRoot` 外；480/480 纯 CRLF、BOM 479/480（`Lines/EVENT_K22_織部真菜香.ERB` 无 BOM）；内核/契约/Rust diff 为空 | 进行中 · 认领：chief 2026-10-26 |
+| ADP-EVRSE | **eratohoReverse 适配**（新包 `packages/plugins/eratohoreverse-adapter`，语料 `C:\game\eratohoReverse`＝gitgud `touhou/eratohoReverse`，ver 1.214，`Emuera1824+v1.exe`）：口上 `ERB/口上/{NNNN}_{名}/`（25 目录、**目录内还有 `KOJO_ACT_K1/` 二级族目录**、**无玩家目录**），根层路由 `ERB/口上/EVENT_K.ERB`（844 行）经 `KOJO_CALL(@"DIGEST_K{ARG}")`→`TRYCALLFORM KOJO_%ARGS%` **间接转发**并按性器分族；族实测 `KOJO_ACT_K{n}_{类别}` 1,033 / `REACT` 878 / `COM_K{n}_{指令号}` 604 / `EVENT` 379 / `KOJO_NO9_*` 564 / 性别族 121 | 判据：与 eratohok **逐条不同**（`/eratoho\s*K/i` 对本作不成立——真标题 `eratohoЯeverse` 里是**西里尔 Я**，`CSV/GameBase.csv:10-11`；目录分隔是 `_` 不是空格，hok 的 `^(\d+)[\s　]+` 实测 0/25 命中）；**全树 963 份 100% UTF-8 BOM + 100% 纯 LF**（eraTW/hok 皆 CRLF 主导 ⇒ 保存不许翻行尾）；`M_KOJO` 11 处**全是 `ACTM_KOJO_CORRECTION` 子串伪命中**，不许拿 eraTW 的 `M_KOJO_` 锚；`口上テンプレ/modern/ERB/口上/` 是完整第二棵树（靠 `erbRoot:['ERB']` 挡在外）；`Global.csv`+`Globals.csv` 并存 ⇒ 名字表按文件名精确取；无 `sav/`、`.als` 0；内核/契约/Rust diff 为空 | 进行中 · 认领：chief 2026-10-26 |
+
 ## 在办 · Kojo 2.0（设计基线 v0.9）
 
 > **依据**：`docs/KOJO-2.0-LANGUAGE-SPEC.md`（v0.9 设计稿+任务清单合并入库版）。
