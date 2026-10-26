@@ -1,11 +1,17 @@
 # 启动器模块（Launcher）架构设计与核心接口
 
-- **版本**：v0.3（设计提案，未实现）
-- **日期**：2026-10-24
+- **版本**：v0.4（设计提案，未实现）
+- **日期**：2026-10-26
 - **修订**：v0.2 —— 游戏插件（可修改 / 扩展游戏逻辑）升为一等能力；删除「不做游戏逻辑修改」非目标；
   新增 `PluginManager`、插件清单 / 风险分级 / 函数级冲突 / 存档兼容门禁与信任链。
   v0.3 —— 补齐**插件项目**的作者闭环：创建 / 编辑 / 构建 / 构建并安装 / 从已装插件提取；
   新增 `PluginProjectService`、`PluginSourceManifest`、adapter 侧 `GamePluginRules.scaffold`。
+  v0.4 —— **对照实树逐条核验后的修订批**（不改设计骨架，只改落点与判据）：①确定性打包改走
+  既有 `zip.ts::buildZip`、函数级冲突改走既有 `ErbIndex` / `normalizedName` / `conventionPolicy`；
+  ②ZIP 限额单源改指 `ZIP_EXTRACT_LIMITS` + `fixtures/zip-roundtrip/contract.json` + 宿主硬顶；
+  ③补真名称（`snapshot.source`、`kernel.ops`、`bootstrap.ts` 注册点）并纠正 adapter 可达的
+  解析通道（壳层 tree-sitter 不可 import）；④补两条实树闸（开机图 / artifact-audit）与真壳
+  验收通道；⑤键位改为未占用项（`ctrl+n` 已被 `kojo.newKojoFile` 占用）；⑥脏缓冲保护提到 P1。
 - **状态**：**设计提案 · 待评审**。本文件只回答「启动器怎么长、边界在哪、契约是什么」；
   落地后的插件数、测试数、性能读数一律以 `docs/STATE.md` 为准。
 - **上位文档**：[ARCHITECTURE.md](ARCHITECTURE.md)（总体架构与铁律）、
@@ -89,11 +95,15 @@
 | 现有资产 | 启动器如何复用 | 是否改动 |
 |---|---|---|
 | `GameAdapter` 槽位（`game.adapter`） | 增加**可选** `launch?: GameLaunchAdapter`；旧 adapter 零改动 | additive |
-| `sav-parser` / `state-replay` | 存档列表的摘要、快照回放直接复用，不重写 | 零改动 |
-| ERB 解析器 / tree-sitter | adapter 的 `analyzeFunctions` 内部复用它产出函数定义；启动器不新增第二套解析 | 零改动（消费侧新增） |
+| `sav-parser` / `state-replay` | 存档列表的摘要、快照回放直接复用（服务键 `snapshot.source` / `state.replay`），不重写 | 零改动 |
+| ERB 解析器（服务键 `erb.parser`）/ 库包 | adapter 的 `analyzeFunctions` 经**服务键注入**或依赖库包（`@kojo/kojo-core` / `packages/erb-syntax-tree`）产出函数定义；启动器不新增第二套解析 | 零改动（消费侧新增） |
 | `WorkspaceService` | 插件项目 = 工作区项目（`meta.kind='game-plugin'`）+ 一个制品；产物落项目 `build/`，安装仍走插件管线 | 零改动（只新增 meta 约定） |
-| `file-history` / `ops-journal` | 内容包/插件覆盖前的备份、撤销记录可复用同一套思路 | 只读参考 |
-| `market.rs` 的 ZIP 四重守卫 | 抽成通用 `archive_guard.rs`，市场与启动器共用 | 重构 + 测试 |
+| `zip.ts::buildZip` | 插件包构建的**确定性打包**直接复用（`mtimeMs` 恒固定、DOS 时间 1980 起算、同内容两次逐字节相同）；生产消费方已是 `kojo-project-kit/package-actions.ts` | 零改动（消费侧新增） |
+| `plugin-api/erb.ts::ErbIndex` | 函数级索引（`byName: Map<normalizedName, ErbFunctionRef[]>`，含 `filePath` + `startLine`）；冲突比对与重名诊断共用这一份 | 零改动 |
+| `convention-linter` 的 `erb.duplicate-function` + adapter `conventionPolicy` | 「有意重复」的判据（真盘上 eraSQC 有 190 处逐角色重复、eratohoK 仅 2 处）直接复用，启动器不另立宽容名单 | 零改动 |
+| `file-history` / `ops-history`（`kernel.ops`，契约 `plugin-api/journal.ts`） | 内容包/插件覆盖前的备份、撤销记录可复用同一套思路 | 只读参考 |
+| `market.rs` 的 ZIP 守卫 + `fixtures/zip-roundtrip/contract.json` | 守卫抽成通用 `archive_guard.rs`，市场与启动器共用；**跨语言判据参数仍走那张共享表**（`include_str!`，两侧各有钉，表漂一字节必有一边红） | 重构 + 测试 |
+| `ps10-eager-graph` / `release-gate` 的开机图与产物闸 | 启动器视图与插件必须**全程动态 import**，否则开机图（193 文件 / 2,870 KB，余量 10 KB）与 dist 件数（80 / 85）当场红 | 接入（不改阈值） |
 | `updater_proxy.rs` | 应用自更新不动；启动器的下载闸另立 `launcher/download.rs` | 零改动 |
 | `single-instance` 插件 | 保证同一时刻只有一个应用实例；启动器再叠每实例锁 | 零改动 |
 | `ProjectService` / 工作区 | 「在编辑器中打开实例」复用现有项目打开链路 | 零改动 |
@@ -114,7 +124,7 @@
 | 7 | **失败可见，不静默** | 每个实例有 `state` 与 `lastExit`；每个任务有 `state/error`；每条安全拒绝带中文原因与错误码 |
 | 8 | **additive 优先** | 新服务键、新命令、新可选字段；既有 `GameAdapter`、`Plugin`、`PlatformBridge` 旧消费方零改动 |
 | 9 | **Windows-first，不为跨平台预支复杂度** | P0 只做 Windows Job Object；非 Windows 走 `#[cfg]` 的尽力实现或明确 `LAUNCHER_PLATFORM_UNSUPPORTED` |
-| 10 | **不做无证据的魔法数** | 容器限额、日志环大小、备份保留数全部集中为契约常量；首版值由真实包体/日志实测后定，不散落 |
+| 10 | **不做无证据的魔法数** | 容器限额、日志环大小、备份保留数全部集中为契约常量；ZIP 限额的 TS 单源是 `zip.ts::ZIP_EXTRACT_LIMITS`，跨语言判据参数是 `fixtures/zip-roundtrip/contract.json`（宿主侧另有硬顶，作纵深防御），**不在 `launcher.ts` 另立第二份**；首版值由真实包体/日志实测后定，不散落 |
 | 11 | **逻辑变更显式、可回滚** | 游戏插件可以改/替换游戏逻辑，但必须：清单可见、风险分级、先备份存档与被覆盖文件、可卸载回滚；禁止静默安装与「装完再说」 |
 | 12 | **源与产物分离，构建可重复** | 作者改的是工作区里的 `plugin.json`（无哈希）；哈希与清单只在构建时产生；同源两次构建逐字节相同；**源在项目、产物在 `build/`、装到实例是第三份**，三者版本由 `inspectDrift` 一眼说清 |
 
@@ -159,7 +169,7 @@
 | 启动器 UI | 实例、状态、任务、日志、包、插件风险 | 引擎名、exe 名、存档格式、函数语义 | 显示中文错误 + 重试入口 |
 | `launcher-core` | 通用领域模型与流程编排 | 任何具体游戏名词 | 抛 `LauncherError`，任务落 `failed` |
 | `PluginManager` | 插件清单、风险分级、函数级冲突、兼容与存档影响 | 具体函数语义、引擎加载细节 | 计划阶段拒绝或标风险 |
-| `PluginProjectService` | 工作区项目/制品、源清单、根映射、确定性构建、漂移 | 具体游戏目录、函数语义、模板内容 | `LAUNCHER_PLUGIN_PROJECT_*` / `BUILD_FAILED` |
+| `PluginProjectService` | 工作区项目/制品、源清单、根映射、确定性构建、漂移 | 具体游戏目录、函数语义、模板内容 | `LAUNCHER_PLUGIN_PROJECT_*` / `LAUNCHER_PLUGIN_BUILD_FAILED` |
 | `kernel.launcher` | 宿主命令的形状 | 领域语义 | 原样透传宿主错误 |
 | Rust 宿主 | 路径、进程、ZIP、字节流、Job Object | 游戏名、存档语义、内容/插件含义 | 返回 `LauncherErrorDto` |
 | `GameLaunchAdapter` | 引擎变体、exe 相对路径、存档目录、日志格式、插件清单/加载规则、模板骨架与函数分析 | UI 与进程实现 | `probe` 返回空 / `buildProfile` 抛错 |
@@ -206,7 +216,8 @@ UI            LauncherService        Adapter           Host              OS
 | 插件项目 UI | `packages/app/src/launcher/plugin-project-wizard.tsx` | **新增** | 新建向导、项目列表、构建/安装按钮、诊断与漂移提示 | React + 启动器服务 |
 | 宿主 | `packages/app/src-tauri/src/launcher/` | **新增模块** | 特权原语：注册表、进程、Job Object、ZIP、日志泵、下载闸、诊断包 | Rust 标准库 + 既有 crate |
 | 宿主守卫 | `packages/app/src-tauri/src/archive_guard.rs` | **新增 + 市场复用** | ZIP 条目/深度/字节/大小写折叠四重守卫，单点真源 | `zip` crate |
-| UI | `packages/app/src/launcher/` | **新增视图** | 实例库、详情、插件/内容/存档/日志、任务中心、下载、设置 | React + 服务 |
+| 组合根 | `packages/app/src/bootstrap.ts` | **加一行注册** | `launcher-core` 进显式有序注册序列（位置在内核服务就绪之后、需要它的视图之前）；root / app 的 `package.json` 同步加 workspace 依赖 | 既有装配 |
+| UI | `packages/app/src/launcher/` | **新增视图（全动态 import）** | 实例库、详情、插件/内容/存档/日志、任务中心、下载、设置 | React + 服务 |
 | 编辑器桥 | `packages/app/src/ui/` | **少量接线** | 「启动游戏」「在编辑器中打开实例/插件源码」 | 既有 session |
 | adapter 示例 | `packages/plugins/eratw-adapter/src/launch.ts`、`plugins.ts` | **新增** | 提供候选 exe、存档布局、日志解析、插件根/清单/加载顺序 | 只在本包出现游戏名 |
 | 测试 | `packages/plugins/launcher-core/tests/`、`packages/app/src-tauri/src/launcher/tests.rs` | **新增** | 路径守卫、状态机、ZIP 炸弹、回滚、编码 | — |
@@ -723,8 +734,17 @@ export interface GamePluginRules {
   /** 插件的存档影响默认值；清单未声明时用这个 */
   readonly saveImpact: 'none' | 'possible' | 'unknown';
   /**
-   * 函数级分析回调：**由 adapter 实现**（内部可复用编辑器侧脚本解析器 / tree-sitter），
-   * launcher-core 只拿「函数名 + 相对路径 + 行号」做比对，不认识任何语言或语法。
+   * 函数级分析回调：**由 adapter 实现**，launcher-core 只拿「归一化名 + 相对路径 + 行号」
+   * 做比对，不认识任何语言或语法。
+   *
+   * **可用的复用通道只有两条**（adapter 是插件，受 `audit:decoupling` B/C 约束）：
+   * ①经服务键注入 `erb.parser`（`ErbParserService.parseFile` / `buildIndex`），
+   * ②依赖库包（`@kojo/kojo-core` / `packages/erb-syntax-tree`——`eratw-adapter` 已在用）。
+   * **壳层的 `packages/app/src/monaco/tree-sitter/` 不可 import**：那是 Monaco 侧
+   * wasm + worker，属应用壳，不是 adapter 可达面。
+   *
+   * 产物形状与 `plugin-api/erb.ts::ErbFunctionRef` 对齐（ERB 系 adapter 直接投影
+   * `ErbIndex.byName` 即可）；非 ERB 游戏（如 XML 口上）自行映射到同一形状。
    * `baseDir` = 解析基准（游戏根 / 插件 payload 根），`files` 为相对路径。
    * 解析失败必须抛错（计划阶段失败可见），**不许返回空数组假装没有函数**。
    * 缺席 = 该游戏不做函数级冲突分析，只做文件级。
@@ -740,6 +760,12 @@ export interface GamePluginRules {
    * 由 `PluginProjectService` 经 `kernel.workspaces` 写入工作区——写授权永远留在 core 一侧。
    * 生成结果**不得**包含 `plugin.json`：清单由 core 按向导输入生成，避免清单双真源。
    * 缺席 = 该游戏只能创建空白项目（向导仍可用，模板下拉只有「空白」）。
+   *
+   * **与被删除的 `GameAdapter.scaffold` 不是一回事**（`plugin-api/game.ts` 顶部有
+   * 「别再往回加」的判据记录）：那个成员**直接写游戏目录**、全仓零消费方，已删；
+   * 本回调不写盘、消费方是向导。各 adapter 现有的 `scaffold.ts` 纯生成器仍在，
+   * 是「供数」真源（经 `deps.scaffold` 通道服务新建口上向导）——本回调若与该通道
+   * 形状重合，应做薄包装**复用**它，不得复制第二份生成逻辑。
    */
   readonly scaffold?: (options: PluginScaffoldOptions) => Promise<PluginScaffoldResult>;
 }
@@ -776,8 +802,13 @@ export interface PluginScaffoldResult {
 }
 
 export interface ScriptFunctionDefinition {
-  /** 函数标识（由 adapter/解析器定义，core 只当字符串比较） */
+  /** 函数标识（原样；只用于展示与日志） */
   readonly name: string;
+  /**
+   * 归一化名（大小写无关的游戏必须给，如 Emuera 系一律大写）。
+   * **冲突比对一律用这一栏**——`plugin-api/erb.ts` 的 `ErbFunction` 早已按这个口径建模。
+   */
+  readonly normalizedName: string;
   /** 相对 baseDir 的 posix 路径 */
   readonly path: string;
   readonly line: number;
@@ -1129,7 +1160,17 @@ export interface PluginCompatibility {
   readonly reasons: readonly string[];
 }
 
-/** 函数级冲突：adapter 提供函数定义清单，core 只比对「函数名 + 定义位置」 */
+/**
+ * 函数级冲突：adapter 提供函数定义清单，core 只比对「归一化名 + 定义位置」。
+ *
+ * **两处判据必须复用实树既有真源，否则真盘会刷屏或漏报**：
+ * - 比对键用 `ScriptFunctionDefinition.normalizedName`（大小写无关的引擎，
+ *   拿原样名比会漏掉 `M_KOJO_K1` vs `m_kojo_k1`）；
+ * - 「有意重复」由当前 adapter 的 `conventionPolicy` 决定——与
+ *   `convention-linter` 的 `erb.duplicate-function` 同一判据。真盘实证：
+ *   eraSQC 有 190 处逐角色重复（EVENTTRAIN 91 + EVENTEND 90 + 1），
+ *   eratohoK 仅 2 处；启动器**不另立宽容名单**。
+ */
 export interface FunctionConflict {
   readonly functionName: string;
   readonly existing: {
@@ -1233,7 +1274,9 @@ export interface PluginProjectService {
    * 3. 按向导输入生成 `plugin.json`（唯一真源）；
    * 4. 调 `GamePluginRules.scaffold` 拿文件映射，由本服务写入工作区；
    * 5. 在项目根写 `.gitignore`（排除 `build/`）并建空 `build/`；
-   * 任一步失败：回滚已写入的项目（不留半成品项目）。
+   * 任一步失败：按**本次写入的路径清单逐条**删（回滚不留半成品项目）。
+   * **不要调 `workspaces.remove(projectId)` 当回滚**：那是「连同目录全部内容删除」，
+   * 会把用户在向导失败后已手动放进项目的东西一起删掉（工作区契约没有事务）。
    */
   create(input: PluginProjectCreateInput): Promise<PluginProject>;
 
@@ -1242,7 +1285,14 @@ export interface PluginProjectService {
   /** 删除项目（连同项目目录；工作区模型本就不保留孤儿目录） */
   remove(projectId: string): Promise<void>;
 
-  /** 项目目录绝对路径（供壳层用现有项目打开链路打开；服务本身不 import 编辑器） */
+  /**
+   * 项目目录绝对路径（供壳层用现有项目打开链路打开；服务本身不 import 编辑器）。
+   *
+   * **必须先 `list()`**：内核 `WorkspaceService.projectDir()` 是同步方法，落在
+   * **自选授权根**里的项目要靠 `id → 目录` 缓存解析，而缓存只由 `list()` 填充；
+   * 未命中时它**回落默认根**——直接调会静默指向默认根下的同名 id（= 打开一个
+   * 不存在的目录）。本服务保证内部先扫一遍再解析。
+   */
   projectDir(projectId: string): Promise<string>;
 
   /**
@@ -1560,9 +1610,9 @@ export interface VerifyReport {
 - 命令名：`launcher_<domain>_<verb>`，snake_case；参数与返回 DTO 一律 camelCase（与现有宿主一致）。
 - 返回：`Result<T, LauncherErrorDto>`；`LauncherErrorDto` 形状与 §5.6 相同。
 - **没有任何命令接受「目标路径」来做越界写**；所有写落点由宿主按实例根/暂存根/对话框自己拼。
-  **唯一例外**是插件项目构建的两条命令（§7.2 尾部）：它们接受 `projectDir`，但该目录必须在宿主
-  已登记的写允许域（appData / 已授权工作区根）内，且输出恒在 `{projectDir}/build/` 下；
-  `outRelPath` 不接受任意值。
+  **唯一例外**是插件项目构建的摘要命令（§7.2 尾部）：它接受 `projectDir`，但该目录必须在宿主
+  已登记的写允许域（appData / 已授权工作区根）内，且只读不算写。ZIP 由 TS 侧
+  `zip.ts::buildZip` 在 `{projectDir}/build/` 内生成（走内核 io 写闸），**不新增宿主打包命令**。
 - 事件名以 `kojo:` 前缀（与现有搜索/拖放事件同族），载荷带 `seq` 供 UI 去重。
 
 ### 7.2 命令表
@@ -1596,8 +1646,7 @@ export interface VerifyReport {
 | `launcher_content_diagnose` | `{ instanceId }` | `ContentDiagnosis` | P1 | 只读 |
 | `launcher_pick_write_root` | `{ instanceId, rootId }` | `string \| null` | P1 | 原生目录对话框 + **同命令登记** shared 写授权（存档 / 内容 / 插件共用） |
 | `launcher_pick_archive` | `{ title? }` | `string \| null` | P1 | 原生文件对话框；只选不读不写 |
-| `launcher_project_hash` | `{ projectDir, artifactDir, entries }` | `FileDigest[]` | P1 | `projectDir` 在宿主写允许域内；条目解析后不得逃逸 `artifactDir`；流式哈希 |
-| `launcher_project_pack` | `{ projectDir, artifactDir, entries:[{path,sha256,size}], outRelPath }` | `{ zipRelPath, bytes, sha256 }` | P1 | 同上；`outRelPath` 必须以 `build/` 开头；打包时复验摘要；确定性 ZIP |
+| `launcher_project_hash` | `{ projectDir, artifactDir, entries }` | `FileDigest[]` | P1 | `projectDir` 在宿主写允许域内；条目解析后不得逃逸 `artifactDir`；流式哈希（大二进制不整包读进 JS） |
 | `launcher_save_list` | `{ instanceId }` | `SaveEntry[]` | P1 | 只读 saveRoots |
 | `launcher_save_backups` | `{ instanceId }` | `SaveBackup[]` | P1 | — |
 | `launcher_save_backup` | `{ instanceId, req }` | `LauncherTask` | P1 | 写只落在实例备份目录 |
@@ -1623,14 +1672,23 @@ export interface VerifyReport {
 set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只认 `archivePath`、`planId`、
 `packId` 与文件清单。`launcher_content_plan` 只产出**文件级**计划；`PluginManager` 在其上叠加
 能力解析、版本兼容、函数级冲突、风险分级与存档备份门禁，得到 `PluginInstallPlan`。
-函数级结构由 adapter 的 `analyzeFunctions` 回调提供（adapter 内部可复用 tree-sitter），
+函数级结构由 adapter 的 `analyzeFunctions` 回调提供（adapter 经 `erb.parser` 服务键或库包取
+`ErbIndex`，见 §6.1；**壳层 tree-sitter 不可 import**），
 **宿主不新增任何插件命令，也不认识 ERB/CSV**。
 这样「内容包」与「插件」在特权面上是同一个动作：把已知清单的文件写进已授权的根。
 
-**项目构建的两条命令同样不认识插件语义**：`launcher_project_hash` 只按给定相对路径流式算摘要，
-`launcher_project_pack` 只按给定排序与摘要打包；`plugin.json` / `pack.json` 的校验、`roots` 映射、
-`buildId` 与报告全部在 `PluginProjectService`（TS）。宿主只回答「这批字节的哈希是多少」「这些字节
-能不能写成这个 ZIP」，**不做任何插件判断**。
+**项目构建的宿主命令同样不认识插件语义**：`launcher_project_hash` 只按给定相对路径流式算摘要；
+`plugin.json` / `pack.json` 的校验、`roots` 映射、`buildId` 与报告全部在
+`PluginProjectService`（TS），ZIP 由 `zip.ts::buildZip` 输出。宿主只回答「这批字节的哈希是多少」，
+**不做任何插件判断**。
+
+> **为什么不再要 `launcher_project_pack`**：确定性打包在 TS 侧早已存在且在被生产消费
+> （`zip.ts::buildZip`，`mtimeMs` 恒固定、DOS 时间 1980 起算、同内容两次逐字节相同；
+> 消费方 `kojo-project-kit/src/package-actions.ts`，并由 `zip-roundtrip.test.ts` 对拍
+> golden 容器）。同样的字节在两种语言里各写一份打包器 = 迟早漂，`market.rs` 那段
+> 「表漂一字节必有一边红」的注释讲的正是这件事。只有**流式摘要**必须留在宿主
+> （大二进制资源不整包读进 JS）。若将来实测证明确需宿主打包（大包内存峰值），
+> 那也必须吃 `fixtures/zip-roundtrip/contract.json` 同一张表，并单独立 ADR 记下理由。
 
 ### 7.3 事件表
 
@@ -1727,6 +1785,18 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
 只把授权记进 `launcher/approvals.json`，**不会**把游戏根加进内核的 `writablePaths`；编辑器仍然
 只能写用户显式设为可写的路径。反过来，编辑器可写某个口上目录，也不等于启动器可写整个游戏根。
 两条链唯一的共同点是同一个哲学：**对话框即授权，授权绑命令，JS 不拿落点决定权**。
+
+**这是宿主里的第三条特权写路径，评审要按第三枚举对待**（现状两条：内核 io 的 `assertWritable`
+闸、`exportFile` 的对话框即授权）。v0.4 补两条实测事实，避免把它想得比实际更危险或更安全：
+
+- **不会读到旧文本**：内核 io 的会话文本缓存是**自校验**的（`kernel/src/io.ts` 每次读都比
+  `mtime + size`），启动器绕过内核 io 直写游戏目录，编辑器下一次读到的仍是盘上真相。
+- **编辑器的重载会被自然触发**：`fileWatch.start()` 的根集合含 **`project.rootDir` 整棵**
+  （`use-project-session.ts`），不是只监视口上目录——安装写的每个文件都会产生 `file.changed`。
+  因此 §10.1 第 [9] 步**不要**自己逐文件再发一遍（几百条会把 UI 打满），只发一条聚合的
+  「计划已应用」；单文件事实交给 watcher。
+- **挡不住的只剩脏缓冲**：watcher 只能说「盘上变了」，拦不住用户对旧缓冲按 Ctrl+S 把插件改动
+  写回去——这条从风险 #17 提到 P1（见 §16）。
 
 ### 9.2 磁盘布局
 
@@ -1871,7 +1941,7 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
 | 两个包声明同一 id | **abort** | 升级安装（版本更高时替换） |
 | 依赖缺失（`requires`） | **abort**（`LAUNCHER_PLUGIN_DEPENDENCY`） | 无（首版不自动下载依赖） |
 | 包声明 `conflicts` 命中 | **abort**（`LAUNCHER_PLUGIN_DEPENDENCY`） | 用户卸载冲突包后重试 |
-| **函数级冲突**：插件新增/叠加文件里定义了基础文件或别的插件已有的同名函数 | **abort** | `skip`（保留既有定义）/ `replace`（先备份旧定义所在文件，再覆盖） |
+| **函数级冲突**：插件新增/叠加文件里定义了基础文件或别的插件已有的同名函数（按归一化名判，大小写不敏感） | **abort**；但命中 adapter `conventionPolicy` 承认的有意重复时不计入 | `skip`（保留既有定义）/ `replace`（先备份旧定义所在文件，再覆盖） |
 | **版本不兼容**：`gameVersion` / `apiVersion` 判定失败 | **abort** | 「强制安装」需显式勾选，插件标 `incompatible`，每次启动前警告 |
 | **存档影响未确认**：`saveImpact != 'none'` 且用户未确认 | **abort** | 确认并成功备份存档后继续 |
 | **shared 目标根未授权** | **abort**（`LAUNCHER_SOURCE_NOT_APPROVED`） | 走原生目录对话框授权后重试 |
@@ -1905,7 +1975,7 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
 |---|---|---|
 | **能力 / 风险** | 清单 `capabilities` + 实际落点 → `PluginRisk` | `unknown` 按最高风险展示，必须逐项确认；声明与实际落点不一致（如只声明 `add-content` 却覆盖基础文件）⇒ **按实际升风险** 并记 warning，不信任声明 |
 | **版本兼容** | `adapter.pluginRules.isCompatible` 优先；否则比对清单声明 | `LAUNCHER_PLUGIN_INCOMPATIBLE`；强制安装需显式勾选 |
-| **函数级冲突** | `adapter.analyzeFunctions` 产出的函数名 + 定义位置，与基础文件/已装插件比对 | `LAUNCHER_PLUGIN_CONFLICT`；`skip` / `replace` 逐条决议 |
+| **函数级冲突** | `adapter.analyzeFunctions` 产出的**归一化名** + 定义位置，与基础文件/已装插件比对；「有意重复」按 adapter 的 `conventionPolicy` 收敛（与 `erb.duplicate-function` 同一判据） | `LAUNCHER_PLUGIN_CONFLICT`；`skip` / `replace` 逐条决议 |
 | **存档影响** | 清单 `saveImpact`，缺省取 `pluginRules.saveImpact` | `LAUNCHER_PLUGIN_SAVE_RISK`；确认后自动备份存档 |
 | **重启要求** | `pluginRules.requiresRestart` 或清单声明 | 装/卸/启停后置「待重启」状态，启动前提示 |
 
@@ -1988,11 +2058,13 @@ adapter 应不提供 `pluginRules`（或显式声明不支持），启动器显�
 ```
 读实例 → adapter / gameId / gameVersion（只读）
   → workspaces.create({ name, meta: PluginProjectMeta, rootDir? })
-  → workspaces.createArtifact(projectId, { dirName:'plugin', files:{ 'plugin.json': … }, meta })
+  → workspaces.createArtifact(projectId, { name: 'plugin', dirName:'plugin', files:{ 'plugin.json': … }, meta })
+      ← `WorkspaceArtifactInput` 的 `files` 只有**文本**；二进制走 `io.writeBytes` 逐文件补写
   → pluginRules.scaffold({ template, pluginId, displayName, gameId, capabilities, gameVersion })
       → 返回文件映射 → workspaces.writeText / io.writeBytes 逐文件写入
   → 在项目根写 `.gitignore`（排除 `build/`）并建空 `build/` → workspaces.update(meta 补 lastBuild:null)
-  → 广播 workspace.projectCreated（载荷带 projectId 与 kind）
+  → 广播 workspace.projectCreated（**现有载荷** `{ projectId, requestToken?, source? }`；
+     要区分插件项目就填 `source`，不给它加新字段）
 ```
 
 **校验（创建时即拦，不留到构建）**：
@@ -2036,22 +2108,25 @@ adapter 应不提供 `pluginRules`（或显式声明不支持），启动器显�
 [5] 逐文件算 sha256 / size（宿主流式哈希；不整包读进 JS 内存）
 [6] 生成 pack.json（ContentPackManifest：kind='plugin'、files[]、entrypoints 换算为 ContentFileRef）
 [7] 写 pack.json 到 build/staging/（报告最后写，避免失败时留下指向不存在 ZIP 的报告）
-[8] 宿主打包：按路径排序、固定时间戳、固定压缩级别 → build/{pluginId}-{version}.zip
+[8] 确定性打包：`zip.ts::buildZip(entries, { contract: 'extractable' })`
+    （路径排序 + `mtimeMs` 固定 + DOS 时间 1980 起算 + 压缩级别固定）
+    → build/{pluginId}-{version}.zip，写盘走内核 io 写闸
 [9] 写 build/{buildId}.json（pack.json + zip 哈希 + 源指纹 + 未打包文件 + 警告）
 [10] 返回 PluginBuildResult（zip 绝对路径 / 字节 / zip 自身 sha256 / 警告）
 ```
 
-- **确定性**：条目按 posix 路径排序、mtime 固定（1980-01-01）、压缩参数固定 ⇒ 同一份源
-  两次构建得到**逐字节相同**的 ZIP。`buildId = sha256(pack.json 规范化文本 + 逐文件摘要)`，
-  与构建时间无关；时间只进报告的 `builtAt`。
-- **原子落盘**：ZIP 先写 `build/.tmp/{buildId}.zip` 再 rename；失败删除临时文件，
-  不留半截包。`build/staging/`（`pack.json` 暂存）只在构建期存在，成功或失败都清理。
-- **哈希与打包同一批字节**：打包命令在流式写入时**复验**第 [5] 步的摘要；任一文件在两步之间
+- **确定性**：`buildZip` 已按「条目按 posix 路径排序 + `mtimeMs` 恒固定（DOS 时间 1980 起算）
+  + 压缩参数固定」实现，同一份源两次构建得到**逐字节相同**的 ZIP（`zip-roundtrip.test.ts` 钉住）。
+  `buildId = sha256(pack.json 规范化文本 + 逐文件摘要)`，与构建时间无关；时间只进报告的 `builtAt`。
+- **原子落盘**：ZIP 字节在内存里一次成型，经内核 `io.writeBytes` 原子写（先临时再 rename，
+  与 `writeText` 同款时序）；失败不留半截包。`build/staging/`（`pack.json` 暂存）只在构建期
+  存在，成功或失败都清理。
+- **哈希与打包同一批字节**：打包前对每个文件复算一次摘要并与第 [5] 步比对；任一文件在两步之间
   被改动 ⇒ 构建失败（`LAUNCHER_PLUGIN_BUILD_FAILED`），不产出「包装的和清单说的不是一回事」的包。
 - **不执行项目内任何代码**：没有 `npm install`、没有构建脚本、没有模板渲染器。
   `plugin.json` 是**数据**，不是可执行配置。
-- 构建产物只落 `{projectDir}/build/`；`outRelPath` 由 core 生成且必须以 `build/` 开头
-  （宿主复核，不接受任意目标路径）。
+- 构建产物只落 `{projectDir}/build/`；路径由 core 拼死（**没有** `outRelPath` 这类参数），
+  写走内核 io 写闸（工作区根是常驻可写根）。
 - 构建**不做**安装门禁（不读游戏目录）：能力与实际落点的风险升级、版本兼容、函数级冲突、
   存档影响全部留到 `planInstall`——构建是「产出确定的东西」，安装是「判断能不能进这个实例」。
 - `entrypoints` 必须命中某个 `roots` 映射实际产出的文件；否则构建失败
@@ -2160,13 +2235,39 @@ PluginManager.list → 取该插件 manifest 与 ownedFiles
 3. 解压总字节 / 单条目字节上限；
 4. 路径规范化 + 大小写折叠冲突检测。
 
-启动器额外增加：
+**已有、直接复用（别当新功能重写一遍）**——这些在实树里都已经实现，并且各有钉：
 
-- 拒绝符号链接 / 硬链接 / 设备文件 / 加密条目 / 带数据目录；
-- 拒绝绝对路径、`..`、盘符、UNC、ADS（`file.txt:stream`）、Windows 保留名（`CON`/`NUL`/`AUX`…）、
-  尾点/尾空格；
-- 解压流式写盘，超限立刻中止并删暂存；
-- 限额常量集中在 `plugin-api/src/launcher.ts`，**一处真源**；Rust 不写第二份默认值。
+- 非普通文件条目（符号链接 / FIFO / socket / 设备文件）：`entry_type_problem` 按 unix mode
+  （`S_IFMT` / `S_IFREG`）拒；DOS 来源的条目没有权限位，靠路径闸兜目录条目；
+- 硬链接：**无需新增**——zip 容器里没有独立表示（`zip` 4.6.1 全文无 hardlink 概念，
+  链接关系只能落成重复路径的普通条目），由 `entry-duplicate` 与类型闸共同覆盖；
+- 加密条目与带数据描述符的条目：`FLAG_ENCRYPTED` / `FLAG_STRONG_ENCRYPTION` /
+  `FLAG_DATA_DESCRIPTOR` 一律按 `container-structure` 拒；
+- 绝对路径、`..`、盘符、反斜杠、空路径段、深度、条目数、解压总量：`entry_path_problem` +
+  `declared_entries_problem` + `cap_staging_limits` 的硬顶；
+- 解压流式写盘、超限立刻中止：`stream_capped` / `advance_byte_cap` 已有，照抄调用形态。
+
+**真正要新增的（实树的已知缺口，别写成「已有」）**：
+
+- **Windows 保留设备名段**：TS 侧已判（`zip.ts::isWindowsReservedDeviceNameSegment` →
+  `entry-name-encoding`），**宿主解包器同名缺口是 TS 注释自己记的「边界外待补」**。
+  启动器在宿主解压必须在 `archive_guard.rs` 补这一条，并把判据写进共享表 + 补两侧对拍。
+- **尾点 / 尾空格**：两侧**都还没有**（`normalizeEntryName` 与 `staging_component_problem`
+  都不判）。要判就两侧各加一处实现 + 表里加一行，只在一侧加会当场红。
+- **ADS（`file.txt:stream`）**：字符集闸 `[a-z0-9._-]` 只盖容器名 / 暂存名，不盖**条目路径**
+  （`entry_path_problem` 的码表里没有 ADS 专码；TS 只拦盘符前缀）。要做就按新码两侧同批补。
+
+**限额的单源（v0.4 更正）**：
+
+- TS 侧：`plugin-api/src/zip.ts::ZIP_EXTRACT_LIMITS`（派生自 `MARKET_MAX_FILE_ENTRIES` /
+  `MARKET_MAX_PATH_DEPTH` / `MARKET_MAX_UNPACKED_BYTES`）；需要不同档位时用
+  `ZipContractLimits` **逐调用覆盖**，不要改全局；
+- 跨语言：判据参数（字符集字面、后缀、长度上限等）住
+  `plugin-api/fixtures/zip-roundtrip/contract.json`，Rust 侧 `include_str!` 同一份文件；
+  两侧各有钉（`plugin-api/tests/zip-roundtrip.test.ts` +
+  `market_tests.rs::zip_roundtrip_name_gates_read_the_shared_table`），**表漂一字节必有一边红**；
+- 宿主侧：保留硬顶（`cap_staging_limits` 那套），那是**有意的纵深防御**，不是第二份真源——
+  TS 传什么就收什么才是真风险。
 
 > 首版具体数值不在这里拍脑袋：先以真实内容包 P95 体积与条目数实测，再定契约常量；
 > 在定值前不实现下载通道，避免「先写死再改」。
@@ -2178,8 +2279,9 @@ PluginManager.list → 取该插件 manifest 与 ownedFiles
 ### 11.1 列表
 
 - `saveLayout.roots` 由 adapter 给出；`SaveManager.list` 遍历每个 root，按 `listRule` 过滤/命名；
-- 文件元数据（大小、mtime）由宿主给；存档内角色/进度摘要由编辑器侧 `state-snapshot` 解析，
-  **启动器 core 不解析 sav 格式**（避免游戏知识回流）；
+- 文件元数据（大小、mtime）由宿主给；存档内角色/进度摘要由编辑器侧解析——**服务键
+  `snapshot.source`**（实现插件 `sav-parser`，契约 `plugin-api/snapshot.ts`；ADR-0004 定的名，
+  不是 `state-snapshot`、也不是早期的 `sav.parser`），**启动器 core 不解析存档格式**（避免游戏知识回流）；
 - `shared` 实例默认只读；授权某个 saveRoot 后可写（授权链见 §9.1）；`copy` 实例可写。
 
 ### 11.2 备份
@@ -2275,8 +2377,8 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 | 插件/前端传任意 exe 路径 | 宿主只有 `launcher_start(instanceId)`；exe 路径在创建时固定为实例内相对路径 | 契约测试：不存在接受 exePath 的命令 |
 | exe 被替换成恶意程序 | 信任记录 SHA-256；每次启动复算；变化即 `TRUST_CHANGED` | 篡改 fixture → 启动被拒 |
 | 路径逃逸（`..`/符号链接/junction） | 规范化 + 逐段拒绝 reparse point + 前缀包含校验 | Windows junction fixture |
-| ZIP slip / 炸弹 | 四重守卫 + 规范化 + 拒绝链接/ADS/保留名 | zip bomb / slip / casefold fixture |
-| 命令行注入 | argv 数组，不经过 shell；拒绝 NUL 与超长参数 | 参数含 `&`、`|`、引号 → 原样作为参数 |
+| ZIP slip / 炸弹 | 四重守卫 + 条目路径闸 + 大小写折叠；**保留名 / 尾点尾空格 / ADS 在宿主侧是已知缺口，须按 §10.7 同批补并进共享表** | zip bomb / slip / casefold / reserved-name fixture（两侧各一份） |
+| 命令行注入 | argv 数组，不经过 shell；拒绝 NUL 与超长参数 | 参数含 `&`、竖线、引号 → 原样作为参数 |
 | 环境变量泄露令牌 | 宿主 `env_clear` + 最小白名单；只允许实例显式追加 | 快照测试：不出现 `HTTP_PROXY`/`TOKEN` |
 | 子进程逃出杀树 | Job Object + `CREATE_SUSPENDED` + 禁止 breakaway | 孙进程测试：stop 后两者都消失 |
 | 远程下载到恶意主机 | 协议 + 编译期主机白名单 + 逐跳重定向复核 + 体积双闸 + SHA-256 | 重定向到非白名单 → 拒 |
@@ -2380,9 +2482,17 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 
 ### 14.4 键盘与命令
 
-- 启动器视图内：`Ctrl+N` 添加游戏、`Ctrl+Shift+L` 打开任务中心、`F5` 启动/停止当前实例；
-- 命令注册进现有命令面板（`editor.command` 槽），文案单源，不在按钮上另写一份；
-- 键位冲突以现有 `keybindings.ts` 真源为准，新增命令必须先查重。
+- 启动器视图内：**`Ctrl+Alt+O` 添加游戏、`Ctrl+Alt+J` 打开任务中心、`Ctrl+Alt+R` 启动/停止
+  当前实例**（三枚在 2026-10-26 均为空位）。
+- **不提 `Ctrl+N`**：它已被 `kojo.newKojoFile`（新建口上文件）占用——贡献点在
+  `packages/plugins/ui-sugar-editor/src/index.ts` 的 `keybinding: 'ctrl+n'`，
+  按钮提示、内置教程与 `shell-keys-guard.test.ts` 都在教用户这条键。
+- **不提 `F5`**：WebView2 自带重载语义，要拿得先证明能可靠 `preventDefault`，首版不赌。
+- **键位真源有两处，查重必须两处都扫**：宿主键在 `packages/app/src/ui/keybinding-specs.ts`
+  的 `KEYBINDING_SPECS`（40 条登记、26 条带缺省键位），插件键在各 `editor.command` 贡献的
+  `keybinding` 字段（当前仅 `ctrl+n` 一条）。
+  `keybindings.ts` 是注册 / 覆盖层，**不是清单**——只查它会漏掉插件贡献的键。
+- 命令注册进现有命令面板（`editor.command` 槽），文案单源，不在按钮上另写一份。
 
 ---
 
@@ -2400,8 +2510,16 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 4. 测试 fixture：父进程派生孙进程 → `stop` 后两者都消失；
 5. 首次启动前无信任 → `TRUST_REQUIRED`；原生确认后启动成功；篡改 exe 后 `TRUST_CHANGED`；
 6. 应用退出时运行中的游戏树被杀，下次启动显示 `app-exit`；
-7. `pnpm test` / 双 `typecheck` / `pnpm audit:decoupling` 基线不回退；
-8. 新增内核/契约/宿主源码零游戏名词（审计 A 项通过；文档与 adapter 例外）。
+7. `pnpm test` / 双 `typecheck` / `pnpm audit:decoupling` / `pnpm audit:language` 基线不回退；
+8. 新增内核/契约/宿主源码零游戏名词（审计 A / D 项通过；文档与 adapter 例外）；
+9. **验收通道是真壳**：1–6 必须在 `tools/debug-cli.mjs shell`（真桌面壳带 CDP）或
+   `tools/smoke-tauri-ipc.mjs` 上过。`debug-cli.mjs serve` 的 Web 调试宿**没有 Rust 特权面**
+   ——进程、Job Object、原生对话框在那里一律验不了，跑绿不算数；
+10. **开机图不回退**：`ps10-eager-graph` 仍 ≤193 文件 / ≤2,870 KB（现值余量 0 文件 / 10 KB）
+    ⇒ 启动器 UI 与 `launcher-core` 全部走动态 import，P0 **零新增常驻模块**；
+11. **产物闸**：`node tools/release-gate.mjs` 的 artifact-audit PASS（≤85 件 / ≤10.5 MiB /
+    入口 ≤1,100 kB；现值 80 件）；
+12. `cargo test --lib` 0 failed（必须经 node 起，Git-Bash TMP 坑见 PITFALLS）。
 
 ### 15.2 P1 · 日常可用
 
@@ -2424,7 +2542,8 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 6. **版本不兼容**：`gameVersion` 不满足 → `LAUNCHER_PLUGIN_INCOMPATIBLE`；
    显式强制安装后插件标 `incompatible`，启动前有警告；
 7. 安装中途取消/断电模拟 → 重启后实例无半成品、无 ownership 悬空；
-8. ZIP slip / 炸弹 / 大小写折叠 / ADS / 保留名 fixture 全部拒绝，且暂存被清空；
+8. ZIP slip / 炸弹 / 大小写折叠 / **保留名 / 尾点尾空格 / ADS** fixture 全部拒绝，且暂存被清空
+   （后三项在宿主侧是已知缺口，须按 §10.7 两侧同批补、共享表同步加行）；
 9. 存档备份 → 改动 → 恢复 → 逐文件哈希等于备份；
 10. `shared` 实例未授权时装插件/恢复存档被拒；逐根授权后成功，且授权范围不扩散；
 11. Shift-JIS 日志跨块解码正确（不出现半字符）；10k 行/秒压测 UI 不冻结；
@@ -2463,12 +2582,12 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 |---|---|---|
 | 契约 | 命令/事件/错误码快照；无 exePath 启动命令；插件类型形状 | Node |
 | `launcher-core` | 状态机、任务取消、计划过期、冲突决议、回滚顺序 | Node + 假宿主 |
-| `PluginManager` | 风险分级、函数冲突、版本兼容、存档门禁、卸载残留 | Node + 假宿主 + 函数分析桩 |
-| `PluginProjectService` | 创建/回滚、清单校验、跨根映射、确定性构建、摘要复验、提取、漂移 | Node + 假宿主（IO 与哈希桩） |
-| Rust 宿主 | 路径守卫、ZIP 守卫、argv/env、Job Object、日志泵 | `cargo test --lib` |
-| 集成 | 子进程/孙进程、退出码、编码、复制进度、插件装/卸哈希复原 | Windows CI / 本地 |
-| UI | 实例库空态、启动/停止、任务进度、错误展示、插件确认页字段齐全 | DOM 冒烟 / 手动清单 |
-| 真实冒烟 | 用户提供游戏根与真实插件包 | 不进门禁，发布前手动 |
+| `PluginManager` | 风险分级、函数冲突（归一化名 + `conventionPolicy`）、版本兼容、存档门禁、卸载残留 | Node + 假宿主 + 函数分析桩 |
+| `PluginProjectService` | 创建/逐条回滚、清单校验、跨根映射、确定性构建（对拍 `zip-roundtrip` golden）、摘要复验、提取、漂移 | Node + 假宿主（IO 与哈希桩） |
+| Rust 宿主 | 路径守卫、归档守卫（与 `contract.json` 同表）、argv/env、Job Object、日志泵 | `cargo test --lib`（经 node 起） |
+| 集成（真壳） | 子进程/孙进程、退出码、编码、复制进度、插件装/卸哈希复原 | `tools/smoke-tauri-ipc.mjs` / `tools/debug-cli.mjs shell` |
+| UI | 实例库空态、启动/停止、任务进度、错误展示、插件确认页字段齐全 | `debug-cli.mjs serve`（纯 UI 面）+ 真壳截图 |
+| 真实冒烟 | 用户提供游戏根与真实插件包 | 不进门禁，发布前手动（`smoke-tauri-ipc` 自动还原现场） |
 
 ---
 
@@ -2492,10 +2611,12 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 | 14 | 卸载插件后存档仍引用插件数据 | 旧存档读不出 | 不删存档；`pre-plugin` 备份；卸载时明确提示 | 存档兼容检查（P2） |
 | 15 | 多插件同名函数覆盖链难排查 | 「谁生效」说不清 | 函数级冲突 + 加载顺序可见 + 诊断页 | 跨包函数依赖图（P2） |
 | 16 | shared 授权被误解成「整个游戏目录可写」 | 误改基础文件 | 逐根授权（实例 × rootId）+ 前缀复验 + 可撤销 | 更细粒度授权 |
-| 17 | 编辑器正打开 shared 根时安装插件覆盖基础文件 | 编辑器缓冲与磁盘不一致 / 保存把插件改动覆盖回去 | 安装后发文件变更事件并提示「已重载/需重载」；有脏缓冲时先警告 | 安装前检测脏缓冲并阻止（P2） |
+| 17 | 编辑器正打开 shared 根时安装插件覆盖基础文件 | 编辑器缓冲与磁盘不一致 / 保存把插件改动覆盖回去 | **P1 硬闸**：安装前查脏缓冲，命中即阻止并提示保存/放弃；这是唯一会**静默吃掉插件改动**的路径，不推到 P2 | watcher 事件 + 更细的缓冲代际检测 |
 | 18 | 项目源与已装版本漂移（改了源没重装 / 实例里是别的构建） | 玩家以为生效的是源码 | `inspectDrift` 三态提示；UI 同时显示「源 / 上次构建 / 已装」三版本；不自动递增版本 | 文件监听增量构建（P2） |
 | 19 | 提取项目丢失原构建信息，被误当原作者项目 | 二次分发与原包验收对不上 | `source='extracted'` 常驻徽标 + 不写入 `trust.verified`；首次构建哈希差异属正常并明示 | 提取时保留原 `pack.json` 快照（P2） |
 | 20 | 二进制资源走文本写入管线 | 编码损坏 / 内存峰值 | 二进制一律 `io.writeBytes` 字节级；构建流式哈希与打包，不把整包读进 JS | 大资源分块校验（P2） |
+| 21 | 启动器把新视图 / 新插件静态装进首屏 | 开机图闸（193 文件 / 2,870 KB，余量 10 KB）与 dist 件数闸（80 / 85）当场红，P0 无法落地 | 全动态 import、零新增常驻模块；重基线须**单独一批**，不顺手抬阈值 | 按需预取 + 分块预算 |
+| 22 | 三张写授权表（内核 `writablePaths` / `exportFile` / 启动器 `approvals.json`）口径各自演化 | 审计与铁律说不清「谁能写哪里」 | 本稿只立**一张**启动器表且不复用内核表；守卫实现单点、照 `exportFile` 形态；ADR-0008 落铁律 | 统一写授权服务（须再立 ADR） |
 
 **需要用户/评审拍板的事项**：
 
@@ -2505,6 +2626,9 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 4. 插件签名是否进 P1？本文建议**不进**：首版先用「完整清单 + 显式确认 + 备份 + 回滚」立住可逆性，
    签名（P2）解决的是「发布者身份」，不能替代「装之前看清楚」。若评审要求 P1 必须验签，
    需要先定发布者公钥分发与吊销机制，否则会造一个假安全。
+5. **安装前脏缓冲检查进 P1 还是 P2？**本文 v0.4 建议**进 P1**（风险 #17）：watcher 只能告知
+   「盘上变了」，拦不住用户拿旧缓冲 Ctrl+S 把插件改动写回去；代价是首版要接一条「当前缓冲
+   是否脏」的查询。若评审认为可接受「提示后由用户自负」，则保持 P2 并把它写进确认页文案。
 
 ---
 
@@ -2519,26 +2643,35 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 | `packages/kernel/src/launcher.ts` | 新增零逻辑透传 + 装配 | 不改既有服务 |
 | `packages/plugins/launcher-core/` | 新增一等插件 | 新包 |
 | `packages/plugins/launcher-core/src/plugin-manager.ts` | 插件门禁与安装编排（风险 / 兼容 / 函数冲突 / 存档） | 新文件 |
-| `packages/plugins/launcher-core/src/plugin-project.ts` | 项目服务：创建 / 校验 / 确定性构建 / 提取 / 漂移（消费 `kernel.workspaces` 服务键） | 新文件，内核零改 |
-| `packages/app/src-tauri/src/launcher/` | 新增宿主模块与命令注册（含 `launcher_project_hash` / `launcher_project_pack`） | 新命令，旧命令零改 |
-| `packages/app/src-tauri/src/archive_guard.rs` | 从 `market.rs` 抽出通用 ZIP 守卫，市场改为调用；构建打包复用同一守卫 | 行为不变，市场测试为金样本 |
+| `packages/plugins/launcher-core/src/plugin-project.ts` | 项目服务：创建 / 校验 / 提取 / 漂移（消费 `kernel.workspaces` 服务键）；**打包复用 `zip.ts::buildZip`，不写第二套打包器** | 新文件，内核零改 |
+| `packages/app/src/bootstrap.ts` | `launcher-core` 进显式有序注册序列 | 加一行，旧插件零改 |
+| `packages/app/package.json` / root `package.json` | 加 `@kojo/plugin-launcher-core` 的 workspace 依赖 | 新依赖 |
+| `packages/app/src-tauri/src/launcher/` | 新增宿主模块与命令注册（P0/P1 清单见 §7.2；构建只用 `launcher_project_hash`，**没有**打包命令） | 新命令，旧命令零改 |
+| `packages/app/src-tauri/src/archive_guard.rs` | 从 `market.rs` 抽出通用 ZIP 守卫，市场改为调用；**`fixtures/zip-roundtrip/contract.json` 与 golden 容器两枚钉照旧** | 行为不变，市场测试为金样本 |
+| `packages/plugin-api/fixtures/zip-roundtrip/contract.json` | 若启动器要新增判据参数，扩这张共享表（两侧各自补钉） | additive；表漂一字节必有一边红 |
 | `packages/app/src/launcher/` | 新增启动器视图 | 新视图 |
 | `packages/app/src/launcher/plugin-project-wizard.tsx` | 插件项目新建向导、项目列表、构建/安装/提取入口 | 新文件 |
 | `packages/app/src/ui/` | 「启动游戏」「在编辑器中打开实例/插件源码/插件项目」「构建并安装插件」接线 | additive |
 | `packages/plugins/eratw-adapter/src/launch.ts` | 首个 `GameLaunchAdapter` 实现 | 只在本包出现游戏名 |
 | `packages/plugins/eratw-adapter/src/plugins.ts` | 首个 `GamePluginRules` 实现（插件根 / 清单名 / 加载顺序 / 函数分析 / 模板 scaffold） | 只在本包出现游戏名 |
 | `packages/kojo-project-kit/src/projects-panel.ts` | 识别 `meta.kind='game-plugin'`：徽标、隐藏口上包动作、挂构建入口 | additive；旧项目零改 |
-| `packages/plugins/erb-parser` / tree-sitter 相关 | 函数级索引复用，不新增第二套解析 | 零改动（消费侧新增） |
+| `packages/plugins/erb-parser`（服务键 `erb.parser`）/ `packages/erb-syntax-tree` | 函数级索引复用（`ErbIndex` / `ErbFunction.normalizedName`），不新增第二套解析；**壳层 `monaco/tree-sitter` 不在可达面** | 零改动（消费侧新增） |
 | `docs/adr/0008-launcher-privileged-process-host.md` | 建议新增 ADR | 记录进程特权面与服务键边界 |
 | `docs/adr/0009-game-plugin-install-and-trust.md` | 建议新增 ADR | 记录插件安装、函数覆盖与信任链 |
 | `docs/adr/0010-plugin-source-project-and-build.md` | 建议新增 ADR | 记录「插件项目 = 工作区项目」、源/产物分离、确定性构建与三条写边界 |
 
 **落地纪律**：
 - 先做 P0 的宿主守卫与测试，再写 UI；不允许「先能启动，守卫后补」；
-- `archive_guard.rs` 抽取必须单独一批，先让市场全套测试绿，再让启动器复用；
+- `archive_guard.rs` 抽取必须单独一批，先让市场全套测试绿（含 `contract.json` 与 golden 容器两枚钉），
+  再让启动器复用；
 - 插件项目批**不新建第二套项目存储**：复用 `kernel.workspaces`；缺二进制写入就补 `kernel.io` 调用，
-  不给工作区契约加「任意路径」入口；
+  不给工作区契约加「任意路径」入口；打包只走 `zip.ts::buildZip`；
+- 启动器 UI 与 `launcher-core` **全程动态 import**：开机图现处零余量，任何静态入口都会当场红；
+  阈值需要动就单独一批，不顺手抬；
+- 新键位必须在 `KEYBINDING_SPECS` 与全部命令贡献的 `keybinding` **两处**同时查重；
 - 新命令必须进契约测试快照，禁止只写 Rust 不写 TS 类型；
+- 涉及进程 / 对话框 / Job Object 的判据挂真壳通道（`smoke-tauri-ipc` / `debug-cli shell`），
+  Web 调试宿的绿不作数；
 - 文档只认领与交付：开工在 `docs/BOARD.md` 写一行认领，交付把读数与取舍写进提交信息；
   本文不替代 `STATE.md` / `BOARD.md`。
 
@@ -2549,4 +2682,7 @@ UI 首屏给三个动作：**看日志 / 导出诊断包 / 重新启动**。
 **启动器的核心不是「多一个启动按钮」，而是四道边界：把进程特权关进宿主、把游戏知识关进 adapter、
 把实例数据关进 appData、把游戏逻辑变更关进「显式安装 + 先备份 + 可回滚」。**
 前三条让启动器安全地「跑起来」，第四条让它正当地「改逻辑」——插件是产品能力，不是例外；
-边界立住了，P0 的 5 个命令就能长成 PCL 式闭环；边界没立住，功能越多越危险。
+边界立住了，P0 那 **17 条命令**（§7.2）就能长成 PCL 式闭环；边界没立住，功能越多越危险。
+v0.4 的另一半是同一条纪律的延伸：**能用既有实现的地方不再造第二份**——打包用 `buildZip`、
+函数索引用 `ErbIndex`、限额用 `ZIP_EXTRACT_LIMITS` + 共享 contract 表、重名宽容用 `conventionPolicy`。
+少一份实现，就少一处会漂的口径。
