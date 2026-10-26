@@ -214,6 +214,66 @@
       "name": "C:\\\u0000a.txt",
       "code": "entry-name-encoding",
       "note": "判定顺序钉数：NUL 先于盘符（同上一条）。"
+    },
+    {
+      "name": "CON",
+      "code": "entry-name-encoding",
+      "note": "Windows 保留设备名段（Win32 根本建不出这个文件名）：归既有 entry-name-encoding 码，两侧同判。"
+    },
+    {
+      "name": "files/con.txt",
+      "code": "entry-name-encoding",
+      "note": "带扩展名变体同拒（Win32 取首个点前的主干判保留），大小写不敏感。"
+    },
+    {
+      "name": "ERB/口上/CON.tar.gz",
+      "code": "entry-name-encoding",
+      "note": "深层路径里的段同判（只判段，不判整名前后缀）。"
+    },
+    {
+      "name": "LPT4.erb",
+      "code": "entry-name-encoding"
+    },
+    {
+      "name": "COM1",
+      "code": "entry-name-encoding"
+    },
+    {
+      "name": "CONTOUR.erb",
+      "code": null,
+      "note": "保留名只认整段或其首个点前主干，前缀相同不误伤。"
+    },
+    {
+      "name": "files/nulless.txt",
+      "code": null
+    },
+    {
+      "name": "files/a.txt.",
+      "code": "path-windows-unsafe",
+      "note": "尾随点：Windows 落盘静默剥掉（a.txt. → a.txt），包内名字与落盘名字不再同一串。"
+    },
+    {
+      "name": "files/a.txt ",
+      "code": "path-windows-unsafe",
+      "note": "尾随空格（此名字末位是真空格）：同上。"
+    },
+    {
+      "name": "files/sub./a.txt",
+      "code": "path-windows-unsafe",
+      "note": "目录段尾随点同判（逐段核，不只看最后一段）。"
+    },
+    {
+      "name": "files/sub /a.txt",
+      "code": "path-windows-unsafe"
+    },
+    {
+      "name": "files/a.txt:stream",
+      "code": "path-drive",
+      "note": "段内冒号 = NTFS 备用数据流（ADS）注入面：复用 path-drive 码（盘符位之外的 : 一律拒）。"
+    },
+    {
+      "name": "files/a.txt::$DATA",
+      "code": "path-drive"
     }
   ],
   "golden": {
@@ -348,6 +408,42 @@
       "setEocdTotalEntryCount": 65535,
       "code": "container-zip64",
       "why": "EOCD 的条目数被换成 ZIP64 哨兵 ⇒ 计数与偏移都不再可信。契约明确不支持 ZIP64：硬读只会读出一堆假条目，必须如实标出。"
+    },
+    {
+      "id": "reserved-device-name",
+      "rename": {
+        "from": "files/big.txt",
+        "to": "files/CON.txt"
+      },
+      "code": "entry-name-encoding",
+      "why": "Windows 保留设备名段（Win32 建不出这个文件）：解包器必须在动盘之前拒，且与写侧同一个码（复用 entry-name-encoding，无新码）。"
+    },
+    {
+      "id": "trailing-dot-name",
+      "rename": {
+        "from": "files/copy1.txt",
+        "to": "files/copy1.tx."
+      },
+      "code": "path-windows-unsafe",
+      "why": "尾随点在 Windows 落盘时被静默剥掉：包内名字与落盘名字从此不是同一串（码复用市场清单侧既有的 path-windows-unsafe）。"
+    },
+    {
+      "id": "trailing-space-name",
+      "rename": {
+        "from": "files/copy2.txt",
+        "to": "files/copy2.tx "
+      },
+      "code": "path-windows-unsafe",
+      "why": "尾随空格同上（copy2.tx 的末位是真空格）。"
+    },
+    {
+      "id": "ads-stream-name",
+      "rename": {
+        "from": "files/nested/b.txt",
+        "to": "files/nested/b.tx:"
+      },
+      "code": "path-drive",
+      "why": "段内冒号 = NTFS 备用数据流（ADS）注入面：路径闸按 path-drive 拒（复用既有码，不新造）。"
     }
   ]
 }

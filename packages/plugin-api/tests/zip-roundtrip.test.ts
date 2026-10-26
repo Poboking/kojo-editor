@@ -430,3 +430,34 @@ describe('zipEntryContractProblem · Windows 保留设备名（归入既有 entr
     ).rejects.toThrow(/^entry-name-encoding：/);
   });
 });
+
+describe('zipEntryContractProblem · 尾点尾空格与 ADS（宿主同名缺口的对侧锚）', () => {
+  it('任一段尾随点/空格 → path-windows-unsafe；段内冒号 → path-drive（ADS）；合法名不误伤', () => {
+    expect(zipEntryContractProblem('files/a.txt.')).toBe('path-windows-unsafe');
+    // 末位是真空格（编辑器里看不见，靠共享表同一行钉住）
+    expect(zipEntryContractProblem('files/a.txt ')).toBe('path-windows-unsafe');
+    expect(zipEntryContractProblem('files/sub./a.txt')).toBe('path-windows-unsafe');
+    expect(zipEntryContractProblem('files/sub /a.txt')).toBe('path-windows-unsafe');
+    expect(zipEntryContractProblem('files/a.txt:stream')).toBe('path-drive');
+    expect(zipEntryContractProblem('files/a.txt::$DATA')).toBe('path-drive');
+    expect(zipEntryContractProblem('files/13:00.txt')).toBe('path-drive');
+    // 盘符仍然是盘符（顺序：盘符先于绝对路径，判定码不变）
+    expect(zipEntryContractProblem('C:/windows/a.txt')).toBe('path-drive');
+    // 合法形态零误伤：中间有点、点多于一个、深目录都放行
+    expect(zipEntryContractProblem('files/v1.0/README.md')).toBeNull();
+    expect(zipEntryContractProblem('files/a.b.c.txt')).toBeNull();
+    expect(zipEntryContractProblem('files/deep/说明.txt')).toBeNull();
+  });
+
+  it('buildZip 契约档在写第一个字节之前就拒（写侧同一套闸）', async () => {
+    for (const [name, code] of [
+      ['files/a.txt.', 'path-windows-unsafe'],
+      ['files/a.txt ', 'path-windows-unsafe'],
+      ['files/a.txt:stream', 'path-drive'],
+    ] as [string, string][]) {
+      await expect(buildZip([{ name, data: bytesOf('x') }], { contract: 'extractable' })).rejects.toThrow(
+        new RegExp(`^${code}：`),
+      );
+    }
+  });
+});

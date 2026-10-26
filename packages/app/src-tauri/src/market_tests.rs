@@ -1655,6 +1655,38 @@ fn zip_roundtrip_limit_gates_come_from_the_table() {
     }
 }
 
+/* ---------------- 6. Windows 落盘不安全的名字：保留名 / 尾点尾空格 / ADS ---------------- */
+
+/// L0 批补的三类「Win32 根本落不了盘」的条目名：保留设备名段（本侧新补）、
+/// 任一段尾随 `.` / 空格、段内 `:`（NTFS 备用数据流 ADS，复用 `path-drive` 码）。
+/// 走的是**生产链路** `extract_staging`（不是纯函数），并核「拒在动盘之前、暂存区无残壳」；
+/// 期望码与 TS 侧 `zipEntryContractProblem` 同一套（共享表 `entryNames` / `tampers` 已加行）。
+#[test]
+fn zip_roundtrip_windows_unsafe_entry_names_stop_before_touching_disk() {
+    for (name, want_code) in [
+        ("files/CON.txt", "entry-name-encoding"),
+        ("files/a.txt.", "path-windows-unsafe"),
+        ("files/a.txt ", "path-windows-unsafe"),
+        ("files/a.txt:stream", "path-drive"),
+    ] {
+        let bytes = build_zip(&[("pack.json", b"{\"schema\":1}".as_slice()), (name, b"x")]);
+        let staging = Staging::new("l0-windows-unsafe-name");
+        write_container(&staging, "a.zip", &bytes);
+        let err = expect_extract_err(staging.dir(), "a.zip", "out", &table_limits(), name);
+        assert_eq!(code_of(&err), want_code, "{name:?}: 拒绝码与 TS 侧不一致：{err}");
+        assert!(!staging.dir().join("out").exists(), "{name:?}: 拒了却留下了目标目录");
+        assert_only_container(&staging, "a.zip");
+    }
+    // 合法名相邻形态零误伤（中间有点 / 点多于一个 / 中文深目录都得过闸）
+    for name in ["files/v1.0/README.md", "files/a.b.c.txt", "files/deep/说明.txt"] {
+        assert_eq!(
+            entry_contract_problem(name, name.as_bytes(), Some(ZIP_FLAG_UTF8), table_limits().max_depth),
+            None,
+            "{name:?} 被误拒"
+        );
+    }
+}
+
 /* ------------------------ 发布（上传）闸与解析 ------------------------ */
 
 use crate::market::{

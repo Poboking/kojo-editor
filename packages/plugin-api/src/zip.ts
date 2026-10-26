@@ -179,6 +179,8 @@ export type ZipContractCode =
   | 'path-backslash'
   | 'path-absolute'
   | 'path-dotdot'
+  /** 任一段尾随 `.` 或空格（Windows 落盘时静默剥掉，包内名字与落盘名字从此不是同一串） */
+  | 'path-windows-unsafe'
   | 'path-depth'
   | 'entry-name-encoding'
   | 'entry-duplicate'
@@ -264,15 +266,22 @@ export function zipEntryContractProblem(
   // NUL 不是"路径段"问题，而是**根本无法成为一个文件名**：两侧都归到名字编码这一类
   if (name.includes('\0')) return 'entry-name-encoding';
   if (/^[A-Za-z]:/.test(name)) return 'path-drive';
+  // 盘符位之外的 `:` 一律拒（NTFS 备用数据流 ADS 注入面，如 `file.txt:stream`）——
+  // 复用 `path-drive` 码，与市场清单侧 `packEntryPathProblem` 以及 Rust 解包器同一条口径。
+  if (name.includes(':')) return 'path-drive';
   if (name.includes('\\')) return 'path-backslash';
   if (name.startsWith('/')) return 'path-absolute';
   // 尾斜杠（目录条目）落进"空段"：平台解包器只准落普通文件，目录靠父目录自建
   const segments = name.split('/');
   if (segments.some((s) => s.length === 0 || s === '.')) return 'path-empty-segment';
   if (segments.some((s) => s === '..')) return 'path-dotdot';
+  // 尾随 `.` / 空格：Windows 落盘时会静默剥掉（`a.txt.` → `a.txt`），包内名字与落盘名字
+  // 从此不是同一串 ⇒ 与 Rust `entry_path_problem` 同判（码复用市场侧既有的
+  // `path-windows-unsafe`，不新造码；判定顺序也一致：尾点/尾空格先于保留设备名）。
+  if (segments.some((s) => s.endsWith('.') || s.endsWith(' '))) return 'path-windows-unsafe';
   // Windows 保留设备名段：归入既有 `entry-name-encoding` 码（NUL 同款先例——不是路径段
-  // 问题，是"根本无法成为一个文件名"）。挂点在 dotdot 之后、depth 之前，既有码判定顺序不变；
-  // 共享契约表零改动（无新码）⇒ Rust 侧对拍不受影响（解包器同名缺口记边界外待补）。
+  // 问题，是"根本无法成为一个文件名"）。挂点在尾点/尾空格之后、depth 之前，既有码判定顺序
+  // 不变；Rust 解包器（`archive_guard.rs::entry_path_problem`）在 L0 批补上同一条。
   if (segments.some((s) => isWindowsReservedDeviceNameSegment(s))) return 'entry-name-encoding';
   if (segments.length > maxDepth) return 'path-depth';
   return null;

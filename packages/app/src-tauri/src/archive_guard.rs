@@ -401,8 +401,29 @@ fn entry_name_encoding_problem(name: &str, raw: &[u8], flags: Option<u16>) -> Op
     None
 }
 
+/// Windows 保留设备名（Win32 文件名判据：`CON` 本体与带扩展名变体都建不出来）。
+/// 与 TS `plugin-api/src/zip.ts::WINDOWS_RESERVED_DEVICE_NAMES` /
+/// `isWindowsReservedDeviceNameSegment` **同表同口径**：大小写不敏感，Win32 取首个点前的
+/// 主干判保留（`CON` / `CON.txt` / `CON.tar.gz` 同拒）。历史 DOS 的 `CLOCK$` 不收
+/// （现代 Win32 已不保留，包侧假阳性会拒掉合法市场包）。
+const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+fn is_windows_reserved_device_name_segment(segment: &str) -> bool {
+    let upper = segment.to_ascii_uppercase();
+    let stem = match upper.find('.') {
+        Some(at) => &upper[..at],
+        None => upper.as_str(),
+    };
+    WINDOWS_RESERVED_DEVICE_NAMES.contains(&upper.as_str())
+        || WINDOWS_RESERVED_DEVICE_NAMES.contains(&stem)
+}
+
 /// 条目形态闸（`path-*` 那一族）：**判定顺序与拒绝码字面都是契约的一部分**——
-/// 与契约侧 `packEntryPathProblem`（TS）以及共享表
+/// 与契约侧 `zipEntryContractProblem`（TS `plugin-api/src/zip.ts`）、市场清单侧
+/// `packEntryPathProblem`（TS `plugin-api/src/market.ts`）以及共享表
 /// `plugin-api/fixtures/zip-roundtrip/contract.json` 的 `entryNames` 逐字对齐
 /// （前缀 `files/` 不在此判定：根 `pack.json` 也是合法条目，内容口径归 TS）。
 /// 合法返回 `None`。
@@ -419,6 +440,8 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     if name.as_bytes()[0].is_ascii_alphabetic() && name.get(1..2) == Some(":") {
         return Some("path-drive");
     }
+    // 盘符位之外的 `:` 一律拒（NTFS 备用数据流 ADS 注入面：`file.txt:stream`）——
+    // 复用 `path-drive` 码，与市场清单侧 `packEntryPathProblem` 同一条口径。
     if name.contains(':') {
         return Some("path-drive");
     }
@@ -436,8 +459,20 @@ fn entry_path_problem(name: &str, max_depth: usize) -> Option<&'static str> {
     if segments.contains(&"..") {
         return Some("path-dotdot");
     }
+    // 尾随 `.` / 空格：Windows 落盘时会静默剥掉（`a.txt.` → `a.txt`），包内名字与落盘
+    // 名字从此不是同一串 ⇒ 与 TS `zipEntryContractProblem` 同判（码复用市场侧既有的
+    // `path-windows-unsafe`，不新造码）。
     if segments.iter().any(|s| s.ends_with('.') || s.ends_with(' ')) {
         return Some("path-windows-unsafe");
+    }
+    // Windows 保留设备名段：与 TS 同码（归既有 `entry-name-encoding`，与 NUL 同款先例——
+    // 不是路径段问题，而是"根本无法成为一个文件名"）。挂点在尾点/尾空格之后、depth 之前，
+    // 两侧判定顺序逐条相同，共享表 `entryNames` 钉住。
+    if segments
+        .iter()
+        .any(|s| is_windows_reserved_device_name_segment(s))
+    {
+        return Some("entry-name-encoding");
     }
     if segments.len() > max_depth {
         return Some("path-depth");
