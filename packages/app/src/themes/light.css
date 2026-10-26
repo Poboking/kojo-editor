@@ -29,6 +29,8 @@
              这三枚原先只在深色基线定义，浅档缺覆盖 ⇒ 26 处内凹/按压反馈整体隐身）
      玻璃：--glass-tint --glass-tint-raise --glass-edge --glass-alpha --glass-saturate --glass-blur
      局部兜底：--panel-bg --hover-bg --text --text-dim
+     装饰光族（VIS-54：本档外挂规则里唯一的字面色，2026-10-26 收进 :root，规则只 var()）：
+             --sheen-streak --ripple-ink --ripple-fade
    ============================================================================ */
 
 :root[data-theme='light'] {
@@ -171,11 +173,26 @@
      实心档没有磨砂可用，边界全靠这一条线 ⇒ 再沉一档。 */
   --rim-1: rgba(23, 31, 43, 0.55);
   --rim-solid: rgba(23, 31, 43, 0.62);
+
+  /* —— 装饰"光"族（VIS-54 · 2026-10-26 车道 E3）——
+     这三枚原本是写在外挂规则里的字面 rgba（白扫 / 涟漪的实心端与收束端）。本档的纪律是
+     **规则里一个色值都不写**：颜色全部住在这块 `:root` 里，规则只 `var()`。
+     （终值逐字不变，对拍见 `theme-wash-token-source.test.ts`；正名与 dark/mint 同族的取值
+     该由组长上提到 `tokens.css`——清单在交付回执里。） */
+  --sheen-streak: rgba(255, 255, 255, 0.28);
+  --ripple-ink: rgba(255, 255, 255, 0.42);
+  --ripple-fade: rgba(255, 255, 255, 0);
 }
 
 /* ============================================================================
    残漏收口：styles.css 里绕不过 token 的字面值，用 `[data-theme='light']` 高
    特异性规则就地修正（0,3,0 稳压基础 0,1,0；同分则靠 light.css 后置赢层叠）。
+   ----------------------------------------------------------------------------
+   VIS-54（2026-10-26 车道 E3）：本节仍然要存在（base 给的是为深底调的白墨/暖 tan 值），
+   但**规则里不再出现任何色值**——wash 一律 `color-mix(in srgb, var(--语义色) N%, transparent)`
+   现派生，装饰白扫/涟漪的颜色上提到上面那块 `:root`。三条与 base 逐字同值的冗余规则
+   （`.kd-error` / `.dd-modified .dd-path` / `.dd-workspace-only,.dd-game-only .dd-path`）整条删除。
+   改前终值 = 改后终值，逐条对拍见 `theme-wash-token-source.test.ts`。
    ============================================================================ */
 
 /* 遮罩 / 描边不在这里写规则（组长的收敛，2026-10-24）：本档的遮罩收口只经 `--scrim-* / --rim-*`
@@ -185,13 +202,15 @@
    留着它的代价不是"多几行"，而是**谁动加载顺序就复活一版灰泥**。定义点只许有值，不许有第二张嘴。 */
 
 /* 高光扫过：主按钮在浅色档仍是深蓝实心（#0a5cc2 比深色档的 #2e6fd1 更沉），
-   白扫同族成立但发暗——提亮一档让"贵"的那一笔仍看得见。 */
+   白扫同族成立但发暗——提亮一档让"贵"的那一笔仍看得见（色住在上面的 `--sheen-streak`）。 */
 :root[data-theme='light'] .u-sheen::before {
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  background: linear-gradient(100deg, transparent, var(--sheen-streak), transparent);
 }
-/* 按压涟漪：同理压在深蓝实心 CTAs 上，白涟漪保留、略提饱和 */
+/* 按压涟漪：同理压在深蓝实心 CTAs 上，白涟漪保留、略提饱和（两端的色都取自
+   `--ripple-ink` / `--ripple-fade`；收束端写成 `--ripple-fade` 而非 `transparent`，
+   是为了让改前改后的色标逐字同形，不赌"预乘插值下 transparent 等价于白 0 alpha"）。 */
 :root[data-theme='light'] .u-ripple::after {
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.42) 0%, rgba(255, 255, 255, 0) 60%);
+  background: radial-gradient(circle, var(--ripple-ink) 0%, var(--ripple-fade) 60%);
 }
 /* `button.primary .hint` 的 rgba(255,255,255,.32) 描边与 rgba(0,0,0,.22) 井底：
    **刻意不翻**——它压在 --accent-strong 深蓝实心（浅色档同样是深底）上，白字蓝底成立。 */
@@ -200,40 +219,40 @@
    浅色下把 bevel 反相：一道极淡的**顶部内暗线**读作"嵌在卡里的井"（与浅色主题里
    代码块惯例的凹陷语义一致），接触阴影同时沉一档补足分量。
    2026-10-22 教程代码块改成"表头 + 代码身"两行后，井容器的顶边被表头盖住 ⇒ 内暗线挂到
-   **代码身**上（凹陷语义本来就该属于被读的那一面），接触阴影留在井容器。 */
+   **代码身**上（凹陷语义本来就该属于被读的那一面），接触阴影留在井容器。
+   VIS-54：这两条的终值与上面 `:root` 块的 `--well-shadow` / `--well-edge` 逐字相同
+   （本档的井面三件套早就是"顶部内暗线 + 墨蓝接触阴影"），所以规则侧直接吃那两枚 token——
+   值只有一份，写在 `:root`，规则只决定"挂在哪一层"。 */
 :root[data-theme='light'] .tutorial-code {
-  box-shadow: 0 1px 2px rgba(35, 48, 64, 0.1);
+  box-shadow: var(--well-shadow);
 }
 :root[data-theme='light'] .tutorial-code code {
-  box-shadow: inset 0 1px 0 rgba(35, 48, 64, 0.06);
+  box-shadow: var(--well-edge);
 }
 
 /* 部署/历史面板的深色专属文字色（#7ad39a/#e57373/#e8b86a/#9aa4b2 是为深底调的，
-   压浅面全部 2~3:1 失效）——收口到本主题的深语义三件套（bg 为玻璃面板 ≈ bg-2 档，逐一复核过）。 */
+   压浅面全部 2~3:1 失效）——收口到本主题的深语义三件套（bg 为玻璃面板 ≈ bg-2 档，逐一复核过）。
+   VIS-54 收掉三张"外挂票"：`.kd-error`（base 是 `var(--danger)` ≡ 本档 `var(--red)`）、
+   `.dd-modified .dd-path`（base `var(--warn)` ≡ `var(--amber)`）、
+   `.dd-workspace-only/.dd-game-only .dd-path`（base 就是 `var(--fg-dim)`）——
+   三条的渲染终值与 base 规则逐字相同 = 纯冗余，整条删除；`.kd-banner.ok` 只差 wash 的
+   alpha（base 12% vs 本档 10%），故留一条只写 background 的规则。 */
 :root[data-theme='light'] .kd-banner.ok {
-  background: rgb(14 107 44 / 0.1); /* 深语义同族的淡 wash，绿字压它 4.98:1 */
-  color: var(--green);
-}
-:root[data-theme='light'] .kd-error {
-  color: var(--red);
-}
-:root[data-theme='light'] .dd-modified .dd-path {
-  color: var(--amber);
-}
-:root[data-theme='light'] .dd-workspace-only .dd-path,
-:root[data-theme='light'] .dd-game-only .dd-path {
-  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--green) 10%, transparent); /* 深语义同族的淡 wash，绿字压它 4.98:1 */
 }
 
 /* notice 洗色：深色档的 #d19a66/#e06c75 wash 与浅色语义色相脱节（字是 #8a5a04、
-   边是暖 tan），把 wash/边框一并收到同一支深语义色上，色相不再两张皮。 */
+   边是暖 tan），把 wash/边框一并收到同一支深语义色上，色相不再两张皮。
+   VIS-54：原先是手抄的档内私有色 `rgb(138 90 4 / .1)` / `rgb(180 35 46 / .08)`——
+   那两个三元组就是本档 `--amber` (#8a5a04) / `--red` (#b4232e) 的十进制写法，
+   改 `color-mix(in srgb, var(--x) N%, transparent)` 后合成值逐字不变，但翻色只有一处可改。 */
 :root[data-theme='light'] .notice.warn {
-  background: rgb(138 90 4 / 0.1);
-  border-color: rgb(138 90 4 / 0.38);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 38%, transparent);
 }
 :root[data-theme='light'] .notice.error {
-  background: rgb(180 35 46 / 0.08);
-  border-color: rgb(180 35 46 / 0.38);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  border-color: color-mix(in srgb, var(--red) 38%, transparent);
 }
 
 /* 语义 wash 对等：下列四处仍是深色档的字面洗色（tan #d19a66 / 旧绿 #4fc08d / 红 #e06c75），
