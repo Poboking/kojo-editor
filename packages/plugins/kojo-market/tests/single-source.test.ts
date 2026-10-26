@@ -85,6 +85,14 @@ const ALL = [nodeJoin(ROOT, 'packages')];
 /** 宿主层（Rust）源码目录与两个关键文件：出网判定与哈希口径都住这里 */
 const RUST_SRC = nodeJoin(ROOT, 'packages', 'app', 'src-tauri', 'src');
 const RUST_MARKET_RS = nodeJoin(RUST_SRC, 'market.rs');
+/**
+ * 归档容器守卫（L0 批从 `market.rs` 抽出）：ZIP 容器原语、条目闸、命名闸、解压与字节上限住这里。
+ * 「单源」判据口径不变——仍按**定义恰好一处**数，只是扫描面从单个文件变成容器侧的合并面
+ * （拆文件不许让任何一条计数放宽；把实现复制回 `market.rs` 会当场翻倍即红）。
+ */
+const RUST_ARCHIVE_GUARD_RS = nodeJoin(RUST_SRC, 'archive_guard.rs');
+const hostContainerSources = (): string =>
+  readFileSync(RUST_MARKET_RS, 'utf8') + readFileSync(RUST_ARCHIVE_GUARD_RS, 'utf8');
 const TAURI_BRIDGE = nodeJoin(ROOT, 'packages', 'app', 'src', 'bridge', 'tauri-bridge.ts');
 
 /**
@@ -233,7 +241,9 @@ describe('市场单一真源守门', () => {
     // 白名单或逐跳重核就有人能绕过 ⇒ 计数而不是"有没有"。
     // 2026-10-16 发布通道批起出网 = 两条形态：下载（guarded_send）与发布（guarded_post），
     // **各一个 client**（双闸独立性：client 不共用，闸实现共用、放行表分开）。
-    const rs = readFileSync(RUST_MARKET_RS, 'utf8');
+    // 体积累计闸（`advance_byte_cap`）随容器闸一起搬进 `archive_guard.rs`（L0 批）：
+    // 扫描面取容器侧合并面，定义 1 + 共用 1 这两条计数的口径不变。
+    const rs = hostContainerSources();
     expect(codeMatchCount(rs, /Client::builder/), 'client 构造处数（下载 + 发布）').toBe(2);
     expect(codeMatchCount(rs, /\.send\(\)/), 'send 调用处数（guarded_send / guarded_post / 令牌）').toBe(3);
     expect(codeMatchCount(rs, /reqwest::get\b/), '不许有 reqwest::get 旁路').toBe(0);
@@ -327,11 +337,12 @@ describe('安装面单一真源守门（KM-10..12）', () => {
     // 面板连暂存区都不该知道（"面板不摸盘"那条纪律的延伸）
     expect(scan([/'\.staging'/, /'packs'/, /'\.zip'/], [UI_MARKET_SRC])).toEqual([]);
     expect(codeMatchCount(readFileSync(CONTRACT_MARKET, 'utf8'), /^export function packContainerName\(/m), '容器名派生处数').toBe(1);
-    const rs = readFileSync(RUST_MARKET_RS, 'utf8');
+    const rs = hostContainerSources();
     // 容器名后缀闸的**单源形态**（W14 之后）：这道闸不再持有本地常量，而是读编译期内嵌的
     // 共享表（`plugin-api/fixtures/zip-roundtrip/contract.json`）——判因此从"本地那个
     // `ZIP_SUFFIX` 被用了一次"变成"表里那一次 `ends_with(rule.suffix.as_str())`"。
     // 三条计数一条都不放宽：表读第二次、退回本地字面量、留一份 `".zip"` 硬编码，都当场红。
+    // L0 批把这道闸搬进 `archive_guard.rs` ⇒ 扫描面取容器侧合并面（计数口径不变）。
     expect(
       rs,
       '后缀闸必须读内嵌共享表（include_str! 的那份 contract.json）',

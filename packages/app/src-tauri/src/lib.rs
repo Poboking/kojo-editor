@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 /// 塞进本文件会把既有 IO 正文淹掉（照 `search_tests` 的分文件先例）。
 mod market;
 
+/// 归档容器守卫（ZIP 容器原语与解压安全闸）：市场解压与启动器（内容包 / 存档备份 / 整合包）
+/// 复用同一份实现，不复制第二份；网络与发布面留在 `market`。
+mod archive_guard;
+
 /// OS 外壳原语（在系统资源管理器中显示）：只读、无写盘副作用，独立成文件
 /// 照 `market` 同形态。
 mod shell;
