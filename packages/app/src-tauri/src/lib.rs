@@ -39,6 +39,11 @@ mod diagnostics;
 /// `check({ proxy })`；独立成文件，照 `market` / `shell` 同形态。
 mod updater_proxy;
 
+/// 启动器的**宿主特权面**（L3a）：实例注册表 / 进程托管（Job Object）/ 可执行信任 /
+/// 日志会话。命令面见 `launcher::commands`，落盘与路径判据见 `launcher::paths`。
+/// 这里只多一行模块登记 + `setup` 里的 `manage`，不往本文件塞业务。
+mod launcher;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
@@ -3244,6 +3249,16 @@ pub fn run() {
                 eprintln!("[setup] 无 app_data_dir，常驻授权根与准入根保持为空");
                 return Ok(());
             };
+            // 启动器宿主（launcher_* 命令的状态）：目录骨架在 <appData>/launcher。
+            // 建不出来只出声、不阻断启动——命令会在各自路径判据上 fail-closed。
+            let launcher_host =
+                launcher::LauncherHost::new(&app_dir, launcher::app_emitter(handle.clone()));
+            if let Err(err) = launcher_host.layout.ensure_root() {
+                eprintln!("[setup] 启动器目录准备失败：{}（{}）", err.message, err.code);
+            }
+            if !app.manage(launcher_host) {
+                eprintln!("[setup] 启动器宿主重复登记（launcher_* 命令将读到旧实例）");
+            }
             let state = handle.state::<WriteDomainState>();
             let persisted = read_workspace_roots(&app_dir);
             if !persisted.is_empty() {
@@ -3297,6 +3312,26 @@ pub fn run() {
             stop_watch,
             search_text,
             cancel_search,
+            launcher::commands::launcher_pick_source_root,
+            launcher::commands::launcher_pick_write_root,
+            launcher::commands::launcher_instance_list,
+            launcher::commands::launcher_instance_get,
+            launcher::commands::launcher_instance_create,
+            launcher::commands::launcher_instance_update,
+            launcher::commands::launcher_instance_remove,
+            launcher::commands::launcher_instance_duplicate,
+            launcher::commands::launcher_instance_open_folder,
+            launcher::commands::launcher_trust_executable,
+            launcher::commands::launcher_start,
+            launcher::commands::launcher_stop,
+            launcher::commands::launcher_process_status,
+            launcher::commands::launcher_process_list,
+            launcher::commands::launcher_log_tail,
+            launcher::commands::launcher_log_sessions,
+            launcher::commands::launcher_log_read,
+            launcher::commands::launcher_log_export,
+            launcher::commands::launcher_task_list,
+            launcher::commands::launcher_task_cancel,
             market::market_download,
             market::market_fetch_text,
             market::market_extract,

@@ -56,15 +56,12 @@ sha2 = "0.10"
 # 单实例锁（P0-4）：官方插件（Windows 走 identifier 命名的互斥体 + 命名管道通知）。
 # 第二实例起即发现已有实例 → 通知主进程（回调里聚焦主窗口）→ 立即退出，不弹 Web UI。
 tauri-plugin-single-instance = "2"
-
-[dev-dependencies]
-# 启动器进程原语探针（`src/launcher_probe.rs`）的**唯一**消费者：CreateProcessW 的
-# STARTUPINFOW / JOBOBJECT_EXTENDED_LIMIT_INFORMATION 这类结构体自己按 repr(C) 抄一遍
-# 容易静默错位，探针宁可吃现成绑定。**只在测试面**：windows-sys 0.61.2 已因 tauri 栈
-# 躺在 Cargo.lock 里（**不新增编译单元**，只是多提一个直接依赖），点开的 feature 只影响
-# dev/test 构建。代价实测（暖 target，`cargo test --lib --no-run`）：首次加上本依赖时
-# 一次性 **~10 s**（windows-sys 按新 feature 集重编 + 本 crate 测试面重编）；
-# 之后稳态与加之前持平（加前 1.93 s / 加后 1.87 s，同一台机器同一棵树）。
+# Win32 绑定：CreateProcessW 的 STARTUPINFOW / JOBOBJECT_EXTENDED_LIMIT_INFORMATION 这类
+# 结构体自己按 repr(C) 抄一遍容易静默错位，宁可吃现成绑定。
+# 2026-10-26 启动器 L3a：从 **dev-dependencies 提到 dependencies**——启动器宿主
+# （`src/launcher/`）是生产路径（Job Object / 挂起创建 / 进程存活查询），不再只是探针。
+# 不新增编译单元：windows-sys 0.61.2 早已因 tauri 栈躺在 Cargo.lock 里；feature 集与
+# 探针时期逐条相同（探针 `src/launcher_probe.rs` 也吃同一份）。
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
