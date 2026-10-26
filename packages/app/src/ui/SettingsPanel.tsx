@@ -91,6 +91,8 @@ import {
   type ResolvedFontStack,
 } from './font-presets';
 import { isComposingEvent } from './shell-keys';
+// 欢迎页背景档（2026-10-26 反馈批）：真源与落根属性在 welcome-bg-pref.ts，本页只排版。
+import { setWelcomeBgPref, useWelcomeBgPref, type WelcomeBgPref } from './welcome-bg-pref';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
 import { isFailureNote, isPrimaryButton, useMenuNote } from './context-menu-pages';
@@ -506,6 +508,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           {/* 界面字体（视觉批十二 L20）：档位表真源在 font-presets.ts，生效链与编程字体同一对
               resolve 函数（写侧当场落根元素内联 --font-ui）。锚点在册 settings-search.ts。 */}
           <UiFontRow />
+          {/* 欢迎页背景档（2026-10-26 反馈批）：真源在 welcome-bg-pref.ts，落根元素
+              `data-welcome-bg`，欢迎页样式按档取装饰层。锚点在册 settings-search.ts。 */}
+          <WelcomeBgRow />
           {/* 「只改显示、不动文件」在本节多行重复（批次十一文案瘦身）：收成本组一条脚注。 */}
           <div className="settings-group-note">本节各项只改显示、不动文件。</div>
         </div>
@@ -1986,8 +1991,7 @@ function FontPresetControl(a: FontPresetControlArgs): ReactElement {
   );
 }
 
-/** 「外观」节的界面字体行：自订阅偏好（照 `TreeSitterRow` 先例，零 props） */
-function UiFontRow(): ReactElement {
+/** 「外观」节的界面字体行：自订阅偏好（照 `TreeSitterRow` 先例，零 props） */function UiFontRow(): ReactElement {
   const pref = useEditorDisplayPrefs();
   const resolved = resolveUiFontStack(pref);
   const checker = useMemo(() => domFontPresenceChecker(), []);
@@ -2031,6 +2035,44 @@ function UiFontRow(): ReactElement {
         placeholder="选「自定义」时填界面字体名（如 Microsoft YaHei）"
         note="外壳文字（标签页 / 侧栏 / 设置页）用哪张面；「等宽」档跟随上面的编程字体。选系统（现状）就是本来的样子。只改显示、不动文件"
       />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------------------------
+ * 欢迎页背景档（2026-10-26 反馈批）
+ *
+ * 用户反馈「欢迎页背景过于花哨」，同时要「简约但仍有辨识度」。三档的视觉实现全在
+ * `welcome.css` 的 `data-welcome-bg` 段（素雅 = 点阵 + 远光晕，静态；极光 = 原三团呼吸；
+ * 纯色 = 只留主题底色），本行只负责选档；真源与落根属性在 `welcome-bg-pref.ts`。
+ * 缺省 = 素雅（`WELCOME_BG_DEFAULT`），极光降为可选项——不再替所有人做决定。
+ * ---------------------------------------------------------------------------------------- */
+
+/** 选项表（顺序 = 分段控件顺序；缺省档排第一，与 `WELCOME_BG_DEFAULT` 同词） */
+const WELCOME_BG_CHOICES: readonly { value: WelcomeBgPref; label: string }[] = [
+  { value: 'quiet', label: '素雅' },
+  { value: 'aurora', label: '极光' },
+  { value: 'plain', label: '纯色' },
+];
+
+/** 「外观」节的欢迎页背景行：自订阅偏好（同 `UiFontRow` 先例，零 props） */
+function WelcomeBgRow(): ReactElement {
+  const bg = useWelcomeBgPref();
+  return (
+    <div className="settings-row static" data-settings-key="appearance.welcomeBg">
+      <Segmented
+        ariaLabel="欢迎页背景"
+        value={bg}
+        choices={WELCOME_BG_CHOICES}
+        onPick={(v) => setWelcomeBgPref(v)}
+      />
+      <span>
+        欢迎页背景
+        <span className="settings-hint">
+          素雅 = 细点阵加一枚很淡的光晕（默认，静态层、不占动画）；极光 = 三团缓慢呼吸的光斑；
+          纯色 = 只留主题底色。只改显示、不动文件
+        </span>
+      </span>
     </div>
   );
 }

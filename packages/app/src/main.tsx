@@ -112,3 +112,13 @@ void import('./ui/editor-display-prefs')
   .catch(() => {
     // 播种失败 = 首屏沿用内置栈；这条链的失败不该惊动用户（写侧与编辑器 create 仍会各自应用）
   });
+
+// 欢迎页背景档的冷启动播种（2026-10-26 反馈批）：三档落成根元素的 `data-welcome-bg`，
+// 由 `welcome.css` 读取。缺省档（素雅）本来就是 CSS 首帧默认，不存值的作者一帧都不闪；
+// 存过「极光 / 纯色」的作者要等这一步落属性（差一帧，且仅换装饰层）。
+// 动态 import 同字体那条口径：模块不进 PS-10 开机图（欢迎页只认 CSS 属性，不需要 React 读数）。
+void import('./ui/welcome-bg-pref')
+  .then((m) => m.applyWelcomeBgPref())
+  .catch(() => {
+    // 读不到偏好 = 用缺省档，不打扰作者
+  });

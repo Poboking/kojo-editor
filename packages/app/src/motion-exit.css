@@ -143,11 +143,13 @@ html:root .tree-loading::before {
    极光有两处宿主、都要点：非弹窗态（量高 / 未来窗口中置）画在页面层 `.welcome::before`，
    弹窗态（常态）画在卡片层 `.welcome-card::before`——welcome.css 那边两条规则各管一边，
    这里也得各点一名，漏了哪边哪边就掉回主线程逐帧画 blur(30px)。
+   两条都收窄在 `data-welcome-bg='aurora'` 下：素雅 / 纯色档是**静态**装饰层，不该占
+   合成层（2026-10-26 背景档批之后，极光只是可选项，不再是常态）。
    五处动的都只是 transform，故只声明 transform：多写一条 opacity 等于让浏览器预先
    栅格化一张透明度层，而这里没有一处会动它。 */
 .spinner,
-.welcome::before,
-.app-frame-popup .welcome-screen .welcome-card::before,
+:root[data-welcome-bg='aurora'] .welcome::before,
+:root[data-welcome-bg='aurora'] .app-frame-popup .welcome-screen .welcome-card::before,
 .skeleton::after,
 .boot-bar::after {
   will-change: transform;

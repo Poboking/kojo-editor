@@ -45,6 +45,7 @@ import { DIRECT_MODE_DEFAULT, loadDirectMode } from './direct-mode';
 import { loadThemeChoice } from './theme-pref';
 import { MOTION_PREF_DEFAULT, loadMotionPref } from './motion-pref';
 import { GLASS_TRANSPARENCY_DEFAULT, loadGlassTransparencyPref } from './glass-pref';
+import { WELCOME_BG_DEFAULT, loadWelcomeBgPref } from './welcome-bg-pref';
 import { PANEL_VIRTUALIZE_DEFAULT, loadPanelVirtualize } from './panel-prefs';
 import { loadFormatRulesPref, FORMAT_RULES_DEFAULT } from './format-pref';
 import type { SettingsSectionId } from './SettingsPanel';
@@ -153,6 +154,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'appearance.glass', section: 'appearance', sectionLabel: '外观', label: '毛玻璃透明度', keywords: ['glass 磨砂'], key: 'appearance.glass', isModified: () => loadGlassTransparencyPref() !== GLASS_TRANSPARENCY_DEFAULT },
   // 界面字体（L20）：档位表在 `font-presets.ts`；这一行的"已修改"= 档位或自定义栈任一站起偏离缺省
   { id: 'appearance.uiFontFamily', section: 'appearance', sectionLabel: '外观', label: '界面字体', keywords: ['ui font 字体 字体族 sans-serif 界面字'], key: 'appearance.uiFontFamily', isModified: uiFontChanged },
+  // 欢迎页背景档（2026-10-26 反馈批）：三档真源在 `welcome-bg-pref.ts`（缺省 = 素雅）
+  { id: 'appearance.welcomeBg', section: 'appearance', sectionLabel: '外观', label: '欢迎页背景', keywords: ['welcome 背景 极光 素雅 纯色 点阵'], key: 'appearance.welcomeBg', isModified: () => loadWelcomeBgPref() !== WELCOME_BG_DEFAULT },
 
   // ---- 通用 / 布局 ----
   { id: 'general.zen', section: 'general', sectionLabel: '通用', label: '写作模式', keywords: ['zen ctrl+k z 全屏'], key: 'general.zen' },

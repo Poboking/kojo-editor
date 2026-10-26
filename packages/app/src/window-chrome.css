@@ -140,7 +140,8 @@
   white-space: nowrap;
 }
 
-/* 中间整段空区：拖动由 data-tauri-drag-region 提供（Tauri drag.js），这里只负责占宽 */
+/* 中间整段空区：拖动判定统一由根上的原生 mousedown 接（canStartWindowDragFrom），
+   这里只负责占宽——portal 进来的工具条也吃同一条判定。 */
 .window-chrome-drag {
   flex: 1;
   align-self: stretch;

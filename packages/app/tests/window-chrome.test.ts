@@ -126,3 +126,23 @@ describe('window-chrome.css · 记号颜色走 token', () => {
     expect(markBlock).not.toMatch(/#[0-9a-f]{3,8}\b/i);
   });
 });
+
+/* 标题栏拖动（2026-10-26 反馈批：身份带 portal 后整条栏按不出窗口）。
+   判据在源码形状上：工具条是 React portal，合成事件沿它的 React 树冒泡、不经过
+   本组件挂在带上的处理器 ⇒ 必须走**原生** mousedown；同时不再挂
+   `data-tauri-drag-region`（Tauri drag.js 会再起一遍原生拖动）。 */
+describe('WindowChrome · 整条栏拖动走原生监听', () => {
+  const src = readFileSync(fileURLToPath(new URL('../src/ui/WindowChrome.tsx', import.meta.url)), 'utf8');
+
+  it('根元素挂原生 mousedown，判定复用 canStartWindowDragFrom', () => {
+    expect(src).toContain('chromeRef');
+    expect(src).toContain("addEventListener('mousedown'");
+    expect(src).toContain('canStartWindowDragFrom(target, event.clientX, event.clientY)');
+    // React 侧的带处理器已撤（它对 portal 子树收不到事件，等于摆设）
+    expect(src).not.toContain('onBandMouseDown');
+  });
+
+  it('不再依赖 data-tauri-drag-region（避免同一次按下起两遍原生拖动）', () => {
+    expect(src).not.toContain('data-tauri-drag-region');
+  });
+});

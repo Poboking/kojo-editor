@@ -13,11 +13,9 @@
  * 全屏）的按钮序列与图标都在那里定死。
  */
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
   type ReactElement,
 } from 'react';
 import { isTauri } from '../bridge/invoke';
@@ -116,16 +114,7 @@ export function bandTitleOf(title: string): string {
  */
 export function ChromeBrandMark(): ReactElement {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      fillRule="evenodd"
-      aria-hidden="true"
-      focusable="false"
-      data-tauri-drag-region
-    >
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" fillRule="evenodd" aria-hidden="true" focusable="false">
       <path d="M3 1.6h10a2.4 2.4 0 0 1 2.4 2.4v5a2.4 2.4 0 0 1-2.4 2.4H7.3L4 14.1v-2.7H3A2.4 2.4 0 0 1 .6 9V4A2.4 2.4 0 0 1 3 1.6Zm1.45 4.9a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Zm2.5 0a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Zm2.5 0a1.05 1.05 0 1 0 2.1 0 1.05 1.05 0 1 0-2.1 0Z" />
     </svg>
   );
@@ -192,58 +181,63 @@ export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps):
    * 失败只在 window-fullscreen 里 warn）。
    *
    * 判据取 mousedown 的 `detail === 2` 而不是 `dblclick`：第一次 mousedown 会触发
-   * Tauri 的 start_dragging，WebView 可能收不到随后的 mouseup，dblclick 不保证送达
-   * （Tauri 自己的 drag.js 也在第二次 mousedown 上做最大化）。这里同时截下那次
-   * mousedown，避免 Tauri 的 internal_toggle_maximize 与我们的 toggleMaximize 各切一次。
+   * 原生拖动，WebView 可能收不到随后的 mouseup，dblclick 不保证送达。
+   * 这是**原生**监听（见下一条 effect），因为工具条是 portal 进来的，React 合成事件
+   * 沿 React 树冒泡、不经过本组件挂在带上的处理器。
    */
-  const onBarMouseDown = useCallback((e: ReactMouseEvent<HTMLElement>) => {
-    if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest('button') !== null) return;
-    if (e.detail !== 2) return;
-    // 与 drag.js 同款：压掉默认动作，双击标题栏不该改变编辑器焦点 / 选中文本
-    e.preventDefault();
-    e.stopPropagation();
-    void toggleMaximize();
+  const chromeRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 整条标题栏（含 portal 进来的工具条）的拖动 / 双击最大化：**原生** mousedown 监听，
+   * 不用 React 的 `onMouseDown`。
+   *
+   * 为什么必须原生：工具条由 ShellLayout `createPortal` 进 `.window-chrome-band`，
+   * React 合成事件沿 React 树（ShellLayout 那棵）冒泡，**不会**经过本组件挂在带上的
+   * 处理器——身份带落地后，除左侧标题与右侧窗控外整整一段都按不出窗口（用户反馈
+   * 「进入编辑器界面后无法拖拽编辑器框」）。原生 listener 认 DOM 冒泡，portal 子树照收。
+   *
+   * 判定仍复用弹窗那条 `canStartWindowDragFrom`：按钮 / 折叠头 / 滚动条 / 打开的遮罩
+   * 上不拖，两处"什么算能拖"同一个口径。`detail === 2` 让给最大化，并压掉默认动作
+   * （双击标题栏不该改变编辑器焦点 / 选中文本）。
+   */
+  useEffect(() => {
+    const el = chromeRef.current;
+    if (el === null) return;
+    const onMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (event.detail === 2) {
+        if (target.closest('button') !== null) return;
+        event.preventDefault();
+        void toggleMaximize();
+        return;
+      }
+      if (!canStartWindowDragFrom(target, event.clientX, event.clientY)) return;
+      event.preventDefault();
+      dragStarterRef.current();
+    };
+    el.addEventListener('mousedown', onMouseDown);
+    return () => {
+      el.removeEventListener('mousedown', onMouseDown);
+    };
   }, []);
 
   const actions = chromeActionsOf(state);
 
-  /**
-   * 插槽里的工具条也是"标题栏的一部分"：空白处按下要能拖窗（VIS-10 · D-1）。
-   * 拖动判定不自己写——复用弹窗那条 `canStartWindowDragFrom`，控件 / 滚动条 / 打开的
-   * 遮罩一律排除，两处的"什么算能拖"从此同一个口径。`detail === 2` 让给根上的
-   * 双击最大化，避免同一次按下既 startDragging 又 toggleMaximize。
-   */
-  const onBandMouseDown = useCallback((e: ReactMouseEvent<HTMLSpanElement>) => {
-    if (e.button !== 0 || e.detail === 2) return;
-    if (!canStartWindowDragFrom(e.target as HTMLElement, e.clientX, e.clientY)) return;
-    e.preventDefault();
-    dragStarterRef.current();
-  }, []);
-
   return (
-    <div
-      className="window-chrome"
-      role="toolbar"
-      aria-label="窗口标题栏"
-      data-tauri-drag-region
-      onMouseDown={onBarMouseDown}
-    >
-      <span className="window-chrome-mark" aria-hidden="true" data-tauri-drag-region>
+    <div ref={chromeRef} className="window-chrome" role="toolbar" aria-label="窗口标题栏">
+      <span className="window-chrome-mark" aria-hidden="true">
         <ChromeBrandMark />
       </span>
-      <span className="window-chrome-title" data-tauri-drag-region title={title}>
+      <span className="window-chrome-title" title={title}>
         {bandFilled ? bandTitleOf(title) : title}
       </span>
       {/* 身份带插槽（VIS-10）：真壳里 ShellLayout 把工具条 portal 进这里，
-          于是 36+36 两条横带并成一条 40px；浏览器 dev 没有本组件 ⇒ 工具条留在原位。 */}
-      <span
-        className="window-chrome-band"
-        data-identity-band=""
-        ref={registerIdentityBandSlot}
-        onMouseDown={onBandMouseDown}
-      />
-      <div className="window-chrome-drag" data-tauri-drag-region />
+          于是 36+36 两条横带并成一条 40px；浏览器 dev 没有本组件 ⇒ 工具条留在原位。
+          滑动 / 双击判定由根上那条**原生** mousedown 统一接（portal 子树照收）。 */}
+      <span className="window-chrome-band" data-identity-band="" ref={registerIdentityBandSlot} />
+      <div className="window-chrome-drag" />
       <div className="window-chrome-actions">
         {actions.map((action) => (
           <button

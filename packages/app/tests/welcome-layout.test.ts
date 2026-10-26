@@ -280,3 +280,28 @@ describe('欢迎页 · 限高 = 整数行倍率（半行裁切同源修掉）', 
     expect(cssSrc).not.toMatch(/@keyframes\s+u-spin/);
   });
 });
+
+/* 弹窗态滚动（2026-10-26 反馈批）：教程 →「看看中文口上怎么变成游戏指令」展开后，
+   代码块掉到窗口边缘以下且整页滚不动。根因是弹窗舞台只有 `flex: 1 1 auto`，卡片
+   `height:100%` 落回内容高（实测 863px > 视口 564px），外层 `overflow:hidden` 直接裁掉。
+   判据：舞台拿确定高度、卡片单行栅格钉 1fr；量高态再回到静态自然高度。 */
+describe('欢迎页 · 弹窗态两栏各自滚（折叠内容不被裁）', () => {
+  it('弹窗舞台绝对定位铺满滚动区（百分比高度才有参照）', () => {
+    const rule = cssSrc.match(/\.app-frame-popup \.welcome-stage\s*\{[^}]*\}/);
+    expect(rule, '弹窗舞台规则缺席').not.toBeNull();
+    expect(rule![0]).toContain('position: absolute');
+    expect(rule![0]).toContain('inset: 0');
+  });
+
+  it('弹窗卡片单行栅格 minmax(0, 1fr)：两栏各自滚，不被内容撑高', () => {
+    const rule = cssSrc.match(/\.app-frame-popup \.welcome-screen \.welcome-card\s*\{[^}]*\}/);
+    expect(rule, '弹窗卡片规则缺席').not.toBeNull();
+    expect(rule![0]).toMatch(/grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+  });
+
+  it('量高态撤掉绝对定位（要读卡片的自然高度）', () => {
+    const rule = cssSrc.match(/\.app-frame-popup\.welcome-popup-measuring \.welcome-stage\s*\{[^}]*\}/);
+    expect(rule, '量高态舞台规则缺席').not.toBeNull();
+    expect(rule![0]).toContain('position: static');
+  });
+});

@@ -49,6 +49,7 @@ import {
   resetGlassTransparencyPref,
 } from './glass-pref';
 import { PANEL_VIRTUALIZE_DEFAULT, loadPanelVirtualize, setPanelVirtualize } from './panel-prefs';
+import { WELCOME_BG_DEFAULT, loadWelcomeBgPref, resetWelcomeBgPref } from './welcome-bg-pref';
 import { SEALED_DEFAULT, loadSealed, setSealed } from './sealed';
 import { loadThemeChoice, setFollowSystem } from './theme-pref';
 import { AUTOSAVE_MODE_DEFAULT, loadAutosavePref, setAutosavePref } from './autosave-pref';
@@ -125,6 +126,15 @@ export const SETTINGS_RESET_TABLE: readonly SettingsResetEntry[] = [
     isDefault: () => loadGlassTransparencyPref() === GLASS_TRANSPARENCY_DEFAULT,
     reset: () => {
       resetGlassTransparencyPref();
+    },
+  },
+  {
+    key: 'appearance.welcomeBg',
+    label: '欢迎页背景',
+    read: loadWelcomeBgPref,
+    isDefault: () => loadWelcomeBgPref() === WELCOME_BG_DEFAULT,
+    reset: () => {
+      resetWelcomeBgPref();
     },
   },
   {
