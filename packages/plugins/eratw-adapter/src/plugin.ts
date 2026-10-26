@@ -3,8 +3,10 @@ import type {
   CharaInfo,
   FileIO,
   GameAdapter,
+  GameLaunchAdapter,
   GameProject,
   KojoInstructionTable,
+  Logger,
   MarketService,
   OpJournal,
   Plugin,
@@ -16,8 +18,13 @@ import type {
   WorkspaceService,
 } from '@kojo/plugin-api';
 import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
-import { ERATW } from './constants';
-import { createEratwLaunchAdapter } from './launch';
+import {
+  ERATW,
+  LAUNCH_CONTENT_ROOTS,
+  LAUNCH_DEFAULT_ENCODING,
+  LAUNCH_LOG_RULES,
+  LAUNCH_SAVE_LAYOUT,
+} from './constants';
 import { createEratwCounterTable, ERATW_COUNTER_ENTRIES } from './counter-table';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
@@ -73,6 +80,42 @@ export const TUTORIAL_OVERLAY_BY_ID: Readonly<Record<TutorialId, string>> = {
   kojo2: KOJO2_TUTORIAL_OVERLAY_ID,
   reference: REFERENCE_TUTORIAL_OVERLAY_ID,
 };
+
+/**
+ * 启动面（`GameAdapter.launch`）的**懒外壳** —— ADAPTER-LAZY 批。
+ *
+ * 三件事写死在这里，改之前先看 `tests/launch-lazy.test.ts` 的两条判据：
+ * 1. **同步字段直接给常量**：`saveLayout` / `contentRoots` / `logRules` / `defaultEncoding`
+ *    必须开机可读（实例库开面板、存档页列表、日志解析都不等任何装载），常量的家与证据在
+ *    `./constants` 那一节（不是本文件，也不是 `./launch`）；
+ * 2. **`probe` / `buildProfile` 才走懒边**：`import('./launch')` 一次装载、结果与实例都缓存
+ *    （第二次调用不再进 `import()`、也不再重建 adapter）；`io` / `log` 在闭包里带过去，
+ *    与外壳同寿命；
+ * 3. 装载失败**不吞**：`impl` 缓存的是同一个 rejected promise，调用方按普通启动错误处理
+ *    ——静默造一个"假启动面"会让启动器以为这游戏不能启动。
+ */
+function createLazyLaunchFace(deps: {
+  readonly io: Pick<FileIO, 'listDir' | 'exists'>;
+  readonly log: Logger;
+}): GameLaunchAdapter {
+  let impl: Promise<GameLaunchAdapter> | null = null;
+  const implOf = (): Promise<GameLaunchAdapter> => {
+    impl ??= import('./launch').then((mod) => mod.createEratwLaunchAdapter(deps));
+    return impl;
+  };
+  return {
+    saveLayout: LAUNCH_SAVE_LAYOUT,
+    contentRoots: LAUNCH_CONTENT_ROOTS,
+    logRules: LAUNCH_LOG_RULES,
+    defaultEncoding: LAUNCH_DEFAULT_ENCODING,
+    async probe(rootDir) {
+      return (await implOf()).probe(rootDir);
+    },
+    async buildProfile(rootDir, candidateId, options) {
+      return (await implOf()).buildProfile(rootDir, candidateId, options);
+    },
+  };
+}
 
 /**
  * eraTW 适配器插件 —— 本项目**唯一**允许知道"eraTW / 口上 / CHARA CSV / sav"这些字眼的地方。
@@ -678,11 +721,18 @@ export function createEratwAdapterPlugin(): Plugin {
         },
 
         /**
-         * 启动面（ADAPTER-LAUNCH 车道）：哪个程序可启动、argv、cwd、存档/内容根全部在
-         * `./launch`——本行只接线，一行领域知识都不写在这里。
+         * 启动面（ADAPTER-LAUNCH 车道；ADAPTER-LAZY 批改懒）。
+         *
+         * **同步声明**（`saveLayout` / `contentRoots` / `logRules` / `defaultEncoding`）直接给
+         * `./constants` 里的常量——实例库 / 存档页 / 日志解析开机就要，它们必须在图里。
+         * **探测与组装**（`probe` / `buildProfile`）只在真打开启动器时才跑，实现住
+         * `./launch`，这里用一次 `import()` 拿、拿到即缓存（一次装载，多次复用；依赖
+         * `io` / `log` 在闭包里带过去）。**不要**把这两件改回静态 import：整份实现
+         * 28.8 KB 会随常驻插件回到开机图（`tests/launch-lazy.test.ts` 有反向闸）。
+         *
          * 缺席的历史语义是「该游戏只能编辑、不能启动」，接线后实例库才出现「新建实例」。
          */
-        launch: createEratwLaunchAdapter({ io, log: ctx.log }),
+        launch: createLazyLaunchFace({ io, log: ctx.log }),
       };
 
       ctx.slots.register('game.adapter', { id: `${ERATW.gameId}-adapter`, adapter });

@@ -6,9 +6,11 @@
  */
 export { createEratwAdapterPlugin } from './plugin';
 export { ERATW } from './constants';
-// ADAPTER-LAUNCH 批：启动面（`GameAdapter.launch`）对外暴露工厂 + 错误类型，供启动器侧
-// 与测试**零镜像**引用同一份实现（同 `createEratwConventions` 的既有先例）。
-export { EratwLaunchError, createEratwLaunchAdapter, type EratwLaunchDeps } from './launch';
+// ADAPTER-LAZY 批（2026-10-26）：`./launch` 的**值**导出不再从这里静态转出——本桶是开机图
+// 的节点（`bootstrap.ts` 引它取常驻插件），静态 re-export 等于把整份启动实现（28.8 KB）
+// 挂上欢迎页。运行时只有两处消费者：插件自己（`plugin.ts` 的 `launch` 对象，经 `import()`
+// 懒装载）与测试（直引 `../src/launch`）。类型面照旧转出（`import type` 会被擦除、不进图）。
+export type { EratwLaunchDeps } from './launch';
 export { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 export {
   clearKojoFamilyMemo,

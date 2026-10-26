@@ -450,19 +450,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     文件数不动、KB **+7**（该批落进首屏的 ERB 装配段；同一棵树上把它摘掉即读回 2,860）。
     //     闸随现值 **2,860 → 2,870**——这是"把上游已落地的红修回绿"，不是顺手放宽：
     //     增量已点名到 A2，且 2,870 正是本档在 A2 之前的上一次闸值。
-    //   - **启动器 adapter 启动面批（2026-10-26，eraTW `launch.ts`）**：现读数
-    //     **195 文件 / 2,899 KB**，两枚闸随现值上抬（194 → **195** 文件、2,870 → **2,900** KB）。
+    //   - **启动器 adapter 启动面批（2026-10-26，eraTW `launch.ts`）**：那一批的读数是
+    //     **195 文件 / 2,899 KB**，两枚闸随之上抬（194 → 195 文件、2,870 → 2,900 KB）。
     //     增量点名：`packages/plugins/eratw-adapter/src/launch.ts` **+1 文件 / +28.8 KB**。
-    //     它进图的机制是既有的、不是本批新造的：`eratw-adapter` 是**两个 eager 插件之一**
+    //     它进图的机制是既有的、不是那一批新造的：`eratw-adapter` 是**两个 eager 插件之一**
     //     （`EAGER_PLUGINS`），`plugin.ts` 静态挂 `GameAdapter.launch` ⇒ 整份启动描述符随适配器
-    //     一起在开机图里。
-    //     已知欠账（**单独一批，不在本批顺手改**）：`GameLaunchAdapter` 的同步字段
-    //     （`saveLayout` / `contentRoots` / `logRules` / `defaultEncoding`）撑着"开机即可读"，
-    //     而 `probe` / `buildProfile` 只有打开启动器才用；把前者抽成 ~3 KB 常量表、后者留懒边，
-    //     可把这 29 KB 收回到 3 KB。看板已记 `LAUNCH-ADAPTER-LAZY`。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤195 文件 / ≤2,900 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_900);
-    expect(files.length).toBeLessThanOrEqual(195);
+    //     一起在开机图里。那一批记下的欠账（把同步字段抽成小常量表、实现留懒边），下一行记它已还。
+    //   - **ADAPTER-LAZY 批（2026-10-26，本批）：现读数 194 文件 / 2,879 KB**，两枚闸随现值
+    //     **下调**（195 → 194 文件、2,900 → 2,880 KB；降闸不写理由，读数口径照旧）。
+    //     减法只有一处（`launch.ts` 整份离图：−1 文件 / −28.8 KB），但要同时断三条边：
+    //     · 适配器的同步声明面（`saveLayout` / `contentRoots` / `logRules` / `defaultEncoding`）
+    //       搬进**已在图里**的 `eratw-adapter/src/constants.ts`（+6.7 KB、**零新增文件**——这是
+    //       本批能回到 194 而不是停在 195 的原因：常量搬进既有 eager 文件，不另开小模块）；
+    //     · `plugin.ts` 的 `launch` 对象只留同步字段 + 两个 async 转发，`probe` / `buildProfile`
+    //       经 `import('./launch')` 一次装载并缓存（打开启动器才付解析钱）；
+    //     · 桶 `eratw-adapter/src/index.ts`（`bootstrap.ts` 静态引它）不再值转出 `./launch`，
+    //       只留 `export type`——否则 `launch.ts` 会从这条 re-export 边整份回到图里。
+    //     净变化 2,899 → 2,879（−20 KB / −1 文件）；余量 1 KB：下一枚进图的东西仍须先减面。
+    // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
+    // 交付回执不必靠人肉复算。
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,880 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_880);
+    expect(files.length).toBeLessThanOrEqual(194);
   });
 
   /**

@@ -1,9 +1,19 @@
 /**
- * eraTW 启动面（`GameLaunchAdapter`）—— **「怎么把 eraTW 跑起来」的全部游戏侧知识**。
+ * eraTW 启动面（`GameLaunchAdapter`）的**懒实现**——「怎么把 eraTW 跑起来」的探测与组装。
+ *
+ * ## 本文件的走位（ADAPTER-LAZY 批，2026-10-26）
+ *
+ * `GameLaunchAdapter` 的**同步只读字段**（`saveLayout` / `contentRoots` / `logRules` /
+ * `defaultEncoding`）不在这里——它们必须开机可读，已搬进 `./constants`（同一份领域常量的
+ * 既有 eager 文件），本文件只 import 回来复用，**不重抄**。`probe` / `buildProfile` 是
+ * 唯一入口 `plugin.ts` 的 `launch` 对象经 `import('./launch')` 懒装载的部分（打开启动器才付
+ * 解析钱）。**不要**在任何 eager 文件里静态 import 本文件（`tests/launch-lazy.test.ts`
+ * 有一条反向闸扫这条），否则整份文件会回到开机图。
  *
  * 规格：`docs/LAUNCHER-ARCHITECTURE.md` §6.1（adapter 启动面职责）/ §6.3（`instanceStore.create`
  * 只用 `probe` 的**候选 id** 与 `buildProfile` 的产物）。`launcher-core` 只认字段名，不认任何
- * 具体值；本文件是这些值在 eraTW 上的唯一住处（内核 / 契约 / Rust 宿主零游戏名词）。
+ * 具体值；这些值在 eraTW 上的唯一住处是「本文件（探测 / 组装）+ `./constants` 的启动面那节
+ * （同步声明面）」（内核 / 契约 / Rust 宿主零游戏名词）。
  *
  * ## 证据纪律（每条常量都带等级，改之前先复核）
  *
@@ -37,22 +47,25 @@
 import type {
   ContentRootSpec,
   DirEntry,
-  EncodingProfile,
   FileIO,
   GameLaunchAdapter,
   LaunchBuildOptions,
   LaunchCandidate,
   LauncherErrorCode,
   LaunchProfile,
-  LocaleProfile,
-  LogLocation,
-  LogParseRules,
   Logger,
-  SaveLayoutSpec,
   SaveRootSpec,
 } from '@kojo/plugin-api';
 import { isAbsolute, join } from '@kojo/plugin-api';
-import { ERATW } from './constants';
+import {
+  ERATW,
+  LAUNCH_CONTENT_ROOTS,
+  LAUNCH_DEFAULT_ENCODING,
+  LAUNCH_DEFAULT_LOCALE,
+  LAUNCH_LOG_RULES,
+  LAUNCH_SAV_ROOT,
+  LAUNCH_SAVE_LAYOUT,
+} from './constants';
 
 /* ══════════════════════════════════════════════════════════════════════════════
  * 探测：本作可执行体的两个来源（已知名表 + 引擎命名家族）
@@ -117,188 +130,11 @@ const KNOWN_EXES: readonly KnownExe[] = [
 const FAMILY_ID_PREFIX = 'eratw';
 
 /* ══════════════════════════════════════════════════════════════════════════════
- * 布局：存档根 / 内容根（都按「盘上真的在」产出，缺目录如实省略）
+ * 布局 / 编码 / 日志解析的**声明**住在 `./constants`（开机即读，ADAPTER-LAZY 批）
+ *   存档根 = LAUNCH_SAV_ROOT · 内容根 = LAUNCH_CONTENT_ROOTS · 默认解码 = LAUNCH_DEFAULT_ENCODING
+ *   默认区域 = LAUNCH_DEFAULT_LOCALE · 日志行解析 = LAUNCH_LOG_RULES
+ * 理由与逐条证据等级见那一节的注释；这里不再逐条重抄（两份名单必然漂开）。
  * ══════════════════════════════════════════════════════════════════════════════ */
-
-/** 存档目录相对路径（**本机实测**：`sav/` 6 份 = `global.sav` + `save00..save03.sav` + `save1000.sav`） */
-const SAV_RELATIVE = ERATW.savDir.join('/');
-
-/**
- * 存档根。
- *
- * - 目录名`本机实测`；`USE SAV FOLDER:YES`（`emuera.config` 明文，**文档记载**）证明
- *   「存档住在 `sav/` 子目录」不是本盘偶然；
- * - `format: 'emuera-sav'` 只是给上层挑解析器的标签（宿主不解释）；引擎 `COMPRESS SAVE DATA:YES`
- *   + `USE THE BINARY FORMAT FOR SAVING DATA:YES`（**文档记载**）⇒ 是引擎自有二进制，不是纯文本；
- * - `writableInShared: false`：**契约口径**——shared 实例读可以，写回需用户逐根目录授权
- *   （游戏自己写档是进程行为，不走启动器；启动器的恢复/导入才需要这道闸）。
- */
-const SAV_ROOT: SaveRootSpec = {
-  id: 'sav',
-  label: '存档（sav/）',
-  relativePath: SAV_RELATIVE,
-  format: 'emuera-sav',
-  writableInShared: false,
-};
-
-/**
- * 内容根（声明面；`buildProfile` 再按「盘上在不在」过滤一层）。
- *
- * - `ERB/`：**本机实测** 4,509 份脚本（`.erb` 3,818 / `.erh` 153）⇒ `script`，可写：
- *   编辑器本来就往 `ERB/口上・メッセージ関連/個人口上` 部署（`loadProject` 的 writablePaths），
- *   内容包落在这里与既有写面同域；
- * - `CSV/`：**本机实测** 55 项（`CFLAG.csv` / `Train.csv` / `Chara/` 168 份…）⇒ `data`，
- *   **不可写**：数据表改动会影响存档兼容与后续版本升级，属「必须用户显式授权」的一类；
- * - `resources/`：**本机实测** 23 项 / 328 MB 素材 ⇒ `resource`，**不可写**：替换素材是最容易
- *   毁掉整合包的一步，shared 实例一律不动（copy 实例里做）。
- *
- * **不声明** `plugins/`（**本机实测** 6 项：`tw_csv_chs.xml` 汉化词典 + `ClassLibrary1.dll` /
- * `MathParser.org-mXparser.dll` 原生/托管程序集）：那是引擎的程序集与全局词典目录，
- * 让内容包落进 DLL 目录 = 直接换掉引擎代码，任何 `kind` 都不该给这个落点。
- */
-const CONTENT_ROOTS: readonly ContentRootSpec[] = [
-  {
-    id: 'erb',
-    label: 'ERB 脚本',
-    relativePath: ERATW.erbDir.join('/'),
-    kind: 'script',
-    accepts: ['script'],
-    writableInShared: true,
-  },
-  {
-    id: 'csv',
-    label: 'CSV 数据表',
-    relativePath: ERATW.csvDir.join('/'),
-    kind: 'data',
-    accepts: ['data'],
-    writableInShared: false,
-  },
-  {
-    id: 'resources',
-    label: 'resources 素材',
-    relativePath: 'resources',
-    kind: 'resource',
-    accepts: ['resource'],
-    writableInShared: false,
-  },
-];
-
-/**
- * 存档布局（存档页的列表面：`saveLayout.listRule` 决定「列哪些、显示什么名字」）。
- *
- * - `extensions: ['.sav']`：**本机实测** 6 份存档全部 `.sav` 后缀；
- * - `labelFromFileName: true`：显示名去掉扩展名（`save1000` 比 `save1000.sav` 好读）；
- * - 缺口（见文件头缺口 5）：`global.sav` 也在白名单内 —— 契约没有排除位。
- */
-const SAVE_LAYOUT: SaveLayoutSpec = {
-  roots: [SAV_ROOT],
-  listRule: { extensions: ['.sav'], labelFromFileName: true },
-};
-
-/* ══════════════════════════════════════════════════════════════════════════════
- * 编码 / 语言
- * ══════════════════════════════════════════════════════════════════════════════ */
-
-/**
- * 日志/文本解码策略。
- *
- * - **本机实测**：引擎自己写的 `emuera.log` 是 **UTF-8 + BOM**（首字节 `EF BB BF`，30,055 B）；
- *   `CSV/GameBase.csv` 同为 UTF-8 BOM（`コード,7153` / `タイトル,eraThe World【画蛇添足版】`），
- *   `CSV/CFLAG.csv` 是无 BOM 的合法 UTF-8（`1,既成事実`）——本盘 CSV/ERB 无一需要 Shift-JIS 解；
- * - 故 `fallback` 取 `utf-8`：`auto` 先探 BOM/UTF-8，探不出时才退这一档；
- * - **未知（保守值）**：日文原版的盘可能是 Shift-JIS，`auto` 的探测本身能覆盖；
- *   标准输出的代码页随控制台设置（`emuera.config` 只写了 `DEFAULT ANSI ENCODING:CHINESE_HANS`
- *   这类**文件**编码项），故不钉 `mode: 'fixed'`。
- */
-const DEFAULT_ENCODING: EncodingProfile = { mode: 'auto', fallback: 'utf-8' };
-
-/**
- * 语言/区域：`inherit`（跟随系统）。
- *
- * 依据（**文档记载**）：`emuera.config` 里 `EMUERA INTERFACE LANGUAGE:简体中文`、
- * `DEFAULT ANSI ENCODING:CHINESE_HANS` —— 界面语言与 ANSI 解码由**引擎自己的配置**决定，
- * 不依赖进程区域；而契约首版也明说不存在「按进程切 ANSI 代码页」的原生能力，
- * 故这里只声明「不干预」，不假装能切日区。
- */
-const DEFAULT_LOCALE: LocaleProfile = { mode: 'inherit' };
-
-/* ══════════════════════════════════════════════════════════════════════════════
- * 日志行解析（`LogParseRules`）
- * ══════════════════════════════════════════════════════════════════════════════ */
-
-/**
- * 定位行里的路径片段：**不含空白与括号/冒号**。
- *
- * 为什么不写成 `(.+?\.ERB)`：真盘第 170 行的形态是
- * `函数: @GET_MAPID（MOVEMENTS\物件関連\COMMON2.ERB的26行）` —— 贪婪到「最后一个 `.ERB`」
- * 会把 `函数: @GET_MAPID（` 一起吞进路径。文件名带空格的 `.ERB` 确实存在（引擎允许），
- * 但那种名字在这里**切不出可靠边界** ⇒ 按「宁可漏报不可误报」当作认不出（返回 null），
- * 而不是猜一个半截路径去做跳转。
- */
-const PATH_PART = '[^\\s（）()：「」]+?\\.ERB';
-
-/**
- * 定位行形态一：`<路径>.ERB在<N>行` —— **本机实测**原句
- * `MOVEMENTS\物件関連\COMMON2.ERB在30行错误发生在:…`（`emuera.log` 第 167 行）。
- */
-const LOCATION_AT = new RegExp(`(${PATH_PART})在(\\d+)行`, 'i');
-
-/**
- * 定位行形态二：`<路径>.ERB的第?<N>行` —— **本机实测**原句
- * `MOVEMENTS\物件関連\PLACE_拠点別分岐.ERB的第255行（函数@NAME_FROM_PLACE内）`（第 172 行）
- * 与 `函数: @GET_MAPID（MOVEMENTS\物件関連\COMMON2.ERB的26行）`（第 170 行，无「第」）。
- */
-const LOCATION_LINE_OF = new RegExp(`(${PATH_PART})的第?(\\d+)行`, 'i');
-
-/**
- * 错误行标记（**本机实测**：中文汉化版的「错误内容:」「…错误发生在:」；
- * 引擎日文原句一律是「エラー」）。**不**收 `警告`（引擎的「基本标志未设定」一类是警告，
- * 计进错误会让崩溃摘要全是噪声）；ASCII 标记（`ERROR:` / `Exception`）在盘上未出现 ⇒
- * **未知，保守不收**——宁可漏报不可误报。
- */
-const ERROR_MARKER = /错误|エラー/;
-
-/** 纯排版标记行（`emuera.log` 里大量 `<shape type='space' param='100'>` 分隔物；**本机实测**） */
-const SHAPE_ONLY = /^(?:<shape\b[^>]*>\s*)+$/i;
-
-/**
- * 日志路径 → 相对 posix 路径；**不合法（绝对路径 / 盘符 / `..`）一律 null**。
- *
- * 契约只认相对 `gameRoot` 的路径（绝对路径会把用户目录带进编辑器 UI / 诊断包）；
- * 这里拿不到 `gameRoot`，所以宁可不给位置，也不回显绝对路径。
- */
-function toRelativePosix(raw: string): string | null {
-  const text = raw
-    .trim()
-    // 汉化版在路径外面套了全角/半角括号与冒号（`（…内）` / `错误发生在:`）——剥掉包裹符号
-    .replace(/^[（(【[「'"]+/, '')
-    .replace(/[）)】\]」'"]+$/, '');
-  if (text === '') return null;
-  const unified = text.replace(/\\/g, '/');
-  if (isAbsolute(unified) || /^[a-zA-Z]:/.test(unified) || unified.startsWith('//')) return null;
-  const segments = unified.split('/').filter((segment) => segment !== '' && segment !== '.');
-  if (segments.length === 0 || segments.some((segment) => segment === '..')) return null;
-  return segments.join('/');
-}
-
-const LOG_RULES: LogParseRules = {
-  /** 认不出就 `null`（不猜：宁可没有跳转，也不把正文里随便一段当文件路径） */
-  parseLocation(line: string): LogLocation | null {
-    const match = LOCATION_AT.exec(line) ?? LOCATION_LINE_OF.exec(line);
-    if (!match) return null;
-    const relativePath = toRelativePosix(match[1] ?? '');
-    const lineNo = Number.parseInt(match[2] ?? '', 10);
-    if (relativePath === null || !Number.isSafeInteger(lineNo) || lineNo <= 0) return null;
-    return { relativePath, line: lineNo };
-  },
-  isErrorLine(line: string): boolean {
-    return ERROR_MARKER.test(line);
-  },
-  isNoiseLine(line: string): boolean {
-    const trimmed = line.trim();
-    return trimmed === '' || SHAPE_ONLY.test(trimmed);
-  },
-};
 
 /* ══════════════════════════════════════════════════════════════════════════════
  * 错误：候选不合法（与 core 同一码语义；本包不 import `launcher-core`）
@@ -466,12 +302,12 @@ export function createEratwLaunchAdapter(deps: EratwLaunchDeps): GameLaunchAdapt
 
   /** 存档根：`sav/` 在盘上才声明（缺目录如实省略，绝不给不存在的路径） */
   const saveRootsOf = async (rootDir: string): Promise<SaveRootSpec[]> =>
-    (await existsSafe(join(rootDir, ...ERATW.savDir))) ? [SAV_ROOT] : [];
+    (await existsSafe(join(rootDir, ...ERATW.savDir))) ? [LAUNCH_SAV_ROOT] : [];
 
   /** 内容根：逐个按存在性过滤（同一理由：路径必须真的在） */
   const contentRootsOf = async (rootDir: string): Promise<ContentRootSpec[]> => {
     const present: ContentRootSpec[] = [];
-    for (const root of CONTENT_ROOTS) {
+    for (const root of LAUNCH_CONTENT_ROOTS) {
       if (await existsSafe(join(rootDir, ...root.relativePath.split('/')))) present.push(root);
     }
     return present;
@@ -515,7 +351,7 @@ export function createEratwLaunchAdapter(deps: EratwLaunchDeps): GameLaunchAdapt
     }
     if (saveRoots.length === 0) {
       warnings.push(
-        `未发现「${SAV_RELATIVE}/」存档目录：引擎首次存档才会创建它，此刻声明一个不存在的路径只会让存档页指空。`,
+        `未发现「${LAUNCH_SAV_ROOT.relativePath}/」存档目录：引擎首次存档才会创建它，此刻声明一个不存在的路径只会让存档页指空。`,
       );
     }
 
@@ -555,9 +391,9 @@ export function createEratwLaunchAdapter(deps: EratwLaunchDeps): GameLaunchAdapt
        */
       cwdRelative: '.',
       /** 语言/区域：缺省跟随系统（依据见 `DEFAULT_LOCALE` 的注释） */
-      locale: options.locale ?? DEFAULT_LOCALE,
+      locale: options.locale ?? LAUNCH_DEFAULT_LOCALE,
       /** 解码策略：与 `defaultEncoding` 同一档（依据见 `DEFAULT_ENCODING` 的注释） */
-      encoding: options.encoding ?? DEFAULT_ENCODING,
+      encoding: options.encoding ?? LAUNCH_DEFAULT_ENCODING,
       saveRoots,
       contentRoots,
       ...(warnings.length === 0 ? {} : { warnings }),
@@ -567,13 +403,13 @@ export function createEratwLaunchAdapter(deps: EratwLaunchDeps): GameLaunchAdapt
   return {
     probe,
     buildProfile,
-    saveLayout: SAVE_LAYOUT,
-    contentRoots: CONTENT_ROOTS,
-    logRules: LOG_RULES,
+    saveLayout: LAUNCH_SAVE_LAYOUT,
+    contentRoots: LAUNCH_CONTENT_ROOTS,
+    logRules: LAUNCH_LOG_RULES,
     /**
      * 与 `buildProfile` 的 `encoding` 同一档（单源：改一处两处都跟着变）。
      * 契约里这个字段是「日志默认编码；不给 = auto」的实例级落点。
      */
-    defaultEncoding: DEFAULT_ENCODING,
+    defaultEncoding: LAUNCH_DEFAULT_ENCODING,
   };
 }
