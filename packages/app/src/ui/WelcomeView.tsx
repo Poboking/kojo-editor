@@ -7,7 +7,19 @@ import type { RecentFileRecord } from './recent-files';
 import { version as APP_VERSION } from '../../package.json';
 import type { AppPhase } from './App';
 import { Icon } from './icons';
+import { declareContextSurface } from './context-surfaces';
 import './welcome.css';
+
+/**
+ * 欢迎页登记为**免右键面**（清单里 `welcome` 带 `suppressMenu: true`）。
+ *
+ * 声明在宿主模块顶层（"谁渲染谁声明"），但它**没有 `build`**——这一面永远不提供菜单。
+ * 2026-10-26 之前这里有 `welcome` / `welcome-recent` 两个带菜单的面：弹窗态跑轻档样式，
+ * 菜单拿不到定位几何 ⇒ 通栏裸块 + 0 高遮罩 ⇒ 点空白关不掉、整窗拖动被判据带死
+ * （详见 `context-surfaces.ts` 的 `SUPPRESSED_SURFACE_IDS` 注释）。
+ * 页面上的每件事都有实心入口（打开 / 继续上次会话 / 移除 / 教程），菜单在这里没有独占能力。
+ */
+declareContextSurface({ id: 'welcome', ariaLabel: '欢迎页', area: 'chrome' });
 
 /** 教程卡片指向的语义 id（与内核事件 `ui.tutorial.open` 的载荷同一词表） */
 export type WelcomeTutorialId = 'kojo' | 'sugar' | 'kojo2' | 'reference';
@@ -314,12 +326,11 @@ export function WelcomeView({
     // fileStatCache 在依赖里：补扫完自然转 idle（pending 为空即早退），不会成环
   }, [kernelReady, files, statPath, fileStatCache]);
 
-  /* ---------------------- 右键菜单：本页在免右键白名单里 ---------------------- */
-  // 根元素挂 `data-no-context-menu`（判据在 `context-surfaces.ts`），本页整片不出菜单。
-  // 原先这里有 welcome / welcome-recent 两个面 + 一枚接线桥，2026-10-26 撤掉：
-  // 弹窗态跑在轻档样式下，菜单没有定位几何 ⇒ 出来的是通栏裸块、遮罩 0 高，关不掉且
-  // 连整窗拖动一起废掉（详见 `NO_CONTEXT_MENU_ATTR` 的注释）。页面上的每件事本来都有
-  // 实心入口（打开 / 继续上次会话 / 移除 / 教程），菜单在这里没有独占能力。
+  /* ---------------------- 右键菜单：本页是免右键面 ---------------------- */
+  // 根元素挂 `data-context-surface="welcome"`，清单里这一面标了 `suppressMenu` ⇒ 整片不出菜单
+  // （判据在 `context-surfaces.ts` 的第零级）。原先这里还有 welcome-recent 行级面与一枚接线桥，
+  // 2026-10-26 一并撤掉：弹窗态跑在轻档样式下，菜单没有定位几何 ⇒ 通栏裸块 + 0 高遮罩，
+  // 关不掉且连整窗拖动一起废掉（详见 `SUPPRESSED_SURFACE_IDS` 的注释）。
 
   const canOpen = kernelReady && !opening;
   const tutorialsOpenable = canOpen;
@@ -330,9 +341,8 @@ export function WelcomeView({
   const missingDirs = recent.reduce((n, r) => n + (rowState(r) === 'missing' ? 1 : 0), 0);
 
   return (
-    // 免右键白名单标记（`context-surfaces.ts` 的 `NO_CONTEXT_MENU_ATTR`）：本页整片不出右键菜单。
-    // 它**不是** `data-context-surface`——欢迎页不是"面"，而是明确不表态的一片。
-    <div className="welcome welcome-screen" data-no-context-menu>
+    // 面根 = 免右键白名单面（清单里 `welcome` 标了 `suppressMenu`）：本页整片不出右键菜单。
+    <div className="welcome welcome-screen" data-context-surface="welcome">
       <div className="welcome-scroll">
         <div className="welcome-stage">
           <div className="welcome-card" role="region" aria-label="欢迎">

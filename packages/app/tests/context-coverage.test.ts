@@ -5,7 +5,8 @@
  * 这条测试的存在理由，是这一批最容易被"看起来做完了"骗过去的地方：
  *
  * - **清单里有、没人声明**：`CONTEXT_SURFACE_MANIFEST` 是 WP0 按任务清单一次写全的
- *   32 个面（原本 33；`outline` 与 `market` 曾因无宿主被移除，后来各自有了宿主又登记回来），
+ *   32 个面（原本 33；`outline` 与 `market` 曾因无宿主被移除，后来各自有了宿主又登记回来；
+ *   `welcome` 2026-10-26 起以 `suppressMenu` 的形式回来——它是有宿主的区域，但不出菜单），
  *   逐路补面很容易漏掉一两面，
  *   而漏掉的那一面在运行期**没有任何报错**——右键落上去，走通用兜底菜单，用户以为"这里
  *   本来就没菜单"。本次盘面时就是这样发现 `market` / `plugin-panel` 悬空的。
@@ -40,6 +41,8 @@ import '../src/ui/FileHistoryOverlay';
 import '../src/ui/OpsHistoryOverlay';
 import '../src/ui/plugin-panel-menu';
 import '../src/ui/outline-menu';
+// `welcome`（免右键面）的宿主在 WelcomeView 里，声明在模块顶层——不 import 就不登记
+import '../src/ui/WelcomeView';
 
 import {
   CONTEXT_SURFACE_MANIFEST,

@@ -14,8 +14,8 @@
  *
  * ## 三级策略（根路由 `buildContextMenuRoute`）
  *
- * 0. **免右键白名单（先于一切）**：命中最靠近的 `[data-no-context-menu]` 祖先 ⇒ 这一片
- *    **一个菜单都不出**（也不落兜底）。它表达的是「这里没有可做的事」，不是「这里没人认领」；
+ * 0. **免右键白名单（先于一切）**：命中的面在清单里标了 `suppressMenu` ⇒ 这一片
+ *    **一个菜单都不出**（也不落兜底）。它表达的是「这里不该有菜单」，不是「这里没人认领」；
  * 1. **输入类面（优先）**：目标是 input / textarea / contenteditable ⇒ `input` 面（WP0 自带）。
  *    它排在最前面是刻意的：剪切/复制/粘贴/撤销重做是通用编辑语义，不是某个布局的私有面，
  *    不能被容器面（浮窗/面板/对话框）截走——右键输入框却弹出「关闭窗口」是错的行为；
@@ -50,11 +50,19 @@ import {
 /** 面的归属分区（只用于清单可读性与分组巡检，不参与路由判定） */
 export type ContextSurfaceArea = 'editor' | 'explorer' | 'panel' | 'chrome' | 'plugin' | 'host';
 
-/** 清单条目：id / 无障碍名 / 分区（权威清单，新增面必须先在这里登记） */
+/**
+ * 清单条目：id / 无障碍名 / 分区（权威清单，新增面必须先在这里登记）
+ *
+ * `suppressMenu`（2026-10-26 增）：**这一面不出菜单**。由根路由第零级消费——命中即返回
+ * `null`（不落兜底，也不问里面任何面）。它不是"面没话说"（那是 `build` 返回 `null`，
+ * 语义是"继续往外问"），而是"这一片根本不该有右键菜单"这条**策略**。
+ */
 export interface ContextSurfaceManifestEntry {
   readonly id: string;
   readonly ariaLabel: string;
   readonly area: ContextSurfaceArea;
+  /** 免右键（见类型注释）；只有欢迎页用，理由见下面清单里那一行的注释 */
+  readonly suppressMenu?: true;
 }
 
 /**
@@ -96,8 +104,13 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
   { id: 'activity-bar', ariaLabel: '活动栏菜单', area: 'chrome' },
   { id: 'toolbar', ariaLabel: '工具栏菜单', area: 'chrome' },
   { id: 'status-bar', ariaLabel: '状态栏菜单', area: 'chrome' },
-  // 欢迎页（`welcome` / `welcome-recent`）**不在这张清单里**：它进的是免右键白名单
-  // （见下方 `NO_CONTEXT_MENU_ATTR`）——不是"面"，而是"这一片明确不出菜单"。
+  // `welcome`（2026-10-26）：面登记回来只为两件事——① 它确实是有宿主的区域
+  // （`ui/WelcomeView.tsx` 根元素挂 `data-context-surface="welcome"`，宿主自己声明）；
+  // ② "这一片不出菜单"这条**策略**要有一个权威落点，即 `suppressMenu`。
+  // 没有菜单 ⇒ `ariaLabel` 不参与渲染（只供清单可读性与读屏外的巡检），故写「欢迎页」
+  // 而不是「欢迎页菜单」。曾有的 `welcome-recent`（最近项目行）不登记：行级菜单已随本批退役，
+  // 整页一片白名单即可覆盖。
+  { id: 'welcome', ariaLabel: '欢迎页', area: 'chrome', suppressMenu: true },
   { id: 'settings', ariaLabel: '设置菜单', area: 'chrome' },
   { id: 'keybindings', ariaLabel: '快捷键菜单', area: 'chrome' },
   // `market`：面板由插件 `ui-market` **承载**，但面的声明在宿主侧（见文件底部那段
@@ -117,12 +130,12 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
 const MANIFEST_IDS = new Set(CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id));
 
 /**
- * **免右键白名单**的 DOM 标记（2026-10-26 欢迎页批）。
+ * **免右键白名单**（= 清单里 `suppressMenu: true` 的那些面）。
  *
- * 挂在根元素上即表示「这一整片右键不出菜单」——`buildContextMenuRoute` 第一级就查它，
- * 命中即返回 `null`（不落兜底，也不问里面任何面）。
+ * 从清单派生，不另立一张表：清单本来就是"有哪些区域、各叫什么"的唯一真源，
+ * "这片出不出菜单"是同一件事的另一面，抄第二份必然漂。
  *
- * ## 为什么欢迎页要进白名单（这是修一个真实事故，不是审美取舍）
+ * ## 为什么欢迎页在里面（这是修一个真实事故，不是审美取舍）
  *
  * 欢迎页是无边框启动弹窗（`.app-frame-popup`），它跑在**轻档样式**下：`styles-project.css`
  * 只在进项目时动态加载（`App.tsx` 的 `loadProjectStyles`）。而 `.context-menu` 的**定位几何**
@@ -137,7 +150,33 @@ const MANIFEST_IDS = new Set(CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id));
  *    （菜单组件自己的表，首屏链上就有），弹窗态里**任何**来源的菜单（如欢迎页上浮起的教程
  *    模态）都不会再退化成裸块。
  */
-export const NO_CONTEXT_MENU_ATTR = 'data-no-context-menu';
+const SUPPRESSED_SURFACE_IDS: ReadonlySet<string> = new Set(
+  CONTEXT_SURFACE_MANIFEST.filter((entry) => entry.suppressMenu === true).map((entry) => entry.id),
+);
+
+/** 白名单面的 id（测试与调试读；空集表示没有任何面免右键） */
+export function listSuppressedSurfaces(): readonly string[] {
+  return [...SUPPRESSED_SURFACE_IDS];
+}
+
+/**
+ * 目标是否落在免右键面里（**整片**语义：一路查到文档根，任何一层命中即算）。
+ *
+ * 为什么是整片而不是"最近一层"：白名单表达的是「这一片没有菜单」——欢迎卡片里将来
+ * 挂什么子组件都不该冒出菜单来。欢迎页上浮起的模态（教程 / 首启动纸条 / 启动器）都是
+ * 卡片的**兄弟节点**，不在白名单面里，所以它们自己的面照旧工作。
+ */
+function insideSuppressedSurface(target: HTMLElement): boolean {
+  if (SUPPRESSED_SURFACE_IDS.size === 0) return false;
+  let node = target.closest<HTMLElement>('[data-context-surface]');
+  while (node !== null) {
+    const id = node.getAttribute('data-context-surface');
+    if (id !== null && SUPPRESSED_SURFACE_IDS.has(id)) return true;
+    const parent = node.parentElement;
+    node = parent === null ? null : parent.closest<HTMLElement>('[data-context-surface]');
+  }
+  return false;
+}
 
 /** 面的构建上下文（面据此判断「刚才点的是哪一行 / 哪个元素」） */
 export interface ContextSurfaceBuildContext {
@@ -306,11 +345,9 @@ export function buildContextMenuRoute(
   target: HTMLElement,
   event: MouseEvent,
 ): ContextMenuRoute | null {
-  // 零级：免右键白名单——这一片明确"没话说"，连兜底都不给（欢迎页见 NO_CONTEXT_MENU_ATTR）。
-  // `closest` 是**整片**语义（一路查到文档根）：标记面内部的任何元素都不出菜单。
-  // 欢迎页上浮起的模态（教程 / 首启动纸条 / 启动器）都是卡片的**兄弟节点**，不在标记里，
-  // 所以它们自己的面照旧工作。
-  if (target.closest(`[${NO_CONTEXT_MENU_ATTR}]`) !== null) return null;
+  // 零级：免右键白名单（清单里 `suppressMenu: true` 的面，目前只有欢迎页）——
+  // 这一片明确"不该有菜单"，连兜底都不给。
+  if (insideSuppressedSurface(target)) return null;
   // 一级：输入类面**优先于一切容器面**——输入框里的剪切/复制/粘贴/撤销重做是通用编辑语义，
   // 不能被容器面（浮窗/面板/对话框/设置页）截走：右键输入框却弹出「关闭窗口」是错的行为。
   // 各面若想在输入框上给专属动作，靠 `input` 面自己的 build 分支去做，别在外层抢。

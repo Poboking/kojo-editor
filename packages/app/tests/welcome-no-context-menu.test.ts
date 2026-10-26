@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 欢迎页**免右键白名单**的判据（2026-10-26，接替原 `pages-menus.test.ts`）。
+ * 欢迎页**免右键面**的判据（2026-10-26，接替原 `pages-menus.test.ts`）。
  *
  * ## 为什么这页从"有菜单"变成"不出菜单"
  *
@@ -10,17 +10,26 @@
  * ⇒ 弹窗态的菜单是一块没有定位的通栏裸块，遮罩算出 0 高（点空白关不掉），
  * 且 `.context-menu-backdrop` 只要在文档里整窗拖动就被 `canStartWindowDragFrom` 拒掉。
  *
- * 处置：欢迎页进**免右键白名单**（`NO_CONTEXT_MENU_ATTR`），整条菜单子系统退役；
- * 几何同时下沉到轻档 `context-menu.css`（判据在 `context-menu-layering.test.ts`）。
- * 本文件钉住"白名单真的挡住、且只挡它自己那一片"，以及被保留下来的公共小件。
+ * 处置：欢迎页成为**免右键面**——清单里 `welcome` 带 `suppressMenu: true`，根路由第零级
+ * 命中即返回 `null`；整条菜单子系统退役。几何同时下沉到轻档 `context-menu.css`
+ * （判据在 `context-menu-layering.test.ts`）。
  *
- * 白名单是**整片**语义（`closest` 一路查到根）：标记里的任何元素都不出菜单，
- * 连输入框面与已登记的面都不问——欢迎页上浮起的模态是卡片的**兄弟节点**，不在标记里。
+ * ## 白名单为什么是清单的一列，而不是另一个标记
+ *
+ * 第一版用的是独立 DOM 标记（`data-no-context-menu`），2026-10-26 收口时改成清单字段：
+ * 清单本来就是"有哪些区域、各叫什么"的唯一真源，"这片出不出菜单"是同一件事的另一面；
+ * 两个机制并存 ⇒ 两处真源必然漂。现在宿主仍写 `data-context-surface="welcome"`（它确实是
+ * 一个有宿主的区域），"不出菜单"只在清单里说一次。
+ *
+ * 白名单是**整片**语义（一路查到文档根）：面里的任何元素都不出菜单，连输入框面与已登记的
+ * 面都不问——欢迎页上浮起的模态是卡片的**兄弟节点**，不在这一面里。
  */
 import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+// 副作用 import：欢迎页在模块顶层声明自己的面（"谁渲染谁声明"）
+import '../src/ui/WelcomeView';
 import {
   clipboardAvailable,
   copyText,
@@ -29,10 +38,10 @@ import {
 } from '../src/ui/context-menu-pages';
 import {
   CONTEXT_SURFACE_MANIFEST,
-  NO_CONTEXT_MENU_ATTR,
   buildContextMenuRoute,
   declareContextSurface,
   getContextSurface,
+  listSuppressedSurfaces,
 } from '../src/ui/context-surfaces';
 
 /**
@@ -67,10 +76,10 @@ const PAGES_SRC = read('ui/context-menu-pages.ts');
 const event = (): MouseEvent =>
   new MouseEvent('contextmenu', { bubbles: true, clientX: 8, clientY: 9 });
 
-/** 造一片带白名单标记的欢迎页，返回卡片里最深的那个元素（右键通常落在这种节点上） */
-function markedWelcome(): { root: HTMLElement; deep: HTMLElement } {
+/** 造一片欢迎页（面根 + 卡片 + 最深节点），返回卡片里那个最深的元素 */
+function mountWelcome(): { root: HTMLElement; deep: HTMLElement } {
   const root = document.createElement('div');
-  root.setAttribute(NO_CONTEXT_MENU_ATTR, '');
+  root.setAttribute('data-context-surface', 'welcome');
   const card = document.createElement('div');
   card.className = 'welcome-card';
   const deep = document.createElement('span');
@@ -86,16 +95,16 @@ function resetDom(): void {
   document.body.innerHTML = '';
 }
 
-describe('免右键白名单：欢迎页整片不出菜单', () => {
-  it('卡片里任意位置右键 ⇒ 一个菜单都不开（连兜底都不给）', () => {
+describe('免右键面：欢迎页整片不出菜单', () => {
+  it('面根里任意位置右键 ⇒ 一个菜单都不开（连兜底都不给）', () => {
     resetDom();
-    const { deep } = markedWelcome();
+    const { deep } = mountWelcome();
     expect(buildContextMenuRoute(deep, event())).toBeNull();
   });
 
   it('按钮里的文字也算同一片（行内深处不逃逸）', () => {
     resetDom();
-    const { root } = markedWelcome();
+    const { root } = mountWelcome();
     const button = document.createElement('button');
     const label = document.createElement('span');
     button.appendChild(label);
@@ -103,15 +112,15 @@ describe('免右键白名单：欢迎页整片不出菜单', () => {
     expect(buildContextMenuRoute(label, event())).toBeNull();
   });
 
-  it('标记里的输入框也不出菜单（轻档下不给第二个裸块机会）', () => {
+  it('面里的输入框也不出菜单（白名单先于输入框面）', () => {
     resetDom();
-    const { root } = markedWelcome();
+    const { root } = mountWelcome();
     const input = document.createElement('input');
     root.appendChild(input);
     expect(buildContextMenuRoute(input, event())).toBeNull();
   });
 
-  it('标记里即使有已登记的面，也不问它（面的 build 一次都不跑）', () => {
+  it('面里即使有已登记的面，也不问它（面的 build 一次都不跑）', () => {
     resetDom();
     let calls = 0;
     declareContextSurface({
@@ -123,7 +132,7 @@ describe('免右键白名单：欢迎页整片不出菜单', () => {
         return [{ id: 'status.demo', label: '演示项' }];
       },
     });
-    const { root } = markedWelcome();
+    const { root } = mountWelcome();
     const surfaceRoot = document.createElement('div');
     surfaceRoot.setAttribute('data-context-surface', 'status-bar');
     root.appendChild(surfaceRoot);
@@ -131,18 +140,18 @@ describe('免右键白名单：欢迎页整片不出菜单', () => {
     expect(calls).toBe(0);
   });
 
-  it('标记之外照旧：应用根仍给通用菜单——白名单没有把整站关掉', () => {
+  it('白名单之外照旧：应用根仍给通用菜单——白名单没有把整站关掉', () => {
     resetDom();
-    markedWelcome();
+    mountWelcome();
     const outside = document.createElement('div');
     document.body.appendChild(outside);
     const route = buildContextMenuRoute(outside, event());
     expect(route?.source).toBe('app-fallback');
   });
 
-  it('兄弟节点上的面照常接管（标记不是祖先就不挡）', () => {
+  it('兄弟节点上的面照常接管（面根不是祖先就不挡）', () => {
     resetDom();
-    markedWelcome();
+    mountWelcome();
     declareContextSurface({
       id: 'tutorial',
       ariaLabel: '教程菜单',
@@ -159,30 +168,39 @@ describe('免右键白名单：欢迎页整片不出菜单', () => {
   });
 });
 
-describe('欢迎页不再自称「面」', () => {
-  it('清单里没有 welcome / welcome-recent（白名单不是面，别混进权威清单）', () => {
-    const ids = CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id);
-    expect(ids).not.toContain('welcome');
-    expect(ids).not.toContain('welcome-recent');
+describe('白名单是清单的一列（不是第二张表）', () => {
+  const manifestOf = (id: string) => CONTEXT_SURFACE_MANIFEST.find((entry) => entry.id === id);
+
+  it('清单里 welcome 带 suppressMenu: true，且它是唯一一个免右键面', () => {
+    expect(manifestOf('welcome')?.suppressMenu).toBe(true);
+    expect(listSuppressedSurfaces()).toEqual(['welcome']);
   });
 
-  it('也没有任何模块再声明这两个 id（声明了就会重新接上菜单）', () => {
-    expect(getContextSurface('welcome')).toBeUndefined();
+  it('免右键面不许有 build（有 build = 有人还想给它菜单，两处说法打架）', () => {
+    for (const id of listSuppressedSurfaces()) {
+      expect(getContextSurface(id), `${id} 未声明`).toBeDefined();
+      expect(getContextSurface(id)?.build, `${id} 免右键却有 build`).toBeUndefined();
+    }
+  });
+
+  it('清单里没有 welcome-recent（行级面随菜单一起退役，整页一片白名单即可覆盖）', () => {
+    expect(manifestOf('welcome-recent')).toBeUndefined();
     expect(getContextSurface('welcome-recent')).toBeUndefined();
   });
 
-  it('WelcomeView 根元素带白名单标记，且不再有 data-context-surface="welcome"', () => {
-    expect(WELCOME_SRC).toContain('data-no-context-menu');
-    expect(WELCOME_SRC).not.toContain('data-context-surface="welcome"');
-    // 行级面也撤了：行上不再挂面 id，也不再挂只给菜单读的行数据
-    expect(WELCOME_SRC).not.toContain('data-context-surface="welcome-recent"');
-    expect(WELCOME_SRC).not.toContain('data-recent-root');
+  it('欢迎页真有面根、真有声明（清单 ⇄ 宿主对账，与 context-coverage 同一把尺）', () => {
+    expect(WELCOME_SRC).toContain('data-context-surface="welcome"');
+    expect(WELCOME_SRC).toContain("declareContextSurface({ id: 'welcome'");
+    // 第一版的独立 DOM 标记已退役：不许再有两套机制并存
+    expect(WELCOME_SRC).not.toContain('data-no-context-menu');
   });
 
   it('WelcomeView 不再注册接线桥，也没有"菜单回执"那一行了', () => {
     expect(WELCOME_SRC).not.toContain('registerWelcomeMenuBridge');
     expect(WELCOME_SRC).not.toContain('useMenuNote');
     expect(WELCOME_SRC).not.toContain('welcome-menu-note');
+    // 行上不再挂只给菜单读的行数据
+    expect(WELCOME_SRC).not.toContain('data-recent-root');
   });
 
   it('context-menu-pages 只剩公共小件（欢迎页菜单构建器全退役）', () => {
