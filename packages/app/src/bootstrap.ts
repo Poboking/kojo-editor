@@ -507,8 +507,14 @@ let launcherPluginTask: Promise<void> | null = null;
 
 /** 装载并初始化启动器核心；失败清缓存以便重试（同 `ensureProjectPlugins` 口径） */
 export function ensureLauncherPlugin(kernel: Kernel): Promise<void> {
-  launcherPluginTask ??= import('@kojo/plugin-launcher-core')
-    .then(async ({ createLauncherPlugin }) => {
+  launcherPluginTask ??= Promise.all([
+    import('@kojo/plugin-launcher-core'),
+    // 宿主桥与插件同一拍挂上：`launcher` 面**故意不在** `tauri-bridge.ts` 里静态写，
+    // 否则 12 KB 桥面会算进开机静态图（PS-10）。挂晚了插件初始化就找不到宿主。
+    import('./bridge/launcher-bridge'),
+  ])
+    .then(async ([{ createLauncherPlugin }, { attachLauncherBridge }]) => {
+      attachLauncherBridge(tauriBridge);
       // 重试时插件可能已在表里（register 对同 id 是抛错）——先问一遍再注册
       if (!kernel.plugins.list().some((plugin) => plugin.id === 'launcher-core')) {
         await kernel.registerPlugin(createLauncherPlugin({ decodeBytes: decodeWithProbe }));

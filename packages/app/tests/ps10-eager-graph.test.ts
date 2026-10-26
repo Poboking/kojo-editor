@@ -450,26 +450,9 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     文件数不动、KB **+7**（该批落进首屏的 ERB 装配段；同一棵树上把它摘掉即读回 2,860）。
     //     闸随现值 **2,860 → 2,870**——这是"把上游已落地的红修回绿"，不是顺手放宽：
     //     增量已点名到 A2，且 2,870 正是本档在 A2 之前的上一次闸值。
-    //   - **启动器落地批 L3c（2026-10-26，桌面壳桥）**：现读数 **195 文件 / 2,881 KB**，
-    //     两枚闸随现值上抬（194 → **195** 文件、2,870 → **2,890** KB）。增量逐块点名
-    //     （+1 文件 / +12,295 B，源码字节实量，与读数逐字对得上）：
-    //     · +11,798 B `packages/app/src/bridge/launcher-bridge.ts`（**新进图**）：
-    //       `PlatformBridge.launcher` 的实现——Rust 20 条 `launcher_*` 命令与 4 条
-    //       `kojo:launcher-*` 事件的逐条接线（一个方法 = 一条命令）+ `LauncherErrorDto`
-    //       → `LauncherBridgeError` 的码 / 细节 / 可重试三字段透传 + 订阅的同步取消句柄。
-    //       由 `tauri-bridge.ts` 静态引（`bootstrap.ts` 静态引后者 ⇒ 进开机图）。
-    //       为什么**没有**改成懒装载：契约里 `onProcess/onLog/onTask/onInstance` 的返回值
-    //       是同步的 `Unsubscribe`，动态 import 兑现不了同步句柄；而把它藏进首屏之后的
-    //       `import()` 只是把同一次解析挪后几毫秒，反而让闸看不见真实成本（与上面 L1b 那段
-    //       `kernel/launcher.ts` 的取舍同族：一种能力一个服务键，平台桥就是它的实现方）。
-    //     · +497 B `packages/app/src/bridge/tauri-bridge.ts`：`launcher: launcherBridge`
-    //       属性的接线与那段说明（"只有桌面壳有这个面，Node 桥缺席"）。
-    //     没有整包回灌：成员断言（插件包只许两个常驻 + 两个已知漏点）仍全绿；插件侧
-    //     （`launcher-core`）与视图侧（`app/src/launcher`）仍全在动态边上。
-    //     文件闸 **195 顶格 0 余量**：下一枚进图的模块必须先挪一个出去。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤195 文件 / ≤2,890 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_890);
-    expect(files.length).toBeLessThanOrEqual(195);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,870 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_870);
+    expect(files.length).toBeLessThanOrEqual(194);
   });
 
   /**

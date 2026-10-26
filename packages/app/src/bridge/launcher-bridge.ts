@@ -16,6 +16,7 @@ import type {
   LaunchProfile,
   LogQuery,
   LogSession,
+  PlatformBridge,
   ProcessStatus,
   RemoveInstanceOptions,
   StopOptions,
@@ -276,3 +277,18 @@ export const launcherBridge: LauncherHostBridge = {
   onInstance: (listener: (event: LauncherInstanceEvent) => void) =>
     subscribe<LauncherInstanceEvent>('kojo:launcher-instance', listener),
 };
+
+/**
+ * 把启动器桥挂到平台对象上（**唯一**挂载点，由 `bootstrap.ts::ensureLauncherPlugin` 调用）。
+ *
+ * 为什么是"后挂"而不是在 `tauri-bridge.ts` 里静态写上 `launcher: launcherBridge`：
+ * 那会把整份桥（20 条命令 + 4 条事件 + 错误映射，约 12 KB 源码）算进开机静态图，
+ * 而启动器视图是懒装载的——**桥也应该只在启动器真被打开时才解析**。PS-10 的开机图
+ * 闸量得出来这一枚文件（实测 +1 文件 / +12 KB）。
+ *
+ * 幂等：重复调用不覆盖已挂的（同一进程内只有一份桥；将来若按能力分平台实现，
+ * 先挂者胜，调用方自己负责判定）。
+ */
+export function attachLauncherBridge(platform: PlatformBridge): void {
+  platform.launcher ??= launcherBridge;
+}

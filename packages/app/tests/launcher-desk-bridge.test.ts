@@ -10,9 +10,11 @@
  *    retryable 一个不少）；非 DTO 的拒绝原样上抛，不冒充启动器错误码。
  * 4. **事件**：四条事件名逐字、载荷原样（含 `seq`）、**不去重**（同一 seq 到两次就转两次）。
  * 5. **`Unsubscribe` 真取消**：订阅完成后取消、以及"还没订阅上就取消"两条路径都要退订。
- * 6. **能力缺席语义**：Tauri 桥有 `launcher`，Node 桥**没有**（缺席 = 无此能力，
- *    由内核透传层给一句人话，本层不兜底造假）。
+ * 6. **能力缺席语义**：Tauri 桥的 `launcher` 是**懒挂载**的（`attachLauncherBridge`，
+ *    由 `bootstrap::ensureLauncherPlugin` 调用），静态文件里不许出现它；Node 桥从不挂
+ *    （缺席 = 无此能力，由内核透传层给一句人话，本层不兜底造假）。
  */
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LaunchProfile, PlatformBridge } from '@kojo/plugin-api';
 
@@ -32,7 +34,7 @@ vi.mock('../src/bridge/invoke', () => ({
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 
-import { LauncherBridgeError, launcherBridge } from '../src/bridge/launcher-bridge';
+import { LauncherBridgeError, attachLauncherBridge, launcherBridge } from '../src/bridge/launcher-bridge';
 import { tauriBridge } from '../src/bridge/tauri-bridge';
 import { NodeBridge } from '../../kernel/tests/helpers/node-bridge';
 
@@ -418,9 +420,22 @@ describe('启动器桥 · 事件订阅（名字逐字、载荷原样、不去重
 });
 
 describe('启动器桥 · 能力缺席语义（PlatformBridge.launcher 是可选字段）', () => {
-  it('Tauri 桥有 launcher：20 条命令 + 4 条事件全在', () => {
-    const face = tauriBridge.launcher;
+  it('Tauri 桥**静态不带** launcher：懒挂载前缺席（PS-10：桥面不进开机图）', () => {
+    // 这条是"不该发生的事"也钉住：谁把 `launcher: launcherBridge` 写回 tauri-bridge，
+    // 开机静态图会多一枚文件，这里先红。
+    expect(tauriBridge.launcher).toBeUndefined();
+    const src = readFileSync(new URL('../src/bridge/tauri-bridge.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/from '\/launcher-bridge'/);
+  });
+
+  it('懒挂载后 20 条命令 + 4 条事件全在，且重复挂载幂等', () => {
+    const platform: PlatformBridge = { ...tauriBridge };
+    attachLauncherBridge(platform);
+    const face = platform.launcher;
     expect(face).toBeDefined();
+    const once = platform.launcher;
+    attachLauncherBridge(platform);
+    expect(platform.launcher).toBe(once);
     for (const row of ROWS) expect(typeof (face as unknown as Record<string, unknown>)[row.method]).toBe('function');
     for (const method of ['onProcess', 'onLog', 'onTask', 'onInstance']) {
       expect(typeof (face as unknown as Record<string, unknown>)[method]).toBe('function');

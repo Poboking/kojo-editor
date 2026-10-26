@@ -14,7 +14,6 @@ import type {
 } from '@kojo/plugin-api';
 import {errorText,  DECODE_LABEL } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
-import { launcherBridge } from './launcher-bridge';
 import { decodeReadFilesFrame } from './read-files-frame';
 
 /**
@@ -340,14 +339,11 @@ export const tauriBridge: PlatformBridge = {
     return base64ToBytes(b64);
   },
 
-  /**
-   * 启动器宿主原语（20 条 `launcher_*` 命令 + 4 条事件）：实现在叶子文件
-   * `launcher-bridge.ts`（一个方法 = 一条命令；DTO 与错误映射的理由都在那边）。
-   *
-   * **只有桌面壳有这个面**：Node 桥（测试与 CLI）与 Web 调试宿不实现 ⇒ 内核透传层
-   * （`kernel/src/launcher.ts`）给一句人话。本层不兜底造假数据。
-   */
-  launcher: launcherBridge,
+  // `launcher`（20 条命令 + 4 条事件）**故意不在这里静态挂上**：它只由
+  // `bootstrap.ts::ensureLauncherPlugin` 在用户真要开启动器时 `import()` 后
+  // `attachLauncherBridge(tauriBridge)` 挂进来（见 `bridge/launcher-bridge.ts`）。
+  // 静态挂载会把 12 KB 桥面拖进欢迎页的开机静态图——PS-10 量得出来。
+  // 缺席语义：Node 桥（测试 / CLI）与 Web 调试宿从不挂 ⇒ 内核透传层给一句人话。
 };
 
 /**
