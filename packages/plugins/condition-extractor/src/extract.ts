@@ -28,6 +28,7 @@ import type {
   StateDependency,
   VariableInfo,
 } from '@kojo/plugin-api';
+import { erbContinuationJoin, erbContinuationRoleOf } from '@kojo/plugin-api';
 import { dependencyKey, erbCodeBodyOf, erbCodePrefixLength } from '@kojo/plugin-api';
 import { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
 import { scanBraceTernaries, scanTextTernaries } from './inline';
@@ -398,10 +399,16 @@ export function collectReturns(
 
 /**
  * `{` … `}` 行连接（Emuera `EraStreamReader.ReadEnabledLine` 语义）：
- * 孤行 `{` 起、孤行 `}` 止，块内物理行**按一个空格**拼成一条逻辑行。
+ * 孤行 `{` 起、孤行 `}` 止，块内物理行按引擎的分隔串拼成一条逻辑行。
  *
  * 骨架扫描只有单行视野，`IF A &&` 折行时只拿到半句 ⇒ 解析整体降级 opaque。
  * 这里在**既有语句边界**（孤行 `{` / `}`）内补全原文，再交给同一个表达式解析器。
+ *
+ * 两处判据（"这是不是标记行"与"怎么拼"）自 2026-10-26 A2 批起**不在本文件里**：
+ * 真源是 `@kojo/plugin-api` 的 `erbContinuationRoleOf` / `erbContinuationJoin`，与
+ * `erb-parser/src/erh.ts`（头文件形态）、`erb-syntax-tree/grammar.js`（CST 块）同源。
+ * 在此之前的私有实现在拼接分隔符上与引擎不一致（`join(' ')` 恰好对，但另一处
+ * `join('')` 不对），这类"两处各写一遍"正是要消灭的东西（PITFALLS 211/216 同族）。
  *
  * @returns 拼接后的表达式；语句不在块内 / 块未闭合 ⇒ null（调用方保留原样：
  *          残句继续 opaque，opaque 仍可查，绝不猜）。
@@ -411,7 +418,7 @@ export function joinBracedExpression(
   expression: string,
   lines: readonly string[],
 ): string | null {
-  // 语句前最近的非空 / 非注释行必须是孤立的 `{`（Emuera 要求 `{` 行只含 `{`）
+  // 语句前最近的非空 / 非注释行必须是孤立的 `{`（引擎要求 `{` 行只含 `{`）
   let open = stmtLine - 2;
   while (open >= 0) {
     const probe = (lines[open] ?? '').trim();
@@ -421,14 +428,15 @@ export function joinBracedExpression(
     }
     break;
   }
-  if (open < 0 || (lines[open] ?? '').trim() !== '{') return null;
+  if (open < 0 || erbContinuationRoleOf(lines[open] ?? '') !== 'open') return null;
 
   const parts: string[] = [];
   const head = expression.trim();
   if (head.length > 0) parts.push(head);
   for (let i = stmtLine; i < lines.length; i++) {
+    const role = erbContinuationRoleOf(lines[i] ?? '');
+    if (role === 'close') return erbContinuationJoin(parts);
     const probe = (lines[i] ?? '').trim();
-    if (probe === '}') return parts.join(' ');
     if (probe.length > 0) parts.push(probe);
   }
   return null; // 未闭合的块：不拼接（Emuera 会报错；这里保守回退到原样 opaque）

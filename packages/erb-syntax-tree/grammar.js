@@ -28,6 +28,12 @@
  *   分支段有 `(branch_block)`，折叠查询直接取它。
  * - **[SKIPSTART]…[SKIPEND]**：`skip_block`，区内原文由一个 external scanner 一次吞成
  *   `skip_body`（不解析、不产行节点）——区间内可以有任何字符（含 `@`、控制词、未闭合引号）。
+ * - **行连接 `{` … `}`**（引擎 `EraStreamReader.ReadEnabledLine`，2026-10-26 A2 批）：
+ *   `(continuation_block)`，块内物理行**仍是普通行节点**（保行号与增量）；`{` 包住**控制语句头**
+ *   的那一类（真语料 249 例）不建此块 —— `{` 作控制块的可选前缀、`}` 作块内浮动标记，
+ *   控制块因此仍从关键字行收到自己的收束行（详见 `CONTROL_BLOCK_RULES` 上方与
+ *   `continuation_block` 的头注）。两个标记是 **external 记号**（`scanner.c` 判 `get_column()==0`），
+ *   行内/行尾的散 `{`/`}` 一律走 `brace_literal` —— 字符画行尾的 `{` 才不会把整段吞成块头。
  * - **字符串与 FORM 切分**：行内 `"…"` 成为 `(string)`；串内/串外的 `{…}` 成
  *   `(form_interpolation)`、`%…%` 成 `(form_substitution)`。**只是词法切分**：不求值、不认函数名，
  *   也不保证括号配对（ASCII 画里的散 `{`/`}` 落成 `brace_literal`，绝不因此报错）。
@@ -85,6 +91,8 @@ const P = {
   brace: 1,
   percent: 1,
   bracket: 2,
+  // 行连接标记是 external 记号（行首锚点在 `scanner.c` 里判），此表只给块内 `@` 起手的串正文行用。
+  continuation: 3,
   comment: 4,
   directive: 4,
   dim_directive: 6,
@@ -127,7 +135,6 @@ const CONTROL_LINE_RULES = (() => {
 /** 某一角色的词对应的行规则引用（`$[name]` 形式交给 grammar）。 */
 const lineRefs = (words) => words.map((w) => lineNode(w));
 
-
 /** `#DIM` 族声明词：一级分支逐字母展开大小写；之后必须跟一个水平空白才成声明。 */
 const DIM_ALT = [...S.dimDirectives].sort((a, b) => b.length - a.length || cmp(a, b)).map(ci).join('|');
 const DIM_KEYWORD = `#(?:${DIM_ALT})[ \\t\\f\\u3000]`;
@@ -135,7 +142,18 @@ const DIM_KEYWORD = `#(?:${DIM_ALT})[ \\t\\f\\u3000]`;
 const DIM_MODIFIER_ALT = [...S.dimModifiers].sort((a, b) => b.length - a.length || cmp(a, b)).map(ci).join('|');
 const DIM_MODIFIER = `(?:${DIM_MODIFIER_ALT})[ \\t\\u3000]+`;
 
-/** 控制流块规则（逐配对类别生成；字面量只来自 structure.json）与分支段规则。 */
+/**
+ * 控制流块规则（逐配对类别生成；字面量只来自 structure.json）与分支段规则。
+ *
+ * 行连接 `{` 的**控制头**形（8 盘实测 249 例：IF 153 / SELECTCASE 42 / ELSEIF 33 / CASE 16 /
+ * WHILE 3 / DO 1 / FOR 1）：`{` 包住的经常**就是一条控制语句的头**，`}` 收束，`IF` 的体从
+ * `}` 之后才开始。
+ *
+ * 这类不落成 `continuation_block`（那样会把 `if_block` 拦腰截断，`ENDIF` 变成孤儿，
+ * 折叠区间从 39..58 缩成 38..43 —— 服务侧行扫描器照旧折 39..58，对拍直接少折）。
+ * 改为：`{` 作控制块的**可选前缀**、`}` 作块内**可浮动的收束标记**（见 `_body_item`），
+ * 控制块因此仍从关键字行一直收到自己的收束行。
+ */
 const CONTROL_BLOCK_RULES = {};
 const CONTROL_BLOCK_NAMES = [];
 for (const pair of PAIR_NAMES) {
@@ -149,16 +167,27 @@ for (const pair of PAIR_NAMES) {
   if (branches.length === 0) {
     CONTROL_BLOCK_RULES[`${pair}_block`] = ($) =>
       seq(
+        optional($.continuation_open),
         field('open', choice(...opens.map((n) => $[n]))),
         repeat($._body_item),
         field('close', choice(...closes.map((n) => $[n]))),
       );
   } else {
     const branchBlock = `_${pair}_branch_block`;
+    // `prec.right`：分支段之间是 `repeat(分支段)`，而每段都可带 `{` 前缀 ⇒ 见 `{` 时
+    // "再开一段"与"结束重复"都能推。右结合让它**贪心**取"再开一段"，这也正是唯一能活下来的
+    // 那条路（结束后下一枚记号只能是收束行，不可能是 `{`）。
     CONTROL_BLOCK_RULES[branchBlock] = ($) =>
-      seq(field('branch', choice(...branches.map((n) => $[n]))), repeat($._body_item));
+      prec.right(
+        seq(
+          optional($.continuation_open),
+          field('branch', choice(...branches.map((n) => $[n]))),
+          repeat($._body_item),
+        ),
+      );
     CONTROL_BLOCK_RULES[`${pair}_block`] = ($) =>
       seq(
+        optional($.continuation_open),
         field('open', choice(...opens.map((n) => $[n]))),
         repeat($._body_item),
         repeat(alias($[branchBlock], $.branch_block)),
@@ -192,7 +221,8 @@ module.exports = grammar({
   // 水平空白 / CRLF 的 CR / BOM 是 extras；**换行不是**（由 _newline 记号认领，见头注）。
   extras: () => [/[ \t\r\f\u3000\uFEFF]+/],
 
-  externals: ($) => [$._skip_start, $._skip_body, $._skip_end],
+  // 顺序即 external token id（与 `src/scanner.c` 的 enum 一一对应，改这里必须同步那边）。
+  externals: ($) => [$._skip_start, $._skip_body, $._skip_end, $._continuation_open, $._continuation_close],
 
   // 行族 token 之间靠"最长匹配 + token(prec) 数字"裁决；块/行两义由规则位置区分，无 conflicts 表。
   rules: {
@@ -202,14 +232,29 @@ module.exports = grammar({
       choice(
         $.function_block,
         $.skip_block,
+        $.continuation_block,
         $._control_block,
         $._line,
         $._orphan_control_line,
         $._newline,
       ),
 
-    /** 函数体 / 控制流体内的行集合（不含函数头，不含孤儿收束）。 */
-    _body_item: ($) => choice($.skip_block, $._control_block, $._line, $._newline),
+    /**
+     * 函数体 / 控制流体内的行集合（不含函数头，不含孤儿收束）。
+     *
+     * `continuation_close` 单列一支：控制头被 `{`…`}` 包住时，`}` 落在控制块**体内**
+     * （`{` → `IF …` 续行 → `}` → 体 → `ENDIF`），它不是语句、也不是块的收束，
+     * 而是一个"行连接到此为止"的浮动标记。
+     */
+    _body_item: ($) =>
+      choice(
+        $.skip_block,
+        $.continuation_block,
+        $.continuation_close,
+        $._control_block,
+        $._line,
+        $._newline,
+      ),
 
     _newline: () => /\n/,
 
@@ -358,7 +403,16 @@ module.exports = grammar({
             $.percent_literal,
             $.brace_literal,
           ),
-          repeat(choice($._line_chunk, $.string, $.form_interpolation, $.form_substitution, $.percent_literal, $.brace_literal)),
+          repeat(
+            choice(
+              $._line_chunk,
+              $.string,
+              $.form_interpolation,
+              $.form_substitution,
+              $.percent_literal,
+              $.brace_literal,
+            ),
+          ),
           optional($.comment_inline),
         ),
       ),
@@ -424,6 +478,65 @@ module.exports = grammar({
     form_substitution: () => tkSrc(P.substitution, '%[^%\\r\\n]*%'),
     percent_literal: () => tkSrc(P.percent, '%'),
     brace_literal: () => tkSrc(P.brace, '[{}]'),
+
+    // ============================================================
+    // 行连接 `{` … `}`（Emuera `EraStreamReader.ReadEnabledLine`）
+    // ============================================================
+    /**
+     * **整行只有 `{`** 起、**整行只有 `}`** 止，块内物理行在引擎里被拼成**一条**逻辑行。
+     *
+     * 形状取舍（2026-10-26 A2 批，8 盘 13,509 份 `.erb` 实测）：
+     * - **块内行仍是普通行节点**（`_line` / `_newline`），不另造行类。行号、增量重解、
+     *   着色都沿用既有那条路——这是"块只加一层壳"的代价最小的做法。
+     * - **块内不收控制词整行**：`{` 包住控制语句头的 249 例（见 `CONTROL_BLOCK_RULES` 上方的
+     *   注释）不走本块，改由控制块把 `{` 当前缀、把 `}` 当块内浮动标记吸收。第一版把控制词
+     *   也收进块内，结果 `if_block` 被截断成 `continuation_block`＋孤儿 `ENDIF`，
+     *   8 盘对拍实测 **90 处折叠区间变少**（服务侧 39..58 vs 语法侧 38..43）。
+     * - **块不嵌套**：引擎在块内再遇 `{` 直接 `UnexpectedContinuation`；真语料 7,339 个块
+     *   零嵌套，所以这里也不给嵌套形状（给了反而会把"引擎拒收的文件"解析成合法）。
+     * - 两个标记行**连行尾换行一起吃掉**：判据是"整行只有它"，不吃换行就得靠 lookahead
+     *   （tree-sitter 不支持），而 `{ foo` 这类尾巴必须落回语句行/报错，不能被吞成块头。
+     *
+     * ## 与 `brace_literal` 的分界（含一枚踩过的坑）
+     *
+     * `{` 在行首还有两种身份：`form_interpolation`（`{…}` 同行闭合，词法优先级 60 直接胜）
+     * 与 `brace_literal`（散括号）。**标记只能出现在行首**，这条判据交给 external scanner
+     * （`scanner.c::scan_continuation_marker` 用 `get_column() == 0` 锚定；两枚标记字符本身不
+     * 在 C 里手抄，走 `src/skip-marker.h` 的投影，真源是 `plugin-api` 的 `ERB_CONTINUATION_MARKERS`）：
+     * tree-sitter 的正则没有行首锚点，`[ \t]*\{…` 从行中任意 `{` 起都能匹配，而真语料里
+     * 以 `{` 收尾的字符画（`PRINTL 　||::::::::::{`）就是这么被吞掉的（PITFALLS 223）。
+     * 第一版拿一枚行内高优先级孪生记号 `brace_text` 顶替，只能覆盖"语句行内部"这一种状态：
+     * 停在 `_body_item` 位置的行尾 `{` 照样被抢，eratw `M_KOJO_K77_AA字符画.ERB` 全文 2959 行
+     * 因此落 ERROR（`continuation_open@2654` 无配对 close，外层 `IF`/`ENDIF` 全部错配）。
+     */
+    continuation_block: ($) =>
+      seq(
+        field('open', $.continuation_open),
+        repeat($._continuation_body_item),
+        field('close', $.continuation_close),
+      ),
+    continuation_open: ($) => $._continuation_open,
+    continuation_close: ($) => $._continuation_close,
+    /**
+     * 块内以 `@` 起手、又不是 `@"` 的行（`@C:` / `@B:` / `@/C@` 这类着色码打头的串正文）。
+     *
+     * 为什么只在块内给：引擎把整块拼成**一条**逻辑行 ⇒ 块内任何行都不可能开一个函数，
+     * 这里是全局唯一能确定"`@` 起手 = 纯文本"的位置。块外不敢给——`@` 起手默认就是函数头，
+     * 让它能被文本行抢走会把每个函数都变成彩票。
+     *
+     * 优先级仍压不过 `_at_string_open`（60 > 3）：块内 `@"…` 照样落成 `at_string_line`，
+     * 与块外同形。
+     */
+    continuation_at_text: () => tkSrc(P.continuation, '@[^\\r\\n]*'),
+    /**
+     * 块内落点：普通行 + 换行 + `@` 起手的串正文行。
+     *
+     * **不含控制词整行**：控制头形（`{` → `IF …` → `}`）由控制块自己吸收标记，
+     * 这里若再认控制词，`{` 会先被吞成 `continuation_block`，控制块就永远开不起来
+     * （这一步的代价实测是 90 处折叠区间变少）。
+     */
+    _continuation_body_item: ($) =>
+      choice($._line, $._newline, $.continuation_at_text),
 
     comment_inline: () => tkSrc(P.comment_inline, ';[^\\r\\n]*'),
 

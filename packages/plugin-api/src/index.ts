@@ -447,6 +447,14 @@ export {
   erbPreprocRoleOf,
 } from './erb';
 export type { ErbPreprocCandidate, ErbPreprocRole } from './erb';
+// 行连接 `{` … `}`（2026-10-26 A2 批：两份私有判据 + 一处从来没写，收口成一份真源）
+export {
+  ERB_CONTINUATION_MARKERS,
+  ERB_CONTINUATION_SEPARATOR,
+  erbContinuationJoin,
+  erbContinuationRoleOf,
+} from './erb';
+export type { ErbContinuationRole } from './erb';
 // 索引状态事实（2026-10-19 additive，IDX-STATE 批独占追加）
 export type {
   ErbIndexCoverage,

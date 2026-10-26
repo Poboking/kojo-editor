@@ -50,9 +50,10 @@
  * - **注释行**：`SkipWhiteSpace` 把 `;` 到行尾整个吞掉（`st.Seek(0, End)`）后同样 `EOS`
  *   ⇒ 也跳过。注意 `;!;` / `;#;` 是**代码前缀**不是注释（`st.Jump(3)` 后继续），
  *   所以 `;!;#DIM X, 1` 是一条真声明；
- * - **`{` 行连接**：一行 trim 后正好是 `{` ⇒ 进入合流模式，随后各行原文**直接拼接**
- *   （`b.Append(line)`，无分隔符），收束的 `}` 不并入正文；`{` 行本身也不并入。
- *   合流后的那一条逻辑行才是引擎看到的东西。
+ * - **`{` 行连接**：一行 trim 后正好是 `{` ⇒ 进入合流模式，随后各行原文按引擎口径拼接
+ *   （`b.Append(line)` + `Config.ReplaceContinuationBR`，默认值去引号后是**一个半角空格**，
+ *   见 `plugin-api` 的 `ERB_CONTINUATION_SEPARATOR`），收束的 `}` 不并入正文；`{` 行本身
+ *   也不并入。合流后的那一条逻辑行才是引擎看到的东西。
  *
  * 这三条都不是理论风险：8 盘语料 648 份 `.ERH` 里 **54 份**把 `#DIMS CONST X = `
  * 后面的字符串表摊在 `{`…`}` 里。按"逐行看"判会在这 54 份上各报两条假红
@@ -73,6 +74,7 @@
  */
 
 import type { ErbStructureIssue } from '@kojo/plugin-api';
+import { ERB_CONTINUATION_MARKERS, erbContinuationJoin, erbContinuationRoleOf } from '@kojo/plugin-api';
 import { erbCodeBodyOf, isErbCommentLine } from './scanner';
 
 /**
@@ -156,12 +158,20 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
   let joined: string[] | null = null;
   let joinStart = 0;
 
-  /** 收块：把块内各行**原文直接拼接**（引擎 `b.Append(line)`，无分隔符）后按一条逻辑行判 */
+  /**
+   * 收块：把块内各行按引擎口径拼成**一条**逻辑行再判。
+   *
+   * 分隔符不是一个空格还是不留的"口味"问题——引擎是 `b.Append(line)` 之后紧跟
+   * `b.Append(Config.ReplaceContinuationBR.Replace("\"", ""))`，配置项默认值去引号后是
+   * **一个半角空格**（见 `plugin-api` 的 `ERB_CONTINUATION_SEPARATOR`）。此前这里写的是
+   * `join('')`：`#DIMS CONST X =` 与 `"A"` 拼成 `= "A"`（首行尾部自带空格）看不出差别，
+   * 但 `LOCAL` 与 `1` 这种会拼成 `LOCAL1`，与引擎看到的 `LOCAL 1` 是两个名字。
+   */
   const closeJoin = (): void => {
-    const body = erbCodeBodyOf((joined ?? []).join('').trim()).trim();
+    const body = erbCodeBodyOf(erbContinuationJoin(joined ?? []).trim()).trim();
     joined = null;
     if (body.length === 0) {
-      push(joinStart, '{', '行连接块里没有任何内容——Emuera 会把这条空逻辑行判成「不是 # 开头」并中止。');
+      push(joinStart, ERB_CONTINUATION_MARKERS.open, '行连接块里没有任何内容——Emuera 会把这条空逻辑行判成「不是 # 开头」并中止。');
       return;
     }
     judge(body, joinStart);
@@ -172,24 +182,35 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
     // 代码前缀（`;!;` / `;#;`）之后的才是正文；前缀与正文之间允许空白
     const body = erbCodeBodyOf(raw.trim()).trim();
     const lineNo = i + 1;
+    /** 块内的判据用**原文**（引擎内层循环不剥前缀：`;!;}` 在块内是正文，不是收束） */
+    const rawStart = raw.trimStart();
 
     if (joined !== null) {
-      if (body.length === 0) continue; // 块内空行：引擎 append 空串，不影响正文
-      if (body === '}') {
-        closeJoin();
+      if (rawStart.length === 0) continue; // 块内空行：引擎 append 空串，不影响正文
+      if (rawStart[0] === ERB_CONTINUATION_MARKERS.close) {
+        // 引擎：`TrimStart` 后首字符是 `}` ⇒ 再要求 `TrimEnd` 后整行等于 `}`
+        if (rawStart.trimEnd() === ERB_CONTINUATION_MARKERS.close) {
+          closeJoin();
+        } else {
+          // CharacterAfterContinuationEnd：引擎在该行就抛，块在此终止
+          push(
+            lineNo,
+            ERB_CONTINUATION_MARKERS.close,
+            '行连接的收束行 `}` 后面不能再有内容——Emuera 会判「行连接收束符后有多余字符」并中止。',
+          );
+          joined = null;
+        }
         continue;
       }
-      if (body.startsWith('}')) {
-        // 引擎：`}` 后面还有内容 ⇒ CharacterAfterContinuationEnd（中止，块内正文不再被解析）
-        push(lineNo, '}', '行连接的收束行 `}` 后面不能再有内容——Emuera 会判「行连接收束符后有多余字符」并中止。');
-        joined = null;
-        continue;
-      }
-      if (body.startsWith('{')) {
+      if (rawStart === ERB_CONTINUATION_MARKERS.open) {
         // 引擎：合流体内再遇 `{` ⇒ UnexpectedContinuation（中止）。
         // 报完**留在原块里**继续收（引擎在该行就停了，但这里若顺手把块状态丢掉，
         // 紧随其后的 `}` 会被判成"落单"，一条真错变成两条——多报一条也是假红）。
-        push(lineNo, '{', '行连接块里不能再开一个 `{`——Emuera 会判「意外的行连接开始」并中止。');
+        push(
+          lineNo,
+          ERB_CONTINUATION_MARKERS.open,
+          '行连接块里不能再开一个 `{`——Emuera 会判「意外的行连接开始」并中止。',
+        );
         continue;
       }
       joined.push(raw);
@@ -197,20 +218,28 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
     }
 
     if (body.length === 0 || isErbCommentLine(body)) continue; // 空行 / 全空白 / 注释行（前缀已剥）
-    if (body.startsWith('{')) {
+    if (body.startsWith(ERB_CONTINUATION_MARKERS.open)) {
       // 引擎要求 `{` **整行只有它自己**（`line.Trim() != "{"` ⇒ CharacterAfterContinuation）。
       // 报完照样开块、把 `{` 后面的尾巴当作块内第一段——这样紧随的 `}` 不会变成"落单"，
       // 作者修完 `{` 那一行就够了；引擎反正已经在这一行停了。
       joined = body.length > 1 ? [body.slice(1)] : [];
       joinStart = lineNo;
-      if (raw.trim() !== '{') {
-        push(lineNo, '{', '行连接的 `{` 必须单独占一行——Emuera 会判「行连接符号后有多余字符」并中止。');
+      if (erbContinuationRoleOf(raw) !== 'open') {
+        push(
+          lineNo,
+          ERB_CONTINUATION_MARKERS.open,
+          '行连接的 `{` 必须单独占一行——Emuera 会判「行连接符号后有多余字符」并中止。',
+        );
       }
       continue;
     }
-    if (body.startsWith('}')) {
+    if (body.startsWith(ERB_CONTINUATION_MARKERS.close)) {
       // 引擎在 `#` 检查之前就抛 UnexpectedContinuationEnd（ReadEnabledLine 里）
-      push(lineNo, '}', '这里没有正在合流的行连接块，却出现了 `}`——Emuera 会判「意外的行连接收束」并中止。');
+      push(
+        lineNo,
+        ERB_CONTINUATION_MARKERS.close,
+        '这里没有正在合流的行连接块，却出现了 `}`——Emuera 会判「意外的行连接收束」并中止。',
+      );
       continue;
     }
     judge(body, lineNo);
@@ -218,7 +247,11 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
 
   if (joined !== null) {
     // 引擎：读到文件尾仍没等到 `}` ⇒ NotCloseLineContinuation（中止）
-    push(joinStart, '{', '行连接块没有收束的 `}`——Emuera 会判「行连接没有结束」并中止。');
+    push(
+      joinStart,
+      ERB_CONTINUATION_MARKERS.open,
+      '行连接块没有收束的 `}`——Emuera 会判「行连接没有结束」并中止。',
+    );
   }
   return issues;
 }

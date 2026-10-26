@@ -12,26 +12,40 @@
 import { readFileSync } from 'node:fs';
 import { Parser, Language } from 'web-tree-sitter';
 import { compileQuery, foldRanges, parseStructureText } from '../src/index.ts';
+import { readErbText } from './text-read.mjs';
 
 const [wasmPath, mode, ...files] = process.argv.slice(2);
 if (!wasmPath || !mode || files.length === 0) {
   console.error('用法: node _corpus-worker.mjs <wasm> <parse|fold> <file...>');
   process.exit(2);
 }
+const T0 = Date.now();
+// 计时钩子：**默认关闭**，`KOJO_WORKER_TIMING=1` 才往 stderr 打点。
+// 留着的理由见 PITFALLS 226——每进程固定 ~15 秒才真正退出（wasm teardown），
+// 全量读数时间 ≈ 批数 × 15s；下次再怀疑"解析慢"时，用这几个点一眼分清是解析慢还是退出慢。
+const tm = (tag) => {
+  if (process.env.KOJO_WORKER_TIMING) {
+    console.error(`[wt] ${tag} ${Date.now() - T0}ms uptime=${Math.round(process.uptime() * 1000)}ms`);
+  }
+};
+tm('argv');
 
 await Parser.init();
+tm('Parser.init');
 const language = await Language.load(wasmPath);
+tm('Language.load');
 const parser = new Parser();
 parser.setLanguage(language);
 
 const foldsSource = readFileSync(new URL('../queries/folds.scm', import.meta.url), 'utf8');
 const foldsQuery = mode === 'fold' ? compileQuery(language, foldsSource) : null;
+tm('query');
 
 for (const file of files) {
   const out = { file, crash: 0, errors: 0, missing: 0, errRows: [], ms: 0 };
   let text;
   try {
-    text = readFileSync(file, 'utf8');
+    text = readErbText(file);
   } catch (e) {
     out.crash = 1;
     out.errRows = [String(e?.message ?? e)];
@@ -52,7 +66,10 @@ for (const file of files) {
   const stack = [tree.rootNode];
   while (stack.length) {
     const n = stack.pop();
-    if (n.isMissing) {
+    // 未闭合的 `{`…`}`：external 记号被错误恢复插成**零宽** close，tree-sitter 不给它
+    // `isMissing` ⇒ 按"零宽"计缺失（PITFALLS 223）。真实 `}` 至少一字节。
+    const injectedClose = n.type === 'continuation_close' && n.startIndex === n.endIndex;
+    if (n.isMissing || injectedClose) {
       out.missing++;
       if (out.errRows.length < 8) out.errRows.push(`MISSING@${n.startPosition.row + 1}`);
     } else if (n.type === 'ERROR') {
@@ -68,4 +85,6 @@ for (const file of files) {
 }
 
 parser.delete();
+tm('parser.delete');
+tm('exit');
 process.exit(0);

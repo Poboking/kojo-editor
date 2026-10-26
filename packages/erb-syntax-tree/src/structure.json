@@ -5,7 +5,9 @@
   },
   "markers": {
     "skipStart": "[SKIPSTART]",
-    "skipEnd": "[SKIPEND]"
+    "skipEnd": "[SKIPEND]",
+    "continuationOpen": "{",
+    "continuationClose": "}"
   },
   "preproc": {
     "open": "^\\[(?:IF\\s+[^\\]]*\\S|IF_DEBUG|IF_NDEBUG)\\]\\s*$",

@@ -20,7 +20,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = resolve(here, '..');
 const repoRoot = resolve(pkgRoot, '..', '..');
-const wasmPath = join(pkgRoot, 'tree-sitter-erb.wasm');
+// KOJO_ERB_WASM：A/B 对拍用（指向另一份 wasm，例如 HEAD 版），平时不设。
+const wasmPath = process.env.KOJO_ERB_WASM ?? join(pkgRoot, 'tree-sitter-erb.wasm');
 const worker = join(here, '_corpus-worker.mjs');
 const BATCH = 100;
 

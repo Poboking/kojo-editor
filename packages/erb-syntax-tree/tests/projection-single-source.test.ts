@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildStructure,
   loadTruth,
+  projectContinuationMarkers,
   projectControlFlow,
   projectPreproc,
   serializeSkipHeader,
@@ -141,6 +142,38 @@ describe('ERB 结构投影单源守卫', () => {
     }
   });
 
+  /**
+   * 行连接标记（`{` / `}`）：C 侧 `scanner.c` 要按字符比较，走的是同一张生成头。
+   * 这条闸钉三件事：头里的两枚字符 == 契约真源；现算投影同样等于真源；投影 fail-closed。
+   */
+  it('(b6) 行连接标记：生成头的两枚字符来自 ERB_CONTINUATION_MARKERS', async () => {
+    const contract = await import('../../plugin-api/src/erb.ts');
+    const markers = contract.ERB_CONTINUATION_MARKERS;
+    // ① 字节闸的另一面：头里的 C 字符字面量就是真源那两个字符
+    const header = readFileSync(HEADER_PATH, 'utf8');
+    expect(header).toContain(`#define ERB_CONTINUATION_OPEN_CHAR '${markers.open}'`);
+    expect(header).toContain(`#define ERB_CONTINUATION_CLOSE_CHAR '${markers.close}'`);
+    // ② 现算投影 == 真源（证明 (a) 的字节闸不是唯一防线）
+    expect(fresh.markers.continuationOpen).toBe(markers.open);
+    expect(fresh.markers.continuationClose).toBe(markers.close);
+    // ③ 行为对齐：契约层说"整行只有它"的判据与 C 侧同一口径（`trim` 后等值、非单字符不算）
+    expect(contract.erbContinuationRoleOf(markers.open)).toBe('open');
+    expect(contract.erbContinuationRoleOf(` ${markers.close}\t`)).toBe('close');
+    expect(contract.erbContinuationRoleOf(`x${markers.open}`)).toBeNull();
+    // ④ 变异闸：换一枚真源标记 ⇒ 投影与生成头立刻跟着变（证明它真吃输入而不是另抄）
+    const source = readFileSync(PREPROC_SOURCE_PATH, 'utf8');
+    const mutated = projectContinuationMarkers(source.replace("open: '{',", "open: '[',"));
+    expect(mutated.continuationOpen).toBe('[');
+    expect(mutated.continuationClose).toBe(markers.close);
+    const mutatedHeader = serializeSkipHeader({ ...fresh, markers: { ...fresh.markers, ...mutated } });
+    expect(mutatedHeader).toContain("#define ERB_CONTINUATION_OPEN_CHAR '['");
+    // ⑤ fail-closed 四种形态
+    expect(() => projectContinuationMarkers('export const 什么都不含 = 1;')).toThrow(/ERB_CONTINUATION_MARKERS/);
+    expect(() => projectContinuationMarkers(source.replace("close: '}',", ''))).toThrow(/close/);
+    expect(() => projectContinuationMarkers(source.replace("open: '{',", "open: '<<',"))).toThrow(/单个字符/);
+    expect(() => projectContinuationMarkers(source.replace("close: '}',", "close: '{',"))).toThrow(/相同/);
+  });
+
   it('(b5) 预处理投影 fail-closed：真源形态一变就抛，绝不静默留旧值', () => {
     const source = readFileSync(PREPROC_SOURCE_PATH, 'utf8');
     // ① 抽不到（真源没有那枚声明）
@@ -212,9 +245,11 @@ describe('ERB 结构投影单源守卫', () => {
     expect(bare, `grammar.js 代码区出现裸控制词：${bare.join(' ')}`).toEqual([]);
   });
 
-  it('(e) folds.scm 覆盖投影里的每个配对类别与三类容器', () => {
+  it('(e) folds.scm 覆盖投影里的每个配对类别与四类容器', () => {
     const folds = readFileSync(path.join(PKG, 'queries', 'folds.scm'), 'utf8');
-    for (const node of ['function_block', 'branch_block', 'skip_block']) {
+    // 四类容器：函数 / 分支 / 跳过区 / 行连接块（`continuation_block` 不是配对类别，投影里没有它，
+    // 故必须手列——漏掉它这条闸就哑了）
+    for (const node of ['function_block', 'branch_block', 'skip_block', 'continuation_block']) {
       expect(folds, `folds.scm 缺 (${node})`).toContain(`(${node}) @fold`);
     }
     for (const pair of Object.keys(fresh.controlFlow.pairs)) {

@@ -14,6 +14,10 @@
  *   `trimmed === '…'` 的等值判据（`parseErbText` / `forEachControlFlowLine` 两处），
  *   公开面没有导出 ⇒ 从源码文本抽 `trimmed === '…'`，并按紧随其后的
  *   `inSkipBlock = true|false` 判开/收。抽不到恰好一对就抛（fail-closed）。
+ * - **行连接标记**（`ERB_CONTINUATION_MARKERS`）：真源是 `plugin-api/src/erb.ts` 的
+ *   `{ open: '{', close: '}' }`。C 侧要按字符比较（`scanner.c` 的 `get_column() == 0` 判行首），
+ *   所以与 skip 标记走同一条生成头（`src/skip-marker.h`）——两处各抄一份的话，标记一改就会
+ *   退化成"某些文件的行连接块莫名消失"。抽不到 / 不是单字符 / 开收相同一律抛。
  * - **预处理条件块三枚正则**（`[IF …]` / `[ELSEIF …]` / `[ELSE]` / `[ENDIF]`）：真源是
  *   `packages/plugin-api/src/erb.ts` 的 `ERB_PREPROC_PATTERNS`（语言事实的**唯一**落点）。
  *   语言包**不许**运行期 import 插件，也不该 import 契约 barrel（把整张契约面拖进动态块），
@@ -80,6 +84,36 @@ export function projectMarkers(scannerSource) {
     throw new Error(`真源整行等值标记应恰为 1 开 1 收，实测开 ${starts.join('/') || '无'}、收 ${ends.join('/') || '无'}`);
   }
   return { skipStart: starts[0], skipEnd: ends[0] };
+}
+
+/** 行连接标记的契约真源声明（与 `ERB_PREPROC_PATTERNS` 同一份文件、同一条构建期通道）。 */
+const CONTINUATION_DECL = 'export const ERB_CONTINUATION_MARKERS';
+
+/**
+ * 从 `plugin-api/src/erb.ts` 抽行连接的两个标记字符（`ERB_CONTINUATION_MARKERS`）。
+ *
+ * 为什么要投影到 C 侧：`scanner.c` 判"整行只有它"时不能读 JSON（external scanner 只带
+ * 一段 C），skip 标记因此走 `skip-marker.h`；行连接标记是**同一类语言事实**，若在 C 里
+ * 手抄 `'{'` / `'}'`，契约层哪天改了标记（或加了全角变体），两处就会各说各话，而症状是
+ * "某些文件的行连接块莫名消失"——最难查的那种。⇒ 同一张投影表，同一条字节闸。
+ *
+ * fail-closed：声明抽不到 / 只抽到一枚 / 不是单字符 / 开收相同，一律抛。
+ */
+export function projectContinuationMarkers(source) {
+  const at = source.indexOf(CONTINUATION_DECL);
+  if (at < 0) throw new Error(`真源缺 ${CONTINUATION_DECL}（行连接标记的语言事实）`);
+  const window = source.slice(at, at + 400);
+  const pick = (role) => {
+    const m = new RegExp(`\\b${role}\\s*:\\s*'([^']*)'`).exec(window);
+    if (!m) throw new Error(`${CONTINUATION_DECL} 里找不到 ${role}（形态变了？）`);
+    const value = m[1];
+    if ([...value].length !== 1) throw new Error(`行连接 ${role} 标记应为单个字符，实测 ${JSON.stringify(value)}`);
+    return value;
+  };
+  const open = pick('open');
+  const close = pick('close');
+  if (open === close) throw new Error(`行连接开/收标记相同（${JSON.stringify(open)}），判据无意义`);
+  return { continuationOpen: open, continuationClose: close };
 }
 
 /**
@@ -258,7 +292,7 @@ export function projectControlFlow(words, classify) {
 
 /** 全部投影的纯函数形态（测试注入/变异用）。 */
 export function buildStructure({ scannerSource, erbSource, words, classify }) {
-  const markers = projectMarkers(scannerSource);
+  const markers = { ...projectMarkers(scannerSource), ...projectContinuationMarkers(erbSource) };
   const preproc = projectPreproc(erbSource);
   const dim = projectDimDirectives(scannerSource);
   const dimMods = projectDimModifiers(scannerSource);
@@ -280,20 +314,30 @@ export function serializeStructure(structure) {
 }
 
 /**
- * external scanner 的收区标记头（C 侧不能读 JSON）：`src/scanner.c` include 它。
+ * external scanner 的判据头（C 侧不能读 JSON）：`src/scanner.c` include 它。
  * 生成物同样受字节闸守护——标记改了却没重跑 build，scanner 会继续吞旧标记。
+ *
+ * 两类：整行等值标记（skip 区间，字符串形态）与行连接标记（单字符形态，C 里当 char 用）。
  */
 export function serializeSkipHeader(structure) {
   const start = structure?.markers?.skipStart;
   const end = structure?.markers?.skipEnd;
   if (typeof start !== 'string' || start.length === 0) throw new Error('projection 缺 markers.skipStart');
   if (typeof end !== 'string' || end.length === 0) throw new Error('projection 缺 markers.skipEnd');
+  const contOpen = structure?.markers?.continuationOpen;
+  const contClose = structure?.markers?.continuationClose;
+  if (typeof contOpen !== 'string' || [...contOpen].length !== 1) throw new Error('projection 缺 markers.continuationOpen');
+  if (typeof contClose !== 'string' || [...contClose].length !== 1) throw new Error('projection 缺 markers.continuationClose');
+  /** C 字符字面量：只转义引号与反斜杠（当前标记是 `{`/`}`，这里防的是语言事实变化）。 */
+  const charLiteral = (ch) => `'${ch === "'" || ch === '\\' ? `\\${ch}` : ch}'`;
   return [
-    '/* 生成文件：tools/gen-erb-structure.mjs 从 scanner.ts 的整行等值标记投影而来。禁手改。 */',
+    '/* 生成文件：tools/gen-erb-structure.mjs 从 scanner.ts 的整行等值标记 + plugin-api 的 ERB_CONTINUATION_MARKERS 投影而来。禁手改。 */',
     '#ifndef KOJO_ERB_SKIP_MARKER_H',
     '#define KOJO_ERB_SKIP_MARKER_H',
     `#define ERB_SKIP_START_MARKER "${start}"`,
     `#define ERB_SKIP_END_MARKER "${end}"`,
+    `#define ERB_CONTINUATION_OPEN_CHAR ${charLiteral(contOpen)}`,
+    `#define ERB_CONTINUATION_CLOSE_CHAR ${charLiteral(contClose)}`,
     '#endif',
     '',
   ].join('\n');

@@ -664,4 +664,86 @@ export const ERB_SKIP_MARKERS: Readonly<{ start: string; end: string }> = Object
   end: '[SKIPEND]',
 });
 
+// ---------------------------------------------------------------------------
+// `{` … `}` 行连接（语言事实的唯一落点）
+// ---------------------------------------------------------------------------
+
+/**
+ * 行连接的两个标记字符（Emuera `EraStreamReader.ReadEnabledLine` 的 line-continuation）。
+ *
+ * ## 语言事实
+ *
+ * **整行只有 `{`** 的那一行是"行连接开始"，**整行只有 `}`** 的是收束；两者之间的物理行
+ * 在引擎里被拼成**一条逻辑行**（`{` 与 `}` 本身不进正文）。所以它改变的是**行数语义**：
+ * `IF A &&` / `B` 两行是"半句 + 半句"，拼起来才是引擎看到的那条语句。
+ *
+ * 严格等值（`trim` 之后逐字等于标记）是引擎侧的实际判据，也是这里的判据：
+ * `{ 1, 2 }` 这类行内花括号是 FORM 插值，**不是**行连接；ASCII 画里落单的 `{`
+ * 若按"行首是 `{` 就算"判，会把整段画吞成一条语句。
+ *
+ * **不剥代码前缀**（与 `[SKIPSTART]` 那类判据不同）：引擎在 `{` 分支里判的是
+ * `line.Trim() != "{"`——对**整行**比。所以 `;!;{` 不成立行连接，它会走
+ * `CharacterAfterContinuation` 直接报错。宽容一档就会把"引擎拒绝加载的行"在我们这边
+ * 静默拼成合法逻辑行，作者永远看不到那条错。
+ *
+ * ## 为什么住在 `plugin-api`
+ *
+ * 这条判据至少有三处消费面，且分属**两个插件 + 一个语言包**：
+ * 结构体检的头文件形态（`erb-parser/src/erh.ts`）、条件抽取的多行条件拼接
+ * （`condition-extractor/src/extract.ts::joinBracedExpression`）、语法树的 CST 块
+ * （`erb-syntax-tree/grammar.js`）。插件之间禁止互相 import（解耦审计 C 项），语言包不许
+ * 依赖插件，所以**只有契约层能同时被三方引用**——与 `[SKIPSTART]` / 预处理三枚正则住在
+ * 同一层的理由完全相同（PITFALLS 211 那条纪律）。
+ *
+ * 本表落地前，这条判据在 `condition-extractor` 与 `erb-parser` 里**各写了一份**
+ * （`trim() === '{'` / `body === '{'`，且两处的拼接分隔符**还不一样**：`join(' ')` 与
+ * `join('')`），`erb-syntax-tree` 侧则根本没有（`{` 只当普通语句行）。第三处不是漂移，
+ * 是"从来没写"——与 PITFALLS 216 同族。
+ */
+export const ERB_CONTINUATION_MARKERS: Readonly<{ open: string; close: string }> = Object.freeze({
+  open: '{',
+  close: '}',
+});
+
+/**
+ * 行连接块内各物理行之间的**替换串**（引擎：`Config.ReplaceContinuationBR`）。
+ *
+ * 引擎原文是 `b.Append(line); b.Append(Config.ReplaceContinuationBR.Replace("\"", ""));`——
+ * 配置项默认值在 `ConfigData.setDefault()` 里写的是 `"\" \""`（引号 + 空格 + 引号），
+ * 去引号后就是**一个半角空格**。所以"两行直拼"（`join('')`）不是引擎行为：
+ * `LOCAL` / `1` 两行会拼成 `LOCAL1` 这种不存在的名字，而引擎看到的是 `LOCAL 1`。
+ */
+export const ERB_CONTINUATION_SEPARATOR = ' ';
+
+/** 行连接标记的角色：开始 / 收束 */
+export type ErbContinuationRole = 'open' | 'close';
+
+/**
+ * 一行的行连接角色；不是标记行 ⇒ `null`。
+ *
+ * **严格等值**：`trim` 之后整行必须恰好是那一个字符。`{ 1, 2 }` 是 FORM 插值，
+ * `;!;{` 是引擎会报 `CharacterAfterContinuation` 的坏行，两者都不是行连接。
+ */
+export function erbContinuationRoleOf(lineText: string): ErbContinuationRole | null {
+  const text = lineText.trim();
+  if (text === ERB_CONTINUATION_MARKERS.open) return 'open';
+  if (text === ERB_CONTINUATION_MARKERS.close) return 'close';
+  return null;
+}
+
+/**
+ * 把 `{`…`}` 之间的物理行拼成引擎看到的那**一条**逻辑行。
+ *
+ * 逐行原样拼接、行间补 {@link ERB_CONTINUATION_SEPARATOR}（空行也占一格，与引擎
+ * 无条件 `Append` 一致）。末尾不补分隔符——调用方一律 `trim()` 后使用，差一个尾随空格
+ * 不影响判据。
+ *
+ * **不做的事**：不剥 `;` 注释、不解释字符串。块内出现 `;` 时引擎会在合并后的单行流上
+ * 走 `SkipWhiteSpace` 的 `Seek(End)`，**把整条逻辑行的剩余部分全注释掉**；那是"判据该
+ * 看到的文本"层面的语义，不是拼接层面的，本函数只管拼。
+ */
+export function erbContinuationJoin(lines: readonly string[]): string {
+  return lines.join(ERB_CONTINUATION_SEPARATOR);
+}
+
 

@@ -4,28 +4,34 @@
  *
  * 两侧口径：
  *   · 服务侧 = `erbFoldingRanges(text)` 的 1 基行（函数块 + 控制流整块 + 分支段）；
- *   · 语法侧 = `folds.scm` 的 0 基行 +1（function_block / 各配对 block / branch_block / skip_block）。
+ *   · 语法侧 = `folds.scm` 的 0 基行 +1（function_block / 各配对 block / branch_block / skip_block /
+ *     continuation_block）。
  *
  * 判据（BOARD ERB-TS-STRUCTURE「折叠区间与服务逐项对拍」）：
  *   合法文件（0 ERROR / 0 MISSING）上，**服务侧的每个区间都必须被语法侧原样给出或被其包含**——
- *   语法侧可以多给（`[SKIPSTART]` 块、块头段由整块覆盖），但不能比现有服务少折。
+ *   语法侧可以多给（`[SKIPSTART]` 块、`{`…`}` 行连接块、块头段由整块覆盖），但不能比现有服务少折。
  *   服务侧多在「块头段」（开块行 → 首个分支前一行）：语法侧没有对应节点，由整块区间包含即可。
  *   `--gate`：存在未被包含的服务区间或崩溃时退 1（默认只读数）。
+ *
+ * **基线不是绿的**：A2 之前 erafl 就有 19 条，其中 5 条与文法无关（4 条空函数体 + 1 条函数尾部空行，
+ * 服务侧给区间、语法侧按零跨度滤掉）。看 A2/B 有没有引入回归要看**集合包含**，不看总数（PITFALLS 227）。
  *
  * 用法（仓库根）：
  *   node packages/erb-syntax-tree/tools/fold-compare.mjs
  *   node packages/erb-syntax-tree/tools/fold-compare.mjs --limit 300 --gate --json
  */
-import { readdirSync, existsSync, readFileSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { registerHooks } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readErbText } from './text-read.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = resolve(here, '..');
 const repoRoot = resolve(pkgRoot, '..', '..');
-const wasmPath = join(pkgRoot, 'tree-sitter-erb.wasm');
+// KOJO_ERB_WASM：A/B 对拍用（指向另一份 wasm，例如 HEAD 版），平时不设。
+const wasmPath = process.env.KOJO_ERB_WASM ?? join(pkgRoot, 'tree-sitter-erb.wasm');
 const worker = join(here, '_corpus-worker.mjs');
 const BATCH = 100;
 
@@ -135,7 +141,7 @@ let filesExact = 0;
 
 for (const row of rows) {
   if (row.crash) continue;
-  const text = readFileSync(row.file, 'utf8');
+  const text = readErbText(row.file);
   const lines = text.split(/\r?\n/);
   const blank = (line) => /^[ \t\r]*$/.test(lines[line - 1] ?? '');
   const svc = erbFoldingRanges(text);

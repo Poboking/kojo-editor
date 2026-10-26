@@ -9,6 +9,7 @@
 ;   · branch_block   = 分支行（ELSE / ELSEIF / CASE / CASEELSE / CATCH）→ 下一分支或收束前一行
 ;   · <pair>_block   = 开块行 → 收束行；配对类别由 `src/structure.json` 的投影决定
 ;   · skip_block     = `[SKIPSTART]` → `[SKIPEND]`（区间内原文不解析）
+;   · continuation_block = 孤行 `{` → 孤行 `}`（引擎的行连接；块内行仍是普通行节点，折叠只藏不改行号）
 ;   · 预处理条件块   = `[IF xxx]` / `[IF_DEBUG]` / `[IF_NDEBUG]` → `[ENDIF]`
 ;                      **不在本查询里**：文法不建块（被裁支可以不配平，建块会让真语料整篇 MISSING），
 ;                      配对由 `src/index.ts` 的 `collectPreprocFolds()` 在 CST 上补出。
@@ -19,6 +20,7 @@
 (function_block) @fold
 (branch_block) @fold
 (skip_block) @fold
+(continuation_block) @fold
 
 (if_block) @fold
 (select_block) @fold

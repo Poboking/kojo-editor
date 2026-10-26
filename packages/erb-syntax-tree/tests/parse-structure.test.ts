@@ -37,7 +37,12 @@ interface Fault {
 function faultsOf(root: Node): Fault[] {
   const out: Fault[] = [];
   const walk = (n: Node): void => {
-    if (n.isMissing || n.type === 'ERROR') out.push({ type: n.isMissing ? `MISSING:${n.type}` : 'ERROR', row: n.startPosition.row });
+    // 未闭合的 `{`…`}`：external 记号在错误恢复时会被插成**零宽** close，而 tree-sitter 只给
+    // 内部记号打 `isMissing` ⇒ 这里按"零宽"认作缺失（PITFALLS 223）。真实 `}` 至少一字节。
+    const injected = n.type === 'continuation_close' && n.startIndex === n.endIndex;
+    if (n.isMissing || injected || n.type === 'ERROR') {
+      out.push({ type: n.isMissing || injected ? `MISSING:${n.type}` : 'ERROR', row: n.startPosition.row });
+    }
     for (const c of n.namedChildren) walk(c);
   };
   walk(root);
@@ -537,5 +542,113 @@ describe('折叠查询 folds.scm', () => {
     expect(foldRanges(foldsQuery, open).some((r) => r.startRow === 1)).toBe(false);
     tree.delete();
     open.delete();
+  });
+});
+
+/**
+ * A2 · 行连接 `{` … `}`（引擎 `EraStreamReader.ReadEnabledLine`）
+ *
+ * 五种形状全部有真语料出处（8 盘 13,509 份 `.erb` 实测，判据写在 grammar.js 的
+ * `continuation_block` 头注里），这里各钉一条：
+ *
+ * 1. **纯文本块** → `continuation_block`（块内行仍是普通行节点）；
+ * 2. **控制头块** → `if_block` 把 `{` 当前缀、`}` 当块内浮动标记，仍一直收到 `ENDIF`。
+ *    这条是**回归闸**：第一版把控制词也收进 `continuation_block`，`if_block` 被拦腰截断，
+ *    8 盘对拍实测 90 处折叠区间变少（服务侧 39..58 / 语法侧 38..43）；
+ * 3. **行尾散括号** → 字符画 `PRINTL …::{` 里的 `{` 必须是 `brace_literal`。tree-sitter
+ *    没有行首锚点，块标记会从行中任意 `{` 起匹配——eratw 实测 3 份字符画文件曾因此整篇崩红；
+ *    行尾 `{` 后带尾随空白的那一种（eratw `M_KOJO_K77_AA字符画.ERB` 原样）另钉一条，
+ *    它逼出了"行内孪生记号顶不住、判据必须交给 external scanner"这个结论（PITFALLS 223）；
+ * 4. **分支头块** → `CASE` 那行的 `{` / `}` 落在 `branch_block` 里；
+ * 5. **未闭合** → 落 `MISSING continuation_close`，不许静默吞成文本（external 记号被插成
+ *    零宽 close 时按缺失计，见 `faultsOf`）；
+ * 6. **缩进的孤行 `{` / `}`** → 仍归块标记（行首判据看列，与缩进无关）。
+ */
+describe('A2 行连接 `{` … `}`：块 / 控制头 / 行尾括号', () => {
+  it('纯文本块落成 continuation_block，可折，块内行仍是普通行节点', () => {
+    const tree = parse(['@F', '{', 'PRINTL A', '}'].join('\n'));
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    const blocks = allOf(tree.rootNode, 'continuation_block');
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0]!;
+    expect(block.childForFieldName('open')?.type).toBe('continuation_open');
+    expect(block.childForFieldName('close')?.type).toBe('continuation_close');
+    // 块内那一行没有被打包成新行类（保行号与增量重解的既有那条路）
+    expect(block.namedChildren.map((c) => c.type)).toEqual([
+      'continuation_open',
+      'statement_line',
+      'continuation_close',
+    ]);
+    expect(foldRanges(foldsQuery, tree)).toContainEqual({ startRow: 1, endRow: 3 });
+    tree.delete();
+  });
+
+  it('控制头块：{ 当前缀、} 当块内浮动标记，if_block 仍收到 ENDIF（折叠不许缩成块本身）', () => {
+    const tree = parse(['@F', '{', 'IF A && B', '    && C', '}', 'PRINTL body', 'ENDIF'].join('\n'));
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    // 不许退化成 continuation_block
+    expect(allOf(tree.rootNode, 'continuation_block')).toHaveLength(0);
+    const blocks = allOf(tree.rootNode, 'if_block');
+    expect(blocks).toHaveLength(1);
+    const ifBlock = blocks[0]!;
+    expect(ifBlock.startPosition.row).toBe(1); // 从 `{` 那行起（把它当块头前缀）
+    expect(ifBlock.childForFieldName('open')?.type).toBe('if_line');
+    expect(ifBlock.childForFieldName('close')?.type).toBe('endif_line');
+    const inner = ifBlock.namedChildren.map((c) => c.type);
+    expect(inner).toContain('continuation_open');
+    expect(inner).toContain('continuation_close');
+    // 折叠区间覆盖到 ENDIF：这正是折叠对拍「语法侧不许比服务侧少折」的那条线
+    expect(foldRanges(foldsQuery, tree)).toContainEqual({ startRow: 1, endRow: 6 });
+    tree.delete();
+  });
+
+  it('行尾散括号（字符画）：`PRINTL …::{` 里的 { 是 brace_literal，不许被当成块头', () => {
+    const tree = parse(['@F', 'IF X', 'PRINTL ||::::::::::{', 'ENDIF'].join('\n'));
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'continuation_block')).toHaveLength(0);
+    expect(allOf(tree.rootNode, 'brace_literal')).toHaveLength(1);
+    // 画行仍在 if 体内、块照常收到 ENDIF（被吞成块头时会整段崩成 ERROR）
+    expect(allOf(tree.rootNode, 'if_block')).toHaveLength(1);
+    tree.delete();
+  });
+
+  it('行尾 `{` 后还有尾随空白（eratw 字符画原样）：同样不许当块头', () => {
+    // 出处：eratw `M_KOJO_K77_AA字符画.ERB:2654`（`PRINTL ////…,ﾊ …　{ `）。
+    // 这行曾在整篇里被认成块头 ⇒ 外层 `IF`/`ENDIF` 全部错配、2959 行落 ERROR。
+    const art = '            PRINTL //////////////////,ﾊ 　 　 　 　￣７　　　　　　　　 　{ ';
+    const tree = parse(['@F', 'IF A', art, 'PRINTL B', 'ENDIF'].join('\n'));
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    expect(allOf(tree.rootNode, 'continuation_block')).toHaveLength(0);
+    expect(allOf(tree.rootNode, 'if_block')).toHaveLength(1);
+    expect(allOf(tree.rootNode, 'brace_literal')).toHaveLength(1);
+    tree.delete();
+  });
+
+  it('缩进的孤行 `{` / `}`：仍是行连接块（行首判据看列，不看有没有缩进）', () => {
+    const tree = parse(['@F', '    {', '        PRINTL A', '    }', 'PRINTL B'].join('\n'));
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    const blocks = allOf(tree.rootNode, 'continuation_block');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.startPosition.row).toBe(1);
+    tree.delete();
+  });
+
+  it('分支头块：{ 与 } 落在 branch_block 里，外层 select_block 照常收束', () => {
+    const tree = parse(['@F', 'SELECTCASE X', '{', 'CASE 1', '}', 'PRINTL a', 'ENDSELECT'].join('\n'));
+    expect(faultsOf(tree.rootNode)).toEqual([]);
+    const branches = allOf(tree.rootNode, 'branch_block');
+    expect(branches).toHaveLength(1);
+    const types = branches[0]!.namedChildren.map((c) => c.type);
+    expect(types).toContain('continuation_open');
+    expect(types).toContain('continuation_close');
+    expect(allOf(tree.rootNode, 'select_block')).toHaveLength(1);
+    tree.delete();
+  });
+
+  it('未闭合的 { ：落 MISSING continuation_close，不静默吞成文本', () => {
+    const tree = parse(['@F', '{', 'PRINTL A'].join('\n'));
+    const faults = faultsOf(tree.rootNode);
+    expect(faults.map((f) => f.type)).toEqual(['MISSING:continuation_close']);
+    tree.delete();
   });
 });
