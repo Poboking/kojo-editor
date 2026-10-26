@@ -6,6 +6,9 @@
  */
 export { createEratwAdapterPlugin } from './plugin';
 export { ERATW } from './constants';
+// ADAPTER-LAUNCH 批：启动面（`GameAdapter.launch`）对外暴露工厂 + 错误类型，供启动器侧
+// 与测试**零镜像**引用同一份实现（同 `createEratwConventions` 的既有先例）。
+export { EratwLaunchError, createEratwLaunchAdapter, type EratwLaunchDeps } from './launch';
 export { parseCharaCsv, parseCharaNoFromFileName, parseKojoDirName } from './chara-csv';
 export {
   clearKojoFamilyMemo,

@@ -17,6 +17,7 @@ import type {
 } from '@kojo/plugin-api';
 import { KernelServices, MARKET_SERVICE_KEY, WellKnownServices, combineDigests, foldDigest, join, pathKey } from '@kojo/plugin-api';
 import { ERATW } from './constants';
+import { createEratwLaunchAdapter } from './launch';
 import { createEratwCounterTable, ERATW_COUNTER_ENTRIES } from './counter-table';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
@@ -675,6 +676,13 @@ export function createEratwAdapterPlugin(): Plugin {
             inputDigest: combineDigests([foldDigest(inputParts), currentSchema.inputDigest]) ?? undefined,
           };
         },
+
+        /**
+         * 启动面（ADAPTER-LAUNCH 车道）：哪个程序可启动、argv、cwd、存档/内容根全部在
+         * `./launch`——本行只接线，一行领域知识都不写在这里。
+         * 缺席的历史语义是「该游戏只能编辑、不能启动」，接线后实例库才出现「新建实例」。
+         */
+        launch: createEratwLaunchAdapter({ io, log: ctx.log }),
       };
 
       ctx.slots.register('game.adapter', { id: `${ERATW.gameId}-adapter`, adapter });
