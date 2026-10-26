@@ -17,11 +17,12 @@
       严重级颜色仍单源于 `problem-store.SEVERITY_TINT`，由组件以 `--prob-tint` /
       `color` 内联下传，本文件只**用它**（`currentColor` 派生底纹），不复制色值。
 
-   布局：`.prob-head`（三档读数 + 过滤控件）sticky 常驻，`.prob-list` 只负责排条目——
-   滚动交回容器 `.container-body`（`styles-project.css` 「容器级滚动：消灭面板各自的小
-   滚动条」那条定稿）。旧的 `.prob-list{max-height:320px;overflow:auto}` 与可变高底部
-   面板叠加成双重滚动条，同批废除。
-   ============================================================================ */
+   布局：常驻头（三档读数 + 过滤控件）是 ui-kit 的 `KitPanelHeader`（1026 C1-a 三家
+   同源；`bleed` 档 = 负外边距反衬宿主 `.panel` 内衬、粘住时整条带横到容器边缘，度量住
+   `ui-kit.css`），`.prob-list` 只负责排条目——滚动交回容器 `.container-body`（
+   `styles-project.css` 「容器级滚动：消灭面板各自的小滚动条」那条定稿）。旧的
+   `.prob-list{max-height:320px;overflow:auto}` 与可变高底部面板叠加成双重滚动条，同批废除。
+   ========================================================================== */
 
 /* ------------------------------- 根与布局 ------------------------------- */
 
@@ -34,22 +35,9 @@
 
 /* ------------------ 表头 + 工具条：一块常驻头（sticky） ------------------ */
 
-/* 面板体外层是 `.panel{padding: var(--space-2) var(--space-3)}`；负外边距把这圈内衬
-   反出来、由本段自己吃，于是粘住时整条带子横到容器边缘、条目从它**底下**滚过去，
-   不会在左上角留出一圈"字飘在内容上"的缝。 */
-.panel-problems.prob > .prob-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin: calc(var(--space-2) * -1) calc(var(--space-3) * -1) 0;
-  padding: var(--space-2) var(--space-3) var(--space-1);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border-subtle);
-}
+/* 常驻头骨架（粘顶 / 反衬内衬 / 底色 / 底线）已收进 ui-kit `KitPanelHeader` 的
+   `bleed` 档（`ui-kit/ui-kit.css`，1026 C1-a 三家同源）；本域只留条目从它底下滚过时的
+   读数细则（下面 `.conv-summary` / `.conv-count` 两段）。 */
 
 /* 三档读数：与检索面板的 `ksp-summary` 同档（fs-1 正文读数控件、fs-2 只给这三枚主数） */
 .panel-problems.prob .conv-summary {

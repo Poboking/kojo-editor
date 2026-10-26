@@ -25,6 +25,7 @@ import { isComposingEvent, nextRovingIndex } from './shell-keys';
 import { monacoBuiltinRows } from './monaco-builtin-keybindings';
 import { Icon } from './icons';
 import { KitKbd } from '../ui-kit';
+import { KitSearchField } from '../ui-kit/kit-search-field';
 import { isFailureNote, useMenuNote } from './context-menu-pages';
 // 快捷键面（`keybindings`）的菜单桥与设置面同住 `settings-menu.ts`（本页由 SettingsPanel
 // 静态引入，同属那枚懒 chunk）——键位表与撞键判据只在设置浮层里才有用。
@@ -269,33 +270,25 @@ export function KeybindingsPage({ commands }: { commands: readonly CommandEntry[
       </p>
 
       <div className="kb-toolbar">
-        <div className="kb-search">
-          <Icon name="search" size="sm" className="kb-search-icon" />
-          <input
-            ref={searchRef}
-            type="search"
-            className="kb-search-input"
-            placeholder="搜索命令或按键"
-            aria-label="搜索命令或按键"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onSearchKeyDown}
-          />
-          {query !== '' ? (
-            <button
-              type="button"
-              className="kb-search-clear"
-              aria-label="清空搜索"
-              title="清空搜索"
-              onClick={() => {
-                setQuery('');
-                searchRef.current?.focus();
-              }}
-            >
-              <Icon name="close" size="sm" />
-            </button>
-          ) : null}
-        </div>
+        {/* 搜索井 = ui-kit `KitSearchField`（1026 C1-b 三处接入之一）：图标、输入、
+            清空钮全在井内，度量吃 kit 基线（井 26 / 框内输入净高 24 / 清空钮 24×24 热区）。
+            旧的 `.kb-search` 三件套类名随 JSX 一并退场，flex 占宽由 keybindings.css 补。 */}
+        <KitSearchField
+          icon={<Icon name="search" size="sm" />}
+          inputRef={searchRef}
+          type="search"
+          value={query}
+          onChange={setQuery}
+          placeholder="搜索命令或按键"
+          ariaLabel="搜索命令或按键"
+          onKeyDown={onSearchKeyDown}
+          onClear={() => {
+            setQuery('');
+            searchRef.current?.focus();
+          }}
+          clearLabel="清空搜索"
+          clearIcon={<Icon name="close" size="sm" />}
+        />
 
         <span className="kb-scope theme-segment" role="radiogroup" aria-label="显示范围">
           <button

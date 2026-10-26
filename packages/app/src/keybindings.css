@@ -100,3 +100,12 @@
   max-width: 52ch;
   text-wrap: pretty;
 }
+
+/* ---- 5) 检索井：ui-kit `KitSearchField`（1026 C1-b 三处接入之一） ----
+   图标 / 输入 / 清空钮全在井内，井度量吃 ui-kit.css 基线（ksp 档：26 井 / 24 净高）。
+   `styles-project.css` 里旧的 `.kb-search*` 单类段随类名退场而失配（收尾归 L02）；
+   这里只补本工具条里的一条占宽（双类压基座，与到达顺序无关）。 */
+.kb-page .kit-search-field {
+  flex: 1 1 240px;
+  min-width: 0;
+}

@@ -1,0 +1,15 @@
+/* ============================================================================
+   settings-search-kit.css —— 设置浮层检索井接线切片（1026 kit-converge C1-b）
+
+   设置页搜索框本体已换 ui-kit `KitSearchField`（图标 / 输入 / 清空钮全在井内，
+   真机缺陷「放大镜落在输入框外沿」随旧结构消失；井度量住 `ui-kit/ui-kit.css`）。
+   `settings-search.css`（旁批文件，本批一字不动）里旧的 `.settings-search-icon` /
+   `-input` / `-clear` 单类规则随类名退场自然失配（收尾归 L02）；`.settings-searchbar`
+   外壳与 `.settings-search-modified` 胶囊仍挂真类、样式照旧生效。
+   本切片只补井在 searchbar 行里的那一条占宽腿。
+   ========================================================================== */
+
+.settings-searchbar .kit-search-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}

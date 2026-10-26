@@ -60,6 +60,7 @@ import {
 } from './problem-menu';
 import './context-menu-search.css';
 import { Icon } from './icons';
+import { KitPanelHeader } from '../ui-kit/kit-panel-header';
 
 /**
  * 底部「问题」面板（看板 HK-4 · UI-6；P2-13 分组/过滤/行内修复/复制批）。
@@ -881,8 +882,10 @@ export function ProblemPanel({
         </div>
       ) : (
         // 表头 + 工具条合成一块 sticky 头：列表的滚动交回容器（`.container-body`）之后，
-        // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"（与 `ksp-head` 同一处理）。
-        <div className="prob-head" ref={headRef}>
+        // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"。骨架与检索面板 /
+        // 大纲读数条同源于 ui-kit 的 `KitPanelHeader`（1026 C1-a；`bleed` = 反衬宿主
+        // `.panel` 内衬那一档，度量住在 ui-kit.css）。
+        <KitPanelHeader bleed ref={headRef}>
           <div className="conv-summary">
             <span className="conv-count" style={{ color: SEVERITY_COLOR.error }}>
               错误 {error}
@@ -970,7 +973,7 @@ export function ProblemPanel({
               </>
             ) : null}
           </div>
-        </div>
+        </KitPanelHeader>
       )}
 
       {filtered.length === 0 ? (

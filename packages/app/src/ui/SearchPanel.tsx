@@ -73,6 +73,8 @@ import {
   type SearchScopeItem,
 } from './search-scope';
 import { SearchFilterBar } from './SearchFilterBar';
+import { KitPanelHeader } from '../ui-kit/kit-panel-header';
+import { KitSearchField } from '../ui-kit/kit-search-field';
 import '../search-panel.css';
 import './context-menu-search.css';
 
@@ -1055,8 +1057,10 @@ export function SearchPanel({
         handleRowNav(e);
       }}
     >
-      {/* 控制区 + 状态区：单面板侧栏里整块 sticky（结果滚走、条件与读数常驻） */}
-      <div className="ksp-head" ref={headRef}>
+      {/* 控制区 + 状态区：单面板侧栏里整块 sticky（结果滚走、条件与读数常驻）。
+          骨架与问题面板 / 大纲读数条同源 = ui-kit `KitPanelHeader`（1026 C1-a；
+          无标题只有控件行——本档不填标题槽，追加行走 children）。 */}
+      <KitPanelHeader ref={headRef}>
         <div className="ksp-row ksp-search-row">
           {/* 替换行开关：VSCode 同位（最左 chevron），展开/收起是纯 UI 状态 */}
           <button
@@ -1072,62 +1076,67 @@ export function SearchPanel({
             <Icon name={replaceOpen ? 'chevron-down' : 'chevron-right'} size="md" />
           </button>
 
-          <div className="ksp-field">
-            <input
-              ref={inputRef}
-              className="search-input ksp-input"
-              placeholder="在文件中搜索…"
-              title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）；↑/↓ 回溯最近检索"
-              aria-label="在文件中搜索"
-              autoComplete="off"
-              spellCheck={false}
-              value={s.query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                // 输入法组词中的 ↑↓ 是在候选词里翻页、回车是在确认候选词——一律不接管
-                // （中文作者的主路径；不挡会把一次组词变成一次历史回溯 / 跳转）
-                if (e.nativeEvent.isComposing) return;
-                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                  // ↑/↓ 回溯最近检索（W7-E；数据面在 `search-store.stepSearchHistory`）：
-                  // ↑ 从草稿进入历史并向更旧走，↓ 向更新走、退到最新一条再按 = 还原草稿。
-                  // 没有历史 / 还没进入回溯时的 ↓ **不消费**——既有「↓ 进结果第一行」的
-                  // 行导航（`panel-row-nav`）原样保留；消费时必须停住冒泡，否则同一下按键
-                  // 会被面板根上的行导航再处理一遍（输入框与结果区各动一次）。
-                  if (stepSearchHistory(e.key === 'ArrowUp' ? -1 : 1)) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }
-                  return;
+          {/* 检索井：ui-kit `KitSearchField`（1026 C1-b 三处接入之一）。`ksp-field` 类逐字
+              保留（本面板的度量细则仍住 search-panel.css 的 `.ksp-*` 段）；框内 toggle 组
+              走右侧动作槽；判据锚类 `search-input ksp-input` 由 inputClassName 原样落上。 */}
+          <KitSearchField
+            className="ksp-field"
+            inputClassName="search-input ksp-input"
+            inputRef={inputRef}
+            type="text"
+            value={s.query}
+            onChange={setQuery}
+            placeholder="在文件中搜索…"
+            title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）；↑/↓ 回溯最近检索"
+            ariaLabel="在文件中搜索"
+            autoComplete="off"
+            spellCheck={false}
+            onKeyDown={(e) => {
+              // 输入法组词中的 ↑↓ 是在候选词里翻页、回车是在确认候选词——一律不接管
+              // （中文作者的主路径；不挡会把一次组词变成一次历史回溯 / 跳转）
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                // ↑/↓ 回溯最近检索（W7-E；数据面在 `search-store.stepSearchHistory`）：
+                // ↑ 从草稿进入历史并向更旧走，↓ 向更新走、退到最新一条再按 = 还原草稿。
+                // 没有历史 / 还没进入回溯时的 ↓ **不消费**——既有「↓ 进结果第一行」的
+                // 行导航（`panel-row-nav`）原样保留；消费时必须停住冒泡，否则同一下按键
+                // 会被面板根上的行导航再处理一遍（输入框与结果区各动一次）。
+                if (stepSearchHistory(e.key === 'ArrowUp' ? -1 : 1)) {
+                  e.preventDefault();
+                  e.stopPropagation();
                 }
-                // 回车 = 有结果逐项跳 / 没结果开始检索（输入法组词中的回车已在上面
-                // 让位给候选词确认——中文作者的主路径，不挡会把一次组词变成一次跳转）
-                if (e.key !== 'Enter') return;
-                e.preventDefault();
-                // 有结果优先逐项跳（VSCode 查找控件的 Enter 手感）；查询改过 / 没结果
-                // ⇒ `stepSearchMatch` 返回 null，退回"回车开始检索"
-                if (stepMatch(e.shiftKey ? -1 : 1)) return;
-                start();
-              }}
-            />
-            <div className="ksp-toggles" role="group" aria-label="检索选项">
-              {TOGGLES.map((t) => {
-                const on = s.options[t.key];
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    className={`search-toggle ksp-toggle${on ? ' on' : ''}`}
-                    title={t.title}
-                    aria-label={t.title}
-                    aria-pressed={on}
-                    onClick={() => toggleOption(t.key)}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+                return;
+              }
+              // 回车 = 有结果逐项跳 / 没结果开始检索（输入法组词中的回车已在上面
+              // 让位给候选词确认——中文作者的主路径，不挡会把一次组词变成一次跳转）
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              // 有结果优先逐项跳（VSCode 查找控件的 Enter 手感）；查询改过 / 没结果
+              // ⇒ `stepSearchMatch` 返回 null，退回"回车开始检索"
+              if (stepMatch(e.shiftKey ? -1 : 1)) return;
+              start();
+            }}
+            actions={
+              <div className="ksp-toggles" role="group" aria-label="检索选项">
+                {TOGGLES.map((t) => {
+                  const on = s.options[t.key];
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      className={`search-toggle ksp-toggle${on ? ' on' : ''}`}
+                      title={t.title}
+                      aria-label={t.title}
+                      aria-pressed={on}
+                      onClick={() => toggleOption(t.key)}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            }
+          />
 
           {s.phase === 'running' ? (
             <button
@@ -1486,7 +1495,7 @@ export function SearchPanel({
             </div>
           )}
         </div>
-      </div>
+      </KitPanelHeader>
 
       {/* 结果区：**虚拟列表**（只挂视口内的行 + overscan，两侧留白顶起滚动高度）。
           行号槽宽由整份结果的最长读数定（CSS 自定义属性，一处写全列表）。

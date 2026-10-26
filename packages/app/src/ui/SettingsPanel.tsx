@@ -71,6 +71,7 @@ import {
 } from './editor-display-prefs';
 // 字体档位（视觉批十二 L20）：档位表 / 解析 / 可用性判定的真源全在 font-presets.ts，本页只排版。
 import { KitRadio } from '../ui-kit';
+import { KitSearchField } from '../ui-kit/kit-search-field';
 import {
   CODE_FONT_PRESETS,
   CUSTOM_CODE_FONT_PRESET_ID,
@@ -96,6 +97,8 @@ import { registerSettingsMenuBridge } from './settings-menu';
 // 语言能力矩阵的只读视图（批次十 S15）：现读 monaco/language-capabilities.ts，零 props、样式全内联。
 import { CapabilityMatrixSection } from './capability-matrix-view';
 import '../settings-search.css';
+// 检索井换 ui-kit `KitSearchField` 后的接线切片（1026 C1-b）：只补井在 searchbar 行的占宽腿。
+import './settings-search-kit.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
 import './settings-appearance.css';
@@ -1256,41 +1259,37 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
 
           {/* 设置搜索（1020 编辑器体感批）：抬头下面一整行，跨左右两列。
               「已修改」只统计**有真源读数**的条目（判据见 settings-search.ts），
-              没登记判据的行不会冒充"已改"。 */}
+              没登记判据的行不会冒充"已改"。
+              井本体 = ui-kit `KitSearchField`（1026 C1-b 三处接入之一）：放大镜与清空钮
+              全落进井内（真机缺陷「图标在输入框外沿」随旧结构一并消失），「已修改」胶囊
+              走右侧动作槽；外壳 `.settings-searchbar` 只留行位与下缘留白。 */}
           <div className="settings-searchbar">
-            <Icon name="search" size={14} className="settings-search-icon" />
-            <input
-              ref={searchRef}
+            <KitSearchField
+              icon={<Icon name="search" size={14} />}
+              inputRef={searchRef}
               type="search"
-              className="settings-search-input"
-              placeholder="搜索设置项…"
-              aria-label="搜索设置项"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={setQuery}
+              placeholder="搜索设置项…"
+              ariaLabel="搜索设置项"
               onKeyDown={onSearchKeyDown}
+              onClear={() => {
+                setQuery('');
+                searchRef.current?.focus();
+              }}
+              clearLabel="清空搜索"
+              clearIcon={<Icon name="close" size={14} />}
+              actions={
+                <button
+                  type="button"
+                  className={`settings-search-modified${modifiedOnly ? ' on' : ''}`}
+                  aria-pressed={modifiedOnly}
+                  onClick={() => setModifiedOnly((v) => !v)}
+                >
+                  已修改{modifiedCount > 0 ? ` (${modifiedCount})` : ''}
+                </button>
+              }
             />
-            {query !== '' ? (
-              <button
-                type="button"
-                className="settings-search-clear"
-                aria-label="清空搜索"
-                title="清空搜索"
-                onClick={() => {
-                  setQuery('');
-                  searchRef.current?.focus();
-                }}
-              >
-                <Icon name="close" size={14} />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={`settings-search-modified${modifiedOnly ? ' on' : ''}`}
-              aria-pressed={modifiedOnly}
-              onClick={() => setModifiedOnly((v) => !v)}
-            >
-              已修改{modifiedCount > 0 ? ` (${modifiedCount})` : ''}
-            </button>
           </div>
 
           {/* 左导航栏 + 右分节面板：抬头/页脚 flex:none 永不滚走，只有面板这一列在滚 */}

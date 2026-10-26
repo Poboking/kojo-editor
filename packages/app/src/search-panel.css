@@ -12,7 +12,8 @@
    ② **不写死颜色**。面 / 边 / 字 / 焦点 / 圆角 / 动效全部取 `styles.css` 的 token，
       浅色与薄荷主题同步生效。
 
-   布局：`.ksp-head`（控制 + 状态）与 `.ksp-results`（结果）两段。单面板侧栏里
+   布局：sticky 常驻头（控制 + 状态；骨架 = ui-kit `KitPanelHeader`，1026 C1-a）与
+   `.ksp-results`（结果）两段。单面板侧栏里
    整页滚动而头部 sticky（结果滚走、条件与读数常驻）；分栏 section / 浮窗里
    `.panel` 本就是 flex 列，根撑满、结果区自己滚——两种宿主形态同一套规则。
    ============================================================================ */
@@ -29,19 +30,12 @@
 }
 
 /* 控制区 + 状态区：单面板侧栏（`.sidebar-views` 滚动）里粘住；分栏 / 浮窗里
-   祖先 `overflow: hidden` 使它自然失效（此时结果区自己滚，头部分本来就不动）。 */
-.panel-search.ksp > .ksp-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+   祖先 `overflow: hidden` 使它自然失效（此时结果区自己滚，头部分本来就不动）。
+   粘顶骨架 / 底色 / 底线在 ui-kit `KitPanelHeader` 基座（1026 C1-a 三家同源），
+   本域只补这一档自己的上下内衬（双类压基座，与到达顺序无关）。 */
+.panel-search.ksp > .kit-panel-header {
   padding-top: 2px;
   padding-bottom: var(--space-1);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .panel-search.ksp > .ksp-results {
