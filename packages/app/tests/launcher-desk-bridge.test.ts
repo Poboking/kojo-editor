@@ -2,8 +2,10 @@
  * 桌面壳桥的启动器面（`PlatformBridge.launcher`）—— L3c 的判据面。
  *
  * 钉六件事（每条都对应 `launcher-bridge.ts` 的一条纪律）：
- * 1. **一个方法 = 一条命令**：20 条已接命令的**命令名与载荷键**逐字断言（表驱动，
+ * 1. **一个方法 = 一条命令**：P0 的 20 条命令的**命令名与载荷键**逐字断言（表驱动，
  *    一个方法一行）；参数表来自 `src-tauri/src/launcher/commands.rs`，漂一个字就红。
+ *    （P1 的十六组——内容包 7 + 存档 8 + 选包 1——判据面在
+ *    `launcher-desk-bridge-p1.test.ts`，两边合起来才是 Rust 注册表的全部 36 条。）
  * 2. **DTO 直通**：宿主 `#[serde(rename_all = "camelCase")]` ⇒ 字段名逐字相同，桥零改名；
  *    反例（喂 snake_case 进来必须原样出去）钉住"没有第二份改名表"。
  * 3. **错误码透传**：`LauncherErrorDto` → `LauncherBridgeError`（code / message / detail /
@@ -175,7 +177,7 @@ const ROWS: ReadonlyArray<{
 ];
 
 describe('启动器桥 · 命令名与载荷（一个方法 = 一条命令）', () => {
-  it('表覆盖 Rust 已存在的全部 20 条 launcher_* 命令，且命令名不重复', () => {
+  it('表覆盖 Rust 已存在的 P0 二十条 launcher_* 命令，且命令名不重复', () => {
     expect(ROWS.length).toBe(20);
     expect(new Set(ROWS.map((r) => r.cmd)).size).toBe(20);
     // 每条命令都有对应方法（表自身就是方法的清单：漏接一个方法这里就少一行）
