@@ -68,6 +68,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    # 2026-10-26 优雅停止：`stop` 要枚举子进程的窗口并投 `WM_CLOSE`
+    # （EnumWindows / GetWindowThreadProcessId / PostMessageW / IsWindowVisible），
+    # 测试夹具还要自己注册窗口类（WNDCLASSW 受 Gdi 门控、hInstance 走 LibraryLoader）。
+    # 这三个 feature 此前由 tauri/wry 间接点亮；显式声明，别把编译面挂在别人的 feature 上。
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
 ] }
 
 [profile.release]

@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::error::LauncherResult;
+use super::job::STOP_EXIT_CODE;
 use super::paths::{self, LauncherLayout};
 use super::store::{self, StoredExecutable, StoredInstance, StoredLock, StoredTrust};
 use super::trust;
@@ -179,6 +180,84 @@ fn make_launch_instance(
     Ok(())
 }
 
+/// 夹具窗口：**真窗口 + 真消息循环**，`WM_CLOSE` 是宿主真的从另一个进程投过来的。
+///
+/// 为什么值得造：优雅停止最容易坏的那一段恰好是"宿主能不能在别的进程里找到窗口、
+/// 把消息投进去"——用"假装投递成功"的桩，正好把这段遮掉。窗口取 `WS_POPUP|WS_VISIBLE`
+/// 放在 (-2000, -2000)：可见（`IsWindowVisible` 为真，枚举器才认）、不抢焦点、
+/// 也不出现在任务栏。就绪见证写在建窗之后、进消息循环之前，posted 的消息会先排队不丢。
+mod window_fixture {
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+        PostQuitMessage, RegisterClassW, TranslateMessage, MSG, WM_CLOSE, WM_DESTROY, WNDCLASSW,
+        WS_POPUP, WS_VISIBLE,
+    };
+
+    /// 0 = 收到 WM_CLOSE 就关窗（优雅退出）；1 = 装作没听见（优雅期必然超时）
+    static IGNORE_CLOSE: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "system" fn wndproc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match msg {
+            WM_CLOSE => {
+                if IGNORE_CLOSE.load(Ordering::SeqCst) == 0 {
+                    DestroyWindow(hwnd);
+                }
+                0
+            }
+            WM_DESTROY => {
+                PostQuitMessage(0);
+                0
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+
+    /// 建窗 → 写就绪见证 → 进消息循环（循环退出 = 夹具进程正常退出）。
+    pub fn run(ignore_close: bool, ready: &Path) {
+        IGNORE_CLOSE.store(u32::from(ignore_close), Ordering::SeqCst);
+        unsafe {
+            let instance = GetModuleHandleW(std::ptr::null());
+            let class_name: Vec<u16> = "KojoLauncherStopGraceFixture\0".encode_utf16().collect();
+            let mut class: WNDCLASSW = std::mem::zeroed();
+            class.lpfnWndProc = Some(wndproc);
+            class.hInstance = instance;
+            class.lpszClassName = class_name.as_ptr();
+            assert!(RegisterClassW(&class) != 0, "注册夹具窗口类失败");
+            let hwnd = CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                class_name.as_ptr(),
+                WS_POPUP | WS_VISIBLE,
+                -2000,
+                -2000,
+                120,
+                80,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            );
+            assert!(!hwnd.is_null(), "创建夹具窗口失败");
+            std::fs::write(ready, std::process::id().to_string()).ok();
+            let mut msg: MSG = std::mem::zeroed();
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+}
+
 /// **夹具入口**：只由测试以子进程身份拉起（`--exact --ignored`），单独跑没有任何断言。
 #[test]
 #[ignore = "夹具入口：只由测试以 current_exe() + --exact --ignored 拉起，不单独跑"]
@@ -190,6 +269,10 @@ fn fixture_entry() {
             std::fs::write(dir.join("child.ready"), std::process::id().to_string()).ok();
             std::thread::sleep(Duration::from_secs(60));
         }
+        // 有真窗口、收到 WM_CLOSE 就关窗（优雅停止的"会配合的游戏"）
+        "window-quit" => window_fixture::run(false, &dir.join("window.ready")),
+        // 有真窗口、但 WM_CLOSE 装作没听见（"卡在存档界面"的游戏）
+        "window-stubborn" => window_fixture::run(true, &dir.join("window.ready")),
         "emit" => {
             use std::io::Write;
             // 一段可读标记 + 非法 UTF-8 字节：宿主必须逐字节保真
@@ -542,7 +625,10 @@ fn start_stop_lifecycle_clears_lock_and_marks_user_stop() {
     let app = TestDir::new("lifecycle");
     let witness = TestDir::new("lifecycle-witness");
     let (host, events) = test_host(app.path());
-    make_launch_instance(&host, "id-life", "sleep", witness.path()).unwrap();
+    // 夹具用"配合关窗"的真窗口：用户 stop ⇒ `WM_CLOSE` ⇒ 游戏自己退出 ⇒ reason=`user`。
+    // （无窗口的夹具会被判成强杀并记 `killed`——那是另一条路径的判据，见下方的
+    // `stop_without_windows_skips_the_grace_period`。）
+    make_launch_instance(&host, "id-life", "window-quit", witness.path()).unwrap();
     // 上次异常退出留下的陈旧锁（pid 已不存在）必须被就地清掉，而不是拦住本次启动
     store::write_lock(
         &host.layout,
@@ -564,7 +650,7 @@ fn start_stop_lifecycle_clears_lock_and_marks_user_stop() {
     assert!(pid_alive(pid));
     let session_id = status.session_id.clone().expect("running 必须有 sessionId");
     assert!(wait_until(
-        || witness.join("child.ready").exists(),
+        || witness.join("window.ready").exists(),
         Duration::from_secs(10)
     ));
     assert!(
@@ -780,6 +866,237 @@ fn stop_kills_the_whole_tree() {
         wait_until(|| !pid_alive(grandchild), Duration::from_secs(5)),
         "Job 收尸必须连孙进程一起（pid={grandchild} 仍活着）"
     );
+}
+
+/* ------------------------------- 停止：优雅 / 强杀 ------------------------------- */
+
+/// 起一个实例并等到夹具报到（`witness_name` 是夹具写的就绪见证文件），回 pid。
+fn start_ready(host: &Arc<LauncherHost>, id: &str, witness: &Path, witness_name: &str) -> u32 {
+    let status = super::process::start_blocking(host, id).expect("启动必须成功");
+    assert!(
+        wait_until(
+            || witness.join(witness_name).exists(),
+            Duration::from_secs(20)
+        ),
+        "夹具必须在时限内报到（{witness_name}）"
+    );
+    status.pid.expect("running 必须给 pid")
+}
+
+/// 一次 stop 的"读数 + 实测墙钟"：优雅期判据全靠这段耗时。
+fn stop_timed(
+    host: &Arc<LauncherHost>,
+    id: &str,
+    force: bool,
+    timeout_ms: Option<u64>,
+) -> (super::process::ProcessStatusDto, Duration) {
+    let started = Instant::now();
+    let status = super::process::stop_blocking(host, id, force, timeout_ms).expect("stop 必须成功");
+    (status, started.elapsed())
+}
+
+#[test]
+fn force_stop_kills_immediately_and_records_killed() {
+    let app = TestDir::new("stop-force");
+    let witness = TestDir::new("stop-force-witness");
+    let (host, _events) = test_host(app.path());
+    make_launch_instance(&host, "id-force", "sleep", witness.path()).unwrap();
+    let pid = start_ready(&host, "id-force", witness.path(), "child.ready");
+
+    let (status, elapsed) = stop_timed(&host, "id-force", true, Some(10_000));
+    assert_eq!(status.state, "exited", "被用户停掉的进程不该记 crash");
+    assert_eq!(status.exit_reason.as_deref(), Some("killed"));
+    assert_eq!(
+        status.exit_code,
+        Some(i64::from(STOP_EXIT_CODE as i32)),
+        "强杀走的是 TerminateJobObject 的停止码"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "force=true 不许走优雅期，实测 {elapsed:?}"
+    );
+    assert!(wait_until(|| !pid_alive(pid), Duration::from_secs(5)));
+    assert!(
+        store::read_lock(&host.layout, "id-force")
+            .unwrap()
+            .is_none(),
+        "退出后 running.lock 必须清掉"
+    );
+    let instance = store::load_instance(&host.layout, "id-force").unwrap();
+    assert_eq!(
+        instance.last_exit.as_ref().map(|exit| exit.reason.as_str()),
+        Some("killed")
+    );
+}
+
+#[test]
+fn stop_without_windows_skips_the_grace_period() {
+    // 夹具 `sleep` 一个窗口都不建 ⇒ 投递 0 发 ⇒ 立刻进强杀分支：
+    // 缺省优雅期是 5 s，这里必须远早于此返回（"点结束却空转 5 s"正是要防的）。
+    let app = TestDir::new("stop-nowin");
+    let witness = TestDir::new("stop-nowin-witness");
+    let (host, _events) = test_host(app.path());
+    make_launch_instance(&host, "id-nowin", "sleep", witness.path()).unwrap();
+    let pid = start_ready(&host, "id-nowin", witness.path(), "child.ready");
+
+    let (status, elapsed) = stop_timed(&host, "id-nowin", false, None);
+    assert_eq!(status.exit_reason.as_deref(), Some("killed"));
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "零窗口时不许等满缺省 5 s 优雅期，实测 {elapsed:?}"
+    );
+    assert!(wait_until(|| !pid_alive(pid), Duration::from_secs(5)));
+
+    // 显式短优雅期同样"不用等满"：命令层的 timeoutMs 一路传到这一层并生效
+    let pid = start_ready(&host, "id-nowin", witness.path(), "child.ready");
+    let (status, elapsed) = stop_timed(&host, "id-nowin", false, Some(200));
+    assert_eq!(status.exit_reason.as_deref(), Some("killed"));
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "timeoutMs=200 时实测 {elapsed:?}"
+    );
+    assert!(wait_until(|| !pid_alive(pid), Duration::from_secs(5)));
+}
+
+#[test]
+fn stop_waits_full_grace_then_kills_when_window_ignores_close() {
+    // **没有模拟**：窗口是真窗口、`WM_CLOSE` 真从宿主进程投进子进程、超时也是真的；
+    // 唯一"人为"的地方是夹具在 WndProc 里把 WM_CLOSE 丢掉（模拟卡在存档界面的游戏）。
+    let app = TestDir::new("stop-stubborn");
+    let witness = TestDir::new("stop-stubborn-witness");
+    let (host, _events) = test_host(app.path());
+    make_launch_instance(&host, "id-stub", "window-stubborn", witness.path()).unwrap();
+    let pid = start_ready(&host, "id-stub", witness.path(), "window.ready");
+
+    let (windows, posted) = super::process::post_close_report_for_test(pid);
+    assert_eq!(windows, 1, "枚举器必须找到夹具的那一枚可见顶层窗口");
+    assert_eq!(posted, 1, "WM_CLOSE 必须真的投进去");
+
+    let (status, elapsed) = stop_timed(&host, "id-stub", false, Some(1_200));
+    assert_eq!(
+        status.exit_reason.as_deref(),
+        Some("killed"),
+        "关不掉就必须记 killed，不许冒充 user"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1_100),
+        "投递成功却没人应答时必须等满优雅期，实测 {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "超时之后要立刻杀树，实测 {elapsed:?}"
+    );
+    assert_eq!(
+        status.exit_code,
+        Some(i64::from(STOP_EXIT_CODE as i32)),
+        "走的是 TerminateJobObject"
+    );
+    assert!(wait_until(|| !pid_alive(pid), Duration::from_secs(5)));
+}
+
+#[test]
+fn graceful_wm_close_exits_and_records_user() {
+    let app = TestDir::new("stop-graceful");
+    let witness = TestDir::new("stop-graceful-witness");
+    let (host, _events) = test_host(app.path());
+    make_launch_instance(&host, "id-grace", "window-quit", witness.path()).unwrap();
+    let pid = start_ready(&host, "id-grace", witness.path(), "window.ready");
+
+    let (status, elapsed) = stop_timed(&host, "id-grace", false, Some(5_000));
+    assert_eq!(
+        status.exit_reason.as_deref(),
+        Some("user"),
+        "子进程自己关窗退出必须记 user"
+    );
+    assert_eq!(status.state, "exited");
+    assert_eq!(status.exit_code, Some(0));
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "配合关窗的子进程不该等满 5 s 优雅期，实测 {elapsed:?}"
+    );
+    assert!(wait_until(|| !pid_alive(pid), Duration::from_secs(5)));
+    assert!(
+        store::read_lock(&host.layout, "id-grace")
+            .unwrap()
+            .is_none(),
+        "优雅退出也要清锁"
+    );
+    let instance = store::load_instance(&host.layout, "id-grace").unwrap();
+    assert_eq!(
+        instance.last_exit.as_ref().map(|exit| exit.reason.as_str()),
+        Some("user")
+    );
+}
+
+#[test]
+fn start_during_stopping_is_busy() {
+    let app = TestDir::new("stop-busy");
+    let witness = TestDir::new("stop-busy-witness");
+    let (host, _events) = test_host(app.path());
+    make_launch_instance(&host, "id-busy", "window-stubborn", witness.path()).unwrap();
+    let _pid = start_ready(&host, "id-busy", witness.path(), "window.ready");
+
+    let host_for_stop = host.clone();
+    let stopper = std::thread::spawn(move || {
+        super::process::stop_blocking(&host_for_stop, "id-busy", false, Some(1_500))
+    });
+    // `stopping` 在投递 WM_CLOSE 之前就发出；从这里到进程退出之间运行表里还有它
+    assert!(
+        wait_until(
+            || {
+                host.last
+                    .lock()
+                    .unwrap()
+                    .get("id-busy")
+                    .map(|snapshot| snapshot.state == "stopping")
+                    .unwrap_or(false)
+            },
+            Duration::from_secs(3)
+        ),
+        "stop 必须先把状态推进到 stopping"
+    );
+    let busy = super::process::start_blocking(&host, "id-busy").unwrap_err();
+    assert_eq!(
+        busy.code, "LAUNCHER_INSTANCE_BUSY",
+        "stopping 期间不允许再起第二个进程"
+    );
+
+    let stopped = stopper
+        .join()
+        .expect("stop 线程不该 panic")
+        .expect("stop 必须成功");
+    assert!(matches!(stopped.state.as_str(), "exited" | "crashed"));
+    assert_eq!(stopped.exit_reason.as_deref(), Some("killed"));
+}
+
+#[test]
+fn stop_is_idempotent_and_announces_stopping_once() {
+    let app = TestDir::new("stop-twice");
+    let witness = TestDir::new("stop-twice-witness");
+    let (host, events) = test_host(app.path());
+    make_launch_instance(&host, "id-twice", "sleep", witness.path()).unwrap();
+    let pid = start_ready(&host, "id-twice", witness.path(), "child.ready");
+
+    let first = super::process::stop_blocking(&host, "id-twice", true, Some(10_000)).unwrap();
+    assert_eq!(first.exit_reason.as_deref(), Some("killed"));
+    // monitor 已收完尾：表里没有它，第二发只回答当前读数（不敲门、不杀、不塞记录回来）
+    assert!(host.running_map().is_empty());
+    let second = super::process::stop_blocking(&host, "id-twice", false, None).unwrap();
+    assert_eq!(second.state, first.state);
+    assert_eq!(second.exit_reason.as_deref(), Some("killed"));
+    assert!(host.running_map().is_empty(), "第二发不许把记录塞回来");
+    assert!(!pid_alive(pid), "停完不许有残留进程");
+
+    let sink = events.lock().unwrap();
+    let stopping = sink
+        .iter()
+        .filter(|(event, payload)| {
+            event == super::EVENT_PROCESS
+                && payload["instanceId"] == "id-twice"
+                && payload["status"]["state"] == "stopping"
+        })
+        .count();
+    assert_eq!(stopping, 1, "stopping 只许宣布一次（第二发 stop 不许再发）");
 }
 
 #[test]

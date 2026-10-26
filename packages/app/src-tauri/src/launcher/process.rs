@@ -11,8 +11,11 @@
 //! - **每实例单进程**：内存表 + `running.lock` 双保险；重复 `start` 报
 //!   `LAUNCHER_INSTANCE_BUSY`（契约 §5.6 里没有 `LAUNCHER_ALREADY_RUNNING` 这个码）。
 //!
-//! 明确**未做**（不假装）：优雅期 `WM_CLOSE`（首版 `stop` 直接 `TerminateJobObject` 杀树，
-//! 退出原因按 `force` 记 `user` / `killed`）。
+//! 停止有两条路（§8 状态机 / 铁律 6）：`stop` 先给该 pid 的**可见顶层窗口**投 `WM_CLOSE`
+//! （优雅期缺省 5 s）；零窗口 / 投递全失败 ⇒ **立刻**杀树，投递成功则等进程自己退出，
+//! 优雅期到点再 `TerminateJobObject`。`lastExit.reason` 按**实际走的那条路**记
+//! `user`（优雅退出）/ `killed`（强杀，含超时被杀）。停止命令本身永远有上限：优雅期
+//! ≤ 30 s，收尾各 ≤ 3 s，绝不让 UI 永久转圈。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -31,10 +34,14 @@ use super::paths;
 use super::store::{self, StoredExit, StoredInstance, StoredLock};
 use super::{iso_now, LauncherHost, EVENT_PROCESS};
 
-/// 停止时的默认等待上限（契约常量：优雅期 5 s；首版是直接杀树，同样封顶）。
+/// 优雅期缺省值（契约常量 5 s）：`WM_CLOSE` 之后等游戏自己退出的上限。
 pub const DEFAULT_STOP_TIMEOUT_MS: u64 = 5_000;
-/// 停止等待的硬上限（再久就是"UI 永久转圈"，不允许）。
+/// 优雅期的硬上限（再久就是"UI 永久转圈"，不允许）。
 pub const MAX_STOP_TIMEOUT_MS: u64 = 30_000;
+/// 强杀之后等 Job 进程计数归零的上限（杀是即时的，这里只防"某进程死不透"挂住命令）。
+const KILL_SETTLE_TIMEOUT_MS: u64 = 3_000;
+/// 等监视线程落退出记录 / 清锁的上限（收尾，不属于优雅期）。
+const MONITOR_SETTLE_TIMEOUT_MS: u64 = 3_000;
 
 /// 进程读数（`ProcessStatus` 同形）。
 #[derive(Debug, Clone, Serialize)]
@@ -90,8 +97,10 @@ pub struct RunningProc {
 mod sys {
     use std::os::windows::io::AsRawHandle;
 
+    use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
+        CloseHandle, GetLastError, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+        WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
@@ -99,6 +108,9 @@ mod sys {
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, OpenThread, ResumeThread, TerminateProcess,
         WaitForSingleObject,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
     };
 
     const PROCESS_TERMINATE: u32 = 0x0001;
@@ -193,6 +205,65 @@ mod sys {
         Ok(resumed)
     }
 
+    /// 一次 `WM_CLOSE` 投递的读数（`posted == 0` ⇒ 没有可投递的目标）。
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct CloseReport {
+        /// 属于该 pid 的可见顶层窗口数。
+        pub windows: u32,
+        /// 成功投递 `WM_CLOSE` 的窗口数。
+        pub posted: u32,
+    }
+
+    struct CloseVisit {
+        pid: u32,
+        report: CloseReport,
+    }
+
+    /// 优雅停止的第一步：给该 pid 的每个**可见顶层窗口**投一枚 `WM_CLOSE`。
+    ///
+    /// 只看可见顶层窗口：游戏主窗口必然在其中；隐藏的辅助窗口（托盘 / 覆盖层）收到
+    /// `WM_CLOSE` 可能弹出"是否保存"的确认框，反而把对话框交给了看不见的窗口。
+    /// 返回读数而不是 bool：调用方必须把"零窗口"与"投递全被拒"都当成**立刻强杀**的
+    /// 信号——这两种局面在优雅期里不会有任何变化，白等 5 s 只会让用户以为卡死。
+    pub fn post_close_to_pid(pid: u32) -> CloseReport {
+        unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let ctx = &mut *(lparam as *mut CloseVisit);
+            let mut owner = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut owner);
+            if owner == ctx.pid && IsWindowVisible(hwnd) != 0 {
+                ctx.report.windows += 1;
+                if PostMessageW(hwnd, WM_CLOSE, 0, 0) != 0 {
+                    ctx.report.posted += 1;
+                }
+            }
+            1 // 非 0 = 继续枚举
+        }
+        let mut ctx = CloseVisit {
+            pid,
+            report: CloseReport::default(),
+        };
+        unsafe {
+            EnumWindows(Some(visit), &mut ctx as *mut CloseVisit as LPARAM);
+        }
+        ctx.report
+    }
+
+    /// 等进程退出（`true` = 等到了，或者打开句柄时它就已经不在）。
+    ///
+    /// `OpenProcess` 拿不到句柄时用 `process_start_ticks` 复核：区分"进程真的没了"
+    /// （别再等）与"权限不足"（继续等优雅期），别把打开失败当成"已退出"。
+    pub fn wait_process_exit(pid: u32, timeout_ms: u64) -> bool {
+        unsafe {
+            let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+            if handle.is_null() {
+                return process_start_ticks(pid).is_none();
+            }
+            let wait = WaitForSingleObject(handle, timeout_ms.min(u32::MAX as u64 - 1) as u32);
+            CloseHandle(handle);
+            wait == WAIT_OBJECT_0
+        }
+    }
+
     /// 让 `Child` 的句柄对 `windows-sys` 可见。
     pub fn raw_handle(child: &std::process::Child) -> HANDLE {
         child.as_raw_handle() as HANDLE
@@ -201,6 +272,14 @@ mod sys {
 
 #[cfg(not(windows))]
 mod sys {
+    /// 非 Windows 没有窗口概念（命令层在 `platform_gate` 就返回了，这里只为编译同形）。
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[allow(dead_code)]
+    pub struct CloseReport {
+        pub windows: u32,
+        pub posted: u32,
+    }
+
     pub fn pid_alive(_pid: u32) -> bool {
         false
     }
@@ -210,6 +289,14 @@ mod sys {
     pub fn terminate_pid(_pid: u32) {}
     pub fn resume_process_threads(_pid: u32) -> Result<u32, String> {
         Err("unsupported".to_string())
+    }
+    #[allow(dead_code)]
+    pub fn post_close_to_pid(_pid: u32) -> CloseReport {
+        CloseReport::default()
+    }
+    #[allow(dead_code)]
+    pub fn wait_process_exit(_pid: u32, _timeout_ms: u64) -> bool {
+        false
     }
 }
 
@@ -763,7 +850,36 @@ pub fn describe_exit_code(code: Option<i64>) -> String {
 
 /* ------------------------------- 停止 / 查询 ------------------------------- */
 
-/// `stop` 的同步实现：`TerminateJobObject` → 等 Job 进程计数归零 → 等监视线程收尾。
+/// 优雅期 = 命令层传下来的 `timeoutMs` 钳进 [0, 30 s]，缺省 5 s。
+///
+/// 参数到了这一层只剩"等多久"这一件事：命令层之外没有人再解释这个秒数。
+fn grace_period(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(
+        timeout_ms
+            .unwrap_or(DEFAULT_STOP_TIMEOUT_MS)
+            .min(MAX_STOP_TIMEOUT_MS),
+    )
+}
+
+/// 测试直读（会**真的**投一枚 `WM_CLOSE`）：回（可见顶层窗口数, 投递成功数）。
+///
+/// 这两件事要分开看才能定责："没窗口"与"投了但没人理"是两条不同的分支，
+/// 混成一个 bool 时一条用例两种红分不清。
+#[cfg(test)]
+pub(crate) fn post_close_report_for_test(pid: u32) -> (u32, u32) {
+    let report = sys::post_close_to_pid(pid);
+    (report.windows, report.posted)
+}
+
+/// `stop` 的同步实现（§8 状态机）：先敲门（`WM_CLOSE`），优雅期到点再杀树。
+///
+/// 三条不可换序：
+/// 1. **先发 `stopping`**：从这一刻起 `start` 必须报 `LAUNCHER_INSTANCE_BUSY`（运行表里
+///    还有它），UI 也从事件里知道"正在关"；
+/// 2. **优雅期只等一次**：投递成功才等进程退出；零窗口 / 投递全失败 ⇒ 立刻强杀，
+///    不许白等（"点结束却一动不动 5 s"正是这条铁律要防的）；
+/// 3. **`forced` 只在实际走强杀时置位**：monitor 靠它分 `user` / `killed`，
+///    所以超时被杀也必须记 `killed`——它走的确实是杀树那条路。
 pub fn stop_blocking(
     host: &Arc<LauncherHost>,
     instance_id: &str,
@@ -771,30 +887,49 @@ pub fn stop_blocking(
     timeout_ms: Option<u64>,
 ) -> LauncherResult<ProcessStatusDto> {
     platform_gate()?;
-    let (job, stop, session_id, pid, started_at) = {
+    // 先把运行记录里的字段抄出来、**把运行表的锁放掉**，再往下做任何事：
+    // `status()` 自己还要读运行表，持锁调用它就是同一把 std::Mutex 自锁（这条踩过）。
+    let running = {
         let map = host.running_map();
-        match map.get(instance_id) {
-            Some(proc) => (
+        map.get(instance_id).map(|proc| {
+            (
                 proc.job.clone(),
                 proc.stop.clone(),
                 proc.session_id.clone(),
                 proc.pid,
                 proc.started_at.clone(),
-            ),
-            // 没在跑：按"当前读数"回答（幂等，不报错）
-            None => return Ok(status(host, instance_id)),
-        }
+            )
+        })
     };
+    let Some((job, stop, session_id, pid, started_at)) = running else {
+        // 没在跑：按"当前读数"回答（幂等，不报错）
+        return Ok(status(host, instance_id));
+    };
+    let grace = grace_period(timeout_ms);
 
+    // 第二发 stop（UI 连点 / 两路命令并发）：不再敲一遍门、也不重置优雅期，只等第一发
+    // 收尾；`force` 仍然算数——那是"我改主意了，立刻杀"。
+    if stop.requested.swap(true, Ordering::SeqCst) {
+        if force && !stop.forced.swap(true, Ordering::SeqCst) {
+            job.terminate(STOP_EXIT_CODE)?;
+        }
+        wait_turned_down(host, instance_id, grace);
+        return Ok(finishing_status(
+            host,
+            instance_id,
+            pid,
+            &session_id,
+            &started_at,
+        ));
+    }
     stop.forced.store(force, Ordering::SeqCst);
-    stop.requested.store(true, Ordering::SeqCst);
 
     let stopping = ProcessStatusDto {
         instance_id: instance_id.to_string(),
         state: "stopping".to_string(),
         pid: Some(pid),
         session_id: Some(session_id.clone()),
-        started_at: Some(started_at),
+        started_at: Some(started_at.clone()),
         elapsed_ms: 0,
         exit_code: None,
         exit_reason: None,
@@ -806,39 +941,110 @@ pub fn stop_blocking(
         json!({ "instanceId": instance_id, "status": stopping }),
     );
 
-    job.terminate(STOP_EXIT_CODE)?;
-
-    let timeout = Duration::from_millis(
-        timeout_ms
-            .unwrap_or(DEFAULT_STOP_TIMEOUT_MS)
-            .min(MAX_STOP_TIMEOUT_MS),
-    );
-    let deadline = Instant::now() + timeout;
-    loop {
-        let empty = job.process_count().map(|count| count == 0).unwrap_or(true);
-        if empty || Instant::now() >= deadline {
-            break;
+    let killed = if force {
+        true
+    } else {
+        let report = sys::post_close_to_pid(pid);
+        if report.posted == 0 {
+            // 零个可见窗口，或每个窗口都投递失败：优雅期里不会有任何变化
+            true
+        } else {
+            !sys::wait_process_exit(pid, grace.as_millis() as u64)
         }
-        std::thread::sleep(Duration::from_millis(25));
+    };
+    if killed {
+        // 置位必须在 terminate 之前：monitor 在子进程退出后立刻读它
+        stop.forced.store(true, Ordering::SeqCst);
+        job.terminate(STOP_EXIT_CODE)?;
+        wait_job_drained(&job);
     }
-    // 监视线程还要落退出记录 / 清锁：给它一小段时间，但绝不无限等
-    let deadline = Instant::now() + Duration::from_secs(3);
+    wait_turned_down(
+        host,
+        instance_id,
+        Duration::from_millis(MONITOR_SETTLE_TIMEOUT_MS),
+    );
+    Ok(finishing_status(
+        host,
+        instance_id,
+        pid,
+        &session_id,
+        &started_at,
+    ))
+}
+
+/// 等运行表里没有它（monitor 摘表 = 退出记录 / 清锁都写完了），有上限。
+fn wait_turned_down(host: &LauncherHost, instance_id: &str, budget: Duration) {
+    let deadline = Instant::now() + budget;
     while host.running_map().contains_key(instance_id) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
-    Ok(status(host, instance_id))
+}
+
+/// 强杀之后等 Job 进程计数归零（有上限：查询失败或死不透都不能把命令挂住）。
+fn wait_job_drained(job: &JobHandle) {
+    let deadline = Instant::now() + Duration::from_millis(KILL_SETTLE_TIMEOUT_MS);
+    loop {
+        match job.process_count() {
+            Some(0) => return,
+            Some(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            // 还有进程但已到上限，或 Job 已经查不出读数：都只能如实返回，
+            // 让命令层拿到"stopping"而不是继续阻塞。
+            Some(_) | None => return,
+        }
+    }
+}
+
+/// 收尾读数：运行表里还有它 ⇒ 如实回 `stopping`（别把"还在关"说成 running）；
+/// 否则回最近一次终态快照（exited / crashed + exitReason）。
+fn finishing_status(
+    host: &LauncherHost,
+    instance_id: &str,
+    pid: u32,
+    session_id: &str,
+    started_at: &str,
+) -> ProcessStatusDto {
+    // 单独一句取读数：`if host.running_map().contains_key(..)` 那种写法会把临时守卫
+    // 挂到整个 if 语句上，体内再调 `status()` 就是自锁。
+    let still_running = host.running_map().contains_key(instance_id);
+    if still_running {
+        return ProcessStatusDto {
+            instance_id: instance_id.to_string(),
+            state: "stopping".to_string(),
+            pid: Some(pid),
+            session_id: Some(session_id.to_string()),
+            started_at: Some(started_at.to_string()),
+            elapsed_ms: 0,
+            exit_code: None,
+            exit_reason: None,
+            last_error: None,
+        };
+    }
+    status(host, instance_id)
 }
 
 /// 单个实例的当前读数（运行中用实时耗时，否则用最近一次快照）。
 pub fn status(host: &LauncherHost, instance_id: &str) -> ProcessStatusDto {
-    if let Some(proc) = host.running_map().get(instance_id) {
+    // 先把运行记录抄出来、放掉运行表的锁，再去读快照表：两把锁不嵌套，
+    // 而且 `status()` 可以被"已经持有运行表"的调用方安全调用（别再造自锁）。
+    let live = {
+        let map = host.running_map();
+        map.get(instance_id).map(|proc| {
+            (
+                proc.pid,
+                proc.session_id.clone(),
+                proc.started_at.clone(),
+                proc.started.elapsed().as_millis() as u64,
+            )
+        })
+    };
+    if let Some((pid, session_id, started_at, elapsed_ms)) = live {
         return ProcessStatusDto {
             instance_id: instance_id.to_string(),
             state: "running".to_string(),
-            pid: Some(proc.pid),
-            session_id: Some(proc.session_id.clone()),
-            started_at: Some(proc.started_at.clone()),
-            elapsed_ms: proc.started.elapsed().as_millis() as u64,
+            pid: Some(pid),
+            session_id: Some(session_id),
+            started_at: Some(started_at),
+            elapsed_ms,
             exit_code: None,
             exit_reason: None,
             last_error: None,
