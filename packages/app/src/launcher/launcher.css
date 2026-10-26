@@ -697,6 +697,251 @@
   color: var(--fg-dim);
 }
 
+/* ------------------------------ 内容包面板（UI-CONTENT） ------------------------------
+   类名族 `launcher-content-*`：只管内容包面板自己的版式。颜色 / 圆角 / 间距 / 字号
+   全部吃 token（同本文件①②③三条纪律）；状态一律复用 `.launcher-status` 的
+   「圆点 + 文字 + 语义色」双编码，不在这里另造一套色规则。 */
+
+.launcher-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.launcher-content-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.launcher-content-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-2);
+  color: var(--fg);
+}
+.launcher-content-count {
+  font-size: var(--fs-0);
+  font-weight: 400;
+  color: var(--fg-dim);
+}
+.launcher-content-head-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.launcher-content-hint {
+  margin: 0;
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.launcher-content-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-content-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.launcher-content-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  min-width: 0;
+}
+/* 已停用的包整行降一档亮度（文字仍带「已停用」，不靠颜色单编码） */
+.launcher-content-row[data-enabled='false'] .launcher-content-name {
+  color: var(--fg-dim);
+}
+.launcher-content-row-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.launcher-content-name {
+  font-size: var(--fs-2);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launcher-content-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.launcher-content-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+.launcher-content-confirm-text {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg);
+}
+.launcher-content-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-text);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.launcher-content-plan-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-content-plan-head .launcher-status {
+  margin-left: auto;
+}
+.launcher-content-facts {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  padding: var(--space-2) var(--space-3);
+}
+.launcher-content-warnings {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  color: var(--amber);
+}
+.launcher-content-conflicts-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-content-conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.launcher-content-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  min-width: 0;
+}
+/* 撞别的包 / 撞基础文件：左侧竖条区分（文字里也有「撞…」一档，不靠颜色单编码） */
+.launcher-content-conflict[data-kind='other-pack'] {
+  border-left: 2px solid var(--amber);
+}
+.launcher-content-conflict[data-kind='base-file'] {
+  border-left: 2px solid var(--red);
+}
+.launcher-content-conflict-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg);
+  word-break: break-all;
+}
+.launcher-content-task {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.launcher-content-diagnosis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.launcher-content-groups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.launcher-content-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.launcher-content-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.launcher-content-group-label {
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-content-group-items {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  color: var(--fg);
+  word-break: break-all;
+}
+.launcher-content-group-pack {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--accent-text);
+}
+
 /* 窄窗（浮层缩到 760 以下）：列表收到上方，详情在下（同 `settings-nav-split` 的单列口径） */
 @media (max-width: 760px) {
   .launcher-body {
