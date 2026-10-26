@@ -1,4 +1,13 @@
 /* ============================================================================
+   设置浮层的组件级样式切片（SettingsPanel.tsx 静态 import）
+   ----------------------------------------------------------------------------
+   ① 外观 → 主题选择器（2026-10 批；`ThemePickerSection` 专用）——原文件主体，
+      两条色路的口径见下面那段文件头，没有改。
+   ② 1026 kit-converge C2：常规行的 `KitField` 接线（VIS-40）与浮层的纵向留白 /
+      分组标题（VIS-73），在文件尾另起一段。
+   ============================================================================ */
+
+/* ============================================================================
    设置页 → 外观 → 主题选择器（2026-10 批；`ui/SettingsPanel.tsx` 的 ThemePickerSection 专用）
    ----------------------------------------------------------------------------
    分层口径（两条色路，各自为什么长这样都写在下面，别混用）：
@@ -171,4 +180,59 @@
   color: var(--fg-dim);
   font-size: var(--fs-0);
   line-height: 1.6;
+}
+
+/* ============================================================================
+   1026 kit-converge C2 · 设置浮层的行模板与纵向留白（VIS-40 / VIS-73）
+   ----------------------------------------------------------------------------
+   本文件是设置页的组件级样式切片（SettingsPanel.tsx 静态 import，随本面板的懒 chunk
+   到达，不落首屏样式链）。以下两段同样只在该浮层内生效，一律以 `.settings-host` 起头
+   取特异性——`styles-project.css` 的 `.settings-*` 本体归另一条线，本批一个字不改，
+   要压过它靠的是双类（0,2,x > 0,1,x），与到达顺序无关。
+   ============================================================================ */
+
+/* ---- C2-c：常规行换 ui-kit `KitField` 之后的两条页面腿 ---- */
+/* ① 右轴：件自己缺省 `minmax(0,1fr) auto`，控件列各行其宽；设置页要的是那条
+      「开关 / 步进器 / 裸按钮右边缘同轴」的竖直尺，它的真源是 `.settings-host` 上的
+      `--settings-ctl-axis`（自定义属性会继承进来，所以这里直接吃它，不抄第二份 120px）。
+   ② `.settings-kit-row` 只做 `[data-settings-key]` 锚的载体：锚必须逐行写成 JSX 字面量
+      （`settings-search.test.ts` 只认字面量，而 `KitField` 是零页面知识的控件件），
+      所以这层外壳不带任何视觉，padding / 圆角 / hover / 栅格全在件自己身上。 */
+.settings-host .kit-field {
+  grid-template-columns: minmax(0, 1fr) minmax(var(--settings-ctl-axis), auto);
+}
+.settings-kit-row {
+  min-width: 0;
+}
+
+/* ---- C2-d：纵向留白——不留一整片空的底部 ----
+   浮层是「抬头 + 左导航栏 / 右分节面板 + 页脚」三段，中间那行 `align-items` 缺省 stretch：
+   左右两栏谁高跟谁，另一栏被拉成等高。右栏内容只到六成时，余量全**堆在正文底下**，
+   看上去就是"模态还有一屏没用上"。这里不跟它抢高度，改成把余量**上下对分**：
+   `margin-block: auto` 只在有剩余空间时才分配（内容填满或溢出时两枚边距归零，
+   绝不把首行顶出滚动区），于是一行设置也只有一行设置的高度，不再拿空白充场面。 */
+.settings-host .settings-nav-panel {
+  display: flex;
+  flex-direction: column;
+}
+.settings-host .settings-nav-panel > .settings-body {
+  margin-block: auto;
+}
+/* 分栏区不再把宿主的余量吃干（`flex: 1 1 auto` → `0 1 auto`）：宿主本来就只带
+   `max-height`，高度应当由内容决定；留着 1 的那一档，短内容时底部空白永远收不掉。 */
+.settings-host .settings-nav-split {
+  flex: 0 1 auto;
+}
+
+/* ---- C2-d：分组标题改小标题，删掉 fieldset 尾线 ----
+   原来是 11px 正文色 + 一条向右淡出的规则线（`::after` 那截渐变）——「视图 ————」那种
+   fieldset 味。本档换成 12px（`--fs-1`）的 dim 小标题 + 8px（`--space-2`）下间距，
+   锚点感只靠字距与字重撑，不再画线：线在右栏被拉满时还会跟着正文一起变长，越短的内容越显眼。 */
+.settings-host .settings-group-title {
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  margin-bottom: var(--space-2);
+}
+.settings-host .settings-group-title::after {
+  content: none;
 }

@@ -34,105 +34,15 @@ const cx = (...parts: Array<string | false | null | undefined>): string =>
 
 /* ------------------------------- KitField ------------------------------- */
 
-export interface KitFieldProps {
-  /** 行标题（一行话说清这项是什么） */
-  title: ReactNode;
-  /** 副行说明（settings-hint 语言：12px dim、行高 1.6） */
-  description?: ReactNode;
-  /** 控件槽：渲染在右轴（与文字列共享 16px 栅格沟） */
-  control?: ReactNode;
-  /** 追加在描述之后的额外内容（如 has-field 的独占行输入） */
-  children?: ReactNode;
-  /**
-   * `'label'` = 整行即点即切（把行内第一个可标记控件当 labelee，开关行的既有做法）；
-   * 默认 `'div'`。行内用 KitCheck / KitRadio 时**不要**带可见文字再套 label 行——
-   * 二选一：要么 `as="label"` + 无文字控件，要么控件自带文字。
-   */
-  as?: 'div' | 'label';
-  /** 从属项：缩进一级 + 左侧 2px 从属线 */
-  nested?: boolean;
-  /** 控件当前不起作用：整行降透明度、撤 hover、撤指针语义（settings-row.off 口径） */
-  inactive?: boolean;
-  id?: string;
-  className?: string;
-}
-
-/** 设置行模板：标题 + 描述 + 控件槽，两列栅格，宽度上限 760（L09 行模板的收编目标）。 */
-export function KitField({
-  title,
-  description,
-  control,
-  children,
-  as = 'div',
-  nested = false,
-  inactive = false,
-  id,
-  className,
-}: KitFieldProps): ReactElement {
-  const Wrapper = as === 'label' ? 'label' : 'div';
-  return (
-    <Wrapper
-      id={id}
-      className={cx(
-        'kit-field',
-        as === 'label' && 'kit-field-clickable',
-        nested && 'kit-field-nested',
-        inactive && 'kit-field-inactive',
-        className,
-      )}
-    >
-      <span className="kit-field-text">
-        <span className="kit-field-title">{title}</span>
-        {description !== undefined ? <span className="kit-field-desc">{description}</span> : null}
-        {children}
-      </span>
-      {control !== undefined ? <span className="kit-field-ctl">{control}</span> : null}
-    </Wrapper>
-  );
-}
+// 单品叶子（1026 kit-converge C2-c）：实现搬去 `./kit-field`，这里只 re-export——桶棒导出面一字不变。
+export { KitField, type KitFieldProps } from './kit-field';
 
 /* ------------------------------- KitCheck ------------------------------- */
 
-export interface KitCheckProps {
-  checked: boolean;
-  /** 直接给布尔值，不向调用方泄漏 event（Switch 同族口径） */
-  onChange: (checked: boolean) => void;
-  /** 无障碍名；无可见文字时落 `aria-label`，有可见文字时文字即标签 */
-  label: string;
-  /** 可见文字（给了就换成 label 包裹，点文字即切换） */
-  children?: ReactNode;
-  disabled?: boolean;
-  id?: string;
-  className?: string;
-}
-
-/** 自绘复选框：视觉隐藏的真 `<input type="checkbox">` + 井面勾盒（替掉零 CSS 的原生档）。 */
-export function KitCheck({
-  checked,
-  onChange,
-  label,
-  children,
-  disabled = false,
-  id,
-  className,
-}: KitCheckProps): ReactElement {
-  const Wrapper = children !== undefined ? 'label' : 'span';
-  return (
-    <Wrapper className={cx('kit-check', className)}>
-      <input
-        id={id}
-        type="checkbox"
-        className="kit-check-input"
-        checked={checked}
-        disabled={disabled}
-        aria-label={children === undefined ? label : undefined}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="kit-check-box" aria-hidden="true" />
-      {children !== undefined ? <span className="kit-check-text">{children}</span> : null}
-    </Wrapper>
-  );
-}
+// 单品叶子（1026 kit-converge C2-a）：实现搬去 `./kit-check`，这里只 re-export——桶棒导出面一字不变。
+// ⚠ 基座只有这一枚 `KitCheck`：任何文件再写同名局部 `function KitCheck` 都会把 import 绑定遮掉，
+//    由 tests/kit-field-converge.test.ts 全仓判据钉住（VIS-41）。
+export { KitCheck, type KitCheckProps } from './kit-check';
 
 /* ------------------------------- KitRadio ------------------------------- */
 
@@ -141,61 +51,12 @@ export { KitRadio, type KitRadioProps } from './kit-radio';
 
 /* ------------------------------- KitSelect ------------------------------- */
 
-export interface KitSelectOption {
-  value: string;
-  label: string;
-  disabled?: boolean;
-}
-
-export interface KitSelectProps {
-  value: string;
-  /** 直接给选中项的 value，不泄漏 event */
-  onChange: (value: string) => void;
-  options: readonly KitSelectOption[];
-  /** 无障碍名（原生 select 没有可见标题时必填语义） */
-  ariaLabel: string;
-  title?: string;
-  disabled?: boolean;
-  id?: string;
-  className?: string;
-}
-
-/**
- * 下拉选择：`appearance:none` 的真 `<select>` 住在 sunken 井里 + 自绘 chevron。
- * 键盘 / 屏幕阅读器语义全部走原生（这是刻意取舍：不做 listbox 重实现，只把**外观**收进
- * 控件语言）；弹层菜单面按 token 给 `option` 底色与文字色。
- */
-export function KitSelect({
-  value,
-  onChange,
-  options,
-  ariaLabel,
-  title,
-  disabled = false,
-  id,
-  className,
-}: KitSelectProps): ReactElement {
-  return (
-    <span className={cx('kit-select', className)}>
-      <select
-        id={id}
-        className="kit-select-input"
-        value={value}
-        disabled={disabled}
-        title={title}
-        aria-label={ariaLabel}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value} disabled={o.disabled}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <span className="kit-select-arrow" aria-hidden="true" />
-    </span>
-  );
-}
+// 单品叶子（1026 kit-converge C2-b）：实现搬去 `./kit-select`，这里只 re-export——桶棒导出面一字不变。
+export {
+  KitSelect,
+  type KitSelectProps,
+  type KitSelectOption,
+} from './kit-select';
 
 /* ------------------------------ KitSegmented ------------------------------ */
 

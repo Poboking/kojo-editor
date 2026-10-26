@@ -87,114 +87,17 @@
   font-size: var(--fs-1);
 }
 
-/* ------------------- KitCheck：自绘勾选（语义腿仍是原生） ------------------- */
-/* ui-kit-candidate: KitCheck —— 与 `Switch.tsx` 同语言的勾选形态；真 checkbox 只把外观
-   换成画出来的方框，Tab / 空格 / `checked` 受控 / 屏幕阅读器一条不掉。收编后可替掉
-   `ksp-opt-check` 与设置页里靠 `accent-color` 的散勾选。 */
+/* ------------------- KitCheck / KitSelect：件本体在 ui-kit.css ------------------- */
+/* 这两枚控件的外观自 1026 C2 起**全部**取自 ui-kit 基座叶子（`kit-check.tsx` /
+   `kit-select.tsx`，度量住 `ui-kit/ui-kit.css` 的 `.kit-check*` / `.kit-select*`）。
+   本域只留两条真正的度量差——多写一条就是第二份勾盒（VIS-41 的教训）。
+   旧的 `.prob-check*`（14px 勾盒 + check SVG 字形）与 `.prob-select*`（自绘井 +
+   `Icon chevron-down`）整段随本批删净：基座的 16px 勾盒与自绘 chevron 已经盖住同一诉求。 */
 
-/* 视觉隐藏、**不** `display:none`：后者会把键盘焦点与无障碍名一起丢掉（同 `Switch`） */
-.panel-problems.prob .prob-check {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-}
-.panel-problems.prob .prob-check-input {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  opacity: 0;
-  transform: translateY(-50%);
-}
-.panel-problems.prob .prob-check-box {
-  display: inline-grid;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xs);
-  background: var(--surface-sunken);
-  color: transparent;
-  transition:
-    background-color var(--dur-1) var(--ease-out),
-    border-color var(--dur-1) var(--ease-out),
-    box-shadow var(--dur-1) var(--ease-out);
-}
-.panel-problems.prob .prob-check-glyph {
-  opacity: 0;
-  /* 图标本体按 16 格画，勾到 10 档时描边相对变粗是**想要的**（小勾要看得见） */
-  transform: scale(0.7);
-  transition:
-    opacity var(--dur-1) var(--ease-out),
-    transform var(--dur-2) var(--ease-spring);
-}
-/* 选中态：accent 填充档（与全站"已开启"同一语言），勾走 `--on-accent` */
-.panel-problems.prob .prob-check-input:checked + .prob-check-box {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
-  color: var(--on-accent);
-}
-.panel-problems.prob .prob-check-input:checked + .prob-check-box .prob-check-glyph {
-  opacity: 1;
-  transform: none;
-}
-.panel-problems.prob .prob-check-input:focus-visible + .prob-check-box {
-  border-color: var(--focus-ring);
-  box-shadow: var(--shadow-focus);
-}
-.panel-problems.prob .prob-check-input:disabled + .prob-check-box {
-  opacity: var(--disabled-opacity);
-}
-
-/* ------------------- KitSelect：原生 select 的 token 化外观 ------------------- */
-/* ui-kit-candidate: KitSelect —— 外观自绘（`appearance:none` + SVG 箭头 + 井面），
-   开合 / 键盘 / 弹层仍归原生：弹层由系统画，换全自绘要另写开合态与焦点管理。 */
-.panel-problems.prob .prob-select-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  min-width: 0;
-}
-.panel-problems.prob .prob-select {
-  appearance: none;
-  -webkit-appearance: none;
-  min-width: 0;
+/* KitSelect 在本面板的度量差：井宽上限（长来源名不撑爆工具条），基座那条没有这条腿。
+   井体宽度落在 wrapper span 上，内层 select 由基座的 `min-width: 0` 自己收进来。 */
+.panel-problems.prob .prob-select-well {
   max-width: 220px;
-  min-height: 24px;
-  padding: 0 20px 0 var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--fg);
-  font-family: var(--font-meta);
-  font-size: var(--fs-1);
-  line-height: 1.4;
-  text-overflow: ellipsis;
-}
-.panel-problems.prob .prob-select:hover {
-  border-color: var(--border-strong);
-}
-.panel-problems.prob .prob-select:focus-visible {
-  border-color: var(--focus-ring);
-  box-shadow: var(--shadow-focus);
-}
-/* 系统弹层的选项面：不指定的话在深底上会落平台白底 */
-.panel-problems.prob .prob-select option {
-  background-color: var(--surface-overlay);
-  color: var(--fg);
-}
-.panel-problems.prob .prob-select-caret {
-  position: absolute;
-  right: 5px;
-  /* 箭头只是指认，点它的人仍是下面的 select */
-  pointer-events: none;
-  color: var(--fg-dim);
 }
 
 /* ------------------- 过滤输入井（与 `ksp-field` 同族） ------------------- */
@@ -579,15 +482,6 @@
   background: transparent;
 }
 
-/* ------------------------------ 减弱动效 ------------------------------ */
-
-@media (prefers-reduced-motion: reduce) {
-  .panel-problems.prob .prob-check-glyph {
-    transition: opacity var(--dur-1) linear;
-    transform: none;
-  }
-}
-:root[data-motion='reduced'] .panel-problems.prob .prob-check-glyph {
-  transition: opacity var(--dur-1) linear;
-  transform: none;
-}
+/* 减弱动效：本域唯一的动效腿（勾盒与井的过渡）都已随 KitCheck / KitSelect 收进
+   `ui-kit.css`，那边按 `--dur-*` 单源、由全站 `:root[data-motion]` 那条统一压平；
+   这里不再抄第二份 `prob-check-glyph` 回落（件本体没了，回落也就没了对象）。 */

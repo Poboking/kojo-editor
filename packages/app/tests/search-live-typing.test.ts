@@ -150,7 +150,7 @@ describe('检索面板「打字即搜」', () => {
     vi.useFakeTimers();
     const { queries, release } = recordingRunner();
     await mount();
-    const box = container.querySelector<HTMLInputElement>('input.search-live');
+    const box = container.querySelector<HTMLInputElement>('.search-live .kit-check-input');
     expect(box, '「打字即搜」开关必须在场').not.toBeNull();
     await act(async () => {
       box!.click();

@@ -75,6 +75,10 @@ import {
 import { SearchFilterBar } from './SearchFilterBar';
 import { KitPanelHeader } from '../ui-kit/kit-panel-header';
 import { KitSearchField } from '../ui-kit/kit-search-field';
+// 下拉井与勾选取自基座叶子（1026 C2-b / C2-a）：排序与范围两枚、"打字即搜"一颗。
+// 键盘腿（Enter 即搜）挂在行本体上——keydown 会冒泡，件因此不必多开一个 onKeyDown 口子。
+import { KitCheck } from '../ui-kit/kit-check';
+import { KitSelect } from '../ui-kit/kit-select';
 import '../search-panel.css';
 import './context-menu-search.css';
 
@@ -1259,14 +1263,35 @@ export function SearchPanel({
             </label>
 
             {/* 排序（P2-11）：三选一，默认按路径（与今天逐字一致）。只改投影序，
-                不重发检索；在途流式结果也当场重排（排序是纯函数，住 search-stream）。 */}
-            <label className="search-sort-row ksp-opt-row">
+                不重发检索；在途流式结果也当场重排（排序是纯函数，住 search-stream）。
+                井本体 = ui-kit `KitSelect`（1026 C2-b）：`appearance` 归零 + 自绘 chevron，
+                开合 / 键盘 / 读屏仍归原生 `<select>`。Enter 即搜那条腿在行本体上接住
+                （keydown 从 select 冒泡上来），件因此不必为它多开一个口子。 */}
+            <label
+              className="search-sort-row ksp-opt-row"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  start();
+                }
+              }}
+            >
               <span className="ksp-opt-label">排序</span>
-              <select
+              <KitSelect
                 className="search-sort ksp-opt-select"
+                ariaLabel="排序方式"
                 title="结果排序：按路径（默认）/ 按命中数 / 按文件名。只改投影顺序，不重新检索。"
                 value={s.sortMode}
-                onChange={(e) => setSearchSortMode(e.target.value as SearchSortMode)}
+                onChange={(v) => setSearchSortMode(v as SearchSortMode)}
+                options={SEARCH_SORT_OPTIONS.map((o) => ({ value: o.mode, label: o.label }))}
+              />
+            </label>
+
+            {scopes.length > 0 ? (
+              // 范围（只看那一处）同上：井在基座，逐档说明走 `option.title`（KitSelectOption
+              // 那条 additive 的腿），陈旧 key 按"不限"显示与生效，不猜。
+              <label
+                className="search-scope-row ksp-opt-row"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -1274,52 +1299,42 @@ export function SearchPanel({
                   }
                 }}
               >
-                {SEARCH_SORT_OPTIONS.map((o) => (
-                  <option key={o.mode} value={o.mode}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {scopes.length > 0 ? (
-              <label className="search-scope-row ksp-opt-row">
                 <span className="ksp-opt-label">只看</span>
-                <select
+                <KitSelect
                   className="search-scope ksp-opt-select"
+                  ariaLabel="只看的目录范围"
                   title="默认不限：整个项目加作者工作区一起搜。选定后只搜那一处，速度更快，但范围外的文件这一轮不会搜。"
-                  // 陈旧 key（换过项目）按"不限"显示与生效，不猜
                   value={selectedScopeKey}
-                  onChange={(e) => setSearchScope(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      start();
-                    }
-                  }}
-                >
-                  <option value="">全部目录</option>
-                  {scopes.map((o) => (
-                    <option key={o.key} value={o.key} title={o.detail || undefined}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setSearchScope(v)}
+                  options={[
+                    { value: '', label: '全部目录' },
+                    ...scopes.map((o) => ({
+                      value: o.key,
+                      label: o.label,
+                      title: o.detail || undefined,
+                    })),
+                  ]}
+                />
               </label>
             ) : null}
 
             {/* 打字即搜开关（P2-11）：住面板自己行内，不占全局设置。
-                默认开的理由见组件顶部 `liveSearch` 注释。 */}
-            <label className="search-live-row ksp-opt-row">
-              <input
-                type="checkbox"
-                className="search-live ksp-opt-check"
+                默认开的理由见组件顶部 `liveSearch` 注释。
+                勾本体 = ui-kit `KitCheck`（1026 C2-a）：可见文字走件自己的 label 档
+                （外层因此从 `<label>` 退成 `<div>`，不套嵌套 label）。 */}
+            <div
+              className="search-live-row ksp-opt-row"
+              title="打字即搜：停止输入约 0.3 秒后自动检索（回车 / 搜索钮随时可手动搜）"
+            >
+              <KitCheck
+                className="search-live"
                 checked={liveSearch}
-                onChange={(e) => setLiveSearch(e.target.checked)}
-                title="打字即搜：停止输入约 0.3 秒后自动检索（回车 / 搜索钮随时可手动搜）"
-              />
-              <span className="ksp-opt-check-label">打字即搜</span>
-            </label>
+                label="打字即搜"
+                onChange={setLiveSearch}
+              >
+                打字即搜
+              </KitCheck>
+            </div>
 
             {/* P2-15：glob 过滤 + 保留大小写开关（自带状态的新组件；一行接线，不重排既有行） */}
             <SearchFilterBar onRequestSearch={start} />
