@@ -256,7 +256,13 @@ function previewRuntimeFor(target: HTMLElement): PreviewMenuRuntime | null {
 
 /* ------------------------------- 面声明 ------------------------------- */
 
-/** 编辑器外框（`.editor-toolbar` 上带 `data-context-surface="editor"`） */
+/**
+ * 编辑器外框（`data-context-surface="editor"` 挂在外框根节点上）。
+ *
+ * VIS-15（1026 编辑器体感批 E2）之后那一条是**上下文带** `.editor-crumb-band`
+ * （改前是 `.editor-toolbar`，与它下面那根 20px 的面包屑条叠成两条窄带）；
+ * 面属性跟着同一个根节点搬了过去 ⇒ 右键接管范围一字没缩。
+ */
 declareContextSurface({
   id: 'editor',
   ariaLabel: '编辑器菜单',

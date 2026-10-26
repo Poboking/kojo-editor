@@ -12,8 +12,10 @@
      在本文件末尾按选择器收口，不改 styles.css。
    - 语义绿从 #4fc08d 移向叶绿豆沙 #62c776：与薄荷青绿拉开色相距离，避免"成功色"与
      "accent/选中色"同相难分。
-   - 底部另有残留白/黑硬值的 `[data-theme='mint-dark']` 局部覆盖（遮罩、sheen/ripple、
-     欢迎页极光紫斑、语义 wash 在更深底上的 alpha 补偿）。
+   - 底部另有 `[data-theme='mint-dark']` 局部覆盖（sheen/ripple、欢迎页极光紫斑、开关滑块细环、
+     语义 wash 在更深底上的 alpha 补偿）——VIS-54（2026-10-26）起这些覆盖**只挂选择器、不写色**：
+     值全在本文件那块 `:root`（含本档自有的 `--success-text / --thumb-* / --aurora-cool / --sheen-streak /
+     --ripple-*`），或由 `--green/--amber/--red/--on-accent` 经 `color-mix()` 现派生。
    需覆盖的 token 全集见 light.css 顶部注释（同一张清单），本块逐项给齐。
    ============================================================================ */
 
@@ -146,28 +148,52 @@
   --scrim-solid: rgba(5, 12, 8, 0.56);
   --rim-1: rgba(191, 232, 210, 0.34);
   --rim-solid: rgba(191, 232, 210, 0.42);
+
+  /* —— 本档自有的"值"（VIS-54 · 2026-10-26 车道 E3）——
+     这些枚原先写在外挂规则里（档内私有色 / 裸 hex）。本档的纪律与 light 同：
+     **规则里一个色值都不写**，颜色全住在这块 `:root`，规则只 `var()` 或 `color-mix()` 派生。
+     逐枚终值不变（对拍见 `theme-wash-token-source.test.ts`）；语义与正名归组长的 token 清单
+     （`--success-text` 是 `--danger-text` 的对称缺位，最该先上提到 tokens.css）。 */
+  /* 成功色的**文字档**：绿牌上的字要比 `--green` 亮一档才在 14% wash 上读出"牌"的分量 */
+  --success-text: #7fd28e; /* 压 bg-2 9.18:1 */
+  /* 开关滑块的两层：落在墨绿面上的接触阴影 + 淡青白细环（见下方 .switch-thumb） */
+  --thumb-drop: rgba(2, 10, 6, 0.5);
+  --thumb-ring: rgba(191, 232, 210, 0.4);
+  /* 欢迎页极光的第二团（冰青斑） */
+  --aurora-cool: rgba(56, 168, 196, 0.13);
+  /* 高光扫过 / 按压涟漪的冷薄荷白（纯白在亮薄荷按钮上会"爆"） */
+  --sheen-streak: rgba(226, 255, 241, 0.16);
+  --ripple-ink: rgba(214, 255, 236, 0.3);
+  --ripple-fade: rgba(214, 255, 236, 0);
 }
 
 /* ----------------------------------------------------------------------------
    残留硬值收口（styles.css 里绕不开 token 的白/黑/紫字面量，按选择器覆盖）
-   -------------------------------------------------------------------------- */
+   ---------------------------------------------------------------------------
+   VIS-54（2026-10-26 车道 E3）：本节仍然要存在——base 规则给的是**为深底调的白墨值**，
+   本档必须逐处反相；但**规则里不再出现任何色值**：颜色要么来自上面那块 `:root` 的值，
+   要么由 `--green / --amber / --red / --on-accent` 现派生
+   （`color-mix(in srgb, var(--x) N%, transparent)`）。逐条改前对拍见
+   `theme-wash-token-source.test.ts`。 */
 
 /* 向导主按钮硬编码 #fff：随 --on-accent 走墨绿字 */
 :root[data-theme='mint-dark'] .wizard-actions .primary {
   color: var(--on-accent);
 }
-/* 主按钮里的快捷键芯片：原样式是"白字+白边+黑底"（为蓝底设计）；薄荷底上换成墨绿三件套 */
+/* 主按钮里的快捷键芯片：原样式是"白字+白边+黑底"（为蓝底设计）；薄荷底上换成墨绿三件套。
+   VIS-54：那两枚 rgba(7, 33, 24, …) 就是 `--on-accent` (#072118) 的十进制写法——芯片的边与底
+   本来就是"落在 accent 填充上的那支墨绿"，改 color-mix 派生后合成值逐字不变。 */
 :root[data-theme='mint-dark'] button.primary .hint {
   color: var(--on-accent);
-  border-color: rgba(7, 33, 24, 0.35);
-  background: rgba(7, 33, 24, 0.14);
+  border-color: color-mix(in srgb, var(--on-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
 }
 /* 开关滑块 = --on-accent（墨绿），在未选中的绿灰轨道上只有 2.23:1——补一圈淡青白细环，
    任何轨道底色下滑块都"浮"得起来（环压 sunken 14.28 / 压轨道 5.68） */
 :root[data-theme='mint-dark'] .switch-thumb {
   box-shadow:
-    0 1px 2px rgba(2, 10, 6, 0.5),
-    0 0 0 1px rgba(191, 232, 210, 0.4);
+    0 1px 2px var(--thumb-drop),
+    0 0 0 1px var(--thumb-ring);
 }
 /* 遮罩不在这里写规则（组长的收敛，2026-10-24）：纯黑径向 + 蓝黑底（`rgba(8,10,13)`）在墨绿底上
    读成"蓝雾"这件事，现在由上面那一族 `--scrim-* / --rim-*` 的墨绿值解决，消费方只有
@@ -193,37 +219,41 @@
 :root[data-theme='mint-dark'] .welcome::before {
   background:
     radial-gradient(36% 40% at 30% 32%, rgb(var(--accent-rgb) / 0.16), transparent 62%),
-    radial-gradient(32% 38% at 72% 68%, rgba(56, 168, 196, 0.13), transparent 64%);
+    radial-gradient(32% 38% at 72% 68%, var(--aurora-cool), transparent 64%);
 }
-/* 高光扫过/按压涟漪：纯白在亮薄荷按钮上会"爆"，降饱和改冷薄荷白 */
+/* 高光扫过/按压涟漪：纯白在亮薄荷按钮上会"爆"，降饱和改冷薄荷白（色住在上面的 :root） */
 :root[data-theme='mint-dark'] .u-sheen::before {
-  background: linear-gradient(100deg, transparent, rgba(226, 255, 241, 0.16), transparent);
+  background: linear-gradient(100deg, transparent, var(--sheen-streak), transparent);
 }
 :root[data-theme='mint-dark'] .u-ripple::after {
-  background: radial-gradient(circle, rgba(214, 255, 236, 0.3) 0%, rgba(214, 255, 236, 0) 60%);
+  background: radial-gradient(circle, var(--ripple-ink) 0%, var(--ripple-fade) 60%);
 }
-/* 语义 wash 在更深墨绿底上会被"吸进去"：alpha 各补 ~0.02（wash 是承载色，非装饰） */
+/* 语义 wash 在更深墨绿底上会被"吸进去"：alpha 各补 ~0.02（wash 是承载色，非装饰）。
+   VIS-54：三组 rgba(216,162,105)/rgba(226,112,122)/rgba(98,199,118) 的三元组就是本档
+   `--amber` (#d8a269) / `--red` (#e2707a) / `--green` (#62c776)，一律改派生、合成值逐字不变。 */
 :root[data-theme='mint-dark'] .notice.warn,
 :root[data-theme='mint-dark'] .crash-recovery {
-  background: rgba(216, 162, 105, 0.12);
-  border-color: rgba(216, 162, 105, 0.45);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
 }
 :root[data-theme='mint-dark'] .notice.error,
 :root[data-theme='mint-dark'] .conv-failed {
-  background: rgba(226, 112, 122, 0.12);
-  border-color: rgba(226, 112, 122, 0.55);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
 }
 /* 只读横幅（已随视觉批十三撤掉，`.ro-banner` 无消费方——规则也一并删） */
 /* "可写✓"绿牌：原 wash 是旧语义绿 rgba(79,192,141)——太薄荷，换成新叶绿豆沙同族 */
 :root[data-theme='mint-dark'] .sb-writable.ok {
-  background: rgba(98, 199, 118, 0.12);
-  border-color: rgba(98, 199, 118, 0.4);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
 }
-/* 快捷键编辑器横幅/错误：同款硬编码绿红，收进本档语义族 */
+/* 快捷键编辑器横幅/错误：同款硬编码绿红，收进本档语义族。
+   VIS-54：牌上的字原先是档内裸 hex `#7fd28e`（比 `--green` 亮一档的叶绿，压 bg-2 9.18:1），
+   它既不是任何既有 token 的派生值（--green/--fg/--accent-text 任取两枚都凑不出这一枚），
+   就按"主题侧只翻值"的规矩把那**一个值**上提到 :root 的 `--success-text`——
+   `--danger-text` 的对称缺位，等组长把它正名进 tokens.css。
+   `.kd-error` 整条删除：base 规则就是 `color: var(--danger)` ≡ 本档 `var(--red)`，纯冗余。 */
 :root[data-theme='mint-dark'] .kd-banner.ok {
-  background: rgba(98, 199, 118, 0.14);
-  color: #7fd28e; /* 压 bg-2 9.18:1 */
-}
-:root[data-theme='mint-dark'] .kd-error {
-  color: var(--red);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--success-text);
 }

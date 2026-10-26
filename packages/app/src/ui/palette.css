@@ -12,7 +12,8 @@
       遮罩那几条还要压过 `themes/light.css`、`themes/mint-dark.css` 里
       `:root[data-theme] .picker-backdrop`（0,3,0），故统一挂 `html:root`（多一个元素级 ⇒ (0,3,1)）。
    ② **不写死颜色**。面 / 边 / 字 / 高亮 / 圆角 / 节奏全取 token；浅色与薄荷主题同步成立。
-      遮罩的**色相**照两份主题文件现有值（只做"更实"这一件事，不另起一色）。
+      遮罩的色相同样**只取 `--scrim-*` 族**（见下方"遮罩"一节的 VIS-52 收口）——本文件一个
+      `rgba()` 都不写，否则就成了遮罩的第二条通路。
 
    作用域纪律：本文件的排版接管只挂在 `pk-` 修饰类上，而那两个类**只有命令列表**会挂
    （`.pk-commands` = Ctrl+P 的 `>`、`.pk-palette` = F1）。快速打开的文件模式、符号面板
@@ -83,45 +84,28 @@
 
 /* ------------------------------ 遮罩（只有 F1 这一档） ------------------------------ */
 
-/* 旧档：`blur(var(--glass-blur) × 0.5)` = 8px 配 alpha 0.35，整窗糊成一片、背后的正文
-   字迹还在抢焦点。命令面板是**高频键盘面**，作者要看的是列表本身 ⇒ 模糊收到 7px、
-   暗化加一档（0.35 → 0.5），纵深留着、糊感退掉。
-   `html:root`（(0,3,1)）稳压 `themes/*.css` 的 (0,3,0) 同族规则；色相照两份主题文件现值。 */
+/* 本文件**不给遮罩供色**（VIS-52 · 2026-10-26 车道 E3）。命令面板的暗化一律取主路的
+   `--scrim-picker`（磨砂档）/ `--scrim-solid`（玻璃旋钮 0%）/ `--scrim-nofilter`（老内核回落），
+   定义点 = `tokens.css` + `themes/*.css`，消费点 = `styles-project.css` 的 `.picker-backdrop`
+   与 `shell-notices.css` ⑤——与模态 / 查询面同一条通路，三档只差 token 值。
+   原先这里挂着 7 条 `html:root[…][data-theme] .picker-backdrop.pk-mask { background: rgba(…) }`
+   （dark/light/mint × 磨砂/实心 + 老内核回落），是遮罩的**第二条通路**：同一枚遮罩在两处各有
+   一份字面 rgba，翻色的人只动 token 永远追不上这里，加载顺序一变还得赌谁赢——整批删除。
+   删除的代价说清楚：命令面板原先比快速打开"更实一档"（dark 0.5 / mint 0.45 对 token 的
+   0.35 / 0.38，light 走的是另一支灰蓝 0.30），现在两档共用 `--scrim-picker` 的那一值。
+   "更实"若要找回，正确做法是给 scrim 族加一档（见交付回执的待补 token 清单），**不是**回到这里
+   抄第二条字面量。
+   留下的只有**模糊几何**这一件事（几何不是颜色，不算第二张嘴）：命令面板是高频键盘面，
+   主路 `blur(calc(--glass-blur × 0.5))` = 8px 会把背后正文糊成一片，这里收到 7px。
+   `html:root`（(0,3,1)）稳压主路 `:root[data-theme] .picker-backdrop`（0,3,0）；正因为它压得过，
+   实心档必须跟着把虚化撤干净——不然"关掉磨砂"那个开关在命令面板上只关了面、没关遮罩。 */
 html:root .picker-backdrop.pk-mask {
-  background: rgba(8, 10, 13, 0.5);
   -webkit-backdrop-filter: blur(7px) saturate(1.05);
   backdrop-filter: blur(7px) saturate(1.05);
 }
-html:root[data-theme='light'] .picker-backdrop.pk-mask {
-  background: rgba(40, 52, 68, 0.3);
-}
-html:root[data-theme='mint-dark'] .picker-backdrop.pk-mask {
-  background: rgba(6, 12, 9, 0.45);
-}
-
-/* 实心档（设置页「毛玻璃」拧到 0% ⇒ `data-glass='solid'`）：遮罩**一律不糊**，
-   只留暗化。这三条的 (0,4,1)/(0,5,1) 稳压 styles.css 的 (0,3,0) 与 themes 的 (0,4,0)，
-   免得"关掉磨砂"那个开关在命令面板上只关了面、没关遮罩。 */
 html:root[data-glass='solid'] .picker-backdrop.pk-mask {
-  background: rgba(8, 10, 13, 0.55);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-}
-html:root[data-theme='light'][data-glass='solid'] .picker-backdrop.pk-mask {
-  background: rgba(35, 48, 64, 0.45);
-}
-html:root[data-theme='mint-dark'][data-glass='solid'] .picker-backdrop.pk-mask {
-  background: rgba(6, 12, 9, 0.55);
-}
-
-/* 老内核不支持 backdrop-filter ⇒ 没有"背后虚化"这层纵深，暗化必须更实，
-   否则面板与正文糊在一起（与 styles.css 的 @supports 回落同一口径，只是本档自己够得着）。 */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  html:root .picker-backdrop.pk-mask {
-    background: rgba(0, 0, 0, 0.55);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
 }
 
 /* 动效：本文件不新增 animation / transition。面板入场（`pop-in`）与遮罩 `fade-in`

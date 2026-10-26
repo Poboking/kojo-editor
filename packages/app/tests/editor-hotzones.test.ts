@@ -99,8 +99,14 @@ describe('编辑器组件：不抢 Monaco 的右键', () => {
 });
 
 describe('外框：面属性挂在对的节点上', () => {
-  it('工具条是 editor 面的根元素', () => {
-    expect(pane).toContain('className="editor-toolbar" data-context-surface="editor"');
+  /**
+   * VIS-15（1026 编辑器体感批 E2）落点改名：`.editor-toolbar` + `.editor-crumb` 两条窄带
+   * 并成一条上下文带 `.editor-crumb-band` —— 面属性跟着**同一个根节点**搬过去，
+   * 接管范围一字没缩（右键落在这条带上仍是 `editor` 面）。
+   */
+  it('上下文带（原工具条）是 editor 面的根元素', () => {
+    expect(pane).toContain('className="editor-crumb-band" data-context-surface="editor"');
+    expect(pane).not.toContain('className="editor-toolbar"');
   });
 
   it('预览横幅是 sugar-preview 面的根元素，且只在预览在屏时挂属性', () => {

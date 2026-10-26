@@ -38,16 +38,15 @@
   color: var(--fg);
 }
 
-/* 工具条上的「显示语法标记」开关：与 `.kojo 预览` 那颗同族控件（ghost small）。
-   `order: 1` 与预览开关/摘要同侧（`styles-project.css` 把视图控制整族挪到右侧信息区，
-   不给 order 就会掉回左侧路径区——两处控制分居两端比抖一下更糟）。
+/* 上下文带动作簇里的「显示语法标记」开关：与 `.kojo 预览` 那颗同族控件（ghost small）。
    观感照 `.sugar-toggle` 的既有口径：幽灵底 + 描边，开态 accent 字/淡底/描边；
-   状态由 `.on` + aria-pressed 表达，标签恒定（C-1a 防工具条横抖的口径）。 */
-.editor-toolbar > .sugar-marks-toggle {
-  order: 1;
-  margin-inline-start: var(--space-1);
-  white-space: nowrap;
-}
+   状态由 `.on` + aria-pressed 表达，标签恒定（C-1a 防横抖的口径）。
+
+   改前这里还挂着 `order: 1` 与 `margin-inline-start`：那是"跨 spacer 把视图控制挪到工具条
+   右侧信息区"的排位手法（不给 order 就会掉回左侧路径区）。VIS-15（1026 编辑器体感批 E2）
+   把工具条与面包屑并成一条上下文带之后，这颗开关直接落在带子的**动作簇**里——
+   DOM 顺序就是视觉顺序，簇内间距由 `editor-crumb-band.css` 的 `gap` 统一给，
+   `order` 那一族整条作废（留着就是打不到 DOM 的死码）。 */
 .sugar-marks-toggle:hover:not(:disabled) {
   background: var(--hover);
 }
