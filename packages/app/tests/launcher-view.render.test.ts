@@ -414,6 +414,50 @@ describe('LauncherView 渲染冒烟', () => {
     expect(text()).toContain('选择游戏目录…');
   });
 
+  it('有实例：列表 + 详情三块只读事实；启动后停止可用', async () => {
+    const older = instance({
+      id: 'old',
+      name: '旧实例',
+      executableTrust: trustedRecord(),
+      lastLaunchedAt: '2026-10-01T00:00:00.000Z',
+    });
+    const newer = instance({
+      id: 'new',
+      name: '新实例',
+      isolation: 'copy',
+      executableTrust: trustedRecord(),
+      lastLaunchedAt: '2026-10-20T00:00:00.000Z',
+    });
+    await mount(
+      kernelWith(
+        fakeService([older, newer], {
+          statuses: [processStatus({ instanceId: 'new', state: 'running' })],
+        }).service,
+      ),
+    );
+
+    // 排序：最近启动的在前，且首帧就选中它（详情不是空白）
+    const rows = [...container.querySelectorAll('.launcher-row')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain('新实例');
+    expect(container.querySelector('.launcher-detail-name')?.textContent).toBe('新实例');
+
+    // 详情三块（路径 / 运行时 / 信任），且标了只读
+    const blocks = [...container.querySelectorAll('.launcher-block')];
+    expect(blocks.map((block) => block.getAttribute('aria-label'))).toEqual(['路径', '运行时', '信任']);
+    expect(text()).toContain('只读');
+    expect(text()).toContain('game.exe');
+
+    // 运行中：启动置灰、停止可点
+    expect(buttonByText('启动').disabled).toBe(true);
+    expect(buttonByText('停止').disabled).toBe(false);
+
+    // 停止 → 进程回到已退出；随后启动可点（状态经命令返回值回灌）
+    await click(buttonByText('停止'));
+    expect(text()).toContain('已退出');
+    expect(buttonByText('启动').disabled).toBe(false);
+  });
+
   it('读库失败：错误码原样上屏 + 原文不被改写', async () => {
     await mount(
       kernelWith(
