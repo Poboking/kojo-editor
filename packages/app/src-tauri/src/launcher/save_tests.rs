@@ -16,6 +16,10 @@ use super::LauncherHost;
 use std::sync::Arc;
 
 /// 一个 copy 实例 + 一个存档根 `saves`（`instances/{id}/game/saves/`）。
+///
+/// 夹具文件扩展名用 `.bin` 而**不是**引擎的存档扩展名：A 项审计把那个裸词当游戏名词
+/// 黑名单（`sav` 会在 `.sav` 上命中），而这里测的是"按根列文件 / 备份 / 恢复 / 导入"的
+/// 通用逻辑，与扩展名无关——换个中立名比给二十行加 `audit-allow` 更诚实。
 fn save_instance(host: &Arc<LauncherHost>, dir: &TestDir, id: &str) -> PathBuf {
     let game_root = dir.join("source");
     std::fs::create_dir_all(&game_root).expect("源根");
@@ -57,8 +61,8 @@ fn save_list_reports_entries_and_approval() {
     let dir = TestDir::new("save-list");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-saves");
-    write_save(&root, "slot1.sav", b"one");
-    write_save(&root, "auto/slot2.sav", b"two");
+    write_save(&root, "slot1.bin", b"one");
+    write_save(&root, "auto/slot2.bin", b"two");
 
     let listing = saves::list(&host, "inst-saves").expect("列表");
     assert_eq!(listing.entries.len(), 2);
@@ -66,7 +70,7 @@ fn save_list_reports_entries_and_approval() {
     assert!(listing.roots[0].approved, "copy 实例恒已授权");
     assert!(listing.roots[0].exists);
     let paths: Vec<&str> = listing.entries.iter().map(|e| e.path.as_str()).collect();
-    assert_eq!(paths, vec!["auto/slot2.sav", "slot1.sav"]);
+    assert_eq!(paths, vec!["auto/slot2.bin", "slot1.bin"]);
     assert_eq!(listing.entries[1].bytes, 3);
     assert_eq!(listing.entries[1].root_id, "saves");
 }
@@ -76,7 +80,7 @@ fn backup_writes_zip_and_metadata_and_can_be_listed() {
     let dir = TestDir::new("save-backup");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-bk");
-    write_save(&root, "slot1.sav", b"payload");
+    write_save(&root, "slot1.bin", b"payload");
 
     let task = saves::backup(
         &host,
@@ -119,7 +123,7 @@ fn restore_backs_up_current_before_writing() {
     let dir = TestDir::new("save-restore");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-rs");
-    write_save(&root, "slot1.sav", b"v1");
+    write_save(&root, "slot1.bin", b"v1");
 
     let first = saves::backup(&host, "inst-rs", SaveBackupRequestDto::default()).expect("备份 v1");
     let id = first
@@ -130,11 +134,11 @@ fn restore_backs_up_current_before_writing() {
         .expect("id")
         .to_string();
 
-    write_save(&root, "slot1.sav", b"v2-tampered");
+    write_save(&root, "slot1.bin", b"v2-tampered");
     let task = saves::restore(&host, "inst-rs", &id, Default::default()).expect("恢复");
     assert_eq!(task.state, "succeeded");
     assert_eq!(
-        std::fs::read(root.join("slot1.sav")).expect("恢复后"),
+        std::fs::read(root.join("slot1.bin")).expect("恢复后"),
         b"v1"
     );
     let backups = saves::backups(&host, "inst-rs").expect("列表");
@@ -169,7 +173,7 @@ fn delete_backup_removes_only_that_one() {
     let dir = TestDir::new("save-delete");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-del");
-    write_save(&root, "slot1.sav", b"one");
+    write_save(&root, "slot1.bin", b"one");
 
     let mut ids = Vec::new();
     for _ in 0..2 {
@@ -197,7 +201,7 @@ fn backup_retention_keeps_newest_and_spares_safety_backups() {
     let dir = TestDir::new("save-retention");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-keep");
-    write_save(&root, "slot1.sav", b"x");
+    write_save(&root, "slot1.bin", b"x");
 
     for _ in 0..3 {
         saves::backup(&host, "inst-keep", SaveBackupRequestDto::default()).expect("手动备份");
@@ -242,15 +246,15 @@ fn import_is_two_phase() {
     let dir = TestDir::new("save-import");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-imp");
-    write_save(&root, "slot1.sav", b"local");
-    let archive = make_save_import(&dir, "import.zip", &[("slot1.sav", b"imported")]);
+    write_save(&root, "slot1.bin", b"local");
+    let archive = make_save_import(&dir, "import.zip", &[("slot1.bin", b"imported")]);
 
     let plan = saves::plan_import(&host, "inst-imp", &archive.to_string_lossy()).expect("预检");
     assert_eq!(plan.entry_count, 1);
-    assert_eq!(plan.overwrites, vec!["slot1.sav".to_string()]);
+    assert_eq!(plan.overwrites, vec!["slot1.bin".to_string()]);
     assert!(!plan.backup_id.is_empty());
     assert_eq!(
-        std::fs::read(root.join("slot1.sav")).expect("预检不写"),
+        std::fs::read(root.join("slot1.bin")).expect("预检不写"),
         b"local",
         "导入预检不得动存档"
     );
@@ -258,7 +262,7 @@ fn import_is_two_phase() {
     let task = saves::apply_import(&host, &plan.plan_id, None).expect("应用");
     assert_eq!(task.state, "succeeded");
     assert_eq!(
-        std::fs::read(root.join("slot1.sav")).expect("导入后"),
+        std::fs::read(root.join("slot1.bin")).expect("导入后"),
         b"imported"
     );
 
@@ -272,8 +276,8 @@ fn import_plan_expires() {
     let dir = TestDir::new("save-import-exp");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-imp2");
-    write_save(&root, "slot1.sav", b"local");
-    let archive = make_save_import(&dir, "import2.zip", &[("slot1.sav", b"imported")]);
+    write_save(&root, "slot1.bin", b"local");
+    let archive = make_save_import(&dir, "import2.zip", &[("slot1.bin", b"imported")]);
     let plan = saves::plan_import(&host, "inst-imp2", &archive.to_string_lossy()).expect("预检");
 
     let path = host
@@ -289,7 +293,7 @@ fn import_plan_expires() {
     let err = saves::apply_import(&host, &plan.plan_id, None).expect_err("过期必须拒");
     assert_eq!(err.code, ErrorCode::Internal.as_str(), "{}", err.message);
     assert_eq!(
-        std::fs::read(root.join("slot1.sav")).expect("没被写"),
+        std::fs::read(root.join("slot1.bin")).expect("没被写"),
         b"local"
     );
 }
@@ -302,7 +306,7 @@ fn import_rejects_unknown_save_root() {
     let archive = dir.join("bad.zip");
     write_zip(
         &archive,
-        &[("elsewhere/slot1.sav".to_string(), b"x".to_vec())],
+        &[("elsewhere/slot1.bin".to_string(), b"x".to_vec())],
     );
     let err = saves::plan_import(&host, "inst-imp3", &archive.to_string_lossy())
         .expect_err("未声明的根必须拒");
@@ -319,8 +323,8 @@ fn export_writes_zip_under_root_entry_names() {
     let dir = TestDir::new("save-export");
     let host = test_host(dir.path());
     let root = save_instance(&host, &dir, "inst-exp");
-    write_save(&root, "slot1.sav", b"one");
-    write_save(&root, "auto/slot2.sav", b"two");
+    write_save(&root, "slot1.bin", b"one");
+    write_save(&root, "auto/slot2.bin", b"two");
 
     let dest = dir.join("out").join("saves.zip");
     saves::export_to(
@@ -336,7 +340,7 @@ fn export_writes_zip_under_root_entry_names() {
         .map(|index| archive.by_index(index).expect("条目").name().to_string())
         .collect();
     names.sort();
-    assert_eq!(names, vec!["saves/auto/slot2.sav", "saves/slot1.sav"]);
+    assert_eq!(names, vec!["saves/auto/slot2.bin", "saves/slot1.bin"]);
 }
 
 #[test]
@@ -348,7 +352,7 @@ fn export_selection_must_be_relative_and_known() {
         label: None,
         entries: Some(vec![SaveFileRefDto {
             root_id: "saves".to_string(),
-            path: "../../evil.sav".to_string(),
+            path: "../../evil.bin".to_string(),
         }]),
     };
     let err = saves::export_to(&host, "inst-exp2", req, &dir.join("x.zip"))
@@ -378,7 +382,7 @@ fn shared_save_root_requires_approval_before_write() {
         vec![save_root_json("saves", "saves")],
     )
     .expect("存档根");
-    std::fs::write(game_root.join("saves").join("slot1.sav"), b"v1").expect("存档");
+    std::fs::write(game_root.join("saves").join("slot1.bin"), b"v1").expect("存档");
 
     // 备份只读 → 可以（落点在实例备份目录）
     let task = saves::backup(&host, "inst-shared-save", SaveBackupRequestDto::default())
@@ -412,7 +416,7 @@ fn shared_save_root_requires_approval_before_write() {
     .expect("授权");
     saves::restore(&host, "inst-shared-save", &id, Default::default()).expect("授权后恢复");
     assert_eq!(
-        std::fs::read(game_root.join("saves").join("slot1.sav")).expect("写回"),
+        std::fs::read(game_root.join("saves").join("slot1.bin")).expect("写回"),
         b"v1"
     );
 }
