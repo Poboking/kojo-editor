@@ -953,3 +953,346 @@
     border-bottom: 1px solid var(--border-subtle);
   }
 }
+
+/* ============================================================================
+   启动器 · 实例详情「存档」面板（车道 UI-SAVES）——类名族 `launcher-saves-*`
+   ----------------------------------------------------------------------------
+   纪律同上：颜色 / 间距 / 字号只吃 token（本段零颜色字面量），状态一律
+   **颜色 + 文字**双编码（`.launcher-saves-status` 与徽章的 data 属性都配了人话）。
+   错误条与只读事实表**复用**上面已有的 `.launcher-failure*` / `.launcher-facts` /
+   `.launcher-progress`：同一族的块不另造第二套样式。
+   ============================================================================ */
+
+.launcher-saves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.launcher-saves-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.launcher-saves-title {
+  margin: 0;
+  font-size: var(--fs-3);
+  color: var(--fg);
+}
+.launcher-saves-hint {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.6;
+}
+.launcher-saves-refresh {
+  margin-left: auto;
+}
+
+.launcher-saves-note {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+.launcher-saves-warn {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--amber);
+}
+.launcher-saves-notice {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--accent-text);
+}
+.launcher-saves-busy {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+.launcher-saves-failure {
+  margin: 0;
+}
+
+/* ------------------------------ 分组列表 ------------------------------ */
+
+.launcher-saves-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.launcher-saves-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.launcher-saves-group {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 未授权 / 空根：左侧一道琥珀边（同时有文字说明，不只靠颜色） */
+.launcher-saves-group[data-access='needs-approval'] {
+  border-left: 2px solid var(--amber);
+}
+.launcher-saves-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+}
+.launcher-saves-group-label {
+  color: var(--fg);
+}
+.launcher-saves-group-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.launcher-saves-group-count {
+  margin-left: auto;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.launcher-saves-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.launcher-saves-entry {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-saves-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launcher-saves-entry-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.launcher-saves-entry-meta {
+  margin-left: auto;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.launcher-saves-warnings {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ------------------------------ 备份 ------------------------------ */
+
+.launcher-saves-block {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.launcher-saves-block-title,
+.launcher-saves-confirm-title {
+  margin: 0;
+  font-size: var(--fs-2);
+  color: var(--fg);
+}
+.launcher-saves-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.launcher-saves-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 4px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-1);
+  outline: none;
+}
+.launcher-saves-input:focus-visible {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.launcher-saves-badge {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+/* 来源双编码：手动 = 强调色，自动 = 静息色；徽章文字本身就是「手动 / 自动」 */
+.launcher-saves-badge[data-origin='manual'] {
+  color: var(--accent-text);
+  border-color: var(--accent-text);
+}
+.launcher-saves-badge[data-origin='auto'] {
+  color: var(--fg-dim);
+}
+.launcher-saves-badge[data-origin='unknown'] {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.launcher-saves-backups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.launcher-saves-backup {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.launcher-saves-backup[data-origin='manual'] {
+  border-left: 2px solid var(--accent-text);
+}
+.launcher-saves-backup-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  font-size: var(--fs-1);
+}
+.launcher-saves-backup-label {
+  color: var(--fg);
+}
+.launcher-saves-backup-time {
+  margin-left: auto;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.launcher-saves-backup-meta {
+  margin: 0;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.6;
+}
+
+/* ------------------------------ 恢复确认 / 导入预检 ------------------------------ */
+
+.launcher-saves-confirm,
+.launcher-saves-import {
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.launcher-saves-steps {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+.launcher-saves-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+  cursor: pointer;
+}
+.launcher-saves-check input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+/* ------------------------------ 任务横幅 ------------------------------ */
+
+.launcher-saves-task {
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-text);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.launcher-saves-task-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-saves-task-head .launcher-saves-status {
+  margin-left: auto;
+}
+/* 三态点 + 文字（与 `.launcher-status` 同一语义档，只是这面板自立一段类名） */
+.launcher-saves-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.launcher-saves-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.launcher-saves-status[data-tone='ok'] {
+  color: var(--green);
+}
+.launcher-saves-status[data-tone='busy'] {
+  color: var(--accent-text);
+}
+.launcher-saves-status[data-tone='warn'] {
+  color: var(--amber);
+}
+.launcher-saves-status[data-tone='idle'] {
+  color: var(--fg-dim);
+}
