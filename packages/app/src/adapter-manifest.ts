@@ -120,9 +120,9 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     kojo2AdapterExport: 'ERATOHOK_GAME_ADAPTER',
   },
   {
-    // eraAV（2026-10-26 批，P0+P1）。**本批不声明 `kojo2AdapterExport`**：2.0 事实面
-    // （encoding / eventCatalog / presentation …）还没有逐项真盘裁决，导出缺席即走
-    // `null` 语义（该项目 2.0 面零候选、不报错），**绝不借别游戏的事实**。
+    // eraAV（2026-10-26 批，P0+P1+P2+2.0 数据面）。2.0 事实面逐项真盘裁决
+    // （8/9 事件——无 EVENTLOAD；CRLF + BOM 470/471；`#PRI` 共享钩子），
+    // backend 仍缺席（发射面未交付 ⇒ null 是可见降级）。
     id: 'eraav',
     dir: 'eraav-adapter',
     packageName: '@kojo/plugin-eraav-adapter',
@@ -130,9 +130,12 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     scope: 'project',
     auditWord: 'eraav',
     load: () => import('@kojo/plugin-eraav-adapter'),
+    kojo2AdapterExport: 'ERAAV_GAME_ADAPTER',
   },
   {
-    // eratohoReverse（2026-10-26 批，P0+P1）。留口口径与 eraAV 逐字相同（无 2.0 面）。
+    // eratohoReverse（2026-10-26 批，P0+P1+P2+2.0 数据面）。2.0 事实面逐项真盘裁决
+    // （8/9 事件——无 EVENTBUY；LF + BOM 100%；KCOLOR.ERB 共享钩子），
+    // backend 仍缺席（发射面未交付 ⇒ null 是可见降级）。
     id: 'eratohoreverse',
     dir: 'eratohoreverse-adapter',
     packageName: '@kojo/plugin-eratohoreverse-adapter',
@@ -140,6 +143,7 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     scope: 'project',
     auditWord: 'eratohoreverse',
     load: () => import('@kojo/plugin-eratohoreverse-adapter'),
+    kojo2AdapterExport: 'ERATOHOREVERSE_GAME_ADAPTER',
   },
 ];
 

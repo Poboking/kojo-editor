@@ -42,3 +42,5 @@ export {
   parseErhDeclarations,
   parseNameTableCsv,
 } from './variable-schema';
+// 2.0 语言事实面（纯数据、零 IO；adapter-only，无 backend）
+export * from './kojo2/index.js';

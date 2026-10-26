@@ -7,10 +7,11 @@
  *
  * ① eraFL 工程：迁移向导的事件面词/参数形状、存储注入的指纹/存储期、项目扫描的
  *    adapter 事实 ⇒ 全部拿到 **eraFL 的**或空形态，响应里**一个 eraTW 事实名都不许出现**；
- * ② 四家新 2.0 面（eraakumamaid / erakoumakan / erasqc / eratohok）⇒ 按项目各拿到
+ * ② 六家新 2.0 面（eraakumamaid / erakoumakan / erasqc / eratohok / eraav /
+ *    eratohoreverse）⇒ 按项目各拿到
  *    **各自**的事实，**不借 eraTW**（D12：未绑定 = 明确降级，绝不回落默认方言）；
- * ③ 六枚适配器的 2.0 登记结果（eraTW 走 boot 静态路径、其余五家走清单驱动的泛化登记
- *    ⇒ adapter 全在表）；**发射面**仍只有 eraTW / eraFL 两条（其余四家的 backend
+ * ③ 八枚适配器的 2.0 登记结果（eraTW 走 boot 静态路径、其余七家走清单驱动的泛化登记
+ *    ⇒ adapter 全在表）；**发射面**仍只有 eraTW / eraFL 两条（其余六家的 backend
  *    导出未交付 ⇒ null 是可见降级）；
  * ④ 无项目态（欢迎页）⇒ 全腿空形态（迁移 undefined / 存储 null / 扫描 undefined）；
  * ⑤ 源码闸：游戏名退出 App.tsx 与扫描接线文件；bootstrap 不再出现 `'erafl'` 字面量
@@ -92,10 +93,10 @@ describe('LAU-1a ① · eraFL 项目拿到 eraFL 事实，零 eraTW 泄漏', () 
   });
 });
 
-describe('LAU-1a ② · 四家新 2.0 面：按项目拿到各自事实，不借 eraTW', () => {
-  const NEW_SURFACE_IDS = ['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok'] as const;
+describe('LAU-1a ② · 六家新 2.0 面：按项目拿到各自事实，不借 eraTW', () => {
+  const NEW_SURFACE_IDS = ['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok', 'eraav', 'eratohoreverse'] as const;
 
-  it('四家清单条目都已登记 2.0 面（kojo2AdapterExport 在场）', () => {
+  it('清单条目都已登记 2.0 面（kojo2AdapterExport 在场）', () => {
     for (const id of NEW_SURFACE_IDS) {
       expect(ADAPTER_MANIFEST.find((entry) => entry.id === id)?.kojo2AdapterExport).toBeDefined();
     }
@@ -118,7 +119,7 @@ describe('LAU-1a ② · 四家新 2.0 面：按项目拿到各自事实，不借
   }
 });
 
-describe('LAU-1a ③ · 六枚适配器的 2.0 登记结果：adapter 全在表，backend 仍只有两家', () => {
+describe('LAU-1a ③ · 八枚适配器的 2.0 登记结果：adapter 全在表，backend 仍只有两家', () => {
   it('eraTW（boot 静态路径）：adapter 与 backend 都在表里，且与改前同为包导出本体', () => {
     expect(kojo2AdapterForProject({ adapterId: 'eratw' })).toBe(ERATW_GAME_ADAPTER);
     expect(typeof kojo2BackendFactoryForProject({ adapterId: 'eratw' })).toBe('function');
@@ -130,8 +131,8 @@ describe('LAU-1a ③ · 六枚适配器的 2.0 登记结果：adapter 全在表�
     expect(typeof kojo2BackendFactoryForProject({ adapterId: 'erafl' })).toBe('function');
   });
 
-  it('四家新面：adapter 在表，backend 仍缺席（发射面未交付 ⇒ null 是可见降级）', () => {
-    for (const id of ['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok']) {
+  it('六家新面：adapter 在表，backend 仍缺席（发射面未交付 ⇒ null 是可见降级）', () => {
+    for (const id of ['eraakumamaid', 'erakoumakan', 'erasqc', 'eratohok', 'eraav', 'eratohoreverse']) {
       expect(kojo2AdapterForProject({ adapterId: id })).not.toBeNull();
       expect(kojo2BackendFactoryForProject({ adapterId: id })).toBeNull();
       expect(ADAPTER_MANIFEST.find((entry) => entry.id === id)?.kojo2BackendFactoryExport).toBeUndefined();
