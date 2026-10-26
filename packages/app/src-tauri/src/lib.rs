@@ -3330,6 +3330,11 @@ mod shell_tests;
 #[cfg(test)]
 mod diagnostics_tests;
 
+/// 启动器进程原语的**一次性实测探针**（挂起创建 / Job 收尸 / 应用退出 / 日志泵 / env / argv）。
+/// 只有测试内容：问的是"能不能"与"代价多少"，不是生产模块（结论见文件头注与提交信息）。
+#[cfg(test)]
+mod launcher_probe;
+
 #[cfg(test)]
 mod write_domain_tests {
     use super::{
