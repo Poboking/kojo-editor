@@ -419,8 +419,27 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `bootstrap.ts`（2.0 登记表核 `facts.id === entry.id` 的对账与可见诊断）、
     //     `monaco/erb-preproc-dim.ts`（语言判据改扩展名，净增几十字节）。两枚闸随上游现值
     //     走（本批不再抬闸）。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤193 文件 / ≤2,870 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_870);
+    //   - **编辑器对标批 A–E（2026-10-26，变基到本档之上重钉）**：本档基 193 文件 / 2,860 KB；
+    //     A–D 四提交（命令面板桥接内核动作 / 状态栏自动换行与空白符 / 书签 / 双文件比较）落地后
+    //     一度 +10 KB（**零新进图文件**，增重全在既有图内文件）——逐块点名（同尺差集）：
+    //     · `ui/keybinding-specs.ts` +7.2 KB：A 批 29 条内核动作 + C 批 4 条书签 + B 批 2 条状态栏
+    //       开关登进静态表（该表被图内 `context-menu-model.ts` 引来查中文标题）；
+    //     · `ui/file-tree-ops.ts` +2.2 KB：D 批「比较已选文件」的出现判据（右键菜单同步必需）；
+    //     · `ui/commands.ts` +1.4 KB：A 批桥接的 `buildCommandRegistry` 第三参与和弦展示。
+    //     E 提交（回归减面）把这三处压回，两处减法都是「把新逻辑搬到它真正被用到的地方」：
+    //     · **35 条命令型键位条目搬去懒供给模块 `ui/keybinding-specs-commands.ts`**：`ui/keybindings.ts`
+    //       （实测不在开机图）把静态基础表与它拼成键位页看到的完整表；`effectiveKeybindingOf` 对
+    //       合并表查缺省 ⇒ Alt+Z / Alt+F2 族仍生效、命令面板仍搜得到全部内核动作、键位页仍列全；
+    //       内核动作的 title / category / 内建键说明改由 `monaco-command-specs` **派生**（第二份手抄收口）。
+    //       图内 `keybinding-specs` 17.4 → **11.0 KB**（-6.4）。
+    //     · **`ui-kit/index.tsx` 出图（-19.6 KB）**：这张十件桶棒此前被图内唯一消费方
+    //       `kojo2-cutover-settings.tsx` 引（它只用 `KitRadio`）⇒ 等于把其余九件整包拖进欢迎页。
+    //       把 `KitRadio` 拆成单品叶子 `ui-kit/kit-radio.tsx`（+2.4 KB 进图）、消费方直引叶子，
+    //       桶棒整份随之下图（懒面既有 `from '../ui-kit'` 一字未改、导出面不变）。
+    //     实测 **193 文件 / 2,847 KB**（较本档基 -13 KB），文件闸 193 不动（现读数 193，顶格 0 余量）；
+    //     KB 闸随现值 **2,870 → 2,860**（降闸不写理由）。
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤193 文件 / ≤2,860 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_860);
     expect(files.length).toBeLessThanOrEqual(193);
   });
 
