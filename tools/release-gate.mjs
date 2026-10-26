@@ -23,7 +23,7 @@
  * - `language-suite`：`node tools/kojo-conformance.mjs language --json`（语言面套件属另一条线；
  *   当前 CLI 尚无 `language` 子命令 ⇒ rc=2 且「未知命令：language」⇒ SKIP 并写明，绝不自己实现）；
  * - `artifact-audit`：先 `pnpm --filter @kojo/app build`，再量 `packages/app/dist`
- *   入口块 / 总量 / 件数上界（阈值取 `docs/STATE.md` 批次七重基线：≤1,100 kB / ≤10.5 MiB / ≤85 件）；
+ *   入口块 / 总量 / 件数上界（阈值取 `docs/STATE.md` 基线；2026-10-26 启动器批重钉为 ≤1,100 kB / ≤11.0 MiB / ≤90 件）；
  * - `cargo-test`：`cargo test --lib`（15 分钟上限）。**必须经 node 起**（PITFALLS：Git-Bash 的
  *   `TMP=/tmp` 会让 MSVC `link.exe` 报 LNK1104），并兜底把 TMP/TEMP/TMPDIR 换成 Windows 形态。
  * `--release` 的默认项序固定为 `RELEASE_ITEM_IDS`（version-sync 第一，cargo-test 最后），
@@ -295,12 +295,23 @@ export async function inspectVersionSync({ root = ROOT, readText = defaultReadTe
 /**
  * `docs/STATE.md` 的既有基线换算成上界（设计稿 §16.10 R9.7 的产物面）：
  * 入口块 1,035 kB（批次七实测）→ 上限 1,100 kB；dist 72 件 8.97 MiB → 上限 10.5 MiB / 85 件。
- * 口径：vite 报的 `kB` 是 1000 字节；`MB` 按 MiB 计（10.5 MiB 有 ~1.5 MiB 余量，防正常增件即红）。
+ * 口径：vite 报的 `kB` 是 1000 字节；`MB` 按 MiB 计（上界留余量，防正常增件即红）。
  */
 export const ARTIFACT_LIMITS = Object.freeze({
   entryBytes: 1_100_000,
-  distBytes: Math.round(10.5 * 1024 * 1024),
-  files: 85,
+  /*
+   * 2026-10-26 启动器落地批：件数 85 → 90、总量 10.5 → 11.0 MiB。
+   *
+   * 增量逐笔点名（`packages/app/dist` 实测 84 件 / 10.65 MiB，闸量到 85 件含 index.html）：
+   * · 启动器自己的三个懒块 `LauncherView-*.js` 35.2 KB + `LauncherView-*.css` 11.6 KB +
+   *   `launcher-bridge-*.js` 3.1 KB（视图与宿主桥都在动态边上，开机图未变）；
+   * · `@kojo/plugin-launcher-core` 与 `kernel/launcher` 的懒块（core 骨架 + 内容包/插件门禁/存档编排）；
+   * · 其余为本批之前的累积漂移（编辑器对标批之后各批的增量）。
+   * 两枚数仍是"收紧的上界"：11.0 MiB 距现值 0.35 MiB、90 件距现值 5 件——正常增件不红，
+   * 一次性进整包才会红。启动器的内容包 / 插件 / 存档面板还会再加几个懒块，届时按同一口径重钉。
+   */
+  distBytes: Math.round(11.0 * 1024 * 1024),
+  files: 90,
 });
 
 const MIB = 1024 * 1024;

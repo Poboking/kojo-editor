@@ -1110,8 +1110,11 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
 });
 
 describe('release-gate · artifact-audit（dist 上界）', () => {
-  it('阈值常量 = STATE 批次七重基线换算：入口 1,100 kB / dist 10.5 MiB / 85 件', () => {
-    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(10.5 * 1024 * 1024), files: 85 });
+  it('阈值常量随启动器批重钉：入口 1,100 kB / dist 11.0 MiB / 90 件', () => {
+    // 2026-10-26 启动器落地批：85 件 / 10.5 MiB → 90 件 / 11.0 MiB（逐块归因见
+    // `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释）。这条断言是"改阈值必须留痕"的闸：
+    // 抬数时先改注释说清增量来自哪里，再改这里。
+    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.0 * 1024 * 1024), files: 90 });
   });
 
   it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {
