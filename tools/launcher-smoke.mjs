@@ -6,29 +6,44 @@
  * 页内 `__kojoDebug.invoke` 在 shell 形态下走**真 Tauri IPC**（= 产品同一条路）；web 调试宿
  * （`serve`）**没有**镜像 launcher_* 的 36 条命令，所以本工具在 web 会话上只 SKIP 并说明。
  *
- * 本批驱动的面（全部只读，或只碰隔离 appData）：
+ * 本批驱动的面（只读三条 + 两条负向 + L9 夹具批次）：
  * - 只读三条：`launcher_instance_list` / `launcher_process_list` / `launcher_task_list`——
  *   断言返回**数组**（空表 = 合法读数，不是错误）；
  * - 负向两条：`launcher_start` 给不存在的 instanceId ⇒ 结构化错误（带 `code`，不是 panic）；
  *   `launcher_instance_create` 缺 `profile` ⇒ **参数错误**（Tauri 反序列化层拒收，不是业务错误码）；
- * - 副作用：全部探针前后 `launcher_instance_list` 长度不变（证明"只读"不是口号）。
+ * - 副作用：只读三组探针前后 `launcher_instance_list` 长度不变（证明"只读"不是口号）；
+ * - **L9 夹具批次**（`runFixtureProbes`）：在**隔离 appData** 里播种两个夹具实例（已信任 / 未信任），
+ *   游戏根是 `os.tmpdir()` 下的临时目录（`cmd.exe` 的两个副本；执行参数全走 cmd 内置命令，
+ *   不调外部程序、不碰网络、不弹窗），然后真起真停：
+ *   1. 能起（`lifecycle`）：`launcher_start` → `state=running` + pid 非 0 + `launcher_process_list`
+ *      同 pid 在列；
+ *   2. 能停（`lifecycle`）：`launcher_stop` → `exited` / pid 清空 / `running.lock` 清掉 /
+ *      `tasklist` 里夹具 pid 与**孙进程镜像名**双双清零（停之前先证明树真的起过——否则
+ *      "没有残留"是句空话）；孙进程镜像名全场唯一，按名过滤即可证明整棵树被 Job 收干净；
+ *   3. 信任（`trust`）：未信任夹具 ⇒ `LAUNCHER_TRUST_REQUIRED` + `retryable` + 中文人话；
+ *      信任记录的 sha256 **只搬宿主算的那份**（`launcher_instance_get` 的 `executable.sha256`），
+ *      `approvedBy` 写 `fixture-seed:launcher-smoke`（可辨认，绝不冒充 native-dialog）；
+ *      **不调** `launcher_trust_executable`——它有原生对话框，无人值守会挂；
+ *   4. 日志泵（`logs`）：`launcher_log_sessions` 有本场会话、`launcher_log_tail` 尾段含夹具
+ *      打印的标记串（base64 原始字节 → 文本双解对拍），收尾后 `endedAt` / `stdoutBytes` 有值；
+ *   5. 人话（`platform`）：本机 Windows 上进程闸不可达 ⇒ **SKIP 并说明**（不改判成绿），
+ *      只经 overlay 闸核 `LAUNCHER_PLATFORM_UNSUPPORTED` 的报文形状（码 / 中文 message /
+ *      `retryable` 字段在）；非 Windows 上才真打进程闸；
+ *   6. 清场（`cleanup`）：删夹具实例目录 + 临时游戏根 + 注册表条目（`--keep` 保留），
+ *      并把「实例表回到播种前长度」对拍成断言。
  *
  * 隔离（铁律 5 / PITFALLS）：不写任何游戏目录；真壳必须带 `--isolate`——这是 `debug-cli shell`
  * 既有的隔离方式（identifier 换成 `<原 identifier>.smoke`，宿主 appData 落在 `%APPDATA%\<id>.smoke`；
  * debug-cli 没有把 appData 搬进 `KOJO_DEBUG_HOME` 的能力，故本工具只认这一条）。会话自己的产物
  * （session.json / 本工具的读数 JSON）仍在 `<KOJO_DEBUG_HOME>/sessions/<树哈希>/`。
- * 会话没开隔离 ⇒ **直接 SKIP 并说明**，绝不「先跑跑看」；探针全在只读面与两条必然被拒的负向上，
- * 另用「实例表前后等长」对拍证明没有落地副作用。
+ * 会话没开隔离 ⇒ **直接 SKIP 并说明**，绝不「先跑跑看」。夹具批次的写入只有两处：隔离 appData
+ * 与 `os.tmpdir()` 夹具目录（`cleanupPlan` 对这两个根做删除守卫，其它路径一律拒删）。
  * `--start` 会把 TMP/TEMP/TMPDIR 换成 Windows 形态再起壳（Git-Bash 的 `TMP=/tmp` 会让 link.exe
  * 报 LNK1104，PITFALLS 既有条目），并挑一个空闲 vite 端口（1420 被占时不抢别人的 dev server）。
  *
- * 启动器判据的真壳插入点清单（本批只驱动「只读面 + 两条负向」；下面 5 件都要造夹具实例 + 起真进程）：
- * 1. 能起：ready + 已信任 ⇒ `launcher_start` 返回 running，`launcher_process_list` 出现 pid；
- * 2. 能停：`launcher_stop` 收尸到 exited、锁文件清掉、孙进程不残留（日志泵随进程退出）；
- * 3. 信任框：未信任 exe ⇒ `LAUNCHER_TRUST_REQUIRED`；信任框由**宿主**弹，JS 不能跳过；
- * 4. 日志泵：`launcher_log_sessions` / `launcher_log_tail` 有行、编码探测不破坏内容；
- * 5. 平台不支持时的人话：`LAUNCHER_PLATFORM_UNSUPPORTED` + 中文 message + `retryable` 存在。
- * （代码里的插入点 = `runProbes` 末尾那段 `L9 联调批插入点` 注释；5 件事各补一条断言即可。）
+ * 命名对齐（按宿主真实命令名，不按契约草案名）：契约草案里的 `launcher_instance_inspect`
+ * 在 Rust 侧叫 **`launcher_instance_get`**（`InspectionDto`），日志尾段叫 `launcher_log_tail`
+ * （`launcher_log_read` 走 sessionId）。
  *
  * 用法：`node tools/launcher-smoke.mjs --attach`（默认；驱动当期会话）
  *       `node tools/launcher-smoke.mjs --start`（自己起一台 `shell --isolate` 再驱动，收工自己收）
@@ -85,23 +100,27 @@ export function buildInvokeExpression(cmd, args = {}) {
   } catch (e) {
     let code = null;
     let message = '';
+    let detail = null;
+    let retryable = null;
     let raw = '';
     if (e && typeof e === 'object') {
       code = typeof e.code === 'string' ? e.code : null;
       message = typeof e.message === 'string' ? e.message : '';
+      detail = typeof e.detail === 'string' ? e.detail : null;
+      retryable = typeof e.retryable === 'boolean' ? e.retryable : null;
       try { raw = JSON.stringify(e); } catch { raw = String(e); }
     } else {
       message = String(e);
       raw = message;
     }
-    return { ok: false, error: { code, message, raw } };
+    return { ok: false, error: { code, message, detail, retryable, raw } };
   }
 })()`;
 }
 
 /** 错误归类：`launcher-code`（宿主结构化错误）/ `arg`（IPC 参数层）/ `string` / `unknown` */
 export function normalizeError(raw) {
-  const out = { code: null, message: '', kind: 'unknown', panic: false, raw: '' };
+  const out = { code: null, message: '', detail: null, retryable: null, kind: 'unknown', panic: false, raw: '' };
   if (raw === null || raw === undefined) return out;
   if (typeof raw === 'string') {
     out.message = raw;
@@ -110,6 +129,10 @@ export function normalizeError(raw) {
   } else if (typeof raw === 'object') {
     out.code = typeof raw.code === 'string' && raw.code.trim().length > 0 ? raw.code.trim() : null;
     out.message = typeof raw.message === 'string' ? raw.message : '';
+    out.detail = typeof raw.detail === 'string' ? raw.detail : null;
+    // `retryable` 在三处都有：契约 `LauncherError.retryable` 恒有 ⇒ 拿不到真值就记 null
+    // 而不是 false（"没有这个字段"与"明确不可重试"是两件事，别混）。
+    out.retryable = typeof raw.retryable === 'boolean' ? raw.retryable : null;
     try {
       out.raw = JSON.stringify(raw);
     } catch {
@@ -263,13 +286,598 @@ export function checkNoSideEffect(before, after) {
   ];
 }
 
-/** 失败归类（报告里「红在哪一层」）：channel / contract / negative / side-effect / runner */
+/* ------------------------------------------------------------------ *
+ * L9 联调批：夹具实例（隔离 appData 里播种 → 真进程起停 → 收工清场）
+ *
+ * 为什么必须「播种」而不是走产品建实例链路：`launcher_instance_create` 要求源根先经
+ * **原生目录对话框**批准（`store::is_source_approved`），无人值守点不了那个框。夹具因此
+ * 直接按 `store.rs` 的真实字段形状写 `instance.json` + `registry.json`；唯一"手工"的东西
+ * 是**信任记录**——它的 sha256 必须先由宿主自己算（`launcher_instance_get` 的
+ * `executable.sha256`），JS 只做搬运，`approvedBy` 写成可辨认的夹具值（绝不冒充 native-dialog）。
+ * 信任框本身（`launcher_trust_executable`）有 dialogs，无人值守会挂 ⇒ 本工具**不调它**，
+ * 改用另一颗"不写 trust"的实例去打 `LAUNCHER_TRUST_REQUIRED`（那才是那条命令的可测半边）。
+ *
+ * 写入落点只有两处：隔离 appData（`%APPDATA%\<identifier>.smoke\launcher\…`）与
+ * `os.tmpdir()` 下的临时游戏根。真游戏目录一个字节都不碰。
+ * ------------------------------------------------------------------ */
+
+/** 夹具游戏根目录名的统一前缀（`cleanupPlan` 的删除守卫也认它） */
+export const FIXTURE_PREFIX = 'kojo-launcher-smoke-';
+/** 夹具往 stdout 打印的标记串（纯 ASCII：cmd 的 OEM 代码页下同样逐字可读） */
+export const FIXTURE_MARKER = 'launcher-fixture-started';
+/** 播种信任记录里的 approvedBy：一眼可辨「夹具种的，不是用户点过原生框」 */
+export const FIXTURE_APPROVED_BY = 'fixture-seed:launcher-smoke';
+/** 宿主支持的 windowMode（`plugin-api/src/launcher.ts`：auto / visible / hidden） */
+export const SUPPORTED_WINDOW_MODES = Object.freeze(['auto', 'visible', 'hidden']);
+/** 夹具取隐藏档：`process.rs` 见 "hidden" 才加 `CREATE_NO_WINDOW`（不弹窗） */
+export const FIXTURE_WINDOW_MODE = 'hidden';
+/** 结构版本（`store.rs` 的 `SCHEMA_VERSION` / `INSTANCE_SCHEMA_VERSION`，两边必须逐字相等） */
+export const REGISTRY_SCHEMA_VERSION = 1;
+export const INSTANCE_SCHEMA_VERSION = 1;
+/** 夹具实例的 adapterId / gameId：宿主不理解语义，只要非空 */
+export const FIXTURE_ADAPTER_ID = 'launcher-smoke';
+
+/**
+ * 一次运行的夹具标识（同进程内唯一）：同时进实例 id、可执行文件名与标记串——
+ * 并发另一轮 launcher-smoke 因此不可能撞名（`tasklist` 按镜像名找孙进程全靠它）。
+ */
+export function fixtureToken({ now = Date.now(), pid = process.pid } = {}) {
+  const raw = `${Math.floor(now).toString(36)}${(pid % 46_656).toString(36)}`;
+  return raw.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-10);
+}
+
+/** token → 本轮的名字全集（实例 id / 两个可执行文件名 / 标记串 / 游戏根目录名） */
+export function fixtureNames(token) {
+  const t = String(token ?? '');
+  if (!/^[a-z0-9]{1,10}$/.test(t)) throw new Error(`夹具 token 形状非法：${token}`);
+  return {
+    token: t,
+    ids: { trusted: `l9s-${t}-a`, untrusted: `l9s-${t}-b` },
+    exe: `l9fx-${t}-a.exe`,
+    childExe: `l9fx-${t}-b.exe`,
+    marker: `${FIXTURE_MARKER} ${t}`,
+    gameRootName: `${FIXTURE_PREFIX}${t}`,
+  };
+}
+
+/**
+ * 夹具的执行参数：`cmd /c "echo <标记> & <孙进程> /c for /l %i in (1,1,<N>) do @rem"`。
+ *
+ * - `echo` 立刻给日志泵一行（标记串）；
+ * - 孙进程 = 同一份 cmd.exe 的**另一个副本名**，跑纯**内置**的 `for /l` 空转 ≈20 s
+ *   （实测本机 ≈1M 次/秒，3M 次 3.0 s）。为什么不用 `ping 127.0.0.1` 那套老办法：
+ *   L9 实测**宿主起的 cmd 里 `ping` 会立刻死在 DNS 上**（stderr 为「DNS 服务器对区域没有权威。」，
+ *   同一组参数由 node 起是正常的），fixture 不该赌外部程序可达；内置循环不碰网络、不依赖 PATH、
+ *   也不受本机 DNS / 安全软件影响，且**一样是个真子进程**（Job 杀树的判据不受影响）；
+ * - 孙进程的镜像名全场唯一 ⇒ `tasklist` 按名过滤就能证明"树真的起过、且一个不剩"。
+ */
+export const FIXTURE_LOOP_COUNT = 20_000_000;
+
+export function fixtureArgs(childExe, marker) {
+  if (typeof childExe !== 'string' || !/\.exe$/i.test(childExe)) throw new Error(`夹具孙进程必须是 .exe：${childExe}`);
+  if (typeof marker !== 'string' || marker.length === 0) throw new Error('夹具标记串不能为空');
+  return ['/c', `echo ${marker} & ${childExe} /c for /l %i in (1,1,${FIXTURE_LOOP_COUNT}) do @rem`];
+}
+
+/** 隔离 appData 下与本实例相关的全部落点（镜像 `paths.rs` 的 LauncherLayout） */
+export function fixtureLayout(appDataDir, id) {
+  const launcherDir = path.join(String(appDataDir ?? ''), 'launcher');
+  const instancesDir = path.join(launcherDir, 'instances');
+  const instanceRoot = path.join(instancesDir, String(id ?? ''));
+  return {
+    launcherDir,
+    instancesDir,
+    registryFile: path.join(launcherDir, 'registry.json'),
+    instanceRoot,
+    manifestFile: path.join(instanceRoot, 'instance.json'),
+    lockFile: path.join(instanceRoot, 'running.lock'),
+    logsDir: path.join(instanceRoot, 'logs'),
+  };
+}
+
+/**
+ * `instance.json` 的播种形状（逐字段对齐 `store::StoredInstance`，camelCase）。
+ * 形参非法一律抛错：宁可脚本当场挂，也别写一份宿主读不出的清单。
+ */
+export function buildFixtureInstance(input) {
+  const {
+    id,
+    name = id,
+    gameRoot,
+    relativePath,
+    args = [],
+    windowMode = FIXTURE_WINDOW_MODE,
+    now = new Date().toISOString(),
+    notes = 'launcher-smoke 夹具（L9）；收工即删',
+  } = input ?? {};
+  if (typeof id !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(id)) throw new Error(`夹具实例 id 形状非法：${id}`);
+  if (typeof gameRoot !== 'string' || !path.isAbsolute(gameRoot)) throw new Error(`夹具游戏根必须是绝对路径：${gameRoot}`);
+  if (typeof relativePath !== 'string' || !/\.exe$/i.test(relativePath)) throw new Error(`夹具可执行只能是 .exe：${relativePath}`);
+  if (!SUPPORTED_WINDOW_MODES.includes(windowMode)) throw new Error(`windowMode 不在宿主支持档内：${windowMode}`);
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) throw new Error('夹具 args 必须是字符串数组');
+  return {
+    schemaVersion: INSTANCE_SCHEMA_VERSION,
+    id,
+    name,
+    adapterId: FIXTURE_ADAPTER_ID,
+    gameId: FIXTURE_ADAPTER_ID,
+    createdAt: now,
+    updatedAt: now,
+    sourceRoot: gameRoot,
+    isolation: 'shared',
+    state: 'ready',
+    executable: { relativePath, args: [...args], env: {}, windowMode, sha256: null },
+    runtimeId: null,
+    locale: null,
+    encoding: null,
+    saveRoots: [],
+    contentRoots: [],
+    executableTrust: null,
+    launchCount: 0,
+    lastLaunchedAt: null,
+    lastExit: null,
+    notes,
+    tags: ['launcher-smoke-fixture'],
+  };
+}
+
+/** 清单里与注册表索引共有的那七个字段（`store::RegistryEntry`） */
+export function instanceRegistryEntry(instance) {
+  return {
+    id: instance.id,
+    name: instance.name,
+    adapterId: instance.adapterId,
+    gameId: instance.gameId,
+    isolation: instance.isolation,
+    state: instance.state,
+    updatedAt: instance.updatedAt,
+  };
+}
+
+/**
+ * 把夹具条目并进现有注册表。**读不懂就 fail-closed**（不静默用空表覆盖别人的库）。
+ * 返回 `{ ok, registry, reason }`；不存在（首次运行）按空表起步。
+ */
+export function mergeFixtureRegistry(raw, entries = []) {
+  const base = raw === null || raw === undefined ? { schemaVersion: REGISTRY_SCHEMA_VERSION, rev: 0, instances: [] } : raw;
+  if (typeof base !== 'object' || base === null || !Array.isArray(base.instances)) {
+    return { ok: false, registry: null, reason: '现有 registry.json 形状不对（instances 不是数组）——fail-closed，不覆盖' };
+  }
+  const incoming = entries.filter((entry) => entry !== null && typeof entry === 'object' && typeof entry.id === 'string');
+  const incomingIds = new Set(incoming.map((entry) => entry.id));
+  const kept = base.instances.filter((entry) => !(entry !== null && typeof entry === 'object' && incomingIds.has(entry.id)));
+  const rev = Number.isFinite(Number(base.rev)) ? Number(base.rev) : 0;
+  return {
+    ok: true,
+    reason: '',
+    registry: { schemaVersion: REGISTRY_SCHEMA_VERSION, rev: rev + 1, instances: [...kept, ...incoming] },
+  };
+}
+
+/** 从注册表里摘掉夹具条目（清场用）；`raw` 不存在 ⇒ `registry: null`（调用方据此删文件） */
+export function stripFixtureRegistry(raw, ids = []) {
+  if (raw === null || raw === undefined) return { ok: true, registry: null, reason: '' };
+  if (typeof raw !== 'object' || !Array.isArray(raw.instances)) {
+    return { ok: false, registry: null, reason: '现有 registry.json 形状不对（instances 不是数组）——不覆盖' };
+  }
+  const drop = new Set(ids);
+  const kept = raw.instances.filter((entry) => !(entry !== null && typeof entry === 'object' && drop.has(entry.id)));
+  const rev = Number.isFinite(Number(raw.rev)) ? Number(raw.rev) : 0;
+  return { ok: true, reason: '', registry: { schemaVersion: REGISTRY_SCHEMA_VERSION, rev: rev + 1, instances: kept } };
+}
+
+/**
+ * 把**宿主算出的**摘要写成信任记录（`store::StoredTrust` 的四个字段）。
+ * sha256 只接受 64 位小写十六进制——这不是"自己算哈希"，是把宿主的读数搬进清单。
+ */
+export function attachTrust(instance, { sha256, size, approvedAt = new Date().toISOString(), approvedBy = FIXTURE_APPROVED_BY } = {}) {
+  if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) {
+    throw new Error(`信任记录的 sha256 必须是宿主算出的 64 位小写十六进制：${sha256}`);
+  }
+  if (!Number.isInteger(size) || size <= 0) throw new Error(`信任记录的 size 不合法：${size}`);
+  if (typeof approvedBy !== 'string' || approvedBy.trim().length === 0) throw new Error('approvedBy 不能为空');
+  return {
+    ...instance,
+    executable: { ...instance.executable, sha256 },
+    executableTrust: { sha256, size, approvedAt, approvedBy },
+  };
+}
+
+/* ---------------- 读数解析（tasklist / 日志块） ---------------- */
+
+/**
+ * `tasklist /FO CSV /NH` → `[{ image, pid }]`。
+ * 只认引号开头的行：无匹配时 tasklist 打一行本地化提示（不带引号），自然被跳过。
+ */
+export function parseTasklistCsv(text) {
+  const rows = [];
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('"')) continue;
+    const cells = [];
+    const re = /"([^"]*)"/g;
+    let match = re.exec(trimmed);
+    while (match !== null) {
+      cells.push(match[1]);
+      match = re.exec(trimmed);
+    }
+    if (cells.length < 2) continue;
+    const pid = Number(cells[1]);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    rows.push({ image: cells[0], pid });
+  }
+  return rows;
+}
+
+/** 按镜像名（大小写不敏感）挑行 */
+export function rowsByImage(rows, image) {
+  const wanted = String(image ?? '').toLowerCase();
+  return (Array.isArray(rows) ? rows : []).filter(
+    (row) => row !== null && typeof row === 'object' && String(row.image ?? '').toLowerCase() === wanted,
+  );
+}
+
+/**
+ * 日志块（`LogChunkDto[]`，宿主只回 base64 原始字节）→ 文本。
+ * 夹具标记串是 ASCII，故 utf8 / latin1 两种解都至少有一路逐字命中；但夹具**失败**时
+ * cmd / ping 打的是本机 OEM 代码页的中文（zh-CN = GBK）⇒ 多给一路 `gbk` 只为让红变得可读
+ * （`TextDecoder('gbk')` 在 Node 的 full-icu 构建里可用；拿不到就记 null，不影响断言）。
+ */
+export function logTextOf(chunks) {
+  const list = Array.isArray(chunks) ? chunks : [];
+  const buffers = list.map((chunk) => Buffer.from(String(chunk?.bytesBase64 ?? ''), 'base64'));
+  const all = Buffer.concat(buffers);
+  let gbk = null;
+  try {
+    gbk = new TextDecoder('gbk', { fatal: false }).decode(all);
+  } catch {
+    gbk = null;
+  }
+  return {
+    bytes: all.length,
+    streams: list.map((chunk) => String(chunk?.stream ?? '?')),
+    utf8: all.toString('utf8'),
+    latin1: all.toString('latin1'),
+    gbk,
+  };
+}
+
+/* ---------------- 断言：播种 / 信任 / 起 / 停 / 日志 / 失败路径 / 清场 ---------------- */
+
+/** 播种落地：两个夹具都进实例表，且长度恰好 +2 */
+export function checkFixtureSeeded({ baseline, afterSeed, ids = [] } = {}) {
+  const before = Array.isArray(baseline) ? baseline : null;
+  const after = Array.isArray(afterSeed) ? afterSeed : null;
+  if (before === null || after === null) {
+    return [check('fixture:seed-list', 'fixture', false, `播种前后读数不是数组（前=${before === null ? '非数组' : before.length}，后=${after === null ? '非数组' : after.length}）`)];
+  }
+  const present = after
+    .map((entry) => (entry !== null && typeof entry === 'object' ? entry.id ?? null : null))
+    .filter((id) => typeof id === 'string' && ids.includes(id));
+  return [
+    check('fixture:seed-present', 'fixture', present.length === ids.length, `播种后可见 ${present.length}/${ids.length}：${present.join(',') || '无'}`),
+    check('fixture:seed-count', 'fixture', after.length === before.length + ids.length, `实例表 ${before.length} → ${after.length}`),
+  ];
+}
+
+/** 播种后的第一次检视：摘要必须由宿主算（这就是后面写信任记录的唯一来源） */
+export function checkManifestDigest(envelope) {
+  const group = 'fixture';
+  if (envelope?.ok !== true || envelope.value === null || typeof envelope.value !== 'object') {
+    const error = envelope?.error ?? {};
+    return [check('fixture:inspect', group, false, `launcher_instance_get 失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 140)}`)];
+  }
+  const value = envelope.value;
+  const exe = value.executable ?? {};
+  const instance = value.instance ?? {};
+  const digest = typeof exe.sha256 === 'string' ? exe.sha256 : '';
+  return [
+    check('fixture:inspect', group, true, `absolutePath=${String(exe.absolutePath ?? '').slice(0, 160)}`),
+    check('fixture:exists', group, exe.exists === true, `executable.exists=${exe.exists ?? '缺字段'}`),
+    check('fixture:digest-host', group, /^[0-9a-f]{64}$/.test(digest), `宿主算的 sha256=${digest ? `${digest.slice(0, 16)}…（${digest.length} 位）` : '缺失'}`),
+    check(
+      'fixture:untrusted-before',
+      group,
+      exe.trusted === false && (instance.executableTrust ?? null) === null,
+      `trusted=${exe.trusted ?? '缺字段'} executableTrust=${instance.executableTrust === undefined ? '缺字段' : JSON.stringify(instance.executableTrust)}`,
+    ),
+  ];
+}
+
+/** 写回信任记录后，宿主自己复算并认账（trusted=true 是宿主得出的结论，不是我们自说自话） */
+export function checkTrustSeeded(envelope) {
+  const group = 'trust';
+  if (envelope?.ok !== true || envelope.value === null || typeof envelope.value !== 'object') {
+    const error = envelope?.error ?? {};
+    return [check('trust:inspect', group, false, `写信任后复检失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 140)}`)];
+  }
+  const exe = envelope.value.executable ?? {};
+  const trust = envelope.value.instance?.executableTrust ?? null;
+  return [
+    check('trust:host-confirms', group, exe.trusted === true, `宿主复检 trusted=${exe.trusted ?? '缺字段'}（摘要与记录逐字相等）`),
+    check('trust:changed-flag', group, exe.changedSinceTrust === false, `changedSinceTrust=${exe.changedSinceTrust ?? '缺字段'}`),
+    check(
+      'trust:approved-by',
+      group,
+      trust !== null && trust.approvedBy === FIXTURE_APPROVED_BY,
+      `approvedBy=${trust?.approvedBy ?? '缺失'}（可辨认的夹具值，不冒充 native-dialog）`,
+    ),
+    check('trust:sha-recorded', group, trust !== null && trust.sha256 === exe.sha256, `记录 sha256 ${trust?.sha256 ? `${String(trust.sha256).slice(0, 12)}…` : '缺失'} / 现算 ${exe.sha256 ? `${String(exe.sha256).slice(0, 12)}…` : '缺失'}`),
+  ];
+}
+
+/** 能起：返回 running + pid + sessionId，且进程表里同一 pid 在列 */
+export function checkStartRunning(envelope, { instanceId, processList = null } = {}) {
+  const group = 'lifecycle';
+  if (envelope?.ok !== true || envelope.value === null || typeof envelope.value !== 'object') {
+    const error = envelope?.error ?? {};
+    return [check('lifecycle:start-ok', group, false, `launcher_start 失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 160)}`)];
+  }
+  const value = envelope.value;
+  const pid = value.pid;
+  const entries = Array.isArray(processList) ? processList.filter((entry) => entry?.instanceId === instanceId) : [];
+  const listed = entries.find((entry) => entry.pid === pid) ?? null;
+  return [
+    check('lifecycle:start-ok', group, true, `state=${value.state ?? '?'} pid=${pid ?? '—'}`),
+    check('lifecycle:start-state', group, value.state === 'running', `state=${value.state ?? '缺字段'}（期望 running）`),
+    check('lifecycle:start-pid', group, Number.isInteger(pid) && pid > 0, `pid=${pid ?? '空'}（期望正整数，0/空 = 没真起）`),
+    check('lifecycle:start-session', group, typeof value.sessionId === 'string' && value.sessionId.length > 0, `sessionId=${value.sessionId ?? '缺字段'}`),
+    check(
+      'lifecycle:start-listed',
+      group,
+      listed !== null && listed.state === 'running',
+      Array.isArray(processList)
+        ? `process_list 里 ${entries.length} 条本实例；同 pid 条目=${listed ? `state=${listed.state}` : '无'}`
+        : '进程表不可读',
+    ),
+  ];
+}
+
+/** 树真的起过（否则"没有孙进程残留"是空话）：夹具孙进程镜像名在 tasklist 里至少一条 */
+export function checkTreeAlive({ taskList, imageName, pid } = {}) {
+  const group = 'lifecycle';
+  const rows = rowsByImage(taskList, imageName);
+  const own = (Array.isArray(taskList) ? taskList : []).filter((row) => row?.pid === pid);
+  return [
+    check('lifecycle:tree-alive', group, rows.length >= 1, `孙进程 ${imageName} 在 tasklist 里 ${rows.length} 条（pid=${rows.map((row) => row.pid).join(',') || '—'}）`),
+    check('lifecycle:fixture-pid-alive', group, own.length === 1, `夹具 pid=${pid ?? '空'} 在 tasklist 里 ${own.length} 条`),
+  ];
+}
+
+/** 能停：exited + pid 清空 + 锁文件清掉 + 进程树一个不剩 */
+export function checkStopClean({ envelope, pid, lockExists, taskList, imageName } = {}) {
+  const group = 'lifecycle';
+  const base = [];
+  if (envelope?.ok !== true || envelope.value === null || typeof envelope.value !== 'object') {
+    const error = envelope?.error ?? {};
+    base.push(check('lifecycle:stop-ok', group, false, `launcher_stop 失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 160)}`));
+  } else {
+    base.push(check('lifecycle:stop-ok', group, true, `state=${envelope.value.state ?? '?'} exitReason=${envelope.value.exitReason ?? '—'} exitCode=${envelope.value.exitCode ?? '—'}`));
+    base.push(check('lifecycle:stop-state', group, envelope.value.state === 'exited', `state=${envelope.value.state ?? '缺字段'}（期望 exited）`));
+    base.push(check('lifecycle:stop-pid-cleared', group, envelope.value.pid === null || envelope.value.pid === undefined, `pid=${envelope.value.pid ?? '空'}（收尸后应为空）`));
+    base.push(
+      check(
+        'lifecycle:stop-exit-reason',
+        group,
+        typeof envelope.value.exitReason === 'string' && envelope.value.exitReason.length > 0,
+        `exitReason=${envelope.value.exitReason ?? '缺字段'}（killed = 走杀树那条路；user = WM_CLOSE 后自退）`,
+      ),
+    );
+  }
+  const rows = Array.isArray(taskList) ? taskList : [];
+  const stillThere = rows.filter((row) => row?.pid === pid);
+  base.push(check('lifecycle:stop-pid-gone', group, rows.length > 0 && stillThere.length === 0, `tasklist ${rows.length} 行，夹具 pid=${pid ?? '空'} 命中 ${stillThere.length} 条`));
+  const leftovers = rowsByImage(rows, imageName);
+  base.push(
+    check(
+      'lifecycle:stop-tree-gone',
+      group,
+      rows.length > 0 && leftovers.length === 0,
+      leftovers.length === 0 ? `孙进程 ${imageName} 已清零（${rows.length} 行全表可见）` : `孙进程残留：${leftovers.map((row) => row.pid).join(',')}`,
+    ),
+  );
+  base.push(check('lifecycle:stop-lock-cleared', group, lockExists === false, `running.lock ${lockExists ? '仍在盘上' : '已清'}`));
+  return base;
+}
+
+/** 日志泵：会话表里有本场会话（且属于本实例） */
+export function checkLogSessions(envelope, { sessionId, instanceId } = {}) {
+  const group = 'logs';
+  if (envelope?.ok !== true || !Array.isArray(envelope.value)) {
+    const error = envelope?.error ?? {};
+    return [check('logs:sessions', group, false, `launcher_log_sessions 失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 140)}`)];
+  }
+  const sessions = envelope.value;
+  const found = sessions.find((session) => session?.id === sessionId) ?? null;
+  return [
+    check('logs:sessions', group, sessions.length > 0, `${sessions.length} 场会话`),
+    check('logs:session-present', group, found !== null, `sessionId=${sessionId ?? '空'} ${found === null ? '不在会话表里' : '在列'}`),
+    check('logs:session-instance', group, found !== null && found.instanceId === instanceId, `会话归属 instanceId=${found?.instanceId ?? '缺字段'}`),
+  ];
+}
+
+/** 日志泵：尾段有块、且内容含夹具打印的标记串 */
+export function checkLogContent({ tailEnvelope, marker } = {}) {
+  const group = 'logs';
+  if (tailEnvelope?.ok !== true || tailEnvelope.value === null || typeof tailEnvelope.value !== 'object') {
+    const error = tailEnvelope?.error ?? {};
+    return [check('logs:tail', group, false, `launcher_log_tail 失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 140)}`)];
+  }
+  const page = tailEnvelope.value;
+  const text = logTextOf(page.chunks);
+  const hit =
+    text.utf8.includes(String(marker)) || text.latin1.includes(String(marker)) || (text.gbk ?? '').includes(String(marker));
+  // 诊断样本优先用 GBK（cmd / ping 的中文错误串是 OEM 代码页），退回 utf8
+  const sample = (text.gbk ?? text.utf8).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 160);
+  return [
+    check('logs:chunks', group, Array.isArray(page.chunks) && page.chunks.length > 0, `chunks=${Array.isArray(page.chunks) ? page.chunks.length : 0} 路=${text.streams.join('/') || '—'} bytes=${text.bytes}`),
+    check('logs:marker', group, hit, `标记「${marker}」${hit ? '命中' : '未命中'}；样本=${sample || '(空)'}`),
+  ];
+}
+
+/** 日志泵收尾：本场会话已记结束时间 + stdout 字节数 > 0（泵在进程退出后把最后一块写完） */
+export function checkLogPumpFinished(envelope, { sessionId } = {}) {
+  const group = 'logs';
+  if (envelope?.ok !== true || !Array.isArray(envelope.value)) {
+    const error = envelope?.error ?? {};
+    return [check('logs:finished', group, false, `收尾复检失败：code=${error.code ?? 'null'} message=${String(error.message ?? '').slice(0, 140)}`)];
+  }
+  const session = envelope.value.find((item) => item?.id === sessionId) ?? null;
+  return [
+    check('logs:finished-ended', group, session !== null && typeof session.endedAt === 'string' && session.endedAt.length > 0, `endedAt=${session?.endedAt ?? '缺'}（泵已收尾）`),
+    check('logs:finished-bytes', group, session !== null && Number(session.stdoutBytes) > 0, `stdoutBytes=${session?.stdoutBytes ?? '缺'} stderrBytes=${session?.stderrBytes ?? '缺'}`),
+  ];
+}
+
+/** 未信任夹具：start 必须报 `LAUNCHER_TRUST_REQUIRED`（信任只能由宿主对话框给出） */
+export function checkTrustRequired(envelope) {
+  const group = 'trust';
+  const id = 'trust-required';
+  if (envelope?.ok === true) {
+    return [check(`${id}:rejected`, group, false, `未信任实例竟然启动成功：${JSON.stringify(envelope.value)?.slice(0, 160)}`)];
+  }
+  const error = envelope?.error ?? {};
+  return [
+    check(`${id}:rejected`, group, true, '已拒绝（没有绕过信任）'),
+    check(`${id}:code`, group, error.code === 'LAUNCHER_TRUST_REQUIRED', `code=${error.code ?? 'null'}（期望 LAUNCHER_TRUST_REQUIRED）`),
+    check(`${id}:retryable`, group, error.retryable === true, `retryable=${error.retryable === undefined ? '缺字段' : error.retryable}（信任可重新确认 ⇒ 应为 true）`),
+    check(`${id}:message-human`, group, typeof error.message === 'string' && /[\u4e00-\u9fa5]/.test(error.message), `message=${String(error.message ?? '').slice(0, 120)}`),
+    check(`${id}:no-panic`, group, error.panic !== true, error.panic ? '命中 panic 特征' : '无 panic 特征'),
+  ];
+}
+
+/** 拒绝之后进程表里不许出现"假装在跑"的本实例 */
+export function checkNoRunAfterRefusal(envelope, instanceId) {
+  const group = 'trust';
+  if (envelope?.ok !== true || !Array.isArray(envelope.value)) {
+    return [check('trust:no-run', group, false, '进程表不可读')];
+  }
+  const entry = envelope.value.find((item) => item?.instanceId === instanceId) ?? null;
+  const running = entry !== null && entry.state === 'running';
+  return [
+    check('trust:no-run', group, !running && (entry === null || entry.pid === null || entry.pid === undefined), entry === null ? '进程表里没有本实例（干净）' : `state=${entry.state} pid=${entry.pid ?? '空'}`),
+  ];
+}
+
+/**
+ * `LAUNCHER_PLATFORM_UNSUPPORTED` 的报文形状（码 + 中文人话 + retryable 字段在）。
+ * 本机 Windows 上进程闸恒放行，故经 overlay 闸取这份形状（见 `platformUnsupportedReading`）。
+ */
+export function checkPlatformErrorShape(envelope) {
+  const id = 'platform-shape';
+  if (envelope?.ok === true) {
+    return [check(`${id}:rejected`, id, false, 'overlay 隔离竟然创建成功（P2 未落地却放行）')];
+  }
+  const error = envelope?.error ?? {};
+  return [
+    check(`${id}:code`, id, error.code === EXPECTED_CODES.platformUnsupported, `code=${error.code ?? 'null'}（期望 ${EXPECTED_CODES.platformUnsupported}）`),
+    check(`${id}:message-human`, id, typeof error.message === 'string' && /[\u4e00-\u9fa5]/.test(error.message), `message=${String(error.message ?? '').slice(0, 120)}`),
+    check(`${id}:retryable-field`, id, typeof error.retryable === 'boolean', `retryable=${error.retryable === undefined ? '缺字段' : error.retryable}（字段必须存在）`),
+    check(`${id}:no-panic`, id, error.panic !== true, error.panic ? '命中 panic 特征' : '无 panic 特征'),
+  ];
+}
+
+/** 夹具批次能不能在本机跑（cmd.exe 复制 + CREATE_NO_WINDOW + Job 杀树 ⇒ 只有 Windows） */
+export function platformFixturePlan({ platform = process.platform } = {}) {
+  if (platform === 'win32') return { run: true, skipReason: null };
+  return {
+    run: false,
+    skipReason: `本机 ${platform}：夹具要复制 cmd.exe、走 CREATE_NO_WINDOW 与 Job 杀树语义，只有 Windows 这条通道；夹具批次 SKIP（不伪造）`,
+  };
+}
+
+/** "平台不支持的人话"这条判据在本机是否可测（Windows 上进程闸不可达 ⇒ SKIP 并说明） */
+export function platformUnsupportedReading({ platform = process.platform } = {}) {
+  if (platform !== 'win32') return { verdict: 'check', reason: null };
+  return {
+    verdict: 'skip',
+    reason:
+      '本机是 Windows：process.rs 的 platform_gate 恒放行，LAUNCHER_PLATFORM_UNSUPPORTED（进程托管）在本机不可达；' +
+      '只用 overlay 闸核同一码的报文形状，不伪造平台',
+  };
+}
+
+function isInsideOrEqual(root, target, platform = process.platform) {
+  const norm = (value) => {
+    const resolved = path.resolve(value);
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const base = norm(root);
+  const full = norm(target);
+  return full === base || full.startsWith(base.endsWith(path.sep) ? base : `${base}${path.sep}`);
+}
+
+/**
+ * 清场清单（删什么、以及**拒绝删什么**）。
+ * 两条守卫：实例目录必须在隔离 appData 的 `launcher/instances/` 之下；游戏根必须在
+ * `os.tmpdir()` 之下且目录名带夹具前缀。任一条不满足 ⇒ `ok:false`，调用方按红处理且不删。
+ */
+export function cleanupPlan({ appDataDir, instanceIds = [], gameRoot = null, keep = false, tmpRoot = os.tmpdir() } = {}) {
+  if (keep) return { ok: true, kept: true, targets: [], reason: '--keep：夹具与临时游戏根留在现场（排查用）' };
+  const instancesDir = path.join(String(appDataDir ?? ''), 'launcher', 'instances');
+  const targets = [];
+  for (const id of instanceIds) {
+    const dir = path.join(instancesDir, String(id ?? ''));
+    if (!isInsideOrEqual(instancesDir, dir)) {
+      return { ok: false, kept: false, targets: [], reason: `实例目录不在隔离 appData 的 instances 目录之下（${dir}）——拒绝删除` };
+    }
+    targets.push({ kind: 'instance', path: dir });
+  }
+  if (gameRoot !== null && gameRoot !== undefined) {
+    const resolved = path.resolve(gameRoot);
+    if (!isInsideOrEqual(tmpRoot, resolved)) {
+      return { ok: false, kept: false, targets: [], reason: `游戏根不在临时目录内（${resolved}，tmp=${tmpRoot}）——拒绝删除` };
+    }
+    if (!path.basename(resolved).startsWith(FIXTURE_PREFIX)) {
+      return { ok: false, kept: false, targets: [], reason: `游戏根目录名不是夹具前缀（${path.basename(resolved)}）——拒绝删除` };
+    }
+    targets.push({ kind: 'game-root', path: resolved });
+  }
+  return { ok: true, kept: false, targets, reason: '' };
+}
+
+/** 清场落到盘上的证据（`exists` 可注入，纯函数面才好测） */
+export function checkDiskGone({ targets = [], exists = (p) => fs.existsSync(p) } = {}) {
+  const group = 'cleanup';
+  const list = Array.isArray(targets) ? targets : [];
+  if (list.length === 0) return [check('cleanup:gone', group, false, '清场清单是空的（没有可证明的东西）')];
+  return list.map((target) =>
+    check(
+      `cleanup:gone:${target.kind}:${path.basename(String(target.path))}`,
+      group,
+      exists(target.path) !== true,
+      `${target.kind} ${target.path} ${exists(target.path) === true ? '仍在盘上' : '已删除'}`,
+    ),
+  );
+}
+
+/** 实例表回到播种前：长度相等且不再含夹具 id */
+export function checkCleanup({ baseline, after, ids = [] } = {}) {
+  const group = 'cleanup';
+  const before = Array.isArray(baseline) ? baseline : null;
+  const list = Array.isArray(after) ? after : null;
+  if (before === null || list === null) {
+    return [check('cleanup:list', group, false, `清场后读数不是数组（基线=${before === null ? '非数组' : before.length}，清场后=${list === null ? '非数组' : list.length}）`)];
+  }
+  const leftovers = list
+    .map((entry) => (entry !== null && typeof entry === 'object' ? entry.id ?? null : null))
+    .filter((id) => typeof id === 'string' && ids.includes(id));
+  return [
+    check('cleanup:count', group, list.length === before.length, `实例表 ${before.length} → ${list.length}（播种前 → 清场后）`),
+    check('cleanup:no-fixture', group, leftovers.length === 0, leftovers.length === 0 ? '夹具 id 已从实例表消失' : `残留：${leftovers.join(',')}`),
+  ];
+}
+
+/** 失败归类（报告里「红在哪一层」）：channel / contract / negative / side-effect / fixture / lifecycle / logs / trust / platform / cleanup / runner */
 export function classifyFailure(assertion) {
   const group = String(assertion?.group ?? '');
   if (group === 'channel') return 'channel';
   if (group === 'readonly') return 'contract';
   if (group === 'negative-start' || group === 'negative-create') return 'negative';
   if (group === 'side-effect') return 'side-effect';
+  if (group === 'fixture' || group === 'trust' || group === 'lifecycle' || group === 'logs' || group === 'platform' || group === 'cleanup') {
+    return group;
+  }
   return 'runner';
 }
 
@@ -420,7 +1028,9 @@ async function startShell({ budgetMs, verbose }) {
       return { ok: false, child, reason: `真壳在就绪前退出（code=${exited.code} signal=${exited.signal ?? '-'}）`, tail };
     }
     const session = readSessionFile();
-    if (session !== null && session.mode === 'shell') {
+    // 会话文件出现 ≠ 壳还活着：debug-cli 的 `exit` 处理也会落一份 session.json（壳刚死时那扇门
+    // 还在），2026-10-26 实测过一次"5.6 s 就绪 + CDP fetch failed"的假就绪 ⇒ 再验一次 CDP 端口。
+    if (session !== null && session.mode === 'shell' && (await portOpen(Number(session.cdpPort)))) {
       return { ok: true, child, session, bootMs: Date.now() - started, vitePort };
     }
     await sleep(500);
@@ -446,11 +1056,364 @@ async function probeInvoke(cdp, cmd, args = {}) {
   return normalizeEnvelope(raw);
 }
 
+/* ------------------------- 夹具的磁盘面（只在隔离 appData / 临时目录） ------------------------- */
+
+function writeJsonFile(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+}
+
+/** 读 JSON：不存在 ⇒ `{ text:null, value:null, missing:true }`；存在但读/解析失败 ⇒ `error` 非空（fail-closed） */
+function readJsonFile(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf-8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { text: null, value: null, missing: true, error: null };
+    return { text: null, value: null, missing: false, error: String(err?.message ?? err) };
+  }
+  try {
+    return { text, value: JSON.parse(text), missing: false, error: null };
+  } catch (err) {
+    return { text, value: null, missing: false, error: `JSON 解析失败：${String(err?.message ?? err)}` };
+  }
+}
+
+/** 临时游戏根 + 两个 cmd.exe 副本（真游戏盘一个字节都不碰） */
+function seedFixtureFiles(names) {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const source = path.join(systemRoot, 'System32', 'cmd.exe');
+  const gameRoot = path.join(os.tmpdir(), names.gameRootName);
+  if (!fs.existsSync(source)) throw new Error(`找不到夹具母本：${source}`);
+  fs.rmSync(gameRoot, { recursive: true, force: true });
+  fs.mkdirSync(gameRoot, { recursive: true });
+  const copies = [names.exe, names.childExe].map((name) => {
+    const dest = path.join(gameRoot, name);
+    fs.copyFileSync(source, dest);
+    return { name, dest, size: fs.statSync(dest).size };
+  });
+  return { gameRoot, source, copies };
+}
+
+/** `tasklist` 全表（一次拿齐，之后按 pid / 镜像名做纯过滤） */
+function readTaskList() {
+  if (!IS_WINDOWS) return { ok: false, rows: [], detail: '非 Windows 没有 tasklist' };
+  const out = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], {
+    encoding: 'utf-8',
+    windowsHide: true,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const rows = parseTasklistCsv(out.stdout ?? '');
+  return {
+    ok: out.status === 0 && rows.length > 0,
+    rows,
+    detail: out.status === 0 ? `${rows.length} 行` : `rc=${out.status} ${String(out.stderr ?? '').slice(0, 160)}`,
+  };
+}
+
+/** 轮询到 `check` 真为止（返回最后一次读数；超时也返回，不抛——红由断言负责） */
+async function pollUntil(read, check, { timeoutMs = 10_000, intervalMs = 300 } = {}) {
+  const started = Date.now();
+  let last = await read();
+  while (Date.now() - started < timeoutMs) {
+    if (check(last) === true) return last;
+    await sleep(intervalMs);
+    last = await read();
+  }
+  return last;
+}
+
 /**
- * 顺序执行四组探针，返回断言表 + 频道读数。**写动作一条都不发**：
- * 两条负向都在「不可能落地」的路径上（查无实例 / 缺参数被 IPC 层拒收）。
+ * L9 联调批：夹具实例播种 → 真进程起停 → 日志泵 → 失败路径 → 清场。
+ *
+ * 全程只写两个地方：隔离 appData（实例清单 / 注册表 / 日志 / 锁）与 `os.tmpdir()` 下的
+ * 临时游戏根。清场放在 `finally` 里：中途任何一步炸了，夹具与临时目录照样删干净
+ * （`--keep` 除外，那是排查用的显式保留）。
  */
-async function runProbes(cdp, { appDataDir }) {
+async function runFixtureProbes(cdp, { appDataDir, keep = false, baseline = null } = {}) {
+  const assertions = [];
+  const skips = [];
+  const readings = {
+    platform: process.platform,
+    token: null,
+    ids: null,
+    gameRoot: null,
+    exe: null,
+    pid: null,
+    sessionId: null,
+    logSample: null,
+    treeBeforeStop: null,
+    lockAfterStop: null,
+    instanceCounts: { baseline: Array.isArray(baseline) ? baseline.length : null, afterSeed: null, afterCleanup: null },
+  };
+
+  const fixturePlan = platformFixturePlan();
+  if (!fixturePlan.run) {
+    skips.push({ id: 'fixture:platform', group: 'fixture', reason: fixturePlan.skipReason });
+    return { assertions, readings, skips };
+  }
+  if (!Array.isArray(baseline)) {
+    skips.push({
+      id: 'fixture:baseline',
+      group: 'fixture',
+      reason: '实例表基线不是数组——播种 / 清场没有对拍基准，夹具整批 SKIP（readonly 那条已经红了，先修它）',
+    });
+    return { assertions, readings, skips };
+  }
+
+  const token = fixtureToken();
+  const names = fixtureNames(token);
+  const ids = [names.ids.trusted, names.ids.untrusted];
+  const [trustedId, untrustedId] = ids;
+  const trusted = fixtureLayout(appDataDir, trustedId);
+  const untrusted = fixtureLayout(appDataDir, untrustedId);
+  readings.token = token;
+  readings.ids = names.ids;
+
+  // 注册表的原始字节：清场时要么还原条目、要么（本来不存在）删掉文件恢复"首次运行"
+  const registryOriginal = readJsonFile(trusted.registryFile);
+  let gameRoot = null;
+  let cleanupDone = false;
+
+  const cleanup = async () => {
+    if (cleanupDone) return null;
+    cleanupDone = true;
+    const plan = cleanupPlan({ appDataDir, instanceIds: ids, gameRoot, keep });
+    const result = { plan, removed: [], errors: [], kept: keep };
+    if (!plan.ok) {
+      result.errors.push(plan.reason);
+      return result;
+    }
+    if (plan.kept) {
+      skips.push({ id: 'cleanup:keep', group: 'cleanup', reason: plan.reason });
+      return result;
+    }
+    // 先摘注册表条目再删目录：反过来一旦删一半失败，会留下"注册表指向不存在清单"的库
+    const fresh = readJsonFile(trusted.registryFile);
+    const stripped = stripFixtureRegistry(fresh.value, ids);
+    if (!stripped.ok) {
+      result.errors.push(stripped.reason);
+    } else if (stripped.registry === null || registryOriginal.missing) {
+      try {
+        fs.rmSync(trusted.registryFile, { force: true });
+        result.removed.push(trusted.registryFile);
+      } catch (err) {
+        result.errors.push(`删注册表失败：${String(err?.message ?? err)}`);
+      }
+    } else {
+      try {
+        writeJsonFile(trusted.registryFile, stripped.registry);
+      } catch (err) {
+        result.errors.push(`写回注册表失败：${String(err?.message ?? err)}`);
+      }
+    }
+    for (const target of plan.targets) {
+      try {
+        fs.rmSync(target.path, { recursive: true, force: true });
+        result.removed.push(target.path);
+      } catch (err) {
+        result.errors.push(`删 ${target.path} 失败：${String(err?.message ?? err)}`);
+      }
+    }
+    return result;
+  };
+
+  try {
+    /* ---- 1) 夹具文件 + 清单播种 ---- */
+    const files = seedFixtureFiles(names);
+    gameRoot = files.gameRoot;
+    readings.gameRoot = gameRoot;
+    readings.exe = names.exe;
+    assertions.push(
+      check(
+        'fixture:exe-copies',
+        'fixture',
+        files.copies.every((copy) => copy.size > 0),
+        `${files.copies.map((copy) => `${copy.name}=${copy.size}B`).join('，')}（母本 ${files.source}）`,
+      ),
+    );
+
+    if (registryOriginal.error !== null) {
+      assertions.push(check('fixture:registry-readable', 'fixture', false, `隔离 appData 的 registry.json 读不懂：${registryOriginal.error}——不覆盖，整批作废`));
+      throw new Error('registry.json 不可读，放弃播种');
+    }
+
+    const now = new Date().toISOString();
+    const args = fixtureArgs(names.childExe, names.marker);
+    const instanceTrusted = buildFixtureInstance({ id: trustedId, name: `夹具-已信任-${token}`, gameRoot, relativePath: names.exe, args, now });
+    const instanceUntrusted = buildFixtureInstance({ id: untrustedId, name: `夹具-未信任-${token}`, gameRoot, relativePath: names.exe, args, now });
+    writeJsonFile(trusted.manifestFile, instanceTrusted);
+    writeJsonFile(untrusted.manifestFile, instanceUntrusted);
+
+    const merged = mergeFixtureRegistry(registryOriginal.value, [instanceRegistryEntry(instanceTrusted), instanceRegistryEntry(instanceUntrusted)]);
+    if (!merged.ok) {
+      assertions.push(check('fixture:registry-merge', 'fixture', false, merged.reason));
+      throw new Error(merged.reason);
+    }
+    writeJsonFile(trusted.registryFile, merged.registry);
+    assertions.push(check('fixture:registry-write', 'fixture', true, `registry.json rev=${merged.registry.rev}，实例 ${merged.registry.instances.length} 条`));
+
+    const seedList = await probeInvoke(cdp, 'launcher_instance_list');
+    readings.instanceCounts.afterSeed = Array.isArray(seedList.value) ? seedList.value.length : null;
+    assertions.push(...checkFixtureSeeded({ baseline, afterSeed: seedList.value, ids }));
+    if (Array.isArray(seedList.value) && ids.some((id) => !seedList.value.some((entry) => entry?.id === id))) {
+      // 播种没生效 ⇒ 后面每条都在测空气（实例表读不出清单时宿主会整体报错）
+      throw new Error(`播种未生效：实例表里没有 ${ids.join(' / ')}`);
+    }
+
+    /* ---- 2) 信任记录：哈希只认宿主算的那份 ---- */
+    const inspected = await probeInvoke(cdp, 'launcher_instance_get', { instanceId: trustedId });
+    assertions.push(...checkManifestDigest(inspected));
+    const absolutePath = inspected.ok ? String(inspected.value?.executable?.absolutePath ?? '') : '';
+    const hostDigest = inspected.ok ? String(inspected.value?.executable?.sha256 ?? '') : '';
+    if (!/^[0-9a-f]{64}$/.test(hostDigest) || absolutePath.length === 0) {
+      throw new Error('宿主没有给出可用摘要，无法播种信任记录');
+    }
+    const size = fs.statSync(absolutePath).size;
+    const trustedInstance = attachTrust(instanceTrusted, { sha256: hostDigest, size, approvedAt: now });
+    writeJsonFile(trusted.manifestFile, trustedInstance);
+    const reInspected = await probeInvoke(cdp, 'launcher_instance_get', { instanceId: trustedId });
+    assertions.push(...checkTrustSeeded(reInspected));
+
+    /* ---- 3) 能起 ---- */
+    const started = await probeInvoke(cdp, 'launcher_start', { instanceId: trustedId });
+    const pid = started.ok ? started.value?.pid : null;
+    readings.pid = typeof pid === 'number' ? pid : null;
+    readings.sessionId = started.ok ? (started.value?.sessionId ?? null) : null;
+    const processListAfterStart = await probeInvoke(cdp, 'launcher_process_list');
+    assertions.push(...checkStartRunning(started, { instanceId: trustedId, processList: processListAfterStart.value }));
+    if (readings.pid === null || readings.sessionId === null) {
+      throw new Error('启动没有给出 pid / sessionId，后面的停止与日志没有靶子');
+    }
+
+    /* ---- 4) 日志泵（会话 + 尾段含标记串） ---- */
+    const sessionsEnvelope = await probeInvoke(cdp, 'launcher_log_sessions', { instanceId: trustedId });
+    assertions.push(...checkLogSessions(sessionsEnvelope, { sessionId: readings.sessionId, instanceId: trustedId }));
+    const tailEnvelope = await pollUntil(
+      async () => probeInvoke(cdp, 'launcher_log_tail', { instanceId: trustedId, query: { sessionId: readings.sessionId } }),
+      (envelope) => {
+        if (envelope?.ok !== true) return false;
+        const text = logTextOf(envelope.value?.chunks);
+        return text.utf8.includes(names.marker) || text.latin1.includes(names.marker);
+      },
+      { timeoutMs: 10_000 },
+    );
+    assertions.push(...checkLogContent({ tailEnvelope, marker: names.marker }));
+    if (tailEnvelope.ok) {
+      const text = logTextOf(tailEnvelope.value?.chunks);
+      readings.logSample = text.utf8.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 120);
+      // 失败分诊用：OEM（GBK）解出来的那份中文，红的时候能直接读因
+      readings.logSampleGbk = (text.gbk ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 240);
+    }
+
+    /* ---- 5) 树真的起过（孙进程在场），然后能停 ---- */
+    const treeBefore = await pollUntil(
+      () => readTaskList(),
+      (table) => rowsByImage(table.rows, names.childExe).length >= 1,
+      { timeoutMs: 8_000 },
+    );
+    readings.treeBeforeStop = {
+      ok: treeBefore.ok,
+      detail: treeBefore.detail,
+      child: rowsByImage(treeBefore.rows, names.childExe).map((row) => row.pid),
+    };
+    assertions.push(...checkTreeAlive({ taskList: treeBefore.rows, imageName: names.childExe, pid: readings.pid }));
+
+    const stopped = await probeInvoke(cdp, 'launcher_stop', { instanceId: trustedId, force: false });
+    const treeAfter = await pollUntil(
+      () => readTaskList(),
+      (table) => rowsByImage(table.rows, names.childExe).length === 0 && !table.rows.some((row) => row.pid === readings.pid),
+      { timeoutMs: 8_000 },
+    );
+    const lockAfterStop = fs.existsSync(trusted.lockFile);
+    readings.lockAfterStop = lockAfterStop;
+    readings.treeAfterStop = {
+      ok: treeAfter.ok,
+      detail: treeAfter.detail,
+      child: rowsByImage(treeAfter.rows, names.childExe).map((row) => row.pid),
+      fixturePid: treeAfter.rows.filter((row) => row.pid === readings.pid).length,
+    };
+    assertions.push(
+      ...checkStopClean({
+        envelope: stopped,
+        pid: readings.pid,
+        lockExists: lockAfterStop,
+        taskList: treeAfter.rows,
+        imageName: names.childExe,
+      }),
+    );
+
+    const sessionsAfterStop = await pollUntil(
+      async () => probeInvoke(cdp, 'launcher_log_sessions', { instanceId: trustedId }),
+      (envelope) => {
+        const session = Array.isArray(envelope?.value) ? envelope.value.find((item) => item?.id === readings.sessionId) : null;
+        return session !== null && Number(session.stdoutBytes) > 0 && typeof session.endedAt === 'string';
+      },
+      { timeoutMs: 8_000 },
+    );
+    assertions.push(...checkLogPumpFinished(sessionsAfterStop, { sessionId: readings.sessionId }));
+
+    /* ---- 6) 失败路径 A：未信任夹具 ⇒ TRUST_REQUIRED ---- */
+    const refused = await probeInvoke(cdp, 'launcher_start', { instanceId: untrustedId });
+    assertions.push(...checkTrustRequired(refused));
+    const processListAfterRefusal = await probeInvoke(cdp, 'launcher_process_list');
+    assertions.push(...checkNoRunAfterRefusal(processListAfterRefusal, untrustedId));
+
+    /* ---- 7) 失败路径 B：平台不支持（本机不可达 ⇒ SKIP；只核报文形状） ---- */
+    const platformReading = platformUnsupportedReading();
+    if (platformReading.verdict === 'skip') {
+      skips.push({ id: 'platform:start-gate', group: 'platform', reason: platformReading.reason });
+      const overlayCreate = await probeInvoke(cdp, 'launcher_instance_create', {
+        request: {
+          name: `夹具-overlay-${token}`,
+          sourceRoot: gameRoot,
+          adapterId: FIXTURE_ADAPTER_ID,
+          gameId: FIXTURE_ADAPTER_ID,
+          isolation: 'overlay',
+        },
+        profile: { executable: { relativePath: names.exe, args: [], windowMode: FIXTURE_WINDOW_MODE } },
+      });
+      assertions.push(...checkPlatformErrorShape(overlayCreate));
+    } else {
+      const startOnUnsupported = await probeInvoke(cdp, 'launcher_start', { instanceId: MISSING_INSTANCE_ID });
+      assertions.push(...checkPlatformErrorShape(startOnUnsupported));
+    }
+  } catch (error) {
+    assertions.push(check('fixture:batch', 'fixture', false, `夹具批次中断：${String(error?.message ?? error).slice(0, 300)}`));
+  } finally {
+    const result = await cleanup();
+    if (result !== null) {
+      readings.cleanup = result;
+      if (result.errors.length > 0) assertions.push(check('cleanup:run', 'cleanup', false, result.errors.join('；')));
+      else if (!result.kept) {
+        assertions.push(
+          check(
+            'cleanup:run',
+            'cleanup',
+            result.removed.length > 0,
+            result.removed.length === 0 ? '没有任何东西被删除' : `已删 ${result.removed.length} 项（实例目录 ${ids.length} + 临时游戏根 + 注册表条目）`,
+          ),
+        );
+        assertions.push(...checkDiskGone({ targets: result.plan.targets }));
+      }
+      const afterList = await probeInvoke(cdp, 'launcher_instance_list').catch(() => ({ ok: false, value: null }));
+      readings.instanceCounts.afterCleanup = Array.isArray(afterList.value) ? afterList.value.length : null;
+      if (result.kept) {
+        skips.push({ id: 'cleanup:assert', group: 'cleanup', reason: '--keep：实例表未回基线，清场对拍不适用' });
+      } else {
+        assertions.push(...checkCleanup({ baseline, after: afterList.value, ids }));
+      }
+    }
+  }
+
+  return { assertions, readings, skips };
+}
+
+/**
+ * 顺序执行探针，返回断言表 + 频道读数。前四组**写动作一条都不发**（两条负向都在
+ * 「不可能落地」的路径上）；第五组是 L9 夹具批次，写入只落隔离 appData 与临时游戏根。
+ */
+async function runProbes(cdp, { appDataDir, keep = false }) {
   const assertions = [];
   const readings = { appDataDir, lists: {} };
 
@@ -484,16 +1447,21 @@ async function runProbes(cdp, { appDataDir }) {
   const after = await probeInvoke(cdp, 'launcher_instance_list');
   assertions.push(...checkNoSideEffect(before.value, after.value));
 
-  /* ---- L9 联调批插入点（夹具实例 + 真进程就位后，把文件头那 5 件事各写成一条断言接在这里）----
-   * 1 能起：launcher_start(夹具实例) → state=running，process_list 里 pid 非 0；
-   * 2 能停：launcher_stop → state=exited，再 process_list 不含它，锁文件已清；
-   * 3 信任框：未信任夹具 ⇒ code=LAUNCHER_TRUST_REQUIRED（信任只能由宿主对话框给出）；
-   * 4 日志泵：log_sessions 有本实例会话，log_read 首行非空且编码回读与盘上对拍；
-   * 5 人话：platform_unsupported / retryable 字段齐全（非 Windows 或 overlay 场景）。
-   * 断言组沿用 'negative-*' / 新增 'lifecycle'（classifyFailure 已把未知组归 runner，新增组须同时补归类）。
+  /* ---- L9 联调批：夹具实例 + 真进程生命周期（文件头 5 件事各落到断言组）----
+   * 1 能起（lifecycle）：launcher_start → state=running + pid 非 0 + process_list 同 pid 在列；
+   * 2 能停（lifecycle）：launcher_stop → exited / pid 清空 / running.lock 清掉 / tasklist 里
+   *   夹具 pid 与孙进程镜像名双双清零（停之前先证明树真的起过，否则"没有残留"是空话）；
+   * 3 信任（trust）：未信任夹具 ⇒ LAUNCHER_TRUST_REQUIRED + retryable + 中文人话；
+   * 4 日志泵（logs）：log_sessions 有本场会话、log_tail 尾段含夹具打印的标记串、
+   *   收尾后 endedAt 与 stdoutBytes 都有值；
+   * 5 人话（platform）：本机 Windows 上进程闸不可达 ⇒ SKIP 并说明，只经 overlay 闸核
+   *   LAUNCHER_PLATFORM_UNSUPPORTED 的报文形状（码 / 中文 message / retryable 字段）。
    */
+  const fixture = await runFixtureProbes(cdp, { appDataDir, keep, baseline: before.value });
+  assertions.push(...fixture.assertions);
+  readings.fixture = fixture.readings;
 
-  return { assertions, readings };
+  return { assertions, readings, skips: fixture.skips };
 }
 
 function printAssertions(assertions) {
@@ -501,6 +1469,14 @@ function printAssertions(assertions) {
     const mark = entry.ok ? 'ok  ' : 'FAIL';
     console.log(`  [${mark}] ${entry.group}/${entry.id} — ${entry.detail}`);
   }
+}
+
+/**
+ * SKIP 条目（**不计入断言、不影响 rc**，但也绝不混进 pass 数里假装绿）。
+ * 单独一行一行的 `[SKIP]`：读数行格式受 `parseReadingLine` 钉住，不能塞进去。
+ */
+function printSkips(skips = []) {
+  for (const item of skips) console.log(`  [SKIP] ${item.group}/${item.id} — ${item.reason}`);
 }
 
 async function writeReport(report, outPath) {
@@ -640,20 +1616,31 @@ export async function main(argv = process.argv.slice(2), { command = null } = {}
     }
     assertions.push(check('channel:cdp', 'channel', true, `${page.url.slice(0, 120)}`));
 
-    const probed = await runProbes(cdp, { appDataDir });
+    const probed = await runProbes(cdp, { appDataDir, keep: flags.keep });
     assertions.push(...probed.assertions);
+    const skips = Array.isArray(probed.skips) ? probed.skips : [];
     cdp.close();
     cdp = null;
 
     const tally = groupAssertions(assertions);
     printAssertions(assertions);
+    printSkips(skips);
     const rc = tally.failed === 0 ? 0 : 1;
     const line = summarizeRun({ command: commandText, rc, elapsedMs: Date.now() - started, tally, mode, bootMs });
+    const fixture = probed.readings.fixture ?? {};
     console.log(
       `[launcher-smoke] 读数：instance/process/task = ${probed.readings.lists.launcher_instance_list ?? '?'}/` +
         `${probed.readings.lists.launcher_process_list ?? '?'}/${probed.readings.lists.launcher_task_list ?? '?'}；` +
         `appData=${appDataDir}`,
     );
+    if (typeof fixture.token === 'string') {
+      console.log(
+        `[launcher-smoke] 夹具：token=${fixture.token} pid=${fixture.pid ?? '—'} session=${fixture.sessionId ?? '—'} ` +
+          `实例表 baseline/afterSeed/afterCleanup = ${fixture.instanceCounts?.baseline ?? '?'}/` +
+          `${fixture.instanceCounts?.afterSeed ?? '?'}/${fixture.instanceCounts?.afterCleanup ?? '?'}` +
+          `；skip=${skips.length}`,
+      );
+    }
     if (tally.failed > 0) {
       for (const item of tally.failing) console.log(`  ✗ [${item.bucket}] ${item.id} — ${item.detail}`);
     }
@@ -669,6 +1656,7 @@ export async function main(argv = process.argv.slice(2), { command = null } = {}
         session: { cdpPort: session.cdpPort, vitePort: session.vitePort, identifier, appDataDir },
         readings: probed.readings,
         assertions,
+        skips,
         tally,
         reading: line,
       },

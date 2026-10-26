@@ -13,6 +13,7 @@
  *   c 域外写被拒（devtools console 调 write_file_bytes 到 C:\Windows\Temp → 明确拒绝）
  *   d 关闭项目后再写游戏目录 → 被拒（回到仅 appDataDir）
  *   e appDataDir 写正常
+ *   f 启动器只读三表可达（launcher_instance_list / _process_list / _task_list，连打两次无副作用）
  *
  * 用法：node tools/smoke-tauri-ipc.mjs [游戏目录]
  *   端口默认按仓库配置（1420）；`KOJO_SMOKE_VITE_PORT=1431` 可换（临时合并配置走 `tauri dev --config`，
@@ -836,6 +837,41 @@ async function main() {
     const eOnDisk = fs.existsSync(ePath) && fs.readFileSync(ePath).toString('utf-8') === 'appdata-ok';
     if (eResult.ok && eOnDisk) P('e', 'appDataDir 写正常', `写入并可读回 ${ePath}`);
     else F('e', 'appDataDir 写正常', `invoke=${JSON.stringify(eResult)} onDisk=${eOnDisk}`);
+
+    /* -------- f) 启动器只读面（真 IPC，零副作用） -------- */
+    // 为什么放在这里能加：三条 `launcher_*` 只读命令（实例 / 进程 / 任务表）都**不写盘**，
+    // 也不依赖项目状态（d 步要关项目，故排它前面）。进程托管的真起真停（夹具实例 + 真进程 +
+    // Job 杀树 + 日志泵）在 `tools/launcher-smoke.mjs` 里做——那里的判据要写隔离 appData，
+    // 而本工具跑的是**真 appData**（identifier `dev.kojo.editor`、共用画像），不适合播种夹具。
+    // 这里只钉"只读三表在真壳里可达且形状对，且连打两次长度不变"。
+    const fRead = await cdp.evalJs(`(async () => {
+      const inv = ${INV};
+      const once = async (cmd) => {
+        try { return { ok: true, value: await inv(cmd, {}) }; }
+        catch (e) { return { ok: false, code: (e && e.code) || null, err: String(e) }; }
+      };
+      const first = await once('launcher_instance_list');
+      const second = await once('launcher_instance_list');
+      const processes = await once('launcher_process_list');
+      const tasks = await once('launcher_task_list');
+      return { first, second, processes, tasks };
+    })()`);
+    const asLen = (r) => (r && r.ok && Array.isArray(r.value) ? r.value.length : null);
+    const fLens = {
+      instances1: asLen(fRead?.first),
+      instances2: asLen(fRead?.second),
+      processes: asLen(fRead?.processes),
+      tasks: asLen(fRead?.tasks),
+    };
+    const fBad = Object.entries(fLens).filter(([, value]) => value === null).map(([key]) => key);
+    if (fBad.length === 0 && fLens.instances1 === fLens.instances2) {
+      P('f', '启动器只读三表（真 IPC）',
+        `instance/process/task = ${fLens.instances1}/${fLens.processes}/${fLens.tasks}（连打两次实例表长度不变）`);
+    } else if (fBad.length > 0) {
+      F('f', '启动器只读三表（真 IPC）', `非数组读数：${fBad.join(',')}；原始=${JSON.stringify(fRead)?.slice(0, 300)}`);
+    } else {
+      F('f', '启动器只读三表（真 IPC）', `实例表长度变了：${fLens.instances1} → ${fLens.instances2}（只读命令不该有副作用）`);
+    }
 
     /* -------- d) 关闭项目后再写游戏目录 → 被拒 -------- */
     // ⚠ C-1a 起「关闭项目」从工具栏右区收进项目名旁「更多」⋯ 菜单（共享 ContextMenu）：
