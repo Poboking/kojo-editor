@@ -77,12 +77,12 @@
       }
     },
     "M3(旧token名)": {
-      "total": 163,
+      "total": 164,
       "files": {
         "packages/app/src/bootstrap.ts": 1,
         "packages/app/src/monaco/kojo-hover.ts": 2,
         "packages/app/src/monaco/kojo-language.ts": 46,
-        "packages/app/src/monaco/kojo-theme-rules.ts": 29,
+        "packages/app/src/monaco/kojo-theme-rules.ts": 30,
         "packages/app/src/monaco/kojo2-code-actions.ts": 1,
         "packages/app/src/monaco/kojo2-theme.ts": 1,
         "packages/app/src/monaco/theme.ts": 28,
