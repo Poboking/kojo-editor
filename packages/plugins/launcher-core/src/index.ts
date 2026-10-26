@@ -11,13 +11,15 @@
  * | `processes` 进程监督 | ✅ 装配（core 侧单飞锁 + 状态机记账 + 事件订阅） |
  * | `tasks` 任务中心 | ✅ 装配（快照合并 + 进度节流 + 取消语义） |
  * | `logs` 日志 | ✅ 装配（流式解码 + 环形缓冲 + 诊断包请求编排） |
- * | `runtimes` / `content` / `plugins` / `pluginProjects` / `saves` | ❌ 未装配（见下） |
+ * | `saves` 存档 | ✅ 装配（宿主有 `launcher_save_*` 八条命令时；否则仍拒绝，见下） |
+ * | `runtimes` / `content` / `plugins` / `pluginProjects` | ❌ 未装配（见下） |
  * | `updates`（P2） | ❌ 缺席（契约里本就是可选字段） |
  *
- * **未装配的五条都只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_content_*` /
- * `launcher_save_*` / `launcher_pick_archive` / `launcher_project_hash`。本层不造空实现假装能用
- * ——每条方法都抛 `LAUNCHER_PLATFORM_UNSUPPORTED` 并说清是哪一块没接（不静默、不返回空数组
- * 让 UI 以为「这里就是没有」）。它们随 P1 宿主命令与对应编排一起补，届时只换桩，不动上面四条。
+ * **未装配的四条只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_content_*` /
+ * `launcher_pick_archive` / `launcher_project_hash`。本层不造空实现假装能用——每条方法都抛
+ * `LAUNCHER_PLATFORM_UNSUPPORTED` 并说清是哪一块没接（不静默、不返回空数组让 UI 以为
+ * 「这里就是没有」）。它们随 P1 宿主命令与对应编排一起补，届时只换桩，不动其余服务。
+ * 存档同样按能力探测：宿主还没有那八条命令时 `saves` 保持桩，不降级成半套实现在中途断链。
  *
  * ## 两条硬边界
  *
@@ -44,6 +46,8 @@ import type { DecodeBytes } from './log-service';
 import { InstanceStoreImpl } from './instance-store';
 import { LogServiceImpl } from './log-service';
 import { ProcessSupervisorImpl } from './process-supervisor';
+import { SaveManagerImpl } from './save-manager';
+import { saveHostFrom } from './save-host';
 import { TaskCenterImpl } from './task-center';
 import { notAssembled } from './errors';
 
@@ -128,6 +132,23 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         }
       };
 
+      /**
+       * 存档编排：只在宿主**真有** `launcher_save_*` 八条命令时装配（`saveHostFrom` 探测）。
+       * 缺任一条 ⇒ 保留「未装配」桩（P0 行为不变）：半套命令下的恢复链会在中途断掉，
+       * 比每个方法各自抛一句不一样的错更糟。
+       */
+      const saveHost = saveHostFrom(host);
+      const saves = saveHost
+        ? new SaveManagerImpl({
+            host: saveHost,
+            getInstance: (instanceId) => instances.get(instanceId),
+            saveLayoutOf: (adapterId) => adapterOf(adapterId)?.saveLayout,
+            tasks,
+            processes,
+            ...(options.now === undefined ? {} : { now: options.now }),
+          })
+        : NOT_ASSEMBLED.saves;
+
       /** 宿主事件 → 各自的服务（事件是宿主推来的真相，命令返回值只是"我这一步的结果"） */
       const disposers = [
         host.onProcess((event) => processes.applyEvent(event)),
@@ -171,7 +192,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         content: NOT_ASSEMBLED.content,
         plugins: NOT_ASSEMBLED.plugins,
         pluginProjects: NOT_ASSEMBLED.pluginProjects,
-        saves: NOT_ASSEMBLED.saves,
+        saves,
         initialize,
         dispose: shutdown,
       };
@@ -259,6 +280,15 @@ export {
 } from './errors';
 export { InstanceStoreImpl } from './instance-store';
 export { ProcessSupervisorImpl, idleStatus } from './process-supervisor';
+export { SaveManagerImpl, DEFAULT_SAVE_BACKUP_KEEP, DEFAULT_IMPORT_PLAN_TTL_MS } from './save-manager';
+export type { SaveManagerOptions, SaveProcessControl, SaveTaskSink } from './save-manager';
+export { saveHostFrom } from './save-host';
+export type {
+  HostSaveImportPlan,
+  HostSaveListing,
+  HostSaveRootState,
+  SaveHostBridge,
+} from './save-host';
 export { TaskCenterImpl, isTerminalTaskState, DEFAULT_TASK_PROGRESS_THROTTLE_MS } from './task-center';
 export {
   LogServiceImpl,
