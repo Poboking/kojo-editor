@@ -420,9 +420,13 @@ function Picker({
             setCursor(0);
           }}
         />
+        {/* 列表容器的 `stagger` 只是**挂上现成的机器**（styles.css 的 `.stagger > *` +
+            `--stagger` 节拍阶梯，时长/截断/压平全在 `palette.css` 那节里收口）——
+            组件侧不留一行 JS 计时，也不新造第二套节拍。与作用域那条一贯口径相同：
+            只给命令两档（`pk-list`），`default` 档（快速打开文件 / 符号面板）不入场。 */}
         <div
           ref={listRef}
-          className={`picker-list ${variant === 'default' ? '' : 'pk-list'}`}
+          className={`picker-list ${variant === 'default' ? '' : 'pk-list stagger'}`}
           data-context-surface={surface}
         >
           {items.length === 0 ? (

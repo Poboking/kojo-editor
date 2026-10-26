@@ -124,8 +124,11 @@ html:root[data-glass='solid'] .picker-backdrop.pk-mask {
   padding-inline: var(--space-2);
   border-radius: var(--radius-md);
   /* 键盘上下移动时高亮是"走到下一行"，不是"换了一页"：70ms（--dur-press 档，
-     与全站按压同速）够读出过渡、又不拖慢连按 ↑↓ 的节奏。token 无 60ms 档。 */
-  transition: background-color var(--dur-press) var(--ease-out);
+     与全站按压同速）够读出过渡、又不拖慢连按 ↑↓ 的节奏。token 无 60ms 档。
+     transform 与背景色同拍同曲线（两条分开写会读成"底色先变、胶囊后到"）。 */
+  transition:
+    background-color var(--dur-press) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
 }
 
 /* 选中行不再贴左缘画 accent 竖条：那根条在圆角胶囊的左边会读成"缺了个角"。
@@ -133,10 +136,82 @@ html:root[data-glass='solid'] .picker-backdrop.pk-mask {
 .pk-list .picker-item.active {
   background: var(--accent-dim);
   box-shadow: none;
+  /* 选中行在键盘面上就是**光标**，光标移动该有一点位移感——但只给 2px（一枚 --space-0），
+     再多就成了"每按一次 ↓ 整行跳一下"。位移只走 `transform`：胶囊本就浮在行里，
+     动 margin/padding/width 是逐行重排（本仓红线，见 `ui/motion-surface.css` 纪律②）。
+     这条 2px 会被上面那条入场动画在运行期盖住（动画优先于普通声明），所以入场那档
+     特意把填充收到 `backwards`——否则终帧的 `transform: none` 把它**永久钉死**。 */
+  transform: translateX(var(--space-0));
 }
 
-/* 动效：本文件的 animation 仍只有 styles.css 给的入场（`pop-in`）与遮罩 `fade-in`，
-   而 `pop-in` 那两条已经被全局的
-   `@media (prefers-reduced-motion: reduce)` 与 `:root[data-motion='reduced']`
-   压到 0.01ms ⇒ 减弱动效的机器上这一档同样是瞬移，无需在此另写回落。
-   本批只新增了一条 transition（背景色，70ms），它同样吃那两条全局压时规则。 */
+/* ------------------------------ 逐行入场（复用 styles.css 的 `.stagger` 机器） ------------------------------ */
+
+/* 面板本体早有 `pop-in`，列表此前是"一整块弹出来"。这里接上仓里**现成**那台机器
+   （`.stagger > * { animation: u-rise var(--dur-3) var(--ease-out) both }` + 第 n 个子元素
+   `calc(var(--stagger) × (n-1))` 的节拍阶梯；节拍 token = tokens.css 的 `--stagger`，
+   现下用在欢迎卡 / 设置分组 / 空态），`Palette.tsx` 只多挂一枚 `stagger` 类
+   ——**不另起第二套 keyframes、不另立第二枚节拍常数**。
+   作用域照本文件一贯口径：机器只挂在 `.pk-list`（= F1 与 `>` 命令两档），
+   快速打开的文件模式 / 符号面板走 `default` 档，一行都不参与入场（渲染逐字同改动前）。 */
+
+/* 两处收敛只属于"命令列表"这一面，且**一律 longhand**：
+   `animation:` 简写会把 `animation-delay` 复位成 0，等于当场拆掉机器的阶梯、
+   再在这里手写一份延迟 = 第二套节拍机器。选择器叠三层类（(0,3,0)）稳压
+   `.stagger > *`（0,1,0）与 `.stagger > *:nth-child(n)`（0,2,0）——生产构建里组件 CSS
+   **先于** styles.css 注入，同分必输，靠特异性取胜不靠顺序。 */
+.picker-list.pk-list.stagger > * {
+  /* ① 时长降一档：机器默认的 `--dur-3`(320ms) 是给欢迎卡那种大块准备的，28px 的一行浮 320ms
+        读起来像"列表在加载"。行入场在本仓已有先例——文件树行 `ms-row-in` 吃 `--dur-1`，
+        同一把尺（`ui/motion-surface.css` ①）。 */
+  animation-duration: var(--dur-1);
+  /* ② `both` 收成 `backwards`：`both` 含 forwards ⇒ 动画一结束，终帧的 `transform: none`
+        会**永久钉在行上**（fill-mode 的 after-phase 在级联里高于普通声明、也高于 transition），
+        上面选中行那 2px 就再也打不动。行的基态本就等于终态（opacity 1 / 无位移），
+        砍掉后半段零视觉代价，而 delay 期间仍是"还没到"而不是"先露一下再淡"。 */
+  animation-fill-mode: backwards;
+}
+
+/* 阶梯截断（上限策略）：机器排到第 9 个子元素才封顶（×8 = 360ms），面板等不起——
+   `.picker-list` 是 46vh 的滚容器、行高 28px，1280×800 一屏 13 行上下，照机器排下去
+   第 9 行要到 360ms 之后才露脸，而命令面板的用途是**打开即读**（判据是"首屏读得出内容"，
+   不是"动画排满"）。故本面把平台段提前到第 5 个：0 / 45 / 90 / 135ms，第 5 个起同值 ×4。
+   连最晚那一拍也只到 180 + 120 = 300ms 全到齐，而"这是一行行出现的"那件事前四拍就说完
+   了，再多就是让作者看着屏幕排队。
+   形状仍是**平台段**、不是按 index 取模：深列的行同帧到齐（与机器的 `n+9`、树行的 `n+7`
+   同一招式），滚下去不会看见半截入场，也不多出第二套节拍。 */
+.picker-list.pk-list.stagger > *:nth-child(n + 5) {
+  animation-delay: calc(var(--stagger) * 4);
+}
+
+/* ------------------------------ 压平闸（减弱动效档） ------------------------------ */
+
+/* 两条口径各一条，照 `ui/motion-surface.css` 那对先例。全局那两条只把
+   `animation-duration` / `transition-duration` 压到 0.01ms，**压不到 delay** ⇒
+   带 `backwards` 填充的行在减弱档会"先空 135ms 再蹦出来"，比根本不动更糟。
+   所以这里点名把 `animation-delay` 显式归零，并关掉 `animation`
+   （关掉后停在基态 = 常显，不会卡在半道上的入场态）。
+   选中行那条 transition 一并关掉：减弱档要的是"高亮瞬间换行"，不是 70ms 的滑动。
+   `:root` 与 `*:nth-child(n)` 都不是装饰：这两条要抬到 (0,5,0)，稳压上面那条
+   截断阶梯（(0,4,0)）——不然"压平了"只关掉了 animation-name，delay 仍被更高特异性的
+   阶梯规则留着，判据读到的就是"没归零"。`:nth-child(n)` 命中**每一个**子元素，
+   所以一条就覆盖了机器的 1–8 级与本面的平台段。 */
+@media (prefers-reduced-motion: reduce) {
+  :root .picker-list.pk-list.stagger > *:nth-child(n),
+  :root .pk-list .picker-item {
+    animation: none;
+    animation-delay: 0s;
+    transition: none;
+  }
+}
+:root[data-motion='reduced'] .picker-list.pk-list.stagger > *:nth-child(n),
+:root[data-motion='reduced'] .pk-list .picker-item {
+  animation: none;
+  animation-delay: 0s;
+  transition: none;
+}
+
+/* 动效总账：本文件的 animation 现在三件——styles.css 给面板的 `pop-in`、遮罩的 `fade-in`、
+   以及上面那条列表逐行入场。三件的时长与缓动全吃 `--dur-*` / `--ease-*` / `--stagger`，
+   零裸值；前两件由全局那两条压时长规则管住，列表入场因为带 delay，
+   另走上面那两条显式压平（关 animation + delay 归零），不复用那条压不住 delay 的全局规则。 */
+
