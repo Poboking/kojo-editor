@@ -19,7 +19,10 @@
   display: flex;
   flex-direction: column;
   width: min(1080px, 94vw);
-  height: min(720px, 88vh);
+  /* VIS-16：`height` 写死 ⇒ 空库也撑满 720 高，右边那一大片就是灰 void。
+     改 `max-height`：面板按内容长，长到 720/88vh 封顶才滚。
+     `min-height` 留一条底线，免得只有顶栏的面板塌成一条。 */
+  max-height: min(720px, 88vh);
   min-height: 320px;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
@@ -91,16 +94,28 @@
 
 /* ------------------------------ 搜索 ------------------------------ */
 
+/* 搜索井（VIS-42 · D-10）：度量对齐检索面板那套 `ksp-*` 基线——井 26 高 / 内边距
+   0 3 0 7 / radius-md / sunken 底 / hover 抬一档描边；框内输入 24px 命中（WCAG 2.5.8）
+   + --fs-2 + placeholder 走 --fg-dim 且 opacity:1。
+   Lane C 正在抽 `KitSearchField`，本车道**不自己抽件**：只把两处度量对齐成等价替换的
+   形状，C 落地时这里整块删掉即可。等 C 的 KitSearchField。 */
 .launcher-search {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 4px var(--space-2);
+  gap: 2px;
+  min-height: 26px;
+  padding: 0 3px 0 7px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
   color: var(--fg-dim);
   flex: none;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.launcher-search:hover:not(:focus-within) {
+  border-color: var(--border-strong);
 }
 .launcher-search:focus-within {
   border-color: var(--focus-ring);
@@ -109,12 +124,21 @@
 .launcher-search-input {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 24px;
   border: none;
+  border-radius: 0;
+  padding: 0;
   background: transparent;
   color: var(--fg);
-  font: inherit;
-  font-size: var(--fs-1);
+  /* 焦点可见性由外层井的 :focus-within 环承担 ⇒ 框内不再叠一圈 outline（双层边） */
   outline: none;
+  font-family: inherit;
+  font-size: var(--fs-2);
+  line-height: 1.4;
+}
+.launcher-search-input::placeholder {
+  color: var(--fg-dim);
+  opacity: 1;
 }
 
 /* ------------------------------ 实例列表 ------------------------------ */
@@ -1619,4 +1643,141 @@
 .launcher-plugins-group-plugin {
   font-family: var(--font-mono);
   color: var(--fg);
+}
+
+/* ------------------------------ 空库版式（VIS-16 · D-3） ------------------------------ */
+
+/* 改前（1576 视口真读数）：模态落在 x=8..1113 —— 没居中，因为遮罩那层 `.overlay-backdrop`
+   的 flex 居中压根没挂上（本文件头注释写着"复用既有 .overlay-backdrop"，JSX 里却只有
+   `.launcher-mask` 一个类）；面板 `height: min(720px,88vh)` 写死，空库也撑满整高；
+   主体两栏 `minmax(220px,296px) 1fr` ⇒ 左 296px 近空栏 + 右一大片灰 void 中间三行字；
+   "还没有实例"左栏与右卡各说一遍；左栏顶上还叠一张 4 行红框错误卡。
+   改后：JSX 补 `overlay-backdrop` ⇒ 居中 + 遮罩 + z 档一条都走基座；`max-height` ⇒ 按内容长；
+   空库整张面只剩一张三步引导卡。 */
+
+/* 空库：单列（左栏在 JSX 里就不渲了），卡居中、限宽，不许被拉成一条横幅 */
+.launcher-body.is-empty {
+  grid-template-columns: 1fr;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5) var(--space-4);
+}
+
+.launcher-empty-card {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+.launcher-empty-title {
+  margin: 0;
+  font-size: var(--fs-4);
+  font-weight: 600;
+  color: var(--fg);
+}
+.launcher-empty-note {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+
+/* 三步引导：取向导真源 `WIZARD_STEP_TITLES` 的三个名字横排，序号是形状编码
+   （不只靠颜色），步与步之间一条发丝箭头——读作"接着做这三件事"而不是三条并列说明。 */
+.launcher-empty-steps {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  counter-reset: none;
+}
+.launcher-empty-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.launcher-empty-step + .launcher-empty-step {
+  position: relative;
+}
+/* 步骤之间一枚纯 CSS 三角（不是拿字符当图标）：读作"接着做下一件"，不是三条并列说明 */
+.launcher-empty-step + .launcher-empty-step::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-2) - 5px);
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+  border-left: 4px solid var(--border-strong);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+.launcher-empty-step-index {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--accent-rgb) / 0.16);
+  color: var(--accent-text);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.launcher-empty-step-label {
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-empty-card .empty-actions {
+  margin-top: var(--space-1);
+}
+
+/* 列表读不成的错误降成通栏 inline notice（VIS-16）：一条发丝边 + 左侧 2px 红轨仍在
+   （错误必须可见，铁律 4），但不再是一张占三行的卡片；次级细节收进同一段小字。
+   文案一个字没动——这里改的只有版式。 */
+.launcher-failure--dense {
+  flex: none;
+  margin: 0 var(--space-4) var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--red);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+}
+.launcher-failure--dense .launcher-failure-head {
+  grid-column: 1;
+  gap: var(--space-1);
+}
+.launcher-failure--dense .launcher-failure-message {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.launcher-failure--dense .launcher-failure-detail,
+.launcher-failure--dense .launcher-failure-why,
+.launcher-failure--dense .launcher-failure-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+/* 通栏档里错误码不涂琥珀（那一档颜色留给"红轨"这一个信号） */
+.launcher-failure--dense .launcher-failure-code {
+  color: var(--fg-dim);
+  background: transparent;
 }

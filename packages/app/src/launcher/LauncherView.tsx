@@ -118,14 +118,21 @@ interface CreationState {
 function FailureNotice({
   failure,
   onDismiss,
+  dense = false,
 }: {
   readonly failure: FailureView;
   readonly onDismiss?: () => void;
+  /**
+   * 通栏 inline 档（VIS-16 · D-3）：同一段文字，不再画 4 行红框卡——
+   * 一条发丝边的行内通知，标题 + 码 + 首句在一行里，其余降成次级小字。
+   * **只动版式，文案一条不减**（缺省 `false` = 向导/创建面里那一张张卡，原样）。
+   */
+  readonly dense?: boolean;
 }): ReactElement {
   // 四类启动错误的「为什么 + 下一步」；其余码走 `failure.hint`（一张表覆盖全部码）
   const advice = launchErrorAdvice(failure.code);
   return (
-    <div className="launcher-failure" role="alert">
+    <div className={`launcher-failure${dense ? ' launcher-failure--dense' : ''}`} role="alert">
       <div className="launcher-failure-head">
         <strong>{failure.title}</strong>
         <code className="launcher-failure-code">{failure.code ?? '无错误码'}</code>
@@ -289,11 +296,22 @@ function EmptyLibrary({
   readonly surfaceCount: number;
 }): ReactElement {
   return (
-    <div className="empty-state">
-      <p>还没有实例</p>
-      <p className="dim">
-        实例 = 一个游戏目录 + 一份隔离配置。点「从目录创建」→ 选目录 → 选启动程序 → 起名。
-      </p>
+    // 空状态（VIS-16 · D-3）：原先是"左近空栏 + 右一大片灰 void 中间三行字"，而且
+    // "还没有实例"在左栏与这里各说一遍。现在整张面只有一件事——一张三步引导卡，
+    // 步骤名直接取向导真源 `WIZARD_STEP_TITLES`（向导那三步叫什么这里就写什么，不另抄口径）。
+    <div className="launcher-empty-card">
+      <p className="launcher-empty-title">还没有实例</p>
+      <p className="launcher-empty-note">实例 = 一个游戏目录 + 一份隔离配置。三步建好第一个：</p>
+      <ol className="launcher-empty-steps">
+        {WIZARD_STEPS.map((step, index) => (
+          <li key={step} className="launcher-empty-step">
+            <span className="launcher-empty-step-index" aria-hidden="true">
+              {index + 1}
+            </span>
+            <span className="launcher-empty-step-label">{WIZARD_STEP_TITLES[step]}</span>
+          </li>
+        ))}
+      </ol>
       <div className="empty-actions">
         <button type="button" className="primary" onClick={onCreate}>
           从目录创建
@@ -997,7 +1015,7 @@ export function LauncherView({ kernel, onClose }: LauncherViewProps): ReactEleme
   };
 
   return (
-    <div className="launcher-mask" onMouseDown={onMaskDown}>
+    <div className="launcher-mask overlay-backdrop" onMouseDown={onMaskDown}>
       <div className="launcher-panel glass" role="dialog" aria-modal="true" aria-label="启动器 · 实例库">
         <header className="launcher-head">
           <div className="launcher-head-titles">
@@ -1061,49 +1079,57 @@ export function LauncherView({ kernel, onClose }: LauncherViewProps): ReactEleme
           />
         ) : null}
 
+        {phase.kind === 'ready' && wizard === null && listFailure !== null ? (
+          // 列表读不成 ⇒ 一条通栏 inline notice（VIS-16 · D-3）：原先它叠在左栏那一列里，
+          // 4 行红框 + 下面紧跟一条"还没有实例。"——两条都在解释同一件失败。
+          // 现在通知住在顶栏之下、整张面之上，一条说清；文案一个字没动，只搬版式。
+          <FailureNotice failure={listFailure} dense />
+        ) : null}
+
         {phase.kind === 'ready' && wizard === null ? (
-          <div className="launcher-body">
-            <aside className="launcher-side">
-              <label className="launcher-search">
-                <Icon name="search" size="sm" />
-                <input
-                  className="launcher-search-input"
-                  type="search"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="搜索实例名 / 游戏 / 隔离模式"
-                  aria-label="搜索实例"
-                />
-              </label>
-              {listFailure === null ? null : <FailureNotice failure={listFailure} />}
-              {rows.length === 0 ? (
-                <p className="launcher-note">
-                  {instances.length === 0 ? '还没有实例。' : '没有匹配的实例。'}
-                </p>
-              ) : (
-                <ul className="launcher-list">
-                  {rows.map((row) => (
-                    <li key={row.id}>
-                      <button
-                        type="button"
-                        className={`launcher-row${row.id === selectedId ? ' on' : ''}`}
-                        aria-pressed={row.id === selectedId}
-                        onClick={() => setSelectedId(row.id)}
-                      >
-                        <span className="launcher-row-name">{row.name}</span>
-                        <span className="launcher-row-meta">
-                          <span className="launcher-badge">{row.isolation}</span>
-                          <span className="launcher-status" data-tone={row.status.tone}>
-                            {row.status.label}
+          <div className={`launcher-body${instances.length === 0 ? ' is-empty' : ''}`}>
+            {instances.length === 0 ? null : (
+              // 空库不再画左栏（VIS-16）：一个 296px 的近空栏 + 一句重复的"还没有实例。"
+              // 把引导卡挤成右边那一片灰 void 里的三行字。有实例才需要那一列筛子。
+              <aside className="launcher-side">
+                <label className="launcher-search">
+                  <Icon name="search" size="sm" />
+                  <input
+                    className="launcher-search-input"
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="搜索实例名 / 游戏 / 隔离模式"
+                    aria-label="搜索实例"
+                  />
+                </label>
+                {rows.length === 0 ? (
+                  <p className="launcher-note">没有匹配的实例。</p>
+                ) : (
+                  <ul className="launcher-list">
+                    {rows.map((row) => (
+                      <li key={row.id}>
+                        <button
+                          type="button"
+                          className={`launcher-row${row.id === selectedId ? ' on' : ''}`}
+                          aria-pressed={row.id === selectedId}
+                          onClick={() => setSelectedId(row.id)}
+                        >
+                          <span className="launcher-row-name">{row.name}</span>
+                          <span className="launcher-row-meta">
+                            <span className="launcher-badge">{row.isolation}</span>
+                            <span className="launcher-status" data-tone={row.status.tone}>
+                              {row.status.label}
+                            </span>
                           </span>
-                        </span>
-                        <span className="launcher-row-time">上次启动：{row.lastLaunched}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </aside>
+                          <span className="launcher-row-time">上次启动：{row.lastLaunched}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </aside>
+            )}
 
             <section className="launcher-main">
               {creation === null ? null : (
