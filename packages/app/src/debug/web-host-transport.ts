@@ -98,13 +98,21 @@ export async function webHostInvokeIfActive(cmd: string, args?: Record<string, u
   return { active: true, value: await webHostInvoke(cmd, args) };
 }
 
-/** 直连调试宿的一条 invoke（调试面 `__kojoDebug.invoke` 用；不做 active 判定） */
+/**
+ * 直连调试宿的一条 invoke（调试面 `__kojoDebug.invoke` 用；不做 active 判定）。
+ *
+ * 二进制命令（`read_file_bytes_raw` / `read_files_raw`）带 `?binary=1`：宿回
+ * `application/octet-stream` 原始帧/字节，页面直接 `arrayBuffer()`——省掉 base64 的
+ * 1.33× 膨胀与逐字节还原（2026-10-26 性能批）。旧宿不认这个参数、仍回 JSON 信封，
+ * 这里按 content-type 回退到 `decodeValue`，两侧可独立升级。
+ */
 export async function webHostInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   const cfg = config();
   if (!cfg) throw new Error('web 调试宿未选入（缺 ?kojo-debug=1）');
+  const binary = BINARY_COMMANDS.has(cmd);
   let res: Response;
   try {
-    res = await fetch(`${cfg.origin}/invoke`, {
+    res = await fetch(`${cfg.origin}/invoke${binary ? '?binary=1' : ''}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ cmd, args: args ?? {} }),
@@ -113,6 +121,9 @@ export async function webHostInvoke(cmd: string, args?: Record<string, unknown>)
     throw new Error(
       `web 调试宿连接失败（${cfg.origin}，命令 ${cmd}）：${errText(err)}——先起宿：node tools/debug-cli.mjs serve`,
     );
+  }
+  if (binary && (res.headers.get('content-type') ?? '').includes('application/octet-stream')) {
+    return res.arrayBuffer();
   }
   let body: { ok?: boolean; value?: unknown; error?: string };
   try {

@@ -200,10 +200,25 @@ try {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chooseDir: project }),
   });
-  // 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
-  if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
-    await cdpClick(cdp, '.dev-note-actions .ghost');
-    await sleep(300);
+  // 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：**它是懒挂载**，可能比欢迎页
+  // 晚一拍出现——只查一次会漏（实测遮罩后到、点击落在遮罩上）。这里以「打开按钮真的
+  // 能被 elementFromPoint 命中」为准：纸条一出现就按真实路径关掉，直到可点为止。
+  for (let i = 0; i < 40; i++) {
+    const gate = await cdp.evalJs(`(() => {
+      const el = document.querySelector('.welcome-open');
+      const note = !!document.querySelector('.dev-note-mask');
+      if (!el) return { note, clickable: false };
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return { note, clickable: !!hit && hit.closest('.welcome-open') !== null };
+    })()`);
+    if (gate?.note) {
+      await cdpClick(cdp, '.dev-note-actions .ghost');
+      await sleep(200);
+      continue;
+    }
+    if (gate?.clickable) break;
+    await sleep(200);
   }
   await cdpClick(cdp, '.welcome-open');
   const modalStep = await waitFor(
@@ -237,6 +252,17 @@ try {
     !!info?.path && info.lineCount > 0,
     `${info?.path ?? '?'} · 行数=${info?.lineCount} · 语言=${info?.languageId}`,
   );
+
+  // ⑤b 二进制直传（2026-10-26 性能批）：页面拿到的必须是原始 ArrayBuffer，
+  //     不是 {__b64} 信封——读者据此区分旧宿回退与新宿直传两条腿。
+  const binBytes = await cdp.evalJs(
+    `(async () => {
+      const r = await __kojoDebug.invoke('read_file_bytes_raw', { path: ${JSON.stringify(info?.path ?? '')} });
+      return r instanceof ArrayBuffer ? r.byteLength : -1;
+    })()`,
+    30000,
+  );
+  check('二进制命令直传原始字节（ArrayBuffer）', typeof binBytes === 'number' && binBytes > 0, `${binBytes} B`);
 
   // ⑥ 命令注册表：所有功能的可编程入口在场
   const cmdCount = await cdp.evalJs('__kojoDebug.commands.list().length');

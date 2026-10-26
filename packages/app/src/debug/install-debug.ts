@@ -88,7 +88,11 @@ export interface EditorInfo {
 }
 
 const BUS_RING_LIMIT = 500;
-const busRing: BusRecord[] = [];
+// 定长环形缓冲（2026-10-26 性能批）：旧实现每来一条事件就 push + splice 搬移 500 项，
+// 内核事件密集时会成为页内热路径；现在 O(1) 覆盖写，读取时按环形序还原（仅取数时分配）。
+const busRing: BusRecord[] = new Array<BusRecord>(BUS_RING_LIMIT);
+let busHead = 0;
+let busCount = 0;
 
 /** kernel 的同步缓存（装配完成即写入）：`state()` 这类同步读数从它取，不 await */
 let kernelNow: Kernel | null = null;
@@ -98,8 +102,24 @@ function recordBus(name: string, payload: unknown): void {
   // PerformanceObserver 条目的 startTime 同钟——hintForTask 才能对上；
   // Date.now() 是墙钟，两域混用 ⇒ 长任务 hint 恒 null（实测三条全 null）。
   // 消费方（bus.recent 的展示）只相对排序，无墙钟依赖。
-  busRing.push({ t: performance.now(), name, payload });
-  if (busRing.length > BUS_RING_LIMIT) busRing.splice(0, busRing.length - BUS_RING_LIMIT);
+  busRing[busHead] = { t: performance.now(), name, payload };
+  busHead = (busHead + 1) % BUS_RING_LIMIT;
+  if (busCount < BUS_RING_LIMIT) busCount += 1;
+}
+
+/** 最近 n 条（时间正序）；n 超上限按上限给。无事件 ⇒ 空数组 */
+function busRecent(n: number): BusRecord[] {
+  // 外部可传任意值（eval 里手敲）：非有限数回退 40，别让 new Array(NaN) 抛
+  const want = Number.isFinite(n) ? Math.floor(n) : 40;
+  const k = Math.min(Math.max(0, want), busCount);
+  if (k === 0) return [];
+  const out = new Array<BusRecord>(k);
+  let idx = (busHead - k + BUS_RING_LIMIT) % BUS_RING_LIMIT;
+  for (let i = 0; i < k; i++) {
+    out[i] = busRing[idx]!;
+    idx = (idx + 1) % BUS_RING_LIMIT;
+  }
+  return out;
 }
 
 /** 事件载荷太大时会拖垮 JSON 序列化：旁听面只留摘要形态（数值 / 短串 / 浅结构） */
@@ -132,7 +152,7 @@ export function installDebug(): KojoDebugApi {
   });
 
   // 性能探针（关着零开销；bus 相关性在 stop 时从环形缓冲取，不在采集期加订阅）
-  const probe = createPerfProbe({ getBusRecent: (n) => busRing.slice(-n) });
+  const probe = createPerfProbe({ getBusRecent: (n) => busRecent(n) });
 
   const api: KojoDebugApi = {
     mode: isTauri() ? 'shell' : 'web-debug',
@@ -170,7 +190,7 @@ export function installDebug(): KojoDebugApi {
     },
     bus: {
       recent(n = 40) {
-        return busRing.slice(-n);
+        return busRecent(n);
       },
       on(name, cb) {
         let un: (() => void) | null = null;

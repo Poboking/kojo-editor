@@ -646,17 +646,31 @@ async function cmdOpenProject(args, dir, flags) {
         signal: AbortSignal.timeout(3000),
       });
     }
-    // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
-    //    （ghost=关闭并记「看过」，同一浏览器档案不会再弹）
-    if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
-      await cdpClick(cdp, '.dev-note-actions .ghost');
-      await sleep(300);
-    }
+    // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）——**懒挂载**，可能比欢迎页
+    //    晚一拍出现。以「打开按钮真的被 elementFromPoint 命中」为准：纸条一出现就按真实
+    //    路径关掉，直到可点（只查一次会漏，实测点击落在后到的遮罩上）。
     // 3) 点「打开项目」卡（欢迎相位）——真壳模式已在第 1 步点了最近项目行，跳过
     const phase = await cdp.evalJs('__kojoDebug.state().phase');
     if (s.mode !== 'shell') {
       if (phase === 'welcome') {
         await waitFor(cdp, `!!document.querySelector('.welcome-open')`, { timeoutMs: 10000, label: '欢迎页打开按钮' });
+        for (let i = 0; i < 40; i++) {
+          const gate = await cdp.evalJs(`(() => {
+            const el = document.querySelector('.welcome-open');
+            const note = !!document.querySelector('.dev-note-mask');
+            if (!el) return { note, clickable: false };
+            const r = el.getBoundingClientRect();
+            const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+            return { note, clickable: !!hit && hit.closest('.welcome-open') !== null };
+          })()`);
+          if (gate?.note) {
+            await cdpClick(cdp, '.dev-note-actions .ghost');
+            await sleep(200);
+            continue;
+          }
+          if (gate?.clickable) break;
+          await sleep(200);
+        }
         await cdpClick(cdp, '.welcome-open');
       } else {
         die(`当前相位是 ${phase}（已开着别的项目）——先 __kojoDebug.commands.run('workbench.closeProject') 或重启会话`, 2);

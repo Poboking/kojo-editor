@@ -47,12 +47,23 @@ function norm(p) {
   return path.resolve(String(p ?? ''));
 }
 
-function insideAny(target, roots) {
-  const t = norm(target).toLowerCase();
-  return roots.some((r) => {
-    const rl = norm(r).toLowerCase();
-    return t === rl || t.startsWith(rl.endsWith(path.sep) ? rl : rl + path.sep);
-  });
+/** 准入比较用的形态：Windows 大小写不敏感，统一小写归一（只在命中判定用，不回写路径） */
+function normLower(p) {
+  return norm(p).toLowerCase();
+}
+
+/**
+ * 命中判定吃**预归一化的根**（2026-10-26 性能批）：旧实现每次调用都重新
+ * `norm + toLowerCase` 全部根并新建数组——批量 stat / 批读两千条路径时这一步
+ * 比 stat 本身还贵（实测 stat_files 2000 条 CPU 1.7s）。根表只在域变更时重建。
+ */
+function insideLower(targetLower, rootsLower) {
+  for (const root of rootsLower) {
+    if (targetLower === root) return true;
+    const base = root.endsWith(path.sep) ? root : root + path.sep;
+    if (targetLower.startsWith(base)) return true;
+  }
+  return false;
 }
 
 /** HostError：宿主命令的「业务失败」——应答 200 + {ok:false,error}（与 Tauri reject 同消费口径） */
@@ -65,28 +76,51 @@ class HostError extends Error {}
  * `read_files_frame`，三份实现以帧格式为唯一真源成对演进）：
  *   [u32 文件数] 每文件 [u32 pathLen][path utf-8][u32 status][i64 mtime][u64 size][u64 dataLen][data]
  */
-export function encodeReadFilesFrame(files) {
+const EMPTY_BUFFER = Buffer.alloc(0);
+
+/**
+ * 帧切片（性能批）：元数据小块 + **直接引用文件数据缓冲**（不再逐文件 Buffer.from 拷贝）。
+ * 两条消费路径：JSON 信封 ⇒ `encodeReadFilesFrame` 一次分配拼成整帧再 base64；
+ * 二进制直传 ⇒ 直接逐切片 `res.write`（省掉整帧拼接与 base64 两道大拷贝）。
+ */
+function readFilesFrameChunks(files) {
   const parts = [];
-  const head = Buffer.alloc(4);
+  const head = Buffer.allocUnsafe(4);
   head.writeUInt32LE(files.length, 0);
   parts.push(head);
   for (const f of files) {
     const pb = Buffer.from(f.path, 'utf-8');
     const status = f.status === 'ok' ? 0 : f.status === 'not-found' ? 1 : 2;
-    const data = f.status === 'ok' ? Buffer.from(f.data ?? []) : Buffer.alloc(0);
-    const pl = Buffer.alloc(4);
+    const data =
+      f.status === 'ok'
+        ? Buffer.isBuffer(f.data)
+          ? f.data
+          : Buffer.from(f.data ?? [])
+        : EMPTY_BUFFER;
+    const pl = Buffer.allocUnsafe(4);
     pl.writeUInt32LE(pb.length, 0);
-    // status 之后的元数据尾（mtime/size/dataLen），拼在 path 后面——帧格式要求
-    // [pathLen][path][status][mtime][size][dataLen][data] 顺序，path 紧跟 pathLen
-    const tail = Buffer.alloc(4 + 8 + 8 + 8);
-    let o = 0;
-    tail.writeUInt32LE(status, o); o += 4;
-    tail.writeBigInt64LE(BigInt(Math.max(0, Math.round(f.mtimeMs ?? 0))), o); o += 8;
-    tail.writeBigUInt64LE(BigInt(Math.max(0, f.size ?? 0)), o); o += 8;
-    tail.writeBigUInt64LE(BigInt(data.length), o);
+    // 帧格式：[pathLen][path][status][mtime][size][dataLen][data]
+    const tail = Buffer.allocUnsafe(28);
+    tail.writeUInt32LE(status, 0);
+    tail.writeBigInt64LE(BigInt(Math.max(0, Math.round(f.mtimeMs ?? 0))), 4);
+    tail.writeBigUInt64LE(BigInt(Math.max(0, f.size ?? 0)), 12);
+    tail.writeBigUInt64LE(BigInt(data.length), 20);
     parts.push(pl, pb, tail, data);
   }
-  return Buffer.concat(parts);
+  return parts;
+}
+
+export function encodeReadFilesFrame(files) {
+  const chunks = readFilesFrameChunks(files);
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = Buffer.allocUnsafe(total);
+  let offset = 0;
+  for (const c of chunks) {
+    c.copy(out, offset);
+    offset += c.length;
+  }
+  return out;
 }
 
 /** utf-16le / utf-16be 编码器（带 BOM 的形态与 Rust encoding_rs 对齐：BOM 只在「编码档」为 bom 档时写） */
@@ -181,34 +215,87 @@ function createWatchHub(log) {
 /* ------------------------------- 全文检索 ------------------------------- */
 
 const SEARCH_MAX_FILE_BYTES = 8 * 1024 * 1024;
-const SEARCH_CHUNK = 256 * 1024;
 /** 无换行的巨型行不许把「当前行缓冲」撑爆——内存上限 O(最长行) 的护栏 */
 const SEARCH_MAX_LINE_CHARS = 4 * 1024 * 1024;
+/** 每批并行扫描的文件数（批内并发、批间按 readdir 序收口 ⇒ 上限/取消语义可预测） */
+const SEARCH_CONCURRENCY = Math.max(1, Number(process.env.KOJO_DEBUG_SEARCH_CONCURRENCY ?? 8) || 8);
+/** 目录遍历并发（readdir / stat 共用；Windows 上过高反而被 Defender 拖慢） */
+const WALK_CONCURRENCY = Math.max(1, Number(process.env.KOJO_DEBUG_WALK_CONCURRENCY ?? 24) || 24);
 
-async function walkFiles(root, out, depthBudget) {
-  let dirents;
-  try {
-    dirents = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const d of dirents) {
-    if (d.name === '.kojo-debug' || d.name === 'node_modules' || d.name === '.git') continue;
-    const full = path.join(root, d.name);
-    if (d.isDirectory()) {
-      if (depthBudget > 0) await walkFiles(full, out, depthBudget - 1);
-    } else if (d.isFile()) {
-      out.push(full);
+/**
+ * 有界限流器：把任意异步任务压到并发上限内；返回的 Promise 按调用顺序各自解析。
+ * 目录树并行遍历、批量 stat、walk_dir 元数据都复用它（递归不会把并发乘成 limit^depth）。
+ */
+function createLimiter(limit) {
+  let active = 0;
+  let head = 0;
+  const queue = [];
+  const pump = () => {
+    while (active < limit && head < queue.length) {
+      const job = queue[head++];
+      active += 1;
+      Promise.resolve()
+        .then(job.fn)
+        .then(job.resolve, job.reject)
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
     }
-  }
+    // 已消费前缀攒多了一次性清掉（shift 每项 O(n)，两千条 stat 会白搬两百万次）
+    if (head > 512 && head * 2 > queue.length) {
+      queue.splice(0, head);
+      head = 0;
+    }
+  };
+  return (fn) =>
+    new Promise((resolve, reject) => {
+      queue.push({ fn, resolve, reject });
+      pump();
+    });
 }
 
-/** 首 8KB 探 NUL（二进制判据；跨块累计到 8KB 为止） */
-function chunkHasNul(chunk, state) {
-  for (let i = 0; i < chunk.length && state.checked < 8192; i++, state.checked++) {
-    if (chunk[i] === 0) return true;
-  }
-  return false;
+/**
+ * 并行 + **顺序确定**的目录遍历：每个目录项按 readdir 序生成「文件串 / 子目录 Promise」，
+ * 子目录递归立即入队（限流器压并发），展开时按原序 flatten——结果与旧串行 walkFiles
+ * 逐位一致（上限截断的落点因此可复现）。
+ */
+async function walkFiles(root, depthBudget, limit) {
+  const walk = async (dir, depth) => {
+    let dirents;
+    try {
+      dirents = await limit(() => fs.readdir(dir, { withFileTypes: true }));
+    } catch {
+      return [];
+    }
+    const parts = [];
+    for (const d of dirents) {
+      if (d.name === '.kojo-debug' || d.name === 'node_modules' || d.name === '.git') continue;
+      const full = path.join(dir, d.name);
+      if (d.isDirectory()) {
+        if (depth > 0) parts.push(walk(full, depth - 1));
+      } else if (d.isFile()) {
+        parts.push(full);
+      }
+    }
+    const out = [];
+    for (const part of parts) {
+      if (typeof part === 'string') {
+        out.push(part);
+      } else {
+        const sub = await part;
+        for (const f of sub) out.push(f);
+      }
+    }
+    return out;
+  };
+  return walk(root, depthBudget);
+}
+
+/** 首 8KB 探 NUL（二进制判据；原生 Buffer 搜索，不再逐字节 JS 循环） */
+function hasNul(buf) {
+  const n = Math.min(buf.length, 8192);
+  return n > 0 && buf.subarray(0, n).indexOf(0) !== -1;
 }
 
 /** BOM → 解码器（utf-8 / utf-16le / utf-16be；BOM 由解码器自行剥离） */
@@ -219,76 +306,180 @@ function decoderFor(head) {
 }
 
 /**
- * 单文件**流式**扫描：逐块读盘、流式解码（`stream:true` 让多字节字符 / CRLF 跨块正确）、
- * 按行消费即弃——内存上限 O(最长行)，不再整文件落字符串 + 整棵行数组
- * （旧实现在 2325 文件 / 百 MB 级语料上被实测把宿压到 exit 13，2026-10-25 反馈）。
- * onMatch 返回 true ⇒ 提前收束（命中上限）。返回 'ok'|'binary'|'too-large'|'unreadable'。
+ * 一次已命中的 exec 结果 → SearchResult 的 match 形态（列 UTF-16 码元 +1，与 Monaco 同轴；
+ * 超 200 字符以命中为中心开窗，省略号含在串里）。
  */
-function scanFileLines(file, matcher, onMatch) {
-  return new Promise((resolve) => {
-    let stream;
-    try {
-      stream = fss.createReadStream(file, { highWaterMark: SEARCH_CHUNK });
-    } catch {
-      resolve('unreadable');
-      return;
-    }
-    let decoder = null;
-    let carry = '';
-    let bytes = 0;
-    let lineNo = 0;
-    let done = false;
-    const binState = { checked: 0 };
-    const finish = (status) => {
-      if (done) return;
-      done = true;
-      stream.destroy();
-      resolve(status);
-    };
-    stream.on('data', (chunk) => {
-      if (done) return;
-      bytes += chunk.length;
-      if (chunkHasNul(chunk, binState)) {
-        finish('binary');
-        return;
-      }
-      if (decoder === null) decoder = decoderFor(chunk);
-      carry += decoder.decode(chunk, { stream: true });
-      for (;;) {
-        const nl = carry.indexOf('\n');
-        if (nl < 0) break;
-        let line = carry.slice(0, nl);
-        carry = carry.slice(nl + 1);
-        if (line.endsWith('\r')) line = line.slice(0, -1);
-        lineNo += 1;
-        matcher.lastIndex = 0;
-        const m = matcher.exec(line);
-        if (m && onMatch(lineNo, line, m)) {
-          finish('ok');
-          return;
-        }
-      }
-      if (bytes > SEARCH_MAX_FILE_BYTES || carry.length > SEARCH_MAX_LINE_CHARS) {
-        finish('too-large');
-        return;
-      }
-    });
-    stream.on('end', () => {
-      if (done) return;
-      carry += (decoder ?? (decoder = decoderFor(Buffer.alloc(0)))).decode(); // 流式收尾
-      if (carry !== '') {
-        let line = carry.endsWith('\r') ? carry.slice(0, -1) : carry;
-        matcher.lastIndex = 0;
-        const m = matcher.exec(line);
-        if (m) onMatch(lineNo + 1, line, m);
-      }
-      finish('ok');
-    });
-    stream.on('error', () => finish('unreadable'));
-  });
+function makeMatch(line, m) {
+  const start = m.index;
+  const end = start + Math.max(1, m[0].length);
+  let preview = line;
+  let s0 = start;
+  if (line.length > 200) {
+    const winStart = Math.max(0, start - 80);
+    const winEnd = Math.min(line.length, end + 80);
+    preview = `${winStart > 0 ? '…' : ''}${line.slice(winStart, winEnd)}${winEnd < line.length ? '…' : ''}`;
+    s0 = start - winStart + (winStart > 0 ? 1 : 0);
+  }
+  return { column: start + 1, preview, start: s0, end: s0 + (end - start) };
 }
 
-const yieldToEventLoop = () => new Promise((r) => setImmediate(r));
+/**
+ * 整串按行扫描（正则查询路径）：逐行找**全部**不重叠命中（口径对齐 Rust
+ * `scan_text` 的 `find_iter(line)`——同一行多处命中都要列出）。
+ */
+function scanWholeText(text, matcher, maxPerFile) {
+  const entries = [];
+  let overflow = false;
+  let lineNo = 0;
+  const take = (line, no) => {
+    matcher.lastIndex = 0;
+    for (;;) {
+      const m = matcher.exec(line);
+      if (!m) return false;
+      if (entries.length >= maxPerFile) {
+        overflow = true;
+        return true;
+      }
+      entries.push({ line: no, ...makeMatch(line, m) });
+      if (m[0].length === 0) {
+        matcher.lastIndex += 1;
+        if (matcher.lastIndex > line.length) return false;
+      }
+    }
+  };
+  const len = text.length;
+  let start = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', start);
+    if (nl < 0) break;
+    let end = nl;
+    if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
+    lineNo += 1;
+    if (take(end > start ? text.slice(start, end) : '', lineNo)) return { entries, overflow };
+    start = nl + 1;
+  }
+  if (start < len) {
+    let end = len;
+    if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
+    lineNo += 1;
+    take(end > start ? text.slice(start, end) : '', lineNo);
+  }
+  return { entries, overflow };
+}
+
+/**
+ * 普通文本查询的**整串原生扫描**（性能批主力）：非正则、查询不含换行时，
+ * 用 `indexOf`（大小写敏感）或全局正则（大小写不敏感 / 整词）在整串上一次走完，
+ * 只在命中处回推行号并切预览窗。旧实现每条行一次 `RegExp.exec` + 两次 slice，
+ * 300k 行语料上单这一项就是数百毫秒。
+ *
+ * 语义与逐行扫描一致：命中不跨行（查询本身不含换行）、非重叠、列号 UTF-16 码元 +1、
+ * 预览窗口 160 字符 + 省略号；命中上限（maxPerFile）以「再命中一次即 overflow」判。
+ */
+function scanTextFast(text, fast, maxPerFile) {
+  const entries = [];
+  let overflow = false;
+  let lineNo = 1;
+  let lineStart = 0;
+  const take = (idx, matchLen) => {
+    if (entries.length >= maxPerFile) {
+      overflow = true;
+      return false;
+    }
+    // 行号/行首单调前进：匹配索引递增，整体只扫一遍换行
+    for (;;) {
+      const nl = text.indexOf('\n', lineStart);
+      if (nl === -1 || nl >= idx) break;
+      lineNo += 1;
+      lineStart = nl + 1;
+    }
+    const start = idx - lineStart;
+    const end = start + Math.max(1, matchLen);
+    let lineEnd = text.indexOf('\n', idx);
+    if (lineEnd === -1) lineEnd = text.length;
+    if (lineEnd > lineStart && text.charCodeAt(lineEnd - 1) === 13) lineEnd -= 1;
+    const lineLen = lineEnd - lineStart;
+    let preview;
+    let s0 = start;
+    if (lineLen <= 200) {
+      preview = text.slice(lineStart, lineEnd);
+    } else {
+      const winStart = Math.max(0, start - 80);
+      const winEnd = Math.min(lineLen, end + 80);
+      preview = `${winStart > 0 ? '…' : ''}${text.slice(lineStart + winStart, lineStart + winEnd)}${
+        winEnd < lineLen ? '…' : ''
+      }`;
+      s0 = start - winStart + (winStart > 0 ? 1 : 0);
+    }
+    entries.push({ line: lineNo, column: start + 1, preview, start: s0, end: s0 + (end - start) });
+    return true;
+  };
+  if (fast.kind === 'indexOf') {
+    const needle = fast.needle;
+    let from = 0;
+    for (;;) {
+      const idx = text.indexOf(needle, from);
+      if (idx === -1) break;
+      if (!take(idx, needle.length)) break;
+      from = idx + needle.length;
+    }
+  } else {
+    const re = fast.re;
+    re.lastIndex = 0;
+    for (;;) {
+      const m = re.exec(text);
+      if (!m) break;
+      if (!take(m.index, m[0].length)) break;
+      if (m[0].length === 0) re.lastIndex += 1;
+    }
+  }
+  return { entries, overflow };
+}
+
+/** 4MiB 以上才扫一遍行界（旧流式实现的「无换行巨行」护栏，整读形态下同样保留） */
+function hasOverlongLine(text) {
+  if (text.length <= SEARCH_MAX_LINE_CHARS) return false;
+  let start = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', start);
+    if (nl === -1) return text.length - start > SEARCH_MAX_LINE_CHARS;
+    if (nl - start > SEARCH_MAX_LINE_CHARS) return true;
+    start = nl + 1;
+  }
+}
+
+/**
+ * 单文件扫描入口（2026-10-26 性能批）：open + fstat + readFile 一路句柄（少一次路径查找），
+ * 超 8MiB 直接 tooLarge 不读；≤8MiB 整读整解。并发由批调度封顶（默认 8 ⇒ 峰值 ≤64MiB），
+ * 不再需要 2026-10-25 的流式扫描（那轮是为无上限并发/整树行数组的 OOM 兜底）。
+ * status 口径不变：ok / binary / too-large / unreadable。
+ */
+async function scanFile(file, matcher, maxPerFile, fast) {
+  let fh;
+  try {
+    fh = await fs.open(file, 'r');
+  } catch {
+    return { status: 'unreadable', entries: [], overflow: false };
+  }
+  try {
+    const st = await fh.stat();
+    if (!st.isFile()) return { status: 'unreadable', entries: [], overflow: false };
+    if (st.size > SEARCH_MAX_FILE_BYTES) return { status: 'too-large', entries: [], overflow: false };
+    const buf = await fh.readFile();
+    if (buf.length > SEARCH_MAX_FILE_BYTES) return { status: 'too-large', entries: [], overflow: false };
+    if (hasNul(buf)) return { status: 'binary', entries: [], overflow: false };
+    const text = decoderFor(buf).decode(buf);
+    const r = fast ? scanTextFast(text, fast, maxPerFile) : scanWholeText(text, matcher, maxPerFile);
+    if (hasOverlongLine(text)) {
+      return { status: 'too-large', entries: r.entries, overflow: r.overflow };
+    }
+    return { status: 'ok', entries: r.entries, overflow: r.overflow };
+  } catch {
+    return { status: 'unreadable', entries: [], overflow: false };
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
 
 /** 小并发池（保持逐项顺序；fn 抛错 ⇒ 整批 fail-loud，与逐个 await 同语义） */
 async function mapPool(items, limit, fn) {
@@ -323,15 +514,30 @@ async function searchText(state, request, admitRead) {
   for (const root of roots) admitRead(root); // 读域闸补位：旧实现的 walkFiles 绕过了它
   const extensions = (opts.extensions ?? []).map((e) => String(e).toLowerCase().replace(/^\./, ''));
   let matcher;
+  // 全局标志：逐行扫时同一行的多处命中都要列出（口径对齐 Rust `find_iter(line)`）
   if (opts.isRegex) {
     try {
-      matcher = new RegExp(query, opts.caseSensitive ? '' : 'i');
+      matcher = new RegExp(query, opts.caseSensitive ? 'g' : 'gi');
     } catch (err) {
       throw new HostError(`正则不合法：${err?.message ?? String(err)}`);
     }
   } else {
     const esc = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    matcher = new RegExp(opts.wholeWord ? `(?<!\\w)${esc}(?!\\w)` : esc, opts.caseSensitive ? '' : 'i');
+    matcher = new RegExp(opts.wholeWord ? `(?<!\\w)${esc}(?!\\w)` : esc, opts.caseSensitive ? 'g' : 'gi');
+  }
+  // 普通文本查询（非正则、不含换行）走整串原生扫描快路径；正则查询保持逐行语义
+  // （正则可能跨行，整串搜会改变 `a.*b` 这类查询的命中）。
+  let fast = null;
+  if (!opts.isRegex && !query.includes('\n') && !query.includes('\r')) {
+    if (opts.caseSensitive && !opts.wholeWord) {
+      fast = { kind: 'indexOf', needle: query };
+    } else {
+      const esc = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      fast = {
+        kind: 'regex',
+        re: new RegExp(opts.wholeWord ? `(?<!\\w)${esc}(?!\\w)` : esc, opts.caseSensitive ? 'g' : 'gi'),
+      };
+    }
   }
   const maxResults = Math.max(1, Number(opts.maxResults ?? 2000));
   const maxPerFile = 200;
@@ -342,14 +548,15 @@ async function searchText(state, request, admitRead) {
   let filesScanned = 0;
   const searchId = Number(request.searchId);
   const cancelled = () => state.cancelledSearches.has(searchId);
-  let openEntry = null; // { path, matches }：当前文件的聚合（首命中才建，无命中零分配）
+  let wasCancelled = false;
 
   try {
-    outer: for (const root of roots) {
-      const list = [];
-      await walkFiles(root, list, 12);
+    // 1) 目录遍历并行（结果保持 readdir 序；多根之间也并行，收口时按 roots 序拼接）
+    const walkLimit = createLimiter(WALK_CONCURRENCY);
+    const lists = await Promise.all(roots.map((root) => walkFiles(root, 12, walkLimit)));
+    const candidates = [];
+    for (const list of lists) {
       for (const file of list) {
-        if (cancelled()) return finalize(true);
         if (extensions.length > 0) {
           const ext = path.extname(file).slice(1).toLowerCase();
           if (!extensions.includes(ext)) {
@@ -357,52 +564,55 @@ async function searchText(state, request, admitRead) {
             continue;
           }
         }
-        filesScanned += 1;
-        if ((filesScanned & 127) === 0) await yieldToEventLoop(); // 让 cancel_search 有机会落进来
-        let fileMatches = 0;
-        openEntry = null;
-        const status = await scanFileLines(file, matcher, (lineNo, line, m) => {
-          if (totalMatches >= maxResults || fileMatches >= maxPerFile) {
-            truncated = true;
-            return true;
-          }
-          const start = m.index;
-          const end = start + Math.max(1, m[0].length);
-          let preview = line;
-          let s0 = start;
-          if (line.length > 200) {
-            const winStart = Math.max(0, start - 80);
-            const winEnd = Math.min(line.length, end + 80);
-            preview = `${winStart > 0 ? '…' : ''}${line.slice(winStart, winEnd)}${winEnd < line.length ? '…' : ''}`;
-            s0 = start - winStart + (winStart > 0 ? 1 : 0);
-          }
-          openEntry ??= { path: file, matches: [] };
-          openEntry.matches.push({
-            line: lineNo,
-            column: start + 1,
-            preview,
-            start: s0,
-            end: s0 + (end - start),
-          });
-          fileMatches += 1;
-          totalMatches += 1;
-          return false;
-        });
-        if (openEntry) files.push(openEntry);
-        if (status === 'binary') skipped.binary += 1;
-        else if (status === 'too-large') skipped.tooLarge += 1;
-        else if (status === 'unreadable') skipped.unreadable += 1;
+        candidates.push(file);
+      }
+    }
+
+    // 2) 逐批并行扫描：批内并发、批间按 readdir 序收口 ⇒ 截断落点确定、读盘不无限超前。
+    //    取消在批界与批内逐文件检查（cancel_search 从另一条 HTTP 请求落进来）。
+    outer: for (let start = 0; start < candidates.length; start += SEARCH_CONCURRENCY) {
+      if (cancelled()) {
+        wasCancelled = true;
+        break;
+      }
+      const slice = candidates.slice(start, start + SEARCH_CONCURRENCY);
+      const batch = await Promise.all(
+        slice.map(async (file) => {
+          if (cancelled()) return null;
+          filesScanned += 1;
+          return { path: file, ...(await scanFile(file, matcher, maxPerFile, fast)) };
+        }),
+      );
+      for (const r of batch) {
+        if (!r) continue;
+        if (r.status === 'binary') skipped.binary += 1;
+        else if (r.status === 'too-large') skipped.tooLarge += 1;
+        else if (r.status === 'unreadable') skipped.unreadable += 1;
+        if (r.entries.length === 0) continue;
+        if (totalMatches >= maxResults) {
+          truncated = true;
+          continue;
+        }
+        const room = maxResults - totalMatches;
+        const take = r.entries.length > room ? r.entries.slice(0, room) : r.entries;
+        if (r.entries.length > room || r.overflow) truncated = true;
+        files.push({ path: r.path, matches: take });
+        totalMatches += take.length;
         if (totalMatches >= maxResults) {
           truncated = true;
           break outer;
         }
+      }
+      if (cancelled()) {
+        wasCancelled = true;
+        break;
       }
     }
   } finally {
     // 生命周期收口：取消标记用完即清（旧实现只增不减，长会话里泄漏）
     state.cancelledSearches.delete(searchId);
   }
-  return finalize(false);
+  return finalize(wasCancelled);
 
   function finalize(wasCancelled) {
     return {
@@ -451,58 +661,93 @@ export async function createDebugServer(options) {
   };
   const hub = createWatchHub(log);
 
-  const readRoots = () => [...state.readonlyRoots, ...state.workspaceRoots];
-  const writeRoots = () => [sandbox, appdata, ...state.workspaceRoots, ...state.writeDomain];
+  // 根表缓存（性能批）：readonly / workspace / writeDomain 只在域变更时重建小写归一表；
+  // 命中判定每次只归一目标路径一次。错误文案仍用原始大小写根（可读）。
+  let readRootsLower = null;
+  let writeRootsLower = null;
+  const invalidateRoots = () => {
+    readRootsLower = null;
+    writeRootsLower = null;
+  };
+  const readRoots = () => {
+    readRootsLower ??= [...state.readonlyRoots, ...state.workspaceRoots].map(normLower);
+    return readRootsLower;
+  };
+  const writeRoots = () => {
+    writeRootsLower ??= [sandbox, appdata, ...state.workspaceRoots, ...state.writeDomain].map(normLower);
+    return writeRootsLower;
+  };
+  const readRootsDisplay = () => [...state.readonlyRoots, ...state.workspaceRoots];
+  const writeRootsDisplay = () => [sandbox, appdata, ...state.workspaceRoots, ...state.writeDomain];
 
   function admitRead(p) {
-    if (!insideAny(p, readRoots())) {
+    if (!insideLower(normLower(p), readRoots())) {
       throw new HostError(
-        `调试宿读域外路径被拒：${p}（可读根：${readRoots().join('；')}；要加根用 --readonly 或先 choose_workspace_root）`,
+        `调试宿读域外路径被拒：${p}（可读根：${readRootsDisplay().join('；')}；要加根用 --readonly 或先 choose_workspace_root）`,
       );
     }
   }
   function admitWrite(p) {
-    if (!insideAny(p, writeRoots())) {
+    if (!insideLower(normLower(p), writeRoots())) {
       throw new HostError(
-        `调试宿写域外路径被拒：${p}（可写根：${writeRoots().join('；')}；项目要可写需走注册写域 / 常驻工作区根）`,
+        `调试宿写域外路径被拒：${p}（可写根：${writeRootsDisplay().join('；')}；项目要可写需走注册写域 / 常驻工作区根）`,
       );
     }
   }
 
   async function walkDir(root, opts) {
-    const out = [];
+    // 并行版（2026-10-26 性能批）：readdir / stat 走同一个有界限流器，输出顺序与旧实现
+    // 逐项一致（readdir 序：目录项 → 该目录子树 → 下一个兄弟），方便 UI 差分。
     const maxDepth = Number.isFinite(opts?.maxDepth) ? opts.maxDepth : Infinity;
     const includeFiles = opts?.includeFiles !== false;
     const includeDirs = opts?.includeDirs !== false;
     const withMetadata = opts?.withMetadata === true;
+    const limit = createLimiter(WALK_CONCURRENCY);
     const rec = async (dir, depth) => {
       let dirents;
       try {
-        dirents = await fs.readdir(dir, { withFileTypes: true });
+        dirents = await limit(() => fs.readdir(dir, { withFileTypes: true }));
       } catch {
-        return; // 路径不存在 ⇒ 空数组（契约口径）
+        return []; // 路径不存在 ⇒ 空数组（契约口径）
       }
+      const pieces = [];
       for (const d of dirents) {
         const full = path.join(dir, d.name);
-        const meta = {};
-        if (withMetadata && d.isFile()) {
-          try {
-            const st = await fs.stat(full);
-            meta.mtimeMs = Math.round(st.mtimeMs);
-            meta.size = st.size;
-          } catch {
-            /* 取不到就不填（契约：不许拿 0 兜底） */
+        if (d.isDirectory()) {
+          if (includeDirs) pieces.push({ name: d.name, path: full, isDirectory: true });
+          if (depth < maxDepth) pieces.push(rec(full, depth + 1));
+        } else if (d.isFile() && includeFiles) {
+          const entry = { name: d.name, path: full, isDirectory: false };
+          if (withMetadata) {
+            // 先发起 stat（并发），按 readdir 序 await；取不到就不填（契约：不许拿 0 兜底）
+            entry.__meta = limit(() => fs.stat(full)).then(
+              (st) => ({ mtimeMs: Math.round(st.mtimeMs), size: st.size }),
+              () => null,
+            );
           }
+          pieces.push(entry);
         }
-        if (d.isDirectory() && includeDirs) out.push({ name: d.name, path: full, isDirectory: true });
-        if (d.isFile() && includeFiles) out.push({ name: d.name, path: full, isDirectory: false, ...meta });
-        if (d.isDirectory() && depth < maxDepth) await rec(full, depth + 1);
       }
+      const out = [];
+      for (const piece of pieces) {
+        if (typeof piece?.then === 'function') {
+          const sub = await piece;
+          for (const e of sub) out.push(e);
+          continue;
+        }
+        if (piece.__meta) {
+          const meta = await piece.__meta;
+          delete piece.__meta;
+          if (meta) Object.assign(piece, meta);
+        }
+        out.push(piece);
+      }
+      return out;
     };
-    await rec(root, 0);
-    return out;
+    return rec(root, 0);
   }
 
+  let tmpWriteSeq = 0;
   const commands = {
     app_data_dir: async () => appdata,
     append_frontend_log: async (args) => {
@@ -524,12 +769,14 @@ export async function createDebugServer(options) {
       const root = norm(chosen);
       if (!state.workspaceRoots.some((r) => norm(r).toLowerCase() === root.toLowerCase())) {
         state.workspaceRoots.push(root);
+        invalidateRoots();
         log(`[debug-host] 常驻工作区根已登记：${root}`);
       }
       return root;
     },
     clear_write_domain: async () => {
       state.writeDomain = [];
+      invalidateRoots();
     },
     copy_file: async (args) => {
       const from = norm(args?.from);
@@ -590,7 +837,8 @@ export async function createDebugServer(options) {
       const p = norm(args?.path);
       admitRead(p);
       try {
-        return { __b64: (await fs.readFile(p)).toString('base64') };
+        // 返回 Buffer：JSON 应答由响应层装 {__b64} 信封，二进制直传（?binary=1）原样回字节
+        return await fs.readFile(p);
       } catch (err) {
         if (err?.code === 'ENOENT') throw new HostError(`文件不存在：${p}`);
         throw new HostError(`读文件失败：${p}（${err?.message ?? String(err)}）`);
@@ -598,12 +846,23 @@ export async function createDebugServer(options) {
     },
     read_files_raw: async (args) => {
       const paths = Array.isArray(args?.paths) ? args.paths.map(norm) : [];
-      const files = await mapPool(paths, 8, async (p) => {
+      // 并发 16 + open/fstat/read 一趟句柄（少一次路径查找）：批量打开项目时是单次最大读盘口
+      const files = await mapPool(paths, 16, async (p) => {
         try {
           admitRead(p);
-          const st = await fs.stat(p);
-          const data = await fs.readFile(p);
-          return { path: p, status: 'ok', mtimeMs: Math.round(st.mtimeMs), size: st.size, data };
+          const fh = await fs.open(p, 'r');
+          try {
+            const st = await fh.stat();
+            if (!st.isFile()) {
+              const err = new Error('不是普通文件');
+              err.code = 'EISDIR';
+              throw err;
+            }
+            const data = await fh.readFile();
+            return { path: p, status: 'ok', mtimeMs: Math.round(st.mtimeMs), size: st.size, data };
+          } finally {
+            await fh.close().catch(() => {});
+          }
         } catch (err) {
           if (err instanceof HostError) throw err; // 域外是整批拒绝，不是逐文件失败
           return {
@@ -611,7 +870,7 @@ export async function createDebugServer(options) {
             status: err?.code === 'ENOENT' ? 'not-found' : 'read-error',
             mtimeMs: null,
             size: null,
-            data: Buffer.alloc(0),
+            data: EMPTY_BUFFER,
           };
         }
       });
@@ -621,13 +880,15 @@ export async function createDebugServer(options) {
           `单次批量读 ${(total / 1048576).toFixed(1)} MiB 超上限 32 MiB（base64 信封会再放大）——拆小批`,
         );
       }
-      return { __b64: encodeReadFilesFrame(files).toString('base64') };
+      // 返回帧 Buffer：JSON 应答装信封；二进制直传原样送回（省 base64 1.33× 与页面 atob）
+      return encodeReadFilesFrame(files);
     },
     register_write_domain: async (args) => {
       const root = norm(args?.root);
       admitRead(root); // 注册的根至少要在读域内（--readonly / sandbox / 常驻根）
       if (!state.writeDomain.some((r) => norm(r).toLowerCase() === root.toLowerCase())) {
         state.writeDomain.push(root);
+        invalidateRoots();
       }
     },
     remove_dir: async (args) => {
@@ -670,6 +931,7 @@ export async function createDebugServer(options) {
     },
     stat_files: async (args) => {
       const paths = Array.isArray(args?.paths) ? args.paths.map(norm) : [];
+      // 并发 16：本机实测 32/64 反而在 Defender 下抖动，16 的 p50 最稳（2026-10-26 性能批）
       const out = await mapPool(paths, 16, async (p) => {
         try {
           admitRead(p);
@@ -698,7 +960,8 @@ export async function createDebugServer(options) {
       admitWrite(p);
       // 原子写镜像（Rust 侧同目录临时文件 + rename）
       await fs.mkdir(path.dirname(p), { recursive: true });
-      const tmp = path.join(path.dirname(p), `.kojo-debug-tmp-${process.pid}-${Date.now()}`);
+      // 同毫秒并发写同目录也不许撞临时名（批量化调试会并发保存多个文件）
+      const tmp = path.join(path.dirname(p), `.kojo-debug-tmp-${process.pid}-${Date.now()}-${tmpWriteSeq++}`);
       await fs.writeFile(tmp, Buffer.from(String(args?.data ?? ''), 'base64'));
       await fs.rename(tmp, p);
     },
@@ -712,6 +975,10 @@ export async function createDebugServer(options) {
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    // 二进制直传选入（页面 web-host-transport 对两个二进制命令自动带 ?binary=1）：
+    // 应答体原样回帧/字节，不走 base64 + JSON（大文件读的 1.33× 膨胀与页面 atob 全省）。
+    // 命令返回非 Buffer / 命令失败 ⇒ 仍按 JSON 应答，旧页面与 CLI 无感。
+    const wantBinary = url.searchParams.get('binary') === '1';
     // CORS：页面在 vite 端口（如 1420），跨 origin fetch / EventSource 都要这条
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-headers', 'content-type');
@@ -748,7 +1015,10 @@ export async function createDebugServer(options) {
           if (Array.isArray(b.readonly)) {
             for (const r of b.readonly) {
               const root = norm(r);
-              if (!state.readonlyRoots.includes(root)) state.readonlyRoots.push(root);
+              if (!state.readonlyRoots.includes(root)) {
+                state.readonlyRoots.push(root);
+                invalidateRoots();
+              }
             }
           }
           json(res, 200, { ok: true, policy: state.policy });
@@ -775,7 +1045,23 @@ export async function createDebugServer(options) {
           }
           try {
             const value = await handler(req2?.args ?? {});
-            json(res, 200, { ok: true, value: value === undefined ? null : value });
+            if (wantBinary && Buffer.isBuffer(value)) {
+              res.writeHead(200, {
+                'content-type': 'application/octet-stream',
+                'content-length': value.length,
+              });
+              res.end(value);
+              return;
+            }
+            json(res, 200, {
+              ok: true,
+              value:
+                value === undefined
+                  ? null
+                  : Buffer.isBuffer(value)
+                    ? { __b64: value.toString('base64') }
+                    : value,
+            });
           } catch (err) {
             const error = err instanceof HostError ? err.message : `${err?.message ?? String(err)}`;
             log(`[debug-host] 命令失败 ${req2?.cmd}: ${error}`);

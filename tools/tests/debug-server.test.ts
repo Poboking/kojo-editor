@@ -45,6 +45,73 @@ function b64ToBuf(b64: string): ArrayBuffer {
   return ab;
 }
 
+interface SearchOptions {
+  isRegex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  extensions?: string[];
+  maxResults?: number;
+}
+
+/**
+ * 逐行参考实现（性能批的对拍 oracle）：口径对齐 Rust `scan_text`——同一行列出
+ * **全部**不重叠命中（`find_iter(line)`），上限按「再出现一个装不下的命中」判截断。
+ */
+function legacyFileMatches(text: string, matcher: RegExp, maxPerFile = 200) {
+  const matches: { line: number; column: number; preview: string; start: number; end: number }[] = [];
+  let overflow = false;
+  let lineNo = 0;
+  const take = (line: string): boolean => {
+    matcher.lastIndex = 0;
+    for (;;) {
+      const m = matcher.exec(line);
+      if (!m) return false;
+      if (matches.length >= maxPerFile) {
+        overflow = true;
+        return true;
+      }
+      const start = m.index;
+      const end = start + Math.max(1, m[0].length);
+      let preview = line;
+      let s0 = start;
+      if (line.length > 200) {
+        const winStart = Math.max(0, start - 80);
+        const winEnd = Math.min(line.length, end + 80);
+        preview = `${winStart > 0 ? '…' : ''}${line.slice(winStart, winEnd)}${winEnd < line.length ? '…' : ''}`;
+        s0 = start - winStart + (winStart > 0 ? 1 : 0);
+      }
+      matches.push({ line: lineNo, column: start + 1, preview, start: s0, end: s0 + (end - start) });
+      if (m[0].length === 0) {
+        matcher.lastIndex += 1;
+        if (matcher.lastIndex > line.length) return false;
+      }
+    }
+  };
+  let start = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', start);
+    if (nl < 0) break;
+    let end = nl;
+    if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
+    lineNo += 1;
+    if (take(end > start ? text.slice(start, end) : '')) return { matches, overflow };
+    start = nl + 1;
+  }
+  if (start < text.length) {
+    let end = text.length;
+    if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
+    lineNo += 1;
+    take(end > start ? text.slice(start, end) : '');
+  }
+  return { matches, overflow };
+}
+
+function buildSearchMatcher(query: string, options: SearchOptions): RegExp {
+  if (options.isRegex) return new RegExp(query, options.caseSensitive ? 'g' : 'gi');
+  const esc = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(options.wholeWord ? `(?<!\\w)${esc}(?!\\w)` : esc, options.caseSensitive ? 'g' : 'gi');
+}
+
 beforeAll(async () => {
   await fs.mkdir(tmpRoot, { recursive: true });
   sandbox = path.join(tmpRoot, 'sandbox');
@@ -137,6 +204,36 @@ describe('调试宿 · 文件面与准入', () => {
       expect.objectContaining({ exists: true, size: bytes.length }),
       expect.objectContaining({ exists: false, mtimeMs: null }),
     ]);
+  });
+
+  it('二进制直传（?binary=1）：帧/单文件字节原样回 octet-stream，错误仍回 JSON', async () => {
+    const p = path.join(sandbox, 'binary', 'x.ERB');
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    const bytes = Buffer.from('PRINTL 直传\r\nこんにちは', 'utf-8');
+    await fs.writeFile(p, bytes);
+    const post = (cmd: string, args: Record<string, unknown>) =>
+      fetch(`${base}/invoke?binary=1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cmd, args }),
+      });
+
+    const batchRes = await post('read_files_raw', { paths: [p] });
+    expect(batchRes.headers.get('content-type')).toContain('application/octet-stream');
+    const frameFiles = decodeReadFilesFrame(await batchRes.arrayBuffer());
+    expect(frameFiles).toHaveLength(1);
+    expect(Buffer.from(frameFiles[0]!.data).equals(bytes)).toBe(true);
+
+    const singleRes = await post('read_file_bytes_raw', { path: p });
+    expect(singleRes.headers.get('content-type')).toContain('application/octet-stream');
+    expect(Buffer.from(await singleRes.arrayBuffer()).equals(bytes)).toBe(true);
+
+    // 失败不换信封：页面按 content-type 回退 JSON 读错误（旧宿主/新宿双向兼容）
+    const bad = await post('read_file_bytes_raw', { path: path.join(sandbox, 'binary', 'missing.ERB') });
+    expect(bad.headers.get('content-type')).toContain('application/json');
+    const badBody = (await bad.json()) as { ok: boolean; error?: string };
+    expect(badBody.ok).toBe(false);
+    expect(String(badBody.error)).toContain('文件不存在');
   });
 
   it('walk_dir：withMetadata 带元数据、includeDirs/includeFiles 可关', async () => {
@@ -300,7 +397,135 @@ describe('调试宿 · search_text', () => {
   });
 });
 
-describe('调试宿 · search_text 流式重写后的不变量（2026-10-25 性能批）', () => {
+describe('调试宿 · 检索快路径与逐行语义逐字段对拍（2026-10-26 性能批）', () => {
+  // sandbox 在顶层 beforeAll 才赋值——describe 定义期不能算路径
+  let trickyDir = '';
+  let trickyFile = '';
+  const trickyText =
+    'ABC abc ABC\r\n' +
+    'こんにちは😀 こんにちは\r\n' +
+    `${'x'.repeat(300)}NEEDLE${'y'.repeat(300)}\r\n` +
+    '\r\n' +
+    'last NEEDLE noeol';
+
+  beforeAll(async () => {
+    trickyDir = path.join(sandbox, 'tricky');
+    trickyFile = path.join(trickyDir, 'tricky.ERB');
+    await fs.mkdir(trickyDir, { recursive: true });
+    await fs.writeFile(trickyFile, trickyText, 'utf-8');
+  });
+
+  const run = async (query: string, options: SearchOptions) =>
+    invoke('search_text', {
+      request: {
+        searchId: 21,
+        roots: [trickyDir],
+        query,
+        options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [], maxResults: 2000, ...options },
+      },
+    });
+
+  it('大小写 / 整词 / 正则 / CJK+emoji / CRLF / 长行预览 / 无尾换行：与逐行参考实现逐字段一致', async () => {
+    const cases: Array<[string, SearchOptions]> = [
+      ['ABC', { caseSensitive: true }],
+      ['abc', { caseSensitive: false }],
+      ['こんにちは', { caseSensitive: true }],
+      ['NEEDLE', { caseSensitive: true }],
+      ['abc', { caseSensitive: false, wholeWord: true }],
+      ['ABC', { caseSensitive: true, wholeWord: true }],
+      ['A.C', { isRegex: true, caseSensitive: true }],
+      ['^ABC', { isRegex: true, caseSensitive: true }],
+      // 含换行的查询在逐行语义下永不命中（快路径必须自动让位）
+      ['ABC\nabc', { caseSensitive: true }],
+    ];
+    for (const [query, options] of cases) {
+      const r = await run(query, options);
+      expect(r.ok, `${query} ${JSON.stringify(options)}: ${r.error}`).toBe(true);
+      const v = r.value as { files: { path: string; matches: unknown[] }[] };
+      const expected = legacyFileMatches(trickyText, buildSearchMatcher(query, options));
+      expect(v.files[0]?.matches ?? [], `${query} ${JSON.stringify(options)}`).toEqual(expected.matches);
+    }
+  });
+
+  it('逐文件命中上限（200）：第 201 次命中只置 overflow/truncated，不写出', async () => {
+    const denseDir = path.join(sandbox, 'dense');
+    const denseFile = path.join(denseDir, 'dense.ERB');
+    await fs.mkdir(denseDir, { recursive: true });
+    await fs.writeFile(denseFile, `${Array.from({ length: 250 }, () => 'HIT').join(' ')}\n`, 'utf-8');
+    const r = await invoke('search_text', {
+      request: {
+        searchId: 22,
+        roots: [denseDir],
+        query: 'HIT',
+        options: { isRegex: false, caseSensitive: true, wholeWord: false, extensions: [], maxResults: 5000 },
+      },
+    });
+    const v = r.value as { files: { matches: unknown[] }[]; totalMatches: number; truncated: boolean };
+    expect(v.files[0]!.matches).toHaveLength(200);
+    expect(v.totalMatches).toBe(200);
+    expect(v.truncated).toBe(true);
+  });
+
+  it('并行批之下截断按 readdir 序确定：maxResults 卡在文件边界', async () => {
+    const orderDir = path.join(sandbox, 'order');
+    await fs.mkdir(orderDir, { recursive: true });
+    for (let i = 0; i < 12; i++) {
+      await fs.writeFile(path.join(orderDir, `f-${String(i).padStart(2, '0')}.ERB`), 'HIT HIT HIT\n', 'utf-8');
+    }
+    const order = (await fs.readdir(orderDir)).filter((n) => n.endsWith('.ERB'));
+    const r = await invoke('search_text', {
+      request: {
+        searchId: 23,
+        roots: [orderDir],
+        query: 'HIT',
+        options: { isRegex: false, caseSensitive: true, wholeWord: false, extensions: [], maxResults: 7 },
+      },
+    });
+    const v = r.value as { files: { path: string; matches: unknown[] }[]; totalMatches: number; truncated: boolean };
+    expect(v.totalMatches).toBe(7);
+    expect(v.truncated).toBe(true);
+    expect(v.files.map((f) => path.basename(f.path))).toEqual(order.slice(0, 3));
+    expect(v.files[2]!.matches).toHaveLength(1);
+  });
+});
+
+describe('调试宿 · walk_dir 并行化后的输出顺序（2026-10-26 性能批）', () => {
+  it('目录项 → 子树 → 下一兄弟：与串行参考实现逐项一致（含 withMetadata）', async () => {
+    const root = path.join(sandbox, 'walk-order');
+    const dirs = ['a', 'a/b', 'a/b/c', 'z', 'm'];
+    for (const d of dirs) await fs.mkdir(path.join(root, d), { recursive: true });
+    const files = ['a/x.ERB', 'a/b/y.ERB', 'a/b/c/z.ERB', 'z/q.ERB', 'm/n.ERB', 'root.ERB'];
+    for (const f of files) await fs.writeFile(path.join(root, f), `PRINTL ${f}`, 'utf-8');
+
+    const reference: { path: string; isDirectory: boolean }[] = [];
+    const rec = async (dir: string) => {
+      for (const d of await fs.readdir(dir, { withFileTypes: true })) {
+        const full = path.join(dir, d.name);
+        if (d.isDirectory()) {
+          reference.push({ path: full, isDirectory: true });
+          await rec(full);
+        } else {
+          reference.push({ path: full, isDirectory: false });
+        }
+      }
+    };
+    await rec(root);
+
+    const r = await invoke('walk_dir', {
+      path: root,
+      opts: { includeFiles: true, includeDirs: true, withMetadata: true },
+    });
+    const entries = r.value as { path: string; isDirectory: boolean; size?: number; mtimeMs?: number }[];
+    expect(entries.map((e) => ({ path: e.path, isDirectory: e.isDirectory }))).toEqual(reference);
+    for (const e of entries) {
+      if (e.isDirectory) continue;
+      expect(typeof e.size, e.path).toBe('number');
+      expect(typeof e.mtimeMs, e.path).toBe('number');
+    }
+  });
+});
+
+describe('调试宿 · search_text 整读路径的不变量（2026-10-25 性能批原判据）', () => {
   beforeAll(async () => {
     await fs.mkdir(path.join(sandbox, 'stream'), { recursive: true });
   });
@@ -325,9 +550,9 @@ describe('调试宿 · search_text 流式重写后的不变量（2026-10-25 性�
     expect(String(r.error)).toContain('读域外');
   });
 
-  it('CJK 多字节字符跨读块边界仍正确命中（流式解码 stream:true）', async () => {
-    // 在多个潜在块边界（8KB/64KB/128KB/256KB）前 1 字节处放 3 字节 CJK——
-    // 无论实际切块落在哪，词都必须整字命中且列号按 UTF-16 码元计
+  it('CJK 多字节字符在旧读块边界处仍正确命中（整读后语义不变）', async () => {
+    // 在多个旧流式块边界（8KB/64KB/128KB/256KB）前 1 字节处放 3 字节 CJK——
+    // 无论解码器怎么切，词都必须整字命中且列号按 UTF-16 码元计
     for (const boundary of [8192, 65536, 131072, 262144]) {
       const file = path.join(sandbox, 'stream', `cjk-${boundary}.ERB`);
       const head = 'a'.repeat(boundary - 1);
@@ -353,7 +578,7 @@ describe('调试宿 · search_text 流式重写后的不变量（2026-10-25 性�
     expect(v.skipped.filtered).toBe(0);
   });
 
-  it('CRLF 跨块边界不产生幽灵行 / 丢行', async () => {
+  it('CRLF 在旧块边界处不产生幽灵行 / 丢行', async () => {
     for (const boundary of [8192, 65536, 131072]) {
       const file = path.join(sandbox, 'stream', `crlf-${boundary}.ERB`);
       const head = 'a'.repeat(boundary - 1);
@@ -376,7 +601,7 @@ describe('调试宿 · search_text 流式重写后的不变量（2026-10-25 性�
     }
   });
 
-  it('超 8MB 文件按 tooLarge 跳过（流式截断，不整文件读入）', async () => {
+  it('超 8MB 文件按 tooLarge 跳过（fstat 先判，不整文件读入）', async () => {
     const big = path.join(sandbox, 'stream', 'big.ERB');
     await fs.writeFile(big, Buffer.alloc(8 * 1024 * 1024 + 1024, 0x61)); // 'a' × ~8MB
     const r = await search2({});

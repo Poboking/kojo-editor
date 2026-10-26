@@ -65,7 +65,7 @@ node tools/debug-cli.mjs stop
   → 保存后 `eval "__kojoDebug.invoke('read_file_bytes_raw',{path:'…'})"` 与盘上内容对拍。
 - **外部改动 / 文件监视**：改沙盒内文件 → `events` 里应出现 `file.changed` 级联（调试宿 SSE → `kojo:fs-changed`）。
 - **对话框流**：目录选择 = `POST /policy {"chooseDir": …}` 自动应答（`open-project` 已内置）；`null` = 模拟取消。
-- **批量回归**：`node tools/debug-web-smoke.mjs`（9 断言端到端；失败自动留屏上文本 + 失败截图）。
+- **批量回归**：`node tools/debug-web-smoke.mjs`（14 断言端到端；失败自动留屏上文本 + 失败截图）。
 
 ## 三、CLI 子命令总表
 
@@ -92,11 +92,23 @@ perf.{start,stop,isRunning,lastReport,summary}}`。
 
 ## 四、调试宿（debug-server.mjs）速览
 
-- 协议：`POST /invoke` `{cmd,args}`→`{ok,value|error}`（二进制回 `{__b64}` 信封）；`GET /events` SSE
+- 协议：`POST /invoke` `{cmd,args}`→`{ok,value|error}`（二进制回 `{__b64}` 信封；带 `?binary=1`
+  时两个二进制命令直接回 `application/octet-stream` 原始帧/字节，错误仍回 JSON——页面侧按
+  content-type 自动回退，旧宿/旧页面可独立升级）；`GET /events` SSE
   （`kojo:fs-changed` / `kojo:fs-watch-error`，事件名与桌面壳 Tauri 事件**字面成对**）；`GET /health|/config`；`POST /policy`。
 - 准入：只绑 127.0.0.1；读域＝sandbox ∪ appData ∪ `--readonly` 根 ∪ 常驻工作区根；写域＝sandbox ∪ appData ∪
   常驻根 ∪ `register_write_domain` 登记根；域外一律显式报错。对话框＝policy 自动应答（**不开放任意目标路径参数**，
   与铁律 6 同向）；`export_file` 落 sandbox/exports 并回全路径。
+- **性能（2026-10-26 性能批）**：`search_text` 目录遍历并行但输出顺序确定；普通文本查询（非正则、
+  不含换行）在整串上 `indexOf`/全局正则一次扫完，只在命中处回推行号；≤8 MiB 文件整读、超限 fstat
+  秒拒；批内并发由 `KOJO_DEBUG_SEARCH_CONCURRENCY`（默认 8）封顶，内存上界≈并发×8 MiB。
+  目录/元数据并发为 `KOJO_DEBUG_WALK_CONCURRENCY`（默认 24）。`walk_dir` 并行 readdir/stat 但
+  输出序与串行实现逐项一致；批量读用 open+fstat+readFile 一趟句柄，二进制应答不再 base64 膨胀。
+  同机同语料对拍（`node tools/debug-host-bench.mjs`，2000×~30KB + 大文件，warm cache，2026-10-26，
+  优化前→优化后）：全扫检索 2.78s→0.66s（大小写不敏感 2.00s→0.53s、正则 1.85s→0.63s）、
+  `walk_dir` 带元数据 0.88s→0.39s、200 文件批读 131ms→81ms、24MB 批读 268ms→118ms、5MiB 单读
+  164ms→77ms；`stat_files` 2000 条基本持平（Windows 元数据 I/O 下限）。**口径**：同一行多处命中
+  全列出（与 Rust `scan_text` 的 `find_iter(line)` 对齐）；`maxResults` 截断落点仍按 readdir 序确定。
 
 ## 四b、真桌面壳模式（shell）——壳专属改动的验证通道
 
