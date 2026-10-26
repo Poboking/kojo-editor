@@ -14,11 +14,16 @@
  * | `saves` 存档 | ✅ 装配（宿主有 `launcher_save_*` 八条命令时；否则仍拒绝，见下） |
  * | `content` 内容包 | ✅ 装配（只读预检裁决 + 两阶段记账 + 每实例单飞 + 任务/取消，见 `content-manager.ts`） |
  * | `plugins` 游戏插件 | ✅ 装配（五道逻辑门禁 + 计划台账 + 单飞；落盘/卸载/启停/排序/诊断委托内容包管线，见 `plugin-manager.ts`） |
- * | `runtimes` / `pluginProjects` | ❌ 未装配（见下） |
+ * | `pluginProjects` 插件源码项目 | ✅ 装配（L7b；项目住 `kernel.workspaces`，构建确定性，见 `plugin-project.ts`） |
+ * | `runtimes` | ❌ 未装配（见下） |
  * | `updates`（P2） | ❌ 缺席（契约里本就是可选字段） |
  *
- * **未装配的两条只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_pick_archive` /
- * `launcher_project_hash`。本层不造空实现假装能用——每条方法都抛
+ * **`pluginProjects` 已装配，但两条宿主命令仍是 P1**：`launcher_project_hash`（构建的逐文件摘要）
+ * 与 `launcher_project_extract`（把压缩包反解成项目）。真实宿主还没有它们时，`build` /
+ * `extractArchive` 各自抛 `LAUNCHER_PLATFORM_UNSUPPORTED` 并**点名**缺哪条命令——
+ * 本层不算第二份 SHA-256，也不在 JS 里解 zip（ADR-0010 决策 3）。
+ *
+ * **`runtimes` 仍未装配**（`launcher_runtime_*` 全标 P1）：每条方法都抛
  * `LAUNCHER_PLATFORM_UNSUPPORTED` 并说清是哪一块没接（不静默、不返回空数组让 UI 以为
  * 「这里就是没有」）。它们随 P1 宿主命令与对应编排一起补，届时只换桩，不动其余服务。
  * 存档、内容包与插件同样按能力探测：宿主还没有对应命令时保持"走到探测再拒绝"的桩，
@@ -34,13 +39,14 @@
  */
 
 import type {
+  FileIO,
   GameAdapter,
   LauncherService,
   Plugin,
-  PluginProjectService,
   RuntimeManager,
   SaveManager,
   SlotRegistry,
+  WorkspaceService,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import type { LauncherHostBridge } from './host';
@@ -49,6 +55,7 @@ import { ContentManagerImpl } from './content-manager';
 import { InstanceStoreImpl } from './instance-store';
 import { LogServiceImpl } from './log-service';
 import { PluginManagerImpl } from './plugin-manager';
+import { PluginProjectServiceImpl } from './plugin-project';
 import { ProcessSupervisorImpl } from './process-supervisor';
 import { SaveManagerImpl } from './save-manager';
 import { saveHostFrom } from './save-host';
@@ -197,6 +204,27 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         ...(options.now === undefined ? {} : { now: options.now }),
       });
 
+      /**
+       * 插件源码项目（L7b）：项目 = `kernel.workspaces` 里的工作区项目，源码 / 产物分离，
+       * 打包只走 `zip.ts::buildZip`（不写第二套打包器）。
+       *
+       * 两个内核能力面**按需取**（`tryInject`）而不是写进 `requires`：`requires` 是激活闸，
+       * 加进去会让「没有工作区的宿主」整块激活失败（实例 / 进程 / 日志随之不可用）。
+       * 与契约「能力面显式声明」的差距已上报：缺少时 `create / build / extract` 等方法
+       * 各自抛 `LAUNCHER_PLATFORM_UNSUPPORTED` 并点名缺哪个服务键，不降级成假项目。
+       */
+      const workspaces = ctx.tryInject<WorkspaceService>(KernelServices.Workspaces);
+      const io = ctx.tryInject<FileIO>(KernelServices.IO);
+      const pluginProjects = new PluginProjectServiceImpl({
+        workspaces: workspaces ?? null,
+        io: io ?? null,
+        host,
+        plugins,
+        getInstance: (instanceId) => instances.get(instanceId),
+        pluginRulesOf: (adapterId) => pluginSurfacesOf(adapterId)?.launch?.pluginRules,
+        ...(options.now === undefined ? {} : { now: options.now }),
+      });
+
       /** 宿主事件 → 各自的服务（事件是宿主推来的真相，命令返回值只是"我这一步的结果"） */
       const disposers = [
         host.onProcess((event) => processes.applyEvent(event)),
@@ -241,7 +269,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         runtimes: NOT_ASSEMBLED.runtimes,
         content,
         plugins,
-        pluginProjects: NOT_ASSEMBLED.pluginProjects,
+        pluginProjects,
         saves,
         initialize,
         dispose: shutdown,
@@ -260,7 +288,6 @@ const refuse = (label: string) => (): Promise<never> => Promise.reject(notAssemb
 
 const NOT_ASSEMBLED: {
   readonly runtimes: RuntimeManager;
-  readonly pluginProjects: PluginProjectService;
   readonly saves: SaveManager;
 } = {
   runtimes: {
@@ -270,18 +297,6 @@ const NOT_ASSEMBLED: {
     resolve: refuse('运行时解析'),
     verify: refuse('运行时校验'),
     remove: refuse('运行时删除'),
-  },
-  pluginProjects: {
-    list: refuse('插件项目列表'),
-    get: refuse('插件项目详情'),
-    create: refuse('插件项目创建'),
-    update: refuse('插件项目改名'),
-    remove: refuse('插件项目删除'),
-    projectDir: refuse('插件项目目录'),
-    build: refuse('插件构建'),
-    planInstall: refuse('插件构建并安装'),
-    extract: refuse('插件项目提取'),
-    inspectDrift: refuse('插件项目漂移检查'),
   },
   saves: {
     list: refuse('存档列表'),
@@ -320,6 +335,28 @@ export {
 export { InstanceStoreImpl } from './instance-store';
 export { ContentManagerImpl } from './content-manager';
 export { PluginManagerImpl } from './plugin-manager';
+export {
+  PluginProjectServiceImpl,
+  parseSourceManifest,
+  sourceManifestProblems,
+  canonicalManifestText,
+  canonicalPackText,
+  globMatch,
+  PLUGIN_PROJECT_KIND,
+  PLUGIN_SOURCE_MANIFEST_FILE,
+  PLUGIN_PROJECT_GITIGNORE,
+  DEFAULT_PLUGIN_ARTIFACT_DIR,
+} from './plugin-project';
+export type {
+  HostFileDigest,
+  HostProjectHashInput,
+  HostProjectExtractEntry,
+  HostProjectExtractResult,
+  ProjectHashHost,
+  ProjectExtractHost,
+  PluginProjectServiceOptions,
+  SourceManifestExpect,
+} from './plugin-project';
 export type {
   HostPluginPlan,
   HostPluginStaging,
