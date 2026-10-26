@@ -41,6 +41,9 @@ import './tutorial-surface.css';
 // 编辑器动效切片（1026 阅读面批 C1/C4/C5）：只含 `.monaco-*` / 滚动条选择器，不归两份样式表的
 // 「轻档 ⊆ 重档」三闸管（理由与三条纪律见该文件头注）。
 import './motion-editor.css';
+// 动效收口切片（1026 动效批）：toast 退场 / 标签脏点与保存微光 / 效果库接线 / 合成层提示。
+// 每条规则都靠复合选择器（`html:root` / 双类）压过既有面，不靠位次。
+import './motion-exit.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链

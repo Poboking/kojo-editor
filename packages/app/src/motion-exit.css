@@ -1,0 +1,150 @@
+/* ============================================================================
+   动效收口（1026 动效批 · A2 退场 / A3 脏点 / A5 效果库接线 / A6 合成层提示）
+   ----------------------------------------------------------------------------
+   为什么单开一个文件：本批要挂的东西全落在既有重档上（styles.css / styles-project.css /
+   palette.css 都是冲突热点），新规则集中在这里，别线改那几份时一眼能看出新增面。
+   加载位置见 main.tsx 末尾那行 import——排在 themes/*.css 之后、懒档
+   styles-project.css **之前**，所以这里不靠位次取胜：凡是压既有规则的，一律用复合
+   选择器把特异性抬上去（`html:root` / 双类），懒档后到也压不住。
+
+   时长与缓动零字面量：`--dur-1`（120ms）= 微交互、`--dur-2`（200ms）= 退场、
+   `--dur-press`（70ms）= 按下跟手；240ms 的保存微光写成 `calc(var(--dur-1) * 2)`
+   ——token 里没有 240ms 档，乘出来比新开一枚 token 便宜。减弱动效仍由 styles.css 的
+   两条全局规则压平（应用内开关 / 系统偏好各一条），本文件不重复写回落；唯一例外是
+   toast 退场：那条由 JS 先判，减弱动效下根本不进动画。
+   ============================================================================ */
+
+/* ------------------------------ A2 · toast 退场 ------------------------------ */
+
+/* 与 `toast-in`（右移 16px 进场）同一条轴、反着走：只回收 8px 就够读出"收回去"，
+   位移再大就成了横幅滑出。`forwards` 保证 removal 前的最后几帧稳定停在终态。 */
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+/* 双类 (0,2,0) 稳压 `.toast` 的 (0,1,0)（styles-project.css 是懒档、后到，同分必输，
+   所以这条不靠顺序）。退场中不再接受点击——正在消失的按钮不该还能按。 */
+.toast.toast-out {
+  animation: toast-out var(--dur-2) var(--ease-out) forwards;
+  pointer-events: none;
+}
+
+/* ------------------------------ A3 · 标签脏点 ------------------------------ */
+
+/* 未保存点从零长出来（此前是瞬现）。scale 而不是宽度：`.tab-label` 的 ellipsis 槽位
+   一旦跟着变，整条标签的文字都会横移。`--ease-spring` 给一点点过冲，9px 的圆点
+   过冲 4% 是"弹出来"而不是"蹦一下"。 */
+@keyframes tab-dirty-pop {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.editor-tab .tab-dirty {
+  animation: tab-dirty-pop var(--dur-1) var(--ease-spring) both;
+}
+
+/* 保存成功（dirty true→false）那一下：一道 accent 微光从左扫到右。
+   240ms 只够"看见",不够"表演"——存盘是每几分钟一次的高频动作，动效必须能被忽略。
+   结构上是一个 `::after` 罩层 + `overflow: hidden` 裁切，零布局、零重排；
+   `position/overflow` 只在挂上 `.tab-saved` 的这 260ms 里存在，基础规则一个字没改
+   （`.editor-tab` 的 inset box-shadow 指示条因此不受影响）。 */
+@keyframes tab-saved-sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
+.editor-tab.tab-saved {
+  position: relative;
+  overflow: hidden;
+}
+.editor-tab.tab-saved::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 18%,
+    rgb(var(--accent-rgb) / 0.24) 50%,
+    transparent 82%
+  );
+  transform: translateX(-100%);
+  animation: tab-saved-sheen calc(var(--dur-1) * 2) var(--ease-out);
+  will-change: transform;
+}
+
+/* --------------------------- A5 · 效果库真实接线 --------------------------- */
+
+/* u-press-tint 的 5 处消费（活动栏 / 工具条 / 文件树行 / 面板标签 / 状态栏可点格）。
+   为什么写在 CSS 而不是给组件加类：五处分别住 ActivityBar / ShellLayout / FileTree /
+   PanelBody / statusbar，本批文件白名单不含它们的 TSX；而这条工具的全部内容就是两条
+   声明（按下着色 + 70ms 跟手），就地等价复刻零信息损失，也避免为一行类名去动五个
+   冲突热点。
+   `:not(.active)`：树行与面板标签自带"选中"语义（`.tree-file.active` /
+   `.panel-tab.active`），给选中行再压一层 accent 会让"选中"和"按下"读成同一件事。
+   `html:root` 前缀（(0,2,x)）是为了压过懒档里后到的 `.ab-item:hover` /
+   `.toolbar-btn:hover`（同分、后到即赢）。 */
+html:root
+  :is(
+    .ab-item,
+    .toolbar-btn,
+    .tree-file:not(.active),
+    .panel-tab:not(.active),
+    .statusbar [data-status-cell]
+  ):active:not(:disabled):not([aria-disabled='true']):not(.off) {
+  background-color: var(--active);
+  transition-duration: var(--dur-press);
+}
+
+/* u-shimmer 的真实消费：浮层装载行（`overlaySpinner()`——「正在并账 / 正在读取两侧
+   内容」）此前只有一枚转圈，整行是静的。顺带把这条 @keyframes 补成可挂的类
+   （效果库里它一直只有 `.skeleton::after` 一个消费者，没有类可挂）。
+   1.4s 与 `.skeleton::after` 同周期：两种占位框挨着出现时不该各走各的拍子。 */
+.ov-loading,
+.u-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.ov-loading::after,
+.u-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--hover), transparent);
+  transform: translateX(-100%);
+  animation: u-shimmer calc(var(--anim-spin) * 2) var(--ease-in-out) infinite;
+  will-change: transform;
+}
+
+/* u-glow-breathe 的真实消费：文件树的「正在读取口上目录… / 索引中…」——全仓唯一一处
+   把索引进度写在脸上的常驻状态（`::before` 就是既有那枚转圈，styles-project.css:8601）。
+   呼吸挂在外圈 box-shadow 上，幅度按 token 家族（--anim-breathe 2.8s），一圈 12→22px
+   的柔光在 16px 的小圆上读作"心跳"，再大就成了发光按钮。
+   `html:root` 前缀压过懒档里那条单类 `animation: u-spin 700ms ...`（同分且后到），
+   否则这里新增的第二条动画会被整条 shorthand 覆盖掉。 */
+html:root .tree-loading::before {
+  animation:
+    u-spin var(--anim-spin) linear infinite,
+    u-glow-breathe var(--anim-breathe) var(--ease-in-out) infinite;
+}
+
+/* --------------------------- A6 · 常驻动画的合成层 --------------------------- */
+
+/* 只点这四件的名：它们**真有**不会停的动画（spinner 转圈 / 欢迎页极光 / 骨架扫光 /
+   引导条扫动）。静止元素挂 will-change 是反优化——每枚都换来一个独立合成层，白吃显存。
+   四处动的都只是 transform，故只声明 transform：多写一条 opacity 等于让浏览器预先
+   栅格化一张透明度层，而这里没有一处会动它。 */
+.spinner,
+.welcome::before,
+.skeleton::after,
+.boot-bar::after {
+  will-change: transform;
+}

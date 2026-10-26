@@ -26,6 +26,13 @@ import './context-menu-tabs.css';
 export type { TabRowProps } from './tab-row';
 
 /**
+ * 保存微光挂类的存活时长。CSS 那条是 `calc(var(--dur-1) * 2)` = 240ms，这里多留 20ms：
+ * 早摘会切掉最后一帧（微光走到右缘前突然消失），晚摘则完全看不出来——动画跑完后
+ * `::after` 停在 `translateX(100%)`，本来就在裁切区外。
+ */
+const TAB_SAVED_FLASH_MS = 260;
+
+/**
  * 标签栏（C1 右键菜单 / C2 固定标签 / C3 全部保存入口）。
  *
  * **独立成模块**（不与 ProjectView 同文件）：ProjectView 静态引入 EditorPane →
@@ -357,6 +364,54 @@ export const TabBar = memo(function TabBar({
       ?.querySelector('.editor-tab.active')
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeFile, openTabs.length]);
+
+  /**
+   * 保存成功那一道微光（1026 动效批 A3）。
+   *
+   * 判据只有一个：`dirtyPaths` 里**少了一个仍然开着的**路径（true → false）。保存并不经过
+   * 本组件（入口在命令面板 / 编辑器的自动保存），所以只能拿前后两份集合做差。
+   * 关掉一个脏标签也是"少了一个"，但那种情况下 `querySelector` 找不到行（已经卸载），
+   * 自然什么都不闪。
+   *
+   * 为什么手挂类而不是给 `TabRow` 加 prop：`tab-row.tsx` 不在本批文件范围里；而
+   * `tabClassName()` **不含 dirty**（脏点是一个独立 span）⇒ 这条 className 在保存前后
+   * 逐字不变，React 不会重写它，手挂的类因此能活到动画结束。
+   */
+  const prevDirtyRef = useRef<ReadonlySet<string>>(dirtyPaths);
+  const flashTimersRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    const prev = prevDirtyRef.current;
+    prevDirtyRef.current = dirtyPaths;
+    const saved = [...prev].filter((p) => !dirtyPaths.has(p));
+    const root = tabsRef.current;
+    if (saved.length === 0 || root === null) return;
+    const timers = flashTimersRef.current;
+    for (const el of root.querySelectorAll<HTMLElement>('[data-tab-path]')) {
+      const path = el.dataset.tabPath ?? '';
+      if (!saved.includes(path)) continue;
+      el.classList.remove('tab-saved');
+      // 读一次布局把类名的"摘 → 挂"推到两帧上：同一条在闪的过程中又被存一次时，
+      // 动画必须重新开始，而不是当成没变过
+      void el.offsetWidth;
+      el.classList.add('tab-saved');
+      const existing = timers.get(path);
+      if (existing !== undefined) window.clearTimeout(existing);
+      timers.set(
+        path,
+        window.setTimeout(() => {
+          timers.delete(path);
+          el.classList.remove('tab-saved');
+        }, TAB_SAVED_FLASH_MS),
+      );
+    }
+  }, [dirtyPaths]);
+  useEffect(() => {
+    const timers = flashTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   /** 箭头滚动步长：约一屏（0.8 口径），平滑滚动缺失时退化为直写 scrollLeft（可测可退） */
   const scrollTabs = useCallback((dir: -1 | 1): void => {
