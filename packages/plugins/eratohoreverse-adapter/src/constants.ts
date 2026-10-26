@@ -23,9 +23,13 @@
  * - 角色 CSV 在 **`CSV/CHARA/`**（108 份，目录名全大写），文件名 `Chara{no}_{名前}.csv`
  *   （含 `Chara0_あなた.csv`）；CSV 根层 28 份 `.csv` + 2 份 `.config`，且
  *   **`Global.csv` 与 `Globals.csv` 并存**（15 / 17 行）⇒ 名字表按文件名精确取，不做前缀匹配；
- * - 实测编码（全树 963 份 `.ERB/.ERH/.CSV`，非抽样）：**UTF-8 BOM 100%**、
- *   **换行 100% 纯 LF（CRLF 0 份）**——eraTW 与 eratohoK 都是 CRLF 主导（hok：2,522 纯 CRLF / 41 混合），
- *   所以本作**绝不允许按 CRLF 保存**，否则整文件行尾重排；
+ * - 实测编码（全树 1,083 份 `.ERB/.ERH/.CSV`，非抽样；其中受管 `ERB/` 907 份 `.ERB/.ERH`）：
+ *   **UTF-8 BOM 100%**、**换行 100% 纯 LF（CRLF 0 份、混合 0 份）**；
+ *   对照实测（同一台机、同一把尺）：`C:/game/eraAV/ERB` 471 份**全 CRLF**、
+ *   `C:/game/eratw-画蛇添足版eratw4.980/ERB` 3,972 份 = **LF 3,934 / CRLF 3 / 无换行 35**
+ *   ——**eraTW 是 LF 主导**，早先本文件写「eraTW 与 eratohoK 都是 CRLF 主导」是错的（本机量不出来，
+ *   eratohoK 的盘不在这台机器上、无从复验）。⇒ 行尾判据只能**逐盘量**，不许拿姊妹作类推：
+ *   本作 100% LF，所以**保存绝不许翻成 CRLF**（一翻就整文件重排），而 eraAV 恰好相反要保 CRLF；
  * - 无静态 `sav/` 目录 ⇒ 不提议 `savDir`，状态回放类插件按契约自动 inactive；
  * - 盘上有两棵干扰树：`口上テンプレ/modern/ERB/口上/キャラ番号_キャラ名/` 是**完整第二棵 ERB 树**
  *   （38 份 `KX2` 模板），`resources/`（list.csv + title.png）与 `readme/`、`開発情報/`、
