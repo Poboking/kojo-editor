@@ -4,10 +4,12 @@
  *  ② 尺寸只有四档刻度（xs/sm/md/lg = 12/14/16/22），历史遗留数字一律就近吸附（平局取大），
  *     钉死"9 档散装尺寸"不再回来；
  *  ③ filled 只许住在状态族（`FILLED_ICON_NAMES` 白名单），其余族整条路径纯描边；
- *  ④ 表体量（42 枚）与未命中注册表的字形回退（第三方贡献契约）照旧；
+ *  ④ 表体量（44 枚）与未命中注册表的字形回退（第三方贡献契约）照旧；
  *  ⑤ 名 ↔ 注册表闭合闸（R1 批）：标签栏溢出三枚 affordance 与标签行的图标名一律
  *     须在 `ICONS` 在册——CSS 旋转 180° 借来的箭头、`▾`/`‹` 这类字符入面都算违例
  *     （形态照 `problem-panel-ux.test.ts` 的读源码判据，不造新尺）。
+ *  ⑥ 同一件事的**全仓面**（任何源码里的 `icon: '<字面名>'` 与 `<Icon name="…">` 逐个对册，
+ *     判红点名文件:行号）住隔壁 `icons-registry-closure.test.ts`——1027 批由 `copy` 漏册引出。
  * 任何一条漂了当场红；扩表是允许的，但要**有意识地**改这里的钉数。
  */
 import { readFileSync } from 'node:fs';
@@ -60,8 +62,8 @@ describe('ICON_SIZES · 四档刻度是唯一口径', () => {
 });
 
 describe('家族一致 · 每枚图标都是同一口径的 SVG', () => {
-  it('表体 43 枚（扩表请有意识地抬这个数字；R1 批补入 chevron-left，40→41；收尾批补入 save-all，41→42；视觉批十四补入 more-horizontal，42→43）', () => {
-    expect(names.length).toBe(43);
+  it('表体 44 枚（扩表请有意识地抬这个数字；R1 批补入 chevron-left，40→41；收尾批补入 save-all，41→42；视觉批十四补入 more-horizontal，42→43；1027 注册表闭合批补入 copy，43→44）', () => {
+    expect(names.length).toBe(44);
   });
 
   for (const name of names) {
