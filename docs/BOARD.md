@@ -65,5 +65,4 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LAUNCH-L4 | core 骨架（P0）：`packages/plugins/launcher-core/`——实例库（appData 布局 / schemaVersion / 原子写 / 陈旧锁）、任务中心、日志服务（解码**注入**，不复制 `decodeWithProbe`）、进程编排（对假宿主） | 状态机全表迁移 + 单实例锁 + 任务取消 + 跨块解码；audit 插件数 26→27 自动识别；开机图不变 | 进行中 · 认领：qoder-l4 2026-10-26 |
 | LAUNCH-GATE | 闸与通道复核：懒加载新视图是否动开机图；`smoke-tauri-ipc` / `debug-cli shell` 可用性与 launcher 判据插入点 | 开机图读数逐字引用；通道 rc 实测；零生产码改动 | 进行中 · 认领：qoder-gate 2026-10-26 |
