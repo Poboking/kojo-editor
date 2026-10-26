@@ -24,27 +24,16 @@ import type {
 } from '@kojo/plugin-api';
 
 /**
- * `kernel.launcher` 实现：**平台桥的零逻辑透传**（启动器特权面在插件侧的唯一入口）。
+ * `kernel.launcher` 实现：平台桥的**零逻辑透传**（启动器特权面在插件侧的唯一入口）。
  *
- * 为什么单独一个服务键，而不是塞进 `kernel.io`：
- * - 起进程与写盘是**两种能力**（铁律 5/6 的边界），混在文件面里等于「要读盘的人顺带
- *   拿到了要起进程的人」；
- * - 内核**刻意不解释**任何启动判定：实例是否就绪、程序哈希是否匹配、运行时能否解析、
- *   每实例锁、Job Object 收尸全在宿主（§8 / §13）那一条链路里。内核再核一次就是第二份
- *   判据，它一定会漂——照 `remote.ts` 的同族教训。
- *
- * 形状约束（能力面边界，不是风格问题）：**没有任何方法接受「目标程序路径」**，
- * 也没有任何方法接受「写到这里的路径」。启动只认 `instanceId`，信任只认 `instanceId`，
- * 落点只有「宿主按 appData 现算」与「原生对话框即授权」两种。
- *
- * 平台无此能力（Node 桥 / Web 调试宿）时由本层给一句人话——**不降级、不造假数据**，
- * 与 `remote.ts` 里"平台缺某条可选能力"的缺席口径逐字同族（那边的方法名不在此复述：
- * `kojo-market` 的单一真源闸按方法名扫生产面，多写一处就是假红）。
+ * 内核不解释任何启动判定（就绪 / 哈希 / 运行时 / 每实例锁 / 进程收尸全在宿主），再核一次就是
+ * 第二份判据、一定会漂（同 `remote.ts`）；起进程与写盘是两种能力，故不塞进 `kernel.io`。
+ * 能力面边界：**没有任何方法接受「目标程序路径」或「写到这里的路径」**；可选能力缺席即人话
+ * （不降级、不造假数据）。方法名不在此复述：`kojo-market` 的真源闸按方法名扫生产面。
  */
 export class LauncherHostImpl implements LauncherHostBridge {
   constructor(private readonly bridge: PlatformBridge) {}
 
-  /** 平台级缺席（Node 桥 / Web 宿）给人的一句话；与"某条 P1 命令没实现"分开说 */
   private get host(): LauncherHostBridge {
     const host = this.bridge.launcher;
     if (host === undefined) {
@@ -52,6 +41,35 @@ export class LauncherHostImpl implements LauncherHostBridge {
     }
     return host;
   }
+
+  /** 可选命令（规格标 P1）的统一转发器：调用时才取宿主；缺席即人话并点名哪块能力 */
+  private p1<K extends keyof LauncherHostBridge>(name: K, what: string): NonNullable<LauncherHostBridge[K]> {
+    return (async (...args: never[]) => {
+      const fn = this.host[name] as unknown as ((...a: never[]) => unknown) | undefined;
+      if (fn === undefined) throw new Error(`当前平台的启动器不支持${what}`);
+      return fn.call(this.host, ...args);
+    }) as unknown as NonNullable<LauncherHostBridge[K]>;
+  }
+
+  instanceDuplicate = this.p1('instanceDuplicate', '复制实例');
+  pickWriteRoot = this.p1('pickWriteRoot', '逐根写授权');
+  pickArchive = this.p1('pickArchive', '选择压缩包');
+  logExport = this.p1('logExport', '导出日志');
+  contentList = this.p1('contentList', '内容包列表');
+  contentPlan = this.p1('contentPlan', '内容包预检');
+  contentApply = this.p1('contentApply', '内容包安装');
+  contentUninstall = this.p1('contentUninstall', '内容包卸载');
+  contentSetEnabled = this.p1('contentSetEnabled', '内容包启停');
+  contentSetOrder = this.p1('contentSetOrder', '内容包排序');
+  contentDiagnose = this.p1('contentDiagnose', '内容包诊断');
+  saveList = this.p1('saveList', '存档列表');
+  saveBackups = this.p1('saveBackups', '存档备份列表');
+  saveBackup = this.p1('saveBackup', '存档备份');
+  saveRestore = this.p1('saveRestore', '存档恢复');
+  saveDeleteBackup = this.p1('saveDeleteBackup', '删除存档备份');
+  saveImport = this.p1('saveImport', '存档导入预检');
+  saveApplyImport = this.p1('saveApplyImport', '存档导入');
+  saveExport = this.p1('saveExport', '存档导出');
 
   /* ---- 实例 ---- */
 
@@ -75,28 +93,10 @@ export class LauncherHostImpl implements LauncherHostBridge {
     return this.host.instanceRemove(instanceId, opts);
   }
 
-  async instanceDuplicate(instanceId: string, name?: string): Promise<InstanceCreation> {
-    const fn = this.host.instanceDuplicate;
-    if (fn === undefined) throw new Error('当前平台的启动器不支持复制实例');
-    return fn.call(this.host, instanceId, name);
-  }
-
   /* ---- 目录（对话框即授权） ---- */
 
   async pickSourceRoot(title?: string): Promise<string | null> {
     return this.host.pickSourceRoot(title);
-  }
-
-  async pickWriteRoot(instanceId: string, rootId: string): Promise<string | null> {
-    const fn = this.host.pickWriteRoot;
-    if (fn === undefined) throw new Error('当前平台的启动器不支持逐根写授权');
-    return fn.call(this.host, instanceId, rootId);
-  }
-
-  async pickArchive(title?: string): Promise<string | null> {
-    const fn = this.host.pickArchive;
-    if (fn === undefined) throw new Error('当前平台的启动器不支持选择压缩包');
-    return fn.call(this.host, title);
   }
 
   async openInstanceFolder(instanceId: string, which: InstanceOpenTarget): Promise<void> {
@@ -137,12 +137,6 @@ export class LauncherHostImpl implements LauncherHostBridge {
 
   async logRead(sessionId: string, query?: LogQuery): Promise<HostLogPage> {
     return this.host.logRead(sessionId, query);
-  }
-
-  async logExport(instanceId: string, sessionId?: string): Promise<string | null> {
-    const fn = this.host.logExport;
-    if (fn === undefined) throw new Error('当前平台的启动器不支持导出日志');
-    return fn.call(this.host, instanceId, sessionId);
   }
 
   /* ---- 任务 ---- */

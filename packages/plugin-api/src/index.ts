@@ -959,4 +959,13 @@ export type {
   LauncherTaskEvent,
   LauncherInstanceEvent,
   LauncherHostBridge,
+  /* §7.4 内容包 / 存档的宿主读数（L1c） */
+  HostSaveRootState,
+  HostSaveListing,
+  HostSaveImportPlan,
+  HostContentConflict,
+  HostContentPlan,
+  HostContentIssueCode,
+  HostContentIssue,
+  HostContentDiagnosis,
 } from './launcher';

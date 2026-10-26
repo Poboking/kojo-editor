@@ -13,6 +13,10 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { KernelServices, WellKnownServices } from '../src/services';
 import type {
+  ConflictResolution,
+  ContentConflict,
+  ContentDiagnosis,
+  ContentFileRef,
   ContentManager,
   ContentPackKind,
   ContentPackManifest,
@@ -21,8 +25,18 @@ import type {
   ExecutableTrust,
   GameAdapter,
   GameLaunchAdapter,
+  HostContentConflict,
+  HostContentDiagnosis,
+  HostContentIssue,
+  HostContentIssueCode,
+  HostContentPlan,
   HostLogChunk,
   HostLogPage,
+  HostSaveImportPlan,
+  HostSaveListing,
+  HostSaveRootState,
+  InstalledContent,
+  InstallPlanOptions,
   InstanceOpenTarget,
   InstancePatch,
   LauncherError,
@@ -33,6 +47,7 @@ import type {
   LauncherLogEvent,
   LauncherProcessEvent,
   LauncherService,
+  LauncherTask,
   LauncherTaskEvent,
   LauncherUpdateService,
   LaunchProfile,
@@ -42,7 +57,13 @@ import type {
   PluginSourceManifest,
   ProcessStatus,
   ProcessSupervisor,
+  RestoreOptions,
+  SaveBackup,
+  SaveBackupRequest,
   SaveEntry,
+  SaveExportRequest,
+  SaveImportPlan,
+  ZipContractLimits,
 } from '../src/index';
 
 describe('启动器契约 · 类型形状', () => {
@@ -263,6 +284,171 @@ describe('启动器契约 · 宿主桥（L1b 补齐的 §7 形状）', () => {
     >();
     // 平台桥上的启动器是**一个可选子对象**：缺席 = 该平台没有这个能力面（不降级）
     expectTypeOf<PlatformBridge['launcher']>().toEqualTypeOf<LauncherHostBridge | undefined>();
+  });
+});
+
+describe('启动器契约 · 内容包 / 存档的宿主面（L1c：P1 两族进契约）', () => {
+  /**
+   * 这一节钉的是「消费方不再各自声明一份形状」：`launcher-core` 的两个局部投影
+   * （`ContentHostCommands` / `SaveHostBridge`）现在只是契约上的 `Required<Pick<…>>`，
+   * 而桌面壳桥（`app/src/bridge/launcher-bridge.ts`）直接按契约赋值。形状一漂就红在这里。
+   */
+
+  it('内容七条：全可选（缺席 = 该宿主没有这组），参数与返回逐条钉死', () => {
+    // 可选性：这七条不是「必填能力面」——旧宿主没有它们仍满足契约（P1 的语义）
+    expectTypeOf<LauncherHostBridge['contentList']>().toEqualTypeOf<
+      ((instanceId: string) => Promise<readonly InstalledContent[]>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['contentPlan']>().toEqualTypeOf<
+      | ((
+          instanceId: string,
+          archivePath: string,
+          opts?: InstallPlanOptions,
+        ) => Promise<HostContentPlan>)
+      | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['contentApply']>().toEqualTypeOf<
+      | ((planId: string, resolutions?: readonly ConflictResolution[]) => Promise<LauncherTask>)
+      | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['contentUninstall']>().toEqualTypeOf<
+      | ((
+          instanceId: string,
+          packId: string,
+          files?: readonly ContentFileRef[],
+        ) => Promise<LauncherTask>)
+      | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['contentSetEnabled']>().toEqualTypeOf<
+      | ((instanceId: string, packId: string, enabled: boolean) => Promise<LauncherTask>)
+      | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['contentSetOrder']>().toEqualTypeOf<
+      ((instanceId: string, packIds: readonly string[]) => Promise<void>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['contentDiagnose']>().toEqualTypeOf<
+      ((instanceId: string) => Promise<HostContentDiagnosis>) | undefined
+    >();
+
+    // 第三参 opts：可省、且只承载「逐调用换档」的限额（不复制任何数值）
+    expectTypeOf<Parameters<Required<LauncherHostBridge>['contentPlan']>>().toEqualTypeOf<
+      [instanceId: string, archivePath: string, opts?: InstallPlanOptions]
+    >();
+    expectTypeOf<InstallPlanOptions>().toEqualTypeOf<{ readonly limits?: ZipContractLimits }>();
+    // 卸载第三参 = 本包独占 ownership 快照（可省；宿主仍以 ownership.json 复核）
+    expectTypeOf<Parameters<Required<LauncherHostBridge>['contentUninstall']>[2]>().toEqualTypeOf<
+      readonly ContentFileRef[] | undefined
+    >();
+  });
+
+  it('存档八条：全可选，参数与返回逐条钉死（写落点没有「目标路径」这一位）', () => {
+    expectTypeOf<LauncherHostBridge['saveList']>().toEqualTypeOf<
+      ((instanceId: string) => Promise<HostSaveListing>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveBackups']>().toEqualTypeOf<
+      ((instanceId: string) => Promise<readonly SaveBackup[]>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveBackup']>().toEqualTypeOf<
+      ((instanceId: string, req: SaveBackupRequest) => Promise<LauncherTask>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveRestore']>().toEqualTypeOf<
+      | ((instanceId: string, backupId: string, opts?: RestoreOptions) => Promise<LauncherTask>)
+      | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveDeleteBackup']>().toEqualTypeOf<
+      ((instanceId: string, backupId: string) => Promise<void>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveImport']>().toEqualTypeOf<
+      ((instanceId: string, archivePath: string) => Promise<HostSaveImportPlan>) | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveApplyImport']>().toEqualTypeOf<
+      | ((planId: string, resolutions?: readonly ConflictResolution[]) => Promise<LauncherTask>)
+      | undefined
+    >();
+    expectTypeOf<LauncherHostBridge['saveExport']>().toEqualTypeOf<
+      ((instanceId: string, req: SaveExportRequest) => Promise<string | null>) | undefined
+    >();
+
+    // 参数表里只有 id / 相对名 / backup·plan id：没有一格是「写到这个绝对路径」
+    expectTypeOf<Parameters<Required<LauncherHostBridge>['saveDeleteBackup']>>().toEqualTypeOf<
+      [instanceId: string, backupId: string]
+    >();
+    expectTypeOf<'targetPath' extends keyof LauncherHostBridge ? true : false>().toEqualTypeOf<false>();
+    expectTypeOf<'destPath' extends keyof LauncherHostBridge ? true : false>().toEqualTypeOf<false>();
+    // 导出请求本身也不含落点（落点由原生保存对话框在同一个命令内选定）
+    expectTypeOf<'path' extends keyof SaveExportRequest ? true : false>().toEqualTypeOf<false>();
+  });
+
+  it('`save_list` 是三字段：entries + roots + warnings（不是裸 SaveEntry[]）', () => {
+    expectTypeOf<HostSaveListing>().toEqualTypeOf<{
+      readonly entries: readonly SaveEntry[];
+      readonly roots: readonly HostSaveRootState[];
+      readonly warnings?: readonly string[];
+    }>();
+    // 逐根授权读数：approved 是 shared 实例的写回门禁；exists 是可选盘上读数
+    expectTypeOf<HostSaveRootState>().toEqualTypeOf<{
+      readonly rootId: string;
+      readonly approved: boolean;
+      readonly exists?: boolean;
+    }>();
+    // 反证：裸数组「装不下」授权读数（这两行就是当初缺口 1 的形状化写法）
+    expectTypeOf<HostSaveListing['entries']>().not.toEqualTypeOf<readonly HostSaveRootState[]>();
+  });
+
+  it('`HostSaveImportPlan` = 契约计划 + 三个宿主可选读数（缺席不猜）', () => {
+    expectTypeOf<HostSaveImportPlan>().toExtend<SaveImportPlan>();
+    expectTypeOf<HostSaveImportPlan['entryCount']>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<HostSaveImportPlan['totalBytes']>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<HostSaveImportPlan['expiresAt']>().toEqualTypeOf<string | undefined>();
+    // 计划本体四字段仍是契约那一份（不在这里另立一套）
+    expectTypeOf<SaveImportPlan>().toEqualTypeOf<{
+      readonly planId: string;
+      readonly backupId: string;
+      readonly overwrites: readonly string[];
+      readonly warnings: readonly string[];
+    }>();
+  });
+
+  it('`HostContentIssueCode` 是封闭六项（含 orphan-file / load-order 两档）', () => {
+    // 逐字重抄：删一档、加一档都先红在这里（地图不是装饰，是钉）
+    expectTypeOf<HostContentIssueCode>().toEqualTypeOf<
+      | 'missing-file'
+      | 'hash-mismatch'
+      | 'conflict'
+      | 'missing-dependency'
+      | 'orphan-file'
+      | 'load-order'
+    >();
+    expectTypeOf<HostContentIssue['code']>().toEqualTypeOf<HostContentIssueCode>();
+    // 孤儿文件与启用顺序**不是**领域码表里的一档：映射归消费方，宿主只如实报
+    expectTypeOf<ContentDiagnosis['issues'][number]['code']>().toEqualTypeOf<
+      'missing-file' | 'hash-mismatch' | 'conflict' | 'missing-dependency'
+    >();
+  });
+
+  it('`HostContentPlan` / `HostContentConflict`：与领域计划同形，冲突多一档落盘语义', () => {
+    expectTypeOf<HostContentConflict['kind']>().toEqualTypeOf<
+      'other-pack' | 'base-file' | 'case-collision'
+    >();
+    expectTypeOf<HostContentConflict['existingPath']>().toEqualTypeOf<string | undefined>();
+    // 二分的领域面不动：大小写碰撞由消费方折回这两档
+    expectTypeOf<ContentConflict['kind']>().toEqualTypeOf<'other-pack' | 'base-file'>();
+
+    expectTypeOf<HostContentPlan>().toEqualTypeOf<{
+      readonly planId: string;
+      readonly manifest: ContentPackManifest;
+      readonly targets: readonly { readonly rootId: string; readonly relativePath: string }[];
+      readonly additions: readonly ContentFileRef[];
+      readonly overwrites: readonly ContentFileRef[];
+      readonly conflicts: readonly HostContentConflict[];
+      readonly missingRequirements: readonly string[];
+      readonly warnings: readonly string[];
+      readonly expiresAt: string;
+    }>();
+    expectTypeOf<HostContentDiagnosis>().toEqualTypeOf<{
+      readonly instanceId: string;
+      readonly issues: readonly HostContentIssue[];
+    }>();
   });
 });
 

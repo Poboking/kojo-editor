@@ -24,27 +24,23 @@
  * - 宿主命令缺席 = 如实拒绝（`LAUNCHER_PLATFORM_UNSUPPORTED` 并点名缺哪条命令），
  *   不造假计划、不返回空列表。
  *
- * ## 已知契约缺口（已在交付回复里逐条上报，不擅自扩 `plugin-api`）
+ * ## 宿主读数从哪来（L1c 收口：形状只有契约一份）
  *
- * 1. `ContentConflict.kind` 只有 `'other-pack' | 'base-file'`，**没有大小写碰撞**这一档；
- *    而 §10.7 明确要求「大小写折叠冲突检测」。本层让宿主计划多带一档 `'case-collision'`
- *    （带既有文件的实际大小写 `existingPath`），由本层**映射**成二分（有 `existingPackId`
- *    → `other-pack`，否则 `base-file`）并追加一条人话 warning。宿主若已自行折叠成二分，
- *    本层原样放行。
- * 2. `ContentDiagnosis` 的码表只有四项（`missing-file` / `hash-mismatch` / `conflict` /
- *    `missing-dependency`），**装不下孤儿文件与启用顺序异常**（`PluginDiagnosis` 有
- *    `load-order`，内容侧没有；也没有 `orphan-file`）。本层要求宿主诊断多带这两档，映射进
- *    `conflict` 并用人话 `message` 的固定前缀区分；同时给报告加了 `warnings`（附加字段，
- *    契约形状不变）。
+ * 1. **大小写碰撞**：领域面 `ContentConflict.kind` 只有二分，而 §10.7 要求「大小写折叠冲突
+ *    检测」。宿主计划多报一档 `'case-collision'`（带既有文件的实际大小写 `existingPath`，
+ *    见契约 `HostContentConflict`），本层**映射**成二分（有 `existingPackId` → `other-pack`，
+ *    否则 `base-file`）并追加一条人话 warning。宿主若已自行折叠成二分，本层原样放行。
+ * 2. **孤儿文件与启用顺序**：领域面 `ContentDiagnosis` 码表装不下这两档，契约把它们收进
+ *    `HostContentIssueCode`（`orphan-file` / `load-order`）。本层映射进 `conflict` 并用人话
+ *    `message` 的固定前缀区分；同时给报告加了 `warnings`（附加字段，领域形状不变）。
  * 3. 没有「计划过期 / 计划不存在」的专用码：本层用 `LAUNCHER_INTERNAL` + 具体中文 `message`
  *    （`retryable` 为真），detail 说清要重新预检。
  * 4. 没有「内容包未安装」「顺序参数不合法」「内容根不接受该包类型」的专用码：
  *    分别落到 `LAUNCHER_CONTENT_BROKEN` / `LAUNCHER_CONTENT_CONFLICT` /
  *    `LAUNCHER_CONTENT_CONFLICT`，`message` 覆盖成具体人话。
- * 5. `launcher_content_uninstall` 的命令表只有 `{ instanceId, packId }`，宿主按自己的
- *    `ownership.json` 删文件；但「只删本包 ownership 记录、不碰别的包写过的同名文件」这条
- *    需要跨包对账，本层因此**多传一个 `files` 参数**（本包独占的 ownership 快照），
- *    宿主仍须以 `ownership.json` 复核（纵深防御）。
+ * 5. `launcher_content_uninstall` 除 `{ instanceId, packId }` 外还带一个可选 `files`
+ *    （契约已收）：那是本层算出的「本包独占」ownership 快照，宿主仍须以 `ownership.json`
+ *    复核（纵深防御），不碰别的包写过的同名文件。
  */
 
 import type {
@@ -56,6 +52,11 @@ import type {
   ContentManager,
   ContentPackManifest,
   ContentRootSpec,
+  HostContentConflict,
+  HostContentDiagnosis,
+  HostContentIssue,
+  HostContentIssueCode,
+  HostContentPlan,
   InstalledContent,
   InstallPlanOptions,
   LauncherErrorCode,
@@ -73,84 +74,37 @@ import { InstanceLock } from './instance-lock';
 import { isTerminalTaskState } from './task-center';
 
 /* ══════════════════════════════════════════════════════════════════════════════
- * 宿主命令面（本包局部声明；`host.ts` 未收编 `launcher_content_*`，见交付报告）
+ * 宿主命令面（形状真源在契约 §7.4；本文件只做**投影与探测**，不持有第二份定义）
  * ══════════════════════════════════════════════════════════════════════════════ */
 
 /**
- * 宿主计划里的一条文件冲突。
+ * `launcher_content_*` 七条命令的 camelCase 投影（一个方法 = 一条命令，不带任何路径拼装）。
  *
- * 比契约的 `ContentConflict` 多一档 `'case-collision'`：大小写折叠是**落盘语义**，
- * 只有看见磁盘的宿主判得了；映射成契约二分是领域语义，住本层（缺口 1）。
+ * 形状**没有第二份**（L1c 收口）：`HostContentPlan` / `HostContentConflict` /
+ * `HostContentIssue*` / `HostContentDiagnosis` 都住 `plugin-api/launcher.ts` §7.4，
+ * 本文件只把契约上**可选**的 P1 方法收成一组非可选，供调用点探测后使用。
  */
-export interface HostContentConflict {
-  readonly rootId: string;
-  readonly path: string;
-  readonly kind: 'other-pack' | 'base-file' | 'case-collision';
-  readonly existingPackId: string | null;
-  /** `kind='case-collision'` 时磁盘上既有条目的实际大小写 */
-  readonly existingPath?: string;
-  readonly resolution: ContentConflict['resolution'];
-}
+export type ContentHostCommands = Required<
+  Pick<
+    LauncherHostBridge,
+    | 'contentList'
+    | 'contentPlan'
+    | 'contentApply'
+    | 'contentUninstall'
+    | 'contentSetEnabled'
+    | 'contentSetOrder'
+    | 'contentDiagnose'
+  >
+>;
 
-/** 宿主计划（`launcher_content_plan` 的返回；与契约同形，冲突项多一档，见缺口 1） */
-export interface HostContentPlan {
-  readonly planId: string;
-  readonly manifest: ContentPackManifest;
-  readonly targets: readonly { readonly rootId: string; readonly relativePath: string }[];
-  readonly additions: readonly ContentFileRef[];
-  readonly overwrites: readonly ContentFileRef[];
-  readonly conflicts: readonly HostContentConflict[];
-  readonly missingRequirements: readonly string[];
-  readonly warnings: readonly string[];
-  readonly expiresAt: string;
-}
-
-/** 宿主诊断码（契约四项 + 孤儿文件 + 启用顺序，见缺口 2） */
-export type HostContentIssueCode =
-  | 'missing-file'
-  | 'hash-mismatch'
-  | 'conflict'
-  | 'missing-dependency'
-  | 'orphan-file'
-  | 'load-order';
-
-export interface HostContentIssue {
-  readonly packId: string;
-  readonly code: HostContentIssueCode;
-  readonly path?: string;
-  readonly message: string;
-}
-
-export interface HostContentDiagnosis {
-  readonly instanceId: string;
-  readonly issues: readonly HostContentIssue[];
-}
-
-/** `launcher_content_*` 的 camelCase 投影（一个方法 = 一条命令，不带任何路径拼装） */
-export interface ContentHostCommands {
-  /** `launcher_content_list` */
-  contentList(instanceId: string): Promise<readonly InstalledContent[]>;
-  /** `launcher_content_plan`（ZIP 四重守卫与解到暂存都在宿主；限额由本层逐调用传入） */
-  contentPlan(
-    instanceId: string,
-    archivePath: string,
-    opts: { readonly limits: ZipContractLimits },
-  ): Promise<HostContentPlan>;
-  /** `launcher_content_apply`（计划未过期、每实例单飞、全程可回滚在宿主） */
-  contentApply(planId: string, resolutions?: readonly ConflictResolution[]): Promise<LauncherTask>;
-  /** `launcher_content_uninstall`（`files` = 本包独占的 ownership 快照，见缺口 5） */
-  contentUninstall(
-    instanceId: string,
-    packId: string,
-    files: readonly ContentFileRef[],
-  ): Promise<LauncherTask>;
-  /** `launcher_content_set_enabled`（停游戏由本层先做，见 §10.3） */
-  contentSetEnabled(instanceId: string, packId: string, enabled: boolean): Promise<LauncherTask>;
-  /** `launcher_content_set_order`（只接受已安装 id 的排列，提交前本层先核一遍） */
-  contentSetOrder(instanceId: string, packIds: readonly string[]): Promise<void>;
-  /** `launcher_content_diagnose`（只读） */
-  contentDiagnose(instanceId: string): Promise<HostContentDiagnosis>;
-}
+/** 宿主读数（纯 re-export；名字是本包公开面已用惯的那些，形状只有契约一份） */
+export type {
+  HostContentConflict,
+  HostContentDiagnosis,
+  HostContentIssue,
+  HostContentIssueCode,
+  HostContentPlan,
+} from '@kojo/plugin-api';
 
 /** 方法名 → 宿主命令名（报缺失时点名，不让用户对着「未提供该能力」猜） */
 const HOST_COMMAND_NAMES: Readonly<Record<keyof ContentHostCommands, string>> = {
@@ -751,9 +705,14 @@ export class ContentManagerImpl implements ContentManager {
     return instance;
   }
 
-  /** 取一条宿主内容命令；缺席即如实拒绝（点名缺哪条，不让 UI 以为「这里就是没有」） */
+  /**
+   * 取一条宿主内容命令；缺席即如实拒绝（点名缺哪条，不让 UI 以为「这里就是没有」）。
+   *
+   * 探测看的是**契约上的可选方法**（§7.4 全标 P1）：内核透传层在场时这些方法恒在，
+   * 由内核给一句人话；绕过内核的装配（单测 / 旧宿主）仍在这里被点名拦下。
+   */
   private cmd<K extends keyof ContentHostCommands>(name: K): ContentHostCommands[K] {
-    const fn = (this.host as Partial<ContentHostCommands>)[name];
+    const fn = this.host[name];
     if (typeof fn !== 'function') {
       throw launcherError('LAUNCHER_PLATFORM_UNSUPPORTED', {
         message: '当前宿主未提供内容包能力',

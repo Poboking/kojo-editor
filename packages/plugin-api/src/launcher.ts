@@ -1684,6 +1684,125 @@ export interface LauncherInstanceEvent {
   readonly seq: number;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+ * §7.4 内容包 / 存档的宿主读数（P1：`launcher_content_*` / `launcher_save_*`）
+ *
+ * 这一组是**宿主命令的返回形状**，不是领域面：领域面（§6.6 / §6.9）说「返回已裁决的计划 /
+ * 已归并的诊断」，宿主面能给的比那多几处只读读数——多出来的部分在下面逐条注释里点名，
+ * 由消费方（`launcher-core`）映射或原样透传，宿主不再自造第二套语义。
+ *
+ * 为什么这些读数**必须**进契约（L1c 收口，此前 `launcher-core` 各自声明了一份局部形状）：
+ * - 一份形状两处声明 = 两处漂移，且漂在类型层看不出来（`as unknown as` 一挡就过去了）；
+ * - 每条读数的语义只有宿主知道（`roots[].approved` 是写回门禁、`case-collision` 是落盘语义、
+ *   `orphan-file` / `load-order` 是只有看见磁盘才判得出的两档），契约不写这里就等于让
+ *   每个消费方各自猜一遍。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 一个存档根（`saveRoot`）的宿主读数。
+ *
+ * `approved` 是 shared / overlay 实例的**写回门禁**（§9.1）：copy 实例宿主恒报 `true`
+ * （写的是实例内副本），shared 实例看 `approvals.json`。
+ */
+export interface HostSaveRootState {
+  readonly rootId: string;
+  /** 该根是否已获写授权（`launcher_pick_write_root` 的对话框即授权） */
+  readonly approved: boolean;
+  /** 该根在盘上是否存在（可选读数；缺席 = 宿主不报） */
+  readonly exists?: boolean;
+}
+
+/**
+ * `launcher_save_list` 的返回：存档条目 + **逐根授权读数** + 宿主侧人话警告。
+ *
+ * 不是裸 `SaveEntry[]`：`roots[]` 装的是「这个根能不能写回」，`SaveEntry` 表达不了
+ * （条目一个字节都没变），而 shared 实例的列表恰好按它过滤。
+ */
+export interface HostSaveListing {
+  readonly entries: readonly SaveEntry[];
+  readonly roots: readonly HostSaveRootState[];
+  /** 宿主侧人话警告（可选；消费方与自己的警告合并，不覆盖） */
+  readonly warnings?: readonly string[];
+}
+
+/**
+ * `launcher_save_import` 的返回：契约计划 + 宿主**可选**读数。
+ *
+ * 三个数都只有宿主给得出（它才解过包）：条目数 / 总字节是 §11.4 的预检闸，
+ * `expiresAt` 是「计划过期即作废」的时间界。缺席 = 宿主没报，消费方**不猜**
+ * （条数 / 字节落回「不设这道闸」，过期时刻落回本层 TTL）。
+ */
+export interface HostSaveImportPlan extends SaveImportPlan {
+  /** 包内条目数（宿主解包读数） */
+  readonly entryCount?: number;
+  /** 解包后的总字节 */
+  readonly totalBytes?: number;
+  /** 暂存计划过期时刻（ISO-8601） */
+  readonly expiresAt?: string;
+}
+
+/**
+ * 宿主内容计划里的一条文件冲突。
+ *
+ * 比领域面的 `ContentConflict` 多一档 `'case-collision'`：大小写折叠是**落盘语义**
+ * （`Data/A` 与 `data/a` 在 Windows 上是同一个文件），只有看见磁盘的宿主判得了；
+ * 折回领域二分（`other-pack` / `base-file`）是消费方的事。
+ */
+export interface HostContentConflict {
+  readonly rootId: string;
+  readonly path: string;
+  readonly kind: 'other-pack' | 'base-file' | 'case-collision';
+  /** 撞上的既有文件的属主包 id；`null` = 基础游戏文件 */
+  readonly existingPackId: string | null;
+  /** `kind = 'case-collision'` 时磁盘上既有条目的**实际大小写** */
+  readonly existingPath?: string;
+  readonly resolution: ContentConflict['resolution'];
+}
+
+/** `launcher_content_plan` 的返回：与领域计划同形，冲突项多一档（见 `HostContentConflict`） */
+export interface HostContentPlan {
+  readonly planId: string;
+  readonly manifest: ContentPackManifest;
+  readonly targets: readonly { readonly rootId: string; readonly relativePath: string }[];
+  readonly additions: readonly ContentFileRef[];
+  readonly overwrites: readonly ContentFileRef[];
+  readonly conflicts: readonly HostContentConflict[];
+  readonly missingRequirements: readonly string[];
+  readonly warnings: readonly string[];
+  /** 暂存计划过期即作废（两次预检之间不持有实例锁，只能靠时间界） */
+  readonly expiresAt: string;
+}
+
+/**
+ * 宿主诊断码：领域面四项 + 宿主多报的两档。
+ *
+ * `orphan-file`（本包 ownership 里记着、盘上却没有 / 盘上有却不属于任何包）与
+ * `load-order`（启用顺序与权重的实际排列异常）都是**只有看见磁盘才判得出**的，
+ * 领域面 `ContentDiagnosis` 的码表没有位置 ⇒ 消费方把它们映射进 `conflict`
+ * 并用人话 `message` 的固定前缀区分；宿主不许把它们悄悄折成别的码再报。
+ */
+export type HostContentIssueCode =
+  | 'missing-file'
+  | 'hash-mismatch'
+  | 'conflict'
+  | 'missing-dependency'
+  | 'orphan-file'
+  | 'load-order';
+
+/** 一条宿主诊断项（`message` 是人话；`path` 只有文件级问题才有） */
+export interface HostContentIssue {
+  readonly packId: string;
+  readonly code: HostContentIssueCode;
+  readonly path?: string;
+  readonly message: string;
+}
+
+/** `launcher_content_diagnose` 的返回（只读；按包逐条给，归并归消费方） */
+export interface HostContentDiagnosis {
+  readonly instanceId: string;
+  readonly issues: readonly HostContentIssue[];
+}
+
 /**
  * 宿主原语的零逻辑透传（服务键 `kernel.launcher` / 平台桥 `PlatformBridge.launcher`）。
  *
@@ -1756,6 +1875,69 @@ export interface LauncherHostBridge {
   taskList(): Promise<readonly LauncherTask[]>;
   /** `launcher_task_cancel`（只取消可取消任务；回滚由任务自身完成） */
   taskCancel(taskId: string): Promise<void>;
+
+  /* ---- 内容包（`launcher_content_*` 七条，全 P1：缺席 = 该宿主没有这组） ----
+   *
+   * 解包、暂存、写盘、备份、回滚、ownership 落盘**全在宿主**；消费方只裁决与记账。
+   * 方法缺席时透传层给一句人话（照 `logExport` 的同族口径），**不降级、不造假数据**。
+   */
+
+  /** `launcher_content_list`：宿主读自己落盘的 `state.json` / `ownership.json` */
+  contentList?(instanceId: string): Promise<readonly InstalledContent[]>;
+  /**
+   * `launcher_content_plan`：解到**实例暂存**并出计划，**不碰游戏根**。
+   *
+   * 第三参只承载逐调用的限额档（`limits` 缺省 = 宿主那一档）；消费方也从契约常量取值，
+   * 宿主只许收紧、不许另立一套默认值。
+   */
+  contentPlan?(
+    instanceId: string,
+    archivePath: string,
+    opts?: InstallPlanOptions,
+  ): Promise<HostContentPlan>;
+  /** `launcher_content_apply`：两阶段的第二半；`planId` 一次性消费 */
+  contentApply?(planId: string, resolutions?: readonly ConflictResolution[]): Promise<LauncherTask>;
+  /**
+   * `launcher_content_uninstall`：`files` = 消费方算出的「本包独占」ownership 快照
+   * （可缺省；宿主仍以 `ownership.json` 复核——快照是纵深防御，不是唯一凭据）。
+   */
+  contentUninstall?(
+    instanceId: string,
+    packId: string,
+    files?: readonly ContentFileRef[],
+  ): Promise<LauncherTask>;
+  /** `launcher_content_set_enabled`（停游戏由消费方先做，§10.3） */
+  contentSetEnabled?(instanceId: string, packId: string, enabled: boolean): Promise<LauncherTask>;
+  /** `launcher_content_set_order`（只接受已安装 id 的排列） */
+  contentSetOrder?(instanceId: string, packIds: readonly string[]): Promise<void>;
+  /** `launcher_content_diagnose`（只读；码表见 `HostContentIssueCode`） */
+  contentDiagnose?(instanceId: string): Promise<HostContentDiagnosis>;
+
+  /* ---- 存档（`launcher_save_*` 八条，全 P1：缺席 = 该宿主没有这组） ----
+   *
+   * 写落点只有三处：实例备份目录（宿主现算）、实例内 saveRoot（copy）、
+   * 已授权的 saveRoot（shared，approvals.json）。**没有任何「目标路径」参数**。
+   */
+
+  /** `launcher_save_list`：只读 saveRoots（含逐根授权读数，不是裸 `SaveEntry[]`） */
+  saveList?(instanceId: string): Promise<HostSaveListing>;
+  /** `launcher_save_backups`：实例备份目录清单 */
+  saveBackups?(instanceId: string): Promise<readonly SaveBackup[]>;
+  /** `launcher_save_backup`：只写实例备份目录；返回终态任务（`result.backupId`） */
+  saveBackup?(instanceId: string, req: SaveBackupRequest): Promise<LauncherTask>;
+  /** `launcher_save_restore`：解包 → 校验 → 逐文件写临时 + rename；返回终态任务 */
+  saveRestore?(instanceId: string, backupId: string, opts?: RestoreOptions): Promise<LauncherTask>;
+  /** `launcher_save_delete_backup`：只删实例备份目录内的那一份 */
+  saveDeleteBackup?(instanceId: string, backupId: string): Promise<void>;
+  /** `launcher_save_import`：解到暂存并预检；**不写实例** */
+  saveImport?(instanceId: string, archivePath: string): Promise<HostSaveImportPlan>;
+  /** `launcher_save_apply_import`：确认后落盘；返回终态任务 */
+  saveApplyImport?(
+    planId: string,
+    resolutions?: readonly ConflictResolution[],
+  ): Promise<LauncherTask>;
+  /** `launcher_save_export`：原生保存对话框 + 写盘同命令；返回用户选的落点或 `null` */
+  saveExport?(instanceId: string, req: SaveExportRequest): Promise<string | null>;
 
   /* ---- 事件（§7.3） ---- */
 
