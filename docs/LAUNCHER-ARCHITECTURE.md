@@ -98,7 +98,7 @@
 | `sav-parser` / `state-replay` | 存档列表的摘要、快照回放直接复用（服务键 `snapshot.source` / `state.replay`），不重写 | 零改动 |
 | ERB 解析器（服务键 `erb.parser`）/ 库包 | adapter 的 `analyzeFunctions` 经**服务键注入**或依赖库包（`@kojo/kojo-core` / `packages/erb-syntax-tree`）产出函数定义；启动器不新增第二套解析 | 零改动（消费侧新增） |
 | `WorkspaceService` | 插件项目 = 工作区项目（`meta.kind='game-plugin'`）+ 一个制品；产物落项目 `build/`，安装仍走插件管线 | 零改动（只新增 meta 约定） |
-| `zip.ts::buildZip` | 插件包构建的**确定性打包**直接复用（`mtimeMs` 恒固定、DOS 时间 1980 起算、同内容两次逐字节相同）；生产消费方已是 `kojo-project-kit/package-actions.ts` | 零改动（消费侧新增） |
+| `zip.ts::buildZip` | 插件包构建的**打包实现**直接复用；但它**自己不排序**、时间取 `opts.date`（缺省 `Date.now()`）⇒ 确定性由消费侧「先按 posix 路径排序 + 传固定 `date`」保证；生产消费方已是 `kojo-project-kit/package-actions.ts` | 零改动（消费侧新增） |
 | `plugin-api/erb.ts::ErbIndex` | 函数级索引（`byName: Map<normalizedName, ErbFunctionRef[]>`，含 `filePath` + `startLine`）；冲突比对与重名诊断共用这一份 | 零改动 |
 | `convention-linter` 的 `erb.duplicate-function` + adapter `conventionPolicy` | 「有意重复」的判据（真盘上 eraSQC 有 190 处逐角色重复、eratohoK 仅 2 处）直接复用，启动器不另立宽容名单 | 零改动 |
 | `file-history` / `ops-history`（`kernel.ops`，契约 `plugin-api/journal.ts`） | 内容包/插件覆盖前的备份、撤销记录可复用同一套思路 | 只读参考 |
@@ -2108,15 +2108,16 @@ adapter 应不提供 `pluginRules`（或显式声明不支持），启动器显�
 [5] 逐文件算 sha256 / size（宿主流式哈希；不整包读进 JS 内存）
 [6] 生成 pack.json（ContentPackManifest：kind='plugin'、files[]、entrypoints 换算为 ContentFileRef）
 [7] 写 pack.json 到 build/staging/（报告最后写，避免失败时留下指向不存在 ZIP 的报告）
-[8] 确定性打包：`zip.ts::buildZip(entries, { contract: 'extractable' })`
-    （路径排序 + `mtimeMs` 固定 + DOS 时间 1980 起算 + 压缩级别固定）
+[8] 确定性打包：**先按 posix 路径排序**，再 `zip.ts::buildZip(entries, { contract: 'extractable', date: 固定值 })`
+    （时间统一取固定 `date`，缺省会被夹到 DOS 1980；压缩级别固定）
     → build/{pluginId}-{version}.zip，写盘走内核 io 写闸
 [9] 写 build/{buildId}.json（pack.json + zip 哈希 + 源指纹 + 未打包文件 + 警告）
 [10] 返回 PluginBuildResult（zip 绝对路径 / 字节 / zip 自身 sha256 / 警告）
 ```
 
-- **确定性**：`buildZip` 已按「条目按 posix 路径排序 + `mtimeMs` 恒固定（DOS 时间 1980 起算）
-  + 压缩参数固定」实现，同一份源两次构建得到**逐字节相同**的 ZIP（`zip-roundtrip.test.ts` 钉住）。
+- **确定性**：`buildZip` **只按给定顺序落盘**、时间取 `opts.date`（缺省 `Date.now()`，更早会被夹到
+  DOS 1980）⇒ 确定性由**消费侧**保证：先按 posix 路径排序、传固定 `date`、压缩参数固定。
+  `zip-roundtrip.test.ts` 钉的是往返与共享表，**不替你排序**。
   `buildId = sha256(pack.json 规范化文本 + 逐文件摘要)`，与构建时间无关；时间只进报告的 `builtAt`。
 - **原子落盘**：ZIP 字节在内存里一次成型，经内核 `io.writeBytes` 原子写（先临时再 rename，
   与 `writeText` 同款时序）；失败不留半截包。`build/staging/`（`pack.json` 暂存）只在构建期
