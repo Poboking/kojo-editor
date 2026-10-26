@@ -123,8 +123,10 @@ export interface HostPluginPlan extends HostContentPlan {
 
 /**
  * 本层用到的两条宿主命令（其余走 `ContentManager`，见文件头）。
- * `LauncherHostBridge` 的声明里还没有这两条（§7.2 把插件排在 `launcher_content_*` 上，
- * 形状是 `ContentHostCommands`），故在调用点按本接口探测——缺席即如实拒绝。
+ *
+ * 这两条在契约 `LauncherHostBridge` 上是**可选**的（§7.4 的 P1），本接口只是把它们收成
+ * 非可选供调用点探测；与契约的唯一差别是 `contentPlan` 的返回多一层插件暂存视图
+ * （`HostPluginPlan.staging`，宿主只对插件包报），所以仍是本包自己的窄化形状——缺席即如实拒绝。
  */
 export interface PluginHostCommands {
   contentPlan(
