@@ -128,8 +128,8 @@ const THEMES = captureMergedThemes();
 
 /**
  * 本文件量的是**六套**主题（2026-10-27 经典编辑器色批的 one-dark / rose-pine / synthwave84
- * 也一并纳入——它们同样是 46 条规则：11 词法 + 15 糖 + 5 语义 + 15 的 2.0 规则，
- * 只是装配走"一张 46 键表"而不是四张分表）。加档时这张表要与 `ui/theme-pref.ts` 的
+ * 也一并纳入——它们同样是 48 条规则：12 词法 + 15 糖 + 5 语义 + 16 的 2.0 规则，
+ * 只是装配走"一张 48 键表"而不是四张分表）。加档时这张表要与 `ui/theme-pref.ts` 的
  * `THEME_IDS` 手动同步——它是**Monaco 侧 id**，与 pref 名不同形，故不直接 import。
  */
 const THEME_IDS = [

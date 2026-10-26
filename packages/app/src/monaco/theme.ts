@@ -29,8 +29,8 @@ import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
  * ## 两代装配路并存（2026-10-27 批）
  * 前三套（dark/light/mint-dark）走"四张分表"（BASE/SUGAR/SEMANTIC/2.0），它们各自的演进史
  * 与逐档判据注释都留在原地、一格未动；后三套（one-dark/rose-pine/synthwave84）走
- * "一张 46 键表 + 部件色种子生成器"，理由与判据见本文件下半段那节的表头。
- * 两条路的产物形状完全相同（46 条规则 + 91 键部件色），由同一道闸量。
+ * "一张 48 键表 + 部件色种子生成器"，理由与判据见本文件下半段那节的表头。
+ * 两条路的产物形状完全相同（48 条规则 + 91 键部件色），由同一道闸量。
  *
  * ## 取色口径
  * - **dark**：沿用既有 `kojo-dark` 的语法色（ERB 基线 + 糖 + 语义），底色从 vs-dark 的
@@ -689,20 +689,21 @@ export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
  * 三套新主题走**另一条装配路**，与上面三套并存（既有三套一格未动，它们的同引用断言、
  * 三分法调色板、逐档注释全部保持原样）。
  *
- * 为什么新开一条：既有三套把 46 档拆成 BASE（11）/ SUGAR（15）/ SEMANTIC（5）/ 2.0（15）
+ * 为什么新开一条：既有三套把 48 档拆成 BASE（12）/ SUGAR（15）/ SEMANTIC（5）/ 2.0（16）
  * 四张表，是因为它们的演进史是「先有词法、后补糖、再补语义、最后并 2.0」——四张表各自
- * 带着自己的判据注释。新主题没有这段历史，**一张 46 键的表反而更好核**：一屏能看全
+ * 带着自己的判据注释。新主题没有这段历史，**一张 48 键的表反而更好核**：一屏能看全
  * "这套主题到底给了几种色"，而 `retint()` 只按 token 名取值、四个来源的 token 名两两不
  * 重叠（`sugar.*` / `kojo2.*` / `function` 族 / 裸词法名），所以单表完全够用。
  *
  * 取色纪律与既有三套**逐条相同**（判据由 `theme-color-gates.test.ts` 对 `THEME_IDS` 全量跑）：
  * 每条规则对 `editor.background` ≥ 4.5、主题内任意两枚不同前景 CIE76 ΔE ≥ 12、
  * `operator` 住在结构族（可读 / 弱于正文 / 彩度低于关键字 / 对全部基线档 ΔE ≥ 12）、
- * 跨语言同义档五组逐字同色。三套的实算读数写在各自表头。
+ * 跨语言同义档五组逐字同色、第三色档（`support.type` 与 `kojo2.type`）逐字同色。
+ * 三套的实算读数写在各自表头。
  */
 type RulePalette = Readonly<Record<string, string>>;
 
-/** 单表 → 46 条规则（四个来源的 token 名互不重叠，故一张表喂四次） */
+/** 单表 → 48 条规则（四个来源的 token 名互不重叠，故一张表喂四次） */
 function rulesFromOneTable(palette: RulePalette): Monaco.editor.ITokenThemeRule[] {
   return [
     ...rulesFromPalette(BASE_RULE_SPECS, palette),
@@ -733,7 +734,7 @@ function rulesFromOneTable(palette: RulePalette): Monaco.editor.ITokenThemeRule[
  *   近邻：锚点取亮粉 `ff5ec7`、声明取紫灰 `a194c9`、旁白取函数蓝、说话人取黄。
  *   独立色因此从 24 枚收到 15 枚。
  *
- * 实算（底 `#282c34`）：全部 46 档 ≥ 4.72；独立色 15 枚，最紧一对 `56b6c2 ↔ 61afce`
+ * 实算（底 `#282c34`）：全部 48 档 ≥ 4.72；独立色 16 枚，最紧一对 `56b6c2 ↔ 61afce`
  * ΔE 12.6（这一对是既有三套就一直守着的"系统函数 vs 函数"微差，不是本批新造）。
  */
 const ONE_DARK_PALETTE: RulePalette = {
@@ -741,6 +742,10 @@ const ONE_DARK_PALETTE: RulePalette = {
   keyword: 'c678dd',
   'keyword.preprocessor': 'e5c07b',
   'entity.name.function': '61afef',
+  // 类型 / 结构名（第三色）：**直接沿用缺省 dark 那一枚 `b3bd47`**，不另调。
+  // 本盘与 `DARK_BASE_PALETTE` 本来就是同源色（见上），"类型"这一档跟着同源才不会
+  // 在切档时自己变色；而底从 #1e2227 抬到 #282c34 后它仍有 6.86，余量比 dark 那档还大。
+  'support.type': 'b3bd47',
   variable: 'e8838c',
   string: '98c379',
   number: 'd19a66',
@@ -786,6 +791,7 @@ const ONE_DARK_PALETTE: RulePalette = {
   'kojo2.number': 'd19a66',
   'kojo2.number.hex': 'd19a66',
   'kojo2.operator': '56b6c2',
+  'kojo2.type': 'b3bd47',
 };
 
 /**
@@ -799,16 +805,22 @@ const ONE_DARK_PALETTE: RulePalette = {
  * 留下来的是它真正的身份：`iris #c4a7e7` 关键字、`foam #9ccfd8` 函数/标签、
  * `gold #f6c177` 字符串与数字、`rose #ebbcba` 变量与台词、`love #eb6f92` 常量与警示。
  * 底够黑（L* 8.5），所以这套是三套新主题里对比度余量最大的：最弱 `#908caa` 5.48、
- * 独立色 9 枚、最紧一对 ΔE 19.6 —— 不需要任何额外提亮就整块过闸。
+ * 独立色 10 枚、最紧一对 ΔE 19.6 —— 不需要任何额外提亮就整块过闸。
  *
- * `keyword.raw` 是本盘唯一"外借"色：Rosé Pine 没有暖灰（官方原生直通直接用正文色），
- * 取 `9d9489`（暖灰）把"不解释的原文"与注释、正文两条灰线都拉开。
+ * 两枚"外借"色（Rosé Pine 官方九枚里没有对应档）：
+ * - `keyword.raw` 取 `9d9489`（暖灰）——官方把原生直通直接用正文色，会与 `identifier`
+ *   同色；这枚把"不解释的原文"与注释、正文两条灰线都拉开。
+ * - `support.type` 取灰橄榄 `94a06e`——**不取上游那枚满彩的 `96b458`**：本盘九枚的彩度
+ *   中位只有 18（最艳的 `eb6f92` 也才 51），塞一枚 C50 的亮绿橄榄会像异物。`94a06e` 的
+ *   C28 落在盘内典型区间，对底 6.32（与本盘最弱档同水平），对最近的一枚暖灰 `9d9489`
+ *   ΔE 22.8。色相仍守在"黄绿/橄榄"这一族——与另五套主题同一支，换档时"类型"不会跳色相。
  */
 const ROSE_PINE_PALETTE: RulePalette = {
   comment: '908caa',
   keyword: 'c4a7e7',
   'keyword.preprocessor': 'f6c177',
   'entity.name.function': '9ccfd8',
+  'support.type': '94a06e',
   variable: 'ebbcba',
   string: 'f6c177',
   number: 'eb6f92',
@@ -854,6 +866,7 @@ const ROSE_PINE_PALETTE: RulePalette = {
   'kojo2.number': 'eb6f92',
   'kojo2.number.hex': 'eb6f92',
   'kojo2.operator': '5fa0b8',
+  'kojo2.type': '94a06e',
 };
 
 /**
@@ -864,24 +877,29 @@ const ROSE_PINE_PALETTE: RulePalette = {
  * 仍有 **4.66:1**，而它们的色相跨度大到两两 ΔE 最小也有 13.6。以往"霓虹主题必然
  * 有一半过不了 AA"的直觉，在这个底上不成立 —— 前提是底真的够暗（比 App 缺省 dark 还暗半档）。
  *
- * 十枚独立色与它们的语义（顺序＝官方 tokenColors 的主干）：
+ * 十一枚独立色与它们的语义（顺序＝官方 tokenColors 的主干，末一枚是本盘自造）：
  * `fede5d` 黄=关键字 / `36f9f6` 青=函数、标签、旁白、字符串转义 / `ff7edb` 粉=变量、代词、
  * 锚点、提示 / `ff8b39` 橙=字符串、插值、说话人 / `f97e72` 珊瑚=数字、预处理、参数 /
  * `72f1b8` 薄荷=台词、名字层、糖运算符 / `b893ce` 紫=结构标点+声明（operator 那一族）/
- * `848bbd` 蓝灰=注释 / `eae6f5` 正文 / `a09ab8` 冷灰紫=原生直通。
+ * `848bbd` 蓝灰=注释 / `eae6f5` 正文 / `a09ab8` 冷灰紫=原生直通 / `a8cf4e` 酸柠檬=类型。
  *
- * 两处**不是官方原值**的地方：
+ * 三处**不是官方原值**的地方：
  * - `keyword.raw`（原生直通）`a09ab8`：官方没有对应档（它把围栏体当正文），这是本盘自造，
  *   取"冷灰紫"是为了同时离开注释 `848bbd`（ΔE 13.6）与正文；
  * - `operator` 用 `b893ce` 而不是官方的黄 `fede5d`：官方把运算符与关键字同色，而本仓
  *   判据要求运算符**彩度低于关键字**（标点是骨架不是内容）。紫色在本盘是现成的结构族
- *   （官方 `gitDecoration.modified` 就是它），拿来做标点既守判据又不出戏。
+ *   （官方 `gitDecoration.modified` 就是它），拿来做标点既守判据又不出戏；
+ * - `support.type` 取酸柠檬 `a8cf4e`：官方没有类型档。这一档要落在黄绿那条窄带上
+ *   （另五套主题都在这一族，换档时"类型"不该跳色相），而本盘的黄已被关键字占死，
+ *   于是往绿侧偏 20° —— 对关键字黄 ΔE 31.4（读不成"第二种黄"）、对台词薄荷 45.2、
+ *   对底 8.51；C57 与本盘彩度中位 51 同档，霓虹盘里不显脏。
  */
 const SYNTHWAVE84_PALETTE: RulePalette = {
   comment: '848bbd',
   keyword: 'fede5d',
   'keyword.preprocessor': 'f97e72',
   'entity.name.function': '36f9f6',
+  'support.type': 'a8cf4e',
   variable: 'ff7edb',
   string: 'ff8b39',
   number: 'f97e72',
@@ -927,6 +945,7 @@ const SYNTHWAVE84_PALETTE: RulePalette = {
   'kojo2.number': 'f97e72',
   'kojo2.number.hex': 'f97e72',
   'kojo2.operator': 'b893ce',
+  'kojo2.type': 'a8cf4e',
 };
 
 /**
