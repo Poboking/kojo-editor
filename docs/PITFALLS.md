@@ -33,6 +33,9 @@
 | Edit 偶发"声称成功未落盘"；同文件并行 Edit 必 EBUSY | 关键修改后读回验证；**同一文件多次 Edit 必须串行** |
 | vitest 把 `console.log` 首行并进用例头行 ⇒ grep 水位行漏读 | 探针输出重定向到文件再 grep，或关键数字放非首行 |
 | 模板字符串里写 Markdown 反引号会截断 TS 模板串 | 用「」代替 |
+| **`audit:language` 的 M3 随主题档数线性涨**：每加一档主题必多写 46 个 `sugar.*` / `kojo2.*` 键名（三档＝ +87 行，163 → 250），闸当场红 | 这是**正当增长**、不是遗留回潮（`theme.ts` 就是 token 名的法定落点）。`--update-baseline` 重钉后**必须 `git diff` 逐行核**：只该看到 `theme.ts` 那一格与 `total` 一行；若出现别的文件，说明顺手把别处的漂移一起洗白了 |
+| **`repeat(auto-fit, minmax(132px, 1fr))` 在「卡片数 = 列数 × 1.5」时留孤儿**：六张主题卡在设置页实际宽度下排成 4 列 ⇒ 「4 + 2」，第二行右边空两格，看着像掉了一张 | 定长卡片的组**写死列数**（3 列 ⇒ 6 张正好 3 × 2，且原三张从「3 + 1 空格」变成整行占满）；折行判据用 `@container` 不用 `@media`——设置面板比窗口窄得多，窗口 1200px 时面板可能只有 430px，媒体查询根本不触发 |
+| 容器查询前要给容器写 `container-type: inline-size`（漏了 `@container` 静默不生效、不报错） | 加档/改折行点后**量出来**：`getComputedStyle(cards).gridTemplateColumns` 数一下到底是几列，别靠眼睛 |
 | cargo 输出带 ANSI 色码 | 正则匹配前先 stripAnsi |
 | 同工作区并行线 WIP 让集成冒烟断言误红（如 ruleCount 5→6） | 先 `audit` 粗判；只提交自己边界内文件；别用 `git stash` 动共享树 |
 | **rebase 判为"自动合并"的文件可能内嵌冲突标记**；`git add -A` 会把它提交进历史 | 逐文件 add + `git diff --cached` 过目；提交后扫 `^(<<<<<<<\|=======\|>>>>>>>)( \|$)`（带后缀才算真标记） |
