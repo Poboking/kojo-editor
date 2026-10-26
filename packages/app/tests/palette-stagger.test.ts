@@ -49,12 +49,13 @@ const DUR1_MS = tokenMs('--dur-1');
 const classWeight = (selector: string): number =>
   (selector.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+(?:\([^)]*\))?/g) ?? []).length;
 
-/** 取某条规则的正文（只在压平后的源码上找；本仓判据一贯口径） */
+/** 取某条规则的正文（只在压平后的源码上找；本仓判据一贯口径）。
+ *  找不到时**返回空串而不是抛**：本文件在 `describe` 体里就会取规则，一抛就是整文件
+ *  collection error（"no tests"），读数的人分不清是判据坏了还是实现坏了——
+ *  让每条断言自己红，才说得出"哪一条被谁拆了"。 */
 const ruleBody = (selector: string): string => {
   const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp(`${esc}\\s*\\{([^}]*)\\}`).exec(flatPalette);
-  expect(m, `palette.css 里找不到规则：${selector}`).not.toBeNull();
-  return m![1]!;
+  return new RegExp(`${esc}\\s*\\{([^}]*)\\}`).exec(flatPalette)?.[1] ?? '';
 };
 
 /* ---------------- 渲染面（与 palette-groups 同一份最小命令表） ---------------- */
@@ -136,7 +137,9 @@ describe('② 上限策略：阶梯在第 5 个封顶（首屏读得出内容，
   });
 
   it('封顶台阶 × 节拍 + 入场时长 ≤ 320ms：最晚一行也在首屏预算内到齐', () => {
-    const budgetMs = Number(plateau![1]) * STAGGER_MS + DUR1_MS;
+    // 阶梯整条不见了 = 按"排到最深"处理（判据只增不减，宁可红在上一条）
+    const steps = Number(plateau?.[1] ?? Number.MAX_SAFE_INTEGER);
+    const budgetMs = steps * STAGGER_MS + DUR1_MS;
     // 机器默认排到 ×8 = 360ms（欢迎卡那种大块才需要），命令面板是"打开即读"的键盘面
     expect(budgetMs, `最晚一行要 ${budgetMs}ms 才到齐（> 首屏预算）`).toBeLessThanOrEqual(320);
   });
