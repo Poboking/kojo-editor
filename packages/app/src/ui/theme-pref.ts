@@ -176,13 +176,137 @@ function notifyThemePref(): void {
   for (const listener of listeners) listener();
 }
 
+/* ------------------------------ 主题切换揭示（D4） ------------------------------ */
+
+/**
+ * 揭示的原点（视口坐标 px，左上角为 0,0）。缺省由本模块自己找：当前聚焦元素的中心
+ * → 视口中心。调用方**想指定**（比如从菜单项触发、想从菜单那一点散开）才需要传。
+ */
+export interface ThemeRevealOrigin {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * 揭示用的**运行期几何量**：切换前写到 `:root` 的行内变量，由 `motion-visual.css` 的
+ * `@keyframes theme-reveal` 消费。它们不是设计 token（不进 tokens.css、不参与主题翻值），
+ * 每次切换现算现写、动画结束即撤，理由见本段末尾。
+ */
+const REVEAL_X = '--theme-reveal-x';
+const REVEAL_Y = '--theme-reveal-y';
+const REVEAL_R = '--theme-reveal-r';
+
+/** 只为 `startViewTransition` 立的最小结构类型（DOM lib 版本不一定带它；不引 any） */
+interface ViewTransitionHandle {
+  readonly finished?: Promise<void>;
+}
+interface ViewTransitionCapableDocument {
+  startViewTransition?: (update: () => void) => ViewTransitionHandle;
+}
+
+/**
+ * 当前能不能做揭示。四条硬条件，任一不满足就**直接硬切**（与加分之前逐字一致）：
+ * ① 有 document（node 单测环境没有）；
+ * ② 内核认 `startViewTransition`（WebView2 / 老 Edge 的旧档、Safari 17 之前都没有）；
+ * ③ 应用内「减弱动效」没开（`data-motion='reduced'`，真源 `motion-pref.ts`）；
+ * ④ 系统档没要求减弱（`prefers-reduced-motion: reduce`）——系统档在不少 Windows 机器上
+ *    是假阳性（见 styles.css 同段注记），但主题揭示是**纯装饰**，宁可少放一次动画。
+ * 读 matchMedia 抛错按"允许"走：这里没有靠动画才能成立的事实，不该因抛错丢功能。
+ */
+function revealAllowed(): boolean {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return false;
+  const doc = document as Document & ViewTransitionCapableDocument;
+  if (typeof doc.startViewTransition !== 'function') return false;
+  if (document.documentElement.getAttribute('data-motion') === 'reduced') return false;
+  try {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true) return false;
+  } catch {
+    /* 读不到系统档：按允许处理 */
+  }
+  return true;
+}
+
+/**
+ * 默认原点 = 当前聚焦元素的中心。
+ *
+ * 为什么不是"记住最后一次 pointerdown"：那需要在模块加载期挂一个全局监听（副作用藏在
+ * import 里，单测与首屏图都要为它让路）。而**点卡换主题**这条主路径上，被点的
+ * `<button class="theme-card">` 在 click 派发前就已经拿到焦点（Chromium/WebView2 的
+ * mousedown 默认行为），于是 `activeElement` 天然就是"用户刚指的那一点"。
+ * 键盘触发（命令面板 / Tab+Enter）没有鼠标点，退到视口中心由圆环居中散开，同样成立。
+ */
+function focusedElementCenter(): ThemeRevealOrigin | null {
+  try {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  } catch {
+    return null;
+  }
+}
+
+/** 圆环要盖满视口：取原点到最远那个角的距离（四角同算，滚动/窗口尺寸都不必另判） */
+function revealRadius(x: number, y: number): number {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  return Math.hypot(Math.max(x, w - x), Math.max(y, h - y));
+}
+
+/**
+ * 把"写 data-theme"这一步包进一次 View Transition，并在切换前把圆心与半径写到根元素上。
+ *
+ * 调用序（与逐字硬切的唯一差别就在这一层）：
+ *   ① 写三个几何变量 → ② `startViewTransition(update)` → ③ update 里同步写 `data-theme`
+ *   与通知订阅者（主题是**同步**改属性生效的，所以快照拍到的一定是新画面）
+ *   → ④ 动画结束后把变量撤掉（只在值仍是本次写的那一份时撤，防止连点两次时误清新的）。
+ *
+ * 返回值只用于测试与调试：`true` = 走了揭示，`false` = 硬切。
+ */
+function applyThemeWithReveal(choice: ThemeChoice, origin?: ThemeRevealOrigin): boolean {
+  const root = typeof document === 'undefined' ? null : document.documentElement;
+  const concrete = resolveThemeChoice(normalizeChoice(choice), systemPrefersDark());
+  // 点当前那一档 / 环境不支持 / 用户要静：一律走原路，零新增分支
+  if (!root || root.getAttribute('data-theme') === concrete || !revealAllowed()) {
+    applyThemePref(choice);
+    notifyThemePref();
+    return false;
+  }
+  const c = origin ?? focusedElementCenter() ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  const radius = revealRadius(c.x, c.y);
+  const px = `${Math.round(c.x)}px`;
+  const py = `${Math.round(c.y)}px`;
+  const pr = `${Math.round(radius)}px`;
+  root.style.setProperty(REVEAL_X, px);
+  root.style.setProperty(REVEAL_Y, py);
+  root.style.setProperty(REVEAL_R, pr);
+  const doc = document as Document & ViewTransitionCapableDocument;
+  const clear = (): void => {
+    if (root.style.getPropertyValue(REVEAL_X) !== px) return;
+    root.style.removeProperty(REVEAL_X);
+    root.style.removeProperty(REVEAL_Y);
+    root.style.removeProperty(REVEAL_R);
+  };
+  const vt = doc.startViewTransition!(() => {
+    applyThemePref(choice);
+    notifyThemePref();
+  });
+  // `finished` 在被打断（连点第二次）时会 reject；两种结局都要收尾
+  if (vt.finished) void vt.finished.then(clear, clear);
+  else clear();
+  return true;
+}
+
 /**
  * 写选择（先归一再存）+ 当场生效 + 维护系统监听 + 通知订阅者。
  * - 选具体档：主键与副键（手选备份）一并写成该档——点卡即手选。
  * - 选 `system`：主键写 'system'；副键**只在还没备份过时**补一份当前生效档，
  *   已有手选档（比如薄荷）不许被覆盖——那正是"关闭时沿用用户手选"要还原回去的值。
+ * - `origin` 可选：只有"要从某一点散开"的调用方才传（见 `ThemeRevealOrigin`）；
+ *   不传 = 从被点元素/视口中心散开，**原有调用方一个字都不用改**。
  */
-export function setThemeChoice(choice: ThemeChoice): void {
+export function setThemeChoice(choice: ThemeChoice, origin?: ThemeRevealOrigin): void {
   const c = normalizeChoice(choice);
   if (c === 'system') {
     if (readKey(THEME_MANUAL_KEY) === null) {
@@ -192,9 +316,8 @@ export function setThemeChoice(choice: ThemeChoice): void {
     writeKey(THEME_MANUAL_KEY, c);
   }
   writeKey(THEME_KEY, c);
-  applyThemePref(c);
+  applyThemeWithReveal(c, origin);
   syncSystemTracking();
-  notifyThemePref();
 }
 
 /** 【旧入口·保留】写具体档，等价 `setThemeChoice(t)` */

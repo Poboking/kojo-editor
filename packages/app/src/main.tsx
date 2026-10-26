@@ -44,6 +44,9 @@ import './motion-editor.css';
 // 动效收口切片（1026 动效批）：toast 退场 / 标签脏点与保存微光 / 效果库接线 / 合成层提示。
 // 每条规则都靠复合选择器（`html:root` / 双类）压过既有面，不靠位次。
 import './motion-exit.css';
+// 动效切片（2026-10-26 动效批 D4）：主题切换的圆形揭示（View Transition + clip-path）。
+// 它服务的是换主题这一下，两个相位（欢迎 / 项目）都可能发生，所以不能进项目态懒档。
+import './motion-visual.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链
