@@ -41,13 +41,11 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：模板 scaffold / `buildZip` 确定性打包 / `launcher_project_hash` 摘要 / 提取 / drift（复用 `kernel.workspaces`，不造第二套项目存储） | 同内容两次打包逐字节相同；源码/产物分离；三条写边界 | 进行中 · 认领：qoder-l7b 2026-10-26 |
-| LAUNCH-L10 | 视图「建实例 → 信任 → 启动」：原生目录对话框选根、候选卡片（证据/推荐位）、copy 任务进度、`trustExecutable` → `start` 次序 | 未信任走"信任并启动"；原生框取消不得启动；错误码人话映射 | 进行中 · 认领：qoder-l10 2026-10-26 |
-| LAUNCH-ADAPTER-LAZY | 回收 adapter 启动面进图成本：同步字段抽小常量表、`probe`/`buildProfile` 留懒边 | ps10 文件数回 194 或 KB 明显下降；29 例单测 + 4 例真盘守卫零放宽；反向闸防写回 | 进行中 · 认领：qoder-al 2026-10-26 |
-| LAUNCH-L3D | 桌面壳桥补 L3b 的 16 条命令（`content_*` / `save_*` / `pick_archive`），按 L3b 给的签名表逐条接 | 命令名/载荷键逐字断言；`save_list` 的 `{entries,roots,warnings}` 与 TS 侧 `HostSaveListing` 对齐 | 待派（L3b 已落） |
-| LAUNCH-LOCK | 内容包与插件各自持一把单飞锁 ⇒ 合并成每实例一把（L7a 报告的第 7 条缺口） | 同一实例并发 `content.apply` + `plugins.apply` 只许一发通过 | 待派（core） |
-| LAUNCH-GATE | 闸与通道复核：`smoke-tauri-ipc` / `debug-cli shell` 的 launcher 判据插入点与通道 rc 实测 | 零生产码改动；读数逐字引用 | 待派 |
-| LAUNCH-L9 | 端到端联调（真壳）：建实例 → 信任 → 启动 → 装内容包 → 存档恢复，并把判据插进 `smoke-tauri-ipc` | 真壳读数（非 Web 调试宿）；失败路径逐条可见 | 待派（依赖 L3D/L10） |
+| LAUNCH-L1C | 契约收口（L3D 报的端到端断点）：内容/存档 16 条宿主形状进 `plugin-api` §7、内核透传补全、launcher-core 删掉局部重复定义 | 有 P1 方法的假桥装配后 `saves` / `content` 都是真实现；launcher-core 314 例零回退；ps10 不涨 | 进行中 · 认领：qoder-l1c 2026-10-26 |
+| LAUNCH-UI-CONTENT | 视图「内容包」面板：已装列表 / 两阶段安装（计划读数 + 冲突选择）/ 启停排序卸载 / 诊断四组 | 组件自取数、不碰原生对话框；纯函数 ≥16 例；开机图不涨 | 进行中 · 认领：qoder-uic 2026-10-26 |
+| LAUNCH-UI-SAVES | 视图「存档」面板：按根分组 / 备份 / 恢复（先自动备份）/ 导入预检 / 导出 | shared 未授权根明确拒绝、无"强行恢复"；纯函数 ≥16 例 | 进行中 · 认领：qoder-uis 2026-10-26 |
+| LAUNCH-UI-PLUGINS | 视图「游戏插件」面板：已装列表 / 风险与兼容徽标 / 信任 / 启停 / 顺序 / 冲突解决 / 源码项目入口 | 高风险未受信不得安装；函数级冲突按「预期重复」分档展示 | 待派（依赖 L1C 与 L7a/L7b） |
+| LAUNCH-L9 | 端到端联调（真壳）：隔离 appData 里种一个夹具实例（宿主现算哈希的信任记录）→ 启动 → 日志有行 → 停止 → 无孙进程；失败路径逐条可见 | 真壳读数（非 Web 调试宿）；不碰真游戏目录；`launcher-smoke` 的 5 件判据逐条落地 | 待派（依赖 L1C / L3D） |
 
 ## 在办 · 语言面统一（LAU · 2026-10-25，组长 krosama）
 

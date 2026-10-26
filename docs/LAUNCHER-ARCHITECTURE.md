@@ -1638,21 +1638,21 @@ export interface VerifyReport {
 | `launcher_runtime_verify` | `{ runtimeId }` | `RuntimeVerification` | P1 | 只读哈希 |
 | `launcher_runtime_remove` | `{ runtimeId }` | `void` | P1 | 只删托管运行时根 |
 | `launcher_content_list` | `{ instanceId }` | `InstalledContent[]` | P1 | — |
-| `launcher_content_plan` | `{ instanceId, archivePath }` | `ContentInstallPlan` | P1 | ZIP 四重守卫；解到实例暂存；不写实例 |
+| `launcher_content_plan` | `{ instanceId, archivePath, opts? }`（`opts.limits?` = 三枚限额，宿主按共享表夹顶） | `ContentInstallPlan` | P1 | ZIP 四重守卫；解到实例暂存；不写实例 |
 | `launcher_content_apply` | `{ planId, resolutions? }` | `LauncherTask` | P1 | 计划未过期；每实例单飞；全程可回滚 |
-| `launcher_content_uninstall` | `{ instanceId, packId }` | `LauncherTask` | P1 | 只删本包 ownership 记录的文件 |
+| `launcher_content_uninstall` | `{ instanceId, packId, files? }`（`files` 只作**筛选**，ownership 仍是权威） | `LauncherTask` | P1 | 只删本包 ownership 记录的文件 |
 | `launcher_content_set_enabled` | `{ instanceId, packId, enabled }` | `LauncherTask` | P1 | 先停游戏；应用/撤下同一事务 |
 | `launcher_content_set_order` | `{ instanceId, packIds }` | `void` | P1 | 只接受已安装 id 的排列 |
 | `launcher_content_diagnose` | `{ instanceId }` | `ContentDiagnosis` | P1 | 只读 |
 | `launcher_pick_write_root` | `{ instanceId, rootId }` | `string \| null` | P1 | 原生目录对话框 + **同命令登记** shared 写授权（存档 / 内容 / 插件共用） |
 | `launcher_pick_archive` | `{ title? }` | `string \| null` | P1 | 原生文件对话框；只选不读不写 |
 | `launcher_project_hash` | `{ projectDir, artifactDir, entries }` | `FileDigest[]` | P1 | `projectDir` 在宿主写允许域内；条目解析后不得逃逸 `artifactDir`；流式哈希（大二进制不整包读进 JS） |
-| `launcher_save_list` | `{ instanceId }` | `SaveEntry[]` | P1 | 只读 saveRoots |
+| `launcher_save_list` | `{ instanceId }` | `HostSaveListing`（`entries + roots{approved} + warnings?`） | P1 | 只读 saveRoots；逐根授权读数供 shared 写回门禁 |
 | `launcher_save_backups` | `{ instanceId }` | `SaveBackup[]` | P1 | — |
 | `launcher_save_backup` | `{ instanceId, req }` | `LauncherTask` | P1 | 写只落在实例备份目录 |
 | `launcher_save_restore` | `{ instanceId, backupId, opts? }` | `LauncherTask` | P1 | 先自动备份当前；shared 需目录授权 |
 | `launcher_save_delete_backup` | `{ instanceId, backupId }` | `void` | P1 | 只删实例备份目录内文件 |
-| `launcher_save_import` | `{ instanceId, archivePath }` | `SaveImportPlan` | P1 | ZIP 守卫；先解到暂存并预检 |
+| `launcher_save_import` | `{ instanceId, archivePath }` | `HostSaveImportPlan`（增补 `entryCount/totalBytes/expiresAt`） | P1 | ZIP 守卫；先解到暂存并预检 |
 | `launcher_save_apply_import` | `{ planId, resolutions? }` | `LauncherTask` | P1 | 同 restore 守卫 |
 | `launcher_save_export` | `{ instanceId, req }` | `string \| null` | P1 | 原生保存对话框 + 写盘同命令 |
 | `launcher_log_tail` | `{ instanceId, query? }` | `HostLogPage`（原始块，见 §7.4） | P0 | 读实例日志目录；上限截断 |
