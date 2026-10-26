@@ -177,7 +177,11 @@ export const FileRow = memo(function FileRow({ f, onOpenFile }: FileRowProps): R
   const prob = useRowProblems(f);
   return (
     <button
-      className={`tree-file ${active ? 'active' : ''} ${selected && !active ? 'multi-selected' : ''}`}
+      // class 串用 join 拼（空档不落盘）：`${x ? 'a' : ''}` 那种模板在尾部会留下空格，
+      // 而「高亮当前文件」那条计时用例按 `class="tree-file active"` 精确匹配串
+      className={['tree-file', active && 'active', selected && !active && 'multi-selected']
+        .filter(Boolean)
+        .join(' ')}
       aria-current={active ? 'true' : undefined}
       // 多选态给读屏 / 测试一个稳定挂点（不与 aria-current 的"当前项"语义抢位）
       data-multi-selected={selected ? 'true' : undefined}

@@ -102,7 +102,15 @@ const DirFileRow = memo(function DirFileRow(props: {
   const prob = useRowProblems(props.path);
   return (
     <button
-      className={`tree-file ${active ? 'active' : ''} ${selected && !active ? 'multi-selected' : ''} ${props.isErb ? '' : 'tree-extra-file'}`}
+      // 见 `file-tree-row.FileRow`：class 串用 join 拼，尾随空格会让精确串断言失配
+      className={[
+        'tree-file',
+        active && 'active',
+        selected && !active && 'multi-selected',
+        !props.isErb && 'tree-extra-file',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       aria-current={active ? 'true' : undefined}
       data-multi-selected={selected ? 'true' : undefined}
       title={props.isErb ? props.path : `${props.path}（附加文件，不在口上索引内）`}
