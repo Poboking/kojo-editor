@@ -15,18 +15,23 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
 } from 'react';
 import { isTauri } from '../bridge/invoke';
 import { Icon, type IconName } from './icons';
+import { registerIdentityBandSlot, useIdentityBandFilled } from './identity-band';
 import {
+  canStartWindowDragFrom,
   closeWindow,
   exitFullscreen,
   minimizeWindow,
+  prepareWindowDrag,
   subscribeWindowState,
   toggleMaximize,
+  type WindowDragStarter,
   type WindowState,
 } from './window-fullscreen';
 import '../window-chrome.css';
@@ -93,6 +98,17 @@ function runChromeAction(id: ChromeActionId): void {
 }
 
 /**
+ * 标题栏那串可读名（VIS-11 · D-8）：`windowTitleFor` 给的是 `<项目目录名> — kojo-editor`。
+ * 工具条并进身份带后，带里 `.tb-project` 已经把项目名报过一遍 ⇒ 这里只留**破折号后面**
+ * 那段产品名，同一行同一个名字不许出现两次；没有破折号（无项目）时原样返回。
+ * 纯函数、独立可测；`title` 悬停属性仍给完整那串（窗口标题三处同源的口径不动）。
+ */
+export function bandTitleOf(title: string): string {
+  const at = title.lastIndexOf(' — ');
+  return at < 0 ? title : title.slice(at + 3);
+}
+
+/**
  * 品牌记号（P3-4）：一枚极简「对话框 / 口上」气泡——纯内联 SVG（单 path，evenodd 挖三枚
  * 点），零图片资源、零依赖。形状走 `fill="currentColor"`，颜色档位由 CSS token 给
  * （`.window-chrome-mark` 上 `color: var(--accent)`），三主题自动跟随；欢迎页用同一形状的
@@ -126,6 +142,8 @@ export function WindowChrome(props: WindowChromeProps): ReactElement | null {
 
 export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps): ReactElement {
   const [state, setState] = useState<WindowState>({ fullscreen: false, maximized: false });
+  /** 工具条有没有并进本带（决定标题只报产品名还是报全串） */
+  const bandFilled = useIdentityBandFilled();
 
   useEffect(() => {
     let disposed = false;
@@ -155,6 +173,21 @@ export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps):
   }, [windowState]);
 
   /**
+   * 同步拖动发起器（照弹窗那条同一个口径）：`startDragging` 必须在 mousedown 调用栈里
+   * 同步发出，等一拍 await 就丢手势 ⇒ 挂载时预载，卸载后落到 no-op。
+   */
+  const dragStarterRef = useRef<WindowDragStarter>(() => {});
+  useEffect(() => {
+    let alive = true;
+    void prepareWindowDrag().then((starter) => {
+      if (alive) dragStarterRef.current = starter;
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /**
    * 双击整条栏 = 最大化 / 还原（与 VS Code 一致；全屏下由系统决定是否生效，
    * 失败只在 window-fullscreen 里 warn）。
    *
@@ -175,6 +208,19 @@ export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps):
 
   const actions = chromeActionsOf(state);
 
+  /**
+   * 插槽里的工具条也是"标题栏的一部分"：空白处按下要能拖窗（VIS-10 · D-1）。
+   * 拖动判定不自己写——复用弹窗那条 `canStartWindowDragFrom`，控件 / 滚动条 / 打开的
+   * 遮罩一律排除，两处的"什么算能拖"从此同一个口径。`detail === 2` 让给根上的
+   * 双击最大化，避免同一次按下既 startDragging 又 toggleMaximize。
+   */
+  const onBandMouseDown = useCallback((e: ReactMouseEvent<HTMLSpanElement>) => {
+    if (e.button !== 0 || e.detail === 2) return;
+    if (!canStartWindowDragFrom(e.target as HTMLElement, e.clientX, e.clientY)) return;
+    e.preventDefault();
+    dragStarterRef.current();
+  }, []);
+
   return (
     <div
       className="window-chrome"
@@ -187,8 +233,16 @@ export function WindowChromeFrame({ title = 'kojo-editor' }: WindowChromeProps):
         <ChromeBrandMark />
       </span>
       <span className="window-chrome-title" data-tauri-drag-region title={title}>
-        {title}
+        {bandFilled ? bandTitleOf(title) : title}
       </span>
+      {/* 身份带插槽（VIS-10）：真壳里 ShellLayout 把工具条 portal 进这里，
+          于是 36+36 两条横带并成一条 40px；浏览器 dev 没有本组件 ⇒ 工具条留在原位。 */}
+      <span
+        className="window-chrome-band"
+        data-identity-band=""
+        ref={registerIdentityBandSlot}
+        onMouseDown={onBandMouseDown}
+      />
       <div className="window-chrome-drag" data-tauri-drag-region />
       <div className="window-chrome-actions">
         {actions.map((action) => (
