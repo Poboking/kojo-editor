@@ -126,7 +126,20 @@ function captureMergedThemes(): Map<string, CapturedTheme> {
 
 const THEMES = captureMergedThemes();
 
-const THEME_IDS = ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const;
+/**
+ * 本文件量的是**六套**主题（2026-10-27 经典编辑器色批的 one-dark / rose-pine / synthwave84
+ * 也一并纳入——它们同样是 46 条规则：11 词法 + 15 糖 + 5 语义 + 15 的 2.0 规则，
+ * 只是装配走"一张 46 键表"而不是四张分表）。加档时这张表要与 `ui/theme-pref.ts` 的
+ * `THEME_IDS` 手动同步——它是**Monaco 侧 id**，与 pref 名不同形，故不直接 import。
+ */
+const THEME_IDS = [
+  'kojo-dark',
+  'kojo-light',
+  'kojo-mint-dark',
+  'kojo-one-dark',
+  'kojo-rose-pine',
+  'kojo-synthwave84',
+] as const;
 
 /** v1 基线 32 条（词法 12 + 糖 15 + 语义 5）；其余是 2.0 的 16 条
  * （2026-10-27 第三色批：词法基线 +`support.type`、2.0 +`kojo2.type`，两枚同色） */
@@ -280,6 +293,12 @@ describe('第三色档：v1 `support.type` 与 2.0 `kojo2.type` 每套主题逐�
 
 /* ============================== ④ 部件色同族同源 ============================== */
 
+/**
+ * 部件色同族同源只对**有 2.0 版本**的三族成立（`kojo2-theme.ts` 目前只注册三套，
+ * 与 v1 三套一一对应）。新三套（one-dark / rose-pine / synthwave84）没有 `kojo2-*` 孪生，
+ * 因此不在这张表里——它们的部件色由 `buildColors()` 统一生成（取值逻辑三套相同），
+ * 一致性由生成器保证，不需要这道"v1 与 2.0 逐键相等"的闸。
+ */
 const COLOR_FAMILIES: readonly {
   readonly v1: string;
   readonly k2: string;

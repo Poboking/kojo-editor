@@ -77,7 +77,7 @@
       }
     },
     "M3(旧token名)": {
-      "total": 164,
+      "total": 251,
       "files": {
         "packages/app/src/bootstrap.ts": 1,
         "packages/app/src/monaco/kojo-hover.ts": 2,
@@ -85,7 +85,7 @@
         "packages/app/src/monaco/kojo-theme-rules.ts": 30,
         "packages/app/src/monaco/kojo2-code-actions.ts": 1,
         "packages/app/src/monaco/kojo2-theme.ts": 1,
-        "packages/app/src/monaco/theme.ts": 28,
+        "packages/app/src/monaco/theme.ts": 115,
         "packages/app/src/monaco/tree-sitter/erb-tiers.ts": 2,
         "packages/app/src/monaco/tree-sitter/kojo2-assets.ts": 1,
         "packages/app/src/monaco/tree-sitter/types.ts": 15,

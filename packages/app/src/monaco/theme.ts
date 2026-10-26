@@ -20,17 +20,25 @@ import {
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 
 /**
- * Monaco 三套主题（2026-10-17 反馈 3：编辑器配色跟随主题）。
+ * Monaco 主题（2026-10-17 反馈 3：编辑器配色跟随主题；2026-10-27 经典编辑器色批扩到六套）。
  *
- * 主题 id 与 `ui/theme-pref.ts` 的三档**逐字对应**，但本模块不 import 那个 UI 模块——
+ * 主题 id 与 `ui/theme-pref.ts` 的六档**逐字对应**，但本模块不 import 那个 UI 模块——
  * monaco 层只认识自己的联合类型，避免 UI → monaco → UI 的反向依赖；两边联合类型相同
  * 由 `tests/monaco-theme.test.ts` 用 `THEME_IDS` 做一一映射断言钉住。
+ *
+ * ## 两代装配路并存（2026-10-27 批）
+ * 前三套（dark/light/mint-dark）走"四张分表"（BASE/SUGAR/SEMANTIC/2.0），它们各自的演进史
+ * 与逐档判据注释都留在原地、一格未动；后三套（one-dark/rose-pine/synthwave84）走
+ * "一张 46 键表 + 部件色种子生成器"，理由与判据见本文件下半段那节的表头。
+ * 两条路的产物形状完全相同（46 条规则 + 91 键部件色），由同一道闸量。
  *
  * ## 取色口径
  * - **dark**：沿用既有 `kojo-dark` 的语法色（ERB 基线 + 糖 + 语义），底色从 vs-dark 的
  *   `#1e1e1e` 改为 app 的 `--bg` `#1e2227`，编辑器与外壳同底；
  * - **light**：VS Code Light+ 气质，深蓝/橄榄绿/赭石/紫四族压浅底；不复用任何暗色前景；
  * - **mint-dark**：与 `themes/mint-dark.css` 的墨绿底 `#0f1713` 协调的冷薄荷族。
+ * - 后三套逐套见其表头（One Dark 的底色还账、Rosé Pine 的两枚弃用色、Synthwave '84 的
+ *   整块过闸）。
  *
  * **`operator` 档住哪儿**（ERB 半角运算符 + 全角标点、`.kojo` 表达式的 `()+[]`）：
  * 标点在屏上是骨架不是内容，所以它必须**比正文弱**（对比度低于同套 `identifier`）、
@@ -60,15 +68,30 @@ import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
  * `theme-color-gates.test.ts`），不许再写字面量。
  */
 
-export type MonacoThemeId = 'kojo-dark' | 'kojo-light' | 'kojo-mint-dark';
+export type MonacoThemeId =
+  | 'kojo-dark'
+  | 'kojo-light'
+  | 'kojo-mint-dark'
+  | 'kojo-one-dark'
+  | 'kojo-rose-pine'
+  | 'kojo-synthwave84';
 
 /** 与 `ui/theme-pref.ts` 的 `ThemePref` 逐字同形（不 import，理由见头注） */
-export type MonacoThemePref = 'dark' | 'light' | 'mint-dark';
+export type MonacoThemePref =
+  | 'dark'
+  | 'light'
+  | 'mint-dark'
+  | 'one-dark'
+  | 'rose-pine'
+  | 'synthwave84';
 
 const THEME_ID_BY_PREF: Readonly<Record<string, MonacoThemeId>> = {
   dark: 'kojo-dark',
   light: 'kojo-light',
   'mint-dark': 'kojo-mint-dark',
+  'one-dark': 'kojo-one-dark',
+  'rose-pine': 'kojo-rose-pine',
+  synthwave84: 'kojo-synthwave84',
 };
 
 /** 偏好 → Monaco 主题 id（未知/脏值回缺省 dark，绝不抛） */
@@ -660,9 +683,465 @@ export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
   'diffEditorOverview.removedForeground': '#e2707acc',
 };
 
+/* ============ 2026-10-27 经典编辑器色批：One Dark / Rosé Pine / Synthwave '84 ============ */
+
+/**
+ * 三套新主题走**另一条装配路**，与上面三套并存（既有三套一格未动，它们的同引用断言、
+ * 三分法调色板、逐档注释全部保持原样）。
+ *
+ * 为什么新开一条：既有三套把 46 档拆成 BASE（11）/ SUGAR（15）/ SEMANTIC（5）/ 2.0（15）
+ * 四张表，是因为它们的演进史是「先有词法、后补糖、再补语义、最后并 2.0」——四张表各自
+ * 带着自己的判据注释。新主题没有这段历史，**一张 46 键的表反而更好核**：一屏能看全
+ * "这套主题到底给了几种色"，而 `retint()` 只按 token 名取值、四个来源的 token 名两两不
+ * 重叠（`sugar.*` / `kojo2.*` / `function` 族 / 裸词法名），所以单表完全够用。
+ *
+ * 取色纪律与既有三套**逐条相同**（判据由 `theme-color-gates.test.ts` 对 `THEME_IDS` 全量跑）：
+ * 每条规则对 `editor.background` ≥ 4.5、主题内任意两枚不同前景 CIE76 ΔE ≥ 12、
+ * `operator` 住在结构族（可读 / 弱于正文 / 彩度低于关键字 / 对全部基线档 ΔE ≥ 12）、
+ * 跨语言同义档五组逐字同色。三套的实算读数写在各自表头。
+ */
+type RulePalette = Readonly<Record<string, string>>;
+
+/** 单表 → 46 条规则（四个来源的 token 名互不重叠，故一张表喂四次） */
+function rulesFromOneTable(palette: RulePalette): Monaco.editor.ITokenThemeRule[] {
+  return [
+    ...rulesFromPalette(BASE_RULE_SPECS, palette),
+    ...retint(KOJO_SUGAR_THEME_RULES, palette),
+    ...retint(KOJO_SEMANTIC_THEME_RULES, palette),
+    ...retint(KOJO2_THEME_RULES, palette),
+  ];
+}
+
+/**
+ * One Dark（Atom 原味）——**本仓缺省 dark 的语法色本来就是它**。
+ *
+ * 这一点值得说清，否则会以为这一档"抄了自己"：`DARK_BASE_PALETTE` 的十一档
+ * （`c678dd` 紫关键字 / `61afef` 蓝函数 / `e06c75` 红变量 / `98c379` 绿字符串 /
+ * `d19a66` 橙数字 / `56b6c2` 青标签 / `e5c07b` 黄预处理）与 One Dark 官方
+ * `tokenColors` **逐字同源**——差别只在底色：本仓用了 App 的 `#1e2227`，官方是 `#282c34`。
+ * 所以这一档真正的产出是「把底色与面板还回官方，并让那套调色板在更亮的底上重新过闸」。
+ *
+ * **换底是要付账的**：底从 `#1e2227`（L 0.0157）抬到 `#282c34`（L 0.0250），同样的 4.5
+ * 门槛把可用前景整体上推约 6%，于是原样搬过来的七档当场掉线（实测 4.30–4.47）。
+ * 提亮后仍要守住 ΔE ≥ 12 —— 提亮会把色池往上压，**灰系与紫系最先挤在一起**：
+ * - `comment` 退到偏暖的中性灰 `8e97a0`（不提更蓝：越蓝越靠近 `identifier` 与 `operator`，
+ *   实测蓝移一档就撞到 ΔE 9.7）；
+ * - `identifier` 提到 `b8bfca`（正文比官方 `abb2bf` 亮一档，把上沿让开给注释）；
+ * - `operator` 留在 `7f9cc0`（结构族），**不往更饱和的蓝走**——`6d9ce0` 与函数蓝
+ *   `61afef` 只差 ΔE 10.1；
+ * - 2.0 的十五档**不搬 dark 那套**（那是 15 枚独立色，提亮后紫系凑不下），改为落到本盘
+ *   近邻：锚点取亮粉 `ff5ec7`、声明取紫灰 `a194c9`、旁白取函数蓝、说话人取黄。
+ *   独立色因此从 24 枚收到 15 枚。
+ *
+ * 实算（底 `#282c34`）：全部 46 档 ≥ 4.72；独立色 15 枚，最紧一对 `56b6c2 ↔ 61afce`
+ * ΔE 12.6（这一对是既有三套就一直守着的"系统函数 vs 函数"微差，不是本批新造）。
+ */
+const ONE_DARK_PALETTE: RulePalette = {
+  comment: '8e97a0',
+  keyword: 'c678dd',
+  'keyword.preprocessor': 'e5c07b',
+  'entity.name.function': '61afef',
+  variable: 'e8838c',
+  string: '98c379',
+  number: 'd19a66',
+  label: '56b6c2',
+  operator: '7f9cc0',
+  identifier: 'b8bfca',
+  'string.escape': 'd19a66',
+
+  'sugar.keyword': 'c678dd',
+  'sugar.keyword.alias': 'a194c9',
+  'sugar.system-function': '61afce',
+  'sugar.operator': '56b6c2',
+  'sugar.cont': 'e5c07b',
+  'sugar.pronoun': 'e8838c',
+  'sugar.speech': '98c379',
+  'sugar.speech.delimiter': '7f9cc0',
+  'sugar.interp': 'd19a66',
+  'sugar.interp.delimiter': 'd19a66',
+  'sugar.colon': '7f9cc0',
+  'sugar.slot': '5cc9a8',
+  'keyword.raw': 'b0a89a',
+  'keyword.erb': 'e8838c',
+  'keyword.erb.family': 'a194c9',
+
+  function: '61afef',
+  'function.declaration': '61afef',
+  parameter: 'd19a66',
+  'variable.declaration': 'e5c07b',
+  'variable.declaration.readonly': 'e5c07b',
+
+  'kojo2.anchor': 'ff5ec7',
+  'kojo2.declaration': 'a194c9',
+  'kojo2.keyword': 'c678dd',
+  'kojo2.keyword.delimiter': '7f9cc0',
+  'kojo2.speaker': 'e5c07b',
+  'kojo2.speech': '98c379',
+  'kojo2.speech.string': '98c379',
+  'kojo2.narration': '61afef',
+  'kojo2.interp': 'd19a66',
+  'kojo2.hint': 'e8838c',
+  'kojo2.raw': 'b0a89a',
+  'kojo2.comment': '8e97a0',
+  'kojo2.number': 'd19a66',
+  'kojo2.number.hex': 'd19a66',
+  'kojo2.operator': '56b6c2',
+};
+
+/**
+ * Rosé Pine —— 玫瑰灰紫、低饱和、近黑的底（官方 base `#191724`）。
+ *
+ * 官方那 9 枚色里有两枚**在这个 App 的判据下不可用**，这是本档唯一的取舍：
+ * - `muted #6e6a86`（官方注释色）压 `#191724` 只有 3.0 ⇒ 注释改用 `subtle #908caa`；
+ * - `pine #31748f`（官方深青）只有 3.4 ⇒ `operator` 用它**提亮版** `5fa0b8`
+ *   （同色相、同"深青"身份，只把明度抬到过线；对 `identifier` 仍明显退让，彩度 24 < 关键字 36）。
+ *
+ * 留下来的是它真正的身份：`iris #c4a7e7` 关键字、`foam #9ccfd8` 函数/标签、
+ * `gold #f6c177` 字符串与数字、`rose #ebbcba` 变量与台词、`love #eb6f92` 常量与警示。
+ * 底够黑（L* 8.5），所以这套是三套新主题里对比度余量最大的：最弱 `#908caa` 5.48、
+ * 独立色 9 枚、最紧一对 ΔE 19.6 —— 不需要任何额外提亮就整块过闸。
+ *
+ * `keyword.raw` 是本盘唯一"外借"色：Rosé Pine 没有暖灰（官方原生直通直接用正文色），
+ * 取 `9d9489`（暖灰）把"不解释的原文"与注释、正文两条灰线都拉开。
+ */
+const ROSE_PINE_PALETTE: RulePalette = {
+  comment: '908caa',
+  keyword: 'c4a7e7',
+  'keyword.preprocessor': 'f6c177',
+  'entity.name.function': '9ccfd8',
+  variable: 'ebbcba',
+  string: 'f6c177',
+  number: 'eb6f92',
+  label: '9ccfd8',
+  operator: '5fa0b8',
+  identifier: 'e0def4',
+  'string.escape': 'eb6f92',
+
+  'sugar.keyword': 'c4a7e7',
+  'sugar.keyword.alias': '908caa',
+  'sugar.system-function': '9ccfd8',
+  'sugar.operator': '5fa0b8',
+  'sugar.cont': 'f6c177',
+  'sugar.pronoun': 'eb6f92',
+  'sugar.speech': 'ebbcba',
+  'sugar.speech.delimiter': '908caa',
+  'sugar.interp': 'f6c177',
+  'sugar.interp.delimiter': 'f6c177',
+  'sugar.colon': '908caa',
+  'sugar.slot': '9ccfd8',
+  'keyword.raw': '9d9489',
+  'keyword.erb': 'eb6f92',
+  'keyword.erb.family': 'c4a7e7',
+
+  function: '9ccfd8',
+  'function.declaration': '9ccfd8',
+  parameter: 'f6c177',
+  'variable.declaration': 'eb6f92',
+  'variable.declaration.readonly': 'eb6f92',
+
+  'kojo2.anchor': 'eb6f92',
+  'kojo2.declaration': 'c4a7e7',
+  'kojo2.keyword': 'c4a7e7',
+  'kojo2.keyword.delimiter': '908caa',
+  'kojo2.speaker': 'ebbcba',
+  'kojo2.speech': 'ebbcba',
+  'kojo2.speech.string': 'f6c177',
+  'kojo2.narration': '9ccfd8',
+  'kojo2.interp': 'f6c177',
+  'kojo2.hint': 'eb6f92',
+  'kojo2.raw': '9d9489',
+  'kojo2.comment': '908caa',
+  'kojo2.number': 'eb6f92',
+  'kojo2.number.hex': 'eb6f92',
+  'kojo2.operator': '5fa0b8',
+};
+
+/**
+ * Synthwave '84 —— 深紫底 + 霓虹粉青，参考 robb0wen/synthwave-vscode。
+ *
+ * **官方色板整块过闸，一档未改**（这是本批最意外的一件事，值得记下来）：
+ * 底 `#262335` 够黑（L* 14.8），官方那十枚霓虹色压上去最弱的一档 `comment #848bbd`
+ * 仍有 **4.66:1**，而它们的色相跨度大到两两 ΔE 最小也有 13.6。以往"霓虹主题必然
+ * 有一半过不了 AA"的直觉，在这个底上不成立 —— 前提是底真的够暗（比 App 缺省 dark 还暗半档）。
+ *
+ * 十枚独立色与它们的语义（顺序＝官方 tokenColors 的主干）：
+ * `fede5d` 黄=关键字 / `36f9f6` 青=函数、标签、旁白、字符串转义 / `ff7edb` 粉=变量、代词、
+ * 锚点、提示 / `ff8b39` 橙=字符串、插值、说话人 / `f97e72` 珊瑚=数字、预处理、参数 /
+ * `72f1b8` 薄荷=台词、名字层、糖运算符 / `b893ce` 紫=结构标点+声明（operator 那一族）/
+ * `848bbd` 蓝灰=注释 / `eae6f5` 正文 / `a09ab8` 冷灰紫=原生直通。
+ *
+ * 两处**不是官方原值**的地方：
+ * - `keyword.raw`（原生直通）`a09ab8`：官方没有对应档（它把围栏体当正文），这是本盘自造，
+ *   取"冷灰紫"是为了同时离开注释 `848bbd`（ΔE 13.6）与正文；
+ * - `operator` 用 `b893ce` 而不是官方的黄 `fede5d`：官方把运算符与关键字同色，而本仓
+ *   判据要求运算符**彩度低于关键字**（标点是骨架不是内容）。紫色在本盘是现成的结构族
+ *   （官方 `gitDecoration.modified` 就是它），拿来做标点既守判据又不出戏。
+ */
+const SYNTHWAVE84_PALETTE: RulePalette = {
+  comment: '848bbd',
+  keyword: 'fede5d',
+  'keyword.preprocessor': 'f97e72',
+  'entity.name.function': '36f9f6',
+  variable: 'ff7edb',
+  string: 'ff8b39',
+  number: 'f97e72',
+  label: '36f9f6',
+  operator: 'b893ce',
+  identifier: 'eae6f5',
+  'string.escape': '36f9f6',
+
+  'sugar.keyword': 'fede5d',
+  'sugar.keyword.alias': 'b893ce',
+  'sugar.system-function': '36f9f6',
+  'sugar.operator': '72f1b8',
+  'sugar.cont': 'fede5d',
+  'sugar.pronoun': 'ff7edb',
+  'sugar.speech': '72f1b8',
+  'sugar.speech.delimiter': 'b893ce',
+  'sugar.interp': 'ff8b39',
+  'sugar.interp.delimiter': 'ff8b39',
+  'sugar.colon': 'b893ce',
+  'sugar.slot': '72f1b8',
+  'keyword.raw': 'a09ab8',
+  'keyword.erb': 'ff7edb',
+  'keyword.erb.family': 'b893ce',
+
+  function: '36f9f6',
+  'function.declaration': '36f9f6',
+  parameter: 'f97e72',
+  'variable.declaration': 'fede5d',
+  'variable.declaration.readonly': 'fede5d',
+
+  'kojo2.anchor': 'ff7edb',
+  'kojo2.declaration': 'b893ce',
+  'kojo2.keyword': 'fede5d',
+  'kojo2.keyword.delimiter': 'b893ce',
+  'kojo2.speaker': 'ff8b39',
+  'kojo2.speech': '72f1b8',
+  'kojo2.speech.string': 'ff8b39',
+  'kojo2.narration': '36f9f6',
+  'kojo2.interp': 'ff8b39',
+  'kojo2.hint': 'ff7edb',
+  'kojo2.raw': 'a09ab8',
+  'kojo2.comment': '848bbd',
+  'kojo2.number': 'f97e72',
+  'kojo2.number.hex': 'f97e72',
+  'kojo2.operator': 'b893ce',
+};
+
+/**
+ * 部件色的**生成器**：91 键的键表只写一次，三套主题各给 18 枚种子。
+ *
+ * 为什么不学既有三套逐键手写：那三张表各 91 行，加一套就是 91 行 × 3，而且**彼此会漂**
+ * （同一件事 `list.hoverBackground` 在某套用了 `--bg-3`、另一套用了 `--bg-2`，漂了没人
+ * 看得出来——`inherit: false` 下漏键才会露底，取值不一致就只是"手感不一样"）。
+ * 键表写一次、种子各给一份，于是三套新主题的部件色**取值逻辑完全相同**，差异只剩种子。
+ *
+ * 取色口径（与 `KOJO_DARK_COLORS` 的既有约定对齐，注释见那张表）：
+ * - 所有半透明档一律由种子色拼 alpha（`${seed}59`），**不新造色**；
+ * - 字色类（`input.foreground` / `list.*Foreground`）一律用正文或强调文字档；
+ * - 当前行 = 该档 `--bg-3`（1.18–1.25 那一档薄抬升，理由见 `KOJO_DARK_COLORS` 的 C1 注）。
+ */
+interface ColorSeeds {
+  /** 编辑器底（必须与 `themes/<id>.css` 的 `--bg` 逐字相等，测试钉住） */
+  readonly bg: string;
+  /** 正文（必须与 `--fg` 逐字相等） */
+  readonly fg: string;
+  /** 次要文字 / 行号 */
+  readonly dim: string;
+  /** 更暗一档：暗行号、缩进参考线、分隔线（不承载语义文字） */
+  readonly dimDeep: string;
+  /** 当前行抬升 = 该档 `--bg-3` */
+  readonly lineHi: string;
+  /** 面板 / 列表悬停底 */
+  readonly panel: string;
+  /** 浮层底（菜单 / 补全 / hover / 输入框下落面） */
+  readonly overlay: string;
+  readonly accent: string;
+  /** accent 当文字用（光标 / 链接 / 高亮字） */
+  readonly accentText: string;
+  readonly indent: string;
+  readonly indentActive: string;
+  readonly brackets: readonly [string, string, string, string, string, string];
+  readonly red: string;
+  readonly amber: string;
+  readonly green: string;
+  readonly badgeBg: string;
+  readonly badgeFg: string;
+  /** 滚动条滑块基色（透明度由生成器统一给三档） */
+  readonly slider: string;
+}
+
+function buildColors(s: ColorSeeds): Readonly<Record<string, string>> {
+  return {
+    'editor.background': s.bg,
+    'editor.foreground': s.fg,
+    'editorLineNumber.foreground': s.dim,
+    'editorLineNumber.activeForeground': s.fg,
+    'editorLineNumber.dimmedForeground': s.dimDeep,
+    'editorCursor.foreground': s.accentText,
+    // 当前行（C1）：border 与 background 同色 ⇒ 不画描边（理由见 KOJO_DARK_COLORS 同键注）
+    'editor.lineHighlightBackground': s.lineHi,
+    'editor.lineHighlightBorder': s.lineHi,
+    'editor.selectionBackground': `${s.accent}59`,
+    'editor.inactiveSelectionBackground': `${s.accent}29`,
+    'editor.selectionHighlightBackground': `${s.accent}3d`,
+    'editor.wordHighlightBackground': `${s.accent}2e`,
+    'editor.wordHighlightStrongBackground': `${s.accent}5c`,
+    'editor.findMatchBackground': `${s.amber}66`,
+    'editor.findMatchHighlightBackground': `${s.amber}38`,
+    'editor.findRangeHighlightBackground': `${s.accent}24`,
+    'editorIndentGuide.background1': s.indent,
+    'editorIndentGuide.activeBackground1': s.indentActive,
+    'editorBracketMatch.background': `${s.accent}29`,
+    'editorBracketMatch.border': s.accent,
+    'editorBracketHighlight.foreground1': s.brackets[0],
+    'editorBracketHighlight.foreground2': s.brackets[1],
+    'editorBracketHighlight.foreground3': s.brackets[2],
+    'editorBracketHighlight.foreground4': s.brackets[3],
+    'editorBracketHighlight.foreground5': s.brackets[4],
+    'editorBracketHighlight.foreground6': s.brackets[5],
+    'editorBracketHighlight.unexpectedBracket.foreground': s.red,
+    'editorWhitespace.foreground': s.indent,
+    'editorRuler.foreground': s.lineHi,
+    'editorGutter.background': s.bg,
+    'editorOverviewRuler.background': s.bg,
+    'editorOverviewRuler.border': s.indentActive,
+    'editorError.foreground': s.red,
+    'editorWarning.foreground': s.amber,
+    'editorInfo.foreground': s.accentText,
+    'editorLink.activeForeground': s.accentText,
+    focusBorder: s.accent,
+    'input.background': s.lineHi,
+    'input.border': s.indentActive,
+    'input.foreground': s.fg,
+    'input.placeholderForeground': s.dim,
+    'list.hoverBackground': s.lineHi,
+    'list.focusBackground': s.lineHi,
+    'list.activeSelectionBackground': s.lineHi,
+    'list.activeSelectionForeground': s.fg,
+    'list.inactiveSelectionBackground': s.panel,
+    'list.hoverForeground': s.fg,
+    'list.highlightForeground': s.accentText,
+    'list.focusHighlightForeground': s.accentText,
+    'menu.background': s.overlay,
+    'menu.foreground': s.fg,
+    'menu.selectionBackground': s.lineHi,
+    'menu.selectionForeground': s.fg,
+    'menu.border': s.indentActive,
+    'menu.separatorBackground': s.indentActive,
+    'badge.background': s.badgeBg,
+    'badge.foreground': s.badgeFg,
+    'widget.border': s.indentActive,
+    'editorWidget.background': s.overlay,
+    'editorWidget.border': s.indentActive,
+    'editorWidget.foreground': s.fg,
+    'editorSuggestWidget.background': s.overlay,
+    'editorSuggestWidget.border': s.indentActive,
+    'editorSuggestWidget.foreground': s.fg,
+    'editorSuggestWidget.selectedBackground': s.lineHi,
+    'editorSuggestWidget.selectedForeground': s.fg,
+    'editorSuggestWidget.highlightForeground': s.accentText,
+    'editorSuggestWidget.focusHighlightForeground': s.accentText,
+    'editorSuggestWidgetStatus.foreground': s.dim,
+    'editorHoverWidget.background': s.overlay,
+    'editorHoverWidget.border': s.indentActive,
+    'editorHoverWidget.foreground': s.fg,
+    'editorHoverWidget.highlightForeground': s.accentText,
+    'editorHoverWidget.statusBarBackground': s.lineHi,
+    'editorStickyScroll.background': s.bg,
+    'editorStickyScroll.border': s.indent,
+    'editorStickyScrollHover.background': s.panel,
+    'minimap.background': s.bg,
+    'scrollbarSlider.background': `${s.slider}30`,
+    'scrollbarSlider.hoverBackground': `${s.slider}50`,
+    'scrollbarSlider.activeBackground': `${s.slider}70`,
+    'diffEditor.insertedTextBackground': `${s.green}2e`,
+    'diffEditor.removedTextBackground': `${s.red}2e`,
+    'diffEditor.insertedLineBackground': `${s.green}1a`,
+    'diffEditor.removedLineBackground': `${s.red}1a`,
+    'diffEditorGutter.insertedLineBackground': `${s.green}26`,
+    'diffEditorGutter.removedLineBackground': `${s.red}26`,
+    'diffEditor.diagonalFill': `${s.indentActive}66`,
+    'diffEditor.border': s.indentActive,
+    'diffEditorOverview.insertedForeground': `${s.green}cc`,
+    'diffEditorOverview.removedForeground': `${s.red}cc`,
+  };
+}
+
+/**
+ * One Dark 的部件色种子。底/正文与 `themes/one-dark.css` 的 `--bg/--fg` 逐字相等
+ * （`#282c34` / `#b8bfca`）；`lineHi` 取 `#333944`——官方面板 `#3e4451` 压在 `#282c34` 上是
+ * **1.43:1**，作为"当前行"太重（那是"被选中"的量级），故取只抬 1.21:1 的一档。
+ */
+const ONE_DARK_COLORS = buildColors({
+  bg: '#282c34',
+  fg: '#b8bfca',
+  dim: '#8e97a0',
+  dimDeep: '#5a626e',
+  lineHi: '#333944',
+  panel: '#2c313a',
+  overlay: '#21252b',
+  accent: '#61afef',
+  accentText: '#7cc4ff',
+  indent: '#3b4048',
+  indentActive: '#4b5263',
+  brackets: ['#c678dd', '#61afef', '#56b6c2', '#e5c07b', '#e8838c', '#98c379'],
+  red: '#e8838c',
+  amber: '#e5c07b',
+  green: '#98c379',
+  badgeBg: '#2e6fd1',
+  badgeFg: '#ffffff',
+  slider: '#4b5263',
+});
+
+const ROSE_PINE_COLORS = buildColors({
+  bg: '#191724',
+  fg: '#e0def4',
+  dim: '#908caa',
+  dimDeep: '#524f67',
+  // 官方 overlay `#26233a` 只有 1.10:1（几乎看不出），抬到 #2c2843 = 1.19:1
+  lineHi: '#2c2843',
+  panel: '#1f1d2e',
+  overlay: '#1f1d2e',
+  accent: '#c4a7e7',
+  accentText: '#d4c0f2',
+  indent: '#26233a',
+  indentActive: '#403d52',
+  brackets: ['#c4a7e7', '#9ccfd8', '#f6c177', '#ebbcba', '#eb6f92', '#908caa'],
+  red: '#eb6f92',
+  amber: '#f6c177',
+  green: '#8fc7a8',
+  badgeBg: '#c4a7e7',
+  badgeFg: '#191724',
+  slider: '#524f67',
+});
+
+const SYNTHWAVE84_COLORS = buildColors({
+  bg: '#262335',
+  fg: '#eae6f5',
+  dim: '#9a92b8',
+  dimDeep: '#5c5470',
+  // 官方没有 lineHighlightBackground（只有一条 40% 的紫描边）；按"抬 1.22:1"自算得 #362e52
+  lineHi: '#362e52',
+  panel: '#241b2f',
+  overlay: '#1f1932',
+  accent: '#ff7edb',
+  accentText: '#ff9ce6',
+  indent: '#3a3352',
+  indentActive: '#4d4470',
+  brackets: ['#ff7edb', '#36f9f6', '#fede5d', '#72f1b8', '#ff8b39', '#b893ce'],
+  red: '#ff6b73',
+  amber: '#fede5d',
+  green: '#72f1b8',
+  badgeBg: '#ff7edb',
+  badgeFg: '#1b0f26',
+  slider: '#b893ce',
+});
+
 /* ------------------------------ 装配 ------------------------------ */
 
-/** 一次性定义三套主题（幂等；`registerErbLanguage` 末尾调用） */
+/** 一次性定义六套主题（幂等；`registerErbLanguage` 末尾调用） */
 export function defineMonacoThemes(monaco: typeof Monaco): void {
   // K2-SURFACE-DEFAULT：v1 三套**无条件**带 2.0 token 规则（见 `darkRules` 上方头注）——
   // 默认档打开 `.kojo2` 就有配色，不必先切流。部件色与 v1 规则一格未动。
@@ -683,6 +1162,26 @@ export function defineMonacoThemes(monaco: typeof Monaco): void {
     inherit: false,
     rules: mintRules(),
     colors: KOJO_MINT_COLORS,
+  });
+  // 2026-10-27 经典编辑器色三套：base 一律 `vs-dark`（三套都是深色；`inherit: false` 下
+  // base 只决定 Monaco 内部几个"深浅行为"开关——滚动条惯性、缩略图对比归一化——不供色）。
+  monaco.editor.defineTheme('kojo-one-dark', {
+    base: 'vs-dark',
+    inherit: false,
+    rules: rulesFromOneTable(ONE_DARK_PALETTE),
+    colors: ONE_DARK_COLORS,
+  });
+  monaco.editor.defineTheme('kojo-rose-pine', {
+    base: 'vs-dark',
+    inherit: false,
+    rules: rulesFromOneTable(ROSE_PINE_PALETTE),
+    colors: ROSE_PINE_COLORS,
+  });
+  monaco.editor.defineTheme('kojo-synthwave84', {
+    base: 'vs-dark',
+    inherit: false,
+    rules: rulesFromOneTable(SYNTHWAVE84_PALETTE),
+    colors: SYNTHWAVE84_COLORS,
   });
   // Kojo 2.0 三套主题（K2 batch-3，flag 守卫）：与 v1 三套**不同 id**（`kojo2-*`），
   // 不覆盖、不继承，重复注册由 `registerKojo2Themes` 的 WeakSet 幂等挡掉。

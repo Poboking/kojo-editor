@@ -21,6 +21,14 @@ import './ui-kit/ui-kit.css';
 // 才能压过基础 `:root`。缺省 dark 无对应文件块（tokens.css 的基础 :root 即深色），light/mint 各自翻 token。
 import './themes/light.css';
 import './themes/mint-dark.css';
+// 经典编辑器色三套（2026-10-27 批）：与上面两档同一条通路——`:root[data-theme='…']` 只翻 token。
+// 它们都排在 `styles.css` 之后，所以「同一选择器、后到者胜」这条对它们成立；三条之间互不
+// 重叠（各自的 data-theme 值不同），故三者内部次序无意义——按色系的"暖→冷→霓虹"排只为好读。
+// ⚠ 新增一档**必须**同时加这一行：漏了不会有任何报错，只会在切到那一档时静默落回基础 :root
+// （= 界面还是深蓝灰、编辑器却已换成新主题），`monaco-theme.test.ts` 的 CSS 源映射也不查这里。
+import './themes/one-dark.css';
+import './themes/rose-pine.css';
+import './themes/synthwave84.css';
 // 底部「问题」面板（批次十一 L03）：与 `search-panel.css` 同族的一套 `.prob-*` 规则。
 // 面板根类 `.prob` + 双类选择器提特异性，故它与"谁先到"无关——放链尾只为让新面板的
 // 覆盖意图读起来明确（`styles-project.css` 里遗留的单类 `.prob-*` 已在同批删净）。

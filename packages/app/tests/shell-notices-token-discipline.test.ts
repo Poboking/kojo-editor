@@ -370,9 +370,16 @@ function walk(dir: string, acc: string[] = []): string[] {
   }
   return acc;
 }
-/** token 定义点＝字面量**该**待着的地方，不进账本 */
-const TOKEN_DEF_POINTS = ['tokens.css', 'light.css', 'mint-dark.css'];
-const ledgerFiles = walk(PKG_ROOT).filter((p) => p.endsWith('.css') && !TOKEN_DEF_POINTS.includes(path.basename(p)));
+/** token 定义点＝字面量**该**待着的地方，不进账本。
+ *
+ *  口径按**位置**判、不按文件名列举：`src/themes/` 下任一份 css 都是"某一档的全部 token 值"，
+ *  天然是定义点。2026-10-27 把主题从三档扩到六档（+one-dark / rose-pine / synthwave84）时，
+ *  原来那份 `['tokens.css', 'light.css', 'mint-dark.css']` 文件名白名单会让三个新档**整份**掉进
+ *  消费点账本（105 → 184），逼着后来人要么改阈值、要么把字面量搬去别处——两种都是错的方向。
+ */
+const isTokenDefPoint = (p: string): boolean =>
+  path.basename(p) === 'tokens.css' || path.basename(path.dirname(p)) === 'themes';
+const ledgerFiles = walk(PKG_ROOT).filter((p) => p.endsWith('.css') && !isTokenDefPoint(p));
 const ledger = ledgerFiles.reduce((n, p) => n + (readFileSync(p, 'utf8').match(/rgba?[(]/g) ?? []).length, 0);
 
 /* ------------------------------ ④ 判据 ------------------------------ */

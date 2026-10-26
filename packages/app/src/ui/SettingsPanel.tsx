@@ -110,11 +110,23 @@ import './settings-appearance.css';
 // 右键菜单回执那一行的排版（1023 覆盖面批）：与欢迎页 / 快捷键页共用同一份新样式表
 import './context-menu-pages.css';
 
-/** 主题选择器的人类标签（作者面：不出现 id / token 这类机器词） */
+/**
+ * 主题选择器的人类标签（作者面：不出现 id / token 这类机器词）。
+ *
+ * 后三档是**专有名词**，不做汉化——「One Dark」「Rosé Pine」「Synthwave '84」就是它们在
+ * 各自社区里的名字，译成「原子暗色」「玫瑰松」「合成波八四」反而没人认得出。这与前三条
+ * 「深色 / 浅色 / 薄荷」的取向不冲突：那三个是本仓自起的描述名，没有社区原名可循。
+ *
+ * `Record<ThemePref, string>` 是加档的**编译期钉子**：`ThemePref` 一加值、这里漏一项，
+ * 整个 app 侧 typecheck 当场红（比运行时漏一张卡可靠）。
+ */
 const THEME_LABELS: Record<ThemePref, string> = {
   dark: '深色',
   light: '浅色',
   'mint-dark': '薄荷',
+  'one-dark': 'One Dark',
+  'rose-pine': 'Rosé Pine',
+  synthwave84: "Synthwave '84",
 };
 
 /**
@@ -1034,7 +1046,8 @@ function ThemePickerSection(): ReactElement {
           description={
             <>
               打开后按系统的深浅自动在深色 / 浅色之间切换，你在系统里改主题，这里当场跟着换；
-              薄荷只选手动出现，不会跟着系统切过去。关掉即回到最近一次手动选的档位。只改显示、不动文件
+              薄荷 / One Dark / Rosé Pine / Synthwave '84 这四套深色只走手动，不会跟着系统切过去。
+              关掉即回到最近一次手动选的档位。只改显示、不动文件
             </>
           }
           control={<Switch checked={following} onChange={setFollowSystem} label="跟随系统" />}

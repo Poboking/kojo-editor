@@ -208,21 +208,48 @@ const bodyLines = (rule: Rule): string[] =>
 
 const NO_TOKENS = new Map<string, string>();
 
-/** 引导层三个档位的名字（`index.html` 早应用脚本 + `themes/*.css` 的口径：读不到/非法 ⇒ dark） */
-type ThemeName = 'dark' | 'light' | 'mint-dark';
-const THEMES: readonly ThemeName[] = ['dark', 'light', 'mint-dark'];
+/** 引导层六个档位的名字（`index.html` 早应用脚本 + `themes/*.css` 的口径：读不到/非法 ⇒ dark） */
+type ThemeName = 'dark' | 'light' | 'mint-dark' | 'one-dark' | 'rose-pine' | 'synthwave84';
+const THEMES: readonly ThemeName[] = [
+  'dark',
+  'light',
+  'mint-dark',
+  'one-dark',
+  'rose-pine',
+  'synthwave84',
+];
 
-/** 每档取色 token 的真源：dark 在 `tokens.css` 基础 `:root`（L01 单源化前住 styles.css），另两档在各自 `themes/*.css` */
+/**
+ * 非缺省档的主题源清单（2026-10-27 扩到六档）。
+ *
+ * 这张表是**引导层与主题源逐字比对**的唯一入口：`index.html` 里那 14 条内联规则写的是
+ * 字面量，主题源写的是 token，两边独立手写 ⇒ 这里的映射一断，那条红线就变成自我循环。
+ * 加一档只加一行；漏了的话 `THEMES` 里的档会拿不到源、`tokenMap` 当场抛（不是静默跳过）。
+ */
+const THEME_CSS: Readonly<
+  Record<Exclude<ThemeName, 'dark'>, { readonly file: string; readonly prelude: string }>
+> = {
+  light: { file: 'light.css', prelude: ":root[data-theme='light']" },
+  'mint-dark': { file: 'mint-dark.css', prelude: ":root[data-theme='mint-dark']" },
+  'one-dark': { file: 'one-dark.css', prelude: ":root[data-theme='one-dark']" },
+  'rose-pine': { file: 'rose-pine.css', prelude: ":root[data-theme='rose-pine']" },
+  synthwave84: { file: 'synthwave84.css', prelude: ":root[data-theme='synthwave84']" },
+};
+
+/** 每档取色 token 的真源：dark 在 `tokens.css` 基础 `:root`（L01 单源化前住 styles.css），其余在各自 `themes/*.css` */
 function themeTokens(theme: ThemeName): Map<string, string> {
   if (theme === 'dark') return tokenMap(tokensSrc(), ':root', 'tokens.css');
-  if (theme === 'light') return tokenMap(lightTheme(), ":root[data-theme='light']", 'light.css');
-  return tokenMap(mintTheme(), ":root[data-theme='mint-dark']", 'mint-dark.css');
+  const spec = THEME_CSS[theme];
+  return tokenMap(read(`../src/themes/${spec.file}`), spec.prelude, THEME_CSS[theme].file);
 }
 
 const THEME_SOURCE: Readonly<Record<ThemeName, string>> = {
   dark: 'tokens.css 基础 :root',
   light: 'themes/light.css',
   'mint-dark': 'themes/mint-dark.css',
+  'one-dark': 'themes/one-dark.css',
+  'rose-pine': 'themes/rose-pine.css',
+  synthwave84: 'themes/synthwave84.css',
 };
 
 /**
@@ -545,12 +572,14 @@ describe('引导层扫光 · 单源配方（BOOT-SW 判据①）', () => {
 
     // 「真源只有基线一档」这条前提本身也得钉住：themes/*.css 若哪天逐档重定义 --fs-*，
     // 上面只比基线就会漏掉按档跳字，那时才需要改成按档断言。
-    const perTheme: readonly [ThemeName, string, string][] = [
-      ['light', lightTheme(), ":root[data-theme='light']"],
-      ['mint-dark', mintTheme(), ":root[data-theme='mint-dark']"],
-    ];
-    for (const [theme, css, prelude] of perTheme) {
-      const themeTokenMap = tokenMap(css, prelude, THEME_SOURCE[theme]);
+    for (const theme of THEMES) {
+      if (theme === 'dark') continue;
+      const spec = THEME_CSS[theme];
+      const themeTokenMap = tokenMap(
+        read(`../src/themes/${spec.file}`),
+        spec.prelude,
+        THEME_SOURCE[theme],
+      );
       for (const face of FONT_FACES) {
         expect(
           themeTokenMap.has(face.token),

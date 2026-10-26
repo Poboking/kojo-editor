@@ -21,7 +21,8 @@ import {
   KOJO_SEMANTIC_THEME_RULES,
   KOJO_SUGAR_THEME_RULES,
 } from '../src/monaco/kojo-theme-rules';
-import { defineMonacoThemes } from '../src/monaco/theme';
+import { defineMonacoThemes, monacoThemeIdFor } from '../src/monaco/theme';
+import { THEME_IDS } from '../src/ui/theme-pref';
 import {
   KOJO2_COLOR_KEYS,
   KOJO2_DARK_THEME_ID,
@@ -305,6 +306,13 @@ describe('registerKojo2Themes：幂等、不串实例、主题名完整', () => 
 
 /* ==================== 既有主题装配点：flag 守卫的接线 ==================== */
 
+/**
+ * v1 主题 id 全集（**按 `THEME_IDS` 现算，不手抄**）：2026-10-27 批次把 v1 从三套扩到六套
+ * （深 / 浅 / 薄荷 / One Dark / Rosé Pine / Synthwave '84），自那以后任何"三套"字面量都
+ * 会当场红。这里与 `monaco-theme.test.ts` 同口径，将来加档两条测试一起自动跟上。
+ */
+const V1_THEME_IDS: readonly string[] = THEME_IDS.map(monacoThemeIdFor);
+
 /** 假 localStorage（`null` = 没存过 = flag 关；`'on'` = 开） */
 function stubFlag(on: boolean): void {
   const store = new Map<string, string>();
@@ -333,30 +341,25 @@ describe('defineMonacoThemes · Kojo 2.0 主题只在 flag 开时注册', () => 
     vi.unstubAllGlobals();
   });
 
-  it('flag 关 ⇒ 只有 v1 三套，一个 kojo2-* 都不定义（也不加载主题模块）', async () => {
+  it('flag 关 ⇒ 只有 v1 那几套，一个 kojo2-* 都不定义（也不加载主题模块）', async () => {
     stubFlag(false);
     const fake = fakeMonaco();
     defineMonacoThemes(fake.monaco);
     await flushThemeImport();
-    expect([...fake.defined.keys()]).toEqual(['kojo-dark', 'kojo-light', 'kojo-mint-dark']);
-    expect(fake.calls()).toBe(3);
+    expect([...fake.defined.keys()]).toEqual(V1_THEME_IDS);
+    expect(fake.calls()).toBe(V1_THEME_IDS.length);
   });
 
-  it('flag 开 ⇒ 追加定义 kojo2-* 三套（v1 三套原样保留，不覆盖）', async () => {
+  it('flag 开 ⇒ 追加定义 kojo2-* 三套（v1 原样保留，不覆盖）', async () => {
     stubFlag(true);
     const fake = fakeMonaco();
     defineMonacoThemes(fake.monaco);
-    // v1 三套是同步定义；2.0 三套在动态 import 之后
-    expect([...fake.defined.keys()]).toEqual(['kojo-dark', 'kojo-light', 'kojo-mint-dark']);
+    // v1 是同步定义；2.0 三套在动态 import 之后
+    expect([...fake.defined.keys()]).toEqual(V1_THEME_IDS);
     await flushThemeImport();
-    expect([...fake.defined.keys()]).toEqual([
-      'kojo-dark',
-      'kojo-light',
-      'kojo-mint-dark',
-      ...KOJO2_THEME_IDS,
-    ]);
+    expect([...fake.defined.keys()]).toEqual([...V1_THEME_IDS, ...KOJO2_THEME_IDS]);
     for (const id of KOJO2_THEME_IDS) expect(fake.defined.get(id)).toBe(KOJO2_THEMES[id]);
-    expect(fake.calls()).toBe(6);
+    expect(fake.calls()).toBe(V1_THEME_IDS.length + KOJO2_THEME_IDS.length);
   });
 
   it('重复装配同一实例：2.0 三套不重复 define（`registerKojo2Themes` 的 WeakSet 幂等）', async () => {
@@ -364,12 +367,13 @@ describe('defineMonacoThemes · Kojo 2.0 主题只在 flag 开时注册', () => 
     const fake = fakeMonaco();
     defineMonacoThemes(fake.monaco);
     await flushThemeImport();
-    expect(fake.calls()).toBe(6);
+    const firstPass = V1_THEME_IDS.length + KOJO2_THEME_IDS.length;
+    expect(fake.calls()).toBe(firstPass);
     defineMonacoThemes(fake.monaco);
     await flushThemeImport();
-    // 第二次：v1 三套照旧重定义（既有行为），2.0 三套被幂等挡掉
-    expect(fake.calls()).toBe(9);
-    expect(fake.defined.size).toBe(6);
+    // 第二次：v1 那几套照旧重定义（既有行为），2.0 三套被幂等挡掉
+    expect(fake.calls()).toBe(firstPass + V1_THEME_IDS.length);
+    expect(fake.defined.size).toBe(firstPass);
   });
 });
 

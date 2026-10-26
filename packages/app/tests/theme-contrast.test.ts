@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * 视觉批十一 L15 · 三档对比度门禁（dark / light / mint-dark）。
+ * 视觉批十一 L15 · 六档对比度门禁（dark / light / mint-dark / one-dark / rose-pine / synthwave84）。
  *
  * 纯 node 源码判据：不起壳、无 DOM、不依赖浏览器——直接解析
  *  - `src/tokens.css` 的基础裸 `:root`（= dark 档的全部 token 真值），
@@ -36,8 +36,20 @@ import { describe, expect, it } from 'vitest';
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 const tokensSrc = read('../src/tokens.css');
-const lightSrc = read('../src/themes/light.css');
-const mintSrc = read('../src/themes/mint-dark.css');
+
+/**
+ * 主题源清单（2026-10-27 扩到六档）：`buildLayer` 逐份找匹配的 `:root[data-theme='…']` 块。
+ * 加一档就在这里加一行——**漏了不会报错**，那档的终值表只继承基础 `:root`，
+ * 于是它被当成"深色基线"量对比度：深色档悄悄假绿、浅色档当场红。
+ * `THEMES` 名单断言里逐档点了名，就是防这个。
+ */
+const THEME_SOURCES: ReadonlyArray<{ readonly id: string; readonly src: string }> = [
+  { id: 'light', src: read('../src/themes/light.css') },
+  { id: 'mint-dark', src: read('../src/themes/mint-dark.css') },
+  { id: 'one-dark', src: read('../src/themes/one-dark.css') },
+  { id: 'rose-pine', src: read('../src/themes/rose-pine.css') },
+  { id: 'synthwave84', src: read('../src/themes/synthwave84.css') },
+];
 
 /* ------------------------------ ① token 表解析 ------------------------------ */
 
@@ -81,7 +93,7 @@ function collectRootDecls(src: string, want: string): Map<string, string> {
 function buildLayer(themeSelector: string | null): Map<string, string> {
   const map = new Map(collectRootDecls(tokensSrc, ':root'));
   if (themeSelector) {
-    for (const src of [lightSrc, mintSrc]) {
+    for (const { src } of THEME_SOURCES) {
       for (const [k, v] of collectRootDecls(src, themeSelector)) map.set(k, v);
     }
   }
@@ -98,6 +110,11 @@ const LAYERS: ReadonlyArray<{ id: string; map: Map<string, string> }> = [
   })(),
   { id: 'light', map: buildLayer(":root[data-theme='light']") },
   { id: 'mint-dark', map: buildLayer(":root[data-theme='mint-dark']") },
+  // 2026-10-27 经典编辑器色三套：同一套判据、同一张 COMBOS 名单，逐档量到底。
+  // 加档只加这三行——`buildLayer` 吃 `:root[data-theme='…']` 前导，文件由 `THEME_FILES` 供。
+  { id: 'one-dark', map: buildLayer(":root[data-theme='one-dark']") },
+  { id: 'rose-pine', map: buildLayer(":root[data-theme='rose-pine']") },
+  { id: 'synthwave84', map: buildLayer(":root[data-theme='synthwave84']") },
 ];
 
 /* ------------------------------ ② var() 展开与颜色求值 ------------------------------ */
@@ -346,7 +363,14 @@ describe('L15 三档对比度门禁（tokens.css + themes/*.css 源码判据）'
   it('反假绿地板②：组合名单必须显式列全（≥12 条），且逐档点名不缺项', () => {
     expect(COMBOS.length).toBeGreaterThanOrEqual(12);
     expect(ALL.length).toBe(COMBOS.length * LAYERS.length);
-    expect(LAYERS.map((l) => l.id)).toEqual(['dark', 'light', 'mint-dark']);
+    expect(LAYERS.map((l) => l.id)).toEqual([
+      'dark',
+      'light',
+      'mint-dark',
+      'one-dark',
+      'rose-pine',
+      'synthwave84',
+    ]);
   });
 
   it('全部 档×组合 达标：正文 ≥4.5 / 大字·UI ≥3.0，0 条不达标', () => {

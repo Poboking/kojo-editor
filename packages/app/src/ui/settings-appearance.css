@@ -44,11 +44,28 @@
   font-weight: 600;
 }
 
-/* ---- 预览卡行：窄面板里自动折成一列也不溢出（minmax + auto-fit，无横向滚动条） ---- */
+/* ---- 预览卡行 ----
+ * 列数**写死三列**，不用 auto-fit：2026-10-27 从三档扩到六档时，auto-fit 在设置页的
+ * 实际宽度下排成 4 列 ⇒ 六张卡变成「4 + 2」、第二行右边空两格，看着像掉了一张。
+ * 三列下六张正好 3 × 2；而原来那三张也从「3 + 1 空格」变成整行占满，比加档前更齐。
+ *
+ * 折行判据用**容器查询**（按 `.theme-picker` 自己的宽度）而不是 `@media`（按窗口）：
+ * 设置面板比窗口窄得多，窗口 1200px 时面板可能只有 430px，媒体查询根本不会触发，
+ * 三列会挤成 116px 一张。容器查询在 480px 以下折两列，六张 = 2 × 3，同样不留孤儿。 */
+.theme-picker {
+  container-type: inline-size;
+}
+
 .theme-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2);
+}
+
+@container (max-width: 480px) {
+  .theme-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .theme-card {
@@ -126,6 +143,26 @@
   --pv-fg: #d9e9df; /* themes/mint-dark.css --fg（压 --pv-bg ≈ 14.5:1） */
   --pv-accent: #35d0a0; /* themes/mint-dark.css --accent */
   --pv-edge: #2b3f35; /* themes/mint-dark.css --border */
+}
+/* 2026-10-27 经典编辑器色三套：同样取各自主题源的 --bg/--fg/--accent/--border 现值。
+   卡面必须用**被预览档自己**的颜色——跟着当前主题走就永远只像现在这一档，预览失去意义。 */
+.theme-card[data-theme-card='one-dark'] {
+  --pv-bg: #282c34; /* themes/one-dark.css --bg */
+  --pv-fg: #b8bfca; /* themes/one-dark.css --fg（压 --pv-bg ≈ 8.6:1） */
+  --pv-accent: #61afef; /* themes/one-dark.css --accent */
+  --pv-edge: #3b4048; /* themes/one-dark.css --border */
+}
+.theme-card[data-theme-card='rose-pine'] {
+  --pv-bg: #191724; /* themes/rose-pine.css --bg */
+  --pv-fg: #e0def4; /* themes/rose-pine.css --fg（压 --pv-bg ≈ 12.2:1） */
+  --pv-accent: #c4a7e7; /* themes/rose-pine.css --accent */
+  --pv-edge: #2a2740; /* themes/rose-pine.css --border */
+}
+.theme-card[data-theme-card='synthwave84'] {
+  --pv-bg: #262335; /* themes/synthwave84.css --bg */
+  --pv-fg: #eae6f5; /* themes/synthwave84.css --fg（压 --pv-bg ≈ 13.3:1） */
+  --pv-accent: #ff7edb; /* themes/synthwave84.css --accent */
+  --pv-edge: #3f3660; /* themes/synthwave84.css --border */
 }
 
 /* 纸面上的"字"：取该档 --fg（正文线）与该档 --accent（高亮行），纯几何小块、非文本 */

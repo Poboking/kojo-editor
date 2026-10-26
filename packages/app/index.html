@@ -4,17 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kojo-editor · 口上编辑器</title>
-    <!-- 主题早应用（主题系统 2026-10-17）：React 挂载前就把保存过的主题落到 <html data-theme>，
-         免得浅色/薄荷用户先闪一下深色。真源与归一口径同 `ui/theme-pref.ts`（读不到/非法 ⇒ dark）。
-         dark 是缺省档，此时下面的引导底色 #1e2227 仍与 styles.css 的 --bg 相等——smoke-tauri-dom 断言①
-         钉的那条不变量不被破坏。 -->
+    <!-- 主题早应用（主题系统 2026-10-17；2026-10-27 扩到六档）：React 挂载前就把保存过的主题
+         落到 <html data-theme>，免得非缺省档用户先闪一下深色。真源与归一口径同 `ui/theme-pref.ts`
+         （读不到/非法 ⇒ dark）。⚠ 这份白名单必须与 `THEME_IDS` 手动同步——内联脚本里不能 import，
+         所以只能手抄；'system' 不在此列（早应用不知道系统深浅，折 dark，挂载后立刻改写）。
+         漏一项的后果不是报错，而是那一档用户每次开机都先看一段深蓝灰引导。
+         dark 是缺省档，此时下面的引导底色 #1e2227 仍与 styles.css 的 --bg 相等——smoke-tauri-dom
+         断言①钉的那条不变量不被破坏。 -->
     <script>
       (function () {
         try {
           var t = localStorage.getItem('kojo.ui.theme.v1');
+          var known = ['light', 'mint-dark', 'one-dark', 'rose-pine', 'synthwave84'];
           document.documentElement.setAttribute(
             'data-theme',
-            t === 'light' || t === 'mint-dark' ? t : 'dark',
+            known.indexOf(t) >= 0 ? t : 'dark',
           );
         } catch (e) {
           document.documentElement.setAttribute('data-theme', 'dark');
@@ -307,6 +311,188 @@
       }
       html[data-theme='mint-dark'] .boot-bar::after {
         background: #35d0a0;
+      }
+      /* ---- 2026-10-27 经典编辑器色三套：五面（--bg/--fg/--fg-dim/--bg-3/--accent）与
+         各自的 themes/*.css 逐字相等，由 boot-sweep-single-source.test.ts 比对 ---- */
+      html[data-theme='one-dark'],
+      html[data-theme='one-dark'] body {
+        background: #282c34;
+      }
+      html[data-theme='one-dark'] #boot-splash {
+        background: #282c34;
+        color: #b8bfca;
+      }
+      html[data-theme='one-dark'] .boot-splash-tip {
+        color: #a0a9b2;
+      }
+      html[data-theme='one-dark'] .boot-splash-mark {
+        color: #61afef;
+      }
+      html[data-theme='one-dark'] .boot-splash-ver {
+        color: #a0a9b2;
+      }
+      html[data-theme='one-dark'] #boot-splash::before {
+        background: radial-gradient(115% 85% at 50% -20%, rgba(97, 175, 239, 0.1), transparent 64%);
+        box-shadow:
+          inset 0 0 0 1px #3b4048,
+          inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      }
+      html[data-theme='one-dark'] #boot-splash::after {
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(97, 175, 239, 0.4) 16%,
+          rgba(97, 175, 239, 0.62) 50%,
+          rgba(97, 175, 239, 0.4) 84%,
+          transparent
+        );
+      }
+      html[data-theme='one-dark'] #boot-splash-close {
+        color: #a0a9b2;
+      }
+      html[data-theme='one-dark'] #boot-splash-close:hover {
+        background: #e8838c;
+        border-color: #e8838c;
+        color: #282c34;
+        box-shadow:
+          0 0 0 3px rgba(232, 131, 140, 0.22),
+          0 6px 16px rgba(232, 131, 140, 0.3);
+      }
+      html[data-theme='one-dark'] #boot-splash-close:active {
+        background: #e8838c;
+        border-color: #f2a7ae;
+        color: #282c34;
+        box-shadow: 0 0 0 2px rgba(232, 131, 140, 0.26);
+      }
+      html[data-theme='one-dark'] #boot-splash-close:focus-visible {
+        outline: none;
+        box-shadow: inset 0 0 0 2px #7cc4ff;
+      }
+      html[data-theme='one-dark'] .boot-bar {
+        background: #333944;
+      }
+      html[data-theme='one-dark'] .boot-bar::after {
+        background: #61afef;
+      }
+      html[data-theme='rose-pine'],
+      html[data-theme='rose-pine'] body {
+        background: #191724;
+      }
+      html[data-theme='rose-pine'] #boot-splash {
+        background: #191724;
+        color: #e0def4;
+      }
+      html[data-theme='rose-pine'] .boot-splash-tip {
+        color: #9a95b8;
+      }
+      html[data-theme='rose-pine'] .boot-splash-mark {
+        color: #c4a7e7;
+      }
+      html[data-theme='rose-pine'] .boot-splash-ver {
+        color: #9a95b8;
+      }
+      html[data-theme='rose-pine'] #boot-splash::before {
+        background: radial-gradient(115% 85% at 50% -20%, rgba(196, 167, 231, 0.16), transparent 64%);
+        box-shadow:
+          inset 0 0 0 1px #2a2740,
+          inset 0 1px 0 rgba(255, 240, 245, 0.05);
+      }
+      html[data-theme='rose-pine'] #boot-splash::after {
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(196, 167, 231, 0.5) 16%,
+          rgba(196, 167, 231, 0.75) 50%,
+          rgba(196, 167, 231, 0.5) 84%,
+          transparent
+        );
+      }
+      html[data-theme='rose-pine'] #boot-splash-close {
+        color: #9a95b8;
+      }
+      html[data-theme='rose-pine'] #boot-splash-close:hover {
+        background: #eb6f92;
+        border-color: #eb6f92;
+        color: #191724;
+        box-shadow:
+          0 0 0 3px rgba(235, 111, 146, 0.22),
+          0 6px 16px rgba(235, 111, 146, 0.3);
+      }
+      html[data-theme='rose-pine'] #boot-splash-close:active {
+        background: #eb6f92;
+        border-color: #f29bb3;
+        color: #191724;
+        box-shadow: 0 0 0 2px rgba(235, 111, 146, 0.26);
+      }
+      html[data-theme='rose-pine'] #boot-splash-close:focus-visible {
+        outline: none;
+        box-shadow: inset 0 0 0 2px #d4c0f2;
+      }
+      html[data-theme='rose-pine'] .boot-bar {
+        background: #2c2843;
+      }
+      html[data-theme='rose-pine'] .boot-bar::after {
+        background: #c4a7e7;
+      }
+      html[data-theme='synthwave84'],
+      html[data-theme='synthwave84'] body {
+        background: #262335;
+      }
+      html[data-theme='synthwave84'] #boot-splash {
+        background: #262335;
+        color: #eae6f5;
+      }
+      html[data-theme='synthwave84'] .boot-splash-tip {
+        color: #a49cc2;
+      }
+      html[data-theme='synthwave84'] .boot-splash-mark {
+        color: #ff7edb;
+      }
+      html[data-theme='synthwave84'] .boot-splash-ver {
+        color: #a49cc2;
+      }
+      html[data-theme='synthwave84'] #boot-splash::before {
+        background: radial-gradient(115% 85% at 50% -20%, rgba(255, 126, 219, 0.16), transparent 64%);
+        box-shadow:
+          inset 0 0 0 1px #3f3660,
+          inset 0 1px 0 rgba(255, 226, 250, 0.05);
+      }
+      html[data-theme='synthwave84'] #boot-splash::after {
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(255, 126, 219, 0.5) 16%,
+          rgba(255, 126, 219, 0.78) 50%,
+          rgba(255, 126, 219, 0.5) 84%,
+          transparent
+        );
+      }
+      html[data-theme='synthwave84'] #boot-splash-close {
+        color: #a49cc2;
+      }
+      html[data-theme='synthwave84'] #boot-splash-close:hover {
+        background: #ff6b73;
+        border-color: #ff6b73;
+        color: #1b0f26;
+        box-shadow:
+          0 0 0 3px rgba(255, 107, 115, 0.22),
+          0 6px 16px rgba(255, 107, 115, 0.3);
+      }
+      html[data-theme='synthwave84'] #boot-splash-close:active {
+        background: #ff6b73;
+        border-color: #ff9a9f;
+        color: #1b0f26;
+        box-shadow: 0 0 0 2px rgba(255, 107, 115, 0.26);
+      }
+      html[data-theme='synthwave84'] #boot-splash-close:focus-visible {
+        outline: none;
+        box-shadow: inset 0 0 0 2px #ff9ce6;
+      }
+      html[data-theme='synthwave84'] .boot-bar {
+        background: #362e52;
+      }
+      html[data-theme='synthwave84'] .boot-bar::after {
+        background: #ff7edb;
       }
     </style>
   </head>

@@ -1,0 +1,163 @@
+/* ============================================================================
+   One Dark 主题（Atom 经典配色，官方底 #282c34）
+   ----------------------------------------------------------------------------
+   机制同 `light.css` / `mint-dark.css`：`:root[data-theme='one-dark']` 只重定义 token 值。
+
+   这一档的来历值得写清楚，否则会以为它"和缺省 dark 重复"：**本仓缺省 dark 的语法色本来就是
+   One Dark**（`c678dd` 紫关键字 / `61afef` 蓝函数 / `e06c75` 红变量 / `98c379` 绿字符串 /
+   `d19a66` 橙数字 / `56b6c2` 青标签 / `e5c07b` 黄预处理，与官方 `tokenColors` 逐字同源），
+   差别只在底色——App 用的是 `#1e2227`，官方是 `#282c34`。所以这一档交付的其实是
+   「把底色与面板还回官方」，让那套调色板回到它被设计时的底上。
+
+   **换底要付账**：底从 L* 13.0 抬到 17.9，同样的 4.5 门槛把可用前景整体上推，官方原样搬来的
+   七档当场掉线（实测 4.30–4.47）。这里的取值是"提亮到过线、但守住色相与两两可分"的结果，
+   逐档理由与实算读数见 `monaco/theme.ts` 的 ONE_DARK_PALETTE 表头。
+
+   关键标定：
+   - **主按钮仍是深蓝底 + 白字**（`--accent-strong: #2e6fd1` / `--on-accent: #ffffff`，压 5.0:1）。
+     与薄荷/粉那两档"亮底 + 深字"相反——One Dark 的蓝本就不够亮，白字才稳，且这样它
+     与缺省 dark 的主按钮形态一致（同一支蓝的深浅两档）。
+   - 面板 `#2c313a`、浮层 `#21252b`（官方 sidebar / editorWidget 两枚），**当前行**取
+     `#333944`（1.21:1）而不是官方面板 `#3e4451`（1.43:1，那是"被选中"的量级，太重）。
+   - 语义绿直接用官方字符串绿 `#98c379`、琥珀用官方黄 `#e5c07b`、红用提亮后的 `#e8838c`。
+
+   需覆盖的 token 全集见 light.css 顶部那张清单（同一张），本块逐项给齐。
+   ============================================================================ */
+
+:root[data-theme='one-dark'] {
+  /* 表面：蓝灰梯度 sunken < bg < bg-2 < bg-3（相对亮度 0.0177 / 0.0250 / 0.0289 / 0.0405） */
+  --bg: #282c34;
+  --bg-2: #2c313a;
+  --bg-3: #333944;
+  --surface-sunken: #21252b;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+
+  /* 描边：官方 border/indentGuide 一族（#3b4048 / #4b5263） */
+  --border: #3b4048;
+  --border-subtle: #32373f;
+  --border-strong: #4b5263;
+
+  /* 文字：官方 foreground #abb2bf 提亮到 #b8bfca（把上沿让给注释，见 theme.ts 表头）。
+     fg 压四档面 9.4 / 8.6 / 8.2 / 7.6；fg-dim 压 bg-2 5.4、压 bg-3 4.86（bg-3 是最难点——
+     `--surface-overlay` 就是它，计数徽标那枚芯片底，判据线 4.5）。
+     fg-dim 比 Monaco 的 comment（#8e97a0）亮一档：两者不必同值，外壳弱文字压在更亮的面
+     bg-3 上、编辑器注释压在更暗的 bg 上，各按自己的底定。 */
+  --fg: #b8bfca;
+  --fg-dim: #a0a9b2;
+
+  /* accent 填充上的文字：深蓝黑。
+     这一档与缺省 dark 相反，走**亮蓝底 + 深字**：官方函数蓝 #61afef 本身够亮，白字压它
+     只有 2.3:1（`--on-accent on --accent` 那条 UI 判据 3.0 都过不了），深字压它 4.99:1。
+     与薄荷 / Synthwave 两档同一取舍，只是那两档的"墨"是绿黑 / 紫黑，这里是蓝黑。 */
+  --on-accent: #1a1f26;
+
+  /* accent：官方函数蓝。accent 当文字压 bg 6.6、压 bg-3 5.5；链接档亮一档到 accent-text */
+  --accent: #61afef;
+  --accent-rgb: 97 175 239;
+  --accent-strong: #61afef; /* 深蓝黑字 4.99:1 */
+  --accent-strong-hover: #7cc4ff; /* 提亮反馈，深蓝黑字 8.76:1 */
+  --accent-strong-active: #4a9ae0; /* 压深一档，深蓝黑字 5.51:1 */
+  --accent-text: #7cc4ff; /* 文字档：压 bg 7.4 / 压 bg-3 6.1 */
+  --accent-dim: rgb(var(--accent-rgb) / 0.22);
+
+  /* 交互底：默认深色主题的白 wash 在 #282c34 上完全成立（比 #1e2227 更亮，白 wash 更"融"） */
+  --hover: rgba(255, 255, 255, 0.055);
+  --hover-soft: rgba(255, 255, 255, 0.035);
+  --hover-strong: rgba(255, 255, 255, 0.1);
+  --active: rgba(255, 255, 255, 0.12); /* fg 压合成底 7.9 */
+  --sel-bg: rgb(var(--accent-rgb) / 0.3); /* 选区合成 #3d5670，fg 压它 5.8 */
+
+  /* 按钮三态：底 = bg-3 抬亮/压暗的蓝灰 */
+  --btn-bg-hover: #3a404b; /* fg 7.5 / fg-dim 4.6 */
+  --btn-bg-active: #24282f; /* fg 10.6 */
+
+  /* 滚动条：官方 scrollbarSlider 用 `#4b5263` 一族 */
+  --scroll-thumb: rgba(75, 82, 99, 0.55);
+  --scroll-thumb-hover: rgba(90, 99, 119, 0.72);
+  --scroll-thumb-active: rgba(105, 115, 138, 0.85);
+
+  /* 语义色：绿 = 官方字符串绿 98c379；红 = e06c75 提亮版 e8838c（原值压 bg 4.38，差一点）；
+     琥珀 = 官方黄 e5c07b。压 bg：green 7.6 / red 5.9 / amber 8.9 */
+  --green: #98c379;
+  --red: #e8838c;
+  --amber: #e5c07b;
+  /* 「提示」档：官方函数蓝的柔化版（压 bg 8.6，与语义三色同明度带） */
+  --info: #7cc4ff;
+  /* 错误文字档：与 --red 分档——`--red #e8838c` 压 `--bg-3` 只有 4.45（差一点），
+     而错误文字最常落在浮层（`--surface-overlay` = bg-3）上，故单独提亮到 #efa0a7（5.67） */
+  --danger-text: #efa0a7;
+
+  /* 焦点环：官方 focus 蓝的亮版（压 bg 8.6，UI 判据 3:1 的近三倍余量） */
+  --focus-ring: #7cc4ff;
+  --focus-glow: rgba(97, 175, 239, 0.35);
+
+  /* 阴影：沿用深色基线的黑投影（蓝灰底上纯黑投影成立，不必掺蓝——
+     掺色投影是"底色有强色相"时才需要的补偿，见 mint / synthwave 两档） */
+  --shadow-1:
+    0 1px 2px rgb(10 12 16 / 0.4),
+    0 6px 20px rgb(10 12 16 / 0.55);
+  --shadow-2:
+    0 2px 5px rgb(10 12 16 / 0.42),
+    0 12px 36px rgb(10 12 16 / 0.6);
+  --shadow-3:
+    0 2px 6px rgb(10 12 16 / 0.45),
+    0 16px 48px rgb(10 12 16 / 0.65),
+    0 0 0 1px rgb(10 12 16 / 0.3);
+  --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
+  --well-edge: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --well-shadow: 0 1px 2px rgb(10 12 16 / 0.28);
+  --press-overlay: rgba(255, 255, 255, 0.15);
+
+  /* 玻璃：tint 三元组 = 本档 bg-2/bg-3 预合成（官方 widget 的 #21252b 一族偏暗，落点按 bg-2 算） */
+  --glass-tint: 44 49 58;
+  --glass-tint-raise: 51 57 68;
+  --glass-edge: rgba(255, 255, 255, 0.075);
+  --glass-alpha: 0.85;
+  --glass-saturate: 1.25;
+  --glass-blur: 16px;
+
+  /* —— 插件独占区的本地兜底 token（与 light/mint 同构）—— */
+  --panel-bg: var(--bg-2);
+  --hover-bg: var(--bg-3);
+  --text: var(--fg);
+  --text-dim: var(--fg-dim);
+
+  /* —— 遮罩压暗与浮层实描边：蓝灰底上沿用深色基线的蓝黑遮罩即可，只需按本档亮度微调。
+     仍不给 `--scrim-nofilter`（老内核回落沿用基座纯黑，与缺省 dark 一致）。 */
+  --scrim-a: rgba(14, 16, 21, 0.36);
+  --scrim-b: rgba(14, 16, 21, 0.64);
+  --scrim-fill: rgba(18, 20, 26, 0.48);
+  --scrim-query-a: rgba(14, 16, 21, 0.22);
+  --scrim-query-b: rgba(14, 16, 21, 0.42);
+  --scrim-query-fill: rgba(18, 20, 26, 0.34);
+  --scrim-picker: rgba(18, 20, 26, 0.38);
+  --scrim-solid: rgba(18, 20, 26, 0.56);
+  --rim-1: rgba(200, 210, 226, 0.34);
+  --rim-solid: rgba(200, 210, 226, 0.42);
+
+  /* —— 本档自有的值 —— */
+  --success-text: #a9d68c; /* 绿牌上的字比 --green 亮一档 */
+  --thumb-drop: rgba(10, 12, 16, 0.5);
+  --thumb-ring: rgba(200, 210, 226, 0.4);
+  --aurora-cool: rgba(97, 175, 239, 0.13); /* 极光第二团：同 accent 蓝，不同调 */
+  --sheen-streak: rgba(255, 255, 255, 0.14);
+  --ripple-ink: rgba(226, 238, 255, 0.28);
+  --ripple-fade: rgba(226, 238, 255, 0);
+}
+
+/* 主按钮形态是**亮蓝底 + 深字**（与缺省 dark 的"深蓝底 + 白字"相反，理由见 `--on-accent`
+   那一格）。所以向导里那枚硬编码 `#fff` 必须收口，否则白字压在亮蓝上只有 2.3:1。
+   下面两条与 mint / rose-pine / synthwave84 三档同构。 */
+:root[data-theme='one-dark'] .wizard-actions .primary {
+  color: var(--on-accent);
+}
+:root[data-theme='one-dark'] button.primary .hint {
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--on-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
+}

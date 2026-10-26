@@ -1,23 +1,34 @@
 import { useSyncExternalStore } from 'react';
 /**
- * 主题偏好（主题系统 2026-10-17；「跟随系统」2026-10 追加批）：零 React 纯逻辑 + 极小 React 钩子，可单测。
+ * 主题偏好（主题系统 2026-10-17；「跟随系统」2026-10 追加批；「经典编辑器色」2026-10-27 批）：零 React 纯逻辑 + 极小 React 钩子，可单测。
  *
  * 存法照 `glass-pref.ts` / `motion-pref.ts` 先例——localStorage 真源 + 订阅表，**不新造第二套
  * 偏好机制**；生效路径同款：把值写到根元素的 `data-theme` 属性上，由 `themes/*.css` 的
  * `:root[data-theme='…']` 块读取（换主题只翻 token 值，不动组件规则）。设置页一翻当场见效。
  *
- * ## 四档（落盘的是 `ThemeChoice`）
+ * ## 六档（落盘的是 `ThemeChoice`）
  * - `dark`：**缺省**，本仓既有蓝灰深色（`styles.css` 的 `:root` 就是它，值一律不动）。
  * - `light`：中性浅色（`themes/light.css`），VSCode Light+ 气质、保留蓝灰身份。
  * - `mint-dark`：薄荷暗色（`themes/mint-dark.css`），参考 Qoder 薄荷暗色。
+ * - `one-dark`：Atom One Dark 原味（`themes/one-dark.css`）——本仓缺省 dark 的**语法色本来就
+ *   是 One Dark 血统**（`c678dd`/`61afef`/`e06c75`/`98c379`/`d19a66`/`56b6c2` 逐字同源），
+ *   它只是把底色换成了 App 的 `#1e2227`。这一档把底色还回官方 `#282c34`、面板还回 `#3e4451`，
+ *   于是「同一个调色板、另一种底色」这件事第一次可切换。
+ * - `rose-pine`：Rosé Pine（`themes/rose-pine.css`），玫瑰灰紫 + 低饱和，官方 base `#191724`。
+ * - `synthwave84`：Synthwave '84（`themes/synthwave84.css`），霓虹粉青 + 深紫 `#262335`，
+ *   参考 robb0wen/synthwave-vscode；【本批的审美主场，也是用户点名要的那一档】。
  * - `system`：**跟随系统**——按 `prefers-color-scheme` 在深色/浅色之间解析，并监听系统档变化
  *   实时切换（订阅表收到通知 ⇒ `useThemePref` 的快照换成新具体档 ⇒ 壳层既有 effect 重写
  *   `data-theme`、Monaco 侧随同一钩子换主题——所有消费文件零改动）。
  *
+ * **为什么只有 dark/light 参与系统回退**：系统偏好只表达「深 or 浅」这一个维度，而
+ * mint/one-dark/rose-pine/synthwave84 是**四套各有身份的深色**，系统无从替用户挑。它们
+ * 一律是显式手选，`resolveThemeChoice('system', …)` 的返回值集合永远只有 `dark` / `light`。
+ *
  * ## 向后兼容（存储键不抬版本）
  * 老用户存的 `'dark' | 'light' | 'mint-dark'` 在新模型里仍是**合法选择**，读写原样、零迁移；
  * 非法/缺席折缺省 `dark` 的老口径逐字不变。`loadThemePref()` 的返回联合**没有**加 'system'：
- * 它给 Monaco / 壳层消费，永远返回解析后的具体三档（`monaco/theme.ts` 与 `ThemePref` 的
+ * 它给 Monaco / 壳层消费，永远返回解析后的具体档（`monaco/theme.ts` 与 `ThemePref` 的
  * 双向同形编译钉因此不许动）。设置页要读的是「含 system 的选择」，走新入口 `useThemeChoice()`。
  * 副键 `kojo.ui.theme.manual.v1` 只存「最近一次手选的具体档」，仅在关闭跟随系统时用来还原；
  * 副键缺席不影响任何旧行为（缺省折 dark，与主键旧口径同源）。
@@ -27,14 +38,28 @@ import { useSyncExternalStore } from 'react';
  * dark 下 `:root` 基础 token 原样生效，主题文件里 `[data-theme='dark']` 不写任何覆盖即可
  * （缺省态由基础 `:root` 承担），故首屏 splash 的硬编码 `#1e2227` 在默认档仍与 `--bg` 相等
  * （`tools/smoke-tauri-dom.mjs` 断言①钉的那条不变量不破坏）。`index.html` 早应用脚本把
- * 'system' 折成 dark 落 `data-theme`（该文件本批不归这条线所有）——挂载后本模块立刻按
- * 系统档改写，系统浅色的用户开机只会看到一小段深色引导，不产生错色常驻。
+ * 'system' 折成 dark 落 `data-theme`——挂载后本模块立刻按系统档改写，系统浅色的用户开机
+ * 只会看到一小段深色引导，不产生错色常驻。
+ *
+ * ## 加一档要动哪里（2026-10-27 批的清单，别再漏）
+ * ① 本文件：`ThemePref` / `THEME_IDS` / `normalizeChoice` 三处字面量；
+ * ② `monaco/theme.ts`：`MonacoThemeId` / `MonacoThemePref` / `THEME_ID_BY_PREF` + 一套色板；
+ * ③ `themes/<id>.css` + `main.tsx` 一行 import（缺 import = 全场落回基础 :root，静默）；
+ * ④ `index.html`：早应用白名单 + 引导层那 14 条（`boot-sweep-single-source.test.ts` 会逐字
+ *    比对该档 `--bg/--fg/--fg-dim/--bg-3/--accent` 与引导层，漏了当场红）；
+ * ⑤ `SettingsPanel.tsx` 的 `THEME_LABELS` + `settings-appearance.css` 的卡面预览色
+ *    （六档卡按 3 × 2 排，列数写死在 `.theme-cards` 上，**不随档数变**）；
+ * ⑥ `ui/settings-search.ts` 的「已修改」判定：**不许枚举档名**，写成
+ *    `c !== THEME_PREF_DEFAULT && c !== 'system'`。本批真踩过——那里原本是
+ *    `c === 'light' || c === 'mint-dark'`，于是新三档选了也不算「改过」，搜索页静默不标记。
+ * 少任何一处都有测试兜着（②③由 monaco-theme 的 CSS 源映射，④由 boot-sweep，①⑤由 typecheck），
+ * **只有 ⑥ 没有闸**——它是一句布尔表达式，编译期抓不到，加档时记得回头看一眼。
  */
 
-/** 具体三档 = 写进 `data-theme` / Monaco 的生效档联合（与 `monaco/theme.ts` 逐字同形，不许加档） */
-export type ThemePref = 'dark' | 'light' | 'mint-dark';
+/** 具体档 = 写进 `data-theme` / Monaco 的生效档联合（与 `monaco/theme.ts` 逐字同形，不许加档） */
+export type ThemePref = 'dark' | 'light' | 'mint-dark' | 'one-dark' | 'rose-pine' | 'synthwave84';
 
-/** 用户选择 = 具体三档 + `system`；主键落盘的就是这个联合 */
+/** 用户选择 = 具体档 + `system`；主键落盘的就是这个联合 */
 export type ThemeChoice = ThemePref | 'system';
 
 /** 主偏好键（localStorage，落 `ThemeChoice`） */
@@ -46,8 +71,20 @@ const THEME_MANUAL_KEY = 'kojo.ui.theme.manual.v1';
 /** 缺省 = dark（既有蓝灰深色；加了 system 档之后缺省不变，老用户体验逐字不动） */
 export const THEME_PREF_DEFAULT: ThemePref = 'dark';
 
-/** 全部具体主题（设置页预览卡、`applyThemePref` 校验与 monaco 三套 id 映射共用这张表，单源不抄第二份） */
-export const THEME_IDS: readonly ThemePref[] = ['dark', 'light', 'mint-dark'];
+/**
+ * 全部具体主题（设置页预览卡、`applyThemePref` 校验与 monaco 各套 id 映射共用这张表，单源不抄第二份）。
+ * 次序＝设置页卡片的排列次序：先本仓三档（缺省 → 浅色 → 薄荷），再三套经典编辑器配色
+ * （One Dark → Rosé Pine → Synthwave '84）。既有三档的相对次序与位置一格未动——老用户的
+ * 肌肉记忆（第三张是薄荷）不该因为加档而漂。
+ */
+export const THEME_IDS: readonly ThemePref[] = [
+  'dark',
+  'light',
+  'mint-dark',
+  'one-dark',
+  'rose-pine',
+  'synthwave84',
+];
 
 /** localStorage 访问器（node 测试环境无 window；隐私模式可能抛错——都不该影响本会话） */
 function storage(): Storage | null {
@@ -78,15 +115,19 @@ function writeKey(key: string, value: string): void {
   }
 }
 
-/** 选择归一：四档原样；非法/缺席一律回缺省 dark（绝不让脏值进存储或 `data-theme`） */
+/**
+ * 选择归一：合法档原样（用 `THEME_IDS.includes` 判，加档只改上面那张表一处）；
+ * `system` 原样；非法/缺席一律回缺省 dark（绝不让脏值进存储或 `data-theme`）。
+ */
 export function normalizeChoice(raw: string | null | undefined): ThemeChoice {
-  return raw === 'system' || raw === 'dark' || raw === 'light' || raw === 'mint-dark'
-    ? raw
+  if (raw === 'system') return 'system';
+  return raw !== null && raw !== undefined && (THEME_IDS as readonly string[]).includes(raw)
+    ? (raw as ThemePref)
     : THEME_PREF_DEFAULT;
 }
 
 /**
- * 【旧入口·保留】归一到具体三档：非法折 dark；'system' 在"要 concrete 的语境"里同样折 dark。
+ * 【旧入口·保留】归一到具体档：非法折 dark；'system' 在"要 concrete 的语境"里同样折 dark。
  * 语义与抬档前逐字一致（老单测零改动跑绿）；新代码请优先用 `normalizeChoice` / `resolveThemeChoice`。
  */
 export function normalizeTheme(raw: string | null | undefined): ThemePref {
@@ -106,7 +147,8 @@ export function systemPrefersDark(): boolean {
 
 /**
  * 纯解析（单测直钉）：选择 + 系统深浅 → 实际生效的具体档。
- * `system` 只在 dark / light 之间取——**薄荷是显式手选，不参与系统回退**；具体档原样通过。
+ * `system` 只在 dark / light 之间取——**四套深色（薄荷 / One Dark / Rosé Pine / Synthwave '84）
+ * 都是显式手选，不参与系统回退**；具体档原样通过。
  */
 export function resolveThemeChoice(choice: ThemeChoice, systemIsDark: boolean): ThemePref {
   return choice === 'system' ? (systemIsDark ? 'dark' : 'light') : choice;
@@ -123,7 +165,7 @@ export function loadManualChoice(): ThemePref {
 }
 
 /**
- * 读**生效**主题（缺省 dark；永远是具体三档——system 在这里就被解析掉）。
+ * 读**生效**主题（缺省 dark；永远是具体档——system 在这里就被解析掉）。
  * 消费口径抬档前后逐字不变：Monaco / `data-theme` 一侧不需要知道 'system' 的存在。
  */
 export function loadThemePref(): ThemePref {

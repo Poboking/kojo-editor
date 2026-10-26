@@ -464,7 +464,7 @@ export function EditorPane({
    */
   useEffect(() => subscribeLargeFileNotices(notify), [notify]);
   /**
-   * 主题偏好（反馈 3）：dark / light / mint-dark 三档与 `monaco/theme.ts` 的三套主题
+   * 主题偏好（反馈 3）：`THEME_IDS` 的每一档与 `monaco/theme.ts` 的每一套主题
    * 一一对应；偏好一变就把 Monaco 全局主题换过去（同页所有编辑器实例一起换）。
    * 创建实例时另按 `loadThemePref()` 现取（见下方 `monaco.editor.create`）。
    * 两段式（性能批 S5）：主界面当帧变，Monaco 延一帧，理由见 `applyMonacoTheme`。

@@ -1,0 +1,167 @@
+/* ============================================================================
+   Synthwave '84 主题（深紫底 + 霓虹粉青；参考 robb0wen/synthwave-vscode）
+   ----------------------------------------------------------------------------
+   机制同 `light.css` / `mint-dark.css`：`:root[data-theme='synthwave84']` 只重定义 token 值，
+   全场换装，组件规则一格不碰。
+
+   身份：底 #262335（官方 `editor.background` 原值），accent 粉 #ff7edb（官方变量/标记色），
+   高亮点缀青 #36f9f6（官方函数色）。霓虹气质靠**粉与青两张嘴唇**维持，而不是把整个界面
+   染成紫色——紫只做底、描边与结构（`--border` / `--indent` / 结构标点），大面积仍是深紫灰。
+
+   两条关键标定：
+   - **底够黑，霓虹才敢亮**：`#262335` 的 L* 是 14.8（缺省 dark `#1e2227` 是 13.0）——只比
+     缺省档亮一点点，所以官方那十枚高饱和色压上去最弱的一档仍有 4.66:1（实测见
+     `monaco/theme.ts` 的 SYNTHWAVE84 表头）。这是本档能"原封不动用官方色板"的唯一前提，
+     换底前请先重跑 `theme-color-gates.test.ts`。
+   - **主按钮走亮粉底 + 深紫字**（`--accent-strong: #ff7edb` / `--on-accent: #1b0f26`，
+     压 8.07:1）。与薄荷档同一取舍：白字压在亮粉上只有 1.9:1，等于看不见；深紫字才是
+     这一档的"墨"。因此 `styles.css` 里那两处硬编码白字（`.wizard-actions .primary` /
+     `button.primary .hint`）要按选择器收口——见文件末尾。
+
+   需覆盖的 token 全集见 light.css 顶部那张清单（同一张），本块逐项给齐。
+   ============================================================================ */
+
+:root[data-theme='synthwave84'] {
+  /* 表面：紫灰梯度 sunken < bg < bg-2 < bg-3（相对亮度 0.0093 / 0.0182 / 0.0242 / 0.0333）。
+     bg-3 是 Monaco 当前行的抬升档，控制在 1.22:1（同三套既有主题的 1.18–1.25 带）。 */
+  --bg: #262335;
+  --bg-2: #2d2745;
+  --bg-3: #362e52;
+  --surface-sunken: #1b1628;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+
+  /* 描边：紫灰三档。深紫底上"灰线"会读成脏，紫线读成同一块材质受光 */
+  --border: #3f3660;
+  --border-subtle: #322a4b;
+  --border-strong: #544779;
+
+  /* 文字：微紫白。fg 压四档面 15.1 / 13.3 / 11.7 / 15.8；fg-dim 压 bg-2 5.47、
+     压 bg-3 4.87 —— 全过 AA 且仍读得出"弱一档" */
+  --fg: #eae6f5;
+  --fg-dim: #a49cc2;
+
+  /* accent 填充上的文字：深紫黑（见头部标定，白字在亮粉底上只有 1.9:1，弃） */
+  --on-accent: #1b0f26;
+
+  /* accent：霓虹粉。accent 当文字压 bg 6.7、压 bg-3 5.9；链接档再亮一档到 accent-text */
+  --accent: #ff7edb;
+  --accent-rgb: 255 126 219;
+  --accent-strong: #ff7edb; /* 深紫字 8.07:1 */
+  --accent-strong-hover: #ff9ce6; /* 提亮反馈，深紫字 10.1:1 */
+  --accent-strong-active: #f266cc; /* 压深一档，深紫字 6.8:1 */
+  --accent-text: #ff9ce6; /* 文字档：压 bg 8.3 / 压 bg-3 7.3 */
+  --accent-dim: rgb(var(--accent-rgb) / 0.22);
+
+  /* 交互底：wash 一律从白墨换成粉墨——深紫底上白 wash 会读成"起雾"，粉 wash 才是同族提亮。
+     alpha 较默认白档微补（粉比白"融"，同可见度要多给一点） */
+  --hover: rgba(255, 126, 219, 0.08);
+  --hover-soft: rgba(255, 126, 219, 0.05);
+  --hover-strong: rgba(255, 126, 219, 0.14);
+  --active: rgb(var(--accent-rgb) / 0.16); /* fg 压合成底 12.4 */
+  --sel-bg: rgb(var(--accent-rgb) / 0.32); /* 选区合成 #5a3a63，fg 压它 7.9+ */
+
+  /* 按钮三态：底 = bg-3 抬亮/压暗的紫灰 */
+  --btn-bg-hover: #3a3259; /* fg 12.6 / fg-dim 5.2 */
+  --btn-bg-active: #241e35; /* fg 15.4 */
+
+  /* 滚动条：官方 scrollbarSlider 就是紫（`#9d8bca` 一族），照它取 --b893ce 的 alpha 链 */
+  --scroll-thumb: rgba(184, 147, 206, 0.18);
+  --scroll-thumb-hover: rgba(184, 147, 206, 0.32);
+  --scroll-thumb-active: rgba(184, 147, 206, 0.45);
+
+  /* 语义色：绿用官方薄荷 72f1b8（本盘台词色，语义上"成功=通行"同族）；
+     红用官方 error fe4450 的提亮版 ff6b73（原值压 bg 只有 3.9，提亮保色相）；
+     琥珀用官方黄 fede5d（本盘关键字色，"警告"与"待办"同一支黄）。压 bg：green 10.9 / red 6.0 / amber 11.5 */
+  --green: #72f1b8;
+  --red: #ff6b73;
+  --amber: #fede5d;
+  /* 「提示」档：官方青 36f9f6 压 bg 11.7，但纯青作文字过艳，取本盘旁白青的柔和版 */
+  --info: #6fc8e8;
+  /* 错误文字档：本档 --red 压 bg-3 已有 5.4，不必另抬，跟着 --danger 走 */
+  --danger-text: var(--danger);
+
+  /* 焦点环：比 accent 再亮一档的粉（压 bg 8.3，UI 判据 3:1 的两倍余量） */
+  --focus-ring: #ff9ce6;
+  --focus-glow: rgba(255, 126, 219, 0.35);
+
+  /* 阴影：暗档投影掺紫（rgb(12 8 22)）——纯黑投影在紫底上读成"脏灰边"，
+     紫黑投影读成"深度"。shadow-3 末层切边环同样紫化 */
+  --shadow-1:
+    0 1px 2px rgb(12 8 22 / 0.45),
+    0 6px 20px rgb(12 8 22 / 0.6);
+  --shadow-2:
+    0 2px 5px rgb(12 8 22 / 0.48),
+    0 12px 36px rgb(12 8 22 / 0.62);
+  --shadow-3:
+    0 2px 6px rgb(12 8 22 / 0.5),
+    0 16px 48px rgb(12 8 22 / 0.68),
+    0 0 0 1px rgb(12 8 22 / 0.34);
+  /* 抬升面顶边高光：白→淡粉白（紫底上纯白读成冷贴条，粉白才像同一块材质受光） */
+  --edge-raise: inset 0 1px 0 rgba(255, 226, 250, 0.05);
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
+  /* 井面 + 按压罩（与 mint 同构：井边比 edge-raise 低半档，投影掺紫，按压罩取粉白） */
+  --well-edge: inset 0 1px 0 rgba(255, 226, 250, 0.035);
+  --well-shadow: 0 1px 2px rgb(12 8 22 / 0.3);
+  --press-overlay: rgba(255, 214, 245, 0.15);
+
+  /* 玻璃：tint 三元组 = 本档 bg-2/bg-3 预合成（补偿遮罩暗化后 alpha .85 的合成落点），
+     edge 淡粉白；blur/alpha 沿用设计常量，旋钮语义不动 */
+  --glass-tint: 45 39 69;
+  --glass-tint-raise: 54 46 82;
+  --glass-edge: rgba(255, 214, 245, 0.075);
+  --glass-alpha: 0.85;
+  --glass-saturate: 1.25;
+  --glass-blur: 16px;
+
+  /* —— 插件独占区的本地兜底 token（与 light/mint 同构，缺则回落深蓝灰冷岛）—— */
+  --panel-bg: var(--bg-2);
+  --hover-bg: var(--bg-3);
+  --text: var(--fg);
+  --text-dim: var(--fg-dim);
+
+  /* —— 遮罩压暗（scrim）与浮层实描边（rim）——
+     纯黑径向 + 蓝黑底在紫底上读成"蓝雾"，本档一律换紫黑；rim 用淡粉白，因为深紫底 +
+     深色代码面本就是低反差的一对，边界只能靠一条亮线认出来。
+     仍不给 `--scrim-nofilter`：老内核（无 backdrop-filter）的回落遮罩沿用基座纯黑，本档不改它。 */
+  --scrim-a: rgba(10, 6, 18, 0.36);
+  --scrim-b: rgba(10, 6, 18, 0.64);
+  --scrim-fill: rgba(14, 9, 24, 0.48);
+  --scrim-query-a: rgba(10, 6, 18, 0.22);
+  --scrim-query-b: rgba(10, 6, 18, 0.42);
+  --scrim-query-fill: rgba(14, 9, 24, 0.34);
+  --scrim-picker: rgba(14, 9, 24, 0.38);
+  --scrim-solid: rgba(14, 9, 24, 0.56);
+  --rim-1: rgba(220, 190, 245, 0.34);
+  --rim-solid: rgba(220, 190, 245, 0.42);
+
+  /* —— 本档自有的值（规则里一个色值都不写，颜色全住在这块 :root）—— */
+  --success-text: #8ff5c8; /* 绿牌上的字要比 --green 亮一档 */
+  --thumb-drop: rgba(10, 6, 18, 0.5);
+  --thumb-ring: rgba(220, 190, 245, 0.4);
+  /* 欢迎页极光的第二团：官方青（36f9f6 一族），与首团粉光同族不同调 */
+  --aurora-cool: rgba(54, 249, 246, 0.13);
+  --sheen-streak: rgba(255, 230, 250, 0.16);
+  --ripple-ink: rgba(255, 200, 245, 0.3);
+  --ripple-fade: rgba(255, 200, 245, 0);
+}
+
+/* ----------------------------------------------------------------------------
+   残留硬值收口（styles.css 里绕不开 token 的白字，按选择器覆盖）
+   ---------------------------------------------------------------------------
+   只在"为蓝底调的白字"落在亮粉底上会失去对比度时才写；色值一律取上面的 token，
+   规则里不出现任何新字面量。 */
+
+/* 向导主按钮硬编码 #fff：随 --on-accent 走深紫字 */
+:root[data-theme='synthwave84'] .wizard-actions .primary {
+  color: var(--on-accent);
+}
+/* 主按钮里的快捷键芯片：原样式是"白字+白边+黑底"（为蓝底设计），亮粉底上换成深紫三件套 */
+:root[data-theme='synthwave84'] button.primary .hint {
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--on-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
+}

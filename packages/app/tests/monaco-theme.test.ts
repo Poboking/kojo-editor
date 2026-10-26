@@ -59,6 +59,11 @@ const THEME_BASES: Readonly<Record<MonacoThemeId, string>> = {
   'kojo-dark': 'vs-dark',
   'kojo-light': 'vs',
   'kojo-mint-dark': 'vs-dark',
+  // 2026-10-27 经典编辑器色三套：三套都是深色，base 一律 vs-dark
+  // （`inherit: false` 下 base 只决定滚动条惯性 / 缩略图归一化这类"深浅行为"开关，不供色）
+  'kojo-one-dark': 'vs-dark',
+  'kojo-rose-pine': 'vs-dark',
+  'kojo-synthwave84': 'vs-dark',
 };
 
 const REQUIRED_COLORS = [
@@ -108,12 +113,15 @@ const REQUIRED_BASE_TOKENS = [
 
 /* ============================== ① 映射 ============================== */
 
-describe('monacoThemeIdFor：三档映射与兜底', () => {
-  it('三档偏好一一对应且主题 id 唯一、全覆盖', () => {
+describe('monacoThemeIdFor：六档映射与兜底', () => {
+  it('六档偏好一一对应且主题 id 唯一、全覆盖', () => {
     expect(THEME_IDS.map((pref) => monacoThemeIdFor(pref))).toEqual([
       'kojo-dark',
       'kojo-light',
       'kojo-mint-dark',
+      'kojo-one-dark',
+      'kojo-rose-pine',
+      'kojo-synthwave84',
     ]);
     expect(new Set(THEME_IDS.map((pref) => monacoThemeIdFor(pref))).size).toBe(THEME_IDS.length);
   });
@@ -123,11 +131,16 @@ describe('monacoThemeIdFor：三档映射与兜底', () => {
   });
 });
 
-/* ============================== ② 三套主题装配 ============================== */
+/* ============================== ② 六套主题装配 ============================== */
 
-describe('defineMonacoThemes：经 registerErbLanguage 一次定义三套', () => {
-  it('三套 id 齐全，base 正确，rules/colors 非空，inherit=false', () => {
-    expect([...themes.keys()].sort()).toEqual(['kojo-dark', 'kojo-light', 'kojo-mint-dark']);
+describe('defineMonacoThemes：经 registerErbLanguage 一次定义六套', () => {
+  it('六套 id 齐全，base 正确，rules/colors 非空，inherit=false', () => {
+    // 期望集合 = THEME_IDS 经同一映射得来——**不再手抄一份 id 元组**：加档时只要
+    // `THEME_IDS` 与 `THEME_ID_BY_PREF` 同步，这条断言自动跟上（手抄的话两处都要改，
+    // 漏一处就是"新档有 id 但没被这条守门看见"）。
+    expect([...themes.keys()].sort()).toEqual(
+      THEME_IDS.map((pref) => monacoThemeIdFor(pref)).sort(),
+    );
     for (const [id, theme] of themes) {
       expect(theme.base, `${id}.base`).toBe(THEME_BASES[id as MonacoThemeId]);
       expect(theme.inherit, `${id}.inherit`).toBe(false);
@@ -142,9 +155,9 @@ describe('defineMonacoThemes：经 registerErbLanguage 一次定义三套', () =
     }
   });
 
-  it('三套 editor.background 互不相同（换主题必须换底色）', () => {
+  it('六套 editor.background 互不相同（换主题必须换底色）', () => {
     const backgrounds = [...themes.values()].map((t) => t.colors['editor.background']!.toLowerCase());
-    expect(new Set(backgrounds).size).toBe(3);
+    expect(new Set(backgrounds).size).toBe(THEME_IDS.length);
   });
 
   it('dark 的糖/语义规则对象原样复用（同引用，主题侧不抄第二份）', () => {
@@ -174,6 +187,11 @@ const CSS_SOURCES: readonly { theme: MonacoThemeId; file: string }[] = [
   { theme: 'kojo-dark', file: '../src/tokens.css' },
   { theme: 'kojo-light', file: '../src/themes/light.css' },
   { theme: 'kojo-mint-dark', file: '../src/themes/mint-dark.css' },
+  // 2026-10-27：新三套各自一份主题源。这条映射是"编辑器底色与外壳底色必须同一块"
+  // 的唯一守门——两处各写一遍 hex 而没人比对，正是最容易静默漂的一格。
+  { theme: 'kojo-one-dark', file: '../src/themes/one-dark.css' },
+  { theme: 'kojo-rose-pine', file: '../src/themes/rose-pine.css' },
+  { theme: 'kojo-synthwave84', file: '../src/themes/synthwave84.css' },
 ];
 
 describe('编辑器底色/字色与主题 token 逐字相等', () => {

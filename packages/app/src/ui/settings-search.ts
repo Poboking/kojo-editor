@@ -42,7 +42,7 @@ import { FIND_SEED_DEFAULT, loadFindSeedPref } from './find-pref';
 import { AUTOSAVE_MODE_DEFAULT, loadAutosavePref } from './autosave-pref';
 import { NAME_COLOR_DEFAULT, loadNameColorPref } from './semantic-color-pref';
 import { DIRECT_MODE_DEFAULT, loadDirectMode } from './direct-mode';
-import { loadThemeChoice } from './theme-pref';
+import { loadThemeChoice, THEME_PREF_DEFAULT } from './theme-pref';
 import { MOTION_PREF_DEFAULT, loadMotionPref } from './motion-pref';
 import { GLASS_TRANSPARENCY_DEFAULT, loadGlassTransparencyPref } from './glass-pref';
 import { WELCOME_BG_DEFAULT, loadWelcomeBgPref } from './welcome-bg-pref';
@@ -144,9 +144,12 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'editor.directMode', section: 'editor', sectionLabel: '编辑器', label: '直连模式（就地编辑游戏目录）', keywords: ['direct mode 游戏目录 写权限'], key: 'editor.directMode', isModified: () => loadDirectMode() !== DIRECT_MODE_DEFAULT },
 
   // ---- 外观 ----
-  { id: 'appearance.theme', section: 'appearance', sectionLabel: '外观', label: '主题', keywords: ['theme 配色 深色 浅色 薄荷'], key: 'appearance.theme', isModified: () => {
+  { id: 'appearance.theme', section: 'appearance', sectionLabel: '外观', label: '主题', keywords: ['theme 配色 深色 浅色 薄荷 one dark rose pine synthwave 霓虹 复古 atom'], key: 'appearance.theme', isModified: () => {
+    // 「已修改」= 任何非缺省的具体档。**不许写成枚举**：2026-10-27 加三档时这里原本是
+    // `c === 'light' || c === 'mint-dark'`，于是 One Dark / Rosé Pine / Synthwave '84 选了也不算改过。
+    // `system` 单独排除——它有自己那一条 `appearance.followSystem`。
     const c = loadThemeChoice();
-    return c === 'light' || c === 'mint-dark';
+    return c !== THEME_PREF_DEFAULT && c !== 'system';
   } },
   { id: 'appearance.followSystem', section: 'appearance', sectionLabel: '外观', label: '跟随系统', keywords: ['system 深浅 auto'], key: 'appearance.followSystem', isModified: () => loadThemeChoice() === 'system' },
   { id: 'appearance.motion', section: 'appearance', sectionLabel: '外观', label: '减弱动效', keywords: ['motion 动画 reduced'], key: 'appearance.motion', isModified: () => loadMotionPref() !== MOTION_PREF_DEFAULT },

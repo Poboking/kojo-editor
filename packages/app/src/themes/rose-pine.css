@@ -1,0 +1,168 @@
+/* ============================================================================
+   Rosé Pine 主题（玫瑰灰紫 + 低饱和；官方 base #191724）
+   ----------------------------------------------------------------------------
+   机制同 `light.css` / `mint-dark.css`：`:root[data-theme='rose-pine']` 只重定义 token 值。
+
+   身份：底 #191724（官方 base），accent iris 紫 #c4a7e7，正文 #e0def4。这一档的气质是
+   **"暗处的一层玫瑰灰"**——所有颜色都往灰里压过一档饱和，紫色不刺、粉色不甜。
+
+   三处取舍（官方 9 枚色里有两枚在本仓判据下不可用）：
+   - 官方注释 `muted #6e6a86` 压 base 只有 3.0 ⇒ 注释改用 `subtle #908caa`（5.48）；
+   - 官方深青 `pine #31748f` 只有 3.4 ⇒ 结构族（`operator` 一族）用它**提亮版** `#5fa0b8`
+     （同色相、同"深青"身份，只把明度抬到过线；对正文仍明显退让，彩度 24 < 关键字 36）；
+   - 语义绿：Rosé Pine 官方没有绿（"成功"在它的生态里由 foam 那片青绿承担），
+     本档取 `#8fc7a8`（同一支冷绿、压到与 iris 同明度带），避免从别的主题借一枚绿的"外来感"。
+
+   关键标定：
+   - **主按钮反过来走"亮紫底 + 深底字"**（`--accent-strong: #c4a7e7` / `--on-accent: #191724`，
+     压 7.99:1）。与薄荷/粉两档同法：iris 够亮，深字才是它的"墨"；白字压它只有 2.1:1。
+     因此 `styles.css` 里那两处硬编码白字要按选择器收口（见文件末尾）。
+   - 底够黑（L* 8.5），所以这套是三套新主题里对比度余量最大的：最弱一档 5.48、
+     独立色 9 枚、最紧一对 ΔE 19.6 —— 整块不需要任何额外提亮。
+   - `--bg-3`（当前行抬升）用 `#2c2843` 而不是官方 overlay `#26233a`：后者只有 **1.10:1**，
+     等于没抬（作者找不到自己在哪一行），前者 1.19:1，落在三套既有主题同一条带上。
+
+   需覆盖的 token 全集见 light.css 顶部那张清单（同一张），本块逐项给齐。
+   ============================================================================ */
+
+:root[data-theme='rose-pine'] {
+  /* 表面：紫黑梯度 sunken < bg < bg-2 < bg-3（相对亮度 0.0074 / 0.0126 / 0.0158 / 0.0243） */
+  --bg: #191724;
+  --bg-2: #1f1d2e;
+  --bg-3: #2c2843;
+  --surface-sunken: #13111c;
+  --surface: var(--bg);
+  --surface-raised: var(--bg-2);
+  --surface-overlay: var(--bg-3);
+
+  /* 描边：官方 surface / overlay / highlight-high 三档（#1f1d2e / #26233a / #403d52），
+     border 取 overlay 与 highlight-med 之间——直接用 overlay 太贴底，线读不出来 */
+  --border: #2a2740;
+  --border-subtle: #211f30;
+  --border-strong: #403d52;
+
+  /* 文字：官方 text #e0def4 / subtle #908caa 提亮到 #9a95b8。
+     **为什么要提**：`--surface-overlay` 就是 `--bg-3`（当前行抬升档），官方 subtle 压它只有
+     4.37，差 0.13 破线；而 bg-3 不能再压暗（`#26233a` 的 1.10:1 等于当前行没抬），
+     所以只能抬字。提亮后压 bg-2 6.4、压 bg-3 4.96。
+     Monaco 的 comment 仍是官方原值 `#908caa`（压编辑器底 #191724 有 5.48）——外壳弱文字
+     压在更亮的面 bg-3 上，编辑器注释压在更暗的 bg 上，各按自己的底定，不必同值。 */
+  --fg: #e0def4;
+  --fg-dim: #9a95b8;
+
+  /* accent 填充上的文字：官方 base（深紫黑，见头部标定；白字压 iris 只有 2.1:1，弃） */
+  --on-accent: #191724;
+
+  /* accent：官方 iris。accent 当文字压 bg 7.5、压 bg-3 6.2；链接档亮一档到 accent-text */
+  --accent: #c4a7e7;
+  --accent-rgb: 196 167 231;
+  --accent-strong: #c4a7e7; /* 深底字 7.99:1 */
+  --accent-strong-hover: #d3bdf0; /* 提亮反馈，深底字 9.4:1 */
+  --accent-strong-active: #b294dd; /* 压深一档，深底字 6.5:1 */
+  --accent-text: #d4c0f2; /* 文字档：压 bg 9.1 / 压 bg-3 7.5 */
+  --accent-dim: rgb(var(--accent-rgb) / 0.22);
+
+  /* 交互底：wash 用 iris 墨而不是白墨——在近黑的紫底上，白 wash 会把底"提灰"，
+     iris wash 才是同族提亮；alpha 较默认白档略补 */
+  --hover: rgba(196, 167, 231, 0.075);
+  --hover-soft: rgba(196, 167, 231, 0.045);
+  --hover-strong: rgba(196, 167, 231, 0.13);
+  --active: rgb(var(--accent-rgb) / 0.15); /* fg 压合成底 11.2 */
+  --sel-bg: rgb(var(--accent-rgb) / 0.3); /* 选区合成 #453a5e，fg 压它 7.6 */
+
+  /* 按钮三态：底 = bg-3 抬亮/压暗的紫灰 */
+  --btn-bg-hover: #322d4c; /* fg 10.9 / fg-dim 4.6 */
+  --btn-bg-active: #1d1a2a; /* fg 13.6 */
+
+  /* 滚动条：官方 highlight-high #524f67 一族的 alpha 链 */
+  --scroll-thumb: rgba(82, 79, 103, 0.6);
+  --scroll-thumb-hover: rgba(103, 99, 128, 0.75);
+  --scroll-thumb-active: rgba(124, 120, 152, 0.88);
+
+  /* 语义色：红 = 官方 love #eb6f92；琥珀 = 官方 gold #f6c177；绿 = 本档自取的冷绿（见头部取舍）。
+     压 bg：green 10.1 / red 6.1 / amber 9.4 */
+  --green: #8fc7a8;
+  --red: #eb6f92;
+  --amber: #f6c177;
+  /* 「提示」档：官方 foam #9ccfd8（压 bg 8.9，与语义三色同明度带） */
+  --info: #9ccfd8;
+  /* 错误文字档：本档 --red 压 bg-3 已有 5.0，不必另抬，跟着 --danger 走 */
+  --danger-text: var(--danger);
+
+  /* 焦点环：比 accent 再亮一档的 iris（压 bg 9.1，UI 判据 3:1 的三倍余量） */
+  --focus-ring: #d4c0f2;
+  --focus-glow: rgba(196, 167, 231, 0.35);
+
+  /* 阴影：投影掺紫黑（rgb(8 6 15)）——纯黑投影在紫黑底上读成"脏灰边"，
+     同族紫黑才读成"深度" */
+  --shadow-1:
+    0 1px 2px rgb(8, 6, 15, 0.4),
+    0 6px 20px rgb(8, 6, 15, 0.55);
+  --shadow-2:
+    0 2px 5px rgb(8, 6, 15, 0.44),
+    0 12px 36px rgb(8, 6, 15, 0.62);
+  --shadow-3:
+    0 2px 6px rgb(8, 6, 15, 0.46),
+    0 16px 48px rgb(8, 6, 15, 0.68),
+    0 0 0 1px rgb(8, 6, 15, 0.32);
+  /* 抬升面顶边高光：暖白（rose 一族受光，偏紫白在近黑底上反而发冷） */
+  --edge-raise: inset 0 1px 0 rgba(255, 240, 245, 0.05);
+  --shadow-focus:
+    0 0 0 1px var(--focus-ring),
+    0 0 0 4px var(--focus-glow);
+  --well-edge: inset 0 1px 0 rgba(255, 240, 245, 0.035);
+  --well-shadow: 0 1px 2px rgb(8, 6, 15, 0.28);
+  --press-overlay: rgba(245, 225, 240, 0.15);
+
+  /* 玻璃：tint 三元组 = 本档 bg-2/bg-3 预合成；edge 暖白 */
+  --glass-tint: 31 29 46;
+  --glass-tint-raise: 44 40 67;
+  --glass-edge: rgba(255, 240, 245, 0.075);
+  --glass-alpha: 0.85;
+  --glass-saturate: 1.25;
+  --glass-blur: 16px;
+
+  /* —— 插件独占区的本地兜底 token（与 light/mint 同构）—— */
+  --panel-bg: var(--bg-2);
+  --hover-bg: var(--bg-3);
+  --text: var(--fg);
+  --text-dim: var(--fg-dim);
+
+  /* —— 遮罩压暗与浮层实描边：近黑紫底上遮罩要更重一点才"压得住"（本档底已经很暗，
+     .36 的遮罩几乎看不出来），此处比既有三档各抬 0.04；rim 用暖白。
+     仍不给 `--scrim-nofilter`（老内核回落沿用基座纯黑）。 */
+  --scrim-a: rgba(8, 6, 15, 0.4);
+  --scrim-b: rgba(8, 6, 15, 0.68);
+  --scrim-fill: rgba(12, 10, 20, 0.52);
+  --scrim-query-a: rgba(8, 6, 15, 0.26);
+  --scrim-query-b: rgba(8, 6, 15, 0.46);
+  --scrim-query-fill: rgba(12, 10, 20, 0.38);
+  --scrim-picker: rgba(12, 10, 20, 0.42);
+  --scrim-solid: rgba(12, 10, 20, 0.6);
+  --rim-1: rgba(235, 215, 240, 0.34);
+  --rim-solid: rgba(235, 215, 240, 0.42);
+
+  /* —— 本档自有的值 —— */
+  --success-text: #a5d9bc; /* 绿牌上的字比 --green 亮一档 */
+  --thumb-drop: rgba(8, 6, 15, 0.5);
+  --thumb-ring: rgba(235, 215, 240, 0.4);
+  --aurora-cool: rgba(156, 207, 216, 0.13); /* 极光第二团：官方 foam，与首团 iris 同族不同调 */
+  --sheen-streak: rgba(255, 245, 250, 0.15);
+  --ripple-ink: rgba(245, 228, 245, 0.28);
+  --ripple-fade: rgba(245, 228, 245, 0);
+}
+
+/* ----------------------------------------------------------------------------
+   残留硬值收口（styles.css 里绕不开 token 的白字，按选择器覆盖）
+   --------------------------------------------------------------------------- */
+
+/* 向导主按钮硬编码 #fff：随 --on-accent 走深紫黑字 */
+:root[data-theme='rose-pine'] .wizard-actions .primary {
+  color: var(--on-accent);
+}
+/* 主按钮里的快捷键芯片：原样式为蓝底设计的白三件套，iris 底上换成深紫三件套 */
+:root[data-theme='rose-pine'] button.primary .hint {
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--on-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
+}
