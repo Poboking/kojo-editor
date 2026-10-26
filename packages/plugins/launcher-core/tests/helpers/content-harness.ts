@@ -7,6 +7,7 @@
 
 import type { LauncherInstance } from '@kojo/plugin-api';
 import { ContentManagerImpl } from '../../src/content-manager';
+import { InstanceLock } from '../../src/instance-lock';
 import { ProcessSupervisorImpl } from '../../src/process-supervisor';
 import { TaskCenterImpl } from '../../src/task-center';
 import {
@@ -24,6 +25,8 @@ export interface ContentHarness {
   readonly tasks: TaskCenterImpl;
   readonly processes: ProcessSupervisorImpl;
   readonly manager: ContentManagerImpl;
+  /** 每实例写盘单飞锁（注入的话就是外面那把：用来验「与插件共用同一把」） */
+  readonly lock: InstanceLock;
   readonly instance: LauncherInstance;
   /** 把实例的本地进程读数置成运行中 / 已退出（`stop` 是否真发宿主命令靠它） */
   setRunning(running: boolean): void;
@@ -33,6 +36,8 @@ export interface ContentHarness {
 
 export interface ContentHarnessOptions {
   readonly instance?: Partial<LauncherInstance>;
+  /** 注入外部锁（缺省自建；组合根总是注入，见 `index.ts`） */
+  readonly lock?: InstanceLock;
 }
 
 export function makeContentHarness(options: ContentHarnessOptions = {}): ContentHarness {
@@ -52,10 +57,12 @@ export function makeContentHarness(options: ContentHarnessOptions = {}): Content
   const now = (): number => clock;
   const tasks = new TaskCenterImpl({ throttleMs: 0, now });
   const processes = new ProcessSupervisorImpl({ host, now });
+  const lock = options.lock ?? new InstanceLock({ tasks });
   const manager = new ContentManagerImpl({
     host,
     tasks,
     processes,
+    lock,
     getInstance: async (instanceId) =>
       host.instances.find((item) => item.id === instanceId) ?? null,
     now,
@@ -66,6 +73,7 @@ export function makeContentHarness(options: ContentHarnessOptions = {}): Content
     tasks,
     processes,
     manager,
+    lock,
     instance,
     setRunning(running: boolean): void {
       processes.applySnapshot([

@@ -9,7 +9,9 @@
  *    计划与清单逐条对账——全部是「不动盘就能判」的拒绝面；
  * 2. **两阶段之间的记账**：`planId → (instanceId, 计划)` 只在本层存活，`apply` 一次性消费；
  * 3. **每实例单飞**：第二次并发的变更在**发宿主命令之前**就被拒（`LAUNCHER_TASK_BUSY`），
- *    不排进队列——排队会让 UI 以为「点了两次就是装两次」；
+ *    不排进队列——排队会让 UI 以为「点了两次就是装两次」。锁的**真源是
+ *    `instance-lock.ts`**：本层与插件门禁共用同一把（同一实例同一时刻只许一条写盘链），
+ *    本文件不再自持锁表；
  * 4. **任务与取消语义**：把宿主返回的任务认领进 `TaskCenter`（进度、可取消），取消时让宿主
  *    回滚并把任务落 `cancelled`；本层**从不写 ownership**，所以「取消后已落盘」不可能发生
  *    在本层手里。
@@ -67,6 +69,7 @@ import { ZIP_EXTRACT_LIMITS, zipEntryContractProblem } from '@kojo/plugin-api';
 import type { ZipContractCode } from '@kojo/plugin-api';
 import { launcherError, normalizeLauncherError } from './errors';
 import type { LauncherHostBridge } from './host';
+import { InstanceLock } from './instance-lock';
 import { isTerminalTaskState } from './task-center';
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -201,6 +204,12 @@ export interface ContentManagerOptions {
   readonly processes: ProcessSupervisor;
   /** 取实例快照（组合根接实例库；取不到 = `LAUNCHER_INSTANCE_NOT_FOUND`） */
   readonly getInstance: (instanceId: string) => Promise<LauncherInstance | null>;
+  /**
+   * 每实例写盘单飞锁。组合根（`index.ts`）**必须**把同一把锁也交给 `PluginManagerImpl`
+   * ——那正是「内容包与插件共用一条写盘闸」的装配点；缺席则本层自建一把（单测 / 独立装配），
+   * 只保证内容包自身串行。
+   */
+  readonly lock?: InstanceLock;
   readonly now?: () => number;
 }
 
@@ -218,11 +227,6 @@ export interface ContentTaskSink extends TaskCenter {
 interface PlanRecord {
   readonly instanceId: string;
   readonly plan: ContentInstallPlan;
-}
-
-interface ApplyHold {
-  planId: string | null;
-  taskId: string | null;
 }
 
 /** 未在运行 = 无需停，可以继续（§10.3 的「若未运行则继续」；缺口：没有专用码） */
@@ -245,9 +249,10 @@ export class ContentManagerImpl implements ContentManager {
   private readonly getInstance: (instanceId: string) => Promise<LauncherInstance | null>;
   private readonly now: () => number;
   private readonly plans = new Map<string, PlanRecord>();
-  /** 每实例单飞：instance → 正在进行的计划 / 任务 */
-  private readonly applying = new Map<string, ApplyHold>();
-  private readonly unsubscribe: () => void;
+  /** 每实例单飞（与插件门禁同一把，见 `instance-lock.ts`）：instance → 正在进行的计划 / 任务 */
+  private readonly lock: InstanceLock;
+  /** 锁是自建还是外部注入：外部注入的归组合根 dispose，本层不许替它清表 */
+  private readonly ownsLock: boolean;
 
   constructor(options: ContentManagerOptions) {
     this.host = options.host;
@@ -255,10 +260,8 @@ export class ContentManagerImpl implements ContentManager {
     this.processes = options.processes;
     this.getInstance = options.getInstance;
     this.now = options.now ?? Date.now;
-    // 任务终态是释放单飞锁的唯一出口之一（另一条是宿主命令同步返回终态）
-    this.unsubscribe = this.tasks.subscribe((task) => {
-      if (isTerminalTaskState(task.state)) this.releaseByTask(task.id);
-    });
+    this.ownsLock = options.lock === undefined;
+    this.lock = options.lock ?? new InstanceLock({ tasks: options.tasks });
   }
 
   /* ------------------------------ 契约面 ------------------------------ */
@@ -329,7 +332,7 @@ export class ContentManagerImpl implements ContentManager {
     }
     this.assertPlanFresh(record.plan.expiresAt, planId);
     await this.requireInstance(record.instanceId);
-    this.assertNotBusy(record.instanceId);
+    this.lock.assertFree(record.instanceId, 'content', { planId, action: '内容包安装' });
     if (record.plan.missingRequirements.length > 0) {
       throw launcherError('LAUNCHER_PLUGIN_DEPENDENCY', {
         message: '内容包声明的依赖未满足，已拒绝安装',
@@ -429,8 +432,8 @@ export class ContentManagerImpl implements ContentManager {
     assertPermutation(packIds, packs.map((pack) => pack.manifest.id));
     const command = this.cmd('contentSetOrder');
 
-    this.assertNotBusy(instanceId);
-    this.applying.set(instanceId, { planId: null, taskId: null });
+    // 排序也是写盘（宿主改写 state.json 的 loadOrder）：与安装共用同一把每实例锁
+    const hold = this.lock.acquire(instanceId, 'content', { action: '调整加载顺序' });
     try {
       await this.stopGame(instanceId);
       await command(instanceId, packIds);
@@ -440,7 +443,7 @@ export class ContentManagerImpl implements ContentManager {
         detail: '调整加载顺序失败',
       });
     } finally {
-      this.release(instanceId);
+      this.lock.release(hold);
     }
   }
 
@@ -474,11 +477,10 @@ export class ContentManagerImpl implements ContentManager {
     return report;
   }
 
-  /** 断订阅（任务快照保留，供 UI 收尾） */
+  /** 断订阅（任务快照保留，供 UI 收尾）；自建的单飞锁一并收表（注入的归组合根） */
   dispose(): void {
-    this.unsubscribe();
     this.plans.clear();
-    this.applying.clear();
+    if (this.ownsLock) this.lock.dispose();
   }
 
   /* ------------------------------ 内部：计划裁决 ------------------------------ */
@@ -672,29 +674,29 @@ export class ContentManagerImpl implements ContentManager {
     readonly context: string;
     readonly start: () => Promise<LauncherTask>;
   }): Promise<LauncherTask> {
-    this.assertNotBusy(input.instanceId);
-    // 锁在**发宿主命令之前**落下（同进程监督的那把锁：挡住「同一瞬间两个请求都过闸」）
-    this.applying.set(input.instanceId, { planId: input.planId, taskId: null });
+    // 落票在**发宿主命令之前**（挡住「同一瞬间两个请求都过闸」）；票的判据全在 `instance-lock.ts`
+    const hold = this.lock.acquire(input.instanceId, 'content', { planId: input.planId });
 
     let task: LauncherTask;
     try {
       task = await input.start();
     } catch (err) {
-      this.release(input.instanceId);
+      // 失败路径：宿主命令直接抛错 ⇒ 立刻还票，不让一次拒绝卡死整台实例
+      this.lock.release(hold);
       throw normalizeLauncherError(err, {
         fallbackCode: input.fallbackCode,
         detail: input.context,
       });
     }
 
-    const hold = this.applying.get(input.instanceId);
-    if (hold) hold.taskId = task.id;
+    // 任务 id 记到票上：异步终态（成功 / 失败 / 取消）到达时按它释放
+    this.lock.attachTask(hold, task.id);
     this.tasks.adopt(task, {
-      onCancel: () => this.cancelHostTask(input.instanceId, input.planId, task.id, task),
+      onCancel: () => this.cancelHostTask(input.planId, task.id, task),
     });
 
     const settled = this.tasks.get(task.id) ?? task;
-    if (isTerminalTaskState(settled.state)) this.release(input.instanceId);
+    if (isTerminalTaskState(settled.state)) this.lock.release(hold);
     if (settled.state === 'failed') {
       // 宿主给的码原样透传（`normalizeLauncherError` 只补 detail，不改码）
       throw normalizeLauncherError(settled.error ?? launcherError(input.fallbackCode), {
@@ -708,9 +710,9 @@ export class ContentManagerImpl implements ContentManager {
    * 取消：先让宿主回滚，再把任务落 `cancelled`。
    * 本层从不写 ownership，所以「取消后 ownership 落盘」唯一可能的来源是宿主没回滚干净——
    * 那种情况由宿主的下一条终态快照纠正（终态冻结：迟到的 `succeeded` 不会把 `cancelled` 拉回）。
+   * 票由锁的终态订阅按 `taskId` 收回（`adopt` 落 `cancelled` 的同一次广播里完成）。
    */
   private async cancelHostTask(
-    instanceId: string,
     planId: string | null,
     taskId: string,
     snapshot: LauncherTask,
@@ -724,28 +726,7 @@ export class ContentManagerImpl implements ContentManager {
       endedAt: new Date(this.now()).toISOString(),
     });
     if (planId !== null) this.plans.delete(planId);
-    this.release(instanceId);
-  }
-
-  private assertNotBusy(instanceId: string): void {
-    const hold = this.applying.get(instanceId);
-    if (!hold) return;
-    throw launcherError('LAUNCHER_TASK_BUSY', {
-      message: '该实例已有内容变更正在进行中，请等它结束',
-      detail:
-        `实例 ${instanceId} 正在进行${hold.planId ? `计划 ${hold.planId}` : '内容变更'}` +
-        (hold.taskId ? `（任务 ${hold.taskId}）` : ''),
-    });
-  }
-
-  private release(instanceId: string): void {
-    this.applying.delete(instanceId);
-  }
-
-  private releaseByTask(taskId: string): void {
-    for (const [instanceId, hold] of [...this.applying]) {
-      if (hold.taskId === taskId) this.applying.delete(instanceId);
-    }
+    this.lock.releaseByTask(taskId);
   }
 
   /**

@@ -22,14 +22,17 @@
  *   「只接受已装 id 的排列」、宿主诊断的透传——这些与包类型无关，重写一遍只会产生第二套口径；
  * - **不复用** `planInstall` / `applyInstall`：`ContentManagerImpl` 对 `kind === 'plugin'`
  *   的包在预检处显式拒绝（「需走插件安装通道」），且它的 `planId → 计划` 台账是私有的；
- *   插件计划必须先在它之上叠五道闸，落盘才有意义。故本层自己持计划台账、每实例单飞与
- *   任务认领（与 `ContentManagerImpl.runTask` 同构，**不重写任何写盘/回滚**），
- *   宿主的 `contentApply` 仍是唯一落盘入口。
+ *   插件计划必须先在它之上叠五道闸，落盘才有意义。故本层自己持计划台账与任务认领
+ *   （与 `ContentManagerImpl.runTask` 同构，**不重写任何写盘/回滚**），宿主的 `contentApply`
+ *   仍是唯一落盘入口。
  *
- * ## 与内容管线的锁是**两把**（已上报的装配缺口）
+ * ## 与内容管线共用**同一把**每实例单飞锁（`instance-lock.ts`）
  *
- * 插件变更与内容包变更各自持锁，二者并发时只有宿主侧能兜。要真正「同一实例只许一个变更」，
- * 需要 `ContentManagerImpl` 开放一个「允许插件包 + 共用锁」的装配位；本批不动那个文件。
+ * 两边的门禁不同、落点相同（同一棵游戏根、同一份 `ownership.json`），故「同一实例只许
+ * 一条写盘链」的判据只有一份：组合根把同一个 `InstanceLock` 同时交给本层与内容管线。
+ * 本层自己**不持锁表**；`uninstall` / `setEnabled` / `setOrder` 三条委托路径也不在本层
+ * 抢票——被委托的内容管线在它自己的 `runTask` / `setOrder` 里落票，一张票覆盖整段临界区。
+ * 进程侧的单实例锁（「能不能起进程」）**不并入**，边界见 `instance-lock.ts` 文件头。
  *
  * ## 已知契约缺口（已逐条上报，未擅自扩 `plugin-api`）
  *
@@ -92,6 +95,7 @@ import type { ZipContractCode } from '@kojo/plugin-api';
 import type { HostContentConflict, HostContentPlan } from './content-manager';
 import type { LauncherHostBridge } from './host';
 import { launcherError, normalizeLauncherError } from './errors';
+import { InstanceLock } from './instance-lock';
 import { isTerminalTaskState } from './task-center';
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -213,11 +217,6 @@ interface PlanRecord {
   readonly trustRequired: boolean;
 }
 
-interface ApplyHold {
-  planId: string | null;
-  taskId: string | null;
-}
-
 interface Decisions {
   /** 交给宿主的文件级决议（函数级 `skip` 折成该文件的 `skip`） */
   readonly hostResolutions: readonly ConflictResolution[];
@@ -333,6 +332,11 @@ export interface PluginManagerOptions {
   readonly saves?: PluginSaveGuard;
   /** 打开插件源码项目（工作区）；缺席 = `openSource` 在有源码时如实拒绝 */
   readonly openProject?: (projectId: string) => Promise<void>;
+  /**
+   * 每实例写盘单飞锁：**与 `ContentManagerImpl` 必须是同一个实例**（组合根只建一把）。
+   * 这里没有缺省值：本层自建一把就等于「两把锁」，那正是本批要消掉的缺口。
+   */
+  readonly lock: InstanceLock;
   readonly now?: () => number;
 }
 
@@ -359,15 +363,14 @@ export class PluginManagerImpl implements PluginManager {
   private readonly now: () => number;
 
   private readonly plans = new Map<string, PlanRecord>();
-  /** 每实例单飞：instance → 正在进行的计划 / 任务 */
-  private readonly applying = new Map<string, ApplyHold>();
+  /** 每实例单飞（与内容管线同一把 `InstanceLock`，本层不持锁表） */
+  private readonly lock: InstanceLock;
   /** instance → pluginId → 本地真相 */
   private readonly states = new Map<string, Map<string, PluginState>>();
   /** instance → pluginId → 用户批准记录 */
   private readonly approvals = new Map<string, Map<string, Approval>>();
   /** 异步终态的一次性订阅（`dispose` 时一并撤） */
   private readonly watchers = new Set<() => void>();
-  private readonly unsubscribe: () => void;
 
   constructor(options: PluginManagerOptions) {
     this.content = options.content;
@@ -381,11 +384,8 @@ export class PluginManagerImpl implements PluginManager {
     this.gameVersionOf = options.gameVersionOf;
     this.saves = options.saves;
     this.openProject = options.openProject;
+    this.lock = options.lock;
     this.now = options.now ?? Date.now;
-    // 任务终态是释放单飞锁的出口之一（另一条是宿主命令同步返回终态）
-    this.unsubscribe = this.tasks.subscribe((task) => {
-      if (isTerminalTaskState(task.state)) this.releaseByTask(task.id);
-    });
   }
 
   /* ------------------------------ 查询面 ------------------------------ */
@@ -612,7 +612,8 @@ export class PluginManagerImpl implements PluginManager {
     }
     this.assertPlanFresh(record.plan.expiresAt, planId);
     await this.requireInstance(record.instanceId);
-    this.assertNotBusy(record.instanceId);
+    // 前段先看一眼（失败得快）；真正落票在 `runTask` 里、发宿主命令之前
+    this.lock.assertFree(record.instanceId, 'plugin', { planId, action: '插件安装' });
 
     const plan = record.plan;
     if (!record.compatible && opts?.allowIncompatible !== true) {
@@ -685,26 +686,22 @@ export class PluginManagerImpl implements PluginManager {
         detail: `pluginId=${pluginId}`,
       });
     }
-    this.assertNotBusy(instanceId);
+    // 本层不抢票：被委托的内容管线在它自己的 `runTask` 里落票（一张票覆盖整段临界区）
+    this.lock.assertFree(instanceId, 'plugin', { action: '插件卸载' });
     const state = this.states.get(instanceId)?.get(pluginId);
     const rules = this.pluginRulesOf(instance.adapterId);
     const saveImpact =
       state?.saveImpact ?? target.manifest.saveImpact ?? rules?.saveImpact ?? 'unknown';
 
-    this.applying.set(instanceId, { planId: null, taskId: null });
     let task: LauncherTask;
     try {
       task = await this.content.uninstall(instanceId, pluginId);
     } catch (err) {
-      this.release(instanceId);
       throw normalizeLauncherError(err, {
         fallbackCode: 'LAUNCHER_CONTENT_BROKEN',
         detail: '插件卸载失败',
       });
     }
-    const hold = this.applying.get(instanceId);
-    if (hold) hold.taskId = task.id;
-    if (isTerminalTaskState(task.state)) this.release(instanceId);
     this.whenSucceeded(task, () => {
       this.states.get(instanceId)?.delete(pluginId);
     });
@@ -738,21 +735,17 @@ export class PluginManagerImpl implements PluginManager {
     }
     if (enabled) await this.assertEnableConflicts(instance, packs, pluginId);
 
-    this.assertNotBusy(instanceId);
-    this.applying.set(instanceId, { planId: null, taskId: null });
+    // 同卸载：票由被委托的内容管线落，本层只做前置快判
+    this.lock.assertFree(instanceId, 'plugin', { action: enabled ? '启用插件' : '停用插件' });
     let task: LauncherTask;
     try {
       task = await this.content.setEnabled(instanceId, pluginId, enabled);
     } catch (err) {
-      this.release(instanceId);
       throw normalizeLauncherError(err, {
         fallbackCode: 'LAUNCHER_CONTENT_BROKEN',
         detail: enabled ? '启用插件失败' : '停用插件失败',
       });
     }
-    const hold = this.applying.get(instanceId);
-    if (hold) hold.taskId = task.id;
-    if (isTerminalTaskState(task.state)) this.release(instanceId);
     this.whenSucceeded(task, () => {
       const state = this.states.get(instanceId)?.get(pluginId);
       if (state) state.enabled = enabled;
@@ -785,8 +778,8 @@ export class PluginManagerImpl implements PluginManager {
       .sort((a, b) => a.order - b.order)
       .map((pack) => pack.manifest.id);
 
-    this.assertNotBusy(instanceId);
-    this.applying.set(instanceId, { planId: null, taskId: null });
+    // 票由被委托的内容管线 `setOrder` 落（那边与内容包排序是同一条临界区）
+    this.lock.assertFree(instanceId, 'plugin', { action: '调整插件加载顺序' });
     try {
       await this.content.setOrder(instanceId, [...others, ...pluginIds]);
     } catch (err) {
@@ -794,8 +787,6 @@ export class PluginManagerImpl implements PluginManager {
         fallbackCode: 'LAUNCHER_CONTENT_BROKEN',
         detail: '调整插件加载顺序失败',
       });
-    } finally {
-      this.release(instanceId);
     }
     const map = this.states.get(instanceId);
     pluginIds.forEach((pluginId, index) => {
@@ -996,13 +987,14 @@ export class PluginManagerImpl implements PluginManager {
     await this.openProject(sourceProjectId);
   }
 
-  /** 断订阅（任务快照保留，供 UI 收尾）；计划台账一并清空 */
+  /**
+   * 断订阅（任务快照保留，供 UI 收尾）；计划台账一并清空。
+   * 单飞锁**不在这里 dispose**：它与内容管线共用、归组合根所有（`index.ts` 的 shutdown）。
+   */
   dispose(): void {
-    this.unsubscribe();
     for (const off of [...this.watchers]) off();
     this.watchers.clear();
     this.plans.clear();
-    this.applying.clear();
   }
 
   /* ------------------------------ 内部：计划裁决 ------------------------------ */
@@ -1401,29 +1393,29 @@ export class PluginManagerImpl implements PluginManager {
     readonly onSucceeded?: () => void;
     readonly start: () => Promise<LauncherTask>;
   }): Promise<LauncherTask> {
-    this.assertNotBusy(input.instanceId);
-    // 锁在**发宿主命令之前**落下（挡住「同一瞬间两个请求都过闸」）
-    this.applying.set(input.instanceId, { planId: input.planId, taskId: null });
+    // 落票在**发宿主命令之前**；与内容包同一把锁（`instance-lock.ts`），本层不持锁表
+    const hold = this.lock.acquire(input.instanceId, 'plugin', { planId: input.planId });
 
     let task: LauncherTask;
     try {
       task = await input.start();
     } catch (err) {
-      this.release(input.instanceId);
+      // 失败路径：宿主命令直接抛错 ⇒ 立刻还票
+      this.lock.release(hold);
       throw normalizeLauncherError(err, {
         fallbackCode: input.fallbackCode,
         detail: input.context,
       });
     }
 
-    const hold = this.applying.get(input.instanceId);
-    if (hold) hold.taskId = task.id;
+    // 任务 id 记到票上：异步终态（成功 / 失败 / 取消）到达时按它释放
+    this.lock.attachTask(hold, task.id);
     this.tasks.adopt(task, {
-      onCancel: () => this.cancelHostTask(input.instanceId, input.planId, task.id, task),
+      onCancel: () => this.cancelHostTask(input.planId, task.id, task),
     });
 
     const settled = this.tasks.get(task.id) ?? task;
-    if (isTerminalTaskState(settled.state)) this.release(input.instanceId);
+    if (isTerminalTaskState(settled.state)) this.lock.release(hold);
     if (settled.state === 'failed') {
       // 宿主给的码原样透传（`normalizeLauncherError` 只补 detail，不改码）
       throw normalizeLauncherError(settled.error ?? launcherError(input.fallbackCode), {
@@ -1438,9 +1430,9 @@ export class PluginManagerImpl implements PluginManager {
    * 取消：先让宿主回滚，再把任务落 `cancelled`。
    * **本层不落插件状态**（登记只挂在 `succeeded` 上），所以「取消后插件显示已装」不可能
    * 发生在这里；宿主的终态快照也不会把 `cancelled` 拉回 `succeeded`（终态冻结在任务中心）。
+   * 票由锁的终态订阅按 `taskId` 收回（紧接在 `adopt` 落 `cancelled` 的那次广播里）。
    */
   private async cancelHostTask(
-    instanceId: string,
     planId: string | null,
     taskId: string,
     snapshot: LauncherTask,
@@ -1454,7 +1446,7 @@ export class PluginManagerImpl implements PluginManager {
       endedAt: new Date(this.now()).toISOString(),
     });
     if (planId !== null) this.plans.delete(planId);
-    this.release(instanceId);
+    this.lock.releaseByTask(taskId);
   }
 
   /** 终态一次性订阅：任务异步完成时再登记插件状态（宿主可能先返回 `running`） */
@@ -1471,27 +1463,6 @@ export class PluginManagerImpl implements PluginManager {
       if (update.state === 'succeeded') run();
     });
     this.watchers.add(off);
-  }
-
-  private assertNotBusy(instanceId: string): void {
-    const hold = this.applying.get(instanceId);
-    if (!hold) return;
-    throw launcherError('LAUNCHER_TASK_BUSY', {
-      message: '该实例已有插件变更正在进行中，请等它结束',
-      detail:
-        `实例 ${instanceId} 正在进行${hold.planId ? `计划 ${hold.planId}` : '插件变更'}` +
-        (hold.taskId ? `（任务 ${hold.taskId}）` : ''),
-    });
-  }
-
-  private release(instanceId: string): void {
-    this.applying.delete(instanceId);
-  }
-
-  private releaseByTask(taskId: string): void {
-    for (const [instanceId, hold] of [...this.applying]) {
-      if (hold.taskId === taskId) this.applying.delete(instanceId);
-    }
   }
 
   private assertPlanFresh(expiresAt: string, planId: string): void {

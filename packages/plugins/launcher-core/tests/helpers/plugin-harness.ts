@@ -18,6 +18,7 @@ import type {
   ScriptFunctionDefinition,
 } from '@kojo/plugin-api';
 import { ContentManagerImpl } from '../../src/content-manager';
+import { InstanceLock } from '../../src/instance-lock';
 import type { HostPluginPlan, PluginSaveGuard } from '../../src/plugin-manager';
 import { PluginManagerImpl } from '../../src/plugin-manager';
 import { ProcessSupervisorImpl } from '../../src/process-supervisor';
@@ -154,6 +155,8 @@ export interface PluginHarness {
   readonly host: FakeContentHost;
   readonly content: ContentManagerImpl;
   readonly manager: PluginManagerImpl;
+  /** 内容包与插件**共用**的那把每实例写盘锁（`index.ts` 装配同形） */
+  readonly lock: InstanceLock;
   readonly tasks: TaskCenterImpl;
   readonly processes: ProcessSupervisorImpl;
   readonly instance: LauncherInstance;
@@ -212,10 +215,13 @@ export function makePluginHarness(options: PluginHarnessOptions = {}): PluginHar
   let seq = 0;
   const tasks = new TaskCenterImpl({ throttleMs: 0, now, newId: () => `t-${++seq}` });
   const processes = new ProcessSupervisorImpl({ host, now });
+  // 一把锁、两个服务（L7a 缺口第 7 条的修法）：与 `index.ts` 的装配逐字同形
+  const lock = new InstanceLock({ tasks });
   const content = new ContentManagerImpl({
     host,
     tasks,
     processes,
+    lock,
     getInstance: async (instanceId) =>
       host.instances.find((item) => item.id === instanceId) ?? null,
     now,
@@ -227,6 +233,7 @@ export function makePluginHarness(options: PluginHarnessOptions = {}): PluginHar
     host,
     tasks,
     processes,
+    lock,
     getInstance: async (instanceId) =>
       host.instances.find((item) => item.id === instanceId) ?? null,
     pluginRulesOf: (adapterId) => (adapterId === ADAPTER_ID ? rules : undefined),
@@ -247,6 +254,7 @@ export function makePluginHarness(options: PluginHarnessOptions = {}): PluginHar
     host,
     content,
     manager,
+    lock,
     tasks,
     processes,
     instance,

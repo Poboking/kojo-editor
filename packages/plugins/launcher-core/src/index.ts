@@ -13,7 +13,7 @@
  * | `logs` 日志 | ✅ 装配（流式解码 + 环形缓冲 + 诊断包请求编排） |
  * | `saves` 存档 | ✅ 装配（宿主有 `launcher_save_*` 八条命令时；否则仍拒绝，见下） |
  * | `content` 内容包 | ✅ 装配（只读预检裁决 + 两阶段记账 + 每实例单飞 + 任务/取消，见 `content-manager.ts`） |
- * | `plugins` 游戏插件 | ✅ 装配（五道逻辑门禁 + 计划台账 + 单飞；落盘/卸载/启停/排序/诊断委托内容包管线，见 `plugin-manager.ts`） |
+ * | `plugins` 游戏插件 | ✅ 装配（五道逻辑门禁 + 计划台账 + 单飞；与内容包**共用一把** `InstanceLock`，落盘/卸载/启停/排序/诊断委托内容包管线，见 `plugin-manager.ts`） |
  * | `pluginProjects` 插件源码项目 | ✅ 装配（L7b；项目住 `kernel.workspaces`，构建确定性，见 `plugin-project.ts`） |
  * | `runtimes` | ❌ 未装配（见下） |
  * | `updates`（P2） | ❌ 缺席（契约里本就是可选字段） |
@@ -52,6 +52,7 @@ import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plug
 import type { LauncherHostBridge } from './host';
 import type { DecodeBytes } from './log-service';
 import { ContentManagerImpl } from './content-manager';
+import { InstanceLock } from './instance-lock';
 import { InstanceStoreImpl } from './instance-store';
 import { LogServiceImpl } from './log-service';
 import { PluginManagerImpl } from './plugin-manager';
@@ -170,12 +171,18 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
           })
         : NOT_ASSEMBLED.saves;
 
+      // 每实例写盘单飞锁（规格 §10.1）：内容包与插件**共用这一把**——两边往同一棵游戏根
+      // 写盘、改同一份 ownership.json，各持一把锁时 `content.apply` 与 `plugins.apply`
+      // 可以同时跑（L7a 上报的缺口第 7 条）。锁在这里建、在这里 dispose，两个服务只借票。
+      const writeLock = new InstanceLock({ tasks });
+
       // 内容包编排（L6a）：只做只读预检的裁决、两阶段记账、每实例单飞与任务认领；
       // 解包/写盘/回滚/ownership 全在宿主 `launcher_content_*`（缺席则如实拒绝，见 content-manager 文件头）。
       const content = new ContentManagerImpl({
         host,
         tasks,
         processes,
+        lock: writeLock,
         getInstance: (instanceId) => instances.get(instanceId),
         ...(options.now === undefined ? {} : { now: options.now }),
       });
@@ -195,6 +202,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         host,
         tasks,
         processes,
+        lock: writeLock,
         getInstance: (instanceId) => instances.get(instanceId),
         pluginRulesOf: (adapterId) => pluginSurfacesOf(adapterId)?.launch?.pluginRules,
         conventionPolicyOf: (adapterId) => pluginSurfacesOf(adapterId)?.conventionPolicy,
@@ -255,6 +263,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         for (const dispose of disposers) dispose();
         plugins.dispose();
         content.dispose();
+        writeLock.dispose();
         tasks.dispose();
         logs.dispose();
         processes.dispose();
@@ -334,6 +343,13 @@ export {
 } from './errors';
 export { InstanceStoreImpl } from './instance-store';
 export { ContentManagerImpl } from './content-manager';
+export { InstanceLock } from './instance-lock';
+export type {
+  InstanceLockHandle,
+  InstanceLockKind,
+  InstanceLockRequest,
+  InstanceLockSnapshot,
+} from './instance-lock';
 export { PluginManagerImpl } from './plugin-manager';
 export {
   PluginProjectServiceImpl,
