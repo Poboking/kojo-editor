@@ -123,8 +123,11 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
    *  所以这里照同一口径把 token 解成数——**判据强度不降**：既钉"宿主必须吃 `--z-menu`"，
    *  又钉"`--z-menu` 的真值仍是 1300"，比原来只钉一个字面量多拦一种漂移（谁挪档位表也红）。 */
   const hostZToken = hostZ ? /^var\((--z-[a-z0-9-]+)\)$/.exec(tight(hostZ)) : null;
-  const hostZValue = hostZToken
-    ? Number(declOf(TOKEN_RULES, ':root', hostZToken[1]))
+  // 具名一次再喂给 `declOf`：`hostZToken[1]` 在本仓的 `noUncheckedIndexedAccess` 下是
+  // `string | undefined`，直接取下标过不了类型（真值断言在下面的用例里，不在这里）
+  const hostZTokenName = hostZToken?.[1];
+  const hostZValue = hostZTokenName
+    ? Number(declOf(TOKEN_RULES, ':root', hostZTokenName))
     : Number(hostZ);
 
   it('主题里 --z-modal 是 1100（下面所有算式都从它出发）', () => {
@@ -133,7 +136,7 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
 
   it('.context-menu-host 走档位表 --z-menu，解出来是 1300（且不低于 1300）', () => {
     expect(hostZ).toBeDefined();
-    expect(hostZToken?.[1]).toBe('--z-menu');
+    expect(hostZTokenName).toBe('--z-menu');
     const value = hostZValue;
     expect(Number.isInteger(value)).toBe(true);
     expect(value).toBeGreaterThanOrEqual(1300);
