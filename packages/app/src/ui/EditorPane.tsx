@@ -75,6 +75,10 @@ import './sugar-read.css';
 import './bookmark-gutter.css';
 // 右键面（1023 覆盖面批）：外框 / 预览横幅两个面的样式只进这个新文件（不往常驻样式表里塞）
 import './context-menu-editor-chrome.css';
+// 上下文带（VIS-15 · 1026 编辑器体感批 E2）：工具条与面包屑并成一条 28px 带子之后的
+// **全部**新样式（带子度量 / 两簇分域 / 项目相对口径那道「/」 / 降级浮层）。
+// 同一纪律：新规则只进本切片，不去动 `styles-project.css` 那批 `.editor-toolbar …` 残留。
+import './editor-crumb-band.css';
 import { perf } from '../perf';
 import {
   composeSugarDoc,
@@ -139,6 +143,16 @@ import {
   type SugarCacheEntry,
 } from './editor-pane/pane-helpers';
 import { useBreadcrumb } from './editor-pane/use-breadcrumb';
+// 上下文带的窄屏溢出（VIS-15）：次要项那一族的事实→菜单条目纯映射 + 文案单源。
+// 弹层本体用全站共用的 `<ContextMenu>`——同一个界面不许有两种弹出语言。
+import {
+  BAND_MARKS_ID,
+  BAND_MORE_TITLE,
+  SUGAR_STATS_DETAIL,
+  bandHasSecondary,
+  bandOverflowItems,
+} from './editor-pane/band-overflow';
+import { ContextMenu } from './context-menu';
 // K2 batch-3：`.kojo2` 的问题归 2.0 诊断链路独占（flag 关 ⇒ 恒 false，v1 行为逐字不变）。
 // 只引这个纯判据模块，不把 core 编译 / eraTW backend 拖进本文件的模块图。
 import { kojo2OwnsDiagnostics } from './kojo2-diagnostics-gate';
@@ -304,15 +318,20 @@ interface Props {
  *   打开即算、编辑停顿去抖重算（v0.3 S6）。
  */
 /**
- * 编辑器区视觉批（批次十一 L13）的三个模块级常量：
- * - `STATUS_FLASH_MS`：工具条瞬时态（「已保存 12:34」一类）自动回落元信息位的时限；
+ * 编辑器区视觉批（批次十一 L13；带子收口改于 1026 E2 · VIS-15）的三个模块级常量：
+ * - `STATUS_FLASH_MS`：带子瞬时态（「已保存 12:34」一类）自动回落元信息位的时限；
  *   写完不回落 = 陈旧事实与错误同格同醒目度（改前的病灶）。
- * - `TOOLBAR_NARROW_QUERY`：窄屏判据。1280 以下工具条不再靠 `display:none` 硬藏次要
- *   信息，而是把它们收进「更多」浮层（降级层级，信息可取回）。
+ * - `BAND_NARROW_QUERY`：窄屏判据。改前是 `(max-width: 1280px)`，而编辑器窗口的**默认尺寸
+ *   就是 1280×840**（真源 `ui/window-fullscreen.ts` 的 `EDITOR_WINDOW_SIZE`）⇒ 每一次正常
+ *   编辑都被当成窄屏，次要信息天天躲在「更多」后面。带子合并后左簇只剩身份 + 符号链、
+ *   右簇只剩预览开关 / 解锁态 / 状态位 / 保存，实测要到 1024 以下才真挤 ⇒ 断点随之下调，
+ *   判据要的是"真的窄"，不是"默认就不宽"。
+ *   （窄屏那簇内容的弹出语言也换了：不再是就地自造的 `span` 浮层，而是全站共用的
+ *   `<ContextMenu>`——见 `editor-pane/band-overflow.ts`。）
  * - `EDITOR_SKELETON_WIDTHS`：Monaco 装载期骨架条的宽度错落（纯装饰，不参与测量）。
  */
 const STATUS_FLASH_MS = 8000;
-const TOOLBAR_NARROW_QUERY = '(max-width: 1280px)';
+const BAND_NARROW_QUERY = '(max-width: 1024px)';
 const EDITOR_SKELETON_WIDTHS = ['42%', '68%', '55%', '80%', '30%', '64%', '72%', '48%'] as const;
 
 /**
@@ -551,20 +570,23 @@ export function EditorPane({
   const [editorBooted, setEditorBooted] = useState(false);
   const [firstFileShown, setFirstFileShown] = useState(false);
   /**
-   * 窄屏工具条的降级层级（批次十一 L13）：≤1280 时徽章/糖摘要不再与主控件抢位，
-   * 整族收进「更多」浮层——信息**可取回**，而不是 `display:none` 硬藏。
+   * 窄屏带子的降级层级（批次十一 L13 起，落点随 VIS-15 收口）：≤1024 时次要项
+   * （糖摘要 / 「显示语法标记」）不再与主控件抢位，整簇收进「更多」菜单——信息**可取回**，
+   * 而不是 `display:none` 硬藏。菜单本体是共享 `<ContextMenu>`（Esc / 遮罩 / 焦点归还
+   * 都由它负责，本组件只记开在哪一格）。
    */
-  const [narrowToolbar, setNarrowToolbar] = useState<boolean>(() =>
+  const [narrowBand, setNarrowBand] = useState<boolean>(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(TOOLBAR_NARROW_QUERY).matches
+      ? window.matchMedia(BAND_NARROW_QUERY).matches
       : false,
   );
-  const [toolbarMoreOpen, setToolbarMoreOpen] = useState(false);
-  const toolbarMoreWrapRef = useRef<HTMLSpanElement | null>(null);
+  /** 溢出菜单的锚点（视口坐标；`null` = 没开）。开在哪颗按钮下方由点击那一格自己报。 */
+  const [bandMenuAt, setBandMenuAt] = useState<{ x: number; y: number } | null>(null);
   /**
    * PS-5 校验暂停闸的可见态（键 = 正停着的那条路径；值恒 true）。
-   * 由 `markerRunner` 的 `pauseChanged` 在跨界时写入 ⇒ 工具条那一句「文件太大，
-   * 错误检查已暂停」与波浪线**同源同时**（不是宿主另算一遍体量，两处不会漂）。
+   * 由 `markerRunner` 的 `pauseChanged` 在跨界时写入 ⇒ 「文件太大，错误检查已暂停」那一句
+   * （VIS-15 起落在编辑区左下的降级浮层，不在上下文带上）与波浪线**同源同时**
+   * （不是宿主另算一遍体量，两处不会漂）。
    */
   const [markerPaused, setMarkerPaused] = useState<Record<string, boolean>>({});
   /**
@@ -573,7 +595,7 @@ export function EditorPane({
    * 为什么要有它：折叠区间超额时**宿主**先按 vendor 那条线（5,000 处）截掉尾巴，
    * 而 standalone Monaco 的那位 `RangesLimitReporter` 在本 app 没人接（那句
    * "folding was removed for N ranges" 是 VS Code 工作区侧发的）——不由这里说，
-   * 就又是一次"少给了但没人说"（铁律 4）。文案走作者口径，见工具条那一格。
+   * 就又是一次"少给了但没人说"（铁律 4）。文案走作者口径，见下方 `bandNoticeNodes` 那一族。
    */
   const [foldingCap, setFoldingCap] = useState<Record<string, FoldingCapNotice>>({});
   useEffect(() => {
@@ -694,30 +716,22 @@ export function EditorPane({
   /** 窄屏判据订阅（matchMedia 而非 resize 轮询：断点翻转才重渲染，跨断点立即反映） */
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mq = window.matchMedia(TOOLBAR_NARROW_QUERY);
-    setNarrowToolbar(mq.matches); // 挂载时校正一次（初始值取的是首帧读数）
-    const onChange = (e: MediaQueryListEvent): void => setNarrowToolbar(e.matches);
+    const mq = window.matchMedia(BAND_NARROW_QUERY);
+    setNarrowBand(mq.matches); // 挂载时校正一次（初始值取的是首帧读数）
+    const onChange = (e: MediaQueryListEvent): void => setNarrowBand(e.matches);
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  /** 「更多」浮层的退场：外部按下或 Esc（浮层本体是工具条的从属件，不占模态栈） */
+  /**
+   * 换文件就收起溢出菜单（VIS-15）：菜单是带子里渲染的内联浮层，跨文件不会自己退场；
+   * 而里面那一格读的是**这一份文件**的糖摘要——摘要换了、菜单标题却还是上一份的现场，
+   * 就是"陈旧事实与当前事实同屏"（铁律 4 的同一族病灶）。
+   * 同值 setState 会被 React 直接吞掉，所以没开着菜单时这一拍零成本。
+   */
   useEffect(() => {
-    if (!toolbarMoreOpen) return;
-    const onDocDown = (e: PointerEvent): void => {
-      const wrap = toolbarMoreWrapRef.current;
-      if (wrap && !wrap.contains(e.target as Node)) setToolbarMoreOpen(false);
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setToolbarMoreOpen(false);
-    };
-    document.addEventListener('pointerdown', onDocDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onDocDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [toolbarMoreOpen]);
+    setBandMenuAt(null);
+  }, [filePath]);
 
   /**
    * 全部脏标签的内容快照（autosave 兜底句柄，退出/崩溃守护批）：逐 model 读
@@ -1879,7 +1893,7 @@ export function EditorPane({
         autosaveFailedRef.current.add(path);
         notify({
           kind: 'error',
-          message: `自动保存「${path}」未成功——内容仍标记未保存；原因见编辑器工具条的红色提示，手动 Ctrl+S 同样可处理。`,
+          message: `自动保存「${path}」未成功——内容仍标记未保存；原因见编辑器上方那条信息带右端的红色提示，手动 Ctrl+S 同样可处理。`,
         });
       }
     },
@@ -2150,7 +2164,7 @@ export function EditorPane({
           stopRead(); // 幂等：读盘失败时补记一次采样（正常路径已记过则跳过）
           if (!cancelled) {
             setError(errorText(e));
-            // 读盘失败 = 这一拍没有内容可上屏：骨架也要退场（错误位独立醒目，见工具条）
+            // 读盘失败 = 这一拍没有内容可上屏：骨架也要退场（错误位独立醒目，见带子右端的状态位）
             setFirstFileShown(true);
           }
           return;
@@ -2598,27 +2612,41 @@ export function EditorPane({
   /** 预览是否正挂在屏上（= 横幅面该不该存在，也是 `sugar-stats` 渲染的那一档） */
   const sugarPreviewing = sugarView && sugarStats !== null;
 
-  /* ------------------- 工具条显示层派生（批次十一 L13；纯呈现，零判定语义） ------------------- */
+  /* ------------------- 上下文带显示层派生（批次十一 L13 起；带子收口于 1026 E2 · VIS-15；纯呈现，零判定语义） ------------------- */
 
   /** 骨架可见：Monaco 未创建，或首个文件还没落屏（此后切换不再闪骨架） */
   const showEditorSkeleton = !editorBooted || (filePath !== '' && !firstFileShown);
-  /** 窄屏「更多」浮层有没有东西可收（一样都没有就不出现这颗按钮） */
-  const hasToolbarSecondary =
-    markerPaused[filePath] === true ||
-    Boolean(foldingCap[filePath]) ||
-    (sugarView && Boolean(sugarStats)) ||
-    labelParts.head !== '';
   /**
-   * 次要徽章族（校验暂停 / 折叠超额）：宽屏直排工具条，窄屏整族进「更多」浮层。
-   * JSX 单例、两个落点互斥渲染（宽屏 inline / 窄屏浮层）——文案只有一个真源。
+   * 窄屏「更多」菜单有没有东西可收（一样都没有就不出现这颗按钮）。
+   *
+   * 判据只剩**次要项那一族**（糖摘要 + 「显示语法标记」开关），改前三件都不再算数：
+   * - 目录前缀：绝对长前缀**任何宽度都不上屏**（项目相对口径），完整路径恒在文件名的
+   *   `title` 里，要复制还有面包屑右键那两条——浮层再抄一遍是第二份口径；
+   * - 两枚降级徽章：整族离开带子（见下方 `bandNoticeNodes` 的落点说明）。
+   * 口径单源在 `editor-pane/band-overflow.ts`，本处只问它"这一族有没有"。
    */
-  const toolbarNoticeNodes = (
+  const bandSecondary = { previewing: sugarPreviewing, stats: sugarStats, marks: sugarMarks };
+  const hasBandSecondary = bandHasSecondary(bandSecondary);
+  /**
+   * 次要徽章族（校验暂停 / 折叠超额）：**已经不上带子**。
+   *
+   * 带子是"我在哪 + 我能干什么"那一行，而这两枚说的是"这一份文件的检查/折叠被降级了"——
+   * 既不是导航也不是动作，混在导航带里就是 VIS-15 点名的病灶（一条 20px 的灰带上顶着一句
+   * 告警，读起来像带子坏了）。落点改成**编辑区自身的左下浮层**（`.editor-notice-layer`，
+   * 样式见 `editor-crumb-band.css`）：与壳层既有的分区同一口径（项目级错误条固定左下、
+   * 通知中心右下），告警跟着**它说的那份文件**出现在代码旁边，而不是跟着带子漂。
+   * 状态栏那一格（归 Lane D 的 `ShellLayout.tsx`）是第二个可选落点，本批不伸手——
+   * 需要它配合的话由组长收尾（见交付说明）。
+   * JSX 仍是**单例**：文案只有一个真源，`ps5-editor-pane-wiring` / `ps5-editor-tiers`
+   * 钉的那两句人话与禁词表都照旧吃这一段。
+   */
+  const bandNoticeNodes = (
     <>
       {/* PS-5 校验暂停闸的可见性（铁律 4「内核不静默」在宿主这一侧的落点）：
           波浪线与右侧问题列表停了，就必须有一句话说它为什么停、以及"内容/保存没受影响"。
           文案走作者口径（不出现 marker / 装饰 / 阈值这类内部词），细节放悬停。
-          盒子复用 `.erb-mode-hint` 那一族徽章度量（工具条里已有两家同款），不另造一档样式。
-          `.erb-mode-notice` 给恒定占位宽：两枚徽章互斥/共存切换不再推着右侧控件横移。 */}
+          盒子复用 `.erb-mode-hint` 那一族徽章度量（带子里的解锁态那颗就是同款），不另造一档样式。
+          `.erb-mode-notice` 给恒定占位宽：两枚徽章互斥/共存切换不再推着同一行的控件横移。 */}
       {markerPaused[filePath] === true ? (
         <span
           className="erb-mode-hint erb-mode-notice"
@@ -2646,11 +2674,11 @@ export function EditorPane({
       ) : null}
     </>
   );
-  /** 糖摘要（「已收起 N 行」那句）：同样属于次要信息，窄屏收进浮层（全文在 title 里） */
+  /** 糖摘要（「已收起 N 行」那句）：次要读数，窄屏收进「更多」菜单（全文恒在 title / 菜单悬停里） */
   const sugarStatsNode = (
     <span
       className="sugar-stats dim"
-      title="其余行按原样显示：.kojo 还没覆盖到的控制流（SIF / 循环 / TRY）、赋值与调用，以及注释和空行。文件内容始终没有被改动。"
+      title={SUGAR_STATS_DETAIL}
     >
       {sugarStats}
     </span>
@@ -2658,28 +2686,58 @@ export function EditorPane({
 
   return (
     <div className="editor-pane" data-editor-group={groupId}>
-      {/* 外框面：右键落在工具条这一条上时给「复制文件路径 / 命令面板 / 打开设置」。
+      {/* VIS-15（1026 编辑器体感批 E2）：**一条上下文带**替掉了「工具条 + 面包屑」那两条窄带。
+          改前 34px + 20px = 54px 的"又一根灰条 + 又一根更矮的灰条"，读的是同一件事
+          （我在哪份文件、这份文件现在怎么样）；改后一条 28px 的带子，左簇 = 导航
+          （身份 + 符号链），右簇 = 动作（预览开关 / 解锁态 / 状态位 / 保存）。
+          样式全部住在本组件自带的切片 `editor-crumb-band.css`（`styles-project.css` 里那批
+          `.editor-toolbar …` 从此打不到任何 DOM，是待清残留，不是本带的依据）。
+
+          外框面：右键落在这条带上时给「复制文件路径 / 命令面板 / 打开设置」
+          ——`data-context-surface="editor"` 跟着带子的根节点走（原来在 `.editor-toolbar` 上）。
           Monaco 里面的热区（行号槽/小地图/概览标尺/滚动条…）由根路由整片放行，
           这个属性管不到它们，也不该管。 */}
-      <div className="editor-toolbar" data-context-surface="editor">
-        {/* 身份优先（UI P4）：文件名 + 最深一层目录恒显，只有长前缀可缩。
-            旧版整条路径交给 CSS 尾部省略，1280 窗口下 969px 塞进 550px ⇒ 裁掉的
-            正好是文件名，作者盯着工具条读到的是游戏目录前缀。完整路径留在 title 里。 */}
-        <span className="file-label" title={filePath}>
-          {labelParts.head !== '' ? <span className="file-dir">{labelParts.head}</span> : null}
-          {labelParts.tail !== '' ? <span className="file-pkg">{labelParts.tail}</span> : null}
-          <span className="file-base">{labelParts.base}</span>
-        </span>
-        <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
-          {dirty ? <Icon name="circle-filled" size="xs" /> : null}
-        </span>
-        {/* 次要徽章族（校验暂停 / 折叠超额）——JSX 单源在上面 `toolbarNoticeNodes`：
-            宽屏直排，窄屏（≤1280）整族收进「更多」浮层（降级层级，不硬藏）。
-            `.dirty-dot` 恒定占位宽（CSS），非脏→脏的首拍不再推着整条工具条横移。 */}
-        {narrowToolbar ? null : toolbarNoticeNodes}
-        {isErbLike(filePath) && !inWorkspace(filePath) ? (
-          <>
-            {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**
+      <div className="editor-crumb-band" data-context-surface="editor">
+        <div className="band-nav">
+          {/* 身份只在这里出现一次（VIS-15 的第二刀）：标签条已被 Lane D 收成"名 + 脏点"，
+              工具条那颗 file-label 属于重复身份 —— 文件身份归**导航簇**。
+              项目相对口径三条一件没丢（判据住 `shell-info-design` ⑤，落点随带子改名）：
+              · 绝对长前缀 `.file-dir` 仍不上屏（渲染着，由切片在任何宽度下 `display:none`）；
+              · 目录与文件名之间那道可见「/」由切片补（`.file-pkg::after`）；
+              · 完整绝对路径**恒在** `title={filePath}`，悬停即得。
+              旧版整条路径交给 CSS 尾部省略，1280 窗口下 969px 塞进 550px ⇒ 裁掉的正好是
+              文件名（UI P4 立的"身份不许裁，前缀可以让"）。 */}
+          <span className="file-label" title={filePath}>
+            {labelParts.head !== '' ? <span className="file-dir">{labelParts.head}</span> : null}
+            {labelParts.tail !== '' ? <span className="file-pkg">{labelParts.tail}</span> : null}
+            <span className="file-base">{labelParts.base}</span>
+          </span>
+          {/* 脏点跟着身份走（它是"这一份文件"的状态，既不是导航也不是动作）。
+              恒定占位宽在切片里：非脏→脏的首拍不再推着整条带子横移。 */}
+          <span className={`dirty-dot ${dirty ? 'on' : ''}`} title={dirty ? '未保存' : '已保存'}>
+            {dirty ? <Icon name="circle-filled" size="xs" /> : null}
+          </span>
+          {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内），
+              每段后面的把手展开**同级**列表（1020 编辑器体感批，数据在同一棵缓存树上）。
+              空链整条不渲染（糖视图 / 不在任何块内 = 没有可信的真文件行号可展示）——
+              带子本身仍在（身份与动作都不该跟着符号链一起消失）。
+              点击走 `editor.revealLocation` 既有通道跳块头行——不新造导航机制。 */}
+          <CrumbBar
+            levels={breadcrumb.crumbLevels}
+            onRevealLine={(line) => {
+              if (!filePath) return;
+              kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });
+            }}
+          />
+        </div>
+        {/* 导航与动作分域那道竖线（吃 --border，不写死色；与壳层工具栏那件同一手法） */}
+        <span className="band-divider" aria-hidden="true" />
+        <div className="band-actions">
+          {/* 次要徽章族（校验暂停 / 折叠超额）**不再上带子**：JSX 单源在上方 `bandNoticeNodes`，
+              落点改到编辑区左下的浮层（`.editor-notice-layer`，见 `.editor-body` 那一格）。 */}
+          {isErbLike(filePath) && !inWorkspace(filePath) ? (
+            <>
+              {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**
                 （工作区 ERB 恒可编辑，不开预览）。
                 只读**不再在这里挂胶囊**——它与底部状态栏那颗是同一件事，两处并排等于互相抢答
                 （2026-10-14 去重），原先挂在徽章上的那句解释迁进了状态栏胶囊的悬停。
@@ -2714,7 +2772,7 @@ export function EditorPane({
                  逐级上溯：内层**不表态**才问外层；而面属性不挂 = 这一层根本不存在，于是自然落到
                  `editor`——这正是关着预览时想要的，所以属性必须跟着状态走）。
                  `display: contents` 见
-                 `context-menu-editor-chrome.css`：包裹层不参与布局，工具条一个字都不动。 */
+                 `context-menu-editor-chrome.css`：包裹层不参与布局，带子一个字都不动。 */
               <span className="sugar-banner" data-context-surface={sugarPreviewing ? 'sugar-preview' : undefined}>
                 {/* 预览开关：整份 ERB 投影成 .kojo 写法（只读显示，磁盘一字未动）——
                     本功能的存在理由就是让不熟悉原生语法的人也能把别人的口上当剧本读懂。
@@ -2740,8 +2798,9 @@ export function EditorPane({
                 </button>
                 {sugarView && sugarStats ? (
                   <>
-                    {/* 糖摘要节点与浮层共享同一份 JSX（定义在 `sugarStatsNode`）；窄屏让位给「更多」 */}
-                    {narrowToolbar ? null : sugarStatsNode}
+                    {/* 糖摘要节点与窄屏菜单共享同一份事实（定义在 `sugarStatsNode` /
+                        `band-overflow.ts`）；窄屏让位给「更多」菜单（件少一件就不出现那颗钮） */}
+                    {narrowBand ? null : sugarStatsNode}
                     {/* 阅读模式开关（C-2）：默认阅读态——`续`、`空行`、`等待`、`：` 这类
                         语法标记降到低对比、台词成为主体；打开恢复主题高对比，逐字看清标记。
                         只动显示层（token 装饰），投影文本一字不变。标签恒为「显示语法标记」，
@@ -2762,84 +2821,84 @@ export function EditorPane({
                 ) : null}
               </span>
             )}
-          </>
-        ) : null}
-        {/* 窄屏降级层级（批次十一 L13）：次要信息（目录前缀 / 两枚徽章 / 糖摘要）收进
-            「更多」浮层——1280 以下靠**层级**让位，不再只把 `.file-dir` 一藏了之。
-            按钮只在真有内容时出现；浮层外部按下 / Esc 收起（上方 effect）。 */}
-        {narrowToolbar && hasToolbarSecondary ? (
-          <span className="toolbar-more-wrap" ref={toolbarMoreWrapRef}>
+            </>
+          ) : null}
+          {/* 窄屏降级层级（批次十一 L13 起；VIS-15 换掉弹出语言 + 重定断点）：
+              次要项（糖摘要 / 「显示语法标记」）在 ≤1024 收进「更多」——
+              · **不再自造浮层**：菜单本体是全站共用的 `<ContextMenu>`（遮罩只认左键、
+                Esc 逐级关闭、焦点归还调用者、`clampMenuPosition` 夹视口都由它负责），
+                同一种弹出语言只留一份；
+              · 断点 1280 → 1024：默认窗口就是 1280 宽，旧判据在正常态天天命中；
+              · 按钮只在真有内容时出现，主控件一件不藏（预览开关 / 解锁态 / 状态位 / 保存）。 */}
+          {narrowBand && hasBandSecondary ? (
             <button
               type="button"
-              className="ghost small toolbar-more"
-              aria-expanded={toolbarMoreOpen}
-              aria-haspopup="true"
-              onClick={() => setToolbarMoreOpen((v) => !v)}
-              title="次要提示（目录前缀 · 检查暂停 · 折叠截断 · 糖摘要）收在这里——窄屏不抢主控件的位置，点开即得全文。"
+              className="ghost small band-more"
+              aria-expanded={bandMenuAt !== null}
+              aria-haspopup="menu"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setBandMenuAt(bandMenuAt === null ? { x: r.left, y: r.bottom + 2 } : null);
+              }}
+              title={BAND_MORE_TITLE}
             >
               更多
             </button>
-            {toolbarMoreOpen ? (
-              <span className="toolbar-more-pop" role="group" aria-label="更多编辑器提示">
-                {labelParts.head !== '' ? (
-                  <span className="toolbar-more-dir" title="完整目录前缀（项目相对口径外的绝对长前缀）">
-                    {labelParts.head}
-                  </span>
-                ) : null}
-                {toolbarNoticeNodes}
-                {sugarView && sugarStats ? sugarStatsNode : null}
+          ) : null}
+          {narrowBand && hasBandSecondary && bandMenuAt !== null ? (
+            <ContextMenu
+              x={bandMenuAt.x}
+              y={bandMenuAt.y}
+              items={bandOverflowItems(bandSecondary)}
+              ariaLabel="带子次要项"
+              onSelect={(id) => {
+                if (id === BAND_MARKS_ID) setSugarMarks((v) => !v);
+                setBandMenuAt(null);
+              }}
+              onDismiss={() => setBandMenuAt(null)}
+            />
+          ) : null}
+          {/* 带子状态位三拆（批次十一 L13）：元信息 / 瞬时态 / 错误各自一档——
+              · 元信息：编码·EOL·行数**不再在这里重打**（底部状态栏独一份，去重后元信息位
+                落为空档，`.editor-status` 的 min-width 给它留恒定占位，右簇不横移）；
+              · 瞬时态：「已保存 12:34」一类，`STATUS_FLASH_MS` 后自动回落元信息位；
+              · 错误：独立语义色（--danger）+ 字重，不再与元信息同灰度；持久驻留，
+                保存成功 / 换文件复位。长文案整格省略号截断，全文进 title 悬停。 */}
+          <span className="editor-status" title={error ?? (status !== '' ? status : undefined)}>
+            {error ? (
+              <span className="editor-status-error">
+                <Icon name="warning" size="sm" /> {error}
               </span>
-            ) : null}
+            ) : status !== '' ? (
+              <span className="editor-status-flash">{status}</span>
+            ) : (
+              <span className="editor-status-meta" aria-hidden="true" />
+            )}
           </span>
-        ) : null}
-        <span className="spacer" />
-        {/* 工具条状态位三拆（批次十一 L13）：元信息 / 瞬时态 / 错误各自一档——
-            · 元信息：编码·EOL·行数**不再在这里重打**（底部状态栏独一份，去重后元信息位
-              落为空档，`.editor-status` 的 min-width 给它留恒定占位，右簇不横移）；
-            · 瞬时态：「已保存 12:34」一类，`STATUS_FLASH_MS` 后自动回落元信息位；
-            · 错误：独立语义色（--danger）+ 字重，不再与元信息同灰度；持久驻留，
-              保存成功 / 换文件复位。长文案整格省略号截断，全文进 title 悬停。 */}
-        <span className="editor-status" title={error ?? (status !== '' ? status : undefined)}>
-          {error ? (
-            <span className="editor-status-error">
-              <Icon name="warning" size="sm" /> {error}
-            </span>
-          ) : status !== '' ? (
-            <span className="editor-status-flash">{status}</span>
-          ) : (
-            <span className="editor-status-meta" aria-hidden="true" />
-          )}
-        </span>
-        {/* 保存三段式（P3-4）：醒目度跟着「有没有东西可存」走——
-            只读态整颗**不渲染**（只读的说明只留底部状态栏胶囊一处，2026-10-14 去重口径，
-            工具条不再重造只读提示，也不摆一颗永远按不动的实心按钮）；
-            可写但无改动 = .idle 弱化档（ghost 化，仍 disabled，快捷键行为零改动）；
-            改过内容才回到醒目主按钮。判定用 `kernel.io.isWritable` 同一真源，不另立口径。
-            SAVE-BUTTON-IO-SEAM（出路②）在此口径上**追加**宿主那一半：TS 批准记录在册但
-            宿主准入门拒过的目录里，按钮渲染但置灰、悬停指回常驻错误条的那颗出路按钮
-            （`save-button.tsx`；按下去必然失败的动作不再按得动）。 */}
-        {kernel.io.isWritable(filePath) ? (
-          <SaveButton
-            dirty={dirty}
-            hostBlocked={saveBlockedByHostWriteDomain(filePath)}
-            onSave={() => void save()}
-          />
-        ) : null}
+          {/* 保存三段式（P3-4）：醒目度跟着「有没有东西可存」走——
+              只读态整颗**不渲染**（只读的说明只留底部状态栏胶囊一处，2026-10-14 去重口径，
+              带子不再重造只读提示，也不摆一颗永远按不动的实心按钮）；
+              可写但无改动 = .idle 弱化档（ghost 化，仍 disabled，快捷键行为零改动）；
+              改过内容才回到醒目主按钮。判定用 `kernel.io.isWritable` 同一真源，不另立口径。
+              SAVE-BUTTON-IO-SEAM（出路②）在此口径上**追加**宿主那一半：TS 批准记录在册但
+              宿主准入门拒过的目录里，按钮渲染但置灰、悬停指回常驻错误条的那颗出路按钮
+              （`save-button.tsx`；按下去必然失败的动作不再按得动）。 */}
+          {kernel.io.isWritable(filePath) ? (
+            <SaveButton
+              dirty={dirty}
+              hostBlocked={saveBlockedByHostWriteDomain(filePath)}
+              onSave={() => void save()}
+            />
+          ) : null}
+        </div>
       </div>
-      {/* 面包屑（D1，宿主自绘）：角色/家族级导航复用 documentSymbol 链（外→内），
-          每段后面的把手展开**同级**列表（1020 编辑器体感批，数据在同一棵缓存树上）。
-          空链整条不渲染（糖视图 / 不在任何块内 = 没有可信的真文件行号可展示）。
-          点击走 `editor.revealLocation` 既有通道跳块头行——不新造导航机制。 */}
-      <CrumbBar
-        levels={breadcrumb.crumbLevels}
-        onRevealLine={(line) => {
-          if (!filePath) return;
-          kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });
-        }}
-      />
       {/* 装载骨架（批次十一 L13）：Monaco 创建 / 首个文件落屏之前，`.editor-body`
           不再是纯空白——复用效果库的 `.skeleton` 扫光条顶着这一拍（绝对定位覆盖层，
-          不参与编辑器测量；实例创建照常进行，骨架到点自动退场）。 */}
+          不参与编辑器测量；实例创建照常进行，骨架到点自动退场）。
+          同一层还挂着**降级徽章浮层**（VIS-15 从带子里搬下来的两枚告警）：
+          它与骨架都是 `.editor-body` 的绝对定位从属件，都不参与 Monaco 测量；
+          浮层整层 `pointer-events: none`、只有徽章自己吃指针，所以不挡代码上的点击。
+          状态栏（Lane D 的 `ShellLayout.tsx`）是这类读数的另一个可选落点，本批不动它。 */}
       <div className="editor-body" ref={hostRef}>
         {showEditorSkeleton ? (
           <div className="editor-body-skeleton" aria-hidden="true">
@@ -2848,6 +2907,7 @@ export function EditorPane({
             ))}
           </div>
         ) : null}
+        <div className="editor-notice-layer">{bandNoticeNodes}</div>
       </div>
       {pendingChoice ? <SaveWarningDialog warning={pendingChoice} onDecide={decideSaveWarning} /> : null}
       {introAsk ? <SugarViewIntroDialog onDecide={decideIntro} /> : null}

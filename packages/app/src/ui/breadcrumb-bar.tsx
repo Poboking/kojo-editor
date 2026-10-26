@@ -6,6 +6,13 @@
  * 拆出来才能用 node SSR 单测钉死「同级列表 = 同层符号、点开跳哪一行」这类判据。
  * 数据全由宿主算好交进来（`breadcrumb-path.ts` 的 `crumbLevelsAt`），本组件零判据、零 IO。
  *
+ * **它今天不再自成一行**（VIS-15 · 1026 编辑器体感批 E2）：改前面包屑是标签条下面那根
+ * 20px 的矮灰条，与 34px 的编辑器工具条叠在一起；改后它是上下文带 `.editor-crumb-band`
+ * 左簇（导航）里的一段，与文件身份同排。根类名 `.editor-crumb` 不动——一整套点击 / 把手 /
+ * 中段先缩的判据都挂在它身上，动的只是呈现（度量与底色交还给带子，见
+ * `ui/editor-crumb-band.css` 的 `.editor-crumb-band .editor-crumb` 那一段）。
+ * 符号链为空时本组件仍整条不渲染，而**带子本身继续在**（身份与动作不该跟着符号链消失）。
+ *
  * 两条菜单各管一件事（1023）：
  * - **左键那枚把手**仍就地弹同级列表（点一下就跳同级块，原来是这么用的，不改）；
  * - **右键任意一段**走根宿主（固定层，不会被编辑器工具栏裁掉）：复制层级名 / 复制路径 /
@@ -257,7 +264,12 @@ export const CrumbBar = memo(function CrumbBar({ levels, onRevealLine }: CrumbBa
   const level = menu !== null ? levels[menu.at] : undefined;
 
   return (
-    <div className="editor-crumb" aria-label="位置面包屑" data-context-surface="breadcrumb">
+    <div
+      className="editor-crumb"
+      role="navigation"
+      aria-label="位置面包屑"
+      data-context-surface="breadcrumb"
+    >
       {levels.map((lv, i) => {
         const c = lv.current;
         return (

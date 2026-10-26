@@ -1,0 +1,256 @@
+/**
+ * 编辑器上下文带（VIS-15 · 1026 编辑器体感批 E2）的**唯一**样式入口。
+ *
+ * ## 这一条带子替掉了什么
+ *
+ * 改前：`.editor-toolbar`（34px：padding 5+5 / 控件 24px 档 / 1px 底边）叠在
+ * `.editor-crumb`（20px：padding 2+2 / 字 12px / 1px 底边）之上，两条窄带一起压在标签条下面
+ * ——读起来就是"又一根灰条 + 又一根更矮的灰条"，54px 换到的是"我在哪 + 我能干什么"两件事。
+ * 改后：一条 `.editor-crumb-band`，`min-height: 28px`（含 1px 底边轨，border-box），
+ * 左簇 = 导航（文件身份 + 符号链），右簇 = 动作（预览开关 / 解锁态 / 状态位 / 保存）。
+ * 省下的 26px ≈ 编辑器多两行代码的行高。
+ *
+ * ## 三条硬约束（本文件的写法纪律）
+ *
+ * ① **靠特异性取胜，不靠注入顺序**：`styles-project.css` 里那些还活着的同类选择器都是
+ *   单类（0,1,0）——`.editor-crumb` / `.file-label` / `.file-dir` / `.editor-status`。
+ *   本文件一律写成 `.editor-crumb-band <类>`（0,2,0）或更深，生产构建里组件切片与重档谁
+ *   先到不确定，所以**不许**依赖"我在后面"。
+ *   另：那一批 `.editor-toolbar …` 旧样式本体住在 `styles-project.css`（Lane B 独占，本批不删），
+ *   工具条节点已不再渲染 ⇒ 那些规则今天打不到任何 DOM，是**待清残留**，不是本带的依据。
+ * ② **不写死颜色**：全文只吃 `var()`（`css-token-single-source` 与 `css-font-size-scale`
+ *   两道闸都在册；字号一律 `--fs-*`，间距一律 `--space-*`）。
+ * ③ **不许给带子加 `transform` / `filter` / `contain: paint`**：溢出「更多」与面包屑同级下拉
+ *   都是 `position: fixed` 的共享 `<ContextMenu>`，一旦有这类属性就给它造出局部坐标系，
+ *   菜单会跟着带子滚动、并被带子的盒裁掉。
+ *
+ * ## 减弱动效
+ *
+ * 本带只有一处入场（降级徽章浮层的淡入），节奏走局部变量 `--cb-dur`；
+ * `:root[data-motion='reduced']`（应用内开关）与 `@media (prefers-reduced-motion: reduce)`
+ * （系统偏好）两条各自把它压成 `0ms`——不靠 `styles-project.css` 末尾那条全局兜底。
+ */
+
+/* ------------------------------ 带子本体 ------------------------------ */
+
+.editor-crumb-band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* 28px 是**外框**高（全局 `box-sizing: border-box`，含下方 1px 轨）：
+     24px 控件档 + 上下各 1.5px 呼吸 + 1px 轨 = 28，正好把 WCAG 2.5.8 的 24×24 命中区
+     装进一条带子而不撑高它。 */
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  flex: 0 0 auto;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-1);
+  white-space: nowrap;
+}
+
+/* 左簇：导航（身份 + 符号链）。它是唯一可以让位的一簇——身份不许裁、符号链中段先缩。 */
+.editor-crumb-band .band-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 右簇：动作。`gap` 与带子同档；簇内控件一律不许缩（让位次序见下方状态位与糖摘要）。 */
+.editor-crumb-band .band-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* 两簇之间那道竖线（导航 vs 动作的分域；吃 --border，不写死色）。 */
+.editor-crumb-band .band-divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  opacity: 0.7;
+}
+
+/* ------------------------------ 身份格（从工具条搬进导航簇） ------------------------------ */
+/* 项目相对口径三条**一件不许丢**（判据在 shell-info-design ⑤，只是落点从
+   `.editor-toolbar` 换成 `.editor-crumb-band`）：
+   · 绝对长前缀 `.file-dir` 不上屏（全文恒在 `.file-label` 的 title={filePath}）；
+   · 目录与文件名之间那道可见「/」（`.file-pkg::after`）；
+   · 身份不许裁——被挤的轮到最深目录那一格自己省略。
+   带子里字号降到 `--fs-1`（与符号链同档），层级靠 `.file-base` 的字重表达，不靠字号抢。 */
+
+.editor-crumb-band .file-label {
+  font-size: var(--fs-1);
+  /* 34ch ≈ 一条带子里给"身份"的预算上限；剩下的横向空间归符号链（它比路径中段有用）。 */
+  max-width: 34ch;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.editor-crumb-band .file-label .file-dir {
+  display: none;
+}
+
+.editor-crumb-band .file-label .file-pkg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-crumb-band .file-label .file-pkg::after {
+  content: '/';
+  margin-left: var(--space-1);
+  color: var(--fg-dim);
+}
+
+/* 脏点跟着身份走（它是"这一份文件"的状态，不是导航，也不是动作）。 */
+.editor-crumb-band .dirty-dot {
+  flex: none;
+}
+
+/* ------------------------------ 符号链并入带子 ------------------------------ */
+/* `.editor-crumb` 今天仍是 `CrumbBar` 的根类（一整套点击/把手/收缩判据挂在它身上），
+   只是不再自成一行：吃掉它自带的 padding / 底色 / 底边轨，让它当带子里的一个行内簇。
+   单类那条（0,1,0）在这里压不过"谁后注入"的赌局 ⇒ 全部写成两级。 */
+
+.editor-crumb-band .editor-crumb {
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  /* 底色与轨道都交还给带子：并排两根灰条的病根就是两簇各自画了一遍面板底。
+     文字色一并从"字面回落"（`--text-dim` 是历史幻影 token）收回 `--fg-dim`，
+     带子里的字色从此只有一档来源。 */
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+.editor-crumb-band .editor-crumb-item {
+  color: var(--fg-dim);
+}
+
+.editor-crumb-band .editor-crumb-item:hover {
+  background: var(--hover-soft);
+  color: var(--fg);
+}
+
+/* ------------------------------ 动作簇：把 `.editor-toolbar` 那批度量搬过来 ------------------------------ */
+/* 左边那些 `.editor-toolbar …` 规则今天全是打不到 DOM 的残留（本体在 styles-project.css，
+   归 Lane B 收尾）。带子不靠它们，本段自带等价件：按钮不许折行、胶囊不许缩、
+   状态位留恒定占位、保存键弱化档。少写一件就是"外观悄悄退化而测试全绿"那一类事故。 */
+
+.editor-crumb-band .band-actions button {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.editor-crumb-band .erb-mode-hint {
+  flex: 0 0 auto;
+}
+
+.editor-crumb-band .sugar-stats {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.editor-crumb-band .editor-status {
+  flex: 0 1 auto;
+  /* 恒定占位（批次十一 L13 的口径，落点换成带子）：瞬时态一句话出现/回落
+     不再推着「.kojo 预览」开关左右跳。 */
+  min-width: 16ch;
+  text-align: right;
+}
+
+/* 保存键三段式的弱化档（P3-4）：可写但无改动 = 幽灵化，改过内容才回实心主按钮。
+   特异性 (0,3,1) 压得住 `button.primary`（0,1,1）的实心底与白字。 */
+.editor-crumb-band button.primary.idle {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--fg-dim);
+  box-shadow: none;
+}
+
+.editor-crumb-band button.primary.idle:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--hover-soft);
+  color: var(--fg);
+}
+
+/* 窄屏「更多」那颗（内容与全站菜单同源，只有这颗按钮是本带自己的入口）。 */
+.editor-crumb-band .band-more {
+  position: relative;
+  flex: none;
+}
+
+.editor-crumb-band .band-more[aria-expanded='true'] {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+/* ------------------------------ 降级徽章浮层（离开带子之后落的地方） ------------------------------ */
+/* 「文件太大，错误检查已暂停」与「折叠太多，只折前 5000 处」是**这一份文件的现场告警**，
+   不是导航、也不是动作 ⇒ 不再上带子（导航带混入告警就是改前的病）。落点：编辑区自身的
+   左下浮层，与壳层"错误条固定左下 / 通知中心右下"那条既有分区同一口径；
+   盒子仍吃 `.erb-mode-hint` 的既有度量（不另造一档胶囊样式），这里只加"浮在代码上"
+   需要的那两件：一面底 + 一道影，外加把命中权还给它自己（整层不吃指针）。
+   横向同时钉 `left` 与 `right` ⇒ 浮层宽度锁在编辑区之内（分屏把编辑区压到 400px 时，
+   两枚徽章并排也不会画到面板外面去）；多出来的一段交给 `flex-wrap` 换行，不裁字。
+   `z-index: 3` 是 `.editor-body` **内部**的先后（装载骨架是 2，Monaco 自己的层更低），
+   不是全局层级梯上的一档——与骨架那条注释同一口径，要抬进正式档先在 tokens.css 登记。 */
+
+.editor-notice-layer {
+  --cb-dur: 160ms;
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.editor-notice-layer .erb-mode-hint {
+  pointer-events: auto;
+  max-width: 100%;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+  animation: cb-notice-in var(--cb-dur) var(--ease-out);
+}
+
+@keyframes cb-notice-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 减弱动效（应用内开关 + 系统偏好，各自独立生效）：局部节奏压成 0ms 并把入场整条撤掉，
+   浮层直接停在终态——不靠 `styles-project.css` 末尾那条全局兜底。 */
+:root[data-motion='reduced'] .editor-notice-layer {
+  --cb-dur: 0ms;
+}
+
+:root[data-motion='reduced'] .editor-notice-layer .erb-mode-hint {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-notice-layer {
+    --cb-dur: 0ms;
+  }
+  .editor-notice-layer .erb-mode-hint {
+    animation: none;
+  }
+}

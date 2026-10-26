@@ -3,8 +3,9 @@
  *
  * 只放「加了面属性之后必须补的一件小事」：预览横幅的包裹层是 `sugar-preview` 面的根元素
  * （`data-context-surface`），它本身**不参与布局**——`display: contents` 让它从盒模型里
- * 消失，里面那几颗按钮/读数仍按原样排在 `.editor-toolbar` 的 flex 里（工具条宽度、间距、
- * 省略行为一字不变）。没有这条规则，凭空多一层 span 会把工具条的行内布局挤一下。
+ * 消失，里面那几颗按钮/读数仍按原样排在上下文带 `.editor-crumb-band` 的动作簇（`.band-actions`）
+ * 的 flex 里（宽度、间距、省略行为一字不变；VIS-15 之前那一排叫 `.editor-toolbar`）。
+ * 没有这条规则，凭空多一层 span 会把带子的行内布局挤一下。
  *
  * 为什么不写进 `styles.css` / `styles-project.css`：11 路并行改同一批共享样式表必然撞车
  * （见批内公共规程第 3 节第 5 条），新增规则一律进本批新建文件、由组件自己 import。
