@@ -198,3 +198,81 @@ describe('债二本体 · `--font-sans` 幻影已接到界面字体真源', () =
     expect(read('../src/tokens.css')).toContain('--font-ui:');
   });
 });
+
+/* ------------------------------ 玻璃 blur 半径：几何也必须单源 ------------------------------ */
+/**
+ * 1027 玻璃档批（本文件口径的自然延伸）。
+ *
+ * 立论：本闸钉的是「`var(--x)` 必须有定义点」，反方向同一条纪律是——**定义点该有的数不许住在消费侧**。
+ * `--scrim-* / --rim-*` 那两族当年是"色"犯了这个错，玻璃这一轮犯的是"几何"：`blur()` 半径有 12 行
+ * 写成裸 px（`shell-notices.css` ⑤ 的五条规则 × `-webkit-` 双写 + `ui/palette.css` 的 `.pk-mask`），
+ * 于是 light / mint 两档号称各自标定过浓度，实际只有 tint / alpha / saturate 在翻，**半径卡死在源码里**，
+ * 三档不一致。现在半径按用途进 `tokens.css` 的 `--glass-blur-*` 四档（名字跟途走、不跟序号走），
+ * 规则只 `var()`；逐字等值（含 dark 档那两枚 `calc` 缺省）由 `styles-wash-token-discipline.test.ts` 对拍。
+ *
+ * ⚠ 尺子的边界：`@supports … ((backdrop-filter: blur(1px)) …)` 是**特性探测**，不是声明——它必须能
+ * 留裸 px，否则等于要求老内核探测用 token。判据靠"声明位"边界字符把 `(` 后面那些排除掉，
+ * 下面的"至少扫到 N 格"读数闸就是防这条边界把真声明一起吞掉的（数少了立刻红）。
+ */
+const GLASS_TIERS = ['--glass-blur-scrim', '--glass-blur-scrim-query', '--glass-blur-picker', '--glass-blur-palette'] as const;
+const tokensRaw = read('../src/tokens.css');
+
+/** 只吃**声明位**上的 backdrop-filter：前面必须是行首 / `;` / `{` / 空白，不能是 `(`（特性探测） */
+const DECL_AT = /(?:^|[;{\s])(?:-webkit-)?backdrop-filter[ \t]*:[ \t]*([^;{}]*)/g;
+const BARE_BLUR = /blur\(\s*[\d.]+px/;
+
+const bareBlurAt: string[] = [];
+let backdropDeclCount = 0;
+for (const p of cssFiles) {
+  const body = stripCssComments(readFileSync(p, 'utf8'));
+  for (const m of body.matchAll(DECL_AT)) {
+    backdropDeclCount++;
+    const value = m[1]!.replace(/\s+/g, ' ').trim();
+    if (BARE_BLUR.test(value)) bareBlurAt.push(`${relOf(p)}: backdrop-filter: ${value}`);
+  }
+}
+
+describe('玻璃 blur 半径单源 · backdrop-filter 不许再有裸 px', () => {
+  it('确实扫到了 backdrop-filter 声明（防空跑：全仓声明格数 ≥40，本批实测 50，含 `none` 与特性探测外的每一条）', () => {
+    console.log(`[glass-blur] backdrop-filter 声明格数 = ${backdropDeclCount}，其中裸 px 半径 = ${bareBlurAt.length}（本批改前 12）`);
+    expect(backdropDeclCount).toBeGreaterThanOrEqual(24);
+  });
+
+  it(`反查：全仓源码的 backdrop-filter blur 半径全部吃 --glass-blur* 档（改前 12 行裸 px → 现测 ${bareBlurAt.length}）`, () => {
+    expect(bareBlurAt, `这些格又自己抄半径了（主题翻浓度追不上）：\n${bareBlurAt.join('\n')}`).toEqual([]);
+  });
+
+  it('四枚用途档在 tokens.css 有 dark 定义点，且每一枚都真被消费（立档不消费 = 白立）', () => {
+    for (const t of GLASS_TIERS) {
+      expect(declaredInCss.has(t), `${t} 没有定义点`).toBe(true);
+      expect(tokensRaw, `${t} 的定义点不在 tokens.css 的 glass 段`).toContain(`${t}:`);
+      const consumers = cssFiles.filter((p) => stripCssComments(readFileSync(p, 'utf8')).includes(`var(${t})`));
+      expect(consumers.length, `${t} 没有任何消费方`).toBeGreaterThan(0);
+    }
+  });
+
+  it('档位表的 dark 缺省 = 主路那条 calc 的原文（本批零终值漂移，styles*.css 的懒档规则一字未动）', () => {
+    expect(tokensRaw).toMatch(/--glass-blur-scrim:\s*calc\(var\(--glass-blur\) \* 0\.8\);/);
+    expect(tokensRaw).toMatch(/--glass-blur-scrim-query:\s*calc\(var\(--glass-blur\) \* 0\.5\);/);
+    expect(tokensRaw).toMatch(/--glass-blur-picker:\s*calc\(var\(--glass-blur\) \* 0\.5\);/);
+    expect(tokensRaw).toMatch(/--glass-blur-palette:\s*7px;/);
+  });
+
+  it('light 四档全补、mint 补三档（picker 刻意不给：mint 的 `.picker-backdrop` 只供 background）', () => {
+    const light = read('../src/themes/light.css');
+    const mint = read('../src/themes/mint-dark.css');
+    for (const t of GLASS_TIERS) expect(light, `light.css 少了 ${t} 这一格`).toMatch(new RegExp(`${t}:\\s*\\d+px;`));
+    for (const t of ['--glass-blur-scrim', '--glass-blur-scrim-query', '--glass-blur-palette'] as const) {
+      expect(mint, `mint-dark.css 少了 ${t} 这一格`).toMatch(new RegExp(`${t}:\\s*\\d+px;`));
+    }
+    expect(mint.match(/--glass-blur-picker:/g) ?? [], 'mint 立了 picker 档却没有 mint 规则消费它 = 第二张嘴').toHaveLength(0);
+  });
+
+  it('两条通路的分工没被改坏：palette 仍靠 `html:root` 压主路、实心档仍连虚化一起撤', () => {
+    const palette = stripCssComments(read('../src/ui/palette.css'));
+    expect(palette).toMatch(/html:root \.picker-backdrop\.pk-mask\s*\{\s*-webkit-backdrop-filter:\s*blur\(var\(--glass-blur-palette\)\)/);
+    expect(palette).toMatch(/html:root\[data-glass='solid'\] \.picker-backdrop\.pk-mask\s*\{\s*-webkit-backdrop-filter:\s*none;\s*backdrop-filter:\s*none;/);
+    // 主路（light 的 `.picker-backdrop`）仍是 (0,3,0)，压不过上面那条 (0,3,1)——级联关系是这两档的语义本体
+    expect(stripCssComments(read('../src/shell-notices.css'))).toMatch(/:root\[data-theme='light'\] \.picker-backdrop\s*\{/);
+  });
+});

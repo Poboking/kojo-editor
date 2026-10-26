@@ -97,11 +97,16 @@
    抄第二条字面量。
    留下的只有**模糊几何**这一件事（几何不是颜色，不算第二张嘴）：命令面板是高频键盘面，
    主路 `blur(calc(--glass-blur × 0.5))` = 8px 会把背后正文糊成一片，这里收到 7px。
+   1027 玻璃档批：这个 7px 不再写在规则里，改吃 `--glass-blur-palette`（定义点 = `tokens.css` 的
+   dark 档 + `themes/light.css` / `themes/mint-dark.css`，逐档 7px，展开终值与改前逐字相同——
+   对拍见 `styles-wash-token-discipline.test.ts`）。为什么单独一档而不折进 `--glass-blur-picker`：
+   picker 那档是**主路懒档**的量程（dark/light 8px），本档是 F1 独有的"再收 1px"，两档在 mint
+   还想各自翻（mint 的 picker 走主路、pk-mask 走本档），合了就分不开。
    `html:root`（(0,3,1)）稳压主路 `:root[data-theme] .picker-backdrop`（0,3,0）；正因为它压得过，
    实心档必须跟着把虚化撤干净——不然"关掉磨砂"那个开关在命令面板上只关了面、没关遮罩。 */
 html:root .picker-backdrop.pk-mask {
-  -webkit-backdrop-filter: blur(7px) saturate(1.05);
-  backdrop-filter: blur(7px) saturate(1.05);
+  -webkit-backdrop-filter: blur(var(--glass-blur-palette)) saturate(1.05);
+  backdrop-filter: blur(var(--glass-blur-palette)) saturate(1.05);
 }
 html:root[data-glass='solid'] .picker-backdrop.pk-mask {
   -webkit-backdrop-filter: none;

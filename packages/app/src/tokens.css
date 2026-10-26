@@ -119,9 +119,24 @@
      时压在暗化遮罩上的**合成结果**正好等于编辑器自己的 chrome（tint→--bg-2、tint-raise→--bg-3）。
      于是"拧透明度"只改变背后泄漏多少、**不改色相**，且 `data-glass='solid'` 实心档落 --bg-2 与磨砂档
      合成色一致（开关只切质感、不跳色）。换主题色时 tint/tint-raise 与 --bg-2/--bg-3 一并重算。
-     blur/saturate 是设计常量、不暴露给用户；edge 是顶边高光（磨砂玻璃的"厚度"）。 */
+     blur/saturate 是设计常量、不暴露给用户（**给用户**的只有 alpha）；edge 是顶边高光（磨砂玻璃的"厚度"）。
+     "常量"指的不是"不许翻"——主题侧要翻浓度就翻下面那四枚用途档，别在规则里抄数。 */
   --glass-blur: 16px; /* 20→16：遮罩已在同层先做 0.8× 模糊，串联后 20px 边际收益为 0，只多耗 GPU */
   --glass-saturate: 1.25; /* 1.5→1.25：底近无彩，1.5 把泄漏边缘推成可察觉彩噪；且与遮罩饱和相乘 */
+  /* 虚化半径的**用途档**（1027 玻璃档批）：`--glass-blur` 是"面"的常量（`.glass` 族那一档），
+     翻不动"罩比面浅、键盘面比确认面更浅"这几件事。于是 light / mint 两档过去只能把半径写成裸 px
+     （`shell-notices.css` ⑤ 的五条规则 + `ui/palette.css` 的 `.pk-mask`，共 12 行），主题侧永远追不上
+     ——三档号称能各自翻浓度，其实只有 tint / alpha / saturate 在翻，blur 卡死在源码里。
+     口径：**名字跟着用途走，不跟序号走**（`-2 / -light / -strong` 那种编号一年后没人记得谁是谁）。
+     dark 档的缺省值 = **主路那条 calc 的原文**（`styles.css` / `styles-project.css` 的懒档规则仍在用
+     `calc(var(--glass-blur) × n)`，本批不动它们），所以下面四档在 dark 档展开后与改前逐字同值 =
+     **零终值漂移**；light / mint 只管把自己标定过的那个数填进对应槽位。判据见
+     `css-token-single-source.test.ts`（全仓不许再有裸 px 的 backdrop-filter blur）与
+     `styles-wash-token-discipline.test.ts`（三档展开值逐字对拍改前字面量）。 */
+  --glass-blur-scrim: calc(var(--glass-blur) * 0.8); /* 破坏性确认面（模态 / 向导遮罩）：罩要留一点"那是编辑器"的结构，比面浅一档 */
+  --glass-blur-scrim-query: calc(var(--glass-blur) * 0.5); /* 只读查询面（比对 / 预览）：再轻一档。不与 picker 合一——mint 的 query(9px) 比它的 picker(8px) 深，合档等于替 mint 改设计 */
+  --glass-blur-picker: calc(var(--glass-blur) * 0.5); /* 命令面板遮罩（主路 `.picker-backdrop` 那一档）：高频键盘面，正文必须糊到读不出字行 */
+  --glass-blur-palette: 7px; /* F1 命令面板的 `.pk-mask`：比 picker 再收 1px（8px 在密集小字上仍读成"一片"）。它是同一条遮罩路上的更浅一档、不是第二条通路——palette.css 只供几何不供色（VIS-52） */
   --glass-alpha: 0.85; /* 缺省 15% 通透（= glass-pref 的 GLASS_TRANSPARENCY_DEFAULT，两处同步） */
   --glass-tint: 40 45 51; /* 预合成：alpha .85 落 --bg-2 */
   --glass-tint-raise: 48 54 62; /* 预合成：alpha .85 落 --bg-3（玻璃面上的抬升件用） */
