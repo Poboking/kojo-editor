@@ -96,11 +96,9 @@ set_order / diagnose` 的载荷里没有插件语义，宿主只认 `archivePath
     与 `packages/plugin-api/src`，新目录天然在闸内；
   - `audit:language` 的 M1 / M2 扫 `packages/app/src` **整树**（monaco + ui + 其余），不是只扫
     monaco 层；启动器视图落地后同样受这两条约束；
-  - **一处尚未收编**：`audit:decoupling` A 项的中性目录只列到 `packages/app/src/ui`、
-    `packages/app/src/monaco`、`packages/app/src/bridge`，而启动器视图落点
-    `packages/app/src/launcher/` **不在**名单里。落地该视图的批次必须把它一并加进
-    `NEUTRAL_DIRS`，否则启动器视图是 A 项的空白区（`audit:language` 的 M1/M2 已覆盖它，
-    但 A 项的语言面约束不会自动生效）。
+  - **视图目录已收编**（2026-10-26 L5 批）：`packages/app/src/launcher` 已进
+    `audit:decoupling` A 项的 `NEUTRAL_DIRS`（此前只列到 `packages/app/src/ui` /
+    `monaco` / `bridge`，启动器视图曾是 A 项的空白区）。`audit:language` 的 M1/M2 照旧覆盖它。
 
 ### 6. 发布前置条件（未解缺口，不是已实现）
 
