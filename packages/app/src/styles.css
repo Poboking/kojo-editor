@@ -23,7 +23,7 @@ button {
   background: var(--surface-overlay);
   color: var(--fg);
   border-radius: var(--radius-md);
-  padding: 6px 14px;
+  padding: var(--space-6) 14px;
   cursor: pointer;
   /* 顶边高光（VSCode 精修批）：实心按钮挂一条极淡 inset 亮边，"这块面朝向光源"的暗示；
      透明/幽灵按钮在下方各自清掉。 */
@@ -76,7 +76,7 @@ button.big {
   padding: 10px 28px;
 }
 button.small {
-  padding: 3px 10px;
+  padding: var(--space-1) 10px;
   font-size: var(--fs-1);
   /* 全站小按钮实测高 23px，差 1px 就够不到 WCAG 2.5.8 的 24×24 最小目标；
      补 min-height 而不是改 padding——视觉密度几乎不变，可点区补齐。 */
@@ -88,13 +88,13 @@ button.link {
   /* 实机：`--accent` 当文字压在深底上只有 4.41:1（欢迎页「最近打开」那条路径就是它），
      正文级需 4.5 ⇒ 链接式按钮走文字档 `--accent-text`（5.54:1）。 */
   color: var(--accent-text);
-  padding: 2px 0;
+  padding: var(--space-0) 0;
   text-align: left;
 }
 code {
   font-family: var(--font-mono);
   background: var(--hover);
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   border-radius: var(--radius-sm);
   font-size: var(--fs-1);
 }
@@ -205,9 +205,9 @@ textarea {
   pointer-events: none;
   background:
     radial-gradient(36% 40% at 30% 32%, rgb(var(--accent-rgb) / 0.18), transparent 62%),
-    radial-gradient(32% 38% at 72% 68%, rgba(124, 92, 255, 0.15), transparent 64%);
+    radial-gradient(32% 38% at 72% 68%, var(--violet-wash), transparent 64%);
   filter: blur(28px);
-  animation: welcome-aurora 26s var(--ease-in-out) infinite;
+  animation: welcome-aurora var(--anim-aurora) var(--ease-in-out) infinite;
 }
 @keyframes welcome-aurora {
   0%,
@@ -228,7 +228,7 @@ textarea {
   padding: 40px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-3);
   /* 分层抬升 + 顶边高光：欢迎卡是首屏第一件"浮起来"的物件，给足厚度；弹簧缓动入场 */
   box-shadow:
     var(--edge-raise),
@@ -241,7 +241,7 @@ textarea {
   letter-spacing: -0.01em;
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--space-2);
 }
 /* 版本号从"标题尾巴上的灰字"升成一枚独立胶囊 chip（VSCode 精修批） */
 .welcome-card h1 .ver {
@@ -254,7 +254,7 @@ textarea {
   background: var(--surface-sunken);
 }
 .tagline {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--fg-dim);
 }
 .notice {
@@ -264,16 +264,16 @@ textarea {
   padding: 10px 14px;
 }
 .notice.warn {
-  background: rgba(209, 154, 102, 0.1);
-  border-color: rgba(209, 154, 102, 0.4);
+  background: var(--wash-warn);
+  border-color: var(--wash-warn-edge);
 }
 .notice.error {
-  background: rgba(224, 108, 117, 0.1);
-  border-color: rgba(224, 108, 117, 0.5);
+  background: var(--wash-error);
+  border-color: var(--wash-error-edge);
   white-space: pre-wrap;
 }
 .recent h3 {
-  margin: 6px 0;
+  margin: var(--space-6) 0;
   font-size: var(--fs-2);
   color: var(--fg-dim);
 }
@@ -286,7 +286,7 @@ textarea {
 .recent-head .recent-clear {
   font-size: var(--fs-1);
   color: var(--fg-dim);
-  padding: 2px 0;
+  padding: var(--space-0) 0;
 }
 .recent-head .recent-clear:hover {
   color: var(--accent-text);
@@ -331,10 +331,10 @@ textarea {
   flex: 1;
   min-width: 0;
   display: flex;
-  gap: 10px;
+  gap: var(--space-2);
   justify-content: space-between;
   align-items: center;
-  padding: 7px 10px;
+  padding: var(--space-2) 10px;
 }
 .recent-dir {
   overflow: hidden;
@@ -353,7 +353,7 @@ textarea {
   color: var(--fg-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   line-height: 1.7;
 }
 .recent li.missing .recent-dir {
@@ -366,7 +366,7 @@ textarea {
   border-color: transparent;
   color: var(--fg-dim);
   font-size: var(--fs-0);
-  padding: 2px 8px;
+  padding: var(--space-0) var(--space-2);
   border-radius: var(--radius-sm);
 }
 .recent-remove:hover {
@@ -379,7 +379,7 @@ textarea {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   line-height: 1.6;
   background: var(--surface-sunken);
 }
@@ -388,7 +388,7 @@ textarea {
   font-size: var(--fs-1);
   line-height: 1.7;
   border-top: 1px solid var(--border-subtle);
-  padding-top: 12px;
+  padding-top: var(--space-3);
 }
 
 /* ------------------------------ modal ------------------------------ */
@@ -414,7 +414,7 @@ textarea {
   width: 620px;
   max-width: 92vw;
   border-radius: var(--radius-lg);
-  padding: 24px 28px;
+  padding: var(--space-5) 28px;
   box-shadow:
     var(--edge-raise),
     var(--shadow-3);
@@ -425,12 +425,12 @@ textarea {
   font-size: var(--fs-5);
 }
 .modal .paths {
-  margin: 8px 0;
-  padding-left: 6px;
+  margin: var(--space-2) 0;
+  padding-left: var(--space-6);
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
 }
 .modal .dim {
   color: var(--fg-dim);
@@ -440,8 +440,8 @@ textarea {
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  margin-top: 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 /* --------------------- P2：overlay 宿主（向导 / 设置等模态） --------------------- */
@@ -603,7 +603,7 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--fg);
-  padding: 6px 10px;
+  padding: var(--space-6) 10px;
   font-size: var(--fs-2);
   outline: none;
 }
@@ -827,7 +827,7 @@ textarea {
   align-items: baseline;
   gap: var(--space-2);
   width: 100%;
-  padding: 5px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border: none;
   border-left: 2px solid transparent;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -938,7 +938,7 @@ textarea {
     width: auto;
     border: 1px solid transparent;
     border-radius: var(--radius-pill);
-    padding: 3px var(--space-3);
+    padding: var(--space-1) var(--space-3);
     white-space: nowrap;
   }
   .tutorial-toc-item:hover {
@@ -1074,7 +1074,7 @@ textarea {
 .tutorial-arrow {
   align-self: center;
   /* 「编译为」做成一枚安静的小胶囊：给左右对照一个明确的轴心，而不是飘着的灰字 */
-  padding: 2px var(--space-2);
+  padding: var(--space-0) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--bg-2);
@@ -1175,7 +1175,7 @@ textarea {
 }
 .proj-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 .nav-empty.err {
@@ -1191,7 +1191,7 @@ textarea {
   bottom: 36px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
   z-index: var(--z-toast);
   max-width: 400px;
 }
@@ -1200,11 +1200,11 @@ textarea {
   --glass-alpha: 0.85;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2);
   /* 只给左条：其余三边 1px 交玻璃主规则（本条在后，长声明压得住那条简写） */
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-lg);
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   box-shadow:
     var(--edge-raise),
     var(--shadow-1);
@@ -1225,7 +1225,7 @@ textarea {
   flex: none;
   display: inline-flex;
   align-items: center;
-  margin-top: 2px;
+  margin-top: var(--space-0);
   color: var(--accent-text);
 }
 .toast-error .toast-icon {
@@ -1244,7 +1244,7 @@ textarea {
 .toast-close {
   flex: none;
   border: none;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   color: var(--fg-dim);
   border-radius: var(--radius-sm);
   display: inline-flex;
@@ -1377,7 +1377,7 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .boot-skeleton-brand {
   font-size: var(--fs-display);
@@ -1389,7 +1389,7 @@ textarea {
 .boot-splash-lock {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 10px; /* 体感批 B-1 刻意不收：index.html 内联引导层同格写死 gap:10px，boot-sweep-single-source.test.ts 逐字镜像钉着它（引导层不许有第二张嘴）——归组长并入刻度时一起动 */
 }
 .boot-splash-mark {
   width: 26px;
@@ -1461,11 +1461,11 @@ textarea {
 /* ——"有事要处理"而不是"出错了"；版式对齐既有 .notice，不另起炉灶。 */
 
 .crash-recovery {
-  background: rgba(209, 154, 102, 0.1);
-  border-color: rgba(209, 154, 102, 0.4);
+  background: var(--wash-warn);
+  border-color: var(--wash-warn-edge);
 }
 .crash-recovery p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 .crash-recovery-actions {
   display: flex;
@@ -1570,31 +1570,31 @@ button.resume-session {
   animation: u-rise var(--dur-3) var(--ease-out) both;
 }
 .stagger > *:nth-child(1) {
-  animation-delay: 0ms;
+  animation-delay: 0;
 }
 .stagger > *:nth-child(2) {
-  animation-delay: 45ms;
+  animation-delay: calc(var(--stagger) * 1);
 }
 .stagger > *:nth-child(3) {
-  animation-delay: 90ms;
+  animation-delay: calc(var(--stagger) * 2);
 }
 .stagger > *:nth-child(4) {
-  animation-delay: 135ms;
+  animation-delay: calc(var(--stagger) * 3);
 }
 .stagger > *:nth-child(5) {
-  animation-delay: 180ms;
+  animation-delay: calc(var(--stagger) * 4);
 }
 .stagger > *:nth-child(6) {
-  animation-delay: 225ms;
+  animation-delay: calc(var(--stagger) * 5);
 }
 .stagger > *:nth-child(7) {
-  animation-delay: 270ms;
+  animation-delay: calc(var(--stagger) * 6);
 }
 .stagger > *:nth-child(8) {
-  animation-delay: 315ms;
+  animation-delay: calc(var(--stagger) * 7);
 }
 .stagger > *:nth-child(n + 9) {
-  animation-delay: 360ms;
+  animation-delay: calc(var(--stagger) * 8);
 }
 /* 单独取用的入场工具（不想整组错峰时） */
 .u-rise {
@@ -1675,7 +1675,7 @@ button.resume-session {
   border-radius: var(--radius-lg);
   background:
     linear-gradient(var(--surface-overlay), var(--surface-overlay)) padding-box,
-    linear-gradient(135deg, var(--accent), #7c5cff 48%, var(--accent-text)) border-box;
+    linear-gradient(135deg, var(--accent), var(--violet) 48%, var(--accent-text)) border-box;
 }
 /* accent 柔光：悬停 / .is-active / focus-within 时亮起一圈，用于强调当前焦点面 */
 .u-glow {
@@ -1688,7 +1688,7 @@ button.resume-session {
 }
 /* 呼吸柔光：活体状态（进行中/已连接/录制）用，幅度小、循环慢 */
 .u-breathe {
-  animation: u-glow-breathe 2.8s var(--ease-in-out) infinite;
+  animation: u-glow-breathe var(--anim-breathe) var(--ease-in-out) infinite;
 }
 /* 键盘焦点柔光环：给想要"环 + 光"而非硬 outline 的控件（与全局 :focus-visible 并存，
    挂本类即改用 box-shadow 环，outline 让位） */
@@ -1705,16 +1705,21 @@ button.resume-session {
   content: '';
   position: absolute;
   top: 0;
-  left: -60%;
+  left: 0;
   width: 40%;
   height: 100%;
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.18), transparent);
-  transform: skewX(-20deg);
-  transition: left var(--dur-3) var(--ease-out);
+  background: linear-gradient(100deg, transparent, var(--sheen-band), transparent);
+  /* 扫光带走 **transform**，不再动 `left`（体感批 B-6 · VIS-32）：`left` 是 layout 属性，
+     每帧都要重排 + 重绘，而这条是悬停期一直在跑的动画——正是「用 layout 属性做动画」的
+     反例本体。几何**逐字等价**：带子自身宽 40%（= 容器宽的 0.4），于是
+     `left: -60%` ≡ `translateX(-150%)`、`left: 120%` ≡ `translateX(300%)`（都按自身宽折回容器宽）。
+     `skewX` 必须留在同一条 `transform` 里——`transform` 是整体替换，分两处写会互相覆盖。 */
+  transform: translateX(-150%) skewX(-20deg);
+  transition: transform var(--dur-3) var(--ease-out);
   pointer-events: none;
 }
 .u-sheen:hover::before {
-  left: 120%;
+  transform: translateX(300%) skewX(-20deg);
 }
 /* 按压涟漪：容器需 relative + overflow:hidden（本类已给），:active 时中心扩散一次 */
 .u-ripple {
@@ -1732,7 +1737,7 @@ button.resume-session {
   aspect-ratio: 1;
   translate: -50% -50%;
   border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 66%);
+  background: radial-gradient(closest-side, var(--ripple-core) 0%, var(--ripple-tail) 66%);
   /* 收缩量留在 `transform` 上（`u-ripple` 关键帧动的就是这一条）：写成独立的 `scale:` 属性
      会和关键帧各乘各的，波峰永远停在 0 */
   transform: scale(0);
@@ -1740,7 +1745,7 @@ button.resume-session {
   pointer-events: none;
 }
 .u-ripple:active::after {
-  animation: u-ripple 480ms var(--ease-out);
+  animation: u-ripple var(--anim-ripple) var(--ease-out);
 }
 
 /* ---- 质感 ---- */
@@ -1797,7 +1802,7 @@ button.resume-session {
   height: 14px;
   border-radius: 50%;
   background: var(--on-accent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 1px 2px var(--drop-dark);
   transition: transform var(--dur-2) var(--ease-spring);
 }
 .switch input:checked ~ .switch-track {
@@ -1825,7 +1830,7 @@ button.resume-session {
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: u-spin 700ms linear infinite;
+  animation: u-spin var(--anim-spin) linear infinite;
 }
 
 /* 骨架占位：sunken 底 + 扫光，加载态用它替"空白/转圈"，减少布局跳动 */
@@ -1877,7 +1882,7 @@ button.resume-session {
 .u-focus-glow:active:not(:disabled):focus-visible {
   box-shadow:
     var(--shadow-focus),
-    inset 0 1px 2px rgba(0, 0, 0, 0.28);
+    inset 0 1px 2px var(--inset-dark);
 }
 
 /* ---- 全站接入段（零 TSX 改动；新面自己挂上面的工具类，别在这里加名字） ----

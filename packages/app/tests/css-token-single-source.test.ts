@@ -14,8 +14,9 @@
  *     B. **由 TS 行内注入**（`style={{ '--x': … }}` / `['--x'] = …` / `setProperty('--x', …)`）；
  *        这一条不是正则放宽：B 的成员逐枚点名（见 INJECTED_ROSTER），并且要验到写入形态本身，
  *        只提一次名字（注释里说说）不算。
- *     C. 兜底豁免名单 FALLBACK_PHANTOM_ROSTER（见下）——现存 22 枚"从未定义、只靠字面回落"
- *        的历史幻影，逐枚登记；名单是**只许缩不许涨**的欠账账本。
+ *     C. 兜底豁免名单 FALLBACK_PHANTOM_ROSTER（见下）——历史上"从未定义、只靠字面回落"的幻影
+ *        逐枚登记（R2 立账时 22 枚，体感批 B-5 转正三枚老命名残留后 19 枚）；名单是
+ *        **只许缩不许涨**的欠账账本。
  *  ② `--font-sans` 全仓不再被引用，且 `.nav-badge` 那格吃的是 `--font-ui`。
  *  ③ 名单即口径：①算出来的三个集合与登记的名单**逐字相等**——新幻影进不来，
  *     转正掉的必须从账上划掉（划不掉的红是故意的）。
@@ -90,10 +91,16 @@ for (const p of tsFiles) {
 const phantoms = [...usedInCss.keys()].filter((n) => !declaredInCss.has(n) && !injectedFromTs.has(n)).sort();
 
 /**
- * C · 兜底豁免账（22 枚，逐枚点名）：全部是「从未定义、只靠 `var(--x, 字面回落)` 活着」
+ * C · 兜底豁免账（19 枚，逐枚点名）：全部是「从未定义、只靠 `var(--x, 字面回落)` 活着」
  * 的历史幻影（tokens.css L01 那节注释称之「幻影转正」待办）。**这里不放宽判据**——
  * 它们今天渲染得出东西来，是因为回落值就是它们想要的数；转正的代价是给它们一个定义点，
  * 而那属于 L01/L09 的色面工作，不在本路射程。谁转正一枚，就从这本账上划掉一行。
+ *
+ * 体感批 B-5（2026-10-26）划掉三枚老命名残留：`--bg-1` / `--bg-hover` / `--r-1`——
+ * 全仓只剩 `styles-project.css` 的 `.inj-rescan` 一族还在引用它们（三处兜底各写各的字面量），
+ * 现已改吃定义点真身：底 → `transparent`（原兜底即终值）、悬停底 → `--wash-neutral`、
+ * 圆角 → `--radius-sm`（4px 同值）、描边 → `--border`（`#d8dde3` 那份是浅色档的抄来的死兜底）。
+ * 逐字等值由新建的 `styles-wash-token-discipline.test.ts` 拿**改前字面量**当期望值对拍。
  */
 const FALLBACK_PHANTOM_ROSTER: readonly string[] = [
   // —— 面板/表格的头部槽位（sticky 头那一族：由消费方按面板写死，从未有定义点）——
@@ -111,10 +118,6 @@ const FALLBACK_PHANTOM_ROSTER: readonly string[] = [
   '--well-bg',
   '--well-radius',
   '--hair-color',
-  // —— 老命名残留（--bg-1 / --bg-hover / --r-1 都是分档之前的旧名，现值在 --bg-2 / --hover-soft / --radius-sm）——
-  '--bg-1',
-  '--bg-hover',
-  '--r-1',
   // —— 芯片与波纹槽位（--chip-* 走回落；--rx/--ry 是"纯 CSS 拿不到指针点"的槽位，见波效应规则注释）——
   '--chip-bg',
   '--chip-fg',

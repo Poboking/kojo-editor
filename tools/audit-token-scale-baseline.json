@@ -1,0 +1,43 @@
+{
+  "_readme": "tools/audit-token-scale.mjs 的棘轮基线：每文件只数代码行上的违规声明数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-token-scale.mjs --update-baseline` 重钉。",
+  "checks": {
+    "Z1(z-index裸值)": {
+      "total": 38,
+      "files": {
+        "packages/app/src/context-menu.css": 1,
+        "packages/app/src/dev-note.css": 2,
+        "packages/app/src/keybindings.css": 1,
+        "packages/app/src/market.css": 1,
+        "packages/app/src/outline-panel.css": 1,
+        "packages/app/src/problem-panel.css": 1,
+        "packages/app/src/search-panel.css": 1,
+        "packages/app/src/styles-project.css": 19,
+        "packages/app/src/styles.css": 3,
+        "packages/app/src/ui/palette.css": 1,
+        "packages/app/src/ui/welcome.css": 4,
+        "packages/app/src/update-notice-card.css": 1,
+        "packages/app/src/window-chrome.css": 2
+      },
+      "exempt": {
+        "total": 0,
+        "files": {}
+      }
+    },
+    "D1(动效裸时长)": {
+      "total": 24,
+      "files": {
+        "packages/app/src/kojo2.css": 2,
+        "packages/app/src/launcher/launcher.css": 1,
+        "packages/app/src/search-panel.css": 2,
+        "packages/app/src/settings-search.css": 1,
+        "packages/app/src/styles-project.css": 9,
+        "packages/app/src/styles.css": 7,
+        "packages/app/src/update-dialog.css": 2
+      },
+      "exempt": {
+        "total": 0,
+        "files": {}
+      }
+    }
+  }
+}

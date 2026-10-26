@@ -23,7 +23,7 @@ button {
   background: var(--surface-overlay);
   color: var(--fg);
   border-radius: var(--radius-md);
-  padding: 6px 14px;
+  padding: var(--space-6) 14px;
   cursor: pointer;
   /* 顶边高光（VSCode 精修批）：实心按钮挂一条极淡 inset 亮边，"这块面朝向光源"的暗示；
      透明/幽灵按钮在下方各自清掉。 */
@@ -76,7 +76,7 @@ button.big {
   padding: 10px 28px;
 }
 button.small {
-  padding: 3px 10px;
+  padding: var(--space-1) 10px;
   font-size: var(--fs-1);
   /* 全站小按钮实测高 23px，差 1px 就够不到 WCAG 2.5.8 的 24×24 最小目标；
      补 min-height 而不是改 padding——视觉密度几乎不变，可点区补齐。 */
@@ -88,13 +88,13 @@ button.link {
   /* 实机：`--accent` 当文字压在深底上只有 4.41:1（欢迎页「最近打开」那条路径就是它），
      正文级需 4.5 ⇒ 链接式按钮走文字档 `--accent-text`（5.54:1）。 */
   color: var(--accent-text);
-  padding: 2px 0;
+  padding: var(--space-0) 0;
   text-align: left;
 }
 code {
   font-family: var(--font-mono);
   background: var(--hover);
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   border-radius: var(--radius-sm);
   font-size: var(--fs-1);
 }
@@ -205,9 +205,9 @@ textarea {
   pointer-events: none;
   background:
     radial-gradient(36% 40% at 30% 32%, rgb(var(--accent-rgb) / 0.18), transparent 62%),
-    radial-gradient(32% 38% at 72% 68%, rgba(124, 92, 255, 0.15), transparent 64%);
+    radial-gradient(32% 38% at 72% 68%, var(--violet-wash), transparent 64%);
   filter: blur(28px);
-  animation: welcome-aurora 26s var(--ease-in-out) infinite;
+  animation: welcome-aurora var(--anim-aurora) var(--ease-in-out) infinite;
 }
 @keyframes welcome-aurora {
   0%,
@@ -228,7 +228,7 @@ textarea {
   padding: 40px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-3);
   /* 分层抬升 + 顶边高光：欢迎卡是首屏第一件"浮起来"的物件，给足厚度；弹簧缓动入场 */
   box-shadow:
     var(--edge-raise),
@@ -241,7 +241,7 @@ textarea {
   letter-spacing: -0.01em;
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--space-2);
 }
 /* 版本号从"标题尾巴上的灰字"升成一枚独立胶囊 chip（VSCode 精修批） */
 .welcome-card h1 .ver {
@@ -254,7 +254,7 @@ textarea {
   background: var(--surface-sunken);
 }
 .tagline {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--fg-dim);
 }
 .notice {
@@ -264,16 +264,16 @@ textarea {
   padding: 10px 14px;
 }
 .notice.warn {
-  background: rgba(209, 154, 102, 0.1);
-  border-color: rgba(209, 154, 102, 0.4);
+  background: var(--wash-warn);
+  border-color: var(--wash-warn-edge);
 }
 .notice.error {
-  background: rgba(224, 108, 117, 0.1);
-  border-color: rgba(224, 108, 117, 0.5);
+  background: var(--wash-error);
+  border-color: var(--wash-error-edge);
   white-space: pre-wrap;
 }
 .recent h3 {
-  margin: 6px 0;
+  margin: var(--space-6) 0;
   font-size: var(--fs-2);
   color: var(--fg-dim);
 }
@@ -286,7 +286,7 @@ textarea {
 .recent-head .recent-clear {
   font-size: var(--fs-1);
   color: var(--fg-dim);
-  padding: 2px 0;
+  padding: var(--space-0) 0;
 }
 .recent-head .recent-clear:hover {
   color: var(--accent-text);
@@ -331,10 +331,10 @@ textarea {
   flex: 1;
   min-width: 0;
   display: flex;
-  gap: 10px;
+  gap: var(--space-2);
   justify-content: space-between;
   align-items: center;
-  padding: 7px 10px;
+  padding: var(--space-2) 10px;
 }
 .recent-dir {
   overflow: hidden;
@@ -353,7 +353,7 @@ textarea {
   color: var(--fg-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   line-height: 1.7;
 }
 .recent li.missing .recent-dir {
@@ -366,7 +366,7 @@ textarea {
   border-color: transparent;
   color: var(--fg-dim);
   font-size: var(--fs-0);
-  padding: 2px 8px;
+  padding: var(--space-0) var(--space-2);
   border-radius: var(--radius-sm);
 }
 .recent-remove:hover {
@@ -379,7 +379,7 @@ textarea {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   line-height: 1.6;
   background: var(--surface-sunken);
 }
@@ -388,7 +388,7 @@ textarea {
   font-size: var(--fs-1);
   line-height: 1.7;
   border-top: 1px solid var(--border-subtle);
-  padding-top: 12px;
+  padding-top: var(--space-3);
 }
 
 /* --------------------- 壳层五区布局（UI 重设计批 P1） --------------------- */
@@ -410,7 +410,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 4px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   min-height: 36px;
@@ -426,12 +426,12 @@ textarea {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0);
 }
 .tb-project {
   font-size: var(--fs-1);
   color: var(--fg-dim);
-  padding: 2px var(--space-2);
+  padding: var(--space-0) var(--space-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -444,7 +444,7 @@ textarea {
   /* 图标 + 文案（如「关闭项目」）同行：flex 对齐 + 固定间距，图标按钮则自然居中 */
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 /* 图标按钮 hover 走淡底而非描边——避免边框闪现 */
 .toolbar-btn:hover:not(:disabled) {
@@ -464,7 +464,7 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0);
   padding: var(--space-2) 0;
   background: var(--bg-2);
   border-right: 1px solid var(--border);
@@ -606,8 +606,8 @@ textarea {
 .panel-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px var(--space-2);
+  gap: var(--space-0);
+  padding: var(--space-0) var(--space-2);
   border-bottom: 1px solid var(--border);
   flex: none;
 }
@@ -616,7 +616,7 @@ textarea {
   background: transparent;
   color: var(--fg-dim);
   font-size: var(--fs-1);
-  padding: 4px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border-radius: 0;
   position: relative;
 }
@@ -649,7 +649,7 @@ textarea {
 }
 .panel-close {
   border: none;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   display: inline-flex;
   align-items: center;
 }
@@ -681,7 +681,7 @@ textarea {
   padding: var(--space-2) var(--space-3);
 }
 .panel h3 {
-  margin: 2px 0 8px;
+  margin: var(--space-0) 0 var(--space-2);
   font-size: var(--fs-1);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -722,7 +722,7 @@ textarea {
   margin: auto;
   text-align: center;
   color: var(--fg-dim);
-  padding: 0 24px;
+  padding: 0 var(--space-5);
   animation: fade-in var(--dur-2) var(--ease-out);
 }
 .empty-state > p:first-child {
@@ -733,20 +733,20 @@ textarea {
 .empty-state .dim {
   font-size: var(--fs-1);
   line-height: 1.8;
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
 }
 .empty-actions {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   justify-content: center;
-  margin: 18px 0 6px;
+  margin: 18px 0 var(--space-6);
 }
 /* 快捷键提示做成 kbd 芯片 */
 .empty-actions .hint {
   font-family: var(--font-mono);
   font-size: var(--fs-0);
-  margin-left: 6px;
-  padding: 1px 5px;
+  margin-left: var(--space-6);
+  padding: 1px var(--space-1);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: var(--radius-sm);
@@ -829,8 +829,8 @@ textarea {
 .editor-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px 0 12px;
+  gap: var(--space-6);
+  padding: 0 var(--space-2) 0 var(--space-3);
   height: 36px;
   font-size: var(--fs-2);
   color: var(--fg-dim);
@@ -885,7 +885,7 @@ textarea {
   opacity: 0.85;
 }
 .editor-tab.pinned {
-  padding-left: 8px;
+  padding-left: var(--space-2);
 }
 .editor-tab.pinned .tab-label {
   color: var(--fg);
@@ -904,7 +904,7 @@ textarea {
   cursor: pointer;
   font-size: var(--fs-2);
   line-height: 1;
-  padding: 0 2px;
+  padding: 0 var(--space-0);
   /* 实测 17×17，够不到 24×24 最小可点区（关闭是会丢东西的动作，不该靠瞄准）。
      图标仍 13px，只是把可点区补齐；关闭钮平时靠 opacity 隐藏，占位不变故不抖动。 */
   min-width: 24px;
@@ -967,13 +967,21 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--fg);
-  padding: 5px 8px;
+  padding: var(--space-1) var(--space-2);
   width: 100%;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-6);
+  /* 原生控件不继承字号与字族（体感批 B-3 · VIS-25）：这一格是 `<input>`（FileTree.tsx 的
+     `className="tree-filter"`），本规则改前**既不给 font-size 也不给 font-family**，于是它一路吃
+     Chromium 的 `-webkit-small-control` 系统字 = 真机实测那枚 **13.3333px**——`--fs-*` 六档整数
+     的自陈（tokens.css 字号段）被一个漏网的原生控件破了相，界面字号缩放（`UI_FONT_SCALE_TOKENS`
+     现读 token 乘倍率）也管不到它。口径照同面板的 `.tree-edit-input`（`--fs-1` + `font-family:
+     inherit`）与 `ui-chrome-polish.test.ts` 钉过的 `.nav-chara-select`：**吃刻度，不吃系统字**。 */
+  font-size: var(--fs-1);
+  font-family: inherit;
 }
 /* 批量展开/收起的一句可读数（UI 反馈 6）。类名不叫 .tree-note——上游已把它用作「空目录」行。 */
 .tree-reveal-note {
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-6);
   font-size: var(--fs-0);
 }
 .tree-groups {
@@ -990,13 +998,13 @@ textarea {
 .tree-group-btn {
   width: 100%;
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
   background: none;
   border: none;
   color: var(--fg);
   /* 树行度量：纵向内衬归零、行高交 --tree-row-h（caret 12px 在 22px 行里不裁切） */
-  padding: 0 2px;
+  padding: 0 var(--space-0);
   height: var(--tree-row-h);
   font-size: var(--fs-1);
   text-align: left;
@@ -1023,7 +1031,7 @@ textarea {
 }
 .tree-files {
   list-style: none;
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
   padding: 0 0 0 var(--tree-indent);
 }
 /* 作者包节点（角色组内二级；可折叠、默认折叠——口上树定稿向 §3） */
@@ -1031,12 +1039,12 @@ textarea {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   border: none;
   background: transparent;
   color: var(--fg);
   font-size: var(--fs-1);
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   height: var(--tree-row-h);
   text-align: left;
   border-radius: var(--radius-sm);
@@ -1059,7 +1067,7 @@ textarea {
    否则每深一层会多出两段式跳变；包内容的列表单独补一级，见下条。 */
 .tree-files.nested {
   padding-left: 0;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0);
 }
 /* 包 → 包内容（ERB 列表与真实文件夹视图）是「一级条目 → 子级」那一跳：补一级缩进 */
 .tree-package-node > .tree-files.nested {
@@ -1076,12 +1084,12 @@ textarea {
 .tree-dir {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   height: var(--tree-row-h);
   font-size: var(--fs-1);
   font-family: inherit;
@@ -1107,7 +1115,7 @@ textarea {
 }
 /* 目录读取中 / 失败提示行（同取树行行高，只不绑死 height：提示语变长时可换行） */
 .tree-note {
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   line-height: var(--tree-row-h);
   color: var(--fg-dim);
   font-size: var(--fs-1);
@@ -1117,8 +1125,8 @@ textarea {
 .tree-extra {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+  gap: var(--space-6);
+  padding: 0 var(--space-2);
   height: var(--tree-row-h);
   color: var(--fg-dim);
   font-size: var(--fs-1);
@@ -1141,7 +1149,7 @@ textarea {
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   color: var(--fg);
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   height: var(--tree-row-h);
   font-size: var(--fs-1);
   font-family: inherit;
@@ -1168,7 +1176,7 @@ textarea {
   /* 菜单项不是实心件：清掉全局 button 的顶边高光，否则每项头上多一条亮线 */
   box-shadow: none;
   color: var(--fg);
-  padding: 5px 10px 5px 8px;
+  padding: var(--space-1) 10px var(--space-1) var(--space-2);
   font-size: var(--fs-1);
   line-height: 1.4;
   text-align: left;
@@ -1209,7 +1217,7 @@ textarea {
 /* 菜单分组分隔线（导入/编辑动作与查看动作之间）：两端渐隐，不通栏硬线 */
 .context-menu-sep {
   height: 1px;
-  margin: 4px 6px;
+  margin: var(--space-1) var(--space-6);
   background: transparent;
   border-bottom: 1px solid var(--border-subtle);
   border-image: linear-gradient(90deg, transparent, var(--border) 14%, var(--border) 86%, transparent) 1;
@@ -1235,7 +1243,7 @@ textarea {
   background: color-mix(in srgb, var(--danger) 20%, transparent);
   box-shadow:
     inset 2px 0 0 var(--danger),
-    inset 0 1px 0 rgba(0, 0, 0, 0.28);
+    inset 0 1px 0 var(--inset-dark);
 }
 /* 减弱动效：入场彻底不跑（不吃全局那条 0.01ms 兜底，省一次合成层） */
 :root[data-motion='reduced'] .context-menu {
@@ -1252,7 +1260,7 @@ textarea {
   border: none;
   color: var(--fg);
   /* 与 .tree-dir / .tree-package 同一行高；行高即 line-height（文字单行垂直居中） */
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   height: var(--tree-row-h);
   line-height: var(--tree-row-h);
   text-align: left;
@@ -1287,7 +1295,7 @@ textarea {
 }
 .tree-loading {
   color: var(--fg-dim);
-  padding: 8px 0;
+  padding: var(--space-2) 0;
 }
 
 /* --------------------------- plugin status panel --------------------------- */
@@ -1298,11 +1306,11 @@ textarea {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--space-1);
 }
 .plugin-row {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
   font-size: var(--fs-2);
   flex-wrap: wrap;
@@ -1334,11 +1342,11 @@ textarea {
 .panel-convention-report {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
 }
 .conv-summary {
   display: flex;
-  gap: 10px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   align-items: baseline;
 }
@@ -1352,18 +1360,18 @@ textarea {
 .conv-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .conv-failed {
-  border: 1px solid rgba(224, 108, 117, 0.5);
-  background: rgba(224, 108, 117, 0.1);
+  border: 1px solid var(--wash-error-edge);
+  background: var(--wash-error);
   border-radius: var(--radius-md);
-  padding: 6px 8px;
+  padding: var(--space-6) var(--space-2);
 }
 .conv-failed-head {
   color: var(--red);
   font-size: var(--fs-1);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 .conv-failed-list {
   list-style: none;
@@ -1374,7 +1382,7 @@ textarea {
 }
 .conv-empty {
   font-size: var(--fs-1);
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 .conv-groups {
   list-style: none;
@@ -1382,17 +1390,17 @@ textarea {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
 }
 .conv-group-btn {
   width: 100%;
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 2px 0;
+  padding: var(--space-0) 0;
   text-align: left;
 }
 .conv-group-btn:hover {
@@ -1409,7 +1417,7 @@ textarea {
 }
 .conv-rule-desc {
   font-size: var(--fs-0);
-  padding: 0 0 4px 18px;
+  padding: 0 0 var(--space-1) 18px;
   line-height: 1.5;
 }
 .conv-issues {
@@ -1422,12 +1430,12 @@ textarea {
 .conv-issue-btn {
   width: 100%;
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: baseline;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   text-align: left;
   border-radius: var(--radius-sm);
   font-size: var(--fs-1);
@@ -1460,7 +1468,7 @@ textarea {
   white-space: nowrap;
 }
 .conv-more {
-  padding: 4px 0 2px;
+  padding: var(--space-1) 0 var(--space-0);
 }
 .conv-legend {
   font-size: var(--fs-0);
@@ -1496,12 +1504,12 @@ textarea {
 .search-match {
   width: 100%;
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: baseline;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
   text-align: left;
   border-radius: var(--radius-sm);
 }
@@ -1528,8 +1536,8 @@ textarea {
 .editor-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
+  gap: var(--space-2);
+  padding: var(--space-1) 10px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
 }
@@ -1540,7 +1548,7 @@ textarea {
 .file-label {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-6);
   min-width: 0;
   font-size: var(--fs-2);
   max-width: 46vw;
@@ -1724,7 +1732,7 @@ textarea {
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .sugar-toggle:hover:not(:disabled) {
   background: var(--hover);
@@ -1831,7 +1839,7 @@ button.erb-mode-hint.unlocked:hover {
   width: 620px;
   max-width: 92vw;
   border-radius: var(--radius-lg);
-  padding: 24px 28px;
+  padding: var(--space-5) 28px;
   box-shadow:
     var(--edge-raise),
     var(--shadow-3);
@@ -1842,12 +1850,12 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-5);
 }
 .modal .paths {
-  margin: 8px 0;
-  padding-left: 6px;
+  margin: var(--space-2) 0;
+  padding-left: var(--space-6);
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
 }
 .modal .dim {
   color: var(--fg-dim);
@@ -1857,8 +1865,8 @@ button.erb-mode-hint.unlocked:hover {
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  margin-top: 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 /* ------------------------------ kojo navigator ------------------------------ */
@@ -1866,13 +1874,13 @@ button.erb-mode-hint.unlocked:hover {
 .panel-kojo-nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 0;
   flex: 1;
 }
 .nav-toolbar {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 /* 函数树工具条（视觉批十三）：角色下拉原先直接落浏览器原生样式（`appearance:auto` + 13.33px
@@ -1884,7 +1892,7 @@ button.erb-mode-hint.unlocked:hover {
   appearance: none;
   -webkit-appearance: none;
   height: 26px;
-  padding: 0 22px 0 8px;
+  padding: 0 22px 0 var(--space-2);
   background-color: var(--surface-sunken);
   background-image:
     linear-gradient(45deg, transparent 50%, currentColor 50%),
@@ -1916,7 +1924,7 @@ button.erb-mode-hint.unlocked:hover {
   flex: 1;
   min-width: 0;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   background: var(--surface-sunken);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -1942,7 +1950,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-1);
 }
 .nav-empty {
-  padding: 12px 4px;
+  padding: var(--space-3) var(--space-1);
   font-size: var(--fs-2);
 }
 .nav-tree,
@@ -1957,18 +1965,18 @@ button.erb-mode-hint.unlocked:hover {
 }
 .nav-family,
 .nav-face {
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0);
 }
 .nav-family-btn,
 .nav-face-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 3px 4px;
+  padding: var(--space-1) var(--space-1);
   font-size: var(--fs-2);
   cursor: pointer;
   text-align: left;
@@ -1991,7 +1999,7 @@ button.erb-mode-hint.unlocked:hover {
 .nav-funcs {
   list-style: none;
   margin: 0;
-  padding: 0 0 4px 34px;
+  padding: 0 0 var(--space-1) 34px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -1999,12 +2007,12 @@ button.erb-mode-hint.unlocked:hover {
 .nav-func-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   font-size: var(--fs-1);
   font-family: var(--font-mono, monospace);
   cursor: pointer;
@@ -2030,7 +2038,7 @@ button.erb-mode-hint.unlocked:hover {
   font-family: var(--font-ui);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 3px;
+  padding: 0 var(--space-1);
   color: var(--fg-dim);
 }
 /* 条件徽章（condition.extractor 标签；如 恋慕 / 好感度） */
@@ -2056,7 +2064,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .nav-more {
   font-size: var(--fs-1);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
 }
 /* 面窗口「显示更多」：触底自动加载的哨兵也是可点击按钮（观察器不可用时的退化路径） */
 .nav-more-btn {
@@ -2066,7 +2074,7 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-sm);
   color: var(--fg-dim);
   font-size: var(--fs-1);
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-6);
   cursor: pointer;
   text-align: center;
 }
@@ -2085,12 +2093,12 @@ button.erb-mode-hint.unlocked:hover {
 .nav-hit-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   width: 100%;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 3px 4px;
+  padding: var(--space-1) var(--space-1);
   font-size: var(--fs-1);
   cursor: pointer;
   text-align: left;
@@ -2114,7 +2122,7 @@ button.erb-mode-hint.unlocked:hover {
 .nav-hit-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .nav-hit-row > .nav-hit-btn {
   flex: 1;
@@ -2129,7 +2137,7 @@ button.erb-mode-hint.unlocked:hover {
   border-radius: var(--radius-sm);
   color: var(--fg-dim);
   font-size: var(--fs-0);
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   cursor: pointer;
 }
 .nav-preview-btn:hover {
@@ -2141,9 +2149,9 @@ button.erb-mode-hint.unlocked:hover {
 .nav-preview {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin: 2px 0 6px 28px;
-  padding: 6px 8px;
+  gap: var(--space-1);
+  margin: var(--space-0) 0 var(--space-6) 28px;
+  padding: var(--space-6) var(--space-2);
   border-left: 2px solid var(--border);
 }
 .nav-preview-ctx,
@@ -2152,7 +2160,7 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .nav-preview-lines {
   font-size: var(--fs-1);
@@ -2170,15 +2178,15 @@ button.erb-mode-hint.unlocked:hover {
 .panel-state-replay {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--space-6);
+  padding: var(--space-2);
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
 .rp-toolbar {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   flex-wrap: wrap;
   align-items: center;
 }
@@ -2186,35 +2194,35 @@ button.erb-mode-hint.unlocked:hover {
   flex: 1 1 140px;
   min-width: 0;
   font-size: var(--fs-1);
-  padding: 3px 4px;
+  padding: var(--space-1) var(--space-1);
 }
 .rp-fn-input {
   flex: 2 1 200px;
   min-width: 0;
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-1);
-  padding: 3px 5px;
+  padding: var(--space-1) var(--space-1);
 }
 .rp-context-input {
   flex: 1 1 130px;
   min-width: 0;
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-1);
-  padding: 3px 5px;
+  padding: var(--space-1) var(--space-1);
 }
 .rp-status {
-  padding: 1px 2px;
+  padding: 1px var(--space-0);
 }
 .rp-empty {
-  padding: 6px 2px;
+  padding: var(--space-6) var(--space-0);
 }
 .rp-error {
   color: var(--red, #e06c75);
-  padding: 2px;
+  padding: var(--space-0);
   white-space: pre-wrap;
 }
 .rp-hint {
-  padding: 0 2px;
+  padding: 0 var(--space-0);
   font-size: var(--fs-0);
 }
 .rp-suggests {
@@ -2235,7 +2243,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg);
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-0);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   cursor: pointer;
 }
 .rp-suggest-btn:hover {
@@ -2245,12 +2253,12 @@ button.erb-mode-hint.unlocked:hover {
 .rp-result {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
   min-height: 0;
 }
 .rp-summary {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
 }
@@ -2259,7 +2267,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 .rp-badge.conf-exact {
   color: var(--green, #98c379);
@@ -2276,7 +2284,7 @@ button.erb-mode-hint.unlocked:hover {
 .rp-badge.unk {
   color: var(--fg-dim);
   border-style: dashed;
-  margin-right: 4px;
+  margin-right: var(--space-1);
 }
 .rp-count.hit {
   color: var(--green, #98c379);
@@ -2292,7 +2300,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-unknowns {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   align-items: center;
   flex-wrap: wrap;
   font-size: var(--fs-0);
@@ -2307,14 +2315,14 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-pred-btn {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: baseline;
   width: 100%;
   background: none;
   border: none;
   color: var(--fg);
   font-size: var(--fs-1);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   cursor: pointer;
   text-align: left;
   border-radius: var(--radius-sm);
@@ -2328,7 +2336,7 @@ button.erb-mode-hint.unlocked:hover {
   color: var(--fg-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 3px;
+  padding: 0 var(--space-1);
   min-width: 34px;
   text-align: center;
 }
@@ -2360,7 +2368,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-more {
   font-size: var(--fs-0);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
 }
 
 /* 分支走向区（v0.2 第九批） */
@@ -2370,15 +2378,15 @@ button.erb-mode-hint.unlocked:hover {
   gap: 1px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 4px 2px;
+  padding: var(--space-1) var(--space-0);
 }
 .rp-branches-head {
   font-size: var(--fs-0);
-  padding: 0 4px 2px;
+  padding: 0 var(--space-1) var(--space-0);
 }
 .rp-branch-row {
   display: flex;
-  gap: 5px;
+  gap: var(--space-1);
   align-items: baseline;
   font-size: var(--fs-0);
 }
@@ -2409,7 +2417,7 @@ button.erb-mode-hint.unlocked:hover {
   font-family: var(--font-mono, monospace);
   cursor: pointer;
   text-align: left;
-  padding: 1px 3px;
+  padding: 1px var(--space-1);
   border-radius: var(--radius-sm);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2430,7 +2438,7 @@ button.erb-mode-hint.unlocked:hover {
 /* 协议场景参数输入区（v0.2 第十批） */
 .rp-slots {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
   flex-wrap: wrap;
   font-size: var(--fs-0);
@@ -2440,7 +2448,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-slot {
   display: inline-flex;
-  gap: 3px;
+  gap: var(--space-1);
   align-items: center;
 }
 .rp-slot-idx {
@@ -2451,7 +2459,7 @@ button.erb-mode-hint.unlocked:hover {
   width: 64px;
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-0);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
 }
 .rp-slot-hint {
   font-size: var(--fs-0);
@@ -2461,15 +2469,15 @@ button.erb-mode-hint.unlocked:hover {
 .panel-archive-browser {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--space-6);
+  padding: var(--space-2);
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
 }
 .ab-toolbar {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
   justify-content: space-between;
 }
@@ -2480,17 +2488,17 @@ button.erb-mode-hint.unlocked:hover {
   white-space: nowrap;
 }
 .ab-empty {
-  padding: 6px 2px;
+  padding: var(--space-6) var(--space-0);
 }
 .ab-error {
   color: var(--red, #e06c75);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   white-space: pre-wrap;
 }
 .ab-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
   min-height: 0;
 }
 .ab-row {
@@ -2512,7 +2520,7 @@ button.erb-mode-hint.unlocked:hover {
   border: none;
   color: var(--fg);
   font-size: var(--fs-1);
-  padding: 3px 5px;
+  padding: var(--space-1) var(--space-1);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
@@ -2521,7 +2529,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .ab-row-head {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: baseline;
   flex-wrap: wrap;
 }
@@ -2550,43 +2558,43 @@ button.erb-mode-hint.unlocked:hover {
 .ab-detail {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 3px 6px 5px 18px;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-6) var(--space-1) 18px;
 }
 .ab-chara-row {
   display: flex;
-  gap: 3px;
+  gap: var(--space-1);
   flex-wrap: wrap;
 }
 .ab-badge {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 .ab-more {
   font-size: var(--fs-0);
 }
 .ab-failed-head {
   font-size: var(--fs-0);
-  padding: 2px 2px 1px;
+  padding: var(--space-0) var(--space-0) 1px;
 }
 .ab-hint {
   font-size: var(--fs-0);
-  padding: 0 2px;
+  padding: 0 var(--space-0);
 }
 
 /* ---------------- 状态注入器面板（inj-*，v0.2 第十五批） ---------------- */
 .panel-snapshot-injector {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-2);
+  padding: var(--space-2);
 }
 .inj-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 .inj-select {
@@ -2597,12 +2605,12 @@ button.erb-mode-hint.unlocked:hover {
 .inj-hint,
 .inj-more {
   font-size: var(--fs-0);
-  padding: 2px;
+  padding: var(--space-0);
 }
 .inj-error {
   color: var(--danger, #d05a5a);
   font-size: var(--fs-0);
-  padding: 3px 2px;
+  padding: var(--space-1) var(--space-0);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -2612,21 +2620,21 @@ button.erb-mode-hint.unlocked:hover {
 }
 .inj-body {
   display: flex;
-  gap: 10px;
+  gap: var(--space-2);
   align-items: flex-start;
 }
 .inj-left {
   flex: 0 0 46%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
   min-width: 0;
 }
 .inj-right {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .inj-vars {
@@ -2639,8 +2647,8 @@ button.erb-mode-hint.unlocked:hover {
 .inj-var-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 5px;
+  gap: var(--space-6);
+  padding: var(--space-0) var(--space-1);
   border: none;
   background: transparent;
   color: inherit;
@@ -2667,7 +2675,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 3px;
+  padding: 0 var(--space-1);
   opacity: 0.85;
 }
 .inj-var-preview {
@@ -2680,20 +2688,20 @@ button.erb-mode-hint.unlocked:hover {
 .inj-editor {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  padding: var(--space-6) var(--space-2);
 }
 .inj-editor-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   font-size: var(--fs-1);
 }
 .inj-editor-row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
 }
 .inj-input {
@@ -2710,7 +2718,7 @@ button.erb-mode-hint.unlocked:hover {
 .inj-cell-row {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   font-size: var(--fs-0);
 }
 .inj-cell-index {
@@ -2729,8 +2737,8 @@ button.erb-mode-hint.unlocked:hover {
   flex: 1;
 }
 .inj-new-cell {
-  margin-top: 4px;
-  padding-top: 4px;
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
   border-top: 1px dashed var(--border);
 }
 .inj-cell-index-input {
@@ -2739,10 +2747,10 @@ button.erb-mode-hint.unlocked:hover {
 .inj-pending {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  padding: var(--space-6) var(--space-2);
 }
 .inj-pending-head {
   display: flex;
@@ -2754,7 +2762,7 @@ button.erb-mode-hint.unlocked:hover {
 .inj-diff-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   font-size: var(--fs-0);
   padding: 1px 0;
 }
@@ -2784,29 +2792,29 @@ button.erb-mode-hint.unlocked:hover {
 }
 .inj-inject-row {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .inj-result {
   color: var(--success, #4e9a5c);
   font-size: var(--fs-0);
-  padding: 3px 2px;
+  padding: var(--space-1) var(--space-0);
   word-break: break-all;
 }
 /* 「重新扫描」（W-1，2026-10-19）：扫描此前只在 project.opened 发生，面板没有任何手动入口。
    与 inj-inject-row 里的按钮同族，但独立成类以免被注入按钮的强调色带跑。 */
 .inj-rescan {
   font-size: var(--fs-0);
-  padding: 2px 8px;
-  border: 1px solid var(--border, #d8dde3);
-  border-radius: var(--r-1, 4px);
-  background: var(--bg-1, transparent);
+  padding: var(--space-0) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: inherit;
   cursor: pointer;
 }
 .inj-rescan:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+  background: var(--wash-neutral);
 }
 .inj-rescan:disabled {
   opacity: 0.6;
@@ -2817,8 +2825,8 @@ button.erb-mode-hint.unlocked:hover {
 .panel-sugar-preview {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-2);
+  padding: var(--space-2);
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
@@ -2826,7 +2834,7 @@ button.erb-mode-hint.unlocked:hover {
 .pv-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: space-between;
   flex-wrap: wrap;
 }
@@ -2838,32 +2846,32 @@ button.erb-mode-hint.unlocked:hover {
 .pv-empty,
 .pv-hint {
   font-size: var(--fs-0);
-  padding: 2px;
+  padding: var(--space-0);
 }
 .pv-error {
   color: var(--danger, #d05a5a);
   font-size: var(--fs-0);
-  padding: 3px 2px;
+  padding: var(--space-1) var(--space-0);
   white-space: pre-wrap;
   word-break: break-all;
 }
 .pv-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
 }
 .pv-summary {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   flex-wrap: wrap;
 }
 .pv-chip {
   display: inline-flex;
   align-items: baseline;
-  gap: 3px;
+  gap: var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   font-size: var(--fs-0);
 }
 .pv-chip.bad {
@@ -2883,20 +2891,20 @@ button.erb-mode-hint.unlocked:hover {
 .pv-section {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
 }
 .pv-section-head {
   font-size: var(--fs-0);
   font-weight: 600;
-  padding: 2px 0;
+  padding: var(--space-0) 0;
   border-bottom: 1px solid var(--border);
 }
 .pv-diag {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-6);
   font-size: var(--fs-0);
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
@@ -2931,8 +2939,8 @@ button.erb-mode-hint.unlocked:hover {
 .pv-row {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 1px 4px;
+  gap: var(--space-6);
+  padding: 1px var(--space-1);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
@@ -2969,7 +2977,7 @@ button.erb-mode-hint.unlocked:hover {
   font-size: var(--fs-0);
   border: 1px solid var(--warning, #c9a03c);
   border-radius: var(--radius-sm);
-  padding: 0 3px;
+  padding: 0 var(--space-1);
 }
 .pv-gen {
   flex: 0 0 auto;
@@ -2980,7 +2988,7 @@ button.erb-mode-hint.unlocked:hover {
   flex: 0 0 auto;
   font-size: var(--fs-0);
   border-radius: var(--radius-sm);
-  padding: 0 3px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--border);
 }
 .pv-reach.ok {
@@ -3000,8 +3008,8 @@ button.erb-mode-hint.unlocked:hover {
 .panel-sugar-verdict {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-2);
+  padding: var(--space-2);
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
@@ -3012,35 +3020,35 @@ button.erb-mode-hint.unlocked:hover {
 .sv-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: space-between;
   flex-wrap: wrap;
 }
 .sv-empty,
 .sv-hint {
   font-size: var(--fs-0);
-  padding: 2px;
+  padding: var(--space-0);
 }
 .sv-error {
   color: var(--danger, #d05a5a);
   font-size: var(--fs-0);
-  padding: 3px 2px;
+  padding: var(--space-1) var(--space-0);
   white-space: pre-wrap;
   word-break: break-all;
 }
 .sv-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
 }
 .sv-verdict {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
 }
 .sv-verdict.ok {
   border-color: var(--success, #4e9a5c);
@@ -3065,7 +3073,7 @@ button.erb-mode-hint.unlocked:hover {
 }
 .sv-counts {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--fs-0);
 }
 .sv-count.err {
@@ -3088,8 +3096,8 @@ button.erb-mode-hint.unlocked:hover {
 .sv-row {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 2px 4px;
+  gap: var(--space-6);
+  padding: var(--space-0) var(--space-1);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
@@ -3136,8 +3144,8 @@ button.erb-mode-hint.unlocked:hover {
 .panel-sugar-lift {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-2);
+  padding: var(--space-2);
   font-size: var(--fs-1);
   min-height: 0;
   overflow: auto;
@@ -3149,8 +3157,8 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 2px 10px;
+  gap: var(--space-3);
+  padding: var(--space-0) 10px;
   min-height: 24px;
   background: var(--bg-2);
   border-top: 1px solid var(--border);
@@ -3160,7 +3168,7 @@ button.erb-mode-hint.unlocked:hover {
 .sb-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 .sb-right {
@@ -3175,7 +3183,7 @@ button.erb-mode-hint.unlocked:hover {
    等宽数位是为了计数变化时宽度不抖。 */
 .sb-diag {
   display: inline-flex;
-  gap: 8px;
+  gap: var(--space-2);
   white-space: nowrap;
   color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
@@ -3204,7 +3212,7 @@ button.erb-mode-hint.unlocked:hover {
 .sb-eol {
   border: none;
   background: transparent;
-  padding: 0 2px;
+  padding: 0 var(--space-0);
   margin: 0;
   color: inherit;
   font: inherit;
@@ -3226,9 +3234,9 @@ button.erb-mode-hint.unlocked:hover {
   z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
   min-width: 92px;
-  padding: 4px;
+  padding: var(--space-1);
   background: var(--bg-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -3237,7 +3245,7 @@ button.erb-mode-hint.unlocked:hover {
 .sb-eol-item {
   border: none;
   background: transparent;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   margin: 0;
   color: var(--fg);
   font: inherit;
@@ -3255,14 +3263,14 @@ button.erb-mode-hint.unlocked:hover {
 }
 .sb-eol-item.on::after {
   content: '✓';
-  margin-left: 8px;
+  margin-left: var(--space-2);
 }
 .sb-dirty {
   color: var(--fg-dim);
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   transition: color var(--dur-1) var(--ease-out);
 }
 .sb-dirty.on {
@@ -3284,8 +3292,8 @@ button.erb-mode-hint.unlocked:hover {
 }
 .sb-writable.ok {
   color: var(--green);
-  background: rgba(79, 192, 141, 0.1);
-  border-color: rgba(79, 192, 141, 0.3);
+  background: var(--wash-success);
+  border-color: var(--wash-success-edge);
   cursor: default;
 }
 .sb-writable.ro {
@@ -3315,10 +3323,10 @@ button.erb-mode-hint.unlocked:hover {
 .sb-problems {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   border: none;
   background: transparent;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -3399,7 +3407,7 @@ button.erb-mode-hint.unlocked:hover {
   background: transparent;
   color: var(--fg);
   text-align: left;
-  padding: 5px 14px;
+  padding: var(--space-1) 14px;
   font-size: var(--fs-2);
   cursor: pointer;
   border-radius: 0;
@@ -3428,7 +3436,7 @@ button.erb-mode-hint.unlocked:hover {
   min-width: 0;
   display: flex;
   align-items: baseline;
-  gap: 5px;
+  gap: var(--space-1);
   white-space: nowrap;
   font-size: var(--fs-1);
 }
@@ -3447,7 +3455,7 @@ button.erb-mode-hint.unlocked:hover {
   flex-shrink: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-0);
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: var(--radius-sm);
@@ -3458,13 +3466,13 @@ button.erb-mode-hint.unlocked:hover {
    正是「按了没反应」这一类要根除的形态。 */
 .picker-note {
   border-top: 1px solid var(--border);
-  padding: 5px 14px;
+  padding: var(--space-1) 14px;
   font-size: var(--fs-1);
 }
 /* 分组标签（1020 编辑器体感批：Ctrl+P 的「最近打开」一节）：
    它是给眼睛的隔断，不是候选 —— 不进 data-idx、不可点、↑↓ 永不停在上面。 */
 .picker-group-label {
-  padding: 6px 14px 2px;
+  padding: var(--space-6) 14px var(--space-0);
   font-size: var(--fs-0);
   letter-spacing: 0.04em;
   text-transform: none;
@@ -3793,7 +3801,7 @@ button.erb-mode-hint.unlocked:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--fg);
-  padding: 6px 10px;
+  padding: var(--space-6) 10px;
   font-size: var(--fs-2);
   outline: none;
 }
@@ -4055,8 +4063,8 @@ button.erb-mode-hint.unlocked:hover {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0);
+  padding: var(--space-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
@@ -4093,8 +4101,8 @@ button.erb-mode-hint.unlocked:hover {
    覆盖 base `button` 的实心/描边/高光（用 `.theme-seg-btn` 0,2,0 压过 `button` 0,0,1）。 */
 .theme-segment {
   display: inline-flex;
-  padding: 2px;
-  gap: 2px;
+  padding: var(--space-0);
+  gap: var(--space-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
@@ -4105,7 +4113,7 @@ button.erb-mode-hint.unlocked:hover {
   background: transparent;
   color: var(--fg-dim);
   font-size: var(--fs-1);
-  padding: 3px 10px;
+  padding: var(--space-1) 10px;
   min-height: 24px;
   border-radius: var(--radius-sm);
 }
@@ -4122,7 +4130,7 @@ button.erb-mode-hint.unlocked:hover {
 /* 注册表来源行（KM-9）：唯一可编辑的市场设置就是一个 URL */
 .settings-text {
   min-width: 0;
-  padding: 6px 10px;
+  padding: var(--space-6) 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
@@ -4226,14 +4234,14 @@ button.erb-mode-hint.unlocked:hover {
 .wizard-actions .primary {
   background: var(--accent-strong);
   border-color: transparent;
-  color: #fff;
+  color: var(--on-fill);
 }
 /* 主按钮里的快捷键芯片：`.hint` 的默认色是给深底用的灰，压到蓝底上只剩 1.03:1
    （实机量得，等于看不见）。在按钮内改用白字 + 压暗底，量得 7.07:1。 */
 button.primary .hint {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.32);
-  background: rgba(0, 0, 0, 0.22);
+  color: var(--on-fill);
+  border-color: var(--hint-edge);
+  background: var(--hint-well);
 }
 .wizard-actions .primary:disabled {
   opacity: var(--disabled-opacity);
@@ -4427,7 +4435,7 @@ button.primary .hint {
   align-items: baseline;
   gap: var(--space-2);
   width: 100%;
-  padding: 5px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border: none;
   border-left: 2px solid transparent;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -4538,7 +4546,7 @@ button.primary .hint {
     width: auto;
     border: 1px solid transparent;
     border-radius: var(--radius-pill);
-    padding: 3px var(--space-3);
+    padding: var(--space-1) var(--space-3);
     white-space: nowrap;
   }
   .tutorial-toc-item:hover {
@@ -4674,7 +4682,7 @@ button.primary .hint {
 .tutorial-arrow {
   align-self: center;
   /* 「编译为」做成一枚安静的小胶囊：给左右对照一个明确的轴心，而不是飘着的灰字 */
-  padding: 2px var(--space-2);
+  padding: var(--space-0) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--bg-2);
@@ -4775,7 +4783,7 @@ button.primary .hint {
 }
 .proj-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 .nav-empty.err {
@@ -4791,7 +4799,7 @@ button.primary .hint {
   bottom: 36px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
   z-index: var(--z-toast);
   max-width: 400px;
 }
@@ -4800,11 +4808,11 @@ button.primary .hint {
   --glass-alpha: 0.85;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2);
   /* 只给左条：其余三边 1px 交玻璃主规则（本条在后，长声明压得住那条简写） */
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-lg);
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   box-shadow:
     var(--edge-raise),
     var(--shadow-1);
@@ -4825,7 +4833,7 @@ button.primary .hint {
   flex: none;
   display: inline-flex;
   align-items: center;
-  margin-top: 2px;
+  margin-top: var(--space-0);
   color: var(--accent-text);
 }
 .toast-error .toast-icon {
@@ -4844,7 +4852,7 @@ button.primary .hint {
 .toast-close {
   flex: none;
   border: none;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   color: var(--fg-dim);
   border-radius: var(--radius-sm);
   display: inline-flex;
@@ -4904,7 +4912,7 @@ button.primary .hint {
   justify-content: center;
   min-width: 18px;
   min-height: 18px;
-  padding: 0 2px;
+  padding: 0 var(--space-0);
   border: none;
   background: none;
   color: inherit;
@@ -4947,7 +4955,7 @@ button.primary .hint {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   white-space: nowrap;
 }
 .kp-body {
@@ -4994,7 +5002,7 @@ button.primary .hint {
 .kp-card-cta {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   margin-top: var(--space-1);
   white-space: nowrap;
 }
@@ -5009,12 +5017,12 @@ button.primary .hint {
 .kp-tutorial-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   background: none;
   border: none;
   color: var(--fg);
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-6);
   font-size: var(--fs-2);
   cursor: pointer;
   text-align: left;
@@ -5045,7 +5053,7 @@ button.primary .hint {
 /* 项目行是这一层唯一的"块级入口"，比包行 / 文件行高一格呼吸（密度问题的正解是
    让可点的东西更可读，而不是把行压扁去塞更多空行） */
 .kp-project-btn {
-  padding: 5px 6px;
+  padding: var(--space-1) var(--space-6);
 }
 .kp-artifact-name {
   overflow: hidden;
@@ -5058,7 +5066,7 @@ button.primary .hint {
   font-size: var(--fs-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 3px;
+  padding: 0 var(--space-1);
   color: var(--fg-dim);
 }
 .kp-dirname {
@@ -5076,7 +5084,7 @@ button.primary .hint {
   flex: 0 0 auto;
   margin-left: auto;
   min-width: 18px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border-radius: var(--radius-pill);
   background: var(--bg-3);
   color: var(--fg-dim);
@@ -5094,7 +5102,7 @@ button.primary .hint {
   align-items: center;
   gap: var(--space-1);
   margin: var(--space-1) 0 0;
-  padding: var(--space-1) 6px 2px;
+  padding: var(--space-1) var(--space-6) var(--space-0);
   border-top: 1px solid var(--border-subtle);
   font-size: var(--fs-0);
   letter-spacing: 0.02em;
@@ -5117,7 +5125,7 @@ button.primary .hint {
   color: var(--accent);
 }
 .kp-note {
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   font-size: var(--fs-1);
 }
 .kp-note.err {
@@ -5149,7 +5157,7 @@ button.primary .hint {
   opacity: 1;
 }
 .kp-action {
-  padding: 1px 7px;
+  padding: 1px var(--space-2);
   font-size: var(--fs-1);
   line-height: 1.6;
   border-radius: var(--radius-sm);
@@ -5162,8 +5170,8 @@ button.primary .hint {
    中性色 + 左边细线，与提示条同族但更轻——它是补充信息，不该抢树的主体。
    悬停看原文出处（哪个文件哪一行），授权条款不替作者下判断。 */
 .kp-facts {
-  margin: 2px 0 3px;
-  padding: 2px 6px 2px 8px;
+  margin: var(--space-0) 0 var(--space-1);
+  padding: var(--space-0) var(--space-6) var(--space-0) var(--space-2);
   border-left: 2px solid var(--border);
   font-size: var(--fs-1);
   line-height: 1.5;
@@ -5216,7 +5224,7 @@ button.primary .hint {
 }
 .kp-status-close {
   flex: none;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border: none;
   background: none;
   color: inherit;
@@ -5241,7 +5249,7 @@ button.primary .hint {
   flex: none;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 2px;
+  padding-right: var(--space-0);
   min-height: max-content;
 }
 /* 题头即展开键（批次十一）：默认只占一行，四本教程收在里面——把整栏高度还给口上树。
@@ -5249,10 +5257,10 @@ button.primary .hint {
 .kp-tutorials-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   min-height: 24px;
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-6);
   border: none;
   background: none;
   color: var(--fg-dim);
@@ -5274,7 +5282,7 @@ button.primary .hint {
 .kp-tutorials-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
 }
 .kp-tutorials-body.kp-collapsed {
   display: none;
@@ -5286,7 +5294,7 @@ button.primary .hint {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
   color: var(--fg-dim);
@@ -5329,8 +5337,8 @@ button.primary .hint {
 .kp-draft {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
+  gap: var(--space-6);
+  padding: var(--space-0) var(--space-6);
   flex-wrap: wrap;
 }
 .kp-draft-input {
@@ -5342,7 +5350,7 @@ button.primary .hint {
   background: var(--bg);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
 }
 .kp-draft-input:focus-visible {
   outline: 1px solid var(--focus-ring);
@@ -5423,8 +5431,8 @@ button.primary .hint {
 .panel-condition-matrix {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: var(--space-2);
+  padding: var(--space-2);
   flex: 1;
   min-height: 0;
   font-size: var(--fs-1);
@@ -5440,7 +5448,7 @@ button.primary .hint {
 .cm-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   flex: none;
 }
@@ -5451,7 +5459,7 @@ button.primary .hint {
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 4px 6px;
+  padding: var(--space-1) var(--space-6);
   font-size: var(--fs-2);
 }
 .cm-filter {
@@ -5461,7 +5469,7 @@ button.primary .hint {
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   font-size: var(--fs-2);
 }
 .cm-status {
@@ -5473,7 +5481,7 @@ button.primary .hint {
   min-height: 0;
   overflow: auto;
   border-top: 1px solid var(--border);
-  padding-top: 6px;
+  padding-top: var(--space-6);
 }
 /* 行视口化（`.cm-virt` 常开）：固定行高 + 行头压成单行，
    内容不得把行撑高（窗口数学以实测行高为唯一真源，经 `--cm-row-h` 落入本规则）。
@@ -5509,7 +5517,7 @@ button.primary .hint {
   z-index: 2;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -5523,7 +5531,7 @@ button.primary .hint {
   z-index: 1;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   font-weight: 600;
   white-space: nowrap;
   text-align: left;
@@ -5599,23 +5607,23 @@ button.primary .hint {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
   max-height: 180px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  padding: var(--space-6) var(--space-2);
   font-size: var(--fs-0);
 }
 .cm-empty {
   color: var(--fg-dim);
   font-size: var(--fs-0);
-  padding: 8px 2px;
+  padding: var(--space-2) var(--space-0);
 }
 .cm-error {
   color: var(--danger, #d05a5a);
   font-size: var(--fs-0);
-  padding: 3px 2px;
+  padding: var(--space-1) var(--space-0);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -5623,7 +5631,7 @@ button.primary .hint {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 /* 两行表头：第一行 = 大时机类（可点折叠，跨该组子列）；第二行 = 子列（指令名） */
 .cm-group-th {
@@ -5632,7 +5640,7 @@ button.primary .hint {
   z-index: 2;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   font-weight: 600;
   white-space: nowrap;
   text-align: center;
@@ -5649,7 +5657,7 @@ button.primary .hint {
   color: var(--fg-dim);
 }
 .cm-fold {
-  margin-right: 4px;
+  margin-right: var(--space-1);
   font-size: var(--fs-0);
   opacity: 0.8;
 }
@@ -5659,7 +5667,7 @@ button.primary .hint {
   z-index: 2;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
   font-weight: 500;
   font-size: var(--fs-0);
   white-space: nowrap;
@@ -5729,7 +5737,7 @@ button.primary .hint {
 .cm-detail-head {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  gap: var(--space-1);
   flex-wrap: wrap;
 }
 .cm-detail-key {
@@ -5747,13 +5755,13 @@ button.primary .hint {
 .cm-detail-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   font-size: var(--fs-0);
 }
 .cm-detail-btn:hover {
@@ -5808,8 +5816,8 @@ button.primary .hint {
   --cm-cell: 22px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--space-6);
+  padding: var(--space-2);
   flex: 1;
   min-height: 0;
   font-size: var(--fs-1);
@@ -5819,14 +5827,14 @@ button.primary .hint {
 /* 工具条下的术语解释：空缺是什么 / 填格子的产出是什么 */
 .cm-entry-hint {
   flex: none;
-  padding: 0 2px;
+  padding: 0 var(--space-0);
   font-size: var(--fs-0);
   line-height: 1.5;
 }
 .cm-entry-hint-mark {
   display: inline-block;
   width: 12px;
-  margin-left: 2px;
+  margin-left: var(--space-0);
   color: var(--accent);
   font-weight: 700;
 }
@@ -5835,13 +5843,13 @@ button.primary .hint {
 .cm-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-6);
   flex: none;
 }
 .cm-toolbar-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   min-width: 0;
 }
 .cm-chara {
@@ -5873,7 +5881,7 @@ button.primary .hint {
   flex: none;
   display: inline-flex;
   align-items: center;
-  padding-left: 7px;
+  padding-left: var(--space-2);
   color: var(--fg-dim);
 }
 .cm-chara-input {
@@ -5883,7 +5891,7 @@ button.primary .hint {
   border: 0;
   background: transparent;
   color: var(--fg);
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   font-size: var(--fs-1);
   outline: none;
 }
@@ -5894,7 +5902,7 @@ button.primary .hint {
   flex: none;
   width: 22px;
   height: 22px;
-  margin-right: 3px;
+  margin-right: var(--space-1);
   padding: 0;
   border: 0;
   background: transparent;
@@ -5911,13 +5919,13 @@ button.primary .hint {
 }
 .cm-chara-pop {
   position: absolute;
-  z-index: 30;
+  z-index: var(--z-local);
   left: 0;
   right: 0;
   top: calc(100% + 4px);
   max-height: 288px;
   overflow-y: auto;
-  padding: 4px;
+  padding: var(--space-1);
   background: var(--surface-overlay);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -5926,10 +5934,10 @@ button.primary .hint {
 .cm-chara-opt {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   min-height: 26px;
-  padding: 3px 7px;
+  padding: var(--space-1) var(--space-2);
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
@@ -5970,10 +5978,10 @@ button.primary .hint {
   font-weight: 600;
 }
 .cm-chara-note {
-  padding: 10px 8px;
+  padding: 10px var(--space-2);
 }
 .cm-chara-foot {
-  padding: 5px 7px 2px;
+  padding: var(--space-1) var(--space-2) var(--space-0);
   font-size: var(--fs-0);
 }
 .cm-pack-select {
@@ -5984,7 +5992,7 @@ button.primary .hint {
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   font-size: var(--fs-1);
   box-shadow: var(--well-raise);
 }
@@ -5996,7 +6004,7 @@ button.primary .hint {
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--fs-1);
   box-shadow: var(--well-raise);
 }
@@ -6016,7 +6024,7 @@ button.primary .hint {
   padding: 0 9px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: transparent;
@@ -6049,7 +6057,7 @@ button.primary .hint {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: var(--cm-btn-h);
   padding: 0 9px;
   color: var(--fg-dim);
@@ -6066,7 +6074,7 @@ button.primary .hint {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
   flex: none;
   padding: 0 1px;
   font-size: var(--fs-0);
@@ -6075,7 +6083,7 @@ button.primary .hint {
 .cm-status-main {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -6091,7 +6099,7 @@ button.primary .hint {
   max-width: 42%;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 1px 7px;
+  padding: 1px var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
   background: var(--hover-soft);
@@ -6106,7 +6114,7 @@ button.primary .hint {
 .cm-status-cov {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   flex: none;
   font-variant-numeric: tabular-nums;
 }
@@ -6134,7 +6142,7 @@ button.primary .hint {
   display: inline-flex;
   align-items: center;
   height: 20px;
-  padding: 0 7px;
+  padding: 0 var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: var(--hover-soft);
@@ -6160,8 +6168,8 @@ button.primary .hint {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--fs-0);
   color: var(--fg);
   background: var(--accent-dim);
@@ -6189,8 +6197,8 @@ button.primary .hint {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 6px 8px;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-2);
   border: 1px solid var(--red);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--red) 7%, var(--surface-raised));
@@ -6200,8 +6208,8 @@ button.primary .hint {
 .cm-fill-guide {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 5px 7px 6px;
+  gap: var(--space-0);
+  padding: var(--space-1) var(--space-2) var(--space-6);
   border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--red) 8%, transparent);
@@ -6212,14 +6220,14 @@ button.primary .hint {
   color: var(--fg);
 }
 .cm-fill-guide-what strong {
-  margin-right: 3px;
+  margin-right: var(--space-1);
   color: var(--accent-text);
 }
 .cm-fill-guide-steps {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-1);
   color: var(--fg-dim);
 }
 .cm-fill-guide-steps b {
@@ -6234,9 +6242,9 @@ button.primary .hint {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
@@ -6253,7 +6261,7 @@ button.primary .hint {
 }
 .cm-filter-clear {
   height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
@@ -6278,7 +6286,7 @@ button.primary .hint {
 .cm-fillbar-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   flex-wrap: wrap;
 }
 .cm-fillbar-title {
@@ -6313,7 +6321,7 @@ button.primary .hint {
 }
 .cm-fillbar-btn {
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--fs-0);
   background: transparent;
   border-color: var(--border);
@@ -6324,15 +6332,15 @@ button.primary .hint {
 }
 .cm-fillbar-exit {
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--fs-0);
 }
 .cm-fillbar-lines {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   flex-wrap: wrap;
-  padding-top: 4px;
+  padding-top: var(--space-1);
   border-top: 1px dashed var(--border-subtle);
 }
 .cm-fillbar-label {
@@ -6380,7 +6388,7 @@ button.primary .hint {
 /* 行斑马纹：条带只落在数据格上（行头/表头有自己的粘性底色）；
    虚拟化切片按绝对行号给 `.cm-even`，滚动窗口平移时斑马纹不会跳动。 */
 .cm-table tbody tr.cm-even > td {
-  background: rgba(255, 255, 255, 0.012);
+  background: var(--zebra-stripe);
 }
 
 /* ---- 表头 ---- */
@@ -6393,7 +6401,7 @@ button.primary .hint {
   border: 0;
   border-right: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border);
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-2);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -6412,7 +6420,7 @@ button.primary .hint {
   border: 0;
   border-right: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-2);
   height: 24px;
   box-sizing: border-box;
   font-size: var(--fs-0);
@@ -6440,8 +6448,8 @@ button.primary .hint {
   justify-content: center;
   min-width: 16px;
   height: 15px;
-  padding: 0 4px;
-  margin-left: 4px;
+  padding: 0 var(--space-1);
+  margin-left: var(--space-1);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--amber) 14%, transparent);
   color: var(--amber);
@@ -6451,13 +6459,13 @@ button.primary .hint {
   vertical-align: 1px;
 }
 .cm-gap-clear {
-  margin-left: 4px;
+  margin-left: var(--space-1);
   color: var(--green);
   opacity: 0.65;
   font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
 }
 .cm-fold {
-  margin-right: 3px;
+  margin-right: var(--space-1);
   opacity: 0.7;
 }
 .cm-subth {
@@ -6468,7 +6476,7 @@ button.primary .hint {
   border: 0;
   border-right: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   height: 22px;
   box-sizing: border-box;
   font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
@@ -6493,8 +6501,8 @@ button.primary .hint {
   justify-content: center;
   min-width: 14px;
   height: 14px;
-  padding: 0 3px;
-  margin-left: 3px;
+  padding: 0 var(--space-1);
+  margin-left: var(--space-1);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--amber) 12%, transparent);
   color: var(--amber);
@@ -6513,7 +6521,7 @@ button.primary .hint {
   border: 0;
   border-right: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-6);
   font-weight: 500;
   white-space: nowrap;
   text-align: left;
@@ -6521,7 +6529,7 @@ button.primary .hint {
 .cm-row-main {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-6);
   max-width: calc(100% - 26px);
   vertical-align: middle;
 }
@@ -6544,8 +6552,8 @@ button.primary .hint {
   justify-content: center;
   min-width: 15px;
   height: 15px;
-  padding: 0 4px;
-  margin-left: 4px;
+  padding: 0 var(--space-1);
+  margin-left: var(--space-1);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--amber) 12%, transparent);
   color: var(--amber);
@@ -6590,7 +6598,7 @@ button.primary .hint {
   border-color: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 var(--edge-on-fill);
 }
 .cm-cell.on:hover {
   background: var(--accent);
@@ -6649,6 +6657,9 @@ button.primary .hint {
   border-radius: 50%;
   box-sizing: border-box;
   background: var(--red);
+  /* 这枚白勾**刻意不**折进 `--on-danger`：`condition-matrix-fill-marker.test.ts:34` 把它钉成
+     字面量断言（`toContain('color: #fff')`），而那份测试不归本车道——收编=替别人改判据，
+     已登记给组长（体感批 B-5 余项）。 */
   color: #fff;
   font-size: 10px; /* 亚 11px 档：--fs-* 无此刻度，硬塞=改实测几何（理由见「条件矩阵 v2」节头） */
   font-weight: 900;
@@ -6698,26 +6709,26 @@ button.primary .hint {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   max-height: 190px;
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
   box-shadow: var(--well-raise);
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   font-size: var(--fs-0);
 }
 .cm-detail-head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-6);
   flex-wrap: wrap;
 }
 .cm-detail-title {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-6);
   min-width: 0;
 }
 .cm-detail-key {
@@ -6753,7 +6764,7 @@ button.primary .hint {
 .cm-detail-hint-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex-wrap: wrap;
   font-size: var(--fs-0);
 }
@@ -6761,7 +6772,7 @@ button.primary .hint {
   display: inline-flex;
   align-items: center;
   height: 18px;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
   background: var(--hover-soft);
@@ -6785,13 +6796,13 @@ button.primary .hint {
 .cm-detail-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-6);
   font-size: var(--fs-0);
   box-shadow: none;
 }
@@ -6825,8 +6836,8 @@ button.primary .hint {
 .cm-detail-guide {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 2px 0;
+  gap: var(--space-1);
+  padding: var(--space-0) 0;
 }
 .cm-detail-guide-title {
   font-weight: 600;
@@ -6835,14 +6846,14 @@ button.primary .hint {
 .cm-legend {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
-  margin-top: 2px;
+  margin-top: var(--space-0);
 }
 .cm-legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   font-size: var(--fs-0);
   color: var(--fg-dim);
 }
@@ -6873,7 +6884,7 @@ button.primary .hint {
   align-items: center;
   gap: 9px;
   text-align: center;
-  padding: 24px 16px;
+  padding: var(--space-5) var(--space-4);
 }
 .cm-state-icon {
   display: inline-flex;
@@ -6902,18 +6913,18 @@ button.primary .hint {
 .cm-empty {
   color: var(--fg-dim);
   font-size: var(--fs-0);
-  padding: 10px 2px;
+  padding: 10px var(--space-0);
   line-height: 1.55;
 }
 /* ---- 填格浮层（ui.overlay）---- */
 .cmfill {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 0;
 }
 .cmfill-head h3 {
-  margin: 0 0 2px;
+  margin: 0 0 var(--space-0);
   font-size: var(--fs-3);
   color: var(--fg);
 }
@@ -6922,7 +6933,7 @@ button.primary .hint {
 }
 .cmfill-intro {
   margin: -4px 0 0;
-  padding: 7px 10px;
+  padding: var(--space-2) 10px;
   border-left: 2px solid var(--accent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
@@ -6936,23 +6947,23 @@ button.primary .hint {
 .cmfill-grid {
   display: grid;
   grid-template-columns: minmax(270px, 0.92fr) minmax(0, 1.08fr);
-  gap: 14px;
+  gap: var(--space-3);
   min-height: 380px;
   max-height: min(62vh, 620px);
 }
 .cmfill-settings {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: var(--space-0);
 }
 .cmfill-preview {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 0;
-  padding: 8px;
+  padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
@@ -6962,14 +6973,14 @@ button.primary .hint {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .cmfill-copy {
   height: 24px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--fs-0);
   background: transparent;
   border-color: var(--border-subtle);
@@ -6995,7 +7006,7 @@ button.primary .hint {
 .cmfill-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .cmfill-label {
   font-size: var(--fs-0);
@@ -7006,7 +7017,7 @@ button.primary .hint {
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
-  padding: 2px;
+  padding: var(--space-0);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
@@ -7036,7 +7047,7 @@ button.primary .hint {
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
   color: var(--fg);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--fs-1);
   box-shadow: var(--well-raise);
 }
@@ -7049,13 +7060,13 @@ button.primary .hint {
 .cmfill-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .cmfill-chip {
   display: inline-flex;
   align-items: center;
   height: 20px;
-  padding: 0 7px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
   background: var(--hover-soft);
@@ -7079,7 +7090,7 @@ button.primary .hint {
   background: color-mix(in srgb, var(--amber) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border-subtle));
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  padding: var(--space-6) var(--space-2);
 }
 .cmfill-error {
   font-size: var(--fs-0);
@@ -7088,7 +7099,7 @@ button.primary .hint {
   background: color-mix(in srgb, var(--red) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border-subtle));
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  padding: var(--space-6) var(--space-2);
   white-space: pre-wrap;
 }
 .cmfill-notice {
@@ -7098,8 +7109,8 @@ button.primary .hint {
 .cmfill-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding-top: 2px;
+  gap: var(--space-2);
+  padding-top: var(--space-0);
 }
 .cmfill-empty {
   display: flex;
@@ -7107,7 +7118,7 @@ button.primary .hint {
   justify-content: center;
   flex: 1;
   min-height: 180px;
-  padding: 16px;
+  padding: var(--space-4);
   text-align: center;
 }
 @media (max-width: 760px) {
@@ -7175,7 +7186,7 @@ button.primary .hint {
 }
 .floating-panel-action {
   flex: none;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7384,7 +7395,7 @@ button.primary .hint {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0);
   margin: 0 0 var(--space-2);
   border-bottom: 1px solid var(--border);
 }
@@ -7450,13 +7461,13 @@ button.primary .hint {
 .kd-labels {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 4px 0 10px;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 10px;
   font-size: var(--fs-1);
   color: var(--fg-dim, #9aa4b2);
 }
 .kd-label {
-  padding: 2px 8px;
+  padding: var(--space-0) var(--space-2);
   border: 1px solid var(--border, #3a4252);
   border-radius: 4px;
   overflow-wrap: anywhere;
@@ -7473,7 +7484,7 @@ button.primary .hint {
 }
 .kd-banner.ok {
   margin: 0 0 10px;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   /* 批次十一 L12 语义色归一：原 `#7ad39a` / `rgba(60,180,110,.12)` 是写死的浅色字面，
      light/mint-dark 主题下不翻色——成功面改吃 `--success`（wash 用 color-mix 同 dev-note 口径）。 */
@@ -7481,7 +7492,7 @@ button.primary .hint {
   color: var(--success);
 }
 .kd-error {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   /* 同上：`#e57373` → `--danger`（= `--red`），三主题自动跟随 */
   color: var(--danger);
   overflow-wrap: anywhere;
@@ -7495,13 +7506,13 @@ button.primary .hint {
 .dd-table {
   width: 100%;
   border-collapse: collapse;
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   font-size: var(--fs-2);
 }
 .dd-table th,
 .dd-table td {
   text-align: left;
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--border, #3a4252);
 }
 .dd-path {
@@ -7527,18 +7538,18 @@ button.primary .hint {
 .fh-table {
   width: 100%;
   border-collapse: collapse;
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   font-size: var(--fs-2);
 }
 .fh-table th,
 .fh-table td {
   text-align: left;
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--border, #3a4252);
 }
 .fh-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-6);
 }
 
 /* ===== D1 面包屑（宿主自绘栏：standalone Monaco 无 breadcrumbs API，取证见 breadcrumb-path.ts） ===== */
@@ -7550,12 +7561,12 @@ button.primary .hint {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0);
   overflow: hidden;
-  padding: 2px 10px;
+  padding: var(--space-0) 10px;
   font-size: var(--fs-1);
-  color: var(--text-dim, #9aa4b2);
-  background: var(--panel-bg, #232834);
+  color: var(--text-dim);
+  background: var(--panel-bg);
   border-bottom: 1px solid var(--border, #3a4252);
   white-space: nowrap;
   user-select: none;
@@ -7578,7 +7589,7 @@ button.primary .hint {
 }
 .editor-crumb-sep {
   flex: none;
-  margin: 0 4px;
+  margin: 0 var(--space-1);
   opacity: 0.6;
 }
 .editor-crumb-item {
@@ -7590,11 +7601,11 @@ button.primary .hint {
   text-overflow: ellipsis;
   white-space: nowrap;
   border-radius: var(--radius-sm);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
 }
 .editor-crumb-item:hover {
-  background: var(--hover-bg, #2f3646);
-  color: var(--text, #d7dce4);
+  background: var(--hover-bg);
+  color: var(--text);
 }
 .editor-crumb-item:focus-visible {
   outline: 1px solid var(--focus-ring);
@@ -7607,13 +7618,13 @@ button.primary .hint {
   display: inline-flex;
   align-items: center;
   margin-left: 1px;
-  padding: 1px 2px;
+  padding: 1px var(--space-0);
   border-radius: var(--radius-sm);
   cursor: pointer;
   opacity: 0.55;
 }
 .editor-crumb-caret:hover {
-  background: var(--hover-bg, #2f3646);
+  background: var(--hover-bg);
   opacity: 1;
 }
 .editor-crumb-caret:focus-visible {
@@ -7622,21 +7633,21 @@ button.primary .hint {
 }
 .editor-crumb-caret[aria-expanded='true'] {
   opacity: 1;
-  background: var(--hover-bg, #2f3646);
+  background: var(--hover-bg);
 }
 
 /* PERF-6（2026-10-16 树即时批）：过滤态强制全展开 ⇒ 渲染窗口的「继续显示下一批」尾行。
    它是"还有多少命中没挂进 DOM"的读数，不是装饰：独占一行、不抢文件行的视觉。 */
 .tree-filter-more {
   list-style: none;
-  padding: 4px 6px;
+  padding: var(--space-1) var(--space-6);
 }
 .tree-filter-more button {
   width: 100%;
   border: 1px dashed var(--border);
   color: var(--fg-dim);
   font-size: var(--fs-1);
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-6);
   cursor: pointer;
 }
 .tree-filter-more button:hover {
@@ -7658,7 +7669,7 @@ button.primary .hint {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .boot-skeleton-brand {
   font-size: var(--fs-display);
@@ -7670,7 +7681,7 @@ button.primary .hint {
 .boot-splash-lock {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 10px; /* 体感批 B-1 刻意不收：index.html 内联引导层同格写死 gap:10px，boot-sweep-single-source.test.ts 逐字镜像钉着它（引导层不许有第二张嘴）——归组长并入刻度时一起动 */
 }
 .boot-splash-mark {
   width: 26px;
@@ -7752,10 +7763,10 @@ button.primary .hint {
 .rp-locate {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  margin: 2px 0 6px;
-  padding: 6px 8px;
+  margin: var(--space-0) 0 var(--space-6);
+  padding: var(--space-6) var(--space-2);
   border-left: 3px solid var(--accent, #61afef);
   background: color-mix(in srgb, var(--accent, #61afef) 10%, transparent);
   border-radius: var(--radius-sm);
@@ -7795,8 +7806,8 @@ button.primary .hint {
 .conv-modes {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 4px;
+  gap: var(--space-0);
+  margin-left: var(--space-1);
 }
 /* 选中的那一枚用主色描边，不加底色块：面板工具条本来就没有块状背景，
    一块实心会把「重新校验」那颗按钮的视觉重量压掉 */
@@ -7805,14 +7816,14 @@ button.primary .hint {
   border-radius: var(--radius-sm);
   background: none;
   color: var(--fg);
-  padding: 1px 6px;
+  padding: 1px var(--space-6);
   font-size: var(--fs-1);
   cursor: default;
 }
 .conv-rollup {
   font-size: var(--fs-0);
   color: var(--fg-dim);
-  padding: 2px 0 4px;
+  padding: var(--space-0) 0 var(--space-1);
 }
 /* 角色/家族的一组里混着多条规则 ⇒ 条目行补一枚规则标识（等宽、弱化，不抢正文） */
 .conv-issue-rule {
@@ -7832,11 +7843,11 @@ button.primary .hint {
 /* ——"有事要处理"而不是"出错了"；版式对齐既有 .notice，不另起炉灶。 */
 
 .crash-recovery {
-  background: rgba(209, 154, 102, 0.1);
-  border-color: rgba(209, 154, 102, 0.4);
+  background: var(--wash-warn);
+  border-color: var(--wash-warn-edge);
 }
 .crash-recovery p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 .crash-recovery-actions {
   display: flex;
@@ -7865,10 +7876,10 @@ button.resume-session {
   /* 展开行的文件清单嵌在表格里：整体缩进 + 更弱的分隔，视觉上隶属上一行 */
   padding-top: 0;
   border-bottom: 1px solid var(--border, #3a4252);
-  background: color-mix(in srgb, var(--panel-bg, #232834) 40%, transparent);
+  background: color-mix(in srgb, var(--panel-bg) 40%, transparent);
 }
 .oh-files {
-  margin: 4px 0 6px;
+  margin: var(--space-1) 0 var(--space-6);
   padding-left: 18px;
   font-size: var(--fs-1);
   line-height: 1.7;
@@ -7881,7 +7892,7 @@ button.resume-session {
   font-size: var(--fs-0);
   text-align: center;
   border-radius: var(--radius-sm);
-  margin-right: 4px;
+  margin-right: var(--space-1);
 }
 .oh-kind-mod {
   color: var(--amber, #e8b86a);
@@ -7948,19 +7959,19 @@ button.resume-session {
 
 .editor-group-close:hover {
   opacity: 1;
-  background: rgba(128, 128, 128, 0.15);
+  background: var(--wash-gray);
 }
 
 .editor-divider {
   flex: 0 0 4px;
   cursor: col-resize;
   background: transparent;
-  transition: background 120ms ease;
+  transition: background var(--dur-1) ease;
 }
 
 .editor-divider:hover,
 .editor-divider:active {
-  background: rgba(128, 128, 128, 0.35);
+  background: var(--wash-gray-strong);
 }
 
 /* MM-9 列向排列（上下堆叠）：data-orientation 由宿主组态的 orientation 驱动。
@@ -8078,31 +8089,31 @@ button.resume-session {
   animation: u-rise var(--dur-3) var(--ease-out) both;
 }
 .stagger > *:nth-child(1) {
-  animation-delay: 0ms;
+  animation-delay: 0;
 }
 .stagger > *:nth-child(2) {
-  animation-delay: 45ms;
+  animation-delay: calc(var(--stagger) * 1);
 }
 .stagger > *:nth-child(3) {
-  animation-delay: 90ms;
+  animation-delay: calc(var(--stagger) * 2);
 }
 .stagger > *:nth-child(4) {
-  animation-delay: 135ms;
+  animation-delay: calc(var(--stagger) * 3);
 }
 .stagger > *:nth-child(5) {
-  animation-delay: 180ms;
+  animation-delay: calc(var(--stagger) * 4);
 }
 .stagger > *:nth-child(6) {
-  animation-delay: 225ms;
+  animation-delay: calc(var(--stagger) * 5);
 }
 .stagger > *:nth-child(7) {
-  animation-delay: 270ms;
+  animation-delay: calc(var(--stagger) * 6);
 }
 .stagger > *:nth-child(8) {
-  animation-delay: 315ms;
+  animation-delay: calc(var(--stagger) * 7);
 }
 .stagger > *:nth-child(n + 9) {
-  animation-delay: 360ms;
+  animation-delay: calc(var(--stagger) * 8);
 }
 /* 单独取用的入场工具（不想整组错峰时） */
 .u-rise {
@@ -8183,7 +8194,7 @@ button.resume-session {
   border-radius: var(--radius-lg);
   background:
     linear-gradient(var(--surface-overlay), var(--surface-overlay)) padding-box,
-    linear-gradient(135deg, var(--accent), #7c5cff 48%, var(--accent-text)) border-box;
+    linear-gradient(135deg, var(--accent), var(--violet) 48%, var(--accent-text)) border-box;
 }
 /* accent 柔光：悬停 / .is-active / focus-within 时亮起一圈，用于强调当前焦点面 */
 .u-glow {
@@ -8196,7 +8207,7 @@ button.resume-session {
 }
 /* 呼吸柔光：活体状态（进行中/已连接/录制）用，幅度小、循环慢 */
 .u-breathe {
-  animation: u-glow-breathe 2.8s var(--ease-in-out) infinite;
+  animation: u-glow-breathe var(--anim-breathe) var(--ease-in-out) infinite;
 }
 /* 键盘焦点柔光环：给想要"环 + 光"而非硬 outline 的控件（与全局 :focus-visible 并存，
    挂本类即改用 box-shadow 环，outline 让位） */
@@ -8213,16 +8224,21 @@ button.resume-session {
   content: '';
   position: absolute;
   top: 0;
-  left: -60%;
+  left: 0;
   width: 40%;
   height: 100%;
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.18), transparent);
-  transform: skewX(-20deg);
-  transition: left var(--dur-3) var(--ease-out);
+  background: linear-gradient(100deg, transparent, var(--sheen-band), transparent);
+  /* 扫光带走 **transform**，不再动 `left`（体感批 B-6 · VIS-32）：`left` 是 layout 属性，
+     每帧都要重排 + 重绘，而这条是悬停期一直在跑的动画——正是「用 layout 属性做动画」的
+     反例本体。几何**逐字等价**：带子自身宽 40%（= 容器宽的 0.4），于是
+     `left: -60%` ≡ `translateX(-150%)`、`left: 120%` ≡ `translateX(300%)`（都按自身宽折回容器宽）。
+     `skewX` 必须留在同一条 `transform` 里——`transform` 是整体替换，分两处写会互相覆盖。 */
+  transform: translateX(-150%) skewX(-20deg);
+  transition: transform var(--dur-3) var(--ease-out);
   pointer-events: none;
 }
 .u-sheen:hover::before {
-  left: 120%;
+  transform: translateX(300%) skewX(-20deg);
 }
 /* 按压涟漪：容器需 relative + overflow:hidden（本类已给），:active 时中心扩散一次 */
 .u-ripple {
@@ -8240,7 +8256,7 @@ button.resume-session {
   aspect-ratio: 1;
   translate: -50% -50%;
   border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 66%);
+  background: radial-gradient(closest-side, var(--ripple-core) 0%, var(--ripple-tail) 66%);
   /* 收缩量留在 `transform` 上（`u-ripple` 关键帧动的就是这一条）：写成独立的 `scale:` 属性
      会和关键帧各乘各的，波峰永远停在 0 */
   transform: scale(0);
@@ -8248,7 +8264,7 @@ button.resume-session {
   pointer-events: none;
 }
 .u-ripple:active::after {
-  animation: u-ripple 480ms var(--ease-out);
+  animation: u-ripple var(--anim-ripple) var(--ease-out);
 }
 
 /* ---- 质感 ---- */
@@ -8305,7 +8321,7 @@ button.resume-session {
   height: 14px;
   border-radius: 50%;
   background: var(--on-accent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 1px 2px var(--drop-dark);
   transition: transform var(--dur-2) var(--ease-spring);
 }
 .switch input:checked ~ .switch-track {
@@ -8333,7 +8349,7 @@ button.resume-session {
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: u-spin 700ms linear infinite;
+  animation: u-spin var(--anim-spin) linear infinite;
 }
 
 /* 骨架占位：sunken 底 + 扫光，加载态用它替"空白/转圈"，减少布局跳动 */
@@ -8443,7 +8459,7 @@ button.resume-session {
 }
 /* busy = 活体状态：呼吸柔光只在这一档出现（.u-breathe 同款关键帧，减弱动效下停终态） */
 .kp-status.busy {
-  animation: u-glow-breathe 2.8s var(--ease-in-out) infinite;
+  animation: u-glow-breathe var(--anim-breathe) var(--ease-in-out) infinite;
 }
 
 /* ---------- D. 状态回放（rp-*）：行轻移 + 结果导轨 + 徽章 tint ---------- */
@@ -8609,7 +8625,7 @@ button.resume-session {
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: u-spin 700ms linear infinite;
+  animation: u-spin var(--anim-spin) linear infinite;
 }
 
 /* ---- 按压反馈三档（2026-10-17 统一批）：一档一语义，全部不吃布局、disabled 零反馈 ----
@@ -8643,7 +8659,7 @@ button.resume-session {
 .u-focus-glow:active:not(:disabled):focus-visible {
   box-shadow:
     var(--shadow-focus),
-    inset 0 1px 2px rgba(0, 0, 0, 0.28);
+    inset 0 1px 2px var(--inset-dark);
 }
 
 /* ---- 全站接入段（零 TSX 改动；新面自己挂上面的工具类，别在这里加名字） ----
@@ -9128,7 +9144,7 @@ button.resume-session {
 .kb-cell-cmd {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
   min-width: 0;
 }
 .kb-title {
@@ -9155,7 +9171,7 @@ button.resume-session {
   font-family: var(--font-meta);
   font-size: var(--fs-1);
   font-variant-numeric: tabular-nums;
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: var(--radius-sm);
@@ -9176,7 +9192,7 @@ button.resume-session {
   /* 单字符芯片（如和弦第二步的「Z」）实测只有 22px 宽 ⇒ 补到 24 的命中区下限 */
   min-width: 24px;
   min-height: 24px;
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   border: none;
   border-radius: var(--radius-sm);
   background: none;
@@ -9209,7 +9225,7 @@ button.resume-session {
 .kb-capture {
   color: var(--accent-text);
   font-size: var(--fs-1);
-  padding: 2px 10px;
+  padding: var(--space-0) 10px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-pill);
   box-shadow: var(--shadow-focus);
@@ -9287,7 +9303,7 @@ button.resume-session {
   margin-top: var(--space-1);
   color: var(--amber);
   font-size: var(--fs-0);
-  padding: 2px var(--space-2);
+  padding: var(--space-0) var(--space-2);
   border: 1px solid var(--amber);
   border-radius: var(--radius-sm);
 }
@@ -9409,7 +9425,7 @@ button.resume-session {
   position: absolute;
   left: 16px;
   bottom: 36px;
-  z-index: 1200;
+  z-index: var(--z-toast);
   max-width: 420px;
   display: flex;
   align-items: flex-start;
