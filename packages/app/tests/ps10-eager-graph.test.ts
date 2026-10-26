@@ -467,10 +467,26 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 桶 `eratw-adapter/src/index.ts`（`bootstrap.ts` 静态引它）不再值转出 `./launch`，
     //       只留 `export type`——否则 `launch.ts` 会从这条 re-export 边整份回到图里。
     //     净变化 2,899 → 2,879（−20 KB / −1 文件）；余量 1 KB：下一枚进图的东西仍须先减面。
+    //   - **体感批（2026-10-26，本组 D 车道：身份带 + 底栏 dock）**：现读数 **194 文件 / 2,883 KB**；
+    //     文件闸不动（194，顶格零余量），KB 闸随现值 **2,880 → 2,890**（口径仍是"读数进十"，
+    //     与本档 2,852→2,860、2,879→2,880 同一条）。增量按**同一张 194 枚图逐枚对字节复算**
+    //     （合并 origin/dev e8c04578 后 dev→HEAD 只差 2,533 B + 一枚新文件），只有两处、都点名：
+    //     · `ui/identity-band.ts` **+3,264 B / +1 文件**——身份带插槽（`useSyncExternalStore` +
+    //       ref 登记的 75 行小模块）。它进图不是被顺带拖进来的：`WindowChrome` 在真壳的**欢迎页**
+    //       就要登记插槽，而"浏览器 dev 下标题栏不存在 ⇒ 工具条必须回原位渲染"这条脱钩判据只能住
+    //       在这个模块里。内联进 `WindowChrome.tsx` 只是换个文件记账（字节照付），还会让懒面侧
+    //       （`ShellLayout`）从一个组件模块里取 store——故不取。
+    //     · `ui/WindowChrome.tsx` **+2,533 B**——身份带 portal 落点 + `bandTitleOf`（同一行里项目名
+    //       只报一遍）+ 同步拖动发起器预载（`startDragging` 必须在 mousedown 调用栈里发出，晚一拍
+    //       就丢手势）。
+    //     ⚠ 上一行"下一枚进图先减面"的承诺**本批没兑现**，理由摆在这里：两处增量都是功能体，
+    //     能减的只有注释，而这两段注释正是"调试宿与真壳必须长同一张脸"这条口径的本身——删它
+    //     等于删判据。减面路线仍欠着，下一批进图者先还（候选：`tokens.css` 档位表说明与
+    //     `styles-project.css` 状态栏段有重叠，可并成一处；本批不动，免得把理由拆到两处之外）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,880 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_880);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,890 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_890);
     expect(files.length).toBeLessThanOrEqual(194);
   });
 

@@ -14,7 +14,8 @@ import {
  * Monaco 部件色 ↔ 设计 token 逐字对拍（VIS-53 · 2026-10-26 车道 E3）。
  *
  * 立论：`monaco/theme.ts` 那三张 `colors` 表是**裸 hex 镜像 token**——`editor.background`
- * 抄 `--bg`、`editor.lineHighlightBackground` 抄 `--bg-2`、`editorCursor.foreground` 抄
+ * 抄 `--bg`、`editor.lineHighlightBackground` 抄 `--bg-3`（当前行那层薄抬升，2026-10-26
+ * 动效批 C1 从 `--bg-2` 抬的一档，本表跟着迁）、`editorCursor.foreground` 抄
  * `--accent-text`、`editor.selectionBackground` 与 `--sel-bg` 同值不同串。 Monaco 拿不到
  * CSS 变量（`defineTheme` 只收字面量），所以这份抄本**注定存在**；问题从来不是"能不能不抄"，
  * 而是"抄了之后没人对"。此前谁改了 `tokens.css` / `themes/*.css` 而忘了 theme.ts，
@@ -41,9 +42,13 @@ import {
  * 变异实测（2026-10-26 交付回执，三侧各注一条、逐条实测必红后还原）：
  *   ① theme.ts 侧 `KOJO_DARK_COLORS['editor.background']` `#1e2227`→`#1e2228` ⇒ 红（exact 档）；
  *   ② theme.ts 侧 `editorBracketHighlight.foreground1` `#c678dd`→`#c678de` ⇒ 红（语法同源档）；
- *   ③ token 侧 `themes/light.css` 的 `--bg-2` `#eaeef2`→`#ebeff3` ⇒ 红 **7 格**
- *      （lineHighlight 两格 + list 三格 + stickyScrollHover + hoverWidget 状态条——
- *       正是"翻了 token 忘了 theme.ts"那一手，2026-10-26 之前全仓零反应）。
+ *   ③ token 侧 `themes/light.css` 的 `--bg-2` `#eaeef2`→`#ebeff3` ⇒ 红 **5 格**
+ *      （list.inactiveSelection + list.hover + list.focus + stickyScrollHover +
+ *       hoverWidget 状态条——正是"翻了 token 忘了 theme.ts"那一手，2026-10-26 之前全仓零反应）；
+ *   ④ 同一文件的 `--bg-3` `#dde3ea`→`#dde3eb` ⇒ 红 **5 格**，含**当前行那两格**
+ *      （lineHighlight bg/border + list.activeSelection + menu.selection +
+ *       suggestWidget.selected）。这一条是动效批 C1 把当前行从 `--bg-2` 抬到 `--bg-3`
+ *      之后重测的：抬档不是脱离同源，只是换了被谁盯着——③④ 都在本树实测、还原后 15/15 绿。
  */
 
 /* ------------------------------ ① 装配：读的是真主题，不是私有导出 ------------------------------ */
@@ -303,8 +308,11 @@ const MIRROR: readonly MirrorRow[] = [
   m('menu.selectionForeground', null, '--fg', '--fg'),
   m('editorSuggestWidget.selectedForeground', null, '--fg', '--fg'),
   // —— 当前行 / 列表选中面 ——
-  m('editor.lineHighlightBackground', '--bg-2', '--bg-2', '--bg-2'),
-  m('editor.lineHighlightBorder', '--bg-2', '--bg-2', '--bg-2'),
+  // 当前行两格跟动效批 C1（2026-10-26）挪到 `--bg-3`：旧值 `--bg-2` 压在 `editor.background`
+  // 上只有 1.091:1（作者找不到"我在哪一行"），三档统一抬到"比面板再抬一层"的同一枚台阶，
+  // **不新造色**。这一维仍由本表钉死：谁翻 `--bg-3` 忘了 theme.ts 照样红（下面变异实测③）。
+  m('editor.lineHighlightBackground', '--bg-3', '--bg-3', '--bg-3'),
+  m('editor.lineHighlightBorder', '--bg-3', '--bg-3', '--bg-3'),
   m('list.inactiveSelectionBackground', '--bg-2', '--bg-2', '--bg-2'),
   m('editorStickyScrollHover.background', '--bg-2', '--bg-2', '--bg-2'),
   m('menu.background', '--bg-2', null, '--bg-2'),
