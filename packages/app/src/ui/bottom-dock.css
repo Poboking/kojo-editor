@@ -1,0 +1,134 @@
+/* -----------------------------------------------------------------------------
+ * 底栏 dock（VIS-13 · D-2 · 车道 D2）——只写这一份，别处的壳层样式一概不碰。
+ *
+ * 特异性口径：本仓样式表按"通用在前、专用在后"平铺，切片靠 **import 顺序**没有保证
+ * （`css-slices-wired` 只管接线，不管顺序），所以这里一律用「容器类 + 自家类」两级
+ * 选择器赢过 `styles-project.css` 里那些单类规则（`.bottombar` / `.container-body`）。
+ *
+ * 颜色口径：全部吃 `var()` token，本文件不出现一个字面量颜色。
+ * -------------------------------------------------------------------------- */
+
+/* dock 的面板体区：横向并排。没拖过高度的格子靠 stretch 等分容器 ⇒ "均分"零算术。 */
+.bottombar .bottom-dock {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+  gap: 1px;
+  overflow: hidden;
+}
+
+/* 一格 = 一条头 + 面板体 + 底沿把手；宽度恒等分（flex 1 1 0），高度可被记忆钉住 */
+.bottombar .dock-cell {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  background: var(--bg-2);
+}
+
+/* 记忆过高度的格子（`data-dock-pinned`）不需要另一条规则：`align-items: stretch` 只在
+   `height: auto` 时生效，元素带了确定高度就自然按那个数站、顶对齐——"没拖过 = 均分、
+   拖过 = 记住"这两态共用一根 CSS，不必在样式里分支。 */
+
+/* 激活格只多一条 2px accent 左边（注意力预算与身份带同口径：一屏一个主信号） */
+.bottombar .dock-cell.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 邻格之间的分隔：一根边框，不叠第二条（gap:1px 露出的就是这根的底色） */
+.bottombar .dock-cell + .dock-cell {
+  border-left: 1px solid var(--border);
+}
+
+/* ---- 头部收成一条：左「面板名 + 计数」，右「筛选槽 / 浮出 / 关闭」 ---- */
+.bottombar .dock-cell-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+
+.bottombar .dock-cell-head .spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.bottombar .dock-cell-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+
+/* 计数：元信息档（--fs-0 / dim），常态不喊狼；悬停说清数的是什么范围 */
+.bottombar .dock-cell-count {
+  flex: none;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-3);
+}
+
+/* 筛选槽：没东西 portal 进来就不占位（`:empty` 判据，容器不替面板猜宽度） */
+.bottombar .dock-cell-slot:empty {
+  display: none;
+}
+
+.bottombar .dock-cell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  flex-direction: column;
+}
+
+/* 逐格高度把手：贴着这一格的底沿（`.resizer-y` 那 4px 命中区照旧，只把负 margin 收回来，
+   否则格子之间会互相咬掉 2px） */
+.bottombar .dock-cell-resizer {
+  margin: 0;
+  flex: none;
+}
+
+/* 折叠态（双击 tab 条）：只剩这一条，标签条自己承担"底栏还在"的全部表达 */
+.bottombar .panel-tabs[data-dock-collapsed='true'] {
+  border-bottom-color: var(--border-strong);
+}
+
+/* 托盘上的"已在场"标记：一颗左侧短竖条 + 亮一档的字。
+   标签条现在说的是"哪些颗正并排挂着"（可以多颗），与"当前激活那颗"（只有一颗，
+   靠 `.panel-tab.active` 那根下划线）是两件事，故两把视觉各自表一件事、不互相顶替。 */
+.bottombar .panel-tab.in-dock {
+  color: var(--fg);
+  background: var(--bg-3);
+  box-shadow: inset 2px 0 0 var(--accent-soft);
+}
+
+/* 拖拽中：整根把手实一点，告诉手"这格归你管"（只动背景，不做位移动画） */
+.bottombar .dock-cell-resizer:active {
+  background: var(--accent);
+  opacity: 0.6;
+}
+
+/* 窄屏：两格并排时把头部的图标与计数让位给面板名（名字不能被挤没） */
+@media (max-width: 1023px) {
+  .bottombar .dock-cell-head {
+    gap: var(--space-0);
+  }
+  .bottombar .dock-cell-count {
+    padding: 0;
+    background: transparent;
+  }
+}

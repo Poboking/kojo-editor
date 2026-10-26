@@ -10,6 +10,7 @@ import {
   type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
@@ -24,9 +25,11 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  beginDockCellResize,
   beginLiveResize,
   beginSplitResize,
   defaultLayout,
+  dockCellIds,
   effectiveLocation,
   filterGameScopedPanels,
   gameScopeByPlugin,
@@ -41,6 +44,7 @@ import {
   type OrganizedPanels,
   type ViewDef,
 } from './layout';
+import { BottomDock } from './bottom-dock';
 import {
   PANEL_DRAG_MIME,
   acceptsPanelDrop,
@@ -2131,6 +2135,67 @@ export function ShellLayout(props: Props): ReactElement {
     [],
   );
 
+  /* ---------------- 底栏 dock（VIS-13 · D-2）：逐格高度与摘除 ---------------- */
+
+  /** dock 里各格的根元素（id → `<section>`）：拖拽期往它身上写内联 `height` */
+  const dockCellElsRef = useRef(new Map<string, HTMLElement>());
+  const registerDockCellEl = useCallback((id: string, el: HTMLElement | null): void => {
+    const els = dockCellElsRef.current;
+    if (el) els.set(id, el);
+    else els.delete(id);
+  }, []);
+
+  /**
+   * 逐格高度拖拽（判据⑤：拖拽零重渲纪律）。
+   *
+   * 与上面 `startDrag` 同一条纪律、同一个理由：**pointermove 一次都不进 reducer**——
+   * 底栏里挂着的是整块面板（问题列表几百行），每帧一次 `LayoutState` = 整壳重渲 +
+   * 一次 `JSON.stringify` 写盘。会话本体是 `layout.ts` 的 `beginDockCellResize`（纯函数，
+   * 可在 node 里按"120 次移动 ⇒ 1 次 commit"量出来），这里只管接手与收场。
+   *
+   * 起手高度现量 `clientHeight`：没拖过的格子内联是空的，量到的就是均分给它的实际像素，
+   * 于是"从均分接着拖"不需要在 JS 里另算一遍除法。
+   */
+  const startDockCellDrag = useCallback((e: ReactPointerEvent<HTMLElement>, id: string): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = dockCellElsRef.current.get(id);
+    if (!el) return;
+    const handle = e.currentTarget;
+    const pointerId = e.pointerId;
+    handle.setPointerCapture?.(pointerId);
+    const session = beginDockCellResize({
+      target: el,
+      startHeight: el.clientHeight,
+      startPos: e.clientY,
+      // 上限现量 dock 面板体区（格的父元素）：一格不许被拖得比整条底栏还能长，
+      // 否则它会被容器剪掉半截——这条尺交给浏览器量，比在 JS 里换算准。
+      maxPx: el.parentElement?.clientHeight,
+    });
+    const onMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      session.onMove(ev.clientY);
+    };
+    const onUp = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+      // 松手一次 commit：值就是拖拽期最后写进内联的那个数 ⇒ 零跳变、一次写盘
+      const height = session.finish();
+      if (height !== null) dispatch({ type: 'bottomHeight', id, height });
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, []);
+
+  /** 摘掉 dock 里的一格（该格头部的 ✕）；摘空即收起整条底栏 */
+  const closeDockCell = useCallback((id: string): void => {
+    dispatch({ type: 'bottomClose', id });
+  }, []);
+
   /**
    * 浮窗 DOM 引用（id → 根 `<section>`）。
    * 拖拽 / 缩放期间**直接改元素样式**、不进 reducer——否则每次 mousemove 都会产生新
@@ -2334,6 +2399,15 @@ export function ShellLayout(props: Props): ReactElement {
   const activeView = org.views.find((v) => v.key === layout.sidebar.active) ?? org.views[0] ?? null;
   const activeAux = org.aux.find((p) => p.id === layout.aux.active) ?? org.aux[0] ?? null;
   const activeBottom = org.bottom.find((p) => p.id === layout.bottom.active) ?? org.bottom[0] ?? null;
+
+  /**
+   * 底栏 dock 的读数（VIS-13 · D-2）：**在场**的是 `org.bottom`（标签条那排托盘），
+   * **并排挂着**的是 `dockCells`（面板体区里那几格）。两者都由 `dockCellIds` 一处算，
+   * 不在渲染里另写一份"哪颗该露出来"的判断。
+   */
+  const bottomIds = org.bottom.map((p) => p.id);
+  const dockIds = dockCellIds(layout, bottomIds);
+  const dockCells = org.bottom.filter((p) => dockIds.includes(p.id));
 
   /** 侧栏组内折叠状态（会话级，不持久化——定稿 §七持久化清单不含组内折叠） */
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -2658,7 +2732,20 @@ export function ShellLayout(props: Props): ReactElement {
     </div>
   );
 
-  const tabStrip = (container: 'aux' | 'bottom', items: readonly UIPanelContribution[], activeId: string | null): ReactElement => (
+  /**
+   * 容器标签条（aux / bottom 共用一条）。
+   *
+   * 底栏多传一格 `dock`（VIS-13 · D-2）：那一排从"互斥的标签页"变成**托盘**——
+   * `aria-selected` 说的是"这颗此刻并排挂在 dock 里"（可以好几颗同时为真），
+   * 点一下是**加进**展开集（`activate` 在底栏已改走 `bottomOpen`，不掉别颗），
+   * 空白处**双击**＝折叠/展开整条面板体。aux 不传 ⇒ 逐字保持旧的单选语义。
+   */
+  const tabStrip = (
+    container: 'aux' | 'bottom',
+    items: readonly UIPanelContribution[],
+    activeId: string | null,
+    dock?: { openIds: readonly string[]; collapsed: boolean },
+  ): ReactElement => (
     <div
       className="panel-tabs"
       role="tablist"
@@ -2667,14 +2754,27 @@ export function ShellLayout(props: Props): ReactElement {
       data-context-surface="panel-tabs"
       data-panel-tabs-container={container}
       data-active-panel={activeId ?? ''}
+      {...(dock === undefined ? {} : { 'data-dock-collapsed': dock.collapsed ? 'true' : 'false' })}
+      {...(dock === undefined
+        ? {}
+        : {
+            title: '双击折叠 / 展开底栏',
+            // 双击落在标签按钮或条尾按钮上不算"双击这一条"（那两下先按了按钮，语义归按钮）
+            onDoubleClick: (e: ReactMouseEvent<HTMLElement>) => {
+              if ((e.target as HTMLElement).closest('button')) return;
+              dispatch({ type: 'bottomToggleCollapse' });
+            },
+          })}
     >
       {items.map((p, i) => (
         <button
           key={p.id}
           role="tab"
-          aria-selected={p.id === activeId}
+          aria-selected={dock !== undefined && dock.openIds.includes(p.id)}
           tabIndex={p.id === activeId ? 0 : -1}
-          className={`panel-tab ${p.id === activeId ? 'active' : ''}`}
+          className={`panel-tab ${p.id === activeId ? 'active' : ''} ${
+            dock !== undefined && dock.openIds.includes(p.id) ? 'in-dock' : ''
+          }`}
           title={p.title}
           data-panel-id={p.id}
           draggable
@@ -3157,7 +3257,7 @@ export function ShellLayout(props: Props): ReactElement {
           </>
         ) : null}
       </div>
-      {layout.bottom.visible && activeBottom ? (
+      {layout.bottom.visible && org.bottom.length > 0 ? (
         <>
           <div
             className="resizer resizer-y"
@@ -3173,14 +3273,25 @@ export function ShellLayout(props: Props): ReactElement {
             style={{ height: layout.bottom.size }}
             {...dropProps('bottom')}
           >
-            {tabStrip('bottom', org.bottom, layout.bottom.active)}
-            <div className="container-body">
-              <PanelBody
-                contribution={activeBottom}
+            {tabStrip('bottom', org.bottom, layout.bottom.active, {
+              openIds: dockIds,
+              collapsed: layout.bottomCollapsed === true,
+            })}
+            {/* 折叠态（判据④）：面板体整块不挂载——不是 `display:none`，是那一整棵子树
+                一次都不渲；再双击回来时面板体靠各自的订阅重建，不丢数据。 */}
+            {layout.bottomCollapsed === true ? null : (
+              <BottomDock
+                cells={dockCells}
+                activeId={activeBottom?.id ?? null}
+                heights={layout.bottomHeights}
                 uiPrefs={uiPrefs}
-                hostVersion={panelHostVersions?.[activeBottom.id]}
+                hostVersions={panelHostVersions}
+                registerEl={registerDockCellEl}
+                onResizeStart={startDockCellDrag}
+                onFloat={floatPanel}
+                onClose={closeDockCell}
               />
-            </div>
+            )}
           </section>
         </>
       ) : null}
