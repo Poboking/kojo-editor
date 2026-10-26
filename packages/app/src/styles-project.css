@@ -8366,20 +8366,13 @@ button.resume-session {
 }
 
 /* ---- 质感 ---- */
-/* 颗粒噪点：给大面积深色面（欢迎背景、hero 卡）一层极淡噪点，消除纯色的"塑料感"。
-   容器需 position:relative；mix-blend overlay + 3.5% 不透明度，看得见质感、看不见噪点本身。 */
-.u-grain {
-  position: relative;
-}
-.u-grain::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.035;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
+/* 颗粒噪点不在这两档里了（2026-10-27 噪点了断批）：这一族原先以 `.u-grain` 工具类的形态，
+   在本档与 styles-project.css 各存一份**逐字副本**，而 `u-grain` 全仓 .tsx/.ts/.html 零命中
+   ——同族的 `.u-sheen` / `.u-ripple` 都有真消费方（`ui/WelcomeView.tsx:394` 一处挂两枚），只有
+   它是"文件在、类名对、测试绿、tsc 绿"四项都不红的死样式（口径同 `tests/editor-glyph-slot.test.ts`）。
+   工具类要有人往 DOM 上挂类才生效，本车道不动 .tsx ⇒ 类壳连同两份副本一起清掉；噪点本体接到
+   `context-menu.css` 的两枚菜单玻璃面上（背景层 + `background-blend-mode`，不另开合成层）。
+   别在这里抄回第三份——`tests/grain-noise-consumer.test.ts` 会红。 */
 
 /* ---- 组件：开关 / 加载 / 骨架 ---- */
 /* 拨动开关（替裸 checkbox；设置页首个消费方）。结构：
