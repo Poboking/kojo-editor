@@ -116,7 +116,7 @@ describe('CSS 解析器本身（判据的地基）', () => {
 
 describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () => {
   const hostZ = declOf(HOST_RULES, '.context-menu-host', 'z-index');
-  const menuZ = declOf(PROJECT_RULES, '.context-menu', 'z-index');
+  const menuZ = declOf(HOST_RULES, '.context-menu', 'z-index');
   const modalVar = declOf(TOKEN_RULES, ':root', '--z-modal');
 
   it('主题里 --z-modal 是 1100（下面所有算式都从它出发）', () => {
@@ -161,24 +161,24 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
   });
 
   it('遮罩贴 --z-modal（1100），菜单比它高一级（点外面关得掉、菜单不被遮罩压住）', () => {
-    expect(declOf(PROJECT_RULES, '.context-menu-backdrop', 'z-index')).toBe('var(--z-modal)');
+    expect(declOf(HOST_RULES, '.context-menu-backdrop', 'z-index')).toBe('var(--z-modal)');
   });
 });
 
 describe('长菜单可滚：max-height 含 vh 兜底 + overflow-y', () => {
   it('overflow-y 是 auto（长菜单不出视口，也不被裁掉半行）', () => {
-    expect(declOf(PROJECT_RULES, '.context-menu', 'overflow-y')).toBe('auto');
+    expect(declOf(HOST_RULES, '.context-menu', 'overflow-y')).toBe('auto');
   });
 
   it('max-height 有 vh 兜底（窗口再矮也不顶出屏幕）', () => {
-    const maxHeight = declOf(PROJECT_RULES, '.context-menu', 'max-height');
+    const maxHeight = declOf(HOST_RULES, '.context-menu', 'max-height');
     expect(maxHeight).toBeDefined();
     expect(maxHeight).toContain('vh');
     expect(maxHeight).toContain('min(');
   });
 
   it('overscroll-behavior: contain（滚到底不把编辑器一起滚）', () => {
-    expect(declOf(PROJECT_RULES, '.context-menu', 'overscroll-behavior')).toBe('contain');
+    expect(declOf(HOST_RULES, '.context-menu', 'overscroll-behavior')).toBe('contain');
   });
 });
 
@@ -192,12 +192,43 @@ describe('类名与组件同源（CSS 改名不能悄悄逃过判据）', () => 
 
   it('菜单组件用的 .context-menu / .context-menu--submenu 在 CSS 里都有规则', () => {
     expect(MENU_SRC).toContain('context-menu context-menu--shared');
-    expect(declOf(PROJECT_RULES, '.context-menu', 'position')).toBe('fixed');
+    expect(declOf(HOST_RULES, '.context-menu', 'position')).toBe('fixed');
     const css = read('context-menu.css');
     expect(css).toContain('.context-menu.context-menu--submenu');
   });
 
   it('宿主样式表确实被菜单组件 import（否则 1300 这条规则根本不会加载）', () => {
     expect(MENU_SRC).toContain("import '../context-menu.css';");
+  });
+});
+
+/**
+ * 回归闸（2026-10-26 欢迎页事故）：菜单的**几何**必须住在轻档（`context-menu.css`，
+ * 随 `ui/context-menu.tsx` 进首屏链），不能只写在重档 `styles-project.css` 里。
+ *
+ * 事故原貌：几何当时全在重档，而重档只在进项目时动态加载 ⇒ 欢迎弹窗 / 启动画面这些轻档
+ * 状态里右键出来的菜单是一块**没有定位的通栏裸块**，遮罩算出 0 高（点空白关不掉），
+ * 且 `.context-menu-backdrop` 一在文档里整窗拖动就被判据拒掉 —— 页面既点不动也拖不动。
+ * 这里把「几何归轻档」钉成判据，避免下一批又把它挪回重档（挪回去这条会红）。
+ */
+describe('菜单几何归轻档（重档缺席时菜单也不能退化）', () => {
+  const GEOMETRY = ['position', 'z-index', 'padding', 'border-radius', 'box-shadow'] as const;
+
+  it('.context-menu 的几何在 context-menu.css 里逐条写全', () => {
+    for (const prop of GEOMETRY) {
+      expect(declOf(HOST_RULES, '.context-menu', prop), prop).toBeDefined();
+    }
+  });
+
+  it('.context-menu-backdrop 的铺满几何也在轻档（遮罩没面积 = 点空白关不掉）', () => {
+    expect(declOf(HOST_RULES, '.context-menu-backdrop', 'position')).toBe('fixed');
+    expect(declOf(HOST_RULES, '.context-menu-backdrop', 'inset')).toBe('0');
+  });
+
+  it('重档不再重复声明这套几何（单一真源，不许两处各自漂移）', () => {
+    for (const prop of ['position', 'padding', 'border-radius'] as const) {
+      expect(declOf(PROJECT_RULES, '.context-menu', prop), prop).toBeUndefined();
+    }
+    expect(declOf(PROJECT_RULES, '.context-menu-backdrop', 'position')).toBeUndefined();
   });
 });

@@ -1153,35 +1153,10 @@ textarea {
   box-shadow: var(--shadow-focus);
 }
 
-/* 右键菜单（壳层轻量实现） */
-.context-menu-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-}
-/* 右键菜单：全站最高频的浮层。底与边交玻璃主规则（同 .modal/.toast 一家），这里只给
-   它自己的尺寸 / 内衬 / 入场。矮面把顶缘高光收进 56px——96px 的淡出带会铺满整块菜单，
-   "光从上面来"反而读不出来。 */
-.context-menu {
-  --glass-fade: 56px;
-  position: fixed;
-  z-index: calc(var(--z-modal) + 1);
-  min-width: 230px;
-  /* 上限 + 视口兜底：长菜单不许顶出屏幕（x 由 JS 夹，y 交这里封顶） */
-  max-width: min(340px, calc(100vw - var(--space-4) * 2));
-  max-height: min(72vh, calc(100vh - var(--space-4) * 2));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  /* 内衬 5 = 同心圆角算式的一项：项圆角 4 + 内衬 5 ≈ 9 ⇒ 容器取 --radius-lg(10) */
-  padding: 5px;
-  border-radius: var(--radius-lg);
-  /* --shadow-1 实测没有切边末环（只有 --shadow-3 有），菜单浮在亮内容上正需要这一圈切边 */
-  box-shadow:
-    var(--shadow-1),
-    0 0 0 1px rgba(0, 0, 0, 0.28);
-  /* 入场只走 opacity：本体带 backdrop-filter，transform 动画每帧都要重采样背后 = 掉帧主因 */
-  animation: fade-in var(--dur-1) var(--ease-out);
-}
+/* 右键菜单的**几何**（`position` / z-index / 尺寸 / 内衬 / 入场）2026-10-26 已下沉到
+   `context-menu.css`——它属于组件自身，弹窗/启动这些轻档状态也要成立（那里不加载本文件，
+   菜单会退化成通栏裸块）。本文件只保留项目态的外观叠加（`.context-menu button` 行高、
+   危险项、实心档回落等，见下）。 */
 .context-menu button {
   display: flex;
   align-items: center;

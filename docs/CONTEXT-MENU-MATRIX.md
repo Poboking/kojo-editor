@@ -4,13 +4,13 @@
 > 反向也成立：想知道"菜单里为什么没有某一项"，按面查这张表。
 >
 > 判据口径（与代码同源，不另立一套）：
-> - 面清单＝`packages/app/src/ui/context-surfaces.ts` 的 `CONTEXT_SURFACE_MANIFEST`（33 面）；
+> - 面清单＝`packages/app/src/ui/context-surfaces.ts` 的 `CONTEXT_SURFACE_MANIFEST`（31 面）；
 > - 每一面必须有人 `declareContextSurface`，且宿主元素真带 `data-context-surface`——
 >   这条由 `packages/app/tests/context-coverage.test.ts` 机器对账，不靠本表人工维持；
 > - **能力不存在 ⇒ 整项不显示**；**上下文暂不可用 ⇒ `disabled: true` + `disabledReason` 人话**
 >   （铁律 4「内核不静默」在菜单层的落点）。本表"未做"一栏写清是哪一种。
 
-## 表 1 · 33 面总览
+## 表 1 · 31 面总览
 
 分区：`editor` 编辑区 / `explorer` 文件树与标签 / `panel` 面板与浮层 / `chrome` 壳层与页面 / `plugin` 插件面板 / `host` 地基。
 
@@ -39,8 +39,7 @@
 | `activity-bar` | chrome | 同上 | 视图项：显示/隐藏 / 移动面板 | 同上 |
 | `toolbar` | chrome | 同上 | 带命令的按钮：复制标题 / 复制 id / 设置 | 同上 |
 | `status-bar` | chrome | 同上 | 每一格（`data-status-cell`）：复制这一格；换行符项按读数分档 | 同上 |
-| `welcome` | chrome | `context-menu-pages.ts` | 欢迎页：新建 / 打开 / 回到教程入口 | `pages-menus.test.ts` |
-| `welcome-recent` | chrome | 同上 | 最近项目行：打开 / 复制路径 / 从列表移除 | 同上 |
+| ~~`welcome`~~ / ~~`welcome-recent`~~ | — | 已撤（2026-10-26） | 欢迎页进**免右键白名单**（`NO_CONTEXT_MENU_ATTR`）：整片不出菜单。原两个面连同构建器 / 接线桥一并退役，页面上的动作都有实心按钮 | `welcome-no-context-menu.test.ts` |
 | `settings` | chrome | `settings-menu.ts`（设置面板，懒 chunk） | 设置项：复制 id / 恢复默认外观 / 定位 | `settings-menu.test.ts` |
 | `keybindings` | chrome | 同上 | 快捷键行：改键 / 恢复 / 查冲突 | 同上 |
 | `market` | chrome | `context-surfaces.ts`（插件 `ui-market` 交 build，宿主声明） | 市场卡片：安装 / 详情 / 复制 id | `plugin-context-menu.test.ts` |
@@ -50,8 +49,10 @@
 | `input` | host | `context-surfaces.ts` | 输入框优先面：剪切/复制/粘贴/全选（**优先于一切容器面**） | `context-menu.test.ts` |
 | `app-fallback` | host | 同上 | 兜底通用菜单：命令面板 / 设置 / 检查更新 | `context-surfaces.test.ts` |
 
-## 表 2 · 三级路由（点下去先问谁）
+## 表 2 · 路由（点下去先问谁）
 
+0. **免右键白名单**：命中最靠近的 `[data-no-context-menu]` 祖先 ⇒ 一个菜单都不出（也不落兜底）。
+   目前只有欢迎页用它——弹窗态跑轻档样式，且那页没有菜单独占的能力；
 1. **输入框面优先**：命中 `input` 就直接用（粘贴/全选必须在输入框那一面，不许被容器面截走）；
 2. **显式面逐级上溯**：从最近的 `[data-context-surface]` 往外走，内层不表态（返回 `null`）才问外层，
    同一个 id 只问一次；

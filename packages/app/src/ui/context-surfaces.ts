@@ -14,6 +14,8 @@
  *
  * ## 三级策略（根路由 `buildContextMenuRoute`）
  *
+ * 0. **免右键白名单（先于一切）**：命中最靠近的 `[data-no-context-menu]` 祖先 ⇒ 这一片
+ *    **一个菜单都不出**（也不落兜底）。它表达的是「这里没有可做的事」，不是「这里没人认领」；
  * 1. **输入类面（优先）**：目标是 input / textarea / contenteditable ⇒ `input` 面（WP0 自带）。
  *    它排在最前面是刻意的：剪切/复制/粘贴/撤销重做是通用编辑语义，不是某个布局的私有面，
  *    不能被容器面（浮窗/面板/对话框）截走——右键输入框却弹出「关闭窗口」是错的行为；
@@ -94,8 +96,8 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
   { id: 'activity-bar', ariaLabel: '活动栏菜单', area: 'chrome' },
   { id: 'toolbar', ariaLabel: '工具栏菜单', area: 'chrome' },
   { id: 'status-bar', ariaLabel: '状态栏菜单', area: 'chrome' },
-  { id: 'welcome', ariaLabel: '欢迎页菜单', area: 'chrome' },
-  { id: 'welcome-recent', ariaLabel: '最近项目菜单', area: 'chrome' },
+  // 欢迎页（`welcome` / `welcome-recent`）**不在这张清单里**：它进的是免右键白名单
+  // （见下方 `NO_CONTEXT_MENU_ATTR`）——不是"面"，而是"这一片明确不出菜单"。
   { id: 'settings', ariaLabel: '设置菜单', area: 'chrome' },
   { id: 'keybindings', ariaLabel: '快捷键菜单', area: 'chrome' },
   // `market`：面板由插件 `ui-market` **承载**，但面的声明在宿主侧（见文件底部那段
@@ -113,6 +115,29 @@ export const CONTEXT_SURFACE_MANIFEST: readonly ContextSurfaceManifestEntry[] = 
 ];
 
 const MANIFEST_IDS = new Set(CONTEXT_SURFACE_MANIFEST.map((entry) => entry.id));
+
+/**
+ * **免右键白名单**的 DOM 标记（2026-10-26 欢迎页批）。
+ *
+ * 挂在根元素上即表示「这一整片右键不出菜单」——`buildContextMenuRoute` 第一级就查它，
+ * 命中即返回 `null`（不落兜底，也不问里面任何面）。
+ *
+ * ## 为什么欢迎页要进白名单（这是修一个真实事故，不是审美取舍）
+ *
+ * 欢迎页是无边框启动弹窗（`.app-frame-popup`），它跑在**轻档样式**下：`styles-project.css`
+ * 只在进项目时动态加载（`App.tsx` 的 `loadProjectStyles`）。而 `.context-menu` 的**定位几何**
+ * （`position: fixed` / `z-index` / 尺寸 / 内衬）当时全写在重档里 ⇒ 弹窗态右键出来的菜单
+ * 是一块**没有定位的裸块**：铺在页面顶端、通栏宽，遮罩算出来的高度是 0。
+ * 后果是连锁的——遮罩没面积 ⇒ 点空白关不掉；`.context-menu-backdrop` 只要在文档里，
+ * 整窗拖动判据（`canStartWindowDragFrom`）就一律拒拖 ⇒ **欢迎页既点不动也拖不动**。
+ *
+ * 两条修法都落了（缺一不可）：
+ * ① 本白名单：欢迎页不出菜单（它本来也没有菜单才能做的事——打开 / 继续 / 移除都有实心按钮）；
+ * ② 几何下沉：`.context-menu` / `.context-menu-backdrop` 的定位搬到 `context-menu.css`
+ *    （菜单组件自己的表，首屏链上就有），弹窗态里**任何**来源的菜单（如欢迎页上浮起的教程
+ *    模态）都不会再退化成裸块。
+ */
+export const NO_CONTEXT_MENU_ATTR = 'data-no-context-menu';
 
 /** 面的构建上下文（面据此判断「刚才点的是哪一行 / 哪个元素」） */
 export interface ContextSurfaceBuildContext {
@@ -281,6 +306,11 @@ export function buildContextMenuRoute(
   target: HTMLElement,
   event: MouseEvent,
 ): ContextMenuRoute | null {
+  // 零级：免右键白名单——这一片明确"没话说"，连兜底都不给（欢迎页见 NO_CONTEXT_MENU_ATTR）。
+  // `closest` 是**整片**语义（一路查到文档根）：标记面内部的任何元素都不出菜单。
+  // 欢迎页上浮起的模态（教程 / 首启动纸条 / 启动器）都是卡片的**兄弟节点**，不在标记里，
+  // 所以它们自己的面照旧工作。
+  if (target.closest(`[${NO_CONTEXT_MENU_ATTR}]`) !== null) return null;
   // 一级：输入类面**优先于一切容器面**——输入框里的剪切/复制/粘贴/撤销重做是通用编辑语义，
   // 不能被容器面（浮窗/面板/对话框/设置页）截走：右键输入框却弹出「关闭窗口」是错的行为。
   // 各面若想在输入框上给专属动作，靠 `input` 面自己的 build 分支去做，别在外层抢。

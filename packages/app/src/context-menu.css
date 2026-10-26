@@ -6,8 +6,9 @@
  *   2) Monaco 原生菜单（编辑器，0.57 未开 shadow DOM）：`.context-view.monaco-menu-container`。
  *
  * 加载顺序不设前提：
- *   - 自定义菜单的主规则在 styles.css（`.glass` 消费方名单里就有 `.context-menu`），
- *     本文件的玻璃面用 **`.context-menu.context-menu`** 双类抬一级特异性，谁先谁后都稳；
+ *   - 自定义菜单的**几何**就在本文件（见下一节，轻档也必须成立）；玻璃底与边在
+ *     styles.css 的 `.glass` 消费方名单里，本文件的玻璃面用 **`.context-menu.context-menu`**
+ *     双类抬一级特异性，谁先谁后都稳；
  *   - Monaco 在**首次打开菜单时**才把菜单样式表 append 到 <head>（menu.js 的
  *     `initializeOrUpdateStyleSheet`），天然排在我们后面 ⇒ 它的选择器全部加
  *     `:root .context-view.monaco-menu-container` 前缀抬特异度，不靠声明顺序碰运气。
@@ -15,6 +16,43 @@
  * 颜色只用既有 token（`--glass-*` / `--hover*` / `--fg*` / `--border*` / `--danger` …），
  * 不写死色值；`data-glass='solid'` 与 `prefers-reduced-motion` 各有明确回落。
  * ========================================================================== */
+
+/* ------------------------- 〇、几何（轻档也必须成立） ------------------------- */
+/* 2026-10-26 从 styles-project.css 搬来：那两段原先住在**重档**里，而重档只在进项目时
+   动态加载（`App.tsx` 的 `loadProjectStyles`）。欢迎弹窗 / 启动画面这些**轻档**状态里
+   右键照样能触发菜单（教程模态、兜底面），可菜单拿不到 `position: fixed` ⇒ 变成一块
+   通栏裸块、遮罩算出来 0 高：点空白关不掉，`.context-menu-backdrop` 一在文档里
+   `canStartWindowDragFrom` 就拒拖 ⇒ 整页既点不动也拖不动。
+   几何属于**组件自身**（本表随 `ui/context-menu.tsx` 进首屏链），不属于项目态装饰；
+   项目态外观（玻璃 / 行高 / 危险项…）仍在 styles-project.css 里叠加，两档互不欠账。 */
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+}
+/* 右键菜单：全站最高频的浮层。底与边交玻璃主规则（同 .modal/.toast 一家），这里只给
+   它自己的尺寸 / 内衬 / 入场。矮面把顶缘高光收进 56px——96px 的淡出带会铺满整块菜单，
+   "光从上面来"反而读不出来。 */
+.context-menu {
+  --glass-fade: 56px;
+  position: fixed;
+  z-index: calc(var(--z-modal) + 1);
+  min-width: 230px;
+  /* 上限 + 视口兜底：长菜单不许顶出屏幕（x 由 JS 夹，y 交这里封顶） */
+  max-width: min(340px, calc(100vw - var(--space-4) * 2));
+  max-height: min(72vh, calc(100vh - var(--space-4) * 2));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 内衬 5 = 同心圆角算式的一项：项圆角 4 + 内衬 5 ≈ 9 ⇒ 容器取 --radius-lg(10) */
+  padding: 5px;
+  border-radius: var(--radius-lg);
+  /* --shadow-1 实测没有切边末环（只有 --shadow-3 有），菜单浮在亮内容上正需要这一圈切边 */
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 1px rgba(0, 0, 0, 0.28);
+  /* 入场只走 opacity：本体带 backdrop-filter，transform 动画每帧都要重采样背后 = 掉帧主因 */
+  animation: fade-in var(--dur-1) var(--ease-out);
+}
 
 /* ------------------------------ 一、自定义菜单 ------------------------------ */
 

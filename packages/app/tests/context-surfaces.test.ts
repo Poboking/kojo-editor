@@ -145,13 +145,13 @@ describe('buildContextMenuRoute · 三级策略', () => {
     expect(picked).toEqual(['tutorial.restart']);
 
     declareContextSurface({
-      id: 'welcome',
-      ariaLabel: '欢迎页菜单',
+      id: 'status-bar',
+      ariaLabel: '状态栏菜单',
       area: 'chrome',
-      build: () => [{ id: 'welcome.reload', label: '刷新欢迎页' }],
+      build: () => [{ id: 'status.reload', label: '刷新状态栏' }],
     });
     // 缺省分发是空操作：不抛就合格（各面自己决定要不要接动作）
-    expect(() => buildContextMenuRoute(surfaceRoot('welcome'), event())?.onSelect('welcome.reload')).not.toThrow();
+    expect(() => buildContextMenuRoute(surfaceRoot('status-bar'), event())?.onSelect('status.reload')).not.toThrow();
   });
 
   it('未声明的面 id（元素上有属性但没人登记）也走兜底', () => {
