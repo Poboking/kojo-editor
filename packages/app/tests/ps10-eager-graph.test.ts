@@ -436,7 +436,7 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       `kojo2-cutover-settings.tsx` 引（它只用 `KitRadio`）⇒ 等于把其余九件整包拖进欢迎页。
     //       把 `KitRadio` 拆成单品叶子 `ui-kit/kit-radio.tsx`（+2.4 KB 进图）、消费方直引叶子，
     //       桶棒整份随之下图（懒面既有 `from '../ui-kit'` 一字未改、导出面不变）。
-    //     实测 **193 文件 / 2,847 KB**（较本档基 -13 KB），文件闸 193 不动（现读数 193，顶格 0 余量）；
+    //     实测 **193 文件 / 2,852 KB**（本档上游变基后读数，含本批减面；较同树未减面低 13 KB），文件闸 193 不动（现读数 193，顶格 0 余量）；
     //     KB 闸随现值 **2,870 → 2,860**（降闸不写理由）。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤193 文件 / ≤2,860 KB）`);
     expect(totalKb).toBeLessThanOrEqual(2_860);
