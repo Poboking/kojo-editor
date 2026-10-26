@@ -15,6 +15,8 @@
  * - `editor.*`：焦点编辑器的读数与受控写（经 editor-pane-registry 的登记簿，
  *   不碰 EditorPane 源码）：info / setValue / type / setCursor / markers；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
+ * - `dialogPolicy.{arm,armed,clear,status}`：目录对话框一次性自动应答（真壳 fetch 腿 /
+ *   web 页面腿；只答"打开＝读"，写域准入门与另存为不碰——见 `dialog-policy.ts` 头注裁决）；
  * - `perf.*`：UI 卡顿体检探针（可开关；帧分档 / 长任务×事件相关性 / 交互延迟 /
  *   逐源码文件的帧耗时归因——口径与阈值见 `perf-probe-core.ts`）；
  * - `dom.snapshot()`：结构快照（`dom-snapshot.ts` 的口径）。
@@ -25,6 +27,14 @@ import { version as APP_VERSION } from '../../package.json';
 import type { Kernel } from '@kojo/kernel';
 import { getDebugCommandRunner, whenDebugKernel } from './debug-registry';
 import { webHostActive, webHostOrigin } from './web-host-transport';
+import {
+  armChooseDir,
+  armedChooseDir,
+  clearChooseDir,
+  installShellDialogIntercept,
+  shellDialogInterceptStatus,
+  type DialogPolicyArmed,
+} from './dialog-policy';
 import { snapshotDocument, type DomSnapshot } from './dom-snapshot';
 import { createPerfProbe, type PerfProbe } from './perf-probe';
 import { summarizeReport } from './perf-probe-core';
@@ -59,6 +69,18 @@ export interface KojoDebugApi {
     markers(): Promise<{ resource: string; severity: number; message: string; line: number }[]>;
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
+  /**
+   * 目录对话框自动应答 policy（2026-10-26 era-pair 批，additive）：只一次性短路
+   * `choose_directory`（打开＝读）；`export_file` / `choose_file` / 写域准入门不应答。
+   * 真壳＝fetch 拦截腿（arm 时拦截腿未就位 ⇒ 抛错如实失败）；web 模式＝`webHostInvoke`
+   * 页面级优先，未 armed 时宿的 POST /policy 腿照旧。
+   */
+  dialogPolicy: {
+    arm(value: string | null): DialogPolicyArmed;
+    armed(): DialogPolicyArmed;
+    clear(): void;
+    status(): { readonly mode: 'shell' | 'web-debug'; readonly shellFetchWrapped: boolean };
+  };
   /** UI 卡顿体检（可开关；关着零开销）：start → 交互 → stop 出报告 */
   perf: {
     start(opts?: { blockingSampleMs?: number }): { started: true; note: string };
@@ -153,6 +175,15 @@ export function installDebug(): KojoDebugApi {
 
   // 性能探针（关着零开销；bus 相关性在 stop 时从环形缓冲取，不在采集期加订阅）
   const probe = createPerfProbe({ getBusRecent: (n) => busRecent(n) });
+
+  // 真壳对话框应答腿（2026-10-26 era-pair 批，PITFALLS 230）：调试面装载（?kojo-debug 选入）
+  // 才包 window.fetch；装载失败必须出声（铁律 4），dialogPolicy.arm 会随之如实抛错。
+  if (isTauri()) {
+    const intercept = installShellDialogIntercept((m) => console.info(`[kojo-debug] ${m}`));
+    if (!intercept.wrapped) {
+      console.warn(`[kojo-debug] 真壳对话框拦截腿未就位：${intercept.reason}——open-project 的目录应答不会生效`);
+    }
+  }
 
   const api: KojoDebugApi = {
     mode: isTauri() ? 'shell' : 'web-debug',
@@ -262,6 +293,20 @@ export function installDebug(): KojoDebugApi {
     },
     invoke(cmd, args) {
       return invoke(cmd, args);
+    },
+    dialogPolicy: {
+      arm(value) {
+        armChooseDir(value);
+        // 真壳里拦截腿没就位 ⇒ arm 不会有任何应答，别留"armed 但没人消费"的假状态：清掉并如实抛
+        if (isTauri() && !shellDialogInterceptStatus().wrapped) {
+          clearChooseDir();
+          throw new Error('真壳对话框拦截腿（fetch 包点）未就位，arm 不会生效——如实失败');
+        }
+        return armedChooseDir();
+      },
+      armed: () => armedChooseDir(),
+      clear: () => clearChooseDir(),
+      status: () => ({ mode: isTauri() ? ('shell' as const) : ('web-debug' as const), shellFetchWrapped: shellDialogInterceptStatus().wrapped }),
     },
     perf: {
       start: (opts) => probe.start(opts),

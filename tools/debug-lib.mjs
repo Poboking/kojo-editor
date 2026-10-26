@@ -273,6 +273,36 @@ export async function cdpClick(cdp, selector) {
 }
 
 /**
+ * 关闭首启「开发者的碎碎念」纸条（dev-note）。要点：它是**懒挂载**的——App.tsx 的
+ * Suspense fallback 本身就是一层 `.modal-mask`（`[data-lazy-mount="dev-note"]`），
+ * 「检查那一刻还没弹 ⇒ 放行」是挂载竞态（2026-10-26 debug-web-smoke 实拍：`.welcome-open`
+ * 的点击被随后 0.5s 内弹上的遮罩吃掉，60s 后才红）。所以等到**懒加载落定**为止：
+ * 纸条在场 ⇒ 真实路径关闭（ghost=先看看，同档案记「看过」不再弹）；fallback 遮罩在场 ⇒ 再等；
+ * 两者皆无 ⇒ 屏幕干净返回 true。超时仍有真纸条 ⇒ false（调用方决定是否红，不静默）。
+ */
+export async function dismissDevNoteMask(cdp, { timeoutMs = 6000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let closeTries = 0;
+  for (;;) {
+    if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
+      if (++closeTries > 3) return false; // 点了三次还在 ⇒ 如实交红，不死循环
+      await cdpClick(cdp, '.dev-note-actions .ghost').catch(() => {});
+      await sleep(250);
+      continue;
+    }
+    if (Date.now() >= deadline) return false;
+    const pending = await cdp.evalJs(`!!document.querySelector('[data-lazy-mount="dev-note"]')`);
+    if (!pending) {
+      // 冷 vite 上懒 chunk 可能恰在检查后挂上来：给一个短窗复核，无弹即干净
+      await sleep(300);
+      if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) continue;
+      return true;
+    }
+    await sleep(250);
+  }
+}
+
+/**
  * 文件树逐层展开，直到出现文件行（`.tree-file`）或无可再点。
  * 树的顶层是**角色分组**（`.tree-group-btn`，eraTW 家族视图），展开后才有目录
  * （`.tree-dir`）与文件行——三种子都按「未点过的先点」逐个展开。

@@ -8,7 +8,9 @@
  * 2. **二进制信封**（`decodeValue` / `base64ToArrayBuffer`）：批量读帧过 JSON 的还原；
  * 3. **DOM 结构快照**（`snapshotDocument`）：喂伪造 document，断言只认结构锚；
  * 4. **事件载荷瘦身**（`slimPayload`）：环形旁听不给大载荷留全量位；
- * 5. **源形状守门**（读源码字符串，形态照 `ps10-eager-graph` / `welcome-*` 先例）：
+ * 5. **对话框自动应答 policy**（`dialog-policy.ts`，2026-10-26 era-pair 批）：一次性消费语义、
+ *    custom-protocol fetch 腿的 URL 认法、合成应答形态对齐 ipc-protocol.js 消费链；
+ * 6. **源形状守门**（读源码字符串，形态照 `ps10-eager-graph` / `welcome-*` 先例）：
  *    - `main.tsx` 对 `debug/install-debug` 只许动态 import（开机图闸零影响的机制保证）；
  *    - `invoke.ts` 未选入时的原报错文案逐字保留（浏览器开发壳既有行为不许被顺手改掉）；
  *    - `tauri-bridge.ts` 的浏览器降级路径保留（调试宿不在场时仍显式「无监视能力」）。
@@ -16,13 +18,22 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   base64ToArrayBuffer,
   decodeValue,
   normalizeOrigin,
   resolveWebHostConfig,
 } from '../src/debug/web-host-transport';
+import {
+  armChooseDir,
+  armedChooseDir,
+  buildChooseDirResponse,
+  clearChooseDir,
+  consumeChooseDir,
+  installShellDialogIntercept,
+  parseIpcCmd,
+} from '../src/debug/dialog-policy';
 import { slimPayload } from '../src/debug/install-debug';
 import { snapshotDocument } from '../src/debug/dom-snapshot';
 
@@ -95,6 +106,55 @@ describe('web 调试宿 · 二进制信封还原', () => {
   });
 });
 
+/* ----------------------------- 对话框自动应答 policy ----------------------------- */
+
+describe('调试面 · dialogPolicy（choose_directory 一次性自动应答，2026-10-26 era-pair 批）', () => {
+  afterEach(() => clearChooseDir());
+
+  it('未 armed ⇒ 恒 miss（透传零触扰）；arm(null)=模拟取消也是有效应答且同样一次性', () => {
+    expect(armedChooseDir()).toEqual({ armed: false, value: null });
+    expect(consumeChooseDir()).toEqual({ hit: false });
+    armChooseDir(null);
+    expect(consumeChooseDir()).toEqual({ hit: true, value: null });
+    expect(consumeChooseDir()).toEqual({ hit: false }); // 兑现即清
+  });
+
+  it('arm→consume 一次性：命中取走并清空；重复 arm 后 arm 者生效', () => {
+    armChooseDir('C:\\game\\demo');
+    expect(armedChooseDir()).toEqual({ armed: true, value: 'C:\\game\\demo' });
+    expect(consumeChooseDir()).toEqual({ hit: true, value: 'C:\\game\\demo' });
+    expect(armedChooseDir().armed).toBe(false);
+    expect(consumeChooseDir().hit).toBe(false);
+    armChooseDir('C:\\game\\a');
+    armChooseDir('C:\\game\\b');
+    expect(consumeChooseDir()).toEqual({ hit: true, value: 'C:\\game\\b' });
+  });
+
+  it('parseIpcCmd：只认 custom-protocol 腿形态（ipc.localhost + 百分号解码 cmd）；其余 URL 一律 null=透传', () => {
+    expect(parseIpcCmd('http://ipc.localhost/choose_directory')).toBe('choose_directory');
+    expect(parseIpcCmd('https://ipc.localhost/choose_directory')).toBe('choose_directory');
+    expect(parseIpcCmd('http://ipc.localhost/plugin%3Afs%7Cread')).toBe('plugin:fs|read');
+    expect(parseIpcCmd('http://127.0.0.1:17777/invoke')).toBeNull();
+    expect(parseIpcCmd('http://localhost:1420/')).toBeNull();
+    expect(parseIpcCmd('not a url')).toBeNull();
+    expect(parseIpcCmd('http://ipc.localhost/%E0%A4%A')).toBeNull(); // 畸形百分号编码 ⇒ 透传
+  });
+
+  it('buildChooseDirResponse：与 ipc-protocol.js 消费链对齐（Tauri-Response ok + application/json 体）', async () => {
+    const res = buildChooseDirResponse('C:\\game\\demo');
+    expect(res.headers.get('Tauri-Response')).toBe('ok');
+    expect((res.headers.get('content-type') ?? '').split(',')[0]).toBe('application/json');
+    expect(await res.json()).toBe('C:\\game\\demo');
+    expect(await buildChooseDirResponse(null).json()).toBeNull();
+  });
+
+  it('installShellDialogIntercept：非壳环境（无 window.__TAURI_INTERNALS__）不偷偷包 fetch——带理由如实缺席', () => {
+    const r = installShellDialogIntercept(() => {});
+    expect(r.wrapped).toBe(false);
+    expect(r.reason ?? '').toContain('__TAURI_INTERNALS__');
+  });
+});
+
 /* ----------------------------- DOM 结构快照 ----------------------------- */
 
 describe('调试面 · DOM 结构快照（只认结构锚）', () => {
@@ -137,5 +197,23 @@ describe('调试面 · 源形状守门（懒装载与既有行为不被顺手改
 
   it('tauri-bridge.ts：调试宿不在场时仍显式「浏览器开发壳无文件监视能力」', () => {
     expect(tauriBridge).toMatch(/浏览器开发壳无文件监视能力（仅 Tauri 桌面壳有）/);
+  });
+
+  it('对话框应答拦截只住 debug/**：产品路径（invoke/tauri-bridge/App/use-project-session）零 dialogPolicy 触扰', () => {
+    const productSources: readonly [string, string][] = [
+      ['bridge/invoke.ts', invokeSrc],
+      ['bridge/tauri-bridge.ts', tauriBridge],
+      ['ui/App.tsx', read('packages/app/src/ui/App.tsx')],
+      ['ui/use-project-session.ts', read('packages/app/src/ui/use-project-session.ts')],
+    ];
+    for (const [name, src] of productSources) {
+      expect(src, `${name} 不该感知对话框应答面`).not.toMatch(/dialog-policy|dialogPolicy|armChooseDir|consumeChooseDir/);
+    }
+  });
+
+  it('web-host-transport 页面腿是「命中才短路」：choose_directory 且 hit 才 return，未命中照走宿 /invoke', () => {
+    const src = read('packages/app/src/debug/web-host-transport.ts');
+    expect(src).toMatch(/if \(cmd === 'choose_directory'\)/);
+    expect(src).toMatch(/if \(hit\.hit\)/);
   });
 });
