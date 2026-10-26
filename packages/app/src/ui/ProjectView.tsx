@@ -1217,6 +1217,7 @@ export function ProjectView({
       activeFile={activeFile}
       onReauth={onReauth}
       dirty={activeFile !== null && dirtyPaths.has(activeFile)}
+      dirtyCount={dirtyPaths.size}
       onSwitchEol={switchEolInActiveGroup}
       stats={{ fileCount, fnCount, indexing, indexError }}
       commandCtx={{ project, ...(activeFile ? { activeFile } : {}) }}

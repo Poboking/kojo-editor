@@ -200,12 +200,22 @@ describe('宿主确实抬号并把它接到 PanelBody（结构约定，少一环
     expect(pv).toContain('panelHostVersions={panelHostVersions}');
   });
 
-  it('ShellLayout：容器 / 分栏 / 浮窗四条渲染腿都把这一格转给 PanelBody', () => {
-    expect(shell.match(/hostVersion=\{panelHostVersions\?\.\[[^\]]+\]\}/g)?.length).toBeGreaterThanOrEqual(4);
+  it('ShellLayout：容器 / 分栏 / 浮窗三条渲染腿都把这一格转给 PanelBody（底栏那条改走 dock，见下）', () => {
+    expect(shell.match(/hostVersion=\{panelHostVersions\?\.\[[^\]]+\]\}/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  // 底栏 dock（VIS-13 · D-2）把"一格一份面板体"这件事搬进了 `bottom-dock.tsx`：
+  // 宿主仍只交一张表，dock 逐格查自己那一格的版本号 ⇒ 桥接腿一条都没断，只是换了个文件长。
+  it('底栏那条腿经 dock 转下去：宿主交整张表，dock 逐格取自己那一格喂 PanelBody', () => {
+    const dock = UI('bottom-dock.tsx');
+    expect(shell).toContain('hostVersions={panelHostVersions}');
+    expect(dock).toContain('hostVersion={hostVersions?.[p.id]}');
+    expect(dock).toMatch(/<PanelBody[^>]*hostVersion=\{hostVersion\}/);
   });
 
   it('抬号只给桥接面板：插件面板那三格查不到 ⇒ 比较按 0 走（一次切标签不该十只面板陪跑）', () => {
     expect(shell).toContain('panelHostVersions?.[activeAux.id]');
-    expect(shell).toContain('panelHostVersions?.[activeBottom.id]');
+    // 底栏不再有"唯一激活格"：dock 每格各查各的，查不到就是 undefined ⇒ 同一口径
+    expect(shell).not.toContain('panelHostVersions?.[activeBottom.id]');
   });
 });

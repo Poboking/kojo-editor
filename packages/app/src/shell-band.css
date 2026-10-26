@@ -1,0 +1,215 @@
+/*
+ * 壳层密度切片（车道 D · 1026-shell-chrome）——身份带、活动栏容器开关、状态栏三档注意力预算、
+ * 窄档降级。
+ *
+ * 为什么单独一个文件：`styles-project.css` / `styles.css` / `tokens.css` 是别的车道独占的
+ * 基座，本批不许伸手改。所以新样式全住这里，并且**每条选择器都带一层壳类**抬特异性
+ * （(0,2,0) 起），压过基座里的单类规则（(0,1,0)）——与两份文件的加载先后无关。
+ *
+ * 三档注意力预算（VIS-23 · D-5，只在本切片管辖的面内立规）：
+ *   主信号 = 允许 accent 色 **加** 形状双编码（进度轨、可点计数）；
+ *   次信号 = 只用字重，颜色留在 --fg 档（身份带里的项目名）；
+ *   元信息 = 一律 --fg-dim，且**不许再叠边框 / 底色**（索引读数、"已保存"）。
+ * 旁边那两枚约定 / 问题计数常态 dim、只读徽标常态透明发丝边是**刻意的降级**（"常态不喊狼"），
+ * 本切片一条都不抬——它们不是缺陷，不在这次优化的射程里。
+ */
+
+/* ------------------------- 身份带里的活动栏容器开关（D-1） ------------------------- */
+
+/* 底部面板 / 副侧栏两枚收到活动栏下缘，与设置钮同族：40px 方格、图标 20px（视图项是 22，
+   低半档表示"这是容器开关，不是视图项"）。 */
+.shell .ab-containers {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.shell .activitybar .ab-item.ab-container {
+  width: 40px;
+  height: 34px;
+  color: var(--fg-dim);
+}
+.shell .activitybar .ab-item.ab-container:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.shell .activitybar .ab-item.ab-container.active {
+  color: var(--fg);
+  background: rgb(var(--accent-rgb) / 0.14);
+}
+/* 开关组与上面的视图项之间那道分隔：一条发丝线，不加边框件 */
+.shell .activitybar .ab-containers {
+  position: relative;
+  padding-top: 6px;
+}
+.shell .activitybar .ab-containers::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 10px;
+  right: 10px;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ------------------------- 状态栏：索引读数升成进度轨（D-5） ------------------------- */
+
+/* 基座 `.sb-idx` 是纯文本 dim（零形状）；这里把它读作"轨 + 文字"两件事：
+   轨 = 形状编码（在途 / 完成 / 失败），文字 = 元信息档，颜色一律不动。 */
+.statusbar .sb-idx {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.statusbar .idx-rail {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--border);
+  overflow: hidden;
+}
+.statusbar .idx-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--sb-idx-fill, 0%);
+  border-radius: inherit;
+  background: var(--accent);
+}
+/* 完成态：铺满但**不铺严重度色**——静息索引好不需要被看见，走 --border-strong 半档 */
+.statusbar .sb-idx.ok .idx-fill {
+  background: var(--border-strong);
+}
+/* 失败态：轨本身断成红虚线（形状即状态），文案照旧四个字，不额外涂色 */
+.statusbar .sb-idx.err .idx-fill {
+  width: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--red) 0 4px,
+    transparent 4px 7px
+  );
+}
+/* 在途 · 有基线可算 ⇒ 定值轨；无基线（首建）⇒ 不定态扫掠，绝不显示一个假百分比 */
+.statusbar .sb-idx.in.pct .idx-fill {
+  transition: width var(--dur-2) var(--ease-out);
+}
+.statusbar .sb-idx.in:not(.pct) .idx-fill {
+  width: 40%;
+  animation: sb-idx-sweep 1.25s var(--ease-out) infinite;
+}
+@keyframes sb-idx-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+/* 减弱动效（应用内开关 + 系统偏好两把闸）：扫掠停成一条静止半轨，
+   信息一档不丢——"在途"仍由文案与轨在不在场表达。 */
+:root[data-motion='reduced'] .statusbar .sb-idx.in:not(.pct) .idx-fill {
+  animation: none;
+  width: 100%;
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .statusbar .sb-idx.in:not(.pct) .idx-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+  .statusbar .sb-idx.pct .idx-fill {
+    transition: none;
+  }
+}
+
+/* ------------------------- 状态栏：脏读数收成可点计数（D-6） ------------------------- */
+
+/* 基座 `.sb-dirty` 是 dim 文本 + `.on` 涂琥珀 + 一颗 circle-filled 点。同一件脏事在
+   标签条 / 工具条 / 状态栏说了三遍 ⇒ 状态栏这一遍改口径：不再报"当前文件"，只报
+   "整窗口欠几份"，并且**可点**（点了就走全部保存）。
+   主信号档 = accent 色 + 可点形状；零份时退回元信息档（dim、无边框、不涂色）。 */
+.statusbar .sb-dirty {
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.statusbar button.sb-dirty.on {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  min-height: 20px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
+}
+.statusbar button.sb-dirty.on:hover {
+  background: rgb(var(--accent-rgb) / 0.12);
+  border-color: rgb(var(--accent-rgb) / 0.34);
+  color: var(--accent-text);
+}
+.statusbar button.sb-dirty.on:active {
+  transform: none;
+  background: rgb(var(--accent-rgb) / 0.18);
+}
+
+/* ------------------------- 壳层窄档降级（D-4） ------------------------- */
+
+/* 改前：壳层五区（身份带 / 活动栏 / 侧栏 / 编辑器区 / 底栏）**零媒体查询**，
+   唯一的自适应是编辑器区那条 matchMedia ≤1280（不归本车道）。窗口下限 960×620
+   （`window-fullscreen.ts` 的 `EDITOR_MIN_SIZE`），实测 1576 视口里五区一律满配。
+   现在立两档：
+     <1180 ⇒ 活动栏只留图标（视图项/开关的文字档收掉），图标格降半档高；
+     <1024 ⇒ 主侧栏转 overlay（浮到编辑器区上，不占横向名额），带内项目名限宽再收紧。
+   刻意不改窗口下限：960 已经落在第二档里，把下限再压只会让"拖到最小就看不清"提前发生。 */
+@media (max-width: 1179px) {
+  .shell .activitybar {
+    width: 40px;
+  }
+  .shell .activitybar .ab-item {
+    width: 34px;
+    height: 34px;
+  }
+  .shell .ab-containers .ab-item.ab-container {
+    width: 34px;
+    height: 30px;
+  }
+  /* 带里挤的时候先让项目身份收缩，全局动作与窗控恒在 */
+  .shell .window-chrome .toolbar .tb-project,
+  .window-chrome .toolbar .tb-project {
+    max-width: min(18vw, 200px);
+  }
+}
+
+@media (max-width: 1023px) {
+  /* 主侧栏转 overlay：绝对定位浮在编辑器区之上（`.shell-main` 已是 flex 行容器，
+     这里靠 position:absolute 退出布局流 ⇒ 编辑器区不被挤窄）。
+     关掉它的路径不只有那枚开关：活动栏项照旧可点（点已激活那枚即收起）。 */
+  .shell .shell-main {
+    position: relative;
+  }
+  .shell .sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: var(--z-toolbar);
+    max-width: min(320px, 78vw);
+    box-shadow: var(--shadow-2);
+    border-right: 1px solid var(--border-strong);
+  }
+  /* overlay 态下侧栏的拖宽把手没意义（宽度由 overlay 自己定），收掉命中区 */
+  .shell .shell-main > .resizer.resizer-x:first-of-type {
+    pointer-events: none;
+    width: 0;
+    margin: 0;
+  }
+}

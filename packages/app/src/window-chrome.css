@@ -54,19 +54,63 @@
   flex: none;
   display: flex;
   align-items: center;
-  /* VIS-3：与工具条（min-height 36）／编辑器标签条（.editor-tab 36）同一横带高度，
-     旧值 34 会在窗口顶缘留下一条 2px 台阶。 */
-  height: 36px;
+  /* VIS-10（D-1）：三条 36px 横带并成两条——本带与并进来的工具条合成一条 40px「身份带」
+     （项目名 · 状态 · 全局动作 · 窗控）。40 而不是 36：工具条那颗 15px 图标 + 文案按钮
+     要 4px 的呼吸，36 会把按钮压成贴边；窗控仍按 Windows 尺度 44×带高，命中率不降。
+     带内空档仍可拖窗（见 `.window-chrome-band` 与 WindowChrome 的 `canStartWindowDragFrom`）。 */
+  height: 40px;
   padding-left: var(--space-3);
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   /* 顶缘受光：浅色主题下 --bg-2 接近白，只靠一条底边会和编辑器/工具条糊成一片；
-     一道 token 化的 inset 高光让这条 36px 读作「窗口 chrome」而不是另一条白带。 */
+     一道 token 化的 inset 高光让这条 40px 读作「窗口 chrome」而不是另一条白带。 */
   box-shadow: var(--edge-raise);
   color: var(--fg-dim);
   font-size: var(--fs-1);
   user-select: none;
   -webkit-user-select: none;
+  gap: var(--space-2);
+}
+
+/* 身份带插槽：ShellLayout 的工具条在真壳里 portal 进这里（`ui/identity-band.ts`）。
+   `flex: 1 1 auto + min-width: 0` ⇒ 带子被挤时先让工具条内部收缩，绝不把右端窗控顶出视野。
+   浏览器 dev 没有本带 ⇒ 插槽不存在 ⇒ 工具条留在原位，两处渲染同一份 JSX。 */
+.window-chrome .window-chrome-band {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+/* 工具条进带后不再自带一条底边与底色（它现在是带的一部分，不是第二条带）；
+   选择器带 `.window-chrome` 前缀抬特异性到 (0,2,0)，压过 `styles-project.css` 的 `.toolbar`
+   (0,1,0)——与加载顺序无关。本车道不动 `styles-project.css`（Lane B 独占）。 */
+.window-chrome .toolbar {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  gap: var(--space-1);
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
+  z-index: auto;
+}
+.window-chrome .toolbar .toolbar-left {
+  gap: 2px;
+}
+/* 带里的项目身份 = 状态档（次信号）：字重承担"这是哪一本"，不叠边框、不铺底色。
+   旧的 `.tb-project` 已有 --fg-dim，这里只补字重与收缩上限。 */
+.window-chrome .toolbar .tb-project {
+  font-weight: 600;
+  max-width: min(26vw, 320px);
+  padding-inline: var(--space-1);
+}
+/* 带内按钮走窗控同一档高度，命中区不小于 28×28（40px 带里上下各留 6px） */
+.window-chrome .toolbar .toolbar-btn {
+  min-height: 28px;
+  font-size: var(--fs-1);
 }
 
 /* 品牌记号（P3-4）：原「3px accent 竖条」升级为同款「口上/对话框」气泡（内联 SVG，

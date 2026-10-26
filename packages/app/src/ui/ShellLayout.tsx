@@ -7,22 +7,29 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
+import { createPortal } from 'react-dom';
+import '../shell-band.css';
+import { setIdentityBandFilled, useIdentityBandSlot } from './identity-band';
 import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  beginDockCellResize,
   beginLiveResize,
   beginSplitResize,
   defaultLayout,
+  dockCellIds,
   effectiveLocation,
   filterGameScopedPanels,
   gameScopeByPlugin,
@@ -37,6 +44,7 @@ import {
   type OrganizedPanels,
   type ViewDef,
 } from './layout';
+import { BottomDock } from './bottom-dock';
 import {
   PANEL_DRAG_MIME,
   acceptsPanelDrop,
@@ -189,7 +197,7 @@ import {
   WORKSPACE_SYMBOL_RENDER_LIMIT,
 } from './workspace-symbols';
 import { PanelBody, StatusbarItem } from './PanelHost';
-import { useOverlayPresence } from './overlay-chrome';
+import { OVERLAY_EXIT_CLASS, useOverlayPresence } from './overlay-chrome';
 import { projectDirName } from './window-title';
 import { ProblemsStatusItem } from './ProblemPanel';
 // 项目名旁的「更多」菜单（C-1a）：复用全站共享 <ContextMenu>（玻璃观感 + WAI-ARIA 键盘），不另造菜单
@@ -928,6 +936,12 @@ interface Props {
   /** 当前文件脏态（状态栏保存态指示） */
   dirty: boolean;
   /**
+   * 全局未保存文件数（VIS-24 · D-6）：状态栏那颗从"当前文件的保存态"改成
+   * "整窗口有几份没落盘"的可点计数——同一件脏事在标签条 / 工具条 / 状态栏说三遍，
+   * 只有这一遍是**可操作的**（点了就走全部保存）。0 ⇒ 不画数字，回落原措辞。
+   */
+  dirtyCount?: number;
+  /**
    * 状态栏 EOL 读数切档的落地入口（W7-H）。缺省 = 读数不可点；
    * EditorPane 上报 `eolSwitchable: true` 时才画入口。
    */
@@ -1006,6 +1020,7 @@ export function ShellLayout(props: Props): ReactElement {
     activeFile,
     onReauth,
     dirty,
+    dirtyCount = 0,
     onSwitchEol,
     stats,
     commandCtx,
@@ -2120,6 +2135,67 @@ export function ShellLayout(props: Props): ReactElement {
     [],
   );
 
+  /* ---------------- 底栏 dock（VIS-13 · D-2）：逐格高度与摘除 ---------------- */
+
+  /** dock 里各格的根元素（id → `<section>`）：拖拽期往它身上写内联 `height` */
+  const dockCellElsRef = useRef(new Map<string, HTMLElement>());
+  const registerDockCellEl = useCallback((id: string, el: HTMLElement | null): void => {
+    const els = dockCellElsRef.current;
+    if (el) els.set(id, el);
+    else els.delete(id);
+  }, []);
+
+  /**
+   * 逐格高度拖拽（判据⑤：拖拽零重渲纪律）。
+   *
+   * 与上面 `startDrag` 同一条纪律、同一个理由：**pointermove 一次都不进 reducer**——
+   * 底栏里挂着的是整块面板（问题列表几百行），每帧一次 `LayoutState` = 整壳重渲 +
+   * 一次 `JSON.stringify` 写盘。会话本体是 `layout.ts` 的 `beginDockCellResize`（纯函数，
+   * 可在 node 里按"120 次移动 ⇒ 1 次 commit"量出来），这里只管接手与收场。
+   *
+   * 起手高度现量 `clientHeight`：没拖过的格子内联是空的，量到的就是均分给它的实际像素，
+   * 于是"从均分接着拖"不需要在 JS 里另算一遍除法。
+   */
+  const startDockCellDrag = useCallback((e: ReactPointerEvent<HTMLElement>, id: string): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = dockCellElsRef.current.get(id);
+    if (!el) return;
+    const handle = e.currentTarget;
+    const pointerId = e.pointerId;
+    handle.setPointerCapture?.(pointerId);
+    const session = beginDockCellResize({
+      target: el,
+      startHeight: el.clientHeight,
+      startPos: e.clientY,
+      // 上限现量 dock 面板体区（格的父元素）：一格不许被拖得比整条底栏还能长，
+      // 否则它会被容器剪掉半截——这条尺交给浏览器量，比在 JS 里换算准。
+      maxPx: el.parentElement?.clientHeight,
+    });
+    const onMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      session.onMove(ev.clientY);
+    };
+    const onUp = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+      // 松手一次 commit：值就是拖拽期最后写进内联的那个数 ⇒ 零跳变、一次写盘
+      const height = session.finish();
+      if (height !== null) dispatch({ type: 'bottomHeight', id, height });
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, []);
+
+  /** 摘掉 dock 里的一格（该格头部的 ✕）；摘空即收起整条底栏 */
+  const closeDockCell = useCallback((id: string): void => {
+    dispatch({ type: 'bottomClose', id });
+  }, []);
+
   /**
    * 浮窗 DOM 引用（id → 根 `<section>`）。
    * 拖拽 / 缩放期间**直接改元素样式**、不进 reducer——否则每次 mousemove 都会产生新
@@ -2324,6 +2400,15 @@ export function ShellLayout(props: Props): ReactElement {
   const activeAux = org.aux.find((p) => p.id === layout.aux.active) ?? org.aux[0] ?? null;
   const activeBottom = org.bottom.find((p) => p.id === layout.bottom.active) ?? org.bottom[0] ?? null;
 
+  /**
+   * 底栏 dock 的读数（VIS-13 · D-2）：**在场**的是 `org.bottom`（标签条那排托盘），
+   * **并排挂着**的是 `dockCells`（面板体区里那几格）。两者都由 `dockCellIds` 一处算，
+   * 不在渲染里另写一份"哪颗该露出来"的判断。
+   */
+  const bottomIds = org.bottom.map((p) => p.id);
+  const dockIds = dockCellIds(layout, bottomIds);
+  const dockCells = org.bottom.filter((p) => dockIds.includes(p.id));
+
   /** 侧栏组内折叠状态（会话级，不持久化——定稿 §七持久化清单不含组内折叠） */
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggleCollapse = (panelId: string): void =>
@@ -2513,7 +2598,7 @@ export function ShellLayout(props: Props): ReactElement {
         <button
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
-          title={`${v.title}（可拖拽到其他容器）`}
+          title={v.title}
           data-view-key={v.key}
           draggable
           tabIndex={v.key === abTabKey ? 0 : -1}
@@ -2536,7 +2621,7 @@ export function ShellLayout(props: Props): ReactElement {
         <button
           key={v.key}
           className={`ab-item ${layout.sidebar.visible && v.key === layout.sidebar.active ? 'active' : ''}`}
-          title={`${v.title}（可拖拽到其他容器）`}
+          title={v.title}
           data-view-key={v.key}
           draggable
           tabIndex={v.key === abTabKey ? 0 : -1}
@@ -2554,6 +2639,28 @@ export function ShellLayout(props: Props): ReactElement {
           <Icon name={v.icon ?? v.title.slice(0, 1)} size={22} />
         </button>
       ))}
+      {/* 容器开关组（VIS-10 · D-1）：这三枚原来挤在工具条右端，与上面的视图项互相抢答。
+          现在"开关哪个容器"住在这一列的下缘——视图项管"看哪一本"，这组管"这本书摆在
+          哪儿、开不开"，两件事各在其位。主侧栏的开关就是上面那组视图项本身（点已激活
+          的那一枚即收起），故这里只补底部区与副侧栏两枚；命令与快捷键一条不动。 */}
+      <div className="ab-containers" role="group" aria-label="容器开关">
+        <button
+          className={`ab-item ab-container ${layout.bottom.visible ? 'active' : ''}`}
+          title="底部面板 (Ctrl+J)"
+          aria-pressed={layout.bottom.visible}
+          onClick={() => dispatch({ type: 'toggle', container: 'bottom' })}
+        >
+          <Icon name="layout-panel-bottom" size={20} />
+        </button>
+        <button
+          className={`ab-item ab-container ${layout.aux.visible ? 'active' : ''}`}
+          title="副侧栏 (Ctrl+Alt+B)"
+          aria-pressed={layout.aux.visible}
+          onClick={() => dispatch({ type: 'toggle', container: 'aux' })}
+        >
+          <Icon name="layout-sidebar-right" size={20} />
+        </button>
+      </div>
       <button className="ab-item" title="设置" onClick={() => { setSettingsSection('general'); setSettingsOpen(true); }}>
         <Icon name="settings" size={22} />
       </button>
@@ -2582,7 +2689,7 @@ export function ShellLayout(props: Props): ReactElement {
             >
               <button
                 className="sidebar-section-head"
-                title={`${p.title}（可拖拽到其他容器）`}
+                title={p.title}
                 // 右键面根（WP3.7 分区头）：data-panel-id 让菜单知道「是哪一节」；
                 // 「折叠 / 展开」的文案由宿主按会话折叠态给（状态真源仍在 React 这边）
                 data-context-surface="panel-section-header"
@@ -2625,7 +2732,20 @@ export function ShellLayout(props: Props): ReactElement {
     </div>
   );
 
-  const tabStrip = (container: 'aux' | 'bottom', items: readonly UIPanelContribution[], activeId: string | null): ReactElement => (
+  /**
+   * 容器标签条（aux / bottom 共用一条）。
+   *
+   * 底栏多传一格 `dock`（VIS-13 · D-2）：那一排从"互斥的标签页"变成**托盘**——
+   * `aria-selected` 说的是"这颗此刻并排挂在 dock 里"（可以好几颗同时为真），
+   * 点一下是**加进**展开集（`activate` 在底栏已改走 `bottomOpen`，不掉别颗），
+   * 空白处**双击**＝折叠/展开整条面板体。aux 不传 ⇒ 逐字保持旧的单选语义。
+   */
+  const tabStrip = (
+    container: 'aux' | 'bottom',
+    items: readonly UIPanelContribution[],
+    activeId: string | null,
+    dock?: { openIds: readonly string[]; collapsed: boolean },
+  ): ReactElement => (
     <div
       className="panel-tabs"
       role="tablist"
@@ -2634,15 +2754,28 @@ export function ShellLayout(props: Props): ReactElement {
       data-context-surface="panel-tabs"
       data-panel-tabs-container={container}
       data-active-panel={activeId ?? ''}
+      {...(dock === undefined ? {} : { 'data-dock-collapsed': dock.collapsed ? 'true' : 'false' })}
+      {...(dock === undefined
+        ? {}
+        : {
+            title: '双击折叠 / 展开底栏',
+            // 双击落在标签按钮或条尾按钮上不算"双击这一条"（那两下先按了按钮，语义归按钮）
+            onDoubleClick: (e: ReactMouseEvent<HTMLElement>) => {
+              if ((e.target as HTMLElement).closest('button')) return;
+              dispatch({ type: 'bottomToggleCollapse' });
+            },
+          })}
     >
       {items.map((p, i) => (
         <button
           key={p.id}
           role="tab"
-          aria-selected={p.id === activeId}
+          aria-selected={dock !== undefined && dock.openIds.includes(p.id)}
           tabIndex={p.id === activeId ? 0 : -1}
-          className={`panel-tab ${p.id === activeId ? 'active' : ''}`}
-          title={`${p.title}（可拖拽到其他容器）`}
+          className={`panel-tab ${p.id === activeId ? 'active' : ''} ${
+            dock !== undefined && dock.openIds.includes(p.id) ? 'in-dock' : ''
+          }`}
+          title={p.title}
           data-panel-id={p.id}
           draggable
           onKeyDown={(e) => tabStripKeyDown(e, container, items, i)}
@@ -2674,6 +2807,20 @@ export function ShellLayout(props: Props): ReactElement {
 
   /** 「更多」菜单的项表（模块内常量：身份稳定，ContextMenu 不因每帧新数组重排焦点） */
   const projectMenuItems: ContextMenuItem[] = [{ id: 'project.close', label: '关闭项目', danger: true }];
+
+  /**
+   * 身份带插槽（VIS-10 · D-1）：真壳里标题栏在 App 根部先挂好，工具条 portal 进它那段
+   * 插槽 ⇒ 36(标题栏)+36(工具条)+37(标签条) 收成 40(身份带)+37(标签条) 两条。
+   * 浏览器 dev / node 测试里 `WindowChrome` 返回 `null`、没有插槽 ⇒ 工具条留在原位，
+   * 少的是那条本来就不存在的标题栏与三枚窗控，**一项功能都不丢**。
+   */
+  const identityBand = useIdentityBandSlot();
+  /** 占用登记：让标题栏知道"带里已经有人报过项目名了"，它自己那串就只留产品名 */
+  useEffect(() => {
+    if (identityBand === null) return;
+    setIdentityBandFilled(true);
+    return () => setIdentityBandFilled(false);
+  }, [identityBand]);
 
   const toolbar = (
     <header className="toolbar" data-context-surface="toolbar">
@@ -2737,33 +2884,11 @@ export function ShellLayout(props: Props): ReactElement {
           );
         })}
       </div>
-      {/* 分组分隔（C-1a）：左簇 = 项目操作，右簇 = 纯视图开关 */}
-      <span className="toolbar-sep" aria-hidden="true" />
-      <div className="toolbar-right">
-        <button
-          className={`ghost small toolbar-btn ${layout.sidebar.visible ? 'on' : ''}`}
-          title="切换主侧栏 (Ctrl+B)"
-          onClick={() => dispatch({ type: 'toggle', container: 'sidebar' })}
-        >
-          <Icon name="layout-sidebar-left" size={15} />
-        </button>
-        <button
-          className={`ghost small toolbar-btn ${layout.bottom.visible ? 'on' : ''}`}
-          title="切换底部区 (Ctrl+J)"
-          onClick={() => dispatch({ type: 'toggle', container: 'bottom' })}
-        >
-          <Icon name="layout-panel-bottom" size={15} />
-        </button>
-        <button
-          className={`ghost small toolbar-btn ${layout.aux.visible ? 'on' : ''}`}
-          title="切换副侧栏 (Ctrl+Alt+B)"
-          onClick={() => dispatch({ type: 'toggle', container: 'aux' })}
-        >
-          <Icon name="layout-sidebar-right" size={15} />
-        </button>
-        {/* 「重置布局」不再占工具条一排（与设置页/命令面板重复，C-1a）：
-            功能仍在——命令 `layout.reset`（ShellLayout 注册）与设置页 `onResetLayout={doReset}` 两个入口。 */}
-      </div>
+      {/* 视图开关（旧 `.toolbar-right` 三枚）从身份带上摘掉（VIS-10 · D-1）：
+          切换主侧栏 / 底部区 / 副侧栏与活动栏入口是同一件事，一排三个"开关灯"的图标
+          挤在项目身份旁边只会把带子读成第二根工具条。命令 `layout.toggleSidebar` /
+          `layout.toggleBottom` / `layout.toggleAux` 与 Ctrl+B / Ctrl+J / Ctrl+Alt+B
+          一条不动，鼠标入口整体搬到活动栏下缘那组容器开关（见 `activityBar`）。 */}
       {projectMenuAt !== null && onCloseProject ? (
         <ContextMenu
           x={projectMenuAt.x}
@@ -2815,6 +2940,32 @@ export function ShellLayout(props: Props): ReactElement {
   const [secondaryCountsOpen, setSecondaryCountsOpen] = useState(false);
   const hasSecondaryCounts = statusbarItems.some((s) => (s.align ?? 'right') === 'left');
 
+  /**
+   * 索引进度轨的**分母**（VIS-23 · D-5）：壳层今天拿不到"扫描总数"——`stats.indexing` 只是
+   * 一个由宿主上抛的布尔，条目数是边扫边长出来的。所以百分比只认真读数：上一次索引完成时
+   * 的文件数基线（按项目根目录键控，换项目即作废）。首建没有基线 ⇒ 宁可不给百分比，
+   * 只让轨做不定态扫掠，绝不编一个假分数（铁律 4：不许静默，也不许假响）。
+   */
+  const indexBaselineRef = useRef<{ root: string; count: number } | null>(null);
+  const indexRootKey = commandCtx.project?.rootDir ?? '';
+  useEffect(() => {
+    if (!commandCtx.project) {
+      indexBaselineRef.current = null;
+      return;
+    }
+    if (stats.indexing || stats.indexError !== null) return;
+    indexBaselineRef.current = { root: indexRootKey, count: stats.fileCount };
+  }, [commandCtx.project, stats.indexing, stats.indexError, stats.fileCount, indexRootKey]);
+  const indexBaseline = indexBaselineRef.current;
+  const indexPct =
+    stats.indexing && indexBaseline !== null && indexBaseline.root === indexRootKey && indexBaseline.count > 0
+      ? Math.min(100, Math.round((stats.fileCount / indexBaseline.count) * 100))
+      : null;
+  /** 轨的填充长度走 CSS 自定义属性（不定态由 CSS 接管，不读这个值） */
+  const indexFillStyle = {
+    '--sb-idx-fill': `${indexPct ?? (stats.indexing ? 0 : 100)}%`,
+  } as CSSProperties;
+
   const statusbar = (
     <footer
       className={`statusbar ${layout.zen ? 'zen' : ''}`}
@@ -2856,23 +3007,33 @@ export function ShellLayout(props: Props): ReactElement {
           ))}
         {/* 问题计数小件（HK-4 · UI-6）：与约定校验的 `.sb-diag` 相邻；点击打开问题面板 */}
         <ProblemsStatusItem onClick={() => dispatch({ type: 'activate', container: 'bottom', key: 'kojo.problems' })} />
-        {!layout.zen &&
-          (stats.indexError ? (
-            // 第一眼只说状态（原文已由打开项目那条通知说过一遍——一处状态只占一格）；
-            // 原始错误（路径 + 英文栈式片段）逐字留在悬停里，技术信息一条不丢
-            //（口径同 `ui-kojo-navigator` 的 `panel-copy.ts`：首句人话，原文进 title）。
-            // 2026-10-20 复核：常驻 chrome 只有四个字 + 悬停看原因是**刻意的**（用户认可维持现状），
-            // 别把它当成"状态栏信息不足"来补长——同一状态只在通知那一处占格。
-            <span className="sb-idx err" data-status-cell="" title={`索引失败：${stats.indexError}`}>
-              索引失败
+        {!layout.zen && (
+          // 索引读数（VIS-23 · D-5）：纯文本升成"2px 进度轨 + 文字档"。
+          // 轨是三态形状编码（in = 在途扫掠 / ok = 完成铺满 / err = 断口），文字仍是元信息档
+          // （dim、不叠边框）——只加形状，不抢严重度色：口径与旁边约定/问题计数的
+          // "常态不喊狼"一致（那是刻意的降级，见 2026-10-20 复核注释），故失败也只把轨染红，
+          // 常驻文案照旧四个字 + 悬停看原因。
+          <span
+            className={`sb-idx ${stats.indexError ? 'err' : stats.indexing ? indexPct !== null ? 'in pct' : 'in' : 'ok'}`}
+            data-status-cell=""
+            {...(stats.indexError ? { title: `索引失败：${stats.indexError}` } : {})}
+          >
+            <span className="idx-rail" aria-hidden="true">
+              <span className="idx-fill" style={indexFillStyle} />
             </span>
-          ) : stats.indexing ? (
-            <span className="sb-idx" data-status-cell="">索引构建中…</span>
-          ) : (
-            <span className="sb-idx" data-status-cell="">
-              {stats.fileCount} 文件 · {stats.fnCount} 函数
+            <span className="idx-text">
+              {stats.indexError ? (
+                '索引失败'
+              ) : stats.indexing ? (
+                indexPct === null ? '索引构建中…' : `索引构建中 ${indexPct}%`
+              ) : (
+                <>
+                  {stats.fileCount} 文件 · {stats.fnCount} 函数
+                </>
+              )}
             </span>
-          ))}
+          </span>
+        )}
       </div>
       <div className="sb-right">
         {statusbarItems
@@ -2889,23 +3050,26 @@ export function ShellLayout(props: Props): ReactElement {
           encodingActions={statusEncodingActions}
           onError={(message) => notify({ kind: 'error', message })}
         />
-        {/* 脏读数（C-1a 语义修正）：只读态下「已保存」是误导——这份文件根本走不了保存；
-            没有改动时如实说「未修改」。有未保存改动仍显示「未保存」（那是事实）。 */}
-        <span
-          className={`sb-dirty ${dirty ? 'on' : ''}`}
-          data-status-cell=""
-          title={dirty ? '有未保存修改' : writablePill === 'ro' ? '当前文件只读，没有改动' : '已保存'}
-        >
-          {dirty ? (
-            <>
-              <Icon name="circle-filled" size={9} /> 未保存
-            </>
-          ) : writablePill === 'ro' ? (
-            '未修改'
-          ) : (
-            '已保存'
-          )}
-        </span>
+        {/* 脏读数（VIS-24 · D-6 收三处为一处）：主信号（当前文件有没有改）归标签条那颗点，
+            这一格只答"整个窗口还欠几份没落盘"，并且**可点**——按下去就是全部保存。
+            零份时不喊狼：只留文字档（只读态说「未修改」，其余「已保存」），与旁边
+            约定/问题计数的常态 dim 同一档注意力预算。
+            只读态下「已保存」是误导——这份文件根本走不了保存，所以没改动时如实说「未修改」。 */}
+        {dirtyCount > 0 ? (
+          <button
+            type="button"
+            className="sb-dirty on"
+            data-status-cell=""
+            title={`有 ${dirtyCount} 个文件未保存，点击全部保存`}
+            onClick={() => runToolbarCommand('workbench.saveAll')}
+          >
+            未保存 {dirtyCount} 个文件
+          </button>
+        ) : (
+          <span className="sb-dirty" data-status-cell="" title={writablePill === 'ro' ? '当前文件只读，没有改动' : '已保存'}>
+            {writablePill === 'ro' ? '未修改' : '已保存'}
+          </span>
+        )}
       </div>
     </footer>
   );
@@ -2958,7 +3122,7 @@ export function ShellLayout(props: Props): ReactElement {
         >
           <div
             className={`overlay-host${overlayContribution?.size === 'wide' ? ' overlay-host-wide' : ''}${
-              overlayContribution === null ? ' ov-exiting' : ''
+              overlayContribution === null ? ` ${OVERLAY_EXIT_CLASS}` : ''
             }`}
             role="dialog"
             aria-modal="true"
@@ -3041,7 +3205,7 @@ export function ShellLayout(props: Props): ReactElement {
 
   return (
     <div className="shell">
-      {toolbar}
+      {identityBand !== null ? createPortal(toolbar, identityBand) : toolbar}
       <div className="shell-main">
         {activityBar}
         {layout.sidebar.visible && activeView ? (
@@ -3093,7 +3257,7 @@ export function ShellLayout(props: Props): ReactElement {
           </>
         ) : null}
       </div>
-      {layout.bottom.visible && activeBottom ? (
+      {layout.bottom.visible && org.bottom.length > 0 ? (
         <>
           <div
             className="resizer resizer-y"
@@ -3109,14 +3273,25 @@ export function ShellLayout(props: Props): ReactElement {
             style={{ height: layout.bottom.size }}
             {...dropProps('bottom')}
           >
-            {tabStrip('bottom', org.bottom, layout.bottom.active)}
-            <div className="container-body">
-              <PanelBody
-                contribution={activeBottom}
+            {tabStrip('bottom', org.bottom, layout.bottom.active, {
+              openIds: dockIds,
+              collapsed: layout.bottomCollapsed === true,
+            })}
+            {/* 折叠态（判据④）：面板体整块不挂载——不是 `display:none`，是那一整棵子树
+                一次都不渲；再双击回来时面板体靠各自的订阅重建，不丢数据。 */}
+            {layout.bottomCollapsed === true ? null : (
+              <BottomDock
+                cells={dockCells}
+                activeId={activeBottom?.id ?? null}
+                heights={layout.bottomHeights}
                 uiPrefs={uiPrefs}
-                hostVersion={panelHostVersions?.[activeBottom.id]}
+                hostVersions={panelHostVersions}
+                registerEl={registerDockCellEl}
+                onResizeStart={startDockCellDrag}
+                onFloat={floatPanel}
+                onClose={closeDockCell}
               />
-            </div>
+            )}
           </section>
         </>
       ) : null}

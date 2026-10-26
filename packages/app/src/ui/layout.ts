@@ -39,6 +39,24 @@ export interface LayoutState {
   panelLocations: Record<string, PanelLocation>;
   /** 浮动面板 id → 几何；非模态可移动浮窗，独立于三容器 */
   floating: Record<string, FloatingState>;
+  /**
+   * 底栏 dock 的逐面板高度记忆（VIS-13 · D-2）：panelId → 该节高度 px。
+   * **可选**：缺省 = 没拖过 = 均分容器高度，旧持久化数据原样可读（不必抬版本、不必迁移）。
+   * 只在 dock 里并排多份面板时才有意义——同看"问题 + 约定校验"不必再开浮窗。
+   */
+  bottomHeights?: Record<string, number>;
+  /**
+   * 底栏 dock 的并排展开集（VIS-13 · D-2）：此刻挂在 dock 里的那些面板 id。
+   * **可选**：缺省（旧持久化数据里根本没这个键）= 只挂当前激活的那一颗，
+   * 即改动前的单面板形态 ⇒ 老库原样可读，不抬版本、不写迁移。
+   * 呈现序恒按编排结果（`organizePanels` 的 order 升序），这一份只记**在场与否**。
+   */
+  bottomDock?: string[];
+  /**
+   * 底栏折叠态（VIS-13 · D-2 判据④）：`true` = 双击 tab 条收成"只剩那一条"，
+   * 面板体不挂载（内容不重渲、不占高）。**可选**：缺省 = 展开，旧数据读作展开。
+   */
+  bottomCollapsed?: boolean;
 }
 
 /** 侧栏视图容器：group 合并（多面板折叠堆叠）或独占（单面板） */
@@ -71,6 +89,22 @@ export const SIZE_LIMITS = {
 
 export type ContainerKey = 'sidebar' | 'aux' | 'bottom';
 
+/* ---------------- 底栏 dock（VIS-13 · D-2）的尺寸尺 ---------------- */
+
+/** dock 里一节的**最短高度**（48px ≈ 一条头 + 两行列表；比这再矮就等于把那一格拖没了） */
+export const DOCK_MIN_CELL_HEIGHT = 48;
+
+/**
+ * dock 里单颗面板节的**高度**钳制区间（区别于容器整体的 `SIZE_LIMITS.bottom`）：
+ * 上界借容器上限——一格不许比整条底栏还能长，否则它会把编辑器挤没。
+ */
+export const DOCK_SIZE_LIMITS = { min: DOCK_MIN_CELL_HEIGHT, max: SIZE_LIMITS.bottom.max } as const;
+
+/** 逐格高度的钳制（写进 `bottomHeights` 之前先过这道尺） */
+export function clampDockHeight(px: number): number {
+  return Math.min(DOCK_SIZE_LIMITS.max, Math.max(DOCK_SIZE_LIMITS.min, Math.round(px)));
+}
+
 
 export type LayoutAction =
   | { type: 'toggle'; container: ContainerKey }
@@ -84,6 +118,18 @@ export type LayoutAction =
   | { type: 'dock'; id: string }
   | { type: 'moveFloating'; id: string; x: number; y: number }
   | { type: 'resizeFloating'; id: string; w: number; h: number }
+  /**
+   * 底栏 dock：把一颗面板**并排挂进**底栏（VIS-13 · D-2）。
+   * 与旧的 `activate` 区别：`activate` 只挪"哪一颗是激活项"，dock 的展开集是**叠加**的——
+   * 已挂着的照旧挂着，同看"问题 + 约定校验"不必再开浮窗。
+   */
+  | { type: 'bottomOpen'; id: string }
+  /** 底栏 dock：摘掉一颗（该格的 ✕）；摘空即收起整条底栏 */
+  | { type: 'bottomClose'; id: string }
+  /** 底栏 dock：逐格高度的**松手 commit**（拖拽期只写内联，见 `beginDockCellResize`） */
+  | { type: 'bottomHeight'; id: string; height: number }
+  /** 底栏折叠 / 展开（双击 tab 条）：`bottomCollapsed` 翻转，面板体整块挂载 / 卸载 */
+  | { type: 'bottomToggleCollapse' }
   /** 封存总闸切换后面板集合增删时的再清洗（org = 新集合的编排结果） */
   | { type: 'reconcile'; org: OrganizedPanels }
   | { type: 'reset'; state: LayoutState };
@@ -97,10 +143,19 @@ export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
   switch (a.type) {
     case 'toggle': {
       const c = s[a.container];
+      // 底栏重新拉起来时，若 dock 已被摘空（用户把每格都关了 ⇒ 整条收起），
+      // 别给出一条"只剩托盘的空底栏"：把激活那颗再挂回去。折叠态也顺手展开。
+      if (a.container === 'bottom' && !c.visible && materializedDock(s).length === 0 && c.active !== null) {
+        return bottomOpen(s, c.active);
+      }
       return { ...s, [a.container]: { ...c, visible: !c.visible } };
     }
     case 'activate': {
       const c = s[a.container];
+      if (a.container === 'bottom') {
+        // 底栏的"激活"在 dock 语义里 = 把它挂进来并聚焦（已经在场的照旧在场，不互斥）
+        return bottomOpen(s, a.key);
+      }
       return { ...s, [a.container]: { ...c, active: a.key, visible: true } };
     }
     case 'resize': {
@@ -112,6 +167,10 @@ export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
       // 移动到目标容器并激活它；sidebar 的激活单位是视图 key
       if (a.to === 'sidebar') {
         return { ...s, panelLocations, sidebar: { ...s.sidebar, visible: true, active: a.viewKey } };
+      }
+      if (a.to === 'bottom') {
+        // 移进底栏 = 挂进 dock（否则已展开的 dock 会把新来的这颗吞在标签条后面）
+        return bottomOpen({ ...s, panelLocations }, a.id);
       }
       const c = s[a.to];
       return { ...s, panelLocations, [a.to]: { ...c, visible: true, active: a.id } };
@@ -149,12 +208,87 @@ export function reducer(s: LayoutState, a: LayoutAction): LayoutState {
         },
       };
     }
+    case 'bottomOpen':
+      return bottomOpen(s, a.id);
+    case 'bottomClose':
+      return bottomClose(s, a.id);
+    case 'bottomHeight': {
+      // 松手才走到这里（拖拽期只写内联样式，见 `beginDockCellResize`）——一次 commit 一格
+      const same = s.bottomHeights?.[a.id];
+      const height = clampDockHeight(a.height);
+      if (same === height) return s;
+      return { ...s, bottomHeights: { ...s.bottomHeights, [a.id]: height } };
+    }
+    case 'bottomToggleCollapse':
+      // 双击 tab 条：展开 ⇄ 只剩一条。这是一次手势（不是一帧一次），落一次盘而已。
+      return { ...s, bottomCollapsed: s.bottomCollapsed !== true };
     case 'reconcile':
       // 封存总闸切换后面板集合增删，失效 active / 位置 override 须按新集合清洗
       return reconcileLayout(s, a.org);
     case 'reset':
       return a.state;
   }
+}
+
+/* ---------------- 底栏 dock（VIS-13 · D-2）：展开集与逐格高度 ---------------- */
+
+/**
+ * dock 里此刻该挂哪几颗（**纯函数，消费方只认这一份口径**）：
+ * - `bottomDock` 有值 ⇒ 取它与"当前在场的 bottom 面板 id"的交集，**呈现序恒按传入序**
+ *   （= `organizePanels` 的 order 升序）——展开集只记"在场与否"，不另存一套排序；
+ * - `bottomDock` 缺省（= 旧持久化数据里根本没这个键）⇒ 只挂当前激活的那一颗，
+ *   与改动前的单面板形态逐字一致；激活项已失效则挂首个在场面板；一颗都没有 ⇒ 空；
+ * - 已浮动的面板由调用方从 `bottomIds` 里排除（`org` 本来就不含浮动者）。
+ */
+export function dockCellIds(s: LayoutState, bottomIds: readonly string[]): string[] {
+  if (s.bottomDock === undefined) {
+    const active = s.bottom.active;
+    if (active !== null && bottomIds.includes(active)) return [active];
+    return bottomIds.length > 0 ? [bottomIds[0] as string] : [];
+  }
+  return bottomIds.filter((id) => s.bottomDock?.includes(id) === true);
+}
+
+/** 展开集的当前内容；缺省态按旧行为物化（只有激活那一颗），好让"叠加"有个起点 */
+function materializedDock(s: LayoutState): string[] {
+  if (s.bottomDock !== undefined) return s.bottomDock;
+  const active = s.bottom.active;
+  return active === null ? [] : [active];
+}
+
+/** 展开集的**叠加**语义：已挂着的不掉（这就是"不再互斥到只剩一个"的全部机制） */
+function withDockPanel(s: LayoutState, id: string): string[] {
+  const cur = materializedDock(s);
+  return cur.includes(id) ? cur : [...cur, id];
+}
+
+function bottomOpen(s: LayoutState, id: string): LayoutState {
+  const dock = withDockPanel(s, id);
+  return {
+    ...s,
+    bottomDock: dock,
+    // 点标签即把底栏带出来，且顺手展开（折叠态下点 tab 只把面板挂进去却看不见 = 更奇怪）
+    bottomCollapsed: false,
+    bottom: { ...s.bottom, visible: true, active: id },
+  };
+}
+
+function bottomClose(s: LayoutState, id: string): LayoutState {
+  const dock = materializedDock(s).filter((x) => x !== id);
+  const active = s.bottom.active;
+  // 摘掉的是激活项 ⇒ 激活落到"最后挂进去的那颗"；摘空时**保留刚被摘掉那颗**当激活项——
+  // 它是"用户最后看的是谁"这条记忆的唯一载体，Ctrl+J 再拉起来时要靠它把格子挂回去。
+  const nextActive = active !== null && dock.includes(active) ? active : (dock[dock.length - 1] ?? active);
+  return {
+    ...s,
+    bottomDock: dock,
+    bottom: {
+      ...s.bottom,
+      active: nextActive,
+      // 摘空 = 整条底栏收起（与旧的 ✕ 同一结局：底栏不该留一条空壳在场）
+      visible: dock.length > 0 ? s.bottom.visible : false,
+    },
+  };
 }
 
 /* ---------------- PS-6：拖拽期的实时样式会话（零 React） ---------------- */
@@ -208,6 +342,38 @@ export function beginLiveResize(opts: {
       const size = clamp(opts.container, opts.startSize + opts.sign * (pos - opts.startPos));
       last = size;
       if (opts.target) opts.target.style.setProperty(prop, `${size}px`);
+    },
+    finish: (): number | null => last,
+  };
+}
+
+/**
+ * 底栏 dock 里**一颗面板节**的高度拖拽会话（VIS-13 · D-2 · 判据⑤）。
+ *
+ * 与 `beginLiveResize` 同一招、同一纪律：**`onMove` 只往那一格写内联 `height`，
+ * 一次都不进 reducer / 不 setState**；松手 `finish()` 给出该 commit 的 px。
+ * 拖一格 120 次 pointermove ⇒ 120 次内联写 + **1** 次 `LayoutState` + **1** 次写盘。
+ *
+ * 起手高度由调用方现场量（`el.clientHeight`）：没拖过的格子内联是空的，量到的就是
+ * 容器均分给它的那份实际像素——把"均分"换算成 px 的活儿留给浏览器，不在这里猜。
+ */
+export function beginDockCellResize(opts: {
+  target: LiveStyleTarget | undefined;
+  startHeight: number;
+  startPos: number;
+  sign?: 1 | -1;
+  /** 现场量的可用高度上限（拖不过底栏自己那条身位）；缺省 = 容器上限 480 */
+  maxPx?: number;
+}): LiveResizeSession {
+  const sign = opts.sign ?? 1;
+  const max = Math.min(DOCK_SIZE_LIMITS.max, Math.max(DOCK_SIZE_LIMITS.min, opts.maxPx ?? DOCK_SIZE_LIMITS.max));
+  let last: number | null = null;
+  return {
+    onMove: (pos: number): void => {
+      const raw = opts.startHeight + sign * (pos - opts.startPos);
+      const height = Math.min(max, Math.max(DOCK_SIZE_LIMITS.min, Math.round(raw)));
+      last = height;
+      if (opts.target) opts.target.style.setProperty('height', `${height}px`);
     },
     finish: (): number | null => last,
   };
@@ -475,6 +641,25 @@ export function reconcileLayout(persisted: Partial<LayoutState> | null, org: Org
     overrides,
   );
   const dfltEff = defaultLayout(orgEff);
+  const effBottomIds = orgEff.bottom.map((p) => p.id);
+
+  /* 底栏 dock 的三格新字段（VIS-13 · D-2）——**全部可选**：旧持久化串里本来就没有它们，
+     这里刻意保持 `undefined`（而不是写回一个"看起来一样"的空值），于是 `dockCellIds`
+     照旧走缺省态"只挂激活那颗"，与改动前的底栏逐字一致。不抬版本、不写迁移。 */
+  const dock =
+    persisted.bottomDock === undefined
+      ? undefined
+      : effBottomIds.filter((id) => persisted.bottomDock?.includes(id) === true);
+  const heights: Record<string, number> = {};
+  if (persisted.bottomHeights && typeof persisted.bottomHeights === 'object') {
+    for (const [id, px] of Object.entries(persisted.bottomHeights)) {
+      // 只留"当前确实在底栏在场、且值像个正像素"的格；脏值（非有限 / ≤0 / 非数）与注销面板一并丢
+      if (effBottomIds.includes(id) && typeof px === 'number' && Number.isFinite(px) && px > 0) {
+        heights[id] = clampDockHeight(px);
+      }
+    }
+  }
+  const hasHeights = Object.keys(heights).length > 0;
   return {
     sidebar: sanitizeContainer(persisted.sidebar, dfltEff.sidebar, new Set(orgEff.views.map((v) => v.key))),
     aux: sanitizeContainer(persisted.aux, dfltEff.aux, new Set(orgEff.aux.map((p) => p.id))),
@@ -484,5 +669,9 @@ export function reconcileLayout(persisted: Partial<LayoutState> | null, org: Org
     zenLimitWidth: persisted.zenLimitWidth !== false,
     panelLocations: overrides,
     floating,
+    ...(dock === undefined ? {} : { bottomDock: dock }),
+    ...(hasHeights ? { bottomHeights: heights } : {}),
+    // 折叠态同口径：只有显式 `true` 才带上（缺省 = 展开，旧数据一律读作展开）
+    ...(persisted.bottomCollapsed === true ? { bottomCollapsed: true } : {}),
   };
 }

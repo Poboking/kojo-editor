@@ -70,24 +70,32 @@
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
 }
+/* 搜索框（VIS-42 · D-10）：度量对齐检索面板那套 ksp 基线——井内输入 24px 命中（WCAG 2.5.8）
+   + --fs-2 字号 + placeholder 实色。Lane C 正在抽 KitSearchField，本车道不自己抽件，
+   只把两处度量换成等价形状；井外边距仍走 token（本域纪律：padding/gap 不许裸 px）。
+   等 C 的 KitSearchField。 */
 .mk-search {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 24px;
   padding: var(--space-1) var(--space-2);
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  font-size: var(--fs-1);
+  font-size: var(--fs-2);
+  line-height: 1.4;
 }
 .mk-search:hover {
-  border-color: var(--accent-dim);
+  /* 静息→悬停→聚焦一条渐进：描边升一档，不动底（旧值 --accent-dim 把 hover 读成"选中"） */
+  border-color: var(--border-strong);
 }
 .mk-search:focus {
   border-color: var(--focus-ring);
 }
 .mk-search::placeholder {
   color: var(--fg-dim);
+  opacity: 1;
 }
 /* 清除键：与输入框视觉一体的内联小控件——静息无边框，只在 hover 时提亮 */
 .mk-clear {
@@ -541,6 +549,8 @@
   /* 足够容纳一个可用宽度的输入框；放不下时整组让位，动作组折到下一行 */
   flex: 1 1 150px;
   min-width: 0;
+  /* 井高 26 = 框 24 + 两条 1px 边（与检索面板 ksp 井同尺，D-10） */
+  min-height: 26px;
 }
 .mk-search-wrap .mk-search {
   flex: 1 1 auto;

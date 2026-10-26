@@ -300,7 +300,10 @@ const PINNED_COPY: readonly {
   },
   {
     file: 'packages/app/src/ui/ShellLayout.tsx',
-    phrase: 'title={`索引失败：${stats.indexError}`}',
+    // 体感批 D-5 把索引读数升成"轨 + 文字"两件事，title 从 `title={...}` 改成条件展开
+    // `{...(x ? { title: ... } : {})}`——原始错误串仍逐字留在悬停里，一条不丢。
+    // 断言跟着换形状，处数照旧钉死 1：多一处（又复制了一遍原文）少一处（原文上屏了）都红。
+    phrase: '{ title: `索引失败：${stats.indexError}` }',
     count: 1,
     why: '原始错误逐字留在悬停里，技术信息一条不丢',
   },
@@ -429,7 +432,8 @@ const ON_SCREEN_MACHINE_ID_EXEMPTIONS: readonly {
   },
   {
     file: 'packages/app/src/ui/ShellLayout.tsx',
-    re: /title=\{`索引失败：\$\{stats\.indexError\}`\}/,
+    // 形状随体感批 D-5（title 改走条件展开），钉的仍是同一件事：原始异常串只进悬停。
+    re: /title:\s*`索引失败：\$\{stats\.indexError\}`/,
     count: 1,
     why: '原始异常串（路径 + 英文片段）只进悬停 title：首句人话、原文一条不丢',
   },
