@@ -68,6 +68,8 @@ const EXEMPT_FILES = new Set([
 /* ---------------- 判据 ---------------- */
 
 const PROPS_Z = new Set(['z-index']);
+/** 全局阶梯的第一档（`tokens.css` 的 `--z-toolbar: 10`）。低于它的裸值＝组件内部叠序，不记账。 */
+const Z_LADDER_FLOOR = 10;
 const PROPS_D = new Set([
   'transition',
   'transition-duration',
@@ -78,6 +80,9 @@ const PROPS_D = new Set([
 ]);
 /** 裸时长：数字（可带小数）紧跟 ms / s，且前面不是标识符字符（`26s` 记、`ease-in-out` 不记） */
 const BARE_DURATION = /(?:^|[^\w-])(\d+(?:\.\d+)?)(m?s)(?![\w-])/;
+/** 零值时长（`0s` / `0ms` / `0.0s`）＝复位，不是一条没归队的节奏 ⇒ D1 不记账。
+ *  见 CHECKS 里 D1 那条的注释：压平闸必须显式把 delay 归零，那是正确代码不是泄漏。 */
+const ZERO_DURATION = /(?:^|[^\w-])0(?:\.0+)?(?:m?s)(?![\w-])/g;
 /** 把 var( … ) 整段抹成空格（含兜底），于是 `var(--z-modal)` 不再被当成裸数 */
 function maskVars(text) {
   let out = '';
@@ -115,13 +120,31 @@ const CHECKS = [
   {
     id: 'Z1(z-index裸值)',
     props: PROPS_Z,
-    /** 合规：取值里任何一处引用了 `--z-*` 族；其余（裸数、别的槽位 var）一律记账 */
-    hit: (value) => !/--z-[A-Za-z0-9-]+/.test(value),
+    /** 合规：取值引用了 `--z-*` 族，**或**它压根不属于全局阶梯那一档。
+     *  组长重划（2026-10-26 集成时）：原口径"任何不走 `--z-*` 的数字都记账"把尺划错了地方——
+     *  实测全仓 59 条 `z-index:` 里 35 条取值是 `0/1/2/3/5/auto`，那是**组件自己的叠序**
+     *  （标题栏里窗控压在品牌记号之上、带子里浮层徽章压在正文之上），本来就不该上全局阶梯；
+     *  把它们记成欠账，等于给基线灌 35 枚噪声，闸第一周就会被人学会忽略——比没闸更糟。
+     *  新口径只拦"有全局分层意图"的：≥ `--z-toolbar`(10) 这一阶梯第一档的裸值，
+     *  以及槽位兜底（`var(--sticky-z, 1)` 那种人手抄的第二张口径，仍归幻影台账管）。 */
+    hit: (value) => {
+      if (/--z-[A-Za-z0-9-]+/.test(value)) return false;
+      // 槽位兜底：绕开档位表的第二张口径，照记
+      if (/var\(\s*--(?![\s\S]*--z-)[A-Za-z0-9-]+\s*,/.test(value)) return true;
+      const n = /^\s*(-?\d+)\s*$/.exec(value);
+      if (n) return Number(n[1]) >= Z_LADDER_FLOOR; // < 10 与 0 都是组件内部叠序，放行
+      return /^\s*auto\s*$/.test(value) ? false : true; // 其它形态（百分比/未知）保守记账
+    },
   },
   {
     id: 'D1(动效裸时长)',
     props: PROPS_D,
-    hit: (value) => BARE_DURATION.test(maskVars(value)),
+    /** 裸时长记账，但**零值除外**（组长重划，与 Z1 的 `Z_LADDER_FLOOR` 同一套道理）：
+     *  `animation-delay: 0s` 是压平闸里的**复位**，不是一条没归队的节奏——车道 A 在
+     *  `motion-surface.css` 头部写明了为什么必须显式归零（全局那条只压 `animation-duration`、
+     *  不压 delay，带 `backwards` 填充的逐行入场在减弱档会"先空 200ms 再出现"，比不动更糟）。
+     *  把复位记成违规，等于逼作者删掉正确的防御代码，或者学会忽略这把闸。 */
+    hit: (value) => BARE_DURATION.test(maskVars(value).replace(ZERO_DURATION, ' ')),
   },
 ];
 
@@ -427,9 +450,25 @@ async function selftest() {
   // 1) Z1：裸 z-index 进代码行
   const z1 = await run({ 'packages/app/src/selftest-z1.css': '.x { z-index: 1200; }\n' });
   cases.push({ name: 'Z1 裸 z-index ⇒ 红', want: 1, got: z1.code, out: z1.out });
+  // 1b) Z1 阈值边界（组长重划口径时新增：引入了 `Z_LADDER_FLOOR` 就必须自证这条线画得住）
+  //     恰好落在阶梯第一档（--z-toolbar = 10）的裸值 ⇒ 有全局分层意图 ⇒ 必须红
+  const zFloor = await run({ 'packages/app/src/selftest-z-floor.css': '.x { z-index: 10; }\n' });
+  cases.push({ name: 'Z1 阈值下界（z-index:10 上全局阶梯）⇒ 红', want: 1, got: zFloor.code, out: zFloor.out });
+  //     低于阶梯的 0/1/9 与 auto 是组件自己的叠序 ⇒ 必须绿
+  //     （不钉这一向的话，"把尺划错"和"把闸拆掉"在 --selftest 里长得一模一样）
+  const zLocal = await run({
+    'packages/app/src/selftest-z-local.css': '.a { z-index: 0; }\n.b { z-index: 1; }\n.c { z-index: 9; }\n.d { z-index: auto; }\n',
+  });
+  cases.push({ name: 'Z1 组件内部叠序（0/1/9/auto 不上阶梯）⇒ 绿', want: 0, got: zLocal.code, out: zLocal.out });
   // 2) D1：裸动效时长（跨行声明也要抓到）
   const d1 = await run({ 'packages/app/src/selftest-d1.css': '.y {\n  transition:\n    left 320ms ease-out;\n}\n' });
   cases.push({ name: 'D1 裸时长（多行 transition）⇒ 红', want: 1, got: d1.code, out: d1.out });
+  // 2b) D1 零值边界：`0s` 是压平闸的复位，不是没归队的节奏 ⇒ 必须绿
+  //     （不钉这一向，"放行复位"和"整条 D1 失效"在自证里分不出来）
+  const dZero = await run({
+    'packages/app/src/selftest-d-zero.css': '.z { animation: none; animation-delay: 0s; transition: opacity var(--dur-1) 0ms; }\n',
+  });
+  cases.push({ name: 'D1 零值复位（0s / 0ms）⇒ 绿', want: 0, got: dZero.code, out: dZero.out });
   // 3) 豁免反例①：audit-allow 落在字符串/选择器里（非注释位）⇒ 不豁免，照样红
   const allowInString = await run({
     'packages/app/src/selftest-allow-string.css': '.z { z-index: 1200; content: "audit-allow: 行中随手写不该免责"; }\n',

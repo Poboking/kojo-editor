@@ -96,7 +96,7 @@
 }
 .statusbar .sb-idx.in:not(.pct) .idx-fill {
   width: 40%;
-  animation: sb-idx-sweep 1.25s var(--ease-out) infinite;
+  animation: sb-idx-sweep var(--anim-sweep) var(--ease-out) infinite;
 }
 @keyframes sb-idx-sweep {
   from {

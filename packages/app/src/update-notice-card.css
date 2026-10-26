@@ -15,7 +15,7 @@
   position: fixed;
   right: 16px;
   bottom: 36px;
-  z-index: 1180;
+  z-index: var(--z-card); /* = 1180（tokens.css 的档位表；体感批 B-2 立档后收编裸值） */
   width: 340px;
   max-width: calc(100vw - 32px);
   padding: var(--space-3);

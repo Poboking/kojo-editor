@@ -139,6 +139,7 @@ const INJECTED_ROSTER: readonly [string, string][] = [
   ['--ksp-gutter', 'app/src/ui/SearchPanel.tsx'], // 结果列的槽位宽：随实测字符数现算
   ['--cm-row-h', 'plugins/ui-condition-matrix/src/index.ts'], // 行视口化：实测行高写回网格（插件侧，非宿主知识）
   ['--cm-rowhead-w', 'plugins/ui-condition-matrix/src/index.ts'], // 首列列宽拖拽后的钉住值
+  ['--sb-idx-fill', 'app/src/ui/ShellLayout.tsx'], // 体感批 D-5：索引进度轨的填充宽度按实测百分比现算
 ];
 
 describe('CSS 自定义属性单源 · 消费面必须有定义点', () => {

@@ -438,9 +438,18 @@ describe('B-2 · z-index 秩序收编（我自己的两份文件）', () => {
     expect(declOf(rules, '.cm-chara-pop', 'z-index')).toBe('var(--z-local)');
   });
 
-  it('跨车道的两枚裸值登记在册（context-menu 1300 / update-notice-card 1180），落地时由组长统一改吃新档', () => {
-    expect(read('../src/context-menu.css')).toMatch(/z-index: 1300;/);
-    expect(read('../src/update-notice-card.css')).toMatch(/z-index: 1180;/);
+  it('跨车道的两枚裸值已由组长改吃新档（context-menu → --z-menu / 提醒卡 → --z-card），档位真值仍钉死', () => {
+    // 本条在车道树上时钉的是"两枚裸值还在册、等组长落地时归档"。组长落地时改成了
+    // token 消费 ⇒ 按本条自己写明的约定换形状：**不是放宽**，两侧都钉——
+    // CSS 侧必须吃对应档位 token（退回裸值红），档位表侧真值必须仍是 1300 / 1180（挪号红）。
+    expect(read('../src/context-menu.css')).toMatch(/z-index:\s*var\(--z-menu\)/);
+    expect(read('../src/update-notice-card.css')).toMatch(/z-index:\s*var\(--z-card\)/);
+    const ladder = read('../src/tokens.css');
+    expect(ladder).toMatch(/--z-menu:\s*1300;/);
+    expect(ladder).toMatch(/--z-card:\s*1180;/);
+    // 反向红线：这两份文件里不许再出现那两枚裸值（绕过档位表的第二张口径）
+    expect(read('../src/context-menu.css')).not.toMatch(/z-index:\s*1300\s*;/);
+    expect(read('../src/update-notice-card.css')).not.toMatch(/z-index:\s*1180\s*;/);
   });
 });
 

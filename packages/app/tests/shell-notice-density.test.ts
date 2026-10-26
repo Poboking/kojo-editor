@@ -109,8 +109,12 @@ describe('更新提醒卡给模态让位（组长改判：整块不画，不是�
   const cardCss = read('../src/update-notice-card.css');
   const CARD_YIELD = 'body:has(.overlay-backdrop, .modal-mask) .update-notice-card';
 
-  it('卡的层序定义一个字没动：仍是 1180（让位不靠压层糊过去）', () => {
-    expect(cardCss).toMatch(/\.update-notice-card\s*\{[^}]*z-index:\s*1180;/);
+  it('卡的层序定义实质没动：仍落在 1180 这一档（让位不靠压层糊过去）', () => {
+    // 体感批 B-2 把裸值 `1180` 收进档位表 `--z-card`。这条判据钉的是"哪一档"而不是
+    // "哪个字面量"，所以两侧一起钉：卡吃 `--z-card`，且 `--z-card` 的真值仍是 1180——
+    // 谁把档位表挪号、或谁把卡退回裸值，都红（比只钉字面量多拦一种漂移）。
+    expect(cardCss).toMatch(/\.update-notice-card\s*\{[^}]*z-index:\s*var\(--z-card\);/);
+    expect(read('../src/tokens.css')).toMatch(/--z-card:\s*1180;/);
     expect(noticesCss).not.toMatch(/update-notice-card[^}]*z-index/);
   });
 

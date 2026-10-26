@@ -133,8 +133,14 @@ describe('CTX-SMOKE ② ariaLabel 对照表与 CONTEXT_SURFACE_MANIFEST 逐条�
 
   it('D 组的宿主 z-index 下界与 CSS 真源一致', () => {
     const block = MENU_CSS.slice(MENU_CSS.indexOf('.context-menu-host {'));
-    const zIndex = Number(/z-index:\s*(\d+)/.exec(block)?.[1]);
-    expect(zIndex, `.context-menu-host 的 z-index 读不到（上下文：${block.slice(0, 120)}）`).toBe(HOST_Z_INDEX_MIN);
+    // 体感批 B-2 把裸值 1300 收进档位表 `--z-menu`。这条判据量的是"宿主到底压不压得过
+    // 提示类浮层"，所以两侧一起钉：CSS 侧必须吃 `--z-menu`，档位表侧 `--z-menu` 必须仍是
+    // HOST_Z_INDEX_MIN —— 谁挪号、谁退回裸值，都红（比原来只读一个字面量多拦一种漂移）。
+    const token = /z-index:\s*var\(\s*(--z-[a-z0-9-]+)\s*\)/.exec(block)?.[1];
+    expect(token, `.context-menu-host 没吃档位表 token（上下文：${block.slice(0, 120)}）`).toBeDefined();
+    const tokensCss = read('packages', 'app', 'src', 'tokens.css');
+    const zIndex = Number(new RegExp(`${token}:\\s*(\\d+)\\s*;`).exec(tokensCss)?.[1]);
+    expect(zIndex, `tokens.css 里 ${token} 读不到值`).toBe(HOST_Z_INDEX_MIN);
     expect(HOST_Z_INDEX_MIN).toBeGreaterThanOrEqual(1200); // 至少要压过提示类浮层
   });
 });
@@ -332,7 +338,13 @@ describe('CTX-SMOKE ④ 判定收集器唯一、失败不降级', () => {
   it('面板触发按钮真的会打开面板（activate bottom/kojo.problems ⇒ reducer 置 visible）', () => {
     const shell = read('packages', 'app', 'src', 'ui', 'ShellLayout.tsx');
     expect(shell).toMatch(/ProblemsStatusItem\s+onClick=\{\(\)\s*=>\s*dispatch\(\{\s*type:\s*'activate',\s*container:\s*'bottom',\s*key:\s*'kojo\.problems'\s*\}\)\}/);
-    expect(read('packages', 'app', 'src', 'ui', 'layout.ts')).toMatch(/case 'activate':[\s\S]{0,220}visible:\s*true/);
+    // 体感批 D-2 把底栏改成 dock：`activate` 在 bottom 那一支不再就地写 visible，
+    // 而是走 `bottomOpen()`。语义一条没少（点标签要把底栏带出来、折叠态下也得展开），
+    // 所以判据跟着追到辅助函数里去钉——**不是放宽**：两条腿各自都必须置 visible:true，
+    // 少钉一条就等于"activate 了但面板没出来"这种红在真壳上才看得见的问题。
+    const layout = read('packages', 'app', 'src', 'ui', 'layout.ts');
+    expect(layout).toMatch(/case 'activate':[\s\S]{0,260}bottomOpen\(s, a\.key\)[\s\S]{0,160}visible:\s*true/);
+    expect(layout).toMatch(/case 'activate':[\s\S]{0,400}active:\s*a\.key,\s*visible:\s*true/);
   });
 
   it('页内探针自包含（只能靠 toString 序列化，引用模块级常量会在真机上变成 undefined）', () => {

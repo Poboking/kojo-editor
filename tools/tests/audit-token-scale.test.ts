@@ -133,7 +133,9 @@ describe('audit-token-scale · 两族各能红（变异实测）', () => {
 
   it('扫描面覆盖：嵌套 at-rule（@media）里的违规同样记账', async () => {
     const { code, output } = await runGate({
-      'packages/app/src/probe-media.css': '@media (width >= 900px) {\n  .m { z-index: 7; }\n}\n',
+      // 夹具取值必须是"上全局阶梯"的裸值（组长重划 Z1 后 <10 与 auto 属组件内部叠序、不记账）。
+      // 这条判据量的是扫描面伸不伸得进嵌套 at-rule，换值不换意图。
+      'packages/app/src/probe-media.css': '@media (width >= 900px) {\n  .m { z-index: 1200; }\n}\n',
     });
     expect(code).toBe(1);
     expect(output).toContain('probe-media.css');
@@ -193,7 +195,9 @@ describe('audit-token-scale · 豁免口径（注释位 + 非空理由 + 行数�
 describe('audit-token-scale · 棘轮与 fail-closed', () => {
   it('命中数 ≤ 基线即绿（存量放行），超过 1 行即红（新增即拦）', async () => {
     const base = 'packages/app/src/probe.css';
-    const twoLines = '.a { z-index: 1; }\n.b { z-index: 2; }\n';
+    // 夹具取"上全局阶梯"的裸值（Z1 重划后 <10 / auto 不记账，用 1/2/3 会让这条棘轮
+    // 悄悄变成"零命中对零基线"——算术仍在测，但测的是空集）。换值不换意图。
+    const twoLines = '.a { z-index: 1200; }\n.b { z-index: 1300; }\n';
     const pinned = JSON.stringify({
       checks: {
         'Z1(z-index裸值)': { total: 2, files: { [base]: 2 }, exempt: { total: 0, files: {} } },
@@ -202,7 +206,7 @@ describe('audit-token-scale · 棘轮与 fail-closed', () => {
     });
     expect((await runGate({ [base]: twoLines }, { baseline: pinned })).code).toBe(0);
     const oneMore = await runGate(
-      { [base]: `${twoLines}.c { z-index: 3; }\n` },
+      { [base]: `${twoLines}.c { z-index: 1400; }\n` },
       { baseline: pinned },
     );
     expect(oneMore.code).toBe(1);

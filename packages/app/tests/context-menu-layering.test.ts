@@ -118,14 +118,23 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
   const hostZ = declOf(HOST_RULES, '.context-menu-host', 'z-index');
   const menuZ = declOf(HOST_RULES, '.context-menu', 'z-index');
   const modalVar = declOf(TOKEN_RULES, ':root', '--z-modal');
+  /** 体感批 B-2 把宿主的裸值 1300 收进档位表 `--z-menu`（和 `--z-modal` / `--z-toast` 同一族）。
+   *  本文件本来就是靠解析 `:root` 里的变量来算层序的（下面 `--z-modal` ⇒ 1101 就是一条解析路），
+   *  所以这里照同一口径把 token 解成数——**判据强度不降**：既钉"宿主必须吃 `--z-menu`"，
+   *  又钉"`--z-menu` 的真值仍是 1300"，比原来只钉一个字面量多拦一种漂移（谁挪档位表也红）。 */
+  const hostZToken = hostZ ? /^var\((--z-[a-z0-9-]+)\)$/.exec(tight(hostZ)) : null;
+  const hostZValue = hostZToken
+    ? Number(declOf(TOKEN_RULES, ':root', hostZToken[1]))
+    : Number(hostZ);
 
   it('主题里 --z-modal 是 1100（下面所有算式都从它出发）', () => {
     expect(modalVar).toBe('1100');
   });
 
-  it('.context-menu-host 是 1300（且不低于 1300）', () => {
+  it('.context-menu-host 走档位表 --z-menu，解出来是 1300（且不低于 1300）', () => {
     expect(hostZ).toBeDefined();
-    const value = Number(hostZ);
+    expect(hostZToken?.[1]).toBe('--z-menu');
+    const value = hostZValue;
     expect(Number.isInteger(value)).toBe(true);
     expect(value).toBeGreaterThanOrEqual(1300);
     expect(value).toBe(1300);
@@ -138,7 +147,7 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
     const computed = modal + 1;
     expect(computed).toBe(1101);
     // 宿主必须压过就地菜单（同一屏上两者可能同时存在：根菜单开着、面板里的菜单又弹出）
-    expect(Number(hostZ) - computed).toBe(199);
+    expect(hostZValue - computed).toBe(199);
   });
 
   it('浮层档在 1200（L02 把裸 1200 归档成 --z-toast），且三层严格递增', () => {
@@ -154,7 +163,7 @@ describe('层叠档位：根宿主 1300 > 浮层 1200 > 就地菜单 1101', () =
     const selector = selectorsOf(tier[0]!).join(' ');
     expect(selector).toMatch(/notification-center|floating-panel|toast/);
 
-    const host = Number(hostZ);
+    const host = hostZValue;
     const menu = Number(modalVar) + 1;
     expect(host).toBeGreaterThan(1200);
     expect(1200).toBeGreaterThan(menu);

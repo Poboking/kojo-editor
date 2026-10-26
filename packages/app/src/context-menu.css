@@ -319,7 +319,7 @@
 .context-menu-host {
   position: fixed;
   inset: 0;
-  z-index: 1300;
+  z-index: var(--z-menu); /* = 1300（tokens.css 档位表；体感批 B-2 兑现了那条"另开 ≥1300 档"的承诺） */
   pointer-events: none; /* 空白处不挡鼠标；遮罩与菜单各自接管 */
 }
 .context-menu-host > * {
