@@ -205,15 +205,22 @@ describe('LauncherView 渲染冒烟', () => {
     });
   }
 
-  /** 轮询到条件成立（异步装载 / IPC 回执都不保证一拍内到齐） */
+  /**
+   * 轮询到条件成立（异步装载 / IPC 回执都不保证一拍内到齐）。
+   *
+   * 判据是**墙钟预算**（10 s）而不是固定次数：满池并行时定时器被抢占，
+   * 200 × 10 ms 的"2 秒"会被拉成十几秒也可能不到 200 拍就超时（2026-10-26 满池实测
+   * 唯一非业务红就是这条）。预算给足，断言仍只断内容。
+   */
   async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
       if (predicate()) return;
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
     }
-    throw new Error(`等待超时：${label}`);
+    throw new Error(`等待超时（10 s）：${label}`);
   }
 
   async function mount(kernel: Kernel | null, onClose: () => void = () => undefined): Promise<void> {

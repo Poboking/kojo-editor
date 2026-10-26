@@ -244,9 +244,11 @@ describe('市场单一真源守门', () => {
         (f) => f !== HOST_DIGEST_SOURCE && f !== HOST_DIGEST_TEST_SOURCE && f !== HOST_LAUNCHER_TRUST_SOURCE,
       ),
     ).toEqual([]);
-    // 例外必须窄：启动器信任链只有一处哈希原语，且它不碰市场头 / 下行校验锚
+    // 例外必须窄：启动器信任链只有**两处**哈希原语（同一算法、同一模块），且它不碰市场头 / 下行校验锚。
+    // 两处各有用途、不是第二套口径：`sha256_file`（流式读大 exe）+ `sha256_bytes`（解包期已在内存的
+    // 内容包 / 存档条目）。计数钉死在这里，第三个入口出现就得先想清楚是不是又造了一套摘要。
     const trust = readFileSync(nodeJoin(ROOT, HOST_LAUNCHER_TRUST_SOURCE), 'utf8');
-    expect(codeMatchCount(trust, /Sha256::new\s*\(/g), '启动器信任摘要原语处数').toBe(1);
+    expect(codeMatchCount(trust, /Sha256::new\s*\(/g), '启动器信任摘要原语处数').toBe(2);
     expect(trust).not.toContain('MARKET_ZIP_SHA256_HEADER');
     expect(trust).not.toMatch(/ring::digest/);
   });

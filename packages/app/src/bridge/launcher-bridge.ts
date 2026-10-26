@@ -34,7 +34,7 @@ import { invoke } from './invoke';
  *    → `instanceList`）。本层不拼路径、不做持久化、不解释限额——那是宿主的活；
  *    命令名与参数表逐字来自 `src-tauri/src/launcher/commands.rs`，改名必须两侧一起改。
  * 2. **载荷键用 camelCase**：Tauri 2 在 JS → Rust 边界上把 camelCase 键映射到 snake_case
- *    形参，与既有桥同口径（`exportFile` 的 `fileName`、`marketDownload` 的 `stagingName`）。
+ *    形参，与既有桥同口径（`exportFile` 的 `fileName`、市场下载那条的 `stagingName`）。
  *    可选参数**显式传 `null`**（Rust 侧是 `Option<T>`）：少一个键在 serde 眼里等于走
  *    `#[serde(default)]`，与"显式没给"是两回事。
  * 3. **返回值原样透传**：宿主 DTO 全部 `#[serde(rename_all = "camelCase")]`（`InstanceDto`
