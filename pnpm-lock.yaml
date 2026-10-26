@@ -92,6 +92,9 @@ importers:
       '@kojo/plugin-kojo-sugar':
         specifier: workspace:*
         version: link:../plugins/kojo-sugar
+      '@kojo/plugin-launcher-core':
+        specifier: workspace:*
+        version: link:../plugins/launcher-core
       '@kojo/plugin-sav-parser':
         specifier: workspace:*
         version: link:../plugins/sav-parser

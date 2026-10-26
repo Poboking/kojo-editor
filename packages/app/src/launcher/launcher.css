@@ -1,0 +1,401 @@
+/* ============================================================================
+   启动器 · 实例库视图（L5 骨架批）——类名族 `launcher-*`
+   ----------------------------------------------------------------------------
+   三条纪律：
+   ① 颜色 / 圆角 / 间距 / 字号**只吃 token**（tokens.css 单源），本文件零颜色字面量；
+   ② 外框复用既有 `.overlay-backdrop`（遮罩 + 居中 + z 档）与 `.glass`（毛玻璃面），
+      本文件只管启动器自己的骨架：顶栏 / 左列表 / 右详情；
+   ③ 状态一律**颜色 + 文字**双编码（只靠颜色读不出状态，色觉差异下会丢信息）。
+   由 `LauncherView.tsx` 组件级引入（同 `kojo2.css` / `market.css` 的先例）：
+   视图本身就是懒 chunk，这里的一行不会进开机图。
+   ============================================================================ */
+
+.launcher-mask {
+  /* 外框的遮罩/居中/动画由 `.overlay-backdrop` 提供，这里只补尺寸上限 */
+  padding: var(--space-4);
+}
+
+.launcher-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 94vw);
+  height: min(720px, 88vh);
+  min-height: 320px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+  animation: overlay-in var(--dur-3) var(--ease-out);
+}
+
+/* ------------------------------ 顶栏 ------------------------------ */
+
+.launcher-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+}
+.launcher-head-titles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  min-width: 0;
+}
+.launcher-title {
+  margin: 0;
+  font-size: var(--fs-4);
+  color: var(--fg);
+}
+.launcher-subtitle {
+  margin: 0;
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+  line-height: 1.6;
+}
+.launcher-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+
+/* ------------------------------ 主体两栏 ------------------------------ */
+
+.launcher-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 296px) 1fr;
+}
+
+.launcher-side {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-right: 1px solid var(--border-subtle);
+  overflow-y: auto;
+}
+
+.launcher-main {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
+/* ------------------------------ 搜索 ------------------------------ */
+
+.launcher-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--fg-dim);
+  flex: none;
+}
+.launcher-search:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.launcher-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-1);
+  outline: none;
+}
+
+/* ------------------------------ 实例列表 ------------------------------ */
+
+.launcher-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.launcher-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.launcher-row:hover {
+  background: var(--hover-soft);
+}
+.launcher-row:focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.launcher-row.on {
+  background: var(--bg-3);
+  border-color: var(--border-strong);
+}
+.launcher-row-name {
+  font-size: var(--fs-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launcher-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+.launcher-row-time {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+
+.launcher-badge {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+/* 状态：圆点 + 文字（双编码）+ 语义色（token，不新造颜色） */
+.launcher-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.launcher-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.launcher-status[data-tone='ok'] {
+  color: var(--green);
+}
+.launcher-status[data-tone='busy'] {
+  color: var(--accent-text);
+}
+.launcher-status[data-tone='warn'] {
+  color: var(--amber);
+}
+.launcher-status[data-tone='idle'] {
+  color: var(--fg-dim);
+}
+
+/* ------------------------------ 详情 ------------------------------ */
+
+.launcher-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.launcher-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.launcher-detail-titles {
+  min-width: 0;
+}
+.launcher-detail-name {
+  margin: 0;
+  font-size: var(--fs-4);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launcher-detail-meta {
+  margin: 2px 0 0;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.launcher-headline {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+.launcher-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.launcher-busy {
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+
+.launcher-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+.launcher-block {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.launcher-block-title {
+  margin: 0 0 var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+  font-weight: 500;
+}
+.launcher-block-note {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+.launcher-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.launcher-fact {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+}
+.launcher-fact dt {
+  color: var(--fg-dim);
+}
+.launcher-fact dd {
+  margin: 0;
+  color: var(--fg);
+  word-break: break-all;
+  white-space: pre-line;
+}
+.launcher-fact[data-tone='warn'] dd {
+  color: var(--amber);
+}
+.launcher-fact[data-tone='ok'] dd {
+  color: var(--green);
+}
+.launcher-fact-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+
+/* ------------------------------ 提示 / 失败 ------------------------------ */
+
+.launcher-note {
+  margin: var(--space-2) 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+.launcher-unavailable {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+}
+.launcher-unavailable-title {
+  margin: 0;
+  font-size: var(--fs-3);
+  color: var(--fg);
+}
+
+.launcher-failure {
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--red);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+}
+.launcher-failure-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-failure-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--amber);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  background: var(--bg);
+}
+.launcher-failure-dismiss {
+  margin-left: auto;
+}
+.launcher-failure-message {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-1);
+  color: var(--fg);
+  line-height: 1.6;
+}
+.launcher-failure-detail {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.launcher-failure-hint {
+  margin: 4px 0 0;
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+
+/* 窄窗（浮层缩到 760 以下）：列表收到上方，详情在下（同 `settings-nav-split` 的单列口径） */
+@media (max-width: 760px) {
+  .launcher-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 40%) 1fr;
+  }
+  .launcher-side {
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+}

@@ -1,7 +1,11 @@
-import { createKernel, type Kernel } from '@kojo/kernel';
+import { createKernel, decodeWithProbe, type Kernel } from '@kojo/kernel';
 import type { Plugin } from '@kojo/plugin-api';
 import { createWorkerTransport, WellKnownServices } from '@kojo/plugin-api';
-import type { ConditionExtractorService, ConventionLinterService } from '@kojo/plugin-api';
+import type {
+  ConditionExtractorService,
+  ConventionLinterService,
+  LauncherService,
+} from '@kojo/plugin-api';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin, createEratwEmitBackend, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 组合根的 eraTW 常驻静态装载点（PS-10 口径，欢迎页就要它）
 import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
@@ -490,6 +494,32 @@ export function ensureProjectPlugins(kernel: Kernel): Promise<void> {
       throw err;
     });
   return projectPluginsTask;
+}
+
+/**
+ * 启动器核心插件（`launcher.service`）的懒装载（L5）。
+ *
+ * `launcher-core` 只在打开实例库时装载：字面量动态 import ⇒ 开机图零新增文件
+ * （PS-10 判据 10）。装载 / 初始化失败**不吞**——错误原样抛给调用方，由视图转成
+ * 可读的错误码 + 人话。`decodeBytes` 注入内核的编码探测（插件自己不 import 内核）。
+ */
+let launcherPluginTask: Promise<void> | null = null;
+
+/** 装载并初始化启动器核心；失败清缓存以便重试（同 `ensureProjectPlugins` 口径） */
+export function ensureLauncherPlugin(kernel: Kernel): Promise<void> {
+  launcherPluginTask ??= import('@kojo/plugin-launcher-core')
+    .then(async ({ createLauncherPlugin }) => {
+      // 重试时插件可能已在表里（register 对同 id 是抛错）——先问一遍再注册
+      if (!kernel.plugins.list().some((plugin) => plugin.id === 'launcher-core')) {
+        await kernel.registerPlugin(createLauncherPlugin({ decodeBytes: decodeWithProbe }));
+      }
+      await kernel.services.tryGet<LauncherService>(WellKnownServices.Launcher)?.initialize();
+    })
+    .catch((error: unknown) => {
+      launcherPluginTask = null;
+      throw error;
+    });
+  return launcherPluginTask;
 }
 
 /**

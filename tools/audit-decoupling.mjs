@@ -77,6 +77,9 @@ const NEUTRAL_DIRS = [
   'packages/app/src/bootstrap.ts', // 例外说明：bootstrap 是宿主组合根，见下方豁免
   'packages/app/src/adapter-manifest.ts', // 同上：适配器清单＝注册元数据（游戏 id / 包名），不是游戏知识
   'packages/app/src/ui', // 2026-10-11 解耦批：宿主 UI 层收编进 A 项（此前 eraTW 文案绑死游戏无门禁可拦）
+  // 启动器视图（2026-10-26 L5 骨架批）：与 `src/ui` 同级的宿主面，只认契约字段
+  // 名（实例 / 进程 / 隔离 / 信任），游戏语义一律在 adapter —— 一并收编进 A 项。
+  'packages/app/src/launcher',
   'packages/app/src/monaco', // 同上：Monaco 语言层（引擎级词汇可，具体游戏约定不可）
   // tree-sitter 语法层（.kojo 表层 DSL 的 CST，语言级词汇可、游戏约定不可）。2026-10-19 TSIT 批收编。
   'packages/kojo-syntax-tree/src',

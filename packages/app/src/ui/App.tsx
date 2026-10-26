@@ -228,6 +228,10 @@ const LazyUnsavedConfirmDialog = lazy(() =>
 const LazyUnsavedFilesConfirmDialog = lazy(() =>
   import('./UnsavedFilesConfirmDialog').then((m) => ({ default: m.UnsavedFilesConfirmDialog })),
 );
+// 启动器实例库（L5）：视图与它依赖的 launcher-core 一起走动态边（开机图零新增文件）
+const LazyLauncherView = lazy(() =>
+  import('../launcher/LauncherView').then((m) => ({ default: m.LauncherView })),
+);
 
 /**
  * 槽位账本的 adapter 事实（K2-STORAGE-SERVICE · LAU-1a 改按项目取）。
@@ -426,6 +430,8 @@ export function App(): ReactElement {
    * ✕ / 两个按钮）写 seen 标记；只活在本会话，不参与 phase 判定。
    */
   const [devNoteOpen, setDevNoteOpen] = useState(() => !loadDevNoteSeen());
+  /** 启动器实例库（L5）：全屏浮层；命令面板与 Ctrl+Alt+O 打开，视图本体懒装载 */
+  const [launcherOpen, setLauncherOpen] = useState(false);
   /**
    * 项目生命周期错误（欢迎页错误区 + 项目态错误条共用的一条 state）。
    * WRITE-ADMIT-SPLIT 出路①：从「一句文案」升级为「文案 + 它自带的那条出路」——
@@ -1058,7 +1064,19 @@ export function App(): ReactElement {
    * 合并一次 memo：`ProjectView` 的 `extraShellCommands` 身份稳定，注册表不随每帧重建。
    */
   const shellCommands = useMemo<readonly ShellCommandSpec[]>(
-    () => [...migrateCommands, ...storageCommands],
+    () => [
+      ...migrateCommands,
+      ...storageCommands,
+      // 启动器实例库（L5）：键位按 LAUNCHER-ARCHITECTURE §14.4 的 Ctrl+Alt+O
+      //（Ctrl+N 已被 kojo.newKojoFile 占用、F5 归 WebView2，两条都刻意避开）。
+      {
+        id: 'launcher.openInstances',
+        title: '启动器：打开实例库',
+        category: '启动器',
+        keybinding: 'ctrl+alt+o',
+        run: () => setLauncherOpen(true),
+      },
+    ],
     [migrateCommands, storageCommands],
   );
 
@@ -2402,6 +2420,12 @@ export function App(): ReactElement {
         >
           <Icon name="close" size="sm" />
         </button>
+      ) : null}
+      {/* 启动器实例库（L5）：顶层浮层，遮罩自己铺满窗口；卸载即收（内部订阅随之断开） */}
+      {launcherOpen ? (
+        <Suspense fallback={<div className="overlay-backdrop" data-lazy-mount="launcher" />}>
+          <LazyLauncherView kernel={kernel} onClose={() => setLauncherOpen(false)} />
+        </Suspense>
       ) : null}
       {/* 右键菜单根宿主（1023 覆盖面批）：固定层，必须排在所有浮层之后（层级见 CSS）。
           各面自己的就地菜单不受影响——这一层只接根路由与兜底。 */}

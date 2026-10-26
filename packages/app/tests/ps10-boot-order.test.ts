@@ -156,8 +156,15 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
     ];
     const found = [...bootstrapSrc.matchAll(/(?:^|\n)\s*[\w.]+.(create[A-Za-z]+Plugin)\(/g)].map((m) => m[1]!);
     expect(found).toEqual(expected);
-    // 动态 import 的模块次序与工厂次序同一份名单（一一对应，不许多不许少）
-    const dyn = [...bootstrapSrc.matchAll(/import\('@kojo\/plugin-([^']+)'\)/g)].map((m) => m[1]!);
+    // 动态 import 的模块次序与工厂次序同一份名单（一一对应，不许多不许少）。
+    // 只看**项目级装载器**本体：bootstrap 里还有「用户显式打开才装」的懒边
+    //（L5 起 `ensureLauncherPlugin` 装 `launcher-core`），它不在项目级名单里，
+    // 其「声明插件全集 ⊆ 动态名单」那条覆盖判据由 ps10-eager-graph 单独钉。
+    const loaderSrc = bootstrapSrc.slice(
+      nthIndex(bootstrapSrc, 'async function loadProjectPlugins'),
+      nthIndex(bootstrapSrc, 'function loadProjectPluginsOnce'),
+    );
+    const dyn = [...loaderSrc.matchAll(/import\('@kojo\/plugin-([^']+)'\)/g)].map((m) => m[1]!);
     expect(dyn.length).toBe(expected.length);
   });
 
