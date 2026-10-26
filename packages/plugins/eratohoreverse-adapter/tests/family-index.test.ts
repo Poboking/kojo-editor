@@ -408,7 +408,7 @@ describe.skipIf(!REAL)('parseKojoFamily —— 真盘覆盖率闸（ERB/口上 �
     expect(families.size).toBe(12);
     // eslint-disable-next-line no-console
     console.info(`[eratohoreverse family-index] 真盘覆盖率 ${hit}/${total} = ${((hit / total) * 100).toFixed(2)}%`);
-  });
+  }, 90000);
 
   it('未命中只有三类：路由终端 20 + 排版化石 2 + 作者私有 519', () => {
     const files = erbFiles(KOJO_DIR);

@@ -4,9 +4,10 @@
  * （架构铁律：游戏知识归 adapter，内核零游戏名词）。
  *
  * 本批＝ P0 布线 + P1 识别与导航（工程识别、角色索引、口上目录绑定、家族解析、
- * 变量字典、指令名表、角色级检索范围）。
+ * 变量字典、指令名表、角色级检索范围）+ **P2 语义层**（`conventions` / `conventionPolicy` /
+ * `nameGlossary`；四条规则的命中清单与已否决规则的理由都在 `./conventions.ts` 头注）。
  *
- * 为什么**没有** `conventions` / `kojoFaceTemplates` / `stateLinePresets`：三条都还没有
+ * 为什么**没有** `kojoFaceTemplates` / `stateLinePresets`：两条都还没有
  * 语料实证（本作路由是 `KOJO_CALL(@"…")` 的**间接转发**，家族面要先由 `family-index` 的
  * 覆盖读数定口径），宁缺毋滥。也**没有** `kojoCallProtocol`：主路由把 FORM 字符串当实参
  * 转发（`CALL KOJO_CALL(@"DIGEST_K{ARG}", TARGET)` → `TRYCALLFORM KOJO_%ARGS%`），
@@ -21,6 +22,7 @@
 import type {
   AdapterDetectResult,
   CharaInfo,
+  ErbParserService,
   FileIO,
   GameAdapter,
   GameProject,
@@ -28,7 +30,7 @@ import type {
   Plugin,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { combineDigests, foldDigest, join } from '@kojo/plugin-api';
+import { combineDigests, foldDigest, join, WellKnownServices } from '@kojo/plugin-api';
 import { charaSearchScopeOptions } from '@kojo/kojo-project-kit';
 import { ERATOHOREVERSE } from './constants';
 import {
@@ -38,6 +40,8 @@ import {
   parseKojoDirName,
 } from './chara-csv';
 import { createEratohoreverseFamilyIndex } from './family-index';
+import { createEratohoreverseConventions } from './conventions';
+import { ERATOHOREVERSE_NAME_GLOSSARY } from './name-glossary';
 import {
   loadEratohoreverseInstructionNames,
   loadEratohoreverseVariableSchema,
@@ -68,6 +72,53 @@ export function createEratohoreverseAdapterPlugin(): Plugin {
         gameId: ERATOHOREVERSE.gameId,
         displayName: ERATOHOREVERSE.displayName,
         functionFamilyIndex: createEratohoreverseFamilyIndex(),
+        /**
+         * 四条约定规则（真盘逐处命中与已否决规则的理由都在 `./conventions.ts` 头注）。
+         *
+         * `parseText` 走服务键 `erb.parser`（**用到的那一刻**才 `tryInject`，与 eratw/eraakumamaid
+         * 取市场、糖服务同一条纪律：解析器插件可能比本插件晚激活）。本包不许 import
+         * `@kojo/plugin-erb-parser`（铁律 2 / 审计 C 项），而遮蔽段补集又**必须**用索引同一条语法
+         * 重解析一次（见 `conventions.ts` 头注"差集通道"）⇒ 服务键是唯一合法通道。
+         * 解析器缺席 ⇒ 抛错进 `report.failedRules`（铁律 4：绝不静默成"判过了、没问题"）。
+         */
+        conventions: createEratohoreverseConventions({
+          parseText: (text, path) => {
+            let parser: ErbParserService | undefined;
+            try {
+              parser = ctx.tryInject<ErbParserService>(WellKnownServices.ErbParser);
+            } catch {
+              // 测试壳等未实现 tryInject 的上下文：与"解析器缺席"同义，照样出声
+              parser = undefined;
+            }
+            if (!parser) {
+              throw new Error('erb.parser 服务缺席（解析器插件未激活/已停用）');
+            }
+            return parser.parseText(text, path);
+          },
+        }),
+        /**
+         * 内置 `erb.duplicate-function` 的收敛：**只收逐个复验过是 `#PRI` 条件定义的名字**。
+         * 校验器吃索引，遮蔽段里的定义出不了表 ⇒ 一轮真实校验（整棵受管 `ERB/`）只看得见 3 组重复：
+         * `EVENTFIRST` / `EVENTLOAD` / `EVENTTRAIN`。本策略只收前两枚：
+         * `EVENTFIRST` = `KCOLOR.ERB:57`（`#PRI` + `SIF !KCOLOR("0") / CALL _LOAD_KCOLOR()`）↔
+         * `SYSTEM.ERB:4`；`EVENTLOAD` = 同文件 `:62` ↔ `SYSTEM_DATAMENU.ERB:48`（汉化补丁按条件再挂
+         * 一份同名钩子，是 Emuera 的 `#PRI` 语义，不是作者写错）。
+         * **`EVENTTRAIN` 照旧逐条报**（`COMMON_USEFUL.ERB:437` ↔ `TRAIN/EVETRAIN.ERB:4`，两处都不带 `#PRI`）。
+         * **`MASTER_POSE*` 一族不在收敛清单里，也不是漏收**：原始盘上 87 组同名里这一族 50 组的第二份
+         * 整棵被 `[SKIPSTART]` 存档（`ERB/TRAIN/TRAINSYS/POSE.ERB:1` 开段，段内 57 处 `MASTER_POSE*`，
+         * 如 `:4` ↔ `MASTER_POSE.ERB:2`、`:848` ↔ `:873`），内置重复规则看不见第二份 ⇒ 压根没有 issue
+         * 可收敛；口径与取证见 `conventions.ts` 头注 `conventionPolicy` 一节。
+         */
+        conventionPolicy: [
+          {
+            ruleId: 'erb.duplicate-function',
+            names: ['EVENTFIRST', 'EVENTLOAD'],
+            reason:
+              'KCOLOR.ERB:57/:62 各是一条 #PRI 条件定义（SIF !KCOLOR("0") → CALL _LOAD_KCOLOR()），与 SYSTEM.ERB:4 / SYSTEM_DATAMENU.ERB:48 的正体成对——#PRI 条件挂钩子是引擎语义，不是作者写错',
+          },
+        ],
+        /** 日文名→中文名对照（展示用；生成口径与两条护栏见 `./name-glossary.ts` 头注） */
+        nameGlossary: ERATOHOREVERSE_NAME_GLOSSARY,
         get variableSchema() {
           return currentSchema;
         },

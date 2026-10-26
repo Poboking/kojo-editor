@@ -11,7 +11,8 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join as nodeJoin, relative as nodeRelative, sep } from 'node:path';
-import type { DirEntry, FileIO, GameAdapter, PluginContext } from '@kojo/plugin-api';
+import type { DirEntry, ErbParserService, FileIO, GameAdapter, PluginContext } from '@kojo/plugin-api';
+import { parseErbText } from '@kojo/plugin-erb-parser';
 import { createEratohoreverseAdapterPlugin } from '../src/plugin';
 
 const silentLog = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
@@ -173,6 +174,18 @@ export interface ActivatedAdapter {
   readonly slots: ReadonlyArray<{ slot: string; item: unknown }>;
 }
 
+/**
+ * `erb.parser` 服务桩（**测试文件专属**：插件源码禁交叉 import，测试不禁——见审计 C 项的测试豁免）。
+ *
+ * 为什么约定规则需要它：`[SKIPSTART]…[SKIPEND]` 区间内的 `@` 定义压根出不了 `ErbFile.functions`，
+ * 唯一真源兼容的拿法是"同一条语法两次解析之差"，而这条语法必须由装配方注入
+ * （宿主里是 `erb.parser` 服务的 `parseText`，与索引同一个 scanner）。
+ * 真身 `parseErbText` 在这里就是那条同一判据的实现。
+ */
+export function erbParserStub(): Pick<ErbParserService, 'parseText'> {
+  return { parseText: (text: string, path?: string) => parseErbText(text, path) };
+}
+
 /** 激活插件并按槽位取回 adapter + 槽位清单（与组合根同一条接线路径） */
 export function activateAdapter(io: FileIO): ActivatedAdapter {
   let adapter: GameAdapter | undefined;
@@ -183,7 +196,7 @@ export function activateAdapter(io: FileIO): ActivatedAdapter {
     onDispose: () => {},
     provide: () => {},
     bus: { emit: () => {}, on: () => () => {} },
-    tryInject: () => undefined,
+    tryInject: (key: string) => (key === 'erb.parser' ? erbParserStub() : undefined),
     inject: <T,>(key: string): T => {
       if (key === 'kernel.io') return io as unknown as T;
       throw new Error(`unexpected inject: ${key}`);

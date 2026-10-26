@@ -119,7 +119,8 @@ describe('多游戏识别矩阵 · 每个盘恰好一个适配器命中', () => 
   let adapters: Map<string, GameAdapter> = new Map();
   beforeAll(async () => {
     adapters = await adaptersById();
-  });
+    // 29 枚逐个动态 import + activate，满载机上会贴到默认 10s 线（实测 10.04s）
+  }, 60000);
 
   it('清单里每一枚适配器都取得了 `game.adapter`（漏一枚＝这闸少测一枚）', () => {
     expect(adapters.size).toBe(ADAPTER_MANIFEST.length);

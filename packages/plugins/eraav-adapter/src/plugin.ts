@@ -3,9 +3,9 @@
  * `ERB/EVENT/EVENT_K.ERB` 主路由 / `CSV/Chara` / `KOJO_MESSAGE_{家族}_{裸号}`」这些字眼的
  * 地方（架构铁律：游戏知识归 adapter，内核零游戏名词）。
  *
- * 本批＝ P0 布线 + P1 识别与导航。故意没有的面：`conventions` / `kojoFaceTemplates` /
- * `stateLinePresets` / `search.scope` / 2.0 面——四条都还没有语料实证，宁缺毋滥；
- * `search.scope` 另有一处硬障碍，见下。
+ * 本批＝ P0 布线 + P1 识别与导航 + **P2 语义层**（`conventions` / `conventionPolicy` /
+ * `search.scope` / `nameGlossary`）。仍然没有的面：`kojoFaceTemplates` / `stateLinePresets` /
+ * 2.0 面——四条都还没有语料实证，宁缺毋滥。
  *
  * **本作最反常的结构**（2026-10-26 真盘实测）：eraTW / eratohoK / eratohoReverse 的
  * 「一角色一口上目录」在这里不存在——`ERB/Lines/` 下是 17 份 `EVENT_K{nn}_{角色名}.ERB`
@@ -13,6 +13,13 @@
  * 塞进去会让「按角色收窄」变成「按整个 Lines 搜」＝**看着能用、其实给出错的结果**，
  * 比留空更坏。故本批一律**不设** `kojoDir`（缺省＝该角色没有独立口上目录，消费方按契约
  * 降级），口上文件名只进 `inputDigest`；导航走「文件树 + 函数家族」两条腿。
+ *
+ * **P2 的 `search.scope` 就是这条裁决的合法出口**（2026-10-26）：不设 `kojoDir` 不等于
+ * 「这个角色没有检索范围」——契约的 `SearchScopeOption.roots` 容得下**单个文件**
+ * （「文件根只产出它自己」，`plugin-api/src/slots.ts:1438-1444`），于是本作按
+ * 「一个角色 = 它那一份口上文件」给范围，既收窄又是语义正好。判据与逐环节复验见
+ * `./search-scope.ts`；`kojo-project-kit` 那份投影在本作**恒空**（它只认 `kojoDir`），
+ * 所以本包自带贡献物，不复用 kit。
  */
 
 import type {
@@ -25,7 +32,7 @@ import type {
   Plugin,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { combineDigests, foldDigest, join } from '@kojo/plugin-api';
+import { combineDigests, foldDigest, isErbBodyPath, isErbDeclarationPath, join } from '@kojo/plugin-api';
 import { ERAAV } from './constants';
 import {
   charaNameFromFileName,
@@ -33,7 +40,11 @@ import {
   parseCharaNoFromFileName,
   parseKojoFileName,
 } from './chara-csv';
+import { createEraavConventions } from './conventions';
+import type { EraavKojoFileEntry, EraavKojoScan } from './kojo-scan';
+import { ERAAV_NAME_GLOSSARY } from './name-glossary';
 import { createEraavFamilyIndex } from './family-index';
+import { eraavSearchScopeOptions } from './search-scope';
 import { loadEraavInstructionNames, loadEraavVariableSchema } from './variable-schema';
 
 /** 空指令表（未加载 / 缺表时返回它；`hasTable=false`，查啥都 undefined） */
@@ -56,11 +67,43 @@ export function createEraavAdapterPlugin(): Plugin {
       let currentSchema: VariableSchema | undefined;
       /** 指令名表（同上；未加载 = 空表实例） */
       let currentInstructionTable: KojoInstructionTable = EMPTY_INSTRUCTION_TABLE;
+      /**
+       * 口上域的**目录级事实**（角色号→文件、域内非 ERB 文件），由 `loadProject` 那一次
+       * `listDir` 备好；约定规则以闭包取用（约定上下文没有 IO，见 `./kojo-scan.ts`）。
+       */
+      let kojoScan: EraavKojoScan | undefined;
 
       const adapter: GameAdapter = {
         gameId: ERAAV.gameId,
         displayName: ERAAV.displayName,
         functionFamilyIndex: createEraavFamilyIndex(),
+        /** 四条规则的真盘命中清单与已否决规则的理由，全部写在 `./conventions.ts` 头注 */
+        conventions: createEraavConventions(() => kojoScan),
+        /**
+         * 内置 `erb.duplicate-function` 在本盘发 **71 条** info，而它们几乎全是本作的**成对写法**：
+         * 每份角色口上文件先写一条带 `#PRI`/`#LATER` 的存在判定、再写正体（`constants.ts` 的
+         * 覆盖率读数同一事实）。真盘逐名量到的形状：`EVENTTRAIN` 18/35 处带 `#PRI`、
+         * `EVENTEND` 19/36 处带 `#LATER`、`EVENTSHOP` 1/2 处——`EVENTSHOP` 那两处复验过就是同一形状
+         * （`ERB/EVENT/EVENT_K.ERB:16` 是 `#PRI`＋`SIF FLAG:7 == 0 / FLAG:7 = 2` 的存在判定，
+         * 正体在 `ERB/SYSTEM/SHOP_MAIN.ERB:13`）。按名字收敛后剩下的**才是**真重复
+         * （实测 `@MISSION_RECEIVE_150` 两处、整组无判定，归本包 `chara-duplicate-shadow` 报 warning）。
+         */
+        conventionPolicy: [
+          {
+            ruleId: 'erb.duplicate-function',
+            names: ['EVENTTRAIN', 'EVENTEND'],
+            reason:
+              '每份 ERB/Lines 角色文件各写一对「#PRI/#LATER 存在判定 + 正体」（真盘 EVENTTRAIN 18/35、EVENTEND 19/36 处带判定；TRAIN_MAIN.ERB:11/:304 与 EVENT_NEXTDAY.ERB:4 同形）——成对是引擎语义，不是作者写错',
+          },
+          {
+            ruleId: 'erb.duplicate-function',
+            names: ['EVENTSHOP'],
+            reason:
+              'EVENT_K.ERB:16 是 #PRI 存在判定（SIF FLAG:7 == 0 → FLAG:7 = 2），正体在 SHOP_MAIN.ERB:13 —— 与 EVENTTRAIN/EVENTEND 同一形状',
+          },
+        ],
+        /** 日文名→中文名对照（展示用；整表由真盘 CSV/Chara 生成，生成口径见 `./name-glossary.ts` 头注） */
+        nameGlossary: ERAAV_NAME_GLOSSARY,
         get variableSchema() {
           return currentSchema;
         },
@@ -156,13 +199,31 @@ export function createEraavAdapterPlugin(): Plugin {
             kojoEntries = [];
             ctx.log.warn(`口上目录不可读（口上文件清单为空）：${kojoRoot} — ${String(err)}`);
           }
-          let kojoFiles = 0;
+          /**
+           * 口上域是扁平文件：登记文件名进摘要 + 备下**目录级事实**（角色号→文件、域内非 ERB
+           * 文件），不给 `kojoDir`（见文件头）。这一份 `kojoScan` 同时喂两处消费方：
+           * `search.scope` 的角色候选与 `conventions` 的两条目录级规则。
+           */
+          const kojoFileEntries: EraavKojoFileEntry[] = [];
+          const nonErbFiles: string[] = [];
           for (const entry of kojoEntries) {
             if (entry.isDirectory) continue;
             inputParts.push(`kojoFile\u0000${entry.name}`);
             // 计数走解析函数（内含 `isErbBodyPath` 的扩展名真源），不在这里再判一次文件名
-            if (parseKojoFileName(entry.name) !== null) kojoFiles++;
+            const parsed = parseKojoFileName(entry.name);
+            if (parsed !== null) {
+              kojoFileEntries.push({ no: parsed.no, path: entry.path, label: parsed.label });
+              continue;
+            }
+            // 解析不出口上文件名 ≠ 该当"外来文件"：`.ERB/.ERH/.ERM` 都是域内合法文件
+            //（实测本域只有 17 份 `.ERB` + 1 份 `.txt`，域内无 `.ERH`）
+            // 扩展名一律走契约谓词，本包不抄字面量（副本闸：plugin-api/tests/erb-ext.test.ts）
+            if (!isErbBodyPath(entry.name) && !isErbDeclarationPath(entry.name)) {
+              nonErbFiles.push(entry.path);
+            }
           }
+          kojoScan = { kojoFiles: kojoFileEntries, nonErbFiles };
+          const kojoFiles = kojoFileEntries.length;
 
           // ---- 3. 变量字典（CSV 主表 + .ERH 作者自定名表；缺 CFLAG 四表是常态）----
           // 字典失败**不阻断**工程加载：没字典只是补全少名字，口上照常能读能改。
@@ -183,7 +244,8 @@ export function createEraavAdapterPlugin(): Plugin {
 
           ctx.log.info(
             `eraAV 工程加载完成：${charaIndex.size} 个角色（口上扁平文件 ${kojoFiles} 份，` +
-              `本作无角色口上目录 ⇒ 不带角色级检索范围），口上根：${kojoRoot}`,
+              `本作无角色口上目录 ⇒ 角色级检索范围按**文件根**给，覆盖 ${kojoFiles} 个角色；` +
+              `域内非 ERB 文件 ${nonErbFiles.length} 份），口上根：${kojoRoot}`,
           );
 
           return {
@@ -204,6 +266,25 @@ export function createEraavAdapterPlugin(): Plugin {
       };
 
       ctx.slots.register('game.adapter', { id: `${ERAAV.gameId}-adapter`, adapter });
+
+      /**
+       * 检索范围：角色级收窄，但**根是那一份口上文件**（不是目录）——本作没有角色口上目录，
+       * `CharaInfo.kojoDir` 一律不设（见文件头与 `docs/PITFALLS.md` 229），故**不走** kit 的
+       * `charaSearchScopeOptions`（它只认 `kojoDir`，在本作恒空），本包按同一种标签口径自己给。
+       * `provide` 零 IO：`no → path` 由 `loadProject` 备好的 `kojoScan` 以闭包递进来
+       * （契约「纯函数纪律」`plugin-api/src/slots.ts:1454-1456`）；没有口上文件的角色
+       * **不产候选**（实测 120 个角色里 17 个有文件 ⇒ 103 个不出现）。
+       * 注册形态与 eratohoReverse 同（`eratohoreverse-adapter/src/plugin.ts:235-242`）：
+       * 只认本项目，`order: 10` 与其它 adapter 同值——同时在场按项目归属过滤，不靠 order 分胜负。
+       */
+      ctx.slots.register('search.scope', {
+        id: `${ERAAV.gameId}-chara-scope`,
+        order: 10,
+        provide: (project) =>
+          project !== null && project.adapterId === ERAAV.gameId
+            ? eraavSearchScopeOptions(project.charaIndex.values(), kojoScan?.kojoFiles ?? [])
+            : [],
+      });
     },
   };
 }

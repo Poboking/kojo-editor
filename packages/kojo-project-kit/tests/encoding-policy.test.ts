@@ -317,12 +317,22 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
   {
     file: 'packages/plugins/eraav-adapter/src/chara-csv.ts',
     count: 1,
-    why: '读侧剥 BOM（首码元 U+FEFF）：eraAV 真盘 120 份 `CSV/Chara` 里 **7 份没有 BOM**（Chara70–75、78），`.ERB` 480 份里也有 1 份无 BOM ⇒ 既剥掉才认首行 `番号`，也不许反过来假定「必有 BOM」；不产出字节',
+    why: '读侧剥 BOM（首码元 U+FEFF）：eraAV 真盘 120 份 `CSV/Chara` 里 **7 份没有 BOM**（Chara70–75、78），受管 `ERB/` 的 471 份 `.ERB/.ERH` 里也有 1 份无 BOM ⇒ 既剥掉才认首行 `番号`，也不许反过来假定「必有 BOM」；不产出字节',
   },
   {
     file: 'packages/plugins/eratohoreverse-adapter/src/chara-csv.ts',
     count: 1,
-    why: '读侧剥 BOM（首码元 U+FEFF）：eratohoReverse 真盘全树 963 份 `.ERB/.ERH/.CSV` 是 100% UTF-8-BOM（且 100% 纯 LF），剥掉才认首行 `番号`；不产出字节',
+    why: '读侧剥 BOM（首码元 U+FEFF）：eratohoReverse 真盘全树 1,083 份 `.ERB/.ERH/.CSV`（受管 `ERB/` 907 份）是 100% UTF-8-BOM（且 100% 纯 LF），剥掉才认首行 `番号`；不产出字节',
+  },
+  {
+    file: 'packages/plugins/eraav-adapter/src/conventions.ts',
+    count: 1,
+    why: '读侧剥 BOM（`^\\uFEFF`）：`[SKIPSTART]` 遮蔽段判据要先看正文原始行，而本盘 470/471 份带 BOM、其中 **33 份首行就是 `@` 定义**（PITFALLS 231）——不剥就整条定义看不见；不产出字节',
+  },
+  {
+    file: 'packages/plugins/eratohoreverse-adapter/src/conventions.ts',
+    count: 1,
+    why: '读侧剥 BOM（`^\\uFEFF`）：本盘 907/907 带 BOM 且 **39 份首行就是 `@` 定义**，`[SKIPSTART]` 遮蔽段的差集判据必须先剥 BOM 才数得到定义（PITFALLS 231）；不产出字节',
   },
   {
     file: 'packages/plugins/erafl-adapter/src/scaffold.ts',
