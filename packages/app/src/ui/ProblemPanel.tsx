@@ -60,6 +60,12 @@ import {
 } from './problem-menu';
 import './context-menu-search.css';
 import { Icon } from './icons';
+import { KitPanelHeader } from '../ui-kit/kit-panel-header';
+// 自绘勾选与下拉一律取自 ui-kit 基座叶子（1026 C2-a / C2-b）。本文件**曾经**有一枚同名
+// 局部 `function KitCheck`：局部声明遮蔽 import 绑定 ⇒ "已收编"在源码里读不出来，
+// `problem-panel.css` 因此养了第二份勾盒（VIS-41）。判据见 tests/kit-field-converge.test.ts。
+import { KitCheck } from '../ui-kit/kit-check';
+import { KitSelect } from '../ui-kit/kit-select';
 
 /**
  * 底部「问题」面板（看板 HK-4 · UI-6；P2-13 分组/过滤/行内修复/复制批）。
@@ -255,41 +261,6 @@ function scrollParentOf(el: HTMLElement): HTMLElement | null {
     node = node.parentElement;
   }
   return null;
-}
-
-/**
- * 自绘勾选控件：真 `<input type="checkbox">` 只把外观换成画出来的方框，语义一格不动
- * （Tab 得到它、空格切得动、`checked` 受控、屏幕阅读器读得出）——与 `Switch.tsx` 同一
- * 语言，只是形态是勾选而非拨动。
- *
- * `// ui-kit-candidate: KitCheck` —— 收编后可替掉检索面板那颗 `ksp-opt-check`
- * 与设置页里靠 `accent-color` 的散勾选，全仓一族的方框。
- */
-function KitCheck({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  /** 直接给布尔值（同 `Switch`）：调用方不必再读 event，也不给"第二处偷偷读 event"留口子 */
-  onChange: (checked: boolean) => void;
-  /** 无障碍名（放进 `<label>` 时与可见文字同词，满足 WCAG 2.5.3 label-in-name） */
-  label: string;
-}): ReactElement {
-  return (
-    <span className="prob-check">
-      <input
-        type="checkbox"
-        className="prob-check-input"
-        checked={checked}
-        aria-label={label}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="prob-check-box" aria-hidden="true">
-        <Icon name="check" size={10} className="prob-check-glyph" />
-      </span>
-    </span>
-  );
 }
 
 export function ProblemPanel({
@@ -881,8 +852,10 @@ export function ProblemPanel({
         </div>
       ) : (
         // 表头 + 工具条合成一块 sticky 头：列表的滚动交回容器（`.container-body`）之后，
-        // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"（与 `ksp-head` 同一处理）。
-        <div className="prob-head" ref={headRef}>
+        // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"。骨架与检索面板 /
+        // 大纲读数条同源于 ui-kit 的 `KitPanelHeader`（1026 C1-a；`bleed` = 反衬宿主
+        // `.panel` 内衬那一档，度量住在 ui-kit.css）。
+        <KitPanelHeader bleed ref={headRef}>
           <div className="conv-summary">
             <span className="conv-count" style={{ color: SEVERITY_COLOR.error }}>
               错误 {error}
@@ -922,31 +895,27 @@ export function ProblemPanel({
               </label>
             ))}
             {srcOpts.length > 1 ? (
-              // 来源过滤（S14）：单一来源时不给下拉——只有一个选项的开关是噪音
-              // 外观自绘（`appearance:none` + SVG 箭头 + token 化井面），选项语义与键盘行为仍归原生
-              // `// ui-kit-candidate: KitSelect`（列表弹层仍由系统画；换全自绘要另写开合与键盘态）
-              <span className="prob-select-wrap">
-                <select
-                  className="prob-filter prob-select"
-                  aria-label="按诊断来源过滤问题"
-                  title="按诊断来源过滤"
-                  value={sourceSel === null ? ALL_SOURCES_VALUE : sourceSel}
-                  onChange={(e) =>
-                    setFilterPrefs((cur) => ({
-                      ...cur,
-                      source: e.target.value === ALL_SOURCES_VALUE ? null : e.target.value,
-                    }))
-                  }
-                >
-                  <option value={ALL_SOURCES_VALUE}>全部来源</option>
-                  {srcOpts.map((o) => (
-                    <option key={o.key} value={o.key}>
-                      {o.label}（{o.count}）
-                    </option>
-                  ))}
-                </select>
-                <Icon name="chevron-down" size={12} className="prob-select-caret" />
-              </span>
+              // 来源过滤（S14）：单一来源时不给下拉——只有一个选项的开关是噪音。
+              // 井体 + chevron 取自 ui-kit `KitSelect`（1026 C2-b）：开合、键盘与读屏语义仍归
+              // 原生 `<select>`，被收进控件语言的只有**外观**那一条腿（含 `-webkit-small-control`
+              // 那枚系统字号随原生 select 一起消失）。工具条上的度量差（井宽上限）走
+              // `prob-select-well` 双类切片压一格。
+              <KitSelect
+                className="prob-filter prob-select-well"
+                ariaLabel="按诊断来源过滤问题"
+                title="按诊断来源过滤"
+                value={sourceSel === null ? ALL_SOURCES_VALUE : sourceSel}
+                onChange={(v) =>
+                  setFilterPrefs((cur) => ({
+                    ...cur,
+                    source: v === ALL_SOURCES_VALUE ? null : v,
+                  }))
+                }
+                options={[
+                  { value: ALL_SOURCES_VALUE, label: '全部来源' },
+                  ...srcOpts.map((o) => ({ value: o.key, label: `${o.label}（${o.count}）` })),
+                ]}
+              />
             ) : null}
             {/* 与检索面板的 `ksp-field` 同族：边框与焦点环画在井上，输入框自己无框 */}
             <span className="prob-field">
@@ -970,7 +939,7 @@ export function ProblemPanel({
               </>
             ) : null}
           </div>
-        </div>
+        </KitPanelHeader>
       )}
 
       {filtered.length === 0 ? (

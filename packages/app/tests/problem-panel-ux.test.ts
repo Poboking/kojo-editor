@@ -10,11 +10,13 @@
  *    `SEVERITY_GLYPH` 那枚**读数腿**常量里（CSS 视觉隐藏，屏幕阅读器与
  *    `problem-truth-single-source` 那把尺共用）——渲染后的面板 markup 里，
  *    每一枚 ✕⚠ℹ 都必须落在 `.prob-count-sr` 格内，图标本体一律 `icons.tsx` 的 SVG。
- * 2. **工具条没有裸生控件**：`select` 必穿 `.prob-select` 住在 `.prob-select-wrap`
- *    井里并配 SVG 箭头；`input[type=checkbox]` 必是 `.prob-check-input`（视觉隐藏、
- *    语义腿仍原生）配 `.prob-check-box` 自绘方框——原生控件留在 DOM 是**设计**
- *    （键盘 / 弹层 / 对面 `problem-menu` 让位给全局输入框面的判据都吃它），
- *    被禁的是"裸 native 外观落进全局 button/select 默认档"。
+ * 2. **工具条没有裸生控件**：勾选与下拉一律取 **ui-kit 基座**（1026 C2-a / C2-b）——
+ *    `select` 必穿 `.kit-select-input` 住在 `.kit-select` 井里并配自绘 `.kit-select-arrow`；
+ *    `input[type=checkbox]` 必是 `.kit-check-input`（视觉隐藏、语义腿仍原生）配
+ *    `.kit-check-box` 自绘方框。本域只许留 `.prob-select-well` 那一格井宽上限。
+ *    原生控件留在 DOM 是**设计**（键盘 / 弹层 / 对面 `problem-menu` 让位给全局输入框面的判据都吃它），
+ *    被禁的是"裸 native 外观落进全局 button/select 默认档"；同样被禁的是本域再抄第二份
+ *    勾盒与井（旧的 `.prob-check*` / `.prob-select*` 段随本批删净，VIS-41）。
  * 3. **token 与滚动收口**：`problem-panel.css` 的 `border-radius` 只许
  *    `var(--radius-*)` 或重置用的 `0`（与已合流 `search-panel.css` 的 `ksp-input`
  *    同一档）；`.prob-list` 不再自带 `max-height`/`overflow`（双重滚动交回
@@ -112,33 +114,37 @@ describe('字符图标清零：▸▾✅ 绝迹，✕⚠ℹ 只住读数腿', ()
   });
 });
 
-describe('工具条：原生控件只许穿 prob 族的外衣', () => {
-  it('select 必穿 .prob-select 住 .prob-select-wrap，配 SVG 箭头（不穿回全局默认档）', () => {
+describe('工具条：原生控件一律穿 ui-kit 基座的外衣', () => {
+  it('来源过滤 = KitSelect：井是 .kit-select、select 穿 .kit-select-input、chevron 自绘', () => {
     fullStore();
     const markup = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));
-    expect(markup).toContain('class="prob-select-wrap"');
-    expect(markup).toContain('<select class="prob-filter prob-select"');
-    expect(markup).toContain('class="icon prob-select-caret"');
-    // 裸生 select（没有 prob-select 的）一个都不许有
+    expect(markup).toContain('<span class="kit-select prob-filter prob-select-well">');
+    expect(markup).toContain('<select class="kit-select-input"');
+    expect(markup).toContain('class="kit-select-arrow"');
+    // 面板自己那两份井与箭头的抄本整体退场（件本体只许有一份）
+    expect(markup).not.toContain('prob-select-wrap');
+    expect(markup).not.toContain('prob-select-caret');
+    // 裸生 select（没有落进 kit 井的）一个都不许有
     const selects = [...markup.matchAll(/<select\b([^>]*)>/g)].map((m) => m[1] ?? '');
     expect(selects.length).toBeGreaterThan(0);
-    for (const attrs of selects) expect(attrs).toContain('prob-select');
+    for (const attrs of selects) expect(attrs).toContain('kit-select-input');
   });
 
-  it('checkbox 必是 KitCheck 族：语义腿（真 input）留着，外观腿是自绘方框 + check SVG', () => {
+  it('checkbox 必是 KitCheck 族：语义腿（真 input）留着，外观腿是基座的自绘方框', () => {
     // 剥掉注释再数：只有 KitCheck 一处产 checkbox 元素，别处再冒原生勾选就是回流
     const codeOnly = panelSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     const checks = [...codeOnly.matchAll(/type="checkbox"/g)];
-    expect(checks.length).toBe(1);
+    expect(checks.length).toBe(0); // 本体在 kit-check.tsx 里，本文件一枚都不许再写
     fullStore();
     const markup = renderToStaticMarkup(h(ProblemPanel, { onReveal: () => {} }));
     const boxes = [...markup.matchAll(/<input([^>]*)>/g)].filter((m) => (m[1] ?? '').includes('checkbox'));
     expect(boxes.length).toBe(3); // 三档严重级各一枚
     for (const box of boxes) {
-      expect(box[1]).toContain('prob-check-input');
+      expect(box[1]).toContain('kit-check-input');
     }
-    expect(markup).toContain('class="prob-check-box"');
-    expect((markup.match(/class="icon prob-check-glyph"/g) ?? []).length).toBe(3);
+    expect(markup).toContain('class="kit-check-box"');
+    // 旧的 prob-check 族（第二份勾盒 + check SVG 字形）不再被挂上
+    expect(markup).not.toContain('prob-check');
   });
 
   it('过滤输入井与检索面板 ksp-field 同族：input 无框、焦点环画在井上', () => {
@@ -216,6 +222,6 @@ describe('rebase 合流驻留闸：对面的功能腿与 ARIA 都在', () => {
     expect(markup).toContain('aria-label="按消息、诊断码、来源或路径过滤问题"');
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain('<span class="prob-count-num" aria-hidden="true">');
-    expect(markup).toContain('<span class="prob-check-box" aria-hidden="true">');
+    expect(markup).toContain('<span class="kit-check-box" aria-hidden="true">');
   });
 });

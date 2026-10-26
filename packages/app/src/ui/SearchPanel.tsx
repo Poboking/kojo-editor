@@ -73,6 +73,12 @@ import {
   type SearchScopeItem,
 } from './search-scope';
 import { SearchFilterBar } from './SearchFilterBar';
+import { KitPanelHeader } from '../ui-kit/kit-panel-header';
+import { KitSearchField } from '../ui-kit/kit-search-field';
+// 下拉井与勾选取自基座叶子（1026 C2-b / C2-a）：排序与范围两枚、"打字即搜"一颗。
+// 键盘腿（Enter 即搜）挂在行本体上——keydown 会冒泡，件因此不必多开一个 onKeyDown 口子。
+import { KitCheck } from '../ui-kit/kit-check';
+import { KitSelect } from '../ui-kit/kit-select';
 import '../search-panel.css';
 import './context-menu-search.css';
 
@@ -1055,8 +1061,10 @@ export function SearchPanel({
         handleRowNav(e);
       }}
     >
-      {/* 控制区 + 状态区：单面板侧栏里整块 sticky（结果滚走、条件与读数常驻） */}
-      <div className="ksp-head" ref={headRef}>
+      {/* 控制区 + 状态区：单面板侧栏里整块 sticky（结果滚走、条件与读数常驻）。
+          骨架与问题面板 / 大纲读数条同源 = ui-kit `KitPanelHeader`（1026 C1-a；
+          无标题只有控件行——本档不填标题槽，追加行走 children）。 */}
+      <KitPanelHeader ref={headRef}>
         <div className="ksp-row ksp-search-row">
           {/* 替换行开关：VSCode 同位（最左 chevron），展开/收起是纯 UI 状态 */}
           <button
@@ -1072,62 +1080,67 @@ export function SearchPanel({
             <Icon name={replaceOpen ? 'chevron-down' : 'chevron-right'} size="md" />
           </button>
 
-          <div className="ksp-field">
-            <input
-              ref={inputRef}
-              className="search-input ksp-input"
-              placeholder="在文件中搜索…"
-              title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）；↑/↓ 回溯最近检索"
-              aria-label="在文件中搜索"
-              autoComplete="off"
-              spellCheck={false}
-              value={s.query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                // 输入法组词中的 ↑↓ 是在候选词里翻页、回车是在确认候选词——一律不接管
-                // （中文作者的主路径；不挡会把一次组词变成一次历史回溯 / 跳转）
-                if (e.nativeEvent.isComposing) return;
-                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                  // ↑/↓ 回溯最近检索（W7-E；数据面在 `search-store.stepSearchHistory`）：
-                  // ↑ 从草稿进入历史并向更旧走，↓ 向更新走、退到最新一条再按 = 还原草稿。
-                  // 没有历史 / 还没进入回溯时的 ↓ **不消费**——既有「↓ 进结果第一行」的
-                  // 行导航（`panel-row-nav`）原样保留；消费时必须停住冒泡，否则同一下按键
-                  // 会被面板根上的行导航再处理一遍（输入框与结果区各动一次）。
-                  if (stepSearchHistory(e.key === 'ArrowUp' ? -1 : 1)) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }
-                  return;
+          {/* 检索井：ui-kit `KitSearchField`（1026 C1-b 三处接入之一）。`ksp-field` 类逐字
+              保留（本面板的度量细则仍住 search-panel.css 的 `.ksp-*` 段）；框内 toggle 组
+              走右侧动作槽；判据锚类 `search-input ksp-input` 由 inputClassName 原样落上。 */}
+          <KitSearchField
+            className="ksp-field"
+            inputClassName="search-input ksp-input"
+            inputRef={inputRef}
+            type="text"
+            value={s.query}
+            onChange={setQuery}
+            placeholder="在文件中搜索…"
+            title="回车开始检索；已有结果时回车 / Shift+回车逐项跳（与 F4 / Shift+F4 同效；Ctrl+Shift+F）；↑/↓ 回溯最近检索"
+            ariaLabel="在文件中搜索"
+            autoComplete="off"
+            spellCheck={false}
+            onKeyDown={(e) => {
+              // 输入法组词中的 ↑↓ 是在候选词里翻页、回车是在确认候选词——一律不接管
+              // （中文作者的主路径；不挡会把一次组词变成一次历史回溯 / 跳转）
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                // ↑/↓ 回溯最近检索（W7-E；数据面在 `search-store.stepSearchHistory`）：
+                // ↑ 从草稿进入历史并向更旧走，↓ 向更新走、退到最新一条再按 = 还原草稿。
+                // 没有历史 / 还没进入回溯时的 ↓ **不消费**——既有「↓ 进结果第一行」的
+                // 行导航（`panel-row-nav`）原样保留；消费时必须停住冒泡，否则同一下按键
+                // 会被面板根上的行导航再处理一遍（输入框与结果区各动一次）。
+                if (stepSearchHistory(e.key === 'ArrowUp' ? -1 : 1)) {
+                  e.preventDefault();
+                  e.stopPropagation();
                 }
-                // 回车 = 有结果逐项跳 / 没结果开始检索（输入法组词中的回车已在上面
-                // 让位给候选词确认——中文作者的主路径，不挡会把一次组词变成一次跳转）
-                if (e.key !== 'Enter') return;
-                e.preventDefault();
-                // 有结果优先逐项跳（VSCode 查找控件的 Enter 手感）；查询改过 / 没结果
-                // ⇒ `stepSearchMatch` 返回 null，退回"回车开始检索"
-                if (stepMatch(e.shiftKey ? -1 : 1)) return;
-                start();
-              }}
-            />
-            <div className="ksp-toggles" role="group" aria-label="检索选项">
-              {TOGGLES.map((t) => {
-                const on = s.options[t.key];
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    className={`search-toggle ksp-toggle${on ? ' on' : ''}`}
-                    title={t.title}
-                    aria-label={t.title}
-                    aria-pressed={on}
-                    onClick={() => toggleOption(t.key)}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+                return;
+              }
+              // 回车 = 有结果逐项跳 / 没结果开始检索（输入法组词中的回车已在上面
+              // 让位给候选词确认——中文作者的主路径，不挡会把一次组词变成一次跳转）
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              // 有结果优先逐项跳（VSCode 查找控件的 Enter 手感）；查询改过 / 没结果
+              // ⇒ `stepSearchMatch` 返回 null，退回"回车开始检索"
+              if (stepMatch(e.shiftKey ? -1 : 1)) return;
+              start();
+            }}
+            actions={
+              <div className="ksp-toggles" role="group" aria-label="检索选项">
+                {TOGGLES.map((t) => {
+                  const on = s.options[t.key];
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      className={`search-toggle ksp-toggle${on ? ' on' : ''}`}
+                      title={t.title}
+                      aria-label={t.title}
+                      aria-pressed={on}
+                      onClick={() => toggleOption(t.key)}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            }
+          />
 
           {s.phase === 'running' ? (
             <button
@@ -1250,14 +1263,35 @@ export function SearchPanel({
             </label>
 
             {/* 排序（P2-11）：三选一，默认按路径（与今天逐字一致）。只改投影序，
-                不重发检索；在途流式结果也当场重排（排序是纯函数，住 search-stream）。 */}
-            <label className="search-sort-row ksp-opt-row">
+                不重发检索；在途流式结果也当场重排（排序是纯函数，住 search-stream）。
+                井本体 = ui-kit `KitSelect`（1026 C2-b）：`appearance` 归零 + 自绘 chevron，
+                开合 / 键盘 / 读屏仍归原生 `<select>`。Enter 即搜那条腿在行本体上接住
+                （keydown 从 select 冒泡上来），件因此不必为它多开一个口子。 */}
+            <label
+              className="search-sort-row ksp-opt-row"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  start();
+                }
+              }}
+            >
               <span className="ksp-opt-label">排序</span>
-              <select
+              <KitSelect
                 className="search-sort ksp-opt-select"
+                ariaLabel="排序方式"
                 title="结果排序：按路径（默认）/ 按命中数 / 按文件名。只改投影顺序，不重新检索。"
                 value={s.sortMode}
-                onChange={(e) => setSearchSortMode(e.target.value as SearchSortMode)}
+                onChange={(v) => setSearchSortMode(v as SearchSortMode)}
+                options={SEARCH_SORT_OPTIONS.map((o) => ({ value: o.mode, label: o.label }))}
+              />
+            </label>
+
+            {scopes.length > 0 ? (
+              // 范围（只看那一处）同上：井在基座，逐档说明走 `option.title`（KitSelectOption
+              // 那条 additive 的腿），陈旧 key 按"不限"显示与生效，不猜。
+              <label
+                className="search-scope-row ksp-opt-row"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -1265,52 +1299,42 @@ export function SearchPanel({
                   }
                 }}
               >
-                {SEARCH_SORT_OPTIONS.map((o) => (
-                  <option key={o.mode} value={o.mode}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {scopes.length > 0 ? (
-              <label className="search-scope-row ksp-opt-row">
                 <span className="ksp-opt-label">只看</span>
-                <select
+                <KitSelect
                   className="search-scope ksp-opt-select"
+                  ariaLabel="只看的目录范围"
                   title="默认不限：整个项目加作者工作区一起搜。选定后只搜那一处，速度更快，但范围外的文件这一轮不会搜。"
-                  // 陈旧 key（换过项目）按"不限"显示与生效，不猜
                   value={selectedScopeKey}
-                  onChange={(e) => setSearchScope(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      start();
-                    }
-                  }}
-                >
-                  <option value="">全部目录</option>
-                  {scopes.map((o) => (
-                    <option key={o.key} value={o.key} title={o.detail || undefined}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setSearchScope(v)}
+                  options={[
+                    { value: '', label: '全部目录' },
+                    ...scopes.map((o) => ({
+                      value: o.key,
+                      label: o.label,
+                      title: o.detail || undefined,
+                    })),
+                  ]}
+                />
               </label>
             ) : null}
 
             {/* 打字即搜开关（P2-11）：住面板自己行内，不占全局设置。
-                默认开的理由见组件顶部 `liveSearch` 注释。 */}
-            <label className="search-live-row ksp-opt-row">
-              <input
-                type="checkbox"
-                className="search-live ksp-opt-check"
+                默认开的理由见组件顶部 `liveSearch` 注释。
+                勾本体 = ui-kit `KitCheck`（1026 C2-a）：可见文字走件自己的 label 档
+                （外层因此从 `<label>` 退成 `<div>`，不套嵌套 label）。 */}
+            <div
+              className="search-live-row ksp-opt-row"
+              title="打字即搜：停止输入约 0.3 秒后自动检索（回车 / 搜索钮随时可手动搜）"
+            >
+              <KitCheck
+                className="search-live"
                 checked={liveSearch}
-                onChange={(e) => setLiveSearch(e.target.checked)}
-                title="打字即搜：停止输入约 0.3 秒后自动检索（回车 / 搜索钮随时可手动搜）"
-              />
-              <span className="ksp-opt-check-label">打字即搜</span>
-            </label>
+                label="打字即搜"
+                onChange={setLiveSearch}
+              >
+                打字即搜
+              </KitCheck>
+            </div>
 
             {/* P2-15：glob 过滤 + 保留大小写开关（自带状态的新组件；一行接线，不重排既有行） */}
             <SearchFilterBar onRequestSearch={start} />
@@ -1486,7 +1510,7 @@ export function SearchPanel({
             </div>
           )}
         </div>
-      </div>
+      </KitPanelHeader>
 
       {/* 结果区：**虚拟列表**（只挂视口内的行 + overscan，两侧留白顶起滚动高度）。
           行号槽宽由整份结果的最长读数定（CSS 自定义属性，一处写全列表）。

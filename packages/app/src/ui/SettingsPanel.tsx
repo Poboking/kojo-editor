@@ -71,6 +71,9 @@ import {
 } from './editor-display-prefs';
 // 字体档位（视觉批十二 L20）：档位表 / 解析 / 可用性判定的真源全在 font-presets.ts，本页只排版。
 import { KitRadio } from '../ui-kit';
+import { KitSearchField } from '../ui-kit/kit-search-field';
+// 设置行的三件套模板（1026 C2-c / VIS-40）：标题 + 说明 + 控件槽，直引叶子、不经桶棒。
+import { KitField } from '../ui-kit/kit-field';
 import {
   CODE_FONT_PRESETS,
   CUSTOM_CODE_FONT_PRESET_ID,
@@ -96,6 +99,8 @@ import { registerSettingsMenuBridge } from './settings-menu';
 // 语言能力矩阵的只读视图（批次十 S15）：现读 monaco/language-capabilities.ts，零 props、样式全内联。
 import { CapabilityMatrixSection } from './capability-matrix-view';
 import '../settings-search.css';
+// 检索井换 ui-kit `KitSearchField` 后的接线切片（1026 C1-b）：只补井在 searchbar 行的占宽腿。
+import './settings-search-kit.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
 import './settings-appearance.css';
@@ -256,6 +261,24 @@ export interface SettingsSection {
 }
 
 /**
+ * 设置页一行的形态（1026 kit-converge C2-c / VIS-40）。
+ *
+ * **常规行（标题 + 说明 + 一个控件）一律走 ui-kit `KitField`**，外面只包一枚
+ * `<div className="settings-kit-row">` 加一行写死的 `data-settings-key` 锚。分工是刻意的：
+ * - 件负责排版（两列栅格、右轴控件槽、`nested` 从属线、`inactive` 降透明、13px 正文 / 12px 说明）；
+ * - 外壳只负责**页面锚**：`settings-menu` 的「复制设置 ID / 恢复默认」按
+ *   `closest('[data-settings-key]')` 取行，`settings-search` 的结果落点与命中闪动也按这枚
+ *   属性取，而 `settings-search.test.ts` 只认 **JSX 字面量**写法
+ *   （`data-settings-key="一串"`）⇒ 锚必须逐行写死在页面上，不许塞进件里当 prop
+ *   （`KitField` 是零页面知识的控件件，它不该认识"设置项 id"）。
+ *
+ * 三档**不是**三件套，仍走各自的外壳，别硬套：
+ * `stacked`（字体两行的单列 flex，判据 `settings-font-row-layout.test.ts`）、
+ * `has-field`（说明 + 独占行输入，如市场草稿行）、`settings-link`（外链行，流式而非栅格）。
+ * 分段控件行（`.theme-segment`）本轮不动——`KitSegmented` 是另批的射程。
+ */
+
+/**
  * 节的清单（模块级导出常量 = 下一批的扩展点）。
  *
  * 形态是「props 进、`SettingsSection[]` 出」的工厂：这样 `render()` 保持无参（闭包捕获 props），
@@ -317,35 +340,41 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
         <>
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">视图</div>
-            <label className="settings-row" data-settings-key="general.zen">
-              <Switch
-                checked={zen}
-                onChange={(c) => dispatch(c ? { type: 'toggleZen' } : { type: 'exitZen' })}
-                label="写作模式"
+            <div className="settings-kit-row" data-settings-key="general.zen">
+              <KitField
+                as="label"
+                title="写作模式"
+                description="收起所有面板，只留编辑器。快捷键 Ctrl+K Z，Esc 退出"
+                control={
+                  <Switch
+                    checked={zen}
+                    onChange={(c) => dispatch(c ? { type: 'toggleZen' } : { type: 'exitZen' })}
+                    label="写作模式"
+                  />
+                }
               />
-              <span>
-                写作模式
-                <span className="settings-hint">收起所有面板，只留编辑器。快捷键 Ctrl+K Z，Esc 退出</span>
-              </span>
-            </label>
+            </div>
             {/* 居中限宽只在写作模式下有意义——非写作模式时它**什么都控制不了**，
                 所以不是"灰着好看"，而是不给一个点了没反应的控件。 */}
-            <label className={`settings-row nested${zen ? '' : ' off'}`} data-settings-key="general.zenLimitWidth">
-              <Switch
-                checked={zenLimitWidth}
-                disabled={!zen}
-                onChange={(c) => dispatch({ type: 'setZenLimitWidth', value: c })}
-                label="编辑器居中限宽"
+            <div className="settings-kit-row" data-settings-key="general.zenLimitWidth">
+              <KitField
+                as="label"
+                nested
+                inactive={!zen}
+                title="编辑器居中限宽"
+                description={
+                  zen ? '按一行正文的舒适宽度收拢；关闭则铺满整个窗口' : '需要先开启写作模式'
+                }
+                control={
+                  <Switch
+                    checked={zenLimitWidth}
+                    disabled={!zen}
+                    onChange={(c) => dispatch({ type: 'setZenLimitWidth', value: c })}
+                    label="编辑器居中限宽"
+                  />
+                }
               />
-              <span>
-                编辑器居中限宽
-                <span className="settings-hint">
-                  {zen
-                    ? '按一行正文的舒适宽度收拢；关闭则铺满整个窗口'
-                    : '需要先开启写作模式'}
-                </span>
-              </span>
-            </label>
+            </div>
           </div>
 
           {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，
@@ -354,30 +383,32 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               2026-10-14 起不在其内（它的开关常驻下面那个「编辑器」组，不随本总闸收起）。 */}
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">封存功能</div>
-            <label className="settings-row" data-settings-key="general.sealed">
-              <Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />
-              <span>
-                显示已封存功能
-                <span
-                  className="settings-hint"
-                  title=".kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。"
-                >
-                  .kojo 转译检查 · 归档浏览器：已封存，勾选可临时恢复。
-                </span>
-              </span>
-            </label>
+            <div className="settings-kit-row" data-settings-key="general.sealed">
+              <KitField
+                as="label"
+                title="显示已封存功能"
+                description={
+                  <span title=".kojo 转译检查 · 归档浏览器：试用反馈后已封存，默认隐藏。勾选可临时恢复；代码未删，随时可以再关。">
+                    .kojo 转译检查 · 归档浏览器：已封存，勾选可临时恢复。
+                  </span>
+                }
+                control={<Switch checked={!sealed} onChange={(c) => setSealed(!c)} label="显示已封存功能" />}
+              />
+            </div>
           </div>
 
           <div className="settings-group">
             <div role="heading" aria-level={4} className="settings-group-title">布局</div>
-            <div className="settings-row static" data-settings-key="general.layout">
-              <button className="ghost small" onClick={onResetLayout}>
-                重置布局
-              </button>
-              <span>
-                重置布局
-                <span className="settings-hint">恢复默认的面板位置、尺寸与显隐；不影响任何文件内容</span>
-              </span>
+            <div className="settings-kit-row" data-settings-key="general.layout">
+              <KitField
+                title="重置布局"
+                description="恢复默认的面板位置、尺寸与显隐；不影响任何文件内容"
+                control={
+                  <button className="ghost small" onClick={onResetLayout}>
+                    重置布局
+                  </button>
+                }
+              />
             </div>
           </div>
         </>
@@ -395,66 +426,81 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               整块走自订阅的 `ThemePickerSection`（照 `TreeSitterRow` / `LayoutPrefRows` 先例，
               读与写就地走 theme-pref 的 localStorage 真源，不占壳层 props 镜像）。 */}
           <ThemePickerSection />
-          <label className="settings-row" data-settings-key="appearance.motion">
-            <Switch
-              checked={motionPref === 'reduced'}
-              onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
-              label="减弱动效"
+          <div className="settings-kit-row" data-settings-key="appearance.motion">
+            <KitField
+              as="label"
+              title="减弱动效"
+              description={
+                <span title="收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效">
+                  收起面板过渡与入场动画，切换更干脆
+                </span>
+              }
+              control={
+                <Switch
+                  checked={motionPref === 'reduced'}
+                  onChange={(c) => commitMotionPref(c ? 'reduced' : 'full')}
+                  label="减弱动效"
+                />
+              }
             />
-            <span>
-              减弱动效
-              <span className="settings-hint" title="收起面板过渡与入场动画，界面切换更干脆。系统级「减弱动效」设置仍会照常生效">
-                收起面板过渡与入场动画，切换更干脆
-              </span>
-            </span>
-          </label>
+          </div>
           {/* 面板渲染偏好（panel-prefs.ts，2026-10-14 面板偏好批）：与「减弱动效」同组、
               一直可见（不随封存总闸收起——它是稳定可用的渲染选项，不是试用中的功能）。 */}
-          <label className="settings-row" data-settings-key="appearance.panelVirtualize">
-            <Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />
-            <span>
-              长列表视口化
-              <span
-                className="settings-hint"
-                title="只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。"
-              >
-                大列表只渲染看得到的行，首开不再卡
-              </span>
-            </span>
-          </label>
+          <div className="settings-kit-row" data-settings-key="appearance.panelVirtualize">
+            <KitField
+              as="label"
+              title="长列表视口化"
+              description={
+                <span title="只渲染屏幕上看得到的行（滚出即撤、滚入即建）：大角色首次打开不再有一次性卡顿。关掉则一次全渲染。">
+                  大列表只渲染看得到的行，首开不再卡
+                </span>
+              }
+              control={<Switch checked={panelVirtualize} onChange={setPanelVirtualize} label="长列表视口化" />}
+            />
+          </div>
           {/* 毛玻璃透明度（glass-pref.ts）：与字号步进器同款排版（− 读数 ＋）。透明度越高，
-              浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。 */}
-          <div className="settings-row static" data-settings-key="appearance.glass" role="group" aria-label="毛玻璃透明度">
-            <span className="settings-stepper">
-              <button
-                className="ghost small"
-                onClick={() => stepGlassTransparencyPref(-1)}
-                disabled={glassTransparency <= GLASS_TRANSPARENCY_MIN}
-                title="更实心"
-                aria-label="降低毛玻璃透明度"
-              >
-                −
-              </button>
-              <span className="settings-stepper-value">{glassTransparency}%</span>
-              <button
-                className="ghost small"
-                onClick={() => stepGlassTransparencyPref(1)}
-                disabled={glassTransparency >= GLASS_TRANSPARENCY_MAX}
-                title="更通透"
-                aria-label="提高毛玻璃透明度"
-              >
-                ＋
-              </button>
-            </span>
-            <span>
-              毛玻璃透明度
-              <span
-                className="settings-hint"
-                title={`浮层与教程目录的磨砂通透程度，默认 ${GLASS_TRANSPARENCY_DEFAULT}%（每档 ${GLASS_TRANSPARENCY_STEP}%）。调到 0% 即实心、关掉磨砂。`}
-              >
-                浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）
-              </span>
-            </span>
+              浮层与教程目录越通透；调到 0% 即实心档，撤掉磨砂回到不透明面。只改显示、不动文件。
+              步进器这一档 `role="group"`：三枚钮是一个整体，读屏要报出组名。件不认得 role，
+              所以这层语义与锚一起住在外壳。 */}
+          <div
+            className="settings-kit-row"
+            data-settings-key="appearance.glass"
+            role="group"
+            aria-label="毛玻璃透明度"
+          >
+            <KitField
+              title="毛玻璃透明度"
+              description={
+                <span
+                  title={`浮层与教程目录的磨砂通透程度，默认 ${GLASS_TRANSPARENCY_DEFAULT}%（每档 ${GLASS_TRANSPARENCY_STEP}%）。调到 0% 即实心、关掉磨砂。`}
+                >
+                  浮层与教程目录的磨砂通透程度，默认 {GLASS_TRANSPARENCY_DEFAULT}%（每档 {GLASS_TRANSPARENCY_STEP}%）
+                </span>
+              }
+              control={
+                <span className="settings-stepper">
+                  <button
+                    className="ghost small"
+                    onClick={() => stepGlassTransparencyPref(-1)}
+                    disabled={glassTransparency <= GLASS_TRANSPARENCY_MIN}
+                    title="更实心"
+                    aria-label="降低毛玻璃透明度"
+                  >
+                    −
+                  </button>
+                  <span className="settings-stepper-value">{glassTransparency}%</span>
+                  <button
+                    className="ghost small"
+                    onClick={() => stepGlassTransparencyPref(1)}
+                    disabled={glassTransparency >= GLASS_TRANSPARENCY_MAX}
+                    title="更通透"
+                    aria-label="提高毛玻璃透明度"
+                  >
+                    ＋
+                  </button>
+                </span>
+              }
+            />
           </div>
           {/* 界面字体（视觉批十二 L20）：档位表真源在 font-presets.ts，生效链与编程字体同一对
               resolve 函数（写侧当场落根元素内联 --font-ui）。锚点在册 settings-search.ts。 */}
@@ -476,137 +522,157 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             <div role="heading" aria-level={4} className="settings-group-title">编辑器</div>
             {/* 字号 / 缩放（A1）：真源与钳制在 font-size-pref.ts，这里只排版。
                 禁用位 = 已到量程两端，与「没改动⇒按钮不可点」同一房规。 */}
-            <div className="settings-row static" data-settings-key="editor.fontSize" role="group" aria-label="正文字号">
-              <span className="settings-stepper">
-                <button
-                  className="ghost small"
-                  onClick={() => stepFontSizePref(-1)}
-                  disabled={fontSize <= FONT_SIZE_MIN}
-                  title="减小字号"
-                  aria-label="减小字号"
-                >
-                  −
-                </button>
-                <span className="settings-stepper-value">{fontSize} px</span>
-                <button
-                  className="ghost small"
-                  onClick={() => stepFontSizePref(1)}
-                  disabled={fontSize >= FONT_SIZE_MAX}
-                  title="增大字号"
-                  aria-label="增大字号"
-                >
-                  ＋
-                </button>
-              </span>
-              <span>
-                正文字号
-                <span className="settings-hint">
-                  编辑器里一行字的大小，默认 {FONT_SIZE_DEFAULT}。只改显示、不动文件
-                </span>
-              </span>
+            <div
+              className="settings-kit-row"
+              data-settings-key="editor.fontSize"
+              role="group"
+              aria-label="正文字号"
+            >
+              <KitField
+                title="正文字号"
+                description={<>编辑器里一行字的大小，默认 {FONT_SIZE_DEFAULT}。只改显示、不动文件</>}
+                control={
+                  <span className="settings-stepper">
+                    <button
+                      className="ghost small"
+                      onClick={() => stepFontSizePref(-1)}
+                      disabled={fontSize <= FONT_SIZE_MIN}
+                      title="减小字号"
+                      aria-label="减小字号"
+                    >
+                      −
+                    </button>
+                    <span className="settings-stepper-value">{fontSize} px</span>
+                    <button
+                      className="ghost small"
+                      onClick={() => stepFontSizePref(1)}
+                      disabled={fontSize >= FONT_SIZE_MAX}
+                      title="增大字号"
+                      aria-label="增大字号"
+                    >
+                      ＋
+                    </button>
+                  </span>
+                }
+              />
             </div>
             {/* 锚点 = 搜索结果的落点：这一行在索引里有 `editor.fontZoom`，DOM 上就得有同一枚
                 data-settings-key，否则「点了跳不过去」（判据见 settings-search.test.ts）。 */}
-            <div className="settings-row static" data-settings-key="editor.fontZoom">
-              <button className="ghost small" onClick={resetFontZoomPref} disabled={fontZoom === FONT_ZOOM_DEFAULT}>
-                重置缩放
-              </button>
-              <span>
-                文字缩放（当前 {100 + fontZoom * 10}%）
-                <span className="settings-hint">
-                  Ctrl+= 放大一档、Ctrl+- 缩小一档（每档 10%）、Ctrl+0 复原；缩放叠在字号上，两者都会记住
-                </span>
-              </span>
+            <div className="settings-kit-row" data-settings-key="editor.fontZoom">
+              <KitField
+                title={<>文字缩放（当前 {100 + fontZoom * 10}%）</>}
+                description="Ctrl+= 放大一档、Ctrl+- 缩小一档（每档 10%）、Ctrl+0 复原；缩放叠在字号上，两者都会记住"
+                control={
+                  <button className="ghost small" onClick={resetFontZoomPref} disabled={fontZoom === FONT_ZOOM_DEFAULT}>
+                    重置缩放
+                  </button>
+                }
+              />
             </div>
             {/* 快建议 / 文档词两个总开关（QSUG-2）：真源与订阅在 suggest-pref.ts，
                 这里只排版。默认都开（对标 VS Code / IDEA）；台词 / 旁白 / 注释 / 字符串
                 与只读 / 预览不靠这两个开关降噪，位置门各自负责。 */}
-            <label className="settings-row" data-settings-key="editor.quickSuggestions">
-              <Switch
-                checked={quickSuggestionsOn}
-                onChange={commitQuickSuggestions}
-                label="输入时自动弹出补全"
+            <div className="settings-kit-row" data-settings-key="editor.quickSuggestions">
+              <KitField
+                as="label"
+                title="输入时自动弹出补全"
+                description={
+                  <>
+                    写到代码位就边打边弹；.kojo 的台词 / 旁白 / 注释与 .erb 的注释 / 字符串里不弹，
+                    只读文件与 .kojo 预览始终不弹。默认开
+                  </>
+                }
+                control={
+                  <Switch
+                    checked={quickSuggestionsOn}
+                    onChange={commitQuickSuggestions}
+                    label="输入时自动弹出补全"
+                  />
+                }
               />
-              <span>
-                输入时自动弹出补全
-                <span className="settings-hint">
-                  写到代码位就边打边弹；.kojo 的台词 / 旁白 / 注释与 .erb 的注释 / 字符串里不弹，
-                  只读文件与 .kojo 预览始终不弹。默认开
-                </span>
-              </span>
-            </label>
-            <label className="settings-row" data-settings-key="editor.wordSuggestions">
-              <Switch
-                checked={wordSuggestionsOn}
-                onChange={commitWordSuggestions}
-                label="文档词补全"
+            </div>
+            <div className="settings-kit-row" data-settings-key="editor.wordSuggestions">
+              <KitField
+                as="label"
+                title="文档词补全"
+                description={
+                  <>
+                    除上下文候选外，再从当前文件里补同前缀的词；只在代码位弹，台词 / 旁白 / 注释里不弹。
+                    超过 5,000 行的文件不提供。默认开
+                  </>
+                }
+                control={<Switch checked={wordSuggestionsOn} onChange={commitWordSuggestions} label="文档词补全" />}
               />
-              <span>
-                文档词补全
-                <span className="settings-hint">
-                  除上下文候选外，再从当前文件里补同前缀的词；只在代码位弹，台词 / 旁白 / 注释里不弹。
-                  超过 5,000 行的文件不提供。默认开
-                </span>
-              </span>
-            </label>
+            </div>
             {/* 补全弹出延迟（SUGGEST-2B）：真源与钳制在 suggest-pref.ts，这里只排版。
                 − / ＋ 每档 100ms；0 显示「立即」= 打字即弹（默认，保持旧体感）。
                 观察者每次排程现读 ⇒ 改完下一次击键即生效，不用重开文件。 */}
-            <div className="settings-row static" data-settings-key="editor.suggestDelay" role="group" aria-label="补全弹出延迟">
-              <span className="settings-stepper">
-                <button
-                  className="ghost small"
-                  onClick={() => commitSuggestDelay(suggestDelay - SUGGEST_DELAY_STEP)}
-                  disabled={suggestDelay <= SUGGEST_DELAY_MIN}
-                  title="更快弹出"
-                  aria-label="减少补全弹出延迟"
-                >
-                  −
-                </button>
-                <span className="settings-stepper-value">
-                  {suggestDelay === SUGGEST_DELAY_MIN ? '立即' : `${suggestDelay} ms`}
-                </span>
-                <button
-                  className="ghost small"
-                  onClick={() => commitSuggestDelay(suggestDelay + SUGGEST_DELAY_STEP)}
-                  disabled={suggestDelay >= SUGGEST_DELAY_MAX}
-                  title="更慢弹出"
-                  aria-label="增加补全弹出延迟"
-                >
-                  ＋
-                </button>
-              </span>
-              <span>
-                补全弹出延迟
-                <span className="settings-hint">
-                  停手后多久弹出候选；0 = 打字即弹；只改补全时机、不动文件
-                </span>
-              </span>
+            <div
+              className="settings-kit-row"
+              data-settings-key="editor.suggestDelay"
+              role="group"
+              aria-label="补全弹出延迟"
+            >
+              <KitField
+                title="补全弹出延迟"
+                description="停手后多久弹出候选；0 = 打字即弹；只改补全时机、不动文件"
+                control={
+                  <span className="settings-stepper">
+                    <button
+                      className="ghost small"
+                      onClick={() => commitSuggestDelay(suggestDelay - SUGGEST_DELAY_STEP)}
+                      disabled={suggestDelay <= SUGGEST_DELAY_MIN}
+                      title="更快弹出"
+                      aria-label="减少补全弹出延迟"
+                    >
+                      −
+                    </button>
+                    <span className="settings-stepper-value">
+                      {suggestDelay === SUGGEST_DELAY_MIN ? '立即' : `${suggestDelay} ms`}
+                    </span>
+                    <button
+                      className="ghost small"
+                      onClick={() => commitSuggestDelay(suggestDelay + SUGGEST_DELAY_STEP)}
+                      disabled={suggestDelay >= SUGGEST_DELAY_MAX}
+                      title="更慢弹出"
+                      aria-label="增加补全弹出延迟"
+                    >
+                      ＋
+                    </button>
+                  </span>
+                }
+              />
             </div>
-            <label className="settings-row" data-settings-key="editor.sugarView">
-              <Switch checked={sugarViewOn} onChange={applySugarViewPref} label=".kojo 预览" />
-              <span>
-                .kojo 预览
-                <span className="settings-hint">
-                  把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
-                  只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
-                </span>
-              </span>
-            </label>
+            <div className="settings-kit-row" data-settings-key="editor.sugarView">
+              <KitField
+                as="label"
+                title=".kojo 预览"
+                description={
+                  <>
+                    把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
+                    只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
+                  </>
+                }
+                control={<Switch checked={sugarViewOn} onChange={applySugarViewPref} label=".kojo 预览" />}
+              />
+            </div>
             {/* 保存时整理空白（E2，2026-10-15 格式化批）：手动版是 Shift+Alt+F，本开关
                 只是把同一次整理挂到保存前。默认关的理由写在 `format-pref.ts`：改的正是空白，
                 而语料里的全角空格多数是有意的排版。文案回避内部术语（不上「糖」字）。 */}
-            <label className="settings-row" data-settings-key="editor.formatOnSave">
-              <Switch checked={formatOnSave} onChange={commitFormatOnSave} label="保存时整理空白" />
-              <span>
-                保存时整理空白
-                <span className="settings-hint">
-                  存盘前把行首与注释里的全角空格折成半角、统一 .kojo 的缩进写法。
-                  台词正文、行尾风格与文件编码都不动；整理是一次可撤销的改动。默认关，
-                  手动整理随时可用 Shift+Alt+F
-                </span>
-              </span>
-            </label>
+            <div className="settings-kit-row" data-settings-key="editor.formatOnSave">
+              <KitField
+                as="label"
+                title="保存时整理空白"
+                description={
+                  <>
+                    存盘前把行首与注释里的全角空格折成半角、统一 .kojo 的缩进写法。
+                    台词正文、行尾风格与文件编码都不动；整理是一次可撤销的改动。默认关，
+                    手动整理随时可用 Shift+Alt+F
+                  </>
+                }
+                control={<Switch checked={formatOnSave} onChange={commitFormatOnSave} label="保存时整理空白" />}
+              />
+            </div>
             {/* 格式化规则开关（P2-14）：整理规则从"全开、零可配"扩成逐条可关。真源
                 `format-pref.ts` 的新键 `kojo.ui.formatRules.v1`（老键 kojo.ui.formatOnSave.v1
                 口径不动；新键缺席 = 两条全开 = 与从前逐字一致）。作用面：手动整理
@@ -616,50 +682,61 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             {/* 行上内联注解（B8，2026-10-16）：往正文里插行的能力，默认关的理由写在
                 `code-lens-pref.ts`。文案刻意不上「CodeLens / 反向索引」这类机器词，
                 并且把"没标注 ≠ 没人用"这条最容易读反的口径当场说清（铁律 4：不静默、也不误导）。 */}
-            <label className="settings-row" data-settings-key="editor.codeLens">
-              <Switch checked={codeLensOn} onChange={commitCodeLens} label="标注函数被谁调用" />
-              <span>
-                标注函数被谁调用
-                <span className="settings-hint">
-                  在函数开头那一行的上方写一句「被 N 处用到」，点一下跳到第一处用到它的地方；满项目都在用的系统函数写作「1000+」。
-                  没找到出处的函数不写这一句——那只代表编辑器证明不了，不代表真的没人调用。
-                  太长或函数太密的文件整份不标注。只改显示、不动文件；默认关
-                </span>
-              </span>
-            </label>
+            <div className="settings-kit-row" data-settings-key="editor.codeLens">
+              <KitField
+                as="label"
+                title="标注函数被谁调用"
+                description={
+                  <>
+                    在函数开头那一行的上方写一句「被 N 处用到」，点一下跳到第一处用到它的地方；满项目都在用的系统函数写作「1000+」。
+                    没找到出处的函数不写这一句——那只代表编辑器证明不了，不代表真的没人调用。
+                    太长或函数太密的文件整份不标注。只改显示、不动文件；默认关
+                  </>
+                }
+                control={<Switch checked={codeLensOn} onChange={commitCodeLens} label="标注函数被谁调用" />}
+              />
+            </div>
             {/* 结构化着色（B6，2026-10-16）：判据来自解析器而不是正则，宿主只翻译协议。
                 文案按本仓口径去黑话——不写「语义高亮 / semantic token」，写作者看得懂的效果。
                 默认关的理由见 `semantic-color-pref.ts`：它会顶掉作者看惯的词法配色。 */}
-            <label className="settings-row" data-settings-key="editor.nameColor">
-              <Switch checked={nameColorOn} onChange={setNameColorPref} label="定义与调用的名字分色" />
-              <span>
-                定义与调用的名字分色
-                <span className="settings-hint">
-                  同一个函数名，在「它被定义的那一行」与「它被调用的地方」显示成两种颜色；
-                  .kojo 里的函数、别名、常量名字同理。只改显示、不动文件；
-                  超过 5,000 行的文件不生效（与粘性滚动同一档降级）。默认关
-                </span>
-              </span>
-            </label>
+            <div className="settings-kit-row" data-settings-key="editor.nameColor">
+              <KitField
+                as="label"
+                title="定义与调用的名字分色"
+                description={
+                  <>
+                    同一个函数名，在「它被定义的那一行」与「它被调用的地方」显示成两种颜色；
+                    .kojo 里的函数、别名、常量名字同理。只改显示、不动文件；
+                    超过 5,000 行的文件不生效（与粘性滚动同一档降级）。默认关
+                  </>
+                }
+                control={<Switch checked={nameColorOn} onChange={setNameColorPref} label="定义与调用的名字分色" />}
+              />
+            </div>
             {/* 结构解析叠层（TSIT-M1）：判据从"看形状"换成"看结构"，是实验线，
                 自订阅偏好而不走 props 镜像（理由同下面的 `LayoutPrefRows`）。 */}
             <TreeSitterRow />
             {/* 自动保存（A6，2026-10-20）：写盘只复用既有 save 一条路（全局互斥 + 写允许域闸门）；
                 默认关的理由 = 游戏目录是部署目标，静默写盘必须是显式选择。护栏见 autosave-pref.decideAutosave。 */}
-            <label className="settings-row" data-settings-key="editor.autosave">
-              <Switch
-                checked={autosaveMode === 'afterDelay'}
-                onChange={(c) => setAutosavePref(c ? 'afterDelay' : 'off')}
-                label="自动保存"
+            <div className="settings-kit-row" data-settings-key="editor.autosave">
+              <KitField
+                as="label"
+                title="自动保存"
+                description={
+                  <>
+                    当前标签停手 {AUTOSAVE_IDLE_MS / 1000} 秒后自动落盘，走的是与 Ctrl+S 完全同一条保存路（同样的写权限闸、保存告警、外部改动确认）。
+                    有未决的保存告警 / 外部改动、或正显示 .kojo 预览时**不会**自动存。默认关
+                  </>
+                }
+                control={
+                  <Switch
+                    checked={autosaveMode === 'afterDelay'}
+                    onChange={(c) => setAutosavePref(c ? 'afterDelay' : 'off')}
+                    label="自动保存"
+                  />
+                }
               />
-              <span>
-                自动保存
-                <span className="settings-hint">
-                  当前标签停手 {AUTOSAVE_IDLE_MS / 1000} 秒后自动落盘，走的是与 Ctrl+S 完全同一条保存路（同样的写权限闸、保存告警、外部改动确认）。
-                  有未决的保存告警 / 外部改动、或正显示 .kojo 预览时**不会**自动存。默认关
-                </span>
-              </span>
-            </label>
+            </div>
             {/* 排版三行（P2-16）：折行 / 多光标修饰键 / 列选择。自订阅 layout-pref，
                 壳层镜像行归 P2-14 的接线批——两边各占一小段，互不重排。 */}
             <LayoutPrefRows />
@@ -679,15 +756,14 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           {!sealed ? (
             <div className="settings-group">
               <div role="heading" aria-level={4} className="settings-group-title">游戏目录写入</div>
-              <label className="settings-row" data-settings-key="editor.directMode">
-                <Switch checked={directMode} onChange={setDirectMode} label="直连模式（就地编辑游戏目录）" />
-                <span>
-                  直连模式（就地编辑游戏目录）
-                  <span className="settings-hint">
-                    开启后，游戏目录里已获写权限的 .ERB 视为可直接编辑，不再逐个文件询问。写保护不变：写权限仍只来自你批准的可写目录。
-                  </span>
-                </span>
-              </label>
+              <div className="settings-kit-row" data-settings-key="editor.directMode">
+                <KitField
+                  as="label"
+                  title="直连模式（就地编辑游戏目录）"
+                  description="开启后，游戏目录里已获写权限的 .ERB 视为可直接编辑，不再逐个文件询问。写保护不变：写权限仍只来自你批准的可写目录。"
+                  control={<Switch checked={directMode} onChange={setDirectMode} label="直连模式（就地编辑游戏目录）" />}
+                />
+              </div>
             </div>
           ) : null}
         </>
@@ -945,16 +1021,19 @@ function ThemePickerSection(): ReactElement {
           </button>
         ))}
       </div>
-      <label className="settings-row" data-settings-key="appearance.followSystem">
-        <Switch checked={following} onChange={setFollowSystem} label="跟随系统" />
-        <span>
-          跟随系统
-          <span className="settings-hint">
-            打开后按系统的深浅自动在深色 / 浅色之间切换，你在系统里改主题，这里当场跟着换；
-            薄荷只选手动出现，不会跟着系统切过去。关掉即回到最近一次手动选的档位。只改显示、不动文件
-          </span>
-        </span>
-      </label>
+      <div className="settings-kit-row" data-settings-key="appearance.followSystem">
+        <KitField
+          as="label"
+          title="跟随系统"
+          description={
+            <>
+              打开后按系统的深浅自动在深色 / 浅色之间切换，你在系统里改主题，这里当场跟着换；
+              薄荷只选手动出现，不会跟着系统切过去。关掉即回到最近一次手动选的档位。只改显示、不动文件
+            </>
+          }
+          control={<Switch checked={following} onChange={setFollowSystem} label="跟随系统" />}
+        />
+      </div>
     </div>
   );
 }
@@ -970,17 +1049,20 @@ function ThemePickerSection(): ReactElement {
 function TreeSitterRow(): ReactElement {
   const on = useTreeSitterPref();
   return (
-    <label className="settings-row" data-settings-key="editor.treeSitter">
-      <Switch checked={on} onChange={setTreeSitterPref} label="结构解析器辅助（实验）" />
-      <span>
-        结构解析器辅助（实验）
-        <span className="settings-hint">
-          另用一条结构解析的路子判断 .kojo 的块边界与行类型，据此着色、折叠，并在块头后回车时多缩一档；
-          原有的配色与折叠仍在，这一层只往上加。解析器出问题就自动退回原来的样子，并在右下角说一声。
-          只改显示、不动文件；<strong>实验特性，默认关</strong>
-        </span>
-      </span>
-    </label>
+    <div className="settings-kit-row" data-settings-key="editor.treeSitter">
+      <KitField
+        as="label"
+        title="结构解析器辅助（实验）"
+        description={
+          <>
+            另用一条结构解析的路子判断 .kojo 的块边界与行类型，据此着色、折叠，并在块头后回车时多缩一档；
+            原有的配色与折叠仍在，这一层只往上加。解析器出问题就自动退回原来的样子，并在右下角说一声。
+            只改显示、不动文件；<strong>实验特性，默认关</strong>
+          </>
+        }
+        control={<Switch checked={on} onChange={setTreeSitterPref} label="结构解析器辅助（实验）" />}
+      />
+    </div>
   );
 }
 
@@ -1256,41 +1338,37 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
 
           {/* 设置搜索（1020 编辑器体感批）：抬头下面一整行，跨左右两列。
               「已修改」只统计**有真源读数**的条目（判据见 settings-search.ts），
-              没登记判据的行不会冒充"已改"。 */}
+              没登记判据的行不会冒充"已改"。
+              井本体 = ui-kit `KitSearchField`（1026 C1-b 三处接入之一）：放大镜与清空钮
+              全落进井内（真机缺陷「图标在输入框外沿」随旧结构一并消失），「已修改」胶囊
+              走右侧动作槽；外壳 `.settings-searchbar` 只留行位与下缘留白。 */}
           <div className="settings-searchbar">
-            <Icon name="search" size={14} className="settings-search-icon" />
-            <input
-              ref={searchRef}
+            <KitSearchField
+              icon={<Icon name="search" size={14} />}
+              inputRef={searchRef}
               type="search"
-              className="settings-search-input"
-              placeholder="搜索设置项…"
-              aria-label="搜索设置项"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={setQuery}
+              placeholder="搜索设置项…"
+              ariaLabel="搜索设置项"
               onKeyDown={onSearchKeyDown}
+              onClear={() => {
+                setQuery('');
+                searchRef.current?.focus();
+              }}
+              clearLabel="清空搜索"
+              clearIcon={<Icon name="close" size={14} />}
+              actions={
+                <button
+                  type="button"
+                  className={`settings-search-modified${modifiedOnly ? ' on' : ''}`}
+                  aria-pressed={modifiedOnly}
+                  onClick={() => setModifiedOnly((v) => !v)}
+                >
+                  已修改{modifiedCount > 0 ? ` (${modifiedCount})` : ''}
+                </button>
+              }
             />
-            {query !== '' ? (
-              <button
-                type="button"
-                className="settings-search-clear"
-                aria-label="清空搜索"
-                title="清空搜索"
-                onClick={() => {
-                  setQuery('');
-                  searchRef.current?.focus();
-                }}
-              >
-                <Icon name="close" size={14} />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={`settings-search-modified${modifiedOnly ? ' on' : ''}`}
-              aria-pressed={modifiedOnly}
-              onClick={() => setModifiedOnly((v) => !v)}
-            >
-              已修改{modifiedCount > 0 ? ` (${modifiedCount})` : ''}
-            </button>
           </div>
 
           {/* 左导航栏 + 右分节面板：抬头/页脚 flex:none 永不滚走，只有面板这一列在滚 */}
@@ -1407,31 +1485,39 @@ function FormatRulesRows(): ReactElement {
   };
   return (
     <>
-      <label className="settings-row" data-settings-key="editor.formatRuleFullWidth">
-        <Switch
-          checked={rules.fullWidthSpace}
-          onChange={(on) => commit({ fullWidthSpace: on })}
-          label="折算全角空格"
+      <div className="settings-kit-row" data-settings-key="editor.formatRuleFullWidth">
+        <KitField
+          as="label"
+          title="折算全角空格"
+          description={
+            <>
+              手动整理（Shift+Alt+F）与保存时整理，都把行首缩进与注释里的全角空格
+              折成半角；关闭后全角空格一律原样保留，台词正文里的全角空格本来就不动。
+              默认开
+            </>
+          }
+          control={
+            <Switch
+              checked={rules.fullWidthSpace}
+              onChange={(on) => commit({ fullWidthSpace: on })}
+              label="折算全角空格"
+            />
+          }
         />
-        <span>
-          折算全角空格
-          <span className="settings-hint">
-            手动整理（Shift+Alt+F）与保存时整理，都把行首缩进与注释里的全角空格
-            折成半角；关闭后全角空格一律原样保留，台词正文里的全角空格本来就不动。
-            默认开
-          </span>
-        </span>
-      </label>
-      <label className="settings-row" data-settings-key="editor.formatRuleIndent">
-        <Switch checked={rules.indent} onChange={(on) => commit({ indent: on })} label="统一 .kojo 缩进写法" />
-        <span>
-          统一 .kojo 缩进写法
-          <span className="settings-hint">
-            手动整理与保存时整理，都把 .kojo 文件的行首空白重排成统一的写法（制表符或
-            4 个空格，取文件里多数派）；关闭后行首空白一字不动。默认开
-          </span>
-        </span>
-      </label>
+      </div>
+      <div className="settings-kit-row" data-settings-key="editor.formatRuleIndent">
+        <KitField
+          as="label"
+          title="统一 .kojo 缩进写法"
+          description={
+            <>
+              手动整理与保存时整理，都把 .kojo 文件的行首空白重排成统一的写法（制表符或
+              4 个空格，取文件里多数派）；关闭后行首空白一字不动。默认开
+            </>
+          }
+          control={<Switch checked={rules.indent} onChange={(on) => commit({ indent: on })} label="统一 .kojo 缩进写法" />}
+        />
+      </div>
     </>
   );
 }

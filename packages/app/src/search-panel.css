@@ -12,7 +12,8 @@
    ② **不写死颜色**。面 / 边 / 字 / 焦点 / 圆角 / 动效全部取 `styles.css` 的 token，
       浅色与薄荷主题同步生效。
 
-   布局：`.ksp-head`（控制 + 状态）与 `.ksp-results`（结果）两段。单面板侧栏里
+   布局：sticky 常驻头（控制 + 状态；骨架 = ui-kit `KitPanelHeader`，1026 C1-a）与
+   `.ksp-results`（结果）两段。单面板侧栏里
    整页滚动而头部 sticky（结果滚走、条件与读数常驻）；分栏 section / 浮窗里
    `.panel` 本就是 flex 列，根撑满、结果区自己滚——两种宿主形态同一套规则。
    ============================================================================ */
@@ -29,19 +30,12 @@
 }
 
 /* 控制区 + 状态区：单面板侧栏（`.sidebar-views` 滚动）里粘住；分栏 / 浮窗里
-   祖先 `overflow: hidden` 使它自然失效（此时结果区自己滚，头部分本来就不动）。 */
-.panel-search.ksp > .ksp-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+   祖先 `overflow: hidden` 使它自然失效（此时结果区自己滚，头部分本来就不动）。
+   粘顶骨架 / 底色 / 底线在 ui-kit `KitPanelHeader` 基座（1026 C1-a 三家同源），
+   本域只补这一档自己的上下内衬（双类压基座，与到达顺序无关）。 */
+.panel-search.ksp > .kit-panel-header {
   padding-top: 2px;
   padding-bottom: var(--space-1);
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .panel-search.ksp > .ksp-results {
@@ -346,8 +340,7 @@
   color: var(--fg-dim);
   white-space: nowrap;
 }
-.panel-search.ksp .ksp-opt-input,
-.panel-search.ksp .ksp-opt-select {
+.panel-search.ksp .ksp-opt-input {
   flex: 1 1 auto;
   min-width: 0;
   /* P3-2 命中区：22→24 补到 WCAG 2.5.8 最小目标（行只涨 2px，其余口径不变） */
@@ -360,22 +353,35 @@
   font-family: var(--font-meta);
   font-size: var(--fs-1);
 }
-.panel-search.ksp .ksp-opt-input:focus-visible,
-.panel-search.ksp .ksp-opt-select:focus-visible {
+.panel-search.ksp .ksp-opt-input:focus-visible {
   border-color: var(--focus-ring);
 }
 
-/* 打字即搜开关（P2-11）：行内 checkbox，accent 着色；行高与其它选项行一致 */
-.panel-search.ksp .ksp-opt-check {
-  flex: none;
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-.panel-search.ksp .ksp-opt-check-label {
+/* 排序 / 范围两枚下拉（1026 C2-b 接 ui-kit `KitSelect` 后的本域接线切片）。
+   `ksp-opt-select` 现在落在**井本体**（`.kit-select` 那层 span）上，不再落在 select 上：
+   所以这里只给排布与字号，边框 / 井底 / 焦点环一律由基座的 `.kit-select-input` 供——
+   两条各写一遍就会在井外套出第二道框。`min-height: 24px` 是 P3-2 热区判据的取数点
+   （`search-hit-area.test.ts`），基座缺省 26 在这一档被压回面板自己的 24。 */
+.panel-search.ksp .ksp-opt-select {
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 24px;
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
   color: var(--fg);
+}
+.panel-search.ksp .ksp-opt-select .kit-select-input {
+  min-height: 24px;
+}
+
+/* 打字即搜开关（P2-11，1026 C2-a 接 ui-kit `KitCheck`）：勾盒与可见文字都是基座的，
+   本域只把它压回选项行的 11px 档——否则一颗开关的文字会比邻读的标签大两号。 */
+.panel-search.ksp .ksp-opt-row .kit-check {
+  flex: none;
+  font-size: var(--fs-0);
+}
+.panel-search.ksp .ksp-opt-row .kit-check-text {
+  min-width: 0;
 }
 
 /* --------------------------------- 状态区 --------------------------------- */

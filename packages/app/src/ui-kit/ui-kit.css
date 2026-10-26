@@ -561,6 +561,131 @@
   opacity: 0;
 }
 
+/* ============================= KitPanelHeader ============================= */
+/* 面板常驻头一副骨架（1026 C1-a / VIS-22，收编「三处各写一遍」）：sticky 顶 + 主行
+   （标题 · 计数 · 动作右靠）+ 追加行纵排。度量照 `prob-head` 的粘底档（z-2、发丝底线）；
+   `--bleed` 反衬宿主 `.panel` 内衬，`--raised` 是侧栏 meta 档底色，`--meta` 收
+   `outline-panel__meta` 的 fs-0 / 紧内衬 / tabular。面板差异由各域切片双类压。 */
+
+.kit-panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.kit-panel-header-static {
+  position: static;
+}
+/* 负外边距把宿主 `.panel{padding: var(--space-2) var(--space-3)}` 反出来、由本头自己吃
+   （原 `.prob-head` 档）：粘住时整条带横到容器边缘，条目从它底下滚过，左上不留缝 */
+.kit-panel-header-bleed {
+  margin: calc(var(--space-2) * -1) calc(var(--space-3) * -1) 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+.kit-panel-header-raised {
+  background: var(--surface-raised);
+}
+.kit-panel-header-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.kit-panel-header-title {
+  min-width: 0;
+}
+.kit-panel-header-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+.kit-panel-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  margin-left: auto;
+}
+/* 元信息档（原 `outline-panel__meta`）：fs-0 dim + 等宽数字 + 紧内衬；标题给字距 */
+.kit-panel-header-meta {
+  padding: var(--space-1) var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+}
+.kit-panel-header-meta .kit-panel-header-title {
+  letter-spacing: 0.08em;
+}
+
+/* ============================== KitSearchField ============================== */
+/* 检索输入井（1026 C1-b / VIS-42）：**井是主体**——边框 / 焦点环 / 井底画在
+   `.kit-search-field` 一层，图标、输入、动作槽、清空钮全在框内（真机缺陷「放大镜落在
+   输入框外沿」的根因就是图标与带框 input 并列）。度量基线 = `ksp-field`：井 26、
+   框内输入净高 24 撑满井口、hover 升一档描边、焦点走 `--shadow-focus`。 */
+
+.kit-search-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 3px 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
+}
+.kit-search-field:hover:not(:focus-within) {
+  border-color: var(--border-strong);
+}
+.kit-search-field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.kit-search-field-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--fg-dim);
+}
+/* 井内 input 无框无底：焦点可见性由井的 :focus-within 环承担（VSCode 查找控件同构）。
+   类名由消费方的判据锚类逐字落上，这里只按元素选择器复位。 */
+.kit-search-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* P3-2 命中区：井 26 − 两条 1px 边 = 净高 24，撑满不涨行高（WCAG 2.5.8） */
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-2);
+  line-height: 1.4;
+}
+.kit-search-field input::placeholder {
+  color: var(--fg-dim);
+  opacity: 1;
+}
+/* 原生 search 的自绘 ✕ 与 kit 清空钮是两套出口：只留 kit 这一颗 */
+.kit-search-field input::-webkit-search-cancel-button {
+  display: none;
+}
+/* 清空钮走 `kit-icon-btn` 的 22 见方 + 24×24 热区语言，本体只补「不许被挤」 */
+.kit-search-field-clear {
+  flex: none;
+}
+
 /* =============================== KitGallery =============================== */
 /* 内部对照页：只做陈列（分节标题 + 并排行 + 灰注），验收控件语言合一用，不进生产接线 */
 

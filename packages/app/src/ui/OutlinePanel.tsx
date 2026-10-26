@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import type { Kernel } from '@kojo/kernel';
 import type { EditorDocumentSymbol } from '@kojo/plugin-api';
 import { KitCount, KitEmpty } from '../ui-kit';
+import { KitPanelHeader } from '../ui-kit/kit-panel-header';
 import { Icon, type IconName } from './icons';
 import { readJumpProbe } from './jump-to-state';
 import {
@@ -436,21 +437,25 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
 
   return (
     <div data-context-surface="outline" className="outline-panel">
-      {/* 顶部读数：`屏上 N`（折叠会缩短这一半）+ `共 M`（全量行数）。纯派生、零持久化——
-          折叠状态本身仍是批次十那条"纯视图状态"，这里只是把它读出来给作者看。 */}
+      {/* 顶部读数条：`屏上 N`（折叠会缩短这一半）+ `共 M`（全量行数）。纯派生、零持久化——
+          折叠状态本身仍是批次十那条"纯视图状态"，这里只是把它读出来给作者看。
+          骨架与问题面板 / 检索面板的常驻头同源于 ui-kit `KitPanelHeader`（1026 C1-a；
+          `meta` 档 = fs-0 紧内衬、`raised` 档 = 侧栏底色，度量住在 ui-kit.css）。 */}
       {state.notice === null && rows.length > 0 ? (
-        <div className="outline-panel__meta" data-outline-meta="">
-          <span className="outline-panel__meta-label">符号</span>
-          <KitCount
-            value={visibleRows.length}
-            max={rows.length}
-            tone={foldedCount > 0 ? 'accent' : 'neutral'}
-            title={`屏上 ${visibleRows.length} / 共 ${rows.length} 个符号`}
-          />
-          {foldedCount > 0 ? (
-            <span className="outline-panel__meta-note">折了 {foldedCount} 支</span>
-          ) : null}
-        </div>
+        <KitPanelHeader
+          meta
+          raised
+          title="符号"
+          count={
+            <KitCount
+              value={visibleRows.length}
+              max={rows.length}
+              tone={foldedCount > 0 ? 'accent' : 'neutral'}
+              title={`屏上 ${visibleRows.length} / 共 ${rows.length} 个符号`}
+            />
+          }
+          actions={foldedCount > 0 ? `折了 ${foldedCount} 支` : undefined}
+        />
       ) : null}
       {body}
       {/* 复制回执（菜单动作的唯一可见反馈）：与空态那句分开——一个是常驻事实，一个是刚发生的事 */}
