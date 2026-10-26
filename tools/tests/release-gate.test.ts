@@ -28,6 +28,7 @@ import {
   parseBuildOutput,
   parseCargoTestOutput,
   parseConformanceJson,
+  parseLauncherSmokeLine,
   parseLanguageSuiteJson,
   parseSmokeOutput,
   parseTypecheckOutput,
@@ -166,6 +167,7 @@ describe('release-gate · 参数与选项目', () => {
       '--build',
       '--corpus',
       '--shell',
+      '--launcher-smoke',
       '--only=audit, conformance',
       '--only=audit',
     ]);
@@ -178,6 +180,7 @@ describe('release-gate · 参数与选项目', () => {
       build: true,
       corpus: true,
       shell: true,
+      launcherSmoke: true,
       only: ['audit', 'conformance'],
       help: false,
     });
@@ -210,13 +213,21 @@ describe('release-gate · 参数与选项目', () => {
       'cargo-test',
       'artifact-audit',
       'language-suite',
+      'launcher-smoke',
     ]);
     expect(selected.skipped.find((entry) => entry.id === 'build-app')?.reason).toBe('可选：未传 --build');
     expect(selected.skipped.find((entry) => entry.id === 'corpus')?.reason).toContain('语料');
     expect(selected.skipped.find((entry) => entry.id === 'smoke-dom')?.reason).toContain('桌面壳');
     // build-app 仍排在第 7 位（既有 JSON 消费方按位置认它），新项一律追加在后
-    expect(ITEM_IDS).toEqual([...ITEM_IDS.slice(0, 10), 'version-sync', 'cargo-test', 'artifact-audit', 'language-suite']);
-    expect(ITEM_IDS).toHaveLength(14);
+    expect(ITEM_IDS).toEqual([
+      ...ITEM_IDS.slice(0, 10),
+      'version-sync',
+      'cargo-test',
+      'artifact-audit',
+      'language-suite',
+      'launcher-smoke',
+    ]);
+    expect(ITEM_IDS).toHaveLength(15);
   });
 
   it('--skip-tests 剔三池（含 corpus），未跑项带原因；核心项一个不少', () => {
@@ -238,6 +249,7 @@ describe('release-gate · 参数与选项目', () => {
       'cargo-test',
       'artifact-audit',
       'language-suite',
+      'launcher-smoke',
     ]);
     expect(selected.skipped.filter((entry) => entry.reason === '--skip-tests')).toHaveLength(3);
     expect(selected.items.some((item) => item.kind === 'test')).toBe(false);
@@ -368,6 +380,7 @@ describe('release-gate · 执行与失败语义', () => {
       'cargo-test',
       'artifact-audit',
       'language-suite',
+      'launcher-smoke',
     ]);
     expect(report.skipped.every((entry) => entry.reason.startsWith('可选：') || entry.reason.startsWith('仅 --release'))).toBe(
       true,
@@ -390,6 +403,7 @@ describe('release-gate · 执行与失败语义', () => {
       'cargo-test',
       'artifact-audit',
       'language-suite',
+      'launcher-smoke',
     ]);
 
     const fast = await runGate(['--skip-tests']);
@@ -630,6 +644,7 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
       'cargo-test',
       'artifact-audit',
       'language-suite',
+      'launcher-smoke',
     ]);
 
     const corpus = resolveSelectedItems({ corpus: true });
@@ -650,6 +665,7 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
       'cargo-test',
       'artifact-audit',
       'language-suite',
+      'launcher-smoke',
     ]);
   });
 
@@ -857,6 +873,7 @@ describe('release-gate · 可选项与 SKIP 口径', () => {
         id: 'language-suite',
         reason: '仅 --release 或 --only=language-suite 时跑（语言面套件；子命令不存在则 SKIP 并说明）',
       },
+      { id: 'launcher-smoke', reason: '可选：需真桌面壳（未传 --launcher-smoke / --only=launcher-smoke）' },
     ]);
   });
 
@@ -916,7 +933,13 @@ describe('release-gate · --release 档选项目', () => {
       'artifact-audit',
       'cargo-test',
     ]);
-    expect(selected.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    expect(selected.skipped.map((entry) => entry.id)).toEqual([
+      'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+      'launcher-smoke',
+    ]);
     // 四个 releaseOnly 项都在默认账之外，且都声明了可读原因
     for (const id of ['version-sync', 'cargo-test', 'artifact-audit', 'language-suite']) {
       const item = DEFAULT_ITEMS.find((entry) => entry.id === id);
@@ -942,7 +965,7 @@ describe('release-gate · --release 档选项目', () => {
     }
   });
 
-  it('--release 可与 --shell / --corpus / --build 组合：追加项接在末尾、顺序固定', () => {
+  it('--release 可与 --shell / --corpus / --build 组合：追加项接在末尾、顺序固定（launcher-smoke 仍 SKIP）', () => {
     const all = resolveSelectedItems({ release: true, shell: true, corpus: true, build: true });
     expect(all.items.map((item) => item.id)).toEqual([
       ...RELEASE_ITEM_IDS,
@@ -951,7 +974,9 @@ describe('release-gate · --release 档选项目', () => {
       'smoke-dom',
       'smoke-ipc',
     ]);
-    expect(all.skipped).toEqual([]);
+    expect(all.skipped).toEqual([
+      { id: 'launcher-smoke', reason: '可选：需真桌面壳（未传 --launcher-smoke / --only=launcher-smoke）' },
+    ]);
   });
 
   it('--only 优先于 --release（单点复跑不被全量档拐走）', () => {
@@ -976,13 +1001,19 @@ describe('release-gate · --release 档选项目', () => {
     expect(selected.skipped.find((entry) => entry.id === 'test-perf')?.reason).toBe('--skip-tests');
   });
 
-  it('--release 全绿 = PASS / exit 0 / 10 项 / 只跳 4 个可选项', async () => {
+  it('--release 全绿 = PASS / exit 0 / 10 项 / 只跳 5 个可选项', async () => {
     const { code, report, calls } = await runGate(['--release']);
     expect(code).toBe(0);
     expect(report.result).toBe('PASS');
     expect(report.failed).toEqual([]);
     expect(report.items.map((item) => item.id)).toEqual([...RELEASE_ITEM_IDS]);
-    expect(report.skipped.map((entry) => entry.id)).toEqual(['build-app', 'corpus', 'smoke-dom', 'smoke-ipc']);
+    expect(report.skipped.map((entry) => entry.id)).toEqual([
+      'build-app',
+      'corpus',
+      'smoke-dom',
+      'smoke-ipc',
+      'launcher-smoke',
+    ]);
     // version-sync / artifact-audit 是进程内检查：不起子进程；artifact-audit 的构建经 runner 走
     expect(calls.map((call) => call.id)).toEqual([
       'typecheck-root',
@@ -1360,3 +1391,94 @@ describe('release-gate · language-suite（子命令不存在 ⇒ SKIP 并说明
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * 车道 GATE：`launcher-smoke` 可选项（启动器真壳冒烟）
+ * 口径：默认 SKIP；显式点名后 rc=2（通道不可用）改判 SKIP 并带原因；rc=1（断言红）仍是 FAIL。
+ * ------------------------------------------------------------------ */
+
+describe('release-gate · launcher-smoke 可选项', () => {
+  const SKIP_REASON = '可选：需真桌面壳（未传 --launcher-smoke / --only=launcher-smoke）';
+
+  it('描述符自洽：可选项解锁键 = launcherSmoke，命令指向 tools/launcher-smoke.mjs，超时为正', () => {
+    const item = DEFAULT_ITEMS.find((entry) => entry.id === 'launcher-smoke');
+    expect(item?.optional).toBe('launcherSmoke');
+    expect(item?.kind).toBe('shell');
+    expect(item?.skipReason).toBe(SKIP_REASON);
+    expect(item?.timeoutMs).toBeGreaterThan(0);
+    expect(String(item?.args?.[0] ?? '').replaceAll('\\', '/')).toMatch(/\/tools\/launcher-smoke\.mjs$/);
+    expect(item?.args).toContain('--start');
+    expect(item?.releaseOnly).toBeUndefined();
+  });
+
+  it('默认档 / --release / --shell 都不收它（只在点名时跑），原因可读', () => {
+    for (const options of [{}, { release: true }, { shell: true }, { corpus: true, build: true }]) {
+      const selected = resolveSelectedItems(options);
+      expect(selected.items.map((entry) => entry.id)).not.toContain('launcher-smoke');
+      expect(selected.skipped).toContainEqual({ id: 'launcher-smoke', reason: SKIP_REASON });
+    }
+  });
+
+  it('--only=launcher-smoke 与 --launcher-smoke 都能把它拉进来', () => {
+    expect(resolveSelectedItems({ only: ['launcher-smoke'] }).items.map((entry) => entry.id)).toEqual(['launcher-smoke']);
+    const appended = resolveSelectedItems({ launcherSmoke: true }).items.map((entry) => entry.id);
+    expect(appended[appended.length - 1]).toBe('launcher-smoke');
+    expect(appended.slice(0, 6)).toEqual(DEFAULT_ITEMS.slice(0, 6).map((entry) => entry.id));
+  });
+
+  it('rc=2 + SKIP 行 ⇒ 改判 SKIP 且原因来自脚本自报（不是一句糊话）', async () => {
+    const handlers = {
+      ...greenHandlers(),
+      'launcher-smoke': () => ({
+        rc: 2,
+        stdout: '[launcher-smoke] SKIP reason=本工作树没有在跑的会话\n[launcher-smoke] cmd="x" rc=2 elapsed=3ms assertions=0 passed=0 failed=0 mode=?\n',
+        stderr: '',
+      }),
+    };
+    const { code, report } = await runGate(['--only=launcher-smoke'], handlers);
+    expect(code).toBe(0);
+    expect(report.result).toBe('PASS');
+    expect(report.skipped.find((entry) => entry.id === 'launcher-smoke')).toEqual({
+      id: 'launcher-smoke',
+      reason: '本工作树没有在跑的会话',
+    });
+  });
+
+  it('rc=2 但没有 SKIP 行 ⇒ 仍 SKIP，但原因写明「未给出原因」（不静默）', async () => {
+    const handlers = { ...greenHandlers(), 'launcher-smoke': () => ({ rc: 2, stdout: '', stderr: 'boom' }) };
+    const { code, report } = await runGate(['--only=launcher-smoke'], handlers);
+    expect(code).toBe(0);
+    const entry = report.skipped.find((item) => item.id === 'launcher-smoke');
+    expect(entry?.reason).toContain('未给出原因');
+  });
+
+  it('rc=1（断言红）⇒ FAIL，不被 rc=2 的 SKIP 口径洗白', async () => {
+    const handlers = {
+      ...greenHandlers(),
+      'launcher-smoke': () => ({
+        rc: 1,
+        stdout: '[launcher-smoke] cmd="x" rc=1 elapsed=9ms assertions=17 passed=16 failed=1 mode=shell\n',
+        stderr: '',
+      }),
+    };
+    const { code, report } = await runGate(['--only=launcher-smoke'], handlers);
+    expect(code).toBe(1);
+    expect(report.failed).toEqual(['launcher-smoke']);
+    expect(report.items[0].rc).toBe(1);
+  });
+
+  it('读数行被解析成可断言的字段（含 boot 段），认不出说 parsed:false', () => {
+    const line =
+      '[launcher-smoke] cmd="node tools/launcher-smoke.mjs --start" rc=0 elapsed=42435ms assertions=17 passed=17 failed=0 mode=shell boot=42216ms';
+    expect(parseLauncherSmokeLine(line)).toEqual({
+      parsed: true,
+      rc: 0,
+      elapsedMs: 42435,
+      assertions: 17,
+      passed: 17,
+      failed: 0,
+      mode: 'shell',
+      bootMs: 42216,
+    });
+    expect(parseLauncherSmokeLine('nothing here')).toEqual({ parsed: false });
+  });
+});

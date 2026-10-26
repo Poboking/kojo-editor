@@ -29,6 +29,13 @@
  * `--release` 的默认项序固定为 `RELEASE_ITEM_IDS`（version-sync 第一，cargo-test 最后），
  * `--shell` / `--corpus` 仍按开关追加；`--only` 优先于 `--release`。
  *
+ * 车道 GATE 追加的 `launcher-smoke`（启动器真壳冒烟）也是**可选项**，默认 SKIP：
+ * 它要一台**真桌面壳**（`tools/debug-cli.mjs shell --isolate`：冷 cargo 构建数分钟 + WebView2 +
+ * 桌面会话），CI / 无桌面机上根本没有这条通道；更重要的一条口径是「通道可用才跑」——
+ * 脚本以 rc=2 + `[launcher-smoke] SKIP reason=…` 如实报「跑不了」，本项把它改判成 SKIP
+ * （rc=2 ⇒ SKIP，rc=1 仍是 FAIL，绝不把断言红洗成跳过）。显式 `--launcher-smoke` 或
+ * `--only=launcher-smoke` 才收它，默认账（CI 快速档）一项不动。
+ *
  * 结构：
  * - `createReleaseGate({ run })` = 纯执行编排（runner 注入，单测用假 runner）；
  * - `createProcessRunner()` = 真 spawn + 超时杀进程树 + 捕获 stdout/stderr；
@@ -42,6 +49,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseReadingLine as parseLauncherSmokeReading, parseSkipLine as parseLauncherSmokeSkip } from './launcher-smoke.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const NODE = process.execPath;
@@ -65,6 +73,8 @@ const TIMEOUT = Object.freeze({
   cargoTest: 15 * 60 * 1000,
   /** version-sync 只读三个 JSON，不 spawn：留个非零值只为「每项都有超时」的形状一致 */
   versionSync: 60 * 1000,
+  /** 启动器真壳冒烟：冷 cargo 构建 + 起壳（实测热 target 42s，冷构建数分钟）后再驱动，给 20 分钟 */
+  launcherSmoke: 20 * 60 * 1000,
 });
 
 const ANSI = /\u001B\[[0-?]*[ -/]*[@-~]/g;
@@ -786,15 +796,60 @@ function languageSuiteItem() {
 }
 
 /**
- * 项清单 = 发布门槛的全部机器面。顺序即执行顺序（前 6 项是默认账，后 4 项可选）。
- * 可选性由 `optional` 声明（= 解锁开关名：build / corpus / shell），
+ * launcher-smoke 的读数：直接复用脚本自己的读数行解析（单源，不在两处抄正则）。
+ * 解析不出返回 `{parsed:false}`——判定仍以 rc 为准，读数缺失不许把红洗绿。
+ */
+export function parseLauncherSmokeLine(text = '') {
+  const reading = parseLauncherSmokeReading(stripAnsi(text));
+  if (reading.parsed !== true) return { parsed: false };
+  return {
+    parsed: true,
+    rc: reading.rc,
+    elapsedMs: reading.elapsedMs,
+    assertions: reading.assertions,
+    passed: reading.passed,
+    failed: reading.failed,
+    mode: reading.mode,
+    bootMs: reading.bootMs,
+  };
+}
+
+/**
+ * launcher-smoke（车道 GATE）：真壳里驱动启动器的只读面（instance/process/task 三条）
+ * + 两条负向（不存在实例的 start / 缺 profile 的 create）。**默认 SKIP**——理由见文件头：
+ * 它是「需要真桌面壳与隔离 appData」的可选项；显式点名后若通道仍不可用（脚本 rc=2），
+ * `interpret` 把它改判成 SKIP 并把脚本自报的原因带进报告（rc=1 的断言红不受影响）。
+ */
+function launcherSmokeItem() {
+  return {
+    id: 'launcher-smoke',
+    kind: 'shell',
+    optional: 'launcherSmoke',
+    skipReason: '可选：需真桌面壳（未传 --launcher-smoke / --only=launcher-smoke）',
+    cmd: 'node tools/launcher-smoke.mjs --start（真壳 shell --isolate；只读三条 + 两条负向）',
+    command: NODE,
+    args: [path.join(ROOT, 'tools', 'launcher-smoke.mjs'), '--start'],
+    shell: false,
+    timeoutMs: TIMEOUT.launcherSmoke,
+    parse: (text) => parseLauncherSmokeLine(text),
+    interpret: ({ rc, text }) => {
+      if (rc !== 2) return null;
+      return { skip: parseLauncherSmokeSkip(text) ?? 'launcher-smoke 通道不可用（rc=2 但未给出原因）' };
+    },
+  };
+}
+
+/**
+ * 项清单 = 发布门槛的全部机器面。顺序即执行顺序（前 6 项是默认账，其余 9 项可选 / 分档）。
+ * 可选性由 `optional` 声明（= 解锁开关名：build / corpus / shell / launcherSmoke），
  * `skipReason` 是默认不跑时写进报告的原因（SKIP 必须可解释）。
  * `smoke-dom` / `smoke-ipc` 需桌面会话 + WebView2，`corpus` 需真实游戏目录：
- * 三者在 CI / 无游戏机上「没得跑」而不是「跑挂了」，故只 SKIP。
+ * 三者在 CI / 无游戏机上「没得跑」而不是「跑挂了」，故只 SKIP；`launcher-smoke` 同理
+ * （真桌面壳 + 隔离 appData，且它自己还会在通道不可用时以 rc=2 报 SKIP）。
  *
  * 末尾四项是 K2-RELEASE-AUTOMATION 的 `--release` 档（`releaseOnly`：默认档不跑、记 SKIP，
- * 只有 `--release` 或显式 `--only` 才跑）。**追加在最后**是为了不挪既有 10 项的位置
- * （JSON 消费方按顺序认 build-app / corpus / smoke-*）。
+ * 只有 `--release` 或显式 `--only` 才跑）；最后一项 `launcher-smoke` 是车道 GATE 的可选项。
+ * **追加在最后**是为了不挪既有 10 项的位置（JSON 消费方按顺序认 build-app / corpus / smoke-*）。
  */
 export const DEFAULT_ITEMS = Object.freeze([
   pnpmItem('typecheck-root', ['typecheck'], 'core', TIMEOUT.typecheck, (text) => parseTypecheckOutput(text)),
@@ -842,6 +897,7 @@ export const DEFAULT_ITEMS = Object.freeze([
   cargoTestItem(),
   artifactAuditItem(),
   languageSuiteItem(),
+  launcherSmokeItem(),
 ]);
 
 /**
@@ -879,10 +935,12 @@ export const USAGE = [
   '  --build            追加 build-app（默认不跑，构建耗时且非每次发布门槛必需）',
   '  --corpus           追加 corpus（先探语料在不在位；缺语料记 SKIP，不当失败）',
   '  --shell            追加 smoke-dom / smoke-ipc 两项桌面壳冒烟（需桌面会话 + WebView2）',
+  '  --launcher-smoke   追加 launcher-smoke（启动器真壳冒烟；需桌面壳 + 隔离 appData，默认 SKIP）',
   '  -h, --help         显示本帮助',
   '',
   `项：${ITEM_IDS.join(', ')}`,
-  '可选四项默认 SKIP 并记原因：build-app(--build) / corpus(--corpus) / smoke-dom,smoke-ipc(--shell)。',
+  '可选五项默认 SKIP 并记原因：build-app(--build) / corpus(--corpus) / smoke-dom,smoke-ipc(--shell) /',
+  'launcher-smoke(--launcher-smoke)。',
   '仅 --release（或显式 --only）才跑：version-sync / cargo-test / artifact-audit / language-suite。',
   '',
   '退出码：0 = 全绿；1 = 有失败（含超时 / runner 异常）；2 = 用法错误',
@@ -910,6 +968,7 @@ export function parseArgs(argv = []) {
     build: false,
     corpus: false,
     shell: false,
+    launcherSmoke: false,
     only: [],
     help: false,
   };
@@ -923,6 +982,7 @@ export function parseArgs(argv = []) {
     else if (arg === '--build') options.build = true;
     else if (arg === '--corpus') options.corpus = true;
     else if (arg === '--shell') options.shell = true;
+    else if (arg === '--launcher-smoke') options.launcherSmoke = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--only') {
       const value = argv[index + 1];
@@ -938,10 +998,10 @@ export function parseArgs(argv = []) {
 }
 
 /**
- * 选项目：缺省 = 6 个核心项（其余 4 个可选，4 个 releaseOnly 默认不做）。
+ * 选项目：缺省 = 6 个核心项（其余 5 个可选，4 个 releaseOnly 默认不做）。
  * - `--skip-tests` 去掉测试池（test-unit / test-perf / corpus），但**显式点名**的优先
  *   （`--only=test-unit --skip-tests` 仍跑，便于只跑单池）；
- * - `optional` 声明的开关（build / corpus / shell）打开才收可选段；`--only` 点名的**无视开关**
+ * - `optional` 声明的开关（build / corpus / shell / launcherSmoke）打开才收可选段；`--only` 点名的**无视开关**
  *   （`--only=smoke-dom` 不带 `--shell` 也跑，便于单点复跑）。
  * - `releaseOnly` 项（version-sync / cargo-test / artifact-audit / language-suite）只在
  *   `--release` 或显式 `--only` 时跑，否则记 SKIP + `skipReason`——默认档（CI 快速档）账不变。
@@ -955,6 +1015,7 @@ export function resolveSelectedItems({
   build = false,
   corpus = false,
   shell = false,
+  launcherSmoke = false,
   release = false,
 } = {}) {
   const unknown = only.filter((id) => !ITEM_IDS.includes(id));
@@ -962,7 +1023,7 @@ export function resolveSelectedItems({
     return { error: `未知项：${unknown.join(', ')}（可用项：${ITEM_IDS.join(', ')}）` };
   }
   const explicit = new Set(only);
-  const unlocked = { build, corpus, shell };
+  const unlocked = { build, corpus, shell, launcherSmoke };
   const byId = new Map(DEFAULT_ITEMS.map((item) => [item.id, item]));
 
   let selected;
