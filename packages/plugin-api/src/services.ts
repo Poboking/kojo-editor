@@ -40,6 +40,16 @@ export const KernelServices = {
    * 旧消费方零改动：缺席时消费方降级为自有行为（可选依赖，不阻塞激活）。
    */
   Ops: 'kernel.ops',
+  /**
+   * 启动器宿主桥（2026-10-26 启动器落地批，additive）：进程/对话框/ZIP/哈希等**特权原语**
+   * 的零逻辑透传（内核 `launcher.ts` 薄层 → 平台桥）。契约 `plugin-api/launcher.ts`。
+   *
+   * 能力面 = 服务键面：它能建进程、弹原生对话框、写实例目录，比 `kernel.io` 更特权，
+   * 故不塞进文件接口顺手发放——要启动就得显式 require 这一键，审阅时一眼看得见。
+   * **宿主零逻辑透传**：只答「路径是否逃逸」「进程是否活着」「这段字节的哈希」，
+   * 不认识任何具体游戏；领域流程全在插件 `launcher-core`。
+   */
+  LauncherHost: 'kernel.launcher',
 } as const;
 
 /**
@@ -128,6 +138,12 @@ export const WellKnownServices = {
    * 消费者：口上 XML 面板 / 诊断面 / 预览面。
    */
   KojoXml: 'kojo.xml',
+  /**
+   * 启动器服务（2026-10-26 启动器落地批，additive）：契约 `LauncherService`，实现插件 =
+   * `launcher-core`。能力面 = 服务键面：它持有实例/内容/插件的**写**编排，与上面那条
+   * 宿主原语键分两层（宿主管原语、本键管领域）。消费者一律动态 import（开机图零负担）。
+   */
+  Launcher: 'launcher.service',
 } as const;
 
 export type KernelServiceKey = (typeof KernelServices)[keyof typeof KernelServices];

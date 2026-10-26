@@ -7,6 +7,7 @@
 
 import type { ConventionRule } from './conventions';
 import type { AdapterDetectResult, ConventionPolicy, KojoSlotSemantics } from './adapter-contract';
+import type { GameLaunchAdapter } from './launcher';
 import type { ReplayCallContext } from './replay';
 
 /** 新增契约类型（type-only 叶子；运行期不占字节，也不在开机静态图上） */
@@ -749,6 +750,11 @@ export interface StateLinePreset {
  *    `kojoCounterTable` / `stateLinePresets`。糖层（中文 → 原生代码）与补全/悬停消费；
  *    缺一项 = 该能力 fail-closed 报诊断（绝不猜）。
  * 4. **展示知识**（可选）：`nameGlossary`（日文名 → 中文名，只影响显示）。
+ * 5. **启动能力**（可选）：`launch`（`GameLaunchAdapter`）。它**不属于引擎结构知识**——
+ *    读侧判据（函数树/变量/约定）与「怎么把游戏跑起来」是两件事：前者消费方是编辑器，
+ *    后者唯一消费方是启动器核心，且缺席就该整块消失（该游戏只能编辑、不能启动）。
+ *    其中「哪个程序可启动、清单文件叫什么、插件怎么排序」是**游戏侧事实**，只许住 adapter；
+ *    契约只描述形状（`launcher.ts` 零值导出、零游戏名词）。
  *
  * ## 两个曾经存在、现已删除的成员（别再往回加）
  *
@@ -829,4 +835,13 @@ export interface GameAdapter {
    * 面板只按 `keys` 精确匹配行，语义全在 adapter；缺省 = 不显示剧情线快选。
    */
   readonly stateLinePresets?: readonly StateLinePreset[];
+  /**
+   * 启动能力（additive；能力族见本文档 §5 分组）。
+   *
+   * 可选：本适配器参与启动器实例管理；**缺席 = 该游戏只能编辑、不能启动**
+   * （实例库不显示「新建实例」，也没有降级路径——不猜目标程序）。
+   * 形状见 `./launcher`：`probe` / `buildProfile` / `saveLayout` / `contentRoots` /
+   * `pluginRules` / `logRules` / `defaultEncoding` / `copyExclude`。
+   */
+  readonly launch?: GameLaunchAdapter;
 }

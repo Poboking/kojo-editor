@@ -817,3 +817,129 @@ export type {
 
 /* ---- LAU-D1 方言上下文（krosama 1025 独占追加区块；勿在他处重排） ---- */
 export type { DialectCarrierKind, DialectContext } from './slots';
+
+/* ---- 启动器契约（2026-10-26 启动器落地批 L1 独占追加区块；勿在他处重排） ----
+ * **必须 `export type`，不许 `export *`、不许任何值导出**：`launcher.ts` 是几十 KB 的
+ * 纯类型面，桶里一旦出现值导出，它就会跟着开机图上欢迎页（B1 / active-adapter 的同形
+ * 教训：值导出决定模块图，type 导出不会）。运行期表（中文话术 / 限额档位 / 模板下拉）
+ * 一律归消费方，契约层连一个 `const` 都不留。
+ */
+export type {
+  /* §5.1 实例 */
+  IsolationMode,
+  InstanceState,
+  LauncherInstance,
+  LaunchExecutable,
+  ExecutableTrust,
+  ExitRecord,
+  /* §5.2 启动描述 */
+  LaunchCandidate,
+  LaunchProfile,
+  SaveRootSpec,
+  ContentRootSpec,
+  /* §5.3 运行时 / 语言环境 */
+  RuntimeRef,
+  RuntimeRequirement,
+  RuntimeVerification,
+  LocaleProfile,
+  EncodingProfile,
+  /* §5.4 内容包与游戏插件清单 */
+  ContentPackKind,
+  PluginCapability,
+  ContentPackManifest,
+  ContentFileEntry,
+  ContentFileRef,
+  PluginSourceManifest,
+  PluginSourceRootMap,
+  /* §5.5 进程 / 任务 / 日志 */
+  ProcessState,
+  ProcessStatus,
+  TaskKind,
+  TaskState,
+  LauncherTask,
+  LogSession,
+  LogLine,
+  LogLocation,
+  /* §5.6 错误 */
+  LauncherErrorCode,
+  LauncherError,
+  /* §6.1 adapter 启动面 */
+  GameLaunchAdapter,
+  LaunchBuildOptions,
+  SaveLayoutSpec,
+  LogParseRules,
+  GamePluginRules,
+  PluginTemplateId,
+  PluginScaffoldOptions,
+  PluginScaffoldResult,
+  ScriptFunctionDefinition,
+  PluginCompatibilityContext,
+  /* §6.2 总门面 */
+  LauncherService,
+  /* §6.3 实例库 */
+  InstanceStore,
+  CreateInstanceRequest,
+  InstancePatch,
+  InstanceCreation,
+  InstanceInspection,
+  RemoveInstanceOptions,
+  InstanceChange,
+  ImportBundleOptions,
+  ExportBundleOptions,
+  /* §6.4 进程 */
+  ProcessSupervisor,
+  StopOptions,
+  /* §6.5 运行时 */
+  RuntimeManager,
+  /* §6.6 内容包 */
+  ContentManager,
+  InstallPlanOptions,
+  ContentInstallPlan,
+  ContentConflict,
+  ConflictResolution,
+  InstalledContent,
+  ContentDiagnosis,
+  /* §6.7 插件 */
+  PluginManager,
+  PluginRisk,
+  InstalledPlugin,
+  PluginTrust,
+  PluginCompatibility,
+  FunctionConflict,
+  PluginConflictResolution,
+  PluginApplyOptions,
+  PluginInstallPlan,
+  PluginDiagnosis,
+  /* §6.8 插件源码项目 */
+  PluginProjectService,
+  PluginProjectSource,
+  PluginProjectMeta,
+  PluginProject,
+  PluginProjectArtifact,
+  PluginInstalledRef,
+  PluginProjectCreateInput,
+  PluginBuildOptions,
+  PluginBuildResult,
+  PluginBuildSummary,
+  PluginProjectInstallPlan,
+  PluginExtractOptions,
+  PluginProjectDrift,
+  /* §6.9 存档 */
+  SaveManager,
+  SaveEntry,
+  SaveBackup,
+  SaveBackupRequest,
+  RestoreOptions,
+  SaveImportPlan,
+  SaveExportRequest,
+  /* §6.10 日志 */
+  LogService,
+  LogQuery,
+  LogPage,
+  /* §6.11 任务 */
+  TaskCenter,
+  /* §6.12 更新（P2） */
+  LauncherUpdateService,
+  UpdateCheckResult,
+  VerifyReport,
+} from './launcher';
