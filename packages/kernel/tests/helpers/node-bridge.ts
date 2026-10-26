@@ -26,6 +26,7 @@ import type {
 /**
  * Node 平台桥（测试与 CLI 用）。
  * 生产环境由 Tauri 壳的 Rust 侧提供同接口实现（encoding_rs + notify + rfd）。
+ * **刻意不实现 `PlatformBridge.launcher`**（起进程 / 原生对话框 / 信任确认都只在桌面壳里）：缺席即「无此能力」，内核透传层给一句人话，这里不造假实例库。
  */
 
 /** 本桥原子写的临时文件名（`.{name}.{pid}.{ms}.tmp`）——与 Rust 侧同口径过滤掉 */

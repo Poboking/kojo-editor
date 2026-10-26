@@ -14,6 +14,7 @@ import type {
 } from '@kojo/plugin-api';
 import {errorText,  DECODE_LABEL } from '@kojo/plugin-api';
 import { base64ToBytes, bytesToBase64, invoke, isTauri } from './invoke';
+import { launcherBridge } from './launcher-bridge';
 import { decodeReadFilesFrame } from './read-files-frame';
 
 /**
@@ -338,6 +339,15 @@ export const tauriBridge: PlatformBridge = {
     const b64 = await invoke<string>('encode_string', { text, encoding });
     return base64ToBytes(b64);
   },
+
+  /**
+   * 启动器宿主原语（20 条 `launcher_*` 命令 + 4 条事件）：实现在叶子文件
+   * `launcher-bridge.ts`（一个方法 = 一条命令；DTO 与错误映射的理由都在那边）。
+   *
+   * **只有桌面壳有这个面**：Node 桥（测试与 CLI）与 Web 调试宿不实现 ⇒ 内核透传层
+   * （`kernel/src/launcher.ts`）给一句人话。本层不兜底造假数据。
+   */
+  launcher: launcherBridge,
 };
 
 /**
