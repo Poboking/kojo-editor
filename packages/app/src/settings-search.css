@@ -109,9 +109,11 @@
   border: 1px solid currentColor;
 }
 
-/* 点结果跳到那一行后的落点回执：一次性的底色回落（动效页关掉就只剩瞬时高亮） */
+/* 点结果跳到那一行后的落点回执：一次性的底色回落（动效页关掉就只剩瞬时高亮）。
+   时长吃 `--anim-spin × 2`（1400ms，改前写死 1.5s，肉眼同档），缓动吃 `--ease-out`
+   ——原来那句 `ease-out` 是 CSS 关键字，绕开了本仓的缓动族。 */
 [data-settings-key][data-hit='1'] {
-  animation: settings-hit 1.5s ease-out;
+  animation: settings-hit calc(var(--anim-spin) * 2) var(--ease-out);
 }
 @keyframes settings-hit {
   0% {
@@ -121,7 +123,14 @@
     background: transparent;
   }
 }
-html[data-motion='off'] [data-settings-key][data-hit='1'] {
+/* VIS-35（真 bug · 1026 车道 A）：这条判据原先写 `data-motion='off'`，
+   而应用内开关（`ui/motion-pref.ts` 的 `applyMotionPref`）写到 `<html>` 上的值是
+   `'reduced'` / `'full'`，全局压平那条也是 `:root[data-motion='reduced']` ⇒
+   'off' 这一档**从来没有过宿主**，减弱动效档下这条回落根本不生效：底色动画被
+   全局压成 0.01ms 后停在终态（transparent），作者点完结果什么回执都看不到。
+   改成与全局同一枚值；回落在动画关掉后换成一条实描边（信息一条不减，铁律 4）。
+   判据：`tests/motion-surface.test.ts` 扫全仓 CSS，`data-motion=` 的值只许 'reduced'。 */
+:root[data-motion='reduced'] [data-settings-key][data-hit='1'] {
   animation: none;
   outline: 1px solid var(--accent, #7aa2f7);
 }

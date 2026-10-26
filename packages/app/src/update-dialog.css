@@ -314,14 +314,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 呼吸点：告诉作者这行是活的（reduced-motion 下降级为常亮，见文件末尾） */
+/* 呼吸点：告诉作者这行是活的（reduced-motion 下降级为常亮，见文件末尾）。
+   周期吃 tokens 的具名动效族——这条本来就是"常驻提示的明暗循环"，
+   `--anim-breathe`（2.8s）是它的同义 token；改前这里写死 1.2s，拧一处全局生效的前提是先吃 token。 */
 .update-dialog-status-dot {
   flex: none;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  animation: update-dialog-pulse 1.2s var(--ease-in-out) infinite;
+  animation: update-dialog-pulse var(--anim-breathe) var(--ease-in-out) infinite;
 }
 
 .update-dialog-status-bytes {
@@ -347,10 +349,12 @@
   transition: width var(--dur-2) var(--ease-in-out);
 }
 
-/* 总量未知（Started 还没报 contentLength）：不定态光带，方向与"正在下载"一致 */
+/* 总量未知（Started 还没报 contentLength）：不定态光带，方向与"正在下载"一致。
+   周期 `--anim-spin × 2`（= 1400ms，与改前的 1.4s 逐字等值）：`ui-kit.css` 的
+   `kit-shimmer` 早就是这同一把尺（同文件 529 行），这里不再另抄一份字面量。 */
 .update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
   width: 38%;
-  animation: update-dialog-indeterminate 1.4s var(--ease-in-out) infinite;
+  animation: update-dialog-indeterminate calc(var(--anim-spin) * 2) var(--ease-in-out) infinite;
 }
 
 .update-dialog-progress-line {

@@ -14,7 +14,7 @@
  * `Map.get` + 字符串比较"。画法与配色仍只有一枚（`TreeProbMark`），树里不存在第二份计数。
  */
 
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
@@ -53,6 +53,11 @@ import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-
 import { SHOW_FILE_HISTORY_COMMAND_ID } from './file-history';
 import type { DirState, EditState, Group, PackageGroup, Props } from './file-tree-types';
 import { Icon } from './icons';
+import { overlaySkeletonRows } from './overlay-chrome';
+// 跨面动效切片（1026 车道 A）：逐行进场的图样与两条压平口径。组件级引入 ⇒ 与
+// `css-slices-wired` 那条"只认 import 语句"的判据同一口径（注释里提文件名不算接线）；
+// 切片内每条规则都靠特异性取胜，不靠到达顺序。
+import './motion-surface.css';
 
 /** 纯函数与上限常量住模型层；此处再导出保持既有消费方（`tab-row` / 测试）的导入面不变 */
 export { middleEllipsis, TREE_LABEL_MAX };
@@ -69,6 +74,12 @@ const IDENTITY_GLOSS = (n: string): string => n;
 const EMPTY_SKIP: ReadonlySet<string> = new Set();
 /** 未传附加根时的恒等空数组（旧写法宿主每帧 `extraRoots ?? []` 造新数组 ⇒ 内部 memo 必失效） */
 const EMPTY_EXTRA_ROOTS: readonly string[] = [];
+/**
+ * 树冷开的骨架行数（VIS-34）：7 行落在"一眼看得出是一列，而不是一屏"的那档——
+ * 少于 6 行读起来像装饰线，多于 8 行就开始替真实内容许愿。入场节拍只铺前 6 行
+ * （`ui/motion-surface.css`），第 7 行与前一行同拍，不收尾拖沓。
+ */
+const TREE_COLD_SKELETON_ROWS = 7;
 const erbKeysCache = new WeakMap<PackageGroup, ReadonlySet<string>>();
 
 /** 目录缓存上界（超界先淘汰未展开的最旧条目；全在展开则原样保留——展开态是作者的现场） */
@@ -251,6 +262,44 @@ function useLatestCallback<T extends (...args: never[]) => unknown>(fn: T | unde
     () => (present ? (((...args: never[]) => (latest.current as T)(...args)) as T) : undefined),
     [present],
   );
+}
+
+/**
+ * 组展开折叠的挂载壳（1026 车道 A · VIS-31）。
+ *
+ * 只做一件事：决定 `ul.tree-files` **在不在 DOM 里**，让 `file-tree.css` 那条
+ * `grid-template-rows: 0fr ⇄ 1fr` 的两个方向都播得完。
+ *
+ * - **展开侧不走 effect**：0fr→1fr 的过渡要靠同一帧里就有真实内容高度差；`useEffect`
+ *   要到绘制之后才跑 ⇒ 会先空跑一帧光板。这里用 React 官方的"渲染期按 props 变化调状态"
+ *   （与上面 `useLatestCallback` 同一类渲染期写法），同帧就把 `ul` 挂上。
+ * - **收起侧延迟卸载**：`lingering` 把 `ul` 再多留 `FOLD_EXIT_MS`，退场播完才真卸载 ⇒
+ *   静息的折叠组零 DOM、零行渲染成本（不会为了动画把整棵子树常驻）。
+ * - `body` 是**惰性**的（函数，不是 children）：折叠态下那一大段 `g.subs.map(...)`
+ *   压根不该构造 React 元素——改成 children 就是把「折叠组也每帧造一遍元素」的
+ *   成本塞回 PS-16 那条渲染纪律里。
+ * - 不用 `ui/overlay-chrome` 的 `useOverlayPresence`：那是浮层的在场钩子（同一份时机
+ *   服务的是"宿主什么时候把浮层节点摘掉"），展开折叠要的是上面那条同帧挂载，形态不同。
+ * - 定位（`scrollLocate`）在退场这 200ms 里可能点名到一条已被裁到零高的行：它的矩形落在
+ *   容器内 ⇒ `scrollLocateIntoRow` 的"已可见"判据直接返回，不滚动、不报错——与改前
+ *   （那行压根不在 DOM 里，两条腿都点不到）终态一致，无需额外排除。
+ */
+const FOLD_EXIT_MS = 200; // 与 --dur-2（200ms）同档；CSS 改过渡时长这里同步
+
+function TreeFoldBody({ open, body }: { open: boolean; body: () => ReactNode }): ReactElement | null {
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [lingering, setLingering] = useState(false);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
+    setLingering(!open);
+  }
+  useEffect(() => {
+    if (open || !lingering) return;
+    const timer = setTimeout(() => setLingering(false), FOLD_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [open, lingering]);
+  if (!open && !lingering) return null;
+  return <>{body()}</>;
 }
 
 /**
@@ -1240,7 +1289,19 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     // 没有 walkDir（纯浏览器宿主 ⇒ 根本没有先手快照）或快照读盘失败 ⇒ 退回旧文案，
     // 不能对着人说"正在读取口上目录"而其实什么都没读。
     const text = walkDir && !walkFailed ? '正在读取口上目录…' : '索引中…';
-    return <div className="tree-loading">{text}</div>;
+    return (
+      <div className="tree-loading">
+        {text}
+        {/* 冷开骨架（VIS-34）：一句话下面垫 7 行 shimmer。`.tree-loading::before`
+            那枚单色环（styles-project 的 H 段）继续在转，这里补的是"大概有多长、快到了"——
+            改前冷开只有这一句文字，读数回来时整棵树从空白直接撑满，读起来像卡了一下。
+            行组件复用 `ui/overlay-chrome.overlaySkeletonRows`（`.skeleton` 的扫光 +
+            `.ov-skeleton-row` 的度量都是既有的，本批只是给它第一个消费方）；
+            排布与宽度阶梯在 `file-tree.css`，入场节拍在 `ui/motion-surface.css`。
+            ⚠ 状态栏那格索引读数（`.sb-idx`）归 Lane D，这里不伸手。 */}
+        {overlaySkeletonRows(TREE_COLD_SKELETON_ROWS)}
+      </div>
+    );
   }
 
   return (
@@ -1278,7 +1339,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
             fsRoots.map((root) => {
               const isOpen = subOpen.has(root);
               return (
-                <li key={root} className="tree-group">
+                <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'}>
                   <button
                     className="tree-group-btn"
                     title={`${root}${root === project.rootDir ? '（项目根）' : '（本次会话添加的文件夹，重开项目后不再显示）'}`}
@@ -1289,15 +1350,20 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                     </span>
                     <span className="group-label">{middleEllipsis(baseName(root), TREE_LABEL_MAX)}</span>
                   </button>
-                  {isOpen ? (
-                    <ul className="tree-files">
-                      {dirCache.has(root) ? (
-                        <DirRows {...dirRowsBase} dir={root} depth={0} skip={EMPTY_SKIP} />
-                      ) : (
-                        <li className="tree-note">读取目录…</li>
-                      )}
-                    </ul>
-                  ) : null}
+                  {/* 折叠容器（VIS-31）：`ul` 仍是本 `li` 的直接子元素——导轨那三条
+                      `.tree-group > .tree-files*` 选择器因此一个字没动 */}
+                  <TreeFoldBody
+                    open={isOpen}
+                    body={() => (
+                      <ul className="tree-files">
+                        {dirCache.has(root) ? (
+                          <DirRows {...dirRowsBase} dir={root} depth={0} skip={EMPTY_SKIP} />
+                        ) : (
+                          <li className="tree-note">读取目录…</li>
+                        )}
+                      </ul>
+                    )}
+                  />
                 </li>
               );
             })
@@ -1311,7 +1377,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         {visible.map((g) => {
           const isOpen = opened.has(g.label) || deferredFilter.length > 0;
           return (
-            <li key={g.label} className="tree-group">
+            <li key={g.label} className="tree-group" data-open={isOpen ? '1' : '0'}>
               <button
                 className="tree-group-btn"
                 title={`${g.label}（右键查看更多）`}
@@ -1330,7 +1396,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                 <span className="group-count">{g.total}</span>
                 <NodeProblemBadge groups={groups} kind="group" nodeKey={g.label} scope="角色目录" />
               </button>
-              {isOpen ? (
+              {/* 折叠容器（VIS-31 · 见 `TreeFoldBody`）：`ul` 仍是本 `li` 的直接子元素，
+                  导轨那三条 `.tree-group > .tree-files*` 选择器一个字没动 */}
+              <TreeFoldBody
+                open={isOpen}
+                body={() => (
                 <ul className="tree-files">
                   {g.subs.map((s) => {
                     // 根散文件（无包目录兜底）：直接平铺在角色组下
@@ -1403,7 +1473,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                     );
                   })}
                 </ul>
-              ) : null}
+                )}
+              />
             </li>
           );
         })}

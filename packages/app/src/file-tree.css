@@ -70,3 +70,63 @@ li > .tree-files.nested:has(.tree-file.active)::before {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent-dim);
 }
+
+/* ============================================================================
+ * 1026 体感批 · 车道 A（VIS-31 树侧 + VIS-34 冷开）
+ * ----------------------------------------------------------------------------
+ * ① 组展开折叠：`grid-template-rows: 0fr → 1fr` 过渡，**不动 height**。
+ *    为什么只有这一条路：`height: auto` 根本不可插值（写了等于没写），`max-height`
+ *    要编一个假上界——比真实内容矮就截断、高就先空跑一段，两种都读起来像卡一下；
+ *    而这两条都会顺带把行盒重排一遍（树是全站最长的一棵）。`0fr → 1fr` 吃的是
+ *    真实内容高度，且只在纵向开合：行高 `--tree-row-h`（22px，刻意的密度档）与
+ *    `--tree-indent` 缩进步进**一个像素都不动**。
+ *    DOM 形态（`FileTree.tsx` 的 `TreeFoldBody`）：折叠网格直接挂在 `li.tree-group`
+ *    自己身上（第一行 = 组头 `auto`，第二行 = `ul.tree-files` 的 0fr/1fr），
+ *    于是 `ul` 仍是 `li.tree-group` 的**直接子元素**——上方那三条
+ *    `.tree-group > .tree-files*` 导轨选择器一个字不改（判据 `indent-rail-single-source.test.ts`）。
+ *    `min-height: 0` 不是可选的：0fr 那行的基线尺寸由项目的 min-content 给，
+ *    不压掉它折叠就永远收不到零（这条链上最容易漏的一环）。
+ *    折叠后 ul 还会多留 200ms（`--dur-2` 同档，卸载时机在 `TreeFoldBody`）好让
+ *    收拢播完，之后真卸载 ⇒ 静息的折叠组零 DOM、零成本。
+ *    逐行入场的图样与节拍在 `ui/motion-surface.css`（本切片只管"开合"这一件事）。
+ * ② 树冷开骨架（VIS-34）：`.tree-loading` 本来的那张脸是一句文字 + `::before`
+ *    一枚单色环（styles-project 的 H 段），骨架行的排布归这里，shimmer 与入场
+ *    归 `.skeleton` 效果库与 `ui/motion-surface.css`。宽度阶梯是**有意的不齐**——
+ *    六行等宽读起来像栅栏，长短错落才像"马上就有内容了"。
+ * ========================================================================= */
+.file-tree .tree-group {
+  display: grid;
+  grid-template-rows: auto 0fr;
+  transition: grid-template-rows var(--dur-2) var(--ease-standard);
+}
+.file-tree .tree-group[data-open='1'] {
+  grid-template-rows: auto 1fr;
+}
+.file-tree .tree-group > .tree-files {
+  overflow: hidden;
+  min-height: 0;
+}
+/* 收拢态那 4px 是 `.tree-files` 自己的下边距：折叠期间不留它，
+   否则 0fr 行还剩一条缝，看着像"没关严"。 */
+.file-tree .tree-group[data-open='0'] > .tree-files {
+  margin-bottom: 0;
+}
+
+/* 冷开骨架：替掉空白，读数回来时原地换成真行，整棵树一跳不跳。
+   ⚠ 这一格在 `.file-tree` **之外**（索引未就绪时早就 return 了，根 div 压根还没挂），
+   故按 `.tree-loading` 单类作用域，提特异性靠往下两枚类名（0,2,0）而不是祖先类。 */
+.tree-loading .ov-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  margin-top: var(--space-2);
+}
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(2n + 1) {
+  width: 62%;
+}
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(2n) {
+  width: 84%;
+}
+.tree-loading .ov-skeleton > .ov-skeleton-row:last-child {
+  width: 40%;
+}
