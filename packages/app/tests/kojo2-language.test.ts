@@ -136,11 +136,16 @@ describe('五锚点：每行的第一眼是锚点', () => {
 /* ============================== 保留词 / 数字 / 运算符 ============================== */
 
 describe('保留词、数字与中文运算符', () => {
-  it('`? 否` / `由` / 类型词 / 存储期词 / 织入修饰词都在保留词档', () => {
+  it('`? 否` / `由` / 类型词 / 存储期词 / 织入修饰词各归各档（类型词自 2026-10-27 第三色批起独立一档）', () => {
     expect(ofToken(tokensOf('? 否'), KOJO2_TOKEN.keyword)).toEqual(['否']);
     expect(ofToken(tokensOf('# 表 心情 由 恋慕'), KOJO2_TOKEN.keyword)).toEqual(['由']);
     const decl = tokensOf('# 变量 今天已触发 整数 = 0 存档');
-    expect(ofToken(decl, KOJO2_TOKEN.keyword)).toEqual(['整数', '存档']);
+    // 类型词从"保留词"里拆出来：`整数` 说的是**这一列存什么**，`存档` 说的是**它活多久**，
+    // 两件事挤一枚色就是把第三色档白白省掉了。判据两侧都留：type 里恰是类型词，
+    // keyword 里仍是存储期词（少一格 = 拆档拆丢了，多一格 = 卫兵序错了）。
+    expect(ofToken(decl, KOJO2_TOKEN.type)).toEqual(['整数']);
+    expect(ofToken(decl, KOJO2_TOKEN.keyword)).toEqual(['存档']);
+    expect(ofToken(tokensOf('# 变量 心情快照 字符串'), KOJO2_TOKEN.type)).toEqual(['字符串']);
     expect(ofToken(tokensOf('@织 回合末 之后'), KOJO2_TOKEN.keyword)).toEqual(['之后']);
     expect(ofToken(tokensOf('空行 等待'), KOJO2_TOKEN.keyword)).toEqual(['空行', '等待']);
   });
@@ -423,6 +428,8 @@ describe('档位与配色：一档一色、与 v1 不撞名', () => {
     const sampleLines = [
       '@算', // anchor + declaration
       '# 表 心情 由 恋慕', // declaration + keyword
+      // 类型档的发射点（2026-10-27 第三色批）：类型词 + 存储期词同屏，两档必须各发各的
+      '# 变量 人数 整数 存档',
       '? 否', // anchor + keyword
       '灵梦：「早」', // speaker + delimiter + speech
       '灵梦：「{你}」', // interp

@@ -104,6 +104,8 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
       'operator',
       'number',
       'embedded',
+      // 类型 / 结构名（2026-10-27 第三色批）：`# 表` / `# 池` / `# 模` 三枚结构定义头
+      'type',
       'none',
     ];
     const missing = wanted.filter((n) => !names.has(n));
@@ -130,6 +132,7 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
       'operator',
       'number',
       'embedded',
+      'type',
       'none',
     ];
     const noHit = wanted.filter((n) => !hit.has(n));
@@ -137,6 +140,9 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
     // 关键档位的命中数下界（防止只命中最稀疏的一枚就过闸）
     const all = q.matches(root).flatMap((m) => m.captures.map((c) => c.name));
     const countOf = (n: string): number => all.filter((x) => x === n).length;
+    // 类型档的地板：full.kojo2 里 `# 表` / `# 池` / `# 模` 各一枚 = 3。这一枚之所以单独立一条，
+    // 是因为"theme 里有 support.type 这个键"零成本、屏上有没有它是另一件事（2026-10-27 第三色批）。
+    expect(countOf('type'), 'full.kojo2 上 @type 命中数').toBeGreaterThanOrEqual(3);
     expect(countOf('string')).toBeGreaterThanOrEqual(15); // 旁白段 + 台词串
     expect(countOf('keyword.control')).toBeGreaterThanOrEqual(10); // @ / ? 块头族
     expect(countOf('string.special')).toBeGreaterThanOrEqual(5); // 插值 + 表演提示

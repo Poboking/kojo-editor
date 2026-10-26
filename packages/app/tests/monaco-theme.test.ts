@@ -93,6 +93,9 @@ const REQUIRED_BASE_TOKENS = [
   'keyword',
   'keyword.preprocessor',
   'entity.name.function',
+  // 类型 / 结构名（2026-10-27 第三色批）：三套都必须有这一档的前景，漏一套当场抛
+  // （`rulesFromPalette` 的"调色板缺少 token"），漏登记进本表则由下面的覆盖用例点名。
+  'support.type',
   'variable',
   'string',
   'number',

@@ -87,6 +87,8 @@ export const KOJO2_CAPTURE_TOKEN_TYPES: Readonly<Record<string, Kojo2TokenName>>
   'keyword.function': KOJO2_TOKEN.keyword,
   'keyword.directive': KOJO2_TOKEN.keyword,
   'keyword.operator': KOJO2_TOKEN.operator,
+  // 2026-10-27 第三色批：`# 表` / `# 池` / `# 模` 三枚结构定义头（查询侧同一批改判）
+  type: KOJO2_TOKEN.type,
   label: KOJO2_TOKEN.declaration,
   'function.call': KOJO2_TOKEN.declaration,
   'punctuation.special': KOJO2_TOKEN.anchor,

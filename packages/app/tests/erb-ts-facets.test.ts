@@ -394,6 +394,37 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
     console.log(`[erb-ts-facets] semantic tokens=${semantic.tokens.length} 分档=${JSON.stringify(Object.fromEntries(histogram))}`);
   });
 
+  /**
+   * 第三色批（2026-10-27）的**取证用例**：`support.type` 这一档不是"theme 里有这个键"就算数，
+   * 得在真 wasm + 真查询上把 `#DIM` 的型 / 存储限定词**逐列**打出来。
+   *
+   * 样本写形照真语料（eraTW 系语料实测：38,608 条 `#DIM` 族声明行里 11,521 行带限定词，
+   * 共 11,896 枚，分布在 992 份文件；高频词 `CONST` 4,317 / `DYNAMIC` 3,664 / `CHARA` 1,530 /
+   * `SAVEDATA` 1,055 / `REF` 853）。真盘路径不入仓，只走 `tools/corpus.mjs` 的环境变量。
+   */
+  it('#DIM 的型 / 存储限定词单独吃类型档，同一行的声明词与声明名各归各档', async () => {
+    const { replies } = await runEngine(
+      ['#DIM CONST GLOBAL 心, 10', '#DIM DYNAMIC 计数', '#DIM 名字, 3', ''].join('\n'),
+    );
+    const semantic = lastReply(replies, 'semantic');
+    if (!semantic) throw new Error('没有 semantic 回话');
+    const typed = semantic.tokens.filter((t) => t.tier === 'support.type');
+    const text = ['#DIM CONST GLOBAL 心, 10', '#DIM DYNAMIC 计数', '#DIM 名字, 3', ''];
+    const at = (t: (typeof typed)[number]): string =>
+      text[t.startRow]!.slice(t.startCol, t.endCol).trim();
+    // `dim_modifier` 的记号形是"词 + 其后至少一个空白"（语法层的 DIM_MODIFIER 就是这么切的），
+    // 所以跨度带一个尾随空格；涂在空格上没有视觉差，判据只看词本身。
+    expect(typed.map(at), '类型档打出的词').toEqual(['CONST', 'GLOBAL', 'DYNAMIC']);
+    // 同一行的其余部分**一档不许糊平**：声明词仍走预处理档，作者写的名字不涂色
+    expect(semantic.tokens.filter((t) => t.startRow === 0).map((t) => t.tier)).toEqual(
+      expect.arrayContaining(['keyword.preprocessor']),
+    );
+    expect(semantic.tokens.some((t) => t.tier === 'support.type' && at(t) === '心')).toBe(false);
+    // 第三枚 `#DIM 名字, 3` 没有任何限定词 ⇒ 该行零类型格（判据不是"有 #DIM 就涂"）
+    expect(typed.some((t) => t.startRow === 2)).toBe(false);
+    console.log(`[erb-ts-facets] support.type 命中=${typed.length} ${typed.map(at).join(',')}`);
+  });
+
   it('语义 token 的坐标落在捕获节点上（IF 行从行首缩进起、串从引号起）', async () => {
     const { replies } = await runEngine(FIXTURE);
     const semantic = lastReply(replies, 'semantic');

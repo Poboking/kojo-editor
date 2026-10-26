@@ -22,6 +22,12 @@
  * | `@string` | `string` | 台词 / 串，与 Monarch 同档 |
  * | `@string.special` | `sugar.interp` | FORM `{…}` / `%…%` 插值记号 |
  * | `@raw` | `keyword.raw` | 停用区体内原文 = 不透明整块 |
+ * | `@type` | `support.type` | **唯一一档不是词法同名档**（2026-10-27 第三色批）：`#DIM` 的型 / 存储限定词 |
+ *
+ * `@type` 为什么破例走主题档而不是复用词法色：词法层（`erb-language.ts`）对这一维**没有任何判据**
+ * ——它把 `#DIM CONST 名` 整条 `#` 行按 `#\w+` 只认第一个词，限定词与名字都落进兜底档。
+ * 判据只有 CST 有（`dim_directive → dim_modifier` 是子记号节点），所以这一档是"结构层给出的
+ * 新信息"，不是"换了个判据重涂同一格"——`@keyword.control` → `keyword.erb` 那条例外的同族。
  *
  * 表外捕获返回 `null`（引擎说一次并不着色）；`none` 是有意的"不供着色"哨兵，
  * 返回 `undefined` ⇒ 安静跳过（查询里留着只为可读性）。
@@ -38,6 +44,10 @@ export const ERB_SEMANTIC_CAPTURE_TIERS: Readonly<Record<string, string>> = {
   string: 'string',
   'string.special': 'sugar.interp',
   raw: 'keyword.raw',
+  // 2026-10-27 第三色批：`#DIM` 行的型 / 存储限定词（`CONST` / `DYNAMIC` / `CHARA` …）。
+  // 消费链 = 默认开的结构层（`ui/tree-sitter-pref.ts` 的 `TREE_SITTER_DEFAULT = true`），
+  // 命中面见 queries/highlights.scm 的 @type 那段注释与 `tests/erb-ts-facets.test.ts` 的取证用例。
+  type: 'support.type',
 };
 
 /** 有意不供着色的捕获（引擎遇到它们不告警；与"表外"是两件事） */
