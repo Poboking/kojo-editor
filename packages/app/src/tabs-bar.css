@@ -23,3 +23,44 @@
 
 /* 左/右箭头各自用注册表里的 `chevron-left` / `chevron-right`（互镜像），本切片不再需要
    旋转变形的类。 */
+
+/* ============================================================================
+ * 1026 体感批 · 车道 A（VIS-31 标签侧）：切换标签时活动指示条走 scaleX
+ * ----------------------------------------------------------------------------
+ * 现状：`.editor-tab.active` 的顶部 accent 线是 `styles-project.css` 里那条
+ * `box-shadow: inset 0 2px 0 var(--accent)`——底色/描边/字重都有 `--dur-*` 过渡，
+ * 唯独这条指示条是**瞬变**（切标签时它"啪"地跳到另一枚上）。
+ *
+ * 补法与红线：
+ *  - 指示条**继续走 box-shadow**（内描边画在一条 2px 带上），位移**只走 `transform: scaleX()`**
+ *    ——本仓"零布局抖动"的纪律：绝不允许给 `width` / `height` 加过渡（标签条是横向 flex，
+ *    宽度过渡 = 每帧重排整条标签栏，切起来像橡皮筋）；
+ *  - 旧那条 `inset 0 2px 0` 一个字符不动（终态仍由它兜：伪元素只是给它加一档过渡），
+ *    所以**减弱动效 / 伪元素不生效时读起来与改前逐字相同**；
+ *  - 两条同处一格的 accent 不叠加成双倍粗：伪元素那条就是 2px 带内的一道内描边，
+ *    与容器那条同心同色，静止时视觉上是一枚。
+ *  - 特异性 (0,2,0) 稳压懒档单类 `.editor-tab` (0,1,0)，与注入顺序无关（本文件由 `main.tsx`
+ *    静态引入、`ui/motion-surface.css` 那条压平闸由 `tabs-bar.tsx` 组件级引入，
+ *    两条到达时机都不保证排在懒档 `styles-project.css` 之后 ⇒ 一律按特异性取胜）。
+ * ========================================================================= */
+.editor-tabs-bar .editor-tab {
+  position: relative;
+}
+.editor-tabs-bar .editor-tab::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  /* 指示条本体仍是 box-shadow 那一族（与 `.editor-tab.active` 的 inset 顶线同色同形） */
+  box-shadow: inset 0 2px 0 var(--accent);
+  /* 收着的时候是零宽，不是透明——scaleX(0) 不进布局、不吃命中 */
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-2) var(--ease-out);
+  pointer-events: none;
+}
+.editor-tabs-bar .editor-tab.active::after {
+  transform: scaleX(1);
+}

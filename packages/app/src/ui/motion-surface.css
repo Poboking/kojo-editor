@@ -1,0 +1,120 @@
+/* ============================================================================
+ * 1026 前端体感批 · 车道 A：跨面动效切片（VIS-31 的"逐行入场"那一半 + 压平闸）
+ * ----------------------------------------------------------------------------
+ * 本切片只管四件事，全是**动效**，不碰任何布局与颜色：
+ *   ① 逐行进场的图样 `ms-row-in`（只动 opacity / transform，绝不吃布局）；
+ *   ② 进场节拍：`--stagger`（tokens.css 定义、此前全仓 0 消费）在这里第一次被消费；
+ *   ③ 树冷开骨架的入场节拍（与树行同一把尺）；
+ *   ④ 本批新增的每一处动效的**两条压平口径**（系统 prefers-reduced-motion + 应用内
+ *      `:root[data-motion='reduced']`）——全局那条只压 `animation-duration`，**不压 delay**，
+ *      带 `backwards` 填充的逐行入场在减弱档会"先空 200ms 再出现"，比不动更糟，
+ *      所以每一处带 delay 的规则都必须自己把 `animation-name` 关掉（同 `.boot-bar::after` 的先例）。
+ *
+ * 两条切片纪律（组长立的，`css-slices-wired.test.ts` + 本文件的静态判据都查）：
+ *   ① **靠特异性取胜不靠顺序**：本文件由 `FileTree.tsx` / `tabs-bar.tsx` 组件级引入，
+ *      到达时机不如 `main.tsx` 那条静态链可控 ⇒ 每条与重/懒档同属性对撞的选择器都
+ *      比它高一档（双类起步，压平档再加 `:root[data-motion]` 一层）。
+ *   ② **不写死颜色，只吃 `var()`**：本文件里零色面字面量（rgb 族与 hex 一枚都不写，
+ *      连说明文字都不写——全仓裸色账本按原文出现数计，注释也算，见
+ *      `shell-notices-token-discipline.test.ts` 的那把尺）；进场图样只用透明度与位移。
+ *
+ * 各面自己的过渡（树折叠 `file-tree.css` / 标签指示条 `tabs-bar.css` / 大纲扫光
+ * `outline-panel.css` / 通知让位 `shell-notices.css`）留在各自组件的切片里——
+ * 判据按文件读源码，动效跟着它修饰的组件走，别把一份手感拆成两张纸。
+ * ========================================================================= */
+
+/* ---------------------------- ① 逐行进场图样 ----------------------------
+   `backwards` 是这套的命门：没有它，带 delay 的行会在等待期先以终态露一秒，
+   然后才开始淡入——读起来像闪一下。有了它，delay 期间行是"还没到"的状态。
+   纵向位移只走半格 `--space-1`（2px）：再多就是页面在跳。 */
+@keyframes ms-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--space-1) * -0.5));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.file-tree .tree-files > li,
+.tree-loading .ov-skeleton > .ov-skeleton-row {
+  animation: ms-row-in var(--dur-1) var(--ease-standard) backwards;
+}
+
+/* ---------------------- ②③ 节拍阶梯（只铺前六行） ----------------------
+   阶梯到第 6 行封顶（5 × 45ms = 225ms），第 7 行起同值——再往深排就不是"逐行入场"
+   而是"看着屏幕排队"。深列的其余行走同一个终态，不做二阶延迟。 */
+.file-tree .tree-files > li:nth-child(2),
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(2) {
+  animation-delay: calc(var(--stagger) * 1);
+}
+.file-tree .tree-files > li:nth-child(3),
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(3) {
+  animation-delay: calc(var(--stagger) * 2);
+}
+.file-tree .tree-files > li:nth-child(4),
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(4) {
+  animation-delay: calc(var(--stagger) * 3);
+}
+.file-tree .tree-files > li:nth-child(5),
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(5) {
+  animation-delay: calc(var(--stagger) * 4);
+}
+.file-tree .tree-files > li:nth-child(6),
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(6) {
+  animation-delay: calc(var(--stagger) * 5);
+}
+.file-tree .tree-files > li:nth-child(n + 7),
+.tree-loading .ov-skeleton > .ov-skeleton-row:nth-child(n + 7) {
+  animation-delay: calc(var(--stagger) * 5);
+}
+
+/* ----------------------------- ④ 压平闸 -----------------------------
+   两档口径各一条，逐条点名本批新增的动效面（不写通配 `*`：那会把别人家的动画一起按掉，
+   越界且没法判据）。`animation: none` 关掉名字 ⇒ 元素停在声明的基态（行是常显、
+   指示条按类给终值、扫光那条基态本身就是透明），不存在"压平后卡在入场态"。 */
+@media (prefers-reduced-motion: reduce) {
+  .file-tree .tree-files > li,
+  .tree-loading .ov-skeleton > .ov-skeleton-row,
+  .editor-tabs-bar .editor-tab::after,
+  .outline-panel .outline-row.is-active::after,
+  .notification-center.notification-shell {
+    animation: none;
+    animation-delay: 0s;
+    transition: none;
+  }
+}
+
+:root[data-motion='reduced'] .file-tree .tree-files > li,
+:root[data-motion='reduced'] .tree-loading .ov-skeleton > .ov-skeleton-row,
+:root[data-motion='reduced'] .editor-tabs-bar .editor-tab::after,
+:root[data-motion='reduced'] .outline-panel .outline-row.is-active::after,
+:root[data-motion='reduced'] .notification-center.notification-shell {
+  animation: none;
+  animation-delay: 0s;
+  transition: none;
+}
+
+/* ------------------- ⑤ 更新提醒卡在场：通知列抬过卡那一档的位移 -------------------
+ * 抬升的**声明**在 `update-notice-card.css`（`bottom: calc(--notice-slot-bottom + --notice-card-h
+ * + --notice-gap)`，算术由 `shell-notice-density.test.ts` 钉着，本切片一个字不碰）；
+ * 改前它之所以会动，是因为 `shell-notices.css` 那条 `transition: bottom` 顺带把它也过渡了——
+ * 那条几何过渡本批换成了 transform（逐帧重排不起），这里就**必须**补上位移，
+ * 否则"卡出现 → 通知列弹上去"这一格会被静默删掉。
+ * `:not(:has(.overlay-backdrop, .modal-mask))` 是分工而不是装饰：模态在场时卡整块不画
+ * （shell-notices ⑥），让位那两条规则（`body:has(.overlay-backdrop …)`）自己接管位移，
+ * 两边永不同时命中 ⇒ 不存在"同一条 animation 属性两个来源打架、胜负看注入顺序"的局面。
+ * from 用同一族 `--notice-*` 算出"还没抬起来的那一格"（卡高 + 一档间隙），零新常数。 */
+body:has(.update-notice-card):not(:has(.overlay-backdrop, .modal-mask)) .notification-center.notification-shell {
+  animation: notice-card-lift var(--dur-2) var(--ease-standard);
+}
+@keyframes notice-card-lift {
+  from {
+    transform: translateY(calc(var(--notice-card-h) + var(--notice-gap)));
+  }
+  to {
+    transform: translateY(0);
+  }
+}

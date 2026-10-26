@@ -116,27 +116,54 @@ body:has(.overlay-backdrop, .modal-mask) .notification-center.notification-shell
   left: 16px;
   right: auto;
   max-width: min(360px, calc(100vw - 32px));
+  animation: notice-shell-shift var(--dur-2) var(--ease-standard);
 }
 /* 左下被项目态错误条占了（`position:absolute; left:16 bottom:36`）⇒ 抬到它上方，两列永不叠字。
    抬升 = 错误条槽位底 + 实测条高 + 一档间隙（`tokens.css` 的 `--notice-*` 族，2026-10-24 真壳量得；
    原先这里写死 128，比实测条顶缘 125 只多 3px——文案一换行就叠字） */
 body:has(.overlay-backdrop, .modal-mask):has(.project-session-error) .notification-center.notification-shell {
   bottom: calc(var(--notice-slot-bottom) + var(--notice-err-h) + var(--notice-gap));
+  animation: notice-shell-rise var(--dur-2) var(--ease-standard);
 }
-/* 让位是"整列平移"，给一档 `--dur-2`（200ms）的位移过渡；两种降动效口径都压平（同 update-notice-card） */
-.notification-center.notification-shell {
-  transition:
-    left var(--dur-2) var(--ease-out),
-    right var(--dur-2) var(--ease-out),
-    bottom var(--dur-2) var(--ease-out);
+/* 让位/抬升的位移（VIS-32 · 1026 车道 A）：
+ *   改前：`.notification-center.notification-shell` 上挂 `transition: left/right/bottom`
+ *         ——三枚全是几何属性，过渡期间**每帧重排一次通知列**（列里 toast 越多越贵）。
+ *   改后：落点仍由 `left` / `right` / `bottom` **声明**（终值真源；`:has()` 不可用时整组
+ *         失效 = 回到改前的右下形态，与 R5 同一降级口径），但**位移只跑 `transform: translate()`**
+ *         ——进合成层，零逐帧重排；keyframe 的 `from` 用同一族 `--notice-*`（竖）与
+ *         视口减两枚槽位边距减列宽自身（横，`100%` 即列宽）算出"让位前那一格"，播完回到声明的终值。
+ *   两条取舍说清楚，别让人以为是免费的：
+ *    ① 位移只播**入场**（状态刚成立那一帧），撤除时直接落回右下——`transition` 的双向性
+ *      换掉了，换的是不重排；撤让位与模态关闭同帧发生，本来就不该抢镜。
+ *    ② 横向 `from` 里的 `100%` 取的是**让位后**的列宽（`max-width` 360），旧位置按 400 算的列宽
+ *      会有至多 40px 的起跳误差；200ms 的位移里读不出，且落点（声明值）恒准。 */
+@keyframes notice-shell-shift {
+  from {
+    transform: translate(calc(100vw - 32px - 100%), 0);
+  }
+  to {
+    transform: translate(0, 0);
+  }
 }
+@keyframes notice-shell-rise {
+  from {
+    transform: translate(calc(100vw - 32px - 100%), calc(var(--notice-err-h) + var(--notice-gap)));
+  }
+  to {
+    transform: translate(0, 0);
+  }
+}
+/* 两种降动效口径都压平（同 update-notice-card 的先例）。`transition: none` 留着：
+   它现在守的是"别再把几何属性接回这列上"，`animation: none` 关的是本批这两条位移。 */
 @media (prefers-reduced-motion: reduce) {
   .notification-center.notification-shell {
     transition: none;
+    animation: none;
   }
 }
 :root[data-motion='reduced'] .notification-center.notification-shell {
   transition: none;
+  animation: none;
 }
 
 /* ========================= ③ 状态栏：两组诊断计数分主次 ========================= */

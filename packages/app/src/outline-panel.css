@@ -253,3 +253,48 @@
   color: var(--fg-dim);
   font-size: var(--fs-1);
 }
+
+/* ============================================================================
+ * 1026 体感批 · 车道 A（VIS-31 大纲侧）：定位当前符号的一档扫光
+ * ----------------------------------------------------------------------------
+ * 现状：光标（当前符号行）换行时只有底色 / 左条 / 字重 / 靶心四**终态**同时翻，
+ * 没有任何过程 ⇒ 编辑器里跳了一次光标，大纲里"哪一行刚被定位到"只能靠重新扫一遍。
+ * 这里补的是那一档过程：一道从左端扫过的光，`--dur-2`（200ms）一次，播完即退场。
+ *
+ * 三条口径：
+ *  - **位移只走 `transform`，不走 `left`**：`left` 是几何属性，逐帧过渡 = 逐帧重排
+ *    整棵大纲（行数上百就看得见卡）；`transform` 进合成层，行盒一个都不动；
+ *  - **基态就是不可见**（`opacity: 0`）：两条压平口径（系统 / 应用内）把
+ *    `animation-duration` 压成 0.01ms 时，动画播完回到基态 = 只剩原有的四通道终态，
+ *    不许它停在"半道上的光带"那种读起来像卡死的中间态（`.boot-bar::after` 的老坑）；
+ *  - 行本身 `position: relative` 只为给伪元素一个定位上下文，不改任何既有度量；
+ *    顶部读数条 `z-index: 1` 仍压在行之上（定位行是 z-auto），粘顶遮挡关系不变。
+ *
+ * 类名 `is-active` 由 `OutlinePanel.tsx` 给（本文件不碰它），伪元素每次"成为当前行"
+ * 都重跑一次 ⇒ 定位 effect（`scrollIntoView` 那条）落点即扫光起点。
+ * ========================================================================= */
+.outline-panel .outline-row {
+  position: relative;
+}
+.outline-panel .outline-row.is-active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--space-5) * 2);
+  background: linear-gradient(90deg, var(--accent-soft), transparent);
+  opacity: 0;
+  pointer-events: none;
+  animation: outline-locate-sweep var(--dur-2) var(--ease-out);
+}
+@keyframes outline-locate-sweep {
+  from {
+    opacity: 0.9;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(calc(var(--space-5) * 6));
+  }
+}

@@ -22,6 +22,9 @@ import {
   type TabMenuItemId,
 } from './tabs-ops';
 import './context-menu-tabs.css';
+// 跨面动效切片（1026 车道 A）：`tabs-bar.css` 里那条指示条的 scaleX 在减弱档要有得压平。
+// 与 `FileTree.tsx` 引的是同一份（Vite 去重），两边各自成立 ⇒ 谁在场都不靠对方的挂载时机。
+import './motion-surface.css';
 
 export type { TabRowProps } from './tab-row';
 
