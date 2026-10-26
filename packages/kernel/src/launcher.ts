@@ -38,7 +38,8 @@ import type {
  * 落点只有「宿主按 appData 现算」与「原生对话框即授权」两种。
  *
  * 平台无此能力（Node 桥 / Web 调试宿）时由本层给一句人话——**不降级、不造假数据**，
- * 与 `RemoteServiceImpl.marketPublish` 的缺席口径逐字同族。
+ * 与 `remote.ts` 里"平台缺某条可选能力"的缺席口径逐字同族（那边的方法名不在此复述：
+ * `kojo-market` 的单一真源闸按方法名扫生产面，多写一处就是假红）。
  */
 export class LauncherHostImpl implements LauncherHostBridge {
   constructor(private readonly bridge: PlatformBridge) {}
