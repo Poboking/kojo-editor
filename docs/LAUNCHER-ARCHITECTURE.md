@@ -1818,10 +1818,11 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
 
 ```
 {appData}/launcher/
-├── index.json                     # 实例索引（派生缓存，可由实例目录重建）
-├── index.json.bak                 # 原子写备份
+├── registry.json                  # 实例索引（派生缓存，可由实例目录重建；L3a 落地名）
+├── registry.json.bak              # 原子写备份
 ├── approvals.json                 # 来源根批准表 + shared 写授权（只由原生对话框写入）
-├── runtimes/
+├── trash/{timestamp}/             # 删实例时 keepBackups 的落点（§9.3）
+├── runtime/
 │   └── {runtimeId}/
 │       ├── runtime.json
 │       └── payload/...
@@ -1847,7 +1848,7 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
         │   ├── {sessionId}.stdout.log
         │   ├── {sessionId}.stderr.log
         │   └── {sessionId}.json   # 退出码、时长、exe 哈希、实例快照
-        └── tmp/                   # 解压/导入暂存；启动时清理过期项
+        └── staging/               # 解压/导入暂存；启动时清理过期项
 ```
 
 > **插件源码项目不在 `{appData}/launcher/` 下**：它是工作区项目
@@ -1867,7 +1868,7 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
 ### 9.4 复制算法
 
 - 按目录流式复制，显示 `bytes` 进度；
-- 默认跳过 adapter `copyExclude` + 通用 `logs/`、`tmp/`、`*.log`；
+- 默认跳过 adapter `copyExclude` + 通用 `logs/`、`staging/`、`*.log`；
 - `includeSaves=false`（默认）时跳过 `saveRoots`，新实例从干净存档开始；
 - 复制完成后计算**基线清单**（文件数/总字节/关键文件哈希），写入 `instance.json`；
 - 复制失败/取消：删掉整个 `instances/{id}/`，不留半成品实例。
@@ -1899,7 +1900,7 @@ set_order / diagnose` 的载荷里没有「插件」这个语义——宿主只�
     kind='plugin' → PluginManager；其余 → ContentManager
         │
         ▼
-[1] 解到 instances/{id}/tmp/{planId}/     ← ZIP 四重守卫
+[1] 解到 instances/{id}/staging/{planId}/ ← ZIP 四重守卫
     （构建产物同样从这里进，**没有**从 build/ 直写实例的旁路）
         │
         ▼
@@ -2240,7 +2241,7 @@ PluginManager.list → 取该插件 manifest 与 ownedFiles
 
 - 格式：`.zip` + 根 `bundle.json`（实例模板 + 内容包/插件列表 + 可选游戏文件）；
 - 导入：解到暂存 → 校验 → 创建 `copy` 实例 → 按 `loadOrder` 安装内容 → 写配置 → 完成；
-- 导出：流式 ZIP（`game/` 可选、`content/`、`instance.json`，默认排除 `logs/`、`backups/`、`tmp/`）；
+- 导出：流式 ZIP（`game/` 可选、`content/`、`instance.json`，默认排除 `logs/`、`backups/`、`staging/`）；
 - **不内置游戏本体下载源**；bundle 里带游戏文件时，UI 明确提示「这是发布者附带的内容，请自行确认版权」。
 
 ### 10.7 容器守卫

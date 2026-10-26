@@ -39,6 +39,15 @@ const ONLY_COMPARE_SOURCE = 'packages/plugin-api/src/market.ts';
 /** 宿主唯一允许的哈希：发布上传摘要（`market.rs` 一处）+ 其测试向量（`market_tests.rs`） */
 const HOST_DIGEST_SOURCE = 'packages/app/src-tauri/src/market.rs';
 const HOST_DIGEST_TEST_SOURCE = 'packages/app/src-tauri/src/market_tests.rs';
+/**
+ * 宿主第二处、也是**唯一另一处**允许的哈希：启动器的目标程序信任链（2026-10-26 L3a）。
+ *
+ * 为什么它不是"第二份真相"：市场摘要管的是**上传字节与索引条目**（下行校验锚只住 TS），
+ * 而启动器要证明的是"盘上那个 exe 还是用户批准过的那个"——ADR-0008 决策 1 与规格 §13.2
+ * 都把它钉成宿主职责（JS 传的哈希一律忽略），所以它只能住在宿主、且只算不判。
+ * 例外必须窄：下面两枚用例除了点名这一个文件，还断它只有一个哈希原语。
+ */
+const HOST_LAUNCHER_TRUST_SOURCE = 'packages/app/src-tauri/src/launcher/trust.rs';
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   if (statSync(dir).isFile()) {
@@ -198,11 +207,11 @@ describe('市场单一真源守门', () => {
     }
     // `target` 目录按名跳过 ⇒ 依赖源码不算违例（否则整棵树都是红的）
     expect(rs.some((p) => p.includes('/target/')), 'target 目录漏进了扫描面').toBe(false);
-    // 哈希扫描面必须真的扫到宿主两处（生产摘要 + 测试向量），不是空闸
+    // 哈希扫描面必须真的扫到宿主两处（生产摘要 + 启动器信任链），不是空闸
     const hostHits = scan([/\bSha256\b/], [nodeJoin(ROOT, 'packages', 'app', 'src-tauri')], true);
     const hostFiles = [...new Set(hostHits.map((h) => h.split(':')[0]))].sort();
-    // 测试向量不必出现 `Sha256` 字面；生产摘要所在的 market.rs 必须被扫到
-    expect(hostFiles).toEqual([HOST_DIGEST_SOURCE]);
+    // 测试向量不必出现 `Sha256` 字面；生产摘要与启动器信任链必须被扫到，别无第三处
+    expect(hostFiles).toEqual([HOST_LAUNCHER_TRUST_SOURCE, HOST_DIGEST_SOURCE]);
   });
 
   it('SHA-256 只住 TS（宿主唯一例外：发布上传容器摘要）', () => {
@@ -219,6 +228,7 @@ describe('市场单一真源守门', () => {
       (f) =>
         f !== HOST_DIGEST_SOURCE &&
         f !== HOST_DIGEST_TEST_SOURCE &&
+        f !== HOST_LAUNCHER_TRUST_SOURCE &&
         // 测试里用标准库做 oracle 不算第二份实现（同上一枚用例的口径）
         !f.includes('/tests/'),
     );
@@ -228,12 +238,17 @@ describe('市场单一真源守门', () => {
     expect(codeMatchCount(rs, /Sha256::new\s*\(/g), '宿主上传摘要原语处数').toBe(1);
     expect(rs, '上传摘要头').toContain('MARKET_ZIP_SHA256_HEADER');
     expect(rs).not.toMatch(/ring::digest/);
-    // 除 market.rs / market_tests.rs 外，其他 Rust 源文件一个哈希原语都不许有
+    // 除 market.rs / market_tests.rs / launcher/trust.rs 外，其他 Rust 源文件一个哈希原语都不许有
     expect(
       scan(PATTERNS, [RUST_SRC]).filter(
-        (f) => f !== HOST_DIGEST_SOURCE && f !== HOST_DIGEST_TEST_SOURCE,
+        (f) => f !== HOST_DIGEST_SOURCE && f !== HOST_DIGEST_TEST_SOURCE && f !== HOST_LAUNCHER_TRUST_SOURCE,
       ),
     ).toEqual([]);
+    // 例外必须窄：启动器信任链只有一处哈希原语，且它不碰市场头 / 下行校验锚
+    const trust = readFileSync(nodeJoin(ROOT, HOST_LAUNCHER_TRUST_SOURCE), 'utf8');
+    expect(codeMatchCount(trust, /Sha256::new\s*\(/g), '启动器信任摘要原语处数').toBe(1);
+    expect(trust).not.toContain('MARKET_ZIP_SHA256_HEADER');
+    expect(trust).not.toMatch(/ring::digest/);
   });
 
   it('出网只有两条形态（下载 / 发布），闸同一份形态两张表：client 构造与 send 各恰其数', () => {

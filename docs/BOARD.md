@@ -65,4 +65,10 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LAUNCH-GATE | 闸与通道复核：懒加载新视图是否动开机图；`smoke-tauri-ipc` / `debug-cli shell` 可用性与 launcher 判据插入点 | 开机图读数逐字引用；通道 rc 实测；零生产码改动 | 进行中 · 认领：qoder-gate 2026-10-26 |
+| LAUNCH-L3B | Rust 宿主内容/存档命令：`launcher_content_*` 七条 + `launcher_save_*` 八条 + `launcher_pick_archive`（staging 两阶段 / ownership / 逆序回滚 / 基础快照不覆盖 / shared 授权根复验） | `cargo test --lib` 绿；ZIP 复用 `archive_guard::extract_staging`，不自造解包器 | 进行中 · 认领：qoder-l3b 2026-10-26 |
+| LAUNCH-L3C | 桌面壳桥：`PlatformBridge.launcher` 接 L3a 已存在命令 + 四条事件；Node 桥缺席（= 无此能力） | 命令名/载荷键逐字断言；DTO camelCase 映射；错误码透传 | 进行中 · 认领：qoder-l3c 2026-10-26 |
+| LAUNCH-STOP | 优雅停止：`WM_CLOSE` → 优雅期超时 → `TerminateJobObject`；`lastExit.reason` 区分 `user` / `killed` | `force=false` 无窗口子进程不得空等默认 5 s；stopping 期重复 start = BUSY | 进行中 · 认领：qoder-stop 2026-10-26 |
+| LAUNCH-L7A | core 插件门禁 `PluginManager`：能力/兼容/函数级冲突（`normalizedName` + `conventionPolicy`）/风险分级/存档影响/依赖，写盘委托内容包管线 | ≥26 例；真冲突与「预期重复」两类分钉；高风险未受信拒装 | 进行中 · 认领：qoder-l7a 2026-10-26 |
+| LAUNCH-GATE | 闸与通道复核：懒加载新视图是否动开机图；`smoke-tauri-ipc` / `debug-cli shell` 可用性与 launcher 判据插入点 | 开机图读数逐字引用；通道 rc 实测；零生产码改动 | 待派 |
+| LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界 | 待派（依赖 L7A 的清单类型） |
+| LAUNCH-L9 | 端到端联调：真宿主 + 真壳（`debug-cli shell`）跑「建实例 → 信任 → 启动 → 装内容包 → 存档恢复」，并把 launcher 判据插进 `smoke-tauri-ipc` | 真壳读数（非 Web 调试宿）；失败路径逐条可见 | 待派（依赖 L3B/L3C） |
