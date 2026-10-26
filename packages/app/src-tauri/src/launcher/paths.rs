@@ -31,6 +31,18 @@ pub const GAME_SUBDIR: &str = "game";
 pub const LOGS_SUBDIR: &str = "logs";
 pub const BACKUPS_SUBDIR: &str = "backups";
 pub const STAGING_SUBDIR: &str = "staging";
+/// 内容包 / 游戏插件的安装区（§9.2：同一命名空间，kind 见 `pack.json`）。
+pub const CONTENT_SUBDIR: &str = "content";
+pub const PACK_MANIFEST_FILE: &str = "pack.json";
+pub const OWNERSHIP_FILE: &str = "ownership.json";
+pub const PACK_STATE_FILE: &str = "state.json";
+pub const PAYLOAD_SUBDIR: &str = "payload";
+/// `backups/packs/{packId}/`（基础快照 + 每次操作的当次快照）。
+pub const PACK_BACKUPS_SUBDIR: &str = "packs";
+/// `backups/saves/`（存档备份 ZIP + 同名 `.json` 元数据）。
+pub const SAVE_BACKUPS_SUBDIR: &str = "saves";
+/// 首次安装前的基础文件快照（升级不覆盖，§10.1 第 [7] 步）。
+pub const ORIGINAL_SNAPSHOT_DIR: &str = "original";
 
 /// 实例 id 的形状闸：宿主生成的 UUID（含 `-`）。任何来自 JS 的 id 都先过这一关——
 /// 它同时是「不能拿它拼出路径逃逸」的判据。
@@ -38,6 +50,21 @@ pub fn valid_instance_id(raw: &str) -> bool {
     !raw.is_empty()
         && raw.len() <= 64
         && raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// 单段名字（计划 id / 备份 id / 包 id）的形状闸。
+///
+/// 判据只回答「能不能当目录名」：ASCII 字母数字与 `-` `_` `.`，长度 1..=64，不许纯点、
+/// 不许以点开头（`..foo` 这类在 Windows 上会被折叠，干脆一律不让进）。**不**在这里
+/// 判业务字符集：包 id 更严的那一版（`^[a-z0-9][a-z0-9._-]{0,63}$`）归清单校验，
+/// 这里只保证它落不成路径。
+pub fn valid_component(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw.len() <= 64
+        && !raw.starts_with('.')
+        && raw
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
 fn escape(message: &str, detail: String) -> LauncherErrorDto {
@@ -331,6 +358,46 @@ impl LauncherLayout {
 
     pub fn staging_dir(&self, id: &str) -> LauncherResult<PathBuf> {
         Ok(self.instance_root(id)?.join(STAGING_SUBDIR))
+    }
+
+    /// 一次预检的暂存目录（内容包 / 存档导入共用）：`staging/{planId}/`。
+    pub fn staging_plan_dir(&self, id: &str, plan_id: &str) -> LauncherResult<PathBuf> {
+        if !valid_component(plan_id) {
+            return Err(escape("计划 id 形状非法", format!("planId={plan_id}")));
+        }
+        Ok(self.staging_dir(id)?.join(plan_id))
+    }
+
+    /// 内容包安装区根：`content/`。目录名即包 id（**先过形状闸**）。
+    pub fn content_dir(&self, id: &str) -> LauncherResult<PathBuf> {
+        Ok(self.instance_root(id)?.join(CONTENT_SUBDIR))
+    }
+
+    pub fn pack_dir(&self, id: &str, pack_id: &str) -> LauncherResult<PathBuf> {
+        if !valid_component(pack_id) {
+            return Err(escape("包 id 形状非法", format!("packId={pack_id}")));
+        }
+        Ok(self.content_dir(id)?.join(pack_id))
+    }
+
+    pub fn pack_payload_dir(&self, id: &str, pack_id: &str) -> LauncherResult<PathBuf> {
+        Ok(self.pack_dir(id, pack_id)?.join(PAYLOAD_SUBDIR))
+    }
+
+    /// `backups/packs/{packId}/`：`original/` 与每次操作的 `{timestamp}/` 都在这里。
+    pub fn pack_backups_dir(&self, id: &str, pack_id: &str) -> LauncherResult<PathBuf> {
+        if !valid_component(pack_id) {
+            return Err(escape("包 id 形状非法", format!("packId={pack_id}")));
+        }
+        Ok(self
+            .backups_dir(id)?
+            .join(PACK_BACKUPS_SUBDIR)
+            .join(pack_id))
+    }
+
+    /// `backups/saves/`：存档备份的唯一落点（**只在实例根内**）。
+    pub fn save_backups_dir(&self, id: &str) -> LauncherResult<PathBuf> {
+        Ok(self.backups_dir(id)?.join(SAVE_BACKUPS_SUBDIR))
     }
 
     pub fn lock_file(&self, id: &str) -> LauncherResult<PathBuf> {

@@ -57,6 +57,16 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
+/// 内存字节的 SHA-256（小写十六进制）。
+///
+/// 内容包 / 存档已经在解包期**整份读进内存**（单条目上限由共享表夹住），落盘前后各算一次
+/// 即可；这里复用同一份哈希实现，不引第二个摘要口径。
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex_lower(&hasher.finalize())
+}
+
 /// 原生确认框的正文。**把路径与哈希都摆出来**：用户看到的是"要运行哪个文件"。
 pub fn confirm_text(display_path: &Path, digest: &FileDigest) -> String {
     format!(

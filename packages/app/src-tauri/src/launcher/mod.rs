@@ -15,15 +15,21 @@
 //! 必须放工作线程）；进程拉起后由**两条日志泵线程 + 一条监视线程**接管，命令立即返回。
 
 pub mod commands;
+pub mod content;
 pub mod error;
 pub mod job;
 pub mod logs;
 pub mod paths;
 pub mod process;
+pub mod saves;
 pub mod store;
 pub mod tasks;
 pub mod trust;
 
+#[cfg(test)]
+mod content_tests;
+#[cfg(test)]
+mod save_tests;
 #[cfg(test)]
 mod tests;
 

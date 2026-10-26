@@ -11,8 +11,9 @@ use serde::Serialize;
 
 /// 宿主会用到的错误码。字面量逐字对齐 §5.6，**不得新增契约里没有的码**。
 ///
-/// L3a 只点亮其中一部分；L3b（内容包 / 存档）会用到剩下的几个（归档、任务冲突等），
-/// 因此整份留着——新增码必须先在 `plugin-api` 的 `LauncherErrorCode` 里出现。
+/// L3a 只点亮其中一部分；L3b（内容包 / 存档）点亮归档 / 内容 / 插件依赖 / 存档回写那几个。
+/// 新增码必须先在 `plugin-api` 的 `LauncherErrorCode` 里出现——下面每一条都能在
+/// `launcher.ts:496` 的并集里逐字找到。
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -26,6 +27,11 @@ pub enum ErrorCode {
     SourceNotApproved,
     PathEscape,
     ArchiveInvalid,
+    ArchiveLimit,
+    ContentConflict,
+    ContentBroken,
+    PluginDependency,
+    SaveRestoreFailed,
     TaskBusy,
     TaskCancelled,
     SchemaUnsupported,
@@ -47,6 +53,11 @@ impl ErrorCode {
             Self::SourceNotApproved => "LAUNCHER_SOURCE_NOT_APPROVED",
             Self::PathEscape => "LAUNCHER_PATH_ESCAPE",
             Self::ArchiveInvalid => "LAUNCHER_ARCHIVE_INVALID",
+            Self::ArchiveLimit => "LAUNCHER_ARCHIVE_LIMIT",
+            Self::ContentConflict => "LAUNCHER_CONTENT_CONFLICT",
+            Self::ContentBroken => "LAUNCHER_CONTENT_BROKEN",
+            Self::PluginDependency => "LAUNCHER_PLUGIN_DEPENDENCY",
+            Self::SaveRestoreFailed => "LAUNCHER_SAVE_RESTORE_FAILED",
             Self::TaskBusy => "LAUNCHER_TASK_BUSY",
             Self::TaskCancelled => "LAUNCHER_TASK_CANCELLED",
             Self::SchemaUnsupported => "LAUNCHER_SCHEMA_UNSUPPORTED",
@@ -58,7 +69,8 @@ impl ErrorCode {
     /// 宿主侧默认的「可重试」判定：用户能自己再走一遍的才给重试。
     ///
     /// 例：`INSTANCE_BUSY`（等它停）、`TRUST_REQUIRED` / `TRUST_CHANGED`（重新确认）、
-    /// `SOURCE_NOT_APPROVED`（重新授权）、`RUNTIME_MISSING`（补运行时）；
+    /// `SOURCE_NOT_APPROVED`（重新授权）、`RUNTIME_MISSING`（补运行时）、
+    /// `CONTENT_CONFLICT`（改决议后重装）、`ARCHIVE_LIMIT`（换一个小一点的包）；
     /// `PATH_ESCAPE` / `EXECUTABLE_INVALID` / `SCHEMA_UNSUPPORTED` 重试没有意义。
     pub fn retryable(self) -> bool {
         matches!(
@@ -69,6 +81,10 @@ impl ErrorCode {
                 | Self::TrustChanged
                 | Self::SourceNotApproved
                 | Self::RuntimeMissing
+                | Self::ContentConflict
+                | Self::ArchiveLimit
+                | Self::PluginDependency
+                | Self::SaveRestoreFailed
         )
     }
 }

@@ -17,10 +17,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tauri::State;
 
+use super::content::{
+    self, ContentPlanDto, DiagnosisDto, FileRefDto, InstalledContentDto, PlanOptionsDto,
+    ResolutionDto,
+};
 use super::error::{internal, platform_unsupported, ErrorCode, LauncherErrorDto, LauncherResult};
 use super::logs::{self, LogPageDto, LogQuery, LogSessionDto};
 use super::paths::{self, LauncherLayout};
 use super::process::{self, ProcessStatusDto};
+use super::saves::{
+    self, RestoreOptionsDto, SaveBackupDto, SaveBackupRequestDto, SaveExportRequestDto,
+    SaveImportPlanDto, SaveListingDto, SaveResolutionDto,
+};
 use super::store::{self, StoredExecutable, StoredInstance, StoredTrust};
 use super::tasks::{self, TaskDto};
 use super::trust;
@@ -1125,11 +1133,250 @@ pub async fn launcher_task_cancel(state: HostState<'_>, task_id: String) -> Laun
     tasks::cancel(&host, &task_id)
 }
 
+/* ------------------------------- 内容包 ------------------------------- */
+
+/// `launcher_pick_archive`：原生文件对话框，**只选不读不写**（§7.2）。
+///
+/// 返回的路径随后作为 `archivePath` 传给 `content_plan` / `save_import`——那是"输入件"，
+/// 不是"写落点"；写落点仍然全部由 `paths::LauncherLayout` 拼。
+#[tauri::command]
+pub async fn launcher_pick_archive(title: Option<String>) -> LauncherResult<Option<String>> {
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_title(title.unwrap_or_else(|| "选择压缩包".to_string()))
+        .add_filter("ZIP 压缩包", &["zip"]);
+    let Some(picked) = dialog.pick_file().await else {
+        return Ok(None);
+    };
+    Ok(Some(picked.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn launcher_content_list(
+    state: HostState<'_>,
+    instance_id: String,
+) -> LauncherResult<Vec<InstalledContentDto>> {
+    let host = state.inner().clone();
+    block("launcher_content_list", move || {
+        content::list(&host, &instance_id)
+    })
+    .await
+}
+
+/// `launcher_content_plan({ instanceId, archivePath, opts })`：解到暂存 + 出计划，**不写游戏根**。
+#[tauri::command]
+pub async fn launcher_content_plan(
+    state: HostState<'_>,
+    instance_id: String,
+    archive_path: String,
+    opts: Option<PlanOptionsDto>,
+) -> LauncherResult<ContentPlanDto> {
+    let host = state.inner().clone();
+    block("launcher_content_plan", move || {
+        let limits = opts.and_then(|opts| opts.limits);
+        content::plan(&host, &instance_id, &archive_path, limits)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_content_apply(
+    state: HostState<'_>,
+    plan_id: String,
+    resolutions: Option<Vec<ResolutionDto>>,
+) -> LauncherResult<TaskDto> {
+    let host = state.inner().clone();
+    block("launcher_content_apply", move || {
+        content::apply(&host, &plan_id, resolutions)
+    })
+    .await
+}
+
+/// `launcher_content_uninstall`：`files` = TS 侧算出的「本包独占」快照；ownership 仍是权威。
+#[tauri::command]
+pub async fn launcher_content_uninstall(
+    state: HostState<'_>,
+    instance_id: String,
+    pack_id: String,
+    files: Option<Vec<FileRefDto>>,
+) -> LauncherResult<TaskDto> {
+    let host = state.inner().clone();
+    block("launcher_content_uninstall", move || {
+        content::uninstall(&host, &instance_id, &pack_id, files)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_content_set_enabled(
+    state: HostState<'_>,
+    instance_id: String,
+    pack_id: String,
+    enabled: bool,
+) -> LauncherResult<TaskDto> {
+    let host = state.inner().clone();
+    block("launcher_content_set_enabled", move || {
+        content::set_enabled(&host, &instance_id, &pack_id, enabled)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_content_set_order(
+    state: HostState<'_>,
+    instance_id: String,
+    pack_ids: Vec<String>,
+) -> LauncherResult<()> {
+    let host = state.inner().clone();
+    block("launcher_content_set_order", move || {
+        content::set_order(&host, &instance_id, &pack_ids)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_content_diagnose(
+    state: HostState<'_>,
+    instance_id: String,
+) -> LauncherResult<DiagnosisDto> {
+    let host = state.inner().clone();
+    block("launcher_content_diagnose", move || {
+        content::diagnose(&host, &instance_id)
+    })
+    .await
+}
+
+/* ------------------------------- 存档 ------------------------------- */
+
+#[tauri::command]
+pub async fn launcher_save_list(
+    state: HostState<'_>,
+    instance_id: String,
+) -> LauncherResult<SaveListingDto> {
+    let host = state.inner().clone();
+    block("launcher_save_list", move || {
+        saves::list(&host, &instance_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_save_backups(
+    state: HostState<'_>,
+    instance_id: String,
+) -> LauncherResult<Vec<SaveBackupDto>> {
+    let host = state.inner().clone();
+    block("launcher_save_backups", move || {
+        saves::backups(&host, &instance_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_save_backup(
+    state: HostState<'_>,
+    instance_id: String,
+    req: SaveBackupRequestDto,
+) -> LauncherResult<TaskDto> {
+    let host = state.inner().clone();
+    block("launcher_save_backup", move || {
+        saves::backup(&host, &instance_id, req)
+    })
+    .await
+}
+
+/// `launcher_save_restore`：宿主内**必然**先自动备份当前（`backupCurrent` 默认 true）。
+#[tauri::command]
+pub async fn launcher_save_restore(
+    state: HostState<'_>,
+    instance_id: String,
+    backup_id: String,
+    opts: Option<RestoreOptionsDto>,
+) -> LauncherResult<TaskDto> {
+    let host = state.inner().clone();
+    block("launcher_save_restore", move || {
+        saves::restore(&host, &instance_id, &backup_id, opts.unwrap_or_default())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_save_delete_backup(
+    state: HostState<'_>,
+    instance_id: String,
+    backup_id: String,
+) -> LauncherResult<()> {
+    let host = state.inner().clone();
+    block("launcher_save_delete_backup", move || {
+        saves::delete_backup(&host, &instance_id, &backup_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_save_import(
+    state: HostState<'_>,
+    instance_id: String,
+    archive_path: String,
+) -> LauncherResult<SaveImportPlanDto> {
+    let host = state.inner().clone();
+    block("launcher_save_import", move || {
+        saves::plan_import(&host, &instance_id, &archive_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launcher_save_apply_import(
+    state: HostState<'_>,
+    plan_id: String,
+    resolutions: Option<Vec<SaveResolutionDto>>,
+) -> LauncherResult<TaskDto> {
+    let host = state.inner().clone();
+    block("launcher_save_apply_import", move || {
+        saves::apply_import(&host, &plan_id, resolutions)
+    })
+    .await
+}
+
+/// `launcher_save_export`：原生保存对话框 + **同一命令内写 ZIP**（对话框即授权）。
+#[tauri::command]
+pub async fn launcher_save_export(
+    state: HostState<'_>,
+    instance_id: String,
+    req: SaveExportRequestDto,
+) -> LauncherResult<Option<String>> {
+    let host = state.inner().clone();
+    let suggested = {
+        let host = host.clone();
+        let instance_id = instance_id.clone();
+        block("launcher_save_export 命名", move || {
+            Ok(saves::suggested_export_name(&host, &instance_id))
+        })
+        .await?
+    };
+    let Some(picked) = rfd::AsyncFileDialog::new()
+        .set_title("导出存档备份")
+        .set_file_name(&suggested)
+        .add_filter("ZIP 压缩包", &["zip"])
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    let path = picked.path().to_path_buf();
+    block("launcher_save_export 写入", move || {
+        saves::export_to(&host, &instance_id, req, &path)?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    })
+    .await
+}
+
 /// 命令名的唯一清单（测试拿它钉 `lib.rs` 的注册表：少登记一条就红）。
 #[allow(dead_code)]
-pub const COMMAND_NAMES: [&str; 20] = [
+pub const COMMAND_NAMES: [&str; 36] = [
     "launcher_pick_source_root",
     "launcher_pick_write_root",
+    "launcher_pick_archive",
     "launcher_instance_list",
     "launcher_instance_get",
     "launcher_instance_create",
@@ -1146,6 +1393,21 @@ pub const COMMAND_NAMES: [&str; 20] = [
     "launcher_log_sessions",
     "launcher_log_read",
     "launcher_log_export",
+    "launcher_content_list",
+    "launcher_content_plan",
+    "launcher_content_apply",
+    "launcher_content_uninstall",
+    "launcher_content_set_enabled",
+    "launcher_content_set_order",
+    "launcher_content_diagnose",
+    "launcher_save_list",
+    "launcher_save_backups",
+    "launcher_save_backup",
+    "launcher_save_restore",
+    "launcher_save_delete_backup",
+    "launcher_save_import",
+    "launcher_save_apply_import",
+    "launcher_save_export",
     "launcher_task_list",
     "launcher_task_cancel",
 ];

@@ -1,4 +1,7 @@
-//! 后台任务（P0 只有实例复制 / 复制实例两类；内容包与存档任务在 L3b）。
+//! 后台任务：P0 只有实例复制 / 复制实例（`enqueue_copy`，异步 + 可取消）；
+//! 内容包与存档的操作走**同步任务**（`begin` / `succeed` / `fail` / `cancel_task`）——
+//! §7.2 那些命令要返回终态 `LauncherTask` 快照（TS 会立刻读 `result.backupId`），
+//! 但取消语义照旧：`launcher_task_cancel` 置同一条槽的标志，执行体在自己的检查点上收工。
 //!
 //! 任务的存在理由：`copy` 档实例要把整棵游戏目录抄进 `instances/{id}/game/`，几 GB 的
 //! 复制不能占着命令线程，也不能让"创建实例"这个动作看起来卡死。于是：
@@ -353,4 +356,86 @@ fn rollback_instance(host: &LauncherHost, instance_id: &str) {
         }
     }
     host.emit_instance_change("removed", instance_id);
+}
+
+/* ═══════════════════════ 同步任务（内容包 / 存档，L3b） ═══════════════════════ */
+
+/// 同步任务句柄：登记即拿到取消标志，执行体在**自己的检查点**读它。
+///
+/// 与 `enqueue_copy` 的异步任务不同，内容包应用 / 存档备份是**命令内跑完**的：
+/// §7.2 返回 `LauncherTask`，而 TS 侧 `SaveManager` 会**立刻**从返回快照里读
+/// `result.backupId`（`createPreRestoreBackup`）——所以这些命令必须回终态快照。
+/// 进度仍走 `kojo:launcher-task`，取消仍走 `launcher_task_cancel`（置同一个标志位）。
+pub struct TaskHandle {
+    pub dto: TaskDto,
+    pub cancel: Arc<AtomicBool>,
+}
+
+/// 登记一条同步任务（`queued` → 立刻 `running`，并广播一次）。
+pub fn begin(host: &LauncherHost, instance_id: Option<&str>, kind: &str) -> TaskHandle {
+    let dto = TaskDto {
+        id: new_task_id(host),
+        kind: kind.to_string(),
+        instance_id: instance_id.map(|id| id.to_string()),
+        state: "running".to_string(),
+        progress: None,
+        created_at: iso_now(),
+        started_at: Some(iso_now()),
+        ended_at: None,
+        error: None,
+        result: None,
+        cancellable: true,
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    host.tasks.lock().unwrap_or_else(|e| e.into_inner()).insert(
+        dto.id.clone(),
+        TaskSlot {
+            dto: dto.clone(),
+            cancel: cancel.clone(),
+        },
+    );
+    emit_task(host, &dto);
+    TaskHandle { dto, cancel }
+}
+
+/// 进度（只在检查点调用；`done`/`total` 单位由调用方给）。
+pub fn report_progress(host: &LauncherHost, dto: &mut TaskDto, done: u64, total: u64, message: &str) {
+    update_progress(host, dto, done, total, message);
+    emit_task(host, dto);
+}
+
+/// 终态：成功。返回**落盘后的终态快照**（命令返回它）。
+pub fn succeed(host: &LauncherHost, mut dto: TaskDto, result: Value, message: &str) -> TaskDto {
+    if let Some(progress) = dto.progress.as_mut() {
+        progress.message = message.to_string();
+    }
+    dto.state = "succeeded".to_string();
+    dto.ended_at = Some(iso_now());
+    dto.error = None;
+    dto.result = Some(result);
+    store_task(host, dto.clone());
+    dto
+}
+
+/// 终态：失败（宿主码原样保留，不改成同名近义词）。
+pub fn fail(host: &LauncherHost, mut dto: TaskDto, error: LauncherErrorDto) -> TaskDto {
+    dto.state = "failed".to_string();
+    dto.ended_at = Some(iso_now());
+    dto.error = Some(error);
+    dto.result = None;
+    store_task(host, dto.clone());
+    dto
+}
+
+/// 终态：取消（回滚由执行体自己完成，见 `content::rollback`）。
+pub fn cancel_task(host: &LauncherHost, mut dto: TaskDto, message: &str) -> TaskDto {
+    dto.state = "cancelled".to_string();
+    dto.ended_at = Some(iso_now());
+    dto.error = Some(LauncherErrorDto::new(
+        super::error::ErrorCode::TaskCancelled,
+        message.to_string(),
+    ));
+    dto.result = None;
+    store_task(host, dto.clone());
+    dto
 }
