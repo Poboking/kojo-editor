@@ -388,6 +388,315 @@
   color: var(--fg-dim);
 }
 
+/* ------------------------------ 新建实例向导（L10） ------------------------------ */
+
+.launcher-wizard {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3);
+  overflow: hidden;
+}
+.launcher-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+.launcher-step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+.launcher-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-size: var(--fs-0);
+  line-height: 1;
+}
+.launcher-step[data-state='on'] {
+  color: var(--accent-text);
+  border-color: var(--accent-text);
+}
+.launcher-step[data-state='done'] {
+  color: var(--green);
+  border-color: var(--green);
+}
+.launcher-wizard-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.launcher-wizard-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.launcher-wizard-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.launcher-wizard-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.launcher-wizard-blocked {
+  font-size: var(--fs-0);
+  color: var(--amber);
+}
+.launcher-warn-note {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--amber);
+}
+
+/* 候选卡片（显示名 / 相对路径证据 / 推荐位，三行都可见） */
+.launcher-candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.launcher-candidate {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.launcher-candidate:hover {
+  background: var(--hover-soft);
+}
+.launcher-candidate:focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.launcher-candidate[aria-pressed='true'] {
+  border-color: var(--border-strong);
+  background: var(--bg-3);
+}
+.launcher-candidate[data-recommended='true'] {
+  border-left: 2px solid var(--accent-text);
+}
+.launcher-candidate-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.launcher-candidate-name {
+  font-size: var(--fs-2);
+  color: var(--fg);
+}
+.launcher-candidate-rec {
+  color: var(--accent-text);
+  border-color: var(--accent-text);
+}
+.launcher-candidate-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+.launcher-candidate-notes {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.6;
+}
+
+/* 零候选：标题 + 逐条原因（明确说「这个目录不能作为实例」） */
+.launcher-empty-probe {
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.launcher-empty-probe-title {
+  margin: 0;
+  font-size: var(--fs-2);
+  color: var(--amber);
+}
+.launcher-empty-probe-reasons {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+
+/* 表单（名字 / 隔离模式 / 包含存档） */
+.launcher-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-1);
+}
+.launcher-field-label {
+  color: var(--fg-dim);
+}
+.launcher-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  gap: var(--space-2);
+}
+.launcher-input {
+  padding: 4px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-1);
+  outline: none;
+}
+.launcher-input:focus-visible {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.launcher-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+.launcher-choice[data-disabled='true'] {
+  color: var(--fg-dim);
+  cursor: default;
+}
+.launcher-choice input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.launcher-choice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.launcher-choice-label {
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-choice-hint {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  line-height: 1.6;
+}
+.launcher-wizard-summary {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* 创建回执：复制任务进度（不假装立刻 ready） */
+.launcher-creation {
+  flex: none;
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-text);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.launcher-creation-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+.launcher-creation-head .launcher-status {
+  margin-left: auto;
+}
+.launcher-progress {
+  width: 100%;
+  height: 6px;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.launcher-progress::-webkit-progress-bar {
+  background: var(--bg-3);
+  border-radius: var(--radius-pill);
+}
+.launcher-progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+.launcher-progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+/* 原生确认框被取消 / 信任未完成的一行说明（不是错误条） */
+.launcher-trust-note {
+  margin: 0;
+  font-size: var(--fs-1);
+  line-height: 1.7;
+  color: var(--amber);
+}
+
+/* 四类启动错误的「为什么」段（码与原文照旧原样显示） */
+.launcher-failure-heading {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-1);
+  color: var(--amber);
+}
+.launcher-failure-why {
+  margin: 4px 0 0;
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+
 /* 窄窗（浮层缩到 760 以下）：列表收到上方，详情在下（同 `settings-nav-split` 的单列口径） */
 @media (max-width: 760px) {
   .launcher-body {

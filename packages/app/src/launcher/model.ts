@@ -1,24 +1,33 @@
 /**
- * 启动器视图的**纯函数层**（L5 骨架批）。
+ * 启动器视图的**纯函数层**（L5 骨架批 + L10 创建/信任/启动流）。
  *
  * 为什么单独一枚文件：视图（`LauncherView.tsx`）只做渲染与订阅，凡是「把读数变成人话」
  * 的判断都住这里——纯函数、零 React、零 IO，单测可以直接点名每一条分支。
  * 本层**不重复造第二份真源**：
  * - 状态机的「是什么」由契约 `@kojo/plugin-api` 的联合类型给出，这里只做**展示词**；
  * - 错误的中文话术由 `launcher-core/errors.ts`（`LauncherError.message`）给出，
- *   本层只补**下一步建议**（hint）与「未分类错误」的兜底包装，不改写码、不改写原文。
+ *   本层只补**下一步建议**（hint）与「未分类错误」的兜底包装，不改写码、不改写原文；
+ * - L10 的三步向导（`wizard*`）是**纯状态迁移**：输入是对话框回执 / 探测结果 / 用户输入，
+ *   输出是下一态；视图不自己拼路径、不猜程序名。
  *
  * 视觉档位（`LauncherTone`）只表达语义，配色在 `launcher.css` 里落 token
  * （`--green` / `--amber` / `--red` / `--fg-dim`），本层不产生任何颜色字面量。
  */
 
 import type {
+  CreateInstanceRequest,
   InstanceInspection,
   InstanceState,
   IsolationMode,
   LauncherInstance,
+  LauncherTask,
+  LaunchCandidate,
   ProcessState,
   ProcessStatus,
+  ProcessSupervisor,
+  TaskKind,
+  TaskState,
+  Unsubscribe,
 } from '@kojo/plugin-api';
 import { byCodePoint } from '../ui/commands';
 
@@ -191,13 +200,21 @@ export interface StartStopControls {
 }
 
 /**
+ * 详情页在飞的动作。
+ *
+ * `trust` 是「信任并启动」的第一步（宿主原生确认框）：它算**忙碌**——
+ * 确认框开着的时候再点一次启动会开出第二个框，用户会以为第一次没生效。
+ */
+export type LauncherPending = 'start' | 'stop' | 'trust' | null;
+
+/**
  * 按钮可用态由**进程态 + 本地在飞动作**两件事决定：
  * - 过渡态（starting / stopping）与本地在飞的命令一律锁死两颗按钮（防双击重复下发）；
  * - running 只给「停止」，其余（idle / exited / crashed）只给「启动」。
  */
 export function startStopControls(
   processState: string,
-  pending: 'start' | 'stop' | null,
+  pending: LauncherPending,
 ): StartStopControls {
   const transitional = processState === 'starting' || processState === 'stopping';
   const locked = pending !== null || transitional;
@@ -206,11 +223,13 @@ export function startStopControls(
       ? '正在启动…'
       : pending === 'stop'
         ? '正在停止…'
-        : processState === 'starting'
-          ? '正在启动…'
-          : processState === 'stopping'
-            ? '正在停止…'
-            : null;
+        : pending === 'trust'
+          ? '正在等待系统确认…'
+          : processState === 'starting'
+            ? '正在启动…'
+            : processState === 'stopping'
+              ? '正在停止…'
+              : null;
   return {
     canStart: !locked && processState !== 'running',
     canStop: !locked && processState === 'running',
@@ -252,8 +271,17 @@ export function launcherErrorHint(code: string | null | undefined): string {
   return NEXT_STEP_BY_CODE[code] ?? DEFAULT_NEXT_STEP;
 }
 
-/** 视图里会失败的六条腿（标题按动作分，不合并成一句「出错了」） */
-export type LauncherAction = 'service' | 'initialize' | 'list' | 'inspect' | 'start' | 'stop';
+/** 视图里会失败的九条腿（标题按动作分，不合并成一句「出错了」） */
+export type LauncherAction =
+  | 'service'
+  | 'initialize'
+  | 'list'
+  | 'inspect'
+  | 'start'
+  | 'stop'
+  | 'trust'
+  | 'create'
+  | 'wizard';
 
 const ACTION_TITLES: Readonly<Record<LauncherAction, string>> = {
   service: '启动器服务不可用',
@@ -262,6 +290,9 @@ const ACTION_TITLES: Readonly<Record<LauncherAction, string>> = {
   inspect: '读取实例详情失败',
   start: '启动失败',
   stop: '停止失败',
+  trust: '确认目标程序失败',
+  create: '创建实例失败',
+  wizard: '新建实例向导失败',
 };
 
 /** 一份可渲染的失败读数：码原样、话原样，另加标题与建议 */
@@ -518,4 +549,588 @@ export function detailHeadline(instance: LauncherInstance, status: ProcessStatus
   if (instance.state === 'broken') return '实例已损坏：先修复目录或重新创建，再启动。';
   if (instance.executableTrust === null) return '首次启动前需要确认目标程序（会弹系统确认框）。';
   return '可以启动。';
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * L10 · 新建实例向导（三步状态机，纯函数）
+ *
+ * 三步：选来源目录 → 选启动程序 → 起名与隔离。
+ * 为什么进纯函数：向导的每条迁移（前进 / 后退 / 取消 / 目录对话框取消）都是一条分支，
+ * 写在视图里就只能靠点击测；抽出来之后**逐态断言**，视图只负责渲染与调命令。
+ *
+ * 边界（与铁律 5/6 对齐）：
+ * - 目录只能来自原生对话框（`host.pickSourceRoot`）⇒ 本层收的是**回执**，
+ *   没有「拼一个路径」的入口；
+ * - 候选只能来自 adapter 的 `probe` ⇒ 本层收的是**探测结果**，不猜程序名。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** 向导三步（顺序即界面顺序；`wizardStepIndex` 是唯一序号真源） */
+export const WIZARD_STEPS = ['source', 'candidate', 'details'] as const;
+
+export type WizardStep = (typeof WIZARD_STEPS)[number];
+
+export const WIZARD_STEP_TITLES: Readonly<Record<WizardStep, string>> = {
+  source: '选来源目录',
+  candidate: '选启动程序',
+  details: '起名与隔离',
+};
+
+export interface WizardState {
+  readonly step: WizardStep;
+  /** 原生目录对话框确认过的来源根；`null` = 还没选（或用户取消了） */
+  readonly sourceRoot: string | null;
+  /** 选中的候选（复合键 `adapterId::candidateId`；`null` = 还没选） */
+  readonly candidateKey: string | null;
+  readonly name: string;
+  /** 契约里 `shared` / `copy` / `overlay` 三档；向导只开前两档（`overlay` 无宿主落点） */
+  readonly isolation: 'shared' | 'copy';
+  readonly includeSaves: boolean;
+}
+
+export function wizardStepIndex(step: WizardStep): number {
+  return WIZARD_STEPS.indexOf(step);
+}
+
+/** 初始态：第一步、什么都没选（换目录 / 重来时都从这一份起） */
+export function wizardStart(): WizardState {
+  return {
+    step: 'source',
+    sourceRoot: null,
+    candidateKey: null,
+    name: '',
+    isolation: 'shared',
+    includeSaves: false,
+  };
+}
+
+/** 取消 / 关闭向导：整份草稿丢弃（宿主侧此时没有任何写入发生） */
+export function wizardCancel(): WizardState {
+  return wizardStart();
+}
+
+export type PickOutcome =
+  | { readonly kind: 'cancelled'; readonly state: WizardState }
+  | { readonly kind: 'picked'; readonly state: WizardState };
+
+/**
+ * 目录对话框回执 → 下一步。
+ *
+ * `root === null`（用户取消）**不是错误**：停在原步，什么都不改（实例库 / 授权表都没动）。
+ * 返回 `cancelled` 让视图只说一句「已取消」，而不是弹错误条。
+ */
+export function wizardApplyPickedRoot(state: WizardState, root: string | null): PickOutcome {
+  const trimmed = root === null ? '' : root.trim();
+  if (trimmed === '') return { kind: 'cancelled', state };
+  return {
+    kind: 'picked',
+    state: { ...state, step: 'candidate', sourceRoot: trimmed, candidateKey: null, name: '' },
+  };
+}
+
+/** 向导要判断「下一步能不能走」，只需要候选数量这一条外部读数 */
+export interface WizardContext {
+  readonly candidateCount: number;
+}
+
+/** 当前步为什么不能前进（`null` = 可以） */
+export function wizardBlockedReason(state: WizardState, context: WizardContext): string | null {
+  switch (state.step) {
+    case 'source':
+      return state.sourceRoot === null ? '还没有选来源目录：先点「选择游戏目录」。' : null;
+    case 'candidate':
+      if (context.candidateCount === 0) {
+        return '这个目录没有可启动的候选：换一个目录，或先确认游戏本体完整。';
+      }
+      return state.candidateKey === null ? '先选一个要启动的程序。' : null;
+    case 'details':
+      return state.name.trim() === '' ? '实例需要一个名字（列表里靠它认）。' : null;
+    default:
+      return null;
+  }
+}
+
+export type WizardMove =
+  | { readonly kind: 'moved'; readonly state: WizardState; readonly reason: null }
+  | { readonly kind: 'blocked'; readonly state: WizardState; readonly reason: string };
+
+/** 前进一步（不满足条件就原地不动并给出原因，不静默） */
+export function wizardAdvance(state: WizardState, context: WizardContext): WizardMove {
+  if (state.step === 'details') {
+    return { kind: 'blocked', state, reason: '已经在最后一步：点「创建实例」提交。' };
+  }
+  const reason = wizardBlockedReason(state, context);
+  if (reason !== null) return { kind: 'blocked', state, reason };
+  const step = WIZARD_STEPS[wizardStepIndex(state.step) + 1];
+  return { kind: 'moved', state: step === undefined ? state : { ...state, step }, reason: null };
+}
+
+/**
+ * 后退一步。
+ *
+ * 从候选步退回来源步时**清掉候选**：换了目录，旧候选的 id 不一定还成立
+ * （`probe` 的结果是按目录现算的）——留着它就是在界面上藏一个死引用。
+ */
+export function wizardRetreat(state: WizardState): WizardState {
+  const index = wizardStepIndex(state.step);
+  if (index <= 0) return state;
+  const step = WIZARD_STEPS[index - 1];
+  if (step === undefined) return state;
+  return step === 'source' ? { ...state, step, candidateKey: null } : { ...state, step };
+}
+
+/** 选一个候选；名字还空着时用游戏显示名兜底（用户可以改） */
+export function wizardSelectCandidate(
+  state: WizardState,
+  card: CandidateCard,
+): WizardState {
+  return {
+    ...state,
+    candidateKey: card.key,
+    name: state.name.trim() === '' ? card.gameName : state.name,
+  };
+}
+
+/** 候选卡片（`probe` 一条结果在界面上的一行） */
+export interface CandidateCard {
+  /** 复合键：`adapterId::candidateId`（多适配器时两个 id 可能撞车） */
+  readonly key: string;
+  readonly adapterId: string;
+  readonly gameId: string;
+  /** 游戏显示名（adapter 的 `displayName`） */
+  readonly gameName: string;
+  readonly candidateId: string;
+  readonly label: string;
+  /** 证据：可执行体相对 `gameRoot` 的路径（契约没有「证据」位，见文件头缺口） */
+  readonly relativePath: string;
+  readonly arch: string | null;
+  readonly notes: string | null;
+  /**
+   * 推荐位。
+   *
+   * **契约缺口**：`LaunchCandidate` 没有 `recommended` 字段；adapter 侧（eraTW）用
+   * 「顺序 = 推荐顺序」表达（`launch.ts` 文件头缺口 1）。这里只认**第一条**，
+   * 并且只在有多个候选时才标——把「唯一候选」也叫「推荐」是噪声。
+   */
+  readonly recommended: boolean;
+}
+
+export function candidateKey(adapterId: string, candidateId: string): string {
+  return `${adapterId}::${candidateId}`;
+}
+
+export function candidateCards(
+  adapterId: string,
+  gameId: string,
+  gameName: string,
+  candidates: readonly LaunchCandidate[],
+): CandidateCard[] {
+  const ranked = candidates.length > 1;
+  return candidates.map((candidate, index) => ({
+    key: candidateKey(adapterId, candidate.id),
+    adapterId,
+    gameId,
+    gameName,
+    candidateId: candidate.id,
+    label: candidate.label,
+    relativePath: candidate.executableRelativePath,
+    arch: candidate.arch ?? null,
+    notes: candidate.notes ?? null,
+    recommended: ranked && index === 0,
+  }));
+}
+
+/** 零候选的人话：标题 + 逐条原因（不猜「可能是 x」，只说看得见的事实） */
+export interface EmptyProbeNotice {
+  readonly title: string;
+  readonly reasons: readonly string[];
+}
+
+export function emptyProbeNotice(
+  failures: readonly { readonly adapterId: string; readonly message: string }[],
+): EmptyProbeNotice {
+  const reasons: string[] = [
+    '一个候选都没有的目录不能作为实例：启动器不会去猜哪个文件是游戏本体。',
+  ];
+  for (const failure of failures) {
+    reasons.push(`适配器 ${failure.adapterId} 探测时出错：${failure.message}`);
+  }
+  if (failures.length === 0) {
+    reasons.push('适配器在这个目录的根层没有找到它能启动的程序。');
+  }
+  return { title: '这个目录不能作为实例', reasons };
+}
+
+/**
+ * 「没有 adapter 启动面」的分档提示（保留）。
+ *
+ * 与「宿主未就绪」是两件事：宿主命令齐了、但槽位里没有任何带 `launch` 的 adapter
+ * ⇒ 本游戏只能编辑、不能启动（契约 §6.1 的缺省语义）。按钮因此照样能点开向导，
+ * 但第二步会如实说「没有启动面」而不是空转。
+ */
+export const NO_LAUNCH_SURFACE_TEXT =
+  '这一版没有提供启动面的适配器（game.adapter 槽位里没有 launch）：实例只能编辑，不能启动。';
+
+/* ------------------------------ 隔离模式 ------------------------------ */
+
+export interface IsolationChoice {
+  readonly mode: 'shared' | 'copy';
+  readonly label: string;
+  readonly hint: string;
+}
+
+/**
+ * 向导只开两档（`overlay` 契约里有形状、宿主没有落点）。
+ * `copy` 的体积提示**不给具体数字**：探测结果里没有目录体积读数，
+ * 编一个「约 x GB」就是撒谎（缺口已上报：`probe` / `InstanceCreation` 都不带预估体积）。
+ */
+export const ISOLATION_CHOICES: readonly IsolationChoice[] = [
+  {
+    mode: 'shared',
+    label: '共享目录（默认）',
+    hint: '不复制文件：直接使用你选的那个游戏目录，改动立刻生效。',
+  },
+  {
+    mode: 'copy',
+    label: '独立副本',
+    hint: '把整个游戏目录复制到实例目录：可能数百 MB 到数 GB、耗时长；复制期间实例停在「准备中」，不能启动。',
+  },
+];
+
+export function isolationChoiceLabel(mode: string): string {
+  return ISOLATION_CHOICES.find((choice) => choice.mode === mode)?.label ?? isolationLabel(mode);
+}
+
+/** 「包含存档」这一项的说明随隔离模式变（共享模式下了它也不生效） */
+export function includeSavesHint(mode: 'shared' | 'copy'): string {
+  return mode === 'copy'
+    ? '把现有存档一起复制到副本（不勾选 = 副本从全新存档开始）。'
+    : '共享模式直接用原目录的存档，这一项不生效。';
+}
+
+/* ------------------------------ 提交 ------------------------------ */
+
+export interface WizardSubmission {
+  readonly request: CreateInstanceRequest | null;
+  readonly problem: string | null;
+}
+
+/**
+ * 草稿 → `CreateInstanceRequest`。
+ *
+ * 只放**用户能作主的字段**：`adapterId` / `gameId` / `candidateId` 全部来自探测结果，
+ * `sourceRoot` 来自对话框回执。`includeSaves` 只在 copy 档下发（shared 档传了也没意义，
+ * 传了反而让「这人选了包含存档」成为一句假话）。
+ */
+export function wizardCreateRequest(
+  state: WizardState,
+  card: CandidateCard | null,
+): WizardSubmission {
+  if (state.sourceRoot === null) {
+    return { request: null, problem: '还没有来源目录：回到第一步重新选。' };
+  }
+  if (card === null || card.key !== state.candidateKey) {
+    return { request: null, problem: '还没有选定启动程序：回到上一步选一个候选。' };
+  }
+  const name = state.name.trim();
+  if (name === '') return { request: null, problem: '实例需要一个名字（列表里靠它认）。' };
+  return {
+    request: {
+      name,
+      sourceRoot: state.sourceRoot,
+      adapterId: card.adapterId,
+      gameId: card.gameId,
+      candidateId: card.candidateId,
+      isolation: state.isolation,
+      ...(state.isolation === 'copy' ? { includeSaves: state.includeSaves } : {}),
+    },
+    problem: null,
+  };
+}
+
+/** 最后一步的只读摘要（创建前让人看清「将要建什么」） */
+export function wizardSummaryRows(state: WizardState, card: CandidateCard | null): readonly FactRow[] {
+  return [
+    { label: '游戏', value: card?.gameName ?? '未选' },
+    {
+      label: '程序',
+      value: card === null ? '未选' : `${card.relativePath}${card.arch === null ? '' : `（${card.arch}）`}`,
+    },
+    { label: '来源目录', value: state.sourceRoot ?? '未选' },
+    { label: '隔离模式', value: isolationChoiceLabel(state.isolation) },
+    {
+      label: '存档',
+      value:
+        state.isolation === 'copy'
+          ? state.includeSaves
+            ? '随副本复制现有存档'
+            : '副本从全新存档开始'
+          : '使用原目录存档',
+    },
+  ];
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * L10 · 信任流：什么时候「启动」变成「信任并启动」
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+export interface LaunchPlan {
+  /** 按钮文案：未信任 / 确认后又被改动 ⇒「信任并启动」 */
+  readonly label: string;
+  readonly needsTrust: boolean;
+  /** 连点都不该给的原因（实例没就绪 / 程序不在位）；`null` = 可以点 */
+  readonly blockedReason: string | null;
+}
+
+/**
+ * 启动按钮的形态。
+ *
+ * 信任态以**详情读数**为准（`inspection.executable.trusted` 是宿主现算的），
+ * 只在详情还没读到时退回实例快照的 `executableTrust === null`——
+ * 两处读数不一致时以「更接近磁盘真相」的那一份（inspection）为准。
+ */
+export function launchPlan(
+  instance: LauncherInstance,
+  inspection: InstanceInspection | null,
+): LaunchPlan {
+  if (instance.state !== 'ready') {
+    return {
+      label: '启动',
+      needsTrust: false,
+      blockedReason: `实例当前是「${instanceStateLabel(instance.state)}」，不能启动。`,
+    };
+  }
+  if (inspection !== null && !inspection.executable.exists) {
+    return {
+      label: '启动',
+      needsTrust: false,
+      blockedReason: '目标程序不在位（可能被改名、移动或删除）：先修复目录，再启动。',
+    };
+  }
+  const needsTrust =
+    inspection === null
+      ? instance.executableTrust === null
+      : !inspection.executable.trusted || inspection.executable.changedSinceTrust;
+  return { label: needsTrust ? '信任并启动' : '启动', needsTrust, blockedReason: null };
+}
+
+/**
+ * 原生确认框被取消 / 信任命令失败时的一行说明。
+ *
+ * **契约缺口**：取消语义没有专用错误码（宿主在对话框取消时回什么没写死）。
+ * 所以这里两条都认：码里带 `CANCEL` 视为取消，其余把原文带出来。
+ * 两种情况共同的下一步一样——**不启动、不自动重试**（重试只会再弹一次框）。
+ */
+export interface TrustInterruption {
+  readonly cancelled: boolean;
+  readonly note: string;
+}
+
+export function describeTrustInterruption(error: unknown): TrustInterruption {
+  const shaped = asLauncherErrorShape(error);
+  const raw = shaped !== null ? shaped.message : error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const cancelled = (shaped !== null && /CANCEL/i.test(shaped.code)) || /取消/.test(raw);
+  const detail = raw.trim() === '' ? '' : `（${raw.trim()}）`;
+  return {
+    cancelled,
+    note: cancelled
+      ? '已取消系统确认框：目标程序仍未确认，这次没有启动游戏，也不会自动重试。'
+      : `信任没有完成${detail}：目标程序仍未确认，这次没有启动游戏。确认后可以再点一次。`,
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * L10 · 后台任务进度（创建 copy 实例 = 一个复制任务）
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+const TASK_KIND_LABELS: Readonly<Record<string, string>> = {
+  'instance-copy': '复制实例目录',
+  'instance-duplicate': '复制实例',
+  'content-install': '安装内容包',
+  'save-restore': '恢复存档',
+};
+
+export function taskKindLabel(kind: TaskKind | string): string {
+  return TASK_KIND_LABELS[kind] ?? `后台任务（${kind}）`;
+}
+
+/** 字节数 → 人话（1 位小数；单位到 GB 为止，再大也读作 GB） */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '未知大小';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+export interface TaskProgressView {
+  /** 一句话（「正在复制实例目录…」/「复制实例目录完成」） */
+  readonly headline: string;
+  /** 进度读数（没有进度时明说「没有进度读数」，不留空白） */
+  readonly detail: string;
+  readonly percent: number | null;
+  readonly tone: LauncherTone;
+  readonly terminal: boolean;
+  readonly cancellable: boolean;
+  /** 失败时的原文（不改写；成功 / 进行中为 null） */
+  readonly errorText: string | null;
+}
+
+const TASK_STATE_TONE: Readonly<Record<TaskState, LauncherTone>> = {
+  queued: 'busy',
+  running: 'busy',
+  succeeded: 'ok',
+  failed: 'warn',
+  cancelled: 'idle',
+};
+
+const TERMINAL_TASK_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
+
+/**
+ * 任务读数 → 可渲染进度。
+ *
+ * 「复制任务非空 ⇒ 实例还没就绪」这条判断**不由本函数负责**（它只看任务），
+ * 视图据 `creation.task !== null` 决定显示进度而非就绪详情——两者一起才构成
+ * 「不要假装立刻 ready」。
+ */
+export function taskProgressView(task: LauncherTask): TaskProgressView {
+  const kind = taskKindLabel(task.kind);
+  const headline =
+    task.state === 'queued'
+      ? `排队等待：${kind}`
+      : task.state === 'running'
+        ? `正在${kind}…`
+        : task.state === 'succeeded'
+          ? `${kind}完成`
+          : task.state === 'failed'
+            ? `${kind}失败`
+            : `${kind}已取消`;
+  const progress = task.progress;
+  const detail =
+    progress === null
+      ? '这个任务没有进度读数。'
+      : `${
+          progress.unit === 'bytes'
+            ? `${formatBytes(progress.done)} / ${formatBytes(progress.total)}`
+            : progress.unit === 'files'
+              ? `${progress.done} / ${progress.total} 个文件`
+              : `${progress.done} / ${progress.total} 步`
+        }${progress.message.trim() === '' ? '' : ` · ${progress.message}`}`;
+  const percent =
+    progress === null || progress.total <= 0
+      ? null
+      : Math.max(0, Math.min(100, Math.round((progress.done / progress.total) * 100)));
+  return {
+    headline,
+    detail,
+    percent,
+    tone: TASK_STATE_TONE[task.state],
+    terminal: TERMINAL_TASK_STATES.has(task.state),
+    cancellable: task.cancellable && !TERMINAL_TASK_STATES.has(task.state),
+    errorText: task.error === null ? null : task.error.message,
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * L10 · 启动后的进程读数：订阅优先，轮询兜底
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** 兜底轮询间隔（宿主/服务没有推送能力时；3 s——比宿主事件粗，但够看清「跑起来了没」） */
+export const PROCESS_POLL_INTERVAL_MS = 3_000;
+
+export interface ProcessWatchTimer {
+  readonly setInterval: typeof setInterval;
+  readonly clearInterval: typeof clearInterval;
+}
+
+const DEFAULT_PROCESS_TIMER: ProcessWatchTimer = { setInterval, clearInterval };
+
+/**
+ * 盯住一个实例的进程读数。**优先订阅**（`processes.subscribe`：事件带 `seq`，
+ * 是宿主推来的真相）；服务没有订阅能力时**退化为 3 s 轮询** `processes.status`。
+ *
+ * 为什么还要这一层：视图已经有一份全局订阅（列表用），但「启动后到底跑没跑」是
+ * 详情页最要紧的一条读数——服务没实现订阅时，只靠全局订阅会永远停在 `starting`。
+ * 两份监听不会打架：都是同一形状的快照，后到的覆盖先到的。
+ */
+export function watchProcessStatus(
+  processes: Pick<ProcessSupervisor, 'status' | 'subscribe'>,
+  instanceId: string,
+  onStatus: (status: ProcessStatus) => void,
+  timer: ProcessWatchTimer = DEFAULT_PROCESS_TIMER,
+): Unsubscribe {
+  const subscribe = (processes as { subscribe?: unknown }).subscribe;
+  if (typeof subscribe === 'function') {
+    return processes.subscribe(onStatus);
+  }
+  // 退化路径：契约里 `subscribe` 是必填，但宿主桥可能只实现了读——轮询是唯一能动的形态
+  const handle = timer.setInterval(() => {
+    onStatus(processes.status(instanceId));
+  }, PROCESS_POLL_INTERVAL_MS);
+  return () => {
+    timer.clearInterval(handle);
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * L10 · 四类启动错误的「人话 + 下一步」
+ *
+ * 与 `launcherErrorHint` 的分工：那张表按**码**给一句下一步（覆盖全部码）；
+ * 这张表只覆盖启动链上最常撞的四类，给出**为什么**（解释）+ 具体动作，
+ * 渲染成错误条里的一段。码与原文照旧原样显示，这里一个字都不改写。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+export interface LaunchErrorAdvice {
+  readonly heading: string;
+  readonly explanation: string;
+  readonly nextStep: string;
+}
+
+const LAUNCH_ADVICE_BY_CODE: Readonly<Record<string, LaunchErrorAdvice>> = {
+  LAUNCHER_TRUST_CHANGED: {
+    heading: '目标程序在确认之后被改动过',
+    explanation:
+      '系统只信任你确认过的那一份程序：文件一变，旧的确认就作废（这是防替换的第一道闸）。',
+    nextStep: '点「信任并启动」重新走一次系统确认框；确认通过后才会启动。',
+  },
+  LAUNCHER_EXECUTABLE_INVALID: {
+    heading: '启动目标不合法',
+    explanation:
+      '启动目标必须是游戏目录内的可执行文件（相对路径、不含 ..、以 .exe 结尾）；启动器不接受任意路径。',
+    nextStep: '如果目录里的程序被改名或移动过：回到「新建实例」重新选一个候选。',
+  },
+  LAUNCHER_ALREADY_RUNNING: {
+    heading: '这个实例已经在运行',
+    explanation: '同一实例同一时刻只允许一个进程；重复启动会被拒绝，避免两个游戏同时写同一份存档。',
+    nextStep: '要重开就先点「停止」，等状态变成「未运行」再启动。',
+  },
+  LAUNCHER_INSTANCE_BUSY: {
+    heading: '这个实例正忙（启动 / 停止 / 复制还没结束）',
+    explanation: '同一实例的操作是串行的：上一个动作没落定之前，新的命令会被拒绝。',
+    nextStep: '等状态点变成「运行中」或「未运行」再操作；复制期间请等任务进度走完。',
+  },
+  LAUNCHER_PLATFORM_UNSUPPORTED: {
+    heading: '这一版还没有这条宿主能力',
+    explanation: '需要的能力（例如实例复制、逐根写授权）还没接入当前桌面壳，走不到下一步。',
+    nextStep: '可以先继续编辑；要创建实例请用「共享目录」档，或等宿主命令补齐后再试。',
+  },
+};
+
+export function launchErrorAdvice(code: string | null | undefined): LaunchErrorAdvice | null {
+  if (code === null || code === undefined) return null;
+  return LAUNCH_ADVICE_BY_CODE[code] ?? null;
+}
+
+/** 任意抛出物 → 一句原文（结构化错误取 `message`，其余取 `Error.message` / 字面量） */
+export function thrownMessage(error: unknown): string {
+  const shaped = asLauncherErrorShape(error);
+  if (shaped !== null) return shaped.message;
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return '没有附带任何错误信息（未分类异常）。';
 }
