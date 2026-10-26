@@ -58,3 +58,4 @@
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
 | LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_project_hash` / `launcher_runtime_*` 两条宿主命令目前**不在** Rust 侧，须先补；插件面板的「打开源码」已接 `plugins.openSource`，源码项目本体仍只能读、不能建 | 待派（依赖 L7A 的清单类型，已落） |
+| LAUNCH-P0-RESIDUE | P0 真壳验收余项（L9 已覆盖判据④孙进程 + ①的地基）：② ~10 MB fixture 的 `copy` 实例 + 复制进度可见；③ 同实例二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 原生信任框确认后启动成功、篡改 exe 报 `TRUST_CHANGED`；⑥ 应用退出杀树 + 下次启动显示 `app-exit`；① 的「经 UI 建 shared 实例」现只由夹具播种覆盖 | 全部在真壳（`debug-cli shell` / `launcher-smoke`）取证；不碰真游戏目录；⑤ 的原生框无人值守点不了 ⇒ 须改由宿主侧命令面取证或在报告里如实标 SKIP | 待派 |
