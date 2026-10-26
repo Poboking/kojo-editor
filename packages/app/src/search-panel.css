@@ -26,6 +26,11 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  /* 容器查询上下文（D2 · 2026-10-26）：本面板在侧栏里可窄到 200px 上下、在底部面板里
+     又能上千像素，**宽度只由宿主给**（面板自己是 flex 子项，行内尺寸不依赖内容），
+     所以这里挂 `inline-size` 容器是安全的；窄宽重排见文末「窄侧栏降噪」段。
+     不用媒体查询的理由：侧栏宽度是作者拖出来的，与视口宽无关。 */
+  container-type: inline-size;
 }
 
 /* 控制区 + 状态区：单面板侧栏（`.sidebar-views` 滚动）里粘住；分栏 / 浮窗里
@@ -967,5 +972,80 @@
 }
 .panel-search.ksp .ksp-vlist > .ksp-vrow-first > .search-file {
   border-top-color: transparent;
+}
+
+/* ============================================================================
+   窄侧栏降噪（D2 · 2026-10-26 前端动效优化批 · motion-d）
+
+   实测（默认 260px 侧栏 → 面板净宽 236）：输入框只剩 **92px**（首行 = chevron 22 +
+   输入井 180 + 搜索钮 26；井内再被三枚 toggle 吃掉 74），说明文字（`.ksp-hint`
+   + `.ksp-suggest`）在 236 里各折两行，合计吃掉 78px 高度——面板首屏一多半是灰字。
+
+   两条改法（都只在窄宽生效，宽面板/底部面板一个字不变）：
+
+   ① **输入井重排成两行**：行留（chevron / 搜索钮）守在第一行，井内 input 独占一行、
+      toggle 组落到第二行右对齐。断点算得出来，不是拍的：
+         input = 面板宽 − 22(chevron) − 26(搜索钮) − 8(两道 gap) − 10(井内衬) − 74(toggle)
+       要让 input ≥ 160 ⇒ 面板宽 ≥ 300。所以阈值取 300，越过它才换排（238→300 这一段
+       行内仍然够用，不该提前长高）。
+     井高 26 → 56（24 + 2 + 20 + 内衬）：多花 30px，换回 76px 的输入宽度。
+
+   ② **灰字降噪**：`.ksp-suggest`（"默认检索整个项目…"）整条收起——它讲的是「选项」
+     折叠区里已经写着的事；`.ksp-hint` 收成一行（原句仍在 DOM 里，读屏照念、宽度够时
+     照常折行）。键位速查本来就是折叠的（`.ksp-help-body`），悬停/点「键位」即开，
+     窄宽下它就是那句说明的可展开出口。
+   ============================================================================ */
+
+@container (max-width: 300px) {
+  .panel-search.ksp .ksp-row {
+    /* 井高了：行内三件改顶对齐，否则 chevron / 搜索钮会飘到井的垂直中线 */
+    align-items: flex-start;
+  }
+
+  .panel-search.ksp .ksp-field {
+    /* 井内两行：input 占满第一行，toggle 组占第二行右端 */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding: 2px 3px 3px 7px;
+  }
+
+  .panel-search.ksp .ksp-input {
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .panel-search.ksp .ksp-toggles {
+    grid-row: 2;
+    justify-self: end;
+    margin-top: 1px;
+  }
+
+  /* 22px 的 chevron 与 26px 的井首行同高对齐（(26−22)/2）；搜索钮本来就是 26，不用动 */
+  .panel-search.ksp .ksp-icon-btn {
+    margin-top: 2px;
+  }
+
+  .panel-search.ksp .ksp-hint {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .panel-search.ksp .ksp-suggest {
+    display: none;
+  }
+
+  /* 过滤条 / 排序 / 范围 / 类型：标签与控件拆两行，控件吃满宽（236px 里挤一行时
+     下拉框只剩 60~70px，「全部目录」会被截成「全…」） */
+  .panel-search.ksp .ksp-opt-row {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .panel-search.ksp .ksp-opt-input,
+  .panel-search.ksp .ksp-opt-select {
+    flex: 1 1 100%;
+  }
 }
 
