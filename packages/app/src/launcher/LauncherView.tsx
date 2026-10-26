@@ -16,6 +16,11 @@
  * 失败面：错误码**原样**显示、原文不改写；四类常见启动错误另给「为什么 + 下一步」
  * （`launchErrorAdvice`）。拿不到 `launcher.service` 时仍说清缺哪一块，不吞异常。
  *
+ * 详情分区（组长接线，UI-CONTENT / UI-SAVES 两块面板的挂载点）：`概览` = 只读事实三块
+ * （路径 / 运行时 / 信任，默认分区）；`内容包` = `ContentPanel`；`存档` = `SavesPanel`。
+ * 两块面板**只在自己那一屏才挂载**（组件自取数，挂着就多两轮 IPC），且只拿到
+ * `host.pickArchive` / `service.saves.exportArchive` 两条回调——视图不开第二条授权路径。
+ *
  * 装载纪律（PS-10）：本组件只经 `App.tsx` 的 `lazy(() => import('./launcher/LauncherView'))`
  * 进入，插件本体由 `bootstrap.ts::ensureLauncherPlugin` 的字面量动态 import 装载
  * ⇒ 开机图**零新增文件**。样式全部走 `launcher.css`（token 消费，零颜色字面量）。
@@ -33,12 +38,16 @@ import {
 import type { Kernel } from '@kojo/kernel';
 import type {
   InstanceInspection,
+  LauncherHostBridge,
   LauncherInstance,
   LauncherService,
   LauncherTask,
   ProcessStatus,
+  SaveExportRequest,
 } from '@kojo/plugin-api';
 import { Icon } from '../ui/icons';
+import { ContentPanel } from './content-panel';
+import { SavesPanel } from './saves-panel';
 import {
   ISOLATION_CHOICES,
   NO_LAUNCH_SURFACE_TEXT,
@@ -70,6 +79,7 @@ import {
   wizardStepIndex,
   wizardSummaryRows,
   type CandidateCard,
+  type DetailFacts,
   type FactRow,
   type FailureView,
   type LauncherPending,
@@ -172,6 +182,92 @@ function FactBlock({
         ))}
       </dl>
     </section>
+  );
+}
+
+/** 详情分区：概览（只读事实）/ 内容包 / 存档——两块面板按需挂载，不抢首帧 */
+type DetailTab = 'overview' | 'content' | 'saves';
+
+const DETAIL_TABS: readonly { readonly id: DetailTab; readonly label: string }[] = [
+  { id: 'overview', label: '概览' },
+  { id: 'content', label: '内容包' },
+  { id: 'saves', label: '存档' },
+];
+
+/**
+ * 详情页的分区容器。
+ *
+ * 两块面板（`ContentPanel` / `SavesPanel`）只在对应分区被点开时才挂载：
+ * 它们的取数由组件自己发起（`service.content.*` / `service.saves.*`），
+ * 挂在 `概览` 那一屏上就会白白多打两轮 IPC。
+ *
+ * `host` 只在这里被读一次，转成面板要的两条回调形状：
+ * - `onPickArchive`：`host.pickArchive` 缺席（Web 壳 / 极早相位）⇒ 传 `undefined`，
+ *   面板据此禁用导入按钮并写明「宿主未提供选择器」——不假装能选；
+ * - `onExport`：走 `service.saves.exportArchive`（原生保存对话框即授权，与契约 §9 一致）。
+ */
+function DetailTabs({
+  service,
+  instance,
+  facts,
+  host,
+}: {
+  readonly service: LauncherService;
+  readonly instance: LauncherInstance;
+  readonly facts: DetailFacts;
+  readonly host: LauncherHostBridge | null;
+}): ReactElement {
+  const [tab, setTab] = useState<DetailTab>('overview');
+
+  const onPickArchive = useMemo(
+    () =>
+      host === null || typeof host.pickArchive !== 'function'
+        ? undefined
+        : (): Promise<string | null> => host.pickArchive!(),
+    [host],
+  );
+
+  return (
+    <>
+      <div className="launcher-tabs" role="tablist" aria-label="实例详情分区">
+        {DETAIL_TABS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === entry.id}
+            className={`launcher-tab${tab === entry.id ? ' on' : ''}`}
+            onClick={() => setTab(entry.id)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'overview' ? (
+        <div className="launcher-fact-grid">
+          <FactBlock title="路径" rows={facts.paths} />
+          <FactBlock title="运行时" rows={facts.runtime} />
+          <FactBlock title="信任" rows={facts.trust} />
+        </div>
+      ) : null}
+
+      {tab === 'content' ? (
+        <ContentPanel service={service} instanceId={instance.id} onPickArchive={onPickArchive} />
+      ) : null}
+
+      {tab === 'saves' ? (
+        <SavesPanel
+          service={service}
+          instanceId={instance.id}
+          isolation={instance.isolation === 'copy' ? 'copy' : 'shared'}
+          onPickArchive={onPickArchive}
+          onExport={(req: SaveExportRequest): Promise<string | null> =>
+            service.saves.exportArchive(instance.id, req)
+          }
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -1064,11 +1160,12 @@ export function LauncherView({ kernel, onClose }: LauncherViewProps): ReactEleme
                   )}
                   {inspectFailure === null ? null : <FailureNotice failure={inspectFailure} />}
                   {facts === null ? null : (
-                    <div className="launcher-fact-grid">
-                      <FactBlock title="路径" rows={facts.paths} />
-                      <FactBlock title="运行时" rows={facts.runtime} />
-                      <FactBlock title="信任" rows={facts.trust} />
-                    </div>
+                    <DetailTabs
+                      service={phase.service}
+                      instance={selected}
+                      facts={facts}
+                      host={host}
+                    />
                   )}
                 </div>
               )}

@@ -257,6 +257,39 @@
   color: var(--fg-dim);
 }
 
+/* 详情分区（概览 / 内容包 / 存档）：底边一条细线，选中项与正文同色 */
+.launcher-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: var(--space-1);
+}
+.launcher-tab {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.launcher-tab:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.launcher-tab.on {
+  background: var(--surface-raised);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.launcher-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .launcher-fact-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

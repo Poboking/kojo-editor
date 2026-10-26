@@ -39,13 +39,7 @@
 
 > **原则**：ERB 与 kojo2 同为一级语言，能力矩阵由 descriptor 声明 + `LANG-PARITY-GATE` 钉住；禁止"某 provider 只挂一门语言"。
 
-| ID | 任务（落点） | 关键判据 | 状态 |
-|---|---|---|---|
-| LAUNCH-L1C | 契约收口（L3D 报的端到端断点）：内容/存档 16 条宿主形状进 `plugin-api` §7、内核透传补全、launcher-core 删掉局部重复定义 | 有 P1 方法的假桥装配后 `saves` / `content` 都是真实现；launcher-core 314 例零回退；ps10 不涨 | 进行中 · 认领：qoder-l1c 2026-10-26 |
-| LAUNCH-UI-CONTENT | 视图「内容包」面板：已装列表 / 两阶段安装（计划读数 + 冲突选择）/ 启停排序卸载 / 诊断四组 | 组件自取数、不碰原生对话框；纯函数 ≥16 例；开机图不涨 | 进行中 · 认领：qoder-uic 2026-10-26 |
-| LAUNCH-UI-SAVES | 视图「存档」面板：按根分组 / 备份 / 恢复（先自动备份）/ 导入预检 / 导出 | shared 未授权根明确拒绝、无"强行恢复"；纯函数 ≥16 例 | 进行中 · 认领：qoder-uis 2026-10-26 |
-| LAUNCH-UI-PLUGINS | 视图「游戏插件」面板：已装列表 / 风险与兼容徽标 / 信任 / 启停 / 顺序 / 冲突解决 / 源码项目入口 | 高风险未受信不得安装；函数级冲突按「预期重复」分档展示 | 待派（依赖 L1C 与 L7a/L7b） |
-| LAUNCH-L9 | 端到端联调（真壳）：隔离 appData 里种一个夹具实例（宿主现算哈希的信任记录）→ 启动 → 日志有行 → 停止 → 无孙进程；失败路径逐条可见 | 真壳读数（非 Web 调试宿）；不碰真游戏目录；`launcher-smoke` 的 5 件判据逐条落地 | 待派（依赖 L1C / L3D） |
+（本区暂无在办行：同权矩阵已由 `LANG-PARITY-GATE` 钉住，启动器相关批次统一在下方「启动器落地」区管理。）
 
 ## 在办 · 语言面统一（LAU · 2026-10-25，组长 krosama）
 
@@ -63,10 +57,6 @@
 
 | ID | 任务（落点） | 关键判据 | 状态 |
 |---|---|---|---|
-| LAUNCH-L3B | Rust 宿主内容/存档命令：`launcher_content_*` 七条 + `launcher_save_*` 八条 + `launcher_pick_archive`（staging 两阶段 / ownership / 逆序回滚 / 基础快照不覆盖 / shared 授权根复验） | `cargo test --lib` 绿；ZIP 复用 `archive_guard::extract_staging`，不自造解包器 | 进行中 · 认领：qoder-l3b 2026-10-26 |
-| LAUNCH-L3C | 桌面壳桥：`PlatformBridge.launcher` 接 L3a 已存在命令 + 四条事件；Node 桥缺席（= 无此能力） | 命令名/载荷键逐字断言；DTO camelCase 映射；错误码透传 | 进行中 · 认领：qoder-l3c 2026-10-26 |
-| LAUNCH-STOP | 优雅停止：`WM_CLOSE` → 优雅期超时 → `TerminateJobObject`；`lastExit.reason` 区分 `user` / `killed` | `force=false` 无窗口子进程不得空等默认 5 s；stopping 期重复 start = BUSY | 进行中 · 认领：qoder-stop 2026-10-26 |
-| LAUNCH-L7A | core 插件门禁 `PluginManager`：能力/兼容/函数级冲突（`normalizedName` + `conventionPolicy`）/风险分级/存档影响/依赖，写盘委托内容包管线 | ≥26 例；真冲突与「预期重复」两类分钉；高风险未受信拒装 | 进行中 · 认领：qoder-l7a 2026-10-26 |
-| LAUNCH-GATE | 闸与通道复核：懒加载新视图是否动开机图；`smoke-tauri-ipc` / `debug-cli shell` 可用性与 launcher 判据插入点 | 开机图读数逐字引用；通道 rc 实测；零生产码改动 | 待派 |
-| LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界 | 待派（依赖 L7A 的清单类型） |
-| LAUNCH-L9 | 端到端联调：真宿主 + 真壳（`debug-cli shell`）跑「建实例 → 信任 → 启动 → 装内容包 → 存档恢复」，并把 launcher 判据插进 `smoke-tauri-ipc` | 真壳读数（非 Web 调试宿）；失败路径逐条可见 | 待派（依赖 L3B/L3C） |
+| LAUNCH-UI-PLUGINS | 视图「游戏插件」面板：已装列表 / 风险与兼容徽标 / 信任 / 启停 / 顺序 / 冲突解决 / 源码项目入口 | 高风险未受信不得安装；函数级冲突按「预期重复」分档展示；面板只在对应分区挂载（detail tabs，ps10 不涨） | 待派（依赖已齐：L1C 与 L7a 均已落 dev；L7b 的源码项目入口缺哪块就在面板上写明缺哪块） |
+| LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_project_hash` / `launcher_runtime_*` 两条宿主命令目前**不在** Rust 侧，须先补 | 待派（依赖 L7A 的清单类型，已落） |
+| LAUNCH-L9 | 端到端联调（真壳）：隔离 appData 里种一个夹具实例（宿主现算哈希的信任记录）→ 启动 → 日志有行 → 停止 → 无孙进程；再把 launcher 判据插进 `smoke-tauri-ipc` | 真壳读数（非 Web 调试宿）；不碰真游戏目录；`launcher-smoke` 的 5 件判据逐条落地；失败路径逐条可见 | 待派（依赖 L1C / L3D 已落） |
