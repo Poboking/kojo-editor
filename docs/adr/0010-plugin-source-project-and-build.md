@@ -62,7 +62,9 @@
 
 - **确定性由「调用方给定顺序 + 统一 `date`」保证，不是 `buildZip` 自动做的**：
   `buildZip` 按**收到的条目顺序**落盘，时间戳取 `opts.date`（缺省 `Date.now()`）或条目自带的
-  `mtimeMs`。因此构建必须先把条目**按 posix 路径排序**再传入、并固定 `date`；
+  `mtimeMs`，并夹到 DOS 时间可表示的 1980 起算区间（`DOS_EPOCH_YEAR`；更早的 mtime 一律夹到 1980-01-01）。
+  因此构建必须**不读文件真实 mtime**、先把条目按 posix 路径排序、再传入固定 `date`——
+  三者齐了才有「同源两次构建逐字节相同」；
   `buildId = sha256(pack.json 规范化文本 + 逐文件摘要)` 与时间无关，时间只进报告的 `builtAt`。
   这一条是消费侧责任——把它写成「buildZip 自己会排序」会让下一份实现漏掉排序而仍以为可复现。
   `zip-roundtrip.test.ts` 正是以显式 `date` + 固定条目表钉住逐字节相等。
