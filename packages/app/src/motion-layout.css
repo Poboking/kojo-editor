@@ -21,7 +21,9 @@
       的语义，绕不开重排，故放在最短的档上（见 ①）。
    ④ **动效可关**：全域 `:root[data-motion='reduced']` 与 `prefers-reduced-motion` 的压平规则
       （styles-project.css 7365 / 5412 那两条）已经覆盖本片所有 animation/transition；
-      JS 侧的等待由 `ShellLayout.motionIsFlat()` 同步跳过，不留空窗。
+      JS 侧的等待由 `motion-pref.motionIsReduced()` 同步跳过，不留空窗。判据只有那一处真源
+      （应用内开关与系统偏好两条独立生效），`ShellLayout` 里原来的 `motionIsFlat` 已降级为
+      指向它的 deprecate 别名，不许再长出第二份实现。
    ============================================================================ */
 
 /* ----------------------------------------------------------------------------
