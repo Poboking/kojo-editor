@@ -3,7 +3,7 @@
  *
  * 启动器内核面（服务 `launcher.service`；契约 `plugin-api/launcher.ts` §6.2）。
  *
- * ## 本批（L4 · P0 骨架）的范围
+ * ## 本批范围（L4 · P0 骨架 + L6a 内容包编排）
  *
  * | 子服务 | 状态 |
  * |---|---|
@@ -12,14 +12,16 @@
  * | `tasks` 任务中心 | ✅ 装配（快照合并 + 进度节流 + 取消语义） |
  * | `logs` 日志 | ✅ 装配（流式解码 + 环形缓冲 + 诊断包请求编排） |
  * | `saves` 存档 | ✅ 装配（宿主有 `launcher_save_*` 八条命令时；否则仍拒绝，见下） |
- * | `runtimes` / `content` / `plugins` / `pluginProjects` | ❌ 未装配（见下） |
+ * | `content` 内容包 | ✅ 装配（只读预检裁决 + 两阶段记账 + 每实例单飞 + 任务/取消，见 `content-manager.ts`） |
+ * | `runtimes` / `plugins` / `pluginProjects` | ❌ 未装配（见下） |
  * | `updates`（P2） | ❌ 缺席（契约里本就是可选字段） |
  *
- * **未装配的四条只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_content_*` /
- * `launcher_pick_archive` / `launcher_project_hash`。本层不造空实现假装能用——每条方法都抛
+ * **未装配的三条只缺宿主命令**（§7.2 全标 P1）：`launcher_runtime_*` / `launcher_pick_archive` /
+ * `launcher_project_hash`。本层不造空实现假装能用——每条方法都抛
  * `LAUNCHER_PLATFORM_UNSUPPORTED` 并说清是哪一块没接（不静默、不返回空数组让 UI 以为
  * 「这里就是没有」）。它们随 P1 宿主命令与对应编排一起补，届时只换桩，不动其余服务。
- * 存档同样按能力探测：宿主还没有那八条命令时 `saves` 保持桩，不降级成半套实现在中途断链。
+ * 存档与内容包同样按能力探测：宿主还没有对应命令时保持"走到探测再拒绝"的桩，
+ * 不降级成半套实现在中途断链。)
  *
  * ## 两条硬边界
  *
@@ -31,7 +33,6 @@
  */
 
 import type {
-  ContentManager,
   LauncherService,
   Plugin,
   PluginManager,
@@ -43,6 +44,7 @@ import type {
 import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import type { LauncherHostBridge } from './host';
 import type { DecodeBytes } from './log-service';
+import { ContentManagerImpl } from './content-manager';
 import { InstanceStoreImpl } from './instance-store';
 import { LogServiceImpl } from './log-service';
 import { ProcessSupervisorImpl } from './process-supervisor';
@@ -149,6 +151,16 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
           })
         : NOT_ASSEMBLED.saves;
 
+      // 内容包编排（L6a）：只做只读预检的裁决、两阶段记账、每实例单飞与任务认领；
+      // 解包/写盘/回滚/ownership 全在宿主 `launcher_content_*`（缺席则如实拒绝，见 content-manager 文件头）。
+      const content = new ContentManagerImpl({
+        host,
+        tasks,
+        processes,
+        getInstance: (instanceId) => instances.get(instanceId),
+        ...(options.now === undefined ? {} : { now: options.now }),
+      });
+
       /** 宿主事件 → 各自的服务（事件是宿主推来的真相，命令返回值只是"我这一步的结果"） */
       const disposers = [
         host.onProcess((event) => processes.applyEvent(event)),
@@ -177,6 +189,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
       /** `dispose()`：停任务、断事件；**不杀游戏进程**（宿主 app-exit 统一收尸） */
       const shutdown = async (): Promise<void> => {
         for (const dispose of disposers) dispose();
+        content.dispose();
         tasks.dispose();
         logs.dispose();
         processes.dispose();
@@ -189,7 +202,7 @@ export function createLauncherPlugin(options: LauncherPluginOptions = {}): Plugi
         logs,
         tasks,
         runtimes: NOT_ASSEMBLED.runtimes,
-        content: NOT_ASSEMBLED.content,
+        content,
         plugins: NOT_ASSEMBLED.plugins,
         pluginProjects: NOT_ASSEMBLED.pluginProjects,
         saves,
@@ -210,7 +223,6 @@ const refuse = (label: string) => (): Promise<never> => Promise.reject(notAssemb
 
 const NOT_ASSEMBLED: {
   readonly runtimes: RuntimeManager;
-  readonly content: ContentManager;
   readonly plugins: PluginManager;
   readonly pluginProjects: PluginProjectService;
   readonly saves: SaveManager;
@@ -222,15 +234,6 @@ const NOT_ASSEMBLED: {
     resolve: refuse('运行时解析'),
     verify: refuse('运行时校验'),
     remove: refuse('运行时删除'),
-  },
-  content: {
-    list: refuse('内容包列表'),
-    planInstall: refuse('内容包安装预检'),
-    applyInstall: refuse('内容包安装'),
-    uninstall: refuse('内容包卸载'),
-    setEnabled: refuse('内容包启停'),
-    setOrder: refuse('内容包排序'),
-    diagnose: refuse('内容包诊断'),
   },
   plugins: {
     list: refuse('游戏插件列表'),
@@ -270,6 +273,16 @@ const NOT_ASSEMBLED: {
 
 export type { LauncherHostBridge, HostLogPage, HostLogChunk } from './host';
 export type { DecodeBytes, LauncherLogPage } from './log-service';
+export type {
+  ContentDiagnosisReport,
+  ContentHostCommands,
+  ContentManagerOptions,
+  HostContentConflict,
+  HostContentDiagnosis,
+  HostContentIssue,
+  HostContentIssueCode,
+  HostContentPlan,
+} from './content-manager';
 export {
   LAUNCHER_ERROR_MESSAGES,
   isLauncherError,
@@ -279,6 +292,7 @@ export {
   notAssembled,
 } from './errors';
 export { InstanceStoreImpl } from './instance-store';
+export { ContentManagerImpl } from './content-manager';
 export { ProcessSupervisorImpl, idleStatus } from './process-supervisor';
 export { SaveManagerImpl, DEFAULT_SAVE_BACKUP_KEEP, DEFAULT_IMPORT_PLAN_TTL_MS } from './save-manager';
 export type { SaveManagerOptions, SaveProcessControl, SaveTaskSink } from './save-manager';
