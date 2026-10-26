@@ -695,11 +695,26 @@ textarea {
   display: flex;
   overflow: hidden;
 }
+/* 书写栏宽（D1 · 2026-10-26 动效批）：1000px → **92ch**。
+   为什么改：1000px 是"屏宽的七成"，不是"一行能读多少字"——在 1576 的窗口里它横贯
+   大半个屏，中文正文一行摊到 70+ 字，眼睛回行会丢行；而且它是绝对值，字号档一抬，
+   行长跟着变成更宽的一行，正好把"放大字号让字好认"这件事抵消掉。
+   `ch` 是**本元素字号下「0」的宽度**（这里是 #root 的 UI 字号，14px ⇒ 92ch ≈ 694px），
+   于是：① 界面字号档（`uiFontScale` 往根元素写 `--fs-*` 行内值）一动，栏宽同步缩放，
+   行长恒定在 ~50 个汉字的舒适区；② 超宽屏（2560 / 4K）不再"越宽越难读"，多余宽度
+   全给左右留白（`margin: 0 auto` 那行本来就居中）。
+   Monaco 是绝对定位填满容器的，所以缩的必须是**它外面这层**（`.zen-editor-inner`），
+   不是 `.monaco-editor`——改里面只会让编辑器画出容器、被裁掉右边。
+   minimap 跟着进栏内（它本来就是 `.monaco-editor` 的子盒）：本批**没有**在 zen 下隐藏
+   它，因为用 CSS 藏会留一个 72px 的空洞——Monaco 的 contentWidth 是在 JS 里按
+   "minimap 宽度"算死的（实测：`display:none` 掉 `.minimap` 后 `.view-lines` 仍是 555px，
+   而容器 694px），要真关得走 `updateOptions({minimap:{enabled:false}})`，那是 EditorPane
+   的地盘（本批不动）。以"结构感知编辑器"的身份论，留一张结构图也不算杂质。 */
 .zen-editor-inner {
   flex: 1;
   min-height: 0;
   width: 100%;
-  max-width: 1000px;
+  max-width: 92ch;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -3149,8 +3164,8 @@ button.erb-mode-hint.unlocked:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 2px 10px;
+  gap: 8px;
+  padding: 2px 10px 2px 8px;
   min-height: 24px;
   background: var(--bg-2);
   border-top: 1px solid var(--border);
@@ -3160,7 +3175,7 @@ button.erb-mode-hint.unlocked:hover {
 .sb-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 .sb-right {
@@ -3328,9 +3343,89 @@ button.erb-mode-hint.unlocked:hover {
   background: var(--hover);
   color: var(--fg);
 }
-/* 禅模式：状态栏退为背景，悬停才回到前台 */
+
+/* ------------------ 状态栏信息分层（D3 · 2026-10-26 动效批） ------------------
+
+   改前读数（真壳 1576×808，mini-game，静息 = `data-sb-secondary='collapsed'`）：
+     [🔒只读 60] [▸ 24] [项目 30] [已打开 ✕0 ⚠1 ℹ3 134] [2 文件 · 5 函数 77]
+   前一批（shell-notices.css）已经把「项目」的三档数字收进 ▸ 展开器，这是对的；剩下的
+   问题是**分簇分错了边**：那一对竖线画在「项目」左右两侧（`::before` 的右线 +
+   `sb-problems` 的左线），于是 `▸` 跟它管的「项目」被劈开，而口径最接近的
+   「项目 ↔ 已打开」反倒被重线隔成两家；`2 文件 · 5 函数` 与诊断计数同档同色同字号，
+   展开后六枚数字连成一串，扫一眼仍不知道该看谁。
+
+   四条改法（只动排版与字号，不动任何口径、不改 DOM、不加删读数）：
+   ① **按语义分三簇 + 每簇自贴分隔**：只读（权限）｜诊断（项目·可展开 + 已打开）｜
+      索引统计。簇间用 `--border`，簇内「项目 ↔ 已打开」用 `--border-subtle`（弱一档）
+      ——两本数的口径差异（项目级含未打开文件 ≠ 已打开文件的波浪线）由线的粗细再说
+      一遍；簇①|② 那道线挂到 `.shell-sb-toggle` 左缘，`▸` 和「项目」回到同一簇。
+   ② **数字先于标签**：标签（「项目」/「已打开」）降到 `--fs-0` + `--fg-dim`，数字留
+      `--fs-1`；所有读数面（含语言 / 编码 / 行列 / 保存态）统一走 `--font-meta` +
+      `tabular-nums`，数字等宽 ⇒ 读数跳动时邻居不横移。
+   ③ **弱化不该常看的**：索引统计（`2 文件 · 5 函数`）是全栏最不重要的一格，降到
+      `--fs-0`——它是"这工程有多大"的背景音，不是此刻要处理的账。
+   ④ **右簇只切一刀**：`1:1` 与 `未修改` 是打字时唯一会变的两个读数，用一道
+      `--border-subtle` 把它们从左边那串静态标签里摘出来。
+   -------------------------------------------------------------------------- */
+
+/* 读数面统一等宽档（tokens.css 对 --font-meta 的分工就是"标识与读数"） */
+.sb-diag,
+.sb-problems,
+.sb-idx,
+.sb-editor,
+.sb-sel,
+.sb-dirty,
+.sb-eol {
+  font-family: var(--font-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 标签弱一档：数字 12px、标签 11px（不靠透明度压，--fg-dim 的对比度一点不损失） */
+.statusbar .sb-scope-tag,
+.statusbar .sb-diag::before {
+  font-size: var(--fs-0);
+  letter-spacing: 0.02em;
+  color: var(--fg-dim);
+}
+
+/* 簇①|②：权限徽标之后。这条线挂在**展开器**左缘，不是挂在 `.sb-diag` 上——
+   真壳 DOM 顺序是 [只读] [▸ 展开器] [.sb-slot > .sb-diag]，展开器在 `.sb-diag` **前面**，
+   线画在 `.sb-diag` 左缘就会从「▸」和它管的「项目」之间劈过去，一簇读成两簇。
+   特异性 (0,3,0) 稳压 shell-notices.css 里 `.statusbar .shell-sb-toggle` (0,2,0)
+   的 `border: 1px solid transparent`，不赌两张切片谁后到。 */
+.statusbar .sb-left .shell-sb-toggle {
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+}
+/* 「项目」标签自带的右线降为簇内弱分隔（原 (0,1,0) 规则写在壳层信息设计批的末尾块） */
+.statusbar .sb-diag::before {
+  border-right: none;
+  padding-right: 6px;
+  margin-right: 2px;
+}
+.statusbar .sb-problems {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 8px;
+}
+/* 簇②|③：诊断之后是索引统计 */
+.statusbar .sb-idx {
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+  font-size: var(--fs-0);
+}
+/* 右簇只分两段：左边是文件的"方言与视图"（语言 / 缩进 / 编码·行尾·行数 / 两个开关），
+   右边是此刻**边打字边变**的两个读数（光标位置 / 保存态）。打字时眼睛只该盯后两个，
+   拿一道弱线把它们从前面那串静态标签里摘出来；比给七八格都加线更安静。 */
+.statusbar .sb-sel {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 8px;
+}
+/* 禅模式：状态栏退为背景，悬停才回到前台。
+   D3 微调：0.4 → 0.62。0.4 时 `--fg-dim` 压 `--bg-2` 只剩 ~2.6:1（读数整体糊掉），
+   而 zen 里状态栏是**唯一的**权限/诊断窗口（工具条与面板都退了），不该退到读不出；
+   0.62 约 4:1，仍明显比前台弱一档，"退为背景"的意思没丢。 */
 .shell.zen .statusbar {
-  opacity: 0.4;
+  opacity: 0.62;
   transition: opacity var(--dur-2) var(--ease-out);
 }
 .shell.zen .statusbar:hover,
