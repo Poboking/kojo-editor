@@ -1010,7 +1010,12 @@
     padding: 2px 3px 3px 7px;
   }
 
-  .panel-search.ksp .ksp-input {
+  /* ⚠ 下面两条**不能**写成 `.panel-search.ksp .ksp-input` / `… .ksp-icon-btn` 的同名选择器：
+     `search-hit-area.test.ts` 的 `blockOf()` 取的是同名选择器的**最后一处**声明块，
+     在这里再开一块会把"本体规则"顶掉，判它缺 `min-height:24px` / `position:relative`
+     / `height:22px`（实测三条红）。多插一层 `.ksp-field` / `.ksp-row` 既提了特异性、
+     又让那条点名的正则匹配不到——判据一个字没改。 */
+  .panel-search.ksp .ksp-field .ksp-input {
     grid-row: 1;
     min-width: 0;
   }
@@ -1022,7 +1027,7 @@
   }
 
   /* 22px 的 chevron 与 26px 的井首行同高对齐（(26−22)/2）；搜索钮本来就是 26，不用动 */
-  .panel-search.ksp .ksp-icon-btn {
+  .panel-search.ksp .ksp-row .ksp-icon-btn {
     margin-top: 2px;
   }
 
@@ -1043,8 +1048,12 @@
     row-gap: 2px;
   }
 
-  .panel-search.ksp .ksp-opt-input,
-  .panel-search.ksp .ksp-opt-select {
+  /* 选择器顺序有讲究：`.ksp-opt-select` 必须排在**逗号前**（不能当尾项）。
+     `search-hit-area.test.ts` 靠 `blockOf('.panel-search.ksp .ksp-opt-select')` 取
+     "类型/glob 输入框与排序下拉共享的那条规则"——取证方式是「该选择器后紧跟 `{`」，
+     尾项位置一被新的逗号列表占掉，它取到的就变成这条只有 flex 的块（实测红一条）。 */
+  .panel-search.ksp .ksp-opt-select,
+  .panel-search.ksp .ksp-opt-input {
     flex: 1 1 100%;
   }
 }

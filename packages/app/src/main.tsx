@@ -44,17 +44,18 @@ import './motion-editor.css';
 // 动效收口切片（1026 动效批）：toast 退场 / 标签脏点与保存微光 / 效果库接线 / 合成层提示。
 // 每条规则都靠复合选择器（`html:root` / 双类）压过既有面，不靠位次。
 import './motion-exit.css';
-// 动效切片（2026-10-26 动效批 D4）：主题切换的圆形揭示（View Transition + clip-path）。
+// 壳层布局动效（B1–B5）：侧栏 / 底部区开合、视图交叉淡入、编辑器组入场、zen 换场。
+// 本片只声明 transition/animation 这类 `styles-project.css` **没有写过的属性**（见文件头纪律 ②），
+// 所以位次不改变任何既有终值。
+import './motion-layout.css';
+// 动效视觉切片（D4）：主题切换的圆形揭示（View Transition + clip-path）。
 // 它服务的是换主题这一下，两个相位（欢迎 / 项目）都可能发生，所以不能进项目态懒档。
+// 必须压在四个动效切片的最后一位：`::view-transition-*` 只认最后一套同名声明。
 import './motion-visual.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链
 // （styles-project.css → market.css）进项目时加载，级联相对顺序与拆分前逐字一致。
-// 壳层布局动效（1026-b 动效批）：侧栏 / 底部区开合、视图交叉淡入、编辑器组入场、zen 换场。
-// 本片只声明 transition/animation 这类 `styles-project.css` **没有写过的属性**（见文件头纪律 ②），
-// 所以位次不改变任何既有终值；放链尾只为读起来"最后一块"。`css-slices-wired` 钉死本行存在。
-import './motion-layout.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root not found');

@@ -2763,7 +2763,7 @@ export function ShellLayout(props: Props): ReactElement {
       })}
     </div>
   ) : (
-    <div key={activeView?.key ?? 'empty'} className="sidebar-views">
+    <div key={activeView?.key ?? 'no-views'} className="sidebar-views">
       {activeView && activeView.panels[0] ? (
         <PanelBody
           contribution={activeView.panels[0]}
