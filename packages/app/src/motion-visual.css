@@ -1,0 +1,69 @@
+/* ============================================================================
+   动效切片 · 主题切换的圆形揭示（2026-10-26 前端动效优化批 · D4）
+
+   为什么单开一个切片：这条样式服务的是**宿主级一次性动画**（换主题的那 320ms），
+   既不属于某个面板（styles-project.css 是项目态懒档），也不属于某块组件（各组件
+   的 CSS 是随组件注入的，首屏/懒档都可能先到）。换主题在两个相位都能发生，所以它
+   必须在**静态链末尾**、且不依赖任何组件的挂载顺序——由 main.tsx 静态引入。
+
+   规矩与本仓其余切片的硬纪律一致：
+   ① 只消费 `var(--…)`（时长/缓动全取 tokens.css 的 `--dur-*` / `--ease-*`）；
+      `--theme-reveal-*` 不是设计 token，是 `theme-pref.ts` 每次切换**现算现写**到
+      `<html>` 行内的一枚几何量（圆心 + 半径），动画结束即撤——它们不进 tokens.css，
+      因为"圆心"没有设计语义，只有一个运行期的值。
+   ② 不写 `[data-theme=…]` 覆盖：本文件与主题色无关（揭示的是一张快照）。
+   ③ 减弱动效两条通道都让路：`data-motion='reduced'`（应用内开关）与
+      `prefers-reduced-motion`（系统档）。JS 侧已先判一次（不支持/要静 ⇒ 压根不启
+      动 View Transition），这里是"就算进了揭示流程也不动"的兜底，双保险不为重复。
+
+   为什么是 circle + clip-path 而不是交叉淡入：主题翻转是"整块换装"，交叉淡入会让
+   两套色同时存在半帧（浅色压在深色上读成灰泥）。圆形揭示只让**一张**画面在屏上，
+   半径从点击处推到最远角，观感是"新的那一层从指尖铺开"。
+   ============================================================================ */
+
+/* 揭示几何量的**定义点**（也是全仓唯一一处）。
+   真值由 `theme-pref.ts` 在每次切换前写进 `<html>` 的**行内**样式——行内样式压过本规则，
+   所以这里只是"没有 JS 介入时"的兜底（视口中心 + 盖满一屏），同时也满足
+   `css-token-single-source` 闸的"有消费必有定义"：本族不进 tokens.css，因为它们没有
+   设计语义、只有一枚现算的坐标（与 `--ksp-gutter` / `--rx` 同族，但那些是组件内槽位）。 */
+html {
+  --theme-reveal-x: 50%;
+  --theme-reveal-y: 50%;
+  --theme-reveal-r: 150vmax;
+}
+
+/* 旧画面原地不动：既不淡出（淡出会露出底下的空档），也不缩放（会读成整页在动）。 */
+::view-transition-old(root) {
+  animation: none;
+  z-index: 1;
+}
+
+/* 新画面盖在旧画面之上，只露出一枚不断变大的圆。`both` 让首帧就落在 circle(0)：
+   否则在起始帧之前会有一拍"整页已换、还没开始剪"的闪。 */
+::view-transition-new(root) {
+  z-index: 2;
+  animation: theme-reveal var(--dur-3) var(--ease-out) both;
+}
+
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0px at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%));
+  }
+  to {
+    clip-path: circle(var(--theme-reveal-r, 150vmax) at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%));
+  }
+}
+
+/* 兜底①：应用内「减弱动效」开着（JS 已跳过启动，这条管"设置里刚打开、切换已在飞"的半拍） */
+:root[data-motion='reduced'] ::view-transition-new(root),
+:root[data-motion='reduced'] ::view-transition-old(root) {
+  animation: none;
+}
+
+/* 兜底②：系统档要求减弱。硬切 = 新画面直接出现，与没有 View Transition 的世界一致。 */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-new(root),
+  ::view-transition-old(root) {
+    animation: none;
+  }
+}

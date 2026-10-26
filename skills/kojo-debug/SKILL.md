@@ -73,7 +73,7 @@ node tools/debug-cli.mjs stop
 ## 一键回归
 
 ```bash
-node tools/debug-web-smoke.mjs   # 11 断言端到端：欢迎页→开项目→开文件→命令表→事件→截图→
+node tools/debug-web-smoke.mjs   # 14 断言端到端：欢迎页→开项目→开文件→二进制直传→命令表→事件→截图→
                                  # 截图不吃缓存帧→性能探针出结构化报告；失败自动留取证（屏上文本+失败截图）
 ```
 

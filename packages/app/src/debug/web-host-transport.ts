@@ -13,6 +13,7 @@
  * 安全面：调试宿只绑 127.0.0.1、写路径有沙盒闸（见 tools/debug-server.mjs 头注）；
  * 页面侧不增任何权限——它只是把「原本要经 Tauri IPC 的调用」换个信封送到本机调试宿。
  */
+import { consumeChooseDir } from './dialog-policy';
 
 /** 二进制命令的应答信封：宿主命令里唯二回二进制的（`read_file_bytes_raw` / `read_files_raw`） */
 const BINARY_COMMANDS = new Set(['read_file_bytes_raw', 'read_files_raw']);
@@ -98,13 +99,30 @@ export async function webHostInvokeIfActive(cmd: string, args?: Record<string, u
   return { active: true, value: await webHostInvoke(cmd, args) };
 }
 
-/** 直连调试宿的一条 invoke（调试面 `__kojoDebug.invoke` 用；不做 active 判定） */
+/**
+ * 直连调试宿的一条 invoke（调试面 `__kojoDebug.invoke` 用；不做 active 判定）。
+ *
+ * 二进制命令（`read_file_bytes_raw` / `read_files_raw`）带 `?binary=1`：宿回
+ * `application/octet-stream` 原始帧/字节，页面直接 `arrayBuffer()`——省掉 base64 的
+ * 1.33× 膨胀与逐字节还原（2026-10-26 性能批）。旧宿不认这个参数、仍回 JSON 信封，
+ * 这里按 content-type 回退到 `decodeValue`，两侧可独立升级。
+ */
 export async function webHostInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   const cfg = config();
   if (!cfg) throw new Error('web 调试宿未选入（缺 ?kojo-debug=1）');
+  // 页面级对话框应答 policy（2026-10-26 era-pair 批，与真壳 fetch 腿同一条口径）：
+  // armed 时**一次性**短路 choose_directory，未 armed 恒透传——宿的 POST /policy 腿照旧。
+  if (cmd === 'choose_directory') {
+    const hit = consumeChooseDir();
+    if (hit.hit) {
+      console.info(`[kojo-debug] choose_directory 由调试面页面级 policy 应答（一次性）：${JSON.stringify(hit.value ?? null)}`);
+      return hit.value ?? null;
+    }
+  }
+  const binary = BINARY_COMMANDS.has(cmd);
   let res: Response;
   try {
-    res = await fetch(`${cfg.origin}/invoke`, {
+    res = await fetch(`${cfg.origin}/invoke${binary ? '?binary=1' : ''}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ cmd, args: args ?? {} }),
@@ -113,6 +131,9 @@ export async function webHostInvoke(cmd: string, args?: Record<string, unknown>)
     throw new Error(
       `web 调试宿连接失败（${cfg.origin}，命令 ${cmd}）：${errText(err)}——先起宿：node tools/debug-cli.mjs serve`,
     );
+  }
+  if (binary && (res.headers.get('content-type') ?? '').includes('application/octet-stream')) {
+    return res.arrayBuffer();
   }
   let body: { ok?: boolean; value?: unknown; error?: string };
   try {

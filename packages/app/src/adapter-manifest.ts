@@ -119,6 +119,32 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     load: () => import('@kojo/plugin-eratohok-adapter'),
     kojo2AdapterExport: 'ERATOHOK_GAME_ADAPTER',
   },
+  {
+    // eraAV（2026-10-26 批，P0+P1+P2+2.0 数据面）。2.0 事实面逐项真盘裁决
+    // （8/9 事件——无 EVENTLOAD；CRLF + BOM 470/471；`#PRI` 共享钩子），
+    // backend 仍缺席（发射面未交付 ⇒ null 是可见降级）。
+    id: 'eraav',
+    dir: 'eraav-adapter',
+    packageName: '@kojo/plugin-eraav-adapter',
+    factory: 'createEraavAdapterPlugin',
+    scope: 'project',
+    auditWord: 'eraav',
+    load: () => import('@kojo/plugin-eraav-adapter'),
+    kojo2AdapterExport: 'ERAAV_GAME_ADAPTER',
+  },
+  {
+    // eratohoReverse（2026-10-26 批，P0+P1+P2+2.0 数据面）。2.0 事实面逐项真盘裁决
+    // （8/9 事件——无 EVENTBUY；LF + BOM 100%；KCOLOR.ERB 共享钩子），
+    // backend 仍缺席（发射面未交付 ⇒ null 是可见降级）。
+    id: 'eratohoreverse',
+    dir: 'eratohoreverse-adapter',
+    packageName: '@kojo/plugin-eratohoreverse-adapter',
+    factory: 'createEratohoreverseAdapterPlugin',
+    scope: 'project',
+    auditWord: 'eratohoreverse',
+    load: () => import('@kojo/plugin-eratohoreverse-adapter'),
+    kojo2AdapterExport: 'ERATOHOREVERSE_GAME_ADAPTER',
+  },
 ];
 
 /** 项目级适配器（组合根装载的就是这一批） */

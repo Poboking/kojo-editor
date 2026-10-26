@@ -9,6 +9,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EDITOR_DISPLAY_PREF_DEFAULT,
+  LINE_HEIGHT_DEFAULT,
+  LINE_HEIGHT_PRESETS,
   UI_FONT_SCALE_TOKENS,
   applyUiFontScalePref,
   editorDisplayFontPatch,
@@ -82,11 +84,12 @@ const BASELINE_TOKENS: Record<string, string> = {
 };
 
 describe('缺省 = 今天硬编码的那一份', () => {
-  it('无 window / 空表 ⇒ 全缺省（行高 0=自动、空白符 none、缩略图跟随、行号 on、字体族默认、行内提示开、界面字号 100%）', () => {
+  it('无 window / 空表 ⇒ 全缺省（行高 1.5=CJK 舒适档、空白符 none、缩略图跟随、行号 on、字体族默认、行内提示开、界面字号 100%）', () => {
     stubWindow(undefined);
     expect(loadEditorDisplayPrefs()).toEqual(EDITOR_DISPLAY_PREF_DEFAULT);
     stubWindow(fakeStorage());
     expect(loadEditorDisplayPrefs()).toEqual(EDITOR_DISPLAY_PREF_DEFAULT);
+    expect(EDITOR_DISPLAY_PREF_DEFAULT.lineHeight).toBe(1.5);
     expect(EDITOR_DISPLAY_PREF_DEFAULT.minimap).toBe('follow');
     expect(EDITOR_DISPLAY_PREF_DEFAULT.uiFontScale).toBe(100);
   });
@@ -94,7 +97,7 @@ describe('缺省 = 今天硬编码的那一份', () => {
   it('缺省补丁不改变今天任何一个 Monaco 读数', () => {
     stubWindow(fakeStorage());
     const p = editorDisplayOptionPatch(100);
-    expect(p.lineHeight).toBe(0);
+    expect(p.lineHeight).toBe(1.5);
     expect(p.renderWhitespace).toBe('none');
     expect(p.minimap).toEqual({ enabled: true, renderCharacters: false, maxColumn: 72 });
     expect(p.lineNumbers).toBe('on');
@@ -123,13 +126,43 @@ describe('缺省 = 今天硬编码的那一份', () => {
 });
 
 describe('坏值清洗（绝不抛进渲染链）', () => {
-  it('行高：0 或 14–96 的整数；负数 / 小数 / NaN / 超大都回合法域', () => {
-    expect(sanitizeLineHeight(0)).toBe(0);
-    expect(sanitizeLineHeight(22.7)).toBe(22);
-    expect(sanitizeLineHeight(-3)).toBe(14);
-    expect(sanitizeLineHeight(999)).toBe(96);
-    expect(sanitizeLineHeight(Number.NaN)).toBe(0);
-    expect(sanitizeLineHeight('18' as unknown as number)).toBe(0);
+  it('行高：合法域 = Monaco 那三态（0<v<8 倍数 / 8–150 像素）；0 与脏值迁到缺省', () => {
+    // 倍数档：两位小数、下限 1.0（再低行与行就压在一起）
+    expect(sanitizeLineHeight(1.35)).toBe(1.35);
+    expect(sanitizeLineHeight(1.5)).toBe(1.5);
+    expect(sanitizeLineHeight(1.3333)).toBe(1.33);
+    expect(sanitizeLineHeight(0.2)).toBe(1);
+    expect(sanitizeLineHeight(9.9)).toBe(10); // 边界在 8：≥ 8 走像素档，取整
+    // 像素档：老盘上当年手选的绝对值原样保留（渲染逐像素不变），取整
+    expect(sanitizeLineHeight(18)).toBe(18);
+    expect(sanitizeLineHeight(24)).toBe(24);
+    expect(sanitizeLineHeight(22.7)).toBe(23);
+    expect(sanitizeLineHeight(999)).toBe(150);
+    // 0 = 旧缺省的「自动」，一次性迁到新缺省（理由见模块头注）；负数与脏值同样回缺省
+    expect(sanitizeLineHeight(0)).toBe(1.5);
+    expect(sanitizeLineHeight(-3)).toBe(1.5);
+    expect(sanitizeLineHeight(Number.NaN)).toBe(1.5);
+    expect(sanitizeLineHeight('weird' as unknown as number)).toBe(1.5);
+    // localStorage 里存的就是串：数字串照收（同 sanitizeUiFontScale 的口径）
+    expect(sanitizeLineHeight('1.5' as unknown as number)).toBe(1.5);
+    expect(sanitizeLineHeight('24' as unknown as number)).toBe(24);
+  });
+
+  it('盘上的 0（旧缺省的自动，任何一项显示偏好一改都会被镜像写入）迁到新缺省 1.5', () => {
+    stubWindow(fakeStorage({ 'kojo.ui.editor.lineHeight.v1': '0' }));
+    expect(loadEditorDisplayPrefs().lineHeight).toBe(1.5);
+    expect(editorDisplayOptionPatch(100).lineHeight).toBe(1.5);
+    // 显式选档写进去之后读回来就是那一档（写入路径不再产生 0）
+    saveEditorDisplayPrefs({ lineHeight: 1.7 });
+    expect(loadEditorDisplayPrefs().lineHeight).toBe(1.7);
+  });
+
+  it('三档预设就是设置页与缺省值的那一份（1.35 / 1.5 / 1.7 ⇒ 14px 字号下 19 / 21 / 24）', () => {
+    expect(LINE_HEIGHT_PRESETS.map((p) => p.value)).toEqual([1.35, 1.5, 1.7]);
+    expect(LINE_HEIGHT_PRESETS.map((p) => Math.round(p.value * 14))).toEqual([19, 21, 24]);
+    // 缺省必须落在某一档上，否则设置页会出现"三档都不亮"
+    expect(LINE_HEIGHT_PRESETS.some((p) => p.value === LINE_HEIGHT_DEFAULT)).toBe(true);
+    expect(LINE_HEIGHT_DEFAULT).toBe(1.5);
   });
 
   it('枚举：只有登记值算数，脏值与大小写变体回落缺省', () => {

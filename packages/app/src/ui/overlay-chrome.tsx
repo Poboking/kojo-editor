@@ -1,10 +1,24 @@
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './icons';
+import { motionIsReduced } from './motion-pref';
+
+/**
+ * 「动效已被压平」的运行时判据 —— **真源在 `motion-pref.ts` 的 `motionIsReduced()`**。
+ *
+ * 本模块只做转出：1026 动效批两条线原本各写了一份同义判定（这里一份、通知中心一份），
+ * 且在「无 `document` 时算什么」上分叉。收口后全仓只剩 `motion-pref` 那一份，
+ * 名字沿用 `motionIsFlat` 是为了不动壳层那 4 处调用点与既有测试。
+ *
+ * @deprecated 新代码直接 `import { motionIsReduced } from './motion-pref'`。
+ */
+export const motionIsFlat = motionIsReduced;
 
 /**
  * 浮层「在场」钩子（视觉批十五）：`open` 落下后再留 `ms` 毫秒才真正卸载，期间
  * `exiting = true`——宿主把 `.ov-exiting` 挂在面板根上就播 `overlay-out`。
  * 设置浮层与 `ui.overlay` 族共用这一份时机，免得"一半浮层有退场、一半没有"。
+ *
+ * 减弱动效下**同步卸载**（`motionIsFlat`）：动画已被压平，再等 `ms` 只是空窗。
  */
 export function useOverlayPresence(open: boolean, ms = 200): { mounted: boolean; exiting: boolean } {
   const [state, setState] = useState<{ mounted: boolean; exiting: boolean }>({
@@ -19,6 +33,10 @@ export function useOverlayPresence(open: boolean, ms = 200): { mounted: boolean;
     }
     if (open) {
       setState({ mounted: true, exiting: false });
+      return;
+    }
+    if (motionIsFlat()) {
+      setState({ mounted: false, exiting: false });
       return;
     }
     setState((cur) => (cur.mounted ? { mounted: true, exiting: true } : cur));

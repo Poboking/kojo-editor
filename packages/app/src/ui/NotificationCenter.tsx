@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { pushNotice } from './notice-queue';
 import { Icon } from './icons';
+import { motionIsReduced } from './motion-pref';
 import { installNoticeMenuHost } from './notification-menu';
 
 /** 通知动作按钮（如「去授权」）——点击后先关 toast 再执行 */
@@ -59,6 +60,22 @@ export const NotifyContext = createContext<Notify>(() => {});
 /** toast 同屏上限与淘汰规则住在 `notice-queue.ts`（纯函数可单测，HK-8 裁决批） */
 /** info 自动消失时长；error 常驻到用户处理（与 VSCode 一致：错误不自动消失） */
 const INFO_TTL_MS = 6000;
+
+/**
+ * 退场动画的实际时长（ms），**从计算样式读**而不是在 TS 里再抄一份 200。
+ *
+ * 抄一份常量就是两个真源：`motion-exit.css` 的 `.toast.toast-out` 改档时这里会静默不同步
+ * （要么提前半帧切掉、要么让一条透明的 toast 多占 200ms 的 DOM）。读计算样式则天然同源。
+ * 读到 0 / 读不到 ⇒ 当帧移除，三条路径同效：减弱动效、样式表没装载（单测的 node 环境）、
+ * 以及浏览器因机器性能丢弃动画。`animationDuration` 可能是逗号列表，只取第一条。
+ */
+function exitDurationMs(el: HTMLElement): number {
+  if (typeof getComputedStyle !== 'function') return 0;
+  const raw = getComputedStyle(el).animationDuration.split(',')[0]?.trim() ?? '';
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return raw.endsWith('ms') ? value : value * 1000;
+}
 
 /**
  * 一条通知身上的可执行动作（`action` 与 `actions` 两代形态按序拼起来）。
@@ -149,12 +166,54 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
    */
   const timersRef = useRef(new Map<number, number>());
 
-  const dismiss = useCallback((id: number) => {
+  /**
+   * 正在退场的通知 id（1026 动效批 A2：此前消失 = DOM 直接卸载，一条提示是"啪"地没的）。
+   * 与 `notices` 分开存：`notices` 是**屏上有哪几条**的真源，退场只是那一条被划掉了，
+   * 它还得画完 200ms 的淡出才真正离开。
+   */
+  const [exiting, setExiting] = useState<readonly number[]>([]);
+  /** 退场计时器（按 id）。与上面 `timersRef` 分开：那本是 info 的 TTL，这本是动画时长。 */
+  const exitTimersRef = useRef(new Map<number, number>());
+  /** 退场要量的是**这一条自己的**计算样式，所以得摸到容器 */
+  const centerRef = useRef<HTMLDivElement | null>(null);
+
+  /** 真正把一条从屏上摘掉（退场动画走完 / 减弱动效 / 无样式表时都是这里） */
+  const drop = useCallback((id: number) => {
+    setExiting((list) => list.filter((x) => x !== id));
     setNotices((list) => list.filter((n) => n.id !== id));
   }, []);
 
-  /** 一键清掉屏上全部（右键菜单的「清除全部通知」；计时器由下面那个收敛 effect 一并收） */
-  const clearAll = useCallback(() => setNotices([]), []);
+  /**
+   * 关闭一条通知。语义仍是"立刻从真源里划掉"，只是**画面上**多一帧退场：
+   * 先挂 `.toast-out`（见 `motion-exit.css`），等它自己跑完再 `drop`。
+   * 减弱动效 / 无样式表环境 ⇒ 不进动画，当帧消失（绝不等待）。
+   */
+  const dismiss = useCallback(
+    (id: number) => {
+      if (motionIsReduced()) {
+        drop(id);
+        return;
+      }
+      setExiting((list) => (list.includes(id) ? list : [...list, id]));
+    },
+    [drop],
+  );
+
+  /**
+   * 一键清掉屏上全部（右键菜单的「清除全部通知」；计时器由下面那个收敛 effect 一并收）。
+   *
+   * 与单条 `dismiss` 同一条语义：非减弱档**保留 `notices`**、只把每条标进 `exiting`，
+   * 于是 DOM 还在、`.toast-out` 能真跑满 200ms，到点由 `drop` 逐个摘——批量清除也是
+   * 一片淡出而不是"啪"地全没。减弱档才直接清空。
+   */
+  const clearAll = useCallback(() => {
+    if (motionIsReduced() || notices.length === 0) {
+      setExiting([]);
+      setNotices([]);
+      return;
+    }
+    setExiting((list) => [...new Set([...list, ...notices.map((n) => n.id)])]);
+  }, [notices]);
 
   /**
    * 通知面的右键菜单（WP3.8）：把「屏上有哪几条 + 每条带什么动作」交给菜单数据面，
@@ -210,11 +269,48 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
     };
   }, []);
 
+  /**
+   * 退场排程（A2）：`.toast-out` 挂上去之后，量这一条自己的动画时长，再按时长摘掉它。
+   *
+   * 为什么量而不是听 `animationend`：听事件在"动画根本没跑"的环境里会**永久卡住**
+   * （无样式表、单测的 node/happy-dom、浏览器把动画丢了）——一条已经透明的 toast 赖在
+   * DOM 里，`role="alert"` 还继续念。时长读成 0 就走当帧移除那条腿，两种环境同一条路径。
+   * 多留 30ms 是给"定时器比合成器早一拍"的余量，不然最后一帧会露出 0.1 的不透明度。
+   */
+  useEffect(() => {
+    if (exiting.length === 0) return;
+    for (const id of exiting) {
+      if (exitTimersRef.current.has(id)) continue;
+      const el = centerRef.current?.querySelector<HTMLElement>(`[data-notice-id="${id}"]`) ?? null;
+      const ms = el === null ? 0 : exitDurationMs(el);
+      if (ms === 0) {
+        drop(id);
+        continue;
+      }
+      exitTimersRef.current.set(
+        id,
+        window.setTimeout(() => {
+          exitTimersRef.current.delete(id);
+          drop(id);
+        }, ms + 30),
+      );
+    }
+  }, [exiting, drop]);
+
+  useEffect(() => {
+    const timers = exitTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
   return (
     <NotifyContext.Provider value={notify}>
       {children}
       {notices.length > 0 ? (
         <div
+          ref={centerRef}
           className="notification-center notification-shell"
           data-context-surface="notification"
         >
@@ -227,7 +323,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
             return (
               <div
                 key={n.id}
-                className={`toast toast-${n.kind}`}
+                className={`toast toast-${n.kind}${exiting.includes(n.id) ? ' toast-out' : ''}`}
                 role="alert"
                 title={noticeTooltip(n)}
                 // 右键菜单认这一条是谁（容器空白处 = 整批「清除全部」）

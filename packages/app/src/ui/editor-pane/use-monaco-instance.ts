@@ -242,9 +242,20 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       // 编辑器体感（ui-polish）：平滑滚动 / 平滑光标 / 整行高亮 / 上下留白
       smoothScrolling: true,
       cursorSmoothCaretAnimation: 'on',
+      // 光标呼吸（C3）：与 small 档同值（`editor-options.ts` 的 TIER_SMALL）。create 到
+      // 第一个文件落档之间有一拍，这一格不写就是那半秒里的硬切闪；档位表落定后同值覆盖。
+      cursorBlinking: 'smooth',
       renderLineHighlight: 'all',
       padding: { top: 6, bottom: 16 },
-      scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
+      // 滚动条 overlay 化（C4）：滑轨 12 → 10px、滑块 8px，两条都窄一档——12px 的常驻滑轨
+      // 是"网页感"最重的一处。真正的"静止半透明 / 悬停显形"在 `motion-editor.css`（Monaco 自己
+      // 切 `.scrollbar.visible/.invisible`，样式侧只补 opacity 过渡，不参与显隐判定）
+      scrollbar: {
+        verticalScrollbarSize: 10,
+        horizontalScrollbarSize: 10,
+        verticalSliderSize: 8,
+        horizontalSliderSize: 8,
+      },
       // 编程字体（单一真源）：**只走 create 路径**，不进体量降级集——字体与体量两轴正交，
       // updateOptions 只覆写发过去的键，创建时钉一次就贯穿切文件
       ...CODE_FONT_BASELINE,

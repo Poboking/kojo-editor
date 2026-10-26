@@ -20,6 +20,14 @@
 | MK-SMOKE-RECAL | `smoke-tauri-market.mjs` 本机 4 红（2026-10-22 发行前实测）：f2/g/h 三条 = **锚点过期**（`ANCHOR_BYTES=1612` / `ANCHOR_SHA256=f1b72c01…` / 期望 2 条包，线上实测 4,141 B / sha `e100bb76ea79` / 6 条包——社区投稿已进注册表，钉的是**会变的外部内容**）；k 一条 = **判据踩在自己的采样噪声面上**（`intervalMs=300` 却判「行消失 ≤ 目录消失 + 300ms」，实测 469ms / 2,013ms 两跑皆红，功能面逐字节与记账全对） | 判据：f2/g/h 改成「schema 合规 + 远程与盘上逐字节自洽」为准、锚点只钉**本仓可控**内容（外部注册表内容不钉 sha，或按 `fetchedAt` 分档）；k 的容差须 > 2×采样间隔，或改钉「同一轮内行消失前无二次轮询」这类与粒度无关的判据——**不许**为凑绿把功能断言写松 | 待认领 · 来源：chief 发行前实机测试 2026-10-22 |
 | FIX-SUGARJIT | **.kojo 预览开启后恶性崩坏四联**：①编辑界面异常抖动 ②鼠标指针在文本/指针样式间高频抽搐 ③编辑区无法上下滚动 ④语法高亮全灭全白；用户跟进：**所有文件都无法编辑**且抖动既现 ⇒ 疑似编辑器反复重挂载 / readOnly 循环级渲染环 | 判据：四联全消（不抖动 / 指针不抽搐 / 可上下滚动 / 高亮正常）且所有文件可编辑 | 进行中 · 认领：gvm 2026-10-17（dev 基线重建时从旧 master 线迁入：git log 未见交付、dev 看板原未登记） |
 
+## 在办 · 多游戏适配（eraAV + eratohoReverse · 2026-10-26，chief）
+
+> **任务**：把编辑器适配到两款新 era 游戏，验证「加一个 era 只加数据」这条路（`adapter-manifest.ts` 单一清单 + 内核零改动）。
+> **P0 布线 + P1 识别与导航**为一批；2.0 事实面（`kojo2/`）、发射面（backend）、conventions、糖面留给后续批。
+
+| ID | 任务 | 关键判据 / 已实测事实 | 状态 |
+| PERF-KOJO2-ANALYSIS | **先行红（非多游戏批引入）**：`packages/app/tests/kojo2-project-analysis.test.ts`「10000 个 @函（解析桩）判定中位数 ≤ 100ms」在本机反复贴阈值。复现：`node node_modules/vitest/vitest.mjs run packages/app/tests/kojo2-project-analysis.test.ts`（空闲独跑，无别的重活）。期望 vs 实际：屏上原样 `AssertionError: expected 103.19970000000012 to be less than or equal to 100`；同一棵树枝四次读数 = 两绿（<100）+ 119.99 + 141.69。定责：该文件 import 面只有 `@kojo/kojo-core` 与 `app/src/ui`（`:17`、`:38`），与适配器/清单零交集；多游戏批两轮全量都撞上它 | 判据：阈值判据要经得起本机抖动（多次取中位数、或按机器档位分档，**不许**为凑绿把断言写松）；先由计时闸的 owner 定口径 | 待认领 · 来源：chief 多游戏适配批 2026-10-26 |
+
 ## 在办 · Kojo 2.0（设计基线 v0.9）
 
 > **依据**：`docs/KOJO-2.0-LANGUAGE-SPEC.md`（v0.9 设计稿+任务清单合并入库版）。

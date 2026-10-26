@@ -47,23 +47,85 @@
   background: var(--bg);
 }
 
-/* 背景氛围（替代旧欢迎页的极光层）：两团极淡的 accent 径向光，静态、不抢内容。
-   旧 `.welcome::before` 的漂移动画不再沿用——VSCode 式的欢迎页以"静"为底。
-   **同一元素**上仍叠着 styles.css 的 `.welcome::before`（26s 无限漂移 + blur(28px)），
-   本规则只换了 inset/background，动画与模糊会照旧生效；这里逐项显式收口
-   （沿袭旧规则、不动它——`welcome-rise` 之外本页不应有常驻动效）。 */
+/* 背景氛围（D5 · 2026-10-26 动效批重做）：三团极淡的 accent 径向光，缓慢漂移 + 呼吸。
+   上一版把 styles.css 的极光层显式收成了**静态**（animation:none / filter:none /
+   inset:0 / alpha 0.11+0.06），实机截图里等于没有——"不做动效"在这里实际买到的是
+   "没有氛围"，不是"安静"。本版按「台面上有呼吸、盯着看三秒才确认在动」重调：
+   · 振幅 0.9%（≈14px / 半程 21s）⇒ ~0.7px/s，扫一眼是静的，盯住才有位移；
+   · 呼吸靠 scale 1.02→1.045 + opacity 0.92→1 双通道（周边视觉对径向缩放比平移更敏感，
+     所以位移可以更小、整体仍然"活着"）；
+   · 三团而不是两团：右下的第三团专门压住"只有左上发光"的斜向失衡，构图才不歪；
+   · 周期取 `--anim-aurora`（26s）的 1.6 倍：tokens 里的 26s 是"双色团漂移一整轮"的
+     标定值，本页三团叠了呼吸，需要更长一轮才不显快——不另造字面量。
+
+   ⚠ 弹窗态的关键事实（上一版没算到这一层，所以"等于没做"）：本页现在的常态是
+   `.app-frame-popup`——**欢迎卡铺满整个窗口**（`height:100%`），页面背景连一个像素都
+   露不出来。所以光斑必须画在**卡片自己的 `::before`** 上（见本段末尾那段），
+   页面层这份只服务"卡片不铺满"的版式（量高态 / 未来窗口中置形态）。
+   两张图共用 `--welcome-aurora` 一条配方，全页只有一处梯度定义。
+
+   减弱动效由全局规则（styles.css 的 `data-motion='reduced'` / `prefers-reduced-motion`
+   两条）压成一帧静态光斑，本文件不另设开关。颜色走 `color-mix` 从 accent 派生，
+   浅色/薄荷两档自动跟着主题翻相（薄荷另有自己的两团覆写，见 themes/mint-dark.css）。 */
+.welcome.welcome-screen {
+  /* 极光配方（单源）：页面层与弹窗态的卡片层画的是同一张图 */
+  --welcome-aurora:
+    radial-gradient(44% 50% at 12% 88%, color-mix(in srgb, var(--accent) 46%, transparent), transparent 72%),
+    radial-gradient(40% 46% at 88% 8%, color-mix(in srgb, var(--accent-text) 28%, transparent), transparent 74%),
+    radial-gradient(46% 40% at 74% 78%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 76%);
+  /* 一轮呼吸的时长：tokens 的 --anim-aurora 是"双色团漂移一整轮"的标定值 */
+  --welcome-breathe-dur: calc(var(--anim-aurora) * 1.6);
+}
+
 .welcome.welcome-screen::before {
   content: '';
   position: absolute;
-  inset: 0;
+  /* 负内衬：光斑要伸出视口一圈，漂移时四边不许露底（父级 overflow:hidden 会裁掉） */
+  inset: -18%;
   z-index: 0;
   pointer-events: none;
-  animation: none;
-  filter: none;
-  transform: none;
-  background:
-    radial-gradient(58% 46% at 16% -4%, rgb(var(--accent-rgb) / 0.11), transparent 70%),
-    radial-gradient(42% 40% at 92% 4%, rgb(var(--accent-rgb) / 0.06), transparent 72%);
+  background: var(--welcome-aurora);
+  filter: blur(30px);
+  animation: welcome-breathe var(--welcome-breathe-dur) var(--ease-in-out) infinite;
+}
+
+/* 弹窗态：卡片铺满窗口 ⇒ 同一张极光图挂到卡片上。`z-index:-1` 让它压过卡片自己的
+   玻璃底、又落在两栏内容之下（卡片的 `position:relative; z-index:1` 提供栈上下文，
+   所以负层不会漏到页面底下）。内衬取 0（不是负值）：梯度四边本来就透明，缩放不露边，
+   而负值会从卡片圆角那 10px 缺口里漏光。 */
+.app-frame-popup .welcome-screen .welcome-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--welcome-aurora);
+  filter: blur(30px);
+  animation: welcome-breathe var(--welcome-breathe-dur) var(--ease-in-out) infinite;
+}
+
+/* 弹窗态下页面层整枚不画。初版只写了 `animation: none`，收口批改成 `content: none`，
+   两个理由都不是审美：
+   ① 卡片背景是 **0.85 透明度**（styles.css 的玻璃底），"被卡片整面盖住"是想当然——
+      页面层那道光会透出 15%，两层同配方叠加 ⇒ 实际浓度比设计稿高一截；
+   ② A6 给极光挂了 `will-change: transform`，这枚 inset -18% + blur(30px) 的层会一直
+      占着一块合成层。`content: none` 让伪元素根本不生成，层、绘制、显存一起省。 */
+.app-frame-popup .welcome-screen::before {
+  content: none;
+}
+
+/* 呼吸：位移与明暗同相（一起慢、一起亮），避免两个不同周期的动画互相咬出"顿挫" */
+@keyframes welcome-breathe {
+  0%,
+  100% {
+    transform: translate3d(-0.9%, -0.6%, 0) scale(1.02);
+    opacity: 0.92;
+  }
+  50% {
+    transform: translate3d(0.9%, 0.6%, 0) scale(1.045);
+    opacity: 1;
+  }
 }
 
 /* 滚动区兼任居中舞台：卡片用 auto 上下边距在**有空间时**垂直居中，空间不足时

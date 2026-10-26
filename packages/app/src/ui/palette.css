@@ -108,7 +108,35 @@ html:root[data-glass='solid'] .picker-backdrop.pk-mask {
   backdrop-filter: none;
 }
 
-/* 动效：本文件不新增 animation / transition。面板入场（`pop-in`）与遮罩 `fade-in`
-   仍由 styles.css 的既有规则负责，而那两条已经被全局的
+/* ------------------------------ 选中行：内缩胶囊（1026 动效批 A4） ------------------------------ */
+
+/* 旧的选中态是一块**贴边到顶**的方块（`.picker-item.active`：直角 + 左缘 2px accent 条），
+   整行读作"表格里被选中的那条记录"。命令面板是键盘面，选中行其实是**光标**，
+   所以照 Raycast 的做法收成一枚浮在行里的胶囊：左右各内缩 6px、圆角 --radius-md。
+   6px 由 --space-1(4) + --space-0(2) 拼出——token 没有 6px 档，不为一个内缩新开 token。
+   文字左缘仍是 6 + 8 = 14px，与 `.picker-input` 的 14px 内边距**同一条竖线**：
+   内缩的只是高亮本身，不是内容（否则输入框与列表会错开，读起来像两套栅格）。
+   `width: auto` 是必需的——`display: flex` 的块级盒在 `width: auto` 下铺满减掉
+   margin 后的宽度，于是胶囊不会撑出面板、`.picker` 的 overflow:hidden 也不会裁到它。 */
+.pk-list .picker-item {
+  width: auto;
+  margin-inline: calc(var(--space-1) + var(--space-0));
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-md);
+  /* 键盘上下移动时高亮是"走到下一行"，不是"换了一页"：70ms（--dur-press 档，
+     与全站按压同速）够读出过渡、又不拖慢连按 ↑↓ 的节奏。token 无 60ms 档。 */
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+/* 选中行不再贴左缘画 accent 竖条：那根条在圆角胶囊的左边会读成"缺了个角"。
+   胶囊本身的 accent 底已经足够表态，选中语义不靠第二根线。 */
+.pk-list .picker-item.active {
+  background: var(--accent-dim);
+  box-shadow: none;
+}
+
+/* 动效：本文件的 animation 仍只有 styles.css 给的入场（`pop-in`）与遮罩 `fade-in`，
+   而 `pop-in` 那两条已经被全局的
    `@media (prefers-reduced-motion: reduce)` 与 `:root[data-motion='reduced']`
-   压到 0.01ms ⇒ 减弱动效的机器上这一档同样是瞬移，无需在此另写回落。 */
+   压到 0.01ms ⇒ 减弱动效的机器上这一档同样是瞬移，无需在此另写回落。
+   本批只新增了一条 transition（背景色，70ms），它同样吃那两条全局压时规则。 */

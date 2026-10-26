@@ -25,6 +25,7 @@ import {
   cdpClick,
   cdpPage,
   debugHome,
+  dismissDevNoteMask,
   expandTreeUntilFile,
   findBrowser,
   freePort,
@@ -33,6 +34,7 @@ import {
   sleep,
   waitFor,
 } from './debug-lib.mjs';
+import { assertPageOrigin } from './smoke-lib.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 // 每轮一个唯一工作目录，且**默认在系统临时目录**：browser-profile 里的文件会被 Edge
@@ -121,7 +123,10 @@ cleanupAll.push(() => server.close());
 console.log(`[smoke] 调试宿 :${server.port}`);
 
 const vitePort = await freePort(4273);
-const vite = spawn(process.execPath, [viteBin, '--port', String(vitePort), '--strictPort'], {
+// `--host 127.0.0.1`（2026-10-26 修，PITFALLS 230 同族小坑）：vite 7 缺省只绑/只报 localhost
+// （Windows 上常仅解析 ::1），而下面的页面 URL 与本会话一切读数口径都写 127.0.0.1——
+// 不显式 --host 就是 ERR_CONNECTION_REFUSED 假红。与 debug-cli.mjs cmdServe 同口径，不动产品配置。
+const vite = spawn(process.execPath, [viteBin, '--port', String(vitePort), '--strictPort', '--host', '127.0.0.1'], {
   cwd: path.join(REPO, 'packages', 'app'),
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -175,6 +180,14 @@ const cdp = await new Cdp(page.webSocketDebuggerUrl).connect();
 console.log(`[smoke] 页面：${page.url}`);
 
 try {
+  // ⓪ origin 钉（2026-10-26，PITFALLS 230 同族假绿/假红闸，与 smoke-tauri-ipc 同口径）：
+  //    先等导航落定（刚挂上时文档还是 about:blank，直接问 origin 会假红——实测），
+  //    再要求页面 origin **逐字等于我们自己的 127.0.0.1 vite**：端口上若坐着别的树
+  //    （localhost/::1 漂址或同口他树 dev server），这里带 href 当场红，绝不吃假绿。
+  await waitFor(cdp, `location.href !== 'about:blank'`, { timeoutMs: 30000, label: '页面导航落定（离开 about:blank）' });
+  const pageHref = await assertPageOrigin(cdp, `http://127.0.0.1:${vitePort}`);
+  console.log(`[smoke] 页面 origin 钉死：${pageHref}`);
+
   // ① 欢迎页真实渲染（结构判据，不匹配文案）
   await waitFor(cdp, '!!document.querySelector(".welcome")', { timeoutMs: 30000, label: '欢迎页' });
   check('欢迎页渲染', true);
@@ -200,10 +213,38 @@ try {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chooseDir: project }),
   });
-  // 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
-  if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
-    await cdpClick(cdp, '.dev-note-actions .ghost');
-    await sleep(300);
+  // ④a 调试面对话框 policy（2026-10-26 era-pair 批；真壳靠这条腿应答原生对话框，web 腿在此对拍）：
+  //    armed 面在场 + **一次性**消费——armed 时 choose_directory 回页面值（宿 policy 值不动，未 armed 回宿值）。
+  const dpFake = path.join(sandbox, 'dialog-policy-probe');
+  const dpShape = await cdp.evalJs(
+    `(() => { const d = __kojoDebug.dialogPolicy; return d && typeof d.arm === 'function' && typeof d.armed === 'function' && typeof d.clear === 'function' && typeof d.status === 'function' ? true : null; })()`,
+  );
+  check('dialogPolicy 面在场（arm/armed/clear/status）', dpShape === true);
+  const dpRound = await cdp.evalJs(
+    `(() => {
+      __kojoDebug.dialogPolicy.arm(${JSON.stringify(dpFake)});
+      const armedEcho = __kojoDebug.dialogPolicy.armed();
+      return { armed: armedEcho.armed, value: armedEcho.value };
+    })()`,
+  );
+  check(
+    'dialogPolicy.arm 后 armed() 回显（win 路径大小写不敏感对拍）',
+    dpRound?.armed === true && String(dpRound?.value).toLowerCase() === dpFake.toLowerCase(),
+    JSON.stringify(dpRound),
+  );
+  const dpConsumed = await cdp.evalJs(
+    `__kojoDebug.invoke('choose_directory').then((v) => __kojoDebug.dialogPolicy.armed().armed === false && String(v).toLowerCase() === ${JSON.stringify(dpFake.toLowerCase())})`,
+  );
+  check('dialogPolicy armed 时 choose_directory 回页面值且一次性消费', dpConsumed === true, String(dpConsumed));
+  // 未 armed ⇒ 回落到既有宿 policy（POST /policy 的 project，非消费式）——真壳腿坏时这条红能区分层级
+  const dpHost = await cdp.evalJs(`__kojoDebug.invoke('choose_directory').then((v) => String(v).toLowerCase() === ${JSON.stringify(project.toLowerCase())})`);
+  check('未 armed 时 choose_directory 照旧回落宿 policy（零触扰）', dpHost === true, String(dpHost));
+
+  // 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉。
+  // 懒挂载竞态（2026-10-26 实拍）：纸条的 Suspense fallback 本身就是一层 .modal-mask，
+  // 「在场才关」的单次检查会放行、0.5s 后遮罩弹上吃掉 .welcome-open 的点击 ⇒ dismissDevNoteMask 等到落定。
+  if (!(await dismissDevNoteMask(cdp))) {
+    throw new Error('「开发者的碎碎念」纸条关不掉（ghost 点击未生效）——屏幕被遮罩盖住，如实红');
   }
   await cdpClick(cdp, '.welcome-open');
   const modalStep = await waitFor(
@@ -237,6 +278,17 @@ try {
     !!info?.path && info.lineCount > 0,
     `${info?.path ?? '?'} · 行数=${info?.lineCount} · 语言=${info?.languageId}`,
   );
+
+  // ⑤b 二进制直传（2026-10-26 性能批）：页面拿到的必须是原始 ArrayBuffer，
+  //     不是 {__b64} 信封——读者据此区分旧宿回退与新宿直传两条腿。
+  const binBytes = await cdp.evalJs(
+    `(async () => {
+      const r = await __kojoDebug.invoke('read_file_bytes_raw', { path: ${JSON.stringify(info?.path ?? '')} });
+      return r instanceof ArrayBuffer ? r.byteLength : -1;
+    })()`,
+    30000,
+  );
+  check('二进制命令直传原始字节（ArrayBuffer）', typeof binBytes === 'number' && binBytes > 0, `${binBytes} B`);
 
   // ⑥ 命令注册表：所有功能的可编程入口在场
   const cmdCount = await cdp.evalJs('__kojoDebug.commands.list().length');

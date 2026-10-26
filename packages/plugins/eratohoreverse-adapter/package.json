@@ -1,0 +1,14 @@
+{
+  "name": "@kojo/plugin-eratohoreverse-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eratohoReverse game adapter: GameBase-title detection (Cyrillic Я in the real title), Chara CSV index (CSV/CHARA), kojo-directory binding (ERB/口上/NNNN_名), the indirect KOJO_CALL form routing of this title and variable-name tables. All eratohoReverse-specific knowledge lives here; the kernel stays game-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*",
+    "@kojo/kojo-project-kit": "workspace:*"
+  }
+}

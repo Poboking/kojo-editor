@@ -118,6 +118,15 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 第六个 adapter（eratohoK，2026-10-25 批）。同样走项目级；`CSV/GameBase.csv`
       // 标题是唯一强特征（与 eraFL / era紅魔館 的 `ERB/口上` 目录不冲突）。
       'createTohokAdapterPlugin',
+      // 第七个 adapter（eraAV，2026-10-26 批，P0+P1）。同样走项目级：欢迎页无贡献面。
+      // detect 三件套（`ERB/Lines` 目录 + `ERB/EVENT/EVENT_K.ERB` 文件 + GameBase 标题）
+      // 与另六家实测零交集——最险的一处是 eraAkumaMaid 的主路由**同名** `EVENT_K.ERB`，
+      // 本作靠父目录不同（`ERB/EVENT` vs `ERB/EVENT_K`）区分，故次序不参与判定。
+      'createEraavAdapterPlugin',
+      // 第八个 adapter（eratohoReverse，2026-10-26 批，P0+P1）。同样走项目级；
+      // `CSV/GameBase.csv` 标题（真盘含西里尔 Я）是唯一强特征，
+      // `ERB/口上/EVENT_K.ERB` 与 eraAV 的 `ERB/EVENT/EVENT_K.ERB` 靠父目录分开。
+      'createEratohoreverseAdapterPlugin',
     ];
     // 适配器的名单与次序搬进**单一清单**（`src/adapter-manifest.ts`）：这里逐字钉住它。
     const manifest = projectAdapters();

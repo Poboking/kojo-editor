@@ -29,6 +29,8 @@
       "@kojo/plugin-erakoumakan-adapter": ["../plugins/erakoumakan-adapter/src/index.ts"],
       "@kojo/plugin-erasqc-adapter": ["../plugins/erasqc-adapter/src/index.ts"],
       "@kojo/plugin-eratohok-adapter": ["../plugins/eratohok-adapter/src/index.ts"],
+      "@kojo/plugin-eraav-adapter": ["../plugins/eraav-adapter/src/index.ts"],
+      "@kojo/plugin-eratohoreverse-adapter": ["../plugins/eratohoreverse-adapter/src/index.ts"],
       "@kojo/plugin-ui-status": ["../plugins/ui-plugin-status/src/index.ts"],
       "@kojo/plugin-convention-linter": ["../plugins/convention-linter/src/index.ts"],
       "@kojo/plugin-condition-extractor": ["../plugins/condition-extractor/src/index.ts"],

@@ -66,7 +66,7 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
     // B3：小文件开吸顶（贴顶行 = 当前大纲项）
     expect(o.stickyScroll).toEqual({ enabled: true, maxLineCount: 4 });
     expect(o.smoothScrolling).toBe(true);
-    expect(o.cursorBlinking).toBe('blink');
+    expect(o.cursorBlinking).toBe('smooth');
     expect(o.cursorSmoothCaretAnimation).toBe('on');
     expect(o.detectIndentation).toBe(true);
   });
@@ -154,7 +154,7 @@ describe('editorOptionsForLineCount（三档开关矩阵）', () => {
     // 吸顶、光标动画与引导线同样逐档往返（不许卡在关）
     expect(editorOptionsForLineCount(100).stickyScroll).toEqual({ enabled: true, maxLineCount: 4 });
     expect(editorOptionsForLineCount(100).smoothScrolling).toBe(true);
-    expect(editorOptionsForLineCount(100).cursorBlinking).toBe('blink');
+    expect(editorOptionsForLineCount(100).cursorBlinking).toBe('smooth');
     expect(editorOptionsForLineCount(100).cursorSmoothCaretAnimation).toBe('on');
     expect(editorOptionsForLineCount(100).guides).toMatchObject({ bracketPairs: true, indentation: true });
   });

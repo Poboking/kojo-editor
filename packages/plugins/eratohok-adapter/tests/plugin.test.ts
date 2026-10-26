@@ -87,10 +87,15 @@ describe('loadProject —— 真盘读数（守卫：D:/game/eratohoK 存在才�
   let proj: GameProject;
   let activated: ReturnType<typeof activateAdapter>;
 
+  // `loadProject` 走真盘：读 174 份 Chara CSV + 扫 118 个口上目录。单跑 ~1 s，但满载并行池里
+  // 会被挤过 vitest 默认的 **hookTimeout 10 s** 而整文件标红——2026-10-26 全量跑实测报的是
+  // `Hook timed out in 10000ms`，不是断言失败（单跑本文件 10 例全过）。
+  // 重 IO 钩子给显式预算，是本仓既有口径（`docs/PITFALLS.md` §81；
+  // `vitest.perf.config.ts` 的 `hookTimeout: 120000` 是同一件事）。
   beforeAll(async () => {
     activated = activateAdapter(nodeIo());
     proj = await activated.adapter.loadProject(GAME_ROOT);
-  });
+  }, 120_000);
 
   it.skipIf(!hasCorpus)('角色索引：174 份 Chara CSV ∪ 118 个口上目录', () => {
     expect(proj.charaIndex.size).toBeGreaterThanOrEqual(174);

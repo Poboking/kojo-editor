@@ -38,6 +38,28 @@ import './shell-notices.css';
 // 项目态（重档）都吃得到，所以必须留在**静态链**、且排在 themes/*.css 之后
 // （与 light 档那枚同特异性的井身反相内衬赢平靠位次，判据见切片文件头）。
 import './tutorial-surface.css';
+// ---- 1026 动效批切片（A/B/C/D 四条线的规则各自成片，四条的相对次序有意义、绝对位次没意义）----
+// 四条都只声明 styles*.css 里没有的新类/新属性，且每条规则要么靠复合选择器
+// （`html:root` / 双类 `(0,2,0)`）压过既有面、要么本就只命中新类 ⇒ **一律不靠位次取胜**。
+// 这不是洁癖：实测（`:4305` 项目态，读 `style[data-vite-dev-id]` 的序）四片落在 14–17，
+// 而懒档 `styles-project.css` / `market.css` 在 19–20 —— 也就是说**它们并不是全场最后到**，
+// 后到的还有整整一份全量样式表。凡是与既有声明撞车的（`.sidebar` 的 `transition`、
+// `.toast` 的 `animation`），只能靠提特异性赢，位次一定救不了。
+// 编辑器动效切片（C1/C4/C5）：只含 `.monaco-*` / 滚动条选择器，不归两份样式表的
+// 「轻档 ⊆ 重档」三闸管（理由与三条纪律见该文件头注）。
+import './motion-editor.css';
+// 动效收口切片（1026 动效批）：toast 退场 / 标签脏点与保存微光 / 效果库接线 / 合成层提示。
+// 每条规则都靠复合选择器（`html:root` / 双类）压过既有面，不靠位次。
+import './motion-exit.css';
+// 壳层布局动效（B1–B5）：侧栏 / 底部区开合、视图交叉淡入、编辑器组入场、zen 换场。
+// 本片只声明 transition/animation 这类 `styles-project.css` **没有写过的属性**（见文件头纪律 ②），
+// 所以位次不改变任何既有终值。
+import './motion-layout.css';
+// 动效视觉切片（D4）：主题切换的圆形揭示（View Transition + clip-path）。
+// 它服务的是换主题这一下，两个相位（欢迎 / 项目）都可能发生，所以不能进项目态懒档。
+// 必须是**四条里**的最后一位：`::view-transition-old/new(root)` 是同名伪元素、只认最后一套
+// 声明，而全仓这一个伪元素只有本片在写（`grep view-transition` 可验）。
+import './motion-visual.css';
 // PS-18：market.css 不再进首屏——市场面板是项目态，且它对 styles.css 里 `.mk-*` 基础段的
 // 9 组「同特异性后来者胜」叠加（mk-row/mk-head/mk-name…，见 styles-split.equivalence.test.ts
 // 的冲突审计）只有在**全量样式表之后**到达才成立。它现在随 loadProjectView 的重档链

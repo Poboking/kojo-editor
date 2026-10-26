@@ -74,3 +74,32 @@ export function applyMotionPref(
   if (!root) return;
   root.setAttribute('data-motion', p);
 }
+
+/**
+ * 此刻是否「动效已被压平」——应用内开关 **或** 系统偏好，任一成立即为真。
+ *
+ * ## 为什么 JS 侧也要问这一句
+ *
+ * CSS 那两条全局规则（`styles.css` 的 `:root[data-motion='reduced']` 与
+ * `@media (prefers-reduced-motion: reduce)`）只把 `animation/transition` 的 duration
+ * 压到 0.01ms——**动画没了，等待还在**：浮层要等 200ms 才卸、侧栏要等 120ms 才摘
+ * DOM、toast 要等 200ms 才消失。开着「减弱动效」的作者换来的是一段什么都没有的空窗
+ * （点一下，小半秒后界面才变）。**时序归 JS，动画归 CSS，两边都得知道。**
+ *
+ * ## 为什么必须只有这一份
+ *
+ * 1026 动效批两条线各自写过一个同义函数（`overlay-chrome.motionIsFlat` 与
+ * `NotificationCenter.skipsExitMotion`），在「无 `document` 时算什么」这个边界上当场
+ * 分叉：一个回 true（当压平）、一个回 false（当要动画）。后者靠下游"时长读到 0 就走
+ * 同步分支"擦屁股才没出事——那是运气，不是设计。同一条判据不许有第二份实现。
+ *
+ * 无 `document`（node / happy-dom 裸环境 / SSR）⇒ 回 `true`：没有 DOM 就没有动画可看，
+ * 让调用方走同步分支，比让它等一个永远不会到的 `animationend` 安全。
+ */
+export function motionIsReduced(): boolean {
+  if (typeof document === 'undefined') return true;
+  if (document.documentElement.getAttribute('data-motion') === 'reduced') return true;
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+}

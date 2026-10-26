@@ -26,7 +26,8 @@
  *   commands [过滤串]          # 命令面板注册表（所有功能的可编程入口）
  *   run <命令id>               # 跑一条命令面板命令
  *   open-project <目录> [--writable] [--no-open-first]
- *         # 真实用户路径开项目：自动应答目录对话框 → 点「打开项目」卡 → 处理写权限审批
+ *         # web 模式＝调试宿 POST /policy；真壳（shell）＝调试面 dialogPolicy 应答 fetch 腿（只读，
+ *         # 不进 Rust 写域准入门 ⇒ --writable 如实拒）。两模式都在最后硬对拍 rootDir===请求目录（假绿拦截）
  *   open-file <路径片段>       # 点文件树真实打开一个文件（等 Monaco 挂载）
  *   click <选择器>             # CDP 真实点击（元素中心 + elementFromPoint 自证）
  *   type [<选择器>] <文本>     # 选择器可省＝打到当前焦点元素（命令面板/搜索框先点开再 type）
@@ -49,6 +50,7 @@ import {
   cdpClick,
   cdpPage,
   debugHome,
+  dismissDevNoteMask,
   expandTreeUntilFile,
   findBrowser,
   freePort,
@@ -59,7 +61,7 @@ import {
   sleep,
   waitFor,
 } from './debug-lib.mjs';
-import { devTarget, recentOpenRowSel } from './smoke-lib.mjs';
+import { devTarget } from './smoke-lib.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const DEBUG_DIR = debugHome();
@@ -464,7 +466,7 @@ async function cmdShell(args, flags) {
   console.log('[ok] 真壳调试会话就绪：');
   console.log(`   会话       ：${session.sessionId}（mode=shell；会话目录 ${SESS_DIR}）`);
   console.log(`   页面       ：${session.url}（webview 内，浏览器打开无壳行为属正常）`);
-  console.log('   下一步     ：state · commands · eval · screenshot（窗口几何以截图+DOM 为准）· open-project（走最近项目行）');
+  console.log('   下一步     ：state · commands · eval · screenshot（窗口几何以截图+DOM 为准）· open-project <目录>（调试面 policy 应答目录对话框，只读）');
   console.log('   收工       ：Ctrl+C 或 node tools/debug-cli.mjs stop');
   console.log('');
   await new Promise(() => {});
@@ -619,25 +621,39 @@ async function cmdOpenProject(args, dir, flags) {
   if (!dir) die('open-project 需要目录参数', 2);
   const abs = path.resolve(dir);
   if (!fs.existsSync(abs)) die(`目录不存在：${abs}`, 2);
+  const samePath = (a, b) =>
+    process.platform === 'win32' ? String(a).toLowerCase() === String(b).toLowerCase() : String(a) === String(b);
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 15000, label: '__kojoDebug 装载' });
     // 0) 已开着同一个项目 ⇒ 幂等直过
     const cur = await cdp.evalJs('(__kojoDebug.state().project ?? {}).rootDir ?? null');
-    if (cur && path.resolve(String(cur)) === abs) {
+    if (cur && samePath(path.resolve(String(cur)), abs)) {
       console.log(`[ok] 项目已开着：${abs}`);
       return;
     }
-    // 1) 目录对话框的自动应答（真实点击后 UI 会走 choose_directory → 调试宿按 policy 应答）
-    //    真壳（mode=shell）没有调试宿：目录选择是**原生对话框**无法自动应答——改走最近项目行
+    // 1) 目录对话框的自动应答——两条腿同一个 policy 口径（2026-10-26 era-pair 批）：
+    //    web 模式 = 调试宿 POST /policy（既有）；真壳 = 调试面 dialogPolicy 一次性应答
+    //    custom-protocol fetch 腿（`packages/app/src/debug/dialog-policy.ts`）。
+    //    旧退化形态「点最近项目第一行」根本不读传入路径，是假绿之源（PITFALLS 230），已删——
+    //    路径落不了地就在后面的 rootDir 硬对拍上如实红，绝不猜。
     if (s.mode === 'shell') {
-      const hasRecent = await waitFor(cdp, `!!document.querySelector(${JSON.stringify(recentOpenRowSel)})`, {
-        timeoutMs: 15000,
-        label: '最近项目行（真壳模式）',
-      }).catch(() => false);
-      if (!hasRecent) {
-        die('真壳模式下 open-project 走「最近项目」行，但这台机器的壳 appData 里没有最近项目——先手工开过一次，或用 web 模式（serve）驱动', 2);
+      if (flags.includes('--writable')) {
+        die(
+          '真壳 open-project 只支持只读打开：调试面应答的对话框**不进 Rust 写域准入门**' +
+            '（铁律 6/7：准入门只认真实对话框交付）。要验写链路走 web 模式（serve，调试宿有自己的写域登记）' +
+            '或真人开一次对话框。',
+          2,
+        );
       }
-      await cdpClick(cdp, recentOpenRowSel);
+      const has = await cdp.evalJs('typeof (__kojoDebug.dialogPolicy && __kojoDebug.dialogPolicy.arm) === "function"');
+      if (!has) {
+        die('真壳调试面缺 dialogPolicy 面（壳里跑的是旧构建？stop 后重起 shell）——本命令不回退「最近项目行」猜路径（PITFALLS 230）', 2);
+      }
+      try {
+        await cdp.evalJs(`__kojoDebug.dialogPolicy.arm(${JSON.stringify(abs)})`);
+      } catch (err) {
+        die(`调试面装载对话框应答失败：${String(err?.message ?? err)}`, 1);
+      }
     } else {
       await fetch(`http://127.0.0.1:${s.serverPort}/policy`, {
         method: 'POST',
@@ -646,40 +662,70 @@ async function cmdOpenProject(args, dir, flags) {
         signal: AbortSignal.timeout(3000),
       });
     }
-    // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
-    //    （ghost=关闭并记「看过」，同一浏览器档案不会再弹）
-    if (await cdp.evalJs('!!document.querySelector(".dev-note-mask")')) {
-      await cdpClick(cdp, '.dev-note-actions .ghost');
-      await sleep(300);
-    }
-    // 3) 点「打开项目」卡（欢迎相位）——真壳模式已在第 1 步点了最近项目行，跳过
-    const phase = await cdp.evalJs('__kojoDebug.state().phase');
-    if (s.mode !== 'shell') {
+    // 应答装了却没被消费（中途失败/相位不对）不许留过期 policy——收尾一律 clear
+    let failure = null;
+    try {
+      // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
+      //    （ghost=关闭并记「看过」，同一浏览器档案不会再弹）。它是懒挂载的（Suspense fallback
+      //    本身就是一层 .modal-mask）——helper 等到落定为止，防「检查后 0.5s 弹上」吃掉后续点击。
+      if (!(await dismissDevNoteMask(cdp))) {
+        throw new Error('「开发者的碎碎念」纸条关不掉（ghost 点击未生效）——屏幕被遮罩盖住，如实红');
+      }
+      // 3) 点「打开项目」卡（欢迎相位）——两模式同路；真壳的对话框已由第 1 步的 policy 应答
+      const phase = await cdp.evalJs('__kojoDebug.state().phase');
       if (phase === 'welcome') {
         await waitFor(cdp, `!!document.querySelector('.welcome-open')`, { timeoutMs: 10000, label: '欢迎页打开按钮' });
+        for (let i = 0; i < 40; i++) {
+          const gate = await cdp.evalJs(`(() => {
+            const el = document.querySelector('.welcome-open');
+            const note = !!document.querySelector('.dev-note-mask');
+            if (!el) return { note, clickable: false };
+            const r = el.getBoundingClientRect();
+            const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+            return { note, clickable: !!hit && hit.closest('.welcome-open') !== null };
+          })()`);
+          if (gate?.note) {
+            await cdpClick(cdp, '.dev-note-actions .ghost');
+            await sleep(200);
+            continue;
+          }
+          if (gate?.clickable) break;
+          await sleep(200);
+        }
         await cdpClick(cdp, '.welcome-open');
       } else {
-        die(`当前相位是 ${phase}（已开着别的项目）——先 __kojoDebug.commands.run('workbench.closeProject') 或重启会话`, 2);
+        throw new Error(`当前相位是 ${phase}（已开着别的项目）——先关项目（工具栏「项目操作」→「关闭项目」，它不是命令面板命令）或 stop 后重启会话`);
+      }
+      // 4) 写权限审批弹窗（出现就按 flags 决定；不出现（只读根）就等树）
+      const modal = await waitFor(
+        cdp,
+        `(() => { const m = document.querySelector('.modal[aria-label="写权限确认"]'); return m ? 'yes' : (document.querySelector('.file-tree') ? 'tree' : ''); })()`,
+        { timeoutMs: 60000, intervalMs: 250, label: '写权限审批 / 文件树' },
+      );
+      if (modal === 'yes') {
+        // 弹窗里 primary = 批准可写；ghost = 只读浏览
+        await cdpClick(cdp, flags.includes('--writable') ? '.modal .primary' : '.modal .ghost');
+        console.log(flags.includes('--writable') ? '   写权限：已批准可写' : '   写权限：按只读浏览');
+      }
+      // 5) 等项目态落定：文件树在场 + project.rootDir 就位
+      await waitFor(cdp, `!!document.querySelector('.file-tree')`, { timeoutMs: 90000, label: '文件树' });
+      const st = await waitFor(cdp, `(__kojoDebug.state().project ?? {}).rootDir ?? ''`, { timeoutMs: 90000, label: 'project.rootDir' });
+      const state = await cdp.evalJs('__kojoDebug.state()');
+      // 防假绿硬对拍（PITFALLS 230 的病根）：落盘读到的 rootDir 必须逐字（win 忽略大小写）等于请求目录
+      if (!samePath(path.resolve(String(st)), abs)) {
+        throw new Error(`打开的目录与请求不一致（假绿拦截）：请求 ${abs}，实际 ${st}`);
+      }
+      console.log(`[ok] 项目已开：${st}`);
+      console.log(`   adapter=${state.project?.adapterId ?? '?'} · 标签=${state.tabs.count} · 通知=${state.notices.count}`);
+      for (const n of state.notices.items ?? []) console.log(`   notice: ${n}`);
+    } catch (err) {
+      failure = err;
+    } finally {
+      if (s.mode === 'shell') {
+        await cdp.evalJs('__kojoDebug.dialogPolicy && __kojoDebug.dialogPolicy.clear()').catch(() => {});
       }
     }
-    // 4) 写权限审批弹窗（出现就按 flags 决定；不出现（只读根）就等树）
-    const modal = await waitFor(
-      cdp,
-      `(() => { const m = document.querySelector('.modal[aria-label="写权限确认"]'); return m ? 'yes' : (document.querySelector('.file-tree') ? 'tree' : ''); })()`,
-      { timeoutMs: 60000, intervalMs: 250, label: '写权限审批 / 文件树' },
-    );
-    if (modal === 'yes') {
-      // 弹窗里 primary = 批准可写；ghost = 只读浏览
-      await cdpClick(cdp, flags.includes('--writable') ? '.modal .primary' : '.modal .ghost');
-      console.log(flags.includes('--writable') ? '   写权限：已批准可写' : '   写权限：按只读浏览');
-    }
-    // 5) 等项目态落定：文件树在场 + project.rootDir 就位
-    await waitFor(cdp, `!!document.querySelector('.file-tree')`, { timeoutMs: 90000, label: '文件树' });
-    const st = await waitFor(cdp, `(__kojoDebug.state().project ?? {}).rootDir ?? ''`, { timeoutMs: 90000, label: 'project.rootDir' });
-    const state = await cdp.evalJs('__kojoDebug.state()');
-    console.log(`[ok] 项目已开：${st}`);
-    console.log(`   adapter=${state.project?.adapterId ?? '?'} · 标签=${state.tabs.count} · 通知=${state.notices.count}`);
-    for (const n of state.notices.items ?? []) console.log(`   notice: ${n}`);
+    if (failure) throw failure;
   });
 }
 

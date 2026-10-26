@@ -315,6 +315,26 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     why: '读侧剥 BOM（`^\\uFEFF`）：真盘 174 份 `CSV/Chara/Chara{n} {名}.csv` 全部 UTF-8-BOM，剥掉才认首行 `番号`；不产出字节',
   },
   {
+    file: 'packages/plugins/eraav-adapter/src/chara-csv.ts',
+    count: 1,
+    why: '读侧剥 BOM（首码元 U+FEFF）：eraAV 真盘 120 份 `CSV/Chara` 里 **7 份没有 BOM**（Chara70–75、78），受管 `ERB/` 的 471 份 `.ERB/.ERH` 里也有 1 份无 BOM ⇒ 既剥掉才认首行 `番号`，也不许反过来假定「必有 BOM」；不产出字节',
+  },
+  {
+    file: 'packages/plugins/eratohoreverse-adapter/src/chara-csv.ts',
+    count: 1,
+    why: '读侧剥 BOM（首码元 U+FEFF）：eratohoReverse 真盘全树 1,083 份 `.ERB/.ERH/.CSV`（受管 `ERB/` 907 份）是 100% UTF-8-BOM（且 100% 纯 LF），剥掉才认首行 `番号`；不产出字节',
+  },
+  {
+    file: 'packages/plugins/eraav-adapter/src/conventions.ts',
+    count: 1,
+    why: '读侧剥 BOM（`^\\uFEFF`）：`[SKIPSTART]` 遮蔽段判据要先看正文原始行，而本盘 470/471 份带 BOM、其中 **33 份首行就是 `@` 定义**（PITFALLS 231）——不剥就整条定义看不见；不产出字节',
+  },
+  {
+    file: 'packages/plugins/eratohoreverse-adapter/src/conventions.ts',
+    count: 1,
+    why: '读侧剥 BOM（`^\\uFEFF`）：本盘 907/907 带 BOM 且 **39 份首行就是 `@` 定义**，`[SKIPSTART]` 遮蔽段的差集判据必须先剥 BOM 才数得到定义（PITFALLS 231）；不产出字节',
+  },
+  {
     file: 'packages/plugins/erafl-adapter/src/scaffold.ts',
     count: 2,
     why: '新角色脚手架两份产物（`KOJO_DEFINE_K{n}.ERB` + 口上 XML）各带一枚 BOM，与真盘既有文件同形',
@@ -400,12 +420,15 @@ function bomEmitSites(): Map<string, number> {
 }
 
 describe('② BOM 产出具：豁免表钉到文件 + 处数（多一处少一处都红）', () => {
+  // 这一条扫**整个仓库**的源码（`bomEmitSites()` 递归读盘），单跑 ~2.2 s；满载并行池里
+  // 被挤过默认 20 s 就报 `Test timed out in 20000ms`——看着像豁免表漂了，其实是没给 IO 预算。
+  // 按本仓既有口径给显式预算（`docs/PITFALLS.md` §81）：判据与豁免表一条没动。
   it('全仓扫描结果 == 豁免表（一个文件一处不差）', () => {
     const hits = bomEmitSites();
     const actual = [...hits.entries()].map(([file, count]) => `${file} × ${count}`).sort();
     const expected = BOM_EMIT_SITES.map((e) => `${e.file} × ${e.count}`).sort();
     expect(actual).toEqual(expected);
-  });
+  }, 120_000);
 
   it('豁免表每一条的「为什么」都写清楚了（杜绝"顺手加一行豁免"）', () => {
     for (const e of BOM_EMIT_SITES) expect(e.why.length, e.file).toBeGreaterThan(10);

@@ -64,8 +64,8 @@ node tools/debug-cli.mjs stop
 - **编辑链路**：`open-file` → `eval "__kojoDebug.editor.type('PRINTL x')"` → `eval "__kojoDebug.editor.markers()"`
   → 保存后 `eval "__kojoDebug.invoke('read_file_bytes_raw',{path:'…'})"` 与盘上内容对拍。
 - **外部改动 / 文件监视**：改沙盒内文件 → `events` 里应出现 `file.changed` 级联（调试宿 SSE → `kojo:fs-changed`）。
-- **对话框流**：目录选择 = `POST /policy {"chooseDir": …}` 自动应答（`open-project` 已内置）；`null` = 模拟取消。
-- **批量回归**：`node tools/debug-web-smoke.mjs`（9 断言端到端；失败自动留屏上文本 + 失败截图）。
+- **对话框流**：目录选择＝policy 自动应答、两条腿同一口径（web 模式＝`POST /policy {"chooseDir": …}`（`null`＝模拟取消）；真壳＝`__kojoDebug.dialogPolicy.arm(<目录>)` **一次性**、只答"打开＝读"）——`open-project` 两模式都已内置；`export_file`/`choose_file`/写域准入门**不应答**（对话框即授权不许绕）。
+- **批量回归**：`node tools/debug-web-smoke.mjs`（19 断言端到端；失败自动留屏上文本 + 失败截图）。
 
 ## 三、CLI 子命令总表
 
@@ -73,7 +73,7 @@ node tools/debug-cli.mjs stop
 |---|---|---|
 | `serve` | 拉起调试宿+vite+浏览器 | `--headless / --no-browser / --record`（console 落盘）/ `--fresh`（清沙盒）/ `--sandbox/--readonly/--port/--vite-port/--cdp-port/--browser`。**会话按仓库工作树自动隔离**（`<home>/sessions/<树哈希>/`，多 agent 并发互不可见；`KOJO_DEBUG_SESSION_NAME` 显式命名、`KOJO_DEBUG_SESSION` 直指会话文件） |
 | `status` / `stop` / `url` | 会话健康 / 收会话 / 打印编辑器 URL | 会话文件 `%TEMP%/kojo-debug/session.json`（`KOJO_DEBUG_SESSION` 可指别处） |
-| `open-project <dir> [--writable]` | 真实点击链路开项目 | 自动应答目录对话框；`--writable` 批准写权限，缺省只读浏览；已开同项目幂等直过 |
+| `open-project <dir> [--writable]` | 真实点击链路开项目 | 自动应答目录对话框（web=宿 policy／shell=调试面 dialogPolicy，见 §二对话框流）；`--writable` 批准写权限（**仅 web 模式**，真壳只读），缺省只读浏览；已开同项目幂等直过；结尾硬对拍 `rootDir===请求目录` 防假绿 |
 | `open-file <路径片段>` | 真实点击文件树开文件 | 角色分组→目录逐层展开；等 Monaco 挂载后回编辑器读数 |
 | `commands [过滤]` / `run <id>` | 列出 / 执行命令面板命令 | **所有功能只要登记了命令就有可编程入口** |
 | `state` / `dom` / `events [n]` | 一屏读数 / DOM 结构快照 / 事件旁听 | 全部 JSON，可断言 |
@@ -85,18 +85,31 @@ node tools/debug-cli.mjs stop
 | `profile <run [ms]> [--eval "<js>"]` | CPU 采样归因（函数级热点） | selfTime Top25；⚠ 绑 CDP 连接——start/stop 跨调用无效，用 run 一条龙；KOJO_PROFILE_OUT 落 .cpuprofile |
 
 页内 API（`?kojo-debug=1` 选入后）：`__kojoDebug.{mode, host, state(), kernel(), commands.{list,run},
-bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dom.snapshot,
+bus.{recent,on}, editor.{info,setValue,type,setCursor,markers}, invoke, dialogPolicy.{arm,armed,clear,status},
+dom.snapshot,
 perf.{start,stop,isRunning,lastReport,summary}}`。
 写动作（setValue/type）显式命名；`type` 走 executeEdits 进撤销栈＝「像真人一样改」；
 `perf.*` 见 §二 卡顿体检配方（关着零开销）。
 
 ## 四、调试宿（debug-server.mjs）速览
 
-- 协议：`POST /invoke` `{cmd,args}`→`{ok,value|error}`（二进制回 `{__b64}` 信封）；`GET /events` SSE
+- 协议：`POST /invoke` `{cmd,args}`→`{ok,value|error}`（二进制回 `{__b64}` 信封；带 `?binary=1`
+  时两个二进制命令直接回 `application/octet-stream` 原始帧/字节，错误仍回 JSON——页面侧按
+  content-type 自动回退，旧宿/旧页面可独立升级）；`GET /events` SSE
   （`kojo:fs-changed` / `kojo:fs-watch-error`，事件名与桌面壳 Tauri 事件**字面成对**）；`GET /health|/config`；`POST /policy`。
 - 准入：只绑 127.0.0.1；读域＝sandbox ∪ appData ∪ `--readonly` 根 ∪ 常驻工作区根；写域＝sandbox ∪ appData ∪
   常驻根 ∪ `register_write_domain` 登记根；域外一律显式报错。对话框＝policy 自动应答（**不开放任意目标路径参数**，
   与铁律 6 同向）；`export_file` 落 sandbox/exports 并回全路径。
+- **性能（2026-10-26 性能批）**：`search_text` 目录遍历并行但输出顺序确定；普通文本查询（非正则、
+  不含换行）在整串上 `indexOf`/全局正则一次扫完，只在命中处回推行号；≤8 MiB 文件整读、超限 fstat
+  秒拒；批内并发由 `KOJO_DEBUG_SEARCH_CONCURRENCY`（默认 8）封顶，内存上界≈并发×8 MiB。
+  目录/元数据并发为 `KOJO_DEBUG_WALK_CONCURRENCY`（默认 24）。`walk_dir` 并行 readdir/stat 但
+  输出序与串行实现逐项一致；批量读用 open+fstat+readFile 一趟句柄，二进制应答不再 base64 膨胀。
+  同机同语料对拍（`node tools/debug-host-bench.mjs`，2000×~30KB + 大文件，warm cache，2026-10-26，
+  优化前→优化后）：全扫检索 2.78s→0.66s（大小写不敏感 2.00s→0.53s、正则 1.85s→0.63s）、
+  `walk_dir` 带元数据 0.88s→0.39s、200 文件批读 131ms→81ms、24MB 批读 268ms→118ms、5MiB 单读
+  164ms→77ms；`stat_files` 2000 条基本持平（Windows 元数据 I/O 下限）。**口径**：同一行多处命中
+  全列出（与 Rust `scan_text` 的 `find_iter(line)` 对齐）；`maxResults` 截断落点仍按 readdir 序确定。
 
 ## 四b、真桌面壳模式（shell）——壳专属改动的验证通道
 
@@ -112,7 +125,9 @@ node tools/debug-cli.mjs stop
   同 identifier 的 0x8007139F）；`--no-debug-api` 保持 pristine boot——**验启动相位本身**用这个
   （默认的导航注入会重放开机流程）；冷 cargo 构建首次会久（预算 `KOJO_DEBUG_SHELL_BOOT_MS`，默认 300s）。
 - 边界：CDP 看不到 OS 窗口框——无边框 / 窗口几何的判据以**截图 + DOM**（窗口 chrome 模块的属性）为准；
-  目录选择是原生对话框无法自动应答，`open-project` 在 shell 模式走「最近项目」行（没有最近项目时如实报）。
+  目录选择是原生对话框、CDP 点不到它——`open-project` 在 shell 模式经调试面 `dialogPolicy` 应答 IPC 请求腿
+  （一次性、**只读**；写审批 `--writable` 如实拒——Rust 准入门只认真实对话框交付。裁决与残余口子见
+  `packages/app/src/debug/dialog-policy.ts` 头注 + PITFALLS 230）。
 - 与 smoke-tauri-dom 的分工：那是发版判据一次性冒烟；这是可驻留、可逐步驱动（eval/events/screenshot）的会话。
 
 ## 五、开发规范（扩展调试模式前必读）

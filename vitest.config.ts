@@ -35,6 +35,8 @@ export const config = defineConfig({
       '@kojo/plugin-erakoumakan-adapter': r('./packages/plugins/erakoumakan-adapter/src/index.ts'),
       '@kojo/plugin-erasqc-adapter': r('./packages/plugins/erasqc-adapter/src/index.ts'),
       '@kojo/plugin-eratohok-adapter': r('./packages/plugins/eratohok-adapter/src/index.ts'),
+      '@kojo/plugin-eraav-adapter': r('./packages/plugins/eraav-adapter/src/index.ts'),
+      '@kojo/plugin-eratohoreverse-adapter': r('./packages/plugins/eratohoreverse-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('./packages/plugins/convention-linter/src/index.ts'),
       '@kojo/plugin-condition-extractor': r('./packages/plugins/condition-extractor/src/index.ts'),
       '@kojo/plugin-sav-parser': r('./packages/plugins/sav-parser/src/index.ts'),

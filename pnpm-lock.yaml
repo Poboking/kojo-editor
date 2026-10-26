@@ -65,6 +65,9 @@ importers:
       '@kojo/plugin-eraakumamaid-adapter':
         specifier: workspace:*
         version: link:../plugins/eraakumamaid-adapter
+      '@kojo/plugin-eraav-adapter':
+        specifier: workspace:*
+        version: link:../plugins/eraav-adapter
       '@kojo/plugin-erafl-adapter':
         specifier: workspace:*
         version: link:../plugins/erafl-adapter
@@ -77,6 +80,9 @@ importers:
       '@kojo/plugin-eratohok-adapter':
         specifier: workspace:*
         version: link:../plugins/eratohok-adapter
+      '@kojo/plugin-eratohoreverse-adapter':
+        specifier: workspace:*
+        version: link:../plugins/eratohoreverse-adapter
       '@kojo/plugin-eratw-adapter':
         specifier: workspace:*
         version: link:../plugins/eratw-adapter
@@ -264,6 +270,12 @@ importers:
         specifier: workspace:*
         version: link:../../plugin-api
 
+  packages/plugins/eraav-adapter:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
   packages/plugins/erafl-adapter:
     dependencies:
       '@kojo/kojo-core':
@@ -305,6 +317,15 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../../kojo-core
+      '@kojo/kojo-project-kit':
+        specifier: workspace:*
+        version: link:../../kojo-project-kit
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/eratohoreverse-adapter:
+    dependencies:
       '@kojo/kojo-project-kit':
         specifier: workspace:*
         version: link:../../kojo-project-kit

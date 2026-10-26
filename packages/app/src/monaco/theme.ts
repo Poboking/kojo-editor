@@ -344,8 +344,17 @@ export const KOJO_DARK_COLORS: Readonly<Record<string, string>> = {
   'editorLineNumber.activeForeground': '#d7dce2',
   'editorLineNumber.dimmedForeground': '#4c545e',
   'editorCursor.foreground': '#6ea8ff',
-  'editor.lineHighlightBackground': '#24292f',
-  'editor.lineHighlightBorder': '#24292f',
+  // 当前行（C1，2026-10-26 阅读面批）：旧值 `#24292f` 压在 `#1e2227` 上只有 **1.091:1**，
+  // 等于没有（作者找不到"我现在在哪一行"）。三套主题统一改成**各自 `--bg-3` 那一档**
+  // ——外壳里"比面板再抬一层"用的同一枚台阶，不新造色、不引入色相：
+  //   dark  #1e2227 ← #2b3138  **1.218:1**
+  //   light #f6f8fa ← #dde3ea  **1.214:1**
+  //   mint  #0f1713 ← #1c2a23  **1.219:1**
+  // 三档都落在 1.18–1.25 之间，且正文压在新底上仍有 9.5–12.2:1（不是"这行被选中"的
+  // accent wash，只是一层薄抬升）。border 与 background 同色 ⇒ 不画描边（`current-line-exact`
+  // 那条 2px border 规则因 theme 定义了 border 色而生效，同色即不可见）。
+  'editor.lineHighlightBackground': '#2b3138',
+  'editor.lineHighlightBorder': '#2b3138',
   'editor.selectionBackground': '#4c8bf559',
   'editor.inactiveSelectionBackground': '#4c8bf529',
   'editor.selectionHighlightBackground': '#4c8bf53d',
@@ -440,8 +449,10 @@ export const KOJO_LIGHT_COLORS: Readonly<Record<string, string>> = {
   'editorLineNumber.activeForeground': '#1f2328',
   'editorLineNumber.dimmedForeground': '#afb8c1',
   'editorCursor.foreground': '#0550ae',
-  'editor.lineHighlightBackground': '#eaeef2',
-  'editor.lineHighlightBorder': '#eaeef2',
+  // 当前行（C1）：`#eaeef2` 只有 1.095:1 ⇒ 抬到浅档的 `--bg-3` `#dde3ea`（**1.214:1**）。
+  // 数字是同一条公式在**本套底色**上算的，不是抄 dark 那一格。
+  'editor.lineHighlightBackground': '#dde3ea',
+  'editor.lineHighlightBorder': '#dde3ea',
   'editor.selectionBackground': '#0a5cc248',
   'editor.inactiveSelectionBackground': '#0a5cc220',
   'editor.selectionHighlightBackground': '#0a5cc226',
@@ -535,8 +546,10 @@ export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
   'editorLineNumber.activeForeground': '#d9e9df',
   'editorLineNumber.dimmedForeground': '#3f574a',
   'editorCursor.foreground': '#45d9ab',
-  'editor.lineHighlightBackground': '#15201a',
-  'editor.lineHighlightBorder': '#15201a',
+  // 当前行（C1）：`#15201a` 只有 1.088:1 ⇒ 抬到墨绿档的 `--bg-3` `#1c2a23`（**1.219:1**）。
+  // 绿底上抬"同一族更亮一档"，不掺中性灰（灰块在绿底上像另一套主题的残留）。
+  'editor.lineHighlightBackground': '#1c2a23',
+  'editor.lineHighlightBorder': '#1c2a23',
   'editor.selectionBackground': '#35d0a052',
   'editor.inactiveSelectionBackground': '#35d0a024',
   'editor.selectionHighlightBackground': '#35d0a03d',

@@ -17,6 +17,28 @@
  * 字体族**不进 `editorOptionsForLineCount`**（`code-font.ts` 的不变式：降级集永不含字体键）：
  * 它只在 create 路径与偏好变更时 `updateOptions`，与 `CODE_FONT_BASELINE` 同一条轴。
  *
+ * ## 行高存的是**字号倍数**，不是 px（C2，2026-10-26 阅读面批）
+ *
+ * 改前缺省 `lineHeight: 0` = 交给 Monaco 自动算，实测 **19px**（Windows 的 GOLDEN 比
+ * 1.35 × 14px）——那是给拉丁字母排的疏密，中日文台词读起来"行行粘连"。现在缺省 1.5
+ * （14px ⇒ **21px**），并给三档：紧凑 1.35（= 老自动值 19px）/ 舒适 1.5（21px）/ 宽松 1.7（24px）。
+ *
+ * **为什么是倍数而不是固定 px**：Monaco 的 `lineHeight` 本来就吃两段语义
+ * （`fontInfo.js` 的 `BareFontInfo._create`：`0` ⇒ 按字号算；`0 < v < 8` ⇒ v × 字号；
+ * `v ≥ 8` ⇒ 绝对像素，`EditorFloatOption.clamp(0, 150)`）。存倍数的直接收益是**跟字号走**：
+ * 正文字号偏好 10–28px（`font-size-pref.ts`），固定 21px 在字号 24px 时只有 0.88 行——
+ * 字放大、行贴死，而偏好订阅回调**不会**因为改字号重发显示补丁（`use-editor-preferences`
+ * 的 `fontSizeUnsub` 只管字号与缩放两条轴），写死像素等于给"放大正文"埋一颗雷。
+ * 倍数由 Monaco 自己乘字号，改字号当场生效，零接线。
+ *
+ * **盘上三态并存**（`sanitizeLineHeight` 的合法域就是 Monaco 那一套）：
+ * - 老盘里的绝对像素（18/20/22/24/28，当年手选的）**原样保留**，渲染逐像素不变；
+ *   这批作者在设置页看到的三档全不亮，点一下任选一档即迁到倍数口径；
+ * - 老盘里的 `0`（旧缺省的"自动"）**一次性解释成 1.5**。判据：`write()` 每次落盘都会把
+ *   当时的行高镜像进这一格（改任意一项显示偏好都会写 `0`），所以盘上的 `0` 分不清
+ *   "从没选过"与"特意选了自动"——按"没选过"处理，让老作者也吃到 CJK 行距；
+ * - 界面上不再提供"自动"：它在 Windows 上就是 1.35×，与「紧凑」档逐像素等价，两格并一格。
+ *
  * ## `uiFontScale`（C-1b）：界面字号缩放——它**不是 Monaco 选项**
  *
  * 这一位管的是**外壳文字**（标签页、面板标题、树行、设置页），走 CSS 自定义属性
@@ -72,6 +94,27 @@ export type MinimapPref = 'follow' | 'on' | 'off';
 /** 界面字号缩放（%）：三档离散值，不做自由输入——自由值会让取整后相邻两档看起来一样 */
 export type UiFontScalePref = 100 | 110 | 125;
 
+/** 行高三档（值 = Monaco `lineHeight` 的字号倍数；14px 字号下的实际行高写在注释里） */
+export type LineHeightPresetId = 'compact' | 'comfortable' | 'loose';
+
+/**
+ * 行高三档（**设置页与缺省值的同一真源**，UI 不另抄一份数字）：
+ * 1.35 ⇒ 19px（Windows 上 Monaco 的自动值，即改造前的观感）/ 1.5 ⇒ 21px / 1.7 ⇒ 24px。
+ * 上界刻意不到 2.0：1.7 已是"宽"，再宽一行就散，读口上反而更容易串行。
+ */
+export const LINE_HEIGHT_PRESETS: readonly {
+  readonly id: LineHeightPresetId;
+  readonly value: number;
+  readonly label: string;
+}[] = [
+  { id: 'compact', value: 1.35, label: '紧凑' },
+  { id: 'comfortable', value: 1.5, label: '舒适' },
+  { id: 'loose', value: 1.7, label: '宽松' },
+];
+
+/** 缺省行高（= 「舒适」档）：CJK 正文的 1.5× */
+export const LINE_HEIGHT_DEFAULT = 1.5;
+
 /**
  * 缩略图「跟随」档要问的两条判据（都关于**此刻屏幕上那份文档**，与行数正交）：
  * - `preview`：挂的是 `.kojo` 预览投影（派生只读文本，通读的是原文不是它）；
@@ -83,7 +126,10 @@ export interface MinimapViewContext {
 }
 
 export interface EditorDisplayPrefs {
-  /** 行高（px；0 = 交给 Monaco 按字号算，即今天的行为） */
+  /**
+   * 行高：**字号倍数**（0 < v < 8）或绝对像素（8–150），语义与 Monaco 的 `lineHeight` 逐字一致。
+   * 缺省 {@link LINE_HEIGHT_DEFAULT} = 1.5（14px 字号 ⇒ 21px）。见文件头「行高存的是字号倍数」。
+   */
   readonly lineHeight: number;
   readonly renderWhitespace: RenderWhitespacePref;
   /** 缩略图三态（`on` 时仍受体量档约束；`follow` 还受 {@link MinimapViewContext} 约束） */
@@ -104,7 +150,7 @@ export interface EditorDisplayPrefs {
 }
 
 export const EDITOR_DISPLAY_PREF_DEFAULT: EditorDisplayPrefs = {
-  lineHeight: 0,
+  lineHeight: LINE_HEIGHT_DEFAULT,
   renderWhitespace: 'none',
   minimap: 'follow',
   lineNumbers: 'on',
@@ -190,12 +236,23 @@ function readEnum<T extends string>(raw: string | null | undefined, allowed: rea
   return raw !== undefined && raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
 }
 
-/** 行高合法域：0（自动）或 14–96 的整数；非法值回落 0，绝不把怪值喂进 Monaco */
+/**
+ * 行高清洗：合法域**就是 Monaco 自己那一套**（`fontInfo.js` 的 `BareFontInfo._create`
+ * + `EditorFloatOption.clamp(0, 150)`），落盘值原样是其中一态，读盘不做换算：
+ * - `0 < v < 8` ⇒ **字号倍数**（Monaco 的 em 语义；保留两位小数，1.0 是下限——再低行与行就压在一起）；
+ * - `8 ≤ v ≤ 150` ⇒ 绝对像素（取整）；
+ * - `0` ⇒ **迁到缺省 1.5**（不是"自动"，理由见文件头：盘上的 0 分不清没选过与选了自动，
+ *   而界面上已不提供自动档）。负数 / 非有限数 / 非数字串同样回落缺省。
+ *
+ * 数字串照收（localStorage 里存的就是串，同 `sanitizeUiFontScale` 的口径）；
+ * 脏值**回落缺省**而不是回落 0——0 会把上面那条迁移又走一遍，等于没清洗。
+ */
 export function sanitizeLineHeight(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
-  const n = Math.trunc(raw);
-  if (n === 0) return 0;
-  return Math.min(96, Math.max(14, n));
+  const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return LINE_HEIGHT_DEFAULT;
+  if (n === 0) return LINE_HEIGHT_DEFAULT;
+  if (n < 8) return Math.min(7.99, Math.max(1, Math.round(n * 100) / 100));
+  return Math.min(150, Math.round(n));
 }
 
 /**
@@ -344,7 +401,8 @@ export function loadEditorDisplayPrefs(): EditorDisplayPrefs {
   } else {
     try {
       fresh = sanitizePrefs({
-        lineHeight: Number(s.getItem(LINE_HEIGHT_KEY) ?? '0'),
+        // 没存过 ⇒ 新缺省（1.5）；存过 `0`（旧缺省的自动）⇒ 清洗层按"没选过"迁到 1.5
+        lineHeight: Number(s.getItem(LINE_HEIGHT_KEY) ?? String(LINE_HEIGHT_DEFAULT)),
         renderWhitespace: readEnum(
           s.getItem(RENDER_WHITESPACE_KEY),
           RENDER_WHITESPACE_VALUES,

@@ -1,0 +1,167 @@
+/* ============================================================================
+   壳层布局动效（1026-b 动效批 · ShellLayout 独占片）
+   ----------------------------------------------------------------------------
+   本片只做一件事：**布局尺寸与场次切换**的过渡（侧栏 / 底部区的收放、视图交叉淡入、
+   编辑器组入场、zen 换场）。其余动效（浮层退场、toast、标签脏点、状态栏）各有其主，
+   不在这里，也不许往这里加。
+
+   四条纪律：
+   ① **只吃 token**：时长一律 `--dur-1/2`，缓动一律 `--ease-out`；不新造毫秒字面量。
+      JS 侧那几个等待常数（`ShellLayout` 的 `SIDEBAR_MOTION_MS` 等）与这里的档位逐字对应，
+      改一处必须改两处。
+   ② **位次与特异性**：本片在 `main.tsx` 静态链尾部、比懒载的 `styles-project.css` 先到，
+      同特异性下会输给后到的那份（`transition` / `animation` 都是单一属性，后者整条替换）。
+      所以：能只声明"那边没有的属性"就只声明；必须和既有声明撞车时（.sidebar / .bottombar
+      的 `transition` 与那条拖放高亮规则撞），用**双类** `(0,2,0)` 提特异性并把它原有的
+      那半条原样抄回来——这是本仓既有写法（`.context-menu.context-menu`、
+      `.notification-center.notification-shell` 同款）。
+      几何一律不碰：`.sidebar` / `.bottombar` 的宽高由内联 style 驱动。
+   ③ **不吃布局的走 transform**：淡入位移一律 `translateY/translateX`，绝不用
+      margin/left 触发重排。宽高过渡只有侧栏与底部区两处——它们本来就是"编辑器区要让位"
+      的语义，绕不开重排，故放在最短的档上（见 ①）。
+   ④ **动效可关**：全域 `:root[data-motion='reduced']` 与 `prefers-reduced-motion` 的压平规则
+      （styles-project.css 7463 / 5511 那两条 `animation-duration: 0.01ms !important`）已经
+      覆盖本片所有 animation/transition；JS 侧的等待由 `motion-pref.motionIsReduced()` 同步
+      跳过，不留空窗。判据只有那一处真源（应用内开关与系统偏好两条独立生效），`ShellLayout`
+      里原来的 `motionIsFlat` 已降级为指向它的 deprecate 别名，不许再长出第二份实现。
+      （行号会随懒档增删漂移——按 `animation-duration: 0.01ms` 搜，别按数字找。）
+   ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   ① 侧栏开合（B1，--dur-1）
+   ----------------------------------------------------------------------------
+   宽度由 `<aside style={{width}}>` 内联驱动：命令/按钮触发的开合，渲染处把宽度从
+   `layout.sidebar.size` 改成 0，这一条 transition 负责插值；收起动画跑完由
+   `useLayoutPresence` 摘节点。
+   **拖拽把手那一路必须即时**：`data-resizing`（`startDrag` 在 pointerdown 挂、松手摘）
+   把过渡关掉，否则指针每移一像素，容器都从上一帧的过渡终值重新起播，读起来像橡皮筋。
+   Monaco 侧不用手动补 `layout()`：编辑器实例一直是 `automaticLayout: true`，
+   自带的 ResizeObserver 在动画每一帧与收尾都会重排（`use-monaco-instance.ts`）。
+   --------------------------------------------------------------------------- */
+.sidebar.sidebar {
+  /* 双类提特异性是**必须的**：`styles-project.css` 的
+     `.activitybar, .sidebar, .aux, .bottombar { transition: background-color … }` 在懒链里
+     后到，而 `transition` 是单一属性、后者整条替换前者——同特异性下这行会被它吃掉
+     （实测：`transition-property` 只剩 background-color，宽度 260→0 一帧到位）。
+     清单里那半条 `background-color` 是**原样抄回来的**（拖放高亮还在用它），
+     不是新增语义；改那条规则就得回来改这里。 */
+  transition:
+    width var(--dur-1) var(--ease-out),
+    background-color var(--dur-2) var(--ease-out);
+}
+.sidebar.sidebar[data-resizing] {
+  transition: none;
+}
+/* 收起动画期间不接指针：这块面正在变窄，点它只会误触面板里的行 */
+.sidebar.mtn-closing {
+  pointer-events: none;
+}
+/* 重新挂载的入场（收起动画已跑完、节点已摘，再打开时 transition 没有起点可插值）：
+   关键帧只写 `from`，终值是元素自己的内联宽度——不给死数字，拖过多宽的侧栏都能长回来。 */
+@keyframes mtn-sidebar-in {
+  from {
+    width: 0;
+  }
+}
+.sidebar.mtn-enter {
+  animation: mtn-sidebar-in var(--dur-1) var(--ease-out);
+}
+
+/* ----------------------------------------------------------------------------
+   ② 底部区开合（B3，--dur-2）
+   ----------------------------------------------------------------------------
+   与侧栏同一套机制、只换轴与档位：高度跨 200px，120ms 会读成"被切掉"；
+   200ms 是这一批的上限（超过 260ms 就必须有理由）。
+   --------------------------------------------------------------------------- */
+.bottombar.bottombar {
+  /* 同 `.sidebar.sidebar`：压过懒链那条 `transition: background-color`（后者会整条替换） */
+  transition:
+    height var(--dur-2) var(--ease-out),
+    background-color var(--dur-2) var(--ease-out);
+}
+.bottombar.bottombar[data-resizing] {
+  transition: none;
+}
+.bottombar.mtn-closing {
+  pointer-events: none;
+}
+@keyframes mtn-bottombar-in {
+  from {
+    height: 0;
+  }
+}
+.bottombar.mtn-enter {
+  animation: mtn-bottombar-in var(--dur-2) var(--ease-out);
+}
+
+/* ----------------------------------------------------------------------------
+   ③ 侧栏视图交叉淡入（B2，--dur-1）
+   ----------------------------------------------------------------------------
+   点活动栏换视图（文件树 ↔ 搜索 ↔ 分支…）时，内容 120ms 淡入 + 4px 上移。
+   触发方式是 `ShellLayout` 给 `.sidebar-views` 挂 `key={activeView.key}`：换视图 = 换节点
+   ⇒ 挂在节点上的入场动画自然重播；同视图内换面板不动 key，不会跟着抖。
+   上移只有 4px：这是"视线跟着换了一屏"的提示，不是幻灯片。
+   --------------------------------------------------------------------------- */
+@keyframes mtn-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.sidebar-views {
+  animation: mtn-view-in var(--dur-1) var(--ease-out);
+}
+
+/* ----------------------------------------------------------------------------
+   ④ 分屏新组入场（B4，--dur-2）
+   ----------------------------------------------------------------------------
+   `.editor-group` 由 `ProjectView` 渲染（本批不改那个文件）：新组出现时按"挂载即播"的
+   关键帧入场。方向只按**容器轴**走：row 从右切进、column 从下切进（竖排的组横着滑
+   是错的，故另立一条 Y 轴关键帧）；位移只走 transform（不吃布局、也不惊动 Monaco 的
+   ResizeObserver——组宽在挂载那一刻已经定好），10px 的量刚好让人看见"这块是刚开出来
+   的"，多了就像抽屉。
+
+   ⚠ **方向不许按 `:first-child` 分左右**（初版踩过，收口批撤掉）：`animation-name`
+   一变必从 0 重播（CSS Animations：名字集合变化 = 撤旧建新）。开组是安全的——
+   `splitActiveRight` / `splitActiveDown` 都插在焦点组**之后**（editor-groups.ts:187），
+   幸存组的 `:first-child` 资格不会因开组而变；但**关掉最左/最上的组**会让幸存组顶替
+   成 `:first-child`，`-left` ↔ `-right` 翻转的那一下 = 幸存编辑器当着重写的面重播一次
+   200ms 入场。方向这点甜头抵不过"关组闪一下"，同一形态内一律同名。
+   --------------------------------------------------------------------------- */
+@keyframes mtn-group-in-x {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+@keyframes mtn-group-in-y {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.editor-group {
+  animation: mtn-group-in-x var(--dur-2) var(--ease-out);
+}
+.editor-groups[data-orientation='column'] .editor-group {
+  animation-name: mtn-group-in-y;
+}
+
+/* ----------------------------------------------------------------------------
+   ⑤ zen 换场（B5，--dur-2）
+   ----------------------------------------------------------------------------
+   进/出 zen 是**换整棵树**：`.shell zen` 与 `.shell` 是同一位置上的两种元素，React 直接
+   卸载重建（活动栏 / 侧栏 / 底部区连同 Monaco 一起换），跨不过这次重建——逐元素的
+   180ms 收放做不到，退而求其次做"接得住"：新挂上的那层壳 200ms 淡入，整屏元素不至于
+   啪地换掉。
+   类由 `ShellLayout` 的 `shellEnter` 在 `useLayoutEffect` 里落（首帧即带，不闪一帧全亮）。
+   只淡 opacity：不碰尺寸 ⇒ 这次换场里 Monaco 已经在重建，绝不能再叠一次重排。
+   --------------------------------------------------------------------------- */
+@keyframes mtn-shell-in {
+  from {
+    opacity: 0;
+  }
+}
+.shell.mtn-shell-in {
+  animation: mtn-shell-in var(--dur-2) var(--ease-out);
+}
