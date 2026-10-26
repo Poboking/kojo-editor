@@ -20,10 +20,11 @@
       margin/left 触发重排。宽高过渡只有侧栏与底部区两处——它们本来就是"编辑器区要让位"
       的语义，绕不开重排，故放在最短的档上（见 ①）。
    ④ **动效可关**：全域 `:root[data-motion='reduced']` 与 `prefers-reduced-motion` 的压平规则
-      （styles-project.css 7365 / 5412 那两条）已经覆盖本片所有 animation/transition；
-      JS 侧的等待由 `motion-pref.motionIsReduced()` 同步跳过，不留空窗。判据只有那一处真源
-      （应用内开关与系统偏好两条独立生效），`ShellLayout` 里原来的 `motionIsFlat` 已降级为
-      指向它的 deprecate 别名，不许再长出第二份实现。
+      （styles-project.css 7463 / 5511 那两条 `animation-duration: 0.01ms !important`）已经
+      覆盖本片所有 animation/transition；JS 侧的等待由 `motion-pref.motionIsReduced()` 同步
+      跳过，不留空窗。判据只有那一处真源（应用内开关与系统偏好两条独立生效），`ShellLayout`
+      里原来的 `motionIsFlat` 已降级为指向它的 deprecate 别名，不许再长出第二份实现。
+      （行号会随懒档增删漂移——按 `animation-duration: 0.01ms` 搜，别按数字找。）
    ============================================================================ */
 
 /* ----------------------------------------------------------------------------
@@ -115,29 +116,35 @@
    ④ 分屏新组入场（B4，--dur-2）
    ----------------------------------------------------------------------------
    `.editor-group` 由 `ProjectView` 渲染（本批不改那个文件）：新组出现时按"挂载即播"的
-   关键帧入场，节点在左半 = 从左切进、在右半 = 从右切进（`:first-child` 判方向）。
-   位移只走 transform（不吃布局、也不惊动 Monaco 的 ResizeObserver——组宽在挂载那一刻
-   已经定好），10px 的量刚好让人看见"这块是刚开出来的"，多了就像抽屉。
-   注意：左侧新开一组时，原组会变成第 2 个 child 但**不会重播**——动画属性没变，
-   只有新挂载的节点才会跑关键帧。
+   关键帧入场。方向只按**容器轴**走：row 从右切进、column 从下切进（竖排的组横着滑
+   是错的，故另立一条 Y 轴关键帧）；位移只走 transform（不吃布局、也不惊动 Monaco 的
+   ResizeObserver——组宽在挂载那一刻已经定好），10px 的量刚好让人看见"这块是刚开出来
+   的"，多了就像抽屉。
+
+   ⚠ **方向不许按 `:first-child` 分左右**（初版踩过，收口批撤掉）：`animation-name`
+   一变必从 0 重播（CSS Animations：名字集合变化 = 撤旧建新）。开组是安全的——
+   `splitActiveRight` / `splitActiveDown` 都插在焦点组**之后**（editor-groups.ts:187），
+   幸存组的 `:first-child` 资格不会因开组而变；但**关掉最左/最上的组**会让幸存组顶替
+   成 `:first-child`，`-left` ↔ `-right` 翻转的那一下 = 幸存编辑器当着重写的面重播一次
+   200ms 入场。方向这点甜头抵不过"关组闪一下"，同一形态内一律同名。
    --------------------------------------------------------------------------- */
-@keyframes mtn-group-in-left {
-  from {
-    opacity: 0;
-    transform: translateX(-10px);
-  }
-}
-@keyframes mtn-group-in-right {
+@keyframes mtn-group-in-x {
   from {
     opacity: 0;
     transform: translateX(10px);
   }
 }
-.editor-group {
-  animation: mtn-group-in-right var(--dur-2) var(--ease-out);
+@keyframes mtn-group-in-y {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 }
-.editor-group:first-child {
-  animation-name: mtn-group-in-left;
+.editor-group {
+  animation: mtn-group-in-x var(--dur-2) var(--ease-out);
+}
+.editor-groups[data-orientation='column'] .editor-group {
+  animation-name: mtn-group-in-y;
 }
 
 /* ----------------------------------------------------------------------------

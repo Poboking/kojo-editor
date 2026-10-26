@@ -138,12 +138,16 @@ html:root .tree-loading::before {
 
 /* --------------------------- A6 · 常驻动画的合成层 --------------------------- */
 
-/* 只点这四件的名：它们**真有**不会停的动画（spinner 转圈 / 欢迎页极光 / 骨架扫光 /
+/* 只点这几件的名：它们**真有**不会停的动画（spinner 转圈 / 欢迎页极光 / 骨架扫光 /
    引导条扫动）。静止元素挂 will-change 是反优化——每枚都换来一个独立合成层，白吃显存。
-   四处动的都只是 transform，故只声明 transform：多写一条 opacity 等于让浏览器预先
+   极光有两处宿主、都要点：非弹窗态（量高 / 未来窗口中置）画在页面层 `.welcome::before`，
+   弹窗态（常态）画在卡片层 `.welcome-card::before`——welcome.css 那边两条规则各管一边，
+   这里也得各点一名，漏了哪边哪边就掉回主线程逐帧画 blur(30px)。
+   五处动的都只是 transform，故只声明 transform：多写一条 opacity 等于让浏览器预先
    栅格化一张透明度层，而这里没有一处会动它。 */
 .spinner,
 .welcome::before,
+.app-frame-popup .welcome-screen .welcome-card::before,
 .skeleton::after,
 .boot-bar::after {
   will-change: transform;

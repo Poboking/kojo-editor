@@ -105,9 +105,14 @@
   animation: welcome-breathe var(--welcome-breathe-dur) var(--ease-in-out) infinite;
 }
 
-/* 弹窗态下页面层被卡片整面盖住：留着不动只是白烧一层合成动画，停掉（画面不变） */
+/* 弹窗态下页面层整枚不画。初版只写了 `animation: none`，收口批改成 `content: none`，
+   两个理由都不是审美：
+   ① 卡片背景是 **0.85 透明度**（styles.css 的玻璃底），"被卡片整面盖住"是想当然——
+      页面层那道光会透出 15%，两层同配方叠加 ⇒ 实际浓度比设计稿高一截；
+   ② A6 给极光挂了 `will-change: transform`，这枚 inset -18% + blur(30px) 的层会一直
+      占着一块合成层。`content: none` 让伪元素根本不生成，层、绘制、显存一起省。 */
 .app-frame-popup .welcome-screen::before {
-  animation: none;
+  content: none;
 }
 
 /* 呼吸：位移与明暗同相（一起慢、一起亮），避免两个不同周期的动画互相咬出"顿挫" */

@@ -92,11 +92,16 @@
  * 选择器前缀 `html *` 只为把特异性抬到 (0,0,1)：`styles.css` / `styles-project.css` 里那条
  * 裸 `::-webkit-scrollbar-thumb` 是 (0,0,0)，而重档那份要等项目视图才懒加载到达，
  * 位次靠不住 —— 只靠"后到者胜"会在进出项目时闪一次。
+ *
+ * ⚠ **这里故意没有 `transition`**（收口批探针实验定案）：给一枚真溢出的探针元素挂
+ * `transition: opacity 1s` 再切拇指透明度，`getAnimations({subtree:true})` 回报**空数组**、
+ * 透明度当帧跳到终值 —— Chromium 不给 `::-webkit-scrollbar-*` 伪元素跑过渡，写上去只是
+ * 一条永远不会执行的死声明。显隐因此是"切变"不是"淡入淡出"：0.55↔1 的幅度小、又在指针
+ * 已经进场的时刻发生，读起来不突兀；真想要淡入淡出只能换自绘滚动条，不值得。
  * ========================================================================================== */
 
 html *::-webkit-scrollbar-thumb {
   opacity: 0.55;
-  transition: opacity var(--dur-2) var(--ease-out);
 }
 
 html *:hover::-webkit-scrollbar-thumb {
