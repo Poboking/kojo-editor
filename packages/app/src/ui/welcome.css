@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
    欢迎页（批次十一 · 视觉 L04「两态重构」）—— 居中单卡，本仓 token 落地。
 
    为什么不再有标签（用户反馈 2 + 第九批澄清）：VSCode 的欢迎页是"进入工作区后的
@@ -1335,26 +1335,36 @@
 }
 
 /* ============================================================================
-   Synthwave '84 · 霓虹底板（2026-10-27 用户反馈批）
+   Synthwave '84 · 霓虹底板
 
-   两条诉求其实是一件事的两半：① 这一档的欢迎页「有点刺眼」；② 要有 Synthwave 那股
-   美术风格，但**编辑界面一格不许动**。于是把刺眼的那层（满宽亮粉 CTA）压下去，
-   把身份感挪到背景上——背景不参与阅读，天然不干扰编辑。
+   第一版（2026-10-27 上午）是"紫灰底 + 一枚小粉团 + 一张透视网格"，被用户拿参考图
+   一句话打回："太挫了"。第二版照参考图重画，补齐四件套：品红天幕 / **条纹落日** /
+   **城市剪影** / **灯海**，并把色相全部拉满——这才有 Synthwave 的骨相。
+
+   另一条诉求从头到尾没变：**编辑界面一格不许动**。
 
    ## 隔离靠选择器，不靠开关
 
-   本段每一条都挂在 `.welcome-screen` 或它内部的卡片上，而项目态**根本不渲染
+   本段每一条都挂在 `.welcome-screen` / `.welcome-neon` 上，而项目态**根本不渲染
    `WelcomeView`**（只有 `App` 的无项目分支挂 `WelcomeOverlayHost`）⇒ 编辑器五区
    拿不到这里任何一个像素。这不是"约定"，是组件树结构：欢迎页与编辑器态互斥渲染。
+
+   ## 为什么多了 `.welcome-neon` 这一枚节点
+
+   落日要自己的 `mask`（横向切口），城市要自己的 `clip-path`（天际线），灯海要自己的
+   底边渐隐——三样都得**只裁自己**。同一个元素上的背景层做不到这一点，一枚伪元素也
+   只有两格。所以装饰单独成层，层内再用两个伪元素 + 一个 `span` 分工：
+   `.welcome-neon` 天幕 / `::before` 落日 / `::after` 城市 / `.welcome-neon-sea` 灯海。
+   节点在其余五档是 `display:none`：不建层、不绘制。
 
    ## 沿用 data-welcome-bg 的三档语义，不新增档位
 
    `WELCOME_BG_IDS` 被 `welcome-bg-pref.test.ts` 逐字钉着三条，加档要动那份契约；
    而"素雅 / 极光 / 纯色"本来就够表达这三件事，只是本档把它们翻译成霓虹语汇：
 
-   - `quiet`（缺省）= **静置**：天空 / 落日 / 网格一次画完，零动画；
-   - `aurora`        = **流动**：网格朝观察者滚、天幕极缓呼吸（本档把"极光"读作"有生命"）；
-   - `plain`         = **一刀切**：伪元素根本不生成，层 / 绘制 / 显存一起省。
+   - `quiet`（缺省）= **静置**：天幕 / 落日 / 城市 / 灯海一次画完，零动画；
+   - `aurora`        = **流动**：落日极缓胀缩、天幕呼吸（本档把"极光"读作"有生命"）；
+   - `plain`         = **一刀切**：整枚装饰层 `display:none`，层 / 绘制 / 显存一起省。
 
    缺属性时（首帧 `applyWelcomeBgPref` 还没跑到）按 `quiet` 画：`:not([data-welcome-bg='plain'])`
    比逐档列举更宽，且永远不会把 `plain` 误判成"要画"。
@@ -1367,62 +1377,58 @@
    ============================================================================ */
 
 /* 本档的几何量（无颜色，不进账本）：
-   - 落日直径吃视口高，窗口一矮就缩，不会在小窗里长成一整块彩；
-   - 网格**列距与行距分开**：竖线 64px、横线 36px。透视会把行距沿 Y 方向再压一次
-     （`rotateX` 的 cos + 透视因子），同值时横线只剩三四条，读起来像"稀疏格子"而不是地面；
-   - 动画位移必须 = 行距（36px），走完一个周期正好回到原位——见 `welcome-neon-roll`。 */
+   - `--neon-horizon` 是全图唯一的基准线：天际线基座、落日圆心、灯海上沿，三处共用这一个数。
+     改它整幅画一起上下，不会出现"太阳沉进楼里"或"灯海浮在半空"；
+   - 落日半径吃视口高（`24vh`，夹在 120–232px）：参考图那颗占画面 46% 宽的巨日搬进 800px
+     高的卡片会整块压住正文，这里按"远处的地平线"取景，体量靠两圈光晕补。 */
 :root[data-theme='synthwave84'] .welcome-screen {
-  --neon-sun-size: clamp(220px, 30vh, 340px);
-  --neon-grid-col: 64px;
-  --neon-grid-row: 36px;
+  --neon-horizon: 86%;
+  --neon-sun-r: clamp(120px, 24vh, 232px);
 }
 
-/* ---- 第 1 层：天幕 + 落日 + 星点 + 扫描线（一次画完的十层背景，无 DOM、无图片）----
-   层序（上→下）= 扫描线 → 地面 → 星点 ×2 → 落日圆盘 → 落日辉光 → 地平线实线 →
-   地平线窄光晕 → 天空光柱 → 天幕。
+/* 默认不画：这一枚节点在任何主题下都渲染（React 读不到主题），靠这条关掉。
+   `display:none` ⇒ 不建层、不绘制、不占合成，其余五档一个像素都不多花。 */
+.welcome-neon {
+  display: none;
+}
 
-   「地面」那层在 72% 处硬切，它盖住落日的下半 ⇒ 落日"沉进地平线"这件事不需要遮罩；
-   「落日辉光」排在圆盘之后（更下层），中心被圆盘挡住，只露出外圈 ⇒ 一个天然的光环；
-   「地平线实线」画在落日之上，是地平线那道"岸"；
-   「天空光柱」是一枚竖椭圆，从地平线向上晕开 40% 高——第一版只有一层压扁的横向
-   光晕，天空因此是一块死紫，上半部（占卡片六成面积）读不出任何 Synthwave 语言。
+/* ---- 第 1 层：天幕（深紫黑 → 品红）+ 星点 ×2 + 两圈光 + 扫描线 ----
+   这一层只是"背景板"；落日 / 城市 / 灯海各自住在自己的节点里（下面三层），
+   因为它们都需要**自己的** mask 或 clip-path（横向切口、天际线、灯海渐隐）——
+   同一个元素上的背景层没法只裁其中一层。
 
-   第二条选择器是给 `aurora` 用的：极光配方那条特异性 (0,4,0)，只有同分且后到才压得住。 */
-:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-card::before,
-:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-card::before {
-  content: '';
+   层序（上→下）= 扫描线 → 星点 ×2 → 落日外光 → 地平线窄光 → 天幕渐变。
+   天幕的亮度是**按正文位置定过**的：62% 之前最亮只到 `--neon-sky-low`，更亮的两档
+   全部压在 74% 之后，那里只有楼群、没有一行字（算据见 `themes/synthwave84.css`）。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-neon {
+  display: block;
   position: absolute;
   inset: 0;
   z-index: -1;
   pointer-events: none;
   border-radius: inherit;
+  overflow: hidden;
   background-color: var(--neon-sky-top);
   background-image:
     repeating-linear-gradient(180deg, var(--neon-scan) 0 1px, transparent 1px 4px),
-    linear-gradient(180deg, transparent 0 71.8%, var(--neon-ground-near) 72%, var(--neon-ground-far) 100%),
-    radial-gradient(var(--neon-star) 1px, transparent 1.4px),
-    radial-gradient(var(--neon-star) 1px, transparent 1.4px),
-    radial-gradient(
-      circle closest-side at 50% 50%,
-      var(--neon-sun-core) 0%,
-      var(--neon-sun-mid) 40%,
-      var(--neon-sun-edge) 58%,
-      var(--neon-sun-edge) 60%,
-      transparent 63%
-    ),
-    radial-gradient(circle closest-side at 50% 50%, var(--neon-sun-halo) 0%, transparent 100%),
-    linear-gradient(180deg, transparent calc(72% - 1px), var(--neon-horizon-line) 72%, transparent calc(72% + 1.5px)),
-    radial-gradient(78% 9% at 50% 72%, var(--neon-horizon-glow), transparent 70%),
-    radial-gradient(46% 40% at 50% 72%, var(--neon-sky-glow), transparent 74%),
-    linear-gradient(180deg, var(--neon-sky-top) 0%, var(--neon-sky-mid) 44%, var(--neon-sky-horizon) 72%);
+    radial-gradient(var(--neon-star) 1px, transparent 1.7px),
+    radial-gradient(var(--neon-star) 1px, transparent 1.7px),
+    radial-gradient(ellipse 26% 22% at 50% var(--neon-horizon), var(--neon-sun-halo), transparent 72%),
+    radial-gradient(ellipse 62% 7% at 50% var(--neon-horizon), var(--neon-horizon-glow), transparent 76%),
+    radial-gradient(ellipse 54% 30% at 50% var(--neon-horizon), var(--neon-sky-bloom), transparent 80%),
+    linear-gradient(
+      180deg,
+      var(--neon-sky-top) 0%,
+      var(--neon-sky-mid) 32%,
+      var(--neon-sky-low) 60%,
+      var(--neon-sky-low) var(--neon-horizon),
+      var(--neon-ground) 100%
+    );
   background-size:
     auto,
     auto,
-    170px 130px,
-    260px 210px,
-    var(--neon-sun-size) var(--neon-sun-size),
-    calc(var(--neon-sun-size) * 1.9) calc(var(--neon-sun-size) * 1.9),
-    auto,
+    150px 118px,
+    247px 193px,
     auto,
     auto,
     auto;
@@ -1430,70 +1436,208 @@
     0 0,
     0 0,
     0 0,
-    86px 64px,
-    50% 70%,
-    50% 70%,
-    0 0,
+    79px 47px,
     50% 50%,
     50% 50%,
     0 0;
-  background-repeat: no-repeat, no-repeat, repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
-  /* 覆盖素雅档的点阵配方：那枚 mask 会把七层一起裁成"四边淡出"，不是这幅画要的边界 */
-  -webkit-mask-image: none;
-  mask-image: none;
-  /* 覆盖极光档的 blur 与漂移：本档的"动"只发生在网格那一层，天幕是静的 */
-  filter: none;
-  animation: none;
+  background-repeat: repeat, repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat;
 }
 
-/* ---- 第 2 层：透视网格 ----
-   一张等距网格，用 `perspective + rotateX` 让它"躺下去"——竖线自然收敛到消失点、
-   横线自然越远越密，不需要手算任何多边形。
+/* ---- 第 2 层：条纹落日 ----
+   一颗正圆，圆心钉在 `--neon-horizon` 上：半个身子落在地平线以下，被楼群和灯海盖住，
+   露出来的正好是参考图那道"切在楼顶上的半轮"。
 
-   **铰链必须钉在顶边**（`transform-origin: 50% 0`）：顶边就是地平线，网格从那里
-   向观察者铺开，消失点自然落在顶边中点。第一版用了底边铰链 + `perspective(340px)`，
-   算下来 371px 高的元素被压成 89px 的一条细带（实机截图取证：整片网格几乎不可见）——
-   底边铰链把"近大远小"倒过来了，越远越被挤没。顶边铰链 + `700px` 透视则让
-   236px 的元素铺成 ~183px 的可视高度，正好吃满地平线以下。
-   溢出卡片的部分由卡片自己的 `overflow: hidden` 裁（本档才加，见下）。 */
-:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-card::after {
+   横向切口走 `mask-image`，这是"条纹落日"唯一老实的做法——切口必须**透出天幕**，
+   任何"叠一层天幕色的横条"的近似都会在渐变上露馅。代价是 mask 作用于整枚元素，
+   所以辉光不能挂 `box-shadow`（会被一起切成条），它单独活在第 1 层的 `--neon-sun-halo` 里。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-neon::before {
   content: '';
   position: absolute;
-  left: -12%;
-  right: -12%;
-  top: 72%;
-  height: 42%;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    repeating-linear-gradient(90deg, var(--neon-grid-x) 0 1px, transparent 1px var(--neon-grid-col)),
-    repeating-linear-gradient(180deg, var(--neon-grid-y) 0 1px, transparent 1px var(--neon-grid-row));
-  transform: perspective(700px) rotateX(56deg);
-  transform-origin: 50% 0;
-  /* 远端（顶边 = 地平线）淡入：网格不许在地平线上凭空断成一条硬边，
-     但也不能淡太久——第一版在 86% 就收干，整片网格被自己抹掉了。
-     10% 是实机调出来的：再短就会在地平线处露出一道"空地面"。 */
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 10%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 10%);
+  left: 50%;
+  top: var(--neon-horizon);
+  width: calc(var(--neon-sun-r) * 2);
+  height: calc(var(--neon-sun-r) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background-image: linear-gradient(
+    180deg,
+    var(--neon-sun-top) 0%,
+    var(--neon-sun-upper) 12%,
+    var(--neon-sun-mid) 30%,
+    var(--neon-sun-low) 46%,
+    var(--neon-sun-edge) 58%
+  );
+  /* 七道切口，越往下越宽（3.6% → 5%）：近处的条纹被透视拉高，是这个道理的反向用法 */
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    #000 0 8%,
+    transparent 8% 11.6%,
+    #000 11.6% 22%,
+    transparent 22% 25.8%,
+    #000 25.8% 36%,
+    transparent 36% 40%,
+    #000 40% 50%,
+    transparent 50% 54.2%,
+    #000 54.2% 63%,
+    transparent 63% 67.4%,
+    #000 67.4% 75%,
+    transparent 75% 79.6%,
+    #000 79.6% 87%,
+    transparent 87% 92%,
+    #000 92% 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    #000 0 8%,
+    transparent 8% 11.6%,
+    #000 11.6% 22%,
+    transparent 22% 25.8%,
+    #000 25.8% 36%,
+    transparent 36% 40%,
+    #000 40% 50%,
+    transparent 50% 54.2%,
+    #000 54.2% 63%,
+    transparent 63% 67.4%,
+    #000 67.4% 75%,
+    transparent 75% 79.6%,
+    #000 79.6% 87%,
+    transparent 87% 92%,
+    #000 92% 100%
+  );
 }
 
-/* 网格要溢出卡片（左右 -12%）才画得出"视野外还在延伸"，裁在圆角上顺带把圆角外的
-   装饰一起收干净。只在这一档加：其他档没有溢出层，多一层裁切只会白付一次合成。 */
+/* ---- 第 3 层：城市剪影 ----
+   一座确定性的城：低矮街区在 78.6–84.8 之间参差，正中一段平缓（84% 上下）留出豁口，
+   落日正好从豁口里升起来；尖塔只长在两侧（58–62%）。形状走 `clip-path` 多边形而不是
+   堆几十个 div —— 一次绘制、零节点；
+   窗灯是同一枚元素上的 Tiling 背景层，天然被 `clip-path` 裁在楼体之内（这就是为什么
+   它不能画在第 1 层的背景里：那层的裁剪会对整幅天幕生效）。
+   坐标是"确定性种子"生成的（`tools` 之外的临时脚本，见批次回执），改形状就重跑一次，
+   不要手调——手调一定会在某处出现一段 0.3% 宽的毛刺。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-neon::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: var(--neon-city);
+  background-image:
+    /* 地平线以下压成纯暗地面：窗灯不许长到楼脚。第一版窗户一直铺到卡片底，
+       整座城读成一堵"电视雪花墙"（实机截图取证）——真实夜景是暗体量 + 稀疏亮点。 */
+    linear-gradient(180deg, transparent 0 var(--neon-horizon), var(--neon-city) var(--neon-horizon)),
+    radial-gradient(ellipse 46% 12% at 50% var(--neon-horizon), var(--neon-city-glow), transparent 72%),
+    radial-gradient(var(--neon-window) 1px, transparent 1.7px),
+    radial-gradient(var(--neon-window-warm) 1px, transparent 1.7px);
+  background-size: auto, auto, 8px 12px, 15px 19px;
+  background-position: 0 0, 50% 50%, 0 0, 5px 7px;
+  background-repeat: no-repeat, no-repeat, repeat, repeat;
+  clip-path: polygon(
+    0% 86%, 0% 83.02%, 1.22% 83.02%, 1.22% 80.01%,
+    2.15% 80.01%, 2.15% 81.92%, 3.14% 81.92%, 3.14% 81.13%,
+    3.79% 81.13%, 3.79% 65.74%, 5.13% 65.74%, 5.13% 58%,
+    6.18% 58%, 6.18% 64.38%, 7.6% 64.38%, 7.6% 82.47%,
+    8.76% 82.47%, 8.76% 82.26%, 10.06% 82.26%, 10.06% 80.69%,
+    10.71% 80.69%, 10.71% 84.26%, 11.61% 84.26%, 11.61% 84.5%,
+    12.71% 84.5%, 12.71% 83.74%, 14.49% 83.74%, 14.49% 80.78%,
+    15.48% 80.78%, 15.48% 82.14%, 16.58% 82.14%, 16.58% 79.96%,
+    18.52% 79.96%, 18.52% 82.58%, 19.26% 82.58%, 19.26% 83.02%,
+    20.71% 83.02%, 20.71% 83.68%, 22.3% 83.68%, 22.3% 81.55%,
+    23.69% 81.55%, 23.69% 82.41%, 25.55% 82.41%, 25.55% 79.61%,
+    27.1% 79.61%, 27.1% 81.97%, 27.8% 81.97%, 27.8% 67.08%,
+    29.53% 67.08%, 29.53% 69.32%, 30.57% 69.32%, 30.57% 78.62%,
+    32.03% 78.62%, 32.03% 80.65%, 32.6% 80.65%, 32.6% 84.07%,
+    34.43% 84.07%, 34.43% 67.35%, 35.23% 67.35%, 35.23% 82.7%,
+    37.12% 82.7%, 37.12% 59.75%, 38.73% 59.75%, 38.73% 83.31%,
+    40.39% 83.31%, 40.39% 82.94%, 40.95% 82.94%, 40.95% 82.54%,
+    42.9% 82.54%, 42.9% 80.43%, 44.39% 80.43%, 44.39% 79.32%,
+    45.75% 79.32%, 45.75% 84.27%, 47.53% 84.27%, 47.53% 80.15%,
+    49.45% 80.15%, 49.45% 83.61%, 50.22% 83.61%, 50.22% 81.66%,
+    51.82% 81.66%, 51.82% 82.72%, 53.51% 82.72%, 53.51% 79.54%,
+    55.52% 79.54%, 55.52% 82.26%, 56.61% 82.26%, 56.61% 79.94%,
+    57.63% 79.94%, 57.63% 60.06%, 59.49% 60.06%, 59.49% 84.35%,
+    60.73% 84.35%, 60.73% 82.7%, 62.09% 82.7%, 62.09% 58.35%,
+    62.79% 58.35%, 62.79% 81.18%, 64.03% 81.18%, 64.03% 81.26%,
+    64.67% 81.26%, 64.67% 84.8%, 66.27% 84.8%, 66.27% 80.46%,
+    67.08% 80.46%, 67.08% 70.72%, 68.9% 70.72%, 68.9% 69.17%,
+    69.67% 69.17%, 69.67% 80.94%, 71% 80.94%, 71% 82.47%,
+    71.62% 82.47%, 71.62% 62.7%, 72.4% 62.7%, 72.4% 62.58%,
+    74.2% 62.58%, 74.2% 82.78%, 75.77% 82.78%, 75.77% 80.19%,
+    77.03% 80.19%, 77.03% 81.97%, 78.99% 81.97%, 78.99% 81.77%,
+    79.78% 81.77%, 79.78% 60.56%, 81.67% 60.56%, 81.67% 80.94%,
+    83.21% 80.94%, 83.21% 81.93%, 84.96% 81.93%, 84.96% 80.89%,
+    85.71% 80.89%, 85.71% 80.35%, 87.15% 80.35%, 87.15% 79.54%,
+    88.68% 79.54%, 88.68% 81.09%, 89.58% 81.09%, 89.58% 80.17%,
+    90.25% 80.17%, 90.25% 84.54%, 91.07% 84.54%, 91.07% 81.6%,
+    92.15% 81.6%, 92.15% 58.8%, 93.39% 58.8%, 93.39% 83.09%,
+    94.4% 83.09%, 94.4% 81.02%, 95.13% 81.02%, 95.13% 78.76%,
+    96.36% 78.76%, 96.36% 81.43%, 98.15% 81.43%, 98.15% 79.48%,
+    98.75% 79.48%, 98.75% 82.8%, 99.36% 82.8%, 99.36% 83.29%,
+    100% 83.29%, 100% 86%, 100% 100%, 0% 100%
+  );
+}
+
+/* ---- 第 4 层：灯海 ----
+   参考图下半部那片"密到发糊"的城市灯。三层不同步长的颗粒叠密度，顶上留亮、
+   最下面 38% 沉进地基色 —— 否则卡片下缘会亮着一条边，像被裁断的贴纸。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-neon-sea {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* `z-index` 不是可有可无：`::after`（城市）在树序里排在 span 之后，z-index:auto 时
+     它压着灯海画 —— 第一版灯海整个被城市盖住，只剩一条没有灯的地面（实机截图取证）。 */
+  z-index: 1;
+  height: calc(101% - var(--neon-horizon));
+  background-image:
+    linear-gradient(180deg, transparent 0%, transparent 62%, var(--neon-sea-fade) 100%),
+    radial-gradient(var(--neon-sea-dot) 1px, transparent 1.7px),
+    radial-gradient(var(--neon-sea-dot-cool) 1px, transparent 1.7px),
+    radial-gradient(var(--neon-sea-dot) 1.5px, transparent 2.2px);
+  background-size: auto, 5px 7px, 9px 8px, 19px 15px;
+  background-position: 0 0, 0 0, 4px 3px, 9px 7px;
+  /* 颗粒往下走越来越淡：近处的灯反而被暗角吃掉，读起来才是"俯视一片灯海"而不是
+     "一张铺满亮点的地砖"。这条顺带救了右下角那行说明文字的对比度（见批次回执）。 */
+  /* 末尾那档写 RGBA 十六进制而不是半透明函数：mask 的颜色只取 alpha、不是绘制色，
+     但全仓"裸 rgba 账本"是数出现次数的 —— 不往那本账上凭空添两笔。 */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 26%, #000 52%, #0000004d 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 26%, #000 52%, #0000004d 100%);
+}
+
+/* 本档的装饰落在 `.welcome-neon` 里，卡片自己那枚"素雅点阵"伪元素必须让位：
+   它铺在卡片玻璃底之下（玻璃是 0.85 透明度），留着只会跟天幕抢同一块像素。 */
+:root[data-theme='synthwave84'] .welcome-screen .welcome-card::before {
+  content: none;
+}
+
+/* 编译样例的两块面板：本档的 `--surface-sunken` 太透，`--fg-dim` 的小字会直接压在
+   落日的洋红光带上（实测 1.91:1）。这里只换**颜色**，尺寸/边框/圆角一律不动。 */
+:root[data-theme='synthwave84'] .welcome-screen .welcome-sample-pane {
+  background: var(--neon-pane);
+}
+
+/* 侧栏的底：原本是 `linear-gradient(180deg, var(--hover-soft), transparent 42%)`，
+   本档把下缘补成一道向下的暗角（理由见 `--neon-side-veil` 的注记）。 */
+:root[data-theme='synthwave84'] .welcome-screen .welcome-side {
+  background-image: linear-gradient(180deg, transparent 38%, var(--neon-side-veil) 62%);
+}
+
+/* 灯海要贴到卡片圆角上，必须裁：多一层 `overflow:hidden` 只在这一档加，
+   其他档没有溢出层，白付一次合成不值。 */
 :root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-card {
   overflow: hidden;
 }
 
-/* ---- 第 3 层：动效只给「极光」档 ----
-   两处都走 transform / opacity（合成层），不吃布局。全局两条减弱动效规则
+/* ---- 第 5 层：动效只给「极光」档 ----
+   两条都走 transform / opacity（合成层），不吃布局。全局两条减弱动效规则
    （`@media (prefers-reduced-motion)` 与 `:root[data-motion='reduced']`）会把时长压到
-   0.01ms、次数压到 1，且 `fill-mode` 缺省为 none ⇒ 动画结束后回到元素自身的 transform
-   （即 from 帧），滚动一个周期恰好 = 一个步长，所以"被压平"与"停在起点"像素级同图。 */
-:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-card::before {
-  animation: welcome-neon-breathe 9s var(--ease-in-out) infinite;
+   0.01ms、次数压到 1，且 `fill-mode` 缺省为 none ⇒ 动画结束后回到元素自身的帧，
+   所以"被压平"与"停在起点"像素级同图。
+   灯海没有做滚动：三层颗粒的纵向步长（7 / 8 / 15px）没有公倍数，滚完一个周期一定跳帧；
+   宁可它静着，也不做一条会打嗝的动画。 */
+:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-neon {
+  animation: welcome-neon-breathe var(--neon-breathe-dur) var(--ease-in-out) infinite;
 }
 
-:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-card::after {
-  animation: welcome-neon-roll 1.8s linear infinite;
+:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-neon::before {
+  animation: welcome-neon-sun var(--neon-sun-dur) var(--ease-in-out) infinite;
 }
 
 @keyframes welcome-neon-breathe {
@@ -1507,16 +1651,16 @@
   }
 }
 
-/* 位移量必须逐字 = `--neon-grid-row`（36px）：走完一个周期正好回到原位，循环无跳帧。
-   这里没有写成 var()，是因为 keyframes 里的自定义属性在部分内核上不参与插值
-   （会静默变成"一张不动的网格"）——宁可两处同值 + 这条注记，也不赌运行时。 */
-@keyframes welcome-neon-roll {
-  from {
-    transform: perspective(700px) rotateX(56deg) translate3d(0, 0, 0);
+/* 落日缓慢胀缩 3.5%：只动 `scale`，圆盘与切口一起缩放，不会露出"条纹错位"的缝。
+   `translate(-50%, -50%)` 必须逐字写回来——`transform` 是整条替换，不是叠加。 */
+@keyframes welcome-neon-sun {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
   }
 
-  to {
-    transform: perspective(700px) rotateX(56deg) translate3d(0, 36px, 0);
+  50% {
+    transform: translate(-50%, -50%) scale(1.035);
   }
 }
 

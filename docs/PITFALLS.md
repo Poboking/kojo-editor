@@ -38,9 +38,14 @@
 | 容器查询前要给容器写 `container-type: inline-size`（漏了 `@container` 静默不生效、不报错） | 加档/改折行点后**量出来**：`getComputedStyle(cards).gridTemplateColumns` 数一下到底是几列，别靠眼睛 |
 | **CSS 透视网格的铰链方向搞反 ⇒ 整片网格消失**：`transform-origin: 50% 100%` + `rotateX(62deg)` + `perspective(340px)` 下，371px 高的元素只剩 89px 可视（实机截图：网格"看不见"）——底边铰链把「近大远小」倒过来了，越远越被挤没 | 铰链钉**远边**（地平线那一侧，`50% 0`）+ 大透视（`700px`）：元素从地平线朝观察者铺开，消失点自然落在铰链边中点。改完用 `getComputedStyle(el,'::after')` 读 `top/height/transform` 反算可视高度，别靠眼睛 |
 | **半透明霓虹装饰的对比度要按「合成后」算**：判据是叠加**结果**对 `--fg` ≥ 4.5，不是色值本身的亮度（0.35 档暖白混出来 0.137，刚好卡 4.6）。另外 `background` 简写会把 `background-color` 复位成 transparent，而 `.u-ripple` 在减弱动效下的按压回落恰好用 `background-image` 换掉渐变 ⇒ 按钮按下去变成一块透明 | 先 sRGB 通道混合、再线性化求相对亮度；这类色值一律住 `themes/*.css`（定义点不进裸 rgba 账本），组件 CSS 只写 `var()`；渐变按钮把底色单列一条 `background-color` 兜住，覆盖规则三态（base / hover / active）都要给——`button.primary:hover` 带元素权重 (0,2,1)，只覆盖基态会在 hover 时输回去 |
-| cargo 输出带 ANSI 色码 | 正则匹配前先 stripAnsi |
+| **`mask` / `clip-path` 只作用于整枚元素，不作用于其中某一层背景** ⇒ 条纹落日的横向切口、城市的剪影、灯海的渐隐，三样都必须是**各自独立的节点**（一枚伪元素只有两格，一枚元素的背景层无法单独裁） | 画复杂插画前先列"哪些层需要自己的裁剪"，再决定节点数；判据不是"能不能画出来"而是"能不能只裁这一层" |
+| **写进天幕背景层的"边缘渐隐"会被更上层的伪元素/子节点整块盖住**（实测：右缘渐隐一个像素都没生效，因为城市 `::after` 与灯海 `span` 都画在它上面） | 想压暗某一区域，先问"这块像素的最上层是谁"——多数时候答案是"把暗角挂到**那层**身上"（本例挂到 `.welcome-side` 自己的 `background-image`） |
+| **`::after` 在绘制树序里排在子元素之后**：`.welcome-neon-sea`（子 span）被 `.welcome-neon::after`（城市）盖住 ⇒ 灯海整片消失，只剩一条没灯的地面 | 需要"子元素压过 `::after`"时给子元素显式 `z-index`（本例 `z-index:1`）；调试顺序：`getComputedStyle` 读 `display/opacity/clip` 都对 ⇒ 那就是层序问题，不是属性问题 |
+| **半透明面板压在有光的插画上，对比度会掉到 2:1 以下**（本档 `--surface-sunken` 上的小字实测 1.91） | 量法：给正文加 `color:transparent` → 截图得到**纯背景板** → 逐像素算相对亮度，取**第 95 百分位**而不是最大值（1px 描边/光点会把 max 顶到 0.4 造成误报）；`--surface-sunken` 这类 token 不许为本档改（编辑器也在用），另给一枚本档专用的不透明面板色 |
+| **天际线高度模型写反符号 ⇒ 正中拔成一块"方肉"**：`top *= 1 - k*near` 里的 `near` 表示"越靠正中越接近 1"，乘上去是把 y 变小＝**变高**，与"正中留豁口给落日"正好相反 | 用 y 轴百分比画轮廓时，**y 越小越高**要念出声；改完立刻截图看轮廓，别只看点数 |
 | 同工作区并行线 WIP 让集成冒烟断言误红（如 ruleCount 5→6） | 先 `audit` 粗判；只提交自己边界内文件；别用 `git stash` 动共享树 |
 | **rebase 判为"自动合并"的文件可能内嵌冲突标记**；`git add -A` 会把它提交进历史 | 逐文件 add + `git diff --cached` 过目；提交后扫 `^(<<<<<<<\|=======\|>>>>>>>)( \|$)`（带后缀才算真标记） |
+| cargo 输出带 ANSI 色码 | 正则匹配前先 stripAnsi |
 | 中文输入法合成期按键穿透全局快捷键（合成期 Esc 会误关设置页/全禅） | 判据单源 `shell-keys.isComposingEvent`（三条叠用 + 捕获阶段）；**失焦必须清会话标志**；模态栈挂同一门后 |
 | 真实壳 DOM 探针两类假失败：按钮 `title` 带快捷键后缀（「 (Ctrl+J)」）；固定 sleep 等不到首屏 | 先怀疑仪器再怀疑被测物；轮询目标元素；**派事件前自检仪器**（合成事件带没带上 `isComposing`） |
 | 量"改前"时动别人工作副本 = 抢端口 + 可能撞未提交树 | `git worktree add <临时目录> HEAD --detach` 起游离树；`CARGO_TARGET_DIR` 指已有 target 免冷编译 |
