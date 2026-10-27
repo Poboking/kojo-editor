@@ -59,10 +59,12 @@ export interface DirtyGate {
   dirtyOf?: (paths: readonly string[]) => string[];
   /**
    * 让用户选：`true` = 继续，`false` = 整个动作作废。
+   * **允许回 Promise**（执行层本来就挂在 async 腿上）：宿主要用真对话框问的时候，
+   * 同步签名等于逼宿主自造一套轮询；`boolean` 的旧调用（含全部单测夹具）一字不动仍合法。
    * `kind` 决定措辞——`move` 问的是"源带着未保存改动要被移走"，
    * `overwrite` 问的是"落点那份未保存的改动还只在编辑器里"。
    */
-  askDirty?: (kind: 'move' | 'overwrite', names: readonly string[]) => boolean;
+  askDirty?: (kind: 'move' | 'overwrite', names: readonly string[]) => boolean | Promise<boolean>;
 }
 
 export interface FileOpsExecInput {
@@ -333,7 +335,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
   if (dirtyOf !== undefined && askDirty !== undefined) {
     const allSources = decided.runs.map((op) => op.from);
     const moveNames = dirtyOf(decided.runs.filter((op) => op.mode === 'move').map((op) => op.from));
-    if (moveNames.length > 0 && !askDirty('move', moveNames)) {
+    if (moveNames.length > 0 && !(await askDirty('move', moveNames))) {
       return {
         ...empty,
         aborted: true,
@@ -342,7 +344,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
       };
     }
     const overNames = dirtyOf(decided.runs.filter((op) => op.overwrite).map((op) => op.to));
-    if (overNames.length > 0 && !askDirty('overwrite', overNames)) {
+    if (overNames.length > 0 && !(await askDirty('overwrite', overNames))) {
       return {
         ...empty,
         aborted: true,

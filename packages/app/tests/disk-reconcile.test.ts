@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dirtyNamesIn,
   fileOpGuardMessage,
   mapRenamedPath,
   pathGoneByDelete,
@@ -104,5 +105,16 @@ describe('既有判据未回退', () => {
 
   it('fileOpGuardMessage：脏文件在被改名目录之下也拦（递归大刀）', () => {
     expect(fileOpGuardMessage(['C:\\p\\x'], new Set([WIN('C:/p/x/sub/a.erb')]))).toContain('未保存修改');
+  });
+
+  it('dirtyNamesIn：守门与脏闸同一份匹配判据——点名哪几份是脏的（含目录之下），去重且按入参序', () => {
+    const dirty = new Set([WIN('C:/p/x/a.erb'), 'C:\\p\\y\\b.erb']);
+    // 精确命中 + 目录之下（递归大刀问的就是这一格下面有没有脏的）
+    expect(dirtyNamesIn(['C:\\p\\x\\a.erb'], dirty)).toEqual(['a.erb']);
+    expect(dirtyNamesIn(['C:\\p\\x'], dirty)).toEqual(['a.erb']);
+    // 两份都脏 ⇒ 两个名字；同一份被两种入参写法交了两次 ⇒ 只点一次名
+    expect(dirtyNamesIn(['C:\\p\\y\\b.erb', 'C:/p/x', 'C:\\p\\x\\a.erb'], dirty)).toEqual(['b.erb', 'a.erb']);
+    // 干净的一批 ⇒ 空数组（脏闸不该问）
+    expect(dirtyNamesIn(['C:\\p\\z'], dirty)).toEqual([]);
   });
 });

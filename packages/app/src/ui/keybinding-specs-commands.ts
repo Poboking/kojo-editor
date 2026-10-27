@@ -110,10 +110,30 @@ const GROUP_AND_PROJECT_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.showFileInOsExplorer', title: '在资源管理器中显示当前文件', category: '项目', rebindable: true, note: '仅桌面壳；系统文件管理器里选中它' },
 ];
 
+/**
+ * 资源管理器剪贴板家族（WS-13 2a 车）：命令面板 + 键位页入口。
+ *
+ * ## 为什么四条都**不带缺省键**
+ *
+ * `Ctrl+C/X/V/D` 只在资源管理器树的按键判据里生效（焦点在不在树里是那条白名单的第一道闸，
+ * 见 `file-tree-keyboard.ts`）；把它们登记成**宿主全局键**会把编辑器与输入框里的
+ * 复制粘贴全抢走——那是比"树里少一个键"大得多的回归。作者想在键位页自绑随他：
+ * `rebindable: true`，绑出来的全局键由键位运行期自己负责。
+ * 菜单项标题与这四条同源（`file-tree-ops.ts` 的 clipItems 带 command id；
+ * 键位注册表没登记 ⇒ 菜单回退到规格文案，登记了也不冲突——两边标题逐字相同）。
+ */
+const EXPLORER_CLIP_SPECS: readonly KeybindingSpec[] = [
+  { id: 'explorer.copyEntry', title: '复制到剪贴板', category: '资源管理器', rebindable: true, note: '焦点在资源管理器树上时 Ctrl+C 生效；不占全局键' },
+  { id: 'explorer.cutEntry', title: '剪切到剪贴板', category: '资源管理器', rebindable: true, note: '落地在粘贴那一步；焦点在树上时 Ctrl+X 生效' },
+  { id: 'explorer.pasteEntry', title: '粘贴到当前文件夹', category: '资源管理器', rebindable: true, note: '落点 = 焦点行所在目录（或作者包）；焦点在树上时 Ctrl+V 生效' },
+  { id: 'explorer.duplicateEntry', title: '创建副本', category: '资源管理器', rebindable: true, note: '原地再落一份（名字 2 自动让位）；焦点在树上时 Ctrl+D 生效' },
+];
+
 /** 命令面板入口型条目全集（`./keybindings` 把它拼在静态基础表后，构成键位页看到的完整表） */
 export const COMMAND_PANEL_KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   ...STATUS_BAR_SPECS,
   ...BOOKMARK_SPECS,
   ...GROUP_AND_PROJECT_SPECS,
+  ...EXPLORER_CLIP_SPECS,
   ...BUILTIN_ACTION_SPECS,
 ];

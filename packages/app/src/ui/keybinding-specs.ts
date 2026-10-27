@@ -126,6 +126,8 @@ export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   // 在系统资源管理器中显示。**这张序表必须收它**：未登记的分类会被排到最后，
   // 而守门测试按「出现过的分类都在序表里」判（`keybindings.test.ts`）。
   '项目',
+  // 资源管理器剪贴板家族（WS-13 2a 车，懒半表 `keybinding-specs-commands.ts`）：同一理由进序表
+  '资源管理器',
   '编辑器',
   // 文档内书签（1026 编辑器体感 C 批）：命令面板与 `ShellLayout` 的 shellCommands 同分类名
   '书签',

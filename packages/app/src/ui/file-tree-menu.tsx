@@ -144,6 +144,11 @@ export interface FileTreeMenuRuntime {
    * **可选**（additive）：旧消费方不传 ⇒ 视为空集，「比较已选文件」整项不出现。
    */
   readonly selection?: () => readonly string[];
+  /**
+   * 会话剪贴板的条目数**现读**（WS-13；同一理由：粘贴项只在剪贴板非空时出现，
+   * 而剪贴板变化不重渲树，注册那帧的快照会过期）。缺省 = 0 = 没有「粘贴到此」这一项。
+   */
+  readonly clipCount?: () => number;
   /** 分发一条动作（幂等；组件已卸载时是空操作） */
   readonly act: (id: MenuItemId, scope: FileTreeScope) => void;
 }
@@ -165,6 +170,7 @@ export function fileTreeSurfaceMenu(
     activeFile: rt.activeFile,
     ...(scopePathOf(scope) === undefined ? {} : { path: scopePathOf(scope) }),
     ...(rt.selection === undefined ? {} : { selection: rt.selection() }),
+    ...(rt.clipCount === undefined ? {} : { clipCount: rt.clipCount() }),
   });
   return specs.map(toContextMenuItem);
 }

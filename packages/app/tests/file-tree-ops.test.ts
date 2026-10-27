@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deleteConfirmText,
+  dirtyGateText,
   fsLocatePlanOf,
   fsLocatePlanOfRoots,
   isUnderPath,
@@ -118,6 +119,32 @@ describe('menuItemsFor · 能力缺项时整项不显示（灰着不说话 = 违
   it('删除永远是危险项（危险色 + 勾选列 ! 提示，不只靠颜色）', () => {
     expect(menuItemsFor('file', FULL_CAP).find((i) => i.id === 'delete')!.danger).toBe(true);
     expect(menuItemsFor('package', FULL_CAP).find((i) => i.id === 'delete')!.danger).toBe(true);
+  });
+});
+
+/* ------------------------------ WS-13 · 脏闸问句（文案单源） ------------------------------ */
+
+describe('dirtyGateText · 搬运脏闸的问句', () => {
+  it('move 形态说"改动跟着文件走"，overwrite 形态说清盖的是盘上那份且能从文件历史找回', () => {
+    const move = dirtyGateText('move', ['a.ERB']);
+    expect(move).toContain('未保存的修改');
+    expect(move).toContain('跟着文件一起过去');
+    const over = dirtyGateText('overwrite', ['b.ERB']);
+    expect(over).toContain('盘上');
+    expect(over).toContain('文件历史');
+    // 措辞纪律：不出现"脏 / model / 缓冲区"这类内部词
+    for (const text of [move, over]) {
+      expect(text).not.toContain('缓冲区');
+      expect(text).not.toContain('model');
+    }
+  });
+
+  it('超过四份收成「等 N 项」（点名是为了一眼看见，不是为刷屏）', () => {
+    const text = dirtyGateText('move', ['1.ERB', '2.ERB', '3.ERB', '4.ERB', '5.ERB', '6.ERB']);
+    expect(text).toContain('1.ERB');
+    expect(text).toContain('4.ERB');
+    expect(text).not.toContain('5.ERB');
+    expect(text).toContain('等 6 项');
   });
 });
 

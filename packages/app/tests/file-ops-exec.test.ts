@@ -631,6 +631,43 @@ describe('执行层 · 三道闸', () => {
     expect(r.failedSources).toEqual([`${SRC}/a.ERB`]);
   });
 
+  it('askDirty 允许回 Promise（宿主拿真对话框异步问；落盘等这一答，答"不"一个字节不动）', async () => {
+    fs.seedFile(`${SRC}/a.ERB`, 'A');
+    let asked = 0;
+    const r = await runFileOps({
+      io: fs.io(),
+      plan: planOf({ sources: [f(`${SRC}/a.ERB`)], targetEntries: [], mode: 'move' }),
+      decision: 'keepBoth',
+      targetWritable: true,
+      dirty: {
+        dirtyOf: () => ['a.ERB'],
+        askDirty: async (kind) => {
+          asked += 1;
+          expect(kind).toBe('move');
+          await Promise.resolve(); // 模拟"等作者点按钮"的那一拍
+          return false;
+        },
+      },
+    });
+    expect(asked).toBe(1);
+    expect(r.aborted).toBe(true);
+    expect(fs.hasFile(`${SRC}/a.ERB`)).toBe(true);
+    expect(fs.hasFile(`${DST}/a.ERB`)).toBe(false);
+  });
+
+  it('askDirty 的 Promise 答"继续" ⇒ 照常落地（布尔旧写法与新写法共用同一条 await 腿）', async () => {
+    fs.seedFile(`${SRC}/a.ERB`, 'A');
+    const r = await runFileOps({
+      io: fs.io(),
+      plan: planOf({ sources: [f(`${SRC}/a.ERB`)], targetEntries: [], mode: 'move' }),
+      decision: 'keepBoth',
+      targetWritable: true,
+      dirty: { dirtyOf: () => ['a.ERB'], askDirty: async () => true },
+    });
+    expect(r.done).toBe(1);
+    expect(fs.hasFile(`${DST}/a.ERB`)).toBe(true);
+  });
+
   it('计划层的非法源 ⇒ 任何决定下都在回执里点名（选了"跳过"也不许它消失）', async () => {
     fs.seedFile(`${SRC}/a.ERB`, 'A');
     const r = await runFileOps({

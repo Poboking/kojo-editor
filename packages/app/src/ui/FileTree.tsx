@@ -15,6 +15,7 @@
  */
 
 import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type UIEvent as ReactUIEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
@@ -47,13 +48,16 @@ import {
   conflictQuestion,
   type ConflictDecision,
   type FileOpEntry,
+  type FileOpMode,
   type FileOpsPlan,
 } from './file-ops-plan';
 import { runFileOps } from './file-ops-exec';
 import {
   clearFileClipboard,
+  fileClipSentence,
   getFileClipMode,
   getFileClipboard,
+  hasFileClipboard,
   setExplorerOpsRuntime,
   setFileClipboard,
   type ClipEntry,
@@ -85,11 +89,12 @@ import {
   visibleRange,
   type VisibleRange,
 } from './file-tree-virtual';
-import { planRowClick, planTreeKey, rowIsDir, treeKeyEventOf } from './file-tree-keyboard';
+import { clipTargetDirOf, planRowClick, planTreeKey, rowIsClipSource, rowIsDir, treeKeyEventOf } from './file-tree-keyboard';
 import { planDirCacheEviction, protectedDirKeysOf } from './file-tree-cache';
 import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark } from './file-tree-row';
 import { DirRows } from './file-tree-dir-rows';
+import { useModalEscape } from './modal-stack';
 import { getActivePath, setActivePath, subscribeActivePath } from './file-tree-selection';
 import { clearSelected, getSelectedPaths, setSelected } from './file-tree-multi-selection';
 import { useNodeProblems } from './file-tree-problem-view';
@@ -387,6 +392,46 @@ function TreeSpacer({ px }: { px: number }): ReactElement | null {
   const style = spacerStyle(px);
   if (style === null) return null;
   return <li className="tree-vspacer" role="presentation" aria-hidden="true" style={style} />;
+}
+
+/* ---------------- WS-13 搬运家族的现场问句（冲突四选项 / 脏闸） ---------------- */
+
+/**
+ * 一次待答的问句（**同一时刻只挂一枚**——搬运是串行的：上一问没答完，后到的动作被挡并说人话）。
+ *
+ * 形态照 `UnsavedConfirmDialog` / `WritableApprovalDialog` 那三家模态的房规：
+ * `.modal[aria-label]` + `useModalEscape`，且 Esc 恒落"一个字节都不动"那一格（冲突问 = 全部取消、
+ * 脏闸问 = 不搬）。**挂在 body 上**而不是就地渲染：树滚动容器带 `contain: layout paint`
+ * （styles-project.css 长列表隔离带），fixed 遮罩在它里面会被钉成面板大小——与右键菜单
+ * 走根宿主同一个理由。上屏回执不建第二套 toast：一句话状态行走既有的 `revealNote`。
+ */
+interface FileOpsAsk {
+  readonly label: string;
+  readonly text: string;
+  readonly choices: ReadonlyArray<{ readonly value: string; readonly label: string; readonly primary?: boolean }>;
+  readonly escapeValue: string;
+  readonly pick: (value: string) => void;
+}
+
+function FileOpsAskDialog({ ask }: { ask: FileOpsAsk }): ReactElement {
+  useModalEscape(() => ask.pick(ask.escapeValue));
+  return createPortal(
+    <div className="modal-mask">
+      <div className="modal" role="dialog" aria-modal="true" aria-label={ask.label}>
+        <h2>{ask.label}</h2>
+        {/* dirtyGateText / conflictQuestion 都带换行与逐条点名，pre-line 让换行照上屏 */}
+        <p style={{ whiteSpace: 'pre-line' }}>{ask.text}</p>
+        <div className="modal-actions">
+          {ask.choices.map((c) => (
+            <button key={c.value} className={c.primary === true ? 'primary' : 'ghost'} onClick={() => ask.pick(c.value)}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 /**
@@ -1110,6 +1155,293 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     );
   };
 
+  /* ---------------- WS-13：剪贴板家族（复制 / 剪切 / 粘贴 / 创建副本）的接线 ---------------- */
+
+  /**
+   * 待答问句（冲突四选项 / 脏闸二选项）。
+   *
+   * ref 与 state 同步维护：ref 给**同一个 tick 里的第二个动作**看（粘贴链还挂在 await 上时，
+   * state 尚未提交），挡下重入并说人话；state 只决定这一帧画不画面。
+   */
+  const [fileOpsAsk, setFileOpsAsk] = useState<FileOpsAsk | null>(null);
+  const fileOpsAskRef = useRef<FileOpsAsk | null>(null);
+  /** 落盘在途闸：一次搬运没跑完之前不接第二次（IO 是异步的，双击粘贴不该跑两遍） */
+  const fileOpsBusy = useRef(false);
+
+  const askFileOps = (
+    spec: Omit<FileOpsAsk, 'pick'>,
+    fallback: string,
+  ): Promise<string> => {
+    if (fileOpsAskRef.current !== null) {
+      note('上一个搬运还在等作者决定——先把那一个答了。');
+      return Promise.resolve(fallback);
+    }
+    return new Promise<string>((resolve) => {
+      const ask: FileOpsAsk = {
+        ...spec,
+        pick: (value: string): void => {
+          fileOpsAskRef.current = null;
+          setFileOpsAsk(null);
+          resolve(value);
+        },
+      };
+      fileOpsAskRef.current = ask;
+      setFileOpsAsk(ask);
+    });
+  };
+
+  /** 撞名问句：文案与选项都取自计划层单源（`conflictQuestion` / `CONFLICT_CHOICES`） */
+  const askConflict = (plan: FileOpsPlan): Promise<ConflictDecision> =>
+    askFileOps(
+      {
+        label: '同名条目怎么处理',
+        text: conflictQuestion(plan),
+        choices: CONFLICT_CHOICES.map((c) => ({
+          value: c.action,
+          label: c.label,
+          primary: c.action === 'keepBoth',
+        })),
+        escapeValue: 'cancel',
+      },
+      'cancel',
+    ) as Promise<ConflictDecision>;
+
+  /** 脏闸问句：文案单源在 `file-tree-ops.dirtyGateText`，措辞不在此处重写 */
+  const askDirtyGate = (kind: 'move' | 'overwrite', names: readonly string[]): Promise<boolean> =>
+    askFileOps(
+      {
+        label: '有未保存的修改',
+        text: dirtyGateText(kind, names),
+        choices: [
+          { value: 'cancel', label: '取消' },
+          { value: 'go', label: '继续', primary: true },
+        ],
+        escapeValue: 'cancel',
+      },
+      'cancel',
+    ).then((v) => v === 'go');
+
+  /**
+   * 行模型现读"这一格是什么"（多选集只存路径，种类必须从当场还在的行上取——
+   * 树可能已经变了，猜种类就是把目录当文件搬）。
+   */
+  const clipEntriesOf = (paths: readonly string[]): ClipEntry[] => {
+    const byKey = new Map<string, (typeof tree.rows)[number]>();
+    for (const r of tree.rows) if (r.path !== '') byKey.set(pkey(r.path), r);
+    const out: ClipEntry[] = [];
+    for (const p of paths) {
+      const r = byKey.get(pkey(p));
+      if (r === undefined || !rowIsClipSource(r)) continue;
+      out.push({ path: r.path, isDir: r.kind === 'dir' || r.kind === 'package' });
+    }
+    return out;
+  };
+
+  /** 搬运的宾语（口径与键位层注释一致）：右击行不在勾选集里就以它为准，否则多选集，再否则焦点行 */
+  const clipSources = (hintPath?: string): ClipEntry[] => {
+    const selection = getSelectedPaths();
+    if (hintPath !== undefined && !selection.some((s) => pkey(s) === pkey(hintPath))) {
+      return clipEntriesOf([hintPath]);
+    }
+    if (selection.length > 0) {
+      const entries = clipEntriesOf(selection);
+      if (entries.length > 0) return entries;
+    }
+    const focusRow = focusIndex >= 0 ? rowAt(tree, focusIndex) : undefined;
+    if (focusRow === undefined || !rowIsClipSource(focusRow)) return [];
+    return [{ path: focusRow.path, isDir: focusRow.kind === 'dir' || focusRow.kind === 'package' }];
+  };
+
+  /** 落点目录（焦点行所在那一格；口径住 `clipTargetDirOf`） */
+  const clipTargetDir = (): string | null =>
+    clipTargetDirOf(focusIndex >= 0 ? rowAt(tree, focusIndex) : undefined);
+
+  /** 搬运参与跨根判定的根清单（项目根 + 会话附加根 + 工作区各根；`buildFileOpsPlan` 的 roots 口径） */
+  const moveRoots = (): string[] => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of [project.rootDir, ...(extraRoots ?? []), ...folders.map((f) => f.path)]) {
+      if (r === '' || seen.has(pkey(r))) continue;
+      seen.add(pkey(r));
+      out.push(r);
+    }
+    return out;
+  };
+
+  /** 目标目录现状：粘贴那一刻现取一次（列表比缓存新 ⇒ 撞名问句问得准）；取不到退回缓存/空 */
+  const targetEntriesOf = async (dir: string): Promise<FileOpEntry[]> => {
+    if (listDir !== undefined) {
+      try {
+        const list = await listDir(dir);
+        return list.map((e) => ({ path: e.path, isDir: e.isDirectory }));
+      } catch {
+        /* 读不动不硬撑：落地那步走独占创建，预检只是提前把话说清楚（见 file-ops-plan 模块头） */
+      }
+    }
+    const st = dirCache.get(dir);
+    return Array.isArray(st) ? st.map((e) => ({ path: e.path, isDir: e.isDirectory })) : [];
+  };
+
+  /** 计划 → （冲突问一句）→ 执行层落盘 → 回执上屏 + 目录重列 + 索引/标签收尾 + 剪贴板收尾 */
+  const executeFileOps = async (args: {
+    intent: 'paste' | 'duplicate';
+    mode: FileOpMode;
+    sources: readonly FileOpEntry[];
+    targetDir: string;
+  }): Promise<void> => {
+    if (io === undefined) {
+      note('当前环境没有落盘的通道（纯浏览器宿主）——复制进剪贴板可以，粘贴落不了地。');
+      return;
+    }
+    if (fileOpsBusy.current) {
+      note('上一个搬运还在落盘——稍等一下。');
+      return;
+    }
+    fileOpsBusy.current = true;
+    try {
+      const plan = buildFileOpsPlan({
+        sources: args.sources,
+        targetDir: args.targetDir,
+        targetEntries: await targetEntriesOf(args.targetDir),
+        mode: args.mode,
+        intent: args.intent,
+        roots: moveRoots(),
+      });
+      const hasConflict = plan.items.some((i) => i.status === 'conflict');
+      let decision: ConflictDecision = 'skip';
+      if (hasConflict) {
+        // 副本的本义就是"原地再落一份"：撞名（通常就是与源自己撞）不改名没有别的落法，
+        // 问一句等于把作者已经说清楚的事再问一遍；粘贴才需要问。
+        decision = plan.intent === 'duplicate' ? 'keepBoth' : await askConflict(plan);
+      }
+      let writable = false;
+      try {
+        writable = io.isWritable(plan.targetDir);
+      } catch {
+        writable = false; // "说不出可写"绝不亮成可写（与根头那格同一把尺）
+      }
+      const outcome = await runFileOps({
+        io,
+        plan,
+        decision,
+        targetWritable: writable,
+        // 脏闸接真源：`dirtyOf` 由宿主从会话脏态投影（判据住 disk-reconcile，树不自造第二份"脏"）
+        dirty: dirtyOf !== undefined ? { dirtyOf, askDirty: askDirtyGate } : undefined,
+      });
+      note(outcome.resultText);
+      // 收尾三件（与新建/重命名既有口径同一条腿）：落点与源所在层各重列一次、索引增量上报、
+      // 剪切落地的标签改写走 onFilesGone 的 renamed 那半（"跟着搬"而不是"被删了"）
+      refetchDirs([plan.targetDir, ...plan.items.map((i) => parentDir(i.from))]);
+      const movedTos = outcome.moved.map((m) => m.to);
+      const movedFroms = outcome.moved.map((m) => m.from);
+      if (outcome.created.length > 0 || movedTos.length > 0 || movedFroms.length > 0) {
+        onDiskEntriesChanged?.({ changed: [...outcome.created, ...movedTos], removed: movedFroms });
+      }
+      if (outcome.moved.length > 0) {
+        for (const m of outcome.moved) pruneCacheUnder(m.from);
+        onFilesGone?.([], outcome.moved.map((m) => ({ from: m.from, to: m.to })));
+        // 剪切落地的部分从剪贴板退场；没落地的（跳过/拒绝/失败）仍留在原地，剪贴板留着它们才能重试
+        const gone = new Set(movedFroms.map((p) => pkey(p)));
+        const rest = getFileClipboard().filter((e) => !gone.has(pkey(e.path)));
+        setFileClipboard(rest, 'cut');
+      }
+    } finally {
+      fileOpsBusy.current = false;
+    }
+  };
+
+  /** 一次动作的总入口（键位、菜单、命令面板运行时桥三条腿汇到这一处） */
+  const runClipOp = (op: ExplorerOp, hintPath?: string, hintDir?: string | null): void => {
+    if (op === 'copy' || op === 'cut') {
+      const entries = clipSources(hintPath);
+      if (entries.length === 0) {
+        note(
+          hintPath !== undefined
+            ? '这一格眼下不在树里（可能刚被移动或删掉）——先刷新再看一眼。'
+            : `先选中要搬的条目（文件、文件夹或作者包），再${op === 'copy' ? '复制' : '剪切'}。`,
+        );
+        return;
+      }
+      setFileClipboard(entries, op === 'cut' ? 'cut' : 'copy');
+      note(fileClipSentence());
+      return;
+    }
+    if (op === 'paste') {
+      const targetDir = hintDir !== undefined ? hintDir : clipTargetDir();
+      if (!hasFileClipboard()) {
+        note('剪贴板是空的——先在树上选中要搬的东西，再按复制。');
+        return;
+      }
+      if (targetDir === null || targetDir === '') {
+        note('没有明确的落点目录——先把焦点落到一个文件夹（或作者包）上，再粘贴。');
+        return;
+      }
+      void executeFileOps({ intent: 'paste', mode: getFileClipMode() === 'cut' ? 'move' : 'copy', sources: getFileClipboard(), targetDir }).catch(
+        (err: unknown) => noteErr(err, '粘贴'),
+      );
+      return;
+    }
+    // duplicate：原地再落一份（落点 = 源自己那一格）
+    const entries = clipSources(hintPath);
+    if (entries.length === 0) {
+      note('先选中要做副本的条目（文件、文件夹或作者包）。');
+      return;
+    }
+    const targetDir = hintDir !== undefined ? hintDir : parentDir(entries[0]!.path);
+    if (targetDir === null || targetDir === '') {
+      note('这一格读不出它所在的文件夹——先刷新再看一眼。');
+      return;
+    }
+    void executeFileOps({ intent: 'duplicate', mode: 'copy', sources: entries, targetDir }).catch(
+      (err: unknown) => noteErr(err, '创建副本'),
+    );
+  };
+
+  /**
+   * 把执行入口登记进运行时桥（每次渲染整体替换；卸载即 null——与菜单运行时同一形态）。
+   * 命令面板不持有现场：宾语与落点只有树自己当场知道，打过来由这里现读。
+   */
+  const runClipOpRef = useRef(runClipOp);
+  runClipOpRef.current = runClipOp;
+  useEffect(() => {
+    setExplorerOpsRuntime({ run: (op) => runClipOpRef.current(op) });
+  });
+  useEffect(
+    () => () => {
+      setExplorerOpsRuntime(null);
+      // 卸载时还挂着没答的问句：把 ref 清掉，别留一个永远等不到的"在等决定"
+      fileOpsAskRef.current = null;
+    },
+    [],
+  );
+
+  /**
+   * 换项目即清剪贴板（模块级会话态活得比一次挂载久）。
+   * 只在**根真的变了**时清：侧栏开关导致的重挂不清——"上次剪了什么"在现场还在的项目里仍有效。
+   */
+  const clipRootRef = useRef(project.rootDir);
+  useEffect(() => {
+    if (pkey(clipRootRef.current) === pkey(project.rootDir)) return;
+    clipRootRef.current = project.rootDir;
+    clearFileClipboard();
+  }, [project.rootDir]);
+
+  /** 右键作用域自己那一格的落点目录（粘贴到菜单右击处；口径与 `clipTargetDirOf` 一致） */
+  const scopeTargetDir = (scope: FileTreeScope): string | null => {
+    switch (scope.kind) {
+      case 'file':
+        return parentDir(scope.path);
+      case 'dir':
+        return scope.path;
+      case 'package':
+        return scope.dir;
+      case 'group':
+        return scope.prefix;
+      case 'blank':
+        return null;
+    }
+  };
+
   /** 作用域自身的路径（文件 / 目录 / 作者包；角色组与空白区没有可复制/可删的路径） */
   const scopePathOf = (scope: FileTreeScope): string => {
     switch (scope.kind) {
@@ -1282,6 +1614,21 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       case 'command-palette':
         if (!runContextMenuCommand(COMMAND_PALETTE_COMMAND)) note('命令面板打不开：命令还没注册好');
         break;
+      /* ---- WS-13 剪贴板家族 + 按目录限定检索（宾语 = 右击行或多选集，落点 = 右击那一格） ---- */
+      case 'clip-copy':
+        runClipOp('copy', scopePathOf(scope));
+        break;
+      case 'clip-cut':
+        runClipOp('cut', scopePathOf(scope));
+        break;
+      case 'clip-paste':
+        runClipOp('paste', undefined, scopeTargetDir(scope));
+        break;
+      case 'duplicate':
+        // 副本落 = 源自己那一格的**兄弟层**（hintDir 不给，runClipOp 自己按源路径取父目录；
+        // 把目录的副本落进目录自己里面是要被计划层判掉的那种圈）
+        runClipOp('duplicate', scopePathOf(scope));
+        break;
     }
   };
 
@@ -1324,6 +1671,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       capability: menuCapability,
       // 多选集现读（不是注册这帧的快照）：勾选不引起树重渲，快照会过期（见 file-tree-menu）
       selection: getSelectedPaths,
+      // 剪贴板条目数同样现读：粘贴项只在剪贴板非空时出现（空集合给灰态 = 点了没反应）
+      clipCount: () => getFileClipboard().length,
       act: runMenuAction,
     });
   });
@@ -1869,6 +2218,19 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         // 「当前可见行」= 窗口切到的那段行（判据是行模型，不是 DOM——被裁掉的行不该进集合）
         setSelected(rangePaths(tree, range.start, range.end - 1));
         break;
+      /* ---- WS-13 剪贴板家族（宾语与落点全部现读：多选集 → 焦点行） ---- */
+      case 'copy':
+        runClipOp('copy');
+        break;
+      case 'cut':
+        runClipOp('cut');
+        break;
+      case 'paste':
+        runClipOp('paste');
+        break;
+      case 'duplicate':
+        runClipOp('duplicate');
+        break;
     }
   };
 
@@ -2321,6 +2683,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           过滤强制全展开 ⇒ 只显示前 {plan.rendered} / {plan.matched} 个命中（点树尾按钮继续加载，或把过滤词写长一点）
         </p>
       ) : null}
+      {/* WS-13 现场问句（同名条目四选项 / 脏闸二选项）：portal 挂 body——树容器带
+          `contain: layout paint`，fixed 遮罩就地渲染会被钉成面板大小（与右键菜单走根宿主同因） */}
+      {fileOpsAsk === null ? null : <FileOpsAskDialog ask={fileOpsAsk} />}
       {/* 就地渲染的 FileTreeContextMenu 自 1023 批起不再挂在这里：菜单统一由根宿主
           （`context-menu-host.tsx` 的固定层）渲染，浮层裁剪与遮挡一次收口。那个组件
           保留在 file-tree-menu.tsx 作兜底实现（根宿主缺席的宿主可自渲染）。 */}

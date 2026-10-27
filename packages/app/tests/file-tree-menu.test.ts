@@ -243,6 +243,92 @@ describe('文案 · 全中文 + 命令项不另造第二份', () => {
   });
 });
 
+/* ------------------------------ WS-13 · 搬运家族与按目录检索 ------------------------------ */
+
+describe('WS-13 · 搬运家族（有通道 = 出现；没通道 = 整组不显示）', () => {
+  const MOVE = cap({ canMoveEntries: true });
+
+  it('canMoveEntries 缺席：四项一枚都不出现（灰着不说话 = 违反铁律 4）', () => {
+    for (const scope of ['file', 'dir', 'package'] as const) {
+      const ids = idsOf(scope, FULL);
+      for (const id of ['clip-copy', 'clip-cut', 'clip-paste', 'duplicate']) {
+        expect(ids, `${scope}/${id}`).not.toContain(id);
+      }
+    }
+  });
+
+  it('有通道：复制 / 剪切 / 创建副本出现，「粘贴到此」只在剪贴板非空时出现', () => {
+    expect(idsOf('file', MOVE)).toEqual([
+      'open',
+      'clip-copy',
+      'clip-cut',
+      'duplicate',
+      'copy-name',
+      'copy-path',
+      'copy-rel-path',
+      'reveal',
+      'refresh',
+      'history',
+      'rename',
+      'delete',
+    ]);
+    const withClip = menuItemsFor('file', MOVE, { view: 'kojo', clipCount: 2 }).map((i) => i.id);
+    expect(withClip).toContain('clip-paste');
+    expect(withClip.indexOf('clip-paste')).toBe(withClip.indexOf('duplicate') + 1); // 紧跟副本那一项
+  });
+
+  it('目录 / 作者包作用域共用同一族（顺序与文件作用域同源）', () => {
+    const dir = idsOf('dir', MOVE);
+    expect(dir.slice(0, 5)).toEqual(['new-file', 'new-dir', 'clip-copy', 'clip-cut', 'duplicate']);
+    expect(idsOf('package', MOVE)[3]).toBe('clip-copy'); // 导入置顶、新建随后，搬运族第三组
+  });
+
+  it('三项动作都带 command id（菜单标题与命令面板同一真源，两枚 id 各写一遍必漂移）', () => {
+    const items = menuItemsFor('file', MOVE);
+    expect(items.find((i) => i.id === 'clip-copy')!.command).toBe('explorer.copyEntry');
+    expect(items.find((i) => i.id === 'clip-cut')!.command).toBe('explorer.cutEntry');
+    expect(items.find((i) => i.id === 'duplicate')!.command).toBe('explorer.duplicateEntry');
+    expect(items.find((i) => i.id === 'clip-paste')).toBeUndefined(); // clipCount 缺省 0 = 没这一项
+  });
+});
+
+describe('WS-13 · 在此文件夹中搜索（canSearchInFolder）', () => {
+  it('有宿主回调位：文件与目录/包作用域都给「在此文件夹中搜索」', () => {
+    const withSearch = cap({ canSearchInFolder: true });
+    expect(idsOf('file', withSearch)).toContain('search-in-folder');
+    expect(idsOf('dir', withSearch)).toContain('search-in-folder');
+    expect(idsOf('group', withSearch)).not.toContain('search-in-folder'); // 树级菜单不吃这一项（口径不变）
+  });
+
+  it('没通道整项不显示；有通道时它在「显示」组起头带分隔线（reveal 不再顶格）', () => {
+    expect(idsOf('file', FULL)).not.toContain('search-in-folder');
+    const items = menuItemsFor('file', cap({ canSearchInFolder: true }));
+    expect(items.find((i) => i.id === 'search-in-folder')!.dividerBefore).toBe(true);
+    expect(items.find((i) => i.id === 'reveal')!.dividerBefore).toBe(false);
+    // 搜索位缺席时 reveal 自己顶格（旧判据逐字保留）
+    expect(menuItemsFor('file', FULL).find((i) => i.id === 'reveal')!.dividerBefore).toBe(true);
+  });
+});
+
+describe('面运行时 · clipCount 现读透到面（空剪贴板不给"点了没反应"的粘贴项）', () => {
+  const act = (): void => {};
+  it('运行时带 clipCount ⇒ 面里的粘贴项按**右键那一刻**的条数出现', () => {
+    const rt: FileTreeMenuRuntime = {
+      view: 'kojo',
+      activeFile: null,
+      capability: cap({ canMoveEntries: true }),
+      clipCount: () => 3,
+      act,
+    };
+    expect(fileTreeSurfaceMenu({ kind: 'file', path: 'C:/koa/001/a.ERB' }, rt).some((i) => i.id === 'clip-paste')).toBe(true);
+    const empty: FileTreeMenuRuntime = { ...rt, clipCount: () => 0 };
+    expect(fileTreeSurfaceMenu({ kind: 'file', path: 'C:/koa/001/a.ERB' }, empty).some((i) => i.id === 'clip-paste')).toBe(false);
+    // 旧消费方不传 clipCount ⇒ 视为空（additive：既有面形状一字不动）
+    const legacy: FileTreeMenuRuntime = { view: 'kojo', activeFile: null, capability: cap({ canMoveEntries: true }), act };
+    expect(fileTreeSurfaceMenu({ kind: 'file', path: 'C:/koa/001/a.ERB' }, legacy).some((i) => i.id === 'clip-paste')).toBe(false);
+  });
+});
+
 /* ------------------------------ 面路由与分发 ------------------------------ */
 
 describe('面路由 · 行元素 → file-tree，空白区 → file-tree-root', () => {

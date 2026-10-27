@@ -29,6 +29,9 @@ import { editorModelPool } from './editor-model-pool-instance';
 import { createProjectNameLedger } from './name-ledger';
 import { revealLocationOf } from '../monaco/reveal-position';
 import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState } from './search-store';
+import { runExplorerOp } from './file-clipboard';
+import { EXPLORER_COPY_COMMAND, EXPLORER_CUT_COMMAND, EXPLORER_PASTE_COMMAND, EXPLORER_DUPLICATE_COMMAND } from './file-tree-ops';
+import { dirtyNamesIn } from './disk-reconcile';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import { quickOpenRootsOf, scanRootsOf, searchRootsOf, type WorkspaceFolder } from './workspace-folders';
 import { useWorkspaceFolders } from './use-workspace-folders';
@@ -829,6 +832,16 @@ export function ProjectView({
             },
           ]
         : []),
+      /* ---- 资源管理器剪贴板家族（WS-13 2a 车）----
+       * 命令面板 / 键位页的入口；执行腿只有树自己那条（宾语与落点都要现场：多选集、
+       * 焦点行、目录缓存都在 `FileTree` 的运行时桥里现读）。树没挂载（项目没开、
+       * 侧栏被换掉）⇒ `runExplorerOp` 回 false，这里必须说人话——静默返回是铁律 4 的形状。
+       * 键位四条**刻意不带缺省键**（登记与理由见 `keybinding-specs-commands.ts`）：
+       * Ctrl+C/X/V/D 走树内白名单，全局认领会把编辑器的复制粘贴抢走。 */
+      { id: EXPLORER_COPY_COMMAND, title: '复制到剪贴板', category: '资源管理器', run: () => { if (!runExplorerOp('copy')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
+      { id: EXPLORER_CUT_COMMAND, title: '剪切到剪贴板', category: '资源管理器', run: () => { if (!runExplorerOp('cut')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
+      { id: EXPLORER_PASTE_COMMAND, title: '粘贴到当前文件夹', category: '资源管理器', run: () => { if (!runExplorerOp('paste')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
+      { id: EXPLORER_DUPLICATE_COMMAND, title: '创建副本', category: '资源管理器', run: () => { if (!runExplorerOp('duplicate')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
       // 宿主追加的命令（K2-MIGRATE-MOUNT；开关关时是空数组，表与接线前逐字一致）
       ...(extraShellCommands ?? []),
     ],
@@ -867,6 +880,20 @@ export function ProjectView({
       kernel.bus.emit('ui.diffView.open', compareSelectedRequest(left, right, project.rootDir));
     },
     [kernel, project.rootDir],
+  );
+  /**
+   * 搬运的脏闸（WS-13 2a 车）：把会话脏态投影成"这批路径里哪几份是脏的"。
+   *
+   * **真源只有这一份**：`dirtyPaths` 由编辑器逐文件上抛（宿主 App 持有），匹配判据住
+   * `disk-reconcile.dirtyNamesIn`——与删除/重命名守门（`guardFileOp`）同一条腿，
+   * 树侧拿到的就是"有没有未保存改动"的同一真相，不许长第二份"脏"定义。
+   * 身份恒定（读 ref），所以它进不了、也不需要进 `fileTreeVersion` 的比较面。
+   */
+  const dirtyPathsRef = useRef(dirtyPaths);
+  dirtyPathsRef.current = dirtyPaths;
+  const dirtyOf = useCallback(
+    (paths: readonly string[]): string[] => dirtyNamesIn(paths, dirtyPathsRef.current),
+    [],
   );
   /**
    * 名称显示对照（中日对照：日文名 → 中文名）。
@@ -940,8 +967,8 @@ export function ProjectView({
     },
     [kernel, notify],
   );
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], workspaceFolders: [] as readonly WorkspaceFolder[], onDiskEntriesChanged: undefined as ((delta: DiskDelta) => void) | undefined, onAddExtraRoot: undefined as (() => void) | undefined, onRemoveExtraRoot: undefined as ((dir: string) => void) | undefined, onCompareFiles: compareSelectedFiles });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], workspaceFolders, onDiskEntriesChanged, onAddExtraRoot, onRemoveExtraRoot, onCompareFiles: compareSelectedFiles };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, dirtyOf, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], workspaceFolders: [] as readonly WorkspaceFolder[], onDiskEntriesChanged: undefined as ((delta: DiskDelta) => void) | undefined, onAddExtraRoot: undefined as (() => void) | undefined, onRemoveExtraRoot: undefined as ((dir: string) => void) | undefined, onCompareFiles: compareSelectedFiles });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, dirtyOf, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], workspaceFolders, onDiskEntriesChanged, onAddExtraRoot, onRemoveExtraRoot, onCompareFiles: compareSelectedFiles };
   /**
    * 桥换了内容就得有人告诉 memo（PS-6 正确性修复）。
    *
@@ -984,6 +1011,7 @@ export function ProjectView({
           onImportPackage={a.importPackage}
           io={a.io}
           guardFileOp={a.guardFileOp}
+          dirtyOf={a.dirtyOf}
           onFilesGone={a.onFilesGone}
           onRevealInExplorer={a.onRevealInExplorer}
           refreshNonce={a.treeNonce}

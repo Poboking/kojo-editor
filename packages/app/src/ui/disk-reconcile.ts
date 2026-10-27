@@ -75,6 +75,26 @@ export function fileOpGuardMessage(
 }
 
 /**
+ * 搬运的脏闸（WS-13 2a 车）：给一批路径，返回其中**带着未保存修改**的那些的名字
+ * （按入参顺序、名字去重；目录命中时点名的是它底下那份脏文件）。
+ *
+ * 与 `fileOpGuardMessage` 共用**同一条匹配判据**（精确命中，或脏文件落在被搬目录之下）——
+ * 守门回答"能不能动"（一刀拒绝），这里回答"哪几份是脏的"（让作者选）。两问一份真源，
+ * 不留第二份"脏"的定义；执行层（`file-ops-exec.DirtyGate`）拿的就是这个投影。
+ */
+export function dirtyNamesIn(paths: readonly string[], dirtyPaths: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (const target of paths) {
+    for (const p of dirtyPaths) {
+      if (p !== target && !isPathUnder(target, p)) continue;
+      const name = p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+      if (!out.includes(name)) out.push(name);
+    }
+  }
+  return out;
+}
+
+/**
  * 盘上事实变更后的路径集合收尾（脏态与固定态同一份口径）：被删的（含被删目录下的
  * 子路径）退出、被改名的**连同其下子路径**换新路径——不留悬空旧路径。没命中时返回
  * **同一个引用**，不给 React 制造无谓的重渲染。
