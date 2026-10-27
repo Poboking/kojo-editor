@@ -36,6 +36,8 @@
 | **`audit:language` 的 M3 随主题档数线性涨**：每加一档主题必多写 48 个 `sugar.*` / `kojo2.*` 键名（三档＝ +90 行，163 → 254），闸当场红 | 这是**正当增长**、不是遗留回潮（`theme.ts` 就是 token 名的法定落点）。`--update-baseline` 重钉后**必须 `git diff` 逐行核**：只该看到 `theme.ts` 那一格与 `total` 一行；若出现别的文件，说明顺手把别处的漂移一起洗白了 |
 | **`repeat(auto-fit, minmax(132px, 1fr))` 在「卡片数 = 列数 × 1.5」时留孤儿**：六张主题卡在设置页实际宽度下排成 4 列 ⇒ 「4 + 2」，第二行右边空两格，看着像掉了一张 | 定长卡片的组**写死列数**（3 列 ⇒ 6 张正好 3 × 2，且原三张从「3 + 1 空格」变成整行占满）；折行判据用 `@container` 不用 `@media`——设置面板比窗口窄得多，窗口 1200px 时面板可能只有 430px，媒体查询根本不触发 |
 | 容器查询前要给容器写 `container-type: inline-size`（漏了 `@container` 静默不生效、不报错） | 加档/改折行点后**量出来**：`getComputedStyle(cards).gridTemplateColumns` 数一下到底是几列，别靠眼睛 |
+| **CSS 透视网格的铰链方向搞反 ⇒ 整片网格消失**：`transform-origin: 50% 100%` + `rotateX(62deg)` + `perspective(340px)` 下，371px 高的元素只剩 89px 可视（实机截图：网格"看不见"）——底边铰链把「近大远小」倒过来了，越远越被挤没 | 铰链钉**远边**（地平线那一侧，`50% 0`）+ 大透视（`700px`）：元素从地平线朝观察者铺开，消失点自然落在铰链边中点。改完用 `getComputedStyle(el,'::after')` 读 `top/height/transform` 反算可视高度，别靠眼睛 |
+| **半透明霓虹装饰的对比度要按「合成后」算**：判据是叠加**结果**对 `--fg` ≥ 4.5，不是色值本身的亮度（0.35 档暖白混出来 0.137，刚好卡 4.6）。另外 `background` 简写会把 `background-color` 复位成 transparent，而 `.u-ripple` 在减弱动效下的按压回落恰好用 `background-image` 换掉渐变 ⇒ 按钮按下去变成一块透明 | 先 sRGB 通道混合、再线性化求相对亮度；这类色值一律住 `themes/*.css`（定义点不进裸 rgba 账本），组件 CSS 只写 `var()`；渐变按钮把底色单列一条 `background-color` 兜住，覆盖规则三态（base / hover / active）都要给——`button.primary:hover` 带元素权重 (0,2,1)，只覆盖基态会在 hover 时输回去 |
 | cargo 输出带 ANSI 色码 | 正则匹配前先 stripAnsi |
 | 同工作区并行线 WIP 让集成冒烟断言误红（如 ruleCount 5→6） | 先 `audit` 粗判；只提交自己边界内文件；别用 `git stash` 动共享树 |
 | **rebase 判为"自动合并"的文件可能内嵌冲突标记**；`git add -A` 会把它提交进历史 | 逐文件 add + `git diff --cached` 过目；提交后扫 `^(<<<<<<<\|=======\|>>>>>>>)( \|$)`（带后缀才算真标记） |

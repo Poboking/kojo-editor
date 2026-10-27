@@ -1333,3 +1333,217 @@
   height: auto;
   max-height: none;
 }
+
+/* ============================================================================
+   Synthwave '84 · 霓虹底板（2026-10-27 用户反馈批）
+
+   两条诉求其实是一件事的两半：① 这一档的欢迎页「有点刺眼」；② 要有 Synthwave 那股
+   美术风格，但**编辑界面一格不许动**。于是把刺眼的那层（满宽亮粉 CTA）压下去，
+   把身份感挪到背景上——背景不参与阅读，天然不干扰编辑。
+
+   ## 隔离靠选择器，不靠开关
+
+   本段每一条都挂在 `.welcome-screen` 或它内部的卡片上，而项目态**根本不渲染
+   `WelcomeView`**（只有 `App` 的无项目分支挂 `WelcomeOverlayHost`）⇒ 编辑器五区
+   拿不到这里任何一个像素。这不是"约定"，是组件树结构：欢迎页与编辑器态互斥渲染。
+
+   ## 沿用 data-welcome-bg 的三档语义，不新增档位
+
+   `WELCOME_BG_IDS` 被 `welcome-bg-pref.test.ts` 逐字钉着三条，加档要动那份契约；
+   而"素雅 / 极光 / 纯色"本来就够表达这三件事，只是本档把它们翻译成霓虹语汇：
+
+   - `quiet`（缺省）= **静置**：天空 / 落日 / 网格一次画完，零动画；
+   - `aurora`        = **流动**：网格朝观察者滚、天幕极缓呼吸（本档把"极光"读作"有生命"）；
+   - `plain`         = **一刀切**：伪元素根本不生成，层 / 绘制 / 显存一起省。
+
+   缺属性时（首帧 `applyWelcomeBgPref` 还没跑到）按 `quiet` 画：`:not([data-welcome-bg='plain'])`
+   比逐档列举更宽，且永远不会把 `plain` 误判成"要画"。
+
+   ## 为什么只画在卡片上、不画页面层
+
+   弹窗态（常态）卡片铺满窗口，页面层被 `.app-frame-popup .welcome-screen::before
+   { content: none }` 关掉；量高态只存在一帧。给页面层再写一套配方 = 两份会漂移的
+   同一张图。整幅画只在卡片圆角之内，反而像一张装框的挂画。
+   ============================================================================ */
+
+/* 本档的几何量（无颜色，不进账本）：
+   - 落日直径吃视口高，窗口一矮就缩，不会在小窗里长成一整块彩；
+   - 网格**列距与行距分开**：竖线 64px、横线 36px。透视会把行距沿 Y 方向再压一次
+     （`rotateX` 的 cos + 透视因子），同值时横线只剩三四条，读起来像"稀疏格子"而不是地面；
+   - 动画位移必须 = 行距（36px），走完一个周期正好回到原位——见 `welcome-neon-roll`。 */
+:root[data-theme='synthwave84'] .welcome-screen {
+  --neon-sun-size: clamp(220px, 30vh, 340px);
+  --neon-grid-col: 64px;
+  --neon-grid-row: 36px;
+}
+
+/* ---- 第 1 层：天幕 + 落日 + 星点 + 扫描线（一次画完的十层背景，无 DOM、无图片）----
+   层序（上→下）= 扫描线 → 地面 → 星点 ×2 → 落日圆盘 → 落日辉光 → 地平线实线 →
+   地平线窄光晕 → 天空光柱 → 天幕。
+
+   「地面」那层在 72% 处硬切，它盖住落日的下半 ⇒ 落日"沉进地平线"这件事不需要遮罩；
+   「落日辉光」排在圆盘之后（更下层），中心被圆盘挡住，只露出外圈 ⇒ 一个天然的光环；
+   「地平线实线」画在落日之上，是地平线那道"岸"；
+   「天空光柱」是一枚竖椭圆，从地平线向上晕开 40% 高——第一版只有一层压扁的横向
+   光晕，天空因此是一块死紫，上半部（占卡片六成面积）读不出任何 Synthwave 语言。
+
+   第二条选择器是给 `aurora` 用的：极光配方那条特异性 (0,4,0)，只有同分且后到才压得住。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-card::before,
+:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background-color: var(--neon-sky-top);
+  background-image:
+    repeating-linear-gradient(180deg, var(--neon-scan) 0 1px, transparent 1px 4px),
+    linear-gradient(180deg, transparent 0 71.8%, var(--neon-ground-near) 72%, var(--neon-ground-far) 100%),
+    radial-gradient(var(--neon-star) 1px, transparent 1.4px),
+    radial-gradient(var(--neon-star) 1px, transparent 1.4px),
+    radial-gradient(
+      circle closest-side at 50% 50%,
+      var(--neon-sun-core) 0%,
+      var(--neon-sun-mid) 40%,
+      var(--neon-sun-edge) 58%,
+      var(--neon-sun-edge) 60%,
+      transparent 63%
+    ),
+    radial-gradient(circle closest-side at 50% 50%, var(--neon-sun-halo) 0%, transparent 100%),
+    linear-gradient(180deg, transparent calc(72% - 1px), var(--neon-horizon-line) 72%, transparent calc(72% + 1.5px)),
+    radial-gradient(78% 9% at 50% 72%, var(--neon-horizon-glow), transparent 70%),
+    radial-gradient(46% 40% at 50% 72%, var(--neon-sky-glow), transparent 74%),
+    linear-gradient(180deg, var(--neon-sky-top) 0%, var(--neon-sky-mid) 44%, var(--neon-sky-horizon) 72%);
+  background-size:
+    auto,
+    auto,
+    170px 130px,
+    260px 210px,
+    var(--neon-sun-size) var(--neon-sun-size),
+    calc(var(--neon-sun-size) * 1.9) calc(var(--neon-sun-size) * 1.9),
+    auto,
+    auto,
+    auto,
+    auto;
+  background-position:
+    0 0,
+    0 0,
+    0 0,
+    86px 64px,
+    50% 70%,
+    50% 70%,
+    0 0,
+    50% 50%,
+    50% 50%,
+    0 0;
+  background-repeat: no-repeat, no-repeat, repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  /* 覆盖素雅档的点阵配方：那枚 mask 会把七层一起裁成"四边淡出"，不是这幅画要的边界 */
+  -webkit-mask-image: none;
+  mask-image: none;
+  /* 覆盖极光档的 blur 与漂移：本档的"动"只发生在网格那一层，天幕是静的 */
+  filter: none;
+  animation: none;
+}
+
+/* ---- 第 2 层：透视网格 ----
+   一张等距网格，用 `perspective + rotateX` 让它"躺下去"——竖线自然收敛到消失点、
+   横线自然越远越密，不需要手算任何多边形。
+
+   **铰链必须钉在顶边**（`transform-origin: 50% 0`）：顶边就是地平线，网格从那里
+   向观察者铺开，消失点自然落在顶边中点。第一版用了底边铰链 + `perspective(340px)`，
+   算下来 371px 高的元素被压成 89px 的一条细带（实机截图取证：整片网格几乎不可见）——
+   底边铰链把"近大远小"倒过来了，越远越被挤没。顶边铰链 + `700px` 透视则让
+   236px 的元素铺成 ~183px 的可视高度，正好吃满地平线以下。
+   溢出卡片的部分由卡片自己的 `overflow: hidden` 裁（本档才加，见下）。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-card::after {
+  content: '';
+  position: absolute;
+  left: -12%;
+  right: -12%;
+  top: 72%;
+  height: 42%;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(90deg, var(--neon-grid-x) 0 1px, transparent 1px var(--neon-grid-col)),
+    repeating-linear-gradient(180deg, var(--neon-grid-y) 0 1px, transparent 1px var(--neon-grid-row));
+  transform: perspective(700px) rotateX(56deg);
+  transform-origin: 50% 0;
+  /* 远端（顶边 = 地平线）淡入：网格不许在地平线上凭空断成一条硬边，
+     但也不能淡太久——第一版在 86% 就收干，整片网格被自己抹掉了。
+     10% 是实机调出来的：再短就会在地平线处露出一道"空地面"。 */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 10%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 10%);
+}
+
+/* 网格要溢出卡片（左右 -12%）才画得出"视野外还在延伸"，裁在圆角上顺带把圆角外的
+   装饰一起收干净。只在这一档加：其他档没有溢出层，多一层裁切只会白付一次合成。 */
+:root[data-theme='synthwave84']:not([data-welcome-bg='plain']) .welcome-screen .welcome-card {
+  overflow: hidden;
+}
+
+/* ---- 第 3 层：动效只给「极光」档 ----
+   两处都走 transform / opacity（合成层），不吃布局。全局两条减弱动效规则
+   （`@media (prefers-reduced-motion)` 与 `:root[data-motion='reduced']`）会把时长压到
+   0.01ms、次数压到 1，且 `fill-mode` 缺省为 none ⇒ 动画结束后回到元素自身的 transform
+   （即 from 帧），滚动一个周期恰好 = 一个步长，所以"被压平"与"停在起点"像素级同图。 */
+:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-card::before {
+  animation: welcome-neon-breathe 9s var(--ease-in-out) infinite;
+}
+
+:root[data-theme='synthwave84'][data-welcome-bg='aurora'] .welcome-screen .welcome-card::after {
+  animation: welcome-neon-roll 1.8s linear infinite;
+}
+
+@keyframes welcome-neon-breathe {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 位移量必须逐字 = `--neon-grid-row`（36px）：走完一个周期正好回到原位，循环无跳帧。
+   这里没有写成 var()，是因为 keyframes 里的自定义属性在部分内核上不参与插值
+   （会静默变成"一张不动的网格"）——宁可两处同值 + 这条注记，也不赌运行时。 */
+@keyframes welcome-neon-roll {
+  from {
+    transform: perspective(700px) rotateX(56deg) translate3d(0, 0, 0);
+  }
+
+  to {
+    transform: perspective(700px) rotateX(56deg) translate3d(0, 36px, 0);
+  }
+}
+
+/* ---- 第 4 层：主 CTA——把刺眼的那块收下来 ----
+   `button.primary` 的底色是 `var(--accent-strong)` = 满彩粉 `#ff7edb`，铺在全宽 52px 上
+   就是"一块发光的粉"（实机截图取证）。这里换成本档的粉→紫渐变（霓虹味更足，平均亮度
+   从 0.413 压到 0.268），再补一枚内描边当灯管边。
+   三态都显式写：`button.primary:hover` 那类规则带元素权重 (0,2,1)，只覆盖基态会在 hover
+   时输回去。`background-color` 单列一条是有意的——`.u-ripple` 在减弱动效下的按压回落会
+   用 `background-image` 换掉渐变，有底色兜着才不至于按下去变成一块透明。 */
+:root[data-theme='synthwave84'] .welcome-screen .welcome-open {
+  background-color: var(--neon-cta-from);
+  background-image: linear-gradient(96deg, var(--neon-cta-from), var(--neon-cta-to));
+  box-shadow:
+    inset 0 0 0 1px var(--neon-cta-edge),
+    0 8px 24px var(--neon-cta-glow);
+}
+
+:root[data-theme='synthwave84'] .welcome-screen .welcome-open:hover:not(:disabled) {
+  background-color: var(--neon-cta-from-hover);
+  background-image: linear-gradient(96deg, var(--neon-cta-from-hover), var(--neon-cta-to-hover));
+  box-shadow:
+    inset 0 0 0 1px var(--neon-cta-edge),
+    0 10px 28px var(--neon-cta-glow);
+}
+
+:root[data-theme='synthwave84'] .welcome-screen .welcome-open:active:not(:disabled) {
+  background-color: var(--neon-cta-from);
+  background-image: linear-gradient(96deg, var(--neon-cta-from), var(--neon-cta-to));
+}
