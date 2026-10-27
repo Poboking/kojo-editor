@@ -52,6 +52,7 @@ import {
 } from '@kojo/kojo-core';
 import type {
   StructureCaptureTable,
+  StructureEdit,
   StructureFacet,
   StructureFailureReason,
   StructureParseReply,
@@ -74,6 +75,7 @@ import {
   type Kojo2WorkerResult,
 } from './kojo2-worker-protocol';
 import type { Kojo2Capture } from './kojo2-tokenizer';
+import { applyEdit, commonEdit } from './edit';
 
 export type Kojo2WorkerClientState = 'idle' | 'starting' | 'ready' | 'unavailable' | 'disposed';
 
@@ -107,6 +109,12 @@ interface PendingRequest {
   readonly type: Kojo2WorkerRequestType;
   /** 这条请求带的增量基准（v3 只回 `incremental`；"有没有重新解树"由树身份是否变化推出来） */
   readonly baseTreeId?: string;
+  /** 这条请求交出去的整篇文本（答复回来后它就是下一条 `parse{edit}` 的基线） */
+  readonly text: string;
+  /** 主线程的版本号（差集基线丢了时按原版本重发整篇） */
+  readonly version: number;
+  /** 这一条是带着 `edit` 发的（`parse-failed` = 基线树不认识 ⇒ 重发整篇，不记失败） */
+  fromEdit: boolean;
   readonly resolve: (result: Kojo2WorkerResult<Kojo2WorkerReply>) => void;
   readonly timer: ReturnType<typeof setTimeout>;
 }
@@ -149,6 +157,9 @@ export class Kojo2WorkerClient {
   /** 说 v3 还是 v2（双跑窗口的开关；`protocol-mismatch` / 引导期无回话 ⇒ 翻到 `'v2'`） */
   private mode: 'v3' | 'v2';
   private readonly pending = new Map<number, PendingRequest>();
+  /** 上一条**成功答复**对应的文本与树身份（`parse{edit}` 的基线；两者永远成对更新） */
+  private lastText: string | null = null;
+  private lastTreeId: string | null = null;
   private readonly createWorker: () => Worker;
   private readonly timeoutMs: number;
   private readonly bootstrapTimeoutMs: number;
@@ -254,6 +265,8 @@ export class Kojo2WorkerClient {
     });
     const worker = this.worker;
     this.worker = null;
+    this.lastText = null;
+    this.lastTreeId = null;
     try {
       worker?.terminate();
     } catch {
@@ -298,9 +311,19 @@ export class Kojo2WorkerClient {
         });
         if (bootstrapStall) this.fallBackToV2('引导期一条回话都没有（对面多半是旧 worker，它不认识 open）');
       }, budget);
-      this.pending.set(id, { id, type, baseTreeId: payload.oldTreeId, timer, resolve });
+      const entry: PendingRequest = {
+        id,
+        type,
+        baseTreeId: payload.oldTreeId,
+        text: payload.text,
+        version: payload.version,
+        fromEdit: false,
+        timer,
+        resolve,
+      };
+      this.pending.set(id, entry);
       try {
-        this.dispatch(worker, id, type, payload);
+        this.dispatch(worker, id, type, payload, entry);
       } catch (error) {
         // 投递都失败 = 线程已经死了：这一条与其余在途请求收同一结局，客户端进入终态
         this.pending.delete(id);
@@ -311,20 +334,39 @@ export class Kojo2WorkerClient {
     }).then((result) => (result.ok ? { ok: true as const, value: result.value as T } : result));
   }
 
-  /** 投递一条请求：v3（`parse` + `want`）或 v2（LAU-1 之前那套按 type 分的消息） */
-  private dispatch(worker: Worker, id: number, type: Kojo2WorkerRequestType, payload: RequestPayload): void {
+  /**
+   * 投递一条请求：v3（`parse` + `want`）或 v2（LAU-1 之前那套按 type 分的消息）。
+   *
+   * ## v3 走差集（§4.1 迁移表最后一条：kojo2 原本每键带全文，接上 `edit` 才与 v1 齐平）
+   *
+   * 基线是**上一条成功答复**交出的那棵树 + 那条请求的文本（两者成对记，见 {@link rememberBaseline}）。
+   * 这条线程自己求一条保守编辑，缝回去自检一次——缝不回来（或还没有基线）就老实发整篇：
+   * 差集口径漂了宁可贵一次，绝不让两侧文本分叉。上游若显式给了 `oldTreeId`，只有它正好是
+   * 我们手上的基线时才改走差集（否则基线文本对不上，worker 会按整篇重解，白贵一趟）。
+   */
+  private dispatch(
+    worker: Worker,
+    id: number,
+    type: Kojo2WorkerRequestType,
+    payload: RequestPayload,
+    entry: PendingRequest,
+  ): boolean {
     if (this.mode === 'v3') {
+      const base = this.baselineFor(payload);
+      const edit = base === null ? null : this.editOf(base.text, payload.text);
+      entry.fromEdit = edit !== null && base !== null;
       const request: StructureRequest = {
         id,
         kind: 'parse',
         doc: 0,
         version: payload.version,
-        text: payload.text,
-        ...(payload.oldTreeId === undefined ? {} : { baseTreeId: payload.oldTreeId }),
+        ...(entry.fromEdit && base !== null
+          ? { edit: edit!, baseTreeId: base.treeId }
+          : { text: payload.text, ...(payload.oldTreeId === undefined ? {} : { baseTreeId: payload.oldTreeId }) }),
         want: facetsOf(type),
       };
       worker.postMessage(request);
-      return;
+      return entry.fromEdit;
     }
     const legacy: Kojo2WorkerRequest = {
       id,
@@ -334,12 +376,40 @@ export class Kojo2WorkerClient {
       ...(payload.oldTreeId === undefined ? {} : { oldTreeId: payload.oldTreeId }),
     } as Kojo2WorkerRequest;
     worker.postMessage(legacy);
+    entry.fromEdit = false;
+    return false;
+  }
+
+  /** 这条请求能不能走差集：有基线、且上游没给一个和它对不上的基准 */
+  private baselineFor(payload: RequestPayload): { readonly text: string; readonly treeId: string } | null {
+    const text = this.lastText;
+    const treeId = this.lastTreeId;
+    if (text === null || treeId === null) return null;
+    if (payload.oldTreeId !== undefined && payload.oldTreeId !== treeId) return null;
+    return { text, treeId };
+  }
+
+  /** 一条保守编辑（缝不回去 / 文本没变 ⇒ `null`：整篇是永远正确的兜底） */
+  private editOf(base: string, next: string): StructureEdit | null {
+    if (base === next) return null;
+    const edit = commonEdit(base, next);
+    return applyEdit(base, edit) === next ? edit : null;
+  }
+
+  /** 成功答复回来：把"树身份 + 那条请求的文本"成对记成下一条的基线 */
+  private rememberBaseline(treeId: string, text: string): void {
+    if (treeId.length === 0) return;
+    this.lastTreeId = treeId;
+    this.lastText = text;
   }
 
   /** 双跑窗口：翻到 v2（不重发在飞请求——它们已经各自超时收账；后续请求走旧话） */
   private fallBackToV2(why: string): void {
     if (this.mode === 'v2') return;
     this.mode = 'v2';
+    // 旧路没有差集通道 ⇒ 基线作废（留着只会让下一次 v3 尝试拿一份隔代的文本）
+    this.lastText = null;
+    this.lastTreeId = null;
     this.warnOnce(`legacy:${why}`, `[kojo2-worker] v3 通道交给旧路（v2）：${why}`);
   }
 
@@ -372,11 +442,44 @@ export class Kojo2WorkerClient {
       this.lateReplies += 1; // 超时之后才到（或凭空出现）：丢掉，不改已定的答案
       return undefined;
     }
-    this.pending.delete(id);
+    this.settlePending(pending);
+    return pending;
+  }
+
+  /** 从待办表摘掉一条并记"worker 说过话了"（成功 / 失败 / 重发都走这一步，账只有一处） */
+  private settlePending(pending: PendingRequest): void {
+    this.pending.delete(pending.id);
     clearTimeout(pending.timer);
     this.answered = true;
     if (this.status === 'starting') this.status = 'ready';
-    return pending;
+  }
+
+  /**
+   * 差集请求被 worker 判"基线树不认识"（线程换过 / 树被缓存挤掉）⇒ **当场重发整篇**：
+   * 同一条 `id`、同一张计时票，不记失败。这是协议的正常兜底——不接住的话，一次基线丢失会让
+   * 这条语言此后每次击键都 `parse-failed`（v1 那条路早就是这么做的）。
+   */
+  private retryAsFullText(pending: PendingRequest): boolean {
+    if (!pending.fromEdit) return false;
+    const worker = this.worker;
+    if (worker === null) return false;
+    this.lastText = null;
+    this.lastTreeId = null;
+    pending.fromEdit = false;
+    try {
+      const request: StructureRequest = {
+        id: pending.id,
+        kind: 'parse',
+        doc: 0,
+        version: pending.version,
+        text: pending.text,
+        want: facetsOf(pending.type),
+      };
+      worker.postMessage(request);
+      return true;
+    } catch {
+      return false; // 投递失败 ⇒ 由调用方照常收账（线程已经不在了）
+    }
   }
 
   /** v3 回话 → 上游要的那一种回复（`facets` → 三条旧形状） */
@@ -386,8 +489,13 @@ export class Kojo2WorkerClient {
         this.fallBackToV2(`open 握手被拒：${reply.message}`);
         return;
       }
-      const pending = this.pendingFor(reply.id);
-      if (pending === undefined) return;
+      const pending = this.pending.get(reply.id);
+      if (pending === undefined) {
+        if (reply.id !== 0) this.lateReplies += 1; // 与 `pendingFor` 同口径：对不上号就丢
+        return;
+      }
+      if (reply.reason === 'parse-failed' && this.retryAsFullText(pending)) return;
+      this.settlePending(pending);
       pending.resolve(
         reply.treeId === undefined
           ? { ok: false, reason: reasonOf(reply.reason), message: reply.message }
@@ -406,6 +514,8 @@ export class Kojo2WorkerClient {
     }
     const pending = this.pendingFor(reply.id);
     if (pending === undefined) return;
+    // 基线只在**成功**答复之后推进（失败那一条的树身份是"没解成"，拿它当基线只会白贵一趟）
+    this.rememberBaseline(reply.treeId, pending.text);
     pending.resolve(this.translate(reply, pending.type, pending.baseTreeId));
   }
 

@@ -671,7 +671,9 @@ export function createKojo2ProtocolRing(
       text = baseline.slice(0, edit.start.offset) + edit.newText + baseline.slice(edit.oldEnd.offset);
     }
 
-    const want: readonly StructureFacet[] = request.want ?? ['semantic', 'folds', 'indent'];
+    // `want` 缺省 = 全带（§4.1）：kojo2 这一族不产 `syntax` 面（它由 v1 语言那条 worker 供），
+    // 故这一面点名了也只会安静缺省——`queryTypeOf` 回 null 即"这一面这次没算"。
+    const want: readonly StructureFacet[] = request.want ?? ['semantic', 'folds', 'indent', 'syntax'];
     const queryTypes = want.map(queryTypeOf).filter((type): type is 'captures' | 'folds' | 'indents' => type !== null);
     const parsers: { parseMs: number; queryMs: number; loadMs: number; treeId: string; incremental: boolean } = {
       parseMs: 0,

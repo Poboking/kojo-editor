@@ -651,6 +651,58 @@ describe('请求字段形状（协议真源 = @kojo/kojo-core 的 structure-prot
   });
 });
 
+/* ============================ 差集（§4.1 迁移表最后一条） ============================ */
+
+describe('差集路：kojo2 每键只发改动那一段（与 v1 齐平）', () => {
+  it('首条整篇；基线到手之后每键走 parse{edit, baseTreeId}，不再带全文', async () => {
+    const { client, worker } = makeClient();
+    const first = client.captures('> 一。\n', 1);
+    const firstSent = sentOf(worker)[0]!;
+    expect(firstSent.raw, '还没有基线 ⇒ 整篇').toMatchObject({ kind: 'parse', text: '> 一。\n' });
+    worker.reply(capturesReply(firstSent.id, 't1'));
+    expect((await first).ok).toBe(true);
+
+    const second = client.captures('> 一二。\n', 2);
+    const edited = worker.sent.at(-1) as Record<string, unknown>;
+    expect(edited, '有基线 ⇒ 差集').toMatchObject({ kind: 'parse', baseTreeId: 't1', want: ['semantic'] });
+    expect(edited.text, '差集请求不许再带整篇').toBeUndefined();
+    expect(edited.edit, `差集内容不对：${JSON.stringify(edited.edit)}`).toMatchObject({
+      start: { row: 0, column: 3, offset: 3 },
+      oldEnd: { row: 0, column: 3, offset: 3 },
+      newEnd: { row: 0, column: 4, offset: 4 },
+      newText: '二',
+    });
+    worker.reply(capturesReply(edited.id as number, 't2'));
+    expect((await second).ok).toBe(true);
+  });
+
+  it('上游给了对不上的 oldTreeId ⇒ 老实发整篇，但把它那枚基准原样带上', () => {
+    const { client, worker } = makeClient();
+    void client.captures('甲', 1, 'tree-other');
+    expect(worker.sent.at(-1)).toMatchObject({ kind: 'parse', text: '甲', baseTreeId: 'tree-other' });
+    expect((worker.sent.at(-1) as { edit?: unknown }).edit).toBeUndefined();
+  });
+
+  it('基线树丢了（worker 回 parse-failed）⇒ 同一条 id 当场重发整篇，且不判死', async () => {
+    const { client, worker } = makeClient();
+    const first = client.folds('> 一。\n', 1);
+    worker.reply(foldsReply(sentOf(worker)[0]!.id, 't1'));
+    expect((await first).ok).toBe(true);
+
+    const second = client.folds('> 一！\n', 2);
+    const edited = worker.sent.at(-1) as { id: number };
+    expect(worker.sent.at(-1)).toMatchObject({ kind: 'parse', baseTreeId: 't1' });
+    worker.reply({ ok: false, id: edited.id, kind: 'parse', reason: 'parse-failed', message: 'baseTreeId 不是本线程手上那棵树' });
+    await flush();
+    expect(worker.sent.at(-1), '差集兜底 = 重发整篇').toMatchObject({ kind: 'parse', id: edited.id, text: '> 一！\n' });
+    expect(client.pendingCount, '同一条请求仍然在飞（不是两条）').toBe(1);
+    worker.reply(foldsReply(edited.id, 't2'));
+    const result = await second;
+    expect(result.ok, result.ok ? '' : result.message).toBe(true);
+    expect(client.state).toBe('ready');
+  });
+});
+
 /* ============================ 真 wasm（进程内回环） ============================ */
 
 describe('真 wasm · parse / captures / folds / indents（worker 本体）', () => {
