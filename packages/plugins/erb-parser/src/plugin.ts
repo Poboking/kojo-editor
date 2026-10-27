@@ -15,8 +15,9 @@ import type {
   Plugin,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, isErbDialectPath, projectFingerprintOf } from '@kojo/plugin-api';
+import { KernelServices, isErbDialectPath, isPathUnder, pathKey, projectFingerprintOf } from '@kojo/plugin-api';
 import { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
+import { applyIndexDelta, type IncrementalFileUpdate } from './incremental';
 import { idleIndexState, indexStateOf, sourceFactsOf, type IndexOutcome, type SourceReading } from './index-state';
 import {
   PARSE_FILE_TASK,
@@ -1111,6 +1112,8 @@ export function createErbParserPlugin(): Plugin {
 
         const built = makeIndex();
         index = built;
+        // 整扫交出的索引带全量反向引用（惰性聚合）：增量那轮置的"待修"标记到此了结
+        referencesRepairPending = false;
         // 收尾事实（IDX-STATE）：`ready` 与 `nothing-to-scan` 的分界由 `coverageOf()` 判，
         // 这里只交读数——一个根都没走到的那一轮永远不会被写成"扫完了"。
         // 失败文件表（IDX-SILENT）随收尾一起交出：`filesScanned` 与 `filesFailed` 是同一批 walk
@@ -1142,6 +1145,234 @@ export function createErbParserPlugin(): Plugin {
         });
         inFlight = p;
         return p;
+      }
+
+      /** 盘上改名 / 显式重建共用的**整扫**入口（`rebuildIndex` 与增量的回退都走它） */
+      async function rebuildNow(): Promise<ErbIndex> {
+        if (projectRoots.length === 0) throw new Error('No project is open; cannot rebuild the ERB index');
+        if (refreshScanRoots() && inFlight) return inFlight;
+        generation++;
+        return startBuild(generation);
+      }
+
+      /* ---------------- 盘上增量（WS-05）：外部改动去抖收集 + 内部动作直调 ---------------- */
+
+      /**
+       * 增量去抖窗口（250–400ms 档）。一次保存常炸出多条事件（原子写的临时文件 + rename、
+       * 连写几份档），逐条重读是白付；但也不能等 60s 整轮——作者按下 Ctrl+S 后
+       * 函数树 / Ctrl+T 应当立刻跟上。
+       */
+      const INCREMENTAL_DEBOUNCE_MS = 300;
+      /** 待增量处理的路径（pathKey → 原文；判等一律 pathKey，与事件纪律同口径） */
+      const pendingChanged = new Map<string, string>();
+      const pendingRemoved = new Map<string, string>();
+      let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+      /**
+       * 增量把反向引用标成"不可用"（见 {@link applyFileChangesImpl}）：置位后
+       * **下一次访问 `index.references`** 才把整扫排上——不在保存路径上无条件付整树重扫，
+       * 也不给"查找引用"答一份与正文不符的名单（契约的保守口径）。
+       */
+      let referencesRepairPending = false;
+
+      function clearPendingFileChanges(): void {
+        if (pendingTimer !== null) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        pendingChanged.clear();
+        pendingRemoved.clear();
+      }
+
+      const baseNameOf = (path: string): string => {
+        const trimmed = path.replace(/[\\/]+$/, '');
+        const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+        return cut >= 0 ? trimmed.slice(cut + 1) : trimmed;
+      };
+
+      /** 索引"该管"的路径：落在当前扫描根内（目录由 `removed` 的前缀语义覆盖） */
+      function inIndexScope(path: string): boolean {
+        if (typeof path !== 'string' || path.length === 0) return false;
+        return scanRootPlan().roots.some((root) => isPathUnder(root, path));
+      }
+
+      /** `file.changed` 的收集口（与"扫描根活读比对"同在既有事件订阅里） */
+      function collectFileChange(ev: { readonly kind: string; readonly path: string }): void {
+        if (index === null || projectRoots.length === 0) return;
+        const path = ev.path;
+        if (!inIndexScope(path)) return; // 根外（存档 / 素材 / 别处）：索引里没有它的位置
+        const key = pathKey(path);
+        if (ev.kind === 'unlink') {
+          pendingChanged.delete(key);
+          pendingRemoved.set(key, path);
+        } else {
+          pendingRemoved.delete(key);
+          pendingChanged.set(key, path);
+        }
+        if (pendingTimer !== null) return; // 首条起算、不随事件重置（同内核去抖的纪律）
+        pendingTimer = setTimeout(() => {
+          pendingTimer = null;
+          void flushFileChanges();
+        }, INCREMENTAL_DEBOUNCE_MS);
+      }
+
+      /** 去抖窗口落地：`io.exists` 判删（改名常以 change/add 报告旧路径已不在），随后批量增量 */
+      async function flushFileChanges(): Promise<void> {
+        const changed = [...pendingChanged.values()];
+        const removed = [...pendingRemoved.values()];
+        pendingChanged.clear();
+        pendingRemoved.clear();
+        if (changed.length === 0 && removed.length === 0) return;
+        // 整扫在跑 / 刚被换根触发：它读的就是盘上现状，这趟增量可省（不叠加、不抢）
+        if (inFlight !== null) return;
+        const alive: string[] = [];
+        for (const path of changed) {
+          let exists = true;
+          try {
+            exists = await io.exists(path);
+          } catch {
+            exists = true; // 判不出来：按原地重读处理（读失败会在下一层回退整扫）
+          }
+          if (exists) alive.push(path);
+          else removed.push(path);
+        }
+        if (alive.length === 0 && removed.length === 0) return;
+        try {
+          await applyFileChangesImpl({ changed: alive, removed });
+        } catch (err: unknown) {
+          // 回退整扫本身失败才走到这里：原因已经在 impl 里记过一条 error，这里只补一层上下文
+          ctx.log.error(`Incremental index update did not settle: ${String(err)}`);
+        }
+      }
+
+      /**
+       * 增量更新（契约 `applyFileChanges` 的实现，WS-05）。
+       *
+       * 只处理"落在扫描根内 + 方言扩展名"的 changed（目录 / 素材 / 根外一律不算失败，只数）；
+       * removed 按前缀移除（目录删改名的正确形态）。读 / 解析失败、形状不符 ⇒ **回退整扫**
+       * （`rebuildNow`，既有通道，含快照复用与代际语义），绝不交一份半新半旧的索引。
+       *
+       * 反向引用（`references`）**保守失效**：见 `./incremental.ts` 头注——增量只重扫了
+       * 变过的文件，旧边里既有过期的、也有因新增定义而漏掉的，带着它比不带更坏。
+       * 失效靠新索引上的一个 getter 落地：谁读 `index.references`，谁就在这里把整扫排上
+       * （"下一次访问走全量重建"，不在保存路径上无条件付整树重扫）。
+       */
+      async function applyFileChangesImpl(input: {
+        readonly changed: readonly string[];
+        readonly removed: readonly string[];
+      }): Promise<ErbIndex | null> {
+        const startedAt = Date.now();
+        const base = index;
+        if (base === null) return null; // 无索引 ⇒ 不凭空造（下一次整扫自会读到盘上现状）
+        if (projectRoots.length === 0) return null;
+        if (inFlight !== null) return base; // 整扫在跑：它的结果会覆盖这趟
+        const gen = generation;
+        const asPaths = (value: unknown): string[] =>
+          Array.isArray(value) ? value.filter((p): p is string => typeof p === 'string' && p.length > 0) : [];
+        const changedIn = asPaths(input?.changed);
+        const removedIn = asPaths(input?.removed);
+        const roots = scanRootPlan().roots;
+        const inRoots = (p: string): boolean => roots.some((root) => isPathUnder(root, p));
+        const keptChanged = changedIn.filter((p) => inRoots(p) && isDialect(baseNameOf(p)));
+        const keptRemoved = removedIn.filter(inRoots);
+        const skipped = changedIn.length - keptChanged.length;
+        if (keptChanged.length === 0 && keptRemoved.length === 0) {
+          if (skipped > 0) {
+            ctx.log.info(
+              `Incremental index update: ${skipped} path(s) outside the scan roots or not ERB dialect, ignored`,
+            );
+          }
+          return base;
+        }
+        try {
+          // 批量读（一份也走同一条管线：编码探测 / BOM / EOL 归一化与整扫逐字一致）
+          const texts = await io.readTexts(keptChanged);
+          const updated: IncrementalFileUpdate[] = [];
+          for (let i = 0; i < keptChanged.length; i++) {
+            const path = keptChanged[i]!;
+            const tf = texts[i];
+            if (!tf) throw new Error(`read failed: ${path}`);
+            let size: number | null = null;
+            try {
+              size = (await io.stat(path))?.size ?? null;
+            } catch {
+              size = null; // stat 不可用 ⇒ 该文件判过期（保守方向同整扫），不影响别的条目
+            }
+            // mtime + size 与索引里记的一致 ⇒ 正文没变（与整扫的快照复用同一条判据）：
+            // 一次保存常伴随多条事件，这一条把重复的那些折掉，也避免无谓的广播。
+            const recordedMtime = base.fileMtimes?.get(path);
+            const recordedSize = base.fileSizes?.get(path);
+            if (
+              base.files.has(path) &&
+              tf.mtimeMs !== null &&
+              size !== null &&
+              recordedMtime === tf.mtimeMs &&
+              recordedSize === size
+            ) {
+              continue;
+            }
+            updated.push({ path, file: parseErbText(tf.text, path), mtimeMs: tf.mtimeMs, size });
+          }
+          // 期间换了项目 / 扫描根变了：新一代已经接管，这趟结果作废（不提交、不广播）
+          if (gen !== generation) return inFlight ?? index;
+          const result = applyIndexDelta({ index: base, updated, removed: keptRemoved });
+          if (updated.length === 0 && result.dropped === 0) {
+            ctx.log.info(`Incremental index update: nothing changed (${keptChanged.length} path(s) re-read)`);
+            return base;
+          }
+          referencesRepairPending = true;
+          attachStaleReferences(result.index);
+          index = result.index;
+          noteState(gen, 'settled', result.index.files.size, result.index.byName.size);
+          ctx.log.info(
+            `ERB index updated incrementally: +${result.added} ~${result.replaced} -${result.dropped} ` +
+              `(skipped ${skipped}, ${Date.now() - startedAt}ms; references invalidated until the next full rebuild)`,
+          );
+          ctx.bus.emit('kojo.functionChanged', {
+            projectRoot: currentRoot,
+            files: [...result.index.files.keys()],
+          });
+          return result.index;
+        } catch (err: unknown) {
+          ctx.log.error(
+            `Incremental index update failed (${changedIn.length} changed / ${removedIn.length} removed); ` +
+              `falling back to a full rebuild: ${String(err)}`,
+          );
+          return rebuildNow();
+        }
+      }
+
+      /**
+       * 给增量索引挂上"反向引用不可用"的读数口：读一次就把整扫排上（并只排一次）。
+       *
+       * 为什么用 getter 而不是直接不带这个字段：`referencesOf` / 调用层级 / 行内注解都写的是
+       * `index.references?.bySymbol`——字段缺席它们读到的是"没有引用"。getter 让"下一次访问"
+       * 这个契约口径有落点：先如实答"不可用"，同时替作者把全量引用扫排上。
+       */
+      function attachStaleReferences(target: ErbIndex): void {
+        let requested = false;
+        Object.defineProperty(target, 'references', {
+          enumerable: true,
+          configurable: true,
+          get: () => {
+            if (!requested) {
+              requested = true;
+              requestReferencesRepair();
+            }
+            return undefined;
+          },
+        });
+      }
+
+      /** 排一次"为恢复反向引用"的整扫（在途有空时才排；没有项目 / 已有整扫 ⇒ 交给它们） */
+      function requestReferencesRepair(): void {
+        if (!referencesRepairPending) return;
+        if (inFlight !== null || projectRoots.length === 0) return;
+        referencesRepairPending = false;
+        ctx.log.info('References unavailable after an incremental index update; scheduling a full rebuild');
+        generation++;
+        void startBuild(generation).catch((err: unknown) => {
+          ctx.log.error(`Index rebuild for references failed: ${String(err)}`);
+        });
       }
 
       const service: ErbParserService = {
@@ -1188,18 +1419,30 @@ export function createErbParserPlugin(): Plugin {
          * （快照复用 / 收尾广播 / 落盘全按原语义，不另造扫描循环）。
          * 扫描根恰好在同一刻变了 ⇒ `refreshScanRoots` 已起新一轮，直接跟它，不重复全树遍历。
          */
-        async rebuildIndex(): Promise<ErbIndex> {
-          if (projectRoots.length === 0) throw new Error('No project is open; cannot rebuild the ERB index');
-          if (refreshScanRoots() && inFlight) return inFlight;
-          generation++;
-          return startBuild(generation);
-        },
+        rebuildIndex: rebuildNow,
+
+        /**
+         * 盘上**增量**更新（WS-05，契约 additive）：文件增删改名 / 保存后让平铺列表、
+         * 函数树、Ctrl+T 立刻跟上，不必等 60s 整轮。
+         *
+         * 口径全在 {@link applyFileChangesImpl}：无索引 ⇒ null；根外 / 非方言 ⇒ 只数不报错；
+         * 读 / 解析失败 ⇒ 回退既有整扫；成功 ⇒ 广播 `kojo.functionChanged`（既有事件）。
+         */
+        applyFileChanges: (input: { readonly changed: readonly string[]; readonly removed: readonly string[] }) =>
+          applyFileChangesImpl(input),
 
         // 位置 → 符号（B0）：只读已构建的索引，不读盘；未构建 → undefined（不猜）
         functionAt: (path: string, line: number) => (index ? functionAt(index, path, line) : undefined),
 
         // 符号 → 引用点（H2）：同上，只读 `index.references`，未构建 → 空数组
-        referencesTo: (name: string) => (index ? referencesOf(index, name) : []),
+        // WS-05：增量更新后反向引用是**保守失效**的（见 `attachStaleReferences`）——
+        // 读到"不可用"的那一下就把整扫排上，作者下一次查找引用拿到的是真事实。
+        referencesTo: (name: string) => {
+          if (index === null) return [];
+          const refs = referencesOf(index, name);
+          requestReferencesRepair();
+          return refs;
+        },
       };
 
       // 响应式：项目打开 → 自动构建（根 = 口上根 ∪ 工作区根，见 startBuild）；项目关闭 → 清空
@@ -1225,6 +1468,9 @@ export function createErbParserPlugin(): Plugin {
           currentRoot = '';
           activeSignature = '';
           generation++;
+          // 待增量处理的那批路径属于这个项目：一起丢掉（定时器也撤掉，别在关项目后读盘）
+          clearPendingFileChanges();
+          referencesRepairPending = false;
           // 复位事实面（IDX-STATE）：上一棵树的读数留着就是"这一轮还在扫上一轮的东西"
           lastSources = [];
           lastRootsWalked = 0;
@@ -1234,6 +1480,8 @@ export function createErbParserPlugin(): Plugin {
           lastIndexState = idleIndexState();
         }),
       );
+      // 插件卸载：去抖窗口里那批路径不该在卸载后落地（读盘 / 广播都属于本插件）
+      ctx.onDispose(clearPendingFileChanges);
 
       /* ---------------- 扫描根变更的"活读时刻"（IDX-ROOT，2026-10-19） ----------------
 
@@ -1247,10 +1495,15 @@ export function createErbParserPlugin(): Plugin {
        - `file.changed`（内核监视器）：作者刚在新授权的落点里建/存了文件；
        - `editor.activeFileChanged`（宿主）：作者切到自己工作区那份口上文件——
          五条语言服务腿直接读 `index` 而**不**经 `ensureIndex()`，光靠那条兜不住这一步。
+
+       WS-05 起 `file.changed` 还多一只手：**收集路径、去抖 300ms 后做增量更新**
+      （`collectFileChange` → `flushFileChanges`）。根变更仍走上面那条同步签名比对——
+      两条腿判的不是一件事：根变了必须整扫，文件变了只需重读那几份。
        */
       ctx.onDispose(
-        ctx.bus.on('file.changed', () => {
+        ctx.bus.on('file.changed', (ev) => {
           refreshScanRoots();
+          collectFileChange(ev);
         }),
       );
       ctx.onDispose(

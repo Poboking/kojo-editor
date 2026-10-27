@@ -42,6 +42,7 @@ import {
 } from './file-tree-ops';
 import { baseName, buildFileGroups, dirsToRelist, kojoOwners, middleEllipsis, rowKeyOf, TREE_LABEL_MAX } from './file-tree-model';
 import { createEntryIfAbsent } from './file-tree-create';
+import { browsableRootsOf, type WorkspaceFolder } from './workspace-folders';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark } from './file-tree-row';
@@ -75,6 +76,8 @@ const IDENTITY_GLOSS = (n: string): string => n;
 const EMPTY_SKIP: ReadonlySet<string> = new Set();
 /** 未传附加根时的恒等空数组（旧写法宿主每帧 `extraRoots ?? []` 造新数组 ⇒ 内部 memo 必失效） */
 const EMPTY_EXTRA_ROOTS: readonly string[] = [];
+/** 未传工作区根模型时的恒等空数组（同上：引用恒定，别在渲染期造新数组） */
+const EMPTY_WORKSPACE_FOLDERS: readonly WorkspaceFolder[] = [];
 /**
  * 树冷开的骨架行数（VIS-34）：7 行落在"一眼看得出是一列，而不是一屏"的那档——
  * 少于 6 行读起来像装饰线，多于 8 行就开始替真实内容许愿。入场节拍只铺前 6 行
@@ -237,6 +240,7 @@ export function FileTree(props: Props): ReactElement {
   const onFilesGone = useLatestCallback(rest.onFilesGone);
   const onAddFolder = useLatestCallback(rest.onAddFolder);
   const onCompareFiles = useLatestCallback(rest.onCompareFiles);
+  const onDiskEntriesChanged = useLatestCallback(rest.onDiskEntriesChanged);
   return (
     <FileTreeBody
       {...rest}
@@ -249,6 +253,7 @@ export function FileTree(props: Props): ReactElement {
       onFilesGone={onFilesGone}
       onAddFolder={onAddFolder}
       onCompareFiles={onCompareFiles}
+      onDiskEntriesChanged={onDiskEntriesChanged}
       extraRoots={rest.extraRoots && rest.extraRoots.length > 0 ? rest.extraRoots : EMPTY_EXTRA_ROOTS}
     />
   );
@@ -308,7 +313,7 @@ function TreeFoldBody({ open, body }: { open: boolean; body: () => ReactNode }):
  *
  * 与外壳同一份实现，只差一件事：**不再收 `activeFile`**（见 `FileTree` 的注释）。
  */
-const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onCompareFiles }: FileTreeBodyProps): ReactElement {
+const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onCompareFiles, workspaceFolders, onDiskEntriesChanged }: FileTreeBodyProps): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为；IDENTITY_GLOSS 模块级 ⇒ 引用恒定） */
   const glossOf = gloss ?? IDENTITY_GLOSS;
   const [filter, setFilter] = useState('');
@@ -375,15 +380,35 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   const snapPaths = walkSnap && walkSnap.proj === project ? walkSnap.paths : null;
 
   /**
+   * 工作区根模型（WS-04）：`author` / `extra` 根各有**独立顶层分组**。
+   *
+   * 为什么必须先有这份：作者工作区里的文件「搜索 / 监视都认，树里没有」——那是五套根集合
+   * 各拼各的直接后果。模型把根与角色/可写性一次说清，这里只负责画。
+   */
+  const folders = workspaceFolders ?? EMPTY_WORKSPACE_FOLDERS;
+  /**
+   * 需要**独立顶层分组**的根（作者作品目录 + 会话附加根）。
+   * 游戏根 / 口上域 / 存档不在此列：它们的内容由角色分组（口上域）与文件系统视图（游戏根）覆盖，
+   * 再列一遍就是把同一批游戏文件画成两遍。
+   */
+  const rootFolders = useMemo(() => folders.filter((f) => f.role !== 'game'), [folders]);
+
+  /**
    * 分组来源优先级：索引（权威）→ 冷开快照（索引未就绪的先手）。
    * 两者共用 `buildFileGroups` 同一构建函数 + 同一 owners 表 ⇒ 同一文件集下结构逐字相同，
    * 索引就绪切换时不重排。
+   *
+   * WS-04：**归到 author / extra 根名下的路径在这里先剔掉**——它们在顶层那几组里各出现一次；
+   * 不剔就是同一批文件两处可见（"不要把游戏内文件重复列一遍"的同一条纪律）。
+   * 剔除按**根的路径前缀**做（同步、零 IO）：不依赖那几组的内容是否已经走完。
    */
   const groups = useMemo<Group[]>(() => {
     const paths = index ? [...index.files.keys()] : snapPaths;
     if (!paths) return [];
-    return buildFileGroups(paths, kojoOwners(project));
-  }, [index, snapPaths, project]);
+    const claimed = rootFolders.map((f) => f.path);
+    const kept = claimed.length === 0 ? paths : paths.filter((p) => !claimed.some((root) => isUnderPath(root, p)));
+    return buildFileGroups(kept, kojoOwners(project));
+  }, [index, snapPaths, project, rootFolders]);
 
   /**
    * 诊断：**宿主不订阅**（PERF 批）。
@@ -415,6 +440,77 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       })
       .filter((g) => g.subs.length > 0 || g.label.toLowerCase().includes(q));
   }, [groups, deferredFilter]);
+
+  /* ---------------- author / extra 根的独立顶层分组（WS-04） ---------------- */
+
+  /** 根清单的身份串（换根 / 增删根 ⇒ 重新走一遍列举）；`refreshNonce` 之外再吃它 */
+  const rootWalkKey = rootFolders.map((f) => pkey(f.path)).join('\n');
+  /** 逐根列举结果（`'error'` = 这个文件夹读不到；缺席 = 还没列） */
+  const [rootWalk, setRootWalk] = useState<{
+    key: string;
+    states: ReadonlyMap<string, readonly string[] | 'error'>;
+  }>({ key: '', states: new Map() });
+  const rootFoldersRef = useRef(rootFolders);
+  rootFoldersRef.current = rootFolders;
+  useEffect(() => {
+    if (!walkDir || rootFolders.length === 0) return;
+    const picked = rootFoldersRef.current;
+    const key = picked.map((f) => pkey(f.path)).join('\n');
+    const states = new Map<string, readonly string[] | 'error'>();
+    let alive = true;
+    void Promise.all(
+      picked.map(async (folder) => {
+        try {
+          states.set(pkey(folder.path), await walkDialectPaths(walkDir, [folder.path]));
+        } catch {
+          states.set(pkey(folder.path), 'error');
+        }
+      }),
+    ).then(() => {
+      if (alive) setRootWalk({ key, states });
+    });
+    return () => {
+      alive = false;
+    };
+    // 依赖刻意只到 key / refreshNonce：`rootFolders` 每帧是新数组，进依赖就是每帧重走一遍列举
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walkDir, rootWalkKey, refreshNonce]);
+
+  /**
+   * 每个 author / extra 根的文件集 = 索引里落在该根下的条目 ∪ 该根的列举结果。
+   *
+   * 两路并起来而不是二选一：作者作品目录本来就在索引扫描面里（索引更权威、含未打开文件），
+   * 而会话附加根**不在**索引面里（只能靠列举）。更具体的根（落在本根之内的另一个分组根）
+   * 自己列，这里剔掉——否则同一个文件在两组的顶层各出现一次。
+   */
+  const rootGroups = useMemo(() => {
+    const walked = rootWalk.key === rootWalkKey ? rootWalk.states : null;
+    const indexed = index ? [...index.files.keys()] : snapPaths ?? [];
+    return rootFolders.map((folder) => {
+      const collected = new Map<string, string>();
+      for (const path of indexed) if (isUnderPath(folder.path, path)) collected.set(pkey(path), path);
+      const state = walked?.get(pkey(folder.path));
+      if (Array.isArray(state)) for (const path of state) if (!collected.has(pkey(path))) collected.set(pkey(path), path);
+      const nested = rootFolders.filter(
+        (other) => pkey(other.path) !== pkey(folder.path) && isUnderPath(folder.path, other.path),
+      );
+      const files = [...collected.values()]
+        .filter((path) => !nested.some((other) => isUnderPath(other.path, path)))
+        .sort();
+      const status: 'ready' | 'loading' | 'error' =
+        Array.isArray(state) || files.length > 0 ? 'ready' : state === 'error' ? 'error' : 'loading';
+      return { folder, key: `root:${pkey(folder.path)}`, files, status };
+    });
+  }, [rootFolders, rootWalk, rootWalkKey, index, snapPaths]);
+
+  /** 过滤态：命中词落到文件路径上；整组没命中也留着（组头自带计数=0 是诚实反馈） */
+  const rootGroupsVisible = useMemo(() => {
+    const q = deferredFilter.toLowerCase();
+    if (!q) return rootGroups.map((g) => ({ ...g, hits: g.files }));
+    return rootGroups
+      .map((g) => ({ ...g, hits: g.files.filter((f) => f.toLowerCase().includes(q)) }))
+      .filter((g) => g.hits.length > 0 || g.folder.label.toLowerCase().includes(q));
+  }, [rootGroups, deferredFilter]);
 
   /**
    * 过滤态渲染窗口（PERF-6）：窗口挂在**它所属的过滤词**上 ⇒ 换词自动回落到首帧上界，
@@ -550,14 +646,30 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   };
 
   /**
-   * fs 视图的根层清单（D1 会话级附加根）：项目根恒在首位，附加根按加入顺序并列。
-   * 只有**一个**根时维持 B5 原形态（根层直接铺开、无分组头），零视觉扰动。
+   * fs 视图的根层清单：取自工作区根模型里带 `browsable` 的那一组（游戏根 + 口上域 +
+   * 存档 + 作品目录 + 附加根，嵌套已折叠）；模型缺席 ⇒ 旧行为（项目根 ∪ 附加根）。
+   *
+   * 只有**一个**根时维持 B5 原形态（根层直接铺开、无分组头），零视觉扰动；
+   * 多根时每根一个分组头（D1 的形态，作品目录同样受益：作者作品在真实文件夹视图里
+   * 第一次看得见、点得开）。
    */
-  const fsRoots = useMemo<string[]>(
-    () => [project.rootDir, ...(extraRoots ?? [])],
-    [project.rootDir, extraRoots],
-  );
+  const fsRoots = useMemo<string[]>(() => {
+    if (folders.length === 0) return [project.rootDir, ...(extraRoots ?? [])];
+    const browsable = browsableRootsOf(folders);
+    return browsable.length > 0 ? browsable : [project.rootDir];
+  }, [folders, project.rootDir, extraRoots]);
   const multiRootFs = fsRoots.length > 1;
+  /** fs 视图根头的角色（标题上屏用：可写 / 只读 / 项目根，别让作者猜这一格是谁） */
+  const fsRootRoleOf = useCallback(
+    (root: string): string => {
+      const hit = folders.find((f) => pkey(f.path) === pkey(root));
+      if (hit === undefined) return root === project.rootDir ? '项目根' : '';
+      if (hit.role === 'author') return '你的作品目录（可写）';
+      if (hit.role === 'extra') return '本次会话添加的文件夹（只读）';
+      return hit.path === project.rootDir ? '项目根' : hit.label;
+    },
+    [folders, project.rootDir],
+  );
 
   /**
    * 进入文件系统视图（B5）时惰性取项目根的第一层：根 = `project.rootDir`
@@ -758,6 +870,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           setEdit(null);
           // 只重列落点目录；新文件立刻可见处 = 包的真实文件夹视图（openLayerOf 已打开）
           refetchDirs([e.dir]);
+          // WS-05：新文件立刻进索引（平铺列表 / 函数树 / Ctrl+T 马上跟），不等 watcher 去抖
+          if (e.kind === 'file') onDiskEntriesChanged?.({ changed: [target], removed: [] });
           note(`已新建${e.kind === 'file' ? '文件' : '文件夹'}「${name}」`);
         },
         (err: unknown) => noteErr(err, '新建'),
@@ -796,7 +910,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       },
       (err: unknown) => noteErr(err, '重命名'),
     );
-  }, [edit, editValue, io, guardFileOp, onFilesGone, refetchDirs, note, noteErr, pruneCacheUnder, remapSubOpen]);
+  }, [edit, editValue, io, guardFileOp, onFilesGone, refetchDirs, note, noteErr, pruneCacheUnder, remapSubOpen, onDiskEntriesChanged]);
 
   const cancelEdit = useCallback((): void => setEdit(null), []);
 
@@ -1345,7 +1459,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                 <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'}>
                   <button
                     className="tree-group-btn"
-                    title={`${root}${root === project.rootDir ? '（项目根）' : '（本次会话添加的文件夹，重开项目后不再显示）'}`}
+                    title={`${root}${fsRootRoleOf(root) ? `（${fsRootRoleOf(root)}）` : ''}`}
                     onClick={() => toggleSub(root)}
                   >
                     <span className="caret">
@@ -1476,6 +1590,48 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                     );
                   })}
                 </ul>
+                )}
+              />
+            </li>
+          );
+        })}
+        {/* author / extra 根的独立顶层分组（WS-04）：组头标明可写 / 只读，行可点开。
+            游戏内文件**不在这里**（角色分组已经列过一遍），剔除在 `groups` 那一格做过。 */}
+        {rootGroupsVisible.map(({ folder, key, files, status, hits }) => {
+          const isOpen = opened.has(key) || deferredFilter.length > 0;
+          return (
+            <li key={key} className="tree-group tree-root-group" data-open={isOpen ? '1' : '0'}>
+              <button
+                className="tree-group-btn"
+                title={`${folder.path}（${folder.writable ? '可写' : '只读'}）`}
+                data-drop-dir={folder.path}
+                data-context-surface="file-tree"
+                data-tree-kind="group"
+                data-tree-label={folder.label}
+                data-tree-path={folder.path}
+                onClick={() => toggleGroup(key)}
+              >
+                <span className="caret">
+                  <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                </span>
+                <span className="group-label">{middleEllipsis(folder.label, TREE_LABEL_MAX)}</span>
+                <span className="dim tree-root-role">{folder.writable ? '可写' : '只读'}</span>
+                <span className="group-count">{files.length}</span>
+              </button>
+              <TreeFoldBody
+                open={isOpen}
+                body={() => (
+                  <ul className="tree-files">
+                    {status === 'error' ? (
+                      <li className="tree-note">这个文件夹读不到（可能已移动，或当前环境没有桌面壳权限）</li>
+                    ) : files.length === 0 ? (
+                      <li className="tree-note">
+                        {status === 'loading' ? '读取文件夹…' : '这个文件夹里还没有 ERB 方言文件'}
+                      </li>
+                    ) : (
+                      <FileRows files={hits} limit={hits.length} onOpenFile={onOpenFile} edit={fileEdit} />
+                    )}
+                  </ul>
                 )}
               />
             </li>

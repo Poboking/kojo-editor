@@ -171,6 +171,7 @@ import { isKojo2CutoverEnabled } from './kojo2-flag';
 // REF-FRONT-PERF：项目生命周期（开/关/写允许域/审批/会话 flush）收在专用 hook；
 // App 只留 UI state 与渲染。项目子树另加错误边界 + 项目态错误条。
 import { useProjectSession, useSessionFlush, useSessionStore } from './use-project-session';
+import { syncErbIndexAfterDiskChange } from './erb-index-sync';
 import { ProjectErrorBoundary } from './error-boundary';
 import { ProjectErrorNotice, raiseProjectErrorBar, visibleProjectError, type ProjectErrorAction, type ProjectErrorBar } from './project-error-notice';
 import { crashExitDecision } from './project-close';
@@ -473,6 +474,9 @@ export function App(): ReactElement {
     };
   }, [windowTitle]);
   const [index, setIndex] = useState<ErbIndex | null>(null);
+  /** 索引读数的 ref 镜像（`onFilesGone` 等恒定身份回调里要读最新那一份，不吃陈旧闭包） */
+  const indexRef = useRef(index);
+  indexRef.current = index;
   const [indexing, setIndexing] = useState(false);
   /**
    * 编辑器组态（SPLIT-1 分屏）：**真源**。`activeFile` / `openTabs` 是焦点组的投影
@@ -2135,17 +2139,28 @@ export function App(): ReactElement {
             },
           );
         }
-        // 索引里的旧路径不会随盘上改名自己消失（函数树 / 引用会留幽灵行）：让解析器重扫一轮。
-        // 失败如实出声（铁律 4）——只是索引旧一会儿，不影响盘上事实，故只在通知区报一次。
-        const parser = kernel?.services.tryGet<ErbParserService>('erb.parser');
-        if (parser?.rebuildIndex) {
+      }
+      // 索引里的旧路径不会随盘上改名自己消失，被删的条目也不会自己退场（函数树 / 引用会留
+      // 幽灵行）。WS-05 起走**增量**：改名按前缀映射其下已索引文件、删除按前缀移除条目，
+      // 不再为一次改名重扫整棵树（那是几秒级的代价，而改的只是几份文件）。
+      // 增量通道不可用（旧实现）时才退回既有整扫；两条腿的失败都如实出声（铁律 4）。
+      const parser = kernel?.services.tryGet<ErbParserService>('erb.parser');
+      if (kernel && (del.length > 0 || renamed.length > 0)) {
+        void syncErbIndexAfterDiskChange({
+          kernel,
+          index: indexRef.current,
+          notify,
+          delta: { removed: del, renamed },
+        }).then((outcome) => {
+          if (outcome !== 'unsupported' || renamed.length === 0) return;
+          if (!parser?.rebuildIndex) return;
           void parser.rebuildIndex().catch((err: unknown) => {
             notify({
               kind: 'error',
               message: `重建代码索引失败：${errorText(err)}。函数树与引用可能还停在旧路径上。`,
             });
           });
-        }
+        });
       }
       // 最近文件：被删的摘除、被改名的**迁移**到新路径（含改名目录之下的子路径），
       // 有变化才落盘（无变化不惊动渲染与存储）

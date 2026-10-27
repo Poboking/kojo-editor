@@ -37,7 +37,8 @@ import {
   type SessionFlushScheduler,
   type SessionRecord,
 } from './session-store';
-import { workspaceProjectDirsOf } from './workspace-roots';
+import { useWorkspaceFolders } from './use-workspace-folders';
+import { watchRootsOf } from './workspace-folders';
 import type { ProjectErrorAction } from './project-error-notice';
 import {
   admitProjectWriteDomain,
@@ -396,20 +397,18 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
    * 文件监视的根集合收口（D1）：**首开与"加了文件夹"共用同一条路**。
    * 原注释见 App.tsx 历史：`fileWatch.start(roots)` 的语义是「用新的一组根替换旧的」，
    * 所以"加根" = 用完整根集合再 start 一次，不需要先 stop。
+   *
+   * WS-04 起根集合不再在这里拼：它取自工作区根模型（`workspace-folders.ts`）——
+   * 与树 / Ctrl+P / 检索 / 整项目诊断**同一份**根表。作品目录是活读数（本会话新建的作品
+   * 也立刻进模型），所以这条 effect 跟的是 `workspaceFolders` 的引用而不是 project 的字面量。
    */
+  const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);
   useEffect(() => {
     if (!kernel || !project) return;
-    void kernel.fileWatch.start([
-      project.rootDir,
-      ...project.kojoPaths,
-      ...(project.savDir ? [project.savDir] : []),
-      ...extraRoots,
-      // 只监视**作品目录**（2026-10-27 收窄批）：自选项目位置根可能正是游戏目录，
-      // 把整个根卷进监视等于给游戏目录挂上全量 watcher（体量 + 噪声都不该发生）。
-      // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，workspaceProjectDirsOf 吞成空列表
-      ...workspaceProjectDirsOf(kernel),
-    ]);
-  }, [kernel, project, extraRoots]);
+    // 只监视模型给定的根：自选项目位置根的**根身**可能正是游戏目录，卷进来等于给整个
+    // 游戏目录挂全量 watcher（体量 + 噪声都不该发生）——作品目录才进表（2026-10-27 收窄批）。
+    void kernel.fileWatch.start(watchRootsOf(workspaceFolders));
+  }, [kernel, project, workspaceFolders]);
 
   const closeProject = useCallback(async () => {
     if (!kernel) return;

@@ -62,7 +62,7 @@ import {
   subscribe as subscribeProblemStore,
   takeRescanPaths,
 } from './problem-store';
-import { workspaceProjectDirsOf } from './workspace-roots';
+import { scanRootsOf, workspaceFoldersOf } from './workspace-folders';
 
 /** 装配需要的内核面（测试给假 kernel 只需这几枚；整包 `Kernel` 不该是判据） */
 export type ScanKernel = Pick<Kernel, 'bus' | 'io' | 'slots' | 'services' | 'project' | 'compute' | 'workspaces'>;
@@ -332,22 +332,14 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
   const indexOf = (): ErbIndex | null =>
     kernel.services.tryGet<ErbParserService>(ERB_PARSER_SERVICE)?.currentIndex() ?? null;
 
-  /** 允许读的根 = 口上根 ∪ 作品目录 ∪ 会话附加根（与文件监视那条同口径；pkey 去重）。
-   *  2026-10-27 收窄批：这里的"工作区根"取 `projectDirs()`（作品目录），
-   *  自选项目位置根根身可能正是游戏目录，整个卷进来只会白扫一遍。 */
+  /** 允许读的根 = 工作区根模型里「能按名找到」的那一组（口上域 ∪ 作品目录 ∪ 会话附加根）。
+   *  2026-10-27 收窄批 + WS-04：这里的根集合不再自己拼——收在 `workspace-folders.ts`，
+   *  与文件监视 / 树 / Ctrl+P / 检索同一份表。自选项目位置根根身可能正是游戏目录，
+   *  整个卷进来只会白扫一遍（模型里的 `game` 根不带 `quickOpen`，天然不进扫描面）。 */
   const rootsOf = (): string[] => {
     const p = projectOf();
     if (!p) return [];
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const r of [...p.kojoPaths, ...workspaceProjectDirsOf(kernel), ...(opts.extraRoots?.() ?? [])]) {
-      if (typeof r !== 'string' || r === '') continue;
-      const k = pkey(r);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(r);
-    }
-    return out;
+    return scanRootsOf(workspaceFoldersOf(kernel, p, opts.extraRoots?.() ?? []));
   };
 
   /**

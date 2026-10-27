@@ -7,6 +7,7 @@
  */
 import type { DirEntry, ErbIndex, FileIO, GameProject, WalkOptions } from '@kojo/plugin-api';
 import type { OpenFileOptions } from './tabs-ops';
+import type { WorkspaceFolder } from './workspace-folders';
 
 export interface Props {
   project: GameProject;
@@ -70,6 +71,21 @@ export interface Props {
   extraRoots?: readonly string[];
   /** 「添加文件夹…」入口（对话框与去重都在宿主 App；缺省 → 按钮不显示） */
   onAddFolder?: () => void;
+  /**
+   * 工作区根模型（WS-04）：`author` / `extra` 根在语义视图里各占一个**独立顶层分组**
+   * （组头标明可写 / 只读），文件系统视图的根层也从这里取。
+   *
+   * 缺省 ⇒ 退回旧行为（fs 视图根 = 项目根 ∪ `extraRoots`，语义视图不显示这些分组）——
+   * 契约演进的 additive 纪律：宿主没接就不多画一层。
+   */
+  workspaceFolders?: readonly WorkspaceFolder[];
+  /**
+   * 盘上条目新增 / 删除 / 改名的收尾（WS-05）：索引增量更新的宿主接线
+   * （`erb-index-sync.ts`）。树侧只报告事实，谁去更新索引归宿主。
+   *
+   * 缺省 ⇒ 什么都不报（旧行为：索引等下一次整扫/换根才跟上）。
+   */
+  onDiskEntriesChanged?: (delta: { readonly changed: readonly string[]; readonly removed: readonly string[] }) => void;
   /**
    * 「比较已选文件」（D 批）：在多选集恰为两个文件、且右击的行在其中时，菜单项出现，
    * 落地交给宿主——由它把 `ui.diffView.open` 发进总线（树不认识 diff 视图，也不读盘）。

@@ -84,7 +84,9 @@ describe('VIS-31 树组展开折叠：grid-template-rows 0fr→1fr，不碰 heig
   it('DOM 契约：ul.tree-files 仍是 li.tree-group 的直接子元素（导轨选择器不许多一层壳）', () => {
     // `indent-rail-single-source.test.ts` 钉的是选择器字面，这一条钉的是 DOM——
     // 谁把折叠容器改成 `<div>` 包一层，这里先红，而不是等到屏上导轨不见。
-    expect(fileTreeTsx.match(/data-open=\{isOpen \? '1' : '0'\}/g) ?? []).toHaveLength(2);
+    // 3 处 = 角色分组 / 包分组 / WS-04 的 author·extra 根分组（都是 `li.tree-group
+    // > ul.tree-files` 同一种形态；数量变了要在这里点名，不能悄悄少画一组）。
+    expect(fileTreeTsx.match(/data-open=\{isOpen \? '1' : '0'\}/g) ?? []).toHaveLength(3);
     expect(fileTreeTsx).not.toMatch(/<div className="tree-fold"/);
     for (const sel of ['.tree-group > .tree-files', '.tree-group > .tree-files:hover::before', '.tree-group > .tree-files:has(.tree-file.active)::before']) {
       expect(fileTreeCss, `导轨选择器 ${sel} 被改写了`).toContain(sel);

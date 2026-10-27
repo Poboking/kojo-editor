@@ -30,7 +30,9 @@ import { createProjectNameLedger } from './name-ledger';
 import { revealLocationOf } from '../monaco/reveal-position';
 import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState } from './search-store';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
-import { workspaceProjectDirsOf } from './workspace-roots';
+import { quickOpenRootsOf, scanRootsOf, searchRootsOf, type WorkspaceFolder } from './workspace-folders';
+import { useWorkspaceFolders } from './use-workspace-folders';
+import { syncErbIndexAfterDiskChange, type DiskDelta } from './erb-index-sync';
 import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
@@ -381,6 +383,14 @@ export function ProjectView({
   }, []);
   /** 壳层通知（G1：命令按下去必须有回应——兑现不了就说一句人话，不灰掉不说话） */
   const notify = useNotify();
+  /**
+   * 工作区根模型（WS-04）：树 / Ctrl+P / 检索 / 整项目诊断**同一份**根表。
+   *
+   * 作品目录是活读数（本会话新建 / 导入的作品自动进模型，不需要手动加根）；
+   * 变化信号与监视那条同源（`use-workspace-folders.ts`），所以"作品建好了但
+   * 树里看不见"这类裂缝不会再出现。
+   */
+  const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);
   /** 壳层工作台 API（空态动作按钮：快速打开 / 命令面板 / 新建口上文件） */
   const [workbench, setWorkbench] = useState<WorkbenchApi | null>(null);
   /** Ctrl+W 命令读最新活动标签（壳层命令注册一次，闭包外取值） */
@@ -486,11 +496,9 @@ export function ProjectView({
   const [sourceFiles, setSourceFiles] = useState<readonly string[]>([]);
   /** 缓存器与 walkDir 桥同生命周期（kernel 换 ⇒ 缓存整体作废，键里不用带 kernel） */
   const sourceFilesCache = useMemo(() => createSourceFileCache(walkDir), [walkDir]);
-  /** 候选根 = 口上域 ∪ 会话级附加根（与 `treeWatchRoots` 同口径，只去字面重复） */
-  const sourceRoots = useMemo(
-    () => [...new Set([...project.kojoPaths, ...(extraRoots ?? [])])],
-    [project.kojoPaths, extraRoots],
-  );
+  /** 候选根 = 工作区模型里带 `quickOpen` 的那一组（口上域 ∪ 作品目录 ∪ 会话级附加根；
+   *  与监视 / 树 / 检索同一份表，写法的去重与嵌套折叠都在模型里做过） */
+  const sourceRoots = useMemo(() => quickOpenRootsOf(workspaceFolders), [workspaceFolders]);
   useEffect(() => {
     let alive = true;
     void sourceFilesCache
@@ -785,14 +793,12 @@ export function ProjectView({
 
 
   /**
-   * 外部改动 → 树重列的**判据根集**（S2-6）= 口上域 ∪ 会话级附加根。
-   * 与监视根同源：监视已经覆盖附加根（D1），过滤却不认它 = 事件到了却被丢掉。
-   * 只去字面重复（附加根常落在口上域之内）；路径口径的比较交给 `affectsKojoTree` 自己。
+   * 外部改动 → 树重列的**判据根集**（S2-6）= 工作区模型里带 `quickOpen` 的那一组
+   * （口上域 ∪ 作品目录 ∪ 会话级附加根）。
+   * 与监视根同源：监视已经覆盖这些根，过滤却不认它 = 事件到了却被丢掉。
+   * 路径口径的比较交给 `affectsKojoTree` 自己。
    */
-  const treeWatchRoots = useMemo(
-    () => [...new Set([...project.kojoPaths, ...(extraRoots ?? [])])],
-    [project.kojoPaths, extraRoots],
-  );
+  const treeWatchRoots = useMemo(() => scanRootsOf(workspaceFolders), [workspaceFolders]);
 
   // B6：树刷新直通车（宿主拖入复制落地后失效目标目录；句柄只注册一次）
   useEffect(() => {
@@ -816,8 +822,23 @@ export function ProjectView({
     };
   }, [kernel, treeWatchRoots]);
 
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], onAddExtraRoot: undefined as (() => void) | undefined, onCompareFiles: compareSelectedFiles });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], onAddExtraRoot, onCompareFiles: compareSelectedFiles };
+  /**
+   * 盘上条目新增（树里新建）/ 删除 / 改名 → **索引增量**（WS-05）。
+   *
+   * 树侧只报事实（哪一份是新的、哪一份没了），落地在 `erb-index-sync`：目录改名按前缀
+   * 映射其下已索引的文件，删除按前缀移除——`index.files` 与函数树因此不再留幽灵行。
+   * 索引读数走 ref（宿主每次渲染才换它；闭包身份保持恒定，树的 memo 不被击穿）。
+   */
+  const indexRef = useRef(index);
+  indexRef.current = index;
+  const onDiskEntriesChanged = useCallback(
+    (delta: DiskDelta) => {
+      void syncErbIndexAfterDiskChange({ kernel, index: indexRef.current, notify, delta });
+    },
+    [kernel, notify],
+  );
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], workspaceFolders: [] as readonly WorkspaceFolder[], onDiskEntriesChanged: undefined as ((delta: DiskDelta) => void) | undefined, onAddExtraRoot: undefined as (() => void) | undefined, onCompareFiles: compareSelectedFiles });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], workspaceFolders, onDiskEntriesChanged, onAddExtraRoot, onCompareFiles: compareSelectedFiles };
   /**
    * 桥换了内容就得有人告诉 memo（PS-6 正确性修复）。
    *
@@ -843,6 +864,7 @@ export function ProjectView({
     extraRoots,
     onAddExtraRoot,
     compareSelectedFiles,
+    workspaceFolders,
   ]);
   const fileTreeComponent = useMemo(() => {
     const StableFileTree = (): ReactElement => {
@@ -863,6 +885,8 @@ export function ProjectView({
           refreshNonce={a.treeNonce}
           gloss={a.gloss}
           extraRoots={a.extraRoots}
+          workspaceFolders={a.workspaceFolders}
+          onDiskEntriesChanged={a.onDiskEntriesChanged}
           onAddFolder={a.onAddExtraRoot}
           onCompareFiles={a.onCompareFiles}
         />
@@ -937,19 +961,17 @@ export function ProjectView({
   /**
    * 侧栏「搜索」视图的稳定组件身份（同 problemComponent 的 ref 闭包写法）。
    *
-   * 检索根 = **项目根 ∪ 会话级附加根（D1）∪ 作者作品目录**（2026-10-27 收窄批：从
-   * "工作区全部根"收窄到"作品目录"——自选项目位置根可能正是游戏目录，按根检索会把
-   * 整个游戏目录拖进检索范围）。只搜项目根会把作者自己写的口上文件整批漏掉；
+   * 检索根 = 工作区模型里带 `search` 的那一组（游戏根 ∪ 口上域 ∪ 作品目录 ∪ 附加根；
+   * 2026-10-27 收窄批：从"工作区全部根"收窄到作品目录——自选项目位置根可能正是游戏目录，
+   * 按根检索会把整个游戏目录拖进检索范围）。只搜项目根会把作者自己写的口上文件整批漏掉；
    * 附加根同理——加进来就是为了"这部分也要能搜到"，漏掉等于没加。
    * 跳转仍走既有 `editor.revealLocation`（与问题面板同一条通道）。
    */
   const searchArgsRef = useRef({ kernel, roots: [] as string[], scopes: NO_SEARCH_SCOPES });
-  // 检索根是**活读数**（`workspaceProjectDirsOf` 每次都现取——缓存会把本会话刚建出来的
-  // 作品目录永远排除在外，口径同 `workspace-roots.ts`）。它的量是几根目录，每渲一次重算
-  // 不要钱；真正要省的是"根没变 ⇒ 面板不重渲"，所以进计数的是拼出来的那串键，不是数组引用。
-  const searchRoots = [
-    ...new Set([project.rootDir, ...(extraRoots ?? []), ...workspaceProjectDirsOf(kernel)]),
-  ];
+  // 检索根是**活读数**（`workspaceFolders` 每次渲染现算，作品目录那一格来自内核现读）。
+  // 它的量是几根目录，每渲一次重算不要钱；真正要省的是"根没变 ⇒ 面板不重渲"，
+  // 所以进计数的是拼出来的那串键，不是数组引用。
+  const searchRoots = useMemo(() => searchRootsOf(workspaceFolders), [workspaceFolders]);
   searchArgsRef.current = {
     kernel,
     roots: searchRoots,

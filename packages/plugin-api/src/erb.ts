@@ -415,6 +415,31 @@ export interface ErbParserService {
    */
   rebuildIndex?(): Promise<ErbIndex>;
   /**
+   * 盘上**增量**更新索引（**additive 可选**，WS-05，2026-10-27）。
+   *
+   * 补的是"文件增删改名 / 保存之后，索引要立刻跟上"这条腿：`rebuildIndex()` 是整树重扫
+   * （walk + 逐文件 stat），给每次保存都来一遍等于拿整项目的代价换一份文件的改动。
+   *
+   * 语义（提供方契约）：
+   * - `changed` = 新增或内容变了的**文件**路径（实现方只在该路径落在当前扫描根内、
+   *   且是方言扩展名时读它；其余忽略，不算失败）；
+   * - `removed` = 移除的路径，**目录按前缀整体移除**其下已索引条目；
+   * - 返回新索引（`currentIndex()` 立刻换成它）并广播 `kojo.functionChanged`；
+   * - **无索引 ⇒ 返回 null**（不凭空造一份"只有这几个文件"的索引）；
+   * - 读 / 解析失败等无法增量收尾的情形，实现方必须**回退出既有整扫通道**
+   *   （`rebuildIndex` 那条），并把原因记进日志——不许静默留下一份半新半旧的索引。
+   *
+   * 派生面的保守口径（允许实现方自行取舍并记录在案）：**`references`（反向引用）
+   * 不保证随增量更新**——实现方可以把它标成不可用（下一次整扫恢复），因为复用旧引用边
+   * 会给"查找引用"答一份与当前正文不符的名单，那比"暂不可用"坏得多。
+   *
+   * **可选**：旧实现不提供时消费方跳过（契约演进的 additive 纪律，同 `rebuildIndex?`）。
+   */
+  applyFileChanges?(input: {
+    readonly changed: readonly string[];
+    readonly removed: readonly string[];
+  }): Promise<ErbIndex | null>;
+  /**
    * 位置 → 符号反查（additive，2026-10-15 语言服务批）：返回**包围该行**的函数定义。
    *
    * 这是 definition / hover / highlight 三类语言智能的共同前置——"我此刻在哪个

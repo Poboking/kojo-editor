@@ -37,6 +37,10 @@ function fakeIO(files: Record<string, string>, isWritable?: (path: string) => bo
       // mtimeMs 恒 null = 平台未提供 → 快照逻辑按"保守过期"处理（与 readText 口径一致）
       return { size: text.length, mtimeMs: null, isDirectory: false };
     },
+    // WS-05：`file.changed` 去抖落地前会先 `exists` 判删（改名常以 change 报告旧路径已不在）
+    async exists(path: string) {
+      return files[path] !== undefined;
+    },
     async walkDir(root: string) {
       return Object.keys(files)
         .filter((p) => p.startsWith(root))
@@ -318,6 +322,164 @@ describe('erb-parser 插件', () => {
       expect([...rebuilt.byName.keys()]).toEqual(['NEW_FN']);
       expect(rebuilt.byName.has('OLD_FN')).toBe(false); // 旧路径不留幽灵行
       expect(parser.currentIndex()).toBe(rebuilt); // 当前索引已换成新一轮
+    });
+
+    /* ---- WS-05 增量：`applyFileChanges`（契约 additive）+ `file.changed` 去抖 ---- */
+
+    /**
+     * 等整扫收尾：`kojo.functionChanged` 在 `startBuild` 内发出，而 `inFlight` 要等它
+     * 返回后才清——这一瞬调 `applyFileChanges` 会被"整扫在跑"挡回去（那是对的，整扫
+     * 读的就是盘上现状），但测试要钉增量本身，得先等那一轮落地。
+     */
+    const settleBuild = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20));
+
+    it('applyFileChanges：改一格只重读那一格，旧函数退场、新函数进来并广播', async () => {
+      const files: Record<string, string> = {
+        '/proj/kojo/a.ERB': '@OLD_FN\nRETURN 1\n',
+        '/proj/kojo/b.ERB': '@KEEP_FN\nRETURN 2\n',
+      };
+      const { services, bus, emit } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+
+      files['/proj/kojo/a.ERB'] = '@FRESH_FN\nRETURN 3\n';
+      const broadcast = new Promise<string[]>((resolve) => {
+        bus.once('kojo.functionChanged', (p) => resolve((p as { files: string[] }).files));
+      });
+      const next = await parser.applyFileChanges!({ changed: ['/proj/kojo/a.ERB'], removed: [] });
+      expect(await broadcast).toEqual(['/proj/kojo/a.ERB', '/proj/kojo/b.ERB']);
+
+      expect(next!.byName.has('OLD_FN')).toBe(false);
+      expect([...next!.byName.keys()].sort()).toEqual(['FRESH_FN', 'KEEP_FN']);
+      expect(parser.currentIndex()).toBe(next);
+      // 反向引用增量后保守失效：不带旧边（下一次访问才排整扫）
+      expect(next!.references).toBeUndefined();
+    });
+
+    it('applyFileChanges：删除目录按前缀移除其下全部条目', async () => {
+      const files: Record<string, string> = {
+        '/proj/kojo/old/a.ERB': '@A\n',
+        '/proj/kojo/old/sub/b.ERB': '@B\n',
+        '/proj/kojo/keep.ERB': '@KEEP\n',
+      };
+      const { services, bus, emit } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+
+      delete files['/proj/kojo/old/a.ERB'];
+      delete files['/proj/kojo/old/sub/b.ERB'];
+      const next = await parser.applyFileChanges!({ changed: [], removed: ['/proj/kojo/old'] });
+      expect([...next!.files.keys()]).toEqual(['/proj/kojo/keep.ERB']);
+      expect(next!.byName.has('A')).toBe(false);
+      expect(next!.byName.has('B')).toBe(false);
+    });
+
+    it('applyFileChanges：根外 / 非方言路径只数不报错（返回原索引，不广播）', async () => {
+      const files: Record<string, string> = { '/proj/kojo/a.ERB': '@A\n' };
+      const { services, bus, emit, logs } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+
+      const before = parser.currentIndex();
+      const next = await parser.applyFileChanges!({
+        changed: ['/proj/sav/存档.sav', '/proj/kojo/note.txt'],
+        removed: ['/elsewhere/gone.ERB'],
+      });
+      expect(next).toBe(before);
+      expect(logs.some((l) => l.includes('ignored'))).toBe(true);
+    });
+
+    it('applyFileChanges：读失败回退整扫（不留半新半旧），结果与盘上现状一致', async () => {
+      const files: Record<string, string> = { '/proj/kojo/a.ERB': '@A\n' };
+      const { services, bus, emit, logs } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+
+      // 报一格"方言、根内、但读不出来"的路径：增量必须回退整扫，而不是把它当空文件
+      files['/proj/kojo/c.ERB'] = '@C\n';
+      const rebroadcast = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      const next = await parser.applyFileChanges!({ changed: ['/proj/kojo/ghost.ERB'], removed: [] });
+      await rebroadcast;
+      expect(logs.some((l) => l.includes('falling back to a full rebuild'))).toBe(true);
+      expect([...next!.files.keys()].sort()).toEqual(['/proj/kojo/a.ERB', '/proj/kojo/c.ERB']);
+    });
+
+    it('增量后读反向引用：先答"不可用"，同时排一次整扫把 references 恢复', async () => {
+      const files: Record<string, string> = { '/proj/kojo/a.ERB': '@A\nCALL B\n' };
+      const { services, bus, emit } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+
+      files['/proj/kojo/b.ERB'] = '@B\nRETURN 1\n';
+      await parser.applyFileChanges!({ changed: ['/proj/kojo/b.ERB'], removed: [] });
+      expect(parser.currentIndex()!.references).toBeUndefined();
+
+      const repaired = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      expect(parser.referencesTo('B')).toEqual([]); // 保守：不知道就是空，不编一份旧名单
+      await repaired;
+      expect(parser.currentIndex()!.references).toBeDefined();
+    });
+
+    it('file.changed 去抖后走增量（保存一份文件，索引与 Ctrl+T 立刻跟上）', async () => {
+      const files: Record<string, string> = { '/proj/kojo/a.ERB': '@A\n' };
+      const { services, bus, emit } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+
+      files['/proj/kojo/saved.ERB'] = '@SAVED_FN\nRETURN 1\n';
+      const incremental = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('file.changed 没有在去抖窗口内落地')), 2_000);
+        bus.on('kojo.functionChanged', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      emit('file.changed', { kind: 'change', path: '/proj/kojo/saved.ERB' });
+      await incremental;
+      expect(parser.currentIndex()!.byName.has('SAVED_FN')).toBe(true);
+
+      // unlink：文件没了 ⇒ 条目退场（不留幽灵行）
+      delete files['/proj/kojo/saved.ERB'];
+      const dropped = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('file.changed', { kind: 'unlink', path: '/proj/kojo/saved.ERB' });
+      await dropped;
+      expect(parser.currentIndex()!.files.has('/proj/kojo/saved.ERB')).toBe(false);
     });
   });
 });

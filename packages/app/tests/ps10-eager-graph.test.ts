@@ -566,11 +566,26 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `bridge/tauri-bridge.ts` +0.7 KB、`use-project-session.ts` +0.2 KB、
     //     `project-scan-schedule.ts` +0.2 KB、adapter 向导 +0.03 KB（合计 ≈32.7 KB；
     //     差值 2.7 KB 是旧基线四舍五入，UI 反馈批本身零进图）。
+    //   - **WS-04/05 工作区单源 + 索引增量批（2026-10-27）**：现读数 **198 文件 / 2,977 KB**；
+    //     两枚闸随现值抬 **194 → 198 文件 / 2,940 → 2,980 KB**（口径仍是"读数进十"）。
+    //     **四枚真新增模块**（`Buffer.byteLength` 合计 ≈25.9 KB），且每一枚都在开机链上
+    //     （不是偷懒的静态边界）：
+    //     · `ui/workspace-folders.ts` 11.7 KB——五条消费者（树 / Ctrl+P / 检索 / 监视 / 扫描）
+    //       的唯一根模型；`use-project-session` 开机装监视时就要拿 `watchRootsOf`，必须常驻；
+    //     · `ui/use-workspace-folders.ts` 2.8 KB——同一模型的 React 变化信号；
+    //     · `ui/erb-index-sync.ts` 6.9 KB——盘上增删改名的增量接线（`App.tsx` 删除/改名收尾直接调）；
+    //     · `plugins/erb-parser/src/incremental.ts` 4.5 KB——增量解析本体（`plugin.ts` 实现 `applyFileChanges`）。
+    //     图内既有文件净增 ≈15 KB：`erb-parser/plugin.ts`（`applyFileChanges` 接线与回退判据）、
+    //     `ui/FileTree.tsx`（根组 / 徽标 / 新建后增量通知）、`ui/ProjectView.tsx`、
+    //     `plugin-api/erb.ts`（`applyFileChanges` 契约）、`ui/project-scan-schedule.ts` /
+    //     `ui/kojo-source-scan.ts` / `ui/App.tsx` / `ui/use-project-session.ts` 合计 <2 KB。
+    //     **减面口径**：四枚都是"开机就要读"的判据，没有可挪到懒边的消费面；真正的减面候选
+    //     照旧是 `ui-kit/index.tsx` 按件拆分。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,940 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_940);
-    expect(files.length).toBeLessThanOrEqual(194);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤2,980 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_980);
+    expect(files.length).toBeLessThanOrEqual(198);
   });
 
   /**
