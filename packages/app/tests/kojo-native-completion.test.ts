@@ -8,6 +8,8 @@
  * - `#D|` ⇒ 只出 `#DIM*` 指令源；`CFLAG:|` ⇒ schema 变量名；`GOTO |` 在无 facts 时回退全文标签；
  * - `SETBIT CFLAG:1,|` ⇒ 位表；
  * - 糖位（`调用 |` / `时机 |` / 行首 `#D`）**绝不**混入 `erb-*` 候选（路由回自己）；
+ *   行首 `#` 位自 v1.9 P2 起由糖侧 `kojo-native-marks` 发声明族候选（闭集扩张），
+ *   仍不得出现 ERB 原生册的 `预处理指令` / 语句词形；
  * - `route` 在 `locate` 之前解出；provenance 记来源装配，`resolveCompletionItem` 按产出装配
  *   分派回表（自定义两册对照钉死，不靠同一份 resolver 的巧合）。
  */
@@ -249,12 +251,17 @@ describe('糖位补全 · 绝不路由进 ERB 册', () => {
     expect(items.every((i) => i.detail !== '预处理指令')).toBe(true);
   });
 
-  it('行首 `#D` 在糖区不误路由（首个 `@` 之前 `#DIM` 无原生块可依）', () => {
+  it('行首 `#D` 在糖区给声明族候选（v1.9 P2），但不出 ERB 原生册', () => {
     const text = '    #D';
     expect(kojoNativeZoneAt(modelOf(text), 1)).toBe(false);
     const items = provideAt(provider, text, 1, 7);
-    expect(labels(items)).not.toContain('#DIM');
+    expect(labels(items)).toContain('#DIM');
+    const declarations = items.filter((i) => (i.detail ?? '').includes('声明族'));
+    expect(declarations.length).toBeGreaterThan(0);
+    expect(declarations.every((i) => labelText(i.label).startsWith('#'))).toBe(true);
+    expect(labels(items)).toContain('#FUNCTION');
     expect(items.every((i) => i.detail !== '预处理指令')).toBe(true);
+    expect(items.some((i) => labelText(i.label) === 'PRINTFORM')).toBe(false);
   });
 });
 

@@ -17,6 +17,7 @@ import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { livePanes } from '../ui/editor-pane-registry';
 import { erbBitHoverName } from './erb-completion-bits';
+import { resolveErbMarkHover } from './kojo-hover-marks';
 import { BLANK_CLASS_STR } from './kojo-completion-position';
 import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
 import { registerForLanguageServices } from './register-dialects';
@@ -348,6 +349,11 @@ function resolveHoverNameCore(
   // 6) 中文 → **原生形态**反查（ZH-D3；`kojo-hover-native.ts`）：族头中文别名、中文函数名 /
   //    语句形调用、时机块头的分野与中文指令名。前五路只认 ASCII 记号与位槽，本路只认中文，
   //    两条路天然不撞；同样「查不到即不显示」（不猜）。
+  // 6.5) 原生标记分类（v1.9 P2）：`[IF …]` / `#DIM` / `{` `}` / 行首大写 ERB 语句。
+  //    前六路的事实优先；这里只补"这是什么"，不给逐词文档（见 `kojo-hover-marks.ts`）。
+  const mark = resolveErbMarkHover(lineText, column);
+  if (mark !== undefined) return mark;
+
   return resolveNativeHover(lineText, column, tables, header);
 }
 

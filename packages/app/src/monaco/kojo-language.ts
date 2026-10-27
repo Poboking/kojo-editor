@@ -5,7 +5,7 @@ import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { sugarEditorLexicon } from '@kojo/kojo-vocab/keywords';
 import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
 import { sugarEnterRulePatterns } from '@kojo/kojo-vocab/enter';
-import { ERB_DIRECTIVES } from './erb-directives';
+import { ERB_DECLARATION_LINE_RE, ERB_DIRECTIVES, ERB_PREPROC_LINE_RE } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
@@ -288,6 +288,15 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
         // ```erb 围栏同档：标记与内容一律 `keyword.raw`，作者一眼看出这是不透明区。
         [/^\s*\[SKIPSTART\]\s*$/, { token: ROLE.raw, next: '@skipBlock' }],
         [/^\s*\[SKIPEND\]\s*$/, ROLE.raw],
+        // 预处理条件标记（v1.9 P2）：整行严格等值（真源 `plugin-api/erb.ts` 的
+        // `ERB_PREPROC_PATTERNS`），连宏名一起涂成外来指令档——必须排在行内 `[` 运算符之前，
+        // 否则 `[IF 恋慕开关]` 会先被内容规则拆成标点 + 普通名。
+        [ERB_PREPROC_LINE_RE, ROLE.directive],
+        // `#` 声明族（v1.9 §3.3）：`#DIM` 族 + 文件级 / 返回类型 8 枚，逐字节直通，整行一档。
+        [ERB_DECLARATION_LINE_RE, ROLE.directive],
+        // 行连接标记 `{` / `}`：**独占一行**才是引擎记号（整行严格等值）；行内 `{` 仍是插值分隔符，
+        // 由内容规则着色。故只认整行形态（前后仅许缩进 / 尾随空白）。
+        [/^\s*[{}]\s*$/, ROLE.raw],
         // 原生 ERB 围栏（```erb … ```）：整块不透明，逐行着色为原生
         [/^\s*```\s*erb\b.*$/i, { token: ROLE.raw, next: '@rawFence' }],
         // 行首 `@erb` 逃生舱（规范 §3.10）

@@ -12,6 +12,7 @@ import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { ERB_COMPLETION_ASSEMBLY, resolveErbCompletionDetail } from './erb-completion';
 import { kojoNativeZoneAt } from './kojo-native-zone';
+import { kojoNativeMarkCandidates, kojoNativeMarkRange, kojoNativeMarkSlotAt } from './kojo-native-marks';
 import { kojoCodePositionAt } from './kojo-suggest-gate';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { erbDimNamesOf } from './erb-completion-declared';
@@ -665,6 +666,45 @@ const WORDS_SOURCE: CompletionSource = {
 };
 
 /**
+ * 糖区的**原生标记位**（v1.9 P2 整个烧进去的一枚 source）：`#` 声明族 / `[` 预处理与停用标记 /
+ * 行首大写 ERB 指令。
+ *
+ * 为什么需要它：这三种写法在**写完整之前**都还落 `text` 行类（`#` 单枚 / `[` 单枚 / `HIT`），
+ * 原生区的跨装配路由要等行类变成 `rawLine` 才接管；不补这一路，作者敲 `#` 与 `[` 永远是零候选
+ * （见 `kojo-native-marks.ts` 头注）。候选表全部取自 `erb-directives.ts`，本路不另抄词形。
+ *
+ * 替换区间**含起手字符**（`#` / `[`）：Monaco 的默认词法不含这两个字符，照默认区间替换会插出
+ * `##DIM` / `[[IF]`；区间由 `kojoNativeMarkRange` 单独算。
+ */
+const NATIVE_MARKS_SOURCE: CompletionSource = {
+  id: 'kojo-native-marks',
+  provide(ctx): Monaco.languages.CompletionItem[] {
+    const line = lineAt(ctx.model, ctx.position.lineNumber);
+    const col0 = col0Of(line, ctx.position.column);
+    if (col0 === null) return [];
+    const slot = kojoNativeMarkSlotAt(line, col0);
+    if (slot === null) return [];
+    const K = ctx.monaco.languages.CompletionItemKind;
+    const span = kojoNativeMarkRange(line, col0);
+    const range: Monaco.IRange = {
+      startLineNumber: ctx.position.lineNumber,
+      endLineNumber: ctx.position.lineNumber,
+      startColumn: span.startColumn,
+      endColumn: span.endColumn,
+    };
+    return kojoNativeMarkCandidates(slot).map((candidate, i) => ({
+      label: candidate.label,
+      kind: K.Keyword,
+      insertText: candidate.insertText,
+      filterText: candidate.label,
+      detail: candidate.detail,
+      range,
+      sortText: `0_${String(i).padStart(3, '0')}`,
+    }));
+  },
+};
+
+/**
  * 全部补全来源（**稳定扩展点**）。后续批次往这里追加 `CompletionSource`，
  * 装配点与排序/去重口径零改动（实现在 `completion-core.ts`，与 `.erb` 共用一份）。
  *
@@ -675,6 +715,7 @@ const WORDS_SOURCE: CompletionSource = {
 export const KOJO_COMPLETION_SOURCES: CompletionSource[] = [
   KOJO_SNIPPET_SOURCE,
   LEXICON_SOURCE,
+  NATIVE_MARKS_SOURCE,
   VARIABLE_SOURCE,
   FACE_SOURCE,
   INSTRUCTION_SOURCE,

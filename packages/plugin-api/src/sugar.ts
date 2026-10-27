@@ -1941,6 +1941,10 @@ export type SugarLiftKind =
   | 'if-block'
   /** `SELECTCASE … ENDSELECT` 分派 → `当 / 是 / 否则`（规范 §3.6） */
   | 'selectcase'
+  /** `[IF X] … [ENDIF]` 预处理条件块 → `预处理 如果 X： … 预处理结束`（补充稿 v1.9 P0-C） */
+  | 'preproc-block'
+  /** `{` … `}` 行连接块 → `多行语句开始 … 多行语句结束`（补充稿 v1.9 P0-B） */
+  | 'line-join'
   /** 重复出现的变量引用 → `别名` 声明建议（规范 §3.1 / §5.0） */
   | 'alias';
 
@@ -1966,6 +1970,14 @@ export interface SugarLiftRoundTrip {
   originalText: string;
   /** 糖片段转译回来的文本（已去掉自证壳的基准缩进） */
   generatedText: string;
+  /**
+   * 比对时**忽略行首缩进**（仅 `preproc-block` 使用）。
+   *
+   * 预处理是文件级裁剪，缩进不参与产物语义；糖形块体按糖语法必然比标记多一级缩进，
+   * 而原生 ERB 的标记与块体常在同一层。故这一类的自证按"去缩进后逐字节一致"判定，
+   * 并在此显式标注——**不得**把它当成逐字节一致的候选。
+   */
+  indentRelaxed?: true;
   /**
    * 首个差异位置（1 基行 / 列）。
    * `verified: true` 时缺省；保留此字段供未来低置信档与调试使用

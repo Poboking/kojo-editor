@@ -63,8 +63,10 @@ import type {
   SugarProjectResult,
   SugarTranspileResult,
 } from '@kojo/plugin-api';
+import { ERB_CONTINUATION_MARKERS, ERB_SKIP_MARKERS, erbContinuationRoleOf, erbPreprocRoleOf } from '@kojo/plugin-api';
 import { liftProject } from './project';
 import type { DictionaryLookup } from './types';
+import { primaryWord } from './keywords';
 import { PRONOUN_REVERSE } from './expression';
 import {
   PRINT_FAMILY_RE,
@@ -162,6 +164,9 @@ export function liftSuggest(deps: LiftDeps, request: SugarLiftRequest): SugarLif
   // 块级识别（自顶向下；块区间被消费后其内部不再单独产出候选——避免嵌套重复建议）
   const consumed = new Set<number>();
   liftBlocks(ctx, candidates, skipped, consumed);
+  // 预处理条件块 / 行连接块（v1.9 P2 回读）：块级识别之后——更大的 IF 块先占区间
+  liftPreprocBlocks(ctx, candidates, skipped, consumed);
+  liftBraceBlocks(ctx, candidates, skipped, consumed);
   // 单行条件识别：`SIF 条件` + 紧随的那一条语句 → `如果 … 则 …`（W5 与投影同口径）
   liftSingleIfs(ctx, candidates, skipped, consumed);
   // 行级识别：文本消息行（跳过已被块 / 单行条件覆盖的行）
@@ -343,6 +348,7 @@ function verifyRoundTrip(
   ctx: LiftContext,
   body: string,
   originalText: string,
+  opts?: { ignoreIndent?: boolean },
 ): { ok: boolean; generatedText: string; diag: SugarDiagnostic[]; narrationColor: NarrationColorMode } {
   let firstGenerated = '';
   let firstDiag: SugarDiagnostic[] = [];
@@ -367,8 +373,12 @@ function verifyRoundTrip(
     // 两侧各按**已知基准**去缩进后比对：壳产物的 `IF LOCAL` 体恒在 1 级；原文块
     // 的基准是块内首条内容行的层级。不能用"最小缩进"猜基准——那会把整块被统一
     // 多缩进一级的片段也归一掉（层级漂移被抹平），见 `normalizeIndentAt`。
-    const generatedNorm = normalizeIndentAt(generated, 1);
-    const originalNorm = normalizeIndentAt(originalText, firstContentIndent(originalText));
+    const generatedNorm = opts?.ignoreIndent
+      ? stripLeadingIndent(generated)
+      : normalizeIndentAt(generated, 1);
+    const originalNorm = opts?.ignoreIndent
+      ? stripLeadingIndent(originalText)
+      : normalizeIndentAt(originalText, firstContentIndent(originalText));
     if (generatedNorm !== null && generatedNorm === originalNorm) {
       return { ok: true, generatedText: generated, diag: [], narrationColor: mode };
     }
@@ -418,6 +428,14 @@ function firstContentIndent(text: string): number {
     return indentOf(l);
   }
   return 0;
+}
+
+/** 逐行去掉行首空白（`ignoreIndent` 口径：缩进不参与产物语义时使用） */
+function stripLeadingIndent(text: string): string {
+  return text
+    .split('\n')
+    .map((l) => (l.trim().length === 0 ? '' : l.replace(/^[ \t\u3000]*/, '')))
+    .join('\n');
 }
 
 /** 从产物里抽正文区间（`IF LOCAL` 之后到其 `ENDIF` 之前），并把基准缩进降一级 */
@@ -571,6 +589,340 @@ function skipBlock(
   skipped.push({ fromLine, toLine, reason, message });
   markConsumed(consumed, fromLine, toLine);
 }
+
+/* --------------------- 预处理条件块 / 行连接块（v1.9 P2 回读） --------------------- */
+
+/** 糖形头词（全部取自 `keywords.ts`；与 lexer / 显示层同一份表） */
+const PREPROC_W = primaryWord('block.preproc');
+const PREPROC_END_W = primaryWord('block.preprocEnd');
+const PREPROC_IF_W = primaryWord('block.if');
+const PREPROC_ELIF_W = primaryWord('block.elif');
+const PREPROC_ELSE_W = primaryWord('block.else');
+const PREPROC_DEBUG_W = primaryWord('inline.preprocDebug');
+const PREPROC_NDEBUG_W = primaryWord('inline.preprocNonDebug');
+const MULTI_START_W = primaryWord('block.multiStart');
+const MULTI_END_W = primaryWord('block.multiEnd');
+
+type PreprocLiftVariant = 'if' | 'elseif' | 'else' | 'debug' | 'ndebug';
+
+interface PreprocLiftBranch {
+  variant: PreprocLiftVariant;
+  macro: string;
+  line: number;
+}
+
+/**
+ * `[IF …]` 族标记行 → 变体 + 宏名；不是预处理器标记 ⇒ `null`。
+ *
+ * 角色判据用契约层单源 `erbPreprocRoleOf`（整行严格等值、大小写不敏感），
+ * 这里只补"哪种变体 / 宏名是什么"——两处口径不会分叉。
+ */
+function preprocMarkOf(lineText: string): { role: 'open' | 'branch' | 'close'; variant: PreprocLiftVariant; macro: string } | null {
+  const text = lineText.trim();
+  const role = erbPreprocRoleOf(text);
+  if (role === null) return null;
+  const m = /^\[([A-Za-z_]+)(?:\s+([^\]]*))?\]$/.exec(text);
+  if (!m) return null;
+  const word = m[1]!.toUpperCase();
+  const macro = (m[2] ?? '').trim();
+  if (role === 'close' && word === 'ENDIF') return { role, variant: 'else', macro: '' };
+  if (role === 'branch') {
+    if (word === 'ELSE') return { role, variant: 'else', macro: '' };
+    if (word === 'ELSEIF' && macro.length > 0) return { role, variant: 'elseif', macro };
+    return null;
+  }
+  if (word === 'IF' && macro.length > 0) return { role, variant: 'if', macro };
+  if (word === 'IF_DEBUG') return { role, variant: 'debug', macro: '' };
+  if (word === 'IF_NDEBUG') return { role, variant: 'ndebug', macro: '' };
+  return null;
+}
+
+/** 一条分支的糖形块头（全角冒号；与 lexer 的块头判据逐字同形） */
+function preprocSugarHead(branch: PreprocLiftBranch): string {
+  switch (branch.variant) {
+    case 'if':
+      return `${PREPROC_W} ${PREPROC_IF_W} ${branch.macro}：`;
+    case 'elseif':
+      return `${PREPROC_W} ${PREPROC_ELIF_W} ${branch.macro}：`;
+    case 'else':
+      return `${PREPROC_W} ${PREPROC_ELSE_W}：`;
+    case 'debug':
+      return `${PREPROC_W} ${PREPROC_DEBUG_W}：`;
+    case 'ndebug':
+      return `${PREPROC_W} ${PREPROC_NDEBUG_W}：`;
+  }
+}
+
+/**
+ * `[IF X] … [ENDIF]` → `预处理 如果 X： … 预处理结束`（补充稿 v1.9 §3.1 回读）。
+ *
+ * 约束（宁可漏报）：
+ * - 只按**单层**配对：块内再出现预处理标记 ⇒ 外层不猜（内层另行识别），避免嵌套重复建议；
+ * - 块体走 `renderSugarBody`（与 IF 块同一套语句逆向），遇到注释 / 空行 / 不可解析条件即放弃；
+ * - 自证按**去缩进**口径比对：预处理是文件级裁剪，缩进不参与产物语义，而糖形块体
+ *   按语法必然比标记多一级——逐字节口径在这里会把真实语料全部误拒（见 `indentRelaxed`）。
+ */
+function liftPreprocBlocks(
+  ctx: LiftContext,
+  candidates: SugarLiftCandidate[],
+  skipped: SugarLiftSkip[],
+  consumed: Set<number>,
+): void {
+  const byLine = new Map<number, ControlFlowStatement>();
+  for (const st of ctx.statements) if (!byLine.has(st.line)) byLine.set(st.line, st);
+
+  let frame: { openLine: number; branches: PreprocLiftBranch[] } | null = null;
+  let inSkip = false;
+
+  const abandon = (cur: number): void => {
+    if (frame === null) return;
+    skipped.push({
+      fromLine: frame.openLine,
+      toLine: Math.max(frame.openLine, cur - 1),
+      reason: 'not-covered',
+      message: `第 ${frame.openLine} 行的预处理块内嵌套了另一个预处理块；回读只建议内层，外层保持原生标记（宁可漏报）。`,
+    });
+    frame = null;
+  };
+
+  for (let i = 1; i <= ctx.lines.length; i++) {
+    const content = contentOf(ctx.lines[i - 1] ?? '');
+    if (content === ERB_SKIP_MARKERS.start) {
+      inSkip = true;
+      continue;
+    }
+    if (content === ERB_SKIP_MARKERS.end) {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip) continue;
+    const mark = preprocMarkOf(content);
+    if (mark === null) continue;
+
+    if (mark.role === 'open') {
+      abandon(i);
+      frame = { openLine: i, branches: [{ variant: mark.variant, macro: mark.macro, line: i }] };
+      continue;
+    }
+    if (frame === null) continue; // 无开块的孤立分支 / 收束：上游已报 statement-shape
+    if (mark.role === 'branch') {
+      frame.branches.push({ variant: mark.variant, macro: mark.macro, line: i });
+      continue;
+    }
+
+    const fr = frame;
+    frame = null;
+    buildPreprocCandidate(ctx, fr.openLine, i, fr.branches, byLine, candidates, skipped, consumed);
+  }
+}
+
+/** 组装并自证一个预处理块候选 */
+function buildPreprocCandidate(
+  ctx: LiftContext,
+  openLine: number,
+  closeLine: number,
+  branches: PreprocLiftBranch[],
+  byLine: Map<number, ControlFlowStatement>,
+  candidates: SugarLiftCandidate[],
+  skipped: SugarLiftSkip[],
+  consumed: Set<number>,
+): void {
+  const fromLine = openLine;
+  const toLine = closeLine;
+  for (let i = fromLine; i <= toLine; i++) {
+    if (consumed.has(i)) return; // 已被更大的块占用（如 IF 块），不重复建议
+  }
+
+  const sugar: string[] = [];
+  for (let b = 0; b < branches.length; b++) {
+    const head = branches[b]!;
+    const bodyStart = head.line + 1;
+    const bodyEnd = b + 1 < branches.length ? branches[b + 1]!.line - 1 : closeLine - 1;
+
+    if (bodyStart <= bodyEnd) {
+      // 原生 `#` / `@` 行不能落进糖块体（@ 会重启函数边界，`#` 是文件级声明）
+      for (let i = bodyStart; i <= bodyEnd; i++) {
+        const c = contentOf(ctx.lines[i - 1] ?? '');
+        if (c.startsWith('#') || c.startsWith('@')) {
+          skipBlock(
+            skipped,
+            consumed,
+            fromLine,
+            toLine,
+            'macro-or-directive',
+            `第 ${fromLine}–${toLine} 行的预处理块体含 \`#\` / \`@\` 行，无法整块写成糖（宁可漏报）。`,
+          );
+          return;
+        }
+      }
+    }
+
+    sugar.push(preprocSugarHead(head));
+    if (bodyStart <= bodyEnd) {
+      const body = renderSugarBody(ctx, bodyStart, bodyEnd, byLine);
+      if (body === null) {
+        skipBlock(
+          skipped,
+          consumed,
+          fromLine,
+          toLine,
+          'mixed-domain-line',
+          `第 ${fromLine}–${toLine} 行的预处理块体无法构成一致的 .kojo 写法（文本域与逻辑域混行 / 注释打断）。`,
+        );
+        return;
+      }
+      for (const l of body) sugar.push(`\t${l}`);
+    }
+  }
+  sugar.push(PREPROC_END_W);
+
+  const body = sugar.join('\n');
+  const original = ctx.lines.slice(fromLine - 1, toLine).join('\n');
+  const verdict = verifyRoundTrip(ctx, body, original, { ignoreIndent: true });
+  if (!verdict.ok) {
+    skipBlock(
+      skipped,
+      consumed,
+      fromLine,
+      toLine,
+      verdict.diag.length > 0 ? 'transpile-error' : 'roundtrip-mismatch',
+      verdict.diag.length > 0
+        ? `第 ${fromLine}–${toLine} 行生成的 .kojo 文本未通过转译（${verdict.diag[0]!.message}）。`
+        : `第 ${fromLine}–${toLine} 行看起来像预处理条件块，但转译回来的文本与原文本不一致（宁可漏报）。`,
+    );
+    return;
+  }
+
+  candidates.push({
+    kind: 'preproc-block',
+    fromLine,
+    toLine,
+    sugarSource: body,
+    confidence: 'verified',
+    narrationColor: verdict.narrationColor,
+    roundTrip: {
+      verified: true,
+      originalText: original,
+      generatedText: verdict.generatedText,
+      indentRelaxed: true,
+    },
+    reason: `第 ${fromLine}–${toLine} 行是一组预处理条件标记，可改写为「${PREPROC_W} …：」缩进块（产物仍是同一批 \`[IF]\` 标记，缩进不参与产物）。`,
+  });
+  markConsumed(consumed, fromLine, toLine);
+}
+
+/**
+ * `{` … `}` → `多行语句开始 … 多行语句结束`（补充稿 v1.9 §3.2 回读）。
+ *
+ * 块体**逐字节原样**（糖层不解析块内文本）：只把每行的**相对缩进**换算成糖片段的缩进，
+ * 其余字符一个不动。嵌套 `{`（引擎无嵌套语义）⇒ 不猜。
+ */
+function liftBraceBlocks(
+  ctx: LiftContext,
+  candidates: SugarLiftCandidate[],
+  skipped: SugarLiftSkip[],
+  consumed: Set<number>,
+): void {
+  let inSkip = false;
+  for (let i = 1; i <= ctx.lines.length; i++) {
+    const raw = ctx.lines[i - 1] ?? '';
+    const content = contentOf(raw);
+    if (content === ERB_SKIP_MARKERS.start) {
+      inSkip = true;
+      continue;
+    }
+    if (content === ERB_SKIP_MARKERS.end) {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip) continue;
+    if (consumed.has(i)) continue;
+    if (erbContinuationRoleOf(content) !== 'open') continue;
+
+    let closeLine = -1;
+    let nested = false;
+    let depth = 1;
+    for (let j = i + 1; j <= ctx.lines.length; j++) {
+      const c = contentOf(ctx.lines[j - 1] ?? '');
+      if (c.startsWith('@')) break; // 穿越函数边界：整块不猜
+      const role = erbContinuationRoleOf(c);
+      if (role === 'open') {
+        nested = true;
+        depth++;
+        continue;
+      }
+      if (role === 'close') {
+        depth--;
+        if (depth === 0) {
+          closeLine = j;
+          break;
+        }
+      }
+    }
+    if (closeLine < 0) continue; // 未收束：上游已报 unclosed-block
+    if (nested) {
+      skipBlock(
+        skipped,
+        consumed,
+        i,
+        closeLine,
+        'not-covered',
+        `第 ${i}–${closeLine} 行的行连接块内又出现 { ——引擎没有嵌套语义，回读不猜。`,
+      );
+      i = closeLine;
+      continue;
+    }
+
+    let overlapped = false;
+    for (let j = i; j <= closeLine; j++) if (consumed.has(j)) overlapped = true;
+    if (overlapped) {
+      i = closeLine;
+      continue;
+    }
+
+    const openIndent = indentLevelOf(raw);
+    const sugar: string[] = [MULTI_START_W];
+    for (let j = i + 1; j <= closeLine - 1; j++) {
+      const lineRaw = ctx.lines[j - 1] ?? '';
+      const lead = /^[ \t\u3000]*/.exec(lineRaw)![0];
+      const rel = Math.max(0, indentLevelOf(lineRaw) - openIndent);
+      sugar.push('\t'.repeat(rel) + lineRaw.slice(lead.length));
+    }
+    sugar.push(MULTI_END_W);
+
+    const body = sugar.join('\n');
+    const original = ctx.lines.slice(i - 1, closeLine).join('\n');
+    const verdict = verifyRoundTrip(ctx, body, original);
+    if (!verdict.ok) {
+      skipBlock(
+        skipped,
+        consumed,
+        i,
+        closeLine,
+        verdict.diag.length > 0 ? 'transpile-error' : 'roundtrip-mismatch',
+        verdict.diag.length > 0
+          ? `第 ${i}–${closeLine} 行生成的 .kojo 文本未通过转译（${verdict.diag[0]!.message}）。`
+          : `第 ${i}–${closeLine} 行看起来像行连接块，但转译回来的文本与原文本不一致（宁可漏报）。`,
+      );
+      i = closeLine;
+      continue;
+    }
+
+    candidates.push({
+      kind: 'line-join',
+      fromLine: i,
+      toLine: closeLine,
+      sugarSource: body,
+      confidence: 'verified',
+      narrationColor: verdict.narrationColor,
+      roundTrip: { verified: true, originalText: original, generatedText: verdict.generatedText },
+      reason: `第 ${i}–${closeLine} 行是一个 ${ERB_CONTINUATION_MARKERS.open} / ${ERB_CONTINUATION_MARKERS.close} 行连接块，可改写为「${MULTI_START_W} / ${MULTI_END_W}」（块体逐字节保留）。`,
+    });
+    markConsumed(consumed, i, closeLine);
+    i = closeLine;
+  }
+}
+
 
 /**
  * IF 块 → `如果 / 否则如果 / 否则`。

@@ -156,3 +156,79 @@ export const ERB_DIRECTIVES: readonly string[] = appendUnseen(
   ERB_STATEMENT_DIRECTIVES,
   ERB_CONTROL_STATEMENTS,
 );
+
+/* ============================== 原生标记（v1.9 P2 面接线） ============================== */
+
+/**
+ * `#` 声明族（**不含 `#` 前缀**，由调用点补）：`#DIM` 族 6 枚 + 文件级 / 返回类型 8 枚。
+ *
+ * 集合口径与转译器直通谓词同源：`kojo-vocab` 的 `DIM_DIRECTIVE_RE`（前 6 枚）与
+ * `native-display/control.ts` 的 8 枚文件级声明（后 8 枚，v1.9 §3.3）。两处改动时此处跟变；
+ * 补全只提供这一份清单，不再在插件侧另抄。
+ */
+export const ERB_DECLARATION_DIRECTIVES: readonly string[] = [
+  'DIM',
+  'DIMS',
+  'DIMSTR',
+  'DIMCHAR',
+  'DIMF',
+  'DEFINE',
+  'FUNCTION',
+  'FUNCTIONS',
+  'GLOBAL',
+  'LOCALSIZE',
+  'LOCALSSIZE',
+  'SFUNCTION',
+  'XFUNCTION',
+  'TESTMEMORY',
+];
+
+/**
+ * 预处理标记（补全骨架；整行严格等值，见 `plugin-api/erb.ts` 的 `ERB_PREPROC_PATTERNS`）。
+ * `[IF]` / `[ELSEIF]` 插入后还需作者补宏名——这里只给骨架，不猜宏。
+ */
+export const ERB_PREPROC_MARKERS: readonly string[] = [
+  '[IF]',
+  '[ELSEIF]',
+  '[ELSE]',
+  '[ENDIF]',
+  '[IF_DEBUG]',
+  '[IF_NDEBUG]',
+];
+
+/**
+ * 逐字母大小写双写（`IF` → `[iI][fF]`）。
+ *
+ * 为什么不用 `i` 标志：Monarch 编译时会**丢掉定义里正则自带的 flags**，统一按
+ * `lexer.ignoreCase` 重建；`.kojo` 的 def 是 `ignoreCase: false`（中文词形大小写敏感），
+ * 所以这里把大小写写进字符类，才能让 `[if 恋慕开关]` / `#dim` 与引擎同判。
+ */
+function ciWord(word: string): string {
+  return word
+    .split('')
+    .map((ch) => (/[A-Za-z]/.test(ch) ? `[${ch.toLowerCase()}${ch.toUpperCase()}]` : ch))
+    .join('');
+}
+
+/**
+ * 整行预处理标记（**高亮**判据）：大小写不敏感、允许行首缩进；`[IF …]` / `[ELSEIF …]` 允许宏名。
+ *
+ * 与 `ERB_PREPROC_MARKERS` 同集，但高亮要连宏名一起涂成一档（`[IF 恋慕开关]` 整行一个颜色），
+ * 故这里写成一条整行正则，而不是逐词命中。放在 `.kojo` 根态、**先于**行内 `[` 运算符规则。
+ */
+export const ERB_PREPROC_LINE_RE = new RegExp(
+  `^\\s*\\[(?:${ciWord('IF')}|${ciWord('ELSEIF')})(?:\\s+[^\\]]*)?\\]\\s*$` +
+    `|^\\s*\\[(?:${ciWord('ELSE')}|${ciWord('ENDIF')}|${ciWord('IF_DEBUG')}|${ciWord('IF_NDEBUG')})\\]\\s*$`,
+);
+
+/**
+ * 整行 `#` 声明（**高亮**判据）：与 `ERB_DECLARATION_DIRECTIVES` 同集。
+ * `\b` 保证 `#FUNCTION` 不吃 `#FUNCTIONS`、`#DIM` 不吃 `#DIMSTR`。
+ */
+export const ERB_DECLARATION_LINE_RE = new RegExp(
+  `^\\s*#(?:${['DIMSTR', 'DIMCHAR', 'DIMF', 'DIMS', 'DIM', 'DEFINE'].map(ciWord).join('|')})\\b` +
+    `|^\\s*#(?:${['FUNCTIONS', 'FUNCTION', 'GLOBAL', 'LOCALSSIZE', 'LOCALSIZE', 'SFUNCTION', 'XFUNCTION', 'TESTMEMORY']
+      .map(ciWord)
+      .join('|')})\\b`,
+);
+

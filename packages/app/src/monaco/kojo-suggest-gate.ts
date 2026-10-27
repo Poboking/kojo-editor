@@ -1,6 +1,7 @@
 import { SUGAR_LEXICON_WORDS } from '@kojo/kojo-vocab/keywords';
 import { STATEMENT_FUNCTIONS } from '@kojo/kojo-vocab/statement-functions';
 import { classifyKojoLine } from './kojo-native-zone';
+import { kojoNativeMarkSlotAt } from './kojo-native-marks';
 import {
   BLANK_CLASS_STR,
   col0Of,
@@ -100,6 +101,9 @@ export function kojoCodePositionAt(line: string, column: number): boolean {
   if (cls.kind === 'text') {
     // 台词 / 旁白：插值放行；行首关键字前缀 / 关键字锚之后的参数位放行（见模块头注）
     if (insideInterpolation(line, col0)) return true;
+    // 原生标记位（v1.9 P2）：行首 `#` / `[` / 大写指令前缀还没写完整整行时仍算代码位，
+    // 否则「敲 `#` 看 `#DIM`、敲 `[` 看 `[IF]`」这一瞬整轮零候选。
+    if (kojoNativeMarkSlotAt(line, col0) !== null) return true;
     if (isTypingStatementKeyword(line, col0)) return true;
     return STATEMENT_ANCHOR.test(line) || STATEMENT_FUNCTION_ANCHOR.test(line);
   }

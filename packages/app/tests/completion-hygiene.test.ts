@@ -454,9 +454,11 @@ describe('SH-6 · 满表遍历（读数：不是空跑）', () => {
     const kojoIds = new Set(kojo.map((c) => c.sourceId));
     const erbIds = new Set(erb.map((c) => c.sourceId));
     // 文档词源（QSUG-2）在本桩里不注开关（`wordBasedSuggestions` 缺席 = 不供），
-    // 出货另由 `document-words.test.ts` 覆盖；其余 source 每路都必须真出货。
+    // 出货另由 `document-words.test.ts` 覆盖；`kojo-native-marks` 是**位置门控**源
+    // （只在行首 `#` / `[` / 大写指令前缀出货，见 `kojo-native-marks.test.ts`），
+    // 其余 source 每路都必须真出货。
     for (const s of KOJO_COMPLETION_SOURCES) {
-      if (s.id === 'kojo-words') continue;
+      if (s.id === 'kojo-words' || s.id === 'kojo-native-marks') continue;
       expect(kojoIds.has(s.id)).toBe(true);
     }
     for (const s of ERB_COMPLETION_SOURCES) {
