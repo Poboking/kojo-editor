@@ -27,6 +27,7 @@
     "@kojo/plugin-eratohoreverse-adapter": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
     "@kojo/plugin-erb-parser": "workspace:*",
+    "@kojo/plugin-inline-completion-local": "workspace:*",
     "@kojo/plugin-kojo-market": "workspace:*",
     "@kojo/plugin-kojo-lang": "workspace:*",
     "@kojo/plugin-kojo-sugar": "workspace:*",
