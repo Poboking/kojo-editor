@@ -57,6 +57,18 @@ export interface ParseFilePayload {
   path: string;
 }
 
+/**
+ * `erb.parseFile` 的**通道回传形态**：解析结果以 JSON 文本回传，而不是 `ErbFile` 对象图。
+ *
+ * 真机冷开那一帧 `Worker.onmessage`（2.1–2.2s）落点**早于 `kojo.functionChanged`** ⇒ 量的是索引阶段
+ * 2,120 条 `parseFile` 的收结果。`ErbFile` 是"80k 浅对象 + 每对象若干字符串"，而结构化克隆按条数
+ * 计价（同源读数见 `ScanRefsPayload` 头注）；同形载荷 99k 函数实测：对象图 1,232ms / `JSON.parse` 293ms。
+ */
+export interface ParseFileWire {
+  /** `ErbFile` 的 JSON 文本（worker 内 `stringify`） */
+  fileJson: string;
+}
+
 export interface ScanFlowPayload {
   text: string;
 }
@@ -180,7 +192,9 @@ export function erbStructureDecorations({ path, text }: EditorDecoratePayload): 
 
 /** 本插件导出的可搬运任务表（宿主与 worker 侧共用） */
 export const erbParserTasks: ComputeTaskTable = {
-  [PARSE_FILE_TASK]: ((payload: ParseFilePayload) => parseErbText(payload.text, payload.path)) as never,
+  [PARSE_FILE_TASK]: ((payload: ParseFilePayload): ParseFileWire => ({
+    fileJson: JSON.stringify(parseErbText(payload.text, payload.path)),
+  })) as never,
   [SCAN_FLOW_TASK]: ((payload: ScanFlowPayload): ControlFlowStatement[] => scanControlFlow(payload.text)) as never,
   [SCAN_REFS_TASK]: ((payload: ScanRefsPayload): ScanRefsFileResult[] => scanRefsBatch(payload)) as never,
   [STRUCTURE_DECORATIONS_TASK]: ((payload: EditorDecoratePayload): LineDecoration[] =>

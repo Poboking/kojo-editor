@@ -162,7 +162,7 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
       .ensureIndex()
       .then((index) => {
         if (project.current() !== requested) return;
-        rebuild(index);
+        scheduleRebuild(index);
       })
       .catch((err: unknown) => {
         if (project.current() !== requested) return;
@@ -175,9 +175,36 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
       });
   };
 
+  /**
+   * 建树调度（P0-2 冷开实测）：建树是**全量**扫 99k 函数的一次性成本（逐函数解析家族 + 归属
+   * + 排序，实测 200–400ms），而触发它的 `kojo.functionChanged` 是**索引任务里同步发出来**的
+   * ——直接跟在同一拍上，等于让「索引已可用」那一帧再背一次建树的账（611ms 那帧里 240ms 是它）。
+   *
+   * 推到下一轮宏任务：索引帧按时收尾（状态栏/树面板先落「建树中」），建树自成一条短帧；
+   * 同一轮里的多次触发只建一次（后到的索引赢），已建过的索引 + 范围仍由 `rebuild` 去重。
+   * 这不是"少算一次"——`tree` 仍然是同一个纯函数的结果，只是不跟索引挤在一帧里。
+   */
+  let pendingBuild: ErbIndex | null = null;
+  let buildScheduled = false;
+  const scheduleRebuild = (index: ErbIndex | null): void => {
+    pendingBuild = index;
+    if (buildScheduled) return;
+    buildScheduled = true;
+    setTimeout(() => {
+      buildScheduled = false;
+      const next = pendingBuild;
+      pendingBuild = null;
+      rebuild(next);
+    }, 0);
+  };
+  ctx.onDispose(() => {
+    buildScheduled = false;
+    pendingBuild = null;
+  });
+
   ctx.onDispose(ctx.bus.on('kojo.functionChanged', () => refresh()));
   ctx.onDispose(ctx.bus.on('project.opened', () => refresh()));
-  ctx.onDispose(ctx.bus.on('project.closed', () => rebuild(null)));
+  ctx.onDispose(ctx.bus.on('project.closed', () => scheduleRebuild(null)));
   /**
    * 「只看」范围（W7 NAV-SCOPE）：宿主那条选择器的**同一份**戳广播到这里。
    * 索引实例没变也要重扫——范围换了，树就该换（旧行为是这里根本不读选择器，
@@ -189,7 +216,7 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
       const current = project.current();
       if (!current) return;
       const idx = parser.currentIndex();
-      if (idx) rebuild(idx);
+      if (idx) scheduleRebuild(idx);
       else refresh();
     }),
   );

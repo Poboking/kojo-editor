@@ -98,7 +98,11 @@ export interface ExtractFilePayload {
 }
 
 /**
- * 单文件抽取结果：桶 + 两段**净 CPU** 耗时（worker 内 `performance.now` 计时）。
+ * 单文件抽取结果（**内存形态**）：桶 + 两段**净 CPU** 耗时（worker 内 `performance.now` 计时）。
+ *
+ * 注意它**不是**跨线程那一份——通道走 `ExtractFileWire`（`conds` 以 JSON 文本回传，
+ * 理由与读数见该接口头注）。本形态是纯函数 `extractFileBucket` 的产出，供
+ * 内联回退、测试与剖面日志共用。
  *
  * 计时随结果回传是为了保住引擎分段剖面日志的形状（`扫描 Xms` / `抽取循环 Yms`）：
  * 搬进 worker 后主线程只能量到"通道往返"，量不到"扫描本身多慢"，而读数要区分的正是这两条。
@@ -107,6 +111,48 @@ export interface ExtractFileResult {
   bucket: FileBucket;
   scanMs: number;
   extractMs: number;
+}
+
+/**
+ * **通道回传形态**（`condition.extractFile` 唯一跨线程的那一份）：`conds` 换成 JSON 文本。
+ *
+ * `bucket.conds` 是深对象图（99k 函数 / 165k 依赖），结构化克隆**按对象数计价**，与消息条数无关
+ * （§3.2 已证伪合批）。同形载荷页内实测：对象图克隆 1,232ms / `JSON.parse` 293ms；真机这条通道
+ * 合计 2.8s / 4,273 条消息（P0-2 的 A 块）。紧凑元组留给"`JSON.parse` 仍占 >200ms"时再说。
+ */
+export interface ExtractFileWire {
+  mtimeMs: number | null;
+  size: number | null;
+  stats: FileStats;
+  /** `FunctionConditions[]` 的 JSON 文本（worker 内 stringify；`schema` 尚未标注，见 `extractFileBucket`） */
+  condsJson: string;
+  scanMs: number;
+  extractMs: number;
+}
+
+/**
+ * 内存形态 → 通道形态（worker 侧那一步 `stringify`，成本记在通道一侧、不计入 `extractMs`——
+ * 分段剖面日志里"抽取循环"仍只量抽取本身）。
+ */
+export function toWireResult(r: ExtractFileResult): ExtractFileWire {
+  return {
+    mtimeMs: r.bucket.mtimeMs,
+    size: r.bucket.size,
+    stats: r.bucket.stats,
+    condsJson: JSON.stringify(r.bucket.conds),
+    scanMs: r.scanMs,
+    extractMs: r.extractMs,
+  };
+}
+
+/** 通道形态 → 内存桶（主线程在这一行付掉唯一那笔 `JSON.parse`） */
+export function decodeBucket(w: ExtractFileWire): FileBucket {
+  return {
+    mtimeMs: w.mtimeMs,
+    size: w.size,
+    stats: w.stats,
+    conds: JSON.parse(w.condsJson) as FunctionConditions[],
+  };
 }
 
 /** 毫秒表针（与 engine 同口径；`Date.now()` 在逐文件计时上会全读成 0） */
@@ -174,7 +220,7 @@ export function conditionExtractorTasks(
   return {
     [EXPR_SYNTAX_DECORATIONS_TASK]: ((payload: EditorDecoratePayload): LineDecoration[] =>
       exprSyntaxDecorations(payload, scanControlFlow)) as never,
-    [CONDITION_EXTRACT_FILE_TASK]: ((payload: ExtractFilePayload): ExtractFileResult =>
-      extractFileBucket(payload, scanControlFlow)) as never,
+    [CONDITION_EXTRACT_FILE_TASK]: ((payload: ExtractFilePayload): ExtractFileWire =>
+      toWireResult(extractFileBucket(payload, scanControlFlow))) as never,
   };
 }

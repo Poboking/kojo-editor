@@ -25,7 +25,7 @@ import type {
 } from '@kojo/plugin-api';
 import { applySchemaLookup, extractFunctionPredicates, type SchemaLookup } from './extract';
 import { parseExpression } from './expr';
-import { CONDITION_EXTRACT_FILE_TASK, type ExtractFileResult } from './offload';
+import { CONDITION_EXTRACT_FILE_TASK, decodeBucket, type ExtractFileWire } from './offload';
 import { mergeBuckets, planReuse, type ExtractExpect, type FileBucket } from './snapshot';
 
 /**
@@ -505,9 +505,9 @@ export class ConditionEngine implements ConditionExtractorService {
           readMs += nowMs() - r0;
         }
 
-        let result: ExtractFileResult;
+        let result: ExtractFileWire;
         try {
-          result = await this.deps.compute.offload<ExtractFileResult>(CONDITION_EXTRACT_FILE_TASK, {
+          result = await this.deps.compute.offload<ExtractFileWire>(CONDITION_EXTRACT_FILE_TASK, {
             path,
             text,
             mtimeMs: mtimeOf.get(path) ?? null,
@@ -523,12 +523,25 @@ export class ConditionEngine implements ConditionExtractorService {
           return;
         }
 
+        /**
+         * 通道形态 → 内存桶：`JSON.parse` 就在这一步（P0-2 的 A 块，见 `./offload.ts`
+         * `ExtractFileWire` 头注）。解码失败与抽取失败**同语义**：跳过不留桶——
+         * 否则坏一次就永久缓存坏结果。
+         */
+        let bucket: FileBucket;
+        try {
+          bucket = decodeBucket(result);
+        } catch (err) {
+          this.deps.log.warn(`Condition extract skipped (decode failed): ${path} — ${String(err)}`);
+          return;
+        }
+
         // schema 语义标注（lookup 是函数、跨不过结构化克隆 ⇒ 主线程补；
         // 口径与任务内实现共用 `applySchemaLookup`，两条路不可能给出两种标注）
         if (lookup) {
-          for (const cond of result.bucket.conds) applySchemaLookup(cond.dependencies, lookup);
+          for (const cond of bucket.conds) applySchemaLookup(cond.dependencies, lookup);
         }
-        computed.set(path, result.bucket);
+        computed.set(path, bucket);
         scanMs += result.scanMs;
         extractMs += result.extractMs;
       },

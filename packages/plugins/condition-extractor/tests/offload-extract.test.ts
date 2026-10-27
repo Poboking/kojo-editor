@@ -17,8 +17,8 @@ import { describe, expect, it } from 'vitest';
 import type { ComputeTaskTable, ControlFlowStatement, StateDependency, VariableInfo } from '@kojo/plugin-api';
 import { handleComputeRequest } from '@kojo/plugin-api';
 import { applySchemaLookup, extractFunctionConditions } from '../src/extract';
-import { CONDITION_EXTRACT_FILE_TASK, conditionExtractorTasks, extractFileBucket } from '../src/offload';
-import type { ExtractFilePayload } from '../src/offload';
+import { CONDITION_EXTRACT_FILE_TASK, conditionExtractorTasks, decodeBucket, extractFileBucket } from '../src/offload';
+import type { ExtractFilePayload, ExtractFileWire } from '../src/offload';
 import type { FileBucket, FileStats } from '../src/snapshot';
 
 /* ---------------- 旧实现（改前 engine.run 主循环的抽取段，逐行封存作对照） ---------------- */
@@ -225,10 +225,11 @@ describe('PS-11 · condition.extractFile 任务 ≡ 改前主循环（封存对�
     const res = await handleComputeRequest(tasks, { id: 42, kind: CONDITION_EXTRACT_FILE_TASK, payload });
     expect(res).toMatchObject({ id: 42 });
     if (!('result' in res)) throw new Error(`unexpected error response: ${JSON.stringify(res)}`);
-    // 计时字段（scanMs/extractMs）随每次运行抖动，对拍只比桶本体；计时是有限数即可
-    const viaWorker = (res as { result: { bucket: FileBucket; scanMs: number; extractMs: number } }).result;
+    // 计时字段（scanMs/extractMs）随每次运行抖动，对拍只比桶本体；计时是有限数即可。
+    // 通道回传的是**文本形态**（`ExtractFileWire`）⇒ 过一遍 decodeBucket 才与直调可比。
+    const viaWorker = (res as { result: ExtractFileWire }).result;
     const direct = extractFileBucket(payload, injectedScan(stmts));
-    expect(JSON.stringify(viaWorker.bucket)).toBe(JSON.stringify(direct.bucket));
+    expect(JSON.stringify(decodeBucket(viaWorker))).toBe(JSON.stringify(direct.bucket));
     expect(Number.isFinite(viaWorker.scanMs)).toBe(true);
     expect(Number.isFinite(viaWorker.extractMs)).toBe(true);
   });
@@ -243,14 +244,10 @@ describe('PS-11 · condition.extractFile 任务 ≡ 改前主循环（封存对�
     const fns = [{ normalizedName: 'M_KOJO_K1_A', startLine: 1, endLine: 4 }];
     const payload = makePayload('D:/game/a.ERB', fns, stmts);
     const tasks = conditionExtractorTasks(injectedScan(stmts));
-    const impl = tasks[CONDITION_EXTRACT_FILE_TASK] as never as (p: ExtractFilePayload) => {
-      bucket: FileBucket;
-      scanMs: number;
-      extractMs: number;
-    };
+    const impl = tasks[CONDITION_EXTRACT_FILE_TASK] as never as (p: ExtractFilePayload) => ExtractFileWire;
     const viaStub = await impl(structuredClone(payload));
     const want = oldExtractFile(payload.text, payload.path, fns, stmts);
-    expect(JSON.stringify(viaStub.bucket)).toBe(JSON.stringify(want));
+    expect(JSON.stringify(decodeBucket(viaStub))).toBe(JSON.stringify(want));
     expect(Number.isFinite(viaStub.scanMs)).toBe(true);
   });
 });
