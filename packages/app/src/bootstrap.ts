@@ -360,6 +360,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     market,
     uiMarket,
     uiKojoXml,
+    inlineCompletionLocal,
   ] = await Promise.all([
     import('@kojo/plugin-convention-linter'),
     import('@kojo/plugin-condition-extractor'),
@@ -380,6 +381,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-kojo-market'),
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
+    import('@kojo/plugin-inline-completion-local'),
   ]);
   // 项目级 adapter 的 2.0 两面：**清单驱动**登记（LAU-1a，泛化原 erafl 特例）——
   // 导出名住在 `adapter-manifest.ts`，组合根只见清单不见游戏名（口径见
@@ -439,6 +441,11 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // 口上 XML 面板（2026-10-24）：消费 `kojo.xml` 服务（由 XML 形态的 adapter 提供）。
     // 服务缺席（ERB 口上形态的工程）⇒ 面板显式降级，不静默空白。
     uiKojoXml.createUiKojoXmlPlugin(),
+    // 内联补全（幽灵文本）本地候选源（IC-B 批，2026-10-27）：往槽 `completion.source`
+    // 注册第一家供方。判据只有"这一格的名字前缀在项目名录里**恰好**命中一条"，
+    // 名录现读 `erb.parser` 的索引（不在这里建第二份）。排在末尾是刻意的：
+    // 上面的名单顺序不承担"谁赢"，槽内先后由各贡献自己的 `order` 决定（本地 10 / 模型 ≥20）。
+    inlineCompletionLocal.createInlineCompletionLocalPlugin(),
   ];
 }
 

@@ -89,6 +89,9 @@ importers:
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
+      '@kojo/plugin-inline-completion-local':
+        specifier: workspace:*
+        version: link:../plugins/inline-completion-local
       '@kojo/plugin-kojo-lang':
         specifier: workspace:*
         version: link:../plugins/kojo-lang
@@ -359,6 +362,12 @@ importers:
         version: 19.3.0
 
   packages/plugins/erb-parser:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+
+  packages/plugins/inline-completion-local:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/plugin-inline-completion-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inline completion (ghost text) local candidate source, slot completion.source: high-precision name-slot continuations, each one self-proved by a unique prefix hit over the erb.parser index. No game knowledge, zero IO.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}
