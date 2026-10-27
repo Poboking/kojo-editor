@@ -69,3 +69,9 @@
 |---|---|---|---|
 | LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_project_hash` / `launcher_runtime_*` 两条宿主命令目前**不在** Rust 侧，须先补；插件面板的「打开源码」已接 `plugins.openSource`，源码项目本体仍只能读、不能建 | 待派（依赖 L7A 的清单类型，已落） |
 | LAUNCH-P0-RESIDUE | P0 真壳验收余项（L9 已覆盖判据④孙进程 + ①的地基）：② ~10 MB fixture 的 `copy` 实例 + 复制进度可见；③ 同实例二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 原生信任框确认后启动成功、篡改 exe 报 `TRUST_CHANGED`；⑥ 应用退出杀树 + 下次启动显示 `app-exit`；① 的「经 UI 建 shared 实例」现只由夹具播种覆盖 | 全部在真壳（`debug-cli shell` / `launcher-smoke`）取证；不碰真游戏目录；⑤ 的原生框无人值守点不了 ⇒ 须改由宿主侧命令面取证或在报告里如实标 SKIP | 待派 |
+
+## 在办 · 美学收口（1027，shiori）
+
+| ID | 任务（落点） | 关键判据 / 已实测事实 | 状态 |
+|---|---|---|---|
+| AE-LADDER | 全站观感的**同一件事被写过多遍**收口成档：浮层抬升四种写法（`.overlay-host` 少顶缘高光 / `.picker` 少切边环 / `.context-menu` 自带裸黑环）、弹窗页脚只有教程有分隔线、滚动渐隐四处各抄一份 mask、四条把手三种悬停色（含编辑器分隔条转**中性灰**＝读作禁用）、分段控件与浮层关闭钮缺按下/焦点态、`.kit-count-danger` 吃实心 `--danger`（压 `--bg-3` 4.11:1 破 AA）、子菜单箭头是文本 `›`（与 `icons-system` 的"字符图标绝迹"口径相悖） | 判据：新增 `packages/app/tests/aesthetic-ladder.test.ts` 钉"名册齐 + 只有一份真源 + 一族状态齐"；全量不回退 + 双 typecheck + `audit:decoupling`/`audit:language` + 开机图与产物闸不动；调试宿 web 亮/浅两档改前改后同屏对拍 | 进行中 · 认领：shiori 2026-10-27 |
