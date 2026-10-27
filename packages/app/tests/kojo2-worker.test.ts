@@ -39,8 +39,10 @@ import {
   type Kojo2ParseReply,
   type Kojo2WorkerReply,
   type Kojo2WorkerRequest,
+  type Kojo2WorkerRequestType,
 } from '../src/monaco/tree-sitter/kojo2-worker-protocol';
 import {
+  createKojo2ProtocolRing,
   createKojo2WorkerEngine,
   foldsFromCaptures,
   KOJO2_RUNTIME_LOAD_ATTEMPTS,
@@ -109,6 +111,9 @@ type FakeWorkerInstance = InstanceType<typeof harness.FakeWorker>;
 /* ============================ 进程内回环 worker（真 wasm 用） ============================ */
 
 function inProcessWorker(engine: Kojo2WorkerEngine): Worker {
+  // LAU-1：环上说的是 v3（引擎仍是 v2 那套内部请求）——回环必须走同一个环，
+  // 否则客户端发的是 v3、引擎收的是 v3、判据却按 v2 看（那是两份协议在同一个测试里对打）。
+  const ring = createKojo2ProtocolRing(engine);
   const target = {
     onmessage: null as ((event: MessageEvent<unknown>) => void) | null,
     onerror: null as ((event: ErrorEvent) => void) | null,
@@ -116,7 +121,7 @@ function inProcessWorker(engine: Kojo2WorkerEngine): Worker {
       // 真 worker 的 postMessage 是跨线程投递：这里用 microtask 模拟"不同步返回"，
       // 保证客户端不会在 `postMessage` 里重入 receive（那会掩盖配对/超时的时序 bug）。
       queueMicrotask(() => {
-        void engine.handle(data as Kojo2WorkerRequest).then((reply) => {
+        void ring.handle(data).then((reply) => {
           target.onmessage?.({ data: reply } as MessageEvent<unknown>);
         });
       });
@@ -208,55 +213,108 @@ async function flush(rounds = 12): Promise<void> {
   for (let i = 0; i < rounds; i++) await Promise.resolve();
 }
 
-function parseReply(id: number, treeId: string, options: Partial<Kojo2ParseReply> = {}): Kojo2ParseReply {
+/**
+ * 一条 v3 `parse` 回话（LAU-1）：面合进 `facets`，`metrics` 必带。
+ * 老测试里的 `parse` / `captures` / `folds` 三种"请求"在这里只差 `facets` 里放哪一格。
+ */
+function v3Reply(
+  id: number,
+  treeId: string,
+  facets: Record<string, unknown> = {},
+  options: { version?: number; incremental?: boolean; parseMs?: number; queryMs?: number; textLength?: number } = {},
+): Record<string, unknown> {
   return {
     ok: true,
     id,
-    type: 'parse',
-    version: 1,
+    kind: 'parse',
+    doc: 0,
+    version: options.version ?? 1,
     treeId,
-    incremental: false,
-    changedRanges: [],
-    textLength: 1,
-    parseMs: 0,
-    loadMs: 0,
-    ...options,
+    incremental: options.incremental ?? false,
+    facets,
+    metrics: {
+      parseMs: options.parseMs ?? 0,
+      queryMs: options.queryMs ?? 0,
+      textLength: options.textLength ?? 1,
+    },
   };
 }
 
-function capturesReply(id: number, treeId: string, captures: Kojo2CapturesReply['captures'] = []): Kojo2CapturesReply {
-  return {
-    ok: true,
-    id,
-    type: 'captures',
-    version: 1,
-    treeId,
-    captures,
-    incremental: false,
-    reparsed: false,
-    queryMs: 0,
-    loadMs: 0,
-  };
+function parseReply(id: number, treeId: string, options: Partial<Kojo2ParseReply> = {}): Record<string, unknown> {
+  return v3Reply(id, treeId, {}, {
+    version: options.version,
+    incremental: options.incremental,
+    parseMs: options.parseMs,
+    textLength: options.textLength,
+  });
 }
 
-function foldsReply(id: number, treeId: string, folds: Kojo2FoldsReply['folds'] = []): Kojo2FoldsReply {
-  return {
-    ok: true,
-    id,
-    type: 'folds',
-    version: 1,
-    treeId,
-    folds,
-    incremental: false,
-    reparsed: false,
-    queryMs: 0,
-    loadMs: 0,
-  };
+function capturesReply(
+  id: number,
+  treeId: string,
+  captures: Kojo2CapturesReply['captures'] = [],
+): Record<string, unknown> {
+  const names: string[] = [];
+  const spans: number[] = [];
+  for (const capture of captures) {
+    let at = names.indexOf(capture.name);
+    if (at < 0) {
+      at = names.length;
+      names.push(capture.name);
+    }
+    spans.push(capture.startPosition.row, capture.startPosition.column, capture.endPosition.row, capture.endPosition.column, at, 0);
+  }
+  return v3Reply(id, treeId, { semantic: { names, nodes: [''], spans } });
 }
 
-function sentOf(worker: FakeWorkerInstance): Kojo2WorkerRequest[] {
-  return worker.sent as Kojo2WorkerRequest[];
+function foldsReply(id: number, treeId: string, folds: Kojo2FoldsReply['folds'] = []): Record<string, unknown> {
+  return v3Reply(id, treeId, { folds: { spans: folds.flatMap((fold) => [fold.startRow, fold.endRow]) } });
 }
+
+/**
+ * 把 worker 收到的消息读成"逻辑请求"：`open` 不算请求（握手），v3 的 `parse` 按 `want`
+ * 还原成老测试认识的四种 `type`（这样判据仍然按"哪一面"写，不按"哪一版协议"写）。
+ */
+interface SentView {
+  readonly id: number;
+  readonly type: Kojo2WorkerRequestType;
+  readonly text?: string;
+  readonly version?: number;
+  readonly oldTreeId?: string;
+  readonly raw: unknown;
+}
+
+function sentOf(worker: FakeWorkerInstance): SentView[] {
+  const out: SentView[] = [];
+  for (const message of worker.sent as Array<Record<string, unknown>>) {
+    if (message.kind === 'open') continue;
+    if (message.kind === 'parse') {
+      const want = (message.want as readonly string[] | undefined) ?? [];
+      const type: Kojo2WorkerRequestType =
+        want.includes('semantic') ? 'captures' : want.includes('folds') ? 'folds' : want.includes('indent') ? 'indents' : 'parse';
+      out.push({
+        id: message.id as number,
+        type,
+        ...(typeof message.text === 'string' ? { text: message.text } : {}),
+        version: message.version as number,
+        ...(typeof message.baseTreeId === 'string' ? { oldTreeId: message.baseTreeId } : {}),
+        raw: message,
+      });
+      continue;
+    }
+    // 旧路（双跑窗口里改说 v2 之后）的消息
+    out.push({
+      id: message.id as number,
+      type: message.type as Kojo2WorkerRequestType,
+      ...(typeof message.text === 'string' ? { text: message.text } : {}),
+      version: message.version as number,
+      ...(typeof message.oldTreeId === 'string' ? { oldTreeId: message.oldTreeId } : {}),
+      raw: message,
+    });
+  }
+  return out;
+}
+
 
 /* ============================ 请求-响应配对 ============================ */
 
@@ -285,7 +343,8 @@ describe('客户端 · 请求-响应配对（按 id，不按到达顺序）', ()
     const { client, worker } = makeClient();
     const request = client.parse('> 一。\n', 1);
     const sent = sentOf(worker)[0]!;
-    worker.reply({ ...foldsReply(sent.id, 'tree-x'), type: 'folds' });
+    // 对面回了一条 **v2 形状**（两侧版本错位的历史信号）⇒ 客户端翻到旧路，并按 id 对号判出 protocol-error
+    worker.reply({ ok: true, id: sent.id, type: 'folds', version: 1, treeId: 'tree-x', folds: [], incremental: false, reparsed: false, queryMs: 0, loadMs: 0 });
     const result = await request;
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('protocol-error');
@@ -321,8 +380,8 @@ describe('客户端 · 请求-响应配对（按 id，不按到达顺序）', ()
 /* ============================ 超时与丢弃 ============================ */
 
 describe('客户端 · 超时丢弃与 dispose', () => {
-  it('默认预算：稳态 2s、引导期 8s（常量即契约）', () => {
-    expect(KOJO2_WORKER_TIMEOUT_MS).toBe(2_000);
+  it('默认预算：稳态与 v1 同一档 4s、引导期 8s（常量即契约；LAU-1 统一两套超时）', () => {
+    expect(KOJO2_WORKER_TIMEOUT_MS).toBe(4_000);
     expect(KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS).toBe(8_000);
   });
 
@@ -334,8 +393,11 @@ describe('客户端 · 超时丢弃与 dispose', () => {
     expect(client.pendingCount).toBe(0);
 
     const second = client.parse('> 二。\n', 2);
-    const sent = sentOf(worker)[1]!;
-    worker.reply(parseReply(sent.id, 'tree-2'));
+    // 引导期一条回话都没有 ⇒ 双跑窗口改说旧话（对面多半是旧 worker，它不认识 `open`）
+    expect(client.protocolMode).toBe('v2');
+    const sent = sentOf(worker).at(-1)!;
+    expect(sent.raw, '改说旧话之后的请求是 v2 形状').toMatchObject({ type: 'parse', text: '> 二。\n' });
+    worker.reply({ ok: true, id: sent.id, type: 'parse', version: 2, treeId: 'tree-2', incremental: false, changedRanges: [], textLength: 1, parseMs: 0, loadMs: 0 });
     const result = await second;
     expect(result.ok).toBe(true);
   });
@@ -429,7 +491,9 @@ describe('客户端 · 启动失败 / 线程崩溃 / 业务失败都是可判别
     });
     const result = await client.parse('> 一。\n', 1);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe('crashed');
+    // LAU-1 起 `open` 是第一个投递的东西：它断了就是"通道没起来"（unavailable），
+    // 与"通道起来之后某条请求投递断了"（crashed）同属"可判别数据"，都不留未 settle 的 promise。
+    if (!result.ok) expect(['crashed', 'unavailable']).toContain(result.reason);
     expect(client.state).toBe('unavailable');
     expect(terminated).toBe(true);
     expect(client.pendingCount).toBe(0);
@@ -562,19 +626,28 @@ describe('单例', () => {
 
 /* ============================ 请求字段形状 ============================ */
 
-describe('请求字段形状（协议真源 = kojo2-worker-protocol.ts）', () => {
-  it('四种 type 都带 id / version / text，oldTreeId 只在给了时才出现', () => {
+describe('请求字段形状（协议真源 = @kojo/kojo-core 的 structure-protocol.ts）', () => {
+  it('先 open 后 parse：一条请求一条回复，面走 want，基线走 baseTreeId', () => {
     const { client, worker } = makeClient();
     void client.parse('parse-text', 1, 'tree-old');
     void client.captures('caps-text', 2);
     void client.folds('folds-text', 3, 'tree-2');
     void client.indents('indents-text', 4);
-    expect(worker.sent).toEqual([
-      { id: 1, type: 'parse', text: 'parse-text', version: 1, oldTreeId: 'tree-old' },
-      { id: 2, type: 'captures', text: 'caps-text', version: 2 },
-      { id: 3, type: 'folds', text: 'folds-text', version: 3, oldTreeId: 'tree-2' },
-      { id: 4, type: 'indents', text: 'indents-text', version: 4 },
+    const [open, ...requests] = worker.sent as Array<Record<string, unknown>>;
+    expect(open).toMatchObject({ kind: 'open', protocol: 3, languageId: 'kojo2' });
+    expect(requests).toEqual([
+      { id: 2, kind: 'parse', doc: 0, version: 1, text: 'parse-text', baseTreeId: 'tree-old', want: [] },
+      { id: 3, kind: 'parse', doc: 0, version: 2, text: 'caps-text', want: ['semantic'] },
+      { id: 4, kind: 'parse', doc: 0, version: 3, text: 'folds-text', baseTreeId: 'tree-2', want: ['folds'] },
+      { id: 5, kind: 'parse', doc: 0, version: 4, text: 'indents-text', want: ['indent'] },
     ]);
+  });
+
+  it('旧路（v2）只在 `protocolMode: legacy` 或对面不认 v3 时才说话', () => {
+    const { client, worker } = makeClient({ protocolMode: 'legacy' });
+    void client.captures('caps-text', 1);
+    expect(worker.sent).toEqual([{ id: 1, type: 'captures', text: 'caps-text', version: 1 }]);
+    expect(client.protocolMode).toBe('v2');
   });
 });
 
@@ -606,7 +679,7 @@ describe('真 wasm · parse / captures / folds / indents（worker 本体）', ()
     expect(incremental.ok).toBe(true);
     if (!incremental.ok) return;
     expect(incremental.value.incremental).toBe(true);
-    expect(incremental.value.changedRanges).toHaveLength(1);
+    // v3 的 `parse` 回话不带 changedRanges（协议里没有这一格；两个消费方都不读它）
     expect(incremental.value.treeId).not.toBe(parsed.value.treeId);
   });
 
@@ -669,7 +742,8 @@ describe('真 wasm · parse / captures / folds / indents（worker 本体）', ()
     const result = await client.folds('> 一行。\n', 1);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toBe('query-unavailable');
+    // v3 把 query-unavailable / query-failed 并成一枚（都是"查询这一面没成"）
+    expect(result.reason).toBe('query-failed');
     expect(result.message).toContain('folds');
   });
 

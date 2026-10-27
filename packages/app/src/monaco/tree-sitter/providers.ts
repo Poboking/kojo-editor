@@ -327,6 +327,8 @@ function startLanguage(
   const languageId = descriptor.id;
   const client = new ClientClass({
     runtime,
+    // 只进 `open.languageId`（worker 侧日志与自证）；宿主不按语言 id 分支（LAU-3 已收口）
+    languageId,
     onFatal: () => {
       // 整档停用只拆这一门语言：另一门语言的结构层不该被邻居的 wasm 失败带走
       stopLanguage(languageId);

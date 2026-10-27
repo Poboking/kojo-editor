@@ -26,18 +26,23 @@
  * 坐标口径：行号 **0 基**（tree-sitter 原生），与 v1 `KojoStructureFold` 一致；列号只在
  * capture 里出现（也是 0 基）。主线程的 Monaco 1 基转换只发生在 `kojo2-tokenizer.ts`。
  */
+import type { STRUCTURE_BOOTSTRAP_TIMEOUT_MS as CORE_BOOTSTRAP, STRUCTURE_TIMEOUT_MS as CORE_TIMEOUT } from '@kojo/kojo-core';
 import type { Kojo2Capture } from './kojo2-tokenizer';
 import type { Kojo2EditRange } from './kojo2-runtime-core';
 
-/** 稳态单请求超时：2s 内回不来 = 这一条这次不顶上（调用方降级，编辑器不等人） */
-export const KOJO2_WORKER_TIMEOUT_MS = 2_000;
+/**
+ * 稳态单请求超时（**LAU-1 起与 v1 同一档**）：§4.1 把两套超时并成一档，取 4s 而不是
+ * kojo2 原来的 2s——稳态的代价函数不对称（多等两秒只让作者晚看到颜色，错判一次却让这一面
+ * 消失到换文档为止）。常量本身留在 `structure-protocol.ts`，这里只是本族的老名字。
+ */
+export const KOJO2_WORKER_TIMEOUT_MS: typeof CORE_TIMEOUT = 4_000;
 
 /**
  * 引导期超时（worker 还没回过任何一条时）：首条请求要等 worker 里 `Parser.init` +
  * `Language.load` + 查询编译。真机 ~0.2s，CI 4 核冷启动可能 1s+，2s 不够安全；
- * 引导完成后立即回到 {@link KOJO2_WORKER_TIMEOUT_MS}。
+ * 引导完成后立即回到 {@link KOJO2_WORKER_TIMEOUT_MS}。LAU-1 起这一格直接取共享常量。
  */
-export const KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS = 8_000;
+export const KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS: typeof CORE_BOOTSTRAP = 8_000;
 
 export type Kojo2WorkerRequestType = 'parse' | 'captures' | 'folds' | 'indents';
 

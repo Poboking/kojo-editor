@@ -1,16 +1,29 @@
 /**
- * Kojo 2.0 结构解析 worker 的**主线程薄客户端**（请求-响应配对 + 超时丢弃 + 可判别降级）。
+ * Kojo 2.0 结构解析 worker 的**主线程薄壳**（LAU-1：这一层只说协议 v3）。
  *
- * ## 主线程在这里只做三件事
+ * ## 主线程在这里只做四件事
  *
- * 1. **建线程**（`?worker` 入口是 `kojo2-ts.worker.ts`；与 v1 `kojo-ts.worker.ts` 同一条 Vite 路）；
- * 2. 发 `{ id, type, text, version, oldTreeId? }`，按 `id` 配对回话；
- * 3. 超时（稳态 2s / 引导期 8s）后把该 `id` 从待办表删掉，**迟到回复直接丢**——
- *    一条已经判了 timeout 的请求不许再被改判（那会让早先的降级决定变成假的）。
+ * 1. **建线程**（`?worker` 入口是 `kojo2-ts.worker.ts`；与 v1 `kojo-ts.worker.ts` 同一条 Vite 路），
+ *    `start()` 发一条 `open{protocol:3}`；
+ * 2. 发 `parse{doc,version,text|edit,baseTreeId?,want}`，按 `id` 配对回话；
+ * 3. 超时（稳态 4s / 引导期 8s，**与 v1 同一档**——LAU-1 之前这里是 2s，§4.1 把两套超时并成一档）后
+ *    把该 `id` 从待办表删掉，**迟到回复直接丢**——一条已经判了 timeout 的请求不许再被改判；
+ * 4. 把 v3 的 `facets` 翻回本族既有消费方（`kojo2-semantic.ts` / `kojo2-folding.ts` /
+ *    `kojo2-indent.ts`）认识的三条回复。**翻译只在这一层**：那三个模块一行不改（additive 契约）。
  *
  * 主线程**一次解析都不做**：这里不 import `web-tree-sitter`、不 import `kojo2-runtime`、
- * 不碰 wasm（连类型都不需要）。`kojo2-semantic.ts` 通过 `getKojo2WorkerClient()` 取这份单例，
- * worker 不可用时拿到 `{ ok: false, reason }`，回空 tokens 即可。
+ * 不碰 wasm（连类型都不需要）。
+ *
+ * ## 双跑窗口（`protocol-mismatch` 不整档哑火）
+ *
+ * 对面如果还是旧 worker（v2：`captures` / `folds` / `indents` / `parse` 四条消息、没有握手），
+ * 本类有两种发现方式，都会**当场改说旧话**（不是把结构层关掉）：
+ * - 它回了 `protocol-mismatch`（新 worker 收到旧形状时的答复）；或
+ * - 引导期一条回话都没有（旧 worker 不认识 `open`，只能静默丢掉 ⇒ 超时）。
+ *
+ * 改说旧话之后，本类发 `{id,type,text,version,oldTreeId}`（LAU-1 之前的形状），收到的
+ * `{ok,type,…}` 也按旧形状解——两条路的**公开方法签名与返回类型完全一致**，
+ * 上游那三个消费模块感知不到换过轨。
  *
  * ## 失败面（全部是数据，不是异常）
  *
@@ -28,36 +41,55 @@
  *
  * ## 并发
  *
- * 客户端**不排队**：`parse` 与查询各自立刻投递，worker 侧按到达序串行处理（一条 parser，
- * 消息环本来就不该交错）。因此"并发两次 parse"的语义是**先到先解、后到后解**；第二趟若想
- * 吃第一趟的增量，必须等第一趟的 `treeId` 回来再发（调用方自己 await）。
+ * 客户端**不排队**：每条请求各自立刻投递，worker 侧按到达序串行处理（一条 parser，
+ * 消息环本来就不该交错）。因此"并发两次 parse"的语义是**先到先解、后到后解**。
  */
 import Kojo2Worker from './kojo2-ts.worker?worker';
 import {
-  KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS,
-  KOJO2_WORKER_TIMEOUT_MS,
+  STRUCTURE_BOOTSTRAP_TIMEOUT_MS,
+  STRUCTURE_PROTOCOL_VERSION,
+  STRUCTURE_TIMEOUT_MS,
+} from '@kojo/kojo-core';
+import type {
+  StructureCaptureTable,
+  StructureFacet,
+  StructureFailureReason,
+  StructureParseReply,
+  StructureReply,
+  StructureRequest,
+} from './protocol';
+import { isStructureReply } from './protocol';
+import {
   isKojo2WorkerReply,
   type Kojo2CapturesReply,
+  type Kojo2FoldRange,
   type Kojo2FoldsReply,
+  type Kojo2IndentRules,
   type Kojo2IndentsReply,
   type Kojo2ParseReply,
-  type Kojo2WorkerFailure,
   type Kojo2WorkerFailureReason,
   type Kojo2WorkerReply,
   type Kojo2WorkerRequest,
   type Kojo2WorkerRequestType,
   type Kojo2WorkerResult,
 } from './kojo2-worker-protocol';
+import type { Kojo2Capture } from './kojo2-tokenizer';
 
 export type Kojo2WorkerClientState = 'idle' | 'starting' | 'ready' | 'unavailable' | 'disposed';
 
 export interface Kojo2WorkerClientOptions {
   /** 建线程（测试注入可编程 FakeWorker；缺省 = Vite 的 `?worker` 入口） */
   readonly createWorker?: () => Worker;
-  /** 稳态单请求预算（毫秒），缺省 {@link KOJO2_WORKER_TIMEOUT_MS} */
+  /** 稳态单请求预算（毫秒），缺省 {@link STRUCTURE_TIMEOUT_MS} */
   readonly timeoutMs?: number;
-  /** 引导期单请求预算（worker 还没回过任何一条时），缺省 {@link KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS} */
+  /** 引导期单请求预算（worker 还没回过任何一条时），缺省 {@link STRUCTURE_BOOTSTRAP_TIMEOUT_MS} */
   readonly bootstrapTimeoutMs?: number;
+  /**
+   * 协议档位（双跑窗口的手动回滚开关）：
+   * - `'auto'`（缺省）= 先说 v3，握手被拒 / 对面形状不符 / 引导期无回话就改说 v2；
+   * - `'legacy'` = 一个字节的 v3 都不发（等价于 LAU-1 之前的行为）。
+   */
+  readonly protocolMode?: 'auto' | 'legacy';
   /** 一次性告警出口（缺省 `console.warn`；测试可收账） */
   readonly warn?: (message: string) => void;
 }
@@ -71,9 +103,19 @@ interface ClientFailure {
 
 interface PendingRequest {
   readonly id: number;
+  /** 上游要的那一种回答（`captures` / `folds` / `indents` / `parse`） */
   readonly type: Kojo2WorkerRequestType;
+  /** 这条请求带的增量基准（v3 只回 `incremental`；"有没有重新解树"由树身份是否变化推出来） */
+  readonly baseTreeId?: string;
   readonly resolve: (result: Kojo2WorkerResult<Kojo2WorkerReply>) => void;
   readonly timer: ReturnType<typeof setTimeout>;
+}
+
+/** 一条请求的原始内容（v3 与 v2 两条路都要它；换轨时原样重发） */
+interface RequestPayload {
+  readonly text: string;
+  readonly version: number;
+  readonly oldTreeId?: string;
 }
 
 function normalizeTimeout(value: number | undefined, fallback: number): number {
@@ -88,6 +130,14 @@ function defaultCreateWorker(): Worker {
   return new Kojo2Worker();
 }
 
+/** 面 ← 上游的请求种类（v3 的 `want` 就是这一格） */
+function facetsOf(type: Kojo2WorkerRequestType): readonly StructureFacet[] {
+  if (type === 'captures') return ['semantic'];
+  if (type === 'folds') return ['folds'];
+  if (type === 'indents') return ['indent'];
+  return []; // 上游只要树身份与耗时（`parse`）
+}
+
 export class Kojo2WorkerClient {
   private worker: Worker | null = null;
   private status: Kojo2WorkerClientState = 'idle';
@@ -96,6 +146,8 @@ export class Kojo2WorkerClient {
   private lateReplies = 0;
   private orphanReplies = 0;
   private unavailableMessage = '';
+  /** 说 v3 还是 v2（双跑窗口的开关；`protocol-mismatch` / 引导期无回话 ⇒ 翻到 `'v2'`） */
+  private mode: 'v3' | 'v2';
   private readonly pending = new Map<number, PendingRequest>();
   private readonly createWorker: () => Worker;
   private readonly timeoutMs: number;
@@ -105,13 +157,19 @@ export class Kojo2WorkerClient {
 
   constructor(options: Kojo2WorkerClientOptions = {}) {
     this.createWorker = options.createWorker ?? defaultCreateWorker;
-    this.timeoutMs = normalizeTimeout(options.timeoutMs, KOJO2_WORKER_TIMEOUT_MS);
-    this.bootstrapTimeoutMs = normalizeTimeout(options.bootstrapTimeoutMs, KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS);
+    this.timeoutMs = normalizeTimeout(options.timeoutMs, STRUCTURE_TIMEOUT_MS);
+    this.bootstrapTimeoutMs = normalizeTimeout(options.bootstrapTimeoutMs, STRUCTURE_BOOTSTRAP_TIMEOUT_MS);
     this.warn = options.warn ?? ((message: string) => console.warn(message));
+    this.mode = options.protocolMode === 'legacy' ? 'v2' : 'v3';
   }
 
   get state(): Kojo2WorkerClientState {
     return this.status;
+  }
+
+  /** 当前说的是哪一版协议（诊断 / 测试用；`protocol-mismatch` 之后会变 'v2'） */
+  get protocolMode(): 'v3' | 'v2' {
+    return this.mode;
   }
 
   /** 在途请求数（超时 / 回话 / dispose 都会减；测试用它自证没有泄漏） */
@@ -154,23 +212,35 @@ export class Kojo2WorkerClient {
     }
     this.worker = worker;
     this.status = 'starting';
+    if (this.mode === 'v3') {
+      // 握手：v3 的第一步。旧 worker 不认识它（静默丢掉）⇒ 由引导期超时翻到 v2。
+      this.post({
+        id: this.nextId++,
+        kind: 'open',
+        protocol: STRUCTURE_PROTOCOL_VERSION,
+        languageId: 'kojo2',
+        // 2.0 的 wasm 由入口静态装配，这两格只作自证（worker 不按 URL 装载）
+        runtimeWasmUrl: 'static:kojo2-runtime',
+        grammarWasmUrl: 'static:kojo2-grammar',
+      });
+    }
     return true;
   }
 
   parse(text: string, version: number, oldTreeId?: string): Promise<Kojo2WorkerResult<Kojo2ParseReply>> {
-    return this.request<Kojo2ParseReply>({ type: 'parse', text, version, oldTreeId });
+    return this.request<Kojo2ParseReply>('parse', { text, version, oldTreeId });
   }
 
   captures(text: string, version: number, oldTreeId?: string): Promise<Kojo2WorkerResult<Kojo2CapturesReply>> {
-    return this.request<Kojo2CapturesReply>({ type: 'captures', text, version, oldTreeId });
+    return this.request<Kojo2CapturesReply>('captures', { text, version, oldTreeId });
   }
 
   folds(text: string, version: number, oldTreeId?: string): Promise<Kojo2WorkerResult<Kojo2FoldsReply>> {
-    return this.request<Kojo2FoldsReply>({ type: 'folds', text, version, oldTreeId });
+    return this.request<Kojo2FoldsReply>('folds', { text, version, oldTreeId });
   }
 
   indents(text: string, version: number, oldTreeId?: string): Promise<Kojo2WorkerResult<Kojo2IndentsReply>> {
-    return this.request<Kojo2IndentsReply>({ type: 'indents', text, version, oldTreeId });
+    return this.request<Kojo2IndentsReply>('indents', { text, version, oldTreeId });
   }
 
   /** 幂等、不抛：在途请求一律 resolve 成 `disposed`，线程立即 terminate */
@@ -194,7 +264,8 @@ export class Kojo2WorkerClient {
   /* -------------------------------- 内部 -------------------------------- */
 
   private request<T extends Kojo2WorkerReply>(
-    payload: Omit<Kojo2WorkerRequest, 'id'>,
+    type: Kojo2WorkerRequestType,
+    payload: RequestPayload,
   ): Promise<Kojo2WorkerResult<T>> {
     if (this.status === 'disposed') {
       return Promise.resolve({
@@ -216,19 +287,20 @@ export class Kojo2WorkerClient {
     const id = this.nextId++;
     // 引导期（worker 还没回过任何一条）要给 wasm 装载留余量；回了一条之后立即回到稳态预算
     const budget = this.answered ? this.timeoutMs : this.bootstrapTimeoutMs;
-    const request = { ...payload, id } as Kojo2WorkerRequest;
     return new Promise<Kojo2WorkerResult<Kojo2WorkerReply>>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        const bootstrapStall = !this.answered;
         resolve({
           ok: false,
           reason: 'timeout',
-          message: `worker 在 ${budget}ms 内没有回话（请求 #${id} ${payload.type}）⇒ 这一条丢弃，客户端继续可用`,
+          message: `worker 在 ${budget}ms 内没有回话（请求 #${id} ${type}）⇒ 这一条丢弃，客户端继续可用`,
         });
+        if (bootstrapStall) this.fallBackToV2('引导期一条回话都没有（对面多半是旧 worker，它不认识 open）');
       }, budget);
-      this.pending.set(id, { id, type: payload.type, timer, resolve });
+      this.pending.set(id, { id, type, baseTreeId: payload.oldTreeId, timer, resolve });
       try {
-        worker.postMessage(request);
+        this.dispatch(worker, id, type, payload);
       } catch (error) {
         // 投递都失败 = 线程已经死了：这一条与其余在途请求收同一结局，客户端进入终态
         this.pending.delete(id);
@@ -239,23 +311,179 @@ export class Kojo2WorkerClient {
     }).then((result) => (result.ok ? { ok: true as const, value: result.value as T } : result));
   }
 
+  /** 投递一条请求：v3（`parse` + `want`）或 v2（LAU-1 之前那套按 type 分的消息） */
+  private dispatch(worker: Worker, id: number, type: Kojo2WorkerRequestType, payload: RequestPayload): void {
+    if (this.mode === 'v3') {
+      const request: StructureRequest = {
+        id,
+        kind: 'parse',
+        doc: 0,
+        version: payload.version,
+        text: payload.text,
+        ...(payload.oldTreeId === undefined ? {} : { baseTreeId: payload.oldTreeId }),
+        want: facetsOf(type),
+      };
+      worker.postMessage(request);
+      return;
+    }
+    const legacy: Kojo2WorkerRequest = {
+      id,
+      type,
+      text: payload.text,
+      version: payload.version,
+      ...(payload.oldTreeId === undefined ? {} : { oldTreeId: payload.oldTreeId }),
+    } as Kojo2WorkerRequest;
+    worker.postMessage(legacy);
+  }
+
+  /** 双跑窗口：翻到 v2（不重发在飞请求——它们已经各自超时收账；后续请求走旧话） */
+  private fallBackToV2(why: string): void {
+    if (this.mode === 'v2') return;
+    this.mode = 'v2';
+    this.warnOnce(`legacy:${why}`, `[kojo2-worker] v3 通道交给旧路（v2）：${why}`);
+  }
+
   private receive(data: unknown): void {
+    if (this.mode === 'v3') {
+      if (isStructureReply(data)) {
+        this.receiveV3(data);
+        return;
+      }
+      if (isKojo2WorkerReply(data)) {
+        // 对面回了 v2 形状（它没看懂 v3 请求，或者压根还是旧 worker）
+        this.fallBackToV2('worker 回传的形状是 v2 协议 ⇒ 改说旧话');
+        this.receiveV2(data);
+        return;
+      }
+      this.orphanReplies += 1;
+      return;
+    }
     if (!isKojo2WorkerReply(data)) {
       this.orphanReplies += 1;
       return;
     }
-    const pending = this.pending.get(data.id);
+    this.receiveV2(data);
+  }
+
+  private pendingFor(id: number): PendingRequest | undefined {
+    const pending = this.pending.get(id);
     if (pending === undefined) {
-      if (data.id === 0) return; // worker 级异常 / 垃圾回话：不是任何请求的答案，不制造伪 id
+      if (id === 0) return undefined; // worker 级异常 / 垃圾回话：不是任何请求的答案
       this.lateReplies += 1; // 超时之后才到（或凭空出现）：丢掉，不改已定的答案
-      return;
+      return undefined;
     }
-    this.pending.delete(data.id);
+    this.pending.delete(id);
     clearTimeout(pending.timer);
     this.answered = true;
     if (this.status === 'starting') this.status = 'ready';
+    return pending;
+  }
+
+  /** v3 回话 → 上游要的那一种回复（`facets` → 三条旧形状） */
+  private receiveV3(reply: StructureReply): void {
+    if (reply.ok === false) {
+      if (reply.reason === 'protocol-mismatch') {
+        this.fallBackToV2(`open 握手被拒：${reply.message}`);
+        return;
+      }
+      const pending = this.pendingFor(reply.id);
+      if (pending === undefined) return;
+      pending.resolve(
+        reply.treeId === undefined
+          ? { ok: false, reason: reasonOf(reply.reason), message: reply.message }
+          : { ok: false, reason: reasonOf(reply.reason), message: reply.message, treeId: reply.treeId },
+      );
+      return;
+    }
+    if (reply.kind === 'ready') {
+      if (reply.protocol !== STRUCTURE_PROTOCOL_VERSION) {
+        this.fallBackToV2(`worker 认的协议是 ${reply.protocol}（本宿主说 ${STRUCTURE_PROTOCOL_VERSION}）`);
+        return;
+      }
+      this.answered = true;
+      if (this.status === 'starting') this.status = 'ready';
+      return;
+    }
+    const pending = this.pendingFor(reply.id);
+    if (pending === undefined) return;
+    pending.resolve(this.translate(reply, pending.type, pending.baseTreeId));
+  }
+
+  /** 把一条 v3 `parse` 回话翻成上游那三条回复之一（翻译只在这一层） */
+  private translate(
+    reply: StructureParseReply,
+    type: Kojo2WorkerRequestType,
+    baseTreeId: string | undefined,
+  ): Kojo2WorkerResult<Kojo2WorkerReply> {
+    const common = {
+      ok: true as const,
+      id: reply.id,
+      version: reply.version,
+      treeId: reply.treeId,
+      incremental: reply.incremental,
+      // v3 只报"这次是不是增量"；"有没有重新解过树"由树身份变化推出来（旧口径的 `reparsed`）：
+      // 树身份没变 = 缓存命中只查不了解；变了（或本来没有基准）= 这一条重新解过。
+      reparsed: reply.treeId !== baseTreeId,
+      queryMs: reply.metrics.queryMs,
+      loadMs: 0,
+    };
+    if (type === 'parse') {
+      const parsed: Kojo2ParseReply = {
+        ok: true,
+        id: reply.id,
+        type: 'parse',
+        version: reply.version,
+        treeId: reply.treeId,
+        incremental: reply.incremental,
+        // kojo2 这一族不消费改动段（v1 那两个消费方也不看）；v3 里没有这一格
+        changedRanges: [],
+        textLength: reply.metrics.textLength,
+        parseMs: reply.metrics.parseMs,
+        loadMs: 0,
+      };
+      return { ok: true, value: parsed };
+    }
+    if (type === 'captures') {
+      const captures = capturesOf(reply.facets.semantic);
+      if (captures === null) {
+        return { ok: false, reason: 'query-unavailable', message: 'worker 没回 semantic 面（查询不可用 / 编译失败）', treeId: reply.treeId };
+      }
+      const value: Kojo2CapturesReply = { ...common, type: 'captures', captures };
+      return { ok: true, value };
+    }
+    if (type === 'folds') {
+      const spans = reply.facets.folds?.spans;
+      if (spans === undefined) {
+        return { ok: false, reason: 'query-unavailable', message: 'worker 没回 folds 面（查询不可用 / 编译失败）', treeId: reply.treeId };
+      }
+      const folds: Kojo2FoldRange[] = [];
+      for (let i = 0; i + 1 < spans.length; i += 2) folds.push({ startRow: spans[i]!, endRow: spans[i + 1]!, kind: 'block' });
+      const value: Kojo2FoldsReply = { ...common, type: 'folds', folds };
+      return { ok: true, value };
+    }
+    const rules: Kojo2IndentRules | undefined = reply.facets.indent;
+    if (rules === undefined) {
+      return { ok: false, reason: 'query-unavailable', message: 'worker 没回 indent 面（查询不可用 / 编译失败）', treeId: reply.treeId };
+    }
+    const value: Kojo2IndentsReply = { ...common, type: 'indents', rules };
+    return { ok: true, value };
+  }
+
+  /** v2 回话（双跑窗口的旧路）：与 LAU-1 之前逐字同口径 */
+  private receiveV2(data: Kojo2WorkerReply): void {
+    const id = (data as { id?: unknown }).id;
+    if (typeof id !== 'number' || !Number.isFinite(id)) {
+      this.orphanReplies += 1;
+      return;
+    }
+    const pending = this.pendingFor(id);
+    if (pending === undefined) return;
     if (!data.ok) {
-      pending.resolve(failureOf(data));
+      pending.resolve(
+        data.treeId === undefined
+          ? { ok: false, reason: data.reason, message: data.message }
+          : { ok: false, reason: data.reason, message: data.message, treeId: data.treeId },
+      );
       return;
     }
     if (data.type !== pending.type) {
@@ -300,6 +528,14 @@ export class Kojo2WorkerClient {
     this.flush({ ok: false, reason: 'crashed', message });
   }
 
+  private post(request: StructureRequest): void {
+    try {
+      this.worker?.postMessage(request);
+    } catch (error: unknown) {
+      this.markUnavailable(`worker 投递失败：${describeError(error)}`);
+    }
+  }
+
   private flush(failure: ClientFailure): void {
     const pending = [...this.pending.values()];
     this.pending.clear();
@@ -320,10 +556,31 @@ export class Kojo2WorkerClient {
   }
 }
 
-function failureOf(reply: Kojo2WorkerFailure): Kojo2WorkerResult<Kojo2WorkerReply> {
-  return reply.treeId === undefined
-    ? { ok: false, reason: reply.reason, message: reply.message }
-    : { ok: false, reason: reply.reason, message: reply.message, treeId: reply.treeId };
+/** v3 失败原因 → 本族既有的失败词表（上游 `kojo2-semantic.ts` 等只认这一套） */
+function reasonOf(reason: StructureFailureReason): Kojo2WorkerFailureReason {
+  if (reason === 'unavailable') return 'unavailable';
+  if (reason === 'disposed') return 'disposed';
+  if (reason === 'invalid-input') return 'invalid-input';
+  if (reason === 'parse-failed') return 'parse-failed';
+  if (reason === 'query-failed') return 'query-failed';
+  if (reason === 'crashed') return 'crashed';
+  if (reason === 'protocol-mismatch') return 'protocol-error';
+  return 'timeout';
+}
+
+/** 扁平捕获表 → `Kojo2Capture[]`（节点类型这一族没有，位置从行列还原） */
+function capturesOf(table: StructureCaptureTable | undefined): Kojo2Capture[] | null {
+  if (table === undefined) return null;
+  const out: Kojo2Capture[] = [];
+  const spans = table.spans;
+  for (let i = 0; i + 5 < spans.length; i += 6) {
+    out.push({
+      name: table.names[spans[i + 4]!] ?? '',
+      startPosition: { row: spans[i]!, column: spans[i + 1]! },
+      endPosition: { row: spans[i + 2]!, column: spans[i + 3]! },
+    });
+  }
+  return out;
 }
 
 let singleton: Kojo2WorkerClient | null = null;

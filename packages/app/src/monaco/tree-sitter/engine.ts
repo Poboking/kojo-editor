@@ -81,6 +81,7 @@
  * 3. 任何一条回话都是新建的 plain array —— Node 对象绝不跨线程。
  */
 import { Edit, Language, Parser, Query, type Node, type Tree } from 'web-tree-sitter';
+import type { StructureCaptureTable, StructureFacet } from './protocol';
 import {
   KOJO_STRUCTURE_MAX_SYNTAX_FAULTS,
   KOJO_STRUCTURE_MAX_TOKENS,
@@ -396,6 +397,16 @@ export class StructureEngine {
   private lastRangeCount = -1;
   /** 最近一趟报给 `tree.edit` 的起点（往前推过就不等于 `editStart`；没增量解过 = -1） */
   private lastReparseFrom = -1;
+  /** LAU-1：树身份（v3 的 `treeId` / `baseTreeId` 对暗号用；每解成一棵换一枚） */
+  private treeSeq = 0;
+  private currentTree: string | null = null;
+  /** LAU-1：v3 回话的两条耗时腿（每次解重算；`now()` 只在解/查两侧各取两次，开销可忽略） */
+  private parseMs = 0;
+  private queryMs = 0;
+  /** LAU-1：引导期读数（`Parser.init` + `Language.load` + 查询编译），v3 `ready` 要它 */
+  private readyLoadMs = 0;
+  /** 这一趟只要哪几面（v3 `want`；`null` = 全带） */
+  private requestedFacets: ReadonlySet<StructureFacet> | null = null;
 
   constructor(options: StructureEngineOptions) {
     this.assets = options.assets;
@@ -420,6 +431,21 @@ export class StructureEngine {
   /** 最近一次解里"哪一面走了整篇、为什么"（perf 池原样打出来；没解过 = 空表） */
   get lastFacetNotes(): readonly string[] {
     return this.facetNotes;
+  }
+
+  /** LAU-1：当前那棵树的身份（v3 `baseTreeId` 对不上 ⇒ 宿主重发整篇）；还没解过 = null */
+  get treeId(): string | null {
+    return this.currentTree;
+  }
+
+  /** LAU-1：上一趟的两条耗时腿（v3 `reply.metrics`；还没解过 = 0） */
+  get lastTimings(): { readonly parseMs: number; readonly queryMs: number } {
+    return { parseMs: this.parseMs, queryMs: this.queryMs };
+  }
+
+  /** LAU-1：引导期墙钟（`Parser.init` + `Language.load` + 查询编译；v3 `ready.loadMs`） */
+  get loadMs(): number {
+    return this.readyLoadMs;
   }
 
   /**
@@ -507,6 +533,10 @@ export class StructureEngine {
       endRow: node.endPosition.row,
       endCol: node.endPosition.column,
       tier,
+      // LAU-1：v3 的 `facets.semantic` 是**捕获的扁平投影**（捕获名 + 节点类型 + 行列），
+      // 折 token 时顺手留下这两格，回话那一层据此压表（不另跑一遍查询、不另抄一张档位表）。
+      capture: capture.name,
+      node: node.type,
     };
   }
 
@@ -709,48 +739,55 @@ export class StructureEngine {
    */
   private emitAll(doc: KojoStructureDocSeq, version: number, window: StructureWindow | null, shift: StructureShift | null): void {
     if (this.tree === null) return;
+    const want = this.requestedFacets;
+    const wanted = (facet: StructureFacet): boolean => want === null || want.has(facet);
     const root = this.tree.rootNode;
     const scoped = window !== null && shift !== null ? { window, shift } : null;
-
-    if (this.highlightsQuery) {
-      const started = this.stamp();
-      const query = this.highlightsQuery;
-      const tokens = this.tokensFace(query, root, scoped);
-      this.elapsed('semanticQuery', started);
-      if (tokens === null) {
-        this.fail(version, 'parse', 'all', `单文档结构段数超过 ${KOJO_STRUCTURE_MAX_TOKENS} ⇒ 结构解析整档停用（这通常意味着语法层的错误恢复在长文件上跑飞了）`);
-        return;
-      }
-      this.emit({ type: 'semantic', doc, version, tokens });
-    }
-    if (this.foldsQuery) {
-      const started = this.stamp();
-      const query = this.foldsQuery;
-      const folds = this.foldsFace(query, root, scoped);
-      this.elapsed('foldsQuery', started);
-      this.emit({ type: 'folds', doc, version, folds });
-    }
-    if (this.indentsQuery) {
-      const started = this.stamp();
-      if (scoped !== null) this.noteFacet('indent', '缩进那一面的产物是集合 ⇒ 恒整篇重算（本语法该面无捕获，装配即回落，实测不耗时）');
-      this.emit({ type: 'indent', doc, version, rules: this.indentRulesFrom(this.indentsQuery, root) });
-      this.elapsed('indentQuery', started);
-    }
-    // 结构残缺（TSIT2-D）：这一面**自己包 try/catch**，且放在最后——遍历树是纯读，
-    // 但它一旦抛错只该让"这一面没波浪线"，不该把已经发出去的三面一起带走（也不该抛进编辑器）。
-    const started = this.stamp();
+    const queryStarted = now();
     try {
-      const face = this.faultsFace(root, scoped);
-      this.elapsed('syntaxScan', started);
-      this.emit({ type: 'syntax', doc, version, faults: face.faults, truncated: face.truncated });
-    } catch (error: unknown) {
-      this.elapsed('syntaxScan', started);
-      this.fail(
-        version,
-        'parse',
-        'syntax',
-        `结构残缺扫描失败 ⇒ 这一面这次不画波浪线（着色与折叠不受影响）：${reason(error)}`,
-      );
+      if (this.highlightsQuery && wanted('semantic')) {
+        const started = this.stamp();
+        const query = this.highlightsQuery;
+        const tokens = this.tokensFace(query, root, scoped);
+        this.elapsed('semanticQuery', started);
+        if (tokens === null) {
+          this.fail(version, 'parse', 'all', `单文档结构段数超过 ${KOJO_STRUCTURE_MAX_TOKENS} ⇒ 结构解析整档停用（这通常意味着语法层的错误恢复在长文件上跑飞了）`);
+          return;
+        }
+        this.emit({ type: 'semantic', doc, version, tokens, table: captureTableOf(tokens) });
+      }
+      if (this.foldsQuery && wanted('folds')) {
+        const started = this.stamp();
+        const query = this.foldsQuery;
+        const folds = this.foldsFace(query, root, scoped);
+        this.elapsed('foldsQuery', started);
+        this.emit({ type: 'folds', doc, version, folds });
+      }
+      if (this.indentsQuery && wanted('indent')) {
+        const started = this.stamp();
+        if (scoped !== null) this.noteFacet('indent', '缩进那一面的产物是集合 ⇒ 恒整篇重算（本语法该面无捕获，装配即回落，实测不耗时）');
+        this.emit({ type: 'indent', doc, version, rules: this.indentRulesFrom(this.indentsQuery, root) });
+        this.elapsed('indentQuery', started);
+      }
+      if (!wanted('syntax')) return;
+      // 结构残缺（TSIT2-D）：这一面**自己包 try/catch**，且放在最后——遍历树是纯读，
+      // 但它一旦抛错只该让"这一面没波浪线"，不该把已经发出去的三面一起带走（也不该抛进编辑器）。
+      const started = this.stamp();
+      try {
+        const face = this.faultsFace(root, scoped);
+        this.elapsed('syntaxScan', started);
+        this.emit({ type: 'syntax', doc, version, faults: face.faults, truncated: face.truncated });
+      } catch (error: unknown) {
+        this.elapsed('syntaxScan', started);
+        this.fail(
+          version,
+          'parse',
+          'syntax',
+          `结构残缺扫描失败 ⇒ 这一面这次不画波浪线（着色与折叠不受影响）：${reason(error)}`,
+        );
+      }
+    } finally {
+      this.queryMs = Math.max(0, now() - queryStarted);
     }
   }
 
@@ -991,6 +1028,7 @@ export class StructureEngine {
   /** 装载两枚 wasm 并编好三份查询；任何一步不成都回一条 `all`，返回 false（调用方不再投递解析） */
   async init(): Promise<boolean> {
     if (this.ready) return true;
+    const loadStarted = now();
     try {
       await Parser.init({ locateFile: () => this.assets.runtimeWasm });
     } catch (error: unknown) {
@@ -1013,7 +1051,9 @@ export class StructureEngine {
       return false;
     }
     this.ready = true;
-    this.emit({ type: 'ready', version: 0 });
+    // LAU-1：引导期读数（v3 `ready.loadMs`）——`Parser.init` + `Language.load` + 查询编译
+    this.readyLoadMs = Math.max(0, now() - loadStarted);
+    this.emit({ type: 'ready', version: 0, loadMs: this.readyLoadMs });
     return true;
   }
 
@@ -1087,16 +1127,23 @@ export class StructureEngine {
     };
   }
 
-  /** 整篇重解（首份文档 / 切文档 / 上一次没有可用旧树时的重新对齐）；三面缓存跟着重建；`doc` = 跨文档隔离号，原样回显 */
-  parse(doc: KojoStructureDocSeq, version: number, text: string): void {
+  /**
+   * 整篇重解（首份文档 / 切文档 / 上一次没有可用旧树时的重新对齐）；三面缓存跟着重建；
+   * `doc` = 跨文档隔离号，原样回显。
+   *
+   * `want`（LAU-1 / v3）：只要这几面（缺省 = 全带）。缺的面**不算**（不是"算了但没结果"）。
+   */
+  parse(doc: KojoStructureDocSeq, version: number, text: string, want?: readonly StructureFacet[]): void {
     if (this.parser === null) return;
     this.tree?.delete();
     this.tree = null;
+    this.requestedFacets = want === undefined ? null : new Set(want);
     this.documentText = text;
     this.forgetCaches();
     this.beginPass('none');
     const counters = { reads: 0, readStart: Number.POSITIVE_INFINITY, readEnd: 0 };
     const started = this.stamp();
+    const wallStarted = now();
     try {
       const next = this.parser.parse(this.reader(text, counters), null);
       this.elapsed('parse', started);
@@ -1105,8 +1152,10 @@ export class StructureEngine {
         return;
       }
       this.tree = next;
+      this.currentTree = `t${++this.treeSeq}`;
     } catch (error: unknown) {
       this.elapsed('parse', started);
+      this.parseMs = Math.max(0, now() - wallStarted);
       this.stat = this.statOf({
         incremental: false, reads: counters.reads, readStart: 0, readEnd: 0,
         editStart: 0, editEnd: text.length, documentLength: text.length,
@@ -1114,6 +1163,7 @@ export class StructureEngine {
       this.fail(version, 'parse', 'all', `整篇解析抛错：${reason(error)}`);
       return;
     }
+    this.parseMs = Math.max(0, now() - wallStarted);
     this.beginPass('full');
     this.emitAll(doc, version, null, null);
     this.stat = this.statOf({
@@ -1134,12 +1184,13 @@ export class StructureEngine {
    * 两种退化要分开看：**没有旧树**（首份 / 刚换文档）⇒ 整篇重解对齐一次，这不算失败；
    * **edit 或 parse 抛错** ⇒ 回一条 `all` 并且就此住口（见文件头纪律 2）。
    */
-  change(request: Extract<KojoStructureRequest, { type: 'change' }>): void {
+  change(request: Extract<KojoStructureRequest, { type: 'change' }>, want?: readonly StructureFacet[]): void {
     if (this.parser === null) return;
+    this.requestedFacets = want === undefined ? null : new Set(want);
     const nextText =
       this.documentText.slice(0, request.start.offset) + request.newText + this.documentText.slice(request.oldEnd.offset);
     if (this.tree === null) {
-      this.parse(request.doc, request.version, nextText);
+      this.parse(request.doc, request.version, nextText, want);
       return;
     }
     const counters = { reads: 0, readStart: Number.POSITIVE_INFINITY, readEnd: 0 };
@@ -1147,6 +1198,7 @@ export class StructureEngine {
     let next: Tree | null = null;
     this.beginPass('none');
     const started = this.stamp();
+    const wallStarted = now();
     // 报给 tree.edit 的起点可以比真实编辑更早（理由见 {@link reparseStart}）；真实编辑区间
     // 仍然只用于缝合文本与坐标换算，两者不许混用。
     const reparse = this.reparseStart(oldTree.rootNode, this.documentText, request);
@@ -1165,23 +1217,27 @@ export class StructureEngine {
       next = this.parser.parse(this.reader(nextText, counters), oldTree);
     } catch (error: unknown) {
       this.elapsed('parse', started);
+      this.parseMs = Math.max(0, now() - wallStarted);
       this.stat = this.statOf({
         incremental: true, reads: counters.reads, readStart: 0, readEnd: 0,
         editStart: request.start.offset, editEnd: request.newEnd.offset, documentLength: nextText.length,
       });
       oldTree.delete();
       this.tree = null;
+      this.currentTree = null;
       this.documentText = nextText;
       this.forgetCaches();
       this.fail(request.version, 'parse', 'all', `增量解析抛错 ⇒ 结构解析整档停用（不拿可疑的树继续着色）：${reason(error)}`);
       return;
     }
     this.elapsed('parse', started);
+    this.parseMs = Math.max(0, now() - wallStarted);
     if (next === null) {
       oldTree.delete();
       this.tree = null;
+      this.currentTree = null;
       this.documentText = nextText;
-      this.parse(request.doc, request.version, nextText);
+      this.parse(request.doc, request.version, nextText, want);
       return;
     }
     const rangesStarted = this.stamp();
@@ -1201,6 +1257,7 @@ export class StructureEngine {
     this.elapsed('changedRanges', rangesStarted);
     oldTree.delete();
     this.tree = next;
+    this.currentTree = `t${++this.treeSeq}`;
     this.documentText = nextText;
     if (window === null) this.passScope = 'full';
     this.emitAll(request.doc, request.version, window, window === null ? null : shift);
@@ -1425,6 +1482,8 @@ export class StructureEngine {
     this.stat = null;
     this.facetNotes = [];
     this.passScope = 'none';
+    this.currentTree = null;
+    this.requestedFacets = null;
     this.forgetCaches();
     this.reportedCaptures.clear();
   }
@@ -1456,6 +1515,48 @@ function rowShift(request: Extract<KojoStructureRequest, { type: 'change' }>): S
 
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
+}
+
+/** 墙钟（v3 回话的 `metrics` / `ready.loadMs`；node 池与浏览器 worker 都有 `performance.now`） */
+function now(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+/**
+ * token 序列 → **捕获的扁平投影**（v3 `facets.semantic`）。
+ *
+ * 口径逐字照 §4.1：`spans` 每 6 个数字一条 `[startRow, startCol, endRow, endCol, nameIndex, nodeIndex]`，
+ * 行 / 列 0 基；`names` / `nodes` 是去重后的字典，下标指向它们。
+ *
+ * 为什么从 token 压而不是另跑一遍查询：token 就是这次遍历的产物（`tokenValue` 把捕获名与
+ * 节点类型留在了上面），再查一遍不但贵，还会让"回话里的表"与"这一趟真查到的东西"变成两份判据。
+ * 表里**只有**已经翻出档位的捕获（表外的那些引擎已经不着色并说了一次）——宿主拿到表之后
+ * 按自己的档位表再翻一次得到颜色，两侧同一张表、同一份事实。
+ */
+export function captureTableOf(tokens: readonly KojoStructureToken[]): StructureCaptureTable {
+  const names: string[] = [];
+  const nameIndex = new Map<string, number>();
+  const nodes: string[] = [];
+  const nodeIndex = new Map<string, number>();
+  const spans: number[] = [];
+  for (const token of tokens) {
+    const name = token.capture ?? '';
+    const node = token.node ?? '';
+    let nameAt = nameIndex.get(name);
+    if (nameAt === undefined) {
+      nameAt = names.length;
+      names.push(name);
+      nameIndex.set(name, nameAt);
+    }
+    let nodeAt = nodeIndex.get(node);
+    if (nodeAt === undefined) {
+      nodeAt = nodes.length;
+      nodes.push(node);
+      nodeIndex.set(node, nodeAt);
+    }
+    spans.push(token.startRow, token.startCol, token.endRow, token.endCol, nameAt, nodeAt);
+  }
+  return { names, nodes, spans };
 }
 
 /** 行文本 → 锚定正则源码（正则元字符逐个转义，不假定节点文本只用 `\w`） */

@@ -51,3 +51,5 @@ export * from './lower/expand/recursion.js';
 export * from './migrate/index.js';
 /* 迁移：语义升级层（`当`/`分支：`/`初回` 三条可证改写，M7 加厚） */
 export * from './migrate/semantic.js';
+/* 结构解析协议 v3（LAU-1）：宿主 ↔ worker 的唯一契约（零游戏名词、零 Monaco、零 IO） */
+export * from './structure-protocol.js';

@@ -45,6 +45,17 @@ import type {
   Kojo2RuntimeResult,
   Kojo2TreeSitterRuntime,
 } from './kojo2-runtime-core';
+import type {
+  StructureCaptureTable,
+  StructureFacet,
+  StructureFailureReason,
+  StructureFoldTable,
+  StructureIndentRules,
+  StructureProtocolVersion,
+  StructureReply,
+  StructureRequest,
+} from './protocol';
+import { contentProblem, isStructureRequest, looksLikeLegacyStructureRequest } from './protocol';
 import {
   isKojo2WorkerRequest,
   type Kojo2CapturesReply,
@@ -91,6 +102,13 @@ export interface Kojo2WorkerEngineOptions {
 export interface Kojo2WorkerEngine {
   /** 串行处理（一条 worker 只有一个 parser，消息环本来就不该交错） */
   handle(request: Kojo2WorkerRequest): Promise<Kojo2WorkerReply>;
+  /**
+   * 预热（LAU-1：v3 `open` 要 `loadMs` 与"装不上就早说"）：幂等地把运行时装起来。
+   * 失败不进缓存（见 `loadRuntime` 的注释），所以下一次请求还会再试。
+   */
+  warmup(): Promise<Kojo2RuntimeResult>;
+  /** `treeId` 对应的全文（v3 `parse{edit}` 在这条线程里缝文本用）；不认识 = null */
+  treeText(treeId: string): string | null;
   /** 幂等：删缓存树 + 释放自己装载的运行时 */
   dispose(): void;
   readonly treeCount: number;
@@ -516,6 +534,10 @@ export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo
 
   return {
     handle,
+    warmup: () => loadRuntime(),
+    treeText(treeId: string): string | null {
+      return trees.get(treeId)?.text ?? null;
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -534,15 +556,242 @@ export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo
 
 /** worker 全局的窄投影（app 的 tsconfig 只挂 DOM lib，不挂 WebWorker lib） */
 export interface Kojo2WorkerScope {
-  postMessage(message: Kojo2WorkerReply): void;
+  postMessage(message: StructureReply): void;
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
+}
+
+/** 协议环（LAU-1）：v3 请求进、v3 回话出；引擎仍是 v2 那一套内部请求，翻译只在这一层 */
+export interface Kojo2ProtocolRing {
+  handle(request: unknown): Promise<StructureReply>;
+  dispose(): void;
+}
+
+/** 内部失败原因 → v3 的闭集（表外/近义项逐条对拍，不新造词） */
+function protocolReasonOf(reason: Kojo2WorkerFailureReason): StructureFailureReason {
+  switch (reason) {
+    case 'unavailable':
+      return 'unavailable';
+    case 'timeout':
+      return 'timeout';
+    case 'disposed':
+      return 'disposed';
+    case 'invalid-input':
+      return 'invalid-input';
+    case 'parse-failed':
+      return 'parse-failed';
+    case 'crashed':
+      return 'crashed';
+    case 'protocol-error':
+      return 'protocol-mismatch';
+    // `query-unavailable`（没给那份查询 / 编译失败）与 `query-failed`（执行抛错）在 v3 是同一枚：
+    // 都是"查询这一面没成"，代价（停哪一面）由宿主决定（D2）。
+    default:
+      return 'query-failed';
+  }
+}
+
+/** 单面（v3 `StructureFacet`）↔ 内部查询类型 */
+function queryTypeOf(facet: StructureFacet): 'captures' | 'folds' | 'indents' | null {
+  if (facet === 'semantic') return 'captures';
+  if (facet === 'folds') return 'folds';
+  if (facet === 'indent') return 'indents';
+  return null; // kojo2 这一族不产结构残缺（syntax 面由 v1 语言那条 worker 供）
+}
+
+/**
+ * v3 协议环：把一条 `open` / `parse` 翻成若干次引擎调用，再把引擎的回话拼成**一条** v3 回话。
+ *
+ * ## 为什么翻译放在这一层而不是改引擎
+ *
+ * 引擎（`createKojo2WorkerEngine`）的请求语义是"一个 `type` 一个回答"，树缓存 / 增量 / 查询
+ * 降级全挂在它身上，`tests/kojo2-worker.test.ts` 打的就是那条路。LAU-1 要的是**线上**协议合并
+ * （一条请求一条回复、面合进 `facets`），不是把引擎拆了重写——翻译在环上，引擎一行不动。
+ *
+ * ## `want` 与真账
+ *
+ * kojo2 的三面各是一条查询（`captures` / `folds` / `indents`）。`want` 只点一面时环只发那一条
+ * （查询那条路自己会解树，树在缓存里时直接查）；多点几面时先 `parse` 一次拿 `treeId`，
+ * 再按 `treeId` 查——**宿主那边始终只走一个来回**（D3 的收益），worker 内部仍是三条查询。
+ */
+export function createKojo2ProtocolRing(
+  engine: Kojo2WorkerEngine,
+  protocol: StructureProtocolVersion = 3,
+): Kojo2ProtocolRing {
+  /** 预热一次（`open` 与首条 parse 都等它；失败不进缓存，下一次还会再试） */
+  let warmed: Promise<Kojo2RuntimeResult> | null = null;
+  const warm = (): Promise<Kojo2RuntimeResult> => {
+    if (warmed === null) warmed = engine.warmup();
+    return warmed;
+  };
+
+  const ok = (reply: StructureReply): StructureReply => reply;
+  const failed = (id: number, kind: 'open' | 'parse' | undefined, reason: StructureFailureReason, message: string, treeId?: string): StructureReply =>
+    treeId === undefined
+      ? { ok: false, id, ...(kind === undefined ? {} : { kind }), reason, message }
+      : { ok: false, id, ...(kind === undefined ? {} : { kind }), reason, message, treeId };
+
+  /** 捕获列表 → 扁平投影（节点类型这一族没有：kojo2 的捕获只带名字与行列） */
+  const captureTable = (captures: readonly Kojo2Capture[]): StructureCaptureTable => {
+    const names: string[] = [];
+    const index = new Map<string, number>();
+    const spans: number[] = [];
+    for (const capture of captures) {
+      let at = index.get(capture.name);
+      if (at === undefined) {
+        at = names.length;
+        names.push(capture.name);
+        index.set(capture.name, at);
+      }
+      spans.push(capture.startPosition.row, capture.startPosition.column, capture.endPosition.row, capture.endPosition.column, at, 0);
+    }
+    return { names, nodes: [''], spans };
+  };
+
+  const handleParse = async (request: Extract<StructureRequest, { kind: 'parse' }>): Promise<StructureReply> => {
+    const problem = contentProblem(request);
+    if (problem !== null) return failed(request.id, 'parse', 'invalid-input', problem);
+    if (request.includedRanges !== undefined) {
+      return failed(request.id, 'parse', 'invalid-input', '本 worker 还没实现 includedRanges（LAU-6 才接线）⇒ 这次不按子区间解');
+    }
+    const loaded = await warm();
+    if (!loaded.ok) return failed(request.id, 'parse', protocolReasonOf(loaded.reason), loaded.message);
+
+    let text: string;
+    let baseTreeId = request.baseTreeId;
+    if ('text' in request) {
+      text = request.text;
+    } else {
+      const baseline = baseTreeId === undefined ? null : engine.treeText(baseTreeId);
+      if (baseline === null) {
+        // 基线树不认识：宿主手里有全文，改发整篇即可（不算故障）
+        return failed(request.id, 'parse', 'parse-failed', `baseTreeId ${String(baseTreeId)} 不是本线程手上那棵树 ⇒ 请改发整篇 text`);
+      }
+      const edit = request.edit;
+      text = baseline.slice(0, edit.start.offset) + edit.newText + baseline.slice(edit.oldEnd.offset);
+    }
+
+    const want: readonly StructureFacet[] = request.want ?? ['semantic', 'folds', 'indent'];
+    const queryTypes = want.map(queryTypeOf).filter((type): type is 'captures' | 'folds' | 'indents' => type !== null);
+    const parsers: { parseMs: number; queryMs: number; loadMs: number; treeId: string; incremental: boolean } = {
+      parseMs: 0,
+      queryMs: 0,
+      loadMs: loaded.runtime.initMs,
+      treeId: baseTreeId ?? '',
+      incremental: baseTreeId !== undefined,
+    };
+    const facets: {
+      semantic?: StructureCaptureTable;
+      folds?: StructureFoldTable;
+      indent?: StructureIndentRules;
+    } = {};
+    let treeIdForReply: string | undefined;
+
+    // 一次只问一面：直接发那条查询（它自己会在需要时解树），省掉一条内部的 parse。
+    if (queryTypes.length <= 1) {
+      const only = queryTypes[0];
+      if (only === undefined) {
+        // 只要指标：解一条 `parse`（`want` 空数组 = 宿主只要树身份与耗时）
+        const parsed = await engine.handle({ id: request.id, type: 'parse', text, version: request.version, oldTreeId: baseTreeId });
+        if (!parsed.ok) return failed(request.id, 'parse', protocolReasonOf(parsed.reason), parsed.message, parsed.treeId);
+        if (parsed.type !== 'parse') return failed(request.id, 'parse', 'protocol-mismatch', '内部回话形状不符（parse 请求回了别的 type）');
+        parsers.parseMs = parsed.parseMs;
+        parsers.treeId = parsed.treeId;
+        parsers.incremental = parsed.incremental;
+        treeIdForReply = parsed.treeId;
+      } else {
+        const queried = await engine.handle({ id: request.id, type: only, text, version: request.version, oldTreeId: baseTreeId });
+        if (!queried.ok) return failed(request.id, 'parse', protocolReasonOf(queried.reason), queried.message, queried.treeId);
+        if (queried.type !== only) return failed(request.id, 'parse', 'protocol-mismatch', `内部回话形状不符（${only} 请求回了 ${String(queried.type)}）`);
+        parsers.queryMs += queried.queryMs;
+        parsers.loadMs = queried.loadMs;
+        parsers.treeId = queried.treeId;
+        parsers.incremental = queried.incremental;
+        treeIdForReply = queried.treeId;
+        if (queried.type === 'captures') facets.semantic = captureTable(queried.captures);
+        else if (queried.type === 'folds')
+          facets.folds = { spans: queried.folds.flatMap((fold) => [fold.startRow, fold.endRow]) };
+        else if (queried.type === 'indents') facets.indent = queried.rules;
+      }
+    } else {
+      // 多点几面：先解一棵树，再按 treeId 查（树在缓存里、文本逐字相同 ⇒ 直接查）
+      const parsed = await engine.handle({ id: request.id, type: 'parse', text, version: request.version, oldTreeId: baseTreeId });
+      if (!parsed.ok) return failed(request.id, 'parse', protocolReasonOf(parsed.reason), parsed.message, parsed.treeId);
+      if (parsed.type !== 'parse') return failed(request.id, 'parse', 'protocol-mismatch', '内部回话形状不符（parse 请求回了别的 type）');
+      parsers.parseMs = parsed.parseMs;
+      parsers.loadMs = parsed.loadMs;
+      parsers.treeId = parsed.treeId;
+      parsers.incremental = parsed.incremental;
+      treeIdForReply = parsed.treeId;
+      for (const type of queryTypes) {
+        const queried = await engine.handle({ id: request.id, type, text, version: request.version, oldTreeId: parsed.treeId });
+        if (!queried.ok) return failed(request.id, 'parse', protocolReasonOf(queried.reason), queried.message, queried.treeId ?? parsed.treeId);
+        if (queried.type !== type) return failed(request.id, 'parse', 'protocol-mismatch', `内部回话形状不符（${type} 请求回了 ${String(queried.type)}）`);
+        parsers.queryMs += queried.queryMs;
+        if (queried.type === 'captures') facets.semantic = captureTable(queried.captures);
+        else if (queried.type === 'folds') facets.folds = { spans: queried.folds.flatMap((fold) => [fold.startRow, fold.endRow]) };
+        else if (queried.type === 'indents') facets.indent = queried.rules;
+      }
+    }
+
+    return ok({
+      ok: true,
+      id: request.id,
+      kind: 'parse',
+      doc: request.doc,
+      version: request.version,
+      treeId: treeIdForReply ?? parsers.treeId,
+      incremental: parsers.incremental,
+      facets,
+      metrics: { parseMs: parsers.parseMs, queryMs: parsers.queryMs, textLength: text.length },
+    });
+  };
+
+  return {
+    async handle(request: unknown): Promise<StructureReply> {
+      if (!isStructureRequest(request)) {
+        // 旧协议（v2）的 `captures` / `folds` / `indents` / `parse`：说清"对面还是旧形状"
+        if (looksLikeLegacyStructureRequest(request)) {
+          const id = (request as { id?: unknown }).id;
+          return failed(
+            typeof id === 'number' && Number.isFinite(id) ? id : 0,
+            undefined,
+            'protocol-mismatch',
+            `收到旧协议（v2）消息（type=${String((request as { type?: unknown }).type)}）⇒ 这条 worker 只说 v3`,
+          );
+        }
+        return failed(0, undefined, 'invalid-input', 'worker 收到的请求形状不符 v3 协议（缺 id / kind，或字段类型不对）');
+      }
+      if (request.kind === 'open') {
+        if (request.protocol !== protocol) {
+          return failed(
+            request.id,
+            'open',
+            'protocol-mismatch',
+            `协议版本不符（worker 认 ${protocol}，宿主发 ${request.protocol}）⇒ 宿主该降级到旧协议那条路`,
+          );
+        }
+        const loaded = await warm();
+        if (!loaded.ok) return failed(request.id, 'open', protocolReasonOf(loaded.reason), loaded.message);
+        return { ok: true, id: request.id, kind: 'ready', protocol, loadMs: loaded.runtime.initMs };
+      }
+      try {
+        return await handleParse(request);
+      } catch (error: unknown) {
+        return failed(request.id, 'parse', 'crashed', `worker 处理请求时抛错：${describeError(error)}`);
+      }
+    },
+    dispose() {
+      engine.dispose();
+    },
+  };
 }
 
 /**
  * 装消息环并返回引擎（worker 入口 `kojo2-ts.worker.ts` 只调这一句；测试可传自己的 scope）。
  *
- * 收件闸在 `isKojo2WorkerRequest`：没有 `id` 的垃圾消息连回都不回（回 `id: 0` 只会制造噪音）。
+ * 收件闸在 ring 里：形状不符的请求回 `invalid-input`（有 id 就带 id），旧形状回
+ * `protocol-mismatch`——**不再一声不响**（LAU-1 之前这里直接 return，旧宿主只会看到超时）。
  * 回话失败（主线程已经 `terminate()`）在这里吞掉：线程下一刻就不归我们管了。
  *
  * `options.loadRuntime` 在生产入口里**必须**由静态资源装配（见 `kojo2-ts.worker.ts` 头注）：
@@ -554,10 +803,9 @@ export function startKojo2Worker(
 ): Kojo2WorkerEngine {
   const target = scope ?? (self as unknown as Kojo2WorkerScope);
   const engine = createKojo2WorkerEngine(options);
+  const ring = createKojo2ProtocolRing(engine);
   target.onmessage = (event: MessageEvent<unknown>) => {
-    const request: unknown = event.data;
-    if (!isKojo2WorkerRequest(request)) return;
-    void engine.handle(request).then(
+    void ring.handle(event.data).then(
       (reply) => {
         try {
           target.postMessage(reply);
@@ -567,9 +815,12 @@ export function startKojo2Worker(
       },
       (error: unknown) => {
         try {
-          target.postMessage(
-            failure(0, undefined, 'crashed', `worker 回话链断了：${describeError(error)}`),
-          );
+          target.postMessage({
+            ok: false,
+            id: 0,
+            reason: 'crashed',
+            message: `worker 回话链断了：${describeError(error)}`,
+          });
         } catch {
           /* 同上 */
         }
@@ -578,9 +829,12 @@ export function startKojo2Worker(
   };
   target.onerror = (event: ErrorEvent) => {
     try {
-      target.postMessage(
-        failure(0, undefined, 'crashed', `worker 线程异常：${event.message || '（无消息）'}`),
-      );
+      target.postMessage({
+        ok: false,
+        id: 0,
+        reason: 'crashed',
+        message: `worker 线程异常：${event.message || '（无消息）'}`,
+      });
     } catch {
       /* 同上 */
     }

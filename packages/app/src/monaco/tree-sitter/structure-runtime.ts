@@ -65,6 +65,15 @@ export interface StructureLanguageRuntime {
   readonly createWorker: () => Worker;
   readonly semantic?: StructureSemanticFacet;
   readonly baseIndentPatterns?: () => BaseIndentPatterns;
+  /**
+   * 捕获名（+ 节点类型）→ 档位名（**宿主侧**的配色判据；LAU-1 的 D4 口径）。
+   *
+   * v3 起 worker 只回**捕获的扁平投影**（查到了哪些捕获 / 节点 / 行列），翻成哪一档由宿主决定：
+   * 缺省 = `types.ts::tierForCapture`（`.kojo` v1 那张表），ERB 交 `erbCaptureTier`
+   * （`erb-tiers.ts` 是两侧共用的同一张表——worker 侧过去拿它做同一件事，现在只有宿主用）。
+   * 返回 `undefined` = 这枚捕获有意不着色（如 ERB 的 `@none`）；`null` = 表外（不着色并说一次）。
+   */
+  readonly captureTier?: (capture: string, nodeType: string) => string | null | undefined;
   /** 结构残缺上屏（缺省 = 宿主通用上屏器） */
   readonly presentSyntax?: (context: StructureSyntaxContext) => void;
   /** 撤下结构残缺（缺省 = 宿主通用上屏器的 clear） */

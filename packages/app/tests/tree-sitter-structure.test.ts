@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
 import {
   encodeStructureTokens,
@@ -108,54 +109,77 @@ describe('结构层档位映射 · 必须落在既有档位表里', () => {
 
 /* ============================ ② 协议形状闸 ============================ */
 
-describe('isStructureReply · 主线程不信来路不明的消息', () => {
-  it('认得六种合法形状', () => {
-    expect(isStructureReply({ type: 'ready', version: 0 })).toBe(true);
-    expect(isStructureReply({ type: 'semantic', doc: 1, version: 3, tokens: [] })).toBe(true);
-    expect(isStructureReply({ type: 'folds', doc: 1, version: 3, folds: [{ startRow: 0, endRow: 4 }] })).toBe(true);
-    expect(isStructureReply({ type: 'indent', doc: 1, version: 3, rules: EMPTY_RULES })).toBe(true);
+/**
+ * v3 的收件闸（LAU-1）。协议真源在 `@kojo/kojo-core` 的 `structure-protocol.ts`，
+ * 闸在 `tree-sitter/protocol.ts`；这里钉的是"主线程不信来路不明的消息"这条纪律本身。
+ *
+ * 双跑窗口里还有一条并存的判据：**v2 形状必须被 v3 闸拒掉**（否则旧 worker 的回话会被当成
+ * 新形状硬解）——见最后一组用例。
+ */
+const PARSE_OK = {
+  ok: true,
+  id: 2,
+  kind: 'parse',
+  doc: 1,
+  version: 3,
+  treeId: 't1',
+  incremental: true,
+  facets: {},
+  metrics: { parseMs: 1, queryMs: 0, textLength: 3 },
+} as const;
+
+describe('isStructureReply（v3）· 主线程不信来路不明的消息', () => {
+  it('认得三类合法回话（ready / parse / 失败）', () => {
+    expect(isStructureReply({ ok: true, id: 1, kind: 'ready', protocol: 3, loadMs: 12 })).toBe(true);
+    expect(isStructureReply(PARSE_OK)).toBe(true);
     expect(
       isStructureReply({
-        type: 'syntax',
-        doc: 1,
-        version: 3,
-        truncated: false,
-        faults: [{ row: 4, endRow: 4, column: 2, endColumn: 9, faultRow: 4, kind: 'unterminated-string' }],
+        ...PARSE_OK,
+        facets: {
+          semantic: { names: ['keyword'], nodes: ['case_head'], spans: [0, 0, 0, 4, 0, 0] },
+          folds: { spans: [0, 9] },
+          indent: EMPTY_RULES,
+          syntax: { faults: [{ row: 4, endRow: 4, column: 2, endColumn: 9, faultRow: 4, kind: 'unterminated-string' }], truncated: false },
+        },
       }),
     ).toBe(true);
-    expect(isStructureReply({ type: 'error', version: 0, stage: 'query', capability: 'folds', message: 'x' })).toBe(true);
-    expect(isStructureReply({ type: 'error', version: 0, stage: 'parse', capability: 'syntax', message: 'x' })).toBe(true);
+    expect(isStructureReply({ ok: false, id: 3, kind: 'parse', reason: 'timeout', message: 'x' })).toBe(true);
+    expect(isStructureReply({ ok: false, id: 4, reason: 'protocol-mismatch', message: 'x', treeId: 't9' })).toBe(true);
   });
 
   it.each([
     ['null', null],
-    ['缺 version', { type: 'ready' }],
-    ['未知 type', { type: 'nope', version: 1 }],
-    ['tokens 不是数组', { type: 'semantic', doc: 1, version: 1, tokens: 'x' }],
-    ['token 缺行列', { type: 'semantic', doc: 1, version: 1, tokens: [{ tier: 'comment' }] }],
-    ['token 坐标是 NaN', { type: 'semantic', doc: 1, version: 1, tokens: [{ startRow: NaN, startCol: 0, endRow: 1, endCol: 2, tier: 'comment' }] }],
-    ['缺 doc（跨文档对不上号就是废消息）', { type: 'semantic', version: 1, tokens: [] }],
-    ['doc 是 NaN', { type: 'semantic', doc: NaN, version: 1, tokens: [] }],
-    ['fold 行号缺', { type: 'folds', doc: 1, version: 1, folds: [{ startRow: 0 }] }],
-    ['rules 缺三条腿', { type: 'indent', doc: 1, version: 1, rules: {} }],
-    ['error 的 stage 不在表里', { type: 'error', version: 1, stage: 'boom', capability: 'all', message: 'x' }],
-    ['error 的 capability 不在表里', { type: 'error', version: 1, stage: 'parse', capability: 'maybe', message: 'x' }],
-    ['error 缺 message', { type: 'error', version: 1, stage: 'parse', capability: 'all' }],
-    ['syntax 缺 doc（这一腿同样要过跨文档闸）', { type: 'syntax', version: 1, faults: [], truncated: false }],
-    ['syntax 缺 truncated 标记', { type: 'syntax', doc: 1, version: 1, faults: [] }],
-    ['syntax 的 faults 不是数组', { type: 'syntax', doc: 1, version: 1, faults: 'x', truncated: false }],
-    ['syntax 的 fault 缺坐标', { type: 'syntax', doc: 1, version: 1, truncated: false, faults: [{ kind: 'unclosed-block' }] }],
-    ['syntax 的 fault 类别在闭集外', { type: 'syntax', doc: 1, version: 1, truncated: false, faults: [{ row: 0, endRow: 0, column: 0, endColumn: 1, faultRow: 0, kind: 'boom' }] }],
+    ['缺 id（回话配不上任何请求）', { ok: true, kind: 'ready', protocol: 3, loadMs: 1 }],
+    ['id 是 NaN', { ok: true, id: NaN, kind: 'ready', protocol: 3, loadMs: 1 }],
+    ['ok 不是布尔', { ok: 'yes', id: 1, kind: 'ready', protocol: 3, loadMs: 1 }],
+    ['未知 kind', { ok: true, id: 1, kind: 'nope', protocol: 3, loadMs: 1 }],
+    ['ready 缺 protocol', { ok: true, id: 1, kind: 'ready', loadMs: 1 }],
+    ['ready 缺 loadMs', { ok: true, id: 1, kind: 'ready', protocol: 3 }],
+    ['parse 缺 doc（跨文档对不上号就是废消息）', { ...PARSE_OK, doc: undefined }],
+    ['parse 的 treeId 不是字符串', { ...PARSE_OK, treeId: 7 }],
+    ['parse 缺 metrics', { ...PARSE_OK, metrics: undefined }],
+    ['parse 的 metrics 缺一条腿', { ...PARSE_OK, metrics: { parseMs: 1, queryMs: 0 } }],
+    ['facets 不是对象', { ...PARSE_OK, facets: null }],
+    ['捕获表 spans 不是 6 的整数倍', { ...PARSE_OK, facets: { semantic: { names: ['a'], nodes: ['b'], spans: [0, 0, 0, 1, 0] } } }],
+    ['捕获表的 nameIndex 越界', { ...PARSE_OK, facets: { semantic: { names: ['a'], nodes: ['b'], spans: [0, 0, 0, 1, 3, 0] } } }],
+    ['捕获表缺 nodes 字典', { ...PARSE_OK, facets: { semantic: { names: ['a'], spans: [] } } }],
+    ['折叠表 spans 是奇数个', { ...PARSE_OK, facets: { folds: { spans: [0] } } }],
+    ['缩进规则缺三条腿', { ...PARSE_OK, facets: { indent: {} } }],
+    ['残缺面缺 truncated 标记', { ...PARSE_OK, facets: { syntax: { faults: [] } } }],
+    ['失败原因在闭集外', { ok: false, id: 5, reason: 'boom', message: 'x' }],
+    ['失败缺 message', { ok: false, id: 6, reason: 'timeout' }],
   ])('丢掉：%s', (_name, payload) => {
     expect(isStructureReply(payload)).toBe(false);
   });
 
-  it('协议版本是实数（两侧对不上时 worker 会当场停用）', () => {
-    /**
-     * 2 = 这一批合并进来的两桩形状变更（两条线各自抬到 2，合并构建仍是同一个 v2）：
-     * 跨文档隔离号 `doc` 进四条内容腿 + TSIT2-D 新增的 `syntax` 腿（新增一条腿仍是形状变更：
-     * 旧宿主碰到它会把整档判成违约）。
-     */
+  it('v2 形状一律被 v3 闸拒掉（旧 worker 的回话不许被当成新形状硬解）', () => {
+    expect(isStructureReply({ type: 'ready', version: 0 })).toBe(false);
+    expect(isStructureReply({ type: 'semantic', doc: 1, version: 3, tokens: [] })).toBe(false);
+    expect(isStructureReply({ type: 'error', version: 0, stage: 'wasm', capability: 'all', message: 'x' })).toBe(false);
+  });
+
+  it('版本号：v3 在 core，v2 常量留给双跑窗口的旧路', () => {
+    expect(STRUCTURE_PROTOCOL_VERSION).toBe(3);
     expect(KOJO_STRUCTURE_PROTOCOL).toBe(2);
   });
 });

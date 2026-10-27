@@ -1,15 +1,25 @@
 /**
- * 主线程 ↔ 结构解析 worker 的**消息协议**（单一真源；两侧都只从这里取类型）。
+ * 结构层**宿主侧的投影类型**与**旧协议（v2）的遗留形状**。
  *
- * ## 为什么协议要单独成文件并且"钉版"
+ * ## 协议真源已搬到 `@kojo/kojo-core`
  *
- * worker 与宿主是两条独立的编译产物：宿主改了消息形状而 worker 没跟上，症状是
- * "结构着色悄悄没了"——正是本仓最恨的那类静默。故此文件同时是三件事的落点：
- * ① 形状（`KojoStructureRequest` / `KojoStructureReply`）；② 版本号
- * （`KOJO_STRUCTURE_PROTOCOL`，`init` 带上、worker 不符即回 `error` 并停用）；
- * ③ **不可信输入的运行时闸**（`isStructureReply`：主线程绝不 `as` 一个 worker 回来的
- * 东西就用作数据）。形状变更 ⇒ 本文件与 `kojo-ts.worker.ts` 同一批改，A/B 测试
- * （`tests/tree-sitter-protocol.test.ts`）钉住协议表与档位名表。
+ * LAU-1 起，宿主 ↔ worker 的消息协议是 `packages/kojo-core/src/structure-protocol.ts`
+ * 的 **v3**（`STRUCTURE_PROTOCOL_VERSION = 3`）：`open` / `parse` 两条请求、`ready` /
+ * `parse` / 失败三条回话、面（facet）合并成一条消息、失败原因是闭集。运行期闸与两张
+ * 小解码器在 `./protocol.ts`。
+ *
+ * 本文件剩下的两件事：
+ * 1. **宿主侧投影**：`KojoStructureToken`（档位名 + 行列）/ `KojoStructureFold`（行区间）
+ *    / 档位表 / legend —— 这些是"屏上要分几层"的表现层决定，不属于线上协议；
+ * 2. **v2 遗留形状**（`KojoStructureRequest` / `KojoStructureReply` + `KOJO_STRUCTURE_PROTOCOL`
+ *    + `isLegacyStructureReply`）：双跑窗口里旧 client（`./client-v2.ts`）要说旧形状，
+ *    v3 client 收到 `protocol-mismatch` 就在那一刻降级到它。**LAU-1 收尾（双跑窗口关闭）
+ *    时整块删除**，届时 `client-v2.ts` 一起删。
+ *
+ * 名字映射（v3 → 本文件）：
+ * `StructurePoint` → `KojoStructurePoint`；`StructureIndentRules` → `KojoStructureIndentRules`；
+ * `StructureSyntaxFault` → `KojoStructureSyntaxFault`；`StructureSyntaxKind` → `KojoStructureSyntaxKind`。
+ * 四者都是**类型别名**，编译期兼容，不另起一套形状。
  *
  * ## 坐标口径（错一格就整片歪，故写死在这里）
  *
@@ -19,16 +29,20 @@
  *   `Edit.startIndex` 在 JS 绑定里就是 JS 字符串下标，两侧同源才不会把树编辑歪）；
  * - 行内区间取 `[startColumn, endColumn)`，`endColumn` 是**排他**的列号（不是 Monaco 列）。
  */
+import type {
+  StructureCaptureTable,
+  StructureIndentRules,
+  StructurePoint,
+  StructureSyntaxFault,
+  StructureSyntaxKind,
+} from '@kojo/kojo-core';
 
 /**
- * 协议版本：形状一变就抬号，worker 认不出就直接停用（而不是拿旧形状硬解）。
+ * 旧协议版本（v2）：`init` 那一步比对。
  *
- * **2** 里同时装着这一批的**两桩形状变更**（两条线各自独立抬到 2，合并后就是同一个 v2 构建：
- * 两侧都在 `init` 那一步比对同一个号，谁也不许再往上抬——抬号等于把对面那半边的钉版全拆掉）：
- * - **doc 序（跨文档隔离）**：内容回复一律带 `doc`，对不上号 ⇒ 主线程整条丢弃（见下）；
- * - **`syntax` 回话（TSIT2-D）**：新增一条腿（CST 的 ERROR / MISSING 事实）。加一条腿仍是
- *   形状变更——旧宿主碰到新 worker 会把 `syntax` 判成违约消息并整档停用（宁可停用，
- *   不拿看不懂的东西硬解），所以按本文件的纪律抬号，让两侧在 `init` 那一步就把不符说出来。
+ * **2** 里同时装着两桩形状变更（两条线各自独立抬到 2，合并后就是同一个 v2 构建）：
+ * doc 序（跨文档隔离）+ `syntax` 回话（TSIT2-D）。**v3 的号在 kojo-core**，这里不再抬——
+ * 双跑窗口里这个常量只是旧 client 与旧 worker 对暗号用的。
  */
 export const KOJO_STRUCTURE_PROTOCOL = 2;
 
@@ -42,11 +56,7 @@ export const KOJO_STRUCTURE_PROTOCOL = 2;
 export type KojoStructureDocSeq = number;
 
 /** 一个点（行 / UTF-16 列 / UTF-16 偏移），三件套必须同时给：tree-sitter 的 Edit 两个轴都要 */
-export interface KojoStructurePoint {
-  readonly row: number;
-  readonly column: number;
-  readonly offset: number;
-}
+export type KojoStructurePoint = StructurePoint;
 
 /** 一枚结构 token：CST 上一个命名节点覆盖的区间 + 该给它哪一档颜色 */
 export interface KojoStructureToken {
@@ -57,6 +67,14 @@ export interface KojoStructureToken {
   /** 档位名：**必须**是 `kojo-language.ts` 的 `KOJO_TOKEN_TIERS` 里出现过的 token 名，
    *  这样语义色与词法色同源，A/B 比的是"判据"而不是"另一套配色" */
   readonly tier: string;
+  /**
+   * 这两格只在 **worker 内部**用（LAU-1）：v3 的 `facets.semantic` 是捕获的扁平投影
+   * （`[行, 列, 行, 列, nameIndex, nodeIndex]` + 两张字典），引擎在把捕获折成 token 时
+   * 顺手把名字与节点类型留在 token 上，回话那一层据此压表。宿主侧**不看**它们
+   * （宿主从表里自己按档位表翻，见 `client.ts`）。
+   */
+  readonly capture?: string;
+  readonly node?: string;
 }
 
 /**
@@ -79,11 +97,7 @@ export interface KojoStructureFold {
  * 之上，一条都不替换（`providers.ts` 的合并点）。空数组 = 结构层这次没有要补的 ⇒ 宿主
  * 连 `setLanguageConfiguration` 都不发（关掉与没接是同一份行为）。
  */
-export interface KojoStructureIndentRules {
-  readonly increasePatterns: readonly string[];
-  readonly decreasePatterns: readonly string[];
-  readonly enterPatterns: readonly string[];
-}
+export type KojoStructureIndentRules = StructureIndentRules;
 
 /**
  * CST 上的一处**结构残缺事实**（`syntax` 回话的元素；TSIT2-D）。
@@ -98,32 +112,14 @@ export interface KojoStructureIndentRules {
  * - 其余 ⇒ 出错节点自己那一行。
  * 残缺点（MISSING 插入点 / ERROR 末行）另存 `faultRow`，供文案说"它还开着开到第几行"。
  */
-export interface KojoStructureSyntaxFault {
-  /** 装饰落点行（0 基，见上） */
-  readonly row: number;
-  /** 落点区间的末行（0 基，含）；单行残缺 = 与 `row` 同值 */
-  readonly endRow: number;
-  /** 落点起始列（0 基 UTF-16 码元） */
-  readonly column: number;
-  /** 落点结束列（0 基，**排他**） */
-  readonly endColumn: number;
-  /** 残缺类别（闭集；宿主按它挑文案与诊断码） */
-  readonly kind: KojoStructureSyntaxKind;
-  /** 残缺点所在行（0 基）：MISSING 的插入点 / ERROR 的末行 */
-  readonly faultRow: number;
-  /** 出错的块头文本（已去行首缩进、截断到首行；`unclosed-block` 才有） */
-  readonly blockHeadText?: string;
-  /** 块头行（0 基；与 `row` 同值时省略） */
-  readonly blockHeadRow?: number;
-  /** 语法层该有的那个收束记号**名**（如 `loop_end`；不是中文、不是上屏文案） */
-  readonly expectedToken?: string;
-}
+export type KojoStructureSyntaxFault = StructureSyntaxFault;
 
 /**
  * 残缺类别的闭集（宿主侧诊断码 = `kojo.` + 这一串，拼法在 `syntax-decorations.ts`，
  * 与 `erb-parser` 的 `erb.${kind}` 同一形态；对账闸见 `tests/diagnostic-copy.test.ts`）。
+ * 形状真源是 v3 协议的 `StructureSyntaxKind`（本处是别名）。
  */
-export type KojoStructureSyntaxKind = 'unclosed-block' | 'unterminated-string' | 'unterminated-interp' | 'unexpected-token';
+export type KojoStructureSyntaxKind = StructureSyntaxKind;
 
 /** 类别闭集（运行期遍历用；新增一类必须同时补文案与码表，漏一条 ⇒ 测试红） */
 export const KOJO_STRUCTURE_SYNTAX_KINDS: readonly KojoStructureSyntaxKind[] = [
@@ -150,8 +146,14 @@ export type KojoStructureCapability = 'semantic' | 'folds' | 'indent' | 'syntax'
 /** 报错的阶段（作者面文案由 `fallback.ts` 按阶段翻成人话） */
 export type KojoStructureErrorStage = 'wasm' | 'parse' | 'query' | 'worker';
 
-/* ------------------------------- → worker ------------------------------- */
+/* --------------------------- 旧协议（v2，双跑窗口） --------------------------- */
 
+/**
+ * **旧**请求形状（v2）：只给 `./client-v2.ts` 用。
+ *
+ * v3 起请求有两种（`open` / `parse`，见 `@kojo/kojo-core`）；这三条只是双跑窗口里
+ * "对面还是旧 worker"时宿主改说旧话所需的遗留形状，LAU-1 收尾时整块删。
+ */
 export type KojoStructureRequest =
   /** 装配 worker：两枚 wasm 的 URL 由宿主注入（Vite `?url` 解析结果，worker 里不许硬编码路径） */
   | { type: 'init'; protocol: number; wasmUrl: string; runtimeWasmUrl: string }
@@ -165,11 +167,18 @@ export type KojoStructureRequest =
    */
   | { type: 'change'; doc: KojoStructureDocSeq; version: number; start: KojoStructurePoint; oldEnd: KojoStructurePoint; newEnd: KojoStructurePoint; newText: string };
 
-/* ------------------------------- → main ------------------------------- */
-
+/**
+ * **旧**回话形状（v2）：只给 `./client-v2.ts` 的收件闸用（形状与 v3 不同，故单列一套）。
+ */
 export type KojoStructureReply =
-  | { type: 'ready'; version: number }
-  | { type: 'semantic'; doc: KojoStructureDocSeq; version: number; tokens: readonly KojoStructureToken[] }
+  /** `loadMs` 是 LAU-1 加的**引擎内读数**（v3 `ready` 要它；v2 线上不带） */
+  | { type: 'ready'; version: number; loadMs?: number }
+  /**
+   * `table` 是 LAU-1 加的**引擎内投影**：v3 的 `facets.semantic` 就是这张扁平捕获表。
+   * 引擎在折 token 的同时把捕获名 / 节点类型留成字典（`tokens` 仍给 v1 那一侧与测试用，
+   * **不在线上协议里**）。两者同源、同一次遍历，不是两份判据。
+   */
+  | { type: 'semantic'; doc: KojoStructureDocSeq; version: number; tokens: readonly KojoStructureToken[]; table?: StructureCaptureTable }
   | { type: 'folds'; doc: KojoStructureDocSeq; version: number; folds: readonly KojoStructureFold[] }
   | { type: 'indent'; doc: KojoStructureDocSeq; version: number; rules: KojoStructureIndentRules }
   | { type: 'syntax'; doc: KojoStructureDocSeq; version: number; faults: readonly KojoStructureSyntaxFault[]; truncated: boolean }
@@ -359,11 +368,15 @@ function isSyntaxFault(value: unknown): value is KojoStructureSyntaxFault {
 const STAGES: readonly string[] = ['wasm', 'parse', 'query', 'worker'];
 const CAPABILITIES: readonly string[] = ['semantic', 'folds', 'indent', 'syntax', 'all'];
 
+/* --------------------------- 旧协议的运行时形状闸 --------------------------- */
+
 /**
- * worker 回传来路不明的东西时**整条丢掉**并计数（`client.ts` 把它报出去）。
+ * **旧**回话的收件闸（v2）。v3 的闸在 `./protocol.ts`（这里把 v3 的那个名字再导出一次，
+ * 让"协议闸"只有一个入口可 import）。
+ *
  * 判据只在形状上，不解释内容——内容解释全在 `semantic.ts` / `providers.ts`。
  */
-export function isStructureReply(value: unknown): value is KojoStructureReply {
+export function isLegacyStructureReply(value: unknown): value is KojoStructureReply {
   const m = value as KojoStructureReply | null;
   if (!m || typeof m.type !== 'string' || !Number.isFinite(m.version)) return false;
   switch (m.type) {
@@ -383,3 +396,12 @@ export function isStructureReply(value: unknown): value is KojoStructureReply {
       return false;
   }
 }
+
+/* ------------------------------ 协议 v3 的闸 ------------------------------ */
+
+/**
+ * v3 回话的收件闸（真源 `./protocol.ts`；此处的再导出只为让调用方一处取名）。
+ *
+ * 名字在双跑窗口里并存：`isStructureReply`（v3）/ `isLegacyStructureReply`（v2）。
+ */
+export { isStructureReply, isStructureRequest, isStructureFacet, contentProblem } from './protocol';
