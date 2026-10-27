@@ -786,3 +786,106 @@ export function erbContinuationJoin(lines: readonly string[]): string {
 }
 
 
+
+/* ============ 引擎保留标识符（LAU-D2 外提，2026-10-27；erb-parser 诊断的唯一词表来源） ============ */
+
+/**
+ * **引擎保留标识符**：任何 era 系作品都不需要 `#DIM` 的名字（族头 / 内置标量 / 系统变量）。
+ *
+ * ## 为什么住契约包
+ * 唯一消费方 `@kojo/plugin-erb-parser` 的未定义名诊断**不许自带词表**（语言面零引擎名词），
+ * 而插件只许依赖 `@kojo/plugin-api`（铁律 2）；词表的另一份（着色显示层
+ * `ENGINE_VARIABLE_REFERENCE_HEADS`）在 `@kojo/kojo-vocab/engine`，宿主侧消费、与这里同口径
+ * 但**消费面不同**（那张收"要着色的族头形"，这张收"永远有定义的名字"）。两边的交集是刻意的，
+ * 各自只有一份定义。
+ *
+ * ## 迁移原件（逐枚原样、零增删）
+ * = `erb-parser/src/undefined-name.ts` 的两张表（`ERB_KEYWORD_LIST` 的引擎成员 +
+ * `ENGINE_BUILTIN_NAMES` 全表）。依据是引擎语法事实而不是某部作品：`TALENT` / `ITEM` /
+ * `EQUIP` / `ABL` / `EXP` 等是 `GETNUM(<変数族>, …)` 第一参的族头（写全名即是合法写法）；
+ * `NOITEM` / `TEQUIP` / `FLAG` / `TCVAR` / `NOWEX` / `STAIN` 等是内置标量 / 数组；
+ * `GAMEBASE_*` 是系统变量。语料实测（eraTW 4.980，4,385 份 `.erb`）这批名字贡献约 440 条
+ * 误报——它们从未有过 `#DIM` 声明，却永远有定义。
+ *
+ * **只收实测出现过 / 引擎语法点名的名字**（不抄整张 Emuera 变量表）：多收一个就可能掩盖
+ * 作者对同名用户变量的真实拼写错误。
+ */
+export const ERB_ENGINE_RESERVED_IDENTIFIERS: readonly string[] = [
+  // —— 调用协议槽 / 作用域标量 / 引擎时间与循环量 ——
+  'ARG',
+  'ARGS',
+  'RESULT',
+  'RESULTS',
+  'ASSI',
+  'ASSIPLAY',
+  'MASTER',
+  'TARGET',
+  'PLAYER',
+  'DAY',
+  'TIME',
+  'MONEY',
+  'NOW',
+  'CHARANUM',
+  'LINECOUNT',
+  'SELECTCOM',
+  'PREVCOM',
+  'STR',
+  'NAME',
+  'CALLNAME',
+  'MASTERNAME',
+  'TRAINNAME',
+  'BASE',
+  'MAXBASE',
+  // —— 变量族头（`GETNUM/CSV*` 第一参、也可直接带 `:` 索引）——
+  'ABL',
+  'CFLAG',
+  'CDFLAG',
+  'EQUIP',
+  'EX', // `EXP` 族的 Emuera 别名（语料 1,740 处 `EX:…`，全无 #DIM）
+  'EXP',
+  'FLAG',
+  'JUEL',
+  'MARK',
+  'NOWEX',
+  'PALAM',
+  'SOURCE',
+  'STAIN',
+  'TALENT',
+  'TCVAR',
+  'TEQUIP',
+  'TFLAG',
+  // —— 内置标量 / 数组 / 系统变量 ——
+  'BASENAME',
+  'DRAWLINESTR',
+  'EQUIPNAME',
+  'ABLNAME',
+  'EXPNAME',
+  'GAMEBASE_TITLE',
+  'GAMEBASE_VERSION',
+  'ITEM',
+  'NICKNAME',
+  'NO',
+  'NOITEM',
+  'RAND',
+];
+
+/**
+ * **字符串型引擎伪变量**：赋值右侧可以是无引号文本，整行不扫（未定义名诊断的行为判据）。
+ *
+ * 语料实证（eraTW 4.980）：`ARGS = 共通` / `STR:16 = 破旧小屋` / `TSTR:1 = 科技蓝白呼吸`
+ * 这类写法有 150+ 处——右侧的裸词是作者写的**文本**，不是变量引用。`CSTR` 是同一族里
+ * 过去以字面量形式直接写在诊断规则里的唯一一枚，本批一并归队（零增删）。
+ */
+export const ERB_ENGINE_STRING_IDENTIFIERS: readonly string[] = [
+  'ARGS',
+  'CALLNAME',
+  'CSTR',
+  'MASTERNAME',
+  'NAME',
+  'NICKNAME',
+  'RESULTS',
+  'SAVESTR',
+  'STR',
+  'TRAINNAME',
+  'TSTR',
+];

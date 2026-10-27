@@ -11,6 +11,7 @@ import {
 } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
+import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
 /**
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。
  *
@@ -321,60 +322,31 @@ const ERB_TERN_STATES: Record<string, Monaco.languages.IMonarchLanguageRule[]> =
  * 语料里多是 `TALENT:PLAYER:2` 的中段与裸读）。**不收**作品自造名（`ROOMDATA` / `C_ID`…）——
  * 那是游戏知识，归 adapter（铁律 3）；语言层收了作品专名，换一部作品就是错色。
  *
- * ## 与 `ENGINE_VARIABLE_FAMILIES`（`kojo-sugar`）的关系
- * 那张是**转译器/字典侧**的"具名索引族"清单（`.erb` 族头补全 `erb-completion-families.ts`、
- * 成员补全与 `.kojo` 的 `ERB_FAMILY_HEADS` 都从它派生），比本表窄 30 枚（本表多的即②类与引擎别名）。
- * 两条消费线各吃一张表，就是「有颜色但补不出来」/「补得出但整行白字」的漂移根源 ⇒
- * `tests/erb-family-single-source.test.ts` 逐向对拍，双向差集**必须逐字等于**闸里登记的台账
- * （台账只许收窄：收口一枚删一行）。
+ * ## 真源（LAU-D2，2026-10-27：词形外提出清）
+ * 词形一律来自 `@kojo/kojo-vocab/engine` 的 {@link ENGINE_VARIABLE_REFERENCE_HEADS}——
+ * 那是"字典侧具名索引族（`ENGINE_VARIABLE_FAMILIES`，补全 / 成员 / `.kojo` 族头档同源）
+ * ＋ 显示层专收三组（作用域标量 / 语言槽位 / 引擎别名与展开形）"的**派生**，本文件零词形。
  *
- * ## K6 批（2026-10-25）新增两枚的证据链（语料 = eraTW 4.980 `ERB/` 3,971 份 / 4,126,929 行，只读实测）
- * - **`MASTERNAME`（两处都进）**：族头形 `MASTERNAME:<角色号>` 12,272 处 / 149 份
- *   （`口上・メッセージ関連/個人口上/001 Reimu [霊夢]/灵梦-少女之梦/M_KOJO_K1_2_イベント.ERB:586`
- *   `MASTERNAME:1 = 亲爱的`；同文件 :590 是 `%MASTERNAME:1%` 插值形）；裸形 `%MASTERNAME%` 16 处。
- *   引擎内建四条：全树 0 处 `#DIM/#DIMS/#DEFINE` 声明（引擎保留名不会被作品声明）；引擎二进制
- *   （`Emuera_LazyLoadingV3.0_x64.exe` 的 .NET 名字堆）里有 `_MASTERNAME`，与 `_CALLNAME` `CSTRNAME`
- *   `TSTRNAME` 同段并列；仓内三处独立知识认它（`state-replay` 的 `CHARA_STR_SCALAR`、
- *   `erb-parser/src/undefined-name.ts:168,240`、`eratw-adapter` 的 `ENGINE_FAMILIES`/`FAMILY_ALIASES`＝`主人名`）；
- *   用法与 `CALLNAME` 同形（字符串族、索引是角色号、无具名表 ⇒ 不进核对台账）。
- * - **`PLAYER`（只进本表）**：6,444 处裸读 + 8,533 处中段作用域形，**族头形 `PLAYER:` 0 处**
- *   （`fromEN/Addition/ADD_ACTIVE_TOUCH.ERB:156` `IF LOCAL == PLAYER`）。同族 `MASTER`/`TARGET`/`ASSI`/`NO`
- *   早已在册 ⇒ 漏它是遗漏（`erb-parser/src/undefined-name.ts:150` 亦收）。不进字典侧：
- *   `ENGINE_FAMILIES` 头注把 `PLAYER` 明确划在"执行上下文量"表外，语料 0 处族头形也证明补全弹它只误导。
- * - **`CHILDNAME` 拒收（两处都不进）**：5,045 处族头形 / 103 份像族头，实为作品自造存档串——
- *   `DIM.ERH:465` `#DIMS CHARADATA SAVEDATA CHILDNAME, 101`、`出産経過.ERB:35` 以 `VARSIZE("CHILDNAME")`
- *   取其 DIM 尺寸、引擎二进制 0 命中（同批 `MASTERNAME`/`CALLNAME`/`TCVAR` 全命中）、`ENGINE_FAMILIES` 无它。
- *   开项目时它已由 adapter 的 `*.ERH` 声明名表面进补全，不必占语言层名单。
+ * 为什么不再各吃一张表：两份手抄的漂移形态是「屏上有颜色但 `CF|` 补不出来」或反过来。
+ * K6 批把双向差集记成台账（30 枚显示层独收 / 1 枚 `JVEL` 补全侧独有）交 LAU-D2 收口；
+ * 本批把 30 枚按组登记进共用词表、`JVEL` 作为**显式剔除**（拼写裁决另案），
+ * 于是 `tests/erb-family-single-source.test.ts` 的台账从 31 枚收成 1 枚，且显示层是派生不是抄本。
  *
- * ## K6 收尾裁决批（2026-10-25，lead 复实测语料后改正）
- * 裁决规则 = **零回退优先**：今天有色的名字只有拿到"非内建"反证（引擎串面查无 **且** 语料 0 行）才许删。
- * - **`ITEM` 补进（两处都进）**：`ITEM:` 语料 1,713 行 / 507 份、引擎二进制串面点名有；具名索引形
- *   1,200 处（`CASINO.ERB` `IF !ITEM:紅魔賭場VIP会員証`）+ 名表在盘（`CSV/Item.csv` 主表、`Item.als`
- *   追加表）⇒ 按"具名索引族"口径走方案①进 `ENGINE_VARIABLE_FAMILIES`（`.erb` 族头补全同源跟认，
- *   取证详情记在那张表的头注）。
- * - **三枚反证钉（都两处不进）**：`MONSTER_ACTION` / `MONSTER_EXPLV` / `DUMMY_EXT` —— 引擎串面查无 +
- *   语料 `NAME:` 形 0 行（`.local/erb-gap/family-counts.mjs` / `engine-strings3.mjs` 可复跑），是裁决
- *   认定**唯一许删**的三项；`erb-family-single-source.test.ts` 与 `CHILDNAME` 同钉"不许顺手加回来"。
+ * ## 保留在原文的证据链（词条本身已迁走，判定口径不变）
+ * - **`MASTERNAME`**：族头形 12,272 处 / 149 份、裸形 16 处、全树 0 处 `#DIM` 声明、引擎二进制
+ *   名字堆有 `_MASTERNAME`（与 `_CALLNAME`/`CSTRNAME`/`TSTRNAME` 同段）⇒ 引擎内建字符串族。
+ * - **`PLAYER`**：6,444 处裸读 + 8,533 处中段作用域形、族头形 `PLAYER:` 0 处 ⇒ 只进显示层，
+ *   不进字典侧（`ENGINE_FAMILIES` 把执行上下文量划在表外，补全弹它只误导）。
+ * - **`ITEM`**：1,713 行 / 507 份在用、名表在盘（`CSV/Item.csv` + `Item.als`）⇒ 走具名索引族口径，
+ *   两处都进、追加在字典表末尾（`resolveFamily` 首中胜次序零反转）。
+ * - **`CHILDNAME` 拒收**：作品 `#DIMS` 自造存档名（`DIM.ERH`），引擎串面 0 命中 ⇒ 归 adapter。
+ * - **`MONSTER_ACTION` / `MONSTER_EXPLV` / `DUMMY_EXT` 拒收**：引擎串面查无 **且** 语料 0 行，
+ *   是裁决认定唯一许删的三项（不许顺手加回来，测试同钉）。
  *
- * ## 词形为什么存成一整块空白分隔的字串
- * 守卫 `tests/erb-directive-words.test.ts` 不许本文件出现"整条等于 `ERB_DIRECTIVES` 词"的**字符串字面量**
- * （指令串真源只有 `erb-directives.ts`），而 `CFLAG`/`EQUIP`/`RAND`/`DOWNBASE` 既是指令又是族头 ⇒
- * 逐枚写字面量会被误伤。族头是另一条轴，故存整块字串再 `split`：守卫判据（单枚引号包一整词）天然不命中，
- * 两边口径都不必放宽。
- *
- * **为什么这一整块挤在同一行**（LAU 语言面棘轮闸 `pnpm audit:language` 的口径逼出来的，不是手滑）：
- * M1 按**代码行**数引擎词汇命中、逐文件钉基线棘轮（本文件基线 1 行），而行尾 `//` 注释不算豁免、
- * 只有整行注释才豁免 ⇒ 名单一拆多行就把预算吃光（拆 6 行＝6 命中当场超闸）。分组读法交给下面的
- * 块注释（注释行进不了基线），数据行保持一行；真要减面走 LAU-D2 把引擎词汇外提出宿主层。
- * - 首组 `CFLAG…MAXBASE`＝与字典侧重叠的具名索引族；
- * - 次组 `ABL…SOURCE`＝其余具名索引族与引擎别名；
- * - 第三组 `NOWEX…CALLNAME`＝本批补进的字符串族（`MASTERNAME` / `ITEM`）所在轴；
- * - 末两行 `RESULTS…PLAYER`＝作用域词与显示层专用词。
+ * ⚠ 词表住在共用包里 ⇒ 本文件不再需要"整块单行字串"那种写法（旧版为绕 `pnpm audit:language`
+ * 的 M1 按行计数而挤成一行）；M1 因此在本文件归零。
  */
-const ERB_VARIABLE_FAMILY_FORMS = 'CFLAG CDFLAG CSTR TCVAR TSTR TFLAG TALENT MARK EXP BASE MAXBASE ABL RELATION FLAG PALAM JUEL GOTJUEL DOWNBASE CUP CDOWN SOURCE NOWEX EQUIP TEQUIP STAIN ITEM NAME CALLNAME RESULTS LOCALS LOCAL ARGS ARG DAY TIME MONEY MASTER TARGET ASSI NO RAND SELECTCOM UP DOWN LOSEBASE EX PALAMLV STAIN_1 STAIN_2 MASTERNAME PLAYER';
-
-/** 名单数组（= {@link ERB_VARIABLE_FAMILY_FORMS} 的空白切分；无重复、全大写 ASCII 词形由测试钉住） */
-export const ERB_VARIABLE_FAMILY_HEADS: readonly string[] = ERB_VARIABLE_FAMILY_FORMS.trim().split(/\s+/);
+export const ERB_VARIABLE_FAMILY_HEADS: readonly string[] = ENGINE_VARIABLE_REFERENCE_HEADS;
 
 /**
  * 变量多段引用（`CFLAG:ARG:口上セレクタ` / `TCVAR:50` / `MASTERNAME:1`）整段 `variable`。

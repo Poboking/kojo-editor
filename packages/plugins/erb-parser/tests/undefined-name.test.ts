@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ERB_ENGINE_RESERVED_IDENTIFIERS,
+  ERB_ENGINE_STRING_IDENTIFIERS,
+} from '@kojo/plugin-api';
+import {
   ERB_UNDEFINED_NAME,
   collectUndefinedNameDiagnostics,
   type UndefinedNameDiagnosticsInput,
@@ -12,11 +16,21 @@ import {
  * （字符串、注释、数字、函数名、关键字、成员访问、通配展开、调用/跳转行、定义行、
  * SKIP 区、散文行、未知语句行、冒号链赋值）。另有作用域（#DIM / 形参）与
  * did-you-mean 候选的接线测试。
+ *
+ * **引擎保留名按生产同一条来路取**（LAU-D2）：诊断规则本身零词表，词表由宿主注入；
+ * 这里读词表的真源（`@kojo/plugin-api`）当"装配根"，不抄第二份名单——
+ * 抄一份就等于把刚拆掉的重复又造回来，还测不出真源漂移。
  */
 const collect = (
   text: string,
   extra: Partial<Omit<UndefinedNameDiagnosticsInput, 'text'>> = {},
-): ReturnType<typeof collectUndefinedNameDiagnostics> => collectUndefinedNameDiagnostics({ text, ...extra });
+): ReturnType<typeof collectUndefinedNameDiagnostics> =>
+  collectUndefinedNameDiagnostics({
+    text,
+    builtinNames: ERB_ENGINE_RESERVED_IDENTIFIERS,
+    engineStringNames: ERB_ENGINE_STRING_IDENTIFIERS,
+    ...extra,
+  });
 
 describe('collectUndefinedNameDiagnostics · 真阳性', () => {
   it('IF 条件里的未声明变量：warning + 中文消息 + 1 基列区间 + 稳定诊断码', () => {
@@ -270,5 +284,48 @@ describe('collectUndefinedNameDiagnostics · 批次十二（字符串词法盲�
     expect(collect('IF UNKNOWN == @"Start_{LOOP}"').map((d) => d.name)).toEqual(['UNKNOWN']);
     // 反证②：插值 `%…%` 之内是表达式（不是字符串内容），未知名仍报
     expect(collect('IF @"%UNKNOWN + 1%" == 0').map((d) => d.name)).toEqual(['UNKNOWN']);
+  });
+});
+
+/**
+ * LAU-D2（2026-10-27）：引擎词表**外提**后的数据驱动判据。
+ *
+ * 判据只有一条：**结果跟着词表走**。
+ * - 词表是唯一判据 ⇒ 注入一份假词表，假名字当场放行（没有第二份硬编码在拦它）；
+ * - 不注入 ⇒ 不猜（族头 / 引擎标量照报），**不许**在规则里留回退表——回退表就是刚拆掉的
+ *   那份重复，且真源改了它不会跟。
+ * 这两条同时钉住"外提"的全部收益：插件层零词表，宿主注入什么就认什么。
+ */
+describe('collectUndefinedNameDiagnostics · 引擎词表外置（数据驱动，不内置回落）', () => {
+  it('不注入 ⇒ 引擎族头与引擎标量都按未定义报（不猜、无回落表）', () => {
+    const bare = collectUndefinedNameDiagnostics({ text: 'IF CFLAG == SELECTCOM' });
+    expect(bare.map((d) => d.name)).toEqual(['CFLAG', 'SELECTCOM']);
+    // 反证：同样的输入，按生产来路注入真源 ⇒ 一条不报
+    expect(collect('IF CFLAG == SELECTCOM')).toEqual([]);
+  });
+
+  it('注入假词表 ⇒ 结果跟着变（词表就是判据；真源里没有的名字不许被常识放过）', () => {
+    const text = 'IF FAKEFAMILY == FAKESCALAR';
+    // 只喂一枚：另一枚照报 ⇒ 不是"认识一个就整行放行"
+    expect(
+      collectUndefinedNameDiagnostics({ text, builtinNames: ['FAKEFAMILY'] }).map((d) => d.name),
+    ).toEqual(['FAKESCALAR']);
+    expect(
+      collectUndefinedNameDiagnostics({ text, builtinNames: ['FAKEFAMILY', 'FAKESCALAR'] }),
+    ).toEqual([]);
+    // 从真源里删一枚 ⇒ 立刻按未定义报（证明消费的是注入变量，而不是抄进规则里的常量）
+    const withoutCom = ERB_ENGINE_RESERVED_IDENTIFIERS.filter((w) => w !== 'SELECTCOM');
+    expect(
+      collectUndefinedNameDiagnostics({ text: 'IF SELECTCOM == 1', builtinNames: withoutCom }).map((d) => d.name),
+    ).toEqual(['SELECTCOM']);
+  });
+
+  it('字符串伪变量同样数据驱动：`engineStringNames` 决定"整行不扫"的名单', () => {
+    // 不在名单 ⇒ 右侧裸词按未定义报
+    expect(collectUndefinedNameDiagnostics({ text: 'ARGS = 共通' }).map((d) => d.name)).toEqual(['共通']);
+    // 名单里 ⇒ 整行不扫
+    expect(collectUndefinedNameDiagnostics({ text: 'ARGS = 共通', engineStringNames: ['ARGS'] })).toEqual([]);
+    // 假名字同样吃这一格
+    expect(collectUndefinedNameDiagnostics({ text: 'FAKESTR = 文本', engineStringNames: ['FAKESTR'] })).toEqual([]);
   });
 });

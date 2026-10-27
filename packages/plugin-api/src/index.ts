@@ -988,3 +988,8 @@ export type {
   InlineCompletionStage,
   InlineCompletionTriggerKind,
 } from './inline-completion';
+
+/* ---- 引擎保留标识符（LAU-D2 独占追加区块，2026-10-27；勿在他处重排） ----
+   插件（`@kojo/plugin-erb-parser`）只许依赖 plugin-api ⇒ "永远有定义"的引擎词表住这里；
+   着色显示层那份（`ENGINE_VARIABLE_REFERENCE_HEADS`）在 `@kojo/kojo-vocab/engine`。 */
+export { ERB_ENGINE_RESERVED_IDENTIFIERS, ERB_ENGINE_STRING_IDENTIFIERS } from './erb';

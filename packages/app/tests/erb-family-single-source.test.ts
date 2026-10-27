@@ -1,38 +1,35 @@
 /**
- * K6 · 族头名单双向对拍闸（显示层 `ERB_VARIABLE_FAMILY_HEADS` ⇄ 字典层 `ENGINE_VARIABLE_FAMILIES`）
+ * 族头**单一真源**闸（显示层 `ERB_VARIABLE_FAMILY_HEADS` ⇄ 共用词表 `ENGINE_VARIABLE_*`）
  *
- * ## 为什么要这把闸
- * `.erb` 的变量族头今天存在**两份手抄**：
- * ① `packages/app/src/monaco/erb-language.ts` 的 `ERB_VARIABLE_FAMILY_HEADS`（Monarch `variable` 着色，
- *    规则由它现建，见 `ERB_VARIABLE_REF_PATTERN`）；
- * ② `@kojo/plugin-kojo-sugar` 的 `ENGINE_VARIABLE_FAMILIES`（`.erb` 族头补全候选源
- *    `erb-completion-families.ts` / 成员补全 `erb-completion-members.ts` / `.kojo` 的
- *    `ERB_FAMILY_HEADS` 都从它派生）。
- * 两份各改各的 ⇒ 漂移的用户可见形态就是「屏上有颜色但 `CF|` 补不出来」或反过来。本闸把两边的
- * **双向差集钉成台账**：任何一侧新增/删收族头，只要没同时动另一侧或没在台账里留理由，当场红。
- * 台账是**只许收窄**的债务表——单源收口（两边合成一张表）留后续批，收一枚就该把那条删掉。
+ * ## 为什么要有这把闸（K6 立项时是"两份手抄 + 台账"）
+ * `.erb` 的变量族头曾经存在**两份手抄**：宿主 `erb-language.ts` 的 Monarch 串，与
+ * `ENGINE_VARIABLE_FAMILIES`（族头补全 / 成员补全 / `.kojo` 族头档的来源）。两份各改各的
+ * ⇒ 漂移的用户可见形态就是「屏上有颜色但 `CF|` 补不出来」或反过来。K6 把双向差集钉成
+ * 台账（30 枚显示层独收 + 1 枚 `JVEL`），并写明"单源收口留后续批"。
  *
- * ## 口径（为什么现在还不是同一张表）
- * ②按"具名索引族"建表（名字写在冒号后面、要换算成编号的那批）；①还要收**引擎作用域/上下文标量**
- * （`MASTER` / `TARGET` / `PLAYER` / `ARG` / `RESULTS` / `DAY` …，语料里多是 `TALENT:PLAYER:2` 的中段与裸读），
- * 否则这些高频引擎词整行白字。两类都不许收**作品专名**（`ROOMDATA` / `C_ID` / `CHILDNAME` 归 adapter）。
+ * ## LAU-D2（2026-10-27）：台账收口，词形外指出清
+ * 那 30 枚按三组（引擎作用域标量 / 语言层槽位 / 引擎别名与展开形）登记进共用词表
+ * `@kojo/kojo-vocab/engine`，显示层改为**派生**：`ERB_VARIABLE_FAMILY_HEADS` 就是
+ * `ENGINE_VARIABLE_REFERENCE_HEADS` 本体（同一数组，不是抄本）；`JVEL` 从沉默变成
+ * `ENGINE_VARIABLE_DISPLAY_SUPPRESSED`（显式剔除，等拼写裁决另案）。
+ * 于是本闸的判据从"双向差集 == 手抄台账"变成**结构断言**：
+ * - 显示层 == 共用词表本体（`toBe`，比 `toEqual` 更强：连拷贝都不许）；
+ * - 显示层 − 字典侧 == 词表登记的三组专收（一枚不多、一枚不少）；
+ * - 字典侧 − 显示层 == 词表登记的显式剔除（当前只 `JVEL`）。
  *
- * ## 本批（K6）落的两枚 + 收尾裁决批补的一枚
- * - `MASTERNAME` → **两处都进**（引擎内建字符串族，与 `CALLNAME` 同形；语料 12,272 处族头形 / 149 份，
- *   全树 0 处 `#DIM` 系声明，引擎二进制名字堆有 `_MASTERNAME`）。
- * - `PLAYER` → **只进显示层**（语料 0 处 `PLAYER:` 族头形；`eratw-adapter` 的 `ENGINE_FAMILIES`
- *   把它明确划在"执行上下文量"表外）⇒ 落在 `DISPLAY_ONLY` 台账里，理由随条目登记。
- * - `CHILDNAME` → **两处都不进**（`ERB/DIM.ERH:465` `#DIMS CHARADATA SAVEDATA CHILDNAME, 101` 是作品声明，
- *   引擎二进制 0 命中 ⇒ 具体游戏约定，铁律 3）；本文件末组把它钉成"不许顺手加回来"。
- * - **`ITEM` → 两处都进（K6 收尾裁决 2026-10-25）**：零回退口径——`ITEM:` 语料 1,713 行 / 507 份在用、
- *   引擎串面点名有、具名索引 1,200 处且 `CSV/Item.csv` 主表在盘 ⇒ 走"进 `ENGINE_VARIABLE_FAMILIES`
- *   让补全同认"的方案①（放清单末尾 = `resolveFamily` 首中胜次序零反转）。同批把
- *   `MONSTER_ACTION` / `MONSTER_EXPLV` / `DUMMY_EXT`（引擎串面查无 + 语料 0 行 = 唯一拿到反证的三项）
- *   与 `CHILDNAME` 一起钉成拒收。
+ * 口径不变：收**引擎级**词，**不许收作品专名**（`ROOMDATA` / `C_ID` / `CHILDNAME` 归 adapter）。
+ * 取证链（K6 / 收尾裁决批）留在共用词表与 `erb-language.ts` 的块注释里。
  */
 
 import { describe, expect, it } from 'vitest';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import {
+  ENGINE_FAMILY_ALIAS_HEADS,
+  ENGINE_VARIABLE_DISPLAY_SUPPRESSED,
+  ENGINE_VARIABLE_REFERENCE_HEADS,
+  ENGINE_VARIABLE_SCOPE_HEADS,
+  ERB_SLOT_HEADS,
+} from '@kojo/kojo-vocab/engine';
 import { ERB_VARIABLE_FAMILY_HEADS, ERB_VARIABLE_REF_PATTERN } from '../src/monaco/erb-language';
 import { ERB_COMMANDS, ERB_FAMILY_HEADS } from '../src/monaco/kojo-language';
 
@@ -40,30 +37,16 @@ const setOf = (words: readonly string[]): Set<string> => new Set(words);
 const diff = (a: readonly string[], b: readonly string[]): string[] =>
   [...setOf(a)].filter((x) => !setOf(b).has(x)).sort();
 
-/**
- * 台账 A：**着色有、补全无**（显示层独收的引擎作用域词与引擎别名）。
- * 每条都必须有理由——收进这张表等于承认"它今天还漂着"，单源收口批应逐条删掉它。
- */
-const DISPLAY_ONLY: Readonly<Record<string, readonly string[]>> = {
-  // 引擎作用域 / 上下文标量：`族:PLAYER:` 式中段与裸读，具名索引不存在 ⇒ 字典层不收（K6 取证）
-  '执行上下文量': ['MASTER', 'TARGET', 'ASSI', 'NO', 'SELECTCOM', 'RAND', 'DAY', 'TIME', 'MONEY', 'PLAYER'],
-  // 语言层槽位词（`.erb` 里是局部/实参/返回槽，不是游戏字典族）
-  '语言层槽位': ['ARG', 'ARGS', 'LOCAL', 'LOCALS', 'RESULTS'],
-  // 引擎给同一名表另开的头 / 二维展开形（字典侧只认主名，收两枚会让 resolveFamily 抢归属）
-  '引擎别名与展开形': ['CDFLAG', 'CSTR', 'TSTR', 'EX', 'JUEL', 'MAXBASE', 'RELATION', 'EQUIP', 'CDOWN', 'UP', 'DOWN', 'LOSEBASE', 'PALAMLV', 'STAIN_1', 'STAIN_2'],
-};
+/** 共用词表登记的三组**显示层专收**（不是台账，是词表本体的一部分） */
+const DISPLAY_GROUPS: readonly (readonly string[])[] = [
+  ENGINE_VARIABLE_SCOPE_HEADS,
+  ERB_SLOT_HEADS,
+  ENGINE_FAMILY_ALIAS_HEADS,
+];
 
-/**
- * 台账 B：**补全有、着色无**（只余 `JVEL` 一枚）。
- * 疑点：语料（eraTW 4.980 的 `ERB/`）里 `JVEL` **0 份**、`JUEL` 114 份，盘上名称表是 `CSV/Juel.csv`+`Juel.als`，
- * 引擎二进制名字堆 `JUEL` 8 命中 / `JVEL` 0 命中 ⇒ `JVEL` 疑为 `ENGINE_VARIABLE_FAMILIES` 的历史拼误
- * （`eratw-adapter` 的教学表与 scaffold 夹具把它当"认账族头"原样抄了）。
- * 本批不擅自改拼写（会动转译器的族归属与用户面文案），已交 lead 决；台账钉死 ⇒ 谁修谁删这一行。
- */
-const COMPLETION_ONLY: readonly string[] = ['JVEL'];
-
-describe('K6 族头双向对拍 · 名单形态', () => {
-  it('显示层名单无重复、全大写 ASCII 词形（引擎标识符大小写不敏感 ⇒ 只存一种写法）', () => {
+describe('族头单一真源 · 名单形态', () => {
+  it('显示层就是共用词表本体（同一数组对象，连拷贝都不许）；无重复、全大写 ASCII 词形', () => {
+    expect(ERB_VARIABLE_FAMILY_HEADS).toBe(ENGINE_VARIABLE_REFERENCE_HEADS);
     expect(ERB_VARIABLE_FAMILY_HEADS.length).toBeGreaterThan(0);
     expect(new Set(ERB_VARIABLE_FAMILY_HEADS).size).toBe(ERB_VARIABLE_FAMILY_HEADS.length);
     for (const w of ERB_VARIABLE_FAMILY_HEADS) {
@@ -113,27 +96,31 @@ describe('K6 族头双向对拍 · 名单形态', () => {
   });
 });
 
-describe('K6 族头双向对拍 · 双向差集必须等于台账', () => {
-  it('方向 A（补全 ⇒ 着色）：`ENGINE_VARIABLE_FAMILIES` 每枚都在 Monarch 名单里，余差集逐字等于台账 B', () => {
+describe('族头单一真源 · 差集 = 词表登记的三组专收 + 显式剔除（结构，不是台账）', () => {
+  it('方向 A（字典 ⇒ 显示）：字典侧每枚都在显示层，唯一例外是**显式剔除**的 `JVEL`', () => {
     const gap = diff(ENGINE_VARIABLE_FAMILIES, ERB_VARIABLE_FAMILY_HEADS);
-    expect(gap, `补得出却没颜色（新漂移或台账该改）：${gap.join(' / ')}`).toEqual([...COMPLETION_ONLY].sort());
+    expect(gap, `补得出却没颜色：${gap.join(' / ')}`).toEqual([...ENGINE_VARIABLE_DISPLAY_SUPPRESSED].sort());
+    expect(ENGINE_VARIABLE_DISPLAY_SUPPRESSED).toEqual(['JVEL']);
   });
 
-  it('方向 B（着色 ⇒ 补全）：Monarch 独收的每枚都在台账 A 里有条目，差集逐字相等', () => {
-    const declared = Object.values(DISPLAY_ONLY).flat();
-    expect(new Set(declared).size).toBe(declared.length); // 台账内部不许重登
-    for (const w of declared) expect(ERB_VARIABLE_FAMILY_HEADS, `台账里的 ${w} 已不在名单（台账该删）`).toContain(w);
-    for (const w of declared) expect(ENGINE_VARIABLE_FAMILIES, `台账里的 ${w} 其实已被字典层收（台账该删）`).not.toContain(w);
+  it('方向 B（显示 ⇒ 字典）：显示层独收的每枚都在词表的三组里（不是散落在宿主的例外）', () => {
+    const declared = DISPLAY_GROUPS.flat();
+    expect(new Set(declared).size, '三组之间不许重登').toBe(declared.length);
+    for (const w of declared) expect(ERB_VARIABLE_FAMILY_HEADS, `词表登记的 ${w} 没进显示层`).toContain(w);
+    for (const w of declared) expect(ENGINE_VARIABLE_FAMILIES, `词表登记的 ${w} 同时出现在字典侧（它该只在一边）`).not.toContain(w);
     const gap = diff(ERB_VARIABLE_FAMILY_HEADS, ENGINE_VARIABLE_FAMILIES);
-    expect(gap, `有颜色但补不出来（新漂移或台账该改）：${gap.join(' / ')}`).toEqual([...declared].sort());
+    expect(gap, `有颜色但不在词表三组里：${gap.join(' / ')}`).toEqual([...declared].sort());
   });
 
-  it('台账规模钉死（只许收窄）：两边差集合计 = 31 枚，收口一枚就删一行', () => {
-    const total =
-      diff(ENGINE_VARIABLE_FAMILIES, ERB_VARIABLE_FAMILY_HEADS).length +
-      diff(ERB_VARIABLE_FAMILY_HEADS, ENGINE_VARIABLE_FAMILIES).length;
-    expect(total).toBe(COMPLETION_ONLY.length + Object.values(DISPLAY_ONLY).flat().length);
-    expect(total).toBeLessThanOrEqual(31);
+  it('差集规模钉死：显示层独收 30 枚 + 剔除 1 枚（K6 台账 31 枚原样收口，不许借机扩面）', () => {
+    expect(DISPLAY_GROUPS.flat()).toHaveLength(30);
+    expect(ERB_VARIABLE_FAMILY_HEADS).toHaveLength(51);
+    expect(ENGINE_VARIABLE_FAMILIES).toHaveLength(22);
+  });
+
+  it('`JVEL` 不吃的着色面不许偷偷回来：裸形 / 索引形都不归 variable', () => {
+    expect(ERB_VARIABLE_REF_PATTERN.exec('JVEL')?.[0] ?? '').toBe('');
+    expect(ERB_VARIABLE_REF_PATTERN.exec('IF JVEL == 1')?.[0] ?? '').toBe('');
   });
 });
 

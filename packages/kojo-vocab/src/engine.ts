@@ -62,6 +62,95 @@ export const ENGINE_VARIABLE_FAMILIES: readonly string[] = [
   'ITEM',
 ];
 
+/* ==================== 显示层变量引用族头（LAU-D2 外提，2026-10-27） ==================== */
+
+/**
+ * **显示层专收**的三组词（`ERB_VARIABLE_REF_PATTERN` 的差额，逐枚理由在下面各组）。
+ *
+ * 为什么住这里而不是宿主：这三组都是**跨 era 引擎级词形**（作用域标量 / 语言槽位 /
+ * 引擎给同一名表另开的头），与具体作品的方言数据无关——换任何一部 era 系作品都长这样。
+ * 旧账（`packages/app/tests/erb-family-single-source.test.ts` 的台账 A）把它们记成
+ * "显示有、补全无"的漂移；LAU-D2 把这笔账收进共用词表，显示层只做派生（宿主零词形）。
+ */
+
+/**
+ * 引擎**作用域 / 上下文标量**：语料里多是 `TALENT:PLAYER:2` 的中段与裸读，具名索引不存在
+ * ⇒ 字典侧（{@link ENGINE_VARIABLE_FAMILIES}）不收，但它们是引擎给每一部作品都写好的量。
+ *
+ * 同名的"永远有定义"事实另有一张**消费面不同**的表：`@kojo/plugin-api` 的
+ * `ERB_ENGINE_RESERVED_IDENTIFIERS`（未定义名诊断用；它必须住契约包——插件只许依赖
+ * plugin-api，而诊断规则本身零词表，详见那里与 `erb-parser/src/plugin.ts` 的接线注）。
+ */
+export const ENGINE_VARIABLE_SCOPE_HEADS: readonly string[] = [
+  'MASTER',
+  'TARGET',
+  'ASSI',
+  'NO',
+  'SELECTCOM',
+  'RAND',
+  'DAY',
+  'TIME',
+  'MONEY',
+  'PLAYER',
+];
+
+/**
+ * **语言层槽位词**：`.erb` 的局部 / 实参 / 返回槽，是 ERB 语言语义（与 `#DIM` 作用域同级），
+ * 不是游戏字典族——字典侧 `resolveFamily` 也不该认它们。
+ */
+export const ERB_SLOT_HEADS: readonly string[] = ['ARG', 'ARGS', 'LOCAL', 'LOCALS', 'RESULTS'];
+
+/**
+ * **引擎别名与二维展开形**：引擎给同一张名字表另开的族头（`EX` 是 `EXP` 的别名、
+ * `CDFLAG`/`CSTR`/`TSTR` 是 `CFLAG`/`CSV` 系第二维、`MAXBASE`/`LOSEBASE`/`PALAMLV` 是派生态、
+ * `RELATION` 是关系族、`JUEL`/`EQUIP` 是名表族）。
+ *
+ * 字典侧只认主名（收两枚会让 `resolveFamily` 抢归属）⇒ 只进显示层；
+ * 语料实证与 K6 登记同源，逐条留在 `erb-family-single-source.test.ts` 的历史台账里。
+ */
+export const ENGINE_FAMILY_ALIAS_HEADS: readonly string[] = [
+  'CDFLAG',
+  'CSTR',
+  'TSTR',
+  'EX',
+  'JUEL',
+  'MAXBASE',
+  'RELATION',
+  'EQUIP',
+  'CDOWN',
+  'UP',
+  'DOWN',
+  'LOSEBASE',
+  'PALAMLV',
+  'STAIN_1',
+  'STAIN_2',
+];
+
+/**
+ * 字典侧有、**显示层刻意不收**的族头（当前只有 `JVEL` 一枚）。
+ *
+ * `JVEL` 疑为 `JUEL` 的历史拼误（语料 0 份 / 引擎串面 0 命中，见 K6 台账 B）；本批不外提
+ * 拼写裁决，只把"显示层不收它"这件事从**沉默**变成**显式**：派生式里点名剔除，改拼写时
+ * 谁动谁删这一行（删掉即自动进显示层）。
+ */
+export const ENGINE_VARIABLE_DISPLAY_SUPPRESSED: readonly string[] = ['JVEL'];
+
+/**
+ * **ERB 变量多段引用（`变量` 着色）的族头唯一真源**：`CFLAG:ARG:口上セレクタ` /
+ * `MASTERNAME:1` / `TALENT:PLAYER:2` 整段归 `variable` 的词形都在这里。
+ *
+ * = 字典侧 {@link ENGINE_VARIABLE_FAMILIES}（去掉 {@link ENGINE_VARIABLE_DISPLAY_SUPPRESSED}）
+ * ＋ 三组显示层专收。**派生而不是再抄一份**：簇表顺序取"字典侧在前、专收组在后"，
+ * 与旧手抄串的顺序不同但**集合逐枚相等**（匹配行为只取决于集合：每个候选后都跟 `\b`，
+ * 互为前缀的词只在"前缀后不是词边界"时才轮到下一个候选）。
+ */
+export const ENGINE_VARIABLE_REFERENCE_HEADS: readonly string[] = [
+  ...ENGINE_VARIABLE_FAMILIES.filter((head) => !ENGINE_VARIABLE_DISPLAY_SUPPRESSED.includes(head)),
+  ...ENGINE_VARIABLE_SCOPE_HEADS,
+  ...ERB_SLOT_HEADS,
+  ...ENGINE_FAMILY_ALIAS_HEADS,
+];
+
 /**
  * **具名索引核对的生效族 → 其名称表键候选**（P-10③ 立项；ALS 批 2026-10-14 扩族）。
  *

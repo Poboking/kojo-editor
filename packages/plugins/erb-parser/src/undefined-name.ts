@@ -2,8 +2,8 @@
  * ERB 未定义名诊断（S8，2026-10-23）。
  *
  * 「这个名字在本文件的已知声明集里查无」——已知集四类：`#DIM` 族声明、函数局部
- * （形参）、ERB 语言层内置伪变量、引擎 globals（适配器注入）。诊断码
- * `ERB_UNDEFINED_NAME`，严重度 warning，并给编辑距离 ≤ 2 的 did-you-mean 候选。
+ * （形参）、ERB 语言语义词（本层小表）、引擎保留名（**宿主从共用词表注入**，本层不收）。
+ * 诊断码 `ERB_UNDEFINED_NAME`，严重度 warning，并给编辑距离 ≤ 2 的 did-you-mean 候选。
  *
  * ## 为什么只扫"表达式语境"
  *
@@ -35,7 +35,7 @@
  *
  * - 数字（首字符是 `\p{N}`）；
  * - 函数名（记号后（可隔空白）紧跟 `(` 的调用形）；
- * - ERB 语句/词运算符/字面量（见 `ERB_KEYWORDS`）与 Emuera 内置变量名（`ENGINE_BUILTIN_NAMES`）；
+ * - ERB 语句/词运算符/字面量（见 `ERB_LANGUAGE_KEYWORDS`）与宿主注入的引擎保留名（`builtinNames`）；
  * - 显示指令行（`PRINT` 全族）——其后的整段是文本，`=` 也不例外；
  * - 成员访问与索引链（记号紧邻半/全角冒号，冒号两侧**可隔空白**）；
  * - 通配/展开形（成对 `%NAME%`）、`@` 作用域写法、`￥` 具名索引（`FLAG:￥人気`）；
@@ -91,10 +91,23 @@ export interface UndefinedNameDiagnosticsInput {
   readonly dimNames?: readonly string[];
   /** 局部声明名（形参等；与文本解析结果合并，按全文件已知处理） */
   readonly localNames?: readonly string[];
-  /** 系统内置名（追加到语言层内置表） */
+  /**
+   * 系统内置名（**宿主注入**）。
+   *
+   * 引擎保留名的真源是 `@kojo/plugin-api` 的 `ERB_ENGINE_RESERVED_IDENTIFIERS`
+   * （跨 era 引擎级事实，不属于本规则）；装配处 `createErbParserPlugin` 缺省就取它。
+   * **本规则不内置回落表**：没传 ⇒ 那些名字按未定义报，不猜。
+   */
   readonly builtinNames?: readonly string[];
   /** 引擎 globals（适配器 / 字典注入；跨游戏通用层不解释） */
   readonly engineGlobalNames?: readonly string[];
+  /**
+   * 字符串型**引擎**伪变量（**宿主注入**；真源 = `ERB_ENGINE_STRING_IDENTIFIERS`）。
+   *
+   * 与 {@link stringNames} 同一个行为（赋值右侧整行不扫），差别只在来源：这里是
+   * 引擎内建（跨 era 恒有），那里是适配器 / 工程索引的声明。
+   */
+  readonly engineStringNames?: readonly string[];
   /** 其它外部已知名（与上面几项合并） */
   readonly knownNames?: readonly string[];
   /**
@@ -125,50 +138,29 @@ const EXPRESSION_STATEMENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * ERB 语言层关键字 / 字面量 / 词运算符——它们不是变量引用。
+ * ERB **语言语义**词：关键字 / 字面量 / 词运算符 / 语言槽位——它们不是变量引用。
  *
- * 只收**跨游戏通用**的词（引擎伪变量、字符对象常量、字面量、`AND/OR/XOR`）；
- * 引擎变量族头/内置标量不混进这里——它们是"永远有定义的名"而非关键字，单列在
- * `ENGINE_BUILTIN_NAMES`；具体常量（`C_PINK` 一类）仍属于适配器名录，由
- * `engineGlobalNames` 注入，本层不抄第二份游戏知识。
+ * 只收"说这句话的那门语言"本身的东西：作用域声明词（`LOCAL` / `GLOBAL` 族）、
+ * 字面量（`NULL` / `TRUE` / `FALSE` / `NONE`）、词运算符与 `CASE` 语法词（`AND` / `OR` /
+ * `XOR` / `IS` / `TO` / `ELSE`）。
+ *
+ * **引擎级名字一枚都不在这里**（LAU-D2，2026-10-27）：族头、引擎标量、系统变量都是
+ * "跨 era 恒有定义的名"，真源在 `@kojo/plugin-api` 的 `ERB_ENGINE_RESERVED_IDENTIFIERS`，
+ * 由宿主经 {@link UndefinedNameDiagnosticsInput.builtinNames} **注入**——本包不存词表、
+ * 也不内置回落表（没有词表 ⇒ 不认识的名字照报，不猜）。具体常量（`C_PINK` 一类）仍属
+ * 适配器名录，走 `engineGlobalNames`，本层不抄第二份游戏知识。
  */
-const ERB_KEYWORD_LIST: readonly string[] = [
-  // 语言层伪变量（ARG/ARGS 形参与返回值槽）
-  'ARG',
-  'ARGS',
-  'RESULT',
-  'RESULTS',
+const ERB_LANGUAGE_IDENTIFIERS: readonly string[] = [
+  // 语言层作用域词（`#DIM` 家族声明的作用域；不是引擎变量族）
   'LOCAL',
   'LOCALS',
   'GLOBAL',
   'GLOBALS',
-  // 字符对象 / 时间等引擎通用常量
-  'ASSI',
-  'ASSIPLAY',
-  'MASTER',
-  'TARGET',
-  'PLAYER',
-  'DAY',
-  'TIME',
-  'MONEY',
-  'NOW',
   // 字面量
   'NULL',
   'TRUE',
   'FALSE',
   'NONE',
-  // 引擎通用标量（跨 era 系通用，不是某部作品的 d20 名字）
-  'CHARANUM',
-  'LINECOUNT',
-  'SELECTCOM',
-  'PREVCOM',
-  'STR',
-  'NAME',
-  'CALLNAME',
-  'MASTERNAME',
-  'TRAINNAME',
-  'BASE',
-  'MAXBASE',
   // 词运算符 / CASE 语法词（Emuera 表达式里的别名写法）
   'AND',
   'OR',
@@ -178,73 +170,19 @@ const ERB_KEYWORD_LIST: readonly string[] = [
   'ELSE',
 ];
 
-const ERB_KEYWORDS: ReadonlySet<string> = new Set(ERB_KEYWORD_LIST);
+const ERB_LANGUAGE_KEYWORDS: ReadonlySet<string> = new Set(ERB_LANGUAGE_IDENTIFIERS);
 
 /**
- * Emuera **内置变量 / 疑似変数**名（引擎保留名：任何 era 系作品都不需要 `#DIM`）。
+ * 字符串型的**语言槽位**：赋值右侧可以是无引号文本，整行不扫。
  *
- * 依据是引擎语法事实而不是某部作品：`TALENT` / `ITEM` / `EQUIP` / `ABL` / `EXP` 等是
- * `GETNUM(<変数族>, …)` 第一参的族头（写全名即是合法写法）；`NOITEM` / `TEQUIP` /
- * `FLAG` / `TCVAR` / `NOWEX` / `STAIN` 等是内置标量/数组；`GAMEBASE_*` 是系统变量。
- * 语料实测（eraTW 4.980，4,385 份 `.erb`）这二十余枚名字贡献约 440 条误报——它们从未有过
- * `#DIM` 声明，却永远有定义，按未定义报就是把引擎保留名当作者拼错。
- *
- * 只收**实测出现过**的名字（不抄整张 Emuera 变量表）：多收一个就可能掩盖作者对
- * 同名用户变量的真实拼写错误。
- */
-const ENGINE_BUILTIN_NAMES: readonly string[] = [
-  // 变量族头（`GETNUM/CSV*` 第一参、也可直接带 `:` 索引）
-  'ABL',
-  'CFLAG',
-  'CDFLAG',
-  'EQUIP',
-  'EX', // `EXP` 族的 Emuera 别名（语料 1,740 处 `EX:…`，全无 #DIM）
-  'EXP',
-  'FLAG',
-  'JUEL',
-  'MARK',
-  'NOWEX',
-  'PALAM',
-  'SOURCE',
-  'STAIN',
-  'TALENT',
-  'TCVAR',
-  'TEQUIP',
-  'TFLAG',
-  // 内置标量 / 数组 / 系统变量
-  'BASENAME',
-  'DRAWLINESTR',
-  'EQUIPNAME',
-  'ABLNAME',
-  'EXPNAME',
-  'GAMEBASE_TITLE',
-  'GAMEBASE_VERSION',
-  'ITEM',
-  'NICKNAME',
-  'NO',
-  'NOITEM',
-  'RAND',
-];
-
-/**
- * 字符串型内置伪变量：赋值右侧可以是无引号文本，整行不扫（见 `collectUndefinedNameDiagnostics`）。
+ * 引擎侧的字符串伪变量（`NAME` / `CALLNAME` / `STR` / `TSTR` / `SAVESTR` …）真源在
+ * `@kojo/plugin-api` 的 `ERB_ENGINE_STRING_IDENTIFIERS`，由宿主经
+ * {@link UndefinedNameDiagnosticsInput.engineStringNames} 注入；本层只留语言自己的槽位。
  *
  * 语料实证（eraTW 4.980）：`ARGS = 共通` / `STR:16 = 破旧小屋` / `TSTR:1 = 科技蓝白呼吸`
  * 这类写法有 150+ 处——右侧的裸词是作者写的**文本**，不是变量引用。
  */
-const STRING_BUILTIN_NAMES: ReadonlySet<string> = new Set([
-  'LOCALS',
-  'RESULTS',
-  'NAME',
-  'CALLNAME',
-  'MASTERNAME',
-  'TRAINNAME',
-  'NICKNAME',
-  'SAVESTR',
-  'STR',
-  'ARGS',
-  'TSTR',
-]);
+const STRING_LANGUAGE_IDENTIFIERS: ReadonlySet<string> = new Set(['LOCALS']);
 
 /**
  * 赋值形行首：`名字` + 可选索引链（`[..]` / `:..`）+ 赋值运算符。
@@ -588,8 +526,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
 
   // ---- 文件级已知名（#DIM + 四类外部名录）----
   const baseDisplay = new Map<string, string>();
-  addNames(baseDisplay, ERB_KEYWORD_LIST);
-  addNames(baseDisplay, ENGINE_BUILTIN_NAMES);
+  addNames(baseDisplay, ERB_LANGUAGE_IDENTIFIERS);
   addNames(baseDisplay, input.builtinNames);
   addNames(baseDisplay, input.engineGlobalNames);
   addNames(baseDisplay, input.knownNames);
@@ -599,8 +536,8 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
   addNames(baseDisplay, parsed.dims.map((dim) => dim.name));
 
   // ---- 字符串型声明（赋值右侧可能是无引号文本，整行不扫）----
-  const stringVars = new Set<string>(STRING_BUILTIN_NAMES);
-  stringVars.add('CSTR');
+  const stringVars = new Set<string>(STRING_LANGUAGE_IDENTIFIERS);
+  for (const name of input.engineStringNames ?? []) stringVars.add(name.toUpperCase());
   for (const dim of parsed.dims) {
     if (dim.directive === 'DIMS' || dim.directive === 'DIMSTR' || dim.directive === 'DIMCHAR') {
       const name = declaredBaseName(dim.name);
@@ -723,7 +660,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
       const end = start + token.length;
       if (STARTS_WITH_NUMBER.test(token)) continue;
       const upper = token.toUpperCase();
-      if (ERB_KEYWORDS.has(upper) || EXPRESSION_STATEMENTS.has(upper)) continue;
+      if (ERB_LANGUAGE_KEYWORDS.has(upper) || EXPRESSION_STATEMENTS.has(upper)) continue;
       if (colonAdjacent(code, start, end)) continue;
       if (nameInternalAdjacent(code, start, end)) continue;
       if (wildAdjacent(code, start, end)) continue;

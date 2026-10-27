@@ -15,7 +15,13 @@ import type {
   Plugin,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { KernelServices, isErbDialectPath, isPathUnder, pathKey, projectFingerprintOf } from '@kojo/plugin-api';
+import {
+  ERB_ENGINE_RESERVED_IDENTIFIERS,
+  ERB_ENGINE_STRING_IDENTIFIERS,
+  KernelServices,
+  isErbDialectPath,
+  projectFingerprintOf,
+} from '@kojo/plugin-api';
 import { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
 import { applyIndexDelta, type IncrementalFileUpdate } from './incremental';
 import { idleIndexState, indexStateOf, sourceFactsOf, type IndexOutcome, type SourceReading } from './index-state';
@@ -223,6 +229,11 @@ export interface ErbSemanticDiagnosticsResult {
   readonly failedRules: readonly ErbDiagnosticsRuleFailure[];
 }
 
+export interface ErbSemanticDiagnosticsResult {
+  readonly decorations: LineDecoration[];
+  readonly failedRules: readonly ErbDiagnosticsRuleFailure[];
+}
+
 /** 工程级声明名（#DIM 族）按索引对象缓存；索引重建即换键，天然失效 */
 const projectNamesCache = new WeakMap<ErbIndex, { dims: string[]; strings: string[] }>();
 
@@ -364,6 +375,11 @@ export function collectErbSemanticDiagnostics(
   return { decorations: sortAndDedupe(decorations), failedRules };
 }
 
+/**
+ * 装配 erb-parser 插件。
+ *
+ * 引擎保留名取 `@kojo/plugin-api` 的真源（LAU-D2）：诊断规则零词表，词表换代只改一处。
+ */
 export function createErbParserPlugin(): Plugin {
   return {
     id: 'erb-parser',
@@ -1596,7 +1612,13 @@ export function createErbParserPlugin(): Plugin {
         title: 'ERB 实参与未定义名诊断',
         order: 22,
         decorate(file): LineDecoration[] {
-          const result = collectErbSemanticDiagnostics({ path: file.path, text: file.text }, index);
+          // 引擎保留名来自契约包（LAU-D2）：诊断规则零词表，这里只做透传。
+          const result = collectErbSemanticDiagnostics({ path: file.path, text: file.text }, index, {
+            undefinedNames: {
+              builtinNames: ERB_ENGINE_RESERVED_IDENTIFIERS,
+              engineStringNames: ERB_ENGINE_STRING_IDENTIFIERS,
+            },
+          });
           for (const failure of result.failedRules) {
             ctx.log.warn(`ERB diagnostic rule '${failure.rule}' failed for ${file.path}: ${failure.message}`);
           }

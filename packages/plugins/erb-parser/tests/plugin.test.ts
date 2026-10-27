@@ -734,3 +734,23 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
     expect(actions(false, erb, twiceBroken, undefined, decorations, 'document')).toEqual([]);
   });
 });
+
+/**
+ * LAU-D2（2026-10-27）：引擎保留名外提后的**装配接线**。
+ *
+ * 判据：插件开箱即认契约包真源（引擎族头 / 标量 / 字符串伪变量都不报）；词表本身零份
+ * 副本（规则级的数据驱动判据在 `undefined-name.test.ts`，这里只验"装配处接对了源"）。
+ */
+describe('erb-parser 插件 · 引擎保留名接线（LAU-D2）', () => {
+  const erb = '/t/注入.ERB';
+  const text = ['IF CFLAG == SELECTCOM', 'ARGS = 共通'].join('\n');
+
+  it('缺省装配 ⇒ 引擎族头 / 引擎标量 / 字符串伪变量都不报未定义名', () => {
+    const { slots } = activatePlugin(fakeIO({ [erb]: text }));
+    const deco = slots.find((s) => s.kind === 'ui.editor.decorator' && s.contribution.id === 'erb-semantics')
+      ?.contribution.decorate;
+    const found = ((deco?.({ path: erb, text, project: null }) as LineDecoration[] | undefined) ?? [])
+      .filter((d) => d.code === 'ERB_UNDEFINED_NAME');
+    expect(found).toEqual([]);
+  });
+});
