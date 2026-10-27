@@ -198,6 +198,154 @@ export function pinPreview(preview: string | null, path: string): string | null 
 
 /* ------------------------------ 拖拽重排与分界（C2） ------------------------------ */
 
+/**
+ * 标签拖拽的自定义 MIME（1027 跨组批：从 `tabs-bar.tsx` 组件内提到这里）。
+ *
+ * 两个理由：跨组的落点（标签行 / 标签栏空白 / 空组正文）分居三个模块，MIME 必须
+ * 有一份共享真源；而判别载荷形状（组 id + 路径）是纯逻辑，应当可单测。
+ */
+export const TAB_DRAG_MIME = 'application/x-kojo-tab-move';
+
+/**
+ * 一次标签拖拽的载荷：**源组 id + 路径**。
+ * 只有路径不够用——同一个文件可以同时开在两个组里，跨组移动要知道"从哪一组拿走的"。
+ */
+export interface TabDragPayload {
+  readonly groupId: string | null;
+  readonly path: string;
+}
+
+/** 拖拽载荷编码（dragstart 时写进 dataTransfer） */
+export function encodeTabDragPayload(groupId: string | null, path: string): string {
+  return JSON.stringify({ groupId, path });
+}
+
+/**
+ * 拖拽载荷解码：**损坏容忍**——非 JSON（旧版载荷就是一条裸路径）或形状不对时，
+ * 把原文整条当路径收下（`groupId: null` = 源组未知）；只有空串回 `null`
+ * （空串代表"这不是一次标签拖拽"，不是"路径为空"）。
+ */
+export function decodeTabDragPayload(raw: string): TabDragPayload | null {
+  if (raw === '') return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const rec = parsed as Record<string, unknown>;
+      if (typeof rec.path === 'string' && rec.path !== '') {
+        const gid = rec.groupId;
+        return { groupId: typeof gid === 'string' && gid !== '' ? gid : null, path: rec.path };
+      }
+    }
+  } catch {
+    // 非 JSON：落到下面的裸路径分支
+  }
+  return { groupId: null, path: raw };
+}
+
+/**
+ * 一次拖放的落点事实：目标组 + 该组标签 + 命中的标签（`null` = 空白处 ⇒ 追加到末尾）
+ * + 命中标签的左半/右半。
+ */
+export interface TabDropTarget {
+  readonly groupId: string;
+  readonly tabs: readonly string[];
+  readonly targetPath: string | null;
+  readonly before: boolean;
+}
+
+/** 落点计划的三态：无操作 / 组内重排 / 跨组移动 */
+export type TabDropKind = 'none' | 'reorder' | 'move';
+
+export interface TabDropPlan {
+  readonly kind: TabDropKind;
+  readonly path: string;
+  /** 源组（拖拽载荷给的；`null` = 未知，跨组时调用方据此决定不做） */
+  readonly fromGroupId: string | null;
+  readonly toGroupId: string | null;
+  /**
+   * 两种语义各归各：
+   * - `reorder`：**删除后插入**下标（移除 path 之后的数组为基准，旧口径）；
+   * - `move`：目标组的**插入下标**（源组那边删掉一个位置不参与修正——跨组不是同一个数组）。
+   */
+  readonly toIndex: number;
+}
+
+const NO_TAB_DROP: TabDropPlan = {
+  kind: 'none',
+  path: '',
+  fromGroupId: null,
+  toGroupId: null,
+  toIndex: 0,
+};
+
+/**
+ * 拖放落点计划（纯函数；只算不动手）。
+ *
+ * - **同组**：落点折算成删除后插入下标，与 `planReorder` 的既有语义逐字一致
+ *   （`from === to` 视为无操作，调用方不必再去重）；
+ * - **跨组**：插入下标 = 命中标签的下标（左半）/ 下标 + 1（右半），**不做**同组那种
+ *   删除位移修正；空白处 = 追加到目标组末尾。源组未知（旧版裸路径载荷且本组没开它）
+ *   ⇒ 无操作：不猜它是从哪一组来的。
+ * - **落空**（命中标签不在目标组 / 载荷为空）⇒ 无操作。
+ */
+export function planTabDrop(drag: TabDragPayload | null, target: TabDropTarget): TabDropPlan {
+  if (drag === null) return NO_TAB_DROP;
+  let insert: number;
+  if (target.targetPath === null) {
+    insert = target.tabs.length;
+  } else {
+    const hit = target.tabs.indexOf(target.targetPath);
+    if (hit < 0) return NO_TAB_DROP;
+    insert = hit + (target.before ? 0 : 1);
+  }
+  // 同组判定：载荷带组 id 就比 id；旧版裸路径载荷（groupId null）看本组开没开它
+  const sameGroup =
+    drag.groupId !== null ? drag.groupId === target.groupId : target.tabs.includes(drag.path);
+  if (!sameGroup) {
+    if (drag.groupId === null) return NO_TAB_DROP;
+    return {
+      kind: 'move',
+      path: drag.path,
+      fromGroupId: drag.groupId,
+      toGroupId: target.groupId,
+      toIndex: insert,
+    };
+  }
+  const from = target.tabs.indexOf(drag.path);
+  if (from < 0) return NO_TAB_DROP;
+  const to = from < insert ? insert - 1 : insert;
+  if (to === from) return NO_TAB_DROP;
+  return {
+    kind: 'reorder',
+    path: drag.path,
+    fromGroupId: target.groupId,
+    toGroupId: target.groupId,
+    toIndex: to,
+  };
+}
+
+/**
+ * 把插入下标钳进**固定区 / 非固定区**（跨组移动复用「固定区在前」的不变量）。
+ *
+ * 目标组里固定标签的条数就是分界：被移动标签自己是固定标签 ⇒ 只能落在
+ * `[0, pinnedCount]`；否则只能落在 `[pinnedCount, len]`。与 `applyPin` /
+ * `planReorder` 是同一份顺序口径（分界由 pinned 集合现算，不另存一份）。
+ */
+export function clampIndexToPinZone(
+  tabs: readonly string[],
+  toIndex: number,
+  pinnedTarget: boolean,
+  pinned: ReadonlySet<string>,
+): number {
+  let pinnedCount = 0;
+  for (const p of tabs) if (pinned.has(p)) pinnedCount++;
+  const lo = pinnedTarget ? 0 : pinnedCount;
+  const hi = pinnedTarget ? pinnedCount : tabs.length;
+  // 非数值（宿主没给落点）按"落在该段末尾"处理，不把 NaN 传进 splice
+  if (!Number.isFinite(toIndex)) return hi;
+  return Math.max(lo, Math.min(toIndex, hi));
+}
+
 export interface ReorderPlan {
   readonly order: readonly string[];
   /** 跨分界拖放 ⇒ 自动改固定态（非固定拖进固定区 = pin；固定拖出 = unpin）；null = 不变 */
@@ -252,6 +400,9 @@ export type TabMenuItemId =
   | 'copy-name'
   | 'reveal'
   | 'open-in-new-group'
+  | 'move-to-group'
+  /** 「移动到组」的子项：`move-to-group:<目标组 id>`（组 id 由宿主分配，这里不猜） */
+  | `move-to-group:${string}`
   | 'split-right'
   | 'split-down';
 
@@ -275,6 +426,17 @@ export interface TabMenuFacts {
   readonly canSplit: boolean;
   /** 有项目根 ⇒ 「复制相对路径」才有基准（没有 ⇒ 整项不显示，免得拷出误导的半截路径） */
   readonly hasRoot: boolean;
+  /**
+   * **其他**编辑器组（1027 跨组批）：「移动到组」子菜单的来源。
+   * 空数组 = 只有一个组 ⇒ 该项灰着并说明原因（铁律 4：不可用必须让人看见为什么）。
+   */
+  readonly otherGroups: readonly TabMenuGroupRef[];
+}
+
+/** 菜单里显示的另一组：id 给动作，label 由调用方给（如「第 2 组」），本模块不编号 */
+export interface TabMenuGroupRef {
+  readonly id: string;
+  readonly label: string;
 }
 
 /**
@@ -328,18 +490,15 @@ export function tabMenuItemsFor(facts: TabMenuFacts): ContextMenuItem[] {
   }
 
   // ---- 分屏 / 分组类 ----
-  // 「移动到其他组」不着陆：App 只有「拆开/关组」的组态纯函数，没有「把标签搬进另一组」
-  // 的动作——按铁律「能力不存在 ⇒ 整项不显示」，这里刻意不画。
+  // 这一段的**段首分隔线**：「在新编辑器组打开」要命令通道，「移动到组」不要——
+  // 两条此消彼长，所以由「谁先出现谁带」（下面那条 `canSplit` 判断）。
   if (facts.canSplit) {
     items.push({ id: 'open-in-new-group', label: '在新编辑器组打开', dividerBefore: true });
   }
-  // 没有「在新编辑器组打开」时（命令通道不在），第一枚拆分项自己带分隔线
-  const firstInGroup = facts.canSplit ? {} : { dividerBefore: true };
-  const splitRight = runnableCommandItem(
-    'workbench.splitEditor',
-    { id: 'split-right', ...firstInGroup },
-    facts.canSplit,
-  );
+  // 「移动到组」：动作来自宿主（App 的 moveTabBetweenGroups + editor-groups 纯函数），
+  // 与命令通道无关；单组时灰着并说清原因，不给"按了没反应"的幽灵入口。
+  items.push(moveToGroupMenuItem(facts, facts.canSplit ? {} : { dividerBefore: true }));
+  const splitRight = runnableCommandItem('workbench.splitEditor', { id: 'split-right' }, facts.canSplit);
   if (splitRight !== null) items.push(splitRight);
   const splitDown = runnableCommandItem(
     'workbench.splitEditorDown',
@@ -349,6 +508,35 @@ export function tabMenuItemsFor(facts: TabMenuFacts): ContextMenuItem[] {
   if (splitDown !== null) items.push(splitDown);
 
   return items;
+}
+
+/**
+ * 「移动到组」子菜单（1027 跨组批）。
+ *
+ * 子项 id 形如 `move-to-group:<目标组 id>`——目标组身份是宿主分配的 id，菜单不复制
+ * 「第几组」的编号规则（label 由调用方按数组序给），也不把路径塞进 id（带盘符冒号）。
+ */
+function moveToGroupMenuItem(facts: TabMenuFacts, overrides: Partial<ContextMenuItem>): ContextMenuItem {
+  const base: ContextMenuItem = { id: 'move-to-group', label: '移动到组', ...overrides };
+  if (facts.otherGroups.length === 0) {
+    return {
+      ...base,
+      disabled: true,
+      disabledReason: '没有其他编辑器组（先向右或向下拆分）',
+    };
+  }
+  return {
+    ...base,
+    children: facts.otherGroups.map((g) => ({ id: `move-to-group:${g.id}`, label: g.label })),
+  };
+}
+
+/** 「移动到组」子项 id → 目标组 id（`null` = 不是该子菜单的子项 / 父项本身） */
+export function moveToGroupTargetOf(id: string): string | null {
+  const prefix = 'move-to-group:';
+  if (!id.startsWith(prefix)) return null;
+  const target = id.slice(prefix.length);
+  return target === '' ? null : target;
 }
 
 /* --------------------- 右键菜单：标签栏空白区 / 编辑器组头（1023） --------------------- */

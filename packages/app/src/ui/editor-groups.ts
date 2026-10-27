@@ -12,7 +12,7 @@
  * 这里只提供「给一份旧态 + 一个意图 ⇒ 返回一份新态」的纯函数——与
  * `editor-groups.test.ts` 的闭环口径一一对应。
  */
-import { planPreviewOpen } from './tabs-ops';
+import { clampIndexToPinZone, planPreviewOpen } from './tabs-ops';
 
 /** 一个编辑器组：自己的标签栈 + 组内激活标签 */
 export interface EditorGroupState {
@@ -233,6 +233,58 @@ export function closeGroup(state: EditorGroupsState, groupId: string): EditorGro
   const groups = state.groups.filter((g) => g.id !== groupId);
   const activeGroupId = state.activeGroupId === groupId ? neighborGroupId(state, groupId) : state.activeGroupId;
   return { groups, activeGroupId, orientation: state.orientation };
+}
+
+/**
+ * 把一枚标签从一组**搬到**另一组（1027 跨组批：拖拽标签到别组 / 右键「移动到组」）。
+ *
+ * 规则（每条都有单测钉着）：
+ * - 两组合法、from ≠ to、path 在源组；任一不成立 ⇒ 原样返回同一引用（调用方可跳过 setState）；
+ * - 目标组**已有**同路径：不重复造标签——源组移除，目标组把它激活（一份文件两条标签是假象）；
+ * - 保持「固定区在前」：插入下标经 `clampIndexToPinZone` 钳进被移动标签所属的那一段
+ *   （固定 ⇄ 固定区、非固定 ⇄ 非固定区；**显式移动不改固定态**，改态只发生在组内拖拽跨分界）；
+ * - 源组激活标签被搬走 ⇒ 落右邻居 / 末尾左邻（复用 `neighborOf`）；
+ * - 源组变空**不回收**：移动不是关闭，作者还要能拖回来（关空的回收只属于 closeTabsInGroup）；
+ * - 移动即显式使用：源组的预览态清空，目标组不把它设成预览（拖/右键 = 转正）；
+ * - 焦点跟到目标组，目标组激活 = 被移动标签。
+ */
+export function moveTabBetweenGroups(
+  state: EditorGroupsState,
+  path: string,
+  fromGroupId: string,
+  toGroupId: string,
+  toIndex: number,
+  pinned: ReadonlySet<string>,
+): EditorGroupsState {
+  if (fromGroupId === toGroupId) return state;
+  const from = state.groups.find((g) => g.id === fromGroupId);
+  const to = state.groups.find((g) => g.id === toGroupId);
+  if (!from || !to || !from.tabs.includes(path)) return state;
+
+  const remaining = from.tabs.filter((p) => p !== path);
+  const gone = new Set([path]);
+  const fromActive = neighborOf(from.tabs, gone, from.active);
+  // 预览是"只是瞄一眼"：被显式搬走 = 转正（源组不再留预览，目标组也不接这一态）
+  const fromPreview = from.preview === path ? null : from.preview ?? null;
+
+  let toTabs: readonly string[];
+  if (to.tabs.includes(path)) {
+    toTabs = to.tabs;
+  } else {
+    const at = clampIndexToPinZone(to.tabs, toIndex, pinned.has(path), pinned);
+    const next = [...to.tabs];
+    next.splice(at, 0, path);
+    toTabs = next;
+  }
+
+  const groups = state.groups.map((g): EditorGroupState => {
+    if (g.id === fromGroupId) return { ...g, tabs: remaining, active: fromActive, preview: fromPreview };
+    if (g.id === toGroupId) {
+      return { ...g, tabs: toTabs, active: path, preview: g.preview === path ? null : g.preview ?? null };
+    }
+    return g;
+  });
+  return { groups, activeGroupId: toGroupId, orientation: state.orientation };
 }
 
 /** 焦点切换（点击某组任意处 / 命令聚焦） */

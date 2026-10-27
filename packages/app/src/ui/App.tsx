@@ -104,6 +104,7 @@ import {
   splitActiveDown,
   splitActiveRight,
   closeGroup as closeEditorGroup,
+  moveTabBetweenGroups as moveTabBetweenGroupsState,
   type EditorGroupsState,
 } from './editor-groups';
 // 导航历史（MM-6 前进/后退 + MM-10 恢复关闭的标签）：纯逻辑单源，App 是唯一状态所有者
@@ -1985,6 +1986,37 @@ export function App(): ReactElement {
     }
   }, []);
 
+  /**
+   * 跨组移动标签（1027：拖拽到别组 / 右键「移动到组」）。
+   *
+   * 规则全在 `editor-groups.moveTabBetweenGroups`（固定区钳位 / 源组邻居落点 / 空组不回收 /
+   * 预览转正），这里只负责三件宿主的事：定位清除（焦点与激活都换了组）、组态写回、
+   * 以及 MRU 账（源组摘掉、目标组按 `activateTabInGroup` 同一条 touchMru 口径置顶）。
+   */
+  const moveTabBetweenGroups = useCallback(
+    (path: string, fromGroupId: string, toGroupId: string, toIndex?: number) => {
+      const prev = editorGroupsRef.current;
+      const dest = prev.groups.find((g) => g.id === toGroupId);
+      const at = toIndex ?? dest?.tabs.length ?? 0;
+      const next = moveTabBetweenGroupsState(prev, path, fromGroupId, toGroupId, at, pinnedRef.current);
+      if (next === prev) return; // 无操作（同组 / 状态已变）：连 return 都不惊动渲染
+      if (
+        prev.activeGroupId !== next.activeGroupId ||
+        activeGroupOf(prev).active !== activeGroupOf(next).active
+      ) {
+        setReveal(null);
+      }
+      setEditorGroups(next);
+      const fromMru = (mruRef.current[fromGroupId] ?? []).filter((p) => p !== path);
+      mruRef.current = {
+        ...mruRef.current,
+        [fromGroupId]: fromMru,
+        [toGroupId]: touchMru(mruRef.current[toGroupId] ?? [], path),
+      };
+    },
+    [],
+  );
+
   /** 全部保存（Ctrl+Shift+S；壳层命令经 ProjectView 注入；SPLIT-1 起跨组逐组保存） */
   const saveAll = useCallback(async (): Promise<boolean> => {
     for (const a of actionsByGroupRef.current.values()) {
@@ -2322,6 +2354,7 @@ export function App(): ReactElement {
             onReorderTabInGroup={reorderTabInGroup}
             onTogglePinInGroup={togglePinInGroup}
             onBatchCloseTabInGroup={batchCloseInGroup}
+            onMoveTabBetweenGroups={moveTabBetweenGroups}
             onSplitEditor={splitEditor}
             onSplitEditorDown={splitEditorDown}
             onSetGroupsOrientation={setGroupsOrientationDir}

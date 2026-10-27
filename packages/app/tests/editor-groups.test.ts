@@ -11,6 +11,7 @@ import {
   closeGroup,
   closeTabsInGroup,
   initialEditorGroups,
+  moveTabBetweenGroups,
   openInActiveGroup,
   restoreGroups,
   serializeGroups,
@@ -369,5 +370,167 @@ describe('编辑器组态 · 持久化往返（MM-9）', () => {
     })!;
     expect(back.groups[0]!.tabs).toEqual(['a.erb', 'b.erb']);
     expect(back.groups[0]!.active).toBe('b.erb');
+  });
+});
+
+/* --------------------- 1027 跨组批：标签搬组（拖拽 / 右键「移动到组」） --------------------- */
+
+/** 两组夹具：g1 = a b c（激活 b），g2 = x y（激活 x）；焦点在 g1 */
+const twoGroups = (): EditorGroupsState => ({
+  groups: [
+    { id: 'g1', tabs: ['a', 'b', 'c'], active: 'b' },
+    { id: 'g2', tabs: ['x', 'y'], active: 'x' },
+  ],
+  activeGroupId: 'g1',
+  orientation: 'row',
+});
+
+const groupById = (s: EditorGroupsState, id: string) => s.groups.find((g) => g.id === id)!;
+
+describe('moveTabBetweenGroups · 跨组移动基础', () => {
+  it('搬到目标组指定下标；焦点跟到目标组，目标组激活被移动标签', () => {
+    const s = twoGroups();
+    const next = moveTabBetweenGroups(s, 'b', 'g1', 'g2', 1, new Set());
+    expect(groupById(next, 'g1').tabs).toEqual(['a', 'c']);
+    expect(groupById(next, 'g2').tabs).toEqual(['x', 'b', 'y']);
+    expect(groupById(next, 'g2').active).toBe('b');
+    expect(next.activeGroupId).toBe('g2');
+    // 源组激活是 b（被搬走）⇒ 落右邻居 c
+    expect(groupById(next, 'g1').active).toBe('c');
+    // 入参不变
+    expect(groupById(s, 'g1').tabs).toEqual(['a', 'b', 'c']);
+  });
+
+  it('下标越界钳到目标组末尾', () => {
+    const next = moveTabBetweenGroups(twoGroups(), 'b', 'g1', 'g2', 99, new Set());
+    expect(groupById(next, 'g2').tabs).toEqual(['x', 'y', 'b']);
+  });
+
+  it('源组激活落右邻；搬走的是末尾 ⇒ 落左邻', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['a', 'b'], active: 'b' },
+        { id: 'g2', tabs: [], active: null },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'b', 'g1', 'g2', 0, new Set());
+    expect(groupById(next, 'g1').active).toBe('a');
+  });
+
+  it('源组变空**不回收**（移动不是关闭，作者还能拖回来）', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['a'], active: 'a' },
+        { id: 'g2', tabs: ['x'], active: 'x' },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'a', 'g1', 'g2', 1, new Set());
+    expect(next.groups).toHaveLength(2);
+    expect(groupById(next, 'g1').tabs).toEqual([]);
+    expect(groupById(next, 'g1').active).toBeNull();
+  });
+
+  it('目标组已有同路径：不重复造标签，源组移除并在目标组激活', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['a', 'b'], active: 'a' },
+        { id: 'g2', tabs: ['x', 'b'], active: 'x' },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'b', 'g1', 'g2', 0, new Set());
+    expect(groupById(next, 'g1').tabs).toEqual(['a']);
+    expect(groupById(next, 'g2').tabs).toEqual(['x', 'b']);
+    expect(groupById(next, 'g2').active).toBe('b');
+    expect(next.activeGroupId).toBe('g2');
+  });
+});
+
+describe('moveTabBetweenGroups · 固定区钳位（固定区在前的不变量）', () => {
+  it('非固定标签只能落在固定区之后（toIndex 0 被钳到分界）', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['u'], active: 'u' },
+        { id: 'g2', tabs: ['p1', 'p2', 'x'], active: 'x' },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'u', 'g1', 'g2', 0, new Set(['p1', 'p2']));
+    expect(groupById(next, 'g2').tabs).toEqual(['p1', 'p2', 'u', 'x']);
+  });
+
+  it('固定标签只能落在固定区内（toIndex 末尾被钳到固定区末尾）', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['q', 'a'], active: 'a' },
+        { id: 'g2', tabs: ['p1', 'x'], active: 'x' },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'q', 'g1', 'g2', 5, new Set(['q', 'p1']));
+    expect(groupById(next, 'g2').tabs).toEqual(['p1', 'q', 'x']);
+  });
+
+  it('显式移动不改固定态（pinned 集合只读，落点被钳而不是改态）', () => {
+    const pinned = new Set(['p1']);
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['u'], active: 'u' },
+        { id: 'g2', tabs: ['p1', 'x'], active: 'x' },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    moveTabBetweenGroups(s, 'u', 'g1', 'g2', 1, pinned);
+    expect([...pinned]).toEqual(['p1']);
+  });
+});
+
+describe('moveTabBetweenGroups · 预览态与无操作', () => {
+  it('源组预览清空；目标组不把搬来的标签设成预览（显式移动 = 转正）', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['a', 'b'], active: 'b', preview: 'b' },
+        { id: 'g2', tabs: [], active: null },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'b', 'g1', 'g2', 0, new Set());
+    expect(groupById(next, 'g1').preview).toBeNull();
+    expect(groupById(next, 'g2').preview ?? null).toBeNull();
+  });
+
+  it('目标组原有的预览态不受影响（搬来的不是它）', () => {
+    const s: EditorGroupsState = {
+      groups: [
+        { id: 'g1', tabs: ['a', 'b'], active: 'b' },
+        { id: 'g2', tabs: ['x'], active: 'x', preview: 'x' },
+      ],
+      activeGroupId: 'g1',
+      orientation: 'row',
+    };
+    const next = moveTabBetweenGroups(s, 'a', 'g1', 'g2', 1, new Set());
+    expect(groupById(next, 'g2').preview).toBe('x');
+  });
+
+  it('无操作时返回同一引用：同组 / 源组不存在 / 目标组不存在 / path 不在源组', () => {
+    const s = twoGroups();
+    expect(moveTabBetweenGroups(s, 'b', 'g1', 'g1', 0, new Set())).toBe(s);
+    expect(moveTabBetweenGroups(s, 'b', 'ghost', 'g2', 0, new Set())).toBe(s);
+    expect(moveTabBetweenGroups(s, 'b', 'g1', 'ghost', 0, new Set())).toBe(s);
+    expect(moveTabBetweenGroups(s, 'nope', 'g1', 'g2', 0, new Set())).toBe(s);
+  });
+
+  it('排列方向原样保留', () => {
+    const s: EditorGroupsState = { ...twoGroups(), orientation: 'column' };
+    expect(moveTabBetweenGroups(s, 'b', 'g1', 'g2', 0, new Set()).orientation).toBe('column');
   });
 });

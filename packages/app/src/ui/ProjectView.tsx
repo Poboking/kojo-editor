@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, GameProject, OpJournal, UIPanelContribution } from '@kojo/plugin-api';
 import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
@@ -39,6 +39,7 @@ import { setKojoXmlSchemaSource } from '../monaco/kojo-xml-providers';
 import type { KojoXmlService } from '@kojo/plugin-api';
 import type { ActiveFileSymbolSource } from './palette-search';
 import type { BatchCloseMode, OpenFileOptions } from './tabs-ops';
+import { TAB_DRAG_MIME, decodeTabDragPayload, type TabMenuGroupRef } from './tabs-ops';
 import type { EditorGroupState, GroupsOrientation } from './editor-groups';
 
 /**
@@ -86,6 +87,11 @@ interface Props {
   onTogglePinInGroup: (groupId: string, path: string) => void;
   /** 组内批量关闭（先聚焦该组再走既有确认链） */
   onBatchCloseTabInGroup: (groupId: string, mode: BatchCloseMode, anchor: string) => void;
+  /**
+   * 跨组移动一枚标签（1027 跨组批：拖拽标签到别组 / 右键「移动到组」）。
+   * `toIndex` 是**目标组的插入下标**（`undefined` = 追加到末尾）。
+   */
+  onMoveTabBetweenGroups: (path: string, fromGroupId: string, toGroupId: string, toIndex?: number) => void;
   /** 向右拆分（从焦点组，VSCode 同款携带激活标签） */
   onSplitEditor: () => void;
   /** 向下拆分（MM-9：从焦点组，同款携带激活标签；column 下插在下方） */
@@ -210,6 +216,7 @@ interface GroupCallbacks {
   readonly onReorderTab: (p: string, toIndex: number) => void;
   readonly onTogglePin: (p: string) => void;
   readonly onBatchCloseTab: (mode: BatchCloseMode, anchor: string) => void;
+  readonly onMoveTabToGroup: (p: string, targetGroupId: string, toIndex?: number) => void;
 }
 
 /**
@@ -236,6 +243,7 @@ export function ProjectView({
   onReorderTabInGroup,
   onTogglePinInGroup,
   onBatchCloseTabInGroup,
+  onMoveTabBetweenGroups,
   onSplitEditor,
   onSplitEditorDown,
   onSetGroupsOrientation,
@@ -322,6 +330,7 @@ export function ProjectView({
     onReorderTabInGroup,
     onTogglePinInGroup,
     onBatchCloseTabInGroup,
+    onMoveTabBetweenGroups,
   });
   tabHostRef.current = {
     onActivateTabInGroup,
@@ -329,6 +338,7 @@ export function ProjectView({
     onReorderTabInGroup,
     onTogglePinInGroup,
     onBatchCloseTabInGroup,
+    onMoveTabBetweenGroups,
   };
   const groupCbRef = useRef(new Map<string, GroupCallbacks>());
   const callbacksFor = useCallback((gid: string): GroupCallbacks => {
@@ -347,6 +357,8 @@ export function ProjectView({
         onReorderTab: (p, to) => tabHostRef.current.onReorderTabInGroup(gid, p, to),
         onTogglePin: (p) => tabHostRef.current.onTogglePinInGroup(gid, p),
         onBatchCloseTab: (mode, anchor) => tabHostRef.current.onBatchCloseTabInGroup(gid, mode, anchor),
+        onMoveTabToGroup: (p, targetGroupId, toIndex) =>
+          tabHostRef.current.onMoveTabBetweenGroups(p, gid, targetGroupId, toIndex),
       };
       groupCbRef.current.set(gid, cb);
     }
@@ -1152,6 +1164,71 @@ export function ProjectView({
   }, []);
 
   /**
+   * 每组可见的「其他组」清单（1027 跨组批：标签右键「移动到组」子菜单）。
+   *
+   * label 按**数组序**编号（第 N 组 = 排列序第 N 组：row 从左到右、column 从上到下），
+   * 编号规则只此一处；菜单侧只照单显示。memo 的依赖是「组 id 序列」拼成的串：
+   * 组的 id 与顺序不变时数组引用恒定 ⇒ TabBar 的 memo 不被每帧新数组打穿。
+   */
+  const groupIdKey = groups.map((g) => g.id).join('|');
+  const otherGroupsByGroup = useMemo(() => {
+    const refs: TabMenuGroupRef[] = (groupIdKey === '' ? [] : groupIdKey.split('|')).map((id, i) => ({
+      id,
+      label: `第 ${i + 1} 组`,
+    }));
+    const map = new Map<string, readonly TabMenuGroupRef[]>();
+    for (const ref of refs) map.set(ref.id, refs.filter((x) => x.id !== ref.id));
+    return map;
+  }, [groupIdKey]);
+
+  /**
+   * 跨组拖拽落在某一组正文上的高亮（1027）。
+   * 空组没有 TabBar，正文是它**唯一**能接住拖拽的地方（只靠拆分才能往空组放东西的旧限制，
+   * 这一条就是那个缺口的补丁）。
+   */
+  const [bodyDropGroupId, setBodyDropGroupId] = useState<string | null>(null);
+  /**
+   * 组正文的拖放处理（每条都只认标签拖拽的 MIME，编辑器内部的文本拖拽原样放行）。
+   *
+   * 同组拖到正文 = 追加到本组末尾（与拖到标签栏空白同义）；跨组 = 交给宿主搬迁。
+   * 源组未知（旧版裸路径载荷）⇒ 不猜，交给既有行为。
+   */
+  const groupBodyDragHandlers = useCallback(
+    (
+      g: EditorGroupState,
+    ): {
+      onDragOver: (e: ReactDragEvent<HTMLDivElement>) => void;
+      onDragLeave: (e: ReactDragEvent<HTMLDivElement>) => void;
+      onDrop: (e: ReactDragEvent<HTMLDivElement>) => void;
+    } => ({
+      onDragOver: (e) => {
+        if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setBodyDropGroupId((cur) => (cur === g.id ? cur : g.id));
+      },
+      onDragLeave: (e) => {
+        const next = e.relatedTarget;
+        if (next instanceof Node && e.currentTarget.contains(next)) return;
+        setBodyDropGroupId((cur) => (cur === g.id ? null : cur));
+      },
+      onDrop: (e) => {
+        if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
+        setBodyDropGroupId(null);
+        const drag = decodeTabDragPayload(e.dataTransfer.getData(TAB_DRAG_MIME));
+        if (drag === null || drag.groupId === null) return;
+        e.preventDefault();
+        if (drag.groupId !== g.id) {
+          tabHostRef.current.onMoveTabBetweenGroups(drag.path, drag.groupId, g.id, g.tabs.length);
+          return;
+        }
+        tabHostRef.current.onReorderTabInGroup(g.id, drag.path, g.tabs.length);
+      },
+    }),
+    [],
+  );
+
+  /**
    * 一组编辑器的正文（SPLIT-1）。
    *
    * 刻意写成**函数**而不是内联组件：内联组件类型每次 render 都是新的 ⇒ React 整棵子树
@@ -1289,6 +1366,8 @@ export function ProjectView({
                       onReorderTab={tabCb.onReorderTab}
                       onTogglePin={tabCb.onTogglePin}
                       onBatchCloseTab={tabCb.onBatchCloseTab}
+                      otherGroups={otherGroupsByGroup.get(g.id) ?? []}
+                      onMoveTabToGroup={tabCb.onMoveTabToGroup}
                       onSaveAllClick={handleSaveAllClick}
                       hasDirty={dirtyPaths.size > 0}
                     />
@@ -1303,7 +1382,14 @@ export function ProjectView({
                     </button>
                   ) : null}
                 </div>
-                <div className="editor-body">{renderGroupBody(g, focused)}</div>
+                {/* 正文也是跨组拖拽的落点（1027）：空组没有 TabBar，这里是唯一能接住的地方；
+                    只认标签拖拽的 MIME，编辑器内部的文本拖拽不受影响 */}
+                <div
+                  className={bodyDropGroupId === g.id ? 'editor-body tab-drop-target' : 'editor-body'}
+                  {...groupBodyDragHandlers(g)}
+                >
+                  {renderGroupBody(g, focused)}
+                </div>
               </div>
             </Fragment>
           );

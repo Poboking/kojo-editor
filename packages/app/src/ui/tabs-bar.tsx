@@ -11,15 +11,21 @@ import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { TabRow } from './tab-row';
 import {
   CLOSE_SAVED_EMPTY_REASON,
+  TAB_DRAG_MIME,
+  decodeTabDragPayload,
+  encodeTabDragPayload,
   groupMenuItemsFor,
+  moveToGroupTargetOf,
   planCloseSaved,
+  planTabDrop,
   tabListIndexOf,
   tabMenuItemsFor,
   tabName,
   type BatchCloseMode,
   type GroupMenuItemId,
+  type TabDragPayload,
   type TabDropHint,
-  type TabMenuItemId,
+  type TabMenuGroupRef,
 } from './tabs-ops';
 import './context-menu-tabs.css';
 // 跨面动效切片（1026 车道 A）：`tabs-bar.css` 里那条指示条的 scaleX 在减弱档要有得压平。
@@ -86,6 +92,16 @@ export interface TabBarProps {
   onCloseGroup?: (groupId: string) => void;
   /** 项目根（「复制相对路径」的基准；缺省 ⇒ 该项不显示，不拷半截路径） */
   rootDir?: string | null;
+  /**
+   * 其他编辑器组（1027 跨组批）：「移动到组」子菜单的落点；空数组 = 单组
+   * ⇒ 子菜单父项灰着并说明原因。
+   */
+  otherGroups?: readonly TabMenuGroupRef[];
+  /**
+   * 跨组移动落点（拖拽标签到本组 / 右键「移动到组」）。
+   * `toIndex` 是**本组的插入下标**（`undefined` = 追加到末尾）。
+   */
+  onMoveTabToGroup?: (path: string, targetGroupId: string, toIndex?: number) => void;
 }
 
 /* ------------------------- 右键面：按组桥接（多实例安全） ------------------------- */
@@ -103,6 +119,8 @@ export interface TabsMenuBridge {
   readonly dirtyPaths: ReadonlySet<string>;
   readonly pinnedPaths: ReadonlySet<string>;
   readonly rootDir: string | null;
+  /** 其他编辑器组（「移动到组」子菜单的来源；空 = 单组，父项灰着说明原因） */
+  readonly otherGroups: readonly TabMenuGroupRef[];
   /** 组级动作是否有落脚点（宿主给了 `onCloseGroup` 且确实分了屏） */
   readonly canCloseGroup: boolean;
   copyText(text: string, okMessage: string): void;
@@ -114,6 +132,7 @@ export interface TabsMenuBridge {
   saveAll(): void;
   closeGroup(): void;
   reveal(path: string): void;
+  moveToGroup(path: string, targetGroupId: string): void;
 }
 
 const menuBridges = new Map<string, TabsMenuBridge>();
@@ -150,12 +169,14 @@ function tabMenuOf(bridge: TabsMenuBridge, path: string): ContextSurfaceMenu | n
     hasReopen: canRunContextMenuCommand('workbench.reopenClosedTab'),
     canSplit: canRunContextMenuCommand('workbench.splitEditor'),
     hasRoot: bridge.rootDir !== null,
+    otherGroups: bridge.otherGroups,
   });
   if (items.length === 0) return null;
   return {
     items,
     onSelect: (id) => {
-      runTabMenuAction(bridge, path, id as TabMenuItemId);
+      // 子菜单项（`move-to-group:<组 id>`）是动态 id：分发器按前缀认，不枚举
+      runTabMenuAction(bridge, path, id);
     },
   };
 }
@@ -183,7 +204,19 @@ function groupMenuOf(target: HTMLElement): ContextSurfaceMenu | null {
 
 /* ------------------------------ 动作分发（只接既有能力） ------------------------------ */
 
-function runTabMenuAction(bridge: TabsMenuBridge, path: string, id: TabMenuItemId): void {
+/**
+ * 标签行菜单的动作分发（只接既有能力）。
+ *
+ * `id` 收 string 而不是 `TabMenuItemId`：「移动到组」的子项是
+ * `move-to-group:<组 id>`，组 id 由宿主分配、菜单构建时才落地——枚举不进类型，
+ * 按前缀认出目标组即可（`moveToGroupTargetOf`，与构建侧同一份前缀）。
+ */
+function runTabMenuAction(bridge: TabsMenuBridge, path: string, id: string): void {
+  const targetGroup = moveToGroupTargetOf(id);
+  if (targetGroup !== null) {
+    bridge.moveToGroup(path, targetGroup);
+    return;
+  }
   switch (id) {
     case 'close':
       bridge.requestClose(path);
@@ -298,6 +331,16 @@ declareContextSurface({
 });
 
 /**
+ * 当前正在拖的标签（模块级：拖拽是一次性的全局手势，源组与目标组是两个 TabBar 实例，
+ * 组件内 state 传不过去）。
+ *
+ * 为什么不能在 `dragover` 里解密 dataTransfer：浏览器在 dragover 阶段对 `getData`
+ * 返回空串（保护模式），只剩 `types` 可读——"这条拖拽是不是从别的组来的"只能在
+ * dragstart 那一拍记下来。拖拽结束（drop / dragend）即清空。
+ */
+let activeTabDrag: TabDragPayload | null = null;
+
+/**
  * 标签栏（模块级 ⇒ SSR 单测可用，照 FileRows 先例）：标签序列 + 右键面 + 全部保存按钮。
  *
  * - **拖拽重排**：落点指示照旧（drop-before / drop-after）；跨固定区分界的处置
@@ -323,12 +366,25 @@ export const TabBar = memo(function TabBar({
   groupCount = 1,
   onCloseGroup,
   rootDir = null,
+  otherGroups = [],
+  onMoveTabToGroup,
 }: TabBarProps): ReactElement {
   const notify = useNotify();
-  /** 标签拖拽的自定义 MIME（只在标签条内部流转，防外部拖入误触发） */
-  const TAB_DRAG_MIME = 'application/x-kojo-tab-move';
   const tabsRef = useRef<HTMLDivElement | null>(null);
   const [tabDropAt, setTabDropAt] = useState<TabDropHint | null>(null);
+  /**
+   * 别的组的标签正悬在本组上（跨组拖拽的可见反馈）。
+   * 落到空白区时没有标签行可画 drop-before/after，就靠这个类把整条标签栏点亮。
+   */
+  const [crossDragOver, setCrossDragOver] = useState(false);
+
+  /** 这条拖拽是不是从**别的组**来的（dragover 读不到载荷，只能读 dragstart 记下的那份） */
+  const isCrossGroupDrag = useCallback((): boolean => {
+    if (activeTabDrag === null) return false;
+    if (activeTabDrag.groupId !== null) return activeTabDrag.groupId !== groupId;
+    // 旧版裸路径载荷：本组开着它 ⇒ 视作同组（老行为），否则只能当跨组候选
+    return !openTabs.includes(activeTabDrag.path);
+  }, [groupId, openTabs]);
 
   /**
    * 横向溢出判定（L16 可发现性批）：`scrollWidth > clientWidth` 是唯一口径。
@@ -450,36 +506,101 @@ export const TabBar = memo(function TabBar({
   }, []);
 
   /** 以下基回调恒定身份（PS-16）：行的 memo 只看值 props，闭包造行参的事留在行内 */
-  const onTabDragStart = useCallback((e: ReactDragEvent, p: string): void => {
-    e.dataTransfer.setData(TAB_DRAG_MIME, p);
-    e.dataTransfer.setData('text/plain', p);
-    e.dataTransfer.effectAllowed = 'move';
+  const onTabDragStart = useCallback(
+    (e: ReactDragEvent, p: string): void => {
+      const payload = encodeTabDragPayload(groupId, p);
+      activeTabDrag = { groupId, path: p };
+      e.dataTransfer.setData(TAB_DRAG_MIME, payload);
+      e.dataTransfer.setData('text/plain', p);
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    [groupId],
+  );
+  const onTabDragOver = useCallback(
+    (e: ReactDragEvent, p: string): void => {
+      if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // 跨组悬停：整条栏点亮（行上另有 drop-before/after，两者叠加）
+      if (isCrossGroupDrag()) setCrossDragOver(true);
+      const r = e.currentTarget.getBoundingClientRect();
+      const before = e.clientX < r.left + r.width / 2;
+      // 同一个落点不重复写（PS-6 第 7 项）：旧实现每 mousemove 都 `setTabDropAt({...})`
+      // 塞一个新对象 ⇒ 引用必变 ⇒ 标签条每移一个像素整条重渲一次。
+      // 提示位只在 (path, before) 真变化时才有新意义，其余一律原样留着同一份 state。
+      setTabDropAt((cur) => (cur !== null && cur.path === p && cur.before === before ? cur : { path: p, before }));
+    },
+    [isCrossGroupDrag],
+  );
+  /**
+   * 落到某一枚标签上：同组照旧重排（删除后插入语义），跨组交给宿主搬迁。
+   * 落点计划住在 `tabs-ops.planTabDrop`（两套下标语义各归各，单测钉着）。
+   */
+  const onTabDrop = useCallback(
+    (e: ReactDragEvent, p: string): void => {
+      const drag = decodeTabDragPayload(e.dataTransfer.getData(TAB_DRAG_MIME));
+      activeTabDrag = null;
+      setTabDropAt(null);
+      setCrossDragOver(false);
+      if (drag === null) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      const plan = planTabDrop(drag, {
+        groupId,
+        tabs: openTabs,
+        targetPath: p,
+        before: e.clientX < r.left + r.width / 2,
+      });
+      if (plan.kind === 'none') return;
+      e.preventDefault();
+      if (plan.kind === 'move') {
+        if (plan.toGroupId !== null) onMoveTabToGroup?.(plan.path, plan.toGroupId, plan.toIndex);
+        return;
+      }
+      onReorderTab(plan.path, plan.toIndex);
+    },
+    [groupId, openTabs, onMoveTabToGroup, onReorderTab],
+  );
+  /** 标签栏空白处：拖到空处 = 追加到本组末尾（同组 / 跨组都安全） */
+  const onBarDragOver = useCallback(
+    (e: ReactDragEvent<HTMLDivElement>): void => {
+      if (e.target !== e.currentTarget) return; // 行有自己的处理（事件冒泡到本条）
+      if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setTabDropAt(null);
+      if (isCrossGroupDrag()) setCrossDragOver(true);
+    },
+    [isCrossGroupDrag],
+  );
+  const onBarDrop = useCallback(
+    (e: ReactDragEvent<HTMLDivElement>): void => {
+      if (e.target !== e.currentTarget) return;
+      const drag = decodeTabDragPayload(e.dataTransfer.getData(TAB_DRAG_MIME));
+      activeTabDrag = null;
+      setTabDropAt(null);
+      setCrossDragOver(false);
+      if (drag === null) return;
+      const plan = planTabDrop(drag, { groupId, tabs: openTabs, targetPath: null, before: false });
+      if (plan.kind === 'none') return;
+      e.preventDefault();
+      if (plan.kind === 'move') {
+        if (plan.toGroupId !== null) onMoveTabToGroup?.(plan.path, plan.toGroupId, plan.toIndex);
+        return;
+      }
+      onReorderTab(plan.path, plan.toIndex);
+    },
+    [groupId, openTabs, onMoveTabToGroup, onReorderTab],
+  );
+  const onBarDragLeave = useCallback((e: ReactDragEvent<HTMLDivElement>): void => {
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget.contains(next)) return;
+    setCrossDragOver(false);
   }, []);
-  const onTabDragOver = useCallback((e: ReactDragEvent, p: string): void => {
-    if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const r = e.currentTarget.getBoundingClientRect();
-    const before = e.clientX < r.left + r.width / 2;
-    // 同一个落点不重复写（PS-6 第 7 项）：旧实现每 mousemove 都 `setTabDropAt({...})`
-    // 塞一个新对象 ⇒ 引用必变 ⇒ 标签条每移一个像素整条重渲一次。
-    // 提示位只在 (path, before) 真变化时才有新意义，其余一律原样留着同一份 state。
-    setTabDropAt((cur) => (cur !== null && cur.path === p && cur.before === before ? cur : { path: p, before }));
-  }, []);
-  const onTabDrop = useCallback((e: ReactDragEvent, p: string): void => {
-    const dragPath = e.dataTransfer.getData(TAB_DRAG_MIME);
+  const onTabDragEnd = useCallback((): void => {
+    activeTabDrag = null;
     setTabDropAt(null);
-    if (!dragPath || dragPath === p) return;
-    e.preventDefault();
-    const from = openTabs.indexOf(dragPath);
-    let to = openTabs.indexOf(p);
-    if (from < 0 || to < 0) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    if (e.clientX >= r.left + r.width / 2) to++;
-    if (from < to) to--;
-    if (from !== to) onReorderTab(dragPath, to);
-  }, [openTabs, onReorderTab]);
-  const onTabDragEnd = useCallback((): void => setTabDropAt(null), []);
+    setCrossDragOver(false);
+  }, []);
 
   /** 复制一段文本并给一句轻反馈（照 FileTree copyText 口径：没有剪贴板就说人话） */
   const copyText = useCallback((text: string, okMessage: string): void => {
@@ -530,6 +651,7 @@ export const TabBar = memo(function TabBar({
     dirtyPaths,
     pinnedPaths,
     rootDir,
+    otherGroups,
     canCloseGroup: onCloseGroup !== undefined && groupCount > 1,
     copyText,
     activate: onActivateTab,
@@ -540,6 +662,7 @@ export const TabBar = memo(function TabBar({
     saveAll: onSaveAllClick,
     closeGroup: () => onCloseGroup?.(groupId),
     reveal: revealPath,
+    moveToGroup: (path, targetGroupId) => onMoveTabToGroup?.(path, targetGroupId),
   };
   const bridgeRef = useRef<TabsMenuBridge>(bridgeFields);
   Object.assign(bridgeRef.current, bridgeFields);
@@ -549,10 +672,13 @@ export const TabBar = memo(function TabBar({
     <div className="editor-tabs-bar">
       <div
         ref={tabsRef}
-        className="editor-tabs"
+        className={crossDragOver ? 'editor-tabs tab-drop-target' : 'editor-tabs'}
         role="tablist"
         data-context-surface="tab-bar-blank"
         data-group-id={groupId}
+        onDragOver={onBarDragOver}
+        onDragLeave={onBarDragLeave}
+        onDrop={onBarDrop}
         onWheel={(e) => {
           // 垂直滚轮转横向滚动（现代编辑器的无感横滚；滚动条隐藏后这是主要滚动途径）
           if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {

@@ -31,7 +31,7 @@ import {
 } from '../src/ui/tabs-ops';
 import { registerTabsMenuBridge, type TabsMenuBridge } from '../src/ui/tabs-bar';
 
-/** 最保守的事实：只剩「恒在」的那些项 */
+/** 最保守的事实：只剩「恒在」的那些项（1027 起含跨组入口，单组时它灰着） */
 const TAB_FACTS: TabMenuFacts = {
   pinned: false,
   hasSaved: true,
@@ -39,6 +39,7 @@ const TAB_FACTS: TabMenuFacts = {
   hasReopen: false,
   canSplit: false,
   hasRoot: false,
+  otherGroups: [],
 };
 
 const ids = (items: readonly ContextMenuItem[]): string[] => items.map((i) => i.id);
@@ -48,7 +49,7 @@ const byId = (items: readonly ContextMenuItem[], id: string): ContextMenuItem | 
 /* ------------------------------ 标签行菜单 ------------------------------ */
 
 describe('tabMenuItemsFor · 项集合', () => {
-  it('缺省事实：关闭类五项 · 固定 · 复制两档 · 拆分两项（无新能力时的常态）', () => {
+  it('缺省事实：关闭类五项 · 固定 · 复制两档 · 移动到组 · 拆分两项', () => {
     expect(ids(tabMenuItemsFor(TAB_FACTS))).toEqual([
       'close',
       'close-others',
@@ -58,6 +59,7 @@ describe('tabMenuItemsFor · 项集合', () => {
       'toggle-pin',
       'copy-path',
       'copy-name',
+      'move-to-group',
       'split-right',
       'split-down',
     ]);
@@ -130,7 +132,11 @@ describe('tabMenuItemsFor · 项集合', () => {
     }
   });
 
-  it('「移动标签到其他组」不在表里（App 没有这条动作，按铁律不画幽灵入口）', () => {
+  it('「移动到组」：单组时灰着说原因；分屏时出「第 N 组」子菜单（1027 跨组批）', () => {
+    const single = byId(tabMenuItemsFor(TAB_FACTS), 'move-to-group');
+    expect(single?.disabled).toBe(true);
+    expect(single?.disabledReason).toBe('没有其他编辑器组（先向右或向下拆分）');
+
     const all = tabMenuItemsFor({
       pinned: true,
       hasSaved: true,
@@ -138,8 +144,11 @@ describe('tabMenuItemsFor · 项集合', () => {
       hasReopen: true,
       canSplit: true,
       hasRoot: true,
+      otherGroups: [{ id: 'eg-3', label: '第 3 组' }],
     });
-    expect(ids(all)).not.toContain('move-to-group');
+    const item = byId(all, 'move-to-group');
+    expect(item?.disabled).toBeUndefined();
+    expect(item?.children).toEqual([{ id: 'move-to-group:eg-3', label: '第 3 组' }]);
   });
 });
 
@@ -151,6 +160,7 @@ describe('tabMenuItemsFor · 文案与键位', () => {
     hasReopen: true,
     canSplit: true,
     hasRoot: true,
+    otherGroups: [{ id: 'eg-2', label: '第 2 组' }],
   });
 
   it('全部 label 含中文（中文化守卫一条都不丢）', () => {
@@ -312,6 +322,7 @@ const makeBridge = (overrides: Partial<TabsMenuBridge> = {}): BridgeSpies => {
     dirtyPaths: new Set<string>(),
     pinnedPaths: new Set<string>(),
     rootDir: 'C:/koa',
+    otherGroups: [{ id: 'eg-2', label: '第 2 组' }],
     canCloseGroup: true,
     copyText,
     activate,
@@ -322,6 +333,7 @@ const makeBridge = (overrides: Partial<TabsMenuBridge> = {}): BridgeSpies => {
     saveAll,
     closeGroup,
     reveal: vi.fn(),
+    moveToGroup: vi.fn(),
     ...overrides,
   };
   return { bridge, copyText, activate, requestClose, batchClose, closeSaved, closeGroup, saveAll };
@@ -460,5 +472,16 @@ describe('三级路由 · 选中项落到既有动作', () => {
     expect(spies.batchClose).toHaveBeenCalledWith('right', 'C:/koa/b.ERB');
     route?.onSelect('close-all');
     expect(spies.batchClose).toHaveBeenCalledWith('all', 'C:/koa/b.ERB');
+  });
+
+  it('「移动到组」子项：前缀解出目标组，落到桥的 moveToGroup（1027）', () => {
+    const moveToGroup = vi.fn();
+    const spies = makeBridge({ moveToGroup });
+    dispose = registerTabsMenuBridge(spies.bridge);
+    const { tab } = mountGroup();
+    const route = buildContextMenuRoute(tab, event());
+    expect(route?.items.map((i) => i.id)).toContain('move-to-group');
+    route?.onSelect('move-to-group:eg-2');
+    expect(moveToGroup).toHaveBeenCalledWith('C:/koa/b.ERB', 'eg-2');
   });
 });

@@ -195,6 +195,10 @@ const TAB_FACTS: TabMenuFacts = {
   hasReopen: true,
   canSplit: true,
   hasRoot: true,
+  otherGroups: [
+    { id: 'eg-2', label: '第 2 组' },
+    { id: 'eg-3', label: '第 3 组' },
+  ],
 };
 
 const GROUP_FACTS: GroupMenuFacts = {
@@ -692,6 +696,10 @@ describe('标签栏 · 经真实路由逐 id 分发', () => {
     dirtyPaths: new Set<string>(),
     pinnedPaths: new Set<string>(),
     rootDir: 'C:/koa',
+    otherGroups: [
+      { id: 'eg-2', label: '第 2 组' },
+      { id: 'eg-3', label: '第 3 组' },
+    ],
     canCloseGroup: true,
     copyText: (_text, _ok) => calls.push('copyText'),
     activate: () => calls.push('activate'),
@@ -702,6 +710,7 @@ describe('标签栏 · 经真实路由逐 id 分发', () => {
     saveAll: () => calls.push('saveAll'),
     closeGroup: () => calls.push('closeGroup'),
     reveal: () => calls.push('reveal'),
+    moveToGroup: (_path, groupId) => calls.push(`moveToGroup:${groupId}`),
   };
   let unregister: () => void = () => {};
 
@@ -743,12 +752,22 @@ describe('标签栏 · 经真实路由逐 id 分发', () => {
     const row = mount({ 'data-context-surface': 'tabs', 'data-group-id': 'g1', 'data-tab-path': 'C:/koa/b.ERB' });
     const route = buildContextMenuRoute(row, contextEvent());
     expect(route?.source).toBe('tabs');
-    const ids = route!.items.map((i) => i.id);
-    expect(ids.length).toBeGreaterThan(0);
-    for (const id of ids) {
+    const items = route!.items;
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      // 子菜单父项（移动到组）只负责展开，不派发（渲染侧点它开子菜单）——
+      // 它的子项逐个喂（动态 id 走前缀分发）
+      if (item.children !== undefined && item.children.length > 0) {
+        for (const child of item.children) {
+          calls.length = 0;
+          route!.onSelect(child.id);
+          expect(calls.length, `标签行子菜单 ${child.id} 点了没反应`).toBeGreaterThan(0);
+        }
+        continue;
+      }
       calls.length = 0;
-      route!.onSelect(id);
-      expect(calls.length, `标签行 ${id} 点了没反应`).toBeGreaterThan(0);
+      route!.onSelect(item.id);
+      expect(calls.length, `标签行 ${item.id} 点了没反应`).toBeGreaterThan(0);
     }
   });
 
