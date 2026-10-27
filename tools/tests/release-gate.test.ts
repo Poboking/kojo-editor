@@ -1141,13 +1141,15 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
 });
 
 describe('release-gate · artifact-audit（dist 上界）', () => {
-  it('阈值常量随 LAU-3b 收尾批重钉：入口 1,100 kB / dist 11.0 MiB / 92 件', () => {
+  it('阈值常量随 LAU-3b-FLIP 批重钉：入口 1,100 kB / dist 11.0 MiB / 93 件', () => {
     // 2026-10-26 启动器落地批：85 件 / 10.5 MiB → 90 件 / 11.0 MiB（逐块归因见
     // `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释）。这条断言是"改阈值必须留痕"的闸：
     // 抬数时先改注释说清增量来自哪里，再改这里。
     // 2026-10-27 LAU-3b 收尾批：90 → 92 件（改名对话框懒块 + `kit-check` 共享块抽取；
     // 改前/改后各真实构建一次，`dist/assets` 89 → 91），总量与入口不动。
-    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.0 * 1024 * 1024), files: 92 });
+    // 2026-10-27 LAU-3b-FLIP 批：92 → 93 件——增量属变基拉上的上游五笔（本支自身那次
+    // 构建仍是 92 件 / assets 91 枚，入口 249,187 → 253,055 B），未拆到单一 chunk。
+    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.0 * 1024 * 1024), files: 93 });
   });
 
   it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {
