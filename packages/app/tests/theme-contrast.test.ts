@@ -317,6 +317,13 @@ const COMBOS: readonly Combo[] = [
   { fg: '--info', bg: '--surface', need: 4.5, kind: '正文', note: '批十二新立的第四枚语义色' },
   { fg: '--info', bg: '--surface-overlay', need: 4.5, kind: '正文' },
   { fg: '--info', bg: '--surface-sunken', need: 4.5, kind: '正文' },
+  /* —— 1027 补全线 C 车道：幽灵文本（内联补全）落在**编辑器自己的底**上 ——
+   * ghost text 是行内渲染，背后永远是 `--bg`（= `--surface`），不面板、不井、不浮层，所以只判这一对。
+   * 它是**要读的正文**（作者按 Tab 就要拿这格字），走 4.5 那条线；带 alpha 的前景由 `overC`
+   * 先与该档实底叠合再比（`--ghost-text` 的通道就是本档 `--fg`，"弱一档"由 alpha 给——
+   * 取数与两条通路同量的口径见 tokens.css 那一族注，逐档读数另由
+   * `inline-completion-visual.test.ts` 打印）。 */
+  { fg: '--ghost-text', bg: '--surface', need: 4.5, kind: '正文', note: '幽灵文本压编辑器底（1027 补全线 C 车道）' },
   // —— 大字/图形/UI 部件级（≥3.0）——
   { fg: '--on-accent', bg: '--accent', need: 3.0, kind: '大字/UI', note: '反白按钮：名单条目的实际前景是 --on-accent（见头注口径说明）' },
   { fg: '--focus-ring', bg: '--bg', need: 3.0, kind: '大字/UI', note: '焦点环为非文字 UI 部件' },

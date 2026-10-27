@@ -353,6 +353,27 @@
   --input-bg: var(--surface-sunken); /* 输入井底：跟语义表面档，light/mint 自动翻 */
   --accent-soft: rgb(var(--accent-rgb) / 0.12); /* accent 弱 wash（选中行/命中底） */
   --warn: var(--amber); /* --warning 的同义短名，供既有引用直接转正 */
+  /* —— 幽灵文本（内联补全）档（1027 补全线 C 车道 · 2026-10-27）——
+     **两条通路、一把尺**：Monaco 0.57 的 ghost text 有两种渲染形态，由它自己的
+     `editor.inlineSuggest.syntaxHighlightingEnabled`（缺省 **开**）决定——
+       ① 语法着色态 `.ghost-text-decoration.syntax-highlighted`：字色 = 那一档语法前景本身，
+          弱化只能靠**整段 opacity**（颜色不归我们定，定了会和 color map 打架）；
+       ② 非着色态 `.ghost-text-decoration:not(.syntax-highlighted)`：字色 = 主题规则
+          `editorGhostText.foreground`（vendor 的缺省是 `#ffffff56` / `#0007`，**不随本仓六档翻色**）。
+     两档必须**同一个减弱量**，否则作者把①关掉的那一帧，字会当场跳一档深浅。所以这里成对给：
+       - `--ghost-text` = ②的字色，通道**逐字取本档 `--fg`**、只带 alpha ⇒ "幽灵文本就是正文色退一档"，
+         不引入第 16 枚色相；它的消费方是 `monaco/theme.ts` 的 `editorGhostText.foreground`
+         （镜像对拍 `monaco-token-mirror.test.ts`），CSS 侧刻意不再重复上色（两处各说一套 = 本仓最贵的债）；
+       - `--ghost-text-opacity` = ①的 opacity（消费方 `inline-completion.css`，vendor 把这一格写死 0.7）。
+     两个数是**同一个数**（同一档 alpha），由 `inline-completion-visual.test.ts` 逐档钉住。
+     取数不是肉眼：alpha 要同时守住两条 WCAG 线（同 `theme-contrast.test.ts` 那把尺，不另造）——
+     正文档合成后 ≥ 4.5（正文级，作者要读这格字），且本档**最弱的一枚语法前景**合成后 ≥ 3.0
+     （那是注释族，编辑器里本就退让一档）。dark 实测 alpha 0.74 ⇒ 正文 6.97 / 着色态最弱一枚 3.32；
+     正文压底的满对比是 11.59，所以"比正文弱"这一条成立且有余量。
+     六档各标定各的数（浅底/墨绿底/紫底的可用区间不同），逐档读数在 `docs/STATE.md` 之外
+     由那条测试当场打印。 */
+  --ghost-text: rgb(215 220 226 / 0.74);
+  --ghost-text-opacity: 0.74;
   /* —— 体感批 B-4 · VIS-50（2026-10-26）：暗色档不再是"假 token 档" ——
      这四枚原先**只在 `themes/light.css` 与 `themes/mint-dark.css` 里定义**，dark 一档从未有定义点，
      于是暗色全靠消费侧的字面兜底渲染（`var(--text,#d7dce4)` / `var(--hover-bg,#2f3646)` /

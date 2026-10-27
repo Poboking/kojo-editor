@@ -46,6 +46,11 @@ import './shell-notices.css';
 // 项目态（重档）都吃得到，所以必须留在**静态链**、且排在 themes/*.css 之后
 // （与 light 档那枚同特异性的井身反相内衬赢平靠位次，判据见切片文件头）。
 import './tutorial-surface.css';
+// 内联补全（幽灵文本）观感切片（1027 补全线 C 车道）：只命中 Monaco 自己的行内 DOM
+// （`.ghost-text-decoration` / `.inlineSuggestionsHints` 族），与外壳版式零交集，所以与
+// `motion-editor.css` 同一条理由单开一张纸、不进 styles 双档（轻档⊆重档那三闸的口径见该文件头注）。
+// 它靠 `:root` 前缀的特异性取胜、与位次无关 ⇒ 落在静态链的哪一格都不改任何既有终值。
+import './inline-completion.css';
 // ---- 1026 动效批切片（A/B/C/D 四条线的规则各自成片，四条的相对次序有意义、绝对位次没意义）----
 // 四条都只声明 styles*.css 里没有的新类/新属性，且每条规则要么靠复合选择器
 // （`html:root` / 双类 `(0,2,0)`）压过既有面、要么本就只命中新类 ⇒ **一律不靠位次取胜**。

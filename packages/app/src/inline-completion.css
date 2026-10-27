@@ -1,0 +1,162 @@
+/**
+ * 内联补全（幽灵文本）的观感切片（1027 补全线 · C 车道 · 2026-10-27）
+ *
+ * 射程只有**两块 vendor DOM**：Monaco 0.57 的 inline completions 视图（`.ghost-text-decoration`
+ * 一族，`contrib/inlineCompletions/browser/view/ghostText/ghostTextView.css`）与它的
+ * "Tab 接受"提示件（`.inlineSuggestionsHints`，`…/hintsWidget/inlineCompletionsHintsWidget.css`）。
+ * 两块的类名都不在本仓 HTML 里，先例照 `ui/editor-widget.css`（补全 / hover 弹层那份）——
+ * **靠特异性取胜，不靠注入顺序**：每条都以 `:root` 起头（类级 +1），vendor 的 (0,2,0)/(0,3,0)
+ * 一律被压过。改选择器前先把 (a,b,c) 对上，别靠"看着能生效"。
+ *
+ * ## 为什么单独成一张纸，不并进 `styles.css` / `ui/editor-widget.css`
+ * - `styles.css` ↔ `styles-project.css` 由 `styles-split.equivalence.test.ts` 的 A/B/C 三闸
+ *   钉成「轻档行序列 ⊆ 重档行序列 + 级联终态逐键相等」，手写一行重档没有的新规则当场红
+ *   （`motion-editor.css` 的头注就是同一条理由）；
+ * - `editor-widget.css` 量的是**弹层**（suggest-widget / suggest-details / monaco-hover），
+ *   它的判据文件把射程写死在那三枚类名上；幽灵文本是**行内**渲染，不是弹层，混进去会让
+ *   两边的判据都说不清自己在管什么。
+ * 本文件全是 `.monaco-*` 与外壳版式零交集的选择器 ⇒ 两档样式表一个字都不必跟着维护。
+ *
+ * ## 三条口径
+ * ① **弱一档由"色 + alpha"给，不由斜体给**。vendor 把 ghost text 写成 `font-style: italic`
+ *   （英文生态的"这不是我的字"惯例）。本仓的口上正文是 CJK：合成斜体是**伪斜体**，糊，
+ *   而且斜体的字宽会把光标右侧已打的字横向推走。上一批给"类型档"定的同一句话照抄过来：
+ *   **分层靠色相/alpha，不靠字形**（`monaco/theme.ts` 的 `support.type` 注）。
+ *   于是本切片把 italic 收回 normal，弱化全部由 `--ghost-text` / `--ghost-text-opacity` 给
+ *   （两枚 token 的取数与"两条通路同一个减弱量"的口径见 `tokens.css` 那一族注）。
+ * ② **只动 opacity，不动任何会重排的量**。ghost text 是**行内 span**：改它的 width / padding /
+ *   letter-spacing 都会把同一行的其余字面横向推一次（逐键重排）。入场淡入用
+ *   `@keyframes … { from { opacity: 0 } }`——**只写 from**，100% 帧取元素自己的计算值
+ *   （CSS 隐式关键帧），于是深色档落在 `--ghost-text-opacity`、非着色档落在满色，
+ *   不会出现"动画末帧比静息帧亮一档"的闪。
+ * ③ **无候选 = 零节点 = 屏上逐字节与今天一致**。所有选择器都命中"只有候选在场才存在"的 DOM；
+ *   文件里唯一常驻的声明是那两枚局部节奏变量（`--ic-dur` / `--ic-ease`），它们不被任何
+ *   常驻规则消费。这一条不是口头承诺，`inline-completion-visual.test.ts` 逐条钉着
+ *   （不许出现 `content:` / `::before` 这类能在空白处生出节点的选择器）。
+ *
+ * ## 失败态（契约 `outcome.state === 'failed'`）的可见档归谁
+ * Monaco 有现成的通道：`InlineCompletionItem.warning` → ghost text 那一族多一枚 `.warning` 类 +
+ * 一枚 vendor 自己的 codicon（`.ghost-text-view-warning-widget-icon`，颜色由
+ * `--vscode-editorWarning-foreground` 给，而那枚已经镜像本档 `--amber` ⇒ **不新造图标、
+ * 不引宿主图标注册表**）。本切片只做一件事：把 vendor 那条 **4px double + 波浪底片**换成
+ * `1px dashed var(--warning)`——同一段文字如果既可能是"候选源出错了"又可能是"这一行有告警诊断"，
+ * 两者就**不许长同一张脸**（诊断的 double 下划线是编辑器既有的语言，占用了它就是把两种事实压成一种）。
+ * 谁把 `failed` 映到 `warning`：A 车道的 `monaco/inline-completion-host.ts`（本批不在射程，
+ * 欠账记在它那边，回执点名）。
+ *
+ * ## "Tab 接受"为什么走 vendor 的提示件而不是自绘 chip
+ * 两条实测下来选前者，理由与读数见 `docs` 里那条提交正文与本文件末的判据文件；一句话：
+ * 自绘 chip 要有**挂载点**，挂载点在 A 车道正在写的那个文件里，而新开一枚 `.ts` 会顶穿
+ * `ps10-eager-graph` 的**文件闸 194（零余量）**。提示件则由 Monaco 自己管生命周期，
+ * 本切片只把它的**色与字号**收进刻度——vendor 那两枚硬值（键帽 `opacity: .6` 与 `font-size: 8px`）
+ * 一条是"用透明度表达层次"（本仓既有纪律：层次由色给，见 `editor-widget.css` 第三节），
+ * 一条是**低于全站字号刻度最低档 11px** 的裸值（不参与界面字号缩放，`css-font-size-scale.test.ts`
+ * 那条账），两笔都在这里还清。
+ */
+
+/* ---------------------------- 〇、局部节奏变量 ---------------------------- */
+/* 只挂在 `.monaco-editor` 作用域里（ghost text 与提示件都在这棵树内 ⇒ 继承得到）。
+   时长取 `--dur-2`（200ms）——任务给的 150–250ms 带里，全站既有的 `--dur-*` 只有这一格落在带内
+   （`--dur-1` 120ms 在带下、`--dur-3` 320ms 在带上），不为这一格再开一档。 */
+:root .monaco-editor {
+  --ic-dur: var(--dur-2);
+  --ic-ease: var(--ease-out);
+}
+
+/* --------------------- 一、幽灵文本：斜体收回、弱档接 token --------------------- */
+/* vendor (0,2,0) 一条并列三个落点写 `font-style: italic` ⇒ 下面这条 (0,3,0) 起逐条压。 */
+:root .monaco-editor .ghost-text-decoration,
+:root .monaco-editor .ghost-text-decoration-preview,
+:root .monaco-editor .suggest-preview-text .ghost-text {
+  font-style: normal;
+}
+
+/* 语法着色态（`editor.inlineSuggest.syntaxHighlightingEnabled` 缺省**开**，所以这是主通路）：
+   字色由那一档语法前景自己给，我们只能给"退多少"。vendor 把它写死成 0.7（三档主题同一个数）
+   ⇒ 收成 token，六档各自标定（口径与 alpha 取数见 tokens.css / themes/*.css 的注）。
+   vendor `.monaco-editor .ghost-text-decoration.syntax-highlighted` (0,3,0) ⇒ 这条 (0,4,0)。 */
+:root .monaco-editor .ghost-text-decoration.syntax-highlighted,
+:root .monaco-editor .ghost-text-decoration-preview.syntax-highlighted,
+:root .monaco-editor .suggest-preview-text .ghost-text.syntax-highlighted {
+  opacity: var(--ghost-text-opacity);
+}
+
+/* 非着色态（作者把上面那个开关关掉）的字色**不在这里写**：那条由
+   `monaco/theme.ts` 的 `editorGhostText.foreground` 供（与 `--ghost-text` 逐字同源，
+   镜像对拍 `monaco-token-mirror.test.ts`）。这里再抄一遍就是第二张嘴。 */
+
+/* 入场：只动 opacity，200ms，见文件路口径 ②。
+   为什么不是 `transition`：ghost text 的 span 每次该行重绘都是**重建**的，没有"从旧值到新值"
+   的持续元素可供过渡；`animation` 每次重建跑一遍 = 正确的"出现"语义。 */
+:root .monaco-editor .ghost-text-decoration {
+  animation: kojo-ghost-in var(--ic-dur) var(--ic-ease);
+}
+
+@keyframes kojo-ghost-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* --------------------------- 二、失败 / 警示档（弱） --------------------------- */
+/* vendor `.monaco-editor .ghost-text-decoration.warning` (0,3,0)：4px double + 波浪底片。
+   下面这一族 (0,4,0)，落点与 vendor 同形（三类各一次），换掉的是"形状"而不是"有没有"。 */
+:root .monaco-editor .ghost-text-decoration.warning,
+:root .monaco-editor .ghost-text-decoration-preview.warning,
+:root .monaco-editor .suggest-preview-text .ghost-text.warning {
+  background: none;
+  border-bottom: 1px dashed var(--warning);
+}
+
+/* ------------------- 三、"Tab 接受"提示件（vendor hints widget） ------------------- */
+/* 面（底 / 边 / 字）**不在这里声明**：vendor 那三条吃的就是
+   `--vscode-editorHoverWidget-background / -border / -foreground`，而这三枚在
+   `monaco/theme.ts` 里已经各自镜像本档 token（镜像行见 `monaco-token-mirror.test.ts`）——
+   这里只补两样它没有的：与全站浮层同一套的**圆角 + 抬升**，和下面那两枚硬值。
+   vendor `.monaco-editor .inlineSuggestionsHints.withBorder` (0,3,0) ⇒ 这条 (0,4,0)。 */
+:root .monaco-editor .inlineSuggestionsHints.withBorder {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  /* 整件的字号收进刻度：vendor 在这里一个都没写，键帽自己抄了 8px（见下面那条）。 */
+  font-size: var(--fs-0);
+}
+
+/* 键帽那一格（"Tab" 那几个字）：vendor `… .inlineSuggestionsHints .keybinding` (0,2,0)
+   给了 `opacity: 0.6` ⇒ 换成色档、透明度归一（层次由 --fg-dim 给）。这条 (0,3,0)。 */
+:root .monaco-editor .inlineSuggestionsHints .keybinding {
+  opacity: 1;
+  color: var(--fg-dim);
+}
+
+/* 键帽本体：`KeybindingLabel` 在提示件里走的是 `unthemedKeybindingLabelOptions`
+   （五个色全是 undefined ⇒ JS 不写行内色），所以 CSS 是**唯一**的供色处——
+   不是覆写，是补空。8px 低于全站最低档（`--fs-0` = 11px）且**不参与界面字号缩放**，
+   抬进刻度；`3px` 圆角与 `border-radius: 3px` 逐字同值地收进 `--radius-xs` 旁边那一档
+   （3px 不在刻度里，折到 2/4 都会动到芯片尺寸 ⇒ 保留 vendor 的 3px 不动，见判据文件那条
+   "本切片零裸字号/零裸色值"的口径：几何不在收编射程，色与字才是）。
+   vendor `.monaco-editor .inlineSuggestionsHints .keybinding .monaco-keybinding-key` (0,4,0)
+   与 `base/browser/ui/keybindingLabel/keybindingLabel.css` 的 `.monaco-keybinding > .monaco-keybinding-key` (0,1,1)
+   ⇒ 这条 (0,5,0) 两条都压。 */
+:root .monaco-editor .inlineSuggestionsHints .keybinding .monaco-keybinding-key {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  background-color: var(--surface-sunken);
+  border-color: var(--border-strong);
+}
+
+/* ------------------------------ 四、减弱动效 ------------------------------ */
+/* 两条开关各压一次，形态与 `editor-widget.css` 那一对**逐字同构**（`:root[data-motion]` 那条
+   靠 `:root:root` 抬到 (0,3,0)、`@media` 那条同理）——本文件只有一格局部节奏变量，
+   归零 ⇒ 上面那条 animation 一起没了，不必逐条再列落点；也不靠 styles.css 末尾那条
+   全局 `!important` 兜底（组件级样式自己负责自己）。 */
+:root[data-motion='reduced']:root .monaco-editor {
+  --ic-dur: 0ms;
+  --ic-ease: linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:root .monaco-editor {
+    --ic-dur: 0ms;
+    --ic-ease: linear;
+  }
+}

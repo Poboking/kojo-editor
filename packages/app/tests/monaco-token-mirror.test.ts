@@ -304,6 +304,12 @@ const MIRROR: readonly MirrorRow[] = [
   m('editorHoverWidget.foreground', '--fg', '--fg', '--fg'),
   m('input.placeholderForeground', null, null, '--fg-dim'),
   m('editorSuggestWidgetStatus.foreground', null, null, '--fg-dim'),
+  /* 幽灵文本（内联补全）前景——1027 补全线 C 车道：`--ghost-text` 的通道**就是**该档 `--fg`，
+     弱化只由 alpha 给；vendor 缺省是 `#ffffff56` / `#0007`（按 base 深浅、不随本仓六档翻色），
+     所以这一格一旦不定义，浅档的 ghost text 就是一层灰雾。exact 档连 alpha 一起钉：
+     token 侧写 0.74/0.78/0.66，theme.ts 侧必须是 0xbd/0xc7/0xa8。新三套走 buildColors() 生成器，
+     那一侧的逐档对拍补齐在 `inline-completion-visual.test.ts`（本表历史上只管 v1 三档）。 */
+  m('editorGhostText.foreground', '--ghost-text', '--ghost-text', '--ghost-text'),
   m('list.activeSelectionForeground', null, '--fg', '--fg'),
   m('menu.selectionForeground', null, '--fg', '--fg'),
   m('editorSuggestWidget.selectedForeground', null, '--fg', '--fg'),

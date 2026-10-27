@@ -390,6 +390,15 @@ export const KOJO_DARK_COLORS: Readonly<Record<string, string>> = {
   'editorLineNumber.activeForeground': '#d7dce2',
   'editorLineNumber.dimmedForeground': '#4c545e',
   'editorCursor.foreground': '#6ea8ff',
+  /* 幽灵文本（内联补全）的前景观 — 与 `tokens.css` 的 `--ghost-text` 逐字同源（镜像行见
+     `monaco-token-mirror.test.ts`）。**通道 = 本档 `--fg`，只带 alpha**："幽灵文本就是正文色退一档"，
+     不引入第 16 枚色相。vendor 缺省是 `#ffffff56` / `#0007`（按 base 深浅取，**不随本仓六档翻色**），
+     所以这一格不定义就等于让 Monaco 拿它自己的白/黑覆盖层——浅色档会当场翻成灰雾。
+     为什么只给 foreground、不给 `editorGhostText.background / .border`：那两枚在注册表里缺省 null，
+     不定义 ⇒ `--vscode-*` 不发 ⇒ vendor 的 `background-color` / `border` 两条声明整条失效回落
+     initial（透明 + `border-style: none`）= **无色无框**。一旦给了 border，每个候选片段都会框出一圈
+     1px 实线（inline span 逐段成框），那是"格子"不是"预告"。alpha 的取数理由见 tokens.css 那一族注。 */
+  'editorGhostText.foreground': '#d7dce2bd',
   // 当前行（C1，2026-10-26 阅读面批）：旧值 `#24292f` 压在 `#1e2227` 上只有 **1.091:1**，
   // 等于没有（作者找不到"我现在在哪一行"）。三套主题统一改成**各自 `--bg-3` 那一档**
   // ——外壳里"比面板再抬一层"用的同一枚台阶，不新造色、不引入色相：
@@ -495,6 +504,11 @@ export const KOJO_LIGHT_COLORS: Readonly<Record<string, string>> = {
   'editorLineNumber.activeForeground': '#1f2328',
   'editorLineNumber.dimmedForeground': '#afb8c1',
   'editorCursor.foreground': '#0550ae',
+  /* 幽灵文本前景（口径与 dark 表那条注逐字相同）：通道 = 本档 `--fg` #1f2328，alpha 0.78。
+     浅档的 alpha 是六档里最高的之一——不是手抖：浅底可读区间窄，本档最弱的一枚语法前景
+     只有 4.54，整段再乘 0.7 就跌破 3.0（vendor 的缺省值 `#0007` = alpha 0.47，压浅底 2.1:1，
+     等于"看得见但读不出"）。 */
+  'editorGhostText.foreground': '#1f2328c7',
   // 当前行（C1）：`#eaeef2` 只有 1.095:1 ⇒ 抬到浅档的 `--bg-3` `#dde3ea`（**1.214:1**）。
   // 数字是同一条公式在**本套底色**上算的，不是抄 dark 那一格。
   'editor.lineHighlightBackground': '#dde3ea',
@@ -592,6 +606,9 @@ export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
   'editorLineNumber.activeForeground': '#d9e9df',
   'editorLineNumber.dimmedForeground': '#3f574a',
   'editorCursor.foreground': '#45d9ab',
+  /* 幽灵文本前景（口径见 dark 表那条注）：通道 = 墨绿档 `--fg` #d9e9df，alpha 0.66——
+     三套老主题里最"退一档"的一档，因为墨绿底上本档最弱的语法前景仍有 6.07，两把尺都松。 */
+  'editorGhostText.foreground': '#d9e9dfa8',
   // 当前行（C1）：`#15201a` 只有 1.088:1 ⇒ 抬到墨绿档的 `--bg-3` `#1c2a23`（**1.219:1**）。
   // 绿底上抬"同一族更亮一档"，不掺中性灰（灰块在绿底上像另一套主题的残留）。
   'editor.lineHighlightBackground': '#1c2a23',
@@ -989,6 +1006,12 @@ interface ColorSeeds {
   readonly badgeFg: string;
   /** 滚动条滑块基色（透明度由生成器统一给三档） */
   readonly slider: string;
+  /**
+   * 幽灵文本的 alpha（**两枚 hex 字符**，= 该档 `themes/<id>.css` 里 `--ghost-text` 的 alpha 落位）。
+   * 通道不另给种子——它**就是** `fg` 的通道（"幽灵文本 = 正文色退一档"，见 `editorGhostText.foreground`
+   * 那条注），所以这里只能翻"退多少"。逐档取数理由在各自主题文件里。
+   */
+  readonly ghostAlpha: string;
 }
 
 function buildColors(s: ColorSeeds): Readonly<Record<string, string>> {
@@ -999,6 +1022,10 @@ function buildColors(s: ColorSeeds): Readonly<Record<string, string>> {
     'editorLineNumber.activeForeground': s.fg,
     'editorLineNumber.dimmedForeground': s.dimDeep,
     'editorCursor.foreground': s.accentText,
+    /* 幽灵文本前景：通道 = 正文（`s.fg`，与 `--fg` 逐字相等，已由 editor.foreground 那格钉住），
+       alpha = `s.ghostAlpha`（该档 `--ghost-text` / `--ghost-text-opacity` 的同一枚数）。
+       不给 background / border，理由见 `KOJO_DARK_COLORS` 里那格的分节注。 */
+    'editorGhostText.foreground': `${s.fg}${s.ghostAlpha}`,
     // 当前行（C1）：border 与 background 同色 ⇒ 不画描边（理由见 KOJO_DARK_COLORS 同键注）
     'editor.lineHighlightBackground': s.lineHi,
     'editor.lineHighlightBorder': s.lineHi,
@@ -1112,6 +1139,7 @@ const ONE_DARK_COLORS = buildColors({
   badgeBg: '#2e6fd1',
   badgeFg: '#ffffff',
   slider: '#4b5263',
+  ghostAlpha: 'c2', // 0.76 —— 理由见 themes/one-dark.css 的幽灵文本档注
 });
 
 const ROSE_PINE_COLORS = buildColors({
@@ -1134,6 +1162,7 @@ const ROSE_PINE_COLORS = buildColors({
   badgeBg: '#c4a7e7',
   badgeFg: '#191724',
   slider: '#524f67',
+  ghostAlpha: 'ad', // 0.68 —— 六档里最"退一档"的一档（底最黑、余量最大），理由见 themes/rose-pine.css
 });
 
 const SYNTHWAVE84_COLORS = buildColors({
@@ -1156,6 +1185,7 @@ const SYNTHWAVE84_COLORS = buildColors({
   badgeBg: '#ff7edb',
   badgeFg: '#1b0f26',
   slider: '#b893ce',
+  ghostAlpha: 'bd', // 0.74 —— 霓虹盘不敢更淡（低 alpha 的霓虹字会读成"背景另一团光"），理由见 themes/synthwave84.css
 });
 
 /* ------------------------------ 装配 ------------------------------ */
