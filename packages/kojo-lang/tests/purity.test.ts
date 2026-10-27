@@ -7,7 +7,8 @@
  * 交给插件的那天。故判据写在这里，不看运行时，只看源码。
  *
  * 三条：
- * 1. **零运行时依赖**，只许 `@kojo/kojo-core`；
+ * 1. **零运行时依赖**：外部只许 `@kojo/kojo-core`（词表真源）与
+ *    `@kojo/kojo-vocab/keywords`（中文运算符表，B4 随 Monarch 进来，理由见下面那条用例）；
  * 2. **零 Monaco / React / DOM / IO**（含 `type` 导入——契约层的理由同此）；
  * 3. **零游戏名词**：包是语言面，不认识 era / kojo 之外的任何一部游戏。
  *    这一条与 `audit:decoupling` 的 A 项同口径，但那边不扫 `packages/kojo-lang`（它只扫
@@ -52,15 +53,27 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // constants / name-chars / interpolation / declarations / sourcemap / expand-view /
     // symbols / definition / inlay / adapter-source / expand-compile / index
     //（B2 加 interpolation + definition，B2c 加 inlay + adapter-source，B3a 加 expand-compile）
-    expect(files).toHaveLength(12);
+    // + B4 从宿主搬来的语义角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）
+    // + B4 的 2.0 语言面本体：词表 / Monarch 状态机 / 语言配置 / 三套主题装配
+    expect(files).toHaveLength(18);
   });
 
-  it('只依赖 @kojo/kojo-core，其余一律是本包内相对路径', () => {
+  it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
     const offenders: string[] = [];
+    /**
+     * 依赖白名单（B4 从"只有 core"扩到两枚，理由逐条写在册，不是放宽判据）：
+     * - `@kojo/kojo-core`：2.0 词表与缩进宽度的唯一真源（B1 起就是这条）；
+     * - `@kojo/kojo-vocab/keywords`：**中文运算符表**（`等于` / `不在` …）。2.0 规范 §5.1
+     *   明写"沿用现有中文表"，那张表的法定真源就在 vocab（LAU-3b 解耦批把它从
+     *   `@kojo/plugin-kojo-sugar` 搬进非插件包）。B4 把 Monarch 搬进本包 ⇒ 词表出口必须
+     *   跟着进来；PLAN §4「B1 刻意没搬的三块」记的正是这条——**正解是让 core 自持该表**，
+     *   那是单独一批（搬完就把这一行删掉）。vocab 是**库不是插件**，所以这条边不是反向分层。
+     */
+    const allowed = new Set(['@kojo/kojo-core', '@kojo/kojo-vocab/keywords']);
     for (const file of files) {
       for (const spec of specifiersOf(readFileSync(file, 'utf8'))) {
         if (spec.startsWith('.')) continue;
-        if (spec === '@kojo/kojo-core') continue;
+        if (allowed.has(spec)) continue;
         offenders.push(`${path.basename(file)} → ${spec}`);
       }
     }

@@ -9,7 +9,7 @@ import { ERB_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
-import { ROLE } from './semantic-roles';
+import { ROLE } from '@kojo/kojo-lang/semantic-roles';
 
 /**
  * `.kojo` 表层 DSL 编辑器支持 —— Monarch 词法 + 语言配置。
@@ -136,7 +136,7 @@ export const SYSTEM_FUNCTION_WORDS: string[] = [...SYSTEM_FUNCTION_ALIASES.keys(
  *   名字层（CJK 非词表 = 槽位原名 / 作者自定名）走薄荷绿；
  * - 亮度全部 ≥ 4.5:1，不为了分层引入刺眼的高饱和。
  */
-export { ROLE_THEME_RULES } from './kojo-theme-rules';
+export { ROLE_THEME_RULES } from '@kojo/kojo-lang/theme-rules';
 
 /**
  * 档位表：**作者看得见的分层口径** → 该档的**语义角色**（多角色 = 同档同色）。

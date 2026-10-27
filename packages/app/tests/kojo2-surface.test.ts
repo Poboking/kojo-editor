@@ -74,6 +74,16 @@ async function boot(seedOn: boolean): Promise<Wire> {
     },
   });
   vi.resetModules();
+  // B4：`kojo2` 的着色与缩进规则不在宿主里了——descriptor 认领语言之后，落点要从槽取供方。
+  // `resetModules` 之后每轮用例拿到的都是**新的一份**模块图，所以登记必须发生在同一个 epoch 内
+  // （先引落点、再引 `languages`：后者经 `kojo2-language.ts` 引到的是同一枚新落点）。
+  // 于是下面量的"Monaco 面照挂"走的是生产那条链：认领 → 取数 → 翻译 → 落地；
+  // 「没有供方长什么样」由 `monaco-language-surface.test.ts` 单独钉。
+  const surfaceModule = await import('../src/monaco/monaco-language-surface');
+  const { KOJO2_MONACO_LANGUAGE_SURFACE } = await import('@kojo/plugin-kojo-lang');
+  surfaceModule.registerMonacoLanguageSurfaceSource(() => [
+    { id: 'kojo2-monaco-language', surface: KOJO2_MONACO_LANGUAGE_SURFACE },
+  ]);
   const flag = await import('../src/ui/kojo2-flag');
   const registry = await import('../src/monaco/language-registry');
   const languages = await import('../src/monaco/languages');

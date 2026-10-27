@@ -23,11 +23,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { parseSource } from '@kojo/kojo-core';
 import { stubMonaco } from './monarch-harness';
-import {
-  KOJO2_LANGUAGE_ID,
-  KOJO2_PAIRS,
-  kojo2LanguageConfiguration,
-} from '../src/monaco/kojo2-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
+// B4：成对记号的**真源在语言面库**，而"Monaco 实际拿到什么"由宿主落点翻译那一步决定。
+// 本文件因此量 `toMonacoLanguageConfiguration(数据)` 的产物——它比旧口径（直接调宿主自己
+// 装配配置的那枚函数）更真：上色与缩进在屏上生效的就是这一副对象。
+import { KOJO2_LANGUAGE_CONFIGURATION, KOJO2_PAIRS } from '@kojo/kojo-lang/language-config';
+import { toMonacoLanguageConfiguration } from '../src/monaco/monaco-language-surface';
 import {
   installKojo2IndentProvider,
   KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
@@ -411,7 +412,11 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
 /* ============================== ③ 括号配置（语言面 additive） ============================== */
 
 const { monaco: configMonaco } = stubMonaco();
-const LANGUAGE_CONFIG = kojo2LanguageConfiguration(configMonaco);
+const LANGUAGE_CONFIG = toMonacoLanguageConfiguration(
+  configMonaco,
+  KOJO2_LANGUAGE_CONFIGURATION,
+  'kojo2-indent-brackets',
+);
 
 function pairKey(open: string, close: string): string {
   return `${open}${close}`;

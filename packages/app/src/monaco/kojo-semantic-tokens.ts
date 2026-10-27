@@ -65,7 +65,7 @@ export const KOJO_SEMANTIC_TOKEN_LEGEND: Monaco.languages.SemanticTokensLegend =
  * 取色一律**复用既有词法色**（蓝 = 函数、黄 = 声明、橙 = 数/参数位），不引入新配色：
  * 作者看到的应当是"同一类东西同一个色"，而不是"新机制带来第七种蓝"。
  */
-export { KOJO_SEMANTIC_THEME_RULES } from './kojo-theme-rules';
+export { KOJO_SEMANTIC_THEME_RULES } from '@kojo/kojo-lang/theme-rules';
 
 /** 类别名 → legend 下标；`-1` = legend 里没有（不着色 + 一次性告警） */
 const TYPE_INDEX = new Map<string, number>(EDITOR_SEMANTIC_TOKEN_TYPES.map((t, i) => [t, i]));

@@ -17,7 +17,7 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 163,
+      "total": 162,
       "files": {
         "packages/app/src/monaco/document-links.ts": 3,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
@@ -42,7 +42,7 @@
         "packages/app/src/monaco/kojo2-highlight.ts": 2,
         "packages/app/src/monaco/kojo2-indent.ts": 7,
         "packages/app/src/monaco/kojo2-inlay.ts": 2,
-        "packages/app/src/monaco/kojo2-language.ts": 6,
+        "packages/app/src/monaco/kojo2-language.ts": 5,
         "packages/app/src/monaco/kojo2-providers.ts": 3,
         "packages/app/src/monaco/kojo2-references.ts": 2,
         "packages/app/src/monaco/kojo2-rename.ts": 2,
@@ -80,7 +80,6 @@
         "packages/app/src/bootstrap.ts": 1,
         "packages/app/src/monaco/kojo-hover.ts": 2,
         "packages/app/src/monaco/kojo2-code-actions.ts": 1,
-        "packages/app/src/monaco/semantic-roles.ts": 30,
         "packages/app/src/monaco/tree-sitter/kojo2-assets.ts": 1,
         "packages/app/src/ui/CallHierarchyOverlay.tsx": 8,
         "packages/app/src/ui/editor-global-providers.ts": 6,
@@ -90,7 +89,8 @@
         "packages/app/src/ui/kojo2-storage-adapter.ts": 1,
         "packages/app/src/ui/kojo2-storage-persist.ts": 2,
         "packages/app/src/ui/kojo2-storage-retry-command.ts": 1,
-        "packages/app/src/ui/project-diagnostics.ts": 8
+        "packages/app/src/ui/project-diagnostics.ts": 8,
+        "packages/kojo-lang/src/semantic-roles.ts": 30
       },
       "exempt": {
         "total": 1,

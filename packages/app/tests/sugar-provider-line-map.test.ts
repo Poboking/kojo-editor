@@ -41,6 +41,8 @@ import { pushPreview, resetQuickFixPreviews } from '../src/ui/quick-fix-preview'
 const stub = vi.hoisted(() => {
   const invoke = (path: string): unknown => {
     if (path === 'monaco.Range') return function Range(...args: number[]) { return args; };
+    // B4：组合根挂载会问"哪些语言已认领"（语言面只落给认领过的语言）——替身答空表。
+    if (path === 'monaco.languages.getLanguages') return [];
     return { dispose: () => undefined };
   };
   const universal = (path: string): unknown =>

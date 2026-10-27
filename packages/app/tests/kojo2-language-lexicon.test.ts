@@ -6,8 +6,10 @@
  *   同名真源逐项相等；`KOJO2_RESERVED_WORDS` 的每一项都能在 core 词表里找到出处（无自造词）。
  * - (b) **`@原生` 围栏词由 core 语义反证**：用 core 词法器对 16 枚调度词逐词实测"哪一枚真能
  *   开围栏"，结果必须**恰等于** `KOJO2_NATIVE_FENCE_WORD`（该常量因此能安全地集中一处手写）。
- * - (c) **零抄本**：语言面三个源文件的字符串字面量里，不得出现"整条等于 2.0 词形"的抄本
- *   （唯一例外是 (b) 那一枚围栏词常量，注释里写明理由）。
+ * - (c) **零抄本**：语言面正文（`@kojo/kojo-lang` 的 lexicon / monarch / language-config /
+ *   monaco-theme 四枚）的字符串字面量里，不得出现"整条等于 2.0 词形"的抄本
+ *   （唯一例外是 (b) 那一枚围栏词常量，注释里写明理由）。宿主的 `monaco/kojo2-*.ts`
+ *   在 B4 之后只剩指针，扫它们证明不了任何事，所以判据跟着正文走。
  */
 
 import { readFileSync } from 'node:fs';
@@ -46,9 +48,17 @@ import {
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
 const MONACO_DIR = path.join(ROOT, 'packages', 'app', 'src', 'monaco');
-const KOJO2_SOURCES = ['kojo2-language.ts', 'kojo2-lexicon.ts', 'kojo2-enter.ts'];
+const LANG_DIR = path.join(ROOT, 'packages', 'kojo-lang', 'src');
+/**
+ * 零抄本闸扫的是**正文所在的文件**（B4 之后正文在语言面库，宿主的三枚老地址只剩指针）。
+ * 判据本身一字未改，只是跟着搬家走——扫老地址会绿得毫无意义。
+ */
+const KOJO2_SOURCES = ['lexicon.ts', 'monarch.ts', 'language-config.ts', 'monaco-theme.ts'].map(
+  (name) => path.join(LANG_DIR, name),
+);
 
-const read = (rel: string): string => readFileSync(path.join(MONACO_DIR, rel), 'utf8');
+const read = (target: string): string =>
+  readFileSync(path.isAbsolute(target) ? target : path.join(MONACO_DIR, target), 'utf8');
 
 /* ============================== (a) 转发不是重写 ============================== */
 
@@ -231,29 +241,35 @@ function previousMeaningfulChar(source: string, index: number): string {
 }
 
 describe('零抄本：语言面不许手写 2.0 词形', () => {
-  it('三个源文件的字符串字面量里没有整条等于 2.0 词形的抄本（唯一例外：围栏词常量）', () => {
+  it('语言面正文的字符串字面量里没有整条等于 2.0 词形的抄本（唯一例外：围栏词常量）', () => {
     const hits: string[] = [];
     for (const file of KOJO2_SOURCES) {
+      const name = path.basename(file);
       for (const literal of stringLiterals(read(file))) {
         const bare = literal.content.trim();
         if (!WORD_SET.has(bare)) continue;
         // 围栏词是 core 没单独命名导出的那一枚，允许在 lexicon 的常量定义处手写一次；
         // 该字面量本身由上面 (b) 用 core 词法器反证，不是"第二份真源"。
         const allowed =
-          file === 'kojo2-lexicon.ts' &&
+          name === 'lexicon.ts' &&
           bare === KOJO2_NATIVE_FENCE_WORD &&
           read(file).split('\n')[literal.line - 1]?.includes('KOJO2_NATIVE_FENCE_WORD =');
-        if (!allowed) hits.push(`kojo2-lexicon 面 ${file}:${literal.line} 「${literal.content}」`);
+        if (!allowed) hits.push(`kojo2 语言面 ${name}:${literal.line} 「${literal.content}」`);
       }
     }
-    expect(hits, `kojo2 语言面出现 2.0 词形手抄字面量（词形只能经 kojo2-lexicon 从 core 来）：\n${hits.join('\n')}`).toEqual([]);
+    expect(hits, `kojo2 语言面出现 2.0 词形手抄字面量（词形只能经 lexicon 从 core 来）：\n${hits.join('\n')}`).toEqual([]);
   });
 
   it('扩展名 `.kojo2` 全仓只有一处字面量（B1 后住在语言面库的零依赖叶子 constants.ts）', () => {
     // B1（2026-10-24）：字面源随 `kojo2-constants` 搬进 `@kojo/kojo-lang`。
-    // 判据从"宿主 monaco 目录内唯一"改成"宿主这四枚文件内零处 + 包内唯一"——
-    // 不变量（一处可改）没变，只是那一处换了地址。
-    const files = ['kojo2-language.ts', 'kojo2-lexicon.ts', 'kojo2-enter.ts'];
+    // B4（本批）：语言面正文（Monarch / 配置）也搬了进去 ⇒ 这一格从"宿主四枚文件零处"扩成
+    // **宿主指针 + 包内正文**全零处。不变量（一处可改）没变，只是那一处换了地址。
+    const files = [
+      'kojo2-language.ts',
+      'kojo2-lexicon.ts',
+      'kojo2-enter.ts',
+      ...KOJO2_SOURCES,
+    ];
     const occurrences: string[] = [];
     for (const file of files) {
       read(file)

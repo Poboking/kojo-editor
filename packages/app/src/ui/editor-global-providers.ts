@@ -38,6 +38,7 @@ import type {
   GameAdapter,
   GameProject,
   LineDecoration,
+  MonacoLanguageContribution,
 } from '@kojo/plugin-api';
 import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/kojo-vocab/engine';
@@ -109,6 +110,15 @@ import {
 // 本模块静态引它只拉起 `kojo2-runtime` 的**类型与单例壳**，两枚 wasm 与 highlights 查询
 // 仍只在运行时的默认装载器里动态 import（`kojo2-assets.ts` 不进主线程静态图）。
 import { installKojo2SemanticTokensProvider } from '../monaco/kojo2-semantic';
+// SDK B4：Monaco 语言面的**取数缝**。宿主组合根把"从槽里读语言面"登记进
+// `monaco/monaco-language-surface.ts`（范式同 `@kojo/kojo-lang/adapter-source`：包与插件都
+// 看不见 kernel，只能由持有者交一枚 getter），再把晚激活的供方补落到 Monaco——
+// descriptor 认领语言时插件未必已就位，那一腿只可能留下"有语言没着色"的退化。
+import {
+  applyAllMonacoLanguageSurfaces,
+  registerMonacoLanguageSurfaceSource,
+  unregisterMonacoLanguageSurfaceSource,
+} from '../monaco/monaco-language-surface';
 // K2 batch-4：Kojo 2.0 的补全 / 悬停 / 转定义三枚 provider（纯模型 → Monaco 协议）。
 // **本文件仍不认识任何具体 adapter**：2.0 adapter 由宿主组合根经 `GlobalProviderOptions`
 // 注入（那枚对象不在 `game.adapter` 槽位上，见该接口的注），语言层零游戏名词（解耦审计 A）。
@@ -1538,6 +1548,31 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     });
     globalDisposers.push({ dispose: unregister });
   }
+  /**
+   * SDK B4：把"从哪里拿 Monaco 语言面"登记进宿主落点，并补一轮 apply。
+   *
+   * 三条口径与上面那张登记表一致：**用时现取**（不缓存槽数组，插件重注册立刻生效）、
+   * **零登记不猜**（取不到就交给落点的退化分支）、**注销只撤自己**。
+   * `requireKernel()` 在极端时序下（组合根早于 kernel 建立）会抛 ⇒ 这里咽成空表，
+   * 由落点说一条"没有供方"的 warn；下一轮挂载再取。
+   *
+   * 为什么登记完**马上**再 apply 一次：`kojo2` 的语言认领发生在 descriptor 注册（EditorPane
+   * 模块顶层，一次性），而 `@kojo/plugin-kojo-lang` 是 bootstrap 里的动态 import ⇒ 可能晚于
+   * 它。落点按 (实例, 语言, 副) 记台账，重复 apply 是空转，不会把 provider 装两遍。
+   */
+  const monacoLanguageSurfaceGetter =
+    (): readonly MonacoLanguageContribution[] => {
+      try {
+        return requireKernel().slots.query('ui.monaco.language');
+      } catch {
+        return [];
+      }
+    };
+  registerMonacoLanguageSurfaceSource(monacoLanguageSurfaceGetter);
+  globalDisposers.push({
+    dispose: () => unregisterMonacoLanguageSurfaceSource(monacoLanguageSurfaceGetter),
+  });
+  applyAllMonacoLanguageSurfaces(monaco);
   try {
     // 💡 CodeAction 宿主适配（槽 `ui.editor.codeAction`，P3b）：宿主只做 Monaco 协议
     // 转换（registerCodeActionProvider），动作产出全在插件（纯函数 provideActions）；

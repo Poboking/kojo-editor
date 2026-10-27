@@ -144,12 +144,17 @@ describe('契约层零 Monaco（B4 的 purity 判据）', () => {
 });
 
 describe('三张档位联合是闭集', () => {
-  it('`MonacoIndentAction` 与 Monaco 的 IndentAction 同名五档，不多不少', () => {
+  it('`MonacoIndentAction` 与 Monaco 的 IndentAction 同名四档，不多不少', () => {
+    // vendored 0.57 的 `monaco.d.ts:7443` 只有 `None / Indent / IndentOutdent / Outdent`。
+    // 曾写过第五档 `appendTab`——那是 `Indenter.appendText` **那一格**的名字，不是动作档位；
+    // 档位表多一枚的后果是宿主查不到枚举 ⇒ 那条 onEnterRule 被丢弃并 warn（可见退化）。
+    // "这四档在真 Monaco 枚举上都存在"由**宿主**侧的 `tests/monaco-language-surface.test.ts`
+    // 对着 `monaco.languages.IndentAction` 实测——契约包不引 Monaco，连测试也不该去
+    // `node_modules/.pnpm/<hash>/` 里捞那份 d.ts（那条路径本身就是易碎品）。
     expect([...unionBody('MonacoIndentAction').matchAll(/'([^']+)'/g)].map((m) => m[1])).toEqual([
       'none',
       'indent',
       'indentOutdent',
-      'appendTab',
       'outdent',
     ]);
   });

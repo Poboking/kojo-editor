@@ -22,9 +22,15 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { ROLE_THEME_RULES } from '../src/monaco/kojo-theme-rules';
+import { ROLE_THEME_RULES } from '@kojo/kojo-lang/theme-rules';
 import { KOJO2_TOKEN } from '../src/monaco/kojo2-language';
-import { KOJO2_THEME_TOKEN_MAP, KOJO2_THEMES, KOJO2_THEME_IDS } from '../src/monaco/kojo2-theme';
+// B4：三套 2.0 主题的角色规则与样式索引都在语言面库（`@kojo/kojo-lang/monaco-theme`）；
+// 本文件量的是**同一批对象**——legend 与主题规则的逐字对齐不由宿主再抄一遍。
+import {
+  KOJO2_THEME_TOKEN_MAP,
+  KOJO2_THEMES,
+  KOJO2_THEME_IDS,
+} from '@kojo/kojo-lang/monaco-theme';
 import {
   KOJO2_CAPTURE_TOKEN_TYPES,
   KOJO2_SEMANTIC_TOKEN_LEGEND,

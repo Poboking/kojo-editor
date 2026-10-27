@@ -1,13 +1,14 @@
-import type * as Monaco from './entry';
 import {
   ROLE,
   nameLayerRules,
   rulesFromRolePalette,
+  type KojoTokenThemeRule,
   type SemanticRole,
 } from './semantic-roles';
 
 /**
- * 主题规则的**叶子单一真源**（PS-10 断链批；LAU-2 起改成"角色调色板"）。
+ * 主题规则的**叶子单一真源**（PS-10 断链批；LAU-2 起改成"角色调色板"；
+ * **SDK B4 起住在 `@kojo/kojo-lang`**，与角色表同层）。
  *
  * ## 这一层现在只有一件事：给角色发色
  *
@@ -21,19 +22,23 @@ import {
  *
  * 本文件持**三套主题（暗 / 亮 / 墨绿）的角色调色板**：每套 34 档角色各一枚色，外加名字层
  * 五条（`KOJO_SEMANTIC_*_THEME_RULES`，D6：名字层与语法角色正交，不进角色表）。
- * `theme.ts` 与 `kojo2-theme.ts` 都从这里取同一批对象本体，不各配一套色。
+ * 宿主的 `theme.ts`（六套 `kojo-*`）与 2.0 的主题装配（`@kojo/plugin-kojo-lang` 供的三套
+ * `kojo2-*`）都从这里取**同一批对象本体**，不各配一套色——这正是 B4 能把主题那一副交给
+ * 插件的前提：色只有一份，谁装配都读到同一枚数组。
  *
- * ## 为什么仍住叶子（零依赖）
+ * ## 为什么住语言面库，而不回宿主
  *
- * `theme.ts` 在开机静态图里（`shell-overlays → diff-view → erb-language → theme`、
- * `QuickFixPreviewOverlay → theme` 两条链都经它），而旧的规则老家
- * （`kojo-language.ts` / `kojo-semantic-tokens.ts` / `kojo2-language.ts`）各自静态拖着
- * `@kojo/plugin-kojo-sugar` 那 ~900 KB 词表。本文件只引纯数据叶子 `semantic-roles.ts`
- * （零依赖、字形与角色名），于是糖包照旧整包留在开机静态图外。
+ * 架构 §7.2 第 2 条：「角色表住 SDK，不住 app——角色表 + 主题规则形状必须是导出面」。
+ * 语言面要交给插件（B4）而色表住宿主，供方就只能重抄一遍 hex，那是比"搬家"坏得多的选择。
+ * 本文件与 `semantic-roles.ts` 都是**零 import**（后者只自声明一条
+ * {@link KojoTokenThemeRule}，不认 Monaco），所以：
  *
- * **身份不变量**（测试钉住）：本文件是这三张调色板与六张规则表的**唯一定义处**；
- * `kojo-language.ts` / `kojo-semantic-tokens.ts` / `kojo2-language.ts` 各自
- * `export ... from './kojo-theme-rules'` 原样 re-export（不复制、不接受第二份）。
+ * - 开机静态图引它 = 只引这两枚（约 30 KB），**不会**顺带把词法面（`monarch.ts` →
+ *   词表链）拖进首屏——同 B1 那条"桶教训"，消费方一律引叶子，
+ *   由 `app/tests/ps10-eager-graph.test.ts` 的「开机图里对语言面库的引用必须是叶子」钉住；
+ * - 宿主 `monaco/` 层与包层读到的是同一个对象，`kojo-language.ts` /
+ *   `kojo-semantic-tokens.ts` 那两条 `export ... from` 原样保留（身份不变量：
+ *   调色板与六张规则表**只在本文件定义一次**，任何一侧复制即红）。
  *
  * ## 取色口径（本批**一个色值都不许改**）
  *
@@ -213,31 +218,31 @@ export const NAME_LAYER_PALETTE_MINT: Readonly<Record<string, string>> = Object.
 /* ============================== 规则表（三套 × 两族） ============================== */
 
 /** 暗色 34 条角色规则（`kojo-dark` / `kojo2-dark` 的 `rules` 主体） */
-export const ROLE_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = Object.freeze(
+export const ROLE_THEME_RULES: readonly KojoTokenThemeRule[] = Object.freeze(
   rulesFromRolePalette(SEMANTIC_ROLE_PALETTE_DARK),
 );
 
 /** 亮色 34 条角色规则（`kojo-light` / `kojo2-light`） */
-export const ROLE_LIGHT_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = Object.freeze(
+export const ROLE_LIGHT_THEME_RULES: readonly KojoTokenThemeRule[] = Object.freeze(
   rulesFromRolePalette(SEMANTIC_ROLE_PALETTE_LIGHT),
 );
 
 /** 墨绿 34 条角色规则（`kojo-mint-dark` / `kojo2-mint-dark`） */
-export const ROLE_MINT_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = Object.freeze(
+export const ROLE_MINT_THEME_RULES: readonly KojoTokenThemeRule[] = Object.freeze(
   rulesFromRolePalette(SEMANTIC_ROLE_PALETTE_MINT),
 );
 
 /** 名字层五条（`kojo-dark` 的尾部；由 `kojo-semantic-tokens.ts` 按同对象 re-export） */
-export const KOJO_SEMANTIC_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = Object.freeze(
+export const KOJO_SEMANTIC_THEME_RULES: readonly KojoTokenThemeRule[] = Object.freeze(
   nameLayerRules(NAME_LAYER_PALETTE_DARK),
 );
 
 /** 名字层五条（亮色侧） */
-export const KOJO_SEMANTIC_LIGHT_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = Object.freeze(
+export const KOJO_SEMANTIC_LIGHT_THEME_RULES: readonly KojoTokenThemeRule[] = Object.freeze(
   nameLayerRules(NAME_LAYER_PALETTE_LIGHT),
 );
 
 /** 名字层五条（墨绿侧） */
-export const KOJO_SEMANTIC_MINT_THEME_RULES: readonly Monaco.editor.ITokenThemeRule[] = Object.freeze(
+export const KOJO_SEMANTIC_MINT_THEME_RULES: readonly KojoTokenThemeRule[] = Object.freeze(
   nameLayerRules(NAME_LAYER_PALETTE_MINT),
 );

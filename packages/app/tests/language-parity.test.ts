@@ -540,8 +540,15 @@ describe('上游腿的专项取证（没有 Monaco 注册 API 的那几项）', 
     expect(erb).toMatch(/\bautoClosingPairs\s*:/);
     expect(erb).toMatch(/\bERB_BRACKET_PAIRS\b/);
     const kojo2 = sourceOf('monaco/kojo2-language.ts').text;
-    expect(kojo2).toMatch(/\bbrackets\s*:/);
-    expect(kojo2).toMatch(/\bautoClosingPairs\s*:/);
+    // B4：2.0 的成对记号**正文**在语言面库（`@kojo/kojo-lang/language-config`，本文件的走图器
+    // 只跟 `packages/app/src`），宿主里剩下的两截是"指针 + 落地腿"。取证因此分两条：
+    // ① 宿主确实有一条把供方数据接进 `setLanguageConfiguration` 的腿（`monaco-language-surface.ts`）；
+    // ② 那一副配置的成对表在宿主有唯一出口名（`KOJO2_PAIRS` 的 re-export 指针）。
+    // 缺 ① = 能力声明是假的；缺 ② = 有人在宿主另抄一张表。
+    const surface = sourceOf('monaco/monaco-language-surface.ts').text;
+    expect(surface).toMatch(/setLanguageConfiguration\(\s*languageId/);
+    expect(surface).toMatch(/\bdata\.brackets\b/);
+    expect(surface).toMatch(/\bdata\.autoClosingPairs\b/);
     expect(kojo2).toMatch(/\bKOJO2_PAIRS\b/);
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'builtin')).toContain('brackets');
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'builtin')).toContain('brackets');

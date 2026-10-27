@@ -464,6 +464,9 @@ export const FILES = Object.freeze({
   parityTest: 'packages/app/tests/language-parity.test.ts',
   erbLanguage: 'packages/app/src/monaco/erb-language.ts',
   kojo2Language: 'packages/app/src/monaco/kojo2-language.ts',
+  // SDK B4：2.0 的 Monarch / 语言配置正文搬到 `@kojo/kojo-lang`，宿主这一侧剩下的"注册面"
+  // 就是这枚落点（唯一把供方数据接进 `setLanguageConfiguration` 的模块）。
+  monacoLanguageSurface: 'packages/app/src/monaco/monaco-language-surface.ts',
   erbCompletion: 'packages/app/src/monaco/erb-completion.ts',
   editorPane: 'packages/app/src/ui/EditorPane.tsx',
   problemSync: 'packages/app/src/ui/kojo2-problem-sync.ts',
@@ -970,17 +973,28 @@ export function evaluateAutomatedItem({ language, capability }, ctx) {
     if (fake.length > 0) failures.push(`有人造了第二套预览 provider：${fake.join(', ')}`);
     else evidence.push('全源码零 registerPreview/PeekProvider（Peek 是 Monaco 内建窗）');
   } else if (capability.id === 'brackets') {
-    const rel = language.id === 'erb' ? FILES.erbLanguage : FILES.kojo2Language;
-    shouldRequireText(ctx, rel, /\bbrackets\s*:/, 'brackets:', failures, evidence);
-    shouldRequireText(ctx, rel, /\bautoClosingPairs\s*:/, 'autoClosingPairs:', failures, evidence);
-    shouldRequireText(
-      ctx,
-      rel,
-      language.id === 'erb' ? /\bERB_BRACKET_PAIRS\b/ : /\bKOJO2_PAIRS\b/,
-      language.id === 'erb' ? 'ERB_BRACKET_PAIRS' : 'KOJO2_PAIRS',
-      failures,
-      evidence,
-    );
+    // 两门语言的"成对记号注册面"住址不同（SDK B4）：ERB 的语言配置仍写在它自己的模块里；
+    // 2.0 的正文搬进 `@kojo/kojo-lang`，宿主这一侧的证据于是是**两截**——落点里那条把供方
+    // 数据接进 `setLanguageConfiguration` 的腿，加上 `kojo2-language.ts` 里唯一的成对表出口名。
+    // 缺落点 = 能力声明是假的；缺出口名 = 有人在宿主另抄了一张表。
+    const legs =
+      language.id === 'erb'
+        ? [
+            [FILES.erbLanguage, /\bbrackets\s*:/, 'brackets:'],
+            [FILES.erbLanguage, /\bautoClosingPairs\s*:/, 'autoClosingPairs:'],
+            [FILES.erbLanguage, /\bERB_BRACKET_PAIRS\b/, 'ERB_BRACKET_PAIRS'],
+          ]
+        : [
+            [
+              FILES.monacoLanguageSurface,
+              /setLanguageConfiguration\(\s*languageId/,
+              'setLanguageConfiguration(languageId, …)',
+            ],
+            [FILES.monacoLanguageSurface, /\bdata\.brackets\b/, 'data.brackets'],
+            [FILES.monacoLanguageSurface, /\bdata\.autoClosingPairs\b/, 'data.autoClosingPairs'],
+            [FILES.kojo2Language, /\bKOJO2_PAIRS\b/, 'KOJO2_PAIRS（语言面库单源的出口名）'],
+          ];
+    for (const [rel, re, label] of legs) shouldRequireText(ctx, rel, re, label, failures, evidence);
   } else if (capability.id === 'indent' && tier === 'builtin') {
     // ERB 的缩进走语言配置（不注册 provider）；kojo2 的 indent 是 self，走下面的注册行取证。
     shouldRequireText(ctx, FILES.erbLanguage, /\bonEnterRules\s*:/, 'onEnterRules:', failures, evidence);

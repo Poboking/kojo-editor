@@ -41,3 +41,13 @@ export * from './definition';
 export * from './inlay';
 export * from './adapter-source';
 export * from './expand-compile';
+// B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，
+// 这两枚进桶只是为了让"要整块"的消费方一次拿全。
+export * from './semantic-roles';
+export * from './theme-rules';
+// B4：2.0 的 Monaco 语言面本体（词表 / Monarch 状态机 / 语言配置 / 三套主题装配）。
+// 供方是 `@kojo/plugin-kojo-lang`，宿主只把槽里的数据落进 Monaco。
+export * from './lexicon';
+export * from './monarch';
+export * from './language-config';
+export * from './monaco-theme';

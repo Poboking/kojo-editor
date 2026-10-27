@@ -21,12 +21,14 @@ import {
   ROLE_LIGHT_THEME_RULES,
   ROLE_MINT_THEME_RULES,
   ROLE_THEME_RULES,
-} from '../src/monaco/kojo-theme-rules';
-import { KOJO2_TOKEN, ROLE, ROLE_FONT_STYLES, SEMANTIC_ROLES, isSemanticRole } from '../src/monaco/semantic-roles';
+} from '@kojo/kojo-lang/theme-rules';
+import { KOJO2_TOKEN, ROLE, ROLE_FONT_STYLES, SEMANTIC_ROLES, isSemanticRole } from '@kojo/kojo-lang/semantic-roles';
 import { defineMonacoThemes, monacoThemeIdFor } from '../src/monaco/theme';
 import { THEME_IDS } from '../src/ui/theme-pref';
+// B4 起这三套主题的**声明**在语言面库、**定义**在宿主落点：本文件量的就是"声明经过落点
+// 之后 Monaco 拿到的那副对象"。`colors` 不再由语言包自带（它是编辑器 chrome，六套 + 三套
+// 共用同一批 values），由落点按 `componentPalette` 侧名补齐。
 import {
-  KOJO2_COLOR_KEYS,
   KOJO2_DARK_THEME_ID,
   KOJO2_LIGHT_THEME_ID,
   KOJO2_MINT_DARK_THEME_ID,
@@ -34,13 +36,35 @@ import {
   KOJO2_THEME_CATEGORIES,
   KOJO2_THEME_IDS,
   KOJO2_THEME_TOKEN_MAP,
-  kojo2DarkTheme,
-  kojo2LightTheme,
-  kojo2MintDarkTheme,
   kojo2ThemeIdFor,
-  registerKojo2Themes,
   type Kojo2TokenThemeSide,
-} from '../src/monaco/kojo2-theme';
+} from '@kojo/kojo-lang/monaco-theme';
+import { KOJO2_MONACO_LANGUAGE_SURFACE } from '@kojo/plugin-kojo-lang';
+import {
+  applyAllMonacoLanguageThemes,
+  componentColorKeysFor,
+  materializeMonacoTheme,
+  registerMonacoLanguageSurfaceSource,
+} from '../src/monaco/monaco-language-surface';
+
+/** 部件色键表（宿主侧三套共用同一批键；旧口径 `KOJO2_COLOR_KEYS` 的同义替换） */
+const KOJO2_COLOR_KEYS = componentColorKeysFor('dark');
+
+/** 三套 2.0 主题在 Monaco 眼里的样子 = 供方声明 + 宿主补的部件色 */
+const kojo2DarkTheme = materializeMonacoTheme(KOJO2_THEMES[KOJO2_DARK_THEME_ID]);
+const kojo2LightTheme = materializeMonacoTheme(KOJO2_THEMES[KOJO2_LIGHT_THEME_ID]);
+const kojo2MintDarkTheme = materializeMonacoTheme(KOJO2_THEMES[KOJO2_MINT_DARK_THEME_ID]);
+
+/**
+ * 把供方接进落点（同 `ensureGlobalProviders` 那条线，只是数据源在测试里内联）。
+ * 返回的函数与旧 `registerKojo2Themes` 同义：同一实例只铺一轮。
+ */
+function registerKojo2Themes(monaco: typeof Monaco): boolean {
+  return applyAllMonacoLanguageThemes(monaco);
+}
+registerMonacoLanguageSurfaceSource(() => [
+  { id: 'test:kojo2-monaco-language', surface: KOJO2_MONACO_LANGUAGE_SURFACE },
+]);
 
 /* ============================== 假 Monaco（记调用账） ============================== */
 
@@ -234,7 +258,9 @@ describe('主题字面量：亮 / 暗 / 墨绿三套，rules 与 colors 都完�
       KOJO2_MINT_DARK_THEME_ID,
     ]);
     expect(Object.keys(KOJO2_THEMES).sort()).toEqual([...KOJO2_THEME_IDS].sort());
-    expect(KOJO2_THEMES[KOJO2_DARK_THEME_ID]).toBe(kojo2DarkTheme);
+    // 声明表按 id 一一对应；落点是**确定性**装配（同一份声明 → 值相等的 Monaco 形状）
+    expect(KOJO2_THEMES[KOJO2_DARK_THEME_ID].id).toBe(KOJO2_DARK_THEME_ID);
+    expect(materializeMonacoTheme(KOJO2_THEMES[KOJO2_DARK_THEME_ID])).toEqual(kojo2DarkTheme);
     expect(kojo2ThemeIdFor('dark')).toBe(KOJO2_DARK_THEME_ID);
     expect(kojo2ThemeIdFor('light')).toBe(KOJO2_LIGHT_THEME_ID);
     expect(kojo2ThemeIdFor('mint-dark')).toBe(KOJO2_MINT_DARK_THEME_ID);
@@ -244,7 +270,7 @@ describe('主题字面量：亮 / 暗 / 墨绿三套，rules 与 colors 都完�
   it('colors 键集合三套相同且 = KOJO2_COLOR_KEYS；每个值都是合法十六进制', () => {
     const expectedKeys = [...KOJO2_COLOR_KEYS].sort();
     for (const id of KOJO2_THEME_IDS) {
-      const colors = KOJO2_THEMES[id].colors;
+      const colors = materializeMonacoTheme(KOJO2_THEMES[id]).colors;
       expect(Object.keys(colors).sort(), id).toEqual(expectedKeys);
       for (const [key, value] of Object.entries(colors)) {
         expect(value, `${id}/${key}`).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/i);
@@ -304,13 +330,20 @@ describe('配色质量：对比度 ≥ 4.5、任意两档 ΔE ≥ 12', () => {
 
 /* ============================== 注册 ============================== */
 
-describe('registerKojo2Themes：幂等、不串实例、主题名完整', () => {
+describe('供方主题落到 Monaco（`applyAllMonacoLanguageThemes`）：幂等、不串实例、主题名完整', () => {
   it('同一实例重复调用只定义一次（返回 false 表示这次什么都没做）', () => {
     const fake = fakeMonaco();
     expect(registerKojo2Themes(fake.monaco)).toBe(true);
     expect([...fake.defined.keys()]).toEqual([...KOJO2_THEME_IDS]);
     expect(fake.calls()).toBe(3);
-    expect(fake.defined.get(KOJO2_DARK_THEME_ID)).toBe(kojo2DarkTheme);
+    const dark = fake.defined.get(KOJO2_DARK_THEME_ID)!;
+    expect(dark.rules).toEqual(kojo2DarkTheme.rules);
+    // **规则元素不重造**：落点只拷容器，每一格仍是暗色角色调色板里的同一枚对象
+    // （`semantic-roles.test.ts` 的"v1 与 2.0 铺同一批规则对象"靠的就是这一条）。
+    expect(dark.rules.map((rule) => rule.token)).toEqual([...ROLE_NAMES]);
+    for (let i = 0; i < ROLE_THEME_RULES.length; i += 1) {
+      expect(dark.rules[i]).toBe(ROLE_THEME_RULES[i]);
+    }
 
     expect(registerKojo2Themes(fake.monaco)).toBe(false);
     expect(registerKojo2Themes(fake.monaco)).toBe(false);
@@ -324,7 +357,7 @@ describe('registerKojo2Themes：幂等、不串实例、主题名完整', () => 
     expect(fresh.calls()).toBe(3);
     expect([...fresh.defined.keys()]).toEqual([...KOJO2_THEME_IDS]);
     for (const id of KOJO2_THEME_IDS) {
-      expect(fresh.defined.get(id)).toBe(KOJO2_THEMES[id]);
+      expect(fresh.defined.get(id)).toEqual(materializeMonacoTheme(KOJO2_THEMES[id]));
     }
   });
 });
@@ -391,7 +424,9 @@ describe('defineMonacoThemes · Kojo 2.0 主题只在 flag 开时注册', () => 
     expect([...fake.defined.keys()]).toEqual(V1_THEME_IDS);
     await flushThemeImport();
     expect([...fake.defined.keys()]).toEqual([...V1_THEME_IDS, ...KOJO2_THEME_IDS]);
-    for (const id of KOJO2_THEME_IDS) expect(fake.defined.get(id)).toBe(KOJO2_THEMES[id]);
+    for (const id of KOJO2_THEME_IDS) {
+      expect(fake.defined.get(id)).toEqual(materializeMonacoTheme(KOJO2_THEMES[id]));
+    }
     expect(fake.calls()).toBe(V1_THEME_IDS.length + KOJO2_THEME_IDS.length);
   });
 

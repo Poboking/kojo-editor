@@ -132,10 +132,13 @@ export interface MonacoMonarchData {
 
 /**
  * 回车动作（**档位名**，不是 Monaco 枚举值）。
- * 档位集合与 `monaco.languages.IndentAction` 逐字同名；宿主按这张表取枚举，
- * 取不到的档位 ⇒ **丢弃该条并 warn**（可见退化），不当" none"处理。
+ *
+ * 档位集合 = `monaco.languages.IndentAction` 的四档（本仓 vendored 0.57 的 monaco.d.ts:7443
+ * 实测只有 `None / Indent / IndentOutdent / Outdent`——**没有** appendText 档：追加文本是
+ * `Indenter.appendText` 那一格，不是动作档位，别在这里造第五档）。宿主按这张表查枚举，
+ * 查不到的档位 ⇒ **丢弃该条并 warn**（可见退化），不当"什么都不做"处理。
  */
-export type MonacoIndentAction = 'none' | 'indent' | 'indentOutdent' | 'appendTab' | 'outdent';
+export type MonacoIndentAction = 'none' | 'indent' | 'indentOutdent' | 'outdent';
 
 export interface MonacoOnEnterAction {
   readonly indentAction: MonacoIndentAction;
@@ -143,16 +146,27 @@ export interface MonacoOnEnterAction {
   readonly removeText?: number;
 }
 
+/**
+ * 一条回车规则（字段名与 Monaco 的 `OnEnterRule` 逐字对齐，别在这儿发明第三种名字）。
+ *
+ * `beforeText` 是**必填**：Monaco 的 `onEnterRules` 没有"只看后文"这一档（它按当前行行首
+ * 到光标这段匹配 `beforeText`），把它做成可选只会让供方交出一套宿主必须丢弃的规则。
+ */
 export interface MonacoOnEnterRule {
-  readonly beforeText?: RegExp;
+  readonly beforeText: RegExp;
   readonly afterText?: RegExp;
-  readonly previousText?: RegExp;
+  readonly previousLineText?: RegExp;
   readonly action: MonacoOnEnterAction;
 }
 
+/**
+ * 缩进阶梯（`indentationRules`）。两枚**必填**：Monaco 的 `IndentationRule` 就要这两枚
+ * 正则，缺一枚的供方数据落不进类型；"不自动收束"是写一条永不命中的正则（本仓 `/^(?!)/`），
+ * 不是省略这一格。
+ */
 export interface MonacoIndentationRules {
-  readonly increaseIndentPattern?: RegExp;
-  readonly decreaseIndentPattern?: RegExp;
+  readonly increaseIndentPattern: RegExp;
+  readonly decreaseIndentPattern: RegExp;
   readonly indentNextLinePattern?: RegExp;
   readonly unindentPattern?: RegExp;
 }

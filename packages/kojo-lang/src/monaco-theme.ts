@@ -1,20 +1,22 @@
 /**
- * Kojo 2.0 的 **Monaco 主题**（K2-CUTOVER-PRE / K2-CUTOVER-THEME；LAU-2 起按语义角色铺色）。
+ * Kojo 2.0 的 **主题面数据**（K2-CUTOVER-PRE / K2-CUTOVER-THEME；LAU-2 起按语义角色铺色；
+ * **SDK B4 起住在 `@kojo/kojo-lang`**：三套 `kojo2-*` 的身份、角色规则与作者面分类表都在这里，
+ * 由 `@kojo/plugin-kojo-lang` 经槽 `ui.monaco.language` 交出，宿主落 `editor.defineTheme`）。
  *
  * ## 与六套 `kojo-*` 主题的关系
  *
- * Monaco 主题是进程级的，双轨期同一个窗口只能有一个主题名。真正让"`.kojo2` 文件在 v1 主题下
- * 也正确上色"的做法不是切主题，而是**同一批角色规则**：`theme.ts` 的六套主题与这里的三套
- * `kojo2-*` 读的是叶子 `kojo-theme-rules.ts` 的**同一批规则对象**（`ROLE_THEME_RULES` /
+ * Monaco 主题是进程级的，双轨期同一个窗口只能有一个主题名。真正让"2.0 文件在 v1 主题下
+ * 也正确上色"的做法不是切主题，而是**同一批角色规则**：宿主的六套主题与这里的三套
+ * `kojo2-*` 读的是 `theme-rules.ts` 的**同一批规则对象**（`ROLE_THEME_RULES` /
  * `ROLE_LIGHT_THEME_RULES` / `ROLE_MINT_THEME_RULES`），不各配一套色。本文件保留三套独立
  * 主题（显式切换 / 对照 / 将来的发布态用）。
  *
  * ## 角色表是单一真源（LAU-2）
  *
  * 档位名（`KOJO2_TOKEN`：锚点 / 声明词 / 台词 …，作者面口径）→ **语义角色**
- * （`semantic-roles.ts` 的 `ROLE.*`）→ 三套主题各一枚色（叶子里的三张角色调色板）。
+ * （`semantic-roles.ts` 的 `ROLE.*`）→ 三套主题各一枚色（`theme-rules.ts` 的三张角色调色板）。
  * 本文件只做后两步的拼装：{@link KOJO2_THEME_TOKEN_MAP} 是"角色 → 三侧样式"的索引，
- * 任一侧少一格 / 多一格在**模块加载期**当场抛（与 `theme.ts` 的构建器同一纪律：
+ * 任一侧少一格 / 多一格在**模块加载期**当场抛（与宿主的构建器同一纪律：
  * 少配一档在加载期变红，而不是静默掉色）。`kojo2-theme.test.ts` 再用规则表与
  * `SEMANTIC_ROLES` 双向交叉断言，防将来漂移。
  *
@@ -25,31 +27,31 @@
  * - **墨绿**：`ROLE_MINT_THEME_RULES`（`#0f1713`）。
  * 三套都不 `inherit`（不从基底借色，切主题不残留上一套的 token 色）。
  *
- * **部件色不再各配一套**（2026-10-26 部件色批）：三套 `colors` 直接复用 `theme.ts` 的
- * `KOJO_DARK_COLORS` / `KOJO_LIGHT_COLORS` / `KOJO_MINT_COLORS` 同一批 values。同一主题族里
- * v1 与 2.0 的部件色逐键相等、缺键 0（闸见 `theme-color-gates.test.ts`）。
+ * ## 部件色不在这里（B4 的分工）
+ *
+ * 三套主题的 `colors`（91 键的 `editor.*` / `menu.*` / 浮层 / 滚动条那一族）是**编辑器 chrome**，
+ * 六套主题共用同一批 values（2026-10-26 部件色批：同一主题族里 v1 与 2.0 逐键相等、缺键 0，
+ * 闸见 `theme-color-gates.test.ts`）。语言包抄一份就是第七份色表，所以这里只声明
+ * **侧名**（{@link Kojo2ThemeSurfaceData.componentPalette}：dark / light / mint），
+ * 由宿主装配时取自己那一侧的部件色。`wordPattern` 同一口径。
  *
  * 硬指标（`theme-color-gates.test.ts` / `kojo2-theme.test.ts` 复跑）：每档前景对主题自己的
  * `editor.background` 对比度 ≥ 4.5；**主题内全部生效规则**（34 档角色）两两 CIE76 ΔE ≥ 12
  * （"看起来两档其实一色"是假分层）；跨语言同义档（`「」` 标点 / 台词 / 字面 / 注释 / 原生 /
  * 类型）在两门语言里落**同一个角色**，因此天然同色。
- *
- * ## 幂等注册
- *
- * {@link registerKojo2Themes} 用 `WeakSet` 记已注册过的 Monaco 实例：同一实例重复调用
- * 只定义一次，第二个实例照常各注册一份（不抛、不覆盖别人的主题名）。
  */
 
-import type * as Monaco from './entry';
 import {
   ROLE_LIGHT_THEME_RULES,
   ROLE_MINT_THEME_RULES,
   ROLE_THEME_RULES,
-} from './kojo-theme-rules';
-import { ROLE, SEMANTIC_ROLES, type SemanticRole } from './semantic-roles';
-// 部件色复用 v1 三套（同一主题族逐键相等；`theme.ts` 对本文件的引用是**动态 import**，
-// 所以这条静态反向依赖不成环）。
-import { KOJO_DARK_COLORS, KOJO_LIGHT_COLORS, KOJO_MINT_COLORS } from './theme';
+} from './theme-rules';
+import {
+  ROLE,
+  SEMANTIC_ROLES,
+  type KojoTokenThemeRule,
+  type SemanticRole,
+} from './semantic-roles';
 
 /* ============================== 三套主题的身份 ============================== */
 
@@ -92,7 +94,7 @@ export function kojo2ThemeIdFor(pref: Kojo2ThemePref): Kojo2ThemeId {
 
 /* ============================== 角色 → 颜色映射 ============================== */
 
-/** 一档角色的样式（Monaco `ITokenThemeRule` 的前景色 + 字体样式） */
+/** 一档角色的样式（前景色 + 字体样式；与主题规则 {@link KojoTokenThemeRule} 同源） */
 export interface Kojo2TokenStyle {
   readonly foreground: string;
   readonly fontStyle?: 'bold' | 'italic';
@@ -101,8 +103,8 @@ export interface Kojo2TokenStyle {
 /** 主题三侧（暗 / 亮 / 墨绿；三侧各有一张角色调色板，不再复用暗色侧） */
 export type Kojo2TokenThemeSide = 'dark' | 'light' | 'mint';
 
-/** 把 `ITokenThemeRule` 的 `fontStyle: string` 收窄成本模块允许的两档（越界即抛） */
-function toStyle(rule: Monaco.editor.ITokenThemeRule): Kojo2TokenStyle {
+/** 把规则表的 `fontStyle` 收窄成本模块允许的两档（越界即抛） */
+function toStyle(rule: KojoTokenThemeRule): Kojo2TokenStyle {
   const foreground = rule.foreground;
   if (foreground === undefined || !/^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(foreground)) {
     throw new Error(`[kojo2-theme] 角色「${rule.token}」没有合法的前景色：${String(foreground)}`);
@@ -119,7 +121,7 @@ function toStyle(rule: Monaco.editor.ITokenThemeRule): Kojo2TokenStyle {
  * 把一张规则表按角色收成样式索引；重复角色 = 表本身写错了（加载期抛，不静默后者覆盖）。
  */
 function indexRules(
-  rules: readonly Monaco.editor.ITokenThemeRule[],
+  rules: readonly KojoTokenThemeRule[],
   label: string,
 ): Map<string, Kojo2TokenStyle> {
   const byToken = new Map<string, Kojo2TokenStyle>();
@@ -220,102 +222,63 @@ export const KOJO2_THEME_CATEGORIES: readonly Kojo2ThemeCategory[] = [
   },
 ];
 
-/* ============================== 部件色 ============================== */
+/* ============================== 主题面数据（契约的 `themes` 那一副） ============================== */
 
 /**
- * 三套主题的部件色**直接复用 v1 的同一批 values**（2026-10-26 部件色批）：编辑器底/前景、
- * 行号、当前行、选区、光标、缩进参考线、括号匹配、浮层（menu / suggest / hover / widget）、
- * 徽章、查找、缩略图、滚动条、概览尺、diff 四色与粘性滚动。
+ * 一套 2.0 主题的语言面声明（与契约 `MonacoThemeContributionData` 同形）。
  *
- * 为什么不再自持一份：`inherit: false` 下**未列的键落 Monaco 默认色**。旧表只有 32 键，
- * 漏了 59 键（`menu.*` / `editorHoverWidget.*` / `badge.*` / `editorBracketMatch.*` /
- * `editorSuggestWidget.foreground` / `editorWidget.foreground` …），切到 `kojo2-*` 时那些
- * 浮层露出一块与主题无关的基底灰。共有键的值与 v1 **逐字相等**（0 漂移），所以键集合
- * 直接取 v1 那张表——同一主题族里 v1 与 2.0 的部件色从此结构性地同源（闸见
- * `theme-color-gates.test.ts`：共有键相等 + 缺键 0）。
+ * 这里给的是**规则与身份**，不是 Monaco 的 `IStandaloneThemeData`：缺 `colors` 那一格，
+ * 由宿主按 {@link Kojo2ThemeSurfaceData.componentPalette} 取同侧部件色补齐
+ * （拷贝 + 逐键校验都住在宿主落点，理由见文件头"部件色不在这里"）。
  */
-export const KOJO2_COLOR_KEYS: readonly string[] = Object.freeze(Object.keys(KOJO_DARK_COLORS));
-
-export type Kojo2ColorKey = (typeof KOJO2_COLOR_KEYS)[number];
-
-/**
- * 部件色 → Monaco `colors`（**拷贝 + 逐键校验**）。
- *
- * 拷贝：Monaco 的 `colors` 是可写记录，不把 v1 那张只读表本体交给它（防宿主改写 v1 主题）；
- * 校验：每个值必须是 6/8 位十六进制——少配 / 配错在加载期抛，不静默掉色（本文件既有纪律）。
- */
-function kojo2ColorsFor(colors: Readonly<Record<string, string>>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const key of KOJO2_COLOR_KEYS) {
-    const value = colors[key];
-    if (value === undefined) {
-      throw new Error(`[kojo2-theme] 部件色调色板缺少「${key}」`);
-    }
-    if (!/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
-      throw new Error(`[kojo2-theme] 部件色「${key}」不是合法十六进制色：${value}`);
-    }
-    out[key] = value;
-  }
-  return out;
+export interface Kojo2ThemeSurfaceData {
+  readonly id: string;
+  readonly base: 'vs' | 'vs-dark';
+  readonly inherit: false;
+  readonly rules: readonly KojoTokenThemeRule[];
+  readonly componentPalette: Kojo2TokenThemeSide;
 }
-
-/* ============================== 主题字面量 ============================== */
 
 /**
  * 2.0 暗色主题（`vs-dark` 基底、不继承）。
  *
- * `rules` 是叶子 `ROLE_THEME_RULES` 的**浅拷贝**（元素同对象）：顶层数组要可写（Monaco 的
- * 类型是 `ITokenThemeRule[]`），但每一格不重造——暗色真源只有一份。
+ * `rules` 是 `ROLE_THEME_RULES` 的**浅拷贝**（元素同对象）：顶层数组交给 Monaco 时要可写，
+ * 但每一格不重造——暗色真源只有一份，v1 的 `kojo-dark` 铺的就是同一批对象。
  */
-export const kojo2DarkTheme: Monaco.editor.IStandaloneThemeData = {
+export const kojo2DarkTheme: Kojo2ThemeSurfaceData = {
+  id: KOJO2_DARK_THEME_ID,
   base: 'vs-dark',
   inherit: false,
   rules: [...ROLE_THEME_RULES],
-  colors: kojo2ColorsFor(KOJO_DARK_COLORS),
+  componentPalette: 'dark',
 };
 
-/** 2.0 亮色主题（`vs` 基底、不继承；角色规则 = 叶子的 `ROLE_LIGHT_THEME_RULES` 浅拷贝） */
-export const kojo2LightTheme: Monaco.editor.IStandaloneThemeData = {
+/** 2.0 亮色主题（`vs` 基底、不继承；角色规则 = `ROLE_LIGHT_THEME_RULES` 浅拷贝） */
+export const kojo2LightTheme: Kojo2ThemeSurfaceData = {
+  id: KOJO2_LIGHT_THEME_ID,
   base: 'vs',
   inherit: false,
   rules: [...ROLE_LIGHT_THEME_RULES],
-  colors: kojo2ColorsFor(KOJO_LIGHT_COLORS),
+  componentPalette: 'light',
 };
 
-/** 2.0 墨绿暗色主题（角色规则 = 叶子的 `ROLE_MINT_THEME_RULES`；底色 `#0f1713`） */
-export const kojo2MintDarkTheme: Monaco.editor.IStandaloneThemeData = {
+/** 2.0 墨绿暗色主题（角色规则 = `ROLE_MINT_THEME_RULES`；底色 `#0f1713`） */
+export const kojo2MintDarkTheme: Kojo2ThemeSurfaceData = {
+  id: KOJO2_MINT_DARK_THEME_ID,
   base: 'vs-dark',
   inherit: false,
   rules: [...ROLE_MINT_THEME_RULES],
-  colors: kojo2ColorsFor(KOJO_MINT_COLORS),
+  componentPalette: 'mint',
 };
 
-/** 主题 id → 字面量（注册器与测试共用一张表；顺序与 {@link KOJO2_THEME_IDS} 一致） */
-export const KOJO2_THEMES: Readonly<
-  Record<Kojo2ThemeId, Monaco.editor.IStandaloneThemeData>
-> = {
+/** 主题 id → 声明（注册器与测试共用一张表；顺序与 {@link KOJO2_THEME_IDS} 一致） */
+export const KOJO2_THEMES: Readonly<Record<Kojo2ThemeId, Kojo2ThemeSurfaceData>> = {
   [KOJO2_DARK_THEME_ID]: kojo2DarkTheme,
   [KOJO2_LIGHT_THEME_ID]: kojo2LightTheme,
   [KOJO2_MINT_DARK_THEME_ID]: kojo2MintDarkTheme,
 };
 
-/* ============================== 注册 ============================== */
-
-/** 已注册过的 Monaco 实例（WeakSet：不拖住实例，也不阻止宿主重建） */
-const registeredInstances = new WeakSet<object>();
-
-/**
- * 注册三套 2.0 主题（**幂等**）。
- *
- * 同一 Monaco 实例重复调用只定义一次；`defineTheme` 本身是"同名覆盖"，即便将来有第二个
- * 实例重新注册也不会抛。返回是否真的写了（`false` = 这次是重复调用，什么都没做）。
- */
-export function registerKojo2Themes(monaco: typeof Monaco): boolean {
-  const instance = monaco as unknown as object;
-  if (registeredInstances.has(instance)) return false;
-  for (const id of KOJO2_THEME_IDS) {
-    monaco.editor.defineTheme(id, KOJO2_THEMES[id]);
-  }
-  registeredInstances.add(instance);
-  return true;
-}
+/** 三套主题的**注册序**（供方交出的数组顺序 = 这张表；宿主按此定义，不重排） */
+export const KOJO2_THEME_SURFACES: readonly Kojo2ThemeSurfaceData[] = Object.freeze(
+  KOJO2_THEME_IDS.map((id) => KOJO2_THEMES[id]),
+);

@@ -17,8 +17,12 @@
  * 8. **插件装配**：三枚贡献都注册、id 稳定、只注册一次。
  */
 import { describe, expect, it } from 'vitest';
-import type { PluginContext } from '@kojo/plugin-api';
+import type { MonacoLanguageSurface, PluginContext } from '@kojo/plugin-api';
 import type { GameAdapter } from '@kojo/kojo-core';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
+import { KOJO2_MONARCH } from '@kojo/kojo-lang/monarch';
+import { KOJO2_LANGUAGE_CONFIGURATION } from '@kojo/kojo-lang/language-config';
+import { KOJO2_THEME_SURFACES } from '@kojo/kojo-lang/monaco-theme';
 import {
   createKojoLangPlugin,
   isKojo2Request,
@@ -243,7 +247,7 @@ describe('inlayHint 供方', () => {
 });
 
 describe('插件装配', () => {
-  it('注册三枚贡献，id 稳定、order 相同', () => {
+  it('注册三枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
     const registered: { slot: string; item: { id: string; order?: number } }[] = [];
     const ctx = {
       pluginId: 'kojo-lang',
@@ -258,9 +262,42 @@ describe('插件装配', () => {
 
     createKojoLangPlugin().activate(ctx);
 
-    expect(registered.map((r) => r.item.id)).toEqual(['kojo2-definition', 'kojo2-symbols', 'kojo2-inlay']);
-    expect(registered.every((r) => r.slot === 'ui.editor.languageService')).toBe(true);
+    expect(registered.map((r) => r.item.id)).toEqual([
+      'kojo2-definition',
+      'kojo2-symbols',
+      'kojo2-inlay',
+      // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
+      'kojo2-monaco-language',
+    ]);
+    expect(registered.map((r) => r.slot)).toEqual([
+      'ui.editor.languageService',
+      'ui.editor.languageService',
+      'ui.editor.languageService',
+      'ui.monaco.language',
+    ]);
     expect(new Set(registered.map((r) => r.item.order)).size).toBe(1);
+  });
+
+  it('语言面贡献交出的就是语言面库那几枚对象本体（不抄第二份数据）', () => {
+    const registered: { slot: string; item: { surface?: MonacoLanguageSurface } }[] = [];
+    const ctx = {
+      pluginId: 'kojo-lang',
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      slots: {
+        register: (slot: string, item: { surface?: MonacoLanguageSurface }) => {
+          registered.push({ slot, item });
+          return () => undefined;
+        },
+      },
+    } as unknown as PluginContext;
+
+    createKojoLangPlugin().activate(ctx);
+    const surface = registered.find((r) => r.slot === 'ui.monaco.language')?.item.surface;
+    expect(surface?.languageId).toBe(KOJO2_LANGUAGE_ID);
+    // **引用相等**：契约要求稳定引用（宿主按引用判重复注册），值相等而对象两份就是抄本
+    expect(surface?.monarch).toBe(KOJO2_MONARCH);
+    expect(surface?.configuration).toBe(KOJO2_LANGUAGE_CONFIGURATION);
+    expect(surface?.themes).toBe(KOJO2_THEME_SURFACES);
   });
 
   it('id 与版本是契约的一部分（改名即断链，存储域也按它分）', () => {

@@ -28,7 +28,7 @@ import {
 } from '../src/monaco/kojo2-semantic';
 import { createKojo2FoldingProvider } from '../src/monaco/kojo2-folding';
 import { KOJO2_INJECTIONS, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
-import { ROLE } from '../src/monaco/semantic-roles';
+import { ROLE } from '@kojo/kojo-lang/semantic-roles';
 import {
   disposeInjectionClients,
   planInjectionRanges,

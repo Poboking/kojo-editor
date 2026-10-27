@@ -27,7 +27,11 @@ interface StubCall {
 
 const stub = vi.hoisted(() => {
   const state = { calls: [] as StubCall[], recording: true };
-  const invoke = (path: string, args: readonly unknown[]): { dispose: () => void } => {
+  const invoke = (path: string, args: readonly unknown[]): unknown => {
+    // B4：组合根挂载时会问"哪些语言已认领"（`applyAllMonacoLanguageSurfaces` 只给认领过的
+    // 语言落语言面）。这是**读数**不是注册：答空表（这台替身没认领过任何语言）且不进账本，
+    // 否则下面"注册 API 数量不多不少"的断言会把一次读取算成一枚挂载。
+    if (path === 'monaco.languages.getLanguages') return [];
     if (state.recording) state.calls.push({ path, args });
     return { dispose: () => undefined };
   };

@@ -1,7 +1,12 @@
-import type * as Monaco from './entry';
-
 /**
- * **语义角色表**（LAU-2 · 架构 §4.2 的落地件）：屏幕上一共分几层，以及"哪个旧 token 名属于哪一层"。
+ * **语义角色表**（LAU-2 · 架构 §4.2 的落地件；**SDK B4 起住在 `@kojo/kojo-lang`**）：
+ * 屏幕上一共分几层，以及"哪个旧 token 名属于哪一层"。
+ *
+ * ## 为什么从宿主搬进语言面库（B4，架构 §7.2 第 2 条）
+ *
+ * 「**角色表住 SDK，不住 app**」：语言面交给插件供时，供方拿不到宿主的常量就只能在包里重抄
+ * `role.*` 字符串——抄一遍就是第二份判据。搬到本包叶子后，插件与宿主 `theme.ts` 读的是**同一枚
+ * 对象**。搬动是纯搬家；为什么不认 Monaco（连 type 也不引）写在 `theme-rules.ts` 头注。
  *
  * ## 为什么要有这一层
  *
@@ -15,7 +20,7 @@ import type * as Monaco from './entry';
  *
  * - **捕获侧**（`tree-sitter/erb-tiers.ts`、`tree-sitter/types.ts`、`kojo2-semantic.ts`）与
  *   **词法侧**（三份 Monarch）只发角色名，不再认识任何一门语言的颜色；
- * - **主题侧**（`theme.ts` / `kojo-theme-rules.ts` / `kojo2-theme.ts`）只铺 `token: role.*`
+ * - **主题侧**（`theme.ts` / `kojo-lang/theme-rules.ts` / 2.0 的主题装配）只铺 `token: role.*`
  *   规则，六套主题对同一批角色各给一色。
  *
  * 名字空间带 `role.` 前缀：既避免与 Monaco 基线 token（`keyword` / `string` …）意外撞名，
@@ -222,7 +227,7 @@ export function isSemanticRole(value: string): value is SemanticRole {
  *
  * 分三段：①ERB / v1 共用的裸词法名；②v1 糖层 `sugar.*` 与引擎档 `keyword.erb*`；
  * ③2.0 的 `kojo2.*`。键集合**必须覆盖三侧现役全部 token 名**（ERB 15 / v1 15 / kojo2 16
- * ＝ 46 个口上 token 名，其中 6 对在六套主题里逐字同色故合并到同一角色），另加 ERB
+ * ＝ 46 枚语言面 token 名，其中 6 对在六套主题里逐字同色故合并到同一角色），另加 ERB
  * Monarch 的四枚子档（`string.quote` / `keyword.preprocessor.skip.*` / `comment-code`）
  * ——它们是同一档的细分形，与母档落同一角色。
  *
@@ -357,8 +362,18 @@ export type Kojo2TokenName = (typeof KOJO2_TOKEN)[keyof typeof KOJO2_TOKEN];
 
 /* ============================== 规则构造 ============================== */
 
-/** 角色 → 一条 Monaco 主题规则（前景色来自调用方的调色板；字重来自 {@link ROLE_FONT_STYLES}） */
-export function roleRule(role: SemanticRole, foreground: string): Monaco.editor.ITokenThemeRule {
+/**
+ * 一条主题前景规则——**与 `monaco.editor.ITokenThemeRule` 逐字同形，但不 import 它**
+ * （为什么连 type 也不引、宿主怎么结构化赋过去，都写在 `theme-rules.ts` 头注）。
+ */
+export interface KojoTokenThemeRule {
+  readonly token: string;
+  readonly foreground: string;
+  readonly fontStyle?: 'bold' | 'italic';
+}
+
+/** 角色 → 一条主题规则（前景色来自调用方的调色板；字重来自 {@link ROLE_FONT_STYLES}） */
+export function roleRule(role: SemanticRole, foreground: string): KojoTokenThemeRule {
   const fontStyle = ROLE_FONT_STYLES[role];
   return fontStyle === undefined ? { token: role, foreground } : { token: role, foreground, fontStyle };
 }
@@ -366,7 +381,7 @@ export function roleRule(role: SemanticRole, foreground: string): Monaco.editor.
 /** 把角色调色板铺成规则数组（漏一档当场抛：少配一档在模块加载期变红，而不是静默掉色） */
 export function rulesFromRolePalette(
   palette: Readonly<Record<string, string>>,
-): Monaco.editor.ITokenThemeRule[] {
+): KojoTokenThemeRule[] {
   return SEMANTIC_ROLES.map((role) => {
     const foreground = palette[role];
     if (foreground === undefined) {
@@ -377,7 +392,7 @@ export function rulesFromRolePalette(
 }
 
 /** 名字层五条规则（按 {@link NAME_LAYER_RULES} 的序与字重） */
-export function nameLayerRules(palette: Readonly<Record<string, string>>): Monaco.editor.ITokenThemeRule[] {
+export function nameLayerRules(palette: Readonly<Record<string, string>>): KojoTokenThemeRule[] {
   return NAME_LAYER_RULES.map((spec) => {
     const foreground = palette[spec.token];
     if (foreground === undefined) {

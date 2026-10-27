@@ -26,8 +26,15 @@ import { compileMonarch, driveLine, stubMonaco, type CompiledLexer } from './mon
 import { KOJO2_DECL_WORDS } from '../src/monaco/kojo2-lexicon';
 import { KOJO2_TOKEN, registerKojo2Language } from '../src/monaco/kojo2-language';
 import { formatKojo2Source } from '../src/monaco/kojo2-format';
+import { KOJO2_MONACO_LANGUAGE_SURFACE } from '@kojo/plugin-kojo-lang';
+import { registerMonacoLanguageSurfaceSource } from '../src/monaco/monaco-language-surface';
 
 const { monaco, captured } = stubMonaco();
+// B4：词法正文在语言面库、由插件经槽交出 ⇒ 认领语言之后还要有供方才着色。
+// 这里把真供方接进落点（同 `kojo2-language.test.ts`），本文件驱动的仍是屏上那一份词法。
+registerMonacoLanguageSurfaceSource(() => [
+  { id: 'kojo2-monaco-language', surface: KOJO2_MONACO_LANGUAGE_SURFACE },
+]);
 registerKojo2Language(monaco);
 
 let lexer!: CompiledLexer;

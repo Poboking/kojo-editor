@@ -229,8 +229,12 @@ const BUILTIN_PROBES: Readonly<
       { rel: 'monaco/erb-language.ts', re: /\bERB_BRACKET_PAIRS\b/ },
     ],
     [KOJO2_LANGUAGE_ID]: [
-      { rel: 'monaco/kojo2-language.ts', re: /\bbrackets\s*:/ },
-      { rel: 'monaco/kojo2-language.ts', re: /\bautoClosingPairs\s*:/ },
+      // B4：2.0 的成对记号正文在语言面库（本文件的走图器只跟 `packages/app/src`，读不到包外），
+      // 所以"这一门有注册面"的证据是宿主那两条腿：**落地腿**（唯一把供方数据接进
+      // `setLanguageConfiguration` 的模块）+ **指针**（成对表在宿主只有这一个出口名）。
+      { rel: 'monaco/monaco-language-surface.ts', re: /setLanguageConfiguration\(\s*languageId/ },
+      { rel: 'monaco/monaco-language-surface.ts', re: /\bdata\.brackets\b/ },
+      { rel: 'monaco/monaco-language-surface.ts', re: /\bdata\.autoClosingPairs\b/ },
       { rel: 'monaco/kojo2-language.ts', re: /\bKOJO2_PAIRS\b/ },
     ],
   },

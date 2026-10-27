@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { ROLE_THEME_RULES } from '../src/monaco/kojo-language';
-import { NAME_LAYER_RULES, ROLE, SEMANTIC_ROLES } from '../src/monaco/semantic-roles';
+import { NAME_LAYER_RULES, ROLE, SEMANTIC_ROLES } from '@kojo/kojo-lang/semantic-roles';
 import { KOJO_SEMANTIC_THEME_RULES } from '../src/monaco/kojo-semantic-tokens';
 import { monacoThemeIdFor, type MonacoThemeId, type MonacoThemePref } from '../src/monaco/theme';
 import { THEME_IDS, type ThemePref } from '../src/ui/theme-pref';

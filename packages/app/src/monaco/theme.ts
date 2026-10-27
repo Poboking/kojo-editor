@@ -14,8 +14,8 @@ import {
   ROLE_LIGHT_THEME_RULES,
   ROLE_MINT_THEME_RULES,
   ROLE_THEME_RULES,
-} from './kojo-theme-rules';
-import { ROLE, nameLayerRules, rulesFromRolePalette } from './semantic-roles';
+} from '@kojo/kojo-lang/theme-rules';
+import { ROLE, nameLayerRules, rulesFromRolePalette } from '@kojo/kojo-lang/semantic-roles';
 
 // K2 batch-3：2.0 三套主题的注册闸。flag 模块零依赖（只读 localStorage），静态引它
 // 不破坏上面那条 PS-10 断链；主题数据本身（`kojo2-theme`）仍走**动态 import**（见
@@ -999,17 +999,21 @@ export function defineMonacoThemes(monaco: typeof Monaco): void {
     colors: SYNTHWAVE84_COLORS,
   });
   // Kojo 2.0 三套主题（K2 batch-3，flag 守卫）：与 v1 三套**不同 id**（`kojo2-*`），
-  // 不覆盖、不继承，重复注册由 `registerKojo2Themes` 的 WeakSet 幂等挡掉。
+  // 不覆盖、不继承，重复注册由 `applyAllMonacoLanguageThemes` 的 WeakSet 幂等挡掉。
   //
-  // 为什么仍是**动态 import**：`kojo2-theme` 里那两张规则表虽已下沉到零 import 叶子
-  // （K2-CUTOVER-THEME），但整套 `colors` 字面量 + 组装逻辑 ~15 KB 只在"真的要切到
-  // `kojo2-*` 主题"时才有意义；`kojo2-*` 目前没有任何消费方（用户面切的仍是 v1 三套，
-  // 而 v1 三套此时已各自带上了 2.0 规则）。flag 关时连这一份都不加载（独立主题是切流面）。
+  // **SDK B4 起这三套不是本文件定义的**：规则（按 `role.*` 铺）与主题身份在供方
+  // （`@kojo/kojo-lang/monaco-theme` 经 `@kojo/plugin-kojo-lang` 交进槽 `ui.monaco.language`），
+  // 这里只把槽里的声明落成 `defineTheme`——91 键部件色仍由宿主补（`componentPalette` 那一侧），
+  // 因为它是编辑器 chrome 不是语言事实（六套 `kojo-*` 与三套 `kojo2-*` 共用同一批 values）。
+  //
+  // 为什么仍是**动态 import**：落点模块静态引着本文件的部件色表，而 `kojo2-*` 目前没有任何
+  // 消费方（用户面切的仍是 v1 三套，而 v1 三套此时已各自带上了 2.0 规则）。flag 关时连这一份
+  // 都不加载（独立主题是切流面）。
   // 失败不静默：v1 三套已经定义完，这里只少 2.0 那三套，用一条 warn 说出来。
   if (isKojo2CutoverEnabled()) {
-    void import('./kojo2-theme')
+    void import('./monaco-language-surface')
       .then((module) => {
-        module.registerKojo2Themes(monaco);
+        module.applyAllMonacoLanguageThemes(monaco, { absentIsVisible: true });
       })
       .catch((error: unknown) => {
         console.warn(

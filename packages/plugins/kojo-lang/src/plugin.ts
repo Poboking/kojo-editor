@@ -11,6 +11,9 @@
  * | `documentSymbol` | `symbols.ts` 的 `kojo2DocumentSymbols` | `src/symbols.ts` |
  * | `inlayHint` | `inlay.ts` 的 `kojo2InlayHints` | `src/inlay.ts` |
  *
+ * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
+ * （Monarch / 语言配置 / 三套主题声明），不是 `provide(request)`：见 `src/monaco-language.ts`。
+ *
  * 每一项**分枚注册**，不塞进同一个 `provide`：它们的输入/产出形状不同（单槽 + `kind`
  * 判别），混在一枚里等于让"定义算不出来"顺手把大纲也带走。
  *
@@ -31,6 +34,11 @@
  *
  * 反过来，如果为了"兜底"在宿主留一份原生实现，那就永远有两份判据——B1 已经把判据
  * 搬进包，正是为了不让第二份长出来。
+ *
+ * 语言面（B4）的退化形状**不一样**，而且是契约写死的：宿主仍然认领 `kojo2` 这门语言
+ * （文件能打开、语言 id 正确），只是**没有语法着色、没有成对记号、没有缩进规则、没有
+ * `kojo2-*` 主题**，并 `console.warn` 一条说清楚。它不会"看起来还有颜色但其实是 v1 那套"——
+ * 宿主没有内置 Monarch 可兜，兜了就是第二份判据。
  */
 import type { Plugin, PluginContext } from '@kojo/plugin-api';
 import { kojo2AdapterNow } from '@kojo/kojo-lang/adapter-source';
@@ -38,6 +46,7 @@ import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { provideDefinition } from './definition';
 import { provideDocumentSymbols } from './symbols';
 import { provideInlayHints } from './inlay';
+import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
 /**
  * 贡献的 `order`：比 ERB 的 20 早一点（10）。
@@ -91,8 +100,14 @@ export function createKojoLangPlugin(): Plugin {
         provide: (request) =>
           provideInlayHints(request, { adapter: adapterFor(request.project?.adapterId) }),
       });
+      ctx.slots.register('ui.monaco.language', {
+        id: 'kojo2-monaco-language',
+        order: CONTRIBUTION_ORDER,
+        surface: KOJO2_MONACO_LANGUAGE_SURFACE,
+      });
       ctx.log.info(
-        `语言服务已接入：definition / documentSymbol / inlayHint（languageId=${KOJO2_LANGUAGE_ID}）`,
+        `语言服务已接入：definition / documentSymbol / inlayHint（languageId=${KOJO2_LANGUAGE_ID}）；` +
+          `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）`,
       );
     },
   };

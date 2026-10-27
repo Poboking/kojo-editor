@@ -18,8 +18,8 @@ import { compileMonarch, driveLine, driveLines, stubMonaco, type CompiledLexer }
 import { CJK_WORD_PATTERN } from '../src/monaco/word-separators';
 import { KOJO_DARK_COLORS } from '../src/monaco/theme';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
-import { ROLE_THEME_RULES } from '../src/monaco/kojo-theme-rules';
-import { ROLE } from '../src/monaco/semantic-roles';
+import { ROLE_THEME_RULES } from '@kojo/kojo-lang/theme-rules';
+import { ROLE } from '@kojo/kojo-lang/semantic-roles';
 import {
   KOJO2_LANGUAGE_ID,
   KOJO2_SOURCE_EXTENSION,
@@ -27,6 +27,8 @@ import {
   KOJO2_TOKEN_TIERS,
   registerKojo2Language,
 } from '../src/monaco/kojo2-language';
+import { KOJO2_MONACO_LANGUAGE_SURFACE } from '@kojo/plugin-kojo-lang';
+import { registerMonacoLanguageSurfaceSource } from '../src/monaco/monaco-language-surface';
 
 /* ============================== 装配（真注册 + 真编译） ============================== */
 
@@ -44,6 +46,13 @@ interface CapturedConfig {
 }
 
 const { monaco, captured } = stubMonaco();
+// B4：语言面的正文不在宿主，所以"注册了就有 Monarch"这件事现在取决于**供方在不在**。
+// 这里把真供方（`@kojo/plugin-kojo-lang` 交出的那一枚对象）接进落点的登记表，再认领语言——
+// 于是本文件驱动的词法表就是屏上真正生效的那一份，而不是测试自己拼的副本。
+// （"没有供方会怎样"不在本文件——那是落点的判据，见 `tests/monaco-language-surface.test.ts`。）
+registerMonacoLanguageSurfaceSource(() => [
+  { id: 'test:kojo2-monaco-language', surface: KOJO2_MONACO_LANGUAGE_SURFACE },
+]);
 registerKojo2Language(monaco);
 const configCaptured = captured.configs.find(
   (c) => (c as CapturedConfig).id === KOJO2_LANGUAGE_ID,

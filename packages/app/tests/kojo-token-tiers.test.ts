@@ -7,7 +7,7 @@ import {
   ROLE_THEME_RULES,
   registerKojoLanguage,
 } from '../src/monaco/kojo-language';
-import { LEGACY_ROLE_ALIASES, ROLE } from '../src/monaco/semantic-roles';
+import { LEGACY_ROLE_ALIASES, ROLE } from '@kojo/kojo-lang/semantic-roles';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { SYSTEM_FUNCTION_ALIASES, sugarEditorLexicon } from '@kojo/plugin-kojo-sugar';
 import { compileMonarch, driveLexer, stubMonaco, type Emit, type MonarchAction } from './monarch-harness';

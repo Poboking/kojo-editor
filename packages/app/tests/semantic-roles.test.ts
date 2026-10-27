@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { defineMonacoThemes } from '../src/monaco/theme';
+// B4：三套 `kojo2-*` 的声明在语言面库，**定义**走宿主落点（供方 = `@kojo/plugin-kojo-lang`）。
+// 本文件因此按"供方交出的东西落到 Monaco 之后长什么样"来量，而不是量宿主内部的一张表。
 import {
   KOJO2_THEMES,
   KOJO2_THEME_IDS,
   KOJO2_THEME_TOKEN_MAP,
-  registerKojo2Themes,
-} from '../src/monaco/kojo2-theme';
+} from '@kojo/kojo-lang/monaco-theme';
+import { KOJO2_MONACO_LANGUAGE_SURFACE } from '@kojo/plugin-kojo-lang';
+import {
+  applyAllMonacoLanguageThemes,
+  registerMonacoLanguageSurfaceSource,
+} from '../src/monaco/monaco-language-surface';
 import { KOJO2_TOKEN } from '../src/monaco/kojo2-language';
 import {
   KOJO_SEMANTIC_THEME_RULES,
@@ -16,7 +22,7 @@ import {
   SEMANTIC_ROLE_PALETTE_DARK,
   SEMANTIC_ROLE_PALETTE_LIGHT,
   SEMANTIC_ROLE_PALETTE_MINT,
-} from '../src/monaco/kojo-theme-rules';
+} from '@kojo/kojo-lang/theme-rules';
 import {
   LEGACY_ROLE_ALIASES,
   NAME_LAYER_RULES,
@@ -26,7 +32,7 @@ import {
   isSemanticRole,
   roleForLegacyToken,
   type SemanticRole,
-} from '../src/monaco/semantic-roles';
+} from '@kojo/kojo-lang/semantic-roles';
 import snapshot from './fixtures/legacy-token-colors.json';
 
 /**
@@ -55,6 +61,14 @@ interface CapturedTheme {
   readonly colors: Record<string, string>;
 }
 
+/**
+ * 供方登记表：把插件交出的那一枚语言面接给宿主落点（同 `ensureGlobalProviders` 的接线，
+ * 只是这里的数据源是**测试内联**的同一枚对象，不经 kernel 槽）。
+ */
+registerMonacoLanguageSurfaceSource(() => [
+  { id: 'test:kojo2-monaco-language', surface: KOJO2_MONACO_LANGUAGE_SURFACE },
+]);
+
 function captureThemes(): Map<string, CapturedTheme> {
   const store = new Map<string, string>([['kojo.ui.kojo2Cutover.v1', 'on']]);
   vi.stubGlobal('window', {
@@ -78,7 +92,9 @@ function captureThemes(): Map<string, CapturedTheme> {
     languages: {},
   } as unknown as typeof Monaco;
   defineMonacoThemes(monaco);
-  registerKojo2Themes(monaco);
+  // `kojo2-*` 三套由宿主落点定义（`defineMonacoThemes` 尾段那一条是动态 import，
+  // 等不到 ⇒ 这里同步补同一件事：把供方声明落成 `defineTheme` 调用）。
+  applyAllMonacoLanguageThemes(monaco);
   vi.unstubAllGlobals();
   return themes;
 }

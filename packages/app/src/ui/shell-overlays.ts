@@ -5,7 +5,7 @@ import { KernelServices } from '@kojo/plugin-api';
 // P2-14 / PS-10 断链：diff view 一格整体走**动态装载**。这一格经
 // `diff-view.ts → monaco/erb-language → theme → monaco/kojo-language →
 // @kojo/plugin-kojo-sugar` 静态把糖词表（~900 KB 源码）挂回开机静态图；theme 的规则
-// 数组虽已下沉叶子（`monaco/kojo-theme-rules.ts`），但 `diff-view.ts` 仍静态 import
+// 数组虽已下沉叶子（`@kojo/kojo-lang/theme-rules`），但 `diff-view.ts` 仍静态 import
 // `kojo-language` 取语言 id——本文件是它唯一的宿主 import 点，改动态后糖包整包离开
 // 开机图。**装载时机**：模块作用域就发起 import（本文件随 App 静态进开机图），effect
 // 跑时 chunk 早已到位，注册落在同一 tick 的微任务里；比对意图只由文件历史 overlay 的

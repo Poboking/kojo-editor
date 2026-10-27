@@ -62,6 +62,9 @@ const stub = vi.hoisted(() => {
   const QUERY_RESULTS = new Map<string, () => unknown>([
     ['monaco.editor.getEditors', () => []],
     ['monaco.editor.getModels', () => []],
+    // B4：组合根现在会问"哪些语言已认领"（`applyAllMonacoLanguageSurfaces` 只给认领过的
+    // 语言落语言面）。空表 = 这台替身上下还没注册过任何语言，与"没有 model"同一档冷启动读数。
+    ['monaco.languages.getLanguages', () => []],
   ]);
   const invoke = (path: string): unknown => {
     // **查询不算注册**：`monaco.editor.getEditors()` / `getModels()` 只读现有实例，建出来的

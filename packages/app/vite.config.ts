@@ -267,6 +267,12 @@ export default defineConfig({
       '@kojo/kojo-lang/inlay': r('../kojo-lang/src/inlay.ts'),
       '@kojo/kojo-lang/adapter-source': r('../kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang/expand-compile': r('../kojo-lang/src/expand-compile.ts'),
+      '@kojo/kojo-lang/semantic-roles': r('../kojo-lang/src/semantic-roles.ts'),
+      '@kojo/kojo-lang/theme-rules': r('../kojo-lang/src/theme-rules.ts'),
+      '@kojo/kojo-lang/lexicon': r('../kojo-lang/src/lexicon.ts'),
+      '@kojo/kojo-lang/monarch': r('../kojo-lang/src/monarch.ts'),
+      '@kojo/kojo-lang/language-config': r('../kojo-lang/src/language-config.ts'),
+      '@kojo/kojo-lang/monaco-theme': r('../kojo-lang/src/monaco-theme.ts'),
       '@kojo/kojo-lang': r('../kojo-lang/src/index.ts'),
       // 语言层共用词表（LAU-3b 解耦批）：叶子同样必须排在桶之前。
       '@kojo/kojo-vocab/keywords': r('../kojo-vocab/src/keywords.ts'),

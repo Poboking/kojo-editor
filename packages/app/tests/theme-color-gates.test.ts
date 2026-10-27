@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
+// B4：三套 `kojo2-*` 的**声明**（id / base / 角色规则 / 部件色侧名）在语言面库，
+// `colors` 那一格由宿主落点按侧名补齐——本闸量的正是补完之后的一半（v1 与 2.0 同族逐键相等）。
 import {
   KOJO2_DARK_THEME_ID,
   KOJO2_LIGHT_THEME_ID,
   KOJO2_MINT_DARK_THEME_ID,
   KOJO2_THEMES,
-} from '../src/monaco/kojo2-theme';
-import { KOJO2_TOKEN, SEMANTIC_ROLES, roleForLegacyToken } from '../src/monaco/semantic-roles';
+} from '@kojo/kojo-lang/monaco-theme';
+import { materializeMonacoTheme } from '../src/monaco/monaco-language-surface';
+import { KOJO2_TOKEN, SEMANTIC_ROLES, roleForLegacyToken } from '@kojo/kojo-lang/semantic-roles';
 import {
   KOJO_DARK_COLORS,
   KOJO_LIGHT_COLORS,
@@ -296,8 +299,9 @@ describe('类型档：v1 `support.type` 与 2.0 `kojo2.type` 每套主题落同�
 /* ============================== ④ 部件色同族同源 ============================== */
 
 /**
- * 部件色同族同源只对**有 2.0 版本**的三族成立（`kojo2-theme.ts` 目前只注册三套，
- * 与 v1 三套一一对应）。新三套（one-dark / rose-pine / synthwave84）没有 `kojo2-*` 孪生，
+ * 部件色同族同源只对**有 2.0 版本**的三族成立（语言面库 `monaco-theme.ts` 目前只声明三套，
+ * 与 v1 三套一一对应；`colors` 由宿主落点按 `componentPalette` 侧名补，本闸就是钉这一步
+ * 补齐之后没有漂）。新三套（one-dark / rose-pine / synthwave84）没有 `kojo2-*` 孪生，
  * 因此不在这张表里——它们的部件色由 `buildColors()` 统一生成（取值逻辑三套相同），
  * 一致性由生成器保证，不需要这道"v1 与 2.0 逐键相等"的闸。
  */
@@ -322,7 +326,7 @@ describe('部件色：同一主题族里 v1 与 2.0 共有键逐字相等、缺�
     '$name：键集相等、值逐键相等',
     ({ v1, k2, table }) => {
       const merged = themeOf(v1).colors;
-      const kojo2 = KOJO2_THEMES[k2 as keyof typeof KOJO2_THEMES].colors!;
+      const kojo2 = materializeMonacoTheme(KOJO2_THEMES[k2 as keyof typeof KOJO2_THEMES]).colors;
       const mergedKeys = Object.keys(merged).sort();
       const kojo2Keys = Object.keys(kojo2).sort();
       // 缺键 0（两个方向都查：v1 有的 2.0 必须有，反之亦然）

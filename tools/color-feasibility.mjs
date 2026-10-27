@@ -11,9 +11,11 @@
  * 阈值同闸：ΔE ≥ 12、对比度 ≥ 4.5。不另发明度量。
  *
  * 输入：
- *  - 6 套底色：v1 三套从 `packages/app/src/monaco/theme.ts` 源码现场正则读出
- *    （KOJO_DARK/LIGHT/MINT_COLORS 的 `editor.background`）；kojo2 三套借 esbuild
- *    现场打包 `kojo2-theme.ts` 后从 `KOJO2_THEMES` 模块真值读出。都不抄死值。
+ *  - 6 套底色：全部从 `packages/app/src/monaco/theme.ts` 源码现场正则读出
+ *    （KOJO_DARK/LIGHT/MINT_COLORS 的 `editor.background`）；`kojo2-*` 三套在 SDK B4 之后
+ *    只声明**侧名**（`componentPalette`），底色即宿主同侧那一枚——两套读数同源，不抄死值。
+ *    角色规则（档数与前景色）借 esbuild 现场打包 `packages/kojo-lang/src/monaco-theme.ts`
+ *    从 `KOJO2_THEMES` 模块真值读出。
  *  - 候选色空间：sRGB 均匀网格，缺省步长 8（0,8,...,248,255 ⇒ 33 级/通道，35937 色；
  *    网格相邻点在 Lab 中相距 ~3-4，远小于阈值 12，离散化说明见输出尾注）。
  *  - 档数 N：缺省 18。
@@ -128,8 +130,11 @@ function readV1Backgrounds() {
 }
 
 async function loadKojo2Module() {
-  // 借 node_modules/.pnpm 里的 esbuild 现场打包 kojo2-theme.ts：
-  // 其静态依赖只有零 import 叶子 kojo-theme-rules（type-only import 运行时被抹掉），node 可直跑
+  // 借 node_modules/.pnpm 里的 esbuild 现场打包语言面库的 `monaco-theme.ts`（SDK B4 起
+  // 三套 `kojo2-*` 的身份与角色规则住在那里）：其静态依赖只有同包的两枚零 import 叶子
+  // （theme-rules / semantic-roles，type-only import 运行时被抹掉），node 可直跑。
+  // ⚠ 这里读不到 `colors`——部件色属编辑器 chrome，B4 起由宿主落点按侧名补
+  //   （底色见下面 `SIDE_TO_V1_BG`，与 v1 同族同一批 values）。
   const pnpmDir = path.join(ROOT, 'node_modules', '.pnpm');
   const dirs = readdirSync(pnpmDir).filter((d) => /^esbuild@/.test(d)).sort();
   let esbuild = null;
@@ -147,7 +152,7 @@ async function loadKojo2Module() {
   const res = esbuild.buildSync({
     stdin: {
       contents: `export * from ${JSON.stringify(
-        path.join(ROOT, 'packages/app/src/monaco/kojo2-theme.ts'),
+        path.join(ROOT, 'packages/kojo-lang/src/monaco-theme.ts'),
       )};`,
       resolveDir: ROOT,
       loader: 'ts',
@@ -404,9 +409,16 @@ async function main() {
   const t0 = Date.now();
   const v1 = readV1Backgrounds();
   const kojo2 = await loadKojo2Module();
+  // 供方只声明**侧名**（`componentPalette`），底色因此就是宿主同侧部件色的 `editor.background`
+  // ——`theme-color-gates.test.ts` 钉的"同一主题族 v1 与 2.0 逐键相等"就是这条同源关系。
+  const SIDE_TO_V1_BG = { dark: 'dark', light: 'light', mint: 'mint-dark' };
   const kojo2Bg = {};
-  for (const id of kojo2.KOJO2_THEME_IDS)
-    kojo2Bg[id] = strip(kojo2.KOJO2_THEMES[id].colors['editor.background']);
+  for (const id of kojo2.KOJO2_THEME_IDS) {
+    const side = kojo2.KOJO2_THEMES[id].componentPalette ?? 'dark';
+    const pref = SIDE_TO_V1_BG[side];
+    if (pref === undefined) throw new Error(`未知的部件色侧「${side}」（主题三套）`);
+    kojo2Bg[id] = v1[pref];
+  }
 
   const THEMES = [
     { theme: 'kojo-dark', bg: v1.dark },

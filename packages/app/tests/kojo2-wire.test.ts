@@ -71,6 +71,14 @@ async function boot(seed: BootSeed = 'default'): Promise<Wire> {
     },
   });
   vi.resetModules();
+  // B4：`kojo2` 的 Monarch / 语言配置正文不在宿主了——落点要从槽取供方，所以登记必须发生在
+  // 与 `languages` **同一个模块 epoch** 内（`resetModules` 之后先引落点，再引 descriptor 链，
+  // 两者拿到的是同一枚新落点）。于是下面"挂面照常挂四枚"量的是生产那条链。
+  const surfaceModule = await import('../src/monaco/monaco-language-surface');
+  const { KOJO2_MONACO_LANGUAGE_SURFACE } = await import('@kojo/plugin-kojo-lang');
+  surfaceModule.registerMonacoLanguageSurfaceSource(() => [
+    { id: 'kojo2-monaco-language', surface: KOJO2_MONACO_LANGUAGE_SURFACE },
+  ]);
   const flag = await import('../src/ui/kojo2-flag');
   const open = await import('../src/ui/kojo2-open');
   const registry = await import('../src/monaco/language-registry');

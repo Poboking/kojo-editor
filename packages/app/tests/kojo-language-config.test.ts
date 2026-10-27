@@ -3,7 +3,7 @@ import type * as Monaco from '../src/monaco/entry';
 import { classifyLine, computeFormatEdits, splitLogicalLines, sugarEnterIndentAfter } from '@kojo/plugin-kojo-sugar';
 import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
-import { ROLE } from '../src/monaco/semantic-roles';
+import { ROLE } from '@kojo/kojo-lang/semantic-roles';
 import { CJK_WORD_PATTERN, CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
 import { editorOptionsForLineCount } from '../src/ui/editor-options';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';

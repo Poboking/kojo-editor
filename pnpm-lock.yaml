@@ -229,6 +229,9 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../kojo-core
+      '@kojo/kojo-vocab':
+        specifier: workspace:*
+        version: link:../kojo-vocab
 
   packages/kojo-project-kit:
     dependencies:

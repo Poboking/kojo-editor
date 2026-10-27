@@ -2,7 +2,7 @@
   "name": "@kojo/kojo-lang",
   "version": "0.0.0",
   "private": true,
-  "description": "Kojo 语言面库：编辑器要知道的判据（符号树 / 声明索引 / source map / 展开视图 / 标识符字符集），纯函数纯数据，零 Monaco、零 React、零 IO。语言层，零游戏名词。",
+  "description": "Kojo 语言面库：编辑器要知道的判据与 Monaco 语言面数据（符号树 / 声明索引 / source map / 展开视图 / 标识符字符集 / 词表 / Monarch 状态机 / 缩进与回车规则 / 角色表与角色调色板），纯函数纯数据，零 Monaco、零 React、零 IO。语言层，零游戏名词。",
   "license": "GPL-3.0-or-later",
   "main": "./src/index.ts",
   "type": "module",
@@ -18,9 +18,16 @@
     "./definition": "./src/definition.ts",
     "./inlay": "./src/inlay.ts",
     "./adapter-source": "./src/adapter-source.ts",
-    "./expand-compile": "./src/expand-compile.ts"
+    "./expand-compile": "./src/expand-compile.ts",
+    "./semantic-roles": "./src/semantic-roles.ts",
+    "./theme-rules": "./src/theme-rules.ts",
+    "./lexicon": "./src/lexicon.ts",
+    "./monarch": "./src/monarch.ts",
+    "./language-config": "./src/language-config.ts",
+    "./monaco-theme": "./src/monaco-theme.ts"
   },
   "dependencies": {
-    "@kojo/kojo-core": "workspace:*"
+    "@kojo/kojo-core": "workspace:*",
+    "@kojo/kojo-vocab": "workspace:*"
   }
 }

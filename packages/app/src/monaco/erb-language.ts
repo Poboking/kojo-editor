@@ -11,7 +11,7 @@ import {
 } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
-import { ROLE } from './semantic-roles';
+import { ROLE } from '@kojo/kojo-lang/semantic-roles';
 import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
 /**
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。

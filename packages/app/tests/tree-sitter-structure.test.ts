@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
-import { ROLE } from '../src/monaco/semantic-roles';
+import { ROLE } from '@kojo/kojo-lang/semantic-roles';
 import {
   encodeStructureTokens,
   resetStructureSemanticWarnings,
