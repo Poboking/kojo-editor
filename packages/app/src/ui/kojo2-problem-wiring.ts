@@ -60,10 +60,18 @@ import { isPathUnder, pathKey } from '@kojo/plugin-api';
 // 入口 D（2026-10-25）之前这里静态 import 了 eraTW 的 `ERATW_GAME_ADAPTER` +
 // `createEratwEmitBackend`，于是打开 eraFL 工程时波浪线是拿 eraTW 的落点规则算的
 // ——不报错、只是错。现在两面都从组合根（`bootstrap.ts` 的两张登记簿）按项目现取。
-import type { EmitFailure, GameAdapter, KojoEmitBackend, KojoExprText } from '@kojo/kojo-core';
+import type {
+  DialectBindingResolution,
+  EmitFailure,
+  GameAdapter,
+  KojoDiagnostic,
+  KojoEmitBackend,
+  KojoExprText,
+} from '@kojo/kojo-core';
 import {
   KOJO2_DIAGNOSTICS_SOURCE,
   createKojo2Diagnostics,
+  kojo2DiagnosticsToMarkers,
   type Kojo2DiagnosticsArtifacts,
   type Kojo2DiagnosticsInput,
   type Kojo2DiagnosticsResult,
@@ -137,6 +145,48 @@ export function kojo2IdentityCompileExpression(expr: { readonly text: string }):
 /** 同步诊断入口（`createKojo2Diagnostics` 本身是同步纯计算；异步化留给将来的 worker） */
 export type Kojo2SyncDiagnoseFn = (input: Kojo2DiagnosticsInput) => Kojo2DiagnosticsResult;
 
+/**
+ * 方言诊断端口（LAU-D1b）：解析一次，把 `core/dialect/*` 那几条并进同一轮诊断。
+ *
+ * 语义全在 `@kojo/kojo-core` 的 `resolveDialectBinding`；本文件只做**并集**：
+ * 方言诊断先上（无 span 的落在文件头），编译诊断照旧在后，markers 由同一份 source 重算。
+ * 不给这个端口 ⇒ 这一批诊断与旧行为逐字相同（既有调用方零改动）。
+ */
+export interface Kojo2DialectDeps {
+  readonly resolve: (input: {
+    readonly project: GameProject | null;
+    readonly filePath: string;
+    readonly source: string;
+  }) => DialectBindingResolution;
+}
+
+/**
+ * 把方言诊断并进一次已完成的 2.0 诊断（纯函数；导出给 node 池直测）。
+ *
+ * 计数三格（`errorCount` / `warningCount` / `ok`）全部按并集重算——**不许**保留编译那次
+ * 的读数：`core/dialect/mismatch` 是 error，留在旧读数里会让问题面板表头与状态栏对不上。
+ * `artifacts` 原样保留（产物与 source map 仍只属于那一次编译）。
+ */
+export function withDialectDiagnostics(
+  result: Kojo2DiagnosticsResult,
+  dialectDiagnostics: readonly KojoDiagnostic[],
+  severitySource: Kojo2MarkerSeveritySource,
+  source: string,
+): Kojo2DiagnosticsResult {
+  if (dialectDiagnostics.length === 0) return result;
+  const diagnostics = [...dialectDiagnostics, ...result.diagnostics];
+  const errorCount = diagnostics.filter((item) => item.severity === 'error').length;
+  const warningCount = diagnostics.filter((item) => item.severity === 'warning').length;
+  return {
+    ...result,
+    diagnostics,
+    markers: kojo2DiagnosticsToMarkers(severitySource, diagnostics, source),
+    errorCount,
+    warningCount,
+    ok: result.error === null && errorCount === 0,
+  };
+}
+
 /** `createProjectKojo2Diagnose` 的依赖（组合根给的两面解析 + Monaco severity 表） */
 export interface Kojo2ProjectDiagnoseOptions {
   /** Monaco 的 severity 表（宿主传真实例；测试传同形状替身） */
@@ -145,6 +195,8 @@ export interface Kojo2ProjectDiagnoseOptions {
   readonly project: () => GameProject | null;
   /** 组合根的两面解析（生产传 `kojo2SurfaceForProject` 函数本身） */
   readonly surfaceFor: Kojo2SurfaceResolver;
+  /** 方言诊断端口（LAU-D1b，可选；省略 ⇒ 不并方言诊断） */
+  readonly dialect?: Kojo2DialectDeps;
 }
 
 /**
@@ -184,11 +236,20 @@ export function createProjectKojo2Diagnose(options: Kojo2ProjectDiagnoseOptions)
           '该游戏未登记 2.0 adapter 或 backend，本文件不做 2.0 诊断（不回退到其它游戏的事实）。',
       );
     }
-    return createKojo2Diagnostics({
+    const result = createKojo2Diagnostics({
       monaco: options.severitySource,
       adapter: surface.adapter,
       backend: surface.backend,
     }).diagnose(input);
+    // LAU-D1b：方言诊断与编译诊断走**同一轮**、同一份 markers / 问题面板条目。
+    // 方言侧不另开通道（铁律 4 的"冲突必须 error"就落在既有问题面板上）。
+    if (options.dialect === undefined) return result;
+    const resolution = options.dialect.resolve({
+      project,
+      filePath: input.filePath,
+      source: input.source,
+    });
+    return withDialectDiagnostics(result, resolution.diagnostics, options.severitySource, input.source);
   };
 }
 
@@ -410,6 +471,11 @@ export interface Kojo2ProblemWiringOptions {
    * 面板写 `kojo2/diagnostics-unavailable` + toast），绝不回退到某个游戏的默认事实。
    */
   readonly surfaceFor?: Kojo2SurfaceResolver;
+  /**
+   * 方言诊断端口（LAU-D1b，可选）：给 `createProjectKojo2Diagnose` 用；与 `diagnose`
+   * 互斥（自定义入口自带方言逻辑时不再叠）。省略 ⇒ 不并方言诊断（旧调用方零改动）。
+   */
+  readonly dialect?: Kojo2DialectDeps;
   readonly debounceMs?: number;
   readonly scheduler?: Kojo2DebounceScheduler;
   /** 问题面板写入端（缺省 = `problem-store.setProblems`） */
@@ -475,6 +541,7 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
           severitySource: options.severitySource,
           project: () => projectOfKernel(kernel),
           surfaceFor: options.surfaceFor,
+          ...(options.dialect !== undefined ? { dialect: options.dialect } : {}),
         }));
 
   const notify = (notice: NoticeInput): void => {

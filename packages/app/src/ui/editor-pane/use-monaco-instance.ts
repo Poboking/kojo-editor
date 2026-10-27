@@ -98,6 +98,8 @@ import {
 // 写进**同一个**缓存，预览只读——一次编译两处消费，绝不二次编译。
 import { createKojo2PreviewEntry } from '../kojo2-preview-entry';
 import { publishKojo2PreviewEntry } from '../kojo2-preview-host';
+// LAU-D1b：方言解析的宿主入口（识别链 + 工作区覆盖 + 文件断言 → 绑定）。
+import { resolveDocumentDialect } from '../dialect-binding';
 // K2 batch-7：展开视图（模板/池/随机）的编译成品来源——只登记这一实例的缓存读取器，
 // hover/definition 按路径问，不二次编译（flag 关 ⇒ 零注册）。
 import { registerKojo2ExpandCompileSource } from '../kojo2-expand-compile';
@@ -625,6 +627,9 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       // eraFL 工程拿到的是 eraTW 的落点规则（不报错、只是错）。取不到两面 ⇒ 诊断入口抛错，
       // 问题面板与 toast 亮灯，而不是"这份文件干净"。
       surfaceFor: kojo2SurfaceForProject,
+      // LAU-D1b：同一轮诊断里并 `core/dialect/*`（未绑定 / 冲突 / 响应错配）。
+      // 解析语义全在 core；这里只把"当前项目 + 这份正文 + 这份路径"递进去。
+      dialect: { resolve: resolveDocumentDialect },
       // K2 batch-5：把这一轮编译的成品留下（预览唯一的读入口），并通知预览刷新 / 卸载
       compileCache: kojo2CompileCache,
       onCompile: (filePath) => {

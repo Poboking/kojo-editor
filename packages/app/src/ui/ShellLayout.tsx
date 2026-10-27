@@ -19,6 +19,16 @@ import {
 import type { Kernel } from '@kojo/kernel';
 import { createPortal } from 'react-dom';
 import '../shell-band.css';
+// LAU-D1b：方言解析链的宿主表与状态栏一格。事实源 = 组合根同一张 2.0 登记簿
+// （键 = v1 `gameId`），与语言服务同一把；解析语义全在 `@kojo/kojo-core`。
+import {
+  dialectStatusForProject,
+  dialectStoreRevision,
+  installDialectFactsFor,
+  loadWorkspaceDialectOverride,
+  subscribeDialectStore,
+} from './dialect-binding';
+import { kojo2AdapterForProject } from '../bootstrap';
 import { setIdentityBandFilled, useIdentityBandSlot } from './identity-band';
 import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY, pathKey } from '@kojo/plugin-api';
@@ -237,6 +247,14 @@ import { requestReplaceFocus, requestSearchFocus } from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
 import { toggleFullscreen } from './window-fullscreen';
+
+/**
+ * 方言事实查询登记（LAU-D1b）：**与语言服务同一个 2.0 登记簿、同一把键**
+ * （v1 `gameId` = 方言 id）。项目壳一挂上就登记，状态栏不必等某个文件打开才答得出方言。
+ *
+ * 登记幂等（后登记覆盖前登记），不另开事实表；查不到就是 `null` ⇒ core 按未绑定处理。
+ */
+installDialectFactsFor((dialect) => kojo2AdapterForProject({ adapterId: dialect }));
 
 /**
  * 壳层五区布局（2026-10-11 UI 重设计批 P1；定稿 §二）。
@@ -503,6 +521,32 @@ function applyModelLanguage(
       if (onError) onError(`语言模式切换未完成：${errorText(error)}`);
       else console.warn('[statusbar] 语言模式切换失败：', error);
     });
+}
+
+/**
+ * 状态栏的**方言格**（LAU-D1b）：当前工程绑到哪个方言，`未绑定` 也如实说。
+ *
+ * 口径：**项目级**——识别链结论（`project.adapterId`）优先按工作区覆盖修正，冲突时文案
+ * 标「冲突」并在悬停里给出 `core/dialect/mismatch` 的原文；不读文件内断言（断言只影响
+ * 那一份文件的诊断，见 `dialect-binding.ts`）。订阅覆盖表是因为 `workspace.json` 是异步
+ * 读出来的：读完必须重渲，否则状态栏永远停在识别链那一眼。
+ */
+export function DialectStatusCell({
+  project,
+}: {
+  project: { readonly adapterId?: string | null; readonly rootDir?: string | null } | null;
+}): ReactElement {
+  useSyncExternalStore(subscribeDialectStore, dialectStoreRevision, dialectStoreRevision);
+  const status = dialectStatusForProject(project);
+  return (
+    <span
+      className={`sb-editor sb-dialect ${status.tone}`}
+      data-status-cell=""
+      title={status.title}
+    >
+      {status.label}
+    </span>
+  );
 }
 
 /**
@@ -2019,6 +2063,14 @@ export function ShellLayout(props: Props): ReactElement {
   keybindingIndexRef.current = keybindingIndex;
   const commandCtxRef = useRef(commandCtx);
   commandCtxRef.current = commandCtx;
+  // LAU-D1b：工作区覆盖（`workspace.json` 的 `meta.dialect`）在开项目后现读一次。
+  // 关联口径与读写都在 `dialect-binding.ts`（工作区项目目录 = 当前工程根）；
+  // 没有对应项目 / 服务不可用 ⇒ 清覆盖，状态栏回到识别链结论（不猜默认方言）。
+  const dialectRootDir = commandCtx.project?.rootDir ?? null;
+  useEffect(() => {
+    if (dialectRootDir === null) return;
+    void loadWorkspaceDialectOverride(kernel.workspaces, dialectRootDir);
+  }, [kernel, dialectRootDir]);
 
   // 调试面登记（2026-10-24 调试模式批）：把「命令面板注册表」暴露给 `window.__kojoDebug.commands`
   // ——只登记读 ref 的通道，注册表本身随渲染重建不受影响；未选入调试模式时登记簿无人读。
@@ -3294,6 +3346,9 @@ export function ShellLayout(props: Props): ReactElement {
         )}
       </div>
       <div className="sb-right">
+        {/* 方言格（LAU-D1b）：**项目绑定成功的那一格**——当前方言 id / `未绑定` 原样上屏，
+            作者不必猜这次的语言服务吃的是哪套事实。 */}
+        <DialectStatusCell project={commandCtx.project} />
         {statusbarItems
           .filter((s) => (s.align ?? 'right') === 'right')
           .map((s) => (
