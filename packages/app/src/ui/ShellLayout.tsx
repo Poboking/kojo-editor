@@ -150,6 +150,8 @@ import { applyGlassPref, useGlassTransparencyPref } from './glass-pref';
 // 由 themes/*.css 的 :root[data-theme=…] 读；与 glass/motion 同款分层（生效路径单源、可单测）
 import { applyThemePref, useThemePref } from './theme-pref';
 import { filterSealedPanels, useSealed } from './sealed';
+// 可选面板（用户 2026-10-27 反馈 5）：「缺省收起」的面板整只滤掉，设置页给开关请它出来
+import { filterHiddenPanels, usePanelVisibility } from './panel-visibility';
 import { useDirectMode } from './direct-mode';
 import { usePanelVirtualize } from './panel-prefs';
 // 2.0 面投影（K2-EDITOR-OPEN-PATHS）：开关关着时恒 undefined，下传面与改动前逐字相同
@@ -1144,6 +1146,11 @@ export function ShellLayout(props: Props): ReactElement {
 
   /** 封存总闸（`sealed.ts`；默认封存）：封存态下 `SEALED_PANEL_IDS` 清单里的插件面板整只不进编排 */
   const sealed = useSealed();
+  /**
+   * 可选面板的显隐（`panel-visibility.ts`；缺省收起）：「口上 XML」这类面板缺省不进活动栏，
+   * 用户在设置页勾一下才请它出来。快照是 `id → 是否显示`，没变则同引用（memo 依赖才成立）。
+   */
+  const optionalPanelsVisible = usePanelVisibility();
   /** 直连模式开关（`direct-mode.ts`；默认关）：设置页里经封存总闸 gated——封存态不渲染 */
   const directMode = useDirectMode();
   /**
@@ -1173,8 +1180,9 @@ export function ShellLayout(props: Props): ReactElement {
       gameScopeByPlugin(kernel.slots.query('game.adapter')),
       activeAdapterId,
     );
-    return filterSealedPanels(scoped, sealed);
-  }, [kernel, builtinViews, sealed, activeAdapterId]);
+    // 可选面板闸（用户反馈 5）：「口上 XML」这类缺省收起的先滤掉，用户在设置页打开才进来
+    return filterSealedPanels(filterHiddenPanels(scoped, optionalPanelsVisible), sealed);
+  }, [kernel, builtinViews, sealed, activeAdapterId, optionalPanelsVisible]);
   const toolbarItems = useMemo(() => kernel.slots.query('ui.toolbar'), [kernel]);
   const statusbarItems = useMemo(() => kernel.slots.query('ui.statusbar'), [kernel]);
   /** 状态栏编码格的落地端口（S2 显式编码读写的真身装配；动作在点击时才拉 monaco 模型池） */
@@ -1202,8 +1210,8 @@ export function ShellLayout(props: Props): ReactElement {
   );
   const fullOrgRef = useRef(fullOrg);
   fullOrgRef.current = fullOrg;
-  // 总闸切换 / 换项目（游戏域面板闸换了一批可见面板）后面板集合增删，active/override
-  // 可能失效——重跑一次清洗器（首跑跳过，挂载时已清洗过）
+  // 总闸切换 / 换项目（游戏域面板闸换了一批可见面板）/ 设置页开了某只可选面板
+  // 后面板集合增删，active/override 可能失效——重跑一次清洗器（首跑跳过，挂载时已清洗过）
   const panelSetSkipFirstRef = useRef(true);
   useEffect(() => {
     if (panelSetSkipFirstRef.current) {
@@ -1211,7 +1219,7 @@ export function ShellLayout(props: Props): ReactElement {
       return;
     }
     dispatch({ type: 'reconcile', org: fullOrgRef.current });
-  }, [sealed, activeAdapterId]);
+  }, [sealed, activeAdapterId, optionalPanelsVisible]);
 
   // 持久化（壳层私事，localStorage；变更即存，体量小无需去抖）
   useEffect(() => saveLayout(layout), [layout]);
@@ -2992,21 +3000,30 @@ export function ShellLayout(props: Props): ReactElement {
         </button>
       ))}
       <span className="spacer" />
-      <button
-        className="ghost small panel-float"
-        title="浮动到大窗口"
-        disabled={!activeId}
-        onClick={() => { if (activeId) floatPanel(activeId); }}
-      >
-        <Icon name="popout" size={14} />
-      </button>
-      <button
-        className="ghost small panel-close"
-        title="关闭面板"
-        onClick={() => dispatch({ type: 'toggle', container })}
-      >
-        <Icon name="close" size={14} />
-      </button>
+      {/* 条尾这对「浮出 / 关闭」只属于**没有自己那条头**的容器（aux 的单面板体）。
+          底栏 dock 每一格（`DockCell`）已经各带一对同名按钮，条尾再来一对就是上下两个
+          一模一样的东西、按下去也走同一个 `floatPanel` / 同一个作用者（用户 1027 反馈 3：
+          照实查过——不是"两条通路功能不同"，就是同一个动作被摆了两遍）。
+          折叠态（面板体整块不挂载、没有格）才把这一对交回条尾，当唯一出口。 */}
+      {dock === undefined || dock.collapsed ? (
+        <>
+          <button
+            className="ghost small panel-float"
+            title="浮动到大窗口"
+            disabled={!activeId}
+            onClick={() => { if (activeId) floatPanel(activeId); }}
+          >
+            <Icon name="popout" size={14} />
+          </button>
+          <button
+            className="ghost small panel-close"
+            title="关闭面板"
+            onClick={() => dispatch({ type: 'toggle', container })}
+          >
+            <Icon name="close" size={14} />
+          </button>
+        </>
+      ) : null}
     </div>
   );
 

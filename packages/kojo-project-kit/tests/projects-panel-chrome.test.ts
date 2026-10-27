@@ -13,18 +13,19 @@ import { createKojoProjectsPanel, type KojoProjectsPanelDeps } from '../src/proj
  * ④ 空态卡与分组头的出现条件（CTA 跟 `openNewWizard` 走；分组头只在"两段同屏"时出现）。
  *
  * hook 走平凡 shim 直接调组件函数拿元素树（沿用同目录 title 批的走法，**刻意不引 react-dom**）；
- * `forceOpen` 那一档把 `useState(false)` 翻成 true——面板里初始为 false 的只有
- * `tutOpen` 与 `creating`，后者只影响行内命名框的 disabled，本文件没有草稿，够干净。
+ * `forceClosed` 那一档把初始为 true 的布尔态翻成 false——面板里初始为 true 的只有
+ * `hintOpen`（双真相源提示）与 `tutOpen`（教程区），后者正是"收起态"要取证的那一格。
  */
 
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>();
-  const flag = (): boolean => (globalThis as { __kojoForceOpen?: boolean }).__kojoForceOpen === true;
+  const forceClosed = (): boolean =>
+    (globalThis as { __kojoForceClosed?: boolean }).__kojoForceClosed === true;
   return {
     ...actual,
     useState: (init: unknown): [unknown, () => void] => {
       const value = typeof init === 'function' ? (init as () => unknown)() : init;
-      return [flag() && value === false ? true : value, () => {}];
+      return [forceClosed() && value === true ? false : value, () => {}];
     },
     useRef: (init: unknown): { current: unknown } => ({ current: init }),
     useEffect: (): void => {},
@@ -106,12 +107,12 @@ function deps(over: Partial<KojoProjectsPanelDeps> = {}): KojoProjectsPanelDeps 
   };
 }
 
-const render = (d: KojoProjectsPanelDeps, forceOpen = false): FakeNode[] => {
-  (globalThis as { __kojoForceOpen?: boolean }).__kojoForceOpen = forceOpen;
+const render = (d: KojoProjectsPanelDeps, forceClosed = false): FakeNode[] => {
+  (globalThis as { __kojoForceClosed?: boolean }).__kojoForceClosed = forceClosed;
   try {
     return walk(createKojoProjectsPanel(d)({}));
   } finally {
-    delete (globalThis as { __kojoForceOpen?: boolean }).__kojoForceOpen;
+    delete (globalThis as { __kojoForceClosed?: boolean }).__kojoForceClosed;
   }
 };
 
@@ -143,29 +144,32 @@ describe('工具条 · 计数与动作分层（260px 侧栏不再撕裂）', () 
   });
 });
 
-describe('教程区 · 收起靠 class，入口一个不少', () => {
-  it('默认收起：题头 aria-expanded=false，四行仍在元素树里，分割线不画', () => {
+describe('教程区 · 缺省展开（用户 1027 反馈 1），收起靠 class，入口一个不少', () => {
+  it('缺省展开：题头 aria-expanded=true，四行直出，分割线在位，摘要让位', () => {
     const nodes = render(deps());
     const head = byClass(nodes, 'kp-tutorials-head')[0]!;
-    expect(head.props['aria-expanded']).toBe(false);
-    expect(byClass(nodes, 'kp-tutorials-body')[0]!.className).toContain('kp-collapsed');
+    expect(head.props['aria-expanded']).toBe(true);
+    expect(byClass(nodes, 'kp-tutorials-body')[0]!.className).not.toContain('kp-collapsed');
     expect(byClass(nodes, 'kp-tutorial-btn').map((n) => n.text)).toEqual([
       '▤口上教程',
       '✦.kojo 语言教程',
       '❖Kojo 2.0 语言教程',
       '▦kojo 语法全表',
     ]);
+    expect(byClass(nodes, 'kp-splitter')).toHaveLength(1);
+    // 展开态不给摘要：同一事实已在四行里说过
+    expect(byClass(nodes, 'kp-chip')).toEqual([]);
+  });
+
+  it('收起后：面板体整块 display:none（class 而不是条件渲染）、分割线不画、留一枚计数摘要', () => {
+    const nodes = render(deps(), true);
+    const head = byClass(nodes, 'kp-tutorials-head')[0]!;
+    expect(head.props['aria-expanded']).toBe(false);
+    expect(byClass(nodes, 'kp-tutorials-body')[0]!.className).toContain('kp-collapsed');
+    expect(byClass(nodes, 'kp-tutorial-btn')).toHaveLength(4);
     expect(byClass(nodes, 'kp-splitter')).toEqual([]);
     // 收起态给一枚摘要，说清"这一行点开有四样东西"
     expect(byClass(nodes, 'kp-chip').map((n) => n.text)).toEqual(['4 本']);
-  });
-
-  it('展开后：分割线回来、摘要让位（同一事实不说两遍）', () => {
-    const nodes = render(deps(), true);
-    expect(byClass(nodes, 'kp-tutorials-body')[0]!.className).not.toContain('kp-collapsed');
-    expect(byClass(nodes, 'kp-splitter')).toHaveLength(1);
-    expect(byClass(nodes, 'kp-chip')).toEqual([]);
-    expect(byClass(nodes, 'kp-tutorial-btn')).toHaveLength(4);
   });
 
   it('没有教程提供方 ⇒ 教程区与题头整块不画（没有能力的入口不摆样子）', () => {

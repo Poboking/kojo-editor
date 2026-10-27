@@ -22,7 +22,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  /* 2026-10-27（用户反馈 2）：2px → 6px。下缘四枚原本以 42/36/36/42 三种节拍挤成一摞，
+     35px 的方格之间只剩 2px，读到眼里就是"没排完"。间距是这一组唯一的病，尺寸不动。 */
+  gap: var(--space-6);
 }
 .shell .activitybar .ab-item.ab-container {
   width: 40px;
@@ -40,7 +42,11 @@
 /* 开关组与上面的视图项之间那道分隔：一条发丝线，不加边框件 */
 .shell .activitybar .ab-containers {
   position: relative;
-  padding-top: 6px;
+  /* 发丝线上下各留一口气，组本身也离上方视图项一步（用户反馈 2）：改前 6px 顶内衬、
+     零外边距，线几乎贴在前一枚图标的下沿。 */
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-1);
+  margin-top: var(--space-1);
 }
 .shell .activitybar .ab-containers::before {
   content: '';
@@ -50,6 +56,31 @@
   right: 10px;
   height: 1px;
   background: var(--border);
+}
+/* 设置钮收在整列最末：与开关组之间留出与"组间距"同档的一口气（改前是 nav 的 2px 缝）。 */
+.shell .activitybar > .ab-item:last-child {
+  margin-top: var(--space-6);
+}
+
+/* ------------------------- 状态栏：档位格不再最亮、不再折行（D-5 续 · 用户 1027 反馈 4） --- */
+
+/* 改前：`.sb-eol` 是状态栏里唯一**继承 --fg 亮字**的可点格（折行 / 空白符 / 缩进三格），
+   且 `white-space` 缺省是 normal ⇒ 窗口拖到最窄时「跟随档」被挤成「跟随 / 档」、
+   「不显示」被挤成「不显 / 示」，在一排 dim 读数里既最亮又最碎，还把那一条撑高。
+   现在归到元信息档（--fg-dim，悬停 / 菜单展开才亮），并钉死不换行；它仍是可点格，
+   但不再和"当前文件 / 光标位"抢注意力。 */
+.shell .statusbar .sb-eol {
+  color: var(--fg-dim);
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.shell .statusbar .sb-eol:hover,
+.shell .statusbar .sb-eol[aria-expanded='true'] {
+  color: var(--fg);
+}
+/* 窄窗里这一格是被压的第一个：不许被压到内容宽度以下（压下去就是折行 / 溢出二选一） */
+.shell .statusbar .sb-eol-wrap {
+  flex: none;
 }
 
 /* ------------------------- 状态栏：索引读数升成进度轨（D-5） ------------------------- */
@@ -183,6 +214,14 @@
   .shell .ab-containers .ab-item.ab-container {
     width: 34px;
     height: 30px;
+  }
+  /* 状态栏窄档（用户反馈 4）：整条先把簇间距收一档，档位格（折行 / 空白符 / 缩进）
+     再降半档字号——它们是"设置项的回显"，窄窗里读到注释级就够，不必和正文读数同档。 */
+  .shell .statusbar {
+    gap: var(--space-6);
+  }
+  .shell .statusbar .sb-eol {
+    font-size: var(--fs-0);
   }
   /* 带里挤的时候先让项目身份收缩，全局动作与窗控恒在 */
   .shell .window-chrome .toolbar .tb-project,

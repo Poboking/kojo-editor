@@ -45,6 +45,9 @@ import {
   type WordWrapPref,
 } from './layout-pref';
 import { useFindSeedPref, saveFindSeedPref, type FindSeedPref } from './find-pref'; // FIND-STATE-PERSIST-B
+// 可选面板的显隐（用户 2026-10-27 反馈 5）：真源在 panel-visibility 的 localStorage，
+// 本页只排版；开关一翻活动栏立即增删那一枚，不需要重启。
+import { setPanelVisible, usePanelVisibility } from './panel-visibility';
 import {
   hintClassFor,
   isDraftNoop,
@@ -419,6 +422,10 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               />
             </div>
           </div>
+
+          {/* 可选面板（用户 2026-10-27 反馈 5）：「口上 XML」这类"只在特定工程里才有内容"
+              的面板缺省不进活动栏，勾一下才请出来。 */}
+          <OptionalPanelRow />
 
           {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，
               设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。
@@ -1100,6 +1107,52 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     },
   ];
 };
+
+/**
+ * 「缺省不进活动栏」的面板开关（用户 2026-10-27 反馈 5）。
+ *
+ * 抽成组件而不是内联 JSX 的理由与 `SugarViewRow` 同一条：这一行要订阅
+ * `panel-visibility` 的显隐快照，而 `SETTINGS_SECTIONS` 是普通函数（在 `useMemo` 里调），
+ * 里面不许用 hook。
+ *
+ * 开关 = 面板在不在活动栏里（不是"功能开关"）：关掉只是把入口收起来，面板代码与它的
+ * 服务一条不动，所以这里不说"启用 / 禁用"，只说"显示"。
+ *
+ * ## 为什么这一行是写死的，而不是照插件清单动态铺开
+ *
+ * 设置页的锚点与搜索索引是**源码级双向闭合**的：`tests/settings-search.test.ts` 把
+ * `src/ui` 下的 `.tsx` 整份读进来找锚点（**不剥注释**，所以这段说明里也不能摆一个完整的
+ * 锚点示例串），只认字面量写法——带 `${` 或 `{` 的模板串一律不算数。
+ * 口径是「新增一行设置 = 页面写死锚点 + 索引补同 key 条目，两步缺一即红」。
+ * 动态 key 那条路走不通——它会让这一行**搜不到**，而"去设置里找"正是这件事的入口。
+ *
+ * 缺省收起的清单本身也是写死的一张小表（`panel-visibility.ts` 的
+ * `HIDDEN_BY_DEFAULT_PANEL_IDS`），所以三处同步即可：**加一只可选面板 = 那张表加一个 id
+ * ＋ 这里加一行 ＋ `settings-search.ts` 补一条**。名字与插件 `ui.panel` 贡献的 `title`
+ * 同词，与设置页其余行的口径一致（本页不按插件清单动态生成文案）。
+ */
+function OptionalPanelRow(): ReactElement {
+  const visible = usePanelVisibility();
+  return (
+    <div className="settings-group">
+      <div role="heading" aria-level={4} className="settings-group-title">面板</div>
+      <div className="settings-kit-row" data-settings-key="general.panel.kojo-xml">
+        <KitField
+          as="label"
+          title="「口上 XML」面板"
+          description="把口上数据搬进 XML 的工程才用得上；关掉只是收起活动栏入口，面板能力不动"
+          control={
+            <Switch
+              checked={visible['kojo-xml'] !== false}
+              onChange={(c) => setPanelVisible('kojo-xml', c)}
+              label="「口上 XML」面板"
+            />
+          }
+        />
+      </div>
+    </div>
+  );
+}
 
 /**
  * `.kojo 预览` 那一行（LAU-3：预览与 kojo1 语法**一起封存**）。

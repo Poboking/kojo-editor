@@ -5350,8 +5350,10 @@ button.primary .hint {
 /* 教程入口（E6）：常驻面板底部，不进树的滚动区——写不动时抬头就能找到。
    高度可用上方分割线（.kp-splitter）上下拉伸（E9）；min-height 兜住内容，
    拖到极限也不裁掉入口。
-   批次十一：默认收成一行题头（.kp-tutorials-head 即展开键），分割线只在展开态存在；
+   批次十一：题头即展开键（.kp-tutorials-head），分割线只在展开态存在；
    收起 = 下面 body 整块 display:none（行留在 DOM，不靠条件渲染）。
+   2026-10-27（用户反馈 1）：**缺省改为展开**——收成一行题头时只是一条灰字，新用户
+   基本注意不到这里还有四本教程。收起入口照旧：点题头即可，四行与 chip 的口径不变。
    2026-10-18（反馈 1）：行按钮 hover 有 translateX(2px)，而行是 width:100%——水平溢出的
    2px 会让 overflow-x 随 overflow-y:auto 变成 auto，水平滚动条出现 / 消失又改变可用高度，
    悬停就在"丢失 → 恢复"之间无限上下抖。这里两件事一起做：水平方向永不滚（裁剪掉任何残余
@@ -5363,7 +5365,8 @@ button.primary .hint {
   padding-right: var(--space-0);
   min-height: max-content;
 }
-/* 题头即展开键（批次十一）：默认只占一行，四本教程收在里面——把整栏高度还给口上树。
+/* 题头即展开键（批次十一；1027 反馈 1 改缺省展开）：展开时四本教程都在，题头只作开关；
+   收起后四行 display:none、题头留一枚 chip 说"有几本"——把整栏高度还给口上树是**收起后**的收益。
    折叠走 class（下面 body 用 display:none），行留在 DOM，展开不必重挂。 */
 .kp-tutorials-head {
   display: flex;

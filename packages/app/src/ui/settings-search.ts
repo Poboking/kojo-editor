@@ -176,6 +176,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   // ---- 通用 / 布局 ----
   { id: 'general.zen', section: 'general', sectionLabel: '通用', label: '写作模式', keywords: ['zen ctrl+k z 全屏'], key: 'general.zen' },
   { id: 'general.zenLimitWidth', section: 'general', sectionLabel: '通用', label: '编辑器居中限宽', keywords: ['居中 限宽 宽度'], key: 'general.zenLimitWidth' },
+  // 可选面板的显示开关（用户 2026-10-27 反馈 5）：真源 `panel-visibility.ts`，缺省收起
+  { id: 'general.panel.kojo-xml', section: 'general', sectionLabel: '通用', label: '「口上 XML」面板', keywords: ['xml 面板 活动栏 侧栏 显示 收起'], key: 'general.panel.kojo-xml' },
   { id: 'general.sealed', section: 'general', sectionLabel: '通用', label: '显示已封存功能', keywords: ['封存 sealed 实验'], key: 'general.sealed' },
   { id: 'general.layout', section: 'general', sectionLabel: '通用', label: '重置布局', keywords: ['布局 侧栏 面板 分屏'], key: 'general.layout' },
 

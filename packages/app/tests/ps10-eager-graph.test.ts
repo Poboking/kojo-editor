@@ -546,6 +546,12 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     另 **+0.4 KB** 是变基合流（dev IC 批 + 本分支 LAU-3）后的既有余量：合流树改前已是
     //     **194 / 2,901 KB**，比上一闸多 1 KB。`legacy-sealed-notice`（EditorPane 边）与
     //     `kojo1-rename*`（动态边）都不进本图；减面候选照旧是 `ui-kit/index.tsx` 按件拆分。
+    //   - **UI 反馈批（2026-10-27，教程展开 / 间距 / 浮出按钮去重 / 档位降档 / 口上 XML 缺省收起）**：
+    //     现读数 **194 文件 / 2,907 KB，与上一档逐字相同**，两枚闸不动（194 / 2,910）。
+    //     **本批零进图**不是漏量：新模块 `ui/panel-visibility.ts` 只被 `ShellLayout` 与
+    //     `SettingsPanel` 引，而这两个都挂在 `ProjectView` 的动态边之下
+    //     （`ui/App.tsx:188` 的 `import('./ProjectView')`）——欢迎页那条链根本走不到它。
+    //     判据是同一棵树上改前/改后各跑一次本闸，两次读数一枚不差（194 / 2,907 与 194 / 2,907）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,910 KB）`);

@@ -9,8 +9,8 @@
  * 这一页钉四件事（全部是可观察结构，不是实现细节）：
  * 1. **首屏只建当前一节的 DOM**：默认进「通用」时，面板里一枚编辑器 / 外观的锚点都没有；
  * 2. **导航栏仍是全量七项**（懒挂载不许把入口藏了）；
- * 3. **首屏 DOM 上限**：`.settings-host` 子树元素数 ≤ 120（改前实测 ~90，留足增长余量；
- *    七节全挂的话是它的数倍——这条是"别悄悄退回全挂"的兜底 tripwire）；
+ * 3. **首屏 DOM 上限**：`.settings-host` 子树元素数 ≤ 140（2026-10-27 现值 115；七节全挂
+ *    实测 1462，是它的十倍——这条是"别悄悄退回全挂"的兜底 tripwire，不卡正常加行）；
  * 4. **没有空节**：七节 `render()` 都非 null，「空节从导航栏消失」这条老口径因此不会被
  *    本次改动静默改变（真出现空节时，本用例会先红，提醒把可见性判据补回去）。
  */
@@ -91,9 +91,13 @@ describe('设置页只挂当前一节（懒挂载）', () => {
     const html = renderToString(h(SettingsPanel, panelProps()));
     const keys = [...html.matchAll(/data-settings-key="([^"]+)"/g)].map((m) => m[1]!);
     expect(keys.length).toBeGreaterThan(0);
+    // 「通用」节的行序（自上而下）：写作模式 / 居中限宽 → 面板（口上 XML 显示开关，
+    // 用户 2026-10-27 反馈 5）→ 封存功能 → 布局。缺省收起的面板也**有**这一行：它管的是
+    // 活动栏入口，与面板当前显不显示无关。
     expect(keys.filter((k) => k.startsWith('general.'))).toEqual([
       'general.zen',
       'general.zenLimitWidth',
+      'general.panel.kojo-xml',
       'general.sealed',
       'general.layout',
     ]);
@@ -125,7 +129,7 @@ describe('设置页只挂当前一节（懒挂载）', () => {
     }
   });
 
-  it('首屏 DOM 上限：挂载后 .settings-host 子树元素数 ≤ 120（全挂七节会远超）', async () => {
+  it('首屏 DOM 上限：挂载后 .settings-host 子树元素数 ≤ 140（全挂七节会远超）', async () => {
     const container = document.createElement('div');
     document.body.append(container);
     const root = createRoot(container);
@@ -137,10 +141,14 @@ describe('设置页只挂当前一节（懒挂载）', () => {
       expect(host).not.toBeNull();
       const count = host!.querySelectorAll('*').length;
       // 读数随跑随打（照 ps10-eager-graph 的先例）：闸绿时也能拿到现值，交付回执不必靠人肉复算。
-      console.log(`[settings-lazy] 首屏 .settings-host 子树元素数：${count}（闸：≤120）`);
-      // 改前实测（真壳 headless）：整个文档 +90 节点、面板内 32 节点；
-      // 闸设 120 = 现有读数的三倍余量，只抓"有人把七节又全挂回来"这一档事故。
-      expect(count).toBeLessThanOrEqual(120);
+      console.log(`[settings-lazy] 首屏 .settings-host 子树元素数：${count}（闸：≤140）`);
+      // 这条闸只抓一件事：**有人把七节又全挂回来**。七节全挂实测 1462 节点（2026-10-27
+      // 临时探针量的），与下面这枚数差一个数量级，判别力不缺。
+      // 闸从 120 抬到 140（2026-10-27 用户反馈 5 批）：改前现值已到 103（旧闸只剩 17 的
+      // 余量），本批增设「面板」组 + 一行「口上 XML」开关再 +12 ⇒ 115/120 只剩 5——
+      // 那个余量会让**下一行正常设置**就撞红，是这条闸的误报面，不是它要抓的事故。
+      // 抬到 140 后余量 25（约两行），仍离 1462 有十倍。
+      expect(count).toBeLessThanOrEqual(140);
       // 同一口径的第二枚钉子：锚点只属于当前一节
       expect(anchorKeys(host!).filter((k) => k.startsWith('editor.'))).toEqual([]);
     } finally {

@@ -16,9 +16,13 @@
  * （控制器见 `package-actions.ts`，无消息时状态条不渲染）。
  *
  * E9 起：教程区与树体之间是可拖拽分割线（`.kp-splitter`），拖拽调整教程区高度。
- * 批次十一（视觉 L06）起：教程区**默认收成一行**（`.kp-tutorials-head` 展开/收起），
+ * 批次十一（视觉 L06）起：教程区可收成一行（`.kp-tutorials-head` 展开/收起），
  * 分割线只在展开态出现；收起用 class 而不是条件渲染（控件留在 DOM，与检索面板
  * `.ksp-options-body.ksp-collapsed` 同一判据），四本教程的入口一个都没少。
+ *
+ * 2026-10-27（用户反馈 1）：**缺省改为展开**——收成一行时"教程"只是一个灰字标题，
+ * 新作者根本注意不到这一栏能点开；四本教程是"写不下去时抬头就能找到"的东西，
+ * 藏起来等于没有。收起仍然一点即得（题头就是那枚开关）。
  */
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -878,7 +882,8 @@ export function createKojoProjectsPanel(
      * 批次十一：教程区收起时整条不画——没有可拉的东西，一条拉不动的把手只会让人以为是渲染故障，
      * 顺带把那一格高度还给树体。
      */
-    const [tutOpen, setTutOpen] = useState(false);
+    /** 教程区展开态（2026-10-27 用户反馈 1：**缺省展开**——收起只是一行灰标题，注意不到） */
+    const [tutOpen, setTutOpen] = useState(true);
     const splitter = !tutOpen ? null : h('div', {
       className: `kp-splitter${splitDragging ? ' dragging' : ''}`,
       role: 'separator',
@@ -896,8 +901,9 @@ export function createKojoProjectsPanel(
      * 写不下去时抬头就能找到，不藏在菜单里。行按钮与树行同族（度量 / hover /
      * focus-visible 复用 styles.css 的行按钮组）。
      *
-     * 批次十一：默认**收成一行**（题头即展开键），整栏高度让给口上树；折叠走 class
+     * 批次十一：题头即展开键，整栏高度可以还给口上树；折叠走 class
      * 而不是条件渲染——四行仍在 DOM 里，展开即显、不必重挂（与检索面板选项区同判据）。
+     * 2026-10-27 起缺省展开（展开态占的高度由分割线随时可调，收起一点即得）。
      *
      * 行序＝**阅读顺序**（与欢迎页四卡同一条口径）：工作流 → v1 写法 → 2.0 写法 → 查表。
      * 行名逐字取各本教程自己的 title（这里不另抄名目）；本层只认语义 id，
