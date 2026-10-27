@@ -8,10 +8,10 @@
 //! 二进制数据经 base64 字符串跨 IPC（确定性强；口上文件体量下开销可忽略）。
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use notify::event::{EventKind, ModifyKind, RenameMode};
@@ -1113,6 +1113,120 @@ async fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
     run_blocking("list_dir", move || list_dir_of(&path)).await
 }
 
+/// 并行遍历的最大工作线程数。与检索同一把实测尺（`SEARCH_DEFAULT_THREADS`）：
+/// SMB 上 4–8 路即饱和（并发曲线 1/4/8/16/32 = 1,295/447/440/442/489 ms），再高只压
+/// 服务端连接数、不涨吞吐。
+const WALK_PARALLEL_THREADS: usize = 8;
+
+/// 并行遍历的中间态：某目录里的**一个位置**。
+///
+/// `dto` 与 `descend_into` 刻意分成两格：`includeFiles/includeDirs` 只筛**输出**、不剪枝，
+/// 所以一个"只深入不输出"的目录条目也必须占住它在序列里的位置——否则子项会被插到兄弟
+/// 条目的前面，前序 DFS 当场破相。
+struct WalkSlot {
+    dto: Option<DirEntryDto>,
+    descend_into: Option<PathBuf>,
+}
+
+/// 枚举**单个**目录（不含递归）：每条判据与旧串行实现逐条同源。
+fn enum_walk_slots(
+    dir: &Path,
+    depth: usize,
+    include_files: bool,
+    include_dirs: bool,
+    walk_max: usize,
+    with_metadata: bool,
+) -> Vec<WalkSlot> {
+    let mut slots = Vec::new();
+    // 读不了 = 空（旧实现 `filter_map(|e| e.ok())` + 根错误丢弃 ⇒ 同形）
+    let read = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return slots,
+    };
+    for entry in read {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let is_dir = file_type.is_dir();
+        let entry_path = entry.path();
+        // 符号链接目录与 walkdir 一样不深入（防环）；到达深度上限的目录连 read_dir 都不做
+        let deeper = is_dir && !file_type.is_symlink() && depth < walk_max;
+        // include_dirs / include_files 只控制“是否输出条目”，递归不受影响
+        let emit = (is_dir && include_dirs) || (!is_dir && include_files);
+        if !emit && !deeper {
+            continue;
+        }
+        let dto = if emit {
+            // 顺路取元数据：Windows 上 `DirEntry::metadata()` 用的是枚举时已经拿到的信息，
+            // 不再额外系统调用——**这正是"一次遍历替掉 N 次 stat"成立的前提**。
+            // 取不到就留空（前端退化回 stat_file），绝不伪造 0。
+            let (mtime_ms, size) = match (with_metadata, is_dir) {
+                (true, false) => match entry.metadata() {
+                    Ok(md) => (Some(mtime_ms_of(md.modified().ok())), Some(md.len())),
+                    Err(_) => (None, None),
+                },
+                _ => (None, None),
+            };
+            Some(DirEntryDto {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: entry_path.to_string_lossy().to_string(),
+                is_directory: is_dir,
+                mtime_ms,
+                size,
+            })
+        } else {
+            None
+        };
+        slots.push(WalkSlot {
+            dto,
+            descend_into: if deeper { Some(entry_path) } else { None },
+        });
+    }
+    slots
+}
+
+/// 把「目录 → 位置列表」按**前序 DFS** 摊平成一维输出。
+///
+/// 迭代器栈：栈顶是"当前正在走的目录"，`next()` 吐完就弹回父目录——于是
+/// 「父目录条目 → 它的全部子孙 → 父目录的下一个条目」这条顺序是结构性成立的，
+/// 与各目录被并行枚举完成的先后无关。这也是它能与串行版逐字节对平的根据
+/// （`walk_preorder_keeps_parent_directory_before_children` 钉的就是这条）。
+fn assemble_preorder(root: &Path, mut map: HashMap<PathBuf, Vec<WalkSlot>>) -> Vec<DirEntryDto> {
+    let mut out = Vec::new();
+    let mut stack: Vec<std::vec::IntoIter<WalkSlot>> = Vec::new();
+    if let Some(slots) = map.remove(root) {
+        stack.push(slots.into_iter());
+    }
+    loop {
+        let next = match stack.last_mut() {
+            Some(it) => it.next(),
+            None => break,
+        };
+        let slot = match next {
+            Some(s) => s,
+            None => {
+                stack.pop();
+                continue;
+            }
+        };
+        if let Some(dto) = slot.dto {
+            out.push(dto);
+        }
+        // 子目录不在表里 = 读不到 ⇒ 跳过（旧实现 `if let Ok(child) = read_dir` 同形）
+        if let Some(child) = slot.descend_into {
+            if let Some(slots) = map.remove(&child) {
+                stack.push(slots.into_iter());
+            }
+        }
+    }
+    out
+}
+
 /// 递归列举的同步核心（命令侧只是 async 壳；单测直接打这一层）。
 ///
 /// **手工 `read_dir` 走查**（REF-FRONT-PERF，2026-10-20）：不再经 walkdir。两点实证
@@ -1121,6 +1235,15 @@ async fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
 ///    先 `read_dir` 打开句柄再立刻丢弃（`push` 不判深度）；
 /// ② 常规全量走查基本持平（57.6ms → 56.2ms，差异在探针噪声内）：本条的主收益在 ①，
 ///    以及"不再需要每条目克隆 walkdir 的 metadata 与错误包装"。
+///
+/// **并行枚举**（P0-3 批 3，2026-10-28）：上面两条解决的是"每个目录怎么走"，没解决
+/// "2,389 次 SMB 往返排队等"。真语料（`D:/Game/eraNAS`，2,389 目录 / 10,052 文件）实测
+/// 改前 **899–1,332ms**，而同一进程里已并行化的检索遍历同一棵树只要 205ms ⇒ 差额几乎
+/// 全是队列化延迟。改成"共享目录队列 + N 个工作线程 + 事后内存 DFS 组装"后，顺序、
+/// 深度、符号链接、错误吞并四条语义逐条不变（串行版是它的 1 线程退化）。
+/// 收益面不止本命令：`walkDir` 是 ERB 索引、整项目扫描、Ctrl+P、变量 schema、
+/// 条件矩阵、回收站、备份巡检等十余处功能的共同入口。
+///
 /// 语义逐条保持原口径：前序 DFS、子序 = `read_dir` 顺序（与 walkdir 相同）；`maxDepth`
 /// 计**根之下的层数**（`maxDepth: 0` = 仅直接子项，与 TS 桥同口径）；不跟随符号链接
 /// （符号链接目录本身照常作为条目输出）；读不了的条目静默跳过（与旧实现
@@ -1133,66 +1256,93 @@ fn walk_dir_of(path: &str, o: WalkOptionsDto) -> Result<Vec<DirEntryDto>, String
     // 深度口径与 walkdir 对齐：根为 0，直接子项为 1；用户 maxDepth 再加 1
     let walk_max = if max_depth == usize::MAX { usize::MAX } else { max_depth + 1 };
 
-    let mut out = Vec::new();
-    let root = Path::new(path);
-    let root_read = match std::fs::read_dir(root) {
-        // 根读不了 = 空结果（walkdir 把根错误作为一条 Err 交给 filter_map 丢弃 ⇒ 同形）
-        Err(_) => return Ok(out),
-        Ok(r) => r,
-    };
-    // 显式栈 = (目录, 该目录的迭代器, 该目录里条目的深度)；栈顶即当前目录 ⇒ 输出恒为前序 DFS
-    let mut stack: Vec<(PathBuf, std::fs::ReadDir, usize)> = vec![(root.to_path_buf(), root_read, 1)];
-    loop {
-        let next = match stack.last_mut() {
-            Some((_, it, _)) => it.next(),
-            None => break,
-        };
-        let entry = match next {
-            Some(Ok(e)) => e,
-            Some(Err(_)) => continue,
-            None => {
-                stack.pop();
-                continue;
-            }
-        };
-        let depth = match stack.last() {
-            Some((_, _, d)) => *d,
-            None => break,
-        };
-        let file_type = match entry.file_type() {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        let is_dir = file_type.is_dir();
-        let entry_path = entry.path();
-        // include_dirs / include_files 只控制“是否输出条目”，递归不受影响
-        if (is_dir && include_dirs) || (!is_dir && include_files) {
-            // 顺路取元数据：Windows 上 `DirEntry::metadata()` 用的是枚举时已经拿到的信息，
-            // 不再额外系统调用——**这正是"一次遍历替掉 N 次 stat"成立的前提**。
-            // 取不到就留空（前端退化回 stat_file），绝不伪造 0。
-            let (mtime_ms, size) = match (with_metadata, is_dir) {
-                (true, false) => match entry.metadata() {
-                    Ok(md) => (Some(mtime_ms_of(md.modified().ok())), Some(md.len())),
-                    Err(_) => (None, None),
-                },
-                _ => (None, None),
-            };
-            out.push(DirEntryDto {
-                name: entry.file_name().to_string_lossy().to_string(),
-                path: entry_path.to_string_lossy().to_string(),
-                is_directory: is_dir,
-                mtime_ms,
-                size,
-            });
-        }
-        // 符号链接目录与 walkdir 一样不深入（防环）；到达深度上限的目录连 read_dir 都不做
-        if is_dir && !file_type.is_symlink() && depth < walk_max {
-            if let Ok(child) = std::fs::read_dir(&entry_path) {
-                stack.push((entry_path, child, depth + 1));
-            }
+    let root = PathBuf::from(path);
+    // 根这一层**同步**枚举：单层列举（文件树展开、备份桶巡检都是这个形状）是最热的，
+    // 不该为它付线程创建 + 两次加锁的钱。根读不了 ⇒ 空结果（walkdir 把根错误丢弃 ⇒ 同形）。
+    let root_slots = enum_walk_slots(&root, 1, include_files, include_dirs, walk_max, with_metadata);
+    let mut map: HashMap<PathBuf, Vec<WalkSlot>> = HashMap::new();
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    for slot in &root_slots {
+        if let Some(child) = &slot.descend_into {
+            queue.push_back((child.clone(), 2));
         }
     }
-    Ok(out)
+    map.insert(root.clone(), root_slots);
+
+    // 无子目录 / 只有一个子目录 ⇒ 串行走完：单链目录树上并行只有开销、没有收益
+    if queue.len() < 2 {
+        while let Some((dir, depth)) = queue.pop_front() {
+            let slots = enum_walk_slots(
+                &dir,
+                depth,
+                include_files,
+                include_dirs,
+                walk_max,
+                with_metadata,
+            );
+            for slot in &slots {
+                if let Some(child) = &slot.descend_into {
+                    queue.push_back((child.clone(), depth + 1));
+                }
+            }
+            map.insert(dir, slots);
+        }
+        return Ok(assemble_preorder(&root, map));
+    }
+
+    // ---- 并行：共享目录队列 + Condvar；`pending` = 待办 + 在途，归零即收工 ----
+    let map = Mutex::new(map);
+    let queue = Mutex::new(queue);
+    let done = Condvar::new();
+    let pending = AtomicUsize::new(queue.lock().unwrap().len());
+    let workers = pending
+        .load(Ordering::Relaxed)
+        .min(WALK_PARALLEL_THREADS)
+        .max(1);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let next = {
+                    let mut q = queue.lock().unwrap();
+                    loop {
+                        if let Some(item) = q.pop_front() {
+                            break Some(item);
+                        }
+                        // 队列空 + 无在途 ⇒ 整棵树走完，收工
+                        if pending.load(Ordering::Acquire) == 0 {
+                            break None;
+                        }
+                        q = done.wait(q).unwrap();
+                    }
+                };
+                let Some((dir, depth)) = next else { return };
+                let slots = enum_walk_slots(
+                    &dir,
+                    depth,
+                    include_files,
+                    include_dirs,
+                    walk_max,
+                    with_metadata,
+                );
+                // 先登记子任务、再销自己这一笔：中间不出现"pending 归零但子任务尚未入队"的窗口
+                {
+                    let mut q = queue.lock().unwrap();
+                    for slot in &slots {
+                        if let Some(child) = &slot.descend_into {
+                            pending.fetch_add(1, Ordering::AcqRel);
+                            q.push_back((child.clone(), depth + 1));
+                        }
+                    }
+                    done.notify_all();
+                }
+                map.lock().unwrap().insert(dir, slots);
+                if pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    done.notify_all();
+                }
+            });
+        }
+    });
+    Ok(assemble_preorder(&root, map.into_inner().unwrap()))
 }
 
 #[tauri::command]
@@ -5418,6 +5568,116 @@ mod io_primitives_tests {
                     assert!(j > i, "父目录条目必须在其子项之前：{}", e.path);
                 }
             }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 并行枚举的**顺序契约**（P0-3 批 3）：无论各目录被几个线程以什么先后枚举完，
+    /// 输出都必须与旧串行 DFS **逐字节**相同（连键序一起 ⇒ 用 JSON 全串对平）。
+    /// 参考实现是改造前那份「显式栈 + 逐目录 read_dir」的逐字副本，只在本测里存在——
+    /// 它一旦与产物漂开，`assemble_preorder` 的"结构性保序"就失去了证据。
+    #[test]
+    fn parallel_walk_matches_serial_dfs_byte_for_byte() {
+        use crate::{mtime_ms_of, DirEntryDto};
+        use std::path::{Path, PathBuf};
+
+        fn serial_reference(path: &str, o: &WalkOptionsDto) -> Vec<DirEntryDto> {
+            let include_files = o.include_files.unwrap_or(true);
+            let include_dirs = o.include_dirs.unwrap_or(false);
+            let max_depth = o.max_depth.unwrap_or(usize::MAX);
+            let with_metadata = o.with_metadata.unwrap_or(false);
+            let walk_max = if max_depth == usize::MAX { usize::MAX } else { max_depth + 1 };
+            let mut out = Vec::new();
+            let root = Path::new(path);
+            let root_read = match std::fs::read_dir(root) {
+                Err(_) => return out,
+                Ok(r) => r,
+            };
+            let mut stack: Vec<(PathBuf, std::fs::ReadDir, usize)> =
+                vec![(root.to_path_buf(), root_read, 1)];
+            loop {
+                let next = match stack.last_mut() {
+                    Some((_, it, _)) => it.next(),
+                    None => break,
+                };
+                let entry = match next {
+                    Some(Ok(e)) => e,
+                    Some(Err(_)) => continue,
+                    None => {
+                        stack.pop();
+                        continue;
+                    }
+                };
+                let depth = match stack.last() {
+                    Some((_, _, d)) => *d,
+                    None => break,
+                };
+                let file_type = match entry.file_type() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let is_dir = file_type.is_dir();
+                let entry_path = entry.path();
+                if (is_dir && include_dirs) || (!is_dir && include_files) {
+                    let (mtime_ms, size) = match (with_metadata, is_dir) {
+                        (true, false) => match entry.metadata() {
+                            Ok(md) => (Some(mtime_ms_of(md.modified().ok())), Some(md.len())),
+                            Err(_) => (None, None),
+                        },
+                        _ => (None, None),
+                    };
+                    out.push(DirEntryDto {
+                        name: entry.file_name().to_string_lossy().to_string(),
+                        path: entry_path.to_string_lossy().to_string(),
+                        is_directory: is_dir,
+                        mtime_ms,
+                        size,
+                    });
+                }
+                if is_dir && !file_type.is_symlink() && depth < walk_max {
+                    if let Ok(child) = std::fs::read_dir(&entry_path) {
+                        stack.push((entry_path, child, depth + 1));
+                    }
+                }
+            }
+            out
+        }
+
+        // 多层 + 多分叉（顶层 4 个目录 ⇒ 走的是并行路径，不是 1 线程退化）。
+        // 目录名与文件名都刻意让"创建序"和"字典序"不同，才分得清"按枚举序"与"按名排序"。
+        let dir = temp_dir("walkpar");
+        for top in ["zeta", "alpha", "mid", "beta"] {
+            for inner in ["y", "x"] {
+                std::fs::create_dir_all(dir.join(top).join(inner)).unwrap();
+                std::fs::write(dir.join(top).join(inner).join("k.ERB"), "x").unwrap();
+                std::fs::write(dir.join(top).join(inner).join("a.ERB"), "xx").unwrap();
+            }
+            std::fs::write(dir.join(top).join("loose.ERB"), "x").unwrap();
+        }
+        std::fs::write(dir.join("root.ERB"), "x").unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        let cases: [(Option<usize>, bool, bool, Option<bool>); 4] = [
+            (None, true, false, None),
+            (None, false, true, None),
+            (None, true, true, Some(true)),
+            (Some(1), true, true, Some(true)),
+        ];
+        for (max_depth, files, dirs, meta) in cases {
+            let make = || WalkOptionsDto {
+                max_depth,
+                include_files: Some(files),
+                include_dirs: Some(dirs),
+                with_metadata: meta,
+            };
+            let got = walk_dir_of(&root, make()).unwrap();
+            let want = serial_reference(&root, &make());
+            assert!(!got.is_empty(), "语料不该是空的（否则对平没有意义）");
+            assert_eq!(
+                serde_json::to_string(&got).unwrap(),
+                serde_json::to_string(&want).unwrap(),
+                "并行输出与串行 DFS 不一致（max_depth={max_depth:?} files={files} dirs={dirs} meta={meta:?}）",
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
