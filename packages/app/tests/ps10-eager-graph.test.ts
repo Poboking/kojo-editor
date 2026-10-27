@@ -552,10 +552,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `SettingsPanel` 引，而这两个都挂在 `ProjectView` 的动态边之下
     //     （`ui/App.tsx:188` 的 `import('./ProjectView')`）——欢迎页那条链根本走不到它。
     //     判据是同一棵树上改前/改后各跑一次本闸，两次读数一枚不差（194 / 2,907 与 194 / 2,907）。
+    //   - **1027 三批合流（标签跨组 / WS-01+02 止血 / WS-03 工作区收窄；变基到 UI 反馈批之后）**：
+    //     现读数见下方随跑打点；KB 闸随现值 **2,910 → 2,940**（口径仍是"读数进十"）。
+    //     **零新增模块**：`view-state-store`（约 22.5 KB）本来会被 `App.tsx` 的改名收尾静态
+    //     拽进图，已改成动态 import（改名是低频动作，同 `editor-model-pool-instance` 的懒边）。
+    //     增量逐块点名（`Buffer.byteLength` 对 6a3fcea5 基线）：`ui/tabs-ops.ts` +7.5 KB
+    //     （跨组拖拽载荷 / 落点 / 固定区钳位 / 菜单项）、`kernel/workspace.ts` +4.1 KB
+    //     （projectDirs / 撤销 / 收窄注释）、`ui/App.tsx` +2.7 KB（跨组移动 + 重名收尾）、
+    //     `ui/editor-groups.ts` +2.6 KB、`ui/recent-files.ts` +2.0 KB、`ui/disk-reconcile.ts`
+    //     +2.0 KB、`plugin-api/workspace.ts` +1.9 KB、`plugin-api/platform.ts` +1.7 KB、
+    //     `plugin-api/io.ts` +1.0 KB、`kernel/io.ts` +1.0 KB、`plugin-api/erb.ts` +0.9 KB、
+    //     `ui/workspace-roots.ts` +0.9 KB、`erb-parser/plugin.ts` +0.8 KB、
+    //     `bridge/tauri-bridge.ts` +0.7 KB、`use-project-session.ts` +0.2 KB、
+    //     `project-scan-schedule.ts` +0.2 KB、adapter 向导 +0.03 KB（合计 ≈32.7 KB；
+    //     差值 2.7 KB 是旧基线四舍五入，UI 反馈批本身零进图）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,910 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_910);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,940 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_940);
     expect(files.length).toBeLessThanOrEqual(194);
   });
 

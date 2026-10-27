@@ -22,12 +22,21 @@ type IoStub = {
 
 function fakeKernel(opts: {
   project?: { rootDir: string } | null;
-  roots?: string[];
+  /**
+   * 作者**作品目录**（2026-10-27 收窄批）。枚举只认这一份；`roots()`（自选根根身）
+   * 故意不给——自选根可能正是游戏目录，糖源枚举跟它走会把整个游戏目录卷进来。
+   */
+  projectDirs?: string[];
   io?: IoStub;
 }): Kernel {
   return {
     project: { current: () => (opts.project === undefined ? null : opts.project) },
-    workspaces: { roots: () => opts.roots ?? [] },
+    workspaces: {
+      roots: () => {
+        throw new Error('listKojoSourceTexts 不该读 roots()：可写/检索区只认 projectDirs()');
+      },
+      projectDirs: () => opts.projectDirs ?? [],
+    },
     io: {
       walkDir: async (path: string) =>
         opts.io?.walkDir ? opts.io.walkDir(path, undefined) : [{ name: 'x.ERB', path: `${path}/x.ERB`, isDirectory: false }],
@@ -42,11 +51,11 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
     expect(await listKojoSourceTexts(fakeKernel({ project: null }))).toEqual([]);
   });
 
-  it('只收 `.kojo`（大小写不敏感），根 = 项目根 ∪ 工作区全部根且去重', async () => {
+  it('只收 `.kojo`（大小写不敏感），根 = 项目根 ∪ 作者作品目录且去重', async () => {
     const walked: string[] = [];
     const kernel = fakeKernel({
       project: { rootDir: PROJECT_ROOT },
-      roots: [WS_ROOT, PROJECT_ROOT], // 与项目根重复一枚 ⇒ 只该走一趟
+      projectDirs: [WS_ROOT, PROJECT_ROOT], // 与项目根重复一枚 ⇒ 只该走一趟
       io: {
         walkDir: async (path) => {
           walked.push(path);
@@ -73,7 +82,7 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
   it('某个根 walkDir 抛 ⇒ **上抛**（吞掉坏根 = 少一份清单 = 只改 .erb 半边的假全或无）', async () => {
     const kernel = fakeKernel({
       project: { rootDir: PROJECT_ROOT },
-      roots: [WS_ROOT],
+      projectDirs: [WS_ROOT],
       io: {
         walkDir: async (path) => {
           if (path === WS_ROOT) throw new Error('盘没了');

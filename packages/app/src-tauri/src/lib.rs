@@ -3782,9 +3782,9 @@ mod write_domain_tests {
     #[test]
     fn paths_overlap_covers_equality_descendants_and_ancestors() {
         let base = temp_root("overlap");
-        let game = mkdir(&base.join("eratw"));
+        let game = mkdir(&base.join("game"));
         let packs = mkdir(&game.join("ERB").join("口上"));
-        let sibling = mkdir(&base.join("eratw-备份"));
+        let sibling = mkdir(&base.join("game-备份"));
         assert!(paths_overlap(&game, &game), "相等必须算重叠");
         assert!(paths_overlap(&packs, &game), "游戏目录里的子目录算重叠");
         assert!(paths_overlap(&game, &packs), "游戏目录本身算重叠");

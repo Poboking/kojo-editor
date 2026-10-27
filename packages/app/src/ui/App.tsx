@@ -31,7 +31,6 @@ import {
   upsertRecentFile,
   type RecentFileRecord,
 } from './recent-files';
-import { renameViewStates } from './view-state-store';
 import { clearRecoveredContents, setRecoveredContents } from './recovery-store';
 import { resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
 // LAU-1a（2026-10-25）：2.0 事实的**按项目取**端口全部收在组合根（bootstrap）——
@@ -2124,9 +2123,18 @@ export function App(): ReactElement {
           },
           () => undefined, // 重挂器装不上 = 停旧判据（下一份 model 建时仍会按新路径判）
         );
-        // 视图状态（光标 / 折叠 / 查找）跟着改名走：旧键下的 slice 迁到新键，LRU 次序不变（WS-02）
+        // 视图状态（光标 / 折叠 / 查找）跟着改名走：旧键下的 slice 迁到新键，LRU 次序不变（WS-02）。
+        // **动态 import**：改名是低频动作，而 store 带上 Monaco 视图态族的可序列化面（约 22 KB）
+        // 不该因为这一条收尾挂进开机图——同上方 `editor-model-pool-instance` 的懒边纪律。
         const rootDir = rootDirRef.current;
-        if (rootDir !== null) renameViewStates(rootDir, renamed);
+        if (rootDir !== null) {
+          void import('./view-state-store').then(
+            (module) => module.renameViewStates(rootDir, renamed),
+            (err: unknown) => {
+              notify({ kind: 'error', message: `迁移编辑器视图状态失败：${errorText(err)}` });
+            },
+          );
+        }
         // 索引里的旧路径不会随盘上改名自己消失（函数树 / 引用会留幽灵行）：让解析器重扫一轮。
         // 失败如实出声（铁律 4）——只是索引旧一会儿，不影响盘上事实，故只在通知区报一次。
         const parser = kernel?.services.tryGet<ErbParserService>('erb.parser');
