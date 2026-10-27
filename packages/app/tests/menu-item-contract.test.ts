@@ -166,9 +166,10 @@ const CAP_FULL: MenuCapability = {
   canAddFolder: true,
   // WS-13：搬运家族的分发已接上（FileTree.tsx 的 runMenuAction 认这四条），满能力档翻 true
   // 让它们进守卫网（中文标题 / id 唯一 / 快捷键不凭空写）。
-  // canSearchInFolder 仍按没通道填——那是下一批（检索入口）的活，接线批同时翻位。
+  // canSearchInFolder 接线批已落（runMenuAction 的 search-in-folder 分支 + ProjectView 的
+  // openFolderSearchScope 宿主腿）⇒ 满能力档同步翻位，进源码扫描的分发覆盖面。
   canMoveEntries: true,
-  canSearchInFolder: false,
+  canSearchInFolder: true,
 };
 
 const CAP_NONE: MenuCapability = {

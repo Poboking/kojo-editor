@@ -28,7 +28,7 @@ import { createFileReplaceRunner } from './search-replace-exec';
 import { editorModelPool } from './editor-model-pool-instance';
 import { createProjectNameLedger } from './name-ledger';
 import { revealLocationOf } from '../monaco/reveal-position';
-import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState } from './search-store';
+import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState, openFolderSearchScope } from './search-store';
 import { runExplorerOp } from './file-clipboard';
 import { EXPLORER_COPY_COMMAND, EXPLORER_CUT_COMMAND, EXPLORER_PASTE_COMMAND, EXPLORER_DUPLICATE_COMMAND } from './file-tree-ops';
 import { dirtyNamesIn } from './disk-reconcile';
@@ -1022,6 +1022,12 @@ export function ProjectView({
           onAddFolder={a.onAddExtraRoot}
           onRemoveExtraRoot={a.onRemoveExtraRoot}
           onCompareFiles={a.onCompareFiles}
+          /**
+           * 「在此文件夹中搜索」的宿主腿（WS-13 收尾批）：直接给 `search-store` 的模块函数。
+           * 它是恒等稳定的模块级引用（不走 `fileTreeArgsRef` 桥也不必进 `useHostVersion`），
+           * 存在性即能力位——传了，树的 `canSearchInFolder` 才翻 true，菜单才摆这一项。
+           */
+          onSearchInFolder={openFolderSearchScope}
         />
       );
     };

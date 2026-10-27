@@ -9,8 +9,17 @@
  * - 面路由：行元素 → `file-tree` 面、空白区 → `file-tree-root` 面、拿不到现场 → 兜底。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement as h } from 'react';
+import { act, createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { createRoot, type Root } from 'react-dom/client';
+import type { ErbIndex, GameProject } from '@kojo/plugin-api';
+import projectViewSource from '../src/ui/ProjectView.tsx?raw';
+import { FileTree } from '../src/ui/FileTree';
+import {
+  openFolderSearchScope,
+  setFolderSearchScope,
+  snapshot as searchSnapshot,
+} from '../src/ui/search-store';
 import {
   FileTreeContextMenu,
   fileTreeSurfaceMenu,
@@ -28,6 +37,9 @@ import type { MenuScope } from '../src/ui/file-tree-types';
 import { buildContextMenuRoute } from '../src/ui/context-surfaces';
 import { isChineseMenuLabel, registerContextMenuCommandRunner } from '../src/ui/context-menu-model';
 import { keybindingSpecOf } from '../src/ui/keybindings';
+
+// 分发层那组要真挂载 FileTree（createRoot + act），React 19 要求显式声明 act 环境
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const cap = (over: Partial<MenuCapability> = {}): MenuCapability => ({
   hasIo: true,
@@ -529,5 +541,118 @@ describe('FileTreeContextMenu · 兜底实现（根宿主缺席时自渲染）',
       '重读（重新扫描）',
       '命令面板',
     ]);
+  });
+});
+
+/* ------------------------------ WS-13 收尾批 · 在此文件夹中搜索的分发层 ------------------------------ */
+
+/**
+ * 「在此文件夹中搜索」的**真链分发**：挂真树（FileTree 注册运行时桥）→ 从真行
+ * `buildContextMenuRoute` → `onSelect('search-in-folder')` → 宿主回调拿到的必须是
+ * **被右击那一格自己的目录**（文件行取所在层、包行取本身），不是当前活动文件的层。
+ * 显示层（能力位随 prop 有无翻转）也从这条真链钉一遍——上面的纯函数判据只到
+ * `menuItemsFor`，这里到 `menuCapability.canSearchInFolder` 接线那一格。
+ */
+describe('在此文件夹中搜索 · 分发层（真挂载的树 → 面路由 → 宿主回调）', () => {
+  const KOJO = 'C:/koa/001';
+  const PKG = `${KOJO}/包A`;
+  const A = `${PKG}/a.ERB`;
+  const B = `${PKG}/b.ERB`;
+  // 活动文件故意摆在**另一层**：分发若错取活动文件的目录，下面的断言就红
+  const ELSEWHERE = 'C:/koa/009/别处/x.ERB';
+
+  const project = {
+    charaIndex: new Map([[1, { no: 1, name: '灵梦', kojoDir: KOJO }]]),
+    kojoPaths: ['C:/koa'],
+    rootDir: 'C:/koa',
+  } as unknown as GameProject;
+  const index = {
+    files: new Map([A, B].map((f) => [f, null])),
+    byName: new Map(),
+  } as unknown as ErbIndex;
+
+  let container: HTMLElement;
+  let root: Root;
+
+  async function mountTree(onSearchInFolder?: (dir: string) => void): Promise<void> {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        h(FileTree, {
+          project,
+          index,
+          activeFile: ELSEWHERE,
+          onOpenFile: (): void => {},
+          ...(onSearchInFolder === undefined ? {} : { onSearchInFolder }),
+        }),
+      );
+    });
+    // 展开角色组：文件行与包头行只有展开后才进 DOM
+    const group = container.querySelector('button.tree-group-btn');
+    await act(async () => {
+      group?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+  }
+
+  /** 对真行右键走完整面路由（与线上同一入口：data-tree-* 读作用域 → 运行时桥分发） */
+  function routeForRow(el: Element | null | undefined): ReturnType<typeof buildContextMenuRoute> {
+    expect(el, '树里没有这条行').toBeTruthy();
+    return buildContextMenuRoute(el as HTMLElement, contextEvent());
+  }
+
+  const fileRow = (path: string): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`button.tree-file[data-locate="${path}"]`);
+  const packageRow = (): HTMLElement | null => container.querySelector('button.tree-package');
+
+  afterEach(async () => {
+    await act(async () => {
+      root?.unmount();
+    });
+    container?.remove();
+    document.body.innerHTML = '';
+  });
+
+  it('文件行：能力位随宿主回调在场而翻 true（菜单出项），点击把**那一格的父目录**交给宿主', async () => {
+    const hits: string[] = [];
+    await mountTree((dir) => hits.push(dir));
+    const route = routeForRow(fileRow(B));
+    expect(route?.source).toBe('file-tree');
+    expect(route?.items.map((i) => i.id)).toContain('search-in-folder');
+    route?.onSelect('search-in-folder');
+    // 取的是被右击那行所在的层；活动文件在 009/别处 —— 拿错就红
+    expect(hits).toEqual([PKG]);
+  });
+
+  it('作者包行：作用域目录 = 那一格本身（不套父、不借活动文件）', async () => {
+    const hits: string[] = [];
+    await mountTree((dir) => hits.push(dir));
+    const route = routeForRow(packageRow());
+    expect(route?.items.map((i) => i.id)).toContain('search-in-folder');
+    route?.onSelect('search-in-folder');
+    expect(hits).toEqual([PKG]);
+  });
+
+  it('宿主没给回调：真链上整项不显示（不是灰着），点击自然无处可发', async () => {
+    await mountTree();
+    const route = routeForRow(fileRow(A));
+    expect(route).not.toBeNull();
+    expect(route?.items.map((i) => i.id)).not.toContain('search-in-folder');
+  });
+
+  it('接的是 search-store 那条真通道：范围根落定 + 翻屏 nonce 各抬一格（宿主腿 ProjectView 已传）', async () => {
+    await mountTree(openFolderSearchScope);
+    const nonceBefore = searchSnapshot().folderScopeNonce;
+    const route = routeForRow(fileRow(A));
+    route?.onSelect('search-in-folder');
+    expect(searchSnapshot().folderScopeRoot).toBe(PKG);
+    expect(searchSnapshot().folderScopeNonce).toBe(nonceBefore + 1);
+    setFolderSearchScope(null); // 一次性范围根归位，别把状态漏给同文件的其它判据
+    // 消费方的接线腿用源码钉（ProjectView 全量渲染要整颗内核，不划算；两头字面一致即够。
+    // `?raw` 走 Vite 资产面取源码文本——与 `menu-item-contract.test.ts` 同一查法）：
+    // import 在场 + prop 传下去 = 能力位真源在宿主侧成立
+    expect(projectViewSource).toContain('openFolderSearchScope');
+    expect(projectViewSource).toContain('onSearchInFolder={openFolderSearchScope}');
   });
 });

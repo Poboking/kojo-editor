@@ -1629,6 +1629,14 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         // 把目录的副本落进目录自己里面是要被计划层判掉的那种圈）
         runClipOp('duplicate', scopePathOf(scope));
         break;
+      case 'search-in-folder': {
+        // 作用域 = **右击那一格自己的目录**（文件行取它所在那层，目录/包行取本身），
+        // 不是当前活动文件——右键 B 目录却搜到 A 文件的层是说不通的那种错。
+        // 落点在宿主：`search-store.openFolderSearchScope`（设目录作用域 + 翻搜索视图上屏）。
+        const dir = scopeTargetDir(scope);
+        if (dir !== null) onSearchInFolder?.(dir);
+        break;
+      }
     }
   };
 
