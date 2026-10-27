@@ -105,6 +105,16 @@ interface Props {
    * 单组时宿主侧拒（命令包装要先用 groups.length 挡一道并给人话，铁律 4）。
    */
   onSetGroupsOrientation: (dir: 'row' | 'column') => void;
+  /**
+   * 按**排列序**聚焦编辑器组（WS-14 · `Ctrl+1/2/3/4`；0 基下标）。
+   * 没有那一组时宿主回一句人话——这里只发意图，组态判据单源在 `editor-groups`。
+   * 缺省（旧调用方）⇒ 那一族命令整个不进注册表。
+   */
+  onFocusGroupOrdinal?: (ordinal: number) => void;
+  /** 组间焦点切换（WS-14，环形）：`delta = ±1`；单组由宿主给人话 */
+  onCycleActiveGroup?: (delta: 1 | -1) => void;
+  /** 键盘调整焦点组份额（WS-14：分隔条只有鼠标能拖的那半欠账）；到边界由宿主给人话 */
+  onResizeActiveGroup?: (delta: 1 | -1) => void;
   /** 关闭指定组（组内标签全部随组消失；单组不可关） */
   onCloseGroup: (groupId: string) => void;
   /** 后退（MM-6，Alt+←）：导航历史光标前移；到栈底由宿主发人话通知 */
@@ -196,6 +206,15 @@ interface Props {
  */
 const TREE_REFRESH_WINDOW_MS = 400;
 
+/**
+ * 编辑器组聚焦命令的档位（WS-14 · `Ctrl+1..4`）。
+ *
+ * 为什么到 4 而不是无限：键位表里数字族只有 1..4 是空位（`Ctrl+0` 已给文字缩放），
+ * 而 4 格分屏在 1080p 上已经是"每格看不见口上行"的宽度。要第 5 格请用
+ * 「上一个 / 下一个编辑器组」环形切——命令表不必为罕见的布局再吃键位。
+ */
+const GROUP_FOCUS_ORDINALS: readonly number[] = [1, 2, 3, 4];
+
 /** 检索范围候选的空值（ref 初值；没提供方时面板与改动前逐字一致） */
 const NO_SEARCH_SCOPES: SearchScopeCatalog = { items: [], notices: [] };
 
@@ -272,6 +291,9 @@ export function ProjectView({
   onSplitEditor,
   onSplitEditorDown,
   onSetGroupsOrientation,
+  onFocusGroupOrdinal,
+  onCycleActiveGroup,
+  onResizeActiveGroup,
   onCloseGroup,
   onNavBack,
   onNavForward,
@@ -755,13 +777,65 @@ export function ProjectView({
           onSetGroupsOrientation('row');
         },
       },
+      /* ---- 编辑器组聚焦与键盘调分隔条（WS-14：组态还差的那半套）----
+       * 判据全在 `editor-groups` 的纯函数里（**排列序 = 数组序**，不是创建序 id），
+       * 这里只把它们折成命令项；"没有第 4 组 / 已经拉到边界"的人话由宿主 App 给
+       * （铁律 4：按得下去就要有交代）。
+       * **刻意不灰**这些命令（与 `workbench.setGroupsRow` 同形态）：灰掉会让作者读成
+       * "这功能没做"，而真相反只是"现在只有一格"——那句人话才是答案。
+       * 宿主没给入口（旧调用方 / 单测）⇒ 整族命令不出现，与拆分那族同口径。 */
+      ...(onFocusGroupOrdinal !== undefined
+        ? GROUP_FOCUS_ORDINALS.map((n) => ({
+            id: `workbench.focusGroup${n}`,
+            title: `聚焦第 ${n} 个编辑器组`,
+            category: '工作台',
+            keybinding: effectiveKeybindingOf(`workbench.focusGroup${n}`),
+            run: () => onFocusGroupOrdinal(n - 1),
+          }))
+        : []),
+      ...(onCycleActiveGroup !== undefined
+        ? [
+            {
+              id: 'workbench.prevEditorGroup',
+              title: '上一个编辑器组',
+              category: '工作台',
+              keybinding: effectiveKeybindingOf('workbench.prevEditorGroup'),
+              run: () => onCycleActiveGroup(-1),
+            },
+            {
+              id: 'workbench.nextEditorGroup',
+              title: '下一个编辑器组',
+              category: '工作台',
+              keybinding: effectiveKeybindingOf('workbench.nextEditorGroup'),
+              run: () => onCycleActiveGroup(1),
+            },
+          ]
+        : []),
+      ...(onResizeActiveGroup !== undefined
+        ? [
+            {
+              id: 'workbench.enlargeActiveGroup',
+              title: '放大焦点编辑器组',
+              category: '工作台',
+              keybinding: effectiveKeybindingOf('workbench.enlargeActiveGroup'),
+              run: () => onResizeActiveGroup(1),
+            },
+            {
+              id: 'workbench.shrinkActiveGroup',
+              title: '缩小焦点编辑器组',
+              category: '工作台',
+              keybinding: effectiveKeybindingOf('workbench.shrinkActiveGroup'),
+              run: () => onResizeActiveGroup(-1),
+            },
+          ]
+        : []),
       // 宿主追加的命令（K2-MIGRATE-MOUNT；开关关时是空数组，表与接线前逐字一致）
       ...(extraShellCommands ?? []),
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建。
     // groups 也是：三条 MM-9 命令（splitEditorDown / setGroupsColumn / setGroupsRow）
     // 的 run 闭包读它判组数，依赖漏了就是过期读数。
-    [onRequestCloseTab, onSaveAll, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
+    [onRequestCloseTab, onSaveAll, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onFocusGroupOrdinal, onCycleActiveGroup, onResizeActiveGroup, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

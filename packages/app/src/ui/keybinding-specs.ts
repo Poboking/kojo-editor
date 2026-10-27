@@ -122,6 +122,10 @@ const DEFAULTS: ReadonlyMap<string, string> = new Map(
 export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   '工作台',
   '布局',
+  // 项目级动作（WS-16 命令面板覆盖面批）：关闭项目 / 打开项目文件夹 / 打开最近项目 /
+  // 在系统资源管理器中显示。**这张序表必须收它**：未登记的分类会被排到最后，
+  // 而守门测试按「出现过的分类都在序表里」判（`keybindings.test.ts`）。
+  '项目',
   '编辑器',
   // 文档内书签（1026 编辑器体感 C 批）：命令面板与 `ShellLayout` 的 shellCommands 同分类名
   '书签',

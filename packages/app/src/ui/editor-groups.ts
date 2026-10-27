@@ -293,6 +293,46 @@ export function setActiveGroup(state: EditorGroupsState, groupId: string): Edito
   return { ...state, activeGroupId: groupId };
 }
 
+/* ---------------- WS-14：按排列序聚焦组 / 组间切换 ----------------
+ *
+ * 键位对标 VS Code 的 `Ctrl+1/2/3`（聚焦第 n 个编辑器组）。**序号 = 排列序**（数组下标，
+ * 0 基）而不是 id：id 是创建序，拆分/关组后两者会分叉，而作者看到的"左边那格"永远是排列序。
+ */
+
+/** 焦点组在排列序里的下标（防御式：`activeGroupId` 对不上任何组 ⇒ 0，与 `activeGroupOf` 同兜底） */
+export function activeGroupOrdinal(state: EditorGroupsState): number {
+  const i = state.groups.findIndex((g) => g.id === state.activeGroupId);
+  return i < 0 ? 0 : i;
+}
+
+/**
+ * 按排列序聚焦某一组（`Ctrl+1/2/3…`）。
+ *
+ * 没有这一组 ⇒ 返回**同一个引用**：按到不存在的组就是没按——不该把焦点从当前组身上挪走，
+ * 也不该造一个新对象让会话落盘白拍一帧（`groupsLayoutSignature` 靠身份之外的签名，
+ * 但状态更新本身仍是每帧的活）。
+ */
+export function focusGroupAtOrdinal(state: EditorGroupsState, ordinal: number): EditorGroupsState {
+  const target = state.groups[ordinal];
+  if (target === undefined) return state;
+  return setActiveGroup(state, target.id);
+}
+
+/**
+ * 组间焦点切换（环形）：`delta = +1` 下一组 / `-1` 上一组。
+ *
+ * 单组 ⇒ 同一引用（没有"隔壁"可去）。命令侧在此之前已经判过组数并给人话提示，
+ * 这里的不动状态只是把"按了也没用"落到数据面上。
+ */
+export function cycleActiveGroup(state: EditorGroupsState, delta: number): EditorGroupsState {
+  const count = state.groups.length;
+  if (count < 2 || !Number.isFinite(delta) || delta === 0) return state;
+  const cur = activeGroupOrdinal(state);
+  const step = Math.trunc(delta) % count;
+  const next = (cur + step + count) % count;
+  return focusGroupAtOrdinal(state, next);
+}
+
 /* ------------ 持久化往返（MM-9 编辑器组布局落盘） ------------ */
 
 /** 序列化产物里的一组（纯数据、可 JSON 化；id 一并存下，见 restoreGroups 的重新分配说明） */
@@ -548,4 +588,52 @@ export function splitSizesEqual(
   if (x.length !== y.length) return false;
   for (let i = 0; i < x.length; i++) if (Math.abs(x[i]! - y[i]!) > EPS) return false;
   return true;
+}
+
+/**
+ * 键盘调分隔条的一步（份额的 4%）。
+ *
+ * 为什么是这个数：一次鼠标拖拽通常跨 10–30%，键盘一下走 4% ⇒ 从均分到"明显偏一边"
+ * 约 5–8 下，与主流编辑器键盘调整同量级。再小是按半天看不出动静，再大是一步过头收不回来。
+ */
+export const SPLIT_KEYBOARD_STEP = 0.04;
+
+/**
+ * 键盘调整某一组的份额（WS-14：分隔条只有鼠标能拖的那半欠账）。
+ *
+ * 坐标系与 `splitSizes` 逐字一致：长度 = 组数 - 1，`sizes[i]` 是第 i 组份额，
+ * **最后一组吃剩余**。所以"改一组的大小"= 与它的邻居**交换**份额：
+ * - 焦点组不是最后一组 ⇒ 动它**右边**那条分隔条（与下一组换）；是最后一组 ⇒ 动左边那条。
+ *   单侧而不是两侧同推：两侧推一下的位移是预期的两倍，作者按一下就"跳过头"。
+ * - 末组不在数组里（吃剩余），所以只写数组内那一侧，另一侧自动跟着变。
+ *
+ * 钳制与数据面同款闸：供给方不许跌破 `SPLIT_MIN_RATIO`（一成），合法兜底再由
+ * `isNormalizedSizes` 复验一次——**非法一律回 null**，不把坏数组交给渲染层。
+ *
+ * @returns 新的份额数组；没有可挪的份额（贴到下限 / 单组 / 参数非法）⇒ null
+ *          （调用方据此说人话，并避免一次白 setState 与一轮会话落盘）
+ */
+export function resizeGroupShare(
+  sizes: readonly number[] | null | undefined,
+  groupCount: number,
+  ordinal: number,
+  delta: number,
+  step: number = SPLIT_KEYBOARD_STEP,
+): number[] | null {
+  if (!Number.isFinite(groupCount) || groupCount < 2) return null;
+  if (!Number.isFinite(delta) || delta === 0) return null;
+  if (!Number.isFinite(step) || step <= 0) return null;
+  const n = Math.trunc(groupCount);
+  const base = [...alignSplitSizes(sizes, n)] as number[];
+  const i = Math.max(0, Math.min(n - 1, Math.trunc(ordinal)));
+  const partner = i < n - 1 ? i + 1 : i - 1;
+  const grow = delta > 0 ? i : partner;
+  const shrink = delta > 0 ? partner : i;
+  const room = groupShareOf(base, n, shrink) - SPLIT_MIN_RATIO;
+  const amount = Math.min(step, Math.max(0, room));
+  if (!(amount > EPS)) return null;
+  const out = [...base];
+  if (grow <= n - 2) out[grow] = out[grow]! + amount;
+  if (shrink <= n - 2) out[shrink] = out[shrink]! - amount;
+  return isNormalizedSizes(out, n - 1) ? out : null;
 }

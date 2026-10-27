@@ -14,6 +14,9 @@ import {
   initialEditorGroups,
   moveTabBetweenGroups,
   openInActiveGroup,
+  activeGroupOrdinal,
+  cycleActiveGroup,
+  focusGroupAtOrdinal,
   restoreGroups,
   serializeGroups,
   setActiveGroup,
@@ -567,5 +570,85 @@ describe('groupsLayoutSignature', () => {
     const b = splitActiveRight(a);
     expect(groupsLayoutSignature(b)).not.toBe(groupsLayoutSignature(a));
     expect(groupsLayoutSignature(closeGroup(b, b.activeGroupId))).not.toBe(groupsLayoutSignature(b));
+  });
+});
+
+/* ================= WS-14：按排列序聚焦 / 组间切换 ================= */
+
+describe('编辑器组态 · 按排列序聚焦（WS-14）', () => {
+  /** 三组（第 0 组各带一张标签，避免空组在断言里混进来） */
+  const threeGroups = (): EditorGroupsState => {
+    let s = openInActiveGroup(initialEditorGroups(), 'C:/a.erb');
+    s = splitActiveRight(s);
+    s = splitActiveRight(s);
+    return s;
+  };
+
+  it('activeGroupOrdinal = 排列序（数组下标），不是创建序 id', () => {
+    const s = threeGroups();
+    expect(activeGroupOrdinal(s)).toBe(2); // 连拆两次都插在焦点组之后并带走焦点
+    expect(activeGroupOrdinal(setActiveGroup(s, s.groups[0]!.id))).toBe(0);
+  });
+
+  it('activeGroupId 对不上任何组（坏态）⇒ 序号落 0，与 activeGroupOf 同一兜底', () => {
+    const s = threeGroups();
+    expect(activeGroupOrdinal({ ...s, activeGroupId: 'eg-没有这一组' })).toBe(0);
+  });
+
+  it('focusGroupAtOrdinal 逐档命中；已经是那一组 ⇒ 同一引用（不造新对象）', () => {
+    const s = threeGroups();
+    expect(focusGroupAtOrdinal(s, 0).activeGroupId).toBe(s.groups[0]!.id);
+    expect(focusGroupAtOrdinal(s, 1).activeGroupId).toBe(s.groups[1]!.id);
+    expect(focusGroupAtOrdinal(s, 2)).toBe(s);
+    const first = focusGroupAtOrdinal(s, 0);
+    expect(focusGroupAtOrdinal(first, 0)).toBe(first);
+  });
+
+  it('按到不存在的组 = 没按：焦点留在原组、引用不变（会话落盘不白拍一帧）', () => {
+    const s = threeGroups();
+    expect(focusGroupAtOrdinal(s, 3)).toBe(s);
+    expect(focusGroupAtOrdinal(s, -1)).toBe(s);
+    expect(focusGroupAtOrdinal(s, 99)).toBe(s);
+  });
+
+  it('换焦点组会改布局签名（焦点是持久化字段，漏了就是"重启回第一格"）', () => {
+    const s = threeGroups();
+    const next = focusGroupAtOrdinal(s, 0);
+    expect(groupsLayoutSignature(next)).not.toBe(groupsLayoutSignature(s));
+  });
+});
+
+describe('编辑器组态 · 组间切换（WS-14，环形）', () => {
+  const threeGroups = (): EditorGroupsState => {
+    let s = openInActiveGroup(initialEditorGroups(), 'C:/a.erb');
+    s = splitActiveRight(s);
+    s = splitActiveRight(s);
+    return s;
+  };
+
+  it('+1 往下一组、-1 往上一组；两端回绕（环形，不被"没有下一格"卡住）', () => {
+    const s = focusGroupAtOrdinal(threeGroups(), 0);
+    const idsArr = s.groups.map((g) => g.id);
+    expect(s.groups.findIndex((g) => g.id === cycleActiveGroup(s, 1).activeGroupId)).toBe(1);
+    expect(s.groups.findIndex((g) => g.id === cycleActiveGroup(s, -1).activeGroupId)).toBe(2);
+    // 从最后一组再 +1 ⇒ 回到第一组
+    const last = focusGroupAtOrdinal(s, 2);
+    expect(cycleActiveGroup(last, 1).activeGroupId).toBe(idsArr[0]);
+  });
+
+  it('步长越过组数也按环形取模（+4 / -5 在 3 组上等价于 +1 / -2）', () => {
+    const s = focusGroupAtOrdinal(threeGroups(), 0);
+    const ord = (d: number) => s.groups.findIndex((g) => g.id === cycleActiveGroup(s, d).activeGroupId);
+    expect(ord(4)).toBe(ord(1));
+    expect(ord(-5)).toBe(ord(-2));
+  });
+
+  it('单组 / delta=0 / 非法 delta ⇒ 同一引用（没有"隔壁"就不动状态）', () => {
+    const one = openInActiveGroup(initialEditorGroups(), 'C:/a.erb');
+    expect(cycleActiveGroup(one, 1)).toBe(one);
+    expect(cycleActiveGroup(one, -1)).toBe(one);
+    const three = threeGroups();
+    expect(cycleActiveGroup(three, 0)).toBe(three);
+    expect(cycleActiveGroup(three, Number.NaN)).toBe(three);
   });
 });

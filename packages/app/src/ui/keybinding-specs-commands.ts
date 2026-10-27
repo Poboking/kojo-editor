@@ -7,9 +7,10 @@
  * `./keybinding-specs` 是**开机图内的零 import 叶子**：`context-menu-model.ts`（同样在开机图）
  * 值引它，为右键菜单的每一项取中文标题与缺省键——那面必须同步可得。
  *
- * 本模块这 35 条**都不吃右键菜单那面**：内核动作（`editor.builtin.*`）由 Monaco 自己的
- * 右键菜单列，书签 / 状态栏开关也没有宿主菜单入口（三处的右键面清单里一枚都没有——
- * 见 `editor-context-actions.ts` / `context-menu-pages.ts` 的 commandId 列表）。它们的全部
+ * 本模块这 48 条**都不吃右键菜单那面**：内核动作（`editor.builtin.*`）由 Monaco 自己的
+ * 右键菜单列，书签 / 状态栏开关 / 编辑器组与项目动作也没有宿主菜单入口（三处的右键面清单里
+ * 一枚都没有——见 `editor-context-actions.ts` / `context-menu-pages.ts` 的 commandId 列表）。
+ * 它们的全部
  * 用途是「命令面板可搜 + 键位页可见可改」，而**命令面板与键位页都住在懒 chunk**里
  * （`palette-search` / `KeybindingsPage` / `keybindings.ts` 实测都不在开机图）。
  * 故本模块只被 `./keybindings` 值引，随它一起懒装载——开机图省下这 35 条的源码字节，
@@ -71,9 +72,48 @@ const STATUS_BAR_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.toggleRenderWhitespace', title: '切换空白符显示', category: '编辑器', rebindable: true },
 ];
 
+/**
+ * 编辑器组（WS-14）与项目 / 资源管理器（WS-16）：命令面板 + 键位页入口，
+ * 都不吃右键菜单那面（树的菜单归 D 线，本批一枚都没引这些 id）⇒ 归懒面，开机图不涨字节。
+ *
+ * ## 键位选择依据（登记前逐条扫过全表与 Monaco 内建键）
+ *
+ * - `Ctrl+1..4` 聚焦第 n 个编辑器组：与 VS Code 同款。数字族里 `Ctrl+0` 已被
+ *   「重置文字缩放」占，1..4 是空位；Monaco 只把数字用在**和弦**里
+ *   （`Ctrl+K Ctrl+1` 折叠到第 1 层），单键 `Ctrl+1` 不与它抢同一次按键。
+ * - `Ctrl+PageUp` / `Ctrl+PageDown` 上一个 / 下一个编辑器组：VS Code 同款手感；
+ *   宿主键位表里这两枚全空，Monaco 内建的翻页族用在 `Ctrl+Shift+[ ]` 那族上，不冲突。
+ * - `Ctrl+Alt+=` / `Ctrl+Alt+-` 放大 / 缩小焦点组：与「放大 / 缩小文字」同族符号（+= 增、-= 减），
+ *   只是多按一个 Alt 换"作用对象从字号变成分隔条"。`Ctrl+Alt+字母` 族已被开项目 /
+ *   预览 / 状态那几枚占满，符号位是空位。
+ * - `Ctrl+Shift+E` 聚焦资源管理器：与 VS Code 一致（E = Explorer）；宿主表里
+ *   `Ctrl+Shift+` 族只有 f/h/m/p/s/y/t，E 是空位。
+ *
+ * 项目类三条**刻意不给缺省键**：「关闭项目」「打开最近项目」都是换现场的动作，
+ * 误按的代价是作者当前的工作区被切走——与「关闭编辑器组」同一取舍（见静态表那条注释）。
+ * 「在资源管理器中显示当前文件」也不给：它与标签/面包屑右键同义，桌面壳专属（浏览器里点了必失败），
+ * 用 `when` 灰在面板里反而更诚实。
+ */
+const GROUP_AND_PROJECT_SPECS: readonly KeybindingSpec[] = [
+  { id: 'workbench.focusGroup1', title: '聚焦第 1 个编辑器组', category: '工作台', keys: 'ctrl+1', rebindable: true, note: '按排列序数（从左/从上第 n 格）' },
+  { id: 'workbench.focusGroup2', title: '聚焦第 2 个编辑器组', category: '工作台', keys: 'ctrl+2', rebindable: true },
+  { id: 'workbench.focusGroup3', title: '聚焦第 3 个编辑器组', category: '工作台', keys: 'ctrl+3', rebindable: true },
+  { id: 'workbench.focusGroup4', title: '聚焦第 4 个编辑器组', category: '工作台', keys: 'ctrl+4', rebindable: true },
+  { id: 'workbench.prevEditorGroup', title: '上一个编辑器组', category: '工作台', keys: 'ctrl+pageup', rebindable: true, note: '环形；仅分屏时生效' },
+  { id: 'workbench.nextEditorGroup', title: '下一个编辑器组', category: '工作台', keys: 'ctrl+pagedown', rebindable: true, note: '环形；仅分屏时生效' },
+  { id: 'workbench.enlargeActiveGroup', title: '放大焦点编辑器组', category: '工作台', keys: 'ctrl+alt+=', rebindable: true, note: '键盘调分隔条；相邻那组同步让出份额' },
+  { id: 'workbench.shrinkActiveGroup', title: '缩小焦点编辑器组', category: '工作台', keys: 'ctrl+alt+-', rebindable: true, note: '键盘调分隔条；一成下限为止' },
+  { id: 'workbench.focusExplorer', title: '聚焦资源管理器', category: '布局', keys: 'ctrl+shift+e', rebindable: true, note: '打开主侧栏「口上文件」并把键盘焦点交给树' },
+  { id: 'workbench.closeProject', title: '关闭项目', category: '项目', rebindable: true },
+  { id: 'workbench.openProjectFolder', title: '打开项目文件夹…', category: '项目', rebindable: true },
+  { id: 'workbench.openRecentProjects', title: '打开最近项目…', category: '项目', rebindable: true, note: '与项目名旁「更多」菜单同一张表' },
+  { id: 'workbench.showFileInOsExplorer', title: '在资源管理器中显示当前文件', category: '项目', rebindable: true, note: '仅桌面壳；系统文件管理器里选中它' },
+];
+
 /** 命令面板入口型条目全集（`./keybindings` 把它拼在静态基础表后，构成键位页看到的完整表） */
 export const COMMAND_PANEL_KEYBINDING_SPECS: readonly KeybindingSpec[] = [
   ...STATUS_BAR_SPECS,
   ...BOOKMARK_SPECS,
+  ...GROUP_AND_PROJECT_SPECS,
   ...BUILTIN_ACTION_SPECS,
 ];

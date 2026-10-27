@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_SPLIT_SIZES,
+  SPLIT_KEYBOARD_STEP,
   SPLIT_MIN_RATIO,
   alignSplitSizes,
   equalSplitSizes,
   groupShareOf,
+  resizeGroupShare,
   sanitizeSplitSizes,
   splitFlexOf,
   splitSizesEqual,
@@ -159,5 +161,85 @@ describe('splitSizesForKeptGroups（WS-06 落盘：全组份额 → 会恢复的
     expect(splitSizesForKeptGroups([0.5, 0.2], [A, A])).toBeNull(); // 长度比全组少一截
     expect(splitSizesForKeptGroups([0.5], [A])).toBeNull();
     expect(splitSizesForKeptGroups([0.5], [A, A])).toEqual([0.5]);
+  });
+});
+
+/* ================= WS-14：键盘调分隔条 ================= */
+
+describe('resizeGroupShare · 键盘调分隔条（WS-14）', () => {
+  const sum = (a: readonly number[]): number => a.reduce((x, y) => x + y, 0);
+  /** 末组吃剩余 ⇒ 它的份额 = 1 - Σ */
+  const rest = (a: readonly number[]): number => 1 - sum(a);
+
+  it('两组：放大左格 = 右格让出一步（剩余自动跟着变）', () => {
+    const r = resizeGroupShare([0.5], 2, 0, 1);
+    expect(r).not.toBeNull();
+    expect(r![0]!).toBeCloseTo(0.5 + SPLIT_KEYBOARD_STEP, 6);
+    expect(rest(r!)).toBeCloseTo(0.5 - SPLIT_KEYBOARD_STEP, 6);
+  });
+
+  it('两组：放大右格（末组，不在数组里）= 左格让出一步', () => {
+    const r = resizeGroupShare([0.5], 2, 1, 1);
+    expect(r).not.toBeNull();
+    expect(r![0]!).toBeCloseTo(0.5 - SPLIT_KEYBOARD_STEP, 6);
+  });
+
+  it('缩小 = 与放大相反（同一条分隔条，来回一步回到原点）', () => {
+    const grow = resizeGroupShare([0.5], 2, 0, 1)!;
+    const back = resizeGroupShare(grow, 2, 0, -1)!;
+    expect(back[0]!).toBeCloseTo(0.5, 6);
+  });
+
+  it('三组只动**一条**分隔条：放大中间那格不牵动第一格', () => {
+    const r = resizeGroupShare([0.4, 0.4], 3, 1, 1);
+    expect(r).not.toBeNull();
+    expect(r![0]!).toBeCloseTo(0.4, 6);
+    expect(r![1]!).toBeCloseTo(0.4 + SPLIT_KEYBOARD_STEP, 6);
+    expect(rest(r!)).toBeCloseTo(0.2 - SPLIT_KEYBOARD_STEP, 6);
+  });
+
+  it('贴到一成下限 ⇒ null（没有可挪的份额；命令侧据此说人话，不白 setState）', () => {
+    expect(resizeGroupShare([0.9], 2, 0, 1)).toBeNull(); // 右格已剩一成，借无可借
+    expect(resizeGroupShare([SPLIT_MIN_RATIO], 2, 0, -1)).toBeNull(); // 左格已一成，再缩就破线
+  });
+
+  it('不足一步时按**实有份额**挪（不造出跌破下限的读数）', () => {
+    const r = resizeGroupShare([0.88], 2, 0, 1); // 剩余 0.12，只能借 0.02
+    expect(r).not.toBeNull();
+    expect(r![0]!).toBeCloseTo(0.9, 6);
+    expect(rest(r!)).toBeCloseTo(SPLIT_MIN_RATIO, 6);
+  });
+
+  it('单组 / 非法参数 ⇒ null（只有一格时这动作没有意义）', () => {
+    expect(resizeGroupShare([], 1, 0, 1)).toBeNull();
+    expect(resizeGroupShare([0.5], 2, 0, 0)).toBeNull();
+    expect(resizeGroupShare([0.5], 2, 0, Number.NaN)).toBeNull();
+    expect(resizeGroupShare([0.5], 2, 0, 1, 0)).toBeNull();
+  });
+
+  it('长度不符的现场先按均分对齐（与渲染层同一把尺子），再在那份底子上挪', () => {
+    const r = resizeGroupShare([0.5], 3, 0, 1); // 两组的份额套三组 ⇒ 退回三等分
+    expect(r).not.toBeNull();
+    expect(r!.length).toBe(2);
+    // 借的是**右邻**（第 1 组）那一步，末组吃剩余所以它不动
+    expect(r![0]!).toBeCloseTo(1 / 3 + SPLIT_KEYBOARD_STEP, 6);
+    expect(r![1]!).toBeCloseTo(1 / 3 - SPLIT_KEYBOARD_STEP, 6);
+  });
+
+  it('产物恒过 sanitize 校验（不把坏数组交给渲染层与会话落盘）', () => {
+    for (const g of [2, 3, 4]) {
+      for (const o of [0, 1, 2]) {
+        for (const d of [1, -1]) {
+          const r = resizeGroupShare(equalSplitSizes(g), g, o, d);
+          if (r === null) continue;
+          expect(sanitizeSplitSizes(r, g)).not.toBeNull();
+        }
+      }
+    }
+  });
+
+  it('自定义步长被尊重（4% 是缺省，不是焊死在调用方之外的常数）', () => {
+    const r = resizeGroupShare([0.5], 2, 0, 1, 0.2)!;
+    expect(r[0]!).toBeCloseTo(0.7, 6);
   });
 });

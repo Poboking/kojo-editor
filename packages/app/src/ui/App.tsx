@@ -96,13 +96,17 @@ import {
 // 编辑器组态（SPLIT-1 分屏）：纯逻辑单源，App 是唯一状态所有者
 import {
   activeGroupOf,
+  activeGroupOrdinal,
   alignSplitSizes,
+  cycleActiveGroup,
   closeTabsInGroup,
+  focusGroupAtOrdinal,
   groupsLayoutSignature,
   initialEditorGroups,
   activateTab as activateTabInGroupState,
   openInActiveGroup,
   openPreviewInActiveGroup,
+  resizeGroupShare,
   setActiveGroup as setFocusedGroup,
   setGroupsOrientation,
   splitActiveDown,
@@ -1926,6 +1930,78 @@ export function App(): ReactElement {
   }, []);
 
   /**
+   * 按**排列序**聚焦编辑器组（WS-14 · `Ctrl+1/2/3…`，对标 VS Code 的
+   * `View: Focus First/Second/Third Editor Group`）。
+   *
+   * 序号取排列序而不是 id：id 是创建序，拆分/关组后与"屏幕上从左数第几格"会分叉，
+   * 而作者按键时想的就是那一格。
+   * 没有这一组 ⇒ 一句人话（铁律 4）：按下去没动静会被读成"快捷键坏了"。
+   */
+  const focusGroupByOrdinal = useCallback(
+    (ordinal: number) => {
+      const prev = editorGroupsRef.current;
+      const next = focusGroupAtOrdinal(prev, ordinal);
+      if (next === prev) {
+        notify({
+          kind: 'info',
+          message: `现在只有 ${prev.groups.length} 个编辑器组——先按 Ctrl+\\ 拆分，再按 Ctrl+${ordinal + 1}`,
+        });
+        return;
+      }
+      setEditorGroups(next);
+    },
+    [notify],
+  );
+
+  /** 组间焦点切换（WS-14，环形）：单组没有"隔壁"，同样给人话不静默 */
+  const cycleGroupBy = useCallback(
+    (delta: 1 | -1) => {
+      const prev = editorGroupsRef.current;
+      const next = cycleActiveGroup(prev, delta);
+      if (next === prev) {
+        notify({ kind: 'info', message: '只有一个编辑器组——先按 Ctrl+\\ 拆分出第二格' });
+        return;
+      }
+      setEditorGroups(next);
+    },
+    [notify],
+  );
+
+  /**
+   * 键盘调整焦点组的份额（WS-14：分隔条原来只有鼠标能拖）。动的是焦点组与其**右侧**
+   * （末组则左侧）那一条分隔条，判据与钳制全在 `editor-groups.resizeGroupShare`。
+   *
+   * 挪不动 ⇒ 报"已到边界"而不是静默；真的变了才 setState——份额是会话落盘的依赖，
+   * 白写一帧等于白拍一次盘（与拖拽那条 `onSplitSizesChange` 同一写法：先更 ref 再 setState，
+   * 连按时下一拍读到的就是刚写进去的那份）。
+   */
+  const resizeActiveGroupBy = useCallback(
+    (delta: 1 | -1) => {
+      const prev = editorGroupsRef.current;
+      if (prev.groups.length < 2) {
+        notify({ kind: 'info', message: '只有一个编辑器组——先按 Ctrl+\\ 拆分出第二格' });
+        return;
+      }
+      const next = resizeGroupShare(
+        splitSizesRef.current,
+        prev.groups.length,
+        activeGroupOrdinal(prev),
+        delta,
+      );
+      if (next === null) {
+        notify({
+          kind: 'info',
+          message: delta > 0 ? '这一组已经放到最宽（相邻那组只剩一成）' : '这一组已经收到最窄（一成下限）',
+        });
+        return;
+      }
+      splitSizesRef.current = next;
+      setSplitSizes(next);
+    },
+    [notify],
+  );
+
+  /**
    * 关组（唯一组不关——closeGroup 纯函数里已原样返回）。
    * 关门前必须先过脏门：组内若有任何脏标签，走逐标签确认批量关闭（脏的弹确认、
    * 干净的即关，全空后整组由 closeTabsInGroup 自动回收）——直接 closeEditorGroup
@@ -2457,6 +2533,9 @@ export function App(): ReactElement {
             onSplitEditor={splitEditor}
             onSplitEditorDown={splitEditorDown}
             onSetGroupsOrientation={setGroupsOrientationDir}
+            onFocusGroupOrdinal={focusGroupByOrdinal}
+            onCycleActiveGroup={cycleGroupBy}
+            onResizeActiveGroup={resizeActiveGroupBy}
             onCloseGroup={closeGroupById}
             onNavBack={navBack}
             onNavForward={navForward}
