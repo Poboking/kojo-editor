@@ -1182,6 +1182,19 @@ export function createErbParserPlugin(): Plugin {
           return startBuild(generation);
         },
 
+        /**
+         * 盘上改名后的索引重建（WS-02，契约 additive）：已有索引也重扫——旧路径不会
+         * 自己消失，函数树会留幽灵行。代际自增作废在途构建，随后走**既有** `startBuild`
+         * （快照复用 / 收尾广播 / 落盘全按原语义，不另造扫描循环）。
+         * 扫描根恰好在同一刻变了 ⇒ `refreshScanRoots` 已起新一轮，直接跟它，不重复全树遍历。
+         */
+        async rebuildIndex(): Promise<ErbIndex> {
+          if (projectRoots.length === 0) throw new Error('No project is open; cannot rebuild the ERB index');
+          if (refreshScanRoots() && inFlight) return inFlight;
+          generation++;
+          return startBuild(generation);
+        },
+
         // 位置 → 符号（B0）：只读已构建的索引，不读盘；未构建 → undefined（不猜）
         functionAt: (path: string, line: number) => (index ? functionAt(index, path, line) : undefined),
 

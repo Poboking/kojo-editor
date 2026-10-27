@@ -1,4 +1,5 @@
 import { pathKey } from '@kojo/plugin-api';
+import { mapRenamedPath } from './disk-reconcile';
 import type { SessionKv } from './session-store';
 
 /**
@@ -79,6 +80,53 @@ export function removeRecentFiles(list: readonly RecentFileRecord[], paths: read
   if (paths.length === 0) return [...list];
   const gone = new Set(paths.map(pathKey));
   return list.filter((r) => !gone.has(pathKey(r.path)));
+}
+
+/**
+ * 改名迁移（WS-02）：旧路径（含被改名目录之下的子路径）换新路径，
+ * `openedAt` / `rootDir` 原样保留——那是"这份文件什么时候开的、属于哪个项目"的事实，
+ * 不随文件名变。
+ *
+ * 去重口径与其余入口同尺（pathKey）：同一份文件只留一条。**优先保留改名后的那条**，
+ * 它沿用自己原来的队列位置（"最近"的排序不该被一次改名打乱）；盘上本来还有一条
+ * 指向新路径的旧记录时，让位给改名后的那条（内容同源，时间戳更可信）。
+ *
+ * 未命中 = 原样新数组（不改入参，便于调用侧比对决定是否落盘）。
+ */
+export function renameRecentFiles(
+  list: readonly RecentFileRecord[],
+  renamed: ReadonlyArray<{ from: string; to: string }>,
+): RecentFileRecord[] {
+  if (renamed.length === 0) return [...list];
+  const rows = list.map((r) => {
+    const path = mapRenamedPath(r.path, renamed);
+    return { rec: path === r.path ? r : { ...r, path }, moved: path !== r.path };
+  });
+  const movedKeys = new Set(rows.filter((x) => x.moved).map((x) => pathKey(x.rec.path)));
+  const seen = new Set<string>();
+  const out: RecentFileRecord[] = [];
+  for (const row of rows) {
+    const key = pathKey(row.rec.path);
+    if (seen.has(key)) continue;
+    if (!row.moved && movedKeys.has(key)) continue; // 让位给改名后的那条（同键只留一条）
+    seen.add(key);
+    out.push(row.rec);
+  }
+  return out;
+}
+
+/** 两份列表是否逐条等值（App 用它决定"有变化才落盘"，无变化不惊动存储与渲染） */
+export function sameRecentFiles(
+  a: readonly RecentFileRecord[],
+  b: readonly RecentFileRecord[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.path !== y.path || x.rootDir !== y.rootDir || x.openedAt !== y.openedAt) return false;
+  }
+  return true;
 }
 
 export async function loadRecentFiles(kv: SessionKv): Promise<RecentFileRecord[]> {

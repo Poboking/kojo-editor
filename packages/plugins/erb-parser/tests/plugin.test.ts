@@ -283,6 +283,42 @@ describe('erb-parser 插件', () => {
       emit('project.closed', { rootDir: '/proj' });
       expect(parser.currentIndex()).toBeNull();
     });
+
+    /* ---- WS-02 重命名迁移：rebuildIndex（契约 additive） ---- */
+
+    it('rebuildIndex 无项目时明确 reject（与 ensureIndex 同口径）', async () => {
+      const { services } = activatePlugin(fakeIO({}));
+      const parser = services.get('erb.parser') as ErbParserService;
+      expect(typeof parser.rebuildIndex).toBe('function');
+      await expect(parser.rebuildIndex!()).rejects.toThrow(/No project is open/);
+    });
+
+    it('rebuildIndex 已有索引也重扫：旧路径消失、新路径进来，收尾广播并替换当前索引', async () => {
+      // fakeIO 闭包持有同一份 files 对象 ⇒ 原地增删即可模拟盘上改名
+      const files: Record<string, string> = { '/proj/kojo/old/a.ERB': '@OLD_FN\nRETURN 1\n' };
+      const { services, bus, emit } = activatePlugin(fakeIO(files));
+      const parser = services.get('erb.parser') as ErbParserService;
+
+      const first = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await first;
+      expect(parser.currentIndex()!.files.has('/proj/kojo/old/a.ERB')).toBe(true);
+
+      delete files['/proj/kojo/old/a.ERB'];
+      files['/proj/kojo/new/a.ERB'] = '@NEW_FN\nRETURN 2\n';
+      const second = new Promise<void>((resolve) => {
+        bus.once('kojo.functionChanged', () => resolve());
+      });
+      const rebuilt = await parser.rebuildIndex!();
+      await second;
+
+      expect([...rebuilt.files.keys()]).toEqual(['/proj/kojo/new/a.ERB']);
+      expect([...rebuilt.byName.keys()]).toEqual(['NEW_FN']);
+      expect(rebuilt.byName.has('OLD_FN')).toBe(false); // 旧路径不留幽灵行
+      expect(parser.currentIndex()).toBe(rebuilt); // 当前索引已换成新一轮
+    });
   });
 });
 

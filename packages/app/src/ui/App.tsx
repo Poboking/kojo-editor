@@ -25,10 +25,13 @@ import { loadSessionRecord } from './session-store';
 import {
   loadRecentFiles,
   removeRecentFiles,
+  renameRecentFiles,
+  sameRecentFiles,
   saveRecentFiles,
   upsertRecentFile,
   type RecentFileRecord,
 } from './recent-files';
+import { renameViewStates } from './view-state-store';
 import { clearRecoveredContents, setRecoveredContents } from './recovery-store';
 import { resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
 // LAU-1a（2026-10-25）：2.0 事实的**按项目取**端口全部收在组合根（bootstrap）——
@@ -137,6 +140,7 @@ import {
 import { listSourceFiles, type ShellCommandSpec } from './commands';
 import {
   fileOpGuardMessage,
+  mapRenamedPath,
   pathGoneByDelete,
   reconcilePathsAfterDiskChange,
 } from './disk-reconcile';
@@ -2091,13 +2095,14 @@ export function App(): ReactElement {
         const gone = new Set(g.tabs.filter((p) => pathGoneByDelete(del, p)));
         if (gone.size > 0) nextGroups = closeTabsInGroup(nextGroups, g.id, [...gone]);
       }
-      const renameMap = new Map(renamed.map((r) => [r.from, r.to] as const));
+      // 改名收尾走**前缀感知**映射（WS-02）：目录改名后其下打开的文件标签 / 激活项都要跟随，
+      // 精确 `from → to` 只会换掉目录那一条、子路径全留成悬空旧路径（幽灵标签）。
       nextGroups = {
         ...nextGroups,
         groups: nextGroups.groups.map((g) => ({
           ...g,
-          tabs: g.tabs.map((t) => renameMap.get(t) ?? t),
-          active: g.active ? (renameMap.get(g.active) ?? g.active) : null,
+          tabs: g.tabs.map((t) => mapRenamedPath(t, renamed)),
+          active: g.active ? mapRenamedPath(g.active, renamed) : null,
         })),
       };
       if (activeGroupOf(prevGroups).active !== activeGroupOf(nextGroups).active) setReveal(null);
@@ -2119,18 +2124,32 @@ export function App(): ReactElement {
           },
           () => undefined, // 重挂器装不上 = 停旧判据（下一份 model 建时仍会按新路径判）
         );
+        // 视图状态（光标 / 折叠 / 查找）跟着改名走：旧键下的 slice 迁到新键，LRU 次序不变（WS-02）
+        const rootDir = rootDirRef.current;
+        if (rootDir !== null) renameViewStates(rootDir, renamed);
+        // 索引里的旧路径不会随盘上改名自己消失（函数树 / 引用会留幽灵行）：让解析器重扫一轮。
+        // 失败如实出声（铁律 4）——只是索引旧一会儿，不影响盘上事实，故只在通知区报一次。
+        const parser = kernel?.services.tryGet<ErbParserService>('erb.parser');
+        if (parser?.rebuildIndex) {
+          void parser.rebuildIndex().catch((err: unknown) => {
+            notify({
+              kind: 'error',
+              message: `重建代码索引失败：${errorText(err)}。函数树与引用可能还停在旧路径上。`,
+            });
+          });
+        }
       }
-      // 最近文件摘除（MM-7）：被删的与被改名的旧路径从欢迎页列表移除并落盘
-      // （真有变化才写：无变化不惊动渲染与存储）
-      const gonePaths = [...del, ...renamed.map((r) => r.from)];
-      const nextRecentFiles = removeRecentFiles(recentFilesRef.current, gonePaths);
-      if (nextRecentFiles.length !== recentFilesRef.current.length) {
+      // 最近文件：被删的摘除、被改名的**迁移**到新路径（含改名目录之下的子路径），
+      // 有变化才落盘（无变化不惊动渲染与存储）
+      const prevRecentFiles = recentFilesRef.current;
+      const nextRecentFiles = removeRecentFiles(renameRecentFiles(prevRecentFiles, renamed), del);
+      if (!sameRecentFiles(prevRecentFiles, nextRecentFiles)) {
         recentFilesRef.current = nextRecentFiles;
         setRecentFiles(nextRecentFiles);
         if (kernel) void saveRecentFiles(kernel.storage.global(), nextRecentFiles).catch(() => undefined);
       }
     },
-    [kernel],
+    [kernel, notify],
   );
 
   /**

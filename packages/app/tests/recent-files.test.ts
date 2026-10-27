@@ -5,6 +5,8 @@ import {
   RECENT_FILES_LIMIT,
   loadRecentFiles,
   removeRecentFiles,
+  renameRecentFiles,
+  sameRecentFiles,
   sanitizeRecentFiles,
   saveRecentFiles,
   upsertRecentFile,
@@ -151,6 +153,64 @@ describe('removeRecentFiles（按 pathKey 摘除）', () => {
     expect(removeRecentFiles(list, ['C:/gone.ERB'])).toEqual(list);
     expect(removeRecentFiles(list, [])).toEqual(list);
     expect(removeRecentFiles(list, [])).not.toBe(list);
+  });
+});
+
+describe('renameRecentFiles（改名迁移，WS-02）', () => {
+  const DIR_RENAME = [{ from: 'C:\\Game\\eraTW\\kojo\\001', to: 'C:\\Game\\eraTW\\kojo\\001-新' }];
+
+  it('旧路径（含改名目录之下的子路径）换新路径，openedAt / rootDir 原样保留', () => {
+    const list = [
+      rec('C:\\Game\\eraTW\\kojo\\001\\a.ERB', 'C:\\Game\\eraTW', 30),
+      rec('C:\\Game\\eraTW\\kojo\\001\\pkg\\deep\\b.ERB', 'C:\\Game\\eraTW', 20),
+      rec('C:\\Game\\eraTW\\kojo\\002\\keep.ERB', 'C:\\Game\\eraTW', 10),
+    ];
+    expect(renameRecentFiles(list, DIR_RENAME)).toEqual([
+      rec('C:\\Game\\eraTW\\kojo\\001-新\\a.ERB', 'C:\\Game\\eraTW', 30),
+      rec('C:\\Game\\eraTW\\kojo\\001-新\\pkg\\deep\\b.ERB', 'C:\\Game\\eraTW', 20),
+      rec('C:\\Game\\eraTW\\kojo\\002\\keep.ERB', 'C:\\Game\\eraTW', 10),
+    ]);
+  });
+
+  it('同名前缀邻居不误伤；未命中 = 原样新数组（不改入参）', () => {
+    const list = [rec('C:\\Game\\eraTW\\kojo\\001-备份\\x.ERB', 'C:\\Game\\eraTW', 5)];
+    expect(renameRecentFiles(list, DIR_RENAME)).toEqual(list);
+    expect(renameRecentFiles(list, DIR_RENAME)).not.toBe(list);
+    expect(renameRecentFiles(list, [])).toEqual(list);
+  });
+
+  it('同 pathKey 只留一条：优先保留改名后的那条，并保持它原来的排序位置', () => {
+    // 盘上已有一条指向新路径的更旧记录（同名重开过）：改名后的那条让它在队列里的位置胜出
+    const list = [
+      rec('C:\\Game\\eraTW\\kojo\\001\\a.ERB', 'C:\\Game\\eraTW', 30), // 会被改名
+      rec('C:\\Game\\eraTW\\kojo\\002\\keep.ERB', 'C:\\Game\\eraTW', 20),
+      rec('C:\\Game\\eraTW\\kojo\\001-新\\a.ERB', 'C:\\Game\\eraTW', 10), // 已在新路径
+    ];
+    const out = renameRecentFiles(list, DIR_RENAME);
+    expect(out).toEqual([
+      rec('C:\\Game\\eraTW\\kojo\\001-新\\a.ERB', 'C:\\Game\\eraTW', 30),
+      rec('C:\\Game\\eraTW\\kojo\\002\\keep.ERB', 'C:\\Game\\eraTW', 20),
+    ]);
+  });
+
+  it('改名 + 摘除的组合（App 的收尾口径）：改名先迁、被删的再按精确路径摘', () => {
+    const list = [
+      rec('C:\\Game\\eraTW\\kojo\\001\\a.ERB', 'C:\\Game\\eraTW', 30),
+      rec('C:\\Game\\eraTW\\other\\gone.ERB', 'C:\\Game\\eraTW', 20),
+    ];
+    const out = removeRecentFiles(renameRecentFiles(list, DIR_RENAME), ['C:\\Game\\eraTW\\other\\gone.ERB']);
+    expect(out).toEqual([rec('C:\\Game\\eraTW\\kojo\\001-新\\a.ERB', 'C:\\Game\\eraTW', 30)]);
+  });
+});
+
+describe('sameRecentFiles（有变化才落盘）', () => {
+  it('逐条等值才算没变化；路径 / 时间戳 / 归属任一不同都算变化', () => {
+    const a = [rec('C:/a.ERB', 'C:/p', 2), rec('C:/b.ERB', 'C:/p', 1)];
+    expect(sameRecentFiles(a, [rec('C:/a.ERB', 'C:/p', 2), rec('C:/b.ERB', 'C:/p', 1)])).toBe(true);
+    expect(sameRecentFiles(a, [rec('C:/x.ERB', 'C:/p', 2), rec('C:/b.ERB', 'C:/p', 1)])).toBe(false);
+    expect(sameRecentFiles(a, [rec('C:/a.ERB', 'C:/q', 2), rec('C:/b.ERB', 'C:/p', 1)])).toBe(false);
+    expect(sameRecentFiles(a, [rec('C:/a.ERB', 'C:/p', 9), rec('C:/b.ERB', 'C:/p', 1)])).toBe(false);
+    expect(sameRecentFiles(a, [rec('C:/a.ERB', 'C:/p', 2)])).toBe(false);
   });
 });
 

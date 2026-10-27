@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { pathKey } from '@kojo/plugin-api';
 import {
   clampSlice,
   clearViewStates,
@@ -9,6 +10,7 @@ import {
   MAX_ENTRIES,
   MAX_FOLDS_PER_FILE,
   MAX_TOTAL_FOLDS,
+  renameViewStates,
   setViewState,
   viewStateKey,
   type SerializedFold,
@@ -468,5 +470,77 @@ describe('clearViewStates', () => {
     expect(getViewState('C:\\B', 'C:\\B\\y.erb')).not.toBeNull();
     clearViewStates();
     expect(getViewState('C:\\B', 'C:\\B\\y.erb')).toBeNull();
+  });
+});
+
+/**
+ * 改名迁移（WS-02）：目录改名后，其下文件的光标 / 折叠 / 查找状态不许丢，
+ * 也不许继续挂在旧键上（下次打开新路径时恢复的是"没打开过"，等于白丢一次视图）。
+ */
+describe('renameViewStates（改名迁移）', () => {
+  const ROOT_P = 'C:\\P';
+  const DIR_RENAME = [{ from: 'C:\\P\\old', to: 'C:\\P\\new' }];
+
+  it('目录下多层子路径迁到新键，slice 原样保留，旧键消失（结果已落盘）', () => {
+    installStorage(fakeStorage());
+    const a = 'C:\\P\\old\\a.ERB';
+    const b = 'C:\\P\\old\\pkg\\deep\\b.ERB';
+    setViewState(ROOT_P, a, sliceOf(11, 500));
+    setViewState(ROOT_P, b, sliceOf(22, 600));
+    flushViewStates();
+
+    expect(renameViewStates(ROOT_P, DIR_RENAME)).toBe(true);
+    expect(getViewState(ROOT_P, a)).toBeNull();
+    expect(getViewState(ROOT_P, b)).toBeNull();
+    expect(getViewState(ROOT_P, 'C:\\P\\new\\a.ERB')).toEqual(sliceOf(11, 500));
+    expect(getViewState(ROOT_P, 'C:\\P\\new\\pkg\\deep\\b.ERB')).toEqual(sliceOf(22, 600));
+
+    // 落盘一次：换一份 storage 替身从序列化数据重载，迁移结果仍在
+    installStorage(cloneCurrentStorage());
+    expect(getViewState(ROOT_P, 'C:\\P\\new\\a.ERB')).toEqual(sliceOf(11, 500));
+    expect(getViewState(ROOT_P, 'C:\\P\\new\\pkg\\deep\\b.ERB')).toEqual(sliceOf(22, 600));
+  });
+
+  it('别的项目的条目原样不动；未命中返回 false 且不重写盘', () => {
+    installStorage(fakeStorage());
+    setViewState(ROOT_P, 'C:\\P\\keep.ERB', sliceOf(1));
+    setViewState('C:\\Other', 'C:\\Other\\old\\y.ERB', sliceOf(2));
+    flushViewStates();
+    const before = globalThis.localStorage.getItem(KEY);
+
+    expect(renameViewStates(ROOT_P, [{ from: 'C:\\P\\nope', to: 'C:\\P\\nope2' }])).toBe(false);
+    expect(globalThis.localStorage.getItem(KEY)).toBe(before);
+    expect(getViewState(ROOT_P, 'C:\\P\\keep.ERB')).toEqual(sliceOf(1));
+    // 别项目里同名旧路径不被本项目改名波及
+    expect(getViewState('C:\\Other', 'C:\\Other\\old\\y.ERB')).toEqual(sliceOf(2));
+  });
+
+  it('LRU 次序按原条目重建（改名不把条目顶到"最近使用"端）', () => {
+    installStorage(fakeStorage());
+    setViewState(ROOT_P, 'C:\\P\\old\\a.ERB', sliceOf(1));
+    setViewState(ROOT_P, 'C:\\P\\b.ERB', sliceOf(2));
+    setViewState(ROOT_P, 'C:\\P\\old\\c.ERB', sliceOf(3));
+    flushViewStates();
+
+    expect(renameViewStates(ROOT_P, DIR_RENAME)).toBe(true);
+    flushViewStates();
+    const parsed = JSON.parse(globalThis.localStorage.getItem(KEY) ?? '{}') as {
+      entries?: Record<string, unknown>;
+    };
+    const files = Object.keys(parsed.entries ?? {}).map((k) => k.split('\u0000')[1]);
+    expect(files).toEqual([pathKey('C:\\P\\new\\a.ERB'), pathKey('C:\\P\\b.ERB'), pathKey('C:\\P\\new\\c.ERB')]);
+  });
+
+  it('新键上已有旧条目：让位给改名后的那份（同键只留一条，位置取原名那条）', () => {
+    installStorage(fakeStorage());
+    setViewState(ROOT_P, 'C:\\P\\old\\a.ERB', sliceOf(1));
+    setViewState(ROOT_P, 'C:\\P\\new\\a.ERB', sliceOf(9));
+    flushViewStates();
+
+    expect(renameViewStates(ROOT_P, DIR_RENAME)).toBe(true);
+    flushViewStates();
+    installStorage(cloneCurrentStorage());
+    expect(getViewState(ROOT_P, 'C:\\P\\new\\a.ERB')).toEqual(sliceOf(1));
+    expect(getViewState(ROOT_P, 'C:\\P\\old\\a.ERB')).toBeNull();
   });
 });

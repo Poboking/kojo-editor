@@ -1,4 +1,5 @@
 import { pathKey } from '@kojo/plugin-api';
+import { mapRenamedPath } from './disk-reconcile';
 
 /**
  * 编辑器视图状态的跨会话持久层：localStorage、版本化键、LRU 上限、损坏即整库清洗。
@@ -453,4 +454,59 @@ export function clearViewStates(root?: string): void {
     for (const k of [...m.keys()]) if (k.startsWith(prefix)) m.delete(k);
   }
   flushViewStates();
+}
+
+/**
+ * 改名迁移（WS-02）：把该项目下 `${pathKey(root)}\0${pathKey(file)}` 中命中旧前缀
+ * （自身相等，或位于被改名目录之下——判据见 `disk-reconcile.mapRenamedPath`）的条目
+ * 迁到新键，**slice 原样保留**（光标 / 折叠 / 查找状态都不该因为改个名丢掉）。
+ *
+ * 口径：
+ * - 只动这个项目的条目，别项目的键原样留在原位；
+ * - LRU 顺序按**原条目**的位置重建（改名不改变"最近用过"的次序）；新键上已有旧条目时
+ *   让位给改名后的那份（同键只留一条，与 `setViewState` 的整条替换同精神）；
+ * - 有迁动才落盘，且只落一次；无命中 = 零动作（返回 false，不惊动 localStorage）。
+ *
+ * 已知边界：改名把文件搬到**本项目之外**时，键仍挂在原项目前缀下（`FileTree` 的改名
+ * 只在同目录内，这一步走不到；真要走得到时由下一次 `setViewState` 自然按新路径重记）。
+ */
+export function renameViewStates(
+  root: string,
+  renamed: ReadonlyArray<{ from: string; to: string }>,
+): boolean {
+  if (renamed.length === 0) return false;
+  const m = loadCache();
+  const prefix = `${pathKey(root)}\u0000`;
+  /** 旧键 → 新键（只收本项目条目；未命中的条目也登记，moved=false） */
+  const plan = new Map<string, { toKey: string; moved: boolean }>();
+  for (const k of m.keys()) {
+    if (!k.startsWith(prefix)) continue;
+    const fileKey = k.slice(prefix.length);
+    const mapped = mapRenamedPath(fileKey, renamed);
+    const moved = mapped !== fileKey;
+    plan.set(k, { toKey: moved ? `${prefix}${pathKey(mapped)}` : k, moved });
+  }
+  const movedKeys = new Set([...plan.values()].filter((p) => p.moved).map((p) => p.toKey));
+  if (movedKeys.size === 0) return false;
+
+  const next = new Map<string, ViewSlice>();
+  const emitted = new Set<string>();
+  for (const [k, slice] of m) {
+    const p = plan.get(k);
+    if (p === undefined) {
+      next.set(k, slice); // 别项目的条目原样
+      continue;
+    }
+    if (!p.moved && movedKeys.has(p.toKey)) continue; // 让位给改名后的那份
+    if (emitted.has(p.toKey)) continue;
+    emitted.add(p.toKey);
+    next.set(p.toKey, slice);
+  }
+  // 原地替换 cache（引用不变，cacheSource 也就无需重读），保持 LRU 次序
+  m.clear();
+  for (const [k, v] of next) m.set(k, v);
+  trimEntries(m);
+  enforceFoldBudget(m);
+  flushViewStates(); // 迁移结果落盘一次
+  return true;
 }

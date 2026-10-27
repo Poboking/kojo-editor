@@ -41,6 +41,7 @@ import {
   type MenuItemId,
 } from './file-tree-ops';
 import { baseName, buildFileGroups, dirsToRelist, kojoOwners, middleEllipsis, rowKeyOf, TREE_LABEL_MAX } from './file-tree-model';
+import { createEntryIfAbsent } from './file-tree-create';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark } from './file-tree-row';
@@ -746,12 +747,14 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         note('这个位置在只读范围内，不能在这里新建。要先在「只读」徽章那里批准写权限。');
         return;
       }
-      const doing =
-        e.kind === 'file'
-          ? io!.writeBytes(target, new Uint8Array()) // 新建空文件走既有写链路（备份=空文件无旧版可备）
-          : io!.ensureDir(target);
-      void doing.then(
-        () => {
+      // 同名守门（WS-01）：盘上已有同名条目 ⇒ 不写不覆盖，编辑行留着让作者改名。
+      // 判据与文案在 `file-tree-create`（存在时 writeBytes / ensureDir 一次都不调）。
+      void createEntryIfAbsent(io!, { target, kind: e.kind, name }).then(
+        (outcome) => {
+          if (!outcome.created) {
+            note(outcome.message);
+            return;
+          }
           setEdit(null);
           // 只重列落点目录；新文件立刻可见处 = 包的真实文件夹视图（openLayerOf 已打开）
           refetchDirs([e.dir]);
