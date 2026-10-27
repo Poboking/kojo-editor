@@ -1141,7 +1141,7 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
 });
 
 describe('release-gate · artifact-audit（dist 上界）', () => {
-  it('阈值常量随 LAU-1/D2 合流批重钉：入口 1,100 kB / dist 11.1 MiB / 95 件', () => {
+  it('阈值常量随 LAU-6 注入批重钉：入口 1,100 kB / dist 11.1 MiB / 96 件', () => {
     // 2026-10-26 启动器落地批：85 件 / 10.5 MiB → 90 件 / 11.0 MiB（逐块归因见
     // `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释）。这条断言是"改阈值必须留痕"的闸：
     // 抬数时先改注释说清增量来自哪里，再改这里。
@@ -1151,7 +1151,9 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
     // 构建仍是 92 件 / assets 91 枚，入口 249,187 → 253,055 B），未拆到单一 chunk。
     // 2026-10-27 LAU-1 / D2 合流批：93 → 95 件、11.0 → 11.1 MiB——`protocol-*.js` 1.9 KB
     // 与 `edit-*.js` 0.6 KB 两枚共享块（v3 主路 + v2 回滚路共同引用），入口不动。
-    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.1 * 1024 * 1024), files: 95 });
+    // 2026-10-27 LAU-6 注入批：95 → 96 件——`injection-*.js` 7.6 KB 共享块（`@原生`
+    // 子树执行器，被 semantic 与 worker 侧两块共同引用），总量 11.06 MiB / 入口不动。
+    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.1 * 1024 * 1024), files: 96 });
   });
 
   it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {

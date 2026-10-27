@@ -351,8 +351,16 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * · `edit-*.js` **0.6 KB**——差集工具（`commonEdit` / `applyEdit`）同理由共享。
    * 总量 11,560,993 B（11.03 MiB）顶穿旧上限 11.0 MiB 约 26 KB，故一并抬到 11.1 MiB；
    * 入口 253,336 B 不动。两枚都是"共享边界搬位置"而非新功能体量。
+   *
+   * 2026-10-27 LAU-6 注入批：件数 95 → 96、总量与入口不动。
+   *
+   * 增量逐枚点名（同一棵树改前/改后各真实构建一次，`dist/assets` 94 → 95 枚）：
+   * · `injection-*.js` **7.6 KB**——`@原生` 子树执行器（`tree-sitter/injection.ts`），
+   *   被 `kojo2-semantic` 与 worker 侧两块共同引用 ⇒ 只能是共享块；**不在开机图上**
+   *   （ps10 文件数 198 不动，KB +1 已在那边落账）。总量 11.06 MiB（上限 11.1）、
+   *   入口 262,461 B（上限 1,100 kB）。
    */
-  files: 95,
+  files: 96,
 });
 
 const MIB = 1024 * 1024;

@@ -611,6 +611,9 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `monaco/kojo2-event-sites.ts`（悬停 / 引用 / lint 三处共用的事件挂点扫描）与
     //     `monaco/kojo2-dialect-lint.ts` 的净入图部分；反向抵消 D2b 把 `erb-language.ts`
     //     的族头串摘成从 `@kojo/kojo-vocab/engine` 派生。**下一枚进图模块仍须先挪一枚。**
+    //   - **LAU-6 注入（2026-10-27）**：读数 **198 文件 / 3,018 KB**，两枚闸不动（198 / 3,020）。
+    //     `tree-sitter/injection.ts` 的子解析器走共享块（`injection-*.js`，不在图上），
+    //     入图的只有 `kojo2-semantic.ts` 那几条合并规则的 +1 KB。余量 2 KB。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤3,020 KB）`);
