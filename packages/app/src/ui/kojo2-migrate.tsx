@@ -28,6 +28,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type ReactElement,
 } from 'react';
 import type { MigrateEventArgs } from '@kojo/kojo-core';
@@ -381,7 +382,12 @@ export function Kojo2MigrateWizard({
           data-indeterminate={progressIndeterminate ? '1' : undefined}
         >
           <span className="kojo2-wizard__progress-track">
-            <span className="kojo2-wizard__progress-fill" style={{ width: `${progressPct}%` }} />
+            {/* 进度宽度走 `transform: scaleX()`（P2-12）：`width` 是布局属性，
+                每帧过渡都要重排；0..1 的系数经 CSS 变量递进去，样式表只管几何 */}
+            <span
+              className="kojo2-wizard__progress-fill"
+              style={{ '--kojo2-progress': String(progressPct / 100) } as CSSProperties}
+            />
           </span>
           <span className="kojo2-wizard__progress-pct">{progressPct}%</span>
         </div>

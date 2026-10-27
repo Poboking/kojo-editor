@@ -101,12 +101,17 @@
   background: var(--border);
   overflow: hidden;
 }
+/* 填充走**合成属性**（P2-12）：索引在途时进度事件很密，`width` 过渡每帧都要重排
+   状态栏（连带整条 shell 的布局）；`scaleX` 只走合成。
+   系数由 `ShellLayout` 递 `--sb-idx-fill`（0..1），`width: 100%` 是缩放基准。 */
 .statusbar .idx-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  width: var(--sb-idx-fill, 0%);
+  width: 100%;
   border-radius: inherit;
   background: var(--accent);
+  transform-origin: left center;
+  transform: scaleX(var(--sb-idx-fill, 0));
 }
 /* 完成态：铺满但**不铺严重度色**——静息索引好不需要被看见，走 --border-strong 半档 */
 .statusbar .sb-idx.ok .idx-fill {
@@ -115,6 +120,7 @@
 /* 失败态：轨本身断成红虚线（形状即状态），文案照旧四个字，不额外涂色 */
 .statusbar .sb-idx.err .idx-fill {
   width: 100%;
+  transform: none;
   background: repeating-linear-gradient(
     90deg,
     var(--red) 0 4px,
@@ -123,10 +129,12 @@
 }
 /* 在途 · 有基线可算 ⇒ 定值轨；无基线（首建）⇒ 不定态扫掠，绝不显示一个假百分比 */
 .statusbar .sb-idx.in.pct .idx-fill {
-  transition: width var(--dur-2) var(--ease-out);
+  transition: transform var(--dur-2) var(--ease-out);
 }
+/* 不定态：宽度回到 40% 定长条，位移交给 keyframes（静态 scaleX 必须让位，否则被压成零宽） */
 .statusbar .sb-idx.in:not(.pct) .idx-fill {
   width: 40%;
+  transform: none;
   animation: sb-idx-sweep var(--anim-sweep) var(--ease-out) infinite;
 }
 @keyframes sb-idx-sweep {

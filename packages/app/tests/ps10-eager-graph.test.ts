@@ -616,6 +616,14 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     入图的只有 `kojo2-semantic.ts` 那几条合并规则的 +1 KB。余量 2 KB。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
+    //   - **前端性能批（2026-10-27，自写回声抑制 / 进度条合成属性）**：读数 **198 文件 / 3,018 KB**
+    //     ——与上一档逐字相同（+2 KB 源码在"读数进十"的口径下没抬档），两枚闸不动（198 / 3,020）。
+    //     增量全在图内既有文件：`ui/external-change.ts` 约 +0.6 KB
+    //     （自写回声判据 `isSelfWriteEcho` + `SELF_WRITE_WINDOW_MS`，注释压到最简——
+    //     判据的完整说明住在 `external-change.test.ts` 的同名 describe，那里不进图）、
+    //     `ui/EditorPane.tsx` 约 +0.4 KB（`selfWriteAtRef` 时刻表 + `file.changed` 腿上的一处放行）。
+    //     **零新增模块**；其余改动全在 CSS（`kojo2` / `search-panel` / `shell-band` /
+    //     `update-dialog` / `styles-project`）与插件侧行内样式，一枚都不进本图。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤3,020 KB）`);
     expect(totalKb).toBeLessThanOrEqual(3_020);
     expect(files.length).toBeLessThanOrEqual(198);

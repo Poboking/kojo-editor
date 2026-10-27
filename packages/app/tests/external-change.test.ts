@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { affectsKojoTree, createEventCoalescer, decideExternalChange, matchOpenedPath } from '../src/ui/external-change';
+import { affectsKojoTree, createEventCoalescer, decideExternalChange, isSelfWriteEcho, matchOpenedPath, SELF_WRITE_WINDOW_MS } from '../src/ui/external-change';
 
 /**
  * 外部写盘后的 model 重载决策单测（2026-10-12 审阅补丁，修 B1）。
@@ -150,5 +150,45 @@ describe('matchOpenedPath —— 外部改动该不该认成"这个文件正打�
     expect(matchOpenedPath(keys, 'C:/game/口上A.ERB.bak')).toBeNull();
     expect(matchOpenedPath(keys, 'C:/game/口上')).toBeNull();
     expect(matchOpenedPath(keys, 'C:/game/口上/子.ERB')).toBeNull();
+  });
+});
+/**
+ * 自写回声判据（PERF-2026-10-27 · P2-5）。
+ *
+ * 这条判据的作用是**省掉一次整篇读盘**（保存后 watcher 回音必然 noop），
+ * 所以它只允许在"确实是自己那一笔写"时放行；放错方向就是**外部改动被漏掉**
+ * ——那是数据丢失级的错。四条边界逐一钉死。
+ */
+describe('isSelfWriteEcho —— 自己刚保存的回声不许白读一遍盘', () => {
+  const T = 1_000_000;
+
+  it('窗口内的 change → 抑制（这就是省下的那趟读盘）', () => {
+    expect(isSelfWriteEcho('change', T, T)).toBe(true);
+    expect(isSelfWriteEcho('change', T, T + 1)).toBe(true);
+    expect(isSelfWriteEcho('change', T, T + SELF_WRITE_WINDOW_MS)).toBe(true);
+  });
+
+  it('窗口外的 change → 不抑制（真实的后续外部改动必须处理）', () => {
+    expect(isSelfWriteEcho('change', T, T + SELF_WRITE_WINDOW_MS + 1)).toBe(false);
+    expect(isSelfWriteEcho('change', T, T + 60_000)).toBe(false);
+  });
+
+  it('从没写过这个文件 → 不抑制', () => {
+    expect(isSelfWriteEcho('change', undefined, T)).toBe(false);
+  });
+
+  it('add / unlink 一律不抑制（删除要报、重建要重载，语义不在本判据里）', () => {
+    expect(isSelfWriteEcho('add', T, T + 10)).toBe(false);
+    expect(isSelfWriteEcho('unlink', T, T + 10)).toBe(false);
+  });
+
+  it('时刻倒挂（事件早于标记 / 时钟回拨）→ 不抑制，宁可白读不可漏判', () => {
+    expect(isSelfWriteEcho('change', T, T - 1)).toBe(false);
+    expect(isSelfWriteEcho('change', T, T - 60_000)).toBe(false);
+  });
+
+  it('窗口可注入：口径由调用方定，边界仍然闭合', () => {
+    expect(isSelfWriteEcho('change', T, T + 50, 50)).toBe(true);
+    expect(isSelfWriteEcho('change', T, T + 51, 50)).toBe(false);
   });
 });

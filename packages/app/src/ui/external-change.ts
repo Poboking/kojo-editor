@@ -54,6 +54,22 @@ export type MergeOutcome =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly conflicts: readonly MergeConflictChunk[] };
 
+/** 自写回声时间窗（P2-5；判据说明见 `external-change.test.ts` 的同名 describe） */
+export const SELF_WRITE_WINDOW_MS = 300;
+
+/** 自己刚保存造成的 `file.changed` 回声？只认 `change`（`unlink` 要报、`add` 要重载） */
+export function isSelfWriteEcho(
+  kind: 'change' | 'add' | 'unlink',
+  markedAt: number | undefined,
+  now: number,
+  windowMs: number = SELF_WRITE_WINDOW_MS,
+): boolean {
+  if (kind !== 'change' || markedAt === undefined) return false;
+  const dt = now - markedAt;
+  // 负值（时钟回拨 / 事件早于标记）不抑制：宁可白读一遍，不可漏掉真改动
+  return dt >= 0 && dt <= windowMs;
+}
+
 /**
  * @param modelText 当前编辑器 model 的文本
  * @param diskText  重新从磁盘读到的文本

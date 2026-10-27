@@ -29,6 +29,7 @@ import {
   useEffect,
   useId,
   useRef,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -285,7 +286,7 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
               >
                 <div
                   className="update-dialog-progress-fill"
-                  style={pct !== null ? { width: `${pct}%` } : undefined}
+                  style={pct !== null ? ({ '--ud-progress': String(pct / 100) } as CSSProperties) : undefined}
                 />
               </div>
               {progressText !== null ? (

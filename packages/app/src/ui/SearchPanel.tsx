@@ -1364,7 +1364,11 @@ export function SearchPanel({
               <span className="ksp-progress-track" aria-hidden="true">
                 <span
                   className={`ksp-progress-bar${progressPercent === null ? ' indeterminate' : ''}`}
-                  style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}
+                  style={
+                    progressPercent === null
+                      ? undefined
+                      : ({ '--ksp-progress': String(progressPercent / 100) } as CSSProperties)
+                  }
                 />
               </span>
             </div>

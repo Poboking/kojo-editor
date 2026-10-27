@@ -1309,7 +1309,12 @@ export function createUiConditionMatrixPlugin(): Plugin {
                 createElement(
                   'span',
                   { className: 'cm-cov-bar', 'aria-hidden': 'true' },
-                  createElement('span', { className: 'cm-cov-fill', style: { width: `${pct}%` } }),
+                  // 宽度走 `transform: scaleX()`（P2-12）：系数 0..1 经 CSS 变量递给样式表，
+                  // `width` 是布局属性、过渡时每帧重排；scaleX 只走合成
+                  createElement('span', {
+                    className: 'cm-cov-fill',
+                    style: { '--cm-cov': String(pct / 100) } as unknown as Record<string, string>,
+                  }),
                 ),
                 createElement('span', { className: 'cm-cov-pct' }, `${pct}%`),
                 createElement(

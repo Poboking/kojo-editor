@@ -479,9 +479,16 @@ describe('B-6 · 效果库不许用 layout 属性做动画', () => {
     });
   }
 
-  it('其余仍动 layout 属性的动画已登记（重档 .cm-cov-fill 的 width 由插件侧行内给值，改它要动插件源码 ⇒ 本批不做）', () => {
+  it('最后一条 layout 属性动画债已清：.cm-cov-fill 改走 transform（P2-12）', () => {
     const rules = parseRules(read('../src/styles-project.css'));
-    expect(declOf(rules, '.cm-cov-fill', 'transition')).toContain('width var(--dur-2)');
+    const transition = declOf(rules, '.cm-cov-fill', 'transition')!;
+    // 改前这里钉的是 `width var(--dur-2)`（当时记的是"改它要动插件源码 ⇒ 本批不做"）。
+    // 2026-10-27 性能批连插件侧行内一起改了：系数经 `--cm-cov` 递、样式表只动合成属性。
+    expect(transition, '还在动 layout 属性（width 每帧重排）').not.toMatch(/\bwidth\b/);
+    expect(transition).toContain('transform var(--dur-2)');
+    expect(declOf(rules, '.cm-cov-fill', 'transform')).toContain('scaleX(var(--cm-cov');
+    // 缩放基准必须在：没有 width:100% 时 scaleX 的参照系是内容宽，几何会跟改前不一致
+    expect(declOf(rules, '.cm-cov-fill', 'width')).toBe('100%');
   });
 });
 

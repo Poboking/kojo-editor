@@ -6317,12 +6317,17 @@ button.primary .hint {
   border-radius: var(--radius-pill);
   background: var(--hover-soft);
 }
+/* 覆盖率填充走**合成属性**（P2-12，此前是 `transition: width` 的唯一存量债）：
+   系数由插件侧行内给 `--cm-cov`（0..1），`width: 100%` 是缩放基准。 */
 .cm-cov-fill {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--accent-text));
-  transition: width var(--dur-2) var(--ease-out);
+  transform-origin: left center;
+  transform: scaleX(var(--cm-cov, 0));
+  transition: transform var(--dur-2) var(--ease-out);
 }
 .cm-cov-pct {
   min-width: 2.6em;

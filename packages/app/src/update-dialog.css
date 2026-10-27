@@ -339,18 +339,25 @@
   background: var(--surface-sunken);
 }
 
+/* 下载进度走**合成属性**（P2-12）：进度事件按分片回、很密，`width` 过渡每帧重排；
+   `scaleX` 只走合成。系数由 TSX 递 `--ud-progress`（0..1）。 */
 .update-dialog-progress-fill {
+  width: 100%;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent-strong), var(--accent));
-  transition: width var(--dur-2) var(--ease-in-out);
+  transform-origin: left center;
+  transform: scaleX(var(--ud-progress, 0));
+  transition: transform var(--dur-2) var(--ease-in-out);
 }
 
 /* 总量未知（Started 还没报 contentLength）：不定态光带，方向与"正在下载"一致。
    周期 `--anim-spin × 2`（= 1400ms，与改前的 1.4s 逐字等值）：`ui-kit.css` 的
-   `kit-shimmer` 早就是这同一把尺（同文件 529 行），这里不再另抄一份字面量。 */
+   `kit-shimmer` 早就是这同一把尺（同文件 529 行），这里不再另抄一份字面量。
+   宽度回到 38% 定长条，静态 scaleX 显式让位给 keyframes 的位移。 */
 .update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
   width: 38%;
+  transform: none;
   animation: update-dialog-indeterminate calc(var(--anim-spin) * 2) var(--ease-in-out) infinite;
 }
 

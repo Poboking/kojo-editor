@@ -3334,8 +3334,10 @@ export function ShellLayout(props: Props): ReactElement {
       ? Math.min(100, Math.round((stats.fileCount / indexBaseline.count) * 100))
       : null;
   /** 轨的填充长度走 CSS 自定义属性（不定态由 CSS 接管，不读这个值） */
+  // 进度系数（0..1）经 CSS 变量递给样式表：填充条用 `transform: scaleX()` 而不是
+  // `width`（P2-12——width 过渡每帧重排状态栏，连带整条 shell 的布局）
   const indexFillStyle = {
-    '--sb-idx-fill': `${indexPct ?? (stats.indexing ? 0 : 100)}%`,
+    '--sb-idx-fill': String((indexPct ?? (stats.indexing ? 0 : 100)) / 100),
   } as CSSProperties;
 
   const statusbar = (

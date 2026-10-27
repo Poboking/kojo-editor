@@ -525,12 +525,19 @@
   box-shadow: var(--well-edge);
   overflow: hidden;
 }
+/* 进度填充走**合成属性**（P2-12）：`width` 是布局属性，进度事件密集时每帧都
+   走 layout → paint → composite 全链路；`scaleX` 只走合成。
+   系数由 TSX 递 `--kojo2-progress`（0..1）；`width: 100%` 是缩放基准，
+   视觉等价于改前的 `width: N%`（圆角在极小比例下会有极轻微形变，已与设计确认）。 */
 .kojo2-wizard__progress-fill {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width var(--dur-2) var(--ease-out);
+  transform-origin: left center;
+  transform: scaleX(var(--kojo2-progress, 0));
+  transition: transform var(--dur-2) var(--ease-out);
 }
 .kojo2-wizard__progress[data-state='error'] .kojo2-wizard__progress-fill {
   background: var(--danger);
@@ -543,6 +550,9 @@
 }
 .kojo2-wizard__progress[data-indeterminate='1'] .kojo2-wizard__progress-fill {
   width: 34% !important;
+  /* 定值态的 `scaleX(var(--kojo2-progress, 0))` 在不定态必须让位：此时没有系数
+     （变量缺省 0），静态 transform 会把条压成零宽，位移动画就"扫了个看不见的东西" */
+  transform: none;
   animation: kojo2-wizard-indeterminate 1.2s var(--ease-in-out) infinite;
 }
 @keyframes kojo2-wizard-indeterminate {

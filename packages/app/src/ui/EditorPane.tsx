@@ -50,7 +50,7 @@ import { SaveWarningDialog } from './SaveWarningDialog';
 import { applySizeTier, quickSuggestionsFor } from './editor-options';
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
 import { ErbReadonlyAskDialog, ErbUnlockDialog, SugarViewIntroDialog } from './SugarViewDialogs';
-import { decideExternalChange, matchOpenedPath, openExternalChangeDiff } from './external-change';
+import { decideExternalChange, isSelfWriteEcho, matchOpenedPath, openExternalChangeDiff } from './external-change';
 import { applyDiskText } from './disk-text-sync';
 import { createDocumentBroadcaster } from './document-broadcast';
 import {
@@ -1445,11 +1445,15 @@ export function EditorPane({
     applyReveal();
   }, [revealLine, revealColumn, revealSpan, revealNonce, revealFocus, filePath, applyReveal]);
 
+  /** 「自己刚写过」的时刻表（P2-5）：只记已打开文件 ⇒ 条目数与标签数同阶 */
+  const selfWriteAtRef = useRef(new Map<string, number>());
   /** 保存成功：把该文件 model 的当前版本号立为新基线 */
   const markSaved = useCallback(
     (path: string, entry: ModelEntry) => {
       editorModelPool.setBaseline(path, entry.model.getAlternativeVersionId());
       editorModelPool.setSavedBase(path, entry.model.getValue());
+      // 记下"我刚写过"：随后的 watcher 回声按时间窗放行，省掉整篇读盘（见 `isSelfWriteEcho`）
+      selfWriteAtRef.current.set(pathKey(path), Date.now());
       onDirtyChangeRef.current?.(path, false);
       if (filePathRef.current === path) setDirty(false);
       // 落盘成功 = 外部冲突已被用户表达处置、连败计数销账（A6 护栏与"只报一次"的复位点）
@@ -1886,6 +1890,10 @@ export function EditorPane({
           kind: 'error',
           message: `「${opened}」已在磁盘上被删除。编辑器里的内容现在是唯一副本——保存会重新创建该文件。`,
         });
+        return;
+      }
+      // 自写回声（P2-5）：刚保存过的 change 必然是 watcher 对自己那一笔的回音 ⇒ 不读盘
+      if (isSelfWriteEcho(ev.kind, selfWriteAtRef.current.get(pathKey(opened)), Date.now())) {
         return;
       }
       void reloadFromDisk(opened);
