@@ -1167,6 +1167,14 @@ textarea {
   background: var(--accent-dim);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
+/* WS-13 2b：树内拖拽搬运的落点。可落那一格**复用上面同一条描边**（同一件事就该长一个样），
+   非法落点只多换一层底色 + 一条警示描边——松手照样有一句人话（原因不许吞），
+   高亮只是"看得见这里落不下去"，长度一律来自 token，不写死像素。 */
+.kojo-drop-nocopy {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--danger);
+  cursor: not-allowed;
+}
 .tree-dir-name {
   overflow: hidden;
   text-overflow: ellipsis;

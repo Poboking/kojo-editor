@@ -14,7 +14,7 @@
  * `Map.get` + 字符串比较"。画法与配色仍只有一枚（`TreeProbMark`），树里不存在第二份计数。
  */
 
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type UIEvent as ReactUIEvent } from 'react';
+import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type UIEvent as ReactUIEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
@@ -51,6 +51,18 @@ import {
   type FileOpsPlan,
 } from './file-ops-plan';
 import { runFileOps } from './file-ops-exec';
+import {
+  TREE_DRAG_MIME,
+  TREE_DROP_NO_CLASS,
+  TREE_DROP_OK_CLASS,
+  acceptsTreeDrop,
+  decodeTreeDragPayload,
+  encodeTreeDragPayload,
+  planTreeDragSources,
+  planTreeDropTarget,
+  treeDropClasses,
+  treeDropRejectSentence,
+} from './file-tree-drag';
 import { undoUnavailableText, type DeletePlan } from './file-delete-plan';
 import {
   READONLY_BLOCK_REASON,
@@ -1397,6 +1409,152 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     );
   };
 
+  /* ---------------- WS-13 2b：树内拖拽搬运（拖起=选择集 / 落点=目录行 / 纯拖=移动 / Ctrl 拖=复制） ---------------- */
+
+  /**
+   * 这一批拖的是哪几份（拖起那一刻定下来，松手时多选集可能已经被别的事件改过）。
+   *
+   * `dataTransfer` 里也写了一份同样的载荷（自家 MIME）：ref 是同一个 tick 的快路径，
+   * 载荷是"事件绕道而来"（浏览器把 drop 交给别的表面）时仍能自证的那条慢路径。
+   */
+  const treeDragRef = useRef<{ readonly sources: readonly FileOpEntry[] } | null>(null);
+  /** 当前亮着落点高亮的那一行（类是命令式挂摘的：dragover 每秒几十次，不该为它重渲染树） */
+  const dragHoverElRef = useRef<HTMLElement | null>(null);
+
+  /** 事件源 → 行元素（行内嵌套的 span / 图标都算命中它所属的那一行） */
+  const treeRowElOf = (target: EventTarget | null): HTMLElement | null => {
+    const el = target as HTMLElement | null;
+    if (el === null || typeof el.closest !== 'function') return null;
+    return el.closest<HTMLElement>('[role="treeitem"]');
+  };
+
+  /** 行元素 → 行下标（`data-tid` 是 DOM 与行模型之间唯一的桥，判据住 `file-tree-flat`） */
+  const treeRowIndexFrom = (el: HTMLElement | null): number => {
+    const tid = el?.dataset.tid;
+    return tid === undefined ? -1 : indexOfId(tree, tid);
+  };
+
+  /** 落点高亮：换行先摘干净，再按判决挂类（可落一档描边 / 非法再加一格"不许落"） */
+  const setTreeDropHover = (el: HTMLElement | null, ok: boolean): void => {
+    if (dragHoverElRef.current !== el) {
+      dragHoverElRef.current?.classList.remove(TREE_DROP_OK_CLASS, TREE_DROP_NO_CLASS);
+      dragHoverElRef.current = el;
+    }
+    if (el === null) return;
+    for (const cls of treeDropClasses(ok)) el.classList.add(cls);
+  };
+
+  const clearTreeDropHover = (): void => {
+    dragHoverElRef.current?.classList.remove(TREE_DROP_OK_CLASS, TREE_DROP_NO_CLASS);
+    dragHoverElRef.current = null;
+  };
+
+  /**
+   * 拖起（WS-13 2b · 判据全住 `file-tree-drag`，这里只接线）。
+   *
+   * 三条口径：① 宾语就是**多选集真源**（按下那一行在集合里 = 拖整批；不在 = 先按点行的
+   * 既有口径收到那一行——勾选集合只收文件行，目录行按下时不动它，与鼠标侧逐字一致）；
+   * ② 拖不起来的（角色分组头 / 说明行）当场 preventDefault 并**说清为什么**，不许静默；
+   * ③ 载荷只写自家 MIME ⇒ 外部文件拖入那条腿（`ui/drag-drop.ts`）一个字都不受影响。
+   */
+  const handleTreeDragStart = (e: ReactDragEvent<HTMLUListElement>): void => {
+    const el = treeRowElOf(e.target);
+    const index = treeRowIndexFrom(el);
+    if (index < 0) return;
+    const row = rowAt(tree, index);
+    const plan = planTreeDragSources({
+      tree,
+      pressedIndex: index,
+      selectedPaths: getSelectedPaths(),
+      anchorIndex: anchorIdx.current,
+      shift: e.shiftKey,
+    });
+    if (plan.sources.length === 0) {
+      e.preventDefault();
+      note(plan.reason ?? '这一格拖不动。');
+      treeDragRef.current = null;
+      return;
+    }
+    if (plan.collapseTo !== null) {
+      if (row !== undefined && row.selectable) setSelected([plan.collapseTo]);
+      anchorIdx.current = index;
+    } else if (e.shiftKey) {
+      setSelected(plan.sources.map((s) => s.path));
+    }
+    if (row !== undefined) setFocusTid(row.id);
+    treeDragRef.current = { sources: plan.sources };
+    e.dataTransfer.effectAllowed = 'copyMove';
+    e.dataTransfer.setData(TREE_DRAG_MIME, encodeTreeDragPayload(plan.sources));
+  };
+
+  /**
+   * 拖过（落点高亮 + 允许 drop）。
+   *
+   * **非法落点也接住 drop**：这里若 `preventDefault` 都不做，浏览器就会把松手吃掉，
+   * 作者看到的正是任务里点名不许有的"松手没反应"。形状交给 `treeDropClasses`，
+   * 原因交给 drop 那一句回执——悬停阶段只负责"看得见这里落不下去"。
+   */
+  const handleTreeDragOver = (e: ReactDragEvent<HTMLUListElement>): void => {
+    if (!acceptsTreeDrop(e.dataTransfer.types)) return;
+    const el = treeRowElOf(e.target);
+    const sources = treeDragRef.current?.sources ?? decodeTreeDragPayload(e.dataTransfer.getData(TREE_DRAG_MIME));
+    const verdict = planTreeDropTarget({
+      tree,
+      overIndex: treeRowIndexFrom(el),
+      sources,
+      ctrl: e.ctrlKey,
+      meta: e.metaKey,
+      roots: moveRoots(),
+    });
+    e.preventDefault();
+    e.dataTransfer.dropEffect = verdict.mode;
+    setTreeDropHover(el, verdict.ok);
+  };
+
+  /** 真正离开树容器才清高亮（行与行之间移动会反复触发 leave，闪断即噪声——照 `panel-drop` 口径） */
+  const handleTreeDragLeave = (e: ReactDragEvent<HTMLUListElement>): void => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    clearTreeDropHover();
+  };
+
+  /**
+   * 松手落地：**唯一一条腿就是粘贴那条腿**（`executeFileOps`）。
+   *
+   * 计划层现读目标目录现状 → 撞名问句与粘贴同一句、同四选项；脏源问一次也同一条腿；
+   * 落盘走执行层（独占创建堵 TOCTOU）；收尾（重列目录 / 索引增量 / 标签换路径 / 回执）
+   * 全在既有那半条上，本处只补一句"落不下去"的原因。
+   */
+  const handleTreeDrop = (e: ReactDragEvent<HTMLUListElement>): void => {
+    if (!acceptsTreeDrop(e.dataTransfer.types)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = treeRowElOf(e.target);
+    const sources = treeDragRef.current?.sources ?? decodeTreeDragPayload(e.dataTransfer.getData(TREE_DRAG_MIME));
+    treeDragRef.current = null;
+    clearTreeDropHover();
+    const verdict = planTreeDropTarget({
+      tree,
+      overIndex: treeRowIndexFrom(el),
+      sources,
+      ctrl: e.ctrlKey,
+      meta: e.metaKey,
+      roots: moveRoots(),
+    });
+    if (!verdict.ok || verdict.targetDir === null) {
+      note(treeDropRejectSentence(verdict.reason ?? '这一格落不下去——要落到目录行、作者包行或角色分组行上。'));
+      return;
+    }
+    void executeFileOps({ intent: 'paste', mode: verdict.mode, sources, targetDir: verdict.targetDir }).catch(
+      (err: unknown) => noteErr(err, '拖拽搬运'),
+    );
+  };
+
+  /** 拖拽收尾（落在窗口外 / 按 Esc 中止都会走到这里）：载荷与高亮一起清，不留半个现场 */
+  const handleTreeDragEnd = (): void => {
+    treeDragRef.current = null;
+    clearTreeDropHover();
+  };
+
   /* ---------------- WS-13 2c：批量删除 + 回收站 + 撤销 ---------------- */
 
   /**
@@ -2276,6 +2434,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       const on = !placed && focusTid !== null && tid === focusTid;
       const next = on ? 0 : -1;
       if (el.tabIndex !== next) el.tabIndex = next;
+      // WS-13 2b：拖拽的"可拖"同样走 DOM 而不是 props——理由与上面那格 tabindex 一字不差
+      // （行组件是 memo 过的无知组件，多一位 prop 就多一位"每帧可能换引用"；虚拟化裁掉的行
+      // 本来也没挂出来，代价与窗口同档）。**每一行都可拖**：角色分组头 / 说明性行被拖起来时
+      // 由 `planTreeDragSources` 当场拦下并说出原因（拖不动 ≠ 不许按，静默才是问题）。
+      if (!el.draggable) el.draggable = true;
       if (on) placed = true;
       if (tid !== undefined && tid === pendingFocus.current) target = el;
     }
@@ -2555,6 +2718,13 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         onKeyDown={handleTreeKey}
         onClick={handleTreeClick}
         onScroll={handleTreeScroll}
+        // WS-13 2b：树内拖拽搬运。事件全部**在容器上委托**（与点击 / 键盘同一条腿）：
+        // 行组件是 memo 过的无知组件，给它们加拖拽回调就是给每一行挂一位"每帧可能换引用"的 prop。
+        onDragStart={handleTreeDragStart}
+        onDragOver={handleTreeDragOver}
+        onDragLeave={handleTreeDragLeave}
+        onDrop={handleTreeDrop}
+        onDragEnd={handleTreeDragEnd}
         onFocus={(e) => {
           if (e.target !== e.currentTarget) return;
           focusRovingRow();
