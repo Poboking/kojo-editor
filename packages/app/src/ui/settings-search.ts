@@ -36,6 +36,16 @@ import {
   loadSuggestDelayPref,
   loadWordBasedSuggestionsPref,
 } from './suggest-pref';
+// 幽灵文本（内联补全）三格（IC 批 A 车道）：真源在 `inline-completion-pref.ts` 的 localStorage，
+// 这里只登记可搜索面（缺一格 = 那一行设置页搜不到，`settings-search.test.ts` 的反向闭合会红）。
+import {
+  INLINE_COMPLETION_DEFAULT,
+  INLINE_MAX_CANDIDATES_DEFAULT,
+  INLINE_MIN_SHOW_DELAY_DEFAULT,
+  loadInlineCompletionPref,
+  loadInlineMaxCandidatesPref,
+  loadInlineMinShowDelayPref,
+} from './inline-completion-pref';
 import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { TREE_SITTER_DEFAULT, loadTreeSitterPref } from './tree-sitter-pref';
 import { FIND_SEED_DEFAULT, loadFindSeedPref } from './find-pref';
@@ -116,6 +126,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'editor.quickSuggestions', section: 'editor', sectionLabel: '编辑器', label: '输入时自动弹出补全', keywords: ['quick suggestions 补全 候选'], key: 'editor.quickSuggestions', isModified: () => loadQuickSuggestionsPref() !== QUICK_SUGGESTIONS_DEFAULT },
   { id: 'editor.wordSuggestions', section: 'editor', sectionLabel: '编辑器', label: '文档词补全', keywords: ['word based 补全'], key: 'editor.wordSuggestions', isModified: () => loadWordBasedSuggestionsPref() !== WORD_BASED_SUGGESTIONS_DEFAULT },
   { id: 'editor.suggestDelay', section: 'editor', sectionLabel: '编辑器', label: '补全弹出延迟', keywords: ['delay 延迟 立即'], key: 'editor.suggestDelay', isModified: () => loadSuggestDelayPref() !== SUGGEST_DELAY_DEFAULT },
+  { id: 'editor.inlineCompletion', section: 'editor', sectionLabel: '编辑器', label: '幽灵文本（内联补全）', keywords: ['inline 内联 幽灵文本 ghost tab 补全'], key: 'editor.inlineCompletion', isModified: () => loadInlineCompletionPref() !== INLINE_COMPLETION_DEFAULT },
+  { id: 'editor.inlineMinShowDelay', section: 'editor', sectionLabel: '编辑器', label: '幽灵文本停顿时长', keywords: ['ghost 延迟 停顿 内联 delay'], key: 'editor.inlineMinShowDelay', isModified: () => loadInlineMinShowDelayPref() !== INLINE_MIN_SHOW_DELAY_DEFAULT },
+  { id: 'editor.inlineMaxCandidates', section: 'editor', sectionLabel: '编辑器', label: '幽灵文本最多给几条', keywords: ['ghost 上限 条数 候选 内联'], key: 'editor.inlineMaxCandidates', isModified: () => loadInlineMaxCandidatesPref() !== INLINE_MAX_CANDIDATES_DEFAULT },
   // .kojo 预览与整理（预览总闸 → 保存时整理 → 两条整理规则 → 行内标注）
   { id: 'editor.sugarView', section: 'editor', sectionLabel: '编辑器', label: '.kojo 预览', keywords: ['糖 中文表层 ctrl+alt+t'], key: 'editor.sugarView' },
   { id: 'editor.formatOnSave', section: 'editor', sectionLabel: '编辑器', label: '保存时整理空白', keywords: ['格式化 format on save'], key: 'editor.formatOnSave' },

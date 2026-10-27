@@ -162,6 +162,10 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 口上 XML 面板（2026-10-24 eraFL 批）。末位＝追加，不插队：
       // 它的 `tryInject` 取 `kojo.xml` 服务，缺席时面板自己降级，次序不参与判定。
       'createUiKojoXmlPlugin',
+      // 内联补全（幽灵文本）本地候选源（2026-10-27 IC-B 批）。同样末位追加：它只往槽
+      // `completion.source` 挂一家供方，`tryInject` 取 `erb.parser` 的名录，缺席时整家
+      // 走 `failed` 出声（不静默），次序与"谁赢"无关——槽内先后由各贡献自己的 `order` 定。
+      'createInlineCompletionLocalPlugin',
     ];
     const found = [...bootstrapSrc.matchAll(/(?:^|\n)\s*[\w.]+.(create[A-Za-z]+Plugin)\(/g)].map((m) => m[1]!);
     expect(found).toEqual(expected);

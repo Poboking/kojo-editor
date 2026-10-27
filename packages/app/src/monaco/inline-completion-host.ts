@@ -696,7 +696,22 @@ function installTypingLegs(monaco: typeof Monaco): Monaco.IDisposable {
     if (startSub) handles.push(startSub);
     if (endSub) handles.push(endSub);
   };
-  for (const editor of monaco.editor.getEditors()) hook(editor);
+  // `monaco.editor.getEditors()` 在真 API 里是有的（`editor.api.d.ts:968`），但**测试桩**与
+  // 只装配一部分的宿主页面上可能没有这一枚（集成批实测：`kojo2-structure-gate` /
+  // `sugar-provider-line-map` 的 monaco 桩缺它，直接 `is not a function` 把 mount 打断）。
+  // 缺它时不猜也不静默：已存在的编辑器挂不上打字腿（`onDidCreateEditor` 只覆盖之后创建的），
+  // 所以出一声，让"这一页上打字腿没装全"是可见的事实，而不是一枚偶发的不弹。
+  const listed: unknown = typeof monaco.editor.getEditors === 'function' ? monaco.editor.getEditors() : null;
+  // 桩面可能给出不成形的返回值（集成批实测：某桩的 `getEditors` 存在但返回 `undefined`
+  // ⇒ 只判 `=== null` 会漏进去，`for…of undefined` 当场把 mount 打断）。判据取"是不是可遍历的数组"。
+  const existingEditors: readonly Monaco.editor.ICodeEditor[] | null = Array.isArray(listed)
+    ? (listed as readonly Monaco.editor.ICodeEditor[])
+    : null;
+  if (existingEditors === null) {
+    console.warn('[补全线] `monaco.editor.getEditors()` 不可用 ⇒ 打字腿只挂在之后创建的编辑器上');
+  } else {
+    for (const editor of existingEditors) hook(editor);
+  }
   handles.push(monaco.editor.onDidCreateEditor((editor) => hook(editor)));
   return {
     dispose: () => {
