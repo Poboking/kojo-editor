@@ -18,7 +18,7 @@
  * Monaco 的 standalone 主题服务用 `[tokenType, ...modifiers].join('.')` 去匹配主题规则
  * （`semanticTokensProviderStyling.js` 的 `_hashTable` 取 metadata 那一段）。所以 legend 里
  * 的 **tokenType 必须等于主题规则的 `token`**：本文件的 legend **直接用
- * `kojo2-language.ts` 转交的 `KOJO2_TOKEN.*` 值**（现居 `@kojo/kojo-lang/semantic-roles`，
+ * `kojo2-language.ts` 转交的 `KOJO2_TOKEN.*` 值**（现居 `@kojo/kojo-sdk/semantic-roles`，
  * 即 `role.keyword` / `role.speaker` …），
  * 而不是另起一套 `keyword` / `string`（那会与 v1 的语义类别撞名，还得再补一份映射）。
  * 角色 → 三套样式的索引（`@kojo/kojo-lang/monaco-theme` 的 `KOJO2_THEME_TOKEN_MAP`）是

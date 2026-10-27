@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/kojo-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kojo 语言包作者 SDK：2.0 契约形状（GameAdapter / CarrierBinding / 结构 worker 协议 v4）+ 语义角色表与主题规则形状。零 Monaco、零 React、零 DOM、零 IO、零游戏名词。",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts",
+    "./semantic-roles": "./src/semantic-roles.ts",
+    "./structure-protocol": "./src/structure-protocol.ts"
+  },
+  "dependencies": {
+    "@kojo/kojo-core": "workspace:*",
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

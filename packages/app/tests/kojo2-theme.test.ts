@@ -22,7 +22,7 @@ import {
   ROLE_MINT_THEME_RULES,
   ROLE_THEME_RULES,
 } from '@kojo/kojo-lang/theme-rules';
-import { KOJO2_TOKEN, ROLE, ROLE_FONT_STYLES, SEMANTIC_ROLES, isSemanticRole } from '@kojo/kojo-lang/semantic-roles';
+import { KOJO2_TOKEN, ROLE, ROLE_FONT_STYLES, SEMANTIC_ROLES, isSemanticRole } from '@kojo/kojo-sdk/semantic-roles';
 import { defineMonacoThemes, monacoThemeIdFor } from '../src/monaco/theme';
 import { THEME_IDS } from '../src/ui/theme-pref';
 // B4 起这三套主题的**声明**在语言面库、**定义**在宿主落点：本文件量的就是"声明经过落点

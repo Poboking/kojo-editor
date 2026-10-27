@@ -14,7 +14,7 @@
 
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import {
   EDITOR_PADDING_DEFAULT,
   SUGAR_MARKS_DEFAULT,

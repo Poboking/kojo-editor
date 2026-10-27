@@ -29,7 +29,7 @@
  *   `Edit.startIndex` 在 JS 绑定里就是 JS 字符串下标，两侧同源才不会把树编辑歪）；
  * - 行内区间取 `[startColumn, endColumn)`，`endColumn` 是**排他**的列号（不是 Monaco 列）。
  */
-import { ROLE, type SemanticRole } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE, type SemanticRole } from '@kojo/kojo-sdk/semantic-roles';
 import type {
   StructureCaptureTable,
   StructureIndentRules,

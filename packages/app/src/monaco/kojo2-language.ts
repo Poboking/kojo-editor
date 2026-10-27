@@ -16,7 +16,8 @@
  * | Monarch 状态机与 token 分档 | `@kojo/kojo-lang/monarch` |
  * | 成对记号 / 注释符 / 回车与缩进阶梯 | `@kojo/kojo-lang/language-config` |
  * | 三套 `kojo2-*` 主题的身份与角色规则 | `@kojo/kojo-lang/monaco-theme` |
- * | 语义角色表与三侧角色调色板 | `@kojo/kojo-lang/semantic-roles`、`.../theme-rules` |
+ * | 语义角色表（`role.*` 与档位映射） | `@kojo/kojo-sdk/semantic-roles` |
+ * | 三侧角色调色板（dark / light / mint） | `@kojo/kojo-lang/theme-rules` |
  * | 数据怎么变成 `setMonarchTokensProvider` 的入参 | 宿主 `monaco-language-surface.ts` |
  *
  * ## 为什么还留着这些 re-export

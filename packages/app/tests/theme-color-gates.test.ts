@@ -9,7 +9,7 @@ import {
   KOJO2_THEMES,
 } from '@kojo/kojo-lang/monaco-theme';
 import { materializeMonacoTheme } from '../src/monaco/monaco-language-surface';
-import { KOJO2_TOKEN, SEMANTIC_ROLES, roleForLegacyToken } from '@kojo/kojo-lang/semantic-roles';
+import { KOJO2_TOKEN, SEMANTIC_ROLES, roleForLegacyToken } from '@kojo/kojo-sdk/semantic-roles';
 import {
   KOJO_DARK_COLORS,
   KOJO_LIGHT_COLORS,

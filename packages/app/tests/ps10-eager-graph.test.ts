@@ -681,17 +681,23 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
    *
    * 为什么单独一条而不并进体积闸：读数只能告诉你"涨了 82 KB"，说不清**是谁**；
    * 这条直接点名文件与 specifier。而且它在涨之前就红——体积闸要等累计够量才响。
+   *
+   * SDK B5a：同样的形状多了一枚 `@kojo/kojo-sdk`——它的桶把**契约面 + 结构协议 + 角色表**
+   * 一起 re-export（还会经 `structure-protocol` 值引 core 的桶）。判据与 `kojo-lang` 逐字
+   * 相同（"不许引桶、只许引叶子"），只是取证点从一枚包变成两枚：这不是放宽，是新包进图时
+   * 必须回答的同一个问题。
    */
   it('开机图里对语言面库的引用必须是叶子（不许引桶：桶 = 整包 85 KB）', () => {
+    const barrels = new Set(['@kojo/kojo-lang', '@kojo/kojo-sdk']);
     const offenders: string[] = [];
     for (const rel of files) {
       const src = readFileSync(path.join(repoRoot, rel), 'utf8');
       for (const m of src.matchAll(STATIC_IMPORT_RE)) {
         if (!hasValueBinding(m[1]!)) continue;
-        if (m[2] === '@kojo/kojo-lang') offenders.push(`${rel} → ${m[2]}`);
+        if (barrels.has(m[2]!)) offenders.push(`${rel} → ${m[2]}`);
       }
       for (const m of src.matchAll(EXPORT_FROM_RE)) {
-        if (m[1] === '@kojo/kojo-lang') offenders.push(`${rel} → re-export ${m[1]}`);
+        if (barrels.has(m[1]!)) offenders.push(`${rel} → re-export ${m[1]}`);
       }
     }
     expect(offenders).toEqual([]);

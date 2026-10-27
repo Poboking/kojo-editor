@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { scanTextTernaries } from '@kojo/plugin-condition-extractor';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import { compileMonarch, driveLine, driveLines, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**

@@ -3,7 +3,7 @@ import type * as Monaco from '../src/monaco/entry';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { registerKojoLanguage } from '../src/monaco/kojo-language';
 import { classifyKojoLine } from '../src/monaco/kojo-native-zone';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import { compileMonarch, driveLines, stubMonaco, type Emit } from './monarch-harness';
 
 /**

@@ -24,7 +24,7 @@ import { preprocRoleOf as parserRoleOf } from '@kojo/plugin-erb-parser';
 import { FOLD_PREPROC_PATTERNS, foldPreprocRoleOf } from '../../plugins/erb-parser/src/folding';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { registerKojoLanguage } from '../src/monaco/kojo-language';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import { compileMonarch, driveLexer, stubMonaco, type CompiledLexer } from './monarch-harness';
 import structure from '../../erb-syntax-tree/src/structure.json' with { type: 'json' };
 

@@ -19,7 +19,7 @@ import { CJK_WORD_PATTERN } from '../src/monaco/word-separators';
 import { KOJO_DARK_COLORS } from '../src/monaco/theme';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
 import { ROLE_THEME_RULES } from '@kojo/kojo-lang/theme-rules';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import {
   KOJO2_LANGUAGE_ID,
   KOJO2_SOURCE_EXTENSION,

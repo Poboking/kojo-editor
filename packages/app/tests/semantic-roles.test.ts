@@ -32,7 +32,7 @@ import {
   isSemanticRole,
   roleForLegacyToken,
   type SemanticRole,
-} from '@kojo/kojo-lang/semantic-roles';
+} from '@kojo/kojo-sdk/semantic-roles';
 import snapshot from './fixtures/legacy-token-colors.json';
 
 /**

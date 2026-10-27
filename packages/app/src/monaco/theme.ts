@@ -15,7 +15,7 @@ import {
   ROLE_MINT_THEME_RULES,
   ROLE_THEME_RULES,
 } from '@kojo/kojo-lang/theme-rules';
-import { ROLE, nameLayerRules, rulesFromRolePalette } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE, nameLayerRules, rulesFromRolePalette } from '@kojo/kojo-sdk/semantic-roles';
 
 // K2 batch-3：2.0 三套主题的注册闸。flag 模块零依赖（只读 localStorage），静态引它
 // 不破坏上面那条 PS-10 断链；主题数据本身（`kojo2-theme`）仍走**动态 import**（见

@@ -9,7 +9,7 @@ import { ERB_DECLARATION_LINE_RE, ERB_DIRECTIVES, ERB_PREPROC_LINE_RE } from './
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 
 /**
  * `.kojo` 表层 DSL 编辑器支持 —— Monarch 词法 + 语言配置。

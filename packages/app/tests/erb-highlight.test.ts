@@ -11,7 +11,7 @@ import { registerErbLanguage, setErbDirectiveWords } from '../src/monaco/erb-lan
 import { ERB_CONTROL_STATEMENTS, classifyControlFlow } from '@kojo/plugin-erb-parser';
 import { scanTextTernaries } from '@kojo/plugin-condition-extractor';
 import { CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import { compileMonarch, driveLexer, driveLine, driveLines, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**

@@ -51,7 +51,7 @@ import {
   SEMANTIC_ROLES,
   type KojoTokenThemeRule,
   type SemanticRole,
-} from './semantic-roles';
+} from '@kojo/kojo-sdk/semantic-roles';
 
 /* ============================== 三套主题的身份 ============================== */
 

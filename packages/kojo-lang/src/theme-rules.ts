@@ -4,7 +4,7 @@ import {
   rulesFromRolePalette,
   type KojoTokenThemeRule,
   type SemanticRole,
-} from './semantic-roles';
+} from '@kojo/kojo-sdk/semantic-roles';
 
 /**
  * 主题规则的**叶子单一真源**（PS-10 断链批；LAU-2 起改成"角色调色板"；

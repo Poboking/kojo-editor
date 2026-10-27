@@ -15,7 +15,7 @@
  *   Monaco 交互留在 `EditorPane`（与 `lift-preview.ts` 同款分层，便于单测钉死拼装口径）。
  */
 
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 
 /** 偏好键（壳层私事，localStorage；与布局同款——不进内核存储域） */
 const PREF_KEY = 'kojo.ui.sugarView.v1';

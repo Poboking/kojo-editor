@@ -21,6 +21,8 @@
       "@kojo/plugin-api": ["../plugin-api/src/index.ts"],
       "@kojo/kojo-core": ["../kojo-core/src/index.ts"],
       "@kojo/kojo-lang": ["../kojo-lang/src/index.ts"],
+      "@kojo/kojo-sdk": ["../kojo-sdk/src/index.ts"],
+      "@kojo/kojo-sdk/*": ["../kojo-sdk/src/*.ts"],
       "@kojo/kojo-lang/*": ["../kojo-lang/src/*.ts"],
       "@kojo/kojo-vocab": ["../kojo-vocab/src/index.ts"],
       "@kojo/kojo-vocab/*": ["../kojo-vocab/src/*.ts"],

@@ -19,7 +19,6 @@
     "./inlay": "./src/inlay.ts",
     "./adapter-source": "./src/adapter-source.ts",
     "./expand-compile": "./src/expand-compile.ts",
-    "./semantic-roles": "./src/semantic-roles.ts",
     "./theme-rules": "./src/theme-rules.ts",
     "./lexicon": "./src/lexicon.ts",
     "./monarch": "./src/monarch.ts",
@@ -28,6 +27,7 @@
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*",
+    "@kojo/kojo-sdk": "workspace:*",
     "@kojo/kojo-vocab": "workspace:*"
   }
 }

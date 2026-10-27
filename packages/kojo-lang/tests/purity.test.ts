@@ -53,9 +53,10 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // constants / name-chars / interpolation / declarations / sourcemap / expand-view /
     // symbols / definition / inlay / adapter-source / expand-compile / index
     //（B2 加 interpolation + definition，B2c 加 inlay + adapter-source，B3a 加 expand-compile）
-    // + B4 从宿主搬来的语义角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）
     // + B4 的 2.0 语言面本体：词表 / Monarch 状态机 / 语言配置 / 三套主题装配
-    expect(files).toHaveLength(18);
+    // − B5a：语义角色表**搬去 `@kojo/kojo-sdk/semantic-roles`**（架构 §7「角色表住 SDK」），
+    //   本包不再持有那一枚；角色调色板（theme-rules）留在这里——它是**装配数据**不是契约。
+    expect(files).toHaveLength(17);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
@@ -68,8 +69,15 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
      *   `@kojo/plugin-kojo-sugar` 搬进非插件包）。B4 把 Monarch 搬进本包 ⇒ 词表出口必须
      *   跟着进来；PLAN §4「B1 刻意没搬的三块」记的正是这条——**正解是让 core 自持该表**，
      *   那是单独一批（搬完就把这一行删掉）。vocab 是**库不是插件**，所以这条边不是反向分层。
+     * - `@kojo/kojo-sdk/semantic-roles`（B5a）：语义角色表搬去 SDK 之后，本包（theme-rules /
+     *   monarch / monaco-theme / 桶）读的是**同一枚对象**。方向是 `kojo-lang → kojo-sdk`，
+     *   SDK 只依赖 core + plugin-api ⇒ 无环（由本测试的「白名单」与 SDK 的 purity 两处合钉）。
      */
-    const allowed = new Set(['@kojo/kojo-core', '@kojo/kojo-vocab/keywords']);
+    const allowed = new Set([
+      '@kojo/kojo-core',
+      '@kojo/kojo-vocab/keywords',
+      '@kojo/kojo-sdk/semantic-roles',
+    ]);
     for (const file of files) {
       for (const spec of specifiersOf(readFileSync(file, 'utf8'))) {
         if (spec.startsWith('.')) continue;

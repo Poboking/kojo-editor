@@ -1,4 +1,4 @@
-import { ROLE, type SemanticRole } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE, type SemanticRole } from '@kojo/kojo-sdk/semantic-roles';
 
 /**
  * ERB 结构层的**捕获名 → 语义角色**表（worker 与主线程共用；只引零依赖的角色表，

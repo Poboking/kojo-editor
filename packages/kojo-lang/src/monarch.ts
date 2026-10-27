@@ -12,7 +12,7 @@ import {
   KOJO2_WAIT_CONTINUE,
   escapeRegExp,
 } from './lexicon';
-import { KOJO2_TOKEN } from './semantic-roles';
+import { KOJO2_TOKEN } from '@kojo/kojo-sdk/semantic-roles';
 
 /**
  * Kojo 2.0 的 **Monarch 词法面**（U6；**SDK B4 起住在 `@kojo/kojo-lang`**：本文件交出契约
@@ -70,7 +70,7 @@ type Rule = readonly [pattern: RegExp | string, action: Action];
 
 /** 档位名 → 语义角色（定义在 `semantic-roles.ts`；这里原样转交，宿主 shim 与测试都读同一枚对象） */
 export { KOJO2_TOKEN };
-export type { Kojo2TokenName } from './semantic-roles';
+export type { Kojo2TokenName } from '@kojo/kojo-sdk/semantic-roles';
 
 export interface Kojo2TokenTier {
   /** 档名（面向作者的中文口径，只用于报错文案，不参与配色计算） */

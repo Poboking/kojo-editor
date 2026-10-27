@@ -90,7 +90,7 @@
         "packages/app/src/ui/kojo2-storage-persist.ts": 2,
         "packages/app/src/ui/kojo2-storage-retry-command.ts": 1,
         "packages/app/src/ui/project-diagnostics.ts": 8,
-        "packages/kojo-lang/src/semantic-roles.ts": 30
+        "packages/kojo-sdk/src/semantic-roles.ts": 30
       },
       "exempt": {
         "total": 1,
