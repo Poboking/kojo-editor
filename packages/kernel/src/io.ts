@@ -83,8 +83,14 @@ const STAT_CHUNK_SIZE = 512;
  * 两把尺都留一倍量级余量，低于它冷开时抽取/校验段会出现"缓存已被解析段挤掉"
  * 的重读——那正是本批要消掉的数千次单文件读（2,000 文件合成探针在 96M 字符
  * 上限下实测被削掉 347 个文件、引出 347 次重读，故这版取 128M）。
+ *
+ * **份数尺 2026-10-28 由 4096 提到 8192**（P0-3 批 4）：上面的 2,000 文件探针低估了
+ * 真语料的宽度。真口上域（`D:/Game/eraNAS`）走检索面的就有 6,228 份
+ * （`.erb` 4,601 + `.txt` 1,078 + `.csv` 311 + `.erh` 179 + `.erd` 38 + 其余），
+ * 4096 会让「索引段刚读完 → 抽取段再读」在**同一轮里**就有约 2,100 份被挤出，
+ * 而这两段的读集合几乎重合——挤出即重读。8192 覆盖整份语料再留三成余量。
  */
-const TEXT_CACHE_MAX_FILES = 4096;
+const TEXT_CACHE_MAX_FILES = 8192;
 const TEXT_CACHE_MAX_CHARS = 128 * 1024 * 1024;
 
 /**
@@ -201,8 +207,13 @@ export class FileIOServiceImpl implements FileIO {
   /** 回收站（2026-10-16 undo 批）：removeDir/removeFile 的落点从"直接删"改为"移入" */
   private readonly trash: TrashManager;
   /**
-   * 会话级文本缓存（**只服务 `readTexts` 批量路径**；`readText` 单文件路径不接——
-   * 打开文件永远新鲜读盘，编辑器语义）。
+   * 会话级文本缓存（**查询只发生在 `readTexts` 批量路径**）。
+   *
+   * `readText` 单文件路径**只写不读**（P0-3 批 4）：它读到的正文入表，让后续批量读
+   * 看得见；但它自己永不查询——"打开文件必须看到盘上最新内容"是编辑器的语义，
+   * 而 SMB 的 mtime 精度不足以证明"内容没变"（改了内容但同秒内、size 也没变）。
+   * 缺了这条，扫描器逐文件读过的正文对索引/抽取/校验三条腿全是隐形的，
+   * 同一批文件被读两遍。
    *
    * FIFO（Map 插入序）：命中不动序（热点文件反复命中时不被反复推新，序更稳）；
    * 重新读入=重新插入（挪到队尾）。写路径（writeText / writeBytes / restoreBackup）
@@ -285,7 +296,19 @@ export class FileIOServiceImpl implements FileIO {
     // 就地补捞一次盘上真相（见 ensureFingerprintFromDisk），逐行保真不变量不打折。
     this.rememberFingerprints(path, key, raw, bytes);
     const st = await statCall;
-    return { path, text, encoding, eol, mtimeMs: st?.mtimeMs ?? null };
+    const file: TextFile = { path, text, encoding, eol, mtimeMs: st?.mtimeMs ?? null };
+    // **只写不读**（P0-3 批 4）：`readText` 自己永不命中这张表——"打开文件必须看到盘上
+    // 最新内容"是它的契约（见 `textCache` 字段注释），而 SMB 的 mtime 精度有限，
+    // "内容改了但 mtime 没变"判不出来，所以单文件读不做缓存查询。但它读到的正文**要进表**：
+    // 否则 `readTexts` 那条腿永远看不见这把内容，同一批 `.erb` 在「单文件读（整项目扫描）」
+    // 与「批量读（索引 / 抽取 / 校验）」之间被读两遍、缓存两份——真语料上那是
+    // 4,601 份 × 2 趟 IPC 的重复。写路径（writeText / writeBytes / restoreBackup）
+    // 走 `invalidateTextCache`，这里入的表同样会被清掉，不会把旧内容喂回去。
+    // 没有 stat 就没有失效判据 ⇒ 不入表（宁可少一次复用，也不留可能过期的键）。
+    if (st !== null) {
+      this.putTextCache(key, { mtimeMs: st.mtimeMs, size: st.size, file });
+    }
+    return file;
   }
 
   /**
@@ -1121,9 +1144,14 @@ export class FileIOServiceImpl implements FileIO {
    * 总量档巡检（公开：测试与未来维护面可直调强制跑）：整个 `backup/` 根的 `.bak`
    * 总字节超 `maxTotalBytes` ⇒ 跨桶按**版本时序**从最旧裁到预算内。
    *
-   * 节流（`BACKUP_BYTES_SWEEP_INTERVAL_MS`）：每次 backup 都全根扫太贵（数千桶 ×
-   * walkDir），退成分钟级；`force: true` 绕过节流（测试用）。在途巡检不重叠
-   * （promise 守门）。失败只 warn 不抛——巡检是尽力而为的维护动作，不该炸写路径。
+   * 节流（`BACKUP_BYTES_SWEEP_INTERVAL_MS`）：每次 backup 都全根扫太贵，退成分钟级；
+   * `force: true` 绕过节流（测试用）。在途巡检不重叠（promise 守门）。失败只 warn 不抛
+   * ——巡检是尽力而为的维护动作，不该炸写路径。
+   *
+   * **一次递归替掉「每桶一趟 IPC」**（P0-3 批 5）：旧实现先 `listDir(backup)` 再对每个
+   * 桶单独 `walkDir`，桶数随使用时长线性增长（数千个），于是每次巡检就是数千趟 IPC。
+   * 这里改成对 `backup/` 根递归一次——覆盖范围相同（桶内原本也是递归），
+   * IPC 趟数从 O(桶数) 降到 O(1)。读不到根 = 没有可裁的备份（首次运行 / 尚未建桶）。
    */
   async sweepBackupRootBytes(force = false): Promise<void> {
     const now = Date.now();
@@ -1131,30 +1159,26 @@ export class FileIOServiceImpl implements FileIO {
     this.lastBackupBytesSweepAt = now;
     const appData = await this.bridge.appDataDir();
     const root = join(appData, 'backup');
-    const buckets = await this.bridge.listDir(root).catch(() => [] as DirEntry[]);
-    const versions: Array<{ path: string; name: string; bucket: string; bytes: number }> = [];
+    const files = await this.bridge
+      .walkDir(root, { includeFiles: true, withMetadata: true })
+      .catch(() => null);
+    if (files === null) return;
+    const versions: Array<{ path: string; name: string; bytes: number }> = [];
     let total = 0;
-    for (const b of buckets) {
-      if (!b.isDirectory) continue;
-      const files = await this.bridge
-        .walkDir(b.path, { includeFiles: true, withMetadata: true })
-        .catch(() => null);
-      if (files === null) continue;
-      for (const f of files) {
-        if (f.isDirectory || !f.name.endsWith('.bak')) continue;
-        // 缺 size 补 stat；再取不到就剔除并出声（不拿 0 静默低估总量）
-        let size = f.size ?? null;
-        if (size === null) {
-          const st = await this.bridge.stat(f.path).catch(() => null);
-          size = st !== null && !st.isDirectory ? st.size : null;
-        }
-        if (size === null) {
-          this.log?.warn(`备份版本 stat 失败（总量巡检跳过该条）：${f.path}`);
-          continue;
-        }
-        versions.push({ path: f.path, name: f.name, bucket: b.path, bytes: size });
-        total += size;
+    for (const f of files) {
+      if (f.isDirectory || !f.name.endsWith('.bak')) continue;
+      // 缺 size 补 stat；再取不到就剔除并出声（不拿 0 静默低估总量）
+      let size = f.size ?? null;
+      if (size === null) {
+        const st = await this.bridge.stat(f.path).catch(() => null);
+        size = st !== null && !st.isDirectory ? st.size : null;
       }
+      if (size === null) {
+        this.log?.warn(`备份版本 stat 失败（总量巡检跳过该条）：${f.path}`);
+        continue;
+      }
+      versions.push({ path: f.path, name: f.name, bytes: size });
+      total += size;
     }
     if (total <= this.backupMaxTotalBytes) return;
     // 版本名字典序 = 时序；从最旧开始删，直到进预算
