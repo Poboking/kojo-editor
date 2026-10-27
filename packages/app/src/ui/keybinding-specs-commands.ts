@@ -111,9 +111,9 @@ const GROUP_AND_PROJECT_SPECS: readonly KeybindingSpec[] = [
 ];
 
 /**
- * 资源管理器剪贴板家族（WS-13 2a 车）：命令面板 + 键位页入口。
+ * 资源管理器剪贴板家族（WS-13 2a 车）+ 撤销删除（2c 车）：命令面板 + 键位页入口。
  *
- * ## 为什么四条都**不带缺省键**
+ * ## 为什么这几条都**不带缺省键**
  *
  * `Ctrl+C/X/V/D` 只在资源管理器树的按键判据里生效（焦点在不在树里是那条白名单的第一道闸，
  * 见 `file-tree-keyboard.ts`）；把它们登记成**宿主全局键**会把编辑器与输入框里的
@@ -127,6 +127,7 @@ const EXPLORER_CLIP_SPECS: readonly KeybindingSpec[] = [
   { id: 'explorer.cutEntry', title: '剪切到剪贴板', category: '资源管理器', rebindable: true, note: '落地在粘贴那一步；焦点在树上时 Ctrl+X 生效' },
   { id: 'explorer.pasteEntry', title: '粘贴到当前文件夹', category: '资源管理器', rebindable: true, note: '落点 = 焦点行所在目录（或作者包）；焦点在树上时 Ctrl+V 生效' },
   { id: 'explorer.duplicateEntry', title: '创建副本', category: '资源管理器', rebindable: true, note: '原地再落一份（名字 2 自动让位）；焦点在树上时 Ctrl+D 生效' },
+  { id: 'explorer.undoDeleteEntry', title: '撤销这次删除', category: '资源管理器', rebindable: true, note: '把刚删的那一批从回收站放回原位；**刻意不占 Ctrl+Z**（那是编辑器的），回执旁边那条按钮是同一个动作' },
 ];
 
 /** 命令面板入口型条目全集（`./keybindings` 把它拼在静态基础表后，构成键位页看到的完整表） */

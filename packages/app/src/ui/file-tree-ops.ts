@@ -37,6 +37,13 @@ export const EXPLORER_COPY_COMMAND = 'explorer.copyEntry';
 export const EXPLORER_CUT_COMMAND = 'explorer.cutEntry';
 export const EXPLORER_PASTE_COMMAND = 'explorer.pasteEntry';
 export const EXPLORER_DUPLICATE_COMMAND = 'explorer.duplicateEntry';
+/**
+ * 「撤销这次删除」（WS-13 2c 车）：把刚删的那一批从回收站放回原位。
+ *
+ * 同一理由收在这里（菜单/回执与命令面板要用同一个字面）。它**不带缺省键**：`Ctrl+Z` 是编辑器的，
+ * 全局认领会在任何地方把编辑器的一次撤销抢成"文件放回原位"——那是数据事故而不是一处不便。
+ */
+export const EXPLORER_UNDO_DELETE_COMMAND = 'explorer.undoDeleteEntry';
 
 /** 菜单动作 id（既有 9 个的语义一字不动，新增项一律追加在后） */
 export type MenuItemId =
@@ -400,8 +407,11 @@ export function relativeToRoot(path: string, root: string): string {
  *
  * 措辞纪律：不说"脏 / model / 缓冲区"这类内部词，说"未保存的修改"。
  */
-export function dirtyGateText(kind: 'move' | 'overwrite', names: readonly string[]): string {
+export function dirtyGateText(kind: 'move' | 'overwrite' | 'delete', names: readonly string[]): string {
   const list = names.slice(0, 4).join('、') + (names.length > 4 ? ` 等 ${names.length} 项` : '');
+  if (kind === 'delete') {
+    return `这些文件还有未保存的修改：${list}。\n删除会把它们移进回收站，**编辑器里那份还没存的改动不会跟着进去**——删掉之后那份改动就没了（撤销删除只能把盘上那一份放回来）。\n要先把它们存下来，还是照删？`;
+  }
   return kind === 'move'
     ? `这些文件还有未保存的修改：${list}。\n移走之后编辑器里的改动会跟着文件一起过去（标签的路径会换成新位置）。\n确定要继续吗？`
     : `落点里有文件带着未保存的修改：${list}。\n这次覆盖的是**盘上**那一份（会被写进本地历史，可以从「文件历史」找回），编辑器里未保存的改动不会被写进去。\n确定要覆盖吗？`;

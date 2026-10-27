@@ -1032,6 +1032,12 @@ textarea {
   margin: 0 0 var(--space-6);
   font-size: var(--fs-0);
 }
+/* 「撤销这次删除」那颗（WS-13 2c）：跟在回执那句后面同一行——删除的去路与退路一起看得见。
+   字号跟回执一致（吃刻度 token），间距用同一档 token，不写死像素。 */
+.tree-undo-delete {
+  margin-inline-start: var(--space-6);
+  font-size: var(--fs-0);
+}
 .tree-groups {
   list-style: none;
   margin: 0;

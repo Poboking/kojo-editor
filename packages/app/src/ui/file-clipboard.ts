@@ -86,9 +86,14 @@ export type ExplorerOp = 'copy' | 'cut' | 'paste' | 'duplicate';
  *
  * 只给"做"这一件事：命令面板不持有现场，也不该自己算宾语 —— 宾语（多选集 / 焦点行）
  * 与落点（焦点行所在目录）只有树自己当场知道。
+ *
+ * `undoDelete`（WS-13 2c 车，additive）走同一座桥而不是新起一条：撤销删除之后要重列目录、
+ * 要把文件放回索引，那些现场全在树里；桥外再挂一套"撤销"就等于第二份收尾口径。
+ * **可选**——没登记的宿主 ⇒ `runExplorerUndoDelete()` 回 false，调用侧必须说人话。
  */
 export interface ExplorerOpsRuntime {
   readonly run: (op: ExplorerOp) => void;
+  readonly undoDelete?: () => void;
 }
 
 let runtime: ExplorerOpsRuntime | null = null;
@@ -107,6 +112,14 @@ export function runExplorerOp(op: ExplorerOp): boolean {
   const rt = runtime;
   if (rt === null) return false;
   rt.run(op);
+  return true;
+}
+
+/** 打「撤销这次删除」到当前挂载的树（`false` = 桥不在 / 宿主没登记这条腿） */
+export function runExplorerUndoDelete(): boolean {
+  const rt = runtime;
+  if (rt === null || rt.undoDelete === undefined) return false;
+  rt.undoDelete();
   return true;
 }
 

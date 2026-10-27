@@ -52,6 +52,14 @@ import {
   type FileOpsPlan,
 } from './file-ops-plan';
 import { runFileOps } from './file-ops-exec';
+import { deleteScopeOf, undoUnavailableText, type DeletePlan } from './file-delete-plan';
+import {
+  READONLY_BLOCK_REASON,
+  clearDeleteBatchLedger,
+  getLastDeleteBatch,
+  runBatchDelete,
+  undoDeleteBatch,
+} from './file-delete-exec';
 import {
   clearFileClipboard,
   fileClipSentence,
@@ -1123,7 +1131,12 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
 
   const cancelEdit = useCallback((): void => setEdit(null), []);
 
-  /** 删除（文件/目录同一入口）：守门 → 量级确认 → 落地 → 只重列受影响目录 */
+  /**
+   * 删除（文件/目录同一入口）：守门 → 量级确认 → 落地 → 只重列受影响目录。
+   *
+   * **这一条是"没有多选集"时的单条老腿**（守门一刀拒绝脏文件 + `window.confirm`），
+   * 语义自 B1 批起一字未动；有多选集时走 `runDeleteBatch`（逐条点名 + 回收站台账 + 可撤销）。
+   */
   const doDelete = (path: string, isDir: boolean): void => {
     const blocked = guardFileOp?.([path]) ?? null;
     if (blocked) {
@@ -1182,13 +1195,21 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   const fileOpsAskRef = useRef<FileOpsAsk | null>(null);
   /** 落盘在途闸：一次搬运没跑完之前不接第二次（IO 是异步的，双击粘贴不该跑两遍） */
   const fileOpsBusy = useRef(false);
+  /**
+   * 回执旁边那个「撤销这次删除」还在不在（数字 = 这一批有几份能放回原位）。
+   *
+   * 真相住在 `file-delete-exec` 的会话台账里，这里只决定这一帧画不画那个按钮——
+   * 台账空了（撤销用掉 / 换项目 / 撤销后仍有没放回的为零）就必须收掉，不许留一个点了只会说
+   * "没有可撤销的删除"的假入口（铁律 4）。
+   */
+  const [undoOffer, setUndoOffer] = useState<number | null>(null);
 
   const askFileOps = (
     spec: Omit<FileOpsAsk, 'pick'>,
     fallback: string,
   ): Promise<string> => {
     if (fileOpsAskRef.current !== null) {
-      note('上一个搬运还在等作者决定——先把那一个答了。');
+      note('上一个动作还在等作者决定——先把那一个答了。');
       return Promise.resolve(fallback);
     }
     return new Promise<string>((resolve) => {
@@ -1222,7 +1243,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     ) as Promise<ConflictDecision>;
 
   /** 脏闸问句：文案单源在 `file-tree-ops.dirtyGateText`，措辞不在此处重写 */
-  const askDirtyGate = (kind: 'move' | 'overwrite', names: readonly string[]): Promise<boolean> =>
+  const askDirtyGate = (kind: 'move' | 'overwrite' | 'delete', names: readonly string[]): Promise<boolean> =>
     askFileOps(
       {
         label: '有未保存的修改',
@@ -1412,14 +1433,186 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     );
   };
 
+  /* ---------------- WS-13 2c：批量删除 + 回收站 + 撤销 ---------------- */
+
+  /** 删除确认问句：文案单源在 `file-delete-plan.deleteBatchConfirmText`（逐条点名），这里不改写一个字 */
+  const askDeleteConfirm = (plan: DeletePlan, text: string): Promise<boolean> =>
+    askFileOps(
+      {
+        label: '删除这些条目',
+        text,
+        choices: [
+          { value: 'cancel', label: '取消' },
+          { value: 'go', label: `删除 ${plan.targets.length} 项`, primary: true },
+        ],
+        escapeValue: 'cancel',
+      },
+      'cancel',
+    ).then((v) => v === 'go');
+
+  /** 目录连带规模：确认之前现算一次（一趟 walkDir 拿整棵子树；读不到就如实退化，不猜数字） */
+  const carriedSizes = async (entries: readonly FileOpEntry[]): Promise<Map<string, { files?: number; dirs?: number }>> => {
+    const sizes = new Map<string, { files?: number; dirs?: number }>();
+    if (walkDir === undefined) return sizes;
+    await Promise.all(
+      entries
+        .filter((e) => e.isDir)
+        .map(async (e) => {
+          const key = pkey(e.path);
+          if (sizes.has(key)) return;
+          sizes.set(key, {});
+          try {
+            const list = await walkDir(e.path, { includeFiles: true, includeDirs: true });
+            let files = 0;
+            let dirs = 0;
+            for (const x of list) {
+              if (pkey(x.path) === key) continue; // walkDir 把根自己也列出来：那一格不是"连带"
+              if (x.isDirectory) dirs += 1;
+              else files += 1;
+            }
+            sizes.set(key, { files, dirs });
+          } catch {
+            sizes.set(key, {});
+          }
+        }),
+    );
+    return sizes;
+  };
+
+  /**
+   * 一次批量删除（**有多选集时**才走这条腿；无多选集仍是 `doDelete` 那条单旧口径）。
+   *
+   * 执行层给的是完整事实（删成几项 / 回收站对上几号 / 哪几条被挡下），这里只做四件收尾：
+   * 回执上屏（附撤销入口）、受影响目录重列、被删目录的缓存退场、标签与索引跟着盘上真相走。
+   */
+  const runDeleteBatch = async (entries: readonly FileOpEntry[]): Promise<void> => {
+    if (io === undefined) {
+      note('当前环境没有落盘的通道（纯浏览器宿主）——删除落不了地。');
+      return;
+    }
+    if (fileOpsBusy.current) {
+      note('上一个动作还在落盘——稍等一下。');
+      return;
+    }
+    fileOpsBusy.current = true;
+    try {
+      const sizes = await carriedSizes(entries);
+      const outcome = await runBatchDelete({
+        io,
+        entries,
+        sizeOf: (p) => sizes.get(pkey(p)),
+        blockedOf: (p) => {
+          let writable = false;
+          try {
+            writable = io.isWritable(p);
+          } catch {
+            writable = false; // "说不出可写"绝不亮成可写（与根头那格同一把尺）
+          }
+          return writable ? null : READONLY_BLOCK_REASON;
+        },
+        // 脏闸接的是同一份真源（判据住 disk-reconcile.dirtyNamesIn；批删问一次，不逐条问）
+        dirty: dirtyOf !== undefined ? { dirtyOf, askDirty: askDirtyGate } : undefined,
+        confirm: askDeleteConfirm,
+      });
+      note(outcome.resultText);
+      setUndoOffer(outcome.batch === null ? null : outcome.batch.records.length);
+      const gone = [...outcome.deleted, ...outcome.untracked];
+      if (gone.length === 0) return;
+      const parents: string[] = [];
+      const seenParent = new Set<string>();
+      for (const g of gone) {
+        if (g.isDir) pruneCacheUnder(g.path);
+        const parent = parentDir(g.path);
+        if (parent === '' || seenParent.has(pkey(parent))) continue;
+        seenParent.add(pkey(parent));
+        parents.push(parent);
+      }
+      refetchDirs(parents);
+      const gonePaths = gone.map((g) => g.path);
+      onFilesGone?.(gonePaths, []);
+      onDiskEntriesChanged?.({ changed: [], removed: gonePaths });
+      setSelected([]);
+    } finally {
+      fileOpsBusy.current = false;
+    }
+  };
+
+  /**
+   * 撤销刚才那一批（回收站 → 原路径，逐条 `restoreFromTrash`）。
+   *
+   * 入口两条：回执旁边那个按钮 + 命令面板 `explorer.undoDeleteEntry`——同一个函数，
+   * 不建第二套 toast，也不给撤销抢 `Ctrl+Z`（那是编辑器的键）。
+   */
+  const runUndoDelete = async (): Promise<void> => {
+    const batch = getLastDeleteBatch();
+    if (batch === null || batch.records.length === 0) {
+      setUndoOffer(null);
+      note(undoUnavailableText());
+      return;
+    }
+    if (io === undefined) {
+      note('当前环境没有落盘的通道（纯浏览器宿主）——撤销也落不了地。');
+      return;
+    }
+    if (fileOpsBusy.current) {
+      note('上一个动作还在落盘——稍等一下。');
+      return;
+    }
+    fileOpsBusy.current = true;
+    try {
+      const outcome = await undoDeleteBatch({ io, batch });
+      note(outcome.resultText);
+      setUndoOffer(outcome.remaining.length > 0 ? outcome.remaining.length : null);
+      if (outcome.restored.length === 0) return;
+      const parents: string[] = [];
+      const seenParent = new Set<string>();
+      for (const r of outcome.restored) {
+        if (r.isDir) pruneCacheUnder(r.path);
+        const parent = parentDir(r.path);
+        if (parent === '' || seenParent.has(pkey(parent))) continue;
+        seenParent.add(pkey(parent));
+        parents.push(parent);
+      }
+      refetchDirs(parents);
+      onDiskEntriesChanged?.({ changed: outcome.restored.map((r) => r.path), removed: [] });
+    } finally {
+      fileOpsBusy.current = false;
+    }
+  };
+
+  /**
+   * 删除的宾语判据（三条入口——键位 / 右键 / 命令面板——汇到这一处）。
+   *
+   * 分档住纯函数 `deleteScopeOf`：**勾选集有多于一项 ⇒ 整批**走新腿（逐条点名 + 回收站台账 +
+   * 可撤销）；否则**旧单条语义一字不动**（`guardFileOp` 一刀拒绝 + `window.confirm` + 那句旧回执）。
+   * 焦点行/右击行没被勾选时 `clipSources` 仍以它为准，所以"只删点的那一行"这条老读感保留。
+   */
+  const requestDelete = (hintPath: string, isDir: boolean): void => {
+    if (deleteScopeOf(getSelectedPaths().length) === 'single') {
+      doDelete(hintPath, isDir);
+      return;
+    }
+    const entries = clipSources(hintPath);
+    if (entries.length === 0) {
+      note('先选中要删的条目（文件、文件夹或作者包），再按删除。');
+      return;
+    }
+    void runDeleteBatch(entries).catch((err: unknown) => noteErr(err, '删除'));
+  };
+
   /**
    * 把执行入口登记进运行时桥（每次渲染整体替换；卸载即 null——与菜单运行时同一形态）。
    * 命令面板不持有现场：宾语与落点只有树自己当场知道，打过来由这里现读。
    */
   const runClipOpRef = useRef(runClipOp);
   runClipOpRef.current = runClipOp;
+  const runUndoDeleteRef = useRef(runUndoDelete);
+  runUndoDeleteRef.current = runUndoDelete;
   useEffect(() => {
-    setExplorerOpsRuntime({ run: (op) => runClipOpRef.current(op) });
+    setExplorerOpsRuntime({
+      run: (op) => runClipOpRef.current(op),
+      undoDelete: () => void runUndoDeleteRef.current().catch((err: unknown) => noteErr(err, '撤销')),
+    });
   });
   useEffect(
     () => () => {
@@ -1433,12 +1626,16 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   /**
    * 换项目即清剪贴板（模块级会话态活得比一次挂载久）。
    * 只在**根真的变了**时清：侧栏开关导致的重挂不清——"上次剪了什么"在现场还在的项目里仍有效。
+   *
+   * 删除台账同一处理：里面装的是**上一个项目的绝对路径**，跨项目留着既撤销不动
+   * （回收站的恢复要过新项目这一侧的写允许域，必然被拒），又会把"上次删了什么"留在界面上骗人。
    */
   const clipRootRef = useRef(project.rootDir);
   useEffect(() => {
     if (pkey(clipRootRef.current) === pkey(project.rootDir)) return;
     clipRootRef.current = project.rootDir;
     clearFileClipboard();
+    clearDeleteBatchLedger();
   }, [project.rootDir]);
 
   /** 右键作用域自己那一格的落点目录（粘贴到菜单右击处；口径与 `clipTargetDirOf` 一致） */
@@ -1595,7 +1792,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         if (path) beginRename(path, scope.kind === 'dir' || scope.kind === 'package');
         break;
       case 'delete':
-        if (path) doDelete(path, scope.kind === 'dir' || scope.kind === 'package');
+        // 右键「删除」：勾选集在场且右击那一格就在里面 ⇒ 整批；否则仍以右击那一格为准（旧语义）
+        if (path) requestDelete(path, scope.kind === 'dir' || scope.kind === 'package');
         break;
       case 'import':
         if (scope.kind === 'package') onImportPackage?.({ dir: scope.dir, label: scope.label });
@@ -2244,7 +2442,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         if (row !== undefined && row.path !== '') beginRename(row.path, rowIsDir(tree, cmd.index));
         break;
       case 'delete':
-        if (row !== undefined && row.path !== '') doDelete(row.path, rowIsDir(tree, cmd.index));
+        // Delete / Backspace：有多选集时对整批生效（判据与接线住 `requestDelete`，旧单条语义不动）
+        if (row !== undefined && row.path !== '') requestDelete(row.path, rowIsDir(tree, cmd.index));
         break;
       case 'selectAll':
         // 「当前可见行」= 窗口切到的那段行（判据是行模型，不是 DOM——被裁掉的行不该进集合）
@@ -2361,6 +2560,18 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       {revealNote ? (
         <p className="tree-reveal-note dim" role="status">
           {revealNote}
+          {/* 撤销那颗挂在回执同一行末尾（WS-13 2c）：删除的去路与退路必须在同一句里看得见，
+              而不是让人去翻命令面板。台账空了就必须消失——留一颗点了只会说"没有可撤销的"的按钮
+              正是铁律 4 禁的那种形状。命令面板那条 `explorer.undoDeleteEntry` 是同一个函数。 */}
+          {undoOffer !== null ? (
+            <button
+              type="button"
+              className="ghost tree-undo-delete"
+              onClick={() => void runUndoDelete().catch((err: unknown) => noteErr(err, '撤销'))}
+            >
+              撤销这次删除（{undoOffer} 项）
+            </button>
+          ) : null}
         </p>
       ) : null}
       {/* WS-11 树的语义根：`role="tree"` + `aria-multiselectable`（可勾选 = 多项可选）。

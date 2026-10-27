@@ -29,8 +29,8 @@ import { editorModelPool } from './editor-model-pool-instance';
 import { createProjectNameLedger } from './name-ledger';
 import { revealLocationOf } from '../monaco/reveal-position';
 import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState, openFolderSearchScope } from './search-store';
-import { runExplorerOp } from './file-clipboard';
-import { EXPLORER_COPY_COMMAND, EXPLORER_CUT_COMMAND, EXPLORER_PASTE_COMMAND, EXPLORER_DUPLICATE_COMMAND } from './file-tree-ops';
+import { runExplorerOp, runExplorerUndoDelete } from './file-clipboard';
+import { EXPLORER_COPY_COMMAND, EXPLORER_CUT_COMMAND, EXPLORER_PASTE_COMMAND, EXPLORER_DUPLICATE_COMMAND, EXPLORER_UNDO_DELETE_COMMAND } from './file-tree-ops';
 import { dirtyNamesIn } from './disk-reconcile';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
 import { quickOpenRootsOf, scanRootsOf, searchRootsOf, type WorkspaceFolder } from './workspace-folders';
@@ -842,6 +842,9 @@ export function ProjectView({
       { id: EXPLORER_CUT_COMMAND, title: '剪切到剪贴板', category: '资源管理器', run: () => { if (!runExplorerOp('cut')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
       { id: EXPLORER_PASTE_COMMAND, title: '粘贴到当前文件夹', category: '资源管理器', run: () => { if (!runExplorerOp('paste')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
       { id: EXPLORER_DUPLICATE_COMMAND, title: '创建副本', category: '资源管理器', run: () => { if (!runExplorerOp('duplicate')) notify({ kind: 'info', message: '资源管理器的树没有挂载——先打开项目再执行。' }); } },
+      // 撤销这次删除（WS-13 2c 车）：宾语是会话台账里刚删的那一批，收尾（重列目录 / 放回索引）
+      // 全在树里 ⇒ 仍走那座运行时桥。桥不在、或树没登记这条腿 ⇒ 照实说一句，不静默返回。
+      { id: EXPLORER_UNDO_DELETE_COMMAND, title: '撤销这次删除', category: '资源管理器', run: () => { if (!runExplorerUndoDelete()) notify({ kind: 'info', message: '撤销打不出去：资源管理器的树没有挂载，或这次会话里还没有删过东西。' }); } },
       // 宿主追加的命令（K2-MIGRATE-MOUNT；开关关时是空数组，表与接线前逐字一致）
       ...(extraShellCommands ?? []),
     ],
