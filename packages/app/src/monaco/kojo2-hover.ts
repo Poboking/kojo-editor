@@ -19,6 +19,8 @@
  */
 
 import { insideInterpolation } from './kojo-completion-position';
+import { findEvent, type EventSpec, type GameAdapter } from '@kojo/kojo-core';
+import { kojo2EventSiteAt, kojo2EventSitesOf, type Kojo2EventSite } from './kojo2-event-sites';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DeclarationAt,
@@ -32,6 +34,7 @@ import {
   kojo2TokenSpanAt,
   kojo2TypeWordOf,
   type Kojo2Declaration,
+  type Kojo2Document,
   type Kojo2Query,
 } from '@kojo/kojo-lang';
 
@@ -137,13 +140,135 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
+/* ============================== 事件挂点（LAU-D2） ============================== */
+
+/** 悬停的可选注入面（LAU-D2：`adapter` 让 `# 机` / `@织` 的事件名讲得出方言事实） */
+export interface Kojo2HoverAtOptions {
+  /**
+   * 当前方言的 2.0 事实；缺省 / `null` = **不猜**（事件名一律不给悬停，其余事实照旧）。
+   * 由宿主按**当前项目**现取（与补全 / 签名的 adapter 同一枚），本层不 import 任何 adapter。
+   */
+  readonly adapter?: GameAdapter | null;
+}
+
+/** 派发模型的中文短名（语言词，不是游戏名词；值域 = core `EventDispatchModel`） */
+const DISPATCH_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  'engine-dispatch': '引擎分发',
+  'label-dispatch': '标签分发',
+  hook: '钩子',
+  metadata: '数据表派发',
+});
+
+/** 优先级模型的中文短名（值域 = core `EventPriorityModel`） */
+const PRIORITY_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  'emuera-buckets': 'Emuera 桶（可 之前 / 之后 / 接管）',
+  'load-order': '加载序',
+  none: '无优先级模型',
+});
+
+/** 这一行是不是锚点行（`#` / `@` 开头，允许前导空白）——事件挂点只可能住在这里 */
+function looksLikeAnchorLine(text: string): boolean {
+  const trimmed = text.replace(/^[ \t\u3000]*/, '');
+  return trimmed.startsWith('#') || trimmed.startsWith('@');
+}
+
+/**
+ * 事件挂点的悬停正文（LAU-D2）：**方言事实**，不是本文件事实。
+ *
+ * 这是六类服务里"悬停"那条腿此前唯一没有方言来源的格子——`# 机 训练` 在 eraTW 下是
+ * "引擎的 `EVENTTRAIN`"，在 eraFL 下根本没有这个事件；两枚 adapter 喂同一份文本，悬停必须
+ * 说得不一样（§5.2 "事实面 = 既有 `GameAdapter`"）。目录里有 ⇒ 讲引擎落点 / 派发模型 /
+ * 优先级 / 参数形状；目录里没有 ⇒ 如实说"这个方言没有它"，并列出可用事件（不猜）。
+ */
+export function kojo2EventHoverLines(
+  spec: EventSpec | undefined,
+  site: Kojo2EventSite,
+  adapter: GameAdapter,
+): string[] {
+  if (spec === undefined) {
+    const available = adapter.eventCatalog.events.map((item) => item.event);
+    return [
+      `方言 \`${adapter.id}\` 的事件目录里没有“${site.name}”`,
+      `可用事件：${available.length === 0 ? '（无）' : available.join('、')}`,
+      site.machine
+        ? '`# 机` 只挂本文件；换一个事件名，或先给这个方言补事件目录。'
+        : '`@织` 监听的是方言事件；没有登记的事件监听了也不会被引擎调到。',
+    ];
+  }
+  const lines: string[] = [
+    `引擎落点：\`${spec.engine}\``,
+    `派发：\`${DISPATCH_LABELS[spec.dispatch] ?? spec.dispatch}\` · 优先级：\`${PRIORITY_LABELS[spec.priority] ?? spec.priority}\``,
+  ];
+  if (spec.args.length === 0) {
+    lines.push('参数：（无）');
+  } else {
+    lines.push(
+      `参数：${spec.args
+        .map(
+          (arg) =>
+            `\`${arg.name}\`：${arg.kind === 'int' ? '整数' : arg.kind === 'string' ? '字符串' : '任意值'}${arg.required ? '（必填）' : '（可选）'}`,
+        )
+        .join('、')}`,
+    );
+  }
+  if (spec.forced) lines.push('强制事件：引擎保证触发');
+  lines.push(
+    site.machine
+      ? '`# 机`：本文件挂到这个事件上（一个文件只挂一个）。'
+      : spec.weavable
+        ? '`@织`：监听这个事件（可加 之前 / 之后 / 接管 修饰词）。'
+        : '`@织`：这个事件声明为不可监听（`weavable: false`）。',
+  );
+  return lines;
+}
+
+/**
+ * 光标在事件挂点上时的悬停事实（`undefined` = 这里不是事件挂点）。
+ *
+ * 只有锚点行才去投影事件挂点（悬停是鼠标移动级热路径：普通台词行多扫一遍整篇没有收益）。
+ */
+function eventHoverAt(
+  document: Kojo2Document,
+  text: string,
+  line: number,
+  col0: number,
+  adapter: GameAdapter | null | undefined,
+): Kojo2HoverResult | undefined {
+  if (adapter === null || adapter === undefined) return undefined;
+  if (!looksLikeAnchorLine(text)) return undefined;
+  const site = kojo2EventSiteAt(kojo2EventSitesOf(document), line, col0 + 1);
+  if (site === null) return undefined;
+  let spec: EventSpec | undefined;
+  try {
+    spec = findEvent(adapter, site.name);
+  } catch {
+    spec = undefined;
+  }
+  return {
+    name: site.name,
+    kind: '事件',
+    startColumn: site.startColumn,
+    endColumn: site.endColumn,
+    lines: kojo2EventHoverLines(spec, site, adapter),
+    declaration: {
+      line: site.line,
+      column: site.startColumn,
+      endColumn: site.endColumn,
+    },
+  };
+}
+
 /**
  * 光标处的悬停事实（**纯函数**）。
  *
- * 解析顺序：位置门 → 声明名字段（声明处）→ 名字段反查（引用处）。
+ * 解析顺序：位置门 → 事件挂点（`# 机` / `@织`，**要 adapter**）→ 声明名字段（声明处）→
+ * 名字段反查（引用处）。
  * 引用处只认代码面（声明 / 调度 / 触发 / 条件 / 调度区裸行）；台词正文与原生体在位置门已退让。
  */
-export function kojo2HoverAt(query: Kojo2Query): Kojo2HoverResult | undefined {
+export function kojo2HoverAt(
+  query: Kojo2Query,
+  options: Kojo2HoverAtOptions = {},
+): Kojo2HoverResult | undefined {
   const document = kojo2DocumentOf(query.source);
   const record = document.lines[query.line - 1];
   const text = lineTextOf(document, query.line);
@@ -154,6 +279,10 @@ export function kojo2HoverAt(query: Kojo2Query): Kojo2HoverResult | undefined {
   // 台词的**正文**不悬停；`{…}` 插值里是表达式，照常给事实。
   const interpolated = insideInterpolation(text, col0);
   if (kojo2IsTextSurface(record) && !interpolated) return undefined;
+
+  // 事件挂点：名字不是声明、事实也不在本文件里（方言的 `eventCatalog`），先认这一格。
+  const event = eventHoverAt(document, text, query.line, col0, options.adapter);
+  if (event !== undefined) return event;
 
   const atDeclaration = kojo2DeclarationAt(document, query.line, col0);
   const headerDeclaration =

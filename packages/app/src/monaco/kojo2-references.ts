@@ -80,21 +80,18 @@ import {
   type Kojo2Document,
 } from '@kojo/kojo-lang';
 import { isNameChar } from './kojo-completion-position';
+import { kojo2EventSitesOf, type Kojo2EventSite } from './kojo2-event-sites';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import type { Kojo2ProjectIndex, Kojo2ProjectSymbolRef } from './kojo2-project-index';
 
 /* ============================== 词形（core 单源） ============================== */
 
-/** `# 机` 的声明词（core `KOJO_DECL_WORDS` 位序 §3.3） */
-const MACHINE_WORD = KOJO_DECL_WORDS[2];
-
 /** `# 表` / `# 变量` 的声明词（core 位序 §3.3） */
 const TABLE_WORD = KOJO_DECL_WORDS[5];
 const VARIABLE_WORD = KOJO_DECL_WORDS[3];
 
-/** `@函` / `@织`（core `KOJO_DISPATCH_WORDS` 位序 §2.1） */
+/** `@函`（core `KOJO_DISPATCH_WORDS` 位序 §2.1）；`@织` 的判据已随事件挂点搬进 `kojo2-event-sites.ts` */
 const FUNCTION_WORD = KOJO_DISPATCH_WORDS[8];
-const WEAVE_WORD = KOJO_DISPATCH_WORDS[9];
 
 /**
  * 块头之后是**表达式**的调度词：`@着色`（颜色表达式）/ `@循` / `@复` / `@巡` / `@返`。
@@ -221,9 +218,7 @@ interface DeclarationFact extends NameSpanFact {
 }
 
 /** 一处事件名的挂点（`# 机` = 声明；`@织` = 监听） */
-interface EventAttestation extends NameSpanFact {
-  readonly machine: boolean;
-}
+type EventAttestation = Kojo2EventSite;
 
 /**
  * 出现点所属的符号家族。
@@ -320,36 +315,16 @@ function declarationFactsOf(document: Kojo2Document): DeclarationFact[] {
   }));
 }
 
-/** 一行的事件名（`# 机` / `@织` 的第一个词）；不是事件行 / 没写名字 ⇒ `null` */
-function eventNameOf(line: KojoLexLine): { readonly name: string; readonly offset: number } | null {
-  let machine: boolean;
-  if (line.kind === 'decl' && line.known && line.word === MACHINE_WORD) machine = true;
-  else if (line.kind === 'dispatch' && line.known && line.word === WEAVE_WORD) machine = false;
-  else return null;
-  const first = splitSpaces(line.rest, line.restOffset)[0];
-  if (first === undefined || first.text.length === 0) return null;
-  return { name: first.text, offset: first.offset };
-}
-
 /**
  * 全部事件挂点（源码序）。`# 机` 与 `@织` 的第一个词都进这张表；是不是声明由
  * {@link EventGroup} 决定（有 `# 机` 时 `# 机` 是声明，否则最早 `@织` 是锚点）。
+ *
+ * **判据不在这里**（LAU-D2）：`# 机` / `@织` 的名字段只有一个投影
+ * （`kojo2-event-sites.ts`），引用面 / 悬停 / `dialect lint` 三处共用它。本函数只把
+ * 那一份搬成引用面的内部形状，绝不另扫一遍。
  */
 function eventAttestationsOf(document: Kojo2Document): EventAttestation[] {
-  const out: EventAttestation[] = [];
-  for (const line of document.lines) {
-    const event = eventNameOf(line);
-    if (event === null) continue;
-    const startColumn = event.offset - line.lineOffset + 1;
-    out.push({
-      name: event.name,
-      line: line.number,
-      startColumn,
-      endColumn: startColumn + event.name.length,
-      machine: line.kind === 'decl',
-    });
-  }
-  return out;
+  return kojo2EventSitesOf(document);
 }
 
 /** 同一条事件名的全部挂点；`decl` = `# 机`（没有就取最早 `@织`） */

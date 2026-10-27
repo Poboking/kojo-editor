@@ -103,6 +103,17 @@ export interface Kojo2DiagnosticsResult {
    * 消费方按"没有产物"处理。本服务自己产出的结果总是显式给 `null` 或对象。
    */
   readonly artifacts?: Kojo2DiagnosticsArtifacts | null;
+  /**
+   * **方言体检**的结论（LAU-D2；`undefined` = 这一轮没跑体检 / 方言未绑定）。
+   *
+   * 与 `diagnostics` / `markers` **分家**：体检是按 `(码, 方言)` 聚合的清单（§5.5 呈现纪律），
+   * 不产波浪线、不进 `errorCount`——它回答"这个工程有哪些方言面不成立"，而波浪线回答
+   * "这一行为什么红"。上屏走问题面板的汇总行（`ui/kojo2-problem-wiring.ts`）。
+   */
+  readonly lint?: {
+    readonly dialect: string;
+    readonly diagnostics: readonly KojoDiagnostic[];
+  };
   /** 编译入口抛错时的消息（`null` = 编译入口正常返回；不是诊断） */
   readonly error: string | null;
   readonly errorCount: number;

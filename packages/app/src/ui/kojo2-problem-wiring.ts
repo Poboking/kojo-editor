@@ -78,6 +78,12 @@ import {
   type Kojo2MarkerSeveritySource,
 } from '../monaco/kojo2-diagnostics';
 import { buildKojo2SourceMapModel } from '@kojo/kojo-lang';
+import {
+  aggregateKojo2DialectLint,
+  kojo2DialectLintProblems,
+  lintKojo2Dialect,
+  type Kojo2DialectLintReport,
+} from '../monaco/kojo2-dialect-lint';
 import type { Kojo2PreviewCompilation } from './kojo2-preview-entry';
 import {
   KOJO2_PROBLEM_DEBOUNCE_MS,
@@ -151,6 +157,11 @@ export type Kojo2SyncDiagnoseFn = (input: Kojo2DiagnosticsInput) => Kojo2Diagnos
  * 语义全在 `@kojo/kojo-core` 的 `resolveDialectBinding`；本文件只做**并集**：
  * 方言诊断先上（无 span 的落在文件头），编译诊断照旧在后，markers 由同一份 source 重算。
  * 不给这个端口 ⇒ 这一批诊断与旧行为逐字相同（既有调用方零改动）。
+ *
+ * LAU-D2：同一份解析结果还喂**方言体检**（`dialect lint`）——绑定成功时用它的
+ * `facts` / `carrier` / `validates` 判事件名与事件落点，`diagnostics` 里的
+ * `core/carrier/unowned` 也接进同一张清单（不重造第二条）。未经绑定时体检交 `null`
+ * （零诊断：没有事实 ≠ 事实不符）。
  */
 export interface Kojo2DialectDeps {
   readonly resolve: (input: {
@@ -185,6 +196,22 @@ export function withDialectDiagnostics(
     warningCount,
     ok: result.error === null && errorCount === 0,
   };
+}
+
+/**
+ * 把**方言体检**的结论挂到一次诊断结果上（LAU-D2；纯函数）。
+ *
+ * 与 {@link withDialectDiagnostics} 的分工：那一条把方言诊断并进**波浪线**（错配必须可见、
+ * 必须有位置）；本函数只挂清单——`diagnostics` / `markers` / 三格计数**一个字都不动**，
+ * 因为体检是聚合面（同类 400 条 ⇒ 1 行），把它并进 markers 就是几百条波浪线糊屏。
+ * `lint === null`（未绑定 / 没跑）⇒ 原样返回，既有调用方零改动。
+ */
+export function withDialectLint(
+  result: Kojo2DiagnosticsResult,
+  lint: Kojo2DialectLintReport | null,
+): Kojo2DiagnosticsResult {
+  if (lint === null || lint.diagnostics.length === 0) return result;
+  return { ...result, lint: { dialect: lint.dialect, diagnostics: lint.diagnostics } };
 }
 
 /** `createProjectKojo2Diagnose` 的依赖（组合根给的两面解析 + Monaco severity 表） */
@@ -249,7 +276,19 @@ export function createProjectKojo2Diagnose(options: Kojo2ProjectDiagnoseOptions)
       filePath: input.filePath,
       source: input.source,
     });
-    return withDialectDiagnostics(result, resolution.diagnostics, options.severitySource, input.source);
+    const merged = withDialectDiagnostics(result, resolution.diagnostics, options.severitySource, input.source);
+    // LAU-D2：方言体检（`dialect lint`）——绑定成功才跑；未绑定 / 响应错配 ⇒ `binding === null`
+    // ⇒ `lintKojo2Dialect` 直接交 `null`（零诊断：没有事实绝不报"未知事件"）。
+    return withDialectLint(
+      merged,
+      lintKojo2Dialect({
+        source: input.source,
+        facts: resolution.binding?.facts ?? null,
+        binding: resolution.binding,
+        diagnostics: merged.diagnostics,
+        resolutionDiagnostics: resolution.diagnostics,
+      }),
+    );
   };
 }
 
@@ -584,7 +623,20 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
     debounceMs: 0,
     ...(options.scheduler !== undefined ? { scheduler } : {}),
     onDiagnostics: ({ filePath, result }) => {
-      writeProblems(filePath, kojo2ProblemsOf(filePath, result.markers, options.severitySource));
+      // LAU-D2：先写编译/方言那一片**逐行**问题，再追加**方言体检**的汇总行
+      // （同类只一行，§5.5 呈现纪律）。两者走同一个 `writeProblems`（整档替换语义）——
+      // 不新造第二个面板、第二条上账通道。
+      const rows = kojo2ProblemsOf(filePath, result.markers, options.severitySource);
+      const lint = result.lint;
+      if (lint !== undefined) {
+        rows.push(
+          ...kojo2DialectLintProblems(
+            filePath,
+            aggregateKojo2DialectLint({ dialect: lint.dialect, diagnostics: lint.diagnostics }),
+          ),
+        );
+      }
+      writeProblems(filePath, rows);
       rememberCompilation(filePath, result);
     },
     onCleared: ({ filePath }) => {

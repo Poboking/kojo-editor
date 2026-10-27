@@ -557,6 +557,12 @@ function rangeOfSpan(span: { readonly start: { readonly line: number; readonly c
 export interface Kojo2HoverOptions {
   readonly getFilePath?: Kojo2FilePathSource;
   readonly getCompile?: Kojo2ExpandCompileSource;
+  /**
+   * 当前方言的 2.0 事实（LAU-D2）：`# 机` / `@织` 的事件名讲的是**方言**事实，
+   * 与补全 / 签名吃**同一枚** adapter（同一张登记簿、同一个 getter）。
+   * 缺省 / 取不到 ⇒ 事件名不给悬停（不猜），其余声明事实照旧。
+   */
+  readonly adapter?: GameAdapter | null;
 }
 
 /** 转定义的附加注入面（只服务展开视图的编译成品；缺省 = 问模块级登记表） */
@@ -579,11 +585,14 @@ export function kojo2HoverOf(
 ): Monaco.languages.Hover | undefined {
   const source = sourceOf(model);
   if (source === null) return undefined;
-  const hover = kojo2HoverAt({
-    source,
-    line: position.lineNumber,
-    column: position.column,
-  });
+  const hover = kojo2HoverAt(
+    {
+      source,
+      line: position.lineNumber,
+      column: position.column,
+    },
+    { adapter: options.adapter ?? null },
+  );
   const expand = expandViewFor(model, position, options.getFilePath, options.getCompile);
   const expandSegment =
     expand !== null && expand.via === 'call-site' ? expandViewMarkdown(expand) : null;
@@ -655,7 +664,13 @@ export function installKojo2LanguageProviders(
       try {
         // 展开段与声明悬停**同一个** provider 的两个 contents（K2-EXPAND-VIEW）：
         // 不新造第二个 HoverProvider——Monaco 多 provider 的合并顺序不可控。
-        return kojo2HoverOf(model, position, { getFilePath, getCompile });
+        // LAU-D2：adapter 每轮现取（项目可开可关），只服务 `# 机` / `@织` 的事件名——
+        // 悬停是六类服务里最后一条没有方言来源的腿（钉子见 `tests/kojo2-hover-event.test.ts`）。
+        return kojo2HoverOf(model, position, {
+          getFilePath,
+          getCompile,
+          adapter: adapterAt(adapterSource) ?? null,
+        });
       } catch {
         return undefined;
       }
