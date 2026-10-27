@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <command com="300" name="会話" kojoPlace="TOP" priority="1">
+    <contents>「こんにちは」</contents>
+  </command>
+  <command com="ANY" name="口づけ" kojoPlace="MIDDLE" priority="1">
+    <contents>「……ん」</contents>
+  </command>
+  <command com="SEDUCE" name="誘惑" kojoPlace="TOP" priority="1">
+    <contents>「ねえ、聞いてる？」</contents>
+  </command>
+</data>

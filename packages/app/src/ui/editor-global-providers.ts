@@ -22,7 +22,7 @@ import type { Kernel } from '@kojo/kernel';
 // 具体实例由宿主组合根注入，本文件既不 import 任何 adapter 包，也不认识任何游戏名词。
 import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
 import { activeGameAdapter, errorText, KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
-import { registerKojo2AdapterSource } from '@kojo/kojo-lang/adapter-source';
+import { registerKojo2AdapterSource, kojo2AdapterNow } from '@kojo/kojo-lang/adapter-source';
 import type {
   EditorCodeAction,
   EditorDocumentSymbol,
@@ -43,7 +43,7 @@ import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/kojo-vocab/engine';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
 import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
-import { installHover, type HoverTables } from '../monaco/kojo-hover';
+import { installHover, type CarrierShellHint, type HoverTables } from '../monaco/kojo-hover';
 import { installErbPreprocDim } from '../monaco/erb-preproc-dim';
 import {
   PROVIDED_CODE_ACTION_KINDS,
@@ -383,7 +383,39 @@ function projectSoftLegs(
     // QSUG-2：文档词开关每次补全现取（设置页一翻，下一个候选轮即生效；不用重开文件）
     wordBasedSuggestions: () => loadWordBasedSuggestionsPref(),
     erbIndex: () => erbParserIndex(kernel),
+    // LAU-D3：载体注册壳前缀（`carriers[].shells`）**现取**——项目开闭会换 adapter，
+    // 缓存会把上一个项目的壳前缀带过来（与 `erbIndex` 同一纪律）。
+    carrierShells: carrierShellHintsOf(),
   };
+}
+
+/**
+ * 当前 2.0 adapter 声明的载体注册壳前缀（LAU-D3；纯投影，零游戏名词）。
+ *
+ * 只读 `GameAdapter.carriers[].{carrier,glob,shells}` 三格；没登记 adapter / 没声明
+ * `shells` ⇒ 空数组（悬停不做提示，不猜）。`carriers` 不是数组时按"没有声明"处理
+ * （形状坏由 `validateGameAdapter` 另报，悬停不替它兜底）。
+ */
+function carrierShellHintsOf(): CarrierShellHint[] {
+  const adapter = kojo2AdapterNow();
+  if (adapter === null) return [];
+  const carriers: unknown = adapter.carriers;
+  if (!Array.isArray(carriers)) return [];
+  const out: CarrierShellHint[] = [];
+  for (const item of carriers as readonly unknown[]) {
+    const binding = item as { carrier?: unknown; glob?: unknown; shells?: unknown } | null;
+    if (binding === null || typeof binding !== 'object') continue;
+    if (typeof binding.carrier !== 'string' || typeof binding.glob !== 'string') continue;
+    if (!Array.isArray(binding.shells)) continue;
+    const prefixes = binding.shells.filter((shell): shell is string => typeof shell === 'string');
+    if (prefixes.length === 0) continue;
+    out.push({
+      carrier: binding.carrier as CarrierShellHint['carrier'],
+      glob: binding.glob,
+      prefixes,
+    });
+  }
+  return out;
 }
 
 /**

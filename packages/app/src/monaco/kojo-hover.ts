@@ -11,6 +11,7 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import { symbolTokenAt, unicodeTokenAt } from '@kojo/plugin-api';
+import type { DialectCarrier } from '@kojo/kojo-core';
 import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
@@ -69,6 +70,27 @@ export interface HoverTables {
      * 由宿主 `editorTables()` 从当前 adapter 现取注入。
      */
     readonly counterTable?: KojoCounterTable;
+    /**
+     * 载体注册壳前缀（LAU-D3，additive 可选）——方言在 `carriers[].shells` 里声明的
+     * "这个载体在 ERB 上的注册壳函数前缀"。命中即给一句「这条事件在 xml」，
+     * 而不是让壳函数看起来像"没实现的口上"（DoD 第 4 条）。数据来自 2.0 adapter 的
+     * **声明**，宿主不认识任何一族名字；缺席 = 不做提示（不猜）。
+     */
+    readonly carrierShells?: readonly CarrierShellHint[];
+}
+
+/**
+ * 一条载体注册壳声明（`CarrierBinding.shells` 的宿主投影）。
+ *
+ * `prefixes` 是**方言事实**（`KOJO_DEFINE_K` 一族），宿主只做前缀 + 数字的匹配，
+ * 不解释含义、不据此改任何诊断。匹配口径与 `CarrierBinding.shells` 的注一致：
+ * 函数名（大小写不敏感）以某一项为前缀，且**紧跟数字**（`_K{编号}` 锚点）。
+ */
+export interface CarrierShellHint {
+  readonly carrier: DialectCarrier;
+  /** 正文所在的载体 glob（相对项目根）——提示里原样给作者 */
+  readonly glob: string;
+  readonly prefixes: readonly string[];
 }
 
 /** 一次解析的产物：显示名 + 类别 + 命中的列区间（1 基，供 hover 高亮）+ 附加行 */
@@ -166,6 +188,84 @@ export function resolveHoverName(
   header: KojoDocHeader = {},
   filePath: string | null = null,
   surface: HoverSurface = {},
+): HoverHit | undefined {
+  const hit = resolveHoverNameCore(lineText, column, tables, header, filePath, surface);
+  // LAU-D3 最后一路：载体注册壳前缀（方言声明）⇒ 「这条事件在 xml」。
+  // 只在其它各路**都没答案**或**答在同一段记号上**时接管：它不抢已有事实，
+  // 只给壳函数补一句"正文不在这里"（DoD 第 4 条）。
+  return withCarrierShellHint(hit, lineText, column, tables.carrierShells);
+}
+
+/**
+ * 载体注册壳提示（LAU-D3；纯函数）。
+ *
+ * 判据 = 方言在 `carriers[].shells` 里声明的**前缀 + 紧跟数字**（大小写不敏感）：
+ * 与 `CarrierBinding.shells` 的注逐字同口径（`KOJO_DEFINE_K1099` 命中 `KOJO_DEFINE_K`，
+ * `KOJO_DEFINE_KOJO_INFO_K1099` 只命中长前缀那一条）。命中返回屏上区间与提示行；
+ * 没声明 / 没命中 ⇒ `undefined`（不猜）。
+ */
+export function carrierShellHintOf(
+  lineText: string,
+  column: number,
+  shells: readonly CarrierShellHint[] | undefined,
+): { startColumn: number; endColumn: number; lines: string[] } | undefined {
+  if (shells === undefined || shells.length === 0) return undefined;
+  const span = unicodeTokenAt(lineText, column);
+  if (!span) return undefined;
+  const upper = span.text.toUpperCase();
+  for (const shell of shells) {
+    for (const prefix of shell.prefixes) {
+      if (typeof prefix !== 'string' || prefix.length === 0) continue;
+      const head = prefix.toUpperCase();
+      if (!upper.startsWith(head)) continue;
+      const next = upper.charAt(head.length);
+      if (!(next >= '0' && next <= '9')) continue; // `_K{编号}` 锚点：前缀后必须紧跟数字
+      return {
+        startColumn: span.startColumn,
+        endColumn: span.endColumn,
+        lines: [
+          `这条事件在 ${shell.carrier}：正文在 \`${shell.glob}\`（这里只是注册壳，不是"没实现的口上"）。`,
+        ],
+      };
+    }
+  }
+  return undefined;
+}
+
+/** 把壳提示并进悬停结果（纯函数；没有提示 / 命中落在别的记号上 ⇒ 原样返回） */
+function withCarrierShellHint(
+  hit: HoverHit | undefined,
+  lineText: string,
+  column: number,
+  shells: readonly CarrierShellHint[] | undefined,
+): HoverHit | undefined {
+  const hint = carrierShellHintOf(lineText, column, shells);
+  if (hint === undefined) return hit;
+  if (hit === undefined) {
+    return {
+      name: unicodeTokenAt(lineText, column)?.text ?? '注册壳',
+      kind: '口上注册壳',
+      startColumn: hint.startColumn,
+      endColumn: hint.endColumn,
+      lines: hint.lines,
+    };
+  }
+  // 已有命中但落在别的记号（列区间不相交）⇒ 壳提示不接管，免得张冠李戴。
+  if (hit.endColumn <= hint.startColumn || hit.startColumn >= hint.endColumn) return hit;
+  return { ...hit, lines: [...(hit.lines ?? []), ...hint.lines] };
+}
+
+/**
+ * 悬停第 1–6 路的本体（原 `resolveHoverName`；LAU-D3 只在其外**追加**一路壳提示，
+ * 六路的判定与优先序一个字未动）。
+ */
+function resolveHoverNameCore(
+  lineText: string,
+  column: number,
+  tables: HoverTables,
+  header: KojoDocHeader,
+  filePath: string | null,
+  surface: HoverSurface,
 ): HoverHit | undefined {
   if (!Number.isFinite(column) || column < 1) return undefined;
   const col0 = Math.min(column - 1, lineText.length);

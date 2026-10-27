@@ -20,7 +20,9 @@
  */
 import type * as Monaco from './entry';
 import type { KojoXmlSchema } from '@kojo/plugin-api';
+import type { DialectBinding, GameAdapter } from '@kojo/kojo-core';
 import { attrsOnLine, currentKojoXmlSchema } from './kojo-xml-providers';
+import { kojoXmlDialectProblems, lintKojoXmlDialect } from './kojo-xml-dialect';
 
 export interface KojoXmlProblem {
   /** 1 基行 */
@@ -31,6 +33,91 @@ export interface KojoXmlProblem {
   readonly severity: 'error' | 'warning' | 'info';
   readonly code: string;
   readonly message: string;
+}
+
+/**
+ * 方言事实的宿主注入面（LAU-D3）。
+ *
+ * 与 `setKojoXmlSchemaSource` 同一条纪律：`monaco/*` 不认识任何游戏，只认**形状**；
+ * 解析（识别链 → binding → 载体归属）全在 `@kojo/kojo-core` 的 `resolveDialectBinding`，
+ * 由宿主（`ProjectView`）把当前项目的解析结果按**这份 model 的路径**现算后注入。
+ *
+ * `null` = 未绑定 / 没注入 ⇒ 事件面一条都不问（不猜，也绝不回落到默认方言）。
+ */
+export interface KojoXmlDialectContext {
+  readonly facts: GameAdapter;
+  readonly binding: DialectBinding | null;
+}
+
+/** 路径 + 正文 → 方言上下文（宿主实现；解析器是唯一判据） */
+export type KojoXmlDialectSource = (path: string, text: string) => KojoXmlDialectContext | null;
+
+let dialectSource: KojoXmlDialectSource | null = null;
+
+/** 注入方言来源（`null` = 撤回；换项目时宿主重设或撤回） */
+export function setKojoXmlDialectSource(source: KojoXmlDialectSource | null): void {
+  dialectSource = source;
+}
+
+/** 当前方言上下文（取不到 / 抛错 = `null`：未绑定，不猜） */
+export function currentKojoXmlDialect(path: string, text: string): KojoXmlDialectContext | null {
+  if (dialectSource === null) return null;
+  try {
+    return dialectSource(path, text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 方言事件面（LAU-D3）：整份文本 → 事件面问题（纯函数，**不抛**）。
+ *
+ * 与 {@link checkKojoXmlText} 合并进同一条 marker owner（`kojo-xml`）：波浪线不给方言面
+ * 另开第二个 owner（`kojoXmlDialectProblems` 只做投影，判据在 `kojo-xml-dialect.ts`）。
+ * `dialect === null`（宿主没注入 / 未绑定）⇒ 零问题：不猜、也不回落到任何默认方言。
+ */
+export function checkKojoXmlDialectProblems(
+  lines: readonly string[],
+  schema: KojoXmlSchema | null,
+  dialect: KojoXmlDialectContext | null,
+): KojoXmlProblem[] {
+  if (dialect === null) return [];
+  const report = lintKojoXmlDialect({
+    source: lines.join('\n'),
+    facts: dialect.facts,
+    binding: dialect.binding,
+    schema,
+  });
+  return kojoXmlDialectProblems(report).map((problem) => ({
+    line: problem.line,
+    startColumn: problem.startColumn,
+    endColumn: problem.endColumn,
+    severity: problem.severity,
+    code: problem.code,
+    message: problem.message,
+  }));
+}
+
+/** 两组问题合并成一份（按行 → 列 → 码；同码同区间只留一条，免得两路各说一遍） */
+function mergeKojoXmlProblems(
+  first: readonly KojoXmlProblem[],
+  second: readonly KojoXmlProblem[],
+): KojoXmlProblem[] {
+  const seen = new Set<string>();
+  const out: KojoXmlProblem[] = [];
+  for (const problem of [...first, ...second]) {
+    const key = `${problem.code}\u0000${problem.line}\u0000${problem.startColumn}\u0000${problem.endColumn}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(problem);
+  }
+  out.sort(
+    (a, b) =>
+      a.line - b.line ||
+      a.startColumn - b.startColumn ||
+      (a.code < b.code ? -1 : a.code > b.code ? 1 : 0),
+  );
+  return out;
 }
 
 /** 编辑距离上限：只用来"提个醒"，不追求最优编辑脚本 */
@@ -163,7 +250,15 @@ export function registerKojoXmlDiagnostics(monaco: typeof Monaco): void {
     if (model.getLanguageId() !== LANGUAGE) return;
     const lines: string[] = [];
     for (let i = 1; i <= model.getLineCount(); i++) lines.push(model.getLineContent(i));
-    const problems = checkKojoXmlText(lines, currentKojoXmlSchema());
+    const schema = currentKojoXmlSchema();
+    const uri = (model as { uri?: { path?: unknown } }).uri;
+    const path = uri !== null && typeof uri === 'object' && typeof uri.path === 'string' ? uri.path : '';
+    // 结构面（属性枚举 / 空正文）+ 方言事件面（LAU-D3）并成一张清单：同一个 owner、同一批 marker。
+    // 方言面取不到（宿主没注入 / 未绑定）⇒ 那一半零问题，结构面逐字照旧。
+    const problems = mergeKojoXmlProblems(
+      checkKojoXmlText(lines, schema),
+      checkKojoXmlDialectProblems(lines, schema, currentKojoXmlDialect(path, lines.join('\n'))),
+    );
     monaco.editor.setModelMarkers(
       model,
       OWNER,

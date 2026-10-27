@@ -23,6 +23,7 @@ import type { GameAdapter, GameFingerprint } from '@kojo/kojo-core';
 import { freezeAdapter } from '@kojo/kojo-core';
 
 import { ERAFL_PROFILE } from './profile.js';
+import { ERAFL_CARRIERS } from './carriers.js';
 import { ERAFL_EVENT_CATALOG } from './event-catalog.js';
 import { ERAFL_DOMAIN_SYMBOLS } from './domain-symbols.js';
 import { ERAFL_PRESENTATION } from './presentation.js';
@@ -38,6 +39,7 @@ import {
 } from './capabilities.js';
 
 export * from './profile.js';
+export * from './carriers.js';
 export * from './event-catalog.js';
 export * from './domain-symbols.js';
 export * from './presentation.js';
@@ -77,6 +79,8 @@ export const ERAFL_GAME_ADAPTER: GameAdapter = freezeAdapter({
   version: '2.0.0',
   gameFingerprint: ERAFL_GAME_FINGERPRINT,
   eventCatalog: ERAFL_EVENT_CATALOG,
+  // LAU-D3：正文在 XML、2.0 事件在 `.kojo2`、ERB 只剩注册壳——归属是数据（`carriers.ts`）。
+  carriers: ERAFL_CARRIERS,
   domainSymbols: ERAFL_DOMAIN_SYMBOLS,
   profile: ERAFL_PROFILE,
   presentation: ERAFL_PRESENTATION,

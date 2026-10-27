@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <command com="300" name="初见" kojoPlace="初见" priority="1">
+    <contents>「はじめまして」</contents>
+  </command>
+</data>

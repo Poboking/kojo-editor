@@ -135,6 +135,45 @@ export function computeXmlCommandSymbols(lines: readonly string[]): XmlCommandSy
   return out;
 }
 
+/* ------------------------------ 求值补全 ------------------------------ */
+
+/** 值位置给命令表补全的属性（LAU-D3：`com` 是 Train.csv 那条轴；`eventId` 不是） */
+const COMMAND_VALUE_ATTRIBUTES: readonly string[] = Object.freeze(['com']);
+
+/** 一条命令值候选（纯数据；测试直接断言这张表，不必起 Monaco） */
+export interface XmlCommandValueCandidate {
+  readonly label: string;
+  /** 值本身（要插进引号里的原文） */
+  readonly insertText: string;
+  readonly detail: string;
+}
+
+/**
+ * 命令值候选：`com` / `eventId` 的引号内补全（LAU-D3 DoD：打开 eraFL 口上 XML 时
+ * `command` 有补全）。
+ *
+ * 只认 `KojoXmlSchema.commands`（adapter 交来的表，数字部分来自 `CSV/Train.csv`）：
+ * 宿主不内置任何编号——表为空就零候选（不猜）。`code` 与 `label` 都给一条：
+ * 真盘 `com="300"` 与 `com="会話"` 两种写法都有。
+ */
+export function xmlCommandValueCandidates(
+  schema: KojoXmlSchema | null | undefined,
+  attribute: string,
+): XmlCommandValueCandidate[] {
+  if (schema === null || schema === undefined) return [];
+  if (!COMMAND_VALUE_ATTRIBUTES.includes(attribute)) return [];
+  const out: XmlCommandValueCandidate[] = [];
+  for (const command of schema.commands) {
+    if (typeof command.code === 'string' && command.code.length > 0) {
+      out.push({ label: command.code, insertText: command.code, detail: command.label });
+    }
+    if (typeof command.label === 'string' && command.label.length > 0 && command.label !== command.code) {
+      out.push({ label: command.label, insertText: command.label, detail: `命令 ${command.code}` });
+    }
+  }
+  return out;
+}
+
 /* ------------------------------ 注册 ------------------------------ */
 
 let registered = false;
@@ -220,6 +259,20 @@ export function registerKojoXmlProviders(monaco: typeof Monaco): void {
       if (inValue) {
         const spec = schema.attributes.find((a) => a.name === inValue.name);
         const values = spec?.values ?? [];
+        const commandValues = xmlCommandValueCandidates(schema, inValue.name);
+        if (commandValues.length > 0) {
+          // `com` / `eventId`：命令表优先（值就在引号里，补完即可用）
+          return {
+            suggestions: commandValues.map((candidate) => ({
+              label: candidate.label,
+              kind: 12 /* Value */,
+              detail: candidate.detail,
+              documentation: { value: `命令 ${candidate.insertText}：${candidate.detail}` },
+              insertText: candidate.insertText,
+              range,
+            })),
+          };
+        }
         return {
           suggestions: values.map((v) => ({
             label: v,

@@ -209,8 +209,12 @@ describe('第 6 项 · 载体归属（文件不在任何 glob 里）', () => {
   });
 
   it('反例：方言没声明 carriers ⇒ 一条归属问题都不问（也不许自己发明规则）', () => {
-    const resolution = bindingFor(ERAFL_GAME_ADAPTER, '任意/路径.erb');
-    const report = lintOf('# 机 初见\n', ERAFL_GAME_ADAPTER, resolution.binding, resolution.diagnostics);
+    // eraFL 从 LAU-D3 起**声明了** `carriers`（XML / ERB / inline 三条），
+    // 不再"没声明"；本条的样本必须是一份真的没有 carriers 的方言（剥掉那一格），
+    // 否则测的是另一件事（"声明了但没命中"）。
+    const NO_CARRIERS_DIALECT: GameAdapter = { ...ERAFL_GAME_ADAPTER, carriers: undefined };
+    const resolution = bindingFor(NO_CARRIERS_DIALECT, '任意/路径.erb');
+    const report = lintOf('# 机 初见\n', NO_CARRIERS_DIALECT, resolution.binding, resolution.diagnostics);
     expect(codesOf(report!.diagnostics)).not.toContain('core/carrier/unowned');
   });
 });

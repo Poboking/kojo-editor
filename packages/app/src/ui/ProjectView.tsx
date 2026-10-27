@@ -38,6 +38,8 @@ import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-
 import { TabBar } from './tabs-bar';
 import { requestTabCycle } from './tab-cycle';
 import { setKojoXmlSchemaSource } from '../monaco/kojo-xml-providers';
+import { setKojoXmlDialectSource } from '../monaco/kojo-xml-diagnostics';
+import { resolveDocumentDialect } from './dialect-binding';
 import type { KojoXmlService } from '@kojo/plugin-api';
 import type { ActiveFileSymbolSource } from './palette-search';
 import type { BatchCloseMode, OpenFileOptions } from './tabs-ops';
@@ -957,7 +959,29 @@ export function ProjectView({
      */
     const xml = kernel.services.tryGet<KojoXmlService>(WellKnownServices.KojoXml);
     setKojoXmlSchemaSource(xml ? () => xml.schema() : null);
-    return () => setKojoXmlSchemaSource(null);
+    /**
+     * 方言事实 + 载体归属接进 XML 诊断（LAU-D3）。
+     *
+     * 解析全在 `resolveDocumentDialect`（core 的 `resolveDialectBinding` + 宿主输入），
+     * 这里只交「这份文件此刻的 facts 与 binding」——`monaco/*` 不认识任何方言，
+     * 也不决定归属。取不到（未开项目 / 未绑定）⇒ `null` ⇒ 事件面零诊断（不猜）。
+     *
+     * 路径口径：Monaco model URI 在 Windows 上是 `/D:/…`（前导斜杠），宿主解析器
+     * 要的是盘上的绝对路径；只在盘符形态下剥掉那一个斜杠，其它形态原样交。
+     */
+    setKojoXmlDialectSource((path, text) => {
+      const project = kernel.project.current();
+      if (!project) return null;
+      const filePath = /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
+      const resolution = resolveDocumentDialect({ project, source: text, filePath });
+      const binding = resolution.binding;
+      if (binding === null) return null;
+      return { facts: binding.facts, binding };
+    });
+    return () => {
+      setKojoXmlSchemaSource(null);
+      setKojoXmlDialectSource(null);
+    };
   }, [kernel]);
 
   /**

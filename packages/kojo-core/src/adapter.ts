@@ -556,6 +556,20 @@ export interface CarrierBinding {
   readonly glob: string;
   /** 该载体上哪些事实类由方言校验；**省略 = 全部事实类**（不猜，也不默认关掉某一类） */
   readonly validates?: readonly DialectFactKind[];
+  /**
+   * 这个载体在 **ERB 上的注册壳函数名前缀**（additive 可选；LAU-D3）。
+   *
+   * 有些方言的叙事正文不写在 ERB 里，ERB 只剩"把数据文件注册进引擎"的空壳
+   * （eraFL 的 `@KOJO_DEFINE_K{n}` 一族）。这一格让宿主**不必认识任何一族的名字**
+   * 就能回答"这个 ERB 函数是不是某载体的壳、正文该去哪看"——悬停据此给一句
+   * 「这条事件在 xml」，而不是把壳当成"没实现的口上"。
+   *
+   * 口径：
+   * - 匹配 = 函数名（大小写不敏感）以某一项为**前缀**；不写 = 该载体没有壳函数；
+   * - 只做提示，不改变任何诊断的严重级；
+   * - 名字是**游戏事实**，只许写在方言包里（宿主只读匹配，不解释含义）。
+   */
+  readonly shells?: readonly string[];
 }
 
 /**
@@ -1355,6 +1369,28 @@ export function validateGameAdapter(adapter: GameAdapter): readonly KojoDiagnost
                 push(
                   ADAPTER_VALIDATION_CODES.incomplete,
                   `载体“${String(binding.carrier)}”的 validates 含未知事实类“${String(kind)}”（event / symbol / presentation / storage）。`,
+                );
+              }
+            }
+          }
+        }
+        /*
+         * shells（LAU-D3 additive；省略 = 该载体没有注册壳）。
+         * 只查形状：空串会让"前缀匹配"退化成"匹配一切"，是比缺格更坏的猜。
+         */
+        const shells: unknown = binding.shells;
+        if (shells !== undefined) {
+          if (!Array.isArray(shells)) {
+            push(
+              ADAPTER_VALIDATION_CODES.incomplete,
+              `载体“${String(binding.carrier)}”的 shells 必须是数组（省略 = 该载体没有 ERB 注册壳）。`,
+            );
+          } else {
+            for (const shell of shells as readonly unknown[]) {
+              if (!isText(shell)) {
+                push(
+                  ADAPTER_VALIDATION_CODES.incomplete,
+                  `载体“${String(binding.carrier)}”的 shells 含空前缀：空前缀会匹配所有函数名（不猜）。`,
                 );
               }
             }

@@ -28,8 +28,10 @@
  *
  * `facts === null`（没有 2.0 面 / 未绑定方言）时本模块交 `null`：零诊断。绝不因为"认不出方言"
  * 就报"未知事件"——那是把"没有事实"读成"事实不符"（§9-9 的反面）。
- * 载体同理：方言**声明了** `carriers` 而这文件没归上任何一条 ⇒ 事件面整面跳过
+ * 载体同理：**问过**归属（交了绑定）且这文件没归上任何一条 ⇒ 事件面整面跳过
  * （归属不明时"属于哪个载体"没有依据，猜出来的错比不说更坏；`core/carrier/unowned` 已由解析器说过）。
+ * **没交绑定** ≠ 归属不明：那是"没问过"，名字面照 `eventCatalog` 校验（D2a 原口径，
+ * 见 {@link eventCarrierGateOf} 的 `no-binding` 一栏）。
  *
  * ## 呈现纪律（§5.5 末段）
  *
@@ -134,8 +136,22 @@ function pointSpan(line: number, column = 1): KojoSpan {
   return { start: { line, column }, end: { line, column } };
 }
 
-function make(code: CoreDiagnosticCode, message: string, span: KojoSpan | null): KojoDiagnostic {
+/**
+ * 造一条事件面诊断（严重级按 core 码表）。
+ *
+ * 导出给 XML 面复用（LAU-D3）：`core/event/unknown` / `core/event/wrong-carrier`
+ * 两枚码的**语义与严重级只有 core 一处**，XML 那条腿不得另造一个构造器。
+ */
+export function makeEventDiagnostic(
+  code: CoreDiagnosticCode,
+  message: string,
+  span: KojoSpan | null,
+): KojoDiagnostic {
   return Object.freeze({ code, severity: severityOf(code), message, span });
+}
+
+function make(code: CoreDiagnosticCode, message: string, span: KojoSpan | null): KojoDiagnostic {
+  return makeEventDiagnostic(code, message, span);
 }
 
 /** 方言声明的载体表（`undefined` = 未声明；空数组 = 显式"零条归属"，同样声明过） */
@@ -160,13 +176,63 @@ function validatesKind(binding: CarrierBinding | undefined, kind: DialectFactKin
 }
 
 /**
+ * 事件面载体的**唯一裁决**（LAU-D2 的 `# 机`/`@织` 与 LAU-D3 的 XML 三格共用）。
+ *
+ * | 结果 | 含义 | 调用方该做什么 |
+ * |---|---|---|
+ * | `no-binding` | 调用方**没有交绑定**（没问过归属） | 名字面照目录校验（D2a 口径：没问就不判载体） |
+ * | `no-declaration` | 方言没声明 `carriers` | 同上：载体面一概不问，名字面照目录校验 |
+ * | `unowned` | 声明了，但这份文件不在任何 glob 里 | 整面跳过（解析器已报 `core/carrier/unowned`） |
+ * | `unvalidated` | 本载体不校验事件，且方言没有别的载体校验事件 | 不报（无处可去） |
+ * | `wrong-carrier` | 本载体不校验事件，事件属于另一个载体 | 每个挂点一条 `core/event/wrong-carrier` |
+ * | `validates` | 本载体就是事件面 | 名字面照目录校验 |
+ *
+ * 判定顺序写死（D2a 口径一个字不改），只是把它从 `kojo2EventDiagnosticsOf` 里提出来，
+ * 让 XML 那条腿**用同一张裁决表**而不是复制一份 `if`。
+ *
+ * ⚠ `no-binding` 与 `unowned` 是两件事（LAU-D3 续跑据实收窄，别合并）：
+ * - **没交绑定** = 调用方没做归属解析（D2a 的 `lintOf(source, facts)` 就是这一态）⇒
+ *   载体级判断没有输入，名字面照目录校验（`# 机 训练` 在 eraFL 下仍是 `unknown`）；
+ * - **交了绑定但 `carrier === null`** = 解析器问过且判不出来（`core/carrier/unowned` 已报）
+ *   ⇒ 整面跳过，不猜。
+ * 把两者合成一支会让"没有归属输入"静默变成"归属不明"，那是 D2a 语义的回退。
+ */
+export type EventCarrierGate =
+  | { readonly kind: 'no-binding' }
+  | { readonly kind: 'no-declaration' }
+  | { readonly kind: 'unowned' }
+  | { readonly kind: 'unvalidated' }
+  | { readonly kind: 'wrong-carrier'; readonly expected: CarrierBinding }
+  | { readonly kind: 'validates' };
+
+export function eventCarrierGateOf(
+  facts: GameAdapter,
+  binding: DialectBinding | null | undefined,
+): EventCarrierGate {
+  // 没有绑定对象 = 没问过归属；问过且判不出（`carrier === null`）另有其支。
+  if (binding === null || binding === undefined) return { kind: 'no-binding' };
+  const declared = declaredCarriers(facts);
+  const carrier = binding.carrier ?? null;
+  if (declared === undefined) return { kind: 'no-declaration' };
+  if (carrier === null) return { kind: 'unowned' };
+  const actual = declared.find((item) => item.carrier === carrier);
+  if (!validatesKind(actual, 'event')) {
+    const expected = declared.find((item) => factKindsOf(item).includes('event'));
+    if (expected === undefined) return { kind: 'unvalidated' };
+    return { kind: 'wrong-carrier', expected };
+  }
+  return { kind: 'validates' };
+}
+
+/**
  * 事件挂点 → 诊断（第 1、2 项）。
  *
  * 判定顺序（写死，别调）：
- * 1. 方言**声明了** `carriers` 且这份文件没归上任何一条 ⇒ **整面跳过**（归属不明，不猜）；
+ * 1. 解析器**问过**载体归属、但这份文件没归上任何一条 ⇒ **整面跳过**（归属不明，不猜）；
  * 2. 这份文件的载体**不校验事件**，而方言别处声明了校验事件的载体 ⇒ 每个挂点一条
  *    `core/event/wrong-carrier`（"事件有、地方错"，修法是把这段挪到那个 glob 覆盖的文件里）；
- * 3. 否则每个挂点对 `eventCatalog` 校验：不在表里 ⇒ `core/event/unknown`（位置 = 事件名那一段）。
+ * 3. 否则（没交绑定 / 方言没声明载体 / 本载体就是事件面）每个挂点对 `eventCatalog` 校验：
+ *    不在表里 ⇒ `core/event/unknown`（位置 = 事件名那一段）。
  */
 export function kojo2EventDiagnosticsOf(
   sites: readonly Kojo2EventSite[],
@@ -174,21 +240,19 @@ export function kojo2EventDiagnosticsOf(
   binding: DialectBinding | null | undefined,
 ): KojoDiagnostic[] {
   if (sites.length === 0) return [];
-  const declared = declaredCarriers(facts);
+  const gate = eventCarrierGateOf(facts, binding);
   const carrier = binding?.carrier ?? null;
-  // ① 归属不明：载体级校验整面跳过（解析器已用 core/carrier/unowned 说过这件事）
-  if (declared !== undefined && carrier === null) return [];
-
-  const actual = carrier === null ? undefined : declared?.find((item) => item.carrier === carrier);
-  if (!validatesKind(actual, 'event')) {
-    // ② 这份文件所在的载体不校验事件：方言若在别的载体上校验事件 ⇒ 事件写错了地方
-    const expected = declared?.find((item) => factKindsOf(item).includes('event'));
-    if (expected === undefined) return [];
+  // ① 归属不明 / 无处可去：载体级校验整面跳过（解析器已用 core/carrier/unowned 说过这件事）
+  if (gate.kind === 'unowned' || gate.kind === 'unvalidated') {
+    return [];
+  }
+  if (gate.kind === 'wrong-carrier') {
+    // ② 这份文件所在的载体不校验事件：方言在别的载体上校验事件 ⇒ 事件写错了地方
     return sites.map((site) =>
       make(
         'core/event/wrong-carrier',
-        `事件“${site.name}”属于 ${expected.carrier} 载体，这份文件是 ${String(carrier)}：` +
-          `挪到 ${expected.glob} 覆盖的文件里。`,
+        `事件“${site.name}”属于 ${gate.expected.carrier} 载体，这份文件是 ${String(carrier)}：` +
+          `挪到 ${gate.expected.glob} 覆盖的文件里。`,
         pointSpan(site.line, site.startColumn),
       ),
     );
@@ -308,11 +372,13 @@ export function lintKojo2Dialect(input: Kojo2DialectLintInput): Kojo2DialectLint
       }
     }
   }
-  return { dialect: facts.id, diagnostics: sortDiagnostics(diagnostics) };
+  return { dialect: facts.id, diagnostics: sortDialectDiagnostics(diagnostics) };
 }
 
 /** 源码序（行 → 列 → 码）；没有 span 的（适配器数据面）排在最后，保持输入序 */
-function sortDiagnostics(diagnostics: readonly KojoDiagnostic[]): KojoDiagnostic[] {
+export function sortDialectDiagnostics(
+  diagnostics: readonly KojoDiagnostic[],
+): KojoDiagnostic[] {
   const keyed = diagnostics.map((diagnostic, index) => ({ diagnostic, index }));
   keyed.sort((a, b) => {
     const left = a.diagnostic.span;
@@ -349,7 +415,7 @@ const LINT_DETAIL_LINES = 6;
 /**
  * 诊断数组 → 按 `(码, 方言)` 聚合的清单（纯函数）。
  *
- * 顺序 = 首次出现序（先 error 后 warning 再按源码序，与 `sortDiagnostics` 同源）；
+ * 顺序 = 首次出现序（先 error 后 warning 再按源码序，与 `sortDialectDiagnostics` 同源）；
  * 同类 400 条 ⇒ 1 条，`count = 400`，`lines` 是那 400 行的去重升序列表。
  */
 export function aggregateKojo2DialectLint(
