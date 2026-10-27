@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use notify::event::{EventKind, ModifyKind, RenameMode};
@@ -2438,12 +2438,145 @@ const SEARCH_PROGRESS_EVENT: &str = "kojo:search-progress";
 /// 事件只做增量累积——两者的对齐契约见 `SearchFilesPayload` 的文档。
 const SEARCH_FILES_EVENT: &str = "kojo:search-files";
 
+/* ------------------------- 读盘缓存（打字即搜） ------------------------- */
+//
+// 为什么需要它（2026-10-28 实测，真壳 `D:/Game/eraNAS`、默认扩展名集 6,228 文件）：
+// 一次检索的墙钟是 **3.6–4.4s**，其中**目录枚举占 0.42s**，其余几乎全花在
+// 「打开 + 读 + 嗅探 + 预筛」这四步上（只扫 4,601 份 erb 也要 2.7s）。
+// 打字即搜每停手 300ms 就发一拍、每拍都重读同一批文件——**"每敲一个字重读一遍 138MB"
+// 就是这条功能的主成本**，不是匹配慢，也不是语言选错（匹配本来就在 Rust 里、本来就是 8 线程）。
+//
+// 缓存的是**原始字节**，不是解码后的正文：判据与行为因此可以逐字不变——
+// `scan_file` 只是把 `fs::read` 换成"先查表、查不到再读"，后面的二进制嗅探、字节预筛、
+// 解码、扫描一行没动。缓存命中时也**重跑**嗅探与预筛（都是内存带宽活），
+// 于是 `skipped` 的每一项读数与逐文件读盘时完全一致，不需要"把判定也缓存"。
+//
+// 失效判据放在**键里**（长度 + mtime 纳秒），与磁盘现状逐次比对：文件被写、被替换、
+// 被截断都会对不上 ⇒ 自然回落到读盘，不存在"时间窗过期"这种需要人记得的规则。
+
+/// 缓存预算（原始字节数上限）。
+///
+/// 真语料（eraNAS，默认扩展名集 6,228 文件）134 MB——按"装得下 + 两倍余量"取 384 MB。
+/// 越界不按 LRU 淘汰（那会在越界语料上退化成"每轮都重读被淘汰的那部分"，
+/// 比不缓存更慢），而是**整表清空 + 对这一批语料认输**（`CacheInner::disabled_for`）：
+/// 宁可退回今天"每拍读盘"的行为，也不做半截缓存。
+const SEARCH_CACHE_BUDGET_BYTES: usize = 384 * 1024 * 1024;
+
+struct CachedFile {
+    len: u64,
+    mtime_ns: u64,
+    /// 原始字节（`Arc<Vec<u8>>` 而不是 `Arc<[u8]>`：从 `fs::read` 的 `Vec` 直接移进来，
+    /// 省掉一次 134MB 级别的整体拷贝）
+    bytes: Arc<Vec<u8>>,
+}
+
+impl CachedFile {
+    fn bytes(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+#[derive(Default)]
+struct CacheInner {
+    entries: HashMap<PathBuf, CachedFile>,
+    bytes: usize,
+    /// 已判定"装不下"的语料键：同一批语料不再尝试缓存（避免每轮清空重填的抖动）
+    disabled_for: Option<String>,
+    hits: u64,
+    misses: u64,
+}
+
+/// 进程内的读盘缓存。`Mutex` 足够：每个文件只有一次查表/写表（纳秒级），
+/// 与它替掉的 `fs::read`（百微秒级）不在一个量级上，锁不会成为瓶颈。
+#[derive(Default)]
+struct SearchTextCache {
+    inner: Mutex<CacheInner>,
+}
+
+impl SearchTextCache {
+    /// 这批语料是否还值得缓存（越界过的语料键直接判否，见常量注释）
+    fn enabled_for(&self, corpus: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|g| g.disabled_for.as_deref() != Some(corpus))
+            .unwrap_or(false)
+    }
+
+    /// 查表：**长度与 mtime 都必须与磁盘现状一致**才算命中（判据在键里，不看时间窗）
+    fn lookup(&self, path: &Path, len: u64, mtime_ns: u64) -> Option<Arc<Vec<u8>>> {
+        let mut g = self.inner.lock().ok()?;
+        let hit = match g.entries.get(path) {
+            Some(e) if e.len == len && e.mtime_ns == mtime_ns => Some(e.bytes.clone()),
+            _ => None,
+        };
+        if hit.is_some() {
+            g.hits += 1;
+        } else {
+            g.misses += 1;
+        }
+        hit
+    }
+
+    /// 写表（越界 ⇒ 清空 + 认输，见 `SEARCH_CACHE_BUDGET_BYTES`）
+    fn store(&self, corpus: &str, path: &Path, len: u64, mtime_ns: u64, bytes: Arc<Vec<u8>>) {
+        let Ok(mut g) = self.inner.lock() else { return };
+        if g.disabled_for.as_deref() == Some(corpus) {
+            return;
+        }
+        let entry = CachedFile { len, mtime_ns, bytes };
+        let add = entry.bytes();
+        if g.bytes.saturating_add(add) > SEARCH_CACHE_BUDGET_BYTES {
+            g.entries.clear();
+            g.bytes = 0;
+            g.disabled_for = Some(corpus.to_string());
+            return;
+        }
+        if let Some(old) = g.entries.insert(path.to_path_buf(), entry) {
+            g.bytes = g.bytes.saturating_sub(old.bytes());
+        }
+        g.bytes += add;
+    }
+
+    #[cfg(test)]
+    fn counters(&self) -> (u64, u64) {
+        self.inner
+            .lock()
+            .map(|g| (g.hits, g.misses))
+            .unwrap_or((0, 0))
+    }
+}
+
+/// 语料键：roots + 扩展名 + glob 三者的规范化拼串。缓存只沿这三项复用——
+/// 换根 / 换扩展名 / 换 glob 就是另一批文件，判定与计数都得从头来。
+fn corpus_cache_key(roots: &[String], extensions: &[String], globs: &[String]) -> String {
+    let mut s = String::with_capacity(64);
+    for r in roots {
+        s.push_str(r);
+        s.push('\u{1}');
+    }
+    s.push('\u{2}');
+    for e in extensions {
+        s.push_str(e);
+        s.push(',');
+    }
+    s.push('\u{3}');
+    for g in globs {
+        s.push_str(g);
+        s.push(',');
+    }
+    s
+}
+
 /// 取消集合：`cancel_search` 写入、检索线程逐文件读取。
 /// 用 id 而不是布尔——同一时刻可能有多条检索（前端 id 自增），
 /// 取消必须精确命中一条，不许把别人的检索一起掐掉。
 #[derive(Default)]
 struct SearchState {
     cancelled: std::sync::Arc<Mutex<HashSet<u64>>>,
+    /// 检索热文本缓存（进程内、跨检索）：打字即搜每停手 300ms 就发一拍，而语料是同一批
+    /// ⇒ 把解码后的正文留住，第二拍起只剩内存扫描（见 `SearchTextCache` 的头注）。
+    /// 住 State 而不是每次命令现建：缓存的价值全在"跨拍复用"上。
+    cache: Arc<SearchTextCache>,
 }
 
 #[derive(Deserialize, Default)]
@@ -3041,16 +3174,23 @@ enum FileOutcome {
 /// 的枚举结果上取过一次元数据，旧口径这里再 `fs::metadata` 一遍 ⇒ 12,657 个候选文件
 /// 白多 12,657 趟元数据往返。取不到（遍历失败 / 跨平台差异）⇒ 退回逐文件 stat，
 /// 判定与计数分档（超大 / 读失败）逐字不变。
+///
+/// `cache`（打字即搜批）：命中的判据 = **长度 + mtime 与磁盘现状一致**，命中时整段省掉
+/// 「打开 + 读」——那一段是 3.6s 里的主成本（见 `SearchTextCache` 的头注）。
+/// `None` = 这批语料被判"装不下"（越界过一次），退回逐文件读盘的旧行为。
+#[allow(clippy::too_many_arguments)]
 fn scan_file(
-    path: &Path,
-    size_hint: Option<u64>,
+    file: &SearchFile,
     matcher: &SearchMatcher,
     prefilter: Option<&BytePrefilter>,
     cap: usize,
     policy: &DecodeProbePolicyDto,
     literal_single_pass: bool,
+    cache: Option<&SearchTextCache>,
+    corpus: &str,
 ) -> FileOutcome {
-    let len = match size_hint {
+    let path = file.path.as_path();
+    let len = match file.size {
         Some(n) => n,
         None => match std::fs::metadata(path) {
             Ok(m) => m.len(),
@@ -3060,15 +3200,33 @@ fn scan_file(
     if len > SEARCH_MAX_FILE_BYTES {
         return FileOutcome::TooLarge;
     }
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return FileOutcome::Unreadable,
+    // 读盘缓存：命中 ⇒ 这一拍的「打开 + 读」整段省掉。后面的二进制嗅探 / 字节预筛 /
+    // 解码 / 扫描**一字未动**，所以 `skipped` 的每一项读数与逐文件读盘时逐字一致
+    // （这也是"缓存原始字节而不是解码正文"的理由：判定不必跟着缓存，语义才可能不变）。
+    let cached = match (cache, file.mtime_ns) {
+        (Some(c), Some(mtime_ns)) => c.lookup(path, len, mtime_ns),
+        _ => None,
     };
+    let bytes: Arc<Vec<u8>> = match cached {
+        Some(b) => b,
+        None => {
+            let read = match std::fs::read(path) {
+                Ok(b) => b,
+                Err(_) => return FileOutcome::Unreadable,
+            };
+            let arc = Arc::new(read);
+            if let (Some(c), Some(mtime_ns)) = (cache, file.mtime_ns) {
+                c.store(corpus, path, len, mtime_ns, arc.clone());
+            }
+            arc
+        }
+    };
+    let bytes: &[u8] = bytes.as_slice();
     // 二进制判定放在预筛**之前**：`skipped.binary` 得是"这批候选里的二进制文件数"，
     // 与查询词无关；反过来（先预筛）会让这个数字随查询漂——同一个目录换个词，
     // 界面上的"跳过 N 个二进制文件"就变，那种读数没法信。
-    let utf16ish = is_utf16_bom_hit(&bytes, policy);
-    if looks_binary(&bytes, utf16ish) {
+    let utf16ish = is_utf16_bom_hit(bytes, policy);
+    if looks_binary(bytes, utf16ish) {
         return FileOutcome::Binary;
     }
     // 字节级预筛：不命中的文件整个跳过解码。成立条件两条（口径见 `byte_prefilter`）：
@@ -3077,13 +3235,13 @@ fn scan_file(
     // 预筛正则）。utf-16 的字节被 0 隔开，预筛对它不成立。
     if !utf16ish {
         if let Some(pre) = prefilter {
-            let applies = pre.ascii_safe || std::str::from_utf8(&bytes).is_ok();
-            if applies && !pre.re.is_match(&bytes) {
+            let applies = pre.ascii_safe || std::str::from_utf8(bytes).is_ok();
+            if applies && !pre.re.is_match(bytes) {
                 return FileOutcome::Miss;
             }
         }
     }
-    let text = match decode_with_policy(&bytes, policy) {
+    let text = match decode_with_policy(bytes, policy) {
         Ok(t) => t,
         Err(e) => {
             // 表已在 run_search 入口整体校验过，走到这里 = 解释器与表脱节：可见、可数，不静默
@@ -3101,11 +3259,11 @@ fn scan_file(
 
 /// 隐藏项（`.git` / 编辑器临时文件）整棵跳过：与 ripgrep 缺省一致，也顺手绕开
 /// 版本库元数据这种"搜了全是噪声"的目录。
-fn is_hidden_entry(e: &walkdir::DirEntry) -> bool {
-    e.file_name()
-        .to_str()
-        .map(|n| n.starts_with('.'))
-        .unwrap_or(false)
+///
+/// 只吃**文件名**（不吃 walkdir 的 DirEntry）：并行遍历（P0-3 批 2）改走
+/// `std::fs::read_dir` 之后，判据必须与遍历器解耦，口径逐字不变。
+fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().map(|n| n.starts_with('.')).unwrap_or(false)
 }
 
 /* ------------------------------ glob 文件过滤（P2-15） ------------------------------ */
@@ -3280,9 +3438,17 @@ fn is_excluded(rules: &[ExcludeRule], rel: &str, full: &str) -> bool {
 /// 小写键**（PS-1 §3）：旧实现把 `to_string_lossy().to_lowercase()` 写在比较器里，
 /// 12,657 条路径的排序要 ~35 万次 String 分配（比较器被调 O(N log N) 次，每趟两次）。
 ///
-/// 遍历失败**计数 + 出声**（前若干条打 stderr，其余只计数）：walkdir 逐个条目返回 Result，
-/// 一个读不到 metadata 的条目（超长路径 / 权限 / 句柄）若被 filter 掉就再无声息——
-/// 那正是"搜不到某个文件却没有任何说法"的形状。计数汇入 `skipped.unreadable`。
+/// **并行遍历**（P0-3 批 2，2026-10-28）：语料在 NAS 上时这一步是打字即搜的主要底噪。
+/// 实测（真壳 + `.workbuddy-ai/tmp/search-probe.mjs`，eraNAS：2,389 目录 / 6,228 文件，
+/// **平均每个目录只有 2.6 个文件**）：只走目录、一个文件都不 stat 也要 **807ms** ——
+/// 扩展名过滤在取 metadata 之前，所以这 807ms 全是 `read_dir` 的往返。
+/// 并发曲线（同一棵树，`.workbuddy-ai/tmp/walk-curve.mjs`，同档位跑两遍取第二遍）：
+/// 1 路 1,295ms / 4 路 447ms / **8 路 440ms** / 16 路 442ms / 32 路 489ms / 64 路 467ms
+/// ⇒ 4–8 路即饱和（SMB 把并发压平了），故取检索线程数再夹到 1..=16，不另开档位。
+///
+/// 遍历失败**计数 + 出声**（前 5 条打 stderr，其余只计数）：一个读不到的目录/条目
+/// （超长路径 / 权限 / 句柄）若被静默跳过，就是"搜不到某个文件却没有任何说法"的形状。
+/// 计数汇入 `skipped.unreadable`。
 ///
 /// `globs`（P2-15）：路径形态过滤，与扩展名是**且**的关系（两者都满足才扫；
 /// 空 = 不按形态过滤 = 今天行为逐字不变）。被任一方挡下的文件都计入 `filtered`
@@ -3292,87 +3458,251 @@ fn collect_files(
     extensions: &[String],
     globs: &[String],
     exclude_rules: &[ExcludeRule],
+    threads: usize,
     filtered: &mut u32,
     excluded: &mut u32,
     walk_errors: &mut u32,
 ) -> Vec<SearchFile> {
     let glob_res = compile_globs(globs);
-    let mut out: Vec<(String, PathBuf, Option<u64>)> = Vec::new();
-    let mut reported = 0usize;
-    for root in roots {
-        let root_path = std::path::Path::new(root);
-        let walker = walkdir::WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| e.depth() == 0 || !is_hidden_entry(e));
-        for entry in walker {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(err) => {
-                    *walk_errors += 1;
-                    if reported < 5 {
-                        reported += 1;
-                        eprintln!("[search] 遍历条目失败（已计入 skipped.unreadable）：{err}");
+    let root_paths: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+
+    // 目录队列：worker 从共享栈里抢目录，`pending` = 已入队 + 正在处理的目录数
+    // （栈空且 pending==0 ⇒ 整棵树走完）。用 Condvar 而不是自旋：NAS 上单次
+    // `read_dir` 是毫秒级往返，自旋会白烧满核、还会把 SMB 连接压得更堵。
+    struct Queue {
+        stack: Vec<(usize, PathBuf)>,
+        pending: usize,
+    }
+    let queue = Mutex::new(Queue { stack: Vec::new(), pending: 0 });
+    let wake = std::sync::Condvar::new();
+    let filtered_n = AtomicU32::new(0);
+    let excluded_n = AtomicU32::new(0);
+    let errors_n = AtomicU32::new(0);
+    let reported = AtomicUsize::new(0);
+
+    // 根先摊平：目录进队列；**文件根**直接当候选（walkdir 对文件根也只产出它自己
+    // 一条，这条边界不能因为换了遍历器就丢掉）；符号链接根与 walkdir 的
+    // `follow_links(false)` 同口径——不跟随、也不深入。
+    let mut seeds: Vec<(String, PathBuf, Option<u64>, Option<u64>)> = Vec::new();
+    {
+        let mut g = queue.lock().unwrap();
+        for (i, root) in root_paths.iter().enumerate() {
+            match std::fs::symlink_metadata(root) {
+                Ok(md) if md.file_type().is_symlink() => {}
+                Ok(md) if md.is_file() => {
+                    let size = Some(md.len());
+                    let mtime_ns = md
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos() as u64);
+                    if let Some(hit) = walk_consider(
+                        root.clone(),
+                        root,
+                        extensions,
+                        &glob_res,
+                        exclude_rules,
+                        &filtered_n,
+                        &excluded_n,
+                        size,
+                        mtime_ns,
+                    ) {
+                        seeds.push(hit);
                     }
-                    continue;
                 }
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let p = entry.path();
-            if !extensions.is_empty() {
-                let ext = p
-                    .extension()
-                    .map(|e| e.to_string_lossy().to_ascii_lowercase())
-                    .unwrap_or_default();
-                if !extensions.iter().any(|x| *x == ext) {
-                    *filtered += 1;
-                    continue;
+                _ => {
+                    g.stack.push((i, root.clone()));
+                    g.pending += 1;
                 }
             }
-            let mut skip_by_glob = false;
-            if !glob_res.is_empty() {
-                let rel = relative_slash_path(root_path, p);
-                if !glob_res.iter().any(|re| re.is_match(&rel)) {
-                    *filtered += 1;
-                    skip_by_glob = true;
-                }
-            }
-            if skip_by_glob {
-                continue;
-            }
-            // 排除腿（WS-10）：include 筛出的候选里再挡一层，独立计数（`excluded`）——
-            // "被类型过滤挡下"与"被排除模式挡下"是两句不同的话，不许混成一笔账。
-            if !exclude_rules.is_empty() {
-                let rel = relative_slash_path(root_path, p);
-                let full = p.to_string_lossy().replace('\\', "/");
-                if is_excluded(exclude_rules, &rel, &full) {
-                    *excluded += 1;
-                    continue;
-                }
-            }
-            let path = p.to_path_buf();
-            // 顺路把体积带走：Windows 上这是枚举结果里的现成信息，不再额外系统调用
-            // （`walk_dir(withMetadata)` 同一条前提）。取不到 ⇒ None ⇒ 扫描时退回 stat。
-            let size = entry.metadata().ok().filter(|m| m.is_file()).map(|m| m.len());
-            let key = path.to_string_lossy().to_lowercase();
-            out.push((key, path, size));
         }
     }
-    // 稳定排序 ⇒ 同键（同一个目录的两种写法）保持遍历先后，与旧实现同形
+
+    let n_threads = threads.clamp(1, 16);
+    let batches: Vec<Vec<(String, PathBuf, Option<u64>, Option<u64>)>> =
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for _ in 0..n_threads {
+                handles.push(scope.spawn(|| {
+                    let mut local: Vec<(String, PathBuf, Option<u64>, Option<u64>)> = Vec::new();
+                    loop {
+                        // 抢一个目录：栈空但还有人在跑 ⇒ 睡在 Condvar 上等它推子目录
+                        let (ri, dir) = {
+                            let mut g = queue.lock().unwrap();
+                            loop {
+                                if let Some(d) = g.stack.pop() {
+                                    break d;
+                                }
+                                if g.pending == 0 {
+                                    return local;
+                                }
+                                g = wake.wait(g).unwrap();
+                            }
+                        };
+                        let mut subdirs: Vec<PathBuf> = Vec::new();
+                        match std::fs::read_dir(&dir) {
+                            Ok(rd) => {
+                                for ent in rd {
+                                    let ent = match ent {
+                                        Ok(e) => e,
+                                        Err(err) => {
+                                            count_walk_error(&errors_n, &reported, &err);
+                                            continue;
+                                        }
+                                    };
+                                    let name = ent.file_name();
+                                    // 隐藏项（含隐藏目录）整棵跳过，与 filter_entry 同口径
+                                    if is_hidden_name(&name) {
+                                        continue;
+                                    }
+                                    let ft = match ent.file_type() {
+                                        Ok(t) => t,
+                                        Err(err) => {
+                                            count_walk_error(&errors_n, &reported, &err);
+                                            continue;
+                                        }
+                                    };
+                                    if ft.is_dir() {
+                                        // 符号链接目录不深入（防环），与 follow_links(false) 同口径
+                                        if !ft.is_symlink() {
+                                            subdirs.push(dir.join(&name));
+                                        }
+                                        continue;
+                                    }
+                                    // 非普通文件（符号链接 / 设备 / 管道）一律跳过：
+                                    // 旧实现是 `!entry.file_type().is_file()`，逐字同口径
+                                    if !ft.is_file() {
+                                        continue;
+                                    }
+                                    // 顺路把体积与 mtime 带走：Windows 上 `DirEntry::metadata()`
+                                    // 用的是枚举时已经拿到的信息，不再额外系统调用
+                                    // （与 `walk_dir_of` 同一条前提）。取不到 ⇒ None ⇒ 扫描时补 stat。
+                                    let md = ent.metadata().ok().filter(|m| m.is_file());
+                                    let size = md.as_ref().map(|m| m.len());
+                                    let mtime_ns = md
+                                        .as_ref()
+                                        .and_then(|m| m.modified().ok())
+                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                        .map(|d| d.as_nanos() as u64);
+                                    if let Some(hit) = walk_consider(
+                                        dir.join(&name),
+                                        &root_paths[ri],
+                                        extensions,
+                                        &glob_res,
+                                        exclude_rules,
+                                        &filtered_n,
+                                        &excluded_n,
+                                        size,
+                                        mtime_ns,
+                                    ) {
+                                        local.push(hit);
+                                    }
+                                }
+                            }
+                            // 目录读不了（权限 / 句柄 / 超长路径）⇒ 计入 unreadable 并出声
+                            Err(err) => count_walk_error(&errors_n, &reported, &err),
+                        }
+                        {
+                            let mut g = queue.lock().unwrap();
+                            let n = subdirs.len();
+                            if n > 0 {
+                                g.pending += n;
+                                for d in subdirs {
+                                    g.stack.push((ri, d));
+                                }
+                            }
+                            g.pending -= 1;
+                            if n > 0 || g.pending == 0 {
+                                wake.notify_all();
+                            }
+                        }
+                    }
+                }));
+            }
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+    let mut out = seeds;
+    for b in batches {
+        out.extend(b);
+    }
+    *filtered += filtered_n.load(Ordering::Relaxed);
+    *excluded += excluded_n.load(Ordering::Relaxed);
+    *walk_errors += errors_n.load(Ordering::Relaxed);
+    // 稳定排序 ⇒ 同键（同一个目录的两种写法）保持遍历先后，与旧实现同形；
+    // 也是"输出顺序与线程数无关"的保证（并行合并的先后被这一趟抹平）
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out.dedup_by(|a, b| a.0 == b.0);
     out.into_iter()
-        .map(|(_, path, size)| SearchFile { path, size })
+        .map(|(_, path, size, mtime_ns)| SearchFile { path, size, mtime_ns })
         .collect()
 }
 
-/// 检索候选文件：路径 + **遍历顺路拿到的体积**（`None` = 没拿到，扫描时补一次 stat）。
-/// 带着体积走是为了让 `scan_file` 省掉"每个候选文件再 metadata 一遍"（PS-1 §4）。
+/// 单条路径是否入候选（扩展名 + glob 两道过滤），入则返回 `(小写键, 路径, 体积, mtime)`。
+///
+/// 抽出来是为了让**文件根**与**普通条目**共用同一套判据——两处各写一遍迟早会漂。
+fn walk_consider(
+    path: PathBuf,
+    root: &Path,
+    extensions: &[String],
+    glob_res: &[regex::Regex],
+    exclude_rules: &[ExcludeRule],
+    filtered_n: &AtomicU32,
+    excluded_n: &AtomicU32,
+    size: Option<u64>,
+    mtime_ns: Option<u64>,
+) -> Option<(String, PathBuf, Option<u64>, Option<u64>)> {
+    if !extensions.is_empty() {
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !extensions.iter().any(|x| *x == ext) {
+            filtered_n.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    }
+    if !glob_res.is_empty() {
+        let rel = relative_slash_path(root, &path);
+        if !glob_res.iter().any(|re| re.is_match(&rel)) {
+            filtered_n.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    }
+    // 排除腿（WS-10）：include 筛出的候选里再挡一层，独立计数（`excluded`）——
+    // "被类型过滤挡下"与"被排除模式挡下"是两句不同的话，不许混成一笔账。
+    if !exclude_rules.is_empty() {
+        let rel = relative_slash_path(root, &path);
+        let full = path.to_string_lossy().replace('\\', "/");
+        if is_excluded(exclude_rules, &rel, &full) {
+            excluded_n.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    }
+    let key = path.to_string_lossy().to_lowercase();
+    Some((key, path, size, mtime_ns))
+}
+
+/// 遍历失败**计数 + 出声**：只报前 5 条（其余只计数），避免一棵坏树把 stderr 刷满。
+fn count_walk_error(
+    errors_n: &AtomicU32,
+    reported: &AtomicUsize,
+    err: &std::io::Error,
+) {
+    errors_n.fetch_add(1, Ordering::Relaxed);
+    let n = reported.fetch_add(1, Ordering::Relaxed);
+    if n < 5 {
+        eprintln!("[search] 遍历条目失败（已计入 skipped.unreadable）：{err}");
+    }
+}
+
+/// 检索候选文件：路径 + **遍历顺路拿到的体积与 mtime**（`None` = 没拿到，扫描时补一次 stat）。
+/// 带着体积走是为了让 `scan_file` 省掉"每个候选文件再 metadata 一遍"（PS-1 §4）；
+/// 带着 mtime 走是为了给热文本缓存做失效判据（同一趟 metadata 顺手取，不多一次系统调用）。
 struct SearchFile {
     path: PathBuf,
     size: Option<u64>,
+    mtime_ns: Option<u64>,
 }
 
 #[derive(Default)]
@@ -3407,7 +3737,7 @@ fn run_search(
     cancel: &Mutex<HashSet<u64>>,
     req: &SearchRequestDto,
 ) -> Result<SearchResultDto, String> {
-    run_search_with_files(emit, &|_batch| {}, cancel, req)
+    run_search_with_files(emit, &|_batch| {}, cancel, req, &SearchTextCache::default())
 }
 
 /// 检索主体（P2-11 流式版）：进度与命中文件**共用同一处节流点**。
@@ -3425,6 +3755,7 @@ fn run_search_with_files(
     emit_files: &(dyn for<'a, 'b> Fn(&'a SearchFilesPayload<'b>) + Sync),
     cancel: &Mutex<HashSet<u64>>,
     req: &SearchRequestDto,
+    cache: &SearchTextCache,
 ) -> Result<SearchResultDto, String> {
     let started = std::time::Instant::now();
     if req.query.is_empty() {
@@ -3455,19 +3786,26 @@ fn run_search_with_files(
         .filter(|e| !e.is_empty())
         .collect();
 
+    let globs = o.globs.as_deref().unwrap_or(&[]);
+    // 热文本缓存的适用范围：roots / 扩展名 / glob 三者共同定义"这一批文件"。
+    // 越界过的语料键直接判否（见 `SEARCH_CACHE_BUDGET_BYTES`），退回逐文件读盘。
+    let corpus = corpus_cache_key(&req.roots, &extensions, globs);
+    let cache_opt = cache.enabled_for(&corpus).then_some(cache);
+
     let mut filtered: u32 = 0;
     let mut excluded: u32 = 0;
     let mut walk_errors: u32 = 0;
     // 排除模式（WS-10）：DTO → 规则编译 → collect_files 一条腿，与 include globs 同形态。
-    // 空 / 缺省 ⇒ 规则表为空 ⇒ collect_files 逐字走老路径（老调用方零改动）。
+    // 空 / 缺省 ⇒ 规则表为空 ⇒ 逐字走老路径（老调用方零改动）。
     let exclude_rules = compile_exclude_rules(o.exclude_globs.as_deref().unwrap_or(&[]));
-    // P2-15：globs 必须从 DTO 流进 collect_files（glob 翻译在 collect_files 段内做），
-    // 这是本批触及 run_search 的**唯一一行**——只加实参，逻辑一行未动
+    // P2-15：globs 必须从 DTO 流进 collect_files（glob 翻译在 collect_files 段内做）。
+    // P0-3 批 2：多传一个 `threads`——遍历本身也按这个档位并行（见 `collect_files` 头注）。
     let files = collect_files(
         &req.roots,
         &extensions,
-        o.globs.as_deref().unwrap_or(&[]),
+        globs,
         &exclude_rules,
+        threads,
         &mut filtered,
         &mut excluded,
         &mut walk_errors,
@@ -3509,13 +3847,14 @@ fn run_search_with_files(
                     }
                     let cap = SEARCH_PER_FILE_CAP.min(remaining);
                     match scan_file(
-                        &files[i].path,
-                        files[i].size,
+                        &files[i],
                         &matcher,
                         prefilter.as_ref(),
                         cap,
                         policy,
                         literal_single_pass,
+                        cache_opt,
+                        &corpus,
                     ) {
                         FileOutcome::Hits(hits, clipped) => {
                             if clipped {
@@ -3624,6 +3963,8 @@ async fn search_text(
 ) -> Result<SearchResultDto, String> {
     use tauri::Emitter;
     let cancel = state.cancelled.clone();
+    // 缓存句柄也 clone 出去：`spawn_blocking` 的闭包要 'static，且缓存本身活在图外的 State 里
+    let cache = state.cache.clone();
     // 命令本体跑在阻塞线程池上：这是纯 CPU + 磁盘的活，不许占住异步运行时的执行线程
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |p: SearchProgressPayload| {
@@ -3632,7 +3973,7 @@ async fn search_text(
         let emit_files = |batch: &SearchFilesPayload<'_>| {
             let _ = app.emit(SEARCH_FILES_EVENT, batch.clone());
         };
-        run_search_with_files(&emit, &emit_files, &cancel, &request)
+        run_search_with_files(&emit, &emit_files, &cancel, &request, &cache)
     })
     .await
     .map_err(|e| format!("检索线程失败：{e}"))?
