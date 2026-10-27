@@ -42,9 +42,9 @@ function mountStyle(css: string): void {
 }
 
 /** 只取"扫到了序号"的那些配方（方便断言） */
-function hitsOf(css: string): Record<string, string[]> {
+function hitsOf(doc: Document): Record<string, string[]> {
   const out: Record<string, string[]> = {};
-  for (const h of scanGlowHits(document, NEON_GLOW_RECIPES)) {
+  for (const h of scanGlowHits(doc, NEON_GLOW_RECIPES)) {
     if (h.ids.length > 0) out[h.recipe.hex] = h.ids;
   }
   return out;
@@ -54,7 +54,7 @@ function hitsOf(css: string): Record<string, string[]> {
 function luminance(hex: string): number {
   const n = hex.replace('#', '');
   const channels = [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16) / 255);
-  const [r, g, b] = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const [r = 0, g = 0, b = 0] = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
@@ -199,7 +199,7 @@ describe('生成的规则', () => {
   });
 
   it('一条都没扫到 ⇒ 空串（调用方据此不注入）', () => {
-    expect(buildGlowCss([{ recipe: NEON_DREAMS_RECIPES[2], ids: [] }])).toBe('');
+    expect(buildGlowCss([{ recipe: NEON_DREAMS_RECIPES[2]!, ids: [] }])).toBe('');
   });
 });
 

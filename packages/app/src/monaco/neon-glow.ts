@@ -151,7 +151,10 @@ function classIdsOfColor(cssText: string, hex: string): string[] {
   const re = new RegExp(`\\.mtk(\\d+)\\s*\\{[^}]*?\\bcolor:\\s*#${hex}\\b`, 'gi');
   let m: RegExpExecArray | null;
   while ((m = re.exec(cssText)) !== null) {
-    if (!ids.includes(m[1])) ids.push(m[1]);
+    const id = m[1];
+    // 捕获组必然命中（正则有 `(\d+)`），`noUncheckedIndexedAccess` 下仍要收窄；
+    // 收窄不改变行为，只是把"不存在"显式写成不推入。
+    if (id !== undefined && !ids.includes(id)) ids.push(id);
   }
   return ids;
 }
