@@ -746,6 +746,7 @@ fn streamed_batches_cover_every_file_and_close_with_done() {
         },
         &cancel,
         &req,
+        &crate::SearchTextCache::default(),
     )
     .expect("检索应成功");
     let seen = seen.into_inner().unwrap();
@@ -796,6 +797,7 @@ fn streamed_final_batch_reports_cancellation() {
         },
         &cancel,
         &req,
+        &crate::SearchTextCache::default(),
     )
     .unwrap();
     let seen = seen.into_inner().unwrap();
@@ -830,6 +832,7 @@ fn streamed_batches_never_exceed_the_final_result_when_truncated() {
         },
         &cancel,
         &req,
+        &crate::SearchTextCache::default(),
     )
     .unwrap();
     assert!(out.truncated, "夹具必须真的撞上限");
@@ -1439,5 +1442,42 @@ fn width_fold_survives_the_byte_prefilter_and_legacy_decoding() {
     assert!(names.contains(&"sjis.erb"), "shift_jis 全角正文该命中：{names:?}");
     assert!(!names.contains(&"miss.erb"), "不含词的文件不该出现：{names:?}");
     assert_eq!(out2.total_matches, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/* ------------------------- 热文本缓存（打字即搜） ------------------------- */
+
+/// 同一批文件第二拍必须走缓存、且结果逐条相同；盘上文件变了（长度 + mtime 都动）
+/// ⇒ 缓存必须失效，结果说新真相——这是"缓存不许把改过的文件当成旧内容"的唯一判据。
+///
+/// 缓存的是**原始字节**（不是解码正文），所以连"这一问不命中"的文件也会入表：
+/// 打字即搜的下一拍要重跑预筛，缺了它就还得读盘（见 `SearchTextCache` 的头注）。
+#[test]
+fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
+    let dir = temp_dir("cache-reuse");
+    std::fs::write(dir.join("a.erb"), "口上 一行\n").unwrap();
+    std::fs::write(dir.join("b.erb"), "没有\n").unwrap();
+    let req = request(&dir, "口");
+    let cancel = Mutex::new(HashSet::new());
+    let cache = crate::SearchTextCache::default();
+
+    let out1 = crate::run_search_with_files(&|_p| {}, &|_b| {}, &cancel, &req, &cache).unwrap();
+    assert_eq!(out1.total_matches, 1);
+    let (hits1, misses1) = cache.counters();
+    assert_eq!(hits1, 0, "第一拍表是空的，必然全未命中");
+    assert!(misses1 >= 2, "两个候选文件各查一次表（实际 {misses1}）");
+
+    let out2 = crate::run_search_with_files(&|_p| {}, &|_b| {}, &cancel, &req, &cache).unwrap();
+    assert_eq!(out2.total_matches, out1.total_matches);
+    assert_eq!(out2.files.len(), out1.files.len());
+    let (hits2, _) = cache.counters();
+    assert!(hits2 >= 2, "第二拍两个文件都该命中缓存（实际 {hits2}）");
+
+    // 改内容（长度与 mtime 双判据都变）⇒ 下一次必须是新真相
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    std::fs::write(dir.join("a.erb"), "口上 口上\n").unwrap();
+    let out3 = crate::run_search_with_files(&|_p| {}, &|_b| {}, &cancel, &req, &cache).unwrap();
+    assert_eq!(out3.total_matches, 2, "缓存不许把改过的文件当成旧内容");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
