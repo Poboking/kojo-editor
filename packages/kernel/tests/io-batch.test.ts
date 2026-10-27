@@ -144,6 +144,46 @@ describe('FileIOService · readTexts（批量路径 + 会话缓存）', () => {
     expect(bridge.stats.readPaths).toEqual([f, f]); // 两次都真读（写后缓存已失效）
   });
 
+  /**
+   * `readText` **只写不读**（P0-3 批 4）：它读到的正文入会话表，让批量那条腿看得见；
+   * 但它自己永不命中——"打开文件必须看到盘上最新内容"是它的契约。
+   *
+   * 这条钉的正是"两条腿必须相交"：旧实现里 `readText` 完全不碰 `textCache`，
+   * 于是扫描器逐文件读过的 4,601 份 `.erb` 对索引/抽取/校验三条批量腿全是隐形的，
+   * 同一批文件被读两遍（每遍 9,202 趟 IPC）——本用例的 `readFilesRaw` 计数就是那个差。
+   */
+  it('readText 读过的正文能被 readTexts 命中；但 readText 自己永不命中缓存', async () => {
+    const dir = path.join(tmpDir, 'proj-bridge');
+    const f = path.join(dir, 'b.ERB');
+    await writeRaw(f, Buffer.from('@B\nPRINTL 桥\n'));
+    await setMtime(f, 4_000_000);
+    const bridge = countingBridge();
+    const io = new FileIOServiceImpl(bridge);
+    io.setWritableRoots([dir]);
+
+    const one = await io.readText(f);
+    expect(bridge.stats.readFileBytes).toBe(1);
+    expect(bridge.stats.stat).toBe(1);
+
+    // 契约保护：单文件路径第二次仍读盘（不查缓存）
+    await io.readText(f);
+    expect(bridge.stats.readFileBytes).toBe(2);
+
+    // 而批量路径现在看得见它：只批量 stat 校验，零 readFilesRaw
+    const [two] = await io.readTexts([f]);
+    expect(bridge.stats.readFilesRaw).toBe(0);
+    expect(bridge.stats.statFiles).toBe(1);
+    expect(two!.text).toBe(one.text);
+    expect(two!.encoding).toBe(one.encoding);
+    expect(two!.eol).toBe(one.eol);
+
+    // 写盘后同一条失效通道照常生效：批量读重读，不许把旧正文喂回去
+    await io.writeText(f, '@B2\n');
+    const [three] = await io.readTexts([f]);
+    expect(three!.text).toBe('@B2\n');
+    expect(bridge.stats.readFilesRaw).toBe(1);
+  });
+
   it('失败位与 readText 的失败条件一致：缺文件 null、其余照常（不整批抛）', async () => {
     const dir = path.join(tmpDir, 'proj4');
     const ok = path.join(dir, 'ok.ERB');
