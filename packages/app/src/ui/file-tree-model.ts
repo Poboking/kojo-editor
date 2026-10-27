@@ -39,6 +39,32 @@ export function visibleEntries(
 }
 
 /**
+ * 一份目录清单的排序结果（PS-6 第 4 项；本批从 `file-tree-dir-rows` 提到模型层）。
+ *
+ * `localeCompare` 是这批行里最贵的一步：旧实现每次渲染、每一层都要把整份清单重排一遍，
+ * 一次外部改动重列 K 层就是 K 次全排序，而清单内容压根没换。
+ * 键用**条目数组的引用**（`DirEntry[]` 由 `listDir` 一次产出、放进 dirCache 就不再变），
+ * ⇒ 数组身份 = 内容身份；列举换新数组自然就是新的一格，不会捞到旧顺序。
+ * WeakMap ⇒ 目录从缓存里退场时这份排序跟着被回收，不留第二条不衰减的内存。
+ *
+ * 为什么要搬：渲染侧（`DirRows`）与行模型侧（`file-tree-flat`）**必须看到同一份顺序**
+ * ——目录在前、文件在后、按名排序，两边各排一遍迟早漂，一漂虚拟化的行高与 DOM 就对不上。
+ */
+const sortedByEntries = new WeakMap<readonly DirEntry[], { dirs: DirEntry[]; files: DirEntry[] }>();
+
+export function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; files: DirEntry[] } {
+  const hit = sortedByEntries.get(entries);
+  if (hit) return hit;
+  const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name);
+  const out = {
+    dirs: entries.filter((d) => d.isDirectory).sort(byName),
+    files: entries.filter((d) => !d.isDirectory).sort(byName),
+  };
+  sortedByEntries.set(entries, out);
+  return out;
+}
+
+/**
  * 失效时该重列哪些目录（纯函数，可单测；HK-5）。
  *
  * = **正在显示的**：展开着的子目录 ∪ 已点开「真实文件夹视图」的包目录。

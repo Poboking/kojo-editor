@@ -150,6 +150,8 @@ function useRowSelected(path: string): boolean {
 
 export interface FileRowProps {
   readonly f: string;
+  /** `aria-level`（WS-11）：包内文件行 3、根散文件行 2、文件系统视图由 `DirRows` 侧另算 */
+  readonly level?: number;
   /** 打开（第二参 = 方式：单击给预览态；类型见 tabs-ops.OpenFileOptions） */
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
 }
@@ -171,7 +173,7 @@ export interface FileRowProps {
  * `aria-current` 只挂在选中的那一行（读屏的"当前项"语义；与 `.active` 同一个布尔，
  * 不许出现两份判据）。
  */
-export const FileRow = memo(function FileRow({ f, onOpenFile }: FileRowProps): ReactElement {
+export const FileRow = memo(function FileRow({ f, level = 3, onOpenFile }: FileRowProps): ReactElement {
   const active = useActiveRow(f);
   const selected = useRowSelected(f);
   const prob = useRowProblems(f);
@@ -182,6 +184,12 @@ export const FileRow = memo(function FileRow({ f, onOpenFile }: FileRowProps): R
       className={['tree-file', active && 'active', selected && !active && 'multi-selected']
         .filter(Boolean)
         .join(' ')}
+      role="treeitem"
+      aria-level={level}
+      aria-selected={selected}
+      // 整棵树只有一个 tab 停靠点：roving tabindex 由 `FileTree` 的接线侧把当前焦点行抬到 0
+      tabIndex={-1}
+      data-tid={f}
       aria-current={active ? 'true' : undefined}
       // 多选态给读屏 / 测试一个稳定挂点（不与 aria-current 的"当前项"语义抢位）
       data-multi-selected={selected ? 'true' : undefined}
@@ -191,6 +199,12 @@ export const FileRow = memo(function FileRow({ f, onOpenFile }: FileRowProps): R
       data-tree-kind="file"
       data-tree-path={f}
       onClick={(e) => {
+        // Shift + 单击 = 连选（判据住 `file-tree-keyboard`，动作在树容器的冒泡侧）：
+        // 这一行什么都不做，绝不能把"连选"顺手变成"打开"。
+        if (e.shiftKey) {
+          e.preventDefault();
+          return;
+        }
         // Ctrl / Cmd + 单击 = 勾选（不打开）；纯单击 = 把多选集收回这一份并照旧预览打开。
         // 两条腿合起来就能选中**恰好两个**文件，右侧「比较已选文件」据此出现。
         if (e.ctrlKey || e.metaKey) {

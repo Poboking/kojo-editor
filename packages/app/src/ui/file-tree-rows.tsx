@@ -63,6 +63,14 @@ export interface FileRowsProps {
   readonly files: readonly string[];
   /** 本次最多渲染的行数（≥ files.length 即全量 = 改动前行为） */
   readonly limit: number;
+  /**
+   * 虚拟化的取行起点（WS-12）：从第 `from` 条起最多取 `limit` 条。
+   * 缺省 0 ⇒ 老调用点逐字不变。**传数字而不是切好的数组**：数组每帧都是新引用，
+   * `FileRows` 的 memo 当场作废（PS-16 那条纪律），滚动一帧就把整组行重建一次。
+   */
+  readonly from?: number;
+  /** `aria-level`（WS-11；缺省 3 = 作者包内的文件行，根散文件那档由调用侧传 2） */
+  readonly level?: number;
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
   /**
    * 行内重命名（B1）：与 path 匹配的那行改画输入框（node 由宿主造好塞进来，
@@ -72,13 +80,16 @@ export interface FileRowsProps {
   readonly edit?: { readonly path: string; readonly node: ReactElement } | null;
 }
 
-export const FileRows = memo(function FileRows({ files, limit, onOpenFile, edit }: FileRowsProps): ReactElement {
-  const rows = limit >= files.length ? files : files.slice(0, Math.max(0, limit));
+export const FileRows = memo(function FileRows({ files, limit, from = 0, level = 3, onOpenFile, edit }: FileRowsProps): ReactElement {
+  const start = Math.max(0, Math.min(from, files.length));
+  const end = limit >= files.length ? files.length : Math.min(files.length, start + Math.max(0, limit));
+  const rows = files.slice(start, end);
   return (
     <>
       {rows.map((f) => (
-        <li key={f}>
-          {edit && edit.path === f ? edit.node : <FileRow f={f} onOpenFile={onOpenFile} />}
+        // 包装层不进可达性树：`role="treeitem"` 住在按钮上，层级由 `aria-level` 明说
+        <li key={f} role="none">
+          {edit && edit.path === f ? edit.node : <FileRow f={f} level={level} onOpenFile={onOpenFile} />}
         </li>
       ))}
     </>

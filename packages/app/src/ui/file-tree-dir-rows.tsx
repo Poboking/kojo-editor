@@ -11,9 +11,8 @@
  * 本组件因此对"谁被选中""谁有诊断"一无所知——切标签时不重画任何一层。
  */
 import { memo, useSyncExternalStore, type ReactElement } from 'react';
-import type { DirEntry } from '@kojo/plugin-api';
 import { Icon } from './icons';
-import { BINARY_EXT, erbExt, middleEllipsis, TREE_LABEL_MAX } from './file-tree-model';
+import { BINARY_EXT, erbExt, middleEllipsis, sortedDirsAndFiles, TREE_LABEL_MAX } from './file-tree-model';
 import { isRowActive, subscribeSelection } from './file-tree-selection';
 import {
   isRowSelected,
@@ -46,32 +45,19 @@ export interface DirRowsProps {
   readonly cancelEdit: () => void;
   readonly toggleSub: (dir: string) => void;
   readonly onOpenFile: (path: string, opts?: OpenFileOptions) => void;
+  /**
+   * `aria-level` 的基准（WS-11）：这一层第 0 深度对应的层级。
+   *
+   * 缩进（`depth`）与层级（`aria-level`）是两件事——文件系统视图单根铺开时第 0 层就是树的第 1 层，
+   * 而包内真实文件夹的第 0 层住在第 3 层。缺省 1 ⇒ 老调用点零改动。
+   */
+  readonly levelBase?: number;
 }
 
 /**
- * 一份目录清单的排序结果（PS-6 第 4 项）。
+ * 一份目录清单的排序结果已上移到 `file-tree-model.sortedDirsAndFiles`（WS-12）：
+ * 渲染侧与扁平行模型侧（`file-tree-flat`）必须读同一份顺序，各排一遍迟早漂。
  *
- * `localeCompare` 是这批行里最贵的一步：旧实现每次渲染、每一层都要把整份清单重排一遍，
- * 一次外部改动重列 K 层就是 K 次全排序，而清单内容压根没换。
- * 键用**条目数组的引用**（`DirEntry[]` 由 `listDir` 一次产出、放进 dirCache 就不再变），
- * ⇒ 数组身份 = 内容身份；列举换新数组自然就是新的一格，不会捞到旧顺序。
- * WeakMap ⇒ 目录从缓存里退场时这份排序跟着被回收，不留第二条不衰减的内存。
- */
-const sortedByEntries = new WeakMap<readonly DirEntry[], { dirs: DirEntry[]; files: DirEntry[] }>();
-
-function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; files: DirEntry[] } {
-  const hit = sortedByEntries.get(entries);
-  if (hit) return hit;
-  const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name);
-  const out = {
-    dirs: entries.filter((d) => d.isDirectory).sort(byName),
-    files: entries.filter((d) => !d.isDirectory).sort(byName),
-  };
-  sortedByEntries.set(entries, out);
-  return out;
-}
-
-/**
  * 文件系统视图里的一条**文件行**（从 `DirRows` 的 `files.map` 里提出来，PERF 批）。
  *
  * 提出来只为一件事：选中态与诊断量都由行自己订阅（`file-tree-selection` /
@@ -87,6 +73,7 @@ const DirFileRow = memo(function DirFileRow(props: {
   path: string;
   isErb: boolean;
   label: string;
+  level: number;
   onOpenFile: (path: string, opts?: OpenFileOptions) => void;
 }): ReactElement {
   const active = useSyncExternalStore(
@@ -102,7 +89,7 @@ const DirFileRow = memo(function DirFileRow(props: {
   const prob = useRowProblems(props.path);
   return (
     <button
-      // 见 `file-tree-row.FileRow`：class 串用 join 拼，尾随空格会让精确串断言失配
+      // class 串用 join 拼，尾随空格会让精确串断言失配（见 `file-tree-row.FileRow`）
       className={[
         'tree-file',
         active && 'active',
@@ -111,7 +98,14 @@ const DirFileRow = memo(function DirFileRow(props: {
       ]
         .filter(Boolean)
         .join(' ')}
+      role="treeitem"
+      aria-level={props.level}
+      aria-selected={selected}
+      // 整棵树只有一个 tab 停靠点（roving tabindex，判据与接线见 `FileTree` 的 WS-11 那一段）
+      tabIndex={-1}
+      data-tid={props.path}
       aria-current={active ? 'true' : undefined}
+      // 多选态给读屏 / 测试一个稳定挂点（不与 aria-current 的"当前项"语义抢位）
       data-multi-selected={selected ? 'true' : undefined}
       title={props.isErb ? props.path : `${props.path}（附加文件，不在口上索引内）`}
       data-locate={props.path}
@@ -119,6 +113,12 @@ const DirFileRow = memo(function DirFileRow(props: {
       data-tree-kind="file"
       data-tree-path={props.path}
       onClick={(e) => {
+        // Shift + 单击 = 连选（动作在树容器的冒泡侧，判据住 `file-tree-keyboard`）：
+        // 这一行什么都不做，绝不能把"连选"顺手变成"打开"。
+        if (e.shiftKey) {
+          e.preventDefault();
+          return;
+        }
         // 与 `file-tree-row.FileRow` 同一口径：Ctrl / Cmd = 勾选（不打开），纯单击 = 收回单选并预览。
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
@@ -166,12 +166,15 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     cancelEdit,
     toggleSub,
     onOpenFile,
+    levelBase = 1,
   } = props;
+  /** 这一层的 `aria-level`（缩进仍走 depth，层级另算——见 props 上那条注释） */
+  const level = levelBase + depth;
   const state = dirCache.get(dir);
   if (state === undefined) return [];
   if (state === 'loading' || state === 'error') {
     return [
-      <li key={`${dir}::note`} className="tree-note">
+      <li key={`${dir}::note`} className="tree-note" role="presentation">
         {state === 'loading' ? '读取目录…' : '目录读取失败（需要桌面壳权限）'}
       </li>,
     ];
@@ -180,7 +183,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
   // 包根层：与平铺列表同级的 ERB 在这里略过（判据与 `visibleEntries` 同一条）
   const visibleFiles = depth === 0 ? sorted.files.filter((d) => !skip.has(pkey(d.path))) : sorted.files;
   if (sorted.dirs.length === 0 && visibleFiles.length === 0) {
-    return [<li key={`${dir}::empty`} className="tree-note">（空目录）</li>];
+    return [<li key={`${dir}::empty`} className="tree-note" role="presentation">（空目录）</li>];
   }
   const dirs = sorted.dirs;
   const files = visibleFiles;
@@ -192,7 +195,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
   return [
     ...(creatingHere
       ? [
-          <li key={`${dir}::create`} style={pad}>
+          <li key={`${dir}::create`} style={pad} role="presentation">
             <EditRow
               value={editValue}
               placeholder={creatingHere.kind === 'file' ? '新文件名' : '新文件夹名'}
@@ -206,7 +209,9 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
     ...dirs.map((d) => {
       const renaming = edit?.mode === 'rename' && edit.isDir && edit.path === d.path;
       return (
-        <li key={d.path}>
+        // 包装层不进可达性树（`role="none"`）：`role="treeitem"` 住在里面那枚行元素上，
+        // 层级由 `aria-level` 明说 ⇒ 读屏报得出的层级与键盘走的层级是同一个数（WS-11）
+        <li key={d.path} role="none">
           {renaming ? (
             <div style={pad}>
               <EditRow
@@ -221,12 +226,25 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             <button
               className="tree-dir"
               style={pad}
+              role="treeitem"
+              aria-level={level}
+              aria-expanded={subOpen.has(d.path)}
+              aria-selected={false}
+              tabIndex={-1}
+              data-tid={d.path}
               title={d.path}
               data-drop-dir={d.path}
               data-context-surface="file-tree"
               data-tree-kind="dir"
               data-tree-path={d.path}
-              onClick={() => toggleSub(d.path)}
+              onClick={(e) => {
+                if (e.shiftKey) {
+                  // Shift + 单击 = 连选（动作在树容器的冒泡侧）；不改展开现场
+                  e.preventDefault();
+                  return;
+                }
+                toggleSub(d.path);
+              }}
             >
               <span className="caret">
                 <Icon name={subOpen.has(d.path) ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -235,7 +253,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
             </button>
           )}
           {subOpen.has(d.path) ? (
-            <ul className="tree-files nested">
+            <ul className="tree-files nested" role="group">
               <DirRows {...props} dir={d.path} depth={depth + 1} skip={skip} />
             </ul>
           ) : null}
@@ -246,7 +264,7 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
       const renaming = edit?.mode === 'rename' && !edit.isDir && edit.path === d.path;
       if (renaming) {
         return (
-          <li key={d.path} style={pad}>
+          <li key={d.path} style={pad} role="presentation">
             <EditRow
               value={editValue}
               placeholder="新名称"
@@ -258,15 +276,16 @@ export const DirRows = memo(function DirRows(props: DirRowsProps): ReactElement[
         );
       }
       return BINARY_EXT.test(d.name) ? (
-        <li key={d.path} className="tree-extra" style={pad} title={`${d.path}（压缩包/资源，不在编辑器内打开）`}>
+        <li key={d.path} className="tree-extra" style={pad} role="presentation" title={`${d.path}（压缩包/资源，不在编辑器内打开）`}>
           <span className="tree-extra-name">{glossOf(d.name)}</span>
         </li>
       ) : (
-        <li key={d.path} style={pad}>
+        <li key={d.path} style={pad} role="none">
           <DirFileRow
             path={d.path}
             isErb={erbExt(d.name)}
             label={middleEllipsis(glossOf(d.name), TREE_LABEL_MAX)}
+            level={level}
             onOpenFile={onOpenFile}
           />
         </li>

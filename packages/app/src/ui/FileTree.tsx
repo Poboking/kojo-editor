@@ -14,7 +14,7 @@
  * `Map.get` + 字符串比较"。画法与配色仍只有一枚（`TreeProbMark`），树里不存在第二份计数。
  */
 
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type UIEvent as ReactUIEvent } from 'react';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
 import {
@@ -44,11 +44,35 @@ import { baseName, buildFileGroups, dirsToRelist, kojoOwners, middleEllipsis, ro
 import { createEntryIfAbsent } from './file-tree-create';
 import { browsableRootsOf, type WorkspaceFolder } from './workspace-folders';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
+import {
+  buildFsFlatTree,
+  buildKojoFlatTree,
+  groupRowId,
+  indexOfId,
+  leafRowId,
+  packageRowId,
+  rangePaths,
+  rowAt,
+  type FlatRow,
+  type FlatTree,
+  type KojoGroupInput,
+} from './file-tree-flat';
+import {
+  anchorScrollTop,
+  fullRange,
+  scrollToShow,
+  sliceBlock,
+  spacerStyle,
+  visibleRange,
+  type VisibleRange,
+} from './file-tree-virtual';
+import { planRowClick, planTreeKey, rowIsDir, treeKeyEventOf } from './file-tree-keyboard';
+import { planDirCacheEviction, protectedDirKeysOf } from './file-tree-cache';
 import { EditRow, FileRows } from './file-tree-rows';
 import { TreeProbMark } from './file-tree-row';
 import { DirRows } from './file-tree-dir-rows';
 import { getActivePath, setActivePath, subscribeActivePath } from './file-tree-selection';
-import { clearSelected, getSelectedPaths } from './file-tree-multi-selection';
+import { clearSelected, getSelectedPaths, setSelected } from './file-tree-multi-selection';
 import { useNodeProblems } from './file-tree-problem-view';
 import { setFileTreeMenuRuntime, type FileTreeScope } from './file-tree-menu';
 import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
@@ -326,6 +350,23 @@ function TreeFoldBody({ open, body }: { open: boolean; body: () => ReactNode }):
 }
 
 /**
+ * 虚拟化垫高行（WS-12）：把裁掉的行换成一条等高的占位。
+ *
+ * 为什么必须有它：裁行不改滚动高度是**虚拟化能用起来的前提**——没有垫高，滚动条长度跟着
+ * 挂载行数走，作者一滚就"越滚越短"，视口与行号的对应关系也一并作废。高度取自行模型
+ * （`file-tree-virtual.sliceBlock` 算出的像素，含各级 `<ul>` 的边距口径），不是猜的。
+ *
+ * `aria-hidden` + `role="presentation"`：占位不是树项，读屏与键盘都不该撞上它。
+ * 内联 `style.height` 而不是 CSS 类：本切片那条"不许写带长度的 height"红线管的是
+ * 样式表里的**固定**高度（密度口径），动态垫高本来就没有固定值可写。
+ */
+function TreeSpacer({ px }: { px: number }): ReactElement | null {
+  const style = spacerStyle(px);
+  if (style === null) return null;
+  return <li className="tree-vspacer" role="presentation" aria-hidden="true" style={style} />;
+}
+
+/**
  * 文件树本体（state + 异步 IO + 事件接线 + 渲染）。
  *
  * 与外壳同一份实现，只差一件事：**不再收 `activeFile`**（见 `FileTree` 的注释）。
@@ -367,6 +408,45 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   const locateTarget = useRef<string | null>(null);
   /** 树滚动容器（定位时在其内找 data-locate 行；scrollIntoView 用 nearest 不拽容器） */
   const treeBodyRef = useRef<HTMLUListElement | null>(null);
+
+  /* ---------------- WS-11 键盘与可访问性 / WS-12 行虚拟化的现场 ---------------- */
+
+  /**
+   * 滚动现场（虚拟化窗口的输入）。
+   *
+   * 只记 `top`（scrollTop）与 `h`（clientHeight）两枚数：行模型给每一行算了 `top`，
+   * 窗口 = 二分这两个数得到的行区间 ⇒ 挂载行数只跟视口有关，跟树的长度无关。
+   */
+  const [scroll, setScroll] = useState<{ top: number; h: number }>({ top: 0, h: 0 });
+  /**
+   * 焦点行的行号（= DOM 上的 `data-tid`，判据与口径住 `file-tree-flat`）。
+   *
+   * 存 **tid 而不是下标**：展开 / 收起会让下标整体平移，而 tid 认的是那一行本身
+   * ——锚点保持与"焦点行滚出窗口后重新挂上"都靠它。
+   */
+  const [focusTid, setFocusTid] = useState<string | null>(null);
+  /** 连选锚点（Shift+↑↓ / Shift+点击 的另一端；非连选动作会把它挪到当前行） */
+  const anchorIdx = useRef(-1);
+  /**
+   * "下一次提交该把 DOM 焦点交给哪一行"（行号 = `data-tid`）。
+   *
+   * 为什么需要这一格：虚拟化下焦点行可能还没挂出来（滚动与挂载差一帧），
+   * 当场 `focus()` 会点到 null 上 ⇒ 表现为"按了 End，焦点凭空没了"。
+   * 交给每次提交后的那趟 roving 扫描统一办结（见下面那个 layout effect）。
+   */
+  const pendingFocus = useRef<string | null>(null);
+  /** 展开/收起前的锚点现场（视口不跳那条判据的"改前"半边） */
+  const anchorRow = useRef<{ tid: string; top: number; scroll: number } | null>(null);
+  /**
+   * 锚点采集的 ref 版实现。
+   *
+   * 实现在下面 WS-12 那一块（它要读行模型与焦点行），这里先立一个恒等函数占位：
+   * `toggleSub` 这类早期 `useCallback` 要引用它，而"什么时候真的采锚点"由 ref 里的最新一份决定
+   * ——与 `runLocateRef` 同一条写法（闭包每帧刷新，避免读到上一帧的现场）。
+   */
+  const captureAnchorRef = useRef<() => void>(() => {});
+  /** 淘汰保护集每帧刷在这里（`applyDirUpdates` 读 ref ⇒ 不会因为现场变化换身份、击穿行组件 memo） */
+  const protectDirs = useRef<Set<string>>(new Set());
 
   /* ---------------- 即时化：索引未就绪时用 walk 快照先出树（2026-10-16 树即时批） ---------------- */
 
@@ -555,9 +635,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   };
   const toggleGroup = (label: string): void => setOpened((prev) => toggleIn(prev)(label));
 
-  /** 包目录绝对路径（index 路径为全路径，直接拼接包目录名） */
-  const pkgDirOf = (g: Group, subLabel: string): string =>
-    `${g.prefix.replace(/[\\/]+$/, '')}/${subLabel}`;
+  /** 包目录绝对路径（index 路径为全路径，直接拼接包目录名）；两形共一条算式，不抄第二遍 */
+  const pkgDirOfPrefix = (prefix: string, subLabel: string): string =>
+    `${prefix.replace(/[\\/]+$/, '')}/${subLabel}`;
+  const pkgDirOf = (g: Group, subLabel: string): string => pkgDirOfPrefix(g.prefix, subLabel);
 
   /**
    * 每个目录"最新一次列举请求"的序号。响应回来时只认自己那一次：
@@ -578,15 +659,15 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   const applyDirUpdates = useCallback((updates: ReadonlyMap<string, DirState>): void => {
     setDirCache((prev) => {
       const next = new Map(prev);
-      for (const [dir, state] of updates) next.set(dir, state);
+      for (const [key, state] of updates) next.set(key, state);
       if (next.size <= DIR_CACHE_MAX) return next;
-      for (const key of [...next.keys()]) {
-        if (next.size <= DIR_CACHE_MAX) break;
-        if (!subOpen.has(key)) next.delete(key);
+      // 淘汰顺序由 `file-tree-cache` 那条纯判据给（插入序 = 首次列举先后 ⇒ 先丢最早那份没在用的）
+      for (const key of planDirCacheEviction([...next.keys()], next.size, DIR_CACHE_MAX, protectDirs.current)) {
+        next.delete(key);
       }
       return next;
     });
-  }, [subOpen]);
+  }, []);
 
   /**
    * 一批目录一起列、**一次落地**（PS-6）：外部改动重列走的就是这条。
@@ -594,8 +675,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    * 序号闸照旧逐目录认领先后（迟到的那份不认领）；某一份失败只把**那一个目录**标成
    * error，其余照收——一颗失败不许把整批拖成空白（也不静默：DirRows 会画失败行）。
    */
-  const fetchDirs = useCallback((dirs: readonly string[]): void => {
-    if (!listDir || dirs.length === 0) return;
+  const fetchDirs = useCallback((dirs: readonly string[], onSettled?: (failed: number, listed: number) => void): void => {
+    if (!listDir || dirs.length === 0) {
+      onSettled?.(0, 0);
+      return;
+    }
     const seqs = new Map<string, number>();
     const loading = new Map<string, DirState>();
     for (const dir of dirs) {
@@ -616,6 +700,12 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         updates.set(dir, r.status === 'fulfilled' ? r.value : 'error');
       });
       if (updates.size > 0) applyDirUpdates(updates);
+      // 一句人话回执的"读不到"那一半：批量展开要等列举回来才知道有几个目录失败
+      let failed = 0;
+      updates.forEach((state) => {
+        if (state === 'error') failed++;
+      });
+      onSettled?.(failed, updates.size);
     });
   }, [listDir, dirCache, applyDirUpdates]);
 
@@ -639,6 +729,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
 
   /** 子目录展开/折叠（递归；首次展开才取该层） */
   const toggleSub = useCallback((dir: string): void => {
+    captureAnchorRef.current();
     const willOpen = !subOpen.has(dir);
     setSubOpen((prev) => toggleIn(prev)(dir));
     if (willOpen) ensureDir(dir);
@@ -725,21 +816,39 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    *
    * 上游的「展开全部」原先只管角色组、不管组里的作者包——用户于是看见"点了没反应"。
    * 这里两层一起动，并让根节点的入口变成**可逆开关**（全展开时它反向成收起）。
+   *
+   * **列举走一次批量**（WS-12）：改前对每个待展开的包各调一次 `ensureDir` ⇒
+   * K 个包 = K 轮 `listDir` 请求 + K 次 `setDirCache`（每次都是一帧全树重渲染）。
+   * 现在一次收集、一次 `fetchDirs` ⇒ 一帧落地；回执也说清"展开了多少行、有几个目录读不到"。
    */
   const applyReveal = (list: readonly Group[], r: RevealResult): void => {
     if (r.mode === 'expand') {
+      captureAnchorRef.current();
+      const missing: string[] = [];
+      let fileRows = 0;
       for (const g of list) {
+        if (!opened.has(g.label)) fileRows += g.total;
         for (const s of g.subs) {
           if (s.label === null) continue;
-          if (!pkgFolder.has(packageKey(g.label, s.label))) ensureDir(pkgDirOf(g, s.label));
+          const key = packageKey(g.label, s.label);
+          if (pkgFolder.has(key)) continue;
+          const dir = pkgDirOf(g, s.label);
+          if (!dirCache.has(dir)) missing.push(dir);
         }
       }
+      const head = fileRows > 0 ? `${r.feedback}（新增 ${fileRows} 行文件）` : r.feedback;
+      setRevealNote(missing.length > 0 && listDir === undefined ? `${head}——目录读取通道不可用` : head);
+      fetchDirs(missing, (failed) => {
+        if (failed === 0) return;
+        setRevealNote(`${head}；${failed} 个目录读不到（权限或已移动）`);
+      });
     } else {
+      captureAnchorRef.current();
       setSubOpen(new Set());
     }
     setOpened(r.openedGroups);
     setPkgFolder(r.openedPackages);
-    setRevealNote(r.feedback);
+    if (r.mode !== 'expand') setRevealNote(r.feedback);
   };
 
   /**
@@ -1322,7 +1431,21 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       openPackage(plan.pkg.key);
       ensureDir(plan.pkg.dir);
     }
-    // DOM 提交后再滚：两拍 rAF 保证新展开的行已挂载
+    /**
+     * 虚拟化之后，"行在不在 DOM 里"不再等价于"行在不在树里"（WS-12）。
+     *
+     * 所以先问**行模型**：目标行已经在这份现场里 ⇒ 把它的顶部滚进视口（窗口跟着滚动事件
+     * 重算 ⇒ 下一帧它就真挂出来），顺手把焦点交给它；还没进模型（组刚展开、这一帧的模型
+     * 是展开前那份）⇒ **留着这条定位请求**，等 `tree` 变化那条 effect 再试一次。
+     * DOM 那条腿照旧兜底跑一遍：两拍 rAF 后如果行已经挂上，`scrollLocate` 会精确滚到它。
+     */
+    const index = indexOfId(tree, leafRowId(plan.targetPath));
+    if (index < 0) {
+      scrollLocate(plan.targetPath);
+      return; // 现场还没追上（等下一帧）：不清请求，也不硬滚
+    }
+    scrollToIndex(index);
+    setFocusTid(tree.rows[index]?.id ?? null);
     scrollLocate(plan.targetPath);
     locateTarget.current = null;
   };
@@ -1346,15 +1469,6 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       }),
     [],
   );
-
-  /**
-   * 现场变了就再试一次（目录列举回来 / 分组换了 / 视图切了 / 过滤词落定）。
-   * 读的是 ref，没有待办就立刻返回——这条 effect 不会自己触发渲染。
-   */
-  useEffect(() => {
-    if (locateTarget.current !== null) runLocateRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, deferredFilter, view, dirCache]);
 
   /** 记一次定位请求（右键菜单「定位到当前文件」走这条，与自动定位同一个落点） */
   function requestLocate(file: string): void {
@@ -1398,6 +1512,367 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       erbKeysCache.set(s, hit);
     }
     return hit;
+  };
+
+  /* ---------------- WS-12：扁平行模型 + 虚拟化窗口（判据住 `file-tree-flat` / `file-tree-virtual`） ---------------- */
+
+  /** 正在新建的那一层（行模型要给它的输入行算一格高度，不然滚动会跳） */
+  const createInDir = edit?.mode === 'create' ? edit.dir : null;
+
+  /**
+   * 当前现场会被画成哪些行（一次算清，含每行的像素顶部与层级）。
+   *
+   * 两个视图共用一份行模型：口上视图的行**会被裁**（虚拟化），文件系统视图的行不会
+   * ——它逐层惰性列举，规模由作者的展开动作本身约束。但 ↑↓ / →← / Home / End 与
+   * `aria-level` 在两个视图里走的是同一批判据，不出现"这棵树认键盘、那棵树不认"。
+   */
+  const tree: FlatTree = useMemo(() => {
+    if (view === 'fs') {
+      return buildFsFlatTree({
+        multiRoot: multiRootFs,
+        subOpen,
+        dirCache,
+        createInDir,
+        roots: multiRootFs
+          ? fsRoots.map((root) => ({ key: root, label: baseName(root), dir: root, open: subOpen.has(root) }))
+          : [{ key: project.rootDir, label: baseName(project.rootDir), dir: project.rootDir, open: true }],
+      });
+    }
+    const kojoInputs: KojoGroupInput[] = visible.map((g) => ({
+      group: g,
+      open: opened.has(g.label) || deferredFilter.length > 0,
+      pkgFolderOpen: (pkgKey: string) => pkgFolder.has(pkgKey) && deferredFilter.length === 0,
+      limitOf: (subIdx: number) => renderLimitOf(g, g.subs[subIdx] as PackageGroup),
+    }));
+    const rootInputs: KojoGroupInput[] = rootGroupsVisible.map((rg) => ({
+      group: { label: rg.folder.label, prefix: rg.folder.path, subs: [{ label: null, files: rg.hits }], total: rg.hits.length },
+      key: rg.key,
+      open: opened.has(rg.key) || deferredFilter.length > 0,
+      pkgFolderOpen: () => false,
+      // 说明行（读不到 / 还在读 / 还没有方言文件）也占一行高度：不算进去滚动就会整组错位
+      note:
+        rg.status === 'error'
+          ? '这个文件夹读不到（可能已移动，或当前环境没有桌面壳权限）'
+          : rg.files.length === 0
+            ? rg.status === 'loading'
+              ? '读取文件夹…'
+              : '这个文件夹里还没有 ERB 方言文件'
+            : undefined,
+    }));
+    return buildKojoFlatTree({
+      groups: [...kojoInputs, ...rootInputs],
+      subOpen,
+      dirCache,
+      pkgDirOf: pkgDirOfPrefix,
+      createInDir,
+    });
+    // 依赖里给的都是渲染帧现读的量（`renderLimitOf` / `pkgDirOf` 是每帧重建的纯闭包，
+    // 它们吃的 state 已经逐枚列在下面 ⇒ 不会读到上一帧）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, multiRootFs, fsRoots, project.rootDir, visible, rootGroupsVisible, opened, pkgFolder, subOpen, dirCache, plan, deferredFilter, createInDir]);
+
+  /**
+   * 本次挂载的行区间。
+   *
+   * 口上视图按视口裁；文件系统视图不裁（`fullRange`）——见上面那段取舍。
+   * 两视图都过这一格 ⇒ "非过滤态与过滤态走同一条虚拟化路径"是结构上的，不是两条 if。
+   */
+  const range: VisibleRange = view === 'kojo' ? visibleRange(tree.rows, scroll.top, scroll.h) : fullRange(tree.rows.length);
+  /**
+   * 现场变了就再试一次（目录列举回来 / 分组换了 / 视图切了 / 过滤词落定 / **行模型换了**）。
+   * 读的是 ref，没有待办就立刻返回——这条 effect 不会自己触发渲染。
+   *
+   * 为什么搬在行模型之后、并把 `tree` 放进依赖：虚拟化让"目标行挂不挂得出来"变成**行模型**的
+   * 属性——刚展开的那一组要等新模型算出来才认得出目标行（少了这条，展开后的自动定位会安静地不滚）。
+   */
+  useEffect(() => {
+    if (locateTarget.current !== null) runLocateRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, deferredFilter, view, dirCache, tree]);
+
+  /** 焦点行的下标（tid 是真源，下标每帧从模型现推 ⇒ 展开/收起之后仍指同一行） */
+  const focusIndex = focusTid === null ? -1 : indexOfId(tree, focusTid);
+
+  /**
+   * 目录缓存的淘汰保护集（WS-12）：正在显示的层一个都不许被挤掉。
+   *
+   * 每帧现读进 ref（`applyDirUpdates` 从 ref 取 ⇒ 现场变化不会让那枚回调换身份，
+   * 穿进行组件的 `toggleSub` 引用也就不会因此抖动）。
+   * 改前只护 `subOpen` 一件：点开过「真实文件夹内容」的包目录（键是包键）与焦点行 /
+   * 多选行所在层都露着，缓存超 400 条时会被淘汰成空白。
+   */
+  protectDirs.current = protectedDirKeysOf({
+    subOpen,
+    openPackageDirs: collectPackages(groups)
+      .filter((p) => pkgFolder.has(p.key))
+      .map((p) => p.dir),
+    focusPath: focusIndex >= 0 ? (rowAt(tree, focusIndex)?.path ?? null) : null,
+    selectedPaths: getSelectedPaths(),
+    editingDir: edit?.mode === 'create' ? edit.dir : edit?.mode === 'rename' ? parentDir(edit.path) : null,
+  });
+
+  const viewportH = (): number => {
+    const body = treeBodyRef.current;
+    return body === null || body.clientHeight <= 0 ? scroll.h : body.clientHeight;
+  };
+  const maxScroll = (): number => Math.max(0, tree.height - viewportH());
+
+  /** 把第 index 行滚进视口（先滚、后挂、再聚焦；判据是行模型的像素，不读 DOM 矩形） */
+  const scrollToIndex = (index: number): void => {
+    const row = rowAt(tree, index);
+    const body = treeBodyRef.current;
+    if (row === undefined || body === null) return;
+    const next = scrollToShow(row.top, body.scrollTop, viewportH(), maxScroll());
+    if (Math.abs(next - body.scrollTop) > 0.5) {
+      body.scrollTop = next;
+      setScroll((prev) => (prev.top === next ? prev : { ...prev, top: next }));
+    }
+  };
+
+  /**
+   * 展开 / 收起之前先记下锚点行在视口里的位置。
+   *
+   * 浏览器只会替我们保持 `scrollTop`，而"在它上面插入几十行"恰恰会让盯着的那一行跑掉；
+   * 这里改成保持**锚点行的视口偏移**（`anchorScrollTop` 那条纯判据）。
+   */
+  const captureAnchorImpl = (): void => {
+    const body = treeBodyRef.current;
+    const row = focusIndex >= 0 ? rowAt(tree, focusIndex) : undefined;
+    if (body === null || row === undefined || focusTid === null) {
+      anchorRow.current = null;
+      return;
+    }
+    anchorRow.current = { tid: row.id, top: row.top, scroll: body.scrollTop };
+  };
+  captureAnchorRef.current = captureAnchorImpl;
+
+  /**
+   * 锚点保持：展开 / 收起之后把焦点行顶回它原来在视口里的位置（WS-12「视口不跳」）。
+   *
+   * 浏览器只会替我们保持 `scrollTop`，而"在它上面插入几十行"恰恰会让盯着的那一行跑掉；
+   * 这里改成保持**锚点行的视口偏移**（`anchorScrollTop` 那条纯判据）。
+   *
+   * **有列举在途时续期**：点开一个包的"真实文件夹"要等 `listDir` 回来才算数，
+   * 中间那一格「读取目录…」只有 1 行，真清单回来时可能变成 20 行——都是插在锚点上面。
+   * 一次性的锚点会在第一段落地时用掉，剩下的那次插行就照样跳。续期到"没有 loading 为止"，
+   * 且只在焦点行自己还活着时续（焦点换了 = 作者已经不盯它了；行没了 = 收起的正是它）。
+   */
+  useLayoutEffect(() => {
+    const held = anchorRow.current;
+    anchorRow.current = null;
+    const body = treeBodyRef.current;
+    if (held === null || body === null) return;
+    const index = indexOfId(tree, held.tid);
+    const row = index >= 0 ? rowAt(tree, index) : undefined;
+    if (row === undefined || row.id !== focusTid) return;
+    const next = anchorScrollTop(held.top, row.top, held.scroll, Math.max(0, tree.height - (body.clientHeight || scroll.h)));
+    if (Math.abs(next - body.scrollTop) > 0.5) {
+      body.scrollTop = next;
+      setScroll((prev) => (prev.top === next ? prev : { ...prev, top: next }));
+    }
+    let loading = false;
+    dirCache.forEach((state) => {
+      if (state === 'loading') loading = true;
+    });
+    if (loading) anchorRow.current = { tid: row.id, top: row.top, scroll: body.scrollTop };
+  });
+
+  /**
+   * roving tabindex：整棵树**只有一个** tab 停靠点。
+   *
+   * 为什么走 DOM 而不是 props：焦点行下标每次移动都变，把它穿进行组件就是给 PS-16 那批
+   * memo 新增一位"每帧可能换引用的 prop"；而 tabindex 本来就是 DOM 的事（焦点在哪一行是
+   * DOM 的事实，不是渲染输入）。每帧只扫**挂载中**的行的这一格属性，代价与窗口同档。
+   *
+   * 同一趟扫描顺手把"焦点该落在哪一行"办结（`pendingFocus`）：键盘移动焦点时目标行可能
+   * 还在窗口外（滚动与挂载差一帧），这里等它挂出来再聚焦 ⇒ 不会出现"按了 End 焦点没了"。
+   * 模型里已经不存在的行号直接作废（不留一个将来会误抢焦点的待办）。
+   */
+  useLayoutEffect(() => {
+    const body = treeBodyRef.current;
+    if (body === null) return;
+    const rows = body.querySelectorAll<HTMLElement>('[role="treeitem"]');
+    let placed = false;
+    let target: HTMLElement | null = null;
+    for (const el of rows) {
+      const tid = el.dataset.tid;
+      const on = !placed && focusTid !== null && tid === focusTid;
+      const next = on ? 0 : -1;
+      if (el.tabIndex !== next) el.tabIndex = next;
+      if (on) placed = true;
+      if (tid !== undefined && tid === pendingFocus.current) target = el;
+    }
+    if (!placed && rows.length > 0 && rows[0]!.tabIndex !== 0) rows[0]!.tabIndex = 0;
+    if (pendingFocus.current !== null && indexOfId(tree, pendingFocus.current) < 0) pendingFocus.current = null;
+    if (target !== null) {
+      pendingFocus.current = null;
+      target.focus({ preventScroll: true });
+    }
+  });
+
+  /** 焦点交给当前焦点行（没有焦点行就落到第一个挂载的树项——E 车道接线契约的那半条） */
+  const focusRovingRow = (): void => {
+    const body = treeBodyRef.current;
+    if (body === null) return;
+    const rows = body.querySelectorAll<HTMLElement>('[role="treeitem"]');
+    let target: HTMLElement | null = null;
+    for (const el of rows) {
+      if (focusTid !== null && el.dataset.tid === focusTid) {
+        target = el;
+        break;
+      }
+    }
+    const hit = target ?? (rows[0] as HTMLElement | undefined) ?? null;
+    if (hit === null) return;
+    const tid = hit.dataset.tid;
+    if (tid !== undefined) {
+      setFocusTid(tid);
+      pendingFocus.current = tid;
+    }
+    hit.focus({ preventScroll: true });
+  };
+
+  /**
+   * 焦点落到第 index 行（键盘导航与 Shift 连选都收在这一条腿上）。
+   *
+   * 口径与 VSCode 的资源管理器一致：移动焦点即改动单选集合（Shift 从锚点连选），
+   * 结构行没有可勾选的身份 ⇒ 集合收回空（"勾了要比较的两份文件"那种集合由鼠标侧维持）。
+   */
+  const moveFocus = (index: number, extend: boolean): void => {
+    const row = rowAt(tree, index);
+    if (row === undefined) return;
+    if (extend) {
+      const from = anchorIdx.current >= 0 ? anchorIdx.current : focusIndex;
+      setSelected(rangePaths(tree, from, index));
+    } else {
+      anchorIdx.current = index;
+      setSelected(row.selectable && row.path !== '' ? [row.path] : []);
+    }
+    setFocusTid(row.id);
+    pendingFocus.current = row.id;
+    scrollToIndex(index);
+  };
+
+  /** 展开 / 收起一行（三种结构行各有各的现场集合；口径与既有的 toggle* 逐字相同） */
+  const setOpenRow = (row: FlatRow, want: boolean): void => {
+    captureAnchorRef.current();
+    if (row.kind === 'group') {
+      const key = row.id.slice(2);
+      setOpened((prev) => {
+        if (prev.has(key) === want) return prev;
+        const next = new Set(prev);
+        if (want) next.add(key);
+        else next.delete(key);
+        return next;
+      });
+      return;
+    }
+    if (row.kind === 'package') {
+      const pkgKey = row.id.slice(2);
+      setPkgFolder((prev) => {
+        if (prev.has(pkgKey) === want) return prev;
+        const next = new Set(prev);
+        if (want) next.add(pkgKey);
+        else next.delete(pkgKey);
+        return next;
+      });
+      if (want) ensureDir(row.path);
+      return;
+    }
+    if (row.kind === 'dir') {
+      setSubOpen((prev) => {
+        if (prev.has(row.path) === want) return prev;
+        const next = new Set(prev);
+        if (want) next.add(row.path);
+        else next.delete(row.path);
+        return next;
+      });
+      if (want) ensureDir(row.path);
+    }
+  };
+
+  /**
+   * 树容器的按键接管（WS-11）。
+   *
+   * 两道"不抢"的闸：① 事件源是行内编辑输入框 ⇒ 一个字都不碰（Enter/Esc 是它的）；
+   * ② 判据表以外的键一律 `noop`（白名单），既不 preventDefault 也不 stopPropagation ⇒
+   * Monaco、标签栏、宿主键位都在这套判据之外。命中了的键才 `stopPropagation`——
+   * 全局键位注册表也认 Ctrl+A / Delete 这类组合，不拦就会一次按键做两件事。
+   */
+  const handleTreeKey = (e: ReactKeyboardEvent<HTMLUListElement>): void => {
+    const src = e.target as HTMLElement | null;
+    if (src !== null && src.closest('input') !== null) return;
+    const cmd = planTreeKey(treeKeyEventOf(e), tree, focusIndex);
+    if (cmd.type === 'noop') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const row = 'index' in cmd ? rowAt(tree, cmd.index) : undefined;
+    switch (cmd.type) {
+      case 'focus':
+        moveFocus(cmd.index, cmd.extend);
+        break;
+      case 'expand':
+        if (row !== undefined) setOpenRow(row, true);
+        break;
+      case 'collapse':
+        if (row !== undefined) setOpenRow(row, false);
+        break;
+      case 'toggle':
+        if (row !== undefined) setOpenRow(row, !row.open);
+        break;
+      case 'open':
+        if (row !== undefined && row.path !== '') {
+          anchorIdx.current = cmd.index;
+          setFocusTid(row.id);
+          setSelected([row.path]);
+          onOpenFile(row.path);
+        }
+        break;
+      case 'rename':
+        if (row !== undefined && row.path !== '') beginRename(row.path, rowIsDir(tree, cmd.index));
+        break;
+      case 'delete':
+        if (row !== undefined && row.path !== '') doDelete(row.path, rowIsDir(tree, cmd.index));
+        break;
+      case 'selectAll':
+        // 「当前可见行」= 窗口切到的那段行（判据是行模型，不是 DOM——被裁掉的行不该进集合）
+        setSelected(rangePaths(tree, range.start, range.end - 1));
+        break;
+    }
+  };
+
+  /**
+   * 行上的点击（容器冒泡侧；WS-11 的鼠标腿）。
+   *
+   * 行组件自己只处理 Ctrl 勾选与纯单击打开，**Shift 那一支被它们明确让开**（不 preventDefault
+   * 就会把连选做成打开）。这里补齐：焦点带到被点的那一行，并按 Shift 做区间连选。
+   */
+  const handleTreeClick = (e: ReactMouseEvent<HTMLUListElement>): void => {
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>('[role="treeitem"]') ?? null;
+    if (el === null) return;
+    const tid = el.dataset.tid;
+    if (tid === undefined) return;
+    const index = indexOfId(tree, tid);
+    if (index < 0) return;
+    const plan2 = planRowClick({ shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey }, index);
+    if (plan2.type === 'none') return;
+    setFocusTid(tid);
+    if (plan2.type === 'range') {
+      const from = anchorIdx.current >= 0 ? anchorIdx.current : focusIndex;
+      setSelected(rangePaths(tree, from, index));
+      // 连选之后焦点也在被点的那一行上（浏览器会把焦点留在被点的按钮上，键盘接着走就行）
+      pendingFocus.current = tid;
+      return;
+    }
+    anchorIdx.current = index;
+  };
+
+  /** 滚动现场（虚拟化的唯一输入；同一档位不重排渲染） */
+  const handleTreeScroll = (e: ReactUIEvent<HTMLUListElement>): void => {
+    const body = e.currentTarget;
+    const top = body.scrollTop;
+    const h = body.clientHeight;
+    setScroll((prev) => (prev.top === top && prev.h === h ? prev : { top, h }));
   };
 
   /** 平铺 ERB 行的行内重命名（FileRows 是无知组件：编辑节点在这里造好塞进去；
@@ -1463,7 +1938,25 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           {revealNote}
         </p>
       ) : null}
-      <ul className="tree-groups" ref={treeBodyRef}>
+      {/* WS-11 树的语义根：`role="tree"` + `aria-multiselectable`（可勾选 = 多项可选）。
+          `tabIndex=-1` 不是给 Tab 用的，是给"把焦点交给树"用的那条腿——E 车道的命令拿到
+          `document.querySelector('.file-tree [role="tree"]')` 之后 `.focus()`，
+          下面的 `onFocus` 就把键盘焦点转给当前焦点行（没有焦点行时落到第一行）。
+          行本身用 roving tabindex（整棵树只有一个停靠点），判据与接线见上面那两个 layout effect。 */}
+      <ul
+        className="tree-groups"
+        ref={treeBodyRef}
+        role="tree"
+        aria-multiselectable="true"
+        tabIndex={-1}
+        onKeyDown={handleTreeKey}
+        onClick={handleTreeClick}
+        onScroll={handleTreeScroll}
+        onFocus={(e) => {
+          if (e.target !== e.currentTarget) return;
+          focusRovingRow();
+        }}
+      >
         {view === 'fs' ? (
           // 文件系统视图（B5/D1）：单根 = project.rootDir 第一层直接铺开（原形态，零扰动）；
           // 有附加根 = 每根一个可折叠分组头并列（复用 subOpen 折叠 + dirCache 惰性列举，
@@ -1488,15 +1981,24 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                   ? rootFolder.role === 'extra'
                   : (extraRoots ?? []).some((r) => pkey(r) === pkey(root)));
               return (
-                <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'}>
+                <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'} role="none">
                   {/* 组头行（WS-08）：折叠按钮 + 只读/可写标签 + 移除入口。
                       行尾按钮不能嵌进折叠按钮（button 里套 button 是非法结构），故加这层行容器。
                       WS-04 合并后可写态优先取工作区模型（角色判据）；模型缺席才按 io 现判。 */}
                   <div className="tree-group-head">
                     <button
                       className="tree-group-btn"
+                      role="treeitem"
+                      aria-level={1}
+                      aria-expanded={isOpen}
+                      aria-selected={false}
+                      tabIndex={-1}
+                      data-tid={root}
                       title={`${root}${fsRootRoleOf(root) ? `（${fsRootRoleOf(root)}）` : ''}`}
-                      onClick={() => toggleSub(root)}
+                      onClick={() => {
+                        captureAnchorRef.current();
+                        toggleSub(root);
+                      }}
                     >
                       <span className="caret">
                         <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -1537,7 +2039,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                     body={() => (
                       <ul className="tree-files">
                         {dirCache.has(root) ? (
-                          <DirRows {...dirRowsBase} dir={root} depth={0} skip={EMPTY_SKIP} />
+                          <DirRows {...dirRowsBase} dir={root} depth={0} skip={EMPTY_SKIP} levelBase={2} />
                         ) : (
                           <li className="tree-note">读取目录…</li>
                         )}
@@ -1554,12 +2056,19 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           )
         ) : (
           <>
-        {visible.map((g) => {
+        {visible.map((g, groupIdx) => {
           const isOpen = opened.has(g.label) || deferredFilter.length > 0;
+          const groupTid = groupRowId(g.label);
           return (
-            <li key={g.label} className="tree-group" data-open={isOpen ? '1' : '0'}>
+            <li key={g.label} className="tree-group" data-open={isOpen ? '1' : '0'} role="none">
               <button
                 className="tree-group-btn"
+                role="treeitem"
+                aria-level={1}
+                aria-expanded={isOpen}
+                aria-selected={false}
+                tabIndex={-1}
+                data-tid={groupTid}
                 title={`${g.label}（右键查看更多）`}
                 data-drop-dir={g.prefix || undefined}
                 // 行面（1023）：行数据放 DOM，面的 build 从 target 读——不放闭包（多实例安全）
@@ -1567,7 +2076,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                 data-tree-kind="group"
                 data-tree-label={g.label}
                 data-tree-path={g.prefix}
-                onClick={() => toggleGroup(g.label)}
+                onClick={() => {
+                  captureAnchorRef.current();
+                  toggleGroup(g.label);
+                }}
               >
                 <span className="caret">
                   <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -1581,18 +2093,29 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
               <TreeFoldBody
                 open={isOpen}
                 body={() => (
-                <ul className="tree-files">
-                  {g.subs.map((s) => {
+                <ul className="tree-files" role="group">
+                  {g.subs.map((s, subIdx) => {
+                    // 本组本次挂载的行区间裁到"这个包的 ERB 列表 / 这段根散文件"这一格
+                    // （结构行——组头、包头、包内真实文件夹——一律常驻，见 `file-tree-flat` 的取舍说明）
+                    const block = tree.blockOf(groupIdx, subIdx);
+                    const slice = block === undefined ? null : sliceBlock(block, tree.rows, range);
+                    const from = slice === null ? 0 : slice.from - (block?.start ?? 0);
+                    const count = slice === null ? renderLimitOf(g, s) : slice.to - slice.from;
                     // 根散文件（无包目录兜底）：直接平铺在角色组下
                     if (s.label === null) {
                       return (
-                        <FileRows
-                          key={`${g.label}::(根散文件)`}
-                          files={s.files}
-                          limit={renderLimitOf(g, s)}
-                          onOpenFile={onOpenFile}
-                          edit={fileEdit}
-                        />
+                        <Fragment key={`${g.label}::(根散文件)`}>
+                          <TreeSpacer px={slice?.leadPx ?? 0} />
+                          <FileRows
+                            files={s.files}
+                            from={from}
+                            limit={count}
+                            level={2}
+                            onOpenFile={onOpenFile}
+                            edit={fileEdit}
+                          />
+                          <TreeSpacer px={slice?.trailPx ?? 0} />
+                        </Fragment>
                       );
                     }
                     const label = s.label;
@@ -1601,7 +2124,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                     const isFolder = pkgFolder.has(pkgKey) && deferredFilter.length === 0;
                     const renamingPkg = edit?.mode === 'rename' && edit.isDir && edit.path === pkgDir;
                     return (
-                      <li key={label} className="tree-package-node">
+                      <li key={label} className="tree-package-node" role="none">
                         {renamingPkg ? (
                           <EditRow
                             value={editValue}
@@ -1613,13 +2136,22 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                         ) : (
                           <button
                             className="tree-package"
+                            role="treeitem"
+                            aria-level={2}
+                            aria-expanded={isFolder}
+                            aria-selected={false}
+                            tabIndex={-1}
+                            data-tid={packageRowId(pkgKey)}
                             title={pkgDir}
                             data-drop-dir={pkgDir}
                             data-context-surface="file-tree"
                             data-tree-kind="package"
                             data-tree-label={label}
                             data-tree-path={pkgDir}
-                            onClick={() => togglePkgFolder(pkgKey, pkgDir)}
+                            onClick={() => {
+                              captureAnchorRef.current();
+                              togglePkgFolder(pkgKey, pkgDir);
+                            }}
                           >
                             <span className="caret">
                               <Icon name={isFolder ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -1637,17 +2169,21 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                         )}
                         {/* 追加式：真实文件夹内容在上、ERB 列表原地不动（无动画、不卸载） */}
                         {isFolder ? (
-                          <ul className="tree-files nested pkg-real">
-                            <DirRows {...dirRowsBase} dir={pkgDir} depth={0} skip={erbKeysOf(s)} />
+                          <ul className="tree-files nested pkg-real" role="group">
+                            <DirRows {...dirRowsBase} dir={pkgDir} depth={0} skip={erbKeysOf(s)} levelBase={3} />
                           </ul>
                         ) : null}
-                        <ul className="tree-files nested">
+                        <ul className="tree-files nested" role="group">
+                          <TreeSpacer px={slice?.leadPx ?? 0} />
                           <FileRows
                             files={s.files}
-                            limit={renderLimitOf(g, s)}
+                            from={from}
+                            limit={count}
+                            level={3}
                             onOpenFile={onOpenFile}
                             edit={fileEdit}
                           />
+                          <TreeSpacer px={slice?.trailPx ?? 0} />
                         </ul>
                       </li>
                     );
@@ -1660,10 +2196,13 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         })}
         {/* author / extra 根的独立顶层分组（WS-04）：组头标明可写 / 只读，行可点开。
             游戏内文件**不在这里**（角色分组已经列过一遍），剔除在 `groups` 那一格做过。 */}
-        {rootGroupsVisible.map(({ folder, key, files, status, hits }) => {
+        {rootGroupsVisible.map(({ folder, key, files, status, hits }, ri) => {
           const isOpen = opened.has(key) || deferredFilter.length > 0;
+          const groupIdx = visible.length + ri;
+          const block = tree.blockOf(groupIdx, 0);
+          const slice = block === undefined ? null : sliceBlock(block, tree.rows, range);
           return (
-            <li key={key} className="tree-group tree-root-group" data-open={isOpen ? '1' : '0'}>
+            <li key={key} className="tree-group tree-root-group" data-open={isOpen ? '1' : '0'} role="none">
               {/* 组头行：折叠按钮 + （仅会话附加根）移除入口。行尾按钮不能嵌进折叠按钮
                   （button 里套 button 是非法结构），故与 fs 视图同用一层行容器。
                   WS-08：移除入口必须住在这里——附加根常落在项目根之内，fs 视图会把它
@@ -1671,13 +2210,22 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
               <div className="tree-group-head">
                 <button
                   className="tree-group-btn"
+                  role="treeitem"
+                  aria-level={1}
+                  aria-expanded={isOpen}
+                  aria-selected={false}
+                  tabIndex={-1}
+                  data-tid={groupRowId(key)}
                   title={`${folder.path}（${folder.writable ? '可写' : '只读'}）`}
                   data-drop-dir={folder.path}
                   data-context-surface="file-tree"
                   data-tree-kind="group"
                   data-tree-label={folder.label}
                   data-tree-path={folder.path}
-                  onClick={() => toggleGroup(key)}
+                  onClick={() => {
+                    captureAnchorRef.current();
+                    toggleGroup(key);
+                  }}
                 >
                   <span className="caret">
                     <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -1700,15 +2248,26 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
               <TreeFoldBody
                 open={isOpen}
                 body={() => (
-                  <ul className="tree-files">
+                  <ul className="tree-files" role="group">
                     {status === 'error' ? (
-                      <li className="tree-note">这个文件夹读不到（可能已移动，或当前环境没有桌面壳权限）</li>
+                      <li className="tree-note" role="presentation">这个文件夹读不到（可能已移动，或当前环境没有桌面壳权限）</li>
                     ) : files.length === 0 ? (
-                      <li className="tree-note">
+                      <li className="tree-note" role="presentation">
                         {status === 'loading' ? '读取文件夹…' : '这个文件夹里还没有 ERB 方言文件'}
                       </li>
                     ) : (
-                      <FileRows files={hits} limit={hits.length} onOpenFile={onOpenFile} edit={fileEdit} />
+                      <>
+                        <TreeSpacer px={slice?.leadPx ?? 0} />
+                        <FileRows
+                          files={hits}
+                          from={slice === null ? 0 : slice.from - (block?.start ?? 0)}
+                          limit={slice === null ? hits.length : slice.to - slice.from}
+                          level={2}
+                          onOpenFile={onOpenFile}
+                          edit={fileEdit}
+                        />
+                        <TreeSpacer px={slice?.trailPx ?? 0} />
+                      </>
                     )}
                   </ul>
                 )}
