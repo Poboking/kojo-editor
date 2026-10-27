@@ -164,6 +164,13 @@ function makeIo(): CountingIo {
       calls.push(`ensureDir:${p}`);
       fs.mkdir(p);
     },
+    // 独占创建（WS-01）：市场链路不新建空条目，`false` = "没建"（判据不从这里过）
+    async createFileExclusive() {
+      return false;
+    },
+    async createDirExclusive() {
+      return false;
+    },
     async listDir(p) {
       return fs.children(p);
     },

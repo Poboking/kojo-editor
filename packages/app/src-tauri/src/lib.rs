@@ -893,6 +893,71 @@ async fn ensure_dir(
     .await
 }
 
+/// 独占创建空文件的落盘核心（命令与单测共用；允许域闸在命令侧）。
+///
+/// **竞态闭合点**：`create_new(true)` 落成 OS 的 `CREATE_NEW`（Windows）/ `O_CREAT|O_EXCL`
+/// ——"判存在"与"建文件"是**同一个原子系统调用**。两个进程同时建同名文件时，OS 只让
+/// 一个成功，另一个拿到 `AlreadyExists` ⇒ `Ok(false)`；不存在"先 exists 再写"之间那扇
+/// 会被别人塞进同名文件、然后被这次零字节写**静默清空**的窗口。
+///
+/// 已存在 ⇒ `Ok(false)` 且**一个字节都不动**（不打开写、不截断）。
+/// 其它错误（父目录不存在、权限、路径非法……）原样上抛，绝不折叠成"已存在"。
+fn create_file_exclusive_at(path: &Path) -> Result<bool, String> {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        // 同名路径是**目录**时各平台报法不一（Windows 打开目录 PermissionDenied、
+        // Linux EISDIR）⇒ 用 `is_dir` 归一成"已存在"，不把平台差异漏给 UI 文案。
+        Err(_) if path.is_dir() => Ok(false),
+        Err(e) => Err(format!("create {path}: {e}", path = path.display())),
+    }
+}
+
+#[tauri::command]
+async fn create_file_exclusive(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+) -> Result<bool, String> {
+    // 与 `write_file_bytes` 同闸同文案：越权先拒，盘上不留任何东西
+    ensure_write_allowed(&app, &state, Path::new(&path), "create")?;
+    run_blocking("create_file_exclusive", move || {
+        create_file_exclusive_at(Path::new(&path))
+    })
+    .await
+}
+
+/// 独占创建目录的落盘核心（命令与单测共用；允许域闸在命令侧）。
+///
+/// 用 `create_dir`（**非递归**）而不是 `create_dir_all`：后者在目标已存在时静默成功，
+/// 会把"同名文件夹已经在那儿"变成一次看不见的 no-op。这里要的是 `mkdir` 的原子
+/// EEXIST 语义——已存在 ⇒ `Ok(false)`。
+fn create_dir_exclusive_at(path: &Path) -> Result<bool, String> {
+    match std::fs::create_dir(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(_) if path.is_dir() => Ok(false),
+        Err(e) => Err(format!("create dir {path}: {e}", path = path.display())),
+    }
+}
+
+#[tauri::command]
+async fn create_dir_exclusive(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+) -> Result<bool, String> {
+    ensure_write_allowed(&app, &state, Path::new(&path), "create_dir")?;
+    run_blocking("create_dir_exclusive", move || {
+        create_dir_exclusive_at(Path::new(&path))
+    })
+    .await
+}
+
 /// 列目录的同步核心（命令侧只是 async 壳；单测直接打这一层）。
 fn list_dir_of(path: &str) -> Result<Vec<DirEntryDto>, String> {
     let mut out = Vec::new();
@@ -3424,6 +3489,8 @@ pub fn run() {
             read_file_bytes_raw,
             write_file_bytes,
             ensure_dir,
+            create_file_exclusive,
+            create_dir_exclusive,
             list_dir,
             walk_dir,
             path_exists,
@@ -5094,6 +5161,135 @@ mod batch_io_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+}
+
+#[cfg(test)]
+mod exclusive_create_tests {
+    //! WS-01 的正解判据：新建走 OS 级独占创建（`CREATE_NEW` / `O_CREAT|O_EXCL`），
+    //! 不再"先 exists 再写"。
+    //!
+    //! 钉住三件事：
+    //! 1. 同一路径第一次 `true`、第二次 `false`（不覆盖、不截断，原字节一字不丢）；
+    //! 2. 目录同理；且父目录不存在等错误**原样上抛**，不折叠成"已存在"；
+    //! 3. 允许域闸在落盘**之前**生效（域外连空文件都不许造出来）。
+    use super::{
+        create_dir_exclusive_at, create_file_exclusive_at, ensure_write_allowed_from_parts,
+        WriteDomainState,
+    };
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("kojo-excl-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn file_exclusive_is_true_once_then_false_and_never_touches_existing_bytes() {
+        let dir = temp_dir("file");
+        let target = dir.join("a.ERB");
+
+        assert!(create_file_exclusive_at(&target).unwrap(), "首次创建应成功");
+        assert_eq!(std::fs::read(&target).unwrap(), Vec::<u8>::new(), "新建的是空文件");
+
+        let before = "@FOO\nPRINTL 1\n";
+        std::fs::write(&target, before).unwrap();
+        assert!(!create_file_exclusive_at(&target).unwrap(), "第二次必须是 false");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), before, "已存在时字节一字不许动");
+        assert!(!create_file_exclusive_at(&target).unwrap());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dir_exclusive_is_true_once_then_false_and_keeps_existing_content() {
+        let dir = temp_dir("dir");
+        let target = dir.join("新包");
+
+        assert!(create_dir_exclusive_at(&target).unwrap(), "首次建目录应成功");
+        assert!(target.is_dir());
+        std::fs::write(target.join("inner.ERB"), "keep").unwrap();
+
+        assert!(!create_dir_exclusive_at(&target).unwrap(), "同名目录已在 ⇒ false");
+        assert_eq!(std::fs::read_to_string(target.join("inner.ERB")).unwrap(), "keep");
+
+        // 父目录不存在：不是"已存在"，必须原样报错
+        let orphan = dir.join("missing").join("sub");
+        assert!(create_dir_exclusive_at(&orphan).is_err(), "父目录缺失应上抛");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同名槽位被**另一个类型**占着也要按"已存在"回 false（Windows 打开目录报
+    /// PermissionDenied、Linux 报 EISDIR ⇒ 由 `is_dir` 归一），不能漏成英文系统错误。
+    #[test]
+    fn slot_taken_by_other_kind_reports_exists() {
+        let dir = temp_dir("crosskind");
+        let taken = dir.join("同名");
+        std::fs::create_dir_all(&taken).unwrap();
+        assert!(!create_file_exclusive_at(&taken).unwrap(), "同名目录占位 ⇒ false");
+        assert!(taken.is_dir(), "不许把占位目录改掉");
+
+        let taken_file = dir.join("占位文件");
+        std::fs::write(&taken_file, "x").unwrap();
+        assert!(!create_dir_exclusive_at(&taken_file).unwrap(), "同名文件占位 ⇒ false");
+        assert_eq!(std::fs::read_to_string(&taken_file).unwrap(), "x");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 允许域闸先于落盘：命令侧一旦放行才轮到 `*_at`，故域外路径连空文件都不该出现。
+    #[test]
+    fn gate_rejects_outside_domain_before_anything_is_created() {
+        let appdata = temp_dir("appdata");
+        let outside = temp_dir("outside");
+        let state = WriteDomainState::default();
+        let target = outside.join("x.ERB");
+
+        let err =
+            ensure_write_allowed_from_parts(&appdata, &state, &target, "create").unwrap_err();
+        assert!(err.contains("不在可写范围内"), "越权文案应说明域外：{err}");
+        assert!(!target.exists(), "闸拒之后盘上不许留下任何东西");
+
+        // 域内（appDataDir 常驻允许）照常放行并真的建出来
+        let inside = appdata.join("work.ERB");
+        ensure_write_allowed_from_parts(&appdata, &state, &inside, "create").unwrap();
+        assert!(create_file_exclusive_at(&inside).unwrap());
+
+        let _ = std::fs::remove_dir_all(&appdata);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// 竞态本体：两个线程同时抢同一个路径，OS 只放行一个（另一个 `AlreadyExists`）。
+    #[test]
+    fn concurrent_creates_of_same_path_win_exactly_once() {
+        let dir = temp_dir("race");
+        let target = Arc::new(dir.join("race.ERB"));
+        let barrier = Arc::new(Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let target = Arc::clone(&target);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                create_file_exclusive_at(&target).unwrap()
+            }));
+        }
+        let wins = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|ok| *ok)
+            .count();
+        assert_eq!(wins, 1, "同一路径并发独占创建只许一个成功");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

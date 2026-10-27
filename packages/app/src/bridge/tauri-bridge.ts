@@ -65,6 +65,18 @@ export const tauriBridge: PlatformBridge = {
     await invoke('ensure_dir', { path });
   },
 
+  /**
+   * 独占创建（WS-01）：Rust 侧 `create_new` / `create_dir` 的原子 EEXIST 语义，
+   * `false` = 已存在且盘上零改动。
+   */
+  async createFileExclusive(path: string): Promise<boolean> {
+    return invoke<boolean>('create_file_exclusive', { path });
+  },
+
+  async createDirExclusive(path: string): Promise<boolean> {
+    return invoke<boolean>('create_dir_exclusive', { path });
+  },
+
   async listDir(path: string) {
     return invoke('list_dir', { path });
   },

@@ -748,7 +748,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         return;
       }
       // 同名守门（WS-01）：盘上已有同名条目 ⇒ 不写不覆盖，编辑行留着让作者改名。
-      // 判据与文案在 `file-tree-create`（存在时 writeBytes / ensureDir 一次都不调）。
+      // 判据与文案在 `file-tree-create`；落盘走 OS 级独占创建（O_EXCL），不再先查后写。
       void createEntryIfAbsent(io!, { target, kind: e.kind, name }).then(
         (outcome) => {
           if (!outcome.created) {

@@ -2,89 +2,89 @@ import { describe, expect, it } from 'vitest';
 import { createEntryIfAbsent, entryExistsMessage } from '../src/ui/file-tree-create';
 
 /**
- * WS-01：文件树新建同名条目不得覆盖。
+ * WS-01：文件树新建同名条目不得覆盖（2026-10-27 独占创建批之后）。
  *
  * 事故：`commitEdit` 的 create 模式原来直接 `writeBytes(target, 空)` / `ensureDir(target)`，
- * 盘上已有同名文件时把它**静默清空**。判据收在 `file-tree-create`（组件只管接线）：
- * - 存在 ⇒ 一次写/建都不调、原内容不变、给人话（文件 / 文件夹分别措辞）；
- * - 不存在 ⇒ 照旧建空文件 / 建目录（与既有新建链路一致）；
- * - IO 失败 ⇒ 原错误对象原样上抛（调用侧 `noteErr` 才有真实原因可说），exists 判不出来时
- *   也绝不"当成不存在"去盲写。
+ * 盘上已有同名文件时把它**静默清空**。修法不是"先 exists 再写"（那只是把窗口缩小），
+ * 而是把判存在与建条目交给 OS 级独占创建原语（Rust `CREATE_NEW` / `mkdir`）。
+ *
+ * 本文件钉住 app 侧接线：
+ * - 原语返回 false ⇒ 既有「已存在同名…，未覆盖」文案，编辑行留着（`created:false`）；
+ * - 原语返回 true ⇒ 真建了（`created:true`）；
+ * - 原语抛错（越权 / 权限 / 父目录没了）⇒ 同一个错误对象原样上抛，绝不折叠成"已存在"；
+ * - **端口里根本没有 exists / writeBytes**：假 IO 只实现两条独占原语，"先查后写"在
+ *   类型上就无处落脚（下面用 `Object.keys` 把端口的形状也钉一下）。
  *
  * 独立成文件（不塞进 `file-tree.test.ts`）的原因：后者在性能分池的排除表里
  * （`tools/perf-suite.mjs`），主池 `pnpm test` 根本不会跑它——判据放那儿等于没锁。
  */
 
 interface FakeCreateIo {
-  files: Map<string, string>;
-  dirs: Set<string>;
-  calls: { exists: number; writeBytes: number; ensureDir: number };
+  /** 盘上"真实存在"的条目（判据只剩这一份事实，没有第二套 exists 替身） */
+  entries: Set<string>;
+  calls: { createFileExclusive: number; createDirExclusive: number };
   io: {
-    exists(path: string): Promise<boolean>;
-    writeBytes(path: string, data: Uint8Array): Promise<void>;
-    ensureDir(path: string): Promise<void>;
+    createFileExclusive(path: string): Promise<boolean>;
+    createDirExclusive(path: string): Promise<boolean>;
   };
 }
 
 function fakeCreateIo(
-  init: { files?: Record<string, string>; dirs?: string[] } = {},
-  fail: { exists?: Error; write?: Error; dir?: Error } = {},
+  init: { files?: string[]; dirs?: string[] } = {},
+  fail: { file?: Error; dir?: Error } = {},
 ): FakeCreateIo {
-  const files = new Map(Object.entries(init.files ?? {}));
-  const dirs = new Set(init.dirs ?? []);
-  const calls = { exists: 0, writeBytes: 0, ensureDir: 0 };
+  const entries = new Set([...(init.files ?? []), ...(init.dirs ?? [])]);
+  const calls = { createFileExclusive: 0, createDirExclusive: 0 };
   return {
-    files,
-    dirs,
+    entries,
     calls,
     io: {
-      async exists(path) {
-        calls.exists += 1;
-        if (fail.exists) throw fail.exists;
-        return files.has(path) || dirs.has(path);
+      // 独占原语的语义替身：已在册 ⇒ false（一个字节都不动）；不在册 ⇒ true
+      async createFileExclusive(path) {
+        calls.createFileExclusive += 1;
+        if (fail.file) throw fail.file;
+        if (entries.has(path)) return false;
+        entries.add(path);
+        return true;
       },
-      async writeBytes(path, data) {
-        calls.writeBytes += 1;
-        if (fail.write) throw fail.write;
-        files.set(path, new TextDecoder().decode(data));
-      },
-      async ensureDir(path) {
-        calls.ensureDir += 1;
+      async createDirExclusive(path) {
+        calls.createDirExclusive += 1;
         if (fail.dir) throw fail.dir;
-        dirs.add(path);
+        if (entries.has(path)) return false;
+        entries.add(path);
+        return true;
       },
     },
   };
 }
 
 describe('createEntryIfAbsent · 文件', () => {
-  it('已存在 ⇒ 不写、原内容不变，给「已存在同名文件，未覆盖：xxx」', async () => {
-    const f = fakeCreateIo({ files: { 'C:/p/kojo/001/a.ERB': '@FOO\nPRINTL 1\n' } });
+  it('已存在 ⇒ 原语回 false，给「已存在同名文件，未覆盖：xxx」且不新建', async () => {
+    const f = fakeCreateIo({ files: ['C:/p/kojo/001/a.ERB'] });
     const out = await createEntryIfAbsent(f.io, {
       target: 'C:/p/kojo/001/a.ERB',
       kind: 'file',
       name: 'a.ERB',
     });
     expect(out).toEqual({ created: false, reason: 'exists', message: '已存在同名文件，未覆盖：a.ERB' });
-    expect(f.calls.writeBytes).toBe(0);
-    expect(f.calls.ensureDir).toBe(0);
-    expect(f.calls.exists).toBe(1);
-    expect(f.files.get('C:/p/kojo/001/a.ERB')).toBe('@FOO\nPRINTL 1\n'); // 原内容一字不丢
+    expect(f.calls.createFileExclusive).toBe(1);
+    expect(f.calls.createDirExclusive).toBe(0);
+    expect(f.entries.has('C:/p/kojo/001/a.ERB')).toBe(true);
   });
 
-  it('不存在 ⇒ 写一次空字节（新建空文件走既有写链路）', async () => {
+  it('不存在 ⇒ 独占原语建一次空文件，created:true', async () => {
     const f = fakeCreateIo();
     await expect(
       createEntryIfAbsent(f.io, { target: 'C:/p/kojo/001/new.ERB', kind: 'file', name: 'new.ERB' }),
     ).resolves.toEqual({ created: true });
-    expect(f.calls.writeBytes).toBe(1);
-    expect(f.calls.ensureDir).toBe(0);
-    expect(f.files.get('C:/p/kojo/001/new.ERB')).toBe('');
+    expect(f.calls.createFileExclusive).toBe(1);
+    expect(f.calls.createDirExclusive).toBe(0);
+    expect(f.entries.has('C:/p/kojo/001/new.ERB')).toBe(true);
   });
 });
 
 describe('createEntryIfAbsent · 文件夹', () => {
-  it('已存在 ⇒ 不 ensureDir，给「已存在同名文件夹，未覆盖：xxx」', async () => {
+  it('已存在 ⇒ 原语回 false，给「已存在同名文件夹，未覆盖：xxx」', async () => {
     const f = fakeCreateIo({ dirs: ['C:/p/kojo/001/新包'] });
     const out = await createEntryIfAbsent(f.io, {
       target: 'C:/p/kojo/001/新包',
@@ -92,28 +92,28 @@ describe('createEntryIfAbsent · 文件夹', () => {
       name: '新包',
     });
     expect(out).toEqual({ created: false, reason: 'exists', message: '已存在同名文件夹，未覆盖：新包' });
-    expect(f.calls.writeBytes).toBe(0);
-    expect(f.calls.ensureDir).toBe(0);
+    expect(f.calls.createFileExclusive).toBe(0);
+    expect(f.calls.createDirExclusive).toBe(1);
   });
 
-  it('不存在 ⇒ ensureDir 一次', async () => {
+  it('不存在 ⇒ 独占原语建一次目录，created:true', async () => {
     const f = fakeCreateIo();
     await expect(
       createEntryIfAbsent(f.io, { target: 'C:/p/kojo/001/newdir', kind: 'dir', name: 'newdir' }),
     ).resolves.toEqual({ created: true });
-    expect(f.calls.ensureDir).toBe(1);
-    expect(f.calls.writeBytes).toBe(0);
-    expect(f.dirs.has('C:/p/kojo/001/newdir')).toBe(true);
+    expect(f.calls.createDirExclusive).toBe(1);
+    expect(f.calls.createFileExclusive).toBe(0);
+    expect(f.entries.has('C:/p/kojo/001/newdir')).toBe(true);
   });
 });
 
 describe('createEntryIfAbsent · 错误原因透传', () => {
-  it('写失败 / 建失败 ⇒ reject 同一个错误对象（调用侧 noteErr 说得出真实原因）', async () => {
-    const werr = new Error('disk full');
-    const w = fakeCreateIo({}, { write: werr });
+  it('原语失败（越权 / 权限 / 父目录没了）⇒ reject 同一个错误对象，不折叠成「已存在」', async () => {
+    const ferr = new Error('disk full');
+    const f = fakeCreateIo({}, { file: ferr });
     await expect(
-      createEntryIfAbsent(w.io, { target: 'C:/p/x.ERB', kind: 'file', name: 'x.ERB' }),
-    ).rejects.toBe(werr);
+      createEntryIfAbsent(f.io, { target: 'C:/p/x.ERB', kind: 'file', name: 'x.ERB' }),
+    ).rejects.toBe(ferr);
 
     const derr = new Error('permission denied');
     const d = fakeCreateIo({}, { dir: derr });
@@ -121,18 +121,17 @@ describe('createEntryIfAbsent · 错误原因透传', () => {
       createEntryIfAbsent(d.io, { target: 'C:/p/d', kind: 'dir', name: 'd' }),
     ).rejects.toBe(derr);
   });
+});
 
-  it('exists 判不出来 ⇒ 同样 reject，且一次写/建都不调（不盲写）', async () => {
-    const eerr = new Error('io unavailable');
-    const e = fakeCreateIo({}, { exists: eerr });
-    await expect(
-      createEntryIfAbsent(e.io, { target: 'C:/p/y.ERB', kind: 'file', name: 'y.ERB' }),
-    ).rejects.toBe(eerr);
-    await expect(
-      createEntryIfAbsent(e.io, { target: 'C:/p/y', kind: 'dir', name: 'y' }),
-    ).rejects.toBe(eerr);
-    expect(e.calls.writeBytes).toBe(0);
-    expect(e.calls.ensureDir).toBe(0);
+describe('CreateEntryIo · 端口形状（先查后写在类型上无处落脚）', () => {
+  it('只有两条独占原语：没有 exists / writeBytes / ensureDir', () => {
+    const f = fakeCreateIo();
+    expect(Object.keys(f.io).sort()).toEqual(['createDirExclusive', 'createFileExclusive']);
+    // 反面钉：本模块用到的 IO 面就是 FileIO 的子集，且不含那三个历史方法名
+    const port = f.io as unknown as Record<string, unknown>;
+    expect(port.exists).toBeUndefined();
+    expect(port.writeBytes).toBeUndefined();
+    expect(port.ensureDir).toBeUndefined();
   });
 });
 

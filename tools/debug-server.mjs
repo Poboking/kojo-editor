@@ -631,7 +631,8 @@ async function searchText(state, request, admitRead) {
 
 export const SUPPORTED_COMMANDS = Object.freeze([
   'app_data_dir', 'append_frontend_log', 'cancel_search', 'choose_directory', 'choose_file',
-  'choose_workspace_root', 'clear_write_domain', 'copy_file', 'encode_string', 'ensure_dir',
+  'choose_workspace_root', 'clear_write_domain', 'copy_file', 'create_dir_exclusive',
+  'create_file_exclusive', 'encode_string', 'ensure_dir',
   'export_file', 'list_dir', 'market_device_token', 'market_download', 'market_extract',
   'market_fetch_text', 'market_publish', 'open_url_external', 'path_exists', 'read_file_bytes_raw',
   'pick_directory', 'read_files_raw', 'register_write_domain', 'remove_dir', 'remove_file', 'rename_path',
@@ -807,6 +808,31 @@ export async function createDebugServer(options) {
       admitWrite(to);
       await fs.mkdir(path.dirname(to), { recursive: true });
       await fs.copyFile(from, to);
+    },
+    create_dir_exclusive: async (args) => {
+      // 独占建目录（WS-01 的调试宿镜像）：非递归 mkdir，EEXIST ⇒ false（与 Rust create_dir 同口径）
+      const p = norm(args?.path);
+      admitWrite(p);
+      try {
+        await fs.mkdir(p);
+        return true;
+      } catch (err) {
+        if (err?.code === 'EEXIST') return false;
+        throw err;
+      }
+    },
+    create_file_exclusive: async (args) => {
+      // O_CREAT|O_EXCL：判存在与建文件是同一个原子调用，EEXIST ⇒ false（一个字节都不动）
+      const p = norm(args?.path);
+      admitWrite(p);
+      try {
+        const handle = await fs.open(p, 'wx');
+        await handle.close();
+        return true;
+      } catch (err) {
+        if (err?.code === 'EEXIST') return false;
+        throw err;
+      }
     },
     encode_string: async (args) => (await encodeString(String(args?.text ?? ''), args?.encoding)).toString('base64'),
     ensure_dir: async (args) => {

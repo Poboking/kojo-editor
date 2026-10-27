@@ -734,6 +734,22 @@ export class FileIOServiceImpl implements FileIO {
   }
 
   /**
+   * 独占创建空文件（WS-01）：第一道闸先行，再把"判存在 + 建文件"这一原子动作交给平台桥
+   * （Rust 侧 `CREATE_NEW`）。`false` = 目标已存在且**一个字节都没动**，原样上抛给调用方
+   * 去说人话（不在这里变成异常）。
+   */
+  async createFileExclusive(path: string): Promise<boolean> {
+    this.assertWritable(path);
+    return this.bridge.createFileExclusive(path);
+  }
+
+  /** 独占创建目录（同批）：闸与 `ensureDir` 同闸；`false` = 同名目录已存在。 */
+  async createDirExclusive(path: string): Promise<boolean> {
+    this.assertWritable(path);
+    return this.bridge.createDirExclusive(path);
+  }
+
+  /**
    * 递归遍历 + **本层唯一兑现的 `filter`**（2026-10-16 桥分叉批）。
    *
    * `filter` 是一个 JS 闭包，而平台桥可能跨进程：桌面壳的 `walkDir` =

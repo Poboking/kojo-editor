@@ -136,6 +136,9 @@ function makeFs(io: HarnessOptions = {}) {
       guard(p);
       createdDirs.push(p);
     },
+    // 独占创建（WS-01）：本假 io 不跑新建链路，`false` = "没建"（不是异常）
+    createFileExclusive: async () => false,
+    createDirExclusive: async () => false,
     listDir: async (p: string): Promise<DirEntry[]> => {
       const prefix = `${p}/`;
       return Object.keys(files)

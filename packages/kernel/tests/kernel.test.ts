@@ -27,6 +27,9 @@ function stubBridge(): PlatformBridge {
     statFiles: async (paths) => paths.map((path) => ({ path, exists: false, mtimeMs: null, size: null })),
     writeFileBytes: async () => {},
     ensureDir: async () => {},
+    // 独占创建（WS-01）：本桩只跑项目服务路径，`false` = "这次没建"（不是错误）
+    createFileExclusive: async () => false,
+    createDirExclusive: async () => false,
     listDir: async () => [],
     walkDir: async () => [],
     exists: async () => false,

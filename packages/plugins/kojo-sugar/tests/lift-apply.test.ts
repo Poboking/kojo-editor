@@ -108,6 +108,9 @@ function makeIO(opts: {
       files[p] = data;
     },
     ensureDir: async () => {},
+    // 独占创建（WS-01）：假 io 不跑新建链路，`false` = "没建"
+    createFileExclusive: async () => false,
+    createDirExclusive: async () => false,
     listDir: async (): Promise<DirEntry[]> => [],
     walkDir: async (): Promise<DirEntry[]> => [],
     exists: async (p) => {

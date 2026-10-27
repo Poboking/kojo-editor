@@ -126,6 +126,21 @@ export class NodeBridge implements PlatformBridge {
     await fs.mkdir(path, { recursive: true });
   }
 
+  /**
+   * 独占创建：本桥**不复刻**（照 `chooseFile` / `exportFile` 的缺席口径）。
+   *
+   * "判存在 + 创建"原子性只在桌面壳的 Rust 侧（`CREATE_NEW` / `mkdir`）成立；测试桥
+   * 再实现一份 `wx` 也证明不了生产语义，反倒会造出第二份真相让人误以为已验过。
+   * 判据要跑这条链路时在实例上覆盖这两个方法即可（`io.test.ts` 的 `bridgeWith` 同形）。
+   */
+  async createFileExclusive(): Promise<boolean> {
+    throw new Error('createFileExclusive is not supported by NodeBridge');
+  }
+
+  async createDirExclusive(): Promise<boolean> {
+    throw new Error('createDirExclusive is not supported by NodeBridge');
+  }
+
   async listDir(path: string): Promise<DirEntry[]> {
     try {
       const entries = await fs.readdir(path, { withFileTypes: true });

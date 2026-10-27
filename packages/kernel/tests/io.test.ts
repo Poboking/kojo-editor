@@ -150,6 +150,71 @@ describe('FileIOService · ensureDir（先建目录再写文件的链路）', ()
   });
 });
 
+describe('FileIOService · 独占创建（WS-01：判存在与建条目是同一个原子调用）', () => {
+  /** 以 NodeBridge 为原型覆写单个方法（类方法在原型上，展开复制会丢） */
+  function bridgeWith(overrides: Partial<PlatformBridge>): PlatformBridge {
+    const spy = Object.create(new NodeBridge(appData)) as PlatformBridge;
+    return Object.assign(spy, overrides);
+  }
+
+  it('域内透传两条原语，并把桥的 true/false 原样带回（false 不是异常）', async () => {
+    const seen: string[] = [];
+    const kojo = path.join(tmpDir, 'game', '個人口上');
+    const svc = new FileIOServiceImpl(
+      bridgeWith({
+        createFileExclusive: async (p: string) => {
+          seen.push(`file:${p}`);
+          return false; // 已存在：内核不许把它变成异常
+        },
+        createDirExclusive: async (p: string) => {
+          seen.push(`dir:${p}`);
+          return true;
+        },
+      }),
+    );
+    svc.setWritableRoots([kojo]);
+    await expect(svc.createFileExclusive(path.join(kojo, 'a.ERB'))).resolves.toBe(false);
+    await expect(svc.createDirExclusive(path.join(kojo, '新包'))).resolves.toBe(true);
+    expect(seen).toEqual([`file:${path.join(kojo, 'a.ERB')}`, `dir:${path.join(kojo, '新包')}`]);
+  });
+
+  it('第一道闸先行：域外 / 未批可写根时连桥都不调（盘上不留东西）', async () => {
+    let called = 0;
+    const svc = new FileIOServiceImpl(
+      bridgeWith({
+        createFileExclusive: async () => {
+          called += 1;
+          return true;
+        },
+        createDirExclusive: async () => {
+          called += 1;
+          return true;
+        },
+      }),
+    );
+    const outside = path.join(tmpDir, 'game', 'ERB', 'x.ERB');
+    await expect(svc.createFileExclusive(outside)).rejects.toThrow(WriteNotAllowedError);
+    await expect(svc.createDirExclusive(path.join(tmpDir, 'game', 'ERB', 'out'))).rejects.toThrow(
+      WriteNotAllowedError,
+    );
+    svc.setWritableRoots([path.join(tmpDir, 'game', '個人口上')]);
+    await expect(svc.createFileExclusive(outside)).rejects.toThrow(WriteNotAllowedError);
+    expect(called).toBe(0);
+    expect(await svc.exists(outside)).toBe(false);
+  });
+
+  it('Node 桥无此能力时如实上抛（不静默降级成 exists + writeBytes）', async () => {
+    const svc = new FileIOServiceImpl(new NodeBridge(appData));
+    svc.setWritableRoots([path.join(tmpDir, 'game')]);
+    await expect(svc.createFileExclusive(path.join(tmpDir, 'game', 'x.ERB'))).rejects.toThrow(
+      /not supported by NodeBridge/,
+    );
+    await expect(svc.createDirExclusive(path.join(tmpDir, 'game', 'x'))).rejects.toThrow(
+      /not supported by NodeBridge/,
+    );
+  });
+});
+
 describe('FileIOService · 编码保持与换行保持（防"一次保存毁半库"）', () => {
   it('Shift-JIS 文件读后写回：仍是 Shift-JIS 字节', async () => {
     const f = path.join(tmpDir, 'game', 'kojo.ERB');

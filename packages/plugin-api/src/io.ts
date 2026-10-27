@@ -155,6 +155,26 @@ export interface FileIO {
    * @throws WriteNotAllowedError 当路径不在可写白名单内
    */
   ensureDir(path: string): Promise<void>;
+  /**
+   * **独占创建空文件**（2026-10-27 独占创建原语批）：不存在 ⇒ 建空文件并返回 `true`，
+   * 已存在 ⇒ **一个字节都不动**、返回 `false`；其它失败抛错。
+   *
+   * 与 `exists` + `writeBytes` 的区别只在**竞态**：那两步之间别人塞进同名文件，就会被
+   * 这次零字节写静默清空（WS-01 事故）。本方法把"判存在"与"建文件"合成一个 OS 级原子
+   * 操作（`CREATE_NEW`），新建类调用方应当用它，不要再自己拼 existence check。
+   *
+   * 与 `writeBytes` 同受第一道闸约束：路径不在可写白名单内时抛 `WriteNotAllowedError`。
+   *
+   * @throws WriteNotAllowedError 当路径不在可写白名单内
+   */
+  createFileExclusive(path: string): Promise<boolean>;
+  /**
+   * **独占创建目录**（同批）：成功 ⇒ `true`，已存在 ⇒ `false`（不动既有内容）；
+   * 父目录不存在等错误抛错。写闸同 `ensureDir`。
+   *
+   * @throws WriteNotAllowedError 当路径不在可写白名单内
+   */
+  createDirExclusive(path: string): Promise<boolean>;
   listDir(path: string): Promise<DirEntry[]>;
   /**
    * 递归遍历。`opts.filter` 由**本层兑现**（内核实现），且**只筛输出条目、不剪枝**

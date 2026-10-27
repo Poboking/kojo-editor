@@ -357,6 +357,29 @@ export interface PlatformBridge {
   /** 原子写：同目录临时文件 + rename 覆盖 */
   writeFileBytes(path: string, data: Uint8Array): Promise<void>;
   ensureDir(path: string): Promise<void>;
+  /**
+   * **独占创建空文件**（2026-10-27 独占创建原语批；WS-01 竞态的闭合点）。
+   *
+   * 平台侧必须落成 OS 的 `CREATE_NEW` / `O_CREAT|O_EXCL`：**判存在与建文件是同一个
+   * 原子系统调用**——不存在"先 exists 再写"之间那扇会被别人塞进同名文件、再被这次
+   * 零字节写静默清空的窗口。
+   *
+   * - 目标不存在 ⇒ 建一个空文件，返回 `true`；
+   * - 目标已存在（文件或文件夹占位） ⇒ **一个字节都不动**，返回 `false`；
+   * - 其它失败（父目录不存在 / 权限 / 越权） ⇒ 抛错（不折叠成 `false`——那会把
+   *   "写不进去"说成"已存在"）。
+   *
+   * 写允许域闸与 `writeFileBytes` 同口径、在落盘之前。
+   */
+  createFileExclusive(path: string): Promise<boolean>;
+  /**
+   * **独占创建目录**（同批）：`mkdir` 的原子 EEXIST 语义，而不是 `create_dir_all`
+   * 那种"已存在也静默成功"——调用方要区分"这次真建了"与"它本来就在"。
+   *
+   * - 成功 ⇒ `true`；已存在 ⇒ `false`（不动既有内容、不递归）；
+   * - 父目录不存在 / 权限 / 越权 ⇒ 抛错（不折叠成 `false`）。
+   */
+  createDirExclusive(path: string): Promise<boolean>;
   /** 非递归列目录；路径不存在时返回空数组 */
   listDir(path: string): Promise<DirEntry[]>;
   /**
