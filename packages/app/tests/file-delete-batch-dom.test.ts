@@ -1,15 +1,18 @@
 // @vitest-environment happy-dom
 /**
- * WS-13 2c 车 · **批量删除接线层**的 DOM 级自证（树上按 Delete 真的是这个行为）。
+ * WS-13 2c 车 · **删除接线层**的 DOM 级自证（树上按 Delete 真的是这个行为）。
  *
  * 纯函数那边钉的是判据（`file-delete-plan` / `file-delete-exec`），这一份钉四件接线的东西：
  *
- * 1. **分档**：单击一行（勾选集里只有它）按 Delete ⇒ 走的还是那条单条老腿（`window.confirm` +
- *    那句旧回执 + 守门一刀拒绝脏文件）；勾到第二行才换成整批新腿；
- * 2. **确认框逐条点名**（模态、不是 `window.confirm`），答"取消"一个字节都不动；
+ * 1. **只有一条腿**（收腿批）：勾一枚与勾一整批按 Delete ⇒ 同一段 in-app 模态、同一个
+ *    `aria-label="删除这些条目"`、同一份"逐项点名 + 去路"文案；**全程一次 `window.confirm`
+ *    都不许惊动**（`confirmAsk` 恒空即是这条的读数——原生对话框在无头浏览器里会把渲染线程
+ *    挂死，留着它场景就无法取证）；
+ * 2. **确认框逐条点名**，答"取消"一个字节都不动（一枚与两枚各钉一次）；
  * 3. **回收站与撤销**：删完那句回执旁边那颗「撤销这次删除」点得动、盘上真的回来且内容逐字一致；
  *    命令面板 `explorer.undoDeleteEntry` 那条腿打的是同一个函数；台账空着时说的是指引而不是假成功；
- * 4. **脏闸复用同一份投影**：问一句、答"不"整批作废。
+ * 4. **脏闸复用同一份投影**：问一句、答"不"整批作废（单条也是这一句"问一次、可继续"，
+ *    不再是 `guardFileOp` 那一刀拒绝）。
  *
  * ⚠ 假 io 只做删除与撤销要的那几枚原语（回收站语义照内核 `TrashManager` 复刻，见
  * `file-delete-exec.test.ts`）；问句模态经 `createPortal` 挂 body。
@@ -170,7 +173,7 @@ let root: Root;
 let disk: Disk;
 const gone: Array<[readonly string[], ReadonlyArray<{ from: string; to: string }>]> = [];
 const deltas: Array<{ changed: readonly string[]; removed: readonly string[] }> = [];
-/** 单条老腿用的 `window.confirm`：记下它被问了什么、答什么（旧语义有没有被换掉就看这个） */
+/** 原生对话框探针：收腿之后删除**一次都不该走这里**，恒空即是判据（留桩是为了"红了就知道又长回第二条腿"） */
 const confirmAsk: string[] = [];
 let confirmAnswer = true;
 
@@ -276,23 +279,58 @@ afterEach(async () => {
   clearDeleteBatchLedger();
 });
 
-describe('Delete 的两档 · 有没有多选集', () => {
-  it('只勾着一行（单击也会写进勾选集）⇒ 走的还是那条单条老腿：window.confirm + 旧那句回执，不出现批量模态', async () => {
+describe('删除只有一条腿 · 单条与整批同一种形态', () => {
+  it('只勾着一行（单击也会写进勾选集）按 Delete ⇒ 就是那段逐条点名的模态，一次 `window.confirm` 都不惊动', async () => {
     await mount();
     await expandGroup();
     await clickRow(A);
     await key('Delete');
     await settle();
-    expect(confirmAsk.join('\n')).toContain('确定删除文件「a.ERB」吗');
-    expect(confirmAsk.join('\n')).toContain('回收站');
-    expect(modal('删除这些条目')).toBeNull();
+    const box = modal('删除这些条目');
+    expect(box, '单条也走那段 in-app 模态（旧的第二条腿已收掉）').not.toBeNull();
+    const text = box!.textContent ?? '';
+    expect(text).toContain('确定删除这 1 项吗？（1 个文件）');
+    expect(text).toContain('1. 文件「a.ERB」'); // 单条也是一项一项点名
+    expect(text).toContain('回收站');
+    expect(text).toContain('撤销这次删除');
+    expect(confirmAsk).toEqual([]);
+    expect(disk.calls).toEqual([]); // 还没答 ⇒ 一个字节都没动
+    expect(modalButtons().map((b) => b.textContent)).toEqual(['取消', '删除 1 项']);
+  });
+
+  it('单条确认后：盘上没了 + 标签端走（复用既有那条 `onFilesGone` 腿）+ 撤销那颗也在', async () => {
+    await mount();
+    await expandGroup();
+    await clickRow(A);
+    await key('Delete');
+    await settle();
+    await pick('删除 1 项');
     expect(disk.files.has(norm(A))).toBe(false);
-    expect(statusLine()).toContain('已删除文件「a.ERB」');
-    // 旧腿不进撤销台账（简报口径：无多选集 = 旧行为零改动）
+    expect(statusLine()).toContain('已删除 1 项（1 个文件）：「a.ERB」');
+    expect(statusLine()).toContain('回收站');
+    expect(undoButton()?.textContent).toContain('撤销这次删除（1 项）');
+    // 收腿带来的新读数：单条也进撤销台账（旧腿删完就退不回来了）
+    expect(gone.at(-1)?.[0]).toEqual([A]);
+    expect(deltas.at(-1)?.removed).toEqual([A]);
+    await click(undoButton());
+    expect(disk.files.get(norm(A))).toBe('AAA');
+    expect(statusLine()).toContain('已放回 1 项');
+  });
+
+  it('单条答"取消"⇒ 一个字节都不动，也不留那颗假撤销', async () => {
+    await mount();
+    await expandGroup();
+    await clickRow(A);
+    await key('Delete');
+    await settle();
+    await pick('取消');
+    expect(disk.calls).toEqual([]);
+    expect(disk.files.has(norm(A))).toBe(true);
+    expect(statusLine()).toContain('一个字节都没动');
     expect(undoButton()).toBeNull();
   });
 
-  it('单条删目录 ⇒ 老腿那句"将同时删除其中的 N 个文件"照旧（walkDir 现算的刀口没丢）', async () => {
+  it('单条删目录 ⇒ 模态点名"这条会带走整个文件夹，里面有 N 个文件"（walkDir 现算的刀口没丢），撤销连子项一起回原位', async () => {
     await mount();
     await expandGroup();
     const dirRow = [...container.querySelectorAll<HTMLElement>('button')].find((el) =>
@@ -305,13 +343,23 @@ describe('Delete 的两档 · 有没有多选集', () => {
     });
     await key('Delete');
     await settle();
-    expect(confirmAsk.join('\n')).toContain('确定删除文件夹「包A」吗');
-    expect(confirmAsk.join('\n')).toContain('其中的 2 个文件会一起移入回收站');
+    const box = modal('删除这些条目');
+    expect(box).not.toBeNull();
+    expect(box!.textContent ?? '').toContain('确定删除这 1 项吗？（1 个文件夹）');
+    expect(box!.textContent ?? '').toContain('「包A」');
+    expect(box!.textContent ?? '').toContain('这条会带走整个文件夹，里面有 2 个文件');
+    expect(confirmAsk).toEqual([]);
+
+    await pick('删除 1 项');
     expect(disk.files.has(norm(A))).toBe(false);
     expect(disk.files.has(norm(B))).toBe(false);
+    expect(disk.calls).toEqual([`removeDir:${norm(PKG)}`]); // 只发一条目录删除
+    await click(undoButton());
+    expect(disk.files.get(norm(A))).toBe('AAA');
+    expect(disk.files.get(norm(B))).toBe('BBB');
   });
 
-  it('勾到第二行 ⇒ 换成整批新腿：模态逐条点名、按钮写着"删除 2 项"', async () => {
+  it('勾到第二行 ⇒ 同一段模态、同一个 aria-label，只有数字在长（一个动作一种形态）', async () => {
     await mount();
     await expandGroup();
     await clickRow(A);
@@ -390,7 +438,7 @@ describe('整批删除 · 回收站与撤销', () => {
     await settle();
     await pick('删除 2 项');
     await click(undoButton());
-    // 放回原位后再删一次（这次只勾一枚 + 另一枚走单条老腿）⇒ 台账只剩新那批
+    // 放回原位后再删一次（这次勾散落 + a 两枚）⇒ 台账只剩新那批
     await clickRow(SCATTER);
     await clickRow(A);
     await clickRow(SCATTER, { ctrl: true });
@@ -406,8 +454,29 @@ describe('整批删除 · 回收站与撤销', () => {
   });
 });
 
-describe('批删的脏闸（与 2a 那条确认框同形态，问一次）', () => {
+describe('删除的脏闸（单条与整批同一条腿：问一次、可继续）', () => {
   const dirty = { dirtyOf: (paths: readonly string[]) => (paths.some((p) => norm(p) === norm(A)) ? ['a.ERB'] : []) };
+
+  it('只勾一枚、它还是脏的 ⇒ 不再是 `guardFileOp` 那一刀拒绝，而是确认之后的那一句"要不要照删"', async () => {
+    await mount(dirty);
+    await expandGroup();
+    await clickRow(A);
+    await key('Delete');
+    await settle();
+    // 旧腿在这里会直接 note("文件「a.ERB」有未保存修改，请先保存或关闭它") 然后一动作不发；
+    // 现在先弹逐条点名的删除模态，答"删除"后再问那一句。
+    expect(modal('删除这些条目')).not.toBeNull();
+    expect(statusLine()).not.toContain('请先保存或关闭它');
+    await pick('删除 1 项');
+    const box = modal('有未保存的修改');
+    expect(box, '单条也要走"问一次"这条腿').not.toBeNull();
+    expect(box!.textContent).toContain('编辑器里那份还没存的改动不会跟着进去');
+    // 这句是要渲染给人看的，不是 markdown：星号不许漏到界面上（真壳上抓到的口误）
+    expect(box!.textContent).not.toContain('**');
+    await pick('取消');
+    expect(disk.calls).toEqual([]);
+    expect(disk.files.has(norm(A))).toBe(true);
+  });
 
   it('命中未保存修改 ⇒ 确认之后再问一句；答"取消"整批作废', async () => {
     await mount(dirty);
@@ -420,6 +489,8 @@ describe('批删的脏闸（与 2a 那条确认框同形态，问一次）', () 
     const box = modal('有未保存的修改');
     expect(box).not.toBeNull();
     expect(box!.textContent).toContain('编辑器里那份还没存的改动不会跟着进去');
+    // 这句是要渲染给人看的，不是 markdown：星号不许漏到界面上（真壳上抓到的口误）
+    expect(box!.textContent).not.toContain('**');
     await pick('取消');
     expect(disk.calls).toEqual([]);
     expect(disk.files.has(norm(A))).toBe(true);

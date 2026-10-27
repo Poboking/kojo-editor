@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  deleteConfirmText,
   dirtyGateText,
   fsLocatePlanOf,
   fsLocatePlanOfRoots,
@@ -256,33 +255,9 @@ describe('relativeToRoot · 复制相对路径', () => {
   });
 });
 
-/* ------------------------------ 删除确认文案 ------------------------------ */
-
-describe('deleteConfirmText · 递归删除的量级提示（必须让用户看清刀多大、刀落到哪）', () => {
-  it('文件：给文件名 + 说清是移入回收站（不是永久删）', () => {
-    const msg = deleteConfirmText({ name: '事件.ERB', isDir: false });
-    expect(msg).toContain('事件.ERB');
-    expect(msg).toContain('回收站');
-    expect(msg).toContain('文件历史');
-    expect(msg).not.toContain('文件夹'); // 文件不用背目录的量级警示
-    // 内核 removeFile/removeDir 自 2026-10-16 起都是移入回收站，"无法撤销"与事实相反
-    expect(msg).not.toContain('无法撤销');
-  });
-
-  it('目录 + 现算成功的 N：「其中的 N 个文件会一起移入回收站」', () => {
-    const msg = deleteConfirmText({ name: '少女之梦', isDir: true, fileCount: 42 });
-    expect(msg).toContain('少女之梦');
-    expect(msg).toContain('42');
-    expect(msg).toContain('回收站');
-  });
-
-  it('目录 + N 现算失败：数字退场，但「全部内容」的警示语必须保留', () => {
-    const msg = deleteConfirmText({ name: '少女之梦', isDir: true, fileCount: undefined });
-    expect(msg).not.toContain('undefined');
-    expect(msg).toContain('全部内容');
-    expect(msg).toContain('回收站');
-  });
-});
+/* 删除确认文案不在本文件了（收腿批）：单条与整批共用一份判据，住 `file-delete-plan`，
+   那组"刀多大 + 刀落到哪"的断言搬进 `file-delete-plan.test.ts` 的
+   `只勾一枚时 · 与整批共用同一条确认判据` 那一组，一条没丢。 */
 
 /* ------------------------------ B4：定位计算 ------------------------------ */
 

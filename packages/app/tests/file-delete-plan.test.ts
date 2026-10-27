@@ -5,14 +5,13 @@ import {
   buildDeletePlan,
   deleteBatchConfirmText,
   deleteBatchReceiptText,
-  deleteScopeOf,
   undoDeleteReceiptText,
   undoUnavailableText,
   type DeleteEntry,
 } from '../src/ui/file-delete-plan';
 
 /**
- * WS-13 2c 车 · **批量删除判据层**（零 IO，全部边界靠单证）。
+ * WS-13 2c 车 · **删除判据层**（零 IO，全部边界靠单证）。
  *
  * 这一层管三件会被点错的事：
  * ①父子同批（子不许再发一次删除动作，但必须点名"随谁走"）；
@@ -20,6 +19,9 @@ import {
  * ③删不了的那些（读不出名字 / 只读范围）不许从确认框与回执里消失。
  * 外加文案纪律：**逐条点名**、目录说清刀多大、规模读不到就不猜数字、
  * 删除的去向说成回收站（旧版"此操作无法撤销"与事实相反）。
+ *
+ * **单条与整批是同一条腿**（收腿批）：`n = 1` 没有任何特判，旧 `file-tree-ops.deleteConfirmText`
+ * 那组判据的实质（刀多大 + 刀落到哪）在下面 `只勾一枚时` 那一组里逐条活着。
  */
 
 const DIR = 'C:/koa/001/包A';
@@ -33,19 +35,6 @@ const READONLY = '这一处在只读范围内，不能删除——要先在「�
 
 const f = (path: string): DeleteEntry => ({ path, isDir: false });
 const d = (path: string): DeleteEntry => ({ path, isDir: true });
-
-describe('deleteScopeOf · 单条旧腿与整批新腿的分档', () => {
-  it('勾到第 2 项才算"有多选集"；0 项与 1 项都还是那条单条老语义', () => {
-    expect(deleteScopeOf(0)).toBe('single');
-    expect(deleteScopeOf(1)).toBe('single');
-    expect(deleteScopeOf(2)).toBe('batch');
-    expect(deleteScopeOf(40)).toBe('batch');
-  });
-
-  it('判据不是"非空"：一次普通单击也会把那一行写进勾选集（拿非空当分档 = 单条删除的旧读感整条换掉）', () => {
-    expect(deleteScopeOf(1)).toBe('single');
-  });
-});
 
 describe('buildDeletePlan · 判决', () => {
   it('文件与目录各计其数，顺序随入参（作者眼里的"这几个东西"）', () => {
@@ -168,6 +157,61 @@ describe('deleteBatchConfirmText · 逐条点名', () => {
     expect(text).toContain('30 天');
     expect(text).toContain('撤销这次删除');
     expect(text).not.toContain('无法撤销');
+  });
+});
+
+/* ------------------------------ 只勾一枚：同一条腿、同一种形态 ------------------------------ */
+
+/**
+ * 旧版这里站着第二条腿（`file-tree-ops.deleteConfirmText` + `window.confirm`），按勾选集大小分档。
+ * 收腿之后那一组判据**没有消失，是搬到这里来活**：下面三条逐条对应旧断言的实质——
+ * ①刀多大（目录报 N、读不到 N 时警示语不许跟着退场）、②刀落到哪（回收站 + 「文件历史」）、
+ * ③"无法撤销"那句与事实相反的老话不许回来。加上一条新的：**单条也走逐项点名**，
+ * 于是"勾一枚"与"勾二十枚"是同一份文案的两个长度，不是两套 UI。
+ */
+describe('只勾一枚时 · 与整批共用同一条确认判据（旧单条腿的实质在这里活着）', () => {
+  it('单条文件：点名到文件名 + 说清去回收站（不是永久删）+ 从「文件历史」找回；文件不背目录的量级警示', () => {
+    const text = deleteBatchConfirmText(buildDeletePlan([f(F3)]));
+    expect(text).toContain('散落.ERB');
+    expect(text).toContain('回收站');
+    expect(text).toContain('文件历史');
+    expect(text).not.toContain('文件夹'); // 文件不用背目录的量级警示（旧判据原样搬过来）
+    expect(text).not.toContain('无法撤销');
+  });
+
+  it('单条目录 + 现算成功：刀多大要说出口（N 个文件、M 个子文件夹）', () => {
+    const text = deleteBatchConfirmText(buildDeletePlan([d(DIR)], { sizeOf: () => ({ files: 42, dirs: 3 }) }));
+    expect(text).toContain('「包A」');
+    expect(text).toContain('42');
+    expect(text).toContain('回收站');
+  });
+
+  it('单条目录 + 现算失败：数字退场，但「全部内容」的警示语必须保留，也不许漏出 undefined', () => {
+    const text = deleteBatchConfirmText(buildDeletePlan([d(DIR)]));
+    expect(text).not.toContain('undefined');
+    expect(text).toContain('全部内容');
+    expect(text).toContain('回收站');
+  });
+
+  it('一项也是"一项一项点名"：编号行存在，不是把名字塞进一句光秃秃的问句', () => {
+    const text = deleteBatchConfirmText(buildDeletePlan([f(F3)]));
+    expect(text.split('\n')[1]).toBe('1. 文件「散落.ERB」');
+    // 与两条那一批同构：同一句抬头形态 + 同一份去路收尾
+    const two = deleteBatchConfirmText(buildDeletePlan([f(F3), f(FAR)]));
+    expect(text.split('\n')[0]).toMatch(/^确定删除这 \d+ 项吗？（\d+ 个文件）$/);
+    expect(two.split('\n')[0]).toMatch(/^确定删除这 \d+ 项吗？（\d+ 个文件）$/);
+    // 收尾句同构，只允许量词随条数走（勾一枚时说"这一项"，不许说"这一批"）
+    expect(text.split('\n').at(-1)).toBe(two.split('\n').at(-1)!.replace('这一批', '这一项'));
+    expect(text.split('\n').at(-1)).toContain('这一项会移进');
+    expect(text.split('\n').at(-1)).not.toContain('这一批');
+  });
+
+  it('单条走的就是整批那份计划（没有"一条特判"的第二套结构）：targets/carried/rejected 同一形状', () => {
+    const one = buildDeletePlan([f(F3)]);
+    expect(one.targets).toHaveLength(1);
+    expect(one.fileCount).toBe(1);
+    expect(one.dirCount).toBe(0);
+    expect(one.carriedFileTotal).toBe(0);
   });
 });
 

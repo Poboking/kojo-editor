@@ -1,7 +1,10 @@
 /**
  * 文件树编辑能力（B1/B2/B4 文件树编辑批）的纯逻辑：菜单可见性、名称校验、
- * 删除确认文案、相对路径、定位计算。零 React、零 IO——组件只管接线，
+ * 相对路径、定位计算。零 React、零 IO——组件只管接线，
  * 判据放这里才可单测（与 file-tree-reveal 同一形态）。
+ *
+ * 删除的确认文案**不在这里**（WS-13 2c 起单条与整批共用同一份判据，住 `file-delete-plan`；
+ * 本文件只留脏闸那句 `dirtyGateText`，三种动作共用）。
  *
  * 用户可见文案的纪律：全部人话，不出现内部术语（writablePaths / 域 / 脏 model 之类不上屏）。
  */
@@ -410,32 +413,11 @@ export function relativeToRoot(path: string, root: string): string {
 export function dirtyGateText(kind: 'move' | 'overwrite' | 'delete', names: readonly string[]): string {
   const list = names.slice(0, 4).join('、') + (names.length > 4 ? ` 等 ${names.length} 项` : '');
   if (kind === 'delete') {
-    return `这些文件还有未保存的修改：${list}。\n删除会把它们移进回收站，**编辑器里那份还没存的改动不会跟着进去**——删掉之后那份改动就没了（撤销删除只能把盘上那一份放回来）。\n要先把它们存下来，还是照删？`;
+    return `这些文件还有未保存的修改：${list}。\n删除会把它们移进回收站，编辑器里那份还没存的改动不会跟着进去——删掉之后那份改动就没了（撤销删除只能把盘上那一份放回来）。\n要先把它们存下来，还是照删？`;
   }
   return kind === 'move'
     ? `这些文件还有未保存的修改：${list}。\n移走之后编辑器里的改动会跟着文件一起过去（标签的路径会换成新位置）。\n确定要继续吗？`
     : `落点里有文件带着未保存的修改：${list}。\n这次覆盖的是**盘上**那一份（会被写进本地历史，可以从「文件历史」找回），编辑器里未保存的改动不会被写进去。\n确定要覆盖吗？`;
-}
-
-/* ------------------------------ 删除确认文案 ------------------------------ */
-
-/**
- * 删除确认的量级提示（纯函数，可单测）。
- *
- * 递归删除是把大刀：目录必须让用户看清刀多大——「将同时删除其中的 N 个文件」。
- * N 现算失败（walkDir 抛）时退化为无数字，但"全部内容都会被删除"的警示语必须保留。
- *
- * **删除是移入回收站，不是永久删除**（2026-10-16 undo 批起内核 `removeFile` /
- * `removeDir` 都走 `{appData}/trash/`，可在文件历史里找回）：确认文案必须说清这一档，
- * 旧版的"此操作无法撤销"已经与事实相反——按它写，作者会以为删了就没了。
- */
-export function deleteConfirmText(target: { name: string; isDir: boolean; fileCount?: number }): string {
-  if (!target.isDir) {
-    return `确定删除文件「${target.name}」吗？它会移入回收站，可以从「文件历史」里找回。`;
-  }
-  return typeof target.fileCount === 'number'
-    ? `确定删除文件夹「${target.name}」吗？其中的 ${target.fileCount} 个文件会一起移入回收站，可以从「文件历史」里找回。`
-    : `确定删除文件夹「${target.name}」吗？其中的全部内容（含子文件夹）都会移入回收站，可以从「文件历史」里找回。`;
 }
 
 /* ------------------------------ B4：定位当前文件 ------------------------------ */

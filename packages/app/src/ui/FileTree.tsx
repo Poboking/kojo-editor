@@ -28,7 +28,6 @@ import {
 import {
   COMMAND_PALETTE_COMMAND,
   compareSelectionPair,
-  deleteConfirmText,
   dirtyGateText,
   fsLocatePlanOfRoots,
   isUnderPath,
@@ -52,7 +51,7 @@ import {
   type FileOpsPlan,
 } from './file-ops-plan';
 import { runFileOps } from './file-ops-exec';
-import { deleteScopeOf, undoUnavailableText, type DeletePlan } from './file-delete-plan';
+import { undoUnavailableText, type DeletePlan } from './file-delete-plan';
 import {
   READONLY_BLOCK_REASON,
   clearDeleteBatchLedger,
@@ -1131,45 +1130,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
 
   const cancelEdit = useCallback((): void => setEdit(null), []);
 
-  /**
-   * 删除（文件/目录同一入口）：守门 → 量级确认 → 落地 → 只重列受影响目录。
-   *
-   * **这一条是"没有多选集"时的单条老腿**（守门一刀拒绝脏文件 + `window.confirm`），
-   * 语义自 B1 批起一字未动；有多选集时走 `runDeleteBatch`（逐条点名 + 回收站台账 + 可撤销）。
-   */
-  const doDelete = (path: string, isDir: boolean): void => {
-    const blocked = guardFileOp?.([path]) ?? null;
-    if (blocked) {
-      note(blocked);
-      return;
-    }
-    if (io && !io.isWritable(path)) {
-      note('这个位置在只读范围内，不能删除。要先在「只读」徽章那里批准写权限。');
-      return;
-    }
-    const proceed = (fileCount?: number): void => {
-      // 递归删除是把大刀：文案必须让用户看清刀多大（N 现算失败退化为无数字，警示语保留）
-      if (!window.confirm(deleteConfirmText({ name: baseName(path), isDir, fileCount }))) return;
-      const doing = isDir ? io!.removeDir(path) : io!.removeFile(path);
-      void doing.then(
-        () => {
-          refetchDirs([parentDir(path)]);
-          if (isDir) pruneCacheUnder(path);
-          onFilesGone?.([path], []);
-          note(`已删除${isDir ? '文件夹' : '文件'}「${baseName(path)}」`);
-        },
-        (err: unknown) => noteErr(err, '删除'),
-      );
-    };
-    if (isDir && walkDir) {
-      // N 现算：失败（浏览器壳无 io / 目录不可读）退化为无数字文案，不阻断
-      void walkDir(path, { includeFiles: true, includeDirs: false })
-        .then((entries) => proceed(entries.filter((x) => !x.isDirectory).length))
-        .catch(() => proceed(undefined));
-    } else {
-      proceed(undefined);
-    }
-  };
+  /* 「删除」只有一条腿：`requestDelete` → `runDeleteBatch`（见 WS-13 2c 那一段）。
+   * 原来这里还有一条 `doDelete`——同一动作按勾选集大小分档：勾一枚走 `window.confirm` +
+   * `guardFileOp` 一刀拒绝脏文件，勾两枚才走逐条点名的模态。同一个动作两种 UI、两种脏口径
+   * 就是本批要收掉的东西，于是那条腿连同它的文案（`file-tree-ops.deleteConfirmText`）一起退场。 */
 
   const copyText = (text: string, doneNote: string): void => {
     const clip = navigator.clipboard;
@@ -1435,7 +1399,12 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
 
   /* ---------------- WS-13 2c：批量删除 + 回收站 + 撤销 ---------------- */
 
-  /** 删除确认问句：文案单源在 `file-delete-plan.deleteBatchConfirmText`（逐条点名），这里不改写一个字 */
+  /**
+   * 删除确认问句：文案单源在 `file-delete-plan.deleteBatchConfirmText`（逐条点名），这里不改写一个字。
+   *
+   * **一枚与二十枚都是这同一段模态**（同一 `aria-label`、同一"逐项点名 + 去路"结构）——
+   * 标题与按钮上的数字跟着计划走，勾一项时就是「删除 1 项」。
+   */
   const askDeleteConfirm = (plan: DeletePlan, text: string): Promise<boolean> =>
     askFileOps(
       {
@@ -1480,10 +1449,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   };
 
   /**
-   * 一次批量删除（**有多选集时**才走这条腿；无多选集仍是 `doDelete` 那条单旧口径）。
+   * 删除落地的**唯一一条腿**（勾一枚与勾一整批都进这里；名字里的 "batch" 是"这一份清单"的意思）。
    *
-   * 执行层给的是完整事实（删成几项 / 回收站对上几号 / 哪几条被挡下），这里只做四件收尾：
-   * 回执上屏（附撤销入口）、受影响目录重列、被删目录的缓存退场、标签与索引跟着盘上真相走。
+   * 执行层给的是完整事实（删成几项 / 回收站对上几号 / 哪几条被挡下），这里只做五件收尾：
+   * 回执上屏（附撤销入口）、受影响目录重列、被删目录的缓存退场、标签与索引跟着盘上真相走、
+   * 勾选集清空（条目已经不在盘上，留着一个指向不存在路径的勾选等于骗下一次删除）。
    */
   const runDeleteBatch = async (entries: readonly FileOpEntry[]): Promise<void> => {
     if (io === undefined) {
@@ -1583,15 +1553,12 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   /**
    * 删除的宾语判据（三条入口——键位 / 右键 / 命令面板——汇到这一处）。
    *
-   * 分档住纯函数 `deleteScopeOf`：**勾选集有多于一项 ⇒ 整批**走新腿（逐条点名 + 回收站台账 +
-   * 可撤销）；否则**旧单条语义一字不动**（`guardFileOp` 一刀拒绝 + `window.confirm` + 那句旧回执）。
-   * 焦点行/右击行没被勾选时 `clipSources` 仍以它为准，所以"只删点的那一行"这条老读感保留。
+   * **一个动作一种形态**：不分档。宾语照 `clipSources` 的口径现读（右击行不在勾选集里就以它
+   * 为准，否则勾选集，再否则焦点行——"只删点的那一行"这条老读感就是这么保留的），
+   * 无论读出一枚还是二十枚都交给 `runDeleteBatch`：同一段逐条点名的模态、同一份回收站台账、
+   * 同一颗「撤销这次删除」，脏文件也是**问一次、可继续**（不再被 `guardFileOp` 一刀拒绝）。
    */
-  const requestDelete = (hintPath: string, isDir: boolean): void => {
-    if (deleteScopeOf(getSelectedPaths().length) === 'single') {
-      doDelete(hintPath, isDir);
-      return;
-    }
+  const requestDelete = (hintPath: string): void => {
     const entries = clipSources(hintPath);
     if (entries.length === 0) {
       note('先选中要删的条目（文件、文件夹或作者包），再按删除。');
@@ -1792,8 +1759,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         if (path) beginRename(path, scope.kind === 'dir' || scope.kind === 'package');
         break;
       case 'delete':
-        // 右键「删除」：勾选集在场且右击那一格就在里面 ⇒ 整批；否则仍以右击那一格为准（旧语义）
-        if (path) requestDelete(path, scope.kind === 'dir' || scope.kind === 'package');
+        // 右键「删除」：右击那一格不在勾选集里就只删它，否则删整批（种类由行模型现读，不靠作用域猜）
+        if (path) requestDelete(path);
         break;
       case 'import':
         if (scope.kind === 'package') onImportPackage?.({ dir: scope.dir, label: scope.label });
@@ -2442,8 +2409,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         if (row !== undefined && row.path !== '') beginRename(row.path, rowIsDir(tree, cmd.index));
         break;
       case 'delete':
-        // Delete / Backspace：有多选集时对整批生效（判据与接线住 `requestDelete`，旧单条语义不动）
-        if (row !== undefined && row.path !== '') requestDelete(row.path, rowIsDir(tree, cmd.index));
+        // Delete / Backspace：焦点行没被勾选就只删它，否则删整批（接线与宾语判据住 `requestDelete`）
+        if (row !== undefined && row.path !== '') requestDelete(row.path);
         break;
       case 'selectAll':
         // 「当前可见行」= 窗口切到的那段行（判据是行模型，不是 DOM——被裁掉的行不该进集合）
