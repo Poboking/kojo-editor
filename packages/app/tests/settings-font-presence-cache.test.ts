@@ -69,6 +69,13 @@ function panelProps(over: Partial<SettingsPanelProps> = {}): SettingsPanelProps 
     commitWordSuggestions: noop,
     suggestDelay: 0,
     commitSuggestDelay: noop,
+    // IC 批 A 车道：设置页新增的三格走同一形态（缺省值即既往行为）
+    inlineCompletionOn: true,
+    commitInlineCompletion: noop,
+    inlineMinShowDelay: 0,
+    commitInlineMinShowDelay: noop,
+    inlineMaxCandidates: 5,
+    commitInlineMaxCandidates: noop,
     sugarViewOn: false,
     applySugarViewPref: noop,
     formatOnSave: false,
