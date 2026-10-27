@@ -954,8 +954,9 @@ export interface EditorDocumentIdentity {
    ① 行尾 `// audit-allow: <理由>` 豁免（`:133`）；② **注释行豁免**（`:37-47`）；
    ③ 组合根 / 适配器清单豁免（`:69,78-85`，本仓即 `adapter-manifest.ts` 与 `bootstrap.ts` 的装载点）。
    不豁免就永远红——**闸已落地（LAU-GATE `6ca3c4c3`+`7540b9ed`），基线现值＝M1 游戏名·引擎词汇 6 行 /
-   M2 语言 id 分支 162 行 / M3 旧 token 名 163 行**（钉在 `tools/audit-language-baseline.json`，只降不升；
-   LAU-3 框架批把 M2 从 164 收敛到 162——`tree-sitter/providers.ts` 的两处 `ERB_LANGUAGE_ID` 分支清零后重钉）。
+   M2 语言 id 分支 162 行 / M3 旧 token 名 254 行**（钉在 `tools/audit-language-baseline.json`，只降不升；
+   LAU-3 框架批把 M2 从 164 收敛到 162——`tree-sitter/providers.ts` 的两处 `ERB_LANGUAGE_ID` 分支清零后重钉；
+   M3 的 163 ⇒ 254 是 2026-10-27 六档主题批的 48 条 `kojo2.*` 配色规则，不是 LAU-3 的钱）。
    v1.1 草稿那句"裸 grep 命中 62 行（`eratw` 16 行 / 10 文件）"是**计数口径不同**：棘轮只数**代码行**，
    注释与 `audit-allow` 行不进账（`TALENT`/`CFLAG` 的命中几乎全在注释与补全说明里，如
    `erb-completion-bits.ts:25`、`erb-completion-families.ts:6-14`）。
