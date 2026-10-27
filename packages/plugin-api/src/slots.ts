@@ -5,6 +5,7 @@ import type { GameAdapter } from './game';
 import type { GameProject } from './game';
 import type { EolStyle } from './io';
 import type { InlineCompletionSourceContribution } from './inline-completion';
+import type { MonacoLanguageContribution } from './monaco-language';
 
 /**
  * 槽位系统（对应架构文档 §4）。
@@ -1412,6 +1413,13 @@ export interface SlotMap {
    * **不塞进 `ui.editor.languageService`**，理由写在那份契约的头里（两处各说一遍必漂）。
    */
   'completion.source': InlineCompletionSourceContribution;
+  /**
+   * 一门语言的 **Monaco 语言面**（SDK B4）：Monarch 词法 / 语言配置 / 主题规则，
+   * 插件供纯数据、宿主落 `setMonarchTokensProvider` 等三枚 API。
+   * 契约 `plugin-api/monaco-language.ts`——**没有供方时的退化口径**（语言仍认领、面不存在、
+   * 必须 warn 一条）写在那份头注里，宿主不留兜底实现（判据只有一份）。
+   */
+  'ui.monaco.language': MonacoLanguageContribution;
 }
 
 export type SlotName = keyof SlotMap;

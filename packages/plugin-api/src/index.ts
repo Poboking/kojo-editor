@@ -993,3 +993,27 @@ export type {
    插件（`@kojo/plugin-erb-parser`）只许依赖 plugin-api ⇒ "永远有定义"的引擎词表住这里；
    着色显示层那份（`ENGINE_VARIABLE_REFERENCE_HEADS`）在 `@kojo/kojo-vocab/engine`。 */
 export { ERB_ENGINE_RESERVED_IDENTIFIERS, ERB_ENGINE_STRING_IDENTIFIERS } from './erb';
+
+/* ---- Monaco 语言面契约（SDK B4，2026-10-27；独占追加区块，勿在他处重排） ----
+   与 IC 批同一条纪律：`monaco-language.ts` 是**纯类型叶子**，桶里只许 `export type`
+   （值导出会把这一枚拉进开机图；Monaco 的枚举与实例本来就只在宿主侧存在）。 */
+export type {
+  MonacoAutoClosingPair,
+  MonacoComponentPaletteSide,
+  MonacoIndentAction,
+  MonacoIndentationRules,
+  MonacoLanguageConfigurationData,
+  MonacoLanguageContribution,
+  MonacoLanguageSurface,
+  MonacoMonarchAction,
+  MonacoMonarchData,
+  MonacoMonarchPattern,
+  MonacoMonarchRule,
+  MonacoMonarchWordLists,
+  MonacoOnEnterAction,
+  MonacoOnEnterRule,
+  MonacoSurroundingPair,
+  MonacoThemeBase,
+  MonacoThemeContributionData,
+  MonacoTokenThemeRuleData,
+} from './monaco-language';
