@@ -6,7 +6,8 @@
  * "Tab 接受"提示件（`.inlineSuggestionsHints`，`…/hintsWidget/inlineCompletionsHintsWidget.css`）。
  * 两块的类名都不在本仓 HTML 里，先例照 `ui/editor-widget.css`（补全 / hover 弹层那份）——
  * **靠特异性取胜，不靠注入顺序**：每条都以 `:root` 起头（类级 +1），vendor 的 (0,2,0)/(0,3,0)
- * 一律被压过。改选择器前先把 (a,b,c) 对上，别靠"看着能生效"。
+ * 一律被压过（唯一例外是 `.syntax-highlighted` 那族嵌套规则，实测有效特异性 (0,4,0)——
+ * 见下面第一节那条 ⚠ 注）。改选择器前先把 (a,b,c) 对上，别靠"看着能生效"。
  *
  * ## 为什么单独成一张纸，不并进 `styles.css` / `ui/editor-widget.css`
  * - `styles.css` ↔ `styles-project.css` 由 `styles-split.equivalence.test.ts` 的 A/B/C 三闸
@@ -74,10 +75,20 @@
 /* 语法着色态（`editor.inlineSuggest.syntaxHighlightingEnabled` 缺省**开**，所以这是主通路）：
    字色由那一档语法前景自己给，我们只能给"退多少"。vendor 把它写死成 0.7（三档主题同一个数）
    ⇒ 收成 token，六档各自标定（口径与 alpha 取数见 tokens.css / themes/*.css 的注）。
-   vendor `.monaco-editor .ghost-text-decoration.syntax-highlighted` (0,3,0) ⇒ 这条 (0,4,0)。 */
-:root .monaco-editor .ghost-text-decoration.syntax-highlighted,
-:root .monaco-editor .ghost-text-decoration-preview.syntax-highlighted,
-:root .monaco-editor .suggest-preview-text .ghost-text.syntax-highlighted {
+   ⚠ **特异性实测读数（调试宿 Chromium 实测 2026-10-27，`node tools/debug-cli.mjs serve --headless`；
+   别照公式算。真壳 WebView2 未验，但本仓形态对两种计数口径都赢，见下）**：vendor 那条是 CSS 原生
+   嵌套写法 `.monaco-editor .ghost-text-decoration { &.syntax-highlighted { opacity: .7 } }`，
+   该 Chromium 按**有效 (0,4,0)** 参与级联（不是纸面展开的 (0,3,0)）：后注入的 (0,3,0) 压不动它
+   （计算值仍 0.7），后注入的 (0,4,0) 才压得动（0.31）。而 monaco 的 CSS 由贡献模块注入、位次
+   **永远在静态链之后**（style 标签序：本切片 #18 / vendor #113）⇒ 旧单类名写法
+   `:root .monaco-editor .x.hl` (0,4,0) 与它**平级且先到**，实测改了等于没改（静息 0.7）；
+   根类写两遍抬到 (0,5,0) 才压得住（实测静息 = token 值：dark 0.74，六档 computed opacity
+   逐一 = 各自 --ghost-text-opacity）。`html:root` 前缀（(0,4,1)）同样验过能赢，但本仓的形态是
+   `:root` 起头 + 根类写两遍，与 `ui/editor-widget.css` 的 `.monaco-hover.monaco-hover` 同一条先例。
+   下面每条都按这个数配平。 */
+:root .monaco-editor .ghost-text-decoration.ghost-text-decoration.syntax-highlighted,
+:root .monaco-editor .ghost-text-decoration-preview.ghost-text-decoration-preview.syntax-highlighted,
+:root .monaco-editor .suggest-preview-text .ghost-text.ghost-text.syntax-highlighted {
   opacity: var(--ghost-text-opacity);
 }
 
