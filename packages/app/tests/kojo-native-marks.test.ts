@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { registerKojoLanguage } from '../src/monaco/kojo-language';
-import { ROLE } from '@kojo/kojo-lang/semantic-roles';
+import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import {
   kojoNativeMarkCandidates,
   kojoNativeMarkRange,
