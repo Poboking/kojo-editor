@@ -105,13 +105,14 @@ Shift-JIS 变体由合成用例覆盖（真实语料无）。
 打的是**生产代码**：真 `startStructureWorker`（协议 v3）＋真 ERB 资产（两枚 wasm、三份运行时查询、
 `erbCaptureTier` / `erbIndentPattern`）＋真 `StructureClient`；唯一替身是 `Worker` 本身（进程内桥）。
 档 = `packages/erb-syntax-tree/tests/fixtures/valid-structure.erb`（**63 行 / 1,192 码元**；语料目录不在位时用它，
-换档设 `KOJO_FIRST_FRAME_FIXTURE=<path>`）。3 轮，Windows / Node 24：
+换档设 `KOJO_FIRST_FRAME_FIXTURE=<path>`）。每跑 3 轮取中位，本机连跑 4 次（Windows / Node 24，机器有负载）：
 
-| 段 | 读数 | 口径 |
-|---|---|---|
-| `open → ready` | 中位 **82.6 ms**（81.2–112.2；首跑冷 115.3） | 线程 + `Parser.init`（运行时 wasm）+ `Language.load`（ERB 文法）+ 三份查询编译 |
-| `ready → 首屏着色` | 中位 **3.9 ms**（3.7–4.0；首轮冷 51.0） | `ready` → 宿主手里有第一批 token（`facets.semantic` 解成 token 数组）。**不含** Monaco 的 encode 与那一帧上屏（那一段要真壳） |
+| 段 | 中位区间（4 次跑） | 单轮散布 | 口径 |
+|---|---|---|---|
+| `open → ready` | **82.6 – 117.8 ms** | 81.2 – 267.8 ms | 线程 + `Parser.init`（运行时 wasm）+ `Language.load`（ERB 文法）+ 三份查询编译 |
+| `ready → 首屏着色` | **3.9 – 5.3 ms** | 3.5 – 5.3 ms（首轮冷 51 – 102 ms） | `ready` → 宿主手里有第一批 token（`facets.semantic` 解成 token 数组）。**不含** Monaco 的 encode 与那一帧上屏（那一段要真壳） |
 
-读数要点：首帧的大头在**装配**（~83 ms，约 95%），着色那一段在查询冷启后是毫秒级；首轮 51 ms 是
-"第一次正经跑三份查询"的冷查，不是每份文档的常态。探针收尾会撞 web-tree-sitter 的 Zone OOM
-（PITFALLS 138/209）⇒ 结论只从 stdout 取，`rc` 不作判据。
+读数要点：首帧的大头在**装配**（~83–118 ms，约 95%），着色那一段在查询冷启后是毫秒级；每份文档的
+**首轮**查询是冷的（51–102 ms 随机器负载浮动），稳态 3.5–5.3 ms。⇒ 这两个数按区间读，别当单点预算；
+要收紧就先看机器负载与首轮/稳态之分。探针收尾会撞 web-tree-sitter 的 Zone OOM（PITFALLS
+138/209）⇒ 结论只从 stdout 取，`rc` 不作判据。
