@@ -128,7 +128,9 @@ describe('多行语句括号（`{` / `}` 整行）', () => {
     expect(renderCtrl('{IF LOCAL}')).toBeNull();
   });
 
-  it('词形不靠往 KEYWORDS 加词实现（写形归另一条线）', () => {
-    for (const w of ['多行语句开始', '多行语句结束', '自增', '自减']) expect(lookupKeyword(w), w).toBeUndefined();
+  it('v1.9 P0-B：两枚括号词升为写形（登记 KEYWORDS）；自增 / 自减仍归只读面', () => {
+    expect(lookupKeyword('多行语句开始')).toBe('block.multiStart');
+    expect(lookupKeyword('多行语句结束')).toBe('block.multiEnd');
+    for (const w of ['自增', '自减']) expect(lookupKeyword(w), w).toBeUndefined();
   });
 });

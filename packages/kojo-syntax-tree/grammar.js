@@ -97,7 +97,12 @@ const WF = require('./src/word-forms.json');
  * 或产物被手改过 ⇒ 当场抛，绝不带着缺判据的语法去生成 parser（静默把标记行吞成旁白比构建红更坏）。
  */
 const RAW = WF.rawLineRules;
-if (!RAW || typeof RAW.dimDirective?.pattern !== 'string' || !Array.isArray(RAW.exactMarkers)) {
+if (
+  !RAW ||
+  typeof RAW.dimDirective?.pattern !== 'string' ||
+  typeof RAW.fileDeclDirective?.pattern !== 'string' ||
+  !Array.isArray(RAW.exactMarkers)
+) {
   throw new Error('word-forms.json 缺 rawLineRules 这一格——重跑 tools/gen-word-forms.mjs 取回行首判据投影');
 }
 
@@ -452,14 +457,21 @@ module.exports = grammar({
     // 行首 `@`：原生函数块起始（rawBlockStart，直到下一个 `@` 行整块透传）。
     raw_block_start: lineRule(P.raw_block_start, `@${C}*`),
 
-    // 全大写原生指令行 / `$标签` / `#DIM` 族预处理声明（三形同判 rawLine，故同一枚节点）。
-    // 前两支是 `lexer.ts:606` 的 `RAW_INSTR_RE`（`^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)`）
-    // 与 `content.startsWith('$')` 的记号化写法——正则不是词，投影覆盖不到，改动真源时同改这里。
-    // 第三支**不在此抄词表**：`RAW.dimDirective.pattern` 是 `keywords.ts:550` 的
-    // `DIM_DIRECTIVE_RE` 经生成脚本编译出的记号正则（`/i` → 逐字母 `[xX]`，`^` 由记号的天然起点锚承担）。
+    // 全大写原生指令行 / `$标签` / `#` 声明族（`#DIM` 族 + 文件级 8 枚；三形同判 rawLine，故同一枚节点）。
+    // 前两支是 `lexer.ts` 的 `RAW_INSTR_RE`（`^[A-Z][A-Z0-9_]*(?:[:.][^\s]*)?(?:\s|=|$)`）与
+    // `content.startsWith('$')` 的记号化写法——正则不是词，投影覆盖不到，改动真源时同改这里。
+    // 后两支**不在此抄词表**：`RAW.dimDirective.pattern` / `RAW.fileDeclDirective.pattern` 是
+    // `keywords.ts` 的 `DIM_DIRECTIVE_RE` 与 `FILE_DECL_DIRECTIVE_RE` 经生成脚本编译出的记号正则
+    // （`/i` → 逐字母 `[xX]`，`^` 由记号的天然起点锚承担）。
+    //
+    // **文件级那一支自带尾巴、且不吃本行统一尾巴 `${C}*`**：它的记号是"词 + 一非词字符 + 本行剩余"，
+    // 为的是让 `#FUNCTIONEND` 这种"词后紧跟 ASCII 词字符"的行**长度输给 `text_line`**（最长匹配判给
+    // 文本，与真源 `\b` 同判）；若与其它臂共用统一尾巴，`#FUNCTION` 前缀也能把整行吃下，就判错了。
+    // 四支**同处一枚记号**（不是 `choice` 多枚）：独一枚 token 才是 821,724 B 那档的既有形状，
+    // 拆成两枚实测让 LR/DFA 表多出 5 万余字节（同义改写不换形状）。
     native_line: lineRule(
       P.native_line,
-      `(?:[A-Z][A-Z0-9_.]*(?::${C}*)?|\\$|(?:${RAW.dimDirective.pattern}))${C}*`,
+      `(?:[A-Z][A-Z0-9_.]*(?::${C}*)?|\\$|(?:${RAW.dimDirective.pattern}))${C}*|(?:${RAW.fileDeclDirective.pattern})`,
     ),
 
     // 整行严格等值的标记行（`[SKIPSTART]` / `[SKIPEND]`…）：规则由投影**动态生成**，一支一节点。

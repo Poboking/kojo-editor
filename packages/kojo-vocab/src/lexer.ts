@@ -44,11 +44,18 @@ import type {
   WhenExpr,
 } from '@kojo/plugin-api';
 import {
+  erbContinuationRoleOf,
+  erbPreprocRoleOf,
+  type ErbContinuationRole,
+  type ErbPreprocRole,
+} from '@kojo/plugin-api';
+import {
   argTokenToEngineToken,
   blockEndWord,
   canonicalTimingParamName,
   CONT_MARKS,
   DIM_DIRECTIVE_RE,
+  FILE_DECL_DIRECTIVE_RE,
   HEAD_DECL_KEYS,
   FULLWIDTH_COLON,
   endsWithBlockColon,
@@ -252,6 +259,24 @@ export type LineClass =
    */
   | { kind: 'skipStart' }
   | { kind: 'skipEnd' }
+  /**
+   * 原生预处理标记行（v1.9 P0-C）：`[IF …]` / `[ELSEIF …]` / `[ELSE]` / `[IF_DEBUG]` /
+   * `[IF_NDEBUG]` / `[ENDIF]`。判定**必须早于** `matchRuleTag`——否则 `[IF <宏>]` 会被
+   * 规则池标签吃掉（误报 `rule-pool-branch-outside-pool`），而纯大写四枚又兜底成台词。
+   * 判据单源 `@kojo/plugin-api` 的 `erbPreprocRoleOf`（整行严格等值、大小写不敏感）。
+   */
+  | { kind: 'preprocMarker'; role: ErbPreprocRole; text: string }
+  /** 糖形预处理块头 `预处理 <子词> [<宏>]：`（v1.9 P0-C） */
+  | { kind: 'preprocHead'; variant: 'if' | 'elseif' | 'else' | 'debug' | 'ndebug'; macro: string; text: string }
+  /** 糖形预处理收束 `预处理结束`（v1.9 P0-C） */
+  | { kind: 'preprocEnd' }
+  /**
+   * 行连接块标记（v1.9 P0-B）：整行 `{` / `}` 或糖形 `多行语句开始` / `多行语句结束`。
+   * `sugar` 区分作者写的是中文词还是原生记号（原生标记逐字节透传，糖形发射规范化单字符）。
+   * 块体配对与逐行透传归 parser（`readBraceBlock`）。
+   */
+  | { kind: 'braceStart'; sugar: boolean; text: string }
+  | { kind: 'braceEnd'; sugar: boolean; text: string }
   | { kind: 'headDecl'; key: KeywordId; value: string }
   | {
       kind: 'aliasDecl';
@@ -652,11 +677,43 @@ export function classifyLine(line: LogicalLine): LineClass {
   if (content === '[SKIPSTART]') return { kind: 'skipStart' };
   if (content === '[SKIPEND]') return { kind: 'skipEnd' };
 
+  // ---- 原生预处理标记（v1.9 P0-C）----
+  // **必须排在 `matchRuleTag` 之前**：`[IF <宏>]` 内容含空格 / 小写，旧路径会把它当规则池
+  // 分支标签并报 `rule-pool-branch-outside-pool`（错诊断 + 阻止编译）；`[ELSE]` / `[ENDIF]` /
+  // `[IF_DEBUG]` / `[IF_NDEBUG]` 又会因纯大写被标签判据排除而兜底成台词。判据单源
+  // `@kojo/plugin-api::erbPreprocRoleOf`（整行严格等值、大小写不敏感），与 `.erb` 侧同一条。
+  //
+  // **大小写闸**：引擎侧的预处理器不区分大小写，但 `.kojo` 的规则池标签 `[else]` / `[其他]`
+  // 也是整行方括号，且**惯例小写**（`matchRuleTag` 本来就排除纯大写 ASCII）。若不设闸，
+  // `分支：` 块里的 `[else]` 会被抢成原生 `[ELSE]`，规则池当场失效。故这里只认**标记词大写**
+  // 的原生形式（`[IF …]` / `[ELSE]` / `[ENDIF]` / `[IF_DEBUG]` / `[IF_NDEBUG]`）；小写 `[if …]`
+  // 在 `.kojo` 里仍按规则池标签解释。需要小写原生标记时走 `@` 原生块（逐字节透传）。
+  const preprocRole = /^\[[A-Z]/.test(content) ? erbPreprocRoleOf(content) : null;
+  if (preprocRole) return { kind: 'preprocMarker', role: preprocRole, text: content };
+
+  // ---- 原生行连接标记（v1.9 P0-B）----
+  // 整行恰为 `{` / `}`（允许行首缩进；`content` 已去缩进）。判据单源
+  // `@kojo/plugin-api::erbContinuationRoleOf`；`{ 1, 2 }`（FORM 插值）与 `;!;{` 不是标记。
+  const contRole = erbContinuationRoleOf(content);
+  if (contRole) {
+    const sugar = false;
+    return contRole === 'open'
+      ? { kind: 'braceStart', sugar, text: content }
+      : { kind: 'braceEnd', sugar, text: content };
+  }
+
   // ---- 原生直通（行）----
   // `#DIM` 族预处理声明与全大写指令 / `$标签` 同走这一支：命中上游同源的 `DIM_DIRECTIVE_RE`
   // 就把**整行原文**当原生直通行逐字节透传（修饰词 / 大小写 / 行尾注释一并带走，不解释、不降糖），
   // 于是 `.kojo` 里怎么写、ERB 就怎么出。判据只此一条，见 `keywords.ts` 的 `DIM_DIRECTIVE_RE` 注释。
-  if (RAW_INSTR_RE.test(content) || content.startsWith('$') || DIM_DIRECTIVE_RE.test(content)) {
+  // v1.9 P0-A 把闭集扩到 `#DIM` 族之外的 8 枚文件级 / 返回类型声明（`#FUNCTION` 一族）——
+  // 此前这批行因 `#` 起手且非 `#DIM` 族而一路兜底成台词。
+  if (
+    RAW_INSTR_RE.test(content) ||
+    content.startsWith('$') ||
+    DIM_DIRECTIVE_RE.test(content) ||
+    FILE_DECL_DIRECTIVE_RE.test(content)
+  ) {
     return { kind: 'rawLine', text: content };
   }
 
@@ -668,6 +725,12 @@ export function classifyLine(line: LogicalLine): LineClass {
   // 文本行与原生直通**不剥**：台词里的 `;` 是作者要打印的字符；ERB 直通行的
   // `;` 注释原样保留（那边本来就是合法注释）。
   const code = stripInlineComment(content);
+
+  // ---- 糖形预处理收束 / 行连接标记（v1.9 P0-B / P0-C）----
+  // 判据是**整行恰为该词**（行内 `;` 注释已由 `code` 剥掉，不随产物输出）。
+  if (code === PREPROC_END_W) return { kind: 'preprocEnd' };
+  if (code === MULTI_START_W) return { kind: 'braceStart', sugar: true, text: content };
+  if (code === MULTI_END_W) return { kind: 'braceEnd', sugar: true, text: content };
 
   // ---- 规则池标签 `[条件]`（规范 §3.11）----
   // 只认**整行恰为方括号**的窄形态；判定先于块头/赋值/文本，保证 `[其他]` 不会
@@ -686,6 +749,10 @@ export function classifyLine(line: LogicalLine): LineClass {
   // 注意：块头（`如果 …：` / `时机 …：` / `当 …：` …）也可能含冒号
   // （如 `时机 指令 310 成否: 游戏判定：`）。判据是"行尾是块头终止符"。
   if (endsWithBlockColon(code)) {
+    // 糖形预处理块头（v1.9 P0-C）**先于**普通块头判定：`预处理 如果 X：` 的词头不是
+    // 普通块关键字，而子词 `如果` 会被普通块头解析当成"如果块"误吞。
+    const preprocHead = parsePreprocHead(stripBlockColon(code));
+    if (preprocHead) return preprocHead;
     const block = parseBlockHead(code);
     if (block) return block;
   }
@@ -855,6 +922,78 @@ const CONTINUE_W = primaryWord('inline.continueLoop');
 const RESTART_W = primaryWord('inline.restartLoop');
 /** TRY 系九枚写形的词头（与只读面 `native-display/control.ts` 的中性显示形同一枚词形） */
 const TRY_W = primaryWord('inline.tryStatement');
+
+/* --------------------------- 预处理条件块 / 行连接块（v1.9 P0） --------------------------- */
+
+/** 预处理块头词头与子词（词形全部取自 `keywords.ts`；显示层取同一批串） */
+const PREPROC_W = primaryWord('block.preproc');
+const PREPROC_END_W = primaryWord('block.preprocEnd');
+const PREPROC_DEBUG_W = primaryWord('inline.preprocDebug');
+const PREPROC_NDEBUG_W = primaryWord('inline.preprocNonDebug');
+const IF_W = primaryWord('block.if');
+const ELIF_W = primaryWord('block.elif');
+const ELSE_W = primaryWord('block.else');
+/** 行连接两枚写形（与只读面 `control.ts` 的 `MULTILINE_*_W` 同一份表） */
+const MULTI_START_W = primaryWord('block.multiStart');
+const MULTI_END_W = primaryWord('block.multiEnd');
+
+const PREPROC_HEAD_HINT =
+  `「${PREPROC_W}」块头的合法写法只有五种：` +
+  `「${PREPROC_W} ${IF_W} <宏>：」 / 「${PREPROC_W} ${ELIF_W} <宏>：」 / ` +
+  `「${PREPROC_W} ${ELSE_W}：」 / 「${PREPROC_W} ${PREPROC_DEBUG_W}：」 / ` +
+  `「${PREPROC_W} ${PREPROC_NDEBUG_W}：」；收束是「${PREPROC_END_W}」`;
+
+/**
+ * 宏名判据（与上游 `erb-parser/src/structure.ts::macroOf` 同口径）：**单个裸标识符**，
+ * 拒符号 / 空白 / 数字开头；汉字宏名合法。预处理只读宏名，不读表达式。
+ */
+function isBareMacroName(name: string): boolean {
+  if (name.length === 0) return false;
+  if (/^[0-9]/.test(name)) return false;
+  return !/[^\p{L}\p{N}_]/u.test(name);
+}
+
+/**
+ * 糖形预处理块头 `预处理 <子词> [<宏>]`（入参已剥尾冒号与行内注释）。
+ *
+ * 判据 0（闭集）：`预处理` 后必须跟空白，子词必须是 `如果` / `否则如果` / `否则` /
+ * `调试` / `非调试` 之一；否则返回 `null`（回落普通文本行，`预处理 一下` 不会被误读成指令）。
+ * 子词认出但形制残缺（宏位为空 / 多余正文）⇒ `controlMalformed`（fail-closed，不静默）。
+ */
+function parsePreprocHead(code: string): LineClass | null {
+  if (!code.startsWith(PREPROC_W)) return null;
+  const after = code.slice(PREPROC_W.length);
+  // `预处理如果 X` 这类无空白连写不是块头（子词必须独立成词）
+  if (after.length === 0 || !/^[ \t\u3000]/.test(after)) return null;
+  const rest = after.trimStart();
+
+  const variants: ReadonlyArray<readonly [string, 'if' | 'elseif' | 'else' | 'debug' | 'ndebug', boolean]> = [
+    // 长词优先：`否则如果` 先于 `否则`，`非调试` 后于 `调试` 但两串互不前缀，顺序无碍
+    [ELIF_W, 'elseif', true],
+    [IF_W, 'if', true],
+    [ELSE_W, 'else', false],
+    [PREPROC_NDEBUG_W, 'ndebug', false],
+    [PREPROC_DEBUG_W, 'debug', false],
+  ];
+
+  for (const [word, variant, needsMacro] of variants) {
+    if (!rest.startsWith(word)) continue;
+    const tail = rest.slice(word.length).trimStart();
+    // `如果X`（子词后无空白直接连宏名）不是合法块头
+    if (tail.length > 0 && !/^[ \t\u3000]/.test(rest.slice(word.length))) return null;
+    if (needsMacro) {
+      if (tail.length === 0) return malformed(`${PREPROC_HEAD_HINT}——「${word}」后必须写一个宏名`);
+      if (!isBareMacroName(tail)) {
+        return malformed(`${PREPROC_HEAD_HINT}——宏名必须是单个裸标识符（可以是汉字），不接表达式：\`${tail}\``);
+      }
+      return { kind: 'preprocHead', variant, macro: tail, text: code };
+    }
+    if (tail.length > 0) return malformed(`${PREPROC_HEAD_HINT}——「${word}」不带宏名`);
+    return { kind: 'preprocHead', variant, macro: '', text: code };
+  }
+  // 子词不在闭集 ⇒ 按台词处理（判据 0）
+  return null;
+}
 
 /** 标识符字符（ASCII + 位引用冒号段）——与 `native-display/control.ts` 的循环变量判据同一形 */
 const IDENT_CHARS = '0-9A-Za-z_';

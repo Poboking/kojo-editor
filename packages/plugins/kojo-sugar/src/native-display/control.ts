@@ -46,6 +46,7 @@
  * 这里重抄就成了第二份口径。
  */
 
+import { erbPreprocRoleOf } from '@kojo/plugin-api';
 import { BLOCK_END_SUFFIX, NOTIN_KEYWORDS, blockEndWord, operatorTable, primaryWord as word } from '../keywords';
 import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from '../sugar-ident';
 import type { NativeDisplayInput, NativeDisplayLookup } from './types';
@@ -98,7 +99,11 @@ const ECHO_W = word('inline.engineEcho'); // 原形（记号回显：义项不�
  * 用一种写不回去的写法。
  */
 const SIZE_W = '大小';
-const PRE_W = '预处理';
+const PRE_W = word('block.preproc'); // 预处理（v1.9 P0-C 起同时是糖形块头前缀，写读同源）
+/** 预处理块的收束词（`预处理结束`）与两个调试形子词——单一真源同上 */
+const PRE_END_W = word('block.preprocEnd');
+const PRE_DEBUG_W = word('inline.preprocDebug');
+const PRE_NDEBUG_W = word('inline.preprocNonDebug');
 
 /**
  * TRY 系九枚的**中性显示形**词头（`试探 原形 TRYCGOTO *先, LABEL:目标`）。
@@ -165,9 +170,14 @@ const DATA_GROUPING_NEUTRAL: ReadonlySet<string> = new Set(['DATALIST', 'ENDLIST
  * 为什么**不进 `KEYWORDS`**（与 `试探` / `分组` 逐字同一条判据）：糖层没有这层括号的写形，
  * 登记 = 承诺写得回去；显示形靠"整行就是那一个括号记号"触发，与词表无耦合。
  * 行尾 `;` 注释沿用本文件统一的 `splitComment` 通路原样缀回。
+ *
+ * **v1.9 P0-B 变更**：两枚词已升为 T1 写形（登记进 `KEYWORDS` 的 `block.multiStart` /
+ * `block.multiEnd`），本层改为从 `primaryWord()` 取——写读同形，不再各存一份字面量。
+ * ——下面是升写形**之前**的原始说明，保留以记口径由来：
+ * 「糖层没有这层括号的写形，登记 = 承诺写得回去」。
  */
-const MULTILINE_START_W = '多行语句开始';
-const MULTILINE_END_W = '多行语句结束';
+const MULTILINE_START_W = word('block.multiStart');
+const MULTILINE_END_W = word('block.multiEnd');
 const BRACE_NEUTRAL: ReadonlyMap<string, string> = new Map([
   ['{', MULTILINE_START_W],
   ['}', MULTILINE_END_W],
@@ -472,6 +482,34 @@ function renderLabel(body: string): string | null {
   return name.length === 0 ? null : `${LABEL_W} ${name}`;
 }
 
+/* ----------------------- 原生预处理标记（`[IF]` 族，v1.9 P0-C） ----------------------- */
+
+/**
+ * `[IF X]` / `[ELSEIF X]` / `[ELSE]` / `[IF_DEBUG]` / `[IF_NDEBUG]` / `[ENDIF]` ⇒ 糖形显示。
+ *
+ * **判据单源 `erbPreprocRoleOf`**（`@kojo/plugin-api`，整行严格等值、大小写不敏感）：
+ * 本层只决定"翻成哪一串中文"，绝不另写一条识别正则去猜是不是标记。
+ * 显示形与写形**同一串**（`预处理 如果 X：` / `预处理结束`…）——作者回读看到的就是能写回去的那一行。
+ *
+ * 宏名是**数据不是条件**（引擎只取宏名做 `#DEFINE` 存在性判），故逐字带走、不做表达式中文化。
+ * `[IF DEBUG]` 归一为 `预处理 如果 DEBUG：`（事实是"宏 DEBUG"），不冒充 `[IF_DEBUG]`（后者是引擎
+ * 的调试标记，另有 `预处理 调试：` 一形）。
+ */
+function renderPreprocMarker(body: string): string | null {
+  const role = erbPreprocRoleOf(body);
+  if (role === null) return null;
+  if (role === 'close') return PRE_END_W;
+  const m = /^\[\s*(IF_DEBUG|IF_NDEBUG|ELSEIF|ELSE|IF)\s*([^\]]*?)\s*\]$/i.exec(body);
+  if (!m) return null;
+  const token = (m[1] ?? '').toUpperCase();
+  const arg = (m[2] ?? '').trim();
+  if (token === 'IF_DEBUG') return `${PRE_W} ${PRE_DEBUG_W}：`;
+  if (token === 'IF_NDEBUG') return `${PRE_W} ${PRE_NDEBUG_W}：`;
+  if (token === 'ELSE') return `${PRE_W} ${ELSE_W}：`;
+  if (arg.length === 0) return null;
+  return token === 'ELSEIF' ? `${PRE_W} ${ELIF_W} ${arg}：` : `${PRE_W} ${IF_W} ${arg}：`;
+}
+
 /* ------------------------------- 入口 ------------------------------- */
 
 /** ZH-C 的入口（签名由 lead 钉死，禁止改名或加参） */
@@ -489,6 +527,12 @@ export function renderControlLine(input: NativeDisplayInput): string | null {
 function renderBody(body: string, input: NativeDisplayInput): string | null {
   if (body.startsWith('#')) return renderPreprocessor(body);
   if (body.startsWith('$')) return renderLabel(body);
+  // 原生预处理标记（`[IF …]` 族）：v1.9 P0-C 新增显示形（判据单源 `erbPreprocRoleOf`）。
+  // 位置在括号/`HEAD_RE` 之前：`[` 起手不是标识符，后面两张表都不认领它。
+  if (body.startsWith('[')) {
+    const preproc = renderPreprocMarker(body);
+    if (preproc !== null) return preproc;
+  }
   // 多行语句括号（`{` / `}` 整行）：已知结构、糖层无写形 ⇒ 中性显示形（判据见常量处）。
   // 位置在 `HEAD_RE` 之前：两枚不是标识符，进不了后面任何一张表。
   const brace = BRACE_NEUTRAL.get(body);

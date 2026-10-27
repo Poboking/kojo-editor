@@ -71,7 +71,7 @@ import { isIdentPart, isIdentStart } from './identifier-chars';
 import { STATEMENT_FUNCTIONS } from './statement-functions';
 import { describeErbLiteralFailure, encodeErbText, erbStringLiteral, formattedErbLiteral, type ErbLiteralFailure } from './literal';
 import type { TopNode } from './parser';
-import type { CatchBlock, DataBlock, LoopBlock, RulePoolBlock } from './parser';
+import type { CatchBlock, DataBlock, LoopBlock, PreprocBlock, BraceBlock, RulePoolBlock } from './parser';
 import { sortRulePoolBranches } from './rule-pool';
 import type { AliasTable, DiagnosticSink, DictionaryLookup, HeartBlock, RandomShape } from './types';
 
@@ -1605,7 +1605,15 @@ interface BodyContext {
 
 function emitStatement(
   em: Emitter,
-  node: SugarNode | HeartBlock | LoopBlock | CatchBlock | DataBlock | RulePoolBlock,
+  node:
+    | SugarNode
+    | HeartBlock
+    | LoopBlock
+    | CatchBlock
+    | DataBlock
+    | RulePoolBlock
+    | PreprocBlock
+    | BraceBlock,
   ctx: BodyContext,
   indent: number,
 ): void {
@@ -1669,6 +1677,21 @@ function emitStatement(
     case 'rulePoolBlock':
       emitRulePoolBlock(em, node, ctx, indent);
       break;
+    case 'preprocBlock':
+      // 预处理条件块（v1.9 P0-C）：块头 / 分支 → `[IF …]` 族标记，块体逐句发射，收束 `[ENDIF]`
+      emitPreprocBlock(em, node, ctx, indent);
+      break;
+    case 'braceBlock': {
+      // 行连接块（v1.9 P0-B）：块体**逐字节**透传，一个字节都不解释。
+      // 糖形的两枚标记由 codegen 按当前层级发射（与其它语句同位）；原生记号连原缩进一起透传。
+      const last = node.lines.length - 1;
+      for (let i = 0; i < node.lines.length; i++) {
+        const marker = node.sugar && (i === 0 || (node.closed && i === last));
+        if (marker) em.push(indent, node.lines[i]!, node.loc.start.line);
+        else em.pushRaw(node.lines[i]!, node.loc.start.line, verbatimSpec(0, node.lines[i]!.length));
+      }
+      break;
+    }
     case 'rawLine':
       emitRawLine(em, node, ctx, indent);
       break;
@@ -2731,6 +2754,35 @@ function emitRulePoolBlock(em: Emitter, node: RulePoolBlock, ctx: BodyContext, i
     loc: branch.loc,
   }));
   emitIfBlock(em, { kind: 'ifBlock', branches, loc: node.loc }, ctx, indent);
+}
+
+/* ------------------------------ 预处理条件块（v1.9 P0-C） ------------------------------ */
+
+/**
+ * 预处理条件块 → 文件级预处理标记。
+ *
+ * `预处理 如果 X：` → `[IF X]`；`否则如果 X：` → `[ELSEIF X]`；`否则：` → `[ELSE]`；
+ * `调试：` → `[IF_DEBUG]`；`非调试：` → `[IF_NDEBUG]`；`预处理结束` → `[ENDIF]`。
+ *
+ * 标记行**只在行首缩进**（引擎判整行等值，缩进不参与判据），尾随注释一律不追加——
+ * 糖行的行内 `;` 注释在词法层已剥离，不随产物输出。块体按普通糖语句发射（+1 级）。
+ */
+function emitPreprocBlock(em: Emitter, node: PreprocBlock, ctx: BodyContext, indent: number): void {
+  for (const branch of node.branches) {
+    const marker =
+      branch.kind === 'if'
+        ? `[IF ${branch.macro}]`
+        : branch.kind === 'elseif'
+          ? `[ELSEIF ${branch.macro}]`
+          : branch.kind === 'else'
+            ? '[ELSE]'
+            : branch.kind === 'debug'
+              ? '[IF_DEBUG]'
+              : '[IF_NDEBUG]';
+    em.push(indent, marker, branch.loc.start.line);
+    emitBody(em, branch.body, ctx, indent + 1);
+  }
+  em.push(indent, '[ENDIF]', node.loc.end.line);
 }
 
 /* ------------------------------ 如果块（§3.5） ------------------------------ */

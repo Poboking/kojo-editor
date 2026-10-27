@@ -41,9 +41,18 @@ const wasmPath = join(pkgRoot, 'tree-sitter-kojo.wasm');
  *   （parity 承重）；剩下的大头是"多一个行族节点"在 LR 表里的固定价（≈41,800 B 量级）——
  *   要退它只能把 `try_statement` 降级成 `native_line`，那等于取消这枚节点、宿主按 kind 取色与折叠就没有了。
  *   ⇒ 结论不变：这一档体积是"TRY 系写形有 CST 节点"这件事的**结构性代价**，不是实现浪费。
- * 阈值取实测原样（821,724 B / gzip 101,487 B），不放余量：任何新增体积都必须重新对账。
+ * - 821,724 → **835,718 B**＝v1.9 P0-A「`#` 声明族直通」在 `native_line` 里新增的第四支
+ *   （文件级 8 枚：`#FUNCTION` / `#GLOBAL` / `#LOCALSIZE` …，净 **+13,994 B**）。这一支**必须自带**
+ *   "词 + 一非词字符 + 本行剩余"的尾巴、且不能与前三支共用统一尾巴 `${C}*`：真源 `FILE_DECL_DIRECTIVE_RE`
+ *   用 `\b` 收尾，而 tree-sitter 记号不支持断言，等价改写的落点就是"消费一个非词字符"；共用统一尾巴
+ *   会让 `#FUNCTION` 前缀吃下 `#FUNCTIONEND` 整行（`parity` 实测 2 行真冲突）。逐笔量过两笔可比方案：
+ *   把这一支拆成第二枚 token（`seq(choice(tk,tk), optional($._line_tail))`）＝ 878,462 B（+42,744 B），
+ *   尾巴写 `[^\r\n]*` 而非既有 `C` ＝ 873,115 B（+37,397 B）——都更贵，故取"独一枚 token 内四支并列"
+ *   这形状（与 821,724 B 那档同形状，只多一条择一臂）。⇒ 这一档是"`#` 文件级声明行在 CST 里有 rawLine
+ *   节点"的结构性代价，不是实现浪费。
+ * 阈值取实测原样（835,718 B / gzip 见测试打印），不放余量：任何新增体积都必须重新对账。
  */
-const MAX_WASM_BYTES = 821_724;
+const MAX_WASM_BYTES = 835_718;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo.wasm）', () => {
   const bytes = readFileSync(wasmPath);

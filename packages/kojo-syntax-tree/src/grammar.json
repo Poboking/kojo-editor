@@ -613,7 +613,7 @@
             "value": 4,
             "content": {
               "type": "PATTERN",
-              "value": "(?:[A-Z][A-Z0-9_.]*(?::[^\";\\n]*)?|\\$|(?:#(?:[dD][iI][mM][sS][tT][rR]|[dD][iI][mM][cC][hH][aA][rR]|[dD][iI][mM][fF]|[dD][iI][mM][sS]|[dD][iI][mM]|[dD][eE][fF][iI][nN][eE])\\s+\\S))[^\";\\n]*"
+              "value": "(?:[A-Z][A-Z0-9_.]*(?::[^\";\\n]*)?|\\$|(?:#(?:[dD][iI][mM][sS][tT][rR]|[dD][iI][mM][cC][hH][aA][rR]|[dD][iI][mM][fF]|[dD][iI][mM][sS]|[dD][iI][mM]|[dD][eE][fF][iI][nN][eE])\\s+\\S))[^\";\\n]*|(?:#(?:LOCALSSIZE|TESTMEMORY|FUNCTIONS|LOCALSIZE|SFUNCTION|XFUNCTION|FUNCTION|GLOBAL)(?:[^A-Za-z0-9_\\r\\n][^\";\\n]*)?)"
             }
           }
         },

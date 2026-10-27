@@ -8,8 +8,18 @@ import type {
   TimingBlock,
   WhenBranch,
 } from '@kojo/plugin-api';
-import type { CatchBlock, DataBlock, LoopBlock, RulePoolBlock, RulePoolBranch } from './parser';
+import type {
+  BraceBlock,
+  CatchBlock,
+  DataBlock,
+  LoopBlock,
+  PreprocBlock,
+  PreprocBranch,
+  RulePoolBlock,
+  RulePoolBranch,
+} from './parser';
 import type { HeartBlock } from './types';
+import { primaryWord } from './keywords';
 
 /**
  * `.kojo` 文档 → 大纲（B3）。
@@ -47,10 +57,37 @@ const clip = (text: string, max: number): string => {
  * 大纲必须看见它们——否则块里的 `如果` / `选项` 会整段失踪，结构感在这里断档；
  * 类型按同包 parser / types 的导出入账，不另抄一份形状、更不扫第二遍源文本。
  */
-type InternalBlock = LoopBlock | CatchBlock | DataBlock | RulePoolBlock | HeartBlock;
+type InternalBlock =
+  | LoopBlock
+  | CatchBlock
+  | DataBlock
+  | RulePoolBlock
+  | HeartBlock
+  | PreprocBlock
+  | BraceBlock;
 
 /** 大纲遍历的节点面：契约节点 + 转译器内部块 */
 type SymbolNode = SugarNode | SugarTopLevelNode | InternalBlock;
+
+/**
+ * 只供折叠、不进大纲的标记键（Symbol 键不会被 Monaco 序列化，也不会出现在作者面）。
+ *
+ * 预处理块 / 行连接块是"文件级裁剪 / 透传"构造，不是命名结构——大纲不立节点（v1.9 §3.1 /
+ * §3.2），但折叠要区间。`kojoDocumentSymbols` 递归摘掉带本键的项；`kojoFoldingSymbols`
+ * 原样返回（`folding.ts` 用）。
+ */
+const FOLD_ONLY = Symbol('kojoFoldOnly');
+type FoldTagged = EditorDocumentSymbol & { [FOLD_ONLY]?: true };
+
+/** 递归摘掉 `FOLD_ONLY` 项（父项区间已含子项，摘叶不改父区间） */
+function stripFoldOnly(items: readonly EditorDocumentSymbol[]): EditorDocumentSymbol[] {
+  const out: EditorDocumentSymbol[] = [];
+  for (const item of items) {
+    if ((item as FoldTagged)[FOLD_ONLY]) continue;
+    out.push(item.children ? { ...item, children: stripFoldOnly(item.children) } : item);
+  }
+  return out;
+}
 
 /** 块头行的区间（1 基、闭区间）；`cover` 里的子节点要算进来（分支头只覆盖自己那一行） */
 function rangeOf(
@@ -102,6 +139,35 @@ function rulePoolBranchName(branch: RulePoolBranch, index: number): string {
   });
 }
 
+/**
+ * 预处理分支名（v1.9 P0-C）：`预处理 如果 X` / `预处理 否则如果 X` / `预处理 否则` /
+ * `预处理 调试` / `预处理 非调试`——**写形词表单一真源**（`primaryWord`），不另抄一串字面量。
+ */
+function preprocBranchName(branch: PreprocBranch): string {
+  if (branch.kind === 'else') {
+    return joinParts([primaryWord('block.preproc'), primaryWord('block.else')]);
+  }
+  if (branch.kind === 'debug') {
+    return joinParts([primaryWord('block.preproc'), primaryWord('inline.preprocDebug')]);
+  }
+  if (branch.kind === 'ndebug') {
+    return joinParts([primaryWord('block.preproc'), primaryWord('inline.preprocNonDebug')]);
+  }
+  return joinParts([
+    primaryWord('block.preproc'),
+    branch.kind === 'if' ? primaryWord('block.if') : primaryWord('block.elif'),
+    branch.macro,
+  ]);
+}
+
+/** 预处理分支子项（与 `childSymbol` 同形状，额外带 `FOLD_ONLY`——父项摘掉后折叠仍要分支区间） */
+function preprocChildSymbol(branch: PreprocBranch): EditorDocumentSymbol {
+  return {
+    ...childSymbol(preprocBranchName(branch), branch.loc, branch.body),
+    [FOLD_ONLY]: true,
+  } as FoldTagged;
+}
+
 function caseBranchName(branch: WhenBranch): string {
   if (branch.kind === 'else') return '否则';
   return joinParts([
@@ -134,7 +200,16 @@ function childSymbol(name: string, loc: SugarSourceSpan, body: readonly SymbolNo
 
 /** 节点 → 大纲项（非结构节点返回 null）；`RulePoolBlock` / `HeartBlock` / `LoopBlock` / `CatchBlock` / `DataBlock` 是转译器内部节点，同 `codegen` 的 `emitStatement` 口径并入入参类型 */
 function rawSymbol(
-  node: SugarNode | SugarTopLevelNode | RulePoolBlock | HeartBlock | LoopBlock | CatchBlock | DataBlock,
+  node:
+    | SugarNode
+    | SugarTopLevelNode
+    | RulePoolBlock
+    | HeartBlock
+    | LoopBlock
+    | CatchBlock
+    | DataBlock
+    | PreprocBlock
+    | BraceBlock,
 ): EditorDocumentSymbol | null {
   switch (node.kind) {
     case 'timingBlock': {
@@ -301,6 +376,27 @@ function rawSymbol(
       return { name: joinParts(['别名', node.name]), kind: 'declaration', ...rangeOf(node.loc) };
     case 'constDecl':
       return { name: joinParts(['常量', node.name]), kind: 'declaration', ...rangeOf(node.loc) };
+    case 'preprocBlock':
+      // 预处理条件块（v1.9 P0-C，转译器内部 AST 节点）：**只供折叠、不立大纲节点**。
+      // 文件级裁剪构造不是命名结构，作者面大纲不列它；但折叠要区间（块内可整段藏起），
+      // 故按 `FOLD_ONLY` 标记进来，`kojoDocumentSymbols` 递归摘掉、`kojoFoldingSymbols` 原样保留。
+      // 分支子项同标（否则顶层摘掉父项、`kojoFoldingRanges` 仍能折到分支内部——两棵树都记区间）。
+      return {
+        name: primaryWord('block.preproc'),
+        kind: 'block',
+        ...rangeOf(node.loc, node.branches),
+        children: node.branches.map((branch) => preprocChildSymbol(branch)),
+        [FOLD_ONLY]: true,
+      } as FoldTagged;
+    case 'braceBlock':
+      // 行连接块（v1.9 P0-B，转译器内部 AST 节点）：同样**只供折叠、不立大纲节点**。
+      // 块体是逐字节透传的原生片段（`{` … `}`），没有任何可导航的糖结构。
+      return {
+        name: primaryWord('block.multiStart'),
+        kind: 'block',
+        ...rangeOf(node.loc),
+        [FOLD_ONLY]: true,
+      } as FoldTagged;
     default:
       return null;
   }
@@ -337,7 +433,12 @@ function symbolsOfNodes(nodes: readonly SymbolNode[]): EditorDocumentSymbol[] {
   return out;
 }
 
-/** 顶层大纲（`别名` 声明 + 时机块 + 用户函数 + 顶层原生块） */
+/** 顶层大纲（`别名` 声明 + 时机块 + 用户函数 + 顶层原生块）；`FOLD_ONLY` 项（预处理 / 行连接块）不列 */
 export function kojoDocumentSymbols(doc: SugarDoc): EditorDocumentSymbol[] {
+  return stripFoldOnly(symbolsOfNodes(doc.topLevel));
+}
+
+/** 折叠真源（同一棵 `loc` 树，**保留** `FOLD_ONLY` 项——折叠要区间） */
+export function kojoFoldingSymbols(doc: SugarDoc): EditorDocumentSymbol[] {
   return symbolsOfNodes(doc.topLevel);
 }

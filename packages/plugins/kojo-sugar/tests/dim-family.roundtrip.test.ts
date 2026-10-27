@@ -97,8 +97,8 @@ describe('工包 F · `#DIM` 族在词法层走原生直通（不落台词兜底
     }
   });
 
-  it('非族成员的 `#` 行仍走原路径（今天落 text）——本批不扩面、不误伤', () => {
-    expect(line('#GLOBAL 计数 10').kind).toBe('text');
+  it('v1.9 P0-A：`#GLOBAL` 一族由台词升为原生直通行（闭集扩到 8 枚）', () => {
+    expect(line('#GLOBAL 计数 10').kind).toBe('rawLine');
   });
 
   it('行尾注释随整行一起透传（原生直通支先于注释剥离，口径同全大写指令行）', () => {

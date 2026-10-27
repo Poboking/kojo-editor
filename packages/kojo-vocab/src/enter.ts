@@ -69,6 +69,8 @@ const BODY_OPEN_KINDS: ReadonlySet<LineClass['kind']> = new Set<LineClass['kind'
   'heartHead',
   'functionHead',
   'exprHead',
+  // 预处理条件块（v1.9 P0-C）：`预处理 如果 X：` / `预处理 调试：` 等块头 ⇒ 下一行更深
+  'preprocHead',
 ]);
 
 /** 这一行的分类是否"下一行该更深"（判型只消费 `classifyLine`，不自造第二套词法） */
@@ -153,6 +155,19 @@ const ENTER_FAMILIES = {
   openSection: () => `^${WS}*(?:${wordGroup(['block.section'])})${WS}[^\\r\\n]*${esc(FULLWIDTH_COLON)}$`,
   /** `开关:` 头部声明（后跟缩进块，判据同 parser 的 `readSwitchItems`） */
   openSwitch: () => `^${WS}*(?:${wordGroup(['head.switch'])})${WS}*${COLON}[^\\r\\n]*$`,
+  /**
+   * 预处理条件块头（v1.9 P0-C）：`预处理 如果 X：` / `预处理 否则如果 X：` / `预处理 否则：` /
+   * `预处理 调试：` / `预处理 非调试：`——子词必须落在闭集里，否则 `预处理 一下：` 这类日常中文
+   * 会被误当成块头（与 `classifyLine` 的闭集闸同一口径）。
+   */
+  openPreproc: () =>
+    `^${WS}*(?:${wordGroup(['block.preproc'])})${WS}+(?:${wordGroup([
+      'block.if',
+      'block.elif',
+      'block.else',
+      'inline.preprocDebug',
+      'inline.preprocNonDebug',
+    ])})${HEAD_TAIL}`,
   /** 表达式位块头 `目标 = 如果/当 …：`（`=` 左侧不许再有 `=`，判据同 `parseExprHead`） */
   openExpr: () => {
     const rawStart = `(?:[A-Z][A-Z0-9_]*(?:[:.][^\\s]*)?(?:${WS}|$)|[@$])`;
@@ -287,9 +302,14 @@ export function enterRulePatternsFromRoles(vocab: EnterRoleVocabulary): EnterRul
 export function sugarEnterRulePatterns(): SugarEnterRulePatterns {
   const indentOnEnter = Object.values(ENTER_FAMILIES).map((build) => new RegExp(build()));
   const segmentTail = `(?:${WS}[^\\r\\n]*)?${COLON}${WS}*$`;
+  const segmentAlign = `^${WS}*(?:${wordGroup(SEGMENT_ALIGN_IDS)})${segmentTail}`;
+  // 预处理块的回退形（v1.9 P0-C）：分支头与父块头同级回退；`预处理结束` 无冒号、整行独立
+  const preprocAlign =
+    `^${WS}*(?:(?:${wordGroup(['block.preproc'])})${WS}+(?:${wordGroup(['block.elif', 'block.else'])})${segmentTail}` +
+    `|(?:${wordGroup(['block.preprocEnd'])})${WS}*$)`;
   return {
     indentOnEnter,
     increaseIndentPattern: new RegExp(indentOnEnter.map((r) => r.source).join('|')),
-    decreaseIndentPattern: new RegExp(`^${WS}*(?:${wordGroup(SEGMENT_ALIGN_IDS)})${segmentTail}`),
+    decreaseIndentPattern: new RegExp(`(?:${segmentAlign}|${preprocAlign})`),
   };
 }

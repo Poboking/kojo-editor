@@ -684,10 +684,16 @@ function newContents(text: string, dialect: FormatDialect, rules: ResolvedRules)
     }
     if (cls?.kind === 'rawBlockStart') inRawBlock = true;
     if (cls?.kind === 'skipStart') inRawBlock = true; // 停用区起点：区内一行都不折
-    entries.push({ logical, cls, raw: inRawBlock });
+    // 行连接块（v1.9 P0-B）：块体是**逐字节透传的原生片段**，重排缩进就是改产物字节。
+    // 开标记行自身也按"区内"处理（它与块体的相对缩进没有语法含义，但改它就改了作者排版）；
+    // 收标记行同样先入账再关区——否则 `}` 会被当普通糖行重排，尾巴留在保护区外。
+    if (cls?.kind === 'braceStart') inRawBlock = true;
+    const raw = inRawBlock || cls?.kind === 'braceEnd';
+    entries.push({ logical, cls, raw });
     // 与 `@` 原生块不同，停用区有成对的尾记号：落完 `skipEnd` 必须把区关掉，否则区会一路骑到
     // 文件尾，把配对标记**之后**的正常糖行也不再排版（未配对时照 ERB 语义吃到 EOF，由 parser 报 warning）。
     if (cls?.kind === 'skipEnd') inRawBlock = false;
+    if (cls?.kind === 'braceEnd') inRawBlock = false;
   }
 
   const unit = detectIndentUnit(entries);

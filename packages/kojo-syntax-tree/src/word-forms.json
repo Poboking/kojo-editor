@@ -246,6 +246,29 @@
     ],
     "inline.tryStatement": [
       "试探"
+    ],
+    "block.preproc": [
+      "preproc",
+      "预处理"
+    ],
+    "block.preprocEnd": [
+      "预处理结束"
+    ],
+    "inline.preprocDebug": [
+      "debug",
+      "调试"
+    ],
+    "inline.preprocNonDebug": [
+      "ndebug",
+      "非调试"
+    ],
+    "block.multiStart": [
+      "multiline-start",
+      "多行语句开始"
+    ],
+    "block.multiEnd": [
+      "multiline-end",
+      "多行语句结束"
     ]
   },
   "primaryById": {
@@ -315,7 +338,13 @@
     "inline.restartLoop": "重跑本轮",
     "inline.dataEntry": "条目",
     "inline.engineEcho": "原形",
-    "inline.tryStatement": "试探"
+    "inline.tryStatement": "试探",
+    "block.preproc": "预处理",
+    "block.preprocEnd": "预处理结束",
+    "inline.preprocDebug": "调试",
+    "inline.preprocNonDebug": "非调试",
+    "block.multiStart": "多行语句开始",
+    "block.multiEnd": "多行语句结束"
   },
   "endWordOfId": {
     "block.loop": "循环结束",
@@ -343,6 +372,21 @@
       "source": "^#(?:DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\\s+\\S",
       "ignoreCase": true,
       "pattern": "#(?:[dD][iI][mM][sS][tT][rR]|[dD][iI][mM][cC][hH][aA][rR]|[dD][iI][mM][fF]|[dD][iI][mM][sS]|[dD][iI][mM]|[dD][eE][fF][iI][nN][eE])\\s+\\S"
+    },
+    "fileDeclDirective": {
+      "source": "^#(?:FUNCTION|FUNCTIONS|GLOBAL|LOCALSIZE|LOCALSSIZE|SFUNCTION|XFUNCTION|TESTMEMORY)\\b",
+      "ignoreCase": true,
+      "words": [
+        "FUNCTION",
+        "FUNCTIONS",
+        "GLOBAL",
+        "LOCALSIZE",
+        "LOCALSSIZE",
+        "SFUNCTION",
+        "XFUNCTION",
+        "TESTMEMORY"
+      ],
+      "pattern": "#(?:LOCALSSIZE|TESTMEMORY|FUNCTIONS|LOCALSIZE|SFUNCTION|XFUNCTION|FUNCTION|GLOBAL)(?:[^A-Za-z0-9_\\r\\n][^\";\\n]*)?"
     },
     "exactMarkers": [
       {

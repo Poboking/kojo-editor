@@ -109,6 +109,24 @@ export type KeywordId =
    * （`native-display/control.ts`），记号与余文**逐字**进产物 ⇒ 写形 ≡ 显示形，读得回就写得回去。
    */
   | 'inline.tryStatement'
+  /**
+   * 预处理条件块（v1.9 P0-C）：`预处理 如果 X：` / `预处理 否则如果 X：` / `预处理 否则：` /
+   * `预处理 调试：` / `预处理 非调试：` → `[IF X]` / `[ELSEIF X]` / `[ELSE]` / `[IF_DEBUG]` /
+   * `[IF_NDEBUG]`；收束词 `预处理结束` → `[ENDIF]`。
+   * 词形与只读面（`native-display/control.ts`）同一份表；`调试` / `非调试` 只作块头子词，
+   * 故登记为 `inline.*`（不冒充独立开块词）。
+   */
+  | 'block.preproc'
+  | 'block.preprocEnd'
+  | 'inline.preprocDebug'
+  | 'inline.preprocNonDebug'
+  /**
+   * 行连接块（v1.9 P0-B）：`多行语句开始` / `多行语句结束` → 整行 `{` / `}`。
+   * 两枚词**不进** `blockEndWord` 家族（`多行语句开始` + `结束` 拼不出真实收束词），
+   * 故各自登记为独立 id。
+   */
+  | 'block.multiStart'
+  | 'block.multiEnd'
   /* 别名右值 */
   | 'alias.char';
 /**
@@ -316,6 +334,20 @@ const KEYWORDS: ReadonlyMap<string, KeywordId> = new Map([
   // 配 `ENDFUNC`）本包没有引擎侧取证，猜一个中文叫法就是把没有的东西写成有——与 `原形` 同一判据。
   // 英文别名不登记：`TRY` 是全大写原生记号头（`RAW_INSTR_RE` 直通），登记小写形只会让词表说谎。
   ['试探', 'inline.tryStatement'],
+  // 预处理条件块（v1.9 P0-C）——词形与只读面同源（`native-display/control.ts` 用 `primaryWord` 取同一串）。
+  // `预处理` 是块头词头，子词仍复用 `如果` / `否则如果` / `否则`；`调试` / `非调试` 只在此处作子词。
+  ['预处理', 'block.preproc'],
+  ['preproc', 'block.preproc'],
+  ['预处理结束', 'block.preprocEnd'],
+  ['调试', 'inline.preprocDebug'],
+  ['debug', 'inline.preprocDebug'],
+  ['非调试', 'inline.preprocNonDebug'],
+  ['ndebug', 'inline.preprocNonDebug'],
+  // 行连接块（v1.9 P0-B）——写读同形：显示层早已是这两串，本批升为写形。
+  ['多行语句开始', 'block.multiStart'],
+  ['multiline-start', 'block.multiStart'],
+  ['多行语句结束', 'block.multiEnd'],
+  ['multiline-end', 'block.multiEnd'],
   // 别名的 `角色 N` 右值形态由 `isAliasCharKeyword` 按上下文判定，
   // **不**在此表登记（否则会覆盖 `head.char`——Map 保留最后一次插入）。
 ]);
@@ -562,6 +594,26 @@ export const NOTIN_KEYWORDS: readonly string[] = ['不在', 'notin'];
  * 行尾注释一并原样带走，**不做第二种解释**（口径与上游"判据不动"一致，绝不另发明第三种）。
  */
 export const DIM_DIRECTIVE_RE = /^#(?:DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+\S/i;
+
+/**
+ * 其余**文件级 / 返回类型**声明行（v1.9 P0-A）——`#DIM` 族之外的 8 枚闭集。
+ *
+ * 这 8 枚在只读面（`native-display/control.ts`）早就有中文显示形，但写侧此前一律兜底成
+ * **台词**（`#` 起手且非 `#DIM` 族）。本批按 T3（原生直通）补齐：整行逐字节透传，
+ * **不**拆中文糖（中文写形会诱使作者把它们当"时机块内语句"；`#FUNCTION` 一族本就是
+ * 文件级 / `@` 函数头标记）。合法性仍归 ERB 侧诊断，糖层只保证不吞成台词。
+ *
+ * 闭集，**不做** `/^#\w/` 泛化：泛化会把作者随手写的 `# 注释` 也当声明，且与本表
+ * "只认引擎真有的那批"口径冲突。`#TESTMEMORY` 无余文，故单独一支（`\b` 收尾）。
+ */
+export const FILE_DECL_DIRECTIVE_WORDS: readonly string[] = [
+  'FUNCTION', 'FUNCTIONS', 'GLOBAL', 'LOCALSIZE', 'LOCALSSIZE', 'SFUNCTION', 'XFUNCTION', 'TESTMEMORY',
+];
+
+export const FILE_DECL_DIRECTIVE_RE = new RegExp(
+  `^#(?:${FILE_DECL_DIRECTIVE_WORDS.join('|')})\\b`,
+  'i',
+);
 
 /**
  * `#DIM` 族声明行的前置修饰词（逐字对齐上游 `erb-parser/scanner.ts` 的 `DIM_MODIFIERS`）。

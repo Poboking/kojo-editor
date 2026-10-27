@@ -207,6 +207,8 @@ export async function loadTruth() {
     blockEndWord: kw.blockEndWord,
     statementFunctions: sf.STATEMENT_FUNCTIONS,
     dimDirectiveRe: kw.DIM_DIRECTIVE_RE,
+    fileDeclDirectiveRe: kw.FILE_DECL_DIRECTIVE_RE,
+    fileDeclDirectiveWords: kw.FILE_DECL_DIRECTIVE_WORDS,
     lexerSource: readFileSync(lexerPath, 'utf8'),
     identModule: ident,
   };
@@ -283,17 +285,58 @@ export function buildEngineTokenSets(truth, primaryById) {
 }
 
 /**
- * `classifyLine` 里**不属于中文/英文词表**的那三支行首判据（`#DIM` 族预处理 + 整行严格等值标记）。
- * 词表投影只覆盖"词"，这三支是正则与记号；grammar.js 要的正是它们（本批 18 行真冲突的债主）。
+ * `#` 文件级声明族的**记号正则**（tree-sitter 版）。
+ *
+ * `classifyLine` 里**不属于中文/英文词表**的行首判据（`#DIM` 族预处理 + `#` 文件级声明族 +
+ * 整行严格等值标记）住在这里：词表投影只覆盖"词"，这几支是正则与记号；grammar.js 要的正是它们。
+ *
+ * 真源那枚正则以 `\b`（词边界断言）收尾，而 tree-sitter 记号**不支持断言**——实测
+ * `Error processing rule native_line_token1: Regex error: Assertions are not supported`，
+ * `tree-sitter generate` 直接退 1。故这里按同义改写：**词表照投影**（来源仍是 `keywords.ts`
+ * 那枚数组，不由本脚本另抄），`\b` 换成"一个非词字符"：
+ *
+ * - 词后**有**非词字符（空格 / 全角空格 / 制表 / 标点 / 汉字…）⇒ 那枚字符 + 本行剩余部分一并吃下
+ *   （`#FUNCTION 名` / `#GLOBAL\t计数 10`）；
+ * - 词后**没有**任何字符（裸形到行尾，如 `#FUNCTION` / `#TESTMEMORY`）⇒ 整个尾巴可省。
+ *
+ * 字符类 `[A-Za-z0-9_]` 与 JS `\b` 的"词字符"是**同一套 ASCII 定义**（`名` / 全角标点在两侧都算
+ * 非词字符），所以这条改写对真源判据是等价的，不留第二种口径。会踩的只有"词后紧跟 ASCII 词字符"的
+ * 行（`#FUNCTIONEND` 之类）——真源判据也不认它，且**本支故意不吃 grammar.js 那根统一尾巴 `${C}*`**：
+ * 一旦只吃到 `#FUNCTION` 就停，`text_line` 的整行匹配更长 ⇒ 最长匹配把该行判给文本，与真源同判。
+ *
+ * 分隔符之后那截余文用 `[^";\\n]*`（= grammar.js 里既有的 `C`），**不另立 `[^\\r\\n]*`**：后者会
+ * 往词法字母表里插一段全新分区（`"` / `;` 在内、`\\r` 在外），实测让 LR/DFA 表多出 4 万余字节——
+ * 复用 `C` 既与"停在行内串 / 行内注释之前"的既有口径一致，也不产生第二套字符类口径。
  */
+function buildFileDeclTokenPattern(words) {
+  if (!Array.isArray(words) || words.length === 0) {
+    throw new Error('真源缺 FILE_DECL_DIRECTIVE_WORDS（keywords.ts 的 # 文件级声明词表）');
+  }
+  const alt = [...words].sort((a, b) => b.length - a.length).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return `#(?:${alt})(?:[^A-Za-z0-9_\\r\\n][^";\\n]*)?`;
+}
+
 export function buildRawLineRules(truth) {
   const re = truth.dimDirectiveRe;
   if (!(re instanceof RegExp)) throw new Error('真源缺 DIM_DIRECTIVE_RE（keywords.ts 的 #DIM 族判据）');
+  const fileDecl = truth.fileDeclDirectiveRe;
+  if (!(fileDecl instanceof RegExp)) {
+    throw new Error('真源缺 FILE_DECL_DIRECTIVE_RE（keywords.ts 的 # 文件级声明族判据）');
+  }
   return {
     dimDirective: {
       source: re.source,
       ignoreCase: re.flags.includes('i'),
       pattern: toTokenPattern(re, 'DIM_DIRECTIVE_RE'),
+    },
+    // v1.9 P0-A：`#` 声明族从 6 枚（`#DIM` 族）扩到 14 枚（+8 枚文件级）⇒ 同一格投影、
+    // 语法层的 `native_line` 两支并列消费；不投影的代价照旧是真冲突（fixtures 里 `#FUNCTION` /
+    // `#LOCALSIZE` 五行实测）。
+    fileDeclDirective: {
+      source: fileDecl.source,
+      ignoreCase: fileDecl.flags.includes('i'),
+      words: [...truth.fileDeclDirectiveWords],
+      pattern: buildFileDeclTokenPattern(truth.fileDeclDirectiveWords),
     },
     exactMarkers: extractExactLineMarkers(truth.lexerSource),
   };

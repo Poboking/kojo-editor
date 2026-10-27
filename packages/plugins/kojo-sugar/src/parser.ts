@@ -103,6 +103,47 @@ export interface DataBlock {
   loc: SugarSourceSpan;
 }
 
+/* -------------------- 预处理条件块 / 行连接块（v1.9 P0，内部 AST） -------------------- */
+
+/** 预处理块的一条分支（`预处理 如果 X：` / `否则如果 X：` / `否则：` / `调试：` / `非调试：`） */
+export interface PreprocBranch {
+  kind: 'if' | 'elseif' | 'else' | 'debug' | 'ndebug';
+  /** `if` / `elseif` 的宏名（单个裸标识符）；其余变体为空串 */
+  macro: string;
+  body: SugarNode[];
+  loc: SugarSourceSpan;
+}
+
+/**
+ * 预处理条件块（`预处理 …：` … `预处理结束`）——**转译器内部** AST 节点（同 `LoopBlock` 先例）。
+ *
+ * 产物是文件级预处理标记 `[IF X]` … `[ENDIF]`：缩进不参与产物、分支体逐行落在标记之间。
+ * 嵌套合法（与上游 `checkPreprocStructure` 的独立栈同构）。
+ */
+export interface PreprocBlock {
+  kind: 'preprocBlock';
+  branches: PreprocBranch[];
+  loc: SugarSourceSpan;
+}
+
+/**
+ * 行连接块（`多行语句开始` / `{` … `多行语句结束` / `}`）——**转译器内部** AST 节点。
+ *
+ * `lines` 是**逐字节**产物行（含首 `{` 与末 `}`）；块体不经过糖解析（引擎把块内物理行
+ * 拼成一条逻辑行，块内再出现糖块头会改变行语义）。原生 `{` / `}` 行逐字节保留原缩进，
+ * 糖形两枚词发射规范化单字符。
+ */
+export interface BraceBlock {
+  kind: 'braceBlock';
+  /** true = 糖形两枚中文词（`{` / `}` 由 codegen 按当前层级发射）；false = 原生记号逐字节透传 */
+  sugar: boolean;
+  /** `lines` 是**逐字节**产物行（首行为开标记、收束时末行为闭标记；块体不再经过糖解析） */
+  lines: string[];
+  /** 是否等到收束标记（未收束时末元素是块体行，按原样透传） */
+  closed: boolean;
+  loc: SugarSourceSpan;
+}
+
 /* -------------------- 规则池（`分支：`，规范 §3.11） -------------------- */
 
 /**
@@ -173,6 +214,12 @@ const DATA_W = primaryWord('block.dataTable');
 const DATA_ENTRY_W = primaryWord('inline.dataEntry');
 const DATA_END_W = blockEndWord('block.dataTable');
 const BRANCH_W = primaryWord('block.branch');
+/** 预处理 / 行连接（v1.9 P0；词形与 `lexer.ts`、只读面同一份表） */
+const PREPROC_W = primaryWord('block.preproc');
+const PREPROC_END_W = primaryWord('block.preprocEnd');
+const PREPROC_DEBUG_W = primaryWord('inline.preprocDebug');
+const PREPROC_NDEBUG_W = primaryWord('inline.preprocNonDebug');
+const MULTI_W = primaryWord('block.multiStart');
 
 /**
  * 收束行对应的 `LineClass.kind`（三族各一枚）。
@@ -216,6 +263,61 @@ function posOf(line: LogicalLine): { line: number; column: number } {
 }
 
 /**
+ * 原生预处理标记的**配对记账**（v1.9 P0-C）。
+ *
+ * 只记原生 `[IF …]` / `[ELSEIF …]` / `[ELSE]` / `[IF_DEBUG]` / `[IF_NDEBUG]` / `[ENDIF]`
+ * 行（糖形块在 parser 的块方法里自行配对，与这里互不掺账）。判空 / 收束错位报
+ * `statement-shape`；文件结束仍有未收的 `[IF]` 报 `unclosed-block`（复用既有码，
+ * 不新增诊断码）。
+ *
+ * 位置自由：预处理是文件级裁剪，行可以出现在任何语句位置；`@` 原生块 / 停用区 /
+ * 行连接块体是逐字节透传区，那些行不经 `classifyLine`，自然也不进本栈。
+ */
+class NativePreprocBalance {
+  private readonly stack: { line: number; column: number }[] = [];
+
+  open(loc: { line: number; column: number }): void {
+    this.stack.push(loc);
+  }
+
+  branch(sink: DiagnosticSink, loc: { line: number; column: number }, text: string): void {
+    if (this.stack.length === 0) {
+      sink.report({
+        code: 'statement-shape' as SugarDiagnostic['code'],
+        severity: 'error',
+        message: `「${text}」没有对应的预处理开块（缺 [IF …] / [IF_DEBUG] / [IF_NDEBUG]）`,
+        loc,
+      });
+    }
+  }
+
+  close(sink: DiagnosticSink, loc: { line: number; column: number }): void {
+    if (this.stack.length === 0) {
+      sink.report({
+        code: 'statement-shape' as SugarDiagnostic['code'],
+        severity: 'error',
+        message: '「[ENDIF]」没有对应的预处理开块',
+        loc,
+      });
+      return;
+    }
+    this.stack.pop();
+  }
+
+  finish(sink: DiagnosticSink): void {
+    for (const frame of this.stack) {
+      sink.report({
+        code: 'unclosed-block' as SugarDiagnostic['code'],
+        severity: 'warning',
+        message: '预处理块未收束（缺 [ENDIF]）',
+        loc: frame,
+      });
+    }
+    this.stack.length = 0;
+  }
+}
+
+/**
  * 可推进的源行游标：**逻辑行视图**（语法判定）× **物理行原文**（逐字节透传）。
  *
  * 两份视图锚在同一份切分上（`splitPhysicalLines` / `splitLogicalLines`，1 基物理行号）：
@@ -230,6 +332,13 @@ class Cursor {
     /** 物理行原文（下标 0 = 物理第 1 行） */
     private readonly physical: readonly string[],
   ) {}
+
+  /**
+   * 原生预处理标记的配对栈（v1.9 P0-C）。糖形块在 `parsePreprocBlock` 内自行配对；
+   * 原生 `[IF]` / `[ENDIF]` 行可能出现在任何语句位置（含时机体内），故这里用一份
+   * **共享栈**跨所有 BlockParser 实例记账（`Cursor` 是唯一的共享持有者）。
+   */
+  readonly preproc = new NativePreprocBalance();
 
   private i = 0;
 
@@ -276,7 +385,7 @@ export interface BuildDocResult {
  * 顶层。转译器内部用本类型容纳它们；写回 `SugarDoc.topLevel` 时仍然合法
  * （`RawLine` / `RawFunctionBlock` 是 `SugarNode` 的子集，消费方按 `kind` 判别）。
  */
-export type TopNode = SugarTopLevelNode | RawFunctionBlock | RawLine;
+export type TopNode = SugarTopLevelNode | RawFunctionBlock | RawLine | PreprocBlock | BraceBlock;
 
 /** 构建 `SugarDoc`（顶层：头部声明 + 别名 + 时机块） */
 export function buildDoc(source: string, filePath: string, sink: DiagnosticSink): SugarDoc {
@@ -440,6 +549,49 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       continue;
     }
 
+    // ---- 预处理条件块 / 行连接块 / 原生预处理标记（v1.9 P0）----
+    // 三者都是**文件级裁剪 / 透传**构造，与时机块同级合法（预处理可出现在任何语句位置）。
+    if (cls.kind === 'preprocHead') {
+      sawTiming = true;
+      topLevel.push(readPreprocBlock(cursor, cls, randomShape, sink));
+      continue;
+    }
+    if (cls.kind === 'preprocMarker') {
+      cursor.next();
+      topLevel.push(nativePreprocLine(cursor, line, cls.role, cls.text));
+      continue;
+    }
+    if (cls.kind === 'braceStart') {
+      cursor.next();
+      topLevel.push(readBraceBlock(cursor, cls.sugar));
+      continue;
+    }
+    if (cls.kind === 'preprocEnd') {
+      cursor.next();
+      sink.report({
+        code: 'statement-shape',
+        severity: 'error',
+        message: `「${PREPROC_END_W}」前面没有同缩进的「${PREPROC_W} …：」块头。`,
+        loc: posOf(line),
+      });
+      continue;
+    }
+    if (cls.kind === 'braceEnd') {
+      cursor.next();
+      if (cls.sugar) {
+        sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: `「${primaryWord('block.multiEnd')}」前面没有同缩进的「${primaryWord('block.multiStart')}」。`,
+          loc: posOf(line),
+        });
+        topLevel.push({ kind: 'rawLine', text: '}', loc: spanOf(line) });
+      } else {
+        topLevel.push({ kind: 'rawLine', text: cls.text, loc: spanOf(line) });
+      }
+      continue;
+    }
+
     // 顶层文本行——规范未定义（时机外不应有正文）；报错并跳过（不静默）
     cursor.next();
     sink.report({
@@ -449,6 +601,9 @@ export function buildDoc(source: string, filePath: string, sink: DiagnosticSink)
       loc: posOf(line),
     });
   }
+
+  // 原生 `[IF …]` 族配对收尾：文件尾仍开着 ⇒ `unclosed-block`（还原既有码，不新增诊断码）
+  cursor.preproc.finish(sink);
 
   sortDiagnostics(sink);
   return { filePath, frontMatter, topLevel: topLevel as SugarTopLevelNode[], diagnostics: sink.all() };
@@ -749,6 +904,209 @@ function readSkipBlock(cursor: Cursor, head?: LogicalLine): RawFunctionBlock {
  */
 function straySkipEnd(line: LogicalLine): RawLine {
   return { kind: 'rawLine', text: contentOf(line), loc: spanOf(line) } as RawLine;
+}
+
+/* ------------------------------ 行连接块（`{` … `}`） ------------------------------ */
+
+/**
+ * 读取行连接块（v1.9 P0-B）：`{` / `多行语句开始` 起，逐行原文吃到配对的 `}` / `多行语句结束`
+ * 或文件尾。
+ *
+ * **块体是原生逐行**：本函数不调糖解析、不剥注释、不折行——引擎把块内物理行拼成一条逻辑行，
+ * 块内任何糖改写都会改行语义。`lines` 直接进 `codegen` 的逐字节透传通路。
+ *
+ * 原生标记行（`sugar === false`）保留原缩进与字节；糖形两枚词发射规范化单字符 `{` / `}`
+ * （与 `lexer.ts` 的词形表同源）。未配对 = 头写到文件尾：整段照实产出 + `unclosed-block`
+ * warning（同 `readSkipBlock` 口径，不静默）。体内再出现开块标记 ⇒ `statement-shape`（引擎无嵌套语义）。
+ */
+function readBraceBlock(cursor: Cursor, sugar: boolean, head?: LogicalLine): BraceBlock {
+  const first = head ?? cursor.next()!;
+  const rawLines: string[] = sugar ? ['{'] : cursor.physicalLinesOf(first);
+  let last = first;
+  let closed = false;
+  while (!cursor.done) {
+    const line = cursor.peek()!;
+    const cls = classifyLine(line);
+    if (cls.kind === 'braceEnd') {
+      cursor.next();
+      last = line;
+      if (cls.sugar) rawLines.push('}');
+      else rawLines.push(...cursor.physicalLinesOf(line));
+      closed = true;
+      break;
+    }
+    if (cls.kind === 'braceStart') {
+      cursor.sink.report({
+        code: 'statement-shape',
+        severity: 'error',
+        message: '行连接块不能嵌套——块体内出现 `{` / 多行语句开始会改变整条逻辑行的语义。',
+        loc: posOf(line),
+      });
+    }
+    rawLines.push(...cursor.physicalLinesOf(line));
+    last = line;
+    cursor.next();
+  }
+  if (!closed) {
+    cursor.sink.report({
+      code: 'unclosed-block',
+      severity: 'warning',
+      message: '行连接块一直到文件尾都没有等到 `}` / 多行语句结束——整段按原文透传（未丢一行）。',
+      loc: { line: first.line, column: first.rawIndent.length + 1 },
+    });
+  }
+  return {
+    kind: 'braceBlock',
+    sugar,
+    lines: rawLines,
+    closed,
+    loc: { start: { line: first.line, column: 1 }, end: { line: last.endLine, column: 1 } },
+  };
+}
+
+/* ------------------------------ 原生预处理标记行 ------------------------------ */
+
+/**
+ * 原生 `[IF …]` 族标记行：逐字节透传 + 进共享配对栈（v1.9 P0-C）。
+ *
+ * 与糖形块互不掺账：糖块由 `parsePreprocBlock` 自行配对。这里只保证原生标记不落台词、
+ * 不被规则池标签误吞，并对判空 / 收束错位报 `statement-shape`（复用既有码）。
+ */
+function nativePreprocLine(
+  cursor: Cursor,
+  line: LogicalLine,
+  role: 'open' | 'branch' | 'close',
+  text: string,
+): RawLine {
+  const loc = posOf(line);
+  if (role === 'open') cursor.preproc.open(loc);
+  else if (role === 'branch') cursor.preproc.branch(cursor.sink, loc, text);
+  else cursor.preproc.close(cursor.sink, loc);
+  return { kind: 'rawLine', text, loc: spanOf(line) } as RawLine;
+}
+
+/**
+ * 预处理块的收尾行号：收束词行（若在）＞ 最后一条分支的尾行 ＞ 头行本身。
+ * `loc.end` 只用于折叠 / 结构视图的整段区间，取"最后一个有内容的行"即可。
+ */
+function preprocEndLine(branches: readonly PreprocBranch[], closeLine: LogicalLine | undefined, head: LogicalLine): number {
+  if (closeLine) return closeLine.endLine;
+  const last = branches[branches.length - 1];
+  return last ? last.loc.end.line : head.endLine;
+}
+
+/* ------------------------------ 预处理条件块（v1.9 P0-C） ------------------------------ */
+
+/**
+ * 读取预处理条件块：`预处理 如果 X：` … `预处理 否则如果 X：` … `预处理 否则：` … `预处理结束`。
+ *
+ * - 产物是**文件级预处理标记**（`[IF X]` / `[ELSEIF X]` / `[ELSE]` / `[IF_DEBUG]` /
+ *   `[IF_NDEBUG]` / `[ENDIF]`），块体逐行落在标记之间；缩进不参与产物。
+ * - **可嵌套**：分支体走 `BlockParser.parseBody()`，内层 `预处理 …：` 由 `parseStatement`
+ *   递归落到同一通路（与上游 `checkPreprocStructure` 的独立栈同构）。
+ * - 分支体允许为空（作者常整段临时裁掉），故**不报** `block-empty`。
+ * - 未收束 ⇒ `unclosed-block` warning（同 `readSkipBlock` 口径）；同缩进又出现新的开块
+ *   （`如果` / `调试` / `非调试`）⇒ `statement-shape` 并把行交还外层（不产半成品）。
+ *
+ * 顶层（`buildDoc`）与块体（`BlockParser.parseStatement`）共用本函数——两条入口的
+ * 消费契约一致：**头行未消费**，由本函数取；候选项（`buildStandaloneNode`）一侧
+ * 调用方已消费头行，则把 `head` 显式交进来（同 `readSkipBlock` 的约定）。
+ */
+function readPreprocBlock(
+  cursor: Cursor,
+  cls: LineClass & { kind: 'preprocHead' },
+  randomShape: RandomShape,
+  sink: DiagnosticSink,
+  head?: LogicalLine,
+): PreprocBlock {
+  const headLine = head ?? cursor.next()!;
+  if (head) cursor.next();
+  const branches: PreprocBranch[] = [];
+  let current: PreprocBranch = {
+    kind: cls.variant,
+    macro: cls.macro,
+    body: [],
+    loc: spanOf(headLine),
+  };
+  branches.push(current);
+  let elseSeen = cls.variant === 'else';
+  let closed = false;
+  let closeLine: LogicalLine | undefined;
+  const bodyIndent = headLine.indent + 1;
+
+  /** 分支 loc 收到分支体最后一行（折叠 / 结构视图要整段区间） */
+  const closeBranchSpan = () => {
+    const lastBody = current.body[current.body.length - 1];
+    current.loc = {
+      start: current.loc.start,
+      end: lastBody ? lastBody.loc.end : current.loc.end,
+    };
+  };
+
+  while (!cursor.done) {
+    const line = cursor.peek()!;
+    const content = contentOf(line);
+    if (content.length === 0) {
+      cursor.next();
+      continue;
+    }
+    if (line.indent < headLine.indent) break;
+    if (line.indent === headLine.indent) {
+      const c = classifyLine(line);
+      if (c.kind === 'preprocEnd') {
+        cursor.next();
+        closeLine = line;
+        closed = true;
+        break;
+      }
+      if (c.kind === 'preprocHead') {
+        if (c.variant === 'if' || c.variant === 'debug' || c.variant === 'ndebug') {
+          // 同缩进又开一个新块：上一个块缺收束——报错并把行交还外层（外层会另起一块）
+          sink.report({
+            code: 'statement-shape',
+            severity: 'error',
+            message: `「${PREPROC_W} …：」块还没写「${PREPROC_END_W}」——同一缩进上又出现了一个新的预处理开块。`,
+            loc: posOf(line),
+          });
+          break;
+        }
+        cursor.next();
+        if (elseSeen) {
+          sink.report({
+            code: 'statement-shape',
+            severity: 'error',
+            message: `「${PREPROC_W} ${primaryWord('block.else')}：」之后不能再接分支。`,
+            loc: posOf(line),
+          });
+        }
+        closeBranchSpan();
+        if (c.variant === 'else') elseSeen = true;
+        current = { kind: c.variant, macro: c.macro, body: [], loc: spanOf(line) };
+        branches.push(current);
+        continue;
+      }
+      break; // 同级非分支行 → 本块结束（交给外层）
+    }
+    // 更深：进当前分支体（内层糖语句 / 嵌套预处理块都在这里递归）
+    const sub = new BlockParser(cursor, bodyIndent, sink, randomShape);
+    current.body.push(...sub.parseBody());
+  }
+  closeBranchSpan();
+
+  if (!closed) {
+    sink.report({
+      code: 'unclosed-block',
+      severity: 'warning',
+      message: `「${PREPROC_W} …：」块一直到文件尾都没有等到「${PREPROC_END_W}」——整段按预处理标记照实产出。`,
+      loc: posOf(headLine),
+    });
+  }
+  const endLine = preprocEndLine(branches, closeLine, headLine);
+  return {
+    kind: 'preprocBlock',
+    branches,
+    loc: { start: { line: headLine.line, column: 1 }, end: { line: endLine, column: 1 } },
+  };
 }
 
 /* ------------------------------ 时机块 ------------------------------ */
@@ -1216,6 +1574,39 @@ class BlockParser {
         );
         return null;
       }
+      case 'preprocHead':
+        // 预处理条件块（v1.9 P0-C）——块头自己消费，产物是 `[IF …]` / `[ENDIF]` 标记行
+        return this.parsePreprocBlock(line, cls) as unknown as SugarNode;
+      case 'preprocEnd':
+        // 走到这里 = 收束行没落在糖块头的同缩进上（或根本没有开块）
+        this.cursor.next();
+        this.sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: `「${PREPROC_END_W}」前面没有同缩进的「${PREPROC_W} …：」块头。`,
+          loc: posOf(line),
+        });
+        return null;
+      case 'preprocMarker':
+        this.cursor.next();
+        return nativePreprocLine(this.cursor, line, cls.role, cls.text);
+      case 'braceStart':
+        // 行连接块（v1.9 P0-B）：块体逐字节透传（原生 / 糖形同一通路）
+        return readBraceBlock(this.cursor, cls.sugar) as unknown as SugarNode;
+      case 'braceEnd': {
+        this.cursor.next();
+        if (cls.sugar) {
+          this.sink.report({
+            code: 'statement-shape',
+            severity: 'error',
+            message: `「${primaryWord('block.multiEnd')}」前面没有同缩进的「${primaryWord('block.multiStart')}」。`,
+            loc: posOf(line),
+          });
+          return { kind: 'rawLine', text: '}', loc: spanOf(line) } as RawLine;
+        }
+        // 原生落单 `}`：与 `[SKIPEND]` 同口径——是文件里真实存在的一行，逐字带走不解释
+        return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
+      }
       case 'skipStart':
         // 停用块写在时机正文里：与顶层同一条通路（头行未消费 ⇒ `readSkipBlock` 自己取），
         // 块体逐字节透传，缩进在这个语境里没有含义（ERB 本就不靠缩进）。
@@ -1475,6 +1866,15 @@ class BlockParser {
       });
     }
     return { kind: 'ifBlock', branches, loc: mergeSpan(branches) };
+  }
+
+  /* ------------------------------ 预处理条件块（v1.9 P0-C） ------------------------------ */
+
+  private parsePreprocBlock(
+    headLine: LogicalLine,
+    cls: LineClass & { kind: 'preprocHead' },
+  ): PreprocBlock {
+    return readPreprocBlock(this.cursor, cls, this.randomShape, this.sink, headLine);
   }
 
   /* ------------------------------ 当块 ------------------------------ */
@@ -1817,6 +2217,32 @@ class BlockParser {
         return readSkipBlock(this.cursor, line);
       case 'skipEnd':
         return straySkipEnd(line);
+      case 'preprocHead':
+        // 候选 / 条目体位置的预处理块：调用方已消费头行 ⇒ 显式交 `line`
+        return readPreprocBlock(this.cursor, cls, this.randomShape, this.sink, line) as unknown as SugarNode;
+      case 'preprocEnd':
+        this.sink.report({
+          code: 'statement-shape',
+          severity: 'error',
+          message: `「${PREPROC_END_W}」前面没有同缩进的「${PREPROC_W} …：」块头。`,
+          loc: posOf(line),
+        });
+        return null;
+      case 'preprocMarker':
+        return nativePreprocLine(this.cursor, line, cls.role, cls.text);
+      case 'braceStart':
+        return readBraceBlock(this.cursor, cls.sugar, line) as unknown as SugarNode;
+      case 'braceEnd':
+        if (cls.sugar) {
+          this.sink.report({
+            code: 'statement-shape',
+            severity: 'error',
+            message: `「${primaryWord('block.multiEnd')}」前面没有同缩进的「${primaryWord('block.multiStart')}」。`,
+            loc: posOf(line),
+          });
+          return { kind: 'rawLine', text: '}', loc: spanOf(line) } as RawLine;
+        }
+        return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'rawLine':
         return { kind: 'rawLine', text: cls.text, loc: spanOf(line) } as RawLine;
       case 'settle':

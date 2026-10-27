@@ -55,6 +55,12 @@ const OPENERS: readonly string[] = [
   '开关:',
   '她的心情 = 当 甲：',
   '她的心情 = 如果 心情 > 50：',
+  // v1.9 P0-C：预处理条件块的块头（五形里 if/elif 带宏名，其余裸形）
+  '预处理 如果 恋慕开关：',
+  '预处理 否则如果 嫉妒开关：',
+  '预处理 否则：',
+  '预处理 调试：',
+  '预处理 非调试：',
 ];
 
 /** 缩进形态的正例：回车追加单位 = 原行书写风格（TAB→TAB；其余→4 空格基） */
@@ -86,6 +92,9 @@ const NON_OPENERS: readonly string[] = [
   '空行',
   '调用 F(1)',
   '返回 3',
+  // v1.9 P0-C：收束词与闭集外的子词都不开块体
+  '预处理结束',
+  '预处理 一下：',
   '',
   '   ',
 ];
@@ -123,8 +132,8 @@ describe('sugarEnterIndentAfter · 块头判定（真源 = classifyLine）', () 
 
 describe('正则族 ≡ 精确判定（自洽闸：差集只许是头注列明的三条近似）', () => {
   const patterns = sugarEnterRulePatterns();
-  it('块头类别覆盖读数：indentOnEnter 一族一条正则', () => {
-    expect(patterns.indentOnEnter).toHaveLength(6);
+  it('块头类别覆盖读数：indentOnEnter 一族一条正则（v1.9 P0-C 起 7 族：新增预处理块头）', () => {
+    expect(patterns.indentOnEnter).toHaveLength(7);
   });
 
   const all = [...OPENERS, ...INDENTED.map(([l]) => l), ...NON_OPENERS, ...KNOWN_REGEX_OVERMATCH];
@@ -144,6 +153,13 @@ describe('正则族 ≡ 精确判定（自洽闸：差集只许是头注列明�
     expect(patterns.decreaseIndentPattern.test('    是 甲：')).toBe(true);
     expect(patterns.decreaseIndentPattern.test('「呀。」')).toBe(false);
     expect(patterns.decreaseIndentPattern.test('否则没有结尾冒号')).toBe(false);
+  });
+
+  it('预处理块的回退形（v1.9 P0-C）：分支头与收束词都回到父块那一层', () => {
+    expect(patterns.decreaseIndentPattern.test('        预处理 否则如果 嫉妒开关：')).toBe(true);
+    expect(patterns.decreaseIndentPattern.test('        预处理 否则：')).toBe(true);
+    expect(patterns.decreaseIndentPattern.test('    预处理结束')).toBe(true);
+    expect(patterns.decreaseIndentPattern.test('    预处理 如果 恋慕开关：')).toBe(false);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { EditorDocumentSymbol, EditorFoldingRange, SugarDoc } from '@kojo/plugin-api';
-import { kojoDocumentSymbols } from './document-symbols';
+import { kojoFoldingSymbols } from './document-symbols';
 
 /**
  * `.kojo` 折叠区间（D3，2026-10-15 折叠/面包屑批）。
@@ -19,6 +19,6 @@ export function kojoFoldingRanges(doc: SugarDoc): EditorFoldingRange[] {
       if (symbol.children !== undefined && symbol.children.length > 0) walk(symbol.children);
     }
   };
-  walk(kojoDocumentSymbols(doc));
+  walk(kojoFoldingSymbols(doc));
   return out;
 }
