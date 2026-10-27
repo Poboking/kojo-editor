@@ -20,9 +20,7 @@
   max-width: calc(100vw - 32px);
   padding: var(--space-3);
   border-radius: var(--radius-lg);
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-3);
+  box-shadow: var(--elev-3);
   animation: update-notice-in var(--dur-3) var(--ease-spring);
 }
 
@@ -87,7 +85,10 @@ body:has(.update-notice-card) .notification-center {
   height: 22px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  /* 圆角随件大小（美学批 1027）：22 见方是密集控件档，吃 --radius-sm——与 `.kit-icon-btn`
+     (22/sm)、`.toast-close`(sm)、`.recent-remove`(sm) 同一档。改前它是全仓唯一一枚 22px
+     却挂 --radius-md(10) 的关闭钮，圆得像一个被放错尺寸的药丸 */
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--fg-dim);
@@ -100,6 +101,15 @@ body:has(.update-notice-card) .notification-center {
   border-color: transparent;
   background: var(--hover-strong);
   color: var(--fg);
+}
+/* 按下与键盘落点（美学批 1027）：这枚钮改前只有 hover——按下去颜色不降档，"点到了"这件事
+   没有反馈；焦点环走 ui-kit 契约（outline:none + --shadow-focus），22 见方上硬 outline 会切字。 */
+.update-notice-card .update-notice-card-close:active:not(:disabled) {
+  background: var(--active);
+}
+.update-notice-card .update-notice-card-close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .update-notice-card-meta {

@@ -425,11 +425,23 @@
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+/* 按下态（美学批 1027）：分段控件改前只有 hover——点下去与悬停同色，"按下"这件事没有脸。
+   选中档被聚焦时内描边与柔光环**并存**，别让焦点态把"哪一档选中"闪没。 */
+.kit-seg-btn:active:not(:disabled) {
+  background: var(--hover);
+}
+.kit-seg-btn.on:focus-visible {
+  box-shadow:
+    var(--shadow-focus),
+    inset 0 0 0 1px var(--accent);
+}
 .kit-count-accent {
   color: var(--accent-text);
 }
 .kit-count-danger {
-  color: var(--danger);
+  /* 文字档（README §三"着色只动文字、都取 AA 文字档"）：`--danger` 压在本徽标的 `--bg-3`
+     井底上只有 4.11:1，11px 正文级破线；`--danger-text` 同底 4.83。圆点与描边仍吃 --danger。 */
+  color: var(--danger-text);
 }
 .kit-count-warning {
   color: var(--warning);
@@ -725,4 +737,42 @@
 .kit-gallery-cap {
   color: var(--fg-dim);
   font-size: var(--fs-0);
+}
+
+/* ============================ 对照页 · 基座与抬升 ============================ */
+/* KitGallery 的陈列台。基座按钮档不住在 kit 里（`button` / .primary / .ghost / .danger
+   住在 styles.css），但 kit 每件都从那条基线取观感，所以对照页必须把它们与件并排——
+   分屏看永远看不出漂移。抬升三档同理：只有三块面同屏、底下同一档背景，才量得出
+   "1/2/3 是同一族"。 */
+.kit-gallery-btns {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.kit-gallery-elev {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-lg);
+}
+.kit-gallery-elev-cell {
+  min-width: 152px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.kit-gallery-elev-1 {
+  box-shadow: var(--elev-1);
+}
+.kit-gallery-elev-2 {
+  box-shadow: var(--elev-2);
+}
+.kit-gallery-elev-3 {
+  box-shadow: var(--elev-3);
 }

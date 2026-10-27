@@ -49,10 +49,9 @@
   /* 内衬 5 = 同心圆角算式的一项：项圆角 4 + 内衬 5 ≈ 9 ⇒ 容器取 --radius-lg(10) */
   padding: 5px;
   border-radius: var(--radius-lg);
-  /* --shadow-1 实测没有切边末环（只有 --shadow-3 有），菜单浮在亮内容上正需要这一圈切边 */
-  box-shadow:
-    var(--shadow-1),
-    0 0 0 1px rgba(0, 0, 0, 0.28);
+  /* 抬升吃档位表：--elev-1 = 顶缘高光 + 分层投影 + 1px 切边环（菜单浮在亮内容上正需要这一圈
+     切边；那枚环的色此前是本文件独占的裸 `rgba(0,0,0,.28)`，现已归进 tokens 的 `--elev-rim`） */
+  box-shadow: var(--elev-1);
   /* 入场只走 opacity：本体带 backdrop-filter，transform 动画每帧都要重采样背后 = 掉帧主因 */
   animation: fade-in var(--dur-1) var(--ease-out);
 }
@@ -228,7 +227,9 @@
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-edge);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  /* 与自定义菜单同一档抬升（本文件的立命口径就是"两套 DOM 一份观感"）：
+     改前这枚只有 --shadow-1，比自定义菜单少一圈切边环与一道顶缘高光，并排看左边那块更"实" */
+  box-shadow: var(--elev-1);
   animation: fade-in var(--dur-1) var(--ease-out);
 }
 
@@ -376,14 +377,27 @@
   user-select: none;
 }
 
-/* 子菜单指示箭头：与快捷键同列右缘 */
+/* 子菜单指示箭头：与快捷键同列右缘。改前这里是一枚文本 `›`（U+203A）——细、轻、基线偏高，
+   形状完全由字体决定；换成图标族的 `chevron-right`（xs=12 档）后与左边的动作图标同一支笔画，
+   并且跟着整行的 currentColor 走（文本字形那一版悬停时不亮，右缘比左缘慢半拍）。 */
 .context-menu .context-menu-arrow {
+  display: inline-flex;
+  align-items: center;
   flex: none;
   margin-left: auto;
   padding-left: var(--space-2);
   color: var(--fg-dim);
-  font-size: var(--fs-1);
-  line-height: 1;
+}
+.context-menu button:hover .context-menu-arrow,
+.context-menu button:focus-visible .context-menu-arrow {
+  color: var(--fg);
+}
+/* 分组小节头上方补一道渐隐发丝线：小节名只是"给一段动作起个名"，没有线时两组同族动作
+   读起来还是一长串。第一条不画（顶上就是菜单内衬，画了等于给容器加边框）。 */
+.context-menu-group:not(:first-child) {
+  margin-top: var(--space-1);
+  border-top: 1px solid transparent;
+  border-image: linear-gradient(90deg, transparent, var(--border) 14%, var(--border) 86%, transparent) 1;
 }
 
 /* 子菜单：与父菜单同观感，落点由 JS 实测夹取（贴着父项右侧，放不下翻到左侧）。

@@ -208,7 +208,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
   gap: 0;
   border-radius: var(--radius-lg);
-  box-shadow: var(--edge-raise), var(--shadow-3);
+  box-shadow: var(--elev-3);
   animation: none;
 }
 

@@ -25,7 +25,7 @@
   max-height: min(720px, 88vh);
   min-height: 320px;
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--elev-3);
   overflow: hidden;
   animation: overlay-in var(--dur-3) var(--ease-out);
 }

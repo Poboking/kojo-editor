@@ -74,6 +74,9 @@
 
 ### KitGallery（内部对照页；已导出、暂不接线）
 零 props。并排渲染全部件（可交互），组长集成波用它 + 真壳截图一次性验收控件语言合一。
+1027 美学收口批起，它还并排陈列**基座按钮七档**与**抬升三档**（`--elev-1/2/3` 同屏、底下
+垫同一档 sunken 才量得出"三档是同一族"）与渐隐发丝线方向档——这些不住在 kit 里，
+但 kit 每件都从那条基线取观感，分屏看永远看不出漂移。
 
 ## 三、语义色与 token 约定
 
@@ -82,6 +85,29 @@
 - 选中态：`--accent-dim` 底 + `rgb(var(--accent-rgb)/0.55)` 半强度描边 + `--accent-text` 文字；
 - 焦点一律 `outline:none + box-shadow: var(--shadow-focus)`；禁用一律 `opacity: var(--disabled-opacity)`；
 - 命中区 ≥24×24（P3-2 热区口径：视觉不动、`::before` 扩边）。
+
+### 三b · 全站共用的美学档（1027 美学收口批新增；写新面先取这些，别自抄配方）
+
+| 档 | 真源 | 谁在用 | 一句话判据 |
+|---|---|---|---|
+| `--elev-1 / -2 / -3` | `tokens.css` | 右键菜单 / toast / 工具条浮层＝1；命令面板 / 可拖浮窗 / 角色下拉＝2；模态 / 向导宿主 / 更新框 / 纸条 / 启动器面板 / 欢迎卡＝3 | **浮层面的 `box-shadow` 只许吃 `--elev-*`**：一档 = 顶缘高光 + 分层投影 + 1px 切边环，三件一起给才读得出"浮起来"。`--shadow-*` 单用留给非浮层件 |
+| `--elev-rim` | `tokens.css` | 只被 `--elev-1/2` 吃 | 浮层与背后亮内容之间那一圈切边色；组件里再写 `0 0 0 1px rgba(…)` 即违纪 |
+| `--scroll-w / -w-slim / --scroll-gap / -gap-slim` | `tokens.css` | 全局 / `.shell .panel` / 设置 / 教程 / 市场 | 轨道 10 常规 / 8 密档，内衬 2 / 1——**两档 thumb 实宽都是 6px**（10−2×2 = 8−2×1），改任何一格先算这条等式 |
+| `--split-rest / --split-hot` | `tokens.css` | 壳层 `.resizer` / 教程 `.kp-splitter` / 命令矩阵 `.cm-split`＋`.cm-corner-resize` / 底栏 `.dock-cell-resizer` | 六条把手里**五条**热态一律 accent（底栏那条原本只写 `:active`，悬停零反馈）。**静息只收了教程那条**：命令矩阵 `.cm-split::after` 实测吃 `--border-subtle`（比 `--border` 淡一档），本批不替它调深浅——那是可见变化，不在"零视觉改档"的授权内。**第六条（编辑器组 `.editor-divider`）热态仍转中性灰**——它的**终值**被 B-5 的 `styles-wash-token-discipline` 逐字钉成"零视觉变化"，改色＝替别人改写对拍判据，已登记 AE-SPLIT4 |
+| `.u-hairline-fade*` 的页脚消费 | 效果库 | `.modal-actions` / `.wizard-actions`（含 `.ov-foot`）/ 教程脚部 | 弹窗页脚一律一条两端渐隐线 + `padding-top: var(--space-3)`；要实心带的面自己给底 |
+| `button` 基座档 | `styles.css`（重档同文） | `.primary` / `.ghost` / **`.danger`（本批立档）** / `.small` / `.big` / `.link` | 危险语义静息只转红字与描边（`--danger-text` + `--wash-error-edge`），悬停才升红洗——不与主行动抢位；实心红留给终局确认钮 |
+| 标题阶梯 | `--fs-5 / --fs-4 / --fs-3` | `.modal h2` 18 / `.ov-title` 16 / `.wizard h3` 13 | 浮层标题不许吃正文档，否则"这是一块浮起来的面板"全靠遮罩说 |
+
+**为什么这些进 README 而不是各面板自己写**：本批动手前的实测是——同一档抬升在四处有四种写法、
+同一条页脚线只有一个面有、同一句"可以拉"在六条把手上分了三家（热态两色 / 静息三档 / 一条没悬停态）。
+散着写不会有人反对，但它每次被复制都
+更散一点；`tests/aesthetic-ladder.test.ts` 把这七行钉成判据（名册齐 / 只有一份真源 / 状态齐套）。
+
+**刻意没并进来的**（各自有主，别顺手收编）：Monaco 弹层与命令面板行（`ui/editor-widget.css`、
+`ui/palette.css` 是独立精修语言，本 README §一 明文不强行改写）、`.u-card` / `.u-lift` 这类
+**面板内**卡片面（不是浮层，吃 `--shadow-*` 才对）、`--on-fill` 与主按钮快捷键芯片的翻色
+（`体感批 B-5` 的账，四条主题各自带选择器覆盖，改它要连改两处对拍台账，已登记不属本批）。
+
 
 **待 L01 补的 token**（本目录已用 `var(--xxx, 现值)` 兜底，今天就能渲染）：
 

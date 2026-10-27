@@ -33,9 +33,7 @@
   /* 纸色：主题面色掺一点 accent 暖调；不支持 color-mix 的内核吃上面那条纯色 */
   background: var(--surface-raised);
   background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-3);
+  box-shadow: var(--elev-3);
   /* 微倾斜：纸条"随手放上去"的那点不齐；0.6° 不足以影响阅读 */
   transform: rotate(-0.6deg);
   outline: none;
@@ -59,8 +57,7 @@
 /* 顶缘一道 accent 光：与 update-dialog 同一家族语言（"这是浮起来的一层"） */
 .dev-note:focus-visible {
   box-shadow:
-    var(--edge-raise),
-    var(--shadow-3),
+    var(--elev-3),
     var(--shadow-focus);
 }
 

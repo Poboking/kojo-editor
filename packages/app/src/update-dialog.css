@@ -29,9 +29,7 @@
   max-height: min(84vh, 760px);
   overflow: hidden;
   border-radius: var(--radius-lg);
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-3);
+  box-shadow: var(--elev-3);
   outline: none;
   animation: update-dialog-in var(--dur-3) var(--ease-spring);
 }
@@ -62,8 +60,7 @@
 /* 程序聚焦到面板时给一圈柔光焦点环（不是键盘 Tab 的落点，但读屏/键盘用户看得见位置） */
 .update-dialog:focus-visible {
   box-shadow:
-    var(--edge-raise),
-    var(--shadow-3),
+    var(--elev-3),
     var(--shadow-focus);
 }
 

@@ -118,7 +118,7 @@
 
 /* 拖拽中：整根把手实一点，告诉手"这格归你管"（只动背景，不做位移动画） */
 .bottombar .dock-cell-resizer:active {
-  background: var(--accent);
+  background: var(--split-hot);
   opacity: 0.6;
 }
 

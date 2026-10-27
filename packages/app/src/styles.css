@@ -71,6 +71,34 @@ button.ghost {
   background: transparent;
   box-shadow: none;
 }
+/* ⚠ 幽灵钮的悬停**没**在本批改档（口径已实测，落点欠着一批）：基类 `button:hover` 那枚
+   `--btn-bg-hover` 是实心灰，落在 `ghost` 的透明底上读作"突然贴了块胶布"——但 `ghost` 全站
+   90+ 处，其中 `.toolbar-btn:hover` / `.ksp-clear:hover` 自写 `border-color: transparent`、
+   `.prob-copy:hover` 自写 `--hover-strong`，而 `button.ghost:hover:not(:disabled)` 的特异性
+   (0,3,1) 会把这三处标定过的值一并压掉（重档还比 problem-panel.css 晚到，平局也是它赢）。
+   要收这一档得先给"组件自写的悬停档"让位——那是 `@layer` 或统一 `.kit-btn` 的活，
+   已按实测登记成看板行，不在本批顺手做。 */
+/* 危险钮立档（美学批 1027）：同一个"会丢数据"的语义此前有三种画法——右键菜单项是
+   `color-mix(--danger 14%)` 的洗色、键位行的删除钮是裸 `--red` 文字、市场确认钮是实心红底。
+   并排看像三家产品。基座这一档取**最克制**的那条路：静息只把字与描边转红（不与 .primary
+   抢"主行动"位），悬停才升成红洗 + 红描边，按下再深一档——与菜单项同一族配方。
+   实心红留给"确认不可撤销"的终局钮自己写（`.mk-confirm` 那一档不改，它要的就是吓一跳）。
+   字色一律 `--danger-text` 而非 `--danger`：后者压在最浅的 `--bg-3` 上只有 4.11:1，
+   正文级破线（tokens.css 立这档就是为了这一刻）。 */
+button.danger {
+  color: var(--danger-text);
+  border-color: var(--wash-error-edge);
+  background: transparent;
+  box-shadow: none;
+}
+button.danger:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--wash-error);
+  border-color: var(--danger);
+}
+button.danger:active:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+}
 button.big {
   font-size: var(--fs-4);
   padding: 10px 28px;
@@ -146,13 +174,13 @@ textarea {
 /* ------- 全局主题化细滚动条（F6；定稿 §十：透明轨道、悬停显 thumb） ------- */
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: var(--scroll-w);
+  height: var(--scroll-w);
 }
 .shell .panel::-webkit-scrollbar,
 .container-body::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: var(--scroll-w-slim);
+  height: var(--scroll-w-slim);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -160,7 +188,7 @@ textarea {
 ::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border-radius: var(--radius-sm);
-  border: 2px solid transparent;
+  border: var(--scroll-gap) solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -230,9 +258,7 @@ textarea {
   flex-direction: column;
   gap: var(--space-3);
   /* 分层抬升 + 顶边高光：欢迎卡是首屏第一件"浮起来"的物件，给足厚度；弹簧缓动入场 */
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-3);
+  box-shadow: var(--elev-3);
   animation: overlay-in var(--dur-3) var(--ease-spring);
 }
 .welcome-card h1 {
@@ -374,6 +400,13 @@ textarea {
   border-color: var(--border);
   background: var(--hover);
 }
+.recent-remove:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+.recent-remove:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
 .recent-adapter {
   color: var(--fg-dim);
   font-size: var(--fs-0);
@@ -415,9 +448,7 @@ textarea {
   max-width: 92vw;
   border-radius: var(--radius-lg);
   padding: var(--space-5) 28px;
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-3);
+  box-shadow: var(--elev-3);
   animation: overlay-in var(--dur-3) var(--ease-spring);
 }
 .modal h2 {
@@ -498,7 +529,7 @@ textarea {
   max-height: 80vh;
   overflow-y: auto;
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--elev-3);
   padding: var(--space-4);
   animation: overlay-in var(--dur-3) var(--ease-spring);
 }
@@ -647,7 +678,7 @@ textarea {
    教程宿主经 :has 放宽到 88vh 时，末尾那条 :has 规则把这份算式一起换掉。
    --sb：本浮层内所有滚动条收窄一档（全局 10px 在 8px 的窄栏里像根栏杆）。 */
 .wizard.tutorial {
-  --sb: 8px;
+  --sb: var(--scroll-w-slim);
   display: flex;
   flex-direction: column;
   max-height: calc(80vh - 2 * var(--space-4) - 2 * var(--space-2) - 4px);
@@ -894,7 +925,7 @@ textarea {
   height: var(--sb);
 }
 .wizard.tutorial ::-webkit-scrollbar-thumb {
-  border-width: 1px;
+  border-width: var(--scroll-gap-slim);
 }
 /* 窄窗（宿主 ≈94vw；窗宽到 680 时两列挤不下）：目录栏塌回顶部横滚胶囊带、正文占满宽——
    与既有"窄窗样例回落上下堆叠"同一套降级思路，不破版。折叠在横带里没有意义（一收就只剩
@@ -1205,15 +1236,13 @@ textarea {
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-lg);
   padding: 10px var(--space-3);
-  box-shadow:
-    var(--edge-raise),
-    var(--shadow-1);
+  box-shadow: var(--elev-1);
   font-size: var(--fs-2);
   animation: toast-in var(--dur-3) var(--ease-spring);
   transition: box-shadow var(--dur-1) var(--ease-out);
 }
 .toast:hover {
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--elev-2);
 }
 .toast-error {
   border-left-color: var(--red);
@@ -1253,6 +1282,15 @@ textarea {
 .toast-close:hover {
   color: var(--fg);
   background: var(--hover);
+}
+/* 按下与键盘落点（美学批 1027）：toast 的 × 是全仓最快被点掉的一枚钮，改前它只有 hover——
+   按下去不降档、Tab 走到它身上只借全局那圈硬 outline。补齐后与 .kit-icon-btn 同一族。 */
+.toast-close:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+.toast-close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 /* ------------------------------ 动效关键帧（ui-polish） ------------------------------ */
@@ -1933,6 +1971,8 @@ button.resume-session {
 .u-hairline-fade-right,
 .u-hairline-fade-bottom,
 .u-hairline-fade-left,
+.modal-actions,
+.wizard-actions,
 .tutorial-lead,
 .tutorial-toc,
 .tutorial-section + .tutorial-section,
@@ -1957,6 +1997,15 @@ button.resume-session {
 }
 .u-hairline-fade-left {
   --hair-edge: 0 0 0 1px;
+}
+/* 弹窗页脚统一画这条线（美学批 1027）：此前只有教程的页脚有线（`.wizard.tutorial
+   .wizard-actions` 自己写槽位），`.modal-actions` 与其余向导页脚则是"正文直接坐在按钮上"——
+   同一类面两种收口，读起来像没做完。线与正文之间留 `--space-3`（教程那格的实测档），
+   配方仍交效果库：这里只说"哪条边"，不说"怎么淡"。 */
+.modal-actions,
+.wizard-actions {
+  --hair-edge: 1px 0 0 0;
+  padding-top: var(--space-3);
 }
 
 /* 井面：内嵌区 / 代码块 / 表滚动区共用的那一块底。缺省不抬、无内衬；内衬写进 `--well-pad-*`，

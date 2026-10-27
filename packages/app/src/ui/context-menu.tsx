@@ -432,7 +432,7 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
                 )}
                 {hasChildren ? (
                   <span className="context-menu-arrow" aria-hidden="true">
-                    ›
+                    <Icon name="chevron-right" size="xs" />
                   </span>
                 ) : null}
               </button>

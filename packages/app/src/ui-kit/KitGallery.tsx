@@ -147,6 +147,57 @@ export function KitGallery(): ReactElement {
         </div>
       </Section>
 
+      <Section title="基座按钮档（不住在 kit 里，但每件都从这条基线取观感）">
+        <div className="kit-gallery-btns">
+          <button type="button">默认</button>
+          <button type="button" className="primary">
+            主行动
+          </button>
+          <button type="button" className="ghost">
+            幽灵
+          </button>
+          <button type="button" className="danger">
+            危险
+          </button>
+          <button type="button" className="small">
+            小号
+          </button>
+          <button type="button" className="big">
+            大号
+          </button>
+          <button type="button" disabled>
+            禁用
+          </button>
+          <button type="button" className="link">
+            链接式
+          </button>
+        </div>
+        <span className="kit-gallery-cap">
+          悬停看底色/描边两档，按下看 --dur-press 的跟手回程；danger 静息只转红字与描边，不与主行动抢位
+        </span>
+      </Section>
+
+      <Section title="抬升三档（--elev-1 菜单 / --elev-2 浮层 / --elev-3 模态：同一族三种厚度）">
+        <div className="kit-gallery-elev">
+          <div className="kit-gallery-elev-cell kit-gallery-elev-1">elev-1 · 顶缘高光 + 接触影 + 切边环</div>
+          <div className="kit-gallery-elev-cell kit-gallery-elev-2">elev-2 · 离地一档更远</div>
+          <div className="kit-gallery-elev-cell kit-gallery-elev-3">elev-3 · 末层自带 1px 环</div>
+        </div>
+        <span className="kit-gallery-cap">底下垫 sunken 是为了让三块面吃同一个背景——抬升是相对关系</span>
+      </Section>
+
+      <Section title="渐隐发丝线（.u-hairline-fade-* 一族：两端淡出，不是刀切）">
+        <div className="kit-gallery-col">
+          <div className="u-hairline-fade" style={{ padding: 'var(--space-2) var(--space-1)' }}>
+            默认下边 · 12%/88% 两端渐隐
+          </div>
+          <div className="u-hairline-fade-top" style={{ padding: 'var(--space-2) var(--space-1)' }}>
+            方向伴生类 · 上边
+          </div>
+          <span className="kit-gallery-cap">弹窗页脚（.modal-actions / .wizard-actions）即本族消费方</span>
+        </div>
+      </Section>
+
       <Section title="KitSkeleton（浮层加载态：替掉那一句 .dim）">
         <KitSkeleton lines={3} label="加载中…" />
         <KitSkeleton width={140} height={22} />

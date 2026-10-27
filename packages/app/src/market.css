@@ -191,9 +191,15 @@
   /* 顶部刻意不留 padding：粘性分区标题要贴住滚动视口上缘，不能留出露内容的缝 */
   padding: 0 var(--space-3) var(--space-3);
 }
-/* 滚动条口径与本仓其他面板一致（.shell .panel / .container-body 的 8px 细轴） */
+/* 滚动条口径与本仓其他面板一致（密档 8px 轨 + 1px 内衬 ⇒ thumb 仍是 6px，见 tokens 滚动族）。
+   改前这里只写了 width：横向滚动条（长包名/描述会溢出）于是吃全局 10px 那一档，
+   同一个面板里竖细横粗，是"两条边不一样"最扎眼的一处。 */
 .mk-body::-webkit-scrollbar {
-  width: 8px;
+  width: var(--scroll-w-slim);
+  height: var(--scroll-w-slim);
+}
+.mk-body::-webkit-scrollbar-thumb {
+  border-width: var(--scroll-gap-slim);
 }
 /* 旧结构兜底：列表/分组直接挂在面板上时补左右留白 */
 .panel-market > .mk-list,

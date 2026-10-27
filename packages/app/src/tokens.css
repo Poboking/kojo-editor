@@ -80,7 +80,7 @@
   /* 圆角尺度（UI P4 · §5.122）：此前散落 12 种字面量（1/3/4/5/6/8/12/14px），
      而 token 只定义了 2 档、仅 10 处用它。收成 5 档，档位按"件的大小"命名。
      余两个语义值不进尺度：`50%`（圆点，几何）与 `0`（显式直角）。 */
-  --radius-xs: 2px; /* 细指示条（标签下的高亮条）/ 滚动条 */
+  --radius-xs: 2px; /* 细指示条（标签下的高亮条）/ 行内代码芯片；滚动条 thumb 走 --radius-sm（见下面滚动族） */
   --radius-sm: 4px; /* 密集控件：树行、菜单项、chip、小按钮 */
   --radius-md: 6px; /* 中件：工具条按钮、输入框、面板块、状态条 */
   --radius-lg: 10px; /* 浮层与卡片：picker、overlay、toast、notice、modal、欢迎卡 */
@@ -102,6 +102,20 @@
   /* 抬升面顶边高光（VSCode 精修批）：raised/overlay 面挂一条极淡的 inset 顶亮边，
      是"这块面比后面那块更靠近光源"的最省笔墨的暗示——磨砂玻璃的 `--glass-edge` 同族思路。 */
   --edge-raise: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  /* —— 抬升三档（美学批 1027 · 浮层厚度的单一真源）——
+     一面浮层要"浮得对"，同时需要三件事：顶缘高光（受光）+ 分层投影（离地多高）+ 一圈切边环
+     （与背后亮内容分界）。这三件此前每面各抄一次，且**抄不齐**：`.modal` / `.welcome-card` /
+     `.update-dialog` 给的是 `--edge-raise + --shadow-3`；`.overlay-host` 只给 `--shadow-3`
+     （少了受光）；`.context-menu` 给 `--shadow-1` 再自造一枚裸 `rgba(0,0,0,.28)` 环（全仓唯一
+     一处没吃 token 的切边色）；`.picker` 只给 `--shadow-2`（既无高光也无切边，浮在浅色语法色
+     上时右缘读不出一块面）。同一档抬升在屏上因此有四种厚度，这是"不耐看"里最难指认的那种。
+     口径：**新增浮层面的 box-shadow 只许吃 `--elev-*`**；`--shadow-*` 单用留给"只要投影、
+     不要受光"的非浮层件。`--elev-3` 不再叠环——`--shadow-3` 末层本就自带 1px 切边。
+     `--elev-rim` 取 dark 档现值（逐字来自 `.context-menu`），浅色档若要更柔可在主题侧同名覆写。 */
+  --elev-rim: rgba(0, 0, 0, 0.28);
+  --elev-1: var(--edge-raise), var(--shadow-1), 0 0 0 1px var(--elev-rim); /* 轻浮层：右键菜单 / toast */
+  --elev-2: var(--edge-raise), var(--shadow-2), 0 0 0 1px var(--elev-rim); /* 浮层：命令面板 / 可拖浮窗 */
+  --elev-3: var(--edge-raise), var(--shadow-3); /* 模态与向导宿主 / 欢迎卡 */
   /* 井面（内嵌 / 代码底）的抬升档：井是"凹面"，受光与投影都比 --edge-raise / --shadow-1
      低半档（刻意不同值——直接复用会把"凹"读成"凸"）。缺省不抬，要抬的消费方写
      `--well-raise: var(--well-edge), var(--well-shadow);`。 */
@@ -333,6 +347,35 @@
   --scroll-thumb: rgba(255, 255, 255, 0.12);
   --scroll-thumb-hover: rgba(255, 255, 255, 0.24);
   --scroll-thumb-active: rgba(255, 255, 255, 0.34);
+  /* —— 滚动条几何四档（美学批 1027）——
+     颜色族早已 token 化，几何却散抄过六处：全局 10px 轨 + 2px 透明内衬、`.shell .panel` 与
+     `.container-body` 8px + 2px、设置页与教程 8px + **1px**（各写一遍 `border-width: 1px`）、
+     市场只重声明 width（height 漏了 ⇒ 横向滚动条比纵向粗一档，注释却自称"与其他面板一致"）、
+     Monaco 的 slider 另定一套。同一条滚动条在不同面板粗细不一，是"接缝对不上"里最容易复现的一种。
+     口径：**轨道 10 常规 / 8 密档；内衬 2 常规 / 1 密档**——两档内衬不同是**故意的**：
+     thumb 实宽 = 轨宽 − 2×内衬，两档都落在 **6px** 这一枚上（8−2、10−4）。所以"密档"收的是
+     轨道不是内容，读起来全站一根拇指。要改任何一格先算这条等式，别单点调。
+     圆角跟 `--radius-sm`——4px 正好把 6px 的 thumb 收成胶囊，`--radius-xs`(2) 在细拇指上读成
+     方条（上面 `--radius-xs` 那行"滚动条"注记已按现值改成"细指示条"，别照注释回改）。
+     滚动区**边缘渐隐**（mask）是另一族，与本族无关；那一族今天仍是四处各抄一份配方——
+     收口成一条原语会撞 `ui-chrome-polish.test.ts` 那三条"读元素自己那一格"的判据，
+     已按实测登记成看板 AE-SCROLLFADE，不在本批顺手做。 */
+  --scroll-w: 10px;
+  --scroll-w-slim: 8px;
+  --scroll-gap: 2px;
+  --scroll-gap-slim: 1px;
+  /* 分栏把手两态（美学批 1027）：全仓**六条**把手——壳层 `.resizer`、教程树底 `.kp-splitter`、
+     命令矩阵行分隔 `.cm-split` 与列把手 `.cm-corner-resize`、底栏 `.dock-cell-resizer`、
+     编辑器组 `.editor-divider`——按实测**分了三家**（口径比"四种颜色"更难看也更准）：
+     ① 热态两色——前五条转 accent，唯独 `.editor-divider` 转**中性灰**（同一个"可以拉"的
+        声明给出两种反馈）；② 静息三种可见度——`.resizer` / `.dock-cell-resizer` 不显（透明），
+        `.kp-splitter::after` 吃 `--border`，`.cm-split::after` 吃 `--border-subtle`；
+     ③ 底栏那条只写了 `:active`，**悬停零反馈**（手移上去不动，只有按住才亮）。
+     收进两枚语义档：静息＝发丝线色，热态＝accent（把手是"可以拉"的声明，与选中/焦点同族，
+     不该是中性灰）。第五条 `.editor-divider` 今天仍转灰，原因见该条注释与看板 AE-SPLIT4。
+     命中区几何（4px / 8px / 10px、负 margin）各家结构不同，不并入本族。 */
+  --split-rest: var(--border);
+  --split-hot: var(--accent);
   --on-accent: #fff; /* accent 填充上的文字/滑块色（各主题多为白） */
   /* 按钮/主按钮三态底色（上批的实机值原样搬进 token，值不变、只是可被主题翻） */
   --btn-bg-hover: #333a42;
