@@ -25,7 +25,13 @@ import type { DirEntry, PlatformBridge, WalkOptions } from '@kojo/plugin-api';
  */
 
 /** Rust `WalkOptionsDto` 的字段全集（`packages/app/src-tauri/src/lib.rs`；多余键过不了线） */
-const RUST_WALK_DTO_KEYS = ['maxDepth', 'includeFiles', 'includeDirs', 'withMetadata'] as const;
+const RUST_WALK_DTO_KEYS = [
+  'maxDepth',
+  'includeFiles',
+  'includeDirs',
+  'withMetadata',
+  'extensions',
+] as const;
 
 /** 过线后的 `WalkOptions` 形态：JSON 往返 + DTO 白名单（`filter` 必然不在其中） */
 export function walkOptionsOnWire(opts: WalkOptions | undefined): WalkOptions | undefined {

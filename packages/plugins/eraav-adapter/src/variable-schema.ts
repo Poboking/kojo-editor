@@ -53,7 +53,7 @@
  * `loadEraavInstructionNames()`，与字典共用同一份解析器。
  */
 
-import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
+import { ERB_DECLARATION_EXTENSIONS, foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
 import type {
   FileIO,
   KojoInstructionTable,
@@ -365,6 +365,9 @@ export async function loadEraavVariableSchema(
     let erhPaths: string[] = [];
     try {
       const found = await io.walkDir(erbDir, {
+        // `extensions` 与 `filter` 同时给：前者把载荷压到声明文件那几十条（桥侧筛），
+        // 后者在内核兜语义；两者口径同一条（只筛输出、不剪枝），取交集不变。
+        extensions: ERB_DECLARATION_EXTENSIONS,
         filter: (e) => e.isDirectory || isErbDeclarationPath(e.name),
       });
       erhPaths = found

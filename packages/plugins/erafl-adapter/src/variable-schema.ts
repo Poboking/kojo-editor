@@ -67,7 +67,7 @@
  * 失败一律 `log.warn`（不静默），其余输入照常加载。
  */
 
-import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
+import { ERB_DECLARATION_EXTENSIONS, foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
 import type {
   FileIO,
   KojoInstructionTable,
@@ -395,6 +395,9 @@ export async function loadEraflVariableSchema(
     let erhPaths: string[] = [];
     try {
       const found = await io.walkDir(erbDir, {
+        // `extensions` 与 `filter` 同时给：前者把载荷压到声明文件那几十条（桥侧筛），
+        // 后者在内核兜语义；两者口径同一条（只筛输出、不剪枝），取交集不变。
+        extensions: ERB_DECLARATION_EXTENSIONS,
         filter: (e) => e.isDirectory || isErbDeclarationPath(e.name),
       });
       // 不信任桥回来的都是 `.ERH`：读集合的规模是本函数的性能边界，扩展名自己再筛一遍

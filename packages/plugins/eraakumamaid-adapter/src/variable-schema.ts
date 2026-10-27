@@ -85,7 +85,7 @@
  * 引擎侧「不静默」由调用方日志保证）。
  */
 
-import { foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
+import { ERB_DECLARATION_EXTENSIONS, foldDigest, isErbDeclarationPath, stableHash } from '@kojo/plugin-api';
 import type { FileIO, Logger, VariableInfo, VariableSchema, VariableSource } from '@kojo/plugin-api';
 
 /** 名称表键的来源层：`.csv` = 主表 / `.als` = 追加名表（`.ERH` 常量走另一条路，见 `lookup`） */
@@ -714,6 +714,9 @@ export async function loadErakumamaidVariableSchema(
       // （读集合的规模是本函数的性能与安全边界，不能委托给一具可能跨进程的桥）。
       // 判扩展名一律问契约层单一真源（FT-2 收口），本包不再抄第二份 `.erh` 字面量。
       const found = await io.walkDir(erbDir, {
+        // `extensions` 与 `filter` 同时给：前者把载荷压到声明文件那几十条（桥侧筛），
+        // 后者在内核兜语义；两者口径同一条（只筛输出、不剪枝），取交集不变。
+        extensions: ERB_DECLARATION_EXTENSIONS,
         filter: (e) => e.isDirectory || isErbDeclarationPath(e.name),
       });
       // 确定性顺序：首个定义优先的裁决不该随目录枚举顺序漂移（引擎按路径排序装载）
