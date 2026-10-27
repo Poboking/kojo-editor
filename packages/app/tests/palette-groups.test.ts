@@ -56,6 +56,14 @@ describe('commandRows · 分类从主行搬到分组标签', () => {
     expect(catOnly?.primary).toBe('全部保存');
     expect(catOnly?.ranges).toBeUndefined();
   });
+
+  it('最近使用那几条保留「最近使用」分组，不被分类名盖回去（WS-16：置顶只剩顺序就没人认得出）', () => {
+    const rows = commandRows(commandItems(CMD, '', CTX, { recent: ['layout.toggleZen'] }), CMD);
+    expect(rows.map((r) => r.key)).toEqual(['layout.toggleZen', 'workbench.saveAll', 'workbench.closeAll']);
+    expect(rows.map((r) => r.group)).toEqual(['最近使用', '工作台', '工作台']);
+    // 主行照旧剥掉分类前缀（置顶行也不画成「布局: 切换写作模式」那种长串）
+    expect(rows[0]!.primary).toBe('切换写作模式');
+  });
 });
 
 describe('CommandPalette 静态渲染 · 分组与快捷键列', () => {
