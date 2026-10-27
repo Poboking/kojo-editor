@@ -58,7 +58,7 @@
 > **LAU-3b 解耦批（2026-10-27，同分支）已交付**：`kojo-sugar` 插件族（转译 + `ui-sugar-lift/preview/editor`）只在显式启用 kojo1 时装配（`ui/legacy-plugin-gate.ts`；缺省档连模块字节都不取，真壳双档实测 0 枚 / 4 枚 active）；ERB / kojo2 / 宿主共用的词表、词法、格式化全部迁到 `@kojo/kojo-vocab`，`kojo-sugar` 只剩 v1 转译管线与它自己的宿主面，**已整体离开开机静态图**。用户口径：kojo1 的地位就是"即将删除"，封存服务于彻底删除。
 
 | ID | 任务（落点） | 关键判据 | 状态 |
-| LAU-3b | **扩展名交接工具 + 封存档的首次说明**（LAU-3 框架批已落：描述符 v2 / 可用性门 / 封存层 / 切流缺省 `2.0-default` + v1 计划迁移 + **封存档的语义分析面随门一起停**；LAU-3b 解耦批已落：**插件族激活门** + 共用词表迁 `@kojo/kojo-vocab`；回执都在 `b/qoder/1027-lau-framework`）：① 一键 `.kojo` → `.kojo1` 改名（逐目录走 `writablePaths` 批准、写前备份、清单先过目、只改名不改内容）；② 打开封存档里的 `.kojo` 时的**首次说明**（今天落纯文本，只有状态栏语言菜单那一行说原因，不够显眼） | 未批准域上改名被拒；改名前后 `KOJO_SOURCE_EXTENSION` 单一真源闸全绿；`kojo2-cutover` 的判据翻面有测试 | 待派 · 2026-10-27 |
+| LAU-3b-FLIP | **扩展名真正交接**：`.kojo` 让给 2.0、v1 descriptor 只认 `.kojo1`。前置（改名工具 + `.kojo1` 全链路认领 + 封存档首开说明）已在 `b/qoder/1027-lau-framework` 交付，回执在提交信息；**本行只剩翻转**——先让作者把旧文件标完再翻，否则盘上 v1 `.kojo` 会被当成 2.0 读 | §6.1 的四笔代价逐条兑现：50 处引用 / `kojo2-cutover` 判据翻面 / 常量外字面量（`corpus.ts:66` 与测试）/ `KOJO_SOURCE_EXTENSION` 单一真源闸；`packages/app/src` 零游戏名不变 | 待派 · 2026-10-27 |
 | LAU-BLOCKED | **未排的两枚，卡在人不在码**：LAU-1（协议 v3）与 LAU-D1b（方言解析链上屏）都要等 **K2-CONTRACT / D0** 定契约落点（`plugin-api` vs `kojo-core`，本表第 30-31 行 lead 认领）；LAU-4 与本表 ERB-PARITY、SDK B4/B5 同文件，须串行 | 落点定了才开实现批；在此之前谁动 `structure-protocol.ts` / `semantic-roles.ts` 的落点都是抢裁 | 待 D0 裁决 · krosama 2026-10-25 |
 
 ## 在办 · 启动器落地（2026-10-26，组长 qoder）

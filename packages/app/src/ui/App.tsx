@@ -218,6 +218,13 @@ function createProjectView() {
 const loadKojo2MigrateWizard = (): Promise<{ default: typeof import('./kojo2-migrate')['Kojo2MigrateWizardHost'] }> =>
   import('./kojo2-migrate').then((m) => ({ default: m.Kojo2MigrateWizardHost }));
 const LazyKojo2MigrateWizardHost = lazy(loadKojo2MigrateWizard);
+/**
+ * `.kojo` → `.kojo1` 改名对话框（LAU-3b）：同样是"只有显式动作才上屏"的宿主件，
+ * 走懒边；fallback 用 `modal-mask` 与真身同外层。
+ */
+const LazyKojo1RenameDialog = lazy(() =>
+  import('./kojo1-rename').then((m) => ({ default: m.Kojo1RenameDialog })),
+);
 const LazyDevNoteDialog = lazy(() => import('./DevNoteDialog').then((m) => ({ default: m.DevNoteDialog })));
 const LazyWritableApprovalDialog = lazy(() =>
   import('./WritableApprovalDialog').then((m) => ({ default: m.WritableApprovalDialog })),
@@ -1016,6 +1023,36 @@ export function App(): ReactElement {
   const [migrateState, setMigrateState] = useState<Kojo2MigrateEntrySnapshot | null>(null);
 
   /**
+   * `.kojo` → `.kojo1` 改名工具（LAU-3b）。
+   *
+   * 状态三分：`open=false` 零动作；`open=true && paths===null` 正在列清单（遮罩已在外层）；
+   * `paths!==null` 把清单交给对话框（对话框自己读正文 / 分候选 / 落地）。
+   * 列举口径复用 `listSourceFiles`（与迁移向导 / 快速打开同一条递归列举），不另写一套。
+   */
+  const [legacyRenameOpen, setLegacyRenameOpen] = useState(false);
+  const [legacyRenamePaths, setLegacyRenamePaths] = useState<readonly string[] | null>(null);
+  const openLegacyRename = useCallback((): void => {
+    if (kernel === null) return;
+    setLegacyRenameOpen(true);
+    setLegacyRenamePaths(null);
+    const io = kernel.io;
+    void listSourceFiles(io.walkDir.bind(io), migrateRootsRef.current).then(
+      (paths) => setLegacyRenamePaths(paths),
+      (e: unknown) => {
+        setLegacyRenameOpen(false);
+        notifyRef.current({
+          kind: 'error',
+          message: `列举旧 .kojo 文件失败：${e instanceof Error ? e.message : String(e)}`,
+        });
+      },
+    );
+  }, [kernel]);
+  const closeLegacyRename = useCallback((): void => {
+    setLegacyRenameOpen(false);
+    setLegacyRenamePaths(null);
+  }, []);
+
+  /**
    * 入口与 kernel 同生命周期（换内核 = 换 io，旧入口的写端口作废）。
    *
    * `listFiles` 复用 `commands.ts` 的 `listSourceFiles`（宿主唯一的递归列举口径），
@@ -1067,6 +1104,15 @@ export function App(): ReactElement {
     () => [
       ...migrateCommands,
       ...storageCommands,
+      // LAU-3b：旧 `.kojo` → `.kojo1` 改名（只改名、不改内容；只读域由内核闸拒绝）。
+      // 常驻在项目视图的命令表里：它不是"开关开才有"的功能，任何档位都可能需要把旧文件
+      // 预先标成封存形态。
+      {
+        id: 'workbench.legacyRename',
+        title: '把旧 .kojo 文件改名为 .kojo1（封存）',
+        category: '工作台',
+        run: openLegacyRename,
+      },
       // 启动器实例库（L5）：键位按 LAUNCHER-ARCHITECTURE §14.4 的 Ctrl+Alt+O
       //（Ctrl+N 已被 kojo.newKojoFile 占用、F5 归 WebView2，两条都刻意避开）。
       {
@@ -1077,7 +1123,7 @@ export function App(): ReactElement {
         run: () => setLauncherOpen(true),
       },
     ],
-    [migrateCommands, storageCommands],
+    [migrateCommands, storageCommands, openLegacyRename],
   );
 
   // 结构解析叠层（默认开；只有显式 `off` 才算关，见 `monaco/tree-sitter-pref.ts`）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通
@@ -2405,6 +2451,29 @@ export function App(): ReactElement {
               applyPlan={migrateEntry.apply}
               undoPlan={migrateEntry.undo}
             />
+          </Suspense>
+        ) : null}
+        {/* `.kojo` → `.kojo1` 改名（LAU-3b）：只有命令面板显式发起才挂载；落地后由
+            `onFilesGone` 换标签路径、`treeRefreshRef` 直通车重列文件树（与文件树内联改名
+            同一套收尾），对话框本身不认识这两条通道。
+            `legacyRenamePaths === null` = 正在列清单：外层 `modal-mask` 已在位。 */}
+        {legacyRenameOpen ? (
+          <Suspense fallback={<div className="modal-mask" data-lazy-mount="kojo1-rename" />}>
+            {kernel !== null && legacyRenamePaths !== null ? (
+              <LazyKojo1RenameDialog
+                io={kernel.io}
+                filePaths={legacyRenamePaths}
+                guard={guardFileOp}
+                onClose={closeLegacyRename}
+                onRenamed={(renamed) => {
+                  onFilesGone([], renamed);
+                  treeRefreshRef.current?.();
+                }}
+                notify={(message) => notify({ kind: 'info', message })}
+              />
+            ) : (
+              <div className="modal-mask" data-lazy-mount="kojo1-listing" />
+            )}
           </Suspense>
         ) : null}
       </div>

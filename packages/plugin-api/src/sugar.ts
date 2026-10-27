@@ -1184,10 +1184,12 @@ export function fullwidthSpaceLines(source: string): number[] {
 }
 
 /**
- * 由 `.kojo` 源路径推导目标 `.erb` 产物路径（**纯函数**；不触达磁盘）。
+ * 由 `.kojo` / `.kojo1` 源路径推导目标 `.erb` 产物路径（**纯函数**；不触达磁盘）。
  *
- * 规则：**同目录、同基名，扩展名 `.kojo` → `.ERB`**（大小写不敏感，`\` / `/`
- * 分隔符一律保留原样）。非 `.kojo`（或空路径）→ `null`。
+ * 规则：**同目录、同基名，扩展名 `.kojo` / `.kojo1` → `.ERB`**（大小写不敏感，
+ * `\` / `/` 分隔符一律保留原样）。两枚都收是 LAU-3b 的扩展名交接：`.kojo1` 是
+ * 封存层的显式标记，语法产物目标与 `.kojo` 逐字同一套（只改名字，不改内容）。
+ * 非这两枚（或空路径）→ `null`。
  *
  * 依据（真实语料）：产物布局为 `個人口上/{编号 名称}/{口上名}/M_KOJO_K{n}_{分野}.ERB`，
  * 源 `.kojo` 由编辑器"新建向导"与产物**同目录**生成、并沿用产物基名（`K{No}` +
@@ -1197,7 +1199,7 @@ export function fullwidthSpaceLines(source: string): number[] {
  */
 export function resolveSugarTarget(sourcePath: string): string | null {
   if (!sourcePath) return null;
-  const m = /\.kojo$/i.exec(sourcePath);
+  const m = /\.kojo1?$/i.exec(sourcePath);
   if (!m) return null;
   return `${sourcePath.slice(0, sourcePath.length - m[0].length)}.ERB`;
 }
@@ -1214,16 +1216,36 @@ export function resolveSugarTarget(sourcePath: string): string | null {
 export const KOJO_SOURCE_EXTENSION = '.kojo';
 
 /**
- * Monaco 的 `extensions` 入参：把 {@link KOJO_SOURCE_EXTENSION} 展开成「原样 + 全大写」
- * 两种写法——与 `erb-ext.erbMonacoExtensions` **同形态**（同一个理由：Monaco 的语言注册
- * 按字面量匹配扩展名，只给小写会让盘上的大写文件落到别的语言）。
+ * **封存层**（kojo1）的显式扩展名（LAU-3b，2026-10-27）。
+ *
+ * 为什么两枚并存而不是直接改 {@link KOJO_SOURCE_EXTENSION}：扩展名交接是**两步**——
+ * 先让作者把旧文件主动标成 `.kojo1`（本仓提供改名工具，见 `ui/kojo1-rename*`），
+ * 再把 `.kojo` 让给 2.0。第一步落地时 `.kojo` 仍归 v1 解析器（内容指纹那两档不动），
+ * `.kojo1` 只是**新增**的一枚显式声明：见到它就不必再嗅正文，永远是 kojo1。
+ *
+ * 单一真源口径与 {@link KOJO_SOURCE_EXTENSION} 相同：宿主与插件不得再抄字面量，
+ * 派生（Monaco 扩展名、快速打开清单、产物目标）一律从本常量现算。
+ */
+export const KOJO_LEGACY_SOURCE_EXTENSION = '.kojo1';
+
+/** 封存层源扩展名的全集（`.kojo1` 与仍在过渡期的 `.kojo`；判断"这是不是 v1 源"只走这一处） */
+export const KOJO_V1_SOURCE_EXTENSIONS: readonly string[] = [
+  KOJO_SOURCE_EXTENSION,
+  KOJO_LEGACY_SOURCE_EXTENSION,
+];
+
+/**
+ * Monaco 的 `extensions` 入参：把 {@link KOJO_V1_SOURCE_EXTENSIONS}（`.kojo` + `.kojo1`）
+ * 逐枚展开成「原样 + 全大写」两种写法——与 `erb-ext.erbMonacoExtensions` **同形态**
+ * （同一个理由：Monaco 的语言注册按字面量匹配扩展名，只给小写会让盘上的大写文件落到
+ * 别的语言）。
  *
  * 大小写形态是这里**现算的派生物**，不是第二处手抄：消费方不得在 app 里再写
  * `['.kojo', '.KOJO']`，要加形态只改这一处。
  *
  * 缺省参数留给未来（同方言族那样）：传入别的清单即按同一规则展开，派生物仍只此一份。
  */
-export function kojoMonacoExtensions(exts: readonly string[] = [KOJO_SOURCE_EXTENSION]): string[] {
+export function kojoMonacoExtensions(exts: readonly string[] = KOJO_V1_SOURCE_EXTENSIONS): string[] {
   const out: string[] = [];
   for (const e of exts) {
     out.push(e, e.toUpperCase());

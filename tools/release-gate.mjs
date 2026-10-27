@@ -321,7 +321,19 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * 一次性进整包才会红。启动器的内容包 / 插件 / 存档面板还会再加几个懒块，届时按同一口径重钉。
    */
   distBytes: Math.round(11.0 * 1024 * 1024),
-  files: 90,
+  /*
+   * 2026-10-27 LAU-3b 收尾批：件数 90 → 92（顶格，零余量）、总量与入口不动。
+   *
+   * 增量逐枚点名（同一棵树改前/改后各真实构建一次，`dist/assets` 89 → 91 枚）：
+   * · `kojo1-rename-*.js`——`.kojo → .kojo1` 改名对话框自己的懒块（只在命令面板 /
+   *   设置页显式发起时取字节，开机图零增量）；
+   * · `kit-check-*.js`——**不是新代码，是共享边界搬了位置**：`KitCheck` 此前只被
+   *   同一个块里的消费者引用（内联进 ProjectView 块），改名对话框成为第二个块里的
+   *   消费者 ⇒ rollup 把它抽成共享块。字节量近中性（内联的那份变引用），件数 +1。
+   * 口径同 ps10 文件闸：**顶格不预留**——下一枚进图模块要先挪一枚出去，或按本节
+   * 同款"逐笔点名 + 改前改后各量一次"重钉。
+   */
+  files: 92,
 });
 
 const MIB = 1024 * 1024;
@@ -444,8 +456,8 @@ export async function inspectArtifacts({ root = ROOT, readDist = defaultReadDist
   if (measured.exceeded.includes('entry')) {
     lines.push(`  入口块 ${measured.entry} = ${entryKB} kB ＞ 上限 1,100 kB`);
   }
-  if (measured.exceeded.includes('dist')) lines.push(`  dist 总量 = ${distMiB} MiB ＞ 上限 10.5 MiB`);
-  if (measured.exceeded.includes('files')) lines.push(`  产物件数 = ${measured.files} ＞ 上限 85`);
+  if (measured.exceeded.includes('dist')) lines.push(`  dist 总量 = ${distMiB} MiB ＞ 上限 ${limitMiB} MiB`);
+  if (measured.exceeded.includes('files')) lines.push(`  产物件数 = ${measured.files} ＞ 上限 ${limitFiles}`);
   lines.push(summary);
   return { rc: 1, readings, tail: lines.join('\n') };
 }

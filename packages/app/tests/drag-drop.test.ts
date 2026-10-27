@@ -43,7 +43,8 @@ import {
 describe('classifyDrop：扩展名这一层', () => {
   it('白名单契约：ERB 方言那一段来自契约层单一真源，非方言两类由本行自己决定', () => {
     // 顺序即覆盖提示的显示顺序；`.erh` 是 FT-2 才进面的（拖得开 ⇔ 索引收得到，同一份清单）
-    expect(OPENABLE_EXT).toEqual(['.kojo', '.erb', '.erm', '.erh', '.md', '.txt']);
+    // LAU-3b：`.kojo1` 是封存层的显式标记，与 `.kojo` 同级可打开（顺序 = 提示显示顺序）
+    expect(OPENABLE_EXT).toEqual(['.kojo', '.kojo1', '.erb', '.erm', '.erh', '.md', '.txt']);
   });
 
   it('事件名与 Rust 侧 DRAG_DROP_EVENT 成对', () => {

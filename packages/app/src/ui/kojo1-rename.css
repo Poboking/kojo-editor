@@ -1,0 +1,95 @@
+/* ============================ .kojo → .kojo1 改名（LAU-3b） ============================ */
+/* 只补排布：遮罩 / 面板 / 按钮全部复用 `.modal-mask` / `.modal` 的既有口径。 */
+.modal.legacy-rename {
+  width: min(720px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.legacy-rename__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-1);
+}
+
+.legacy-rename__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.legacy-rename__list {
+  flex: 1 1 auto;
+  min-height: 96px;
+  overflow: auto;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legacy-rename__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-1);
+}
+.legacy-rename__row:hover {
+  background: var(--hover-soft);
+}
+
+.legacy-rename__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-meta);
+}
+
+.legacy-rename__status,
+.legacy-rename__empty {
+  margin: var(--space-2) 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+}
+
+.legacy-rename__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger-text, var(--danger));
+  font-size: var(--fs-1);
+}
+
+.legacy-rename__skipped {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  overflow: auto;
+  margin-top: var(--space-2);
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+}
+.legacy-rename__skipped summary {
+  cursor: pointer;
+}
+.legacy-rename__skipped ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.4em;
+}
+
+.legacy-rename__fail {
+  color: var(--danger-text, var(--danger));
+}

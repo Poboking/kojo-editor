@@ -40,6 +40,7 @@ import {
 } from 'react';
 import { KitRadio } from '../ui-kit/kit-radio';
 import { Icon } from './icons';
+import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
 import {
   getKojo2CutoverController,
   kojo2StageAllowsLegacy,
@@ -281,6 +282,29 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
           : '.kojo 不再按 kojo1 认领（新开的落纯文本），「.kojo 预览」停用；已打开的标签保持原样，不当场抽走高亮。'}
         <br />
         kojo1 的插件族（转译 / 预览 / 升糖 / 糖编辑）不随切档热装热卸：重开项目（或重载窗口）后才按新档生效。
+      </div>
+
+      {/* 扩展名交接（LAU-3b）：只改名字、不改内容；命令本体住在项目视图（它认识文件树
+          与标签收尾），这里只发意图——同一条通道与命令面板逐字相同，不另开一套写盘入口。 */}
+      <div className="kojo2-cutover__footer" data-kojo2-legacy-rename="1">
+        <button
+          type="button"
+          className="small"
+          disabled={!canRunContextMenuCommand('workbench.legacyRename')}
+          title={
+            canRunContextMenuCommand('workbench.legacyRename')
+              ? '只把确认是旧写法的 .kojo 改名为 .kojo1；内容不动，改名时逐份备份'
+              : '需要在打开的项目里使用'
+          }
+          onClick={() => {
+            runContextMenuCommand('workbench.legacyRename');
+          }}
+        >
+          把旧 .kojo 改名为 .kojo1
+        </button>
+        <span className="kojo2-cutover__hint">
+          只改文件名，不改内容；逐份先备份。已经是 2.0 写法或拿不准的文件不会被动到。
+        </span>
       </div>
 
       {/* v1 计划升上来的一次性回执（铁律 4：抬了作者的档位就必须说；写回 v2 后下次开机不再出现） */}

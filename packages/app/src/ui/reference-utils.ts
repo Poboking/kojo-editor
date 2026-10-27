@@ -1,5 +1,5 @@
 import type { EditorSymbolLocation, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
-import { KOJO_SOURCE_EXTENSION, MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
+import { KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS, MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
 
 /**
  * **出现点台账**（W8 XLANG-RENAME，2026-10-17）——改名 / 查找引用 / code-lens /
@@ -46,9 +46,10 @@ export type ReferenceLanguage = 'erb' | 'kojo';
  */
 export { KOJO_SOURCE_EXTENSION };
 
-/** 是否是 `.kojo` 源文件（宿主各处唯一判据，指回这里） */
+/** 是否是 kojo1 源文件（`.kojo` 或封存标记 `.kojo1`；宿主各处唯一判据，指回这里） */
 export function isKojoSourcePath(path: string): boolean {
-  return path.toLowerCase().endsWith(KOJO_SOURCE_EXTENSION);
+  const lower = path.toLowerCase();
+  return KOJO_V1_SOURCE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 /** 路径属于台账的哪一侧（`.kojo` = 糖源，其余按方言面） */

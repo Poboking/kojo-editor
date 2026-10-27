@@ -418,6 +418,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       入口——声明面两类与头文件形态此前只到服务面，编辑器**一条都看不到**。
     //     · +0.2 KB `plugin-api/diagnostic-copy.ts`：`erb.erh-invalid` 的中文名。
     //     · +0.1 KB `erb-parser/plugin.ts` / `index.ts`：服务面透传 `path` 与导出面。
+    //   - **LAU-3b 收尾批（2026-10-27，`.kojo1` 交接工具 + 封存档首开说明）**：现读数 **194 文件 / 2,907 KB**；
+    //     KB 闸随现值 **2,900 → 2,910**（口径仍是"读数进十"）。**零新增模块**，增量全在图内既有文件：
+    //     · `ui/App.tsx` **+3.2 KB**——改名命令、懒加载对话框挂载、列举与落地收尾接线（对话框本体在动态边）；
+    //     · `ui/kojo2-cutover.ts` **+1.3 KB**——`.kojo1` 的 `extension-kojo1` 路由与常量说明；
+    //     · `ui/kojo2-cutover-settings.tsx` **+1.2 KB**——设置页入口与文案；
+    //     · `monaco/languages.ts` **+0.3 KB**——descriptor 两枚扩展名并认；
+    //     另 **+0.4 KB** 是变基合流（dev IC 批 + 本分支 LAU-3）后的既有余量：合流树改前已是
+    //     **194 / 2,901 KB**，比上一闸多 1 KB。`legacy-sealed-notice`（EditorPane 边）与
+    //     `kojo1-rename*`（动态边）都不进本图；减面候选照旧是 `ui-kit/index.tsx` 按件拆分。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     //   - **语言面缺陷批（2026-10-26，合流后重钉）**：读数见下面那条 console（现读数由闸
@@ -528,10 +537,19 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `packages/kojo-vocab`（非插件包），宿主与 ERB / kojo2 改引新包之后，v1 转译的
     //     ~900 KB 链不再被开机静态 import 拽进来。成员断言随之从"两个已知漏点"收紧为
     //     "只剩 condition-extractor"，并新增一条 kojo-sugar 不许回来的断言。
+    //   - **LAU-3b 收尾批（2026-10-27，`.kojo1` 交接工具 + 封存档首开说明）**：现读数 **194 文件 / 2,907 KB**；
+    //     KB 闸随现值 **2,900 → 2,910**（口径仍是"读数进十"）。**零新增模块**，增量全在图内既有文件：
+    //     · `ui/App.tsx` **+3.2 KB**——改名命令、懒加载对话框挂载、列举与落地收尾接线（对话框本体在动态边）；
+    //     · `ui/kojo2-cutover.ts` **+1.3 KB**——`.kojo1` 的 `extension-kojo1` 路由与常量说明；
+    //     · `ui/kojo2-cutover-settings.tsx` **+1.2 KB**——设置页入口与文案；
+    //     · `monaco/languages.ts` **+0.3 KB**——descriptor 两枚扩展名并认；
+    //     另 **+0.4 KB** 是变基合流（dev IC 批 + 本分支 LAU-3）后的既有余量：合流树改前已是
+    //     **194 / 2,901 KB**，比上一闸多 1 KB。`legacy-sealed-notice`（EditorPane 边）与
+    //     `kojo1-rename*`（动态边）都不进本图；减面候选照旧是 `ui-kit/index.tsx` 按件拆分。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,900 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_900);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,910 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(2_910);
     expect(files.length).toBeLessThanOrEqual(194);
   });
 

@@ -25,7 +25,7 @@
  * `tests/language-parity.test.ts` 里红。
  */
 import type * as Monaco from './entry';
-import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { extname, isErbDialectPath, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
@@ -69,12 +69,16 @@ const KOJO_DESCRIPTOR: LanguageDescriptor = {
    * （`ui/kojo2-cutover.ts` 的 `kojo2StageAllowsLegacy`：三档里 `v1-only` / `dual` 为开），
    * 门是纯谓词、注册表不读设置也不订阅（§4.4）。
    *
+   * 认路判据（LAU-3b）：`.kojo1` 是**显式封存标记**，`.kojo` 是过渡期的老扩展名——
+   * 两枚都归这一门（交接工具把旧文件改名前，作者盘上两种形态都会出现）。判据取契约层
+   * `KOJO_V1_SOURCE_EXTENSIONS`，不在宿主另抄一份。
+   *
    * `settingKey` 是**身份**不是第二枚开关：本仓已有切流三档，再造一枚布尔就是两处状态
    * 必漂（用户 2026-10-27 口径「用现成三档」）。
    */
   availability: 'legacy',
   settingKey: 'ui.legacy-kojo-syntax',
-  matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO_SOURCE_EXTENSION,
+  matchesPath: (filePath) => KOJO_V1_SOURCE_EXTENSIONS.includes(extname(filePath).toLowerCase()),
   register: registerKojoLanguage,
   languageServices: true,
   structure: {

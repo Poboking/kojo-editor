@@ -43,6 +43,7 @@
  */
 import {
   KOJO_V1_FILE_EXTENSION,
+  KOJO_V1_LEGACY_FILE_EXTENSION,
   KOJO2_FILE_EXTENSION,
   decideKojo2Route,
   extensionOf,
@@ -88,7 +89,13 @@ export function isKojo2DiagnosticsPath(filePath: string): boolean {
  */
 export function isKojo2RouteablePath(filePath: string): boolean {
   const extension = extensionOf(filePath);
-  if (extension === KOJO2_FILE_EXTENSION || extension === KOJO_V1_FILE_EXTENSION) return true;
+  if (
+    extension === KOJO2_FILE_EXTENSION ||
+    extension === KOJO_V1_FILE_EXTENSION ||
+    extension === KOJO_V1_LEGACY_FILE_EXTENSION
+  ) {
+    return true;
+  }
   return getKojo2CutoverController().getOverride(filePath) !== null;
 }
 

@@ -28,7 +28,7 @@
  * **原地改写**：迁移只改文件内容，不改扩展名、不删源（裁决写在 `kojo2-migrate-model.ts`）。
  * 因此刷新报的路径就是原路径，宿主不需要处理"旧标签失效 / 新标签出现"的改名语义。
  */
-import { KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
+import { KOJO_V1_SOURCE_EXTENSIONS, pathKey } from '@kojo/plugin-api';
 import type { ShellCommandSpec } from './commands';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
@@ -135,7 +135,7 @@ export function isMigrateCandidate(path: string): boolean {
   const dot = path.lastIndexOf('.');
   const sep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   if (dot <= sep) return false;
-  return path.slice(dot).toLowerCase() === KOJO_SOURCE_EXTENSION;
+  return KOJO_V1_SOURCE_EXTENSIONS.includes(path.slice(dot).toLowerCase());
 }
 
 /**

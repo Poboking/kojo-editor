@@ -1,5 +1,5 @@
 import type { FileIO } from '@kojo/plugin-api';
-import {errorText,  ERB_DIALECT_EXTENSIONS, KOJO_SOURCE_EXTENSION, basename } from '@kojo/plugin-api';
+import {errorText,  ERB_DIALECT_EXTENSIONS, KOJO_V1_SOURCE_EXTENSIONS, basename } from '@kojo/plugin-api';
 import { isTauri } from '../bridge/invoke';
 import { joinPath } from './file-tree-ops';
 import { kojo2SourceExtensions } from './kojo2-open';
@@ -24,7 +24,7 @@ import { kojo2SourceExtensions } from './kojo2-open';
  * 拖得开的集合与索引收的集合从此同一条口径，不会再出现"索引里有、拖进来被拒"。
  * 新增非方言类型才动这一行；覆盖提示文案由它派生（`App.tsx`）。
  */
-export const OPENABLE_EXT: readonly string[] = [KOJO_SOURCE_EXTENSION, ...ERB_DIALECT_EXTENSIONS, '.md', '.txt'];
+export const OPENABLE_EXT: readonly string[] = [...KOJO_V1_SOURCE_EXTENSIONS, ...ERB_DIALECT_EXTENSIONS, '.md', '.txt'];
 
 /**
  * 拖放**实际**认的扩展名 = {@link OPENABLE_EXT} + 开关打开时应追加的 2.0 后缀。

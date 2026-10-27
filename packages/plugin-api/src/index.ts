@@ -487,6 +487,8 @@ export {
   isWritableAlias,
   kojoMonacoExtensions,
   KOJO_SOURCE_EXTENSION,
+  KOJO_LEGACY_SOURCE_EXTENSION,
+  KOJO_V1_SOURCE_EXTENSIONS,
   FULLWIDTH_SPACE,
   fullwidthSpaceLines,
   resolveSugarTarget,

@@ -1141,11 +1141,13 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
 });
 
 describe('release-gate · artifact-audit（dist 上界）', () => {
-  it('阈值常量随启动器批重钉：入口 1,100 kB / dist 11.0 MiB / 90 件', () => {
+  it('阈值常量随 LAU-3b 收尾批重钉：入口 1,100 kB / dist 11.0 MiB / 92 件', () => {
     // 2026-10-26 启动器落地批：85 件 / 10.5 MiB → 90 件 / 11.0 MiB（逐块归因见
     // `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释）。这条断言是"改阈值必须留痕"的闸：
     // 抬数时先改注释说清增量来自哪里，再改这里。
-    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.0 * 1024 * 1024), files: 90 });
+    // 2026-10-27 LAU-3b 收尾批：90 → 92 件（改名对话框懒块 + `kit-check` 共享块抽取；
+    // 改前/改后各真实构建一次，`dist/assets` 89 → 91），总量与入口不动。
+    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.0 * 1024 * 1024), files: 92 });
   });
 
   it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {
@@ -1179,25 +1181,27 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
     expect(item.tail).toContain('1250 kB ＞ 上限 1,100 kB');
   });
 
-  it('dist 总量超 10.5 MiB ⇒ FAIL（件数仍达标，只报总量一项）', async () => {
+  it('dist 总量超 11.0 MiB ⇒ FAIL（件数仍达标，只报总量一项）', async () => {
     const files = [...baselineDistFiles(), { rel: 'assets/huge.wasm', bytes: 10 * 1024 * 1024 }];
     const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), { readDist: distReader(files) });
     expect(code).toBe(1);
     const item = report.items[0];
     expect(item.readings.exceeded).toEqual(['dist']);
     expect(item.readings.files).toBe(14);
-    expect(item.tail).toMatch(/dist 总量 = [\d.]+ MiB ＞ 上限 10.5 MiB/);
+    expect(item.tail).toMatch(/dist 总量 = [\d.]+ MiB ＞ 上限 11 MiB/);
   });
 
-  it('产物件数超 85 ⇒ FAIL，tail 打印实测件数', async () => {
+  it('产物件数超上限 ⇒ FAIL，tail 打印实测件数与当前上界', async () => {
     const files = [{ rel: 'assets/index-entry.js', bytes: 800_000 }];
-    for (let index = 0; index < 90; index += 1) files.push({ rel: `assets/c-${index}.js`, bytes: 1_000 });
+    for (let index = 0; index < ARTIFACT_LIMITS.files; index += 1) {
+      files.push({ rel: `assets/c-${index}.js`, bytes: 1_000 });
+    }
     const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), { readDist: distReader(files) });
     expect(code).toBe(1);
     const item = report.items[0];
-    expect(item.readings.files).toBe(91);
+    expect(item.readings.files).toBe(ARTIFACT_LIMITS.files + 1);
     expect(item.readings.exceeded).toEqual(['files']);
-    expect(item.tail).toContain('产物件数 = 91 ＞ 上限 85');
+    expect(item.tail).toContain(`产物件数 = ${ARTIFACT_LIMITS.files + 1} ＞ 上限 ${ARTIFACT_LIMITS.files}`);
   });
 
   it('缺 dist ⇒ FAIL 且 tail 可读：点名目录 + 下一步该跑什么', async () => {

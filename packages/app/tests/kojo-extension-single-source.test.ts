@@ -1,7 +1,11 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KOJO_SOURCE_EXTENSION, kojoMonacoExtensions } from '@kojo/plugin-api';
+import {
+  KOJO_LEGACY_SOURCE_EXTENSION,
+  KOJO_SOURCE_EXTENSION,
+  kojoMonacoExtensions,
+} from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { installAvailabilityGate } from '../src/monaco/language-registry';
@@ -147,8 +151,8 @@ function appSourceFiles(dir = 'packages/app/src'): string[] {
 
 /** 手写的**全大写形态**扩展名字面量——大小写清单被抄进 app 的唯一可疑形状 */
 const UPPERCASE_EXT_LITERAL = /["']\.[A-Z]{2,5}["']/;
-/** 小写形态的扩展名字面量（用来钉住"既有抄本不许增长"） */
-const KOJO_EXT_LITERAL = /["']\.kojo["']/;
+/** 小写形态的扩展名字面量（用来钉住"既有抄本不许增长"；LAU-3b 起 `.kojo1` 同一口径） */
+const KOJO_EXT_LITERAL = /["']\.kojo1?["']/;
 
 describe('② 全仓守门：`.kojo` 的大小写清单只由契约那一份派生函数产生', () => {
   it('packages/app/src 里出现全大写扩展名字面量的文件数 = 0', () => {
@@ -259,7 +263,12 @@ describe('③ 行为面：`.kojo` 注册覆盖大小写两形态，且与选语�
   });
 
   it('派生物形态：清单进、成对大小写出——契约清单加一项，注册处零改动就跟上新形态', () => {
-    expect(kojoMonacoExtensions()).toEqual([KOJO_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION.toUpperCase()]);
+    expect(kojoMonacoExtensions()).toEqual([
+      KOJO_SOURCE_EXTENSION,
+      KOJO_SOURCE_EXTENSION.toUpperCase(),
+      KOJO_LEGACY_SOURCE_EXTENSION,
+      KOJO_LEGACY_SOURCE_EXTENSION.toUpperCase(),
+    ]);
     // 同形态函数的通用性（与 `erbMonacoExtensions` 一样收清单入参）：派生规则只此一份
     expect(kojoMonacoExtensions(['.aaa', '.bbbb'])).toEqual(['.aaa', '.AAA', '.bbbb', '.BBBB']);
     const { registered, monaco } = mockMonaco();

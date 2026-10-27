@@ -177,6 +177,13 @@ import {
   type PreviewMenuContext,
 } from './editor-pane/preview-menu';
 import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
+import {
+  LEGACY_SEALED_NOTICE_MESSAGE,
+  LEGACY_SEALED_NOTICE_TITLE,
+  loadLegacySealedNoticePrompted,
+  markLegacySealedNoticePrompted,
+  shouldExplainLegacySealedOpen,
+} from './legacy-sealed-notice';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -997,6 +1004,43 @@ export function EditorPane({
       if (refreshMarkersRef.current) refreshMarkersRef.current(entry.model, path);
     }
   }, [legacySyntaxOn]);
+
+  /**
+   * 封存层首开说明（LAU-3b）：kojo1 关着时新开 `.kojo` / `.kojo1` 会落 `plaintext`，
+   * 作者看到的是一整块白字。第一次遇到时给一条**可执行**说明（直达设置页），之后不再打扰。
+   *
+   * 判据只认"这份 model 实际是 plaintext"——`.kojo` 里若写的是 2.0 语法，模型会挂
+   * `kojo2`，不弹；已认领的老 model 在门关上时也保持原语言（§4.4），同样不弹。
+   *
+   * **调用点在换文件 effect 里、`setModel` 之后**（不是本组件自己的 effect）：文件那一拍
+   * 是异步装 model 的，挂在 `[filePath]` 上会在 model 还没换装时读上一份文件（判成别人的
+   * 语言）。这一格与"首次打开 ERB 问预览"同款——现读开关、换文件时判一次。
+   */
+  const maybeExplainLegacySealed = useCallback((): void => {
+    if (filePathRef.current === null) return;
+    const legacyOn = isKojoLegacySyntaxEnabled();
+    if (legacyOn) return;
+    const path = filePathRef.current;
+    const model = currentFileModel();
+    const languageId = model?.getLanguageId() ?? '';
+    const prompted = loadLegacySealedNoticePrompted();
+    if (!shouldExplainLegacySealedOpen({ path, languageId, legacyOn, prompted })) return;
+    markLegacySealedNoticePrompted();
+    notify({
+      kind: 'info',
+      title: LEGACY_SEALED_NOTICE_TITLE,
+      message: LEGACY_SEALED_NOTICE_MESSAGE,
+      detail: path,
+      actions: [
+        {
+          label: '打开设置',
+          run: () => {
+            runContextMenuCommand('layout.openSettings');
+          },
+        },
+      ],
+    });
+  }, [currentFileModel, notify]);
 
   // ref 化刷新函数，供只注册一次的 Monaco 回调取用最新闭包
   useEffect(() => {
@@ -2295,6 +2339,8 @@ export function EditorPane({
       // C1 反向下行批：setModel + 视图恢复 + 定位都落定后补发一次位点——面板刚切过来
       // 就有位点（此前收到的还是上一份文件的旧位点，消费方按 filePath 判等自会忽略）
       publishCursor();
+      // LAU-3b：封存档首开说明——model 已换装、语言 id 已定，此刻判"是不是一块白字"才是真的。
+      maybeExplainLegacySealed();
       stopApply();
     })();
     return () => {
@@ -2303,7 +2349,7 @@ export function EditorPane({
       markerFrameRef.current?.();
       markerFrameRef.current = null;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor, maybeExplainLegacySealed]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 

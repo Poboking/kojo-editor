@@ -50,7 +50,7 @@ import {
   type MigrateMetadata,
   type MigrateResult,
 } from '@kojo/kojo-core';
-import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 import {
   buildMigrateDiff,
@@ -179,6 +179,16 @@ export const KOJO2_FILE_EXTENSION: string = KOJO2_SOURCE_EXTENSION;
  */
 export const KOJO_V1_FILE_EXTENSION: string = KOJO_SOURCE_EXTENSION;
 
+/**
+ * 封存层的**显式**扩展名（LAU-3b）：见到 `.kojo1` 不再嗅正文，恒按 v1 解析。
+ *
+ * 它与 {@link KOJO_V1_FILE_EXTENSION} 的关系：`.kojo` 是过渡期老扩展名（仍走
+ * `2.0-default` 的内容指纹），`.kojo1` 是作者用改名工具主动打上的封存标记。
+ * 两枚一起构成"v1 源"的全集，但判据分两档——`extension-kojo1` 不给指纹留任何
+ * 翻面机会（这就是交接工具的意义：作者说它是旧文件，编辑器不再猜）。
+ */
+export const KOJO_V1_LEGACY_FILE_EXTENSION: string = KOJO_LEGACY_SOURCE_EXTENSION;
+
 /* ============================== 内容指纹 ============================== */
 
 /** 内容指纹的结论：能不能只看正文就断定这是 2.0 写法 */
@@ -282,6 +292,8 @@ export type Kojo2RouteReason =
   | 'override'
   /** `.kojo2` 扩展名（新文件） */
   | 'extension-kojo2'
+  /** `.kojo1` 扩展名（LAU-3b 的显式封存标记：不嗅正文，恒按 v1） */
+  | 'extension-kojo1'
   /** `v1-only` 阶段的 `.kojo` */
   | 'stage-v1-only'
   /** `dual` 阶段的 `.kojo`（老文件仍按 v1） */
@@ -399,6 +411,19 @@ export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
       filePath,
       parser: 'kojo2',
       reason: 'extension-kojo2',
+      fingerprint: null,
+    };
+  }
+
+  if (extension === KOJO_V1_LEGACY_FILE_EXTENSION) {
+    // LAU-3b：`.kojo1` 是作者显式打上的封存标记 —— 与阶段、正文都无关，恒按 v1。
+    // 交接工具只改名不改内容，这条判据就是它的落点：改完之后 2.0-default 的正文嗅探
+    // 不再有机会把一份旧文件读成 2.0（那正是"改名"要买的确定性）。
+    return {
+      kind: 'resolved',
+      filePath,
+      parser: 'kojo-v1',
+      reason: 'extension-kojo1',
       fingerprint: null,
     };
   }

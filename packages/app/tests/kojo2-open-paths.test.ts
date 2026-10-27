@@ -19,7 +19,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement as h, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import {
   classifyDrop,
   dropHintText,
@@ -106,7 +106,15 @@ describe('① 拖放清单：恒含 2.0 扩展名（看得见文件是语言面�
   it('恒含：openableExtensions() = 基线清单 + 2.0 扩展名（基线清单没有被就地改大）', () => {
     stubFlag(false);
     expect(openableExtensions()).toEqual([...OPENABLE_EXT, KOJO2_SOURCE_EXTENSION]);
-    expect(OPENABLE_EXT).toEqual([KOJO_SOURCE_EXTENSION, '.erb', '.erm', '.erh', '.md', '.txt']);
+    expect(OPENABLE_EXT).toEqual([
+      KOJO_SOURCE_EXTENSION,
+      KOJO_LEGACY_SOURCE_EXTENSION,
+      '.erb',
+      '.erm',
+      '.erh',
+      '.md',
+      '.txt',
+    ]);
   });
 
   it('悬停文案由同一份清单派生（含 2.0 扩展名，不另抄一句）', () => {
@@ -160,6 +168,8 @@ describe('② 快速打开与项目扫描：后缀判据同一份、项目扫描
     expect(isQuickOpenSourcePath('D:/proj/b.kojo2')).toBe(true);
     expect(isQuickOpenSourcePath('D:/proj/B.KOJO2')).toBe(true);
     expect(isQuickOpenSourcePath('D:/proj/a.kojo')).toBe(true);
+    expect(isQuickOpenSourcePath('D:/proj/a.kojo1')).toBe(true);
+    expect(isQuickOpenSourcePath('D:/proj/A.KOJO1')).toBe(true);
   });
 
   it('listSourceFiles（项目扫描那条列举）含 2.0 文件，md 仍不收', async () => {

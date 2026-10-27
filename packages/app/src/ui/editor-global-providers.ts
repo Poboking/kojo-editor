@@ -21,7 +21,7 @@ import type { Kernel } from '@kojo/kernel';
 // 2.0 语言层的 adapter **只是类型**（`GlobalProviderOptions.kojo2Adapter` 的形状）：
 // 具体实例由宿主组合根注入，本文件既不 import 任何 adapter 包，也不认识任何游戏名词。
 import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
-import { activeGameAdapter, errorText, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
+import { activeGameAdapter, errorText, KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
 import { registerKojo2AdapterSource } from '@kojo/kojo-lang/adapter-source';
 import type {
   EditorCodeAction,
@@ -1704,7 +1704,13 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         if (!ctx) return [];
         const realPath = ctx.filePathRef.current;
         if (!realPath) return [];
-        const path = isSugarModel ? realPath.replace(/\.[A-Za-z0-9]+$/, KOJO_SOURCE_EXTENSION) : realPath;
+        // LAU-3b：`.kojo1` 源的文件本身就是 kojo1 投影，路径原样派发（`resolveSugarTarget`
+        // 已认这两枚）；只有"把 ERB 显示成糖"那种派生才把路径改写成 kojo 源形态。
+        const path = isSugarModel
+          ? realPath.toLowerCase().endsWith(KOJO_LEGACY_SOURCE_EXTENSION)
+            ? realPath
+            : realPath.replace(/\.[A-Za-z0-9]+$/, KOJO_SOURCE_EXTENSION)
+          : realPath;
         const lineCount = model.getLineCount();
         if (!shouldComputeSemanticTokens(lineCount)) return [];
         const kernel = requireKernel();

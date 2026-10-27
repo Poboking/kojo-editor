@@ -7,7 +7,7 @@
  */
 
 import type { EditorCommandContext, EditorCommandContribution } from '@kojo/plugin-api';
-import { ERB_DIALECT_EXTENSIONS, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { ERB_DIALECT_EXTENSIONS, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
 // 2.0 追加项：清单与开关判据只住在 `ui/kojo2-open.ts`（本文件不读开关、不抄字面量）
 import { kojo2SourceExtensions } from './kojo2-open';
 
@@ -213,7 +213,7 @@ export function mergeCandidatePaths(groups: readonly (readonly string[])[]): str
  */
 export const QUICK_OPEN_SOURCE_EXTENSIONS: readonly string[] = [
   ...ERB_DIALECT_EXTENSIONS,
-  KOJO_SOURCE_EXTENSION,
+  ...KOJO_V1_SOURCE_EXTENSIONS,
 ];
 
 /**
