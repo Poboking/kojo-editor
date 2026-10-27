@@ -42,15 +42,6 @@ export const ERB_PREPROC_DEAD_CLASS = 'erb-preproc-dead';
 /** 编辑停顿后重算的去抖窗口（与波浪线的 `MARKER_DEBOUNCE_MS` 同量级，各走各的） */
 const DEBOUNCE_MS = 220;
 
-/**
- * 超过这个行数就整档让位。
- *
- * 判据不是"能不能算"（`collectPreprocDeadRanges` 是 O(行数) 的），而是"值不值"：
- * 装饰只影响阅读，一份 2 万行以上的 ERB 在真语料里一份都没有（eraNAS 全树最大
- * 单文件 1.1 万行），把预算留给波浪线。
- */
-const MAX_DIM_LINES = 20_000;
-
 /** `#DEFINE` 名集的取数腿住叶子模块（零 monaco 依赖，可在 node 里单测）；这里只为旧 import 点留个面 */
 export { definedMacrosOf } from './erb-preproc-defines';
 
@@ -75,8 +66,17 @@ export interface ErbPreprocDimHandle {
  *
  * `deps.index` 每次重算时现取（不缓存索引本身）：索引重建、项目切换、关闭项目
  * 都只需调用方 `refresh()` 一次，这里不必知道任何一种生命周期。
+ *
+ * `deps.maxLines` = 超过这个行数整档让位。判据/阈值**单一真源**在 `ui/editor-options.ts`
+ * （`LARGE_FILE_LINES`，与粘性滚动/括号对着色/整篇找同词同档）；本模块不写第二个数，
+ * 也不引那个模块——它不在开机图的静态段里，引一次就要多枚模块进图（PS-10 闸）。
+ * 原写死 20,000，依据是"真语料最大单文件 1.1 万行"——2026-10-28 复核已过时（同树有
+ * 19,033 行与 169,119 行）。读数见 `.workbuddy-ai/reports/2026-10-28-p0-3-bigfile-highlight.md`。
  */
-export function installErbPreprocDim(deps: { index: () => ErbIndex | null }): ErbPreprocDimHandle {
+export function installErbPreprocDim(deps: {
+  index: () => ErbIndex | null;
+  maxLines: number;
+}): ErbPreprocDimHandle {
   const entries = new Map<Monaco.editor.ICodeEditor, DimEntry>();
 
   const clearOf = (entry: DimEntry): void => {
@@ -98,7 +98,7 @@ export function installErbPreprocDim(deps: { index: () => ErbIndex | null }): Er
       return;
     }
     const ranges =
-      model.getLineCount() > MAX_DIM_LINES
+      model.getLineCount() >= deps.maxLines
         ? []
         : collectPreprocDeadRanges(model.getValue(), definedMacrosOf(deps.index()));
     if (ranges.length === 0) {

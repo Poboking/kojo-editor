@@ -357,7 +357,7 @@ function labelName(raw: string, indent: number): { start: number; end: number; n
  * 块栈在**函数边界**（`@NAME` 定义行）清空——跨函数配对是错的（与结构体检
  * `checkControlFlowStructure` 的 `flushOpen` 同一纪律），未闭合的开块因此不产块。
  */
-export function erbStructureOf(source: string): ErbStructure {
+function computeStructure(source: string): ErbStructure {
   const rawLines = splitLines(source);
   const rows: ErbLine[] = [];
   const functions: ErbNameSpan[] = [];
@@ -491,6 +491,32 @@ export function erbStructureOf(source: string): ErbStructure {
   blocks.sort((a, b) => a.open.line - b.open.line);
 
   return { lines: rows, controlByLine, blockByControlLine, blocks, functions, labels, calls, jumps };
+}
+
+/**
+ * 最近一份源文的结构事实（LRU-1）。`computeStructure` 是 O(行数) 单趟（真语料 19,033 行
+ * 实测 30.7ms），而两个消费方（同符号高亮、扩选）**每次光标移动各问一次**且答案逐字相同。
+ * 命中判据是源文本身：`model.getValue()` 内容未变时交回同一引用，`===` 走 O(1) 快路；
+ * 内容一变整份换掉（不做增量、不认版本号）。**返回值只读**（两个消费方都只读）。
+ * 超 4MB 不入缓存（169k 行那份 5.7MB 不占内存）；只留一份，编辑一次就换。
+ * 读数与取舍见 `.workbuddy-ai/reports/2026-10-28-p0-3-bigfile-highlight.md`。
+ */
+const STRUCTURE_CACHE_MAX_CHARS = 4 * 1024 * 1024;
+let cachedStructureSource: string | null = null;
+let cachedStructure: ErbStructure | null = null;
+
+export function erbStructureOf(source: string): ErbStructure {
+  if (cachedStructure !== null && cachedStructureSource === source) return cachedStructure;
+  const built = computeStructure(source);
+  if (source.length <= STRUCTURE_CACHE_MAX_CHARS) {
+    cachedStructureSource = source;
+    cachedStructure = built;
+  } else {
+    // 超大源文：连上一份一起丢掉，别让缓存持有两份大对象
+    cachedStructureSource = null;
+    cachedStructure = null;
+  }
+  return built;
 }
 
 /* ============================== 小工具 ============================== */
