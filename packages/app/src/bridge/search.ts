@@ -37,6 +37,11 @@ export interface SearchSkipped {
   tooLarge: number;
   unreadable: number;
   filtered: number;
+  /**
+   * 被排除模式（`excludeGlobs`）挡下的文件数（WS-10）。**可选**：老宿主 / 老调试宿
+   * 的载荷没有这个键 ⇒ 读数侧按 0 处理，不谎报也不炸。
+   */
+  excluded?: number;
 }
 
 export interface SearchResult {
@@ -63,6 +68,15 @@ export interface SearchOptions {
    * `searchInFiles` 把 `request` 原样交给 `invoke`，字段一旦被填上就会随请求透传，不丢。
    */
   globs?: readonly string[];
+  /**
+   * 排除模式（WS-10）：gitignore-lite 语义（`**` 跨目录、`*`/`?` 不跨、
+   * 不含 `/` 的模式按文件名匹配任意深度、前导 `!` 取反、后写的规则赢）。
+   * 与 `globs`（include）是**先 include 后 exclude** 的关系：include 筛出的候选里，
+   * 命中任一未被取反回捞的排除模式的文件不进检索，计入 `skipped.excluded`。
+   * 空 / 缺省 = 不排除（老请求体逐字一致）。匹配基准与翻译规则见 Rust
+   * `compile_exclude_rules`（对拍口径见 `search-query.parseExcludePatterns`）。
+   */
+  excludeGlobs?: readonly string[];
 }
 
 export interface SearchRequest {

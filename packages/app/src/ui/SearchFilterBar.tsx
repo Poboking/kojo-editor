@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from 'react';
+import { notifySearchPrefsChanged } from './search-store';
 import {
   getGlobFilterText,
   loadCasePreservePref,
@@ -60,6 +61,9 @@ export function SearchFilterBar({ onRequestSearch }: SearchFilterBarProps): Reac
           value={globText}
           onChange={(e) => {
             setGlobFilterText(e.target.value);
+            // glob 文本住在 search-query 的模块级、不经过 store 的 set——按项目持久化
+            // 需要它时补一声回执（WS-10；防抖与写盘判据在 `search-store.markPrefsDirty`）
+            notifySearchPrefsChanged();
             setTick((t) => t + 1);
           }}
           onKeyDown={(e) => {

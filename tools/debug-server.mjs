@@ -500,6 +500,82 @@ async function mapPool(items, limit, fn) {
 /** 单次批量读的帧体上限：JSON 信封 + base64 会再放大 ~1.33×，超限 fail-loud 保护两端 */
 const READ_BATCH_MAX_BYTES = 32 * 1024 * 1024;
 
+/* ---------------- 排除模式（WS-10）的 Node 镜像腿 ----------------
+ *
+ * 判据与 Rust `compile_exclude_rules` / `is_excluded` 逐字同向：`**` 跨目录、`*` / `?`
+ * 不跨目录、前导 `!` 取反、**按给出顺序求值最后一条命中赢**、不含 `/` 的模式按文件名
+ * 匹配任意深度、两侧分隔符都先归一成 `/`、大小写**敏感**。
+ * 前端镜像在 `ui/search-query.parseExcludePatterns`（解析那半），这里是匹配那半。
+ *
+ * 为什么镜像必须自己认这一条：调试宿是 agent 验 UI 的唯一通道。宿侧不认识
+ * `excludeGlobs` 的话，「排除」框在浏览器里永远是"打了没反应"——那是一条假读数，
+ * 比没有这个功能更坏（作者会据此判定功能没做）。
+ *
+ * 已知不对称（**先记下来，不在本批顺手改**）：include 侧的 `globs`（P2-15）镜像至今
+ * 未实现，Rust 侧才有。排除与 include 是两条独立维度，缺 include 不影响排除的自证。
+ */
+
+/** glob → 正则源码（镜像 Rust `glob_to_regex`：星号对加斜杠 = 任意层含 0 层，单星与问号不跨目录） */
+function globToRegExpSource(glob) {
+  const norm = String(glob).replace(/\\/g, '/');
+  let out = '^';
+  for (let i = 0; i < norm.length; i += 1) {
+    const c = norm[i];
+    if (c === '*' && norm[i + 1] === '*') {
+      if (norm[i + 2] === '/') {
+        out += '(?:.*/)?';
+        i += 2;
+      } else {
+        out += '.*';
+        i += 1;
+      }
+    } else if (c === '*') out += '[^/]*';
+    else if (c === '?') out += '[^/]';
+    else out += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return `${out}$`;
+}
+
+/** 排除模式 → 规则序列（镜像 Rust `exclude_regex_source` + `compile_exclude_rules`） */
+function compileExcludeRules(patterns) {
+  const rules = [];
+  for (const raw of Array.isArray(patterns) ? patterns : []) {
+    let g = String(raw ?? '').trim().replace(/\\/g, '/');
+    if (g === '' || g === '!') continue;
+    const negated = g.startsWith('!');
+    if (negated) g = g.slice(1).trim();
+    if (g === '') continue;
+    const anchored = g.replace(/^\/+/, '');
+    const body = globToRegExpSource(anchored);
+    // 不含 `/` 的模式 = 按文件名匹配任意深度（前缀组必须以 `/` 收尾，段边界才不对齐错）
+    const source = anchored.includes('/') ? body : `^(?:.*/)?${body.slice(1, -1)}$`;
+    try {
+      rules.push({ negated, re: new RegExp(source) });
+    } catch {
+      // 与 Rust 同口径：编译不了的那条忽略并出声，绝不静默当成"没写"
+      console.warn(`[debug-host] 排除模式编译失败（该条已忽略）：${raw}`);
+    }
+  }
+  return rules;
+}
+
+/** 某条路径是否被排除（按序求值，最后一条命中赢；相对与绝对两种写法都试） */
+function isExcludedByRules(rules, rel, full) {
+  let excluded = false;
+  for (const rule of rules) {
+    if (rule.re.test(rel) || rule.re.test(full)) excluded = !rule.negated;
+  }
+  return excluded;
+}
+
+/** 绝对路径 → 相对该根的 `/` 形态（strip 不掉就退回全路径，与 Rust `relative_slash_path` 同兜底） */
+function relSlashPath(root, file) {
+  const r = String(root).replace(/\\/g, '/').replace(/\/+$/, '');
+  const f = String(file).replace(/\\/g, '/');
+  const prefix = `${r}/`;
+  return f.startsWith(prefix) ? f.slice(prefix.length) : f;
+}
+
 /**
  * `search_text` 的 Node 镜像（口径对齐 `bridge/search.ts` 的 SearchResult）：
  * 列 UTF-16 code unit 与 Monaco 同轴；命中行超长以命中为中心开窗（省略号含在串里）。
@@ -513,6 +589,8 @@ async function searchText(state, request, admitRead) {
   if (query === '') throw new HostError('检索词为空');
   for (const root of roots) admitRead(root); // 读域闸补位：旧实现的 walkFiles 绕过了它
   const extensions = (opts.extensions ?? []).map((e) => String(e).toLowerCase().replace(/^\./, ''));
+  // 排除模式（WS-10）：DTO → 规则序列（判据与 Rust 同向，见上面「排除模式的 Node 镜像腿」）
+  const excludeRules = compileExcludeRules(opts.excludeGlobs ?? []);
   let matcher;
   // 全局标志：逐行扫时同一行的多处命中都要列出（口径对齐 Rust `find_iter(line)`）
   if (opts.isRegex) {
@@ -544,7 +622,7 @@ async function searchText(state, request, admitRead) {
   const files = [];
   let totalMatches = 0;
   let truncated = false;
-  const skipped = { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0 };
+  const skipped = { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0, excluded: 0 };
   let filesScanned = 0;
   const searchId = Number(request.searchId);
   const cancelled = () => state.cancelledSearches.has(searchId);
@@ -555,12 +633,22 @@ async function searchText(state, request, admitRead) {
     const walkLimit = createLimiter(WALK_CONCURRENCY);
     const lists = await Promise.all(roots.map((root) => walkFiles(root, 12, walkLimit)));
     const candidates = [];
-    for (const list of lists) {
-      for (const file of list) {
+    for (let li = 0; li < lists.length; li += 1) {
+      // 排除判据的基准 = **相对该检索根**的路径（与 Rust `collect_files` 同一条尺子）；
+      // 同时拿归一后的全路径再试一遍（作者抄地址栏的绝对写法也要能兑现）。
+      const root = roots[li];
+      for (const file of lists[li]) {
         if (extensions.length > 0) {
           const ext = path.extname(file).slice(1).toLowerCase();
           if (!extensions.includes(ext)) {
             skipped.filtered += 1;
+            continue;
+          }
+        }
+        if (excludeRules.length > 0) {
+          const rel = relSlashPath(root, file);
+          if (isExcludedByRules(excludeRules, rel, String(file).replace(/\\/g, '/'))) {
+            skipped.excluded += 1;
             continue;
           }
         }

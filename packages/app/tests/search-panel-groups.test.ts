@@ -127,7 +127,17 @@ describe('searchProgressPercent：进度条读数', () => {
 describe('extensionSummaryText：「选项」折叠时的摘要', () => {
   it('默认扩展名（含换序 / 大小写 / 多余空白）⇒ null，不占位', () => {
     expect(extensionSummaryText(DEFAULT_EXTENSION_TEXT)).toBeNull();
-    expect(extensionSummaryText('ERB, TXT ,Als, csv, erd, erh, kojo')).toBeNull();
+    // 那份"手抄的默认清单"自 WS-10 起不在了：默认面由契约派生（`defaultSearchExtensions()`，
+    // 漂移由 `search-query.test.ts` 那两枚闸守着）。这条判据本来只关心
+    // **"顺序 / 大小写 / 空白不敏感"**，所以反推同一份默认面来喂它，而不是再抄第二份字面量
+    // （抄第二份 = 每次派生变化都要回来改这条，改慢了就是一条假红）。
+    const reshuffled = DEFAULT_EXTENSION_TEXT.split(',')
+      .map((s) => s.trim())
+      .reverse()
+      .map((s, i) => (i % 2 === 0 ? s.toUpperCase() : ` ${s}`))
+      .join(',  ');
+    expect(reshuffled).not.toBe(DEFAULT_EXTENSION_TEXT); // 真的换了序、变了大小写、多了空白
+    expect(extensionSummaryText(reshuffled)).toBeNull();
   });
 
   it('改过 ⇒ 原文本上屏（作者一眼看到自己设了什么）', () => {

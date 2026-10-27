@@ -8,16 +8,19 @@ import {
   type SearchRequest,
   type SearchResult,
 } from '../bridge/search';
-import { errorText } from '@kojo/plugin-api';
+import { errorText, pathKey, type ScopedStorage } from '@kojo/plugin-api';
 import {
   DEFAULT_EXTENSION_TEXT,
+  folderScopeLabel,
   getGlobFilterText,
   isValidSearchQuery,
   normalizeSearchHistory,
+  parseExcludePatterns,
   parseExtensions,
   parseFileFilter,
   pushSearchHistory,
   replaceSummaryText,
+  setGlobFilterText,
 } from './search-query';
 import {
   acceptFilesBatch,
@@ -26,7 +29,13 @@ import {
   sortSearchFiles,
   type SearchSortMode,
 } from './search-stream';
-import { scopeUnreachableText, type AppliedSearchScope } from './search-scope';
+import {
+  describeAppliedScope,
+  narrowRoots,
+  scopeUnreachableText,
+  type AppliedSearchScope,
+  type SearchScopeItem,
+} from './search-scope';
 
 /**
  * 全文检索面板的状态（壳层私有，2026-10-15 全文检索批）。
@@ -61,6 +70,22 @@ export interface SearchState {
   matchCursor: number;
   /** 类型过滤框的原始文本（解析成扩展名列表在发请求那一刻做） */
   extensionText: string;
+  /**
+   * 「排除」框的原始文本（WS-10）：gitignore-lite 模式，发请求那一刻经
+   * `parseExcludePatterns` 现解析；空 = 不排除（老请求体逐字一致）。
+   */
+  excludeText: string;
+  /**
+   * 「在此文件夹中搜索」的一次性范围根（WS-10；`null` = 不限）。
+   * 与选择器的 `scopeKey` 各管一头：这一格来自树右键/入口调用，**不持久化**
+   * （"这次只看这个文件夹"是一次性意图，重启后不该还钉着上次的角落）。
+   */
+  folderScopeRoot: string | null;
+  /**
+   * 打开搜索视图的请求计数（`openFolderSearchScope` 自增；壳层订阅后激活搜索视图）。
+   * 与 `focusNonce` 分开：聚焦输入框与"把面板翻上屏"是两件事，树右键入口两个都要。
+   */
+  folderScopeNonce: number;
   phase: SearchPhase;
   /** 检索中的实时进度（非 running 态恒为 null，避免展示过期读数） */
   progress: SearchProgress | null;
@@ -267,6 +292,227 @@ function saveSearchHistoryPref(history: readonly string[]): void {
   }
 }
 
+/* ---------------------- 检索条件按项目跨重启恢复（WS-10） ---------------------- */
+
+/**
+ * 检索条件住 kernel **全局存储**（与 `session-store.ts` 同一条 KV 通道，按项目根
+ * `pathKey` 归档）：query / 类型 / glob / 排除 / 三开关随项目走，重启回同一个项目
+ * 条件还在——作者的工作现场本来就是这样（上一轮搜到一半、重启后从头敲条件不是
+ * 恢复，是失忆）。
+ *
+ * 门风照 `session-store.ts`：**读不到就用缺省，绝不炸启动**——
+ * - kv 缺席 / get 抛错 / JSON 坏 / 键形不对 ⇒ 缺省值，一条不猜；
+ * - 单条字段坏了只丢那一条（其余字段照常恢复）；
+ * - 写失败静默（只影响下次启动，本次会话照常，与 localStorage 那几格同口径）。
+ *
+ * 与 `queryHistory`（localStorage、跨项目）刻意两存：历史是"搜过什么"的回放清单，
+ * 条件是"这个项目正在查什么"的工作现场——后者按项目分家才有意义。
+ */
+export const SEARCH_PREFS_KEY = 'search-prefs-v1';
+/** 记录里最多保留的项目数（超出按写入序丢最旧；一项目一小格 JSON，32 格压在几 KB） */
+export const SEARCH_PREFS_PROJECT_LIMIT = 32;
+/** 落盘防抖（与 SESSION_FLUSH_DEBOUNCE_MS 同族节奏：打字停下 0.6s 才写） */
+export const SEARCH_PREFS_FLUSH_DEBOUNCE_MS = 600;
+/** 单格文本上限（防手改坏/异常巨型值把存储撑爆；超限那一条按缺省，不截断硬用） */
+const SEARCH_PREFS_TEXT_MAX = 1000;
+
+/** 一个项目的检索条件快照（纯数据，可 JSON 化） */
+export interface SearchPrefsEntry {
+  query: string;
+  extensionText: string;
+  globText: string;
+  excludeText: string;
+  options: SearchOptionsState;
+}
+
+/** 全局记录形状（键 = pathKey(rootDir)，与 session 记录同构） */
+export interface SearchPrefsRecord {
+  v: 1;
+  projects: Record<string, SearchPrefsEntry>;
+}
+
+/** 检索条件存取的最小存取面（ScopedStorage 的 get/set 子集；node 测试给内存替身） */
+export type SearchPrefsKv = Pick<ScopedStorage, 'get' | 'set'>;
+
+export function emptySearchPrefsRecord(): SearchPrefsRecord {
+  return { v: 1, projects: {} };
+}
+
+/** 文本字段清洗：非字符串 / 超长一律回落调用方给的缺省（不猜、不截断硬用） */
+function cleanPrefsText(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string' || raw.length > SEARCH_PREFS_TEXT_MAX) return fallback;
+  return raw;
+}
+
+/** 单条记录清洗（损坏容忍：任何不合法形态回缺省条目；布尔只认显式 true） */
+export function sanitizeSearchPrefsEntry(
+  raw: unknown,
+  fallback?: Partial<SearchPrefsEntry>,
+): SearchPrefsEntry {
+  const base: SearchPrefsEntry = {
+    query: '',
+    extensionText: DEFAULT_EXTENSION_TEXT,
+    globText: '',
+    excludeText: '',
+    options: defaultSearchOptions(),
+    ...fallback,
+  };
+  if (typeof raw !== 'object' || raw === null) return base;
+  const r = raw as Record<string, unknown>;
+  const options = defaultSearchOptions();
+  if (typeof r.options === 'object' && r.options !== null) {
+    const o = r.options as Record<string, unknown>;
+    options.isRegex = o.isRegex === true;
+    options.caseSensitive = o.caseSensitive === true;
+    options.wholeWord = o.wholeWord === true;
+  }
+  return {
+    query: cleanPrefsText(r.query, base.query),
+    extensionText: cleanPrefsText(r.extensionText, base.extensionText),
+    globText: cleanPrefsText(r.globText, base.globText),
+    excludeText: cleanPrefsText(r.excludeText, base.excludeText),
+    options,
+  };
+}
+
+/** 整份记录清洗：v 不对 / projects 不是对象 ⇒ 空记录；坏条目逐条丢 */
+export function sanitizeSearchPrefsRecord(raw: unknown): SearchPrefsRecord {
+  if (typeof raw !== 'object' || raw === null) return emptySearchPrefsRecord();
+  const r = raw as Record<string, unknown>;
+  if (r.v !== 1 || typeof r.projects !== 'object' || r.projects === null) {
+    return emptySearchPrefsRecord();
+  }
+  const projects: Record<string, SearchPrefsEntry> = {};
+  for (const [k, v] of Object.entries(r.projects as Record<string, unknown>)) {
+    if (k === '' || typeof k !== 'string') continue;
+    if (typeof v !== 'object' || v === null) continue;
+    projects[k] = sanitizeSearchPrefsEntry(v);
+  }
+  return { v: 1, projects };
+}
+
+/**
+ * 并入一个项目的条目并回到队尾（写入序即新旧序）；超过上限按最旧丢弃。
+ * 返回新对象，不改入参（与 `upsertSessionProject` 同形态）。
+ */
+export function upsertSearchPrefsEntry(
+  rec: SearchPrefsRecord,
+  rootDir: string,
+  entry: SearchPrefsEntry,
+  limit: number = SEARCH_PREFS_PROJECT_LIMIT,
+): SearchPrefsRecord {
+  const projects: Record<string, SearchPrefsEntry> = {};
+  const key = sessionKeyOf(rootDir);
+  if (limit <= 0) return { v: 1, projects };
+  // 写入序 = 队列序（队头最旧）：给新条目腾一格 ⇒ 留**队尾** limit-1 条，
+  // 从队头开始丢。反过来留队头等于每写一次就丢刚写进来的那条，限额形同虚设。
+  const older = Object.keys(rec.projects).filter((k) => k !== key);
+  const cap = limit - 1;
+  for (const k of older.slice(Math.max(0, older.length - cap))) {
+    projects[k] = rec.projects[k]!;
+  }
+  projects[key] = entry;
+  return { v: 1, projects };
+}
+
+function sessionKeyOf(rootDir: string): string {
+  return pathKey(rootDir);
+}
+
+/* ---- 运行期绑定（模块级；与状态机同生命周期，缺省 = 没绑 = 不持久化） ---- */
+
+let prefsKv: SearchPrefsKv | null = null;
+let prefsRoot: string | null = null;
+let prefsPending: SearchPrefsEntry | null = null;
+let prefsTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 现场条件 → 快照（glob 文本住 `search-query` 模块级，这里一并收） */
+function captureSearchPrefs(): SearchPrefsEntry {
+  return {
+    query: state.query,
+    extensionText: state.extensionText,
+    globText: getGlobFilterText(),
+    excludeText: state.excludeText,
+    options: { ...state.options },
+  };
+}
+
+function writePrefsNow(): void {
+  const kv = prefsKv;
+  const root = prefsRoot;
+  const entry = prefsPending;
+  prefsPending = null;
+  if (prefsTimer !== null) {
+    clearTimeout(prefsTimer);
+    prefsTimer = null;
+  }
+  if (kv === null || root === null || entry === null) return;
+  void (async () => {
+    try {
+      const raw = await kv.get<unknown>(SEARCH_PREFS_KEY);
+      const next = upsertSearchPrefsEntry(sanitizeSearchPrefsRecord(raw), root, entry);
+      await kv.set(SEARCH_PREFS_KEY, next);
+    } catch {
+      /* 写失败只影响下次启动（门风与 localStorage 那几格一致） */
+    }
+  })();
+}
+
+/** 条件变了：拍快照 + 防抖落盘（快照即调度——关项目那一拍现场可能已被清） */
+function markPrefsDirty(): void {
+  if (prefsKv === null || prefsRoot === null) return;
+  prefsPending = captureSearchPrefs();
+  if (prefsTimer !== null) clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(writePrefsNow, SEARCH_PREFS_FLUSH_DEBOUNCE_MS);
+}
+
+/** 强制落盘（项目切换 / 卸载收尾；与 session 的 flushNow 同语义，幂等） */
+export function flushSearchPrefs(): void {
+  writePrefsNow();
+}
+
+/**
+ * 绑定当前项目并恢复它的检索条件（宿主接线点：开项目后调）。
+ * - 读不到记录 / 该项目没有条目 ⇒ 保持现状（缺省或 localStorage 三开关），不猜；
+ * - 恢复本身**不再触发落盘**（快照没变，写一遍只是白 IO）。
+ */
+export async function bindSearchPrefs(kv: SearchPrefsKv, rootDir: string): Promise<void> {
+  // 换绑先把上一个项目的待写落掉（脏确认前数据先归位）
+  if (prefsRoot !== null && prefsRoot !== rootDir) writePrefsNow();
+  prefsKv = kv;
+  prefsRoot = rootDir;
+  try {
+    const raw = await kv.get<unknown>(SEARCH_PREFS_KEY);
+    const rec = sanitizeSearchPrefsRecord(raw);
+    const entry = rec.projects[sessionKeyOf(rootDir)];
+    if (entry === undefined) return;
+    setGlobFilterText(entry.globText);
+    set({
+      query: entry.query,
+      extensionText: entry.extensionText,
+      excludeText: entry.excludeText,
+      options: entry.options,
+      historyCursor: -1,
+      historyDraft: '',
+    });
+  } catch {
+    /* 存储读不到 = 没有记录（缺省照常），绝不把启动/开项目炸掉 */
+  }
+}
+
+/** 解绑（关项目 / 卸载）：先强刷待写，再断通道——断后条件变化不再落盘 */
+export function unbindSearchPrefs(): void {
+  writePrefsNow();
+  prefsKv = null;
+  prefsRoot = null;
+  prefsPending = null;
+}
+
+/** 单测/调试注入：当前是否绑定了持久化通道 */
+export function isSearchPrefsBound(): boolean {
+  return prefsKv !== null;
+}
+
 /** 结果的**显示序**摊平（与面板的 `sortSearchFiles` 同一条排序真源，导航与所见不漂） */
 function searchMatchTargets(files: readonly SearchFileResult[], mode: SearchSortMode): SearchMatchTarget[] {
   const out: SearchMatchTarget[] = [];
@@ -282,6 +528,9 @@ const INITIAL: SearchState = {
   resultQuery: null,
   matchCursor: -1,
   extensionText: DEFAULT_EXTENSION_TEXT,
+  excludeText: '',
+  folderScopeRoot: null,
+  folderScopeNonce: 0,
   phase: 'idle',
   progress: null,
   result: null,
@@ -352,6 +601,7 @@ export function setReplaceRunner(next: ReplaceRunner | null): void {
  */
 export function setQuery(query: string): void {
   set({ query, historyCursor: -1 });
+  markPrefsDirty();
 }
 
 /**
@@ -397,6 +647,64 @@ export function requestReplaceFocus(): void {
 
 export function setExtensionText(text: string): void {
   set({ extensionText: text });
+  markPrefsDirty();
+}
+
+/** 「排除」框（WS-10）：文本 → 存状态，解析成模式列表在发请求那一刻做 */
+export function setExcludeText(text: string): void {
+  set({ excludeText: text });
+  markPrefsDirty();
+}
+
+/**
+ * glob 框的变更回执（`SearchFilterBar` 在 `setGlobFilterText` 之后调）：
+ * glob 文本住 `search-query` 的模块级、不经过本 store 的 `set`，持久化搭不上车——
+ * 这里给它补一脚（同样进防抖落盘）。
+ */
+export function notifySearchPrefsChanged(): void {
+  markPrefsDirty();
+}
+
+/* ---------------------- 「在此文件夹中搜索」（WS-10 落地面） ---------------------- */
+
+/** 文件夹范围在窄化判据里的固定 key（与提供方候选的命名空间 key 不撞：带前缀） */
+export const FOLDER_SCOPE_KEY = 'folder-scope';
+
+/**
+ * 一次性范围根 → 现成的范围候选（**纯装配**，宿主不理解这个目录是什么）：
+ * label 取末段目录名、detail 给全路径进悬停；roots 就一条。
+ * 装出来的形状与提供方候选逐字同构 ⇒ `narrowRoots` / `describeAppliedScope`
+ * 一条判据共用，不为文件夹范围另开第二条收窄腿（"只允许收窄不许扩权"照旧成立）。
+ */
+export function makeFolderScopeItem(dir: string): SearchScopeItem {
+  return { key: FOLDER_SCOPE_KEY, label: folderScopeLabel(dir), detail: dir, roots: [dir] };
+}
+
+/** 设置/清除一次性文件夹范围（不改已有结果——与选择器同语义，下次检索才生效） */
+export function setFolderSearchScope(dir: string | null): void {
+  set({ folderScopeRoot: dir !== null && dir.trim() !== '' ? dir : null });
+}
+
+/**
+ * 「在此文件夹中搜索」的稳定入口（树右键那一枚菜单项由组长在合流时接线，签名如下）：
+ *
+ * ```ts
+ * import { openFolderSearchScope } from './search-store';
+ * openFolderSearchScope(rootDir: string): void
+ * ```
+ *
+ * 一步到位：①写入一次性范围根；②`folderScopeNonce` 自增——壳层订阅后把
+ * 「搜索」视图翻上屏；③`focusNonce` 自增——检索框聚焦。范围生效 / "范围：xxx"
+ * 上屏 / 清除回退全在 `search-store` + `SearchPanel` 本侧闭环，调用方一行接线。
+ */
+export function openFolderSearchScope(rootDir: string): void {
+  const dir = rootDir.trim();
+  if (dir === '') return;
+  set({
+    folderScopeRoot: dir,
+    folderScopeNonce: state.folderScopeNonce + 1,
+    focusNonce: state.focusNonce + 1,
+  });
 }
 
 /**
@@ -412,6 +720,9 @@ export function toggleOption(key: keyof SearchOptionsState): void {
   const options = { ...state.options, [key]: !state.options[key] };
   saveSearchOptionsPref(options);
   set({ options });
+  // 三开关也是"这个项目的检索条件"（WS-10）：只存 localStorage 的话，换项目
+  // 沿用上一条判据、重启回不到判过的那一行——与 query/类型/排除同一份快照落盘
+  markPrefsDirty();
 }
 
 /** 快捷键 / 命令入口：请求面板聚焦（面板订阅 `focusNonce` 落地） */
@@ -507,6 +818,10 @@ export async function runSearch(
   // 见 `SearchFilterBar`），`globs` 是**追加**的第二个维度，Rust 侧按且执行。
   // 空 globs **不带这个键**（老请求体逐字一致：缺键 = 不过滤，与 Rust DTO 的 `None` 同义）。
   const globs = parseFileFilter(getGlobFilterText()).globs;
+  // 排除模式（WS-10）：同款"发请求那一刻现解析"；**空不带键**（老请求体逐字一致）。
+  // 语义 = 先 include 后 exclude，gitignore-lite（后写的规则赢），判据见 Rust
+  // `compile_exclude_rules`；挡下的文件计入 `skipped.excluded` 上屏（铁律 4）。
+  const excludeGlobs = parseExcludePatterns(state.excludeText);
   const request: SearchRequest = {
     searchId,
     roots: [...roots],
@@ -515,6 +830,7 @@ export async function runSearch(
       ...state.options,
       extensions: parseExtensions(state.extensionText),
       ...(globs.length ? { globs } : {}),
+      ...(excludeGlobs.length ? { excludeGlobs } : {}),
     },
   };
   set({
@@ -692,6 +1008,9 @@ export function resetSearch(): void {
     historyDraft: '',
     focusNonce: state.focusNonce,
     replaceFocusNonce: state.replaceFocusNonce,
+    // 「在此文件夹中搜索」的 nonce 与一次性范围根：范围根本属项目态（关项目即失效），
+    // nonce 是"请翻上屏"的单调计数（复位会让壳层的"已服务过"判据把新请求吞掉）
+    folderScopeNonce: state.folderScopeNonce,
   };
   notify();
 }

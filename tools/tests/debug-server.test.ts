@@ -395,6 +395,56 @@ describe('调试宿 · search_text', () => {
     expect(bad.ok).toBe(false);
     expect(String(bad.error)).toContain('正则不合法');
   });
+
+  /* ---- 排除模式（WS-10）：镜像与 Rust 同一套 gitignore-lite 判据 ---- */
+
+  const opts = (extra: Record<string, unknown>) => ({
+    isRegex: false,
+    caseSensitive: false,
+    wholeWord: false,
+    extensions: [],
+    ...extra,
+  });
+  const pathsOf = (r: { value: { files: { path: string }[] } }) =>
+    r.value.files.map((f) => path.basename(f.path)).sort();
+
+  it('不含 `/` 的模式按文件名匹配任意深度；挡下的条数进 skipped.excluded（与 filtered 分账）', async () => {
+    const r = await search({ options: opts({ excludeGlobs: ['*.CSV'] }) });
+    expect(pathsOf(r)).toEqual(['a.ERB']);
+    const v = r.value as { skipped: { filtered: number; excluded: number } };
+    expect(v.skipped.excluded).toBe(1);
+    expect(v.skipped.filtered).toBe(0); // 类型过滤一条没挡 ⇒ 两笔账没混
+  });
+
+  it('大小写敏感（与 Rust 刻意一致）：`*.csv` 挡不住 `b.CSV`', async () => {
+    const r = await search({ options: opts({ excludeGlobs: ['*.csv'] }) });
+    expect(pathsOf(r)).toEqual(['a.ERB', 'b.CSV']);
+    expect((r.value as { skipped: { excluded: number } }).skipped.excluded).toBe(0);
+  });
+
+  it('前导 `**/` 含 0 层：根下的文件也要能被 `**/*.ERB` 挡下（少这一档就是"抄来的模式不生效"）', async () => {
+    const r = await search({ options: opts({ excludeGlobs: ['**/*.ERB'] }) });
+    expect(pathsOf(r)).toEqual(['b.CSV']);
+    expect((r.value as { skipped: { excluded: number } }).skipped.excluded).toBe(1);
+  });
+
+  it('前导 `!` 取反 + 后写的规则赢：`*.CSV, !b.CSV` 等于没挡', async () => {
+    const r = await search({ options: opts({ excludeGlobs: ['*.CSV', '!b.CSV'] }) });
+    expect(pathsOf(r)).toEqual(['a.ERB', 'b.CSV']);
+    expect((r.value as { skipped: { excluded: number } }).skipped.excluded).toBe(0);
+    // 反过来写（先放再挡）就是挡下——顺序即语义，所以这条清单**不排序**
+    const flipped = await search({ options: opts({ excludeGlobs: ['!b.CSV', '*.CSV'] }) });
+    expect(pathsOf(flipped)).toEqual(['a.ERB']);
+  });
+
+  it('空数组 / 全坏条目 ⇒ 与不传该键逐字一致（缺省路径不许被本批改动碰歪）', async () => {
+    const empty = await search({ options: opts({ excludeGlobs: [] }) });
+    const junk = await search({ options: opts({ excludeGlobs: ['', '   ', '!'] }) });
+    const base = await search({});
+    expect(pathsOf(empty)).toEqual(pathsOf(base));
+    expect(pathsOf(junk)).toEqual(pathsOf(base));
+    expect((junk.value as { skipped: { excluded: number } }).skipped.excluded).toBe(0);
+  });
 });
 
 describe('调试宿 · 检索快路径与逐行语义逐字段对拍（2026-10-26 性能批）', () => {

@@ -1,6 +1,7 @@
 import { shortPath } from '@kojo/plugin-api';
 import type { SearchMatch, SearchProgress, SearchResult } from '../bridge/search';
 import type { ReplaceOutcome } from './search-store';
+import { quickOpenSourceExtensions } from './commands';
 
 /**
  * 全文检索面板的**纯逻辑**（无 React、无 IPC）：扩展名过滤的双向换算、命中行预览切分、
@@ -9,10 +10,37 @@ import type { ReplaceOutcome } from './search-store';
  */
 
 /**
- * 默认检索的文件类型：引擎脚本族（含作者自写的 `kojo` 面）+ 表格/文本。
- * 这是**引擎级**词表（跨游戏通用），不含任何具体游戏的约定。
+ * 默认检索的**契约源侧**扩展名：从 `quickOpenSourceExtensions()` 派生——那正是
+ * `Ctrl+P` 与项目扫描用的同一份来源（`ERB_DIALECT_EXTENSIONS + KOJO_V1_SOURCE_EXTENSIONS`
+ * + 开关放行时的 2.0 追加项）。
+ *
+ * **为什么不手写清单**（WS-10 默认真相面批）：从前这里抄了一份
+ * `erb, erh, erd, kojo, txt, csv, als`——`.erm` 与 `.kojo1` 漏在门外、尚未接线的
+ * `.erd` 却混了进来，于是出现「`Ctrl+P` 找得到、全文搜索搜不到」的分叉。
+ * 同一族文件的两份清单必然漂移（本仓反复记的「双真源必然漂移」形状，这里是第三条腿）。
+ * 派生 ⇒ 分叉在结构上不可能；漂移判据由 `search-query.test.ts` 的
+ * 「搜索默认面与 Ctrl+P 同源」用例钉住（谁再手写一份就红）。
  */
-export const DEFAULT_SEARCH_EXTENSIONS = ['erb', 'erh', 'erd', 'kojo', 'txt', 'csv', 'als'] as const;
+function stripLeadingDot(ext: string): string {
+  return ext.toLowerCase().replace(/^\.+/, '');
+}
+
+/**
+ * 契约之外的**通用文本族**（一处显式清单，可覆盖）：表格/纯文本不在方言契约里，
+ * 但口上作者确实要搜它们。这是本文件唯一允许存在的字面量清单。
+ */
+export const SEARCH_EXTRA_EXTENSIONS: readonly string[] = ['txt', 'csv', 'als'];
+
+/** 派生 + 追加 = 搜索默认面（每次现算，与 `quickOpenSourceExtensions()` 逐字同步） */
+export function defaultSearchExtensions(): string[] {
+  return [...quickOpenSourceExtensions().map(stripLeadingDot), ...SEARCH_EXTRA_EXTENSIONS];
+}
+
+/**
+ * 默认检索扩展名（模块加载时按当前开关算一次的快照；要**现算**的口径请调
+ * `defaultSearchExtensions()`）。导出名保留是为了既有消费方（面板指纹、语料测试）零改动。
+ */
+export const DEFAULT_SEARCH_EXTENSIONS: readonly string[] = defaultSearchExtensions();
 
 /** 过滤框的初始文本（与 `DEFAULT_SEARCH_EXTENSIONS` 同源，不各写一份） */
 export const DEFAULT_EXTENSION_TEXT = DEFAULT_SEARCH_EXTENSIONS.join(', ');
@@ -33,6 +61,51 @@ export function parseExtensions(text: string): string[] {
 /** 列表 → 过滤框文本（回填用；与 `parseExtensions` 往返一致） */
 export function formatExtensions(list: readonly string[]): string {
   return list.join(', ');
+}
+
+/* ------------------------------ 排除模式（WS-10） ------------------------------ */
+
+/**
+ * 「排除」框文本 → gitignore-lite 模式清单（**纯函数**，顺序敏感）。
+ *
+ * 分隔符与「类型」/glob 框同款（逗号半/全角、分号、空白）——两个框的打字习惯不该有两套。
+ * 但与 glob 框刻意不同的一点：**不排序、原样保序**。gitignore-lite 语义是
+ * "后写的规则赢"（`!` 取反就靠这个），排序会改写规则先后 = 改写语义。
+ * 同一份输入恒产出同一份请求，判据仍然钉得住。
+ *
+ * 规则（与 Rust 侧 `compile_exclude_rules` 逐字对齐，跨语言对拍用例见 cargo 测试）：
+ * - `**` 跨目录、`*`/`?` 不跨目录；
+ * - 不含 `/` 的模式按**文件名**匹配任意深度（`*.tmp` 挡 `a/b/c.tmp`）；
+ * - 前导 `/` 剥掉（钉在检索根上的相对写法）；反斜杠归一成 `/`；
+ * - 前导 `!` = 取反（把先前挡下的放回来）；
+ * - **大小写敏感**（与 include glob 同口径：显式路径模式显式匹配）。
+ */
+export function parseExcludePatterns(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of text.split(/[,，;；\s]+/)) {
+    const token = raw.trim().replace(/\\/g, '/');
+    if (token === '' || token === '!') continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+}
+
+/* ------------------------------ 「在此文件夹中搜索」的范围标签 ------------------------------ */
+
+/**
+ * 目录路径 → 范围标签（**纯函数**）：取末段目录名；盘符根 / 单段路径原样返回。
+ * 面板上「范围：<label>」只显示这一小截，全路径进悬停。宿主不理解路径的领域含义，
+ * 只做字形切割。
+ */
+export function folderScopeLabel(dir: string): string {
+  const trimmed = dir.replace(/[\\/]+$/, '');
+  const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  if (cut < 0) return trimmed;
+  const last = trimmed.slice(cut + 1);
+  return last === '' ? trimmed : last;
 }
 
 /**
@@ -294,6 +367,9 @@ export function searchNoticeText(r: SearchResult): string | null {
   if (r.skipped.tooLarge > 0) notes.push(`跳过 ${r.skipped.tooLarge} 个超大文件`);
   if (r.skipped.unreadable > 0) notes.push(`${r.skipped.unreadable} 个文件读取失败`);
   if (r.skipped.filtered > 0) notes.push(`${r.skipped.filtered} 个文件被类型过滤挡下`);
+  // 排除模式挡下的条数（WS-10）：老载荷没这个键 ⇒ 按 0 处理，不装出一条读数
+  const excluded = r.skipped.excluded ?? 0;
+  if (excluded > 0) notes.push(`${excluded} 个文件被排除模式挡下`);
   return notes.length > 0 ? notes.join(' · ') : null;
 }
 

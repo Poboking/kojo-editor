@@ -20,10 +20,13 @@ import { setSearchMenuContext } from './search-menu';
 import { KitCount, KitKbd } from '../ui-kit';
 import {
   clearSearchResult,
+  makeFolderScopeItem,
   runReplace,
   runSearch,
   selectSearchMatch,
+  setExcludeText,
   setExtensionText,
+  setFolderSearchScope,
   setQuery,
   setReplaceText,
   setSearchScope,
@@ -43,6 +46,7 @@ import {
   matchLocationLabel,
   parseExtensions,
   previewParts,
+  folderScopeLabel,
   searchMatchCounterText,
   searchNoticeText,
   searchProgressText,
@@ -757,8 +761,19 @@ export function SearchPanel({
     // 是不是同一个词在原地重试。放在 `start` 首行而不是防抖回调里——手动按钮也走这里。
     attemptedQueryRef.current = query ?? s.query;
     // 范围收窄发生在发请求**之前**：扫描代价在原生侧，少扫就是少扫（不是全扫再挑）。
-    const narrowing = narrowRoots(roots, selectedScope);
-    void runSearch(narrowing.roots, describeAppliedScope(selectedScope, narrowing));
+    // 一次性文件夹范围（WS-10「在此文件夹中搜索」）先收，选择器范围再叠——
+    // 两条腿共用 `narrowRoots` 同一条判据（只收窄不扩权），面板里没有第二份收窄代码。
+    const folderItem = s.folderScopeRoot !== null ? makeFolderScopeItem(s.folderScopeRoot) : null;
+    const first = folderItem !== null ? narrowRoots(roots, folderItem) : null;
+    const narrowing = narrowRoots(first !== null ? first.roots : roots, selectedScope);
+    const applied = describeAppliedScope(folderItem !== null ? folderItem : selectedScope, {
+      roots: narrowing.roots,
+      unreachable: [
+        ...(first !== null ? first.unreachable : []),
+        ...narrowing.unreachable,
+      ],
+    });
+    void runSearch(narrowing.roots, applied);
   };
 
   /**
@@ -1261,6 +1276,49 @@ export function SearchPanel({
                 }}
               />
             </label>
+
+            {/* 排除（WS-10）：与「类型」同款克制的单行输入，gitignore-lite 模式。
+                例：backup 下任意深度、后缀 .tmp、前导 ! 取反放回来、后写的规则赢。
+                判据与计数见 Rust compile_exclude_rules；挡下的文件数进结果说明，不静默。 */}
+            <label className="search-ext-row ksp-opt-row">
+              <span className="ksp-opt-label">排除</span>
+              <input
+                className="search-ext ksp-opt-input"
+                title={'排除模式（逗号/空格分隔）：**/backup/**、*.tmp 这类模式挡下的文件不进检索；\n' +
+                  '前导 ! 取反放回来（后写的规则赢）；不含 / 的模式按文件名匹配任意深度；留空 = 不排除'}
+                aria-label="排除模式"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="**/backup/**, *.tmp"
+                value={s.excludeText}
+                onChange={(e) => setExcludeText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    start();
+                  }
+                }}
+              />
+            </label>
+
+            {/* 「在此文件夹中搜索」上屏（WS-10）：一次性范围根可见可清——
+                结果只来自这个文件夹这件事必须说得出口（铁律 4），清除即回退全项目。 */}
+            {s.folderScopeRoot !== null ? (
+              <div className="search-scope-row ksp-opt-row" data-search-folder-scope="">
+                <span className="ksp-opt-label">范围</span>
+                <span className="dim" title={s.folderScopeRoot}>
+                  只搜「{folderScopeLabel(s.folderScopeRoot)}」，范围外的文件没有搜
+                </span>
+                <button
+                  type="button"
+                  className="search-toggle ksp-toggle"
+                  title="清掉一次性文件夹范围，回到全项目检索"
+                  onClick={() => setFolderSearchScope(null)}
+                >
+                  清除
+                </button>
+              </div>
+            ) : null}
 
             {/* 排序（P2-11）：三选一，默认按路径（与今天逐字一致）。只改投影序，
                 不重发检索；在途流式结果也当场重排（排序是纯函数，住 search-stream）。

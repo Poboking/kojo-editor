@@ -42,6 +42,7 @@ fn request(root: &Path, query: &str) -> SearchRequestDto {
             whole_word: Some(false),
             extensions: None,
             globs: None, // P2-15：DTO 加了 globs 字段（缺省 None = 老调用方零改动）
+            exclude_globs: None, // WS-10：同款 additive，缺省 None = 不排除（老用例零改动）
             max_results: None,
             threads: Some(1),
         },
@@ -976,6 +977,146 @@ fn request_dto_globs_default_to_none_when_absent() {
     let without: SearchRequestDto =
         serde_json::from_str(r#"{"searchId":1,"roots":["C://game"],"query":"a"}"#).unwrap();
     assert_eq!(without.options.globs, None);
+}
+
+/* ------------------------- 排除模式（WS-10，gitignore-lite） ------------------------- */
+
+/// 纯函数：模式 → 正则源码。不含 `/` 补"任意深度"前缀段；含 `/` 钉相对根；
+/// 前导 `/` 剥掉；反斜杠归一。
+#[test]
+fn exclude_regex_source_shapes() {
+    // 裸文件名模式 ⇒ 允许任意深度、但段边界必须对齐（前缀组以 `/` 收尾）
+    assert_eq!(super::exclude_regex_source("*.tmp"), "^(.*/)?[^/]*\\.tmp$");
+    // 含 `/` ⇒ 原样钉相对根（glob_to_regex 的产物）
+    assert_eq!(
+        super::exclude_regex_source("backup/**"),
+        super::glob_to_regex("backup/**")
+    );
+    // 前导 `/` = 锚定根的相对写法 ⇒ 与不带斜杠同判据
+    assert_eq!(
+        super::exclude_regex_source("/backup/*.erb"),
+        super::glob_to_regex("backup/*.erb")
+    );
+    // Windows 反斜杠写法先归一成 `/`（含分隔符 ⇒ 仍走"钉相对根"那条腿）
+    assert_eq!(
+        super::exclude_regex_source("sub\\*.erb"),
+        super::glob_to_regex("sub/*.erb")
+    );
+}
+
+/// 纯函数：`is_excluded` 的三条判据——排除不吃掉合法命中、取反回捞、后写赢。
+#[test]
+fn exclude_rules_evaluate_in_order_last_match_wins() {
+    let rules = super::compile_exclude_rules(&[
+        "**/backup/**".to_string(),
+        "!**/backup/keep.erb".to_string(),
+        "*.tmp".to_string(),
+    ]);
+    let hit = |rel: &str| super::is_excluded(&rules, rel, rel);
+    assert!(hit("x/backup/old.erb"), "backup 深处的文件被挡");
+    assert!(!hit("x/backup/keep.erb"), "! 取反把它放回");
+    assert!(!hit("mybackup/a.erb"), "段边界对齐：`backup` 不吃 `mybackup`（排除不吃掉合法命中）");
+    assert!(hit("a/b/c.tmp"), "裸文件名模式挡任意深度");
+    assert!(!hit("a.erb"), "合法命中一个不少");
+    // 后写赢：同一目标"先放回再挡下"就真是挡下
+    let r2 = super::compile_exclude_rules(&[
+        "!a.erb".to_string(),
+        "*.erb".to_string(),
+    ]);
+    assert!(super::is_excluded(&r2, "a.erb", "a.erb"));
+}
+
+/// 绝对 / 相对两种写法都兑现：模式写全路径（抄自资源管理器）时按归一全路径命中。
+#[test]
+fn exclude_matches_absolute_and_relative_spellings() {
+    let rules = super::compile_exclude_rules(&["C:/game/backup/**".to_string()]);
+    assert!(super::is_excluded(&rules, "ignored/whatever.erb", "C:/game/backup/x.erb"), "绝对写法按全路径命中");
+    let rel = super::compile_exclude_rules(&["backup/**".to_string()]);
+    assert!(super::is_excluded(&rel, "backup/x.erb", "C:/game/backup/x.erb"), "相对写法按相对路径命中");
+    assert!(!super::is_excluded(&rel, "other/x.erb", "C:/game/other/x.erb"));
+}
+
+/// 大小写与分隔符：模式大小写敏感（显式路径显式匹配，与 include glob 同口径）；
+/// 路径与模式的分隔符两侧都归一成 `/`。
+#[test]
+fn exclude_is_case_sensitive_and_separator_normalized() {
+    let rules = super::compile_exclude_rules(&["Backup/*.erb".to_string()]);
+    assert!(super::is_excluded(&rules, "Backup/a.erb", "Backup/a.erb"));
+    assert!(!super::is_excluded(&rules, "backup/a.erb", "backup/a.erb"), "大小写不同 = 不是同一路径段");
+    // 反斜杠**模式**写法（作者从 Windows 地址栏抄的）归一后照样命中
+    let bs = super::compile_exclude_rules(&["Backup\\*.erb".to_string()]);
+    assert!(super::is_excluded(&bs, "Backup/a.erb", "Backup/a.erb"));
+}
+
+/// 坏输入不出声不放行也不炸：空白条目丢弃、光杆 `!` 丢弃、空清单 = 不排除。
+#[test]
+fn exclude_tolerates_blank_and_bogus_entries() {
+    assert!(super::compile_exclude_rules(&[]).is_empty());
+    assert!(super::compile_exclude_rules(&[
+        "  ".to_string(),
+        "!".to_string(),
+        "!  ".to_string(),
+    ])
+    .is_empty());
+}
+
+/// 端到端：检索目录里排除 `backup/` 与 `*.tmp`——备份里的命中不进结果、
+/// 合法命中一条不少，`skipped.excluded` 如实计数（不静默）。
+#[test]
+fn search_exclude_globs_blocks_backup_and_keeps_legit_hits() {
+    let dir = temp_dir("exclude-e2e");
+    std::fs::create_dir_all(dir.join("backup")).unwrap();
+    std::fs::write(dir.join("a.erb"), "hit\n").unwrap();
+    std::fs::write(dir.join("backup").join("old.erb"), "hit\nhit\n").unwrap();
+    std::fs::write(dir.join("scratch.tmp"), "hit\n").unwrap();
+
+    let mut req = request(&dir, "hit");
+    req.options.exclude_globs = Some(vec!["**/backup/**".to_string(), "*.tmp".to_string()]);
+    let out = run(&req);
+    assert_eq!(out.total_matches, 1, "只剩 a.erb 的一条命中");
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.skipped.excluded, 2, "backup/old.erb 与 scratch.tmp 各计一笔");
+    assert_eq!(out.skipped.filtered, 0, "排除与类型过滤分账，不混成一笔");
+
+    // 缺省（None）与老行为逐字一致：三个文件全扫
+    let base = run(&request(&dir, "hit"));
+    assert_eq!(base.total_matches, 4);
+    assert_eq!(base.skipped.excluded, 0);
+
+    // 取反回捞：! 一条把 keep 放回来
+    let mut req2 = request(&dir, "hit");
+    req2.options.exclude_globs = Some(vec![
+        "**/backup/**".to_string(),
+        "!**/backup/keep.erb".to_string(),
+    ]);
+    std::fs::write(dir.join("backup").join("keep.erb"), "hit\n").unwrap();
+    let out2 = run(&req2);
+    assert!(out2.files.iter().any(|f| f.path.replace('\\', "/").ends_with("backup/keep.erb")));
+    assert!(!out2.files.iter().any(|f| f.path.replace('\\', "/").ends_with("backup/old.erb")));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 载荷契约：`excludeGlobs` 缺键 ⇒ None；给出 ⇒ camelCase 解析（跨语言字段名一漂就是静默失灵）。
+#[test]
+fn request_dto_exclude_globs_default_and_camel_case() {
+    let with: SearchRequestDto =
+        serde_json::from_str(r#"{"searchId":1,"roots":["C://game"],"query":"a",
+            "options":{"excludeGlobs":["**/backup/**","!keep.erb"]}}"#)
+        .unwrap();
+    assert_eq!(
+        with.options.exclude_globs.as_deref(),
+        Some(["**/backup/**".to_string(), "!keep.erb".to_string()].as_slice())
+    );
+    let without: SearchRequestDto =
+        serde_json::from_str(r#"{"searchId":1,"roots":["C://game"],"query":"a"}"#).unwrap();
+    assert_eq!(without.options.exclude_globs, None);
+    // 完成态 JSON 带上 `excluded` 键（面板读它；缺键 = JS 拿 undefined 而不是报错）
+    let dir = temp_dir("exclude-contract");
+    std::fs::write(dir.join("a.erb"), "hit\n").unwrap();
+    let json = serde_json::to_value(run(&request(&dir, "hit"))).unwrap();
+    assert_eq!(json["skipped"]["excluded"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /* ------------------------- 全词判据跨语言对账（WW-1） ------------------------- */

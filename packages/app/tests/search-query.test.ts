@@ -173,3 +173,74 @@ describe('search-query · 摘要与边角说明', () => {
     expect(searchProgressText({ searchId: 1, filesScanned: 10, totalFiles: 0, matchCount: 2 })).toContain('已扫描 10');
   });
 });
+
+describe('search-query · 默认检索面 = 契约单源派生（WS-10 漂移闸）', () => {
+  it('派生结果与 quickOpenSourceExtensions（Ctrl+P / 项目扫描同一来源）逐项一致', async () => {
+    const { quickOpenSourceExtensions } = await import('../src/ui/commands');
+    const { defaultSearchExtensions, SEARCH_EXTRA_EXTENSIONS } = await import('../src/ui/search-query');
+    const ctrlP = quickOpenSourceExtensions().map((e) => e.toLowerCase().replace(/^\.+/, ''));
+    expect(defaultSearchExtensions()).toEqual([...ctrlP, ...SEARCH_EXTRA_EXTENSIONS]);
+    // 模块级快照与现算函数逐字同值（面板缺省文本、指纹判据都吃这一份）
+    expect([...DEFAULT_SEARCH_EXTENSIONS]).toEqual(defaultSearchExtensions());
+  });
+
+  it('Ctrl+P 认的每一枚后缀都在搜索默认面里（"找得到却搜不到"的分叉不许回来）', async () => {
+    const { quickOpenSourceExtensions } = await import('../src/ui/commands');
+    const set = new Set<string>(DEFAULT_SEARCH_EXTENSIONS);
+    for (const ext of quickOpenSourceExtensions()) {
+      const bare = ext.toLowerCase().replace(/^\.+/, '');
+      expect(set.has(bare), `Ctrl+P 认 ${ext}，搜索默认面就必须认`).toBe(true);
+    }
+  });
+
+  it('老手写清单的三处漂移各自钉死：.erm / .kojo1 在场、未接线的 .erd 不在场', () => {
+    const set = new Set<string>(DEFAULT_SEARCH_EXTENSIONS);
+    expect(set.has('erm'), 'ERB 正文族漏了 .erm 就是"文件存在、搜索搜不到"').toBe(true);
+    expect(set.has('kojo1'), 'v1 源清单（KOJO_V1_SOURCE_EXTENSIONS）必须随契约走').toBe(true);
+    expect(set.has('erd'), '.erd 仍是引擎预留未接线（ERB_ENGINE_RESERVED），不许混进默认面').toBe(false);
+  });
+
+  it('契约清单里新增一枚 ⇒ 默认面自动跟上（派生而非手抄的自证）', async () => {
+    const api = await import('@kojo/plugin-api');
+    const { defaultSearchExtensions } = await import('../src/ui/search-query');
+    const derived = new Set(defaultSearchExtensions());
+    for (const ext of [...api.ERB_DIALECT_EXTENSIONS, ...api.KOJO_V1_SOURCE_EXTENSIONS]) {
+      expect(derived.has(ext.toLowerCase().replace(/^\.+/, ''))).toBe(true);
+    }
+  });
+});
+
+describe('search-query · 排除模式解析（WS-10）', () => {
+  it('分隔符与类型框同款；反斜杠归一成 /；保序（后写的规则赢 ⇒ 排序=改语义）', async () => {
+    const { parseExcludePatterns } = await import('../src/ui/search-query');
+    expect(parseExcludePatterns('**/backup/**, *.tmp')).toEqual(['**/backup/**', '*.tmp']);
+    expect(parseExcludePatterns('backup\\**.erb；!backup\\keep.erb')).toEqual([
+      'backup/**.erb',
+      '!backup/keep.erb',
+    ]);
+    // 排序会改写 `!` 的先后 ⇒ 与 parseExtensions 刻意不同：**不排序**
+    expect(parseExcludePatterns('b.erb a.erb')).toEqual(['b.erb', 'a.erb']);
+  });
+
+  it('空串 / 光杆 `!` / 重复条目一律丢（同一份输入恒产出同一个请求）', async () => {
+    const { parseExcludePatterns } = await import('../src/ui/search-query');
+    expect(parseExcludePatterns('  ')).toEqual([]);
+    expect(parseExcludePatterns('!, ,!, **/x/**, **/x/**')).toEqual(['**/x/**']);
+  });
+
+  it('范围标签取末段目录名（尾部分隔符先剥；单段/盘符根原样）', async () => {
+    const { folderScopeLabel } = await import('../src/ui/search-query');
+    expect(folderScopeLabel('C:\\game\\src')).toBe('src');
+    expect(folderScopeLabel('C:/game/backup/')).toBe('backup');
+    expect(folderScopeLabel('single')).toBe('single');
+    expect(folderScopeLabel('C:/')).toBe('C:');
+  });
+
+  it('结果说明报"被排除模式挡下"的条数；老载荷缺键按 0，不装读数', () => {
+    const withExcluded = searchNoticeText(
+      result({ skipped: { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0, excluded: 7 } }),
+    );
+    expect(withExcluded).toContain('7 个文件被排除模式挡下');
+    expect(searchNoticeText(result())).toBeNull();
+  });
+});

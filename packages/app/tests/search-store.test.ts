@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { pathKey } from '@kojo/plugin-api';
 import type { SearchMatch, SearchRequest, SearchResult } from '../src/bridge/search';
 import { SEARCH_HISTORY_LIMIT, setGlobFilterText } from '../src/ui/search-query';
 import {
+  bindSearchPrefs,
   clearSearchResult,
+  emptySearchPrefsRecord,
+  makeFolderScopeItem,
+  openFolderSearchScope,
   requestReplaceFocus,
   requestSearchFocus,
   resetSearch,
   runReplace,
   runSearch,
+  sanitizeSearchPrefsRecord,
   selectSearchMatch,
+  setExcludeText,
   setExtensionText,
+  setFolderSearchScope,
   setQuery,
   setReplaceRunner,
   setReplaceText,
@@ -22,6 +30,8 @@ import {
   stopSearch,
   subscribe,
   toggleOption,
+  unbindSearchPrefs,
+  upsertSearchPrefsEntry,
   type ReplaceOutcome,
   type ReplaceRunner,
   type SearchRunner,
@@ -710,5 +720,186 @@ describe('search-store 最近检索（W7-E：有效查询 / 去重 / 上限 / �
     expect(snapshot().historyCursor).toBe(-1);
     stepSearchHistory(-1);
     expect(snapshot().query).toBe('b');
+  });
+});
+
+/* ================= WS-10：排除请求体 / 文件夹范围 / 按项目持久化 ================= */
+
+describe('search-store · 排除模式进请求（WS-10）', () => {
+  it('排除框非空：options.excludeGlobs 带保序解析结果（! 取反的先后不许被排序改写）', async () => {
+    const runner = vi.fn<SearchRunner>(async () => result());
+    setSearchRunner(runner);
+    setQuery('abc');
+    setExtensionText('erb');
+    setExcludeText('**/backup/**, *.tmp, !backup/keep.erb');
+    await runSearch(ROOTS);
+    const req = runner.mock.calls[0]![0] as SearchRequest;
+    expect(req.options.excludeGlobs).toEqual(['**/backup/**', '*.tmp', '!backup/keep.erb']);
+  });
+
+  it('排除框为空：请求里不出现 excludeGlobs 键（老请求体逐字一致）', async () => {
+    // 本 describe 不与主 describe 共享 beforeEach：上一条的排除文本会漏进来，先清现场
+    resetSearch();
+    const runner = vi.fn<SearchRunner>(async () => result());
+    setSearchRunner(runner);
+    setQuery('abc');
+    await runSearch(ROOTS);
+    const req = runner.mock.calls[0]![0] as SearchRequest;
+    expect('excludeGlobs' in req.options).toBe(false);
+  });
+});
+
+describe('search-store · 「在此文件夹中搜索」（WS-10）', () => {
+  afterEach(() => {
+    setFolderSearchScope(null);
+  });
+
+  it('makeFolderScopeItem：一条目录 ⇒ 现成范围候选（label 末段、roots 就一条）', () => {
+    const item = makeFolderScopeItem('C:\\game\\src');
+    expect(item.label).toBe('src');
+    expect(item.roots).toEqual(['C:\\game\\src']);
+    expect(item.key).toBe('folder-scope');
+  });
+
+  it('openFolderSearchScope：范围根落定 + 翻屏 nonce + 聚焦 nonce 各自一格', () => {
+    resetSearch();
+    const before = snapshot();
+    openFolderSearchScope('C:\\game\\src');
+    const s = snapshot();
+    expect(s.folderScopeRoot).toBe('C:\\game\\src');
+    expect(s.folderScopeNonce).toBe(before.folderScopeNonce + 1);
+    expect(s.focusNonce).toBe(before.focusNonce + 1);
+    // 空格子不算请求（树右键给不出空路径，给了也不动状态）
+    const mid = snapshot();
+    openFolderSearchScope('   ');
+    expect(snapshot()).toBe(mid);
+  });
+
+  it('setFolderSearchScope(null) 清除回退；resetSearch（关项目）清范围但留 nonce 单调', () => {
+    openFolderSearchScope('C:\\game\\src');
+    const nonce = snapshot().folderScopeNonce;
+    setFolderSearchScope(null);
+    expect(snapshot().folderScopeRoot).toBeNull();
+    openFolderSearchScope('C:\\game\\src');
+    expect(snapshot().folderScopeNonce).toBe(nonce + 1);
+    resetSearch();
+    expect(snapshot().folderScopeRoot).toBeNull();
+    expect(snapshot().folderScopeNonce).toBe(nonce + 1); // 复位不清计数（壳层按"变没变"翻屏）
+  });
+
+  it('空串 setFolderSearchScope 归一成 null（不留一个假范围根）', () => {
+    setFolderSearchScope('  ');
+    expect(snapshot().folderScopeRoot).toBeNull();
+  });
+});
+
+describe('search-store · 检索条件按项目持久化（WS-10）', () => {
+  /** 内存版全局存储（与 session-store 测试同一形态：只有 get/set 被用到） */
+  function fakeKv(): { get: (k: string) => Promise<unknown>; set: (k: string, v: unknown) => Promise<void>; dump: () => Map<string, unknown> } {
+    const map = new Map<string, unknown>();
+    return {
+      async get(k) {
+        return map.get(k);
+      },
+      async set(k, v) {
+        map.set(k, v);
+      },
+      dump: () => map,
+    };
+  }
+
+  /** 冲刷微任务：writePrefsNow 的 async IIFE 要两拍才落到 kv.set */
+  const flushMicro = async (): Promise<void> => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+
+  afterEach(() => {
+    unbindSearchPrefs();
+    vi.useRealTimers();
+    resetSearch();
+  });
+
+  it('绑定后条件变化 ⇒ 防抖一份写入；换项目绑定时先强刷上一份', async () => {
+    vi.useFakeTimers();
+    const kv = fakeKv();
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    setQuery('口上');
+    setExcludeText('**/backup/**');
+    // 防抖窗口内还没写（打字中的每一拍都不该打穿存储）
+    expect(kv.dump().size).toBe(0);
+    vi.advanceTimersByTime(700);
+    await flushMicro();
+    const raw = kv.dump().get('search-prefs-v1');
+    expect(raw).toBeTruthy();
+    const rec = sanitizeSearchPrefsRecord(raw);
+    const key = pathKey('C:\\game');
+    expect(rec.projects[key]?.query).toBe('口上');
+    expect(rec.projects[key]?.excludeText).toBe('**/backup/**');
+    // 关项目（解绑）⇒ 待写的强刷，不丢最后一拍
+    setQuery('口上2');
+    unbindSearchPrefs();
+    await flushMicro();
+    expect(sanitizeSearchPrefsRecord(kv.dump().get('search-prefs-v1')).projects[key]?.query).toBe('口上2');
+  });
+
+  it('重启恢复：同项目绑定读回 query/类型/排除/开关；别的根读不到 ⇒ 保持缺省', async () => {
+    vi.useFakeTimers();
+    const kv = fakeKv();
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    setQuery('恢复我');
+    setExtensionText('erm, kojo1');
+    setExcludeText('*.tmp');
+    toggleOption('caseSensitive');
+    vi.advanceTimersByTime(700);
+    await Promise.resolve();
+    unbindSearchPrefs();
+    resetSearch();
+    expect(snapshot().query).toBe('');
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    expect(snapshot().query).toBe('恢复我');
+    expect(snapshot().extensionText).toBe('erm, kojo1');
+    expect(snapshot().excludeText).toBe('*.tmp');
+    expect(snapshot().options.caseSensitive).toBe(true);
+    // 没存过的项目：一个字都不动（缺省 = 现状，不猜）
+    resetSearch();
+    await bindSearchPrefs(kv as never, 'D:\\other');
+    expect(snapshot().query).toBe('');
+  });
+
+  it('坏载荷一律回缺省：v 不对 / 条目形状错 / 文本超长 ⇒ 绝不抛、绝不半恢复', async () => {
+    const kv = fakeKv();
+    kv.dump().set('search-prefs-v1', { v: 2, projects: { [pathKey('C:\\game')]: { query: 'x' } } });
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    expect(snapshot().query).toBe('');
+    kv.dump().set('search-prefs-v1', { v: 1, projects: { [pathKey('C:\\game')]: { query: 'y'.repeat(1001) } } });
+    resetSearch();
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    expect(snapshot().query).toBe(''); // 超长 = 坏值，不截断硬用
+  });
+
+  it('get 抛错（存储瞬态）⇒ 缺省照常，开项目不许被持久化炸掉', async () => {
+    const boom = {
+      get: () => Promise.reject(new Error('io')),
+      set: () => Promise.reject(new Error('io')),
+    };
+    await expect(bindSearchPrefs(boom as never, 'C:\\game')).resolves.toBeUndefined();
+    expect(snapshot().query).toBe('');
+  });
+
+  it('未绑定通道：条件变化不落盘（浏览器壳 / 没开项目 = 与接线前逐字一致）', async () => {
+    const kv = fakeKv();
+    setQuery('没人收');
+    await flushMicro();
+    expect(kv.dump().size).toBe(0);
+  });
+
+  it('纯函数：整表限额 32，超出按写入序丢最旧；新写入恒在队尾', () => {
+    let rec = emptySearchPrefsRecord();
+    const entry = { query: 'q', extensionText: 'erb', globText: '', excludeText: '', options: { isRegex: false, caseSensitive: false, wholeWord: false } };
+    for (let i = 0; i < 40; i += 1) rec = upsertSearchPrefsEntry(rec, `C:\\p${i}`, entry, 32);
+    const keys = Object.keys(rec.projects);
+    expect(keys.length).toBe(32);
+    expect(keys).toContain(pathKey('C:\\p39'));
+    expect(keys).not.toContain(pathKey('C:\\p0'));
   });
 });

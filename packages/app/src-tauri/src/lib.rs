@@ -2305,6 +2305,11 @@ struct SearchOptionsDto {
     /// 与扩展名"折小写再比"的口径刻意不同（要宽松请写全小写，语料扩展名本就小写）。
     /// 翻译与匹配规则见 `glob_to_regex` / `collect_files`。
     globs: Option<Vec<String>>,
+    /// 排除模式（WS-10，gitignore-lite：`**`/`*`/`?`、前导 `!` 取反、
+    /// 按给出顺序求值最后一条命中赢、不含 `/` 的模式按文件名匹配任意深度）。
+    /// 与 `extensions`/`globs` 是"先 include 后 exclude"的关系；挡下的文件计入
+    /// `skipped.excluded`（不静默）。翻译与判据见 `compile_exclude_rules`。
+    exclude_globs: Option<Vec<String>>,
     max_results: Option<usize>,
     /// 并行度（缺省 8；上限 32 防"给我 512 线程"这类输入）
     threads: Option<usize>,
@@ -2352,6 +2357,8 @@ struct SearchSkippedDto {
     unreadable: u32,
     /// 扩展名过滤挡下的文件数
     filtered: u32,
+    /// 被排除模式（`excludeGlobs`）挡下的文件数（WS-10：与类型过滤分账，不静默）
+    excluded: u32,
 }
 
 #[derive(Serialize)]
@@ -3033,6 +3040,85 @@ fn relative_slash_path(root: &std::path::Path, path: &std::path::Path) -> String
     rel.trim_start_matches('/').to_string()
 }
 
+// ---------------- 排除模式（WS-10：gitignore-lite 语义） ----------------
+//
+// 与 include glob 同一条翻译腿（`glob_to_regex`），但判据多三条，全部对齐
+// gitignore-lite 的公认口径，前端镜像在 `search-query.parseExcludePatterns`：
+// 1. 前导 `!` = 取反（把先前挡下的放回来）；**规则按给出顺序求值，最后一条命中赢**——
+//    这是唯一能让 `!` 有意义的方式，所以排除清单**不排序**（排序 = 改语义）。
+// 2. 不含 `/` 的模式按**文件名**匹配任意深度（`*.tmp` 要挡 `a/b/c.tmp`，
+//    而 `glob_to_regex` 的 `*` 不跨目录）：正则前缀补 `(.*/)?`，段边界天然对齐
+//    （`mybackup/` 不会被 `backup` 一类的裸名模式吃掉——前缀组必须以 `/` 收尾）。
+// 3. 含 `/` 的模式钉在**相对检索根**的路径上（与 include 同一基准），
+//    同时**也拿归一后的全路径试一遍**：作者抄资源管理器地址栏的绝对写法
+//    （`C:/proj/backup/**`）也能兑现。前导 `/` 剥掉（锚定根的相对写法）。
+//
+// 大小写：与 include glob 刻意一致——**敏感**。排除是作者显式写的路径模式，
+// 悄悄放宽会把"只挡 Backup 目录"变成"挡掉一切拼写相近的目录"（吃掉合法命中）。
+// 分隔符：模式与路径两侧都先归一成 `/`（Windows 反斜杠两种写法同判）。
+// 铁律 1：这里没有任何游戏名词——模式一律泛型，判据只看路径形状。
+// （本段刻意用行注释而不是块注释：正文里的正则字面 `(.*/)?` 含 `*/`，
+//   放进 `/* … */` 会提前终止注释，编译器把后半段当代码看。）
+
+/// 一条已编译的排除规则（`negated` = `!` 取反：命中它等于放回）。
+struct ExcludeRule {
+    negated: bool,
+    re: Regex,
+}
+
+/// 排除模式 → 正则源码（**纯函数**；见上面块注释的 2/3 两条）。
+fn exclude_regex_source(pattern: &str) -> String {
+    let p = pattern.trim().replace('\\', "/");
+    // 前导 `/` = 锚定检索根的相对写法：剥掉（相对路径本身不含前导斜杠）
+    let p = p.strip_prefix('/').unwrap_or(&p);
+    let body = glob_to_regex(p);
+    // glob_to_regex 产出 `^…$`；不含 `/` 的模式补"任意深度"前缀段
+    let anchored_anywhere = !p.contains('/');
+    if anchored_anywhere {
+        format!("^(.*/)?{}$", &body[1..body.len() - 1])
+    } else {
+        body
+    }
+}
+
+/// 排除清单 → 规则序列（保序；空串 / 全空白丢弃；`!` 后整串为空丢弃）。
+/// 编译失败与 include 同口径：eprintln 出声并忽略那一条，绝不静默放过。
+fn compile_exclude_rules(patterns: &[String]) -> Vec<ExcludeRule> {
+    patterns
+        .iter()
+        .map(|g| g.trim())
+        .filter(|g| !g.is_empty() && *g != "!")
+        .filter_map(|g| {
+            let (negated, body) = match g.strip_prefix('!') {
+                Some(rest) => (!rest.trim().is_empty(), rest.trim()),
+                None => (false, g),
+            };
+            if body.is_empty() {
+                return None;
+            }
+            match Regex::new(&exclude_regex_source(body)) {
+                Ok(re) => Some(ExcludeRule { negated, re }),
+                Err(err) => {
+                    eprintln!("[search] 排除模式编译失败（该条已忽略）：{g} -> {err}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// 某条路径是否被排除（**纯函数**，单测直打）：按序求值、最后一条命中赢；
+/// 相对与绝对（归一全路径）两种写法都试，命中任一即算这条规则打中。
+fn is_excluded(rules: &[ExcludeRule], rel: &str, full: &str) -> bool {
+    let mut excluded = false;
+    for rule in rules {
+        if rule.re.is_match(rel) || rule.re.is_match(full) {
+            excluded = !rule.negated;
+        }
+    }
+    excluded
+}
+
 /// 收集候选文件（去重 + 路径升序 ⇒ 并行合并后输出顺序与线程数无关）。
 ///
 /// 排序口径**逐字不变**（小写整路径的升序、稳定序、按同键去重），但**每条路径只算一次
@@ -3050,7 +3136,9 @@ fn collect_files(
     roots: &[String],
     extensions: &[String],
     globs: &[String],
+    exclude_rules: &[ExcludeRule],
     filtered: &mut u32,
+    excluded: &mut u32,
     walk_errors: &mut u32,
 ) -> Vec<SearchFile> {
     let glob_res = compile_globs(globs);
@@ -3088,10 +3176,24 @@ fn collect_files(
                     continue;
                 }
             }
+            let mut skip_by_glob = false;
             if !glob_res.is_empty() {
                 let rel = relative_slash_path(root_path, p);
                 if !glob_res.iter().any(|re| re.is_match(&rel)) {
                     *filtered += 1;
+                    skip_by_glob = true;
+                }
+            }
+            if skip_by_glob {
+                continue;
+            }
+            // 排除腿（WS-10）：include 筛出的候选里再挡一层，独立计数（`excluded`）——
+            // "被类型过滤挡下"与"被排除模式挡下"是两句不同的话，不许混成一笔账。
+            if !exclude_rules.is_empty() {
+                let rel = relative_slash_path(root_path, p);
+                let full = p.to_string_lossy().replace('\\', "/");
+                if is_excluded(exclude_rules, &rel, &full) {
+                    *excluded += 1;
                     continue;
                 }
             }
@@ -3126,12 +3228,13 @@ struct SkipCounters {
 }
 
 impl SkipCounters {
-    fn to_dto(&self, filtered: u32, walk_errors: u32) -> SearchSkippedDto {
+    fn to_dto(&self, filtered: u32, excluded: u32, walk_errors: u32) -> SearchSkippedDto {
         SearchSkippedDto {
             binary: self.binary.load(Ordering::Relaxed),
             too_large: self.too_large.load(Ordering::Relaxed),
             unreadable: self.unreadable.load(Ordering::Relaxed) + walk_errors,
             filtered,
+            excluded,
         }
     }
 }
@@ -3198,14 +3301,20 @@ fn run_search_with_files(
         .collect();
 
     let mut filtered: u32 = 0;
+    let mut excluded: u32 = 0;
     let mut walk_errors: u32 = 0;
+    // 排除模式（WS-10）：DTO → 规则编译 → collect_files 一条腿，与 include globs 同形态。
+    // 空 / 缺省 ⇒ 规则表为空 ⇒ collect_files 逐字走老路径（老调用方零改动）。
+    let exclude_rules = compile_exclude_rules(o.exclude_globs.as_deref().unwrap_or(&[]));
     // P2-15：globs 必须从 DTO 流进 collect_files（glob 翻译在 collect_files 段内做），
     // 这是本批触及 run_search 的**唯一一行**——只加实参，逻辑一行未动
     let files = collect_files(
         &req.roots,
         &extensions,
         o.globs.as_deref().unwrap_or(&[]),
+        &exclude_rules,
         &mut filtered,
+        &mut excluded,
         &mut walk_errors,
     );
     let total_files = files.len() as u32;
@@ -3343,7 +3452,7 @@ fn run_search_with_files(
         truncated: overflow.load(Ordering::Relaxed),
         cancelled: cancelled.load(Ordering::Relaxed),
         files_scanned: scanned.load(Ordering::SeqCst) as u32,
-        skipped: counters.to_dto(filtered, walk_errors),
+        skipped: counters.to_dto(filtered, excluded, walk_errors),
         elapsed_ms: started.elapsed().as_millis() as u64,
     })
 }
