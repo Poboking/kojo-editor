@@ -169,6 +169,16 @@ export class NodeBridge implements PlatformBridge {
     const includeFiles = opts?.includeFiles ?? true;
     const includeDirs = opts?.includeDirs ?? false;
     const withMetadata = opts?.withMetadata ?? false;
+    // 扩展名白名单（P0-3 批 6）：与 Rust `walk_dir_of` **同一口径**——
+    // 小写含点、只筛文件输出、不剪枝、目录条目不受影响。点开头（`i <= 0`）与无扩展名判否，
+    // 与 `entry_path.extension()` 的行为对齐。
+    const extensions = (opts?.extensions ?? []).map((x) => x.toLowerCase());
+    const extOk = (name: string): boolean => {
+      if (extensions.length === 0) return true;
+      const i = name.lastIndexOf('.');
+      if (i <= 0) return false;
+      return extensions.includes(name.slice(i).toLowerCase());
+    };
 
     const walk = async (dir: string, depth: number): Promise<void> => {
       if (depth > maxDepth) return;
@@ -177,7 +187,7 @@ export class NodeBridge implements PlatformBridge {
         if (entry.isDirectory) {
           if (includeDirs) out.push(entry);
           await walk(entry.path, depth + 1);
-        } else if (includeFiles) {
+        } else if (includeFiles && extOk(entry.name)) {
           let filled = entry;
           if (withMetadata) {
             // 与 stat() 同源取值：mtimeMs/size 必须与逐文件 stat 一致，否则索引的体量指纹会漂

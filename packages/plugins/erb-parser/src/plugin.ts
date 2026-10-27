@@ -16,6 +16,7 @@ import type {
   WorkspaceService,
 } from '@kojo/plugin-api';
 import {
+  ERB_DIALECT_EXTENSIONS,
   ERB_ENGINE_RESERVED_IDENTIFIERS,
   ERB_ENGINE_STRING_IDENTIFIERS,
   KernelServices,
@@ -624,6 +625,10 @@ export function createErbParserPlugin(): Plugin {
             includeFiles: true,
             includeDirs: false,
             withMetadata: true,
+            // 扩展名白名单下推到桥：真语料 10,052 条里只有 4,601 条是方言文件，
+            // 其余 5,451 条（图片 / 音频 / `.txt`）不该过一次 IPC 再在本地丢掉。
+            // 与下面 `filter` 同一条口径（只筛输出、不剪枝），取交集不变。
+            extensions: ERB_DIALECT_EXTENSIONS,
             filter: (e) => e.isDirectory || isDialect(e.name),
           });
           for (const e of entries) {

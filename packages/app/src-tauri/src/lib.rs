@@ -894,6 +894,13 @@ struct WalkOptionsDto {
     /// true ⇒ 每个文件条目顺带带回 mtime/size（省掉调用方的逐文件 `stat_file` 往返）。
     /// 默认 false：既有调用的开销形态不变。
     with_metadata: Option<bool>,
+    /// 扩展名白名单（小写、含点；空/缺省 = 不过滤）。只筛**文件**输出、不剪枝。
+    ///
+    /// 为什么值得一条 DTO 字段：前端那份 `filter` 是 JS 闭包，只能在 IPC 之后兑现，
+    /// 于是"变量 schema 只为 179 份 `.erh`"也要把 10,052 条整过一趟线。真语料实测
+    /// 全树零输出 300ms、带 10,052 条 550ms ⇒ 载荷占四成。清单是可序列化的纯数据，
+    /// 下推到这一侧就能让那种调用只回 179 条。目录条目不受它影响（按 `include_dirs`）。
+    extensions: Option<Vec<String>>,
 }
 
 /// mtime → epoch 毫秒。`stat_file` 与 `walk_dir(withMetadata)` **共用这一份实现**：
@@ -1136,6 +1143,7 @@ fn enum_walk_slots(
     include_dirs: bool,
     walk_max: usize,
     with_metadata: bool,
+    extensions: &[String],
 ) -> Vec<WalkSlot> {
     let mut slots = Vec::new();
     // 读不了 = 空（旧实现 `filter_map(|e| e.ok())` + 根错误丢弃 ⇒ 同形）
@@ -1156,8 +1164,21 @@ fn enum_walk_slots(
         let entry_path = entry.path();
         // 符号链接目录与 walkdir 一样不深入（防环）；到达深度上限的目录连 read_dir 都不做
         let deeper = is_dir && !file_type.is_symlink() && depth < walk_max;
-        // include_dirs / include_files 只控制“是否输出条目”，递归不受影响
-        let emit = (is_dir && include_dirs) || (!is_dir && include_files);
+        // include_dirs / include_files 只控制“是否输出条目”，递归不受影响。
+        // 扩展名白名单**只筛文件**：目录条目按 include_dirs 照常输出（前端靠它折叠树）。
+        let ext_ok = extensions.is_empty()
+            || entry_path
+                .extension()
+                .map(|e| {
+                    let got = e.to_string_lossy();
+                    extensions.iter().any(|x| got.eq_ignore_ascii_case(x))
+                })
+                .unwrap_or(false);
+        let emit = if is_dir {
+            include_dirs
+        } else {
+            include_files && ext_ok
+        };
         if !emit && !deeper {
             continue;
         }
@@ -1253,13 +1274,30 @@ fn walk_dir_of(path: &str, o: WalkOptionsDto) -> Result<Vec<DirEntryDto>, String
     let include_dirs = o.include_dirs.unwrap_or(false);
     let max_depth = o.max_depth.unwrap_or(usize::MAX);
     let with_metadata = o.with_metadata.unwrap_or(false);
+    // 扩展名归一化：调用方按契约给 `'.erb'` 形态，这里容错成**不带点的小写**
+    // （比较走 `eq_ignore_ascii_case` ⇒ 每条目零分配）。
+    let extensions: Vec<String> = o
+        .extensions
+        .unwrap_or_default()
+        .iter()
+        .map(|x| x.trim_start_matches('.').to_ascii_lowercase())
+        .filter(|x| !x.is_empty())
+        .collect();
     // 深度口径与 walkdir 对齐：根为 0，直接子项为 1；用户 maxDepth 再加 1
     let walk_max = if max_depth == usize::MAX { usize::MAX } else { max_depth + 1 };
 
     let root = PathBuf::from(path);
     // 根这一层**同步**枚举：单层列举（文件树展开、备份桶巡检都是这个形状）是最热的，
     // 不该为它付线程创建 + 两次加锁的钱。根读不了 ⇒ 空结果（walkdir 把根错误丢弃 ⇒ 同形）。
-    let root_slots = enum_walk_slots(&root, 1, include_files, include_dirs, walk_max, with_metadata);
+    let root_slots = enum_walk_slots(
+        &root,
+        1,
+        include_files,
+        include_dirs,
+        walk_max,
+        with_metadata,
+        &extensions,
+    );
     let mut map: HashMap<PathBuf, Vec<WalkSlot>> = HashMap::new();
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     for slot in &root_slots {
@@ -1279,6 +1317,7 @@ fn walk_dir_of(path: &str, o: WalkOptionsDto) -> Result<Vec<DirEntryDto>, String
                 include_dirs,
                 walk_max,
                 with_metadata,
+                &extensions,
             );
             for slot in &slots {
                 if let Some(child) = &slot.descend_into {
@@ -1323,6 +1362,7 @@ fn walk_dir_of(path: &str, o: WalkOptionsDto) -> Result<Vec<DirEntryDto>, String
                     include_dirs,
                     walk_max,
                     with_metadata,
+                    &extensions,
                 );
                 // 先登记子任务、再销自己这一笔：中间不出现"pending 归零但子任务尚未入队"的窗口
                 {
@@ -5399,6 +5439,7 @@ mod io_primitives_tests {
             include_files: Some(true),
             include_dirs: Some(true),
             with_metadata: Some(true),
+            extensions: None,
         };
         let entries = walk_dir_of(&dir.to_string_lossy(), opts).unwrap();
         assert!(entries.iter().any(|e| e.is_directory), "目录条目应仍在");
@@ -5473,6 +5514,7 @@ mod io_primitives_tests {
                     include_files: Some(!dirs),
                     include_dirs: Some(dirs),
                     with_metadata: None,
+                    extensions: None,
                 },
             )
             .unwrap()
@@ -5516,6 +5558,7 @@ mod io_primitives_tests {
                 include_files: Some(false),
                 include_dirs: Some(true),
                 with_metadata: None,
+                extensions: None,
             },
         )
         .unwrap();
@@ -5530,6 +5573,7 @@ mod io_primitives_tests {
                 include_files: Some(true),
                 include_dirs: Some(false),
                 with_metadata: None,
+                extensions: None,
             },
         )
         .unwrap();
@@ -5555,6 +5599,7 @@ mod io_primitives_tests {
                 include_files: Some(true),
                 include_dirs: Some(true),
                 with_metadata: None,
+                extensions: None,
             },
         )
         .unwrap();
@@ -5669,6 +5714,7 @@ mod io_primitives_tests {
                 include_files: Some(files),
                 include_dirs: Some(dirs),
                 with_metadata: meta,
+                extensions: None,
             };
             let got = walk_dir_of(&root, make()).unwrap();
             let want = serial_reference(&root, &make());
@@ -5679,6 +5725,68 @@ mod io_primitives_tests {
                 "并行输出与串行 DFS 不一致（max_depth={max_depth:?} files={files} dirs={dirs} meta={meta:?}）",
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 扩展名白名单（P0-3 批 6）：只筛**文件**输出、不剪枝、大小写不敏感、空清单不过滤。
+    ///
+    /// 这是"只为 179 份 `.erh` 走全树"能把 IPC 载荷从 10,052 条降到 179 条的前提——
+    /// 它一旦误剪枝或误吞目录条目，调用方就会"看不见文件却没有任何说法"。
+    #[test]
+    fn extension_whitelist_filters_files_only_and_never_prunes() {
+        let dir = temp_dir("walkext");
+        std::fs::create_dir_all(dir.join("deep").join("inner")).unwrap();
+        std::fs::write(dir.join("a.ERB"), "x").unwrap();
+        std::fs::write(dir.join("b.erh"), "x").unwrap();
+        std::fs::write(dir.join("c.txt"), "x").unwrap();
+        std::fs::write(dir.join("noext"), "x").unwrap();
+        std::fs::write(dir.join("deep").join("inner").join("d.ErH"), "x").unwrap();
+        std::fs::write(dir.join("deep").join("inner").join("e.erb"), "x").unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        let opts = |exts: Option<Vec<String>>, dirs: bool| WalkOptionsDto {
+            max_depth: None,
+            include_files: Some(true),
+            include_dirs: Some(dirs),
+            with_metadata: None,
+            extensions: exts,
+        };
+
+        // 只要 .erh：其余文件被筛掉，深层 `d.ErH` 仍到达（不剪枝 + 大小写不敏感）
+        let mut only_erh: Vec<String> = walk_dir_of(&root, opts(Some(vec![".erh".into()]), false))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        only_erh.sort();
+        assert_eq!(only_erh, vec!["b.erh".to_string(), "d.ErH".to_string()]);
+
+        // 目录条目不受扩展名影响（前端靠它折叠树）
+        let with_dirs = walk_dir_of(&root, opts(Some(vec![".erh".into()]), true)).unwrap();
+        let dirs: Vec<&str> = with_dirs
+            .iter()
+            .filter(|e| e.is_directory)
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(dirs, vec!["deep", "inner"], "目录侧被扩展名筛掉了");
+
+        // 多个扩展名（清单里大小写混写也认）
+        let mut two: Vec<String> =
+            walk_dir_of(&root, opts(Some(vec![".erb".into(), ".TXT".into()]), false))
+                .unwrap()
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+        two.sort();
+        assert_eq!(
+            two,
+            vec!["a.ERB".to_string(), "c.txt".to_string(), "e.erb".to_string()]
+        );
+
+        // 空清单 = 不过滤（与缺省同义）
+        let all = walk_dir_of(&root, opts(Some(vec![]), false)).unwrap();
+        assert_eq!(all.len(), 6, "空清单不该筛掉任何文件");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -6406,6 +6514,7 @@ mod async_command_tests {
                 include_files: Some(true),
                 include_dirs: Some(true),
                 with_metadata: Some(true),
+                extensions: None,
             }),
         ))
         .unwrap();
@@ -6416,6 +6525,7 @@ mod async_command_tests {
                 include_files: Some(true),
                 include_dirs: Some(true),
                 with_metadata: Some(true),
+                extensions: None,
             },
         )
         .unwrap();
