@@ -43,6 +43,28 @@ export interface StructureSyntaxClearContext {
 }
 
 /**
+ * 一条**注入关系**（LAU-6 / 设计稿 §4.6，D14）：主树里的某个节点，体内是另一门语言的源码。
+ *
+ * 是**数据，不是 `if`**：宿主只按这张表认节点（`hostNode` 原样比对捕获表的节点类型），
+ * 再把区间转发给 `languageId` 那门语言的结构 worker（`includedRanges`，坐标天然对齐）。
+ * 置空这一格 = 回到"整块不透明"（本批的回滚点）。
+ */
+export interface InjectionSpec {
+  /** 主树里的节点名（由语言自己的声明面写死；宿主只做等值比较，不认识任何具体节点） */
+  readonly hostNode: string;
+  /** 子语言 id（Monaco 语言 id；宿主据此从 descriptor 注册表取它的结构运行时） */
+  readonly languageId: string;
+  /**
+   * 取哪个子节点作为注入体；缺省取整个 hostNode。
+   *
+   * ⚠ 本批**未实现**（保留形状）：今天的真实用例里，宿主节点本身就是
+   * 纯净的体容器，取整个节点即可。真有"宿主节点里还夹着别的东西"的语言再加实现，别先
+   * 写一条没人走的路径。
+   */
+  readonly bodyPath?: string;
+}
+
+/**
  * 一门语言的**结构层运行时**（A4 语言无关化）。
  *
  * 由 `LanguageDescriptor.structure.load()` 按需交回：worker 入口、wasm 与查询资源只在
@@ -65,6 +87,13 @@ export interface StructureLanguageRuntime {
   readonly createWorker: () => Worker;
   readonly semantic?: StructureSemanticFacet;
   readonly baseIndentPatterns?: () => BaseIndentPatterns;
+  /**
+   * 宿主节点注入声明（LAU-6）。**置空 = 这门语言不做注入**（也是本批的回滚点）。
+   *
+   * kojo2 今天不用 `structure`（它的结构面走自己的 worker），它的注入声明住在语言模块
+   * `kojo2-language.ts` 的 `KOJO2_INJECTIONS`；这一格留给将来走通用叠层的语言。
+   */
+  readonly injections?: readonly InjectionSpec[];
   /**
    * 捕获名（+ 节点类型）→ 档位名（**宿主侧**的配色判据；LAU-1 的 D4 口径）。
    *

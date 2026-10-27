@@ -32,6 +32,12 @@ export interface Kojo2Capture {
   readonly name: string;
   readonly startPosition: Kojo2Point;
   readonly endPosition: Kojo2Point;
+  /**
+   * 捕获节点的**类型名**（LAU-6 additive）：注入层按 descriptor 的 `injections.hostNode`
+   * 找宿主节点时只认这一格——宿主不硬编码任何节点名。
+   * 缺省（旧回复 / 测试替身没给）= 不知道，注入层跳过这一条（不猜）。
+   */
+  readonly nodeType?: string;
 }
 
 /** Monaco 语义 token 区间：1 基行 / 1 基列 / endColumn 排他 */

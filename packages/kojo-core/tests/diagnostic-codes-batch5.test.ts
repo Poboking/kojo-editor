@@ -69,6 +69,13 @@ const LAUD1_CODES: readonly CoreDiagnosticCode[] = [
 const LAUD1_WARNING_CODES: readonly CoreDiagnosticCode[] = ['core/dialect/unbound', 'core/carrier/unowned'];
 
 /**
+ * LAU-6（`@原生` 注入）additive 的一枚：子树失败退回"整块不透明"，主树四面照常。
+ * 与 LAU-D1 六枚同批口径（闭集只增），但生产者不在核心——它在宿主注入层，
+ * 这里只钉"码在闭集里、级别是 warning"。
+ */
+const LAU6_CODES: readonly CoreDiagnosticCode[] = ['core/injection/child-failed'];
+
+/**
  * batch-4 收工时的全表（`git show <batch-4>/diagnostics.ts`）。
  *
  * **这是"闭集只增不改"的锁**：既有码逐条仍须在场；本批相对它的差集必须**恰为**
@@ -156,10 +163,19 @@ describe('码表 · 闭集只增（S5.6）', () => {
     expect(missing, `既有码被删/改名：${missing.join(' / ')}`).toEqual([]);
   });
 
-  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条（多一条/少一条都要过审）', () => {
+  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
-    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES].sort());
+    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES].sort());
+  });
+
+  it('LAU-6 的 `core/injection/child-failed` 在闭集里、是 warning（降级面不阻断）', () => {
+    for (const code of LAU6_CODES) {
+      expect(declared, `${code} 不在 CoreDiagnosticCode 联合里`).toContain(code);
+      expect(CORE_WARNING_CODES.has(code), `${code} 必须是 warning`).toBe(true);
+      expect(severityOf(code)).toBe('warning');
+      expect(CORE_DIAGNOSTIC_CODES.has(code)).toBe(true);
+    }
   });
 
   it('2026-10-26 批的 `core/decl/multiple-dialect` 在闭集里、是 error，且运行期闭集与类型同源', () => {

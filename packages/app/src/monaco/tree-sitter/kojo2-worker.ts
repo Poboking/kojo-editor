@@ -631,10 +631,18 @@ export function createKojo2ProtocolRing(
       ? { ok: false, id, ...(kind === undefined ? {} : { kind }), reason, message }
       : { ok: false, id, ...(kind === undefined ? {} : { kind }), reason, message, treeId };
 
-  /** 捕获列表 → 扁平投影（节点类型这一族没有：kojo2 的捕获只带名字与行列） */
+  /**
+   * 捕获列表 → 扁平投影。
+   *
+   * LAU-6 起 `nodes` 字典**不再恒为 `['']`**：注入层要按节点类型认宿主节点
+   * （descriptor 的 `injections.hostNode`），所以每条捕获的 `nodeIndex` 指向
+   * `capture.nodeType`。字典去重方式与 `names` 同口径（去重后）。
+   */
   const captureTable = (captures: readonly Kojo2Capture[]): StructureCaptureTable => {
     const names: string[] = [];
     const index = new Map<string, number>();
+    const nodes: string[] = [];
+    const nodeIndex = new Map<string, number>();
     const spans: number[] = [];
     for (const capture of captures) {
       let at = index.get(capture.name);
@@ -643,16 +651,31 @@ export function createKojo2ProtocolRing(
         names.push(capture.name);
         index.set(capture.name, at);
       }
-      spans.push(capture.startPosition.row, capture.startPosition.column, capture.endPosition.row, capture.endPosition.column, at, 0);
+      const node = capture.nodeType ?? '';
+      let nodeAt = nodeIndex.get(node);
+      if (nodeAt === undefined) {
+        nodeAt = nodes.length;
+        nodes.push(node);
+        nodeIndex.set(node, nodeAt);
+      }
+      spans.push(
+        capture.startPosition.row,
+        capture.startPosition.column,
+        capture.endPosition.row,
+        capture.endPosition.column,
+        at,
+        nodeAt,
+      );
     }
-    return { names, nodes: [''], spans };
+    return { names, nodes, spans };
   };
 
   const handleParse = async (request: Extract<StructureRequest, { kind: 'parse' }>): Promise<StructureReply> => {
     const problem = contentProblem(request);
     if (problem !== null) return failed(request.id, 'parse', 'invalid-input', problem);
     if (request.includedRanges !== undefined) {
-      return failed(request.id, 'parse', 'invalid-input', '本 worker 还没实现 includedRanges（LAU-6 才接线）⇒ 这次不按子区间解');
+      // LAU-6 起区间路由子语言 worker（ERB）走；本 worker 是主树那一侧，不收区间。
+      return failed(request.id, 'parse', 'invalid-input', '本 worker 不支持 includedRanges（主树恒按全文档解；注入子 parse 发给子语言 worker）');
     }
     const loaded = await warm();
     if (!loaded.ok) return failed(request.id, 'parse', protocolReasonOf(loaded.reason), loaded.message);

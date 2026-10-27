@@ -335,6 +335,22 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
    * 消息模板：`文件 {路径} 不在方言 {方言} 声明的任何载体归属里（carriers 的 glob 都没命中）：该文件的载体级校验跳过。`
    */
   'core/carrier/unowned',
+  /**
+   * **注入子解析失败**（§4.6 / LAU-6；生产者在宿主侧注入层——今天落在
+   * `packages/app/src/monaco/tree-sitter/injection.ts`，随「子树失败」那一条回落一起发）。
+   *
+   * 语义：主树解得成、子树（`@原生` 体内按 descriptor 声明的子语言）这次解不成
+   * （worker 不可用 / 超时 / 查询失败 / 区间算不出）⇒ **保留主树的 `role.raw`**，
+   * 主树的四面（着色 / 折叠 / 缩进 / 残缺）一律照常，只是这一块仍是"不透明原文"。
+   *
+   * 与 `fallback.ts` 的回落台账不是两套：本码是**机器可对齐**的那一格（诊断闭集里的一员），
+   * 台账那条人话通知照旧由 `reportStructureDegradation` 发，两处同时可见——纪律见铁律 4。
+   *
+   * 级别：warning（在 `CORE_WARNING_CODES` 里）——注入是**增强面**，失败退回"整块不透明"，
+   * 不阻断任何既有能力，也不该像 error 那样把问题面板刷满。
+   * 消息模板：`@原生 体内的子解析这次没顶上（{原因}）：这一块仍按原文显示，其余照常。`
+   */
+  'core/injection/child-failed',
   'core/options/pending',
   'core/profile/missing',
   'core/feature/unsupported',
@@ -364,6 +380,8 @@ export const CORE_WARNING_CODES: ReadonlySet<CoreDiagnosticCode> = new Set<CoreD
   // （方言冲突、响应错配、未知事件、事件落点错）刻意不进这张表，见各码声明处的级别说明。
   'core/dialect/unbound',
   'core/carrier/unowned',
+  // LAU-6：注入子树失败 = 退回"整块不透明"，主树四面照常 ⇒ 降级面、不阻断。
+  'core/injection/child-failed',
 ]);
 
 /** adapter 诊断命名空间（additive，不覆盖 core 码） */

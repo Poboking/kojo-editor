@@ -48,6 +48,7 @@ import type {
   StructureFailureReason,
   StructureParseReply,
   StructureProtocolVersion,
+  StructureRange,
   StructureReply,
   StructureRequest,
 } from './protocol';
@@ -94,7 +95,13 @@ export function startStructureWorker(assets: StructureEngineAssets): StructureEn
   });
 
   /** 装配完成前收到的首解请求（只留最新一条的整篇；见文件头"两条时序口径"） */
-  let staged: { doc: number; version: number; text: string; want: readonly StructureFacet[] | undefined } | null = null;
+  let staged: {
+    doc: number;
+    version: number;
+    text: string;
+    want: readonly StructureFacet[] | undefined;
+    includedRanges: readonly StructureRange[] | undefined;
+  } | null = null;
   /** `open` 的 id（`ready` 要回同一枚；没握过手就是 null） */
   let openId: number | null = null;
   /** 已经在装 wasm 了（重复的 `open` 只补一枚 ready，不再装第二遍） */
@@ -168,14 +175,21 @@ export function startStructureWorker(assets: StructureEngineAssets): StructureEn
     }
     collected = [];
     if ('includedRanges' in request && request.includedRanges !== undefined) {
-      // §4.6 / LAU-6 才接线：本批不认（静默按全文档解 = 拿错形状硬解，比拒绝危险）
-      collected = [];
-      fail(request.id, 'parse', 'invalid-input', '本 worker 还没实现 includedRanges（LAU-6 才接线）⇒ 这次不按子区间解');
-      return;
+      // LAU-6：区间只接"整篇 text"（输入仍是全文档，选区只是限定解哪几段）。
+      // `edit` + 区间没有定义过的语义（差集把旧树推过去之后区间该落在哪一版上？），
+      // 不猜：判非法，让调用方改用整篇。
+      if (!('text' in request)) {
+        fail(request.id, 'parse', 'invalid-input', 'includedRanges 只接整篇 text（edit + 区间没有定义过的语义）⇒ 请改发整篇');
+        return;
+      }
+      if (request.includedRanges.length === 0) {
+        fail(request.id, 'parse', 'invalid-input', 'includedRanges 是空数组（一个字节都不解）⇒ 这是调用方的错，不静默按全文档解');
+        return;
+      }
     }
     const want = request.want;
     if ('text' in request) {
-      engine.parse(request.doc, request.version, request.text, want);
+      engine.parse(request.doc, request.version, request.text, want, request.includedRanges);
       assemble(request, false, request.text.length);
       return;
     }
@@ -231,7 +245,7 @@ export function startStructureWorker(assets: StructureEngineAssets): StructureEn
       staged = null;
       if (pending !== null) {
         collected = [];
-        engine.parse(pending.doc, pending.version, pending.text, pending.want);
+        engine.parse(pending.doc, pending.version, pending.text, pending.want, pending.includedRanges);
         assemble({ id: 0, doc: pending.doc, version: pending.version }, false, pending.text.length);
       }
     });
@@ -268,7 +282,13 @@ export function startStructureWorker(assets: StructureEngineAssets): StructureEn
     if (!engine.initialized) {
       // 装配没完成：整篇请求存最新一条（后来者覆盖），`ready` 一到补解；增量请求没有基线 ⇒ 拒绝。
       if ('text' in request) {
-        staged = { doc: request.doc, version: request.version, text: request.text, want: request.want };
+        staged = {
+          doc: request.doc,
+          version: request.version,
+          text: request.text,
+          want: request.want,
+          includedRanges: request.includedRanges,
+        };
         return;
       }
       fail(request.id, 'parse', 'invalid-input', '装配还没完成，增量请求没有基线文本可缝 ⇒ 请改发整篇 text');

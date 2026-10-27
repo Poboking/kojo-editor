@@ -402,6 +402,8 @@ function buildRuntime(input: BuildRuntimeInput): Kojo2TreeSitterRuntime {
         name: capture.name,
         startPosition: { row: node.startPosition.row, column: node.startPosition.column },
         endPosition: { row: node.endPosition.row, column: node.endPosition.column },
+        // LAU-6：节点类型给注入层认宿主节点（宿主不按节点名分支，只按 descriptor 匹配）
+        nodeType: node.type,
       });
     }
     return { ok: true, captures: out };

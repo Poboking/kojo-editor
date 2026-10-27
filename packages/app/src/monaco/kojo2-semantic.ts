@@ -58,8 +58,9 @@
  * provider 的缓存（worker 客户端是共享单例，**不**在这里 dispose）。
  */
 import type * as Monaco from './entry';
-import { KOJO2_LANGUAGE_ID, KOJO2_TOKEN, type Kojo2TokenName } from './kojo2-language';
+import { KOJO2_INJECTIONS, KOJO2_LANGUAGE_ID, KOJO2_TOKEN, type Kojo2TokenName } from './kojo2-language';
 import { KOJO2_THEME_TOKEN_MAP } from './kojo2-theme';
+import { reportStructureDegradation } from './tree-sitter/fallback';
 import {
   installKojo2IndentConfigFromWorker,
   type Kojo2IndentConfigHandle,
@@ -71,6 +72,14 @@ import {
   type Kojo2TokenSpan,
 } from './tree-sitter/kojo2-tokenizer';
 import type { Kojo2CapturesReply, Kojo2WorkerResult } from './tree-sitter/kojo2-worker-protocol';
+import type { InjectionSpec } from './tree-sitter/structure-runtime';
+import type {
+  InjectionHost,
+  InjectionOutcome,
+  InjectionRunRequest,
+} from './tree-sitter/injection';
+import type { StructureRange } from './tree-sitter/protocol';
+import type { KojoStructureToken } from './tree-sitter/types';
 
 /* ============================== capture 名 → 档位 ============================== */
 
@@ -188,6 +197,185 @@ export function mapKojo2Captures(
   return out;
 }
 
+/* ============================== `@原生` 注入（LAU-6） ============================== */
+
+/**
+ * 子树**捕获名**（子语言查询说的名字，如 ERB 的 `comment` / `keyword.control`）→ kojo2 的
+ * token 名。表外捕获 = 不涂（不猜邻近档）。
+ *
+ * 为什么要在宿主语言这一侧翻译：Monaco 的语义图例是**按 provider（= 按语言）**声明的，
+ * 一份 kojo2 model 只能收 kojo2 provider 的图例；子树要是搬自己那套 token 名进来，
+ * 得先在图例里登记（等于把 ERB 的色板借给 kojo2）。这里改成"同义档"：
+ * 注释→注释、指令/控制流→保留词、声明→声明、串→台词、插值→插值、停用区→原生围栏、
+ * 类型→类型。屏上的语义分层一处不少，且**不新增色档**（图例 / 主题一格不动）。
+ *
+ * ## 为什么键是**捕获名**而不是子语言的**档位名**
+ *
+ * 档位名里有两枚历史遗留（ERB 的 `keyword.erb` / `sugar.interp`），`audit-language` 的
+ * M3 把这类名字按"旧 token 名"计数（只许收敛、不许新增）。而这张表本来就是"子查询的
+ * 捕获 → 本语言的档"，捕获名是查询的直接产物，翻译落在更靠上游的一格；
+ * 对 ERB 逐项同像（`keyword.control` 原来走 `keyword.erb` 档、`string.special` 走
+ * `sugar.interp` 档），所以行为零变化——`kojo2-injection.test.ts` 钉住了这两格。
+ */
+export const KOJO2_INJECTION_CAPTURE_TOKENS: Readonly<Record<string, Kojo2TokenName>> = Object.freeze({
+  comment: KOJO2_TOKEN.comment,
+  'keyword.directive': KOJO2_TOKEN.keyword,
+  tag: KOJO2_TOKEN.keyword,
+  label: KOJO2_TOKEN.declaration,
+  function: KOJO2_TOKEN.declaration,
+  'keyword.control': KOJO2_TOKEN.keyword,
+  string: KOJO2_TOKEN.speech,
+  'string.special': KOJO2_TOKEN.interp,
+  raw: KOJO2_TOKEN.raw,
+  type: KOJO2_TOKEN.type,
+});
+
+/**
+ * 从主树捕获里挑出**注入宿主节点**（纯函数；descriptor 的 `injections` 是数据，这里是唯一消费者）。
+ *
+ * 只认精确节点名：`nodeType` 缺失 / 空串 / 不在表里 ⇒ 跳过（旧回复或测试替身不带节点类型时
+ * 宁可不注入，也不按捕获名猜）。同一节点被多条捕获命中只算一次（键 = 语言 + 类型 + 四点）。
+ * 宿主不出现任何具体节点名——它只住在 `kojo2-language.ts` 的声明里。
+ */
+export function injectionHostNodes(
+  specs: readonly InjectionSpec[],
+  captures: readonly Kojo2Capture[] | null | undefined,
+): InjectionHost[] {
+  if (specs.length === 0 || !Array.isArray(captures) || captures.length === 0) return [];
+  const byNode = new Map<string, InjectionSpec>();
+  for (const spec of specs) byNode.set(spec.hostNode, spec);
+  const out: InjectionHost[] = [];
+  const seen = new Set<string>();
+  for (const capture of captures) {
+    const nodeType = capture.nodeType ?? '';
+    const spec = byNode.get(nodeType);
+    if (spec === undefined) continue;
+    const start = capture.startPosition;
+    const end = capture.endPosition;
+    if (!isInjectionPoint(start) || !isInjectionPoint(end)) continue;
+    const key = `${spec.languageId}\u0000${nodeType}\u0000${start.row}:${start.column}:${end.row}:${end.column}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      languageId: spec.languageId,
+      hostNode: nodeType,
+      startRow: start.row,
+      startColumn: start.column,
+      endRow: end.row,
+      endColumn: end.column,
+    });
+  }
+  return out;
+}
+
+function isInjectionPoint(point: { readonly row: number; readonly column: number }): boolean {
+  return (
+    Number.isInteger(point.row) &&
+    Number.isInteger(point.column) &&
+    point.row >= 0 &&
+    point.column >= 0
+  );
+}
+
+/** 子树 token（0 基行列 + 子语言捕获）→ Monaco 区间（tokenType 已翻成 kojo2 档位） */
+export function injectionTokenSpans(
+  tokens: readonly KojoStructureToken[],
+  options: { readonly lineCount: number; readonly maxColumn: (line: number) => number },
+): Kojo2TokenSpan[] {
+  if (tokens.length === 0) return [];
+  const captures: Kojo2Capture[] = [];
+  for (const token of tokens) {
+    const tokenType = KOJO2_INJECTION_CAPTURE_TOKENS[token.capture ?? ''];
+    if (tokenType === undefined) continue; // 子语言多出一枚捕获而宿主没同义档：不涂（不猜）
+    captures.push({
+      name: tokenType,
+      startPosition: { row: token.startRow, column: token.startCol },
+      endPosition: { row: token.endRow, column: token.endCol },
+    });
+  }
+  return capturesToTokenSpans(captures, options);
+}
+
+/**
+ * 注入区间覆盖的 **1 基行号**（主树原文按行裁）。
+ *
+ * 区间的 endPosition 是"末行换行之后"（= 下一行第 0 列）⇒ 那一位不收进覆盖行；
+ * 只有落在行中间的结尾才把那一行算进来。与 `planInjectionRanges` 的口径成对。
+ */
+export function injectionLineNumbers(ranges: readonly StructureRange[]): Set<number> {
+  const lines = new Set<number>();
+  for (const range of ranges) {
+    const first = range.startPosition.row + 1;
+    const last =
+      range.endPosition.column === 0 && range.endPosition.row > range.startPosition.row
+        ? range.endPosition.row
+        : range.endPosition.row + 1;
+    for (let line = first; line <= last; line++) lines.add(line);
+  }
+  return lines;
+}
+
+/** 区间减法：`[start,end)` 去掉已覆盖后剩下的片段（升序） */
+function uncoveredColumns(
+  start: number,
+  end: number,
+  covered: readonly Kojo2TokenSpan[],
+): Array<[number, number]> {
+  let pieces: Array<[number, number]> = [[start, end]];
+  for (const span of covered) {
+    if (span.endColumn <= start || span.startColumn >= end) continue;
+    const next: Array<[number, number]> = [];
+    for (const [pieceStart, pieceEnd] of pieces) {
+      if (span.endColumn <= pieceStart || span.startColumn >= pieceEnd) {
+        next.push([pieceStart, pieceEnd]);
+        continue;
+      }
+      if (pieceStart < span.startColumn) next.push([pieceStart, span.startColumn]);
+      if (pieceEnd > span.endColumn) next.push([span.endColumn, pieceEnd]);
+    }
+    pieces = next;
+    if (pieces.length === 0) break;
+  }
+  return pieces;
+}
+
+/**
+ * **子树覆盖主树**（§4.6 第 3 步）：注入区内的主树区间（`@原生` 的整行 `role.raw`）让位给
+ * 子树，但**只让出子树真的涂到的列**——子树没涂到的列仍由主树原文兜底（成本表的
+ * "子树优先，主树 `role.raw` 兜底"）。区间外的主树区间一个字节不动。
+ *
+ * 纯函数：不改入参、不抛；输出仍按（行，起始列）升序（`encodeKojo2SemanticTokens` 会再排一次）。
+ */
+export function mergeInjectionSpans(
+  main: readonly Kojo2TokenSpan[],
+  injected: readonly Kojo2TokenSpan[],
+  injectedLines: ReadonlySet<number>,
+): Kojo2TokenSpan[] {
+  if (injected.length === 0) return [...main];
+  const byLine = new Map<number, Kojo2TokenSpan[]>();
+  for (const span of injected) {
+    const bucket = byLine.get(span.line);
+    if (bucket === undefined) byLine.set(span.line, [span]);
+    else bucket.push(span);
+  }
+  const out: Kojo2TokenSpan[] = [];
+  for (const span of main) {
+    if (!injectedLines.has(span.line)) {
+      out.push(span);
+      continue;
+    }
+    for (const [startColumn, endColumn] of uncoveredColumns(
+      span.startColumn,
+      span.endColumn,
+      byLine.get(span.line) ?? [],
+    )) {
+      out.push({ line: span.line, startColumn, endColumn, tokenType: span.tokenType });
+    }
+  }
+  out.push(...injected);
+  return out;
+}
+
 /* ============================== 5 元组编码 ============================== */
 
 /**
@@ -255,6 +443,30 @@ export function encodeKojo2SemanticTokens(
   return data;
 }
 
+/**
+ * 子树失败的那一条可见账（LAU-6 DoD 3）：`warn` 一次 + 回落台账里带 **`core/injection/child-failed`**。
+ *
+ * 两处同时发不是重复：`warn` 是开发面（同一 reason 只刷一条），台账是作者面通知与机器对账的
+ * 唯一通路（`fallback.ts` 的数字归一去重）。**主树的四面不经过这里**——它们照常。
+ */
+function reportInjectionFailure(warn: (message: string) => void, reason: string, message: string): void {
+  warnInjectionOnce(warn, reason, message);
+  reportStructureDegradation({
+    capability: 'semantic',
+    stage: 'parse',
+    message: `@原生 体内的子解析这次没顶上（${reason}）：${message}`,
+    code: 'core/injection/child-failed',
+  });
+}
+
+function warnInjectionOnce(warn: (message: string) => void, reason: string, message: string): void {
+  warnOnce(
+    warn,
+    `injection:${reason}`,
+    `[kojo2-semantic] 注入子解析不可用（${reason}）：${message} ⇒ 这一块仍按原文显示，其余照常`,
+  );
+}
+
 /* ============================== provider ============================== */
 
 /**
@@ -285,12 +497,40 @@ export interface Kojo2SemanticProviderDeps {
    * `installKojo2IndentConfigFromWorker` 上。
    */
   readonly syncIndentConfig?: (model: Monaco.editor.ITextModel, treeId?: string) => void;
+  /**
+   * `@原生` 注入声明（LAU-6；缺省 = `kojo2-language.ts` 的 `KOJO2_INJECTIONS`）。
+   * 置空数组 = **本 provider 不做注入**（回滚点，与 `injections` 置空同义）。
+   */
+  readonly injections?: readonly InjectionSpec[];
+  /**
+   * 子 parse 的执行器（测试注入缝；缺省 = **动态** import `./tree-sitter/injection`）。
+   *
+   * 动态的理由只有一条：开机静态图有硬上限（`ps10-eager-graph.test.ts` ≤198 文件，现值贴顶），
+   * 而注入器只在真有 `@原生` 时才需要。没 `@原生` 的文件连这个模块都不装载，更不会请求
+   * ERB wasm（DoD 第 2 条）。
+   */
+  readonly runInjection?: (model: Monaco.editor.ITextModel, request: InjectionRunRequest) => Promise<InjectionOutcome>;
 }
 
 /** 缺省客户端：懒到第一次真着色才把 worker 模块拉进来 */
 async function defaultWorkerClient(): Promise<Kojo2SemanticWorkerClient> {
   const module = await import('./tree-sitter/kojo2-worker-runtime');
   return module.getKojo2WorkerClient();
+}
+
+/**
+ * 缺省注入执行器：**动态**取注入模块（见 `runInjection` 那条注释）。
+ *
+ * 先记宿主节点账（折叠 provider 靠它决定要不要问子树），再跑（同 model 同版本只跑一次，
+ * 语义面与折叠面共用同一张 promise —— 见 `injection.ts::runInjectionForModel`）。
+ */
+async function defaultRunInjection(
+  model: Monaco.editor.ITextModel,
+  request: InjectionRunRequest,
+): Promise<InjectionOutcome> {
+  const module = await import('./tree-sitter/injection');
+  module.rememberInjectionHosts(model, request.version, request.hosts);
+  return module.runInjectionForModel(model, request);
 }
 
 /** provider + 它自己的资源账（Monaco 的 provider 接口没有 dispose 位） */
@@ -321,6 +561,8 @@ export function createKojo2SemanticTokensProvider(
   const getClient = deps.getClient ?? defaultWorkerClient;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const syncIndentConfig = deps.syncIndentConfig ?? (() => undefined);
+  const runInjection = deps.runInjection ?? defaultRunInjection;
+  const injectionSpecs = deps.injections ?? KOJO2_INJECTIONS;
   /** model → 上一版的树号与结果（`WeakMap`：标签关掉、model 释放后自然可回收） */
   let cache = new WeakMap<Monaco.editor.ITextModel, ModelCacheEntry>();
   /** worker 只有一条 parser ⇒ 请求串行（并发只会让"哪一版上屏"不可预测） */
@@ -369,6 +611,10 @@ export function createKojo2SemanticTokensProvider(
       cache.set(model, { versionId, treeId: result.treeId ?? null, tokens: EMPTY_DATA });
       return EMPTY_DATA;
     }
+    const geometry = {
+      lineCount: model.getLineCount(),
+      maxColumn: (line: number) => model.getLineMaxColumn(line),
+    };
     const spans = capturesToTokenSpans(
       mapKojo2Captures(result.value.captures, (name) =>
         warnOnce(
@@ -378,12 +624,44 @@ export function createKojo2SemanticTokensProvider(
             '要么给它补档位，要么删掉这条捕获',
         ),
       ),
-      {
-        lineCount: model.getLineCount(),
-        maxColumn: (line) => model.getLineMaxColumn(line),
-      },
+      geometry,
     );
-    const tokens = encodeKojo2SemanticTokens(spans);
+    // LAU-6：有宿主节点才解子树（没有 `@原生` 的文件零额外请求，更不碰 ERB wasm）。
+    // 失败只落一条 `core/injection/child-failed` 并保留主树的原文着色——主树四面一行不动。
+    const hostNodes = injectionHostNodes(injectionSpecs, result.value.captures);
+    let mergedSpans = spans;
+    if (hostNodes.length > 0) {
+      try {
+        const outcome = await runInjection(model, {
+          text,
+          version: versionId,
+          specs: injectionSpecs,
+          hosts: hostNodes,
+        });
+        if (disposed) return EMPTY_DATA;
+        if (model.isDisposed()) {
+          forget(model);
+          return EMPTY_DATA;
+        }
+        if (!outcome.ok) {
+          reportInjectionFailure(warn, outcome.reason, outcome.message);
+        } else if (outcome.tokens.length > 0) {
+          mergedSpans = mergeInjectionSpans(
+            spans,
+            injectionTokenSpans(outcome.tokens, geometry),
+            injectionLineNumbers(outcome.ranges),
+          );
+        }
+      } catch (error: unknown) {
+        // 注入器自己抛错 = 与"子树失败"同一结局：不拖垮主树，只记一条可见的码
+        reportInjectionFailure(
+          warn,
+          'internal',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    const tokens = encodeKojo2SemanticTokens(mergedSpans);
     cache.set(model, { versionId, treeId: result.value.treeId, tokens });
     // K2-INDENT-WIRE：捕获成功 = worker 可用 ⇒ 顺手问一次 `indents` 并把规则写进语言配置。
     // 失败面天然是"零改动"（worker 不可用时这条链根本走不到这里），且同步器自己再按

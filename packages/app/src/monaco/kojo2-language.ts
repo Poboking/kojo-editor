@@ -56,6 +56,7 @@ import { CJK_WORD_PATTERN } from './word-separators';
 import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 import { KOJO_SOURCE_EXTENSION, kojoMonacoExtensions } from '@kojo/plugin-api';
 import { KOJO2_THEME_RULES, KOJO2_TOKEN } from './kojo-theme-rules';
+import type { InjectionSpec } from './tree-sitter/structure-runtime';
 
 /**
  * 语言 id 与源扩展名：**定义处已下沉**零 import 叶子 `kojo2-constants.ts`（K2-CUTOVER-THEME）。
@@ -122,6 +123,26 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   // 结构定义头那一档两条链都发同一个色，默认态可见。
   { tier: '类型与结构名', tokens: [KOJO2_TOKEN.type], why: '`整数`/`字符串` 说这一列存什么，`# 表`/`池`/`模` 定义一个结构——都不改判定，改的是形状' },
 ];
+
+/* ============================== 注入声明（LAU-6） ============================== */
+
+/**
+ * Kojo 2.0 的 `@原生` 注入声明（LAU-6 / 设计稿 §4.6 D14）——**宿主节点名只出现在这一处**
+ * （本文件下方那一行数据；宿主代码与其它模块零命中，由 `kojo2-injection.test.ts` 的 grep 闸钉住）。
+ *
+ * - `hostNode`：`grammar.v2.js` 里 `@原生` **体**的真实节点名（栏头与体内逐行是另外两枚节点，
+ *   别拿它们当宿主：整块不透明的是"体"）；
+ * - `languageId: 'erb'`：`@原生` 体是底层 ERB（spec §8.5），子 parse 发给 ERB 的结构 worker
+ *   （`language-registry` 里那枚 descriptor 的 `structure`），带 `includedRanges`；
+ * - 置空这一格 = 回到"整块不透明"（本批的回滚点）。
+ *
+ * 为什么住在这里而不是 `LanguageDescriptor`：本车道边界不动 `language-registry.ts` /
+ * `languages.ts`（两条都在别的批次手上）。这里与 Monarch / token 分档同属"kojo2 这门语言的
+ * 声明面"，宿主代码（`kojo2-semantic` / `kojo2-folding`）只把它当数据读，不认节点名。
+ */
+export const KOJO2_INJECTIONS: readonly InjectionSpec[] = Object.freeze([
+  { hostNode: 'native_body', languageId: 'erb' },
+]);
 
 /* ============================== 词法状态机 ============================== */
 

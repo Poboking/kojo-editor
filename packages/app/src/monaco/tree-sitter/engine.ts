@@ -81,7 +81,7 @@
  * 3. 任何一条回话都是新建的 plain array —— Node 对象绝不跨线程。
  */
 import { Edit, Language, Parser, Query, type Node, type Tree } from 'web-tree-sitter';
-import type { StructureCaptureTable, StructureFacet } from './protocol';
+import type { StructureCaptureTable, StructureFacet, StructureRange } from './protocol';
 import {
   KOJO_STRUCTURE_MAX_SYNTAX_FAULTS,
   KOJO_STRUCTURE_MAX_TOKENS,
@@ -1132,8 +1132,20 @@ export class StructureEngine {
    * `doc` = 跨文档隔离号，原样回显。
    *
    * `want`（LAU-1 / v3）：只要这几面（缺省 = 全带）。缺的面**不算**（不是"算了但没结果"）。
+   *
+   * `includedRanges`（LAU-6）：只解这几段（`@原生` 注入的子 parse）。口径是 web-tree-sitter 的
+   * `ParseOptions.includedRanges` —— 输入仍是**整篇文本**，返回的树坐标也仍是**主文档绝对坐标**
+   * （不平移）。区间的取法由调用方写死（整行对齐 + 末行换行收口 + EOF 补虚拟换行，见
+   * `tree-sitter/injection.ts`）；这里只负责把它原样交给解析器。`edit` 那条增量路不接区间
+   * （编辑 + 区间同给没有定义过的语义，由协议环判 `invalid-input`）。
    */
-  parse(doc: KojoStructureDocSeq, version: number, text: string, want?: readonly StructureFacet[]): void {
+  parse(
+    doc: KojoStructureDocSeq,
+    version: number,
+    text: string,
+    want?: readonly StructureFacet[],
+    includedRanges?: readonly StructureRange[],
+  ): void {
     if (this.parser === null) return;
     this.tree?.delete();
     this.tree = null;
@@ -1145,7 +1157,20 @@ export class StructureEngine {
     const started = this.stamp();
     const wallStarted = now();
     try {
-      const next = this.parser.parse(this.reader(text, counters), null);
+      // LAU-6：区间路只改"解哪几段"，不改取字符方式（仍是整篇 + 有界回调）。
+      // 逐格复制成 plain 对象：web-tree-sitter 的 `Range` 是可变形状，契约那侧是 readonly。
+      const options =
+        includedRanges === undefined || includedRanges.length === 0
+          ? undefined
+          : {
+              includedRanges: includedRanges.map((range) => ({
+                startIndex: range.startIndex,
+                endIndex: range.endIndex,
+                startPosition: { row: range.startPosition.row, column: range.startPosition.column },
+                endPosition: { row: range.endPosition.row, column: range.endPosition.column },
+              })),
+            };
+      const next = this.parser.parse(this.reader(text, counters), null, options);
       this.elapsed('parse', started);
       if (next === null) {
         this.fail(version, 'parse', 'all', '解析器没有产出语法树（多半是语言未装配成功）⇒ 结构解析整档停用');

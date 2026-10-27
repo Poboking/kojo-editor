@@ -132,8 +132,31 @@ export function isStructureParseRequest(value: unknown): value is StructureParse
   if (!isFiniteNumber(request.doc) || !isFiniteNumber(request.version)) return false;
   if (request.baseTreeId !== undefined && typeof request.baseTreeId !== 'string') return false;
   if (request.want !== undefined && (!Array.isArray(request.want) || !request.want.every(isStructureFacet))) return false;
-  if (request.includedRanges !== undefined && !Array.isArray(request.includedRanges)) return false;
+  if (request.includedRanges !== undefined) {
+    // LAU-6：区间形状照 `StructureRange` 逐格查（索引与行列都要给，且都不许是 NaN/负数）；
+    // 空数组 = "一个字节都不解"，语法上合法但语义上是调用方的错——由内容闸之外的调用方判。
+    if (!Array.isArray(request.includedRanges) || !request.includedRanges.every(isStructureRange)) return false;
+  }
   return true;
+}
+
+/** `StructureRange` 的逐格闸（§4.1：索引与行列都要给，UTF-16 码元口径） */
+function isStructureRange(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const range = value as {
+    startIndex?: unknown;
+    endIndex?: unknown;
+    startPosition?: { row?: unknown; column?: unknown };
+    endPosition?: { row?: unknown; column?: unknown };
+  };
+  if (!isFiniteNumber(range.startIndex) || !isFiniteNumber(range.endIndex)) return false;
+  if (range.startIndex < 0 || range.endIndex < range.startIndex) return false;
+  const start = range.startPosition;
+  const end = range.endPosition;
+  if (start === null || typeof start !== 'object' || end === null || typeof end !== 'object') return false;
+  if (!isFiniteNumber(start.row) || !isFiniteNumber(start.column)) return false;
+  if (!isFiniteNumber(end.row) || !isFiniteNumber(end.column)) return false;
+  return start.row >= 0 && start.column >= 0 && end.row >= 0 && end.column >= 0;
 }
 
 /**

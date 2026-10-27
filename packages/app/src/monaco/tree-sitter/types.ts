@@ -70,8 +70,9 @@ export interface KojoStructureToken {
   /**
    * 这两格只在 **worker 内部**用（LAU-1）：v3 的 `facets.semantic` 是捕获的扁平投影
    * （`[行, 列, 行, 列, nameIndex, nodeIndex]` + 两张字典），引擎在把捕获折成 token 时
-   * 顺手把名字与节点类型留在 token 上，回话那一层据此压表。宿主侧**不看**它们
-   * （宿主从表里自己按档位表翻，见 `client.ts`）。
+   * 顺手把名字与节点类型留在 token 上，回话那一层据此压表。宿主侧的正规路径**不看**它们
+   * （宿主从表里自己按档位表翻，见 `client.ts`）；唯一例外是 `@原生` 注入层——它把子树的
+   * 捕获名翻成宿主语言的档（LAU-6），见 `kojo2-semantic.ts::injectionTokenSpans`。
    */
   readonly capture?: string;
   readonly node?: string;

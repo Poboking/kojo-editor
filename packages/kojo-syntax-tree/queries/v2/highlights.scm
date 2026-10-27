@@ -82,3 +82,11 @@
 
 ; ---- `@原生` raw 行：整行内嵌 ERB，不参与 2.0 高亮分层 ----
 (native_line) @embedded
+
+; ---- `@原生` 体容器（LAU-6 注入宿主节点） ----
+; `@none` = **不上色**（与 `blank_line` 同口径）：这条捕获的唯一用途是把 `native_body`
+; 节点的绝对起点／终点交给宿主——宿主按 descriptor 的 `injections.hostNode` 认它，
+; 再把"整行对齐的体内区间"作为 `includedRanges` 发给子语言（ERB）的 worker。
+; 为什么不在宿主里另找：v3 的捕获表只回"查到了什么"，节点类型（`nodes` 字典）与行列
+; 是宿主唯一的真相源；没有这条捕获，宿主就得自己解一棵树或按文本猜围栏。
+(native_body) @none

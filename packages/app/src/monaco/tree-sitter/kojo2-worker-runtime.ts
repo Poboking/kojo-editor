@@ -678,7 +678,7 @@ function reasonOf(reason: StructureFailureReason): Kojo2WorkerFailureReason {
   return 'timeout';
 }
 
-/** 扁平捕获表 → `Kojo2Capture[]`（节点类型这一族没有，位置从行列还原） */
+/** 扁平捕获表 → `Kojo2Capture[]`（位置从行列还原；LAU-6 起节点类型也从 `nodes` 字典还原） */
 function capturesOf(table: StructureCaptureTable | undefined): Kojo2Capture[] | null {
   if (table === undefined) return null;
   const out: Kojo2Capture[] = [];
@@ -688,6 +688,7 @@ function capturesOf(table: StructureCaptureTable | undefined): Kojo2Capture[] | 
       name: table.names[spans[i + 4]!] ?? '',
       startPosition: { row: spans[i]!, column: spans[i + 1]! },
       endPosition: { row: spans[i + 2]!, column: spans[i + 3]! },
+      nodeType: table.nodes[spans[i + 5]!] ?? '',
     });
   }
   return out;

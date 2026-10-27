@@ -1,3 +1,4 @@
+import type { CoreDiagnosticCode } from '@kojo/kojo-core';
 import type { KojoStructureCapability, KojoStructureErrorStage } from './types';
 /**
  * 结构层的**回落台账**（铁律 4 在这一批的具体形状：回落必须看得见，但一次就够）。
@@ -34,6 +35,14 @@ export interface StructureDegradation {
    * 说成"这一面退回了原来的做法"，作者会以为整层着色没了，然后去查一个不存在的故障。
    */
   readonly partial?: boolean;
+  /**
+   * 这条回落对应的 **core 诊断码**（LAU-6 起 additive；缺省 = 没有码，只有人话）。
+   *
+   * 为什么两种说法并存：作者面通知只说人话（`degradationNoticeText`），机器对账要稳定码
+   * （`core/injection/child-failed` 这种闭集成员）。两处同时出现不是两套口径——
+   * 码只进 `console.warn` 的括号与订阅方手上的字段，**不进**作者面正文。
+   */
+  readonly code?: CoreDiagnosticCode;
 }
 
 /** 整档回落（回词法层）与单面回落的人话说法；作者面不出现任何机器词 */
@@ -74,7 +83,9 @@ export function reportStructureDegradation(degradation: StructureDegradation): b
   if (reported.size > 100) reported = new Set();
   reported.add(key);
   console.warn(
-    `[kojo-structure] ${degradation.capability}/${degradation.stage} 回落：${degradation.message}`,
+    `[kojo-structure] ${degradation.capability}/${degradation.stage} 回落${
+      degradation.code === undefined ? '' : `（${degradation.code}）`
+    }：${degradation.message}`,
   );
   for (const listener of [...listeners]) {
     try {

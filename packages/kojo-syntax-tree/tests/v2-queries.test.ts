@@ -174,7 +174,8 @@ const NO_HIGHLIGHT_WHITELIST: Readonly<Record<string, string>> = {
   speech_close: '台词收尾记号：零宽，无可视文本',
   interp_body: '插值体内文：整个 interpolation 已上 @string.special，内部不拆（语义层再涂）',
   interp_close: '插值右花括号记号：零宽，无可视文本',
-  native_body: '`@原生` 围栏体容器：体内逐行由 native_line 上 @embedded',
+  // LAU-6：`native_body` 由 `(native_body) @none` 捕获（@none = 不上色，只把节点区间交给
+  // 注入层做子 parse）⇒ 不再是"无捕获容器"，从白名单移出。
   indent: '缩进记号：scanner 产出的零宽节点，无可视文本',
   dedent: '回退缩进记号：scanner 产出的零宽节点，无可视文本',
 };

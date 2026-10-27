@@ -43,12 +43,15 @@
  * **不**在这里 dispose）。
  */
 import type * as Monaco from './entry';
-import { KOJO2_LANGUAGE_ID } from './kojo2-language';
+import { KOJO2_INJECTIONS, KOJO2_LANGUAGE_ID } from './kojo2-language';
+import { reportStructureDegradation } from './tree-sitter/fallback';
 import type {
   Kojo2FoldRange,
   Kojo2FoldsReply,
   Kojo2WorkerResult,
 } from './tree-sitter/kojo2-worker-protocol';
+import type { InjectionSpec } from './tree-sitter/structure-runtime';
+import type { InjectionHost, InjectionOutcome, InjectionRunRequest } from './tree-sitter/injection';
 
 /** 折叠区间上限不变式：Monaco 的 `foldingMaximumRegions` 缺省 5,000，worker 侧已按 4,000 截过 */
 type FoldRange = Kojo2FoldRange;
@@ -128,12 +131,45 @@ export interface Kojo2FoldingProviderDeps {
   readonly getClient?: () => Kojo2FoldingWorkerClient | Promise<Kojo2FoldingWorkerClient>;
   /** 告警出口（缺省 `console.warn`；测试可收账） */
   readonly warn?: (message: string) => void;
+  /**
+   * `@原生` 注入声明（LAU-6；缺省 = `KOJO2_INJECTIONS`）。空数组 = 不合并子树折叠。
+   *
+   * 折叠的子树**不自己找宿主节点**：宿主节点账由语义 provider 那一趟写下（它本来每篇都跑），
+   * 这里只按 **model + 版本号** 取回同一份（见 `injection.ts::recallInjectionHosts`）。
+   * 取不回（这一版语义面还没跑过）= 只给主树折叠，不猜。
+   */
+  readonly injections?: readonly InjectionSpec[];
+  /** 取回宿主节点账（测试注入缝；缺省 = 动态 import `injection.ts`） */
+  readonly recallInjectionHosts?: (
+    model: Monaco.editor.ITextModel,
+    version: number,
+  ) => Promise<readonly InjectionHost[] | null>;
+  /** 子 parse 执行器（测试注入缝；缺省 = 动态 import `injection.ts`，与语义面共用同一趟） */
+  readonly runInjection?: (model: Monaco.editor.ITextModel, request: InjectionRunRequest) => Promise<InjectionOutcome>;
 }
 
 /** 缺省客户端：懒到第一次真折叠才把 worker 模块拉进来 */
 async function defaultWorkerClient(): Promise<Kojo2FoldingWorkerClient> {
   const module = await import('./tree-sitter/kojo2-worker-runtime');
   return module.getKojo2WorkerClient();
+}
+
+/** 缺省宿主节点账：动态 import 注入模块（静态图上限，理由同语义面） */
+async function defaultRecallInjectionHosts(
+  model: Monaco.editor.ITextModel,
+  version: number,
+): Promise<readonly InjectionHost[] | null> {
+  const module = await import('./tree-sitter/injection');
+  return module.recallInjectionHosts(model, version);
+}
+
+/** 缺省子 parse 执行器：与语义面**共用同一趟**（`runInjectionForModel` 的 model+版本缓存） */
+async function defaultRunInjection(
+  model: Monaco.editor.ITextModel,
+  request: InjectionRunRequest,
+): Promise<InjectionOutcome> {
+  const module = await import('./tree-sitter/injection');
+  return module.runInjectionForModel(model, request);
 }
 
 /** provider + 它自己的资源账（Monaco 的 provider 接口没有 dispose 位） */
@@ -160,6 +196,9 @@ export function createKojo2FoldingProvider(
 ): Kojo2FoldingProviderHandle {
   const getClient = deps.getClient ?? defaultWorkerClient;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
+  const injectionSpecs = deps.injections ?? KOJO2_INJECTIONS;
+  const recallInjectionHosts = deps.recallInjectionHosts ?? defaultRecallInjectionHosts;
+  const runInjection = deps.runInjection ?? defaultRunInjection;
   /** model → 上一版的树号与区间（`WeakMap`：标签关掉、model 释放后自然可回收） */
   let cache = new WeakMap<Monaco.editor.ITextModel, ModelCacheEntry>();
   let disposed = false;
@@ -193,7 +232,51 @@ export function createKojo2FoldingProvider(
       cache.set(model, { versionId, treeId: result.treeId ?? null, ranges: EMPTY_RANGES });
       return EMPTY_RANGES;
     }
-    const ranges = toMonacoFoldingRanges(result.value.folds, model.getLineCount());
+    let folds: readonly FoldRange[] = result.value.folds;
+    // LAU-6：子树折叠（体内 IF/ENDIF 一类）与主树折叠**并集**。宿主节点账来自语义面那一趟
+    // （同一 model 同一版本）；取不回就只给主树折叠——不为了折叠再问一遍 kojo2 worker。
+    if (injectionSpecs.length > 0) {
+      try {
+        const hosts = await recallInjectionHosts(model, versionId);
+        if (hosts !== null && hosts.length > 0) {
+          const outcome = await runInjection(model, {
+            text,
+            version: versionId,
+            specs: injectionSpecs,
+            hosts,
+          });
+          if (outcome.ok) {
+            folds = [...folds, ...outcome.folds];
+          } else {
+            warnOnce(
+              warn,
+              `injection:${outcome.reason}`,
+              `[kojo2-folding] 注入子解析不可用（${outcome.reason}）：${outcome.message} ⇒ 只给主树折叠`,
+            );
+            reportStructureDegradation({
+              capability: 'folds',
+              stage: 'parse',
+              message: `@原生 体内的子解析这次没顶上（${outcome.reason}）：${outcome.message}`,
+              code: 'core/injection/child-failed',
+            });
+          }
+        }
+      } catch (error: unknown) {
+        warnOnce(
+          warn,
+          'injection:internal',
+          `[kojo2-folding] 注入折叠内部异常（本轮只给主树折叠）：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      if (disposed) return EMPTY_RANGES;
+      if (model.isDisposed()) {
+        cache.delete(model);
+        return EMPTY_RANGES;
+      }
+    }
+    const ranges = toMonacoFoldingRanges(folds, model.getLineCount());
     cache.set(model, { versionId, treeId: result.value.treeId, ranges });
     return ranges;
   };
