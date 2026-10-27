@@ -444,7 +444,7 @@ describe('erb-parser 插件', () => {
       const repaired = new Promise<void>((resolve) => {
         bus.once('kojo.functionChanged', () => resolve());
       });
-      expect(parser.referencesTo('B')).toEqual([]); // 保守：不知道就是空，不编一份旧名单
+      expect(parser.referencesTo!('B')).toEqual([]); // 保守：不知道就是空，不编一份旧名单
       await repaired;
       expect(parser.currentIndex()!.references).toBeDefined();
     });
