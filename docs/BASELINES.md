@@ -98,3 +98,20 @@ local-no-write 196 / missing-var 80 / 其余 <20。
 **2,285 口上语料文件 / 4,385 工程全量文件，0 字节差异**。
 编码分布 utf-8-bom 4,341 + utf-8 44（无 Shift-JIS）；换行 lf 4,382 + crlf 3。
 Shift-JIS 变体由合成用例覆盖（真实语料无）。
+
+## 8. ERB 结构层首帧基线（LAU-1，2026-10-27）
+
+探针：`tools/structure-first-frame.mjs`（跑法 `node --experimental-transform-types tools/structure-first-frame.mjs`）。
+打的是**生产代码**：真 `startStructureWorker`（协议 v3）＋真 ERB 资产（两枚 wasm、三份运行时查询、
+`erbCaptureTier` / `erbIndentPattern`）＋真 `StructureClient`；唯一替身是 `Worker` 本身（进程内桥）。
+档 = `packages/erb-syntax-tree/tests/fixtures/valid-structure.erb`（**63 行 / 1,192 码元**；语料目录不在位时用它，
+换档设 `KOJO_FIRST_FRAME_FIXTURE=<path>`）。3 轮，Windows / Node 24：
+
+| 段 | 读数 | 口径 |
+|---|---|---|
+| `open → ready` | 中位 **82.6 ms**（81.2–112.2；首跑冷 115.3） | 线程 + `Parser.init`（运行时 wasm）+ `Language.load`（ERB 文法）+ 三份查询编译 |
+| `ready → 首屏着色` | 中位 **3.9 ms**（3.7–4.0；首轮冷 51.0） | `ready` → 宿主手里有第一批 token（`facets.semantic` 解成 token 数组）。**不含** Monaco 的 encode 与那一帧上屏（那一段要真壳） |
+
+读数要点：首帧的大头在**装配**（~83 ms，约 95%），着色那一段在查询冷启后是毫秒级；首轮 51 ms 是
+"第一次正经跑三份查询"的冷查，不是每份文档的常态。探针收尾会撞 web-tree-sitter 的 Zone OOM
+（PITFALLS 138/209）⇒ 结论只从 stdout 取，`rc` 不作判据。
