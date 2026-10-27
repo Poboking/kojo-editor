@@ -397,7 +397,9 @@ function MenuPanel(props: MenuPanelProps): ReactElement {
                   else itemRefs.current.set(item.id, el);
                 }}
                 {...(item.disabledReason === undefined
-                  ? {}
+                  ? item.title === undefined
+                    ? {}
+                    : { title: item.title }
                   : { title: item.disabledReason, 'aria-description': item.disabledReason })}
                 onMouseEnter={() => {
                   if (hasChildren) {

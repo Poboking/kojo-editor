@@ -10,6 +10,7 @@ import {
   activateTab,
   closeGroup,
   closeTabsInGroup,
+  groupsLayoutSignature,
   initialEditorGroups,
   moveTabBetweenGroups,
   openInActiveGroup,
@@ -532,5 +533,39 @@ describe('moveTabBetweenGroups · 预览态与无操作', () => {
   it('排列方向原样保留', () => {
     const s: EditorGroupsState = { ...twoGroups(), orientation: 'column' };
     expect(moveTabBetweenGroups(s, 'b', 'g1', 'g2', 0, new Set()).orientation).toBe('column');
+  });
+});
+
+/* ---------------- 布局签名（WS-06：会话落盘的依赖判据） ---------------- */
+
+describe('groupsLayoutSignature', () => {
+  it('同内容快照 ⇒ 同签名（拿它当 effect 依赖不会每帧都算"变了"）', () => {
+    const a = openInActiveGroup(initialEditorGroups(), 'C:/a.ERB');
+    const copy: EditorGroupsState = {
+      orientation: a.orientation,
+      activeGroupId: a.activeGroupId,
+      groups: a.groups.map((g) => ({ id: g.id, tabs: [...g.tabs], active: g.active })),
+    };
+    expect(copy).not.toBe(a);
+    expect(groupsLayoutSignature(copy)).toBe(groupsLayoutSignature(a));
+  });
+
+  it('只翻方向 / 只换焦点组 ⇒ 签名也变（这两类变化以前不落盘）', () => {
+    const a = twoGroups();
+    expect(groupsLayoutSignature(setGroupsOrientation(a, 'column'))).not.toBe(groupsLayoutSignature(a));
+    expect(groupsLayoutSignature(setActiveGroup(a, a.groups[1]!.id))).not.toBe(groupsLayoutSignature(a));
+  });
+
+  it('标签序 / 激活标签变化 ⇒ 签名也变（标签签名是持久化字段的一部分）', () => {
+    const a = openInActiveGroup(initialEditorGroups(), 'C:/a.ERB');
+    const b = openInActiveGroup(a, 'C:/b.ERB');
+    expect(groupsLayoutSignature(b)).not.toBe(groupsLayoutSignature(a));
+  });
+
+  it('组数变化 ⇒ 签名变（拆分 / 关组都算布局变化）', () => {
+    const a = openInActiveGroup(initialEditorGroups(), 'C:/a.ERB');
+    const b = splitActiveRight(a);
+    expect(groupsLayoutSignature(b)).not.toBe(groupsLayoutSignature(a));
+    expect(groupsLayoutSignature(closeGroup(b, b.activeGroupId))).not.toBe(groupsLayoutSignature(b));
   });
 });

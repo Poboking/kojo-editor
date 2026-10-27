@@ -319,6 +319,25 @@ export function serializeGroups(state: EditorGroupsState): GroupsSnapshot {
 }
 
 /**
+ * 组态的**布局签名**（WS-06：会话落盘的依赖判据）。
+ *
+ * 覆盖 `serializeGroups` 的全部持久化字段（方向 / 焦点组 / 每组 id、激活、标签序），
+ * 而不用对象身份做依赖：`setEditorGroups` 每次都给新对象，拿它当 effect 依赖等于
+ * "每帧都算变了"——签名相等才是真的没变（焦点、方向、组结构单独变化时才落盘）。
+ *
+ * 分隔符用控制字符：路径里不会出现，标签拼接不会造出假命中。
+ */
+export function groupsLayoutSignature(state: EditorGroupsState): string {
+  return [
+    state.orientation,
+    state.activeGroupId,
+    state.groups
+      .map((g) => `${g.id}\u0001${g.active ?? ''}\u0001${g.tabs.join('\u0002')}`)
+      .join('\u0003'),
+  ].join('\u0004');
+}
+
+/**
  * 快照 ⇒ 组态（MM-9）：**损坏容忍**——任何不合法形态回 null，由调用方维持现状
  * （会话数据丢了可以重开，绝不能炸启动——与 sanitizeSessionRecord 同一门风）。
  * 规则：
@@ -359,4 +378,137 @@ export function restoreGroups(raw: unknown): EditorGroupsState | null {
   const focusIdx = drafts.findIndex((d) => typeof d.oldId === 'string' && d.oldId === r.activeGroupId);
   const activeGroupId = groups[focusIdx >= 0 ? focusIdx : 0]!.id;
   return { groups, activeGroupId, orientation };
+}
+
+
+/* ================= 分屏比例（WS-06：会话恢复完整批） =================
+ *
+ * 为什么住在这里而不是单开模块：分屏比例就是**组态的一部分**（组数 - 1 条分隔条），
+ * 而且三个消费方（session-store 持久化 / App 状态 / ProjectView 渲染）都要这同一把尺子。
+ * 单开会多一枚文件进开机静态图（`ps10-eager-graph` 的文件闸顶格零余量），
+ * 规则本身也没有独立存在的必要。
+ *
+ * 编码口径（每条都有单测钉着）：
+ * - 数组长度 = 组数 - 1：`sizes[i]` 是**第 i 组**占的份额，**最后一组吃剩余**
+ *   （`1 - Σ sizes`）——与「n 组有 n-1 条分隔条」一一对应，单组 = 空数组；
+ * - 每个份额夹在 `[SPLIT_MIN_RATIO, 1 - SPLIT_MIN_RATIO]` 且总和 ≤ `1 - SPLIT_MIN_RATIO`
+ *   （保证最后一组至少剩一成；CSS 里还有 200px / 120px 的最小尺寸兜底，这里是数据面同款闸）；
+ * - **损坏容忍**：形状不对（非数组 / 长度不符 / 有非有限数或非正数）一律回 `null`，
+ *   由调用方退回均分——会话数据丢了可以重开，绝不能炸启动（与 `sanitizeSessionRecord` 同门风）。
+ */
+
+/** 单条份额的下限（两组各至少留一成，避免拖出"看不见的组"） */
+export const SPLIT_MIN_RATIO = 0.1;
+
+/** 单组（没有分隔条）的恒等空数组（引用恒定，别每帧造新数组） */
+export const EMPTY_SPLIT_SIZES: readonly number[] = [];
+
+/** 均分份额（组数 ≤ 1 ⇒ 空数组） */
+export function equalSplitSizes(groupCount: number): readonly number[] {
+  if (!Number.isFinite(groupCount) || groupCount < 2) return EMPTY_SPLIT_SIZES;
+  const size = 1 / groupCount;
+  return Array.from({ length: groupCount - 1 }, () => size);
+}
+
+const EPS = 1e-6;
+
+/** 一条份额数组是否已经是合法归一形态（长度对、逐条在区间内、剩余够最后一组） */
+function isNormalizedSizes(raw: unknown, count: number): raw is readonly number[] {
+  if (!Array.isArray(raw) || raw.length !== count) return false;
+  let sum = 0;
+  for (const v of raw) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return false;
+    if (v < SPLIT_MIN_RATIO - EPS || v > 1 - SPLIT_MIN_RATIO + EPS) return false;
+    sum += v;
+  }
+  return sum > 0 && sum <= 1 - SPLIT_MIN_RATIO + EPS;
+}
+
+/**
+ * 校验并归一化一条份额数组（**损坏容忍**）。
+ *
+ * @param raw        盘上 / 外部给的原值
+ * @param groupCount 当前的组数（份额长度必须恰为 `groupCount - 1`）
+ * @returns 归一化后的新数组；组数 ≤ 1、长度不符、含非法条目 ⇒ null
+ */
+export function sanitizeSplitSizes(raw: unknown, groupCount: number): number[] | null {
+  if (!Number.isFinite(groupCount) || groupCount < 2) return null;
+  if (!Array.isArray(raw) || raw.length !== groupCount - 1) return null;
+  const out: number[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null;
+    out.push(Math.max(SPLIT_MIN_RATIO, Math.min(1 - SPLIT_MIN_RATIO, v)));
+  }
+  const sum = out.reduce((a, b) => a + b, 0);
+  if (!(sum > 0)) return null;
+  // 总和超过「最后一组的下限预算」⇒ 等比缩回（末组恰好留 SPLIT_MIN_RATIO）
+  const budget = 1 - SPLIT_MIN_RATIO;
+  if (sum > budget) {
+    const k = budget / sum;
+    for (let i = 0; i < out.length; i++) out[i] = out[i]! * k;
+  }
+  return out;
+}
+
+/**
+ * 组数变化时的长度对齐（App / ProjectView 共用）。
+ *
+ * 策略（刻意简单、可预期）：
+ * - 组数 ≤ 1 ⇒ 空数组；
+ * - 旧份额合法且长度正好对上 ⇒ 原样沿用（**引用也沿用**，避免无谓的 setState 抖动）；
+ * - **长度对不上（拆分 / 关组 / 恢复到别的组数）⇒ 整份退回均分**——不把旧比例
+ *   硬套到新组上：我们并不知道作者是从哪一组拆出来的，"猜一半留一半"只会让某组
+ *   无端变窄；均分是唯一不撒谎的缺省。
+ */
+export function alignSplitSizes(
+  prev: readonly number[] | null | undefined,
+  groupCount: number,
+): readonly number[] {
+  if (!Number.isFinite(groupCount) || groupCount < 2) return EMPTY_SPLIT_SIZES;
+  if (prev !== null && prev !== undefined && isNormalizedSizes(prev, groupCount - 1)) return prev;
+  return sanitizeSplitSizes(prev, groupCount) ?? equalSplitSizes(groupCount);
+}
+
+/** 第 `index` 组占的份额（末组吃剩余）；组数/下标越界 ⇒ 均分兜底值 */
+export function groupShareOf(
+  sizes: readonly number[] | null | undefined,
+  groupCount: number,
+  index: number,
+): number {
+  const list = alignSplitSizes(sizes, groupCount);
+  if (index >= 0 && index < list.length) return list[index]!;
+  const last = 1 - list.reduce((a, b) => a + b, 0);
+  return last > 0 ? last : 1 / Math.max(1, groupCount);
+}
+
+/** 渲染侧的 flex 简写（`1 1 <pct>%`：可涨可缩，基准 = 归一份额） */
+export function splitFlexOf(ratio: number): string {
+  const pct = Number.isFinite(ratio) && ratio > 0 ? ratio * 100 : 0;
+  return `1 1 ${pct.toFixed(4)}%`;
+}
+
+/**
+ * 拖拽落定时的**像素 → 份额**换算：按各组实际宽度（column 下是高度）占比归一。
+ * 最后一段总是"剩余"，故只取前 n-1 组的占比；分隔条自身的 4px 不计入（只量组）。
+ * 全部量不出来（元素都卸了）⇒ 空数组（调用方保持现状）。
+ */
+export function splitSizesFromWidths(widths: readonly number[]): readonly number[] {
+  const usable = widths.map((w) => (typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : 0));
+  if (usable.length < 2) return EMPTY_SPLIT_SIZES;
+  const total = usable.reduce((a, b) => a + b, 0);
+  if (!(total > 0)) return EMPTY_SPLIT_SIZES;
+  const raw = usable.slice(0, usable.length - 1).map((w) => w / total);
+  return sanitizeSplitSizes(raw, usable.length) ?? equalSplitSizes(usable.length);
+}
+
+/** 两条份额是否等价（长度 + 逐条容差）；用于"值没变就不 setState" */
+export function splitSizesEqual(
+  a: readonly number[] | null | undefined,
+  b: readonly number[] | null | undefined,
+): boolean {
+  const x = a ?? EMPTY_SPLIT_SIZES;
+  const y = b ?? EMPTY_SPLIT_SIZES;
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (Math.abs(x[i]! - y[i]!) > EPS) return false;
+  return true;
 }

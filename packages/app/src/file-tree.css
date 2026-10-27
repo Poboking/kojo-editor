@@ -111,6 +111,57 @@ li > .tree-files.nested:has(.tree-file.active)::before {
 .file-tree .tree-group[data-open='0'] > .tree-files {
   margin-bottom: 0;
 }
+/* 根分组头行（WS-08）：折叠按钮 + 「只读/可写」标签 + 移除按钮并排。
+   折叠按钮仍是行内唯一的主点击区（flex:1），行尾两颗小件不吃它的宽度。 */
+.file-tree .tree-group-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.file-tree .tree-group-head > .tree-group-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 「只读 / 可写」标签：与状态栏可写胶囊同色域（只读灰、可写绿），文字本身已说明，
+   不靠颜色单独承载语义。 */
+.tree-root-tag {
+  flex: 0 0 auto;
+  margin-left: var(--space-0);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 16px;
+  white-space: nowrap;
+}
+.tree-root-tag.is-writable {
+  color: var(--green, #7ec699);
+  border-color: currentColor;
+}
+/* 行尾「移除」：静息半透明、悬停提亮（与 `.editor-group-close` 同款克制度） */
+.tree-root-remove {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  /* 方形命中区用 aspect-ratio 定，不写 height：本切片有一条"不许声明带长度 height"
+     的密度红线（`motion-surface` 守的），这颗按钮本来也不参与行高，别去碰那条判据。 */
+  aspect-ratio: 1 / 1;
+  margin-left: var(--space-0);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.tree-root-remove:hover,
+.tree-root-remove:focus-visible {
+  opacity: 1;
+  background: var(--wash-gray);
+}
 
 /* 冷开骨架：替掉空白，读数回来时原地换成真行，整棵树一跳不跳。
    ⚠ 这一格在 `.file-tree` **之外**（索引未就绪时早就 return 了，根 div 压根还没挂），

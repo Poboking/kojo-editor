@@ -87,6 +87,11 @@ export interface Props {
    */
   onDiskEntriesChanged?: (delta: { readonly changed: readonly string[]; readonly removed: readonly string[] }) => void;
   /**
+   * 「从工作区移除」入口（WS-08）：附加根只能加不能减的欠账，入口在根分组头行尾。
+   * 缺省 ⇒ 不画那颗按钮（没有落地面就不摆一个点了没反应的按钮）。
+   */
+  onRemoveExtraRoot?: (dir: string) => void;
+  /**
    * 「比较已选文件」（D 批）：在多选集恰为两个文件、且右击的行在其中时，菜单项出现，
    * 落地交给宿主——由它把 `ui.diffView.open` 发进总线（树不认识 diff 视图，也不读盘）。
    *

@@ -57,6 +57,12 @@ export interface ContextMenuItem {
    */
   readonly disabledReason?: string;
   /**
+   * 悬停提示（additive；可用的项才有意义）。给"label 必须短、但完整信息不能丢"的场合，
+   * 例如最近项目：label 只放目录末段，完整路径在这里。禁用项的提示固定是 `disabledReason`
+   * （两处同时写会让"为什么按不下去"被路径盖住）。
+   */
+  readonly title?: string;
+  /**
    * 分组标题：**连续**同 `group` 的项归一段，段前画一条不可聚焦的小节头。
    * 与 `dividerBefore` 的区别是语义：分组有名字，分隔线只是断行。
    */

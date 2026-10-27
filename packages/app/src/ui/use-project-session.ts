@@ -21,7 +21,12 @@ import {
   isProjectDetectionError,
   notGameDirMessage,
 } from './drag-drop';
-import { restoreGroups, serializeGroups, type EditorGroupsState } from './editor-groups';
+import {
+  alignSplitSizes,
+  restoreGroups,
+  serializeGroups,
+  type EditorGroupsState,
+} from './editor-groups';
 import { reportDictionaryStatus, variableSchemaFor } from './dictionary-notice-ledger';
 import type { Notify } from './NotificationCenter';
 import { closeProjectSession } from './project-close';
@@ -31,6 +36,9 @@ import { resetSearch } from './search-store';
 import {
   createSessionFlushScheduler,
   emptySessionRecord,
+  planSessionRestore,
+  probeExistingPaths,
+  sanitizeExtraRoots,
   saveSessionRecord,
   sessionProjectOf,
   upsertSessionProject,
@@ -65,8 +73,8 @@ import {
  * - `recoverCrash` / `resumeSession` / `discardCrash`：欢迎页入口，留在 App；
  * - 会话 flush 的**触发位置**：`useSessionFlush` 必须仍在 App 原来那两个 effect 的位置
  *   调用（效果次序不变）；本文件只提供实现。
- * - 分屏 / 布局变化是否应立刻落盘：现状是「tabs/active/pinned 变化才 schedule」，
- *   布局快照（groups）只在已有的 schedule 快照里顺带带上。未改语义，仅记录。
+ * - 布局变化是否落盘：**WS-06 起已改**——方向 / 焦点组 / 组结构 / 分屏比例 / 附加根
+ *   任一变化都会 schedule（签名与 payload 见 `useSessionFlush`），不再"只在标签变化时顺带带"。
  */
 
 /** React ref 的最小形状（避免把 React 类型扩散到参数面） */
@@ -131,6 +139,13 @@ export interface ProjectSessionHost {
   readonly setPendingProjectSwitch: (pending: { dir: string; paths: ReadonlySet<string> } | null) => void;
   readonly setEditorGroups: Dispatch<SetStateAction<EditorGroupsState>>;
   readonly setPinnedPaths: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  /**
+   * 分屏比例（WS-06）：恢复会话时由本 hook 一并写回（与组态同源、同一拍提交，
+   * 免得 App 的对齐副作用把恢复出来的比例当"长度不符"重置成均分）。
+   */
+  readonly setSplitSizes: Dispatch<SetStateAction<readonly number[]>>;
+  /** 会话级附加根（WS-08）：项目打开时按记录恢复，独立于标签恢复 */
+  readonly setExtraRoots: Dispatch<SetStateAction<readonly string[]>>;
   readonly setReveal: (reveal: RevealTarget | null) => void;
   readonly pendingApproval: GameProject | null;
 }
@@ -143,35 +158,62 @@ export interface ProjectSession {
 }
 
 /**
- * 会话标签集装回（退出/崩溃守护批 + MM-9 组态持久化）。原注释见 App.tsx 历史：
- * 恢复件追加在尾部并激活第一个恢复件；pinned 与 tabs 取交集；无记录且无恢复件 =
- * 保持空，绝不凭空造标签。`groups` 合法则整态换成恢复出的组态，再贴标签集。
+ * 会话标签集装回（退出/崩溃守护批 + MM-9 组态持久化 + WS-06 盘上校验）。
+ * 原注释见 App.tsx 历史：恢复件追加在尾部并激活第一个恢复件；pinned 与 tabs 取交集；
+ * 无记录且无恢复件 = 保持空，绝不凭空造标签。`groups` 合法则整态换成恢复出的组态，
+ * 再贴标签集。
+ *
+ * WS-06 的补丁：**不再直接信任记录**——记录可能比盘上事实旧（文件被删/移动）。
+ * 合并后的标签逐条过 `kernel.io.exists`（有界并发），缺失的剔除、剔除数量给一句
+ * 可见说明；布局/orientation 仍照恢复（只要还剩标签）。判据全部住在
+ * `session-restore.ts` 的纯函数里（`planSessionRestore` / `probeExistingPaths`），
+ * 本 hook 只负责"取记录 → 探盘 → 落状态 → 出声"。
  */
 function useRestoreSessionTabs(
+  kernel: Kernel | null,
   sessionRecordRef: RefLike<SessionRecord>,
+  notify: Notify,
   setEditorGroups: Dispatch<SetStateAction<EditorGroupsState>>,
   setPinnedPaths: Dispatch<SetStateAction<ReadonlySet<string>>>,
-): (dir: string, recovered: readonly string[]) => void {
+  setSplitSizes: Dispatch<SetStateAction<readonly number[]>>,
+): (dir: string, recovered: readonly string[]) => Promise<void> {
   return useCallback(
-    (dir: string, recovered: readonly string[]) => {
+    async (dir: string, recovered: readonly string[]) => {
       const rec = sessionProjectOf(sessionRecordRef.current, dir);
       const restored = rec?.groups !== undefined ? restoreGroups(rec.groups) : null;
       const tabs = [...(rec?.tabs ?? [])];
       for (const p of recovered) if (!tabs.includes(p)) tabs.push(p);
       if (tabs.length === 0) return;
-      const pinned = new Set((rec?.pinned ?? []).filter((p) => tabs.includes(p)));
-      const active = recovered[0] ?? (rec?.active && tabs.includes(rec.active) ? rec.active : tabs[0] ?? null);
+      // 探盘：记录标签 ∪ 组态快照里的标签（多组时两者不一定相等），有界并发
+      const candidates = [...new Set([...tabs, ...(restored?.groups.flatMap((g) => g.tabs) ?? [])])];
+      const exists = kernel ? (p: string) => kernel.io.exists(p) : async () => true;
+      const alive = await probeExistingPaths(candidates, exists);
+      const plan = planSessionRestore({
+        tabs: rec?.tabs ?? [],
+        active: rec?.active ?? null,
+        pinned: rec?.pinned ?? [],
+        groups: restored,
+        recovered,
+        exists: (p) => alive.has(p),
+      });
+      if (plan.note !== null) notify({ kind: 'info', message: plan.note });
+      if (plan.focusTabs.length === 0) return; // 全缺：维持空会话（不恢复空壳组）
       setEditorGroups((prev) => {
-        const base = restored ?? prev;
+        const base = plan.groups ?? prev;
         return {
           ...base,
-          groups: base.groups.map((g) => (g.id === base.activeGroupId ? { ...g, tabs, active } : g)),
+          groups: base.groups.map((g) =>
+            g.id === base.activeGroupId ? { ...g, tabs: plan.focusTabs, active: plan.active } : g,
+          ),
         };
       });
-      setPinnedPaths(pinned);
+      setPinnedPaths(new Set(plan.pinned));
+      // 分屏比例（WS-06）：与 groups 快照同源；长度对不上由 alignSplitSizes 兜成均分
+      if (plan.groups !== null) setSplitSizes(alignSplitSizes(rec?.splitSizes, plan.groups.groups.length));
+      else setSplitSizes([]);
     },
-    // 与搬迁前同口径：ref 与 useState setter 都稳定，回调身份恒定
-    [],
+    // 与搬迁前同口径：ref 与 useState setter 都稳定，回调身份恒定（kernel/notify 同源）
+    [kernel, notify, setEditorGroups, setPinnedPaths, setSplitSizes],
   );
 }
 
@@ -201,11 +243,20 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
     setPendingProjectSwitch,
     setEditorGroups,
     setPinnedPaths,
+    setSplitSizes,
+    setExtraRoots,
     setReveal,
     pendingApproval,
   } = host;
 
-  const restoreSessionTabs = useRestoreSessionTabs(sessionRecordRef, setEditorGroups, setPinnedPaths);
+  const restoreSessionTabs = useRestoreSessionTabs(
+    kernel,
+    sessionRecordRef,
+    notify,
+    setEditorGroups,
+    setPinnedPaths,
+    setSplitSizes,
+  );
 
   /**
    * 宿主这一半边的写域事实（WRITE-ADMIT-SPLIT 出路①）：`{dir, grant, reason}`。
@@ -304,7 +355,11 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         // 切回、崩溃恢复合并，走的是同一条路
         if (project?.rootDir !== dir) {
           resetProjectUiState();
-          restoreSessionTabs(dir, wantRecovery ? recoveredPaths() : []);
+          // WS-08：附加根独立于标签恢复（标签全关但根还在的项目也回得来）；
+          // 记录里的根已过绝对路径 / 去重 / 上限清洗，这里再按项目根剔一次自我指涉。
+          setExtraRoots(sanitizeExtraRoots(sessionProjectOf(sessionRecordRef.current, dir)?.extraRoots, dir));
+          // WS-06：恢复前逐条探盘，缺失标签剔除（剔了会出声）
+          await restoreSessionTabs(dir, wantRecovery ? recoveredPaths() : []);
         } else {
           // 同目录重开：标签保住（keepView），激活与定位清掉——清的是**每组**的激活
           // （多组都还在，激活态一并回空态，与单组时代语义一致）
@@ -553,14 +608,25 @@ export interface SessionFlushOptions {
   readonly openTabs: readonly string[];
   readonly activeFile: string | null;
   readonly pinnedPaths: ReadonlySet<string>;
+  /**
+   * 组态**布局签名**（WS-06）：方向 / 焦点组 / 每组 id、激活、标签序的稳定签名。
+   * 只改焦点、只翻方向、只动组结构也各算一次"布局变了"——此前这些变化一律不落盘
+   * （`openTabs` 是焦点组的投影，换个焦点组而标签相同时它可能一字不变）。
+   */
+  readonly layoutSignature: string;
+  /** 分屏比例（WS-06）：拖完分隔条也要落盘；payload 直接带上当前值 */
+  readonly splitSizes: readonly number[];
+  /** 会话级附加根（WS-08）：加/减根都要落盘，重启后根还在 */
+  readonly extraRoots: readonly string[];
 }
 
 /**
  * 会话标签集落盘 + 拆除强刷（原 App.tsx 两个 effect，位置由 App 决定）。
- * 判据与原实现逐字一致：
+ * 判据：
  * - debounce 600ms，写 kernel 全局存储；欢迎页（project null）不写；
+ * - **标签 / 焦点 / 方向 / 组结构 / 分屏比例 / 附加根**任一变化都 schedule（WS-06/08）；
  * - 项目拆除 / kernel 更替 / 卸载：layout 相同步 flushNow，防抖窗口里的最后一拍不丢；
- * - 快照由 schedule 那一刻的 ref 值构成，关项目 reset 之后不会再回读现场。
+ * - 快照由 schedule 那一刻的值构成，关项目 reset 之后不会再回读现场。
  */
 export function useSessionFlush(options: SessionFlushOptions): void {
   const {
@@ -573,6 +639,9 @@ export function useSessionFlush(options: SessionFlushOptions): void {
     openTabs,
     activeFile,
     pinnedPaths,
+    layoutSignature,
+    splitSizes,
+    extraRoots,
   } = options;
 
   useEffect(() => {
@@ -583,8 +652,10 @@ export function useSessionFlush(options: SessionFlushOptions): void {
       tabs: openTabsRef.current,
       active: activeFileRef.current,
       pinned: [...pinnedRef.current],
+      splitSizes,
+      extraRoots,
     });
-  }, [kernel, project, openTabs, activeFile, pinnedPaths]);
+  }, [kernel, project, openTabs, activeFile, pinnedPaths, layoutSignature, splitSizes, extraRoots]);
 
   // 项目拆除（project→null / 换项目 / kernel 更替 / 组件卸载）：layout 相保证这步在
   // commit 内同步发生；无待写时 flushNow 是 no-op，绝不双写。

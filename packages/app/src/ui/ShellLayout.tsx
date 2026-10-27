@@ -30,7 +30,7 @@ import {
 } from './dialect-binding';
 import { kojo2AdapterForProject } from '../bootstrap';
 import { setIdentityBandFilled, useIdentityBandSlot } from './identity-band';
-import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, RecentProject, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY, pathKey } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
@@ -56,6 +56,11 @@ import {
   type ViewDef,
 } from './layout';
 import { BottomDock } from './bottom-dock';
+import {
+  PROJECT_OPEN_FOLDER_MENU_ID,
+  projectDirFromMenuId,
+  projectMenuItemsOf,
+} from './project-open-menu';
 import {
   PANEL_DRAG_MIME,
   acceptsPanelDrop,
@@ -1036,6 +1041,19 @@ interface Props {
   onCloseProject?: () => void;
   /** 重载项目入口（工具栏左区，项目标签旁） */
   onReloadProject?: () => void;
+  /**
+   * 「打开最近项目」子菜单的数据源（WS-07）：与欢迎页最近列表同一份（宿主 App 的 `recent`）。
+   * 菜单项构造在 `project-open-menu.ts`（纯函数）：剔当前项目、最多 8 条、label 取末段、
+   * 完整路径进悬停提示。
+   */
+  recentProjects?: readonly RecentProject[];
+  /**
+   * 按目录换项目（WS-07）：脏确认 / 换根守卫 / 写域重新交付全部走宿主既有 `openProject`
+   * ——壳层只把"点了哪一条"交回去，不认识打开流程的任何一步。
+   */
+  onOpenProject?: (dir: string) => void;
+  /** 「打开另一个游戏目录…」入口（系统目录对话框；与欢迎页同一个 chooseAndOpen） */
+  onOpenProjectFolder?: () => void;
   /** 快速打开候选文件（P2；壳层泛型路径列表，零业务知识） */
   quickOpenFiles?: readonly string[];
   /**
@@ -1179,6 +1197,9 @@ export function ShellLayout(props: Props): ReactElement {
     commandCtx,
     onCloseProject,
     onReloadProject,
+    recentProjects,
+    onOpenProject,
+    onOpenProjectFolder,
     quickOpenFiles,
     quickOpenRecent,
     activeFileSymbols,
@@ -1994,11 +2015,22 @@ export function ShellLayout(props: Props): ReactElement {
       { id: 'bookmarks.next', title: '跳到下一个书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.next'), run: () => jumpToBookmark(1) },
       { id: 'bookmarks.prev', title: '跳到上一个书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.prev'), run: () => jumpToBookmark(-1) },
       { id: 'bookmarks.clearFile', title: '清除本文件书签', category: '书签', keybinding: effectiveKeybindingOf('bookmarks.clearFile'), run: () => clearFileBookmarksCmd() },
+      // 项目切换（WS-07）：命令面板与项目菜单同一动作——都交给宿主的 `openProject`，
+      // 脏确认 / 换根守卫 / 写域重新交付一条不少。宿主没给入口（旧消费方）时整条不出现
+      // （缺省 = 没有能力，不摆一个点了没反应的命令）。
+      ...(onOpenProjectFolder !== undefined
+        ? [{
+            id: 'workbench.openProjectFolder',
+            title: '打开项目文件夹…',
+            category: '项目',
+            run: () => onOpenProjectFolder(),
+          }]
+        : []),
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace, toggleBookmarkAtCursor, jumpToBookmark, clearFileBookmarksCmd],
+    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace, toggleBookmarkAtCursor, jumpToBookmark, clearFileBookmarksCmd, onOpenProjectFolder],
   );
   /**
    * Monaco 内建动作的宿主命令入口（1026 编辑器内核批）。
@@ -3115,8 +3147,40 @@ export function ShellLayout(props: Props): ReactElement {
     </div>
   );
 
-  /** 「更多」菜单的项表（模块内常量：身份稳定，ContextMenu 不因每帧新数组重排焦点） */
-  const projectMenuItems: ContextMenuItem[] = [{ id: 'project.close', label: '关闭项目', danger: true }];
+  /**
+   * 「更多」菜单的项表（WS-07：项目切换入口）——纯函数 `projectMenuItemsOf` 产出，
+   * 这里只按宿主能力开关传参。文案 / 最近项目剔当前根 / 8 条上限 / 完整路径提示
+   * 全在 `project-open-menu.ts`（node 侧直测），本文件不认识这些判据。
+   */
+  const projectMenuItems: ContextMenuItem[] = useMemo(
+    () =>
+      projectMenuItemsOf({
+        recent: recentProjects ?? [],
+        currentRootDir: commandCtx.project?.rootDir ?? null,
+        canOpenFolder: onOpenProjectFolder !== undefined,
+        canOpenRecent: onOpenProject !== undefined,
+        canClose: onCloseProject !== undefined,
+      }),
+    [recentProjects, commandCtx.project?.rootDir, onOpenProjectFolder, onOpenProject, onCloseProject],
+  );
+
+  /** 项目菜单选中分发：最近项目项把目录从 id 里还原出来交给宿主（换根流程全在宿主） */
+  const selectProjectMenuItem = useCallback(
+    (id: string) => {
+      setProjectMenuAt(null);
+      if (id === PROJECT_OPEN_FOLDER_MENU_ID) {
+        onOpenProjectFolder?.();
+        return;
+      }
+      const dir = projectDirFromMenuId(id);
+      if (dir !== null) {
+        onOpenProject?.(dir);
+        return;
+      }
+      if (id === 'project.close') onCloseProject?.();
+    },
+    [onOpenProjectFolder, onOpenProject, onCloseProject],
+  );
 
   /**
    * 身份带插槽（VIS-10 · D-1）：真壳里标题栏在 App 根部先挂好，工具条 portal 进它那段
@@ -3142,12 +3206,13 @@ export function ShellLayout(props: Props): ReactElement {
             {projectDirName(commandCtx.project.rootDir) ?? commandCtx.project.adapterId}
           </span>
         ) : null}
-        {onCloseProject ? (
+        {projectMenuItems.length > 0 ? (
           // 破坏性动作收拢进项目名旁的「更多」菜单（C-1a）：不再与视图开关混在一排；
           // 快捷键与命令行为不变，这里只是换了个入口。可访问名与 aria 态齐全。
+          // WS-07 起这里也承载项目切换（打开另一个目录 / 最近项目），不再只是"关闭"。
           <button
             className="ghost small toolbar-btn tb-project-more"
-            title="项目操作（关闭项目）"
+            title="项目操作（切换 / 关闭项目）"
             aria-label="项目操作"
             aria-haspopup="menu"
             aria-expanded={projectMenuAt !== null}
@@ -3199,16 +3264,13 @@ export function ShellLayout(props: Props): ReactElement {
           挤在项目身份旁边只会把带子读成第二根工具条。命令 `layout.toggleSidebar` /
           `layout.toggleBottom` / `layout.toggleAux` 与 Ctrl+B / Ctrl+J / Ctrl+Alt+B
           一条不动，鼠标入口整体搬到活动栏下缘那组容器开关（见 `activityBar`）。 */}
-      {projectMenuAt !== null && onCloseProject ? (
+      {projectMenuAt !== null && projectMenuItems.length > 0 ? (
         <ContextMenu
           x={projectMenuAt.x}
           y={projectMenuAt.y}
           items={projectMenuItems}
           ariaLabel="项目操作"
-          onSelect={(id) => {
-            setProjectMenuAt(null);
-            if (id === 'project.close') onCloseProject();
-          }}
+          onSelect={selectProjectMenuItem}
           onDismiss={() => setProjectMenuAt(null)}
         />
       ) : null}

@@ -57,8 +57,10 @@ export function isUnderAnyRoot(roots: readonly string[], p: string): boolean {
 /**
  * 「添加文件夹到工作区」的计划（纯函数，可单测）。
  *
- * 会话级附加根 = 只活在当前项目会话里的**浏览/检索/监视**根（不持久化、不进写允许域），
+ * 会话级附加根 = 只在**当前项目会话**里生效的浏览/检索/监视根（不进写允许域），
  * 与上面的**作者作品落点根**（`workspaces.roots()`）语义不同、互不替代。
+ * WS-08 起随会话记录一起持久化（按项目记，重启后回到同一组根），但关项目 /
+ * 换项目仍整体清空——绝不把上一个项目的根带进下一个。
  *
  * 判等一律走 `pathKey`（折叠分隔符与大小写）：同一目录的两种写法不算两个根。
  */
@@ -82,4 +84,28 @@ export function planAddExtraRoot(
     return { roots: [...existing], note: '这个文件夹已经在工作区里了，不用重复添加。' };
   }
   return { roots: [...existing, dir], note: null };
+}
+
+/** 「从工作区移除文件夹」的计划（WS-08；纯函数，可单测） */
+export interface RemoveExtraRootPlan {
+  /** 计划落定后的附加根列表（没命中时原样返回，绝不半改） */
+  readonly roots: readonly string[];
+  /** 是否真的移除了 */
+  readonly removed: boolean;
+  /** 给出声的人话（移除成功 / 本来就不在，两种都出声——按下去必须有响，铁律 4） */
+  readonly note: string;
+}
+
+export function planRemoveExtraRoot(existing: readonly string[], dir: string): RemoveExtraRootPlan {
+  const k = pathKey(dir);
+  const kept = existing.filter((r) => pathKey(r) !== k);
+  if (kept.length === existing.length) {
+    return {
+      roots: [...existing],
+      removed: false,
+      note: '这个文件夹不在工作区里，无需移除。',
+    };
+  }
+  const name = dir.split(/[\\/]/).filter(Boolean).pop() ?? dir;
+  return { roots: kept, removed: true, note: `已从工作区移除：${name}` };
 }

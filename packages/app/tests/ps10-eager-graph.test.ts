@@ -581,10 +581,32 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `ui/kojo-source-scan.ts` / `ui/App.tsx` / `ui/use-project-session.ts` 合计 <2 KB。
     //     **减面口径**：四枚都是"开机就要读"的判据，没有可挪到懒边的消费面；真正的减面候选
     //     照旧是 `ui-kit/index.tsx` 按件拆分。
+    //   - **WS-06/07/08 批（会话布局恢复完整 / 项目切换入口 / 附加根生命周期）**：
+    //     读数见下方随跑打点（改前 194 / 2,937，落地时 194 / 2,967）；KB 闸随现值
+    //     **2,940 → 2,970**（口径仍是"读数进十"），**文件闸不动（194，顶格零余量）**。
+    //     两条新判据（分屏比例 / 恢复前置校验）原本各开一枚文件，落地时量到 196 文件 ⇒
+    //     按本闸纪律改成**并入既有常驻模块**再进图，文件数读回 194：
+    //     · `ui/editor-groups.ts` +7.5 KB——分屏比例那一节（`SPLIT_MIN_RATIO` / sanitize /
+    //       align / 像素换算）与布局签名 `groupsLayoutSignature`。比例本来就是组态的一部分；
+    //     · `ui/session-store.ts` +10.9 KB——恢复判据（`planSessionRestore` 纯函数 +
+    //       `probeExistingPaths` 有界并发探针）与 `splitSizes` / `extraRoots` 两个 additive 字段；
+    //       它读写的正是同一份会话记录的形状；
+    //     · `ui/App.tsx` +5.7 KB——分屏比例状态 / 组数对齐 / 附加根移除 / 新 props 接线；
+    //     · `ui/use-project-session.ts` +4.1 KB——恢复改为探盘后装回、附加根按记录恢复、
+    //       flush 依赖扩到布局签名 / 比例 / 附加根；
+    //     · `ui/workspace-roots.ts` +1.1 KB——`planRemoveExtraRoot`；
+    //     · 零进图：`ui/project-open-menu.ts`（被 `ShellLayout` 引，在项目态懒边之下），
+    //       以及 `ProjectView` / `FileTree` 的改动全部在 `import('./ProjectView')` 之后。
+    //   - **B/C 合流（2026-10-27）**：两批在同两条消费者线上重叠（`App` / `FileTree` /
+    //     `ProjectView` / `use-project-session`），读数按**合流后的树**重测：
+    //     **198 文件 / 3,006 KB**；KB 闸 **2,980 → 3,010**（口径仍是"读数进十"），文件闸 198 不动。
+    //     B 的四枚新模块与 C 的两处并入互不相干（文件数不变）；KB 按"单批增量相加"是
+    //     B +40 / C +30，合流树实测 3,006（比 2,937+70 少 1 KB：两批在 `App.tsx` /
+    //     `FileTree.tsx` 同一段落的改写有重叠，按实际读数进闸）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤2,980 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(2_980);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤3,010 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_010);
     expect(files.length).toBeLessThanOrEqual(198);
   });
 

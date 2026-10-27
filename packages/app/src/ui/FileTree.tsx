@@ -78,6 +78,21 @@ const EMPTY_SKIP: ReadonlySet<string> = new Set();
 const EMPTY_EXTRA_ROOTS: readonly string[] = [];
 /** 未传工作区根模型时的恒等空数组（同上：引用恒定，别在渲染期造新数组） */
 const EMPTY_WORKSPACE_FOLDERS: readonly WorkspaceFolder[] = [];
+
+/**
+ * 附加根的可写态现判（WS-08；工作区模型缺席时的兜底）：走内核 `io.isWritable`
+ * （与写闸同一把尺子）。没有 io（纯浏览器宿主）或判定抛错一律按**只读**——
+ * "说不出可写"绝不能亮成可写。模型在场时以 `folder.writable` 为准（那是角色的判据，
+ * 附加根本来就不进写允许域，两者结论一致）。
+ */
+function rootWritableOf(io: Props['io'], root: string): boolean {
+  if (io === undefined) return false;
+  try {
+    return io.isWritable(root);
+  } catch {
+    return false;
+  }
+}
 /**
  * 树冷开的骨架行数（VIS-34）：7 行落在"一眼看得出是一列，而不是一屏"的那档——
  * 少于 6 行读起来像装饰线，多于 8 行就开始替真实内容许愿。入场节拍只铺前 6 行
@@ -239,6 +254,7 @@ export function FileTree(props: Props): ReactElement {
   const guardFileOp = useLatestCallback(rest.guardFileOp);
   const onFilesGone = useLatestCallback(rest.onFilesGone);
   const onAddFolder = useLatestCallback(rest.onAddFolder);
+  const onRemoveExtraRoot = useLatestCallback(rest.onRemoveExtraRoot);
   const onCompareFiles = useLatestCallback(rest.onCompareFiles);
   const onDiskEntriesChanged = useLatestCallback(rest.onDiskEntriesChanged);
   return (
@@ -252,6 +268,7 @@ export function FileTree(props: Props): ReactElement {
       guardFileOp={guardFileOp}
       onFilesGone={onFilesGone}
       onAddFolder={onAddFolder}
+      onRemoveExtraRoot={onRemoveExtraRoot}
       onCompareFiles={onCompareFiles}
       onDiskEntriesChanged={onDiskEntriesChanged}
       extraRoots={rest.extraRoots && rest.extraRoots.length > 0 ? rest.extraRoots : EMPTY_EXTRA_ROOTS}
@@ -313,7 +330,7 @@ function TreeFoldBody({ open, body }: { open: boolean; body: () => ReactNode }):
  *
  * 与外壳同一份实现，只差一件事：**不再收 `activeFile`**（见 `FileTree` 的注释）。
  */
-const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onCompareFiles, workspaceFolders, onDiskEntriesChanged }: FileTreeBodyProps): ReactElement {
+const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onRemoveExtraRoot, onCompareFiles, workspaceFolders, onDiskEntriesChanged }: FileTreeBodyProps): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为；IDENTITY_GLOSS 模块级 ⇒ 引用恒定） */
   const glossOf = gloss ?? IDENTITY_GLOSS;
   const [filter, setFilter] = useState('');
@@ -1455,18 +1472,46 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           multiRootFs ? (
             fsRoots.map((root) => {
               const isOpen = subOpen.has(root);
+              const isProjectRoot = root === project.rootDir;
+              // 可写态：工作区模型在场取角色判据（`folder.writable`），缺席才按 io 现判；
+              // 判定抛错按只读显示——"说不出可写"绝不能亮成可写。
+              const rootFolder = folders.find((f) => pkey(f.path) === pkey(root));
+              const writableRoot = !isProjectRoot && (rootFolder !== undefined ? rootFolder.writable : rootWritableOf(io, root));
               return (
                 <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'}>
-                  <button
-                    className="tree-group-btn"
-                    title={`${root}${fsRootRoleOf(root) ? `（${fsRootRoleOf(root)}）` : ''}`}
-                    onClick={() => toggleSub(root)}
-                  >
-                    <span className="caret">
-                      <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-                    </span>
-                    <span className="group-label">{middleEllipsis(baseName(root), TREE_LABEL_MAX)}</span>
-                  </button>
+                  {/* 组头行（WS-08）：折叠按钮 + 只读/可写标签 + 移除入口。
+                      行尾按钮不能嵌进折叠按钮（button 里套 button 是非法结构），故加这层行容器。
+                      WS-04 合并后可写态优先取工作区模型（角色判据）；模型缺席才按 io 现判。 */}
+                  <div className="tree-group-head">
+                    <button
+                      className="tree-group-btn"
+                      title={`${root}${fsRootRoleOf(root) ? `（${fsRootRoleOf(root)}）` : ''}`}
+                      onClick={() => toggleSub(root)}
+                    >
+                      <span className="caret">
+                        <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                      </span>
+                      <span className="group-label">{middleEllipsis(baseName(root), TREE_LABEL_MAX)}</span>
+                    </button>
+                    {isProjectRoot ? null : (
+                      <span
+                        className={writableRoot ? 'tree-root-tag is-writable' : 'tree-root-tag'}
+                        title={writableRoot ? '这个附加根在写允许域内，可以直接保存' : '附加根默认只读：写仍走项目授权域'}
+                      >
+                        {writableRoot ? '可写' : '只读'}
+                      </span>
+                    )}
+                    {isProjectRoot || onRemoveExtraRoot === undefined ? null : (
+                      <button
+                        className="tree-root-remove"
+                        title={`从工作区移除：${root}`}
+                        aria-label={`从工作区移除 ${baseName(root)}`}
+                        onClick={() => onRemoveExtraRoot(root)}
+                      >
+                        <Icon name="close" size={12} />
+                      </button>
+                    )}
+                  </div>
                   {/* 折叠容器（VIS-31）：`ul` 仍是本 `li` 的直接子元素——导轨那三条
                       `.tree-group > .tree-files*` 选择器因此一个字没动 */}
                   <TreeFoldBody

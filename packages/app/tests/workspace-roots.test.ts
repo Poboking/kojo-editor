@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
-import { isUnderAnyRoot, planAddExtraRoot, workspaceProjectDirsOf, workspaceRootsOf } from '../src/ui/workspace-roots';
+import {
+  isUnderAnyRoot,
+  planAddExtraRoot,
+  planRemoveExtraRoot,
+  workspaceProjectDirsOf,
+  workspaceRootsOf,
+} from '../src/ui/workspace-roots';
 
 /**
  * 工作区**全部**根的读取与判定（2026-10-14 新建项目自选位置批）。
@@ -134,5 +140,29 @@ describe('planAddExtraRoot · 添加文件夹到工作区的计划', () => {
     const plan = planAddExtraRoot([], 'E:/借阅');
     expect(plan.roots).toEqual(['E:/借阅']);
     expect(plan.note).toBeNull();
+  });
+});
+
+/* ------------------------------ WS-08：附加根的移除计划 ------------------------------ */
+
+describe('planRemoveExtraRoot · 从工作区移除文件夹', () => {
+  it('命中：从清单里摘掉，其余原样（且给一句"已移除"的人话）', () => {
+    const plan = planRemoveExtraRoot(['D:/作品', 'E:/借阅'], 'E:/借阅');
+    expect(plan.roots).toEqual(['D:/作品']);
+    expect(plan.removed).toBe(true);
+    expect(plan.note).toContain('已从工作区移除');
+  });
+
+  it('pathKey 判等：写法差异（分隔符 / 大小写 / 尾分隔符）也算同一个根', () => {
+    const plan = planRemoveExtraRoot(['D:/作品'], 'd:\\作品\\');
+    expect(plan.roots).toEqual([]);
+    expect(plan.removed).toBe(true);
+  });
+
+  it('没命中：清单原样返回 + 说清"不在工作区里"（按下去必须有响）', () => {
+    const plan = planRemoveExtraRoot(['D:/作品'], 'F:/别处');
+    expect(plan.roots).toEqual(['D:/作品']);
+    expect(plan.removed).toBe(false);
+    expect(plan.note).toContain('不在工作区里');
   });
 });

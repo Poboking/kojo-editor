@@ -26,6 +26,8 @@ const css = read('../src/styles-project.css');
 const band = read('../src/shell-band.css');
 const shell = read('../src/ui/ShellLayout.tsx');
 const problems = read('../src/ui/ProblemPanel.tsx');
+/** 项目菜单的数据面（WS-07：最近项目 / 打开另一个目录 / 关闭项目三项的文案与危险色住这里） */
+const projectMenu = read('../src/ui/project-open-menu.ts');
 /** 诊断口径的真源（工包 E 之后：状态栏那颗的标签与 tooltip 都从这里出） */
 const store = read('../src/ui/problem-store.ts');
 
@@ -106,7 +108,11 @@ describe('④ 工具栏分组：项目操作收拢 · 视图开关分离 · 重�
   });
 
   it('关闭项目收进项目名旁的更多菜单（danger 危险项 + 菜单走共享 ContextMenu，键盘/Esc 口径不另造）', () => {
-    expect(shell).toContain("label: '关闭项目', danger: true");
+    // WS-07 起菜单项表收在 `project-open-menu.ts`（纯数据、node 可直测）；
+    // ShellLayout 只负责挂到「更多」按钮上——两处一起钉，免得"搬家"顺手把危险色丢了。
+    expect(projectMenu).toContain("label: '关闭项目'");
+    expect(projectMenu).toMatch(/label: '关闭项目',\s+danger: true/);
+    expect(shell).toContain("from './project-open-menu'");
     expect(shell).toContain("from './context-menu'");
     expect(shell).toContain('aria-haspopup="menu"');
     expect(shell).toContain('aria-expanded={projectMenuAt !== null}');

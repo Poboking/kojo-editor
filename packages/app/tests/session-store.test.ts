@@ -8,6 +8,7 @@ import {
   splitActiveDown,
 } from '../src/ui/editor-groups';
 import {
+  SESSION_EXTRA_ROOTS_LIMIT,
   SESSION_FLUSH_DEBOUNCE_MS,
   SESSION_KEY,
   createSessionFlushScheduler,
@@ -336,5 +337,183 @@ describe('createSessionFlushScheduler（S2 #4 关项目强刷）', () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]?.tabs).toEqual([]); // "标签全关再关项目 = 空标签集"口径穿过调度器不丢
     expect(SESSION_FLUSH_DEBOUNCE_MS).toBe(600);
+  });
+});
+
+/* ------------ splitSizes（WS-06 分屏比例 · additive 扩展） ------------ */
+
+/** 两组快照（splitSizes 长度 = 组数 - 1 = 1） */
+const twoGroupSnapshot = (): unknown => serializeGroups(splitActiveDown(openInActiveGroup(initialEditorGroups(), 'C:/a.ERB')));
+
+describe('sanitizeSessionRecord · splitSizes（WS-06 additive）', () => {
+  it('合法比例随 groups 一起留下，且经归一后仍是同一份值', () => {
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      projects: {
+        p: { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [], groups: twoGroupSnapshot(), splitSizes: [0.35] },
+      },
+    });
+    expect(rec.projects.p?.splitSizes).toEqual([0.35]);
+  });
+
+  it('长度不符 / 乱值 / 没有 groups ⇒ 比例整份丢弃（不炸、不猜）', () => {
+    for (const bad of [[0.5, 0.5], [], 'x', 42, [Number.NaN], [0], [{ v: 1 }]]) {
+      const rec = sanitizeSessionRecord({
+        v: 1,
+        projects: { p: { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [], groups: twoGroupSnapshot(), splitSizes: bad } },
+      });
+      expect('splitSizes' in rec.projects.p!).toBe(false);
+    }
+    // 没有 groups 就无从知道组数 ⇒ 比例没意义，丢弃
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      projects: { p: { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [], splitSizes: [0.4] } },
+    });
+    expect('splitSizes' in rec.projects.p!).toBe(false);
+  });
+
+  it('过小/过大的比例被夹取（0.999 → 1 - 下限），绝不写出把某组挤没的值', () => {
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      projects: { p: { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [], groups: twoGroupSnapshot(), splitSizes: [0.999] } },
+    });
+    expect(rec.projects.p?.splitSizes?.[0]).toBeCloseTo(0.9);
+  });
+});
+
+describe('upsertSessionProject · splitSizes（WS-06 additive）', () => {
+  it('save → load 往返不丢（比例与组态一起回来）', async () => {
+    const groups = twoGroupSnapshot();
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/proj', {
+      ...recOf(['C:/a.ERB'], 'C:/a.ERB', []),
+      groups,
+      splitSizes: [0.7],
+    });
+    await saveSessionRecord(kv, rec);
+    const loaded = await loadSessionRecord(kv);
+    expect(sessionProjectOf(loaded, 'C:/proj')?.splitSizes).toEqual([0.7]);
+    expect(sessionProjectOf(loaded, 'C:/proj')?.groups).toEqual(groups);
+  });
+
+  it('长度与组态不符 ⇒ 只丢比例、组态照存（缩成均分而不是整份记录报废）', () => {
+    const rec = upsertSessionProject(emptySessionRecord(), 'C:/p', {
+      ...recOf(['C:/a.ERB'], 'C:/a.ERB', []),
+      groups: twoGroupSnapshot(),
+      splitSizes: [0.3, 0.3, 0.4],
+    });
+    const entry = sessionProjectOf(rec, 'C:/p');
+    expect(entry?.groups).toBeDefined();
+    expect(entry !== null && 'splitSizes' in entry).toBe(false);
+  });
+});
+
+/* ------------ extraRoots（WS-08 会话级附加根 · additive 扩展） ------------ */
+
+describe('sanitizeSessionRecord · extraRoots（WS-08 additive）', () => {
+  it('绝对路径去重保留；相对路径 / 项目根自身 / 非字符串剔除', () => {
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      projects: {
+        // 真实记录键 = pathKey(项目根)；"项目根自身"的剔除就靠这个键
+        [sessionProjectKey('C:/proj')]: {
+          tabs: ['C:/a.ERB'],
+          active: 'C:/a.ERB',
+          pinned: [],
+          extraRoots: ['D:/一', 'D:/一/', 'E:/二', 'relative/dir', 'C:/proj', 42, ''],
+        },
+      },
+    });
+    expect(rec.projects[sessionProjectKey('C:/proj')]?.extraRoots).toEqual(['D:/一', 'E:/二']);
+  });
+
+  it('标签全空但附加根非空 ⇒ 记录保留（别被"空标签集不入库"吞掉）', () => {
+    const rec = sanitizeSessionRecord({
+      v: 1,
+      projects: { p: { tabs: [], active: null, pinned: [], extraRoots: ['D:/借阅'] } },
+    });
+    expect(rec.projects.p).toEqual({ tabs: [], active: null, pinned: [], extraRoots: ['D:/借阅'] });
+  });
+
+  it('上限截断（32 条），损坏形态整体回空记录不抛', () => {
+    const many = Array.from({ length: 40 }, (_, i) => `D:/r${i}`);
+    const rec = sanitizeSessionRecord({ v: 1, projects: { p: { tabs: ['C:/a.ERB'], extraRoots: many } } });
+    expect(rec.projects.p?.extraRoots).toHaveLength(SESSION_EXTRA_ROOTS_LIMIT);
+    expect(sanitizeSessionRecord({ v: 1, projects: { p: { tabs: ['C:/a.ERB'], extraRoots: 'x' } } }).projects.p?.extraRoots)
+      .toBeUndefined();
+  });
+});
+
+describe('upsertSessionProject · extraRoots（WS-08 additive）', () => {
+  it('save → load 往返；空标签集但有附加根 ⇒ 记录不删', async () => {
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/p', {
+      ...recOf([], null, []),
+      extraRoots: ['D:/借阅'],
+    });
+    await saveSessionRecord(kv, rec);
+    const loaded = await loadSessionRecord(kv);
+    expect(sessionProjectOf(loaded, 'C:/p')).toEqual({
+      tabs: [],
+      active: null,
+      pinned: [],
+      extraRoots: ['D:/借阅'],
+    });
+  });
+
+  it('附加根全删 + 标签也空 ⇒ 记录删除（重开不造标签也不造根）', () => {
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/p', {
+      ...recOf(['C:/a.ERB'], null, []),
+      extraRoots: ['D:/借阅'],
+    });
+    expect(sessionProjectOf(rec, 'C:/p')?.extraRoots).toEqual(['D:/借阅']);
+    rec = upsertSessionProject(rec, 'C:/p', { ...recOf([], null, []), extraRoots: [] });
+    expect(sessionProjectOf(rec, 'C:/p')).toBeNull();
+  });
+
+  it('项目根自身不当附加根存（自我指涉剔除）', () => {
+    const rec = upsertSessionProject(emptySessionRecord(), 'C:/proj', {
+      ...recOf(['C:/a.ERB'], null, []),
+      extraRoots: ['C:/proj', 'D:/借阅'],
+    });
+    expect(sessionProjectOf(rec, 'C:/proj')?.extraRoots).toEqual(['D:/借阅']);
+  });
+
+  it('换项目不继承上一个项目的根：各项目记录互不干扰', () => {
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/a', {
+      ...recOf(['C:/a/x.ERB'], null, []),
+      extraRoots: ['D:/a-借阅'],
+    });
+    rec = upsertSessionProject(rec, 'C:/b', { ...recOf(['C:/b/y.ERB'], null, []), extraRoots: [] });
+    expect(sessionProjectOf(rec, 'C:/a')?.extraRoots).toEqual(['D:/a-借阅']);
+    // B 自己没有根（新项目读自己的记录 → 空，绝不把 A 的根带过来）
+    expect(sessionProjectOf(rec, 'C:/b')?.extraRoots).toBeUndefined();
+  });
+});
+
+/* ------------ 调度器 payload（WS-06/08：比例与附加根随快照走） ------------ */
+
+describe('createSessionFlushScheduler · 布局/附加根随 payload 落盘', () => {
+  it('payload 里的 splitSizes / extraRoots 穿过调度器不丢，且与 groups 一起进盘', async () => {
+    const clock = fakeClock();
+    const kvDisk = memoryKv();
+    let rec = emptySessionRecord();
+    const s = createSessionFlushScheduler({
+      // 与 App 写面同款：payload + 当时的组态快照一起 upsert
+      write: (p) => {
+        rec = upsertSessionProject(rec, p.root, { ...p, groups: twoGroupSnapshot() });
+        void saveSessionRecord(p.kv, rec);
+      },
+      setTimer: (cb) => clock.setTimer(cb),
+      clearTimer: (t) => clock.clearTimer(t),
+    });
+    s.schedule({
+      ...payloadOf('C:/proj', ['C:/a.ERB'], 'C:/a.ERB', []),
+      splitSizes: [0.65],
+      extraRoots: ['D:/借阅'],
+      kv: kvDisk,
+    });
+    s.flushNow();
+    const loaded = await loadSessionRecord(kvDisk);
+    expect(sessionProjectOf(loaded, 'C:/proj')?.splitSizes).toEqual([0.65]);
+    expect(sessionProjectOf(loaded, 'C:/proj')?.extraRoots).toEqual(['D:/借阅']);
   });
 });

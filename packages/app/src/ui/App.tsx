@@ -80,7 +80,7 @@ import {
 import { WelcomeView, type WelcomeTutorialId } from './WelcomeView';
 import { loadDevNoteSeen, markDevNoteSeen } from './dev-note-pref';
 import { WelcomeOverlayHost } from './WelcomeOverlayHost';
-import { planAddExtraRoot } from './workspace-roots';
+import { planAddExtraRoot, planRemoveExtraRoot } from './workspace-roots';
 import { getKojo2CutoverController } from './kojo2-cutover';
 // K2-CUTOVER-STAGE：阶段切换后的宿主效果注入口（设置页只负责改档，不认识 Monaco）
 import { installKojo2CutoverStageEffects } from './kojo2-cutover-settings';
@@ -96,7 +96,9 @@ import {
 // 编辑器组态（SPLIT-1 分屏）：纯逻辑单源，App 是唯一状态所有者
 import {
   activeGroupOf,
+  alignSplitSizes,
   closeTabsInGroup,
+  groupsLayoutSignature,
   initialEditorGroups,
   activateTab as activateTabInGroupState,
   openInActiveGroup,
@@ -107,6 +109,7 @@ import {
   splitActiveRight,
   closeGroup as closeEditorGroup,
   moveTabBetweenGroups as moveTabBetweenGroupsState,
+  splitSizesEqual,
   type EditorGroupsState,
 } from './editor-groups';
 // 导航历史（MM-6 前进/后退 + MM-10 恢复关闭的标签）：纯逻辑单源，App 是唯一状态所有者
@@ -490,6 +493,15 @@ export function App(): ReactElement {
   const editorGroupsRef = useRef(editorGroups);
   editorGroupsRef.current = editorGroups;
   /**
+   * 分屏比例的长度对齐（WS-06）：**只认组数**——组数没变就一个字不动（拖过的比例保住），
+   * 组数一变（拆分 / 关组 / 会话恢复成别的组数）交给 `alignSplitSizes`：长度对得上沿用，
+   * 对不上整份退回均分。`alignSplitSizes` 对合法比例返回**同一引用** ⇒ setState 直接
+   * 被 React 短路，不会因为每次渲染都算一遍而抖动。
+   */
+  useLayoutEffect(() => {
+    setSplitSizes((prev) => alignSplitSizes(prev, editorGroupsRef.current.groups.length));
+  }, [editorGroups.groups.length]);
+  /**
    * 导航历史（MM-6 / MM-10）：**刻意不用 useState**——每次跳转/关标签都写一遍会把
    * 整棵壳树拖进重渲染，而它只被命令回调与关闭路径读写，没有任何渲染面消费。
    * 纯函数返回新 state 后由回调直接写回 ref（与 editorGroupsRef 同族的直接赋值模式）。
@@ -511,10 +523,22 @@ export function App(): ReactElement {
   const [pinnedPaths, setPinnedPaths] = useState<ReadonlySet<string>>(new Set());
   /**
    * 会话级附加根（D1，对标 VSCode Add Folder to Workspace）：作者临时挂进来的浏览/
-   * 检索/监视根。**不持久化**、不进写允许域（附加根默认只读——写仍走既有批准域），
-   * 与 openTabs 同属项目会话态：关项目 / 切项目随 resetProjectUiState 一起清。
+   * 检索/监视根。**不进写允许域**（附加根默认只读——写仍走既有批准域）；WS-08 起随
+   * 本项目会话记录持久化（重开项目回来还是这组根），但换项目仍整体清空——
+   * 绝不把上一个项目的根带进下一个（互不继承）。
    */
   const [extraRoots, setExtraRoots] = useState<readonly string[]>([]);
+  /**
+   * 分屏比例（WS-06）：长度 = 组数 - 1 的归一份额（末组吃剩余，判据见 `split-sizes.ts`）。
+   * 真源在 App，ProjectView 只渲染与在拖拽落定时回报；**拖动过程不落盘、不 setState**
+   * （每帧 setState 会把整壳拖进重渲染），松手才回报一次。
+   *
+   * 长度对齐：组数变化（拆分/关组/恢复）时由下面的 layout effect 过一次
+   * `alignSplitSizes`——长度对不上就整份退回均分，不把旧比例套到新组上。
+   */
+  const [splitSizes, setSplitSizes] = useState<readonly number[]>([]);
+  const splitSizesRef = useRef(splitSizes);
+  splitSizesRef.current = splitSizes;
   /** 待确认的脏标签关闭（非 null = 弹确认框） */
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   /** 待确认的关项目/关窗（非 null = 弹全项目未保存确认；深审 A2） */
@@ -1340,6 +1364,8 @@ export function App(): ReactElement {
     setPendingProjectSwitch,
     setEditorGroups,
     setPinnedPaths,
+    setSplitSizes,
+    setExtraRoots,
     setReveal,
     pendingApproval,
   });
@@ -1364,6 +1390,33 @@ export function App(): ReactElement {
       notify({ kind: 'error', message: `添加文件夹失败：${msg}` });
     }
   }, [kernel, project, extraRoots, notify]);
+
+  /**
+   * 「从工作区移除文件夹」（WS-08）：附加根只能加不能减的欠账，收在这里。
+   * 判据与去重走 `planRemoveExtraRoot`（pathKey 判等）；移除后：
+   * - 文件树 / 检索 / 监视都按既有活读（`extraRoots` 是它们的 props / 依赖）自然更新，
+   *   这里不额外通知任何组件；
+   * - 会话 flush 的依赖里有 extraRoots ⇒ 下一次 debounce 就会把新清单落盘。
+   * 没命中（例如别的入口已经删过）也给人话，按下去必须有响（铁律 4）。
+   */
+  const removeExtraRoot = useCallback(
+    (dir: string) => {
+      const plan = planRemoveExtraRoot(extraRoots, dir);
+      setExtraRoots(plan.roots);
+      notify({ kind: 'info', message: plan.note });
+    },
+    [extraRoots, notify],
+  );
+
+  /**
+   * 分隔条松手时回报的比例（WS-06）：拖动过程 ProjectView 只改 DOM flex，
+   * 落定才喊一次；值没变就不 setState（免得拖回原位也触发一次落盘）。
+   */
+  const onSplitSizesChange = useCallback((next: readonly number[]) => {
+    if (splitSizesEqual(splitSizesRef.current, next)) return;
+    splitSizesRef.current = next;
+    setSplitSizes(next);
+  }, []);
 
   const chooseAndOpen = useCallback(async () => {
     try {
@@ -2045,7 +2098,8 @@ export function App(): ReactElement {
 
   // 会话标签集落盘 + 项目拆除强刷（REF-FRONT-PERF：实现搬进 use-project-session.ts）。
   // **调用位置就是原来的两个 effect 位置**：debounce schedule 与 layout 相 flushNow 的
-  // 注册次序、依赖数组（kernel/project/openTabs/activeFile/pinnedPaths）一字未改。
+  // 注册次序不动；依赖数组在 WS-06/08 扩了布局签名 / 分屏比例 / 附加根——
+  // 只改焦点、只翻方向、只拖分隔条、只加减附加根，现在各算一次真实变更并落盘。
   useSessionFlush({
     kernel,
     project,
@@ -2056,6 +2110,9 @@ export function App(): ReactElement {
     openTabs,
     activeFile,
     pinnedPaths,
+    layoutSignature: groupsLayoutSignature(editorGroups),
+    splitSizes,
+    extraRoots,
   });
 
   /** 固定 / 取消固定标签（C2）：pinned 会话态 + 顺序重排（固定区在前，见 applyPin） */
@@ -2416,7 +2473,13 @@ export function App(): ReactElement {
             registerTreeRefresh={registerTreeRefresh}
             extraRoots={extraRoots}
             onAddExtraRoot={() => void addExtraRoot()}
+            onRemoveExtraRoot={removeExtraRoot}
             extraShellCommands={shellCommands}
+            splitSizes={splitSizes}
+            onSplitSizesChange={onSplitSizesChange}
+            recentProjects={recent}
+            onOpenProject={openProject}
+            onOpenProjectFolder={chooseAndOpen}
           />
         </Suspense>
       </ProjectErrorBoundary>

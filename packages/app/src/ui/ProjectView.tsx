@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbIndex, GameProject, OpJournal, UIPanelContribution } from '@kojo/plugin-api';
+import type { ErbIndex, GameProject, OpJournal, RecentProject, UIPanelContribution } from '@kojo/plugin-api';
 import { KernelServices, NAV_SCOPE_EVENT, WellKnownCommands, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import type { RevealTarget } from './App';
 import { EditorPane, type EditorPaneActions } from './EditorPane';
@@ -42,7 +42,7 @@ import type { KojoXmlService } from '@kojo/plugin-api';
 import type { ActiveFileSymbolSource } from './palette-search';
 import type { BatchCloseMode, OpenFileOptions } from './tabs-ops';
 import { TAB_DRAG_MIME, decodeTabDragPayload, type TabMenuGroupRef } from './tabs-ops';
-import type { EditorGroupState, GroupsOrientation } from './editor-groups';
+import { alignSplitSizes, splitFlexOf, splitSizesFromWidths, type EditorGroupState, type GroupsOrientation } from './editor-groups';
 
 /**
  * `Ctrl+P` 里 `@` 模式的数据源：**模块级常量函数**（引用恒定 ⇒ 面板的 memo 不被每帧新闭包打穿）。
@@ -159,6 +159,27 @@ interface Props {
   /** 「添加文件夹…」入口（对话框与去重都在宿主 App，这里只发意图） */
   onAddExtraRoot?: () => void;
   /**
+   * 「从工作区移除」入口（WS-08）：附加根只能加不能减的欠账，入口挂在树根分组头上。
+   * 缺省 ⇒ 组头不画那颗按钮（没有落地面就不摆一个点了没反应的按钮）。
+   */
+  onRemoveExtraRoot?: (dir: string) => void;
+  /**
+   * 分屏比例（WS-06）：长度 = 组数 - 1 的归一份额（末组吃剩余）。缺省 / 长度不符
+   * ⇒ 均分（与旧行为逐字一致）。宿主是真源，这里只渲染；拖动过程**不**回写。
+   */
+  splitSizes?: readonly number[];
+  /** 分隔条松手时的回报（拖动过程不调用；宿主负责 setState 与落盘） */
+  onSplitSizesChange?: (sizes: readonly number[]) => void;
+  /**
+   * 「打开最近项目」子菜单的数据源（WS-07）：与欢迎页最近列表同一份（App 的 `recent`）。
+   * 这里只透传给壳层，菜单项构造住在 `project-open-menu.ts`（纯函数、可单测）。
+   */
+  recentProjects?: readonly RecentProject[];
+  /** 按目录切换项目（走宿主既有 openProject：脏确认 / 换根守卫一条不少） */
+  onOpenProject?: (dir: string) => void;
+  /** 「打开项目文件夹…」入口（系统目录对话框；与欢迎页同一个 chooseAndOpen） */
+  onOpenProjectFolder?: () => void;
+  /**
    * 宿主追加的壳层命令（K2-MIGRATE-MOUNT）：命令表在这里合并，**注册源仍在宿主**
    * （`App.tsx` 按开关注入 `kojo2-migrate-entry.ts` 的 `commands()`；开关关 ⇒ 空数组
    * ⇒ 与接线前逐字一致）。这里只做透传，不认识任何一条命令的语义。
@@ -271,6 +292,12 @@ export function ProjectView({
   registerTreeRefresh,
   extraRoots,
   onAddExtraRoot,
+  onRemoveExtraRoot,
+  splitSizes,
+  onSplitSizesChange,
+  recentProjects,
+  onOpenProject,
+  onOpenProjectFolder,
   extraShellCommands,
 }: Props): ReactElement {
   /**
@@ -837,8 +864,8 @@ export function ProjectView({
     },
     [kernel, notify],
   );
-  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], workspaceFolders: [] as readonly WorkspaceFolder[], onDiskEntriesChanged: undefined as ((delta: DiskDelta) => void) | undefined, onAddExtraRoot: undefined as (() => void) | undefined, onCompareFiles: compareSelectedFiles });
-  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], workspaceFolders, onDiskEntriesChanged, onAddExtraRoot, onCompareFiles: compareSelectedFiles };
+  const fileTreeArgsRef = useRef({ project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: [] as readonly string[], workspaceFolders: [] as readonly WorkspaceFolder[], onDiskEntriesChanged: undefined as ((delta: DiskDelta) => void) | undefined, onAddExtraRoot: undefined as (() => void) | undefined, onRemoveExtraRoot: undefined as ((dir: string) => void) | undefined, onCompareFiles: compareSelectedFiles });
+  fileTreeArgsRef.current = { project, index, activeFile, onOpenFile, listDir, walkDir, importPackage, treeNonce, gloss: nameGloss, io: kernel.io, guardFileOp, onFilesGone, onRevealInExplorer: revealInExplorer, extraRoots: extraRoots ?? [], workspaceFolders, onDiskEntriesChanged, onAddExtraRoot, onRemoveExtraRoot, onCompareFiles: compareSelectedFiles };
   /**
    * 桥换了内容就得有人告诉 memo（PS-6 正确性修复）。
    *
@@ -863,6 +890,7 @@ export function ProjectView({
     onFilesGone,
     extraRoots,
     onAddExtraRoot,
+    onRemoveExtraRoot,
     compareSelectedFiles,
     workspaceFolders,
   ]);
@@ -888,6 +916,7 @@ export function ProjectView({
           workspaceFolders={a.workspaceFolders}
           onDiskEntriesChanged={a.onDiskEntriesChanged}
           onAddFolder={a.onAddExtraRoot}
+          onRemoveExtraRoot={a.onRemoveExtraRoot}
           onCompareFiles={a.onCompareFiles}
         />
       );
@@ -1120,71 +1149,128 @@ export function ProjectView({
   }, [dirtyPaths, onSaveAll, notify]);
 
   /**
-   * 分隔条拖拽（SPLIT-1）：调宽左右两组。直接改相邻两组的 DOM flex（v1——
-   * 比例不落盘、新开的组回到均分；布局真源仍是 CSS，这里只做会话内微调）。
-   * 最小组宽 200px，防拖没了。
+   * 分隔条拖拽（SPLIT-1；WS-06 补上"比例落盘"）。
+   *
+   * 拖动过程仍**只改相邻两组的 DOM flex**（每帧 setState 会把整壳拖进重渲染，手会抖）；
+   * **松手（pointerup / pointercancel）时**才量一遍全部组的像素宽（column 下是高度），
+   * 折成归一份额回报宿主（`onSplitSizesChange`），并把 px 立刻换回比例——
+   * 拖回原位时"比例值没变、React 不重写 style"这条短路不会把 DOM 留在 px 上。
+   *
+   * 最小组宽 200px（横拖）/ 120px（竖排：高度才是稀缺维度），防拖没了。
    */
   const groupRefs = useRef(new Map<string, HTMLDivElement | null>());
-  const startDividerDrag = useCallback((e: ReactPointerEvent, leftId: string, rightId: string) => {
-    e.preventDefault();
-    const left = groupRefs.current.get(leftId);
-    const right = groupRefs.current.get(rightId);
-    const container = left?.parentElement;
-    if (!left || !right || !container) return;
-    const total = container.clientWidth;
-    const leftW = left.clientWidth;
-    const startX = e.clientX;
-    const move = (ev: PointerEvent): void => {
-      const dx = ev.clientX - startX;
-      const nl = Math.max(200, Math.min(leftW + dx, total - 200));
-      left.style.flex = '0 0 ' + nl + 'px';
-      right.style.flex = '1 1 0%';
-    };
-    // 解绑要看住三种收场（PS-6 第 7 项）：pointerup / pointercancel / 指针丢失。
-    // 只认 pointerup 的那版实现里，手在窗口外松开或系统取消手势 ⇒ 监听器一直挂着，
-    // 下一次拖拽就再叠一条，旧闭包还握着上一轮的 DOM 节点。
-    const up = (ev: PointerEvent): void => {
-      if (ev.pointerId !== e.pointerId) return;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+  /** 组序 / 比例回调的最新值（拖拽闭包活过一次手势，不能握旧值） */
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+  const onSplitSizesChangeRef = useRef(onSplitSizesChange);
+  onSplitSizesChangeRef.current = onSplitSizesChange;
+  /** 有效份额（缺省均分；长度不符由 alignSplitSizes 兜成均分——与旧行为一致） */
+  const effectiveSplitSizes = useMemo(
+    () => alignSplitSizes(splitSizes, groups.length),
+    [splitSizes, groups.length],
+  );
+  const shareOfGroup = useCallback(
+    (index: number): number => {
+      if (index < effectiveSplitSizes.length) return effectiveSplitSizes[index]!;
+      const rest = 1 - effectiveSplitSizes.reduce((a, b) => a + b, 0);
+      return rest > 0 ? rest : 0;
+    },
+    [effectiveSplitSizes],
+  );
+  const applySizesToDom = useCallback((sizes: readonly number[]) => {
+    const list = groupsRef.current;
+    const rest = 1 - sizes.reduce((a, b) => a + b, 0);
+    list.forEach((g, i) => {
+      const el = groupRefs.current.get(g.id);
+      if (!el) return;
+      const share = i < sizes.length ? sizes[i]! : rest;
+      el.style.flex = splitFlexOf(share > 0 ? share : 0);
+    });
   }, []);
+  /** 松手落定：量像素 → 份额 → 回报宿主（量不出来就维持现状，绝不把布局抹成均分） */
+  const commitDividerDrag = useCallback(
+    (vertical: boolean) => {
+      const list = groupsRef.current;
+      if (list.length < 2) return;
+      const widths = list.map((g) => {
+        const el = groupRefs.current.get(g.id);
+        if (!el) return 0;
+        const rect = el.getBoundingClientRect();
+        return vertical ? rect.height : rect.width;
+      });
+      const next = splitSizesFromWidths(widths);
+      if (next.length === 0) return;
+      applySizesToDom(next);
+      onSplitSizesChangeRef.current?.(next);
+    },
+    [applySizesToDom],
+  );
+  const startDividerDrag = useCallback(
+    (e: ReactPointerEvent, leftId: string, rightId: string) => {
+      e.preventDefault();
+      const left = groupRefs.current.get(leftId);
+      const right = groupRefs.current.get(rightId);
+      const container = left?.parentElement;
+      if (!left || !right || !container) return;
+      const total = container.clientWidth;
+      const leftW = left.clientWidth;
+      const startX = e.clientX;
+      const move = (ev: PointerEvent): void => {
+        const dx = ev.clientX - startX;
+        const nl = Math.max(200, Math.min(leftW + dx, total - 200));
+        left.style.flex = '0 0 ' + nl + 'px';
+        right.style.flex = '1 1 0%';
+      };
+      // 解绑要看住三种收场（PS-6 第 7 项）：pointerup / pointercancel / 指针丢失。
+      // 只认 pointerup 的那版实现里，手在窗口外松开或系统取消手势 ⇒ 监听器一直挂着，
+      // 下一次拖拽就再叠一条，旧闭包还握着上一轮的 DOM 节点。
+      const up = (ev: PointerEvent): void => {
+        if (ev.pointerId !== e.pointerId) return;
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+        commitDividerDrag(false);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    },
+    [commitDividerDrag],
+  );
 
   /**
-   * 分隔条**竖向**拖拽（MM-9 column 排列）：调高上下两组。与 startDividerDrag
-   * 同款三事件收尾（pointerup / pointercancel / pointerId 判等），只是把
-   * 宽换成高：最小组高 120px（横拖是 200px——竖排时高度才是稀缺的那一维）。
-   * 同样只改 DOM flex，比例不落盘（布局真源仍是 CSS + 组态 orientation）。
+   * 分隔条**竖向**拖拽（MM-9 column 排列）：调高上下两组，其余与横向同款
+   * （三事件收尾、松手落定回报比例）；最小的高是 120px。
    */
-  const startDividerDragVertical = useCallback((e: ReactPointerEvent, topId: string, bottomId: string) => {
-    e.preventDefault();
-    const top = groupRefs.current.get(topId);
-    const bottom = groupRefs.current.get(bottomId);
-    const container = top?.parentElement;
-    if (!top || !bottom || !container) return;
-    const total = container.clientHeight;
-    const topH = top.clientHeight;
-    const startY = e.clientY;
-    const move = (ev: PointerEvent): void => {
-      const dy = ev.clientY - startY;
-      const nh = Math.max(120, Math.min(topH + dy, total - 120));
-      top.style.flex = '0 0 ' + nh + 'px';
-      bottom.style.flex = '1 1 0%';
-    };
-    const up = (ev: PointerEvent): void => {
-      if (ev.pointerId !== e.pointerId) return;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
-  }, []);
+  const startDividerDragVertical = useCallback(
+    (e: ReactPointerEvent, topId: string, bottomId: string) => {
+      e.preventDefault();
+      const top = groupRefs.current.get(topId);
+      const bottom = groupRefs.current.get(bottomId);
+      const container = top?.parentElement;
+      if (!top || !bottom || !container) return;
+      const total = container.clientHeight;
+      const topH = top.clientHeight;
+      const startY = e.clientY;
+      const move = (ev: PointerEvent): void => {
+        const dy = ev.clientY - startY;
+        const nh = Math.max(120, Math.min(topH + dy, total - 120));
+        top.style.flex = '0 0 ' + nh + 'px';
+        bottom.style.flex = '1 1 0%';
+      };
+      const up = (ev: PointerEvent): void => {
+        if (ev.pointerId !== e.pointerId) return;
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+        commitDividerDrag(true);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    },
+    [commitDividerDrag],
+  );
 
   /**
    * 每组可见的「其他组」清单（1027 跨组批：标签右键「移动到组」子菜单）。
@@ -1323,6 +1409,9 @@ export function ProjectView({
       commandCtx={{ project, ...(activeFile ? { activeFile } : {}) }}
       onCloseProject={onClose}
       onReloadProject={onReload}
+      recentProjects={recentProjects}
+      onOpenProject={onOpenProject}
+      onOpenProjectFolder={onOpenProjectFolder}
       quickOpenFiles={quickOpenFiles}
       quickOpenRecent={recentFiles}
       activeFileSymbols={activeFileSymbolsFromEditor}
@@ -1364,6 +1453,9 @@ export function ProjectView({
                   groupRefs.current.set(g.id, el);
                 }}
                 className={focused ? 'editor-group focused' : 'editor-group'}
+                // 分屏比例（WS-06）：挂载 / 组态恢复时按份额挂 flex；缺省均分与旧行为一致。
+                // 拖动过程由上面的拖拽处理器直接改同一格 inline style（不回写 state）。
+                style={{ flex: splitFlexOf(shareOfGroup(i)) }}
               >
                 {/* 1023 覆盖面批：组头是 `editor-group-header` 面的根（右键面靠
                     `data-group-id` 找回这一组的菜单桥）；标签栏空白区是它内部的
