@@ -21,6 +21,7 @@ import {
   type PaletteRowTarget,
 } from './palette-menu';
 import { revealFailureText, revealInExplorer } from './reveal-explorer';
+import { loadCommandMru, recordCommandUse } from './command-mru';
 import { isComposingEvent } from './shell-keys';
 import {
   activeSymbolKey,
@@ -185,7 +186,10 @@ export function commandRows(items: readonly PickerItem[], commands: readonly Com
     const cat = categoryById.get(it.key);
     if (cat === undefined) return it;
     const prefix = `${cat}: `;
-    const next: PickerItem = { ...it, group: cat };
+    // 分组标签：MRU 置顶那几条已由 `commandItems` 打上「最近使用」（WS-16），
+    // 这里只给**没标过**的行补分类名。反过来把「最近使用」盖掉，置顶就只剩顺序、
+    // 作者看不出这一节为什么在顶上（而分类名仍在主行前缀里被剥掉，两头都没了）。
+    const next: PickerItem = { ...it, group: it.group ?? cat };
     if (it.primary.startsWith(prefix)) {
       next.primary = it.primary.slice(prefix.length);
       const shifted = shiftRanges(it.ranges, prefix.length);
@@ -506,8 +510,13 @@ export interface CommandPaletteProps {
 /** 命令面板（Ctrl+Shift+P / F1）：读统一注册表，when 求值决定禁态 */
 export function CommandPalette({ commands, commandCtx, onClose }: CommandPaletteProps): ReactElement {
   const [query, setQuery] = useState('');
+  // 最近使用置顶（WS-16）：与 `Ctrl+P` 的 `>` 同一份账、同一条判据（两处两套顺序迟早分叉）
+  const commandMru = useMemo(() => loadCommandMru(), []);
   // 条目构造与 Ctrl+P 的 `>` 模式共用一份（`commandItems`）：两个入口给两种高亮/顺序 = 迟早分叉
-  const items = useMemo(() => commandItems(commands, query, commandCtx), [commands, query, commandCtx]);
+  const items = useMemo(
+    () => commandItems(commands, query, commandCtx, { recent: commandMru }),
+    [commands, query, commandCtx, commandMru],
+  );
   // 分类从主行文本挪到分组标签（显示层；过滤/排序判据仍是 `filterCommands` 那一条尺子）
   const rows = useMemo(
     () =>
@@ -528,7 +537,10 @@ export function CommandPalette({ commands, commandCtx, onClose }: CommandPalette
       onPick={(id) => {
         const cmd = commands.find((c) => c.id === id);
         onClose();
-        if (cmd) void cmd.run(commandCtx);
+        if (cmd) {
+          recordCommandUse(id);
+          void cmd.run(commandCtx);
+        }
       }}
       onClose={onClose}
       variant="palette"
@@ -598,6 +610,9 @@ export function QuickOpen({
   const isSymbolMode = mode.kind === 'symbols';
   const source = useMemo(() => (isSymbolMode ? symbolsRef.current() : null), [isSymbolMode]);
 
+  /** 命令最近使用清单（WS-16）：挂载那一拍读一次，见下面 `quickOpenView` 那条注释 */
+  const commandMru = useMemo(() => loadCommandMru(), []);
+
   const view = useMemo(
     () =>
       quickOpenView({
@@ -605,11 +620,14 @@ export function QuickOpen({
         files,
         ...(recent === undefined ? {} : { recent }),
         commands,
+        // 最近使用置顶（WS-16）：挂载那一拍读一次——面板是开一次读一次的现场，
+        // 不必订阅存储；点完就关，下一次开面板自然带上新账。
+        commandRecent: commandMru,
         commandCtx,
         symbolSource: source,
         activeFile,
       }),
-    [mode, files, recent, commands, commandCtx, source, activeFile],
+    [mode, files, recent, commands, commandMru, commandCtx, source, activeFile],
   );
 
   const items = useMemo(() => commandRows(view.items, commands), [view.items, commands]);
@@ -662,7 +680,12 @@ export function QuickOpen({
         if (mode.kind === 'commands') {
           const cmd = commands.find((c) => c.id === key);
           onClose();
-          if (cmd) void cmd.run(commandCtx);
+          if (cmd) {
+            // 记账在**执行之前**：命令体可能抛错或开一个模态，但那一下确实是"用了这条"
+            // （与 VS Code 的 MRU 同口径：按意图计数，不按结果计数）。
+            recordCommandUse(key);
+            void cmd.run(commandCtx);
+          }
           return;
         }
         if (mode.kind === 'line') {

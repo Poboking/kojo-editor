@@ -188,6 +188,7 @@ import {
 } from './update-check';
 import { UpdateDialog } from './UpdateDialog';
 import { isTauri } from '../bridge/invoke';
+import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { modalDepth, closeTopModal } from './modal-stack';
 import { useNotify } from './NotificationCenter';
 import {
@@ -248,7 +249,14 @@ import {
   type ShellContainerTarget,
   type ShellMenuHost,
 } from './context-menu-shell';
-import { requestReplaceFocus, requestSearchFocus } from './search-store';
+import {
+  bindSearchPrefs,
+  requestReplaceFocus,
+  requestSearchFocus,
+  snapshot as searchStateSnapshot,
+  subscribe as subscribeSearchState,
+  unbindSearchPrefs,
+} from './search-store';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
 import { toggleFullscreen } from './window-fullscreen';
@@ -1942,6 +1950,43 @@ export function ShellLayout(props: Props): ReactElement {
     }
   }, []);
 
+  /**
+   * 项目「更多」菜单的按钮句柄（WS-16）：命令面板的「打开最近项目…」要把**同一张菜单**
+   * 翻上屏，而不是另造一份最近项目列表。锚点只有这一个来源 ⇒ 菜单不会有两套位置口径。
+   */
+  const projectMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  /** 把项目菜单钉在按钮下沿（按钮不在场 = 没有项目 / 菜单为空 ⇒ 一句人话，不静默） */
+  const openProjectMenu = useCallback(() => {
+    const el = projectMenuButtonRef.current;
+    if (el === null) {
+      notifyRef.current({ kind: 'info', message: '现在没有可切换的项目（先「打开项目文件夹…」再试）。' });
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    setProjectMenuAt({ x: r.left, y: r.bottom + 2 });
+  }, []);
+
+  /**
+   * 把键盘焦点交给资源管理器（WS-16 · `Ctrl+Shift+E`，对标 VS Code 的 Focus Explorer）。
+   *
+   * 选择器按**能力**而不是按形态问：D 线（WS-11 键盘树）落地后树容器带
+   * `role="tree"` + roving tabindex ⇒ 焦点交给容器，由它转给当前焦点行；还没接上键盘层的
+   * 现在形态里，`.file-tree` 里第一枚行按钮（每行是 `<button>`）就是同一个人话结果。
+   * 判据用 `document.activeElement` 实测而不是"调过 focus() 就算成"：
+   * 没有 tabindex 的容器 `focus()` 是空操作，自欺的读数会把"按了没反应"报成成功。
+   */
+  const focusExplorerTree = useCallback((): boolean => {
+    const takes = (el: HTMLElement | null): el is HTMLElement => {
+      if (el === null) return false;
+      el.focus();
+      return document.activeElement === el;
+    };
+    // 侧栏折叠着的时候树根本不在 DOM 里：先激活视图，再找焦点落点（同一次按键内两件事）
+    dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.files' });
+    if (takes(document.querySelector<HTMLElement>('.file-tree [role="tree"]'))) return true;
+    return takes(document.querySelector<HTMLElement>('.file-tree button'));
+  }, [dispatch]);
+
   const shellCommands = useMemo<readonly ShellCommandSpec[]>(
     () => [
       { id: 'layout.toggleSidebar', title: '切换主侧栏', keybinding: effectiveKeybindingOf('layout.toggleSidebar'), run: () => dispatch({ type: 'toggle', container: 'sidebar' }) },
@@ -2026,11 +2071,59 @@ export function ShellLayout(props: Props): ReactElement {
             run: () => onOpenProjectFolder(),
           }]
         : []),
+      /* ---- 工作台动作补齐（WS-16 命令面板覆盖面批）----
+       * 这几条今天**只有鼠标入口**（工具条那颗「更多」/ 标签右键 / 状态栏图标），
+       * 键盘作者只能 Tab 过去——命令表里一枚都没有，谈不上"工作区级动作全部可达"。
+       * 全部复用既有落地腿（宿主 props / 同一张菜单 / 同一条 revealInExplorer），
+       * 这里只补入口，不复制任何逻辑；宿主没给能力（旧消费方）⇒ 那一条整条不出现。
+       * 破坏性的两条（关闭项目 / 打开最近项目）**刻意不给缺省键**：误按的代价是当前工作区
+       * 被切走，与「关闭编辑器组」同一取舍。 */
+      ...(onCloseProject !== undefined
+        ? [{ id: 'workbench.closeProject', title: '关闭项目', category: '项目', run: () => onCloseProject() }]
+        : []),
+      { id: 'workbench.openRecentProjects', title: '打开最近项目…', category: '项目', run: () => openProjectMenu() },
+      {
+        id: 'workbench.focusExplorer',
+        title: '聚焦资源管理器',
+        keybinding: effectiveKeybindingOf('workbench.focusExplorer'),
+        // 落不到焦点也要出声：树还没内容 / 面板被移出布局时，静默会被读成"快捷键坏了"
+        run: () => {
+          if (focusExplorerTree()) return;
+          notifyRef.current({
+            kind: 'info',
+            message: '资源管理器里没有可聚焦的条目（项目没开，或树是空的）。',
+          });
+        },
+      },
+      ...(typeof activeFile === 'string' && activeFile !== ''
+        ? [
+            {
+              id: 'workbench.showFileInOsExplorer',
+              title: '在资源管理器中显示当前文件',
+              category: '项目',
+              run: () => {
+                if (typeof activeFile !== 'string' || activeFile === '') {
+                  notifyRef.current({ kind: 'info', message: '当前没有打开的文件（先在编辑器里打开一份再执行）。' });
+                  return;
+                }
+                // 桌面壳专属：浏览器里没有原生文件管理器，点了必失败 ⇒ 照实说（铁律 4）
+                if (!isTauri()) {
+                  notifyRef.current({ kind: 'info', message: '这个动作需要桌面壳（浏览器调试面里没有系统文件管理器）。' });
+                  return;
+                }
+                void revealInExplorer(activeFile).then(
+                  () => notifyRef.current({ kind: 'info', message: '已在系统文件管理器里选中这个文件。' }),
+                  (err: unknown) => notifyRef.current({ kind: 'error', message: revealFailureText(err) }),
+                );
+              },
+            },
+          ]
+        : []),
       // P3：编辑器区注入的命令（关闭标签 / 全部保存）并入统一注册表
       ...(extraCommands ?? []),
     ],
-    // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建
-    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace, toggleBookmarkAtCursor, jumpToBookmark, clearFileBookmarksCmd, onOpenProjectFolder],
+    // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建。
+    [extraCommands, kbVersion, toggleWordWrap, toggleRenderWhitespace, toggleBookmarkAtCursor, jumpToBookmark, clearFileBookmarksCmd, onOpenProjectFolder, onCloseProject, openProjectMenu, focusExplorerTree, activeFile],
   );
   /**
    * Monaco 内建动作的宿主命令入口（1026 编辑器内核批）。
@@ -2103,6 +2196,47 @@ export function ShellLayout(props: Props): ReactElement {
     if (dialectRootDir === null) return;
     void loadWorkspaceDialectOverride(kernel.workspaces, dialectRootDir);
   }, [kernel, dialectRootDir]);
+
+  /* -------------------- 检索条件按项目持久化 + 「在此文件夹中搜索」翻屏（WS-10） -------------------- */
+
+  /**
+   * 检索条件的存取通道随项目开合同上/拆下（`search-store` 自己做按项目根的读写与
+   * 防抖落盘，这里只给 kernel 全局存储那条腿 + 项目根）。
+   *
+   * - `rootDir` 为空（没开项目）⇒ `unbind`：条件变化不再落盘，待写的先强刷；
+   * - 换项目 ⇒ 先卸旧（内部 flush）再绑新并恢复该项目存过的那一份；
+   * - 存储读不到 / 坏值 ⇒ 缺省（门风与 `session-store` 逐字一致，绝不炸启动）。
+   */
+  const searchPrefsRootDir = commandCtx.project?.rootDir ?? null;
+  useEffect(() => {
+    if (searchPrefsRootDir === null) {
+      unbindSearchPrefs();
+      return;
+    }
+    void bindSearchPrefs(kernel.storage.global(), searchPrefsRootDir);
+    return () => {
+      unbindSearchPrefs();
+    };
+  }, [kernel, searchPrefsRootDir]);
+
+  /**
+   * `openFolderSearchScope`（树右键「在此文件夹中搜索」的稳定入口）把
+   * `folderScopeNonce` 抬了一格 ⇒ 这里把「搜索」视图翻上屏。
+   * 与 `focusNonce`（输入框聚焦）分开的理由写在 store：两件事、两个计数。
+   */
+  const lastFolderScopeNonce = useRef(searchStateSnapshot().folderScopeNonce);
+  useEffect(
+    () =>
+      subscribeSearchState(() => {
+        const nonce = searchStateSnapshot().folderScopeNonce;
+        if (nonce === lastFolderScopeNonce.current) return;
+        lastFolderScopeNonce.current = nonce;
+        dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.search' });
+      }),
+    // dispatch 来自布局 reducer，身份稳定（见 useReducer 先例）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   // 调试面登记（2026-10-24 调试模式批）：把「命令面板注册表」暴露给 `window.__kojoDebug.commands`
   // ——只登记读 ref 的通道，注册表本身随渲染重建不受影响；未选入调试模式时登记簿无人读。
@@ -3211,15 +3345,14 @@ export function ShellLayout(props: Props): ReactElement {
           // 快捷键与命令行为不变，这里只是换了个入口。可访问名与 aria 态齐全。
           // WS-07 起这里也承载项目切换（打开另一个目录 / 最近项目），不再只是"关闭"。
           <button
+            ref={projectMenuButtonRef}
             className="ghost small toolbar-btn tb-project-more"
             title="项目操作（切换 / 关闭项目）"
             aria-label="项目操作"
             aria-haspopup="menu"
             aria-expanded={projectMenuAt !== null}
-            onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setProjectMenuAt({ x: r.left, y: r.bottom + 2 });
-            }}
+            // 与命令面板的「打开最近项目…」同一条腿（锚点 = 这颗按钮的下沿）
+            onClick={() => openProjectMenu()}
           >
             <Icon name="more-horizontal" size="sm" />
           </button>

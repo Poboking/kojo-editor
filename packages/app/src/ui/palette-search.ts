@@ -336,17 +336,58 @@ export const MODE_TEXT: Record<PaletteModeKind, { placeholder: string; empty: st
 const FILE_HIT_LIMIT = CANDIDATE_BUDGETS.quickOpen;
 
 /**
+ * 命令面板里「最近使用」那节的分组标签（WS-16）。
+ * 一处措辞两面共用（F1 与 `Ctrl+P` 的 `>`），也与文件模式的「最近打开」同句式；
+ * `Palette.commandRows` 认这个常量决定"要不要把分类名盖回分组"。
+ */
+export const COMMAND_MRU_GROUP = '最近使用';
+
+/**
+ * 命令 → 置顶序（**纯函数**，稳定排序）。
+ *
+ * 规则只有一条：`recent`（队首最新）里出现的命令按那份顺序提到最前，**其余保持
+ * `filterCommands` 给的码点序**（分类 + 标题）。不打分、不按使用次数排——
+ * 清单本身只有序没有数，硬编一个"用得越多越靠前"的分数就是假读数。
+ *
+ * `recent` 里在场命令没有的 id（插件卸载后留下的旧条目）自然被忽略：这里按
+ * **在场命令求交**，不反过来按清单生成行（否则会造出点不动的幽灵行）。
+ */
+export function orderCommandsByMru(
+  commands: readonly CommandEntry[],
+  recent: readonly string[] | undefined,
+): CommandEntry[] {
+  if (recent === undefined || recent.length === 0) return [...commands];
+  const rank = new Map<string, number>();
+  recent.forEach((id, i) => {
+    if (!rank.has(id)) rank.set(id, i);
+  });
+  // Array.prototype.sort 稳定 ⇒ 同档（都不在清单里）的相对序就是传进来的码点序
+  return [...commands].sort((a, b) => {
+    const ra = rank.has(a.id) ? rank.get(a.id)! : Number.MAX_SAFE_INTEGER;
+    const rb = rank.has(b.id) ? rank.get(b.id)! : Number.MAX_SAFE_INTEGER;
+    return ra === rb ? 0 : ra < rb ? -1 : 1;
+  });
+}
+
+/**
  * 命令 → 面板条目（**F1 命令面板与 Ctrl+P 的 `>` 共用这一份**）：
  * 过滤判据是 `filterCommands` 一条（分类名也参与匹配，作者记得的是"工作台"而不是 id），
  * 高亮只在标题真含/含子序列时画——只在 id 里命中就不画，不做假高亮。
+ *
+ * `opts.recent`（WS-16）：最近使用的命令置顶，并打上「最近使用」分组标签——
+ * 与文件模式那节「最近打开」同一形态（同一种"我刚刚用过"的语言，两个面不该两套画法）。
+ * 置顶**只改顺序不改判据**：禁态（`when` 求值为假）照旧灰着，匹配/高亮照旧按同一条尺子。
  */
 export function commandItems(
   commands: readonly CommandEntry[],
   term: string,
   commandCtx: EditorCommandContext,
+  opts: { recent?: readonly string[] } = {},
 ): QuickOpenItem[] {
   const trimmed = term.trim();
-  return filterCommands(commands, term).map((c) => {
+  const ranked = orderCommandsByMru(filterCommands(commands, term), opts.recent);
+  const top = new Set(opts.recent ?? []);
+  return ranked.map((c) => {
     const primary = c.category ? `${c.category}: ${c.title}` : c.title;
     const hit = trimmed === '' ? null : fuzzyMatch(primary, trimmed);
     return {
@@ -354,6 +395,7 @@ export function commandItems(
       primary,
       ...(hit !== null ? { ranges: hit.ranges } : {}),
       ...(c.keybinding !== undefined ? { hint: formatKeybinding(c.keybinding) } : {}),
+      ...(top.has(c.id) ? { group: COMMAND_MRU_GROUP } : {}),
       disabled: !commandEnabled(c, commandCtx),
     };
   });
@@ -365,6 +407,11 @@ export interface QuickOpenViewInput {
   readonly recent?: readonly string[];
   /** `>` 模式：与 F1 命令面板同一张注册表、同一条过滤判据（`filterCommands`） */
   readonly commands: readonly CommandEntry[];
+  /**
+   * `>` 模式的最近使用清单（WS-16 · 队首最新）：置顶那几枚并打「最近使用」分组。
+   * 缺省 / 空 ⇒ 与改动前逐字一致（纯码点序）。
+   */
+  readonly commandRecent?: readonly string[];
   readonly commandCtx: EditorCommandContext;
   /** `@` 模式的符号来源（编辑器位点探针；组件侧按下前缀才取） */
   readonly symbolSource: ActiveFileSymbolSource | null;
@@ -412,7 +459,7 @@ export function quickOpenView(input: QuickOpenViewInput): QuickOpenView {
   }
 
   if (mode.kind === 'commands') {
-    return { items: commandItems(input.commands, mode.term, input.commandCtx), emptyText: MODE_TEXT.commands.empty, footnote: null };
+    return { items: commandItems(input.commands, mode.term, input.commandCtx, { recent: input.commandRecent }), emptyText: MODE_TEXT.commands.empty, footnote: null };
   }
 
   if (mode.kind === 'symbols') {

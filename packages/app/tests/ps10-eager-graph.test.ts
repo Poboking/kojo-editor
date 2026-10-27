@@ -633,11 +633,23 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `monaco/tree-sitter/structure-pool.ts` 与 `structure.worker.ts` 都只在懒装配链上
     //     （`client.ts` / `injection.ts` 由语言描述符的 `structure.load()` 动态取），**不进开机图**；
     //     `editor-global-providers.ts` 里那条 `closeStructurePool` 也在懒块里。⇒ 欠账仍是一枚。
+    //   - **批次 E（WS-10 检索真相面 + WS-14 编辑器组 + WS-16 命令面板覆盖面，变基到含
+    //     LAU-5 的 dev 之后）**：KB 闸随之 **3,040 → 3,070**，文件闸 **199 不动**
+    //     （本批**零新进图模块**）。逐笔（全部长在**图内既有文件**里）：
+    //     · `ui/search-store.ts` 的按项目检索条件（`bindSearchPrefs` / 防抖落盘 / 限额驱逐）
+    //       与 `ui/search-query.ts` 的派生默认面 + 排除模式解析——`ShellLayout` 值引前者；
+    //     · `ui/editor-groups.ts` 三枚纯函数（排列序聚焦 / 环形切换 / 键盘调份额）；
+    //     · `ui/App.tsx` 的三枚组命令回调与随之加上的 import。
+    //     刻意**不落进图**的两处：`ui/command-mru.ts`（只被懒面 `Palette.tsx` 值引）与
+    //     `keybinding-specs-commands.ts` 新增的 13 条（懒半表）——文件闸按本节纪律顶格，
+    //     新增模块一律走懒边，这是硬约束不是偏好。
+    //     基线 `3ff2ed63` 上单独测得 +28 KB（3,010 → 3,038）；**变基并入 dev 的性能批 +
+    //     LAU-2 / LAU-5 之后本树实测读数见下面那行日志**，3,070 = 读数进十（同一口径）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,040 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_040);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,070 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_070);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
