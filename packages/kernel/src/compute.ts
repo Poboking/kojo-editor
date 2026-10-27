@@ -60,13 +60,26 @@ function now(): number {
 }
 
 /**
- * 造一个"让路"函数（宏任务边界）。
- *
- * 单例 MessageChannel + 等待者队列：每次 `postMessage` 触发一条 message，
- * 唤醒队首等待者。Node（≥15，`MessageChannel` 已是全局）与浏览器通吃；
- * 极老环境无 MessageChannel 时退化为 `setTimeout(0)`。
+ * 是否为"已挂起"的异步结果（thenable）。`runSliced` 用它区分**同步扫描项**与
+ * **异步 IO 项**：前者并发窗口毫无收益（调用即跑完，整窗预算一次性烧光），
+ * 后者才值得窗口内的并行度（IPC 并行）。只认契约形态，不猜别的。
  */
-function createYielder(): () => Promise<void> {
+function isThenable(v: unknown): v is Promise<unknown> {
+  return (
+    v !== null &&
+    (typeof v === 'object' || typeof v === 'function') &&
+    typeof (v as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * 造一个"让路"函数（宏任务边界；`queueMicrotask` 不行——微任务在当前任务末尾就排干，
+ * 浏览器没有插帧机会）。Node（≥15）与浏览器通吃，无 `MessageChannel` 时退化 `setTimeout(0)`。
+ *
+ * 为什么由本模块持有：这是"切片/让路"这一族语义的落点，且本模块**已在开机图里**
+ * （`ps10-eager-graph` 的文件数与体积顶格零余量，新增独立模块会当场红）。
+ */
+export function createYielder(): () => Promise<void> {
   if (typeof MessageChannel === 'undefined') {
     return () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
@@ -94,6 +107,9 @@ function createYielder(): () => Promise<void> {
     });
 }
 
+/** 进程内共享的让路实例（存储域用它切大载荷的"解码 / 解析 / 序列化"三拍，见 `storage.ts`） */
+export const sharedYieldToMain: () => Promise<void> = createYielder();
+
 interface LatestSlot {
   running: boolean;
   /** 本次运行期间累积的等待者（尾缘合并后共用一个结果） */
@@ -102,21 +118,10 @@ interface LatestSlot {
   next: (() => Promise<unknown>) | null;
 }
 
-/**
- * 是否为"已挂起"的异步结果（thenable）。`runSliced` 用它区分**同步扫描项**与
- * **异步 IO 项**：前者并发窗口毫无收益（调用即跑完，整窗预算一次性烧光），
- * 后者才值得窗口内的并行度（IPC 并行）。只认契约形态，不猜别的。
- */
-function isThenable(v: unknown): v is Promise<unknown> {
-  return (
-    v !== null &&
-    (typeof v === 'object' || typeof v === 'function') &&
-    typeof (v as { then?: unknown }).then === 'function'
-  );
-}
-
 export function createComputePool(opts: { log?: Logger } = {}): ComputePool {
   const log = opts.log;
+  /** 本池**自留一份实例**：`runSliced` 的切片边界是自己的节拍，与别处（存储域的大载荷
+   *  解码/解析）共用一条唤醒队列只会互相插队，没有收益。 */
   const yieldToMain = createYielder();
   const statsByLabel = new Map<string, ComputeTaskStat>();
   /** 因词表封顶被淘汰的 label 数（生命周期计数，resetStats 不清——它是"调用方 label 失控"的证据） */

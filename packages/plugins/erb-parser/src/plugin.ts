@@ -403,6 +403,16 @@ export function createErbParserPlugin(): Plugin {
       /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`） */
       const storage = ctx.storage;
 
+      /**
+       * 让一次路（宏任务边界）；测试面替身只实现用得到的方法 ⇒ 缺席按"微任务"处理。
+       * 为什么要让：热轮无 stale 文件 ⇒ 读批的 `await` 一次都不执行 ⇒ 从 `storage.get()`
+       * 的续体一路同步跑到 `bus.emit`，中间没有让路点（实测单帧 701ms）。
+       */
+      const yieldToMain = async (): Promise<void> => {
+        const y = (compute as Partial<ComputePool>).yieldToMain;
+        await (y === undefined ? Promise.resolve() : y.call(compute));
+      };
+
       /** 当前索引（未打开项目 / 未构建时为 null） */
       let index: ErbIndex | null = null;
       /** 在途构建（并发调用 ensureIndex 时共享同一 Promise） */
@@ -724,6 +734,10 @@ export function createErbParserPlugin(): Plugin {
         const needsRewrite = salvaged !== null;
         const salvagedSkipped = salvaged?.skipped ?? 0;
 
+        // 让路点 ①：快照那一段（IPC + 解码 + 解析 + 逐条校验）到此为止。热轮里下面一直到
+        // `emit` 都没有一次真 await，不让这一下，"解快照"会与"合并/聚合/落盘/级联"算同一帧。
+        await yieldToMain();
+
         const diff = snapshot ? diffSnapshot(snapshot, allFiles, stats) : { reusable: [], stale: allFiles };
 
         /**
@@ -832,6 +846,10 @@ export function createErbParserPlugin(): Plugin {
         const aggMs = Date.now() - aggStartedAt;
         /** 当前名录摘要（refs 溯源判据，见 `snapshot.nameSetDigest`）；随新扫出的 refs 一起落盘 */
         const namesFp = nameSetDigest(byName.keys());
+
+        // 让路点 ②：聚合（79,841 个函数 52ms）+ 名录摘要（10ms）到此为止——后面是落盘序列化
+        // 与 `kojo.functionChanged` 的同步级联（家族名索引 167ms + 条件矩阵 42ms）。
+        await yieldToMain();
 
         /* ---------------- 反向引用扫描（H2 批，判据 = 全局 byName ⇒ 必须排在聚合后） ----------------
          * 只对 **stale 文件**重扫；复用文件直接取快照里的 refs（热构建零额外读盘）。
