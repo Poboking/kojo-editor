@@ -43,6 +43,7 @@ import * as monaco from '../monaco/entry';
 import { makeLookup } from '@kojo/kojo-vocab/engine';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
 import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
+import { disposeInjectionClients, resetInjectionState } from '../monaco/tree-sitter/injection';
 import { installHover, type CarrierShellHint, type HoverTables } from '../monaco/kojo-hover';
 import { installErbPreprocDim } from '../monaco/erb-preproc-dim';
 import {
@@ -2284,6 +2285,26 @@ function teardownGlobalProviders(reason: string): void {
     inlayHintsMemo = new WeakMap();
     codeLensesMemo = new WeakMap();
     codeActionsMemo = new WeakMap();
+    // LAU-6 收尾（注入子通道）：`@原生` 的子语言 worker 是**本模块这一整套注册**的产物
+    // （语义 / 折叠 provider 发起的子 parse 才建它），所以它的收账点就在这里——与上面几张
+    // 记忆化同一条纪律：整套拆毁 = 上一套注册的账一条不留。
+    //
+    // 为什么**不**把项目开闭也算一道边界（`project.closed`）：子语言运行时按 descriptor
+    // 注册表取（`injection.ts::defaultRuntimeLoader`），注册表是进程级只增表、**与项目无关**
+    // ⇒ 同一门子语言在换项目后仍是同一枚 runtime，池子按 `languageId + runtime` 复用是正解；
+    // 每开一次项目就 dispose 只会把 ~1 MB 的 wasm 线程白重开一遍（还会把在途子解析判成
+    // `disposed`）。真正的越界保留只发生在"整套注册已经不在、线程却还活着"，即这一处。
+    //
+    // 顺序无所谓（worker 不碰 Monaco 注册面），但**必须在 finally 里**：前面任何一枚
+    // disposable 抛错都不许漏掉线程（线程是进程资源，Monaco 那侧的 leak 至少还能被重装盖住）。
+    try {
+      disposeInjectionClients();
+      resetInjectionState();
+    } catch (e: unknown) {
+      console.warn(
+        `[editor-providers] ${reason}：注入子通道收账抛错（线程可能残留）：${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
     // 糖面的「源行 → 预览行」快表同理换新：键是投影装配出来的那张数组，留着也不脏
     //（投影换一次就换一张新表 ⇒ 身份变了必然重建），但整套注册拆毁时一并清账最省事也最好读
     previewRowTables = new WeakMap();

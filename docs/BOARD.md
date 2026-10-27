@@ -57,7 +57,7 @@
 > **LAU-3b 解耦批（2026-10-27，同分支）已交付**：`kojo-sugar` 插件族（转译 + `ui-sugar-lift/preview/editor`）只在显式启用 kojo1 时装配（`ui/legacy-plugin-gate.ts`；缺省档连模块字节都不取，真壳双档实测 0 枚 / 4 枚 active）；ERB / kojo2 / 宿主共用的词表、词法、格式化全部迁到 `@kojo/kojo-vocab`，`kojo-sugar` 只剩 v1 转译管线与它自己的宿主面，**已整体离开开机静态图**。用户口径：kojo1 的地位就是"即将删除"，封存服务于彻底删除。
 
 | ID | 任务（落点） | 关键判据 | 状态 |
-| LAU-BLOCKED | **LAU-1（协议 v3）已交付**（`b/qoder/1027-lau-d2a`，回执在提交信息：v3 落 `kojo-core`、双跑降级、差集 1 码元/键、ERB 首帧进 BASELINES）；**LAU-D2a/D2b 已交付**（方言事实接线 + `dialect lint` 七项；引擎词表收成单一真源，M1 6⇒5）；**LAU-6（`@原生` 注入）与 LAU-D3（口上 XML 载体）已交付**（`b/qoder/1027-lau-inject`，回执在提交信息）；LAU-4 仍与 ERB-PARITY、SDK B4/B5 同文件，须串行 | LAU-4 等 B4/B5；LAU-2（角色表）/ LAU-5（单池）/ LAU-D4（方言包 + 翻译）未开工；LAU-6 的 `bodyPath` / `disposeInjectionClients` 宿主装配与 D3 的「编辑器内开 XML」UI 取证留待后续 | LAU-1 / D2 / 6 / D3 已交付 · 2026-10-27 |
+| LAU-BLOCKED | **LAU-1（协议 v3）已交付**（`b/qoder/1027-lau-d2a`，回执在提交信息：v3 落 `kojo-core`、双跑降级、差集 1 码元/键、ERB 首帧进 BASELINES）；**LAU-D2a/D2b 已交付**（方言事实接线 + `dialect lint` 七项；引擎词表收成单一真源，M1 6⇒5）；**LAU-6（`@原生` 注入）与 LAU-D3（口上 XML 载体）已交付**（`b/qoder/1027-lau-inject`，回执在提交信息）；LAU-4 仍与 ERB-PARITY、SDK B4/B5 同文件，须串行 | LAU-4 等 B4/B5；LAU-2（角色表）/ LAU-5（单池）/ LAU-D4（方言包 + 翻译）未开工；LAU-6 的 `disposeInjectionClients` 宿主装配与 D3 的「编辑器内开 XML」UI 取证**已交付**（`b/lau6/1027-residual`，回执在提交信息：拆毁点接在 `teardownGlobalProviders`、真机三件套 PASS），只剩 LAU-6 的 `bodyPath`（无消费方，`InjectionSpec` 已注"未实现"） | LAU-1 / D2 / 6 / D3 已交付 · 2026-10-27 |
 
 ## 在办 · 启动器落地（2026-10-26，组长 qoder）
 
