@@ -110,7 +110,7 @@ function captureTable(name = 'comment', node = 'x'): Record<string, unknown> {
   return { names: [name], nodes: [node], spans: [0, 0, 0, 1, 0, 0] };
 }
 
-const TOKEN_A: KojoStructureToken = { startRow: 0, startCol: 0, endRow: 0, endCol: 1, tier: 'comment', capture: 'comment', node: 'x' };
+const TOKEN_A: KojoStructureToken = { startRow: 0, startCol: 0, endRow: 0, endCol: 1, tier: 'role.comment', capture: 'comment', node: 'x' };
 const RULES_A: KojoStructureIndentRules = { increasePatterns: ['^\\s*A$'], decreasePatterns: [], enterPatterns: [] };
 
 type FakeModel = Monaco.editor.ITextModel & { edit(next: string): void };
@@ -564,8 +564,8 @@ describe('等待票 / 正常丢弃 / 版本读点', () => {
     await flush();
     expect(settled).toBe(false); // 缓存里只有 v1 的结果，必须等 v2
     worker.reply(parseReply(editRequest.id, 1, 2, { semantic: captureTable('keyword') }));
-    expect(await second).toEqual([{ ...TOKEN_A, tier: 'sugar.keyword', capture: 'keyword' }]);
-    expect(await client.tokens(model)).toEqual([{ ...TOKEN_A, tier: 'sugar.keyword', capture: 'keyword' }]);
+    expect(await second).toEqual([{ ...TOKEN_A, tier: 'role.keyword', capture: 'keyword' }]);
+    expect(await client.tokens(model)).toEqual([{ ...TOKEN_A, tier: 'role.keyword', capture: 'keyword' }]);
     expect(notices).toHaveLength(0);
     client.dispose();
   });

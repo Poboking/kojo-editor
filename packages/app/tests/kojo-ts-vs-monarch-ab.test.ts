@@ -264,7 +264,7 @@ beforeAll(async () => {
         } else if (stripped === tier) {
           cells.same += 1;
           fileAgree += 1;
-        } else if (stripped.startsWith(`${tier}.`)) {
+        } else if (sameFamily(tier, stripped)) {
           cells.family += 1;
           fileAgree += 1;
         } else {
@@ -272,9 +272,9 @@ beforeAll(async () => {
         }
         const tierAgg = perTier.get(tier) ?? { total: 0, agree: 0 };
         tierAgg.total += 1;
-        if (stripped !== null && (stripped === tier || stripped.startsWith(`${tier}.`))) tierAgg.agree += 1;
+        if (stripped !== null && (stripped === tier || sameFamily(tier, stripped))) tierAgg.agree += 1;
         perTier.set(tier, tierAgg);
-        if (diffs.length < 400 && (stripped === null || (stripped !== tier && !stripped.startsWith(`${tier}.`)))) {
+        if (diffs.length < 400 && (stripped === null || (stripped !== tier && !sameFamily(tier, stripped)))) {
           diffs.push({
             fixture: rel,
             line: lineNo,
@@ -688,11 +688,29 @@ const TOKEN_AB_FLOOR = 99.2;
  * 取舍：不登记＝那些格子干脆不涂（覆盖率 58.7%），登记＝涂对主体、冒号跟着整段走。
  * ⇒ 两个方向都记在账上，**不许**为了抬高总比率把不一致的族偷偷摘掉。
  */
+/**
+ * 同族子档（**角色口径**，LAU-2 起）：旧口径靠 `<档位>.xxx` 前缀认"同一跨度里的深浅细分"
+ * （台词串首尾的 `sugar.speech.delimiter` 就是这一族）。角色化之后引号改叫 `role.punctuation`
+ * ——两门语言共用同一枚"结构性标点"色，前缀不再相连，但**格子的观感与两侧判据都没变**
+ * （`tests/fixtures/legacy-token-colors.json` 的零改色快照为证：两枚旧名落到同一 hex）。
+ * 故按"在哪一档的跨度里算同族"显式列出，别靠名字前缀猜。
+ */
+const TIER_FAMILY_SUBTIERS: Readonly<Record<string, readonly string[]>> = {
+  'role.speech': ['role.punctuation', 'role.interp', 'role.interp.delimiter', 'role.escape'],
+};
+
+/** 同族判定：同格同名（在上游已判）之外，前缀族 + 上表的显式子档 */
+function sameFamily(tier: string, stripped: string): boolean {
+  if (stripped.startsWith(`${tier}.`)) return true;
+  const subs = TIER_FAMILY_SUBTIERS[tier];
+  return subs !== undefined && subs.includes(stripped);
+}
+
 const TOKEN_AB_TIER_FLOORS: Readonly<Record<string, number>> = {
-  comment: 100,
-  'sugar.speech': 98.7,
-  'keyword.raw': 94.0,
-  'sugar.keyword': 66.2,
+  'role.comment': 100,
+  'role.speech': 98.7,
+  'role.raw': 94.0,
+  'role.keyword': 66.2,
 };
 /** 分母只增不减（本波实测 104,177；缩了就是覆盖面被偷） */
 const TOKEN_AB_MIN_CELLS = 104177;

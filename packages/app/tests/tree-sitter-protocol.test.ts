@@ -440,7 +440,7 @@ const LEGACY_TOKEN: KojoStructureToken = {
   startCol: 0,
   endRow: 0,
   endCol: 1,
-  tier: 'comment',
+  tier: 'role.comment',
   capture: 'comment',
   node: 'x',
 };

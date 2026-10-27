@@ -183,7 +183,7 @@ const token = (over: Partial<KojoStructureToken>): KojoStructureToken => ({
   startCol: 0,
   endRow: 0,
   endCol: 3,
-  tier: 'comment',
+  tier: 'role.comment',
   ...over,
 });
 
@@ -380,15 +380,15 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
       if (!byLine.has(t.startRow)) byLine.set(t.startRow, new Set());
       byLine.get(t.startRow)!.add(t.tier);
     }
-    expect(byLine.get(0)).toContain('comment');
-    expect(byLine.get(1)).toContain('keyword.preprocessor');
-    expect(byLine.get(2)).toContain('entity.name.function');
-    expect(byLine.get(3)).toContain('label');
-    expect(byLine.get(4)).toContain('keyword.preprocessor');
-    expect(byLine.get(5)).toContain('keyword.erb');
-    expect(byLine.get(8)).toContain('string');
-    expect(byLine.get(8)).toContain('sugar.interp');
-    expect(semantic.tokens.some((t) => t.tier === 'keyword.raw')).toBe(true);
+    expect(byLine.get(0)).toContain('role.comment');
+    expect(byLine.get(1)).toContain('role.directive');
+    expect(byLine.get(2)).toContain('role.decl');
+    expect(byLine.get(3)).toContain('role.label');
+    expect(byLine.get(4)).toContain('role.directive');
+    expect(byLine.get(5)).toContain('role.engine');
+    expect(byLine.get(8)).toContain('role.string');
+    expect(byLine.get(8)).toContain('role.interp');
+    expect(semantic.tokens.some((t) => t.tier === 'role.raw')).toBe(true);
     const histogram = new Map<string, number>();
     for (const t of semantic.tokens) histogram.set(t.tier, (histogram.get(t.tier) ?? 0) + 1);
     console.log(`[erb-ts-facets] semantic tokens=${semantic.tokens.length} 分档=${JSON.stringify(Object.fromEntries(histogram))}`);
@@ -408,7 +408,7 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
     );
     const semantic = lastReply(replies, 'semantic');
     if (!semantic) throw new Error('没有 semantic 回话');
-    const typed = semantic.tokens.filter((t) => t.tier === 'support.type');
+    const typed = semantic.tokens.filter((t) => t.tier === 'role.type');
     const text = ['#DIM CONST GLOBAL 心, 10', '#DIM DYNAMIC 计数', '#DIM 名字, 3', ''];
     const at = (t: (typeof typed)[number]): string =>
       text[t.startRow]!.slice(t.startCol, t.endCol).trim();
@@ -417,21 +417,21 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
     expect(typed.map(at), '类型档打出的词').toEqual(['CONST', 'GLOBAL', 'DYNAMIC']);
     // 同一行的其余部分**一档不许糊平**：声明词仍走预处理档，作者写的名字不涂色
     expect(semantic.tokens.filter((t) => t.startRow === 0).map((t) => t.tier)).toEqual(
-      expect.arrayContaining(['keyword.preprocessor']),
+      expect.arrayContaining(['role.directive']),
     );
-    expect(semantic.tokens.some((t) => t.tier === 'support.type' && at(t) === '心')).toBe(false);
+    expect(semantic.tokens.some((t) => t.tier === 'role.type' && at(t) === '心')).toBe(false);
     // 第三枚 `#DIM 名字, 3` 没有任何限定词 ⇒ 该行零类型格（判据不是"有 #DIM 就涂"）
     expect(typed.some((t) => t.startRow === 2)).toBe(false);
-    console.log(`[erb-ts-facets] support.type 命中=${typed.length} ${typed.map(at).join(',')}`);
+    console.log(`[erb-ts-facets] role.type 命中=${typed.length} ${typed.map(at).join(',')}`);
   });
 
   it('语义 token 的坐标落在捕获节点上（IF 行从行首缩进起、串从引号起）', async () => {
     const { replies } = await runEngine(FIXTURE);
     const semantic = lastReply(replies, 'semantic');
     if (!semantic) throw new Error('没有 semantic 回话');
-    const ifToken = semantic.tokens.find((t) => t.startRow === 5 && t.tier === 'keyword.erb');
+    const ifToken = semantic.tokens.find((t) => t.startRow === 5 && t.tier === 'role.engine');
     expect(ifToken).toMatchObject({ startCol: 4, endRow: 5, endCol: 14 });
-    const stringToken = semantic.tokens.find((t) => t.startRow === 8 && t.tier === 'string');
+    const stringToken = semantic.tokens.find((t) => t.startRow === 8 && t.tier === 'role.string');
     expect(stringToken?.startCol).toBe(19);
   });
 
@@ -520,7 +520,7 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message).toContain('@mystery');
     const semantic = lastReply(replies, 'semantic');
-    expect(semantic?.tokens.every((t) => t.tier === 'comment')).toBe(true);
+    expect(semantic?.tokens.every((t) => t.tier === 'role.comment')).toBe(true);
   });
 
   it('`@none` 是有意不着色的哨兵：不产生回落告警', async () => {
@@ -569,7 +569,7 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     const legend = erbSemanticTiers();
     expect(legend).toEqual([...legend].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
     expect(new Set(legend).size).toBe(legend.length);
-    expect(legend).toEqual(expect.arrayContaining(['comment', 'keyword.preprocessor', 'label', 'entity.name.function', 'keyword.erb', 'string', 'sugar.interp', 'keyword.raw']));
+    expect(legend).toEqual(expect.arrayContaining(['role.comment', 'role.directive', 'role.label', 'role.decl', 'role.engine', 'role.string', 'role.interp', 'role.raw']));
     expect(ERB_SEMANTIC_LEGEND.tokenTypes).toEqual(legend);
     expect(ERB_SEMANTIC_LEGEND.tokenModifiers).toEqual([]);
   });
@@ -578,34 +578,34 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(erbCaptureTier('definitely-not-a-capture')).toBeNull();
     expect(erbCaptureTier('none')).toBeUndefined();
-    expect(erbCaptureTier('comment')).toBe('comment');
+    expect(erbCaptureTier('comment')).toBe('role.comment');
     expect(encodeErbStructureTokens([token({ tier: 'sugar.nope' })], { lineCount: 1, maxColumn: () => 10 })).toMatchObject({ data: expect.any(Uint32Array) });
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('编码：单行为区间按（行，列）升序，坐标从 1 起', async () => {
-    const encoded = encodeErbStructureTokens([token({ startRow: 0, startCol: 0, endRow: 0, endCol: 5, tier: 'comment' })], {
+    const encoded = encodeErbStructureTokens([token({ startRow: 0, startCol: 0, endRow: 0, endCol: 5, tier: 'role.comment' })], {
       lineCount: 1,
       maxColumn: () => 12,
     });
     expect(await decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
-      { line: 1, startColumn: 1, length: 5, tier: 'comment' },
+      { line: 1, startColumn: 1, length: 5, tier: 'role.comment' },
     ]);
   });
 
   it('编码：内层优先——串里的插值不被整枚串吞掉，外层切开补写', async () => {
     const encoded = encodeErbStructureTokens(
       [
-        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 20, tier: 'string' }),
-        token({ startRow: 0, startCol: 5, endRow: 0, endCol: 10, tier: 'sugar.interp' }),
+        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 20, tier: 'role.string' }),
+        token({ startRow: 0, startCol: 5, endRow: 0, endCol: 10, tier: 'role.interp' }),
       ],
       { lineCount: 1, maxColumn: () => 21 },
     );
     const decoded = await decode(encoded.data, ERB_SEMANTIC_LEGEND.tokenTypes);
     expect(decoded.map((d) => [d.startColumn, d.length, d.tier])).toEqual([
-      [1, 5, 'string'],
-      [6, 5, 'sugar.interp'],
-      [11, 10, 'string'],
+      [1, 5, 'role.string'],
+      [6, 5, 'role.interp'],
+      [11, 10, 'role.string'],
     ]);
     // 切开是**设计内的补写**（一段都没丢）⇒ 不许计入"丢弃"：算进去就变成每份带插值的口上都
     // 报一条"结构着色没顶上"（2026-10-25 修掉的那条误报）
@@ -621,8 +621,8 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
   it('编码：完全被覆盖的重叠区间丢掉并计数', async () => {
     const encoded = encodeErbStructureTokens(
       [
-        token({ startRow: 0, startCol: 2, endRow: 0, endCol: 8, tier: 'comment' }),
-        token({ startRow: 0, startCol: 2, endRow: 0, endCol: 8, tier: 'comment' }),
+        token({ startRow: 0, startCol: 2, endRow: 0, endCol: 8, tier: 'role.comment' }),
+        token({ startRow: 0, startCol: 2, endRow: 0, endCol: 8, tier: 'role.comment' }),
       ],
       { lineCount: 1, maxColumn: () => 10 },
     );
@@ -664,7 +664,7 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
 
   it('编码：跨度超上限整条丢掉（错误恢复把块撑到全篇时不许糊屏）', () => {
     const result = splitErbStructureTokens(
-      [token({ startRow: 0, endRow: 250, tier: 'string' })],
+      [token({ startRow: 0, endRow: 250, tier: 'role.string' })],
       { lineCount: 400, maxColumn: () => 10 },
     );
     expect(result.droppedWide).toBe(1);
@@ -735,14 +735,14 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
   it('provider：有 token ⇒ 编成 Monaco 数据', async () => {
     const provider = createErbSemanticTokensProvider({
       languageId: ERB_LANGUAGE_ID,
-      tokens: async () => [token({ startRow: 0, startCol: 0, endRow: 0, endCol: 5, tier: 'comment' })],
+      tokens: async () => [token({ startRow: 0, startCol: 0, endRow: 0, endCol: 5, tier: 'role.comment' })],
     });
     const result = (await provider.provideDocumentSemanticTokens!(fakeModel(['hello world']), null, noCancel)) as
       | { data: Uint32Array }
       | null;
     expect(result).not.toBeNull();
     expect(await decode(result!.data, ERB_SEMANTIC_LEGEND.tokenTypes)).toEqual([
-      { line: 1, startColumn: 1, length: 5, tier: 'comment' },
+      { line: 1, startColumn: 1, length: 5, tier: 'role.comment' },
     ]);
   });
 
@@ -774,8 +774,8 @@ describe('ERB 语义 facet · 档位、编码与 provider 边界', () => {
     const provider = createErbSemanticTokensProvider({
       languageId: ERB_LANGUAGE_ID,
       tokens: async () => [
-        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'comment' }),
-        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'string' }), // 整段被先到的盖住
+        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'role.comment' }),
+        token({ startRow: 0, startCol: 0, endRow: 0, endCol: 4, tier: 'role.string' }), // 整段被先到的盖住
       ],
     });
     await provider.provideDocumentSemanticTokens!(fakeModel(['IF X']), null, noCancel);

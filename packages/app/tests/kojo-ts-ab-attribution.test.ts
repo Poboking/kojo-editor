@@ -400,9 +400,24 @@ function buildExpectations(): void {
   }
 }
 
+/**
+ * 同族子档（**角色口径**，LAU-2 起）：旧口径靠 `<档位>.xxx` 前缀认"同一跨度里的深浅细分"
+ * （台词串首尾的 `sugar.speech.delimiter` 就是一例）。角色化后引号改叫 `role.punctuation`
+ * ——两门语言共用同一枚"结构性标点"色，前缀不再相连，但**观感与两侧判据都没变**
+ * （零改色快照 `fixtures/legacy-token-colors.json` 为证）⇒ 按"在哪一档的跨度里算同族"显式列出。
+ */
+const TIER_FAMILY_SUBTIERS: Readonly<Record<string, readonly string[]>> = {
+  'role.speech': ['role.punctuation', 'role.interp', 'role.interp.delimiter', 'role.escape'],
+};
+
+/** 同族（含同格同名）：前缀族 + 上表的显式子档 */
+const sameFamily = (tier: string, token: string | null): boolean =>
+  token !== null &&
+  (token === tier || token.startsWith(`${tier}.`) || (TIER_FAMILY_SUBTIERS[tier]?.includes(token) ?? false));
+
 /** 同族命中口径（与既有 A/B 的"同族子档算一致"同一条尺）。 */
 const matches = (token: string | null, expected: string | undefined): boolean =>
-  expected !== undefined && token !== null && (token === expected || token.startsWith(`${expected}.`));
+  expected !== undefined && sameFamily(expected, token);
 
 /* ==================== 差异格与三桶 ==================== */
 
@@ -577,9 +592,9 @@ beforeAll(async () => {
         const structure = paint.tier;
         if (monarch === null) cells.monarchBlank += 1;
         else if (monarch === structure) cells.same += 1;
-        else if (monarch.startsWith(`${structure}.`)) cells.family += 1;
+        else if (sameFamily(structure, monarch)) cells.family += 1;
         else cells.otherTier += 1;
-        if (monarch !== null && (monarch === structure || monarch.startsWith(`${structure}.`))) continue;
+        if (sameFamily(structure, monarch)) continue;
         const logical = logicalByRow.get(lineNo);
         const kind = logical === undefined ? '<无逻辑行>' : classifyLine(logical).kind;
         kindSeen.add(kind);
@@ -640,8 +655,17 @@ beforeAll(async () => {
  * ⚠ 分母口径：本文件的语料 = "既有 19 份"，`packages/kojo-syntax-tree/tests` 整棵子树不吃。
  * 若红先看第一行打印的夹具清单——清单变了（新增语料 / 有人把夹具挪进 `fixtures/`）就要重算取数，
  * 与既有 A/B 一样按"分母变大是允许方向、但必须重算并报新数"处置，不许默默抬预算。
+ *
+ * **LAU-2 角色化（2026-10-27）：189 ⇒ 0，动的是"同族"那一条口径，不是判定。**
+ * 那 189 格从来不是"两侧判据打架"，而是**同一件事实换了名字**：台词串首尾的引号旧名
+ * `sugar.speech.delimiter` 靠 `<档位>.` 前缀算同族，角色化后它叫 `role.punctuation`
+ * （两门语言共用同一枚"结构性标点"色，零改色快照 `fixtures/legacy-token-colors.json` 为证）
+ * ⇒ 前缀不再相连，2,585 格引号 + 189 格插值集体掉进"说不清"。本批把"在哪一档的跨度里算同族"
+ * 显式写成 `TIER_FAMILY_SUBTIERS`（`role.speech` → 标点 / 插值 / 插值定界 / 转义），
+ * 两把尺（本文件与 `kojo-ts-vs-monarch-ab`）同一个口径 ⇒ 桶回到 0。
+ * 棘轮方向没变：以后哪一批让"说不清"多一格，仍然当场红。
  */
-const UNRESOLVED_BUDGET = 189;
+const UNRESOLVED_BUDGET = 0;
 
 const BUCKETS: readonly Verdict[] = ['结构层更对', '词法层更对', '说不清'];
 
@@ -699,7 +723,7 @@ describe('结构层 ↔ 词法层逐格差异归因（三桶 + 说不清棘轮�
     console.log(`  真表缺口落到格子上（有差异格又没期望档位的 kind ⇒ 缩小"说不清"只能从这里补真表）: ${[...gapCellCounts].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n} 格[${expectationGapReasons.get(k) ?? '?'}｜${expectationGapDetails.get(k) ?? ''}]`).join(' / ') || '—'}`);
     // 节点级覆盖那一格要真的在链上（漏接 = 归因会把 heart_text 判成 keyword 档，白报一堆"结构层更对"）
     expect(tierForCapture('keyword', 'heart_text'), 'heart_text 的节点级覆盖没进归因链').toBe(KOJO_STRUCTURE_NODE_TIERS.keyword!.heart_text);
-    expect(expectationByKind.get('heartText')).toBe('sugar.speech');
+    expect(expectationByKind.get('heartText')).toBe('role.speech');
   });
 
   it('差异格逐条归因：分桶读数 + 三桶样例（总数仍由既有 A/B 文件管）', () => {
@@ -829,7 +853,7 @@ describe('结构层 ↔ 词法层逐格差异归因（三桶 + 说不清棘轮�
     expect(interpolationCellsLineInitial, '行首整行形不再是 2 枚 ⇒ `interpolation` 的行级形状漂了').toBe(2);
     expect(inlineNodes, `行内 interpolation ${inlineNodes} 枚 < 棘轮 27 枚`).toBeGreaterThanOrEqual(27);
     // ④ 登记了也不会自动翻格——这条把"还剩什么活"写死成事实：说不清一格没少（口径没改，实测如此）
-    expect(unresolvedRows.length, '说不清桶若真的往下走，必须先说清是哪一条口径动了（不许顺手改判定）').toBe(189);
+    expect(unresolvedRows.length, '说不清桶若真的往下走，必须先说清是哪一条口径动了（不许顺手改判定）').toBe(UNRESOLVED_BUDGET);
   });
 
   it('归因没长出第二道总数闸：本文件不判一致率，只报参照', () => {
