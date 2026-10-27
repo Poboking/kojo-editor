@@ -56,6 +56,41 @@ export function chordEquals(a: KeyChord, b: KeyChord): boolean {
 }
 
 /**
+ * chord → 索引键（`chordEquals` 的字符串形态，只给键位索引当哈希用）。
+ *
+ * 修饰键顺序固定 c/s/a/m，主键按 `chordFromEvent` 的口径已是小写，所以同一个和弦
+ * 只有一种写法——`buildKeybindingIndex` 与 `keydown` 两侧都吃这一个函数，不会漂。
+ */
+export function chordKey(c: KeyChord): string {
+  return `${c.ctrl ? 'c' : ''}${c.shift ? 's' : ''}${c.alt ? 'a' : ''}${c.meta ? 'm' : ''}:${c.key}`;
+}
+
+/**
+ * 键位索引：`chordKey → 第一条命中的命令`（注册表换代时算一次，别在击键路径上现扫）。
+ *
+ * 为什么要这张表：壳层的 `window` 级 keydown 此前对**每条**带键位的命令都跑一遍
+ * `parseKeybinding`（`toLowerCase` + `split` + `map` + `filter`，一次 4–6 个临时对象），
+ * 而带键位的命令数随插件贡献增长——输入路径上不该有这条线性税。
+ *
+ * 语义与逐条比对**逐字等价**：
+ * - 多和弦（`ctrl+k ctrl+x`，带空格）不进表，仍由壳层上方那条特例分支处理；
+ * - 同一和弦有多条命令时只留**注册表顺序第一条**——原实现命中即 `return`，
+ *   无论它 `commandEnabled` 是真是假都不会再看下一条（见 `ShellLayout` 的 keydown 注释）。
+ */
+export function buildKeybindingIndex(registry: readonly CommandEntry[]): Map<string, CommandEntry> {
+  const out = new Map<string, CommandEntry>();
+  for (const cmd of registry) {
+    const binding = cmd.keybinding;
+    if (!binding || binding.includes(' ')) continue;
+    const parsed = parseKeybinding(binding);
+    if (!parsed) continue;
+    const key = chordKey(parsed);
+    if (!out.has(key)) out.set(key, cmd);
+  }
+  return out;
+}
+
+/**
  * 方向键的人读符号（MM-6 导航键位专用特例）：`alt+arrowleft` 原样显示成
  * 「Alt+arrowleft」——快捷键页与命令面板 hint 里一溜小写英文，作者读不了。
  * 只收左右两支（宿主缺省键位里用得上方向键的只有导航历史）；其余方向键不在

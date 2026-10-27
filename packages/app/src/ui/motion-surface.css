@@ -38,7 +38,11 @@
   }
 }
 
-.file-tree .tree-files > li,
+/* 只铺**前 12 行**（每张列表各算各的）：入场动画是"新内容来了"的提示，用户看得见的
+   就是首屏那十几行；再往下的行在屏外，给它们挂动画等于给一次「展开大目录」凭空造出
+   几百上千个并发动画（层创建 + 合成 + 光栅化都按行数走，而树不虚拟化）。第 13 行起
+   直接以终态出现——视觉上不可见，代价上是一次省掉的整列表重绘。 */
+.file-tree .tree-files > li:nth-child(-n + 12),
 .tree-loading .ov-skeleton > .ov-skeleton-row {
   animation: ms-row-in var(--dur-1) var(--ease-standard) backwards;
 }

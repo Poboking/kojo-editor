@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { EditorCommandContribution } from '@kojo/plugin-api';
 import {
   buildCommandRegistry,
+  buildKeybindingIndex,
+  chordKey,
   chordEquals,
   chordFromEvent,
   commandEnabled,
@@ -232,5 +234,66 @@ describe('快速打开候选过滤', () => {
 
   it('大小写不敏感（查询小写、路径含大写仍命中）', () => {
     expect(filterFileCandidates(paths, 'm_kojo_k12_日常')).toEqual([paths[1]]);
+  });
+});
+/**
+ * 键位索引（2026-10-27 前端性能批）：`buildKeybindingIndex` 与壳层原来那条
+ * 「每条命令现 parse 一遍」的循环**逐字等价**——这条钉子钉的就是"等价"本身，
+ * 免得下次有人图省事把某条边界（多和弦 / 同键多条 / 非法键位）改出分歧。
+ */
+describe('buildKeybindingIndex：与逐条比对同语义，只是提前算好', () => {
+  const entry = (id: string, keybinding?: string): CommandEntry => ({
+    id,
+    title: id,
+    ...(keybinding !== undefined ? { keybinding } : {}),
+    run: () => undefined,
+  });
+
+  /** 旧实现的投影：命中第一条即返回（与 ShellLayout 的 keydown 同一条规矩） */
+  const legacyFirstHit = (registry: readonly CommandEntry[], chord: KeyChord): CommandEntry | null => {
+    for (const cmd of registry) {
+      if (!cmd.keybinding || cmd.keybinding.includes(' ')) continue;
+      const parsed = parseKeybinding(cmd.keybinding);
+      if (parsed && chordEquals(parsed, chord)) return cmd;
+    }
+    return null;
+  };
+
+  const chords: KeyChord[] = [
+    { ctrl: true, shift: false, alt: false, meta: false, key: 'b' },
+    { ctrl: true, shift: true, alt: false, meta: false, key: 'p' },
+    { ctrl: false, shift: false, alt: true, meta: false, key: 'arrowleft' },
+    { ctrl: false, shift: false, alt: false, meta: false, key: 'x' },
+    { ctrl: true, shift: false, alt: false, meta: false, key: 'k' },
+  ];
+
+  it('同一张注册表上，索引查表与逐条比对给出同一条命令', () => {
+    const registry: CommandEntry[] = [
+      entry('a', 'ctrl+b'),
+      entry('b', 'Ctrl+Shift+P'), // 大小写不敏感
+      entry('c', 'ctrl+k ctrl+x'), // 多和弦：不进索引，两侧都不命中
+      entry('d'), // 无键位
+      entry('e', 'shift+alt+arrowleft'),
+      entry('f', 'ctrl+'), // 非法：解析为 null
+    ];
+    const index = buildKeybindingIndex(registry);
+    for (const chord of chords) {
+      expect(index.get(chordKey(chord))?.id ?? null, chordKey(chord)).toBe(legacyFirstHit(registry, chord)?.id ?? null);
+    }
+  });
+
+  it('同键多条只留注册表顺序第一条（原实现命中即 return，不看 enabled）', () => {
+    const registry: CommandEntry[] = [entry('first', 'ctrl+b'), entry('second', 'ctrl+b')];
+    const index = buildKeybindingIndex(registry);
+    expect(index.get(chordKey({ ctrl: true, shift: false, alt: false, meta: false, key: 'b' }))?.id).toBe('first');
+  });
+
+  it('多和弦（带空格）一条都不进索引——它们仍走壳层上方那条特例分支', () => {
+    const index = buildKeybindingIndex([entry('chord', 'ctrl+k ctrl+x'), entry('solo', 'ctrl+j')]);
+    expect([...index.keys()]).toEqual(['c:j']);
+  });
+
+  it('注册表为空 ⇒ 空索引（击键路径上不炸）', () => {
+    expect(buildKeybindingIndex([]).size).toBe(0);
   });
 });

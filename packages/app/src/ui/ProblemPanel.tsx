@@ -339,7 +339,8 @@ export function ProblemPanel({
   const filteredSummary = useMemo(() => summarizeProblems(filtered), [filtered]);
   const filtering = isFiltering(activeFilter);
   /** 来源过滤下拉的选项（序 = 首次出现序；来源只有一种时不给下拉——没有第二个选项的开关是噪音） */
-  const srcOpts = sourceOptions(items);
+  // 按 `items` 记忆：本组件每次滚动窗口提交都会重渲，裸调 `sourceOptions` 等于每帧 O(n) 建一张 Map
+  const srcOpts = useMemo(() => sourceOptions(items), [items]);
   const clearFilter = (): void => {
     setFilterPrefs({ severities: ALL_SEVERITIES, source: null, text: '' });
   };

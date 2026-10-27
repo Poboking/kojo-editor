@@ -173,6 +173,40 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
    */
   const [fold, setFold] = useState<OutlineFoldState>(EMPTY_FOLD);
 
+  /**
+   * 行投影缓存：同一份 `symbols`（**引用相等**）只建一次树。
+   *
+   * 为什么按 `symbols` 引用而不是按光标位置：语言服务在**文档改动**时才换一份新的符号数组，
+   * 纯光标走动给的是同一个引用。此前的实现每次 `refresh()` 都重跑 `buildOutlineRows`
+   * （每层 `[...nodes].sort(...)`）与 `outlineRowsKey`（把所有行拼成一个大字符串），
+   * 而 `refresh` 是挂在 `editor.cursorMoved` 上的 ⇒ **每敲一个字就白烧一遍 O(n log n)**，
+   * 等值键省掉的只是 setState，不省计算。缓存之后光标腿只剩 `locateOutlineRow`。
+   */
+  const rowsCacheRef = useRef<{
+    readonly symbols: readonly EditorDocumentSymbol[];
+    readonly rows: readonly OutlineRow[];
+    readonly key: string;
+  } | null>(null);
+
+  /** 行投影（带缓存，见 `rowsCacheRef`）：`symbols` 引用不变就复用上一次的树 */
+  const rowsOf = useCallback((symbols: readonly EditorDocumentSymbol[]): readonly OutlineRow[] => {
+    const cached = rowsCacheRef.current;
+    if (cached !== null && cached.symbols === symbols) return cached.rows;
+    const rows = buildOutlineRows(symbols);
+    rowsCacheRef.current = { symbols, rows, key: outlineRowsKey(rows) };
+    return rows;
+  }, []);
+
+  /** 行序键：与 `rowsOf` 共用同一份缓存，别再拼一遍大字符串 */
+  const rowsKeyOf = useCallback(
+    (symbols: readonly EditorDocumentSymbol[] | null, rows: readonly OutlineRow[]): string => {
+      const cached = rowsCacheRef.current;
+      if (cached !== null && cached.symbols === symbols && cached.rows === rows) return cached.key;
+      return outlineRowsKey(rows);
+    },
+    [],
+  );
+
   const refresh = useCallback((): void => {
     const probe = readJumpProbe();
     let next: Omit<OutlineViewState, 'key' | 'shape'>;
@@ -183,7 +217,7 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
     } else if (probe.symbols === null) {
       next = { path: probe.path, symbols: null, rows: [], activeIndex: -1, notice: NO_SYMBOLS_NOTICE };
     } else {
-      const rows = buildOutlineRows(probe.symbols);
+      const rows = rowsOf(probe.symbols);
       if (rows.length === 0) {
         next = { path: probe.path, symbols: probe.symbols, rows, activeIndex: -1, notice: EMPTY_TREE_NOTICE };
       } else {
@@ -196,7 +230,7 @@ export function OutlinePanel({ kernel, onReveal }: OutlinePanelProps): ReactElem
         };
       }
     }
-    const rowsKey = outlineRowsKey(next.rows);
+    const rowsKey = rowsKeyOf(next.symbols, next.rows);
     // 空态文案是一份对象：等值键必须取它的**文字**，否则同一棵空态每次刷新都会 setState
     const noticeKey = next.notice === null ? '' : `${next.notice.title}\u0001${next.notice.hint}`;
     const key = `${next.path ?? ''}\u0000${noticeKey}\u0000${next.activeIndex}\u0000${rowsKey}`;

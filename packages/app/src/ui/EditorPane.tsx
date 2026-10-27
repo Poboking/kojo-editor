@@ -2704,6 +2704,19 @@ export function EditorPane({
     return () => setPreviewMenuRuntime(groupId, null);
   }, [groupId, readPreviewMenuContext, runPreviewMenuAction]);
 
+  /**
+   * 面包屑跳行：`CrumbBar` 是 `memo` 组件（`breadcrumb-bar.tsx`），此前这里传的是内联箭头
+   * ⇒ 每次 EditorPane 渲染都是新引用、memo 恒失效，整条链（含派生）跟着重画。
+   * 身份稳定后只有 `levels` 真变才重画。
+   */
+  const revealCrumbLine = useCallback(
+    (line: number): void => {
+      if (!filePath) return;
+      kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });
+    },
+    [filePath, kernel],
+  );
+
   const labelParts = pathLabelParts(filePath);
 
   /** 预览是否正挂在屏上（= 横幅面该不该存在，也是 `sugar-stats` 渲染的那一档） */
@@ -2835,13 +2848,7 @@ export function EditorPane({
               空链整条不渲染（糖视图 / 不在任何块内 = 没有可信的真文件行号可展示）——
               带子本身仍在（身份与动作都不该跟着符号链一起消失）。
               点击走 `editor.revealLocation` 既有通道跳块头行——不新造导航机制。 */}
-          <CrumbBar
-            levels={breadcrumb.crumbLevels}
-            onRevealLine={(line) => {
-              if (!filePath) return;
-              kernel.bus.emit('editor.revealLocation', { filePath, line, source: '面包屑' });
-            }}
-          />
+          <CrumbBar levels={breadcrumb.crumbLevels} onRevealLine={revealCrumbLine} />
         </div>
         {/* 导航与动作分域那道竖线（吃 --border，不写死色；与壳层工具栏那件同一手法） */}
         <span className="band-divider" aria-hidden="true" />

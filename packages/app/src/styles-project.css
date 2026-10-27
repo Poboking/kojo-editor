@@ -1009,6 +1009,11 @@ textarea {
   overflow: auto;
   flex: 1;
   mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  /* 长列表隔离带（照 problem-panel.css 的实测口径：35–47ms → 17–18ms）：
+     树是全站最长的滚动面，行级 hover / 入场动画 / 选中态任何一处变化都会把整棵子树
+     标脏；`layout` 让子树布局不外溢、`paint` 把重绘收在盒内。没有可见溢出：
+     导轨是 `.tree-files` 自己的 `::before`（在盒内），右键菜单走 portal 挂在 body。 */
+  contain: layout paint;
 }
 .tree-group-btn {
   width: 100%;

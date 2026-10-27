@@ -45,6 +45,9 @@
   height: 100%;
   min-height: 0;
   overflow: auto;
+  /* 长列表隔离带（口径同 problem-panel.css）：大纲行数随文档符号数增长，光标走动会换
+     `is-active` 行（扫光动画），不隔离时整棵子树被标脏；`paint` 把重绘收在盒内。 */
+  contain: layout paint;
   font-size: var(--fs-1);
 }
 

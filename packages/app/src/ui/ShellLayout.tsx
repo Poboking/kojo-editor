@@ -186,10 +186,10 @@ import {
 } from './shell-keys';
 import {
   buildCommandRegistry,
+  buildKeybindingIndex,
   chordFromEvent,
-  chordEquals,
+  chordKey,
   commandEnabled,
-  parseKeybinding,
   type ShellCommandSpec,
 } from './commands';
 // 内核动作清单（1026 编辑器内核批）：Monaco 内建动作的宿主命令入口，纯数据
@@ -2012,6 +2012,11 @@ export function ShellLayout(props: Props): ReactElement {
   // 最新注册表 / 上下文 ref（全局键盘处理器闭包外读取）
   const registryRef = useRef(registry);
   registryRef.current = registry;
+  // 键位索引：注册表换代时算一次。击键路径上只做一次 `chordKey` + `Map.get`
+  // （此前是每条带键位的命令各 `parseKeybinding` 一遍，见 `buildKeybindingIndex` 头注）。
+  const keybindingIndex = useMemo(() => buildKeybindingIndex(registry), [registry]);
+  const keybindingIndexRef = useRef(keybindingIndex);
+  keybindingIndexRef.current = keybindingIndex;
   const commandCtxRef = useRef(commandCtx);
   commandCtxRef.current = commandCtx;
 
@@ -2255,28 +2260,25 @@ export function ShellLayout(props: Props): ReactElement {
         void toggleFullscreen();
         return;
       }
-      // 注册表 keybinding 匹配
+      // 注册表 keybinding 匹配（索引表，注册表换代时算一次——见 `buildKeybindingIndex`）
       const chord = chordFromEvent(e);
       if (!chord) return;
-      for (const cmd of registryRef.current) {
-        if (!cmd.keybinding || cmd.keybinding.includes(' ')) continue; // 和弦走上方特例
-        const parsed = parseKeybinding(cmd.keybinding);
-        if (parsed && chordEquals(parsed, chord)) {
-          // 启用态闸（与命令面板同一条 `commandEnabled` 判据）：无项目时 Ctrl+N 在面板里
-          // 是灰的，键盘侧也必须按不动——false ⇒ 不 preventDefault、不 run，让原生行为接手。
-          // 停在这一条命令（不回退到下一条同键命令）：分发仍是「注册表顺序先到先得」。
-          if (
-            !shouldRunGlobalCommand({
-              ...keyEvidence,
-              enabled: commandEnabled(cmd, commandCtxRef.current),
-            })
-          ) {
-            return;
-          }
-          e.preventDefault();
-          void cmd.run(commandCtxRef.current);
+      const cmd = keybindingIndexRef.current.get(chordKey(chord));
+      if (cmd !== undefined) {
+        // 启用态闸（与命令面板同一条 `commandEnabled` 判据）：无项目时 Ctrl+N 在面板里
+        // 是灰的，键盘侧也必须按不动——false ⇒ 不 preventDefault、不 run，让原生行为接手。
+        // 停在这一条命令（不回退到下一条同键命令）：分发仍是「注册表顺序先到先得」。
+        if (
+          !shouldRunGlobalCommand({
+            ...keyEvidence,
+            enabled: commandEnabled(cmd, commandCtxRef.current),
+          })
+        ) {
           return;
         }
+        e.preventDefault();
+        void cmd.run(commandCtxRef.current);
+        return;
       }
     };
     window.addEventListener('keydown', onKey);
