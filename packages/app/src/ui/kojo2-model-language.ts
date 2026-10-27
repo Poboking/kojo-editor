@@ -24,6 +24,10 @@
  *    池回收时（`onWillDispose`）自动解绑，不留悬空监听。
  * 5. **纯逻辑可单测**：路由函数、调度器、`setModelLanguage` 全部注入；本模块不 import
  *    `monaco/entry`（node 环境可直接跑）。
+ * 6. **门不回头改语言**（LAU-3 / §4.4）：重挂时把 model 当前语言交回判据
+ *    （{@link languageIdForKojo2Model} 的第三格），语言可用性门封掉一门语言之后，
+ *    **已认领**的 model 保持原语言，只有新开的落 `plaintext`。判据住在
+ *    `monaco/language-registry.ts::keepClaimedLanguageWhenGated`（只此一处）。
  *
  * ## 调用面
  *
@@ -35,6 +39,7 @@
  */
 
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
+import { keepClaimedLanguageWhenGated } from '../monaco/language-registry';
 import { languageFor } from './editor-model-pool';
 import { getKojo2CutoverController } from './kojo2-cutover';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
@@ -52,8 +57,25 @@ import { isKojo2CutoverEnabled } from './kojo2-flag';
  *    - `resolved` 且 parser 是 v1 / `ambiguous` / `needs-content` / `not-kojo` ⇒ `languageFor(path)`；
  *    - `blocked`（`v1-only` 下把 `.kojo` 显式钉成 2.0）⇒ `plaintext`：不拿 v1 词法去啃
  *      2.0 文本（那会把整篇标成错误），也不假装那条解析器切换已经可用。
+ *
+ * ## 第三格 `currentLanguageId`（LAU-3 / §4.4：门不回头改语言）
+ *
+ * **只有重挂路径传它**（建 model 那一刻没有"当前语言"）。传了 ⇒ 结论再过一道
+ * {@link keepClaimedLanguageWhenGated}：语言可用性门把 kojo1（封存层）关掉之后，`languageFor`
+ * 对一份 v1 内容的 `.kojo` 会答 `plaintext`，若照单重挂，作者眼前这份在编文件当场丢高亮与
+ * 四面——比"这一层暂时不可用"严重得多。守门后的口径：**已认领的保持原语言，新开的落兜底**。
  */
-export function languageIdForKojo2Model(filePath: string, text: string): string {
+export function languageIdForKojo2Model(
+  filePath: string,
+  text: string,
+  currentLanguageId?: string,
+): string {
+  const resolved = resolveKojo2ModelLanguage(filePath, text);
+  return keepClaimedLanguageWhenGated(currentLanguageId, resolved);
+}
+
+/** 不带守门的原始判据（{@link languageIdForKojo2Model} 的内层；单独导出只为可读性） */
+function resolveKojo2ModelLanguage(filePath: string, text: string): string {
   if (!isKojo2CutoverEnabled()) return languageFor(filePath);
   const route = getKojo2CutoverController().route({ filePath, source: text });
   switch (route.kind) {
@@ -99,8 +121,14 @@ export interface Kojo2Disposable {
 export interface Kojo2ModelLanguageDeps {
   /** 2.0 预演开关（读 localStorage；**每次动作现判**，运行中关掉立即失效） */
   readonly isEnabled: () => boolean;
-  /** 目标语言判据（真身 = {@link languageIdForKojo2Model}） */
-  readonly resolveLanguage: (filePath: string, text: string) => string;
+  /**
+   * 目标语言判据（真身 = {@link languageIdForKojo2Model}）。
+   *
+   * 第三格 = **这份 model 此刻挂着的语言 id**，重挂路径必传：真身据此走 §4.4 的守门
+   * （门把一门语言封掉时，已认领的 model 不被刷成 `plaintext`）。少给一格的注入面
+   * （旧测试 / 假体）仍合法——TS 允许形参更少的函数赋进来，只是那道守门不生效。
+   */
+  readonly resolveLanguage: (filePath: string, text: string, currentLanguageId?: string) => string;
   /** 真身 = `monaco.editor.setModelLanguage`；本模块只经这个出口碰 Monaco */
   readonly setModelLanguage: (model: Kojo2LanguageModelLike, languageId: string) => void;
   /** 防抖窗口（毫秒）；缺省 {@link KOJO2_LANGUAGE_REMOUNT_DEBOUNCE_MS} */
@@ -250,14 +278,17 @@ export function createKojo2ModelLanguageController(
       skipped += 1;
       return;
     }
+    // 当前语言**先取一次**：既作幂等判据，也交给判据那一格做 §4.4 的守门
+    // （门把 kojo1 封掉时，不许把这份在编文件刷成 `plaintext`）。
+    const current = attachment.model.getLanguageId();
     let desired: string;
     try {
-      desired = deps.resolveLanguage(attachment.path, attachment.model.getValue());
+      desired = deps.resolveLanguage(attachment.path, attachment.model.getValue(), current);
     } catch (error: unknown) {
       warnOnce(attachment, `重判语言失败（${attachment.path}）：${messageOf(error)}`);
       return;
     }
-    if (desired === attachment.model.getLanguageId()) {
+    if (desired === current) {
       skipped += 1; // 同语言不重挂（幂等判据）
       return;
     }

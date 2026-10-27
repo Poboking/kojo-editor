@@ -4,9 +4,10 @@
  * monaco 与内核 io 全部注入假件——纯逻辑闭环，不加载真 Monaco。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { installAvailabilityGate } from '../src/monaco/language-registry';
 import { JSON_LANGUAGE_ID, registerJsonLanguage } from '../src/monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { createEditorModelPool, languageFor, type PoolDeps } from '../src/ui/editor-model-pool';
@@ -176,6 +177,14 @@ describe('model 池 · 磁盘文本快照（三方合并的 base）', () => {
     expect(h.pool.savedBase('ghost.erb')).toBeUndefined();
   });
 });
+
+/**
+ * 认路判据与**语言可用性门**是两条轴（LAU-3）：本文件只钉前者。缺省档 `2.0-default`
+ * 会把封存层（`kojo-legacy`）挡在门外 ⇒ `languageFor('.kojo')` 答 `plaintext`；
+ * 装一枚恒真假门把门这一轴摘出去（门本身由 `language-registry.test.ts` 钉）。
+ */
+beforeEach(() => installAvailabilityGate(() => true));
+afterEach(() => installAvailabilityGate(null));
 
 /**
  * 语言挂载判据（L1-LANG，2026-10-17）：`languageFor` 曾是**二值映射**（`.kojo` ⇒ 糖、

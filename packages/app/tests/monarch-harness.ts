@@ -190,7 +190,7 @@ export function driveLine(lexer: CompiledLexer, line: string, stackIn?: readonly
     throw new Error(`Monarch def 没有根状态 ${stack[stack.length - 1]}`);
   }
   const out: Emit[] = [];
-  // Monaco 屏上真发的是 token 名 + tokenPostfix（编译器按语言 id 默认补 `.kojo-sugar`），
+  // Monaco 屏上真发的是 token 名 + tokenPostfix（编译器按语言 id 默认补 `.<语言 id>`，v1 那一枚 LAU-3 起是 `.kojo-legacy`），
   // 主题规则按点分段前缀匹配 —— 驱动器同样补上，断言走完整前缀口径
   const lexerPostfix = lexer.tokenPostfix;
   const emitInto = (tokens: readonly Emit[], start: number): void => {

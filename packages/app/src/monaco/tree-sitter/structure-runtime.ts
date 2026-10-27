@@ -1,7 +1,7 @@
 import type * as Monaco from '../entry';
 import type { BaseIndentPatterns } from './indent';
 import type { StructureEncodeResult, StructureGeometry } from './semantic';
-import type { KojoStructureToken } from './types';
+import type { KojoStructureSyntaxFault, KojoStructureToken } from './types';
 
 /** 一门语言结构层可用的**着色面**（legend 与编码器同源，宿主不按语言名挑配色表） */
 export interface StructureSemanticFacet {
@@ -21,6 +21,28 @@ export function lostStructureSpans(result: StructureEncodeResult): number {
 }
 
 /**
+ * 结构残缺（CST 的 ERROR / MISSING）的**上屏上下文**（LAU-3 / 设计稿 §4.3）。
+ *
+ * 与设计稿草稿的差量（一行记账）：草稿写的是 `presentSyntax(faults, truncated)`，
+ * 但 client 的回调本来就是 `(model, faults, truncated)`，而落 marker 还要 monaco 本体
+ * ⇒ 这一格必须带上 `monaco` 与 `model`，否则运行时只能自己 import 宿主（那就把
+ * "宿主零语言知识"换成"语言层反向依赖宿主"，方向更糟）。
+ */
+export interface StructureSyntaxContext {
+  readonly monaco: typeof Monaco;
+  readonly model: Monaco.editor.ITextModel;
+  readonly faults: readonly KojoStructureSyntaxFault[];
+  /** 捕获数撞到上限被截过（上屏时要如实说，不许把"截断"画成"没错"） */
+  readonly truncated: boolean;
+}
+
+/** 撤下上屏（换轨 / 停用 / 关文件）的上下文：同一枚 model，没有 faults */
+export interface StructureSyntaxClearContext {
+  readonly monaco: typeof Monaco;
+  readonly model: Monaco.editor.ITextModel;
+}
+
+/**
  * 一门语言的**结构层运行时**（A4 语言无关化）。
  *
  * 由 `LanguageDescriptor.structure.load()` 按需交回：worker 入口、wasm 与查询资源只在
@@ -28,7 +50,10 @@ export function lostStructureSpans(result: StructureEncodeResult): number {
  *
  * 面由运行时自己声明：
  * - `semantic` 缺省 = 这门语言**不做结构着色**（ERB 首版就是如此，只做折叠 / 残缺 / 缩进）；
- * - `baseIndentPatterns` 缺省 = 不与任何既有回车规则合并，只发结构层自己的规则。
+ * - `baseIndentPatterns` 缺省 = 不与任何既有回车规则合并，只发结构层自己的规则；
+ * - `presentSyntax` / `clearSyntax` 缺省 = 走宿主那枚通用上屏器（`syntax-decorations.ts`）。
+ *   **补掉的就是 `providers.ts` 里那两处 `if (languageId === ERB_LANGUAGE_ID)`**：宿主不再
+ *   知道"哪门语言用哪套文案"，只调用运行时给的这一枚（LAU-3 的 DoD：providers 里零语言 id）。
  *
  * 折叠与结构残缺不需要声明：worker 协议对所有语言一致，查询没写捕获时由
  * `client.ts` 把那一面标 `dead` 并各说一次。
@@ -40,4 +65,8 @@ export interface StructureLanguageRuntime {
   readonly createWorker: () => Worker;
   readonly semantic?: StructureSemanticFacet;
   readonly baseIndentPatterns?: () => BaseIndentPatterns;
+  /** 结构残缺上屏（缺省 = 宿主通用上屏器） */
+  readonly presentSyntax?: (context: StructureSyntaxContext) => void;
+  /** 撤下结构残缺（缺省 = 宿主通用上屏器的 clear） */
+  readonly clearSyntax?: (context: StructureSyntaxClearContext) => void;
 }

@@ -99,7 +99,7 @@ describe('.kojo 预览 / 摘要文案', () => {
 });
 
 /**
- * 糖视图可用门（ADR-0005：目录分野 × 显式解锁）。
+ * 糖视图可用门（ADR-0005：目录分野 × 显式解锁；LAU-3 起多一道 kojo1 封存轴）。
  *
  * 这条门是两组**合流点**：口上项目组把"游戏目录 ERB 只读 / 工作区 ERB 恒可编辑"
  * 落成了轴一，本线把"解锁弹窗"落成轴二，ADR 定的是"糖视图与可编辑态互斥"。
@@ -108,31 +108,55 @@ describe('.kojo 预览 / 摘要文案', () => {
  *
  * 2026-10-14：预览交付为常态功能，**封存总闸（`sealed.ts`）退出这道门**——
  * 输入里没有 `sealed` 这一项，总闸此后只 govern 两只面板（见 sealed.test.ts）。
+ *
+ * 2026-10-27（LAU-3）：`legacySyntaxOn` 进来成为**第三道轴**——预览投影的目标语法就是
+ * kojo1，kojo1 随切流档位封存时预览一起封（用户口径「现有的 kojo1 预览功能得和它的语法
+ * 一起封存」）。它与 `sealed` 不是一回事：`sealed` 是面板总闸（已退出这道门），
+ * `legacySyntaxOn` 是**语法层**在不在册。
  */
 describe('sugarViewAllowed（.kojo 预览可用门 = 不可编辑态的派生）', () => {
-  it('游戏目录 ERB、未解锁 → 唯一放行的组合', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: false })).toBe(true);
+  /** kojo1 在册（`v1-only` / `dual` 两档）时的基线输入：唯一放行组合 */
+  const OPEN = { isErbLike: true, inWorkspace: false, unlocked: false, legacySyntaxOn: true };
+
+  it('游戏目录 ERB、未解锁、kojo1 在册 → 唯一放行的组合', () => {
+    expect(sugarViewAllowed(OPEN)).toBe(true);
   });
 
   it('.kojo 不开预览（本身就是 .kojo，再投影一遍没有意义）', () => {
-    expect(sugarViewAllowed({ isErbLike: false, inWorkspace: false, unlocked: false })).toBe(false);
+    expect(sugarViewAllowed({ ...OPEN, isErbLike: false })).toBe(false);
   });
 
   it('工作区 ERB 不开 .kojo 预览（轴一：恒可编辑 ⟹ 原文必须看得见）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: false })).toBe(false);
+    expect(sugarViewAllowed({ ...OPEN, inWorkspace: true })).toBe(false);
     // 解锁态不影响结论（工作区根本走不到解锁这条路）
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: true, unlocked: true })).toBe(false);
+    expect(sugarViewAllowed({ ...OPEN, inWorkspace: true, unlocked: true })).toBe(false);
   });
 
   it('游戏目录 ERB 一旦解锁 → 该份 .kojo 预览禁用（轴二与互斥规则一致）', () => {
-    expect(sugarViewAllowed({ isErbLike: true, inWorkspace: false, unlocked: true })).toBe(false);
+    expect(sugarViewAllowed({ ...OPEN, unlocked: true })).toBe(false);
+  });
+
+  it('kojo1 封存（缺省档 2.0 当家）→ 一律不许，且**排在其他轴之前**', () => {
+    // 唯一放行组合也只把 legacySyntaxOn 翻成 false ⇒ 关门（说明这一轴真的在判，不是摆设）
+    expect(sugarViewAllowed({ ...OPEN, legacySyntaxOn: false })).toBe(false);
+    // 其余三轴任意取值都不改结论（封存是总否决）
+    for (const isErbLike of [true, false]) {
+      for (const inWorkspace of [true, false]) {
+        for (const unlocked of [true, false]) {
+          expect(
+            sugarViewAllowed({ isErbLike, inWorkspace, unlocked, legacySyntaxOn: false }),
+            `isErbLike=${String(isErbLike)} inWorkspace=${String(inWorkspace)} unlocked=${String(unlocked)}`,
+          ).toBe(false);
+        }
+      }
+    }
   });
 
   it('封存总闸**不再是否决轴**：面板封存中（SEALED_DEFAULT=true）游戏目录 ERB 照样放行', () => {
     // 正向自证：输入里塞一个 `sealed: true` 也毫无作用——这道门已经不认这一项。
     // （用变量传参而不是对象字面量：字面量会因"多余属性"被类型检查拦下，那正是我们要的
     //  结构性证据——参数表里根本没有 sealed，但运行期不许被一个遗留字段否决。）
-    const withStaleSealedFlag = { isErbLike: true, inWorkspace: false, unlocked: false, sealed: true };
+    const withStaleSealedFlag = { ...OPEN, sealed: true };
     expect(sugarViewAllowed(withStaleSealedFlag)).toBe(true);
     // 反向自证：同一份输入把 unlocked 翻成 true 就应当关门（说明上面那条通过不是"恒真"）
     expect(sugarViewAllowed({ ...withStaleSealedFlag, unlocked: true })).toBe(false);

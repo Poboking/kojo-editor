@@ -62,7 +62,18 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
 
 const KOJO_DESCRIPTOR: LanguageDescriptor = {
   id: KOJO_LANGUAGE_ID,
-  label: 'kojo',
+  // 上屏名（LAU-3 / §6）：作者面只叫「kojo1（封存）」——「kojo」这个名字归 2.0。
+  label: 'kojo1（封存）',
+  /**
+   * 封存层（D7）：**不是版本开关，是另一门语言**。默认可用性由宿主注入的门回答
+   * （`ui/kojo2-cutover.ts` 的 `kojo2StageAllowsLegacy`：三档里 `v1-only` / `dual` 为开），
+   * 门是纯谓词、注册表不读设置也不订阅（§4.4）。
+   *
+   * `settingKey` 是**身份**不是第二枚开关：本仓已有切流三档，再造一枚布尔就是两处状态
+   * 必漂（用户 2026-10-27 口径「用现成三档」）。
+   */
+  availability: 'legacy',
+  settingKey: 'ui.legacy-kojo-syntax',
   matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO_SOURCE_EXTENSION,
   register: registerKojoLanguage,
   languageServices: true,
@@ -103,7 +114,9 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
  */
 const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   id: KOJO2_LANGUAGE_ID,
-  label: 'kojo2',
+  // 上屏名（用户 2026-10-27 口径）：**只有一个「kojo」**，它就是 2.0；id 仍是 `kojo2`
+  // （全仓 200+ 处引用 + M2 棘轮按常量名计数，改 id 是另一场迁移）。
+  label: 'kojo',
   matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO2_SOURCE_EXTENSION,
   register: registerKojo2Language,
   slotServices: ['documentSymbol', 'inlayHint', 'definition'],

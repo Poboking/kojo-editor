@@ -798,14 +798,15 @@ describe('副作用面：默认档仍关闭（源码守卫 + 行为断言）', (
     }
   });
 
-  it('默认档行为：`.kojo2` 在候选清单里可见（看得见 = 语言面），但 2.0 专属开项目路由仍返回 off', () => {
-    // 缺省阶段 v1-only：文件可见是语言面；"切项目再排队打开"那条腿属切流面，保持 off
+  it('缺省档行为（LAU-3 翻面）：`.kojo2` 可见，且 2.0 的开项目路由**放行**', () => {
+    // LAU-3 起缺省阶段是 `2.0-default` ⇒ 切流语义默认开启，`.kojo2` 的"切项目再排队打开"
+    // 这条腿跟着放行。`v1-only` 档仍返回 off（守卫本身没退化，那条断言在 kojo2-wire ① 组）。
     expect(kojo2SourceExtensions()).toEqual(['.kojo2']);
     const plan = planKojo2Open(
       { path: 'D:/p/M.kojo2' },
       { currentRoot: 'D:/p', projectOpen: true },
     );
-    expect(plan).toEqual({ kind: 'off' });
+    expect(plan).toEqual({ kind: 'open', path: 'D:/p/M.kojo2' });
   });
 });
 

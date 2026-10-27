@@ -5,10 +5,11 @@
  * 既有测试大多读**源码形状**（钉接线在不在）。行为面补一份直接调函数的单测，
  * 搬迁前后同一个输入必须同一个输出——以后谁再动这些判据，先红在这里。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ErbFile, ErbIndex, EditorSaveHandlerContribution } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
 import type * as Monaco from '../src/monaco/entry';
+import { installAvailabilityGate } from '../src/monaco/language-registry';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 import {
   applyEditabilityAndSuggest,
@@ -21,6 +22,14 @@ import {
 } from '../src/ui/editor-pane/pane-helpers';
 
 afterEach(() => vi.restoreAllMocks());
+
+/**
+ * LAU-3：缺省档 `2.0-default` 把封存层（`kojo-legacy`）挡在门外 ⇒ `minimapCtxForPath`
+ * 对 `.kojo` 会答 `kojoText: false`。本文件钉的是"按语言判"这条纯函数，不是可用性门，
+ * 装一枚恒真假门把门这一轴摘出去。
+ */
+beforeEach(() => installAvailabilityGate(() => true));
+afterEach(() => installAvailabilityGate(null));
 
 /* ───────────────────────── sugarStampOf：判据不全就不缓存 ───────────────────────── */
 

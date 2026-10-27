@@ -32,7 +32,22 @@ import { CJK_WORD_PATTERN } from './word-separators';
  * 精确结构判定在 `kojo-sugar` 转译器，波浪线由 `ui.editor.decorator` 槽给出）。
  */
 
-export const KOJO_LANGUAGE_ID = 'kojo-sugar';
+/**
+ * **封存层（kojo1 / 命令式 Kojo）的语言 id**（LAU-3，2026-10-27 改名批）。
+ *
+ * 旧值 `'kojo-sugar'`。改名的理由与边界：
+ * - 作者面只有一个「kojo」＝ 2.0（`kojo2` 的 label 就是 `kojo`）；v1 上屏一律叫
+ *   「kojo1（封存）」，id 跟着叫 `kojo-legacy`，屏上/代码里不再出现 `kojo-sugar` 这个
+ *   看起来像"当前语言"的名字；
+ * - **只改语言 id，不改插件 id**：`plugins/kojo-sugar/src/index.ts` 那枚 `id: 'kojo-sugar'`
+ *   是插件注册名，2.0 侧还在 import 这个包（`kojo2-lexicon.ts` 取 `sugarEditorLexicon`），
+ *   改它是另一场迁移，不在本批；
+ * - 常量名仍叫 `KOJO_LANGUAGE_ID`（全仓 200+ 处引用；`audit:language` 的 M2 棘轮按
+ *   `*_LANGUAGE_ID` **常量名**计数，改名不减反增）。名字是历史包袱，语义由本注与
+ *   descriptor 的 `availability: 'legacy'` 说清。
+ * - 旧 id 的兼容读在 `ui/language-mode-pref.ts`（作者手工钉过的语言模式覆盖值）。
+ */
+export const KOJO_LANGUAGE_ID = 'kojo-legacy';
 
 /**
  * 宿主唯一词表入口（`sugarEditorLexicon()` 的聚合原样转发，**不做任何加工**：

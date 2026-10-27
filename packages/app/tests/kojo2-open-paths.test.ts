@@ -50,10 +50,18 @@ const CURRENT_ROOT = 'D:/proj';
 const OTHER_ROOT = 'D:/other';
 const KOJO2_FILE = 'D:/proj/chara/M_KOJO_K12_指令.kojo2';
 
-/** 装假 `window.localStorage`（`on` = 预置开关打开）；`ui/kojo2-flag.ts` 每次现读 */
+/**
+ * 装假 `window.localStorage`（`on` = 缺省档，什么都不存；`off` = 盘上显式一份 `v1-only`
+ * 计划）；`ui/kojo2-flag.ts` 每次现读。LAU-3 起缺省档 = `2.0-default`（开关**开着**），
+ * 所以"关"必须显式落到阶段上，不能再拿"没存过"当关。
+ */
 function stubFlag(on: boolean): void {
   const bag = new Map<string, string>();
-  if (on) bag.set(KOJO2_KEY, 'on');
+  if (!on)
+    bag.set(
+      'kojo.ui.kojo2Cutover.plan.v1',
+      JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} }),
+    );
   vi.stubGlobal('window', {
     localStorage: {
       getItem: (key: string): string | null => bag.get(key) ?? null,

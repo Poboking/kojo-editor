@@ -3275,6 +3275,19 @@ button.erb-mode-hint.unlocked:hover {
 .sb-eol-item:hover {
   background: var(--hover);
 }
+/* 不可用的语言（LAU-3 封存层 / 未启用）：**列出来但点不动**，退一档颜色 + 禁点指针。
+   不隐藏的理由见 `ShellLayout.tsx` 那一格：作者看到 `.kojo` 变「纯文本」时必须能在
+   同一个菜单里读到为什么、去哪儿开（铁律 4：不许静默削功能）。 */
+.sb-eol-item.dim,
+.sb-eol-item:disabled {
+  color: var(--fg-dim);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+.sb-eol-item.dim:hover,
+.sb-eol-item:disabled:hover {
+  background: transparent;
+}
 /* 当前档：勾选列 + 强调色（role=menuitemradio 的视觉态） */
 .sb-eol-item.on {
   color: var(--accent-text);

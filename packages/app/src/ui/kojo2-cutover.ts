@@ -79,14 +79,21 @@ export const KOJO2_CUTOVER_STAGES: readonly Kojo2CutoverStage[] = [
   '2.0-default',
 ];
 
-/** 缺省阶段：切不动比切错了便宜（`v1-only` 与"2.0 面没接"的现状逐字等价） */
-export const KOJO2_CUTOVER_DEFAULT_STAGE: Kojo2CutoverStage = 'v1-only';
+/**
+ * 缺省阶段：**`2.0-default`**（用户 2026-10-27 口径「默认 kojo2」）。
+ *
+ * 旧缺省是 `v1-only`（"切不动比切错了便宜"）。翻面之后失败方向也跟着翻：坏值 / 读不到
+ * 一律回 `2.0-default`，即"当前语言是 kojo（2.0）"；kojo1 成了要显式开启的封存层
+ * （见 {@link kojo2StageAllowsLegacy} 与 `monaco/languages.ts` 的 `availability:'legacy'`）。
+ * 存量 v1 计划的迁移规则见 {@link LegacyPersistedCutoverPlan}。
+ */
+export const KOJO2_CUTOVER_DEFAULT_STAGE: Kojo2CutoverStage = '2.0-default';
 
 /** 每个阶段的人话口径（设置页 / 调试面板直接上屏；本模块不产出别的界面文案） */
 export const KOJO2_STAGE_LABELS: Readonly<Record<Kojo2CutoverStage, string>> = {
-  'v1-only': '只认 v1：老文件照旧，2.0 面不接管',
-  dual: '双轨：老 `.kojo` 仍按 v1，新 `.kojo2` 按 2.0',
-  '2.0-default': '2.0 默认：新扩展名按 2.0，老扩展名由内容指纹判',
+  'v1-only': '只认 kojo1：老 `.kojo` 按旧写法解析，2.0 的写回 / 迁移 / 解析器切换全部不接管',
+  dual: '双轨：老 `.kojo` 仍按 kojo1，新 `.kojo2` 按 kojo（2.0）',
+  '2.0-default': 'kojo（2.0）默认：`.kojo2` 按 2.0，老 `.kojo` 由内容指纹判（判不出来按 kojo1 打开）',
 };
 
 /** 运行期阶段守卫（持久化里读到脏值 / devtools 传错，一律回缺省，不抛） */
@@ -116,16 +123,24 @@ export function kojo2StageAllowsSurface(stage: Kojo2CutoverStage): boolean {
 }
 
 /**
+ * 这一档**开没开 kojo1（封存层）**（LAU-3 的 `availability:'legacy'` 门的唯一真源）。
+ *
+ * `v1-only` / `dual` = 开（`.kojo` 仍按 v1 解析）；`2.0-default` = 关（作者选了「2.0 默认」档）。
+ * 一物三用、**不许各写一份**：① 语言可用性门的缺省谓词（`monaco/language-registry.ts`）；
+ * ② `.kojo 预览`（`ui/sugar-view.ts`）；③ 语言菜单 / 状态栏的可选性（`ui/ShellLayout.tsx`）。
+ * 与 {@link kojo2StageAllowsSurface} 的分工：那一格答"2.0 切流语义开没开"（语言面无条件登记）。
+ */
+export function kojo2StageAllowsLegacy(stage: Kojo2CutoverStage): boolean {
+  return stage !== '2.0-default';
+}
+
+/**
  * 旧布尔键 → 阶段的**迁移规则（写死）**：只有 `'on'` 算数，映射到 `dual`。
  *
- * 为什么是 `dual` 而不是 `2.0-default`：旧键的语义只是"把 2.0 面挂上"，不是"老文件按内容
- * 指纹改判"。映射到 `dual` ⇒ 老 `.kojo` 一行都不动、`.kojo2` 打得开，正好等于旧键当年
- * 承诺的效果；`'off'` / `'ON'` / `'1'` / 乱写一律不参与（失败方向 = 少露）。
- *
- * 适用面（与 `ui/kojo2-flag.ts` 的解析顺序同一条）：**盘上计划缺席、或计划还停在缺省档
- * `v1-only`** 时才看它。`v1-only` 既是缺省值、也是开机自动写下的基线（没人"选"过），
- * 不该把 batch-3/4 里翻过旧开关的人静默关掉；一旦作者在新设置页**显式**改过档，旧键就被
- * 删掉（{@link createKojo2CutoverController} 的提交路径），阶段从此独占真源。
+ * 旧键的语义只是"把 2.0 面挂上"，不是"老文件按内容指纹改判"：映射到 `dual` ⇒ 老 `.kojo`
+ * 一行都不动、`.kojo2` 打得开，正是旧键当年承诺的效果；坏值一律不参与（失败方向 = 少露）。
+ * 适用面：**计划缺席、或计划是被抬上来的 v1 基线、或 v2 里显式停在 `v1-only`**
+ * （与 `ui/kojo2-flag.ts` 的解析顺序同一条）。作者显式改档后旧键即被删掉，阶段独占真源。
  */
 export function stageFromLegacyKojo2Flag(raw: string | null): Kojo2CutoverStage | null {
   return raw === 'on' ? 'dual' : null;
@@ -607,13 +622,25 @@ function readStorageString(storage: Kojo2CutoverStorage | null, key: string): st
 }
 
 /**
- * 解析一份计划文档的**阶段**（纯函数：不读 storage、不碰全局）。
+ * 一份计划文档解析出的阶段 + **它是怎么来的**。
  *
- * 坏 JSON / 坏版本 / 坏阶段一律 `null`（调用方回缺省，不抛）。导出给 `ui/kojo2-flag.ts`
- * 做热路径缓存：那里按"计划原始串有没变"决定要不要重解析（`refreshMarkers` 之类每击键
- * 都会问一次开关，不能每次都 `JSON.parse` 一份含 override 表的文档）。
+ * `liftedFromV1Baseline` = 这份是 v1 计划且停在 `v1-only`，被读侧抬到了新缺省档。为什么要
+ * 带出来：v1 的 `v1-only` 与"没人选过"不可区分，抬走它就必须允许**旧布尔键**把它拉回来——
+ * 翻过旧开关的人不该因为"我们改了缺省"被顶到 `2.0-default`（那一档连 kojo1 一起封）。
+ * 显式选过的档（v1 的另两档、任何 v2 计划）不带这一格 ⇒ 旧键无从插手。
  */
-export function parseKojo2CutoverStage(raw: string | null): Kojo2CutoverStage | null {
+export interface ParsedCutoverStage {
+  readonly stage: Kojo2CutoverStage;
+  readonly liftedFromV1Baseline: boolean;
+}
+
+/**
+ * 解析一份计划文档的**阶段与来历**（纯函数：不读 storage、不碰全局、不看别的键）。
+ * 坏 JSON / 坏版本 / 坏阶段一律 `null`（失败方向 = 少露）；认 version 1 与 2。
+ * 与 {@link readPersistedPlan} 同一份判据（那边多带 override 表）⇒ 控制器与
+ * `ui/kojo2-flag.ts` 的热路径**不可能对同一份文档给出不同阶段**。
+ */
+export function parseKojo2CutoverPlanStage(raw: string | null): ParsedCutoverStage | null {
   if (raw === null || raw.length === 0) return null;
   let parsed: unknown;
   try {
@@ -623,8 +650,21 @@ export function parseKojo2CutoverStage(raw: string | null): Kojo2CutoverStage | 
   }
   if (parsed === null || typeof parsed !== 'object') return null;
   const document = parsed as { version?: unknown; stage?: unknown };
-  if (document.version !== 1) return null;
-  return isKojo2CutoverStage(document.stage) ? document.stage : null;
+  if (document.version !== 1 && document.version !== 2) return null;
+  if (!isKojo2CutoverStage(document.stage)) return null;
+  const liftedFromV1Baseline = document.version === 1 && document.stage === 'v1-only';
+  return {
+    stage: liftedFromV1Baseline ? KOJO2_CUTOVER_DEFAULT_STAGE : document.stage,
+    liftedFromV1Baseline,
+  };
+}
+
+/**
+ * 薄壳：只要阶段、不问来历（`ui/kojo2-flag.ts` 的热路径缓存用）。要参与旧布尔键那条
+ * 规则的地方请直接用带来历的那一枚。
+ */
+export function parseKojo2CutoverStage(raw: string | null): Kojo2CutoverStage | null {
+  return parseKojo2CutoverPlanStage(raw)?.stage ?? null;
 }
 
 /**
@@ -642,6 +682,20 @@ export function readKojo2CutoverStage(
 
 /** 落盘文档（版本位留给将来的字段演进；读不懂的一律回缺省） */
 interface PersistedCutoverPlan {
+  readonly version: 2;
+  readonly stage: Kojo2CutoverStage;
+  readonly overrides: Readonly<Record<string, Kojo2Parser>>;
+}
+
+/**
+ * v1 计划（**只读**，用于一次性迁移）。
+ *
+ * 为什么必须迁：`v1-only` 既是旧缺省、又是开机自动写下的基线（`attachStorage` 在没有计划
+ * 时 `persist()` 一次）⇒ 盘上"几乎人人有一份 v1-only"，只改缺省常量对存量用户零效果。
+ * 规则写死：`v1-only` → `2.0-default`（并留 `migratedFromV1Plan` 让设置页如实说一句，
+ * 不静默改档位）；`dual` / `2.0-default` 原样保留（那是显式选择）。
+ */
+interface LegacyPersistedCutoverPlan {
   readonly version: 1;
   readonly stage: Kojo2CutoverStage;
   readonly overrides: Readonly<Record<string, Kojo2Parser>>;
@@ -656,11 +710,24 @@ export function normalizePathKey(filePath: string): string {
   return restored.length > 1 ? restored.replace(/\/+$/, '') : restored;
 }
 
-/** 读一份持久化计划；坏 JSON / 坏版本 / 坏阶段 → null（调用方回缺省，不抛） */
+/** 一次读盘的结论（`migratedFromV1` = 这份计划是 v1 升上来的，调用方据此写回 v2 并如实上屏） */
+export interface PersistedCutoverPlanRead {
+  readonly stage: Kojo2CutoverStage;
+  readonly overrides: ReadonlyMap<string, Kojo2Parser>;
+  readonly migratedFromV1: boolean;
+  /** 阶段是"v1 基线被抬上来的"⇒ 旧布尔键仍可把它拉回 `dual`（判据见 {@link ParsedCutoverStage}） */
+  readonly liftedFromV1Baseline: boolean;
+}
+
+/**
+ * 读一份持久化计划；坏 JSON / 坏版本 / 坏阶段 → null（调用方回缺省，不抛）。
+ * 阶段那一份判据**复用** {@link parseKojo2CutoverPlanStage}（这里只多解 override 表）——
+ * 两处各写一遍版本 / 迁移规则，早晚有一天控制器与热路径解析对不上。
+ */
 function readPersistedPlan(
   storage: Kojo2CutoverStorage | null,
   key: string,
-): { readonly stage: Kojo2CutoverStage; readonly overrides: ReadonlyMap<string, Kojo2Parser> } | null {
+): PersistedCutoverPlanRead | null {
   if (storage === null) return null;
   let raw: string | null;
   try {
@@ -668,17 +735,17 @@ function readPersistedPlan(
   } catch {
     return null;
   }
-  if (raw === null || raw.length === 0) return null;
+  const parsedStage = parseKojo2CutoverPlanStage(raw);
+  if (parsedStage === null) return null;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(raw as string);
   } catch {
     return null;
   }
   if (parsed === null || typeof parsed !== 'object') return null;
-  const document = parsed as { version?: unknown; stage?: unknown; overrides?: unknown };
-  if (document.version !== 1 || !isKojo2CutoverStage(document.stage)) return null;
+  const document = parsed as { version?: unknown; overrides?: unknown };
 
   const overrides = new Map<string, Kojo2Parser>();
   if (document.overrides !== null && typeof document.overrides === 'object') {
@@ -688,7 +755,12 @@ function readPersistedPlan(
       if (normalized.length > 0) overrides.set(normalized, value);
     }
   }
-  return { stage: document.stage, overrides };
+  return {
+    stage: parsedStage.stage,
+    overrides,
+    migratedFromV1: document.version === 1,
+    liftedFromV1Baseline: parsedStage.liftedFromV1Baseline,
+  };
 }
 
 /* ============================== 控制器 ============================== */
@@ -705,6 +777,14 @@ export interface Kojo2CutoverSnapshot {
    * （下次启动读到的正是它），这里照样是 true；只有"内存变了但没写下去"才是 false。
    */
   readonly persisted: boolean;
+  /**
+   * 本次读到的计划是 **v1 升上来的**（一次性事实，写回 v2 之后即消失）。
+   *
+   * 为什么必须带出来：默认档从 `v1-only` 翻到 `2.0-default` 会把存量用户的档位抬走，
+   * 而"没人选过的基线"与"显式选了 v1-only"在 v1 计划里**不可区分**（见
+   * {@link LegacyPersistedCutoverPlan}）。抬了就必须说（铁律 4），设置页据此给一行回执。
+   */
+  readonly migratedFromV1Plan: boolean;
 }
 
 /** 控制器构造参数 */
@@ -778,8 +858,8 @@ export interface Kojo2RouteRequest {
  * 造一个切换控制器（每次调用一个独立实例；宿主的进程级单例见
  * {@link getKojo2CutoverController}）。
  *
- * 失败方向一律"少露"：持久化坏值回 `v1-only`、写失败只丢这一次落盘（内存状态仍生效，
- * `snapshot.persisted=false` 让调用方看得见），绝不抛进渲染链。
+ * 失败方向：持久化坏值回 {@link KOJO2_CUTOVER_DEFAULT_STAGE}（＝`2.0-default`）、写失败
+ * 只丢这一次落盘（内存状态仍生效，`snapshot.persisted=false` 让调用方看得见），绝不抛进渲染链。
  */
 export function createKojo2CutoverController(
   options: Kojo2CutoverControllerOptions = {},
@@ -793,6 +873,8 @@ export function createKojo2CutoverController(
       : KOJO2_CUTOVER_DEFAULT_STAGE;
   let stage: Kojo2CutoverStage = persistedPlan?.stage ?? seededStage;
   const overrides = new Map<string, Kojo2Parser>(persistedPlan?.overrides ?? []);
+  /** v1 计划升上来的一次性回执（写回 v2 后下次开机即为 false） */
+  let migratedFromV1Plan = persistedPlan?.migratedFromV1 ?? false;
   /** 当前状态是否与 storage 一致（没有 storage = false；写失败 = false） */
   let persisted = storage !== null;
   const listeners = new Set<(snapshot: Kojo2CutoverSnapshot) => void>();
@@ -803,6 +885,7 @@ export function createKojo2CutoverController(
       stageLabel: KOJO2_STAGE_LABELS[stage],
       overrides: [...overrides].map(([filePath, parser]) => ({ filePath, parser })),
       persisted,
+      migratedFromV1Plan,
     };
   }
 
@@ -812,7 +895,7 @@ export function createKojo2CutoverController(
       return;
     }
     const document: PersistedCutoverPlan = {
-      version: 1,
+      version: 2,
       stage,
       overrides: Object.fromEntries(overrides),
     };
@@ -950,11 +1033,14 @@ export function createKojo2CutoverController(
         stage = plan.stage;
         overrides.clear();
         for (const [path, parser] of plan.overrides) overrides.set(path, parser);
-        // K2-CUTOVER-STAGE：计划停在缺省档 `v1-only` 且旧键还是 `'on'` ⇒ 抬到 `dual` 并写回。
-        // `v1-only` 同时也是开机自动写下的基线（没人选过），旧键才是 batch-3/4 里作者真正
-        // 拨过的那一只开关；显式改过档的人不会有旧键（提交路径已把它删掉），所以这条不会
-        // 覆盖任何人的明确选择。规则见 {@link stageFromLegacyKojo2Flag}。
-        if (stage === 'v1-only' && legacy !== null) {
+        migratedFromV1Plan = plan.migratedFromV1;
+        // v1 计划当拍写回 v2（读侧只认 1/2、写侧只写 2 ⇒ 迁移一次性）；快照的
+        // `migratedFromV1Plan` 让设置页如实说一句。
+        if (plan.migratedFromV1) persist();
+        // 旧键（`'on'` ⇒ `dual`）仍能说话的两处：计划显式停在 `v1-only`；或阶段是**被抬上来的
+        // v1 基线**（翻过旧开关的人不该被顶到 `2.0-default`——那一档连 kojo1 一起封）。
+        // 显式选过 `dual` / `2.0-default` 的计划不受它影响（阶段独占真源）。
+        if ((stage === 'v1-only' || plan.liftedFromV1Baseline) && legacy !== null && legacy !== stage) {
           stage = legacy;
           persist();
         }
@@ -962,6 +1048,8 @@ export function createKojo2CutoverController(
         // 盘上还没有计划：旧键 `'on'` ⇒ 以 `dual` 起步，再把手里的这一档写成基线。
         if (legacy !== null) stage = legacy;
         persist();
+      } else {
+        migratedFromV1Plan = false;
       }
       emit();
     },
@@ -973,6 +1061,7 @@ export function createKojo2CutoverController(
     reset() {
       stage = KOJO2_CUTOVER_DEFAULT_STAGE;
       overrides.clear();
+      migratedFromV1Plan = false; // 恢复出厂＝作者亲手做的，不需要再给迁移回执
       if (storage !== null) {
         try {
           storage.removeItem(storageKey);

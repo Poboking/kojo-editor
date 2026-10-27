@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Language, Parser, Query, type Node as TreeSitterNode } from 'web-tree-sitter';
 import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
 import { kojoFoldingRanges } from '../../plugins/kojo-sugar/src/folding';
-import { KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
+import { KOJO_LANGUAGE_ID, KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
 import {
   KOJO_STRUCTURE_BASELINE_TOKENS,
@@ -106,8 +106,8 @@ function rowOf(starts: number[], offset: number): number {
 const { monaco, captured } = stubMonaco();
 // registerKojoLanguage 会调 monaco.languages.register / setMonarchTokensProvider（桩接得住）
 registerKojoLanguage(monaco as never);
-const monarchDef = captured.monarchs.get('kojo-sugar');
-if (!monarchDef) throw new Error('没捕获到 kojo-sugar 的 Monarch def（装配面漂 = 本文件整个红）');
+const monarchDef = captured.monarchs.get('kojo-legacy');
+if (!monarchDef) throw new Error('没捕获到 kojo1（kojo-legacy）的 Monarch def（装配面漂 = 本文件整个红）');
 
 /** 档位名 → 档（`KOJO_TOKEN_TIERS` 原表）；报告"同档异名"用 */
 const TIER_OF_TOKEN = new Map<string, string>();
@@ -211,7 +211,7 @@ beforeAll(async () => {
   parser.setLanguage(language);
   query = new Query(language, readFileSync(highlightsPath, 'utf8'));
   foldsQuery = new Query(language, readFileSync(foldsPath, 'utf8'));
-  lexer = await compileMonarch('kojo-sugar', monarchDef);
+  lexer = await compileMonarch('kojo-legacy', monarchDef);
   const legend = structureLegendTypes();
   for (const file of fixtures) {
     const rel = relOf(file);
@@ -258,7 +258,7 @@ beforeAll(async () => {
         fileTotal += 1;
         cells.total += 1;
         const token = monarchCells[column - 1] ?? null;
-        const stripped = token === null ? null : token.replace(/\.kojo-sugar$/, '');
+        const stripped = token === null ? null : token.replace(new RegExp(`\\.${KOJO_LANGUAGE_ID}$`), '');
         if (stripped === null) {
           cells.monarchBlank += 1;
         } else if (stripped === tier) {

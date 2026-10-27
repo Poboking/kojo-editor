@@ -515,6 +515,14 @@ export interface StructureRuntime {
 
 ## 4.4 门控 `language-availability.ts`
 
+> **落地偏离（2026-10-27，LAU-3 框架批）**：门没有独立成文件，而是住在 `monaco/language-registry.ts`
+> 里。理由是一条实测闸：开机静态图 194 文件**顶格零余量**（`ps10-eager-graph.test.ts`），而门必须在
+> 第一次认领之前装好 ⇒ 它天然属于开机图，新增一个文件就要抬一格上限。**语义与本节逐条一致**
+> （纯谓词、门开关不重注册、`plaintext` 兜底、已认领 model 不回头改语言），只是住址不同：
+> `installAvailabilityGate` / `isAvailable` / `availableLanguageDescriptors` /
+> `keepClaimedLanguageWhenGated` 都在注册表那一枚里，缺省谓词读切流三档
+> （`kojo2StageAllowsLegacy`）。`App.tsx` 装门那一版实测 195 文件 / 2,913 KB（越闸），已撤。
+
 ```ts
 /** 由设置页注入（纯谓词，注册表不读设置、不订阅） */
 export type AvailabilityGate = (descriptor: LanguageDescriptor) => boolean;
@@ -945,8 +953,9 @@ export interface EditorDocumentIdentity {
    **不用裸 grep**，且必须继承 `tools/audit-decoupling.mjs` 的三条既有豁免口径：
    ① 行尾 `// audit-allow: <理由>` 豁免（`:133`）；② **注释行豁免**（`:37-47`）；
    ③ 组合根 / 适配器清单豁免（`:69,78-85`，本仓即 `adapter-manifest.ts` 与 `bootstrap.ts` 的装载点）。
-   不豁免就永远红——**闸已落地（LAU-GATE `6ca3c4c3`+`7540b9ed`），基线现值＝M1 游戏名·引擎词汇 7 行 /
-   M2 语言 id 分支 134 行 / M3 旧 token 名 163 行**（钉在 `tools/audit-language-baseline.json`，只降不升）。
+   不豁免就永远红——**闸已落地（LAU-GATE `6ca3c4c3`+`7540b9ed`），基线现值＝M1 游戏名·引擎词汇 6 行 /
+   M2 语言 id 分支 162 行 / M3 旧 token 名 163 行**（钉在 `tools/audit-language-baseline.json`，只降不升；
+   LAU-3 框架批把 M2 从 164 收敛到 162——`tree-sitter/providers.ts` 的两处 `ERB_LANGUAGE_ID` 分支清零后重钉）。
    v1.1 草稿那句"裸 grep 命中 62 行（`eratw` 16 行 / 10 文件）"是**计数口径不同**：棘轮只数**代码行**，
    注释与 `audit-allow` 行不进账（`TALENT`/`CFLAG` 的命中几乎全在注释与补全说明里，如
    `erb-completion-bits.ts:25`、`erb-completion-families.ts:6-14`）。
@@ -984,7 +993,7 @@ export interface EditorDocumentIdentity {
 
 | 项 | 取值 |
 |---|---|
-| 语言 id | `kojo-legacy`。⚠ v1 今天的 id 是 **`kojo-sugar`**（`monaco/kojo-language.ts:35 KOJO_LANGUAGE_ID`），改 id 与改扩展名是**两笔独立代价**：所有按 id 注册 provider / 分支 / 存设置项的地方都要跟着走（§9-1 的闸基线＝M2「语言 id 分支」134 行，里面大部分就是这类 id 引用）。若只为封存，**保留 `kojo-sugar` 这个 id、只加 `availability:'legacy'`** 是更便宜的一条路，LAU-3 开工前二选一定案 |
+| 语言 id | `kojo-legacy`。⚠ v1 **改名前**（LAU-3 之前）的 id 是 **`kojo-sugar`**（`monaco/kojo-language.ts KOJO_LANGUAGE_ID`），改 id 与改扩展名是**两笔独立代价**：所有按 id 注册 provider / 分支 / 存设置项的地方都要跟着走（§9-1 的闸基线＝M2「语言 id 分支」162 行，里面大部分就是这类 id 引用）。若只为封存，**保留 `kojo-sugar` 这个 id、只加 `availability:'legacy'`** 是更便宜的一条路，LAU-3 开工前二选一定案。**✅ 2026-10-27 定案（用户口径）＝改名**：语言 id 改 `kojo-legacy`，label 改「kojo1（封存）」；**插件 id / 包名 `kojo-sugar` 不动**（2.0 侧仍 import 它的词表）；旧 id 的兼容读在 `ui/language-mode-pref.ts`（存量覆盖表读时别名） |
 | 扩展名 | `.kojo1`（见 §6.1；今天 `.kojo` 的单一真源是 `plugin-api/src/sugar.ts:1214 KOJO_SOURCE_EXTENSION`，2.0 是 `kojo-lang/src/constants.ts:23`） |
 | `availability` | `legacy` |
 | `settingKey` | `ui.legacy-kojo-syntax`，**默认 false** |

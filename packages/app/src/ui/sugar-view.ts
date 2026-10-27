@@ -296,7 +296,7 @@ export function sugarToggleTitle(input: {
 }
 
 /**
- * **预览可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定）。
+ * **预览可用门**（ADR-0005：目录分野 × 显式解锁 两道正交轴的派生判定；LAU-3 起多一道封存轴）。
  *
  * 铁律只有一条：**同一份文件不能一边被改、一边被投影**——预览靠"整份文件换成只读
  * 内存 model"工作，可编辑的原文必须始终看得见，否则用户改到自己看不见的行。
@@ -311,13 +311,28 @@ export function sugarToggleTitle(input: {
  *
  * 这道门**不看封存总闸**（`sealed.ts`）：预览已交付为常态功能，总闸如今只管两个面板。
  *
+ * ## 第三道轴：kojo1 封存（LAU-3，用户 2026-10-27 口径）
+ *
+ * 预览投影的**目标语法就是 kojo1**——`composeSugarDoc` 认的是 v1 的 `;` / 全角空格 / 台词行
+ * 那一套写法。kojo1 成为封存层之后，"语法关了但预览还开着"会产出一份**用不存在的语法解释
+ * 出来的只读投影**（词法挂 `plaintext`，投影里却还有糖化标记），比直接没有预览更误导。
+ * 所以：`legacySyntaxOn === false` ⇒ 一律不许，且**排在其他轴之前**（先答"这门语法还在不在"，
+ * 再答"这份文件该不该投影"）。真源是 `ui/kojo2-flag.ts::isKojoLegacySyntaxEnabled`
+ * （＝切流三档里的 `kojo2StageAllowsLegacy`），本函数只收布尔、不读设置、不订阅。
+ *
+ * 偏好值**不清零**：作者切回 v1 / 双轨档，原来开着的预览照旧生效（设置页那一行同理，
+ * 只禁用不改值）。
+ *
  * 纯函数：宿主用它同时门控"自动应用"、"首次询问"与工具条入口，三处口径不会分叉。
  */
 export function sugarViewAllowed(input: {
   isErbLike: boolean;
   inWorkspace: boolean;
   unlocked: boolean;
+  /** kojo1（封存层）此刻开没开；`false` ⇒ 预览一起封（判据见上） */
+  legacySyntaxOn: boolean;
 }): boolean {
+  if (!input.legacySyntaxOn) return false;
   if (!input.isErbLike) return false;
   if (input.inWorkspace) return false;
   if (input.unlocked) return false;

@@ -82,6 +82,10 @@ function stubWindow(storage: MemoryStorage = new MemoryStorage()): MemoryStorage
 /**
  * 开机：盘上计划 + 控制器 `attachStorage`（真宿主的同一拍）。
  * 不挂存储时 `resolveKojo2CutoverStage()` 与控制器阶段就会分叉——本文件不制造那种分叉。
+ *
+ * **写 v2 计划**（LAU-3）：v1 计划的 `v1-only` 在**读侧**被抬到缺省档（存量迁移），
+ * 这里要的是"作者显式选了某一档"，所以别用 v1 的写法（迁移那条判据由
+ * `kojo2-cutover-stage.test.ts` 单独钉）。
  */
 function boot(
   stage: Kojo2CutoverStage,
@@ -90,7 +94,7 @@ function boot(
   const storage = new MemoryStorage();
   storage.values.set(
     KOJO2_CUTOVER_STORAGE_KEY,
-    JSON.stringify({ version: 1, stage, overrides }),
+    JSON.stringify({ version: 2, stage, overrides }),
   );
   stubWindow(storage);
   getKojo2CutoverController().attachStorage(storage);
@@ -101,7 +105,7 @@ function boot(
 function commitPlan(storage: MemoryStorage, stage: Kojo2CutoverStage): void {
   storage.values.set(
     KOJO2_CUTOVER_STORAGE_KEY,
-    JSON.stringify({ version: 1, stage, overrides: {} }),
+    JSON.stringify({ version: 2, stage, overrides: {} }),
   );
 }
 
@@ -115,19 +119,27 @@ afterEach(() => {
 /* ============================== ① 单入口 ============================== */
 
 describe('① 单入口：path+source → route 只有一处', () => {
-  it('flag 关（没有计划、没有旧键）⇒ `.kojo2` 照归 2.0、`.kojo` 按 v1', () => {
+  it('全新装机（没有计划、没有旧键）⇒ 缺省档 2.0-default：`.kojo2` 恒归、`.kojo` 只有正文能说话', () => {
     stubWindow();
-    getKojo2CutoverController(); // 惰性单例 = v1-only
+    getKojo2CutoverController(); // 惰性单例 = 缺省档 `2.0-default`（LAU-3 翻面）
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     const kojo2 = kojo2RouteForPath(KOJO2_PATH);
     expect(kojo2).toMatchObject({ kind: 'resolved', parser: 'kojo2', reason: 'extension-kojo2' });
+    // 缺省档下 `.kojo` 只带路径 ⇒ 不敢替正文说话（`needs-content`），不按扩展名归 v1
+    expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({
+      kind: 'needs-content',
+      reason: 'content-required',
+    });
+    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
+    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
+    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(false);
+    // 那条旧口径只在作者**显式**选回 v1-only 时成立（阶段是唯一真源）
+    boot('v1-only');
     expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({
       kind: 'resolved',
       parser: 'kojo-v1',
       reason: 'stage-v1-only',
     });
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
   });
 
   it('`kojo2RouteFor(model)`：URI 路径优先 + 正文取自 model（`.kojo` 内容 2.0 归 2.0）', () => {
@@ -393,16 +405,16 @@ describe('④ 只有路径（EditorPane）：带正文的结论进备忘，needs
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
   });
 
-  it('控制器重置回 v1-only ⇒ `.kojo` 的 2.0 归属回落（`.kojo2` 不受影响）', () => {
-    boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    // 摘掉存储 + 重置控制器 = 阶段回到 v1-only
+  it('控制器重置回缺省档 ⇒ `.kojo` 的 2.0 归属跟着回来（`.kojo2` 不受影响）', () => {
+    boot('v1-only');
+    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
+    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
+    // 摘掉存储 + 重置控制器 = 阶段回到缺省档 `2.0-default`（LAU-3 翻面）
     vi.unstubAllGlobals();
     resetKojo2CutoverController();
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
+    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
   });
 
   it('旧布尔键 `on` ⇒ dual（迁移规则不变）：`.kojo` 仍按 v1，只有 `.kojo2` 归 2.0', () => {
@@ -715,9 +727,8 @@ describe('⑤ 诊断接线：活动 model 判定按路由', () => {
     wiring.dispose();
   });
 
-  it('flag 关 ⇒ 接线照挂，但 `.kojo` 零诊断（v1 行为逐字不变）', async () => {
-    stubWindow();
-    getKojo2CutoverController();
+  it('flag 关（显式 v1-only）⇒ 接线照挂，但 `.kojo` 零诊断（v1 行为逐字不变）', async () => {
+    boot('v1-only');
     const model = fakeModel(KOJO_PATH, KOJO2_SAMPLE);
     const fake = fakeEditor(model.model);
     const wiring = wire(fake, { path: model.path });

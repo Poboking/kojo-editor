@@ -35,9 +35,18 @@ import { resolveModelLanguage, subscribeLanguageOverride } from './language-mode
  * 建 model / 重挂共用的语言判据（LANG-OVERRIDE-MODEL）：作者手工选过的语言覆盖 >
  * 2.0 路由 / 扩展名判据。优先级那一格只有一份（`resolveModelLanguage`），
  * 本文件与状态栏读数都调它——建 model 与重挂也不会各写一套。
+ *
+ * 第三格 `currentLanguageId` **只有重挂路径会给**（控制器把 model 当前语言交回来）：
+ * 语言可用性门封掉一门语言时，已认领的 model 不被刷成 `plaintext`（LAU §4.4；守门判据在
+ * `monaco/language-registry.ts::keepClaimedLanguageWhenGated`）。建 model 那一刻没有
+ * "当前语言"，不传即可。
+ *
+ * 覆盖变更那条跟随路（{@link subscribeLanguageOverride}  below）**故意不传**：那是作者
+ * 亲手改了这一格的语言选择，答案就该如实——封存档里清掉覆盖 ⇒ 落 `plaintext`，
+ * 而不是悄悄保持一门菜单里已经选不到的语言。
  */
-function languageIdForModel(path: string, text: string): string {
-  return resolveModelLanguage(path, languageIdForKojo2Model(path, text));
+function languageIdForModel(path: string, text: string, currentLanguageId?: string): string {
+  return resolveModelLanguage(path, languageIdForKojo2Model(path, text, currentLanguageId));
 }
 
 /**

@@ -111,12 +111,12 @@ function route(
 /* ============================== 状态机 ============================== */
 
 describe('阶段状态机：三档、逐步前进、每步可退', () => {
-  it('缺省 v1-only（切不动比切错便宜），序与标签表完整', () => {
+  it('缺省 2.0-default（LAU-3 翻面：新装即 2.0 当家），序与标签表完整', () => {
     const cutover = createKojo2CutoverController();
     expect(cutover.getStage()).toBe(KOJO2_CUTOVER_DEFAULT_STAGE);
-    expect(KOJO2_CUTOVER_DEFAULT_STAGE).toBe('v1-only');
+    expect(KOJO2_CUTOVER_DEFAULT_STAGE).toBe('2.0-default');
     expect(cutover.getSnapshot()).toMatchObject({
-      stage: 'v1-only',
+      stage: '2.0-default',
       persisted: false,
       overrides: [],
     });
@@ -131,7 +131,8 @@ describe('阶段状态机：三档、逐步前进、每步可退', () => {
   });
 
   it('advance 逐档前进，到顶是 no-op（不抛、不通知）', () => {
-    const cutover = createKojo2CutoverController();
+    // LAU-3 起缺省已是顶档 ⇒ 从 v1-only 起步才谈得上"前进"
+    const cutover = createKojo2CutoverController({ stage: 'v1-only' });
     const seen: Kojo2CutoverStage[] = [];
     cutover.subscribe((snapshot) => seen.push(snapshot.stage));
 
@@ -169,7 +170,7 @@ describe('阶段状态机：三档、逐步前进、每步可退', () => {
 
   it('构造参数里的脏阶段回缺省（运行期不信任外部值）', () => {
     expect(createKojo2CutoverController({ stage: 'nope' as Kojo2CutoverStage }).getStage()).toBe(
-      'v1-only',
+      '2.0-default',
     );
     expect(createKojo2CutoverController({ stage: 'dual' }).getStage()).toBe('dual');
   });
@@ -197,11 +198,11 @@ describe('阶段状态机：三档、逐步前进、每步可退', () => {
 describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () => {
   it('阶段与 per-file override 都落进注入的 storage（同一个键、同一份文档）', () => {
     const storage = new MemoryStorage();
-    const cutover = createKojo2CutoverController({ storage });
+    const cutover = createKojo2CutoverController({ storage, stage: 'v1-only' });
     cutover.advance();
     cutover.setOverride(KOJO_FILE, 'kojo2');
     expect(storage.document()).toEqual({
-      version: 1,
+      version: 2,
       stage: 'dual',
       overrides: { 'C:/proj/chara/M.kojo': 'kojo2' },
     });
@@ -216,7 +217,7 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
   it('坏 JSON / 坏版本 / 坏阶段 / 坏 override 值：一律回缺省，不抛', () => {
     const cases: string[] = [
       'not json',
-      JSON.stringify({ version: 2, stage: 'dual', overrides: {} }),
+      JSON.stringify({ version: 3, stage: 'dual', overrides: {} }),
       JSON.stringify({ version: 1, stage: '2.0', overrides: {} }),
       JSON.stringify(null),
     ];
@@ -224,7 +225,7 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
       const storage = new MemoryStorage();
       storage.values.set(KOJO2_CUTOVER_STORAGE_KEY, raw);
       const cutover = createKojo2CutoverController({ storage });
-      expect(cutover.getStage(), raw).toBe('v1-only');
+      expect(cutover.getStage(), raw).toBe('2.0-default');
       expect(cutover.getSnapshot().overrides, raw).toEqual([]);
     }
     // 坏 override 值只丢那一格，合法阶段保留
@@ -245,7 +246,7 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
 
   it('写失败：内存状态照常生效，快照露出 persisted=false；恢复后自动回到 true', () => {
     const storage = new MemoryStorage();
-    const cutover = createKojo2CutoverController({ storage });
+    const cutover = createKojo2CutoverController({ storage, stage: 'v1-only' });
     storage.throwOnWrite = true;
     expect(cutover.advance()).toBe('dual');
     expect(cutover.getSnapshot().persisted).toBe(false);
@@ -257,7 +258,7 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
 
   it('attachStorage 采纳盘上计划；盘上没有就把当前状态写下去；detach 后不再落盘', () => {
     const storage = new MemoryStorage();
-    const seeded = createKojo2CutoverController({ storage });
+    const seeded = createKojo2CutoverController({ storage, stage: 'v1-only' });
     seeded.advance();
     seeded.advance();
     seeded.setOverride(KOJO2_FILE, 'kojo-v1');
@@ -285,7 +286,7 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
     cutover.advance();
     cutover.setOverride(KOJO_FILE, 'kojo2');
     cutover.reset();
-    expect(cutover.getStage()).toBe('v1-only');
+    expect(cutover.getStage()).toBe('2.0-default');
     expect(cutover.getSnapshot().overrides).toEqual([]);
     expect(storage.removals).toBe(1);
     expect(storage.values.has(KOJO2_CUTOVER_STORAGE_KEY)).toBe(false);
@@ -319,7 +320,7 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
     resetKojo2CutoverController();
     const second = getKojo2CutoverController();
     expect(second).not.toBe(first);
-    expect(second.getStage()).toBe('v1-only');
+    expect(second.getStage()).toBe('2.0-default');
   });
 
   it('路径键归一：斜杠统一、折叠重复、UNC 保留、大小写兜底匹配', () => {
@@ -478,7 +479,7 @@ describe('文件路由：override 当家，扩展名先说，阶段定老文件'
   });
 
   it('controller 路由随阶段走：同一份 `.kojo` 在三个档里给出三种结论', () => {
-    const cutover = createKojo2CutoverController();
+    const cutover = createKojo2CutoverController({ stage: 'v1-only' });
     expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo-v1' });
     cutover.setStage('dual');
     expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo-v1' });

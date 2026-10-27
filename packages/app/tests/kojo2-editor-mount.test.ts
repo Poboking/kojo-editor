@@ -88,9 +88,18 @@ const CORE_DIAGNOSTICS = createKojo2Diagnostics({
   backend: FIXTURE_BACKEND,
 });
 
+/**
+ * 假 localStorage。**LAU-3 起缺省档 = `2.0-default`（flag 开）**，所以：
+ * 开 = 旧键 `'on'`（⇒ `dual`）或什么都不存；关 = 盘上显式一份 `v1-only` 计划。
+ */
 function stubFlag(on: boolean): void {
   const store = new Map<string, string>();
   if (on) store.set('kojo.ui.kojo2Cutover.v1', 'on');
+  else
+    store.set(
+      'kojo.ui.kojo2Cutover.plan.v1',
+      JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} }),
+    );
   vi.stubGlobal('window', {
     localStorage: {
       getItem: (key: string): string | null => store.get(key) ?? null,

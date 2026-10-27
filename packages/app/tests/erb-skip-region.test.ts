@@ -25,7 +25,7 @@ import { compileMonarch, driveLines, stubMonaco, type Emit } from './monarch-har
  */
 
 const ERB_ID = 'kojo-erb';
-const KOJO_ID = 'kojo-sugar';
+const KOJO_ID = 'kojo-legacy';
 
 const { monaco, captured } = stubMonaco();
 registerErbLanguage(monaco);

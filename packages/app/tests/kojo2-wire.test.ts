@@ -1,10 +1,10 @@
 /**
  * K2-EDITOR-WIRE 的判据闸：Kojo 2.0 在真实编辑器里**可打开**（预演，不切流）。
  *
- * 三组断言（K2-SURFACE-DEFAULT 起语言面与切流开关解耦）：
- * ① 开关关（缺省）= **语言面照常可见**：descriptor 表四枚齐全、`.kojo2` 认出 `kojo2`、
+ * 三组断言（K2-SURFACE-DEFAULT 起语言面与切流开关解耦；LAU-3 起**缺省档不再是"开关关"**）：
+ * ① `v1-only` 档 = **语言面照常可见**：descriptor 表四枚齐全、`.kojo2` 认出 `kojo2`、
  *    挂面四枚都挂上；切流语义仍关——`.kojo2` 打开请求 `off` 且零 port 调用；
- * ② 开关开 = 语言面同上；`.kojo2` 的路由放行（大小写不敏感、只认最后一段扩展名），v1 三条路径一字不改；
+ * ② `dual` 档 = 语言面同上；`.kojo2` 的路由放行（大小写不敏感、只认最后一段扩展名），v1 三条路径一字不改；
  * ③ `.kojo2` 打开 / 新建只走**注入的既有通道**（openFile / openProject 的 pendingOpenFile 腿 /
  *    既有新建通道），非 2.0 文件一律 `not-kojo2` 不接管。
  *
@@ -29,6 +29,16 @@ type OpenModule = typeof import('../src/ui/kojo2-open');
 type SurfaceMonaco = Parameters<LanguagesModule['registerBuiltinLanguageSurfaces']>[0];
 
 const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
+/** 切换计划（真源，LAU-3 起 version 2；见 `ui/kojo2-cutover.ts`） */
+const PLAN_KEY = 'kojo.ui.kojo2Cutover.plan.v1';
+
+/**
+ * 装机时写哪一种盘上状态（LAU-3 起**缺省档不再是"开关关"**）：
+ * - `'default'` = 什么都不写 ⇒ 缺省档 `2.0-default`（切流语义开，kojo1 封存）；
+ * - `'v1-only'` = 显式写一份 v1-only 计划 ⇒ 切流语义关（老语义的"开关关"）；
+ * - `'legacy-on'` = 只写旧布尔键 `'on'` ⇒ 迁移规则视作 `dual`。
+ */
+type BootSeed = 'default' | 'v1-only' | 'legacy-on';
 
 const PROJECT_ROOT = 'D:/proj';
 const KOJO2_FILE = 'D:/proj/chara/M.kojo2';
@@ -42,10 +52,12 @@ interface Wire {
   readonly store: Map<string, string>;
 }
 
-/** 装假 window.localStorage（seedOn = 预置 `'on'`），重装模块并取回本用例的实例 */
-async function boot(seedOn: boolean): Promise<Wire> {
+/** 装假 window.localStorage（按 {@link BootSeed} 预置盘上状态），重装模块并取回本用例的实例 */
+async function boot(seed: BootSeed = 'default'): Promise<Wire> {
   const store = new Map<string, string>();
-  if (seedOn) store.set(KOJO2_KEY, 'on');
+  if (seed === 'legacy-on') store.set(KOJO2_KEY, 'on');
+  if (seed === 'v1-only')
+    store.set(PLAN_KEY, JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} }));
   vi.stubGlobal('window', {
     localStorage: {
       getItem: (key: string): string | null => store.get(key) ?? null,
@@ -166,11 +178,11 @@ function expectNoCalls(log: PortLog): void {
   expect(log.notices).toEqual([]);
 }
 
-/* ================== ① 开关关（缺省）：语言面照常，切流语义仍关 ================== */
+/* ================== ① v1-only 档：语言面照常，切流语义关 ================== */
 
-describe('开关关（缺省）：语言面照常可见，切流语义仍关', () => {
+describe('v1-only 档：语言面照常可见，切流语义仍关', () => {
   it('descriptor 表四枚齐全；`.kojo2` 认得出且唯一命中 kojo2', async () => {
-    const { registry, languages } = await boot(false);
+    const { registry, languages } = await boot('v1-only');
     expect(registry.languageDescriptors().map((descriptor) => descriptor.id)).toEqual([
       ERB_LANGUAGE_ID,
       KOJO_LANGUAGE_ID,
@@ -187,7 +199,7 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
   });
 
   it('认路（大小写 / 最后一段扩展名 / plaintext 兜底）不随开关改口', async () => {
-    const { languages } = await boot(false);
+    const { languages } = await boot('v1-only');
     const cases: ReadonlyArray<readonly [string, string]> = [
       ['D:/p/M.kojo', KOJO_LANGUAGE_ID],
       ['D:/p/M.KOJO', KOJO_LANGUAGE_ID],
@@ -204,7 +216,7 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
   });
 
   it('挂面照常挂四枚：kojo2 的扩展名 / Monarch / 配置都在', async () => {
-    const { languages } = await boot(false);
+    const { languages } = await boot('v1-only');
     const { monaco, captured } = fakeMonaco();
     languages.registerBuiltinLanguageSurfaces(monaco);
     expect(captured.registered.map((entry) => entry.id)).toEqual([
@@ -219,7 +231,7 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
   });
 
   it('`.kojo2` 打开请求 ⇒ off，零 port 调用（调用方照原样走 v1 流程）', async () => {
-    const { open } = await boot(false);
+    const { open } = await boot('v1-only');
     const { ports, log } = spyPorts();
     const plan = open.routeKojo2Open(
       { path: KOJO2_FILE },
@@ -231,11 +243,11 @@ describe('开关关（缺省）：语言面照常可见，切流语义仍关', (
   });
 });
 
-/* ======================== ② 开关开：语言面同上，路由放行 ======================== */
+/* ======================== ② dual 档：语言面同上，路由放行 ======================== */
 
-describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
+describe('dual 档：语言面同上，`.kojo2` 路由放行', () => {
   it('`.kojo2` 命中且唯一（大小写不敏感、只认最后一段扩展名）', async () => {
-    const { registry, languages } = await boot(true);
+    const { registry, languages } = await boot('legacy-on');
     expect(registry.languageDescriptors().map((descriptor) => descriptor.id)).toEqual([
       ERB_LANGUAGE_ID,
       KOJO_LANGUAGE_ID,
@@ -252,17 +264,18 @@ describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
     ).toEqual([KOJO2_LANGUAGE_ID]);
   });
 
-  it('v1 认路不受影响（`.kojo` 仍是 v1 那枚 descriptor 的 id）', async () => {
-    const { registry, languages } = await boot(true);
+  it('v1 认路不受影响（`.kojo` 仍是 v1 那枚 descriptor 的 id，label 已改为「kojo1（封存）」）', async () => {
+    const { registry, languages } = await boot('legacy-on');
     expect(languages.languageForPath('D:/p/M.kojo')).toBe(KOJO_LANGUAGE_ID);
     expect(languages.languageForPath('D:/p/M.kojo.bak')).toBe('plaintext');
     expect(languages.languageForPath('D:/p/M.ERB')).toBe(ERB_LANGUAGE_ID);
     expect(languages.languageForPath('D:/p/settings.json')).toBe(JSON_LANGUAGE_ID);
-    expect(registry.descriptorForPath('D:/p/M.kojo')?.label).toBe('kojo');
+    // LAU-3 正名：作者面只有一个「kojo」（2.0），v1 上屏叫「kojo1（封存）」
+    expect(registry.descriptorForPath('D:/p/M.kojo')?.label).toBe('kojo1（封存）');
   });
 
   it('挂面把 `.kojo2` 扩展名 / Monarch / 语言配置一并挂上，且重复调用只挂一次', async () => {
-    const { languages } = await boot(true);
+    const { languages } = await boot('legacy-on');
     const { monaco, captured } = fakeMonaco();
     languages.registerBuiltinLanguageSurfaces(monaco);
     expect(captured.registered.map((entry) => entry.id)).toEqual([
@@ -292,12 +305,13 @@ describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
   });
 
   it('只有脸：不声明通用语言服务、不声明结构层（v1 provider 不被误挂到 2.0）', async () => {
-    const { registry } = await boot(true);
+    const { registry } = await boot('legacy-on');
     const descriptor = registry.descriptorForLanguageId(KOJO2_LANGUAGE_ID);
     expect(descriptor).not.toBeNull();
     expect(descriptor?.languageServices).toBeUndefined();
     expect(descriptor?.structure).toBeUndefined();
-    expect(descriptor?.label).toBe('kojo2');
+    // LAU-3 正名：作者面只有一个「kojo」＝ 2.0，这一枚的 label 就是它（id 仍是 kojo2）
+    expect(descriptor?.label).toBe('kojo');
   });
 });
 
@@ -305,7 +319,7 @@ describe('开关开：语言面同上，`.kojo2` 路由放行', () => {
 
 describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', () => {
   it('开关开 + 非 2.0 文件 ⇒ not-kojo2，零 port 调用（`.kojo` 不被接管）', async () => {
-    const { open } = await boot(true);
+    const { open } = await boot('legacy-on');
     const { ports, log } = spyPorts();
     const plan = open.routeKojo2Open(
       { path: 'D:/proj/M.kojo' },
@@ -317,7 +331,7 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
   });
 
   it('当前项目内 ⇒ 走既有 openFile（根的大小写 / 分隔符不同也算同一根）', async () => {
-    const { open } = await boot(true);
+    const { open } = await boot('legacy-on');
     const { ports, log } = spyPorts();
     const plan = open.routeKojo2Open(
       { path: KOJO2_FILE },
@@ -332,7 +346,7 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
   });
 
   it('文件属于别的项目根 ⇒ 走既有 openProject 的 pendingOpenFile 腿（与最近文件同一条）', async () => {
-    const { open } = await boot(true);
+    const { open } = await boot('legacy-on');
     const { ports, log } = spyPorts();
     const target = 'D:/other/M.kojo2';
     const plan = open.routeKojo2Open(
@@ -346,7 +360,7 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
   });
 
   it('欢迎页：带根 ⇒ 先开项目再排文件；没有根 ⇒ blocked 并说一句人话', async () => {
-    const { open } = await boot(true);
+    const { open } = await boot('legacy-on');
     const { ports, log } = spyPorts();
     const withRoot = open.routeKojo2Open(
       { path: KOJO2_FILE, rootDir: PROJECT_ROOT },
@@ -370,7 +384,7 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
   });
 
   it('新建：项目内 ⇒ 走既有 createFile；跑出项目根 / 没项目 ⇒ blocked', async () => {
-    const { open } = await boot(true);
+    const { open } = await boot('legacy-on');
     const { ports, log } = spyPorts();
 
     const inside = open.routeKojo2Open(
@@ -401,7 +415,7 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
   });
 
   it('判据单一：`isKojo2Path` 与语言层同一口径（大小写 / 最后一段扩展名）', async () => {
-    const { open } = await boot(true);
+    const { open } = await boot('legacy-on');
     expect(open.isKojo2Path('D:/p/M.kojo2')).toBe(true);
     expect(open.isKojo2Path('D:/p/M.KOJO2')).toBe(true);
     expect(open.isKojo2Path('D:/p/M.kojo2.bak')).toBe(false);
@@ -410,29 +424,29 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
   });
 
   it('按后缀收文件的清单恒含 `.kojo2`（看得见文件是语言面，不看开关）', async () => {
-    const off = await boot(false);
+    const off = await boot('v1-only');
     expect(off.open.kojo2SourceExtensions()).toEqual(['.kojo2']);
-    const on = await boot(true);
+    const on = await boot('legacy-on');
     expect(on.open.kojo2SourceExtensions()).toEqual(['.kojo2']);
   });
 });
 
-/* ======================= 开关自身：默认关 / 坏值不翻成开 ======================= */
+/* ============ 开关自身：阶段是唯一真源，缺省 = 2.0 当家（LAU-3 翻面） ============ */
 
-describe('开关自身：localStorage 唯一真源，默认关', () => {
-  it('缺省关；写开 = `on`、写关 = 删键；每次写入通知订阅者', async () => {
-    const { flag, store } = await boot(false);
-    expect(flag.isKojo2CutoverEnabled()).toBe(false);
+describe('开关自身：阶段是唯一真源，缺省 = 2.0 当家', () => {
+  it('缺省开；写关 = 退到 v1-only（旧键不写 `off`），写开 = 旧键 `on` 且阶段回 dual；每次写入通知订阅者', async () => {
+    const { flag, store } = await boot('default');
+    expect(flag.isKojo2CutoverEnabled()).toBe(true);
 
     const listener = vi.fn();
     const off = flag.subscribeKojo2Cutover(listener);
+    flag.setKojo2CutoverEnabled(false);
+    expect(flag.isKojo2CutoverEnabled()).toBe(false);
+    expect(store.has(KOJO2_KEY)).toBe(false); // 旧键只删不写 `off`（与本仓布尔偏好同一口径）
+
     flag.setKojo2CutoverEnabled(true);
     expect(flag.isKojo2CutoverEnabled()).toBe(true);
     expect(store.get(KOJO2_KEY)).toBe('on');
-
-    flag.setKojo2CutoverEnabled(false);
-    expect(flag.isKojo2CutoverEnabled()).toBe(false);
-    expect(store.has(KOJO2_KEY)).toBe(false);
     expect(listener).toHaveBeenCalledTimes(2);
 
     off();
@@ -440,11 +454,11 @@ describe('开关自身：localStorage 唯一真源，默认关', () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
-  it('手改坏值（`1` / `off` / `ON` / 乱写）一律不翻成开', async () => {
-    const { flag, store } = await boot(false);
+  it('旧键坏值（`1` / `off` / `ON` / 乱写）一律不参与解析：阶段仍是缺省档，开关保持开', async () => {
+    const { flag, store } = await boot('default');
     for (const bad of ['1', 'off', 'ON', 'true', '乱写']) {
       store.set(KOJO2_KEY, bad);
-      expect(flag.isKojo2CutoverEnabled(), bad).toBe(false);
+      expect(flag.isKojo2CutoverEnabled(), bad).toBe(true);
     }
   });
 });

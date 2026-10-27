@@ -133,31 +133,53 @@ describe('monacoThemeIdFor：六档映射与兜底', () => {
 
 /* ============================== ② 六套主题装配 ============================== */
 
+/**
+ * v1 主题 id 全集（**按 `THEME_IDS` 现算，不手抄**；与 `kojo2-theme.test.ts` 同口径）。
+ *
+ * LAU-3 起缺省档（`2.0-default`）就在装配时追加 `kojo2-*` 三套——但那是**动态 import**
+ * （`theme.ts` 的 flag 守卫）：何时落地取决于本模块是否已被同 worker 里别的用例加载过，
+ * 跑单文件时不落地、跑全量时常已落地。拿"装配面上恰好只有 v1 全集"当判据就成了与时序
+ * 赛跑，所以要按这张集合过滤；2.0 三套的注册纪律由 `kojo2-theme.test.ts` 钉
+ * （那边显式等 import 落地）。
+ */
+const V1_THEME_IDS: readonly string[] = THEME_IDS.map((pref) => monacoThemeIdFor(pref));
+const V1_THEME_ID_SET: ReadonlySet<string> = new Set(V1_THEME_IDS);
+
+/** 取一套 v1 主题（缺了当场抛：别让 `!` 把"没装配"吞成一条 undefined 链） */
+function theme(id: string): CapturedTheme {
+  const captured = themes.get(id);
+  if (!captured) throw new Error(`没有捕获到 ${id} 主题（装配面漂 = 本文件整个红）`);
+  return captured;
+}
+
 describe('defineMonacoThemes：经 registerErbLanguage 一次定义六套', () => {
   it('六套 id 齐全，base 正确，rules/colors 非空，inherit=false', () => {
     // 期望集合 = THEME_IDS 经同一映射得来——**不再手抄一份 id 元组**：加档时只要
     // `THEME_IDS` 与 `THEME_ID_BY_PREF` 同步，这条断言自动跟上（手抄的话两处都要改，
-    // 漏一处就是"新档有 id 但没被这条守门看见"）。
-    expect([...themes.keys()].sort()).toEqual(
-      THEME_IDS.map((pref) => monacoThemeIdFor(pref)).sort(),
+    // 漏一处就是"新档有 id 但没被这条守门看见"）。只过滤 v1 全集，理由见 `V1_THEME_IDS`。
+    expect([...themes.keys()].filter((id) => V1_THEME_ID_SET.has(id)).sort()).toEqual(
+      [...V1_THEME_IDS].sort(),
     );
-    for (const [id, theme] of themes) {
-      expect(theme.base, `${id}.base`).toBe(THEME_BASES[id as MonacoThemeId]);
-      expect(theme.inherit, `${id}.inherit`).toBe(false);
-      expect(theme.rules.length, `${id}.rules 过少`).toBeGreaterThan(20);
-      expect(Object.keys(theme.colors).length, `${id}.colors 过少`).toBeGreaterThan(20);
+    for (const id of V1_THEME_IDS) {
+      const captured = theme(id);
+      expect(captured.base, `${id}.base`).toBe(THEME_BASES[id as MonacoThemeId]);
+      expect(captured.inherit, `${id}.inherit`).toBe(false);
+      expect(captured.rules.length, `${id}.rules 过少`).toBeGreaterThan(20);
+      expect(Object.keys(captured.colors).length, `${id}.colors 过少`).toBeGreaterThan(20);
       for (const key of REQUIRED_COLORS) {
-        expect(theme.colors[key], `${id} 缺部件色 ${key}`).toBeDefined();
+        expect(captured.colors[key], `${id} 缺部件色 ${key}`).toBeDefined();
       }
-      for (const [key, value] of Object.entries(theme.colors)) {
+      for (const [key, value] of Object.entries(captured.colors)) {
         expect(value, `${id}/${key} 颜色不是 hex`).toMatch(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/);
       }
     }
   });
 
   it('六套 editor.background 互不相同（换主题必须换底色）', () => {
-    const backgrounds = [...themes.values()].map((t) => t.colors['editor.background']!.toLowerCase());
-    expect(new Set(backgrounds).size).toBe(THEME_IDS.length);
+    const backgrounds = [...themes.entries()]
+      .filter(([id]) => V1_THEME_ID_SET.has(id))
+      .map(([, captured]) => captured.colors['editor.background']!.toLowerCase());
+    expect(new Set(backgrounds).size).toBe(V1_THEME_IDS.length);
   });
 
   it('dark 的糖/语义规则对象原样复用（同引用，主题侧不抄第二份）', () => {
@@ -238,12 +260,13 @@ function contrastRatio(foreground: string, background: string): number {
  */
 
 describe('规则前景对主题背景的 WCAG 对比度', () => {
-  for (const [id, theme] of themes) {
+  for (const id of V1_THEME_IDS) {
     it(`${id}：全部规则 ≥ 4.5:1（无白名单）`, () => {
-      const background = theme.colors['editor.background'];
+      const captured = theme(id);
+      const background = captured.colors['editor.background'];
       if (!background) throw new Error(`${id} 没有 editor.background`);
       expect(background).toMatch(/^#[0-9a-fA-F]{6}$/);
-      for (const rule of theme.rules) {
+      for (const rule of captured.rules) {
         const foreground = rule.foreground;
         if (!foreground) throw new Error(`${id}/${rule.token} 没有 foreground`);
         expect(foreground, `${id}/${rule.token}`).toMatch(/^[0-9a-fA-F]{6}$/);
@@ -294,12 +317,13 @@ function chroma(hex: string): number {
  * 取的是同族更深一档——`③` 那条 ΔE 线就是把这次取舍钉成判据。
  */
 describe('operator 档住在结构族里：可读、弱于正文、别于注释、不抢关键字', () => {
-  for (const [id, theme] of themes) {
+  for (const id of V1_THEME_IDS) {
     it(`${id}：四条落点判据全过`, () => {
-      const background = theme.colors['editor.background'];
+      const captured = theme(id);
+      const background = captured.colors['editor.background'];
       if (!background) throw new Error(`${id} 没有 editor.background`);
       const fgOf = (token: string): string => {
-        const foreground = theme.rules.find((r) => r.token === token)?.foreground;
+        const foreground = captured.rules.find((r) => r.token === token)?.foreground;
         if (!foreground) throw new Error(`${id} 没有 ${token} 的前景（调色板漏格）`);
         return foreground;
       };
@@ -338,9 +362,9 @@ describe('三套 rules 覆盖词法基线 + 全部糖/语义 token', () => {
   const sugarTokens = KOJO_SUGAR_THEME_RULES.map((r) => r.token);
   const semanticTokens = KOJO_SEMANTIC_THEME_RULES.map((r) => r.token);
 
-  for (const [id, theme] of themes) {
+  for (const id of V1_THEME_IDS) {
     it(`${id}：无漏配 token`, () => {
-      const tokens = new Set(theme.rules.map((r) => r.token));
+      const tokens = new Set(theme(id).rules.map((r) => r.token));
       for (const token of [...REQUIRED_BASE_TOKENS, ...sugarTokens, ...semanticTokens]) {
         expect(tokens.has(token), `${id} 漏配 ${token}`).toBe(true);
       }

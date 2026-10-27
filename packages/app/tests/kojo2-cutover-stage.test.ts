@@ -22,6 +22,7 @@ import {
   KOJO2_LEGACY_FLAG_KEY,
   createKojo2CutoverController,
   getKojo2CutoverController,
+  kojo2StageAllowsLegacy,
   kojo2StageAllowsSurface,
   readKojo2CutoverStage,
   resetKojo2CutoverController,
@@ -68,9 +69,13 @@ class MemoryStorage implements Kojo2CutoverStorage {
     this.values.delete(key);
   }
 
-  /** 预置一份合法的切换计划 */
-  seedPlan(stage: Kojo2CutoverStage, overrides: Record<string, string> = {}): this {
-    this.values.set(KOJO2_CUTOVER_STORAGE_KEY, JSON.stringify({ version: 1, stage, overrides }));
+  /** 预置一份合法的切换计划（`version` 缺省 2；迁移用例显式传 1 复刻存量文档） */
+  seedPlan(
+    stage: Kojo2CutoverStage,
+    overrides: Record<string, string> = {},
+    version: 1 | 2 = 2,
+  ): this {
+    this.values.set(KOJO2_CUTOVER_STORAGE_KEY, JSON.stringify({ version, stage, overrides }));
     return this;
   }
 
@@ -113,12 +118,12 @@ describe('① 开关单源：flag 由阶段派生（v1-only = 关）', () => {
     expect(kojo2StageAllowsSurface('2.0-default')).toBe(true);
   });
 
-  it('缺省（没 window / 没存过 / 控制器缺省）= v1-only，开关仍是关（与改动前逐字一致）', () => {
-    expect(resolveKojo2CutoverStage()).toBe('v1-only');
-    expect(isKojo2CutoverEnabled()).toBe(false);
+  it('缺省（没 window / 没存过 / 控制器缺省）= 2.0-default，开关缺省即开（LAU-3 翻面）', () => {
+    expect(resolveKojo2CutoverStage()).toBe('2.0-default');
+    expect(isKojo2CutoverEnabled()).toBe(true);
     stubWindow();
-    expect(resolveKojo2CutoverStage()).toBe('v1-only');
-    expect(isKojo2CutoverEnabled()).toBe(false);
+    expect(resolveKojo2CutoverStage()).toBe('2.0-default');
+    expect(isKojo2CutoverEnabled()).toBe(true);
   });
 
   it('盘上计划是唯一真源：dual / 2.0-default 都翻成开，v1-only 仍是关', () => {
@@ -171,10 +176,14 @@ describe('① 开关单源：flag 由阶段派生（v1-only = 关）', () => {
     expect(isKojo2CutoverEnabled()).toBe(false);
   });
 
-  it('readKojo2CutoverStage 只认 version 1 + 合法阶段（坏版本 / 坏阶段 = null）', () => {
+  it('readKojo2CutoverStage 认 version 1 与 2 + 合法阶段（坏版本 / 坏阶段 = null）', () => {
     const storage = new MemoryStorage().seedPlan('dual');
     expect(readKojo2CutoverStage(storage)).toBe('dual');
+    // LAU-3 起 v2 是当拍写回的版本：照样读得懂
     storage.values.set(KOJO2_CUTOVER_STORAGE_KEY, JSON.stringify({ version: 2, stage: 'dual' }));
+    expect(readKojo2CutoverStage(storage)).toBe('dual');
+    // 将来抬到 3：旧版读到 3 一律 null（失败方向 = 少露）
+    storage.values.set(KOJO2_CUTOVER_STORAGE_KEY, JSON.stringify({ version: 3, stage: 'dual' }));
     expect(readKojo2CutoverStage(storage)).toBeNull();
     storage.values.set(KOJO2_CUTOVER_STORAGE_KEY, JSON.stringify({ version: 1, stage: '2.0' }));
     expect(readKojo2CutoverStage(storage)).toBeNull();
@@ -189,7 +198,7 @@ describe('① 开关单源：flag 由阶段派生（v1-only = 关）', () => {
     storage.seedPlan('2.0-default');
     expect(resolveKojo2CutoverStage()).toBe('2.0-default');
     storage.values.delete(KOJO2_CUTOVER_STORAGE_KEY);
-    expect(resolveKojo2CutoverStage()).toBe('v1-only');
+    expect(resolveKojo2CutoverStage()).toBe('2.0-default');
   });
 });
 
@@ -217,6 +226,8 @@ describe('② 旧键兼容：写死的迁移规则 + 开机迁移一次', () => 
 
   it('setKojo2CutoverEnabled(true)：写旧键 `on` + 阶段推到 dual；关：删旧键 + 回 v1-only', () => {
     const storage = stubWindow();
+    // LAU-3 起缺省已是 2.0 当家；`开` 只把 **v1-only 起步** 推到 dual（不降级，另有用例钉）
+    getKojo2CutoverController().setStage('v1-only');
     setKojo2CutoverEnabled(true);
     expect(storage.values.get(KOJO2_CUTOVER_KEY)).toBe('on');
     expect(getKojo2CutoverController().getStage()).toBe('dual');
@@ -239,10 +250,10 @@ describe('② 旧键兼容：写死的迁移规则 + 开机迁移一次', () => 
   it('开机 attachStorage：没有计划 + 旧键 on ⇒ 以 dual 起步并把它写成基线', () => {
     const storage = new MemoryStorage().seedLegacy('on');
     const controller = createKojo2CutoverController();
-    expect(controller.getStage()).toBe('v1-only');
+    expect(controller.getStage()).toBe('2.0-default');
     controller.attachStorage(storage);
     expect(controller.getStage()).toBe('dual');
-    expect(storage.plan()).toMatchObject({ version: 1, stage: 'dual' });
+    expect(storage.plan()).toMatchObject({ version: 2, stage: 'dual' });
   });
 
   it('开机 attachStorage：计划停在缺省档 v1-only + 旧键 on ⇒ 抬到 dual 并写回计划', () => {
@@ -253,13 +264,13 @@ describe('② 旧键兼容：写死的迁移规则 + 开机迁移一次', () => 
     expect(storage.plan()).toMatchObject({ stage: 'dual' });
   });
 
-  it('开机 attachStorage：旧键坏值（off / ON）不迁移，按 v1-only 写基线', () => {
+  it('开机 attachStorage：旧键坏值（off / ON）不迁移，按缺省档写基线', () => {
     for (const bad of ['off', 'ON', '1']) {
       const storage = new MemoryStorage().seedLegacy(bad);
       const controller = createKojo2CutoverController();
       controller.attachStorage(storage);
-      expect(controller.getStage(), bad).toBe('v1-only');
-      expect(storage.plan(), bad).toMatchObject({ stage: 'v1-only' });
+      expect(controller.getStage(), bad).toBe('2.0-default');
+      expect(storage.plan(), bad).toMatchObject({ stage: '2.0-default' });
     }
   });
 
@@ -287,8 +298,10 @@ describe('② 旧键兼容：写死的迁移规则 + 开机迁移一次', () => 
 
 describe('③ 阶段联动：改档即重挂 / 打开闸 / 诊断入口按新阶段重判', () => {
   it('阶段闸只剩切流语义：`.kojo2` 各档照开，老 `.kojo` 钉 2.0 的 override 在 v1-only 仍被拦', () => {
-    stubWindow(new MemoryStorage().seedLegacy('on'));
-    expect(isKojo2CutoverEnabled()).toBe(true);
+    stubWindow(new MemoryStorage().seedPlan('v1-only'));
+    // `kojo2StageBlockedReason` 读的是**控制器**当前档（不是 resolve 出来的盘上档）⇒ 两边对齐到 v1-only
+    getKojo2CutoverController().setStage('v1-only');
+    expect(isKojo2CutoverEnabled()).toBe(false);
     // K2-SURFACE-DEFAULT：扩展名即声明，阶段不再拦 `.kojo2`
     expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toBeNull();
 
@@ -359,7 +372,7 @@ describe('③ 阶段联动：改档即重挂 / 打开闸 / 诊断入口按新阶
   });
 
   it('显式注入的控制器/效果也能走同一条路（设置页测试用独立实例，不碰单例）', () => {
-    const controller = createKojo2CutoverController();
+    const controller = createKojo2CutoverController({ stage: 'v1-only' });
     const refreshAll = vi.fn();
     const snapshot = commitKojo2CutoverStage('2.0-default', {
       controller,
@@ -369,7 +382,7 @@ describe('③ 阶段联动：改档即重挂 / 打开闸 / 诊断入口按新阶
     expect(snapshot.stageLabel.length).toBeGreaterThan(0);
     expect(refreshAll).toHaveBeenCalledTimes(1);
     // 单例没被碰：两套各判各的（注入面就是为了这个）
-    expect(getKojo2CutoverController().getStage()).toBe('v1-only');
+    expect(getKojo2CutoverController().getStage()).toBe('2.0-default');
   });
 
   it('阶段落盘：改档后计划里就是新阶段，重启也回这一档', () => {
@@ -509,7 +522,7 @@ describe('⑤ 设置页：三态单选 / 人话 / override 清单 / 恢复出厂
     }
   });
 
-  it('恢复出厂：回 v1-only + 清 override + 删计划 + 删旧键（旧键不清就会把解析拉回 dual）', () => {
+  it('恢复出厂：回缺省档（2.0 当家）+ 清 override + 删计划 + 删旧键（旧键不清就会把解析拉回 dual）', () => {
     const storage = stubWindow(
       new MemoryStorage().seedPlan('dual', { [KOJO2_FILE]: 'kojo2' }).seedLegacy('on'),
     );
@@ -518,16 +531,73 @@ describe('⑤ 设置页：三态单选 / 人话 / override 清单 / 恢复出厂
     expect(controller.getStage()).toBe('dual');
 
     const snapshot = resetKojo2CutoverAll(controller);
-    expect(snapshot.stage).toBe('v1-only');
+    expect(snapshot.stage).toBe('2.0-default');
     expect(snapshot.overrides).toEqual([]);
     expect(storage.values.has(KOJO2_CUTOVER_STORAGE_KEY)).toBe(false);
     expect(storage.values.has(KOJO2_LEGACY_FLAG_KEY)).toBe(false);
-    expect(isKojo2CutoverEnabled()).toBe(false);
+    expect(isKojo2CutoverEnabled()).toBe(true);
   });
 
   it('存储不可写时如实说"只在本会话生效"（persisted=false 上屏，不假装存住了）', () => {
     const html = render(createKojo2CutoverController());
     expect(html).toContain('data-kojo2-persisted="0"');
     expect(html).toContain('存储不可写');
+  });
+});
+
+/* ============================== ⑥ LAU-3：缺省翻面 + 一次性迁移 + kojo1 门 ============================== */
+
+/**
+ * LAU-3（2026-10-27）三件套：缺省档从 `v1-only` 翻到 `2.0-default`、存量 v1 计划**一次性迁移**
+ * （并留回执）、以及 kojo1 封存门的三档真值表。
+ *
+ * 迁移为什么必须做：`v1-only` 既是旧缺省、又是开机自动写下的基线 ⇒ 盘上"几乎人人一份 v1-only"，
+ * 只改缺省常量对存量用户零效果。
+ */
+describe('⑥ LAU-3：缺省翻面（存量 v1 计划一次性迁移）+ kojo1 封存门', () => {
+  it('kojo1 门三档真值表：只有 2.0-default 封存', () => {
+    expect(kojo2StageAllowsLegacy('v1-only')).toBe(true);
+    expect(kojo2StageAllowsLegacy('dual')).toBe(true);
+    expect(kojo2StageAllowsLegacy('2.0-default')).toBe(false);
+  });
+
+  it('v1 计划停在 v1-only（旧缺省基线）⇒ 抬到 2.0-default，快照给一次性回执并当拍写回 v2', () => {
+    const storage = new MemoryStorage().seedPlan('v1-only', {}, 1);
+    const controller = createKojo2CutoverController();
+    controller.attachStorage(storage);
+    expect(controller.getStage()).toBe('2.0-default');
+    expect(controller.getSnapshot().migratedFromV1Plan).toBe(true);
+    expect(storage.plan()).toMatchObject({ version: 2, stage: '2.0-default' });
+    // 写回之后就是普通 v2 计划：下次开机不再出现在回执里
+    const restarted = createKojo2CutoverController();
+    restarted.attachStorage(storage);
+    expect(restarted.getSnapshot().migratedFromV1Plan).toBe(false);
+  });
+
+  it('v1 计划显式选了 dual / 2.0-default ⇒ 原样保留（只抬基线，不改选择）', () => {
+    for (const stage of ['dual', '2.0-default'] as const) {
+      const storage = new MemoryStorage().seedPlan(stage, {}, 1);
+      const controller = createKojo2CutoverController();
+      controller.attachStorage(storage);
+      expect(controller.getStage(), stage).toBe(stage);
+    }
+  });
+
+  it('被抬上来的 v1 基线 + 旧键 on ⇒ 留在 dual（不把当年翻过开关的人顶进封存档）', () => {
+    const storage = new MemoryStorage().seedPlan('v1-only', {}, 1).seedLegacy('on');
+    const controller = createKojo2CutoverController();
+    controller.attachStorage(storage);
+    expect(controller.getStage()).toBe('dual');
+    expect(kojo2StageAllowsLegacy(controller.getStage())).toBe(true);
+    expect(storage.plan()).toMatchObject({ version: 2, stage: 'dual' });
+  });
+
+  it('恢复出厂会清掉迁移回执（作者亲手做的，不该再提示"我们替你抬过档"）', () => {
+    const storage = new MemoryStorage().seedPlan('v1-only', {}, 1);
+    const controller = createKojo2CutoverController();
+    controller.attachStorage(storage);
+    expect(controller.getSnapshot().migratedFromV1Plan).toBe(true);
+    controller.reset();
+    expect(controller.getSnapshot().migratedFromV1Plan).toBe(false);
   });
 });

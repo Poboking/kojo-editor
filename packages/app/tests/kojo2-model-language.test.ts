@@ -158,7 +158,7 @@ function harness(options: HarnessOptions = {}): Harness {
 
 /** 按正文判 v1 / 2.0（模拟 `2.0-default` 阶段的路由；不碰真指纹，专测重挂机制） */
 function flavorResolver(_path: string, text: string): string {
-  return text.includes('2.0') ? KOJO2_LANGUAGE_ID : 'kojo-sugar';
+  return text.includes('2.0') ? KOJO2_LANGUAGE_ID : 'kojo-legacy';
 }
 
 const KOJO_PATH = 'C:/作者工作区/事件.kojo';
@@ -177,9 +177,17 @@ interface FlagFake {
   off(): void;
 }
 
+/**
+ * 假 localStorage。**LAU-3 起缺省档 = `2.0-default`（flag 开）**，所以：
+ * 开 = 什么都不存（缺省档），由控制器 `setStage` 说话；关 = 盘上显式一份 `v1-only` 计划。
+ */
 function stubFlag(on: boolean): FlagFake {
   const store = new Map<string, string>();
-  if (on) store.set('kojo.ui.kojo2Cutover.v1', 'on');
+  const PLAN_KEY = 'kojo.ui.kojo2Cutover.plan.v1';
+  const writeV1OnlyPlan = (): void => {
+    store.set(PLAN_KEY, JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} }));
+  };
+  if (!on) writeV1OnlyPlan();
   vi.stubGlobal('window', {
     localStorage: {
       getItem: (key: string): string | null => store.get(key) ?? null,
@@ -193,15 +201,21 @@ function stubFlag(on: boolean): FlagFake {
   });
   return {
     store,
-    on: () => store.set('kojo.ui.kojo2Cutover.v1', 'on'),
-    off: () => store.delete('kojo.ui.kojo2Cutover.v1'),
+    on: () => {
+      store.delete(PLAN_KEY);
+      store.delete('kojo.ui.kojo2Cutover.v1');
+    },
+    off: () => {
+      store.delete('kojo.ui.kojo2Cutover.v1');
+      writeV1OnlyPlan();
+    },
   };
 }
 
 /* ============================== 判据单源 ============================== */
 
 describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', () => {
-  it('flag 关 ⇒ 恒等于 languageFor；`.kojo2` 的语言面照常认出 2.0', () => {
+  it('flag 关（显式 v1-only）⇒ 恒等于 languageFor；`.kojo2` 的语言面照常认出 2.0', () => {
     stubFlag(false);
     for (const path of [KOJO_PATH, KOJO2_PATH, 'C:/x/a.json', 'C:/x/readme.txt']) {
       expect(languageIdForKojo2Model(path, '# 机 指令 310\n灵梦：「你好。」')).toBe(languageFor(path));
@@ -214,12 +228,12 @@ describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', (
     stubFlag(true);
     getKojo2CutoverController().setStage('dual');
     expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
-    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1')).toBe('kojo-sugar');
+    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1')).toBe('kojo-legacy');
   });
 
-  it('flag 开 + v1-only：`.kojo2` 仍是 kojo2（语言面无条件），不被降成 plaintext', () => {
-    stubFlag(true);
-    expect(getKojo2CutoverController().getStage()).toBe('v1-only');
+  it('v1-only：`.kojo2` 仍是 kojo2（语言面无条件），不被降成 plaintext', () => {
+    stubFlag(false);
+    expect(getKojo2CutoverController().getStage()).toBe('2.0-default'); // 非盘上真源，故不参与判据
     expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
   });
 
@@ -227,7 +241,9 @@ describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', (
     stubFlag(true);
     getKojo2CutoverController().setStage('2.0-default');
     expect(languageIdForKojo2Model(KOJO_PATH, '# 角色 灵梦\n> 她别过头。\n')).toBe(KOJO2_LANGUAGE_ID);
-    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1\n$X = 2\n')).toBe('kojo-sugar');
+    // v1 正文仍归 v1 解析器；但 LAU-3 起缺省档把 kojo1 **语言面**封了 ⇒ 挂的是 plaintext
+    // （要回高亮/四面就切到 `dual`——那是"显式开启 kojo1 语法"）
+    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1\n$X = 2\n')).toBe('plaintext');
   });
 
   it('非 kojo 文件即使 flag 开也走 languageFor（路由不接管别人的文件）', () => {
@@ -241,7 +257,7 @@ describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', (
 /* ============================== attach / 幂等 / 防抖 ============================== */
 
 describe('attach：flag 关零动作、flag 开只挂监听', () => {
-  it('flag 关 ⇒ 不订阅、不排定时器、不碰 model；retarget / refresh 也零动作', () => {
+  it('flag 关（显式 v1-only）⇒ 不订阅、不排定时器、不碰 model；retarget / refresh 也零动作', () => {
     stubFlag(false);
     const fake = harness({ enabled: isKojo2CutoverEnabled });
     const model = new FakeModel('> 旁白', 'plaintext');
@@ -259,7 +275,7 @@ describe('attach：flag 关零动作、flag 开只挂监听', () => {
 
   it('attach 时语言已正确 ⇒ 零重挂（幂等），只记一次 skipped', () => {
     const fake = harness();
-    const model = new FakeModel('#DIM X, 1', 'kojo-sugar');
+    const model = new FakeModel('#DIM X, 1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     expect(fake.calls).toEqual([]);
     expect(fake.controller.stats()).toMatchObject({ attached: 1, remounts: 0, skipped: 1, pending: 0 });
@@ -267,7 +283,7 @@ describe('attach：flag 关零动作、flag 开只挂监听', () => {
 
   it('attach 时语言不对 ⇒ 立即纠正一次（建 model 判据与重挂判据同一枚）', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('> 2.0 旁白', 'kojo-sugar');
+    const model = new FakeModel('> 2.0 旁白', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     expect(fake.calls).toEqual([{ model, languageId: KOJO2_LANGUAGE_ID }]);
     expect(model.getLanguageId()).toBe(KOJO2_LANGUAGE_ID);
@@ -292,14 +308,14 @@ describe('attach：flag 关零动作、flag 开只挂监听', () => {
   it('attach 带上建 model 时的语言但不一致 ⇒ 仍立刻对齐一次（兜底别的调用方判错）', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
     const model = new FakeModel('这行是 2.0', 'plaintext'); // model 实际不是声称的 v1
-    fake.attach(model, KOJO_PATH, { languageId: 'kojo-sugar' });
+    fake.attach(model, KOJO_PATH, { languageId: 'kojo-legacy' });
     expect(fake.calls).toEqual([{ model, languageId: KOJO2_LANGUAGE_ID }]);
     expect(model.getLanguageId()).toBe(KOJO2_LANGUAGE_ID);
   });
 
   it('同一 model 二次 attach ⇒ 同一手柄、不重复订阅（listener 仍只有一条）', () => {
     const fake = harness();
-    const model = new FakeModel('#DIM X, 1', 'kojo-sugar');
+    const model = new FakeModel('#DIM X, 1', 'kojo-legacy');
     const first = fake.attach(model, KOJO_PATH);
     const second = fake.attach(model, KOJO_PATH);
     expect(second).toBe(first);
@@ -311,7 +327,7 @@ describe('attach：flag 关零动作、flag 开只挂监听', () => {
 describe('防抖：窗口内多次变化合并成一次重判', () => {
   it('默认窗口 = 300ms，注入的调度器收到同一个值', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     model.setText('改成 2.0');
     expect(fake.schedule.delays).toEqual([KOJO2_LANGUAGE_REMOUNT_DEBOUNCE_MS]);
@@ -319,7 +335,7 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
 
   it('连续 3 次正文变化只排 1 个定时器，到点只重挂一次', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     model.setText('a');
     model.setText('b');
@@ -334,7 +350,7 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
 
   it('到点后语言没变 ⇒ 一次 setModelLanguage 都不调（同语言不重挂）', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('v1 一', 'kojo-sugar');
+    const model = new FakeModel('v1 一', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     model.setText('v1 二');
     fake.schedule.runAll();
@@ -346,7 +362,7 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
 
   it('正文翻转 v1 → 2.0 → v1：两次都重挂，语言跟着正文走', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
 
     model.setText('这行是 2.0');
@@ -355,14 +371,14 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
 
     model.setText('又改回 v1');
     fake.schedule.runAll();
-    expect(model.getLanguageId()).toBe('kojo-sugar');
+    expect(model.getLanguageId()).toBe('kojo-legacy');
     expect(fake.controller.stats().remounts).toBe(2);
   });
 
   it('flag 运行中被关掉 ⇒ 已排队的回调到点只做 no-op，不碰 model', () => {
     const flagOn = { value: true };
     const fake = harness({ enabled: () => flagOn.value });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
 
     model.setText('2.0');
@@ -370,13 +386,13 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
     flagOn.value = false;
     fake.schedule.runAll();
     expect(fake.calls).toEqual([]);
-    expect(model.getLanguageId()).toBe('kojo-sugar');
+    expect(model.getLanguageId()).toBe('kojo-legacy');
   });
 
   it('flag 运行中被关掉后新的内容变化 ⇒ 连定时器都不排', () => {
     const flagOn = { value: true };
     const fake = harness({ enabled: () => flagOn.value });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     flagOn.value = false;
 
@@ -392,9 +408,9 @@ describe('改路径 / 改扩展名：立即重判，不等防抖', () => {
       resolveLanguage: (path, text) =>
         path.endsWith(KOJO2_SOURCE_EXTENSION) || text.includes('2.0')
           ? KOJO2_LANGUAGE_ID
-          : 'kojo-sugar',
+          : 'kojo-legacy',
     });
-    const model = new FakeModel('v1 内容', 'kojo-sugar');
+    const model = new FakeModel('v1 内容', 'kojo-legacy');
     const handle = fake.attach(model, KOJO_PATH);
     expect(handle.path).toBe(KOJO_PATH);
 
@@ -409,7 +425,7 @@ describe('改路径 / 改扩展名：立即重判，不等防抖', () => {
 
   it('retarget 到同语言路径 ⇒ 只更新路径，不重挂（幂等）', () => {
     const fake = harness();
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     const handle = fake.attach(model, KOJO_PATH);
     handle.retarget('C:/作者工作区/另一个.kojo');
     expect(handle.path).toBe('C:/作者工作区/另一个.kojo');
@@ -419,7 +435,7 @@ describe('改路径 / 改扩展名：立即重判，不等防抖', () => {
 
   it('refresh 立即重判：正文已翻转但防抖未到点也立刻重挂，然后取消排队', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     const handle = fake.attach(model, KOJO_PATH);
     model.setText('2.0');
     expect(fake.schedule.size()).toBe(1);
@@ -433,23 +449,23 @@ describe('改路径 / 改扩展名：立即重判，不等防抖', () => {
   it('controller.retarget(model, path)：不持手柄也能改路径；未挂载的 model 返回 false', () => {
     const fake = harness({
       resolveLanguage: (path) =>
-        path.endsWith(KOJO2_SOURCE_EXTENSION) ? KOJO2_LANGUAGE_ID : 'kojo-sugar',
+        path.endsWith(KOJO2_SOURCE_EXTENSION) ? KOJO2_LANGUAGE_ID : 'kojo-legacy',
     });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     expect(fake.controller.retarget(model, KOJO2_PATH)).toBe(true);
     expect(model.getLanguageId()).toBe(KOJO2_LANGUAGE_ID);
 
-    const stranger = new FakeModel('v1', 'kojo-sugar');
+    const stranger = new FakeModel('v1', 'kojo-legacy');
     expect(fake.controller.retarget(stranger, KOJO2_PATH)).toBe(false);
-    expect(stranger.getLanguageId()).toBe('kojo-sugar');
+    expect(stranger.getLanguageId()).toBe('kojo-legacy');
   });
 });
 
 describe('解绑与收尾：不拖住 model、不碰引用计数', () => {
   it('detach 取消排队回调；之后内容变化零动作', () => {
     const fake = harness({ resolveLanguage: flavorResolver });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     const handle = fake.attach(model, KOJO_PATH);
     model.setText('2.0');
     expect(fake.schedule.size()).toBe(1);
@@ -466,7 +482,7 @@ describe('解绑与收尾：不拖住 model、不碰引用计数', () => {
 
   it('detach 可重复调用（不抛、不重复记账）', () => {
     const fake = harness();
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     const handle = fake.attach(model, KOJO_PATH);
     handle.detach();
     expect(() => handle.detach()).not.toThrow();
@@ -475,7 +491,7 @@ describe('解绑与收尾：不拖住 model、不碰引用计数', () => {
 
   it('model 被回收（onWillDispose）⇒ 自动解绑，不让本表拖住已销毁的 model', () => {
     const fake = harness();
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     expect(fake.controller.stats().attached).toBe(1);
 
@@ -486,8 +502,8 @@ describe('解绑与收尾：不拖住 model、不碰引用计数', () => {
 
   it('dispose() 解绑全部；之后的 attach 返回 no-op 手柄（不订阅）', () => {
     const fake = harness();
-    const a = new FakeModel('v1', 'kojo-sugar');
-    const b = new FakeModel('v1', 'kojo-sugar');
+    const a = new FakeModel('v1', 'kojo-legacy');
+    const b = new FakeModel('v1', 'kojo-legacy');
     fake.attach(a, KOJO_PATH);
     fake.attach(b, KOJO_PATH);
     expect(fake.controller.stats().attached).toBe(2);
@@ -496,7 +512,7 @@ describe('解绑与收尾：不拖住 model、不碰引用计数', () => {
     expect(fake.controller.stats().attached).toBe(0);
     expect(a.contentListeners.size).toBe(0);
 
-    const c = new FakeModel('v1', 'kojo-sugar');
+    const c = new FakeModel('v1', 'kojo-legacy');
     fake.attach(c, KOJO_PATH);
     expect(c.contentListeners.size).toBe(0);
     expect(fake.controller.stats().attached).toBe(0);
@@ -511,10 +527,10 @@ describe('refreshAll：阶段 / override 变化后全部重判', () => {
         if (path.endsWith(KOJO2_SOURCE_EXTENSION)) {
           return stage === 'v1-only' ? 'plaintext' : KOJO2_LANGUAGE_ID;
         }
-        return text.includes('2.0') ? KOJO2_LANGUAGE_ID : 'kojo-sugar';
+        return text.includes('2.0') ? KOJO2_LANGUAGE_ID : 'kojo-legacy';
       },
     });
-    const v1Model = new FakeModel('v1', 'kojo-sugar');
+    const v1Model = new FakeModel('v1', 'kojo-legacy');
     const blockedModel = new FakeModel('> 旁白', 'plaintext'); // v1-only 阶段建成的
     fake.attach(v1Model, KOJO_PATH);
     fake.attach(blockedModel, KOJO2_PATH);
@@ -536,7 +552,7 @@ describe('失败不静默：判据 / setModelLanguage 出错只吵一次', () =>
         return KOJO2_LANGUAGE_ID;
       },
     });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     model.setText('再来一次');
     fake.schedule.runAll();
@@ -558,11 +574,11 @@ describe('失败不静默：判据 / setModelLanguage 出错只吵一次', () =>
         throw new Error('monaco 拒绝');
       },
     });
-    const model = new FakeModel('v1', 'kojo-sugar');
+    const model = new FakeModel('v1', 'kojo-legacy');
     fake.attach(model, KOJO_PATH);
     model.setText('2.0');
     fake.schedule.runAll();
-    expect(model.getLanguageId()).toBe('kojo-sugar');
+    expect(model.getLanguageId()).toBe('kojo-legacy');
     expect(fake.controller.stats().remounts).toBe(0);
     expect(fake.warnings.length).toBe(1);
     expect(fake.warnings[0]).toContain('monaco 拒绝');

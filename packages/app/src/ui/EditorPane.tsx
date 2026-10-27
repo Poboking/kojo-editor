@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type {
@@ -101,6 +101,9 @@ import {
   type SugarSegmentInput,
 } from './sugar-view';
 import { resolveModelLanguage, subscribeLanguageOverride } from './language-mode-pref';
+// LAU-3：kojo1（封存层）开没开——`.kojo 预览` 投影的目标语法就是 kojo1，语法封存预览一起封。
+// 订切流阶段（`subscribeKojo2Cutover`）⇒ 设置页改档后当拍反映，不必等换文件 / 重载窗口。
+import { isKojoLegacySyntaxEnabled, subscribeKojo2Cutover } from './kojo2-flag';
 import { isSealed, useSealed } from './sealed';
 import { isDirectMode, useDirectMode } from './direct-mode';
 import { isInWorkspaceFile } from './file-area';
@@ -520,6 +523,16 @@ export function EditorPane({
   const [introAsk, setIntroAsk] = useState(false);
   /** 糖视图开关（偏好持久化；默认**关**——缺省即"看到的正是盘上那份"，见 `sugar-view.ts` 头注） */
   const [sugarView, setSugarView] = useState<boolean>(() => loadSugarViewPref());
+  /**
+   * kojo1（**封存层**）此刻开没开（LAU-3）：预览投影的目标语法就是 kojo1，语法封存 ⇒
+   * 预览一起封（用户 2026-10-27 口径）。订切流阶段 ⇒ 设置页改档后这一格立即翻，
+   * 不必等换文件；判据只有一份（`ui/kojo2-flag.ts::isKojoLegacySyntaxEnabled`）。
+   */
+  const legacySyntaxOn = useSyncExternalStore(
+    subscribeKojo2Cutover,
+    isKojoLegacySyntaxEnabled,
+    () => false,
+  );
   /**
    * 封存总闸（`sealed.ts`；默认封存）。它如今**只作用于两个面板**，糖视图不在其内；
    * 这里剩下的用处只有"解锁弹窗讲多少话"那一档文案口径（见 `decideUnlock` / 弹框选型）。
@@ -1136,9 +1149,10 @@ export function EditorPane({
     // 切换 / 解锁 / 直连 / 换文件全部入口调用）；糖视图正要挂上时同样发的是**原文**
     // 真相（派生文本永不外发，挂载后由 broadcaster 的抑制谓词兜住）。
     documentBroadcaster.flush(path, () => readDocumentTruth(path));
-    // 可用门（ADR-0005）：只对**游戏目录里、本次未解锁**的 ERB 生效。
-    // `.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放预览——
-    // 预览靠"整份文件换成只读 model"工作，可编辑的原文必须始终看得见。
+    // 可用门（ADR-0005 + LAU-3 的封存轴）：只对**游戏目录里、本次未解锁、且 kojo1 还开着**的
+    // ERB 生效。`.kojo` 与**工作区内 ERB**（作者自己的创作源文件，恒可编辑）都不放预览——
+    // 预览靠"整份文件换成只读 model"工作，可编辑的原文必须始终看得见；kojo1 封存时投影的
+    // 目标语法本身已经不在了，同样不放（判据见 `sugar-view.ts::sugarViewAllowed`）。
     if (
       !sugarViewRef.current ||
       !sugarViewAllowed({
@@ -1146,6 +1160,7 @@ export function EditorPane({
         inWorkspace: inWorkspace(path),
         // 直连可编辑 ⟹ 预览让位（与 unlocks 同口径，ADR-0005 互斥）
         unlocked: unlockedPathsRef.current.has(path) || directEditable(path),
+        legacySyntaxOn,
       })
     )
       return;
@@ -1258,7 +1273,7 @@ export function EditorPane({
     refreshSugarReadDecorations();
     // C1 反向下行批：糖视图挂上 = derivedView 翻转（false→true），立刻透出给面板
     publishCursor();
-  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth, publishCursor, refreshSugarReadDecorations]);
+  }, [kernel, clearSugarView, documentBroadcaster, readDocumentTruth, publishCursor, refreshSugarReadDecorations, legacySyntaxOn]);
 
   // 开关变化：记住偏好（下次启动仍是你的选择）+ 就地重算视图
   useEffect(() => {
@@ -1335,9 +1350,20 @@ export function EditorPane({
     return kernel.bus.on('editor.sugarView.set', (p) => {
       if (p.filePath && p.filePath !== filePathRef.current) return;
       // 省略 `on` = 反转：状态所有者是宿主，请求方不必先问"现在是开还是关"
+      const want = p.on ?? !sugarViewRef.current;
+      // kojo1 封存 ⇒ **只许关不许开**（LAU-3）。命令面板 / 插件发的意图都走这一格，
+      // 静默拒绝等于"按了没反应"（铁律 4）：把去哪儿要回来说清楚。偏好值不动。
+      if (want && !isKojoLegacySyntaxEnabled()) {
+        notify({
+          kind: 'info',
+          message:
+            '.kojo 预览随 kojo1 语法一起封存了：在「设置 › Kojo 2.0 切换阶段」退到 v1 档或双轨档即可重新开启（你的开关偏好没有被清掉）。',
+        });
+        return;
+      }
       setSugarView((v) => p.on ?? !v);
     });
-  }, [kernel]);
+  }, [kernel, notify]);
 
   // 记录最新定位请求（同一文件重复定位靠 nonce 变化触发）
   useEffect(() => {
@@ -2282,7 +2308,9 @@ export function EditorPane({
 
   // 首次打开 ERB：问一次"要不要开预览"（问过就再不问）。
   // **工作区 ERB 不弹**（恒可编辑，预览本就不生效，问了没有意义——ADR-0005 轴一）；
-  // 已解锁编辑的文件同样不弹（轴二的破例态下预览也让位）。
+  // 已解锁编辑的文件同样不弹（轴二的破例态下预览也让位）；kojo1 封存时更不弹（LAU-3：
+  // 问一个开不起来的功能等于骗人一次）。这里**现读**开关而不用渲染态：这一格只在换文件时
+  // 判一次，不该因为作者在设置页改档就对着当前文件补弹一次引导。
   // 默认关之后，这一次询问就是本功能主要的发现路径 ⇒ **必须保留**（预览已不在封存清单里，
   // 不再有"封存时不弹"这一条）。
   useEffect(() => {
@@ -2291,6 +2319,7 @@ export function EditorPane({
         isErbLike: isErbLike(filePath),
         inWorkspace: inWorkspace(filePath),
         unlocked: unlockedPathsRef.current.has(filePath) || directEditable(filePath),
+        legacySyntaxOn: isKojoLegacySyntaxEnabled(),
       })
     )
       return;
@@ -2683,6 +2712,22 @@ export function EditorPane({
       {sugarStats}
     </span>
   );
+  /**
+   * kojo1 封存 ⇒ `.kojo 预览` 一起封（LAU-3）时，屏上要不要出声。
+   *
+   * **只对本来就开着预览的作者说**（`sugarView` 为真 = 他的偏好是开、投影刚刚被撤下）：
+   * 从没开过的人屏上不该多一枚徽章（缺省档就是封存档，逐文件挂一句"已封存"是噪声）。
+   * 铁律 4 的那一半由这里兜住：功能被收走必须看得见、并且说清去哪儿要回来。
+   */
+  const sealedSugarNotice: ReactElement | null =
+    legacySyntaxOn || !sugarView ? null : (
+      <span
+        className="erb-mode-hint"
+        title="kojo1 语法在当前档位（2.0 默认）下已封存，.kojo 预览投影的正是 kojo1 写法，因此一起停用。你的开关偏好没有被清掉：到「设置 › Kojo 2.0 切换阶段」退到 v1 档或双轨档，预览照旧生效。"
+      >
+        <Icon name="preview" size="sm" /> .kojo 预览已随 kojo1 封存
+      </span>
+    );
 
   return (
     <div className="editor-pane" data-editor-group={groupId}>
@@ -2765,6 +2810,10 @@ export function EditorPane({
               >
                 直连可编辑
               </span>
+            ) : sealedSugarNotice !== null ? (
+              /* kojo1 封存 ⇒ 预览入口整簇不渲染（不留一颗"点了没反应"的按钮），
+                 换成一句说明：只对本来就开着预览的作者出现（判据见 `sealedSugarNotice`）。 */
+              sealedSugarNotice
             ) : (
               /* 预览横幅（1023 覆盖面批）：这一簇（开关 + 读数 + 语法标记开关）就是
                  `sugar-preview` 面的根元素。**只在预览真在屏上时才挂面属性**——预览关着时

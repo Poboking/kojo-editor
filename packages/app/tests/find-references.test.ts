@@ -125,7 +125,7 @@ describe('installReferenceProvider', () => {
   it('为 ERB 与 .kojo 两种语言 id 注册同一 provider', () => {
     const stub = stubMonaco();
     installReferenceProvider(stub.monaco, { resolve: () => [], navigate: () => undefined });
-    expect(stub.providers.map((p) => p.languageId).sort()).toEqual(['kojo-erb', 'kojo-sugar']);
+    expect(stub.providers.map((p) => p.languageId).sort()).toEqual(['kojo-erb', 'kojo-legacy']);
   });
 
   it('已打开文件用真 model 的 uri；未打开文件发 file URI 且不进 opener 反查表', () => {

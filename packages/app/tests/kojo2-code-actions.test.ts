@@ -57,6 +57,12 @@ import { applyTextEdits } from '../src/ui/editor-global-providers';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
+/**
+ * LAU-3 起缺省档是 `2.0-default`（切流语义**开着**）⇒ "flag 关"不再等于"没存过"。
+ * 关 = 盘上显式一份 `v1-only` 计划（真源是阶段，不是旧布尔键）。
+ */
+const KOJO2_PLAN_KEY = 'kojo.ui.kojo2Cutover.plan.v1';
+const KOJO2_OFF_PLAN = JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} });
 
 /* ============================== 夹具小工具 ============================== */
 
@@ -597,6 +603,7 @@ function fakeModel(text: string, options: FakeModelOptions = {}): Monaco.editor.
 function stubFlag(on: boolean): void {
   const store = new Map<string, string>();
   if (on) store.set(KOJO2_KEY, 'on');
+  else store.set(KOJO2_PLAN_KEY, KOJO2_OFF_PLAN);
   vi.stubGlobal('window', {
     localStorage: {
       getItem: (key: string): string | null => store.get(key) ?? null,

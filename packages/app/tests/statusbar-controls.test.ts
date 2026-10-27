@@ -108,9 +108,9 @@ describe('语言模式偏好（language-mode-pref）', () => {
 
   it('菜单项 = 四档固定项 ∪ 注册面 id（去重、追加在后）', () => {
     expect(languageModeChoices([])).toEqual([...LANGUAGE_MODE_BASE_CHOICES]);
-    expect(languageModeChoices(['kojo-sugar', 'json', ''])).toEqual([
+    expect(languageModeChoices(['kojo-legacy', 'json', ''])).toEqual([
       ...LANGUAGE_MODE_BASE_CHOICES,
-      'kojo-sugar',
+      'kojo-legacy',
     ]);
   });
 

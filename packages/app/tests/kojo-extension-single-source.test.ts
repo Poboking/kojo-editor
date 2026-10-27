@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KOJO_SOURCE_EXTENSION, kojoMonacoExtensions } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
+import { installAvailabilityGate } from '../src/monaco/language-registry';
 import { languageFor } from '../src/ui/editor-model-pool';
 
 /**
@@ -30,6 +31,14 @@ const CONSUMER_FILES = [
 ];
 
 const read = (rel: string): string[] => readFileSync(path.join(ROOT, rel), 'utf8').split(/\r?\n/);
+
+/**
+ * 本文件守的是**扩展名清单的单一真源**，不是语言可用性门（LAU-3 的另一条轴）。
+ * 缺省档 `2.0-default` 把封存层挡在门外 ⇒ `languageFor('.kojo')` 答 `plaintext`，
+ * 与"注册表认不认得这个形态"无关。装一枚恒真假门，把门那一轴摘出去。
+ */
+beforeEach(() => installAvailabilityGate(() => true));
+afterEach(() => installAvailabilityGate(null));
 
 /* ─────────────────────────── 禁止形态（连注释一起查） ─────────────────────────── */
 

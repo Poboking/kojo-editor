@@ -28,7 +28,7 @@ import { compileMonarch, driveLexer, driveLine, driveLines, stubMonaco, type Com
  */
 
 const ERB_ID = 'kojo-erb';
-const KOJO_ID = 'kojo-sugar';
+const KOJO_ID = 'kojo-legacy';
 
 const { monaco, captured } = stubMonaco();
 registerErbLanguage(monaco);
@@ -322,7 +322,12 @@ describe('三套主题的 keyword / keyword.preprocessor 都有色（白色 = �
     const tokens = [...erbEmittedTokens()].sort();
     expect(tokens.length).toBeGreaterThanOrEqual(11);
     expect(tokens).toContain('operator'); // 上一批留下的那枚空档，钉住它别再漂回去
-    for (const [id, theme] of captured.themes) {
+    // 只量 v1 三套：LAU-3 起缺省档就把 `kojo2-*` 三套也装配了（flag 守卫 + 动态 import），
+    // 但那三套是**另一门语言**的调色板（规则表只有 15 枚 `kojo2.*`，见 `kojo2-theme.ts`），
+    // ERB / kojo1 的 token 从来不在它们的判据面里。
+    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
+      const theme = captured.themes.get(id);
+      if (!theme) throw new Error(`主题 ${id} 没被装配`);
       for (const token of tokens) {
         const hit = theme.rules.some((r) => token === r.token || token.startsWith(`${r.token}.`));
         expect(hit, `${id} 没有 ${token} 的配色落点（发得出、没颜色 = 裸默认前景）`).toBe(true);

@@ -10,8 +10,9 @@
  *
  * ## 它与既有开关的关系
  *
- * `ui/kojo2-flag.ts` 已改成**由阶段派生**（`stage !== 'v1-only'` = 2.0 面开启）。所以在
- * 这里改档，不需要另写一份"把 flag 打开"的代码：语言面 / 主题 / 诊断 / 预览 / 拖放清单
+ * `ui/kojo2-flag.ts` 已改成**由阶段派生**（`stage !== 'v1-only'` = 2.0 切流语义开启；
+ * LAU-3 起另有一枚 `stage !== '2.0-default'` = kojo1 可用，见 {@link kojo2StageAllowsLegacy}）。
+ * 所以在这里改档，不需要另写一份"把 flag 打开"的代码：语言面 / 主题 / 诊断 / 预览 / 拖放清单
  * 全部读同一枚开关，订阅经 `subscribeKojo2Cutover` 即时反映。
  *
  * ## 阶段切换后必须做的两件事（否则"切了但没生效"）
@@ -41,7 +42,9 @@ import { KitRadio } from '../ui-kit/kit-radio';
 import { Icon } from './icons';
 import {
   getKojo2CutoverController,
+  kojo2StageAllowsLegacy,
   kojo2StageAllowsSurface,
+  KOJO2_CUTOVER_DEFAULT_STAGE,
   KOJO2_CUTOVER_STAGES,
   type Kojo2CutoverController,
   type Kojo2CutoverSnapshot,
@@ -71,11 +74,21 @@ const STAGE_TITLES: Readonly<Record<Kojo2CutoverStage, string>> = {
   '2.0-default': '2.0 默认',
 };
 
-/** 每档的人话说明（作者面；不上 `stage` 这种机器词，只留能据以决策的事实） */
+/**
+ * 每档的人话说明（作者面；不上 `stage` 这种机器词，只留能据以决策的事实）。
+ *
+ * LAU-3（2026-10-27）起这一档还**决定 kojo1 的开合**：`2.0-default` ⇒ kojo1 成为封存层
+ * （`.kojo` 不再被认领、`.kojo 预览` 一起停用），前两档 ⇒ kojo1 照常可用。这句必须写在
+ * 屏上：它是本档唯一的**削功能**后果，藏着就是静默（铁律 4）。判据仍只有一份
+ * （`kojo2-cutover.ts::kojo2StageAllowsLegacy`），这里只是把它说出来。
+ */
 const STAGE_HINTS: Readonly<Record<Kojo2CutoverStage, string>> = {
-  'v1-only': '老写法照旧，2.0 文件打不开（缺省：切不动比切错便宜）',
-  dual: '老 .kojo 一行都不用动，只有 .kojo2 走 2.0；新写的口上文件用这一档',
-  '2.0-default': '新 .kojo2 走 2.0，老 .kojo 看正文像不像 2.0 再决定；判不出来时按 v1 打开',
+  'v1-only':
+    '只按老写法认文件：.kojo 恒按 v1 解析；.kojo2 照常高亮、照常出诊断，但写回 / 迁移 / 2.0 存储命令不启用。kojo1 可用。',
+  dual: '老 .kojo 一行都不用动，只有 .kojo2 走 2.0；两套语法同时在册。kojo1 可用。',
+  '2.0-default':
+    '缺省档：.kojo2 走 2.0，老 .kojo 看正文像不像 2.0 再决定（判不出来时按 v1 打开）。' +
+    'kojo1 在这一档封存——.kojo 不再被认作 kojo1，「.kojo 预览」随之停用（偏好不清零，退档即恢复）。',
 };
 
 /**
@@ -93,9 +106,13 @@ export function kojo2StageNeedsReload(
 
 /** 重载提示的人话（两个方向各一句；都明说"现在就生效的部分"与"要重载的部分"） */
 export function kojo2ReloadNotice(stage: Kojo2CutoverStage): string {
-  return kojo2StageAllowsSurface(stage)
-    ? '这一档已生效：已打开的标签会立刻按新档重挂。但语言面与配色是在窗口启动时装配的，重载窗口后新开的 .kojo2 才会完整上色、出诊断。'
-    : '已退回「只认 v1」：已打开的标签会立刻回到老写法。2.0 面要重载窗口才会彻底摘掉（本窗口里已经挂上的那一套仍留着）。';
+  if (!kojo2StageAllowsSurface(stage)) {
+    return '已退回「只认 v1」：已打开的标签会立刻回到老写法。2.0 面要重载窗口才会彻底摘掉（本窗口里已经挂上的那一套仍留着）。';
+  }
+  const sealed = kojo2StageAllowsLegacy(stage)
+    ? ''
+    : '这一档同时把 kojo1 封存了：已经打开的 .kojo 保持原样（不当场抽走高亮），新开的 .kojo 不再按 kojo1 认领，「.kojo 预览」停用。';
+  return `这一档已生效：已打开的标签会立刻按新档重挂。但语言面与配色是在窗口启动时装配的，重载窗口后新开的 .kojo2 才会完整上色、出诊断。${sealed}`;
 }
 
 /* ============================== 阶段效果注入口 ============================== */
@@ -149,8 +166,9 @@ export function commitKojo2CutoverStage(
  * 恢复出厂（**两件必须一起做**，顺序也写死）：
  *
  * 1. 删旧布尔键——计划一旦被删，旧键 `'on'` 会让 `resolveKojo2CutoverStage()` 又回到
- *    `dual`，等于"恢复出厂了但 2.0 面还开着"；
- * 2. 控制器 `reset()`——回 `v1-only`、清空全部单文件破例、删掉盘上的计划。
+ *    `dual`，等于"恢复出厂了但档位不是缺省档"；
+ * 2. 控制器 `reset()`——回缺省档（LAU-3 起 = `2.0-default`，kojo1 封存）、清空全部单文件
+ *    破例、删掉盘上的计划（连带清掉"v1 计划升上来"的一次性回执）。
  *
  * 只删不动任何文件内容；返回重置后的快照（组件据此重渲染）。
  */
@@ -175,9 +193,10 @@ export interface Kojo2CutoverSettingsProps {
 }
 
 /**
- * 设置页里的「Kojo 2.0」分区：三态单选 + 每档人话 + 单文件破例清单（可撤）+ 恢复出厂。
+ * 设置页里的「Kojo 2.0」分区：三态单选 + 每档人话 + kojo1 开合读数 + 迁移回执
+ * + 单文件破例清单（可撤）+ 恢复出厂。
  *
- * 订阅只订控制器一张表（阶段 / override / 持久化状态都在同一份快照里）；卸载即退订。
+ * 订阅只订控制器一张表（阶段 / override / 持久化状态 / 迁移回执都在同一份快照里）；卸载即退订。
  */
 export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactElement {
   const controller = props.controller ?? getKojo2CutoverController();
@@ -239,6 +258,13 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
                 <span className="kojo2-cutover__stage-title">
                   {STAGE_TITLES[stage]}
                   {selected ? <span className="kojo2-cutover__badge">当前</span> : null}
+                  {/* 缺省标记跟着 `KOJO2_CUTOVER_DEFAULT_STAGE` 走（LAU-3 起在「2.0 默认」那一档）：
+                      不写字面档名，免得"恢复出厂"与这一格各说一套 */}
+                  {stage === KOJO2_CUTOVER_DEFAULT_STAGE ? (
+                    <span className="kojo2-cutover__badge" data-kojo2-default-stage={stage}>
+                      缺省
+                    </span>
+                  ) : null}
                 </span>
                 <span className="kojo2-cutover__hint">{STAGE_HINTS[stage]}</span>
               </KitRadio>
@@ -246,6 +272,27 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
           );
         })}
       </div>
+
+      {/* kojo1（封存层）此刻的开合——本档唯一的削功能后果，逐档现算、不抄档名 */}
+      <div className="kojo2-cutover__hint" data-kojo2-legacy={kojo2StageAllowsLegacy(snapshot.stage) ? 'on' : 'sealed'}>
+        kojo1（老写法）当前{kojo2StageAllowsLegacy(snapshot.stage) ? '可用' : '已封存'}：
+        {kojo2StageAllowsLegacy(snapshot.stage)
+          ? '.kojo 按 kojo1 认领，「.kojo 预览」照常。'
+          : '.kojo 不再按 kojo1 认领（新开的落纯文本），「.kojo 预览」停用；已打开的标签保持原样，不当场抽走高亮。'}
+      </div>
+
+      {/* v1 计划升上来的一次性回执（铁律 4：抬了作者的档位就必须说；写回 v2 后下次开机不再出现） */}
+      {snapshot.migratedFromV1Plan ? (
+        <div className="kojo2-cutover__notice" role="status" data-kojo2-migrated="1">
+          <span className="kojo2-cutover__notice-icon" aria-hidden="true">
+            <Icon name="info" size="sm" />
+          </span>
+          <span>
+            你原来停在旧的缺省档（只认 v1）。本版把缺省档换成了「2.0 默认」，已按新缺省为你切换；
+            想回到从前的行为，选上面的「只认 v1」或「双轨」即可（不动任何文件内容）。
+          </span>
+        </div>
+      ) : null}
 
       {needsReload ? (
         <div className="kojo2-cutover__notice" role="status" data-kojo2-reload-notice="1">
@@ -293,7 +340,7 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
           恢复出厂
         </button>
         <span className="kojo2-cutover__hint">
-          回到「只认 v1」并清空全部单文件破例；不动任何文件。
+          回到缺省档「{STAGE_TITLES[KOJO2_CUTOVER_DEFAULT_STAGE]}」并清空全部单文件破例；不动任何文件。
         </span>
       </div>
 

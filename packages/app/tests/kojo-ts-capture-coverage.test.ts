@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
+import { KOJO_LANGUAGE_ID, KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
 import {
   KOJO_STRUCTURE_BASELINE_TOKENS,
@@ -141,8 +141,8 @@ function runChild(file: string): { captures: CstCapture[]; crashed: boolean } {
 
 const { monaco, captured } = stubMonaco();
 registerKojoLanguage(monaco as never);
-const monarchDef = captured.monarchs.get('kojo-sugar');
-if (!monarchDef) throw new Error('没捕获到 kojo-sugar 的 Monarch def（装配面漂 = 本文件整个红）');
+const monarchDef = captured.monarchs.get('kojo-legacy');
+if (!monarchDef) throw new Error('没捕获到 kojo1（kojo-legacy）的 Monarch def（装配面漂 = 本文件整个红）');
 
 function emitCells(emits: readonly Emit[], lineText: string): (string | null)[] {
   const cells: (string | null)[] = new Array<string | null>(lineText.length).fill(null);
@@ -166,7 +166,7 @@ interface CaptureAccount {
   cells: number;
   /** 被这一支涂到的行（1 基行号去重） */
   lines: Set<number>;
-  /** 词法层在同一批格子上的档位分布（剥掉 `.kojo-sugar` 后缀；`<未着色>` 单列） */
+  /** 词法层在同一批格子上的档位分布（剥掉 `.<语言 id>` 后缀（LAU-3 起是 `.kojo-legacy`）；`<未着色>` 单列） */
   lexical: Map<string, number>;
 }
 
@@ -191,7 +191,7 @@ let lexicalPaintedCellsTotal = 0;
 let childCrashes = 0;
 
 beforeAll(async () => {
-  const lexer = await compileMonarch('kojo-sugar', monarchDef);
+  const lexer = await compileMonarch('kojo-legacy', monarchDef);
   for (const file of fixtures) {
     const text = readFileSync(file, 'utf8');
     const starts = lineStarts(text);
@@ -250,10 +250,10 @@ beforeAll(async () => {
           if (isSpace(lineText[column - 1]!)) continue; // 分隔格不进任何账（同 A/B）
           account.cells += 1;
           account.lines.add(line);
-          bump(account, (row[column - 1] ?? '<未着色>').replace(/\.kojo-sugar$/, ''));
+          bump(account, (row[column - 1] ?? '<未着色>').replace(new RegExp(`\\.${KOJO_LANGUAGE_ID}$`), ''));
           byNode.cells += 1;
           byNode.lines.add(line);
-          bump(byNode, (row[column - 1] ?? '<未着色>').replace(/\.kojo-sugar$/, ''));
+          bump(byNode, (row[column - 1] ?? '<未着色>').replace(new RegExp(`\\.${KOJO_LANGUAGE_ID}$`), ''));
         }
       }
     }

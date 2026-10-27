@@ -113,7 +113,7 @@ import { fileWritableArea, writablePillTone } from './file-area';
 // 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
 // 这里只取「当前活动文件那份 model」并把选择落到 model 上。
 import { focusedCtx, openModelAcrossGroups } from './editor-pane-registry';
-import { descriptorForPath, FALLBACK_LANGUAGE_ID, languageDescriptors } from '../monaco/language-registry';
+import { descriptorForPath, FALLBACK_LANGUAGE_ID, availableLanguageDescriptors, languageLabelForId, unavailableLanguageDescriptors, unavailableReason } from '../monaco/language-registry';
 import type * as Monaco from '../monaco/entry';
 import {
   languageModeChoices,
@@ -685,7 +685,8 @@ export function EditorStatusReadout({
 
   return (
     <>
-      {/* 语言模式格（S1）：只在有活动文件时出现；读数 = 当前 model 的语言 id */}
+      {/* 语言模式格（S1）：只在有活动文件时出现；读数 = 当前 model 语言的**人读名**
+          （LAU-3：id 只进 `title`，作者不该在状态栏读到 `kojo-erb` / `kojo-legacy` 这种契约名） */}
       {path !== null && modelLanguage !== null ? (
         <span className="sb-editor sb-lang" data-status-cell="">
           <span className="sb-eol-wrap">
@@ -695,25 +696,47 @@ export function EditorStatusReadout({
               data-status-cell=""
               aria-haspopup="menu"
               aria-expanded={menu === 'language'}
-              title={`当前语言模式：${modelLanguage}（点击切换）`}
+              title={`当前语言模式：${languageLabelForId(modelLanguage)}（id=${modelLanguage}，点击切换）`}
               onClick={() => setMenu(menu === 'language' ? null : 'language')}
             >
-              {modelLanguage}
+              {languageLabelForId(modelLanguage)}
             </button>
             {menu === 'language' ? (
               <span className="sb-eol-menu" role="menu" aria-label="语言模式">
-                {languageModeChoices(languageDescriptors().map((descriptor) => descriptor.id)).map((id) => (
+                {/* 可点项 = **此刻可被认领**的那一批（§4.4：选择器列表统一走 isAvailable） */}
+                {languageModeChoices(
+                  availableLanguageDescriptors().map((descriptor) => descriptor.id),
+                ).map((id) => (
                   <button
                     key={id}
                     type="button"
                     role="menuitemradio"
                     aria-checked={modelLanguage === id}
                     className={`sb-eol-item${modelLanguage === id ? ' on' : ''}`}
+                    title={`id=${id}`}
                     onClick={() => chooseLanguage(id)}
                   >
-                    {id}
+                    {languageLabelForId(id)}
                   </button>
                 ))}
+                {/* 封存的 / 没开的语言**列出来但点不动**，并说清去哪儿开（铁律 4：不许静默消失，
+                    否则作者看到 `.kojo` 变成「纯文本」却找不到原因） */}
+                {unavailableLanguageDescriptors().map((descriptor) => {
+                  const reason = unavailableReason(descriptor);
+                  return (
+                    <button
+                      key={descriptor.id}
+                      type="button"
+                      role="menuitem"
+                      aria-disabled="true"
+                      disabled
+                      className="sb-eol-item dim"
+                      title={reason === null ? `id=${descriptor.id}` : `${reason.full}（id=${descriptor.id}）`}
+                    >
+                      {descriptor.label}（{reason?.short ?? '不可用'}）
+                    </button>
+                  );
+                })}
               </span>
             ) : null}
           </span>

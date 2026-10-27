@@ -104,6 +104,8 @@ import { isComposingEvent } from './shell-keys';
 import { setWelcomeBgPref, useWelcomeBgPref, type WelcomeBgPref } from './welcome-bg-pref';
 // Kojo 2.0 档位入口（K2-CUTOVER-STAGE）：自订阅切换控制器，零 props、样式全内联。
 import { Kojo2CutoverSettings } from './kojo2-cutover-settings';
+// LAU-3：`.kojo 预览` 那一行随 kojo1（封存层）一起封——判据只有一份，在这里读它
+import { isKojoLegacySyntaxEnabled, subscribeKojo2Cutover } from './kojo2-flag';
 import { isFailureNote, isPrimaryButton, useMenuNote } from './context-menu-pages';
 // 设置面（`settings`）的数据面住在本模块：它依赖设置项索引 / 外观偏好 / 可重置登记表，
 // 而这些东西只有设置浮层打开时才有用。挂在这里 = 进入本面板的懒 chunk，欢迎页不必替它付账。
@@ -781,17 +783,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
               />
             </div>
             <div className="settings-kit-row" data-settings-key="editor.sugarView">
-              <KitField
-                as="label"
-                title=".kojo 预览"
-                description={
-                  <>
-                    把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
-                    只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
-                  </>
-                }
-                control={<Switch checked={sugarViewOn} onChange={applySugarViewPref} label=".kojo 预览" />}
-              />
+              <SugarViewRow sugarViewOn={sugarViewOn} applySugarViewPref={applySugarViewPref} />
             </div>
             {/* 保存时整理空白（E2，2026-10-15 格式化批）：手动版是 Shift+Alt+F，本开关
                 只是把同一次整理挂到保存前。默认关的理由写在 `format-pref.ts`：改的正是空白，
@@ -1108,6 +1100,59 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     },
   ];
 };
+
+/**
+ * `.kojo 预览` 那一行（LAU-3：预览与 kojo1 语法**一起封存**）。
+ *
+ * 抽成组件而不是内联 JSX 的理由只有一个：**这一行要订阅切流阶段**，而 `SETTINGS_SECTIONS`
+ * 是普通函数（在 `useMemo` 里调，见下方 `SettingsPanel`），里面不许用 hook。本文件既有先例
+ * （`TreeSitterRow` / `LayoutPrefRows` / `FindPrefRow`）都是这么把"带订阅的一行"摘出来的。
+ *
+ * 封存时的口径是**禁用而不清值**：`sugarViewOn` 是作者的偏好，退到 v1 档 / 双轨档就该照旧
+ * 生效（用户 2026-10-27 口径「依旧保存进设置页里，开启 kojo1 才能开启」）。判据不在这里重写，
+ * 读的仍是 `ui/kojo2-flag.ts::isKojoLegacySyntaxEnabled` 那一枚。
+ */
+function SugarViewRow(args: {
+  readonly sugarViewOn: boolean;
+  readonly applySugarViewPref: (on: boolean) => void;
+}): ReactElement {
+  const { sugarViewOn, applySugarViewPref } = args;
+  const legacySyntaxOn = useSyncExternalStore(
+    subscribeKojo2Cutover,
+    isKojoLegacySyntaxEnabled,
+    isKojoLegacySyntaxEnabled,
+  );
+  return (
+    <KitField
+      as="label"
+      title=".kojo 预览"
+      description={
+        <>
+          把游戏目录里的 .ERB 显示成中文表层写法（台词像剧本、条件成「如果 …：」）。
+          只改显示、不改动文件。默认关；快捷键 Ctrl+Alt+T
+          {legacySyntaxOn ? null : (
+            <>
+              <br />
+              <span className="settings-hint">
+                当前不可用：这一面投影的是 kojo1 写法，而 kojo1 已随「Kojo 2.0 切换阶段」的
+                2.0 默认档封存。退到 v1 档或双轨档即可再用——你的开关偏好没有被清掉
+                {sugarViewOn ? '（现在是开着的，退档后立即生效）' : ''}。
+              </span>
+            </>
+          )}
+        </>
+      }
+      control={
+        <Switch
+          checked={sugarViewOn}
+          onChange={applySugarViewPref}
+          disabled={!legacySyntaxOn}
+          label=".kojo 预览"
+        />
+      }
+    />
+  );
+}
 
 /**
  * 外观页的主题一行（2026-10 批：预览卡 + 跟随系统，替换掉原先的纯文字段控）。

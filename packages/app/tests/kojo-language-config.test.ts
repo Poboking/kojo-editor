@@ -41,14 +41,14 @@ function kojoMonarch(): Monaco.languages.IMonarchLanguage {
   const { monaco, captured } = stubMonaco();
   registerKojoLanguage(monaco);
   const def = captured.monarchs.get(KOJO_LANGUAGE_ID);
-  if (!def) throw new Error('没捕获到 kojo-sugar 的 Monarch def（装配面漂 = 注释判据整段失明）');
+  if (!def) throw new Error('没捕获到 kojo1（`kojo-legacy`）的 Monarch def（装配面漂 = 注释判据整段失明）');
   return def;
 }
 
 const KOJO_MONARCH = kojoMonarch();
 const kojoLexerP = compileMonarch(KOJO_LANGUAGE_ID, KOJO_MONARCH);
 
-/** 一行样例 → 真编译产物驱动出的发射序列（token 名带 `.kojo-sugar` 后缀） */
+/** 一行样例 → 真编译产物驱动出的发射序列（token 名带 `.<语言 id>` 后缀，LAU-3 起是 `.kojo-legacy`） */
 async function driveKojo(line: string): Promise<Emit[]> {
   return driveLexer(await kojoLexerP, line);
 }
@@ -221,7 +221,7 @@ describe('comments 格 = 词法真源（Monarch 注释判据同源）', () => {
     const emitted = await driveKojo('  ; 说明');
     // `start: 0` 一并钉住：这枚断言拿整枚 `Emit` 做全等，字段随基座（ERB-PAINT-21 加的列坐标）加长——
     // 0 也正说明"缩进进了注释"这条判据本身
-    expect(emitted).toEqual([{ text: '  ; 说明', token: 'comment.kojo-sugar', start: 0 }]);
+    expect(emitted).toEqual([{ text: '  ; 说明', token: `comment.${KOJO_LANGUAGE_ID}`, start: 0 }]);
   });
 
   it('Monarch：行尾 `;` 起整段 comment，`A = 1` 仍是原档；注释尾巴不许二次发射', async () => {

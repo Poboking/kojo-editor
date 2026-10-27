@@ -2,7 +2,7 @@
  * K2-SURFACE-DEFAULT：Kojo 2.0 语言面**默认可见**（批次十 S5）。
  *
  * 钉四件事：
- * ① **两态都登记**：切流关（缺省）/ 开（旧键 `'on'` ⇒ `dual`）时，`.kojo2` 都有 descriptor、
+ * ① **两态都登记**：切流关（显式 `v1-only`）/ 开（旧键 `'on'` ⇒ `dual`）时，`.kojo2` 都有 descriptor、
  *    都挂 Monaco 面（扩展名 / Monarch / 语言配置），认路不再落到 `plaintext`；
  * ② **能力矩阵两态可读且逐项相同**：descriptor 的 `capabilities` = 矩阵里非豁免的那一份，
  *    开关只门控写回 / 迁移 / 切换，不门控语言面；
@@ -42,6 +42,12 @@ type SurfaceMonaco = Parameters<LanguagesModule['registerBuiltinLanguageSurfaces
 
 /** 旧布尔兼容键：`'on'` ⇒ `dual`（见 `ui/kojo2-cutover.ts::stageFromLegacyKojo2Flag`） */
 const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
+/**
+ * LAU-3 起缺省档 = `2.0-default`（切流语义**开着**）⇒ "关"必须显式落在盘上：
+ * 一份 `v1-only` 计划（阶段是唯一真源，旧布尔键只是兼容垫片）。
+ */
+const KOJO2_PLAN_KEY = 'kojo.ui.kojo2Cutover.plan.v1';
+const KOJO2_OFF_PLAN = JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} });
 
 interface Wire {
   readonly languages: LanguagesModule;
@@ -49,10 +55,11 @@ interface Wire {
   readonly flag: FlagModule;
 }
 
-/** 装假 window.localStorage（seedOn = 预置 `'on'`），重装模块并取回本用例的实例 */
+/** 装假 window.localStorage（seedOn = 预置 `'on'`；关 = 预置 `v1-only` 计划），重装模块并取回本用例的实例 */
 async function boot(seedOn: boolean): Promise<Wire> {
   const store = new Map<string, string>();
   if (seedOn) store.set(KOJO2_KEY, 'on');
+  else store.set(KOJO2_PLAN_KEY, KOJO2_OFF_PLAN);
   vi.stubGlobal('window', {
     localStorage: {
       getItem: (key: string): string | null => store.get(key) ?? null,
@@ -147,7 +154,9 @@ function expectKojo2SurfaceVisible(wire: Wire): void {
 
   const descriptor = wire.registry.descriptorForPath('D:/p/M.kojo2');
   expect(descriptor?.id).toBe(KOJO2_LANGUAGE_ID);
-  expect(descriptor?.label).toBe('kojo2');
+  // LAU-3 / §6（用户 2026-10-27 口径）：作者面**只有一个「kojo」**，它就是 2.0；
+  // id 仍是 `kojo2`（全仓引用 + M2 棘轮按常量名计数，改 id 是另一场迁移）。
+  expect(descriptor?.label).toBe('kojo');
   expect(wire.languages.languageForPath('D:/p/M.kojo2')).toBe(KOJO2_LANGUAGE_ID);
   expect(wire.languages.languageForPath('D:/p/M.KOJO2')).toBe(KOJO2_LANGUAGE_ID);
 
@@ -171,7 +180,7 @@ function expectKojo2SurfaceVisible(wire: Wire): void {
 
 /* ============================== ① 切流关 ============================== */
 
-describe('切流关（缺省 v1-only）：`.kojo2` 语言面照样可见', () => {
+describe('切流关（显式 v1-only 档）：`.kojo2` 语言面照样可见', () => {
   it('开关读数是关，但 descriptor 已登记、认路不走 plaintext、Monaco 面照挂', async () => {
     const wire = await boot(false);
     expect(wire.flag.isKojo2CutoverEnabled()).toBe(false);

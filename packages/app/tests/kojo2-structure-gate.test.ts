@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 
 interface StubCall {
@@ -115,6 +115,12 @@ function mount(): void {
   stub.state.recording = true;
   ensureGlobalProviders();
 }
+
+// LAU-3：缺省档翻到了 `2.0-default`（开关**开着**）⇒ 需要"关"的用例由本钩子显式落档，
+// 不能靠"没设置过"。
+beforeEach(() => {
+  flag.setKojo2CutoverEnabled(false);
+});
 
 afterEach(() => {
   disposeGlobalProviders();

@@ -44,14 +44,14 @@ const LEX = sugarEditorLexicon();
 const { monaco, captured } = stubMonaco();
 registerKojoLanguage(monaco);
 registerErbLanguage(monaco);
-const def = captured.monarchs.get('kojo-sugar');
-if (!def) throw new Error('monaco 桩没捕获到 kojo-sugar 的 Monarch def（装配面漂 = 本文件整个红）');
+const def = captured.monarchs.get('kojo-legacy');
+if (!def) throw new Error('monaco 桩没捕获到 kojo1（kojo-legacy）的 Monarch def（装配面漂 = 本文件整个红）');
 const kojoDark = captured.themes.get('kojo-dark');
 if (!kojoDark) throw new Error('monaco 桩没捕获到 kojo-dark 主题（erb-language 装配面漂 = 本文件整个红）');
 
 /* ============================== Monarch 真编译 + 驱动器 ============================== */
 
-const lexerP = compileMonarch('kojo-sugar', def);
+const lexerP = compileMonarch('kojo-legacy', def);
 
 /** 根状态驱动（基座见 `monarch-harness.ts`：真编译 + 复刻 `_myTokenize`） */
 async function driveRoot(line: string): Promise<Emit[]> {

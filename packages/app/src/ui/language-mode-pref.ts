@@ -11,18 +11,39 @@
  * - 键缺席 = 没手动改过 ⇒ 由扩展名判据（`monaco/languages.ts` 的 descriptor 表）决定；
  *   本模块不猜扩展名，只回答"有没有人明确选过"；
  * - 路径按 `pathKey` 归一（大小写 / 分隔符），Windows 下同一份文件不会存成两条。
+ *
+ * ## 与语言可用性门的两条接口（LAU-3）
+ *
+ * ① **改名别名**：kojo1 的语言 id 由 `kojo-sugar` 改成 `kojo-legacy`（封存层的正名），
+ *    存量覆盖表里写着的旧 id 读时别名过去（{@link RENAMED_LANGUAGE_IDS}），不要求作者
+ *    重新选一遍；写回时自然写成新 id（自愈）。
+ * ② **封存档不吃覆盖**：覆盖指向一门"登记了但此刻不可用"的语言 ⇒ 这一格视同没选过，
+ *    回落到 descriptor 判据（{@link resolveModelLanguage}）。否则门就有了第二条绕过路径：
+ *    菜单里选不到的语言，靠一条旧偏好照样挂上去。判据仍只有一份，在注册表
+ *    （`monaco/language-registry.ts::isLanguageIdAvailable`）。
  */
 import { pathKey } from '@kojo/plugin-api';
+import { isLanguageIdAvailable } from '../monaco/language-registry';
 
 /** 偏好键（壳层私事，localStorage；与布局同款——不进内核存储域） */
 export const LANGUAGE_MODE_PREF_KEY = 'kojo.languageMode.v1';
+
+/**
+ * 语言 id 的**改名别名表**（旧 id → 新 id；读时套用，写时自愈）。
+ *
+ * 只此一枚：`kojo-sugar` → `kojo-legacy`（LAU-3 把 v1 正名为封存层）。**注意这不是插件 id**
+ * ——`plugins/kojo-sugar` 那个包名 / 插件 id 一律不动（内核注册表与语料夹具都按它记账）。
+ */
+export const RENAMED_LANGUAGE_IDS: Readonly<Record<string, string>> = {
+  'kojo-sugar': 'kojo-legacy',
+};
 
 /**
  * 菜单的四档固定项（任务口径：erb / kojo2 / json / plaintext）。
  *
  * 真源仍是 `monaco/language-registry.ts` 的 descriptor 表——这里只是**保证这四档在
  * 菜单里恒可点**（注册面在单测里为空、或 kojo2 开关关着时也不至于只剩一项）；
- * 注册面多出来的语言（如 v1 的 `kojo-sugar`）由 {@link languageModeChoices} 追加在后面。
+ * 注册面多出来的语言（如封存的 `kojo-legacy`）由 {@link languageModeChoices} 追加在后面。
  */
 export const LANGUAGE_MODE_BASE_CHOICES = ['kojo-erb', 'kojo2', 'json', 'plaintext'] as const;
 
@@ -31,6 +52,9 @@ export const LANGUAGE_MODE_BASE_CHOICES = ['kojo-erb', 'kojo2', 'json', 'plainte
  *
  * 顺序稳定：固定项在前（作者最常用的四档），其余按注册顺序追加；不做字母排序，
  * 免得插件化新增语言时菜单顺序每次启动都漂。
+ *
+ * **可用性由调用方过滤**（§4.4：选择器列表统一走 `isAvailable`）——宿主传进来的
+ * 应当是 `availableLanguageDescriptors()` 的 id；本函数不认门，只负责"四档恒在 + 去重"。
  */
 export function languageModeChoices(registeredIds: readonly string[]): string[] {
   const choices: string[] = [...LANGUAGE_MODE_BASE_CHOICES];
@@ -49,7 +73,7 @@ function storage(): Storage | null {
   }
 }
 
-/** 读整张表（键缺席 / JSON 脏 / 不是对象 ⇒ 空表，绝不抛） */
+/** 读整张表（键缺席 / JSON 脏 / 不是对象 ⇒ 空表，绝不抛；旧 id 读时别名到新 id） */
 function readTable(): Record<string, string> {
   const s = storage();
   if (!s) return {};
@@ -61,7 +85,7 @@ function readTable(): Record<string, string> {
     const table: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
       // 只信非空字符串：脏值当"没存过"，回落到扩展名判据
-      if (typeof value === 'string' && value !== '') table[key] = value;
+      if (typeof value === 'string' && value !== '') table[key] = RENAMED_LANGUAGE_IDS[value] ?? value;
     }
     return table;
   } catch {
@@ -87,13 +111,14 @@ export function languageOverrideFor(filePath: string): string | null {
   return readTable()[pathKey(filePath)] ?? null;
 }
 
-/** 记下这份文件的语言选择（空路径不写：没有可归属的键） */
+/** 记下这份文件的语言选择（空路径不写：没有可归属的键；旧 id 写时即别名到新 id） */
 export function setLanguageOverride(filePath: string, languageId: string): void {
   if (filePath === '' || languageId === '') return;
+  const canonical = RENAMED_LANGUAGE_IDS[languageId] ?? languageId;
   const table = readTable();
-  table[pathKey(filePath)] = languageId;
+  table[pathKey(filePath)] = canonical;
   writeTable(table);
-  notifyOverride(filePath, languageId);
+  notifyOverride(filePath, canonical);
 }
 
 /** 撤销这份文件的语言选择（回到扩展名判据） */
@@ -114,9 +139,16 @@ export function clearLanguageOverride(filePath: string): void {
  * `FALLBACK_LANGUAGE_ID`）——两处各自的"描述符那一格"本来就有自己的兜底，本函数只管
  * **优先级**：作者明确选过就听作者的，没选过原样交回。判据只有这一份：模型池建 model、
  * 2.0 重挂、状态栏读数与恢复 effect 都走它，调用点不许再写一套 `override ?? descriptor`。
+ *
+ * **覆盖还要过一道可用性门**（LAU-3）：指向一门"登记了但此刻不可用"的语言（例：kojo1
+ * 封存之后存量表里的 `kojo-legacy`）⇒ 这一格视同没选过，回落到 `descriptorLanguage`。
+ * 不认得这个 id（注册表里没有，例如单测环境 / 插件语言还没登记）⇒ 照旧听作者的：
+ * 门只管自己登记过的那几枚，不替别的语言做主。
  */
 export function resolveModelLanguage(filePath: string, descriptorLanguage: string): string {
-  return languageOverrideFor(filePath) ?? descriptorLanguage;
+  const override = languageOverrideFor(filePath);
+  if (override === null) return descriptorLanguage;
+  return isLanguageIdAvailable(override) ? override : descriptorLanguage;
 }
 
 /** 覆盖变更的监听面（`languageId === null` = 撤销，回到 descriptor 判据） */

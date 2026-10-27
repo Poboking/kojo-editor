@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KernelEventMap } from '@kojo/plugin-api';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { installAvailabilityGate } from '../src/monaco/language-registry';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import { languageFor } from '../src/ui/editor-model-pool';
 import {
@@ -38,6 +39,14 @@ const req = (over: Partial<DiffRequest> = {}): DiffRequest => ({
   modified: { label: 'b', text: 'y' },
   ...over,
 });
+
+/**
+ * 本文件钉的是**认路判据**（扩展名 → 语言 id），不是语言可用性门（LAU-3 的另一条轴，
+ * 由 `language-registry.test.ts` 单独钉）。缺省档 `2.0-default` 会把封存层挡在门外，
+ * `languageFor('.kojo')` 于是答 `plaintext`——装一枚恒真的假门，把这条轴从对拍里摘出去。
+ */
+beforeEach(() => installAvailabilityGate(() => true));
+afterEach(() => installAvailabilityGate(null));
 
 describe('validateDiffRequest', () => {
   it('两侧都有内容 → 放行', () => {

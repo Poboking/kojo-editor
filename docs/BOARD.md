@@ -53,9 +53,11 @@
 
 > 规格来源 `docs/ARCH-language-unification.md` **v1.1**（附录 A 有 v1.0→v1.1 的 21 条逐项对照）。
 > 七路批（LAU-0/1a/GATE/2a/6a/SYNTAX/FIXTURE/D1a）已落 dev，交付回执在各提交信息里，本表行已删。
+> **LAU-3 框架批（2026-10-27）已交付**：分支 `b/qoder/1027-lau-framework`，回执在该提交信息里；本表行已删，余项拆成下面的 LAU-3b。
 
 | ID | 任务（落点） | 关键判据 | 状态 |
-| LAU-BLOCKED | **未排的两枚，卡在人不在码**：LAU-1（协议 v3）与 LAU-D1b（方言解析链上屏）都要等 **K2-CONTRACT / D0** 定契约落点（`plugin-api` vs `kojo-core`，本表第 30-31 行 lead 认领）；LAU-3 / LAU-4 与本表 ERB-PARITY、SDK B4/B5 同文件，须串行 | 落点定了才开实现批；在此之前谁动 `structure-protocol.ts` / `semantic-roles.ts` 的落点都是抢裁 | 待 D0 裁决 · krosama 2026-10-25 |
+| LAU-3b | **扩展名交接工具 + 封存层的两处收尾**（LAU-3 框架批已落：描述符 v2 / 可用性门 / 封存层 / 切流缺省 `2.0-default` + v1 计划迁移，回执在 `b/qoder/1027-lau-framework` 的提交信息）：① 一键 `.kojo` → `.kojo1` 改名（逐目录走 `writablePaths` 批准、写前备份、清单先过目、只改名不改内容）；② 打开 v1 内容 `.kojo` 时的**首次说明**（今天封存档下落纯文本，只有状态栏语言菜单那一行说原因，不够显眼）；③ **v1 诊断面是否随封存一起停**：真壳体感实测（`sandbox/mini-game` 的 `事件.kojo`，缺省档）——模型语言已是 `plaintext`，但 ERB 族的 v1 诊断仍在这份文件上出波浪线（`refreshMarkers` 只在 kojo2 接管时让路）。封存语义上是矛盾，但"停诊断"会让旧文件的错没人说，须定一条口径再动 | 未批准域上改名被拒；改名前后 `KOJO_SOURCE_EXTENSION` 单一真源闸全绿；`kojo2-cutover` 的判据翻面有测试；③ 的口径落成一条测试 | 待派 · 2026-10-27 |
+| LAU-BLOCKED | **未排的两枚，卡在人不在码**：LAU-1（协议 v3）与 LAU-D1b（方言解析链上屏）都要等 **K2-CONTRACT / D0** 定契约落点（`plugin-api` vs `kojo-core`，本表第 30-31 行 lead 认领）；LAU-4 与本表 ERB-PARITY、SDK B4/B5 同文件，须串行 | 落点定了才开实现批；在此之前谁动 `structure-protocol.ts` / `semantic-roles.ts` 的落点都是抢裁 | 待 D0 裁决 · krosama 2026-10-25 |
 
 ## 在办 · 启动器落地（2026-10-26，组长 qoder）
 

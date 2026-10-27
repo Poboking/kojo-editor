@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { classifyLine, splitLogicalLines } from '@kojo/plugin-kojo-sugar';
-import { KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
+import { KOJO_LANGUAGE_ID, KOJO_TOKEN_TIERS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
 import {
   KOJO_STRUCTURE_NODE_TIERS,
@@ -55,7 +55,7 @@ import { KIND_TO_NODE, NON_LINE_NODES } from '../../kojo-syntax-tree/src/node-ty
  *
  * ## 三桶口径（可证伪）
  *
- * 记 `E` = 该 kind 的期望档位、`M` = 词法层在该格的 token（剥掉 `.kojo-sugar` 后缀，同 A/B）、
+ * 记 `E` = 该 kind 的期望档位、`M` = 词法层在该格的 token（剥掉 `.<语言 id>` 后缀（LAU-3 起是 `.kojo-legacy`），同 A/B）、
  * `S` = 结构层在该格的档位：
  *
  * - **结构层更对** ＝ `S` 命中 `E` 且 `M` 不命中 `E`；
@@ -276,8 +276,8 @@ function spansWithOrigin(tokens: readonly PaintToken[], lineCount: number, maxCo
 
 const { monaco, captured } = stubMonaco();
 registerKojoLanguage(monaco as never);
-const monarchDef = captured.monarchs.get('kojo-sugar');
-if (!monarchDef) throw new Error('没捕获到 kojo-sugar 的 Monarch def（装配面漂 = 本文件整个红）');
+const monarchDef = captured.monarchs.get('kojo-legacy');
+if (!monarchDef) throw new Error('没捕获到 kojo1（kojo-legacy）的 Monarch def（装配面漂 = 本文件整个红）');
 
 /** 逐字抄 A/B 的 `emitCells`（列还原；失败行进计数、不猜列）。 */
 function emitCells(emits: readonly Emit[], lineText: string): { cells: (string | null)[]; ok: boolean } {
@@ -482,7 +482,7 @@ function maskShape(lineText: string): string {
 let lexer: Awaited<ReturnType<typeof compileMonarch>> | null = null;
 
 beforeAll(async () => {
-  lexer = await compileMonarch('kojo-sugar', monarchDef);
+  lexer = await compileMonarch('kojo-legacy', monarchDef);
   const payloads = new Map<string, ChildPayload>();
   for (const file of fixtures) {
     const payload = runChild(file);
@@ -573,7 +573,7 @@ beforeAll(async () => {
         cells.total += 1;
         fileTotal += 1;
         const raw = monarchCells[column - 1] ?? null;
-        const monarch = raw === null ? null : raw.replace(/\.kojo-sugar$/, '');
+        const monarch = raw === null ? null : raw.replace(new RegExp(`\\.${KOJO_LANGUAGE_ID}$`), '');
         const structure = paint.tier;
         if (monarch === null) cells.monarchBlank += 1;
         else if (monarch === structure) cells.same += 1;

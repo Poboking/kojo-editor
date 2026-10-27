@@ -4,17 +4,15 @@ import { LARGE_FILE_LINES } from '../../ui/editor-options';
 import { applyNameColorPref, loadNameColorPref, subscribeNameColorPref } from '../../ui/semantic-color-pref';
 import { loadTreeSitterPref, subscribeTreeSitterPref } from '../../ui/tree-sitter-pref';
 import { toMonacoFoldingRanges } from '../kojo-folding';
-import { ERB_LANGUAGE_ID } from '../erb-language';
 import { languageDescriptors, descriptorForLanguageId, descriptorForPath, FALLBACK_LANGUAGE_ID, type LanguageDescriptor } from '../language-registry';
 import { toMonacoLine } from '../positions';
 import { reportStructureDegradation, resetStructureDegradationLedger } from './fallback';
 import { mergeIndentConfig, type BaseIndentPatterns } from './indent';
 import { createStructureSyntaxPresenter } from './syntax-decorations';
-import { erbStructureDiagnostics, ERB_DIAGNOSTIC_SOURCE } from './erb-diagnostics';
 import type { StructureClient, StructureStatus } from './client';
 import { lostStructureSpans, type StructureLanguageRuntime, type StructureSemanticFacet } from './structure-runtime';
 import type { StructureSyntaxPresenter } from './syntax-decorations';
-import type { KojoStructureFold, KojoStructureSyntaxFault } from './types';
+import type { KojoStructureFold } from './types';
 
 /**
  * 结构解析叠层的**装配与闸门**（全仓唯一持有这枚开关状态的地方；A4 语言无关化）。
@@ -319,44 +317,6 @@ function syncIndentConfig(languageId: string): void {
 
 type StructureClientCtor = typeof import('./client').StructureClient;
 
-/**
- * ERB 结构诊断的 marker owner（与 `.kojo` 的 `kojo-structure-syntax` 分开：两门语言各自的
- * model 不会被彼此覆盖，但分开后排查时一眼能看出是哪一层报的）。
- */
-const ERB_STRUCTURE_SYNTAX_OWNER = 'erb-structure-syntax';
-
-/**
- * ERB 的结构残缺 → 行级波浪线（`erb-diagnostics.ts` 只产 plain 事实，上屏的 owner 在这里定）。
- *
- * 为什么不复用 `syntax-decorations.show()`：那个上屏器按 `.kojo` 语言 id 过滤（它的文案是按
- * Kojo 结构写的），ERB 的文案 / 码名 / `[SKIPSTART]` 配对判据都在 `erb-diagnostics.ts` 里。
- */
-function applyErbStructureMarkers(
-  monaco: typeof Monaco,
-  model: Monaco.editor.ITextModel,
-  faults: readonly KojoStructureSyntaxFault[],
-): void {
-  try {
-    const diagnostics = erbStructureDiagnostics(faults, model.getValue());
-    monaco.editor.setModelMarkers(
-      model,
-      ERB_STRUCTURE_SYNTAX_OWNER,
-      diagnostics.map((diagnostic) => ({
-        startLineNumber: diagnostic.line,
-        startColumn: diagnostic.startColumn,
-        endLineNumber: diagnostic.endLine,
-        endColumn: diagnostic.endColumn,
-        message: diagnostic.message,
-        severity: monaco.MarkerSeverity.Error,
-        code: diagnostic.code,
-        source: ERB_DIAGNOSTIC_SOURCE,
-      })),
-    );
-  } catch {
-    // 上屏失败只让这一轮没有波浪线，绝不影响结构层其余能力（折叠 / 缩进 / 着色）
-  }
-}
-
 /** 一门语言：一条线程 + 一枚 client + 它自己的 provider 注册（整组可回收） */
 function startLanguage(
   monaco: typeof Monaco,
@@ -372,22 +332,19 @@ function startLanguage(
       stopLanguage(languageId);
       if (active && overlays.size === 0) deactivate();
     },
-    // 结构残缺到货 → 行级波浪线（`.kojo` 的判据 / 去重 / 文案全在 `syntax-decorations.ts`；
-    // ERB 走自己的 `erb-diagnostics.ts`，两套文案与码名不混用）。
+    // 结构残缺到货 → 行级波浪线。**上屏方式由运行时自己声明**（LAU-3）：ERB 走它自己的
+    // `erb-diagnostics.ts`（文案 / 码名 / `[SKIPSTART]` 配对判据），`.kojo` 走通用上屏器
+    // `syntax-decorations.ts`；宿主这里零语言 id（原先那两处 `if (languageId === ERB)` 已删）。
     onSyntax: (model, faults, truncated) => {
-      if (languageId === ERB_LANGUAGE_ID) {
-        applyErbStructureMarkers(monaco, model, faults);
+      if (runtime.presentSyntax) {
+        runtime.presentSyntax({ monaco, model, faults, truncated });
         return;
       }
       syntax?.show(model, faults, truncated);
     },
     onSyntaxClear: (model) => {
-      if (languageId === ERB_LANGUAGE_ID) {
-        try {
-          monaco.editor.setModelMarkers(model, ERB_STRUCTURE_SYNTAX_OWNER, []);
-        } catch {
-          /* 撤不掉 markers 不影响换轨（下一条 model 重挂） */
-        }
+      if (runtime.clearSyntax) {
+        runtime.clearSyntax({ monaco, model });
         return;
       }
       syntax?.clear(model);
