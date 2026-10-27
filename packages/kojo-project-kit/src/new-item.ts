@@ -25,7 +25,7 @@ export type NewItemKind = 'folder' | 'kojo' | 'erb' | 'txt';
 
 /** 菜单项：标签给眼睛，hint 给悬停（作者要知道点了会建成什么） */
 export const NEW_ITEM_MENU: readonly { kind: NewItemKind; label: string; hint: string }[] = [
-  { kind: 'kojo', label: '新建口上文件（.kojo）', hint: '.kojo 与原始 ERB 都能写；导出/部署时自动转成 .ERB' },
+  { kind: 'kojo', label: '新建口上文件（.kojo，kojo 2.0）', hint: '写 kojo（2.0）写法；行内可嵌 `@原生` 直通 ERB' },
   { kind: 'erb', label: '新建 ERB 文件（.ERB）', hint: '只写原生语法，不经转译' },
   { kind: 'txt', label: '新建文本文件（.txt）', hint: '说明、备忘、搬运记录等附加文件' },
   { kind: 'folder', label: '新建文件夹', hint: '在当前位置建一个子目录' },

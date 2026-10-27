@@ -27,7 +27,7 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ErbIndex, ErbParserService, EventBus, FileIO, PluginContext, ScaffoldFileSet, SugarCompiledBytes, Unsubscribe } from '@kojo/plugin-api';
-import { ERB_BODY_EXTENSIONS, inflateZipEntry, isErbBodyPath, isErbDialectPath, KOJO_SOURCE_EXTENSION, readZipContainer } from '@kojo/plugin-api';
+import { ERB_BODY_EXTENSIONS, inflateZipEntry, isErbBodyPath, isErbDialectPath, KOJO_LEGACY_SOURCE_EXTENSION, readZipContainer } from '@kojo/plugin-api';
 // 真实链路层：借用内核 io + Node 桥做端到端落盘（与 eratw-adapter/tests/deploy.test.ts 同一先例）
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
@@ -66,7 +66,7 @@ const BASE: Omit<KojoScaffoldOptions, 'langDoc'> = {
 };
 
 /**
- * 默认档（糖）产物的**改前逐字节金样**：`tests/fixtures/default-sugar/`（README.md + 8 面 .kojo）。
+ * 默认档（糖）产物的**逐字节金样**：`tests/fixtures/default-sugar/`（README.md + 8 面 .kojo1）。
  *
  * ## 出处（已复核，不是"跑出来的现在态"）
  *
@@ -93,6 +93,25 @@ const BASE: Omit<KojoScaffoldOptions, 'langDoc'> = {
  *    - `刻印取得.kojo`        `e36c18d5fc8c0cf1adbe3ef758983ba0a674abb649472276c799d6728ea553b6`  1212 B
  *    - `性骚扰指令.kojo`      `71e2afaffb6bd49f9583400dfa18f8cb1391722bdd4e1d68f38cbd959cef7278`  1234 B
  *
+ * ## LAU-3b-FLIP 重导（2026-10-27，用户口径「`.kojo` 当场让给 2.0」）
+ *
+ * 糖档源扩展名由 `.kojo` 换为封存层 `.kojo1`（骨架尾部那两处提到扩展名的句子与 README
+ * 的清单/说明全由 `FACE_STUB_EXT` / `stubExt` 现算）⇒ 金样同名重导为 `.kojo1`。差异
+ * **逐项可核**：只有扩展名出现处 + README 两句改口；不带案例的面（性交/奉仕/爱抚/绝顶）
+ * 与旧快照**逐字节相同**，带案例的面只多出扩展名那 1 个字符×2 处。重导后实跑摘要：
+ *
+ * ```
+ * README.md       3d37276cf86c81d4fe2c8d424fddd51e782b7ff1b2ad74a65319ef69262e2095  2012 B
+ * 事件.kojo1      1d2beddd8d3dee97aa3bf71030ef87f8f5d7b2338e6e817dc95c91f0d12ca7b9  1138 B
+ * 日常指令.kojo1  40a7669ef2de260c14a42ecf7c4a381cb448acb11f7d85ef6458d30058e74db3  1173 B
+ * 性交指令.kojo1  c759a709758b6a7c6372ada9195061161f524f0b38d60a45ca88055e49a6c794   618 B
+ * 奉仕指令.kojo1  06062d6a37508d044baccc658eaf08ce8a18644ebec11c2a88e37c80e5ff200e   618 B
+ * 爱抚指令.kojo1  c769e6a87dc09ba6ba4c5a11e8904133f057e7188768fca40192b59f87cd6d56   618 B
+ * 绝顶.kojo1      0084579966740e17804c523d8e74973389c5b5dc74991959d5c78587cc7066e7   463 B
+ * 刻印取得.kojo1  86c9654f31812a7ad3ba3c8912efa0b5dce10419fab502a9b9e09f37696d6c0f  1214 B
+ * 性骚扰指令.kojo1 a658de6e5613027f946459524881142cac086a8e3221af5f3ce23be07e3aa041 1236 B
+ * ```
+ *
  * 这里比的是**字节**而不是摘要：`expect(bytes).toEqual(golden)`。
  * 仓库 `.gitattributes` 是 `* text=auto eol=lf`，checkout 必得 LF ⇒ 金样与产物同为
  * LF 字节，`sugar.test.ts` 那套 golden 靠同一条纪律成立，这里照搬。
@@ -100,14 +119,14 @@ const BASE: Omit<KojoScaffoldOptions, 'langDoc'> = {
 const GOLDEN_DIR = nodePath.join(import.meta.dirname, 'fixtures', 'default-sugar');
 const DEFAULT_KEYS = [
   'README.md',
-  '事件.kojo',
-  '日常指令.kojo',
-  '性交指令.kojo',
-  '奉仕指令.kojo',
-  '爱抚指令.kojo',
-  '绝顶.kojo',
-  '刻印取得.kojo',
-  '性骚扰指令.kojo',
+  '事件.kojo1',
+  '日常指令.kojo1',
+  '性交指令.kojo1',
+  '奉仕指令.kojo1',
+  '爱抚指令.kojo1',
+  '绝顶.kojo1',
+  '刻印取得.kojo1',
+  '性骚扰指令.kojo1',
 ] as const;
 
 /** 金样读成字节（不给任何规范化机会：行尾 / BOM / 空白都在比较范围内） */
@@ -118,7 +137,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 describe('① 默认档：与改前逐字节相同（抬默认行为必红）', () => {
   it('九个文件的键序与逐文件字节全等于改前金样', () => {
-    const out = scaffoldKojoProject(BASE);
+    // LAU-3b-FLIP：缺省档已翻原生 ⇒ 金样比对必须**显式选**封存糖档
+    const out = scaffoldKojoProject({ ...BASE, langDoc: 'sugar' });
     expect(Object.keys(out.files)).toEqual([...DEFAULT_KEYS]);
     expect(out.dirName).toBe('取证作品-影狼 v1.0');
     const drift = DEFAULT_KEYS.filter((rel) => {
@@ -135,18 +155,19 @@ describe('① 默认档：与改前逐字节相同（抬默认行为必红）', 
     for (const rel of DEFAULT_KEYS.slice(1)) expect(rel.endsWith(FACE_STUB_EXT)).toBe(true);
   });
 
-  it('显式糖档 == 不传该字段（缺省即历史行为）', () => {
-    const withSugar = scaffoldKojoProject({ ...BASE, langDoc: 'sugar' });
-    const without = scaffoldKojoProject(BASE);
-    expect(withSugar.dirName).toBe(without.dirName);
-    expect(Object.keys(withSugar.files)).toEqual(Object.keys(without.files));
-    for (const rel of Object.keys(without.files)) expect(withSugar.files[rel]).toBe(without.files[rel]);
+  it('缺省档 = 原生（封存写法必须显式选；不传字段不再落 kojo1）', () => {
+    const def = scaffoldKojoProject(BASE);
+    const native = scaffoldKojoProject({ ...BASE, langDoc: 'native' });
+    expect(def.dirName).toBe(native.dirName);
+    expect(Object.keys(def.files)).toEqual(Object.keys(native.files));
+    for (const rel of Object.keys(native.files)) expect(def.files[rel]).toBe(native.files[rel]);
+    expect(Object.keys(def.files).some((r) => r.endsWith(KOJO_LEGACY_SOURCE_EXTENSION))).toBe(false);
   });
 
   it('糖档扩展名 = 契约单源，不是本包自己抄的一份', () => {
-    expect(FACE_STUB_EXT).toBe(KOJO_SOURCE_EXTENSION);
-    expect(scaffoldStubExt(undefined)).toBe(KOJO_SOURCE_EXTENSION);
-    expect(scaffoldStubExt('sugar')).toBe(KOJO_SOURCE_EXTENSION);
+    expect(FACE_STUB_EXT).toBe(KOJO_LEGACY_SOURCE_EXTENSION);
+    expect(scaffoldStubExt(undefined)).toBe(kojoLangDocExtension('native'));
+    expect(scaffoldStubExt('sugar')).toBe(KOJO_LEGACY_SOURCE_EXTENSION);
     expect(scaffoldStubExt('native')).toBe(kojoLangDocExtension('native'));
     expect(scaffoldStubExt('native')).toBe(ERB_BODY_EXTENSIONS[0]!.toUpperCase());
   });
@@ -184,12 +205,12 @@ describe('② 原生档：产物不含糖记号，且判据本身不是空判据
       'README.md',
       ...CORE_FACES.map((f) => `${f.stem}${ext}`),
     ]);
-    expect(Object.keys(native.files).some((r) => r.endsWith(KOJO_SOURCE_EXTENSION))).toBe(false);
+    expect(Object.keys(native.files).some((r) => r.endsWith(KOJO_LEGACY_SOURCE_EXTENSION))).toBe(false);
     expect(native.dirName).toBe(scaffoldKojoProject(BASE).dirName);
   });
 
   it('糖档确实有糖记号（案例块在）——否则下一条就是空判据', () => {
-    const sugar = scaffoldKojoProject(BASE);
+    const sugar = scaffoldKojoProject({ ...BASE, langDoc: 'sugar' });
     const withMarks = CORE_FACES.filter((f) => sugarMarks(sugar.files[`${f.stem}${FACE_STUB_EXT}`]!).length > 0);
     expect(withMarks.length).toBeGreaterThan(0);
     expect(withMarks.map((f) => f.stem).sort()).toEqual(Object.keys(FACE_CASES).sort());
@@ -218,10 +239,10 @@ describe('② 原生档：产物不含糖记号，且判据本身不是空判据
     for (const face of CORE_FACES) expect(readme).toContain(`\`${face.stem}${ext}\``);
   });
 
-  it('糖档 README 那句关于转译的话一字未动（默认档的作者面也不许被无声改写）', () => {
-    const readme = scaffoldKojoProject(BASE).files['README.md']!;
-    expect(readme).toContain('扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里');
-    expect(readme).toContain('**直接把 `.kojo` 放进游戏目录是不生效的**——引擎只读 `.ERB`');
+  it('糖档 README 如实改口到封存扩展名（作者面不许留着旧的 `.kojo`）', () => {
+    const readme = scaffoldKojoProject({ ...BASE, langDoc: 'sugar' }).files['README.md']!;
+    expect(readme).toContain('扩展名是 `.kojo1`：kojo1 写法与原始 ERB 写法可以写在同一个文件里');
+    expect(readme).toContain('**直接把 `.kojo1` 放进游戏目录是不生效的**——引擎只读 `.ERB`');
   });
 });
 
@@ -325,11 +346,11 @@ describe('③ 原生档进得了索引、也出得了制品（取证实测固化
       expect(e.sourceRel).toBe(e.relPath);
     }
     // 产物名一个 .kojo 都不留（引擎读不到它）
-    expect(plan.entries.every((e) => !/\.kojo$/i.test(e.relPath))).toBe(true);
+    expect(plan.entries.every((e) => !/\.kojo1?$/i.test(e.relPath))).toBe(true);
   });
 
   it('反向对照：糖档走的是转译腿（8 个转译 + README 原样），两档在导出链上是两条都能跑的路', () => {
-    const sugar = scaffoldKojoProject(BASE);
+    const sugar = scaffoldKojoProject({ ...BASE, langDoc: 'sugar' });
     const sources = Object.entries(sugar.files).map(([rel, text]) => ({ relPath: rel, bytes: new TextEncoder().encode(text) }));
     // 替身编译器按来源给**互不相同**的函数名（引擎函数名全局唯一，同名会 fail-closed——
     // 那条冲突本身由 artifact 的测试守着，这里只要它别把两条腿都挡掉）
@@ -351,16 +372,19 @@ describe('③ 原生档进得了索引、也出得了制品（取证实测固化
 describe('④ 供数接线（这一格在 eraTW 的向导里真的会出现）', () => {
   it('ERATW_SCAFFOLD_DEPS.scaffold 带着两档声明出厂（把 withKojoLangDocs 摘掉即红）', () => {
     const declared = readScaffoldLangDocs(ERATW_SCAFFOLD_DEPS.scaffold);
-    expect(declared.map((c) => c.value)).toEqual(['sugar', 'native']);
+    expect(declared.map((c) => c.value)).toEqual(['native', 'sugar']);
     expect(declared[0]!.value).toBe(DEFAULT_KOJO_LANG_DOC);
     expect(ERATW_SCAFFOLD_DEPS.coreFaceCount).toBe(CORE_FACES.length);
   });
 
-  it('这枚供数函数认草稿里的 langDoc：原生档出原生扩展名，缺省出糖档且逐字节等于改前金样', () => {
+  it('这枚供数函数认草稿里的 langDoc：缺省=原生，显式糖档逐字节等于封存金样', () => {
     const draft = { ...BASE, extra: { scriptNo: 1 } };
     const nativeOut = ERATW_SCAFFOLD_DEPS.scaffold({ ...draft, langDoc: 'native' });
     expect(Object.keys(nativeOut.files).filter((r) => r.endsWith(kojoLangDocExtension('native')))).toHaveLength(CORE_FACES.length);
-    const sugarOut = ERATW_SCAFFOLD_DEPS.scaffold(draft);
+    // 不传 langDoc ⇒ 与显式原生档同形（封存写法必须作者明确选）
+    const defaultOut = ERATW_SCAFFOLD_DEPS.scaffold(draft);
+    expect(defaultOut.files).toEqual(nativeOut.files);
+    const sugarOut = ERATW_SCAFFOLD_DEPS.scaffold({ ...draft, langDoc: 'sugar' });
     expect(Object.keys(sugarOut.files)).toEqual([...DEFAULT_KEYS]);
     // 接线腿没夹带任何改写：与改前金样逐字节相同（不只是"和另一个函数一致"）
     const drift = DEFAULT_KEYS.filter((rel) => {
@@ -422,7 +446,7 @@ describe('⑤ 卡口取证：原生档起手包经真部署链 / 真导出链原
     expect(bodies, '引擎正文方言那一份文件数').toHaveLength(CORE_FACES.length);
     for (const e of bodies) expect(nodePath.extname(e.path)).toBe(nativeExt);
     // 反证糖档那枚扩展名一个都没落盘（README 是唯一非方言文件）
-    expect(onDisk.filter((e) => e.name.endsWith(KOJO_SOURCE_EXTENSION))).toEqual([]);
+    expect(onDisk.filter((e) => e.name.endsWith(KOJO_LEGACY_SOURCE_EXTENSION))).toEqual([]);
     expect(onDisk.filter((e) => !isErbDialectPath(e.path)).map((e) => e.name)).toEqual(['README.md']);
   });
 

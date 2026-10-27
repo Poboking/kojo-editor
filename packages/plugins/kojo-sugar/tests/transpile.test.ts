@@ -1389,7 +1389,7 @@ describe('产物层撞名 · function-name-duplicate（跨分野也算）', () =
   });
 
   it('error 诊断即阻断保存（不给半成品 .ERB）', () => {
-    const plan = svc().planSave({ source: collide, sourcePath: 'C:/x/a.kojo' });
+    const plan = svc().planSave({ source: collide, sourcePath: 'C:/x/a.kojo1' });
     expect(plan.blocked).toBe(true);
     expect(plan.blockedReason).toBe('transpile-error');
   });

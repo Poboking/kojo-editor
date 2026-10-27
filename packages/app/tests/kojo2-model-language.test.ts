@@ -163,6 +163,7 @@ function flavorResolver(_path: string, text: string): string {
 
 const KOJO_PATH = 'C:/作者工作区/事件.kojo';
 const KOJO2_PATH = `C:/作者工作区/事件${KOJO2_SOURCE_EXTENSION}`;
+const KOJO1_PATH = 'C:/作者工作区/旧稿.kojo1';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -224,11 +225,11 @@ describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', (
     expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
   });
 
-  it('flag 开 + dual：`.kojo2` 挂 2.0，`.kojo` 仍按 v1（开关不许抢老扩展名）', () => {
+  it('flag 开 + dual：`.kojo` / `.kojo2` 都挂 2.0，正文不参与', () => {
     stubFlag(true);
     getKojo2CutoverController().setStage('dual');
     expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
-    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1')).toBe('kojo-legacy');
+    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1')).toBe(KOJO2_LANGUAGE_ID);
   });
 
   it('v1-only：`.kojo2` 仍是 kojo2（语言面无条件），不被降成 plaintext', () => {
@@ -237,13 +238,13 @@ describe('languageIdForKojo2Model：建 model 与重挂共用的唯一判据', (
     expect(languageIdForKojo2Model(KOJO2_PATH, '> 旁白')).toBe(KOJO2_LANGUAGE_ID);
   });
 
-  it('flag 开 + 2.0-default：`.kojo` 由正文指纹定解析器（同一路径两种结论）', () => {
+  it('flag 开 + 2.0-default：`.kojo` 恒挂 2.0（旧正文也一样）；`.kojo1` 仍走封存面', () => {
     stubFlag(true);
     getKojo2CutoverController().setStage('2.0-default');
     expect(languageIdForKojo2Model(KOJO_PATH, '# 角色 灵梦\n> 她别过头。\n')).toBe(KOJO2_LANGUAGE_ID);
-    // v1 正文仍归 v1 解析器；但 LAU-3 起缺省档把 kojo1 **语言面**封了 ⇒ 挂的是 plaintext
-    // （要回高亮/四面就切到 `dual`——那是"显式开启 kojo1 语法"）
-    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1\n$X = 2\n')).toBe('plaintext');
+    expect(languageIdForKojo2Model(KOJO_PATH, '#DIM X, 1\n$X = 2\n')).toBe(KOJO2_LANGUAGE_ID);
+    // kojo1 语言面在缺省档被封 ⇒ 挂 plaintext（要回高亮/四面就切到 `dual`）
+    expect(languageIdForKojo2Model(KOJO1_PATH, '#DIM X, 1\n')).toBe('plaintext');
   });
 
   it('非 kojo 文件即使 flag 开也走 languageFor（路由不接管别人的文件）', () => {
@@ -275,7 +276,7 @@ describe('attach：flag 关零动作、flag 开只挂监听', () => {
 
   it('attach 时语言已正确 ⇒ 零重挂（幂等），只记一次 skipped', () => {
     const fake = harness();
-    const model = new FakeModel('#DIM X, 1', 'kojo-legacy');
+    const model = new FakeModel('# 机 指令 310', KOJO2_LANGUAGE_ID);
     fake.attach(model, KOJO_PATH);
     expect(fake.calls).toEqual([]);
     expect(fake.controller.stats()).toMatchObject({ attached: 1, remounts: 0, skipped: 1, pending: 0 });
@@ -378,7 +379,7 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
   it('flag 运行中被关掉 ⇒ 已排队的回调到点只做 no-op，不碰 model', () => {
     const flagOn = { value: true };
     const fake = harness({ enabled: () => flagOn.value });
-    const model = new FakeModel('v1', 'kojo-legacy');
+    const model = new FakeModel('v1', KOJO2_LANGUAGE_ID);
     fake.attach(model, KOJO_PATH);
 
     model.setText('2.0');
@@ -386,13 +387,13 @@ describe('防抖：窗口内多次变化合并成一次重判', () => {
     flagOn.value = false;
     fake.schedule.runAll();
     expect(fake.calls).toEqual([]);
-    expect(model.getLanguageId()).toBe('kojo-legacy');
+    expect(model.getLanguageId()).toBe(KOJO2_LANGUAGE_ID);
   });
 
   it('flag 运行中被关掉后新的内容变化 ⇒ 连定时器都不排', () => {
     const flagOn = { value: true };
     const fake = harness({ enabled: () => flagOn.value });
-    const model = new FakeModel('v1', 'kojo-legacy');
+    const model = new FakeModel('v1', KOJO2_LANGUAGE_ID);
     fake.attach(model, KOJO_PATH);
     flagOn.value = false;
 
@@ -425,10 +426,10 @@ describe('改路径 / 改扩展名：立即重判，不等防抖', () => {
 
   it('retarget 到同语言路径 ⇒ 只更新路径，不重挂（幂等）', () => {
     const fake = harness();
-    const model = new FakeModel('v1', 'kojo-legacy');
-    const handle = fake.attach(model, KOJO_PATH);
-    handle.retarget('C:/作者工作区/另一个.kojo');
-    expect(handle.path).toBe('C:/作者工作区/另一个.kojo');
+    const model = new FakeModel('v1', 'plaintext');
+    const handle = fake.attach(model, KOJO1_PATH);
+    handle.retarget('C:/作者工作区/另一个.kojo1');
+    expect(handle.path).toBe('C:/作者工作区/另一个.kojo1');
     expect(fake.calls).toEqual([]);
     expect(fake.controller.stats().skipped).toBe(2);
   });

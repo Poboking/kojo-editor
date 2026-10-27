@@ -495,7 +495,7 @@ function tutorialRowsOf(node: unknown, out: TutorialRow[] = []): TutorialRow[] {
 /** 行序 = 阅读顺序（工作流 → v1 写法 → 2.0 写法 → 查表）；行名逐字取各本教程自己的 title */
 const TUTORIAL_ROWS = [
   ['kojo', '口上教程'],
-  ['sugar', '.kojo 语言教程'],
+  ['sugar', '.kojo1 语言教程'],
   ['kojo2', 'Kojo 2.0 语言教程'],
   ['reference', 'kojo 语法全表'],
 ] as const;

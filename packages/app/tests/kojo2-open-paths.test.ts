@@ -103,11 +103,15 @@ const CTX = { currentRoot: CURRENT_ROOT, projectOpen: true } as const;
 /* ───────────────────────── ① 拖放：清单与分类 ───────────────────────── */
 
 describe('① 拖放清单：恒含 2.0 扩展名（看得见文件是语言面），v1 那几类一字不动', () => {
-  it('恒含：openableExtensions() = 基线清单 + 2.0 扩展名（基线清单没有被就地改大）', () => {
+  it('恒含：openableExtensions() = 基线清单 + 2.0 扩展名（`.kojo` + 旧名 `.kojo2`）', () => {
     stubFlag(false);
-    expect(openableExtensions()).toEqual([...OPENABLE_EXT, KOJO2_SOURCE_EXTENSION]);
-    expect(OPENABLE_EXT).toEqual([
+    expect(openableExtensions()).toEqual([
+      ...OPENABLE_EXT,
       KOJO_SOURCE_EXTENSION,
+      KOJO2_SOURCE_EXTENSION,
+    ]);
+    // 基线清单只剩封存层 `.kojo1`；2.0 的两枚由上面那句追加（没有被就地改大）。
+    expect(OPENABLE_EXT).toEqual([
       KOJO_LEGACY_SOURCE_EXTENSION,
       '.erb',
       '.erm',
@@ -120,7 +124,9 @@ describe('① 拖放清单：恒含 2.0 扩展名（看得见文件是语言面�
   it('悬停文案由同一份清单派生（含 2.0 扩展名，不另抄一句）', () => {
     stubFlag(false);
     expect(dropHintText()).toContain(KOJO2_SOURCE_EXTENSION);
-    expect(dropHintText()).toBe(`松手就能打开：${[...OPENABLE_EXT, KOJO2_SOURCE_EXTENSION].join(' / ')}`);
+    expect(dropHintText()).toBe(
+      `松手就能打开：${[...OPENABLE_EXT, KOJO_SOURCE_EXTENSION, KOJO2_SOURCE_EXTENSION].join(' / ')}`,
+    );
   });
 
   it('拖入 .kojo2 / .KOJO2 收得下（开关关也一样：文件在磁盘上，看得见才打得开）', () => {
@@ -159,6 +165,7 @@ describe('② 快速打开与项目扫描：后缀判据同一份、项目扫描
     stubFlag(false);
     expect(quickOpenSourceExtensions()).toEqual([
       ...QUICK_OPEN_SOURCE_EXTENSIONS,
+      KOJO_SOURCE_EXTENSION,
       KOJO2_SOURCE_EXTENSION,
     ]);
   });
@@ -194,8 +201,11 @@ describe('③ 打开入口闸：开关关零副作用，v1-only 阶段显式 blo
   it('isKojo2Path 只认最后一段扩展名（x.kojo2.bak 不算、大小写不敏感）', () => {
     expect(isKojo2Path('D:/proj/a.kojo2')).toBe(true);
     expect(isKojo2Path('D:/proj/A.KOJO2')).toBe(true);
+    // LAU-3b-FLIP：`.kojo` 是 2.0 的主扩展名，当然算。
+    expect(isKojo2Path('D:/proj/a.kojo')).toBe(true);
+    expect(isKojo2Path('D:/proj/A.KOJO')).toBe(true);
     expect(isKojo2Path('D:/proj/a.kojo2.bak')).toBe(false);
-    expect(isKojo2Path('D:/proj/a.kojo')).toBe(false);
+    expect(isKojo2Path('D:/proj/a.kojo1')).toBe(false);
   });
 
   it('开关关：routeKojo2OpenPath 返回 off，且 openFile / openProject / notify 一次都不调', () => {
@@ -211,13 +221,13 @@ describe('③ 打开入口闸：开关关零副作用，v1-only 阶段显式 blo
     expect(kojo2StageBlockedReason(KOJO2_FILE)).toBeNull();
   });
 
-  it('开关开 + 非 2.0 文件：返回 not-kojo2，端口零调用（v1 文件一点没被接管）', () => {
+  it('开关开 + 非 2.0 文件：返回 not-kojo2，端口零调用（封存层一点没被接管）', () => {
     stubFlag(true);
     const { calls, ports } = makePorts();
-    const plan = routeKojo2OpenPath({ path: 'D:/proj/a.kojo', rootDir: CURRENT_ROOT }, CTX, ports);
+    const plan = routeKojo2OpenPath({ path: 'D:/proj/a.kojo1', rootDir: CURRENT_ROOT }, CTX, ports);
     expect(plan).toEqual({ kind: 'not-kojo2' });
     expect(calls).toEqual({ files: [], projects: [], notes: [] });
-    expect(kojo2StageBlockedReason('D:/proj/a.kojo', { enabled: true, stage: 'v1-only' })).toBeNull();
+    expect(kojo2StageBlockedReason('D:/proj/a.kojo1', { enabled: true, stage: 'v1-only' })).toBeNull();
   });
 
   it('开关开 + dual + 当前项目内：直接走 openFile（不开项目）', () => {
@@ -347,8 +357,12 @@ describe('④ 最近文件：.kojo2 记录能往返、能按记录里的根开',
 /* ───────────────────────── ⑤ 新建向导：扩展名与模板同语言 ───────────────────────── */
 
 describe('⑤ 新建向导：2.0 档的扩展名与模板语言一致（扩展名由宿主下传）', () => {
-  it('previewFileName 缺省仍是 .kojo（旧行为逐字），传入 2.0 扩展名就产出 .kojo2', () => {
-    expect(previewFileName('M_KOJO_K{n}', 12, '破空')).toBe('M_KOJO_K12_破空.kojo');
+  it('previewFileName 缺省 = kojo1 档的 .kojo1；传入 2.0 扩展名就产出 .kojo / .kojo2', () => {
+    // LAU-3b-FLIP：1.x 档产出封存档（`.kojo1`），`.kojo` 归 2.0 由宿主下传。
+    expect(previewFileName('M_KOJO_K{n}', 12, '破空')).toBe('M_KOJO_K12_破空.kojo1');
+    expect(previewFileName('M_KOJO_K{n}', 12, '破空', KOJO_SOURCE_EXTENSION)).toBe(
+      'M_KOJO_K12_破空.kojo',
+    );
     expect(previewFileName('M_KOJO_K{n}', 12, '破空', KOJO2_SOURCE_EXTENSION)).toBe(
       'M_KOJO_K12_破空.kojo2',
     );

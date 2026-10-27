@@ -7,13 +7,15 @@
  * ② **能力矩阵两态可读且逐项相同**：descriptor 的 `capabilities` = 矩阵里非豁免的那一份，
  *    开关只门控写回 / 迁移 / 切换，不门控语言面；
  * ③ **运行期开 ↔ 关不丢能力**：进程级注册表在模块求值后不再随开关增减；
- * ④ **v1 逐字不动**：`.kojo` / `.erb` / `.json` / 未知扩展名的认路与表内次序不变；
+ * ④ **扩展名归属**：`.kojo` / `.kojo2` 归 2.0，`.kojo1` 归封存，`.erb` / `.json` /
+ *    未知扩展名的认路与表内次序不变；
  *    2.0 不声明 `structure` / `languageServices`（原因见 `monaco/languages.ts` 的注释，不硬编）。
  *
  * 单测环境是 `node`（无 window / 无 Monaco）：开关用假 localStorage，语言面用最小桩；
  * `languages.ts` 在模块求值那一刻登记 descriptor ⇒ 每个用例 `resetModules` 后重新 import。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { JSON_LANGUAGE_ID } from '../src/monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
@@ -170,7 +172,13 @@ function expectKojo2SurfaceVisible(wire: Wire): void {
     KOJO_XML_LANGUAGE_ID,
   ]);
   const kojo2 = captured.registered.find((entry) => entry.id === KOJO2_LANGUAGE_ID);
-  expect(kojo2?.extensions).toEqual([KOJO2_SOURCE_EXTENSION]);
+  // LAU-3b-FLIP：2.0 的面收主场 `.kojo` + 旧名 `.kojo2`（大小写都收）。
+  expect(kojo2?.extensions).toEqual([
+    KOJO_SOURCE_EXTENSION,
+    KOJO_SOURCE_EXTENSION.toUpperCase(),
+    KOJO2_SOURCE_EXTENSION,
+    KOJO2_SOURCE_EXTENSION.toUpperCase(),
+  ]);
   expect(captured.monarchs.has(KOJO2_LANGUAGE_ID)).toBe(true);
   const config = captured.configs.get(KOJO2_LANGUAGE_ID) as
     | { readonly comments?: { readonly lineComment?: string } }
@@ -199,12 +207,13 @@ describe('切流开（旧键 on ⇒ dual）：语言面与关着时逐项一致'
     expectKojo2SurfaceVisible(wire);
   });
 
-  it('v1 认路逐字不动（`.kojo` / `.erb` / `.json` / plaintext 兜底）', async () => {
+  it('认路（`.kojo` 归 2.0 / `.kojo1` 归封存 / 其它不动）', async () => {
     const off = await boot(false);
     const on = await boot(true);
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['D:/p/M.kojo', KOJO_LANGUAGE_ID],
-      ['D:/p/M.KOJO', KOJO_LANGUAGE_ID],
+      ['D:/p/M.kojo', KOJO2_LANGUAGE_ID],
+      ['D:/p/M.KOJO', KOJO2_LANGUAGE_ID],
+      ['D:/p/M.kojo1', KOJO_LANGUAGE_ID],
       ['D:/p/M.ERB', ERB_LANGUAGE_ID],
       ['D:/p/M.erm', ERB_LANGUAGE_ID],
       ['D:/p/settings.json', JSON_LANGUAGE_ID],

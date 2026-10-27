@@ -1,5 +1,5 @@
 /**
- * W6 PARITY-EXT 对拍单测（2026-10-17）——`.kojo` 的三员语言服务（`workspaceSymbol` /
+ * W6 PARITY-EXT 对拍单测（2026-10-17）——`.kojo1` 的三员语言服务（`workspaceSymbol` /
  * `codeLens` / `inlayHint`）与 ERB 那条线**同一份判据、同一份结果形状**。
  *
  * ## 为什么必须"两枚真贡献放同一间屋子里对拍"
@@ -16,7 +16,7 @@
  *
  * ## 语料（全假表，不碰真盘）
  *
- * 一份 `.kojo`（`A.kojo`）+ 它的编译产物（`A.ERB`，内容由**同一个转译器当场算出**，
+ * 一份 `.kojo1`（`A.kojo1`）+ 它的编译产物（`A.ERB`，内容由**同一个转译器当场算出**，
  * 杜绝"假产物与真转译不一致"这种自证空洞）+ 一份调用它的方言文件（`CALLER.ERB`）。
  */
 
@@ -49,13 +49,13 @@ import { stubDict } from './support';
 
 /* ============================ 假盘（内容全部当场算出） ============================ */
 
-/** `.kojo` 源：一个用户函数（定义）+ 一个时机块里的**原生直通** CALL（列级映射可得 ⇒ 提示钉得住） */
+/** `.kojo1` 源：一个用户函数（定义）+ 一个时机块里的**原生直通** CALL（列级映射可得 ⇒ 提示钉得住） */
 const KOJO_SOURCE =
   '角色: 12\n' +
   '函数 问候(次数)：\n    「你好。」\n    返回\n' +
   '时机 初见：\n    CALL M_KOJO_K12_问候(3)\n';
 
-const SOURCE_PATH = '/t/KOJO/A.kojo';
+const SOURCE_PATH = '/t/KOJO/A.kojo1';
 /** 产物路径由 `resolveSugarTarget` 的口径写死（同目录换扩展名） */
 const PRODUCT_PATH = '/t/KOJO/A.ERB';
 const CALLER_PATH = '/t/CALLER.ERB';
@@ -280,7 +280,7 @@ async function boot(opts: { openProject?: boolean } = {}): Promise<Harness> {
   // 分野表经 `game.adapter` 槽注入（装配层每次转译现查，注册晚于激活照样生效）
   slotApi.register('game.adapter', stubEratwAdapterContribution() as unknown as EditorLanguageServiceContribution);
 
-  // ③ 项目打开 ⇒ 解析线建索引、糖线建 `.kojo` 名录（两边都只在事件里读盘）
+  // ③ 项目打开 ⇒ 解析线建索引、糖线建 `.kojo1` 名录（两边都只在事件里读盘）
   if (opts.openProject !== false) {
     await harness.emit('project.opened', { project: PROJECT });
     await settle(harness);
@@ -302,8 +302,8 @@ async function settle(h: Harness): Promise<void> {
 
 /* ============================ ① workspaceSymbol 形状对拍 ============================ */
 
-describe('W6 · workspaceSymbol：`.kojo` 与 `.erb` 结果形状逐键一致', () => {
-  it('同一查询词下：糖线那条候选的键集合与 ERB 那条**完全相同**，且落点是 `.kojo` 源行', async () => {
+describe('W6 · workspaceSymbol：`.kojo1` 与 `.erb` 结果形状逐键一致', () => {
+  it('同一查询词下：糖线那条候选的键集合与 ERB 那条**完全相同**，且落点是 `.kojo1` 源行', async () => {
     const h = await boot();
     const erb = h.contribution('erb-workspace-symbols');
     const kojo = h.contribution('kojo-workspace-symbols');
@@ -317,7 +317,7 @@ describe('W6 · workspaceSymbol：`.kojo` 与 `.erb` 结果形状逐键一致', 
     const erbHit = erbResult.symbols.find((s) => s.filePath === PRODUCT_PATH);
     const kojoHit = kojoResult.symbols.find((s) => s.filePath === SOURCE_PATH);
     expect(erbHit, 'ERB 那条线本该给出产物里的定义').toBeDefined();
-    expect(kojoHit, '糖线该把同一条候选重定基到 `.kojo` 源').toBeDefined();
+    expect(kojoHit, '糖线该把同一条候选重定基到 `.kojo1` 源').toBeDefined();
 
     // 形状：不新造第四种结果形状（键集合逐字相同，值域也只有 kind/name/filePath/line）
     expect(Object.keys(kojoHit!).sort()).toEqual(Object.keys(erbHit!).sort());
@@ -338,7 +338,7 @@ describe('W6 · workspaceSymbol：`.kojo` 与 `.erb` 结果形状逐键一致', 
     const h = await boot();
     await settle(h);
     const kojo = h.contribution('kojo-workspace-symbols');
-    // `CALLER` 定义在原生方言文件里（不是任何 `.kojo` 的产物）⇒ 糖线一条都不该编出来
+    // `CALLER` 定义在原生方言文件里（不是任何 `.kojo1` 的产物）⇒ 糖线一条都不该编出来
     const result = kojo.provide({ kind: 'workspaceSymbol', query: 'CALLER', project: PROJECT }) as EditorWorkspaceSymbolResult;
     expect(result).toBeDefined();
     expect(result.symbols).toEqual([]);
@@ -348,7 +348,7 @@ describe('W6 · workspaceSymbol：`.kojo` 与 `.erb` 结果形状逐键一致', 
 
 /* ============================ ② codeLens / inlayHint：判据同源 ============================ */
 
-describe('W6 · codeLens：`.kojo` 的行上注解与 ERB 同一份判据', () => {
+describe('W6 · codeLens：`.kojo1` 的行上注解与 ERB 同一份判据', () => {
   it('标签与落点逐字相同，只有行号折回源（`@` 函数头是纯生成行）', async () => {
     const h = await boot();
     await settle(h);
@@ -381,24 +381,24 @@ describe('W6 · codeLens：`.kojo` 的行上注解与 ERB 同一份判据', () =
     expect(kojoResult.lenses.map((l) => l.line)).toEqual([...kojoResult.lenses.map((l) => l.line)].sort((a, b) => a - b));
   });
 
-  it('「没人调用就不说」这条口径在 `.kojo` 上同样成立（无引用 ⇒ 空数组，不抛）', async () => {
+  it('「没人调用就不说」这条口径在 `.kojo1` 上同样成立（无引用 ⇒ 空数组，不抛）', async () => {
     const h = await boot();
     await settle(h);
     const kojo = h.contribution('kojo-code-lens');
     // 只有一份 `函数 开场()`，且没有任何调用它的方言文件 ⇒ ERB 判据一条不给 ⇒ 糖线也就无话可说
     const source = '角色: 12\n函数 开场()：\n    「开始。」\n    返回\n';
     const only = createSugarTranspileService({ dictionary: stubDict, faceTable: createEratwFaceTable() }).transpile(source, {
-      filePath: '/t/KOJO/B.kojo',
+      filePath: '/t/KOJO/B.kojo1',
     });
     expect(only.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     // 这个函数名根本不在项目索引里（假盘没有它）⇒ "证明不了有人用" ⇒ 空
-    const result = kojo.provide({ kind: 'codeLens', path: '/t/KOJO/B.kojo', text: source, project: PROJECT }) as EditorCodeLensResult;
+    const result = kojo.provide({ kind: 'codeLens', path: '/t/KOJO/B.kojo1', text: source, project: PROJECT }) as EditorCodeLensResult;
     expect(result.kind).toBe('codeLens');
     expect(result.lenses).toEqual([]);
   });
 });
 
-describe('W6 · inlayHint：`.kojo` 的实参位提示与 ERB 同一份判据', () => {
+describe('W6 · inlayHint：`.kojo1` 的实参位提示与 ERB 同一份判据', () => {
   it('产物 CALL 行的提示折回源行列；列证不了就不给（不猜）', async () => {
     const h = await boot();
     await settle(h);
@@ -461,7 +461,7 @@ describe('W6 · inlayHint：`.kojo` 的实参位提示与 ERB 同一份判据', 
 /* ============================ ③④ 守门与缺席（三态） ============================ */
 
 describe('W6 · 三态纪律与方言守门', () => {
-  it('糖线三枚只认 `.kojo`：方言与杂文件一律 undefined（各管各的，不重答）', async () => {
+  it('糖线三枚只认 `.kojo1`：方言与杂文件一律 undefined（各管各的，不重答）', async () => {
     const h = await boot();
     await settle(h);
     for (const id of ['kojo-code-lens', 'kojo-inlay-hints']) {
@@ -475,7 +475,7 @@ describe('W6 · 三态纪律与方言守门', () => {
     expect(h.contribution('kojo-workspace-symbols').provide({ kind: 'documentSymbol', path: SOURCE_PATH, text: '', project: PROJECT })).toBeUndefined();
   });
 
-  it('解析线认整个方言族（大小写不敏感），只拒方言族之外（`.kojo` / `.txt`）', async () => {
+  it('解析线认整个方言族（大小写不敏感），只拒方言族之外（`.kojo1` / `.txt`）', async () => {
     const h = await boot();
     const lens = h.contribution('erb-usage-lens');
     const hints = h.contribution('erb-inlay-hints');
@@ -483,7 +483,7 @@ describe('W6 · 三态纪律与方言守门', () => {
       expect(lens.provide({ kind: 'codeLens', path, text: '@A\n', project: PROJECT })).toBeDefined();
       expect(hints.provide({ kind: 'inlayHint', path, text: 'CALL A\n', project: PROJECT })).toBeDefined();
     }
-    // `.kojo` 是**糖线的地盘**（行号属派生文本），解析线拒它是对的
+    // `.kojo1` 是**糖线的地盘**（行号属派生文本），解析线拒它是对的
     expect(lens.provide({ kind: 'codeLens', path: SOURCE_PATH, text: KOJO_SOURCE, project: PROJECT })).toBeUndefined();
     expect(hints.provide({ kind: 'inlayHint', path: SOURCE_PATH, text: KOJO_SOURCE, project: PROJECT })).toBeUndefined();
   });
@@ -496,7 +496,7 @@ describe('W6 · 三态纪律与方言守门', () => {
   });
 
   it('名录未就绪（项目没开 / 关掉了）⇒ 糖线不答，而不是答"没有"', async () => {
-    // ① 从未打开过项目：解析线在场，但 `.kojo` 名录一条没建 ⇒ 本包不答
+    // ① 从未打开过项目：解析线在场，但 `.kojo1` 名录一条没建 ⇒ 本包不答
     const cold = await boot({ openProject: false });
     expect(
       cold.contribution('kojo-workspace-symbols').provide({ kind: 'workspaceSymbol', query: '问候', project: PROJECT }),

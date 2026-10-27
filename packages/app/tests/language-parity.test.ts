@@ -588,7 +588,8 @@ describe('语言 id / 扩展名关系：两门语言互不蚕食', () => {
       ['D:/p/M.kojo2', KOJO2_LANGUAGE_ID],
       ['D:/p/M.KOJO2', KOJO2_LANGUAGE_ID],
       ['D:/p/M.kojo2.bak', 'plaintext'],
-      ['D:/p/M.kojo', KOJO_LANGUAGE_ID],
+      ['D:/p/M.kojo', KOJO2_LANGUAGE_ID],
+      ['D:/p/M.kojo1', KOJO_LANGUAGE_ID],
       ['D:/p/M.erb', ERB_LANGUAGE_ID],
       ['D:/p/M.erm', ERB_LANGUAGE_ID],
       ['D:/p/M.erh', ERB_LANGUAGE_ID],
@@ -798,10 +799,10 @@ describe('副作用面：默认档仍关闭（源码守卫 + 行为断言）', (
     }
   });
 
-  it('缺省档行为（LAU-3 翻面）：`.kojo2` 可见，且 2.0 的开项目路由**放行**', () => {
+  it('缺省档行为（LAU-3 翻面）：`.kojo` / `.kojo2` 可见，且 2.0 的开项目路由**放行**', () => {
     // LAU-3 起缺省阶段是 `2.0-default` ⇒ 切流语义默认开启，`.kojo2` 的"切项目再排队打开"
     // 这条腿跟着放行。`v1-only` 档仍返回 off（守卫本身没退化，那条断言在 kojo2-wire ① 组）。
-    expect(kojo2SourceExtensions()).toEqual(['.kojo2']);
+    expect(kojo2SourceExtensions()).toEqual(['.kojo', '.kojo2']);
     const plan = planKojo2Open(
       { path: 'D:/p/M.kojo2' },
       { currentRoot: 'D:/p', projectOpen: true },

@@ -271,7 +271,7 @@ export function createUiSugarEditorPlugin(): Plugin {
 
       ctx.slots.register('ui.panel', {
         id: 'sugar-verdict',
-        title: '.kojo 校验',
+        title: '.kojo1 校验',
         icon: 'target',
         order: 76,
         // UI 重设计批 P1：诊断性质 → 底部区 tab（定稿 §四）
@@ -300,7 +300,7 @@ export function createUiSugarEditorPlugin(): Plugin {
       // （非模态，与 overlay 同款模式）。判定知识全在 VerdictPanel，命令只负责"叫它出来"。
       ctx.slots.register('editor.command', {
         id: 'kojo.sugarVerdict.float',
-        title: '浮动 .kojo 校验面板',
+        title: '浮动 .kojo1 校验面板',
         category: '文件',
         run: () => {
           ctx.bus.emit('ui.panel.float', { id: 'sugar-verdict', source: 'ui-sugar-editor' });

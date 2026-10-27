@@ -1690,8 +1690,8 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         // 着色是**纯显示**职责：跟着"此刻屏幕上那份 model"走，派生糖视图同样要上色。
         // 故这里**不能**用 `owningPaneOf`——它把糖 model 判 null 是为拦 definition/rename/hover
         // 等"导航"作用在派生行号上，误伤到着色 ⇒ .kojo 预览关键词高亮全灭。
-        // 糖 model 显示的是 `.kojo` 投影：以 `.kojo` 路径派发，让 kojo 语义腿命中这份文本
-        // （`resolveSugarTarget` 只认 `.kojo` 后缀），同时 ERB 语义腿因扩展名不符自然跳过，无冲突。
+        // 糖 model 显示的是 kojo1 投影：以封存源路径派发，让 kojo 语义腿命中这份文本
+        // （`resolveSugarTarget` 只认 `.kojo1`），同时 ERB 语义腿因扩展名不符自然跳过，无冲突。
         let ctx: PaneCtx | null = null;
         let isSugarModel = false;
         for (const c of livePanes.values()) {
@@ -1704,12 +1704,12 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         if (!ctx) return [];
         const realPath = ctx.filePathRef.current;
         if (!realPath) return [];
-        // LAU-3b：`.kojo1` 源的文件本身就是 kojo1 投影，路径原样派发（`resolveSugarTarget`
-        // 已认这两枚）；只有"把 ERB 显示成糖"那种派生才把路径改写成 kojo 源形态。
+        // LAU-3b-FLIP：`.kojo` 归 2.0 之后，糖投影的源形态是 `.kojo1`
+        // （`.kojo1` 源文件本身原样派发；"把 ERB 显示成糖"那种派生才把路径改写成 `.kojo1`）。
         const path = isSugarModel
           ? realPath.toLowerCase().endsWith(KOJO_LEGACY_SOURCE_EXTENSION)
             ? realPath
-            : realPath.replace(/\.[A-Za-z0-9]+$/, KOJO_SOURCE_EXTENSION)
+            : realPath.replace(/\.[A-Za-z0-9]+$/, KOJO_LEGACY_SOURCE_EXTENSION)
           : realPath;
         const lineCount = model.getLineCount();
         if (!shouldComputeSemanticTokens(lineCount)) return [];

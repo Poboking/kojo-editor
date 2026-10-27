@@ -30,21 +30,19 @@
  *
  * ## 只有路径时怎么办（EditorPane 那一腿）
  *
- * `2.0-default` 的 `.kojo` 只有正文能定归属。带正文的路由（诊断接线 / 语言面 / 打开链路）
- * 会把结论记进一张**有界备忘**（按 `pathKey` + 阶段 + override 失效），于是只有路径的
- * `kojo2OwnsDiagnostics(path)` 也能读到同一份结论；没有结论时**不接管**（`needs-content`
- * 不是"2.0 的"，失败方向 = 不抢 v1 的活）。
+ * LAU-3b-FLIP 之后路由**只认扩展名**，不再有"要正文才能定归属"这一档：带正文与只带路径
+ * 得到的是同一个结论，备忘表照旧保留（它同时承担 override 的登记与失效），但不会再出现
+ * `needs-content`——`kojo2OwnsDiagnostics(path)` 与带正文那一路同源同值。
  *
  * ## 诊断是语言面（K2-SURFACE-DEFAULT）
  *
- * 波浪线是**只读呈现**：`.kojo2` 一打开就归 2.0 管，阶段 `v1-only` 也一样（开关只管写回 /
- * 迁移 / `.kojo` 的解析器切换）。真正的归属判据只有路由：`.kojo2` 恒为 2.0；`.kojo` 在
- * `v1-only` / `dual` 下按 v1（v1 的装饰轮照旧发布，2.0 不让路）。
+ * 波浪线是**只读呈现**：`.kojo` / `.kojo2` 一打开就归 2.0 管，阶段 `v1-only` 也一样
+ * （开关只管写回 / 迁移 / 封存层可不可见）。真正的归属判据只有路由：`.kojo` / `.kojo2`
+ * 恒为 2.0，`.kojo1` 恒为 kojo1。
  */
 import {
   KOJO_V1_FILE_EXTENSION,
-  KOJO_V1_LEGACY_FILE_EXTENSION,
-  KOJO2_FILE_EXTENSION,
+  KOJO2_FILE_EXTENSIONS,
   decideKojo2Route,
   extensionOf,
   getKojo2CutoverController,
@@ -89,11 +87,7 @@ export function isKojo2DiagnosticsPath(filePath: string): boolean {
  */
 export function isKojo2RouteablePath(filePath: string): boolean {
   const extension = extensionOf(filePath);
-  if (
-    extension === KOJO2_FILE_EXTENSION ||
-    extension === KOJO_V1_FILE_EXTENSION ||
-    extension === KOJO_V1_LEGACY_FILE_EXTENSION
-  ) {
+  if (KOJO2_FILE_EXTENSIONS.includes(extension) || extension === KOJO_V1_FILE_EXTENSION) {
     return true;
   }
   return getKojo2CutoverController().getOverride(filePath) !== null;
@@ -137,10 +131,10 @@ export function pathOfKojo2RouteModel(
 }
 
 /**
- * 只按**路径 + 阶段 + override** 路由（不读正文；不碰备忘）。
+ * 只按**路径 + override** 路由（不读正文；不碰备忘）。
  *
- * `2.0-default` 的 `.kojo` 返回 `needs-content`（正文才能定解析器）——调用方必须把它当
- * "还没定"而不是"2.0 的"：{@link kojo2OwnsRoute} 对它是 `false`。
+ * LAU-3b-FLIP 之后扩展名即归属：`.kojo` / `.kojo2` ⇒ `parser: 'kojo2'`，`.kojo1` ⇒
+ * `kojo-v1`，与正文无关，也不会再返回 `needs-content`。
  */
 export function kojo2RouteForPath(filePath: string): Kojo2RouteDecision {
   const controller = getKojo2CutoverController();
@@ -159,10 +153,8 @@ function stageOrDefault(stage: Kojo2CutoverStage | undefined): Kojo2CutoverStage
 /**
  * **path + source → route** 的唯一入口（K2-CUTOVER-ROUTE）。
  *
- * - `source === undefined` ⇒ 相当于 {@link kojo2RouteForPath}（`2.0-default` 的 `.kojo`
- *   仍可能给 `needs-content`）；
- * - 带正文算出的结论会记进"只有路径"的备忘（见模块头），让 `EditorPane.refreshMarkers`
- *   那一腿与诊断接线同源；
+ * - `source === undefined` ⇒ 相当于 {@link kojo2RouteForPath}（结论与带正文相同）；
+ * - 结论照旧记进"只有路径"的备忘（override 的登记与失效走同一张表）；
  * - 一次性 `override` 的结果不记备忘（那不是"这份文件的稳定事实"）。
  */
 export function kojo2RouteForText(
@@ -186,8 +178,8 @@ export function kojo2RouteForText(
 /**
  * 一份 model 的路由（**小包装**：路径取 URI、正文取 `getValue()`，一次读全）。
  *
- * 正文取不到（model 已在销毁途中）⇒ 按"没有正文"路由（`2.0-default` 的 `.kojo` 落
- * `needs-content`，调用方据此**不接管**并露一句话，绝不猜成 2.0）。
+ * 正文取不到（model 已在销毁途中）⇒ 按"没有正文"路由——结论不变（扩展名说了算），
+ * 只是调用方那一拍没有正文可诊断。
  */
 export function kojo2RouteFor(
   model: Kojo2RouteModelLike,
@@ -266,8 +258,8 @@ export interface Kojo2DiagnosticsOwnershipInput {
   /** 目标文件路径（与 `EditorPane` / model URI 同一写法均可） */
   readonly path: string;
   /**
-   * 文件正文（调用方手上有就传：`2.0-default` 的 `.kojo` **只有正文能定归属**）。
-   * 缺省 = 用最近一次带正文路由的备忘；备忘也没有 ⇒ 不接管（`needs-content`）。
+   * 文件正文（可选；LAU-3b-FLIP 之后归属只认扩展名，正文只影响"这一拍有没有内容可诊断"）。
+   * 缺省 = 用最近一次带正文路由的备忘；备忘也没有 ⇒ 直接按路径路由（结论相同）。
    */
   readonly source?: string;
 }
@@ -279,8 +271,8 @@ export interface Kojo2DiagnosticsOwnershipInput {
  * - `kojo2OwnsDiagnostics(path)` —— 路径形：先读带正文的备忘，没有就按路径路由；
  * - `kojo2OwnsDiagnostics({ path, source })` —— 对象形：按正文路由（结论进备忘）。
  *
- * 判据 = flag 开 **且** 路由结论的 parser 是 `kojo2`。flag 关 / `v1-only` / 非 kojo 文件 /
- * `needs-content` / `ambiguous` ⇒ `false`，调用方照原样继续（v1 诊断不让路）。
+ * 判据 = 路由结论的 parser 是 `kojo2`。`.kojo1` / 非 kojo 文件 / 被 override 钉回 v1 ⇒
+ * `false`，调用方照原样继续（v1 诊断不让路）。
  */
 export function kojo2OwnsDiagnostics(filePath: string): boolean;
 export function kojo2OwnsDiagnostics(input: Kojo2DiagnosticsOwnershipInput): boolean;

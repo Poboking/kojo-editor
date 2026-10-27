@@ -38,9 +38,10 @@ const diag = (
 });
 
 describe('S6 / isKojoFile', () => {
-  it('只认 .kojo（大小写不敏感）；null/其它后缀为假', () => {
-    expect(isKojoFile('/p/a.kojo')).toBe(true);
-    expect(isKojoFile('/p/A.KOJO')).toBe(true);
+  it('只认 .kojo1（大小写不敏感）；null/其它后缀为假', () => {
+    expect(isKojoFile('/p/a.kojo1')).toBe(true);
+    expect(isKojoFile('/p/A.KOJO1')).toBe(true);
+    expect(isKojoFile('/p/a.kojo')).toBe(false); // 2.0 的源不归封存层判定面板
     expect(isKojoFile('/p/a.ERB')).toBe(false);
     expect(isKojoFile(null)).toBe(false);
     expect(isKojoFile(undefined)).toBe(false);
@@ -165,38 +166,38 @@ describe('S6 / 降级文案', () => {
 describe('C2 / 缓冲真相池（live-first / disk-fallback 的选择判据）', () => {
   it('未收到广播 → textFor 为 null（调用方退回读盘兜底）', () => {
     const pool = createLiveTextPool();
-    expect(pool.textFor('/proj/x.kojo')).toBeNull();
+    expect(pool.textFor('/proj/x.kojo1')).toBeNull();
   });
 
   it('收到广播 → 以广播为准（读盘不再是真源）', () => {
     const pool = createLiveTextPool();
-    pool.apply('/proj/x.kojo', '未保存的编辑');
-    expect(pool.textFor('/proj/x.kojo')).toBe('未保存的编辑');
+    pool.apply('/proj/x.kojo1', '未保存的编辑');
+    expect(pool.textFor('/proj/x.kojo1')).toBe('未保存的编辑');
   });
 
   it('同一 path 新广播覆盖旧（拿最新一条当权威）', () => {
     const pool = createLiveTextPool();
-    pool.apply('/proj/x.kojo', 'v1');
-    pool.apply('/proj/x.kojo', 'v2');
-    expect(pool.textFor('/proj/x.kojo')).toBe('v2');
+    pool.apply('/proj/x.kojo1', 'v1');
+    pool.apply('/proj/x.kojo1', 'v2');
+    expect(pool.textFor('/proj/x.kojo1')).toBe('v2');
   });
 
   it('path 不匹配不误用：别的文件的广播不喂给当前文件', () => {
     const pool = createLiveTextPool();
-    pool.apply('/proj/other.kojo', 'other');
-    expect(pool.textFor('/proj/x.kojo')).toBeNull();
+    pool.apply('/proj/other.kojo1', 'other');
+    expect(pool.textFor('/proj/x.kojo1')).toBeNull();
   });
 
   it('path 判等走 pathKey 归一（Windows 分隔符/大小写不同也命中同一文件）', () => {
     const pool = createLiveTextPool();
-    pool.apply('C:\\Proj\\X.kojo', 't');
-    expect(pool.textFor('c:/proj/x.kojo')).toBe('t');
+    pool.apply('C:\\Proj\\X.kojo1', 't');
+    expect(pool.textFor('c:/proj/x.kojo1')).toBe('t');
   });
 
   it('空文本也是真相（清空全文的编辑必须如实下发，不与"没收到"混淆）', () => {
     const pool = createLiveTextPool();
-    pool.apply('/proj/x.kojo', '');
-    expect(pool.textFor('/proj/x.kojo')).toBe('');
+    pool.apply('/proj/x.kojo1', '');
+    expect(pool.textFor('/proj/x.kojo1')).toBe('');
   });
 
   it('null / undefined 路径安全取空（换文件瞬时无活动文件的窗口期）', () => {

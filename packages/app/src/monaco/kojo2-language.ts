@@ -54,6 +54,7 @@ import {
 } from './kojo2-lexicon';
 import { CJK_WORD_PATTERN } from './word-separators';
 import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
+import { KOJO_SOURCE_EXTENSION, kojoMonacoExtensions } from '@kojo/plugin-api';
 import { KOJO2_THEME_RULES, KOJO2_TOKEN } from './kojo-theme-rules';
 
 /**
@@ -393,8 +394,10 @@ export function kojo2LanguageConfiguration(
 }
 
 /**
- * 注册 `kojo2` 语言面（**只为 CUTOVER 准备**：本函数不被 `languages.ts` 调用，
- * 暂挂 `.kojo2` 扩展名，绝不抢 v1 的 `.kojo`）。
+ * 注册 `kojo2` 语言面。
+ *
+ * **2026-10-27（LAU-3b-FLIP）起 `.kojo` 也归这一门**（用户口径：`.kojo` 当场让给 2.0），
+ * 与 `.kojo2`（旧名兼容）并列登记；v1 只剩 `.kojo1`，两边不重叠。
  *
  * 幂等：同一 Monaco 实例重复调用只登记一次（与 v1 `registerKojoLanguage` 同形）。
  */
@@ -404,7 +407,7 @@ export function registerKojo2Language(monaco: typeof Monaco): void {
   }
   monaco.languages.register({
     id: KOJO2_LANGUAGE_ID,
-    extensions: [KOJO2_SOURCE_EXTENSION],
+    extensions: kojoMonacoExtensions([KOJO_SOURCE_EXTENSION, KOJO2_SOURCE_EXTENSION]),
     aliases: ['kojo2'],
   });
   monaco.languages.setMonarchTokensProvider(KOJO2_LANGUAGE_ID, KOJO2_MONARCH);

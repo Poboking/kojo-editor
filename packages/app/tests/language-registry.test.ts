@@ -48,8 +48,10 @@ describe('内置语言 descriptor', () => {
 
   it('认路判据与收口前 languageFor 逐字对拍', () => {
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['D:\\作品\\事件.kojo', KOJO_LANGUAGE_ID],
-      ['D:/x/A.KOJO', KOJO_LANGUAGE_ID],
+      ['D:\\作品\\事件.kojo', KOJO2_LANGUAGE_ID],
+      ['D:/x/A.KOJO', KOJO2_LANGUAGE_ID],
+      ['D:\\作品\\旧稿.kojo1', KOJO_LANGUAGE_ID],
+      ['D:/x/A.KOJO1', KOJO_LANGUAGE_ID],
       ['D:\\x\\note.ERB', ERB_LANGUAGE_ID],
       ['D:\\x\\K36.erm', ERB_LANGUAGE_ID],
       ['D:\\x\\M_KOJO_K11_TR.ERH', ERB_LANGUAGE_ID],
@@ -69,6 +71,7 @@ describe('内置语言 descriptor', () => {
   it('每条路径至多命中一门语言（判据不重叠）', () => {
     const paths = [
       'D:\\作品\\事件.kojo',
+      'D:\\作品\\旧稿.kojo1',
       'D:\\x\\note.ERB',
       'D:\\x\\K36.erm',
       'D:\\x\\M_KOJO_K11_TR.ERH',
@@ -125,7 +128,7 @@ describe('语言可用性门（LAU-3）：封存层只影响认领，不动注�
 
   it('缺省谓词：kojo1（legacy）看切流阶段——node 里控制器缺省 = 2.0-default ⇒ 封存', () => {
     // 没有 window ⇒ 控制器缺省档；LAU-3 起那一档是 `2.0-default` ⇒ kojo1 不可认领
-    expect(languageForPath('D:/x/a.kojo')).toBe(FALLBACK_LANGUAGE_ID);
+    expect(languageForPath('D:/x/a.kojo1')).toBe(FALLBACK_LANGUAGE_ID);
     // 注册面不动：表里仍有这一枚，仍可批量挂面（Monarch / 语言配置照旧）
     expect(descriptorForLanguageId(KOJO_LANGUAGE_ID)).not.toBeNull();
     expect(languageDescriptors().some((d) => d.id === KOJO_LANGUAGE_ID)).toBe(true);
@@ -137,12 +140,13 @@ describe('语言可用性门（LAU-3）：封存层只影响认领，不动注�
   it('非 legacy 档不受影响：ERB / JSON / 2.0 在缺省谓词下照常认领', () => {
     expect(languageForPath('D:/x/note.ERB')).toBe(ERB_LANGUAGE_ID);
     expect(languageForPath('D:/x/settings.json')).toBe(JSON_LANGUAGE_ID);
+    expect(languageForPath('D:/x/a.kojo')).toBe('kojo2');
     expect(languageForPath('D:/x/a.kojo2')).toBe('kojo2');
   });
 
   it('装一枚恒真谓词 ⇒ kojo1 立刻能认领（门是纯谓词，不增删注册项）', () => {
     installAvailabilityGate(() => true);
-    expect(languageForPath('D:/x/a.kojo')).toBe(KOJO_LANGUAGE_ID);
+    expect(languageForPath('D:/x/a.kojo1')).toBe(KOJO_LANGUAGE_ID);
     expect(availableLanguageDescriptors().some((d) => d.id === KOJO_LANGUAGE_ID)).toBe(true);
     expect(unavailableLanguageDescriptors()).toEqual([]);
   });
@@ -152,26 +156,27 @@ describe('语言可用性门（LAU-3）：封存层只影响认领，不动注�
     installAvailabilityGate(() => {
       throw new Error('boom');
     });
-    expect(languageForPath('D:/x/a.kojo')).toBe(FALLBACK_LANGUAGE_ID);
+    expect(languageForPath('D:/x/a.kojo1')).toBe(FALLBACK_LANGUAGE_ID);
     expect(warn.mock.calls.some((call) => String(call[0]).includes('抛错'))).toBe(true);
     warn.mockRestore();
   });
 
   it('isLanguageGatedForPath：命中被封掉的语言才为真；已认领的 model 例外（§4.4）', () => {
-    // 缺省档 ⇒ `.kojo` 属于被封的 kojo1：不只语言 id 落兜底，分析面也要一起停
-    expect(isLanguageGatedForPath('D:/x/a.kojo')).toBe(true);
+    // 缺省档 ⇒ `.kojo1` 属于被封的 kojo1：不只语言 id 落兜底，分析面也要一起停
+    expect(isLanguageGatedForPath('D:/x/a.kojo1')).toBe(true);
     // **已认领**这场被封语言的 model 不算"不在场"（在编文件不被当场抽走波浪线）
-    expect(isLanguageGatedForPath('D:/x/a.kojo', KOJO_LANGUAGE_ID)).toBe(false);
+    expect(isLanguageGatedForPath('D:/x/a.kojo1', KOJO_LANGUAGE_ID)).toBe(false);
     // 认领的是别的语言 ⇒ 照旧算封存（防止拿错的 id 蒙混）
-    expect(isLanguageGatedForPath('D:/x/a.kojo', ERB_LANGUAGE_ID)).toBe(true);
+    expect(isLanguageGatedForPath('D:/x/a.kojo1', ERB_LANGUAGE_ID)).toBe(true);
     // 别门语言 / 没登记的路径不受牵连
     expect(isLanguageGatedForPath('D:/x/a.erb')).toBe(false);
+    expect(isLanguageGatedForPath('D:/x/a.kojo')).toBe(false);
     expect(isLanguageGatedForPath('D:/x/a.kojo2')).toBe(false);
     expect(isLanguageGatedForPath('D:/x/note.txt')).toBe(false);
     // 门开 ⇒ 同一份路径不再算"被封"（已认领与否都一样）
     installAvailabilityGate(() => true);
-    expect(isLanguageGatedForPath('D:/x/a.kojo')).toBe(false);
-    expect(isLanguageGatedForPath('D:/x/a.kojo', KOJO_LANGUAGE_ID)).toBe(false);
+    expect(isLanguageGatedForPath('D:/x/a.kojo1')).toBe(false);
+    expect(isLanguageGatedForPath('D:/x/a.kojo1', KOJO_LANGUAGE_ID)).toBe(false);
   });
 
   it('isLanguageIdAvailable：注册过的看门，没注册的不管（存量偏好里外部塞的 id 原样放行）', () => {

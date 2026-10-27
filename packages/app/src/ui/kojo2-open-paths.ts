@@ -25,7 +25,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import { getKojo2CutoverController, type Kojo2CutoverStage } from './kojo2-cutover';
 import { isKojo2CutoverEnabled, subscribeKojo2Cutover } from './kojo2-flag';
 import { routeKojo2Open, type Kojo2OpenContext, type Kojo2OpenPlan } from './kojo2-open';
-import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
+import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 
 /**
  * 宿主下传给贡献方的 2.0 面投影（形状即契约 `UiPrefs.kojo2`；契约里那枚接口未从桶导出，
@@ -116,13 +116,14 @@ export function routeKojo2OpenPath(
  * `UiPrefs.kojo2` 的宿主侧取值（ShellLayout 用；`useSyncExternalStore` 与
  * `panel-prefs` 的偏好投影同款，开关一翻壳层即刻重渲染）。
  *
- * 开关关着 ⇒ `undefined`（**不提供**这一格）：贡献方一律按"没有 2.0"编写，
- * 界面与改动前逐字相同。对象身份随开关稳定 —— 面板的 `memo` 靠这条不白重渲。
+ * LAU-3b-FLIP（2026-10-27）：新建 2.0 文件落的扩展名就是**主场 `.kojo`**（旧名 `.kojo2`
+ * 只作存量兼容，不再新产）。开关关着 ⇒ `undefined`（**不提供**这一格）：贡献方一律按
+ * "没有 2.0"编写，界面与改动前逐字相同。对象身份随开关稳定 —— 面板的 `memo` 靠这条不白重渲。
  */
 export function useKojo2Surface(): Kojo2Surface | undefined {
   const enabled = useSyncExternalStore(subscribeKojo2Cutover, isKojo2CutoverEnabled, () => false);
   return useMemo(
-    () => (enabled ? { extension: KOJO2_SOURCE_EXTENSION } : undefined),
+    () => (enabled ? { extension: KOJO_SOURCE_EXTENSION } : undefined),
     [enabled],
   );
 }

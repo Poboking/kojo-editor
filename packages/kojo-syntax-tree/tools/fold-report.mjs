@@ -28,7 +28,8 @@ function collect(dir, out, exclude) {
     const p = join(dir, e.name);
     if (exclude && (p === exclude || p.startsWith(exclude + '\\'))) continue;
     if (e.isDirectory()) collect(p, out, exclude);
-    else if (e.name.endsWith('.kojo')) out.push(p);
+    // kojo1 源：标准形 `.kojo1`；LAU-3b-FLIP 之后 `.kojo` 归 2.0，但盘上还有没改名的旧源
+    else if (e.name.endsWith('.kojo1') || e.name.endsWith('.kojo')) out.push(p);
   }
   return out;
 }

@@ -21,29 +21,37 @@
  * `tests/lang-doc.test.ts` 按行 + 处数钉死这条边界（多一处即红）。
  */
 
-import { ERB_BODY_EXTENSIONS, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { ERB_BODY_EXTENSIONS, KOJO_LEGACY_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import type { ScaffoldFileSet } from '@kojo/plugin-api';
 import type { KojoScaffoldDraft } from './new-project-wizard';
 
-/** 语言档取值（`sugar` = 表层 DSL 超集，可混写原生；`native` = 只有原生语法） */
+/** 语言档取值（`native` = 只有原生语法；`sugar` = kojo1 封存写法，仅维护老工程用） */
 export type KojoLangDoc = 'sugar' | 'native';
 
-/** 取值清单（顺序即向导下拉顺序：默认档在前） */
-export const KOJO_LANG_DOC_VALUES: readonly KojoLangDoc[] = ['sugar', 'native'];
+/**
+ * 取值清单（顺序即向导下拉顺序：默认档在前）。
+ *
+ * **2026-10-27 翻转（LAU-3b-FLIP）**：老扩展名当场让给 2.0，而本向导的糖档起手模板
+ * 仍是 kojo1 写法 ⇒ 它只能落封存层 `.kojo1`。把"打开一个新项目就是封存语言"当缺省
+ * 是说不过去的，所以缺省档改成**原生 ERB**；糖档保留但排在后面、文案写明封存。
+ * 2.0 的起手模板是后续批，落地后缺省再回到 kojo。
+ */
+export const KOJO_LANG_DOC_VALUES: readonly KojoLangDoc[] = ['native', 'sugar'];
 
-/** 缺省档：既有作者升级后感觉不到差别，是这条反馈的硬约束 */
-export const DEFAULT_KOJO_LANG_DOC: KojoLangDoc = 'sugar';
+/** 缺省档 = 原生（理由见 {@link KOJO_LANG_DOC_VALUES}） */
+export const DEFAULT_KOJO_LANG_DOC: KojoLangDoc = 'native';
 
 /**
  * 该档起手文件的扩展名（**唯一取值口**）。
  *
- * - 糖档 = 契约的表层源扩展名；
+ * - 糖档 = **封存层**源扩展名 `.kojo1`：起手模板是 kojo1 写法，塞进 2.0 的主扩展名
+ *   就是一份解析不了的文件；
  * - 原生档 = 引擎预载的**正文**方言扩展名第一项，取大写形态——引擎按大小写不敏感
  *   收文件，而本仓在盘上/产物名上一贯写大写形态（`resolveSugarTarget` 的产物名也是它），
  *   故这里现算 `.toUpperCase()`，不在任何消费方手抄。
  */
 export function kojoLangDocExtension(doc: KojoLangDoc): string {
-  if (doc === 'sugar') return KOJO_SOURCE_EXTENSION;
+  if (doc === 'sugar') return KOJO_LEGACY_SOURCE_EXTENSION;
   const body = ERB_BODY_EXTENSIONS[0];
   if (body === undefined) throw new Error('ERB 正文扩展名清单为空：无法给原生档定扩展名。');
   return body.toUpperCase();
@@ -65,18 +73,18 @@ export interface KojoLangDocChoice {
  */
 export const KOJO_LANG_DOC_CHOICES: readonly KojoLangDocChoice[] = [
   {
-    value: 'sugar',
-    label: `糖写法（${kojoLangDocExtension('sugar')}，默认）`,
-    hint:
-      `起手文件是 ${kojoLangDocExtension('sugar')}：糖写法与原生 ERB 写法能写在同一个文件里，原生语句逐行直通；` +
-      `导出或部署时自动转成游戏认得的 ${kojoLangDocExtension('native')}，工作区里始终只有这一份源。`,
-  },
-  {
     value: 'native',
-    label: `原生写法（${kojoLangDocExtension('native')}）`,
+    label: `原生写法（${kojoLangDocExtension('native')}，默认）`,
     hint:
       `起手文件直接就是游戏认得的 ${kojoLangDocExtension('native')}：只写原生语法，不经转译，导出或部署时原样带走。` +
-      `这一档的骨架不带糖写法示例（那是 ${kojoLangDocExtension('sugar')} 的写法）。`,
+      `封存写法（${kojoLangDocExtension('sugar')}）的例子不在这里出。`,
+  },
+  {
+    value: 'sugar',
+    label: `kojo1 封存写法（${kojoLangDocExtension('sugar')}，仅维护老工程）`,
+    hint:
+      `起手文件是 ${kojoLangDocExtension('sugar')}：kojo1 已封存（只等删除），只能用旧写法；` +
+      `导出或部署时转成游戏认得的 ${kojoLangDocExtension('native')}。新作品建议选原生写法。`,
   },
 ];
 
@@ -93,14 +101,13 @@ export function kojoLangDocChoice(doc: KojoLangDoc | undefined | null): KojoLang
 
 /**
  * 落点预览那句里关于起手骨架的括注（作者看到"这些文件到底是什么"）。
- * 糖档那句与历史文案逐字相同（历史那句写的是"糖扩展名，可写糖也可写原生"），
  * 扩展名由单源插入，本函数自身不抄任何扩展名。
  */
 export function kojoLangDocPreviewParenthesis(doc: KojoLangDoc | undefined | null): string {
   const value = normalizeKojoLangDoc(doc);
   const ext = kojoLangDocExtension(value);
   return value === 'sugar'
-    ? `（${ext}，可写 ${ext} 也可写原生 ERB）`
+    ? `（${ext}，kojo1 封存写法，可写糖也可写原生 ERB）`
     : `（${ext}，只写原生语法、不经转译）`;
 }
 

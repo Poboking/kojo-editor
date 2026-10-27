@@ -46,19 +46,19 @@ function setup(io: Partial<FileIO>, compileKojo: KojoCompiler = throwingCompile)
   return { actions, log, notifyCount: () => notifies };
 }
 
-/** 默认编译器：被调用即说明用例忘了提供 .kojo 的替身，宁可响也不静默 */
+/** 默认编译器：被调用即说明用例忘了提供 .kojo1 的替身，宁可响也不静默 */
 function throwingCompile(_source: string, label: string): SugarCompiledBytes {
   throw new Error(`本用例未提供编译器，却被要求转译：${label}`);
 }
 
-/** 把 .kojo 源变成"加一行的 .ERB"，好断言转译真的发生了 */
+/** 把 .kojo1 源变成"加一行的 .ERB"，好断言转译真的发生了 */
 const fakeCompile: KojoCompiler = (source, label) => ({
   bytes: new TextEncoder().encode(`; from ${label}\n${source}`),
   transpile: { erb: '', sourceMap: [], diagnostics: [] },
 });
 
 /**
- * 导出链路的最小 io 替身：包内一个 `.kojo` + 一个 `.txt`，落点由 `exportFile` 决定。
+ * 导出链路的最小 io 替身：包内一个 `.kojo1` + 一个 `.txt`，落点由 `exportFile` 决定。
  * （导出已从"整目录复制"改成"制品 ZIP"，见 package-actions.ts 头注。）
  */
 function exportSetup(
@@ -67,7 +67,7 @@ function exportSetup(
 ) {
   const enc = new TextEncoder();
   const files: Record<string, Uint8Array> = {
-    [`${SRC}/事件.kojo`]: enc.encode('如果 A：\n'),
+    [`${SRC}/事件.kojo1`]: enc.encode('如果 A：\n'),
     [`${SRC}/说明.txt`]: enc.encode('原样'),
   };
   return setup(
@@ -155,7 +155,7 @@ describe('导出制品 ZIP（P-D + 2026-10-12 导出批）', () => {
     await settle(actions);
     expect(actions.status()?.kind).toBe('ok');
     expect(actions.status()!.text).toContain(`D:/发布/${NAME}.zip`);
-    expect(actions.status()!.text).toContain('1 个 .kojo 转译为 .ERB');
+    expect(actions.status()!.text).toContain('1 个 .kojo1 转译为 .ERB');
     expect(actions.status()!.text).toContain('1 个文件原样打包');
   });
 
@@ -204,7 +204,7 @@ describe('导出制品 ZIP（P-D + 2026-10-12 导出批）', () => {
     const { actions } = setup(
       {
         walkDir: async () => [
-          { name: '坏.kojo', path: `${SRC}/坏.kojo`, isDirectory: false } satisfies DirEntry,
+          { name: '坏.kojo1', path: `${SRC}/坏.kojo1`, isDirectory: false } satisfies DirEntry,
         ],
         readBytes: async () => new TextEncoder().encode('x'),
         exportFile: async () => {
@@ -281,14 +281,14 @@ describe('buildPackageZip（ZIP 组装本身）', () => {
     return out;
   };
 
-  it('包内根 = 源目录名，.kojo 已换成 .ERB，非 .kojo 原样', async () => {
+  it('包内根 = 源目录名，.kojo1 已换成 .ERB，非 .kojo1 原样', async () => {
     const io = {
       walkDir: async () =>
         [
-          { name: '事件.kojo', path: `${SRC}/事件.kojo`, isDirectory: false },
+          { name: '事件.kojo1', path: `${SRC}/事件.kojo1`, isDirectory: false },
           { name: '说明.txt', path: `${SRC}/说明.txt`, isDirectory: false },
         ] as DirEntry[],
-      readBytes: async (p: string) => (p.endsWith('.kojo') ? enc.encode('如果 A：\n') : enc.encode('原样')),
+      readBytes: async (p: string) => (p.endsWith('.kojo1') ? enc.encode('如果 A：\n') : enc.encode('原样')),
     } as unknown as FileIO;
 
     const { fileName, bytes, plan } = await buildPackageZip(io, SRC, fakeCompile);
@@ -406,7 +406,7 @@ describe('导出链路的往返契约（W14）', () => {
   }
 
   it('导出的字节是平台解包器认识的容器（逐条目读回内容与字节全平）', async () => {
-    const io = readOnlyIo({ '事件.kojo': '如果 A：\n', '说明.txt': '原样', '子目录/备注.md': '# 备注' });
+    const io = readOnlyIo({ '事件.kojo1': '如果 A：\n', '说明.txt': '原样', '子目录/备注.md': '# 备注' });
     const { fileName, bytes } = await buildPackageZip(io, SRC, fakeCompile);
     expect(fileName).toBe(`${NAME}.zip`);
     const container = readZipContainer(bytes);
@@ -421,7 +421,7 @@ describe('导出链路的往返契约（W14）', () => {
       expect(entry.flags & ZIP_FLAG_UTF8).toBe(ZIP_FLAG_UTF8);
       back.push(await inflateZipEntry(entry));
     }
-    expect(new TextDecoder().decode(back[0]!)).toContain('; from 事件.kojo');
+    expect(new TextDecoder().decode(back[0]!)).toContain('; from 事件.kojo1');
     expect(new TextDecoder().decode(back[2]!)).toBe('# 备注');
     // 自证与产品链路同一条判据：通过 = null
     expect(
@@ -469,7 +469,7 @@ describe('导出链路的往返契约（W14）', () => {
 
   it('超深的工作区目录 → path-depth 同样拒在弹框之前', async () => {
     const deep = Array.from({ length: 14 }, (_v, i) => `d${i}`).join('/');
-    const io = { ...readOnlyIo({ [`${deep}/事件.kojo`]: '如果 A：\n' }) } as unknown as FileIO;
+    const io = { ...readOnlyIo({ [`${deep}/事件.kojo1`]: '如果 A：\n' }) } as unknown as FileIO;
     await expect(buildPackageZip(io, SRC, fakeCompile)).rejects.toThrow(/^path-depth：/);
   });
 });

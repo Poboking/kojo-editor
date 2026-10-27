@@ -167,16 +167,16 @@ describe('ignoredDerivedNote · 派生产物被跳过时的一行人话（不静
   });
 
   it('单个：数量、文件名与判据都在', () => {
-    const note = ignoredDerivedNote([{ relPath: '主口上.ERB', sourceRel: '主口上.kojo' }]);
+    const note = ignoredDerivedNote([{ relPath: '主口上.ERB', sourceRel: '主口上.kojo1' }]);
     expect(note).toContain('已忽略 1 个');
     expect(note).toContain('主口上.ERB');
-    expect(note).toContain('以 .kojo 当前编译结果为准');
+    expect(note).toContain('以 .kojo1 当前编译结果为准');
   });
 
   it('多个：数量与文件名逐个列出（编码差异记录同样计入）', () => {
     const note = ignoredDerivedNote([
-      { relPath: 'a.ERB', sourceRel: 'a.kojo' },
-      { relPath: 'b.ERB', sourceRel: 'b.kojo', reason: 'encoding' },
+      { relPath: 'a.ERB', sourceRel: 'a.kojo1' },
+      { relPath: 'b.ERB', sourceRel: 'b.kojo1', reason: 'encoding' },
     ]);
     expect(note).toContain('已忽略 2 个');
     expect(note).toContain('a.ERB');

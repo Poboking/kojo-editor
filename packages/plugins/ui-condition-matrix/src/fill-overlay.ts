@@ -273,7 +273,7 @@ export function createConditionMatrixFillOverlay(draft: () => FillDraft | null):
               className: 'cmfill-input',
               type: 'text',
               value: fileName,
-              placeholder: '例如：条件矩阵填空-K1.kojo',
+              placeholder: '例如：条件矩阵填空-K1.kojo1',
               onChange: (e: { target: { value: string } }) => {
                 setFileName(e.target.value);
                 setNameTouched(true);

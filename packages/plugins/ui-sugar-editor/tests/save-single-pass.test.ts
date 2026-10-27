@@ -22,7 +22,7 @@ import { performSugarSave } from '../src/save-handler';
 
 // 用反斜杠形态：`compileToFile` 内部先过 `normalize`（win32 风格归一到 `\`），
 // 内存 io 的键即归一后的路径——此处直接以同款形态命名，断言面干净。
-const PATH = 'C:\\proj\\M_KOJO_K49_指令.kojo';
+const PATH = 'C:\\proj\\M_KOJO_K49_指令.kojo1';
 const TARGET = 'C:\\proj\\M_KOJO_K49_指令.ERB';
 
 const DOC = '角色: 12\n时机 指令 310：\n    「呀。」\n';

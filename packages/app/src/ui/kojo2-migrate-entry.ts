@@ -28,7 +28,7 @@
  * **原地改写**：迁移只改文件内容，不改扩展名、不删源（裁决写在 `kojo2-migrate-model.ts`）。
  * 因此刷新报的路径就是原路径，宿主不需要处理"旧标签失效 / 新标签出现"的改名语义。
  */
-import { KOJO_V1_SOURCE_EXTENSIONS, pathKey } from '@kojo/plugin-api';
+import { KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
 import type { ShellCommandSpec } from './commands';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 import {
@@ -125,17 +125,22 @@ export interface Kojo2MigrateEntry {
 /* ============================== 纯判据 ============================== */
 
 /**
- * 这个路径是不是迁移的候选：只认 v1 源扩展名 `.kojo`（大小写不敏感）。
+ * 这个路径是不是迁移的候选：只认 **`.kojo`**（大小写不敏感）。
+ *
+ * LAU-3b-FLIP（2026-10-27）之后迁移是**原地改写**：`.kojo` 已归 2.0，把里面的 v1 正文
+ * 改写完之后，文件名不用动、它自然就是一份 2.0 文件。所以候选正是 `.kojo`。
  *
  * `.kojo2` 已经是 2.0 写法，不在候选里——把它塞进迁移列表只会让作者看见一堆
- * "已是 2.0" 的空行；`.erb` 那几类是原生方言，迁移引擎不认识，也不该进来。
+ * "已是 2.0" 的空行；`.kojo1` 也不在候选里：原地改写会留下一份**扩展名仍是 v1** 的
+ * 2.0 文件（路由按扩展名走，那会是一份打不开错的文件）。`.erb` 那几类是原生方言，
+ * 迁移引擎不认识，也不该进来。
  */
 export function isMigrateCandidate(path: string): boolean {
   if (typeof path !== 'string' || path.length === 0) return false;
   const dot = path.lastIndexOf('.');
   const sep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   if (dot <= sep) return false;
-  return KOJO_V1_SOURCE_EXTENSIONS.includes(path.slice(dot).toLowerCase());
+  return path.slice(dot).toLowerCase() === KOJO_SOURCE_EXTENSION;
 }
 
 /**

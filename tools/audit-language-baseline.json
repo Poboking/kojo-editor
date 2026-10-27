@@ -18,7 +18,7 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 164,
+      "total": 163,
       "files": {
         "packages/app/src/monaco/document-links.ts": 3,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
@@ -61,9 +61,8 @@
         "packages/app/src/ui/CallHierarchyOverlay.tsx": 3,
         "packages/app/src/ui/capability-matrix-view.tsx": 4,
         "packages/app/src/ui/editor-global-providers.ts": 6,
-        "packages/app/src/ui/editor-pane/pane-helpers.ts": 2,
+        "packages/app/src/ui/editor-pane/pane-helpers.ts": 3,
         "packages/app/src/ui/editor-pane/use-breadcrumb.ts": 2,
-        "packages/app/src/ui/editor-pane/use-editor-preferences.ts": 2,
         "packages/app/src/ui/editor-pane/use-monaco-instance.ts": 4,
         "packages/app/src/ui/EditorPane.tsx": 3,
         "packages/app/src/ui/kojo2-model-language.ts": 2,

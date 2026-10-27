@@ -393,9 +393,10 @@ describe('S4-UI / 降级文案与文件判定', () => {
     }
   });
 
-  it('isKojoFile：大小写不敏感；非 .kojo / 空值 → false', () => {
-    expect(isKojoFile('/p/x.kojo')).toBe(true);
-    expect(isKojoFile('/p/x.KOJO')).toBe(true);
+  it('isKojoFile：大小写不敏感；非 .kojo1 / 空值 → false', () => {
+    expect(isKojoFile('/p/x.kojo1')).toBe(true);
+    expect(isKojoFile('/p/x.KOJO1')).toBe(true);
+    expect(isKojoFile('/p/x.kojo')).toBe(false); // 2.0 的源不归封存层预览
     expect(isKojoFile('/p/x.erb')).toBe(false);
     expect(isKojoFile('')).toBe(false);
     expect(isKojoFile(null)).toBe(false);

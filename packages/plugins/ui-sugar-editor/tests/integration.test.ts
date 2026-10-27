@@ -10,13 +10,13 @@
  * ui-sugar-editor  --(服务槽)-->  kojo-sugar 的 sugar.transpile（纯函数）
  *        |                              |
  *   ui.editor.decorator            （无 IO：只吃宿主给的 {path,text}）
- *   ui.panel（糖判定）──内核 io（只读当前 .kojo）
+ *   ui.panel（糖判定）──内核 io（只读当前 .kojo1）
  * ```
  *
  * 四件事必须同时成立：
  * 1. **插件真的能激活**（`requires` 两项由 kojo-sugar / 内核提供）；
  * 2. **三处贡献都注册**（`ui.editor.decorator` + `ui.editor.saveHandler` + `ui.panel`）；
- * 3. **波浪线是"诊断 → 装饰"的翻译**——`.kojo` 坏源出行级装饰、原生 `.ERB` 返回空；
+ * 3. **波浪线是"诊断 → 装饰"的翻译**——`.kojo1` 坏源出行级装饰、原生 `.ERB` 返回空；
  * 4. **没有自发明的转译逻辑**——装饰与判定都源自 `sugar.transpile`。
  */
 
@@ -47,7 +47,7 @@ const enc = (s: string) => new TextEncoder().encode(s);
 const KOJO_OK = ['角色: 1', '时机 初见：', '    「你好。」', '    她笑了。 续', ''].join('\n');
 /** 坏糖源：`续` 写在引号内 → error 诊断 `cont-inside-quotes`（带行列） */
 const KOJO_BAD = ['角色: 1', '时机 初见：', '    「你好。 续」', ''].join('\n');
-const PATH_KOJO = '/proj/口上/x.kojo';
+const PATH_KOJO = '/proj/口上/x.kojo1';
 const PATH_ERB = '/proj/口上/x.ERB';
 /** 声明文件（FT-2 进面的 `.ERH`）：糖线一律不接管，保存原样写盘 */
 const PATH_ERH = '/proj/口上/x.ERH';
@@ -326,14 +326,14 @@ describe('S6 / 插件接线（跨插件只走服务槽）', () => {
     expect(k.decorators).toHaveLength(1);
     expect(k.decorators[0]!.id).toBe('sugar-diagnostics');
     expect(typeof k.decorators[0]!.decorate).toBe('function');
-    // 装饰热路径批（PERF-4）：声明 offloadKind ⇒ 宿主把整份 `.kojo` 转译请出同步装饰轮。
+    // 装饰热路径批（PERF-4）：声明 offloadKind ⇒ 宿主把整份 `.kojo1` 转译请出同步装饰轮。
     // 这条 kind **不在** worker 任务表里（转译器要吃项目内注入的适配器表），宿主走异步就地；
     // 声明它的收益是"同版本重触发零重算"的缓存在这条线上同样生效。
     expect(k.decorators[0]!.offloadKind).toBe('sugar.diagnostics');
     expect(k.saveHandlers).toHaveLength(1);
     expect(k.saveHandlers[0]!.id).toBe('sugar-save');
     expect(typeof k.saveHandlers[0]!.save).toBe('function');
-    // `.kojo` 命中、原生 `.ERB` 不命中（接管只在糖源上生效）
+    // `.kojo1` 命中、原生 `.ERB` 不命中（接管只在糖源上生效）
     expect(k.saveHandlers[0]!.matches(PATH_KOJO)).toBe(true);
     expect(k.saveHandlers[0]!.matches(PATH_ERB)).toBe(false);
     // `.ERH` 同样不接管：FT-2 让声明文件进面（能拖开 / 进索引 / 有高亮），
@@ -364,7 +364,7 @@ describe('S6 / 插件接线（跨插件只走服务槽）', () => {
 
 /* ============================== 二、波浪线（诊断 → 装饰） ============================== */
 
-describe('S6 / 波浪线：`.kojo` 诊断翻成行级装饰', () => {
+describe('S6 / 波浪线：`.kojo1` 诊断翻成行级装饰', () => {
   const boot = (files: Record<string, Uint8Array>) => {
     const k = makeKernel(files);
     const sugar = bootSugar(k);

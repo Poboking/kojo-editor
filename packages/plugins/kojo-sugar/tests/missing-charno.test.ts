@@ -4,7 +4,7 @@
  * 旧行为：`charNo = ''` 一路进 codegen → 拼出 `@M_KOJO_ENCOUNTER_K` / `…_K_1`
  * 这种残缺函数名，登记函数整段静默跳过，诊断为空、`planSave.blocked === false`，
  * `compileToFile` 会把残缺产物覆盖到既有 `.ERB`。同理，纯文件头（无正文）的
- * `.kojo` 会写出一份只有 3 字节 BOM 的 `.ERB`。
+ * `.kojo1` 会写出一份只有 3 字节 BOM 的 `.ERB`。
  *
  * 本批判据：`missing-charno`（error）在 codegen 前发出；空产物在源非空时报
  * `block-empty`（error）——**产物只有注释也算空产物**（`;` 注释按"注释不能丢"
@@ -55,7 +55,7 @@ describe('HIGH · 缺/空 `角色:` → missing-charno（error，拦写盘）', 
   });
 
   it('planSave 阻断（transpile-error），不假装可保存', () => {
-    const plan = svc().planSave({ source: missing, sourcePath: '/proj/a.kojo' });
+    const plan = svc().planSave({ source: missing, sourcePath: '/proj/a.kojo1' });
     expect(plan.blocked).toBe(true);
     expect(plan.blockedReason).toBe('transpile-error');
   });
@@ -90,7 +90,7 @@ describe('HIGH · 纯文件头（零产物）→ block-empty（error，拒绝写
   });
 
   it('planSave 阻断；compileToBytes 拒绝', () => {
-    expect(svc().planSave({ source: frontMatterOnly, sourcePath: '/proj/a.kojo' }).blocked).toBe(true);
+    expect(svc().planSave({ source: frontMatterOnly, sourcePath: '/proj/a.kojo1' }).blocked).toBe(true);
     expect(() => svc().compileToBytes(frontMatterOnly)).toThrow(SugarCompileError);
   });
 
@@ -103,7 +103,7 @@ describe('HIGH · 纯文件头（零产物）→ block-empty（error，拒绝写
 describe('HIGH · 注释-only 源穿透空产物守门 → block-empty（error，拒绝写只有注释的 .ERB）', () => {
   // 取证（2026-10-21）：`;` 注释按"注释不能丢"逐字进产物 ⇒ `erb.trim()` 非空，
   // 旧守门（`erb.trim().length === 0`）把"只有注释的产物"判成非空 ⇒ 注释-only 的
-  // `.kojo` 零诊断穿过，`compileToFile` 会把只有注释的 `.ERB` 覆盖到目标位置——
+  // `.kojo1` 零诊断穿过，`compileToFile` 会把只有注释的 `.ERB` 覆盖到目标位置——
   // 与空产物同害（零函数、零正文，覆盖既有产物）。修法：判空改成按行剥空白行与
   // ERB 注释行后看有没有剩余内容（`service.ts` 的 `erbHasContent`），产物不动。
   const commentOnly: Array<[string, string]> = [
@@ -126,7 +126,7 @@ describe('HIGH · 注释-only 源穿透空产物守门 → block-empty（error�
   });
 
   it('planSave 阻断；compileToBytes 拒绝', () => {
-    expect(svc().planSave({ source: '; 只有注释\n', sourcePath: '/proj/a.kojo' }).blocked).toBe(true);
+    expect(svc().planSave({ source: '; 只有注释\n', sourcePath: '/proj/a.kojo1' }).blocked).toBe(true);
     expect(() => svc().compileToBytes('; 只有注释\n')).toThrow(SugarCompileError);
   });
 

@@ -22,7 +22,7 @@ import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
 import { createSugarTranspileService, formatText } from '@kojo/plugin-kojo-sugar';
 import { performSugarSave, type SugarSaveDeps } from '../src/save-handler';
 
-const PATH_KOJO = '/proj/x.kojo';
+const PATH_KOJO = '/proj/x.kojo1';
 
 /** 全角空格只出现在**行首缩进**（整理能消掉的那一类） */
 const DOC_INDENT_FW = ['角色: 12', '时机 指令 310：', `${FULLWIDTH_SPACE}${FULLWIDTH_SPACE}「呀。」`].join('\n') + '\n';

@@ -1,21 +1,18 @@
 /**
- * K2-CUTOVER-ROUTE 的判据闸：**诊断/问题归属按路由，不按扩展名**。
+ * K2-CUTOVER-ROUTE 的判据闸：**诊断/问题归属按路由**（LAU-3b-FLIP 之后路由只认扩展名）。
  *
  * 钉六件事：
  * 1. **单入口**：`path+source → route` 只有 `kojo2RouteFor` / `kojo2RouteForText` /
  *    `kojo2RouteForPath` 三格（分别对应 model / 正文 / 只有路径），结论与
  *    `decideKojo2Route` 逐字一致；
- * 2. **`.kojo2` 各阶段**：`v1-only` 恒不归（blocked）、`dual` / `2.0-default` 恒归；
- * 3. **`2.0-default` 的 `.kojo`**：内容 2.0 归 2.0、v1 / 空 / 歧义不归（歧义只给唯一兜底
- *    v1）；override 仍当家；`dual` 下内容再 2.0 也不归（阶段说了算）；
- * 4. **只有路径的那一腿**（`EditorPane.refreshMarkers`）：带正文的结论进有界备忘 ⇒
- *    同一个文件路径也判归 2.0；没有结论 / `needs-content` ⇒ 不接管（失败方向 = 不抢
- *    v1 的活）；阶段 / override 一变立即失效；
- * 5. **诊断接线**：活动 model 判定改用路由——`2.0-default` 下内容已是 2.0 的 `.kojo`
- *    接管（跑诊断、上 markers）、v1 内容让路；读不到正文 ⇒ 不接管且**不静默**（info 通知
- *    一次）；内容从 v1 改成 2.0 后击键即接管；
- * 6. **flag 关 / `v1-only` 逐字不变**：一个监听都不挂、一次诊断都不跑、一次存储之外的
- *    东西都不碰，归属恒 `false`。
+ * 2. **扩展名即归属**：`.kojo` / `.kojo2` 在任何阶段都归 2.0（正文、空文件、歧义都不看）；
+ *    `.kojo1` 恒归 kojo1；
+ * 3. **override 当家**：显式破例压过扩展名；`v1-only` 下只拦"把非 kojo 文件钉成 2.0"；
+ * 4. **只有路径那一腿**（`EditorPane.refreshMarkers`）：不再需要正文结论，路径形与带
+ *    正文形同源同值；override 一变立即失效；
+ * 5. **诊断接线**：`.kojo` / `.kojo2` 一打开就诊断（语言面），`.kojo1` 让路；正文取不到
+ *    ⇒ 这一拍跳过且**不静默**（info 通知一次）；
+ * 6. **阶段与开关不改变归属**：`v1-only` / `dual` / `2.0-default` 三档结论一致。
  *
  * 环境是 node：开关用假 `window.localStorage`（计划文档 + 旧布尔键），诊断入口注入假体。
  */
@@ -47,15 +44,14 @@ import type { EditorProblem } from '../src/ui/problem-store';
 
 /* ============================== 夹具 ============================== */
 
-/** 已是 2.0 写法（全过 2.0 词法 + 有锚点 ⇒ 内容指纹判 kojo2） */
+/** 已是 2.0 写法（正文内容已不参与路由，留着只为证明"看也不看"） */
 const KOJO2_SAMPLE = '# 机 指令 310\n灵梦：「你好。」\n';
-/** 真实 v1 片段（3 行反例 ⇒ 指纹判 v1） */
+/** 真实 v1 片段（放在 `.kojo` 里也照样按 2.0 开） */
 const V1_SAMPLE = '角色: 灵梦\n时机 指令 310：\n「你好。」\n';
-/** 纯台词：两套解析器都说得通 ⇒ ambiguous（唯一兜底 v1） */
-const AMBIGUOUS_SAMPLE = '灵梦：「你好。」\n';
 
 const KOJO_PATH = 'C:/proj/chara/M_KOJO_K12_指令.kojo';
 const KOJO2_PATH = 'C:/proj/chara/M_KOJO_K12_指令.kojo2';
+const KOJO1_PATH = 'C:/proj/chara/M_KOJO_K12_指令.kojo1';
 
 class MemoryStorage implements Kojo2CutoverStorage {
   readonly values = new Map<string, string>();
@@ -82,10 +78,6 @@ function stubWindow(storage: MemoryStorage = new MemoryStorage()): MemoryStorage
 /**
  * 开机：盘上计划 + 控制器 `attachStorage`（真宿主的同一拍）。
  * 不挂存储时 `resolveKojo2CutoverStage()` 与控制器阶段就会分叉——本文件不制造那种分叉。
- *
- * **写 v2 计划**（LAU-3）：v1 计划的 `v1-only` 在**读侧**被抬到缺省档（存量迁移），
- * 这里要的是"作者显式选了某一档"，所以别用 v1 的写法（迁移那条判据由
- * `kojo2-cutover-stage.test.ts` 单独钉）。
  */
 function boot(
   stage: Kojo2CutoverStage,
@@ -119,30 +111,30 @@ afterEach(() => {
 /* ============================== ① 单入口 ============================== */
 
 describe('① 单入口：path+source → route 只有一处', () => {
-  it('全新装机（没有计划、没有旧键）⇒ 缺省档 2.0-default：`.kojo2` 恒归、`.kojo` 只有正文能说话', () => {
+  it('全新装机（没有计划、没有旧键）⇒ 缺省档 2.0-default：`.kojo` / `.kojo2` 恒归、`.kojo1` 不归', () => {
     stubWindow();
-    getKojo2CutoverController(); // 惰性单例 = 缺省档 `2.0-default`（LAU-3 翻面）
+    getKojo2CutoverController(); // 惰性单例 = 缺省档 `2.0-default`
     expect(kojo2DiagnosticsEnabled()).toBe(true);
-    const kojo2 = kojo2RouteForPath(KOJO2_PATH);
-    expect(kojo2).toMatchObject({ kind: 'resolved', parser: 'kojo2', reason: 'extension-kojo2' });
-    // 缺省档下 `.kojo` 只带路径 ⇒ 不敢替正文说话（`needs-content`），不按扩展名归 v1
-    expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({
-      kind: 'needs-content',
-      reason: 'content-required',
-    });
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(false);
-    // 那条旧口径只在作者**显式**选回 v1-only 时成立（阶段是唯一真源）
-    boot('v1-only');
-    expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({
+
+    for (const path of [KOJO_PATH, KOJO2_PATH]) {
+      expect(kojo2RouteForPath(path), path).toMatchObject({
+        kind: 'resolved',
+        parser: 'kojo2',
+        reason: 'extension-kojo2',
+      });
+      expect(kojo2OwnsDiagnostics(path), path).toBe(true);
+    }
+    // 正文是 v1 也不看：`.kojo` 已让给 2.0。
+    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(true);
+    expect(kojo2RouteForPath(KOJO1_PATH)).toMatchObject({
       kind: 'resolved',
       parser: 'kojo-v1',
-      reason: 'stage-v1-only',
+      reason: 'extension-kojo1',
     });
+    expect(kojo2OwnsDiagnostics(KOJO1_PATH)).toBe(false);
   });
 
-  it('`kojo2RouteFor(model)`：URI 路径优先 + 正文取自 model（`.kojo` 内容 2.0 归 2.0）', () => {
+  it('`kojo2RouteFor(model)`：URI 路径优先 + 结论与正文无关', () => {
     boot('2.0-default');
     const model = {
       uri: { fsPath: KOJO_PATH },
@@ -152,11 +144,11 @@ describe('① 单入口：path+source → route 只有一处', () => {
     expect(route).toMatchObject({
       kind: 'resolved',
       parser: 'kojo2',
-      reason: 'content-kojo2',
+      reason: 'extension-kojo2',
       filePath: KOJO_PATH,
+      fingerprint: null,
     });
     expect(kojo2OwnsRoute(route)).toBe(true);
-    expect(route.kind === 'resolved' ? route.fingerprint?.flavor : null).toBe('kojo2');
   });
 
   it('`kojo2RouteFor(model)`：没有 URI 时回落 `options.filePath`（切标签那一拍的口径）', () => {
@@ -167,11 +159,11 @@ describe('① 单入口：path+source → route 只有一处', () => {
     );
     expect(route).toMatchObject({
       kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'content-v1',
+      parser: 'kojo2',
+      reason: 'extension-kojo2',
       filePath: KOJO_PATH,
     });
-    expect(kojo2OwnsRoute(route)).toBe(false);
+    expect(kojo2OwnsRoute(route)).toBe(true);
   });
 
   it('`kojo2RouteFor` 与 `kojo2RouteForText` 同源：同一路径 / 正文给同一份结论', () => {
@@ -187,59 +179,58 @@ describe('① 单入口：path+source → route 只有一处', () => {
     );
   });
 
-  it('`kojo2RouteForText(path, undefined)` = 只有路径：`2.0-default` 的 `.kojo` 是 needs-content', () => {
+  it('`kojo2RouteForText(path, undefined)` = 只有路径：`.kojo` 也是 resolved（不再要正文）', () => {
     boot('2.0-default');
     const route = kojo2RouteForText(KOJO_PATH, undefined);
-    expect(route).toMatchObject({ kind: 'needs-content', reason: 'content-required' });
-    expect(kojo2OwnsRoute(route)).toBe(false);
+    expect(route).toMatchObject({ kind: 'resolved', parser: 'kojo2', reason: 'extension-kojo2' });
+    expect(kojo2OwnsRoute(route)).toBe(true);
   });
 });
 
-/* ============================== ② `.kojo2` 各阶段 ============================== */
+/* ============================== ② 各阶段 / 各扩展名 ============================== */
 
-describe('② `.kojo2` 各阶段：恒归（语言面无条件），阶段只管 `.kojo`', () => {
-  it('v1-only：`.kojo2` 照归（语言面无条件）', () => {
-    boot('v1-only');
+describe('② 扩展名即归属：三档阶段下结论一致', () => {
+  it.each(['v1-only', 'dual', '2.0-default'] as const)('阶段 %s：`.kojo` / `.kojo2` 照归，`.kojo1` 不归', (stage) => {
+    boot(stage);
     expect(kojo2DiagnosticsEnabled()).toBe(true);
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO2_PATH, source: KOJO2_SAMPLE })).toBe(true);
+    for (const path of [KOJO_PATH, KOJO2_PATH]) {
+      expect(kojo2OwnsDiagnostics(path), `${stage} ${path}`).toBe(true);
+      expect(kojo2OwnsDiagnostics({ path, source: V1_SAMPLE }), `${stage} ${path}`).toBe(true);
+      expect(isKojo2RouteablePath(path), `${stage} ${path}`).toBe(true);
+    }
+    expect(kojo2OwnsDiagnostics(KOJO1_PATH)).toBe(false);
+    expect(kojo2OwnsDiagnostics({ path: KOJO1_PATH, source: KOJO2_SAMPLE })).toBe(false);
+    // 预筛放行 `.kojo1`（它需要读 override 才能断言"不归"），但归属恒 false。
+    expect(isKojo2RouteablePath(KOJO1_PATH)).toBe(true);
   });
 
-  it('dual：`.kojo2` 恒归（扩展名先说话，正文不参与）', () => {
-    boot('dual');
-    expect(kojo2DiagnosticsEnabled()).toBe(true);
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO2_PATH, source: V1_SAMPLE })).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO2_PATH, source: AMBIGUOUS_SAMPLE })).toBe(true);
-  });
-
-  it('2.0-default：`.kojo2` 恒归（大小写不敏感）', () => {
+  it('`.kojo2` 大写形态同样归 2.0', () => {
     boot('2.0-default');
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_PATH.toUpperCase())).toBe(true);
   });
 
-  it('`.kojo2` 被 override 钉回 v1 ⇒ 不归（显式破例最高优先级）', () => {
-    boot('2.0-default', { [KOJO2_PATH]: 'kojo-v1' });
-    expect(kojo2RouteForPath(KOJO2_PATH)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'override',
-    });
-    expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(false);
-    expect(kojo2OwnsDiagnostics({ path: KOJO2_PATH, source: KOJO2_SAMPLE })).toBe(false);
+  it('`.kojo` / `.kojo2` 被 override 钉回 v1 ⇒ 不归（显式破例最高优先级）', () => {
+    boot('2.0-default', { [KOJO2_PATH]: 'kojo-v1', [KOJO_PATH]: 'kojo-v1' });
+    for (const path of [KOJO_PATH, KOJO2_PATH]) {
+      expect(kojo2RouteForPath(path), path).toMatchObject({
+        kind: 'resolved',
+        parser: 'kojo-v1',
+        reason: 'override',
+      });
+      expect(kojo2OwnsDiagnostics(path), path).toBe(false);
+    }
   });
 
-  it('`.kojo` 被 override 钉成 2.0（dual）⇒ 归 2.0；v1-only 下钉不住（blocked）', () => {
-    boot('dual', { [KOJO_PATH]: 'kojo2' });
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
+  it('`.kojo1` 被 override 钉成 2.0（dual）⇒ 归 2.0；v1-only 下钉不住（blocked）', () => {
+    boot('dual', { [KOJO1_PATH]: 'kojo2' });
+    expect(kojo2OwnsDiagnostics(KOJO1_PATH)).toBe(true);
 
-    boot('v1-only', { [KOJO_PATH]: 'kojo2' });
-    expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({
+    boot('v1-only', { [KOJO1_PATH]: 'kojo2' });
+    expect(kojo2RouteForPath(KOJO1_PATH)).toMatchObject({
       kind: 'blocked',
       reason: 'stage-disables-kojo2',
     });
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
+    expect(kojo2OwnsDiagnostics(KOJO1_PATH)).toBe(false);
   });
 
   it('非 kojo 文件（`.erb` / `.txt` / `.kojo.bak`）在所有阶段都不归', () => {
@@ -252,8 +243,6 @@ describe('② `.kojo2` 各阶段：恒归（语言面无条件），阶段只管
         );
         expect(isKojo2RouteablePath(path), path).toBe(false);
       }
-      expect(isKojo2RouteablePath(KOJO_PATH), stage).toBe(true);
-      expect(isKojo2RouteablePath(KOJO2_PATH), stage).toBe(true);
     }
   });
 
@@ -275,154 +264,83 @@ describe('② `.kojo2` 各阶段：恒归（语言面无条件），阶段只管
   });
 });
 
-/* ============================== ③ 2.0-default 的 `.kojo` 内容判据 ============================== */
+/* ============================== ③ 正文不参与 ============================== */
 
-describe('③ 2.0-default 的 `.kojo`：只有内容能说话', () => {
-  it('内容已是 2.0 ⇒ 归 2.0（这正是旧扩展名判据漏掉的那一格）', () => {
+describe('③ 正文不参与路由：`.kojo` 里写什么都归 2.0', () => {
+  it('2.0 正文 / v1 正文 / 空文件 / 纯台词 ⇒ 同一份结论（fingerprint 恒 null）', () => {
     boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    expect(kojo2RouteForText(KOJO_PATH, KOJO2_SAMPLE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo2',
-      reason: 'content-kojo2',
-    });
-  });
-
-  it('内容仍是 v1 ⇒ 不归（v1 诊断照常跑）', () => {
-    boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(false);
-    expect(kojo2RouteForText(KOJO_PATH, V1_SAMPLE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'content-v1',
-    });
-  });
-
-  it('空文件 ⇒ 两套等价，按 v1 开（content-empty，不归 2.0）', () => {
-    boot('2.0-default');
-    expect(kojo2RouteForText(KOJO_PATH, '   \n\t\n')).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'content-empty',
-    });
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: '' })).toBe(false);
-  });
-
-  it('歧义（纯台词 / 混排）⇒ 不接管，只给唯一兜底 v1', () => {
-    boot('2.0-default');
-    const pure = kojo2RouteForText(KOJO_PATH, AMBIGUOUS_SAMPLE);
-    expect(pure).toMatchObject({ kind: 'ambiguous', fallback: 'kojo-v1' });
-    expect(kojo2OwnsRoute(pure)).toBe(false);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: AMBIGUOUS_SAMPLE })).toBe(false);
-
-    const mixed = kojo2RouteForText(
-      KOJO_PATH,
-      '# 机 指令 310\n灵梦：「你好。」\n? 恋慕 >= 500\n角色: 灵梦\n    如果 恋慕：\n',
-    );
-    expect(mixed.kind).toBe('ambiguous');
-    expect(kojo2OwnsRoute(mixed)).toBe(false);
-  });
-
-  it('override 压过内容：2.0 正文 + v1 破例 ⇒ 不归；v1 正文 + 2.0 破例 ⇒ 归', () => {
-    boot('2.0-default');
-    const controller = getKojo2CutoverController();
-
-    controller.setOverride(KOJO_PATH, 'kojo-v1');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
-    controller.clearOverride(KOJO_PATH);
-
-    controller.setOverride(KOJO_PATH, 'kojo2');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(true);
+    for (const source of [KOJO2_SAMPLE, V1_SAMPLE, '', '   \n\t\n', '灵梦：「你好。」\n']) {
+      const route = kojo2RouteForText(KOJO_PATH, source);
+      expect(route).toMatchObject({
+        kind: 'resolved',
+        parser: 'kojo2',
+        reason: 'extension-kojo2',
+        fingerprint: null,
+      });
+      expect(kojo2OwnsRoute(route)).toBe(true);
+    }
   });
 
   it('一次性 override 只作用于这一问（不写进"只有路径"的备忘）', () => {
     boot('2.0-default');
     const oneShot = kojo2RouteForText(KOJO_PATH, KOJO2_SAMPLE, { override: 'kojo-v1' });
     expect(oneShot).toMatchObject({ kind: 'resolved', parser: 'kojo-v1', reason: 'override' });
-    // 备忘没被这次一次性破例污染：同一路径按正文仍判 2.0
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
+    // 备忘没被这次一次性破例污染：同一路径仍归 2.0
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
   });
 
-  it('dual 下内容再像 2.0 也不归（阶段定老文件，内容只在 2.0-default 里断）', () => {
-    boot('dual');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
-    expect(kojo2RouteForText(KOJO_PATH, KOJO2_SAMPLE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'stage-dual',
-    });
+  it('改档不改变 `.kojo` 的归属（阶段只管写回 / 迁移 / 封存层可见性）', () => {
+    const storage = boot('2.0-default');
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
+    commitPlan(storage, 'dual');
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
+    commitPlan(storage, 'v1-only');
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
   });
 });
 
 /* ============================== ④ 只有路径那一腿 ============================== */
 
-describe('④ 只有路径（EditorPane）：带正文的结论进备忘，needs-content 不接管', () => {
-  it('没有正文结论 ⇒ `2.0-default` 的 `.kojo` 是 needs-content，归属 false（不抢 v1 的活）', () => {
+describe('④ 只有路径（EditorPane）：与带正文同源同值，不再需要备忘', () => {
+  it('没有正文结论也判归 2.0（路径形直接按扩展名路由）', () => {
     boot('2.0-default');
-    expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({ kind: 'needs-content' });
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
-  });
-
-  it('带正文判过 2.0 ⇒ 只有路径也归 2.0（v1 装饰轮让路与诊断同源）', () => {
-    boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    // EditorPane.refreshMarkers 的真实调用形态：只有一个 path
+    clearKojo2RouteMemo();
+    expect(kojo2RouteForPath(KOJO_PATH)).toMatchObject({ kind: 'resolved', parser: 'kojo2' });
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
-    // 路径写法差异（反斜杠 / 大小写）也必须命中同一份备忘
+    // 路径写法差异（反斜杠 / 大小写）同一结论
     expect(kojo2OwnsDiagnostics('C:\\proj\\chara\\M_KOJO_K12_指令.KOJO')).toBe(true);
   });
 
-  it('带正文判过 v1 ⇒ 只有路径也 false（v1 装饰轮照常发布）', () => {
+  it('`.kojo1` 只有路径也不归（v1 装饰轮照常发布）', () => {
     boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(false);
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
+    expect(kojo2OwnsDiagnostics(KOJO1_PATH)).toBe(false);
+    expect(kojo2OwnsDiagnostics('C:\\proj\\chara\\M_KOJO_K12_指令.KOJO1')).toBe(false);
   });
 
-  it('内容翻转：2.0 → v1 ⇒ 备忘跟着翻，只有路径也回到不归', () => {
+  it('改 override 即失效：钉回 v1 之后路径形跟着不归', () => {
     boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: V1_SAMPLE })).toBe(false);
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
-  });
-
-  it('改档即失效：2.0-default 的结论不许在 dual 里续命', () => {
-    const storage = boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
-
-    commitPlan(storage, 'dual');
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
-  });
-
-  it('改 override 即失效：2.0 的结论不许在"钉回 v1"之后续命', () => {
-    boot('2.0-default');
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
-    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
-
     getKojo2CutoverController().setOverride(KOJO_PATH, 'kojo-v1');
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(false);
   });
 
-  it('控制器重置回缺省档 ⇒ `.kojo` 的 2.0 归属跟着回来（`.kojo2` 不受影响）', () => {
+  it('控制器重置回缺省档 ⇒ 归属不变（扩展名说了算）', () => {
     boot('v1-only');
     expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
-    // 摘掉存储 + 重置控制器 = 阶段回到缺省档 `2.0-default`（LAU-3 翻面）
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
     vi.unstubAllGlobals();
     resetKojo2CutoverController();
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(true);
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
   });
 
-  it('旧布尔键 `on` ⇒ dual（迁移规则不变）：`.kojo` 仍按 v1，只有 `.kojo2` 归 2.0', () => {
+  it('旧布尔键 `on` ⇒ dual（迁移规则不变）：`.kojo` 也归 2.0', () => {
     const storage = stubWindow();
     storage.values.set(KOJO2_LEGACY_FLAG_KEY, 'on');
     getKojo2CutoverController();
     expect(kojo2DiagnosticsEnabled()).toBe(true);
-    expect(kojo2OwnsDiagnostics({ path: KOJO_PATH, source: KOJO2_SAMPLE })).toBe(false);
+    expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_PATH)).toBe(true);
   });
 });
@@ -616,78 +534,61 @@ function wire(
   return { dispose, markerCalls, written, erased, diagnose };
 }
 
-describe('⑤ 诊断接线：活动 model 判定按路由', () => {
-  it('2.0-default + `.kojo` 内容 2.0 ⇒ 接管（装上即诊断、markers 上屏）', async () => {
+describe('⑤ 诊断接线：扩展名即归属', () => {
+  it('`.kojo` 内容 v1 ⇒ 照样接管（正文不看），装上即诊断、markers 上屏', async () => {
     boot('2.0-default');
-    const model = fakeModel(KOJO_PATH, KOJO2_SAMPLE);
+    const model = fakeModel(KOJO_PATH, V1_SAMPLE);
     const fake = fakeEditor(model.model);
     const wiring = wire(fake, { path: model.path });
     await flushMicrotasks();
     expect(wiring.diagnose).toHaveBeenCalledTimes(1);
     expect(wiring.diagnose.mock.calls[0]![0]).toEqual({
-      source: KOJO2_SAMPLE,
+      source: V1_SAMPLE,
       filePath: KOJO_PATH,
     });
     expect(wiring.markerCalls).toHaveLength(1);
     expect(wiring.markerCalls[0]!.markers).toHaveLength(1);
-    // 让路判据与诊断同源：EditorPane 的 path-only 调用现在也判归 2.0
+    // 让路判据与诊断同源：EditorPane 的 path-only 调用也判归 2.0
     expect(kojo2OwnsDiagnostics(KOJO_PATH)).toBe(true);
     wiring.dispose();
   });
 
-  it('2.0-default + `.kojo` 内容 v1 ⇒ 不接管（一次诊断都不跑，v1 装饰轮照常）', async () => {
+  it('内容从 v1 改成 2.0 ⇒ 下一次停手再诊断一次（归属不变）', async () => {
     boot('2.0-default');
     const model = fakeModel(KOJO_PATH, V1_SAMPLE);
     const fake = fakeEditor(model.model);
     const scheduler = manualScheduler();
     const wiring = wire(fake, { path: model.path, scheduler });
     await flushMicrotasks();
-    expect(wiring.diagnose).not.toHaveBeenCalled();
-    expect(wiring.markerCalls).toEqual([]);
-    expect(wiring.written).toEqual([]);
-    expect(scheduler.pending()).toBe(0);
-    // 击键仍然不排 2.0 诊断（v1 内容在 2.0-default 下归 v1）
-    fake.fireContent();
-    expect(wiring.diagnose).not.toHaveBeenCalled();
-    wiring.dispose();
-  });
-
-  it('内容从 v1 改成 2.0 ⇒ 下一次停手就接管（不要求重开标签）', async () => {
-    boot('2.0-default');
-    const model = fakeModel(KOJO_PATH, V1_SAMPLE);
-    const fake = fakeEditor(model.model);
-    const scheduler = manualScheduler();
-    const wiring = wire(fake, { path: model.path, scheduler });
-    await flushMicrotasks();
-    expect(wiring.diagnose).not.toHaveBeenCalled();
+    expect(wiring.diagnose).toHaveBeenCalledTimes(1);
 
     model.setText(KOJO2_SAMPLE, 2);
     fake.fireContent();
-    expect(scheduler.pending()).toBe(1); // needs-content 先排上，正文留到定时器响时读
+    expect(scheduler.pending()).toBe(1);
     scheduler.runAll();
     await flushMicrotasks();
-    expect(wiring.diagnose).toHaveBeenCalledTimes(1);
+    expect(wiring.diagnose).toHaveBeenCalledTimes(2);
     expect(wiring.markerCalls.at(-1)!.markers).toHaveLength(1);
     wiring.dispose();
   });
 
-  it('切回不归 2.0 的文件 ⇒ 撤旧 markers / 面板条目（切到 `.erb`）', async () => {
+  it('切到不归 2.0 的文件 ⇒ 撤旧 markers / 面板条目（切到 `.kojo1`）', async () => {
     boot('2.0-default');
     const kojo = fakeModel(KOJO_PATH, KOJO2_SAMPLE);
-    const erb = fakeModel('C:/p/a.erb', '; x\n');
+    const legacy = fakeModel(KOJO1_PATH, V1_SAMPLE);
     const fake = fakeEditor(kojo.model);
     const wiring = wire(fake, { path: kojo.path });
     await flushMicrotasks();
     expect(wiring.diagnose).toHaveBeenCalledTimes(1);
 
-    fake.setModel(erb.model);
+    fake.setModel(legacy.model);
     await flushMicrotasks();
     expect(wiring.markerCalls.at(-1)!.markers).toEqual([]);
     expect(wiring.erased).toContain(KOJO_PATH);
     wiring.dispose();
   });
 
-  it('needs-content（正文取不到）⇒ 不接管、不静默：不跑诊断，info 通知恰一次', async () => {
+  it('正文取不到 ⇒ 这一拍跳过、不静默：不跑诊断，info 通知恰一次（归属仍是 2.0）', async () => {
     boot('2.0-default');
     const model = unreadableModel(KOJO_PATH);
     const fake = fakeEditor(model);
@@ -700,7 +601,7 @@ describe('⑤ 诊断接线：活动 model 判定按路由', () => {
     expect(wiring.written).toEqual([]);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]![0].kind).toBe('info');
-    expect(notify.mock.calls[0]![0].message).toContain('2.0 默认');
+    expect(notify.mock.calls[0]![0].message).toContain('取不到正文');
     expect(notify.mock.calls[0]![0].detail).toBe(KOJO_PATH);
 
     // 同一份文件的后续击键不再刷屏
@@ -712,43 +613,41 @@ describe('⑤ 诊断接线：活动 model 判定按路由', () => {
     wiring.dispose();
   });
 
-  it('dual 下 `.kojo` 仍不接管、`.kojo2` 接管（阶段是唯一判据，内容不参与）', async () => {
+  it('dual 下 `.kojo` 与 `.kojo2` 都接管（阶段不改变归属）', async () => {
     boot('dual');
     const kojo = fakeModel(KOJO_PATH, KOJO2_SAMPLE);
     const fake = fakeEditor(kojo.model);
     const wiring = wire(fake, { path: kojo.path });
     await flushMicrotasks();
-    expect(wiring.diagnose).not.toHaveBeenCalled();
+    expect(wiring.diagnose).toHaveBeenCalledTimes(1);
 
     const kojo2 = fakeModel(KOJO2_PATH, KOJO2_SAMPLE);
     fake.setModel(kojo2.model);
     await flushMicrotasks();
-    expect(wiring.diagnose).toHaveBeenCalledTimes(1);
+    expect(wiring.diagnose).toHaveBeenCalledTimes(2);
     wiring.dispose();
   });
 
-  it('flag 关（显式 v1-only）⇒ 接线照挂，但 `.kojo` 零诊断（v1 行为逐字不变）', async () => {
+  it('v1-only 下 `.kojo` 也照常诊断（语言面无条件；阶段只拦显式破例）', async () => {
     boot('v1-only');
     const model = fakeModel(KOJO_PATH, KOJO2_SAMPLE);
     const fake = fakeEditor(model.model);
     const wiring = wire(fake, { path: model.path });
     expect(fake.contentListeners()).toBe(1);
     expect(fake.modelListeners()).toBe(1);
-    fake.fireContent();
     await flushMicrotasks();
-    expect(wiring.diagnose).not.toHaveBeenCalled();
-    expect(wiring.markerCalls).toEqual([]);
+    expect(wiring.diagnose).toHaveBeenCalledTimes(1);
     wiring.dispose();
   });
 
-  it('v1-only ⇒ `.kojo2` 照常诊断（语言面无条件）', async () => {
-    boot('v1-only');
-    const model = fakeModel(KOJO2_PATH, KOJO2_SAMPLE);
+  it('`.kojo1` 任何阶段都不诊断（封存层 = v1 的活）', async () => {
+    boot('2.0-default');
+    const model = fakeModel(KOJO1_PATH, V1_SAMPLE);
     const fake = fakeEditor(model.model);
     const wiring = wire(fake, { path: model.path });
-    expect(fake.contentListeners()).toBe(1);
     await flushMicrotasks();
-    expect(wiring.diagnose).toHaveBeenCalled();
+    expect(wiring.diagnose).not.toHaveBeenCalled();
+    expect(wiring.markerCalls).toEqual([]);
     wiring.dispose();
   });
 });

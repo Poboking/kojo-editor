@@ -152,7 +152,7 @@ describe('教程区 · 缺省展开（用户 1027 反馈 1），收起靠 class�
     expect(byClass(nodes, 'kp-tutorials-body')[0]!.className).not.toContain('kp-collapsed');
     expect(byClass(nodes, 'kp-tutorial-btn').map((n) => n.text)).toEqual([
       '▤口上教程',
-      '✦.kojo 语言教程',
+      '✦.kojo1 语言教程',
       '❖Kojo 2.0 语言教程',
       '▦kojo 语法全表',
     ]);

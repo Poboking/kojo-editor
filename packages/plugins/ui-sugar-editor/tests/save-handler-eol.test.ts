@@ -1,5 +1,5 @@
 /**
- * EOL-OVERRIDE-SAVE 批：`.kojo` 保存接管（`performSugarSave`）的 **eol 透传**。
+ * EOL-OVERRIDE-SAVE 批：`.kojo1` 保存接管（`performSugarSave`）的 **eol 透传**。
  *
  * 宿主（`EditorPane.savePathDetailed`）在作者显式切过换行（`ModelEntry.eolOverride`
  * 复核通过）时，随 `EditorSaveRequest.eol` 递上行尾覆盖档；本模块（纯编排、依赖
@@ -20,9 +20,9 @@ import type {
 } from '@kojo/plugin-api';
 import { performSugarSave, type SugarSaveDeps } from '../src/save-handler';
 
-const PATH_KOJO = '/proj/口上/x.kojo';
+const PATH_KOJO = '/proj/口上/x.kojo1';
 
-/** 构造 blocked 计划（源非 .kojo：产物面被完全拦掉，只考源写透传） */
+/** 构造 blocked 计划（源非 .kojo1：产物面被完全拦掉，只考源写透传） */
 function blockedPlan(): SugarSavePlan {
   return {
     sourcePath: PATH_KOJO,

@@ -43,7 +43,7 @@ function sampleKojo(): { name: string; text: string }[] {
       continue;
     }
     for (const e of entries) {
-      if (!e.isFile() || !e.name.endsWith('.kojo')) continue;
+      if (!e.isFile() || (!e.name.endsWith('.kojo1') && !e.name.endsWith('.kojo'))) continue;
       const f = path.join(d, e.name);
       out.push({ name: `${path.basename(d)}/${e.name}`, text: readFileSync(f, 'utf8') });
     }

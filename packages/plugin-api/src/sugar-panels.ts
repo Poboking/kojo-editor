@@ -14,13 +14,22 @@
 import type { Unsubscribe } from './base';
 import type { AnyEventMap, EventBus } from './events';
 import { pathKey } from './paths';
+import { KOJO_V1_SOURCE_EXTENSIONS } from './sugar';
 import type { SugarDiagnostic, SugarSeverity } from './sugar';
 
 /* ============================== 文件判定 ============================== */
 
-/** 是否 `.kojo` 糖源文件（判定面板 / 波浪线 / 预览只作用于糖源；大小写不敏感） */
+/**
+ * 是否 kojo1（封存层）的糖源文件（判定面板 / 波浪线 / 预览只作用于糖源；大小写不敏感）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 kojo（2.0），封存层的源只剩 `.kojo1`。
+ * 判据取契约层 `KOJO_V1_SOURCE_EXTENSIONS`，不在本文件另抄一份字面量——否则
+ * 2.0 文件会被糖面板接管，正是"封存层污染统一架构"的那条路。
+ */
 export function isKojoFile(path: string | null | undefined): boolean {
-  return typeof path === 'string' && /\.kojo$/i.test(path);
+  if (typeof path !== 'string' || path.length === 0) return false;
+  const lower = path.toLowerCase();
+  return KOJO_V1_SOURCE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 /* ============================== 缓冲真相池（C2） ============================== */
@@ -147,9 +156,9 @@ export type PanelDegrade =
   | 'preview-error';
 
 const DEGRADE_TEXT: Record<PanelDegrade, string> = {
-  'no-project': '未打开 .kojo 文件（从左侧选一份开始编辑）',
-  'no-file': '打开一个 .kojo 文件后可用',
-  'not-kojo': '当前文件不是 .kojo（转译检查只对 .kojo 文件生效）',
+  'no-project': '未打开 .kojo1 文件（从左侧选一份开始编辑）',
+  'no-file': '打开一个 .kojo1 文件后可用',
+  'not-kojo': '当前文件不是 .kojo1（转译检查只对封存的 kojo1 源生效）',
   reading: '读取中…',
   previewing: '生成预览中…',
   'read-error': '读取失败',

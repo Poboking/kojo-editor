@@ -13,21 +13,21 @@ import {
 } from '../src/ui/legacy-sealed-notice';
 
 describe('shouldExplainLegacySealedOpen', () => {
-  const base = { path: 'D:/p/a.kojo', languageId: 'plaintext', legacyOn: false, prompted: false };
+  const base = { path: 'D:/p/a.kojo1', languageId: 'plaintext', legacyOn: false, prompted: false };
 
-  it('kojo1 源 + 已封存 + plaintext + 没说过 ⇒ 弹（两枚扩展名都算）', () => {
+  it('kojo1 源（`.kojo1`，大小写不敏感）+ 已封存 + plaintext + 没说过 ⇒ 弹', () => {
     expect(shouldExplainLegacySealedOpen(base)).toBe(true);
-    expect(shouldExplainLegacySealedOpen({ ...base, path: 'D:/p/a.kojo1' })).toBe(true);
     expect(shouldExplainLegacySealedOpen({ ...base, path: 'D:/P/A.KOJO1' })).toBe(true);
   });
 
-  it('任一条件不成立 ⇒ 不弹（四条件缺一不可）', () => {
+  it('任一条件不成立 ⇒ 不弹（四条件缺一不可）；`.kojo` 归 2.0，不再触发', () => {
     expect(shouldExplainLegacySealedOpen({ ...base, legacyOn: true })).toBe(false);
     expect(shouldExplainLegacySealedOpen({ ...base, prompted: true })).toBe(false);
     expect(shouldExplainLegacySealedOpen({ ...base, languageId: 'kojo2' })).toBe(false);
     expect(shouldExplainLegacySealedOpen({ ...base, languageId: 'kojo-legacy' })).toBe(false);
     expect(shouldExplainLegacySealedOpen({ ...base, path: 'D:/p/a.erb' })).toBe(false);
     expect(shouldExplainLegacySealedOpen({ ...base, path: 'D:/p/a.kojo2' })).toBe(false);
+    expect(shouldExplainLegacySealedOpen({ ...base, path: 'D:/p/a.kojo' })).toBe(false);
   });
 
   it('无 window（node / 测试）⇒ 台账读作"已说过"，绝不弹', () => {

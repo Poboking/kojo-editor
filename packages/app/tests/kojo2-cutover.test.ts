@@ -11,7 +11,7 @@
  *    一次都不读——"注入不污染全局"是断言，不是口头承诺。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import { KOJO2_SOURCE_EXTENSION } from '../src/monaco/kojo2-language';
 import {
   KOJO2_ANCHOR_MARKS,
@@ -19,6 +19,7 @@ import {
   KOJO2_CUTOVER_STAGES,
   KOJO2_CUTOVER_STORAGE_KEY,
   KOJO2_FILE_EXTENSION,
+  KOJO2_FILE_EXTENSIONS,
   KOJO2_STAGE_LABELS,
   KOJO_V1_FILE_EXTENSION,
   createKojo2CutoverController,
@@ -93,6 +94,7 @@ const V1_ASK = '角色: 灵梦\n初回：\n    「初次见面。」\n';
 
 const KOJO_FILE = 'C:\\proj\\chara\\M.kojo';
 const KOJO2_FILE = 'C:\\proj\\chara\\M.kojo2';
+const KOJO1_FILE = 'C:\\proj\\chara\\M.kojo1';
 
 function route(
   stage: Kojo2CutoverStage,
@@ -340,90 +342,65 @@ describe('持久化：注入 storage、坏值回缺省、绝不碰全局', () =>
 /* ============================== 路由 ============================== */
 
 describe('文件路由：override 当家，扩展名先说，阶段定老文件', () => {
-  it('v1-only：`.kojo` 按 v1；`.kojo2` 照样归 2.0（扩展名即声明，语言面不看阶段）', () => {
-    expect(route('v1-only', KOJO_FILE, KOJO2_SAMPLE)).toMatchObject({
+  it('LAU-3b-FLIP：`.kojo` 与 `.kojo2` 在任何阶段都归 2.0（扩展名定解析器，不看阶段/正文）', () => {
+    for (const stage of KOJO2_CUTOVER_STAGES) {
+      // 正文是 v1 也不看：翻转之后 `.kojo` 就是 2.0 的源，旧正文由迁移/改名两条路收。
+      expect(route(stage, KOJO_FILE, V1_BASIC)).toMatchObject({
+        kind: 'resolved',
+        parser: 'kojo2',
+        reason: 'extension-kojo2',
+        fingerprint: null,
+      });
+      expect(route(stage, KOJO2_FILE)).toMatchObject({
+        kind: 'resolved',
+        parser: 'kojo2',
+        reason: 'extension-kojo2',
+      });
+      // 空文件同样归 2.0（不再有"两套等价按 v1 开"那一档）。
+      expect(route(stage, KOJO_FILE, '')).toMatchObject({ kind: 'resolved', parser: 'kojo2' });
+    }
+  });
+
+  it('`.kojo1` 恒归 kojo1（封存标记，不看阶段/正文）', () => {
+    for (const stage of KOJO2_CUTOVER_STAGES) {
+      expect(route(stage, KOJO1_FILE, KOJO2_SAMPLE)).toMatchObject({
+        kind: 'resolved',
+        parser: 'kojo-v1',
+        reason: 'extension-kojo1',
+        fingerprint: null,
+      });
+    }
+  });
+
+  it('override 仍是最高优先级；v1-only 只拦「把非 kojo 文件钉成 2.0」', () => {
+    expect(route('dual', KOJO2_FILE, undefined, 'kojo-v1')).toMatchObject({
       kind: 'resolved',
       parser: 'kojo-v1',
-      reason: 'stage-v1-only',
-      fingerprint: null,
+      reason: 'override',
     });
-    expect(route('v1-only', KOJO2_FILE)).toMatchObject({
+    expect(route('2.0-default', 'C:/p/a.erb', undefined, 'kojo2')).toMatchObject({
       kind: 'resolved',
       parser: 'kojo2',
-      reason: 'extension-kojo2',
+      reason: 'override',
     });
-    // 阶段拦的是**切流**：把老 `.kojo` 显式钉成 2.0 的 override 在 v1-only 下仍被拦
-    const blocked = route('v1-only', KOJO_FILE, undefined, 'kojo2');
+    const blocked = route('v1-only', 'C:/p/a.erb', undefined, 'kojo2');
     expect(blocked).toMatchObject({ kind: 'blocked', reason: 'stage-disables-kojo2' });
     expect(blocked.kind === 'blocked' ? blocked.hint : '').toContain('v1-only');
   });
 
-  it('dual：老文件仍按 v1（内容像 2.0 也不动它），新文件按 2.0', () => {
-    expect(route('dual', KOJO_FILE, KOJO2_SAMPLE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'stage-dual',
-    });
-    expect(route('dual', KOJO2_FILE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo2',
-      reason: 'extension-kojo2',
-    });
-  });
-
-  it('2.0-default：`.kojo2` 恒 2.0；`.kojo` 只在有正文时才判', () => {
-    expect(route('2.0-default', KOJO2_FILE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo2',
-      reason: 'extension-kojo2',
-    });
-    expect(route('2.0-default', KOJO_FILE)).toMatchObject({
-      kind: 'needs-content',
-      reason: 'content-required',
-    });
-    expect(route('2.0-default', KOJO_FILE, KOJO2_SAMPLE)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo2',
-      reason: 'content-kojo2',
-    });
-    expect(route('2.0-default', KOJO_FILE, V1_BASIC)).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'content-v1',
-    });
-    expect(route('2.0-default', KOJO_FILE, '')).toMatchObject({
-      kind: 'resolved',
-      parser: 'kojo-v1',
-      reason: 'content-empty',
-    });
-  });
-
-  it('内容判不出来 = ambiguous + 唯一兜底 kojo-v1（不静默猜）', () => {
-    const dialogueOnly = route('2.0-default', KOJO_FILE, '灵梦：「你好。」\n');
-    expect(dialogueOnly).toMatchObject({
-      kind: 'ambiguous',
-      fallback: 'kojo-v1',
-      fingerprint: { lineCount: 1, anchorLines: 0, kojo2Lines: 1, v1Lines: 0, flavor: 'ambiguous' },
-    });
-    expect(dialogueOnly.kind === 'ambiguous' ? dialogueOnly.hint : '').toContain('override');
-
-    const mixed = route(
-      '2.0-default',
-      KOJO_FILE,
-      '# 机 指令 310\n灵梦：「你好。」\n角色: 灵梦\n? 恋慕 >= 500\n    如果 恋慕：\n',
-    );
-    expect(mixed).toMatchObject({ kind: 'ambiguous', fallback: 'kojo-v1' });
-  });
-
   it('扩展名常量与语言层 / 契约层的单一真源逐字相等（本模块不另造口径）', () => {
     // 本模块不 import monaco 语言面（零 Monaco 依赖），字面量因此有一份，但由这条断言钉住：
-    // 谁改 `.kojo2` / `.kojo`，这里先红。
+    // 谁改 `.kojo2` / `.kojo1`，这里先红。
     expect(KOJO2_FILE_EXTENSION).toBe(KOJO2_SOURCE_EXTENSION);
-    expect(KOJO_V1_FILE_EXTENSION).toBe(KOJO_SOURCE_EXTENSION);
+    expect(KOJO_V1_FILE_EXTENSION).toBe(KOJO_LEGACY_SOURCE_EXTENSION);
+    // 2.0 的源扩展名全集 = `.kojo`（主场）+ `.kojo2`（旧名兼容）。
+    expect(KOJO2_FILE_EXTENSIONS).toEqual([KOJO_SOURCE_EXTENSION, KOJO2_SOURCE_EXTENSION]);
   });
 
-  it('扩展名：大小写不敏感；`.kojo.bak` / `.txt` / 无扩展名一律 not-kojo', () => {    expect(route('dual', 'C:/p/A.KOJO2')).toMatchObject({ kind: 'resolved', parser: 'kojo2' });
-    expect(route('v1-only', 'C:/p/A.KOJO')).toMatchObject({ kind: 'resolved', parser: 'kojo-v1' });
+  it('扩展名：大小写不敏感；`.kojo.bak` / `.txt` / 无扩展名一律 not-kojo', () => {
+    expect(route('dual', 'C:/p/A.KOJO2')).toMatchObject({ kind: 'resolved', parser: 'kojo2' });
+    expect(route('v1-only', 'C:/p/A.KOJO')).toMatchObject({ kind: 'resolved', parser: 'kojo2' });
+    expect(route('v1-only', 'C:/p/A.KOJO1')).toMatchObject({ kind: 'resolved', parser: 'kojo-v1' });
     for (const path of ['C:/p/a.kojo.bak', 'C:/p/readme.txt', 'C:/p/noext', 'C:/p/']) {
       const decision = route('dual', path);
       expect(decision.kind, path).toBe('not-kojo');
@@ -438,10 +415,10 @@ describe('文件路由：override 当家，扩展名先说，阶段定老文件'
     expect(extensionOf('C:/p/.kojo')).toBe('');
   });
 
-  it('per-file override 破例：`.kojo` 可钉 2.0，`.kojo2` 可钉回 v1；v1-only 下 2.0 钉不住', () => {
-    expect(route('dual', KOJO_FILE, undefined, 'kojo2')).toMatchObject({
+  it('per-file override 破例：`.kojo` 可钉回 v1，`.kojo2` 可钉回 v1；v1-only 下"钉成 2.0"仍被拦', () => {
+    expect(route('dual', KOJO_FILE, undefined, 'kojo-v1')).toMatchObject({
       kind: 'resolved',
-      parser: 'kojo2',
+      parser: 'kojo-v1',
       reason: 'override',
     });
     expect(route('2.0-default', KOJO2_FILE, undefined, 'kojo-v1')).toMatchObject({
@@ -449,7 +426,7 @@ describe('文件路由：override 当家，扩展名先说，阶段定老文件'
       parser: 'kojo-v1',
       reason: 'override',
     });
-    expect(route('v1-only', KOJO2_FILE, undefined, 'kojo2')).toMatchObject({
+    expect(route('v1-only', 'C:/p/raw.erb', undefined, 'kojo2')).toMatchObject({
       kind: 'blocked',
       reason: 'stage-disables-kojo2',
     });
@@ -458,36 +435,33 @@ describe('文件路由：override 当家，扩展名先说，阶段定老文件'
   it('controller 路由：存好的 override 参与，一次性 override 更优先，clear 后复原', () => {
     const cutover = createKojo2CutoverController({ stage: 'dual' });
     expect(cutover.route({ filePath: KOJO_FILE, source: KOJO2_SAMPLE })).toMatchObject({
-      parser: 'kojo-v1',
-      reason: 'stage-dual',
-    });
-    cutover.setOverride(KOJO_FILE, 'kojo2');
-    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({
       parser: 'kojo2',
+      reason: 'extension-kojo2',
+    });
+    cutover.setOverride(KOJO_FILE, 'kojo-v1');
+    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({
+      parser: 'kojo-v1',
       reason: 'override',
     });
-    expect(cutover.route({ filePath: KOJO_FILE, override: 'kojo-v1' })).toMatchObject({
-      parser: 'kojo-v1',
+    expect(cutover.route({ filePath: KOJO_FILE, override: 'kojo2' })).toMatchObject({
+      parser: 'kojo2',
       reason: 'override',
     });
     expect(cutover.route({ filePath: KOJO_FILE, override: null })).toMatchObject({
-      parser: 'kojo2',
+      parser: 'kojo-v1',
       reason: 'override',
     });
     cutover.clearOverride(KOJO_FILE);
-    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ reason: 'stage-dual' });
+    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ reason: 'extension-kojo2' });
   });
 
-  it('controller 路由随阶段走：同一份 `.kojo` 在三个档里给出三种结论', () => {
+  it('controller 路由与阶段无关：同一份 `.kojo` 在三个档里结论一致', () => {
     const cutover = createKojo2CutoverController({ stage: 'v1-only' });
-    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo-v1' });
+    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo2' });
     cutover.setStage('dual');
-    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo-v1' });
+    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo2' });
     cutover.setStage('2.0-default');
-    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ kind: 'needs-content' });
-    expect(cutover.route({ filePath: KOJO_FILE, source: KOJO2_SAMPLE })).toMatchObject({
-      parser: 'kojo2',
-    });
+    expect(cutover.route({ filePath: KOJO_FILE })).toMatchObject({ parser: 'kojo2' });
   });
 });
 

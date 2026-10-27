@@ -11,7 +11,7 @@
  */
 
 import type { FileIO, WorkspaceService } from '@kojo/plugin-api';
-import { ERB_BODY_EXTENSIONS, isErbBodyPath, isErbDialectPath, join } from '@kojo/plugin-api';
+import { ERB_BODY_EXTENSIONS, isErbBodyPath, isErbDialectPath, join, KOJO_LEGACY_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import type { FillLanguage, FillPack } from './matrix-fill';
 import type { WorkspacePackRef } from './matrix-scope';
 import { relativeSegments } from './matrix-scope';
@@ -46,10 +46,10 @@ export type FillWriteResult =
   | { readonly ok: true; readonly path: string; readonly line: number }
   | { readonly ok: false; readonly reason: string };
 
-/** 可作为追加目标的源文件（口上正文；.kojo 也算） */
+/** 可作为追加目标的源文件（口上正文；kojo1 源 `.kojo1` 也算） */
 export function isFillSourceName(name: string): boolean {
   const lower = name.toLowerCase();
-  if (lower.endsWith('.kojo')) return true;
+  if (lower.endsWith(KOJO_LEGACY_SOURCE_EXTENSION)) return true;
   return isErbBodyPath(name);
 }
 
@@ -75,7 +75,7 @@ export async function listFillFiles(io: FileIO, rootPath: string): Promise<FillF
 
 /** 语言对应的新文件扩展名（ERB 侧从契约层清单派生，不另写一份口径） */
 export function fillExtension(language: FillLanguage): string {
-  return language === 'kojo' ? '.kojo' : ERB_BODY_EXTENSIONS[0]!.toUpperCase();
+  return language === 'kojo' ? KOJO_LEGACY_SOURCE_EXTENSION : ERB_BODY_EXTENSIONS[0]!.toUpperCase();
 }
 
 /** 文件名消毒：单层、去非法字符、空名给兜底 */
@@ -83,7 +83,7 @@ export function sanitizeFillFileName(name: string, language: FillLanguage): stri
   let base = name.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim();
   if (!base || base === '.' || base === '..') base = '条件矩阵填空';
   const lower = base.toLowerCase();
-  if (lower.endsWith('.kojo') || isErbDialectPath(base)) {
+  if (lower.endsWith(KOJO_LEGACY_SOURCE_EXTENSION) || isErbDialectPath(base)) {
     base = base.slice(0, base.lastIndexOf('.'));
   }
   // 扩展名按语言统一：内容与扩展名不一致的 `.ERB` 里塞糖语法会直接把游戏脚本写坏
@@ -122,12 +122,12 @@ function extOf(path: string): string {
   return path.slice(path.lastIndexOf('.')).toLowerCase();
 }
 
-/** 追加目标的扩展名与语言是否兼容（.kojo 接受两种；.ERB 只接受原生） */
+/** 追加目标的扩展名与语言是否兼容（`.kojo1` 接受两种；`.ERB` 只接受原生） */
 export function appendLanguageConflict(path: string, language: FillLanguage): string | null {
   const ext = extOf(path);
-  if (ext === '.kojo') return null;
+  if (ext === KOJO_LEGACY_SOURCE_EXTENSION) return null;
   if (language === 'kojo') {
-    return `目标文件是 ${ext}：只能追加原生 ERB 写法。请把语言切换为「ERB」，或选择一个 .kojo 文件。`;
+    return `目标文件是 ${ext}：只能追加原生 ERB 写法。请把语言切换为「ERB」，或选择一个 ${KOJO_LEGACY_SOURCE_EXTENSION} 文件。`;
   }
   return null;
 }

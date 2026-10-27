@@ -121,7 +121,7 @@ function outcomeError(outcome: Extract<MarketPublishOutcome, { ok: false }>): st
 export function ignoredDerivedNote(ignored: readonly IgnoredDerivedArtifact[]): string {
   if (ignored.length === 0) return '';
   const names = ignored.map((item) => item.relPath).join('、');
-  return `已忽略 ${ignored.length} 个由 .kojo 生成的同名产物：${names}（以 .kojo 当前编译结果为准）`;
+  return `已忽略 ${ignored.length} 个由 .kojo1 生成的同名产物：${names}（以 .kojo1 当前编译结果为准）`;
 }
 
 /** 向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
@@ -451,7 +451,7 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
                   ? ''
                   : `；已去掉最外层文件夹「${zipSource.strippedRoot}」`)),
             h('div', { className: 'wizard-hint dim' },
-              'zip 内容会作为市场包的 files/** 上传；包内 .kojo 会先转译成 .ERB，纯 .ERB 原样保留。'),
+              'zip 内容会作为市场包的 files/** 上传；包内 .kojo1 会先转译成 .ERB，纯 .ERB 原样保留。'),
             zipSource.skipped.length > 0
               ? h('div', { className: 'wizard-hint dim' },
                   `已跳过 ${zipSource.skipped.length} 个目录/系统垃圾条目（不进包）`)
@@ -603,12 +603,12 @@ export function createPublishKojoWizard(deps: PublishKojoWizardDeps): () => unkn
                 : `${project?.name ?? ''} / ${artifact?.name ?? ''}`)),
         zipSource !== null
           ? h('div', { className: 'dim' },
-              '将把 zip 里的文件作为包内容现打市场容器；包内 .kojo 会先转译成 .ERB，' +
+              '将把 zip 里的文件作为包内容现打市场容器；包内 .kojo1 会先转译成 .ERB，' +
               '逐文件算核对码后上传，成功后进入市场审核。')
           : noArtifacts
             ? null
             : h('div', { className: 'dim' },
-                '发布时会把包内的 .kojo 转译成 .ERB（任一失败整包不产），逐文件算出核对码后上传到口上市场；' +
+                '发布时会把包内的 .kojo1 转译成 .ERB（任一失败整包不产），逐文件算出核对码后上传到口上市场；' +
                 '成功后进入市场审核（维护者合并后上架）。'),
         zipSource === null && artifact !== null
           ? h('div', { className: 'wizard-hint dim' }, `包目录：${join(projectDir, artifact.dirName)}`)

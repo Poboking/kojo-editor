@@ -112,7 +112,7 @@ describe('collectWorkspaceSymbols · 问齐与合并', () => {
 
 describe('collectWorkspaceSymbols · 糖线合并（同一个函数绝不出两行）', () => {
   const DIR = 'C:\\game\\個人口上\\chara10';
-  const KOJO = `${DIR}\\M.kojo`;
+  const KOJO = `${DIR}\\M.kojo1`;
   const ERB = `${DIR}\\M.ERB`;
   const NAME = 'M_KOJO_MESSAGE_COM_K10_挨拶';
   const erbSays = (symbols: EditorWorkspaceSymbol[], totalMatched = symbols.length) =>
@@ -120,7 +120,7 @@ describe('collectWorkspaceSymbols · 糖线合并（同一个函数绝不出两�
   const sugarSays = (symbols: EditorWorkspaceSymbol[], totalMatched = symbols.length) =>
     contribution('sugar', { kind: 'workspaceSymbol', symbols, totalMatched });
 
-  it('同一函数：ERB 报产物（.ERB）、糖线报源（.kojo）⇒ 只剩源那一条，先后顺序无关', () => {
+  it('同一函数：ERB 报产物（.ERB）、糖线报源（.kojo1）⇒ 只剩源那一条，先后顺序无关', () => {
     const erb = erbSays([symbol(NAME, ERB, 12)]);
     const sugar = sugarSays([symbol(NAME, KOJO, 9)]);
     for (const order of [
@@ -159,7 +159,7 @@ describe('collectWorkspaceSymbols · 糖线合并（同一个函数绝不出两�
   });
 
   it('不同目录的两个同名函数（各自都有源）⇒ 两行，各自扣各自的那条', () => {
-    const kojo2 = 'C:\\game\\個人口上\\chara20\\M.kojo';
+    const kojo2 = 'C:\\game\\個人口上\\chara20\\M.kojo1';
     const erb2 = 'C:\\game\\個人口上\\chara20\\M.ERB';
     const got = collectWorkspaceSymbols(
       [
@@ -172,8 +172,8 @@ describe('collectWorkspaceSymbols · 糖线合并（同一个函数绝不出两�
     expect(got.totalMatched).toBe(2); // 4 − 2
   });
 
-  it('推不出目标的路径（`M.kojo.bak`）退化旧键：不崩、也不与同名产物误并', () => {
-    const bak = `${DIR}\\M.kojo.bak`;
+  it('推不出目标的路径（`M.kojo1.bak`）退化旧键：不崩、也不与同名产物误并', () => {
+    const bak = `${DIR}\\M.kojo1.bak`;
     const got = collectWorkspaceSymbols(
       [
         erbSays([symbol(NAME, ERB, 1)], 1),
@@ -185,7 +185,7 @@ describe('collectWorkspaceSymbols · 糖线合并（同一个函数绝不出两�
     expect(got.totalMatched).toBe(2);
   });
 
-  it('糖线缺席（整批没有 .kojo 源）⇒ 键仍是旧口径：输出与改前逐字相同', () => {
+  it('糖线缺席（整批没有 .kojo1 源）⇒ 键仍是旧口径：输出与改前逐字相同', () => {
     const a = contribution('a', {
       kind: 'workspaceSymbol',
       symbols: [symbol('ALPHA', F1, 1), symbol('ALPHA', F1, 9)],

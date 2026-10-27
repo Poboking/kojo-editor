@@ -7,7 +7,8 @@
  * - `@织` 接管冲突、被压监听、未知事件 / 不可监听 / 优先级模型不支持的映射；
  * - 存储期同名（项目级 vs 单元级）、换盘指纹；
  * - 空项目 / 单文件 / 坏文件 / 重复注入 / 输入顺序无关；
- * - 采集器的 IO 边界（只读 `.kojo2`、允许根、开关关零动作、读炸只跳一份、上限截断）；
+ * - 采集器的 IO 边界（只读 2.0 源 `.kojo` / `.kojo2`、`.kojo1` 不读、允许根、
+ *   开关关零动作、读炸只跳一份、上限截断）；
  * - 扫描器同一轮里"不二次读盘 + 一文件一次 publish + v1 与 2.0 合并 + 计时读数"；
  * - 万级 `@函` 的判定耗时上界（口径见该用例内注释）。
  */
@@ -48,7 +49,8 @@ import type { EditorProblem } from '../src/ui/problem-store';
 const ROOT = 'D:/proj';
 const A = `${ROOT}/a.kojo2`;
 const B = `${ROOT}/b.kojo2`;
-const C = `${ROOT}/c.kojo`;
+/** 封存层的 v1 文件（LAU-3b-FLIP 后它才是"非 2.0 的 kojo 源"） */
+const C = `${ROOT}/c.kojo1`;
 const OUTSIDE = 'D:/elsewhere/x.kojo2';
 
 const doc = (path: string, lines: readonly string[], layerId?: string): Kojo2ProjectDocument => ({
@@ -419,16 +421,18 @@ describe('空项目 · 单文件 · 坏文件', () => {
 describe('collectKojo2ProjectDocuments · IO 边界', () => {
   const textOf = `${'# 机 开场'}`;
 
-  it('只读允许根内的 .kojo2：.kojo 不读、根外拒读（并说出拒了几份）', async () => {
+  it('只读允许根内的 2.0 源（.kojo / .kojo2）：.kojo1 不读、根外拒读（并说出拒了几份）', async () => {
+    const MODERN = `${ROOT}/d.kojo`;
     const files: Record<string, string> = {
       [A]: textOf,
       [B]: textOf,
+      [MODERN]: textOf,
       [C]: textOf,
       [OUTSIDE]: textOf,
     };
     const reads: string[] = [];
     const collected = await collectKojo2ProjectDocuments({
-      listFiles: () => [OUTSIDE, C, B, A],
+      listFiles: () => [OUTSIDE, C, MODERN, B, A],
       roots: () => [ROOT],
       readFile: async (path) => {
         reads.push(path);
@@ -436,9 +440,10 @@ describe('collectKojo2ProjectDocuments · IO 边界', () => {
       },
     });
     expect(collected.enabled).toBe(true);
-    expect(collected.documents.map((document) => document.path)).toEqual([A, B]);
-    expect(reads).toEqual([A, B]);
-    expect(collected.stats).toMatchObject({ listed: 4, considered: 2, read: 2, outOfRoots: 1 });
+    // `.kojo` 是 2.0 的主扩展名 ⇒ 一起读；`.kojo1` 是封存层 ⇒ 不碰。
+    expect(collected.documents.map((document) => document.path)).toEqual([A, B, MODERN]);
+    expect(reads).toEqual([A, B, MODERN]);
+    expect(collected.stats).toMatchObject({ listed: 5, considered: 3, read: 3, outOfRoots: 1 });
   });
 
   it('开关关：连 listFiles 都不调（零动作）', async () => {
@@ -563,7 +568,7 @@ describe('扫描器 · .kojo2 项目级结论并进既有上账通道', () => {
     [C]: 'BAD',
   };
 
-  it('一文件一次 publish：v1 诊断 + 落在它头上的项目级结论；.kojo 维持原路', async () => {
+  it('一文件一次 publish：v1 诊断 + 落在它头上的项目级结论；`.kojo1` 维持原路', async () => {
     const h = harness({ files: FILES, kojo2Project: {} });
     const out = await h.scanner.run();
     expect(out.status).toBe('complete');
@@ -611,7 +616,7 @@ describe('扫描器 · .kojo2 项目级结论并进既有上账通道', () => {
     expect(h.published.get(B)![0]!.code).toBeUndefined();
   });
 
-  it('本轮没有 .kojo2 ⇒ 分析不跑、读数保持 null（"没这一步"不等于"跑了没结论"）', async () => {
+  it('本轮没有 2.0 文件 ⇒ 分析不跑、读数保持 null（"没这一步"不等于"跑了没结论"）', async () => {
     const timings: Kojo2ProjectTiming[] = [];
     const h = harness({ files: { [C]: 'BAD' }, kojo2Project: { onTiming: (timing) => timings.push(timing) } });
     const out = await h.scanner.run();

@@ -4,7 +4,7 @@
   "cases": [
     {
       "id": "narrative-scaffold-317",
-      "source": "fixtures/scaffold/性骚扰指令.kojo",
+      "source": "fixtures/scaffold/性骚扰指令.kojo1",
       "sourceSha256": "da1dbbc47c6ab9a0e505120c7ceeace4e2bec816af80578542276dcd9a66d9bf",
       "headerLines": 5,
       "eol": "lf",
@@ -27,7 +27,7 @@
     },
     {
       "id": "narrative-scaffold-daily",
-      "source": "fixtures/scaffold/日常指令.kojo",
+      "source": "fixtures/scaffold/日常指令.kojo1",
       "sourceSha256": "b1f2192f6ed436272a34dbc7193a4f2ea130dc964abdafba95e0fcac34f3acfa",
       "headerLines": 5,
       "eol": "lf",
@@ -50,7 +50,7 @@
     },
     {
       "id": "conditional-scaffold-event",
-      "source": "fixtures/scaffold/事件.kojo",
+      "source": "fixtures/scaffold/事件.kojo1",
       "sourceSha256": "6aa51031125427a80324fcee3677d1898e80ca4381817d25d4bd9314a9bc7d39",
       "headerLines": 5,
       "eol": "lf",
@@ -74,7 +74,7 @@
     },
     {
       "id": "conditional-scaffold-mark",
-      "source": "fixtures/scaffold/刻印取得.kojo",
+      "source": "fixtures/scaffold/刻印取得.kojo1",
       "sourceSha256": "aca2072f5183e83f01f96216219d4c8d2a2b78c227ac72a40c2dede18e04d618",
       "headerLines": 5,
       "eol": "lf",
@@ -592,7 +592,7 @@
     },
     {
       "id": "shell-aibu",
-      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/爱抚指令.kojo",
+      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/爱抚指令.kojo1",
       "sourceSha256": "c769e6a87dc09ba6ba4c5a11e8904133f057e7188768fca40192b59f87cd6d56",
       "headerLines": 5,
       "eol": "lf",
@@ -611,7 +611,7 @@
     },
     {
       "id": "shell-zetcho",
-      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/绝顶.kojo",
+      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/绝顶.kojo1",
       "sourceSha256": "0084579966740e17804c523d8e74973389c5b5dc74991959d5c78587cc7066e7",
       "headerLines": 5,
       "eol": "lf",
@@ -630,7 +630,7 @@
     },
     {
       "id": "shell-houshi",
-      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/奉仕指令.kojo",
+      "source": "packages/plugins/eratw-adapter/tests/fixtures/default-sugar/奉仕指令.kojo1",
       "sourceSha256": "06062d6a37508d044baccc658eaf08ce8a18644ebec11c2a88e37c80e5ff200e",
       "headerLines": 5,
       "eol": "lf",

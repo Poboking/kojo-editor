@@ -19,6 +19,7 @@
  */
 
 import type { ConventionIssue } from '@kojo/plugin-api';
+import { isKojoFile } from '@kojo/plugin-api';
 import { CONT_INSIDE_QUOTES_RULE_ID, READONLY_ALIAS_ASSIGN_RULE_ID } from './rules/sugar-conventions';
 import type { ConventionIssueEdit } from './diagnostics';
 
@@ -144,7 +145,8 @@ export function conventionIssueFixes(
   issue: ConventionIssue,
   lines: readonly string[],
 ): readonly ConventionIssueEdit[] {
-  if (!issue.filePath || !/\.kojo$/i.test(issue.filePath)) return []; // 糖侧约定只管 `.kojo`（与规则侧同一条判据）
+  // 糖侧约定只管封存层的 `.kojo1`（与规则侧同一条单源判据；LAU-3b-FLIP 后 `.kojo` 归 2.0）
+  if (!issue.filePath || !isKojoFile(issue.filePath)) return [];
   const line = issue.line;
   if (typeof line !== 'number' || line < 1 || line > lines.length) return [];
   if (issue.ruleId === CONT_INSIDE_QUOTES_RULE_ID) return relocateContMark(lines[line - 1]!, line);

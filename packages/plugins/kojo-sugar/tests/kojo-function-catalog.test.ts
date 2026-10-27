@@ -1,5 +1,5 @@
 /**
- * `.kojo` 函数名录单测（W6，2026-10-17）——纯逻辑 + 假 io，不碰真盘。
+ * `.kojo1` 函数名录单测（W6，2026-10-17）——纯逻辑 + 假 io，不碰真盘。
  *
  * 钉的是"这份名录能不能被当成事实用"的四条：
  * ① 收进来的每一条都能按**产物路径**查回源坐标（工作区符号重定基全靠它）；
@@ -20,8 +20,8 @@ import { stubDict, stubFaceTable } from './support';
 
 const GOOD = '角色: 12\n函数 问候(次数)：\n    「你好。」\n    返回\n';
 const BROKEN = '角色: 12\n时机 初见：\n    返回\n'; // 非函数体里的裸 `返回` ⇒ indent-mismatch（error）
-const GOOD_PATH = '/t/KOJO/A.kojo';
-const BROKEN_PATH = '/t/KOJO/B.kojo';
+const GOOD_PATH = '/t/KOJO/A.kojo1';
+const BROKEN_PATH = '/t/KOJO/B.kojo1';
 
 const transpiler = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() });
 
@@ -96,7 +96,7 @@ describe('kojo-function-catalog · 收录与查询', () => {
     expect(catalog.locate(product(BROKEN_PATH), 'ANY')).toBeNull();
   });
 
-  it('只有 `.kojo` 源会被收（方言与杂文件一条不进）', async () => {
+  it('只有 `.kojo1` 源会被收（方言与杂文件一条不进）', async () => {
     const { catalog } = fakeCatalog({ files: { '/t/KOJO/C.erb': '@C\n', '/t/KOJO/D.txt': 'x' } });
     await catalog.refresh(['/t/KOJO']);
     expect(catalog.stats().sources).toBe(0);
@@ -165,7 +165,7 @@ describe('kojo-function-catalog · 复用 / 失效 / 带走', () => {
     const hostile = createKojoFunctionCatalog({
       io: {
         async walkDir() {
-          return [{ name: 'A.kojo', path: GOOD_PATH, isDirectory: false, size: GOOD.length, mtimeMs: 1 }];
+          return [{ name: 'A.kojo1', path: GOOD_PATH, isDirectory: false, size: GOOD.length, mtimeMs: 1 }];
         },
         async readTexts() {
           return [null];

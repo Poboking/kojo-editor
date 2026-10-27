@@ -45,7 +45,7 @@ describe('教程内容（E6）', () => {
     expect(SUGAR_TUTORIAL.id).toBe('sugar');
     expect(KOJO_TUTORIAL.id).toBe('kojo');
     expect(KOJO2_TUTORIAL.id).toBe('kojo2');
-    expect(SUGAR_TUTORIAL.title).toBe('.kojo 语言教程');
+    expect(SUGAR_TUTORIAL.title).toBe('.kojo1 语言教程');
     expect(KOJO_TUTORIAL.title).toBe('口上教程');
     expect(KOJO2_TUTORIAL.title).toBe('Kojo 2.0 语言教程');
     expect(SUGAR_TUTORIAL.lead.length).toBeGreaterThan(0);
@@ -130,7 +130,7 @@ describe('教程内容（E6）', () => {
    */
   it('两份教程都交代 2.0 定位，且档位口径逐字统一', () => {
     const tierText =
-      '今天默认档位是「只认 v1」：新装的编辑器打开 `.kojo` 走的还是老写法。要看这份教程里的 2.0 写法，去设置页把「Kojo 2.0 档位」切到「双轨」（老 `.kojo` 一字不动，新 `.kojo2` 走 2.0）或「2.0 默认」；切档后需要重载一次窗口，语言面与配色才全部换过来（编辑器会提示，不会静默）。';
+      '今天默认档位是「2.0 默认」：`.kojo` 就是 kojo（2.0）的源，新装的编辑器打开 `.kojo` 走的就是这一套；`.kojo1` 是封存的 kojo1 旧写法，默认不上色，要看得在设置页打开「显示已封存功能」或切到「双轨」。切档后需要重载一次窗口，语言面与配色才全部换过来（编辑器会提示，不会静默）。';
     expect(tutorialText(KOJO_TUTORIAL), '口上教程缺档位口径（或被人改写了字面）').toContain(tierText);
     for (const t of [SUGAR_TUTORIAL, KOJO_TUTORIAL]) {
       const text = tutorialText(t);

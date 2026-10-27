@@ -83,9 +83,7 @@ import type { NoticeInput } from './NotificationCenter';
 import {
   isKojo2RouteablePath,
   kojo2DiagnosticsEnabled,
-  kojo2OwnsRoute,
   kojo2RouteForPath,
-  kojo2RouteForText,
 } from './kojo2-diagnostics-gate';
 
 /** 诊断失败在问题面板里的稳定诊断码（不是 core 诊断码；一眼看出这是工具链自己的事） */
@@ -543,19 +541,19 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
   });
 
   /**
-   * `2.0-default` 下 `.kojo` 拿不到正文时的**可见**提示去抖（同一份只吵一次）。
+   * 归 2.0 的文件这一拍**拿不到正文**时的可见提示（同一份只吵一次）。
    *
-   * 这一档不接管（不猜成 2.0、不把 v1 的活抢过来），但也不静默：作者得知道"这份文件的
-   * 2.0 诊断为什么没亮"，否则"屏上什么都没有"会被读成"这份文件是干净的"。
+   * LAU-3b-FLIP 之后归属只认扩展名（`.kojo` / `.kojo2` 恒归 2.0），不再有"要正文才能
+   * 定解析器"那一档；但诊断本身仍要正文——读不到就这一拍跳过，**不静默**：作者得知道
+   * 波浪线为什么没亮，否则"屏上什么都没有"会被读成"这份文件是干净的"。
    */
-  const warnedNeedsContent = new Set<string>();
-  const noteNeedsContent = (filePath: string): void => {
-    if (warnedNeedsContent.has(filePath)) return;
-    warnedNeedsContent.add(filePath);
+  const warnedUnreadable = new Set<string>();
+  const noteUnreadable = (filePath: string): void => {
+    if (warnedUnreadable.has(filePath)) return;
+    warnedUnreadable.add(filePath);
     notify({
       kind: 'info',
-      message:
-        'Kojo 2.0：这份 .kojo 在「2.0 默认」阶段要读正文才能判定解析器，但当前取不到正文——暂时按 v1 处理，2.0 诊断未接管。',
+      message: 'Kojo 2.0：这份文件当前取不到正文，诊断这一拍先跳过（下次内容变化会重试）。',
       detail: filePath,
     });
   };
@@ -570,12 +568,10 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
   /**
    * 当前该诊断的目标：活动 model 且**路由**判定归 2.0 管（糖投影 = 派生物，跳过）。
    *
-   * 判据与语言面同一个入口（`kojo2-diagnostics-gate` 的 `kojo2RouteFor*`），不再按扩展名：
-   * - `resolved` + parser `kojo2` ⇒ 接管（`.kojo2`，或 `2.0-default` 下内容已是 2.0 的 `.kojo`）；
-   * - `resolved` v1 / `blocked` / `not-kojo` / `ambiguous` ⇒ 不接管（v1 诊断照常）；
-   * - `needs-content`（`2.0-default` 的 `.kojo`）：`readSource=false` 时先当候选（让击键
-   *   排上定时器，正文留到防抖到点只读一次）；`readSource=true` 时读一次正文再判，
-   *   读不到 ⇒ **不接管**并露一句话（{@link noteNeedsContent}）。
+   * 判据与语言面同一个入口（`kojo2-diagnostics-gate` 的 `kojo2RouteForPath`）：LAU-3b-FLIP
+   * 之后扩展名即归属——`.kojo` / `.kojo2` ⇒ 接管，`.kojo1` / 非 kojo ⇒ 不接管。
+   * `readSource=false` 只判路径（击键热路径）；`readSource=true` 才读正文，读不到就这一拍
+   * **跳过**并露一句话（{@link noteUnreadable}），不猜、不静默。
    */
   const resolveTarget = (readSource: boolean): WiringTarget | null => {
     const model = editor.getModel();
@@ -586,30 +582,13 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
     if (filePath.length === 0 || !isKojo2RouteablePath(filePath)) return null;
 
     const pathDecision = kojo2RouteForPath(filePath);
-    switch (pathDecision.kind) {
-      case 'not-kojo':
-      case 'blocked':
-        return null;
-      case 'ambiguous':
-        // 路径判据给不出这一档（内容指纹才有）；真出现了也不接管——不猜。
-        return null;
-      case 'resolved':
-        if (pathDecision.parser !== 'kojo2') return null;
-        if (!readSource) return { model, filePath };
-        return { model, filePath, source: model.getValue() };
-      case 'needs-content': {
-        if (!readSource) return { model, filePath };
-        let source: string;
-        try {
-          source = model.getValue();
-        } catch {
-          noteNeedsContent(filePath);
-          return null;
-        }
-        const decision = kojo2RouteForText(filePath, source);
-        if (!kojo2OwnsRoute(decision)) return null;
-        return { model, filePath, source };
-      }
+    if (pathDecision.kind !== 'resolved' || pathDecision.parser !== 'kojo2') return null;
+    if (!readSource) return { model, filePath };
+    try {
+      return { model, filePath, source: model.getValue() };
+    } catch {
+      noteUnreadable(filePath);
+      return null;
     }
   };
 

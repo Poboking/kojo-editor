@@ -1,16 +1,20 @@
 /**
- * LAU-3b：`.kojo1` 作为封存层显式扩展名的跨面钉子。
+ * LAU-3b-FLIP（2026-10-27）：`.kojo1` 是 **kojo1 唯一**的源扩展名，`.kojo` 归 2.0。
  *
  * 一条约定要在四个面上同时成立才算落地：
- * ① 路由：`.kojo1` 与阶段 / 正文无关，恒按 v1（`extension-kojo1`）；
- * ② 语言面：可用性门开 ⇒ `kojo-legacy`，门关 ⇒ `plaintext`（与 `.kojo` 同一条门）；
- * ③ 产物 / 台账：`resolveSugarTarget` 与引用台账都认这一枚；
- * ④ 迁移入口：`.kojo1` 仍可进 v1 → 2.0 迁移（它只是封存标记，不是另一种语法）。
+ * ① 路由：`.kojo1` 与阶段 / 正文无关，恒按 v1（`extension-kojo1`）；`.kojo` 恒按 2.0；
+ * ② 语言面：封存层（`kojo-legacy`）仍归可用性门——门开 ⇒ kojo1 面相，门关 ⇒ plaintext；
+ *    `.kojo` 是 2.0 的面，**不读**这道门；
+ * ③ 产物 / 台账：`resolveSugarTarget` 只认封存层 `.kojo1`（糖 → `.ERB`），
+ *    引用台账 / 快速打开仍把三枚都当源文件；
+ * ④ 迁移入口：候选是 `.kojo`（原地改写）。`.kojo1` 不在候选里——改完之后扩展名仍写着
+ *    v1，那会是一份路由打不开的文件；要迁它先把名字交回来（改名工具的反向：`.kojo1` → `.kojo`）。
  */
 import { describe, expect, it, afterEach } from 'vitest';
 import { resolveSugarTarget } from '@kojo/plugin-api';
 import { installAvailabilityGate } from '../src/monaco/language-registry';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageFor } from '../src/ui/editor-model-pool';
 import {
   decideKojo2Route,
@@ -58,26 +62,27 @@ describe('① 路由：`.kojo1` 恒按 v1，不给正文嗅探留翻面机会', 
   });
 });
 
-describe('② 语言面：同一道可用性门', () => {
-  it('门开（v1 可用）⇒ `.kojo1` 认成 kojo-legacy', () => {
+describe('② 语言面：封存层走可用性门，2.0 面不读这道门', () => {
+  it('门开（v1 可用）⇒ `.kojo1` 认成 kojo-legacy，`.kojo` 仍认 kojo2', () => {
     installAvailabilityGate(() => true);
     expect(languageFor('D:/p/a.kojo1')).toBe(KOJO_LANGUAGE_ID);
     expect(languageFor('D:/p/A.KOJO1')).toBe(KOJO_LANGUAGE_ID);
-    expect(languageFor('D:/p/a.kojo')).toBe(KOJO_LANGUAGE_ID);
+    expect(languageFor('D:/p/a.kojo')).toBe(KOJO2_LANGUAGE_ID);
   });
 
-  it('门关（缺省档封印）⇒ 两枚都落 plaintext', () => {
+  it('门关（封存层隐藏）⇒ `.kojo1` 落 plaintext，`.kojo` 照旧是 kojo2', () => {
     installAvailabilityGate((d) => d.availability !== 'legacy');
     expect(languageFor('D:/p/a.kojo1')).toBe('plaintext');
-    expect(languageFor('D:/p/a.kojo')).toBe('plaintext');
+    expect(languageFor('D:/p/a.kojo')).toBe(KOJO2_LANGUAGE_ID);
   });
 });
 
-describe('③ 产物 / 台账 / 清单：`.kojo1` 与 `.kojo` 同级', () => {
-  it('产物目标同目录同基名（`.kojo1` → `.ERB`）', () => {
+describe('③ 产物 / 台账 / 清单：`.kojo1` 仍是糖的源，`.kojo` 已是 2.0 源', () => {
+  it('产物目标同目录同基名（只有封存层 `.kojo1` → `.ERB`）', () => {
     expect(resolveSugarTarget('D:/p/a.kojo1')).toBe('D:/p/a.ERB');
     expect(resolveSugarTarget('D:/p/A.KOJO1')).toBe('D:/p/A.ERB');
-    expect(resolveSugarTarget('D:/p/a.kojo')).toBe('D:/p/a.ERB');
+    // `.kojo` 归 2.0：不再是糖的源，也就没有产物目标。
+    expect(resolveSugarTarget('D:/p/a.kojo')).toBeNull();
     expect(resolveSugarTarget('D:/p/a.kojo2')).toBeNull();
   });
 
@@ -89,11 +94,11 @@ describe('③ 产物 / 台账 / 清单：`.kojo1` 与 `.kojo` 同级', () => {
   });
 });
 
-describe('④ 迁移入口：`extension-kojo1` 仍可迁到 2.0', () => {
-  it('`isMigrateCandidate` 收 `.kojo1`，不收 `.kojo2` / `.erb`', () => {
-    expect(isMigrateCandidate('D:/p/a.kojo1')).toBe(true);
-    expect(isMigrateCandidate('D:/p/A.KOJO1')).toBe(true);
+describe('④ 迁移入口：候选只有 `.kojo`（原地改写），封存层要先把名字交回来', () => {
+  it('`isMigrateCandidate` 收 `.kojo`，不收 `.kojo1` / `.kojo2` / `.erb`', () => {
     expect(isMigrateCandidate('D:/p/a.kojo')).toBe(true);
+    expect(isMigrateCandidate('D:/p/A.KOJO')).toBe(true);
+    expect(isMigrateCandidate('D:/p/a.kojo1')).toBe(false);
     expect(isMigrateCandidate('D:/p/a.kojo2')).toBe(false);
     expect(isMigrateCandidate('D:/p/a.erb')).toBe(false);
   });

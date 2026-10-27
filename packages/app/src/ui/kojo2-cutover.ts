@@ -7,11 +7,13 @@
  * 换成 2.0）是 `K2-CUTOVER`。这里只交付"切得动、切得回、切了能看"的三件前置件：
  *
  * 1. **特性开关**：三态状态机 `v1-only → dual → 2.0-default`，每步都能回退（`advance` /
- *    `rollback` / 逃生门 `setStage`）。默认 `v1-only`：**失败方向永远是"少露"**。
- * 2. **文件路由**：一份文件到底交给 v1 还是 2.0 解析器。判据顺序 = 口诀：
- *    > override 当家，扩展名先说，阶段定老文件，内容只在 2.0-default 里断 `.kojo`。
- *    结果一律可判别（`resolved` / `ambiguous` / `needs-content` / `blocked` / `not-kojo`），
- *    歧义时给**唯一**允许的兜底而不是随手选一个（`ambiguous.fallback === 'kojo-v1'`）。
+ *    `rollback` / 逃生门 `setStage`）。缺省 `2.0-default`（LAU-3 翻面）。
+ * 2. **文件路由**：一份文件交给 v1 还是 2.0 解析器。LAU-3b-FLIP 之后口诀只剩两句：
+ *    > override 当家，扩展名定归属。
+ *    `.kojo` / `.kojo2` → 2.0，`.kojo1` → kojo1；阶段不再参与路由（只管封存层可见性与
+ *    2.0 工具链），正文指纹也不再参与（退居迁移 / 改名工具的提示面）。结果仍是可判别的
+ *    （`resolved` / `blocked` / `not-kojo`；`ambiguous` / `needs-content` 只作为历史成员
+ *    保留在联合类型里，路由不再产出）。
  * 3. **迁移预览**：对一份 v1 源文本跑 `@kojo/kojo-core` 的迁移引擎（分类 + 改写），返回
  *    diff 摘要 / 预计改动行数 / 不可自动迁移台账。**没有写盘通路**：入参是字符串，出参是
  *    readonly 快照，连一个 IO 端口都不收——"不落盘"是签名保证，不是调用方自觉。
@@ -63,12 +65,18 @@ import {
 /**
  * 三态切换阶段（字符串字面量就是持久化口径；`2.0-default` 带点，读代码时一眼认出）。
  *
- * - `v1-only`：只有 v1 的**切流语义**。`.kojo` 按 v1；`.kojo2` 的**语言面照旧可见**
- *   （descriptor 无条件登记，见 `monaco/languages.ts`），解析器也恒为 2.0——扩展名不是
- *   "切流意图"，不需要开关批准。`blocked` 只留给"把 `.kojo` 显式钉成 2.0"的 override。
- * - `dual`：双轨。老扩展名 `.kojo` 仍按 v1（作者的老工程一行都不用动），新扩展名 `.kojo2` 按 2.0。
- * - `2.0-default`：2.0 默认。`.kojo2` 按 2.0；`.kojo` 交给**内容指纹**判——已是 2.0 写法的
- *   老文件按 2.0 开，还是 v1 写法的仍按 v1，判不出来就报 `ambiguous`（不静默猜）。
+ * ⚠ **2026-10-27 翻转（LAU-3b-FLIP）之后，阶段不再决定任何一份文件用哪个解析器**：
+ * `.kojo` / `.kojo2` 恒归 2.0，`.kojo1` 恒归 kojo1，只认扩展名。阶段只剩两件事：
+ *
+ * - **封存层可不可见**（{@link kojo2StageAllowsLegacy}：`v1-only` / `dual` 为开，
+ *   `2.0-default` 关——关着时 `.kojo1` 打开是纯文本 + 首开说明）；
+ * - **2.0 工具链挂不挂**（写回 / 迁移 / 存储服务等，`isKojo2CutoverEnabled()` 派生）。
+ *
+ * 三档的名字沿用历史，读法改成"封存层与工具链的档位"：
+ *
+ * - `v1-only`：只保留 kojo1 那条工具链（2.0 写回 / 迁移不接管）。`.kojo` 仍按 kojo（2.0）打开；
+ * - `dual`：两边都能用（封存层开、2.0 工具链开）；
+ * - `2.0-default`：kojo（2.0）默认，kojo1 封存（要显式「显示已封存功能」才上色）。
  */
 export type Kojo2CutoverStage = 'v1-only' | 'dual' | '2.0-default';
 
@@ -91,9 +99,9 @@ export const KOJO2_CUTOVER_DEFAULT_STAGE: Kojo2CutoverStage = '2.0-default';
 
 /** 每个阶段的人话口径（设置页 / 调试面板直接上屏；本模块不产出别的界面文案） */
 export const KOJO2_STAGE_LABELS: Readonly<Record<Kojo2CutoverStage, string>> = {
-  'v1-only': '只认 kojo1：老 `.kojo` 按旧写法解析，2.0 的写回 / 迁移 / 解析器切换全部不接管',
-  dual: '双轨：老 `.kojo` 仍按 kojo1，新 `.kojo2` 按 kojo（2.0）',
-  '2.0-default': 'kojo（2.0）默认：`.kojo2` 按 2.0，老 `.kojo` 由内容指纹判（判不出来按 kojo1 打开）',
+  'v1-only': '只留 kojo1 工具链：2.0 的写回 / 迁移不接管；`.kojo` 仍按 kojo（2.0）打开',
+  dual: '双轨：kojo1 可用，`.kojo` / `.kojo2` 按 kojo（2.0）',
+  '2.0-default': 'kojo（2.0）默认：`.kojo` / `.kojo2` 按 2.0；kojo1 封存（要显式开启才上色）',
 };
 
 /** 运行期阶段守卫（持久化里读到脏值 / devtools 传错，一律回缺省，不抛） */
@@ -112,11 +120,12 @@ export function isKojo2CutoverStage(value: unknown): value is Kojo2CutoverStage 
 export const KOJO2_LEGACY_FLAG_KEY = 'kojo.ui.kojo2Cutover.v1';
 
 /**
- * 这一档允不允许挂 2.0 面（`v1-only` = 不允许；`dual` / `2.0-default` = 允许）。
+ * 这一档挂不挂 2.0 **工具链**（`v1-only` = 不挂；`dual` / `2.0-default` = 挂）。
  *
- * 这是 `isKojo2CutoverEnabled()` 的**唯一**语义来源：所有既有 flag 守卫（写回 / 迁移 /
- * `.kojo` 解析器 / 存储服务 / 拖放清单）零改动，只是背后的判据从"布尔键"换成了"阶段"。
- * 语言面（着色 / 语言服务 / 诊断 / 缩进 / 格式化 / 折叠…）**不读**本判据。
+ * 这是 `isKojo2CutoverEnabled()` 的**唯一**语义来源：既有 flag 守卫（写回 / 迁移 /
+ * 存储服务 / 拖放清单）零改动，只是背后的判据从"布尔键"换成了"阶段"。
+ * **语言面（着色 / 语言服务 / 诊断 / 缩进 / 格式化 / 折叠…）不读本判据**；`.kojo` 的
+ * 解析器归属也只认扩展名（LAU-3b-FLIP 之后不再由阶段切换）。
  */
 export function kojo2StageAllowsSurface(stage: Kojo2CutoverStage): boolean {
   return stage !== 'v1-only';
@@ -125,7 +134,7 @@ export function kojo2StageAllowsSurface(stage: Kojo2CutoverStage): boolean {
 /**
  * 这一档**开没开 kojo1（封存层）**（LAU-3 的 `availability:'legacy'` 门的唯一真源）。
  *
- * `v1-only` / `dual` = 开（`.kojo` 仍按 v1 解析）；`2.0-default` = 关（作者选了「2.0 默认」档）。
+ * `v1-only` / `dual` = 开（`.kojo1` 按 kojo1 上色/分析）；`2.0-default` = 关（作者选了「2.0 默认」档）。
  * 一物三用、**不许各写一份**：① 语言可用性门的缺省谓词（`monaco/language-registry.ts`）；
  * ② `.kojo 预览`（`ui/sugar-view.ts`）；③ 语言菜单 / 状态栏的可选性（`ui/ShellLayout.tsx`）。
  * 与 {@link kojo2StageAllowsSurface} 的分工：那一格答"2.0 切流语义开没开"（语言面无条件登记）。
@@ -174,20 +183,29 @@ export type Kojo2AnchorMark = (typeof KOJO2_ANCHOR_MARKS)[number];
 export const KOJO2_FILE_EXTENSION: string = KOJO2_SOURCE_EXTENSION;
 
 /**
- * v1 源扩展名：**直接取契约那一枚**（`@kojo/plugin-api::KOJO_SOURCE_EXTENSION`），
- * 本文件不抄第二份字面量（`kojo-extension-single-source.test.ts` 的全仓守门就查这个）。
+ * v1 源扩展名：**直接取契约那一枚封存标记**（`@kojo/plugin-api::KOJO_LEGACY_SOURCE_EXTENSION`
+ * ＝ `.kojo1`），本文件不抄第二份字面量（`kojo-extension-single-source.test.ts` 的全仓守门就查这个）。
+ *
+ * 2026-10-27 翻转（LAU-3b-FLIP，用户口径「`.kojo` 当场让给 2.0」）之后，`.kojo` 不再是
+ * v1 的源——**v1 只剩 `.kojo1`**。这个名字保留下来是因为上层（诊断门 / 测试）按
+ * 「v1 文件扩展名」的语义在用它，与 {@link KOJO_V1_LEGACY_FILE_EXTENSION} 同值。
  */
-export const KOJO_V1_FILE_EXTENSION: string = KOJO_SOURCE_EXTENSION;
+export const KOJO_V1_FILE_EXTENSION: string = KOJO_LEGACY_SOURCE_EXTENSION;
 
 /**
- * 封存层的**显式**扩展名（LAU-3b）：见到 `.kojo1` 不再嗅正文，恒按 v1 解析。
+ * 封存层（kojo1）的源扩展名：见到 `.kojo1` 不再嗅正文，恒按 v1 解析。
  *
- * 它与 {@link KOJO_V1_FILE_EXTENSION} 的关系：`.kojo` 是过渡期老扩展名（仍走
- * `2.0-default` 的内容指纹），`.kojo1` 是作者用改名工具主动打上的封存标记。
- * 两枚一起构成"v1 源"的全集，但判据分两档——`extension-kojo1` 不给指纹留任何
- * 翻面机会（这就是交接工具的意义：作者说它是旧文件，编辑器不再猜）。
+ * 与 {@link KOJO_V1_FILE_EXTENSION} 同值（翻转后 v1 只剩这一枚），两枚名字并存只为
+ * 读代码时的语义清晰：一个说"v1 的源"，一个说"这是封存标记"。
  */
 export const KOJO_V1_LEGACY_FILE_EXTENSION: string = KOJO_LEGACY_SOURCE_EXTENSION;
+
+/**
+ * 2.0 的源扩展名全集：`.kojo`（主场，LAU-3b-FLIP 之后归 2.0）与 `.kojo2`（旧名，兼容）。
+ *
+ * 两枚都从契约 / 零依赖叶子现算，不抄字面量。
+ */
+export const KOJO2_FILE_EXTENSIONS: readonly string[] = [KOJO_SOURCE_EXTENSION, KOJO2_FILE_EXTENSION];
 
 /* ============================== 内容指纹 ============================== */
 
@@ -290,19 +308,24 @@ function flavorOf(
 export type Kojo2RouteReason =
   /** per-file override（显式破例，优先级最高） */
   | 'override'
-  /** `.kojo2` 扩展名（新文件） */
+  /**
+   * 2.0 的源扩展名（`.kojo` / `.kojo2`）。
+   *
+   * LAU-3b-FLIP：2026-10-27 起 `.kojo` 归 2.0，与阶段、正文都无关——这一条是主路，
+   * 不是"新文件"才走的分支。
+   */
   | 'extension-kojo2'
-  /** `.kojo1` 扩展名（LAU-3b 的显式封存标记：不嗅正文，恒按 v1） */
+  /** `.kojo1` 扩展名（封存标记：不嗅正文，恒按 v1） */
   | 'extension-kojo1'
-  /** `v1-only` 阶段的 `.kojo` */
+  /**
+   * 历史原因，**路由已不再产生**：翻转前 `.kojo` 要按阶段 / 正文判定，那些结论类型
+   * 仍留着（诊断门与题板接线按判别联合写死，删成员要连带改三处消费方）。
+   * 新代码不要按它们分支——`.kojo` 现在走 {@link 'extension-kojo2'}。
+   */
   | 'stage-v1-only'
-  /** `dual` 阶段的 `.kojo`（老文件仍按 v1） */
   | 'stage-dual'
-  /** `2.0-default` 下内容指纹判 2.0 */
   | 'content-kojo2'
-  /** `2.0-default` 下内容指纹判 v1 */
   | 'content-v1'
-  /** `2.0-default` 下空文件（两套等价，按 v1 开） */
   | 'content-empty';
 
 /** 路由判定：判别联合，**没有**"猜一个"的返回值 */
@@ -345,17 +368,14 @@ export type Kojo2RouteDecision =
       readonly extension: string;
     };
 
-/** 歧义提示（作者面人话；`hint` 只在这里出现一次，调用方原样上屏） */
-const AMBIGUOUS_HINT =
-  '这份文件两套解析器都说得通（纯台词/纯注释，或刚迁到一半）：先按 v1 打开；确认是 2.0 就给它加一个 per-file override，或改名成 `.kojo2`。';
-
-/** 缺正文时的提示 */
-const NEEDS_CONTENT_HINT =
-  '2.0 默认阶段下 `.kojo` 要看正文才能定解析器：把文件内容一起传进来（打开后再判），不要只按路径猜。';
-
-/** `v1-only` 阶段被要求"把 `.kojo` 按 2.0 解析"时的提示（`.kojo2` 不适用：它恒归 2.0） */
+/**
+ * `v1-only` 阶段被要求"把某个文件按 2.0 解析"时的提示。
+ *
+ * 翻转之后 `.kojo` / `.kojo2` 恒归 2.0，**阶段拦不到它们**；这条只剩 per-file override
+ * 那一条路（作者把 `.erb` 之类显式钉成 2.0）。
+ */
 const STAGE_BLOCKED_HINT =
-  '当前是 v1-only 阶段：老 `.kojo` 仍按 v1 解析，不吃 2.0 解析器（`.kojo2` 不受影响，照常打开）。切到 dual 或 2.0-default 再切。';
+  '当前是 v1-only 阶段：把非 kojo 文件显式钉成 2.0 解析这件事被阶段挡住了。切到 dual 或 2.0-default 再试。';
 
 /** 取路径最后一段扩展名（小写、含点；`x.kojo.bak` → `.bak`，无扩展名 → 空串） */
 export function extensionOf(filePath: string): string {
@@ -371,7 +391,13 @@ export interface Kojo2RouteInput {
   readonly stage: Kojo2CutoverStage;
   /** 目标文件路径（扩展名判据 + override 键归一都用它） */
   readonly filePath: string;
-  /** 文件正文；只有 `2.0-default` 的 `.kojo` 需要它 */
+  /**
+   * 文件正文。
+   *
+   * **路由已不再读它**（LAU-3b-FLIP：`.kojo` 由扩展名定，不嗅正文）；保留字段是为了
+   * 不打断既有调用方，正文的用处只剩内容指纹（迁移候选 / 改名工具 / 诊断提示），
+   * 那些都直接调 `fingerprintKojo2Source`。
+   */
   readonly source?: string;
   /** 显式 per-file override（最高优先级；`null`/缺省 = 没有） */
   readonly override?: Kojo2Parser | null;
@@ -380,12 +406,15 @@ export interface Kojo2RouteInput {
 /**
  * 路由主判据（纯函数）。
  *
- * 口诀：**override 当家，扩展名先说，阶段定老文件，内容只在 2.0-default 里断 `.kojo`。**
+ * 口诀：**override 当家，扩展名定解析器。**
  *
- * `.kojo2` **在任何阶段都归 2.0**（K2-SURFACE-DEFAULT）：2.0 的语言面无条件注册，扩展名
- * 本身就是"这份文件用 2.0 写法"的声明，与"切没切流"无关。开关管的只是**老 `.kojo`** 的
- * 解析器切换（`2.0-default` 的内容指纹）与"把 `.kojo` 显式钉成 2.0"的 override——后者在
- * `v1-only` 阶段仍是 `blocked`（那是切流语义，不是语言面）。
+ * 2026-10-27（LAU-3b-FLIP，用户口径「`.kojo` 当场让给 2.0」）之后：`.kojo` / `.kojo2`
+ * 恒归 2.0，`.kojo1` 恒归 v1，与切流阶段、正文都无关——这里没有"猜"，也没有
+ * "按阶段把老扩展名留给 v1"那一档。切流三档管的只剩**封存层可不可见**
+ * （`kojo2StageAllowsLegacy`）与迁移提示，不再决定任何一份文件用哪个解析器。
+ *
+ * override 仍是最高优先级；`v1-only` 阶段拦的只有"把非 kojo 文件显式钉成 2.0"
+ * 这一条（切流语义），`.kojo` 本身不受影响。
  */
 export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
   const { stage, filePath } = input;
@@ -404,8 +433,11 @@ export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
     };
   }
 
-  if (extension === KOJO2_FILE_EXTENSION) {
-    // K2-SURFACE-DEFAULT：扩展名自带"这是 2.0 文件"的声明，语言面无条件注册 ⇒ 与阶段无关。
+  if (KOJO2_FILE_EXTENSIONS.includes(extension)) {
+    // LAU-3b-FLIP（2026-10-27 用户口径）：`.kojo` 与 `.kojo2` 都是 2.0 的源。
+    // 扩展名自带"这是 2.0 文件"的声明，语言面无条件注册 ⇒ 与阶段、正文都无关。
+    // 盘上还没迁移的 v1 旧文件不会再被"正文嗅探"悄悄接走——它们要么由迁移原地改写成
+    // 2.0，要么由改名工具标成 `.kojo1`；这份确定性正是翻转要买的东西。
     return {
       kind: 'resolved',
       filePath,
@@ -415,10 +447,8 @@ export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
     };
   }
 
-  if (extension === KOJO_V1_LEGACY_FILE_EXTENSION) {
-    // LAU-3b：`.kojo1` 是作者显式打上的封存标记 —— 与阶段、正文都无关，恒按 v1。
-    // 交接工具只改名不改内容，这条判据就是它的落点：改完之后 2.0-default 的正文嗅探
-    // 不再有机会把一份旧文件读成 2.0（那正是"改名"要买的确定性）。
+  if (extension === KOJO_V1_FILE_EXTENSION) {
+    // `.kojo1` 是封存标记：与阶段、正文都无关，恒按 v1。
     return {
       kind: 'resolved',
       filePath,
@@ -428,68 +458,7 @@ export function decideKojo2Route(input: Kojo2RouteInput): Kojo2RouteDecision {
     };
   }
 
-  if (extension !== KOJO_V1_FILE_EXTENSION) {
-    return { kind: 'not-kojo', filePath, extension };
-  }
-
-  if (stage === 'v1-only') {
-    return {
-      kind: 'resolved',
-      filePath,
-      parser: 'kojo-v1',
-      reason: 'stage-v1-only',
-      fingerprint: null,
-    };
-  }
-
-  if (stage === 'dual') {
-    return {
-      kind: 'resolved',
-      filePath,
-      parser: 'kojo-v1',
-      reason: 'stage-dual',
-      fingerprint: null,
-    };
-  }
-
-  // 2.0-default：老扩展名只有在**正文**能说话时才换解析器
-  if (input.source === undefined) {
-    return {
-      kind: 'needs-content',
-      filePath,
-      reason: 'content-required',
-      hint: NEEDS_CONTENT_HINT,
-    };
-  }
-  const fingerprint = fingerprintKojo2Source(input.source);
-  switch (fingerprint.flavor) {
-    case 'kojo2':
-      return {
-        kind: 'resolved',
-        filePath,
-        parser: 'kojo2',
-        reason: 'content-kojo2',
-        fingerprint,
-      };
-    case 'v1':
-      return {
-        kind: 'resolved',
-        filePath,
-        parser: 'kojo-v1',
-        reason: 'content-v1',
-        fingerprint,
-      };
-    case 'empty':
-      return {
-        kind: 'resolved',
-        filePath,
-        parser: 'kojo-v1',
-        reason: 'content-empty',
-        fingerprint,
-      };
-    case 'ambiguous':
-      return { kind: 'ambiguous', filePath, fallback: 'kojo-v1', fingerprint, hint: AMBIGUOUS_HINT };
-  }
+  return { kind: 'not-kojo', filePath, extension };
 }
 
 /* ============================== 迁移预览 ============================== */

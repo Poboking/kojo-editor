@@ -9,7 +9,7 @@
  * ```
  * ui-sugar-preview 面板插件  --(服务槽)-->  kojo-sugar 的 sugar.preview
  *                                                |
- *                                        内核 io（只读当前 .kojo）
+ *                                        内核 io（只读当前 .kojo1）
  * ```
  *
  * 三件事必须同时成立：
@@ -40,7 +40,7 @@ const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 const enc = (s: string) => new TextEncoder().encode(s);
 
 const KOJO = ['角色: 1', '时机 初见：', '    「你好。」', '    她笑了。 续', ''].join('\n');
-const PATH = '/proj/口上/x.kojo';
+const PATH = '/proj/口上/x.kojo1';
 
 /** 伪内核 io（内存 FS；与 lift 集成测试同款） */
 function makeIO(files: Record<string, Uint8Array>) {
@@ -302,7 +302,7 @@ describe('S4-UI / 端到端：读源 → 预览 → 面板建行（只读）', (
     return { k, preview };
   };
 
-  it('io 读当前 .kojo → sugar.preview → 行数 = 源文件行数；面板逐行同源', async () => {
+  it('io 读当前 .kojo1 → sugar.preview → 行数 = 源文件行数；面板逐行同源', async () => {
     const { k, preview } = boot();
     const tf = await k.io.readText(PATH);
     const res = await preview.preview({ source: tf.text, filePath: PATH });

@@ -187,8 +187,8 @@ const TUTORIAL_ENTRIES: readonly {
     id: 'sugar',
     icon: 'wand',
     glyph: '✦',
-    name: '.kojo 语言教程',
-    blurb: '.kojo 语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
+    name: '.kojo1 语言教程',
+    blurb: 'kojo1（封存）语言的每一种写法，以及它编译成的 ERB（每种写法都有一条对照样例）',
   },
   {
     id: 'kojo2',
@@ -196,7 +196,7 @@ const TUTORIAL_ENTRIES: readonly {
     glyph: '❖',
     name: 'Kojo 2.0 语言教程',
     blurb:
-      'Kojo 2.0（`.kojo2`）的每一种写法。今天默认档位仍是「只认 v1」，这一本只教 2.0 那一套，不与 v1 混讲',
+      'Kojo 2.0（`.kojo`）的每一种写法。默认档就是它；这一本只教 2.0 那一套，不与封存的 kojo1 混讲',
   },
   {
     id: 'reference',
@@ -562,7 +562,7 @@ export function createKojoProjectsPanel(
                   'button',
                   {
                     className: 'kp-action',
-                    title: `把「${a.name}」打包成 ZIP（.kojo 自动转译为 .ERB）到选定位置，工作区原件不动`,
+                    title: `把「${a.name}」打包成 ZIP（.kojo1 自动转译为 .ERB）到选定位置，工作区原件不动`,
                     onClick: () => deps.exportArtifact(dir, a.name),
                   },
                   '导出',

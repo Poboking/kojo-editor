@@ -222,7 +222,7 @@ describe('P-10③-B 转译层：表内名零诊断 / 表外名必出一条 warn'
   it('warn 不拦保存前置检查（`planSave` 只因 error 而 blocked）', () => {
     const plan = svc().planSave({
       source: cond('NOWEX:噴乳乳瞎写 == 1'),
-      sourcePath: 'ERB/KOJO/M_KOJO_K12_指令.kojo',
+      sourcePath: 'ERB/KOJO/M_KOJO_K12_指令.kojo1',
     });
     expect(plan.transpile.diagnostics.some((d) => d.code === 'family-name-unknown')).toBe(true);
     expect(plan.blocked).toBe(false);

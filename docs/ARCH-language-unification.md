@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v1.1（设计稿；§8 的七路前置批已落 dev，逐枚落点见下行「状态」）。v1.0 → v1.1 = **LAU-0 事实修订批**：11 处读数 / 出处 / 节点名改正，§4.1 保留差集通道，§5.2 由「新造 `dialect.ts`」改为「既有 2.0 `GameAdapter` 的只读投影」，§5.3 真源改为已上线的 `detect()` 链，§8 增五枚批（LAU-0 / 1a / 2a / 3b / 6a），§9 判据改成 audit 同形态。**逐条对照见附录 A**；设计主张（§2 决策表 / §3 六纪律）未变，只增 D13。**七路交付批的落点与实测改口见 §8.1 + 附录 B（8 条）** |
 | 日期 | 2026-10-25（v1.0）· 2026-10-25（v1.1 修订，逐条带 file:line 取证） |
-| 状态 | **v1.1 交付状态（2026-10-25 七路批已落 dev）**：LAU-0 `ebf8e03c` · GATE `6ca3c4c3` · 2a `f006547c` · D1a `875b05d3` · 1a `4c1487c4` · 6a `45d18791` · SYNTAX `3a76d857`＋`87b7e26c` · FIXTURE `b9e87b2e`（交付回执在各提交信息，基线读数见 `STATE.md` §一）。设计主张仍是设计稿——未落地的批次按 §8 推进。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`（**词位已入表并过 wasm 棘轮，但消费方尚未接线**——`# 方言` 现在只被词法/文法/Monarch 三面认出，解析链要等 LAU-D1b）。**但 LAU-1 / LAU-D1b 暂不可开工**，两个前置未决：① 契约落点（`plugin-api` vs `kojo-core`）挂在 BOARD 的 **K2-CONTRACT / D0 裁决**上，LAU 不替它拍板（§4 抬头）；② LAU-3/4 与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。已做完的是 LAU-0（＝v1.1 文档批）/ LAU-1a / LAU-2a / LAU-6a + GATE / SYNTAX / FIXTURE / D1a；**LAU-3 框架批已交付（2026-10-27，分支 `b/qoder/1027-lau-framework`）**——§6 的 id 二选一已按用户口径定案＝改名 `kojo-legacy`（插件 id / 包名不动），缺省档翻 `2.0-default`，封存层连语义分析一起停；**LAU-3b 解耦批（同分支）已落前半**：kojo1 插件族按切流阶段装配（缺省档不实例化）、ERB / kojo2 / 宿主共用词表迁至 `@kojo/kojo-vocab`、v1 转译包整体离开开机静态图。**LAU-3b 收尾批（2026-10-27，同分支）已交付**：`.kojo → .kojo1` 改名工具（内容指纹只挑 v1 写法、清单先过目、逐文件写权限闸 + 写前备份 + 只改名不改内容；只读域拒绝）与封存档首开说明（一次性台账 + 直达设置页）。**扩展名翻转（`.kojo` 让给 2.0）刻意没有随本批做**：先让作者用工具把旧文件标成 `.kojo1`，再翻扩展名，否则盘上的 v1 `.kojo` 会在翻转那一刻被当成 2.0 读。翻转仍是后续批。**LAU-4（ERB 进槽、与 kojo2 同一条供方路径）方案未变，仍等 SDK B4/B5** |
+| 状态 | **v1.1 交付状态（2026-10-25 七路批已落 dev）**：LAU-0 `ebf8e03c` · GATE `6ca3c4c3` · 2a `f006547c` · D1a `875b05d3` · 1a `4c1487c4` · 6a `45d18791` · SYNTAX `3a76d857`＋`87b7e26c` · FIXTURE `b9e87b2e`（交付回执在各提交信息，基线读数见 `STATE.md` §一）。设计主张仍是设计稿——未落地的批次按 §8 推进。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`（**词位已入表并过 wasm 棘轮，但消费方尚未接线**——`# 方言` 现在只被词法/文法/Monarch 三面认出，解析链要等 LAU-D1b）。**LAU-1 / LAU-D1b 的两个前置已解**：① 契约落点由用户 **2026-10-27 裁定 = `@kojo/kojo-core`**（BOARD K2-CONTRACT 已结，不再镜像 plugin-api）；② LAU-4 仍与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。已做完的是 LAU-0（＝v1.1 文档批）/ LAU-1a / LAU-2a / LAU-6a + GATE / SYNTAX / FIXTURE / D1a；**LAU-3 框架批已交付（2026-10-27，分支 `b/qoder/1027-lau-framework`）**——§6 的 id 二选一已按用户口径定案＝改名 `kojo-legacy`（插件 id / 包名不动），缺省档翻 `2.0-default`，封存层连语义分析一起停；**LAU-3b 解耦批（同分支）已落前半**：kojo1 插件族按切流阶段装配（缺省档不实例化）、ERB / kojo2 / 宿主共用词表迁至 `@kojo/kojo-vocab`、v1 转译包整体离开开机静态图。**LAU-3b 收尾批（2026-10-27，同分支）已交付**：`.kojo → .kojo1` 改名工具（内容指纹只挑 v1 写法、清单先过目、逐文件写权限闸 + 写前备份 + 只改名不改内容；只读域拒绝）与封存档首开说明（一次性台账 + 直达设置页）。**扩展名翻转（`.kojo` 让给 2.0）已随本批最终落地（2026-10-27，用户口径「现在就让」）**：路由只认扩展名——`.kojo` / `.kojo2` → 2.0，`.kojo1` → kojo1；内容指纹退居迁移与改名工具的提示面（不再参与路由/归属）；迁移是原地改写（候选恒 `.kojo`），`resolveSugarTarget` 只认封存层 `.kojo1`。**LAU-4（ERB 进槽、与 kojo2 同一条供方路径）方案未变，仍等 SDK B4/B5** |
 | 范围 | ① ERB / kojo v1（封存）/ kojo2 三条并行结构栈收成一套：**一份协议、一份角色表、一个槽位契约**；② 多 era 适配收进**方言层**（§5），语法不分叉 |
 | 前置 | `KOJO-2.0-LANGUAGE-SPEC.md` §0.2（单一模式）/ §5.3 / §12.1（旧拼写 error+迁移）/ §10（adapter 契约，**§10.1 十五格就是本方案的事实面**）；`HANDOFF-kojo2-sdk-packages.md` B0–B5；`HANDOFF-erafl-adapter.md`（多 era 事实）；**BOARD 在办批次**：`K2-CONTRACT`（契约落点待 D0 裁决）、`ERB-PARITY`（同文件，串行）、`POS-UTIL`（坐标换算收口，§4.6 的 `includedRanges` 归它管） |
 | 不做 | 不改 2.0 语法；不动 `EDITOR_SEMANTIC_TOKEN_TYPES`；不新增 workspace 包；**不为任何 era 分叉语法** |
@@ -152,13 +152,10 @@ LAU 沿着这条既有路线走，不另起炉灶——**但 B4/B5 尚未开工*
 > 下列签名是**目标形状**，不新增 workspace 包（遵循 spec §12.3「不先改名现有包」）。
 > 现有 `KojoStructure*` 类型在 LAU-1 期间保留为**类型别名**，LAU-1 收尾时删除。
 >
-> ⚠ **落点未定，本节类型先按形状评审**（v1.1 改口）。v1.0 写的是"落在 `packages/plugin-api/src/`"，
-> 但 2.0 契约今天住在 `packages/kojo-core/src/adapter.ts`（1,410 行，含 `validateGameAdapter`），
-> 而 BOARD 的 **K2-CONTRACT** 正把「2.0 契约面落 `kojo-core`、与设计稿 C1.2『扩 plugin-api』的偏离」
-> 挂着**待 D0 裁决**（认领：lead 2026-10-21）。LAU 不替 D0 拍板：落点随 D0 结论一次性定，
-> **在此之前 LAU-1 / LAU-D1 不开实现批**（否则两处同时改契约面，additive 纪律守不住）。
-> 结构协议（§4.1）与角色表（§4.2）不涉及这个裁决——它们是宿主↔worker 与宿主↔主题的边界，
-> 与游戏事实无关，可以按 LAU-1 / LAU-2 先走。
+> ✅ **落点已定（用户 2026-10-27 裁定）＝ `packages/kojo-core/src/`**。v1.0 写的"落 `packages/plugin-api/src/`"
+> 已被否决：2.0 契约住在 `kojo-core/src/adapter.ts`（`validateGameAdapter` 同处），**不**再 additive 镜像到
+> plugin-api（BOARD K2-CONTRACT 已结）。本节类型仍按"落 `kojo-core`"阅读；LAU-1 / LAU-D1 据此开实现批。
+> 结构协议（§4.1）与角色表（§4.2）本来就是宿主↔worker 与宿主↔主题的边界，与游戏事实无关，可按 LAU-1 / LAU-2 先行。
 
 ## 4.1 协议 `structure-protocol.ts`
 
@@ -995,7 +992,7 @@ export interface EditorDocumentIdentity {
 | 项 | 取值 |
 |---|---|
 | 语言 id | `kojo-legacy`。⚠ v1 **改名前**（LAU-3 之前）的 id 是 **`kojo-sugar`**（`monaco/kojo-language.ts KOJO_LANGUAGE_ID`），改 id 与改扩展名是**两笔独立代价**：所有按 id 注册 provider / 分支 / 存设置项的地方都要跟着走（§9-1 的闸基线＝M2「语言 id 分支」162 行，里面大部分就是这类 id 引用）。若只为封存，**保留 `kojo-sugar` 这个 id、只加 `availability:'legacy'`** 是更便宜的一条路，LAU-3 开工前二选一定案。**✅ 2026-10-27 定案（用户口径）＝改名**：语言 id 改 `kojo-legacy`，label 改「kojo1（封存）」；**插件 id / 包名 `kojo-sugar` 不动**。~~2.0 侧仍 import 它的词表~~ ⇒ **LAU-3b 解耦批已断**：ERB / kojo2 / 宿主共用的词表、词法、格式化全部迁到 `@kojo/kojo-vocab`（非插件包），本包只剩 v1 转译管线与它自己的宿主面，可随 kojo1 整体删除。旧 id 的兼容读在 `ui/language-mode-pref.ts`（存量覆盖表读时别名） |
-| 扩展名 | `.kojo1`（见 §6.1；**过渡期两枚并认**：`.kojo` 仍归 v1 解析器，`.kojo1` 是显式封存标记。单一真源 `plugin-api/src/sugar.ts` 的 `KOJO_V1_SOURCE_EXTENSIONS` / `KOJO_LEGACY_SOURCE_EXTENSION`，2.0 是 `kojo-lang/src/constants.ts:23`） |
+| 扩展名 | `.kojo1`（见 §6.1；**2026-10-27 起封存层只剩这一枚**：`.kojo` 已让给 2.0。单一真源 `plugin-api/src/sugar.ts` 的 `KOJO_LEGACY_SOURCE_EXTENSION` / `KOJO_V1_SOURCE_EXTENSIONS`，2.0 是 `KOJO_SOURCE_EXTENSION` + `kojo-lang/src/constants.ts:23` 的旧名 `.kojo2`） |
 | `availability` | `legacy` |
 | `settingKey` | `ui.legacy-kojo-syntax`，**默认 false** |
 | 设置页文案 | 「命令式 Kojo 语法（封存）—— 不再演进，仅保证旧文件可打开」 |
@@ -1022,7 +1019,7 @@ export interface EditorDocumentIdentity {
 > **已定：A。** 于是 K2-CUTOVER 的动作是"让出扩展名"，不是"删掉 v1"：
 > `KOJO_SOURCE_EXTENSION` 改指 2.0；v1 descriptor 改认 `.kojo1`；随附一键改扩展名工具（只改名、不改内容）。
 >
-> **落地进度（LAU-3b，2026-10-27）**：第一步已交付——`.kojo1` 成为封存层显式扩展名（语言面 / 路由 / 快速打开 / 拖放 / 引用台账 / 产物目标 / 迁移入口全认），改名工具上线（`ui/kojo1-rename-model.ts` + `ui/kojo1-rename.tsx`，命令 `workbench.legacyRename`，设置页「Kojo 2.0 切流」也有入口）。**`.kojo` 尚未让出**：翻转要等作者用工具把旧文件标完，否则盘上的 v1 `.kojo` 会在翻开那一刻被当成 2.0 读；那一步仍按 §6.1 的四笔代价单独排批。
+> **落地（LAU-3b + LAU-3b-FLIP，2026-10-27）**：第一步交付——`.kojo1` 成为封存层显式扩展名（语言面 / 路由 / 快速打开 / 拖放 / 引用台账 / 产物目标 / 迁移入口全认），改名工具上线（`ui/kojo1-rename-model.ts` + `ui/kojo1-rename.tsx`，命令 `workbench.legacyRename`，设置页「Kojo 2.0 切流」也有入口）。第二步翻转按用户 2026-10-27 口径**当场落地**：`KOJO_SOURCE_EXTENSION`（`.kojo`）归 2.0、v1 descriptor 只认 `.kojo1`；路由/诊断归属只认扩展名（内容指纹退居迁移与改名工具的提示面），`.kojo` 的迁移是原地改写。四笔代价的具体兑现见 `docs/STATE.md` §一与提交回执。
 > 封存层因此天然是"另一个扩展名的另一门语言"，2.0 编译器里一行旧分支都不需要（D7）。
 
 **方案 A 的四笔实际代价（v1.1 补，取证后再排批）**：

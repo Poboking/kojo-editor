@@ -196,7 +196,7 @@ export function createVerdictPanel(deps: VerdictPanelDeps): (props: UIPanelProps
         createElement(
           'div',
           { className: 'sv-toolbar' },
-          createElement('span', { className: 'dim' }, '.kojo 校验（转译诊断；只读）'),
+          createElement('span', { className: 'dim' }, '.kojo1 校验（转译诊断；只读）'),
           createElement(
             'button',
             {

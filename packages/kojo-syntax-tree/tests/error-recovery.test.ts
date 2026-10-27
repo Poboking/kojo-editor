@@ -31,7 +31,7 @@ function collect(dir: string, out: string[]): string[] {
     if (e.name === 'node_modules') continue;
     const p = join(dir, e.name);
     if (e.isDirectory()) collect(p, out);
-    else if (e.name.endsWith('.kojo')) out.push(p);
+    else if (e.name.endsWith('.kojo1') || e.name.endsWith('.kojo')) out.push(p);
   }
   return out;
 }

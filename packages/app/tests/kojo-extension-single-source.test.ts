@@ -251,21 +251,21 @@ function mockMonaco() {
   return { registered, monaco: monaco as unknown as Parameters<typeof registerKojoLanguage>[0] };
 }
 
-describe('③ 行为面：`.kojo` 注册覆盖大小写两形态，且与选语言判据对拍', () => {
+describe('③ 行为面：封存层 `.kojo1` 注册覆盖大小写两形态，且与选语言判据对拍', () => {
   it('登记的 extensions == 契约派生物 == 原样 + 全大写', () => {
     const { registered, monaco } = mockMonaco();
     registerKojoLanguage(monaco);
     expect(registered).toHaveLength(1);
     const { extensions } = registered[0]!;
     expect(extensions).toEqual(kojoMonacoExtensions());
-    expect(extensions).toContain(KOJO_SOURCE_EXTENSION);
-    expect(extensions).toContain(KOJO_SOURCE_EXTENSION.toUpperCase());
+    // LAU-3b-FLIP：kojo1 面只剩封存层 `.kojo1`；`.kojo` 归 2.0 的注册面（kojo2-language）。
+    expect(extensions).toContain(KOJO_LEGACY_SOURCE_EXTENSION);
+    expect(extensions).toContain(KOJO_LEGACY_SOURCE_EXTENSION.toUpperCase());
+    expect(extensions).not.toContain(KOJO_SOURCE_EXTENSION);
   });
 
   it('派生物形态：清单进、成对大小写出——契约清单加一项，注册处零改动就跟上新形态', () => {
     expect(kojoMonacoExtensions()).toEqual([
-      KOJO_SOURCE_EXTENSION,
-      KOJO_SOURCE_EXTENSION.toUpperCase(),
       KOJO_LEGACY_SOURCE_EXTENSION,
       KOJO_LEGACY_SOURCE_EXTENSION.toUpperCase(),
     ]);

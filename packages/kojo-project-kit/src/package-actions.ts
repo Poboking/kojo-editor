@@ -162,7 +162,7 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
             set(
               {
                 kind: 'ok',
-                text: `已导出「${displayName}」${plan.transpiled} 个 .kojo 转译为 .ERB、` +
+                text: `已导出「${displayName}」${plan.transpiled} 个 .kojo1 转译为 .ERB、` +
                   `${plan.passthrough} 个文件原样打包 → ${target}`,
               },
               STATUS_OK_DISMISS_MS,

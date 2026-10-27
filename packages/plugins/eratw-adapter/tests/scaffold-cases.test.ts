@@ -5,17 +5,17 @@
  * 事件／日常指令／刻印取得／性骚扰指令 4 面，撤掉面的空壳必须**整块不出现**
  * 【库内现成案例】标题）——
  * 空壳注释里的案例块**逐字来自真实口上库现成函数**：
- * `fixtures/scaffold/<stem>.erb` 是库内摘取的原 ERB 片段，`<stem>.kojo` 是用本仓
+ * `fixtures/scaffold/<stem>.erb` 是库内摘取的原 ERB 片段，`<stem>.kojo1` 是用本仓
  * 升糖投影 `liftProject`（`kojo-sugar/src/project.ts`）转写、台词按类目简化后的
  * 糖片段；`scaffold.ts` 的 `FACE_CASES` 常量承载同一份文本（脚手架纯函数、无 IO）。
  * 本文件钉住这条链，任何一环被手改一个字都会被抓出：
  *
- * 1. **常量 ↔ fixture**：`FACE_CASES[stem].lines` 与 `<stem>.kojo` 正文逐行一致；
- *    且 `<stem>.erb` / `<stem>.kojo` 成对存在；
+ * 1. **常量 ↔ fixture**：`FACE_CASES[stem].lines` 与 `<stem>.kojo1` 正文逐行一致；
+ *    且 `<stem>.erb` / `<stem>.kojo1` 成对存在；
  * 2. **空壳 ↔ fixture**：生成的面文件里案例块每一行（去 `; ` 前缀、trimStart）都能在
- *    `<stem>.kojo` 里逐字找到（类目占位行与来源注释行按白名单放行）；
+ *    `<stem>.kojo1` 里逐字找到（类目占位行与来源注释行按白名单放行）；
  * 3. **fixture ↔ 库片段（现场重推导）**：从 `<stem>.erb` 出发重跑「台词类目化 +
- *    liftProject 投影」，产物必须等于 `<stem>.kojo` 正文——证明糖片段真是工具转出来的，
+ *    liftProject 投影」，产物必须等于 `<stem>.kojo1` 正文——证明糖片段真是工具转出来的，
  *    不是人手工抄的；
  * 4. **不变量**：面文件每一行都以 `;` 开头（无活函数）；案例块**不得出现** `.erb` 里
  *    被简化掉的真实台词文本（反向断言，并自带"检测器不是空转"的正样本自证）；
@@ -23,7 +23,7 @@
  * 6. **可写性守卫**（返工批 2026-10-14）：把每面案例正文拼成最小可转译文档
  *    （`角色: <数字>` 文件头 + 正文），喂给**真实转译服务**（createSugarTranspileService
  *    + 本包真实分野表 + 本包真实变量字典），要求**零 error 级诊断**（warn 放行）。
- *    示例是给人照抄进 `.kojo` 的——转译报错的写法就不是示例。
+ *    示例是给人照抄进 `.kojo1` 的——转译报错的写法就不是示例。
  *
  * 说明：本文件是**测试**，按解耦审计 C 项豁免可跨包 import——装配走仓内先例
  * （`kernel/package.json` 把插件包列 devDependencies 后按**包名** import）：
@@ -51,12 +51,12 @@ import { loadEratwVariableSchema } from '../src/variable-schema';
 
 const FIXTURE_DIR = new URL('../../../../fixtures/scaffold/', import.meta.url);
 
-function fixturePath(stem: string, ext: 'erb' | 'kojo'): string {
+function fixturePath(stem: string, ext: 'erb' | 'kojo1'): string {
   return fileURLToPath(new URL(`${stem}.${ext}`, FIXTURE_DIR));
 }
 
 /** fixture 文件 → 去 BOM、统一 LF 后的行数组 */
-function fixtureLines(stem: string, ext: 'erb' | 'kojo'): string[] {
+function fixtureLines(stem: string, ext: 'erb' | 'kojo1'): string[] {
   return readFileSync(fixturePath(stem, ext), 'utf8')
     .replace(/^﻿/, '')
     .replace(/\r\n/g, '\n')
@@ -65,14 +65,14 @@ function fixtureLines(stem: string, ext: 'erb' | 'kojo'): string[] {
 }
 
 /** fixture 第一行必须是来源注释（两文件同一份），其后空一行再是正文 */
-function fixtureHeader(stem: string, ext: 'erb' | 'kojo'): string {
+function fixtureHeader(stem: string, ext: 'erb' | 'kojo1'): string {
   const first = fixtureLines(stem, ext)[0] ?? '';
   expect(first, `${stem}.${ext} 缺来源注释`).toMatch(/^; 来源：.+ :: @.+；摘取日期 2026-10-14$/);
   return first;
 }
 
 /** fixture 正文（去掉来源注释行与紧随的空行） */
-function fixtureBody(stem: string, ext: 'erb' | 'kojo'): string[] {
+function fixtureBody(stem: string, ext: 'erb' | 'kojo1'): string[] {
   const lines = fixtureLines(stem, ext);
   expect(lines[1] ?? '', `${stem}.${ext} 来源注释后应为空行`).toBe('');
   const body = lines.slice(2);
@@ -121,7 +121,7 @@ function projectView(snippet: string[]): string[] {
 /* ============================== 空壳解析 ============================== */
 
 const CASE_HEAD_RE = /^; 【库内现成案例】照抄 /;
-const CASE_TAIL_TEXT = '; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「.kojo 语言教程」。';
+const CASE_TAIL_TEXT = '; 上面的编号与角色号来自那份现成口上，照你自己要写的场合改；写法详见「.kojo1 语言教程」。';
 
 const stubOptions: KojoScaffoldOptions = {
   workName: '东方口上合集',
@@ -131,6 +131,8 @@ const stubOptions: KojoScaffoldOptions = {
   charaName: '博丽 灵梦',
   scriptNo: 1,
   license: 'none',
+  // LAU-3b-FLIP：案例块只在封存糖档出现，缺省档已翻原生 ⇒ 这里必须显式选糖档
+  langDoc: 'sugar',
 };
 
 function stubFor(stem: string): string {
@@ -217,39 +219,39 @@ const CASE_STEMS = ['事件', '日常指令', '刻印取得', '性骚扰指令']
 const REMOVED_STEMS = ['性交指令', '奉仕指令', '爱抚指令', '绝顶'];
 
 describe('脚手架案例溯源守卫（fixtures/scaffold ↔ FACE_CASES ↔ 空壳注释）', () => {
-  it('有案例的面齐全：FACE_CASES 键集恰好 = CASE_STEMS；.erb / .kojo 成对存在；来源注释两文件一致', () => {
+  it('有案例的面齐全：FACE_CASES 键集恰好 = CASE_STEMS；.erb / .kojo1 成对存在；来源注释两文件一致', () => {
     expect(Object.keys(FACE_CASES).sort()).toEqual([...CASE_STEMS].sort());
     for (const stem of CASE_STEMS) {
       expect(existsSync(fixturePath(stem, 'erb')), `缺 fixtures/scaffold/${stem}.erb`).toBe(true);
-      expect(existsSync(fixturePath(stem, 'kojo')), `缺 fixtures/scaffold/${stem}.kojo`).toBe(true);
-      expect(fixtureHeader(stem, 'kojo'), `${stem} 两 fixture 来源注释应一致`).toBe(
+      expect(existsSync(fixturePath(stem, 'kojo1')), `缺 fixtures/scaffold/${stem}.kojo1`).toBe(true);
+      expect(fixtureHeader(stem, 'kojo1'), `${stem} 两 fixture 来源注释应一致`).toBe(
         fixtureHeader(stem, 'erb'),
       );
     }
     for (const stem of REMOVED_STEMS) {
       expect(FACE_CASES[stem], `${stem}：案例已撤，不许再有 FACE_CASES 键`).toBeUndefined();
       expect(existsSync(fixturePath(stem, 'erb')), `${stem}：案例已撤，不许留 .erb fixture`).toBe(false);
-      expect(existsSync(fixturePath(stem, 'kojo')), `${stem}：案例已撤，不许留 .kojo fixture`).toBe(false);
+      expect(existsSync(fixturePath(stem, 'kojo1')), `${stem}：案例已撤，不许留 .kojo1 fixture`).toBe(false);
       expect(stubFor(stem), `${stem}：空壳不得输出【库内现成案例】标题块`).not.toContain('【库内现成案例】');
     }
   });
 
-  it('FACE_CASES 常量与 <stem>.kojo 正文逐字一致（单一真源 = fixture）', () => {
+  it('FACE_CASES 常量与 <stem>.kojo1 正文逐字一致（单一真源 = fixture）', () => {
     for (const stem of CASE_STEMS) {
-      expect(FACE_CASES[stem]!.lines, `${stem}：常量 ≠ fixture`).toEqual(fixtureBody(stem, 'kojo'));
+      expect(FACE_CASES[stem]!.lines, `${stem}：常量 ≠ fixture`).toEqual(fixtureBody(stem, 'kojo1'));
     }
   });
 
-  it('空壳案例块每一行都能在对应 <stem>.kojo 里逐字找到（占位行白名单放行）', () => {
+  it('空壳案例块每一行都能在对应 <stem>.kojo1 里逐字找到（占位行白名单放行）', () => {
     for (const stem of CASE_STEMS) {
-      const allowed = lineSet(fixtureBody(stem, 'kojo'));
+      const allowed = lineSet(fixtureBody(stem, 'kojo1'));
       const drift = driftedLines(caseBodyLines(stubFor(stem)), allowed);
       expect(drift, `${stem}：案例块出现了 fixture 里没有的行`).toEqual([]);
     }
   });
 
   it('反向自证：改一个字就被抓出（守卫不是空转）', () => {
-    const allowed = lineSet(fixtureBody('刻印取得', 'kojo'));
+    const allowed = lineSet(fixtureBody('刻印取得', 'kojo1'));
     // 正样本：真实存在的行（含带缩进原样与 trimStart 两种写法）必须通过
     expect(driftedLines(['时机 标记：', '\t\t「日常的对话」', '\t如果 TFLAG:22 == 1：'], allowed)).toEqual([]);
     // 负样本：条件里改一个字（编号/变量不许漂移）必须被抓出
@@ -257,12 +259,12 @@ describe('脚手架案例溯源守卫（fixtures/scaffold ↔ FACE_CASES ↔ 空
     expect(driftedLines(['时机 标记2：'], allowed)).not.toEqual([]);
   });
 
-  it('<stem>.kojo 现场重推导 == <stem>.erb 台词类目化后 liftProject（糖不是手抄的）', () => {
+  it('<stem>.kojo1 现场重推导 == <stem>.erb 台词类目化后 liftProject（糖不是手抄的）', () => {
     for (const stem of CASE_STEMS) {
       const erb = fixtureBody(stem, 'erb');
       const category = FACE_CASES[stem]!.category;
       const derived = projectView(simplifySpeech(erb, category));
-      expect(derived, `${stem}：.kojo ≠ 由 .erb 派生（重跑升糖对不上）`).toEqual(fixtureBody(stem, 'kojo'));
+      expect(derived, `${stem}：.kojo1 ≠ 由 .erb 派生（重跑升糖对不上）`).toEqual(fixtureBody(stem, 'kojo1'));
     }
   });
 
@@ -366,7 +368,7 @@ describe('脚手架案例溯源守卫（fixtures/scaffold ↔ FACE_CASES ↔ 空
     const failing: Record<string, string[]> = {};
     for (const stem of CASE_STEMS) {
       const doc = `角色: 1\n${FACE_CASES[stem]!.lines.join('\n')}\n`;
-      const { diagnostics } = svc.transpile(doc, { filePath: `packages/脚手架/${stem}.kojo` });
+      const { diagnostics } = svc.transpile(doc, { filePath: `packages/脚手架/${stem}.kojo1` });
       const errors = diagnostics.filter((d) => d.severity === 'error').map((e) => `${e.code}: ${e.message}`);
       if (errors.length > 0) failing[stem] = errors;
     }
@@ -386,7 +388,7 @@ describe('脚手架案例溯源守卫（fixtures/scaffold ↔ FACE_CASES ↔ 空
     const svc = createSugarTranspileService({ dictionary, faceTable: createEratwFaceTable() });
     const run = (lines: string[]) =>
       svc
-        .transpile(`角色: 1\n${lines.join('\n')}\n`, { filePath: '自证.kojo' })
+        .transpile(`角色: 1\n${lines.join('\n')}\n`, { filePath: '自证.kojo1' })
         .diagnostics.filter((d) => d.severity === 'error');
     // 正样本：纯数字编号
     expect(run(['时机 指令 88：', '\t「涩涩的话」'])).toEqual([]);

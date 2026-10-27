@@ -126,9 +126,14 @@ export function toRelPath(path: string): string {
   return path.replaceAll('\\', '/').replace(/^\/+/, '');
 }
 
-/** 是否 `.kojo` 源文件（大小写不敏感） */
+/**
+ * 是否**糖源**文件（大小写不敏感）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 已归 2.0，糖（kojo1）的源只剩封存层 `.kojo1`；
+ * 与 `resolveSugarTarget` 的接收集合同口径（认的是一个才不会有"认出来却推不出产物名"）。
+ */
 export function isKojoSource(relPath: string): boolean {
-  return /\.kojo$/i.test(relPath);
+  return /\.kojo1$/i.test(relPath);
 }
 
 /** 文本解码（`.kojo` 源按 UTF-8 读；带 BOM 时剥掉，避免把 BOM 当正文喂给转译器） */

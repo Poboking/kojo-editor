@@ -25,7 +25,7 @@
  * `tests/language-parity.test.ts` 里红。
  */
 import type * as Monaco from './entry';
-import { extname, isErbDialectPath, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
+import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
@@ -46,6 +46,17 @@ import {
   KOJO_XML_SOURCE_EXTENSION,
   registerKojoXmlLanguage,
 } from './xml-language';
+
+/**
+ * 2.0 的源路径判据（LAU-3b-FLIP）：`.kojo` 是主场、`.kojo2` 是旧名兼容。
+ *
+ * 两枚都从各自单源现取（`.kojo` = 契约 `KOJO_SOURCE_EXTENSION`，`.kojo2` = kojo-lang
+ * 的零依赖叶子），本函数只是把它们并列一次——不在宿主再抄字面量。
+ */
+function isKojo2SourcePath(filePath: string): boolean {
+  const ext = extname(filePath).toLowerCase();
+  return ext === KOJO_SOURCE_EXTENSION || ext === KOJO2_SOURCE_EXTENSION;
+}
 
 const ERB_DESCRIPTOR: LanguageDescriptor = {
   id: ERB_LANGUAGE_ID,
@@ -69,9 +80,9 @@ const KOJO_DESCRIPTOR: LanguageDescriptor = {
    * （`ui/kojo2-cutover.ts` 的 `kojo2StageAllowsLegacy`：三档里 `v1-only` / `dual` 为开），
    * 门是纯谓词、注册表不读设置也不订阅（§4.4）。
    *
-   * 认路判据（LAU-3b）：`.kojo1` 是**显式封存标记**，`.kojo` 是过渡期的老扩展名——
-   * 两枚都归这一门（交接工具把旧文件改名前，作者盘上两种形态都会出现）。判据取契约层
-   * `KOJO_V1_SOURCE_EXTENSIONS`，不在宿主另抄一份。
+   * 认路判据（LAU-3b-FLIP，2026-10-27 用户口径「`.kojo` 当场让给 2.0」）：**只剩 `.kojo1`**。
+   * `.kojo` 是 2.0 的源（见下面的 KOJO2_DESCRIPTOR），两门语言的认路判据从此不重叠。
+   * 判据取契约层 `KOJO_V1_SOURCE_EXTENSIONS`，不在宿主另抄一份。
    *
    * `settingKey` 是**身份**不是第二枚开关：本仓已有切流三档，再造一枚布尔就是两处状态
    * 必漂（用户 2026-10-27 口径「用现成三档」）。
@@ -96,7 +107,8 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
 /**
  * Kojo 2.0 的 descriptor（K2-SURFACE-DEFAULT，**默认登记**）：无条件追加在表尾。
  *
- * - 只认 `.kojo2`，**不抢** v1 的 `.kojo`（v1 三枚 descriptor 与注册次序逐字不动）；
+ * - 认 **`.kojo`（主场，2026-10-27 起从 v1 手里接过）与 `.kojo2`（旧名，兼容）**；
+ *   v1 的 descriptor 只剩 `.kojo1`，两边不重叠；
  * - **不声明 `languageServices`**：通用双注册那 11 枚 provider 是 v1 语义的供方，挂到
  *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 的 provider 由各枚 `installKojo2*`
  *   自建、各自只认 `kojo2` 语言 id）；声明面由 `capabilities` 与闸门负责；
@@ -121,7 +133,7 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   // 上屏名（用户 2026-10-27 口径）：**只有一个「kojo」**，它就是 2.0；id 仍是 `kojo2`
   // （全仓 200+ 处引用 + M2 棘轮按常量名计数，改 id 是另一场迁移）。
   label: 'kojo',
-  matchesPath: (filePath) => extname(filePath).toLowerCase() === KOJO2_SOURCE_EXTENSION,
+  matchesPath: (filePath) => isKojo2SourcePath(filePath),
   register: registerKojo2Language,
   slotServices: ['documentSymbol', 'inlayHint', 'definition'],
   capabilities: KOJO2_CAPABILITIES,

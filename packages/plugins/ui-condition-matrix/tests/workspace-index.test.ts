@@ -3,8 +3,8 @@
  *
  * 钉三件：
  * ① ERB 方言文件原样进两份索引（显示 / 抽取坐标一致）；
- * ② `.kojo` 先转译：抽取索引用生成行号 + `texts` 覆盖表，显示索引折回源行；
- * ③ 编译 error 的 `.kojo` 整文件跳过并留在 `problems`（不产半成品、不静默）。
+ * ② `.kojo1` 先转译：抽取索引用生成行号 + `texts` 覆盖表，显示索引折回源行；
+ * ③ 编译 error 的 `.kojo1` 整文件跳过并留在 `problems`（不产半成品、不静默）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -30,9 +30,9 @@ const KOJO_TEXT = ['角色: 1', '口上: 少女之梦', '时机 指令 310：', 
 const BAD_KOJO = ['; 缺否则', '角色: 12', '', '时机 指令 311：', '    变量 = 当 TFLAG:193：', '        是 1 -> 10', ''].join('\n');
 
 describe('workspace-index', () => {
-  it('源文件判定：.kojo 与 ERB 方言（大小写不敏感），其它忽略', () => {
-    expect(isWorkspaceMatrixSourceName('a.kojo')).toBe(true);
-    expect(isWorkspaceMatrixSourceName('B.KOJO')).toBe(true);
+  it('源文件判定：.kojo1 与 ERB 方言（大小写不敏感），其它忽略', () => {
+    expect(isWorkspaceMatrixSourceName('a.kojo1')).toBe(true);
+    expect(isWorkspaceMatrixSourceName('B.KOJO1')).toBe(true);
     expect(isWorkspaceMatrixSourceName('C.ERB')).toBe(true);
     expect(isWorkspaceMatrixSourceName('D.erm')).toBe(true);
     expect(isWorkspaceMatrixSourceName('notes.txt')).toBe(false);
@@ -51,8 +51,8 @@ describe('workspace-index', () => {
     expect(bundle.displayIndex.byName.get(fn.normalizedName)).toHaveLength(1);
   });
 
-  it('.kojo：抽取坐标为生成行、显示坐标折回源行，生成文本进覆盖表', () => {
-    const path = 'D:/ws/pack/M_KOJO_K1_口上.kojo';
+  it('.kojo1：抽取坐标为生成行、显示坐标折回源行，生成文本进覆盖表', () => {
+    const path = 'D:/ws/pack/M_KOJO_K1_口上.kojo1';
     const bundle = buildWorkspaceIndex([{ path, text: KOJO_TEXT }], deps);
 
     expect(bundle.problems).toEqual([]);
@@ -72,8 +72,8 @@ describe('workspace-index', () => {
     }
   });
 
-  it('编译 error 的 .kojo：整文件跳过并进 problems，其余文件照常', () => {
-    const bad = 'D:/ws/pack/bad.kojo';
+  it('编译 error 的 .kojo1：整文件跳过并进 problems，其余文件照常', () => {
+    const bad = 'D:/ws/pack/bad.kojo1';
     const good = 'D:/ws/pack/good.ERB';
     const bundle = buildWorkspaceIndex(
       [
@@ -89,12 +89,12 @@ describe('workspace-index', () => {
     expect(bundle.extractIndex.files.has(bad)).toBe(false);
     expect(bundle.texts.has(bad)).toBe(false);
     expect(bundle.problems).toHaveLength(1);
-    expect(bundle.problems[0]).toContain('bad.kojo');
+    expect(bundle.problems[0]).toContain('bad.kojo1');
     expect(bundle.displayIndex.files.has(good)).toBe(true);
   });
 
-  it('没有语法糖服务：.kojo 记 problem，ERB 不受影响', () => {
-    const path = 'D:/ws/pack/A.kojo';
+  it('没有语法糖服务：.kojo1 记 problem，ERB 不受影响', () => {
+    const path = 'D:/ws/pack/A.kojo1';
     const bundle = buildWorkspaceIndex(
       [
         { path, text: KOJO_TEXT },

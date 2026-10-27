@@ -47,7 +47,7 @@ import {
   editorDisplayOptionPatch,
   subscribeEditorDisplayPrefs,
 } from '../editor-display-prefs';
-import { KOJO_LANGUAGE_ID } from '../../monaco/kojo-language';
+import { isKojoTextLanguage } from './pane-helpers';
 import { loadCodeLensPref } from '../code-lens-pref';
 import type { MutableRef } from './pane-context';
 
@@ -159,7 +159,7 @@ export function useEditorPreferences(params: EditorPreferencesParams): Preferenc
         ed.updateOptions({
           ...editorDisplayOptionPatch(model ? model.getLineCount() : 0, undefined, {
             preview: sugarModel !== null && model === sugarModel,
-            kojoText: model ? model.getLanguageId() === KOJO_LANGUAGE_ID : false,
+            kojoText: model ? isKojoTextLanguage(model.getLanguageId()) : false,
           }),
           ...editorDisplayFontPatch(),
         });

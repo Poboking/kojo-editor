@@ -61,7 +61,8 @@ function collect(dir: string, out: string[], exclude: string | null): string[] {
     const p = join(dir, e.name);
     if (exclude && (p === exclude || p.startsWith(`${exclude}/`) || p.startsWith(`${exclude}\\`))) continue;
     if (e.isDirectory()) collect(p, out, exclude);
-    else if (e.name.endsWith('.kojo')) out.push(p);
+    // LAU-3b-FLIP：封存层标准形 `.kojo1` 与盘上未改名的旧 `.kojo` 都在同一批夹具面里
+    else if (e.name.endsWith('.kojo1') || e.name.endsWith('.kojo')) out.push(p);
   }
   return out;
 }

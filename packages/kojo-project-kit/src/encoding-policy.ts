@@ -99,14 +99,14 @@ export const WRITE_ENCODING_POLICY = {
     eol: 'lf',
     trailingNewline: 'as-authored',
     writer: 'packages/kernel/src/io.ts::writeText（新文件缺省 utf-8-bom / lf）',
-    note: '工作区新建 `.kojo`（`ui-sugar-editor` 的 writeInto）走 writeText 缺省；已存在文件按盘上编码 / 换行保真，不在本行口径内。',
+    note: '工作区新建 `.kojo1`（`ui-sugar-editor` 的 writeInto，封存层）走 writeText 缺省；已存在文件按盘上编码 / 换行保真，不在本行口径内。',
   },
   'scaffold-text': {
     bom: 'never',
     eol: 'lf',
     trailingNewline: 'guaranteed',
     writer: 'packages/kojo-project-kit/src/scaffold-writer.ts::writeScaffoldFiles（经 encodeScaffoldText 逐字节写）',
-    note: '起手包 README 与各面 `.kojo` 空壳的首字符是 `#` / `;`，骨架不含 U+FEFF ⇒ 落盘 BOM-less；末尾一个 LF。',
+    note: '起手包 README 与各面 `.kojo1` / `.ERB` 空壳的首字符是 `#` / `;`，骨架不含 U+FEFF ⇒ 落盘 BOM-less；末尾一个 LF。',
   },
   'scaffold-csv': {
     bom: 'as-authored',
@@ -120,7 +120,7 @@ export const WRITE_ENCODING_POLICY = {
     eol: 'as-authored',
     trailingNewline: 'as-authored',
     writer: 'packages/kernel/src/io.ts::exportFile → app/src/bridge/tauri-bridge.ts → src-tauri/src/lib.rs::export_file（std::fs::write 原样写）',
-    note: '字节透明通道：base64 过 IPC，Rust 原样写盘。调用方给什么就是什么——ZIP 二进制；另存 `.kojo` 由调用方补 U+FEFF（与 workspace-source 同字节）；归档条目取出是原始字节。',
+    note: '字节透明通道：base64 过 IPC，Rust 原样写盘。调用方给什么就是什么——ZIP 二进制；另存 `.kojo1` 由调用方补 U+FEFF（与 workspace-source 同字节）；归档条目取出是原始字节。',
   },
 } as const satisfies Readonly<Record<WritePathId, WritePathEncoding>>;
 

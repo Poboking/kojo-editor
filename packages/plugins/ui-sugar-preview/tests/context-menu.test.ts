@@ -1,8 +1,8 @@
 /**
- * .kojo 转译检查面板右键菜单（1023 覆盖面批 · WP5.2）。
+ * .kojo1 转译检查面板右键菜单（1023 覆盖面批 · WP5.2）。
  *
  * 判据：映射行（空行 / 非空行）、诊断行（文件级 vs 有行号）三种禁用原因，
- * 复制文本的格式，面板刷新在非 .kojo 文件时的禁用，动作分发与降级。
+ * 复制文本的格式，面板刷新在非 .kojo1 文件时的禁用，动作分发与降级。
  */
 import { describe, expect, it } from 'vitest';
 import { hasCjkLabel, type PluginContextMenuRequest } from '@kojo/plugin-api';
@@ -46,7 +46,7 @@ describe('逐行映射行菜单', () => {
     const diagIds = ids(
       buildPreviewDiagMenu({ severity: 'error', message: '缩进', line: 3, column: 1 }),
     );
-    const panelIds = ids(buildPreviewPanelMenu({ filePath: 'a.kojo', canRefresh: true }));
+    const panelIds = ids(buildPreviewPanelMenu({ filePath: 'a.kojo1', canRefresh: true }));
     for (const list of [rowIds, diagIds, panelIds]) {
       expect(new Set(list).size).toBe(list.length);
     }
@@ -86,15 +86,15 @@ describe('诊断行菜单', () => {
 
 describe('面板空白处菜单', () => {
   it('可预览：刷新 + 复制路径', () => {
-    const items = buildPreviewPanelMenu({ filePath: 'src/a.kojo', canRefresh: true });
+    const items = buildPreviewPanelMenu({ filePath: 'src/a.kojo1', canRefresh: true });
     expect(ids(items)).toEqual(['pv.panel.refresh', 'pv.panel.copyPath']);
     expect(items.every((i) => i.disabled === undefined)).toBe(true);
   });
 
-  it('非 .kojo 文件：刷新禁用并说明', () => {
+  it('非 .kojo1 文件：刷新禁用并说明', () => {
     const item = buildPreviewPanelMenu({ filePath: 'src/a.erb', canRefresh: false })[0];
     expect(item?.disabled).toBe(true);
-    expect(item?.disabledReason).toContain('.kojo');
+    expect(item?.disabledReason).toContain('.kojo1');
   });
 
   it('没打开文件：复制路径禁用并说明', () => {
@@ -131,8 +131,8 @@ describe('动作分发', () => {
     const host = hostSpy();
     expect(runPreviewPanelAction('pv.panel.refresh', { filePath: null, canRefresh: false }, host)).toBe(false);
     expect(runPreviewPanelAction('pv.panel.copyPath', { filePath: null, canRefresh: false }, host)).toBe(false);
-    expect(runPreviewPanelAction('pv.panel.copyPath', { filePath: 'a.kojo', canRefresh: true }, host)).toBe(true);
-    expect(host.calls).toEqual(['copy:a.kojo']);
+    expect(runPreviewPanelAction('pv.panel.copyPath', { filePath: 'a.kojo1', canRefresh: true }, host)).toBe(true);
+    expect(host.calls).toEqual(['copy:a.kojo1']);
   });
 
   it('不认识的 id ⇒ false', () => {
@@ -148,7 +148,7 @@ describe('接线与降级', () => {
     const host = hostSpy();
     openPreviewRowMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, row(), host);
     openPreviewDiagMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, { severity: 'error', line: 1, message: 'm' }, host);
-    openPreviewPanelMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, { filePath: 'a.kojo', canRefresh: true }, host);
+    openPreviewPanelMenu({ openContextMenu: (r) => seen.push(r) }, { clientX: 1, clientY: 2 }, { filePath: 'a.kojo1', canRefresh: true }, host);
     expect(seen.map((r) => r.ariaLabel)).toEqual([
       PREVIEW_ROW_MENU_ARIA,
       PREVIEW_DIAG_MENU_ARIA,

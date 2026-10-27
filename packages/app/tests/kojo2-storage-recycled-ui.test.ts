@@ -644,9 +644,9 @@ describe('K2-STORAGE-RECYCLED-UI · `.kojo2` 变更防抖', () => {
     expect(probe.controller.getSnapshot().changeCount).toBe(3);
   });
 
-  it('非 .kojo2 路径（.kojo / .md / .kojo2.bak）零动作、不计变更', async () => {
+  it('非 2.0 路径（.kojo1 / .md / .kojo2.bak）零动作、不计变更', async () => {
     const probe = probeOf();
-    probe.controller.noteChange('D:/proj/a.kojo');
+    probe.controller.noteChange('D:/proj/a.kojo1');
     probe.controller.noteChange('D:/proj/readme.md');
     probe.controller.noteChange('D:/proj/a.kojo2.bak');
     expect(probe.controller.getSnapshot()).toMatchObject({
@@ -656,6 +656,14 @@ describe('K2-STORAGE-RECYCLED-UI · `.kojo2` 变更防抖', () => {
     });
     await vi.advanceTimersByTimeAsync(KOJO2_DECL_REFRESH_DEBOUNCE_MS);
     expect(probe.calls).toHaveLength(0);
+  });
+
+  it('`.kojo` 是 2.0 的主扩展名：变更照样计入并触发一次刷新', async () => {
+    const probe = probeOf();
+    probe.controller.noteChange('D:/proj/a.kojo');
+    expect(probe.controller.getSnapshot()).toMatchObject({ pending: true, changeCount: 1 });
+    await vi.advanceTimersByTimeAsync(KOJO2_DECL_REFRESH_DEBOUNCE_MS);
+    expect(probe.calls).toHaveLength(1);
   });
 
   it('离开项目（dispose）取消挂起窗口：之后的变更一律不触发', async () => {

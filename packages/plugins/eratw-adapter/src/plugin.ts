@@ -346,7 +346,7 @@ export function createEratwAdapterPlugin(): Plugin {
        *    写成 `requires` 硬依赖会把整个 adapter 一起拖下线；
        * ② adapter 通常早于糖插件激活，activate 当场取会取到 undefined，
        *    放到调用时取，激活顺序就与功能无关了。
-       * 取不到时抛中文错误，由 `planArtifacts` 包装成「某个 .kojo 转译失败，未生成制品」——
+       * 取不到时抛中文错误，由 `planArtifacts` 包装成「某个 .kojo1 转译失败，未生成制品」——
        * 宁可拒绝，也不把 `.kojo` 原样塞进游戏目录（那是"装了不生效"）。
        */
       const compileKojo: KojoCompiler = (source, label) => {

@@ -85,7 +85,7 @@ export function buildVerdictPanelMenu(target: VerdictPanelMenuTarget): PluginCon
         label: '刷新判定',
         icon: 'refresh',
         disabled: true,
-        disabledReason: noFile ? '还没打开任何文件' : '当前文件不是 .kojo，没有可判定的转译结果',
+        disabledReason: noFile ? '还没打开任何文件' : '当前文件不是 .kojo1，没有可判定的转译结果',
         group: '判定',
       };
   const viewItem = (on: boolean, label: string): PluginContextMenuItem =>

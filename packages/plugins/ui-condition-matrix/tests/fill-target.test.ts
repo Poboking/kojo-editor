@@ -123,8 +123,8 @@ function entry(name: string, path: string, isDirectory = false): DirEntry {
 /* ------------------------------ 纯函数 ------------------------------ */
 
 describe('追加目标识别与文件名', () => {
-  it('只认口上正文（.kojo 与 ERB body；声明/表格不算）', () => {
-    expect(isFillSourceName('口上.kojo')).toBe(true);
+  it('只认口上正文（.kojo1 与 ERB body；声明/表格不算）', () => {
+    expect(isFillSourceName('口上.kojo1')).toBe(true);
     expect(isFillSourceName('口上.ERB')).toBe(true);
     expect(isFillSourceName('口上.erb')).toBe(true);
     expect(isFillSourceName('口上.ERH')).toBe(false);
@@ -133,15 +133,15 @@ describe('追加目标识别与文件名', () => {
   });
 
   it('扩展名随语言', () => {
-    expect(fillExtension('kojo')).toBe('.kojo');
+    expect(fillExtension('kojo')).toBe('.kojo1');
     expect(fillExtension('erb')).toBe('.ERB');
   });
 
   it('文件名消毒：去非法字符、按语言统一扩展名、空名兜底', () => {
-    expect(sanitizeFillFileName('我的/口上:测试.erb', 'kojo')).toBe('我的口上测试.kojo');
-    expect(sanitizeFillFileName('abc.ERB', 'kojo')).toBe('abc.kojo');
-    expect(sanitizeFillFileName('abc.kojo', 'erb')).toBe('abc.ERB');
-    expect(sanitizeFillFileName('   ', 'kojo')).toBe('条件矩阵填空.kojo');
+    expect(sanitizeFillFileName('我的/口上:测试.erb', 'kojo')).toBe('我的口上测试.kojo1');
+    expect(sanitizeFillFileName('abc.ERB', 'kojo')).toBe('abc.kojo1');
+    expect(sanitizeFillFileName('abc.kojo1', 'erb')).toBe('abc.ERB');
+    expect(sanitizeFillFileName('   ', 'kojo')).toBe('条件矩阵填空.kojo1');
     expect(sanitizeFillFileName('..', 'erb')).toBe('条件矩阵填空.ERB');
     expect(sanitizeFillFileName('无扩展名', 'erb')).toBe('无扩展名.ERB');
   });
@@ -150,7 +150,7 @@ describe('追加目标识别与文件名', () => {
     const name = suggestFillFileName(7, '夜晚/爱慕', 'kojo');
     expect(name).toContain('K7');
     expect(name).toContain('夜晚-爱慕');
-    expect(name.endsWith('.kojo')).toBe(true);
+    expect(name.endsWith('.kojo1')).toBe(true);
     expect(name).not.toContain('/');
   });
 });
@@ -170,9 +170,9 @@ describe('appendFillText', () => {
 });
 
 describe('appendLanguageConflict', () => {
-  it('.kojo 接受两种语言', () => {
-    expect(appendLanguageConflict('a.kojo', 'kojo')).toBeNull();
-    expect(appendLanguageConflict('a.kojo', 'erb')).toBeNull();
+  it('.kojo1 接受两种语言', () => {
+    expect(appendLanguageConflict('a.kojo1', 'kojo')).toBeNull();
+    expect(appendLanguageConflict('a.kojo1', 'erb')).toBeNull();
   });
 
   it('.ERB/.erm 拒绝糖语法并给出人话原因', () => {
@@ -188,14 +188,14 @@ describe('listFillFiles', () => {
   it('只列正文文件、相对路径用 POSIX 分隔、按路径排序', async () => {
     const { io } = fakeIo({
       walked: [
-        entry('b.kojo', 'C:\\pkg\\sub\\b.kojo'),
+        entry('b.kojo1', 'C:\\pkg\\sub\\b.kojo1'),
         entry('a.ERB', 'C:\\pkg\\a.ERB'),
         entry('x.erh', 'C:\\pkg\\x.erh'),
       ],
     });
     const files = await listFillFiles(io, 'C:\\pkg');
-    expect(files.map((f) => f.relPath)).toEqual(['a.ERB', 'sub/b.kojo']);
-    expect(files[1]?.absPath).toBe('C:\\pkg\\sub\\b.kojo');
+    expect(files.map((f) => f.relPath)).toEqual(['a.ERB', 'sub/b.kojo1']);
+    expect(files[1]?.absPath).toBe('C:\\pkg\\sub\\b.kojo1');
   });
 });
 
@@ -227,7 +227,7 @@ describe('writeFill：工作区新文件', () => {
       ),
     ).toContain('没有匹配到工作区项目');
 
-    const target = join(ROOT, '填空.kojo');
+    const target = join(ROOT, '填空.kojo1');
     const existsIo = fakeIo({ existing: [target] }).io;
     const result = await writeFill({ ...base, io: existsIo, workspaces: fakeWorkspaces({ rootPath: ROOT }).workspaces });
     expect(reasonOf(result)).toContain('同名文件已存在');
@@ -247,8 +247,8 @@ describe('writeFill：工作区新文件', () => {
       workspace: wsRef(),
       fileName: '填空.erb',
     });
-    expect(result).toEqual({ ok: true, path: join(ROOT, '填空.kojo'), line: 1 });
-    expect(writes).toEqual([{ projectId: 'p1', relPath: 'K1包/填空.kojo', text: 'CODE\n' }]);
+    expect(result).toEqual({ ok: true, path: join(ROOT, '填空.kojo1'), line: 1 });
+    expect(writes).toEqual([{ projectId: 'p1', relPath: 'K1包/填空.kojo1', text: 'CODE\n' }]);
   });
 
   it('写入抛错转成人话原因', async () => {
@@ -317,7 +317,7 @@ describe('writeFill：工作区追加', () => {
 
 describe('writeFill：游戏目录', () => {
   const dirPath = 'C:\\game\\K1\\我的包';
-  const target = join(dirPath, '填空.kojo');
+  const target = join(dirPath, '填空.kojo1');
 
   it('索引外（无目录）直接拒绝', async () => {
     const { io } = fakeIo();
@@ -373,8 +373,8 @@ describe('writeFill：游戏目录', () => {
   });
 
   it('追加：未授权拒绝；成功时读原文再追加', async () => {
-    const absPath = join(dirPath, '口上.kojo');
-    const file = { relPath: '口上.kojo', absPath };
+    const absPath = join(dirPath, '口上.kojo1');
+    const file = { relPath: '口上.kojo1', absPath };
 
     const denied = await writeFill({
       io: fakeIo({ files: { [absPath]: 'A\n' } }).io,

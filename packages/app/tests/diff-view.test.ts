@@ -42,8 +42,8 @@ const req = (over: Partial<DiffRequest> = {}): DiffRequest => ({
 
 /**
  * 本文件钉的是**认路判据**（扩展名 → 语言 id），不是语言可用性门（LAU-3 的另一条轴，
- * 由 `language-registry.test.ts` 单独钉）。缺省档 `2.0-default` 会把封存层挡在门外，
- * `languageFor('.kojo')` 于是答 `plaintext`——装一枚恒真的假门，把这条轴从对拍里摘出去。
+ * 由 `language-registry.test.ts` 单独钉）。封存层被挡在门外时 `languageFor('.kojo1')`
+ * 会答 `plaintext`——装一枚恒真的假门，把这条轴从对拍里摘出去。
  */
 beforeEach(() => installAvailabilityGate(() => true));
 afterEach(() => installAvailabilityGate(null));
@@ -65,8 +65,9 @@ describe('validateDiffRequest', () => {
 });
 
 describe('languageIdForSide', () => {
-  it('.kojo → 语法糖语言；路径优先于标签', () => {
-    expect(languageIdForSide({ label: 'x.ERB', path: 'C:/p/事件.kojo' })).toBe(KOJO_LANGUAGE_ID);
+  it('.kojo → 2.0 语言、.kojo1 → 封存语言；路径优先于标签', () => {
+    expect(languageIdForSide({ label: 'x.ERB', path: 'C:/p/事件.kojo' })).toBe(KOJO2_LANGUAGE_ID);
+    expect(languageIdForSide({ label: 'x.ERB', path: 'C:/p/事件.kojo1' })).toBe(KOJO_LANGUAGE_ID);
   });
   it('.ERB/.erh → ERB 语言（大小写不敏感）', () => {
     expect(languageIdForSide({ label: 'M_KOJO.ERB' })).toBe(ERB_LANGUAGE_ID);
@@ -96,7 +97,8 @@ describe('languageIdForSide ⇄ 编辑器侧 languageFor 对拍（同一份路�
     ['C:\\game\\ERB\\口上\\正文.erm', ERB_LANGUAGE_ID],
     ['C:\\game\\ERB\\口上\\MARKS_OF_SUIKA.ERM', ERB_LANGUAGE_ID],
     ['C:\\game\\ERB\\口上\\变量定义.erh', ERB_LANGUAGE_ID],
-    ['D:\\作者工作区\\事件.kojo', KOJO_LANGUAGE_ID],
+    ['D:\\作者工作区\\事件.kojo', KOJO2_LANGUAGE_ID],
+    ['D:\\作者工作区\\旧稿.kojo1', KOJO_LANGUAGE_ID],
     ['D:\\x\\说明.txt', PLAINTEXT],
   ];
 
@@ -126,10 +128,11 @@ describe('languageIdForSide ⇄ 编辑器侧 languageFor 对拍（同一份路�
 describe('diffLanguageFor（覆盖表 > 扩展名判据；接批次十二的语言覆盖）', () => {
   const noOverride: LanguageOverrideLookup = () => null;
 
-  it('未命中 ⇒ 回退 languageIdForSide/languageFor（.erb / .kojo2 / .kojo 三档口径不变）', () => {
+  it('未命中 ⇒ 回退 languageIdForSide/languageFor（.erb / .kojo / .kojo1 三档口径）', () => {
     expect(diffLanguageFor({ label: 'C:\\game\\ERB\\口上\\角色.erb' }, noOverride)).toBe(ERB_LANGUAGE_ID);
     expect(diffLanguageFor({ label: 'D:\\工作区\\事件.kojo2' }, noOverride)).toBe(KOJO2_LANGUAGE_ID);
-    expect(diffLanguageFor({ label: 'D:\\工作区\\事件.kojo' }, noOverride)).toBe(KOJO_LANGUAGE_ID);
+    expect(diffLanguageFor({ label: 'D:\\工作区\\事件.kojo' }, noOverride)).toBe(KOJO2_LANGUAGE_ID);
+    expect(diffLanguageFor({ label: 'D:\\工作区\\旧稿.kojo1' }, noOverride)).toBe(KOJO_LANGUAGE_ID);
   });
 
   it('覆盖命中 ⇒ 听作者的，三档扩展名都不再看扩展名', () => {

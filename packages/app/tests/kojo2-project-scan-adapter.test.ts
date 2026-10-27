@@ -42,7 +42,8 @@ import { clearAllProblems, clearProjectScan, type EditorProblem } from '../src/u
 const ROOT = 'D:/kojo2-wire';
 const A = `${ROOT}/a.kojo2`;
 const B = `${ROOT}/b.kojo2`;
-const C = `${ROOT}/c.kojo`;
+/** 封存层的 v1 文件（LAU-3b-FLIP 后"非 2.0 的 kojo 源"） */
+const C = `${ROOT}/c.kojo1`;
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
@@ -266,7 +267,7 @@ describe('analyzeKojo2ProjectAsync · 惰性 adapter 成功与降级', () => {
 /* ============================== 3. 薄接线工厂 ============================== */
 
 describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
-  it('缺省启用判据 = 无条件开（语言面不读切流开关；没有 `.kojo2` 的文件本就不会产生一轮分析）', () => {
+  it('缺省启用判据 = 无条件开（语言面不读切流开关；没有 2.0 源的文件本就不会产生一轮分析）', () => {
     const options = createLazyKojo2ProjectOptions();
     expect(options.enabled?.()).toBe(true);
     expect(kojo2ProjectPassEnabled(options)).toBe(true);
@@ -572,7 +573,7 @@ describe('扫描器透传 · mountProjectScan → scannerDeps → 采集器', ()
     expect(out.kojo2?.adapterUnavailable).toBe(true);
     expect(out.kojo2?.weaveLayers).toBe(false);
     expect(out.degraded).toBe(0);
-    // v1 那一路（.kojo）照常上账；跨文件重名仍落在 B 上
+    // v1 那一路（`.kojo1`）照常上账；跨文件重名仍落在 B 上
     expect(published.get(C)).toHaveLength(1);
     expect(published.get(B)?.map((problem) => problem.code)).toContain('core/decl/duplicate-name');
     expect(onUnavailable).toHaveBeenCalledTimes(1);

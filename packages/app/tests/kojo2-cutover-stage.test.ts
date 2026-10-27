@@ -356,19 +356,21 @@ describe('③ 阶段联动：改档即重挂 / 打开闸 / 诊断入口按新阶
     expect(kojo2StageBlockedReason(KOJO2_FILE, { enabled: true })).toBeNull();
   });
 
-  it('诊断面恒开（语言面）；归属仍逐文件按路由：`.kojo2` 归 2.0、`.kojo` 归 v1', () => {
+  it('诊断面恒开（语言面）；归属按扩展名：`.kojo` / `.kojo2` 归 2.0、`.kojo1` 归 v1', () => {
     stubWindow();
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_FILE)).toBe(true);
-    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo')).toBe(false);
+    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo')).toBe(true);
+    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo1')).toBe(false);
 
-    // 阶段改来改去不改变"诊断面开"这件事（开关只管写回 / 迁移 / `.kojo` 解析器）
+    // 阶段改来改去不改变"诊断面开"与归属这件事（开关只管写回 / 迁移 / 封存层可见性）
     commitKojo2CutoverStage('dual');
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     commitKojo2CutoverStage('v1-only');
     expect(kojo2DiagnosticsEnabled()).toBe(true);
     expect(kojo2OwnsDiagnostics(KOJO2_FILE)).toBe(true);
-    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo')).toBe(false);
+    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo')).toBe(true);
+    expect(kojo2OwnsDiagnostics('D:/proj/chara/M.kojo1')).toBe(false);
   });
 
   it('显式注入的控制器/效果也能走同一条路（设置页测试用独立实例，不碰单例）', () => {

@@ -260,7 +260,7 @@ const REAL_SRC = [
   '',
 ].join('\n');
 const realDiags: readonly SugarDiagnostic[] = transpile.transpile(REAL_SRC, {
-  filePath: 'C:\\proj\\口上\\x.kojo',
+  filePath: 'C:\\proj\\口上\\x.kojo1',
 }).diagnostics;
 
 const d = (code: string, line: number | null, column: number | null, severity: 'error' | 'warning' | 'info' = 'warning'): SugarDiagnostic =>
@@ -476,7 +476,7 @@ describe('W4 收尾 / MoreRow 壳', () => {
 
 /* ============================== 四、真相三事件：一次 attach/dispose 全覆盖 ============================== */
 
-const KOJO = 'C:\\proj\\口上\\x.kojo';
+const KOJO = 'C:\\proj\\口上\\x.kojo1';
 
 describe('W4 收尾 / 面板真相接线（真挂 useEffect，记账总线取证）', () => {
   it('editor 面板：挂载即三条各订一份；一次退订即三条清零；卸载后广播打不进面板状态', () => {
@@ -494,7 +494,7 @@ describe('W4 收尾 / 面板真相接线（真挂 useEffect，记账总线取证
     bus.emit('editor.activeFileChanged', { filePath: KOJO });
     const sigFile = rt.sigOf(0);
     expect(sigFile).not.toBe(sigIdle); // activeFileChanged 进得来
-    bus.emit('editor.documentChanged', { filePath: 'c:/proj/口上/X.KOJO', text: '缓冲真相', dirty: true });
+    bus.emit('editor.documentChanged', { filePath: 'c:/proj/口上/X.KOJO1', text: '缓冲真相', dirty: true });
     expect(rt.sigOf(0)).not.toBe(sigFile); // pathKey 归一命中即 tick（C2 liveTick 驱动重算）
     bus.emit('editor.cursorMoved', { filePath: KOJO, line: 5, column: 1, derivedView: false });
     expect(rt.sigOf(0)).not.toBe(sigFile); // cursorMoved 进得来

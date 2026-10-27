@@ -62,8 +62,16 @@ import {
 
 /* ============================== 0. 常量与路径 ============================== */
 
-/** v1 作者源后缀（真实语料里"可迁移对象"的唯一判据） */
-export const V1_SOURCE_SUFFIX = '.kojo';
+/**
+ * v1 作者源后缀（真实语料里"可迁移对象"的判据）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，kojo1 的标准形是 `.kojo1`；
+ * 但语料盘上大量是**还没迁移/改名**的旧 `.kojo`，扫描两枚都收（口径：正文还得能判 v1，
+ * 这里的后缀只做粗筛）。
+ */
+export const V1_SOURCE_SUFFIXES: readonly string[] = ['.kojo1', '.kojo'];
+/** 上屏文案用的主形（新标准形） */
+export const V1_SOURCE_SUFFIX = '.kojo1';
 /** 2.0 源后缀：明确排除（`.kojo2` 不是迁移输入） */
 export const V2_SOURCE_SUFFIX = '.kojo2';
 
@@ -167,11 +175,11 @@ function assertLimit(limit: number | null): void {
   }
 }
 
-/** v1 源判据：`.kojo` 结尾、`.kojo2` 不算（大小写不敏感；Windows 盘面两种都见过） */
+/** v1 源判据：`.kojo1`（标准形）或旧 `.kojo` 结尾、`.kojo2` 不算（大小写不敏感；Windows 盘面两种都见过） */
 function isV1SourcePath(rel: string): boolean {
   const lower = rel.toLowerCase();
   if (lower.endsWith(V2_SOURCE_SUFFIX)) return false;
-  return lower.endsWith(V1_SOURCE_SUFFIX);
+  return V1_SOURCE_SUFFIXES.some((suffix) => lower.endsWith(suffix));
 }
 
 /**

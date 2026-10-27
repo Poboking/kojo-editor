@@ -12,6 +12,7 @@
  * descriptor 表是进程级只增表 ⇒ 每个用例 `resetModules` 后重新 import，避免跨用例串表。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { JSON_LANGUAGE_ID } from '../src/monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
@@ -201,8 +202,10 @@ describe('v1-only 档：语言面照常可见，切流语义仍关', () => {
   it('认路（大小写 / 最后一段扩展名 / plaintext 兜底）不随开关改口', async () => {
     const { languages } = await boot('v1-only');
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['D:/p/M.kojo', KOJO_LANGUAGE_ID],
-      ['D:/p/M.KOJO', KOJO_LANGUAGE_ID],
+      ['D:/p/M.kojo', KOJO2_LANGUAGE_ID],
+      ['D:/p/M.KOJO', KOJO2_LANGUAGE_ID],
+      ['D:/p/M.kojo1', KOJO_LANGUAGE_ID],
+      ['D:/p/M.KOJO1', KOJO_LANGUAGE_ID],
       ['D:/p/M.ERB', ERB_LANGUAGE_ID],
       ['D:/p/M.erm', ERB_LANGUAGE_ID],
       ['D:/p/settings.json', JSON_LANGUAGE_ID],
@@ -264,14 +267,16 @@ describe('dual 档：语言面同上，`.kojo2` 路由放行', () => {
     ).toEqual([KOJO2_LANGUAGE_ID]);
   });
 
-  it('v1 认路不受影响（`.kojo` 仍是 v1 那枚 descriptor 的 id，label 已改为「kojo1（封存）」）', async () => {
+  it('`.kojo1` 仍走封存那枚 descriptor；`.kojo` 已归 2.0', async () => {
     const { registry, languages } = await boot('legacy-on');
-    expect(languages.languageForPath('D:/p/M.kojo')).toBe(KOJO_LANGUAGE_ID);
-    expect(languages.languageForPath('D:/p/M.kojo.bak')).toBe('plaintext');
+    expect(languages.languageForPath('D:/p/M.kojo1')).toBe(KOJO_LANGUAGE_ID);
+    expect(languages.languageForPath('D:/p/M.kojo1.bak')).toBe('plaintext');
+    expect(languages.languageForPath('D:/p/M.kojo')).toBe(KOJO2_LANGUAGE_ID);
     expect(languages.languageForPath('D:/p/M.ERB')).toBe(ERB_LANGUAGE_ID);
     expect(languages.languageForPath('D:/p/settings.json')).toBe(JSON_LANGUAGE_ID);
     // LAU-3 正名：作者面只有一个「kojo」（2.0），v1 上屏叫「kojo1（封存）」
-    expect(registry.descriptorForPath('D:/p/M.kojo')?.label).toBe('kojo1（封存）');
+    expect(registry.descriptorForPath('D:/p/M.kojo1')?.label).toBe('kojo1（封存）');
+    expect(registry.descriptorForPath('D:/p/M.kojo')?.label).toBe('kojo');
   });
 
   it('挂面把 `.kojo2` 扩展名 / Monarch / 语言配置一并挂上，且重复调用只挂一次', async () => {
@@ -286,7 +291,12 @@ describe('dual 档：语言面同上，`.kojo2` 路由放行', () => {
       KOJO_XML_LANGUAGE_ID,
     ]);
     const kojo2 = captured.registered.find((entry) => entry.id === KOJO2_LANGUAGE_ID);
-    expect(kojo2?.extensions).toEqual(['.kojo2']);
+    expect(kojo2?.extensions).toEqual([
+      KOJO_SOURCE_EXTENSION,
+      KOJO_SOURCE_EXTENSION.toUpperCase(),
+      '.kojo2',
+      '.KOJO2',
+    ]);
     expect(captured.monarchs.has('kojo2')).toBe(true);
     const config = captured.configs.get('kojo2') as
       | { readonly comments?: { readonly lineComment?: string } }
@@ -318,11 +328,11 @@ describe('dual 档：语言面同上，`.kojo2` 路由放行', () => {
 /* ==================== ③ 打开 / 新建：只送到既有通道 ==================== */
 
 describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', () => {
-  it('开关开 + 非 2.0 文件 ⇒ not-kojo2，零 port 调用（`.kojo` 不被接管）', async () => {
+  it('开关开 + 非 2.0 文件 ⇒ not-kojo2，零 port 调用（封存层 `.kojo1` 不被接管）', async () => {
     const { open } = await boot('legacy-on');
     const { ports, log } = spyPorts();
     const plan = open.routeKojo2Open(
-      { path: 'D:/proj/M.kojo' },
+      { path: 'D:/proj/M.kojo1' },
       { currentRoot: PROJECT_ROOT, projectOpen: true },
       ports,
     );
@@ -419,15 +429,16 @@ describe('`.kojo2` 打开 / 新建路由（走既有 project/open 流程）', ()
     expect(open.isKojo2Path('D:/p/M.kojo2')).toBe(true);
     expect(open.isKojo2Path('D:/p/M.KOJO2')).toBe(true);
     expect(open.isKojo2Path('D:/p/M.kojo2.bak')).toBe(false);
-    expect(open.isKojo2Path('D:/p/M.kojo')).toBe(false);
+    expect(open.isKojo2Path('D:/p/M.kojo')).toBe(true);
+    expect(open.isKojo2Path('D:/p/M.kojo1')).toBe(false);
     expect(open.isKojo2Path('D:/p/.kojo2')).toBe(false);
   });
 
-  it('按后缀收文件的清单恒含 `.kojo2`（看得见文件是语言面，不看开关）', async () => {
+  it('按后缀收文件的清单恒含 `.kojo` 与 `.kojo2`（看得见文件是语言面，不看开关）', async () => {
     const off = await boot('v1-only');
-    expect(off.open.kojo2SourceExtensions()).toEqual(['.kojo2']);
+    expect(off.open.kojo2SourceExtensions()).toEqual(['.kojo', '.kojo2']);
     const on = await boot('legacy-on');
-    expect(on.open.kojo2SourceExtensions()).toEqual(['.kojo2']);
+    expect(on.open.kojo2SourceExtensions()).toEqual(['.kojo', '.kojo2']);
   });
 });
 

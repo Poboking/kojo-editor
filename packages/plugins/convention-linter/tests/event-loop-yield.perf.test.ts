@@ -36,7 +36,7 @@ const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, err
  */
 const KOJO_COUNT = 1200;
 
-/** 一棵中等分量的 `.kojo`（多个时机块 + 会出诊断的写法 ⇒ 转译器真在算，不是空跑循环） */
+/** 一棵中等分量的 `.kojo1`（多个时机块 + 会出诊断的写法 ⇒ 转译器真在算，不是空跑循环） */
 function kojoSource(index: number): string {
   const lines: string[] = ['角色: 12', ''];
   for (let t = 0; t < 4; t++) {
@@ -61,7 +61,7 @@ function harness(compute?: ComputePool): ConventionEngine {
   const files = new Map<string, ErbFile>();
   const mtimes = new Map<string, number | null>();
   for (let i = 0; i < KOJO_COUNT; i++) {
-    const path = `/p/kojo/M_KOJO_K12_指令_${i}.kojo`;
+    const path = `/p/kojo/M_KOJO_K12_指令_${i}.kojo1`;
     texts[path] = kojoSource(i);
     files.set(path, parseErbText('', path));
     mtimes.set(path, 1_700_000_000_000 + i);

@@ -34,6 +34,7 @@ import {
 } from '../inline-completion-pref';
 import { languageFor } from '../editor-model-pool';
 import { KOJO_LANGUAGE_ID } from '../../monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '../../monaco/kojo2-language';
 import { splitPath } from '../path-label';
 
 /**
@@ -113,10 +114,23 @@ export function tierOverrides(
  * 缩略图「跟随」档的**文件侧**判据：这份文件本身是不是 `.kojo` 口上正文。
  *
  * 判据取语言而非扩展名（`languageFor` 是唯一的"哪类文件归哪种语言"真源）：
- * 台词型文档在缩略图里没有可导航的结构，一竖条色块只是噪声。
+ * 台词型文档在缩略图里没有可导航的结构，一竖条色块只是噪声。kojo1 与 2.0 两门语言
+ * 都算"口上正文"（LAU-3b-FLIP 之后 `.kojo` 归 2.0，这条判据跟着放宽到两门）。
  */
 export function minimapCtxForPath(path: string): MinimapViewContext {
-  return { kojoText: languageFor(path) === KOJO_LANGUAGE_ID };
+  return { kojoText: isKojoTextLanguage(languageFor(path)) };
+}
+
+/**
+ * 「口上正文」的语言侧判据（缩略图跟随档共用**一处**）：kojo1（封存）与 kojo（2.0）
+ * 两门都算正文，ERB / 其它语言不算。
+ *
+ * 为什么单独导出：文件切换（{@link minimapCtxForPath}）与显示偏好重发
+ * （`use-editor-preferences`）两条路都要答同一句话——两处各写一份 id 分支，
+ * 就会出现"切文件时关缩略图、改字号后又打开"的抖动（LAU-3b-FLIP 复查抓到的分叉）。
+ */
+export function isKojoTextLanguage(language: string): boolean {
+  return language === KOJO_LANGUAGE_ID || language === KOJO2_LANGUAGE_ID;
 }
 
 /**

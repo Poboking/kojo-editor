@@ -39,7 +39,7 @@ import {
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 const DUP_ERB = 'C:/game/data/erbkoujo/a.erb';
-const SUGAR_KOJO = 'C:/game/data/kojo/a.kojo';
+const SUGAR_KOJO = 'C:/game/data/kojo/a.kojo1';
 const DUP_TEXT = '@AAA\nPRINTDATA\nEND\n@AAA\nPRINTDATA\nEND\n';
 const KOJO_TEXT = '时机 对话：\n  「你好 续」\n';
 
@@ -197,7 +197,7 @@ describe('诊断面接线的两槽', () => {
     h.dispose();
   });
 
-  it('`.kojo` 的引号内「续」：线归发布方（本层不再发第二条），💡 仍给整行改法并认领面上那一条', async () => {
+  it('`.kojo1` 的引号内「续」：线归发布方（本层不再发第二条），💡 仍给整行改法并认领面上那一条', async () => {
     const stub: SugarTranspileService = {
       transpile: () => ({
         diagnostics: [
@@ -214,7 +214,7 @@ describe('诊断面接线的两槽', () => {
     const h = harness();
     h.setIndex(indexWith({ [SUGAR_KOJO]: KOJO_TEXT }));
     await h.linter.run();
-    // 归属（2026-10-19 清账批）：`.kojo` 上的糖族行装饰归 `sugar-diagnostics`，本层零条
+    // 归属（2026-10-19 清账批）：`.kojo1` 上的糖族行装饰归 `sugar-diagnostics`，本层零条
     const decorations = h.decorate(SUGAR_KOJO, KOJO_TEXT) ?? [];
     expect(decorations).toEqual([]);
     const actions = h.actions(SUGAR_KOJO, KOJO_TEXT, 2) ?? [];
@@ -272,9 +272,9 @@ describe('诊断面接线的两槽', () => {
 /* ==================== 波浪线**归属**（2026-10-19 自造重叠清账批） ====================
  *
  * W1b 把本插件接上 `ui.editor.decorator`，W2 又把四条糖规则改成转译器的投影 ⇒ 同一棵
- * `.kojo` 同一行的**同一件事**被发成两条 marker：`ui-sugar-editor#sugar-diagnostics` 发一条
+ * `.kojo1` 同一行的**同一件事**被发成两条 marker：`ui-sugar-editor#sugar-diagnostics` 发一条
  * 裸码（转译器码本名）、这里发一条 `sugar.` 前缀 ⇒ 问题面板每条显示两行、计数翻倍。
- * 裁决落在**归属**这一层：`.kojo` 上的糖族行装饰归发布方（它对着**实时转译产物**画，是那份
+ * 裁决落在**归属**这一层：`.kojo1` 上的糖族行装饰归发布方（它对着**实时转译产物**画，是那份
  * 真相的最近邻），本层只进整项目报告与面板分组。
  *
  * 合并口径逐字照宿主（`marker-pool` / `kojo-fix-all.documentDiagnostics`）：按贡献顺序 push、
@@ -283,7 +283,7 @@ describe('诊断面接线的两槽', () => {
  * 两家喂**同一枚真转译服务**（判据单源 ⇒ 行 / 消息 / 严重级天然逐字相等，比对才不是自证）。
  */
 describe('波浪线归属：同一行两贡献方合并不翻倍', () => {
-  /** 真转译服务（同一枚实例喂两家；`.kojo` 无角色头也会报别的码，本组只按码子集筛） */
+  /** 真转译服务（同一枚实例喂两家；`.kojo1` 无角色头也会报别的码，本组只按码子集筛） */
   const sugarService = createSugarTranspileService({ faceTable: createEratwFaceTable() });
 
   /** 起**真** `ui-sugar-editor`，取它那枚 `sugar-diagnostics`（面上那条线的发布方） */
@@ -329,7 +329,7 @@ describe('波浪线归属：同一行两贡献方合并不翻倍', () => {
   const inLintSubset = (d: LineDecoration): boolean =>
     (SUGAR_LINT_DIAGNOSTIC_CODES as readonly string[]).includes(d.code ?? '');
 
-  it('①同一 `.kojo` 同一行：两家合并后的条数 === 发布方那一份（本层一条糖族线都不发）', async () => {
+  it('①同一 `.kojo1` 同一行：两家合并后的条数 === 发布方那一份（本层一条糖族线都不发）', async () => {
     setSugarTranspileProvider(() => sugarService);
     const sugarDecorate = publishSugarSquiggles();
     const h = harness();
@@ -341,7 +341,7 @@ describe('波浪线归属：同一行两贡献方合并不翻倍', () => {
     const subset = published.filter(inLintSubset);
     // 夹具要让发布方**确有**糖族子集那几条线（否则"不翻倍"是两边都没报的空转）
     expect(subset.length, JSON.stringify(published)).toBeGreaterThan(0);
-    // 归属闸：这一族在 `.kojo` 上不由本层画第二条
+    // 归属闸：这一族在 `.kojo1` 上不由本层画第二条
     expect(mine).toEqual([]);
     const merged = [...published, ...mine]; // 宿主就这么合并：按贡献顺序 push，不去重
     expect(merged).toHaveLength(published.length);
@@ -389,7 +389,7 @@ describe('波浪线归属：同一行两贡献方合并不翻倍', () => {
     const mine = h.decorate(DUP_ERB, DUP_TEXT) ?? [];
     expect(mine.length).toBeGreaterThan(0);
     expect(mine.every((d) => d.code === 'erb.duplicate-function')).toBe(true);
-    // 同一轮里 `.kojo` 的糖族那条**不**在面上（归属在别家）——两件事各自成立，不是整条链路哑了
+    // 同一轮里 `.kojo1` 的糖族那条**不**在面上（归属在别家）——两件事各自成立，不是整条链路哑了
     expect(h.decorate(SUGAR_KOJO, KOJO_TEXT) ?? []).toEqual([]);
     h.dispose();
     setSugarTranspileProvider(null);

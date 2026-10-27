@@ -1,4 +1,4 @@
-; @kojo-migration-corpus · 来源: fixtures/scaffold/性骚扰指令.kojo
+; @kojo-migration-corpus · 来源: fixtures/scaffold/性骚扰指令.kojo1
 ; 复制口径: 本头注之后 = 源文件逐字节复制（编码/EOL 原样；本文件 EOL=LF）
 ; 语料分层: 双 golden（v1 产物 + 2.0 产物）
 ; 说明: 脚手架空壳：叙事 + `时机 指令 317`（片段，按 golden 口径补 `角色:`）

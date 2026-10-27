@@ -1,5 +1,6 @@
 import type { EditorSymbolLocation, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
 import { KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS, MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
+import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 
 /**
  * **出现点台账**（W8 XLANG-RENAME，2026-10-17）——改名 / 查找引用 / code-lens /
@@ -46,9 +47,15 @@ export type ReferenceLanguage = 'erb' | 'kojo';
  */
 export { KOJO_SOURCE_EXTENSION };
 
-/** 是否是 kojo1 源文件（`.kojo` 或封存标记 `.kojo1`；宿主各处唯一判据，指回这里） */
+/**
+ * 是否是 kojo 家族的源文件（`.kojo` / `.kojo2` = 2.0，`.kojo1` = 封存层；宿主各处唯一判据）。
+ *
+ * LAU-3b-FLIP 之后 `.kojo` 归 2.0，但它仍是「kojo 这一门语言」的源——台账只关心
+ * "这份文件走 kojo 语义腿还是 ERB 语义腿"，不关心版本。
+ */
 export function isKojoSourcePath(path: string): boolean {
   const lower = path.toLowerCase();
+  if (lower.endsWith(KOJO_SOURCE_EXTENSION) || lower.endsWith(KOJO2_SOURCE_EXTENSION)) return true;
   return KOJO_V1_SOURCE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 

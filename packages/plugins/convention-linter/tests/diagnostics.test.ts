@@ -50,7 +50,7 @@ import {
 import { conventionIssueFixes } from '../src/fixes';
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
-const FILE_A = 'C:/game/data/kojo/a.kojo';
+const FILE_A = 'C:/game/data/kojo/a.kojo1';
 const FILE_B = 'C:/game/data/kojo/b.erb';
 
 function issue(over: Partial<ConventionIssue> = {}): ConventionIssue {
@@ -88,7 +88,7 @@ describe('约定问题 → 波浪线（装饰面）', () => {
     const decorations = conventionDecorationsForFile(
       view(
         issue({ ruleId: 'erb.duplicate-function', severity: 'info', message: '重名', line: 9 }),
-        // 未登记码用 `test.` 而不是 `sugar.`：后者在 `.kojo` 上归别家画线（见
+        // 未登记码用 `test.` 而不是 `sugar.`：后者在 `.kojo1` 上归别家画线（见
         // `decorator-ownership.test.ts` 的归属闸），混进来就测不到"未登记 ⇒ 不给 source"这一条
         issue({ ruleId: 'test.not-registered', severity: 'error', message: '坏', line: 2 }),
       ),
@@ -133,7 +133,7 @@ describe('约定问题 → 波浪线（装饰面）', () => {
     const v = view(issue({ message: 'A 的', line: 1 }), issue({ filePath: FILE_B, message: 'B 的', line: 7 }));
     expect(conventionDecorationsForFile(v, FILE_A).map((d) => d.message)).toEqual(['A 的']);
     expect(conventionDecorationsForFile(v, FILE_B).map((d) => d.message)).toEqual(['B 的']);
-    expect(conventionDecorationsForFile(v, 'c:\\game\\data\\kojo\\A.KOJO').map((d) => d.message)).toEqual(['A 的']);
+    expect(conventionDecorationsForFile(v, 'c:\\game\\data\\kojo\\A.KOJO1').map((d) => d.message)).toEqual(['A 的']);
     expect(conventionDecorationsForFile(v, 'C:/game/data/kojo/none.erb')).toEqual([]);
   });
 });
@@ -150,7 +150,7 @@ describe('约定问题 → 💡 动作（codeAction 面）', () => {
 
   it('①身份键一致：动作带出的诊断与**面上那一条**同尺（G3 与 Ctrl+. 说同一次问题）', () => {
     const v = view(fixed);
-    // `.kojo` 上的糖族**不由本层画线**（归 `sugar-diagnostics`，见文件末归属闸），所以面上的
+    // `.kojo1` 上的糖族**不由本层画线**（归 `sugar-diagnostics`，见文件末归属闸），所以面上的
     // 那条是别家发布的那一枚；本层的动作必须认领**那一枚的身份**，否则 `Ctrl+.` 静默失灵。
     const surface = conventionSurfaceDecoration(fixed)!;
     expect(conventionDecorationsForFile(v, FILE_A)).toEqual([]);
@@ -182,12 +182,12 @@ describe('约定问题 → 💡 动作（codeAction 面）', () => {
     const v = view(fixed, { ...fixed, filePath: FILE_B, key: 'b' });
     const actions = conventionCodeActionsForFile(v, { path: FILE_B, text, scope: 'document' });
     expect(actions).toHaveLength(1);
-    expect(conventionCodeActionsForFile(v, { path: 'C:/game/data/kojo/c.kojo', text, scope: 'document' })).toEqual([]);
+    expect(conventionCodeActionsForFile(v, { path: 'C:/game/data/kojo/c.kojo1', text, scope: 'document' })).toEqual([]);
   });
 
   it('B9：递来 diagnostics 时只应答对得上的那些；空数组 = 一条都不应答', () => {
     const v = view(fixed);
-    // 递来的是**面上画着的那一条**：`.kojo` 上糖族波浪线由 `ui-sugar-editor#sugar-diagnostics`
+    // 递来的是**面上画着的那一条**：`.kojo1` 上糖族波浪线由 `ui-sugar-editor#sugar-diagnostics`
     // 发布，码是不带面板前缀的转译器本名 ⇒ 本层认领的也是这一枚身份（前缀⇄本名的换算只有一处，
     // 见 `rules/sugar-conventions.ts`）。用带前缀的码当"面上那条"就是第二个真源。
     const requested: LineDecoration[] = [{ line: 2, severity: 'error', message: '「续」写在引号内', code: 'cont-inside-quotes' }];
@@ -315,7 +315,7 @@ describe('真规则 × 诊断面（端到端）', () => {
     });
     // 桶里三条都在（面板与折叠层读的是同一份 issues，不静默丢）
     expect(v.get(pathKey(FILE_A))?.issues).toHaveLength(3);
-    // 而这一棵 `.kojo` 上本层**一条线都不画**（归属闸；`decorator-ownership.test.ts` 钉合并后的条数）
+    // 而这一棵 `.kojo1` 上本层**一条线都不画**（归属闸；`decorator-ownership.test.ts` 钉合并后的条数）
     expect(conventionDecorationsForFile(v, FILE_A)).toEqual([]);
   });
 
@@ -434,7 +434,7 @@ describe('真规则 × 诊断面（端到端）', () => {
       const issues = await issuesViaAssembly(ALIAS_NOOP);
       expect(issues.map((i) => i.line), `夹具要让真转译器在第 4 行报出该码：${JSON.stringify(issues)}`).toEqual([4]);
       const v = view(...issues);
-      // 线归发布方（`.kojo` 上的糖族由 `sugar-diagnostics` 画）⇒ 本层不再重复发；
+      // 线归发布方（`.kojo1` 上的糖族由 `sugar-diagnostics` 画）⇒ 本层不再重复发；
       // issue 仍在桶里（项目级结论一条不少），💡 认领的是面上那一条的身份
       expect(conventionDecorationsForFile(v, FILE_A)).toEqual([]);
       expect(v.get(pathKey(FILE_A))?.issues).toHaveLength(1);
@@ -461,7 +461,7 @@ describe('真规则 × 诊断面（端到端）', () => {
       const issues = await issuesViaAssembly(ALIAS_CHANGED);
       expect(issues).toHaveLength(1);
       const v = view(...issues);
-      // 线归发布方（`.kojo` 上的糖族由 `sugar-diagnostics` 画）⇒ 本层不再重复发；
+      // 线归发布方（`.kojo1` 上的糖族由 `sugar-diagnostics` 画）⇒ 本层不再重复发；
       // issue 仍在桶里（项目级结论一条不少），💡 认领的是面上那一条的身份
       expect(conventionDecorationsForFile(v, FILE_A)).toEqual([]);
       expect(v.get(pathKey(FILE_A))?.issues).toHaveLength(1);
@@ -529,7 +529,7 @@ describe('两个数字的差额是**算得出来的**（不各说各话）', () 
     issue({ ruleId: 'r.b', message: 'B 可画', line: 2, column: 3 }),
     issue({ ruleId: 'r.c', message: 'C 整项目级结论', filePath: undefined, line: undefined }),
     issue({ ruleId: 'r.d', message: 'D 只有文件没有行', line: undefined }),
-    // E：`.kojo` 上的糖族 ⇒ 行装饰归 `sugar-diagnostics`（本层只记账，不再画第二条）
+    // E：`.kojo1` 上的糖族 ⇒ 行装饰归 `sugar-diagnostics`（本层只记账，不再画第二条）
     issue({ ruleId: CONT_INSIDE_QUOTES_RULE_ID, severity: 'error', message: 'E 归发布方画', line: 5 }),
   ];
 
@@ -564,7 +564,7 @@ describe('两个数字的差额是**算得出来的**（不各说各话）', () 
   });
 
   it('同一行两处同文案问题 = 两条装饰（不折叠成一条），列位各归各', () => {
-    // 用 `test.` 规则：糖族在 `.kojo` 上归发布方画线，拿它测"同文案两处不折叠"会测到归属闸上去
+    // 用 `test.` 规则：糖族在 `.kojo1` 上归发布方画线，拿它测"同文案两处不折叠"会测到归属闸上去
     const v = buildConventionIssueView([
       issue({ ruleId: 'test.dup', severity: 'error', message: 'm', line: 2, column: 0 }),
       issue({ ruleId: 'test.dup', severity: 'error', message: 'm', line: 2, column: 5 }),
@@ -608,7 +608,7 @@ function parseDuplicateIndex(text: string): ErbIndex {
   return { files: new Map([[file.path, file]]), byName };
 }
 
-it('`.ERB` 不吃糖侧兜底修法（那条判据只归 `.kojo`）', () => {
+it('`.ERB` 不吃糖侧兜底修法（那条判据只归 `.kojo1`）', () => {
   expect(
     conventionIssueFixes(
       { ruleId: CONT_INSIDE_QUOTES_RULE_ID, severity: 'error', message: 'x', filePath: FILE_B, line: 1 },

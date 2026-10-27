@@ -189,7 +189,7 @@ describe('分区贡献的存储键与判据（PERF-12c）', () => {
 
   it('键名过得了内核的键校验、随 ruleId 稳定、清洗撞车也不共用一键', () => {
     const ids = [
-      'eratw.kojo-completeness',
+      'eratw.kojo1-completeness',
       'sugar.static-conventions',
       'x/y', // 清洗后与下面的 'x-y' 前缀相同 ⇒ 靠摘要尾缀区分
       'x-y',
@@ -204,7 +204,7 @@ describe('分区贡献的存储键与判据（PERF-12c）', () => {
       expect(k).not.toContain('..');
       expect(k.length).toBeLessThanOrEqual(120);
     }
-    expect(lintUnitsKey('eratw.kojo-completeness')).toBe(keys[0]);
+    expect(lintUnitsKey('eratw.kojo1-completeness')).toBe(keys[0]);
     expect(new Set(keys).size).toBe(keys.length); // 无碰撞
   });
 

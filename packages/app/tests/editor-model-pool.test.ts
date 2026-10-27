@@ -10,6 +10,7 @@ import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installAvailabilityGate } from '../src/monaco/language-registry';
 import { JSON_LANGUAGE_ID, registerJsonLanguage } from '../src/monaco/json-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { createEditorModelPool, languageFor, type PoolDeps } from '../src/ui/editor-model-pool';
 
 interface FakeModel {
@@ -195,10 +196,12 @@ afterEach(() => installAvailabilityGate(null));
  * 只测映射表，不碰池的生命周期/引用计数（那是上面几组的事，也是并行批次的事）。
  */
 describe('languageFor · 显式白名单 + plaintext 兜底', () => {
-  it('.kojo（含大写 / CJK 基名）⇒ 糖语言', () => {
-    expect(languageFor('D:\\作品\\事件.kojo')).toBe(KOJO_LANGUAGE_ID);
-    expect(languageFor('D:/x/a.kojo')).toBe(KOJO_LANGUAGE_ID);
-    expect(languageFor('D:/x/A.KOJO')).toBe(KOJO_LANGUAGE_ID);
+  it('.kojo ⇒ 2.0 语言；.kojo1 ⇒ 封存语言（含大写 / CJK 基名）', () => {
+    expect(languageFor('D:\\作品\\事件.kojo')).toBe(KOJO2_LANGUAGE_ID);
+    expect(languageFor('D:/x/a.kojo')).toBe(KOJO2_LANGUAGE_ID);
+    expect(languageFor('D:/x/A.KOJO')).toBe(KOJO2_LANGUAGE_ID);
+    expect(languageFor('D:\\作品\\旧稿.kojo1')).toBe(KOJO_LANGUAGE_ID);
+    expect(languageFor('D:/x/A.KOJO1')).toBe(KOJO_LANGUAGE_ID);
   });
 
   it('大写 `.ERB` 真实语料形态 ⇒ ERB 语言（冒烟夹具就是全大写）', () => {

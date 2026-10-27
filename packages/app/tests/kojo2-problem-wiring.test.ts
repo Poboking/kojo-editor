@@ -243,13 +243,15 @@ describe('门：语言面不读切流开关，只认 `.kojo2`', () => {
     wiring.dispose();
   });
 
-  it('kojo2OwnsDiagnostics：只认 `.kojo2`（大小写不敏感），与切流开关无关', () => {
+  it('kojo2OwnsDiagnostics：`.kojo` / `.kojo2`（大小写不敏感）都归 2.0，与切流开关无关', () => {
     stubFlag(false);
     expect(kojo2OwnsDiagnostics('D:/p/a.kojo2')).toBe(true);
+    expect(kojo2OwnsDiagnostics('D:/p/a.kojo')).toBe(true);
     stubFlag(true);
     expect(kojo2OwnsDiagnostics('D:/p/a.kojo2')).toBe(true);
     expect(kojo2OwnsDiagnostics('D:/p/A.KOJO2')).toBe(true);
-    expect(kojo2OwnsDiagnostics('D:/p/a.kojo')).toBe(false);
+    expect(kojo2OwnsDiagnostics('D:/p/A.KOJO')).toBe(true);
+    expect(kojo2OwnsDiagnostics('D:/p/a.kojo1')).toBe(false);
     expect(kojo2OwnsDiagnostics('D:/p/a.erb')).toBe(false);
   });
 });

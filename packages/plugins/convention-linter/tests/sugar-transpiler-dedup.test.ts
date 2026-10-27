@@ -2,15 +2,15 @@
  * RULE-DEDUP（W2）：糖侧约定判据只剩转译器一份。
  *
  * 三条钉法（对应判据①②③）：
- * ① **对拍**：同一份 `.kojo` 输入下，校验面板（`ConventionEngine.run` → `report.issues`）
+ * ① **对拍**：同一份 `.kojo1` 输入下，校验面板（`ConventionEngine.run` → `report.issues`）
  *   产出的码 / 严重级 / 行号 / 文案与**真转译器**（`@kojo/plugin-kojo-sugar` 的
  *   `sugar.transpile`）诊断逐条一致——期望值当场由转译器算出，不写死、不恒真
  *   （另加"四条码都要出现 / 非 error 也原样透出"的反恒真闸）。
  * ② **单实现**：规则源里不得残留任何本地糖扫描（逐个旧判据零件点名），
  *   且转译器的诊断文案不得出现在规则源里（文案单源 = 转译器 + `diagnostic-copy`）。
  * ③ **服务缺席**：零 issue + `failedRules` 带可读原因（区分"未接线"与"服务缺席"两种形态）；
- *   没有 `.kojo` 的项目不制造失败噪声。
- * 另：分区缓存口径（PERF-12b / PERF-13）——连续两轮校验，正文未变的那棵 `.kojo`
+ *   没有 `.kojo1` 的项目不制造失败噪声。
+ * 另：分区缓存口径（PERF-12b / PERF-13）——连续两轮校验，正文未变的那棵 `.kojo1`
  *   **既不再读盘也不再转译**（调用计数为硬闸）；改一棵只重算那一棵。
  */
 
@@ -55,8 +55,8 @@ function makeSugarService(): SugarTranspileService {
   return createSugarTranspileService({ faceTable: createEratwFaceTable() });
 }
 
-const KOJO_A = '/p/kojo/M_KOJO_K12_指令.kojo';
-const KOJO_B = '/p/kojo/M_KOJO_K13_指令.kojo';
+const KOJO_A = '/p/kojo/M_KOJO_K12_指令.kojo1';
+const KOJO_B = '/p/kojo/M_KOJO_K13_指令.kojo1';
 const PLAIN_ERB = '/p/kojo/M_KOJO_K14_事件.ERB';
 
 /** `续` 写在引号内（同一行两处 ⇒ 两条诊断）+ 表达式 `如果` 缺 `否则` */
@@ -273,7 +273,7 @@ describe('W2①：校验面板产出 = 转译器诊断（逐条一致）', () =>
     expect(byId.get(MULTIPLE_CHOICE_BLOCKS_RULE_ID)?.key).toContain('|7|3');
   });
 
-  it('非 `.kojo` 文件不参与（连正文都不读）', async () => {
+  it('非 `.kojo1` 文件不参与（连正文都不读）', async () => {
     const { engine, reads } = engineWith({
       index: indexFor([PLAIN_ERB]),
       provider: () => service,
@@ -428,7 +428,7 @@ describe('W2③：转译服务缺席时零 issue + 可读原因', () => {
     );
   });
 
-  it('没有 `.kojo` 的项目 ⇒ 不报失败也不报条目（无事可做 ≠ 服务缺席）', async () => {
+  it('没有 `.kojo1` 的项目 ⇒ 不报失败也不报条目（无事可做 ≠ 服务缺席）', async () => {
     const { engine, reads } = engineWith({ index: indexFor([PLAIN_ERB]), provider: null });
     const rep = await engine.run();
     expect(rep.failedRules).toEqual([]);
@@ -451,7 +451,7 @@ describe('W2③：转译服务缺席时零 issue + 可读原因', () => {
     expect(k1).toContain('@test');
     // 同一枚服务 ⇒ 判据稳定（复用的前提）
     expect(await createSugarStaticConventionsRule(() => s1).partition!.key!(ctx)).toBe(k1);
-    // 没有 `.kojo` ⇒ 判据不依赖服务，也不因服务缺席而抛
+    // 没有 `.kojo1` ⇒ 判据不依赖服务，也不因服务缺席而抛
     expect(await createSugarStaticConventionsRule(null).partition!.key!(ctxFor([PLAIN_ERB]))).toContain('no-kojo');
   });
 });
@@ -459,7 +459,7 @@ describe('W2③：转译服务缺席时零 issue + 可读原因', () => {
 /* ============================== 缓存口径（PERF-12b / PERF-13 不许回退） ============================== */
 
 describe('W2 缓存：连续两轮校验不重复读盘 / 不重复转译', () => {
-  it('正文未变 ⇒ 第二轮对同一棵 `.kojo` 零 readFile、零 transpile；改一棵只补算那一棵', async () => {
+  it('正文未变 ⇒ 第二轮对同一棵 `.kojo1` 零 readFile、零 transpile；改一棵只补算那一棵', async () => {
     const real = makeSugarService();
     let calls = 0;
     const counting = {
@@ -483,7 +483,7 @@ describe('W2 缓存：连续两轮校验不重复读盘 / 不重复转译', () =
     });
 
     const first = await engine.run();
-    expect(calls).toBe(2); // 只有两棵 `.kojo` 被转译
+    expect(calls).toBe(2); // 只有两棵 `.kojo1` 被转译
     expect(reads.length).toBe(2);
     const expected = sorted(expectedRows(real, paths).map(tuple));
     expect(sorted(first.issues.filter((i) => SUGAR_LINT_RULE_IDS.includes(i.ruleId)).map((i) => tuple(rowOf(i))))).toEqual(

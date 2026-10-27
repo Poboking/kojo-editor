@@ -1,5 +1,5 @@
 /**
- * W3「`.kojo` 的波浪线真的有修法」端到端验收：真转译器 + 真槽位接线。
+ * W3「`.kojo1` 的波浪线真的有修法」端到端验收：真转译器 + 真槽位接线。
  *
  * 本文件是**测试**（解耦审计规则 C 对 `tests/` 豁免），故直接装真转译器 + 本插件，
  * 用一枚受控的 refactor 供方验"quickfix 与其他 refactor 类动作在同一份文档里各归各类"。
@@ -36,7 +36,7 @@ const warnings: string[] = [];
 const capturingLog: Logger = { ...log, warn: (m: string) => warnings.push(m) };
 const enc = (s: string) => new TextEncoder().encode(s);
 
-const PATH = '/proj/口上/x.kojo';
+const PATH = '/proj/口上/x.kojo1';
 
 /**
  * 转译服务的缓存读数（实现侧 additive 面，**不在契约里** ⇒ 本测试按最小形状自取）。
@@ -309,7 +309,7 @@ const SRC_TYPO = ['角色: 1', '时机 指令 310：', '    调用 最大直(1, 
 /* 非闭集码：`续` 写在引号内（error，但文案给了两条出路 ⇒ 本批不动手） */
 const SRC_QUOTES = ['角色: 1', '时机 指令 310：', '    「你好。 续」', ''].join('\n');
 
-describe('W3 / 真转译器：`.kojo` 波浪线换来 quickfix', () => {
+describe('W3 / 真转译器：`.kojo1` 波浪线换来 quickfix', () => {
   it('注册了 `ui.editor.codeAction`（id sugar-quickfix）', () => {
     const h = boot(SRC_STRAY);
     const ids = h.codeActions.map((c) => c.id);
@@ -365,7 +365,7 @@ describe('W3 / 真转译器：`.kojo` 波浪线换来 quickfix', () => {
     expect(quickfix.provideActions({ path: PATH, text: SRC_STRAY, project: null })).toEqual([]);
   });
 
-  it('非 `.kojo`（原生 ERB）不应答：本贡献只对糖源供动作', () => {
+  it('非 `.kojo1`（原生 ERB）不应答：本贡献只对糖源供动作', () => {
     const h = boot(SRC_STRAY);
     const quickfix = h.codeActions.find((c) => c.id === 'sugar-quickfix')!;
     const erb = 'PRINTFORMW 你好 50% 吧。\n';
@@ -379,7 +379,7 @@ describe('W3 / 真转译器：`.kojo` 波浪线换来 quickfix', () => {
     ).toEqual([]);
   });
 
-  it('写允许域之外的 `.kojo`（只读）不给改写动作——与 erb-structure-fix / convention-linter 同一条保守口径', () => {
+  it('写允许域之外的 `.kojo1`（只读）不给改写动作——与 erb-structure-fix / convention-linter 同一条保守口径', () => {
     const h = boot(SRC_STRAY, { writable: false });
     const quickfix = h.codeActions.find((c) => c.id === 'sugar-quickfix')!;
     const diagnostics = markers(h, SRC_STRAY);
@@ -445,7 +445,7 @@ describe('W3 / 与 refactor 类动作共存：各归各类、不互相顶替', (
       at === line
         ? [
             {
-              title: '转成 .kojo 写法（片段·可 Ctrl+Z 撤回）',
+              title: '转成 .kojo1 写法（片段·可 Ctrl+Z 撤回）',
               kind: 'refactor',
               edits: [{ fromLine: line, toLine: line, newText: '    甲。' }],
               run: () => undefined,

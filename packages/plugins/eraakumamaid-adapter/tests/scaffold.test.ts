@@ -40,7 +40,7 @@ describe('eraAkumaMaid 脚手架产物形态', () => {
     expect(names.length).toBe(9);
   });
 
-  it('工作区里没有任何 .ERB（唯一源是 .kojo）', () => {
+  it('工作区里没有任何 .ERB（唯一源是 .kojo1）', () => {
     const names = Object.keys(scaffoldErakumamaidProject(base).files);
     expect(names.filter((n) => /\.ERB$/i.test(n))).toEqual([]);
   });
@@ -60,15 +60,15 @@ describe('eraAkumaMaid 脚手架产物形态', () => {
 
   it('每个空壳都点名本文件该写的函数（作者不必回去翻模板包）', () => {
     const r = scaffoldErakumamaidProject(base);
-    const main = r.files['ERB/EVENT_K/67/EVENT_K67.kojo']!;
+    const main = r.files['ERB/EVENT_K/67/EVENT_K67.kojo1']!;
     expect(main).toContain('CNAME_K67');
     expect(main).toContain('EVENT_PROFILE_K67');
     expect(main).toContain('KOJO_MESSAGE_MARKCNG_K67');
-    expect(r.files['ERB/EVENT_K/67/EVENT_K67_DAILY.kojo']).toContain('KOJO_DAILY_K67');
-    expect(r.files['ERB/EVENT_K/67/EVENT_K67_SELECT.kojo']).toContain(
+    expect(r.files['ERB/EVENT_K/67/EVENT_K67_DAILY.kojo1']).toContain('KOJO_DAILY_K67');
+    expect(r.files['ERB/EVENT_K/67/EVENT_K67_SELECT.kojo1']).toContain(
       'KOJO_WISH_K67_ADDSELECT',
     );
-    expect(r.files['ERB/EVENT_K/67/UPDATE_K67.kojo']).toContain('UPDATE_K67');
+    expect(r.files['ERB/EVENT_K/67/UPDATE_K67.kojo1']).toContain('UPDATE_K67');
     // 说明行里的 {n} 必须已被真实编号替换（原样抄进函数名引擎认不到）
     for (const text of Object.values(r.files)) expect(text).not.toContain('{n}');
   });

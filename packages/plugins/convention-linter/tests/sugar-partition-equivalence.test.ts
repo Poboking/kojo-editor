@@ -20,8 +20,8 @@ import {
 
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
-const KOJO1 = '/p/kojo/a.kojo';
-const KOJO2 = '/p/kojo/b.kojo';
+const KOJO1 = '/p/kojo/a.kojo1';
+const KOJO2 = '/p/kojo/b.kojo1';
 const ERB = '/p/kojo/c.ERB';
 
 const KOJO_SRC_1 =
@@ -80,7 +80,7 @@ async function viaPartition(ctx: ConventionCheckContext): Promise<ConventionProj
 }
 
 describe('sugar.static-conventions 分区×全量对拍（判据来自转译器）', () => {
-  it('两棵 .kojo 各含多项违规 + 一棵 .ERB ⇒ 逐条相同（顺序也同）', async () => {
+  it('两棵 .kojo1 各含多项违规 + 一棵 .ERB ⇒ 逐条相同（顺序也同）', async () => {
     const files = { [KOJO1]: KOJO_SRC_1, [KOJO2]: KOJO_SRC_2, [ERB]: '@A\nPRINTL 1\n' };
     const ctx = ctxFor(files, [KOJO1, KOJO2, ERB]);
     const full = await rule.check!(ctx);
@@ -122,7 +122,7 @@ describe('sugar.static-conventions 分区×全量对拍（判据来自转译器�
     expect(Array.isArray(entries.find((e) => e.file.path === KOJO1)!.unit)).toBe(true);
   });
 
-  it('非 `.kojo` ⇒ 单元 null（不适用，可缓存）', async () => {
+  it('非 `.kojo1` ⇒ 单元 null（不适用，可缓存）', async () => {
     const ctx = ctxFor({ [ERB]: '@A\nPRINTL 1\n' }, [ERB]);
     expect(await rule.partition!.fileUnit(ctx, { path: ERB } as ErbFile)).toBeNull();
   });

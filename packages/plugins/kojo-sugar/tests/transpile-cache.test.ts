@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { createSugarTranspileService } from '../src/service';
 import { stubDict, stubFaceTable } from './support';
 
-const PATH = 'C:/proj/M_KOJO_K49_指令.kojo';
+const PATH = 'C:/proj/M_KOJO_K49_指令.kojo1';
 
 /** 可通过转译的合法文档（与 `save-plan.test.ts` 同款） */
 const VALID = '角色: 12\n时机 指令 310：\n    「呀。」\n';
@@ -64,14 +64,14 @@ describe('失效正确性：文本变 / 路径变 / 代际换实例', () => {
   it('路径变 ⇒ 必重算（filePath 进诊断与命名检查，不可跨文件复用）', () => {
     const s = svc();
     s.transpile(VALID, { filePath: PATH });
-    s.transpile(VALID, { filePath: 'C:/proj/other.kojo' });
+    s.transpile(VALID, { filePath: 'C:/proj/other.kojo1' });
     expect(s.transpileCacheStats()).toMatchObject({ misses: 2, hits: 0 });
   });
 
   it('`fileName` 变化不影响键也不影响产物（入键面 = (文本, filePath)，与产物依赖面一致）', () => {
     const s = svc();
     const r1 = s.transpile(VALID, { filePath: PATH });
-    const r2 = s.transpile(VALID, { filePath: PATH, fileName: '另一名字.kojo' });
+    const r2 = s.transpile(VALID, { filePath: PATH, fileName: '另一名字.kojo1' });
     expect(r2).toBe(r1);
     expect(s.transpileCacheStats()).toMatchObject({ misses: 1, hits: 1 });
   });
@@ -114,15 +114,15 @@ describe('容量上限与淘汰：有界内存 + 结果仍正确', () => {
       faceTable: stubFaceTable(),
       cache: { maxBuckets: 1, maxEntriesPerBucket: 4, maxSourceChars: 10_000 },
     });
-    for (let i = 0; i < 3; i++) s.transpile(VALID, { filePath: `C:/proj/f${i}.kojo` });
+    for (let i = 0; i < 3; i++) s.transpile(VALID, { filePath: `C:/proj/f${i}.kojo1` });
     // 单桶上限 ⇒ 只有第 3 个文件在线；后面的写入挤掉前面的桶
     const stats = s.transpileCacheStats();
     expect(stats.entries).toBeLessThanOrEqual(4);
     expect(stats.evictions).toBeGreaterThanOrEqual(1);
     // 超限文本（> maxSourceChars）不入缓存：每次都 miss，也不清空既有条目
     const huge = `; ${'x'.repeat(11_000)}\n${VALID}`;
-    s.transpile(huge, { filePath: 'C:/proj/big.kojo' });
-    s.transpile(huge, { filePath: 'C:/proj/big.kojo' });
+    s.transpile(huge, { filePath: 'C:/proj/big.kojo1' });
+    s.transpile(huge, { filePath: 'C:/proj/big.kojo1' });
     expect(s.transpileCacheStats().hits).toBe(0);
     expect(s.transpileCacheStats().entries).toBeGreaterThan(0);
   });

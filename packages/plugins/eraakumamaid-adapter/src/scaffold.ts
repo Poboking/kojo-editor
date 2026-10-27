@@ -35,6 +35,7 @@ import {
   buildScaffoldFaceStub,
   buildScaffoldReadme,
   faceTemplateExample,
+  KOJO_LEGACY_SOURCE_EXTENSION,
   type KojoFaceTable,
   type ScaffoldFaceSpec,
   type ScaffoldIdentity,
@@ -65,8 +66,12 @@ export interface AMScaffoldFileSpec {
   readonly alwaysHints: readonly string[];
 }
 
-/** 空壳扩展名（工作区唯一源；部署时转译成 `.ERB`） */
-export const AM_FACE_STUB_EXT = '.kojo';
+/**
+ * 空壳扩展名（工作区唯一源；部署时转译成 `.ERB`）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，本包空壳正文是 kojo1 写法 ⇒ 落 `.kojo1`。
+ */
+export const AM_FACE_STUB_EXT = KOJO_LEGACY_SOURCE_EXTENSION;
 
 /**
  * 7 个口上文件的规格（顺序 = 生成顺序 = 游戏模板包的阅读顺序）。

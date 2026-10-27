@@ -108,7 +108,7 @@ export function buildPreviewPanelMenu(target: PreviewPanelMenuTarget): PluginCon
           label: '刷新预览',
           icon: 'refresh',
           disabled: true,
-          disabledReason: '当前文件不是 .kojo，没有可预览的转译结果',
+          disabledReason: '当前文件不是 .kojo1，没有可预览的转译结果',
           group: '预览',
         },
     target.filePath === null

@@ -38,7 +38,7 @@ import type {
   WorkspaceArtifact,
   WorkspaceProject,
 } from '@kojo/plugin-api';
-import { activeGameAdapter, join } from '@kojo/plugin-api';
+import { activeGameAdapter, join, KOJO_LEGACY_SOURCE_EXTENSION } from '@kojo/plugin-api';
 import {
   latestArtifact,
   type KojoFileDraft,
@@ -69,8 +69,12 @@ function familySegment(family: string): string {
   return family.trim().replace(/[\\/:*?"<>|]/g, '');
 }
 
-/** 1.x 表层源的扩展名（本插件产出的默认形态；2.0 的扩展名由**宿主下传**，这里不写） */
-const KOJO_V1_EXTENSION = '.kojo';
+/**
+ * kojo1 表层源的扩展名（本插件产出的默认形态；2.0 的扩展名由**宿主下传**，这里不写）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，kojo1 的源只剩 `.kojo1`（契约层单源）。
+ */
+const KOJO_V1_EXTENSION = KOJO_LEGACY_SOURCE_EXTENSION;
 
 /** 新建文件的语言档：1.x 表层（缺省）/ 2.0 */
 export type KojoNewFileFormat = 'kojo' | 'kojo2';
@@ -78,8 +82,8 @@ export type KojoNewFileFormat = 'kojo' | 'kojo2';
 /**
  * 目标文件名预览：`{declare模板代入角色号}[_{家族}]<扩展名>`。
  *
- * 扩展名由调用方给（缺省 1.x `.kojo`）：2.0 的扩展名住在宿主（`monaco/kojo2-constants.ts`
- * 全仓唯一处），经 `uiPrefs.kojo2.extension` 下传——插件侧因此**零** `.kojo2` 字面量。
+ * 扩展名由调用方给（缺省 = kojo1 封存层的 `.kojo1`）：2.0 的扩展名住在宿主（契约层
+ * `KOJO_SOURCE_EXTENSION`），经 `uiPrefs.kojo2.extension` 下传——插件侧因此**零**扩展名字面量。
  */
 export function previewFileName(
   declareTemplate: string,
@@ -193,7 +197,8 @@ export function createNewKojoWizard(deps: WizardDeps): UIPanelComponent {
      * 这时下面那个格式选择器一个选项都不多，界面与改动前逐字相同。
      */
     const kojo2Surface = props.uiPrefs?.kojo2;
-    const [format, setFormat] = useState<KojoNewFileFormat>('kojo');
+    // LAU-3b-FLIP：2.0 面在就默认产 2.0 文件（`.kojo`）——封存层不该是新文件的缺省。
+    const [format, setFormat] = useState<KojoNewFileFormat>(kojo2Surface ? 'kojo2' : 'kojo');
     /** 本次要产出的扩展名：2.0 档取宿主给的那一枚（插件侧零字面量），其余恒 1.x */
     const extension =
       format === 'kojo2' && kojo2Surface ? kojo2Surface.extension : KOJO_V1_EXTENSION;

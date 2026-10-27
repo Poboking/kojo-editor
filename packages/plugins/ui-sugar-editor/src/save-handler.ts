@@ -90,11 +90,11 @@ async function restoreBefore(
 /** `blocked` 原因 → 面向作者的说明 */
 function blockNote(plan: SugarSavePlan): string {
   if (plan.blockedReason === 'source-not-kojo') {
-    return '产物未生成：源路径不是 .kojo（无可推导的产物目标）';
+    return '产物未生成：源路径不是 .kojo1（无可推导的产物目标）';
   }
   if (plan.blockedReason === 'transpile-error') {
     const n = plan.transpile.diagnostics.filter((d) => d.severity === 'error').length;
-    return `产物未生成：转译含 ${n} 项错误（见「.kojo 校验」）`;
+    return `产物未生成：转译含 ${n} 项错误（见「.kojo1 校验」）`;
   }
   return plan.erbPath ? '' : '产物未生成：无可推导的产物目标';
 }

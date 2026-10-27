@@ -94,7 +94,7 @@ describe('W4 / 两面板诊断窗口参数同值', () => {
 
 /* ============================== 三、降级文案 / 文件判定同字 ============================== */
 
-describe('W4 / 两面板降级文案与 .kojo 判定逐字一致', () => {
+describe('W4 / 两面板降级文案与 .kojo1 判定逐字一致', () => {
   it('degradeText 对判定面板闭集四键输出同字', () => {
     for (const d of ['no-project', 'not-kojo', 'reading', 'read-error'] as const) {
       expect(previewLogic.degradeText(d)).toBe(editorLogic.degradeText(d));
@@ -102,7 +102,7 @@ describe('W4 / 两面板降级文案与 .kojo 判定逐字一致', () => {
   });
 
   it('isKojoFile 两侧同判（含大小写 / 空值 / 非糖源）', () => {
-    for (const p of ['/p/a.kojo', '/p/A.KOJO', '/p/a.ERB', '', '.kojo', 'x.kojo.bak', null, undefined]) {
+    for (const p of ['/p/a.kojo1', '/p/A.KOJO1', '/p/a.kojo', '/p/a.ERB', '', '.kojo1', 'x.kojo1.bak', null, undefined]) {
       expect(previewLogic.isKojoFile(p)).toBe(editorLogic.isKojoFile(p));
     }
   });
@@ -110,8 +110,8 @@ describe('W4 / 两面板降级文案与 .kojo 判定逐字一致', () => {
   it('createLiveTextPool 同实现行为：两侧池对同一路径序列给出同一答案', () => {
     const e = editorLogic.createLiveTextPool();
     const p = previewLogic.createLiveTextPool();
-    for (const pool of [e, p]) pool.apply('C:\\Proj\\X.kojo', 'truth');
-    expect(p.textFor('c:/proj/x.kojo')).toBe(e.textFor('C:/PROJ/X.KOJO'));
-    expect(e.textFor('c:/proj/x.kojo')).toBe('truth');
+    for (const pool of [e, p]) pool.apply('C:\\Proj\\X.kojo1', 'truth');
+    expect(p.textFor('c:/proj/x.kojo1')).toBe(e.textFor('C:/PROJ/X.KOJO1'));
+    expect(e.textFor('c:/proj/x.kojo1')).toBe('truth');
   });
 });

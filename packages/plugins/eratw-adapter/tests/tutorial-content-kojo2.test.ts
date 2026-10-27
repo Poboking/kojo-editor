@@ -178,8 +178,8 @@ describe('Kojo 2.0 语言教程（内容底线）', () => {
     const first = KOJO2_TUTORIAL.sections[0]!;
     const lead = [first.heading, ...first.paragraphs].join('\n');
     expect(lead).toContain(
-      '今天默认档位是「只认 v1」：新装的编辑器打开 `.kojo` 走的还是老写法。要看这份教程里的 2.0 写法，' +
-        '去设置页把「Kojo 2.0 档位」切到「双轨」（老 `.kojo` 一字不动，新 `.kojo2` 走 2.0）或「2.0 默认」；' +
+      '今天默认档位是「2.0 默认」：`.kojo` 就是 kojo（2.0）的源，新装的编辑器打开 `.kojo` 走的就是这一套；' +
+        '`.kojo1` 是封存的 kojo1 旧写法，默认不上色，要看得在设置页打开「显示已封存功能」或切到「双轨」。' +
         '切档后需要重载一次窗口，语言面与配色才全部换过来（编辑器会提示，不会静默）。',
     );
   });

@@ -25,7 +25,10 @@
 import { extname, isPathUnder, pathKey } from '@kojo/plugin-api';
 // 扩展名取**零依赖叶子**（不取 `monaco/kojo2-language`）：本模块的消费方里有拖放/快速打开/
 // 项目扫描这些只按后缀收文件的清单，判据只需要一枚字符串，不该为它拖上词表链（同 PS-10）。
-import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
+// LAU-3b-FLIP：`.kojo` 与 `.kojo2` 的**全集只住在** `ui/kojo2-cutover.ts` 一处
+// （`KOJO2_FILE_EXTENSIONS`），本模块只做 import —— 而 `kojo2-flag` 早就把那个模块拖进来了，
+// 所以这里不多一份重量。
+import { KOJO2_FILE_EXTENSIONS } from './kojo2-cutover';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 
 /**
@@ -92,13 +95,17 @@ export const KOJO2_NO_PROJECT_REASON =
 export const KOJO2_CREATE_NEEDS_PROJECT_REASON =
   '新建 2.0 文件只能落在当前项目里：先打开项目，再从项目里的文件夹新建。';
 
-/** 是否是 2.0 文件（与语言层 descriptor 同一条判据：最后一段扩展名、大小写不敏感） */
+/**
+ * 是否是 2.0 文件（与语言层 descriptor 同一条判据：最后一段扩展名、大小写不敏感）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，`.kojo2` 是旧名兼容——两枚都算。
+ */
 export function isKojo2Path(filePath: string): boolean {
-  return extname(filePath).toLowerCase() === KOJO2_SOURCE_EXTENSION;
+  return KOJO2_FILE_EXTENSIONS.includes(extname(filePath).toLowerCase());
 }
 
 /**
- * 该补进**按后缀收文件**的那几张清单的条目（K2-SURFACE-DEFAULT 起恒为 2.0 扩展名一项）。
+ * 该补进**按后缀收文件**的那几张清单的条目（K2-SURFACE-DEFAULT 起恒为 2.0 扩展名）。
  *
  * 拖放（`OPENABLE_EXT`）、快速打开（`QUICK_OPEN_SOURCE_EXTENSIONS`）、项目扫描、文件树这些
  * 地方只需要 `[...既有清单, ...kojo2SourceExtensions()]` 追加一次，扩展名不必在每个调用点
@@ -109,7 +116,7 @@ export function isKojo2Path(filePath: string): boolean {
  * 没有这份文件"（实测：缺省档位下 2.0 文件在快速打开里根本不出现）。
  */
 export function kojo2SourceExtensions(): readonly string[] {
-  return [KOJO2_SOURCE_EXTENSION];
+  return KOJO2_FILE_EXTENSIONS;
 }
 
 /** 把可缺省的 root 归成"有根 / 无根"（空串是历史口径里的"没有项目"，别当成一个根） */

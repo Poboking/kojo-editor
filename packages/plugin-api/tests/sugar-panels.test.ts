@@ -405,10 +405,12 @@ describe('W4 / 哨兵文案与活动文件降级判据', () => {
     expect(MORE_ROW_TITLE).toContain('自动加载');
   });
 
-  it('degradeForActiveFile：null → no-project；非 .kojo → not-kojo；.kojo → reading', () => {
+  it('degradeForActiveFile：null → no-project；非 .kojo1 → not-kojo；.kojo1 → reading', () => {
     expect(degradeForActiveFile(null)).toBe('no-project');
     expect(degradeForActiveFile('/p/a.ERB')).toBe('not-kojo');
-    expect(degradeForActiveFile('/p/a.KOJO')).toBe('reading');
+    // `.kojo` 是 2.0 的源（LAU-3b-FLIP），封存层的糖面板不再接管它
+    expect(degradeForActiveFile('/p/a.kojo')).toBe('not-kojo');
+    expect(degradeForActiveFile('/p/a.KOJO1')).toBe('reading');
   });
 
   it('降级闭集每个键都有非空中文文案（同屏两面板共用一份 map）', () => {
@@ -418,9 +420,11 @@ describe('W4 / 哨兵文案与活动文件降级判据', () => {
     }
   });
 
-  it('isKojoFile：大小写不敏感；空串 / 非 .kojo / null / undefined → false', () => {
-    expect(isKojoFile('/p/x.kojo')).toBe(true);
-    expect(isKojoFile('/p/x.KOJO')).toBe(true);
+  it('isKojoFile：大小写不敏感；空串 / 非 .kojo1 / null / undefined → false', () => {
+    expect(isKojoFile('/p/x.kojo1')).toBe(true);
+    expect(isKojoFile('/p/x.KOJO1')).toBe(true);
+    expect(isKojoFile('/p/x.kojo')).toBe(false); // 2.0 的源不归封存层面板
+    expect(isKojoFile('/p/x.kojo2')).toBe(false);
     expect(isKojoFile('/p/x.ERB')).toBe(false);
     expect(isKojoFile('')).toBe(false);
     expect(isKojoFile(null)).toBe(false);

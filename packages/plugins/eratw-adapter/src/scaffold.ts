@@ -48,7 +48,7 @@ import {
   buildScaffoldReadme,
   faceTemplateExample,
   sanitizePathSegment,
-  KOJO_SOURCE_EXTENSION,
+  KOJO_LEGACY_SOURCE_EXTENSION,
   type KojoFaceTable,
   type ScaffoldFaceCase,
   type ScaffoldFaceSpec,
@@ -98,17 +98,25 @@ export interface KojoScaffoldResult {
 /**
  * 核心面空壳的文件扩展名（README 清单与实际产物必须同源于此）。
  *
- * 值 = 契约层的表层源扩展名单源（`KOJO_SOURCE_EXTENSION`），本文件**不抄字面量**
- * （NEW-ERB 单源守卫 `kit/tests/lang-doc.test.ts` 按行钉死）。
+ * 值 = 契约层**封存层**源扩展名（`KOJO_LEGACY_SOURCE_EXTENSION` ＝ `.kojo1`），本文件
+ * **不抄字面量**（NEW-ERB 单源守卫 `kit/tests/lang-doc.test.ts` 按行钉死）。
+ *
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，而本脚手架的空壳正文仍是 kojo1 写法
+ * （全注释 + 糖写法案例）⇒ 只能落 `.kojo1`。2.0 的起手骨架是后续批。
  */
-export const FACE_STUB_EXT = KOJO_SOURCE_EXTENSION;
+export const FACE_STUB_EXT = KOJO_LEGACY_SOURCE_EXTENSION;
 
-/** 本游戏各档的起手扩展名（糖档 = `FACE_STUB_EXT`；原生档由共享层单源给） */
+/**
+ * 本游戏各档的起手扩展名（**显式糖档**才落封存层 `FACE_STUB_EXT`；其余由共享层单源给原生扩展名）。
+ *
+ * LAU-3b-FLIP（2026-10-27，用户口径「kojo2 取代 kojo1 的所有位置」）：缺省不再是封存写法——
+ * 没传 `langDoc` 时按原生档出，只有作者明确选了「kojo1 封存写法」才落 `.kojo1`。
+ */
 export function scaffoldStubExt(langDoc: KojoLangDoc | undefined): string {
-  return langDoc === 'native' ? kojoLangDocExtension('native') : FACE_STUB_EXT;
+  return langDoc === 'sugar' ? FACE_STUB_EXT : kojoLangDocExtension('native');
 }
 
-/** 核心面空壳规格（中文命名；文件名 = stem + '.kojo'） */
+/** 核心面空壳规格（中文命名；文件名 = stem + 封存层源扩展名 `.kojo1`） */
 export type CoreFaceSpec = ScaffoldFaceSpec;
 
 /** 8 核心面（讨论纪要定稿清单；顺序即生成顺序） */
@@ -249,7 +257,7 @@ export function buildFaceStub(
       // 【库内现成案例】是**糖写法**的示例（由真实口上经升糖投影转写）。原生档的文件里
       // 只准写原生 ⇒ 整块不输出（共享骨架对 `faceCase: null` 的既定行为：不留空头、
       // 也不把"已用本工具转成 X 写法"那句收尾语塞进对不上号的档位）。绝不现编原生案例。
-      faceCase: opts.langDoc === 'native' ? null : FACE_CASES[spec.stem] ?? null,
+      faceCase: opts.langDoc === 'sugar' ? FACE_CASES[spec.stem] ?? null : null,
     },
     ext,
   );
@@ -277,7 +285,7 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
   }
 
   const ext = scaffoldStubExt(opts.langDoc);
-  const native = opts.langDoc === 'native';
+  const native = opts.langDoc !== 'sugar';
   const nativeExt = scaffoldStubExt('native');
 
   return buildScaffoldReadme({
@@ -290,8 +298,9 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
       { label: '目标剧本', value: `剧本${opts.scriptNo}` },
     ],
     intro: ['> 请在这里填写作品介绍：设定、基调、与原版口上的差异点等。'],
-    // 糖档这两句**一字都不许动**（默认档产物逐字节不变是这条反馈的硬约束，
-    // `tests/scaffold-lang-doc.test.ts` 用 sha256 钉死）；原生档另写一套说法。
+    // LAU-3b-FLIP（2026-10-27）：糖档的源扩展名已是封存层 `.kojo1`，这两句跟着改口
+    // （扩展名一律取 `FACE_STUB_EXT`，不手抄）；`tests/scaffold-lang-doc.test.ts`
+    // 的金样已按本批重导（见该文件顶部说明）。
     contentNote: native
       ? [
           '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
@@ -303,9 +312,9 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
         ]
       : [
           '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
-            '扩展名是 `.kojo`：.kojo 写法与原始 ERB 写法可以写在同一个文件里，' +
-            '导出或部署时会自动转译成游戏认得的 `.ERB`，工作区里始终只有 `.kojo` 这一份源。',
-          '部分面文件顶部带一份从口上库现成案例转写的注释示例（.kojo 写法，台词简化为类目占位）。',
+            `扩展名是 \`${FACE_STUB_EXT}\`：kojo1 写法与原始 ERB 写法可以写在同一个文件里，` +
+            `导出或部署时会自动转译成游戏认得的 \`${nativeExt}\`，工作区里始终只有 \`${FACE_STUB_EXT}\` 这一份源。`,
+          `部分面文件顶部带一份从口上库现成案例转写的注释示例（\`${FACE_STUB_EXT}\` 写法，台词简化为类目占位）。`,
         ],
     faces: CORE_FACES,
     stubExt: ext,

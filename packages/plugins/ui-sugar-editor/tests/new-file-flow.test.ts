@@ -16,7 +16,7 @@ import { createNewFileFlow, latestArtifact, type KojoFileDraft } from '../src/ne
 
 const log: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 
-const DRAFT: KojoFileDraft = { fileName: 'M_KOJO_K1_破空.kojo', text: '; 灵梦（1） · 破空\n角色: 1\n' };
+const DRAFT: KojoFileDraft = { fileName: 'M_KOJO_K1_破空.kojo1', text: '; 灵梦（1） · 破空\n角色: 1\n' };
 
 function artifact(dirName: string, createdAt: number, id = dirName) {
   return { id, name: dirName, dirName, meta: {}, createdAt };
@@ -174,18 +174,18 @@ describe('写进工作区（常态路径）', () => {
   it('落盘到包目录并返回绝对路径', async () => {
     const h = makeHarness();
     const r = await h.flow.createIn('/appdata/workspaces/w1/包', DRAFT);
-    expect(r).toEqual({ ok: true, path: '/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo' });
-    expect(h.files.get('/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo')).toBe(DRAFT.text);
+    expect(r).toEqual({ ok: true, path: '/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo1' });
+    expect(h.files.get('/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo1')).toBe(DRAFT.text);
   });
 
   it('同名已存在 → 拒绝且不覆盖（作者的东西不能被工具吃掉）', async () => {
     const h = makeHarness();
-    h.files.set('/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo', '原作者写的口上，一个字都不能少');
+    h.files.set('/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo1', '原作者写的口上，一个字都不能少');
     const r = await h.flow.createIn('/appdata/workspaces/w1/包', DRAFT);
     expect(r.ok).toBe(false);
     expect(!r.ok && r.reason).toContain('未覆盖');
     expect(h.writes).toEqual([]);
-    expect(h.files.get('/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo')).toBe('原作者写的口上，一个字都不能少');
+    expect(h.files.get('/appdata/workspaces/w1/包/M_KOJO_K1_破空.kojo1')).toBe('原作者写的口上，一个字都不能少');
   });
 
   it('落点不在可写范围 → 拒（工作区恒可写，走到这里就是项目被挪进了游戏目录）', async () => {
@@ -197,7 +197,7 @@ describe('写进工作区（常态路径）', () => {
 
   it('文件名带路径段 → 拒（不信任上游拼出来的名字）', async () => {
     const h = makeHarness();
-    const r = await h.flow.createIn('/appdata/workspaces/w1/包', { ...DRAFT, fileName: '../逃逸.kojo' });
+    const r = await h.flow.createIn('/appdata/workspaces/w1/包', { ...DRAFT, fileName: '../逃逸.kojo1' });
     expect(!r.ok && r.reason).toContain('不是单层文件名');
     expect(h.writes).toEqual([]);
   });
@@ -210,11 +210,11 @@ describe('写进工作区（常态路径）', () => {
 });
 
 describe('另存到自选文件夹（反馈 3 a2）', () => {
-  it('走 exportFile：内容带 BOM（与工作区 .kojo 同口径），返回落点', async () => {
+  it('走 exportFile：内容带 BOM（与工作区 .kojo1 同口径），返回落点', async () => {
     const h = makeHarness();
     const r = await h.flow.saveToPickedFolder(DRAFT);
-    expect(r).toEqual({ ok: true, path: '/picked/M_KOJO_K1_破空.kojo' });
-    expect(h.files.get('/picked/M_KOJO_K1_破空.kojo')).toBe(`\uFEFF${DRAFT.text}`);
+    expect(r).toEqual({ ok: true, path: '/picked/M_KOJO_K1_破空.kojo1' });
+    expect(h.files.get('/picked/M_KOJO_K1_破空.kojo1')).toBe(`\uFEFF${DRAFT.text}`);
   });
 
   it('对话框里取消 = 不是失败（cancelled 标记，界面不该弹红字）', async () => {
@@ -248,7 +248,7 @@ describe('交给新建项目向导后自动落盘（反馈 3 a1）', () => {
     h.flow.handoffToNewProject(DRAFT);
     const token = tokenOfOpen(h);
     await h.flow.onProjectCreated('w-new', token);
-    const path = '/appdata/workspaces/w-new/东方口上合集-灵梦 v1.0/M_KOJO_K1_破空.kojo';
+    const path = '/appdata/workspaces/w-new/东方口上合集-灵梦 v1.0/M_KOJO_K1_破空.kojo1';
     expect(h.writes).toEqual([path]);
     expect(h.reveals).toEqual([path]);
     expect(h.reopens).toBe(0);
@@ -289,7 +289,7 @@ describe('交给新建项目向导后自动落盘（反馈 3 a1）', () => {
     expect(h.writes).toEqual([]);
     expect(h.reopens).toBe(1);
     const notice = h.flow.takeNotice();
-    expect(notice).toContain('M_KOJO_K1_破空.kojo');
+    expect(notice).toContain('M_KOJO_K1_破空.kojo1');
     expect(notice).toContain('还没有作者包');
     // 一次性的：读过就没了，不会下次开向导还挂着
     expect(h.flow.takeNotice()).toBeNull();

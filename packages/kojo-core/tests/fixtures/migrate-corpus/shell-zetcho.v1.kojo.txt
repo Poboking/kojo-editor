@@ -1,4 +1,4 @@
-; @kojo-migration-corpus · 来源: packages/plugins/eratw-adapter/tests/fixtures/default-sugar/绝顶.kojo
+; @kojo-migration-corpus · 来源: packages/plugins/eratw-adapter/tests/fixtures/default-sugar/绝顶.kojo1
 ; 复制口径: 本头注之后 = 源文件逐字节复制（编码/EOL 原样；本文件 EOL=LF）
 ; 语料分层: v1 产物 + 迁移台账（2.0 产物不可得，见 .ledger.json）
 ; 说明: adapter 脚手架空壳（只有 `;` 注释）

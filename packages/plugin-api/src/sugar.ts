@@ -1184,66 +1184,67 @@ export function fullwidthSpaceLines(source: string): number[] {
 }
 
 /**
- * 由 `.kojo` / `.kojo1` 源路径推导目标 `.erb` 产物路径（**纯函数**；不触达磁盘）。
+ * 由 `.kojo1` 源路径推导目标 `.erb` 产物路径（**纯函数**；不触达磁盘）。
  *
- * 规则：**同目录、同基名，扩展名 `.kojo` / `.kojo1` → `.ERB`**（大小写不敏感，
- * `\` / `/` 分隔符一律保留原样）。两枚都收是 LAU-3b 的扩展名交接：`.kojo1` 是
- * 封存层的显式标记，语法产物目标与 `.kojo` 逐字同一套（只改名字，不改内容）。
- * 非这两枚（或空路径）→ `null`。
+ * 规则：**同目录、同基名，扩展名 `.kojo1` → `.ERB`**（大小写不敏感，`\` / `/`
+ * 分隔符一律保留原样）。非这枚（或空路径）→ `null`。
+ *
+ * **`.kojo` 已不在这里**（LAU-3b 翻转，2026-10-27 用户口径）：`.kojo` 归 2.0，
+ * 它的正文不是表层 DSL，转成 `.ERB` 只会产出一份错的产物。表层 DSL 只剩封存层
+ * （kojo1），它的源文件就是 `.kojo1`。
  *
  * 依据（真实语料）：产物布局为 `個人口上/{编号 名称}/{口上名}/M_KOJO_K{n}_{分野}.ERB`，
- * 源 `.kojo` 由编辑器"新建向导"与产物**同目录**生成、并沿用产物基名（`K{No}` +
- * 分野都已在源文件名里，见 `M_KOJO_K49_指令.kojo` 惯例）——故"换扩展名"即正确
+ * 源由编辑器"新建向导"与产物**同目录**生成、并沿用产物基名（`K{No}` +
+ * 分野都已在源文件名里，见 `M_KOJO_K49_指令.kojo1` 惯例）——故"换扩展名"即正确
  * 推导。**不做跨目录/改名**：那属新建向导与命名校验的职责（后者需 adapter 的
  * `M_KOJO_K{No}` 命名知识，不在本通用函数内）。
  */
 export function resolveSugarTarget(sourcePath: string): string | null {
   if (!sourcePath) return null;
-  const m = /\.kojo1?$/i.exec(sourcePath);
+  const m = /\.kojo1$/i.exec(sourcePath);
   if (!m) return null;
   return `${sourcePath.slice(0, sourcePath.length - m[0].length)}.ERB`;
 }
 
 /**
- * 表层 DSL 的源扩展名（**契约层唯一清单**；DRIFT-APP 3，2026-10-19 上移）。
+ * 2.0 的**主**源扩展名（**契约层唯一清单**；DRIFT-APP 3，2026-10-19 上移）。
  *
  * `kojo` 是审计 A 钦定的跨游戏术语（不是某个游戏的领域知识），故这张清单住契约层，
  * 与 `erb-ext.ts` 的方言清单平级。宿主侧（`app/ui/reference-utils`）指回这里，
- * Monaco 注册面（`app/monaco/kojo-language`）指回 {@link kojoMonacoExtensions}——
+ * Monaco 注册面（`app/monaco/kojo2-language`）指回 {@link kojoMonacoExtensions}——
  * 改前注册处自己写着 `['.kojo']` 一份小抄，同一族文件的大写形态在编辑器与 Monaco
  * 语言映射之间各说各话。
+ *
+ * ⚠ **2026-10-27 起 `.kojo` 归 2.0**（LAU-3b 翻转，用户口径：kojo1 只等删除）。
+ * 本常量仍叫这个名字是因为它是"kojo 语言的源扩展名"这一事实，名字本身不带版本；
+ * **封存层（kojo1）的源扩展名是 {@link KOJO_LEGACY_SOURCE_EXTENSION}（`.kojo1`）**，
+ * 两枚不要混用：任何"v1 源"判据都走 {@link KOJO_V1_SOURCE_EXTENSIONS}。
  */
 export const KOJO_SOURCE_EXTENSION = '.kojo';
 
 /**
- * **封存层**（kojo1）的显式扩展名（LAU-3b，2026-10-27）。
+ * **封存层**（kojo1）的源扩展名（LAU-3b）。
  *
- * 为什么两枚并存而不是直接改 {@link KOJO_SOURCE_EXTENSION}：扩展名交接是**两步**——
- * 先让作者把旧文件主动标成 `.kojo1`（本仓提供改名工具，见 `ui/kojo1-rename*`），
- * 再把 `.kojo` 让给 2.0。第一步落地时 `.kojo` 仍归 v1 解析器（内容指纹那两档不动），
- * `.kojo1` 只是**新增**的一枚显式声明：见到它就不必再嗅正文，永远是 kojo1。
- *
- * 单一真源口径与 {@link KOJO_SOURCE_EXTENSION} 相同：宿主与插件不得再抄字面量，
- * 派生（Monaco 扩展名、快速打开清单、产物目标）一律从本常量现算。
+ * 2026-10-27 用户口径：`.kojo` 当场让给 2.0，kojo1 封存只为后续彻底删除。
+ * 所以本仓不再有"过渡期两枚并认"——**kojo1 的源就是 `.kojo1`，一枚**。
+ * 盘上还没改名的旧文件（`.kojo` 里装着 v1 正文）由两条路收：迁移（原地改写成 2.0）
+ * 或改名工具（`ui/kojo1-rename*`，把内容确认是旧写法的文件标成 `.kojo1`）。
  */
 export const KOJO_LEGACY_SOURCE_EXTENSION = '.kojo1';
 
-/** 封存层源扩展名的全集（`.kojo1` 与仍在过渡期的 `.kojo`；判断"这是不是 v1 源"只走这一处） */
-export const KOJO_V1_SOURCE_EXTENSIONS: readonly string[] = [
-  KOJO_SOURCE_EXTENSION,
-  KOJO_LEGACY_SOURCE_EXTENSION,
-];
+/** v1 源扩展名全集（翻转之后只剩封存标记这一枚；判断"这是不是 v1 源"只走这一处） */
+export const KOJO_V1_SOURCE_EXTENSIONS: readonly string[] = [KOJO_LEGACY_SOURCE_EXTENSION];
 
 /**
- * Monaco 的 `extensions` 入参：把 {@link KOJO_V1_SOURCE_EXTENSIONS}（`.kojo` + `.kojo1`）
- * 逐枚展开成「原样 + 全大写」两种写法——与 `erb-ext.erbMonacoExtensions` **同形态**
- * （同一个理由：Monaco 的语言注册按字面量匹配扩展名，只给小写会让盘上的大写文件落到
- * 别的语言）。
+ * Monaco 的 `extensions` 入参：把一份扩展名清单逐枚展开成「原样 + 全大写」两种写法
+ * ——与 `erb-ext.erbMonacoExtensions` **同形态**（同一个理由：Monaco 的语言注册按
+ * 字面量匹配扩展名，只给小写会让盘上的大写文件落到别的语言）。
+ *
+ * 缺省参数 = v1 源（`.kojo1`），即 `app/monaco/kojo-language` 的注册面；2.0 的注册面
+ * 传自己的清单（`.kojo` + `.kojo2`）走同一个函数，不另写一套大写展开。
  *
  * 大小写形态是这里**现算的派生物**，不是第二处手抄：消费方不得在 app 里再写
  * `['.kojo', '.KOJO']`，要加形态只改这一处。
- *
- * 缺省参数留给未来（同方言族那样）：传入别的清单即按同一规则展开，派生物仍只此一份。
  */
 export function kojoMonacoExtensions(exts: readonly string[] = KOJO_V1_SOURCE_EXTENSIONS): string[] {
   const out: string[] = [];

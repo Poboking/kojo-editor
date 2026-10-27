@@ -73,7 +73,7 @@ function collect(dir: string, out: string[], exclude: string | null): string[] {
     const p = join(dir, e.name);
     if (exclude && (p === exclude || p.startsWith(`${exclude}/`) || p.startsWith(`${exclude}\\`))) continue;
     if (e.isDirectory()) collect(p, out, exclude);
-    else if (e.name.endsWith('.kojo')) out.push(p);
+    else if (e.name.endsWith('.kojo1') || e.name.endsWith('.kojo')) out.push(p);
   }
   return out;
 }

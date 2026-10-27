@@ -48,7 +48,7 @@ function hostSpy(): VerdictMenuHost & { calls: string[] } {
 describe('诊断行菜单', () => {
   it('两处菜单的 id 都唯一（宿主按 id 分发，重号会点错动作）', () => {
     const diagIds = ids(buildVerdictDiagMenu(diag()));
-    const panelIds = ids(buildVerdictPanelMenu({ filePath: 'a.kojo', canRefresh: true }));
+    const panelIds = ids(buildVerdictPanelMenu({ filePath: 'a.kojo1', canRefresh: true }));
     const panelNoFile = ids(buildVerdictPanelMenu({ filePath: null, canRefresh: false }));
     for (const list of [diagIds, panelIds, panelNoFile]) {
       expect(new Set(list).size).toBe(list.length);
@@ -76,8 +76,8 @@ describe('诊断行菜单', () => {
 });
 
 describe('面板空白处菜单', () => {
-  it('有 .kojo 文件：刷新 + 两种视图 + 复制路径', () => {
-    const items = buildVerdictPanelMenu({ filePath: 'a.kojo', canRefresh: true });
+  it('有 .kojo1 文件：刷新 + 两种视图 + 复制路径', () => {
+    const items = buildVerdictPanelMenu({ filePath: 'a.kojo1', canRefresh: true });
     expect(ids(items)).toEqual([
       'sv.panel.refresh',
       'sv.panel.showSource',
@@ -88,10 +88,10 @@ describe('面板空白处菜单', () => {
     expect(items.every((i) => hasCjkLabel(i.label))).toBe(true);
   });
 
-  it('非 .kojo：刷新禁用并说明（视图切换与复制仍可用——那两条不依赖转译）', () => {
+  it('非 .kojo1：刷新禁用并说明（视图切换与复制仍可用——那两条不依赖转译）', () => {
     const items = buildVerdictPanelMenu({ filePath: 'a.erb', canRefresh: false });
     expect(items.find((i) => i.id === 'sv.panel.refresh')?.disabled).toBe(true);
-    expect(items.find((i) => i.id === 'sv.panel.refresh')?.disabledReason).toContain('.kojo');
+    expect(items.find((i) => i.id === 'sv.panel.refresh')?.disabledReason).toContain('.kojo1');
     expect(items.find((i) => i.id === 'sv.panel.showSource')?.disabled).toBeUndefined();
   });
 
@@ -121,12 +121,12 @@ describe('动作分发', () => {
 
   it('面板四条（视图切换走 on=false / on=true 两条通道）', () => {
     const host = hostSpy();
-    const target = { filePath: 'a.kojo', canRefresh: true };
+    const target = { filePath: 'a.kojo1', canRefresh: true };
     expect(runVerdictPanelAction('sv.panel.refresh', target, host)).toBe(true);
     expect(runVerdictPanelAction('sv.panel.showSource', target, host)).toBe(true);
     expect(runVerdictPanelAction('sv.panel.showSugar', target, host)).toBe(true);
     expect(runVerdictPanelAction('sv.panel.copyPath', target, host)).toBe(true);
-    expect(host.calls).toEqual(['refresh', 'view:false', 'view:true', 'copy:a.kojo']);
+    expect(host.calls).toEqual(['refresh', 'view:false', 'view:true', 'copy:a.kojo1']);
   });
 
   it('没有文件时不刷新、不切视图、不复制', () => {
@@ -161,7 +161,7 @@ describe('接线与降级', () => {
     openVerdictPanelMenu(
       { openContextMenu: (r) => seen.push(r) },
       { clientX: 1, clientY: 2 },
-      { filePath: 'a.kojo', canRefresh: true },
+      { filePath: 'a.kojo1', canRefresh: true },
       host,
     );
     expect(seen[0]?.ariaLabel).toBe(VERDICT_PANEL_MENU_ARIA);

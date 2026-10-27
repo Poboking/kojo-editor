@@ -23,15 +23,15 @@ import type {
   SugarTranspileService,
   TextFile,
 } from '@kojo/plugin-api';
-import { isErbDialectPath } from '@kojo/plugin-api';
+import { isErbDialectPath, KOJO_LEGACY_SOURCE_EXTENSION } from '@kojo/plugin-api';
 
-/** 工作区矩阵可读的源文件：`.kojo` 糖源 + ERB 方言（.erb/.erm/.erh） */
+/** 工作区矩阵可读的源文件：kojo1 源 `.kojo1` + ERB 方言（.erb/.erm/.erh） */
 export function isWorkspaceMatrixSourceName(name: string): boolean {
-  return name.toLowerCase().endsWith('.kojo') || isErbDialectPath(name);
+  return name.toLowerCase().endsWith(KOJO_LEGACY_SOURCE_EXTENSION) || isErbDialectPath(name);
 }
 
 export function isKojoSourceName(name: string): boolean {
-  return name.toLowerCase().endsWith('.kojo');
+  return name.toLowerCase().endsWith(KOJO_LEGACY_SOURCE_EXTENSION);
 }
 
 /** 一份待索引的源文件（路径 = 工作区里的绝对路径） */

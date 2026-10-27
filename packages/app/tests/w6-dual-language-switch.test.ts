@@ -10,7 +10,7 @@
  *    开关若是按语言各挂一份，就得各翻一次；共用一枚 provider 时开关只能落在
  *    Monaco 的**编辑器级选项**上（`semanticHighlighting.enabled` / `codeLens`），
  *    翻一次天然覆盖两种语言。
- * ② **同一次应答**：`.erb` 与 `.kojo` 两个 model 走同一个 provider 都拿到真实候选，
+ * ② **同一次应答**：`.erb` 与 `.kojo1` 两个 model 走同一个 provider 都拿到真实候选，
  *    条数与形状一致（不是"一边有另一边空"）。
  * ③ **守门谓词只许一份**：这里的两个供方各用契约层的 `isErbDialectPath` /
  *    `resolveSugarTarget` 自守——本文件刻意**不写**任何扩展名正则，第二份谓词一旦出现
@@ -48,7 +48,8 @@ import {
 } from '../src/ui/semantic-color-pref';
 
 const ERB_PATH = 'C:/p/ERB/A.ERB';
-const KOJO_PATH = 'C:/p/KOJO/A.kojo';
+// LAU-3b-FLIP：kojo1 面的源只剩封存层 `.kojo1`（`.kojo` 已归 2.0）
+const KOJO_PATH = 'C:/p/KOJO/A.kojo1';
 const FOREIGN_PATH = 'C:/p/notes.txt';
 
 /* ----------------------------- 两枚按契约谓词自守的假供方 ----------------------------- */

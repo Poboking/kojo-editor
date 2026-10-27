@@ -24,9 +24,8 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 /**
- * LAU-3：缺省档 `2.0-default` 把封存层（`kojo-legacy`）挡在门外 ⇒ `minimapCtxForPath`
- * 对 `.kojo` 会答 `kojoText: false`。本文件钉的是"按语言判"这条纯函数，不是可用性门，
- * 装一枚恒真假门把门这一轴摘出去。
+ * 本文件钉的是"按语言判"这条纯函数，不是封存层的可用性门：装一枚恒真假门把门这一轴
+ * 摘出去（`.kojo1` 的 `kojoText` 也不受门影响）。
  */
 beforeEach(() => installAvailabilityGate(() => true));
 afterEach(() => installAvailabilityGate(null));
@@ -95,8 +94,9 @@ describe('erbFileInIndex（HK-7：裸字符串比会静默判不上）', () => {
 /* ─────────────────── minimapCtxForPath / baseNameOf：小纯函数 ─────────────────── */
 
 describe('minimapCtxForPath（缩略图「跟随」档的文件侧判据）', () => {
-  it('按语言判：.kojo 正文 true，ERB / 其它文件 false', () => {
+  it('按语言判：`.kojo`（2.0）/ `.kojo1`（封存）都是口上正文，ERB / 其它文件 false', () => {
     expect(minimapCtxForPath('C:\\game\\chara\\a.kojo')).toEqual({ kojoText: true });
+    expect(minimapCtxForPath('C:\\game\\chara\\a.kojo1')).toEqual({ kojoText: true });
     expect(minimapCtxForPath('C:\\game\\chara\\a.erb')).toEqual({ kojoText: false });
     expect(minimapCtxForPath('C:\\game\\readme.md')).toEqual({ kojoText: false });
   });

@@ -13,25 +13,27 @@ import { buildTemplate, previewFileName } from '../src/new-file-wizard';
  */
 
 describe('文件名推导（declare 模板代入）', () => {
-  it('角色号代入 `{n}`，无家族段时用裸模板 + .kojo', () => {
-    expect(previewFileName('M_KOJO_K{n}', 12, '')).toBe('M_KOJO_K12.kojo');
+  it('角色号代入 `{n}`，无家族段时用裸模板 + .kojo1（1.x 档 = 封存层）', () => {
+    expect(previewFileName('M_KOJO_K{n}', 12, '')).toBe('M_KOJO_K12.kojo1');
   });
 
   it('家族段以 `_` 拼在模板之后（工具补前导下划线，作者不手写）', () => {
-    expect(previewFileName('M_KOJO_K{n}', 12, '破空自制')).toBe('M_KOJO_K12_破空自制.kojo');
+    expect(previewFileName('M_KOJO_K{n}', 12, '破空自制')).toBe('M_KOJO_K12_破空自制.kojo1');
   });
 
   it('家族名两端空白剔除；只留空白视同无家族段', () => {
-    expect(previewFileName('M_KOJO_K{n}', 3, '  露米娅  ')).toBe('M_KOJO_K3_露米娅.kojo');
-    expect(previewFileName('M_KOJO_K{n}', 3, '   ')).toBe('M_KOJO_K3.kojo');
+    expect(previewFileName('M_KOJO_K{n}', 3, '  露米娅  ')).toBe('M_KOJO_K3_露米娅.kojo1');
+    expect(previewFileName('M_KOJO_K{n}', 3, '   ')).toBe('M_KOJO_K3.kojo1');
   });
 
   it('家族名中的路径分隔符与通配符被剔除（不会写出越层文件）', () => {
-    expect(previewFileName('M_KOJO_K{n}', 1, 'a/b\\c:d*e?f"g<h>i|j')).toBe('M_KOJO_K1_abcdefghij.kojo');
+    expect(previewFileName('M_KOJO_K{n}', 1, 'a/b\\c:d*e?f"g<h>i|j')).toBe(
+      'M_KOJO_K1_abcdefghij.kojo1',
+    );
   });
 
   it('模板含多处以角色号占位的形态也全部代入（不假设只出现一次）', () => {
-    expect(previewFileName('K{n}_KOJO_{n}', 7, '')).toBe('K7_KOJO_7.kojo');
+    expect(previewFileName('K{n}_KOJO_{n}', 7, '')).toBe('K7_KOJO_7.kojo1');
   });
 });
 

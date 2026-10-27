@@ -339,9 +339,9 @@ describe('ConventionEngine', () => {
 
 /* ========================= 语法糖侧约定（判据 = 转译器，W2 去重批） ========================= */
 
-/** 造一个只含一个 `.kojo` 文件的索引 + 文本表 */
+/** 造一个只含一个 `.kojo1` 文件的索引 + 文本表 */
 function kojoHarness(text: string): Harness {
-  const path = '/p/kojo/test.kojo';
+  const path = '/p/kojo/test.kojo1';
   return harness({
     // 索引只需登记该文件（糖规则按 `index.files` 遍历，再 `readFile` 取文本）
     index: { files: new Map([[path, parseErbText('', path)]]), byName: new Map() },
@@ -357,7 +357,7 @@ function kojoHarness(text: string): Harness {
  * `readonly-alias-assignment` 根本走不到（测试文件豁免插件交叉 import 纪律）。
  */
 const sugar = createSugarTranspileService({ faceTable: createEratwFaceTable() });
-const sugarPath = '/p/kojo/test.kojo';
+const sugarPath = '/p/kojo/test.kojo1';
 
 /** 转译器对这棵源文件的认领码诊断（期望侧独立算一遍） */
 function transpilerIssues(src: string): ConventionIssue[] {
@@ -370,7 +370,7 @@ function panelSugarIssues(rep: Awaited<ReturnType<ConventionEngine['run']>>, cod
 }
 
 describe('内置规则：语法糖侧约定（sugar.static-conventions = 转译器诊断投影）', () => {
-  it('规则已注册，且只对 .kojo 生效（.ERB 不参与）', async () => {
+  it('规则已注册，且只对 .kojo1 生效（.ERB 不参与）', async () => {
     const erb = harness({
       index: makeIndex({ '/p/a.ERB': '@A\nPRINTFORMW 「……」 续\n' }),
     });

@@ -2,7 +2,7 @@
  * 语言服务接线单测（kojo-sugar 侧的 `ui.editor.languageService` 贡献）。
  *
  * 与 `definition.test.ts` 的分工：那里测**纯逻辑**，这里测**装配**——贡献确实注册、
- * 文件门确实生效（只认 `.kojo`，ERB 让给 erb-parser）、未打开项目时是"认但无目标"
+ * 文件门确实生效（只认 `.kojo1`，ERB 让给 erb-parser）、未打开项目时是"认但无目标"
  * 而不是崩或谎报。
  *
  * 用本文件自带的极小上下文体（kojo-sugar 现有测试都是服务级，没有插件级夹具）。
@@ -57,7 +57,7 @@ type LanguageServiceContribution = {
 };
 
 describe('kojo-sugar · ui.editor.languageService 装配', () => {
-  it('注册了语言服务贡献（id 稳定）；`.kojo` 之外的文件一律不认', () => {
+  it('注册了语言服务贡献（id 稳定）；`.kojo1` 之外的文件一律不认', () => {
     const { slots } = activate();
     const hit = slots.find((s) => s.kind === 'ui.editor.languageService');
     expect(hit).toBeDefined();
@@ -76,13 +76,13 @@ describe('kojo-sugar · ui.editor.languageService 装配', () => {
     );
   });
 
-  it('`.kojo`：未打开项目（无索引）→ 认这个文件但给空目标（不崩、不猜）', () => {
+  it('`.kojo1`：未打开项目（无索引）→ 认这个文件但给空目标（不崩、不猜）', () => {
     const { slots } = activate();
     const c = slots.find((s) => s.kind === 'ui.editor.languageService')!.contribution as unknown as LanguageServiceContribution;
     // 纯注释源：转译无 error，但产物里没有 `@` 头 → 自证腿放弃 → 索引缺席 → 空
     const res = c.provide({
       kind: 'definition',
-      path: 'C:\\p\\a.kojo',
+      path: 'C:\\p\\a.kojo1',
       text: '; 空口上\n',
       line: 1,
       column: 1,
@@ -132,25 +132,25 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     ]);
   });
 
-  it('只认 `.kojo`；ERB / 其它扩展名一律 undefined（让给 erb-parser 那条线）', () => {
+  it('只认 `.kojo1`；ERB / 其它扩展名一律 undefined（让给 erb-parser 那条线）', () => {
     const c = symbolsOf(activate().slots);
     expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.ERB', text: '@A\n', project: null })).toBeUndefined();
     expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.txt', text: '时机 指令 1：\n', project: null })).toBe(
       undefined,
     );
     // definition 请求不打扰大纲贡献
-    expect(c.provide({ kind: 'definition', path: 'C:\\p\\a.kojo', text: '', line: 1, column: 1 })).toBeUndefined();
+    expect(c.provide({ kind: 'definition', path: 'C:\\p\\a.kojo1', text: '', line: 1, column: 1 })).toBeUndefined();
   });
 
-  it('`.kojo` → 大纲树；空文件 → 认但不给（`{ symbols: [] }`，不装不认）', () => {
+  it('`.kojo1` → 大纲树；空文件 → 认但不给（`{ symbols: [] }`，不装不认）', () => {
     const c = symbolsOf(activate().slots);
-    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.kojo', text: '', project: null })).toEqual({
+    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.kojo1', text: '', project: null })).toEqual({
       kind: 'documentSymbol',
       symbols: [],
     });
     const res = c.provide({
       kind: 'documentSymbol',
-      path: 'C:\\p\\a.kojo',
+      path: 'C:\\p\\a.kojo1',
       text: '角色: 12\n时机 指令 310：\n    「嗯。」\n',
       project: null,
       lineCount: 3,
@@ -178,21 +178,21 @@ describe('kojo-sugar · foldingRange（D3 折叠）装配', () => {
     return hit.contribution as unknown as FoldingContribution;
   };
 
-  it('只认 `.kojo`；ERB / 其它判别成员一律 undefined（各管各的）', () => {
+  it('只认 `.kojo1`；ERB / 其它判别成员一律 undefined（各管各的）', () => {
     const c = foldingOf(activate().slots);
     expect(c.provide({ kind: 'foldingRange', path: 'C:\\p\\a.ERB', text: '@A\n', project: null })).toBeUndefined();
-    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.kojo', text: '', project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'documentSymbol', path: 'C:\\p\\a.kojo1', text: '', project: null })).toBeUndefined();
   });
 
-  it('`.kojo` → 区间摊平自大纲树；空文件 → 认但不给（`{ ranges: [] }`）', () => {
+  it('`.kojo1` → 区间摊平自大纲树；空文件 → 认但不给（`{ ranges: [] }`）', () => {
     const c = foldingOf(activate().slots);
-    expect(c.provide({ kind: 'foldingRange', path: 'C:\\p\\a.kojo', text: '', project: null })).toEqual({
+    expect(c.provide({ kind: 'foldingRange', path: 'C:\\p\\a.kojo1', text: '', project: null })).toEqual({
       kind: 'foldingRange',
       ranges: [],
     });
     const res = c.provide({
       kind: 'foldingRange',
-      path: 'C:\\p\\a.kojo',
+      path: 'C:\\p\\a.kojo1',
       text: '角色: 12\n时机 指令 310：\n    「嗯。」\n',
       project: null,
       lineCount: 3,
@@ -205,7 +205,7 @@ describe('kojo-sugar · foldingRange（D3 折叠）装配', () => {
 /* ============================== B6 结构化着色 ============================== */
 
 describe('kojo-sugar · semanticToken（B6 着色）装配', () => {
-  const KOJO = 'C:\\p\\a.kojo';
+  const KOJO = 'C:\\p\\a.kojo1';
   const tokensOf = (slots: SlotRecord[]) => {
     const hit = slots.find(
       (s) => s.kind === 'ui.editor.languageService' && s.contribution.id === 'kojo-semantic-tokens',
@@ -214,7 +214,7 @@ describe('kojo-sugar · semanticToken（B6 着色）装配', () => {
     return hit.contribution as unknown as { provide(request: unknown): { kind: string; spans: unknown[] } | undefined };
   };
 
-  it('只认 `.kojo`；ERB / 其它判别成员一律 undefined（让给 erb-parser 那条线）', () => {
+  it('只认 `.kojo1`；ERB / 其它判别成员一律 undefined（让给 erb-parser 那条线）', () => {
     const { slots } = activate();
     const c = tokensOf(slots);
     expect(c.provide({ kind: 'semanticToken', path: 'C:\\p\\a.ERB', text: '@A\n', project: null })).toBeUndefined();

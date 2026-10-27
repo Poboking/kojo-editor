@@ -1,5 +1,5 @@
 /**
- * 2026-10-12 保存接线批单测：`.kojo` 保存编排（`performSugarSave`）的**多路径**。
+ * 2026-10-12 保存接线批单测：`.kojo1` 保存编排（`performSugarSave`）的**多路径**。
  *
  * 本模块是**纯编排**（零 React、零内核），依赖从入参注入——故用 fake `sugar`
  * 与 fake `io` 精确驱动，逐条钉死契约（对应 `plugin-api/sugar.ts` 的 `planSave`
@@ -9,7 +9,7 @@
  *   2. 全角空格未确认 → `needs-choice` 且**未落盘**（不改磁盘）；
  *   3. 全角空格已确认 → 照常保存（告警非阻断）；
  *   4. 转译含 error（`blocked`）→ **源仍保存**、产物不产、`note` 说明原因；
- *   5. 源非 `.kojo`（`blocked`）→ 同上，note 归因路径；
+ *   5. 源非 `.kojo1`（`blocked`）→ 同上，note 归因路径；
  *   6. 源写失败 → `error`（不静默）；
  *   7. 编译落盘失败 → `error`，且消息明确「源已保存」。
  */
@@ -25,7 +25,7 @@ import type {
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { performSugarSave, type SugarSaveDeps } from '../src/save-handler';
 
-const PATH_KOJO = '/proj/口上/x.kojo';
+const PATH_KOJO = '/proj/口上/x.kojo1';
 const PATH_ERB = '/proj/口上/x.ERB';
 
 const errDiag: SugarDiagnostic = {
@@ -174,7 +174,7 @@ describe('保存编排 / 产物被阻止（源始终保存）', () => {
     expect(r.compiles).toEqual([]);
   });
 
-  it('源非 .kojo（无目标）→ saved，note 归因路径', async () => {
+  it('源非 .kojo1（无目标）→ saved，note 归因路径', async () => {
     const r = recorder({
       plan: planOf({ erbPath: null, blocked: true, blockedReason: 'source-not-kojo' }),
     });
@@ -182,7 +182,7 @@ describe('保存编排 / 产物被阻止（源始终保存）', () => {
 
     expect(out.status).toBe('saved');
     if (out.status !== 'saved') return;
-    expect(out.note).toContain('.kojo');
+    expect(out.note).toContain('.kojo1');
     expect(r.compiles).toEqual([]);
   });
 });
