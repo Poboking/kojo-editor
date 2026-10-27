@@ -1,0 +1,11 @@
+    __kojo_table_心情 = 外部计数
+    IF __kojo_table_心情 >= 0 && __kojo_table_心情 <= 99
+    __kojo_table_心情__value = "疏远"
+    ELSEIF __kojo_table_心情 >= 100 && __kojo_table_心情 <= 499
+    __kojo_table_心情__value = "平常"
+    ELSEIF __kojo_table_心情 >= 500
+    __kojo_table_心情__value = "亲近"
+    ELSE
+    __kojo_table_心情__value = "未知"
+    ENDIF
+    PRINTFORMW 她今天看起来%__kojo_table_心情__value%。

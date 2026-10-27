@@ -129,7 +129,9 @@ describe('语言套件 · 覆盖度可数', () => {
   });
 
   it('case 数按 group 固定（覆盖度不许悄悄缩水）', () => {
-    const expected: Readonly<Record<LanguageGroup, number>> = {
+    // 只看**抽象列**的 11 组（`shared` 是 B5a 新立的真方言列，不在本套件）——判据不变，
+    // 只是类型面收窄到 `LANGUAGE_GROUPS` 的元素类型。
+    const expected: Readonly<Record<(typeof LANGUAGE_GROUPS)[number], number>> = {
       text: 5,
       condition: 3,
       table: 5,

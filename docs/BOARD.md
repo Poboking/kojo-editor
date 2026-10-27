@@ -70,6 +70,18 @@
 | LAUNCH-L7B | core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 确定性打包、`launcher_project_hash` 摘要、drift 报告 | 同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_project_hash` / `launcher_runtime_*` 两条宿主命令目前**不在** Rust 侧，须先补；插件面板的「打开源码」已接 `plugins.openSource`，源码项目本体仍只能读、不能建 | 待派（依赖 L7A 的清单类型，已落） |
 | LAUNCH-P0-RESIDUE | P0 真壳验收余项（L9 已覆盖判据④孙进程 + ①的地基）：② ~10 MB fixture 的 `copy` 实例 + 复制进度可见；③ 同实例二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 原生信任框确认后启动成功、篡改 exe 报 `TRUST_CHANGED`；⑥ 应用退出杀树 + 下次启动显示 `app-exit`；① 的「经 UI 建 shared 实例」现只由夹具播种覆盖 | 全部在真壳（`debug-cli shell` / `launcher-smoke`）取证；不碰真游戏目录；⑤ 的原生框无人值守点不了 ⇒ 须改由宿主侧命令面取证或在报告里如实标 SKIP | 待派 |
 
+## 在办 · SDK 分包（2026-10-27 起，组长分派 · 实施 qoder）
+
+> **方向**：把"给第三方语言包作者用的那一层"收成一个**独立包** `@kojo/kojo-sdk`（包名不标版本号），
+> 之后"新增一个方言 = 新增一个包 + 在清单里加一行"，套件与 CLI 一个字都不用改。
+> 分清两件事：`@kojo/kojo-lang` 是**语言面实现**（Monarch / 语言配置 / 主题规则 / 判据），
+> SDK 是**契约与形状**（`GameAdapter` 家族、`ui.monaco.language` / `ui.editor.languageService` 面、
+> 结构 worker 协议版本常量、**角色表**——ARCH §7 约束 2 指定角色表住 SDK，不住宿主）。
+
+| ID | 任务（落点） | 关键判据 | 状态 |
+|---|---|---|---|
+| SDK-B5a | **① `@kojo/kojo-sdk` 立包**（合同类型 / 结构协议 v4 形状与版本常量 / 角色表 + 主题规则形状，零 Monaco·React·DOM·IO·游戏名词，依赖只许 `kojo-core` + `plugin-api`，自带 purity + 导出面棘轮）；**② 角色表搬家**（`semantic-roles.ts` 从 `kojo-lang` 进 SDK，宿主与 `kojo-lang` 只留指针；零改色快照九套主题 × 48/16 档逐档比对）；**③ 两份 profile 的同一份 golden**（conformance 的 `language` 子命令加 eraFL 列 + 第三列假 adapter `demo`：共享用例三列产物**逐字节相同**，方言差异按"各自事实 + 同一期望"单列，不拿 eraTW 的事实喂 eraFL） | 交付三件：①包在、`pnpm --filter @kojo/kojo-sdk test` 全绿、purity/导出面双闸；②`node tools/kojo-conformance.mjs language --adapter {eratw,erafl,demo} --json` 三份报告的共享例 `artifact` 与 golden 逐字相等（差异只有 adapter/backend 标签）；③主题九套零改色 + 双 typecheck + `audit:decoupling` / `audit:language` 不抬号 + 全量不回退 | 已交付（2026-10-28，`b/qoder/1027-sdk-b5`，回执在提交信息）。**B5b（删宿主残留）本批不做**：`packages/app/src` 里 `*kojo2*` 仍有 **60 文件 / 32,941 行**，其中**语言面 21 文件 / 15,055 行仍由宿主直装**（B3 余项未收口）⇒ 按派工"虚报已归零比不做更糟"只记账不删；结构层 8 文件与 `.kojo2` 旧扩展兼容**不算**语言面残留，不为 grep 改名 |
+
 ## 在办 · 美学收口（1027，shiori）
 
 | ID | 任务（落点） | 关键判据 / 已实测事实 | 状态 |

@@ -75,7 +75,13 @@ export const LANGUAGE_GROUPS = Object.freeze([
   'program',
 ] as const);
 
-export type LanguageGroup = (typeof LANGUAGE_GROUPS)[number];
+/**
+ * **共享列**的组名（SDK B5a）。刻意**不进** `LANGUAGE_GROUPS`：那张表是**抽象列**的组序
+ * （11 组，`LANGUAGE_SUITE` 每组都有 case，读数逐组对齐）。共享列只有一组，报告按需追加。
+ */
+export const LANGUAGE_SHARED_GROUP = 'shared' as const;
+
+export type LanguageGroup = (typeof LANGUAGE_GROUPS)[number] | typeof LANGUAGE_SHARED_GROUP;
 
 /** 单 case 的判定状态（见文件头表） */
 export type LanguageStatus = 'pass' | 'differs' | 'blocked';
@@ -1220,8 +1226,11 @@ function runLanguageCase(entry: LanguageCase, context: CaseContext): CaseOutcome
 /* ============================== 9. 套件执行与汇总 ============================== */
 
 function buildGroups(reports: readonly LanguageCaseReport[]): readonly LanguageGroupSummary[] {
+  const order: readonly LanguageGroup[] = reports.some((report) => report.group === LANGUAGE_SHARED_GROUP)
+    ? [...LANGUAGE_GROUPS, LANGUAGE_SHARED_GROUP]
+    : LANGUAGE_GROUPS;
   const groups: LanguageGroupSummary[] = [];
-  for (const group of LANGUAGE_GROUPS) {
+  for (const group of order) {
     const selected = reports.filter((report) => report.group === group);
     const count = (status: LanguageStatus): number => selected.filter((report) => report.status === status).length;
     const constructs = new Set<string>();
@@ -1238,12 +1247,12 @@ function buildGroups(reports: readonly LanguageCaseReport[]): readonly LanguageG
   return Object.freeze(groups);
 }
 
-function buildSummary(reports: readonly LanguageCaseReport[]): LanguageSummary {
+function buildSummary(reports: readonly LanguageCaseReport[], groupCount: number): LanguageSummary {
   const count = (status: LanguageStatus): number => reports.filter((report) => report.status === status).length;
   const constructs = new Set<string>();
   for (const report of reports) for (const construct of report.constructs) constructs.add(construct);
   return {
-    groups: LANGUAGE_GROUPS.length,
+    groups: groupCount,
     cases: reports.length,
     pass: count('pass'),
     differs: count('differs'),
@@ -1290,13 +1299,14 @@ export function runLanguageSuite(input: LanguageSuiteInput): LanguageReport {
     if (outcome.failure !== null) failures.push(outcome.failure);
   }
 
+  const groups = buildGroups(reports);
   return {
     adapter: adapterLabel,
     backend: backendLabel,
     root,
     ok: failures.length === 0,
-    groups: buildGroups(reports),
-    summary: buildSummary(reports),
+    groups: groups,
+    summary: buildSummary(reports, groups.length),
     cases: Object.freeze(reports),
     failures: Object.freeze(failures),
     usage: null,
@@ -1369,6 +1379,10 @@ export const LANGUAGE_CLI_USAGE = [
   '  <case>.golden.erb      成功用例的逐字节产物 golden（真 core + fixture 编译生成）',
   '  <case>.diagnostics.json 失败用例的诊断快照 {case, diagnostics:[{code,severity,line,column}]}',
   '',
+  '共享列（真方言；`column: "shared"` 的注册项；默认 packages/kojo-conformance/tests/fixtures/language-shared）:',
+  '  <case>.kojo2           2.0 源 fixture（恰好一条 `# 机`，且在第一个非空行）',
+  '  <case>.body.erb        共享 body 的逐字节 golden（`# 机` 之后的语义面；机壳属各方言）',
+  '',
   '--adapter:',
   '  fixture  默认；从 FIXTURE_ADAPTER / FIXTURE_BACKEND 派生的语言 fixture（不依赖任何具体游戏）',
   '  其它名称 = 调用方注入的 registry（仓库运行壳会注入真实 adapter；实际可用名称见下方）',
@@ -1380,6 +1394,19 @@ export const LANGUAGE_CLI_USAGE = [
 export interface LanguageAdapterRegistration {
   readonly adapter: GameAdapter;
   readonly backend: KojoEmitBackend;
+  /**
+   * 这一列跑哪一版用例（SDK B5a 起的第二档；缺省 `'abstract'`＝原行为）。
+   *
+   * - `'abstract'`：`LANGUAGE_SUITE`（`开场` 这类**抽象挂点**，与具体方言的事件表无关；
+   *   fixture 列就是这一档，真方言跑它只会大面积 `event-unknown`）；
+   * - `'shared'`：`LANGUAGE_SHARED_SUITE`（§12：真方言的**共享列**——同一份 fixture、
+   *   同一份 body golden，机壳各自给）。
+   *
+   * 为什么是两档而不是"全跑"：抽象列的 fixture 用 `# 机 开场`，那是 fixture 自己的
+   * 占位事件；把它喂给真方言等于拿抽象约定当游戏事实（必然 blocked，且 blocked 不是判据）。
+   * 两档并存，`--adapter fixture` 的 47 例读数因此**逐字不变**。
+   */
+  readonly column?: 'abstract' | 'shared';
 }
 
 /** CLI 依赖：IO + adapter 注册表 + 缺省值（测试全部注入） */
@@ -1390,6 +1417,8 @@ export interface LanguageCliDeps {
   readonly defaultAdapter?: string;
   /** fixture 目录缺省值（默认 `LANGUAGE_FIXTURE_DIR`） */
   readonly defaultRoot?: string;
+  /** 共享列（`column: 'shared'`）的 fixture 目录缺省值（默认 `LANGUAGE_SHARED_FIXTURE_DIR`） */
+  readonly sharedRoot?: string;
   readonly cases?: readonly LanguageCase[];
 }
 
@@ -1478,6 +1507,7 @@ export function runLanguageCli(argv: readonly string[], deps: LanguageCliDeps): 
   const parsed = parseLanguageArgs(argv);
   const defaultAdapter = deps.defaultAdapter ?? 'fixture';
   const defaultRoot = normalizeDir(deps.defaultRoot ?? LANGUAGE_FIXTURE_DIR);
+  const defaultSharedRoot = normalizeDir(deps.sharedRoot ?? LANGUAGE_SHARED_FIXTURE_DIR);
   const names = Object.keys(deps.adapters).sort(cmpText);
   const known = names.length === 0 ? '(无)' : names.join(', ');
 
@@ -1490,15 +1520,351 @@ export function runLanguageCli(argv: readonly string[], deps: LanguageCliDeps): 
     return usageResult(adapterName, adapterName, defaultRoot, `未知 adapter：${adapterName}（已注册：${known}）`);
   }
 
-  const report = runLanguageSuite({
-    io: deps.io,
-    root: parsed.dir ?? defaultRoot,
-    adapter: registration.adapter,
-    backend: registration.backend,
-    adapterLabel: adapterName,
-    backendLabel: registration.backend.id,
-    ...(deps.cases === undefined ? {} : { cases: deps.cases }),
-  });
+  const column = registration.column ?? 'abstract';
+  const report =
+    column === 'shared'
+      ? runLanguageSharedSuite({
+          io: deps.io,
+          root: deps.sharedRoot ?? defaultSharedRoot,
+          adapter: registration.adapter,
+          backend: registration.backend,
+          adapterLabel: adapterName,
+          backendLabel: registration.backend.id,
+        })
+      : runLanguageSuite({
+          io: deps.io,
+          root: parsed.dir ?? defaultRoot,
+          adapter: registration.adapter,
+          backend: registration.backend,
+          adapterLabel: adapterName,
+          backendLabel: registration.backend.id,
+          ...(deps.cases === undefined ? {} : { cases: deps.cases }),
+        });
   const exitCode: 0 | 1 = report.ok ? 0 : 1;
   return { exitCode, report, text: formatLanguageReport(report, { json: parsed.json }) };
+}
+
+/* ============================== 12. 真方言的共享列（SDK B5a） ============================== */
+
+/**
+ * **共享列**：多方言跑同一份 fixture、比同一份 body golden。
+ *
+ * ## 为什么需要这一层（抽象列解释不了的事）
+ *
+ * `LANGUAGE_SUITE` 的 fixture 用 `# 机 开场`——那是 **fixture 自己的占位事件**。把它喂给
+ * 真方言，42/47 会 `event-unknown`（blocked 不是判据，也不能当"跑过了"）。而真方言之间
+ * 的差别有两层，必须分开：
+ *
+ * 1. **机壳（各自事实）**：`# 机 <事件>` 落成什么——eraTW 落它的口上运行时
+ *    `@M_KOJO_ENCOUNTER_K12` + `CALL` + `RETURN`，eraFL 落裸引擎 `@EVENTFIRST` + `#LATER`。
+ *    机壳是**方言事实**，两份 profile 本来就不该相同；
+ * 2. **body（同一期望）**：事件体里那些行——文本 / 空行 / 条件 / 表 / 池 / 模板 / 随机 /
+ *    原生 / 程序层 / 取色——是 2.0 语义面，与方言无关。
+ *
+ * 本列只比第 2 层，**逐字节**。做法不是"归一化后相似"，而是**从产物里取 body**：
+ * 产物行的 source map 指向 `# 机` 之后源行的那一段，就是 body（机壳行指向 `# 机` 行
+ * 本身或纯生成行）。⇒ 两列在 JSON 里 `artifact` 与 `golden` 字面相同，可直接 `diff`。
+ *
+ * ## fixture 形状（判据自查，不靠约定）
+ *
+ * 每份 fixture **恰好一条 `# 机`**，且它是文件里第一个非空行。多单元（第二条 `# 机`）
+ * 会让第二段的机壳行也指向 `> 1` 的源行、被误认成 body —— 故本列**显式拒绝**这种形状
+ * （`blocked: fixture-shape`），不猜。
+ *
+ * ## 与"方言差异"的关系
+ *
+ * 差异项（事件表 / 代词落点 / 存储期）**不进本列**：`# 机 训练` 这类事实只有 eraTW 有，
+ * 拿它当共享用例就是"拿 eraTW 的事实喂 eraFL"。差异项由
+ * `tests/language-shared.test.ts` 的差异表单列（各自事实 + 同一期望）。
+ */
+
+/** 共享列的 fixture 目录（仓库相对；CLI 未给 `--dir` 时用它） */
+export const LANGUAGE_SHARED_FIXTURE_DIR = 'packages/kojo-conformance/tests/fixtures/language-shared';
+
+/** 一条共享用例（`<file>.kojo2` + `<file>.body.erb`） */
+export interface LanguageSharedCase {
+  readonly id: string;
+  readonly file: string;
+  /** 这条 case 钉住的 2.0 语法构造（覆盖度可数） */
+  readonly constructs: readonly string[];
+  readonly note: string;
+}
+
+/**
+ * 共享用例清单（顺序 = 报告顺序）。选件口径：
+ * - 只挑**三方言共有**的事实：事件只有 `初见`（eraTW / eraFL / demo 都声明它，
+ *   引擎 token 各自不同——那属机壳）；代词 / 存储期 / `@织` / `@巡` / 递归 / 心形 / 颜绘
+ *   一律不进（各自事实，见差异表）；
+ * - 每条都真的产字节：body 为空 = 这条没测到东西，不许进表。
+ */
+export const LANGUAGE_SHARED_SUITE: readonly LanguageSharedCase[] = Object.freeze([
+  {
+    id: 'shared/narrative',
+    file: 'narrative',
+    constructs: ['旁白', '台词', '等待'],
+    note: '三行连续文本（旁白 / 台词 / 旁白）——最底层的正文落点',
+  },
+  {
+    id: 'shared/blank',
+    file: 'blank',
+    constructs: ['空行', '空行 等待', '空行 续', '续'],
+    note: '空行三态 + 行尾 `续`：等待轴与文本轴正交',
+  },
+  {
+    id: 'shared/condition',
+    file: 'condition',
+    constructs: ['?', '条件链', '常量外置', '兜底分支'],
+    note: '三分支链 + `# 常量` 引用（IF / ELSEIF / ELSE 的形状）',
+  },
+  {
+    id: 'shared/condition-sif',
+    file: 'condition-sif',
+    constructs: ['SIF', '单语句分支'],
+    note: '单语句分支落 SIF（不是 IF/ENDIF）',
+  },
+  {
+    id: 'shared/table',
+    file: 'table',
+    constructs: ['# 表', '区间档', '开放档', '隐藏槽'],
+    note: '`# 表` 四档分派（含 `亲近线..` 开放档）与 `__kojo_table_*` 隐藏槽',
+  },
+  {
+    id: 'shared/pool',
+    file: 'pool',
+    constructs: ['# 池', '池分支', '! 池调用'],
+    note: '`# 池` 的三分支展开（池体在调用处展开）',
+  },
+  {
+    id: 'shared/template',
+    file: 'template',
+    constructs: ['# 模', '[插槽]', '模板实参', '! 模板调用'],
+    note: '模板实参替换 + 插槽插入（模板体在调用处展开）',
+  },
+  {
+    id: 'shared/random',
+    file: 'random',
+    constructs: ['@随机', 'PRINTDATA'],
+    note: '单行纯文本候选落 PRINTDATA / DATAFORM（randStyle=printdata 的三方言共同面）',
+  },
+  {
+    id: 'shared/native',
+    file: 'native',
+    constructs: ['@原生', '逐行透传'],
+    note: '`@原生` 围栏逐行透传（模板记号在围栏里只是普通字符）',
+  },
+  {
+    id: 'shared/program',
+    file: 'program',
+    constructs: ['# 变量', '@函', '@算', '赋值', '@返', '调用位', '插值'],
+    note: '程序层：赋值 / 复合赋值 / 条件 / 函数调用 / 结果插值（不碰递归与 `@巡`）',
+  },
+  {
+    id: 'shared/presentation-color',
+    file: 'presentation-color',
+    constructs: ['@着色', 'SETCOLOR', 'RESETCOLOR'],
+    note: '取色块（colorMode=D 的 D 系打印在两侧同形）',
+  },
+]);
+
+/** `# 机` 的源行号（1 基）；不是**恰好一条**就返回 null（本列拒绝该形状，见头注） */
+function sharedMachineLine(source: string): number | null {
+  const hits: number[] = [];
+  source.split(/\r?\n/).forEach((line, index) => {
+    if (/^\s*#\s*机(?:\s|$)/.test(line)) hits.push(index + 1);
+  });
+  return hits.length === 1 ? (hits[0] ?? null) : null;
+}
+
+/**
+ * 从产物里取 **body**：产物行的 source map 指向 `# 机` **之后**源行的那一段。
+ *
+ * 机壳行（`@…` / `CALL` / `RETURN` / `LOCAL` / `IF LOCAL` / `#DIM` 槽声明）指向 `# 机`
+ * 那一行或纯生成行，故不在 body 里；`# 表` / `# 模` 的展开行指向定义处（`# 机` 之后）
+ * 或调用处，仍在 body 里——这正是"语义面与方言无关"的那一半。
+ */
+function sharedBodyOf(artifact: string, lineAt: (generatedLine: number) => { readonly source: { readonly start: { readonly line: number } } | null } | null, lineCount: number, machineLine: number): string {
+  const lines = artifact.split('\n');
+  const body: string[] = [];
+  for (let generated = 1; generated <= lineCount; generated++) {
+    const line = lineAt(generated);
+    if (line?.source == null) continue;
+    if (line.source.start.line <= machineLine) continue;
+    body.push(lines[generated - 1] ?? '');
+  }
+  return body.join('\n');
+}
+
+export interface LanguageSharedSuiteInput {
+  readonly io: LanguageIoPort;
+  /** fixture 目录（仓库相对或绝对；缺省 `LANGUAGE_SHARED_FIXTURE_DIR`） */
+  readonly root?: string;
+  readonly adapter: GameAdapter;
+  readonly backend: KojoEmitBackend;
+  readonly adapterLabel?: string;
+  readonly backendLabel?: string;
+  /** 覆盖用例清单（测试用） */
+  readonly cases?: readonly LanguageSharedCase[];
+}
+
+function sharedOutcome(
+  entry: LanguageSharedCase,
+  status: 'pass' | 'differs' | 'blocked',
+  fields: {
+    readonly diagnostics: readonly LanguageDiagnostic[];
+    readonly artifact: string | null;
+    readonly golden: string | null;
+    readonly reason: string | null;
+    readonly diff?: readonly ArtifactLineDiff[];
+    readonly failureCode?: LanguageFailureCode;
+  },
+): { readonly report: LanguageCaseReport; readonly failure: LanguageFailure | null } {
+  const report: LanguageCaseReport = {
+    id: entry.id,
+    group: 'shared',
+    status,
+    diagnostics: fields.diagnostics,
+    artifact: fields.artifact,
+    golden: fields.golden,
+    ok: status === 'pass',
+    expectedDiagnostics: Object.freeze([]),
+    constructs: entry.constructs,
+    reason: fields.reason,
+    diff: Object.freeze(fields.diff ?? []),
+  };
+  if (status === 'pass') return { report, failure: null };
+  return {
+    report,
+    failure: {
+      id: entry.id,
+      group: 'shared',
+      status,
+      code: fields.failureCode ?? (status === 'blocked' ? 'language/blocked' : 'language/golden'),
+      sourceLine: firstErrorLine(fields.diagnostics),
+      message: fields.reason ?? status,
+      expected: fields.golden,
+      actual: fields.artifact,
+    },
+  };
+}
+
+/** 跑共享列（同步、纯函数；IO 只读注入的端口）。报告形状与 `runLanguageSuite` 逐字同形。 */
+export function runLanguageSharedSuite(input: LanguageSharedSuiteInput): LanguageReport {
+  const adapterLabel = input.adapterLabel ?? input.adapter.id;
+  const backendLabel = input.backendLabel ?? input.backend.id;
+  const root = normalizeDir(input.root ?? LANGUAGE_SHARED_FIXTURE_DIR);
+  const entries = input.cases ?? LANGUAGE_SHARED_SUITE;
+
+  const reports: LanguageCaseReport[] = [];
+  const failures: LanguageFailure[] = [];
+
+  for (const entry of entries) {
+    const sourcePath = joinPath(root, `${entry.file}.kojo2`);
+    let source: string;
+    try {
+      source = stripLeadingBom(input.io.readText(sourcePath));
+    } catch (error: unknown) {
+      const outcome = sharedOutcome(entry, 'blocked', {
+        diagnostics: Object.freeze([]),
+        artifact: null,
+        golden: null,
+        reason: `fixture-missing: 读不到 ${sourcePath}（${errorMessage(error)}）`,
+        failureCode: 'language/input',
+      });
+      reports.push(outcome.report);
+      if (outcome.failure !== null) failures.push(outcome.failure);
+      continue;
+    }
+
+    const machineLine = sharedMachineLine(source);
+    if (machineLine === null) {
+      const outcome = sharedOutcome(entry, 'blocked', {
+        diagnostics: Object.freeze([]),
+        artifact: null,
+        golden: null,
+        reason: 'fixture-shape: 共享用例必须恰好一条 `# 机`（body 的边界由它定义）',
+        failureCode: 'language/input',
+      });
+      reports.push(outcome.report);
+      if (outcome.failure !== null) failures.push(outcome.failure);
+      continue;
+    }
+
+    let artifact: string;
+    let diagnostics: readonly LanguageDiagnostic[];
+    let body: string;
+    try {
+      const result = compileKojoSource({ source, adapter: input.adapter, backend: input.backend });
+      artifact = result.erb;
+      diagnostics = Object.freeze(result.diagnostics.map(toLanguageDiagnostic));
+      body = sharedBodyOf(
+        artifact,
+        (generated) => result.sourceMap.lineAt(generated),
+        result.sourceMap.lineCount,
+        machineLine,
+      );
+    } catch (error: unknown) {
+      const outcome = sharedOutcome(entry, 'blocked', {
+        diagnostics: Object.freeze([]),
+        artifact: null,
+        golden: null,
+        reason: `compile-threw: compileKojoSource 抛错（${errorMessage(error)}）`,
+      });
+      reports.push(outcome.report);
+      if (outcome.failure !== null) failures.push(outcome.failure);
+      continue;
+    }
+
+    const goldenPath = joinPath(root, `${entry.file}.body.erb`);
+    let golden: string;
+    try {
+      golden = stripLeadingBom(input.io.readText(goldenPath)).replace(/\n$/, '');
+    } catch (error: unknown) {
+      const outcome = sharedOutcome(entry, 'blocked', {
+        diagnostics,
+        artifact: body,
+        golden: null,
+        reason: `golden-missing: 读不到 ${goldenPath}（${errorMessage(error)}）`,
+        failureCode: 'language/input',
+      });
+      reports.push(outcome.report);
+      if (outcome.failure !== null) failures.push(outcome.failure);
+      continue;
+    }
+
+    if (artifact === '' || body !== golden) {
+      const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+      const excerpt = diffExcerpt(golden, body);
+      const reason =
+        errors.length > 0
+          ? `共享 body 编译报错（${errors.length} 条 error：${errors.map((item) => item.code).join(' | ')}）`
+          : '共享 body 逐字节不一致（机壳不进本列：只比 `# 机` 之后的语义面）';
+      const outcome = sharedOutcome(entry, 'differs', {
+        diagnostics,
+        artifact: body,
+        golden,
+        reason,
+        diff: excerpt.diff,
+      });
+      reports.push(outcome.report);
+      if (outcome.failure !== null) failures.push(outcome.failure);
+      continue;
+    }
+
+    reports.push(
+      sharedOutcome(entry, 'pass', { diagnostics, artifact: body, golden, reason: null }).report,
+    );
+  }
+
+  const groups = buildGroups(reports);
+  return {
+    adapter: adapterLabel,
+    backend: backendLabel,
+    root,
+    ok: failures.length === 0,
+    groups: groups,
+    summary: buildSummary(reports, groups.length),
+    cases: Object.freeze(reports),
+    failures: Object.freeze(failures),
+    usage: null,
+  };
 }

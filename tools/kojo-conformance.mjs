@@ -83,11 +83,39 @@ const CORPUS_ABSENT_ENTRIES = {
   skip: '/packages/kojo-conformance/src/corpus-skip.ts',
 };
 
-/** language 子命令需要额外加载的 TS 入口（语言套件纯逻辑 + 可选 eraTW 注入） */
-const LANGUAGE_ENTRIES = {
-  language: '/packages/kojo-conformance/src/language.ts',
+/** language 子命令的固定入口（套件纯逻辑） */
+const LANGUAGE_SUITE_ENTRY = '/packages/kojo-conformance/src/language.ts';
+
+/**
+ * language 子命令按 `--adapter` **按需**加载的真方言入口（SDK B5a：三种列 + 抽象列）。
+ *
+ * 为什么按需而不是齐载：一枚 adapter 包就是一条 `kojo-core` 桶入口的 SSR 冷载
+ * （PITFALLS 187 记的 60s 量级传输超时）。三轮全载会把启动面顶到超时线上，
+ * 而一次命令只会用到一个 adapter——多载的两枚纯属陪跑。
+ */
+const LANGUAGE_ADAPTER_ENTRIES = {
   eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
+  erafl: '/packages/plugins/erafl-adapter/src/kojo2/index.ts',
+  // 第三列（SDK B5a 的终态判据）：一枚最小 profile + 它自己的机壳，住在 conformance 的
+  // fixture 目录里。它证明"新增一个包 ⇒ 多一列"——套件与 CLI 一个字都不用改。
+  demo: '/packages/kojo-conformance/tests/fixtures/dialect-demo/index.ts',
 };
+
+/** `--adapter <名称>`（缺省 fixture）；只认最朴素的 `--adapter X` 形态，其余交给 language.ts 判用法 */
+function languageAdapterOf(argv) {
+  const index = argv.indexOf('--adapter');
+  const name = index >= 0 ? argv[index + 1] : undefined;
+  return name === undefined || name.startsWith('--') ? 'fixture' : name;
+}
+
+/** language 子命令的入口组：套件 + 本次真要用的那一枚 adapter（未知名称 ⇒ 只有套件，交给 CLI 报错） */
+function languageEntries(argv) {
+  const entries = { language: LANGUAGE_SUITE_ENTRY };
+  const adapter = languageAdapterOf(argv);
+  const entry = LANGUAGE_ADAPTER_ENTRIES[adapter];
+  if (entry !== undefined) entries[adapter] = entry;
+  return entries;
+}
 
 /**
  * 起一个 Vite SSR 服务器把 TS 入口载进来；载完即关（后续调用不会再触发模块加载）。
@@ -95,16 +123,22 @@ const LANGUAGE_ENTRIES = {
  * `configFile` 指向仓库的 `vitest.config.ts`：那份配置是**包别名（`@kojo/*`）的单一真源**，
  * 这里复用它，避免在工具里抄第二份 alias 表（抄了必漂移）。
  *
+ * `watch: null`：本工具**只读一次**模块，从不靠 HMR——但默认开启的 chokidar 会在起服时
+ * 整树爬一遍，把 SSR 的 `fetchModule` 排在同一线程的后面；实测（2026-10-28）不开：eraTW
+ * 一枚入口就撞 `transport invoke timed out after 60000ms`（超时的是 `table.ts` / `parser.ts`
+ * 这类小文件，说明排队而不慢在文件本身）；开 `watch: null` 后同一条命令六枚入口全载 3.8s。
+ * 这是 PITFALLS 187（桶冷载 63.6s 贴着 60s 传输超时线）的放大器，别关回去。
+ *
  * `kind === 'corpus-absent'` 时连 `main.ts` 都不载（见 `CORPUS_ABSENT_ENTRIES`）：那枚入口
  * 把整条真链路拖进 SSR，本机实测单体 67.1s、六枚齐载 137–140s。
  */
-async function loadModules(kind) {
+async function loadModules(kind, argv = []) {
   const server = await createServer({
     configFile: path.join(REPO, 'vitest.config.ts'),
     root: REPO,
     logLevel: 'silent',
     appType: 'custom',
-    server: { middlewareMode: true },
+    server: { middlewareMode: true, watch: null },
   });
   try {
     const modules = {};
@@ -117,7 +151,7 @@ async function loadModules(kind) {
       kind === 'migrate'
         ? MIGRATE_ENTRIES
         : kind === 'language'
-          ? LANGUAGE_ENTRIES
+          ? languageEntries(argv)
           : kind === 'corpus'
             ? CORPUS_ENTRIES
             : kind === 'corpus-absent'
@@ -229,16 +263,43 @@ function runMigrateDiff(modules, argv) {
   return result.exitCode;
 }
 
-/** `language`：语言 fixture 注册表（默认 fixture + 可选真 eraTW 注入；判定全在 language.ts） */
+/**
+ * `language`：语言 fixture 注册表。
+ *
+ * 两档列（SDK B5a）：
+ * - `fixture`（缺省）＝**抽象列**：`# 机 开场` 这类占位事件，与具体方言的事件表无关；
+ * - `eratw` / `erafl` / `demo` ＝**共享列**：同一份 fixture、同一份 body golden（只比
+ *   `# 机` 之后的语义面），机壳由各列的 backend 给。故三列的 JSON 可直接逐字对拍。
+ *
+ * 旧口径（真方言也跑抽象列、42/47 `event-unknown`）仍在 `runLanguageSuite` 层面可复现
+ * （`packages/kojo-conformance/tests/language.test.ts` 注入 eraTW 那条），不是被删掉。
+ */
 function runLanguage(modules, argv) {
-  const { language, eratw, main } = modules;
-  const registrations = {
-    ...language.createLanguageAdapters(),
-    eratw: {
+  const { language, eratw, erafl, demo, main } = modules;
+  const compileText = (expr) => expr.text;
+  const registrations = { ...language.createLanguageAdapters() };
+  // 按需装载（见 `languageEntries`）：没载进来的列不进注册表，CLI 会如实报"未知 adapter"
+  if (eratw !== undefined) {
+    registrations.eratw = {
       adapter: eratw.ERATW_GAME_ADAPTER,
-      backend: eratw.createEratwEmitBackend({ compileExpression: (expr) => expr.text, charNo: '12' }),
-    },
-  };
+      backend: eratw.createEratwEmitBackend({ compileExpression: compileText, charNo: '12' }),
+      column: 'shared',
+    };
+  }
+  if (erafl !== undefined) {
+    registrations.erafl = {
+      adapter: erafl.ERAFL_GAME_ADAPTER,
+      backend: erafl.createEraflEmitBackend({ compileExpression: compileText }),
+      column: 'shared',
+    };
+  }
+  if (demo !== undefined) {
+    registrations.demo = {
+      adapter: demo.DEMO_GAME_ADAPTER,
+      backend: demo.createDemoEmitBackend({ compileExpression: compileText }),
+      column: 'shared',
+    };
+  }
   return main.runMain({ argv, languageAdapters: registrations });
 }
 
@@ -354,7 +415,7 @@ let modules;
 let lastError;
 for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
   try {
-    modules = await loadModules(plan.kind);
+    modules = await loadModules(plan.kind, argv);
     break;
   } catch (error) {
     // 本机实测过一次并发起两个 Vite 时的瞬时 transform 错（同一条命令随后单跑即绿）；
