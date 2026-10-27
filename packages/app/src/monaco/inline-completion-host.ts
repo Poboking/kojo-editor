@@ -449,7 +449,12 @@ export function toMonacoInlineCompletions(
             // `note` 原文跟在幽灵文本后头（契约：宿主原文显示、不解析、不改写）。
             // `displayText` 目前**没有**宿主侧的表面——Monaco 的 `InlineCompletion` 只有
             // `insertText` 这一份字面，另造显示文本就是第二份真相。
-            // TODO(C 车道)：观感面（ghost text 的字色 / 提示语）接 token 时一并决定这一格怎么画。
+            // 观感面已归 C 车道落地（IC-C 批，2026-10-27）：这一格的字色/退让与提示件走
+            // `styles` 侧的 `inline-completion.css`（ghost text 三档 + `.inlineSuggestionsHints`
+            // 提示件与键帽），色值全部取自 `--ghost-text*` token、六档主题逐档标定，
+            // 判据在 `packages/app/tests/inline-completion-visual.test.ts`。
+            // ⚠ 仍欠一枚真机读数：提示件（hover 才出的那条 toolbar）在 C 车道的调试宿会话里
+            // **没出现过**（`showToolbar: 'onHover'`），它的实屏形状记在集成批的"未验"里。
             hint: {
               range: {
                 startLineNumber: range.endLineNumber,
