@@ -1,5 +1,5 @@
 import { classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
-import { enterRulePatternsFromRoles, type EnterRoleVocabulary, type EnterRulePatterns } from '@kojo/plugin-kojo-sugar';
+import { enterRulePatternsFromRoles, type EnterRoleVocabulary, type EnterRulePatterns } from '@kojo/kojo-vocab/enter';
 
 /**
  * `.erb` 回车层级（ERB-ENTER-RULES，2026-10-21）——**词表零抄本**的一张派生表。

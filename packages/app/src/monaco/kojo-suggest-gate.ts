@@ -1,4 +1,5 @@
-import { STATEMENT_FUNCTIONS, SUGAR_LEXICON_WORDS } from '@kojo/plugin-kojo-sugar';
+import { SUGAR_LEXICON_WORDS } from '@kojo/kojo-vocab/keywords';
+import { STATEMENT_FUNCTIONS } from '@kojo/kojo-vocab/statement-functions';
 import { classifyKojoLine } from './kojo-native-zone';
 import {
   BLANK_CLASS_STR,

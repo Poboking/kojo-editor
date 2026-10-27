@@ -3,7 +3,7 @@ import {
   SUGAR_LEXICON_WORDS,
   TIMING_NAMED_PARAMS,
   type SugarLexiconWord,
-} from '@kojo/plugin-kojo-sugar';
+} from '@kojo/kojo-vocab/keywords';
 import { escapeSnippetText } from './completion-core';
 import type { CompletionSource } from './kojo-completion';
 import { isAllBlank } from './kojo-completion-position';

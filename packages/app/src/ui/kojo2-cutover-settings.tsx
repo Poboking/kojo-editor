@@ -111,7 +111,7 @@ export function kojo2ReloadNotice(stage: Kojo2CutoverStage): string {
   }
   const sealed = kojo2StageAllowsLegacy(stage)
     ? ''
-    : '这一档同时把 kojo1 封存了：已经打开的 .kojo 保持原样（不当场抽走高亮），新开的 .kojo 不再按 kojo1 认领，「.kojo 预览」停用。';
+    : '这一档同时把 kojo1 封存了：已经打开的 .kojo 保持原样（不当场抽走高亮），新开的 .kojo 不再按 kojo1 认领，「.kojo 预览」停用；kojo1 的插件族要重载窗口才会彻底卸掉。';
   return `这一档已生效：已打开的标签会立刻按新档重挂。但语言面与配色是在窗口启动时装配的，重载窗口后新开的 .kojo2 才会完整上色、出诊断。${sealed}`;
 }
 
@@ -279,6 +279,8 @@ export function Kojo2CutoverSettings(props: Kojo2CutoverSettingsProps): ReactEle
         {kojo2StageAllowsLegacy(snapshot.stage)
           ? '.kojo 按 kojo1 认领，「.kojo 预览」照常。'
           : '.kojo 不再按 kojo1 认领（新开的落纯文本），「.kojo 预览」停用；已打开的标签保持原样，不当场抽走高亮。'}
+        <br />
+        kojo1 的插件族（转译 / 预览 / 升糖 / 糖编辑）不随切档热装热卸：重开项目（或重载窗口）后才按新档生效。
       </div>
 
       {/* v1 计划升上来的一次性回执（铁律 4：抬了作者的档位就必须说；写回 v2 后下次开机不再出现） */}

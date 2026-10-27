@@ -12,8 +12,8 @@ import type {
 } from '@kojo/plugin-api';
 import { symbolTokenAt, unicodeTokenAt } from '@kojo/plugin-api';
 import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
-import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
-import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
+import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { livePanes } from '../ui/editor-pane-registry';
 import { erbBitHoverName } from './erb-completion-bits';
 import { BLANK_CLASS_STR } from './kojo-completion-position';

@@ -1,4 +1,4 @@
-import { sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
+import { sugarEnterRulePatterns } from '@kojo/kojo-vocab/enter';
 import { KOJO_STRUCTURE_ASSETS } from './assets';
 import TsWorker from './kojo-ts.worker?worker';
 import { KOJO_STRUCTURE_LEGEND, encodeStructureTokens } from './semantic';

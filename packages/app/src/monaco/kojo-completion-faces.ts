@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import type { KojoFaceTable } from '@kojo/plugin-api';
-import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, argTokenCnLabel, type TimingNamedParamSpec } from '@kojo/plugin-kojo-sugar';
+import { TIMING_ARG_TOKENS, TIMING_NAMED_PARAMS, argTokenCnLabel, type TimingNamedParamSpec } from '@kojo/kojo-vocab/keywords';
 import { lineRange } from './completion-range';
 import {
   col0Of,

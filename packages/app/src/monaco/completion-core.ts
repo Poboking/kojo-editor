@@ -10,7 +10,7 @@ import type {
   VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
-import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
+import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { pinyinKeysOf } from './pinyin';
 import { describeCallSignature, slotParameterLabel } from './kojo-signature';
 

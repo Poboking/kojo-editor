@@ -1,5 +1,5 @@
 import type * as Monaco from './entry';
-import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/plugin-kojo-sugar';
+import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/kojo-vocab/keywords';
 
 /**
  * COMPL-SHARED · `.kojo` 补全的**行内位置判据**（字符串 / 注释 / 插值 / 名字段 / 关键字锚）。

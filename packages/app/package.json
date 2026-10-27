@@ -15,6 +15,7 @@
     "@kojo/kernel": "workspace:*",
     "@kojo/kojo-core": "workspace:*",
     "@kojo/kojo-lang": "workspace:*",
+    "@kojo/kojo-vocab": "workspace:*",
     "@kojo/plugin-api": "workspace:*",
     "@kojo/plugin-condition-extractor": "workspace:*",
     "@kojo/plugin-convention-linter": "workspace:*",

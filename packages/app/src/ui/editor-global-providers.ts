@@ -40,7 +40,7 @@ import type {
   LineDecoration,
 } from '@kojo/plugin-api';
 import * as monaco from '../monaco/entry';
-import { makeLookup } from '@kojo/plugin-kojo-sugar';
+import { makeLookup } from '@kojo/kojo-vocab/engine';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
 import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
 import { installHover, type HoverTables } from '../monaco/kojo-hover';

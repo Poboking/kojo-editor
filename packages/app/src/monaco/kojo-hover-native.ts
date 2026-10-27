@@ -7,14 +7,11 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import { kojoIndexNameOf, resolveKojoIndexName } from '@kojo/plugin-api';
-import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
-import {
-  buildFunctionName,
-  lookupFunctionName,
-  STATEMENT_FUNCTIONS,
-  SUGAR_LEXICON_WORDS,
-  TIMING_NAMED_PARAMS,
-} from '@kojo/plugin-kojo-sugar';
+import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
+import { lookupFunctionName } from '@kojo/kojo-vocab/system-functions';
+import { STATEMENT_FUNCTIONS } from '@kojo/kojo-vocab/statement-functions';
+import { SUGAR_LEXICON_WORDS, TIMING_NAMED_PARAMS } from '@kojo/kojo-vocab/keywords';
+import { buildFunctionName } from '@kojo/plugin-kojo-sugar';
 
 /**
  * ZH-D3 · 悬停**原生形态**反查（中文 → 原文，显示线的第三面）。

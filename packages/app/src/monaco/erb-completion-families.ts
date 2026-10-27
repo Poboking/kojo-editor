@@ -1,5 +1,5 @@
 import type * as Monaco from './entry';
-import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { ERB_NAME_CHAR_CLASS } from '@kojo/kojo-lang/name-chars';
 import { col0Of, lineAt } from './kojo-completion-position';
 

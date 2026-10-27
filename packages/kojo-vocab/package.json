@@ -1,0 +1,28 @@
+{
+  "name": "@kojo/kojo-vocab",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ERB / kojo1 / kojo2 共用的语言层词表与纯函数：表层词表、系统函数中文名、引擎族事实、行判型、回车规则、格式化。零 Monaco、零 React、零 IO；不属于任何插件，kojo1 退役后继续存活。",
+  "license": "GPL-3.0-or-later",
+  "main": "./src/index.ts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./keywords": "./src/keywords.ts",
+    "./system-functions": "./src/system-functions.ts",
+    "./identifier-chars": "./src/identifier-chars.ts",
+    "./engine-globals": "./src/engine-globals.ts",
+    "./statement-functions": "./src/statement-functions.ts",
+    "./blank-charset": "./src/blank-charset.ts",
+    "./sugar-ident": "./src/sugar-ident.ts",
+    "./types": "./src/types.ts",
+    "./lexer": "./src/lexer.ts",
+    "./formatter": "./src/formatter.ts",
+    "./enter": "./src/enter.ts",
+    "./engine": "./src/engine.ts"
+  },
+  "dependencies": {
+    "@kojo/kojo-core": "workspace:*",
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

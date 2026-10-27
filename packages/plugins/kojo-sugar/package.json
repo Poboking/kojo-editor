@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@kojo/plugin-api": "workspace:*",
-    "@kojo/kojo-core": "workspace:*"
+    "@kojo/kojo-core": "workspace:*",
+    "@kojo/kojo-vocab": "workspace:*"
   },
   "devDependencies": {
     "@kojo/plugin-erb-parser": "workspace:*",

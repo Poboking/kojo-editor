@@ -1,14 +1,14 @@
 import type * as Monaco from './entry';
 import type { VariableInfo, VariableSchema } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import {
-  ENGINE_VARIABLE_FAMILIES,
   RESERVED_PRONOUNS,
   SUGAR_KEYWORD_ROLE_LABEL,
   SUGAR_LEXICON_OPERATORS,
   SUGAR_LEXICON_WORDS,
-  SYSTEM_FUNCTION_ALIASES,
-} from '@kojo/plugin-kojo-sugar';
+} from '@kojo/kojo-vocab/keywords';
+import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
 import { ERB_COMPLETION_ASSEMBLY, resolveErbCompletionDetail } from './erb-completion';
 import { kojoNativeZoneAt } from './kojo-native-zone';

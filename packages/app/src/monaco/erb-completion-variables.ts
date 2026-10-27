@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import type { VariableSchema } from '@kojo/plugin-api';
-import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 
 /**
  * EC-2 · `.erb` 正文里的**变量族 + 具名索引补全**。

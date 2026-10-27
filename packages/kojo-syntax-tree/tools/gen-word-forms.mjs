@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 /**
- * gen-word-forms.mjs —— 词表构建期投影：把 `kojo-sugar` 的活词表灌进 `src/word-forms.json`，
+ * gen-word-forms.mjs —— 词表构建期投影：把 `@kojo/kojo-vocab` 的活词表灌进 `src/word-forms.json`，
  * 供 `grammar.js` require（tree-sitter CLI 用裸 node 读 grammar，故产物必须是 JSON）。
  *
- * 真源（**只读，绝不回写**）：
- * - `packages/plugins/kojo-sugar/src/keywords.ts` 的 `SUGAR_LEXICON_WORDS` /
+ * 真源（**只读，绝不回写**；LAU-3b 解耦批起已从 kojo-sugar 搬进 kojo-vocab）：
+ * - `packages/kojo-vocab/src/keywords.ts` 的 `SUGAR_LEXICON_WORDS` /
  *   `HEAD_DECL_KEYS` / `primaryWord()` / `blockEndWord()`（聚合入口 `sugarEditorLexicon()`
  *   同一批内表，此处按语义 id 需要直读导出表）与 `DIM_DIRECTIVE_RE`；
- * - `packages/plugins/kojo-sugar/src/statement-functions.ts` 的 `STATEMENT_FUNCTIONS` 键集；
- * - `packages/plugins/kojo-sugar/src/lexer.ts` 的**整行严格等值判据**（`if (content === 'X')
+ * - `packages/kojo-vocab/src/statement-functions.ts` 的 `STATEMENT_FUNCTIONS` 键集；
+ * - `packages/kojo-vocab/src/lexer.ts` 的**整行严格等值判据**（`if (content === 'X')
  *   return { kind: 'k' }` 支，当前 = `[SKIPSTART]` / `[SKIPEND]`）。这一支不是"词形"、是记号，
  *   词表投影覆盖不到它；不投影的代价就是本批实测的 18 行真冲突（上游加了判据、语法层没跟上），
  *   故连它也从真源取，不许 grammar.js 自留第二份。lexer.ts 有依赖、不能像两份叶子模块那样
  *   `import()`，所以走**源码文本抽取**：抽不到一支就抛（fail-closed），绝不静默产出缺判据的投影。
  * - 同一份 `lexer.ts` 里的**引擎记号名单常量**（`const <NAME>: ReadonlySet<string> = new Set([...])`）
- *   与 `packages/plugins/kojo-sugar/src/sugar-ident.ts`（名单成员的出处）。TRY 系写形
+ *   与 `packages/kojo-vocab/src/sugar-ident.ts`（名单成员的出处）。TRY 系写形
  *   `试探 原形 <记号> <原文>` 的界标既不是词也不是正则、是**一张九枚名单**（`inline.engineEcho`
  *   `原形` 之后只放行 TRY_CATCH_OPEN ∪ TRY_LIST_OPEN）——语法层只抄名单就等于把第一真源的
  *   判据换成第二份，故名单按"从 lexer.ts 抽成员集合名 → 到 sugar-ident.ts 取值"两段派生，
@@ -188,15 +188,15 @@ export function extractEngineTokenSet(constName, lexerSource, identModule) {
 /** 读两份零依赖真源模块 + sugar-ident.ts（引擎记号名单成员）+ lexer.ts 源码文本（整行等值判据的唯一出处）。 */
 export async function loadTruth() {
   const kwUrl = pathToFileURL(
-    resolve(pkgRoot, '..', 'plugins', 'kojo-sugar', 'src', 'keywords.ts'),
+    resolve(pkgRoot, '..', 'kojo-vocab', 'src', 'keywords.ts'),
   ).href;
   const sfUrl = pathToFileURL(
-    resolve(pkgRoot, '..', 'plugins', 'kojo-sugar', 'src', 'statement-functions.ts'),
+    resolve(pkgRoot, '..', 'kojo-vocab', 'src', 'statement-functions.ts'),
   ).href;
   const identUrl = pathToFileURL(
-    resolve(pkgRoot, '..', 'plugins', 'kojo-sugar', 'src', 'sugar-ident.ts'),
+    resolve(pkgRoot, '..', 'kojo-vocab', 'src', 'sugar-ident.ts'),
   ).href;
-  const lexerPath = resolve(pkgRoot, '..', 'plugins', 'kojo-sugar', 'src', 'lexer.ts');
+  const lexerPath = resolve(pkgRoot, '..', 'kojo-vocab', 'src', 'lexer.ts');
   const kw = await import(kwUrl);
   const sf = await import(sfUrl);
   const ident = await import(identUrl);
@@ -249,12 +249,12 @@ export function buildWordForms(truth) {
 
   return {
     schema: 1,
-    note: '生成文件，禁手改——由 packages/kojo-syntax-tree/tools/gen-word-forms.mjs 从 kojo-sugar 词表真源投影；重生成走本包 build 链。',
+    note: '生成文件，禁手改——由 packages/kojo-syntax-tree/tools/gen-word-forms.mjs 从 @kojo/kojo-vocab 词表真源投影；重生成走本包 build 链。',
     sources: [
-      'packages/plugins/kojo-sugar/src/keywords.ts',
-      'packages/plugins/kojo-sugar/src/statement-functions.ts',
-      'packages/plugins/kojo-sugar/src/lexer.ts',
-      'packages/plugins/kojo-sugar/src/sugar-ident.ts',
+      'packages/kojo-vocab/src/keywords.ts',
+      'packages/kojo-vocab/src/statement-functions.ts',
+      'packages/kojo-vocab/src/lexer.ts',
+      'packages/kojo-vocab/src/sugar-ident.ts',
     ],
     wordsById,
     primaryById,

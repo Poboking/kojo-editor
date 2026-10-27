@@ -1,4 +1,4 @@
-import { formatText, type FormatDialect, type FormatEdit } from '@kojo/plugin-kojo-sugar';
+import { formatText, type FormatDialect, type FormatEdit } from '@kojo/kojo-vocab/formatter';
 import { errorText } from '@kojo/plugin-api';
 
 /**

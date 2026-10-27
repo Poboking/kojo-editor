@@ -53,6 +53,9 @@ importers:
       '@kojo/kojo-lang':
         specifier: workspace:*
         version: link:../kojo-lang
+      '@kojo/kojo-vocab':
+        specifier: workspace:*
+        version: link:../kojo-vocab
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api
@@ -247,6 +250,15 @@ importers:
         specifier: ^0.27.1
         version: 0.27.1
 
+  packages/kojo-vocab:
+    dependencies:
+      '@kojo/kojo-core':
+        specifier: workspace:*
+        version: link:../kojo-core
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../plugin-api
+
   packages/plugin-api: {}
 
   packages/plugins/condition-extractor:
@@ -393,6 +405,9 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../../kojo-core
+      '@kojo/kojo-vocab':
+        specifier: workspace:*
+        version: link:../../kojo-vocab
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api

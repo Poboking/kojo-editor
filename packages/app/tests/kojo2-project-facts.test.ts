@@ -55,7 +55,10 @@ async function registerProjectSurfaces(): Promise<void> {
 }
 
 // 与生产 `loadProjectPlugins` 同一入口：先登记，再逐腿验"按项目取"。
-beforeAll(registerProjectSurfaces);
+// ⚠ 这趟要装载八枚 adapter 模块（单独跑实测 0.7s，全量并行满载争用时曾越过 10s 默认预算
+// ⇒ 钩子超时、整文件被记成失败而判据一条没跑）。显式给**装载**预算，下面判据一条不放松
+// （与 ps10 动态图那条用例同一先例）。
+beforeAll(registerProjectSurfaces, 30_000);
 
 describe('LAU-1a ① · eraFL 项目拿到 eraFL 事实，零 eraTW 泄漏', () => {
   const eraflProject = { adapterId: ERAFL.gameId };

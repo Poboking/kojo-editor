@@ -340,6 +340,14 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
   const { projectAdapters, createAdapterPlugin } = await import('./adapter-manifest');
   const adapterEntries = projectAdapters();
   const adapterModules = await Promise.all(adapterEntries.map((entry) => entry.load!()));
+  // kojo1 封存门（LAU-3b 插件门）：只有「v1-only / 双轨」两档才装 kojo1 那一家插件
+  // （转译 + 预览 + 升糖 + 糖编辑体验）。缺省档 `2.0-default` 下它们**不实例化、不激活**，
+  // 贡献表里也就没有 `.kojo` 的槽 / 命令 / 面板 / 装饰器。判据只读那一枚开关，
+  // 不在本文件另写阶段解析（`ui/kojo2-flag.ts` 是唯一真源；这里动态取，免得把切流
+  // 控制器拖进开机静态图）。
+  const legacySyntaxOn = (await import('./ui/legacy-plugin-gate')).legacyPluginFamilyEnabled();
+  const legacyImport = <T>(load: () => Promise<T>): Promise<T | null> =>
+    legacySyntaxOn ? load() : Promise.resolve(null);
   const [
     linter,
     extractor,
@@ -366,7 +374,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-condition-extractor'),
     import('@kojo/plugin-sav-parser'),
     import('@kojo/plugin-state-replay'),
-    import('@kojo/plugin-kojo-sugar'),
+    legacyImport(() => import('@kojo/plugin-kojo-sugar')),
     import('@kojo/plugin-kojo-lang'),
     import('@kojo/plugin-ui-status'),
     import('@kojo/plugin-ui-convention-report'),
@@ -375,9 +383,9 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-state-replay'),
     import('@kojo/plugin-ui-archive-browser'),
     import('@kojo/plugin-ui-snapshot-injector'),
-    import('@kojo/plugin-ui-sugar-lift'),
-    import('@kojo/plugin-ui-sugar-preview'),
-    import('@kojo/plugin-ui-sugar-editor'),
+    legacyImport(() => import('@kojo/plugin-ui-sugar-lift')),
+    legacyImport(() => import('@kojo/plugin-ui-sugar-preview')),
+    legacyImport(() => import('@kojo/plugin-ui-sugar-editor')),
     import('@kojo/plugin-kojo-market'),
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
@@ -401,9 +409,10 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // 状态回放（游戏无关；消费 snapshot.source + condition.extractor；
     // 具名索引字典来自当前 adapter 的 variableSchema）
     stateReplay.createStateReplayPlugin(),
-    // 语法糖转译（游戏无关；中文表层关键字是跨游戏语言层，住在契约；
-    // 时机分野命名模板与变量字典来自当前 adapter —— 纯函数，不触达工程状态）
-    sugar.createKojoSugarPlugin(),
+    // 语法糖转译（kojo1 封存档专属；LAU-3b 起未显式启用 kojo1 就整族不装）。
+    // 中文表层关键字是跨游戏语言层，住在 `@kojo/kojo-vocab`（ERB / kojo2 也在用）；
+    // 只有转译 / 预览 / 升糖这一套语义随 kojo1 一起封存。
+    ...(sugar === null ? [] : [sugar.createKojoSugarPlugin()]),
     // Kojo 语言面插件（B2）：definition / documentSymbol 的**唯一供方**，经
     // `ui.editor.languageService` 槽应答 `languageId: 'kojo2'` 的请求。
     // 排在这里的理由：它不 require 任何服务（判据全在 `@kojo/kojo-lang`，零 IO、
@@ -424,14 +433,14 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     uiSnapshotInjector.createUiSnapshotInjectorPlugin(),
     // 升糖预览器（识别在 kojo-sugar 的 sugar.lift；预览经 editor.liftPreview.show
     // 交宿主就地折叠显示，**纯前端不写盘**。排在 kojo-sugar 之后：它 require sugar.lift）
-    uiSugarLift.createUiSugarLiftPlugin(),
+    ...(uiSugarLift === null ? [] : [uiSugarLift.createUiSugarLiftPlugin()]),
     // 糖预览（只读观察面：转译 + 源映射 + 状态回放三向映射全在 kojo-sugar 的
     // sugar.preview；面板只做呈现。排在 kojo-sugar 之后）
-    uiSugarPreview.createUiSugarPreviewPlugin(),
+    ...(uiSugarPreview === null ? [] : [uiSugarPreview.createUiSugarPreviewPlugin()]),
     // 糖编辑体验（v0.3 S6）：编辑器波浪线（ui.editor.decorator 贡献，宿主消费为
     // Monaco markers）+ 糖判定面板。语义全在 kojo-sugar 的 sugar.transpile（纯函数）
     // ——排在 kojo-sugar 之后（它 require sugar.transpile）
-    uiSugarEditor.createUiSugarEditorPlugin(),
+    ...(uiSugarEditor === null ? [] : [uiSugarEditor.createUiSugarEditorPlugin()]),
     // 口上市场 v1：服务 `market`（本地目录源装卸 + 逐文件 sha256 锚）。
     // appVersion 单一真源 = app 包清单（`packages/app/package.json`），插件源码不写版本号
     market.createKojoMarketPlugin({ appVersion: APP_VERSION }),
@@ -474,7 +483,11 @@ export function prefetchProjectPlugins(): Promise<void> {
 }
 
 /**
- * 进项目之前把 18 个项目级插件装好并注册（PS-10）。
+ * 进项目之前把项目级插件装好并注册（PS-10）。
+ *
+ * 名单里的**数量随切流阶段变**：kojo1 那一家四枚（`kojo-sugar` + 三枚 `ui-sugar-*`）
+ * 只在显式启用 kojo1 时导入（见 `ui/legacy-plugin-gate.ts`）；缺省档 `2.0-default` 下
+ * 它们连模块字节都不取。
  *
  * 时机是**硬约束**：必须赶在 `kernel.project.open()` 之前完成——插件们挂在
  * `project.opened` 那一拍上（级联、快照还原、各自的 `compute` 任务表），事件之后再注册

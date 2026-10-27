@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
 import { BUILTIN_FUNCTION_NAMES, builtinSignatureLabel } from '@kojo/plugin-erb-parser';
-import { SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
+import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { isAllBlank } from './kojo-completion-position';
 
 /**

@@ -18,12 +18,11 @@ import { describe, expect, it } from 'vitest';
  *    开机图里除**已知漏点**外，项目级插件一枚文件都不许出现；
  * 3. 图的大小闸（粗闸：抓"整包被拽回来"这种量级事故，不追 KB 级抖动）。
  *
- * ⚠ 已知漏点（本批无权动，如实记在这里而不是偷偷放宽判据）：
- * `App.tsx → ui/shell-overlays.ts → ui/diff-view.ts → monaco/erb-language.ts →
- *  monaco/theme.ts → monaco/kojo-language.ts → @kojo/plugin-kojo-sugar`
- * ——宿主 monaco 层静态挂着 sugar 的词表与条件抽取的表达式表，这两包（~990 KB 源码）
- * 因此仍留在开机图里。要断这根链得动 `monaco/**` 与 `shell-overlays.ts`（PS-10 归属之外），
- * 已作为后续项上报。
+ * ⚠ 已知漏点（如实记在这里而不是偷偷放宽判据）：
+ * **`condition-extractor`** 仍被宿主 monaco 层静态挂着表达式表，因此留在开机图里。
+ * `kojo-sugar` 那条链（`shell-overlays → diff-view → erb-language → theme → kojo-language
+ * → @kojo/plugin-kojo-sugar`）已由 LAU-3b 解耦批断掉：共用词表搬进 `packages/kojo-vocab`，
+ * 宿主与 ERB / kojo2 改引新包，v1 转译包不再进开机静态图（下方有专门断言）。
  */
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -111,8 +110,15 @@ function eagerClosure(entryRel: string, opts?: { followDynamic?: boolean }): Map
 /** PS-10 ① 的判据面：教程正文与渲染器（懒装载壳 `tutorial-lazy.ts` 不在此列，它必须常驻） */
 const TUTORIAL_PROSE_RE = /plugins\/eratw-adapter\/src\/tutorial-(content|overlay|inline|reference)/;
 
-/** 已知漏点（见文件头 ⚠）：仍被宿主 monaco 层静态挂着的两包 */
-const KNOWN_LEAK_PACKAGES = new Set(['kojo-sugar', 'condition-extractor']);
+/**
+ * 已知漏点的**插件目录名**（相对 `packages/plugins/`）。
+ *
+ * - `condition-extractor`：宿主 monaco 层仍静态挂着它的表达式表（`erb-language → …` 链）。
+ * - `kojo-sugar` **已出列**（LAU-3b 解耦批，2026-10-27）：共用词表 / 词法 / 格式化搬到
+ *   `packages/kojo-vocab`（非插件包），宿主与 ERB / kojo2 改引新包之后，v1 转译包的
+ *   ~900 KB 链不再被开机静态图拽进来。下面有一条专门断言它**不许回来**。
+ */
+const KNOWN_LEAK_PACKAGES = new Set(['condition-extractor']);
 
 /** 欢迎页 / 无项目态真吃得到的两个常驻插件 */
 const EAGER_PLUGINS = ['@kojo/plugin-erb-parser', '@kojo/plugin-eratw-adapter'];
@@ -189,10 +195,12 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 常驻两包 + 文件头 ⚠ 记名的漏点包之外，一枚都不该出现在开机图里
     const allowed = new Set(['erb-parser', 'eratw-adapter', ...KNOWN_LEAK_PACKAGES]);
     expect([...presentDirs].filter((d) => !allowed.has(d))).toEqual([]);
-    // 拆分真的生效了：20 个插件包里 ≥15 个整包不在图上（只剩常驻两个 + 两个已知漏点）
+    // 拆分真的生效了：29 个插件包里 ≥15 个整包不在图上（只剩常驻两个 + 已知漏点）
     const deferredDirs = allPluginPackages().filter((d) => !allowed.has(d));
     expect(deferredDirs.length).toBeGreaterThanOrEqual(15);
     expect(deferredDirs.filter((d) => presentDirs.has(d))).toEqual([]);
+    // LAU-3b 解耦批的交付判据：v1 转译包整体不在开机图里（词表已搬去 kojo-vocab）
+    expect(presentDirs.has('kojo-sugar')).toBe(false);
   });
 
   it('开机图体积闸（粗闸：抓整包回灌，不追 KB 级抖动）', () => {
@@ -513,6 +521,13 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     **本批另有一处真减面**：可用性门原本由 `App.tsx` import 注册表来装（实测 **195 文件 /
     //     2,913 KB**，越闸），改成"缺省谓词住在注册表里"之后整张 descriptor 表回到懒边——
     //     文件数读回 194、字节 −15.8 KB。再想减只剩删上面四条注释，那是删判据，故不取。
+    //   - **LAU-3b 解耦批（2026-10-27，kojo1 插件封存 + 词表搬家）**：现读数 **194 文件 / 2,896 KB**
+    //     （+1 KB / +1 文件：`ui/legacy-plugin-gate.ts`——装配根要按切流阶段决定装不装 kojo1
+    //     插件族，这一枚判据必须常驻，但门的真源仍**动态取**，不把切流控制器拖进开机图）。
+    //     `@kojo/plugin-kojo-sugar` 整包**已出图**：共用词表 / 词法 / 格式化搬到
+    //     `packages/kojo-vocab`（非插件包），宿主与 ERB / kojo2 改引新包之后，v1 转译的
+    //     ~900 KB 链不再被开机静态 import 拽进来。成员断言随之从"两个已知漏点"收紧为
+    //     "只剩 condition-extractor"，并新增一条 kojo-sugar 不许回来的断言。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,900 KB）`);

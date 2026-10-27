@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "note": "生成文件，禁手改——由 packages/kojo-syntax-tree/tools/gen-word-forms.mjs 从 kojo-sugar 词表真源投影；重生成走本包 build 链。",
+  "note": "生成文件，禁手改——由 packages/kojo-syntax-tree/tools/gen-word-forms.mjs 从 @kojo/kojo-vocab 词表真源投影；重生成走本包 build 链。",
   "sources": [
-    "packages/plugins/kojo-sugar/src/keywords.ts",
-    "packages/plugins/kojo-sugar/src/statement-functions.ts",
-    "packages/plugins/kojo-sugar/src/lexer.ts",
-    "packages/plugins/kojo-sugar/src/sugar-ident.ts"
+    "packages/kojo-vocab/src/keywords.ts",
+    "packages/kojo-vocab/src/statement-functions.ts",
+    "packages/kojo-vocab/src/lexer.ts",
+    "packages/kojo-vocab/src/sugar-ident.ts"
   ],
   "wordsById": {
     "head.char": [

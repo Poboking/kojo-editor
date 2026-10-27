@@ -28,7 +28,7 @@ import {
   KOJO_WAIT_CONTINUE,
   KOJO_WEAVE_MODIFIERS,
 } from '@kojo/kojo-core';
-import { sugarEditorLexicon } from '@kojo/plugin-kojo-sugar';
+import { sugarEditorLexicon } from '@kojo/kojo-vocab/keywords';
 
 /** 2.0 一级缩进（空格数）；栏头缩进阶梯与 `@原生` 体判定都按它算（core 同一常量）。 */
 export const KOJO2_INDENT_WIDTH = KOJO_INDENT_WIDTH;

@@ -167,7 +167,13 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 走 `failed` 出声（不静默），次序与"谁赢"无关——槽内先后由各贡献自己的 `order` 定。
       'createInlineCompletionLocalPlugin',
     ];
-    const found = [...bootstrapSrc.matchAll(/(?:^|\n)\s*[\w.]+.(create[A-Za-z]+Plugin)\(/g)].map((m) => m[1]!);
+    // 工厂调用可能包在条件装配里（LAU-3b：kojo1 插件族 `...(x === null ? [] : [x.create…()])`），
+    // 所以这里按**装载器函数体**取调用名，不再要求调用出现在行首。
+    const loaderBody = bootstrapSrc.slice(
+      nthIndex(bootstrapSrc, 'async function loadProjectPlugins'),
+      nthIndex(bootstrapSrc, 'function loadProjectPluginsOnce'),
+    );
+    const found = [...loaderBody.matchAll(/[\w.]+\.(create[A-Za-z]+Plugin)\(/g)].map((m) => m[1]!);
     expect(found).toEqual(expected);
     // 动态 import 的模块次序与工厂次序同一份名单（一一对应，不许多不许少）。
     // 只看**项目级装载器**本体：bootstrap 里还有「用户显式打开才装」的懒边

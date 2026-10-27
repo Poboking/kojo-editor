@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import type { KojoFaceTable, KojoIndexKind, KojoIndexTables } from '@kojo/plugin-api';
 import { kojoIndexCandidates } from '@kojo/plugin-api';
-import { TIMING_NAMED_PARAMS } from '@kojo/plugin-kojo-sugar';
+import { TIMING_NAMED_PARAMS } from '@kojo/kojo-vocab/keywords';
 import { lineRange } from './completion-range';
 import {
   CASE_ANCHOR,

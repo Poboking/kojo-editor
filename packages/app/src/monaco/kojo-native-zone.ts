@@ -1,5 +1,5 @@
 import type * as Monaco from './entry';
-import { classifyLine, splitLogicalLines, type LineClass } from '@kojo/plugin-kojo-sugar';
+import { classifyLine, splitLogicalLines, type LineClass } from '@kojo/kojo-vocab/lexer';
 import { erbCompletionGate, erbLabelSlot } from './erb-completion-context';
 import { erbBitSlotOpen } from './erb-completion-bits';
 import { erbFunctionNameSlot } from './erb-completion-functions';

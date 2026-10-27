@@ -2,10 +2,10 @@ import type * as Monaco from './entry';
 import { errorText } from '@kojo/plugin-api';
 import {
   computeFormatEdits,
-  sugarEnterIndentAfter,
   type FormatDialect,
   type FormatEdit,
-} from '@kojo/plugin-kojo-sugar';
+} from '@kojo/kojo-vocab/formatter';
+import { sugarEnterIndentAfter } from '@kojo/kojo-vocab/enter';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
 import type { FormatDegradationNotice, RangeFormatHandlers } from './kojo-format-range';

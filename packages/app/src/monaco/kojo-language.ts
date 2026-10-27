@@ -1,7 +1,10 @@
 import type * as Monaco from './entry';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { kojoMonacoExtensions } from '@kojo/plugin-api';
-import { ENGINE_VARIABLE_FAMILIES, sugarEditorLexicon, SYSTEM_FUNCTION_ALIASES, sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
+import { sugarEditorLexicon } from '@kojo/kojo-vocab/keywords';
+import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
+import { sugarEnterRulePatterns } from '@kojo/kojo-vocab/enter';
 import { ERB_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { toMonacoEnterConfig } from './enter-rules';

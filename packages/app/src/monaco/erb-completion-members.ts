@@ -1,5 +1,5 @@
 import type * as Monaco from './entry';
-import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { BUILTIN_FUNCTION_NAMES } from '@kojo/plugin-erb-parser';
 import { MAX_NAME_CANDIDATES, rankKey, type CompletionTables } from './completion-core';
 import { erbCompletionGate, NAME_CHAR_RE } from './erb-completion-context';

@@ -1,5 +1,5 @@
 import type * as Monaco from './entry';
-import type { EnterRulePatterns } from '@kojo/plugin-kojo-sugar';
+import type { EnterRulePatterns } from '@kojo/kojo-vocab/enter';
 
 /**
  * 回车层级的**宿主唯一翻译层**（ERB-ENTER-RULES，2026-10-21）。

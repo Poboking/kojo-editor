@@ -1,5 +1,5 @@
 import type * as Monaco from '../entry';
-import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/plugin-kojo-sugar';
+import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/kojo-vocab/keywords';
 import type { LineDecoration } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers } from '../kojo-language';
 import { toMonacoColumn, toMonacoLine } from '../positions';

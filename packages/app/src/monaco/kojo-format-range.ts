@@ -6,7 +6,7 @@ import {
   erbNewContentWithPrefix,
   type ErbBodyRegionKind,
   type FormatEdit,
-} from '@kojo/plugin-kojo-sugar';
+} from '@kojo/kojo-vocab/formatter';
 import { errorText, FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import {

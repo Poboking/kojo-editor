@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import type { KojoNameField } from './kojo-completion-position';
 import type { VariableSchema } from '@kojo/plugin-api';
-import { ENGINE_VARIABLE_FAMILIES } from '@kojo/plugin-kojo-sugar';
+import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { isNameChar } from '@kojo/kojo-lang/name-chars';
 
 /**
