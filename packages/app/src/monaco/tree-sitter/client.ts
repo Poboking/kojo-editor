@@ -29,6 +29,7 @@ import {
   type KojoStructureToken,
 } from './types';
 import { StructureClientV2, type StructureClientV2Options, type StructureStatus } from './client-v2';
+import { acquireStructureThread, type StructureThreadLease } from './structure-pool';
 
 /**
  * 主线程侧的 worker 代理（**v3 薄壳**：这里只发请求、收回复、丢迟到、记账）。
@@ -175,6 +176,12 @@ export class StructureClient {
   private readonly onSyntaxClear: (model: Monaco.editor.ITextModel) => void;
   /** 文档隔离号的发生器（只增不减） */
   private docSeq = 0;
+  /** 池租约（LAU-5）；`dispose()` 时还回池子而不是杀线程 */
+  private lease: StructureThreadLease | null = null;
+  /** 这条通道的 `doc` 号段起点（`ready.docBase`；单引擎 worker 回 0） */
+  private docBase = 0;
+  /** 线程还能不能还回池子（`fatal` 之后不能：那具线程已经不可信） */
+  private reusable = true;
   private nextId = 1;
   /** 回过话没有（决定用哪一档预算；与 kojo2 同口径） */
   private answered = false;
@@ -241,7 +248,10 @@ export class StructureClient {
       grammarWasmUrl: this.runtime.grammarWasmUrl,
     };
     try {
-      const worker = this.runtime.createWorker();
+      // LAU-5：从池里**借**线程（同一运行时下复用上一具，`Parser.init` 与已装文法都不重付）
+      const lease = acquireStructureThread(this.runtime);
+      this.lease = lease;
+      const worker = lease.worker;
       worker.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
       worker.onerror = (event: ErrorEvent) =>
         this.fatal(`worker 线程报错：${event.message || '（无消息）'}`);
@@ -292,7 +302,10 @@ export class StructureClient {
     this.pending.clear();
     this.status = 'idle';
     this.latestIndent = null;
-    worker?.terminate();
+    this.docBase = 0;
+    // LAU-5：好线程还回池子（下次开 = `ready{loadMs:0}`），坏线程（fatal 过）直接杀
+    this.lease?.release(this.reusable && worker !== null);
+    this.lease = null;
     const fallback = this.fallback;
     this.fallback = null;
     fallback?.dispose();
@@ -324,7 +337,14 @@ export class StructureClient {
     const worker = this.worker;
     this.worker = null;
     if (this.status !== 'dead') this.status = 'ready';
-    worker?.terminate();
+    // 协议不符 / 对面还是旧 worker ⇒ 这具线程不进池（它说的不是本版协议），当场收掉
+    this.reusable = false;
+    if (this.lease !== null) {
+      this.lease.release(false);
+      this.lease = null;
+    } else {
+      worker?.terminate();
+    }
     this.fallback = new StructureClientV2(options);
     this.fallback.start();
   }
@@ -356,12 +376,22 @@ export class StructureClient {
     return doc;
   }
 
+  /**
+   * 线上真正发的 `doc` 号 = 通道号段起点 + 本客户端自己的序号（LAU-5 / v4）。
+   *
+   * worker 只认 `doc`（它按 `docBase ≤ doc` 找引擎），所以两个客户端的序号撞在一起也没关系
+   * ——只要 `docBase` 不同，号段就不重叠。回话比对用同一个函数，两侧不会各算各的。
+   */
+  private docIdOf(doc: TrackedDocument): number {
+    return this.docBase + doc.seq;
+  }
+
   /** 整篇请求（`doc` 号 + 当前版本 + 当前快照全文） */
   private postParse(doc: TrackedDocument): void {
     this.post({
       id: this.nextId++,
       kind: 'parse',
-      doc: doc.seq,
+      doc: this.docIdOf(doc),
       version: doc.version,
       text: doc.text,
     }, doc, false);
@@ -419,7 +449,7 @@ export class StructureClient {
       {
         id: this.nextId++,
         kind: 'parse',
-        doc: doc.seq,
+        doc: this.docIdOf(doc),
         version,
         edit,
         baseTreeId: doc.baseTreeId,
@@ -572,7 +602,9 @@ export class StructureClient {
     const worker = this.worker;
     this.worker = null;
     this.latestIndent = null;
-    worker?.terminate();
+    this.reusable = false; // 这具线程已经不可信：不还池子，直接杀
+    this.lease?.release(false);
+    this.lease = null;
     this.onFatal(message);
   }
 
@@ -672,6 +704,8 @@ export class StructureClient {
         this.adoptLegacy(`worker 认的协议是 ${data.protocol}（本宿主说 ${STRUCTURE_PROTOCOL_VERSION}）`);
         return;
       }
+      // LAU-5：这条通道的 doc 号段起点（单引擎 worker 回 0）；本客户端所有 parse 都从它起算
+      this.docBase = data.docBase;
       this.promoteToReady();
       return;
     }
@@ -692,8 +726,8 @@ export class StructureClient {
       this.noteDiscarded(`收到文档 ${reply.doc} 的结果而当前跟踪的是文档 ${this.doc?.seq ?? '无'}`, this.doc);
       return;
     }
-    if (reply.doc !== doc.seq) {
-      this.noteDiscarded(`收到文档 ${reply.doc} 的结果而当前跟踪的是文档 ${doc.seq}`, doc);
+    if (reply.doc !== this.docIdOf(doc)) {
+      this.noteDiscarded(`收到文档 ${reply.doc} 的结果而当前跟踪的是文档 ${this.docIdOf(doc)}`, doc);
       return;
     }
     if (reply.version < doc.version) {

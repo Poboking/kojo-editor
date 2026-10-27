@@ -616,7 +616,7 @@ function queryTypeOf(facet: StructureFacet): 'captures' | 'folds' | 'indents' | 
  */
 export function createKojo2ProtocolRing(
   engine: Kojo2WorkerEngine,
-  protocol: StructureProtocolVersion = 3,
+  protocol: StructureProtocolVersion = 4,
 ): Kojo2ProtocolRing {
   /** 预热一次（`open` 与首条 parse 都等它；失败不进缓存，下一次还会再试） */
   let warmed: Promise<Kojo2RuntimeResult> | null = null;
@@ -798,7 +798,8 @@ export function createKojo2ProtocolRing(
         }
         const loaded = await warm();
         if (!loaded.ok) return failed(request.id, 'open', protocolReasonOf(loaded.reason), loaded.message);
-        return { ok: true, id: request.id, kind: 'ready', protocol, loadMs: loaded.runtime.initMs };
+        // kojo2 这条线是单引擎自有 worker（不进 LAU-5 的池）⇒ docBase 恒 0，宿主照旧从 1 起编号
+        return { ok: true, id: request.id, kind: 'ready', protocol, loadMs: loaded.runtime.initMs, docBase: 0 };
       }
       try {
         return await handleParse(request);

@@ -375,6 +375,15 @@ export const ARTIFACT_LIMITS = Object.freeze({
    *   入口侧（主题装配）与若干懒块消费，rollup 把原来内联在入口里的主题装配抽成共享块；
    *   字节量近中性（总量 11,607,464 → 11,607,543 B，+79 B），代价是启动多一条请求。
    *   入口 262,461 → **264,922 B**（角色表与三份 Monarch 的角色名替换净增，仍远低于 1,100 kB）。
+   *
+   * 2026-10-27 LAU-5 结构 worker 池批：件数 **94 不动**，总量 11.07 → **10.97 MiB**，入口 → **265,080 B**。
+   *
+   * 增量逐枚点名（同一棵树一次真实构建，`dist/assets` 93 枚 + index.html）：
+   * · **−2**：`kojo-ts.worker-*.js` / `erb-ts.worker-*.js` 两枚语言入口删除，合成一枚
+   *   `structure.worker-*.js`（126,766 B，两门语言的资源包都在这条线程里）；
+   * · **+1**：`structure-pool-*.js` **909 B**——池被 `client.ts` / `injection.ts` /
+   *   `editor-global-providers.ts` 三处消费，rollup 抽成共享块。**不进开机图**（ps10 仍 199 / 3,037）。
+   * 两枚 worker 合成一枚让总量降了约 0.1 MiB；件数一进一出恰好仍是 94（顶格），别在这里加东西。
    */
   files: 94,
 });

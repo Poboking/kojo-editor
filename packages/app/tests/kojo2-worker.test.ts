@@ -31,6 +31,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import {
   KOJO2_WORKER_BOOTSTRAP_TIMEOUT_MS,
   KOJO2_WORKER_TIMEOUT_MS,
@@ -634,7 +635,7 @@ describe('请求字段形状（协议真源 = @kojo/kojo-core 的 structure-prot
     void client.folds('folds-text', 3, 'tree-2');
     void client.indents('indents-text', 4);
     const [open, ...requests] = worker.sent as Array<Record<string, unknown>>;
-    expect(open).toMatchObject({ kind: 'open', protocol: 3, languageId: 'kojo2' });
+    expect(open).toMatchObject({ kind: 'open', protocol: STRUCTURE_PROTOCOL_VERSION, languageId: 'kojo2' });
     expect(requests).toEqual([
       { id: 2, kind: 'parse', doc: 0, version: 1, text: 'parse-text', baseTreeId: 'tree-old', want: [] },
       { id: 3, kind: 'parse', doc: 0, version: 2, text: 'caps-text', want: ['semantic'] },

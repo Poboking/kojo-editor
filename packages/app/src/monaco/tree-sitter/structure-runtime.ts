@@ -83,8 +83,13 @@ export interface InjectionSpec {
 export interface StructureLanguageRuntime {
   readonly runtimeWasmUrl: string;
   readonly grammarWasmUrl: string;
-  /** 每次调用新建一条线程（一条线程只持有一棵 CST） */
-  readonly createWorker: () => Worker;
+  /**
+   * **注入点（可选）**：自带造线程的函数（测试的假 worker / 回滚到"每语言一条线程"）。
+   *
+   * 缺省 = 走 `structure-pool.ts` 的池（LAU-5：一条线程按 `grammarWasmUrl` 承载多门语言，
+   * `Parser.init` 只付一次）。**生产运行时不再提供这一格**——池是唯一的出线程口。
+   */
+  readonly createWorker?: () => Worker;
   readonly semantic?: StructureSemanticFacet;
   readonly baseIndentPatterns?: () => BaseIndentPatterns;
   /**

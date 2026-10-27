@@ -38,6 +38,7 @@ import {
   STRUCTURE_TIMEOUT_MS,
 } from '@kojo/kojo-core';
 import type { StructureLanguageRuntime, InjectionSpec } from './structure-runtime';
+import { acquireStructureThread, type StructureThreadLease } from './structure-pool';
 import type { StructureCaptureTable, StructureParseReply, StructureRange, StructureRequest } from './protocol';
 import { isStructureReply } from './protocol';
 import { tierForCapture, type KojoStructureFold, type KojoStructureToken } from './types';
@@ -199,6 +200,12 @@ class InjectionWorkerClient {
   private openTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly runtime: StructureLanguageRuntime;
   private readonly languageId: string;
+  /** 池租约（LAU-5）：子解析线程也是从同一只池里借的 */
+  private lease: StructureThreadLease | null = null;
+  /** 这条通道的 `doc` 号段起点（`ready.docBase`）——**必须用**，否则 doc 0 会落到别人那台引擎 */
+  private docBase = 0;
+  /** 线程还能不能还回池子（fail 之后不能） */
+  private reusable = true;
 
   constructor(runtime: StructureLanguageRuntime, languageId: string) {
     this.runtime = runtime;
@@ -218,7 +225,10 @@ class InjectionWorkerClient {
     }
     let worker: InjectionWorkerLike;
     try {
-      worker = this.runtime.createWorker() as unknown as InjectionWorkerLike;
+      // LAU-5：子解析线程同样从池里借（与主文档共用一条线程时，`Parser.init` 只付一次）
+      const lease = acquireStructureThread(this.runtime);
+      this.lease = lease;
+      worker = lease.worker as unknown as InjectionWorkerLike;
     } catch (error: unknown) {
       this.fail(`子语言 worker 启动失败：${describeError(error)}`);
       return Promise.resolve(false);
@@ -275,7 +285,8 @@ class InjectionWorkerClient {
         const request: StructureRequest = {
           id,
           kind: 'parse',
-          doc: 0,
+          // 通道号段起点 + 本客户端固定序号 0：不同客户端落在不同号段，worker 据此找引擎
+          doc: this.docBase,
           version,
           text: input,
           want: ['semantic', 'folds'],
@@ -301,11 +312,10 @@ class InjectionWorkerClient {
     this.resolveReady(false);
     const worker = this.worker;
     this.worker = null;
-    try {
-      worker?.terminate();
-    } catch {
-      /* 已死线程 terminate 会抛：收账不改变结论 */
-    }
+    this.docBase = 0;
+    // LAU-5：好线程还回池子，坏线程直接杀（`terminate` 在已死线程上会抛，收账不改变结论）
+    this.lease?.release(this.reusable && worker !== null);
+    this.lease = null;
   }
 
   /* ------------------------------ 内部 ------------------------------ */
@@ -333,6 +343,7 @@ class InjectionWorkerClient {
         this.fail(`子语言 worker 认的协议是 ${data.protocol}（本宿主说 ${STRUCTURE_PROTOCOL_VERSION}）`);
         return;
       }
+      this.docBase = data.docBase;
       this.answered = true;
       this.state = 'ready';
       this.clearOpenTimer();
@@ -395,11 +406,9 @@ class InjectionWorkerClient {
     this.resolveReady(false);
     const worker = this.worker;
     this.worker = null;
-    try {
-      worker?.terminate();
-    } catch {
-      /* 同上 */
-    }
+    this.reusable = false; // 坏线程：不还池子
+    this.lease?.release(false);
+    this.lease = null;
   }
 
   private settleAll(result: ChildParseResult): void {

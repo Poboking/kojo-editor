@@ -1,6 +1,5 @@
 import { sugarEnterRulePatterns } from '@kojo/kojo-vocab/enter';
 import { KOJO_STRUCTURE_ASSETS } from './assets';
-import TsWorker from './kojo-ts.worker?worker';
 import { KOJO_STRUCTURE_LEGEND, encodeStructureTokens } from './semantic';
 import type { StructureLanguageRuntime } from './structure-runtime';
 
@@ -14,7 +13,6 @@ import type { StructureLanguageRuntime } from './structure-runtime';
 export const KOJO_STRUCTURE_RUNTIME: StructureLanguageRuntime = {
   runtimeWasmUrl: KOJO_STRUCTURE_ASSETS.runtimeWasmUrl,
   grammarWasmUrl: KOJO_STRUCTURE_ASSETS.kojoWasmUrl,
-  createWorker: () => new TsWorker(),
   semantic: {
     legend: KOJO_STRUCTURE_LEGEND,
     encode: encodeStructureTokens,

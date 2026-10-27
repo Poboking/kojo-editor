@@ -4,7 +4,7 @@
  * ## 协议真源已搬到 `@kojo/kojo-core`
  *
  * LAU-1 起，宿主 ↔ worker 的消息协议是 `packages/kojo-core/src/structure-protocol.ts`
- * 的 **v3**（`STRUCTURE_PROTOCOL_VERSION = 3`）：`open` / `parse` 两条请求、`ready` /
+ * 的 **v4**（`STRUCTURE_PROTOCOL_VERSION = 4`，LAU-5 抬号：`ready.docBase`）：`open` / `parse` 两条请求、`ready` /
  * `parse` / 失败三条回话、面（facet）合并成一条消息、失败原因是闭集。运行期闸与两张
  * 小解码器在 `./protocol.ts`。
  *

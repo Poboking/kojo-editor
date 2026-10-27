@@ -43,6 +43,14 @@ const REPO = resolve(HERE, '..');
 
 registerHooks({
   resolve(specifier, context, next) {
+    // LAU-5 起 `client.ts` 静态拉着 `structure-pool.ts`（池），后者又静态 import `?worker` 入口
+    // ——入口里是 `assets.ts` 的 `?url` / `?raw`。node 没有 Vite 后缀，合成只导出默认值的模块；
+    // 本探针注入 `createWorker`，所以那枚合成的 worker 类不会被实例化。
+    if (specifier.startsWith('.') && context.parentURL && specifier.includes('?')) {
+      const [pathPart, query] = specifier.split('?');
+      const abs = fileURLToPath(new URL(pathPart, context.parentURL));
+      return { url: `kojo-asset:${encodeURIComponent(abs)}?${query}`, shortCircuit: true };
+    }
     if (specifier.startsWith('.') && context.parentURL) {
       const base = fileURLToPath(new URL(specifier, context.parentURL));
       for (const candidate of [base.replace(/\.js$/, '.ts'), `${base}.ts`]) {
@@ -52,6 +60,24 @@ registerHooks({
       }
     }
     return next(specifier, context);
+  },
+  load(url, context, next) {
+    if (url.startsWith('kojo-asset:')) {
+      const [encoded, query] = url.slice('kojo-asset:'.length).split('?');
+      const abs = decodeURIComponent(encoded);
+      if (query === 'url') return { format: 'module', source: `export default ${JSON.stringify(abs)};`, shortCircuit: true };
+      if (query === 'raw') {
+        return { format: 'module', source: `export default ${JSON.stringify(readFileSync(abs, 'utf8'))};`, shortCircuit: true };
+      }
+      if (query === 'worker') {
+        return {
+          format: 'module',
+          source: `export default class { constructor() { throw new Error('probe：不建真线程（探针注入了桥）'); } }`,
+          shortCircuit: true,
+        };
+      }
+    }
+    return next(url, context);
   },
 });
 

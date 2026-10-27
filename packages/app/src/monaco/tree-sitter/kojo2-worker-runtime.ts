@@ -1,9 +1,11 @@
 /**
- * Kojo 2.0 结构解析 worker 的**主线程薄壳**（LAU-1：这一层只说协议 v3）。
+ * Kojo 2.0 结构解析 worker 的**主线程薄壳**（LAU-1 立协议 v3，LAU-5 抬到 v4——这条线是单引擎
+ * 自有 worker，`ready.docBase` 恒 0，不进池）。
  *
  * ## 主线程在这里只做四件事
  *
- * 1. **建线程**（`?worker` 入口是 `kojo2-ts.worker.ts`；与 v1 `kojo-ts.worker.ts` 同一条 Vite 路），
+ * 1. **建线程**（`?worker` 入口是 `kojo2-ts.worker.ts`；kojo2 这条线**不进** LAU-5 的池——
+ *    它的引擎是自有 worker 协议，与 `structure.worker.ts` 那条 v4 环不是一套），
  *    `start()` 发一条 `open{protocol:3}`；
  * 2. 发 `parse{doc,version,text|edit,baseTreeId?,want}`，按 `id` 配对回话；
  * 3. 超时（稳态 4s / 引导期 8s，**与 v1 同一档**——LAU-1 之前这里是 2s，§4.1 把两套超时并成一档）后

@@ -9,7 +9,8 @@ import { ROLE, type SemanticRole } from '../semantic-roles';
  * worker 的依赖面只有 `./engine` + `./types` + 入口资源（见 `worker-bootstrap.ts` 头注）。
  * `erb-semantic.ts` 要碰 Monaco 类型与宿主编码，不能进 worker 图；而 worker 里的引擎需要
  * 同一张表才能把 `highlights.scm` 的捕获翻成角色。所以表放在这里，两侧各取所需：
- * - worker（`erb-ts.worker.ts`）通过 `captureTier` 注入 `StructureEngineAssets`；
+ * - worker（`structure.worker.ts` 经 `StructureEngineAssets.captureTier` 注入，LAU-5 起与
+ *   `.kojo` 共用一条线程）用同一张表把捕获翻成档位；
  * - 主线程（`erb-semantic.ts`）用它算 legend、校验 token 档位。
  *
  * ## 档位选型（LAU-2：**只发角色，不再发词法 token 名**）

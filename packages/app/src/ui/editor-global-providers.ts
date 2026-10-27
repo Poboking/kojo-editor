@@ -44,6 +44,7 @@ import { makeLookup } from '@kojo/kojo-vocab/engine';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords, setErbDirectiveWords } from '../monaco/erb-language';
 import { descriptorForLanguageId, languageDescriptors } from '../monaco/language-registry';
 import { disposeInjectionClients, resetInjectionState } from '../monaco/tree-sitter/injection';
+import { closeStructurePool } from '../monaco/tree-sitter/structure-pool';
 import { installHover, type CarrierShellHint, type HoverTables } from '../monaco/kojo-hover';
 import { installErbPreprocDim } from '../monaco/erb-preproc-dim';
 import {
@@ -2300,6 +2301,8 @@ function teardownGlobalProviders(reason: string): void {
     try {
       disposeInjectionClients();
       resetInjectionState();
+      // LAU-5：池里的空闲解析线程也在这里收（provider 注册面都不在了，留着线程只占内存）
+      closeStructurePool();
     } catch (e: unknown) {
       console.warn(
         `[editor-providers] ${reason}：注入子通道收账抛错（线程可能残留）：${e instanceof Error ? e.message : String(e)}`,

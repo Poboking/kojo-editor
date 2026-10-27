@@ -1,6 +1,5 @@
 import type * as Monaco from '../entry';
 import { ERB_STRUCTURE_ASSETS } from './erb-assets';
-import ErbWorker from './erb-ts.worker?worker';
 import { erbBaseIndentPatterns } from './erb-indent';
 import { ERB_SEMANTIC_FACET } from './erb-semantic';
 import { erbStructureDiagnostics, ERB_DIAGNOSTIC_SOURCE } from './erb-diagnostics';
@@ -68,7 +67,6 @@ function applyErbStructureMarkers(
 export const ERB_STRUCTURE_RUNTIME: StructureLanguageRuntime = {
   runtimeWasmUrl: ERB_STRUCTURE_ASSETS.runtimeWasmUrl,
   grammarWasmUrl: ERB_STRUCTURE_ASSETS.erbWasmUrl,
-  createWorker: () => new ErbWorker(),
   semantic: ERB_SEMANTIC_FACET,
   // LAU-1（D4）：v3 起 worker 只回捕获的扁平投影，捕获 → 档位这一步回到宿主。
   // 这张表本来就在两侧共用（`erb-tiers.ts` 头注），现在 worker 侧不再需要它。

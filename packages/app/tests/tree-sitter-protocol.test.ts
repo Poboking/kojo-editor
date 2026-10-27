@@ -88,7 +88,8 @@ function fakeWindowTimers(): void {
 
 describe('协议表 · 契约形状与闭集', () => {
   it('版本号与两档预算就是 §4.1 的四个数（改形状必须先抬号，这条钉在字面量上）', () => {
-    expect(STRUCTURE_PROTOCOL_VERSION).toBe(3);
+    // v4（LAU-5）：`ready` 多了 `docBase`（池里多条通道各占一段 doc 号）——抬号理由见 core 文件头。
+    expect(STRUCTURE_PROTOCOL_VERSION).toBe(4);
     expect(STRUCTURE_TIMEOUT_MS).toBe(4_000);
     expect(STRUCTURE_BOOTSTRAP_TIMEOUT_MS).toBe(8_000);
     expect(STRUCTURE_MAX_CAPTURES).toBe(50_000);
@@ -109,7 +110,15 @@ describe('协议表 · 契约形状与闭集', () => {
   });
 
   it('收件闸：没有合法 id 的请求连错都回不了（形状不合 ⇒ false）', () => {
-    expect(isStructureRequest({ id: 1, kind: 'open', protocol: 3 })).toBe(true);
+    expect(
+      isStructureRequest({
+        id: 1,
+        kind: 'open',
+        protocol: STRUCTURE_PROTOCOL_VERSION,
+        runtimeWasmUrl: 'r',
+        grammarWasmUrl: 'g',
+      }),
+    ).toBe(true);
     expect(isStructureRequest({ id: 1, kind: 'parse', doc: 0, version: 1, text: 'x' })).toBe(true);
     for (const bogus of [null, {}, { kind: 'parse', doc: 0, version: 1, text: 'x' }, { id: 1, kind: 'nope' }]) {
       expect(isStructureRequest(bogus), JSON.stringify(bogus)).toBe(false);
@@ -129,8 +138,10 @@ describe('协议表 · 契约形状与闭集', () => {
   });
 
   it('回话闸：成功只认 `ready` / `parse`，捕获表的 `spans` 必须是 6 的整数倍且下标在字典内', () => {
-    const ready = { ok: true, id: 1, kind: 'ready', protocol: 3, loadMs: 1 };
+    const ready = { ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 };
     expect(isStructureReply(ready)).toBe(true);
+    // v4 的 `docBase` 是必填（缺了就不是本版 ready 的形状）
+    expect(isStructureReply({ ...ready, docBase: undefined })).toBe(false);
     const parse = (spans: number[]) => ({
       ok: true,
       id: 2,
@@ -327,13 +338,26 @@ describe('kojo2 worker 协议环 · 同一份 v3 契约的第二条腿', () => {
     return { engine, seen };
   }
 
-  const open = { id: 1, kind: 'open', protocol: 3, languageId: 'kojo2', runtimeWasmUrl: 'r', grammarWasmUrl: 'g' };
+  const open = {
+    id: 1,
+    kind: 'open',
+    protocol: STRUCTURE_PROTOCOL_VERSION,
+    languageId: 'kojo2',
+    runtimeWasmUrl: 'r',
+    grammarWasmUrl: 'g',
+  };
   const parse = (extra: Record<string, unknown> = {}) => ({ id: 2, kind: 'parse', doc: 0, version: 1, ...extra });
 
-  it('open 版本不符 ⇒ protocol-mismatch；版本对上 ⇒ ready{protocol:3}', async () => {
+  it('open 版本不符 ⇒ protocol-mismatch；版本对上 ⇒ ready{protocol,docBase:0}', async () => {
     const ring = createKojo2ProtocolRing(stubEngine().engine);
     expect(await ring.handle({ ...open, protocol: 2 })).toMatchObject({ ok: false, kind: 'open', reason: 'protocol-mismatch' });
-    expect(await ring.handle(open)).toMatchObject({ ok: true, kind: 'ready', protocol: 3, loadMs: 7 });
+    expect(await ring.handle(open)).toMatchObject({
+      ok: true,
+      kind: 'ready',
+      protocol: STRUCTURE_PROTOCOL_VERSION,
+      docBase: 0,
+      loadMs: 7,
+    });
   });
 
   it('text 与 edit 同给 / 都没给 ⇒ invalid-input（不猜哪个算数）', async () => {
@@ -550,7 +574,7 @@ describe('迟到回复丢弃 / 换轨串号（丢弃 ≠ 回落）', () => {
     unsubscribe = onStructureDegradation((d) => notices.push(`${d.capability}/${d.stage} ${d.message}`));
     client = new StructureClient({ runtime: runtime(), timeoutMs: 40, bootstrapTimeoutMs: 40 });
     client.start();
-    workers[0]!.reply({ ok: true, id: 1, kind: 'ready', protocol: 3, loadMs: 1 });
+    workers[0]!.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
   });
 
   afterEach(() => {
@@ -680,7 +704,7 @@ describe('五类异常各一条（都是可判别数据，绝不 reject）', () 
     });
     client.start();
     const worker = (client as unknown as { worker: FakeWorkerLike }).worker;
-    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: 3, loadMs: 1 });
+    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
     const model = fakeModel('甲');
     expect(await client.tokens(model)).toBeNull();
     expect(client.state, '一次超时不判死（阈值是 3）').toBe('ready');
@@ -697,7 +721,7 @@ describe('五类异常各一条（都是可判别数据，绝不 reject）', () 
     });
     client.start();
     const worker = (client as unknown as { worker: FakeWorkerLike }).worker;
-    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: 3, loadMs: 1 });
+    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
     const pending = client.tokens(fakeModel('甲')); // 在飞：等 worker 回话
     client.dispose();
     expect(await pending, '在飞请求收 null（不 reject）').toBeNull();

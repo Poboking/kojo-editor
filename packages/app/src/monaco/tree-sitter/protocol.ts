@@ -1,5 +1,5 @@
 /**
- * 协议 v3 的**运行期闸**与两张小解码器（主线程与两个 worker 共用；形状真源在
+ * 协议 v4 的**运行期闸**与两张小解码器（主线程与两个 worker 共用；形状真源在
  * `@kojo/kojo-core` 的 `structure-protocol.ts`）。
  *
  * ## 为什么闸住在这里而不是 core
@@ -116,7 +116,11 @@ export function isStructureRequest(value: unknown): value is StructureRequest {
   if (value === null || typeof value !== 'object') return false;
   const request = value as Partial<StructureRequest>;
   if (!isFiniteNumber(request.id)) return false;
-  if (request.kind === 'open') return isFiniteNumber((request as { protocol?: unknown }).protocol);
+  if (request.kind === 'open') {
+    const open = request as { protocol?: unknown; runtimeWasmUrl?: unknown; grammarWasmUrl?: unknown };
+    if (!isFiniteNumber(open.protocol)) return false;
+    return typeof open.runtimeWasmUrl === 'string' && typeof open.grammarWasmUrl === 'string';
+  }
   if (request.kind !== 'parse') return false;
   return isStructureParseRequest(request);
 }
@@ -239,8 +243,10 @@ export function isStructureReply(value: unknown): value is StructureReply {
   }
   if (reply.ok !== true) return false;
   if (reply.kind === 'ready') {
-    const ready = reply as { protocol?: unknown; loadMs?: unknown };
-    return isFiniteNumber(ready.protocol) && isFiniteNumber(ready.loadMs);
+    // v4（LAU-5）：`docBase` 是这条通道的 doc 号段起点（单引擎 worker 回 0）
+    const ready = reply as { protocol?: unknown; loadMs?: unknown; docBase?: unknown };
+    return isFiniteNumber(ready.protocol) && isFiniteNumber(ready.loadMs) &&
+      isFiniteNumber(ready.docBase) && (ready.docBase as number) >= 0;
   }
   if (reply.kind !== 'parse') return false;
   const parse = reply as Partial<StructureParseReply>;

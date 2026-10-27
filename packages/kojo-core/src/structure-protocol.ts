@@ -1,5 +1,5 @@
 /**
- * 结构解析协议 v3（LAU-1）——宿主 ↔ worker 的**唯一**契约。
+ * 结构解析协议 v4（LAU-1 立 v3，LAU-5 抬到 v4）——宿主 ↔ worker 的**唯一**契约。
  *
  * 出处：`docs/ARCH-language-unification.md` §4.1（逐字落地，改形状先改那份文档再改这里）。
  * 落点由用户 2026-10-27 裁定：`@kojo/kojo-core`（不镜像 plugin-api）。
@@ -19,10 +19,18 @@
  *    `monaco/tree-sitter/client-v2.ts`，宿主收到 `protocol-mismatch` 降级到它）；
  * 3. **内容二选一**：`text`（整篇）或 `edit`（基线 + 差集），两个都给判 `invalid-input`
  *    ——不给"哪个算数"留猜的余地。
+ *
+ * ## v3 → v4 变了什么（LAU-5）
+ *
+ * **只加一格**：`ready.docBase`（这条通道的 `doc` 号段起点）。v4 允许一条线程同时承载多门
+ * 语言的引擎（`Parser.init` 共用一次、文法按 `open.grammarWasmUrl` 懒装），`parse` 仍只带
+ * `doc` ⇒ worker 按 `docBase ≤ doc` 的最大那台引擎路由，宿主把 `doc` 写成 `docBase + 序号`。
+ * 抬号的**唯一**原因就是这一格：旧宿主不知道 docBase，会把两个客户端的 doc 撞进同一台引擎，
+ * 那是静默错解，不能靠"字段可选"糊过去（v3 的 `protocol-mismatch` 降级路照旧兜住版本偏斜）。
  */
 
 /** 协议版本：形状一变就抬号；`open` 那一步比对，不符即拒（不拿旧形状硬解） */
-export const STRUCTURE_PROTOCOL_VERSION = 3;
+export const STRUCTURE_PROTOCOL_VERSION = 4;
 
 /** 一条回复最多带回多少捕获（超了截断 + `truncated`，不静默丢） */
 export const STRUCTURE_MAX_CAPTURES = 50_000;
@@ -129,8 +137,16 @@ export interface StructureReadyReply {
   readonly id: number;
   readonly kind: 'ready';
   readonly protocol: number;
-  /** 引导期读数：`Parser.init` + `Language.load` + 查询编译 */
+  /** 引导期读数：`Parser.init` + `Language.load` + 查询编译（复用池里的线程时是 0） */
   readonly loadMs: number;
+  /**
+   * **这条通道的 `doc` 号段起点**（LAU-5 / v4 新增）。
+   *
+   * 一条线程可以同时承载多门语言的引擎（每个 `grammarWasmUrl` 一台），而 `parse` 只带 `doc`
+   * ⇒ 路由靠这一格：worker 取"`docBase ≤ doc` 的最大那台引擎"。宿主的 `doc` 号一律写成
+   * `docBase + 本客户端自己的序号`；单引擎 worker（如 kojo2 那条自有线）回 0，宿主照旧从 1 起。
+   */
+  readonly docBase: number;
 }
 
 /**

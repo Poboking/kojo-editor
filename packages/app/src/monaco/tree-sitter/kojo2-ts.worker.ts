@@ -11,7 +11,7 @@
  * 交给**零动态 import** 的 `kojo2-runtime-core.ts::createKojo2Runtime()`；
  * `kojo2-runtime.ts`（带动态装载器的主线程单例）因此不进 worker 模块图。
  *
- * 与 v1 `kojo-ts.worker.ts` 同形：入口文件短到一眼看完；主线程侧
+ * 与 v1 的入口同形（`kojo-ts.worker.ts` 已在 LAU-5 并入 `structure.worker.ts` 的池路）：入口文件短到一眼看完；主线程侧
  * `kojo2-worker-runtime.ts` 用 `?worker` 把它变成一条独立线程。
  */
 import * as WebTreeSitter from 'web-tree-sitter';

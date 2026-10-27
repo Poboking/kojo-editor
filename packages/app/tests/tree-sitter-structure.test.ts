@@ -131,7 +131,9 @@ const PARSE_OK = {
 
 describe('isStructureReply（v3）· 主线程不信来路不明的消息', () => {
   it('认得三类合法回话（ready / parse / 失败）', () => {
-    expect(isStructureReply({ ok: true, id: 1, kind: 'ready', protocol: 3, loadMs: 12 })).toBe(true);
+    expect(
+      isStructureReply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 12, docBase: 0 }),
+    ).toBe(true);
     expect(isStructureReply(PARSE_OK)).toBe(true);
     expect(
       isStructureReply({
@@ -150,12 +152,14 @@ describe('isStructureReply（v3）· 主线程不信来路不明的消息', () =
 
   it.each([
     ['null', null],
-    ['缺 id（回话配不上任何请求）', { ok: true, kind: 'ready', protocol: 3, loadMs: 1 }],
-    ['id 是 NaN', { ok: true, id: NaN, kind: 'ready', protocol: 3, loadMs: 1 }],
-    ['ok 不是布尔', { ok: 'yes', id: 1, kind: 'ready', protocol: 3, loadMs: 1 }],
-    ['未知 kind', { ok: true, id: 1, kind: 'nope', protocol: 3, loadMs: 1 }],
-    ['ready 缺 protocol', { ok: true, id: 1, kind: 'ready', loadMs: 1 }],
-    ['ready 缺 loadMs', { ok: true, id: 1, kind: 'ready', protocol: 3 }],
+    ['缺 id（回话配不上任何请求）', { ok: true, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 }],
+    ['id 是 NaN', { ok: true, id: NaN, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 }],
+    ['ok 不是布尔', { ok: 'yes', id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 }],
+    ['未知 kind', { ok: true, id: 1, kind: 'nope', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 }],
+    ['ready 缺 protocol', { ok: true, id: 1, kind: 'ready', loadMs: 1, docBase: 0 }],
+    ['ready 缺 loadMs', { ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, docBase: 0 }],
+    ['ready 缺 docBase（v4 的池要这一段号）', { ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1 }],
+    ['ready 的 docBase 是负数', { ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: -1 }],
     ['parse 缺 doc（跨文档对不上号就是废消息）', { ...PARSE_OK, doc: undefined }],
     ['parse 的 treeId 不是字符串', { ...PARSE_OK, treeId: 7 }],
     ['parse 缺 metrics', { ...PARSE_OK, metrics: undefined }],
@@ -179,8 +183,8 @@ describe('isStructureReply（v3）· 主线程不信来路不明的消息', () =
     expect(isStructureReply({ type: 'error', version: 0, stage: 'wasm', capability: 'all', message: 'x' })).toBe(false);
   });
 
-  it('版本号：v3 在 core，v2 常量留给双跑窗口的旧路', () => {
-    expect(STRUCTURE_PROTOCOL_VERSION).toBe(3);
+  it('版本号：v4 在 core（LAU-5 的 `ready.docBase`），v2 常量留给双跑窗口的旧路', () => {
+    expect(STRUCTURE_PROTOCOL_VERSION).toBe(4);
     expect(KOJO_STRUCTURE_PROTOCOL).toBe(2);
   });
 });

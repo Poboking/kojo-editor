@@ -2,7 +2,9 @@
  * LAU-6 收尾：`@原生` 注入的**子语言 worker 生命周期装配**（`disposeInjectionClients`）。
  *
  * 三条主张，各一枚用例：
- * 1. **池子本来就会复用**：同一门子语言连发两次子 parse 只建一条线程（别把"每请求一条"当既有行为）；
+ * 1. **子通道本来就会复用线程**：同一门子语言连发两次子 parse 只建一条线程（子通道单例；
+ *    LAU-5 起生产形态改由 `structure-pool.ts` 复用，本文件用注入的 `createWorker` 只量
+ *    "客户端自己的线程账"）；
  * 2. **收账后不涨**：反复「解析 → 收账」N 轮，创建数 = 终止数 = N、存活数恒 0
  *    ——这是"反复开合不涨 worker 数"的判据本体（用**假 runtime 的计数器**量，不起真 wasm 线程）；
  * 3. **生产装配点真的接了**：`disposeGlobalProviders()`（最后一个实例退场 / 注册半途回滚的
@@ -15,6 +17,7 @@
  * 清账分支（注册面零改动），桩只需"任何属性链可调用"。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import type { StructureLanguageRuntime } from '../src/monaco/tree-sitter/structure-runtime';
 
 const stub = vi.hoisted(() => {
@@ -71,7 +74,7 @@ function countingRuntime(): {
         postMessage: (message: Record<string, unknown>): void => {
           const reply =
             message.kind === 'open'
-              ? { ok: true, id: message.id, kind: 'ready', protocol: 3, loadMs: 1 }
+              ? { ok: true, id: message.id, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 }
               : message.kind === 'parse'
                 ? {
                     ok: true,
@@ -125,7 +128,7 @@ afterEach(() => {
 });
 
 describe('注入子通道 · worker 生命周期（LAU-6 收尾）', () => {
-  it('池子按子语言复用：连发两次子 parse 只建一条线程', async () => {
+  it('子通道按子语言复用：连发两次子 parse 只建一条线程', async () => {
     const counters = countingRuntime();
     await injectOnce(counters.runtime);
     await injectOnce(counters.runtime);
@@ -145,7 +148,7 @@ describe('注入子通道 · worker 生命周期（LAU-6 收尾）', () => {
     expect(counters.live).toBe(0);
   });
 
-  it('生产装配点接了：`disposeGlobalProviders()` 一跑，池子清空（下一趟必须新建）', async () => {
+  it('生产装配点接了：`disposeGlobalProviders()` 一跑，子通道账清空（下一趟必须新建）', async () => {
     const counters = countingRuntime();
     await injectOnce(counters.runtime);
     expect(counters.live).toBe(1);

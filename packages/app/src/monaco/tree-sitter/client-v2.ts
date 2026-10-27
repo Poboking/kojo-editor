@@ -25,6 +25,9 @@
  */
 
 import type * as Monaco from '../entry';
+// LAU-5 起，v1 / ERB 的旧 `?worker` 入口已删：本文件不再有"会说 v2 的线程"可借，
+// `createStructureThread()` 拿到的是 v4 线程（对 v2 消息回 `invalid-input` ⇒ 本路超时后按
+// 失败记账）。双跑窗口因此只剩"降级不会把宿主拖垮"这条价值——窗口关闭时整块删除。
 // 与既有 `editor.worker` 同一条 `?worker` 路（vite 后缀），`worker.format` 仍是默认的 iife。
 // 踩过的坑记在这里，别下一次再撞：`web-tree-sitter` 的 ESM 带两条 `ENVIRONMENT_IS_NODE`
 // 才走到的动态 import（`fs/promises` / `module`），Rollup 只看语法 ⇒ worker 产物要多一枚
@@ -36,6 +39,7 @@ import type * as Monaco from '../entry';
 // import 仍在，照样切 chunk）。
 import { applyEdit, commonEdit } from './edit';
 import { reportStructureDegradation } from './fallback';
+import { createStructureThread } from './structure-pool';
 import type { StructureLanguageRuntime } from './structure-runtime';
 import {
   KOJO_STRUCTURE_PROTOCOL,
@@ -239,7 +243,8 @@ export class StructureClientV2 {
       runtimeWasmUrl: this.runtime.runtimeWasmUrl,
     };
     try {
-      const worker = this.runtime.createWorker();
+      // LAU-5：运行时不再自带 `createWorker`（线程由池出厂）⇒ 旧路回落到池的统一入口
+      const worker = this.runtime.createWorker?.() ?? createStructureThread();
       worker.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
       worker.onerror = (event: ErrorEvent) =>
         this.fatal(`worker 线程报错：${event.message || '（无消息）'}`);

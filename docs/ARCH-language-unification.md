@@ -160,8 +160,9 @@ LAU 沿着这条既有路线走，不另起炉灶——**但 B4/B5 尚未开工*
 ## 4.1 协议 `structure-protocol.ts`
 
 ```ts
-/** 协议版本：形状一变就抬号；`open` 那一步比对，不符即拒（不拿旧形状硬解） */
-export const STRUCTURE_PROTOCOL_VERSION = 3;
+/** 协议版本：形状一变就抬号；`open` 那一步比对，不符即拒（不拿旧形状硬解）
+ *  v4（LAU-5 抬号）：只加 `ready.docBase` —— 一条线程多台引擎时的 `doc` 号段起点 */
+export const STRUCTURE_PROTOCOL_VERSION = 4;
 
 /** 一条回复最多带回多少捕获（超了截断 + `truncated`，不静默丢） */
 export const STRUCTURE_MAX_CAPTURES = 50_000;
@@ -237,8 +238,14 @@ export interface StructureReadyReply {
   readonly id: number;
   readonly kind: 'ready';
   readonly protocol: number;
-  /** 引导期读数：`Parser.init` + `Language.load` + 查询编译 */
+  /** 引导期读数：`Parser.init` + `Language.load` + 查询编译（池里复用同一台引擎时是 0） */
   readonly loadMs: number;
+  /**
+   * **这条通道的 `doc` 号段起点**（v4 / LAU-5）：第 k 台引擎 = `k × 1,000,000`；
+   * 宿主的 `doc` 一律写成 `docBase + 本客户端自己的序号`，worker 按 `docBase ≤ doc`
+   * 的最大那台路由。单引擎 worker（kojo2 自有线）恒回 0。
+   */
+  readonly docBase: number;
 }
 
 /**
@@ -1136,7 +1143,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | **LAU-3** 描述符 v2 + 封存层<br>（**与 ERB-PARITY 串行**；**✅ 2026-10-27 框架批，分支 `b/qoder/1027-lau-framework`**；本批仍认 `.kojo`，`.kojo1` 交接在 LAU-3b） | `availability` / `settingKey` / `presentSyntax`+`clearSyntax`；`services` 那格按 §4.3 的 ① 走 additive（`slotServices` 原位保留）；新增 `kojo-legacy` descriptor 与设置项；删 `tree-sitter/providers.ts:378,385` 两处 `if (ERB)`；**门开关不重认领已打开的 model** | 封存层默认关：`.kojo1` → `plaintext`；开启后四面齐全；关设置项时在编文件语言 id 不变、新开的落 `plaintext`（一条测试）；`providers.ts` 里零 `ERB_LANGUAGE_ID`；`language-parity` 取证表同批更新且全绿 | 设置项默认 false，等价于没有这一层 |
 | **LAU-3b** 扩展名交接工具<br>（**✅ 2026-10-27 同分支交付；翻转未做**） | 一键 `.kojo` → `.kojo1` 改名工具：扫描口上域 `.kojo` → 内容指纹只挑 v1 写法 → 清单先过目 → 逐文件写权限闸 + 写前备份 + 只改名不改内容；`.kojo1` 全链路认领（descriptor / 路由 `extension-kojo1` / 快速打开 / 拖放 / 引用台账 / 产物 / 迁移）；封存档首开说明。`kojo-extension-single-source` 闸扩到 `.kojo1` 字面量 | 只读域拒绝（`not-writable` 逐条回执）；备份失败不改名；清单之后正文变成 2.0 写法 ⇒ 写前再判一次并跳过；新增钉子 24 例（模型 9 / 扩展名跨面 11 / 首开 4）；`audit:language` 与开机图不回退 | 不改名即无影响（封存层默认关）；扩展名翻转仍是后续批 |
 | **LAU-4** ERB 进槽<br>（**依赖 SDK B4/B5，与 ERB-PARITY 合流**） | ERB 的 11 枚 provider 搬成插件供方（依赖 B0–B5 的槽位契约） | ERB 与 kojo2 走同一条 `ui.editor.languageService`；宿主 `monaco/` 下不再有 ERB 判据（§9-1 的终态判据在此批才成立） | 插件可卸载，回落到 `legacyBridge` |
-| **LAU-5** 单 worker 池（可选） | 一个 structure worker 池共用 `Parser.init`，语言懒 `Language.load` | 冷启动省一次 runtime 初始化 + 少两条线程；内存峰值不升。⚠ v1.0 写的"实测 15.7ms"**在本仓无出处**（`STATE.md` / `BASELINES.md` 零命中）⇒ 这批要先自己出读数，别引一个查不到的数 | 池关掉即回到"每语言一条线程" |
+| **LAU-5** 单 worker 池（可选）**✅ 2026-10-27（`b/qoder/1027-lau-roles`）** | 一个 structure worker 池共用 `Parser.init`，语言懒 `Language.load`。落法：协议抬到 **v4**（只加 `ready.docBase`；`parse` 仍只带 `doc`，worker 按 `docBase ≤ doc` 的最大那台路由）；`structure.worker.ts` 一条入口登记两门语言的资源包；`structure-pool.ts` 按 `runtimeWasmUrl` 借还线程；`client.ts` / `injection.ts` 把 `doc` 写成 `docBase + 序号`；kojo2 自有 worker 不进池（回 `docBase: 0`） | 冷启动省一次 runtime 初始化 + 少两条线程；内存峰值不升。⚠ v1.0 写的"实测 15.7ms"**在本仓无出处**（`STATE.md` / `BASELINES.md` 零命中）⇒ 这批自己出读数：`tools/structure-pool-readings.mjs`（一条线程，ERB + `.kojo`）：冷 ERB `open→ready` **96.8 ms**（`loadMs` 95.3）/ 热复用中位 **11.1 ms**（`loadMs` 0，3/3）；换语言冷启动 `loadMs` **12.8 ms**（比第一门少 **82.5 ms** 的运行时 init）；热轮次 JS 堆 17.9 → 18.3 MB（RSS 涨的是第二门文法的 native 段，不是泄漏） | 池关掉即回到"每语言一条线程"（`runtime.createWorker` 注入点仍在；`structure-pool.ts` 换回 `createWorker()` 一行） |
 | **LAU-6a** 注入探针<br>（**已交付，dev `45d18791`**） | 一份 `@原生` 语境 ×8（含 `[SKIPSTART]` 嵌套与深缩进两用例）× 五种区间取法，用 `includedRanges` 向 ERB runtime 发子 parse，读四面 | ✅ 判决 **可排**，但区间必须「整行对齐 ＋ 末行换行收口 ＋ EOF 无换行补虚拟换行」（④ 唯一全绿，③差那一口气）；坐标 40 组 0 错位 ⇒ Range 用 UTF-16 码元；顺带证清 erb wasm 与 grammar.js 同步、无重生成欠账 | 纯探针，不进产品码（`tools/inject-probe.mjs`） |
 | **LAU-6** `@原生` 注入 | descriptor 加 `injections`（`hostNode: 'native_body'`）；协议加 `includedRanges`（已在 §4.1）；宿主按声明转发子 parse；子树 tokens 区间覆盖主树 `role.raw`；`core/injection/child-failed` 进 core 闭集 | §4.6 五条 DoD 全绿（区间口径按 LAU-6a 写死：整行对齐 ＋ 末行换行 ＋ EOF 补虚拟换行）；无 `@原生` 的文件零 wasm 请求；子树失败不拖垮主树；`tools/inject-probe.mjs` 的 ④ 口径转为回归用例 | `injections` 置空即回到"整块不透明" |
 | **LAU-D1** 方言解析链<br>（**契约片 ✅ `875b05d3`＝LAU-D1a；上屏片 D1b 等 D0 落点裁决**；可与 LAU-1/2 并行） | **不新造 `dialect.ts`**（D13）：`GameAdapter` additive 加 `carriers?`；`EditorDocumentIdentity.dialect?`；`dialect-resolver`（识别链 → binding，`workspace.json` 的 `meta` 只做覆盖）；状态栏显示方言。**注意 LAU-1a 已经把三处错事实点收掉了，这批不再包含它们** | 打开 eraFL 工程，状态栏显示 `erafl`；未绑定时事实类服务返回空 + 一条 `core/dialect/unbound`，**不出现任何 eraTW 事实**；覆盖与 `detect()` 不一致 ⇒ `core/dialect/mismatch`（error）且以覆盖为准；`pnpm audit:language` ✅ | `carriers` 与 `dialect?` 都是可选格，删掉即回滚（adapter 本来就从插件取） |

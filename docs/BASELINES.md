@@ -116,3 +116,25 @@ Shift-JIS 变体由合成用例覆盖（真实语料无）。
 **首轮**查询是冷的（51–102 ms 随机器负载浮动），稳态 3.5–5.3 ms。⇒ 这两个数按区间读，别当单点预算；
 要收紧就先看机器负载与首轮/稳态之分。探针收尾会撞 web-tree-sitter 的 Zone OOM（PITFALLS
 138/209）⇒ 结论只从 stdout 取，`rc` 不作判据。
+
+## 9. 结构 worker 池读数（LAU-5，2026-10-27）
+
+探针：`tools/structure-pool-readings.mjs`（跑法 `node --experimental-transform-types tools/structure-pool-readings.mjs`）。
+一条线程（单个 `self` 作用域）登记 **ERB + `.kojo`** 两门语言，四段客户端依次借还；唯一替身是进程内桥。
+DoD 的三条各有一个判据：热复用必须回 `loadMs = 0`；热 ERB 的 `open→ready` 必须比冷启动快；
+换语言的冷启动 `loadMs` 必须小于第一门（= 运行时 init 没重付）。本机一轮（Windows / Node 24）：
+
+| 段 | `open → ready` | `ready.loadMs` | 口径 |
+|---|---|---|---|
+| 冷 ERB（线程第一次） | **96.8 ms** | 95.3 ms | 线程创建 + `Parser.init` + ERB 文法 + 三份查询 |
+| 热 ERB ×3（同一线程） | 中位 **11.1 ms**（5.6 / 11.1 / 12.4） | **0 / 0 / 0** | 引擎原地复用（池里"还了再借"） |
+| 冷 `.kojo`（同一线程，换文法） | **13.0 ms** | 12.8 ms | 只付 `Language.load` + 查询；**省下 82.5 ms 的运行时 init** |
+| 热 `.kojo` ×3 | 中位 **14.3 ms**（2.9 / 14.3 / 14.7） | **0 / 0 / 0** | 同上 |
+| 首解（`ready` → token 到手） | ERB 中位 3.8 ms / `.kojo` 0.6 ms | — | 解的是真 fixture / 真 v1 片段 |
+
+内存：热轮次 JS 堆 17.9 → 18.3 MB（+0.4 MB，判据 ≤ 8 MB）；RSS 77 → 216 MB 的涨幅全部来自
+**第二门文法的 native 段**与解析态，不是逐轮泄漏。线程数：本探针一条线程服务两门语言 / 四个客户端
+（旧形态是每个 `?worker` 入口一条）。
+
+⚠ Windows 上**一个进程装两门文法、退出必崩** `Fatal process out of memory: Zone`（PITFALLS）⇒
+探针分父/子两个进程：子进程测量并打印裁决行，父进程只看裁决、不看子进程退出码。

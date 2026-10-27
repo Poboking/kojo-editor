@@ -15,6 +15,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import type * as Monaco from '../src/monaco/entry';
 import {
   KOJO2_CAPTURE_TOKEN_TYPES,
@@ -422,8 +423,10 @@ const READY: (message: Record<string, unknown>) => unknown = (message) => ({
   ok: true,
   id: message.id,
   kind: 'ready',
-  protocol: 3,
+  protocol: STRUCTURE_PROTOCOL_VERSION,
   loadMs: 1,
+  // 子语言运行时走的是注入自己的那条线（单引擎、不进池）⇒ docBase 恒 0
+  docBase: 0,
 });
 
 describe('子 parse 转发 · 宿主只发区间、不回平移（DoD 2 / §4.6）', () => {

@@ -629,6 +629,10 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     进图是本批的**代价而非副作用**（换来的是 M3 旧 token 名 254 → 64 行、只落别名表一处）。
     //     净 +18 KB ≈ 该模块原始字节（其余文件因角色名替换反向缩了）。按本节纪律，
     //     **下一枚进图模块仍须先挪一枚出去**——欠账挂在这里。
+    //   - **LAU-5 结构 worker 池（2026-10-27）**：读数 **199 文件 / 3,037 KB 不动**，两枚闸不动。
+    //     `monaco/tree-sitter/structure-pool.ts` 与 `structure.worker.ts` 都只在懒装配链上
+    //     （`client.ts` / `injection.ts` 由语言描述符的 `structure.load()` 动态取），**不进开机图**；
+    //     `editor-global-providers.ts` 里那条 `closeStructurePool` 也在懒块里。⇒ 欠账仍是一枚。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 

@@ -196,7 +196,7 @@ describe('结构 client 装配期门控（open → ready → parse 的次序）'
   }
 
   const ready = (worker: Fake, id = 1): void =>
-    worker.reply({ ok: true, id, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 5 });
+    worker.reply({ ok: true, id, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 5, docBase: 0 });
 
   it('(a1) 装配没完成不发 parse；ready 一到补发最新全文；期间编辑只留在本地，全程零降级', async () => {
     const { client, worker } = makeClient();
@@ -311,7 +311,7 @@ describe('跨文档结果隔离（doc 序号对不上号就丢）', () => {
     const client = new StructureClient({ runtime: RUNTIME, timeoutMs, onFatal: (m) => fatalMessages.push(m) });
     client.start();
     const worker = harness.FakeWorker.instances.at(-1)!;
-    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1 });
+    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
     return { client, worker };
   }
 
@@ -410,7 +410,7 @@ describe('失败账本与面缺失（连续 3 次判死 / 缺面即停）', () =
     const client = new StructureClient({ runtime: RUNTIME, timeoutMs, bootstrapTimeoutMs: 60, onFatal: (m) => fatalMessages.push(m) });
     client.start();
     const worker = harness.FakeWorker.instances.at(-1)!;
-    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1 });
+    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
     return { client, worker };
   }
 
@@ -504,7 +504,7 @@ describe('等待票 / 正常丢弃 / 版本读点', () => {
     const client = new StructureClient({ runtime: RUNTIME, timeoutMs, onFatal: (m) => fatalMessages.push(m) });
     client.start();
     const worker = harness.FakeWorker.instances.at(-1)!;
-    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1 });
+    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
     return { client, worker };
   }
 
