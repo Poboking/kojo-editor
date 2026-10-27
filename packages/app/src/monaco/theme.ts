@@ -18,6 +18,8 @@ import {
 // 不破坏上面那条 PS-10 断链；主题数据本身（`kojo2-theme`）仍走**动态 import**（见
 // `defineMonacoThemes` 末尾）。
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
+// Synthwave '84 的关键字霓虹光：零依赖叶子（只碰 DOM），静态引它不加包体负担。
+import { installKeywordGlow, scheduleKeywordGlow } from './neon-glow';
 
 /**
  * Monaco 主题（2026-10-17 反馈 3：编辑器配色跟随主题；2026-10-27 经典编辑器色批扩到六套）。
@@ -125,7 +127,14 @@ export function applyMonacoTheme(sink: MonacoThemeSink, pref: MonacoThemePref): 
     armed = false;
     const id = pending;
     pending = null;
-    if (id !== null) sink.editor.setTheme(id);
+    if (id !== null) {
+      sink.editor.setTheme(id);
+      // Monaco 把 token 色表（`.mtk<N> { color: … }`）写进 `<head>` 正好在 setTheme 这一帧里、
+      // 同步完成 ⇒ 紧跟其后重扫一次是**唯一确定**能捞到序号的时机（早于它的任何时机都靠猜）。
+      // 改档不撤销：规则自带 `:root[data-theme='synthwave84']` 作用域，换到别档自然失效；
+      // 换回 Synthwave 时这里会重扫重写（序号表跟着重算了就跟着变）。
+      installKeywordGlow();
+    }
   };
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
   else setTimeout(run, 0); // node / 老内核：退化为宏任务，请求绝不丢
@@ -1253,4 +1262,10 @@ export function defineMonacoThemes(monaco: typeof Monaco): void {
         );
       });
   }
+
+  // Synthwave '84 的"关键字霓虹光"（仿 robb0wen/synthwave-vscode 的 Neon Dreams）。
+  // 它按**颜色**去 Monaco 生成的 `.mtk<N> { color: #fede5d }` 表里找序号，本函数跑在语言
+  // 注册时、比那张表更早 ⇒ 这里只排一次有限重试兜开机早到的情况；**真正的确定点**是
+  // `applyMonacoTheme` 里 `setTheme` 之后那一发（见该函数）。找不到就什么都不做。
+  scheduleKeywordGlow();
 }
