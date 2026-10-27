@@ -654,11 +654,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （+1 B，图内文件的注释照样算钱）。本批新增的四枚包内模块（词表 / Monarch / 语言配置 /
     //     主题声明）只在**插件懒链**上：`bootstrap.ts` 引 `@kojo/plugin-kojo-lang` 是动态边，
     //     宿主落点与 `theme.ts` 都不进本图。⇒ 欠账照旧：下一枚进图模块仍须先挪一枚出去。
+    //   - **WS-13 2a 车（资源管理器剪贴板家族，变基到含 SDK B4 的 dev 之后）**：读数
+    //     **199 文件 / 3,070 KB**——恰好压在 dev 那档（3,064）+ 本批 6 KB 上，**零新进图模块**
+    //     （文件数不动就是直接证据）。涨的逐枚按 git 现算：`ui/file-tree-ops.ts` +4,699 B
+    //     （四个菜单项 + 两枚能力位）、`ui/disk-reconcile.ts` +984 B（`dirtyNamesIn` 脏投影——
+    //     与既有 `fileOpGuardMessage` 共用同一条匹配判据，不留第二份"脏"定义）、
+    //     `ui/keybinding-specs.ts` +142 B（序表进「资源管理器」分类）= +5,825 B ≈ 该读数差；
+    //     三枚都**没新增 import**（新增 import 才会拽新文件进图）。本批三枚新模块
+    //     `file-clipboard` / `file-ops-plan` / `file-ops-exec`，连同改大的 `FileTree`（+19 KB）
+    //     与 `ProjectView`，全在 `import('./ProjectView')` 的懒边之下，一枚不进图。
+    //     闸 **3,070 → 3,080**：读数正好压在 3,070 上等于零余量，按 `c000a24b` 那次的口径
+    //     留一档给下一枚 KB 级改动（仍是读数进十）。⇒ 欠账照旧：下一枚进图模块须先挪一枚出去。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,070 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_070);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,080 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_080);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
