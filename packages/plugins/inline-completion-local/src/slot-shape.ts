@@ -42,8 +42,13 @@ export interface ErbNameSlot {
  * 不许多不许少（多一个 = 少补一截；少一个 = 吃掉后面的实参）。
  * `\r\n` 与全角 `；`／`，` 是本包补的**安全侧**：它们绝不出现在解析器认的名字里，
  * 把它们也判成结束只会让槽更短，不会让幽灵文本盖到别的记号上。
+ *
+ * ⚠ 导出名带 `_FOR_TEST` 是有意的（不是手滑）：**运行期只被本文件用**，导出只为那枚对拍闸
+ * `tests/terminator-single-source.test.ts` 能把这张表与解析器那侧逐字符比一次。不导出的话，
+ * "两处各写一遍"就只剩注释在守着；导出不带标记又会被当成公开面被别处消费。
+ * 真正的长期解（提到 `plugin-api` 共读）欠在组长的台账上，理由写在那枚测试的头注里。
  */
-const NAME_TERMINATORS: ReadonlySet<string> = new Set([
+export const NAME_TERMINATORS_FOR_TEST: ReadonlySet<string> = new Set([
   '(',
   ',',
   ' ',
@@ -86,7 +91,7 @@ function leadingAsciiWordLength(text: string): number {
 /** 从 `from` 起把名字槽读到终点（不新增"什么算名字字符"的判据：只认结束集） */
 function slotEndOf(text: string, from: number): number {
   let i = from;
-  while (i < text.length && !NAME_TERMINATORS.has(text[i]!)) i++;
+  while (i < text.length && !NAME_TERMINATORS_FOR_TEST.has(text[i]!)) i++;
   return i;
 }
 
