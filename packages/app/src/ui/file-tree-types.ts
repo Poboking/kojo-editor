@@ -48,6 +48,19 @@ export interface Props {
    */
   guardFileOp?: (paths: readonly string[]) => string | null;
   /**
+   * 搬运的脏闸（WS-13 2a 车）：给一批路径，返回其中**有未保存修改**的那些的名字。
+   *
+   * 与 `guardFileOp` 是同一份真相（宿主的 `dirtyPaths`，判据住 `disk-reconcile`），
+   * 只是投影不同：守门回答"能不能动"（一刀拒绝），这里回答"哪几份是脏的"（让作者选）。
+   * 缺省 ⇒ 搬运不做脏检查（旧消费方零改动；执行层因此也拿不到"脏"的第二份定义）。
+   */
+  dirtyOf?: (paths: readonly string[]) => string[];
+  /**
+   * 「在此文件夹中搜索」的落点（E 车留在 `search-store` 的 `openFolderSearchScope`）。
+   * 缺省 ⇒ 菜单项整项不显示（没有落地面就不摆一项点了没反应的入口）。
+   */
+  onSearchInFolder?: (dir: string) => void;
+  /**
    * 盘上操作成功后通知宿主收尾：关掉被删文件的干净标签、改写被重命名文件的标签路径。
    * 与 guardFileOp 同理落在宿主——标签列表是它的 state，树侧只报告事实（谁没了/搬去哪）。
    */

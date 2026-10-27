@@ -605,6 +605,32 @@ describe('执行层 · 三道闸', () => {
     expect(r.done).toBe(1);
   });
 
+  it('failedSources：全成了 ⇒ 空；部分没成 ⇒ 只列仍在原地的那些（宿主据此决定剪贴板留不留）', async () => {
+    fs.seedFile(`${SRC}/a.ERB`, 'A');
+    const r = await runFileOps({
+      io: fs.io(),
+      plan: planOf({ sources: [f(`${SRC}/a.ERB`), f(`${SRC}/没了.ERB`)], targetEntries: [], mode: 'move' }),
+      decision: 'keepBoth',
+      targetWritable: true,
+    });
+    expect(r.done).toBe(1);
+    expect(r.failedSources).toEqual([`${SRC}/没了.ERB`]);
+    expect(fs.hasFile(`${SRC}/a.ERB`)).toBe(false);
+    expect(fs.hasFile(`${DST}/a.ERB`)).toBe(true);
+  });
+
+  it('脏闸答"不"时 failedSources = 全部源（一项都没落地，剪贴板该整份留着）', async () => {
+    fs.seedFile(`${SRC}/a.ERB`, 'A');
+    const r = await runFileOps({
+      io: fs.io(),
+      plan: planOf({ sources: [f(`${SRC}/a.ERB`)], targetEntries: [], mode: 'move' }),
+      decision: 'keepBoth',
+      targetWritable: true,
+      dirty: { dirtyOf: () => ['a.ERB'], askDirty: () => false },
+    });
+    expect(r.failedSources).toEqual([`${SRC}/a.ERB`]);
+  });
+
   it('计划层的非法源 ⇒ 任何决定下都在回执里点名（选了"跳过"也不许它消失）', async () => {
     fs.seedFile(`${SRC}/a.ERB`, 'A');
     const r = await runFileOps({

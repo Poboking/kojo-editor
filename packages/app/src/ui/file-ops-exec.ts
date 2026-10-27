@@ -87,6 +87,12 @@ export interface FileOpsOutcome {
   readonly moved: ReadonlyArray<{ readonly from: string; readonly to: string }>;
   /** 被盖掉的落点（回执里要说清退路在哪） */
   readonly overwritten: readonly string[];
+  /**
+   * **没落地、仍在原地的源路径**（宿主据此决定剪贴板留不留）：
+   * 剪切粘贴失败的那几项还在原地，剪贴板留着它们才能重试；成了的那些必须清掉，
+   * 否则下一次粘贴会再搬一遍已经搬走的东西。
+   */
+  readonly failedSources: readonly string[];
   /** 一句人话回执（成功 N / 跳过 M / 没成 K，没成的逐条点名） */
   readonly resultText: string;
 }
@@ -282,6 +288,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
     created: [] as string[],
     moved: [] as Array<{ from: string; to: string }>,
     overwritten: [] as string[],
+    failedSources: [] as string[],
   };
   if (decided.abort) {
     return { ...empty, aborted: true, resultText: '已全部取消——一个字节都没动。' };
@@ -306,6 +313,8 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
     return {
       ...empty,
       failed,
+      // 一项都没落地 ⇒ 全部源都还在原地（剪切的那份剪贴板要留着它们才能重试）
+      failedSources: decided.runs.map((op) => op.from),
       resultText: opsResultSentence({
         mode: plan.mode,
         intent: plan.intent,
@@ -322,13 +331,24 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
   const dirtyOf = gate.dirtyOf;
   const askDirty = gate.askDirty;
   if (dirtyOf !== undefined && askDirty !== undefined) {
+    const allSources = decided.runs.map((op) => op.from);
     const moveNames = dirtyOf(decided.runs.filter((op) => op.mode === 'move').map((op) => op.from));
     if (moveNames.length > 0 && !askDirty('move', moveNames)) {
-      return { ...empty, aborted: true, resultText: '已取消：那些文件还有未保存的修改，先存一下再搬。' };
+      return {
+        ...empty,
+        aborted: true,
+        failedSources: allSources,
+        resultText: '已取消：那些文件还有未保存的修改，先存一下再搬。',
+      };
     }
     const overNames = dirtyOf(decided.runs.filter((op) => op.overwrite).map((op) => op.to));
     if (overNames.length > 0 && !askDirty('overwrite', overNames)) {
-      return { ...empty, aborted: true, resultText: '已取消：落点那份文件还有未保存的修改，先处理一下再覆盖。' };
+      return {
+        ...empty,
+        aborted: true,
+        failedSources: allSources,
+        resultText: '已取消：落点那份文件还有未保存的修改，先处理一下再覆盖。',
+      };
     }
   }
 
@@ -336,6 +356,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
   const moved: Array<{ from: string; to: string }> = [];
   const overwritten: string[] = [];
   const failed: Array<{ name: string; reason: string }> = [...decided.refused];
+  const failedSources: string[] = [];
   let done = 0;
 
   for (const op of decided.runs) {
@@ -348,6 +369,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
         if (op.overwrite && !op.isDir) overwritten.push(op.to);
       } else {
         failed.push({ name, reason: r.reason });
+        failedSources.push(op.from);
       }
       continue;
     }
@@ -358,6 +380,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
         created.push(r.to);
       } else {
         failed.push({ name, reason: r.reason });
+        failedSources.push(op.from);
       }
       continue;
     }
@@ -368,6 +391,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
       if (op.overwrite) overwritten.push(op.to);
     } else {
       failed.push({ name, reason: r.reason });
+      failedSources.push(op.from);
     }
   }
 
@@ -380,6 +404,7 @@ export async function runFileOps(input: FileOpsExecInput): Promise<FileOpsOutcom
     created,
     moved,
     overwritten,
+    failedSources,
     resultText:
       opsResultSentence({
         mode: plan.mode,

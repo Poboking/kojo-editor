@@ -164,6 +164,11 @@ const CAP_FULL: MenuCapability = {
   canHistory: true,
   canCommandPalette: true,
   canAddFolder: true,
+  // WS-13 两枚位当前按**没通道**填：分发覆盖守卫（下面那节源码扫描）要求"菜单里出现的
+  // 每一项都得在 FileTree.tsx 的分发器里有 case"——接线批（剪贴板家族上树）落地时翻成 true，
+  // 守卫随接线进网新项的中文标题与 id。
+  canMoveEntries: false,
+  canSearchInFolder: false,
 };
 
 const CAP_NONE: MenuCapability = {
@@ -175,6 +180,8 @@ const CAP_NONE: MenuCapability = {
   canHistory: false,
   canCommandPalette: false,
   canAddFolder: false,
+  canMoveEntries: false,
+  canSearchInFolder: false,
 };
 
 /** 文件树五项：作用域 × 能力 × 视图（每一项都足够让面表态） */

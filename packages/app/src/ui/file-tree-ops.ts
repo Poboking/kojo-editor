@@ -27,6 +27,17 @@ export type MenuView = 'kojo' | 'fs';
  */
 export const COMMAND_PALETTE_COMMAND = 'workbench.commandPalette';
 
+/**
+ * 搬运家族的四条命令 id（WS-13 2a 车）。
+ *
+ * 与 `COMMAND_PALETTE_COMMAND` 同一个理由收在这里：**菜单项与命令面板要用同一个字面**，
+ * 标题与键位以键位注册表为准（`keybinding-specs-commands.ts` 的懒半表），这里只是 id。
+ */
+export const EXPLORER_COPY_COMMAND = 'explorer.copyEntry';
+export const EXPLORER_CUT_COMMAND = 'explorer.cutEntry';
+export const EXPLORER_PASTE_COMMAND = 'explorer.pasteEntry';
+export const EXPLORER_DUPLICATE_COMMAND = 'explorer.duplicateEntry';
+
 /** 菜单动作 id（既有 9 个的语义一字不动，新增项一律追加在后） */
 export type MenuItemId =
   | 'open'
@@ -51,7 +62,13 @@ export type MenuItemId =
   | 'add-folder'
   | 'command-palette'
   // ---- D 批（双文件比较）----
-  | 'compare-selected';
+  | 'compare-selected'
+  // ---- WS-13 2a 车（剪贴板家族 + 按目录限定检索）----
+  | 'clip-copy'
+  | 'clip-cut'
+  | 'clip-paste'
+  | 'duplicate'
+  | 'search-in-folder';
 
 export interface MenuItemSpec {
   readonly id: MenuItemId;
@@ -101,6 +118,15 @@ export interface MenuCapability {
   canCommandPalette: boolean;
   /** 会话级附加根（「添加文件夹…」；宿主注入了 onAddFolder 才有） */
   canAddFolder: boolean;
+  /**
+   * 搬运家族（WS-13 2a 车：复制到剪贴板 / 剪切 / 粘贴 / 创建副本）。
+   *
+   * 判据 = **执行层要的三件原语都在**（独占创建 + 复制 + 重命名，都由内核 `io` 给）：
+   * 纯浏览器宿主没有 io ⇒ 四项整组不显示（灰着不说话 = 违反铁律 4）。
+   */
+  canMoveEntries: boolean;
+  /** 「在此文件夹中搜索」（E 车留在 `search-store` 的那条通道；宿主接了才有落点） */
+  canSearchInFolder: boolean;
 }
 
 /** 构建菜单时的现场（视图 / 当前文件 / 作用域自身的路径） */
@@ -119,6 +145,13 @@ export interface MenuOptions {
    * 所以"集合里每一项都是文件"这条由来源保证，本层不再逐项判种类。
    */
   readonly selection?: readonly string[];
+  /**
+   * 会话剪贴板里已有的条目数（WS-13）。
+   *
+   * **缺省 = 0** ⇒ 没有「粘贴到此」这一项：剪贴板空着时给一项灰态就是"点了没反应"。
+   * 只收数量不收路径——菜单判据不需要知道内容，而把源路径塞进 opts 会让每帧重算变成快照问题。
+   */
+  readonly clipCount?: number;
 }
 
 /** 「定位当前文件」——没有活动文件时给禁用 + 原因，而不是让用户点了没反应 */
@@ -188,6 +221,27 @@ function treeMenuItems(scope: 'group' | 'blank', cap: MenuCapability, opts: Menu
 }
 
 /**
+ * 搬运家族的四项（WS-13 2a 车；文件行与目录/包行共用同一份顺序与文案）。
+ *
+ * - **`clip-paste` 只在剪贴板非空时出现**：空剪贴板给一项灰态 = "点了没反应"（铁律 4）；
+ * - 三项动作都**带 `command`**：菜单标题与命令面板标题同一真源（`keybinding-specs-commands.ts`），
+ *   两枚 id 各写一遍是必然漂移的那种形状；
+ * - `canMoveEntries` 缺席 ⇒ 整组不出现（纯浏览器宿主没有落地面）。
+ */
+function clipItems(cap: MenuCapability, opts: MenuOptions): MenuItemSpec[] {
+  if (!cap.canMoveEntries) return [];
+  const items: MenuItemSpec[] = [
+    { id: 'clip-copy', label: '复制到剪贴板', command: EXPLORER_COPY_COMMAND, dividerBefore: true },
+    { id: 'clip-cut', label: '剪切到剪贴板', command: EXPLORER_CUT_COMMAND },
+    { id: 'duplicate', label: '创建副本', command: EXPLORER_DUPLICATE_COMMAND },
+  ];
+  if ((opts.clipCount ?? 0) > 0) {
+    items.push({ id: 'clip-paste', label: '粘贴到此', command: EXPLORER_PASTE_COMMAND });
+  }
+  return items;
+}
+
+/**
  * 「比较已选文件」的**出现判据**（纯函数，可单测）：多选集恰为两项、且被右击的这一行
  * 就在集合里 ⇒ 返回那一对（左 = 先勾的，右 = 后勾的）；否则 `null`（**整项不返回**）。
  *
@@ -215,8 +269,10 @@ export function compareSelectionPair(
  * 文件 / 目录 / 包 / 角色组 / 空白区五种作用域的菜单项清单（纯函数，可单测）。
  *
  * 顺序与分组：
- * - 文件 = 打开 | 复制文件名、复制路径、复制相对路径 [| 比较已选文件（恰选 2 个文件时）] | 显示 | 刷新、文件历史 | 重命名、删除；
- * - 目录/包 = [导入] | 新建文件、新建文件夹 | 复制文件名、复制路径 | 显示 | 刷新、折叠全部 | 重命名、删除；
+ * - 文件 = 打开 [| 复制到剪贴板、剪切、创建副本 (| 粘贴到此)] | 复制文件名、复制路径、复制相对路径
+ *   [| 比较已选文件（恰选 2 个文件时）| 在此文件夹中搜索] | 显示 | 刷新、文件历史 | 重命名、删除；
+ * - 目录/包 = [导入] | 新建文件、新建文件夹 [| 搬运家族] | 复制文件名、复制路径
+ *   [| 在此文件夹中搜索] | 显示 | 刷新、折叠全部 | 重命名、删除；
  * - 角色组 / 空白区 = 视图切换 | 添加文件夹 | 展开/折叠全部 | 定位当前文件 | 重读 [| 命令面板]。
  *
  * 每一项都有**真实落点**（FileTree 的 relistShown / applyReveal / setView / setLocateReq 或
@@ -230,12 +286,16 @@ export function menuItemsFor(
   if (scope === 'group' || scope === 'blank') return treeMenuItems(scope, cap, opts);
   if (scope === 'file') {
     const items: MenuItemSpec[] = [{ id: 'open', label: '打开', icon: 'code' }];
-    if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制文件名' });
+    items.push(...clipItems(cap, opts));
+    if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制文件名', dividerBefore: items.length > 1 });
     items.push({ id: 'copy-path', label: '复制路径' }, { id: 'copy-rel-path', label: '复制相对路径' });
     if (compareSelectionPair(opts.selection, opts.path) !== null) {
       items.push({ id: 'compare-selected', label: '比较已选文件', icon: 'files', dividerBefore: true });
     }
-    if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout', dividerBefore: true });
+    if (cap.canSearchInFolder) items.push({ id: 'search-in-folder', label: '在此文件夹中搜索', icon: 'search', dividerBefore: true });
+    // 既有口径：这一组（显示）以分隔线起头；WS-13 后组头挪给「在此文件夹中搜索」（在场时），
+    // 它缺席时 reveal 自己顶格（旧测试钉的就是 reveal.dividerBefore=true 这一格）。
+    if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout', dividerBefore: !cap.canSearchInFolder });
     if (cap.canRelist) items.push({ id: 'refresh', label: '刷新', icon: 'refresh', dividerBefore: true });
     if (cap.canHistory) items.push(historyItem(opts));
     if (cap.hasIo) {
@@ -248,8 +308,10 @@ export function menuItemsFor(
   if (cap.hasIo) {
     items.push({ id: 'new-file', label: '新建文件', dividerBefore: items.length > 0 }, { id: 'new-dir', label: '新建文件夹' });
   }
+  items.push(...clipItems(cap, opts));
   if (cap.canClipboard) items.push({ id: 'copy-name', label: '复制文件名', dividerBefore: items.length > 0 });
   items.push({ id: 'copy-path', label: '复制路径', dividerBefore: !cap.canClipboard && items.length > 0 });
+  if (cap.canSearchInFolder) items.push({ id: 'search-in-folder', label: '在此文件夹中搜索', icon: 'search' });
   if (cap.canReveal) items.push({ id: 'reveal', label: '在资源管理器中显示', icon: 'popout' });
   if (cap.canRelist) items.push({ id: 'refresh', label: '刷新', icon: 'refresh', dividerBefore: true });
   items.push({ id: 'collapse-all', label: '折叠全部', icon: 'chevron-right' });
@@ -325,6 +387,24 @@ export function relativeToRoot(path: string, root: string): string {
   if (rLower.length > 0 && lower.startsWith(`${rLower}/`)) return p.slice(r.length + 1);
   if (lower === rLower) return path;
   return path;
+}
+
+/* ------------------------------ 搬运的脏闸文案（WS-13） ------------------------------ */
+
+/**
+ * 脏闸的问句（纯函数，可单测）：`kind` 决定问的是哪一边。
+ *
+ * - `move`：源带着未保存的改动要被搬走（编辑器里的改动会跟着文件走，落点标签自动换路径，
+ *   但"跟着走"这件事作者必须知道，不能替他决定）；
+ * - `overwrite`：落点那一份在编辑器里有未保存改动，而这次要盖的是**盘上**那份。
+ *
+ * 措辞纪律：不说"脏 / model / 缓冲区"这类内部词，说"未保存的修改"。
+ */
+export function dirtyGateText(kind: 'move' | 'overwrite', names: readonly string[]): string {
+  const list = names.slice(0, 4).join('、') + (names.length > 4 ? ` 等 ${names.length} 项` : '');
+  return kind === 'move'
+    ? `这些文件还有未保存的修改：${list}。\n移走之后编辑器里的改动会跟着文件一起过去（标签的路径会换成新位置）。\n确定要继续吗？`
+    : `落点里有文件带着未保存的修改：${list}。\n这次覆盖的是**盘上**那一份（会被写进本地历史，可以从「文件历史」找回），编辑器里未保存的改动不会被写进去。\n确定要覆盖吗？`;
 }
 
 /* ------------------------------ 删除确认文案 ------------------------------ */

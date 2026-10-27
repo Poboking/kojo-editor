@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildKojoFlatTree, firstNavigable, indexOfId, lastNavigable } from '../src/ui/file-tree-flat';
 import type { Group } from '../src/ui/file-tree-types';
-import { nextNavigable, planRowClick, planTreeKey, rowIsDir, treeKeyEventOf, edgeNavigable } from '../src/ui/file-tree-keyboard';
+import { nextNavigable, planRowClick, planTreeKey, rowIsDir, treeKeyEventOf, edgeNavigable, clipTargetDirOf, rowIsClipSource } from '../src/ui/file-tree-keyboard';
 
 const group = (label: string, prefix: string, subs: Array<{ label: string | null; files: string[] }>): Group => ({
   label,
@@ -162,13 +162,57 @@ describe('planTreeKey · 不抢键（白名单）', () => {
     expect(planTreeKey(ev('x'), tree, 3)).toEqual({ type: 'noop' });
     expect(planTreeKey(ev('Tab'), tree, 3)).toEqual({ type: 'noop' });
     expect(planTreeKey(ev('PageDown'), tree, 3)).toEqual({ type: 'noop' });
-    expect(planTreeKey(ev('c', { ctrl: true }), tree, 3)).toEqual({ type: 'noop' });
+    // Ctrl+C/X/V/D 已进白名单（WS-13 剪贴板家族，见下面专节）——表外样本换成没登记的组合
+    expect(planTreeKey(ev('e', { ctrl: true }), tree, 3)).toEqual({ type: 'noop' });
+    expect(planTreeKey(ev('c', { ctrl: true, shift: true }), tree, 3)).toEqual({ type: 'noop' });
     expect(planTreeKey(ev('ArrowDown', { ctrl: true }), tree, 3)).toEqual({ type: 'noop' });
     expect(planTreeKey(ev('a', { shift: true, ctrl: true }), tree, 3)).toEqual({ type: 'noop' });
+    expect(planTreeKey(ev('1', { ctrl: true }), tree, 3)).toEqual({ type: 'noop' });
   });
 
   it('Alt 一律不碰（Alt+… 是宿主与输入法的）', () => {
     expect(planTreeKey({ key: 'ArrowDown', shift: false, ctrl: false, meta: false, alt: true }, tree, 0)).toEqual({ type: 'noop' });
+  });
+});
+
+describe('planTreeKey · 剪贴板家族（WS-13）', () => {
+  it('Ctrl/Cmd + C/X/V/D 各落到自己的动作；命令不带下标（宾语由接线侧现读多选集或焦点行）', () => {
+    expect(planTreeKey(ev('c', { ctrl: true }), tree, 3)).toEqual({ type: 'copy' });
+    expect(planTreeKey(ev('x', { ctrl: true }), tree, 3)).toEqual({ type: 'cut' });
+    expect(planTreeKey(ev('v', { ctrl: true }), tree, 3)).toEqual({ type: 'paste' });
+    expect(planTreeKey(ev('d', { ctrl: true }), tree, 3)).toEqual({ type: 'duplicate' });
+    expect(planTreeKey(ev('C', { meta: true }), tree, 3)).toEqual({ type: 'copy' });
+  });
+
+  it('剪贴板家族不抢带 Shift 的同键（Ctrl+Shift+C 留给宿主），Alt 那族也照旧不碰', () => {
+    expect(planTreeKey(ev('c', { ctrl: true, shift: true }), tree, 3)).toEqual({ type: 'noop' });
+    expect(planTreeKey(ev('v', { ctrl: true, alt: true }), tree, 3)).toEqual({ type: 'noop' });
+  });
+
+  it('没有焦点行时剪贴板动作照发（多选集与剪贴板都在模块级，宾语不依赖焦点行存在）', () => {
+    // 焦点行只决定"粘贴落点"和"没有多选时复制谁"——这些判据在接线侧现读；
+    // 键位层给的是**意图**，这里钉的是 -1 也不吞键（吞了会漂成宿主按键）。
+    expect(planTreeKey(ev('c', { ctrl: true }), tree, -1)).toEqual({ type: 'copy' });
+    expect(planTreeKey(ev('v', { ctrl: true }), tree, -1)).toEqual({ type: 'paste' });
+  });
+});
+
+describe('剪贴板家族的行种类判据（WS-13）', () => {
+  const row = (index: number) => tree.rows[index];
+
+  it('源种类 = 与 F2/Delete 同一族（文件 / 目录 / 包行）；角色组头与说明行不是"盘上的一个条目"', () => {
+    expect(rowIsClipSource(row(3))).toBe(true); // a.ERB（file）
+    expect(rowIsClipSource(row(2))).toBe(true); // 包头（package）
+    expect(rowIsClipSource(row(0))).toBe(false); // 角色组头（group）
+    expect(rowIsClipSource(row(1))).toBe(true); // 散落文件（file）
+    expect(rowIsClipSource(undefined)).toBe(false);
+  });
+
+  it('粘贴落点：文件行 = 它所在那一格；目录 / 包 / 角色组 = 它自己；说明行没有落点（null）', () => {
+    expect(clipTargetDirOf(row(3))).toBe('C:/koa/001/包A'); // a.ERB → 包目录
+    expect(clipTargetDirOf(row(2))).toBe('C:/koa/001/包A'); // 包行 = 包目录本身
+    expect(clipTargetDirOf(row(0))).toBe('C:/koa/001'); // 角色组头 = 角色目录（盘上真目录）
+    expect(clipTargetDirOf(undefined)).toBeNull();
   });
 });
 

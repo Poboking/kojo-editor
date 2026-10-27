@@ -28,6 +28,7 @@ import {
   COMMAND_PALETTE_COMMAND,
   compareSelectionPair,
   deleteConfirmText,
+  dirtyGateText,
   fsLocatePlanOfRoots,
   isUnderPath,
   joinPath,
@@ -40,6 +41,24 @@ import {
   type MenuCapability,
   type MenuItemId,
 } from './file-tree-ops';
+import {
+  CONFLICT_CHOICES,
+  buildFileOpsPlan,
+  conflictQuestion,
+  type ConflictDecision,
+  type FileOpEntry,
+  type FileOpsPlan,
+} from './file-ops-plan';
+import { runFileOps } from './file-ops-exec';
+import {
+  clearFileClipboard,
+  getFileClipMode,
+  getFileClipboard,
+  setExplorerOpsRuntime,
+  setFileClipboard,
+  type ClipEntry,
+  type ExplorerOp,
+} from './file-clipboard';
 import { baseName, buildFileGroups, dirsToRelist, kojoOwners, middleEllipsis, rowKeyOf, TREE_LABEL_MAX } from './file-tree-model';
 import { createEntryIfAbsent } from './file-tree-create';
 import { browsableRootsOf, type WorkspaceFolder } from './workspace-folders';
@@ -276,6 +295,8 @@ export function FileTree(props: Props): ReactElement {
   const onImportPackage = useLatestCallback(rest.onImportPackage);
   const onRevealInExplorer = useLatestCallback(rest.onRevealInExplorer);
   const guardFileOp = useLatestCallback(rest.guardFileOp);
+  const dirtyOf = useLatestCallback(rest.dirtyOf);
+  const onSearchInFolder = useLatestCallback(rest.onSearchInFolder);
   const onFilesGone = useLatestCallback(rest.onFilesGone);
   const onAddFolder = useLatestCallback(rest.onAddFolder);
   const onRemoveExtraRoot = useLatestCallback(rest.onRemoveExtraRoot);
@@ -290,6 +311,8 @@ export function FileTree(props: Props): ReactElement {
       onImportPackage={onImportPackage}
       onRevealInExplorer={onRevealInExplorer}
       guardFileOp={guardFileOp}
+      dirtyOf={dirtyOf}
+      onSearchInFolder={onSearchInFolder}
       onFilesGone={onFilesGone}
       onAddFolder={onAddFolder}
       onRemoveExtraRoot={onRemoveExtraRoot}
@@ -371,7 +394,7 @@ function TreeSpacer({ px }: { px: number }): ReactElement | null {
  *
  * 与外壳同一份实现，只差一件事：**不再收 `activeFile`**（见 `FileTree` 的注释）。
  */
-const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onRemoveExtraRoot, onCompareFiles, workspaceFolders, onDiskEntriesChanged }: FileTreeBodyProps): ReactElement {
+const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, listDir, walkDir, onImportPackage, io, onRevealInExplorer, guardFileOp, dirtyOf, onSearchInFolder, onFilesGone, refreshNonce, gloss, extraRoots, onAddFolder, onRemoveExtraRoot, onCompareFiles, workspaceFolders, onDiskEntriesChanged }: FileTreeBodyProps): ReactElement {
   /** 名称显示对照（缺省 = 恒等，保持旧行为；IDENTITY_GLOSS 模块级 ⇒ 引用恒定） */
   const glossOf = gloss ?? IDENTITY_GLOSS;
   const [filter, setFilter] = useState('');
@@ -1267,6 +1290,12 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    *
    * 只有**真实存在**的通道才设位：命令面板 / 文件历史看命令注册表，重列看 `listDir`，
    * 添加文件夹看宿主回调，剪贴板看 `navigator.clipboard`。
+   *
+   * 搬运家族（WS-13）的位 = **执行层的原语齐不齐**：落地要 `createFileExclusive` /
+   * `createDirExclusive` / `copyFile` / `rename` / `removeFile`（全在契约 `FileIO` 上，
+   * io 在场即齐）——纯浏览器宿主没有 io ⇒ 四项整组不显示。
+   * 「在此文件夹中搜索」看宿主的 `onSearchInFolder` 回调（落点是 `search-store` 的
+   * `openFolderSearchScope`，宿主没接就不摆一项点了没反应的入口）。
    */
   const menuCapability: MenuCapability = {
     hasIo: io !== undefined,
@@ -1277,6 +1306,8 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     canHistory: canRunContextMenuCommand(SHOW_FILE_HISTORY_COMMAND_ID),
     canCommandPalette: canRunContextMenuCommand(COMMAND_PALETTE_COMMAND),
     canAddFolder: onAddFolder !== undefined,
+    canMoveEntries: io !== undefined,
+    canSearchInFolder: onSearchInFolder !== undefined,
   };
 
   /**

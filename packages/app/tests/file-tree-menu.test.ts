@@ -38,6 +38,10 @@ const cap = (over: Partial<MenuCapability> = {}): MenuCapability => ({
   canHistory: true,
   canCommandPalette: true,
   canAddFolder: true,
+  // WS-13 两枚新位的缺省档 = **这个夹具的宿主没接那条通道**（既有各段的整屏清单因此一字不动）；
+  // 有通道那一档在「WS-13 · 搬运家族与按目录检索」专节按位真填 true 逐条钉。
+  canMoveEntries: false,
+  canSearchInFolder: false,
   ...over,
 });
 

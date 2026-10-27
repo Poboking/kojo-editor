@@ -27,6 +27,10 @@ const FULL_CAP: MenuCapability = {
   canHistory: true,
   canCommandPalette: true,
   canAddFolder: true,
+  // 搬运家族 / 按目录检索：本夹具按"没通道"填（那两族的显示判据专档在
+  // file-tree-menu.test.ts 的「WS-13 搬运家族」一节，逐条按有/无通道钉）
+  canMoveEntries: false,
+  canSearchInFolder: false,
 };
 
 /* ------------------------------ 菜单可见性 ------------------------------ */
@@ -56,6 +60,8 @@ describe('menuItemsFor · 能力缺项时整项不显示（灰着不说话 = 违
       canHistory: false,
       canCommandPalette: false,
       canAddFolder: false,
+      canMoveEntries: false,
+      canSearchInFolder: false,
     }).map((i) => i.id);
     // 「复制路径 / 复制相对路径」是既有口径：剪贴板缺席时仍保留（点下去会自己说复制不了），
     // 新增的「复制文件名」才按能力位收（它没有旧行为要保）。

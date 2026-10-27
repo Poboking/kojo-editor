@@ -18,12 +18,21 @@
  * | F2 | 重命名（走既有行内编辑链路） |
  * | Delete | 删除（走既有守门 + 回收站链路） |
  * | Ctrl / Cmd + A | 全选当前可见的树项 |
+ * | Ctrl / Cmd + C | 复制（把选中项收进剪贴板；WS-13 剪贴板家族） |
+ * | Ctrl / Cmd + X | 剪切（同上，模式记为"剪切"，落地在粘贴那一步） |
+ * | Ctrl / Cmd + V | 粘贴到当前焦点行所在目录（或包） |
+ * | Ctrl / Cmd + D | 原地创建副本 |
  *
  * **没列出来的键一律不接管**（返回 `noop` ⇒ 组件既不 preventDefault 也不 stopPropagation），
  * 这是"不抢 Monaco / 标签栏按键"那条纪律的实现方式：白名单，而不是黑名单。
+ *
+ * ⚠ `Ctrl+C/X/V` 只在这棵树的按键判据里生效（焦点不在树里就一个字都不碰）——
+ * 它们**不进宿主全局键位表**：全局认领这三枚会把编辑器与输入框里的复制粘贴全抢走
+ * （键位表里那四条 `explorer.*` 条目因此刻意不带缺省键，见 `keybinding-specs-commands.ts`）。
  */
 import type { FlatRow, FlatTree } from './file-tree-flat';
 import { isNavigable } from './file-tree-flat';
+import { parentDir } from './file-tree-ops';
 
 /** 一次按键的现场（只取判据需要的几枚修饰位） */
 export interface TreeKeyEvent {
@@ -55,6 +64,11 @@ export type TreeKeyCommand =
   | { type: 'rename'; index: number }
   | { type: 'delete'; index: number }
   | { type: 'selectAll' }
+  /** 剪贴板家族（WS-13）：没有下标——宾语是"多选集或焦点行"，由接线侧现读 */
+  | { type: 'copy' }
+  | { type: 'cut' }
+  | { type: 'paste' }
+  | { type: 'duplicate' }
   /** 不接管这一键（组件既不 preventDefault 也不 stopPropagation） */
   | { type: 'noop' };
 
@@ -113,8 +127,16 @@ export function planTreeKey(ev: TreeKeyEvent, tree: FlatTree, focusIndex: number
   const row = focusIndex >= 0 ? tree.rows[focusIndex] : undefined;
   const key = ev.key;
 
-  if ((ev.ctrl || ev.meta) && !ev.shift && (key === 'a' || key === 'A')) return { type: 'selectAll' };
-  if (ev.ctrl || ev.meta) return { type: 'noop' }; // 组合键交回宿主（Ctrl+C / Ctrl+Shift+… 都不归树管）
+  if ((ev.ctrl || ev.meta) && !ev.shift) {
+    // Ctrl/Cmd + 单字母这一族归树（白名单）：全选 + 剪贴板家族（WS-13）。
+    // 其余组合键（Ctrl+S / Ctrl+Shift+P / Ctrl+K 和弦…）一律交回宿主，见下面那行。
+    if (key === 'a' || key === 'A') return { type: 'selectAll' };
+    if (key === 'c' || key === 'C') return { type: 'copy' };
+    if (key === 'x' || key === 'X') return { type: 'cut' };
+    if (key === 'v' || key === 'V') return { type: 'paste' };
+    if (key === 'd' || key === 'D') return { type: 'duplicate' };
+  }
+  if (ev.ctrl || ev.meta) return { type: 'noop' }; // 组合键交回宿主（Ctrl+Shift+… 都不归树管）
 
   switch (key) {
     case 'ArrowDown':
@@ -178,6 +200,32 @@ export function planTreeKey(ev: TreeKeyEvent, tree: FlatTree, focusIndex: number
 export function rowIsDir(tree: FlatTree, index: number): boolean {
   const row = tree.rows[index];
   return row !== undefined && isDirRow(row);
+}
+
+/* ------------------------------ 剪贴板家族的行种类判据（WS-13） ------------------------------ */
+
+/**
+ * 这一行能不能当**搬运的源**（复制 / 剪切 / 副本）。
+ *
+ * 与 F2 / Delete 同一套行种类（`isEntryRow`）：角色组头与说明行不是"盘上的一个条目"——
+ * 组头是语义分组的标签（既有口径里它连重命名与删除都不给），说明行压根没有路径。
+ * 三种入口保持一致比"复制多给一格"更要紧：能删的东西才谈得上剪切，剪切与复制同一宾语。
+ */
+export function rowIsClipSource(row: FlatRow | undefined): boolean {
+  return row !== undefined && isEntryRow(row) && row.path !== '';
+}
+
+/**
+ * 焦点行的**粘贴落点**目录（拿不到 = null，调用侧说人话）。
+ *
+ * 口径与右键菜单一致：目录 / 作者包 = 它自己；文件 = 它所在的那一格目录；
+ * 角色组头 = 角色目录本身（它是盘上真目录，粘进去就是"粘到该角色目录下"）；
+ * 说明行没有落点。
+ */
+export function clipTargetDirOf(row: FlatRow | undefined): string | null {
+  if (row === undefined || row.path === '') return null;
+  if (row.kind === 'file' || row.kind === 'extra') return parentDir(row.path);
+  return row.path;
 }
 
 /**

@@ -53,6 +53,10 @@ const FULL: MenuCapability = {
   canHistory: true,
   canCommandPalette: true,
   canAddFolder: true,
+  // 本夹具的宿主只接了「比较」这条腿：搬运家族与按目录检索的通道都不在它的现场里
+  // （能力位口径 = 有通道才设位；那两族行为另有专档判据，见 file-tree-menu.test.ts）
+  canMoveEntries: false,
+  canSearchInFolder: false,
 };
 
 const fileMenuIds = (selection: readonly string[] | undefined, path: string | undefined): string[] =>

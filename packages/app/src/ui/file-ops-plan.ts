@@ -40,7 +40,8 @@ export type FileOpMode = 'copy' | 'move';
 
 /**
  * 意图：`paste` = 剪贴板落地（同层粘贴算非法）；`duplicate` = 原地创建副本
- * （同层是它的**本义**，故只放开第 2 条判据，其余照旧）。
+ * （同层是它的**本义**：放开"不许粘进父目录"那条，反过来要求源必须就在这一格里——
+ * 跨格的"副本"落点含义不清，与其猜不如判掉并说清）。
  */
 export type FileOpIntent = 'paste' | 'duplicate';
 
@@ -230,16 +231,23 @@ export function buildFileOpsPlan(input: FileOpsPlanInput): FileOpsPlan {
       // 撞名（副本意图下这个同名条目通常就是源自己，同样算撞名）
       const occupied = new Set<string>([...taken.keys()]);
       const alt = keepBothName(name, src.isDir, occupied);
-      const actions: ConflictAction[] = src.isDir
-        ? ['skip', 'keepBoth']
-        : ['skip', 'overwrite', 'keepBoth'];
-      const item: PlanItem = { from: src.path, name, isDir: src.isDir, to: target, status: 'conflict', actions };
-      if (alt === undefined) {
-        item.actions = actions.filter((a) => a !== 'keepBoth');
-        item.reason = `自动改名的名字（${name} 2 … ${name} ${KEEP_BOTH_LIMIT}）也全被占着，先腾出一个位置再粘贴。`;
-      } else {
-        item.renameTo = joinPath(targetDir, alt);
-      }
+      const item: PlanItem = {
+        from: src.path,
+        name,
+        isDir: src.isDir,
+        to: target,
+        status: 'conflict',
+        // 目录**不给覆盖**（整目录覆盖 = 吃掉对面那一整棵子树），见模块头
+        actions: alt === undefined
+          ? (src.isDir ? ['skip'] : ['skip', 'overwrite'])
+          : src.isDir
+            ? ['skip', 'keepBoth']
+            : ['skip', 'overwrite', 'keepBoth'],
+        ...(alt === undefined
+          ? { reason: `自动改名的名字（${name} 2 … ${name} ${KEEP_BOTH_LIMIT}）也全被占着，先腾出一个位置再粘贴。` }
+          : {}),
+        ...(alt === undefined ? {} : { renameTo: joinPath(targetDir, alt) }),
+      };
       items.push(item);
       // 本批里前面已排定的落点也占位：同一目录粘两份同名文件不该给出同一个自动改名名
       taken.set(pkey(name), { path: target, isDir: src.isDir });
@@ -274,6 +282,9 @@ function rejectReason(args: {
   }
   if (intent === 'paste' && pkey(parentDir(src.path)) === pkey(targetDir)) {
     return `「${name}」本来就在这一格里，粘贴进来等于把它搬给它自己——要同层副本请用「创建副本」。`;
+  }
+  if (intent === 'duplicate' && pkey(parentDir(src.path)) !== pkey(targetDir)) {
+    return `副本就在条目自己那一格里：「${name}」不在这一格，请只选中同一个文件夹里的条目再创建副本。`;
   }
   if (roots.length > 0) {
     if (!inRoot(roots, targetDir)) return '落点不在项目或工作区的任何一个文件夹里，不能往那里写。';

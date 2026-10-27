@@ -142,6 +142,18 @@ describe('计划层 · 非法源逐条判掉', () => {
     expect(p.mode).toBe('copy'); // 副本恒为复制，绝不把源搬走
   });
 
+  it('②c「创建副本」反过来要求源就在这一格里：不在就判掉并说清怎么选', () => {
+    const p = plan({
+      sources: [f(`${W}/elsewhere/a.ERB`)],
+      targetDir: PKG,
+      targetEntries: [],
+      mode: 'copy',
+      intent: 'duplicate',
+    });
+    expect(p.items[0]?.status).toBe('rejected');
+    expect(p.items[0]?.reason).toContain('不在这一格');
+  });
+
   it('③ 跨根：源与目标不同根 ⇒ rejected；同根照常放行', () => {
     const roots = [W, 'C:/author'];
     const p = plan({
