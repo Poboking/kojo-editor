@@ -57,7 +57,7 @@
 > **LAU-3b 解耦批（2026-10-27，同分支）已交付**：`kojo-sugar` 插件族（转译 + `ui-sugar-lift/preview/editor`）只在显式启用 kojo1 时装配（`ui/legacy-plugin-gate.ts`；缺省档连模块字节都不取，真壳双档实测 0 枚 / 4 枚 active）；ERB / kojo2 / 宿主共用的词表、词法、格式化全部迁到 `@kojo/kojo-vocab`，`kojo-sugar` 只剩 v1 转译管线与它自己的宿主面，**已整体离开开机静态图**。用户口径：kojo1 的地位就是"即将删除"，封存服务于彻底删除。
 
 | ID | 任务（落点） | 关键判据 | 状态 |
-| LAU-BLOCKED | **LAU-D1b（方言解析链上屏）已交付**（`b/qoder/1027-lau-wave1`，回执在提交信息；状态栏读到「方言 eratw」）；**LAU-1（协议 v3）车道进行中**；D0 裁定契约落点 = `@kojo/kojo-core`；LAU-4 仍与 ERB-PARITY、SDK B4/B5 同文件，须串行 | LAU-1 按 `kojo-core` 落点落地（双跑窗口 + `protocol-mismatch` 降级）；LAU-4 等 B4/B5 | LAU-D1b 已交付 · LAU-1 进行中 · 2026-10-27 |
+| LAU-BLOCKED | **LAU-1（协议 v3）已交付**（`b/qoder/1027-lau-d2a`，回执在提交信息：v3 落 `kojo-core`、双跑降级、差集 1 码元/键、ERB 首帧进 BASELINES）；**LAU-D2a/D2b 已交付**（方言事实接线 + `dialect lint` 七项；引擎词表收成单一真源，M1 6⇒5）；LAU-4 仍与 ERB-PARITY、SDK B4/B5 同文件，须串行 | LAU-4 等 B4/B5；LAU-2（角色表）/ LAU-5（单池）/ LAU-D3（XML 载体）未开工 | LAU-1 / D2 已交付 · 2026-10-27 |
 
 ## 在办 · 启动器落地（2026-10-26，组长 qoder）
 

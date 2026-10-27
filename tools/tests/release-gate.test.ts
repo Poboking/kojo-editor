@@ -1141,7 +1141,7 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
 });
 
 describe('release-gate · artifact-audit（dist 上界）', () => {
-  it('阈值常量随 LAU-3b-FLIP 批重钉：入口 1,100 kB / dist 11.0 MiB / 93 件', () => {
+  it('阈值常量随 LAU-1/D2 合流批重钉：入口 1,100 kB / dist 11.1 MiB / 95 件', () => {
     // 2026-10-26 启动器落地批：85 件 / 10.5 MiB → 90 件 / 11.0 MiB（逐块归因见
     // `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释）。这条断言是"改阈值必须留痕"的闸：
     // 抬数时先改注释说清增量来自哪里，再改这里。
@@ -1149,7 +1149,9 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
     // 改前/改后各真实构建一次，`dist/assets` 89 → 91），总量与入口不动。
     // 2026-10-27 LAU-3b-FLIP 批：92 → 93 件——增量属变基拉上的上游五笔（本支自身那次
     // 构建仍是 92 件 / assets 91 枚，入口 249,187 → 253,055 B），未拆到单一 chunk。
-    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.0 * 1024 * 1024), files: 93 });
+    // 2026-10-27 LAU-1 / D2 合流批：93 → 95 件、11.0 → 11.1 MiB——`protocol-*.js` 1.9 KB
+    // 与 `edit-*.js` 0.6 KB 两枚共享块（v3 主路 + v2 回滚路共同引用），入口不动。
+    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.1 * 1024 * 1024), files: 95 });
   });
 
   it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {
@@ -1183,14 +1185,14 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
     expect(item.tail).toContain('1250 kB ＞ 上限 1,100 kB');
   });
 
-  it('dist 总量超 11.0 MiB ⇒ FAIL（件数仍达标，只报总量一项）', async () => {
-    const files = [...baselineDistFiles(), { rel: 'assets/huge.wasm', bytes: 10 * 1024 * 1024 }];
+  it('dist 总量超上限 ⇒ FAIL（件数仍达标，只报总量一项）', async () => {
+    const files = [...baselineDistFiles(), { rel: 'assets/huge.wasm', bytes: ARTIFACT_LIMITS.distBytes }];
     const { code, report } = await runGate(['--only=artifact-audit'], greenHandlers(), { readDist: distReader(files) });
     expect(code).toBe(1);
     const item = report.items[0];
     expect(item.readings.exceeded).toEqual(['dist']);
     expect(item.readings.files).toBe(14);
-    expect(item.tail).toMatch(/dist 总量 = [\d.]+ MiB ＞ 上限 11 MiB/);
+    expect(item.tail).toMatch(/dist 总量 = [\d.]+ MiB ＞ 上限 11\.1 MiB/);
   });
 
   it('产物件数超上限 ⇒ FAIL，tail 打印实测件数与当前上界', async () => {
