@@ -346,6 +346,13 @@ export function WelcomeView({
       <div className="welcome-scroll">
         <div className="welcome-stage">
           <div className="welcome-card" role="region" aria-label="欢迎">
+            {/* 装饰层：只有 Synthwave '84 一档画（其余档 `display:none`，不生成任何绘制）。
+                形状（天幕 / 条纹落日 / 城市剪影 / 灯海）全部由 `welcome.css` 末尾那段供给，
+                色值住 `themes/synthwave84.css` 的 `--neon-*`。`aria-hidden` + 零交互，
+                读屏与焦点序都不经过它。 */}
+            <div className="welcome-neon" aria-hidden="true">
+              <span className="welcome-neon-sea" />
+            </div>
             <main className="welcome-main">
               {/* ── 首屏第 1 件：品牌头（字号档 = display，页内唯一） ── */}
               {/* 弹窗拖动由 App 的整窗 mousedown 接管（除控件/滚动条/模态外任意位置可拖），

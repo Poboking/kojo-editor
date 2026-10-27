@@ -2202,7 +2202,8 @@ function WelcomeBgRow(): ReactElement {
         欢迎页背景
         <span className="settings-hint">
           素雅 = 细点阵加一枚很淡的光晕（默认，静态层、不占动画）；极光 = 三团缓慢呼吸的光斑；
-          纯色 = 只留主题底色。只改显示、不动文件
+          纯色 = 只留主题底色。Synthwave '84 另有一套霓虹底板：素雅静置、极光缓流、纯色关掉。
+          只改显示、不动文件
         </span>
       </span>
     </div>
