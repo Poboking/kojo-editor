@@ -359,8 +359,16 @@ export const ARTIFACT_LIMITS = Object.freeze({
    *   被 `kojo2-semantic` 与 worker 侧两块共同引用 ⇒ 只能是共享块；**不在开机图上**
    *   （ps10 文件数 198 不动，KB +1 已在那边落账）。总量 11.06 MiB（上限 11.1）、
    *   入口 262,461 B（上限 1,100 kB）。
+   *
+   * 2026-10-27 LAU-6 / D3 收尾批：件数 96 → **93**（收回），总量与入口不动。
+   *
+   * `disposeInjectionClients()` 把 `tree-sitter/injection.ts` 接成
+   * `ui/editor-global-providers.ts` 的**静态**边 ⇒ `injection-*.js` 与 `protocol-*.js`
+   * 两枚共享块被并回该块（`edit-*.js` 仍在），共享边界退回 LAU-6 之前的位置。
+   * 读数 93 件（assets 92 枚 + index.html）· 11.07 MiB · 入口 `index-kC_k9a41.js`
+   * 262,461 B；开机图仍 198 / 3,018 KB（该块本就在 `ProjectView` 动态边之下）。
    */
-  files: 96,
+  files: 93,
 });
 
 const MIB = 1024 * 1024;
