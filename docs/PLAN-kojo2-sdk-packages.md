@@ -146,7 +146,7 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 | **B1** | 建 `@kojo/kojo-lang`：搬 `symbols` / `declarations` / `sourcemap-model` / `expand-view` / `constants` + 抽出 `name-chars`（约 1.9k 行，纯函数） | 宿主改为从包 import，**行为逐字不变**（既有 kojo2 测试全绿）；包内零 monaco / 零 react | ✅ 2026-10-24 |
 | **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**已接 4 项**（definition / documentSymbol / inlayHint / definition 的展开落点）——另 2 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 4/5 完成 2026-10-24（references / foldingRange 归 B3） |
 | **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽**。**第一步（B3a/B3b）已做**：`expand-compile` 搬进包、definition 真正切槽 | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | 🟡 进行中 2026-10-24 |
-| **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件。**实际落法**：判据进 `@kojo/kojo-lang`（`lexicon` / `monarch` / `language-config` / `monaco-theme` 四枚 + 角色表与三侧调色板按 §7.2 同批下沉），`@kojo/plugin-kojo-lang` 归成一枚 `MonacoLanguageSurface` 交槽，宿主只留唯一落点 `monaco/monaco-language-surface.ts` 做翻译与装配 | 主题 token 名不变（`theme-contrast` 三档门禁不破）——token 名自 LAU-2 起就是 `role.*`，三套 `kojo2-*` 与六套 `kojo-*` 铺同一批 34 档角色；**部件色（91 键）与 `wordPattern` 留宿主**（编辑器 chrome，供方只声明 `componentPalette` 侧名）；无供方 = 语言仍认领、面不存在、一条 warn | ✅ 2026-10-28（`db39b8f5` 契约 + `de757a28` 搬家与落点） |
+| **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件。**实际落法**：判据进 `@kojo/kojo-lang`（`lexicon` / `monarch` / `language-config` / `monaco-theme` 四枚 + 角色表与三侧调色板按 §7.2 同批下沉），`@kojo/plugin-kojo-lang` 归成一枚 `MonacoLanguageSurface` 交槽，宿主只留唯一落点 `monaco/monaco-language-surface.ts` 做翻译与装配 | 主题 token 名不变（`theme-contrast` 三档门禁不破）——token 名自 LAU-2 起就是 `role.*`，三套 `kojo2-*` 与六套 `kojo-*` 铺同一批 34 档角色；**部件色（91 键）与 `wordPattern` 留宿主**（编辑器 chrome，供方只声明 `componentPalette` 侧名）；无供方 = 语言仍认领、面不存在、一条 warn | ✅ 2026-10-28（`7f02ff73` 契约 + `f0be5efb` 搬家与落点，变基到 dev `e5348ba1` 后复测） |
 | **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden | |
 
 **为什么这个顺序**：B1 是纯搬（零语义变化，风险最低，先拿掉 3.2k 行）；B2 用**现成槽位**证明"插件接得上"；B3 才动契约扩出来的新面；B4 碰主题（有门禁，放后）；B5 才删宿主。
@@ -287,7 +287,7 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 | `kojo2-references` | 1390 | 同上 + 与 `project-index` 互为类型引用 | B2/B3 |
 | `kojo2-lexicon` | 98 | ~~转发 `@kojo/plugin-kojo-sugar` 的中文运算符表。**库依赖插件**是反向分层~~——**B4 已搬走**：那张表的法定真源在 LAU-3b 解耦批就落进了 `@kojo/kojo-vocab/keywords`（**库，不是插件**），所以 `@kojo/kojo-lang → @kojo/kojo-vocab` 是同层边，包 purity 白名单据此从"只有 core"扩到两枚并写明理由。剩下的**真欠账**：正解仍是让 core 的表达式层自持该表，届时删掉这一行 import 与白名单那一格 | 单独一批（迁运算符表进 core） |
 
-这三块加起来 2,165 行，是 B1 之后宿主里最厚的语言面残留。
+这三块原本加起来 2,165 行，是 B1 之后宿主里最厚的语言面残留——B4 已搬走 `kojo2-lexicon`（98 行），余下 **2,067 行**（`project-index` + `kojo2-references`，两枚互为类型引用、都卡在 cutover 开关上）仍归 B2/B3。
 
 ---
 
