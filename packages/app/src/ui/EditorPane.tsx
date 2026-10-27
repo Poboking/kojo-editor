@@ -11,6 +11,8 @@ import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
 import { registerBuiltinLanguageSurfaces } from '../monaco/languages';
+// LAU-3：封存层关着时，属于它的文件连语义分析都不跑（判据住在注册表，见 `isLanguageGatedForPath`）
+import { isLanguageGatedForPath } from '../monaco/language-registry';
 import { KOJO_LANGUAGE_ID, decorationsToMarkers } from '../monaco/kojo-language';
 import { applyMonacoTheme } from '../monaco/theme';
 import { useThemePref } from './theme-pref';
@@ -971,10 +973,30 @@ export function EditorPane({
       // 照常发布空档会把 2.0 已上账的问题与波浪线整档抹掉 ⇒ 这一档让路。
       // flag 关 / 非 2.0 文件 ⇒ 恒 false，下面逐字不变。
       if (kojo2OwnsDiagnostics(path)) return;
+      // 封存层（kojo1）关着时，**属于它、且还没被认领**的文件连分析都不跑（LAU-3 /
+      // 2026-10-27 口径：封存 = 整门语言不在场，不是"换个语言 id 了事"）。这里原先只换了
+      // 语言 id，屏上于是留下"纯文本 + v1 红波浪线"的自相矛盾（真壳体感实测抓到的就是这一条）。
+      // 第三格传当前语言 = §4.4 的那条例外：已认领的 model 保持原样（含波浪线），
+      // 与设置页"已打开的标签保持原样"同一句承诺。
+      // 丢弃路径 = 取消在途结果；已上屏的那一档当场撤走（波浪线 + 问题面板两处）。
+      if (isLanguageGatedForPath(path, model.getLanguageId())) {
+        markerRunner.dropPath(path);
+        monaco.editor.setModelMarkers(model, MARKER_OWNER, []);
+        setProblems(path, []);
+        return;
+      }
       markerRunner.refresh(path, () => (model.isDisposed() ? '' : model.getValue()));
     },
     [markerRunner],
   );
+
+  // 封存门槛翻转（设置页改档）⇒ 已打开的每一份文件重判一次：
+  // 封上时撤走旧装饰器的波浪线，解开时把分析请回来。只碰打开着的 model（别的没有 model 可挂）。
+  useEffect(() => {
+    for (const [path, entry] of [...entriesRef.current]) {
+      if (refreshMarkersRef.current) refreshMarkersRef.current(entry.model, path);
+    }
+  }, [legacySyntaxOn]);
 
   // ref 化刷新函数，供只注册一次的 Monaco 回调取用最新闭包
   useEffect(() => {

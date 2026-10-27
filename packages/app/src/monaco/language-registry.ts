@@ -249,6 +249,30 @@ export function languageDescriptors(): readonly LanguageDescriptor[] {
   return descriptors;
 }
 
+/**
+ * 这份路径命中一门**已登记、但此刻不可用**的语言（例：`2.0-default` 档下的 `.kojo`）。
+ *
+ * 与 {@link descriptorForPath} 的区别：那一枚答"该挂哪门语言"（封存 ⇒ `plaintext`），
+ * 这一枚答"它本来属于一门被封掉的语言吗"。宿主拿它停掉该文件的**语义分析面**
+ * （旧装饰器的波浪线 / 问题面板）——只换语言 id 不够：屏上会留下"纯文本 + v1 红波浪线"
+ * 这种自相矛盾（真壳体感实测抓到的正是这一条）。
+ *
+ * **已认领的 model 例外**（与 {@link keepClaimedLanguageWhenGated} 同一条 §4.4 口径）：
+ * 传进来的 `claimedLanguageId` 就是这门被封语言的 id ⇒ 返回 `false`（分析照跑）。
+ * 否则改档那一刻，在编文件的波浪线会被当场抽走，与设置页"已打开的标签保持原样"
+ * 的承诺打架。新开的文件（`claimedLanguageId` 缺省 = 还没认领）才落 `true`。
+ *
+ * 判据与认领同序（注册序首次命中、判据不重叠），不另造一张表。
+ */
+export function isLanguageGatedForPath(filePath: string, claimedLanguageId?: string): boolean {
+  for (const descriptor of descriptors) {
+    if (!descriptor.matchesPath(filePath)) continue;
+    if (isAvailable(descriptor)) return false;
+    return claimedLanguageId === undefined || claimedLanguageId !== descriptor.id;
+  }
+  return false;
+}
+
 /** 此刻**可被认领**的 descriptor（选择器 / 语言菜单读这一份，不读全表） */
 export function availableLanguageDescriptors(): readonly LanguageDescriptor[] {
   return descriptors.filter((descriptor) => isAvailable(descriptor));
