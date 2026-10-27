@@ -8,7 +8,7 @@ import type {
 } from '@kojo/plugin-api';
 import {errorText,  EDITOR_SEMANTIC_TOKEN_MODIFIERS, EDITOR_SEMANTIC_TOKEN_TYPES } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
-import { LARGE_FILE_LINES } from '../ui/editor-options';
+import { HUGE_FILE_LINES } from '../ui/editor-options';
 
 /**
  * 结构化着色的**宿主接线**（B6，2026-10-16 结构化着色批）。
@@ -265,17 +265,10 @@ export function encodeSemanticTokens(spans: readonly EditorSemanticTokenSpan[]):
   return written === sorted.length ? data : data.slice(0, written * 5);
 }
 
-/**
- * 一次整篇着色的全部代价（三条贡献方各一遍单遍扫描 + 排序 + 编码）都压在
- * **主线程的输入路径**上，所以大文件这一档必须有明确判据，而不是"应该不快但凑合"。
- *
- * 阈值**直接引用** `editor-options.ts` 的 `LARGE_FILE_LINES`（5,000），本模块不再自己
- * 写一遍 5000：那条线上已经为 52,602 行那个文件关掉了粘性滚动、括号对着色与整篇找
- * 同词——语义着色是同一族"全文级"开销，该在同一个档位上同开同关。两处各写一个数字
- * 早晚分叉（调那档的人不会想起这里），所以只留一处。
- * 读数（合成同体量 + 真语料最大单文件）见 `tests/semantic-tokens.perf.test.ts`。
- */
-export const SEMANTIC_TOKEN_MAX_LINES = LARGE_FILE_LINES;
+/** 一次整篇着色 = 三条贡献方各一遍单遍扫描 + 排序 + 编码，全压在**主线程**上。
+ *  阈值 2026-10-28 从 5,000（照 Monaco 全文特性抄）抬到 50,000：本供方只是一趟线性扫描，
+ *  24,197 行实测 43.9 ms；169,247 行那份 435 ms + 16.8 万 span 仍留在闸外。 */
+export const SEMANTIC_TOKEN_MAX_LINES = HUGE_FILE_LINES;
 
 /** 该不该为这份文档算着色（**纯函数**，与 Monaco 无关） */
 export function shouldComputeSemanticTokens(lineCount: number): boolean {

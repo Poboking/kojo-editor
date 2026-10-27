@@ -59,6 +59,12 @@ function normalizeEol(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
+/** 归一化换行后**切一次行**（`visibleCodeLines` / `parseErbText` 共用）：24,197 行实测 2.6 ms，
+ *  贵的是每多一家消费方就多一遍整篇遍历（16.8 ms/遍） */
+export function splitErbLines(text: string): readonly string[] {
+  return normalizeEol(text).split('\n');
+}
+
 /**
  * 一行的"代码视野"：字符串内容与引号外的 `;` 注释尾巴**等长刷白**。
  * 等长是为了保住列坐标（引用点要能回指原文位置）；PRINT 字符串里的 `;` 不当注释
@@ -284,7 +290,11 @@ export interface VisibleCodeLine {
  * 三处各写一遍就是第二判据，漂移的表现是"引用面板说没有、波浪线却红"（反之亦然）。
  */
 export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
-  const lines = normalizeEol(text).split('\n');
+  yield* visibleCodeLinesOf(splitErbLines(text));
+}
+
+/** 同一判据在**已切好的行数组**上跑（{@link splitErbLines} 的产物；判据一字未动） */
+function* visibleCodeLinesOf(lines: readonly string[]): Generator<VisibleCodeLine> {
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
@@ -335,6 +345,11 @@ export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
       keywordEnd,
     };
   }
+}
+
+/** 摊平一份可见行给**多消费者共用**（同一份数组可反复迭代；只在该轮里活着，不跨轮缓存） */
+export function visibleCodeLineList(lines: readonly string[]): VisibleCodeLine[] {
+  return [...visibleCodeLinesOf(lines)];
 }
 
 /** 归一化快路径：无小写拉丁（半/全角）就不分配 toUpperCase 副本（412 万行的热路径）。 */

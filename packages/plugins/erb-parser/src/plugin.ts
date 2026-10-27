@@ -48,7 +48,7 @@ import { checkStructure } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
-import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, type FileRefs } from './references';
+import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
@@ -225,7 +225,7 @@ export interface ErbSemanticDiagnosticsOptions {
   /** 覆盖实参目录（测试注入；缺省由索引的 `arityParamsOf` 构造） */
   readonly arityCatalog?: ArityCatalog;
   /** 追加给未定义名的已知名集（适配器接入前留的 additive 口） */
-  readonly undefinedNames?: Omit<UndefinedNameDiagnosticsInput, 'text' | 'path'>;
+  readonly undefinedNames?: Omit<UndefinedNameDiagnosticsInput, 'text' | 'path' | 'lines' | 'visible'>;
 }
 
 export interface ErbSemanticDiagnosticsResult {
@@ -310,6 +310,10 @@ export function collectErbSemanticDiagnostics(
 ): ErbSemanticDiagnosticsResult {
   if (!isDialect(file.path) || file.text.length === 0) return { decorations: [], failedRules: [] };
 
+  // 四家消费方共用一份扫描产物：切行一次、可见行摊平一次（此前各家各扫一遍，24k 行 16.8 ms/遍）
+  const lines = splitErbLines(file.text);
+  const visible = visibleCodeLineList(lines);
+
   const decorations: LineDecoration[] = [];
   const failedRules: ErbDiagnosticsRuleFailure[] = [];
 
@@ -317,7 +321,7 @@ export function collectErbSemanticDiagnostics(
     options.arityCatalog ?? (index === null ? null : (normalizedName: string) => arityParamsOf(index, normalizedName));
   if (catalog !== null) {
     try {
-      for (const d of collectArityDiagnostics({ path: file.path, text: file.text, catalog })) {
+      for (const d of collectArityDiagnostics({ path: file.path, text: file.text, catalog, visible })) {
         // 少给（含省略可选）是 Emuera 的合法写法，见接线注①——只留"多给"
         if (!d.message.includes(ARITY_EXTRA_ARG_MARKER)) continue;
         decorations.push({ ...d, severity: 'warning' });
@@ -334,6 +338,8 @@ export function collectErbSemanticDiagnostics(
         ...collectUndefinedNameDiagnostics({
           text: file.text,
           path: file.path,
+          lines,
+          visible,
           dimNames: declared.dims,
           stringNames: declared.strings,
           ...options.undefinedNames,
@@ -359,6 +365,7 @@ export function collectErbSemanticDiagnostics(
       ...collectBuiltinArgDiagnostics({
         path: file.path,
         text: file.text,
+        visible,
         ...(index === null ? {} : { isUserFunction: (upper: string) => index.byName.has(upper) }),
       }),
     );

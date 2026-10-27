@@ -25,7 +25,7 @@ import {
   normalizeSemanticSpans,
   shouldComputeSemanticTokens,
 } from '../src/monaco/kojo-semantic-tokens';
-import { LARGE_FILE_LINES } from '../src/ui/editor-options';
+import { HUGE_FILE_LINES } from '../src/ui/editor-options';
 
 interface Latency {
   readonly median: number;
@@ -108,10 +108,15 @@ describe('B6 着色代价 · 宿主合并/夹取/编码（合成 span，无 IO�
     });
   }
 
-  it('降级闸按 `LARGE_FILE_LINES` 同档生效：真语料最大单文件一次调用都不发', () => {
-    expect(SEMANTIC_TOKEN_MAX_LINES).toBe(LARGE_FILE_LINES); // 单一真源：档位只有一个数
-    expect(shouldComputeSemanticTokens(52_602)).toBe(false); // 语料最大单文件
-    expect(shouldComputeSemanticTokens(20_000)).toBe(false);
-    expect(shouldComputeSemanticTokens(LARGE_FILE_LINES)).toBe(true);
+  it('降级闸按 `HUGE_FILE_LINES` 同档生效：large 档整档照算，huge 档让位', () => {
+    // 2026-10-28：5,000（`LARGE_FILE_LINES`）→ 50,000（`HUGE_FILE_LINES`）。
+    // 旧线是照 Monaco 内部全文特性抄的，而本供方是一趟线性扫描（24,197 行实测 43.9 ms）；
+    // 169,247 行那份 435 ms + 16.8 万 span，仍留在闸外。依据见常量注。
+    expect(SEMANTIC_TOKEN_MAX_LINES).toBe(HUGE_FILE_LINES); // 单一真源：档位只有一个数
+    expect(shouldComputeSemanticTokens(20_000)).toBe(true); // large 档不再让位
+    expect(shouldComputeSemanticTokens(52_602)).toBe(true); // 旧读数里那份"语料最大单文件"
+    expect(shouldComputeSemanticTokens(HUGE_FILE_LINES)).toBe(true); // "≥ 即降"只在越界才降
+    expect(shouldComputeSemanticTokens(HUGE_FILE_LINES + 1)).toBe(false);
+    expect(shouldComputeSemanticTokens(169_247)).toBe(false);
   });
 });

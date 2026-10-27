@@ -1,7 +1,7 @@
 import type { EditorSemanticTokenSpan, ErbFile, ErbFunction, ErbIndex } from '@kojo/plugin-api';
 import { locateIdentifier, modelLineAt, splitModelLines } from '@kojo/plugin-api';
 import { parseErbText } from './scanner';
-import { scanFileRefs } from './references';
+import { scanFileRefs, splitErbLines } from './references';
 
 /**
  * ERB 结构化着色（B6，2026-10-16 结构化着色批）。
@@ -123,17 +123,13 @@ function referenceSpans(text: string, index: ErbIndex): EditorSemanticTokenSpan[
   return out;
 }
 
-/**
- * 整篇 ERB 缓冲区 → 结构化着色 span（**纯函数**：文本 + 可空索引进，数据出；不读盘）。
- *
- * 产出序 = 声明 → 形参 → 声明名 → 引用；宿主负责排序、去重、夹取与 delta 编码。
- * 空文本进空数组出（`{spans: []}` = 认这个文件但没东西可画，不是"不认"）。
- */
+/** 整篇 ERB 缓冲区 → 结构化着色 span（**纯函数**；产出序 = 声明 → 形参 → 声明名 → 引用）。
+ *  拼接不许用 `push(...arr)`：169k 行那份 span 数超 V8 实参上限，会 `RangeError` 爆栈 */
 export function erbSemanticTokens(text: string, index: ErbIndex | null): EditorSemanticTokenSpan[] {
   if (text.length === 0) return [];
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  const file = parseErbText(text);
+  const lines = splitErbLines(text);
+  const file = parseErbText(text, '<semantic-tokens>', lines);
   const out = [...definitionSpans(file, lines), ...dimSpans(file, lines)];
-  if (index) out.push(...referenceSpans(text, index));
+  if (index) for (const s of referenceSpans(text, index)) out.push(s);
   return out;
 }

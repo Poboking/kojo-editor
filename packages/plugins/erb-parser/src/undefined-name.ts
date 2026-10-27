@@ -50,7 +50,7 @@
 import type { LineDecoration } from '@kojo/plugin-api';
 import { isErbDialectPath, MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 import { DEFAULT_MAX_EDIT_DISTANCE, DEFAULT_MAX_SUGGESTIONS, suggestNames } from './did-you-mean';
-import { visibleCodeLines } from './references';
+import { splitErbLines, visibleCodeLines, type VisibleCodeLine } from './references';
 import { parseErbText } from './scanner';
 
 /** 诊断码（问题面板 / 工具提示分组；与同批 `ERB_ARITY_MISMATCH` 同一稳定标识口径） */
@@ -82,6 +82,9 @@ export interface UndefinedNameDiagnostic extends LineDecoration {
 export interface UndefinedNameDiagnosticsInput {
   /** 文件文本（`.erb` / `.erm` / `.erh`；不传 `path` 时按方言文本处理） */
   readonly text: string;
+  /** 共用扫描产物：`lines` = `splitErbLines` 产物（本模块一轮读三趟全文）；`visible` = `visibleCodeLineList` 产物（两趟共用） */
+  readonly lines?: readonly string[];
+  readonly visible?: readonly VisibleCodeLine[];
   /**
    * 文件路径（可选）。给了就按 `isErbDialectPath` 做方言门——`.kojo` 等非方言
    * 一律零诊断（语法诊断另有糖线）。不传 = 调用方已自行把门。
@@ -522,7 +525,12 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
   if (text.length === 0) return [];
   if (input.path !== undefined && !isErbDialectPath(input.path)) return [];
 
-  const parsed = parseErbText(text, '<undefined-name>');
+  // 全文的三趟读取共用一份产物（语义诊断那一轮四家消费方都走这条）：
+  // 行数组一次切好，可见行摊平后**赋值目标趟与主扫描趟重复迭代同一份数组**。
+  const rawLines = input.lines ?? splitErbLines(text);
+  const visible = input.visible ?? [...visibleCodeLines(text)];
+
+  const parsed = parseErbText(text, '<undefined-name>', rawLines);
 
   // ---- 文件级已知名（#DIM + 四类外部名录）----
   const baseDisplay = new Map<string, string>();
@@ -550,7 +558,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
   }
 
   // ---- FOR 循环变量：语法声明位（真实语料大量 `FOR p, …` 而不写 #DIM）----
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of rawLines) {
     const head = FOR_HEAD_RE.exec(raw);
     if (head?.[1] === undefined) continue;
     const name = declaredBaseName(head[1]);
@@ -561,7 +569,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
 
   // ---- 赋值目标：Emuera 允许隐式变量，写位置就是声明位（语料大量 `A = 0`）----
   // 只对**读**位置报告；写位置一律并入已知集（否则真实语料会成片误报）。
-  for (const lineInfo of visibleCodeLines(text)) {
+  for (const lineInfo of visible) {
     if (lineInfo.isDefinition) continue;
     const raw = lineInfo.raw;
     if (!raw.includes('=')) continue;
@@ -620,7 +628,7 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
   const functions = parsed.functions;
   let fnIndex = 0;
 
-  for (const lineInfo of visibleCodeLines(text)) {
+  for (const lineInfo of visible) {
     if (lineInfo.isDefinition) continue;
 
     // 当前行所属函数（形参作用域）；函数区间由 parseErbText 收紧，互不重叠
