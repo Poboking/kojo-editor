@@ -86,6 +86,22 @@ describe('perf-probe · 逐源码文件的帧耗时归因', () => {
     expect(out[0]).toMatchObject({ durationMs: 150, scriptMs: 120, renderMs: 30 });
     expect(out[0]!.sources).toEqual(['b.tsx', 'c.tsx']);
   });
+
+  it('规范形态 scripts（复数）也归因——真页面只给复数，旧拼写仍认（2026-10-27 批 4）', () => {
+    // 实测坑：早期两处读的是单数 `script`，真条目带的是 `scripts` ⇒ 真页面里 scriptMs 恒 0、
+    // 每条长帧都被折进 (render) 桶，报告看不出"哪个文件在吃帧"。
+    const canonical: LongFrameLike = {
+      startTime: 1,
+      duration: 200,
+      scripts: [{ sourceURL: 'http://127.0.0.1:4173/src/ui/FileTree.tsx?t=9', duration: 150 }],
+    };
+    expect(aggregateBySource([canonical])).toEqual([{ source: 'FileTree.tsx', scriptMs: 150, frames: 1 }]);
+    const reading = longFrameReadings([canonical], 1)[0]!;
+    expect(reading).toMatchObject({ durationMs: 200, scriptMs: 150, renderMs: 50 });
+    expect(reading.sources).toEqual(['FileTree.tsx']);
+    // 旧拼写不回归
+    expect(longFrameReadings([frame(80, [['a.tsx', 60]])], 1)[0]!.scriptMs).toBe(60);
+  });
 });
 
 describe('perf-probe · 报告拼装与摘要', () => {

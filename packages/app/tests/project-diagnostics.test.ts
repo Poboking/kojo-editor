@@ -200,7 +200,7 @@ describe('createProjectScanner · 正常一轮', () => {
     expect(h.scanner.isRunning()).toBe(false);
   });
 
-  it('分批之间让路：一批一次，几批几次（6 个文件 / 每批 2 ⇒ 3 次）', async () => {
+  it('让路粒度 = 单个文件：6 个文件 / 每批 2 ⇒ 6 次（批不再是对外的让路单位）', async () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 6; i++) files[`${ROOT}/001/F${i}.ERB`] = 'bad';
     let yields = 0;
@@ -213,7 +213,9 @@ describe('createProjectScanner · 正常一轮', () => {
       },
     });
     await h.scanner.run();
-    expect(yields).toBe(3);
+    // P0-2 批 4：旧口径「一批一次」= 3 次，但一批 16 个文件在真壳实测是一条 580ms 长任务，
+    // 所以让路点下沉到**每一项**——总数跟着文件数走（不是批数）
+    expect(yields).toBe(6);
   });
 });
 

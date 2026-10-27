@@ -68,8 +68,22 @@ export type ScanContributor = Pick<EditorDecoratorContribution, 'id' | 'decorate
 
 /** 一轮最多办几个文件（0 = 不限） */
 export const SCAN_MAX_FILES_PER_RUN = 400;
-/** 两批之间让路一次的粒度 */
+/** 分批键的粒度（同一批"围着出结论"：中途取消也留下一段完整的分组） */
 export const SCAN_BATCH_SIZE = 16;
+/**
+ * 让路粒度：**每办几个文件让一次路**（P0-2 批 4）。
+ *
+ * 旧口径是「一批（16 个文件）让一次」——那是 2026-10-20 写这一格时的假设：一次 `decorate`
+ * 只需几毫秒。冷开实测（真壳 400 文件、页内四路探针、**不开 tracing**）把它推翻了：
+ * 一个文件的整档诊断 ≈ 22ms（`expressionSites` 4.7ms + `visibleCodeLines` 3.5ms +
+ * `collectUndefinedNameDiagnostics` 2.7ms + did-you-mean 那族 3.7ms，逐项自时间读数见
+ * `2026-10-27-p0-2-batch4-findings.md` §3），16 个一批 = 一条 **580ms 长任务**——
+ * 用户点完「打开文件夹」看到的那两下卡顿里，一下就是它（另一下是索引帧本身）。
+ *
+ * 让路粒度改成 1（单个文件）：最坏任务从「一批」降到「一个文件」，而总工时一字不变。
+ * 判据是 §3.4「perf 窗口内无 >500ms 长任务」，把粒度钉在**项**上才有余量。
+ */
+export const SCAN_YIELD_EVERY_FILES = 1;
 /** 点名给作者看的错误条数上限（其余折成数字，不把 tooltip 写成日志） */
 export const SCAN_ERROR_SAMPLE = 5;
 
@@ -431,11 +445,15 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
       const project = deps.project();
       for (const batch of batches) {
         if (stale()) return quit('cancelled');
-        const yielder = deps.yieldBetween?.() ?? Promise.resolve();
-        await yielder;
-        if (stale()) return quit('cancelled');
-        for (const path of batch.paths) {
+        for (let i = 0; i < batch.paths.length; i++) {
           if (stale()) return quit('cancelled');
+          // 让路点放在**读盘之前**：于是「上一项收尾」与「本项开工」之间必然有一次宏任务
+          // 边界（粒度见 `SCAN_YIELD_EVERY_FILES` 头注——旧口径是每批一次，一批 580ms）
+          if (i % SCAN_YIELD_EVERY_FILES === 0) {
+            await (deps.yieldBetween?.() ?? Promise.resolve());
+            if (stale()) return quit('cancelled');
+          }
+          const path = batch.paths[i]!;
           let text: string;
           try {
             text = await deps.readFile(path);

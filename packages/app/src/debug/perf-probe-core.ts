@@ -136,9 +136,26 @@ export function sourceName(url: string): string {
 export interface LongFrameLike {
   startTime: number;
   duration: number;
+  /** 规范字段名（`PerformanceLongAnimationFrameTiming.scripts`） */
+  scripts?: { duration?: number; sourceURL?: string }[];
+  /** 旧拼写（早期夹具用过单数；保留兼容，见 `scriptsOf`） */
   script?: { duration?: number; sourceURL?: string }[];
   renderStart?: number;
   styleAndLayoutStart?: number;
+}
+
+/**
+ * 取一条长帧的脚本清单。
+ *
+ * **规范里是 `scripts`（复数）**：`long-animation-frame` 条目带的是 `scripts: [{duration, sourceURL, invoker, ...}]`。
+ * 早期两处读的是单数 `script`，于是在真页面上**永远取到空数组** ⇒ 每条长帧都被记成
+ * `scriptMs=0 / sources=[]`，归因一律落进 `(render)` 桶（2026-10-27 P0-2 批 4 实测：
+ * 真壳 582ms 的长帧在报告里"sources 为空"，而同一帧的 CDP 采样里全是 JS）。此处两形通吃。
+ */
+function scriptsOf(f: LongFrameLike): { duration?: number; sourceURL?: string }[] {
+  if (Array.isArray(f.scripts)) return f.scripts;
+  if (Array.isArray(f.script)) return f.script;
+  return [];
 }
 
 /**
@@ -151,7 +168,7 @@ export interface LongFrameLike {
 export function aggregateBySource(frames: readonly LongFrameLike[]): SourceCostReading[] {
   const map = new Map<string, SourceCostReading & { scriptMs: number; frames: number }>();
   for (const f of frames) {
-    const scripts = Array.isArray(f.script) ? f.script : [];
+    const scripts = scriptsOf(f);
     const perFrame = new Map<string, number>();
     let scriptMsTotal = 0;
     for (const s of scripts) {
@@ -178,7 +195,7 @@ export function longFrameReadings(frames: readonly LongFrameLike[], limit = 20):
     .sort((a, b) => b.duration - a.duration)
     .slice(0, limit)
     .map((f) => {
-      const scripts = Array.isArray(f.script) ? f.script : [];
+      const scripts = scriptsOf(f);
       const scriptMs = scripts.reduce((acc, s) => acc + (s?.duration ?? 0), 0);
       const sources = [...new Set(scripts.map((s) => sourceName(s?.sourceURL ?? '')))].slice(0, 6);
       return {
