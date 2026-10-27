@@ -816,6 +816,22 @@ describe('真 wasm · parse / captures / folds / indents（worker 本体）', ()
     expect(table, `没有命中「# 表」词形的规则：${result.value.rules.increasePatterns.join(' | ')}`).toBeTruthy();
   });
 
+  it('真 wasm · 差集路：第二键由 worker 按基线缝文本，捕获与整篇解逐条相等', async () => {
+    const { client } = realPair();
+    const first = await client.parse('> 甲。\n', 1);
+    expect(first.ok, first.ok ? '' : first.message).toBe(true);
+    if (!first.ok) return;
+    const edited = '> 甲乙。\n';
+    const viaEdit = await client.captures(edited, 2, first.value.treeId); // 有基线 ⇒ 发 edit
+    expect(viaEdit.ok, viaEdit.ok ? '' : viaEdit.message).toBe(true);
+    if (!viaEdit.ok) return;
+    expect(viaEdit.value.incremental, '差集走的就是增量那条路').toBe(true);
+    const viaFull = await client.captures(edited, 3); // 文本没变 ⇒ 老实发整篇
+    expect(viaFull.ok, viaFull.ok ? '' : viaFull.message).toBe(true);
+    if (!viaFull.ok) return;
+    expect(viaEdit.value.captures).toEqual(viaFull.value.captures);
+  });
+
   it('并发两次 parse：worker 按到达序串行处理，两棵新树互不冒充', async () => {
     const { client } = realPair();
     const [first, second] = await Promise.all([
