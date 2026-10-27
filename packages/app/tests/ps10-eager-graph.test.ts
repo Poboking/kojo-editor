@@ -493,8 +493,11 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     出现 `export const` 字样不算违纪，所以那条闸扫的是**剥掉注释后的正文**）。
     //     +1 KB 的落点只有两处，都是已在册文件里的中文说明：`plugin-api/slots` 的
     //     `'completion.source'` 条目（为什么不带 `ui.` 前缀 + 为什么不塞 `languageService`）
-    //     与 `plugin-api/index` 的 IC 追加区块头。**闸不抬**（2,890 不动，余量 5 KB），
+    //     与 `plugin-api/index` 的 IC 追加区块头。**闸不抬**（2,890 不动），
     //     上面那笔"下一批先减面"的欠账**没还也没新增**——本批没往常驻面加一枚模块。
+    //     ⚠ 但落地时读数再 +1 KB ⇒ **194 文件 / 2,888 KB，余量只剩 2 KB**。那 1 KB 不是本批的：
+    //     合流上游 synthwave84 欢迎页批 `e226e0bf` 给常驻件 `ui/WelcomeView.tsx` 加了 7 行。
+    //     欠账现在更紧，减面候选照旧是 `ui-kit/index.tsx` 按件拆分（约 −12 KB）——别再往下传。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
     console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤194 文件 / ≤2,890 KB）`);
