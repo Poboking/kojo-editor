@@ -1,6 +1,7 @@
 import type { PlatformBridge, ScopedStorage, StorageService } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
 import { decodeWithProbe } from './encoding';
+import { sharedYieldToMain as yieldToMain } from './compute';
 
 /**
  * 存储域实现。
@@ -42,6 +43,15 @@ export interface StorageBackend {
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,119}$/;
 
+/**
+ * 值得让一次路的载荷门槛（字节 / UTF-16 码元数）：1 MiB 以上才切。
+ *
+ * 让路不是免费的（一次跳转 ≈ 0.1–0.3ms，还会把一次读拆成两条任务），小载荷本来 <1ms。
+ * 真语料里跨过这条线的只有索引快照（v11 约 18 MB）：切它买的是"解码 98ms / 解析 163ms
+ * 不再与调用方的聚合、落盘、下游级联挤进同一条任务"（实测单帧 701ms → 247ms）。
+ */
+const YIELD_MIN_PAYLOAD_BYTES = 1 << 20;
+
 export function assertSafeSegment(kind: 'scope' | 'key', value: string): void {
   if (!SAFE_SEGMENT.test(value) || value.includes('..')) {
     throw new Error(`Invalid storage ${kind}: '${value}' (allowed: [A-Za-z0-9_][A-Za-z0-9._-]{0,119}, no '..')`);
@@ -79,6 +89,8 @@ export class FileStorageBackend implements StorageBackend {
     }
     if (r.status === 'not-found') return { kind: 'missing' };
     if (r.status !== 'ok') return { kind: 'unreadable' };
+    // 大载荷先让路再解码：解码是纯 CPU，而这一拍是 IPC 响应的续体（见 YIELD_MIN_PAYLOAD_BYTES）。
+    if (r.data.byteLength >= YIELD_MIN_PAYLOAD_BYTES) await yieldToMain();
     // 单源解码（W12 ENC-SRC）：旧写法是旁路 `bridge.decode(bytes, 'utf-8')`——当年在对照的是
     // "客户端 TextDecoder vs Rust encoding_rs"逐字等价性（§5.90 实机复测后 Rust 侧对照命令
     // `decode_bytes` 已删）。判序/替换策略合一进 DECODE_PROBE_POLICY 后，KV 与编辑器走同
@@ -132,6 +144,8 @@ export class ScopedStorageImpl implements ScopedStorage {
       throw new Error(msg);
     }
     try {
+      // 同上：`JSON.parse` 也是同步纯 CPU（18 MB 实测 163ms），别压在调用方那条任务上。
+      if (r.data.length >= YIELD_MIN_PAYLOAD_BYTES) await yieldToMain();
       return { state: 'ok', value: JSON.parse(r.data) as T };
     } catch (e: unknown) {
       // 损坏的存储文件不致命：记日志 + 视为缺失（审阅 L1 修复；
@@ -149,6 +163,10 @@ export class ScopedStorageImpl implements ScopedStorage {
 
   async set<T = unknown>(key: string, value: T): Promise<void> {
     assertSafeSegment('key', key);
+    // 序列化**不在调用方的任务里做**：`JSON.stringify` 是同步的，写成
+    // `backend.write(..., JSON.stringify(value))` 时它在 set() 被调用那一拍就烧完全部时间
+    // （索引快照 18 MB ≈ 200ms，正好压在"索引收尾"那帧的尾巴上）。写盘本身就是异步的。
+    await yieldToMain();
     await this.backend.write(this.scope, key, JSON.stringify(value));
   }
 
