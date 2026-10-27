@@ -161,7 +161,7 @@ const DISPATCH_LABELS: Readonly<Record<string, string>> = Object.freeze({
 
 /** 优先级模型的中文短名（值域 = core `EventPriorityModel`） */
 const PRIORITY_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  'emuera-buckets': 'Emuera 桶（可 之前 / 之后 / 接管）',
+  'emuera-buckets': '引擎桶（可 之前 / 之后 / 接管）',
   'load-order': '加载序',
   none: '无优先级模型',
 });
