@@ -70,7 +70,7 @@ import {
 } from '../monaco/kojo-inlay-hints';
 import { revealLocationOf } from '../monaco/reveal-position';
 // 大文档档位线的**单一真源**（本模块只引用、不再抄数字，同 codeLens / 着色 / 面包屑各批）
-import { foldingEnabledForLineCount } from './editor-options';
+import { LARGE_FILE_LINES, foldingEnabledForLineCount } from './editor-options';
 import {
   dialectForLanguage,
   installDocumentFormatter,
@@ -1649,6 +1649,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 真算装饰时才被叫，那时内核一定在 ⇒ 订阅挂在它首次被取用那一刻，之后幂等。
     let unsubPreprocDim: (() => void) | null = null;
     const erbPreprocDim = installErbPreprocDim({
+      // 让位阈值与编辑器档位同一份表（本模块已引 editor-options，转手传进去即可——
+      // `monaco/erb-preproc-dim` 自己引那个模块会多枚模块进开机图，PS-10 闸会红）。
+      maxLines: LARGE_FILE_LINES,
       index: () => {
         const kernel = requireKernel();
         if (unsubPreprocDim === null) {

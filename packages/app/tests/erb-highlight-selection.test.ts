@@ -744,3 +744,39 @@ describe('源码卫生：Monaco 只 type-only、零插件包 import、不碰结�
     expect(selectionSource).toMatch(/registerSelectionRangeProvider\(ERB_LANGUAGE_ID/);
   });
 });
+
+/**
+ * 结构缓存（LRU-1）的可观测证据。
+ *
+ * 为什么值得钉：`erbStructureOf` 的两个消费方（同符号高亮、扩选）在**每次光标移动**各问
+ * 一次，真语料 `Lunatic Survival Scarlet.ERB`（19,033 行）实测 30.7ms/次。缓存把它降到
+ * 0.0ms，而这件事唯一可观测的特征就是"同一份源文交回同一个对象"；语义要求仍是
+ * "内容变了必须换一份"，所以两条都要断言。
+ */
+describe('erbStructureOf · 结构缓存（LRU-1）', () => {
+  it('同一份源文重复问交回同一份；内容变一个字就换一份', () => {
+    const source = '@A\nIF X\n  CALL B\nENDIF\n';
+    const first = erbStructureOf(source);
+    expect(erbStructureOf(source)).toBe(first);
+
+    const changed = `${source}; 注释\n`;
+    const after = erbStructureOf(changed);
+    expect(after).not.toBe(first);
+    // 语义不变：只是多了一行注释 ⇒ 行数 +1，函数仍是那一个
+    expect(after.lines.length).toBe(first.lines.length + 1);
+    expect(after.functions.map((f) => f.name)).toEqual(first.functions.map((f) => f.name));
+  });
+
+  it('超过体量上限的源文不进缓存，之后小文件照常命中', () => {
+    const huge = 'X'.repeat(4 * 1024 * 1024 + 1);
+    const a = erbStructureOf(huge);
+    const b = erbStructureOf(huge);
+    // 没被缓存 ⇒ 两次是两个对象（不吃那份内存），但结果逐项相同
+    expect(b).not.toBe(a);
+    expect(b.lines.length).toBe(a.lines.length);
+    // 超大源文之后缓存不是脏状态：小文件仍走命中路
+    const small = 'IF X\nENDIF\n';
+    const s1 = erbStructureOf(small);
+    expect(erbStructureOf(small)).toBe(s1);
+  });
+});
