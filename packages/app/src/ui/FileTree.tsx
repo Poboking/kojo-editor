@@ -936,6 +936,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    * 自动失效一条都不会到，作者手里必须还有一条不用重开项目的路。
    */
   const relistShown = (): number => {
+    // D-1「视口不跳」的第三条腿：重列回来的清单**可能比缓存里长**（外面丢进新文件），
+    // 这些行插在焦点行上面时浏览器只保 scrollTop、不保行——先记锚点，落地那一帧由
+    // 恢复侧把视口偏移补回去（与 toggleSub / applyReveal 同一形态）。
+    captureAnchorRef.current();
     const dirs = new Set(dirsToRelist(subOpen, pkgFolder, collectPackages(groups)));
     // 文件系统视图（B5/D1）：根层全部根一并重列（多根时折叠着的也会被取到顶层——手动
     // 重读是显式动作，宁可多取一层也不留"按了刷新还有根没重列"的疑心）
@@ -1775,6 +1779,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   const runLocate = (): void => {
     const target = locateTarget.current;
     if (target === null) return;
+    // D-1「视口不跳」的第四条腿：定位途中会改展开态（openGroup / openPackage / openSubDir），
+    // 插进来的行落在焦点行**上面**时不能把视口从作者盯着的那一行拽走——请求还没落定
+    // （等列举 / 等行模型追上）的每一帧都由锚点保偏移；而**落定那一拍**的滚动是定位自己
+    // 发的（scrollToIndex / scrollLocate），锚点当场作废，恢复腿不许把它拽回去。
+    captureAnchorRef.current();
     if (view === 'fs') {
       // 文件系统视图：locatePlanOf 是语义树口径，不适用——退化为「从所属根到 activeFile
       // 逐级展开」（D1：fsRoots 逐根算归属，附加根内的文件同样定位得到）。
@@ -1803,6 +1812,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
       }
       scrollLocate(target);
       locateTarget.current = null;
+      anchorRow.current = null; // 落定：这一拍的滚动归定位自己，锚点作废（不许拽回去）
       return;
     }
     if (deferredFilter) {
@@ -1836,6 +1846,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     setFocusTid(tree.rows[index]?.id ?? null);
     scrollLocate(plan.targetPath);
     locateTarget.current = null;
+    anchorRow.current = null; // 落定：滚动归定位自己（含"焦点本来就在目标行"那种，锚点会把这拍拽回去）
   };
   /** 订阅回调与 effect 都走这一格：闭包每帧刷新，避免读到上一帧的现场 */
   const runLocateRef = useRef(runLocate);

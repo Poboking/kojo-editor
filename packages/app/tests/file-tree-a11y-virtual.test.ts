@@ -476,6 +476,107 @@ describe('WS-12 · 展开/收起的视口不跳', () => {
   });
 });
 
+/**
+ * D-1 收尾批的两条遗留腿（本组是这两条的**首证**，旧组一条都不动）：
+ *
+ * 1. **重列（relistShown）**：失效信号 / 手动「重新读取」触发的重列，清单**变长**才见得出跳
+ *    ——新行插在焦点行上面，浏览器只保 scrollTop 不保行。捕获补在 `relistShown()` 开头
+ *    （HK-5 的 nonce effect 与 `relist` 菜单分支共用这条），落地那一帧由恢复侧补 N × 22。
+ * 2. **定位（runLocate）**：请求还没落定时（等行模型追上）展开插行不许把视口从焦点行拽走；
+ *    落定那一拍的滚动归定位自己 ⇒ 当场作废锚点。这里的现场按"落定后不需要新滚动"排
+ *    （目标行展开后正好落在补偿出的视口顶），跳没跳一眼可辨。
+ */
+describe('D-1 收尾批 · 重列与定位的视口不跳', () => {
+  type Entry = { name: string; path: string; isDirectory: boolean };
+
+  /** 一块可变的包目录清单：第一次列举给 1 行、重列给 5 行 ⇒「清单变长」是造出来的事实 */
+  function grownListing(): { listDir: (dir: string) => Promise<Entry[]>; calls: () => number } {
+    let n = 0;
+    const listDir = async (dir: string): Promise<Entry[]> => {
+      if (dir !== PKG) return [];
+      n += 1;
+      if (n === 1) return [{ name: 'a.txt', path: `${PKG}/a.txt`, isDirectory: false }];
+      return ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt'].map((name) => ({ name, path: `${PKG}/${name}`, isDirectory: false }));
+    };
+    return { listDir, calls: () => n };
+  }
+
+  it('重列清单变长、四行插在焦点行上面 ⇒ scrollTop 正好补 4 × 22（relistShown 的捕获腿）', async () => {
+    const { listDir, calls } = grownListing();
+    // refreshNonce 由 0 起步：下面抬到 1 就是 HK-5 的那一发失效信号
+    const { project, index } = fakeProject(300);
+    const treeElement = (nonce: number) =>
+      h(FileTree, { project, index, activeFile: null, onOpenFile: (): void => {}, listDir: listDir as never, refreshNonce: nonce });
+    root = createRoot(container);
+    await act(async () => {
+      root.render(treeElement(0));
+    });
+    await openGroup();
+    await act(async () => {
+      treeEl().focus();
+    });
+    await key('ArrowDown'); // 组头 → 包头
+    await key('ArrowRight'); // 键盘点开真实文件夹（此刻这层只有 a.txt 一行）
+    await act(async () => {});
+    expect(calls()).toBe(1);
+    await key('ArrowDown'); // → a.txt
+    await key('ArrowDown'); // → 第一份 ERB（焦点行：真实文件夹的行列在它**上面**）
+    expect(treeEl().scrollTop).toBe(0);
+    // 失效信号：nonce 抬一格 → relistShown 重列 → 清单从 1 行长成 5 行（净多 4 行插在焦点行上面）
+    await act(async () => {
+      root.render(treeElement(1));
+    });
+    await act(async () => {});
+    expect(calls()).toBe(2);
+    expect(treeEl().scrollTop).toBe(4 * 22);
+    // 补的是视口，焦点没被交出去：还站在第一份 ERB 上
+    expect(items().find((el) => el.tabIndex === 0)?.dataset.tid).toBe('C:/koa/001/包A/M_KOJO_K1_00000.ERB');
+  });
+
+  /**
+   * 两个角色组的现场：gA 折叠、gB 展开且焦点在 gB 头行；定位 gA 里的文件 ⇒
+   * 展开 gA 把「包头 + a1」两行插在焦点行上面。落定后 a1 正好在补出来的视口顶
+   * （不需要新滚动）——44px 只可能来自锚点补偿，摘掉捕获或恢复任何一条都回到 0。
+   */
+  it('定位要展开焦点行上面的组 ⇒ scrollTop 正好补 2 × 22，落定后焦点交给目标行（runLocate 的捕获腿）', async () => {
+    const KOJO_A = 'C:/koa/001';
+    const KOJO_B = 'C:/koa/002';
+    const A1 = `${KOJO_A}/包A/a1.ERB`;
+    const project = {
+      charaIndex: new Map([
+        [1, { no: 1, name: '灵梦', kojoDir: KOJO_A }],
+        [2, { no: 2, name: '妖梦', kojoDir: KOJO_B }],
+      ]),
+      kojoPaths: ['C:/koa'],
+      rootDir: 'C:/game',
+    } as unknown as GameProject;
+    const index = {
+      files: new Map([A1, `${KOJO_B}/包B/b1.ERB`, `${KOJO_B}/包B/b2.ERB`].map((f) => [f, null])),
+      byName: new Map(),
+    } as unknown as ErbIndex;
+    root = createRoot(container);
+    await act(async () => {
+      root.render(h(FileTree, { project, index, activeFile: null, onOpenFile: (): void => {} }));
+    });
+    // 只展开 gB（第二个组头）：此刻行序 = [gA 头, gB 头, gB 包, b1, b2]，焦点随点击落在 gB 头
+    const groupHeads = container.querySelectorAll<HTMLButtonElement>('button.tree-group-btn');
+    expect(groupHeads.length).toBe(2);
+    await click(groupHeads[1] as HTMLElement);
+    expect(items().find((el) => el.tabIndex === 0)?.dataset.tid).toBe('g:#2 妖梦');
+    expect(treeEl().scrollTop).toBe(0);
+    // 定位请求：gA 里那份文件——展开 gA 会在焦点行（gB 头）上面插两行
+    await act(async () => {
+      setActivePath(A1);
+    });
+    await act(async () => {});
+    expect(treeEl().scrollTop).toBe(2 * 22);
+    // 落定的语义没被锚点拖住：焦点行交给目标文件本身
+    expect(items().find((el) => el.tabIndex === 0)?.dataset.tid).toBe(A1);
+    // 原焦点行（gB 头）还在 DOM 里（补量不是把它滚没了）
+    expect(container.querySelector('[data-tid="g:#2 妖梦"]')).not.toBeNull();
+  });
+});
+
 describe('多选与鼠标连选', () => {
   it('Shift + 点击 ⇒ 从锚点连选到被点那一行，且不打开文件', async () => {
     const opened: string[] = [];
