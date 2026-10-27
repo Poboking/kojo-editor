@@ -969,3 +969,20 @@ export type {
   HostContentIssue,
   HostContentDiagnosis,
 } from './launcher';
+
+/* ---- 内联补全（幽灵文本）候选源契约（mzuka 1027 IC 批独占追加区块；勿在他处重排） ----
+ * 与上面启动器那条**同一条纪律**：`inline-completion.ts` 是纯类型叶子，桶里只许
+ * `export type`——值导出会把模块拉进开机图，而候选上限 / 超时预算 / 上下文窗宽这些
+ * 数字本来就归宿主（契约层连一个 `const` 都不留）。
+ */
+export type {
+  InlineCompletionCandidate,
+  InlineCompletionFailure,
+  InlineCompletionItemKind,
+  InlineCompletionOutcome,
+  InlineCompletionRange,
+  InlineCompletionRequest,
+  InlineCompletionSourceContribution,
+  InlineCompletionStage,
+  InlineCompletionTriggerKind,
+} from './inline-completion';

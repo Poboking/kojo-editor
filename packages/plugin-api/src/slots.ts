@@ -4,6 +4,7 @@ import type { RevealRange, RevealSpan } from './events';
 import type { GameAdapter } from './game';
 import type { GameProject } from './game';
 import type { EolStyle } from './io';
+import type { InlineCompletionSourceContribution } from './inline-completion';
 
 /**
  * 槽位系统（对应架构文档 §4）。
@@ -1404,6 +1405,13 @@ export interface SlotMap {
   'game.adapter': GameAdapterContribution;
   'export.target': ExportTargetContribution;
   'search.scope': SearchScopeContribution;
+  /**
+   * 内联补全（幽灵文本）候选源（IC 批）。贡献物是**领域事实**（一批候选文本），界面由宿主
+   * 画，故与 `search.scope` / `export.target` 同族、不带 `ui.` 前缀。
+   * 契约 `plugin-api/inline-completion.ts`；为什么走槽而不是服务键、为什么
+   * **不塞进 `ui.editor.languageService`**，理由写在那份契约的头里（两处各说一遍必漂）。
+   */
+  'completion.source': InlineCompletionSourceContribution;
 }
 
 export type SlotName = keyof SlotMap;
