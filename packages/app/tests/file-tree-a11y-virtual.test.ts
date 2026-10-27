@@ -534,6 +534,67 @@ describe('D-1 收尾批 · 重列与定位的视口不跳', () => {
   });
 
   /**
+   * 真壳实测抓出的洞（E2E 复现后补的判据）：`relistShown` 捕获锚点后、响应落地前，
+   * 树**还会经历别的渲染**（手动「重读」那支点完就 setState 写回执；用户也可能顺手滚一格）。
+   * 一次性锚点会被那一帧白白吃掉，真清单回来插行时反而没人补量——恢复侧必须认
+   * 「重列批在途」这份续期理由（cached 目录的重列没有 loading 那一格可认）。
+   */
+  it('重列在途时先落一发无关渲染（滚一格）⇒ 锚点续期，清单落地照样补 4 × 22', async () => {
+    type Entry = { name: string; path: string; isDirectory: boolean };
+    let releaseGrown: ((v: Entry[]) => void) | null = null;
+    let calls = 0;
+    const listDir = (dir: string): Promise<Entry[]> => {
+      if (dir !== PKG) return Promise.resolve([]);
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve([{ name: 'a.txt', path: `${PKG}/a.txt`, isDirectory: false }]);
+      }
+      // 重列那一发挂住：先把"响应落地前的中间渲染"演出来
+      return new Promise<Entry[]>((resolve) => {
+        releaseGrown = resolve;
+      });
+    };
+    const { project, index } = fakeProject(300);
+    const treeElement = (nonce: number) =>
+      h(FileTree, { project, index, activeFile: null, onOpenFile: (): void => {}, listDir: listDir as never, refreshNonce: nonce });
+    root = createRoot(container);
+    await act(async () => {
+      root.render(treeElement(0));
+    });
+    await openGroup();
+    await act(async () => {
+      treeEl().focus();
+    });
+    await key('ArrowDown'); // → 包头
+    await key('ArrowRight'); // 点开真实文件夹（1 行清单已落）
+    await act(async () => {});
+    await key('ArrowDown'); // → a.txt
+    await key('ArrowDown'); // → 第一份 ERB（焦点行）
+    expect(treeEl().scrollTop).toBe(0);
+    // 失效信号：捕获锚点、重列请求挂住在途
+    await act(async () => {
+      root.render(treeElement(1));
+    });
+    // 响应没回来的这一拍里先来一发中间渲染：滚一格 ⇒ 消费掉一次性锚点（恢复回原位）——
+    // 没有「重列在途续期」这条腿，真清单回来时就没有锚点可补了
+    await act(async () => {
+      treeEl().scrollTop = 10;
+      treeEl().dispatchEvent(new Event('scroll'));
+    });
+    await act(async () => {});
+    // 放行 grown 清单（1 行 → 5 行：四行插在焦点行上面）
+    await act(async () => {
+      releaseGrown?.(
+        ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt'].map((name) => ({ name, path: `${PKG}/${name}`, isDirectory: false })),
+      );
+      releaseGrown = null;
+    });
+    await act(async () => {});
+    expect(treeEl().scrollTop).toBe(4 * 22);
+    expect(items().find((el) => el.tabIndex === 0)?.dataset.tid).toBe('C:/koa/001/包A/M_KOJO_K1_00000.ERB');
+  });
+
+  /**
    * 两个角色组的现场：gA 折叠、gB 展开且焦点在 gB 头行；定位 gA 里的文件 ⇒
    * 展开 gA 把「包头 + a1」两行插在焦点行上面。落定后 a1 正好在补出来的视口顶
    * （不需要新滚动）——44px 只可能来自锚点补偿，摘掉捕获或恢复任何一条都回到 0。

@@ -935,6 +935,14 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    * （§5.84）——某些根没监视上、或平台根本没有监视能力（浏览器开发壳）。那时
    * 自动失效一条都不会到，作者手里必须还有一条不用重开项目的路。
    */
+  /**
+   * 重列请求批是否还在途（D-1 真壳实测抓出的洞）：`relistShown` 捕获锚点后，**响应落地前
+   * 还有一发同帧的 setState**（手动那枚「重读」点完就写一句话回执 `note`），那一帧把一次性
+   * 锚点白白用掉、真清单回来插行时反而没人补量。恢复侧只要看见这里还是 true 就续期锚点
+   * （与「列举在途续期」同一条腿，只是那份 loading 判据盖不到 cached 目录的重列）。
+   */
+  const relistInFlight = useRef(false);
+
   const relistShown = (): number => {
     // D-1「视口不跳」的第三条腿：重列回来的清单**可能比缓存里长**（外面丢进新文件），
     // 这些行插在焦点行上面时浏览器只保 scrollTop、不保行——先记锚点，落地那一帧由
@@ -945,7 +953,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     // 重读是显式动作，宁可多取一层也不留"按了刷新还有根没重列"的疑心）
     if (view === 'fs') for (const r of fsRoots) dirs.add(r);
     // 一次失效 = 一次请求批 = **一帧**（旧实现每份目录响应各排一帧，K 层展开就是 K 帧全树）
-    fetchDirs([...dirs]);
+    relistInFlight.current = true;
+    fetchDirs([...dirs], () => {
+      relistInFlight.current = false;
+    });
     return dirs.size;
   };
 
@@ -2073,7 +2084,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     dirCache.forEach((state) => {
       if (state === 'loading') loading = true;
     });
-    if (loading) anchorRow.current = { tid: row.id, top: row.top, scroll: body.scrollTop };
+    // 「重列批在途」与「列举 loading」并列的续期理由：relistShown 走的是缓存里已有的目录，
+    // 不会有 loading 那一格，但响应落地前的同帧 setState（回执一句话）会先吃掉一次性锚点。
+    if (loading || relistInFlight.current) anchorRow.current = { tid: row.id, top: row.top, scroll: body.scrollTop };
   });
 
   /**
