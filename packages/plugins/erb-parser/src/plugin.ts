@@ -20,6 +20,8 @@ import {
   ERB_ENGINE_STRING_IDENTIFIERS,
   KernelServices,
   isErbDialectPath,
+  isPathUnder,
+  pathKey,
   projectFingerprintOf,
 } from '@kojo/plugin-api';
 import { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
