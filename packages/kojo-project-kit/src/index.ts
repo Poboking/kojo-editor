@@ -90,6 +90,7 @@ export {
   composeScaffoldDraft,
   createNewKojoProjectWizard,
   defaultWorkspaceRoot,
+  gameRootsForbiddingLocation,
   listMarketTemplates,
   locationLabel,
   noKojoDirWarning,

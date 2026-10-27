@@ -34,12 +34,13 @@ import { createElement as h, useEffect, useMemo, useState } from 'react';
 import type {
   CharaInfo,
   FileIO,
+  GameProject,
   MarketService,
   ProjectService,
   ScaffoldFileSet,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { buildScaffoldDirName, sanitizePathSegment } from '@kojo/plugin-api';
+import { buildScaffoldDirName, pathKey, sanitizePathSegment } from '@kojo/plugin-api';
 import { LICENSE_CHOICES, licenseProducesFile, type LicenseKind } from './licenses';
 import { readPackAuthorship, type PackAuthorship } from './attribution';
 import {
@@ -196,6 +197,30 @@ export function defaultWorkspaceRoot(workspaces: WorkspaceService): string | nul
   } catch {
     return null;
   }
+}
+
+/**
+ * 「项目位置」对话框的**禁选根**（2026-10-27 游戏目录防护批）。
+ *
+ * 取当前游戏项目的根目录 + 口上域 + 存档目录（有才算），按 `pathKey` 去重、丢掉空串。
+ * 平台侧对每一根做**双向包含**判定：选中的文件夹与它们相等 / 在其下 / 含它，一律拒。
+ * 于是"选游戏目录"与"选游戏目录的上级（把游戏整个圈进来）"两条都在选择那一刻被挡下。
+ *
+ * 没有打开项目（`null`）⇒ 空数组 ⇒ 平台行为与历史逐字一致（这条防护不认识游戏，
+ * 只是把当前项目的位置当作"不许当作品位置"的清单递过去）。
+ */
+export function gameRootsForbiddingLocation(project: GameProject | null): string[] {
+  if (project === null) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [project.rootDir, ...project.kojoPaths, project.savDir]) {
+    if (typeof raw !== 'string' || raw.length === 0) continue;
+    const k = pathKey(raw);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(raw);
+  }
+  return out;
 }
 
 /**
@@ -560,11 +585,19 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
      * 这里**不拼路径、不校验目录、不申请权限**——选定即授权发生在平台命令内部
      * （系统目录对话框 + 登记常驻授权根绑成一个原子动作，铁律 6 的法定形态，
      * 与导出用的 `io.exportFile` 同族）。取消返回 null，状态原样不动。
+     *
+     * 2026-10-27 游戏目录防护批：把当前**游戏根 / 口上域 / 存档目录**作为 `forbidRoots`
+     * 递过去，平台侧在**登记之前**拒掉与它们重叠的选择（相等 / 在其下 / 含它）。
+     * 选到游戏目录（或游戏目录的上级）当作品位置，等于把整个游戏目录圈进可写域；
+     * 这条要在选择那一刻就说"不行"，别等事后收窄。拒因是平台给的中文原文，原样上屏。
      */
     const pickLocation = async (): Promise<void> => {
       setError(null);
       try {
-        const picked = await deps.io.chooseWorkspaceRoot({ title: LOCATION_DIALOG_TITLE });
+        const picked = await deps.io.chooseWorkspaceRoot({
+          title: LOCATION_DIALOG_TITLE,
+          forbidRoots: gameRootsForbiddingLocation(gameProject),
+        });
         if (picked !== null) setChosenRoot(picked);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e));

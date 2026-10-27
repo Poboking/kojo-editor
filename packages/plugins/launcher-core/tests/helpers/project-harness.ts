@@ -210,6 +210,22 @@ export class FakeWorkspaces implements WorkspaceService {
     return [this.defaultRoot, ...this.extraRoots];
   }
 
+  /** 与内核同口径：默认根 + 自选根下的作品目录（自选根根身不在其中） */
+  projectDirs(): string[] {
+    const out = [this.defaultRoot];
+    for (const dir of this.dirById.values()) {
+      if (this.extraRoots.some((r) => isPathUnder(r, dir)) && !out.some((d) => sameDir(d, dir))) {
+        out.push(dir);
+      }
+    }
+    return out;
+  }
+
+  /** 测试替身不做撤销（内核那侧的口径见 workspace.test.ts） */
+  async revokeRoot(root: string): Promise<void> {
+    throw new Error(`FakeWorkspaces 不支持撤销：${root}`);
+  }
+
   async list(): Promise<WorkspaceProject[]> {
     const out: WorkspaceProject[] = [];
     for (const root of this.roots()) {

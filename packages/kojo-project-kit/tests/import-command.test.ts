@@ -25,7 +25,8 @@ interface Harness {
 function makeHarness(choose: (opts?: { title?: string }) => Promise<string | null> = async () => null): Harness {
   const commands: EditorCommandContribution[] = [];
   const state = { forced: null as Error | null };
-  const io = { chooseWorkspaceRoot: choose } as unknown as FileIO;
+  // 2026-10-27 导入来源批：走 `pickDirectory`（只选不授权），不再借 chooseWorkspaceRoot
+  const io = { pickDirectory: choose } as unknown as FileIO;
   const ctx = {
     pluginId: 'kit-test',
     log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
@@ -82,7 +83,7 @@ describe('kojo-project-kit · registerImportCommand 收敛（双 adapter 并装�
 
   it('命令 run 走 pickAndRequestImport：选定目录 → 发 workspace.importRequested（source=command-palette）', async () => {
     const emits: Array<{ event: string; payload: unknown }> = [];
-    const io = { chooseWorkspaceRoot: async () => 'D:/packs/东方口上包' } as unknown as FileIO;
+    const io = { pickDirectory: async () => 'D:/packs/东方口上包' } as unknown as FileIO;
     let captured: EditorCommandContribution | undefined;
     const ctx = {
       pluginId: 'kit-test',
@@ -109,7 +110,7 @@ describe('kojo-project-kit · registerImportCommand 收敛（双 adapter 并装�
 
   it('pickAndRequestImport：取消（null）安静返回、零发射', async () => {
     const emits: unknown[] = [];
-    const io = { chooseWorkspaceRoot: async () => null } as unknown as FileIO;
+    const io = { pickDirectory: async () => null } as unknown as FileIO;
     const ctx = {
       pluginId: 'kit-test',
       log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
@@ -119,5 +120,52 @@ describe('kojo-project-kit · registerImportCommand 收敛（双 adapter 并装�
     } as unknown as PluginContext;
     await pickAndRequestImport(ctx, io, 'projects-panel');
     expect(emits).toEqual([]);
+  });
+});
+
+/**
+ * 「来源目录只选不授权」（2026-10-27 导入来源批）。
+ *
+ * 旧形态借 `chooseWorkspaceRoot` 选来源——那条通道是「对话框即授权」，选到游戏目录当
+ * 来源就把游戏目录登记成了常驻可写根。现在必须走 `pickDirectory`；平台没有这个能力时
+ * **出声拒绝**，绝不许偷偷退回那条会扩大写允许域的通道。
+ */
+describe('kojo-project-kit · pickAndRequestImport 不碰写授权', () => {
+  const makeCtx = (emits: unknown[], logs: string[]): PluginContext =>
+    ({
+      pluginId: 'kit-test',
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: (m: string) => logs.push(m) },
+      bus: { emit: (_e: string, p?: unknown) => emits.push(p), on: () => () => {} },
+      onDispose: () => {},
+      slots: { register: () => () => {} },
+    }) as unknown as PluginContext;
+
+  it('平台只有 chooseWorkspaceRoot（没有 pickDirectory）⇒ 不发射、出声，绝不回退到授权通道', async () => {
+    const emits: unknown[] = [];
+    const logs: string[] = [];
+    let asked = 0;
+    const io = {
+      chooseWorkspaceRoot: async () => {
+        asked += 1;
+        return 'C:/Game/eratw';
+      },
+    } as unknown as FileIO;
+    await pickAndRequestImport(makeCtx(emits, logs), io, 'projects-panel');
+    expect(asked).toBe(0);
+    expect(emits).toEqual([]);
+    expect(logs.some((l) => l.includes('没有目录选择能力'))).toBe(true);
+  });
+
+  it('对话框能力抛错：原样进日志，安静返回（不吞、也不发空载荷）', async () => {
+    const emits: unknown[] = [];
+    const logs: string[] = [];
+    const io = {
+      pickDirectory: async () => {
+        throw new Error('需要桌面壳');
+      },
+    } as unknown as FileIO;
+    await pickAndRequestImport(makeCtx(emits, logs), io, 'projects-panel');
+    expect(emits).toEqual([]);
+    expect(logs.some((l) => l.includes('需要桌面壳'))).toBe(true);
   });
 });

@@ -34,6 +34,8 @@ function fakeWorkspaces(): WorkspaceService {
   return {
     rootDir: () => '/appdata/workspaces',
     roots: () => ['/appdata/workspaces'],
+    projectDirs: () => ['/appdata/workspaces'],
+    revokeRoot: async () => {},
     list: async () => [],
     get: async () => null,
     create: async () => {

@@ -85,7 +85,7 @@ describe('FileIOService · 写保护', () => {
     expect(io.isWritable(path.join(b, 'x.txt'))).toBe(true);
   });
 
-  it('chooseWorkspaceRoot：选定即同步登记进常驻可写根；取消（null）时授权一点不动', async () => {
+  it('chooseWorkspaceRoot：选定只回答"作品能建在哪"，不在 io 侧整根放宽；取消时更是一个字节不动', async () => {
     const chosen = path.join(tmpDir, 'works', '自选位置');
     /** 以 NodeBridge 为原型覆写对话框通道（类方法在原型上，展开复制会丢） */
     const withPicked = (root: string | null): PlatformBridge =>
@@ -101,14 +101,29 @@ describe('FileIOService · 写保护', () => {
 
     const picked = new FileIOServiceImpl(withPicked(chosen));
     await expect(picked.chooseWorkspaceRoot({ title: '选吧' })).resolves.toBe(chosen);
-    // 授权立刻生效（不等重启）：本会话里紧接着 create 项目就该写得进去
-    expect(picked.isWritable(path.join(chosen, '包', '事件.ERB'))).toBe(true);
+    // 2026-10-27 收窄批：选定根可能是游戏目录，本层绝不整根放宽；
+    // 可写的是 WorkspaceService 建出来/扫出来的作品目录（那条链在 workspace.test.ts 钉着）。
+    expect(picked.isWritable(path.join(chosen, '包', '事件.ERB'))).toBe(false);
+    expect(picked.isWritable(path.join(chosen, 'x.txt'))).toBe(false);
   });
 
   it('chooseWorkspaceRoot：平台无对话框能力时错误如实上抛（不静默降级回默认位置）', async () => {
     await expect(io.chooseWorkspaceRoot({ title: '选吧' })).rejects.toThrow(
       /chooseWorkspaceRoot is not supported by NodeBridge/,
     );
+  });
+
+  it('pickDirectory：只选不授权（选定路径一个字节都不进可写域）；平台无此能力时人话上抛', async () => {
+    const source = path.join(tmpDir, '作者包来源');
+    const withPicker = Object.assign(Object.create(new NodeBridge(appData)) as PlatformBridge, {
+      pickDirectory: async () => source,
+    });
+    const pickIo = new FileIOServiceImpl(withPicker);
+    await expect(pickIo.pickDirectory({ title: '选来源' })).resolves.toBe(source);
+    // 2026-10-27 导入来源批：来源目录是只读的，绝不因为"选过"就变可写
+    expect(pickIo.isWritable(path.join(source, 'x.txt'))).toBe(false);
+
+    await expect(io.pickDirectory({ title: '选来源' })).rejects.toThrow(/没有目录选择能力/);
   });
 });
 

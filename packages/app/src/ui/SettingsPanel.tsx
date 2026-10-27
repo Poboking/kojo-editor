@@ -272,6 +272,19 @@ export interface SettingsPanelProps {
   searchQuery?: string;
   /** 清空顶部那一条框（快捷键节空态的退路按钮用；缺省不渲染那颗钮） */
   onClearSearch?: () => void;
+
+  /* ---- 工作区带（2026-10-27 撤销批） ---- */
+  /**
+   * 工作区落点根清单（默认根恒在首位 + 每个自选项目位置根）。
+   * 壳层从 `workspaces.roots()` 现取——本组件不自己问内核（它是懒加载的纯呈现面）。
+   * 缺席 / 空数组 = 工作区服务不可用（浏览器开发壳）：那一节给一句人话，不伪造数据。
+   */
+  workspaceRoots?: readonly { readonly path: string; readonly isDefault: boolean }[];
+  /**
+   * 撤销一个自选根（壳层转给 `workspaces.revokeRoot`）。失败原因由本组件原样上屏
+   * （默认根不可撤销、根里还有作品……都是内核给的现成人话）。
+   */
+  onRevokeWorkspaceRoot?: (root: string) => Promise<void>;
 }
 
 /**
@@ -283,6 +296,7 @@ export type SettingsSectionId =
   | 'general'
   | 'appearance'
   | 'editor'
+  | 'workspace'
   | 'capabilities'
   | 'market'
   | 'about'
@@ -375,6 +389,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     installUpdate,
     searchQuery = '',
     onClearSearch,
+    workspaceRoots,
+    onRevokeWorkspaceRoot,
   } = props;
 
   return [
@@ -906,6 +922,16 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
       ),
     },
     {
+      id: 'workspace',
+      label: '工作区',
+      // 工作区落点 → 收纳箱（icons.tsx 的 archive）：与「文件」页的 files 区分开，
+      // 又比 trash 更像"存放的地方"而不是"删除"
+      icon: 'archive',
+      render: () => (
+        <WorkspaceRootsSection roots={workspaceRoots} onRevoke={onRevokeWorkspaceRoot} />
+      ),
+    },
+    {
       id: 'capabilities',
       label: '语言能力',
       // 能力矩阵 → 棋盘图标（icons.tsx 的 matrix）
@@ -1411,7 +1437,137 @@ function FindPrefRow(): ReactElement {
   );
 }
 
-/** 右面板（tabpanel）的稳定 id：导航栏每项 aria-controls 指过来 */const SETTINGS_PANEL_ID = 'settings-nav-panel';
+/**
+ * 「工作区」一节：落点根清单 + 撤销自选根（2026-10-27 撤销批）。
+ *
+ * 为什么要有这一节：自选项目位置是**常驻**授权（跟应用走，不随项目关闭收回），
+ * 收窄之后常驻可写根只到作品目录，但"某个自选根还挂在清单上"这件事本身必须看得见、
+ * 撤得掉——否则作者把游戏目录误选成项目位置后，没有任何 UI 能把那笔授权退回去。
+ *
+ * 形态是刻意的**最小可用**：
+ * - 默认根照列（标注「默认 · 不可撤销」），让作者知道自己的作品默认住在哪；
+ * - 每个自选根一颗「撤销」，点了先变成「确认撤销 / 取消」两步（不可逆动作不设一键；
+ *     本页没有通用确认弹窗，就地把按钮换成两枚是最小代价的两步确认）；
+ * - 失败原因（根里还有作品 / 默认根 / 平台不支持）由内核给的中文原文**原样上屏**，
+ *     错误挂在该行下面，不弹窗、不静默。
+ *
+ * 服务不可用（浏览器调试壳，`roots()` 抛）时壳层传空数组/缺席 ⇒ 这一节给一句人话，
+ * 不伪造任何根。
+ */
+function WorkspaceRootsSection(args: {
+  readonly roots?: readonly { readonly path: string; readonly isDefault: boolean }[];
+  readonly onRevoke?: (root: string) => Promise<void>;
+}): ReactElement {
+  const { roots, onRevoke } = args;
+  /** 正在二次确认的那一行（null = 没有待确认的撤销） */
+  const [confirming, setConfirming] = useState<string | null>(null);
+  /** 正在撤销的那一行（按钮转圈即禁用，避免连点重复调平台命令） */
+  const [busy, setBusy] = useState<string | null>(null);
+  /** 上一次撤销的失败原因（挂着对应行；成功或再点一次即清） */
+  const [failure, setFailure] = useState<{ readonly root: string; readonly message: string } | null>(
+    null,
+  );
+
+  if (roots === undefined || roots.length === 0) {
+    return (
+      <div className="settings-group">
+        <div role="heading" aria-level={4} className="settings-group-title">项目位置</div>
+        <div className="settings-row static">
+          <span>
+            暂时读不到工作区位置
+            <span className="settings-hint">
+              当前环境没有工作区服务（例如浏览器调试壳）。桌面版里这里会列出默认位置和你自选的项目位置。
+            </span>
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const revoke = (root: string): void => {
+    if (onRevoke === undefined) return;
+    setBusy(root);
+    setFailure(null);
+    void onRevoke(root).then(
+      () => {
+        setBusy(null);
+        setConfirming(null);
+      },
+      (e: unknown) => {
+        setBusy(null);
+        setFailure({ root, message: e instanceof Error ? e.message : String(e) });
+      },
+    );
+  };
+
+  return (
+    <div className="settings-group">
+      <div role="heading" aria-level={4} className="settings-group-title">项目位置</div>
+      {roots.map((root) => {
+        const pending = confirming === root.path;
+        const working = busy === root.path;
+        return (
+          <div className="settings-row static" key={root.path} data-workspace-root={root.path}>
+            {root.isDefault ? (
+              <span>
+                {root.path}
+                <span className="settings-hint">
+                  默认 · 不可撤销（作品默认就住在这个位置）
+                </span>
+              </span>
+            ) : (
+              <>
+                {pending ? (
+                  <>
+                    <button
+                      className="primary small"
+                      onClick={() => revoke(root.path)}
+                      disabled={working || onRevoke === undefined}
+                    >
+                      {working ? '撤销中…' : '确认撤销'}
+                    </button>
+                    <button
+                      className="ghost small"
+                      onClick={() => setConfirming(null)}
+                      disabled={working}
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="ghost small"
+                    onClick={() => {
+                      setFailure(null);
+                      setConfirming(root.path);
+                    }}
+                    disabled={onRevoke === undefined}
+                  >
+                    撤销
+                  </button>
+                )}
+                <span>
+                  {root.path}
+                  <span className="settings-hint">
+                    自选位置：撤销后这里不再是可写位置（里面的作品会先拦下撤销，不会变成只读）
+                  </span>
+                </span>
+              </>
+            )}
+            {failure !== null && failure.root === root.path ? (
+              <span className="settings-hint is-err" role="alert">
+                {failure.message}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 右面板（tabpanel）的稳定 id：导航栏每项 aria-controls 指过来 */
+const SETTINGS_PANEL_ID = 'settings-nav-panel';
 const tabIdOf = (id: SettingsSectionId): string => `settings-nav-tab-${id}`;
 
 /**

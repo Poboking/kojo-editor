@@ -21,36 +21,45 @@ import {
 const DEFAULT_ROOT = 'C:/Users/dev/AppData/Roaming/dev.kojo.editor/workspaces';
 const EXTRA_ROOT = 'D:/作品';
 const ROOTS = [DEFAULT_ROOT, EXTRA_ROOT];
+/** 2026-10-27 收窄批：可写判定只认"默认根 + 作品目录"，自选根根身不在其中 */
+const PROJECT_DIRS = [DEFAULT_ROOT, `${EXTRA_ROOT}/p1`];
 
-/** 只填 workspaces.roots() 的最小 kernel 替身（口径同 workspace-roots.test.ts） */
-function kernelWithRoots(roots: () => string[]): Pick<Kernel, 'workspaces'> {
-  return { workspaces: { roots } as unknown as Kernel['workspaces'] };
+/**
+ * 只填 `workspaces.projectDirs()` 的最小 kernel 替身（口径同 workspace-roots.test.ts）。
+ * `roots()` 仍然给着（可写判定已不读它）：这个替身要是还能被 `roots()` 糊过去，
+ * 下面那条"自选根根身不算工作区"的自证就失去意义了。
+ */
+function kernelWithRoots(
+  projectDirs: () => string[],
+  roots: () => string[] = () => ROOTS,
+): Pick<Kernel, 'workspaces'> {
+  return { workspaces: { projectDirs, roots } as unknown as Kernel['workspaces'] };
 }
-const kernel = kernelWithRoots(() => ROOTS);
+const kernel = kernelWithRoots(() => PROJECT_DIRS);
 
 describe('fileWritableAreaOf · 三区判定', () => {
-  it('工作项目区：默认根与作者自选根都算（两个根各自的反向自证=游戏目录那条）', () => {
-    expect(fileWritableAreaOf(`${DEFAULT_ROOT}/p1/我的口上.kojo`, ROOTS)).toBe('workspace');
-    expect(fileWritableAreaOf(`${EXTRA_ROOT}/p1/子目录/a.ERB`, ROOTS)).toBe('workspace');
+  it('工作项目区：默认根与自选根里的**作品目录**都算（两个根各自的反向自证=游戏目录那条）', () => {
+    expect(fileWritableAreaOf(`${DEFAULT_ROOT}/p1/我的口上.kojo`, PROJECT_DIRS)).toBe('workspace');
+    expect(fileWritableAreaOf(`${EXTRA_ROOT}/p1/子目录/a.ERB`, PROJECT_DIRS)).toBe('workspace');
     // 反向自证：同一份文件名、换成游戏目录前缀 ⇒ 立刻不是工作区
-    expect(fileWritableAreaOf('C:/Game/demo/ERB/口上関連/a.ERB', ROOTS)).not.toBe('workspace');
+    expect(fileWritableAreaOf('C:/Game/demo/ERB/口上関連/a.ERB', PROJECT_DIRS)).not.toBe('workspace');
   });
 
   it('口上区：工作区外的原生 ERB（.erb / .erm 都算）', () => {
     const erb = 'C:/Game/demo/ERB/a.ERB';
-    expect(fileWritableAreaOf(erb, ROOTS)).toBe('game-erb');
-    expect(fileWritableAreaOf('C:/Game/demo/ERB/b.erm', ROOTS)).toBe('game-erb');
+    expect(fileWritableAreaOf(erb, PROJECT_DIRS)).toBe('game-erb');
+    expect(fileWritableAreaOf('C:/Game/demo/ERB/b.erm', PROJECT_DIRS)).toBe('game-erb');
     // 反向自证：同一目录里换个扩展名就不替区域作保
-    expect(fileWritableAreaOf('C:/Game/demo/ERB/c.kojo', ROOTS)).toBe('other');
+    expect(fileWritableAreaOf('C:/Game/demo/ERB/c.kojo', PROJECT_DIRS)).toBe('other');
   });
 
   it('other：没有打开的文件（空态不许替任何文件作保）', () => {
-    expect(fileWritableAreaOf(null, ROOTS)).toBe('other');
+    expect(fileWritableAreaOf(null, PROJECT_DIRS)).toBe('other');
     // 反向自证：一有路径就落进某区，不再是 other
-    expect(fileWritableAreaOf(`${DEFAULT_ROOT}/p1/a.kojo`, ROOTS)).toBe('workspace');
+    expect(fileWritableAreaOf(`${DEFAULT_ROOT}/p1/a.kojo`, PROJECT_DIRS)).toBe('workspace');
   });
 
-  it('没有工作区根（服务不可用 / 浏览器开发壳）⇒ 游戏目录 ERB 仍判成口上区', () => {
+  it('没有可写目录（服务不可用 / 浏览器开发壳）⇒ 游戏目录 ERB 仍判成口上区', () => {
     expect(fileWritableAreaOf('C:/Game/demo/ERB/a.erb', [])).toBe('game-erb');
   });
 
@@ -75,13 +84,27 @@ describe('fileWritableArea / isInWorkspaceFile · 与 kernel 接线', () => {
     expect(fileWritableArea(kernel, game)).not.toBe('workspace');
   });
 
-  it('roots() 抛错（无平台数据目录）→ 不抛穿渲染路径，判成 other/game-erb', () => {
+  it('自选根根身（可能正是游戏目录）不算工作区：可写判定读的是作品目录，不是 roots()', () => {
+    // 同一个替身，roots() 里明明有 EXTRA_ROOT：判定必须装作没看见
+    expect(fileWritableArea(kernel, `${EXTRA_ROOT}/散落的文件.ERB`)).toBe('game-erb');
+    expect(isInWorkspaceFile(kernel, `${EXTRA_ROOT}/散落的文件.ERB`)).toBe(false);
+    // 反向自证：作品目录里的同名文件照样是工作区
+    expect(isInWorkspaceFile(kernel, `${EXTRA_ROOT}/p1/散落的文件.ERB`)).toBe(true);
+  });
+
+  it('projectDirs() 抛错（无平台数据目录）→ 不抛穿渲染路径，判成 other/game-erb', () => {
     const broken = kernelWithRoots(() => {
       throw new Error('Workspace service is unavailable');
     });
     expect(() => fileWritableArea(broken, 'C:/Game/demo/ERB/a.ERB')).not.toThrow();
     expect(fileWritableArea(broken, 'C:/Game/demo/ERB/a.ERB')).toBe('game-erb');
     expect(isInWorkspaceFile(broken, 'C:/Game/demo/ERB/a.ERB')).toBe(false);
+  });
+
+  it('服务只有 roots()（旧替身没实现 projectDirs）→ 一律判成无可写区，不炸', () => {
+    const legacy = { workspaces: { roots: () => ROOTS } as unknown as Kernel['workspaces'] };
+    expect(() => fileWritableArea(legacy, `${EXTRA_ROOT}/p1/a.ERB`)).not.toThrow();
+    expect(fileWritableArea(legacy, `${EXTRA_ROOT}/p1/a.ERB`)).toBe('game-erb');
   });
 });
 

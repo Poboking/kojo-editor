@@ -37,7 +37,7 @@ import {
   type SessionFlushScheduler,
   type SessionRecord,
 } from './session-store';
-import { workspaceRootsOf } from './workspace-roots';
+import { workspaceProjectDirsOf } from './workspace-roots';
 import type { ProjectErrorAction } from './project-error-notice';
 import {
   admitProjectWriteDomain,
@@ -404,8 +404,10 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
       ...project.kojoPaths,
       ...(project.savDir ? [project.savDir] : []),
       ...extraRoots,
-      // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，workspaceRootsOf 吞成空列表
-      ...workspaceRootsOf(kernel),
+      // 只监视**作品目录**（2026-10-27 收窄批）：自选项目位置根可能正是游戏目录，
+      // 把整个根卷进监视等于给游戏目录挂上全量 watcher（体量 + 噪声都不该发生）。
+      // 服务在没有平台数据目录的环境（浏览器开发壳）会抛，workspaceProjectDirsOf 吞成空列表
+      ...workspaceProjectDirsOf(kernel),
     ]);
   }, [kernel, project, extraRoots]);
 

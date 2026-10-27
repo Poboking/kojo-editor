@@ -21,7 +21,7 @@ import { createPortal } from 'react-dom';
 import '../shell-band.css';
 import { setIdentityBandFilled, useIdentityBandSlot } from './identity-band';
 import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, UIPanelContribution } from '@kojo/plugin-api';
-import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
+import {errorText,  MARKET_SERVICE_KEY, pathKey } from '@kojo/plugin-api';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
@@ -110,6 +110,7 @@ import {
   useFontZoomPref,
 } from './font-size-pref';
 import { fileWritableArea, writablePillTone } from './file-area';
+import { workspaceRootsOf } from './workspace-roots';
 // 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
 // 这里只取「当前活动文件那份 model」并把选择落到 model 上。
 import { focusedCtx, openModelAcrossGroups } from './editor-pane-registry';
@@ -1656,6 +1657,39 @@ export function ShellLayout(props: Props): ReactElement {
   );
 
   /**
+   * 设置页「工作区」一节的数据面（2026-10-27 撤销批）：落点根清单 + 撤销入口。
+   *
+   * 数据**现取不缓存**（`roots()` 是同步读内存数组、零 IO）：撤销成功或本会话新授权了
+   * 一个位置，抬一次 `workspaceRootsNonce` 就重取。`isDefault` 按 `rootDir()` 判等
+   * （`pathKey` 折叠分隔符与大小写），默认根那颗不给撤销按钮——内核也会拒，但按钮
+   * 不该先给出一个注定失败的入口。
+   *
+   * 服务不可用（浏览器调试壳）时 `workspaceRootsOf` 吞成空数组 ⇒ 那一节显示人话。
+   */
+  const [workspaceRootsNonce, setWorkspaceRootsNonce] = useState(0);
+  const workspaceRoots = useMemo(() => {
+    let defaultRoot: string | null = null;
+    try {
+      defaultRoot = kernel.workspaces.rootDir();
+    } catch {
+      defaultRoot = null;
+    }
+    const defaultKey = defaultRoot === null ? null : pathKey(defaultRoot);
+    return workspaceRootsOf(kernel).map((p) => ({
+      path: p,
+      isDefault: defaultKey !== null && pathKey(p) === defaultKey,
+    }));
+  }, [kernel, workspaceRootsNonce]);
+  const revokeWorkspaceRoot = useCallback(
+    async (root: string): Promise<void> => {
+      // 失败原因原样上抛：设置页那一行会把它显示出来（不在这里吞成人话的另一份）
+      await kernel.workspaces.revokeRoot(root);
+      setWorkspaceRootsNonce((n) => n + 1);
+    },
+    [kernel],
+  );
+
+  /**
    * 进入编辑器 3 秒后静默检查一次——只在 Tauri 壳里跑（浏览器 dev 跳过），
    * 卸载清 timer。依赖只有稳定的 `performUpdateCheck`，不随渲染重置。
    * 3 秒内作者若已手动检查/安装（phase 不再是 idle），这次自动检查让位，不叠加请求。
@@ -3136,7 +3170,7 @@ export function ShellLayout(props: Props): ReactElement {
    * 区域答不出（没打开文件 / 区域外的非 ERB）才回落到项目级 `writable`。
    */
   // PS-6：memo 在 kernel + activeFile 上——`fileWritableArea` 每次调用都要
-  // `workspaceRootsOf(kernel)`（内核那侧现拼一份根数组），路径没换答案就不会换，
+  // `workspaceProjectDirsOf(kernel)`（内核那侧现拼一份目录数组），路径没换答案就不会换，
   // 不该跟着壳层的每一次重渲重算一遍。
   const writableArea = useMemo(() => fileWritableArea(kernel, activeFile ?? null), [kernel, activeFile]);
   const writablePill = writablePillTone(writableArea, writable);
@@ -3362,6 +3396,8 @@ export function ShellLayout(props: Props): ReactElement {
           onClose={() => setSettingsOpen(false)}
           initialSection={settingsSection}
           commands={registry}
+          workspaceRoots={workspaceRoots}
+          onRevokeWorkspaceRoot={revokeWorkspaceRoot}
           zen={layout.zen}
           zenLimitWidth={layout.zenLimitWidth}
           dispatch={dispatch}

@@ -30,7 +30,7 @@ import { createProjectNameLedger } from './name-ledger';
 import { revealLocationOf } from '../monaco/reveal-position';
 import { setReplaceRunner, snapshot as readSearchState, subscribe as subscribeSearchState } from './search-store';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
-import { workspaceRootsOf } from './workspace-roots';
+import { workspaceProjectDirsOf } from './workspace-roots';
 import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
@@ -937,17 +937,18 @@ export function ProjectView({
   /**
    * 侧栏「搜索」视图的稳定组件身份（同 problemComponent 的 ref 闭包写法）。
    *
-   * 检索根 = **项目根 ∪ 会话级附加根（D1）∪ 作者工作区全部根**：工作区自 2026-10-14 起
-   * 不再是一个目录（默认根 + 对话框自选根），只搜项目根会把作者自己写的口上文件整批漏掉；
+   * 检索根 = **项目根 ∪ 会话级附加根（D1）∪ 作者作品目录**（2026-10-27 收窄批：从
+   * "工作区全部根"收窄到"作品目录"——自选项目位置根可能正是游戏目录，按根检索会把
+   * 整个游戏目录拖进检索范围）。只搜项目根会把作者自己写的口上文件整批漏掉；
    * 附加根同理——加进来就是为了"这部分也要能搜到"，漏掉等于没加。
    * 跳转仍走既有 `editor.revealLocation`（与问题面板同一条通道）。
    */
   const searchArgsRef = useRef({ kernel, roots: [] as string[], scopes: NO_SEARCH_SCOPES });
-  // 检索根是**活读数**（`workspaceRootsOf` 每次都现取——缓存会把本会话刚自选的那根
-  // 永远排除在外，口径同 `workspace-roots.ts`）。它的量是几根目录，每渲一次重算不要钱；
-  // 真正要省的是"根没变 ⇒ 面板不重渲"，所以进计数的是拼出来的那串键，不是数组引用。
+  // 检索根是**活读数**（`workspaceProjectDirsOf` 每次都现取——缓存会把本会话刚建出来的
+  // 作品目录永远排除在外，口径同 `workspace-roots.ts`）。它的量是几根目录，每渲一次重算
+  // 不要钱；真正要省的是"根没变 ⇒ 面板不重渲"，所以进计数的是拼出来的那串键，不是数组引用。
   const searchRoots = [
-    ...new Set([project.rootDir, ...(extraRoots ?? []), ...workspaceRootsOf(kernel)]),
+    ...new Set([project.rootDir, ...(extraRoots ?? []), ...workspaceProjectDirsOf(kernel)]),
   ];
   searchArgsRef.current = {
     kernel,

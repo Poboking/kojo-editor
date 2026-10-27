@@ -2,7 +2,7 @@ import type { Kernel } from '@kojo/kernel';
 import type { EditorLanguageServiceContribution, EditorSymbolLocation } from '@kojo/plugin-api';
 import type { KojoReferenceProbe, KojoSourceFile } from '../monaco/erb-rename';
 import { isKojoSourcePath } from './reference-utils';
-import { workspaceRootsOf } from './workspace-roots';
+import { workspaceProjectDirsOf } from './workspace-roots';
 import { errorText } from '@kojo/plugin-api';
 
 /**
@@ -15,8 +15,9 @@ import { errorText } from '@kojo/plugin-api';
  * 1. `listKojoSourceTexts`：项目里**所有** `.kojo` 源（含未打开标签）。只做后缀枚举
  *    与读文，**零糖语法知识**——本模块不认识 `函数` / `调用` 任何一个词，
  *    也不许在这里判读（判读在糖线，抄第二份就漂，见 `ui/reference-utils.ts` 头注）。
- *    检索根口径与搜索面板**同源**：项目根 ∪ 作者工作区全部根（工作区自 2026-10-14
- *    起是多个根，只搜项目根会把作者自己写的糖源整批漏掉）。
+ *    检索根口径与搜索面板**同源**：项目根 ∪ 作者作品目录（2026-10-27 收窄批：
+ *    从"工作区全部根"收窄到"作品目录"——自选项目位置根可能正是游戏目录，
+ *    按根枚举会把整个游戏目录拖进来）。只搜项目根会把作者自己写的糖源整批漏掉。
  * 2. `kojoReferencesViaSlot`：把探针交给槽，收回可证明的引用点。
  *
  * ## 为什么失败必须**抛**，不许退成空数组
@@ -43,7 +44,7 @@ export class KojoReferenceUnansweredError extends Error {}
 export async function listKojoSourceTexts(kernel: Kernel): Promise<readonly KojoSourceFile[]> {
   const project = kernel.project.current();
   if (!project) return [];
-  const roots = [...new Set([project.rootDir, ...workspaceRootsOf(kernel)])];
+  const roots = [...new Set([project.rootDir, ...workspaceProjectDirsOf(kernel)])];
   const paths: string[] = [];
   for (const root of roots) {
     if (root === '') continue;

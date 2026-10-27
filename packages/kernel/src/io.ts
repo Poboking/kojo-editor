@@ -831,15 +831,32 @@ export class FileIOServiceImpl implements FileIO {
 
   /**
    * 自选「项目位置」根（2026-10-14 批）：**对话框即授权**——授权发生在平台命令内
-   * （目录对话框与写进常驻根清单绑成一个原子动作），本层只负责把结果同步进第一道闸。
+   * （目录对话框与写进常驻根清单绑成一个原子动作）。
    * 与 `exportFile` 同族：刻意不接受路径入参，JS 侧没有"给个路径就放行"的入口。
+   *
+   * 2026-10-27 收窄批：本层**不再**把选定根整根追加进常驻可写根。那个动作曾让
+   * "把游戏目录选成项目位置"直接等于游戏目录可写。现在选定根只回答"作品可以建在哪"，
+   * 真正可写的是 `WorkspaceServiceImpl` 建出来/扫出来的作品目录（`projectDirs()`，
+   * 由工作区服务整替同步进本层）。对话框取消时仍然一个字节都不改。
    */
-  async chooseWorkspaceRoot(opts?: { title?: string }): Promise<string | null> {
+  async chooseWorkspaceRoot(opts?: {
+    title?: string;
+    forbidRoots?: readonly string[];
+  }): Promise<string | null> {
     const root = await this.bridge.chooseWorkspaceRoot(opts);
     if (root === null) return null; // 取消 = 什么都不改
-    this.addAppWritableRoot(root);
-    this.log?.info(`Project location authorized: ${root}`);
+    this.log?.info(`Project location selected (workspace service will register project dirs): ${root}`);
     return root;
+  }
+
+  /**
+   * 目录选择对话框（2026-10-27 导入来源批，additive 可选）：**只选不读不写、不登记授权**。
+   * 平台桥缺席（Node 桥等）⇒ 一句人话（照 `chooseFile` 的 unsupported 口径，不静默）。
+   */
+  async pickDirectory(opts?: { title?: string }): Promise<string | null> {
+    const pick = this.bridge.pickDirectory;
+    if (pick === undefined) throw new Error('当前平台没有目录选择能力（需要桌面壳）');
+    return pick.call(this.bridge, opts);
   }
 
   isWritable(path: string): boolean {

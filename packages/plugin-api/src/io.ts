@@ -199,8 +199,20 @@ export interface FileIO {
    * 与 `exportFile` 同族、同一暴露方式：这是插件侧唯一能"让写允许域变宽"的通道，
    * 而它**不接受路径入参**——授权只能来自用户在对话框里的显式选择（铁律 6）。
    * 平台无对话框能力（Node 桥）时抛错，调用侧自解释呈现。
+   *
+   * `forbidRoots`（2026-10-27 游戏目录防护批，additive）：这些目录（通常是当前游戏根 /
+   * 口上域）一律不许被选成项目位置。平台侧在**登记 / 落盘之前**做双向包含判定
+   * （相等 / 位于其下 / 包含它），命中即返回中文错误——不产生任何授权残留。
+   * 与 `chooseWorkspaceRoot` 相反，这是"把允许域挡在外面"的参数，不是授权入口。
    */
-  chooseWorkspaceRoot(opts?: { title?: string }): Promise<string | null>;
+  chooseWorkspaceRoot(opts?: { title?: string; forbidRoots?: readonly string[] }): Promise<string | null>;
+  /**
+   * 目录选择对话框（2026-10-27 导入来源批，additive 可选）：弹系统目录对话框，返回选定
+   * 路径；取消 → null。**只选不读不写、不登记任何授权**——这是"选一个只读来源目录"
+   * （如导入作者包）的正确形态：借 `chooseWorkspaceRoot` 选来源等于把来源目录（可能就是
+   * 游戏目录）登记成可写根。无此能力的平台（Node 桥）不实现，内核透传层给一句人话。
+   */
+  pickDirectory?(opts?: { title?: string }): Promise<string | null>;
   isWritable(path: string): boolean;
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;

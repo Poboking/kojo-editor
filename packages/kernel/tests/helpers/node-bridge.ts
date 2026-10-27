@@ -266,6 +266,12 @@ export class NodeBridge implements PlatformBridge {
     throw new Error('chooseWorkspaceRoot is not supported by NodeBridge');
   }
 
+  async revokeWorkspaceRoot(): Promise<void> {
+    // 撤销同样只能走桌面壳的两份清单（workspace_roots.txt / approved_roots.txt）；
+    // 本桥的授权是构造参数喂进来的内存名单，没有可撤销的落盘状态
+    throw new Error('revokeWorkspaceRoot is not supported by NodeBridge');
+  }
+
   /**
    * 远程取文本：**本桥刻意不复刻白名单**（那是 Rust 侧唯一真源，抄一份必然漂），
    * 也不降级去 `fetch()`。生产口径 = 无此能力即抛错，调用侧自解释呈现（照 `exportFile`）。

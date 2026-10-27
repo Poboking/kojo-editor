@@ -26,6 +26,25 @@ export function workspaceRootsOf(kernel: Pick<Kernel, 'workspaces'>): string[] {
 }
 
 /**
+ * 常驻**可写**目录（2026-10-27 收窄批）：默认根 + 已解析的作品目录，
+ * **不含**自选项目位置根的根身。判定"这份文件是不是作者可写区"只能用这一份。
+ *
+ * 为什么不是 `roots()`：自选根可能是游戏目录（作者把它选成"项目位置"），
+ * 用 `roots()` 判定会把游戏目录下的 ERB 判成"工作区可写"，于是编辑器拿掉只读、
+ * 状态栏亮绿——与写闸的实况打脸。`roots()` 保留给"可在哪里新建作品"。
+ *
+ * 服务不可用（无平台数据目录，如浏览器开发壳）时吞成**空数组**（= 没有可写区），
+ * 绝不抛穿渲染路径。
+ */
+export function workspaceProjectDirsOf(kernel: Pick<Kernel, 'workspaces'>): string[] {
+  try {
+    return kernel.workspaces.projectDirs();
+  } catch {
+    return [];
+  }
+}
+
+/**
  * p 是否落在**任一根**之内（组件级判定：`<根>-备份` 这类同前缀的邻居目录不算命中，
  * 该语义由 `isPathUnder` 的分隔符边界给出）。空根列表 ⇒ false。
  */

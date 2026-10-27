@@ -5,7 +5,7 @@
  *
  * 这条判定原本只活在 `EditorPane.inWorkspace` 里（编辑器拿它决定 Monaco 的 readOnly）。
  * 状态栏那颗可写胶囊改成**按所在区域**上色（工作项目区绿「可写」／口上区黄「只读」）之后，
- * 同一个问题有了第二个问口。两处各写一遍 `isUnderAnyRoot(workspaceRootsOf(kernel), p)`
+ * 同一个问题有了第二个问口。两处各写一遍 `isUnderAnyRoot(workspaceProjectDirsOf(kernel), p)`
  * 就是两个真源——本仓被"副本判定"咬过两次（FT-2 / PITFALLS 42：一处放宽另一处没跟上，
  * 症状是同一份文件在两个界面上互相打脸）。所以分野收进这一个纯函数，两处都只调它。
  *
@@ -13,9 +13,14 @@
  *
  * | 区域 | 依据 | 可写性 |
  * |---|---|---|
- * | `workspace` | 落在**全部工作区根**之内（默认根 + 作者自选的项目位置） | 恒可写：创作权威区，与项目授权状态无关 |
+ * | `workspace` | 落在**常驻可写目录**之内（默认根 + 已解析的作品目录） | 恒可写：创作权威区，与项目授权状态无关 |
  * | `game-erb` | 工作区外的原生 ERB（`.erb` / `.erm`）＝游戏目录里的借阅件 | 默认只读；要改就逐份破例或走直连模式 |
  * | `other` | 没有打开文件／区域外的非 ERB 文件 | **不替区域作保**：回落到项目级授权状态 |
+ *
+ * 2026-10-27 收窄批：`workspace` 的判据从 `roots()`（含自选根根身）换成
+ * `workspaces.projectDirs()`（只含作品目录）。作者把游戏目录选成"项目位置"时，
+ * 旧判据会把游戏目录里的 ERB 判成"工作区可写"——编辑器拿掉只读、胶囊亮绿，
+ * 而写闸照旧拒绝（状态与事实打脸的另一半）。
  *
  * `other` 那一格是故意的：区域只回答"在哪一区"，答不出"这一区的这份文件此刻能不能写"
  * （游戏目录里已批准写入的 `.kojo` 就是反例）。胶囊因此保留既有那条项目级口径，
@@ -24,7 +29,7 @@
 
 import type { Kernel } from '@kojo/kernel';
 import { isErbLike } from './lift-preview';
-import { isUnderAnyRoot, workspaceRootsOf } from './workspace-roots';
+import { isUnderAnyRoot, workspaceProjectDirsOf } from './workspace-roots';
 
 /** 可写性分野的三区（状态栏胶囊与编辑器 readOnly 共用的坐标） */
 export type FileWritableArea = 'workspace' | 'game-erb' | 'other';
@@ -41,11 +46,11 @@ export function fileWritableAreaOf(filePath: string | null, roots: readonly stri
 }
 
 /**
- * 现取工作区全部根再判（**不缓存**：`roots()` 是同步读内存数组、零 IO，缓存会把
- * 本会话刚自选的那个新根永远排除在外——口径同 `workspace-roots.ts`）。
+ * 现取常驻可写目录再判（**不缓存**：`projectDirs()` 是同步读内存数组、零 IO，缓存会把
+ * 本会话刚建出来的作品目录永远排除在外——口径同 `workspace-roots.ts`）。
  */
 export function fileWritableArea(kernel: Pick<Kernel, 'workspaces'>, filePath: string | null): FileWritableArea {
-  return fileWritableAreaOf(filePath, workspaceRootsOf(kernel));
+  return fileWritableAreaOf(filePath, workspaceProjectDirsOf(kernel));
 }
 
 /**

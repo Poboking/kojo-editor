@@ -5,9 +5,12 @@ import { createEratwAdapterPlugin } from '../src/plugin';
 /**
  * 「从文件夹导入口上项目…」命令（命令面板入口）的钉子。
  *
- * 这条命令只干两件事：弹系统目录对话框（`io.chooseWorkspaceRoot`）→ 发**既有**
+ * 这条命令只干两件事：弹系统目录对话框（`io.pickDirectory`，只选不授权）→ 发**既有**
  * 的 `workspace.importRequested` 意图。测试钉的是这两步的逐字行为：
  * payload 形状、取消的安静、对话框抛错的人话——不是"不炸"就算过。
+ *
+ * 2026-10-27 导入来源批：来源目录是**只读**的，选择通道必须是 `pickDirectory`；
+ * 旧的 `chooseWorkspaceRoot` 会把来源（可能就是游戏目录）登记成常驻可写根。
  */
 
 interface Emit {
@@ -67,11 +70,11 @@ function activate(io: FileIO): Harness {
   };
 }
 
-/** 可编排 chooseWorkspaceRoot 行为的伪 IO（其余成员本命令不碰，给最小桩） */
+/** 可编排 pickDirectory 行为的伪 IO（其余成员本命令不碰，给最小桩） */
 function fakeIO(
-  choose: (opts?: { title?: string }) => Promise<string | null>,
+  pick: (opts?: { title?: string }) => Promise<string | null>,
 ): FileIO {
-  return { chooseWorkspaceRoot: choose } as unknown as FileIO;
+  return { pickDirectory: pick } as unknown as FileIO;
 }
 
 describe('eratw-adapter · 「从文件夹导入口上项目…」命令', () => {
@@ -119,7 +122,7 @@ describe('eratw-adapter · 「从文件夹导入口上项目…」命令', () =>
 
   it('对话框抛错 → 人话进 log（含原因），不吞、不发射', async () => {
     const { command, emits, errors } = activate(fakeIO(async () => {
-      throw new Error('chooseWorkspaceRoot is not supported by NodeBridge');
+      throw new Error('pickDirectory is not supported by NodeBridge');
     }));
     await command!.run({ project: null });
     expect(emits).toEqual([]);
@@ -127,7 +130,22 @@ describe('eratw-adapter · 「从文件夹导入口上项目…」命令', () =>
     // 人话：说清哪条路走不通 + 原因原样带上
     expect(errors[0]).toContain('从文件夹导入口上项目');
     expect(errors[0]).toContain('目录选择对话框');
-    expect(errors[0]).toContain('chooseWorkspaceRoot is not supported by NodeBridge');
+    expect(errors[0]).toContain('pickDirectory is not supported by NodeBridge');
+  });
+
+  it('平台没有 pickDirectory ⇒ 不发射、出声，绝不回退到会授权的 chooseWorkspaceRoot', async () => {
+    let widened = 0;
+    const io = {
+      chooseWorkspaceRoot: async () => {
+        widened += 1;
+        return 'D:/game';
+      },
+    } as unknown as FileIO;
+    const { command, emits, errors } = activate(io);
+    await command!.run({ project: null });
+    expect(widened).toBe(0);
+    expect(emits).toEqual([]);
+    expect(errors.some((m) => m.includes('没有目录选择能力'))).toBe(true);
   });
 
   it('对话框标题走中文人话（系统对话框里作者看得见的字）', async () => {

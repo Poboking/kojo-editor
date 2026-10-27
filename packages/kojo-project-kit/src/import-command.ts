@@ -25,8 +25,10 @@ export const IMPORT_KOJO_PROJECT_COMMAND_TITLE = '从文件夹导入口上项目
  * 系统目录对话框选定 → 发既有的导入意图（命令面板与「我的口上项目」面板按钮走**同一条
  * 通道**，两处行为逐字一致，只差 `source` 标记；KM-13：市场来源据此读上一级 pack.json 兜底署名）。
  *
- * 对话框通道即 `io.chooseWorkspaceRoot`（对话框即授权，铁律 6 的法定形态）——这里只借它的
- * "选目录"形态，授权登记由平台命令内部完成，本函数不碰授权本身。
+ * 对话框通道是 `io.pickDirectory`（2026-10-27 导入来源批）：**只选不授权**。
+ * 旧形态借 `io.chooseWorkspaceRoot` 只是要一个"选目录"的形态，可它是「对话框即授权」——
+ * 选到游戏目录当来源，就把游戏目录登记成了**常驻可写根**（来源本该只读）。
+ * 现在来源选择不碰任何授权；无此能力的平台（Node 桥）给人话，不静默。
  */
 export async function pickAndRequestImport(
   ctx: PluginContext,
@@ -35,7 +37,12 @@ export async function pickAndRequestImport(
 ): Promise<void> {
   let picked: string | null;
   try {
-    picked = await io.chooseWorkspaceRoot({ title: '选择要导入的作者包文件夹' });
+    const pick = io.pickDirectory;
+    if (pick === undefined) {
+      ctx.log.error('「从文件夹导入口上项目」打不开目录选择对话框：当前平台没有目录选择能力（需要桌面壳）');
+      return;
+    }
+    picked = await pick.call(io, { title: '选择要导入的作者包文件夹' });
   } catch (err) {
     // 对话框本身起不来（如无对话框能力的环境）：人话出声，不吞——
     // 宁可让作者知道"这条路今天走不通"，也不让他对着毫无反应的按钮发呆。

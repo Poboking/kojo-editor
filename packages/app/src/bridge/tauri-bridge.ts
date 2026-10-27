@@ -207,7 +207,22 @@ export const tauriBridge: PlatformBridge = {
     // 与 exportFile 同一形态的「对话框即授权」：目录对话框 + 把选定路径登记为常驻授权根
     // 并落盘，全在 Rust 的 choose_workspace_root 一个命令内。
     // 这里没有路径入参，也没有任何"给个路径就放行写权限"的通道（铁律 6）。
-    return invoke<string | null>('choose_workspace_root', { title: opts?.title ?? null });
+    // `forbidRoots` 反向：让 Rust 在**登记之前**拒掉与这些目录重叠的选择（游戏目录防护批），
+    // 传 snake_case 与命令形参名对齐。
+    return invoke<string | null>('choose_workspace_root', {
+      title: opts?.title ?? null,
+      forbidRoots: opts?.forbidRoots ?? null,
+    });
+  },
+
+  async revokeWorkspaceRoot(path: string): Promise<void> {
+    // 唯一一条**收窄**写允许域的命令：路径参数只能让允许域变小（铁律 6 管的是扩大）
+    await invoke('revoke_workspace_root', { path });
+  },
+
+  /** 目录选择对话框：只选不授权（导入来源用），与 chooseWorkspaceRoot 的差别就是"不登记" */
+  async pickDirectory(opts): Promise<string | null> {
+    return invoke<string | null>('pick_directory', { title: opts?.title ?? null });
   },
 
   async listWorkspaceRoots(): Promise<string[]> {

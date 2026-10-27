@@ -417,8 +417,31 @@ export interface PlatformBridge {
    * 授权模型与 `exportFile` 同族 = **对话框即授权**：
    * 平台不存在"接受一个路径参数就放行写权限"的命令，JS 拿不到写允许域的扩大入口。
    * Node 桥无对话框 → 抛 unsupported。
+   *
+   * `forbidRoots`（2026-10-27 游戏目录防护批，additive）：这些目录不许被选成项目位置。
+   * 平台侧在**登记 / 落盘之前**做双向包含判定（相等 / 位于其下 / 包含它），
+   * 命中即返回中文 Err、一个字节的授权都不留。空列表 / 缺席 = 行为与历史逐字一致。
    */
-  chooseWorkspaceRoot(opts?: { title?: string }): Promise<string | null>;
+  chooseWorkspaceRoot(opts?: { title?: string; forbidRoots?: readonly string[] }): Promise<string | null>;
+  /**
+   * 撤销一个自选项目位置根的常驻授权（2026-10-27 撤销批）。
+   *
+   * 平台侧把它从常驻授权根（`workspace_roots.txt`）与准入根（`approved_roots.txt`）
+   * 两份清单里移除并按规范化路径口径落盘、失效规范化备忘录；默认工作区根（appData 下）
+   * 拒绝撤销。这是全仓唯一一条**收窄**写允许域的命令——它只有路径参数，
+   * 但只能让允许域变小，故不违铁律 6（铁律 6 管的是"扩大"）。
+   * Node 桥无此能力（没有对应的授权状态）→ 抛 unsupported。
+   */
+  revokeWorkspaceRoot(path: string): Promise<void>;
+  /**
+   * 目录选择对话框：只弹框、只返回路径，**不登记任何授权**（2026-10-27 导入来源批）。
+   *
+   * 与 `chooseDirectory`（会登记准入根）和 `chooseWorkspaceRoot`（会登记常驻可写根）
+   * 的区别就是这一句"不登记"：选一个**只读来源**（导入的作者包目录）不该让来源
+   * 变成可写域——那正是"选到游戏目录就把游戏目录授权了"的旧缺陷。
+   * 取消 → null。无对话框能力的平台（Node 桥）不实现，内核透传层给一句人话。
+   */
+  pickDirectory?(opts?: { title?: string }): Promise<string | null>;
   /**
    * 已获常驻授权的**自选**项目位置根（绝对路径列表；不含默认工作区根，
    * 那由内核自己按 appDataDir 拼）。不存在的目录平台侧会剔除并出声。

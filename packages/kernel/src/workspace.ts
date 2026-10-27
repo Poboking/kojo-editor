@@ -20,12 +20,15 @@ import { WORKSPACE_MANIFEST_FILE, isAbsolute, isPathUnder, join } from '@kojo/pl
  * 落点根 = 默认根 `<appDataDir>/workspaces`（恒在首位）∪ 用户自选并常驻授权的项目位置根
  * （2026-10-14 批；`roots()`）。注册表 = 扫描各根目录读 manifest（免索引文件——索引即目录，崩溃不漂移）。
  *
- * 安全：
- * - 初始化时把**全部根**登记为 io 的**常驻可写根**（`setAppWritableRoots`）——
- *   工作区恒可写，独立于游戏目录写授权的开闭周期；写盘仍走内核 io 双闸；
+ * 安全（2026-10-27 收窄批）：
+ * - 常驻可写根 = **默认根 + 已解析的作品目录**（`projectDirs()`）。自选项目位置根的
+ *   **根身本身不再登记**：作者把游戏目录选成"项目位置"时，游戏目录下的一切文件曾经连带
+ *   可写（收窄前 `setAppWritableRoots([root, ...extraRoots])`）；现在只有真正落在其下的
+ *   作品目录可写，游戏目录保持只读。写盘仍走内核 io 双闸；
  * - 额外根只读自平台（`listWorkspaceRoots`），而平台侧那份授权的唯一来源是
  *   目录对话框（`chooseWorkspaceRoot`：对话框与登记绑在同一个命令内）。
  *   本服务**不接受**任何"给个路径就放行"的入口：`create` 的 `rootDir` 必须命中已知根；
+ * - 收窄授权（`revokeRoot`）是允许的：那是路径参数，但它只能让写允许域变小（铁律 6 管"扩大"）；
  * - 一切相对路径经 `resolveIn` 校验（拒绝对路径 / `..` 逃逸），
  *   项目 id / 制品目录名强制单层 segment。
  *
@@ -101,7 +104,8 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     const appData = await this.deps.bridge.appDataDir();
     this.root = join(appData, 'workspaces');
     this.extraRoots = await this.readAuthorizedRoots();
-    this.deps.io.setAppWritableRoots([this.root, ...this.extraRoots]);
+    // 只登记默认根 + 已解析作品目录（此刻还没有 ⇒ 只有默认根）：自选根根身不进写允许域
+    this.syncWritableRoots();
     await this.deps.io.ensureDir(this.root);
     this.deps.log.info(
       `Workspace root: ${this.root}` +
@@ -110,6 +114,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     // 有外部根 ⇒ 必须先扫一次，否则 projectDir() 把它们的项目全解析回默认根
     // （get/update/remove 会找不到项目）。没有外部根时保持零额外扫描：默认根下
     // `join(root, id)` 就是唯一真相，init 再扫一遍纯属重复面板的那一次 list。
+    // `list()` 末尾会再同步一次常驻可写根（把扫到的作品目录纳入）。
     if (this.extraRoots.length > 0) await this.list();
   }
 
@@ -129,6 +134,30 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   roots(): string[] {
     const root = this.requireRoot();
     return [root, ...this.extraRoots.filter((r) => !isSameRoot(r, root))];
+  }
+
+  /**
+   * 常驻**可写**目录：默认根（恒在首位）+ 已解析的作品目录。
+   *
+   * 刻意**不含自选根根身**（2026-10-27 收窄批）：`roots()` 回答"能在哪里新建作品"，
+   * 这里是"此刻哪些目录可写"。自选根如果是游戏目录，根身可写 = 游戏目录可写，
+   * 那正是本批要收掉的面。只收 `dirById` 里落在某个自选根之下的目录
+   * （默认根下的项目已被默认根整体覆盖）。
+   */
+  projectDirs(): string[] {
+    const root = this.requireRoot();
+    const out = [root];
+    for (const dir of this.dirById.values()) {
+      if (!this.extraRoots.some((r) => isPathUnder(r, dir))) continue;
+      if (out.some((d) => isSameRoot(d, dir))) continue;
+      out.push(dir);
+    }
+    return out;
+  }
+
+  /** 把 `projectDirs()` 同步进 io 第一道闸（整替语义：只许收窄或按作品目录放宽） */
+  private syncWritableRoots(): void {
+    this.deps.io.setAppWritableRoots(this.projectDirs());
   }
 
   projectDir(projectId: string): string {
@@ -246,16 +275,21 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   /**
    * 刷新授权根（`create` 前调用）：本会话里刚经对话框新增的根不会出现在
-   * `init` 时读到的那份里，故落盘授权后重读一次并同步进 io 第一道闸（追加，不收回既有授权）。
+   * `init` 时读到的那份里，故落盘授权后重读一次。
+   *
+   * **不再把根身登记进 io**（2026-10-27 收窄批）：新根之下的既有作品目录要靠一次
+   * `list()` 解析出来（`list` 末尾同步常驻可写根），自选根根身本身始终不写。
    */
   private async refreshAuthorizedRoots(): Promise<void> {
     const fresh = await this.readAuthorizedRoots();
+    let added = false;
     for (const r of fresh) {
       if (this.extraRoots.some((e) => isSameRoot(e, r))) continue;
       this.extraRoots.push(r);
-      this.deps.io.addAppWritableRoot(r);
-      this.deps.log.info(`项目位置授权已生效：${r}`);
+      added = true;
+      this.deps.log.info(`项目位置授权已生效：${r}（只登记其下的作品目录）`);
     }
+    if (added) await this.list();
   }
 
   async list(): Promise<WorkspaceProject[]> {
@@ -282,6 +316,9 @@ export class WorkspaceServiceImpl implements WorkspaceService {
         out.push(p);
       }
     }
+    // 扫完即同步常驻可写根：自选根下的作品目录刚刚被解析出来
+    // （2026-10-27 收窄批——收窄后这是"作品可写"的唯一来源）
+    this.syncWritableRoots();
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -322,6 +359,8 @@ export class WorkspaceServiceImpl implements WorkspaceService {
       meta: input.meta ?? {},
     };
     this.dirById.set(id, join(root, id)); // 先登记，manifest 才写得到正确的根
+    // 再同步可写根：新作品目录此刻才进 `projectDirs()`，随后 ensureDir / 写 manifest 才过得去
+    this.syncWritableRoots();
     await this.deps.io.ensureDir(join(root, id));
     await this.writeManifest(project);
     this.deps.log.info(`Workspace project created: ${name} (${id}) @ ${root}`);
@@ -353,7 +392,44 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     // 绕开 assertWritable——常驻根被收回或路径出域时照样删盘。
     await this.deps.io.removeDir(dir);
     this.dirById.delete(projectId);
+    // 作品没了 ⇒ 它的目录也别再留在常驻可写根里（只收窄，不放宽）
+    this.syncWritableRoots();
     this.deps.log.info(`Workspace project removed: ${projectId}`);
+  }
+
+  /**
+   * 撤销一个自选项目位置根（2026-10-27 撤销批）。
+   *
+   * 顺序是刻意的：先核对"这个根下还有没有作品"，再动平台侧清单——反过来做的话，
+   * 一次被拒的撤销也已经把授权撤了一半（作品当场变只读，而 UI 上写着"撤销失败"）。
+   */
+  async revokeRoot(root: string): Promise<void> {
+    const defaultRoot = this.requireRoot();
+    if (isSameRoot(root, defaultRoot)) {
+      throw new Error(
+        `默认工作区不能撤销：${defaultRoot} 就是作者作品的常驻位置（撤销会把里面的作品锁成只读）。`,
+      );
+    }
+    // 名单要重读：本会话刚经对话框授权的根不在 init 那份里
+    await this.refreshAuthorizedRoots();
+    const hit = this.extraRoots.find((r) => isSameRoot(r, root));
+    if (hit === undefined) {
+      throw new Error(`这个位置不在已授权的项目位置清单里：${root}（可能已经撤销过）`);
+    }
+    // 必须扫一次：`dirById` 只由 list()/create 填充，问不出"还有没有作品"就撤销 = 作品变只读
+    await this.list();
+    const busy = [...this.dirById.entries()].filter(([, dir]) => isPathUnder(hit, dir));
+    if (busy.length > 0) {
+      const names = busy.slice(0, 3).map(([id]) => id).join('、');
+      throw new Error(
+        `这个位置里还有 ${busy.length} 个作品${names.length > 0 ? `（${names}${busy.length > 3 ? '…' : ''}）` : ''}：` +
+          '先把它们移走或删除，再撤销——否则撤销后这些作品会变成只读。',
+      );
+    }
+    await this.deps.bridge.revokeWorkspaceRoot(hit);
+    this.extraRoots = this.extraRoots.filter((r) => !isSameRoot(r, hit));
+    this.syncWritableRoots();
+    this.deps.log.info(`项目位置授权已撤销：${hit}`);
   }
 
   async createArtifact(projectId: string, input: WorkspaceArtifactInput): Promise<WorkspaceArtifact> {

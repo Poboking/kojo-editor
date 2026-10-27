@@ -192,6 +192,30 @@ fn is_same_path(a: &Path, b: &Path) -> bool {
     lowered_components(a) == lowered_components(b)
 }
 
+/// 两个路径是否**重叠**（相等 / 一个在另一个里面）：规范化后双向 `is_within`。
+/// 规范化失败（目录已被删掉）时退回原始组件比较——那一侧只会更严，不会更松。
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    match (canonicalize_deep(a), canonicalize_deep(b)) {
+        (Ok(ca), Ok(cb)) => is_within(&ca, &cb) || is_within(&cb, &ca),
+        _ => is_within(a, b) || is_within(b, a),
+    }
+}
+
+/// 从常驻根清单里**移除同一个目录**的全部写法（规范化 + 大小写口径同 `push_extra_root`）。
+/// 返回实际移除的条数。纯函数（单测直接打这一层）：撤销命令的另一半是落盘，不在本函数里。
+fn remove_same_root(list: &mut Vec<PathBuf>, target: &Path) -> usize {
+    let canon = canonicalize_deep(target).ok();
+    let before = list.len();
+    list.retain(|p| {
+        let same = match (canonicalize_deep(p), canon.as_ref()) {
+            (Ok(a), Some(b)) => is_same_path(&a, b),
+            _ => is_same_path(p, target),
+        };
+        !same
+    });
+    before - list.len()
+}
+
 /// 追加常驻授权根（按规范化路径去重）；返回是否真的新增。
 /// 去重要经 `canonicalize_deep`——对话框回来的路径常带 `\\?\` 前缀或大小写差异，
 /// 纯字符串比较会把同一个目录认成两次授权。
@@ -1389,6 +1413,7 @@ async fn choose_workspace_root(
     app: tauri::AppHandle,
     state: tauri::State<'_, WriteDomainState>,
     title: Option<String>,
+    forbid_roots: Option<Vec<String>>,
 ) -> Result<Option<String>, String> {
     use tauri::Manager;
     let mut dialog = rfd::AsyncFileDialog::new();
@@ -1399,6 +1424,26 @@ async fn choose_workspace_root(
         Some(handle) => handle.path().to_path_buf(),
         None => return Ok(None), // 取消 = 不改任何授权状态
     };
+    // 游戏目录防护（2026-10-27）：与任一 forbid 根**双向重叠**（相等 / 在其下 / 含它）⇒
+    // 当场拒绝。判定必须在 push_extra_root / record_approved_root **之前**：
+    // 先登记再报错 = 一次被拒的选择也留下了永久授权残留（正是本批要堵的洞）。
+    let forbidden = forbid_roots.as_deref().unwrap_or(&[]);
+    for f in forbidden.iter().filter(|f| !f.trim().is_empty()) {
+        let forbid = std::path::PathBuf::from(f);
+        if paths_overlap(&picked, &forbid) {
+            eprintln!(
+                "[choose_workspace_root] 选择与受保护目录重叠，拒绝登记：{} ↔ {}",
+                picked.display(),
+                forbid.display()
+            );
+            return Err(format!(
+                "这个文件夹不能当项目位置：它与当前游戏的目录重叠（{}）。\n\
+                 游戏目录必须保持只读——请另选一个只存你自己作品的文件夹（不要选游戏目录，\
+                 也不要选游戏目录的上级文件夹）。",
+                forbid.display()
+            ));
+        }
+    }
     // 快照在锁内取、落盘在块外做：不持着锁去做磁盘 IO
     let snapshot = {
         let mut guard = state
@@ -1422,6 +1467,96 @@ async fn choose_workspace_root(
         snapshot.len()
     );
     Ok(Some(picked.to_string_lossy().to_string()))
+}
+
+/// 撤销一个自选**项目位置**根的常驻授权（2026-10-27 撤销批）。
+///
+/// 这是全仓唯一一条**收窄**写允许域的命令：它接受一个路径参数，但只能把授权拿掉，
+/// 不可能让允许域变宽（铁律 6 管的是"扩大"）。
+///
+/// 做三件事，一步不省：①从内存 `extra_roots` 与 `approved_roots` 两份清单里移除
+/// 同一个目录的全部写法（`remove_same_root` 的规范化口径）；②把两份清单整表重写落盘；
+/// ③失效规范化备忘录（否则旧根的缓存还能放行到下次变更）。
+///
+/// **默认工作区根（`<appDataDir>/workspaces`）拒绝撤销**：那是内核自己的作品常驻位置，
+/// 撤掉等于把作者作品锁成只读。清单里本来没有它时同样如实报"不在清单里"。
+#[tauri::command]
+async fn revoke_workspace_root(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    path: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if path.trim().is_empty() {
+        return Err("要撤销的项目位置不能是空路径。".to_string());
+    }
+    let target = std::path::PathBuf::from(path.trim());
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let default_root = app_dir.join("workspaces");
+    let is_default = match (canonicalize_deep(&target), canonicalize_deep(&default_root)) {
+        (Ok(a), Ok(b)) => is_same_path(&a, &b),
+        _ => is_same_path(&target, &default_root),
+    };
+    if is_default {
+        return Err(format!(
+            "默认工作区不能撤销：{} 就是作者作品的常驻位置（撤销会把里面的作品锁成只读）。",
+            default_root.display()
+        ));
+    }
+    // 两份清单都在锁内改完再整表取快照，落盘在锁外（不持锁做磁盘 IO）
+    let (extra_snapshot, approved_snapshot, removed) = {
+        let mut extra = state
+            .extra_roots
+            .lock()
+            .map_err(|_| "write domain state poisoned".to_string())?;
+        let removed_extra = remove_same_root(&mut extra, &target);
+        let extra_snapshot = extra.clone();
+        drop(extra);
+        let mut approved = state
+            .approved_roots
+            .lock()
+            .map_err(|_| "write domain state poisoned".to_string())?;
+        let removed_approved = remove_same_root(&mut approved, &target);
+        let approved_snapshot = approved.clone();
+        (extra_snapshot, approved_snapshot, removed_extra + removed_approved)
+    };
+    if removed == 0 {
+        return Err(format!(
+            "这个位置不在已授权的项目位置清单里：{}（可能已经撤销过）",
+            target.display()
+        ));
+    }
+    write_workspace_roots(&app_dir, &extra_snapshot)?;
+    write_approved_roots(&app_dir, &approved_snapshot)?;
+    // 允许域变了 ⇒ 规范化备忘录整体作废（与 register / clear 同一口径）
+    invalidate_canon_roots(&state);
+    eprintln!(
+        "[revoke_workspace_root] 已撤销：{}（常驻根剩 {} 个）",
+        target.display(),
+        extra_snapshot.len()
+    );
+    Ok(())
+}
+
+/// 目录选择对话框：**只选不读不写、不登记任何授权**（2026-10-27 导入来源批）。
+///
+/// 与 `choose_directory`（会登记准入根）和 `choose_workspace_root`（会登记常驻可写根）
+/// 的差别就是这一句"不登记"：选一个只读来源（导入的作者包目录）不该让来源变成可写域
+/// ——旧形态借 `choose_workspace_root` 选来源，选到游戏目录就把游戏目录授权了。
+/// 读侧无闸是既有口径（`read_file_bytes` 同样读任意路径）。
+#[tauri::command]
+async fn pick_directory(title: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(t) = title.as_deref() {
+        dialog = dialog.set_title(t);
+    }
+    Ok(dialog
+        .pick_folder()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string()))
 }
 
 /// 内存 ∪ 磁盘清单的去重与失效剔除（**纯函数**，可单测）：保授权顺序、
@@ -3302,6 +3437,8 @@ pub fn run() {
             choose_directory,
             choose_file,
             choose_workspace_root,
+            revoke_workspace_root,
+            pick_directory,
             workspace_roots,
             export_file,
             app_data_dir,
@@ -3394,8 +3531,9 @@ mod write_domain_tests {
         ensure_in_write_domain, ensure_write_allowed_from_parts,
         invalidate_canon_roots, is_reserved_state_file, is_root_approved, is_same_path, is_within,
         memo_insert_canon_if_current,
-        merge_workspace_roots, push_approved_root, push_extra_root, read_approved_roots,
-        read_workspace_roots, write_approved_roots, write_workspace_roots, WriteDomainState,
+        merge_workspace_roots, paths_overlap, push_approved_root, push_extra_root,
+        read_approved_roots, read_workspace_roots, remove_same_root, write_approved_roots,
+        write_workspace_roots, WriteDomainState,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -3614,6 +3752,45 @@ mod write_domain_tests {
         let other = mkdir(&temp_root("other"));
         assert!(push_extra_root(&mut list, &other));
         assert_eq!(list.len(), 2);
+    }
+
+    /// 撤销的纯核心（2026-10-27 撤销批）：同一个目录的**全部写法**一次移除，
+    /// 邻居目录、同前缀目录一概留下——撤多了就是把别人的作品锁成只读。
+    #[test]
+    fn remove_same_root_drops_only_the_same_directory() {
+        let chosen = mkdir(&temp_root("chosen"));
+        let neighbor = mkdir(&temp_root("neighbor"));
+        // 同前缀的兄弟（`xxx` vs `xxx-备份`）：不是同一个目录
+        let sibling = mkdir(&PathBuf::from(format!("{}-备份", chosen.display())));
+        let mut list: Vec<PathBuf> = vec![
+            chosen.clone(),
+            neighbor.clone(),
+            chosen.join("."),
+            sibling.clone(),
+        ];
+        assert_eq!(remove_same_root(&mut list, &chosen), 2, "两种写法都该移除");
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|p| is_same_path(p, &neighbor)));
+        assert!(list.iter().any(|p| is_same_path(p, &sibling)));
+        // 幂等：再来一次什么都不动（不会误删邻居）
+        assert_eq!(remove_same_root(&mut list, &chosen), 0);
+        assert_eq!(list.len(), 2);
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
+
+    /// 游戏目录防护的判定核心：相等 / 在其下 / 含它 都算重叠；同前缀兄弟不算
+    #[test]
+    fn paths_overlap_covers_equality_descendants_and_ancestors() {
+        let base = temp_root("overlap");
+        let game = mkdir(&base.join("eratw"));
+        let packs = mkdir(&game.join("ERB").join("口上"));
+        let sibling = mkdir(&base.join("eratw-备份"));
+        assert!(paths_overlap(&game, &game), "相等必须算重叠");
+        assert!(paths_overlap(&packs, &game), "游戏目录里的子目录算重叠");
+        assert!(paths_overlap(&game, &packs), "游戏目录本身算重叠");
+        assert!(paths_overlap(&base, &game), "游戏目录的上级算重叠（选中它等于把游戏圈进来）");
+        assert!(!paths_overlap(&sibling, &game), "同前缀兄弟目录不算重叠");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// 授权根持久化：写下去读得回（一行一路径），文件不存在 = 空列表不报错

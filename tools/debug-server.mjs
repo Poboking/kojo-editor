@@ -634,8 +634,8 @@ export const SUPPORTED_COMMANDS = Object.freeze([
   'choose_workspace_root', 'clear_write_domain', 'copy_file', 'encode_string', 'ensure_dir',
   'export_file', 'list_dir', 'market_device_token', 'market_download', 'market_extract',
   'market_fetch_text', 'market_publish', 'open_url_external', 'path_exists', 'read_file_bytes_raw',
-  'read_files_raw', 'register_write_domain', 'remove_dir', 'remove_file', 'rename_path',
-  'search_text', 'show_in_folder', 'start_watch', 'stat_file', 'stat_files', 'stop_watch',
+  'pick_directory', 'read_files_raw', 'register_write_domain', 'remove_dir', 'remove_file', 'rename_path',
+  'revoke_workspace_root', 'search_text', 'show_in_folder', 'start_watch', 'stat_file', 'stat_files', 'stop_watch',
   'updater_env_proxy', 'walk_dir', 'workspace_roots', 'write_file_bytes',
 ]);
 
@@ -763,16 +763,38 @@ export async function createDebugServer(options) {
     },
     choose_directory: async () => state.policy.chooseDir,
     choose_file: async () => state.policy.chooseFile,
-    choose_workspace_root: async () => {
+    choose_workspace_root: async (args) => {
       const chosen = state.policy.chooseDir;
       if (!chosen) return null;
       const root = norm(chosen);
+      // 游戏目录防护（与 Rust 同口径）：与任一 forbid 根双向重叠 ⇒ 登记之前就拒
+      const forbid = Array.isArray(args?.forbidRoots) ? args.forbidRoots : [];
+      for (const f of forbid.map(norm)) {
+        if (insideLower(normLower(root), [normLower(f)]) || insideLower(normLower(f), [normLower(root)])) {
+          throw new HostError(
+            `这个文件夹不能当项目位置：它与当前游戏的目录重叠（${f}）。请另选一个只存你自己作品的文件夹。`,
+          );
+        }
+      }
       if (!state.workspaceRoots.some((r) => norm(r).toLowerCase() === root.toLowerCase())) {
         state.workspaceRoots.push(root);
         invalidateRoots();
         log(`[debug-host] 常驻工作区根已登记：${root}`);
       }
       return root;
+    },
+    // 目录选择：只选不授权（与 Rust `pick_directory` 同口径）
+    pick_directory: async () => (state.policy.chooseDir ? norm(state.policy.chooseDir) : null),
+    revoke_workspace_root: async (args) => {
+      const target = normLower(args?.path);
+      if (target === '') throw new HostError('要撤销的项目位置不能是空路径。');
+      const before = state.workspaceRoots.length;
+      state.workspaceRoots = state.workspaceRoots.filter((r) => normLower(r) !== target);
+      if (state.workspaceRoots.length === before) {
+        throw new HostError(`这个位置不在已授权的项目位置清单里：${norm(args?.path)}（可能已经撤销过）`);
+      }
+      invalidateRoots();
+      log(`[debug-host] 常驻工作区根已撤销：${norm(args?.path)}`);
     },
     clear_write_domain: async () => {
       state.writeDomain = [];

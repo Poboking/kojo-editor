@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
-import { isUnderAnyRoot, planAddExtraRoot, workspaceRootsOf } from '../src/ui/workspace-roots';
+import { isUnderAnyRoot, planAddExtraRoot, workspaceProjectDirsOf, workspaceRootsOf } from '../src/ui/workspace-roots';
 
 /**
  * 工作区**全部**根的读取与判定（2026-10-14 新建项目自选位置批）。
@@ -44,6 +44,31 @@ describe('workspaceRootsOf', () => {
     expect(workspaceRootsOf(kernel)).toEqual([DEFAULT_ROOT]);
     expect(isUnderAnyRoot(workspaceRootsOf(kernel), `${EXTRA_ROOT}/p1/a.ERB`)).toBe(true);
     expect(roots).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('workspaceProjectDirsOf（2026-10-27 收窄批：可写判定只认作品目录）', () => {
+  it('原样转发 projectDirs()：默认根 + 作品目录（自选根根身不在其中）', () => {
+    const kernel = {
+      workspaces: {
+        roots: () => [DEFAULT_ROOT, EXTRA_ROOT],
+        projectDirs: () => [DEFAULT_ROOT, `${EXTRA_ROOT}/p1`],
+      } as unknown as Kernel['workspaces'],
+    };
+    expect(workspaceProjectDirsOf(kernel)).toEqual([DEFAULT_ROOT, `${EXTRA_ROOT}/p1`]);
+    // 反向自证：同一替身的 roots() 里明明有自选根根身，可写判定必须不认它
+    expect(isUnderAnyRoot(workspaceProjectDirsOf(kernel), `${EXTRA_ROOT}/散件.ERB`)).toBe(false);
+  });
+
+  it('服务不可用（projectDirs() 抛）→ 吞成空数组，绝不抛穿渲染路径', () => {
+    const kernel = {
+      workspaces: {
+        projectDirs: () => {
+          throw new Error('Workspace service is unavailable (no platform data directory)');
+        },
+      } as unknown as Kernel['workspaces'],
+    };
+    expect(workspaceProjectDirsOf(kernel)).toEqual([]);
   });
 });
 

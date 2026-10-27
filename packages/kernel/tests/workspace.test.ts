@@ -239,11 +239,15 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     await ws2.init();
   });
 
-  it('roots() 默认根恒在首位；授权根 init 起就登记进 io 常驻可写根', () => {
+  it('roots() 默认根恒在首位；自选根根身**不进**常驻可写根（2026-10-27 收窄批）', () => {
     const roots = ws2.roots();
     expect(roots[0]).toBe(ws2.rootDir());
     expect(roots).toContain(extraRoot);
-    expect(io2.isWritable(path.join(extraRoot, '包', '事件.ERB'))).toBe(true);
+    // `roots()` 仍是"可在哪里新建作品"，含自选根整体
+    expect(ws2.projectDirs()).toEqual([ws2.rootDir()]);
+    // 收窄口径的反向自证：自选根根身（可能就是游戏目录）此刻不可写
+    expect(io2.isWritable(path.join(extraRoot, '包', '事件.ERB'))).toBe(false);
+    expect(io2.isWritable(path.join(ws2.rootDir(), 'x', 'y.txt'))).toBe(true);
   });
 
   it('create 进授权根：落点在外部根，list 跨根看得见，projectDir 解析到外部根', async () => {
@@ -255,6 +259,10 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     expect(ws2.projectDir(p.id)).toBe(path.join(extraRoot, p.id));
     // 默认根下不该多出这个目录
     expect(await io2.exists(path.join(ws2.rootDir(), p.id))).toBe(false);
+    // 2026-10-27 收窄批：作品目录进可写域，自选根根身**不**进（两个方向都验）
+    expect(ws2.projectDirs()).toContain(path.join(extraRoot, p.id));
+    expect(io2.isWritable(path.join(extraRoot, p.id, 'pkg', 'a.txt'))).toBe(true);
+    expect(io2.isWritable(path.join(extraRoot, '别处', 'b.txt'))).toBe(false);
 
     // 新实例（模拟重启后）：init 见到授权根就扫一次 ⇒ 外部根里的项目开箱即可解析
     const freshIo = new FileIOServiceImpl(new NodeBridge(appData, [extraRoot]));
@@ -265,6 +273,9 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     });
     await fresh.init();
     expect(fresh.projectDir(p.id)).toBe(path.join(extraRoot, p.id));
+    // init 那次扫描解析出作品目录后，常驻可写根已按作品目录重算
+    expect(freshIo.isWritable(path.join(extraRoot, p.id, 'workspace.json'))).toBe(true);
+    expect(freshIo.isWritable(path.join(extraRoot, '别处', 'b.txt'))).toBe(false);
     const list = await fresh.list();
     expect(list.map((x) => x.name)).toContain('外部作品');
     // 制品动作按 projectDir 定位 ⇒ 外部根里的包读写的是外部根里的那份
@@ -401,6 +412,53 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     });
     expect(() => dead.roots()).toThrow(/unavailable/);
     expect(() => dead.rootDir()).toThrow(/unavailable/);
+    expect(() => dead.projectDirs()).toThrow(/unavailable/);
+  });
+
+  /* ---------------- 撤销自选根（2026-10-27 撤销批） ---------------- */
+
+  it('撤销自选根：默认根拒绝；有作品时拒绝（中文原因、平台清单不动）；清空后成功并重建可写根', async () => {
+    const revoked: string[] = [];
+    let authorized = [extraRoot];
+    const bridge = Object.assign(Object.create(new NodeBridge(appData, [extraRoot])) as PlatformBridge, {
+      listWorkspaceRoots: async () => [...authorized],
+      revokeWorkspaceRoot: async (p: string) => {
+        revoked.push(p);
+        authorized = authorized.filter((r) => r !== p);
+      },
+    });
+    const rIo = new FileIOServiceImpl(bridge);
+    const rWs = new WorkspaceServiceImpl({ bridge, io: rIo, log: noopLog });
+    await rWs.init();
+
+    // 默认根不可撤销（它就是作品的常驻位置）
+    await expect(rWs.revokeRoot(rWs.rootDir())).rejects.toThrow(/默认工作区不能撤销/);
+    expect(revoked).toEqual([]);
+
+    const p = await rWs.create({ name: '还没搬走的作品', rootDir: extraRoot });
+    await expect(rWs.revokeRoot(extraRoot)).rejects.toThrow(/还有 1 个作品/);
+    // 拒绝必须发生在动平台清单之前：授权一个字节都没少、作品照旧可写
+    expect(revoked).toEqual([]);
+    expect(rWs.roots()).toContain(extraRoot);
+    expect(rIo.isWritable(path.join(extraRoot, p.id, 'a.txt'))).toBe(true);
+
+    await rWs.remove(p.id);
+    await rWs.revokeRoot(extraRoot);
+    expect(revoked).toEqual([extraRoot]);
+    expect(rWs.roots()).toEqual([rWs.rootDir()]);
+    expect(rWs.projectDirs()).toEqual([rWs.rootDir()]);
+    expect(rIo.isWritable(path.join(extraRoot, 'x.txt'))).toBe(false);
+  });
+
+  it('撤销没授权过的根：拒绝（人话），不去惊动平台', async () => {
+    await expect(ws2.revokeRoot(path.join(tmpDir, '从没授权过的文件夹'))).rejects.toThrow(
+      /不在已授权的项目位置清单/,
+    );
+  });
+
+  it('平台无撤销能力（Node 桥）：错误如实上抛，名单原样（不静默假装撤掉了）', async () => {
+    await expect(ws2.revokeRoot(extraRoot)).rejects.toThrow(/revokeWorkspaceRoot is not supported/);
+    expect(ws2.roots()).toContain(extraRoot);
   });
 });
 

@@ -104,21 +104,22 @@ describe('设置页只挂当前一节（懒挂载）', () => {
     expect(keys.filter((k) => k.startsWith('editor.') || k.startsWith('appearance.'))).toEqual([]);
   });
 
-  it('导航栏仍是全量七项（懒挂载不藏入口）', () => {
+  it('导航栏仍是全量八项（懒挂载不藏入口；2026-10-27 加「工作区」）', () => {
     const html = renderToString(h(SettingsPanel, panelProps()));
     const tabs = [...html.matchAll(/class="settings-nav-item[^"]*"/g)];
-    expect(tabs).toHaveLength(7);
-    for (const label of ['通用', '外观', '编辑器', '语言能力', '口上市场', '快捷键', '关于']) {
+    expect(tabs).toHaveLength(8);
+    for (const label of ['通用', '外观', '编辑器', '工作区', '语言能力', '口上市场', '快捷键', '关于']) {
       expect(html).toContain(`>${label}<`);
     }
   });
 
-  it('七节 render() 都非 null（「空节从导航栏消失」的老口径没被改动静默改掉）', () => {
+  it('八节 render() 都非 null（「空节从导航栏消失」的老口径没被改动静默改掉）', () => {
     const sections = SETTINGS_SECTIONS(panelProps());
     expect(sections.map((s) => s.id)).toEqual([
       'general',
       'appearance',
       'editor',
+      'workspace',
       'capabilities',
       'market',
       'keybindings',

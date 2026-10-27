@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { CharaInfo, WorkspaceService } from '@kojo/plugin-api';
+import type { CharaInfo, GameProject, WorkspaceService } from '@kojo/plugin-api';
 import {
   buildCreateInput,
   charaOptionLabel,
   defaultWorkspaceRoot,
+  gameRootsForbiddingLocation,
   locationLabel,
   noKojoDirWarning,
   readRequestToken,
@@ -167,5 +168,54 @@ describe('locationLabel / defaultWorkspaceRoot（「项目位置」那行的文�
       rootDir: () => '/appdata/workspaces',
     } as unknown as WorkspaceService;
     expect(defaultWorkspaceRoot(working)).toBe('/appdata/workspaces');
+  });
+});
+
+/**
+ * 「项目位置」对话框的禁选根（2026-10-27 游戏目录防护批）。
+ *
+ * 这条清单是"选到游戏目录就把游戏目录授权了"的第一道拦截：平台侧据它做双向包含判定。
+ * 判错的方向是**漏**——少递一根（游戏根 / 口上域 / 存档目录），作者就能把那个目录
+ * 选成作品位置；多递一根只是多拒一次合法选择，代价小得多。
+ */
+describe('gameRootsForbiddingLocation（项目位置对话框的禁选根）', () => {
+  const project = {
+    rootDir: 'C:/Game/eratw',
+    kojoPaths: ['C:/Game/eratw/ERB/口上関連', 'C:/Game/eratw/ERB/口上関連'],
+    savDir: 'C:/Game/eratw/sav',
+    adapterId: 'eratw',
+    writablePaths: [],
+    charaIndex: new Map(),
+  } as unknown as GameProject;
+
+  it('没有打开项目 → 空数组（平台行为与历史逐字一致）', () => {
+    expect(gameRootsForbiddingLocation(null)).toEqual([]);
+  });
+
+  it('游戏根 + 口上域 + 存档目录全部在列（重复的只留一份）', () => {
+    expect(gameRootsForbiddingLocation(project)).toEqual([
+      'C:/Game/eratw',
+      'C:/Game/eratw/ERB/口上関連',
+      'C:/Game/eratw/sav',
+    ]);
+  });
+
+  it('路径写法不同（大小写 / 分隔符）算同一根；空串与缺省 savDir 不进清单', () => {
+    const weird = {
+      rootDir: 'C:\\Game\\eraTW',
+      kojoPaths: ['c:/game/eratw'],
+      adapterId: 'eratw',
+      writablePaths: [],
+      charaIndex: new Map(),
+    } as unknown as GameProject;
+    expect(gameRootsForbiddingLocation(weird)).toEqual(['C:\\Game\\eraTW']);
+    const empty = {
+      rootDir: '',
+      kojoPaths: ['', 'C:/Game/x/ERB'],
+      adapterId: 'eratw',
+      writablePaths: [],
+      charaIndex: new Map(),
+    } as unknown as GameProject;
+    expect(gameRootsForbiddingLocation(empty)).toEqual(['C:/Game/x/ERB']);
   });
 });
