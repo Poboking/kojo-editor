@@ -1217,13 +1217,23 @@ export function createErbParserPlugin(): Plugin {
 
       /** 去抖窗口落地：`io.exists` 判删（改名常以 change/add 报告旧路径已不在），随后批量增量 */
       async function flushFileChanges(): Promise<void> {
+        if (pendingChanged.size === 0 && pendingRemoved.size === 0) return;
+        // 整扫在跑：它的结果**可能早于**这次改动（事件在它起跑之后才到）⇒ 不能当"它读的是
+        // 盘上现状"就把这批丢掉（实机会话里复现过：保存恰好撞上一轮重建 ⇒ 这次改动静默消失）。
+        // 保住 pending，等它收尾再来一次；首条起算、不空转（inFlight 的 finally 一定会清）。
+        if (inFlight !== null) {
+          if (pendingTimer === null) {
+            pendingTimer = setTimeout(() => {
+              pendingTimer = null;
+              void flushFileChanges();
+            }, INCREMENTAL_DEBOUNCE_MS);
+          }
+          return;
+        }
         const changed = [...pendingChanged.values()];
         const removed = [...pendingRemoved.values()];
         pendingChanged.clear();
         pendingRemoved.clear();
-        if (changed.length === 0 && removed.length === 0) return;
-        // 整扫在跑 / 刚被换根触发：它读的就是盘上现状，这趟增量可省（不叠加、不抢）
-        if (inFlight !== null) return;
         const alive: string[] = [];
         for (const path of changed) {
           let exists = true;

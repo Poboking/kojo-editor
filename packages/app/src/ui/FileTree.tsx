@@ -1477,6 +1477,16 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
               // 判定抛错按只读显示——"说不出可写"绝不能亮成可写。
               const rootFolder = folders.find((f) => pkey(f.path) === pkey(root));
               const writableRoot = !isProjectRoot && (rootFolder !== undefined ? rootFolder.writable : rootWritableOf(io, root));
+              /**
+               * 只有**会话附加根**可以移除（WS-08）。作者作品目录 / 口上域 / 存档都是
+               * 项目事实，移掉就是在 UI 上撒谎（盘上还在、下次开项目又回来）。
+               * 模型缺席时 fs 根 = 项目根 ∪ `extraRoots` ⇒ 非项目根就是附加根。
+               */
+              const removable =
+                !isProjectRoot &&
+                (rootFolder !== undefined
+                  ? rootFolder.role === 'extra'
+                  : (extraRoots ?? []).some((r) => pkey(r) === pkey(root)));
               return (
                 <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'}>
                   {/* 组头行（WS-08）：折叠按钮 + 只读/可写标签 + 移除入口。
@@ -1496,12 +1506,20 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                     {isProjectRoot ? null : (
                       <span
                         className={writableRoot ? 'tree-root-tag is-writable' : 'tree-root-tag'}
-                        title={writableRoot ? '这个附加根在写允许域内，可以直接保存' : '附加根默认只读：写仍走项目授权域'}
+                        title={
+                          writableRoot
+                            ? rootFolder?.role === 'author'
+                              ? '你的作品目录：可直接保存'
+                              : '这个根在写允许域内，可以直接保存'
+                            : rootFolder?.role === 'extra'
+                              ? '附加根默认只读：写仍走项目授权域'
+                              : '项目内容默认只读：写仍走项目授权域'
+                        }
                       >
                         {writableRoot ? '可写' : '只读'}
                       </span>
                     )}
-                    {isProjectRoot || onRemoveExtraRoot === undefined ? null : (
+                    {!removable || onRemoveExtraRoot === undefined ? null : (
                       <button
                         className="tree-root-remove"
                         title={`从工作区移除：${root}`}
@@ -1646,23 +1664,39 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           const isOpen = opened.has(key) || deferredFilter.length > 0;
           return (
             <li key={key} className="tree-group tree-root-group" data-open={isOpen ? '1' : '0'}>
-              <button
-                className="tree-group-btn"
-                title={`${folder.path}（${folder.writable ? '可写' : '只读'}）`}
-                data-drop-dir={folder.path}
-                data-context-surface="file-tree"
-                data-tree-kind="group"
-                data-tree-label={folder.label}
-                data-tree-path={folder.path}
-                onClick={() => toggleGroup(key)}
-              >
-                <span className="caret">
-                  <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-                </span>
-                <span className="group-label">{middleEllipsis(folder.label, TREE_LABEL_MAX)}</span>
-                <span className="dim tree-root-role">{folder.writable ? '可写' : '只读'}</span>
-                <span className="group-count">{files.length}</span>
-              </button>
+              {/* 组头行：折叠按钮 + （仅会话附加根）移除入口。行尾按钮不能嵌进折叠按钮
+                  （button 里套 button 是非法结构），故与 fs 视图同用一层行容器。
+                  WS-08：移除入口必须住在这里——附加根常落在项目根之内，fs 视图会把它
+                  折进项目根头，那条路上根本没有它自己的头行可挂按钮。 */}
+              <div className="tree-group-head">
+                <button
+                  className="tree-group-btn"
+                  title={`${folder.path}（${folder.writable ? '可写' : '只读'}）`}
+                  data-drop-dir={folder.path}
+                  data-context-surface="file-tree"
+                  data-tree-kind="group"
+                  data-tree-label={folder.label}
+                  data-tree-path={folder.path}
+                  onClick={() => toggleGroup(key)}
+                >
+                  <span className="caret">
+                    <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                  </span>
+                  <span className="group-label">{middleEllipsis(folder.label, TREE_LABEL_MAX)}</span>
+                  <span className="dim tree-root-role">{folder.writable ? '可写' : '只读'}</span>
+                  <span className="group-count">{files.length}</span>
+                </button>
+                {folder.role !== 'extra' || onRemoveExtraRoot === undefined ? null : (
+                  <button
+                    className="tree-root-remove"
+                    title={`从工作区移除：${folder.path}`}
+                    aria-label={`从工作区移除 ${folder.label}`}
+                    onClick={() => onRemoveExtraRoot(folder.path)}
+                  >
+                    <Icon name="close" size={12} />
+                  </button>
+                )}
+              </div>
               <TreeFoldBody
                 open={isOpen}
                 body={() => (

@@ -603,10 +603,13 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     B 的四枚新模块与 C 的两处并入互不相干（文件数不变）；KB 按"单批增量相加"是
     //     B +40 / C +30，合流树实测 3,006（比 2,937+70 少 1 KB：两批在 `App.tsx` /
     //     `FileTree.tsx` 同一段落的改写有重叠，按实际读数进闸）。
+    //   - **变基到 dev `c000a24b`（击键/光标/长列表热路径批）之后**：读数 **198 文件 / 3,010 KB**
+    //     （dev 那批 `commands.ts` 键位索引 +4 KB，全部在图内既有文件）；KB 闸随之 **3,010 → 3,020**
+    //     ——读数恰好压在 3,010 上等于零余量，留一档给下一枚 KB 级改动（口径不变，仍是读数进十）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤3,010 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_010);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤3,020 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_020);
     expect(files.length).toBeLessThanOrEqual(198);
   });
 

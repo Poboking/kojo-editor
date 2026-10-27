@@ -1,6 +1,6 @@
 import type { ScopedStorage } from '@kojo/plugin-api';
 import { isAbsolute, pathKey } from '@kojo/plugin-api';
-import { restoreGroups, sanitizeSplitSizes, type EditorGroupState, type EditorGroupsState } from './editor-groups';
+import { restoreGroups, sanitizeSplitSizes, splitSizesForKeptGroups, type EditorGroupState, type EditorGroupsState } from './editor-groups';
 
 /**
  * 会话恢复的持久层（2026-10-16 退出/崩溃守护批）：每个项目一份标签集，
@@ -146,6 +146,23 @@ export function sessionProjectOf(rec: SessionRecord, rootDir: string): SessionPr
   return rec.projects[sessionProjectKey(rootDir)] ?? null;
 }
 
+/**
+ * 快照里每组的标签表（只给"哪几组是空的"这一个判据用）。
+ *
+ * 损坏容忍：形状不对 ⇒ 空表（= 没有可判的组），绝不抛——它与 `restoreGroups`
+ * 是同一门风：会话数据坏了最多丢布局，不许炸启动。
+ */
+function rawGroupTabsOf(groups: unknown): string[][] {
+  if (typeof groups !== 'object' || groups === null) return [];
+  const list = (groups as Record<string, unknown>).groups;
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => {
+    if (typeof item !== 'object' || item === null) return [];
+    const tabs = (item as Record<string, unknown>).tabs;
+    return Array.isArray(tabs) ? tabs.filter((t): t is string => typeof t === 'string') : [];
+  });
+}
+
 /** upsert 一个项目的会话态并顺手把 lastRoot 指向它（返回新对象，不改入参） */
 export function upsertSessionProject(
   rec: SessionRecord,
@@ -182,8 +199,11 @@ export function upsertSessionProject(
   const groups = data.groups === undefined ? null : restoreGroups(data.groups);
   if (groups !== null) {
     entry.groups = data.groups;
-    // splitSizes（WS-06）：长度必须对上这份快照的组数；对不上宁可不存（恢复时均分）
-    const sizes = sanitizeSplitSizes(data.splitSizes, groups.groups.length);
+    // splitSizes（WS-06）：份额在运行时是**全组坐标**（含空组），而恢复会把空组剔掉
+    // （`restoreGroups` 的既有口径）——直接按全组长度校验，会在"拆出一个空组"这种最
+    // 常见的形态下把比例整份丢掉（实机已复现）。这里先投影到**会被恢复的那些组**
+    // （`splitSizesForKeptGroups`），入库的份额与恢复出的组数始终一一对应。
+    const sizes = splitSizesForKeptGroups(data.splitSizes, rawGroupTabsOf(data.groups));
     if (sizes !== null) entry.splitSizes = sizes;
   }
   if (extraRoots !== undefined && extraRoots.length > 0) entry.extraRoots = extraRoots;

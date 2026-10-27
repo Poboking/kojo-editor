@@ -405,6 +405,32 @@ describe('upsertSessionProject · splitSizes（WS-06 additive）', () => {
     expect(entry?.groups).toBeDefined();
     expect(entry !== null && 'splitSizes' in entry).toBe(false);
   });
+
+  it('实机形态：三组里有一组是空的 ⇒ 份额投影到会恢复的两组后照存（不是整份丢掉）', async () => {
+    // 全组 [0.2, 0.6]（第三组吃剩余 0.2）；中间那组是空的（刚拆出来还没开文件）
+    const groups = {
+      orientation: 'row',
+      activeGroupId: 'eg-3',
+      groups: [
+        { id: 'eg-1', tabs: ['C:/a.ERB'], active: 'C:/a.ERB' },
+        { id: 'eg-2', tabs: [], active: null },
+        { id: 'eg-3', tabs: ['C:/b.ERB'], active: 'C:/b.ERB' },
+      ],
+    };
+    let rec = upsertSessionProject(emptySessionRecord(), 'C:/p', {
+      ...recOf(['C:/a.ERB'], 'C:/a.ERB', []),
+      groups,
+      splitSizes: [0.2, 0.6],
+    });
+    const entry = sessionProjectOf(rec, 'C:/p');
+    // 恢复出 2 组（空组被 restoreGroups 剔掉）⇒ 份额长度必须是 1，且 50/50
+    expect(entry?.splitSizes).toHaveLength(1);
+    expect(entry?.splitSizes?.[0]).toBeCloseTo(0.5);
+
+    await saveSessionRecord(kv, rec);
+    const loaded = await loadSessionRecord(kv);
+    expect(sessionProjectOf(loaded, 'C:/p')?.splitSizes).toEqual(entry?.splitSizes);
+  });
 });
 
 /* ------------ extraRoots（WS-08 会话级附加根 · additive 扩展） ------------ */

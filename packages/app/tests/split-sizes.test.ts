@@ -8,6 +8,7 @@ import {
   sanitizeSplitSizes,
   splitFlexOf,
   splitSizesEqual,
+  splitSizesForKeptGroups,
   splitSizesFromWidths,
 } from '../src/ui/editor-groups';
 
@@ -129,5 +130,34 @@ describe('groupShareOf / splitFlexOf / splitSizesEqual', () => {
     expect(splitSizesEqual([0.5], [0.51])).toBe(false);
     expect(splitSizesEqual([], undefined)).toBe(true);
     expect(splitSizesEqual([0.5], [0.2, 0.3])).toBe(false);
+  });
+});
+
+describe('splitSizesForKeptGroups（WS-06 落盘：全组份额 → 会恢复的那些组）', () => {
+  // 实机复现过的形态：拆出来的第二/第三组还是空的；`restoreGroups` 会把空组剔掉，
+  // 全组份额直接入库会在恢复时对不上长度 ⇒ 比例整份丢掉。这里钉"投影到存活组"。
+  const A = ['a'];
+  const EMPTY: readonly string[] = [];
+
+  it('全是非空组 ⇒ 原样保留（投影是恒等）', () => {
+    expect(splitSizesForKeptGroups([0.2, 0.5], [A, A, A])).toEqual([0.2, 0.5]);
+  });
+
+  it('中间一组为空 ⇒ 份额按存活两组的占比归一（空组那格不占预算）', () => {
+    // 全组 [0.2, 0.6]（第三组吃剩余 0.2）；存活 = 第 1、3 组 ⇒ 各 0.2，归一 50/50
+    const sizes = splitSizesForKeptGroups([0.2, 0.6], [A, EMPTY, A]);
+    expect(sizes).toHaveLength(1);
+    expect(sizes![0]).toBeCloseTo(0.5);
+  });
+
+  it('末组为空（最常见：刚拆出来还没开文件）⇒ 只剩一组，没有可恢复的比例', () => {
+    expect(splitSizesForKeptGroups([0.3], [A, EMPTY])).toBeNull();
+  });
+
+  it('空值 / 长度不符 / 少于两组 ⇒ null（不写半份比例）', () => {
+    expect(splitSizesForKeptGroups(undefined, [A, A])).toBeNull();
+    expect(splitSizesForKeptGroups([0.5, 0.2], [A, A])).toBeNull(); // 长度比全组少一截
+    expect(splitSizesForKeptGroups([0.5], [A])).toBeNull();
+    expect(splitSizesForKeptGroups([0.5], [A, A])).toEqual([0.5]);
   });
 });

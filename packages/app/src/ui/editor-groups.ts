@@ -501,6 +501,43 @@ export function splitSizesFromWidths(widths: readonly number[]): readonly number
   return sanitizeSplitSizes(raw, usable.length) ?? equalSplitSizes(usable.length);
 }
 
+/**
+ * 全组坐标的份额 → **会被恢复的那些组**的坐标（WS-06 落盘前的换算）。
+ *
+ * 为什么需要这一步：`restoreGroups` 会把空组过滤掉（渲染层不需要空组占位），
+ * 而"拆一个新的空组"恰恰是最常见的分屏形态。若把全组份额直接入库，恢复时组数
+ * 对不上（3 组里有 1 组空 ⇒ 恢复出 2 组）⇒ 校验失败、比例整份丢掉；
+ * 用户拖过的比例就这么在一次重启后消失。
+ *
+ * 这里按"哪几组有标签"（空组会被 restoreGroups 剔掉）把份额投影到存活组，
+ * 再归一到「存活组的末组吃剩余」口径——入库的份额与恢复出的组数始终一一对应。
+ *
+ * @param sizes     全组坐标的份额（长度 = 组数 - 1；末组吃剩余）
+ * @param groupTabs 各组标签表（只用来判"这一组是不是空的"；判据与 restoreGroups 同向）
+ * @returns 存活组坐标的份额；存活组 < 2 或无有效份额 ⇒ null（没有可恢复的比例）
+ */
+export function splitSizesForKeptGroups(
+  sizes: readonly number[] | null | undefined,
+  groupTabs: readonly (readonly string[])[],
+): number[] | null {
+  const rawCount = groupTabs.length;
+  if (rawCount < 2) return null;
+  // 份额必须是**全组坐标**那份（长度 = 全组数 - 1）：缺省 / 长度不符都说明调用方
+  // 给的不是这一拍的布局，投影出去只会造一份假比例 ⇒ 宁可 null（恢复时均分）。
+  if (sizes === null || sizes === undefined || sizes.length !== rawCount - 1) return null;
+  const kept: number[] = [];
+  groupTabs.forEach((tabs, i) => {
+    if (tabs.some((t) => typeof t === 'string' && t !== '')) kept.push(i);
+  });
+  if (kept.length < 2) return null;
+  const shares = kept.map((i) => groupShareOf(sizes, rawCount, i));
+  const total = shares.reduce((a, b) => a + b, 0);
+  if (!(total > 0)) return null;
+  // 前 n-1 条入库（末组在恢复时吃剩余），与 `sanitizeSplitSizes` 的长度口径一致
+  const normalized = shares.map((s) => s / total);
+  return sanitizeSplitSizes(normalized.slice(0, kept.length - 1), kept.length);
+}
+
 /** 两条份额是否等价（长度 + 逐条容差）；用于"值没变就不 setState" */
 export function splitSizesEqual(
   a: readonly number[] | null | undefined,
