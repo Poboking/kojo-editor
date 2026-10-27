@@ -36,6 +36,7 @@ import {
   erbStructureDecorations,
   scanRefsNamesOf,
   type ParseFilePayload,
+  type ParseFileWire,
   type ScanFlowPayload,
   type ScanRefsFileResult,
   type ScanRefsNamesPart,
@@ -782,8 +783,11 @@ export function createErbParserPlugin(): Plugin {
               try {
                 // IO 留主线程（worker 内 IPC 未验证），**只把纯解析**搬上并行通道：
                 // 有 worker 时是真并行（多槽轮转），无 worker / 通道失败时自动内联回退。
+                // 回传是**文本形态**（`ParseFileWire`，见 offload.ts 头注）——对象图结构化克隆
+                // 按条数计价，索引阶段那 2 秒长帧就是它；这里只剩一次 `JSON.parse`。
                 const payload: ParseFilePayload = { text: tf.text, path };
-                const file = await compute.offload<ErbFile>(PARSE_FILE_TASK, payload);
+                const wire = await compute.offload<ParseFileWire>(PARSE_FILE_TASK, payload);
+                const file = JSON.parse(wire.fileJson) as ErbFile;
                 fresh.set(path, {
                   mtimeMs: tf.mtimeMs,
                   // 双判据的 size 位（PERF-7）：与 mtime 同源口径（walk 顺带 / stat 兜底）
@@ -792,6 +796,7 @@ export function createErbParserPlugin(): Plugin {
                   file,
                 });
               } catch (err) {
+                // 解码失败与解析失败同语义：记一条 parse 失败、不留结果（不静默、不伪造）
                 failures.push({ path, reason: 'parse' });
                 ctx.log.warn(`Parse failed: ${path}: ${String(err)}`);
               }

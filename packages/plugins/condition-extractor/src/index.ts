@@ -210,5 +210,13 @@ export {
   conditionExtractorTasks,
   exprSyntaxDecorations,
   extractFileBucket,
+  // 通道形态的编解码（跨线程那一份是 `ExtractFileWire`，见 ./offload.ts 头注）
+  toWireResult,
+  decodeBucket,
 } from './offload';
-export type { ExtractFilePayload, ExtractFileResult, ExtractFileFunction } from './offload';
+export type {
+  ExtractFilePayload,
+  ExtractFileResult,
+  ExtractFileWire,
+  ExtractFileFunction,
+} from './offload';

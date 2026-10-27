@@ -33,6 +33,9 @@ import {
   candidateRank,
   nextWindow,
   pathInScope,
+  pathProbe,
+  sepOf,
+  type PathProbe,
   windowSize,
 } from '@kojo/plugin-api';
 
@@ -143,18 +146,91 @@ export function charaOwnersOf(charaIndex: ReadonlyMap<number, CharaInfo>): Chara
  * 文件路径 → 归属角色号（找不到 ⇒ `null`；一条判据、一处实现）。
  *
  * **取最更深的那一条**：角色目录可能互相嵌套（作者把一个角色的分支放进另一个角色的目录里），
- * `startsWith` 谁都能匹上——按匹配到的根长度取胜者，才是"这文件住在谁家里"的答案。
- * 判据本身仍是契约层的 `pathInScope`，这里只比"哪一条更具体"。
+ * `startsWith` 谁都能匹上——按匹配到的根取胜者，才是"这文件住在谁家里"的答案。
+ * 判据本身仍是契约层那一条（`pathProbe` / `probeContains` = `isPathUnder` 的预折叠形态）。
+ *
+ * **实现走"沿路径向上找根"而不是"逐根比一遍"**（P0-2 冷开实测）：旧写法是
+ * `文件 × 全部角色目录`（2,120 × ~1,000 ≈ 200 万次包含判定，单帧 self 138ms）。
+ * 换过来只需 `文件 × 自身层数`（约 7 次），因为「命中某个根」等价于「该根是这个文件路径的
+ * 某个祖先目录」——而"最深的祖先"就是旧写法里"长度最大的根"要的答案。
+ * 同一目录挂了多个角色时（同键多条）仍按原表顺序取第一条，与旧写法的 `>` 严格比较一致。
  */
 export function ownerNoOfPath(filePath: string, owners: readonly CharaOwner[]): number | null {
-  let best: { no: number; depth: number } | null = null;
+  return pickOwner(pathProbe(filePath), indexOwners(owners));
+}
+
+/** 一个根折出来的格子：`depth` = **原始根**长度（裁决口径与旧实现一致，见下） */
+interface OwnerSlot {
+  readonly no: number;
+  readonly depth: number;
+}
+
+/**
+ * 角色目录表 → 「折叠根 → 角色们」的查找表。
+ *
+ * `depth` 用原始根长度而不是折叠后的：归一化可能缩短字符串（`C:\a\b\..`），
+ * 拿折叠长度比会改掉嵌套根之间的胜负——旧实现的裁决位就是这个原始长度，照抄。
+ * 按分隔符风格分组：`probeContains` 用**根**的风格取分隔符，分组后每组只走一种分隔符。
+ */
+interface OwnerIndex {
+  readonly groups: readonly { readonly sep: string; readonly byKey: ReadonlyMap<string, readonly OwnerSlot[]> }[];
+}
+
+function indexOwners(owners: readonly CharaOwner[]): OwnerIndex {
+  const groups = new Map<string, Map<string, OwnerSlot[]>>();
   for (const owner of owners) {
     for (const root of owner.roots) {
-      if (!pathInScope(filePath, [root])) continue;
-      if (best === null || root.length > best.depth) best = { no: owner.no, depth: root.length };
+      const probe = pathProbe(root);
+      if (probe.key === '') continue;
+      const sep = sepOf(probe.style);
+      let byKey = groups.get(sep);
+      if (!byKey) {
+        byKey = new Map();
+        groups.set(sep, byKey);
+      }
+      const slot: OwnerSlot = { no: owner.no, depth: root.length };
+      const list = byKey.get(probe.key);
+      if (list) list.push(slot);
+      else byKey.set(probe.key, [slot]);
     }
   }
-  return best?.no ?? null;
+  return {
+    groups: [...groups.entries()].map(([sep, byKey]) => ({ sep, byKey })),
+  };
+}
+
+/**
+ * 沿路径向上列祖先键（含自身）：`C:\a\b\c` → `C:\a\b\c` / `C:\a\b` / `C:\a` / `C:\`。
+ * 盘符根与 POSIX 根都要**把分隔符留在键里**（`normalize('C:\\')` 就是 `C:\`）。
+ */
+function ancestorKeys(key: string, sep: string): string[] {
+  const out: string[] = [key];
+  let end = key.lastIndexOf(sep);
+  while (end > 0) {
+    // 盘符根（`c:` + sep）与 POSIX 根（`/`）都是 1~3 字符的特例，保留分隔符
+    if (end === 2 && key.charCodeAt(1) === 58 /* ':' */) {
+      out.push(key.slice(0, 3));
+      break;
+    }
+    out.push(key.slice(0, end));
+    end = key.lastIndexOf(sep, end - 1);
+  }
+  if (end === 0 && key.charCodeAt(0) === sep.charCodeAt(0)) out.push(sep);
+  return out;
+}
+
+/** 归属判定本体（`ownerNoOfPath` 与建树热循环共用这一处） */
+function pickOwner(file: PathProbe, index: OwnerIndex): number | null {
+  for (const group of index.groups) {
+    for (const candidate of ancestorKeys(file.key, group.sep)) {
+      const slots = group.byKey.get(candidate);
+      if (slots === undefined) continue;
+      let best: OwnerSlot | null = null;
+      for (const slot of slots) if (best === null || slot.depth > best.depth) best = slot;
+      return best!.no;
+    }
+  }
+  return null;
 }
 
 /** 建树与搜索的一次性输入（additive：不传 ⇒ 与改动前逐字一致的形态仍由调用方决定） */
@@ -283,6 +359,8 @@ export function buildNavigatorTree(
 ): NavigatorTree {
   const owners = options.owners ?? charaOwnersOf(charaIndex);
   const byDir = owners.length > 0;
+  // 根表索引一遍（不是逐文件逐根比）；判据仍是契约层那条，见 `indexOwners`
+  const ownerIndex = indexOwners(owners);
   const scopeRoots = options.scope?.roots ?? [];
   // 角色号 → (家族 → (面 → 函数[]))
   const acc = new Map<number, Map<string, Map<string, FunctionNode[]>>>();
@@ -293,7 +371,7 @@ export function buildNavigatorTree(
   for (const file of index.files.values()) {
     if (!pathInScope(file.path, scopeRoots)) continue;
     filesScanned++;
-    const ownerNo = byDir ? ownerNoOfPath(file.path, owners) : null;
+    const ownerNo = byDir ? pickOwner(pathProbe(file.path), ownerIndex) : null;
     for (const fn of file.functions) {
       totalFunctions++;
       // 家族/面/槽位的结构仍来自适配器规则（那**不是**角色归属——归属只有一条判据）；

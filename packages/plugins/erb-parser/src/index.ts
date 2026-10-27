@@ -78,6 +78,7 @@ export {
   erbStructureDecorations,
   scanRefsBatch,
   type ParseFilePayload,
+  type ParseFileWire,
   type ScanFlowPayload,
   type ScanRefsPayload,
 } from './offload';

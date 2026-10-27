@@ -72,6 +72,32 @@ const PLAIN_FACES: readonly string[] = [
   'EVENT',
 ].sort((a, b) => b.length - a.length);
 
+/**
+ * `PLAIN_FACES` 的下划线形态**只算一次**（原先每名字现拼 38 个模板串），并按**末位字符**分桶：
+ * `endsWith` 只有末位相同才可能命中 ⇒ 38 次比较变 1 次取桶；桶内顺序 = 全局顺序，"最长优先"不变。
+ */
+type FaceEntry = { readonly face: string; readonly suffixed: string };
+const PLAIN_FACE_SUFFIXES: readonly FaceEntry[] = PLAIN_FACES.map((face) => ({ face, suffixed: `_${face}` }));
+const PLAIN_FACE_BUCKETS: ReadonlyMap<string, readonly FaceEntry[]> = (() => {
+  const byLast = new Map<string, FaceEntry[]>();
+  for (const entry of PLAIN_FACE_SUFFIXES) {
+    const last = entry.suffixed.charAt(entry.suffixed.length - 1);
+    const list = byLast.get(last);
+    if (list) list.push(entry);
+    else byLast.set(last, [entry]);
+  }
+  return byLast;
+})();
+
+/** 特殊结构面门禁：7 条正则都要求名字里出现这些字面量之一（不命中就整段跳过） */
+const SPECIAL_HEAD_GUARD = /_(?:MESSAGE_PALAMCNG|IRAI|OPTION|VERSION|UPDATE)/;
+
+/** 「裸家族」判据要的同一批标记（`includes('_MESSAGE_COM')` 等） */
+const PLAIN_FACE_MARKERS: readonly string[] = PLAIN_FACE_SUFFIXES.map((f) => f.suffixed);
+
+/** 尾部容忍字符的**末位**探测（命中才值得跑整条替换，见 `parseKojoFamilyRaw`） */
+const TRAILING_JUNK = /[,;\s]$/;
+
 /** 特殊结构面（带子号捕获）：capture 1 = 家族段（may 空），capture 2 = 子号 */
 const SPECIAL_HEADS: ReadonlyArray<{ face: string; re: RegExp }> = [
   // 射精等 PALAM 变体：_MESSAGE_PALAMCNG_A / _A1..A6 / _B .. _F
@@ -174,7 +200,9 @@ export function parseKojoFamily(rawName: string, filePath?: string): FamilyMatch
 }
 
 function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
-  const name = rawName.replace(/[,;\s]+$/, ''); // 容忍尾部逗号/空白（真实语料存在）
+  // 容忍尾部逗号/空白（真实语料存在）。先做一次**只测末位**的探测：`[,;\s]$` 只能落在
+  // 末位 ⇒ 不命中时是 O(1)，不必对 99k 个名字逐个跑一遍 `[,;\s]+$` 的回溯扫描。
+  const name = TRAILING_JUNK.test(rawName) ? rawName.replace(/[,;\s]+$/, '') : rawName;
 
   // 1) 家族声明：M_KOJO_K{n} / M_KOJO_K{n}_{selector}
   let m = /^M_KOJO_K(\d+)(?:_(\d+))?$/.exec(name);
@@ -214,9 +242,9 @@ function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
     // 锚点语义（BUG-3 显式化）：greedy (.*) = **取最后一个 _K{no} 为编号锚**——
     // 家族名段允许再含 _K 段（如 X_K3_MESSAGE_COM_K1_1 → no=1，家族 MESSAGE_COM），
     // 与"最靠近槽位的 K 编号才是家族编号"的引擎家族命名一致。
-    // \d+ 之后必须是 `_` 或串尾（`(_.+)?` 保证），`A_K1B` 类不会被误切（regex 回溯后无锚可依 → null）。
-    const anchor = /^(.*)_K(\d+)(_.+)?$/.exec(name);
-    if (anchor && PLAIN_FACES.some((f) => (anchor[1] ?? '').includes(`_${f}`))) {
+    // \d+ 之后必须是 `_` 或串尾（`(_.+)?` 保证），`A_K1B` 类不会被误切（回溯后无锚可依 → null）。
+    const anchor = splitAtLastKAnchor(name);
+    if (anchor && PLAIN_FACE_MARKERS.some((m) => anchor.head.includes(m))) {
       prefix = '';
       rest = name;
     } else {
@@ -225,7 +253,7 @@ function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
   }
 
   // 4) K 锚点：rest = head..._K{no}{tail}
-  const tailMatch = /^(.*)_K(\d+)(_.+)?$/.exec(rest);
+  const tailMatch = splitAtLastKAnchor(rest);
   if (!tailMatch) {
     // KX 占位符（K{n} 未替换的模板残留）：照常解析面，编号置 null
     if (/_KX(?:_|$)/.test(name)) {
@@ -244,17 +272,44 @@ function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
     return null; // 无编号锚点又非占位符：与口上命名无关
   }
 
-  return decomposeHead(tailMatch[1] ?? '', {
+  return decomposeHead(tailMatch.head, {
     kind: 'ok',
     prefix,
-    no: Number(tailMatch[2]),
+    no: tailMatch.no,
     selector: 0,
-    slot: (tailMatch[3] ?? '').replace(/^_/, ''),
+    slot: tailMatch.tail === '' ? '' : tailMatch.tail.slice(1),
     isPlaceholder: false,
   });
 }
 
-/* ------------------------------ 内部工具 ------------------------------ */
+/** 内部工具 */
+
+/**
+ * 取「最后一个 `_K{digits}` 锚点」，等价于 `/^(.*)_K(\d+)(_.+)?$/` 的贪婪语义：`(.*)` 尽可能长
+ * ⇒ 锚点尽可能靠右；`(_.+)?` 要求分隔符后**至少还有一个字符**。手写是因为那条正则对每个名字都要
+ * 从头回溯（99k 名字两处调用，self 76.8ms），从右往左只走"`_K` 个数 + 1"步。
+ */
+function splitAtLastKAnchor(s: string): { head: string; no: number; tail: string } | null {
+  let limit = s.length;
+  for (;;) {
+    const k = s.lastIndexOf('_K', limit - 1);
+    if (k < 0) return null;
+    let j = k + 2;
+    while (j < s.length) {
+      const c = s.charCodeAt(j);
+      if (c < 48 || c > 57) break;
+      j++;
+    }
+    if (j > k + 2) {
+      const head = s.slice(0, k);
+      const no = Number(s.slice(k + 2, j));
+      if (j === s.length) return { head, no, tail: '' };
+      // `_.+` 形态：分隔符后面必须还有东西（`A_K1_` 不算槽位）
+      if (s.charCodeAt(j) === 95 && j + 1 < s.length) return { head, no, tail: s.slice(j) };
+    }
+    limit = k;
+  }
+}
 
 interface PartialMatch {
   kind: FamilyParseKind;
@@ -304,28 +359,32 @@ function decomposeHead(headIn: string, base: PartialMatch): FamilyMatch | null {
     head = head.slice(0, mcIdx);
   }
 
-  // 特殊结构面
-  for (const { face, re } of SPECIAL_HEADS) {
-    const sm = re.exec(head);
-    if (sm) {
-      const sub = (sm[2] ?? '').replace(/^_/, '');
-      return make({
-        ...base,
-        family: stripFamilyMarker(sm[1] ?? ''),
-        face,
-        sub: sub || checkSub,
-        isMessageCheck,
-      });
+  // 特殊结构面（先过一道门禁：绝大多数名字一个特殊面 token 都没有，7 条正则就整段跳过）
+  if (SPECIAL_HEAD_GUARD.test(head)) {
+    for (const { face, re } of SPECIAL_HEADS) {
+      const sm = re.exec(head);
+      if (sm) {
+        const sub = (sm[2] ?? '').replace(/^_/, '');
+        return make({
+          ...base,
+          family: stripFamilyMarker(sm[1] ?? ''),
+          face,
+          sub: sub || checkSub,
+          isMessageCheck,
+        });
+      }
     }
   }
 
-  // 普通面（endsWith 最长优先）
-  for (const face of PLAIN_FACES) {
-    if (head === `_${face}`) {
-      return make({ ...base, family: '', face, sub: checkSub, isMessageCheck });
-    }
-    if (head.endsWith(`_${face}`)) {
-      const famRaw = head.slice(0, head.length - face.length - 1);
+  // 普通面（endsWith 最长优先；按末位分桶 + 后缀串预置，见 `PLAIN_FACE_BUCKETS`）
+  const bucket = head === '' ? undefined : PLAIN_FACE_BUCKETS.get(head.charAt(head.length - 1));
+  if (bucket) {
+    for (const { face, suffixed } of bucket) {
+      if (!head.endsWith(suffixed)) continue;
+      if (head.length === suffixed.length) {
+        return make({ ...base, family: '', face, sub: checkSub, isMessageCheck });
+      }
+      const famRaw = head.slice(0, head.length - suffixed.length);
       return make({ ...base, family: stripFamilyMarker(famRaw), face, sub: checkSub, isMessageCheck });
     }
   }
@@ -425,8 +484,8 @@ const FAMILY_MEMO_LIMIT = 200_000;
 export interface KojoFamilyMemo {
   /**
    * 解析函数名 → 家族结构。`filePath` 可选：占位符形态据文件编号还原角色号
-   * （见 `alignPlaceholderToPath`）。**键包含 filePath**——同名不同文件各占一条，
-   * 否则占位符的对齐结果会跨文件串味。
+   * （见 `alignPlaceholderToPath`）。**占位符的判定按「名字 + 文件」缓存**——同名不同文件
+   * 各占一条，否则对齐结果会跨文件串味；与文件无关的判定按名字缓存（见实现处的两张表）。
    */
   parse(rawName: string, filePath?: string): FamilyMatch | null;
   /** 当前条目数（内存上限的读数；测试用来验淘汰行为） */
@@ -437,30 +496,50 @@ export interface KojoFamilyMemo {
 }
 
 export function createKojoFamilyMemo(limit = FAMILY_MEMO_LIMIT): KojoFamilyMemo {
-  const memo = new Map<string, FamilyMatch | null>();
+  /**
+   * **两张表**：按名字的（与 filePath 无关，占 99% 调用）与按「名字 + 文件」的（只放占位符）。
+   * 旧实现每次拼 `${rawName}\u0000${filePath}` 再查表（99k 名字 × 80 余字符，`parse` self 107ms）；
+   * 而只有占位符依赖文件来源（`alignPlaceholderToPath` 对非占位符原样返回）⇒ 按名字缓存即可。
+   */
+  const nameMemo = new Map<string, FamilyMatch | null>();
+  /** 占位符专用（量极小：真语料里 KX 残留是少数）；键仍需带文件，否则同名不同文件串味 */
+  const pathMemo = new Map<string, FamilyMatch | null>();
   let hits = 0;
   let misses = 0;
+  const put = (table: Map<string, FamilyMatch | null>, key: string, value: FamilyMatch | null): void => {
+    if (table.size >= limit) table.clear();
+    table.set(key, value);
+  };
   return {
     parse(rawName: string, filePath?: string): FamilyMatch | null {
-      // 键含 filePath（NUL 分隔，函数名/路径均不含 NUL）：占位符对齐结果依赖文件来源，
-      // 只按 rawName 作键会让同名不同文件互相覆盖、返回陈旧判定。
-      const key = filePath === undefined ? rawName : `${rawName}\u0000${filePath}`;
-      const hit = memo.get(key);
       // 命中 null **也算命中**：非口生命名的函数（引擎助手、AA 工具等）同样占大量调用，
       // 每次重跑那条 regex 链就是本批要消掉的成本
-      if (hit !== undefined) {
+      const byName = nameMemo.get(rawName);
+      if (byName !== undefined) {
         hits++;
-        return hit;
+        return byName;
+      }
+      if (filePath !== undefined) {
+        const byPath = pathMemo.get(`${rawName}\u0000${filePath}`);
+        if (byPath !== undefined) {
+          hits++;
+          return byPath;
+        }
       }
       misses++;
       const result = alignPlaceholderToPath(parseKojoFamilyRaw(rawName), filePath);
-      if (memo.size >= limit) memo.clear();
-      memo.set(key, result);
+      // 占位符的对齐结果依赖文件来源（**含"没给文件"这一种**）⇒ 一律进「名字 + 文件」那张表；
+      // 非占位符与路径无关 ⇒ 按名字缓存，热路径上只剩一次短键 `Map.get`
+      if (result !== null && result.isPlaceholder) put(pathMemo, `${rawName}\u0000${filePath ?? ''}`, result);
+      else put(nameMemo, rawName, result);
       return result;
     },
-    size: () => memo.size,
+    size: () => nameMemo.size + pathMemo.size,
     stats: () => ({ hits, misses }),
-    clear: () => memo.clear(),
+    clear: () => {
+      nameMemo.clear();
+      pathMemo.clear();
+    },
   };
 }
 

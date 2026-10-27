@@ -13,6 +13,28 @@ export type PathStyle = 'win32' | 'posix';
 const WIN_DRIVE = /^[A-Za-z]:[\\/]/;
 const WIN_ABS_ONLY = /^[A-Za-z]:$/;
 
+/* --------------------------- 归一化记忆（冷开热路径） --------------------------- */
+
+/**
+ * 归一化 / 折叠大小写的记忆表。`isPathUnder` 是「文件 → 范围 / 归属 / 写域」的唯一判据，
+ * 一次判定归一化两侧，而调用方是「逐目录根 × 逐文件」的循环 ⇒ 同一批路径被归一化几十万次。
+ * P0-2 冷开实测：`normalize` self 936ms + `isPathUnder` self 454ms（读数与归因见批 3 报告）。
+ *
+ * 语义不变（纯函数 + 有界记忆）；溢出整表清空，避免换项目后旧路径一直占内存。
+ */
+const MEMO_LIMIT = 32768;
+const normMemo = new Map<string, string>();
+const foldMemo = new Map<string, string>();
+
+function memo(memoTable: Map<string, string>, p: string, compute: () => string): string {
+  const hit = memoTable.get(p);
+  if (hit !== undefined) return hit;
+  const v = compute();
+  if (memoTable.size >= MEMO_LIMIT) memoTable.clear();
+  memoTable.set(p, v);
+  return v;
+}
+
 /** 判定路径风格（以输入形态为准；Windows 盘符/反斜杠 → win32） */
 export function pathStyle(p: string): PathStyle {
   if (WIN_DRIVE.test(p) || p.startsWith('\\\\') || WIN_ABS_ONLY.test(p)) return 'win32';
@@ -28,9 +50,13 @@ export function isAbsolute(p: string): boolean {
   return WIN_DRIVE.test(p) || /^[\\/]/.test(p);
 }
 
-/** 归一化：统一分隔符、折叠 `.` 与多余分隔符、按需解析 `..` */
+/** 归一化：统一分隔符、折叠 `.` 与多余分隔符、按需解析 `..`（带记忆，见上） */
 export function normalize(p: string): string {
   if (p.length === 0) return '.';
+  return memo(normMemo, p, () => normalizeUncached(p));
+}
+
+function normalizeUncached(p: string): string {
   const style = pathStyle(p);
   const sep = sepOf(style);
   const alt = style === 'win32' ? '/' : '\\';
@@ -116,29 +142,63 @@ export function extname(p: string): string {
   return i <= 0 ? '' : b.slice(i);
 }
 
-/**
- * child 是否位于 parent 之下（含相等）。
- * Windows 路径大小写不敏感；两侧均先归一化。
- */
-export function isPathUnder(parent: string, child: string): boolean {
-  if (parent.length === 0) return false;
-  const style = pathStyle(parent);
-  let a = normalize(parent);
-  let b = normalize(child);
-  if (style === 'win32') {
-    a = a.toLowerCase();
-    b = b.toLowerCase();
-  }
+/** 归一化 + 折叠大小写（判等用的形态；带记忆——热路径上同一路径会被问几十万次） */
+function foldedPath(p: string): string {
+  return memo(foldMemo, p, () => normalize(p).toLowerCase());
+}
+
+/** 折叠形态下的包含判定（`isPathUnder` / `probeContains` 的唯一实现体） */
+function containsFolded(a: string, b: string, style: PathStyle): boolean {
   if (a === b) return true;
   const sep = sepOf(style);
   const withSep = a.endsWith(sep) ? a : a + sep;
   return b.startsWith(withSep);
 }
 
+/**
+ * 判据的**预折叠**形态（`pathProbe` + `probeContains`）：根折一遍、路径折一遍，之后每次判定
+ * 只剩两次前缀比较。答案与 `isPathUnder` 逐字相同（`paths.test.ts` 有对拍用例）——判据仍只有
+ * 一条，这里只是它的事前形态。
+ */
+export interface PathProbe {
+  /** 折叠后的判等形态（win32 已小写；**空串 = 入参为空** ⇒ 不包含任何路径） */
+  readonly key: string;
+  /** 分隔符风格（取自入参本身，与 `isPathUnder` 取 parent 风格的口径一致） */
+  readonly style: PathStyle;
+}
+
+/** 把一条路径折成判等形态（同一路径重复调用只花一次 `Map.get`） */
+export function pathProbe(p: string): PathProbe {
+  if (p.length === 0) return { key: '', style: 'posix' };
+  const style = pathStyle(p);
+  return { key: style === 'win32' ? foldedPath(p) : normalize(p), style };
+}
+
+/** `child` 是否在 `root` 之下（含相等）——与 `isPathUnder(root, child)` 同答案 */
+export function probeContains(root: PathProbe, child: PathProbe): boolean {
+  if (root.key === '') return false;
+  return containsFolded(root.key, child.key, root.style);
+}
+
+/**
+ * child 是否位于 parent 之下（含相等）。
+ * Windows 路径大小写不敏感；两侧均先归一化。
+ *
+ * 形态走记忆（`normalize` / `foldedPath`）：判据本身逐字未变，只是不再重复归一化同一份路径。
+ */
+export function isPathUnder(parent: string, child: string): boolean {
+  if (parent.length === 0) return false;
+  const style = pathStyle(parent);
+  const fold = style === 'win32';
+  const a = fold ? foldedPath(parent) : normalize(parent);
+  const b = fold ? foldedPath(child) : normalize(child);
+  return containsFolded(a, b, style);
+}
+
 /** 用于 Map 键的统一形态（Windows 折叠大小写，避免同一路径两种写法重复缓存） */
 export function pathKey(p: string): string {
   const n = normalize(p);
-  return pathStyle(n) === 'win32' ? n.toLowerCase() : n;
+  return pathStyle(n) === 'win32' ? foldedPath(p) : n;
 }
 
 /**
