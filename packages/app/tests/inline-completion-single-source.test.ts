@@ -219,8 +219,11 @@ describe('③ 十二道闸点名表与源码一致', () => {
   });
 
   it('表里没有"两侧各抄一份"这一档（出现即红）', () => {
-    const kinds = new Set(GATE_ROLL_CALL.map((r) => r.kind));
-    expect(kinds.has('copied')).toBe(false);
+    // 判据取"kind 集合恰好等于这三档"，不取 `kinds.has('copied')`：后者在类型面根本不成立
+    // （`GateKind` 里没有 'copied'，`Set<GateKind>.has` 直接 TS2345），app 侧 tsc 当场红。
+    // 等值断言已经把"多出一档抄本"钉死——谁加一档，这里必红；只加进 union 却不用的空档
+    // 不构成风险（没有行会走到它）。
+    const kinds = new Set<string>(GATE_ROLL_CALL.map((r) => r.kind));
     expect([...kinds].sort()).toEqual(['counterpart', 'popup-only', 'shared']);
   });
 
