@@ -60,6 +60,8 @@ export interface ArityInput {
   readonly text: string;
   /** 函数目录（通常由 `arityParamsOf(index, name)` 构造，见下） */
   readonly catalog: ArityCatalog;
+  /** 已摊平的可见行（`visibleCodeLineList` 产物）：多消费者共用时传它 */
+  readonly visible?: readonly VisibleCodeLine[];
 }
 
 /**
@@ -421,8 +423,11 @@ export function erbCallSitesOf(line: VisibleCodeLine, code: string): readonly Er
 export function collectArityDiagnostics(input: ArityInput): LineDecoration[] {
   if (!isErbDialectPath(input.path) || input.text.length === 0) return [];
   const out: LineDecoration[] = [];
-  for (const line of visibleCodeLines(input.text)) {
+  const lines = input.visible ?? visibleCodeLines(input.text);
+  for (const line of lines) {
     if (line.isDefinition) continue;
+    // 预筛：非 CALL 行且原文无 `(` ⇒ 无调用点（codeView 保长）。CALL 槽不能跳：`CALL FOO` 无括号也合法
+    if (!line.isCallLine && line.raw.indexOf('(') < 0) continue;
     const code = line.codeView();
     for (const site of erbCallSitesOf(line, code)) {
       const params = input.catalog(normalizedUpper(site.name));

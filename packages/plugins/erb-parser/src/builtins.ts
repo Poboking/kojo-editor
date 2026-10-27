@@ -1,7 +1,7 @@
 import type { LineDecoration } from '@kojo/plugin-api';
 import { isErbDialectPath } from '@kojo/plugin-api';
 import { erbCallSitesOf, type ArgSpan } from './arity';
-import { normalizedUpper, visibleCodeLines } from './references';
+import { normalizedUpper, visibleCodeLines, type VisibleCodeLine } from './references';
 
 /**
  * ERB **内建式中函数**（Emuera `exmeth`）静态签名表 + 实参诊断。
@@ -326,6 +326,8 @@ export interface BuiltinArgDiagnosticsInput {
    * 该名字整体不判（影子函数让位，见文件头注）。
    */
   readonly isUserFunction?: (normalizedName: string) => boolean;
+  /** 已摊平的可见行（`visibleCodeLineList` 产物）：与 `collectArityDiagnostics` 同一个共用口 */
+  readonly visible?: readonly VisibleCodeLine[];
 }
 
 /** 可证的实参表达式类型（判不出的 ⇒ `null`，一律不报） */
@@ -403,8 +405,11 @@ function trimmedSpan(raw: string, span: ArgSpan): ArgSpan | null {
 export function collectBuiltinArgDiagnostics(input: BuiltinArgDiagnosticsInput): LineDecoration[] {
   if (!isErbDialectPath(input.path) || input.text.length === 0) return [];
   const out: LineDecoration[] = [];
-  for (const line of visibleCodeLines(input.text)) {
+  const lines = input.visible ?? visibleCodeLines(input.text);
+  for (const line of lines) {
     if (line.isDefinition) continue;
+    // 与 `collectArityDiagnostics` 同一道预筛（两家共用 `erbCallSitesOf`，预筛必须同形）
+    if (!line.isCallLine && line.raw.indexOf('(') < 0) continue;
     const code = line.codeView();
     for (const site of erbCallSitesOf(line, code)) {
       const sig = builtinSignatureOf(site.name);

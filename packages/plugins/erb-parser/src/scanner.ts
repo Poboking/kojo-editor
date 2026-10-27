@@ -292,8 +292,9 @@ export function parseLabelDefinition(trimmed: string): string | undefined {
   return name.length > 0 ? name : undefined;
 }
 
-export function parseErbText(text: string, path = '<memory>'): ErbFile {
-  const lines = normalizeEol(text).split('\n');
+/** 解析单文件文本（**纯函数**）。`preSplit` = 已归一化并切好的行数组（`splitErbLines` 的产物），不传则就地切 */
+export function parseErbText(text: string, path = '<memory>', preSplit?: readonly string[]): ErbFile {
+  const lines = preSplit ?? normalizeEol(text).split('\n');
   const lineCount = lines.length;
 
   const functions: ErbFunction[] = [];

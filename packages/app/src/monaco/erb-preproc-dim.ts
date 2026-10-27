@@ -64,14 +64,13 @@ export interface ErbPreprocDimHandle {
 /**
  * 装配被裁支压暗。全局一份（`ensureGlobalProviders` 里调用一次），返回句柄供整体拆毁。
  *
- * `deps.index` 每次重算时现取（不缓存索引本身）：索引重建、项目切换、关闭项目
- * 都只需调用方 `refresh()` 一次，这里不必知道任何一种生命周期。
+ * `deps.index` 每次重算时现取（不缓存索引本身）：索引重建 / 项目切换 / 关闭项目只需
+ * 调用方 `refresh()` 一次。
  *
- * `deps.maxLines` = 超过这个行数整档让位。判据/阈值**单一真源**在 `ui/editor-options.ts`
- * （`LARGE_FILE_LINES`，与粘性滚动/括号对着色/整篇找同词同档）；本模块不写第二个数，
- * 也不引那个模块——它不在开机图的静态段里，引一次就要多枚模块进图（PS-10 闸）。
- * 原写死 20,000，依据是"真语料最大单文件 1.1 万行"——2026-10-28 复核已过时（同树有
- * 19,033 行与 169,119 行）。读数见 `.workbuddy-ai/reports/2026-10-28-p0-3-bigfile-highlight.md`。
+ * `deps.maxLines` = 超过这个行数整档让位（装配侧传 `HUGE_FILE_LINES`，50,000）。2026-10-28
+ * 从 `LARGE_FILE_LINES`（5,000）抬到 huge 边界：`collectPreprocDeadRanges` 实测 24,197 行
+ * **7.0 ms**、169,247 行 **43.7 ms**，而它在**每次停笔后**都要重算 ⇒ 5,000 那道闸砍掉了
+ * 一批本来只值 5–10ms 的文件，而 16 万行那一档确实付不起。
  */
 export function installErbPreprocDim(deps: {
   index: () => ErbIndex | null;
@@ -98,7 +97,7 @@ export function installErbPreprocDim(deps: {
       return;
     }
     const ranges =
-      model.getLineCount() >= deps.maxLines
+      model.getLineCount() > deps.maxLines
         ? []
         : collectPreprocDeadRanges(model.getValue(), definedMacrosOf(deps.index()));
     if (ranges.length === 0) {

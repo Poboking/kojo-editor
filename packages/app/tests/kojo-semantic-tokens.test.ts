@@ -19,9 +19,10 @@ import type {
 } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { LARGE_FILE_LINES } from '../src/ui/editor-options';
+import { HUGE_FILE_LINES, LARGE_FILE_LINES } from '../src/ui/editor-options';
 import {
   KOJO_SEMANTIC_TOKEN_LEGEND,
+  SEMANTIC_TOKEN_MAX_LINES,
   collectSemanticTokenSpans,
   encodeSemanticTokens,
   installSemanticTokensProvider,
@@ -267,11 +268,15 @@ describe('encodeSemanticTokens · delta 编码', () => {
 /* ============================== 降级判据 ============================== */
 
 describe('shouldComputeSemanticTokens · 大文件降级', () => {
-  it('阈值就是 `editor-options.ts` 的 `LARGE_FILE_LINES`（同一族"全文级"开销同开同关；档位一处真源）', () => {
-    // 这里**不**再抄一遍 5000：`SEMANTIC_TOKEN_MAX_LINES` 直接等于那个常量，
-    // 调档只改 `editor-options.ts` 一处，本断言随之移动（抄数字 = 第二真源，正是要防的漂移）。
-    expect(shouldComputeSemanticTokens(LARGE_FILE_LINES)).toBe(true);
-    expect(shouldComputeSemanticTokens(LARGE_FILE_LINES + 1)).toBe(false);
+  it('阈值就是 `editor-options.ts` 的 `HUGE_FILE_LINES`（2026-10-28 从 LARGE 档抬到 HUGE 档）', () => {
+    // 这里**不**抄数字：`SEMANTIC_TOKEN_MAX_LINES` 直接等于那个常量，调档只改
+    // `editor-options.ts` 一处，本断言随之移动（抄数字 = 第二真源，正是要防的漂移）。
+    // 抬档依据：本供方是一趟线性扫描（24,197 行 43.9 ms），不是 Monaco 那种常驻全文索引；
+    // 169,247 行那份 435 ms + 16.8 万 span 仍留在闸外。
+    expect(SEMANTIC_TOKEN_MAX_LINES).toBe(HUGE_FILE_LINES);
+    expect(shouldComputeSemanticTokens(HUGE_FILE_LINES)).toBe(true);
+    expect(shouldComputeSemanticTokens(HUGE_FILE_LINES + 1)).toBe(false);
+    expect(shouldComputeSemanticTokens(LARGE_FILE_LINES + 1)).toBe(true); // large 档不再让位
   });
 
   it('空文档 / 非有限行数不算（provider 不该为不存在的文本付全文扫描）', () => {
