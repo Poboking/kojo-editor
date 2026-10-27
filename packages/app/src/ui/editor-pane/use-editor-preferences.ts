@@ -32,7 +32,13 @@ import {
   setFontZoomPref,
   subscribeFontSizePref,
 } from '../font-size-pref';
-import { findPrefPatch, layoutPrefPatch, quickSuggestionsFor } from '../editor-options';
+import { findPrefPatch, inlineSuggestPatch, layoutPrefPatch, quickSuggestionsFor } from '../editor-options';
+import {
+  loadInlineCompletionPref,
+  loadInlineMinShowDelayPref,
+  subscribeInlineCompletionPref,
+  subscribeInlineMinShowDelayPref,
+} from '../inline-completion-pref';
 import { subscribeLayoutPref } from '../layout-pref';
 import { subscribeFindSeedPref } from '../find-pref'; // FIND-STATE-PERSIST-B
 import {
@@ -95,6 +101,32 @@ export function useEditorPreferences(params: EditorPreferencesParams): Preferenc
         }
         ed.updateOptions({ quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()) });
       });
+      // 幽灵文本（IC 批）：三格里只有这两格进 Monaco 选项（总开关 + 停顿延迟），
+      // 候选上限住在 provider 侧（它是宿主的截断点，不是 Monaco 的概念）。
+      // 只读 / 派生视图这里同样强制关——与上面 `quickSuggestions` 那一拍同一条纪律，
+      // 且这里是**选项**层面的关：Monaco 连一次请求都不发（"关掉 = 逐字节一致"的机制保证）。
+      const inlineCompletionUnsub = subscribeInlineCompletionPref(() => {
+        let readOnly = false;
+        try {
+          readOnly = ed.getOption(monaco.editor.EditorOption.readOnly);
+        } catch {
+          readOnly = false;
+        }
+        ed.updateOptions(
+          inlineSuggestPatch(readOnly ? false : loadInlineCompletionPref(), loadInlineMinShowDelayPref()),
+        );
+      });
+      const inlineMinDelayUnsub = subscribeInlineMinShowDelayPref(() => {
+        let readOnly = false;
+        try {
+          readOnly = ed.getOption(monaco.editor.EditorOption.readOnly);
+        } catch {
+          readOnly = false;
+        }
+        ed.updateOptions(
+          inlineSuggestPatch(readOnly ? false : loadInlineCompletionPref(), loadInlineMinShowDelayPref()),
+        );
+      });
       // 排版偏好（P2-16）：折行 / 多光标修饰键 / 列选择。与切文件路径同读一份偏好
       // （editor-options.ts 的 layoutPrefPatch）；这里只补发这三个键——补丁里没有
       // readOnly / quickSuggestions，所以订阅回调不必复刻切标签那层的 overrides。
@@ -144,6 +176,8 @@ export function useEditorPreferences(params: EditorPreferencesParams): Preferenc
         fontZoomSync.dispose();
         suggestDelayUnsub();
         quickSuggestionsUnsub();
+        inlineCompletionUnsub();
+        inlineMinDelayUnsub();
         layoutUnsub();
         findSeedUnsub();
         displayUnsub();

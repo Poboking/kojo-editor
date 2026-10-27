@@ -51,6 +51,13 @@ function panelProps(over: Partial<SettingsPanelProps> = {}): SettingsPanelProps 
     commitWordSuggestions: noop,
     suggestDelay: 0,
     commitSuggestDelay: noop,
+    // 幽灵文本三格（IC 批 A 车道）：值取"从没改过"的缺省态，与上面那组同口径
+    inlineCompletionOn: true,
+    commitInlineCompletion: noop,
+    inlineMinShowDelay: 0,
+    commitInlineMinShowDelay: noop,
+    inlineMaxCandidates: 5,
+    commitInlineMaxCandidates: noop,
     sugarViewOn: false,
     applySugarViewPref: noop,
     formatOnSave: false,

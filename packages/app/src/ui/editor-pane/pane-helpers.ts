@@ -17,12 +17,21 @@ import type {
   ErbIndex,
 } from '@kojo/plugin-api';
 import { errorText, pathKey } from '@kojo/plugin-api';
-import { formatOnTypeForDocument, quickSuggestionsFor, type EditorOptionPatch } from '../editor-options';
+import {
+  formatOnTypeForDocument,
+  inlineSuggestPatch,
+  quickSuggestionsFor,
+  type EditorOptionPatch,
+} from '../editor-options';
 import {
   editorDisplayOptionPatch,
   type MinimapViewContext,
 } from '../editor-display-prefs';
 import { loadQuickSuggestionsPref, loadSuggestDelayPref } from '../suggest-pref';
+import {
+  loadInlineCompletionPref,
+  loadInlineMinShowDelayPref,
+} from '../inline-completion-pref';
 import { languageFor } from '../editor-model-pool';
 import { KOJO_LANGUAGE_ID } from '../../monaco/kojo-language';
 import { splitPath } from '../path-label';
@@ -52,18 +61,24 @@ export const MARKER_DEBOUNCE_MS = 250;
 export const PREVIEW_WRITE_VETO = '.kojo 预览是只读显示，动作改的是派生文本——先切回原文再执行。';
 
 /**
- * 只读态与快建议**同拍**落 Monaco 选项。
+ * 只读态与快建议 / 幽灵文本**同拍**落 Monaco 选项。
  *
  * `readOnly` 只拦编辑，不拦 suggest；provider 又拿不到 editor 的可写状态 ⇒ 只读文件 /
  * 糖预览若不在这里把 `quickSuggestions` 关掉，全局快建议照样会弹。可写态下还叠一层
  * 设置页总开关（`loadQuickSuggestionsPref`）；延迟同源，保证「补全弹出延迟」对 Monaco
  * 快建议与宿主主动触发同时生效。
+ *
+ * IC 批加上的那一格：`editor.inlineSuggest`（幽灵文本总开关 + 停顿延迟）。同一条纪律——
+ * **只读 / 派生视图这里就关掉**，因为候选是要**写进 model** 的字面，落在投影上改的不是原文；
+ * 而"关掉 = 一次都不问"这条判据靠的就是这一格选项（第二道同名闸在 provider 里，
+ * 真源仍是同一把 localStorage，见 `editor-options.ts` 的 `inlineSuggestPatch`）。
  */
 export function applyEditabilityAndSuggest(ed: Monaco.editor.IStandaloneCodeEditor, readOnly: boolean): void {
   ed.updateOptions({
     readOnly,
     quickSuggestions: quickSuggestionsFor(readOnly, loadQuickSuggestionsPref()),
     quickSuggestionsDelay: loadSuggestDelayPref(),
+    ...inlineSuggestPatch(readOnly ? false : loadInlineCompletionPref(), loadInlineMinShowDelayPref()),
   });
 }
 

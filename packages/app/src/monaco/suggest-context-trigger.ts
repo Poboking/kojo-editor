@@ -6,6 +6,7 @@ import { erbFunctionNameSlot } from './erb-completion-functions';
 import { erbBitSlotOpen } from './erb-completion-bits';
 import { erbVariableSlotAt } from './erb-completion-variables';
 import { insideStringOrComment, isBlank, lineAt } from './kojo-completion-position';
+import { kojoCodePositionAt } from './kojo-suggest-gate';
 import { caseValueSlotAt, timingNumberSlotAt } from './kojo-completion-instructions';
 import { timingFaceSlot, timingNamedParamValueSlot } from './kojo-completion-faces';
 import { kojoFunctionNameSlot } from './kojo-completion-functions';
@@ -94,6 +95,17 @@ export const CONTEXT_TRIGGER_DEBOUNCE_MAX_MS = 2000;
 const CURSOR_REASON_NOT_SET = 0;
 /** 「这一拍不是打字」的光标事件（撤掉待发的一拍；只可能少弹，不可能多弹） */
 const CURSOR_REASON_NOT_TYPING: readonly number[] = [1, 3, 4, 5, 6];
+
+/**
+ * 这一拍光标事件**不是打字**带起来的（点击 / 方向键 / 粘贴 / 撤销重做 / 整篇 flush）。
+ *
+ * 两侧共用（IC 批）：弹窗观察者据此撤掉待发的一拍；幽灵文本观察者据此把"刚敲下的那一枚
+ * 字符"这个事实作废（⇒ 闸门 ⑦ 的对面判据与 `triggerCharacter` 一起归零）。
+ * 数值表只有上面那一枚，本函数是它唯一的出口。
+ */
+export function cursorReasonBreaksTypingLeg(reason: number): boolean {
+  return CURSOR_REASON_NOT_TYPING.includes(reason);
+}
 
 /** `SuggestController.ID`（vendor `contrib/suggest/browser/suggestController.js:102`） */
 const SUGGEST_CONTROLLER_ID = 'editor.contrib.suggestController';
@@ -221,8 +233,13 @@ export function isSlotOpeningChar(ch: string): boolean {
   return isBlank(ch) || ch === '@' || ch === ',' || ch === '，' || ch === ':' || ch === '的';
 }
 
-/** 光标是否落在**非代码视野**（字符串 / 注释）里：两门语言各走各的那一枚判据，不自造 */
-function isNonCodePosition(languageId: string, line: string, column: number): boolean {
+/**
+ * 光标是否落在**非代码视野**（字符串 / 注释）里：两门语言各走各的那一枚判据，不自造。
+ *
+ * 弹窗观察者（闸门⑨）与内联观察者（幽灵文本）**共用**：这条判据两侧一模一样，
+ * 抄第二份的结果一定是"弹窗不弹的地方幽灵文本弹了"。
+ */
+export function isNonCodePosition(languageId: string, line: string, column: number): boolean {
   if (languageId === ERB_LANGUAGE_ID) return erbCompletionGate(line, column) === 'in-string';
   if (languageId === KOJO_LANGUAGE_ID) {
     const col0 = Math.min(Math.max(column - 1, 0), line.length);
@@ -231,15 +248,34 @@ function isNonCodePosition(languageId: string, line: string, column: number): bo
   return true; // 未知语言（上游已拦）兜底为"不给弹"
 }
 
-/** 一次评估的全部事实（纯数据 ⇒ 抑制条件可以逐条单测，不必造 Monaco 运行时） */
-export interface SuggestOpenContext {
-  readonly languageId: string;
-  /** 光标所在行文本 */
-  readonly line: string;
-  /** Monaco 的 1 基列 */
-  readonly column: number;
-  /** 刚敲下的那一枚字符（不是"单字符纯插入"⇒ `null`）；字符本身不限，位置由 gate ⑩ 决定 */
-  readonly typedChar: string | null;
+/**
+ * 语言侧的**代码位门**（候选源 provider 自己出货前用的那一枚，单源分别是
+ * `kojoCodePositionAt`（`.kojo` 的台词 / 旁白 / 注释门）与 `erbCompletionGate`（ERB 的
+ * 串 / 注释门））。
+ *
+ * 为什么内联侧要多问这一枚而弹窗侧不问：弹窗的落点由闸门⑩（候选源自己认的名字位探针）
+ * 兜住，探针在台词行本来就不命中；幽灵文本**没有**⑩ 这一道（见 `inline-completion-host.ts`
+ * 的头注：它的对面是契约的"弃权"机制，不是宿主的名字位探针），所以降噪必须直接问语言侧
+ * 那枚代码位门，否则台词 / 旁白行会真的长出幽灵文本。
+ *
+ * 未知语言 ⇒ `false`（与 {@link isNonCodePosition} 同一条兜底方向：不猜）。
+ */
+export function codeViewAt(languageId: string, line: string, column: number): boolean {
+  if (languageId === ERB_LANGUAGE_ID) return erbCompletionGate(line, column) !== 'in-string';
+  if (languageId === KOJO_LANGUAGE_ID) return kojoCodePositionAt(line, column);
+  return false;
+}
+
+/**
+ * 弹窗与内联（幽灵文本）**共用**的那几道闸的事实（IC 批 A 车道）。
+ *
+ * 为什么单独成一个接口：这七条是**纯标量的编辑器状态**，与"哪一侧要弹"无关。
+ * 此前它们逐字写在 `shouldTriggerContextSuggest` 里；内联那条腿一接线，最自然的写法
+ * 就是再抄一遍那七行——而抄本一漂，症状是"弹窗不弹的地方幽灵文本弹了"（或反过来），
+ * 两侧各自的测试都还是绿的。于是把它们收成**这一个函数 + 这一个形状**，
+ * 由 `tests/inline-completion-single-source.test.ts` 按源码文本钉住"只许定义一次"。
+ */
+export interface SharedSuggestGateFacts {
   /** 有打开的文件（空编辑器一律不弹） */
   readonly hasPath: boolean;
   /** `editor` 处于只读（本仓只读门：游戏目录默认锁；只读时插入会被吞 ⇒ 弹了纯骚扰） */
@@ -252,6 +288,38 @@ export interface SuggestOpenContext {
   readonly multiCursor: boolean;
   /** 有选区（作者正在选，不是正在写） */
   readonly selectionActive: boolean;
+  /**
+   * 输入法合成期（`compositionstart`→`compositionend` 的会话态）。`true` ⇒ 本轮自动弹出
+   * 整轮沉默：拼音 / 候选还没上字，弹出来只会被下一次 `compositionupdate` 过滤掉，或者
+   * 诱使 Enter / Tab 去"接受建议"而不是提交候选。可选：旧调用方不传 = `false`。
+   */
+  readonly composing?: boolean;
+}
+
+/**
+ * 两侧共用的闸门（①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标 / 有选区 ⑫输入法合成期）。
+ *
+ * 纯函数、零语言知识、零 IO。⑫ 排在最前（合成期连"这一拍是不是打字"都不必问）。
+ */
+export function sharedSuggestGates(c: SharedSuggestGateFacts): boolean {
+  if (c.composing === true) return false; // ⑫ 合成期：输入法还没上字，不许替作者弹
+  if (!c.hasPath) return false; // ①
+  if (c.readOnly) return false; // ②
+  if (c.derivedView) return false; // ③
+  if (!c.focused) return false; // ④
+  if (c.multiCursor || c.selectionActive) return false; // ⑤
+  return true;
+}
+
+/** 一次评估的全部事实（纯数据 ⇒ 抑制条件可以逐条单测，不必造 Monaco 运行时） */
+export interface SuggestOpenContext extends SharedSuggestGateFacts {
+  readonly languageId: string;
+  /** 光标所在行文本 */
+  readonly line: string;
+  /** Monaco 的 1 基列 */
+  readonly column: number;
+  /** 刚敲下的那一枚字符（不是"单字符纯插入"⇒ `null`）；字符本身不限，位置由 gate ⑩ 决定 */
+  readonly typedChar: string | null;
   /** 补全 widget 已可见 / 正在跑（重弹 = 重置选择） */
   readonly widgetVisible: boolean;
   /**
@@ -264,31 +332,22 @@ export interface SuggestOpenContext {
    * 可选：旧调用方不传 = `true`（保持既有行为）。
    */
   readonly quickSuggestionsEnabled?: boolean;
-  /**
-   * 输入法合成期（`compositionstart`→`compositionend` 的会话态）。`true` ⇒ 本轮自动弹出
-   * 整轮沉默：拼音 / 候选还没上字，弹出来只会被下一次 `compositionupdate` 过滤掉，或者
-   * 诱使 Enter / Tab 去"接受建议"而不是提交候选。可选：旧调用方不传 = `false`。
-   */
-  readonly composing?: boolean;
 }
 
 /**
- * 主动触发的**全部闸门**（纯函数；观察者只负责把 Monaco 事件折成 {@link SuggestOpenContext}）。
- * ⑪ 总开关**最先判**（关掉时其余判据都不必算），⑫ 输入法合成期紧随其后（合成期一律不弹），
- * 其后 ①–⑩ 按编号顺序，逐条可测：
- * ①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标/有选区 ⑥widget 已开 ⑦不是"刚敲下的一枚字符"
- * ⑧这门语言没有名字位判据 ⑨串/注释内 ⑩候选源自己不信这一位。
+ * 弹窗观察者独有的位置门（⑧这门语言没有名字位判据 ⑨串 / 注释内 ⑩候选源自己不信这一位）。
+ *
+ * ⑩ 只有弹窗侧用得上：那一条腿是**宿主替作者按键**，弹了没货就是骚扰，所以必须问候选源
+ * 自己的名字位探针。幽灵文本没有这一道——它的对面是契约的**弃权**机制（供方自己回
+ * `undefined` / `no-completion`），把名字位探针铺上去会掐死"整句 / 下一行"那一类候选
+ * （取舍与理由见 `inline-completion-host.ts` 的头注）。
  */
-export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
-  if (c.quickSuggestionsEnabled === false) return false; // ⑪（总开关，先判）
-  if (c.composing === true) return false; // ⑫ 合成期：输入法还没上字，不许替作者弹
-  if (!c.hasPath) return false; // ①
-  if (c.readOnly) return false; // ②
-  if (c.derivedView) return false; // ③
-  if (!c.focused) return false; // ④
-  if (c.multiCursor || c.selectionActive) return false; // ⑤
-  if (c.widgetVisible) return false; // ⑥
-  if (c.typedChar === null) return false; // ⑦ 任意单字符都行（SUGGEST-2B）；位置交给 ⑩
+export function suggestNameSlotGates(c: {
+  languageId: string;
+  line: string;
+  column: number;
+  nativeSlot?: boolean;
+}): boolean {
   const probes = nameSlotProbesOf(c.languageId); // ⑧
   if (probes === null) return false;
   if (isNonCodePosition(c.languageId, c.line, c.column)) return false; // ⑨
@@ -296,6 +355,21 @@ export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
   //（`CALL ` / `#D` / `CFLAG:` / `GOTO ` / `SETBIT …,`——判据在 `kojo-native-zone.ts`，
   // 不在这里另抄一份 ERB 位置门）。
   return (c.nativeSlot ?? false) || probes.some((probe) => probe(c.line, c.column) !== null);
+}
+
+/**
+ * 主动触发的**全部闸门**（纯函数；观察者只负责把 Monaco 事件折成 {@link SuggestOpenContext}）。
+ * ⑪ 总开关**最先判**（关掉时其余判据都不必算），其后是两侧共用的 ⑫①–⑤、弹窗独有的 ⑥⑦、
+ * 位置门 ⑧⑨⑩，逐条可测：
+ * ①无文件 ②只读 ③派生视图 ④无焦点 ⑤多光标/有选区 ⑥widget 已开 ⑦不是"刚敲下的一枚字符"
+ * ⑧这门语言没有名字位判据 ⑨串/注释内 ⑩候选源自己不信这一位。
+ */
+export function shouldTriggerContextSuggest(c: SuggestOpenContext): boolean {
+  if (c.quickSuggestionsEnabled === false) return false; // ⑪（总开关，先判）
+  if (!sharedSuggestGates(c)) return false; // ⑫①②③④⑤（与幽灵文本**同一份**判据）
+  if (c.widgetVisible) return false; // ⑥
+  if (c.typedChar === null) return false; // ⑦ 任意单字符都行（SUGGEST-2B）；位置交给 ⑩
+  return suggestNameSlotGates(c); // ⑧⑨⑩
 }
 
 /** 位置签名（含语言 + 路径 + 行 + 列 + 光标前文）：同一签名只弹一次，重复事件与往返移动都吞掉 */
@@ -387,8 +461,13 @@ function editorKeyShieldNodeOf(editor: Monaco.editor.IStandaloneCodeEditor): HTM
   }
 }
 
-/** 「单字符纯插入」= 打字（删除 / 替换 / 粘贴 / 整篇 setValue 都不是）；返回插入的那一枚字符 */
-function singleInsertedChar(e: Monaco.editor.IModelContentChangedEvent): string | null {
+/**
+ * 「这一枚键入事件是不是打字（而不是删除 / 替换 / 粘贴 / 整篇 setValue）」，返回插入的那一枚字符。
+ *
+ * 弹窗观察者与**内联（幽灵文本）观察者共用这一枚**（IC 批：`triggerCharacter` 与闸门 ⑦
+ * 的对面都要求"刚敲下的一枚字符"这个事实，判据抄第二份必然漂）。
+ */
+export function singleInsertedChar(e: Monaco.editor.IModelContentChangedEvent): string | null {
   if (e.isFlush === true) return null;
   const changes = e.changes ?? [];
   if (changes.length !== 1) return null;
@@ -558,7 +637,7 @@ export function installSuggestContextTrigger(
       return;
     }
     const reason = typeof e.reason === 'number' ? e.reason : CURSOR_REASON_NOT_SET;
-    if (CURSOR_REASON_NOT_TYPING.includes(reason)) {
+    if (cursorReasonBreaksTypingLeg(reason)) {
       typedChar = null;
       cancelTimer();
       return;

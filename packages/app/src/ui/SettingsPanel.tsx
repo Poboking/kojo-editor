@@ -8,6 +8,15 @@ import { setPanelVirtualize } from './panel-prefs';
 import { setNameColorPref } from './semantic-color-pref';
 import { setTreeSitterPref, useTreeSitterPref } from './tree-sitter-pref';
 import { SUGGEST_DELAY_MAX, SUGGEST_DELAY_MIN, SUGGEST_DELAY_STEP } from './suggest-pref';
+// 幽灵文本三格的区间常量（IC 批 A 车道）：真源与夹取都在 `inline-completion-pref.ts`，本页只排版
+import {
+  INLINE_MAX_CANDIDATES_MAX,
+  INLINE_MAX_CANDIDATES_MIN,
+  INLINE_MAX_CANDIDATES_STEP,
+  INLINE_MIN_SHOW_DELAY_MAX,
+  INLINE_MIN_SHOW_DELAY_MIN,
+  INLINE_MIN_SHOW_DELAY_STEP,
+} from './inline-completion-pref';
 import { AUTOSAVE_IDLE_MS, setAutosavePref, type AutosaveMode } from './autosave-pref';
 import {
   FONT_SIZE_DEFAULT,
@@ -215,6 +224,17 @@ export interface SettingsPanelProps {
   suggestDelay: number;
   /** 写补全弹出延迟（壳层落 `saveSuggestDelayPref`；订阅表把新值推回本页） */
   commitSuggestDelay: (ms: number) => void;
+
+  /* ---- 幽灵文本带（IC 批 A 车道，2026-10-27） ---- */
+  /** 幽灵文本（内联补全）总开关；真源 `inline-completion-pref.ts`，**默认开**（理由见那份文件） */
+  inlineCompletionOn: boolean;
+  commitInlineCompletion: (on: boolean) => void;
+  /** 停顿多久才弹（ms，0 = 立即）；这一位直接写成 Monaco 的 `editor.inlineSuggest.minShowDelay` */
+  inlineMinShowDelay: number;
+  commitInlineMinShowDelay: (ms: number) => void;
+  /** 最多几条候选（宿主的截断上限；第 0 条 = 按接受键拿到的那一条） */
+  inlineMaxCandidates: number;
+  commitInlineMaxCandidates: (count: number) => void;
   sugarViewOn: boolean;
   applySugarViewPref: (on: boolean) => void;
   formatOnSave: boolean;
@@ -324,6 +344,12 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     commitWordSuggestions,
     suggestDelay,
     commitSuggestDelay,
+    inlineCompletionOn,
+    commitInlineCompletion,
+    inlineMinShowDelay,
+    commitInlineMinShowDelay,
+    inlineMaxCandidates,
+    commitInlineMaxCandidates,
     sugarViewOn,
     applySugarViewPref,
     formatOnSave,
@@ -654,6 +680,99 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
                       disabled={suggestDelay >= SUGGEST_DELAY_MAX}
                       title="更慢弹出"
                       aria-label="增加补全弹出延迟"
+                    >
+                      ＋
+                    </button>
+                  </span>
+                }
+              />
+            </div>
+            {/* 幽灵文本（内联补全，IC 批 A 车道）：三格真源都在 `inline-completion-pref.ts`，
+                本页只排版——开关走 Monaco 的 `editor.inlineSuggest.enabled`（关掉 = 一次都不问），
+                延迟走 `editor.inlineSuggest.minShowDelay`，上限走宿主截断（provider 侧）。 */}
+            <div className="settings-kit-row" data-settings-key="editor.inlineCompletion">
+              <KitField
+                as="label"
+                title="幽灵文本补全"
+                description={
+                  <>
+                    光标后头淡淡浮出一段建议，按 Tab 就收下、按 Esc 就丢掉。只在 .erb / .kojo 的代码位弹，
+                    台词 / 旁白 / 注释 / 字符串里不弹，只读文件与 .kojo 预览始终不弹；
+                    候选补全弹窗开着的时候让给弹窗。默认开
+                  </>
+                }
+                control={
+                  <Switch
+                    checked={inlineCompletionOn}
+                    onChange={commitInlineCompletion}
+                    label="幽灵文本补全"
+                  />
+                }
+              />
+            </div>
+            <div
+              className="settings-kit-row"
+              data-settings-key="editor.inlineMinShowDelay"
+              role="group"
+              aria-label="幽灵文本停顿延迟"
+            >
+              <KitField
+                title="幽灵文本停顿延迟"
+                description="停手后多久浮出建议；0 = 打字即浮；只改显示、不动文件"
+                control={
+                  <span className="settings-stepper">
+                    <button
+                      className="ghost small"
+                      onClick={() => commitInlineMinShowDelay(inlineMinShowDelay - INLINE_MIN_SHOW_DELAY_STEP)}
+                      disabled={inlineMinShowDelay <= INLINE_MIN_SHOW_DELAY_MIN}
+                      title="更快浮出"
+                      aria-label="减少幽灵文本停顿延迟"
+                    >
+                      −
+                    </button>
+                    <span className="settings-stepper-value">
+                      {inlineMinShowDelay === INLINE_MIN_SHOW_DELAY_MIN ? '立即' : `${inlineMinShowDelay} ms`}
+                    </span>
+                    <button
+                      className="ghost small"
+                      onClick={() => commitInlineMinShowDelay(inlineMinShowDelay + INLINE_MIN_SHOW_DELAY_STEP)}
+                      disabled={inlineMinShowDelay >= INLINE_MIN_SHOW_DELAY_MAX}
+                      title="更慢浮出"
+                      aria-label="增加幽灵文本停顿延迟"
+                    >
+                      ＋
+                    </button>
+                  </span>
+                }
+              />
+            </div>
+            <div
+              className="settings-kit-row"
+              data-settings-key="editor.inlineMaxCandidates"
+              role="group"
+              aria-label="幽灵文本候选上限"
+            >
+              <KitField
+                title="幽灵文本候选上限"
+                description="一次最多收下几条候选（第一条是 Tab 拿到的，其余供逐条切换）；只截尾巴、不重排"
+                control={
+                  <span className="settings-stepper">
+                    <button
+                      className="ghost small"
+                      onClick={() => commitInlineMaxCandidates(inlineMaxCandidates - INLINE_MAX_CANDIDATES_STEP)}
+                      disabled={inlineMaxCandidates <= INLINE_MAX_CANDIDATES_MIN}
+                      title="减少候选上限"
+                      aria-label="减少幽灵文本候选上限"
+                    >
+                      −
+                    </button>
+                    <span className="settings-stepper-value">{inlineMaxCandidates} 条</span>
+                    <button
+                      className="ghost small"
+                      onClick={() => commitInlineMaxCandidates(inlineMaxCandidates + INLINE_MAX_CANDIDATES_STEP)}
+                      disabled={inlineMaxCandidates >= INLINE_MAX_CANDIDATES_MAX}
+                      title="增加候选上限"
+                      aria-label="增加幽灵文本候选上限"
                     >
                       ＋
                     </button>
