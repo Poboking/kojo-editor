@@ -18,10 +18,11 @@ import { compileMonarch, driveLine, driveLines, stubMonaco, type CompiledLexer }
 import { CJK_WORD_PATTERN } from '../src/monaco/word-separators';
 import { KOJO_DARK_COLORS } from '../src/monaco/theme';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
+import { ROLE_THEME_RULES } from '../src/monaco/kojo-theme-rules';
+import { ROLE } from '../src/monaco/semantic-roles';
 import {
   KOJO2_LANGUAGE_ID,
   KOJO2_SOURCE_EXTENSION,
-  KOJO2_THEME_RULES,
   KOJO2_TOKEN,
   KOJO2_TOKEN_TIERS,
   registerKojo2Language,
@@ -354,7 +355,9 @@ describe('语言配置：comments / wordPattern / 成对记号 / 回车层级', 
 
 describe('档位与配色：一档一色、与 v1 不撞名', () => {
   const tierTokens = KOJO2_TOKEN_TIERS.flatMap((t) => [...t.tokens]);
-  const ruleColor = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule.foreground ?? '']));
+  // LAU-2 起配色是**角色表**（`kojo-theme-rules.ts` 的暗色 34 档），2.0 的档位表是它的子集；
+  // 这里取的仍是 `kojo2-dark` 主题真铺的那张表（与 `theme.ts` / `kojo2-theme.ts` 同一对象本体）。
+  const ruleColor = new Map(ROLE_THEME_RULES.map((rule) => [rule.token, rule.foreground ?? '']));
 
   function contrast(hex: string): number {
     const lum = (h: string): number => {
@@ -373,29 +376,42 @@ describe('档位与配色：一档一色、与 v1 不撞名', () => {
   }
 
   it('U6 点名的十档都在：anchor/declaration/keyword/speaker/speech/narration/interp/hint/raw/comment', () => {
+    // 档位名从 LAU-2 起就是语义角色（`KOJO2_TOKEN` 的十六格 → 角色）；十档的口径不变，
+    // 只是取值处从"旧 token 名字面量"换成角色表（旧名一个都不在测试里手抄）。
     for (const token of [
-      'kojo2.anchor',
-      'kojo2.declaration',
-      'kojo2.keyword',
-      'kojo2.speaker',
-      'kojo2.speech',
-      'kojo2.narration',
-      'kojo2.interp',
-      'kojo2.hint',
-      'kojo2.raw',
-      'kojo2.comment',
+      KOJO2_TOKEN.anchor,
+      KOJO2_TOKEN.declaration,
+      KOJO2_TOKEN.keyword,
+      KOJO2_TOKEN.speaker,
+      KOJO2_TOKEN.speech,
+      KOJO2_TOKEN.narration,
+      KOJO2_TOKEN.interp,
+      KOJO2_TOKEN.hint,
+      KOJO2_TOKEN.raw,
+      KOJO2_TOKEN.comment,
     ]) {
       expect(tierTokens, `档位表缺 ${token}`).toContain(token);
     }
   });
 
-  it('档位表恰盖住配色全集（一 token 不双重登记，也不漏档）', () => {
+  it('档位表的每一档在暗色角色规则里都取得到色（角色表是全集，档位表是它的子集）', () => {
     expect(new Set(KOJO2_TOKEN_TIERS.map((t) => t.tier)).size).toBe(KOJO2_TOKEN_TIERS.length);
-    expect([...ruleColor.keys()].sort()).toEqual([...new Set(tierTokens)].sort());
+    const seen = new Set<string>();
     for (const tier of KOJO2_TOKEN_TIERS) {
       expect(tier.tokens.length).toBeGreaterThan(0);
       expect(tier.why.length).toBeGreaterThan(0);
+      // 档内允许两个 2.0 档位名落同一角色（`number` 与 `hex` 同角色 = 十进制 / 十六进制同色），
+      // 那不是撞档；跨档重复登记才说明档位表分错了。
+      for (const token of new Set(tier.tokens)) {
+        expect(seen.has(token), `「${token}」被两档登记`).toBe(false);
+        seen.add(token);
+      }
+      for (const token of tier.tokens) {
+        expect(ruleColor.has(token), `「${token}」在暗色角色规则里没有色`).toBe(true);
+      }
     }
+    // 全集的其余角色属于 v1 糖层 / ERB / 名字层，2.0 的档位不该把它们登记进来
+    expect(seen.size).toBeLessThan(ruleColor.size);
   });
 
   it('一档一色 + 深底对比度 ≥ 4.5（任何两档前景互不相同）', () => {
@@ -415,12 +431,12 @@ describe('档位与配色：一档一色、与 v1 不撞名', () => {
     }
   });
 
-  it('与 v1 不撞名（v1 `sugar.*` / `keyword.erb*` / `keyword.raw` 与 kojo2 档位无交集）', () => {
-    const v1Tokens = new Set(KOJO_TOKEN_TIERS.flatMap((tier) => [...tier.tokens]));
-    for (const token of tierTokens) {
-      expect(token.startsWith('kojo2.'), `${token} 不在 kojo2 命名空间`).toBe(true);
-      expect(v1Tokens.has(token), `${token} 与 v1 档位撞名`).toBe(false);
-    }
+  it('与 v1 共用的角色只有三档同义层（跨语言同色是设计，不再各配一遍色）', () => {
+    // LAU-2 之前这条是"命名空间不撞"（`kojo2.*` 与 `sugar.*` 无交集）；收口后两门语言发
+    // **同一批角色**，于是判据换成"共用面恰是同义层"：多共用一档 = 未经评审的跨语言并色。
+    const v1Roles = new Set(KOJO_TOKEN_TIERS.flatMap((tier) => [...tier.tokens]));
+    const shared = [...new Set(tierTokens)].filter((token) => v1Roles.has(token));
+    expect(shared.sort()).toEqual([ROLE.punctuation, ROLE.raw, ROLE.speech].sort());
   });
 
   it('每档都被词法真发出来（配了色却没有发射点 = 假档）', () => {

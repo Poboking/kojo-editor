@@ -6,7 +6,7 @@ import {
   KOJO2_MINT_DARK_THEME_ID,
   KOJO2_THEMES,
 } from '../src/monaco/kojo2-theme';
-import { KOJO2_TOKEN } from '../src/monaco/kojo-theme-rules';
+import { KOJO2_TOKEN, SEMANTIC_ROLES, roleForLegacyToken } from '../src/monaco/semantic-roles';
 import {
   KOJO_DARK_COLORS,
   KOJO_LIGHT_COLORS,
@@ -26,7 +26,7 @@ import {
  *    最小 4.4（`c9a7f5` vs `d6acff`）。
  *
  * 本文件钉四件事（flag 开 = 双轨期真实装配态）：
- * 1. **可读**：48 条规则每一档对主题自己的 `editor.background` 对比度 ≥ 4.5；
+ * 1. **可读**：39 条规则每一档对主题自己的 `editor.background` 对比度 ≥ 4.5；
  * 2. **不撞色**：主题内去重后的前景两两 CIE76 ΔE ≥ 12（撞色 = 假分层）；
  * 3. **跨语言同义档同色**：同一段源文本被两门语法同时着色的五组（`「」`/`：` 标点、
  *    台词正文、字符串字面量、注释、原生直通）在 v1 与 2.0 两侧必须**逐字同色**——
@@ -141,10 +141,11 @@ const THEME_IDS = [
   'kojo-synthwave84',
 ] as const;
 
-/** v1 基线 32 条（词法 12 + 糖 15 + 语义 5）；其余是 2.0 的 16 条
- * （2026-10-27 第三色批：词法基线 +`support.type`、2.0 +`kojo2.type`，两枚同色） */
-const V1_RULE_COUNT = 32;
-const ALL_RULE_COUNT = 48;
+/** 34 档角色 + 名字层 5 条（D6）= 39 条规则（LAU-2 收口前是 32 v1 + 16 2.0 = 48 条）。
+ * 收口只改命名与形状，不改色：逐档色值由 `semantic-roles.test.ts` 拿改前快照钉住。 */
+const ROLE_RULE_COUNT = SEMANTIC_ROLES.length;
+const NAME_LAYER_RULE_COUNT = 5;
+const ALL_RULE_COUNT = ROLE_RULE_COUNT + NAME_LAYER_RULE_COUNT;
 
 function themeOf(id: string): CapturedTheme {
   const theme = THEMES.get(id);
@@ -169,18 +170,17 @@ afterEach(() => {
 /* ============================== ① 可读性 ============================== */
 
 describe('主题内全部生效规则：对主题自己的 editor.background ≥ 4.5', () => {
-  it('三套都真的合并了 48 条（32 v1 + 16 2.0），一个 kojo2 都不少（反假绿地板）', () => {
+  it('六套都真的铺满 39 条（34 角色 + 5 名字层），一个角色都不少（反假绿地板）', () => {
     for (const id of THEME_IDS) {
       const theme = themeOf(id);
       expect(theme.rules.length, `${id} 规则数`).toBe(ALL_RULE_COUNT);
-      expect(theme.rules.filter((rule) => rule.token.startsWith('kojo2.')).length, id).toBe(
-        ALL_RULE_COUNT - V1_RULE_COUNT,
-      );
+      expect(theme.rules.filter((rule) => rule.token.startsWith('role.')).length, id).toBe(ROLE_RULE_COUNT);
+      expect(theme.rules.filter((rule) => !rule.token.startsWith('role.')).length, id).toBe(NAME_LAYER_RULE_COUNT);
       expect(theme.inherit ?? false, `${id} 必须 inherit:false`).toBe(false);
     }
   });
 
-  it.each(THEME_IDS)('%s：逐档点名（48 条）', (id) => {
+  it.each(THEME_IDS)('%s：逐档点名（39 条）', (id) => {
     const theme = themeOf(id);
     const background = theme.colors['editor.background']!.slice(1);
     const weak = theme.rules
@@ -227,8 +227,13 @@ describe('主题内任意两档前景 CIE76 ΔE ≥ 12（撞色 = 假分层）',
 /* ============================== ③ 跨语言同义档 ============================== */
 
 /**
- * 五组"同一段源文本被两门语法各发一枚 token"的同义档。v1 侧是糖/基线 token，
- * 2.0 侧是 `kojo2.*`；两侧在**每一套主题**里都必须逐字同色。
+ * 六组"同一段源文本被两门语法各发一枚 token"的同义档。LAU-2 起它们**落同一个角色**
+ * （`semantic-roles.ts` 的别名表），于是"同色"是结构性的，不再是三处各配一遍色的巧合：
+ * - `「」` / `：` 标点、台词正文、字符串字面量、整行注释、整行原生直通、类型 / 结构名。
+ *
+ * 判据分两层：①两枚旧名解析到**同一角色**（结构）；②该角色在每一套主题里只有一条规则
+ * （`semantic-roles.test.ts` 的"每套每角色一条"），于是取值唯一 ⇒ 必然同色。
+ * 旧名清单本身就是这张表的取证面，故此处允许出现旧名。
  */
 const SYNONYM_GROUPS: readonly { readonly v1: readonly string[]; readonly k2: string; readonly why: string }[] = [
   {
@@ -240,54 +245,51 @@ const SYNONYM_GROUPS: readonly { readonly v1: readonly string[]; readonly k2: st
   { v1: ['string'], k2: KOJO2_TOKEN.string, why: '字符串字面量' },
   { v1: ['comment'], k2: KOJO2_TOKEN.comment, why: '整行注释' },
   { v1: ['keyword.raw'], k2: KOJO2_TOKEN.raw, why: '整行原生直通' },
+  { v1: ['support.type'], k2: KOJO2_TOKEN.type, why: '类型 / 结构名（字形不同、语义同一档）' },
 ];
 
-describe('跨语言同义档：同一段文本在两门语言里同色', () => {
-  it('五组都登记在表里（防"表空了也算绿"）', () => {
-    expect(SYNONYM_GROUPS.length).toBe(5);
+describe('跨语言同义档：同一段文本在两门语言里落同一角色（因此同色）', () => {
+  it('六组都登记在表里（防"表空了也算绿"）', () => {
+    expect(SYNONYM_GROUPS.length).toBe(6);
   });
 
-  it.each(THEME_IDS)('%s：五组逐字同色', (id) => {
-    const theme = themeOf(id);
-    const fg = foregroundByToken(theme);
+  it.each(THEME_IDS)('%s：六组都落同一角色，且该角色只有一条规则', (id) => {
+    const fg = foregroundByToken(themeOf(id));
     const bad: string[] = [];
     for (const group of SYNONYM_GROUPS) {
-      const k2 = fg.get(group.k2);
-      expect(k2, `${id} 缺 ${group.k2}`).toBeDefined();
+      expect(fg.get(group.k2), `${id} 缺 ${group.k2}`).toBeDefined();
       for (const token of group.v1) {
-        const v1 = fg.get(token);
-        expect(v1, `${id} 缺 ${token}`).toBeDefined();
-        if (v1 !== k2) {
-          bad.push(
-            `${token}=#${v1} vs ${group.k2}=#${k2}（ΔE=${deltaE(v1!, k2!).toFixed(1)}）—— ${group.why}`,
-          );
+        const role = roleForLegacyToken(token);
+        if (role === undefined) {
+          bad.push(`${token} 在别名表里没有角色`);
+          continue;
         }
+        if (role !== group.k2) bad.push(`${token} → ${role}，2.0 侧是 ${group.k2}（${group.why}）`);
+        if (fg.get(role) !== fg.get(group.k2)) bad.push(`${token} → ${role} 的两侧取色不一致`);
       }
     }
-    expect(bad.join('\n'), `${id} 的同义档不同色：\n${bad.join('\n')}`).toBe('');
+    expect(bad.join('\n'), `${id} 的同义档没落在同一角色：\n${bad.join('\n')}`).toBe('');
   });
 });
 
-/* ============================== ③b 第三色档：两门语言同色 ============================== */
+/* ============================== ③b 类型档：两门语言同一角色 ============================== */
 
 /**
- * 类型 / 结构名（2026-10-27 第三色批）。
+ * 类型 / 结构名（2026-10-27 第三色批；LAU-2 收成同一角色）。
  *
- * 这一组**不在**上面那五组里——五组的判据是"同一段源文本被两条语法各发一枚 token"，
- * 而 v1 侧的 `support.type` 打的是 `.ERB` 的 `#DIM` 型/存储限定词、2.0 侧的 `kojo2.type`
- * 打的是 `# 表`/`# 池`/`# 模` 头与类型词，**字形不同、语义同一档**。所以这里判的是
- * "同一类东西同一个色"那一半承诺：两门语言的"类型"在每一套主题里必须逐字同色，
- * 不许出现"ERB 的 olive 与 2.0 的另一种绿"。
+ * v1 侧的 `support.type` 打的是 `.ERB` 的 `#DIM` 型/存储限定词、2.0 侧的 `kojo2.type` 打的是
+ * `# 表`/`# 池`/`# 模` 头与类型词，**字形不同、语义同一档**。"同一类东西同一个色"这条承诺
+ * 现在由别名表结构性保证：两枚旧名解析到同一个 `role.type`，故每一套主题里必然同色。
  */
-describe('第三色档：v1 `support.type` 与 2.0 `kojo2.type` 每套主题逐字同色', () => {
-  it.each(THEME_IDS)('%s：两枚都在，且色值相等', (id) => {
+describe('类型档：v1 `support.type` 与 2.0 `kojo2.type` 每套主题落同一角色、同色', () => {
+  it.each(THEME_IDS)('%s：两枚都在，且解析到同一角色、同色', (id) => {
     const fg = foregroundByToken(themeOf(id));
-    const v1 = fg.get('support.type');
-    const k2 = fg.get(KOJO2_TOKEN.type);
-    expect(v1, `${id} 缺 v1 侧 support.type 的前景`).toBeDefined();
-    expect(k2, `${id} 缺 2.0 侧 kojo2.type 的前景`).toBeDefined();
-    expect(k2, `${id}: support.type=#${v1} 与 kojo2.type=#${k2} 漂移`).toBe(v1);
-    expect(v1).toMatch(/^[0-9a-fA-F]{6}$/);
+    const v1Role = roleForLegacyToken('support.type');
+    const k2Role = KOJO2_TOKEN.type; // 2.0 侧这一步已经是角色（KOJO2_TOKEN 的值即角色）
+    expect(v1Role, `${id} 缺 v1 侧 support.type 的角色`).toBeDefined();
+    expect(k2Role, `${id} 缺 2.0 侧 kojo2.type 的角色`).toBeDefined();
+    expect(k2Role, `${id}: support.type → ${v1Role} 与 kojo2.type → ${k2Role} 漂移`).toBe(v1Role);
+    expect(fg.get(v1Role!), `${id} 主题里缺 ${v1Role} 的规则`).toMatch(/^[0-9a-fA-F]{6}$/);
   });
 });
 

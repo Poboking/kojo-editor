@@ -1,19 +1,22 @@
 import type * as Monaco from './entry';
-// PS-10 断链：两张规则数组下沉到零 import 叶子 `kojo-theme-rules.ts`——它们的**老家**
-// （`kojo-language.ts` / `kojo-semantic-tokens.ts`）各自拖着 `@kojo/plugin-kojo-sugar`
+// PS-10 断链：角色调色板下沉到零依赖叶子 `kojo-theme-rules.ts`——它们的**老家**
+// （三份 Monarch 与 `kojo-semantic-tokens.ts`）各自拖着 `@kojo/plugin-kojo-sugar`
 // 词表链，本文件在开机静态图里（diff-view / QuickFixPreviewOverlay 都经它），
-// 直接 import 老家就等于把糖包静态挂回开机图。叶子与两个老家的关系见叶子头注。
+// 直接 import 老家就等于把糖包静态挂回开机图。叶子与几个老家的关系见叶子头注。
 //
-// K2-CUTOVER-THEME：2.0 的 token 规则表也住在同一叶子（同一理由——不能经
-// `kojo2-language.ts` 取，那条链拖糖词表）。它们**无条件追加**进三套 v1 主题
-// （K2-SURFACE-DEFAULT），于是 `.kojo2` 文件在 `kojo-*` 主题下也上色，不必整窗切主题。
+// LAU-2（角色表批）：主题规则按**语义角色**铺，不再按 token 名。角色表（含字重）住
+// `semantic-roles.ts`，三套主题的角色调色板住叶子，本文件只做装配 + 后三套自己的调色板。
+// 于是 `.kojo2` 文件在 `kojo-*` 主题下也上色（同一批角色规则，不必整窗切主题）。
 import {
-  KOJO_SUGAR_THEME_RULES,
+  KOJO_SEMANTIC_LIGHT_THEME_RULES,
+  KOJO_SEMANTIC_MINT_THEME_RULES,
   KOJO_SEMANTIC_THEME_RULES,
-  KOJO2_LIGHT_THEME_RULES,
-  KOJO2_MINT_THEME_RULES,
-  KOJO2_THEME_RULES,
+  ROLE_LIGHT_THEME_RULES,
+  ROLE_MINT_THEME_RULES,
+  ROLE_THEME_RULES,
 } from './kojo-theme-rules';
+import { ROLE, nameLayerRules, rulesFromRolePalette } from './semantic-roles';
+
 // K2 batch-3：2.0 三套主题的注册闸。flag 模块零依赖（只读 localStorage），静态引它
 // 不破坏上面那条 PS-10 断链；主题数据本身（`kojo2-theme`）仍走**动态 import**（见
 // `defineMonacoThemes` 末尾）。
@@ -28,41 +31,42 @@ import { installKeywordGlow, scheduleKeywordGlow } from './neon-glow';
  * monaco 层只认识自己的联合类型，避免 UI → monaco → UI 的反向依赖；两边联合类型相同
  * 由 `tests/monaco-theme.test.ts` 用 `THEME_IDS` 做一一映射断言钉住。
  *
- * ## 两代装配路并存（2026-10-27 批）
- * 前三套（dark/light/mint-dark）走"四张分表"（BASE/SUGAR/SEMANTIC/2.0），它们各自的演进史
- * 与逐档判据注释都留在原地、一格未动；后三套（one-dark/rose-pine/synthwave84）走
- * "一张 48 键表 + 部件色种子生成器"，理由与判据见本文件下半段那节的表头。
- * 两条路的产物形状完全相同（48 条规则 + 91 键部件色），由同一道闸量。
+ * ## 装配只有一条路（LAU-2 起）
+ * 六套主题都走"角色调色板 → `rulesFromRolePalette()` + 名字层五条"：34 条角色规则 + 5 条
+ * 名字层 = 39 条规则，外加 91 键部件色，由同一道闸量（`theme-color-gates.test.ts`）。
+ * 前三套（dark/light/mint-dark）的角色调色板住零依赖叶子 `kojo-theme-rules.ts`（与
+ * `kojo2-theme.ts` 同一批对象本体）；后三套（one-dark/rose-pine/synthwave84）的调色板
+ * 住在下面各自那节，逐档判据注释留在原地。
  *
  * ## 取色口径
- * - **dark**：沿用既有 `kojo-dark` 的语法色（ERB 基线 + 糖 + 语义），底色从 vs-dark 的
+ * - **dark**：沿用既有 `kojo-dark` 的语法色（ERB 基线 + 糖 + 语义 + 2.0），底色从 vs-dark 的
  *   `#1e1e1e` 改为 app 的 `--bg` `#1e2227`，编辑器与外壳同底；
  * - **light**：VS Code Light+ 气质，深蓝/橄榄绿/赭石/紫四族压浅底；不复用任何暗色前景；
  * - **mint-dark**：与 `themes/mint-dark.css` 的墨绿底 `#0f1713` 协调的冷薄荷族。
  * - 后三套逐套见其表头（One Dark 的底色还账、Rosé Pine 的两枚弃用色、Synthwave '84 的
  *   整块过闸）。
  *
- * **`operator` 档住哪儿**（ERB 半角运算符 + 全角标点、`.kojo` 表达式的 `()+[]`）：
- * 标点在屏上是骨架不是内容，所以它必须**比正文弱**（对比度低于同套 `identifier`）、
+ * **`role.operator` 档住哪儿**（ERB 半角运算符 + 全角标点、`.kojo` 表达式的 `()+[]`）：
+ * 标点在屏上是骨架不是内容，所以它必须**比正文弱**（对比度低于同套 `role.text`）、
  * **比注释强且肉眼可分**（CIE76 ΔE ≥ 12，判据同 `kojo-token-tiers.test.ts` 的"撞色 = 假分层"），
  * 且**不引入新色相**——三套各取本套既有的"冷色结构族"一档：
- * dark `7f9cc0`、mint `8fb3c9` 即本套的标点/分隔符族（与 `sugar.speech.delimiter`/`sugar.colon`
- * 同色：同一枚 `「` 在两门语言里必须同色）；light 的分隔符族 2026-10-26 色值批从 `5b6b7f`
+ * dark `7f9cc0`、mint `8fb3c9` 即本套的标点/分隔符族（与 `role.punctuation` 同色：
+ * 同一枚 `「` 在两门语言里必须同色）；light 的分隔符族 2026-10-26 色值批从 `5b6b7f`
  * 抬到同族更蓝的 `335f96`（旧值与其注释色 `57606a` ΔE 只有 7.6 ⇒ 台词标点会读成注释），
  * 于是 light 的 operator 取同族更深一档 `35526f`（与分隔符 ΔE 16.6，对全部基线档 ≥ 12）。
  * 三套的 operator 彩度都低于各自关键字档 ⇒ 运算符不抢关键字。
  *
- * `inherit: false`：三套都写全规则，不从基底主题借色（避免切到 light 时残留 vs-dark 的
- * 深色 token / 部件色）。dark 的糖与语义规则**对象原样复用**（`kojo-token-tiers.test.ts`
- * 有同引用断言），light/mint 只按 token 换前景，token 集合因此永远同源。
+ * `inherit: false`：六套都写全规则，不从基底主题借色（避免切到 light 时残留 vs-dark 的
+ * 深色 token / 部件色）。三套叶子调色板的规则**对象原样复用**（`kojo-token-tiers.test.ts`
+ * 有同引用断言），角色集合因此永远同源。
  *
- * **`support.type` 档住哪儿**（2026-10-27 第三色批）：外部建议点名的"类型用第三色"，本仓此前
+ * **`role.type` 档住哪儿**（2026-10-27 第三色批）：外部建议点名的"类型用第三色"，本仓此前
  * 只有紫（关键字）与蓝（函数名，粗）两层，结构名一直没有自己的色。三套各取一支**黄绿／橄榄**
  * （dark `b3bd47` / light `5f6b2a` / mint `96b458`）——这条色相带在三套盘里都是空的，所以对每套
  * 最近的一枚（都是台词绿）都拉开到 ΔE ≥ 24，对比度 5.4–7.9。它**不加 fontStyle**：分层靠色相，
- * 不靠伪斜体（CJK 斜体会糊，与 `keyword` 同一口径）。消费方两条链都默认开：
+ * 不靠伪斜体（CJK 斜体会糊，与 `role.keyword` 同一口径）。消费方两条链都默认开：
  * `.ERB` 结构层的 `#DIM` 型/存储限定词（`tree-sitter/erb-tiers.ts`）与 2.0 的结构定义头
- * （`kojo2.type`，逐字同色，两门语言的"类型"不许有两种绿）。
+ * ——两门语言落**同一个角色**，不许有两种绿。
  *
  * **底色口径（2026-10-26 判据批）**：`inherit: false` 意味着 `editor.background` 就是量
  * 对比度的那块底（dark `#1e2227` / light `#f6f8fa` / mint `#0f1713`），**不是** vs-dark 基底
@@ -142,241 +146,41 @@ export function applyMonacoTheme(sink: MonacoThemeSink, pref: MonacoThemePref): 
 
 /* ------------------------------ 规则构建 ------------------------------ */
 
-interface BaseRuleSpec {
-  readonly token: string;
-  readonly fontStyle?: 'bold' | 'italic';
-}
-
-/** 词法基线 token（三套主题都必须覆盖；字体样式与既有 kojo-dark 一致） */
-const BASE_RULE_SPECS: readonly BaseRuleSpec[] = [
-  { token: 'comment', fontStyle: 'italic' },
-  { token: 'keyword' },
-  { token: 'keyword.preprocessor' },
-  { token: 'entity.name.function', fontStyle: 'bold' },
-  // 类型 / 结构名（2026-10-27 第三色批）：本仓第一枚**独立于关键字与函数名**的结构前景档。
-  // 消费方是两条默认开的链：`.ERB` 结构层的 `#DIM` 型/存储限定词（`erb-tiers.ts` 的 `type` 档）
-  // 与 2.0 的结构定义头（`kojo2.type` 与本档逐字同色）。**不加 fontStyle**：
-  // 与 `keyword` 同理——CJK 环境里的斜体是伪斜体，糊；这一档靠色相分层，不靠字形。
-  { token: 'support.type' },
-  { token: 'variable' },
-  { token: 'string' },
-  { token: 'number' },
-  { token: 'label' },
-  { token: 'identifier' },
-  // 运算符 / 标点族（ERB 的半角运算符与全角标点、`.kojo` 的 `()+[]` 共用这一档；
-  // 上一批只给全角标点定了 token 归属，调色板这三格是留下的欠账）
-  { token: 'operator' },
-  { token: 'string.escape' },
-];
-
-function ruleOf(token: string, foreground: string, fontStyle?: string): Monaco.editor.ITokenThemeRule {
-  return fontStyle === undefined ? { token, foreground } : { token, foreground, fontStyle };
-}
-
-function rulesFromPalette(
-  specs: readonly BaseRuleSpec[],
-  palette: Readonly<Record<string, string>>,
-): Monaco.editor.ITokenThemeRule[] {
-  return specs.map((spec) => {
-    const foreground = palette[spec.token];
-    if (foreground === undefined) {
-      throw new Error(`[monaco-theme] 调色板缺少 token「${spec.token}」`);
-    }
-    return ruleOf(spec.token, foreground, spec.fontStyle);
-  });
-}
+/* ------------------------------ 规则构建（LAU-2：角色调色板） ------------------------------ */
 
 /**
- * 把一套既有规则按 token 换前景（字体样式原样保留）。源规则决定 token 集合，
- * 目标调色板漏一个就当场抛——"少配一档"在模块加载期变红，而不是静默掉色。
- */
-function retint(
-  source: readonly Monaco.editor.ITokenThemeRule[],
-  palette: Readonly<Record<string, string>>,
-): Monaco.editor.ITokenThemeRule[] {
-  return source.map((rule) => {
-    const foreground = palette[rule.token];
-    if (foreground === undefined) {
-      throw new Error(`[monaco-theme] 调色板缺少 token「${rule.token}」`);
-    }
-    return ruleOf(rule.token, foreground, rule.fontStyle);
-  });
-}
-
-/* ------------------------------ 语法色 ------------------------------ */
-
-/**
- * 既有 dark 词法基线（与改造前 `kojo-dark` 逐字同色，只改了 `comment` 一枚——见下）。
- */
-const DARK_BASE_PALETTE: Readonly<Record<string, string>> = {
-  // 2026-10-26 对比度批：注释色 6a737d 压真底 #1e2227 只有 3.32（此前按 vs-dark #1e1e1e
-  // 量出 3.46，两笔都不够 4.5）。提亮到中性灰 879098（4.93），色相不动；
-  // 同时把 2.0 注释 6a8f9a 并到同一个灰上（"注释"在两门语言里是一档）。
-  comment: '879098',
-  keyword: 'c678dd',
-  'keyword.preprocessor': 'e5c07b',
-  'entity.name.function': '61afef',
-  // 类型 / 结构名（第三色）：暗底上取偏黄的橄榄 `b3bd47`——对底 `#1e2227` 对比 7.83，
-  // 对全表最近的一枚（台词草绿 `98c379`）ΔE 25.4，与关键字紫 / 函数蓝三色分立。
-  'support.type': 'b3bd47',
-  variable: 'e06c75',
-  string: '98c379',
-  number: 'd19a66',
-  label: '56b6c2',
-  // 标点/运算符档 = 本套分隔符族（与 sugar.speech.delimiter / sugar.colon 同色，
-  // 同一枚 `「` 在 ERB 与 .kojo 里必须同色）；比正文 abb2bf 弱、与注释 6a737d 肉眼可分
-  operator: '7f9cc0',
-  identifier: 'abb2bf',
-  'string.escape': 'd19a66',
-};
-
-/** Light+ 气质：深蓝 = 函数/系统函数，橄榄绿 = 台词/字符串，赭石 = 数字/插值，紫 = 关键字 */
-const LIGHT_BASE_PALETTE: Readonly<Record<string, string>> = {
-  comment: '57606a',
-  keyword: '8250df',
-  'keyword.preprocessor': '953800',
-  'entity.name.function': '0550ae',
-  // 类型 / 结构名（第三色）：浅底取深橄榄 `5f6b2a`——对底 `#f6f8fa` 对比 5.44，
-  // 对台词绿 `116329` ΔE 24.6（浅底可读区间窄，这一支是量出来的，不是猜的）。
-  'support.type': '5f6b2a',
-  variable: 'b4232e',
-  string: '116329',
-  number: '953800',
-  label: '0a6b73',
-  // 同一支冷色结构族，但**不能**直取本套分隔符档——旧 5b6b7f 与浅底注释色 57606a
-  // 的 CIE76 ΔE 只有 7.6（肉眼同色），台词标点会读成注释；取同族更深一档 35526f
-  // （ΔE 对全部基线档 ≥ 12）。2026-10-26 色值批把分隔符本身抬到 335f96（见下），
-  // 于是这枚算子档与它差 16.6，两档都留在"冷色结构族"。
-  operator: '35526f',
-  identifier: '24292f',
-  'string.escape': 'b35900',
-};
-
-const LIGHT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
-  'sugar.keyword': '8250df',
-  'sugar.keyword.alias': '6e6a86',
-  'sugar.system-function': '0550ae',
-  'sugar.operator': '0a6b73',
-  'sugar.cont': '953800',
-  'sugar.pronoun': 'b4232e',
-  'sugar.speech': '116329',
-  // 2026-10-26 色值批：5b6b7f 与注释 57606a 差 7.6、与别名 6e6a86 差 9.1（两对撞色）。
-  // 抬到同族的钢蓝 335f96（对全部档 ≥ 16.5，对比度 6.13）；2.0 的 kojo2.keyword.delimiter
-  // 跟着取同一枚（「」两门语言同色）。
-  'sugar.speech.delimiter': '335f96',
-  'sugar.interp': 'b35900',
-  'sugar.interp.delimiter': 'b35900',
-  'sugar.colon': '335f96',
-  'sugar.slot': '0e6b5c',
-  'keyword.raw': '57606a',
-  'keyword.erb': 'bf3989',
-  // 族头 6639ba 与关键字 8250df 只差 11.7（撞色），且与 2.0 声明 512da8 差 6.5；
-  // 移到同族更紫的一档 8e44ad（对全部档 ≥ 12）
-  'keyword.erb.family': '8e44ad',
-};
-
-const LIGHT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
-  function: '0550ae',
-  'function.declaration': '0550ae',
-  parameter: 'b35900',
-  'variable.declaration': '953800',
-  'variable.declaration.readonly': '953800',
-};
-
-/** 薄荷暗色：墨绿底上的冷色族（青蓝/薄荷/冷紫/沙金/珊瑚），全部压 #0f1713 ≥ 4.5 */
-const MINT_BASE_PALETTE: Readonly<Record<string, string>> = {
-  comment: '8aa99a',
-  keyword: 'c9a7f5',
-  // 2026-10-26 色值批：沙金 e3c08d 与 number/interp 的 f0b98a 只差 8.6（撞色），
-  // 提纯到金黄 dca023（ΔE 36.9；色相不动，仍是"暖金"族）
-  'keyword.preprocessor': 'dca023',
-  'entity.name.function': '7cc7ff',
-  // 类型 / 结构名（第三色）：墨绿底上的暖橄榄 `96b458`——对底 `#0f1713` 对比 7.78，
-  // 对最近的台词绿 `9ccf9a` ΔE 23.9。墨绿盘的黄绿／橄榄那一块原本是空的（不是"第 16 枚必撞"），
-  // 2.0 侧的 `kojo2.type` 与本档逐字同色。
-  'support.type': '96b458',
-  variable: 'ff9ba3',
-  string: '9ccf9a',
-  number: 'f0b98a',
-  label: '74d6d0',
-  // 同 dark：本套标点/分隔符族（sugar.speech.delimiter / sugar.colon 同色）
-  operator: '8fb3c9',
-  identifier: 'd9e9df',
-  'string.escape': 'f0b98a',
-};
-
-const MINT_SUGAR_PALETTE: Readonly<Record<string, string>> = {
-  'sugar.keyword': 'c9a7f5',
-  'sugar.keyword.alias': '9a8fb8',
-  'sugar.system-function': '7cc7ff',
-  'sugar.operator': '74d6d0',
-  'sugar.cont': 'dca023',
-  'sugar.pronoun': 'ff9ba3',
-  'sugar.speech': '9ccf9a',
-  'sugar.speech.delimiter': '8fb3c9',
-  'sugar.interp': 'f0b98a',
-  'sugar.interp.delimiter': 'f0b98a',
-  'sugar.colon': '8fb3c9',
-  'sugar.slot': '67dcc0',
-  // 原生直通：与注释 8aa99a 只差 8.3（撞色），移到暖灰 ada18a（ΔE 17.1，仍是"不解释的原文"灰）
-  'keyword.raw': 'ada18a',
-  'keyword.erb': 'ff9ccf',
-  // 族头 bfa0ff 与关键字 c9a7f5 只差 9.6（撞色），提纯到 af8cff（ΔE 22.4；仍是紫）
-  'keyword.erb.family': 'af8cff',
-};
-
-const MINT_SEMANTIC_PALETTE: Readonly<Record<string, string>> = {
-  function: '7cc7ff',
-  'function.declaration': '7cc7ff',
-  parameter: 'f0b98a',
-  'variable.declaration': 'dca023',
-  'variable.declaration.readonly': 'dca023',
-};
-
-/**
- * 规则在**调用时**组装，不在模块顶层（`retint` 要按套换前景，三套主题各算各的）。
+ * 六套主题的语法规则**只有一种铺法**：给 34 个语义角色各发一色，再补名字层那五条。
  *
- * 附带的红利：两张源规则数组住在零 import 叶子 `kojo-theme-rules.ts`，本文件不再
- * import `kojo-language.ts` / `kojo-semantic-tokens.ts`——旧有的装配环
- * （`kojo-semantic-tokens → register-dialects → erb-language → 本文件` 造成的
- * TDZ 风险）从这条静态边走不到了，`defineMonacoThemes` 任何时候调用绑定都已就绪。
+ * 上一代是三套走"四张分表"（词法 12 / 糖 15 / 语义 5 / 2.0 16）、新三套走"一张 48 键表"；
+ * LAU-2 把两代合成一条：`rulesFromRolePalette(角色调色板)` + 名字层。
+ * - 角色表本身（含字重）见 `semantic-roles.ts`；
+ * - 暗 / 亮 / 墨绿三套的角色调色板与名字层调色板住在零依赖叶子 `kojo-theme-rules.ts`
+ *   （`kojo2-theme.ts` 与 `kojo2-semantic.ts` 读的是同一批对象本体）；
+ * - 后三套（One Dark / Rosé Pine / Synthwave '84）的调色板留本文件下半段（各自带判据注释）。
  *
- * K2-SURFACE-DEFAULT：2.0 的 token 规则**无条件**追加在 v1 规则之后（`kojo2.*` 与
- * `sugar.*` 不撞名，追加不影响任何既有档，也不重排 v1 一格）。理由：`.kojo2` 的语言面
- * 永远可见，切流开关只管写回 / 迁移 / `.kojo` 的解析器切换——默认档打开 `.kojo2` 不该
- * 是一坨没有配色的灰字。三套 `kojo2-*` 独立主题仍按 flag 注册（见 `defineMonacoThemes`）。
+ * 两代产物的形状如今完全相同（34 条角色 + 5 条名字层 = 39 条规则 + 91 键部件色），由同一道闸量
+ * （`theme-color-gates.test.ts`）。
  */
+type RulePalette = Readonly<Record<string, string>>;
+
+/** 角色调色板 + 名字层调色板 → 39 条规则（漏一格当场抛，不静默掉色） */
+function rulesFromPalettes(roles: Readonly<Record<string, string>>, nameLayer: RulePalette): Monaco.editor.ITokenThemeRule[] {
+  return [...rulesFromRolePalette(roles), ...nameLayerRules(nameLayer)];
+}
+
+/** 暗色：角色调色板与名字层都直接取叶子的同一批对象（真源只有一份） */
 function darkRules(): Monaco.editor.ITokenThemeRule[] {
-  return [
-    ...rulesFromPalette(BASE_RULE_SPECS, DARK_BASE_PALETTE),
-    // 同引用：既有暗色糖/语义规则对象原样并入（tokens 单一真源，测试钉住）
-    ...KOJO_SUGAR_THEME_RULES,
-    ...KOJO_SEMANTIC_THEME_RULES,
-    ...KOJO2_THEME_RULES,
-  ];
+  return [...ROLE_THEME_RULES, ...KOJO_SEMANTIC_THEME_RULES];
 }
 
+/** 亮色：叶子里各自一套浅底调色板 */
 function lightRules(): Monaco.editor.ITokenThemeRule[] {
-  return [
-    ...rulesFromPalette(BASE_RULE_SPECS, LIGHT_BASE_PALETTE),
-    ...retint(KOJO_SUGAR_THEME_RULES, LIGHT_SUGAR_PALETTE),
-    ...retint(KOJO_SEMANTIC_THEME_RULES, LIGHT_SEMANTIC_PALETTE),
-    // 亮底用它自己的 2.0 调色板（暗色规则落在 #f6f8fa 上对比度不足）
-    ...KOJO2_LIGHT_THEME_RULES,
-  ];
+  return [...ROLE_LIGHT_THEME_RULES, ...KOJO_SEMANTIC_LIGHT_THEME_RULES];
 }
 
+/** 墨绿：墨绿盘自己的两套（理由见 `SEMANTIC_ROLE_PALETTE_MINT` 表头） */
 function mintRules(): Monaco.editor.ITokenThemeRule[] {
-  return [
-    ...rulesFromPalette(BASE_RULE_SPECS, MINT_BASE_PALETTE),
-    ...retint(KOJO_SUGAR_THEME_RULES, MINT_SUGAR_PALETTE),
-    ...retint(KOJO_SEMANTIC_THEME_RULES, MINT_SEMANTIC_PALETTE),
-    // 墨绿有自己的 2.0 调色板：原始态直接并暗色表是 10 对撞色（最小 4.4）；修完 v1 侧仍剩
-    // 4 对（含"原生直通""标点"两对必须同色的同义档）。`KOJO2_MINT_THEME_RULES` 逐档落到
-    // 墨绿盘既有的语义近邻色，不引入第 16 枚色（理由见该表头注）。初版曾按切流开关决定
-    // 并/不并（`mergeKojo2`），K2-SURFACE-DEFAULT 之后 2.0 语言面恒可见 ⇒ 恒并。
-    ...KOJO2_MINT_THEME_RULES,
-  ];
+  return [...ROLE_MINT_THEME_RULES, ...KOJO_SEMANTIC_MINT_THEME_RULES];
 }
 
 /* ------------------------------ 部件色 ------------------------------ */
@@ -712,33 +516,19 @@ export const KOJO_MINT_COLORS: Readonly<Record<string, string>> = {
 /* ============ 2026-10-27 经典编辑器色批：One Dark / Rosé Pine / Synthwave '84 ============ */
 
 /**
- * 三套新主题走**另一条装配路**，与上面三套并存（既有三套一格未动，它们的同引用断言、
- * 三分法调色板、逐档注释全部保持原样）。
+ * 三套新主题的调色板**按角色**写（LAU-2）：一张 34 档角色 + 5 条名字层的表。
  *
- * 为什么新开一条：既有三套把 48 档拆成 BASE（12）/ SUGAR（15）/ SEMANTIC（5）/ 2.0（16）
- * 四张表，是因为它们的演进史是「先有词法、后补糖、再补语义、最后并 2.0」——四张表各自
- * 带着自己的判据注释。新主题没有这段历史，**一张 48 键的表反而更好核**：一屏能看全
- * "这套主题到底给了几种色"，而 `retint()` 只按 token 名取值、四个来源的 token 名两两不
- * 重叠（`sugar.*` / `kojo2.*` / `function` 族 / 裸词法名），所以单表完全够用。
+ * 上一代这里还分两条装配路（前三套四张分表 / 后三套一张 48 键表），LAU-2 之后合成一条：
+ * 角色调色板 → `rulesFromRolePalette()`，名字层 → `nameLayerRules()`。一张表反而更好核：
+ * 一屏能看全"这套主题到底给了几种色"，且角色名与键顺序由 `SEMANTIC_ROLES` 钉死，
+ * 六个主题互相之间不再各有一套键名。
  *
- * 取色纪律与既有三套**逐条相同**（判据由 `theme-color-gates.test.ts` 对 `THEME_IDS` 全量跑）：
+ * 取色纪律与另三套**逐条相同**（判据由 `theme-color-gates.test.ts` 对 `THEME_IDS` 全量跑）：
  * 每条规则对 `editor.background` ≥ 4.5、主题内任意两枚不同前景 CIE76 ΔE ≥ 12、
- * `operator` 住在结构族（可读 / 弱于正文 / 彩度低于关键字 / 对全部基线档 ΔE ≥ 12）、
- * 跨语言同义档五组逐字同色、第三色档（`support.type` 与 `kojo2.type`）逐字同色。
- * 三套的实算读数写在各自表头。
+ * `role.operator` 住在结构族（可读 / 弱于正文 / 彩度低于关键字 / 对全部基线档 ΔE ≥ 12）、
+ * 跨语言同义档五组逐字同色、类型档（`role.type`）两门语言逐字同色。
+ * 三套的实算读数写在各自表头（读数按改前的 token 名记，色值一格未动）。
  */
-type RulePalette = Readonly<Record<string, string>>;
-
-/** 单表 → 48 条规则（四个来源的 token 名互不重叠，故一张表喂四次） */
-function rulesFromOneTable(palette: RulePalette): Monaco.editor.ITokenThemeRule[] {
-  return [
-    ...rulesFromPalette(BASE_RULE_SPECS, palette),
-    ...retint(KOJO_SUGAR_THEME_RULES, palette),
-    ...retint(KOJO_SEMANTIC_THEME_RULES, palette),
-    ...retint(KOJO2_THEME_RULES, palette),
-  ];
-}
-
 /**
  * One Dark（Atom 原味）——**本仓缺省 dark 的语法色本来就是它**。
  *
@@ -764,60 +554,47 @@ function rulesFromOneTable(palette: RulePalette): Monaco.editor.ITokenThemeRule[
  * ΔE 12.6（这一对是既有三套就一直守着的"系统函数 vs 函数"微差，不是本批新造）。
  */
 const ONE_DARK_PALETTE: RulePalette = {
-  comment: '8e97a0',
-  keyword: 'c678dd',
-  'keyword.preprocessor': 'e5c07b',
-  'entity.name.function': '61afef',
-  // 类型 / 结构名（第三色）：**直接沿用缺省 dark 那一枚 `b3bd47`**，不另调。
-  // 本盘与 `DARK_BASE_PALETTE` 本来就是同源色（见上），"类型"这一档跟着同源才不会
-  // 在切档时自己变色；而底从 #1e2227 抬到 #282c34 后它仍有 6.86，余量比 dark 那档还大。
-  'support.type': 'b3bd47',
-  variable: 'e8838c',
-  string: '98c379',
-  number: 'd19a66',
-  label: '56b6c2',
-  operator: '7f9cc0',
-  identifier: 'b8bfca',
-  'string.escape': 'd19a66',
+  [ROLE.text]: 'b8bfca',
+  [ROLE.comment]: '8e97a0',
+  [ROLE.keyword]: 'c678dd',
+  [ROLE.keywordAlias]: 'a194c9',
+  [ROLE.keywordAlt]: 'c678dd',
+  [ROLE.directive]: 'e5c07b',
+  [ROLE.engine]: 'e8838c',
+  [ROLE.engineFamily]: 'a194c9',
+  [ROLE.operator]: '7f9cc0',
+  [ROLE.operatorWord]: '56b6c2',
+  [ROLE.operatorAlt]: '56b6c2',
+  [ROLE.number]: 'd19a66',
+  [ROLE.numberAlt]: 'd19a66',
+  [ROLE.string]: '98c379',
+  [ROLE.escape]: 'd19a66',
+  [ROLE.interp]: 'd19a66',
+  [ROLE.interpDelimiter]: 'd19a66',
+  [ROLE.interpAlt]: 'd19a66',
+  [ROLE.punctuation]: '7f9cc0',
+  [ROLE.speech]: '98c379',
+  [ROLE.speaker]: 'e5c07b',
+  [ROLE.narration]: '61afef',
+  [ROLE.hint]: 'e8838c',
+  [ROLE.cont]: 'e5c07b',
+  [ROLE.slot]: '5cc9a8',
+  [ROLE.pronoun]: 'e8838c',
+  [ROLE.variable]: 'e8838c',
+  [ROLE.label]: '56b6c2',
+  [ROLE.decl]: '61afef',
+  [ROLE.declaration]: 'a194c9',
+  [ROLE.call]: '61afce',
+  [ROLE.type]: 'b3bd47',
+  [ROLE.raw]: 'b0a89a',
+  [ROLE.anchor]: 'ff5ec7',
 
-  'sugar.keyword': 'c678dd',
-  'sugar.keyword.alias': 'a194c9',
-  'sugar.system-function': '61afce',
-  'sugar.operator': '56b6c2',
-  'sugar.cont': 'e5c07b',
-  'sugar.pronoun': 'e8838c',
-  'sugar.speech': '98c379',
-  'sugar.speech.delimiter': '7f9cc0',
-  'sugar.interp': 'd19a66',
-  'sugar.interp.delimiter': 'd19a66',
-  'sugar.colon': '7f9cc0',
-  'sugar.slot': '5cc9a8',
-  'keyword.raw': 'b0a89a',
-  'keyword.erb': 'e8838c',
-  'keyword.erb.family': 'a194c9',
-
-  function: '61afef',
+  // 名字层五条（D6：与语法角色正交；键是 Monaco 语义 token 的 type.modifier 串）
+  'function': '61afef',
   'function.declaration': '61afef',
-  parameter: 'd19a66',
+  'parameter': 'd19a66',
   'variable.declaration': 'e5c07b',
   'variable.declaration.readonly': 'e5c07b',
-
-  'kojo2.anchor': 'ff5ec7',
-  'kojo2.declaration': 'a194c9',
-  'kojo2.keyword': 'c678dd',
-  'kojo2.keyword.delimiter': '7f9cc0',
-  'kojo2.speaker': 'e5c07b',
-  'kojo2.speech': '98c379',
-  'kojo2.speech.string': '98c379',
-  'kojo2.narration': '61afef',
-  'kojo2.interp': 'd19a66',
-  'kojo2.hint': 'e8838c',
-  'kojo2.raw': 'b0a89a',
-  'kojo2.comment': '8e97a0',
-  'kojo2.number': 'd19a66',
-  'kojo2.number.hex': 'd19a66',
-  'kojo2.operator': '56b6c2',
-  'kojo2.type': 'b3bd47',
 };
 
 /**
@@ -842,57 +619,47 @@ const ONE_DARK_PALETTE: RulePalette = {
  *   ΔE 22.8。色相仍守在"黄绿/橄榄"这一族——与另五套主题同一支，换档时"类型"不会跳色相。
  */
 const ROSE_PINE_PALETTE: RulePalette = {
-  comment: '908caa',
-  keyword: 'c4a7e7',
-  'keyword.preprocessor': 'f6c177',
-  'entity.name.function': '9ccfd8',
-  'support.type': '94a06e',
-  variable: 'ebbcba',
-  string: 'f6c177',
-  number: 'eb6f92',
-  label: '9ccfd8',
-  operator: '5fa0b8',
-  identifier: 'e0def4',
-  'string.escape': 'eb6f92',
+  [ROLE.text]: 'e0def4',
+  [ROLE.comment]: '908caa',
+  [ROLE.keyword]: 'c4a7e7',
+  [ROLE.keywordAlias]: '908caa',
+  [ROLE.keywordAlt]: 'c4a7e7',
+  [ROLE.directive]: 'f6c177',
+  [ROLE.engine]: 'eb6f92',
+  [ROLE.engineFamily]: 'c4a7e7',
+  [ROLE.operator]: '5fa0b8',
+  [ROLE.operatorWord]: '5fa0b8',
+  [ROLE.operatorAlt]: '5fa0b8',
+  [ROLE.number]: 'eb6f92',
+  [ROLE.numberAlt]: 'eb6f92',
+  [ROLE.string]: 'f6c177',
+  [ROLE.escape]: 'eb6f92',
+  [ROLE.interp]: 'f6c177',
+  [ROLE.interpDelimiter]: 'f6c177',
+  [ROLE.interpAlt]: 'f6c177',
+  [ROLE.punctuation]: '908caa',
+  [ROLE.speech]: 'ebbcba',
+  [ROLE.speaker]: 'ebbcba',
+  [ROLE.narration]: '9ccfd8',
+  [ROLE.hint]: 'eb6f92',
+  [ROLE.cont]: 'f6c177',
+  [ROLE.slot]: '9ccfd8',
+  [ROLE.pronoun]: 'eb6f92',
+  [ROLE.variable]: 'ebbcba',
+  [ROLE.label]: '9ccfd8',
+  [ROLE.decl]: '9ccfd8',
+  [ROLE.declaration]: 'c4a7e7',
+  [ROLE.call]: '9ccfd8',
+  [ROLE.type]: '94a06e',
+  [ROLE.raw]: '9d9489',
+  [ROLE.anchor]: 'eb6f92',
 
-  'sugar.keyword': 'c4a7e7',
-  'sugar.keyword.alias': '908caa',
-  'sugar.system-function': '9ccfd8',
-  'sugar.operator': '5fa0b8',
-  'sugar.cont': 'f6c177',
-  'sugar.pronoun': 'eb6f92',
-  'sugar.speech': 'ebbcba',
-  'sugar.speech.delimiter': '908caa',
-  'sugar.interp': 'f6c177',
-  'sugar.interp.delimiter': 'f6c177',
-  'sugar.colon': '908caa',
-  'sugar.slot': '9ccfd8',
-  'keyword.raw': '9d9489',
-  'keyword.erb': 'eb6f92',
-  'keyword.erb.family': 'c4a7e7',
-
-  function: '9ccfd8',
+  // 名字层五条（D6：与语法角色正交；键是 Monaco 语义 token 的 type.modifier 串）
+  'function': '9ccfd8',
   'function.declaration': '9ccfd8',
-  parameter: 'f6c177',
+  'parameter': 'f6c177',
   'variable.declaration': 'eb6f92',
   'variable.declaration.readonly': 'eb6f92',
-
-  'kojo2.anchor': 'eb6f92',
-  'kojo2.declaration': 'c4a7e7',
-  'kojo2.keyword': 'c4a7e7',
-  'kojo2.keyword.delimiter': '908caa',
-  'kojo2.speaker': 'ebbcba',
-  'kojo2.speech': 'ebbcba',
-  'kojo2.speech.string': 'f6c177',
-  'kojo2.narration': '9ccfd8',
-  'kojo2.interp': 'f6c177',
-  'kojo2.hint': 'eb6f92',
-  'kojo2.raw': '9d9489',
-  'kojo2.comment': '908caa',
-  'kojo2.number': 'eb6f92',
-  'kojo2.number.hex': 'eb6f92',
-  'kojo2.operator': '5fa0b8',
-  'kojo2.type': '94a06e',
 };
 
 /**
@@ -921,57 +688,47 @@ const ROSE_PINE_PALETTE: RulePalette = {
  *   对底 8.51；C57 与本盘彩度中位 51 同档，霓虹盘里不显脏。
  */
 const SYNTHWAVE84_PALETTE: RulePalette = {
-  comment: '848bbd',
-  keyword: 'fede5d',
-  'keyword.preprocessor': 'f97e72',
-  'entity.name.function': '36f9f6',
-  'support.type': 'a8cf4e',
-  variable: 'ff7edb',
-  string: 'ff8b39',
-  number: 'f97e72',
-  label: '36f9f6',
-  operator: 'b893ce',
-  identifier: 'eae6f5',
-  'string.escape': '36f9f6',
+  [ROLE.text]: 'eae6f5',
+  [ROLE.comment]: '848bbd',
+  [ROLE.keyword]: 'fede5d',
+  [ROLE.keywordAlias]: 'b893ce',
+  [ROLE.keywordAlt]: 'fede5d',
+  [ROLE.directive]: 'f97e72',
+  [ROLE.engine]: 'ff7edb',
+  [ROLE.engineFamily]: 'b893ce',
+  [ROLE.operator]: 'b893ce',
+  [ROLE.operatorWord]: '72f1b8',
+  [ROLE.operatorAlt]: 'b893ce',
+  [ROLE.number]: 'f97e72',
+  [ROLE.numberAlt]: 'f97e72',
+  [ROLE.string]: 'ff8b39',
+  [ROLE.escape]: '36f9f6',
+  [ROLE.interp]: 'ff8b39',
+  [ROLE.interpDelimiter]: 'ff8b39',
+  [ROLE.interpAlt]: 'ff8b39',
+  [ROLE.punctuation]: 'b893ce',
+  [ROLE.speech]: '72f1b8',
+  [ROLE.speaker]: 'ff8b39',
+  [ROLE.narration]: '36f9f6',
+  [ROLE.hint]: 'ff7edb',
+  [ROLE.cont]: 'fede5d',
+  [ROLE.slot]: '72f1b8',
+  [ROLE.pronoun]: 'ff7edb',
+  [ROLE.variable]: 'ff7edb',
+  [ROLE.label]: '36f9f6',
+  [ROLE.decl]: '36f9f6',
+  [ROLE.declaration]: 'b893ce',
+  [ROLE.call]: '36f9f6',
+  [ROLE.type]: 'a8cf4e',
+  [ROLE.raw]: 'a09ab8',
+  [ROLE.anchor]: 'ff7edb',
 
-  'sugar.keyword': 'fede5d',
-  'sugar.keyword.alias': 'b893ce',
-  'sugar.system-function': '36f9f6',
-  'sugar.operator': '72f1b8',
-  'sugar.cont': 'fede5d',
-  'sugar.pronoun': 'ff7edb',
-  'sugar.speech': '72f1b8',
-  'sugar.speech.delimiter': 'b893ce',
-  'sugar.interp': 'ff8b39',
-  'sugar.interp.delimiter': 'ff8b39',
-  'sugar.colon': 'b893ce',
-  'sugar.slot': '72f1b8',
-  'keyword.raw': 'a09ab8',
-  'keyword.erb': 'ff7edb',
-  'keyword.erb.family': 'b893ce',
-
-  function: '36f9f6',
+  // 名字层五条（D6：与语法角色正交；键是 Monaco 语义 token 的 type.modifier 串）
+  'function': '36f9f6',
   'function.declaration': '36f9f6',
-  parameter: 'f97e72',
+  'parameter': 'f97e72',
   'variable.declaration': 'fede5d',
   'variable.declaration.readonly': 'fede5d',
-
-  'kojo2.anchor': 'ff7edb',
-  'kojo2.declaration': 'b893ce',
-  'kojo2.keyword': 'fede5d',
-  'kojo2.keyword.delimiter': 'b893ce',
-  'kojo2.speaker': 'ff8b39',
-  'kojo2.speech': '72f1b8',
-  'kojo2.speech.string': 'ff8b39',
-  'kojo2.narration': '36f9f6',
-  'kojo2.interp': 'ff8b39',
-  'kojo2.hint': 'ff7edb',
-  'kojo2.raw': 'a09ab8',
-  'kojo2.comment': '848bbd',
-  'kojo2.number': 'f97e72',
-  'kojo2.number.hex': 'f97e72',
-  'kojo2.operator': 'b893ce',
-  'kojo2.type': 'a8cf4e',
 };
 
 /**
@@ -1226,19 +983,19 @@ export function defineMonacoThemes(monaco: typeof Monaco): void {
   monaco.editor.defineTheme('kojo-one-dark', {
     base: 'vs-dark',
     inherit: false,
-    rules: rulesFromOneTable(ONE_DARK_PALETTE),
+    rules: rulesFromPalettes(ONE_DARK_PALETTE, ONE_DARK_PALETTE),
     colors: ONE_DARK_COLORS,
   });
   monaco.editor.defineTheme('kojo-rose-pine', {
     base: 'vs-dark',
     inherit: false,
-    rules: rulesFromOneTable(ROSE_PINE_PALETTE),
+    rules: rulesFromPalettes(ROSE_PINE_PALETTE, ROSE_PINE_PALETTE),
     colors: ROSE_PINE_COLORS,
   });
   monaco.editor.defineTheme('kojo-synthwave84', {
     base: 'vs-dark',
     inherit: false,
-    rules: rulesFromOneTable(SYNTHWAVE84_PALETTE),
+    rules: rulesFromPalettes(SYNTHWAVE84_PALETTE, SYNTHWAVE84_PALETTE),
     colors: SYNTHWAVE84_COLORS,
   });
   // Kojo 2.0 三套主题（K2 batch-3，flag 守卫）：与 v1 三套**不同 id**（`kojo2-*`），

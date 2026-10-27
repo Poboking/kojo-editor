@@ -24,6 +24,7 @@ import { preprocRoleOf as parserRoleOf } from '@kojo/plugin-erb-parser';
 import { FOLD_PREPROC_PATTERNS, foldPreprocRoleOf } from '../../plugins/erb-parser/src/folding';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { registerKojoLanguage } from '../src/monaco/kojo-language';
+import { ROLE } from '../src/monaco/semantic-roles';
 import { compileMonarch, driveLexer, stubMonaco, type CompiledLexer } from './monarch-harness';
 import structure from '../../erb-syntax-tree/src/structure.json' with { type: 'json' };
 
@@ -86,7 +87,7 @@ describe('预处理器 `[` 标记：四处消费面与契约真源同判（跨�
       expect(projectedRoleOf(line), '语法包投影侧').toBe(truth);
       const emitted = driveLexer(await erbLexer(), line);
       expect(
-        emitted.some((e) => e.token.startsWith('keyword.preprocessor')),
+        emitted.some((e) => e.token.startsWith(ROLE.directive)),
         `显示侧实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
       ).toBe(true);
     });
@@ -99,10 +100,14 @@ describe('预处理器 `[` 标记：四处消费面与契约真源同判（跨�
       expect(parserRoleOf(line), '结构体检侧').toBeNull();
       expect(projectedRoleOf(line), '语法包投影侧').toBeNull();
       const emitted = driveLexer(await erbLexer(), line);
+      // 停用区标记走**另一条专路**（`[SKIPSTART]`/`[SKIPEND]` 的块状态）——LAU-2 收口后它与
+      // 条件块标记落同一角色 `role.directive`（同一枚色），故这里只能钉"它确实着色了"，
+      // "不是条件块"由上面三条契约面对拍负责；其余反例则连该角色的发射都不许有。
+      const skipMarker = line === ERB_SKIP_MARKERS.start || line === ERB_SKIP_MARKERS.end;
       expect(
-        emitted.some((e) => e.token === 'keyword.preprocessor'),
+        emitted.some((e) => e.token.startsWith(ROLE.directive)),
         `显示侧实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
-      ).toBe(false);
+      ).toBe(skipMarker);
     });
   }
 });

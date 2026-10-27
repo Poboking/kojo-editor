@@ -614,8 +614,6 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //   - **LAU-6 注入（2026-10-27）**：读数 **198 文件 / 3,018 KB**，两枚闸不动（198 / 3,020）。
     //     `tree-sitter/injection.ts` 的子解析器走共享块（`injection-*.js`，不在图上），
     //     入图的只有 `kojo2-semantic.ts` 那几条合并规则的 +1 KB。余量 2 KB。
-    // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
-    // 交付回执不必靠人肉复算。
     //   - **前端性能批（2026-10-27，自写回声抑制 / 进度条合成属性）**：读数 **198 文件 / 3,018 KB**
     //     ——与上一档逐字相同（+2 KB 源码在"读数进十"的口径下没抬档），两枚闸不动（198 / 3,020）。
     //     增量全在图内既有文件：`ui/external-change.ts` 约 +0.6 KB
@@ -624,9 +622,19 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `ui/EditorPane.tsx` 约 +0.4 KB（`selfWriteAtRef` 时刻表 + `file.changed` 腿上的一处放行）。
     //     **零新增模块**；其余改动全在 CSS（`kojo2` / `search-panel` / `shell-band` /
     //     `update-dialog` / `styles-project`）与插件侧行内样式，一枚都不进本图。
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤198 文件 / ≤3,020 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_020);
-    expect(files.length).toBeLessThanOrEqual(198);
+    //   - **LAU-2 角色表（2026-10-27，变基到含前端性能批的 dev 之后）**：读数 **199 文件 / 3,037 KB**
+    //     （3,036 + 上游那批的 +1 KB），两枚闸随之
+    //     **198 → 199 / 3,020 → 3,040**（口径仍是"读数进十"）。这**是一枚新进图模块**：
+    //     `monaco/semantic-roles.ts` 18,508 B——角色表被主题/三份 Monarch/捕获侧共同静态引用，
+    //     进图是本批的**代价而非副作用**（换来的是 M3 旧 token 名 254 → 64 行、只落别名表一处）。
+    //     净 +18 KB ≈ 该模块原始字节（其余文件因角色名替换反向缩了）。按本节纪律，
+    //     **下一枚进图模块仍须先挪一枚出去**——欠账挂在这里。
+    // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
+    // 交付回执不必靠人肉复算。
+
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,040 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_040);
+    expect(files.length).toBeLessThanOrEqual(199);
   });
 
   /**

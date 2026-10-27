@@ -3,10 +3,11 @@ import type * as Monaco from '../src/monaco/entry';
 import {
   ERB_COMMANDS,
   ERB_FAMILY_HEADS,
-  KOJO_SUGAR_THEME_RULES,
   KOJO_TOKEN_TIERS,
+  ROLE_THEME_RULES,
   registerKojoLanguage,
 } from '../src/monaco/kojo-language';
+import { LEGACY_ROLE_ALIASES, ROLE } from '../src/monaco/semantic-roles';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { SYSTEM_FUNCTION_ALIASES, sugarEditorLexicon } from '@kojo/plugin-kojo-sugar';
 import { compileMonarch, driveLexer, stubMonaco, type Emit, type MonarchAction } from './monarch-harness';
@@ -60,27 +61,27 @@ async function driveRoot(line: string): Promise<Emit[]> {
 
 /** 聚合词形 → 应得档位（分类次序 = Monarch `cases` 卫兵的判词次序，同名多档者以先判为准） */
 function expectedTokenFor(word: string): string {
-  if (LEX.contMarks.includes(word)) return 'sugar.cont';
-  if (LEX.operators.includes(word) || LEX.notin.includes(word)) return 'sugar.operator';
-  if (LEX.reservedPronouns.includes(word)) return 'sugar.pronoun';
+  if (LEX.contMarks.includes(word)) return ROLE.cont;
+  if (LEX.operators.includes(word) || LEX.notin.includes(word)) return ROLE.operatorWord;
+  if (LEX.reservedPronouns.includes(word)) return ROLE.pronoun;
   const entry = LEX.words.find((w) => w.word === word);
-  if (entry) return entry.primary ? 'sugar.keyword' : 'sugar.keyword.alias';
-  if (SYSTEM_FUNCTION_ALIASES.has(word)) return 'sugar.system-function';
+  if (entry) return entry.primary ? ROLE.keyword : ROLE.keywordAlias;
+  if (SYSTEM_FUNCTION_ALIASES.has(word)) return ROLE.call;
   throw new Error(`判据词形「${word}」不在聚合词表任何一层（判据集合本身错了）`);
 }
 
 /** 聚合字词形全集（含英文别名——别名属输入面，也走真驱动；连字符别名见 it() 内说明） */
 const WORD_FORMS: { word: string; expect: string }[] = [
   ...LEX.words.map((w) => ({ word: w.word, expect: expectedTokenFor(w.word) })),
-  ...[...LEX.operators, ...LEX.notin].map((w) => ({ word: w, expect: 'sugar.operator' })),
-  ...LEX.reservedPronouns.map((w) => ({ word: w, expect: 'sugar.pronoun' })),
+  ...[...LEX.operators, ...LEX.notin].map((w) => ({ word: w, expect: ROLE.operatorWord })),
+  ...LEX.reservedPronouns.map((w) => ({ word: w, expect: ROLE.pronoun })),
   ...[...SYSTEM_FUNCTION_ALIASES.keys()].map((w) => ({ word: w, expect: expectedTokenFor(w) })),
 ].filter((f, i, all) => all.findIndex((g) => g.word === f.word) === i); // 同词多登记（别名 ∩ 系统函数）只驱动一次
 
 /** ERB 指令档 / 族头档：行首规则才命中 ⇒ 判据行必须以该词开头 */
 const ERB_FORMS: { word: string; expect: string }[] = [
-  ...[...ERB_FAMILY_HEADS].map((w) => ({ word: w, expect: 'keyword.erb.family' })),
-  ...[...ERB_COMMANDS].map((w) => ({ word: w, expect: 'keyword.erb' })),
+  ...[...ERB_FAMILY_HEADS].map((w) => ({ word: w, expect: ROLE.engineFamily })),
+  ...[...ERB_COMMANDS].map((w) => ({ word: w, expect: ROLE.engine })),
 ];
 
 /* ============================== 发射覆盖（聚合词表全覆盖·不点名） ============================== */
@@ -117,7 +118,7 @@ describe('Monarch 词法逐词发射（聚合词表全覆盖·不点名）', () 
     expect(symbols.size).toBeGreaterThan(0);
     for (const sym of symbols) {
       const emitted = await driveRoot(`行 ${sym} 尾`);
-      const hit = emitted.find((e) => e.token.startsWith('sugar.cont.'));
+      const hit = emitted.find((e) => e.token.startsWith(`${ROLE.cont}.`));
       expect(hit, `符号 ${sym} 没进 cont 档（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeDefined();
       expect(hit!.text).toBe(sym);
     }
@@ -126,9 +127,9 @@ describe('Monarch 词法逐词发射（聚合词表全覆盖·不点名）', () 
   it('组合行：族头 + 代词 + cont 三档同屏各自发色（CFLAG:她 = 5 ~）', async () => {
     const emitted = await driveRoot(`CFLAG:她 = 5 ~`);
     const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' ');
-    expect(emitted.find((e) => e.token.startsWith('keyword.erb.family.')), joined).toBeDefined();
-    expect(emitted.find((e) => e.token.startsWith('sugar.pronoun.')), joined).toBeDefined();
-    expect(emitted.find((e) => e.token.startsWith('sugar.cont.') && e.text === '~'), joined).toBeDefined();
+    expect(emitted.find((e) => e.token.startsWith(`${ROLE.engineFamily}.`)), joined).toBeDefined();
+    expect(emitted.find((e) => e.token.startsWith(`${ROLE.pronoun}.`)), joined).toBeDefined();
+    expect(emitted.find((e) => e.token.startsWith(`${ROLE.cont}.`) && e.text === '~'), joined).toBeDefined();
   });
 
   it('词表外的中文串 = 名字层 sugar.slot（不再掉回 identifier——名字层一档的成立面）', async () => {
@@ -136,7 +137,7 @@ describe('Monarch 词法逐词发射（聚合词表全覆盖·不点名）', () 
     // （设计好的变红方式，比静默漂移好）。
     for (const w of ['彗', '攫', '熵']) {
       const emitted = await driveRoot(`${w}的风风语首要语段`);
-      const hit = emitted.find((e) => e.token.startsWith('sugar.slot.'));
+      const hit = emitted.find((e) => e.token.startsWith(`${ROLE.slot}.`));
       expect(hit, `「${w}…」应为名字层（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeDefined();
       expect(hit!.text).toBe(`${w}的风风语首要语段`);
     }
@@ -149,10 +150,10 @@ describe('Monarch 词法逐词发射（聚合词表全覆盖·不点名）', () 
       const hit = emitted.find((e) => e.token.startsWith(`${form.expect}.`));
       expect(hit, `「${form.word}」期望 ${form.expect} 档，实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBeDefined();
       expect(hit!.text).toBe(form.word);
-      if (form.expect === 'keyword.erb.family') {
+      if (form.expect === ROLE.engineFamily) {
         // 族头分档死角哨：走 plain keyword.erb（不带 family 后缀）的发射必须为零
         expect(
-          emitted.find((e) => e.token.startsWith('keyword.erb.') && !e.token.startsWith('keyword.erb.family.')),
+          emitted.find((e) => e.token.startsWith(`${ROLE.engine}.`) && !e.token.startsWith(`${ROLE.engineFamily}.`)),
           `「${form.word}」押去了指令档 keyword.erb（族头/指令拆分死角）`,
         ).toBeUndefined();
       }
@@ -205,7 +206,7 @@ function tokenizerTokenNames(): Set<string> {
 describe('KOJO_TOKEN_TIERS 档位表（作者可见的分层口径）', () => {
   const emittedTokens = tokenizerTokenNames();
   const tierTokens = KOJO_TOKEN_TIERS.flatMap((t) => [...t.tokens]);
-  const ruleTokens = KOJO_SUGAR_THEME_RULES.map((r) => r.token);
+  const ruleTokens = ROLE_THEME_RULES.map((r) => r.token);
 
   it('档位名唯一，每档 token 非空，每档都写得出"为什么值得一档"', () => {
     expect(new Set(KOJO_TOKEN_TIERS.map((t) => t.tier)).size).toBe(KOJO_TOKEN_TIERS.length);
@@ -215,11 +216,19 @@ describe('KOJO_TOKEN_TIERS 档位表（作者可见的分层口径）', () => {
     }
   });
 
-  it('档位表恰好盖住糖主题 token 全集（一档不落，一 token 不双重登记）', () => {
-    expect(new Set(tierTokens).size).toBe(tierTokens.length);
-    expect(new Set(tierTokens).size).toBe(new Set(ruleTokens).size);
-    for (const tok of new Set(ruleTokens)) {
-      expect(new Set(tierTokens).has(tok), `主题规则 token ${tok} 没进档位表`).toBe(true);
+  it('档位表恰好盖住 kojo1 侧现役角色全集（一档不落，一角色不双重登记）', () => {
+    // 档位表是**作者面**的分层口径（13 档），主题规则表是**全部**角色（34 档，含 ERB 与
+    // 2.0 的档）。两者的交集必须恰好是 kojo1 侧现役角色：多一档 = 登记了没人发的档，
+    // 少一档 = 词法发了但档位表没收录（作者面看不见那一层）。
+    const v1Roles = new Set(
+      Object.entries(LEGACY_ROLE_ALIASES)
+        .filter(([legacy]) => legacy.startsWith('sugar.') || legacy.startsWith('keyword.erb') || legacy === 'keyword.raw')
+        .map(([, role]) => role),
+    );
+    expect(new Set(tierTokens).size, '档位表里同一角色被两档登记').toBe(tierTokens.length);
+    expect([...new Set(tierTokens)].sort()).toEqual([...v1Roles].sort());
+    for (const tok of new Set(tierTokens)) {
+      expect(ruleTokens.includes(tok), `档位角色 ${tok} 在主题规则表里没有配色`).toBe(true);
     }
   });
 
@@ -233,7 +242,7 @@ describe('KOJO_TOKEN_TIERS 档位表（作者可见的分层口径）', () => {
   });
 
   it('kojo-dark 主题接线真成立：糖档规则每个对象原样在场（同引用，主题侧不得抄第二份）', () => {
-    for (const rule of KOJO_SUGAR_THEME_RULES) {
+    for (const rule of ROLE_THEME_RULES) {
       expect(
         kojoDark.rules.includes(rule as unknown as Monaco.editor.ITokenThemeRule),
         `主题 rules 里没有 ${rule.token}（被复制了？）`,
@@ -286,7 +295,7 @@ function deltaE(a: string, b: string): number {
 
 describe('档位配色：一档一色 + 深底可读', () => {
   const foregroundOf = new Map<string, string>();
-  for (const rule of KOJO_SUGAR_THEME_RULES) {
+  for (const rule of ROLE_THEME_RULES) {
     expect(typeof rule.foreground).toBe('string');
     expect((rule.foreground ?? '').length, `rule ${rule.token}.foreground 不是 6 位 hex）`).toBe(6);
     foregroundOf.set(rule.token, rule.foreground ?? '');

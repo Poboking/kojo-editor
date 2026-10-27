@@ -3,6 +3,7 @@ import type * as Monaco from '../src/monaco/entry';
 import { classifyLine, computeFormatEdits, splitLogicalLines, sugarEnterIndentAfter } from '@kojo/plugin-kojo-sugar';
 import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
+import { ROLE } from '../src/monaco/semantic-roles';
 import { CJK_WORD_PATTERN, CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
 import { editorOptionsForLineCount } from '../src/ui/editor-options';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
@@ -55,7 +56,7 @@ async function driveKojo(line: string): Promise<Emit[]> {
 
 /** 注释档的发射文本拼起来（判据只看 `comment` 从哪开始、到哪结束） */
 const commentText = (emits: readonly Emit[]): string =>
-  emits.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('');
+  emits.filter((e) => e.token.startsWith(`${ROLE.comment}.`)).map((e) => e.text).join('');
 
 /** monaco 深层 common 模块无 subpath 类型 ⇒ 变量路径动态 import（cjk-typing 同款手法） */
 async function monacoInternal(sub: string): Promise<Record<string, any>> {
@@ -221,15 +222,15 @@ describe('comments 格 = 词法真源（Monarch 注释判据同源）', () => {
     const emitted = await driveKojo('  ; 说明');
     // `start: 0` 一并钉住：这枚断言拿整枚 `Emit` 做全等，字段随基座（ERB-PAINT-21 加的列坐标）加长——
     // 0 也正说明"缩进进了注释"这条判据本身
-    expect(emitted).toEqual([{ text: '  ; 说明', token: `comment.${KOJO_LANGUAGE_ID}`, start: 0 }]);
+    expect(emitted).toEqual([{ text: '  ; 说明', token: `${ROLE.comment}.${KOJO_LANGUAGE_ID}`, start: 0 }]);
   });
 
   it('Monarch：行尾 `;` 起整段 comment，`A = 1` 仍是原档；注释尾巴不许二次发射', async () => {
     const emitted = await driveKojo('A = 1 ; 尾注释');
     const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
-    expect(emitted.find((e) => e.text === 'A')?.token.startsWith('identifier.'), joined).toBe(true);
-    expect(emitted.find((e) => e.text === '=')?.token.startsWith('operator.'), joined).toBe(true);
-    expect(emitted.find((e) => e.text === '1')?.token.startsWith('number.'), joined).toBe(true);
+    expect(emitted.find((e) => e.text === 'A')?.token.startsWith(`${ROLE.text}.`), joined).toBe(true);
+    expect(emitted.find((e) => e.text === '=')?.token.startsWith(`${ROLE.operator}.`), joined).toBe(true);
+    expect(emitted.find((e) => e.text === '1')?.token.startsWith(`${ROLE.number}.`), joined).toBe(true);
     expect(commentText(emitted), joined).toBe('; 尾注释');
     expect(emitted.find((e) => e.text === '尾注释'), '注释尾巴不许有第二处发射').toBeUndefined();
   });
@@ -237,15 +238,15 @@ describe('comments 格 = 词法真源（Monarch 注释判据同源）', () => {
   it('Monarch：`// 说明` 不是 comment（旧形退场）——两枚 `/` 落 operator、正文照常着色', async () => {
     const emitted = await driveKojo('// 说明');
     const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
-    expect(emitted.some((e) => e.token.startsWith('comment.')), joined).toBe(false);
+    expect(emitted.some((e) => e.token.startsWith(`${ROLE.comment}.`)), joined).toBe(false);
     expect(emitted.filter((e) => e.text === '/'), joined).toHaveLength(2);
-    expect(emitted.some((e) => e.token.startsWith('operator.')), joined).toBe(true);
+    expect(emitted.some((e) => e.token.startsWith(`${ROLE.operator}.`)), joined).toBe(true);
   });
 
   it('Monarch：台词 `「」` 里的 `;` 不被切（speech 态先吃），行尾注释仍从 `」` 之后起', async () => {
     const inside = await driveKojo('「台词;不是注释」');
-    expect(inside.some((e) => e.token.startsWith('comment.'))).toBe(false);
-    expect(inside.find((e) => e.text === '台词;不是注释')?.token.startsWith('sugar.speech.')).toBe(true);
+    expect(inside.some((e) => e.token.startsWith(`${ROLE.comment}.`))).toBe(false);
+    expect(inside.find((e) => e.text === '台词;不是注释')?.token.startsWith(`${ROLE.speech}.`)).toBe(true);
     const tail = await driveKojo('「台词」 ; 尾注释');
     expect(commentText(tail)).toBe('; 尾注释');
   });
@@ -254,17 +255,17 @@ describe('comments 格 = 词法真源（Monarch 注释判据同源）', () => {
     const emitted = await driveKojo('别名 X = "a;b" ; 尾注释');
     const joined = emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
     expect(commentText(emitted), joined).toBe('; 尾注释');
-    expect(emitted.find((e) => e.text === 'a')?.token.startsWith('identifier.'), joined).toBe(true);
-    expect(emitted.find((e) => e.text === 'b')?.token.startsWith('identifier.'), joined).toBe(true);
+    expect(emitted.find((e) => e.text === 'a')?.token.startsWith(`${ROLE.text}.`), joined).toBe(true);
+    expect(emitted.find((e) => e.text === 'b')?.token.startsWith(`${ROLE.text}.`), joined).toBe(true);
   });
 
   it('Monarch：`[SKIPSTART]` / `[SKIPEND]` 标记行不进 comment，块内原生行照旧走指令档', async () => {
     for (const marker of ['[SKIPSTART]', '[SKIPEND]']) {
       const emitted = await driveKojo(marker);
-      expect(emitted.some((e) => e.token.startsWith('comment.')), marker).toBe(false);
+      expect(emitted.some((e) => e.token.startsWith(`${ROLE.comment}.`)), marker).toBe(false);
     }
     const inside = await driveKojo('IF TFLAG:193 = 0');
-    expect(inside.find((e) => e.text === 'IF')?.token.startsWith('keyword.erb.'), '块内原生行仍是原档').toBe(true);
+    expect(inside.find((e) => e.text === 'IF')?.token.startsWith(`${ROLE.engine}.`), '块内原生行仍是原档').toBe(true);
   });
 });
 

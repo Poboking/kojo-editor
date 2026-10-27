@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { scanTextTernaries } from '@kojo/plugin-condition-extractor';
+import { ROLE } from '../src/monaco/semantic-roles';
 import { compileMonarch, driveLine, driveLines, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**
@@ -29,12 +30,25 @@ function bare(lexer: CompiledLexer, emitted: readonly Emit[]): string {
 }
 
 describe('内联三元相位机（switchTo 三相位）', () => {
-  it('① 闭合 `\\@` 精确回到 str：同一条串后面的正文仍出 string、收尾引号出 string.quote 并回到 root', async () => {
+  it('① 闭合 `\\@` 精确回到 str：同一条串后面的正文仍出角色层、收尾引号同串档并回到 root', async () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "x\\@A?b#c\\@y"');
+    // 期望串按角色拼（LAU-2 起引号与串内容同角色 `role.string`，转义记号独立成 `role.escape`）
     expect(bare(lexer, line.emitted)).toBe(
-      'PRINTL::keyword "::string.quote x::string \\@::string.escape A::variable ?::string.escape ' +
-        'b::string #::string.escape c::string \\@::string.escape y::string "::string.quote',
+      [
+        `PRINTL::${ROLE.keyword}`,
+        `"::${ROLE.string}`,
+        `x::${ROLE.string}`,
+        `\\@::${ROLE.escape}`,
+        `A::${ROLE.variable}`,
+        `?::${ROLE.escape}`,
+        `b::${ROLE.string}`,
+        `#::${ROLE.escape}`,
+        `c::${ROLE.string}`,
+        `\\@::${ROLE.escape}`,
+        `y::${ROLE.string}`,
+        `"::${ROLE.string}`,
+      ].join(' '),
     );
     expect(line.stack).toEqual(['root']);
   });
@@ -43,7 +57,7 @@ describe('内联三元相位机（switchTo 三相位）', () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "\\@A?a#b\\@中\\@C?c#d\\@尾"');
     const bounds = line.emitted
-      .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape'))
+      .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(ROLE.escape))
       .map((e) => e.text)
       .join('');
     expect(bounds).toBe('\\@?#\\@\\@?#\\@');
@@ -99,13 +113,13 @@ describe('内联三元相位机（switchTo 三相位）', () => {
       const inStr = driveLine(lexer, `PRINTL "x${shape}y"`).emitted;
       const bounds = (emitted: readonly Emit[]): string =>
         emitted
-          .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape'))
+          .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(ROLE.escape))
           .map((e) => e.text)
           .join('');
       expect(bounds(inRoot), `root 态没涂 ${shape}`).toBe('\\@?#\\@');
       expect(bounds(inStr), `str 态与 root 态边界序列分叉：${shape}`).toBe(bounds(inRoot));
       // 两态都只涂这一枚，不许顺手多产
-      expect(inStr.filter((e) => e.token.startsWith('string.escape')).length, `str 多产 escape：${shape}`).toBe(4);
+      expect(inStr.filter((e) => e.token.startsWith(ROLE.escape)).length, `str 多产 escape：${shape}`).toBe(4);
     }
   });
 
@@ -113,7 +127,7 @@ describe('内联三元相位机（switchTo 三相位）', () => {
     const lexer = await erbLexer();
     const bounds = (emitted: readonly Emit[]): string =>
       emitted
-        .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape'))
+        .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(ROLE.escape))
         .map((e) => e.text)
         .join('');
     const pairs: readonly [string, string][] = [
@@ -130,7 +144,7 @@ describe('内联三元相位机（switchTo 三相位）', () => {
   it('③c 唯一剩下的口径差是 `;`：root 段禁注释界，str 段里 `;` 是正文', async () => {
     const lexer = await erbLexer();
     const escapes = (emitted: readonly Emit[]): number =>
-      emitted.filter((e) => e.token.startsWith('string.escape')).length;
+      emitted.filter((e) => e.token.startsWith(ROLE.escape)).length;
     // 串里 `;` 属正文 ⇒ 涂
     expect(escapes(driveLine(lexer, 'PRINTL "x\\@A;b?c#d\\@y"').emitted)).toBeGreaterThan(0);
     // 引号外 `;` 起注释 ⇒ 形状不许跨注释界 ⇒ 不涂（与语义层 codeViewOf 同向）
@@ -157,15 +171,15 @@ describe('内联三元相位机（switchTo 三相位）', () => {
     }
     const tail = driveLines(lexer, [...lines, 'PRINTL 正常']);
     const last = tail[tail.length - 1]!;
-    expect(last.some((e) => e.token.startsWith('string.') && e.text === '正常'), '尾行不许被上一行的串态染色').toBe(false);
-    expect(last.some((e) => e.token.startsWith('string.escape'))).toBe(false);
+    expect(last.some((e) => e.token.startsWith(`${ROLE.string}.`) && e.text === '正常'), '尾行不许被上一行的串态染色').toBe(false);
+    expect(last.some((e) => e.token.startsWith(ROLE.escape))).toBe(false);
   });
 
   /** 反向自证：把 guard 的"段内含非空白"写成"界前一字符非空白" ⇒ 主流排版整片掉色 */
   it('⑤ 真源不认的形状（段内全空白）着色层也不涂——涂 ⊆ 认在这一格的双向证据', async () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "a\\@ ?b#c\\@d"');
-    expect(line.emitted.filter((e) => e.token.startsWith('string.escape'))).toHaveLength(0);
+    expect(line.emitted.filter((e) => e.token.startsWith(ROLE.escape))).toHaveLength(0);
     expect(scanTextTernaries('a\\@ ?b#c\\@d')).toHaveLength(0);
   });
 
@@ -173,14 +187,16 @@ describe('内联三元相位机（switchTo 三相位）', () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "x\\@ STRLENS(nDesc) ? %nDesc% #设定\\@y"');
     const bounds = line.emitted
-      .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape'))
+      .filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(ROLE.escape))
       .map((e) => e.text)
       .join('');
     expect(bounds, `实发 ${bare(lexer, line.emitted)}`).toBe('\\@?#\\@');
     // 段内插值照旧 escape+variable（覆盖率与零回退同时成立才算这条过）
-    expect(bare(lexer, line.emitted)).toContain('%::string.escape nDesc::variable %::string.escape');
+    expect(bare(lexer, line.emitted)).toContain(
+      `%::${ROLE.escape} nDesc::${ROLE.variable} %::${ROLE.escape}`,
+    );
     expect(line.stack).toEqual(['root']);
     // 反面：段里**全是**空白 ⇒ 真源不认 ⇒ 本层也不涂（同一条判据的两个方向）
-    expect(driveLine(lexer, 'PRINTL "a\\@ ?b#c\\@d"').emitted.filter((e) => e.token.startsWith('string.escape'))).toHaveLength(0);
+    expect(driveLine(lexer, 'PRINTL "a\\@ ?b#c\\@d"').emitted.filter((e) => e.token.startsWith(ROLE.escape))).toHaveLength(0);
   });
 });

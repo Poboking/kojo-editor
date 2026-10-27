@@ -1,46 +1,38 @@
 /**
- * Kojo 2.0 的 **Monaco 主题**（K2-CUTOVER-PRE / K2-CUTOVER-THEME）：五锚点 / 声明名 / 对话各归各色，
- * 亮暗两套 + 墨绿变体，`rules` 与 `kojo2-language.ts` 的 token 名**逐字同源**。
+ * Kojo 2.0 的 **Monaco 主题**（K2-CUTOVER-PRE / K2-CUTOVER-THEME；LAU-2 起按语义角色铺色）。
  *
- * ## 与 v1 三套主题的关系（K2-CUTOVER-THEME 后）
+ * ## 与六套 `kojo-*` 主题的关系
  *
  * Monaco 主题是进程级的，双轨期同一个窗口只能有一个主题名。真正让"`.kojo2` 文件在 v1 主题下
- * 也正确上色"的做法不是切主题，而是**把 2.0 的 token 规则并进 `kojo-dark` / `kojo-light` /
- * `kojo-mint-dark`**——那件事住在 `theme.ts`（flag 守卫，规则数据取自 `kojo-theme-rules.ts`）。
- * 本文件继续保留 `kojo2-*` 三套**独立主题**（显式切换 / 对照 / 将来的发布态用），
- * 两处读的是同一批规则对象，不各配一套色。
+ * 也正确上色"的做法不是切主题，而是**同一批角色规则**：`theme.ts` 的六套主题与这里的三套
+ * `kojo2-*` 读的是叶子 `kojo-theme-rules.ts` 的**同一批规则对象**（`ROLE_THEME_RULES` /
+ * `ROLE_LIGHT_THEME_RULES` / `ROLE_MINT_THEME_RULES`），不各配一套色。本文件保留三套独立
+ * 主题（显式切换 / 对照 / 将来的发布态用）。
  *
- * ## token 名的单一真源
+ * ## 角色表是单一真源（LAU-2）
  *
- * token 名与三套（暗 / 亮 / 墨绿）规则表的**定义处**是零 import 叶子 `kojo-theme-rules.ts`
- * （`KOJO2_TOKEN` / `KOJO2_THEME_RULES` / `KOJO2_LIGHT_THEME_RULES` /
- * `KOJO2_MINT_THEME_RULES`）；本文件只按 `KOJO2_TOKEN` 建 token → 样式的映射。任何一侧
- * 少一格 / 多一格，{@link KOJO2_THEME_TOKEN_MAP} 在**模块加载期**当场抛（与 `theme.ts` 的
- * `retint` 同一纪律：少配一档在加载期变红，而不是静默掉色）。`kojo2-theme.test.ts` 再用
- * 规则表与 `KOJO2_TOKEN` 双向交叉断言，防将来漂移。
+ * 档位名（`KOJO2_TOKEN`：锚点 / 声明词 / 台词 …，作者面口径）→ **语义角色**
+ * （`semantic-roles.ts` 的 `ROLE.*`）→ 三套主题各一枚色（叶子里的三张角色调色板）。
+ * 本文件只做后两步的拼装：{@link KOJO2_THEME_TOKEN_MAP} 是"角色 → 三侧样式"的索引，
+ * 任一侧少一格 / 多一格在**模块加载期**当场抛（与 `theme.ts` 的构建器同一纪律：
+ * 少配一档在加载期变红，而不是静默掉色）。`kojo2-theme.test.ts` 再用规则表与
+ * `SEMANTIC_ROLES` 双向交叉断言，防将来漂移。
  *
  * ## 取色口径
  *
- * - **暗**：原样沿用叶子里的 `KOJO2_THEME_RULES`（不重定义、不改一个色值），
- *   底色取 app 的 `--bg` `#1e2227`（与 `kojo-dark` 同底，切过来不跳）；
- * - **亮**：叶子里的 `KOJO2_LIGHT_THEME_RULES`（2026-10-26 批：八档同义档落到 v1 亮色盘
- *   同名档，锚点品红 / 声明靛两档自带，理由见该表头注；紫=声明、棕=说话人、绿=台词、
- *   蓝=旁白、红=提示、钢蓝=标点）；
- * - **墨绿**：叶子里的 `KOJO2_MINT_THEME_RULES`（逐档落到墨绿盘既有的语义近邻色）
- *   + 墨绿底 `#0f1713`（与 `kojo-mint-dark` 同底）。
+ * - **暗**：`ROLE_THEME_RULES`（与 `kojo-dark` 逐字同色，底色同为 `#1e2227`）；
+ * - **亮**：`ROLE_LIGHT_THEME_RULES`（`#f6f8fa`）；
+ * - **墨绿**：`ROLE_MINT_THEME_RULES`（`#0f1713`）。
  * 三套都不 `inherit`（不从基底借色，切主题不残留上一套的 token 色）。
  *
  * **部件色不再各配一套**（2026-10-26 部件色批）：三套 `colors` 直接复用 `theme.ts` 的
- * `KOJO_DARK_COLORS` / `KOJO_LIGHT_COLORS` / `KOJO_MINT_COLORS` 同一批 values。原先是
- * 一份 32 键的私有表，`inherit: false` 下漏列的 59 键（`menu.*` / `editorHoverWidget.*` /
- * `badge.*` / `editorBracketMatch.*` / `editorSuggestWidget.foreground` …）会掉回 Monaco
- * 默认色——切主题时露出一块基底灰。同一主题族里 v1 与 2.0 的部件色现在逐键相等、缺键 0
- * （闸见 `theme-color-gates.test.ts`）。
+ * `KOJO_DARK_COLORS` / `KOJO_LIGHT_COLORS` / `KOJO_MINT_COLORS` 同一批 values。同一主题族里
+ * v1 与 2.0 的部件色逐键相等、缺键 0（闸见 `theme-color-gates.test.ts`）。
  *
  * 硬指标（`theme-color-gates.test.ts` / `kojo2-theme.test.ts` 复跑）：每档前景对主题自己的
- * `editor.background` 对比度 ≥ 4.5；**主题内全部生效规则**（v1 31 档 + 2.0 15 档，不只
- * 2.0 单族）两两 CIE76 ΔE ≥ 12（"看起来两档其实一色"是假分层）；跨语言同义档（`「」` 标点 /
- * 台词 / 字面 / 注释 / 原生）与 v1 同名档同色。
+ * `editor.background` 对比度 ≥ 4.5；**主题内全部生效规则**（34 档角色）两两 CIE76 ΔE ≥ 12
+ * （"看起来两档其实一色"是假分层）；跨语言同义档（`「」` 标点 / 台词 / 字面 / 注释 / 原生 /
+ * 类型）在两门语言里落**同一个角色**，因此天然同色。
  *
  * ## 幂等注册
  *
@@ -50,12 +42,11 @@
 
 import type * as Monaco from './entry';
 import {
-  KOJO2_LIGHT_THEME_RULES,
-  KOJO2_MINT_THEME_RULES,
-  KOJO2_THEME_RULES,
-  KOJO2_TOKEN,
-  type Kojo2TokenName,
+  ROLE_LIGHT_THEME_RULES,
+  ROLE_MINT_THEME_RULES,
+  ROLE_THEME_RULES,
 } from './kojo-theme-rules';
+import { ROLE, SEMANTIC_ROLES, type SemanticRole } from './semantic-roles';
 // 部件色复用 v1 三套（同一主题族逐键相等；`theme.ts` 对本文件的引用是**动态 import**，
 // 所以这条静态反向依赖不成环）。
 import { KOJO_DARK_COLORS, KOJO_LIGHT_COLORS, KOJO_MINT_COLORS } from './theme';
@@ -68,10 +59,10 @@ export const KOJO2_DARK_THEME_ID = 'kojo2-dark';
 /** 2.0 亮色主题 id */
 export const KOJO2_LIGHT_THEME_ID = 'kojo2-light';
 
-/** 2.0 墨绿暗色主题 id（暗色 token 规则 + 墨绿底） */
+/** 2.0 墨绿暗色主题 id（墨绿角色调色板 + 墨绿底） */
 export const KOJO2_MINT_DARK_THEME_ID = 'kojo2-mint-dark';
 
-/** 全部 2.0 主题 id（注册顺序 = 数组序；测试按此断言"两套都在"） */
+/** 全部 2.0 主题 id（注册顺序 = 数组序；测试按此断言"三套都在"） */
 export const KOJO2_THEME_IDS = [
   KOJO2_DARK_THEME_ID,
   KOJO2_LIGHT_THEME_ID,
@@ -99,33 +90,33 @@ export function kojo2ThemeIdFor(pref: Kojo2ThemePref): Kojo2ThemeId {
   return KOJO2_THEME_ID_BY_PREF[pref] ?? KOJO2_DARK_THEME_ID;
 }
 
-/* ============================== token → 颜色映射 ============================== */
+/* ============================== 角色 → 颜色映射 ============================== */
 
-/** 一档 token 的样式（Monaco `ITokenThemeRule` 的前景色 + 字体样式） */
+/** 一档角色的样式（Monaco `ITokenThemeRule` 的前景色 + 字体样式） */
 export interface Kojo2TokenStyle {
   readonly foreground: string;
   readonly fontStyle?: 'bold' | 'italic';
 }
 
-/** 主题三侧（暗 / 亮 / 墨绿；墨绿有自己的 2.0 规则表，不再复用暗色侧） */
+/** 主题三侧（暗 / 亮 / 墨绿；三侧各有一张角色调色板，不再复用暗色侧） */
 export type Kojo2TokenThemeSide = 'dark' | 'light' | 'mint';
 
 /** 把 `ITokenThemeRule` 的 `fontStyle: string` 收窄成本模块允许的两档（越界即抛） */
 function toStyle(rule: Monaco.editor.ITokenThemeRule): Kojo2TokenStyle {
   const foreground = rule.foreground;
   if (foreground === undefined || !/^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(foreground)) {
-    throw new Error(`[kojo2-theme] token「${rule.token}」没有合法的前景色：${String(foreground)}`);
+    throw new Error(`[kojo2-theme] 角色「${rule.token}」没有合法的前景色：${String(foreground)}`);
   }
   const fontStyle = rule.fontStyle;
   if (fontStyle === undefined) return { foreground };
   if (fontStyle !== 'bold' && fontStyle !== 'italic') {
-    throw new Error(`[kojo2-theme] token「${rule.token}」的 fontStyle 不受支持：${fontStyle}`);
+    throw new Error(`[kojo2-theme] 角色「${rule.token}」的 fontStyle 不受支持：${fontStyle}`);
   }
   return { foreground, fontStyle };
 }
 
 /**
- * 把一张规则表按 token 收成样式索引；重复 token = 表本身写错了（加载期抛，不静默后者覆盖）。
+ * 把一张规则表按角色收成样式索引；重复角色 = 表本身写错了（加载期抛，不静默后者覆盖）。
  */
 function indexRules(
   rules: readonly Monaco.editor.ITokenThemeRule[],
@@ -134,7 +125,7 @@ function indexRules(
   const byToken = new Map<string, Kojo2TokenStyle>();
   for (const rule of rules) {
     if (byToken.has(rule.token)) {
-      throw new Error(`[kojo2-theme] ${label}规则里 token「${rule.token}」出现了两次`);
+      throw new Error(`[kojo2-theme] ${label}规则里角色「${rule.token}」出现了两次`);
     }
     byToken.set(rule.token, toStyle(rule));
   }
@@ -142,48 +133,46 @@ function indexRules(
 }
 
 /**
- * 组装 token → 三套样式（暗 / 亮 / 墨绿）；三侧都必须与叶子的规则表**逐格同源**。
+ * 组装角色 → 三套样式（暗 / 亮 / 墨绿）；三侧都必须与叶子的规则表**逐格同源**。
  *
- * 校验顺序：先按 `KOJO2_TOKEN` 逐 token 取三侧规则（缺 = 抛），再反向查三张表有没有
- * 未登记的 token（多 = 抛）。这样"词法加了新档忘了配主题"与"配了色但词法不发这个 token"
+ * 校验顺序：先按 `SEMANTIC_ROLES` 逐角色取三侧规则（缺 = 抛），再反向查三张表有没有
+ * 未登记的角色（多 = 抛）。这样"角色表加了新角色忘了配色"与"配了色但角色表里没有"
  * 两个方向都在导入期变红。
  */
 function buildTokenMap(): Readonly<
-  Record<Kojo2TokenName, Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>>
+  Record<SemanticRole, Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>>
 > {
   const bySide: Readonly<Record<Kojo2TokenThemeSide, Map<string, Kojo2TokenStyle>>> = {
-    dark: indexRules(KOJO2_THEME_RULES, '暗色'),
-    light: indexRules(KOJO2_LIGHT_THEME_RULES, '亮色'),
-    mint: indexRules(KOJO2_MINT_THEME_RULES, '墨绿'),
+    dark: indexRules(ROLE_THEME_RULES, '暗色'),
+    light: indexRules(ROLE_LIGHT_THEME_RULES, '亮色'),
+    mint: indexRules(ROLE_MINT_THEME_RULES, '墨绿'),
   };
   const tableName: Readonly<Record<Kojo2TokenThemeSide, string>> = {
-    dark: 'KOJO2_THEME_RULES',
-    light: 'KOJO2_LIGHT_THEME_RULES',
-    mint: 'KOJO2_MINT_THEME_RULES',
+    dark: 'ROLE_THEME_RULES',
+    light: 'ROLE_LIGHT_THEME_RULES',
+    mint: 'ROLE_MINT_THEME_RULES',
   };
 
   const map = {} as Record<
-    Kojo2TokenName,
+    SemanticRole,
     Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>
   >;
-  for (const token of Object.values(KOJO2_TOKEN)) {
+  for (const role of SEMANTIC_ROLES) {
     const styles = {} as Record<Kojo2TokenThemeSide, Kojo2TokenStyle>;
     for (const side of ['dark', 'light', 'mint'] as const) {
-      const style = bySide[side].get(token);
+      const style = bySide[side].get(role);
       if (style === undefined) {
-        throw new Error(
-          `[kojo2-theme] 词法 token「${token}」在 ${tableName[side]} 里没有配色`,
-        );
+        throw new Error(`[kojo2-theme] 角色「${role}」在 ${tableName[side]} 里没有配色`);
       }
       styles[side] = style;
     }
-    map[token] = styles;
+    map[role] = styles;
   }
   const known = Object.keys(map).length;
   for (const side of ['dark', 'light', 'mint'] as const) {
     if (bySide[side].size !== known) {
       throw new Error(
-        `[kojo2-theme] ${tableName[side]} 里有 ${bySide[side].size - known} 档未在 KOJO2_TOKEN 登记`,
+        `[kojo2-theme] ${tableName[side]} 里有 ${bySide[side].size - known} 档未在 SEMANTIC_ROLES 登记`,
       );
     }
   }
@@ -191,50 +180,42 @@ function buildTokenMap(): Readonly<
 }
 
 /**
- * 词法 token → 三套主题的样式（暗 / 亮 / 墨绿）。
+ * 角色 → 三套主题的样式（暗 / 亮 / 墨绿）。
  *
- * 键集合**必须**等于 `Object.values(KOJO2_TOKEN)`：三侧都从叶子的规则表派生；任一缺格 /
- * 多格在模块加载期抛。
+ * 键集合**必须**等于 `SEMANTIC_ROLES`：三侧都从叶子的角色调色板派生；任一缺格 / 多格在
+ * 模块加载期抛。
  */
 export const KOJO2_THEME_TOKEN_MAP: Readonly<
-  Record<Kojo2TokenName, Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>>
+  Record<SemanticRole, Readonly<Record<Kojo2TokenThemeSide, Kojo2TokenStyle>>>
 > = buildTokenMap();
 
-
 /**
- * 作者面的**分类口径**：五锚点 / 声明名 / 对话三层各自归哪些 token。
+ * 作者面的**分类口径**：五锚点 / 声明名 / 对话三层各自归哪些角色。
  *
- * 这不是第二份配色表（颜色只在上面的映射里），而是"主题到底覆盖了哪三类东西"的验收清单：
+ * 这不是第二份配色表（颜色只在上面的映射里），而是"主题到底覆盖了哪几类东西"的验收清单：
  * 设置页 / 配色文档 / 测试都从这里取，避免"以为锚点单独一色"这类误解——词法对五锚点
- * 只发一个 `kojo2.anchor`（`#`/`@`/`>`/`?`/`!` 不再细分，改细分是词法的事，不是主题的事）。
+ * 只发一个 `role.anchor`（`#`/`@`/`>`/`?`/`!` 不再细分，改细分是词法的事，不是主题的事）。
  */
 export interface Kojo2ThemeCategory {
   readonly category: '锚点' | '声明名' | '对话';
-  readonly tokens: readonly Kojo2TokenName[];
+  readonly tokens: readonly SemanticRole[];
   readonly note: string;
 }
 
 export const KOJO2_THEME_CATEGORIES: readonly Kojo2ThemeCategory[] = [
   {
     category: '锚点',
-    tokens: [KOJO2_TOKEN.anchor],
-    note: '五锚点 `# @ > ? !` 共用一档（词法只发 kojo2.anchor；行首转义 `\\` 同档）',
+    tokens: [ROLE.anchor],
+    note: '五锚点 `# @ > ? !` 共用一档（词法只发 role.anchor；行首转义 `\\` 同档）',
   },
   {
     category: '声明名',
-    tokens: [KOJO2_TOKEN.declaration],
+    tokens: [ROLE.declaration],
     note: '`#` 后的声明词 / `@` 后的调度词 / `!` 后的被调名',
   },
   {
     category: '对话',
-    tokens: [
-      KOJO2_TOKEN.speaker,
-      KOJO2_TOKEN.speech,
-      KOJO2_TOKEN.string,
-      KOJO2_TOKEN.interp,
-      KOJO2_TOKEN.hint,
-      KOJO2_TOKEN.delimiter,
-    ],
+    tokens: [ROLE.speaker, ROLE.speech, ROLE.string, ROLE.interpAlt, ROLE.hint, ROLE.punctuation],
     note: '`角色：「…」` 的说话人与台词两层，外加插值 / 行尾表演提示 / 「」标点',
   },
 ];
@@ -283,29 +264,29 @@ function kojo2ColorsFor(colors: Readonly<Record<string, string>>): Record<string
 /**
  * 2.0 暗色主题（`vs-dark` 基底、不继承）。
  *
- * `rules` 是叶子 `kojo-theme-rules.ts` 的 `KOJO2_THEME_RULES` 的**浅拷贝**（元素同对象）：
- * 顶层数组要可写（Monaco 的类型是 `ITokenThemeRule[]`），但每一格不重造——暗色真源只有一份。
+ * `rules` 是叶子 `ROLE_THEME_RULES` 的**浅拷贝**（元素同对象）：顶层数组要可写（Monaco 的
+ * 类型是 `ITokenThemeRule[]`），但每一格不重造——暗色真源只有一份。
  */
 export const kojo2DarkTheme: Monaco.editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: false,
-  rules: [...KOJO2_THEME_RULES],
+  rules: [...ROLE_THEME_RULES],
   colors: kojo2ColorsFor(KOJO_DARK_COLORS),
 };
 
-/** 2.0 亮色主题（`vs` 基底、不继承；token 规则 = 叶子的 `KOJO2_LIGHT_THEME_RULES` 浅拷贝） */
+/** 2.0 亮色主题（`vs` 基底、不继承；角色规则 = 叶子的 `ROLE_LIGHT_THEME_RULES` 浅拷贝） */
 export const kojo2LightTheme: Monaco.editor.IStandaloneThemeData = {
   base: 'vs',
   inherit: false,
-  rules: [...KOJO2_LIGHT_THEME_RULES],
+  rules: [...ROLE_LIGHT_THEME_RULES],
   colors: kojo2ColorsFor(KOJO_LIGHT_COLORS),
 };
 
-/** 2.0 墨绿暗色主题（token 规则 = 叶子的 `KOJO2_MINT_THEME_RULES`；底色 `#0f1713`） */
+/** 2.0 墨绿暗色主题（角色规则 = 叶子的 `ROLE_MINT_THEME_RULES`；底色 `#0f1713`） */
 export const kojo2MintDarkTheme: Monaco.editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: false,
-  rules: [...KOJO2_MINT_THEME_RULES],
+  rules: [...ROLE_MINT_THEME_RULES],
   colors: kojo2ColorsFor(KOJO_MINT_COLORS),
 };
 

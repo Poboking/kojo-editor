@@ -3,8 +3,9 @@
  *
  * 钉死四件事：
  * 1. **「显示语法标记」默认关 = 阅读态**（偏好记住，与糖视图开关同款纪律）；
- * 2. **token → 弱化档位表**（`续` 最低档、语法骨架降档可辨、结构性标点退边界、台词中性前景）——
- *    弱化**只按 token 作用**，投影文本零改动这条铁律的显示侧表达；
+ * 2. **角色 → 弱化档位表**（`续` 最低档、语法骨架降档可辨、结构性标点退边界、台词中性前景）——
+ *    弱化**只按角色**（LAU-2 起 Monarch 发 `role.*`，不再发 `sugar.*` 旧 token 名），
+ *    投影文本零改动这条铁律的显示侧表达；
  * 3. **装饰区间算术**（分词产物 → 1 基行列；越界夹取、乱序跳过、空白与无归属 token 不产区间）；
  * 4. **阅读排版补丁**（栏宽 ≈44 个中日文可见宽度、行距倍数、留白；撤预览写回位有常量真源）。
  *
@@ -13,6 +14,7 @@
 
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ROLE } from '../src/monaco/semantic-roles';
 import {
   EDITOR_PADDING_DEFAULT,
   SUGAR_MARKS_DEFAULT,
@@ -86,41 +88,42 @@ describe('阅读模式 / 「显示语法标记」偏好', () => {
   });
 });
 
-describe('阅读模式 / token → 弱化档位表', () => {
+describe('阅读模式 / 角色 → 弱化档位表', () => {
   it('不等待标记（续/~/⏎）归最低档 MARK', () => {
-    expect(sugarReadClassFor('sugar.cont')).toBe(SUGAR_READ_CLASS_MARK);
+    expect(sugarReadClassFor(ROLE.cont)).toBe(SUGAR_READ_CLASS_MARK);
   });
 
   it('语法骨架（关键字/别名/运算符/系统函数）同档 SYNTAX——含 `空行` `等待` 这类词表关键字形', () => {
-    for (const t of ['sugar.keyword', 'sugar.keyword.alias', 'sugar.operator', 'sugar.system-function']) {
+    for (const t of [ROLE.keyword, ROLE.keywordAlias, ROLE.operatorWord, ROLE.call]) {
       expect(sugarReadClassFor(t)).toBe(SUGAR_READ_CLASS_SYNTAX);
     }
   });
 
-  it('结构性标点（：与台词引号）归 DELIMITER；台词正文归 SPEECH', () => {
-    expect(sugarReadClassFor('sugar.colon')).toBe(SUGAR_READ_CLASS_DELIMITER);
-    expect(sugarReadClassFor('sugar.speech.delimiter')).toBe(SUGAR_READ_CLASS_DELIMITER);
-    expect(sugarReadClassFor('sugar.speech')).toBe(SUGAR_READ_CLASS_SPEECH);
+  it('结构性标点（：与台词引号同为 role.punctuation）归 DELIMITER；台词正文归 SPEECH', () => {
+    expect(sugarReadClassFor(ROLE.punctuation)).toBe(SUGAR_READ_CLASS_DELIMITER);
+    expect(sugarReadClassFor(ROLE.speech)).toBe(SUGAR_READ_CLASS_SPEECH);
   });
 
-  it('未登记的 token 原样高对比（代词/插值/名字层/原生 ERB 档不弱化——弱化反而丢信息）', () => {
-    for (const t of ['sugar.pronoun', 'sugar.interp', 'sugar.interp.delimiter', 'sugar.slot', 'keyword.erb', 'keyword.raw', 'identifier', '']) {
+  it('未登记的角色原样高对比（代词/插值/名字层/原生档不弱化——弱化反而丢信息）', () => {
+    for (const t of [ROLE.pronoun, ROLE.interp, ROLE.interpDelimiter, ROLE.slot, ROLE.engine, ROLE.raw, ROLE.text, '']) {
       expect(sugarReadClassFor(t)).toBeUndefined();
     }
   });
 
-  it('层级形态（`a.b` 叠父 scope）跟随最深一档的前缀走', () => {
-    expect(sugarReadClassFor('sugar.keyword.foo')).toBe(SUGAR_READ_CLASS_SYNTAX);
-    expect(sugarReadClassFor('sugar.cont.foo')).toBe(SUGAR_READ_CLASS_MARK);
-    // 前缀匹配必须带点边界：`sugar.contents` 不是 `sugar.cont` 的孩子
-    expect(sugarReadClassFor('sugar.contents')).toBeUndefined();
+  it('层级形态（`a.b` 叠父 scope / Monarch 追加语言后缀）跟随最深一档的前缀走', () => {
+    expect(sugarReadClassFor(`${ROLE.keyword}.foo`)).toBe(SUGAR_READ_CLASS_SYNTAX);
+    expect(sugarReadClassFor(`${ROLE.cont}.foo`)).toBe(SUGAR_READ_CLASS_MARK);
+    // 真 tokenize 产物的形态：Monarch 会在角色名后追加语言 id 后缀
+    expect(sugarReadClassFor(`${ROLE.speech}.kojo-legacy`)).toBe(SUGAR_READ_CLASS_SPEECH);
+    // 前缀匹配必须带点边界：`role.contents` 不是 `role.cont` 的孩子
+    expect(sugarReadClassFor('role.contents')).toBeUndefined();
   });
 });
 
 describe('阅读模式 / 装饰区间算术（纯显示层，投影零改动的判据）', () => {
   it('token 区间 = 本 offset 到下一 offset；1 基行列与 Monaco Range 同口径', () => {
     const lines = ['甲 续'];
-    const tokens = [[{ offset: 0, type: 'sugar.slot' }, { offset: 1, type: '' }, { offset: 2, type: 'sugar.cont' }]];
+    const tokens = [[{ offset: 0, type: ROLE.slot }, { offset: 1, type: '' }, { offset: 2, type: ROLE.cont }]];
     expect(sugarReadDecorations(lines, tokens)).toEqual([
       { lineNumber: 1, startColumn: 3, endColumn: 4, className: SUGAR_READ_CLASS_MARK },
     ]);
@@ -130,15 +133,15 @@ describe('阅读模式 / 装饰区间算术（纯显示层，投影零改动的�
     const lines = ['她说「甲」', '空行 续'];
     const tokens = [
       [
-        { offset: 0, type: 'sugar.slot' },
-        { offset: 2, type: 'sugar.speech.delimiter' },
-        { offset: 3, type: 'sugar.speech' },
-        { offset: 4, type: 'sugar.speech.delimiter' },
+        { offset: 0, type: ROLE.slot },
+        { offset: 2, type: ROLE.punctuation },
+        { offset: 3, type: ROLE.speech },
+        { offset: 4, type: ROLE.punctuation },
       ],
       [
-        { offset: 0, type: 'sugar.keyword' },
+        { offset: 0, type: ROLE.keyword },
         { offset: 2, type: '' },
-        { offset: 3, type: 'sugar.cont' },
+        { offset: 3, type: ROLE.cont },
       ],
     ];
     expect(sugarReadDecorations(lines, tokens)).toEqual([
@@ -153,13 +156,13 @@ describe('阅读模式 / 装饰区间算术（纯显示层，投影零改动的�
   it('外部数据不可信（与 composeSugarDoc 同款健壮性）：越界夹取、乱序空区间跳过', () => {
     // offset 超行末 ⇒ 夹到行末；下一 token offset 比本 token 小（乱序）⇒ 区间为空，跳过
     expect(
-      sugarReadDecorations(['短'], [[{ offset: 0, type: 'sugar.cont' }, { offset: 99, type: 'sugar.cont' }]]),
+      sugarReadDecorations(['短'], [[{ offset: 0, type: ROLE.cont }, { offset: 99, type: ROLE.cont }]]),
     ).toEqual([{ lineNumber: 1, startColumn: 1, endColumn: 2, className: SUGAR_READ_CLASS_MARK }]);
-    expect(sugarReadDecorations(['短'], [[{ offset: 5, type: 'sugar.cont' }]])).toEqual([]);
+    expect(sugarReadDecorations(['短'], [[{ offset: 5, type: ROLE.cont }]])).toEqual([]);
   });
 
   it('token 行数与文本行数不齐不抛（缺文本行按空行处理 → 整行区间为空即跳过）', () => {
-    expect(sugarReadDecorations([], [[{ offset: 0, type: 'sugar.cont' }]])).toEqual([]);
+    expect(sugarReadDecorations([], [[{ offset: 0, type: ROLE.cont }]])).toEqual([]);
     expect(sugarReadDecorations(['a'], [])).toEqual([]);
   });
 

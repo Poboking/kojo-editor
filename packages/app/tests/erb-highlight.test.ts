@@ -11,6 +11,7 @@ import { registerErbLanguage, setErbDirectiveWords } from '../src/monaco/erb-lan
 import { ERB_CONTROL_STATEMENTS, classifyControlFlow } from '@kojo/plugin-erb-parser';
 import { scanTextTernaries } from '@kojo/plugin-condition-extractor';
 import { CJK_WORD_SEPARATORS } from '../src/monaco/word-separators';
+import { ROLE } from '../src/monaco/semantic-roles';
 import { compileMonarch, driveLexer, driveLine, driveLines, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 
 /**
@@ -71,7 +72,7 @@ function positions(form: string): { where: string; line: string }[] {
   ];
 }
 
-const keywordToken = (postfix: string): string => `keyword${postfix}`;
+const keywordToken = (postfix: string): string => `${ROLE.keyword}${postfix}`;
 
 /** 该词在发射结果里的 token；没有发射点 → `<none>` */
 function tokenOfWord(emitted: readonly Emit[], word: string): string {
@@ -211,7 +212,7 @@ describe('高亮不回退（词法分层仍然成立）', () => {
   it('变量多段引用整段 variable：CFLAG:ARG:口上セレクタ / 小写 cflag:arg / rand:2（指令同名词的索引形态）', async () => {
     for (const line of ['CFLAG:ARG:口上セレクタ = 1', 'cflag:arg = 1', 'rand:2', 'mastername:arg = 1']) {
       const { emitted } = await emitErb(line);
-      const variable = emitted.find((e) => e.token.startsWith('variable.') && e.text.startsWith(line.split(' ')[0]!));
+      const variable = emitted.find((e) => e.token.startsWith(`${ROLE.variable}.`) && e.text.startsWith(line.split(' ')[0]!));
       expect(variable, `「${line}」没有整段 variable（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeDefined();
     }
   });
@@ -224,40 +225,40 @@ describe('高亮不回退（词法分层仍然成立）', () => {
     for (const line of ['MASTERNAME:1 = 亲爱的', 'mastername:1 = 达令', 'MasterNAME:ARG =']) {
       const { emitted } = await emitErb(line);
       const head = line.split(' ')[0]!;
-      const variable = emitted.find((e) => e.token.startsWith('variable.') && e.text === head);
+      const variable = emitted.find((e) => e.token.startsWith(`${ROLE.variable}.`) && e.text === head);
       expect(variable, `「${line}」的「${head}」没进 variable（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeDefined();
     }
   });
 
   it('K6：`PLAYER` 作裸标量与作中段作用域都归 variable，且中段不许另起一枚（`TALENT:PLAYER:2` 一整枚）', async () => {
     const bare = await emitErb('IF TFLAG:103 == PLAYER');
-    expect(bare.emitted.find((e) => e.text === 'PLAYER')?.token.startsWith('variable.'), '裸 PLAYER 没进 variable').toBe(true);
+    expect(bare.emitted.find((e) => e.text === 'PLAYER')?.token.startsWith(`${ROLE.variable}.`), '裸 PLAYER 没进 variable').toBe(true);
     const mid = await emitErb('TALENT:PLAYER:2 & 2');
     const texts = mid.emitted.map((e) => e.text);
     expect(texts, `中段被切碎：${texts.join(' / ')}`).not.toContain('PLAYER');
-    expect(mid.emitted.find((e) => e.text === 'TALENT:PLAYER:2')?.token.startsWith('variable.')).toBe(true);
+    expect(mid.emitted.find((e) => e.text === 'TALENT:PLAYER:2')?.token.startsWith(`${ROLE.variable}.`)).toBe(true);
   });
 
   it('字符串里的指令词不染 keyword（FORM 串内仍是 string）', async () => {
     const { emitted } = await emitErb('PRINTFORMW "CALL IF ENDCATCH"');
-    const stringText = emitted.filter((e) => e.token.startsWith('string.') || e.token.startsWith('string'));
+    const stringText = emitted.filter((e) => e.token.startsWith(`${ROLE.string}.`) || e.token.startsWith(ROLE.string));
     expect(stringText.map((e) => e.text).join('')).toContain('CALL IF ENDCATCH');
-    expect(emitted.find((e) => (e.text === 'CALL' || e.text === 'IF' || e.text === 'ENDCATCH') && e.token.startsWith('keyword.'))).toBeUndefined();
+    expect(emitted.find((e) => (e.text === 'CALL' || e.text === 'IF' || e.text === 'ENDCATCH') && e.token.startsWith(`${ROLE.keyword}.`))).toBeUndefined();
   });
 
   it('行首注释整行 comment，其中的指令词不发射 keyword', async () => {
     const { emitted } = await emitErb('; CALL IF ENDCATCH 都是注释');
     expect(emitted).toHaveLength(1);
-    expect(emitted[0]!.token.startsWith('comment')).toBe(true);
+    expect(emitted[0]!.token.startsWith(ROLE.comment)).toBe(true);
     expect(emitted[0]!.text).toContain('CALL IF ENDCATCH');
   });
 
   it('@ 函数定义与 $ 标签仍走专用档位', async () => {
     const fn = await emitErb('@EVENTFIRST');
-    expect(fn.emitted.find((e) => e.text === '@')?.token.startsWith('keyword.')).toBe(true);
-    expect(fn.emitted.find((e) => e.text === 'EVENTFIRST')?.token.startsWith('entity.name.function.')).toBe(true);
+    expect(fn.emitted.find((e) => e.text === '@')?.token.startsWith(`${ROLE.keyword}.`)).toBe(true);
+    expect(fn.emitted.find((e) => e.text === 'EVENTFIRST')?.token.startsWith(`${ROLE.decl}.`)).toBe(true);
     const label = await emitErb('$LOOP_TOP');
-    expect(label.emitted.find((e) => e.text === 'LOOP_TOP')?.token.startsWith('label.')).toBe(true);
+    expect(label.emitted.find((e) => e.text === 'LOOP_TOP')?.token.startsWith(`${ROLE.label}.`)).toBe(true);
   });
 
   /**
@@ -271,22 +272,22 @@ describe('高亮不回退（词法分层仍然成立）', () => {
     const head = driveLine(lexer, '@"台\\@A?有#无\\@尾"');
     const joined = head.emitted.map((e) => `${e.text}=${e.token}`).join(' | ');
     expect(
-      head.emitted.some((e) => e.token.startsWith('entity.name.function.')),
+      head.emitted.some((e) => e.token.startsWith(`${ROLE.decl}.`)),
       `行首 @" 仍被函数规则吞掉：${joined}`,
     ).toBe(false);
-    expect(head.emitted.find((e) => e.text === '"')?.token, joined).toBe(`string.quote${post}`);
-    expect(head.emitted.some((e) => e.text === '?' && e.token.startsWith('string.escape.')), joined).toBe(true);
+    expect(head.emitted.find((e) => e.text === '"')?.token, joined).toBe(`${ROLE.string}${post}`);
+    expect(head.emitted.some((e) => e.text === '?' && e.token.startsWith(`${ROLE.escape}.`)), joined).toBe(true);
     expect(head.stack).toEqual(['root']);
     // 反方向不许松动：真函数名（不含引号）照旧走 entity 档
     const def = await emitErb('@PRINT_STATE');
-    expect(def.emitted.find((e) => e.text === 'PRINT_STATE')?.token.startsWith('entity.name.function.')).toBe(true);
+    expect(def.emitted.find((e) => e.text === 'PRINT_STATE')?.token.startsWith(`${ROLE.decl}.`)).toBe(true);
   });
 
   it('#DIM / #DEFINE / #FUNCTION 与 [SKIPSTART] 仍为 keyword.preprocessor（大小写两形态）', async () => {
     for (const line of ['#DIM 口上セレクタ', '#DEFINE FOO', '#FUNCTION', '#dim x', '[SKIPSTART]']) {
       const { emitted } = await emitErb(line);
       expect(
-        emitted.find((e) => e.token.startsWith('keyword.preprocessor.')),
+        emitted.find((e) => e.token.startsWith(`${ROLE.directive}.`)),
         `「${line}」没发 keyword.preprocessor（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`,
       ).toBeDefined();
     }
@@ -301,9 +302,9 @@ describe('三套主题的 keyword / keyword.preprocessor 都有色（白色 = �
       const theme = captured.themes.get(id);
       if (!theme) throw new Error(`主题 ${id} 没被装配`);
       const rule = (token: string) => theme.rules.find((r) => r.token === token);
-      const keyword = rule('keyword');
-      const preprocessor = rule('keyword.preprocessor');
-      const identifier = rule('identifier');
+      const keyword = rule(ROLE.keyword);
+      const preprocessor = rule(ROLE.directive);
+      const identifier = rule(ROLE.text);
       expect(keyword?.foreground, `${id} 缺 keyword 前景`).toMatch(/^[0-9a-f]{6}$/i);
       expect(preprocessor?.foreground, `${id} 缺 keyword.preprocessor 前景`).toMatch(/^[0-9a-f]{6}$/i);
       expect(identifier?.foreground, `${id} 缺 identifier 前景`).toMatch(/^[0-9a-f]{6}$/i);
@@ -321,7 +322,7 @@ describe('三套主题的 keyword / keyword.preprocessor 都有色（白色 = �
   it('ERB 每一枚发射 token 在三套主题里都有落点（调色板漏格当场红）', () => {
     const tokens = [...erbEmittedTokens()].sort();
     expect(tokens.length).toBeGreaterThanOrEqual(11);
-    expect(tokens).toContain('operator'); // 上一批留下的那枚空档，钉住它别再漂回去
+    expect(tokens).toContain(ROLE.operator); // 上一批留下的那枚空档，钉住它别再漂回去
     // 只量 v1 三套：LAU-3 起缺省档就把 `kojo2-*` 三套也装配了（flag 守卫 + 动态 import），
     // 但那三套是**另一门语言**的调色板（规则表只有 15 枚 `kojo2.*`，见 `kojo2-theme.ts`），
     // ERB / kojo1 的 token 从来不在它们的判据面里。
@@ -381,10 +382,10 @@ describe('.kojo 原生直通行同步吃补集（大写才是原生指令）', (
     const lexer = await kojoLexerP;
     for (const word of ['ENDCATCH', 'NOSKIP', 'SETVAR', 'HTML_PRINT']) {
       const upper = driveLexer(lexer, word);
-      expect(upper.find((e) => e.text === word)?.token.startsWith('keyword.erb.'), `${word} 行首没进指令档`).toBe(true);
+      expect(upper.find((e) => e.text === word)?.token.startsWith(`${ROLE.engine}.`), `${word} 行首没进指令档`).toBe(true);
       const lower = driveLexer(lexer, word.toLowerCase());
       const lowerToken = lower.find((e) => e.text === word.toLowerCase())?.token ?? '<none>';
-      expect(lowerToken.startsWith('keyword.erb.'), `${word.toLowerCase()} 不该吃原生指令档（实发 ${lowerToken}）`).toBe(false);
+      expect(lowerToken.startsWith(`${ROLE.engine}.`), `${word.toLowerCase()} 不该吃原生指令档（实发 ${lowerToken}）`).toBe(false);
     }
   });
 });
@@ -399,13 +400,13 @@ describe('setErbDirectiveWords 的公开语义不变，补集不随项目词表�
     expect(def.ignoreCase).toBe(true);
 
     const { emitted: extra } = await emitErb('ENDCATCH');
-    expect(tokenOfWord(extra, 'ENDCATCH').startsWith('keyword.')).toBe(true);
+    expect(tokenOfWord(extra, 'ENDCATCH').startsWith(`${ROLE.keyword}.`)).toBe(true);
     const { emitted: adapter } = await emitErb('亲吻');
-    expect(tokenOfWord(adapter, '亲吻').startsWith('keyword.')).toBe(true);
+    expect(tokenOfWord(adapter, '亲吻').startsWith(`${ROLE.keyword}.`)).toBe(true);
 
     setErbDirectiveWords(monaco, null); // 收尾：回基底（不把测试词表留给同进程后续用例）
     const { emitted: restored } = await emitErb('ENDCATCH');
-    expect(tokenOfWord(restored, 'ENDCATCH').startsWith('keyword.')).toBe(true);
+    expect(tokenOfWord(restored, 'ENDCATCH').startsWith(`${ROLE.keyword}.`)).toBe(true);
   });
 });
 
@@ -414,23 +415,23 @@ describe('setErbDirectiveWords 的公开语义不变，补集不随项目词表�
 describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf 是唯一真相，正反面各钉）', () => {
   it('① 行尾 `;` 之后整段 comment：PRINTL 台词 ;说明 的「说明」不再是 identifier', async () => {
     const { emitted } = await emitErb('PRINTL 台词 ;说明');
-    expect(emitted.find((e) => e.text === '台词')?.token.startsWith('identifier.')).toBe(true);
-    expect(emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';说明');
+    expect(emitted.find((e) => e.text === '台词')?.token.startsWith(`${ROLE.text}.`)).toBe(true);
+    expect(emitted.filter((e) => e.token.startsWith(`${ROLE.comment}.`)).map((e) => e.text).join('')).toBe(';说明');
     expect(emitted.find((e) => e.text === '说明'), '注释尾巴不许有第二处发射').toBeUndefined();
   });
 
   it('①b 反面：串里的 `;` 不当注释；串闭合后的行尾 `;` 恢复注释', async () => {
     const inside = await emitErb('PRINTL "台词;说明"');
-    expect(inside.emitted.some((e) => e.token.startsWith('comment.'))).toBe(false);
-    expect(inside.emitted.filter((e) => e.token.startsWith('string')).map((e) => e.text).join('')).toContain('台词;说明');
+    expect(inside.emitted.some((e) => e.token.startsWith(`${ROLE.comment}.`))).toBe(false);
+    expect(inside.emitted.filter((e) => e.token.startsWith(ROLE.string)).map((e) => e.text).join('')).toContain('台词;说明');
     const after = await emitErb('PRINTL "台词" ;说明');
-    expect(after.emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';说明');
+    expect(after.emitted.filter((e) => e.token.startsWith(`${ROLE.comment}.`)).map((e) => e.text).join('')).toBe(';说明');
   });
 
   it('①c 变量段不许吞尾注释：CFLAG:ARG;说明 ⇒ variable 止于 `;`、其后 comment', async () => {
     const { emitted } = await emitErb('CFLAG:ARG;说明');
-    expect(emitted.find((e) => e.text === 'CFLAG:ARG')?.token.startsWith('variable.')).toBe(true);
-    expect(emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';说明');
+    expect(emitted.find((e) => e.text === 'CFLAG:ARG')?.token.startsWith(`${ROLE.variable}.`)).toBe(true);
+    expect(emitted.filter((e) => e.token.startsWith(`${ROLE.comment}.`)).map((e) => e.text).join('')).toBe(';说明');
   });
 
   it('② 未闭合引号只染到本行行尾、下一行恢复正常；闭合串回根态（codeViewOf 逐行刷白的口径）', async () => {
@@ -438,11 +439,11 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
     const closed = driveLine(lexer, 'PRINTL "闭合"');
     expect(closed.stack).toEqual(['root']);
     const open = driveLine(lexer, 'PRINTL "尾未闭合');
-    expect(open.emitted.find((e) => e.text === '尾未闭合')?.token.startsWith('string.')).toBe(true);
+    expect(open.emitted.find((e) => e.text === '尾未闭合')?.token.startsWith(`${ROLE.string}.`)).toBe(true);
     expect(open.stack, '串态绝不带过行界').toEqual(['root']);
     const next = driveLine(lexer, 'PRINTL 正常', open.stack);
-    expect(next.emitted.some((e) => e.token.startsWith('string.'))).toBe(false);
-    expect(next.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith('keyword.')).toBe(true);
+    expect(next.emitted.some((e) => e.token.startsWith(`${ROLE.string}.`))).toBe(false);
+    expect(next.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith(`${ROLE.keyword}.`)).toBe(true);
   });
 
   it('②b 串内 % FORM 层同样行尾出栈（嵌套态不留到下一行）', async () => {
@@ -450,7 +451,7 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
     const open = driveLine(lexer, 'PRINTL "前段%ＦＯＲＭ');
     expect(open.stack).toEqual(['root']);
     const next = driveLine(lexer, 'PRINTL 正常', open.stack);
-    expect(next.emitted.some((e) => e.token.startsWith('string.'))).toBe(false);
+    expect(next.emitted.some((e) => e.token.startsWith(`${ROLE.string}.`))).toBe(false);
   });
 
   it('③ 全角标点有确定归属（operator，非空 token）；全角 `；` 不当行尾注释（语义层只认半角 0x3B）', async () => {
@@ -458,8 +459,8 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
       const { emitted } = await emitErb(`PRINTL 台词${ch}说明`);
       const hit = emitted.find((e) => e.text.includes(ch));
       expect(hit, `「${ch}」坠进空 defaultToken`).toBeDefined();
-      expect(hit!.token.startsWith('operator.'), `「${ch}」应归 operator，实发 ${hit!.token}`).toBe(true);
-      expect(emitted.some((e) => e.token.startsWith('comment.')), `全角「${ch}」不许触发注释`).toBe(false);
+      expect(hit!.token.startsWith(`${ROLE.operator}.`), `「${ch}」应归 operator，实发 ${hit!.token}`).toBe(true);
+      expect(emitted.some((e) => e.token.startsWith(`${ROLE.comment}.`)), `全角「${ch}」不许触发注释`).toBe(false);
     }
   });
 
@@ -487,21 +488,21 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
       const { emitted } = await emitErb(`PRINTL 台词${ch}说明`);
       const hit = emitted.find((e) => e.text.includes(ch));
       expect(hit, `「${ch}」U+${ch.codePointAt(0)!.toString(16).toUpperCase()} 坠进空 defaultToken（着色层没跟上标点表）`).toBeDefined();
-      expect(hit!.token.startsWith('operator.'), `「${ch}」U+${ch.codePointAt(0)!.toString(16).toUpperCase()} 应归 operator，实发 ${hit!.token}`).toBe(true);
-      expect(emitted.some((e) => e.token.startsWith('comment.')), `全角「${ch}」不许触发注释`).toBe(false);
+      expect(hit!.token.startsWith(`${ROLE.operator}.`), `「${ch}」U+${ch.codePointAt(0)!.toString(16).toUpperCase()} 应归 operator，实发 ${hit!.token}`).toBe(true);
+      expect(emitted.some((e) => e.token.startsWith(`${ROLE.comment}.`)), `全角「${ch}」不许触发注释`).toBe(false);
     }
   });
 
   it('③b 全角字母数字进标识符族（反向索引 ａ-ｚ 与 MODEL_TOKEN_CLASS 的记号口径同向），不落空 token', async () => {
     const { emitted } = await emitErb('ＲＡＮＤ １２３');
-    expect(emitted.find((e) => e.text === 'ＲＡＮＤ')?.token.startsWith('identifier.')).toBe(true);
-    expect(emitted.find((e) => e.text === '１２３')?.token.startsWith('identifier.')).toBe(true);
+    expect(emitted.find((e) => e.text === 'ＲＡＮＤ')?.token.startsWith(`${ROLE.text}.`)).toBe(true);
+    expect(emitted.find((e) => e.text === '１２３')?.token.startsWith(`${ROLE.text}.`)).toBe(true);
   });
 
   it('④ 行首注释口径不回退：整行仍一段 comment（首个规则吃下，不产生二次发射）', async () => {
     const { emitted } = await emitErb('; PRINTL 台词 ; 说明');
     expect(emitted).toHaveLength(1);
-    expect(emitted[0]!.token.startsWith('comment.')).toBe(true);
+    expect(emitted[0]!.token.startsWith(`${ROLE.comment}.`)).toBe(true);
   });
 });
 
@@ -531,11 +532,11 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "台词{LOCAL:1}尾巴"');
     const of = (text: string) => line.emitted.find((e) => e.text === text)?.token ?? '<none>';
-    expect(of('{').startsWith('string.escape.'), `{ 实发 ${of('{')}`).toBe(true);
-    expect(of('}').startsWith('string.escape.'), `} 实发 ${of('}')}`).toBe(true);
-    expect(of('LOCAL:1').startsWith('variable.'), `层内实发 ${of('LOCAL:1')}`).toBe(true);
-    expect(of('台词').startsWith('string.'), '串内字面段仍是 string').toBe(true);
-    expect(of('尾巴').startsWith('string.'), '层后字面段仍是 string').toBe(true);
+    expect(of('{').startsWith(`${ROLE.escape}.`), `{ 实发 ${of('{')}`).toBe(true);
+    expect(of('}').startsWith(`${ROLE.escape}.`), `} 实发 ${of('}')}`).toBe(true);
+    expect(of('LOCAL:1').startsWith(`${ROLE.variable}.`), `层内实发 ${of('LOCAL:1')}`).toBe(true);
+    expect(of('台词').startsWith(`${ROLE.string}.`), '串内字面段仍是 string').toBe(true);
+    expect(of('尾巴').startsWith(`${ROLE.string}.`), '层后字面段仍是 string').toBe(true);
     expect(line.stack, '闭合串回根态').toEqual(['root']);
   });
 
@@ -544,17 +545,17 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
     const line = driveLine(lexer, 'PRINTL "台词%CALLNAME:MASTER%尾巴"');
     const percents = line.emitted.filter((e) => e.text === '%');
     expect(percents).toHaveLength(2);
-    expect(percents.every((e) => e.token.startsWith('string.escape.'))).toBe(true);
-    expect(line.emitted.find((e) => e.text === 'CALLNAME:MASTER')?.token.startsWith('variable.')).toBe(true);
+    expect(percents.every((e) => e.token.startsWith(`${ROLE.escape}.`))).toBe(true);
+    expect(line.emitted.find((e) => e.text === 'CALLNAME:MASTER')?.token.startsWith(`${ROLE.variable}.`)).toBe(true);
     expect(line.stack).toEqual(['root']);
   });
 
   it('③ 反面：`\\{` 是转义出来的字面括号，留在 string 层、不开插值层（expr.ts 的 `\\` 吞一字符口径）', async () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "字面\\{LOCAL:1\\}尾巴"');
-    expect(line.emitted.some((e) => e.token.startsWith('variable.')), `转义括号不许开层：${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
-    expect(line.emitted.some((e) => e.token.startsWith('string.escape.'))).toBe(false);
-    expect(line.emitted.filter((e) => e.token.startsWith('string.')).map((e) => e.text).join('')).toBe('"字面\\{LOCAL:1\\}尾巴"');
+    expect(line.emitted.some((e) => e.token.startsWith(`${ROLE.variable}.`)), `转义括号不许开层：${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
+    expect(line.emitted.some((e) => e.token.startsWith(`${ROLE.escape}.`))).toBe(false);
+    expect(line.emitted.filter((e) => e.token.startsWith(`${ROLE.string}.`)).map((e) => e.text).join('')).toBe('"字面\\{LOCAL:1\\}尾巴"');
     expect(line.stack).toEqual(['root']);
   });
 
@@ -570,12 +571,12 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
       expect(line.stack, `「${open}」的串态被带过了行界`).toEqual(['root']);
       // 保守方向与 codeViewOf 一致：等不到闭合的那一段留在 string 层，不冒充 variable 表达式
       expect(
-        line.emitted.some((e) => e.token.startsWith('variable.')),
+        line.emitted.some((e) => e.token.startsWith(`${ROLE.variable}.`)),
         `「${open}」把未闭合的残段染成了表达式：${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
       ).toBe(false);
       const next = driveLine(lexer, 'PRINTL 正常', line.stack);
-      expect(next.emitted.some((e) => e.token.startsWith('string.')), `「${open}」把下一行也染成串了`).toBe(false);
-      expect(next.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith('keyword.')).toBe(true);
+      expect(next.emitted.some((e) => e.token.startsWith(`${ROLE.string}.`)), `「${open}」把下一行也染成串了`).toBe(false);
+      expect(next.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith(`${ROLE.keyword}.`)).toBe(true);
     }
   });
 
@@ -584,10 +585,10 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
     for (const line of ['PRINTL "台词{"', 'PRINTL "完成率50%"']) {
       const drive = driveLine(lexer, line);
       expect(drive.stack, `「${line}」应正常闭合`).toEqual(['root']);
-      const quote = drive.emitted.filter((e) => e.text === '"' && e.token.startsWith('string.quote.'));
+      const quote = drive.emitted.filter((e) => e.text === '"' && e.token.startsWith(`${ROLE.string}.`));
       expect(quote, `「${line}」丢了闭合引号：${drive.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toHaveLength(2);
-      expect(drive.emitted.some((e) => e.token.startsWith('variable.'))).toBe(false);
-      expect(drive.emitted.some((e) => e.token.startsWith('string.escape.'))).toBe(false);
+      expect(drive.emitted.some((e) => e.token.startsWith(`${ROLE.variable}.`))).toBe(false);
+      expect(drive.emitted.some((e) => e.token.startsWith(`${ROLE.escape}.`))).toBe(false);
     }
   });
 
@@ -597,8 +598,8 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
     // 语义层（erb-completion-context.ts 的 erbCodeViewBlocked）认 `""` 是一枚字面引号、仍在串内；
     // 着色层按"闭合 + 立刻重开"处理——两次翻转后 `转义` 仍归 string、`的文字` 仍归代码，
     // 与"什么是串"的可见结果同口径（差异只在 bracket 配对计数，不在本工包三件里，故只钉不改）。
-    expect(line.emitted.find((e) => e.text === '转义')?.token.startsWith('string.'), '转义 应仍是串内 string').toBe(true);
-    expect(line.emitted.find((e) => e.text === '的文字')?.token.startsWith('identifier.'), '的文字 应在串外').toBe(true);
+    expect(line.emitted.find((e) => e.text === '转义')?.token.startsWith(`${ROLE.string}.`), '转义 应仍是串内 string').toBe(true);
+    expect(line.emitted.find((e) => e.text === '的文字')?.token.startsWith(`${ROLE.text}.`), '的文字 应在串外').toBe(true);
     expect(line.stack).toEqual(['root']);
   });
 });
@@ -611,28 +612,28 @@ describe('P2 边角着色（`;!;` / `;#;` 代码前缀、`\'=` 赋值运算符�
       const line = driveLine(await erbLexer(), `${prefix}PRINTL あ`);
       const head = line.emitted[0];
       expect(head?.text, `${prefix} 的首个发射点应是前缀本身`).toBe(prefix);
-      expect(head?.token, `${prefix} 应落预处理档（与 #DIM 同色），不是 comment`).toMatch(/^keyword\.preprocessor/);
+      expect(head?.token, `${prefix} 应落预处理档（与 #DIM 同色），不是 comment`).toMatch(/^role\.directive/);
       expect(
-        line.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith('keyword.'),
+        line.emitted.find((e) => e.text === 'PRINTL')?.token.startsWith(`${ROLE.keyword}.`),
         `${prefix} 之后的语句应仍是关键字色`,
       ).toBe(true);
-      expect(line.emitted.some((e) => e.token.startsWith('comment')), `${prefix} 行不许整行染成注释`).toBe(false);
+      expect(line.emitted.some((e) => e.token.startsWith(ROLE.comment)), `${prefix} 行不许整行染成注释`).toBe(false);
     }
   });
 
   it('普通 `;` 行仍是整行注释（前缀规则不得放宽）', async () => {
     const line = driveLine(await erbLexer(), ';PRINTL あ');
-    expect(line.emitted.some((e) => e.token.startsWith('comment'))).toBe(true);
+    expect(line.emitted.some((e) => e.token.startsWith(ROLE.comment))).toBe(true);
     // 整行一枚注释 token：不许漏出任何 keyword（`PRINTL` 在注释里不是指令）
-    expect(line.emitted.some((e) => e.token.startsWith('keyword')), '注释行漏出关键字色').toBe(false);
+    expect(line.emitted.some((e) => e.token.startsWith(ROLE.keyword)), '注释行漏出关键字色').toBe(false);
   });
 
   it('`\'=` 是运算符：`STR \'= TSTR:0 + "ABC"` 里 `\'=` 单独一枚 operator，`+` 口径不变', async () => {
     const line = driveLine(await erbLexer(), 'STR \'= TSTR:0 + "ABC"');
-    expect(line.emitted.find((e) => e.text === "'=")?.token.startsWith('operator'), "'= 应是 operator").toBe(true);
-    expect(line.emitted.find((e) => e.text === '+')?.token.startsWith('operator')).toBe(true);
+    expect(line.emitted.find((e) => e.text === "'=")?.token.startsWith(ROLE.operator), "'= 应是 operator").toBe(true);
+    expect(line.emitted.find((e) => e.text === '+')?.token.startsWith(ROLE.operator)).toBe(true);
     // 回归：`STR` 之后的串照旧进 string，`'=` 没把引号吃掉
-    expect(line.emitted.find((e) => e.text === 'ABC')?.token.startsWith('string.')).toBe(true);
+    expect(line.emitted.find((e) => e.text === 'ABC')?.token.startsWith(`${ROLE.string}.`)).toBe(true);
   });
 });
 
@@ -665,7 +666,7 @@ describe('ERB 预处理器条件块着色（整行 → keyword.preprocessor；�
     it(`「${JSON.stringify(line)}」整行出 keyword.preprocessor（一条规则吃下，无二次发射）`, async () => {
       const { emitted } = await emitErb(line);
       expect(
-        emitted.every((e) => e.token.startsWith('keyword.preprocessor.')),
+        emitted.every((e) => e.token.startsWith(`${ROLE.directive}.`)),
         `「${line}」实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
       ).toBe(true);
       expect(emitted, `「${line}」应恰一枚发射（整行一条规则）`).toHaveLength(1);
@@ -678,11 +679,11 @@ describe('ERB 预处理器条件块着色（整行 → keyword.preprocessor；�
     // 内层 `IF` / `CALL` 不再作为独立发射点出现（整行被预处理器规则吃掉）
     expect(emitted.some((e) => e.text === 'IF' || e.text === 'CALL'), `漏出发射：${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
     expect(emitted).toHaveLength(1);
-    expect(emitted[0]!.token.startsWith('keyword.preprocessor.')).toBe(true);
+    expect(emitted[0]!.token.startsWith(`${ROLE.directive}.`)).toBe(true);
     // 反向兜底：确认裸 `IF`（不带方括号）仍走控制词档——本规则只吃 `[` 起手整行等值形
     const bareIf = await emitErb('IF 1');
-    expect(bareIf.emitted.find((e) => e.text === 'IF')?.token.startsWith('keyword.')).toBe(true);
-    expect(bareIf.emitted.find((e) => e.text === 'IF')?.token.startsWith('keyword.preprocessor.')).toBe(false);
+    expect(bareIf.emitted.find((e) => e.text === 'IF')?.token.startsWith(`${ROLE.keyword}.`)).toBe(true);
+    expect(bareIf.emitted.find((e) => e.text === 'IF')?.token.startsWith(`${ROLE.directive}.`)).toBe(false);
   });
 
   /** 反面：非整行等值形一律不算块（ASCII 方括号画 / 裸形 / 缺参数 / 粘连词），绝不出 preprocessor 档 */
@@ -697,7 +698,7 @@ describe('ERB 预处理器条件块着色（整行 → keyword.preprocessor；�
     it(`「${JSON.stringify(line)}」不是预处理器块标记（不误伤 ASCII / 裸形）`, async () => {
       const { emitted } = await emitErb(line);
       expect(
-        emitted.some((e) => e.token.startsWith('keyword.preprocessor.')),
+        emitted.some((e) => e.token.startsWith(`${ROLE.directive}.`)),
         `「${line}」被误判为块：${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`,
       ).toBe(false);
     });
@@ -707,11 +708,11 @@ describe('ERB 预处理器条件块着色（整行 → keyword.preprocessor；�
     const lexer = await erbLexer();
     const per = driveLines(lexer, ['[SKIPSTART]', '[IF x]', '[ENDIF]', '[SKIPEND]']);
     // 块内两行整体 raw（skip 态的 `.*$` 吃掉整行，root 的预处理器规则进不来）
-    expect(per[1]!.every((e) => e.token.startsWith('keyword.raw')), `块内 [IF x] 实发 ${per[1]!.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(true);
-    expect(per[2]!.every((e) => e.token.startsWith('keyword.raw'))).toBe(true);
+    expect(per[1]!.every((e) => e.token.startsWith(ROLE.raw)), `块内 [IF x] 实发 ${per[1]!.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(true);
+    expect(per[2]!.every((e) => e.token.startsWith(ROLE.raw))).toBe(true);
     // [SKIPEND] 退回 root：块外 [ENDIF] 恢复 keyword.preprocessor
     const after = driveLines(lexer, ['[SKIPSTART]', '[ENDIF]', '[SKIPEND]', '[ENDIF]']);
-    expect(after[3]![0]?.token.startsWith('keyword.preprocessor.')).toBe(true);
+    expect(after[3]![0]?.token.startsWith(`${ROLE.directive}.`)).toBe(true);
   });
 });
 
@@ -743,15 +744,15 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     const line = driveLine(lexer, 'PRINTL "台词\\@CFLAG:0>0?是#否\\@尾巴"');
     const post = lexer.tokenPostfix;
     const of = tokenMap(line.emitted);
-    expect(of('\\@'), `开记号实发 ${of('\\@')}`).toBe(`string.escape${post}`);
-    expect(of('\\@', 1), '收记号应与开记号同档').toBe(`string.escape${post}`);
-    expect(of('CFLAG:0>0'), '条件段必须一整枚 variable').toBe(`variable${post}`);
-    expect(of('?')).toBe(`string.escape${post}`);
-    expect(of('#')).toBe(`string.escape${post}`);
-    expect(of('是')).toBe(`string${post}`);
-    expect(of('否')).toBe(`string${post}`);
-    expect(of('台词')).toBe(`string${post}`);
-    expect(of('尾巴')).toBe(`string${post}`);
+    expect(of('\\@'), `开记号实发 ${of('\\@')}`).toBe(`${ROLE.escape}${post}`);
+    expect(of('\\@', 1), '收记号应与开记号同档').toBe(`${ROLE.escape}${post}`);
+    expect(of('CFLAG:0>0'), '条件段必须一整枚 variable').toBe(`${ROLE.variable}${post}`);
+    expect(of('?')).toBe(`${ROLE.escape}${post}`);
+    expect(of('#')).toBe(`${ROLE.escape}${post}`);
+    expect(of('是')).toBe(`${ROLE.string}${post}`);
+    expect(of('否')).toBe(`${ROLE.string}${post}`);
+    expect(of('台词')).toBe(`${ROLE.string}${post}`);
+    expect(of('尾巴')).toBe(`${ROLE.string}${post}`);
     expect(line.stack).toEqual(['root']);
   });
 
@@ -762,19 +763,19 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     const of = tokenMap(line.emitted);
     // ERB-PAINT-21 起 `str` 态走相位机：条件段按"正文跑动 / 括号整块"分段发射，**同归 variable 一档**
     // （上一批的整形状群组一次吐一整枚 `(A||B)&&C`；分段只是把同一颜色切成几块，不是降级）
-    expect(of('(A||B)'), `括号条件块实发 ${of('(A||B)')}`).toBe(`variable${post}`);
-    expect(of('&&C'), `括号后的条件跑动实发 ${of('&&C')}`).toBe(`variable${post}`);
-    expect(of('是'), '真段归 string').toBe(`string${post}`);
-    expect(of('(真)'), '真段里的括号整块仍是 string').toBe(`string${post}`);
-    expect(of('CFLAG'), `方括号条件段首块实发 ${of('CFLAG')}`).toBe(`variable${post}`);
-    expect(of('[1]'), `方括号整块实发 ${of('[1]')}`).toBe(`variable${post}`);
+    expect(of('(A||B)'), `括号条件块实发 ${of('(A||B)')}`).toBe(`${ROLE.variable}${post}`);
+    expect(of('&&C'), `括号后的条件跑动实发 ${of('&&C')}`).toBe(`${ROLE.variable}${post}`);
+    expect(of('是'), '真段归 string').toBe(`${ROLE.string}${post}`);
+    expect(of('(真)'), '真段里的括号整块仍是 string').toBe(`${ROLE.string}${post}`);
+    expect(of('CFLAG'), `方括号条件段首块实发 ${of('CFLAG')}`).toBe(`${ROLE.variable}${post}`);
+    expect(of('[1]'), `方括号整块实发 ${of('[1]')}`).toBe(`${ROLE.variable}${post}`);
     // 真段正文问号：`是(真)?` 的那枚 `?` 不是分隔符 ⇒ 出 string、绝不出 escape
-    const plainQuestion = line.emitted.filter((e) => e.text === '?' && !e.token.startsWith('string.escape.'));
+    const plainQuestion = line.emitted.filter((e) => e.text === '?' && !e.token.startsWith(`${ROLE.escape}.`));
     expect(plainQuestion, '真段正文里的 `?` 必须存在且不占边界档').toHaveLength(1);
     // 两枚三元共 8 枚边界（4×`\@` + 2×`?` + 2×`#`）全部 string.escape，别无 escape 发射
-    const bounds = line.emitted.filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'));
+    const bounds = line.emitted.filter((e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(`${ROLE.escape}.`));
     expect(bounds.map((e) => e.text).join(''), '\\@?#\\@\\@?#\\@');
-    expect(line.emitted.filter((e) => e.token === `string.escape${post}`)).toHaveLength(8);
+    expect(line.emitted.filter((e) => e.token === `${ROLE.escape}${post}`)).toHaveLength(8);
     expect(line.stack).toEqual(['root']);
   });
 
@@ -791,17 +792,17 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     for (const src of malformed.slice(0, 4)) {
       const line = driveLine(lexer, src);
       const boundary = line.emitted.filter(
-        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
+        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(`${ROLE.escape}.`),
       );
       expect(boundary, `「${src}」残形产了边界档：${boundary.map((e) => e.text).join('')}`).toHaveLength(0);
       expect(line.stack, `「${src}」状态栈必须出干净`).toEqual(['root']);
     }
     // 第 5 条形本身完整 ⇒ 边界照涂，但行尾未闭合引号仍被 ⑨ 吸收、栈出干净（纪律②③ 的闸不松）
     const tail = driveLine(lexer, malformed[4]!);
-    expect(tail.emitted.some((e) => e.text === '?' && e.token.startsWith('string.escape.'))).toBe(true);
+    expect(tail.emitted.some((e) => e.text === '?' && e.token.startsWith(`${ROLE.escape}.`))).toBe(true);
     expect(tail.stack).toEqual(['root']);
     const next = driveLine(lexer, 'PRINTL 正常', tail.stack);
-    expect(next.emitted.some((e) => e.token.startsWith('string.')), '残引号不许把下一行染成串').toBe(false);
+    expect(next.emitted.some((e) => e.token.startsWith(`${ROLE.string}.`)), '残引号不许把下一行染成串').toBe(false);
   });
 
   it('③a `PRINTFORM "#text"` 的 `#` 与串内孤立 `#`/`?` 不受影响（`#` 只在整形状认过 `?` 之后才算分隔）', async () => {
@@ -809,10 +810,10 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     for (const src of ['PRINTFORM "#text"', 'PRINTL "#没有三元"', 'PRINTL "a?b#c"']) {
       const line = driveLine(lexer, src);
       expect(
-        line.emitted.filter((e) => e.token.startsWith('string.escape.')),
+        line.emitted.filter((e) => e.token.startsWith(`${ROLE.escape}.`)),
         `「${src}」不该产任何结构边界档`,
       ).toHaveLength(0);
-      expect(line.emitted.filter((e) => e.token.startsWith('variable.'))).toHaveLength(0);
+      expect(line.emitted.filter((e) => e.token.startsWith(`${ROLE.variable}.`))).toHaveLength(0);
       expect(line.stack).toEqual(['root']);
     }
   });
@@ -837,16 +838,16 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     for (const { line: src, brace } of nowPainted) {
       const line = driveLine(lexer, src);
       const bounds = line.emitted.filter(
-        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
+        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(`${ROLE.escape}.`),
       );
       expect(bounds.length, `「${src}」应涂出边界档（实发 ${line.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`).toBeGreaterThan(0);
       // 每枚三元三枚边界：开 `\@` + `?` + `#` + 收 `\@` = 4
       expect(bounds.map((e) => e.text).join(''), `「${src}」边界序列`).toBe('\\@?#\\@');
       if (brace) {
         // 插值层照旧出 `{`/`}` escape + 层内 variable ⇒ 既有着色一层不少（本批判据的硬约束）
-        expect(line.emitted.some((e) => ['{', '}'].includes(e.text) && e.token === `string.escape${post}`), `「${src}」花括号插值层被波及`).toBe(true);
+        expect(line.emitted.some((e) => ['{', '}'].includes(e.text) && e.token === `${ROLE.escape}${post}`), `「${src}」花括号插值层被波及`).toBe(true);
       }
-      expect(line.emitted.some((e) => e.token === `variable${post}`), `「${src}」没有 variable 发射`).toBe(true);
+      expect(line.emitted.some((e) => e.token === `${ROLE.variable}${post}`), `「${src}」没有 variable 发射`).toBe(true);
       expect(line.stack, `「${src}」栈必须出干净`).toEqual(['root']);
     }
   });
@@ -867,7 +868,7 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     for (const src of stillRefused) {
       const line = driveLine(lexer, src);
       const boundary = line.emitted.filter(
-        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith('string.escape.'),
+        (e) => ['\\@', '?', '#'].includes(e.text) && e.token.startsWith(`${ROLE.escape}.`),
       );
       expect(boundary, `「${src}」拒收形产了边界档：${boundary.map((e) => e.text).join('')}`).toHaveLength(0);
       expect(line.stack, `「${src}」栈必须出干净`).toEqual(['root']);
@@ -883,37 +884,37 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
     const bare = driveLine(lexer, '\\@CFLAG:0>0?是#否\\@');
     const post = lexer.tokenPostfix;
     const of = tokenMap(bare.emitted);
-    expect(of('CFLAG:0>0')).toBe(`variable${post}`);
-    expect(of('是')).toBe(`string${post}`);
-    expect(of('#')).toBe(`string.escape${post}`);
-    expect(of('\\@', 1)).toBe(`string.escape${post}`);
+    expect(of('CFLAG:0>0')).toBe(`${ROLE.variable}${post}`);
+    expect(of('是')).toBe(`${ROLE.string}${post}`);
+    expect(of('#')).toBe(`${ROLE.escape}${post}`);
+    expect(of('\\@', 1)).toBe(`${ROLE.escape}${post}`);
     // 整口吃掉 = 条件段一整枚（无规则时变量族会在 `>` 处把 `CFLAG:0` 切碎先行发射——碎片不许出现）
     expect(bare.emitted.some((e) => e.text === 'CFLAG:0'), `条件被变量族切碎：${bare.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toBe(false);
     expect(bare.stack).toEqual(['root']);
 
     const withComment = driveLine(lexer, '\\@A?a#b\\@ ;注');
-    expect(withComment.emitted.filter((e) => e.token.startsWith('comment.')).map((e) => e.text).join('')).toBe(';注');
-    expect(withComment.emitted.some((e) => e.text === '?' && e.token.startsWith('string.escape.'))).toBe(true);
+    expect(withComment.emitted.filter((e) => e.token.startsWith(`${ROLE.comment}.`)).map((e) => e.text).join('')).toBe(';注');
+    expect(withComment.emitted.some((e) => e.text === '?' && e.token.startsWith(`${ROLE.escape}.`))).toBe(true);
 
     const acrossSemi = driveLine(lexer, '\\@A;B?a#b\\@'); // root 段禁 `;`：形状不许跨注释界
-    expect(acrossSemi.emitted.filter((e) => e.token.startsWith('string.escape.')), `实发 ${acrossSemi.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toHaveLength(0);
+    expect(acrossSemi.emitted.filter((e) => e.token.startsWith(`${ROLE.escape}.`)), `实发 ${acrossSemi.emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}`).toHaveLength(0);
 
     const unclosed = driveLine(lexer, '\\@CFLAG:0?a#b'); // 未闭合裸形：零枚 escape
-    expect(unclosed.emitted.filter((e) => e.token.startsWith('string.escape.'))).toHaveLength(0);
+    expect(unclosed.emitted.filter((e) => e.token.startsWith(`${ROLE.escape}.`))).toHaveLength(0);
 
     const inSkip = driveLines(lexer, ['[SKIPSTART]', '\\@A?a#b\\@', '[SKIPEND]']);
-    expect(inSkip[1]!.every((e) => e.token.startsWith('keyword.raw')), '停用块内的同形文本仍是死代码 raw').toBe(true);
+    expect(inSkip[1]!.every((e) => e.token.startsWith(ROLE.raw)), '停用块内的同形文本仍是死代码 raw').toBe(true);
   });
 
   it('⑤ 一枚串两层混排：`{插值}` 与 `\\@三元\\@` 各自成档互不干扰', async () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "前{ITEM:45}中\\@A>1?有#无\\@后"');
     const of = tokenMap(line.emitted);
-    expect(of('ITEM:45')).toBe('variable' + lexer.tokenPostfix); // strExpr 老档
-    expect(of('{')).toBe(`string.escape${lexer.tokenPostfix}`);
-    expect(of('A>1')).toBe('variable' + lexer.tokenPostfix); // 三元条件新档
-    expect(of('?')).toBe(`string.escape${lexer.tokenPostfix}`);
-    expect(of('后')).toBe('string' + lexer.tokenPostfix);
+    expect(of('ITEM:45')).toBe(ROLE.variable + lexer.tokenPostfix); // strExpr 老档
+    expect(of('{')).toBe(`${ROLE.escape}${lexer.tokenPostfix}`);
+    expect(of('A>1')).toBe(ROLE.variable + lexer.tokenPostfix); // 三元条件新档
+    expect(of('?')).toBe(`${ROLE.escape}${lexer.tokenPostfix}`);
+    expect(of('后')).toBe(ROLE.string + lexer.tokenPostfix);
     expect(line.stack).toEqual(['root']);
   });
 
@@ -937,9 +938,9 @@ describe('内联文本形三元着色（串内 ⓪ + 裸文本行；只复用 st
       const paintedConds = emitted
         .filter(
           (e, i) =>
-            e.token === `variable${post}` &&
-            emitted[i - 1]?.text === '\\@' && emitted[i - 1]?.token === `string.escape${post}` &&
-            emitted[i + 1]?.text === '?' && emitted[i + 1]?.token === `string.escape${post}`,
+            e.token === `${ROLE.variable}${post}` &&
+            emitted[i - 1]?.text === '\\@' && emitted[i - 1]?.token === `${ROLE.escape}${post}` &&
+            emitted[i + 1]?.text === '?' && emitted[i + 1]?.token === `${ROLE.escape}${post}`,
         )
         .map((e) => e.text.trim());
       const recognized = scanTextTernaries(src).map((c) => c.text);

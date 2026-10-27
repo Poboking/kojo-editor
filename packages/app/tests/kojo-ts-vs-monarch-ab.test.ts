@@ -360,10 +360,13 @@ describe('结构层 ↔ Monarch 逐格 A/B（同语料、同档位名）', () =>
         if (tier !== null) used.add(tier);
       }
     }
-    const tierTokens = new Set(KOJO_TOKEN_TIERS.flatMap((t) => [...t.tokens]));
-    const legend = new Set(structureLegendTypes());
+    const tierTokens = new Set<string>(KOJO_TOKEN_TIERS.flatMap((t) => [...t.tokens]));
+    const legend = new Set<string>(structureLegendTypes());
     for (const tier of used) {
-      expect(tierTokens.has(tier) || KOJO_STRUCTURE_BASELINE_TOKENS.includes(tier), `档位 ${tier} 在屏上无处取色`).toBe(true);
+      expect(
+        tierTokens.has(tier) || (KOJO_STRUCTURE_BASELINE_TOKENS as readonly string[]).includes(tier),
+        `档位 ${tier} 在屏上无处取色`,
+      ).toBe(true);
       expect(legend.has(tier), `档位 ${tier} 不在 legend 里 ⇒ 编码时无处落 index`).toBe(true);
     }
     console.log(`结构层实际用到的档位名: ${[...used].sort().join(', ')}`);

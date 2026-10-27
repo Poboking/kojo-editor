@@ -11,6 +11,7 @@ import {
 } from '@kojo/plugin-api';
 import { defineMonacoThemes } from './theme';
 import { CJK_WORD_PATTERN } from './word-separators';
+import { ROLE } from './semantic-roles';
 import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
 /**
  * ERB (EraBasic) 基础语法高亮 —— Monarch 词法定义（v0.1 宽口径版）。
@@ -249,7 +250,7 @@ function erbInlineTernaryShape(extraForbid: string): { regex: RegExp; emit: stri
   const source = `(\\\\@)(${v.cond('?#')})(\\?)(${v.unit('#')}*)(#)(${v.unit('')}*)(\\\\@)`;
   return {
     regex: new RegExp(source),
-    emit: ['string.escape', 'variable', 'string.escape', 'string', 'string.escape', 'string', 'string.escape'],
+    emit: [ROLE.escape, ROLE.variable, ROLE.escape, ROLE.string, ROLE.escape, ROLE.string, ROLE.escape],
   };
 }
 
@@ -267,9 +268,9 @@ const ERB_TERN_GUARD = (() => {
 const ERB_TERN_STATES: Record<string, Monaco.languages.IMonarchLanguageRule[]> = (() => {
   const v = erbTernaryVocab('');
   const phases = erbTernaryPhases(v);
-  const cond = phases.run('?#', 'variable');
-  const truePhase = phases.run('#', 'string');
-  const falsePhase = phases.run('', 'string');
+  const cond = phases.run('?#', ROLE.variable);
+  const truePhase = phases.run('#', ROLE.string);
+  const falsePhase = phases.run('', ROLE.string);
   const pctOpen = phases.pctOpen;
   const braceOpen = phases.braceOpen;
   const parenRun = phases.parenRun;
@@ -277,38 +278,38 @@ const ERB_TERN_STATES: Record<string, Monaco.languages.IMonarchLanguageRule[]> =
   return {
     // `<条件>`：真谓词段 ⇒ variable；`?` 是唯一的界（`#` 由 guard 禁在这段之前）
     erbTernCond: [
-      [/\?/, { token: 'string.escape', switchTo: 'erbTernTrue' }],
-      [pctOpen('?#'), { token: 'string.escape', next: '@strStr' }],
-      [braceOpen, { token: 'string.escape', next: '@strExpr' }],
-      [parenRun, 'variable'],
-      [squareRun, 'variable'],
-      [/\\@/, 'string'], // 理论到不了这里（guard 的段字符类不吃 `\`）；留着当"越界即退化"的兜底
+      [/\?/, { token: ROLE.escape, switchTo: 'erbTernTrue' }],
+      [pctOpen('?#'), { token: ROLE.escape, next: '@strStr' }],
+      [braceOpen, { token: ROLE.escape, next: '@strExpr' }],
+      [parenRun, ROLE.variable],
+      [squareRun, ROLE.variable],
+      [/\\@/, ROLE.string], // 理论到不了这里（guard 的段字符类不吃 `\`）；留着当"越界即退化"的兜底
       [cond.eol.regex, { token: cond.eol.token, next: '@popall' }],
       [cond.mid.regex, cond.mid.token],
-      [/[^]+$/, { token: 'string', next: '@popall' }], // 任何意外字符：本行内出栈，绝不带过行界
+      [/[^]+$/, { token: ROLE.string, next: '@popall' }], // 任何意外字符：本行内出栈，绝不带过行界
     ],
     // `<真文>`：输出文本 ⇒ string；`#` 是分隔（`?` 在这段是正文疑问句）
     erbTernTrue: [
-      [/#/, { token: 'string.escape', switchTo: 'erbTernFalse' }],
-      [pctOpen('#'), { token: 'string.escape', next: '@strStr' }],
-      [braceOpen, { token: 'string.escape', next: '@strExpr' }],
-      [parenRun, 'string'],
-      [squareRun, 'string'],
-      [/\\@/, 'string'],
+      [/#/, { token: ROLE.escape, switchTo: 'erbTernFalse' }],
+      [pctOpen('#'), { token: ROLE.escape, next: '@strStr' }],
+      [braceOpen, { token: ROLE.escape, next: '@strExpr' }],
+      [parenRun, ROLE.string],
+      [squareRun, ROLE.string],
+      [/\\@/, ROLE.string],
       [truePhase.eol.regex, { token: truePhase.eol.token, next: '@popall' }],
       [truePhase.mid.regex, truePhase.mid.token],
-      [/[^]+$/, { token: 'string', next: '@popall' }],
+      [/[^]+$/, { token: ROLE.string, next: '@popall' }],
     ],
     // `<假文>`：`?` `#` 都是正文；只有闭合 `\@` 退栈回串
     erbTernFalse: [
-      [/\\@/, { token: 'string.escape', next: '@pop' }],
-      [pctOpen(''), { token: 'string.escape', next: '@strStr' }],
-      [braceOpen, { token: 'string.escape', next: '@strExpr' }],
-      [parenRun, 'string'],
-      [squareRun, 'string'],
+      [/\\@/, { token: ROLE.escape, next: '@pop' }],
+      [pctOpen(''), { token: ROLE.escape, next: '@strStr' }],
+      [braceOpen, { token: ROLE.escape, next: '@strExpr' }],
+      [parenRun, ROLE.string],
+      [squareRun, ROLE.string],
       [falsePhase.eol.regex, { token: falsePhase.eol.token, next: '@popall' }],
       [falsePhase.mid.regex, falsePhase.mid.token],
-      [/[^]+$/, { token: 'string', next: '@popall' }],
+      [/[^]+$/, { token: ROLE.string, next: '@popall' }],
     ],
   };
 })();
@@ -406,22 +407,22 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // 行首注释规则**之前**，否则整行会被下面的 `^\s*;.*$` 吞成注释。
         // 只吃前缀本身（3 个字符），其后的正文继续交给本状态的其余规则按代码着色；
         // 判据与语义层同源（`plugin-api` 的 `ERB_CODE_PREFIXES`），此处只做字形匹配。
-        [/^\s*(?:;!;|;#;)/, 'keyword.preprocessor.comment-code'],
+        [/^\s*(?:;!;|;#;)/, ROLE.directive],
         // 行首注释（Emuera 语义：行首 ; 整行注释）
-        [/^\s*;.*$/, 'comment'],
+        [/^\s*;.*$/, ROLE.comment],
         // 行内尾注释：引号外的 `;` 起注释到行末。`str` 态是另一状态、串里进不了 root，
         // 所以这条不会把 PRINTL "a;b" 的 `;` 当注释；语义层 codeViewOf 同一判据。
-        [/;.*$/, 'comment'],
+        [/;.*$/, ROLE.comment],
         // 行首函数定义 @NAME / @NAME(...)。**禁集里有 `"`**：ERB 的函数名不许含引号，而真语料里
         // 压在我这条规则位置上的其实是「多参数调用折行」——`CALL PRINTBUTTON_EX,` 的实参 `@"…"`
         // 单独起一行（本盘取样 22 行，全是这形）。旧写法 `[^\s(;]+` 把 `"` 也当名字字符 ⇒ 整行
         // 吞成 `entity.name.function`，串层根本进不去 ⇒ 那行的 `%…%`/`{…}`/`\@…\@` 一律无色。
         // 禁掉 `"` 后该形落到下面的 `"` 规则进 `str` 态（`@` 无规则命中 ⇒ 不发射，与基座一致）。
-        [/^(\s*)(@)([^\s(;"]+)/, ['', 'keyword', 'entity.name.function']],
+        [/^(\s*)(@)([^\s(;"]+)/, ['', ROLE.keyword, ROLE.decl]],
         // 行首跳转标签 $LABEL
-        [/^(\s*)(\$)([^\s;]+)/, ['', 'keyword', 'label']],
+        [/^(\s*)(\$)([^\s;]+)/, ['', ROLE.keyword, ROLE.label]],
         // 预处理指令 #DIM / #FUNCTION 等（含修饰词）
-        [/^(\s*)(#\w+)/, ['', 'keyword.preprocessor']],
+        [/^(\s*)(#\w+)/, ['', ROLE.directive]],
         // 预处理停用区 `[SKIPSTART] … [SKIPEND]`（引擎原样输出，块内不是 ERB 代码）。
         //
         // 判据 = 真源 lexer 的**整行等值**（`erb-parser/src/scanner.ts`：
@@ -434,8 +435,8 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // 块内逐行发 `keyword.raw`（与 `.kojo` 原生围栏同档的"不透明"色）——
         // 两档分开，作者一眼能看出"这是停用块"而不是"活代码里混进了关键字"。
         // 字面量从 `ERB_SKIP_MARKERS` 派生（契约 §一纪律：显示层不再手写 `[SKIPSTART]` 词形）。
-        [erbSkipRule(ERB_SKIP_MARKERS.start), { token: 'keyword.preprocessor.skip.start', next: '@skip' }],
-        [erbSkipRule(ERB_SKIP_MARKERS.end), 'keyword.preprocessor.skip.end'],
+        [erbSkipRule(ERB_SKIP_MARKERS.start), { token: ROLE.directive, next: '@skip' }],
+        [erbSkipRule(ERB_SKIP_MARKERS.end), ROLE.directive],
         // 预处理器条件块标记 `[IF …]` / `[IF_DEBUG]` / `[IF_NDEBUG]` / `[ELSEIF …]` / `[ELSE]` / `[ENDIF]`。
         //
         // 判据 = 契约真源 `ERB_PREPROC_PATTERNS`（`erbPreprocRoleOf` 用的同一批正则），规则序与它
@@ -445,41 +446,41 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // **必须排在 SKIP 两条之后、`standaloneKeyword` 之前**：本工包根因之一是 `[IF x]` 整行白字、
         // 内层 `IF` 反被控制词档着色。整行一条规则吃掉后，`[IF x]` 里的 `IF` 不再被单独成词，
         // 也就漏不进 `standaloneKeyword`。
-        [erbPreprocRule('close'), 'keyword.preprocessor'],
-        [erbPreprocRule('branch'), 'keyword.preprocessor'],
-        [erbPreprocRule('open'), 'keyword.preprocessor'],
+        [erbPreprocRule('close'), ROLE.directive],
+        [erbPreprocRule('branch'), ROLE.directive],
+        [erbPreprocRule('open'), ROLE.directive],
         // 裸文本行上的内联文本形三元（`PRINTDATA`/`SELECTCOM` 体这类无引号位；形状与档位见
         // `erbInlineTernaryShape` 头注，比 `str` 态 ⓪ 多禁 `;`——注释界在引号外才生效）。
         // root 里没有别的规则从 `\` 起手，排位在字符串规则之前只为读序清楚；残形（未闭合 `\@`）
         // 落回既有 root 兜底行为（`?` 被变量续段类吞进多段引用等），与本条互不干扰。
         [ERB_INLINE_TERNARY_ROOT.regex, ERB_INLINE_TERNARY_ROOT.emit],
         // 字符串（含 FORM 串转义）：进 `str` 态，串内 `{…}` / `%…%` 两层在那里解析
-        [/"/, { token: 'string.quote', bracket: '@open', next: '@str' }],
+        [/"/, { token: ROLE.string, bracket: '@open', next: '@str' }],
         // 整词指令（含高亮补集）：必须排在变量族之前——CFLAG/EQUIP/RAND/DOWNBASE 同时是
         // 变量族头，只靠后面的 cases 会让大写形态吃 variable 色（SUGGEST-2C 的 second root）
-        ...(standaloneKeyword ? [[standaloneKeyword, 'keyword'] as [RegExp, string]] : []),
+        ...(standaloneKeyword ? [[standaloneKeyword, ROLE.keyword] as [RegExp, string]] : []),
         // 变量多段引用：CFLAG:ARG:口上セレクタ / TCVAR:50 / ARG:1 / RESULTS:2 / LOCALS:1 / MASTERNAME:1
         // （词形 = `ERB_VARIABLE_FAMILY_HEADS`，段尾字符集排除 `;` 的理由见该常量头注与本条原注释：
         // 否则 `CFLAG:ARG;说明` 把行尾注释整段吞成 variable，与语义层分叉）
-        [ERB_VARIABLE_REF_PATTERN, 'variable'],
+        [ERB_VARIABLE_REF_PATTERN, ROLE.variable],
         // 数值常量
-        [/\b\d+\b/, 'number'],
+        [/\b\d+\b/, ROLE.number],
         // `'=` 字符串表达式赋值（Emuera ver1813+）：`STR '= TSTR:0 + "ABC"`。
         // `'` 在 ERB 里**只**作为这个运算符的首字符出现（没有单引号字符串），所以单独一条
         // 规则是精确的；排在通用运算符规则之前（后者不含 `'`，但把 `'=` 先收掉可以避免
         // `'` 落空 token）。语义层早就是赋值（`undefined-name.ts` 的 `ASSIGN_LINE_RE`
         // 收了 `'`），此前只有着色不认——同一行两侧口径分叉。
-        [/'=/, 'operator'],
+        [/'=/, ROLE.operator],
         // 运算符
-        [/[+\-*/%<>!=&|^~?:.,]/, 'operator'],
+        [/[+\-*/%<>!=&|^~?:.,]/, ROLE.operator],
         // 指令 / 函数调用标识符
         [
           /[A-Za-z_][A-Za-z0-9_]*/,
           {
             cases: {
-              '@directives': 'keyword',
-              '@highlightWords': 'keyword',
-              '@default': 'identifier',
+              '@directives': ROLE.keyword,
+              '@highlightWords': ROLE.keyword,
+              '@default': ROLE.text,
             },
           },
         ],
@@ -493,9 +494,9 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
           /[\u3040-\u30fa\u30fc-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
           {
             cases: {
-              '@directives': 'keyword',
-              '@highlightWords': 'keyword',
-              '@default': 'identifier',
+              '@directives': ROLE.keyword,
+              '@highlightWords': ROLE.keyword,
+              '@default': ROLE.text,
             },
           },
         ],
@@ -506,9 +507,9 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
           /[\uff10-\uff19\uff21-\uff3a\uff41-\uff5a\u3005]+/,
           {
             cases: {
-              '@directives': 'keyword',
-              '@highlightWords': 'keyword',
-              '@default': 'identifier',
+              '@directives': ROLE.keyword,
+              '@highlightWords': ROLE.keyword,
+              '@default': ROLE.text,
             },
           },
         ],
@@ -528,7 +529,7 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // 误当词字符，上面刚从标识符类里挖出来）。它们全在 word-separators 的标点表里
         // （分词侧早认它们是分隔符），着色侧漏一枚就是"同一枚字符两边口径分叉"；
         // `tests/erb-highlight.test.ts` 的 ③′ 拿标点表反查这一整段，加一枚标点忘加归属当场红。
-        [/[\u3001-\u303f\uff01-\uff65\u2018-\u201d\u2026\u00b7\u30fb]+/, 'operator'],
+        [/[\u3001-\u303f\uff01-\uff65\u2018-\u201d\u2026\u00b7\u30fb]+/, ROLE.operator],
       ],
       // 串内第二层（FORM 记号）。两条纪律叠在一起才成立：
       // **A. 内容字符类必须排除 `{`**（`[^"{%\\]`）：上一批点名的"`strExpr` 历史不可达"根因就在
@@ -568,41 +569,41 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
         // （`strStr` / `strExpr`，push 后由它们 `@pop` 回本相位），既上色又不回退。
         //
         // **必须排在 ① 之前**（次序即判据）；①-⑩ 一条不改。
-        [ERB_TERN_GUARD, { token: 'string.escape', next: '@erbTernCond' }],
-        [/\\./, 'string'], // ①
+        [ERB_TERN_GUARD, { token: ROLE.escape, next: '@erbTernCond' }],
+        [/\\./, ROLE.string], // ①
         // ②③ 本行既等不到闭合记号、也等不到闭合引号 ⇒ 残段留在 string 层并出栈
         //（`"台词{未闭合`、记号正好压在行尾的 `"台词{`、`"前段%` 都不许把 strExpr / strStr 带过行界）
-        [/\{[^"}]*$/, { token: 'string', next: '@popall' }], // ②
-        [/%[^"%]*$/, { token: 'string', next: '@popall' }], // ③
+        [/\{[^"}]*$/, { token: ROLE.string, next: '@popall' }], // ②
+        [/%[^"%]*$/, { token: ROLE.string, next: '@popall' }], // ③
         // ④⑤ 开层（前瞻要求"闭合记号在闭合引号之前"，见 B④）
-        [/\{(?=[^"}]*\})/, { token: 'string.escape', next: '@strExpr' }], // ④
-        [/%(?=[^"%]*%)/, { token: 'string.escape', next: '@strStr' }], // ⑤
+        [/\{(?=[^"}]*\})/, { token: ROLE.escape, next: '@strExpr' }], // ④
+        [/%(?=[^"%]*%)/, { token: ROLE.escape, next: '@strStr' }], // ⑤
         // ⑥⑦ 落单记号（形如 `"…{"`：本行有闭合引号却没有闭合记号）就是**字面内容**——
         // 保住颜色，也保住那枚闭合引号的 `@close`（bracket 配对计数不许被吞掉一层）
-        [/\{/, 'string'], // ⑥
-        [/%/, 'string'], // ⑦
-        [/"/, { token: 'string.quote', bracket: '@close', next: '@pop' }], // ⑧
-        [/[^"{%\\]+$/, { token: 'string', next: '@popall' }], // ⑨
-        [/[^"{%\\]+/, 'string'],
+        [/\{/, ROLE.string], // ⑥
+        [/%/, ROLE.string], // ⑦
+        [/"/, { token: ROLE.string, bracket: '@close', next: '@pop' }], // ⑧
+        [/[^"{%\\]+$/, { token: ROLE.string, next: '@popall' }], // ⑨
+        [/[^"{%\\]+/, ROLE.string],
         // ⑩ 行尾落单的 `\`（续行写法里真会出现）：①要两枚字符、⑨又不吃 `\`，
         // 少了这一条串态就会被带过行界——正是⑨要防的事，所以单独收口。
-        [/\\$/, { token: 'string', next: '@popall' }],
+        [/\\$/, { token: ROLE.string, next: '@popall' }],
       ],
       strExpr: [
         // 插值层里再坐一枚内联三元 ⇒ 同样交给相位机（真语料实测形如
         // `@"%\@ プール > 0 ? ＋ # － \@%{ABS(プール)}枚"`：三元整枚嵌在 `%…%` 里，
         // 层级判据（`strStr` 的 `[^%]+` 一路吃到闭合 `%`）会把它当纯文本吞掉。
         // 相位机收尾用 `@pop` ⇒ 弹回**推它的那一层**（这里是 `strStr`），不是弹回 `str`。
-        [ERB_TERN_GUARD, { token: 'string.escape', next: '@erbTernCond' }],
-        [/[^}]+$/, { token: 'variable', next: '@popall' }],
-        [/\}/, { token: 'string.escape', next: '@pop' }],
-        [/[^}]+/, 'variable'],
+        [ERB_TERN_GUARD, { token: ROLE.escape, next: '@erbTernCond' }],
+        [/[^}]+$/, { token: ROLE.variable, next: '@popall' }],
+        [/\}/, { token: ROLE.escape, next: '@pop' }],
+        [/[^}]+/, ROLE.variable],
       ],
       strStr: [
-        [ERB_TERN_GUARD, { token: 'string.escape', next: '@erbTernCond' }],
-        [/[^%]+$/, { token: 'variable', next: '@popall' }],
-        [/%/, { token: 'string.escape', next: '@pop' }],
-        [/[^%]+/, 'variable'],
+        [ERB_TERN_GUARD, { token: ROLE.escape, next: '@erbTernCond' }],
+        [/[^%]+$/, { token: ROLE.variable, next: '@popall' }],
+        [/%/, { token: ROLE.escape, next: '@pop' }],
+        [/[^%]+/, ROLE.variable],
       ],
       // 内联三元的三个相位（ERB-PAINT-21）：`cond --?--> true --#--> false --\@--> @pop` 回 `str`。
       // 表体由 `erbTernaryPhases` 从 `erbTernaryVocab('')`（wide 口径）派生，与 `ERB_TERN_GUARD`
@@ -615,8 +616,8 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
        * 嵌套 `[SKIPSTART]` 一律不解析——引擎既不编译也不执行这些行。
        */
       skip: [
-        [erbSkipRule(ERB_SKIP_MARKERS.end), { token: 'keyword.preprocessor.skip.end', next: '@pop' }],
-        [/.*$/, 'keyword.raw'],
+        [erbSkipRule(ERB_SKIP_MARKERS.end), { token: ROLE.directive, next: '@pop' }],
+        [/.*$/, ROLE.raw],
       ],
     },
   };

@@ -9,12 +9,13 @@
  *
  * ## 分档目标（"一眼看出这行是哪种脸"）
  * 五锚点（`# @ > ? !`）是骨架；台词 / 旁白 / 原生 / 注释 / 提示各自一档；插值与数字/运算符
- * 在正文里单独一档。token 名一律 `kojo2.*`，与 v1 的 `sugar.*` / `keyword.erb*` **不撞名**
- * （档位表见 {@link KOJO2_TOKEN_TIERS}，配色见 {@link KOJO2_THEME_RULES}）。
+ * 在正文里单独一档。**token 名从 LAU-2 起不再是 `kojo2.*`，而是语义角色 `role.*`**
+ * ——与 v1（`role.keyword` 一档）和 ERB 共用同一张角色表（`semantic-roles.ts`），
+ * 于是"同一段文本在两门语言里同色"不再靠三处各配一遍色来维持。作者面口径仍在
+ * {@link KOJO2_TOKEN_TIERS}（档位表），配色在 `kojo-theme-rules.ts` 的角色调色板。
  *
- * 主题合并**不在本文件**：`theme.ts` 是仓里唯一的主题装配点（`kojo-dark` / `kojo-light` /
- * `kojo-mint-dark` 一次定义）。2.0 的规则数据住在零 import 叶子 `kojo-theme-rules.ts`，
- * `theme.ts` 在 flag 开时把它并进 v1 三套（K2-CUTOVER-THEME）；本文件不 defineTheme，
+ * 主题装配**不在本文件**：`theme.ts` 是仓里唯一的主题装配点（六套一次定义）。角色规则
+ * 住在零依赖叶子 `kojo-theme-rules.ts`，`theme.ts` 直接铺；本文件不 defineTheme，
  * 避免出现第二份主题。
  *
  * ## 词表零抄本
@@ -55,7 +56,7 @@ import {
 import { CJK_WORD_PATTERN } from './word-separators';
 import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 import { KOJO_SOURCE_EXTENSION, kojoMonacoExtensions } from '@kojo/plugin-api';
-import { KOJO2_THEME_RULES, KOJO2_TOKEN } from './kojo-theme-rules';
+import { KOJO2_TOKEN } from './semantic-roles';
 import type { InjectionSpec } from './tree-sitter/structure-runtime';
 
 /**
@@ -71,14 +72,16 @@ export { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION };
 /* ============================== token 分档 ============================== */
 
 /**
- * token 名与配色：**定义处已下沉**零 import 叶子 `kojo-theme-rules.ts`（K2-CUTOVER-THEME）。
+ * 2.0 的**词法档位名 → 语义角色**表：**定义处已下沉**零依赖叶子 `semantic-roles.ts`
+ * （LAU-2）。
  *
- * `theme.ts` 在开机静态图里，要在 flag 开时把 2.0 规则并进 v1 三套主题，就不能经本文件
- * 取那批数据（等于把糖词表挂回首屏）。因此 `KOJO2_TOKEN` / `KOJO2_THEME_RULES` /
- * `KOJO2_LIGHT_THEME_RULES` 住在叶子，本文件与 `kojo2-theme.ts` 各自 re-export 同一对象本体。
+ * `theme.ts` 在开机静态图里，主题要按角色铺色就不能经本文件取数据（本文件一加载就拖着
+ * 糖词表 ~900 KB）。因此 `KOJO2_TOKEN` 住在叶子，本文件与 `kojo2-theme.ts` 各自
+ * re-export 同一对象本体。档位名（锚点 / 声明名 / 对话三类）仍是**作者面口径**，
+ * 角色名是**主题面口径**，两者多对一（`keyword` 族四支 → 同一角色）。
  */
-export { KOJO2_THEME_RULES, KOJO2_TOKEN };
-export type { Kojo2TokenName } from './kojo-theme-rules';
+export { KOJO2_TOKEN };
+export type { Kojo2TokenName } from './semantic-roles';
 
 /**
  * 档位表（作者可见的分层口径 → token 名；同档共享前景色）。
@@ -87,7 +90,7 @@ export type { Kojo2TokenName } from './kojo-theme-rules';
 export interface Kojo2TokenTier {
   /** 档名（面向作者的中文口径，只用于报错文案，不参与配色计算） */
   readonly tier: string;
-  /** 该档 token 名（同档共享前景色） */
+  /** 该档的角色名（同档共享前景色；角色表见 `semantic-roles.ts`） */
   readonly tokens: readonly string[];
   /** 为什么值得单独一档（写不出理由的不配成为一档） */
   readonly why: string;

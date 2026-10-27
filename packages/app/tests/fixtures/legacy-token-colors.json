@@ -1,0 +1,1364 @@
+{
+  "kojo-dark": {
+    "comment": {
+      "fg": "879098",
+      "fs": "italic"
+    },
+    "keyword": {
+      "fg": "c678dd",
+      "fs": null
+    },
+    "keyword.preprocessor": {
+      "fg": "e5c07b",
+      "fs": null
+    },
+    "entity.name.function": {
+      "fg": "61afef",
+      "fs": "bold"
+    },
+    "support.type": {
+      "fg": "b3bd47",
+      "fs": null
+    },
+    "variable": {
+      "fg": "e06c75",
+      "fs": null
+    },
+    "string": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "number": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "label": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "identifier": {
+      "fg": "abb2bf",
+      "fs": null
+    },
+    "operator": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "string.escape": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "sugar.keyword": {
+      "fg": "c678dd",
+      "fs": null
+    },
+    "sugar.keyword.alias": {
+      "fg": "9687be",
+      "fs": null
+    },
+    "sugar.system-function": {
+      "fg": "61afce",
+      "fs": null
+    },
+    "sugar.operator": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "sugar.cont": {
+      "fg": "e5c07b",
+      "fs": "bold"
+    },
+    "sugar.pronoun": {
+      "fg": "e06c75",
+      "fs": null
+    },
+    "sugar.speech": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "sugar.speech.delimiter": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "sugar.interp": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "sugar.interp.delimiter": {
+      "fg": "d19a66",
+      "fs": "bold"
+    },
+    "sugar.colon": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "sugar.slot": {
+      "fg": "5cc9a8",
+      "fs": null
+    },
+    "keyword.raw": {
+      "fg": "a8a290",
+      "fs": null
+    },
+    "keyword.erb": {
+      "fg": "ff7ab2",
+      "fs": null
+    },
+    "keyword.erb.family": {
+      "fg": "9d7bea",
+      "fs": null
+    },
+    "function": {
+      "fg": "61afef",
+      "fs": null
+    },
+    "function.declaration": {
+      "fg": "61afef",
+      "fs": "bold"
+    },
+    "parameter": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "variable.declaration": {
+      "fg": "e5c07b",
+      "fs": null
+    },
+    "variable.declaration.readonly": {
+      "fg": "e5c07b",
+      "fs": "italic"
+    },
+    "kojo2.anchor": {
+      "fg": "ff41b9",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "a582d7",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "8be9fd",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "ffb86c",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "5fa0f5",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "f9e2af",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "f38ba8",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "a8a290",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "879098",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "d6acff",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "d6acff",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "b3bd47",
+      "fs": null
+    }
+  },
+  "kojo-light": {
+    "comment": {
+      "fg": "57606a",
+      "fs": "italic"
+    },
+    "keyword": {
+      "fg": "8250df",
+      "fs": null
+    },
+    "keyword.preprocessor": {
+      "fg": "953800",
+      "fs": null
+    },
+    "entity.name.function": {
+      "fg": "0550ae",
+      "fs": "bold"
+    },
+    "support.type": {
+      "fg": "5f6b2a",
+      "fs": null
+    },
+    "variable": {
+      "fg": "b4232e",
+      "fs": null
+    },
+    "string": {
+      "fg": "116329",
+      "fs": null
+    },
+    "number": {
+      "fg": "953800",
+      "fs": null
+    },
+    "label": {
+      "fg": "0a6b73",
+      "fs": null
+    },
+    "identifier": {
+      "fg": "24292f",
+      "fs": null
+    },
+    "operator": {
+      "fg": "35526f",
+      "fs": null
+    },
+    "string.escape": {
+      "fg": "b35900",
+      "fs": null
+    },
+    "sugar.keyword": {
+      "fg": "8250df",
+      "fs": null
+    },
+    "sugar.keyword.alias": {
+      "fg": "6e6a86",
+      "fs": null
+    },
+    "sugar.system-function": {
+      "fg": "0550ae",
+      "fs": null
+    },
+    "sugar.operator": {
+      "fg": "0a6b73",
+      "fs": null
+    },
+    "sugar.cont": {
+      "fg": "953800",
+      "fs": "bold"
+    },
+    "sugar.pronoun": {
+      "fg": "b4232e",
+      "fs": null
+    },
+    "sugar.speech": {
+      "fg": "116329",
+      "fs": null
+    },
+    "sugar.speech.delimiter": {
+      "fg": "335f96",
+      "fs": null
+    },
+    "sugar.interp": {
+      "fg": "b35900",
+      "fs": null
+    },
+    "sugar.interp.delimiter": {
+      "fg": "b35900",
+      "fs": "bold"
+    },
+    "sugar.colon": {
+      "fg": "335f96",
+      "fs": null
+    },
+    "sugar.slot": {
+      "fg": "0e6b5c",
+      "fs": null
+    },
+    "keyword.raw": {
+      "fg": "57606a",
+      "fs": null
+    },
+    "keyword.erb": {
+      "fg": "bf3989",
+      "fs": null
+    },
+    "keyword.erb.family": {
+      "fg": "8e44ad",
+      "fs": null
+    },
+    "function": {
+      "fg": "0550ae",
+      "fs": null
+    },
+    "function.declaration": {
+      "fg": "0550ae",
+      "fs": "bold"
+    },
+    "parameter": {
+      "fg": "b35900",
+      "fs": null
+    },
+    "variable.declaration": {
+      "fg": "953800",
+      "fs": null
+    },
+    "variable.declaration.readonly": {
+      "fg": "953800",
+      "fs": "italic"
+    },
+    "kojo2.anchor": {
+      "fg": "bf3989",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "512da8",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "8250df",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "335f96",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "8b4513",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "116329",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "116329",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "0550ae",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "b35900",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "b4232e",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "57606a",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "57606a",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "953800",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "953800",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "35526f",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "5f6b2a",
+      "fs": null
+    }
+  },
+  "kojo-mint-dark": {
+    "comment": {
+      "fg": "8aa99a",
+      "fs": "italic"
+    },
+    "keyword": {
+      "fg": "c9a7f5",
+      "fs": null
+    },
+    "keyword.preprocessor": {
+      "fg": "dca023",
+      "fs": null
+    },
+    "entity.name.function": {
+      "fg": "7cc7ff",
+      "fs": "bold"
+    },
+    "support.type": {
+      "fg": "96b458",
+      "fs": null
+    },
+    "variable": {
+      "fg": "ff9ba3",
+      "fs": null
+    },
+    "string": {
+      "fg": "9ccf9a",
+      "fs": null
+    },
+    "number": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "label": {
+      "fg": "74d6d0",
+      "fs": null
+    },
+    "identifier": {
+      "fg": "d9e9df",
+      "fs": null
+    },
+    "operator": {
+      "fg": "8fb3c9",
+      "fs": null
+    },
+    "string.escape": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "sugar.keyword": {
+      "fg": "c9a7f5",
+      "fs": null
+    },
+    "sugar.keyword.alias": {
+      "fg": "9a8fb8",
+      "fs": null
+    },
+    "sugar.system-function": {
+      "fg": "7cc7ff",
+      "fs": null
+    },
+    "sugar.operator": {
+      "fg": "74d6d0",
+      "fs": null
+    },
+    "sugar.cont": {
+      "fg": "dca023",
+      "fs": "bold"
+    },
+    "sugar.pronoun": {
+      "fg": "ff9ba3",
+      "fs": null
+    },
+    "sugar.speech": {
+      "fg": "9ccf9a",
+      "fs": null
+    },
+    "sugar.speech.delimiter": {
+      "fg": "8fb3c9",
+      "fs": null
+    },
+    "sugar.interp": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "sugar.interp.delimiter": {
+      "fg": "f0b98a",
+      "fs": "bold"
+    },
+    "sugar.colon": {
+      "fg": "8fb3c9",
+      "fs": null
+    },
+    "sugar.slot": {
+      "fg": "67dcc0",
+      "fs": null
+    },
+    "keyword.raw": {
+      "fg": "ada18a",
+      "fs": null
+    },
+    "keyword.erb": {
+      "fg": "ff9ccf",
+      "fs": null
+    },
+    "keyword.erb.family": {
+      "fg": "af8cff",
+      "fs": null
+    },
+    "function": {
+      "fg": "7cc7ff",
+      "fs": null
+    },
+    "function.declaration": {
+      "fg": "7cc7ff",
+      "fs": "bold"
+    },
+    "parameter": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "variable.declaration": {
+      "fg": "dca023",
+      "fs": null
+    },
+    "variable.declaration.readonly": {
+      "fg": "dca023",
+      "fs": "italic"
+    },
+    "kojo2.anchor": {
+      "fg": "ff9ccf",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "7cc7ff",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "c9a7f5",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "8fb3c9",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "ff9ba3",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "9ccf9a",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "9ccf9a",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "d9e9df",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "67dcc0",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "ada18a",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "8aa99a",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "74d6d0",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "96b458",
+      "fs": null
+    }
+  },
+  "kojo-one-dark": {
+    "comment": {
+      "fg": "8e97a0",
+      "fs": "italic"
+    },
+    "keyword": {
+      "fg": "c678dd",
+      "fs": null
+    },
+    "keyword.preprocessor": {
+      "fg": "e5c07b",
+      "fs": null
+    },
+    "entity.name.function": {
+      "fg": "61afef",
+      "fs": "bold"
+    },
+    "support.type": {
+      "fg": "b3bd47",
+      "fs": null
+    },
+    "variable": {
+      "fg": "e8838c",
+      "fs": null
+    },
+    "string": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "number": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "label": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "identifier": {
+      "fg": "b8bfca",
+      "fs": null
+    },
+    "operator": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "string.escape": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "sugar.keyword": {
+      "fg": "c678dd",
+      "fs": null
+    },
+    "sugar.keyword.alias": {
+      "fg": "a194c9",
+      "fs": null
+    },
+    "sugar.system-function": {
+      "fg": "61afce",
+      "fs": null
+    },
+    "sugar.operator": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "sugar.cont": {
+      "fg": "e5c07b",
+      "fs": "bold"
+    },
+    "sugar.pronoun": {
+      "fg": "e8838c",
+      "fs": null
+    },
+    "sugar.speech": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "sugar.speech.delimiter": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "sugar.interp": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "sugar.interp.delimiter": {
+      "fg": "d19a66",
+      "fs": "bold"
+    },
+    "sugar.colon": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "sugar.slot": {
+      "fg": "5cc9a8",
+      "fs": null
+    },
+    "keyword.raw": {
+      "fg": "b0a89a",
+      "fs": null
+    },
+    "keyword.erb": {
+      "fg": "e8838c",
+      "fs": null
+    },
+    "keyword.erb.family": {
+      "fg": "a194c9",
+      "fs": null
+    },
+    "function": {
+      "fg": "61afef",
+      "fs": null
+    },
+    "function.declaration": {
+      "fg": "61afef",
+      "fs": "bold"
+    },
+    "parameter": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "variable.declaration": {
+      "fg": "e5c07b",
+      "fs": null
+    },
+    "variable.declaration.readonly": {
+      "fg": "e5c07b",
+      "fs": "italic"
+    },
+    "kojo2.anchor": {
+      "fg": "ff5ec7",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "a194c9",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "c678dd",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "e5c07b",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "61afef",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "e8838c",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "b0a89a",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "8e97a0",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "d19a66",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "b3bd47",
+      "fs": null
+    }
+  },
+  "kojo-rose-pine": {
+    "comment": {
+      "fg": "908caa",
+      "fs": "italic"
+    },
+    "keyword": {
+      "fg": "c4a7e7",
+      "fs": null
+    },
+    "keyword.preprocessor": {
+      "fg": "f6c177",
+      "fs": null
+    },
+    "entity.name.function": {
+      "fg": "9ccfd8",
+      "fs": "bold"
+    },
+    "support.type": {
+      "fg": "94a06e",
+      "fs": null
+    },
+    "variable": {
+      "fg": "ebbcba",
+      "fs": null
+    },
+    "string": {
+      "fg": "f6c177",
+      "fs": null
+    },
+    "number": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "label": {
+      "fg": "9ccfd8",
+      "fs": null
+    },
+    "identifier": {
+      "fg": "e0def4",
+      "fs": null
+    },
+    "operator": {
+      "fg": "5fa0b8",
+      "fs": null
+    },
+    "string.escape": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "sugar.keyword": {
+      "fg": "c4a7e7",
+      "fs": null
+    },
+    "sugar.keyword.alias": {
+      "fg": "908caa",
+      "fs": null
+    },
+    "sugar.system-function": {
+      "fg": "9ccfd8",
+      "fs": null
+    },
+    "sugar.operator": {
+      "fg": "5fa0b8",
+      "fs": null
+    },
+    "sugar.cont": {
+      "fg": "f6c177",
+      "fs": "bold"
+    },
+    "sugar.pronoun": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "sugar.speech": {
+      "fg": "ebbcba",
+      "fs": null
+    },
+    "sugar.speech.delimiter": {
+      "fg": "908caa",
+      "fs": null
+    },
+    "sugar.interp": {
+      "fg": "f6c177",
+      "fs": null
+    },
+    "sugar.interp.delimiter": {
+      "fg": "f6c177",
+      "fs": "bold"
+    },
+    "sugar.colon": {
+      "fg": "908caa",
+      "fs": null
+    },
+    "sugar.slot": {
+      "fg": "9ccfd8",
+      "fs": null
+    },
+    "keyword.raw": {
+      "fg": "9d9489",
+      "fs": null
+    },
+    "keyword.erb": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "keyword.erb.family": {
+      "fg": "c4a7e7",
+      "fs": null
+    },
+    "function": {
+      "fg": "9ccfd8",
+      "fs": null
+    },
+    "function.declaration": {
+      "fg": "9ccfd8",
+      "fs": "bold"
+    },
+    "parameter": {
+      "fg": "f6c177",
+      "fs": null
+    },
+    "variable.declaration": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "variable.declaration.readonly": {
+      "fg": "eb6f92",
+      "fs": "italic"
+    },
+    "kojo2.anchor": {
+      "fg": "eb6f92",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "c4a7e7",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "c4a7e7",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "908caa",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "ebbcba",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "ebbcba",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "f6c177",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "9ccfd8",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "f6c177",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "eb6f92",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "9d9489",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "908caa",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "eb6f92",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "5fa0b8",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "94a06e",
+      "fs": null
+    }
+  },
+  "kojo-synthwave84": {
+    "comment": {
+      "fg": "848bbd",
+      "fs": "italic"
+    },
+    "keyword": {
+      "fg": "fede5d",
+      "fs": null
+    },
+    "keyword.preprocessor": {
+      "fg": "f97e72",
+      "fs": null
+    },
+    "entity.name.function": {
+      "fg": "36f9f6",
+      "fs": "bold"
+    },
+    "support.type": {
+      "fg": "a8cf4e",
+      "fs": null
+    },
+    "variable": {
+      "fg": "ff7edb",
+      "fs": null
+    },
+    "string": {
+      "fg": "ff8b39",
+      "fs": null
+    },
+    "number": {
+      "fg": "f97e72",
+      "fs": null
+    },
+    "label": {
+      "fg": "36f9f6",
+      "fs": null
+    },
+    "identifier": {
+      "fg": "eae6f5",
+      "fs": null
+    },
+    "operator": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "string.escape": {
+      "fg": "36f9f6",
+      "fs": null
+    },
+    "sugar.keyword": {
+      "fg": "fede5d",
+      "fs": null
+    },
+    "sugar.keyword.alias": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "sugar.system-function": {
+      "fg": "36f9f6",
+      "fs": null
+    },
+    "sugar.operator": {
+      "fg": "72f1b8",
+      "fs": null
+    },
+    "sugar.cont": {
+      "fg": "fede5d",
+      "fs": "bold"
+    },
+    "sugar.pronoun": {
+      "fg": "ff7edb",
+      "fs": null
+    },
+    "sugar.speech": {
+      "fg": "72f1b8",
+      "fs": null
+    },
+    "sugar.speech.delimiter": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "sugar.interp": {
+      "fg": "ff8b39",
+      "fs": null
+    },
+    "sugar.interp.delimiter": {
+      "fg": "ff8b39",
+      "fs": "bold"
+    },
+    "sugar.colon": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "sugar.slot": {
+      "fg": "72f1b8",
+      "fs": null
+    },
+    "keyword.raw": {
+      "fg": "a09ab8",
+      "fs": null
+    },
+    "keyword.erb": {
+      "fg": "ff7edb",
+      "fs": null
+    },
+    "keyword.erb.family": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "function": {
+      "fg": "36f9f6",
+      "fs": null
+    },
+    "function.declaration": {
+      "fg": "36f9f6",
+      "fs": "bold"
+    },
+    "parameter": {
+      "fg": "f97e72",
+      "fs": null
+    },
+    "variable.declaration": {
+      "fg": "fede5d",
+      "fs": null
+    },
+    "variable.declaration.readonly": {
+      "fg": "fede5d",
+      "fs": "italic"
+    },
+    "kojo2.anchor": {
+      "fg": "ff7edb",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "fede5d",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "ff8b39",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "72f1b8",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "ff8b39",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "36f9f6",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "ff8b39",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "ff7edb",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "a09ab8",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "848bbd",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "f97e72",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "f97e72",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "b893ce",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "a8cf4e",
+      "fs": null
+    }
+  },
+  "kojo2-dark": {
+    "kojo2.anchor": {
+      "fg": "ff41b9",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "a582d7",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "8be9fd",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "7f9cc0",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "ffb86c",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "98c379",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "5fa0f5",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "f9e2af",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "f38ba8",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "a8a290",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "879098",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "d6acff",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "d6acff",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "56b6c2",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "b3bd47",
+      "fs": null
+    }
+  },
+  "kojo2-light": {
+    "kojo2.anchor": {
+      "fg": "bf3989",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "512da8",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "8250df",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "335f96",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "8b4513",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "116329",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "116329",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "0550ae",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "b35900",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "b4232e",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "57606a",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "57606a",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "953800",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "953800",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "35526f",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "5f6b2a",
+      "fs": null
+    }
+  },
+  "kojo2-mint-dark": {
+    "kojo2.anchor": {
+      "fg": "ff9ccf",
+      "fs": "bold"
+    },
+    "kojo2.declaration": {
+      "fg": "7cc7ff",
+      "fs": null
+    },
+    "kojo2.keyword": {
+      "fg": "c9a7f5",
+      "fs": null
+    },
+    "kojo2.keyword.delimiter": {
+      "fg": "8fb3c9",
+      "fs": null
+    },
+    "kojo2.speaker": {
+      "fg": "ff9ba3",
+      "fs": null
+    },
+    "kojo2.speech": {
+      "fg": "9ccf9a",
+      "fs": null
+    },
+    "kojo2.speech.string": {
+      "fg": "9ccf9a",
+      "fs": null
+    },
+    "kojo2.narration": {
+      "fg": "d9e9df",
+      "fs": null
+    },
+    "kojo2.interp": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "kojo2.hint": {
+      "fg": "67dcc0",
+      "fs": "italic"
+    },
+    "kojo2.raw": {
+      "fg": "ada18a",
+      "fs": null
+    },
+    "kojo2.comment": {
+      "fg": "8aa99a",
+      "fs": "italic"
+    },
+    "kojo2.number": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "kojo2.number.hex": {
+      "fg": "f0b98a",
+      "fs": null
+    },
+    "kojo2.operator": {
+      "fg": "74d6d0",
+      "fs": null
+    },
+    "kojo2.type": {
+      "fg": "96b458",
+      "fs": null
+    }
+  }
+}

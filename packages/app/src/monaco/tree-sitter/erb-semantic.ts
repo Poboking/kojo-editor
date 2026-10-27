@@ -51,7 +51,7 @@ export const ERB_SEMANTIC_LEGEND: Monaco.languages.SemanticTokensLegend = {
 };
 
 const TYPE_INDEX = new Map<string, number>(ERB_SEMANTIC_LEGEND.tokenTypes.map((tier, i) => [tier, i]));
-const KNOWN_TIERS = new Set<string>(Object.values(ERB_SEMANTIC_CAPTURE_TIERS));
+const KNOWN_ROLES = new Set<string>(Object.values(ERB_SEMANTIC_CAPTURE_TIERS));
 
 const warned = new Set<string>();
 function warnOnce(key: string, message: string): void {
@@ -117,7 +117,7 @@ export function splitErbStructureTokens(
   let droppedEmpty = 0;
   let droppedWide = 0;
   for (const token of tokens) {
-    if (typeof token.tier !== 'string' || !KNOWN_TIERS.has(token.tier)) {
+    if (typeof token.tier !== 'string' || !KNOWN_ROLES.has(token.tier)) {
       warnOnce(`tier:${String(token.tier)}`, `档位 "${String(token.tier)}" 不在 ERB 档位表里 ⇒ 该段不着色（改 erb-tiers.ts 或查询）`);
       continue;
     }

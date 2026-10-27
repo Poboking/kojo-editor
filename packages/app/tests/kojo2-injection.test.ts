@@ -27,6 +27,7 @@ import {
 } from '../src/monaco/kojo2-semantic';
 import { createKojo2FoldingProvider } from '../src/monaco/kojo2-folding';
 import { KOJO2_INJECTIONS, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
+import { ROLE } from '../src/monaco/semantic-roles';
 import {
   disposeInjectionClients,
   planInjectionRanges,
@@ -350,7 +351,7 @@ describe('provider · 只在真有宿主节点时才问子树（DoD 2）', () =>
         folds: [],
         tokens: [
           // 夹具第 3 行（0 基）19 字 ⇒ 0 基末列 19 = 1 基末列 20（几何夹取的上界）
-          { startRow: 3, startCol: 4, endRow: 3, endCol: 19, tier: 'comment', capture: 'comment', node: 'comment_line' },
+          { startRow: 3, startCol: 4, endRow: 3, endCol: 19, tier: ROLE.comment, capture: 'comment', node: 'comment_line' },
         ],
       }),
     );
@@ -478,7 +479,7 @@ describe('子 parse 转发 · 宿主只发区间、不回平移（DoD 2 / §4.6�
     expect(parseRequest?.want).toEqual(['semantic', 'folds']);
     expect(outcome.ranges).toEqual(plan.ranges);
     expect(outcome.tokens).toEqual([
-      { startRow: 3, startCol: 4, endRow: 3, endCol: 19, tier: 'comment', capture: 'comment', node: 'comment_line' },
+      { startRow: 3, startCol: 4, endRow: 3, endCol: 19, tier: ROLE.comment, capture: 'comment', node: 'comment_line' },
     ]);
     expect(outcome.folds).toEqual([{ startRow: 4, endRow: 6 }]);
   });

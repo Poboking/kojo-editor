@@ -9,6 +9,7 @@ import { ERB_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
+import { ROLE } from './semantic-roles';
 
 /**
  * `.kojo` 表层 DSL 编辑器支持 —— Monarch 词法 + 语言配置。
@@ -122,23 +123,23 @@ export const ERB_HIGHLIGHT_COMMANDS: readonly string[] = [
 export const SYSTEM_FUNCTION_WORDS: string[] = [...SYSTEM_FUNCTION_ALIASES.keys()];
 
 /**
- * `kojo-dark` 主题里糖专属 token 的着色规则（由 `erb-language.ts` 合并进主题定义）。
+ * `kojo-dark` 的**角色**着色规则（LAU-2 起：主题按语义角色铺，不再按 token 名）。
  *
- * **定义处已下沉**零 import 叶子 `kojo-theme-rules.ts`（PS-10 断链：本文件静态挂着
+ * **定义处已下沉**零依赖叶子 `kojo-theme-rules.ts`（PS-10 断链：本文件静态挂着
  * `@kojo/plugin-kojo-sugar` 词表，`theme.ts` 在开机静态图里，经本文件取规则等于把
  * 糖包挂回开机图）。此处按**同一数组本体** re-export：既有 import 点（主题装配、
  * `kojo-token-tiers.test.ts` 的同对象引用断言）读到的对象不变，别在这里复制第二份。
  *
- * 取色口径（**深底可读 + 一档一色**，判据复跑见 `kojo-token-tiers.test.ts`）：
+ * 取色口径（**深底可读**，判据复跑见 `kojo-token-tiers.test.ts`）：
  * - 已中文化的糖层走冷色族（紫=关键字、青=运算符、蓝=函数、绿=台词、玫=代词）；
  * - 还没中文化的原生层走"外来族"（粉=引擎指令、蓝紫=族头、灰=整行原生直通），
  *   名字层（CJK 非词表 = 槽位原名 / 作者自定名）走薄荷绿；
- * - 亮度全部 ≥ 4.46:1（既有档位里最弱的一档），不为了分层引入刺眼的高饱和。
+ * - 亮度全部 ≥ 4.5:1，不为了分层引入刺眼的高饱和。
  */
-export { KOJO_SUGAR_THEME_RULES } from './kojo-theme-rules';
+export { ROLE_THEME_RULES } from './kojo-theme-rules';
 
 /**
- * 档位表：**作者看得见的分层口径** → 该档的 token 名（多 token = 同档同色）。
+ * 档位表：**作者看得见的分层口径** → 该档的**语义角色**（多角色 = 同档同色）。
  *
  * 为什么把这张表放进源码而不只放测试：它同时是**主题的验收清单**——新增一档就得在这里
  * 登记，`kojo-token-tiers.test.ts` 立刻会问"这一档的前景色与谁撞了"。
@@ -146,26 +147,26 @@ export { KOJO_SUGAR_THEME_RULES } from './kojo-theme-rules';
 export interface KojoTokenTier {
   /** 档名（面向作者的中文口径；只用于报错文案，不参与配色计算） */
   readonly tier: string;
-  /** 该档的 token 名（同档共享前景色） */
+  /** 该档的角色名（同档共享前景色；角色表见 `semantic-roles.ts`） */
   readonly tokens: readonly string[];
   /** 为什么值得单独一档（写不出理由的不配成为一档） */
   readonly why: string;
 }
 
 export const KOJO_TOKEN_TIERS: readonly KojoTokenTier[] = [
-  { tier: '中文关键字', tokens: ['sugar.keyword'], why: '句子的骨架，作者最常确认的一眼位' },
-  { tier: '中文运算符', tokens: ['sugar.operator'], why: '`不在` 与比较词都改判定，须与关键字分色' },
-  { tier: '中文系统函数', tokens: ['sugar.system-function'], why: '调用位（中文函数名）与关键字不同层' },
-  { tier: '保留代词', tokens: ['sugar.pronoun'], why: '`她`/`你` 是引用而非控制流' },
-  { tier: '不等待标记', tokens: ['sugar.cont'], why: '`续`/`~`/`⏎` 改的是运行行为' },
-  { tier: '台词', tokens: ['sugar.speech'], why: '作者写的正文，语法层要退到后面' },
-  { tier: '结构性标点', tokens: ['sugar.speech.delimiter', 'sugar.colon'], why: '块头与台词的边界，一族即可' },
-  { tier: '插值记号', tokens: ['sugar.interp', 'sugar.interp.delimiter'], why: '「台词里的表达式」自成一层' },
-  { tier: '名字层（槽位原名 / 作者自定名）', tokens: ['sugar.slot'], why: '既不是语法词也不是英文残留，是"还得记住的原名"' },
-  { tier: '英文隐藏别名', tokens: ['sugar.keyword.alias'], why: '输入生效但不必展示 ⇒ 弱化一档，看得见但别抢戏' },
-  { tier: '引擎指令', tokens: ['keyword.erb'], why: '一整条还没中文化的骨架，需要最扎眼的外来色' },
-  { tier: '引擎族头', tokens: ['keyword.erb.family'], why: '族头后面还挂着槽位原名 ⇒ 与指令分档才看得出差一层' },
-  { tier: '整行原生直通', tokens: ['keyword.raw'], why: '围栏 / `$标签` / `@函数` = 不透明整块，与行内指令分档' },
+  { tier: '中文关键字', tokens: [ROLE.keyword], why: '句子的骨架，作者最常确认的一眼位' },
+  { tier: '中文运算符', tokens: [ROLE.operatorWord], why: '`不在` 与比较词都改判定，须与关键字分色' },
+  { tier: '中文系统函数', tokens: [ROLE.call], why: '调用位（中文函数名）与关键字不同层' },
+  { tier: '保留代词', tokens: [ROLE.pronoun], why: '`她`/`你` 是引用而非控制流' },
+  { tier: '不等待标记', tokens: [ROLE.cont], why: '`续`/`~`/`⏎` 改的是运行行为' },
+  { tier: '台词', tokens: [ROLE.speech], why: '作者写的正文，语法层要退到后面' },
+  { tier: '结构性标点', tokens: [ROLE.punctuation], why: '块头与台词的边界，一族即可' },
+  { tier: '插值记号', tokens: [ROLE.interp, ROLE.interpDelimiter], why: '「台词里的表达式」自成一层' },
+  { tier: '名字层（槽位原名 / 作者自定名）', tokens: [ROLE.slot], why: '既不是语法词也不是英文残留，是"还得记住的原名"' },
+  { tier: '英文隐藏别名', tokens: [ROLE.keywordAlias], why: '输入生效但不必展示 ⇒ 弱化一档，看得见但别抢戏' },
+  { tier: '引擎指令', tokens: [ROLE.engine], why: '一整条还没中文化的骨架，需要最扎眼的外来色' },
+  { tier: '引擎族头', tokens: [ROLE.engineFamily], why: '族头后面还挂着槽位原名 ⇒ 与指令分档才看得出差一层' },
+  { tier: '整行原生直通', tokens: [ROLE.raw], why: '围栏 / `$标签` / `@函数` = 不透明整块，与行内指令分档' },
 ];
 
 /**
@@ -206,25 +207,25 @@ const KOJO_PAIRS: readonly (readonly [open: string, close: string])[] = [
  */
 const KOJO_CONTENT_RULES: Monaco.languages.IMonarchLanguageRule[] = [
   // 台词引号（「」/｢｣/『』）——台词 = 作者色（规范 §1.3 的 99% 相关律）
-  [/「/, { token: 'sugar.speech.delimiter', next: '@speech' }],
-  [/｢/, { token: 'sugar.speech.delimiter', next: '@speechAlt' }],
-  [/『/, { token: 'sugar.speech.delimiter', next: '@speechIn' }],
+  [/「/, { token: ROLE.punctuation, next: '@speech' }],
+  [/｢/, { token: ROLE.punctuation, next: '@speechAlt' }],
+  [/『/, { token: ROLE.punctuation, next: '@speechIn' }],
   // 插值 `{…}`（旁白行/台词行皆可出现）
-  [/\{/, { token: 'sugar.interp.delimiter', next: '@interp' }],
+  [/\{/, { token: ROLE.interpDelimiter, next: '@interp' }],
   // 标记的**符号形**（`~` / `⏎`，词表派生）：词支命中不到的那一批，单独一条规则给 `sugar.cont`
-  [charClassPattern(CONT_SYMBOLS), 'sugar.cont'],
+  [charClassPattern(CONT_SYMBOLS), ROLE.cont],
   // 中文词形：运算符 → 不等待标记 → 保留代词 → 关键字 → 系统函数 → 名字层
   [
     /[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9f]+/,
     {
       cases: {
-        '@contMarks': 'sugar.cont',
-        '@operators': 'sugar.operator',
-        '@pronouns': 'sugar.pronoun',
-        '@primaryWords': 'sugar.keyword',
-        '@systemFunctions': 'sugar.system-function',
+        '@contMarks': ROLE.cont,
+        '@operators': ROLE.operatorWord,
+        '@pronouns': ROLE.pronoun,
+        '@primaryWords': ROLE.keyword,
+        '@systemFunctions': ROLE.call,
         // 词表里没有的中文/日文名字 = 槽位原名或作者自定名（既不是语法词也不是英文残留）
-        '@default': 'sugar.slot',
+        '@default': ROLE.slot,
       },
     },
   ],
@@ -233,20 +234,20 @@ const KOJO_CONTENT_RULES: Monaco.languages.IMonarchLanguageRule[] = [
     /[A-Za-z_][A-Za-z0-9_]*/,
     {
       cases: {
-        '@contMarks': 'sugar.cont',
-        '@englishAliases': 'sugar.keyword.alias',
+        '@contMarks': ROLE.cont,
+        '@englishAliases': ROLE.keywordAlias,
         // 运算符组的 ASCII 形（`不在` 的别名 `notin`）也要落档——此前漏 cases 会掉 identifier
-        '@operators': 'sugar.operator',
-        '@erbFamilyHeads': 'keyword.erb.family',
-        '@erbCommands': 'keyword.erb',
-        '@default': 'identifier',
+        '@operators': ROLE.operatorWord,
+        '@erbFamilyHeads': ROLE.engineFamily,
+        '@erbCommands': ROLE.engine,
+        '@default': ROLE.text,
       },
     },
   ],
-  [/\b0x[0-9a-fA-F]+\b/, 'number.hex'],
-  [/\b\d+\b/, 'number'],
-  [/：/, 'sugar.colon'],
-  [/[+\-*/%<>!=&|^~?:.,()\[\]]/, 'operator'],
+  [/\b0x[0-9a-fA-F]+\b/, ROLE.number],
+  [/\b\d+\b/, ROLE.number],
+  [/：/, ROLE.punctuation],
+  [/[+\-*/%<>!=&|^~?:.,()\[\]]/, ROLE.operator],
 ];
 
 export function registerKojoLanguage(monaco: typeof Monaco): void {
@@ -278,22 +279,22 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
       root: [
         // 行首 `;` = 整行注释（真源 `lexer.ts::classifyLine` 的 `content.startsWith(';')`）。
         // 旧版还把 `^\s*//` 一并涂成 comment——`//` 在转译器里**不是**注释，本批删掉那一形。
-        [/^\s*;.*$/, 'comment'],
+        [/^\s*;.*$/, ROLE.comment],
         // 行尾 `;` 注释（非锚定，`;` 起至行末）：对位 `lexer.ts::stripInlineComment`。
         // `"…"` 内的 `;` 由下面的 `dquote` 先吃掉，`「…」` 内的 `;` 由 speech 态先吃掉。
-        [/;.*$/, 'comment'],
+        [/;.*$/, ROLE.comment],
         // 停用块 `[SKIPSTART] … [SKIPEND]`：引擎原样输出（真源 `classifyLine` 的
         // `skipStart` / `skipEnd`，**整行严格等值**）。块内不是 `.kojo` 代码 ⇒ 与
         // ```erb 围栏同档：标记与内容一律 `keyword.raw`，作者一眼看出这是不透明区。
-        [/^\s*\[SKIPSTART\]\s*$/, { token: 'keyword.raw', next: '@skipBlock' }],
-        [/^\s*\[SKIPEND\]\s*$/, 'keyword.raw'],
+        [/^\s*\[SKIPSTART\]\s*$/, { token: ROLE.raw, next: '@skipBlock' }],
+        [/^\s*\[SKIPEND\]\s*$/, ROLE.raw],
         // 原生 ERB 围栏（```erb … ```）：整块不透明，逐行着色为原生
-        [/^\s*```\s*erb\b.*$/i, { token: 'keyword.raw', next: '@rawFence' }],
+        [/^\s*```\s*erb\b.*$/i, { token: ROLE.raw, next: '@rawFence' }],
         // 行首 `@erb` 逃生舱（规范 §3.10）
-        [/^\s*@\s*erb\b.*$/i, 'keyword.raw'],
+        [/^\s*@\s*erb\b.*$/i, ROLE.raw],
         // 原生直通行：`$标签` / `@函数` = 不透明整块 ⇒ 前缀与名字一律走原生档（不吃基线 label/function 色）
-        [/^\s*\$[^\s;]+/, 'keyword.raw'],
-        [/^\s*@[^\s;(]+/, 'keyword.raw'],
+        [/^\s*\$[^\s;]+/, ROLE.raw],
+        [/^\s*@[^\s;(]+/, ROLE.raw],
         // 行首全大写 ERB 指令：族头一档、其余指令一档、没见过的照旧当普通名字
         [
           /^(\s*)([A-Z][A-Z0-9_]*)\b/,
@@ -301,9 +302,9 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
             '',
             {
               cases: {
-                '@erbFamilyHeads': 'keyword.erb.family',
-                '@erbCommands': 'keyword.erb',
-                '@default': 'identifier',
+                '@erbFamilyHeads': ROLE.engineFamily,
+                '@erbCommands': ROLE.engine,
+                '@default': ROLE.text,
               },
             },
           ],
@@ -312,7 +313,7 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
         // 开引号要求**本行**还有闭合引号（`(?=[^"]*")`）⇒ 串态天然不跨行，压在行尾的
         // 落单 `"` 不会让下一行的行首 `;` 注释失明；落单引号按普通标点走（旧版同相）。
         // 与串外共用同一批内容规则；引号本身给 `string.quote`（基线串色），内容各归原档。
-        [/"(?=[^"]*")/, { token: 'string.quote', next: '@dquote' }],
+        [/"(?=[^"]*")/, { token: ROLE.string, next: '@dquote' }],
         // 其余行内词法（台词 / 插值 / 中文词形 / 英文别名 / 数字 / 标点）——
         // 与 `dquote` 串态**同一批规则对象**，见 KOJO_CONTENT_RULES 头注。
         ...KOJO_CONTENT_RULES,
@@ -323,41 +324,41 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
        * 故本状态没有 `$` 兜底、也绝不带过行界。
        */
       dquote: [
-        [/"/, { token: 'string.quote', next: '@pop' }],
+        [/"/, { token: ROLE.string, next: '@pop' }],
         ...KOJO_CONTENT_RULES,
       ],
       /** ```erb 围栏内部：逐行原生，遇闭合围栏退出 */
       rawFence: [
-        [/^\s*```\s*$/, { token: 'keyword.raw', next: '@pop' }],
-        [/.*$/, 'keyword.raw'],
+        [/^\s*```\s*$/, { token: ROLE.raw, next: '@pop' }],
+        [/.*$/, ROLE.raw],
       ],
       /** `[SKIPSTART] … [SKIPEND]` 停用区内部：逐行原生，遇整行等值标记退出 */
       skipBlock: [
-        [/^\s*\[SKIPEND\]\s*$/, { token: 'keyword.raw', next: '@pop' }],
-        [/.*$/, 'keyword.raw'],
+        [/^\s*\[SKIPEND\]\s*$/, { token: ROLE.raw, next: '@pop' }],
+        [/.*$/, ROLE.raw],
       ],
       speech: [
-        [/[^」{\\]+/, 'sugar.speech'],
-        [/\{/, { token: 'sugar.interp.delimiter', next: '@interp' }],
-        [/\\$/, 'sugar.speech'],
-        [/」/, { token: 'sugar.speech.delimiter', next: '@pop' }],
-        [/./, 'sugar.speech'],
+        [/[^」{\\]+/, ROLE.speech],
+        [/\{/, { token: ROLE.interpDelimiter, next: '@interp' }],
+        [/\\$/, ROLE.speech],
+        [/」/, { token: ROLE.punctuation, next: '@pop' }],
+        [/./, ROLE.speech],
       ],
       speechAlt: [
-        [/[^｣{\\]+/, 'sugar.speech'],
-        [/\{/, { token: 'sugar.interp.delimiter', next: '@interp' }],
-        [/｣/, { token: 'sugar.speech.delimiter', next: '@pop' }],
-        [/./, 'sugar.speech'],
+        [/[^｣{\\]+/, ROLE.speech],
+        [/\{/, { token: ROLE.interpDelimiter, next: '@interp' }],
+        [/｣/, { token: ROLE.punctuation, next: '@pop' }],
+        [/./, ROLE.speech],
       ],
       speechIn: [
-        [/[^』{\\]+/, 'sugar.speech'],
-        [/\{/, { token: 'sugar.interp.delimiter', next: '@interp' }],
-        [/』/, { token: 'sugar.speech.delimiter', next: '@pop' }],
-        [/./, 'sugar.speech'],
+        [/[^』{\\]+/, ROLE.speech],
+        [/\{/, { token: ROLE.interpDelimiter, next: '@interp' }],
+        [/』/, { token: ROLE.punctuation, next: '@pop' }],
+        [/./, ROLE.speech],
       ],
       interp: [
-        [/[^}]+/, 'sugar.interp'],
-        [/\}/, { token: 'sugar.interp.delimiter', next: '@pop' }],
+        [/[^}]+/, ROLE.interp],
+        [/\}/, { token: ROLE.interpDelimiter, next: '@pop' }],
       ],
     },
   } as Monaco.languages.IMonarchLanguage);

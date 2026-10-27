@@ -15,6 +15,8 @@
  *   Monaco 交互留在 `EditorPane`（与 `lift-preview.ts` 同款分层，便于单测钉死拼装口径）。
  */
 
+import { ROLE } from '../monaco/semantic-roles';
+
 /** 偏好键（壳层私事，localStorage；与布局同款——不进内核存储域） */
 const PREF_KEY = 'kojo.ui.sugarView.v1';
 /**
@@ -436,27 +438,30 @@ export const SUGAR_READ_CLASS_DELIMITER = 'sugar-read-delimiter';
 export const SUGAR_READ_CLASS_SPEECH = 'sugar-read-speech';
 
 /**
- * token → 阅读态装饰类（**只按 token 作用**，不碰投影文本一个字符）。
+ * 角色 → 阅读态装饰类（**只按角色作用**，不碰投影文本一个字符）。
+ *
+ * 键从 LAU-2 起是**语义角色**（`semantic-roles.ts` 的 `ROLE.*`）：Monarch 自那批起不再发
+ * `sugar.*` 旧 token 名，改发角色名；这张表若还按旧名写，阅读态会在无人察觉的情况下
+ * 整体失效（`monaco.editor.tokenize` 一个都匹配不上 ⇒ 装饰为零，屏上照常可读）。
  *
  * 分层判据（对应"会说话的稿纸"）：
- * - `sugar.cont`（`续` / `~` / `⏎`）：行尾行为标记 ⇒ 最低一档（`MARK`）；
+ * - `role.cont`（`续` / `~` / `⏎`）：行尾行为标记 ⇒ 最低一档（`MARK`）；
  * - 关键字 / 运算符 / 系统函数（含 `空行` `等待` 这些词表关键字形）：语法骨架 ⇒
  *   降一档但仍可辨（`SYNTAX`）；
- * - `：` 与台词引号：结构性标点 ⇒ 退到边界感（`DELIMITER`）；
+ * - `：` 与台词引号：结构性标点（同为 `role.punctuation`）⇒ 退到边界感（`DELIMITER`）；
  * - 台词正文：稿纸的主体 ⇒ 换成中性前景色（`SPEECH`），配色层级由它领衔。
  *
- * 没进表的 token（代词 / 插值 / 名字层 / 原生 ERB 档）阅读态**不动**：代词与插值是
+ * 没进表的角色（代词 / 插值 / 名字层 / 原生档）阅读态**不动**：代词与插值是
  * 内容的一部分；原生档是"这行还没中文化"的锚点，弱化反而丢信息。
  */
 const SUGAR_READ_TOKEN_CLASSES: Readonly<Record<string, string>> = {
-  'sugar.cont': SUGAR_READ_CLASS_MARK,
-  'sugar.keyword': SUGAR_READ_CLASS_SYNTAX,
-  'sugar.keyword.alias': SUGAR_READ_CLASS_SYNTAX,
-  'sugar.operator': SUGAR_READ_CLASS_SYNTAX,
-  'sugar.system-function': SUGAR_READ_CLASS_SYNTAX,
-  'sugar.colon': SUGAR_READ_CLASS_DELIMITER,
-  'sugar.speech.delimiter': SUGAR_READ_CLASS_DELIMITER,
-  'sugar.speech': SUGAR_READ_CLASS_SPEECH,
+  [ROLE.cont]: SUGAR_READ_CLASS_MARK,
+  [ROLE.keyword]: SUGAR_READ_CLASS_SYNTAX,
+  [ROLE.keywordAlias]: SUGAR_READ_CLASS_SYNTAX,
+  [ROLE.operatorWord]: SUGAR_READ_CLASS_SYNTAX,
+  [ROLE.call]: SUGAR_READ_CLASS_SYNTAX,
+  [ROLE.punctuation]: SUGAR_READ_CLASS_DELIMITER,
+  [ROLE.speech]: SUGAR_READ_CLASS_SPEECH,
 };
 
 /**

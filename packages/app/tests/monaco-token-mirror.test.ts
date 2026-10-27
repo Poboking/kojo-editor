@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
+import { ROLE } from '../src/monaco/semantic-roles';
 import {
   KOJO_DARK_COLORS,
   KOJO_LIGHT_COLORS,
@@ -396,14 +397,14 @@ interface SyntaxRow {
 const s = (key: string, dark: Spec, light: Spec, mint: Spec): SyntaxRow => ({ key, tiers: [dark, light, mint] });
 
 const SYNTAX_MIRROR: readonly SyntaxRow[] = [
-  s('editorBracketHighlight.foreground1', 'keyword', 'keyword', 'keyword'),
-  s('editorBracketHighlight.foreground2', 'entity.name.function', 'entity.name.function', 'entity.name.function'),
-  s('editorBracketHighlight.foreground3', 'label', 'label', 'label'),
-  s('editorBracketHighlight.foreground4', 'keyword.preprocessor', 'keyword.preprocessor', 'keyword.preprocessor'),
-  s('editorBracketHighlight.foreground5', 'variable', 'keyword.erb', 'variable'),
-  s('editorBracketHighlight.foreground6', 'string', 'string', 'string'),
-  s('editorBracketHighlight.unexpectedBracket.foreground', 'variable', 'variable', 'variable'),
-  s('editorInfo.foreground', null, null, 'entity.name.function'),
+  s('editorBracketHighlight.foreground1', ROLE.keyword, ROLE.keyword, ROLE.keyword),
+  s('editorBracketHighlight.foreground2', ROLE.decl, ROLE.decl, ROLE.decl),
+  s('editorBracketHighlight.foreground3', ROLE.label, ROLE.label, ROLE.label),
+  s('editorBracketHighlight.foreground4', ROLE.directive, ROLE.directive, ROLE.directive),
+  s('editorBracketHighlight.foreground5', ROLE.variable, ROLE.engine, ROLE.variable),
+  s('editorBracketHighlight.foreground6', ROLE.string, ROLE.string, ROLE.string),
+  s('editorBracketHighlight.unexpectedBracket.foreground', ROLE.variable, ROLE.variable, ROLE.variable),
+  s('editorInfo.foreground', null, null, ROLE.decl),
 ];
 
 /**

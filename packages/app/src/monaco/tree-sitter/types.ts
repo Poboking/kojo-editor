@@ -29,6 +29,7 @@
  *   `Edit.startIndex` 在 JS 绑定里就是 JS 字符串下标，两侧同源才不会把树编辑歪）；
  * - 行内区间取 `[startColumn, endColumn)`，`endColumn` 是**排他**的列号（不是 Monaco 列）。
  */
+import { ROLE, type SemanticRole } from '../semantic-roles';
 import type {
   StructureCaptureTable,
   StructureIndentRules,
@@ -237,10 +238,10 @@ export type KojoStructureReply =
  * 表外那些格数是**覆盖面的真账缺口**，要补得先由查询侧给出**子记号级捕获**（`(if_head keyword: …)`
  * 那一类），不是由宿主猜一个档。逐支账由 `tests/kojo-ts-capture-coverage.test.ts` 每次复跑打印。
  */
-export const KOJO_STRUCTURE_CAPTURE_TIERS: Readonly<Record<string, string>> = {
-  comment: 'comment',
-  keyword: 'sugar.keyword',
-  string: 'sugar.speech',
+export const KOJO_STRUCTURE_CAPTURE_TIERS: Readonly<Record<string, SemanticRole>> = {
+  comment: ROLE.comment,
+  keyword: ROLE.keyword,
+  string: ROLE.speech,
 };
 
 /**
@@ -268,32 +269,32 @@ export const KOJO_STRUCTURE_CAPTURE_TIERS: Readonly<Record<string, string>> = {
  * 语法升级（节点改名 / 拆分）时这张表自然失效：查不到就回落到捕获名表，不抛错、不静默丢色，
  * A/B 与覆盖面账会自己说出来。
  */
-export const KOJO_STRUCTURE_NODE_TIERS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  keyword: { heart_text: 'sugar.speech' },
+export const KOJO_STRUCTURE_NODE_TIERS: Readonly<Record<string, Readonly<Record<string, SemanticRole>>>> = {
+  keyword: { heart_text: ROLE.speech },
   // TSIT5：光杆收束 / 流转 / 裸块头——整行就是那个中文关键字，跨度里没有别族承担内容
   'keyword.control': {
-    loop_end: 'sugar.keyword',
-    loop_flow: 'sugar.keyword',
-    catch_head: 'sugar.keyword',
-    catch_end: 'sugar.keyword',
-    data_head: 'sugar.keyword',
-    data_end: 'sugar.keyword',
-    return_statement: 'sugar.keyword',
-    random_head: 'sugar.keyword',
-    group_head: 'sugar.keyword',
-    branch_head: 'sugar.keyword',
-    choice_head: 'sugar.keyword',
-    menu_head: 'sugar.keyword',
+    loop_end: ROLE.keyword,
+    loop_flow: ROLE.keyword,
+    catch_head: ROLE.keyword,
+    catch_end: ROLE.keyword,
+    data_head: ROLE.keyword,
+    data_end: ROLE.keyword,
+    return_statement: ROLE.keyword,
+    random_head: ROLE.keyword,
+    group_head: ROLE.keyword,
+    branch_head: ROLE.keyword,
+    choice_head: ROLE.keyword,
+    menu_head: ROLE.keyword,
   },
   // TSIT5：`@函数名` 块起始 = 不透明整块（`native_line` 依上面那条理由留在表外）
-  'keyword.directive': { raw_block_start: 'keyword.raw' },
+  'keyword.directive': { raw_block_start: ROLE.raw },
 };
 
 /** Monaco 基线 token 名（不必进 `KOJO_TOKEN_TIERS`，主题基线里已有色） */
-export const KOJO_STRUCTURE_BASELINE_TOKENS: readonly string[] = ['comment'];
+export const KOJO_STRUCTURE_BASELINE_TOKENS: readonly SemanticRole[] = [ROLE.comment];
 
 /** 捕获名（+ 可选的节点类型）→ 档位名；表里没有 = `null`（该捕获不着色，并走一次性告警） */
-export function tierForCapture(capture: string, nodeType?: string): string | null {
+export function tierForCapture(capture: string, nodeType?: string): SemanticRole | null {
   if (nodeType !== undefined) {
     const byNode = KOJO_STRUCTURE_NODE_TIERS[capture]?.[nodeType];
     if (byNode !== undefined) return byNode;
@@ -302,8 +303,8 @@ export function tierForCapture(capture: string, nodeType?: string): string | nul
 }
 
 /** 语义 token legend 的类型表（档位名去重后按稳定顺序；下标即编码里的 typeIndex） */
-export function structureLegendTypes(): string[] {
-  const seen = new Set<string>();
+export function structureLegendTypes(): SemanticRole[] {
+  const seen = new Set<SemanticRole>();
   for (const tier of Object.values(KOJO_STRUCTURE_CAPTURE_TIERS)) seen.add(tier);
   for (const byNode of Object.values(KOJO_STRUCTURE_NODE_TIERS)) for (const tier of Object.values(byNode)) seen.add(tier);
   for (const token of KOJO_STRUCTURE_BASELINE_TOKENS) seen.add(token);

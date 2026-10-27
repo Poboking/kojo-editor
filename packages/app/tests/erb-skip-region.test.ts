@@ -3,6 +3,7 @@ import type * as Monaco from '../src/monaco/entry';
 import { registerErbLanguage } from '../src/monaco/erb-language';
 import { registerKojoLanguage } from '../src/monaco/kojo-language';
 import { classifyKojoLine } from '../src/monaco/kojo-native-zone';
+import { ROLE } from '../src/monaco/semantic-roles';
 import { compileMonarch, driveLines, stubMonaco, type Emit } from './monarch-harness';
 
 /**
@@ -63,7 +64,7 @@ describe('.ERB [SKIPSTART]…[SKIPEND] 原样块', () => {
   it('块内逐行单一 raw 档：IF / 「台词」 / ; 注释 / 字符串 都不再被识别为语言构造', async () => {
     const lexer = await erbLexerP;
     const perLine = driveLines(lexer, body);
-    const raw = `keyword.raw${lexer.tokenPostfix}`;
+    const raw = `${ROLE.raw}${lexer.tokenPostfix}`;
     for (let i = 1; i <= 4; i++) {
       expect(
         allTokens(perLine[i]!, raw),
@@ -77,7 +78,7 @@ describe('.ERB [SKIPSTART]…[SKIPEND] 原样块', () => {
     expect(joined(perLine[4]!)).toBe('PRINTFORMW "字符串"');
   });
 
-  it('两个标记是专用标记档且与块内不同档（start / end 各自可区分）', async () => {
+  it('两个标记落预处理档且与块内 raw 档不同档（LAU-2 起 start / end 同角色）', async () => {
     const lexer = await erbLexerP;
     const perLine = driveLines(lexer, body);
     const start = perLine[0]!;
@@ -86,10 +87,12 @@ describe('.ERB [SKIPSTART]…[SKIPEND] 原样块', () => {
     expect(end, `结束标记行（实发：${dump(perLine)}）`).toHaveLength(1);
     expect(joined(start)).toBe('[SKIPSTART]');
     expect(joined(end)).toBe('[SKIPEND]');
-    expect(start[0]!.token.startsWith('keyword.preprocessor.skip.start')).toBe(true);
-    expect(end[0]!.token.startsWith('keyword.preprocessor.skip.end')).toBe(true);
-    expect(start[0]!.token, 'start / end 必须可区分').not.toBe(end[0]!.token);
-    const raw = `keyword.raw${lexer.tokenPostfix}`;
+    // LAU-2 收口：`keyword.preprocessor.skip.start` / `.end` 在别名表里都归 `role.directive`
+    // （收口前它们也只靠 `keyword.preprocessor` 前缀吃同一条规则、同一枚色）⇒ 可区分性只剩
+    // 「标记 vs 块内」两层，start / end 不再各分一色（要分色＝改配色，属定稿色卡那一批）
+    expect(start[0]!.token.startsWith(ROLE.directive)).toBe(true);
+    expect(end[0]!.token.startsWith(ROLE.directive)).toBe(true);
+    const raw = `${ROLE.raw}${lexer.tokenPostfix}`;
     expect(start[0]!.token, '标记不许落在块内 raw 档').not.toBe(raw);
     expect(end[0]!.token, '标记不许落在块内 raw 档').not.toBe(raw);
   });
@@ -99,8 +102,8 @@ describe('.ERB [SKIPSTART]…[SKIPEND] 原样块', () => {
       const theme = captured.themes.get(id);
       expect(theme, `主题 ${id} 没被装配`).toBeDefined();
       const foreground = (token: string) => theme!.rules.find((r) => r.token === token)?.foreground;
-      const marker = foreground('keyword.preprocessor');
-      const raw = foreground('keyword.raw');
+      const marker = foreground(ROLE.directive);
+      const raw = foreground(ROLE.raw);
       expect(marker, `${id} 缺 keyword.preprocessor 前景`).toMatch(/^[0-9a-f]{6}$/i);
       expect(raw, `${id} 缺 keyword.raw 前景`).toMatch(/^[0-9a-f]{6}$/i);
       expect(marker!.toLowerCase(), `${id}：标记档与 raw 档同色`).not.toBe(raw!.toLowerCase());
@@ -111,12 +114,12 @@ describe('.ERB [SKIPSTART]…[SKIPEND] 原样块', () => {
     const lexer = await erbLexerP;
     const perLine = driveLines(lexer, body);
     const ifToken = perLine[6]!.find((e) => e.text === 'IF')?.token ?? '<none>';
-    expect(ifToken, `[SKIPEND] 后的 IF 实发 ${ifToken}（${dump(perLine)}）`).toBe(`keyword${lexer.tokenPostfix}`);
-    expect(perLine[6]!.some((e) => e.token.startsWith('keyword.raw'))).toBe(false);
+    expect(ifToken, `[SKIPEND] 后的 IF 实发 ${ifToken}（${dump(perLine)}）`).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
+    expect(perLine[6]!.some((e) => e.token.startsWith(ROLE.raw))).toBe(false);
 
     const afterString = await driveLines(lexer, ['[SKIPSTART]', 'IF 1', '[SKIPEND]', 'PRINTFORMW "后文"']);
-    expect(afterString[3]!.find((e) => e.text === 'PRINTFORMW')?.token).toBe(`keyword${lexer.tokenPostfix}`);
-    expect(afterString[3]!.some((e) => e.token.startsWith('string'))).toBe(true);
+    expect(afterString[3]!.find((e) => e.text === 'PRINTFORMW')?.token).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
+    expect(afterString[3]!.some((e) => e.token.startsWith(ROLE.string))).toBe(true);
   });
 });
 
@@ -133,8 +136,8 @@ describe('.ERB 标记判据 = 真源 lexer 的整行等值（不是"行内出现
       expect(
         perLine[1]!.find((e) => e.text === 'IF')?.token,
         `${label} 的同形文本开了块，吃掉了后文（${dump(perLine)}）`,
-      ).toBe(`keyword${lexer.tokenPostfix}`);
-      expect(perLine[0]!.some((e) => e.token.startsWith('keyword.preprocessor.skip.start'))).toBe(false);
+      ).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
+      expect(perLine[0]!.some((e) => e.token.startsWith(ROLE.directive))).toBe(false);
       // 字符串 / 注释场景里，块外原有档位不许被这条规则扰动
       if (label === '字符串内') expect(joined(perLine[0]!)).toContain('[SKIPSTART]');
     }
@@ -143,27 +146,27 @@ describe('.ERB 标记判据 = 真源 lexer 的整行等值（不是"行内出现
   it('缩进与行尾空白不改变判据（trim 后整行等值）', async () => {
     const lexer = await erbLexerP;
     const perLine = driveLines(lexer, ['   [SKIPSTART]', '\tIF 1', '[SKIPEND]   ', 'IF 4']);
-    expect(perLine[0]![0]!.token.startsWith('keyword.preprocessor.skip.start')).toBe(true);
-    expect(allTokens(perLine[1]!, `keyword.raw${lexer.tokenPostfix}`)).toBe(true);
-    expect(perLine[2]![0]!.token.startsWith('keyword.preprocessor.skip.end')).toBe(true);
-    expect(perLine[3]!.find((e) => e.text === 'IF')?.token).toBe(`keyword${lexer.tokenPostfix}`);
+    expect(perLine[0]![0]!.token.startsWith(ROLE.directive)).toBe(true);
+    expect(allTokens(perLine[1]!, `${ROLE.raw}${lexer.tokenPostfix}`)).toBe(true);
+    expect(perLine[2]![0]!.token.startsWith(ROLE.directive)).toBe(true);
+    expect(perLine[3]!.find((e) => e.text === 'IF')?.token).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
   });
 
   it('块内带残留的 [SKIPEND] 不结束块；只有整行等值的才结束', async () => {
     const lexer = await erbLexerP;
     const perLine = driveLines(lexer, ['[SKIPSTART]', '[SKIPEND] 残余', 'IF 1', '[SKIPEND]', 'IF 2']);
-    const raw = `keyword.raw${lexer.tokenPostfix}`;
+    const raw = `${ROLE.raw}${lexer.tokenPostfix}`;
     expect(allTokens(perLine[1]!, raw), `带残留的 [SKIPEND] 提前结束了块（${dump(perLine)}）`).toBe(true);
     expect(allTokens(perLine[2]!, raw)).toBe(true);
-    expect(perLine[3]![0]!.token.startsWith('keyword.preprocessor.skip.end')).toBe(true);
-    expect(perLine[4]!.find((e) => e.text === 'IF')?.token).toBe(`keyword${lexer.tokenPostfix}`);
+    expect(perLine[3]![0]!.token.startsWith(ROLE.directive)).toBe(true);
+    expect(perLine[4]!.find((e) => e.text === 'IF')?.token).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
   });
 
   it('孤立的 [SKIPEND] 只是标记，不改变状态（后文仍按 root 着色）', async () => {
     const lexer = await erbLexerP;
     const perLine = driveLines(lexer, ['[SKIPEND]', 'IF 7']);
-    expect(perLine[0]![0]!.token.startsWith('keyword.preprocessor.skip.end')).toBe(true);
-    expect(perLine[1]!.find((e) => e.text === 'IF')?.token).toBe(`keyword${lexer.tokenPostfix}`);
+    expect(perLine[0]![0]!.token.startsWith(ROLE.directive)).toBe(true);
+    expect(perLine[1]!.find((e) => e.text === 'IF')?.token).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
   });
 });
 
@@ -176,10 +179,10 @@ describe('.kojo 侧停用块同样是原样档（真源 lexer 已登记 skipStar
   it('Monarch 与源判据同向：块内逐行 raw、标记行同档、[SKIPEND] 后恢复糖着色', async () => {
     const lexer = await kojoLexerP;
     const perLine = driveLines(lexer, ['[SKIPSTART]', '如果 条件：', 'IF 1', '[SKIPEND]', '如果 条件2：']);
-    const raw = `keyword.raw${lexer.tokenPostfix}`;
+    const raw = `${ROLE.raw}${lexer.tokenPostfix}`;
     // 标记与块内一律 raw（与 ```erb 围栏同档：不透明区不冒充活代码）
     for (const i of [0, 1, 2, 3]) expect(allTokens(perLine[i]!, raw), `第 ${i + 1} 行不是 raw`).toBe(true);
     // 整行等值的 [SKIPEND] 退块，后文恢复
-    expect(perLine[4]!.find((e) => e.text === '如果')?.token).toBe(`sugar.keyword${lexer.tokenPostfix}`);
+    expect(perLine[4]!.find((e) => e.text === '如果')?.token).toBe(`${ROLE.keyword}${lexer.tokenPostfix}`);
   });
 });

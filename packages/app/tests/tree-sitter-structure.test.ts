@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import { KOJO_TOKEN_TIERS } from '../src/monaco/kojo-language';
+import { ROLE } from '../src/monaco/semantic-roles';
 import {
   encodeStructureTokens,
   resetStructureSemanticWarnings,
@@ -72,17 +73,17 @@ describe('结构层档位映射 · 必须落在既有档位表里', () => {
    * 这一条钉住"不许再借引擎指令档凑数"；真要接全大写 ERB 直通行，走 `@keyword.directive` 自己登记。
    */
   it('@keyword 落中文关键字档，不借引擎指令档', () => {
-    expect(tierForCapture('keyword')).toBe('sugar.keyword');
-    expect(Object.values(KOJO_STRUCTURE_CAPTURE_TIERS)).not.toContain('keyword.erb');
+    expect(tierForCapture('keyword')).toBe(ROLE.keyword);
+    expect(Object.values(KOJO_STRUCTURE_CAPTURE_TIERS)).not.toContain(ROLE.engine);
   });
 
   it('节点类型级覆盖只在它登记的那支捕获里生效，查不到就回落到捕获名表', () => {
     // 心形正文是"整行 @keyword"里唯一一条不含关键字的正文 ⇒ 按台词档
-    expect(tierForCapture('keyword', 'heart_text')).toBe('sugar.speech');
+    expect(tierForCapture('keyword', 'heart_text')).toBe(ROLE.speech);
     // 语法升级（节点改名 / 拆分）时这张表自然失效：回落，不猜、不抛
-    expect(tierForCapture('keyword', 'node_that_does_not_exist_yet')).toBe('sugar.keyword');
+    expect(tierForCapture('keyword', 'node_that_does_not_exist_yet')).toBe(ROLE.keyword);
     // 别的捕获名下的同名节点不许被这一格串色
-    expect(tierForCapture('comment', 'heart_text')).toBe('comment');
+    expect(tierForCapture('comment', 'heart_text')).toBe(ROLE.comment);
   });
 
   it('legend 与两张档位表同源：表里每个档名都能反查回下标', () => {
@@ -292,7 +293,7 @@ const token = (over: Partial<KojoStructureToken>): KojoStructureToken => ({
   startCol: 0,
   endRow: 0,
   endCol: 3,
-  tier: 'comment',
+  tier: ROLE.comment,
   ...over,
 });
 

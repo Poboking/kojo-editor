@@ -5,7 +5,7 @@
  * **假 worker 客户端**（结构类型 `Kojo2SemanticWorkerClient`，只实现 `captures`）。18 条用例
  * 的语义逐条保留，只把"旧树 `Tree` 句柄"这一层换成"`treeId` 字符串"：
  *
- * 1. **legend 与主题逐字对齐**：legend 的每个 tokenType 都在 `KOJO2_THEME_RULES` /
+ * 1. **legend 与主题逐字对齐**：legend 的每个 tokenType 都在暗色角色规则（`ROLE_THEME_RULES`）/
  *    `KOJO2_THEME_TOKEN_MAP` 里，且前景色 / 字体样式逐格相等（不另造色板）；
  * 2. **capture 表不漏档**：`queries/v2/highlights.scm` 里出现的每个捕获名（`@none` 除外）
  *    都在这张表里——查询加档而映射没加时这里先红，而不是静默掉色；
@@ -22,7 +22,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { KOJO2_THEME_RULES, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
+import { ROLE_THEME_RULES } from '../src/monaco/kojo-theme-rules';
+import { KOJO2_TOKEN } from '../src/monaco/kojo2-language';
 import { KOJO2_THEME_TOKEN_MAP, KOJO2_THEMES, KOJO2_THEME_IDS } from '../src/monaco/kojo2-theme';
 import {
   KOJO2_CAPTURE_TOKEN_TYPES,
@@ -230,10 +231,10 @@ function dataOf(result: unknown): Uint32Array {
 describe('legend · 与 kojo2-theme 的主题规则逐字对齐', () => {
   it('legend 的每个 tokenType 都是一条主题规则，且暗色侧前景 / 字体样式逐格相等', () => {
     expect(KOJO2_SEMANTIC_TOKEN_LEGEND.tokenModifiers).toEqual([]);
-    const rules = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule]));
+    const rules = new Map(ROLE_THEME_RULES.map((rule) => [rule.token, rule]));
     for (const token of KOJO2_SEMANTIC_TOKEN_TYPES) {
       const rule = rules.get(token);
-      expect(rule, `legend「${token}」在 KOJO2_THEME_RULES 里没有规则`).toBeDefined();
+      expect(rule, `legend「${token}」在暗色角色规则里没有规则`).toBeDefined();
       const themeStyle = KOJO2_THEME_TOKEN_MAP[token].dark;
       expect({ foreground: rule!.foreground, fontStyle: rule!.fontStyle }).toEqual({
         foreground: themeStyle.foreground,

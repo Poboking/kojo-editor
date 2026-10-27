@@ -75,18 +75,13 @@
       }
     },
     "M3(旧token名)": {
-      "total": 254,
+      "total": 64,
       "files": {
         "packages/app/src/bootstrap.ts": 1,
         "packages/app/src/monaco/kojo-hover.ts": 2,
-        "packages/app/src/monaco/kojo-language.ts": 46,
-        "packages/app/src/monaco/kojo-theme-rules.ts": 30,
         "packages/app/src/monaco/kojo2-code-actions.ts": 1,
-        "packages/app/src/monaco/kojo2-theme.ts": 1,
-        "packages/app/src/monaco/theme.ts": 118,
-        "packages/app/src/monaco/tree-sitter/erb-tiers.ts": 2,
+        "packages/app/src/monaco/semantic-roles.ts": 30,
         "packages/app/src/monaco/tree-sitter/kojo2-assets.ts": 1,
-        "packages/app/src/monaco/tree-sitter/types.ts": 15,
         "packages/app/src/ui/CallHierarchyOverlay.tsx": 8,
         "packages/app/src/ui/editor-global-providers.ts": 6,
         "packages/app/src/ui/kojo2-cutover-settings.tsx": 1,
@@ -95,8 +90,7 @@
         "packages/app/src/ui/kojo2-storage-adapter.ts": 1,
         "packages/app/src/ui/kojo2-storage-persist.ts": 2,
         "packages/app/src/ui/kojo2-storage-retry-command.ts": 1,
-        "packages/app/src/ui/project-diagnostics.ts": 8,
-        "packages/app/src/ui/sugar-view.ts": 8
+        "packages/app/src/ui/project-diagnostics.ts": 8
       },
       "exempt": {
         "total": 1,

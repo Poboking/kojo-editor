@@ -1,26 +1,28 @@
 /**
- * Kojo 2.0 主题判据闸（K2-CUTOVER-PRE）。
+ * Kojo 2.0 主题判据闸（K2-CUTOVER-PRE；LAU-2 起判据对象 = 语义角色）。
  *
  * 钉四件事：
- * 1. **token 同源**：`KOJO2_THEME_TOKEN_MAP` 的键集合与 `kojo2-language.ts` 的 `KOJO2_TOKEN`
- *    逐字相等（顺序也相等），暗色侧与 `KOJO2_THEME_RULES` 逐格同源——将来词法加档 / 改名，
- *    这里先红，不会静默掉色；
- * 2. **两套 key 完整**：暗 / 亮 / 墨绿三套的 `colors` 键集合与 `KOJO2_COLOR_KEYS` 相等，
- *    每个值都是合法十六进制色；
- * 3. **配色质量**：每档对各自底色对比度 ≥ 4.5，任意两档 CIE76 ΔE ≥ 12（假分层 = 红）；
+ * 1. **角色同源**：`KOJO2_THEME_TOKEN_MAP` 的键集合与 `SEMANTIC_ROLES` 逐字相等（顺序也相等），
+ *    暗色侧与叶子的 `ROLE_THEME_RULES` 逐格同源——将来角色表加档 / 改名，这里先红，
+ *    不会静默掉色；
+ * 2. **三套 key 完整**：暗 / 亮 / 墨绿三套的 `colors` 键集合与 `KOJO2_COLOR_KEYS` 相等，
+ *    每个值都是合法十六进制色；三套的规则 token 集合彼此相等；
+ * 3. **配色质量**：每档角色对各自底色对比度 ≥ 4.5，任意两档 CIE76 ΔE ≥ 12（假分层 = 红）；
  * 4. **注册幂等**：同一 Monaco 实例只定义一次，第二个实例各注册一份，主题名不串。
+ *
+ * LAU-2 之前这一族量的是 16 个 `kojo2.*` token；现在两门语言共用一个角色表，
+ * 三套 `kojo2-*` 主题与六套 `kojo-*` 主题铺的是**同一批 34 档角色**（逐档色值由
+ * `semantic-roles.test.ts` 拿改前快照钉住），所以本文件量角色，不再量 `kojo2.*` 名字。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { KOJO2_THEME_RULES, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
 import {
-  KOJO2_LIGHT_THEME_RULES,
-  KOJO2_MINT_THEME_RULES,
-  KOJO2_THEME_RULES as LEAF_THEME_RULES,
-  KOJO2_TOKEN as LEAF_TOKEN,
   KOJO_SEMANTIC_THEME_RULES,
-  KOJO_SUGAR_THEME_RULES,
+  ROLE_LIGHT_THEME_RULES,
+  ROLE_MINT_THEME_RULES,
+  ROLE_THEME_RULES,
 } from '../src/monaco/kojo-theme-rules';
+import { KOJO2_TOKEN, ROLE, ROLE_FONT_STYLES, SEMANTIC_ROLES, isSemanticRole } from '../src/monaco/semantic-roles';
 import { defineMonacoThemes, monacoThemeIdFor } from '../src/monaco/theme';
 import { THEME_IDS } from '../src/ui/theme-pref';
 import {
@@ -114,43 +116,43 @@ function deltaE(a: string, b: string): number {
   return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
 }
 
-/* ============================== token 同源 ============================== */
+/* ============================== 角色同源 ============================== */
 
-const TOKEN_NAMES = Object.values(KOJO2_TOKEN);
+const ROLE_NAMES = [...SEMANTIC_ROLES];
 
-describe('token 映射：与 kojo2-language 的 token 名逐字一致', () => {
-  it('键集合 = KOJO2_TOKEN 的值集合（顺序也一致，防手抄漂移）', () => {
-    expect(Object.keys(KOJO2_THEME_TOKEN_MAP)).toEqual([...TOKEN_NAMES]);
-    expect(new Set(Object.keys(KOJO2_THEME_TOKEN_MAP)).size).toBe(TOKEN_NAMES.length);
-    // 全部 `kojo2.` 前缀（与 v1 的 `sugar.*` / `keyword.*` 不撞名）
-    for (const token of TOKEN_NAMES) expect(token.startsWith('kojo2.')).toBe(true);
+describe('角色映射：与语义角色表逐字一致', () => {
+  it('键集合 = SEMANTIC_ROLES（顺序也一致，防手抄漂移）', () => {
+    expect(Object.keys(KOJO2_THEME_TOKEN_MAP)).toEqual(ROLE_NAMES);
+    expect(new Set(Object.keys(KOJO2_THEME_TOKEN_MAP)).size).toBe(ROLE_NAMES.length);
+    // 全部 `role.` 前缀（与 Monaco 基线 token 如 `keyword` / `string` 不撞名）
+    for (const role of ROLE_NAMES) expect(role.startsWith('role.')).toBe(true);
   });
 
-  it('暗色侧与 KOJO2_THEME_RULES 逐格同源（前景 + 字体样式，一格不差）', () => {
-    const ruleByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule]));
-    expect(ruleByToken.size).toBe(TOKEN_NAMES.length);
-    for (const token of TOKEN_NAMES) {
-      const rule = ruleByToken.get(token);
-      expect(rule, `KOJO2_THEME_RULES 缺 ${token}`).toBeTruthy();
-      const style = KOJO2_THEME_TOKEN_MAP[token].dark;
+  it('暗色侧与 ROLE_THEME_RULES 逐格同源（前景 + 字体样式，一格不差）', () => {
+    const ruleByRole = new Map(ROLE_THEME_RULES.map((rule) => [rule.token, rule]));
+    expect(ruleByRole.size).toBe(ROLE_NAMES.length);
+    for (const role of ROLE_NAMES) {
+      const rule = ruleByRole.get(role);
+      expect(rule, `ROLE_THEME_RULES 缺 ${role}`).toBeTruthy();
+      const style = KOJO2_THEME_TOKEN_MAP[role as keyof typeof KOJO2_THEME_TOKEN_MAP].dark;
       expect(style.foreground).toBe(rule!.foreground);
       expect(style.fontStyle).toBe(rule!.fontStyle);
     }
   });
 
-  it('亮色侧齐全且是合法十六进制；暗/亮都只含允许的字体样式', () => {
-    for (const token of TOKEN_NAMES) {
-      for (const side of ['dark', 'light'] as const) {
-        const style = KOJO2_THEME_TOKEN_MAP[token][side];
-        expect(style.foreground, `${token}/${side}`).toMatch(/^[0-9a-f]{6}$/i);
+  it('亮色侧齐全且是合法十六进制；三侧都只含允许的字体样式', () => {
+    for (const role of ROLE_NAMES) {
+      for (const side of ['dark', 'light', 'mint'] as const) {
+        const style = KOJO2_THEME_TOKEN_MAP[role as keyof typeof KOJO2_THEME_TOKEN_MAP][side];
+        expect(style.foreground, `${role}/${side}`).toMatch(/^[0-9a-f]{6}$/i);
         expect([undefined, 'bold', 'italic']).toContain(style.fontStyle);
       }
     }
-    // 锚点加粗、提示与注释斜体（与 kojo2-language 的规则一致）
-    expect(KOJO2_THEME_TOKEN_MAP[KOJO2_TOKEN.anchor].dark.fontStyle).toBe('bold');
-    expect(KOJO2_THEME_TOKEN_MAP[KOJO2_TOKEN.anchor].light.fontStyle).toBe('bold');
-    expect(KOJO2_THEME_TOKEN_MAP[KOJO2_TOKEN.hint].light.fontStyle).toBe('italic');
-    expect(KOJO2_THEME_TOKEN_MAP[KOJO2_TOKEN.comment].light.fontStyle).toBe('italic');
+    // 锚点加粗、提示与注释斜体（与角色表的 `ROLE_FONT_STYLES` 一致）
+    expect(KOJO2_THEME_TOKEN_MAP[ROLE.anchor].dark.fontStyle).toBe('bold');
+    expect(KOJO2_THEME_TOKEN_MAP[ROLE.anchor].light.fontStyle).toBe('bold');
+    expect(KOJO2_THEME_TOKEN_MAP[ROLE.hint].light.fontStyle).toBe('italic');
+    expect(KOJO2_THEME_TOKEN_MAP[ROLE.comment].light.fontStyle).toBe('italic');
   });
 
   it('作者面三类（锚点 / 声明名 / 对话）都落在映射里，且不重复登记', () => {
@@ -164,42 +166,65 @@ describe('token 映射：与 kojo2-language 的 token 名逐字一致', () => {
       expect(category.tokens.length).toBeGreaterThan(0);
       expect(category.note.length).toBeGreaterThan(0);
       for (const token of category.tokens) {
-        expect(TOKEN_NAMES, `${category.category} 里的 ${token} 不是词法 token`).toContain(token);
+        expect(isSemanticRole(token), `${category.category} 里的 ${token} 不是角色`).toBe(true);
+        expect(ROLE_NAMES, `${category.category} 里的 ${token} 不在角色表`).toContain(token);
         expect(seen.has(token), `${token} 被两类同时登记`).toBe(false);
         seen.add(token);
       }
     }
     // 对话类必须含 `角色：「…」` 的两层：说话人与台词
     const dialogue = KOJO2_THEME_CATEGORIES.find((category) => category.category === '对话')!;
-    expect(dialogue.tokens).toContain(KOJO2_TOKEN.speaker);
-    expect(dialogue.tokens).toContain(KOJO2_TOKEN.speech);
+    expect(dialogue.tokens).toContain(ROLE.speaker);
+    expect(dialogue.tokens).toContain(ROLE.speech);
+  });
+
+  it('2.0 的十六个词法档位名解析到的角色全部在映射里（词法 → 角色 → 颜色一条链走通）', () => {
+    expect(Object.keys(KOJO2_TOKEN).length).toBe(16);
+    for (const role of Object.values(KOJO2_TOKEN)) {
+      expect(isSemanticRole(role)).toBe(true);
+      expect(KOJO2_THEME_TOKEN_MAP[role], `${role} 没有主题样式`).toBeDefined();
+    }
+  });
+
+  it('三侧字重逐格等于角色表的 ROLE_FONT_STYLES（字重漂移 = 屏上"同一档两种脸"）', () => {
+    for (const role of ROLE_NAMES) {
+      const want = ROLE_FONT_STYLES[role as keyof typeof ROLE_FONT_STYLES];
+      for (const side of ['dark', 'light', 'mint'] as const) {
+        expect(
+          KOJO2_THEME_TOKEN_MAP[role as keyof typeof KOJO2_THEME_TOKEN_MAP][side].fontStyle,
+          `${role}/${side}`,
+        ).toBe(want);
+      }
+    }
   });
 });
 
 /* ============================== 主题字面量 ============================== */
 
 describe('主题字面量：亮 / 暗 / 墨绿三套，rules 与 colors 都完整', () => {
-  it('暗色：vs-dark、不继承、规则就是 KOJO2_THEME_RULES 的浅拷贝', () => {
+  it('暗色：vs-dark、不继承、规则就是 ROLE_THEME_RULES 的浅拷贝', () => {
     expect(kojo2DarkTheme.base).toBe('vs-dark');
     expect(kojo2DarkTheme.inherit).toBe(false);
-    expect(kojo2DarkTheme.rules).toEqual([...KOJO2_THEME_RULES]);
-    expect(kojo2DarkTheme.rules.map((rule) => rule.token).sort()).toEqual([...TOKEN_NAMES].sort());
+    expect(kojo2DarkTheme.rules).toEqual([...ROLE_THEME_RULES]);
+    expect(kojo2DarkTheme.rules.map((rule) => rule.token).sort()).toEqual([...ROLE_NAMES].sort());
   });
 
-  it('亮色 / 墨绿：不继承、规则 token 集合与暗色完全相同', () => {
+  it('亮色 / 墨绿：不继承、规则角色集合与暗色完全相同', () => {
     for (const theme of [kojo2LightTheme, kojo2MintDarkTheme]) {
       expect(theme.inherit).toBe(false);
-      expect(theme.rules.map((rule) => rule.token).sort()).toEqual([...TOKEN_NAMES].sort());
+      expect(theme.rules.map((rule) => rule.token).sort()).toEqual([...ROLE_NAMES].sort());
     }
     expect(kojo2LightTheme.base).toBe('vs');
     expect(kojo2MintDarkTheme.base).toBe('vs-dark');
     // 亮色的每一格 = 映射里的亮色侧（不另写第二份调色板）
-    const lightByToken = new Map(kojo2LightTheme.rules.map((rule) => [rule.token, rule]));
-    for (const token of TOKEN_NAMES) {
-      const rule = lightByToken.get(token);
-      expect(rule!.foreground).toBe(KOJO2_THEME_TOKEN_MAP[token].light.foreground);
-      expect(rule!.fontStyle).toBe(KOJO2_THEME_TOKEN_MAP[token].light.fontStyle);
+    const lightByRole = new Map(kojo2LightTheme.rules.map((rule) => [rule.token, rule]));
+    for (const role of ROLE_NAMES) {
+      const rule = lightByRole.get(role);
+      expect(rule!.foreground).toBe(KOJO2_THEME_TOKEN_MAP[role as keyof typeof KOJO2_THEME_TOKEN_MAP].light.foreground);
+      expect(rule!.fontStyle).toBe(KOJO2_THEME_TOKEN_MAP[role as keyof typeof KOJO2_THEME_TOKEN_MAP].light.fontStyle);
     }
+    expect(kojo2LightTheme.rules).toEqual([...ROLE_LIGHT_THEME_RULES]);
+    expect(kojo2MintDarkTheme.rules).toEqual([...ROLE_MINT_THEME_RULES]);
   });
 
   it('主题 id ↔ 字面量一一对应；偏好映射回缺省暗色', () => {
@@ -225,7 +250,7 @@ describe('主题字面量：亮 / 暗 / 墨绿三套，rules 与 colors 都完�
         expect(value, `${id}/${key}`).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/i);
       }
     }
-    // 两套主题的底必须不同（不是复制粘贴的假亮色）
+    // 三套主题的底必须两两不同（不是复制粘贴的假亮色）
     expect(kojo2LightTheme.colors['editor.background']).not.toBe(
       kojo2DarkTheme.colors['editor.background'],
     );
@@ -248,21 +273,21 @@ describe('配色质量：对比度 ≥ 4.5、任意两档 ΔE ≥ 12', () => {
     { name: 'mint-dark', side: 'mint', theme: kojo2MintDarkTheme },
   ];
 
-  it.each(SIDES)('$name：每档前景对底色对比度 ≥ 4.5', ({ theme, side }) => {
+  it.each(SIDES)('$name：每档角色前景对底色对比度 ≥ 4.5', ({ theme, side }) => {
     const background = theme.colors['editor.background']!.slice(1);
-    for (const token of TOKEN_NAMES) {
-      const foreground = KOJO2_THEME_TOKEN_MAP[token][side].foreground;
-      expect(contrast(foreground, background), `${token} 在 ${side} 底上太弱`).toBeGreaterThanOrEqual(4.5);
+    for (const role of ROLE_NAMES) {
+      const foreground = KOJO2_THEME_TOKEN_MAP[role as keyof typeof KOJO2_THEME_TOKEN_MAP][side].foreground;
+      expect(contrast(foreground, background), `${role} 在 ${side} 底上太弱`).toBeGreaterThanOrEqual(4.5);
     }
   });
 
   it.each([
-    // 去重后剩几枚独立色 = 16 档减去"同档共用色"的对数：
-    // 暗色共用 {台词/字面, 数字/十六进制} 2 对 ⇒ 14；亮色再多一对 {原生/注释} ⇒ 13。
-    // （标点 2026-10-26 批起与 v1 同色 7f9cc0，不再与保留词共用 ⇒ 暗色 12 → 13；
-    //  类型档 2026-10-27 批各套都是一枚新色，不与任何档共用 ⇒ 暗 13 → 14、亮 12 → 13。）
-    { name: 'dark', theme: kojo2DarkTheme, unique: 14 },
-    { name: 'light', theme: kojo2LightTheme, unique: 13 },
+    // 去重后剩几枚独立色（LAU-2 收口前与收口后**逐字相同**——本批一格色都没改；
+    // 旧读数是 16 档 `kojo2.*` 去重后的 14 / 13 / 13，现在是 34 档角色去重后的 25 / 18 / 16）：
+    // dark 25 / light 18 / mint 16。
+    { name: 'dark', theme: kojo2DarkTheme, unique: 25 },
+    { name: 'light', theme: kojo2LightTheme, unique: 18 },
+    { name: 'mint-dark', theme: kojo2MintDarkTheme, unique: 16 },
   ])('$name：任意两档 CIE76 ΔE ≥ 12（一档一色，不许假分层）', ({ theme, unique: expected }) => {
     const unique = [...new Set(theme.rules.map((rule) => rule.foreground!))];
     expect(unique.length).toBe(expected);
@@ -385,35 +410,7 @@ describe('defineMonacoThemes · Kojo 2.0 主题只在 flag 开时注册', () => 
   });
 });
 
-/* ==================== K2-CUTOVER-THEME：2.0 规则并入 v1 三套 ==================== */
-
-/**
- * v1 三套主题的**规则词表契约**（本测试自持一份，不 import `theme.ts` 的实现细节）：
- * 词法基线 12 档 + 糖 15 档 + 语义 5 档 = 32 条。flag 关时三套 rules 必须**逐字**就是这
- * 32 条（K2-CUTOVER-THEME 的硬判据）；flag 开时这 32 条仍在原位，2.0 规则只许**追加**。
- */
-const V1_BASE_TOKENS: readonly string[] = [
-  'comment',
-  'keyword',
-  'keyword.preprocessor',
-  'entity.name.function',
-  // 类型 / 结构名（2026-10-27 第三色批）：位序与 `theme.ts` 的 BASE_RULE_SPECS 逐字对齐——
-  // 本表是"原序在前"那条判据的尺子，插错一格当场红。
-  'support.type',
-  'variable',
-  'string',
-  'number',
-  'label',
-  'identifier',
-  'operator',
-  'string.escape',
-];
-
-const V1_RULE_TOKENS: readonly string[] = [
-  ...V1_BASE_TOKENS,
-  ...KOJO_SUGAR_THEME_RULES.map((rule) => rule.token),
-  ...KOJO_SEMANTIC_THEME_RULES.map((rule) => rule.token),
-];
+/* ==================== LAU-2：规则数据单源 + 六套与三套同角色 ==================== */
 
 /** 装配一次并拿 `defineTheme` 捕获的账（flag 由调用方先 stub） */
 function captureThemes(): Map<string, Monaco.editor.IStandaloneThemeData> {
@@ -422,87 +419,51 @@ function captureThemes(): Map<string, Monaco.editor.IStandaloneThemeData> {
   return fake.defined;
 }
 
-function tokensOf(theme: Monaco.editor.IStandaloneThemeData): string[] {
-  return theme.rules.map((rule) => rule.token);
-}
-
-describe('2.0 规则无条件并入 v1 三套（K2-SURFACE-DEFAULT）', () => {
+describe('LAU-2：三套 `kojo2-*` 与六套 `kojo-*` 铺同一批角色', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('默认档（不设任何 stage）：v1 32 条原序在前，16 条 2.0 规则逐格追加在后', () => {
-    // 不 stub 任何东西 = 缺省阶段 `v1-only`（切流语义关闭）——配色是语言面，照样并入
-    const themes = captureThemes();
-    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
-      const tokens = tokensOf(themes.get(id)!);
-      expect(tokens.slice(0, V1_RULE_TOKENS.length), id).toEqual([...V1_RULE_TOKENS]);
-      expect(tokens.length, id).toBe(V1_RULE_TOKENS.length + KOJO2_THEME_RULES.length);
+  it('规则数据单源：叶子三张规则表被三套 kojo2 主题原样引用（浅拷贝，元素同对象）', () => {
+    for (const [theme, rules] of [
+      [kojo2DarkTheme, ROLE_THEME_RULES],
+      [kojo2LightTheme, ROLE_LIGHT_THEME_RULES],
+      [kojo2MintDarkTheme, ROLE_MINT_THEME_RULES],
+    ] as const) {
+      expect(theme.rules).toHaveLength(rules.length);
+      for (let i = 0; i < rules.length; i += 1) expect(theme.rules[i]).toBe(rules[i]);
     }
   });
 
-  it('默认档：16/16 个 `kojo2.*` token 全部有配色（三套主题各 16 条）', () => {
+  it('六套 kojo-* 的角色规则集与 kojo2-* 逐字相同（两门语言同一批档）', () => {
     const themes = captureThemes();
-    const expected = Object.values(KOJO2_TOKEN);
-    expect(expected).toHaveLength(16);
-    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
-      const tokens = new Set(tokensOf(themes.get(id)!));
-      const missing = expected.filter((token) => !tokens.has(token));
-      expect(missing, `${id} 缺 ${missing.length} 档 2.0 token 配色`).toEqual([]);
+    for (const id of V1_THEME_IDS) {
+      const roles = themes.get(id)!.rules.map((rule) => rule.token).filter((t) => t.startsWith('role.'));
+      expect([...roles].sort(), id).toEqual([...ROLE_NAMES].sort());
     }
   });
 
-  it('暗色两套追加暗色规则、亮色那套追加亮色规则（不把暗色调色板照搬）', () => {
-    const themes = captureThemes();
-    const darkTail = themes.get('kojo-dark')!.rules.slice(V1_RULE_TOKENS.length);
-    const mintTail = themes.get('kojo-mint-dark')!.rules.slice(V1_RULE_TOKENS.length);
-    const lightTail = themes.get('kojo-light')!.rules.slice(V1_RULE_TOKENS.length);
-    expect(darkTail).toEqual([...KOJO2_THEME_RULES]);
-    // 墨绿有自己的盘（色值批：暗色表落墨绿底剩 4 对撞色）⇒ 只保证"是 2.0 的 16 档"
-    expect(mintTail.map((rule) => rule.token)).toEqual(KOJO2_THEME_RULES.map((rule) => rule.token));
-    expect(lightTail).toEqual([...KOJO2_LIGHT_THEME_RULES]);
-    const darkByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule.foreground]));
-    for (const rule of lightTail) {
-      expect(rule.foreground, `${rule.token} 亮色误用暗色`).not.toBe(darkByToken.get(rule.token));
-    }
-  });
-
-  it('kojo-mint-dark：追加墨绿 2.0 规则（与 kojo2-mint-dark 同一选择）', () => {
-    const mint = captureThemes().get('kojo-mint-dark')!;
-    expect(mint.rules.slice(V1_RULE_TOKENS.length)).toEqual([...KOJO2_MINT_THEME_RULES]);
-    // 墨绿不再复用暗色表：那五枚与本盘近邻色只差 4.4–11.7（撞色），已换成墨绿语义近邻色
-    expect(KOJO2_MINT_THEME_RULES).not.toEqual(KOJO2_THEME_RULES);
-  });
-
-  it('rules 与 colors 只随装配，不随切流开关：两档逐字相同', () => {
+  it('规则与颜色只随装配、不随切流开关：两档逐字相同', () => {
     stubFlag(false);
     const off = captureThemes();
     stubFlag(true);
     const on = captureThemes();
-    for (const id of ['kojo-dark', 'kojo-light', 'kojo-mint-dark'] as const) {
+    for (const id of V1_THEME_IDS) {
       expect(on.get(id)!.rules, id).toEqual(off.get(id)!.rules);
       expect(on.get(id)!.colors, id).toEqual(off.get(id)!.colors);
     }
   });
 
-  it('亮色 2.0 规则表在 #f6f8fa 上每档对比度 ≥ 4.5（合并进 kojo-light 不掉档）', () => {
-    expect(KOJO2_LIGHT_THEME_RULES.length).toBe(Object.values(KOJO2_TOKEN).length);
-    for (const rule of KOJO2_LIGHT_THEME_RULES) {
+  it('亮色角色调色板在 #f6f8fa 上每档 ≥ 4.5（合并进 kojo-light 不掉档）', () => {
+    for (const rule of ROLE_LIGHT_THEME_RULES) {
       expect(rule.foreground, rule.token).toBeDefined();
       expect(contrast(rule.foreground!, 'f6f8fa'), `${rule.token} 在浅底上太弱`).toBeGreaterThanOrEqual(4.5);
     }
   });
 
-  it('KOJO2_LIGHT_THEME_RULES 与 KOJO2_TOKEN 逐字对齐（token 集合 + 顺序 + 字体样式）', () => {
-    expect(KOJO2_LIGHT_THEME_RULES.map((rule) => rule.token)).toEqual([...Object.values(KOJO2_TOKEN)]);
-    const darkByToken = new Map(KOJO2_THEME_RULES.map((rule) => [rule.token, rule]));
-    for (const rule of KOJO2_LIGHT_THEME_RULES) {
-      expect(rule.fontStyle, `${rule.token} 亮/暗字重漂移`).toBe(darkByToken.get(rule.token)?.fontStyle);
-    }
-  });
-
-  it('规则数据单源：kojo2-language 的 re-export 与叶子是同一对象（搬家没复制）', () => {
-    expect(KOJO2_THEME_RULES).toBe(LEAF_THEME_RULES);
-    expect(KOJO2_TOKEN).toBe(LEAF_TOKEN);
+  it('名字层五条仍在 kojo-dark 里（D6：与角色正交，不并进角色表）', () => {
+    const themes = captureThemes();
+    const tokens = new Set(themes.get('kojo-dark')!.rules.map((rule) => rule.token));
+    for (const rule of KOJO_SEMANTIC_THEME_RULES) expect(tokens.has(rule.token), rule.token).toBe(true);
   });
 });

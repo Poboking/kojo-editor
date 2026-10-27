@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { registerErbLanguage } from '../src/monaco/erb-language';
-import { KOJO_SUGAR_THEME_RULES } from '../src/monaco/kojo-language';
+import { ROLE_THEME_RULES } from '../src/monaco/kojo-language';
+import { NAME_LAYER_RULES, ROLE, SEMANTIC_ROLES } from '../src/monaco/semantic-roles';
 import { KOJO_SEMANTIC_THEME_RULES } from '../src/monaco/kojo-semantic-tokens';
 import { monacoThemeIdFor, type MonacoThemeId, type MonacoThemePref } from '../src/monaco/theme';
 import { THEME_IDS, type ThemePref } from '../src/ui/theme-pref';
@@ -93,22 +94,24 @@ const REQUIRED_COLORS = [
   'editorOverviewRuler.border',
 ] as const;
 
-const REQUIRED_BASE_TOKENS = [
-  'comment',
-  'keyword',
-  'keyword.preprocessor',
-  'entity.name.function',
-  // 类型 / 结构名（2026-10-27 第三色批）：三套都必须有这一档的前景，漏一套当场抛
-  // （`rulesFromPalette` 的"调色板缺少 token"），漏登记进本表则由下面的覆盖用例点名。
-  'support.type',
-  'variable',
-  'string',
-  'number',
-  'label',
-  'identifier',
-  // 运算符 / 标点档（ERB 的半角运算符与全角标点、`.kojo` 表达式括号都发这一枚 token）
-  'operator',
-  'string.escape',
+/**
+ * 六套主题都必须覆盖的**角色**（LAU-2：词法基线不再按 token 名判，改按角色判）。
+ * 这十二档是"每个编辑器都必须有的那几层"：注释 / 骨架 / 预处理 / 定义名 / 类型 / 变量 /
+ * 串 / 数字 / 标签 / 正文 / 运算符 / 转义。缺一档 ⇔ `rulesFromRolePalette` 在装配期抛。
+ */
+const REQUIRED_BASE_ROLES = [
+  ROLE.comment,
+  ROLE.keyword,
+  ROLE.directive,
+  ROLE.decl,
+  ROLE.type,
+  ROLE.variable,
+  ROLE.string,
+  ROLE.number,
+  ROLE.label,
+  ROLE.text,
+  ROLE.operator,
+  ROLE.escape,
 ] as const;
 
 /* ============================== ① 映射 ============================== */
@@ -185,7 +188,7 @@ describe('defineMonacoThemes：经 registerErbLanguage 一次定义六套', () =
   it('dark 的糖/语义规则对象原样复用（同引用，主题侧不抄第二份）', () => {
     const dark = themes.get('kojo-dark');
     if (!dark) throw new Error('没有捕获到 kojo-dark 主题');
-    for (const rule of KOJO_SUGAR_THEME_RULES) {
+    for (const rule of ROLE_THEME_RULES) {
       expect(dark.rules.includes(rule), `kojo-dark 缺糖规则 ${rule.token}（或被复制了）`).toBe(true);
     }
     for (const rule of KOJO_SEMANTIC_THEME_RULES) {
@@ -327,29 +330,29 @@ describe('operator 档住在结构族里：可读、弱于正文、别于注释�
         if (!foreground) throw new Error(`${id} 没有 ${token} 的前景（调色板漏格）`);
         return foreground;
       };
-      const operator = fgOf('operator');
-      expect(operator, `${id}/operator`).toMatch(/^[0-9a-fA-F]{6}$/);
+      const operator = fgOf(ROLE.operator);
+      expect(operator, `${id}/role.operator`).toMatch(/^[0-9a-fA-F]{6}$/);
       // ① 可读（本文件 ④ 的全局线在 operator 上单独再看一次，读数写进失败信息）
       expect(
         contrastRatio(operator, background),
-        `${id}/operator #${operator} 对比 ${contrastRatio(operator, background).toFixed(2)}:1 < 4.5`,
+        `${id}/role.operator #${operator} 对比 ${contrastRatio(operator, background).toFixed(2)}:1 < 4.5`,
       ).toBeGreaterThanOrEqual(4.5);
       // ② 弱于正文：标点比台词/标识符退让（浅底上"退让"= 对比更低）
       expect(
         contrastRatio(operator, background),
-        `${id}/operator #${operator} 比正文 #${fgOf('identifier')} 还抢眼`,
-      ).toBeLessThan(contrastRatio(fgOf('identifier'), background));
+        `${id}/role.operator #${operator} 比正文 #${fgOf(ROLE.text)} 还抢眼`,
+      ).toBeLessThan(contrastRatio(fgOf(ROLE.text), background));
       // ③ 不抢关键字：彩度低于本套关键字档
-      expect(chroma(operator), `${id}/operator C*=${chroma(operator).toFixed(1)} ≥ 关键字 C*`).toBeLessThan(
-        chroma(fgOf('keyword')),
+      expect(chroma(operator), `${id}/role.operator C*=${chroma(operator).toFixed(1)} ≥ 关键字 C*`).toBeLessThan(
+        chroma(fgOf(ROLE.keyword)),
       );
       // ④ 肉眼可分：对每个基线档 ΔE ≥ 12（撞色 = 假分层；注释那一档尤其，台词标点最常被读成它）
-      for (const token of REQUIRED_BASE_TOKENS) {
-        if (token === 'operator') continue;
+      for (const token of REQUIRED_BASE_ROLES) {
+        if (token === ROLE.operator) continue;
         const other = fgOf(token);
         expect(
           deltaE(operator, other),
-          `${id}: operator #${operator} ↔ ${token} #${other} ΔE=${deltaE(operator, other).toFixed(1)} < 12`,
+          `${id}: role.operator #${operator} ↔ ${token} #${other} ΔE=${deltaE(operator, other).toFixed(1)} < 12`,
         ).toBeGreaterThanOrEqual(12);
       }
     });
@@ -358,14 +361,14 @@ describe('operator 档住在结构族里：可读、弱于正文、别于注释�
 
 /* ============================== ⑤ token 覆盖 ============================== */
 
-describe('三套 rules 覆盖词法基线 + 全部糖/语义 token', () => {
-  const sugarTokens = KOJO_SUGAR_THEME_RULES.map((r) => r.token);
+describe('六套 rules 覆盖全部角色 + 名字层五条', () => {
+  const roleTokens = ROLE_THEME_RULES.map((r) => r.token);
   const semanticTokens = KOJO_SEMANTIC_THEME_RULES.map((r) => r.token);
 
   for (const id of V1_THEME_IDS) {
     it(`${id}：无漏配 token`, () => {
       const tokens = new Set(theme(id).rules.map((r) => r.token));
-      for (const token of [...REQUIRED_BASE_TOKENS, ...sugarTokens, ...semanticTokens]) {
+      for (const token of [...REQUIRED_BASE_ROLES, ...roleTokens, ...semanticTokens]) {
         expect(tokens.has(token), `${id} 漏配 ${token}`).toBe(true);
       }
     });
