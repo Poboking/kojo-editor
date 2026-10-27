@@ -187,6 +187,9 @@ import {
 } from './editor-pane-registry';
 import { sourceLineToSugar } from './sugar-view';
 import { loadWordBasedSuggestionsPref } from './suggest-pref';
+// IC 批（A 车道）：幽灵文本的宿主接线层 + 它的三格偏好真源（localStorage 单源，同 suggest-pref 形态）
+import { installInlineCompletion, type InlineCompletionFacts } from '../monaco/inline-completion-host';
+import { loadInlineCompletionPref, loadInlineMaxCandidatesPref } from './inline-completion-pref';
 
 /**
  * 2.0 项目级符号索引（K2-INDEX-REFS）：引用面与将来的跨文件重命名/调用层级共用这一份。
@@ -1378,6 +1381,49 @@ export function provideCodeActionsFor(
   return { actions, dispose: () => undefined };
 }
 
+/**
+ * 幽灵文本（内联补全）的**宿主事实**（IC 批 A 车道，2026-10-27）。
+ *
+ * 一次问槽要知道的六件事，全部从**既有登记簿**取，本模块不另建第二套"谁在屏上"的账：
+ * - 归属实例：`owningPaneOf` / `sugarOwningPaneOf` 两条相反判据**都要问**——前者答"有没有可写
+ *   的原文主人"（投影答无），后者答"它是不是投影面"。幽灵文本是**写**动作，所以在投影面上
+ *   必须整条沉默；但"这份 model 有没有主人"仍然要认后者，否则投影那一面连"该沉默"都不知道。
+ * - 只读 / 焦点 / 多光标 / 选区：都取**此刻的编辑器**（分屏 = 每实例各一份，别用全局焦点位）。
+ * - 项目：`kernel.project.current()`；没开项目 = `null`，供方按"无事实"降级（契约明文：
+ *   绝不回落到任何默认方言）。
+ *
+ * 返回 `null` = 这份 model 在宿主这里没有主人（隐藏池里的 / 别的应用面的）⇒ 一次都不问。
+ */
+function inlineCompletionFacts(model: Monaco.editor.ITextModel): InlineCompletionFacts | null {
+  const ctx = owningPaneOf(model) ?? sugarOwningPaneOf(model);
+  if (!ctx) return null;
+  const editor = ctx.editorRef.current;
+  if (!editor) return null;
+  const path = ctx.filePathRef.current;
+  const selections =
+    (typeof editor.getSelections === 'function' ? editor.getSelections() : null) ?? [];
+  let readOnly = true;
+  let focused = false;
+  let project: GameProject | null = null;
+  try {
+    readOnly = editor.getOption(monaco.editor.EditorOption.readOnly) === true;
+    focused = editor.hasTextFocus() === true;
+    project = requireKernel().project.current();
+  } catch {
+    // 内核还没就绪 / 编辑器已 dispose ⇒ 不猜，整条沉默（这一次不问任何供方）
+    return null;
+  }
+  return {
+    path: path || null,
+    derivedView: ctx.sugarModelRef.current === model,
+    readOnly,
+    focused,
+    multiCursor: selections.length > 1,
+    selectionActive: selections.some((s) => !!s && !s.isEmpty()),
+    project,
+  };
+}
+
 let globalsInstalled = false;
 const globalDisposers: Monaco.IDisposable[] = [];
 
@@ -1902,6 +1948,34 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     globalDisposers.push(installKojoCompletion(monaco, () => editorTables(requireKernel())));
     // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
     globalDisposers.push(installErbCompletion(monaco, () => editorTables(requireKernel())));
+    /* 幽灵文本（IC 批 A 车道，2026-10-27）：把 Monaco 的 inline completions 通道接到槽
+     * `completion.source`。
+     *
+     * 与上面两枚补全的关系是**两条独立通道**，不是同一件事做两遍：弹窗那条走
+     * `ui.editor.languageService`（同步、1:1 一家、列表呈现），幽灵文本这条走 `completion.source`
+     * （异步、多贡献者按 `order` 轮流、单答呈现 + 逐候选切换）。契约为什么不许塞进 languageService
+     * 写在 `plugin-api/inline-completion.ts` 的头注里，这里不重述。
+     *
+     * 装配点只做三件事：交槽查询的口子、交宿主事实（上面那一枚）、交偏好读取器。
+     * 时间预算 / 上下文窗 / 截断上限全在 `monaco/inline-completion-host.ts`（宿主的策略），
+     * 键位一律不在这里（Tab / Esc / IME 归属见该文件头注）。
+     */
+    globalDisposers.push(
+      installInlineCompletion(monaco, {
+        sources: () => {
+          try {
+            return requireKernel().slots.query('completion.source');
+          } catch {
+            return []; // 内核还没就绪：这一次没有候选源可问（不猜、不抛进 Monaco 的供给路径）
+          }
+        },
+        facts: inlineCompletionFacts,
+        pref: {
+          enabled: () => loadInlineCompletionPref(),
+          maxCandidates: () => loadInlineMaxCandidatesPref(),
+        },
+      }),
+    );
     // 用户片段补全（S18）：语言面常开（不经过 2.0 切流门控），ERB 与 kojo2 各挂**一枚独立
     // provider**——Monaco 同一语言允许多枚 completion provider 并存，内置补全不受影响。
     globalDisposers.push(...userSnippetProvider.install(monaco));

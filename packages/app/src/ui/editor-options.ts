@@ -106,6 +106,32 @@ export function quickSuggestionsFor(
 }
 
 /**
+ * 幽灵文本（内联补全，IC 批 A 车道）的 Monaco 选项补丁。
+ *
+ * ## 为什么这一格必须是**选项**而不是"provider 里返回空"
+ *
+ * `editor.inlineSuggest.enabled` 此前**全仓从没被设过**（vendor `InlineEditorSuggest`
+ * 缺省 `enabled: true` / `minShowDelay: 0`；取证 `grep -rn "inlineSuggest" packages/app/src`
+ * 改前只命中 `entry.ts` 那两条 import）。选项为关时 Monaco **一次都不问** provider，
+ * 于是"关掉 = 与接线前逐字节一致"这条判据有机制保证，而不是靠供方自觉。
+ * provider 侧另有第二道同名闸（`inline-completion-host.ts` 的 `pref-disabled`）：
+ * 第二道**不是重复判据**，它挡的是"选项还没落到位"那一拍（实例创建 / 切标签的时序），
+ * 真源仍是 `inline-completion-pref.ts` 那一份 localStorage。
+ *
+ * ## 为什么补丁只带两位
+ *
+ * `inlineSuggest` 是**组合选项**，vendor 的 `applyUpdate` 按键深合并到既有值上——只写
+ * `enabled` / `minShowDelay` 不会把同组其余位（`mode` / `showToolbar` / `suppressSuggestions`
+ * …）顶成缺省值。反过来说：**不许**在这里整张重抄 `inlineSuggest` 的值，那是第二份缺省表。
+ *
+ * `minShowDelay` 就是作者那格「停顿多久才弹」（真源与夹取在 pref 模块；vendor 区间 0–10000，
+ * 作者区间收窄到 0–1000 与「补全弹出延迟」同一把尺）。
+ */
+export function inlineSuggestPatch(enabled: boolean, minShowDelay: number): EditorOptionPatch {
+  return { inlineSuggest: { enabled, minShowDelay } };
+}
+
+/**
  * 中文语料的打字噪声 / 选词基线（A2+A3，**所有档位同值**）：
  * 既 spread 进 `editorOptionsForLineCount`（切文件路径），也 spread 进 EditorPane 的 create options。
  *

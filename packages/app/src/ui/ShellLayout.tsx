@@ -94,6 +94,15 @@ import {
   useSuggestDelayPref,
   useWordBasedSuggestionsPref,
 } from './suggest-pref';
+// 幽灵文本（内联补全）三格读数（IC 批 A 车道）：形态照 `suggest-pref`，真源在 localStorage
+import {
+  saveInlineCompletionPref,
+  saveInlineMaxCandidatesPref,
+  saveInlineMinShowDelayPref,
+  useInlineCompletionPref,
+  useInlineMaxCandidatesPref,
+  useInlineMinShowDelayPref,
+} from './inline-completion-pref';
 import {
   resetFontZoomPref,
   stepFontZoomPref,
@@ -1410,6 +1419,25 @@ export function ShellLayout(props: Props): ReactElement {
   const wordSuggestionsOn = useWordBasedSuggestionsPref();
   const commitWordSuggestions = useCallback((on: boolean) => {
     saveWordBasedSuggestionsPref(on);
+  }, []);
+
+  /**
+   * 幽灵文本三格读数（IC 批 A 车道，2026-10-27）：真源在 `inline-completion-pref.ts` 的
+   * localStorage + 订阅表，这里只拿投影。写下去后 `EditorPane` 的订阅回调现读 ⇒ **不用重开文件**，
+   * 与上面「输入时自动弹出补全」那一组同一条链路（候选上限那一格不进 Monaco 选项，它住在宿主的
+   * 截断点 `monaco/inline-completion-host.ts`）。
+   */
+  const inlineCompletionOn = useInlineCompletionPref();
+  const commitInlineCompletion = useCallback((on: boolean) => {
+    saveInlineCompletionPref(on);
+  }, []);
+  const inlineMinShowDelay = useInlineMinShowDelayPref();
+  const commitInlineMinShowDelay = useCallback((ms: number) => {
+    saveInlineMinShowDelayPref(ms);
+  }, []);
+  const inlineMaxCandidates = useInlineMaxCandidatesPref();
+  const commitInlineMaxCandidates = useCallback((count: number) => {
+    saveInlineMaxCandidatesPref(count);
   }, []);
 
   // 字号/缩放读数（A1）：真源在 font-size-pref 的 localStorage，这里只拿投影
@@ -3313,6 +3341,12 @@ export function ShellLayout(props: Props): ReactElement {
           commitWordSuggestions={commitWordSuggestions}
           suggestDelay={suggestDelay}
           commitSuggestDelay={commitSuggestDelay}
+          inlineCompletionOn={inlineCompletionOn}
+          commitInlineCompletion={commitInlineCompletion}
+          inlineMinShowDelay={inlineMinShowDelay}
+          commitInlineMinShowDelay={commitInlineMinShowDelay}
+          inlineMaxCandidates={inlineMaxCandidates}
+          commitInlineMaxCandidates={commitInlineMaxCandidates}
           sugarViewOn={sugarViewOn}
           applySugarViewPref={applySugarViewPref}
           formatOnSave={formatOnSave}

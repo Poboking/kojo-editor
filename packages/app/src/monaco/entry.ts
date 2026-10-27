@@ -108,6 +108,21 @@ import 'monaco-editor/editor/contrib/semanticTokens/browser/viewportSemanticToke
 import 'monaco-editor/editor/contrib/smartSelect/browser/smartSelect.js';
 import 'monaco-editor/editor/contrib/snippet/browser/snippetController2.js';
 import 'monaco-editor/editor/contrib/stickyScroll/browser/stickyScrollContribution.js';
+// ⑤（IC 批 A 车道，2026-10-27 核过）：**保留**，但它今天与将来都必须"不产出候选"——分工写在这里。
+// 这条 vendor 桥（`suggestInlineCompletions.js` 的 `SuggestInlineCompletions`）做的事是
+// **"把补全弹窗的候选也投一份成幽灵文本"**，且它只在自己满足一个条件时才出货：
+// `QuickSuggestionsOptions.valueFor(quickSuggestions, tokenType) === 'inline'`（源码原文，
+// 该文件 `provideInlineCompletions` 第 3 个早退分支）。而本仓的 `QUICK_SUGGESTIONS`
+// 是**布尔**三档（`ui/editor-options.ts`：`{other:true, comments:false, strings:false}`），
+// 布尔 `true` ≠ 字符串 `'inline'` ⇒ 恒早退 ⇒ **今天空转**（IC 批的实测：把它注册的真身
+// `registerEditorFeature` 打进调试宿，`provideInlineCompletions` 返回 `undefined`，
+// 屏幕上的幽灵文本全部来自槽 `completion.source` 那一枚 provider，见
+// `tests/inline-completion-host.test.ts` 的「quickSuggestions 是布尔 ⇒ 桥恒空转」那一钉）。
+// **为什么不删**：①它是 `editor.main.js` 非语言段的逐条同序清单一员（本文件头的维护纪律），
+// 删一行就是自创清单；②正牌候选源已经接管幽灵文本这一格，删掉桥并不改变任何行为，
+// 而**留着并钉住它的沉默条件**才防得住真正的事故——有人把 `quickSuggestions` 改成 `'inline'`
+// 那一刻，两家会同时往同一格投候选（弹窗候选 + 槽候选），症状是"幽灵文本一会儿是名字一会儿
+// 是整句"。那条钉子与这条注释是成对的：改判据必须先看见注释。
 import 'monaco-editor/editor/contrib/suggest/browser/suggestInlineCompletions.js';
 import 'monaco-editor/editor/standalone/browser/toggleHighContrast/toggleHighContrast.js';
 import 'monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js';
