@@ -80,8 +80,11 @@ function reasonOfStage(stage: string): StructureFailureReason {
 
 /**
  * 起一条结构化线程。`assets` 只描述"哪两枚 wasm、哪几份查询"——语言名不在这里出现。
+ *
+ * 返回引擎本体（生产入口不看它）：量数探针与协议表测试要 `dispose()` 掉引擎才收得干净
+ * （原生内存由引擎持有，线程被 terminate 时随线程回收，进程内驱动时没有那条兜底）。
  */
-export function startStructureWorker(assets: StructureEngineAssets): void {
+export function startStructureWorker(assets: StructureEngineAssets): StructureEngine {
   const scope = self as unknown as WorkerScope;
   /** 一次请求内引擎的子回话（v3 要一条请求一条回复；见文件头的翻译口径） */
   let collected: KojoStructureReply[] = [];
@@ -255,6 +258,13 @@ export function startStructureWorker(assets: StructureEngineAssets): void {
       runOpen(request);
       return;
     }
+    // 内容二选一在**暂存之前**就判：装配期收到一条 `text` + `edit` 同给 / 都没给的请求，
+    // 既不能悄悄按 text 解（那等于替作者猜了哪个算数），也不能当增量拒（它根本不是增量）。
+    const problem = contentProblem(request);
+    if (problem !== null) {
+      fail(request.id, 'parse', 'invalid-input', problem);
+      return;
+    }
     if (!engine.initialized) {
       // 装配没完成：整篇请求存最新一条（后来者覆盖），`ready` 一到补解；增量请求没有基线 ⇒ 拒绝。
       if ('text' in request) {
@@ -271,4 +281,5 @@ export function startStructureWorker(assets: StructureEngineAssets): void {
     // 线程级未捕获异常：能说话就说，说不出去由宿主的超时 / 崩溃判据兜住
     fail(0, undefined, 'crashed', `worker 线程异常：${event.message}`);
   };
+  return engine;
 }

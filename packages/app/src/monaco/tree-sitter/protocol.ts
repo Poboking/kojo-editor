@@ -237,11 +237,21 @@ export function isStructureReply(value: unknown): value is StructureReply {
 }
 
 /**
- * 旧协议（v2）请求的**识别**：只用来把"对面还是旧形状"这件事说成 `protocol-mismatch`，
+ * 旧协议请求的**识别**：只用来把"对面还是旧形状"这件事说成 `protocol-mismatch`，
  * 而不是一声不响（旧宿主 + 新 worker 的静默曾被记成"结构层悄悄没了"）。
+ *
+ * 两套旧协议都收：v1 的 `init` / `parse` / `change`，kojo2 的 `captures` / `folds` / `indents`
+ * （kojo2 的 `parse` 与 v1 同名）。
  */
 export function looksLikeLegacyStructureRequest(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false;
   const type = (value as { type?: unknown }).type;
-  return type === 'init' || type === 'parse' || type === 'change';
+  return (
+    type === 'init' ||
+    type === 'parse' ||
+    type === 'change' ||
+    type === 'captures' ||
+    type === 'folds' ||
+    type === 'indents'
+  );
 }
