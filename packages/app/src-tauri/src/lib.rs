@@ -2784,6 +2784,14 @@ fn unfold_width(ch: char) -> char {
 /// **只用于非正则查询**：正则模式下作者拥有 pattern 的解释权，折叠字符会改写转义 /
 /// 字符类 / 量词的语义（如 `\x{FF08}`），故原样编译、不折——这也正是"需要精确宽度
 /// 匹配"时的逃生口。
+///
+/// **代价（实测，别当成可优化点随手改）**：每个 ASCII 可见字符（U+0021–U+007E）都会被
+/// 展开成两成员类 ⇒ regex **提不出字面量前缀**，只能 DFA 扫完全文；单形字符（CJK 等）
+/// 仍输出裸字面量，照旧走 memmem。eraNAS 6,228 文件、同样零命中：
+/// `zzzznohit` 650–732ms vs `口上_K` 345–400ms，差 ~300ms。
+/// 这不是 bug，是"半角查询必须命中全角正文"这条产品判据的价格；`(?i)` 不是成因
+/// （打开 `caseSensitive` 反而更慢：741–794ms），`memchr2` 锚点也救不了
+/// （全角形 UTF-8 首字节恒为 `0xEF`）。三条排除过程见 PITFALLS 248。
 fn literal_width_pattern(query: &str) -> String {
     let mut out = String::with_capacity(query.len() * 4);
     for ch in query.chars() {
