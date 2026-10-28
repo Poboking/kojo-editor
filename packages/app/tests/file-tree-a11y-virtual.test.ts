@@ -20,6 +20,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { act, createElement as h } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ErbIndex, GameProject } from '@kojo/plugin-api';
+import { GAP_GROUP_UL, GAP_NESTED_UL, TREE_ROW_H } from '../src/ui/file-tree-flat';
 import { FileTree } from '../src/ui/FileTree';
 import { getSelectedPaths, resetMultiSelectionForTest } from '../src/ui/file-tree-multi-selection';
 import { resetSelectionForTest, setActivePath } from '../src/ui/file-tree-selection';
@@ -29,11 +30,26 @@ import { resetSelectionForTest, setActivePath } from '../src/ui/file-tree-select
 const KOJO = 'C:/koa/001';
 const PKG = `${KOJO}/包A`;
 
-/** 一万行的假项目：一个角色目录 · 一个作者包 · `count` 份 ERB（文件名零填充 ⇒ 顺序可读） */
-function fakeProject(count: number): { project: GameProject; index: ErbIndex; files: string[] } {
-  const files = Array.from({ length: count }, (_, i) => `${PKG}/M_KOJO_K1_${String(i).padStart(5, '0')}.ERB`);
+/** 角色目录键：`#<no> <名>`（组头 tid 与包键都从它派生，测试里要按它点名） */
+const kojoDirOf = (no: number): string => `C:/koa/${String(no).padStart(3, '0')}`;
+/**
+ * 角色名：第一枚沿用旧夹具的「灵梦」——本文件已有 26 条判据按 `g:#1 灵梦` /
+ * `p:#1 灵梦::包A` 点名行号，改名字就是无谓地把它们全搬一遍；多组只往后加。
+ */
+const nameOf = (no: number): string => (no === 1 ? '灵梦' : `角色${no}`);
+const labelOf = (no: number): string => `#${no} ${nameOf(no)}`;
+
+/** `count` 行假项目 × `groups` 个角色目录：一个角色一个包，包内 `count` 份 ERB（文件名零填充 ⇒ 顺序可读） */
+function fakeProject(count: number, groups = 1): { project: GameProject; index: ErbIndex; files: string[] } {
+  const charaIndex = new Map<number, { no: number; name: string; kojoDir: string }>();
+  const files: string[] = [];
+  for (let no = 1; no <= groups; no++) {
+    const dir = kojoDirOf(no);
+    charaIndex.set(no, { no, name: nameOf(no), kojoDir: dir });
+    for (let i = 0; i < count; i++) files.push(`${dir}/包A/M_KOJO_K${no}_${String(i).padStart(5, '0')}.ERB`);
+  }
   const project = {
-    charaIndex: new Map([[1, { no: 1, name: '灵梦', kojoDir: KOJO }]]),
+    charaIndex,
     kojoPaths: ['C:/koa'],
     rootDir: 'C:/game',
   } as unknown as GameProject;
@@ -46,6 +62,8 @@ let root: Root;
 interface MountOpts {
   /** 假项目的文件行数（默认一万行：虚拟化那组判据要的量级） */
   filesCount?: number;
+  /** 角色目录枚数（默认 1；三层裁切那组判据要"很多组"才看得出组头被裁） */
+  groups?: number;
   onOpenFile?: (p: string) => void;
   io?: unknown;
   listDir?: (dir: string) => Promise<{ name: string; path: string; isDirectory: boolean }[]>;
@@ -53,7 +71,7 @@ interface MountOpts {
 
 /** 把树挂起来（默认口上视图；组与包都还没展开） */
 async function mount(props: MountOpts = {}): Promise<void> {
-  const { project, index } = fakeProject(props.filesCount ?? 10_000);
+  const { project, index } = fakeProject(props.filesCount ?? 10_000, props.groups);
   const onOpenFile = props.onOpenFile ?? ((): void => {});
   root = createRoot(container);
   await act(async () => {
@@ -96,6 +114,45 @@ async function key(k: string, mod: { shift?: boolean; ctrl?: boolean } = {}): Pr
 
 async function openGroup(): Promise<void> {
   await click(container.querySelector('button.tree-group-btn'));
+}
+
+/** 滚到某一像素位（happy-dom 不做布局：`clientHeight` 恒 0 ⇒ 视口走兜底那一档，滚动位只能手给） */
+async function scrollToTop(px: number): Promise<void> {
+  await act(async () => {
+    const body = treeEl();
+    body.scrollTop = px;
+    body.dispatchEvent(new Event('scroll'));
+  });
+}
+
+/**
+ * 把所有组都点开（三层裁切那组判据的前置现场）。
+ *
+ * ⚠ 三条都是本批 DOM 形状逼出来的，不是测试风格问题：
+ * - **不能一次快照全点掉**：组头自己现在也会进裁切窗口，快照里深位置那几枚在点下去之前就已经
+ *   脱离 DOM（React 的事件挂在根容器上，脱落的节点收不到 click）⇒ 每轮只点"此刻还挂在 DOM 里
+ *   且收起着"的那一枚，点完重新查；
+ * - **不能拿挂载数当"开完了"的判据**：全展开之后挂载窗口里本来就只剩几枚组头，
+ *   数得出的是"我点过几枚"，所以自己记账；
+ * - 一屏装不下整棵 ⇒ 没有收起的组头了就往下滚一档接着点（步长远小于窗口覆盖的行数，
+ *   不会有组头被跨过去）。开不到 `expect` 枚 ⇒ 直接红，不许静默少开几组。
+ */
+async function openAllGroups(expect: number, totalPx: number): Promise<void> {
+  const opened = new Set<string>();
+  const step = 440;
+  for (let guard = 0; guard < 800; guard++) {
+    const closed = [...container.querySelectorAll<HTMLButtonElement>('button.tree-group-btn[aria-expanded="false"]')];
+    const next = closed.find((el) => !opened.has(el.dataset.tid ?? ''));
+    if (next !== undefined) {
+      opened.add(next.dataset.tid ?? '');
+      await click(next);
+      continue;
+    }
+    const body = treeEl();
+    if (body.scrollTop + body.clientHeight >= totalPx) break;
+    await scrollToTop(body.scrollTop + step);
+  }
+  if (opened.size !== expect) throw new Error(`展不到底：点到 ${opened.size} 枚组头，现场该有 ${expect} 枚`);
 }
 
 beforeEach(() => {
@@ -349,13 +406,71 @@ describe('WS-12 · 一万行的挂载规模', () => {
     expect(rows.some((el) => el.dataset.locate === 'C:/koa/001/包A/M_KOJO_K1_09999.ERB')).toBe(false);
   });
 
-  it('结构行（组头 / 包头）常驻不裁，叶子行才进窗口', async () => {
+  /**
+   * WS-12 欠账批**改判据**（为什么改写在这里，不许当成"为绿放宽"）：
+   *
+   * 旧的那条钉的是"结构行（组头 / 包头）常驻不裁，叶子行才进窗口"。那是当初的取舍，
+   * 真壳读数把它推翻了：eraNAS 136 组全展开、滚到 scrollTop=30,000 时挂 319 枚 treeitem，
+   * 其中**文件行只有 28 枚**，其余 291 枚全是恒挂载的组头与包头（136 + 155）——
+   * 组数与包数同样是索引一次灌进来的，规模并不由作者的展开动作约束，
+   * 于是"虚拟化"在最长的这两类行上根本没生效。
+   *
+   * 本批把裁点上提到三层（组 / 包 / 平铺 ERB），所以这条判据的方向**反过来**：
+   * 深滚时视口之外的结构行也必须一枚都不挂。而"在窗口里就得挂得出来"那条腿由下面
+   * 第一条钉住——裁的依据是视口位置，不是行的种类。
+   */
+  it('窗口顶部：组头与包头照旧挂得出来（裁的是视口之外，不是某一类行）', async () => {
     await mount({ filesCount: 10_000 });
     await openGroup();
     expect(container.querySelectorAll('button.tree-group-btn')).toHaveLength(1);
     expect(container.querySelectorAll('button.tree-package')).toHaveLength(1);
     // 说明：包还没点开真实文件夹 ⇒ 没有 DirRows 层，叶子块就是那一份 ERB 列表
     expect(spacers().length).toBeGreaterThan(0);
+  });
+
+  it('深滚：视口之外的组头与包头一枚都不挂（改前恒挂 60 枚结构行的那格）', async () => {
+    const G = 30;
+    const K = 8;
+    const perGroup = (2 + K) * TREE_ROW_H + GAP_GROUP_UL + GAP_NESTED_UL;
+    await mount({ filesCount: K, groups: G });
+    await openAllGroups(G, G * perGroup);
+    expect(container.querySelectorAll('button.tree-group-btn[aria-expanded="true"]').length).toBeGreaterThan(0);
+    await scrollToTop(15 * perGroup);
+    const mounted = items();
+    // 改前：30 枚组头 + 30 枚包头恒挂载；现在整棵树只许挂窗口那一段
+    expect(container.querySelectorAll('button.tree-group-btn').length).toBeLessThan(6);
+    expect(container.querySelectorAll('button.tree-package').length).toBeLessThan(6);
+    expect(mounted.length).toBeGreaterThan(0);
+    expect(mounted.length).toBeLessThan(60);
+    // 视口上方那一组的组头与包头确实不在 DOM 里（不是"挂了但看不见"）
+    expect(container.querySelector('[data-tid="g:#1 灵梦"]')).toBeNull();
+    expect(container.querySelector(`[data-tid="p:${labelOf(1)}::包A"]`)).toBeNull();
+    // 整组被裁 ⇒ 一条等高占位替掉整个 li.tree-group（挂在树根 ul 上，不带 data-open）
+    expect(container.querySelectorAll('.tree-groups > li.tree-vspacer').length).toBeGreaterThan(0);
+    // roving tabindex：裁掉行之后仍然最多一个停靠点，且占位一枚都不带 role=treeitem
+    expect(mounted.filter((el) => el.tabIndex === 0)).toHaveLength(1);
+    expect(container.querySelectorAll('.tree-vspacer[role="treeitem"]').length).toBe(0);
+  });
+
+  it('三层都裁 ⇒ scrollHeight 恒等于整模型高度（任何窗口位置一分不差）', async () => {
+    const G = 12;
+    const K = 40;
+    // 每组：组头 + 包头 + K 份 ERB，外加包 ERB 列表那档 2px 与组列表那档 4px
+    const perGroup = (2 + K) * TREE_ROW_H + GAP_GROUP_UL + GAP_NESTED_UL;
+    const total = G * perGroup;
+    await mount({ filesCount: K, groups: G });
+    await openAllGroups(G, total);
+    for (const px of [0, 300, perGroup * 5 + 30, perGroup * 11, total]) {
+      await scrollToTop(px);
+      const padPx = spacers().reduce((n, el) => n + Number.parseFloat(el.style.height || '0'), 0);
+      const rowsPx =
+        (items().length + container.querySelectorAll('.tree-note').length) * TREE_ROW_H;
+      // 常驻的 ul 带缝：展开着的组各一档 4px、挂出来的包各一档 2px（被整段裁掉的已在 padPx 里）
+      const gapPx =
+        container.querySelectorAll('.tree-groups > li.tree-group[data-open="1"]').length * GAP_GROUP_UL +
+        container.querySelectorAll('li.tree-package-node').length * GAP_NESTED_UL;
+      expect(padPx + rowsPx + gapPx).toBe(total);
+    }
   });
 
   it('展开作者包的真实文件夹层不改挂载规模（目录层按现场展开，行数仍受窗口约束）', async () => {

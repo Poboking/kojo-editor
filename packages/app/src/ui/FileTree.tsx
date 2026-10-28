@@ -14,7 +14,7 @@
  * `Map.get` + 字符串比较"。画法与配色仍只有一枚（`TreeProbMark`），树里不存在第二份计数。
  */
 
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type UIEvent as ReactUIEvent } from 'react';
+import { Fragment, createElement, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type UIEvent as ReactUIEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirEntry, GameProject, WalkOptions } from '@kojo/plugin-api';
 import {errorText,  isErbDialectPath } from '@kojo/plugin-api';
@@ -95,15 +95,19 @@ import {
   packageRowId,
   rangePaths,
   rowAt,
+  TREE_ROW_H,
   type FlatRow,
   type FlatTree,
   type KojoGroupInput,
 } from './file-tree-flat';
 import {
   anchorScrollTop,
+  cullSpacerPx,
   fullRange,
+  isCulledSlice,
   scrollToShow,
   sliceBlock,
+  sliceSpan,
   spacerStyle,
   visibleRange,
   type VisibleRange,
@@ -397,20 +401,32 @@ function TreeFoldBody({ open, body }: { open: boolean; body: () => ReactNode }):
 }
 
 /**
- * 虚拟化垫高行（WS-12）：把裁掉的行换成一条等高的占位。
+ * 虚拟化垫高行（WS-12 · 欠账批扩到三层）：把裁掉的行换成一条等高的占位。
  *
  * 为什么必须有它：裁行不改滚动高度是**虚拟化能用起来的前提**——没有垫高，滚动条长度跟着
  * 挂载行数走，作者一滚就"越滚越短"，视口与行号的对应关系也一并作废。高度取自行模型
  * （`file-tree-virtual.sliceBlock` 算出的像素，含各级 `<ul>` 的边距口径），不是猜的。
  *
+ * 三个使用位置（同一个形状，不另造第二枚组件）：
+ * - 叶子行裁口的头尾（组 ul / 包 ul 里，垫的是被裁的那几行）；
+ * - **整组**在视口之外（`tree-groups` 的直接子，替掉整个 `li.tree-group`）；
+ * - **整包**在视口之外（组 ul 的直接子，替掉整个 `li.tree-package-node`）。
+ * 后两档的高度来自 `sliceSpan` 的含缝口径（那两级 `<ul>` 连同它们的下边距一起没了），
+ * 前一档来自 `sliceBlock` 的行底口径（缝仍由常驻的 `<ul>` 带）——两边混用就会多垫或少垫一档缝。
+ *
  * `aria-hidden` + `role="presentation"`：占位不是树项，读屏与键盘都不该撞上它。
  * 内联 `style.height` 而不是 CSS 类：本切片那条"不许写带长度的 height"红线管的是
  * 样式表里的**固定**高度（密度口径），动态垫高本来就没有固定值可写。
+ *
+ * `tag`（欠账批新增）：占位替的是**列表项**就用 `li`（默认——树根 ul 与组 / 包的 ul 里），
+ * 替的是**一行行元素自己**（组头按钮、包头按钮、根分组那条头行容器）就用 `div`——
+ * 那一格住在 `li.tree-group` / `li.tree-package-node` 里面，再挂一枚 `<li>` 就是
+ * "`<li>` 嵌在 `<li>` 里"的非法 HTML（React 会直接报 hydration 错，浏览器解析也会把树拆歪）。
  */
-function TreeSpacer({ px }: { px: number }): ReactElement | null {
+function TreeSpacer({ px, tag = 'li' }: { px: number; tag?: 'li' | 'div' }): ReactElement | null {
   const style = spacerStyle(px);
   if (style === null) return null;
-  return <li className="tree-vspacer" role="presentation" aria-hidden="true" style={style} />;
+  return createElement(tag, { className: 'tree-vspacer', role: 'presentation', 'aria-hidden': true, style });
 }
 
 /* ---------------- WS-13 搬运家族的现场问句（冲突四选项 / 脏闸） ---------------- */
@@ -2309,6 +2325,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    *
    * 口上视图按视口裁；文件系统视图不裁（`fullRange`）——见上面那段取舍。
    * 两视图都过这一格 ⇒ "非过滤态与过滤态走同一条虚拟化路径"是结构上的，不是两条 if。
+   *
+   * **这一格窗口就是三层裁点唯一的输入**（WS-12 欠账批）：组（`sliceSpan(grp.span)`）、
+   * 包（`sliceSpan(sub.span)`）、平铺 ERB（`sliceBlock`）都拿它算 ⇒ 视口之外的行不分种类，
+   * 一律不挂 DOM、只垫高度；不存在"叶子行走窗口、结构行走常驻"那两套口径。
    */
   const range: VisibleRange = view === 'kojo' ? visibleRange(tree.rows, scroll.top, scroll.h) : fullRange(tree.rows.length);
   /**
@@ -2832,35 +2852,57 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         {visible.map((g, groupIdx) => {
           const isOpen = opened.has(g.label) || deferredFilter.length > 0;
           const groupTid = groupRowId(g.label);
+          /**
+           * 这一组的挂载判决（WS-12 欠账批：组头与包行也进视口裁切）。
+           *
+           * 三层裁点各自一条 `sliceSpan` / `sliceBlock`，口径互不重叠：
+           * - **整组**在窗口外 ⇒ 一条等高占位替掉整个 `li.tree-group`（组头 + 里面的包 +
+           *   两级 `<ul>` 连同它们的下边距全都在 `span` 里报掉了）；
+           * - 组**相交** ⇒ 组头那一行按行号自己判在不在窗口里（挂载的组也有"头在窗口上方"那格），
+           *   里面的每个包段再各自判——整包在外 ⇒ 一条占位替掉整个 `li.tree-package-node`；
+           * - 包**相交** ⇒ 平铺 ERB 仍按既有的叶子块 `sliceBlock` 裁（**行底口径**：那档 2px 缝
+           *   由还挂在 DOM 里的 `ul.tree-files.nested` 带，占位不许再垫一遍，见 `TreeSpacer` 注释）。
+           *
+           * `grp === undefined`（模型与渲染同帧不同步的兜底）⇒ 一行都不裁，退回本批之前的形状。
+           */
+          const grp = tree.groups[groupIdx];
+          const gSlice = grp === undefined ? null : sliceSpan(grp.span, tree.rows, range);
+          if (gSlice !== null && isCulledSlice(gSlice)) return <TreeSpacer key={g.label} px={cullSpacerPx(gSlice)} />;
+          const headerIn = grp === undefined || (grp.start >= range.start && grp.start < range.end);
           return (
             <li key={g.label} className="tree-group" data-open={isOpen ? '1' : '0'} role="none">
-              <button
-                className="tree-group-btn"
-                role="treeitem"
-                aria-level={1}
-                aria-expanded={isOpen}
-                aria-selected={false}
-                tabIndex={-1}
-                data-tid={groupTid}
-                title={`${g.label}（右键查看更多）`}
-                data-drop-dir={g.prefix || undefined}
-                // 行面（1023）：行数据放 DOM，面的 build 从 target 读——不放闭包（多实例安全）
-                data-context-surface="file-tree"
-                data-tree-kind="group"
-                data-tree-label={g.label}
-                data-tree-path={g.prefix}
-                onClick={() => {
-                  captureAnchorRef.current();
-                  toggleGroup(g.label);
-                }}
-              >
-                <span className="caret">
-                  <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-                </span>
-                <span className="group-label">{g.label}</span>
-                <span className="group-count">{g.total}</span>
-                <NodeProblemBadge groups={groups} kind="group" nodeKey={g.label} scope="角色目录" />
-              </button>
+              {headerIn ? (
+                <button
+                  className="tree-group-btn"
+                  role="treeitem"
+                  aria-level={1}
+                  aria-expanded={isOpen}
+                  aria-selected={false}
+                  tabIndex={-1}
+                  data-tid={groupTid}
+                  title={`${g.label}（右键查看更多）`}
+                  data-drop-dir={g.prefix || undefined}
+                  // 行面（1023）：行数据放 DOM，面的 build 从 target 读——不放闭包（多实例安全）
+                  data-context-surface="file-tree"
+                  data-tree-kind="group"
+                  data-tree-label={g.label}
+                  data-tree-path={g.prefix}
+                  onClick={() => {
+                    captureAnchorRef.current();
+                    toggleGroup(g.label);
+                  }}
+                >
+                  <span className="caret">
+                    <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                  </span>
+                  <span className="group-label">{g.label}</span>
+                  <span className="group-count">{g.total}</span>
+                  <NodeProblemBadge groups={groups} kind="group" nodeKey={g.label} scope="角色目录" />
+                </button>
+              ) : (
+                // 组头滚出窗口：等高占位顶上（22px 那一档就是行模型里这一行的高度）
+                <TreeSpacer tag="div" px={TREE_ROW_H} />
+              )}
               {/* 折叠容器（VIS-31 · 见 `TreeFoldBody`）：`ul` 仍是本 `li` 的直接子元素，
                   导轨那三条 `.tree-group > .tree-files*` 选择器一个字没动 */}
               <TreeFoldBody
@@ -2869,11 +2911,17 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                 <ul className="tree-files" role="group">
                   {g.subs.map((s, subIdx) => {
                     // 本组本次挂载的行区间裁到"这个包的 ERB 列表 / 这段根散文件"这一格
-                    // （结构行——组头、包头、包内真实文件夹——一律常驻，见 `file-tree-flat` 的取舍说明）
                     const block = tree.blockOf(groupIdx, subIdx);
                     const slice = block === undefined ? null : sliceBlock(block, tree.rows, range);
                     const from = slice === null ? 0 : slice.from - (block?.start ?? 0);
                     const count = slice === null ? renderLimitOf(g, s) : slice.to - slice.from;
+                    // 整段（包头 + 真实文件夹层 + ERB 列表 + 那档 ul 缝）都在窗口外 ⇒ 一条占位
+                    const sub = grp?.subs[subIdx];
+                    const sSlice = sub === undefined ? null : sliceSpan(sub.span, tree.rows, range);
+                    if (sSlice !== null && isCulledSlice(sSlice)) {
+                      return <TreeSpacer key={s.label === null ? `${g.label}::(根散文件)` : s.label} px={cullSpacerPx(sSlice)} />;
+                    }
+                    const subHeaderIn = sub === undefined || (sub.headerIdx >= range.start && sub.headerIdx < range.end);
                     // 根散文件（无包目录兜底）：直接平铺在角色组下
                     if (s.label === null) {
                       return (
@@ -2906,6 +2954,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                             onCommit={commitEdit}
                             onCancel={cancelEdit}
                           />
+                        ) : !subHeaderIn ? (
+                          // 包头滚出窗口：等高占位顶上（这一格正在重命名时上面那支优先，输入框不许被裁）
+                          <TreeSpacer tag="div" px={TREE_ROW_H} />
                         ) : (
                           <button
                             className="tree-package"
@@ -2974,12 +3025,21 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           const groupIdx = visible.length + ri;
           const block = tree.blockOf(groupIdx, 0);
           const slice = block === undefined ? null : sliceBlock(block, tree.rows, range);
+          // 与角色分组同一套三层判决（这一层的"子段"只有那条根散文件，叶子块自己就裁完了）
+          const grp = tree.groups[groupIdx];
+          const gSlice = grp === undefined ? null : sliceSpan(grp.span, tree.rows, range);
+          if (gSlice !== null && isCulledSlice(gSlice)) return <TreeSpacer key={key} px={cullSpacerPx(gSlice)} />;
+          const headerIn = grp === undefined || (grp.start >= range.start && grp.start < range.end);
           return (
             <li key={key} className="tree-group tree-root-group" data-open={isOpen ? '1' : '0'} role="none">
               {/* 组头行：折叠按钮 + （仅会话附加根）移除入口。行尾按钮不能嵌进折叠按钮
                   （button 里套 button 是非法结构），故与 fs 视图同用一层行容器。
                   WS-08：移除入口必须住在这里——附加根常落在项目根之内，fs 视图会把它
-                  折进项目根头，那条路上根本没有它自己的头行可挂按钮。 */}
+                  折进项目根头，那条路上根本没有它自己的头行可挂按钮。
+                  滚出窗口时整条头行（含那颗移除按钮）换成一条等高占位：域外的行本来就不该看得见摸得着。 */}
+              {!headerIn ? (
+                <TreeSpacer tag="div" px={TREE_ROW_H} />
+              ) : (
               <div className="tree-group-head">
                 <button
                   className="tree-group-btn"
@@ -3018,6 +3078,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                   </button>
                 )}
               </div>
+              )}
               <TreeFoldBody
                 open={isOpen}
                 body={() => (
