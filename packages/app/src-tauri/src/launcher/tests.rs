@@ -316,8 +316,88 @@ fn read_pid(path: &Path) -> Option<u32> {
         .and_then(|text| text.trim().parse().ok())
 }
 
+/// 残留进程探针：**只认 signaled 态**（`process::pid_alive` = `WaitForSingleObject(0)`）。
+///
+/// 以前这里是 `process_start_ticks(pid).is_some()`，那是"能不能 OpenProcess"的判据，
+/// 不是"还活着"的判据：进程退出后，只要还有句柄引用着它的进程对象（本文件留下的
+/// `Child`、监视线程手上的句柄……），内核对象就还在，`OpenProcess` + `GetProcessTimes`
+/// 照样成功 ⇒ `stop_blocking` 明明等到退出了，探针却报"有残留"（满载并行 cargo 下的
+/// 假红）。分歧本身由
+/// `terminated_process_still_reads_start_ticks_but_is_not_alive` 钉住。
 fn pid_alive(pid: u32) -> bool {
-    super::process::process_start_ticks(pid).is_some()
+    super::process::pid_alive(pid)
+}
+
+/// 钉住探针陷阱本身：**已终止但被引用的进程对象仍能 `OpenProcess` 成功**
+/// ⇒ 存活判据只认 **signaled 态**，不许改回 `process_start_ticks(..).is_some()`。
+///
+/// 为什么值得单独一枚测试而不是留注释：上面那个 shim 服务着本文件 10 处 `pid_alive`
+/// 断言。shim 用"能不能 OpenProcess"当存活判据时，进程退出后只要还有句柄引用着它的
+/// 进程对象（监视线程手上那枚 `Child` 就够），对象就还在，`GetProcessTimes` 照样读得到
+/// 创建时间 ⇒ `stop_blocking` 明明等到退出了，探针却报"有残留进程"。满载并行 cargo 时
+/// 这段窗口就是 `stop_is_idempotent_and_announces_stopping_once` 的偶发红（实拍
+/// 280/1、287/1 各一轮）。
+///
+/// 不靠时间运气：子进程用测试二进制自重启的 `exit-code` 夹具，退出由 **`child.wait()`
+/// 的真信号**确定；`Child` 全程**不 drop**（std 的 `Child` 把进程句柄攥到 drop 为止，
+/// 正好造出"已终止但被引用"），再额外 `OpenProcess` 一枚句柄攥着复核。
+#[test]
+fn terminated_process_still_reads_start_ticks_but_is_not_alive() {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    let dir = TestDir::new("probe-divergence");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("current_exe"))
+        .args(fixture_args())
+        .env(ROLE_ENV, "exit-code")
+        .env(EXIT_ENV, "7")
+        .env(DIR_ENV, dir.path().display().to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("探针分歧夹具的子进程必须起得来");
+    let pid = child.id();
+
+    // 真退出信号（不是"睡 200 ms 赌它退了"）；`child` 之后一直不 drop，
+    // 它手上那枚进程句柄就是"被引用"的来源。
+    let status = child
+        .wait()
+        .expect("夹具子进程必须等得到退出信号");
+    assert_eq!(status.code(), Some(7), "夹具应当以退出码 7 结束");
+
+    // 已终止、对象仍被 `Child` 引用着 ⇒ 新开一枚句柄照样成功（旧判据过报的机制）
+    let extra =
+        unsafe { OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    assert!(
+        !extra.is_null(),
+        "已终止但被引用的进程对象本应仍能 OpenProcess 成功——旧 shim 过报就来自这里；\
+         哪天这条不成立，`pid_alive` 的判据要与本断言一起重审，不许只删这行"
+    );
+    // 第三读数：攥着的句柄上进程对象已是 **signaled**（= 真的退了）
+    let signaled = unsafe { WaitForSingleObject(extra, 0) } == WAIT_OBJECT_0;
+    unsafe { CloseHandle(extra) };
+    assert!(signaled, "退出后进程对象必须是 signaled 态，否则这枚测试的靶子没立住");
+
+    // 分歧就在这一对读数里：旧判据"还活着"，新探针"已经死了"
+    let ticks = super::process::process_start_ticks(pid);
+    let alive = super::process::pid_alive(pid);
+    println!(
+        "pid={pid} 退出后读数：process_start_ticks={ticks:?}（旧判据 ⇒ 说还有残留）\
+         pid_alive={alive}（新判据 ⇒ 干净）"
+    );
+    assert!(
+        ticks.is_some(),
+        "钉住陷阱：已终止但被引用的进程对象仍能 OpenProcess + GetProcessTimes 成功\
+         （读数 {ticks:?}）⇒ 残留进程绝不许用 process_start_ticks(..).is_some() 判活"
+    );
+    assert!(
+        !alive,
+        "新探针必须只认 signaled 态：pid={pid} 已真退出，却读出 alive={alive}"
+    );
 }
 
 /* ------------------------------- 纯判据 ------------------------------- */

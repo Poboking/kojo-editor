@@ -121,7 +121,13 @@ mod sys {
     /// 进程是否还活着（`WaitForSingleObject(0)` = 未 signaled）。
     ///
     /// 生产路径用的是 `process_start_ticks`（存活 + 身份一起答）；本函数留给测试直读。
-    #[allow(dead_code)]
+    ///
+    /// 判据为什么必须是 signaled 态而不是"能不能 OpenProcess"：进程**终止后**只要还有
+    /// 别人持有它的句柄（测试自己留下的 `Child`、监视线程的句柄……），进程内核对象就还
+    /// 活着，`OpenProcess` + `GetProcessTimes` 照样成功 ⇒ "已死但被引用"会被报成"还活着"。
+    /// 终止的进程对象是 signaled，`WaitForSingleObject(handle, 0)` 立刻返回
+    /// `WAIT_OBJECT_0`，才是真的退出。
+    #[allow(dead_code)] // 只被 `#[cfg(all(windows, test))]` 的再导出消费：非 test 构建里它就是死的
     pub fn pid_alive(pid: u32) -> bool {
         unsafe {
             let handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
@@ -301,6 +307,14 @@ mod sys {
 }
 
 pub(crate) use sys::process_start_ticks;
+/// 测试专用的"残留进程"探针（只认 signaled 态，见 `sys::pid_alive` 的注释）。
+///
+/// 为什么门控在 `all(windows, test)`：非 test 构建里没人用它（生产判据是
+/// `process_start_ticks`），无门控的 `pub(crate) use` 会凭空招来一枚
+/// `unused_imports`；非 Windows 目标上 `launcher::tests` 整个文件是
+/// `#![cfg(windows)]` 的，也不该看到这个再导出。
+#[cfg(all(windows, test))]
+pub(crate) use sys::pid_alive;
 
 fn platform_gate() -> LauncherResult<()> {
     if cfg!(windows) {
