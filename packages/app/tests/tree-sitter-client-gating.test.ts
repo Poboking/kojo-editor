@@ -115,19 +115,73 @@ const RULES_A: KojoStructureIndentRules = { increasePatterns: ['^\\s*A$'], decre
 
 type FakeModel = Monaco.editor.ITextModel & { edit(next: string): void };
 
+/**
+ * 把"旧文 → 新文"化成 Monaco 会给的那一条 `IModelContentChangedEvent`（单段、前后缀差集）。
+ *
+ * 假 model 早先只 `fn()` 不带事件，等于**绕开**了被测的增量编辑路（`client.onChanged` 见不到
+ * `rangeOffset` 就退回整篇）。这里按真 Monaco 的形状给（行列为 1 基、偏移按旧文 UTF-16 码元），
+ * 于是"编辑后发的是差集请求"这条才真的被钉住。
+ */
+function contentChanged(before: string, after: string): unknown {
+  const max = Math.min(before.length, after.length);
+  let prefix = 0;
+  while (prefix < max && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < max - prefix &&
+    before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+  const pointAt = (offset: number): { row: number; column: number } => {
+    const end = Math.min(Math.max(0, offset), before.length);
+    let row = 0;
+    let lineStart = 0;
+    for (let i = 0; i < end; i += 1) {
+      if (before.charCodeAt(i) === 10) {
+        row += 1;
+        lineStart = i + 1;
+      }
+    }
+    return { row, column: end - lineStart };
+  };
+  const start = pointAt(prefix);
+  const end = pointAt(before.length - suffix);
+  return {
+    isFlush: false,
+    versionId: 0,
+    changes: [
+      {
+        rangeOffset: prefix,
+        rangeLength: before.length - suffix - prefix,
+        text: after.slice(prefix, after.length - suffix),
+        range: {
+          startLineNumber: start.row + 1,
+          startColumn: start.column + 1,
+          endLineNumber: end.row + 1,
+          endColumn: end.column + 1,
+        },
+      },
+    ],
+  };
+}
+
 function fakeModel(text: string): FakeModel {
   let value = text;
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(event: unknown) => void>();
   return {
     getValue: () => value,
+    // 行数对账（`client.onChanged` 的自检目标）：**自己数**，不借被测代码的口径
+    getLineCount: () => value.split('\n').length,
     isDisposed: () => false,
-    onDidChangeContent: (fn: () => void) => {
+    onDidChangeContent: (fn: (event: unknown) => void) => {
       listeners.add(fn);
       return { dispose: () => listeners.delete(fn) };
     },
     edit: (next: string) => {
+      const event = contentChanged(value, next);
       value = next;
-      for (const fn of [...listeners]) fn();
+      for (const fn of [...listeners]) fn(event);
     },
   } as unknown as FakeModel;
 }

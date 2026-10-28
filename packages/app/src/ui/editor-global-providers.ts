@@ -70,7 +70,7 @@ import {
 } from '../monaco/kojo-inlay-hints';
 import { revealLocationOf } from '../monaco/reveal-position';
 // 大文档档位线的**单一真源**（本模块只引用、不再抄数字，同 codeLens / 着色 / 面包屑各批）
-import { HUGE_FILE_LINES, foldingEnabledForLineCount } from './editor-options';
+import { FOLDING_MAX_RANGES, HUGE_FILE_LINES, foldingEnabledForLineCount } from './editor-options';
 import {
   dialectForLanguage,
   installDocumentFormatter,
@@ -1016,20 +1016,14 @@ export function foldingAffordable(lineCount: number): boolean {
 }
 
 /**
- * 一次交回的折叠区间**数量**上限。对标的是 VSCode 的 `FoldingLimitReporter` 那一格：
- * 大文件上它不杀供给器，而是**按数量**截并**把截了多少说出来**
- * （那句 "folding was removed for N ranges because the file is too large"）。
+ * 一次交回的折叠区间**数量**上限。数字的出处与读数在 `editor-options.ts` 的
+ * {@link FOLDING_MAX_RANGES}——**同一枚也进 Monaco 的 `foldingMaximumRegions`**：
+ * 宿主先按这个数截并说出截了多少，Monaco 那边就再也截不到东西（它截是静默的）。
  *
- * 数字不是新造的，取 vendor 自己那条线的缺省值（取证 `common/config/editorOptions.js`
- * 的 `EditorIntOption(56, 'foldingMaximumRegions', 5000, 10, 65000)`；硬顶在
- * `contrib/folding/browser/foldingRanges.js` 的 `MAX_FOLDING_REGIONS = 0xFFFF`）：
- * Monaco 本来就会在 5,000 条上把多出来的丢掉，我们只是**在它丢之前自己先丢、并且说一声**——
- * standalone 那份 `RangesLimitReporter`（`folding.js:418`）在本 app 里没人接它的
- * `onDidChange`（那句话是 workbench 侧的 notification service 发的），所以数量超额若不由宿主说，
- * 就又是一次静默。真实语料之最那篇（52,601 行）的函数 + 控制流块远不到 5,000 条 ⇒ 这一档
- * **不削任何今天存在的文件**，只兜住"块数病态多"的那一类。
+ * 对标的是 VSCode 的 `FoldingLimitReporter` 那一格：大文件上它不杀供给器，而是**按数量**
+ * 截并**把截了多少说出来**（那句 "folding was removed for N ranges because the file is too large"）。
  */
-export const FOLDING_MAX_RANGES = 5_000;
+export { FOLDING_MAX_RANGES };
 
 /** 折叠被按数量截了尾巴的那句话（{@link onFoldingCapChanged} 递给宿主；null = 没截） */
 export interface FoldingCapNotice {

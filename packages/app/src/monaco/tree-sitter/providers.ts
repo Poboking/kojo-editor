@@ -1,4 +1,5 @@
 import type * as Monaco from '../entry';
+import type { StructureFacet } from '@kojo/kojo-core';
 import '../languages';
 import { LARGE_FILE_LINES } from '../../ui/editor-options';
 import { applyNameColorPref, loadNameColorPref, subscribeNameColorPref } from '../../ui/semantic-color-pref';
@@ -82,21 +83,43 @@ const overlays = new Map<string, LanguageOverlay>();
 let syntax: StructureSyntaxPresenter | null = null;
 const optionHooks: Monaco.IDisposable[] = [];
 
-/** 结构层这一路的体量闸：与语义着色同一档（全文级开销同开同关，判据只留一处） */
+/**
+ * 结构**着色 / 缩进**这一路的体量闸：与语义着色同一档（`LARGE_FILE_LINES`）。
+ *
+ * **折叠不看这一条**（2026-10-28 拆开）：详见 {@link resolveStructureFoldsEnabled}。
+ */
 const STRUCTURE_MAX_LINES = LARGE_FILE_LINES;
 
+/** 结构着色 / 缩进在这一行数上还供不供（纯数；折叠另有判据） */
+export function structureSemanticAffordable(lineCount: number): boolean {
+  return Number.isFinite(lineCount) && lineCount <= STRUCTURE_MAX_LINES;
+}
+
+/** 偏好 + 语言声明两条腿（**不带体量**）：体量怎么判由每个面自己决定 */
+function structureCapable(
+  languageId: string,
+  path: string | null | undefined,
+  prefOn: boolean,
+): boolean {
+  // 偏好开（缺省开；显式 `off` ⇒ 假）——作者关掉后即便 provider 还没被摘除也不许顶上
+  if (!prefOn) return false;
+  // 已装上的结构层 descriptor 也算数（测试替身语言 / 尚未进注册表的语言），再退回按路径认领
+  const descriptor =
+    descriptorForLanguageId(languageId) ??
+    overlays.get(languageId)?.descriptor ??
+    (languageId === FALLBACK_LANGUAGE_ID || !path ? null : descriptorForPath(path));
+  return descriptor?.structure !== undefined;
+}
+
 /**
- * 这份文档此刻该不该由结构层顶上（纯判据；测试 `tests/tree-sitter-default.test.ts` 直接打它）。
+ * 这份文档的**着色 / 缩进**该不该由结构层顶上（纯判据；
+ * 测试 `tests/tree-sitter-default.test.ts` 直接打它）。
  *
- * 三条腿缺一不可：
- * - **偏好开**（缺省开；显式 `off` ⇒ 假）——作者关掉后即便 provider 还没被摘除也不许顶上；
- * - **语言声明了 `structure`**——`kojo2` / JSON / 认不出的 `plaintext` 一律不碰
- *   （`.kojo2` 的结构面走自己那套 worker，不由通用叠层接管）；
- * - **没超过体量闸**——超大文件按现有 `LARGE_FILE_LINES` 档跳过，保持回落。
+ * 三条腿：偏好开 + 语言声明了 `structure`（`kojo2` / JSON / 认不出的 `plaintext` 一律不碰，
+ * `.kojo2` 的结构面走自己那套 worker）+ 没超过体量闸。
  *
  * `path` 只在语言 id 不认识时用来自查 descriptor（模型池还没定语言的那一拍）；
  * `plaintext` 不按路径猜——与 `language-registry`「认不出不猜 DSL」同一条。
- *
  * `prefOn` 只为测试注入；生产取 localStorage 真源。
  */
 export function resolveStructureEnabled(
@@ -105,14 +128,40 @@ export function resolveStructureEnabled(
   lineCount: number,
   prefOn: boolean = loadTreeSitterPref(),
 ): boolean {
-  if (!prefOn) return false;
-  if (!Number.isFinite(lineCount) || lineCount > STRUCTURE_MAX_LINES) return false;
-  // 已装上的结构层 descriptor 也算数（测试替身语言 / 尚未进注册表的语言），再退回按路径认领
-  const descriptor =
-    descriptorForLanguageId(languageId) ??
-    overlays.get(languageId)?.descriptor ??
-    (languageId === FALLBACK_LANGUAGE_ID || !path ? null : descriptorForPath(path));
-  return descriptor?.structure !== undefined;
+  if (!structureSemanticAffordable(lineCount)) return false;
+  return structureCapable(languageId, path, prefOn);
+}
+
+/**
+ * **折叠**这一路该不该由结构层顶上：**不设行数闸**（2026-10-28）。
+ *
+ * ## 为什么它与着色不同档
+ *
+ * 原判据把三个面绑在一条 5,000 行的线上，理由是"全文级开销同开同关"。实测不支持这条：
+ *
+ * | 面 | 24,197 行 ERB 整篇（worker 内） | 落在哪条线程 |
+ * |---|---|---|
+ * | 折叠 | **210 ms** | worker（`folds.scm` 一趟查询） |
+ * | + 缩进 | 271 ms | worker |
+ * | + 残缺 | 299 ms | worker |
+ * | + 语义 | 365 ms | worker 查询 + **主线程编码** |
+ *
+ * 折叠是这四条里最便宜的一条，而且**完全在 worker 里**；真正压主线程的是语义那一面的
+ * token 编码（`providers.ts` 的 `semantic.encode`）——所以只有它继续留在
+ * `LARGE_FILE_LINES` 的闸内，折叠放开。
+ *
+ * ## 放开之后编辑器还剩几道闸（都不是"静默削功能"）
+ *
+ * - `folding:false`（`TIER_HUGE`，≥50,000 行）把整条折叠槽撤掉——那时 provider 根本不会被问；
+ * - `FOLDING_MAX_RANGES` / Monaco 的 `foldingMaximumRegions` 按**区间条数**封顶，超额有可见提示；
+ * - worker 侧超时判死仍走 `fallback.ts` 台账（与其余各面同一套）。
+ */
+export function resolveStructureFoldsEnabled(
+  languageId: string,
+  path: string | null | undefined,
+  prefOn: boolean = loadTreeSitterPref(),
+): boolean {
+  return structureCapable(languageId, path, prefOn);
 }
 
 /** 没有基底规则的语言：`mergeIndentConfig` 要求三条腿齐全，用"永不匹配"占位 */
@@ -122,12 +171,17 @@ const EMPTY_INDENT_BASE: BaseIndentPatterns = {
   decreaseIndentPattern: /(?!)/,
 };
 
-/** 大文档不由结构层顶上（说一次，别每击键重复） */
-function noteSizeSkip(kind: 'semantic' | 'folds'): void {
+/**
+ * 大文档的**着色**不由结构层顶上（说一次，别每击键重复）。
+ *
+ * 折叠不再走这里：它已从这条体量闸里拆出去（判据见 {@link resolveStructureFoldsEnabled}），
+ * 所以"让路"这件事只对着色成立——说出来的话必须只指着色，否则就是假话。
+ */
+function noteSemanticSizeSkip(): void {
   reportStructureDegradation({
-    capability: kind,
+    capability: 'semantic',
     stage: 'parse',
-    message: `超过 ${STRUCTURE_MAX_LINES} 行的文件这次不由结构层顶上（与语义着色同一档降级，回到原有做法）`,
+    message: `超过 ${STRUCTURE_MAX_LINES} 行的文件这次不由结构层着色（回到词法层的分色）`,
   });
 }
 
@@ -190,9 +244,9 @@ function structureSemanticProvider(
     async provideDocumentSemanticTokens(model, _resultId, token) {
       if (!active || model.getLanguageId() !== languageId) return null;
       if (token.isCancellationRequested) return null;
-      // 偏好关 / 语言没声明结构面 / 超大文件：一律不顶上（超大那份由 noteSizeSkip 说一次）
+      // 偏好关 / 语言没声明结构面 / 超大文件：一律不顶上（超大那份由 noteSemanticSizeSkip 说一次）
       if (!resolveStructureEnabled(languageId, model.uri?.path, model.getLineCount())) {
-        if (model.getLineCount() > STRUCTURE_MAX_LINES) noteSizeSkip('semantic');
+        if (model.getLineCount() > STRUCTURE_MAX_LINES) noteSemanticSizeSkip();
         return null;
       }
       const overlay = overlays.get(languageId);
@@ -239,10 +293,7 @@ function structureFoldingProvider(languageId: string): Monaco.languages.FoldingR
       if (!active || model.getLanguageId() !== languageId) return [];
       const overlay = overlays.get(languageId);
       if (!overlay) return [];
-      if (!resolveStructureEnabled(languageId, model.uri?.path, model.getLineCount())) {
-        if (model.getLineCount() > STRUCTURE_MAX_LINES) noteSizeSkip('folds');
-        return [];
-      }
+      if (!resolveStructureFoldsEnabled(languageId, model.uri?.path)) return [];
       let folds: readonly KojoStructureFold[] | null;
       try {
         folds = await overlay.client.foldingRanges(model);
@@ -329,6 +380,20 @@ function startLanguage(
     runtime,
     // 只进 `open.languageId`（worker 侧日志与自证）；宿主不按语言 id 分支（LAU-3 已收口）
     languageId,
+    /**
+     * 这一份文档要哪几面：**语义那一面只在"装配了 + 这一档还供"时才要**。
+     *
+     * `parse` 的 `want` 缺省 = 四面全查，而 ≥5,000 行的文档本就不供语义（上面那道闸），
+     * 全查是白烧——24,197 行 ERB 实测 365 ms（四面）vs 299 ms（折叠+缩进+残缺）。
+     * 折叠这一面自从拆出体量闸后任何大小都要，缩进跟着折叠的同一趟回话到货。
+     */
+    facetsFor: (model) => {
+      const facets: StructureFacet[] = ['folds', 'indent', 'syntax'];
+      if (runtime.semantic !== undefined && structureSemanticAffordable(model.getLineCount())) {
+        facets.push('semantic');
+      }
+      return facets;
+    },
     onFatal: () => {
       // 整档停用只拆这一门语言：另一门语言的结构层不该被邻居的 wasm 失败带走
       stopLanguage(languageId);

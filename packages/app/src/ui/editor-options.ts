@@ -158,8 +158,32 @@ export const CJK_TYPING_BASELINE: EditorOptionPatch = {
   },
 };
 
+/**
+ * 一次交回的折叠区间**条数**上限（**宿主与 Monaco 同一份**：这枚数字同时进
+ * `foldingMaximumRegions`，见 `COMMON_OPTIONS`）。
+ *
+ * ## 为什么从 5,000 抬到 20,000（2026-10-28）
+ *
+ * 5,000 是照 Monaco 的缺省 `foldingMaximumRegions`（5000）抄的，抄的时候没有真语料读数。
+ * 实测（`erbFoldingRanges`，真语料整篇）：
+ *
+ * | 文件 | 行数 | 折叠区间 |
+ * |---|---|---|
+ * | `M_KOJO_K139_日常系コマンド.ERB` | 24,197 | **8,066** |
+ * | `M_KOJO_K42_日常系コマンド.ERB` | 23,171 | 6,073 |
+ * | `NewNameGenerator.ERB` | 169,247 | 139 |
+ *
+ * ⇒ 5,000 在 2.3 万行这一档上已经**真的在砍**（砍掉约 3,000 处，界面那条"只折前 5000 处"
+ * 说的就是这件事），而 5,000–20,000 行正是语料的主体重心。20,000 是最大观测值的 2.5 倍，
+ * 内存代价仍可忽略（每条 3 枚定长数组 ≈ 12 字节 ⇒ 满额约 240 KB）；超过仍有可见提示。
+ */
+export const FOLDING_MAX_RANGES = 20_000;
+
 /** 与体量无关的公共补丁（各档共用，不进档位表） */
 const COMMON_OPTIONS: EditorOptionPatch = {
+  // Monaco 自己的折叠条数上限：**与本仓 `FOLDING_MAX_RANGES` 同源**（否则宿主不砍、它照砍，
+  // 而且是静默砍——它的 `RangesLimitReporter` 在这套 standalone 里没人接）
+  foldingMaximumRegions: FOLDING_MAX_RANGES,
   // Monaco 内建词 provider 任意位置都出货（台词行弹词）⇒ 永远关；文档词由
   // `document-words.ts` 的受门 source 提供，开关在 `suggest-pref.ts`
   wordBasedSuggestions: 'off',

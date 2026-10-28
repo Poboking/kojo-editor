@@ -13,11 +13,12 @@ import {
   STRUCTURE_DEAD_AFTER_FAILURES,
   STRUCTURE_PROTOCOL_VERSION,
   STRUCTURE_TIMEOUT_MS,
+  type StructureFacet,
   type StructureFailureReason,
   type StructureParseReply,
   type StructureRequest,
 } from '@kojo/kojo-core';
-import { applyEdit, commonEdit } from './edit';
+import { applyEdit, countNewlines, editFromChanges } from './edit';
 import { reportStructureDegradation } from './fallback';
 import { isStructureReply } from './protocol';
 import type { StructureLanguageRuntime } from './structure-runtime';
@@ -50,13 +51,19 @@ import { acquireStructureThread, type StructureThreadLease } from './structure-p
  *    整条通道（`onFatal`，装配层据此拆 provider，切设置项或换文档才重来）；**ready 之后**
  *    只死当前文档的那几面（换文档重计），与 §1 代价 2 的既有口径一致。
  *
- * ## 差集逻辑原样保留（v1.1 改口）
+ * ## 增量编辑（v1.1 的差集 → 2026-10-28 的事件驱动）
  *
- * 一次 content change 里可能有多段（多光标 / 粘贴）：这里不逐段翻译，而是拿**代理自己留的
- * 上一版文本**与 `model.getValue()` 求一条保守编辑（`edit.ts`），缝完自检一次——缝出来的
- * 文本与模型现读的全文不等 ⇒ 立刻退回整篇。发出去的是 `parse{edit, baseTreeId}`：
- * `baseTreeId` 是上一条回复交出的树；worker 说不认识（换过线程 / 上次没解成）⇒ 本类**当场
- * 重发整篇**，不把这一条记成失败（那是协议的正常兜底，不是故障）。
+ * 一次 content change 里可能有多段（多光标 / 粘贴）：这里不逐段翻译，而是把它们并成**一条**
+ * 保守编辑（`edit.ts` 的 `editFromChanges`）。旧口径是拿代理自己留的上一版文本与
+ * `model.getValue()` 求差集——**每次击键一遍全文**，1.36 MB 实测 10.7 ms，全落在主线程的
+ * 输入路径上。现在直接吃事件给的 `rangeOffset / rangeLength / text / 行列`（O(改动数)，
+ * 与文档长度无关），用 `applyEdit`（SlicedString，实测 0.01 ms）推进本地快照；"这一版对不对"
+ * 的自检从"缝出来的全文 == `getValue()`"换成 **O(1) 的行数对账**（`doc.lines` vs
+ * `model.getLineCount()`），对不上就退回整篇。
+ *
+ * 发出去的是 `parse{edit, baseTreeId}`：`baseTreeId` 是上一条回复交出的树；worker 说不认识
+ * （换过线程 / 上次没解成）⇒ 本类**当场重发整篇**，不把这一条记成失败（那是协议的正常兜底，
+ * 不是故障）。
  *
  * ## 降级到旧路（双跑窗口的第二种形态）
  *
@@ -99,7 +106,14 @@ interface TrackedDocument {
   readonly seq: number;
   /** 代理这一侧的文本快照（与 worker 那一侧逐字相等，靠同一条编辑维持） */
   text: string;
+  /** 快照的行数（与 `model.getLineCount()` 比，是增量口径的廉价自检，见 `onChanged`） */
+  lines: number;
   version: number;
+  /**
+   * 这一份文档要哪几面（`undefined` = 全部）。**由装配层判定**（体量档 / 语言声明），
+   * 客户端只负责把它带进每一条 `parse` 请求——worker 侧据此跳过没人消费的查询。
+   */
+  readonly want: readonly StructureFacet[] | undefined;
   /** 装配还没完成：不发 parse，等 `ready` 后补发最新全文 */
   pendingParse: boolean;
   /** 上一次回复交出的树（差集请求的基线；`null` = 还没解过） */
@@ -146,6 +160,14 @@ export interface StructureClientOptions {
    * - `'legacy'` = 一个字节的 v3 都不发，直接走 `client-v2.ts`（等价于 LAU-1 之前的行为）。
    */
   readonly protocolMode?: 'auto' | 'legacy';
+  /**
+   * 这一份文档要哪几面（缺省 = 全部）。装配层按**体量档 / 语言声明**回答；客户端不算这件事。
+   *
+   * 存在的理由：worker 的 `parse` 在 `want` 缺省时会把四面全查一遍。大文件上语义那一面
+   * 本来就不供（`providers.ts` 的体量闸），全查只是白烧——24,197 行 ERB 实测
+   * 365 ms（四面）vs 299 ms（折叠+缩进+残缺），差 66 ms，与文档长度同阶。
+   */
+  readonly facetsFor?: (model: Monaco.editor.ITextModel) => readonly StructureFacet[] | undefined;
   /** 整档停用时的通知（装配层在这里拆 provider） */
   onFatal?: (message: string) => void;
   /** 结构残缺到货（上屏器；回调不许抛） */
@@ -360,11 +382,13 @@ export class StructureClient {
       model,
       seq: ++this.docSeq,
       text,
+      lines: model.getLineCount(),
       version: 1,
+      want: this.options.facetsFor?.(model),
       // 装配没完成就先不发 parse（发了注定被拒）：等 ready 后补发，自然带上最新全文
       pendingParse: this.status !== 'ready',
       baseTreeId: null,
-      subscription: model.onDidChangeContent(() => this.onChanged()),
+      subscription: model.onDidChangeContent((event) => this.onChanged(event)),
       semantic: null,
       folds: null,
       dead: { semantic: false, folds: false },
@@ -394,6 +418,7 @@ export class StructureClient {
       doc: this.docIdOf(doc),
       version: doc.version,
       text: doc.text,
+      ...(doc.want === undefined ? {} : { want: doc.want }),
     }, doc, false);
   }
 
@@ -428,35 +453,74 @@ export class StructureClient {
     }
   }
 
-  /** 内容变化 → 一条保守编辑；缝不回去就整篇重解（口径漂了宁可贵一次） */
-  private onChanged(): void {
+  /**
+   * 内容变化 → 一条保守编辑（**事件路**，2026-10-28）。
+   *
+   * ## 为什么不再每击键读全文
+   *
+   * 旧口径是 `model.getValue()` 取全文、再与上一版做前后缀差集（`commonEdit`）。1.36 MB /
+   * 24,197 行真语料实测 **10.7 ms/击键**，全落在主线程的输入路径上；而 Monaco 的
+   * `onDidChangeContent` 已经把"哪一段被换成了什么"给全了（`rangeOffset` / `rangeLength` /
+   * `text` / 行列）⇒ 拼一条编辑是 O(改动数)，`applyEdit` 走 SlicedString 实测 **0.01 ms**。
+   *
+   * ## 自检换成"行数对账"
+   *
+   * 旧口径的自检是"缝出来的文本 == `getValue()`"——那要一遍全文，正是要省掉的东西。
+   * 这里改对**行数**：各段 `range` 给出去掉了几行、`text` 给回插入了几行，增量维护一份
+   * `doc.lines`，每次事件后与 `model.getLineCount()`（O(1)）对一次。行数对不上 ⇒ 快照与
+   * 模型已经分叉，当场退回整篇重解——判据一样硬，代价与文档长度无关。
+   *
+   * ## 什么时候退回整篇
+   *
+   * - `isFlush`（`setValue` / 撤销越界整个换掉）：`changes` 的语义在这里没有保证；
+   * - 事件形状不认（重叠 / 顺序认不出 / 越界，`editFromChanges` 返回 null）；
+   * - 行数对账不符；
+   * - 还没拿到基线树（`baseTreeId === null`）——增量没有可推的旧树。
+   */
+  private onChanged(event?: Monaco.editor.IModelContentChangedEvent): void {
     const doc = this.doc;
     if (doc === null || doc.model.isDisposed() || this.worker === null) return;
-    const next = doc.model.getValue();
-    if (next === doc.text) return;
     const version = doc.version + 1;
     doc.version = version;
-    const previous = doc.text;
-    doc.text = next;
-    // 装配没完成：只留最新文本与版本，不发请求；ready 后补发的整篇自带这份快照
-    if (doc.pendingParse) return;
-    const edit = commonEdit(previous, next);
-    if (applyEdit(previous, edit) !== next || doc.baseTreeId === null) {
-      this.postParse(doc);
-      return;
+    if (event !== undefined && !event.isFlush) {
+      const edit = editFromChanges(doc.text, event.changes);
+      if (edit !== null) {
+        let lineDelta = 0;
+        for (const change of event.changes) {
+          lineDelta += countNewlines(change.text) - (change.range.endLineNumber - change.range.startLineNumber);
+        }
+        const next = applyEdit(doc.text, edit);
+        const lines = doc.lines + lineDelta;
+        if (lines === doc.model.getLineCount()) {
+          doc.text = next;
+          doc.lines = lines;
+          if (doc.pendingParse) return; // 装配没完成：只留最新快照，ready 后补发整篇
+          if (doc.baseTreeId === null) {
+            this.postParse(doc);
+            return;
+          }
+          this.post(
+            {
+              id: this.nextId++,
+              kind: 'parse',
+              doc: doc.seq,
+              version,
+              edit,
+              baseTreeId: doc.baseTreeId,
+              ...(doc.want === undefined ? {} : { want: doc.want }),
+            },
+            doc,
+            true,
+          );
+          return;
+        }
+      }
     }
-    this.post(
-      {
-        id: this.nextId++,
-        kind: 'parse',
-        doc: this.docIdOf(doc),
-        version,
-        edit,
-        baseTreeId: doc.baseTreeId,
-      },
-      doc,
-      true,
-    );
+    // 兜底：整篇重解（换文本 / 事件形状不认 / 行数对不上 / 没有基线树）
+    doc.text = doc.model.getValue();
+    doc.lines = doc.model.getLineCount();
+    if (doc.pendingParse) return;
+    this.postParse(doc);
   }
 
   private post(request: StructureRequest, doc: TrackedDocument, fromEdit: boolean): void {

@@ -22,8 +22,8 @@ const MAX_SELECTIONS = 64;
 
 /**
  * 折叠体积闸（每条目 + 全库双预算）：
- * - 每条文件最多 MAX_FOLDS_PER_FILE 条（约 38KB/文件；Monaco 默认 foldingMaximumRegions=5000，
- *   作者日常折叠远低于此，400 已覆盖整份大脚本的粗粒度折叠）；
+ * - 每条文件最多 MAX_FOLDS_PER_FILE 条（约 38KB/文件；Monaco 的 `foldingMaximumRegions` 由宿主设成
+ *   20,000，作者日常折叠远低于此，400 已覆盖整份大脚本的粗粒度折叠）；
  * - 全库最多 MAX_TOTAL_FOLDS 条（约 570KB ≈ localStorage 常见 5MB 配额的 12%）；
  * 超预算一律**先丢折叠、保光标/滚动**：从最久未用（Map 头部）的条目开始整条清空 folds，
  * 光标是主、折叠是次，绝不因为折叠把视图状态整条挤掉。
