@@ -115,6 +115,11 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
   // 二进制写路径的 `file.changed` 失效广播经第 4 参注入（2026-10-18 缓存失效批，additive；
   // 未传 bus 的旧调用方零改动）——撤销注入 / 恢复备份落盘后下游二进制缓存显式失效，不赌 mtime 粒度
   const io = new FileIOServiceImpl(opts.platform, kernelLog, undefined, bus);
+  /**
+   * MEM-2：关项目 = 这一轮整库正文全用不上了，**立刻**归还文本缓存，不等空闲计时器
+   * （切项目只有几百毫秒间隔，等 20s 等于让旧项目的一百多兆压在下一个项目的索引头上）。幂等。
+   */
+  bus.on('project.closed', () => io.releaseTextCache('manual'));
   const compute = createComputePool({ log: kernelLog });
   const fileWatch = new FileWatcherServiceImpl({ platform: opts.platform, bus, log: kernelLog });
 

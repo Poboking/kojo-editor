@@ -292,6 +292,26 @@ export function parseLabelDefinition(trimmed: string): string | undefined {
   return name.length > 0 ? name : undefined;
 }
 
+/**
+ * 把字符串拷成**独立副本**，切断 V8 切片串（SlicedString）对父串的引用（MEM-1）。
+ *
+ * `parseErbText` 的工作形态是 `text.split('\n')` → 逐行 `slice` / `trim` 取名字。V8 的
+ * `slice` 在结果 ≥ 13 码元时**不复制字符**，而是造一个指向父串的 `SlicedString`，父串又指向
+ * 整篇正文——一枚 20 码元的函数名在堆上等于**整份文件**。索引里每个文件至少留一枚这样的名字
+ * ⇒ 整库正文被静默钉住。实测（eraNAS 4,145 份 / 1.137 亿码元 / 100,393 函数）：只解析不入表、
+ * 正文读完即弃，堆仍从 20.3 MB 涨到 276.4 MB；摊平后同口径 **63.0 MB**。
+ *
+ * 写法：`' ' + value` 造出 `ConsString(' ', 切片串)`，`slice(1)` 先摊平它——左段非空 ⇒ V8
+ * 不走"左段空就直接返回右段"的快路，必然新分配一份 `SeqString` 并把两段抄进去 ⇒ 新串的父串
+ * 只是一段 n+1 码元的小缓冲。实测 20 万枚 20 码元串 ≈ 28 ms，相对一次全库索引（14 s）可忽略。
+ * ≤ 12 码元原样返回：V8 的 `SubString` 在该长度以下本来就复制，它已是独立串。
+ * （`JSON.parse(JSON.stringify(s))` 同样能摊平且不留切片壳，但慢 3 倍。）
+ */
+export function detachString(value: string): string {
+  if (value.length <= 12) return value;
+  return (' ' + value).slice(1);
+}
+
 /** 解析单文件文本（**纯函数**）。`preSplit` = 已归一化并切好的行数组（`splitErbLines` 的产物），不传则就地切 */
 export function parseErbText(text: string, path = '<memory>', preSplit?: readonly string[]): ErbFile {
   const lines = preSplit ?? normalizeEol(text).split('\n');
@@ -449,6 +469,42 @@ export function parseErbText(text: string, path = '<memory>', preSplit?: readonl
   for (let i = 0; i < functions.length; i++) {
     const next = functions[i + 1];
     functions[i]!.endLine = next ? next.startLine - 1 : lineCount;
+  }
+
+  /**
+   * 切片留存闸（MEM-1）：本函数产出的**全部常驻字符串**都要与入参 `text` 脱钩。
+   *
+   * 来源都是切片：函数名与形参名（`@` 行切）、`#DIM` 族名（`split` 切）、`$` 标签名、
+   * **注释块**（`cleanDocBlock` 的 `replace`/`trimEnd` 逐行切，`join('\n')` 只有一段时直接
+   * 返回那枚切片——单行注释最常见）。谁不摊平谁就把整份正文拖进堆里：只摊 `name` 与把
+   * `normalizedName`/`docComment` 一起摊，索引常驻差 130 MB 量级。
+   *
+   * 为什么不逐处在创建点摊：创建点有六处，漏一处的表现是"内存莫名多几百兆、功能全对"。
+   * 收在出口这一趟，判据只有一条：**凡离开本函数且会被索引常驻的字符串，都摊过**。
+   * `path` 不在闸内（调用方给的独立串）；`normalizedName` 在闸内，理由见下。
+   */
+  for (let i = 0; i < functions.length; i++) {
+    const fn = functions[i]!;
+    const rawName = fn.name;
+    const detached = detachString(rawName);
+    fn.name = detached;
+    /**
+     * `normalizedName` 是最容易漏的一处：`toUpperCase()` 对"本来就没有小写"的名字
+     * （ERB 函数名绝大多数是全大写 ASCII 或纯假名）走快路**原样返回接收者**——也就是那枚切片。
+     * 它一留着，`detachString(fn.name)` 刚断开的链又接回去了，而且断点在另一个字段上，
+     * 只测 `name` 根本看不出来。内容相等时直接复用摊平后的那份；不等（真有小写要转）
+     * 说明 `toUpperCase()` 造了新串，但它仍可能是新串上的切片，同样要摊。
+     */
+    fn.normalizedName = fn.normalizedName === rawName ? detached : detachString(fn.normalizedName);
+    if (fn.docComment !== undefined) fn.docComment = detachString(fn.docComment);
+    for (let k = 0; k < fn.params.length; k++) {
+      const param = fn.params[k]!;
+      param.name = detachString(param.name);
+    }
+  }
+  for (let i = 0; i < dims.length; i++) dims[i]!.name = detachString(dims[i]!.name);
+  if (labels) {
+    for (let i = 0; i < labels.length; i++) labels[i]!.name = detachString(labels[i]!.name);
   }
 
   return { path, functions, dims, hasFunctionDirective, lineCount, ...(labels ? { labels } : {}) };

@@ -94,6 +94,21 @@ const TEXT_CACHE_MAX_FILES = 8192;
 const TEXT_CACHE_MAX_CHARS = 128 * 1024 * 1024;
 
 /**
+ * 会话文本缓存的**空闲整表释放**时限（MEM-2，2026-10-29 内存批）。
+ *
+ * 上面两把尺只回答"最多装多少"，回答不了"装满留多久"。旧行为留到进程结束：一次全库索引
+ * 把整份语料读进表（真语料 `D:/Game/eraNAS` 4,340 份 / 1.14 亿码元 / 堆上 218MB），
+ * 此后写两小时代码，这 218MB 一个字节都不还。
+ *
+ * 缓存的价值只在**一段突发**里（索引 → 抽取 → 校验三段读集合几乎重合，段间隔毫秒）；
+ * 作者停手之后下一次批量读多半是几小时后，留着整库正文毫无用处 ⇒ 判据改成"最后一次
+ * 读写之后还闲着多久"。取 20s：真语料开项目三段全跑完约 11–15s（STATE 的冷开剖面），
+ * 余量覆盖"开完先去泡杯茶"。释放幂等且出声（`[io]` 一行 info 带量），释放后与"从没读过"
+ * 逐字同形——命中判据本来就要先 stat 比对 mtime+size。
+ */
+const TEXT_CACHE_IDLE_RELEASE_MS = 20_000;
+
+/**
  * 原文换行指纹缓存上限（PS-2 起缓存的是**原始未归一化文本**这一份字符串，
  * EolMap 在真正发生"保换行保存"那一刻才即时切分——旧的"每次读入即拆成逐行数组"
  * 让每个文件在盘、文本缓存、指纹缓存里存了三份，万行文件的光谱数组实测按字符数记账
@@ -226,6 +241,9 @@ export class FileIOServiceImpl implements FileIO {
   private textCacheMisses = 0;
   private readonly textCacheMaxFiles: number;
   private readonly textCacheMaxChars: number;
+  /** MEM-2：空闲整表释放的定时器（0 = 关闭；node 下 unref，不吊住进程） */
+  private textCacheIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly textCacheIdleReleaseMs: number;
   private readonly metaCacheMaxEntries: number;
   /** 备份字节档的注入上限（缺省 = 模块常量；测试用小值钉裁剪纪律） */
   private readonly backupMaxPerBucketBytes: number;
@@ -242,7 +260,7 @@ export class FileIOServiceImpl implements FileIO {
      * 只为让"超限削最旧"这条纪律能被廉价地钉死——生产调用方零改动。
      * `maxMetaEntries`（PS-2 追加）：编码/EOL 判据缓存的条目上限注入点。
      */
-    cacheCaps: { maxFiles?: number; maxChars?: number; maxMetaEntries?: number } = {},
+    cacheCaps: { maxFiles?: number; maxChars?: number; maxMetaEntries?: number; idleReleaseMs?: number } = {},
     /**
      * 事件总线（2026-10-18 缓存失效批，additive 可选）：缺席 = 不发事件，其余行为逐字不变。
      * **只发 `file.changed`**——二进制写路径（writeBytes / removeFile / restoreBackup）落盘后
@@ -260,6 +278,7 @@ export class FileIOServiceImpl implements FileIO {
   ) {
     this.textCacheMaxFiles = cacheCaps.maxFiles ?? TEXT_CACHE_MAX_FILES;
     this.textCacheMaxChars = cacheCaps.maxChars ?? TEXT_CACHE_MAX_CHARS;
+    this.textCacheIdleReleaseMs = cacheCaps.idleReleaseMs ?? TEXT_CACHE_IDLE_RELEASE_MS;
     this.metaCacheMaxEntries = cacheCaps.maxMetaEntries ?? META_CACHE_MAX_ENTRIES;
     this.backupMaxPerBucketBytes = backupByteCaps.maxPerBucketBytes ?? BACKUP_MAX_BYTES_PER_FILE;
     this.backupMaxTotalBytes = backupByteCaps.maxTotalBytes ?? BACKUP_MAX_TOTAL_BYTES;
@@ -307,6 +326,8 @@ export class FileIOServiceImpl implements FileIO {
     // 没有 stat 就没有失效判据 ⇒ 不入表（宁可少一次复用，也不留可能过期的键）。
     if (st !== null) {
       this.putTextCache(key, { mtimeMs: st.mtimeMs, size: st.size, file });
+      // MEM-2：入表即活动（单文件读这条腿；批量腿在 readTexts 末尾按批续一次）
+      this.armTextCacheIdleRelease();
     }
     return file;
   }
@@ -347,7 +368,6 @@ export class FileIOServiceImpl implements FileIO {
         }
       }
     }
-
     // 2) 未命中：按批读（一批一趟 IPC），逐文件解码、入缓存
     for (let start = 0; start < missIdx.length; start += READ_BATCH_SIZE) {
       const idx = missIdx.slice(start, start + READ_BATCH_SIZE);
@@ -384,6 +404,9 @@ export class FileIOServiceImpl implements FileIO {
         this.putTextCache(key, { mtimeMs: r.mtimeMs, size: r.size ?? r.data.length, file: tf });
       }
     }
+    // MEM-2：一批读完才续一次（命中/未命中都算活动）。首次全库扫就是"全未命中"那一档，
+    // 所以这里不能只看命中；表空时 arm 自己 no-op。
+    this.armTextCacheIdleRelease();
     return out;
   }
 
@@ -403,6 +426,44 @@ export class FileIOServiceImpl implements FileIO {
       this.textCache.delete(oldest);
       if (evicted) this.textCacheChars -= evicted.file.text.length;
     }
+  }
+
+  /**
+   * 续期空闲释放计时（MEM-2）：任何一次"入表"或"命中"都算活动；表空时不起定时器。
+   * `idleReleaseMs <= 0` = 关闭（测试注入口）。node 下 unref，不吊住事件循环。
+   */
+  private armTextCacheIdleRelease(): void {
+    if (this.textCacheIdleReleaseMs <= 0 || this.textCache.size === 0) return;
+    if (this.textCacheIdleTimer !== null) clearTimeout(this.textCacheIdleTimer);
+    const timer = setTimeout(() => {
+      this.textCacheIdleTimer = null;
+      this.releaseTextCache('idle');
+    }, this.textCacheIdleReleaseMs);
+    // node（内核单测 / 调试宿）里不吊住事件循环；浏览器侧 setTimeout 没有 unref，可空
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.textCacheIdleTimer = timer;
+  }
+
+  /**
+   * 整表释放会话文本缓存（MEM-2；幂等）。读数走既有 `debugCaches().text`，不另开观测面。
+   *
+   * 为什么整表而不是逐条 LRU：这张表要么"整份语料都在、后续段零读盘"，要么"留一半"——
+   * 留一半的命中率接近 0（同一轮各段读的是同一批文件，削掉哪半都要重读那半），却仍满额占内存。
+   * 释放量进 info 日志（铁律 4），命中/未命中计数保留（观测面不归零）。
+   */
+  releaseTextCache(reason: 'idle' | 'manual' = 'manual'): void {
+    if (this.textCacheIdleTimer !== null) {
+      clearTimeout(this.textCacheIdleTimer);
+      this.textCacheIdleTimer = null;
+    }
+    if (this.textCache.size === 0) return;
+    const files = this.textCache.size;
+    const chars = this.textCacheChars;
+    this.textCache.clear();
+    this.textCacheChars = 0;
+    this.log?.info(
+      `[io] session text cache released (${reason}): ${files} file(s) / ${chars} char(s) / ~${Math.round(chars / 1_000_000)}M`,
+    );
   }
 
   /**

@@ -10,7 +10,7 @@ import type {
   SymbolToken,
 } from '@kojo/plugin-api';
 import { isErbDialectPath, MODEL_TOKEN_CLASS, unicodeTokenAt } from '@kojo/plugin-api';
-import { erbCodePrefixLength } from './scanner';
+import { detachString, erbCodePrefixLength } from './scanner';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -617,7 +617,7 @@ export function scanFileRefs(
       if (name.length > 0) {
         const upper = name.toUpperCase();
         if (collect !== undefined) collect(upper);
-        if (hasName(upper)) out.push([upper, line, at + 2 + (slice.length - slice.trimStart().length), KIND_DEFINITION]);
+        if (hasName(upper)) out.push([detachString(upper), line, at + 2 + (slice.length - slice.trimStart().length), KIND_DEFINITION]);
       }
       continue;
     }
@@ -637,7 +637,7 @@ export function scanFileRefs(
       const upper = hasLower ? normalizedUpper(run) : run;
       if (collect !== undefined) collect(upper);
       if (!hasName(upper)) return;
-      out.push([upper, line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
+      out.push([detachString(upper), line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
     });
   }
   return out;

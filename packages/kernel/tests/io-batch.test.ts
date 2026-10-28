@@ -273,6 +273,44 @@ describe('FileIOService · readTexts（批量路径 + 会话缓存）', () => {
     expect(dbg.files).toBe(1);
     expect(dbg.hits + dbg.misses).toBe(2); // 计数如实：一次未命中也要看得见
   });
+
+  /**
+   * MEM-2（2026-10-29 内存批）：会话文本缓存**留到进程结束**曾是整库正文常驻的直接原因
+   * （真语料 4,340 份 / 1.14 亿码元 / 218 MB）。判据两条：闲置超时整表归还；注入 0 = 关闭。
+   */
+  it('空闲整表释放（MEM-2）：闲置超时后整表归还，命中/未命中计数不归零', async () => {
+    const dir = path.join(tmpDir, 'proj8');
+    const a = path.join(dir, 'a.ERB');
+    const b = path.join(dir, 'b.ERB');
+    await writeRaw(a, Buffer.from('@A\n'));
+    await writeRaw(b, Buffer.from('@B\n'));
+    const io = new FileIOServiceImpl(countingBridge(), undefined, { idleReleaseMs: 20 });
+
+    await io.readTexts([a, b]);
+    expect(io.debugCaches().text.files).toBe(2);
+
+    await new Promise((done) => setTimeout(done, 150));
+    const after = io.debugCaches().text;
+    expect(after.files).toBe(0); // 整表归还
+    expect(after.chars).toBe(0);
+    expect(after.misses).toBe(2); // 观测面不归零（释放的是正文，不是账）
+
+    // 释放后语义与"从没读过"同形：再读一次是未命中，内容照常正确
+    const again = await io.readTexts([a]);
+    expect(again[0]?.text).toBe('@A\n');
+    expect(io.debugCaches().text.misses).toBe(3);
+  });
+
+  it('空闲释放可关（idleReleaseMs: 0）——旧行为留作对照', async () => {
+    const dir = path.join(tmpDir, 'proj9');
+    const a = path.join(dir, 'a.ERB');
+    await writeRaw(a, Buffer.from('@A\n'));
+    const io = new FileIOServiceImpl(countingBridge(), undefined, { idleReleaseMs: 0 });
+
+    await io.readTexts([a]);
+    await new Promise((done) => setTimeout(done, 80));
+    expect(io.debugCaches().text.files).toBe(1);
+  });
 });
 
 /**

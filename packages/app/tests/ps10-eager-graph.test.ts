@@ -736,11 +736,21 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     闸 **3,090 → 3,140**：这 17 条（P0-2 冷开 / P0-3 检索与大文件 / 折叠拆闸 / A 批 / B 批）
     //     此前只在本地分支上跑，**首次并进主干**，字节差是一次到账，不是单批膨胀。
     //     ⇒ 欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸仍是顶格 199，零文件余量）。
+    //   - **内存批 MEM-1/MEM-2（2026-10-29，本批）**：读数 **199 文件 / 3,141 KB**——
+    //     **零新进图模块**（199 未动）；净 **+7,706 B** 全落在图内既有四个文件，逐枚实测：
+    //     `kernel/src/io.ts` +3,730（文本缓存的空闲整表释放 + 观测出口）、
+    //     `erb-parser/src/scanner.ts` +3,603（`detachString` 助手与出口留存闸）、
+    //     `kernel/src/kernel.ts` +331（`project.closed` → 释放一行）、
+    //     `erb-parser/src/references.ts` +42（两处 `detachString` 调用与一行 import）。
+    //     ⇒ 闸 **3,140 → 3,145**（余量 4 KB）。抬这一档的理由：这批加的是**能力**不是注释堆——
+    //     它把整库正文的隐式留存（约 −145 MB）与文本缓存的常驻（约 −218 MB）从堆上摘掉，
+    //     代码本身必须留在图里；文件数一分未涨，说明没有偷偷多拽模块进来。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,140 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_140);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,145 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_145);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
