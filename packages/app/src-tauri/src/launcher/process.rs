@@ -738,11 +738,14 @@ fn attach(
             0,
         );
         store::clear_lock(&host.layout, &cleanup_instance, &cleanup_session);
-        host.finish_running(&cleanup_instance, &cleanup_session);
         let mut failed = ProcessStatusDto::idle(&cleanup_instance);
         failed.last_error =
             Some(super::error::internal("启动监视线程失败").detail(err.to_string()));
+        // 与 `monitor_loop` 末尾同一形状：终态快照必须先落进 last，再摘运行表。
+        // 摘表是等待方（`stop_blocking` 的 `wait_turned_down`）唯一的信号，
+        // 那之后 `status()` 读 last 必须已经是终态，而不是别人早先写的 running/stopping。
         host.set_status(failed);
+        host.finish_running(&cleanup_instance, &cleanup_session);
         return Err(super::error::internal("启动监视线程失败").detail(err.to_string()));
     }
 
@@ -812,8 +815,6 @@ fn monitor_loop(
         });
     }
     store::clear_lock(&host.layout, &instance_id, &session_id);
-    // 先摘运行记录再查状态：`stop` 等的是"表里没有它"
-    host.finish_running(&instance_id, &session_id);
 
     let status = ProcessStatusDto {
         instance_id: instance_id.clone(),
@@ -823,7 +824,7 @@ fn monitor_loop(
             "exited".to_string()
         },
         pid: None,
-        session_id: Some(session_id),
+        session_id: Some(session_id.clone()),
         started_at: Some(started_at),
         elapsed_ms,
         exit_code,
@@ -837,7 +838,14 @@ fn monitor_loop(
             None
         },
     };
+    // 终态快照必须先落进 last，再摘运行表：摘表是 stop 等到的信号，
+    // 那之后 `status()` 读 last 必须已经是终态（否则窗口内会读到 stop
+    // 自己写的 stopping 快照，exit_reason: None —— 满载并行下 1/10 复现）。
+    // 日志 / 清单 last_exit / clear_lock 都在这两步之前完成，"表空 ⇒ 一切落盘完毕"不变；
+    // `status()` 是"运行表优先"，先写快照也不影响 running 读数。
     host.set_status(status.clone());
+    host.finish_running(&instance_id, &session_id);
+    // 事件次序保持原样：表已空才宣布终态
     host.emit_event(
         EVENT_PROCESS,
         json!({ "instanceId": instance_id, "status": status }),

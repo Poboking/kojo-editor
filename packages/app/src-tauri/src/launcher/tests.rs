@@ -1179,6 +1179,98 @@ fn stop_is_idempotent_and_announces_stopping_once() {
     assert_eq!(stopping, 1, "stopping 只许宣布一次（第二发 stop 不许再发）");
 }
 
+/// **窗口钉**：反复 start→stop，每次 stop 返回的读数只要是终态，就必须带 `exit_reason`。
+///
+/// 这里复现的是 `monitor_loop` 的收尾次序缺陷（实拍：满载并行下约 1/10 撞上）：
+/// 旧次序是「摘运行表 → 组装终态 DTO → 写快照」——摘表正是 `stop_blocking` 的
+/// `wait_turned_down` 等到的信号，它醒来后 `finishing_status` 见表里没它就去读 `last`，
+/// 而 `last` 还是 stop 自己写的 `stopping`（`exit_reason: None`）⇒ stop 的返回值变成
+/// `state:"stopping", exit_reason:None`。
+///
+/// 为什么用**多轮**而不是单轮：窗口只有"摘表放锁 → 写快照拿锁"这几微秒，单轮几乎撞不上；
+/// 30 轮在满载并行下足以把概率放大到能看见（每轮约 2.6 s，几乎全花在 debug 构建里对
+/// 19 MB 测试二进制做 sha256 校验——轮数再翻倍只是线性加测试时长，别为此加）。
+/// 每一轮都等旧见证文件删掉再 `start_ready`，保证等的是**这一轮**的夹具报到。
+#[test]
+fn every_stop_result_that_is_terminal_carries_exit_reason() {
+    const ROUNDS: usize = 30;
+    let app = TestDir::new("stop-terminal");
+    let witness = TestDir::new("stop-terminal-witness");
+    let (host, _events) = test_host(app.path());
+    make_launch_instance(&host, "id-terminal", "sleep", witness.path()).unwrap();
+    let ready = witness.join("child.ready");
+
+    for round in 0..ROUNDS {
+        let _ = std::fs::remove_file(&ready);
+        let pid = start_ready(&host, "id-terminal", witness.path(), "child.ready");
+        let status =
+            super::process::stop_blocking(&host, "id-terminal", true, Some(10_000)).unwrap();
+        assert!(
+            matches!(status.state.as_str(), "exited" | "crashed"),
+            "第 {round} 轮 stop 返回了非终态读数（窗口内读到了 stop 自己写的 stopping）：{status:?}"
+        );
+        assert_eq!(
+            status.exit_reason.as_deref(),
+            Some("killed"),
+            "第 {round} 轮终态读数必须带 exit_reason（窗口内读到 None = 快照晚于摘表）：{status:?}"
+        );
+        assert!(
+            wait_until(|| !pid_alive(pid), Duration::from_secs(5)),
+            "第 {round} 轮停完不许有残留进程（pid={pid}）"
+        );
+    }
+}
+
+/// **顺序钉**（防回改）：`process.rs` 里终态快照必须写在摘运行表**之前**。
+///
+/// 行为钉（上面那枚）只有在满载并行时才偶尔红；这条是纯源码形状，任何时候跑都立刻红，
+/// 专门防下一次"为了少写一行"把 `set_status` 挪回 `finish_running` 之后。
+///
+/// 为什么从 `fn monitor_loop(` 起算切片：`host.set_status(status.clone())` 在
+/// `start_blocking` 里还有一处（running 快照），全局 `find` 会误认那一处而让钉子失效。
+#[test]
+fn terminal_snapshot_is_written_before_running_record_is_dropped() {
+    let src = include_str!("process.rs");
+
+    let monitor = src
+        .find("fn monitor_loop(")
+        .expect("process.rs 里必须有 monitor_loop（钉子失效 ⇒ 先重钉这条，别删）");
+    let body = &src[monitor..];
+    let finish = body
+        .find("host.finish_running(&instance_id, &session_id)")
+        .expect("monitor_loop 必须摘运行表：这句是 stop 等到的信号");
+    let set = body[..finish]
+        .rfind("host.set_status(status.clone())")
+        .expect(
+            "摘运行表之前必须先写终态快照 `host.set_status(status.clone())`：\
+             摘表即 stop 醒来的信号，晚写一瞬 stop 就读到 stopping/None",
+        );
+    assert!(
+        set < finish,
+        "终态快照必须早于摘表（set={set}, finish={finish}）"
+    );
+    // 事件次序保持既有承诺：表已空才宣布终态 ⇒ emit_event 留在摘表之后（且仍在 monitor_loop 内）
+    let fn_end = body
+        .find("fn describe_exit_code(")
+        .expect("monitor_loop 后面必须紧跟 describe_exit_code（切片边界）");
+    assert!(
+        body[finish..fn_end].contains("host.emit_event("),
+        "monitor_loop 的 emit_event 必须留在摘表之后（表已空才宣布终态）"
+    );
+
+    // 同一形状的第二处：监视线程起不来时的清理路径（快照先落、再摘表）
+    let cleanup = src
+        .find("if let Err(err) = monitor {")
+        .expect("process.rs 里必须有监视线程起不来时的清理分支");
+    let tail = &src[cleanup..];
+    let finish_cleanup = tail
+        .find("host.finish_running(&cleanup_instance, &cleanup_session)")
+        .expect("清理分支必须摘运行表");
+    tail[..finish_cleanup]
+        .rfind("host.set_status(failed)")
+        .expect("清理分支同样要先把 failed 快照落进 last，再摘运行表");
+}
+
 #[test]
 fn crash_exit_code_is_classified_as_crashed() {
     let app = TestDir::new("crash");
