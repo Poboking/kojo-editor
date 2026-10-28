@@ -477,7 +477,15 @@ export function rangePaths(tree: FlatTree, from: number, to: number): string[] {
   return out;
 }
 
-/** 当前模型里所有可选中（= 文件）行的路径（Ctrl+A 的全集；虚拟化裁掉的行也在内——见组件注释） */
+/**
+ * 当前模型里所有可选中（= 文件）行的路径——`Ctrl+A` 的全集（WS-12 欠账批定的口径）。
+ *
+ * **整个行模型，不是视口窗口那一段**：虚拟化只决定"哪些行此刻挂在 DOM 里"，
+ * 不决定"这一棵树里有哪些文件"。全选之后紧跟着就是复制 / 剪切 / 删除（WS-13），
+ * 收窗口那一段等于把"全选"说成"选到眼前那一屏"。
+ * 不可勾选的行（组头 / 包头 / 目录 / 附加条目 / 说明行）本来就不进集合——
+ * 口径与 `FlatRow.selectable` 一份，不在此处另立。
+ */
 export function allSelectablePaths(tree: FlatTree): string[] {
   const out: string[] = [];
   for (const row of tree.rows) if (row.selectable && row.path !== '') out.push(row.path);

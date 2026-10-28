@@ -87,6 +87,7 @@ import { createEntryIfAbsent } from './file-tree-create';
 import { browsableRootsOf, type WorkspaceFolder } from './workspace-folders';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import {
+  allSelectablePaths,
   buildFsFlatTree,
   buildKojoFlatTree,
   groupRowId,
@@ -2595,10 +2596,31 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         // Delete / Backspace：焦点行没被勾选就只删它，否则删整批（接线与宾语判据住 `requestDelete`）
         if (row !== undefined && row.path !== '') requestDelete(row.path);
         break;
-      case 'selectAll':
-        // 「当前可见行」= 窗口切到的那段行（判据是行模型，不是 DOM——被裁掉的行不该进集合）
-        setSelected(rangePaths(tree, range.start, range.end - 1));
+      case 'selectAll': {
+        /**
+         * 全选 = **整个行模型里所有可勾选的行**，不是"眼前那一屏"（WS-12 欠账批改口径）。
+         *
+         * 改前收的是 `rangePaths(tree, range.start, range.end - 1)`。那是 WS-11 时代的口径——
+         * 当时"窗口外的行"压根不存在，行模型就是 DOM。虚拟化之后两头都变了：
+         * ① 真语料 2,689 行的模型里，窗口只覆盖三十几行 ⇒ 按一次全选只收 30 枚，
+         *    这句"全选"就是说谎（改前真壳实测：滚到深处按 Ctrl+A 收 21 枚）；
+         * ② WS-13 起全选集直接喂给复制 / 剪切 / **删除**（`clipSources` 读的就是这份多选集），
+         *    "全选只删到眼前那一屏"比读起来别扭危险得多。
+         *
+         * 被裁掉的行本来就不在 DOM 里，勾选态由 `file-tree-multi-selection` 那份集合自己维持
+         * ⇒ 滚回来时 `FileRows` 按同一判据点亮，不需要它们此刻挂着。回执那句必须报**总数**
+         * （确认框那侧 `file-delete-plan` 的 `DELETE_LIST_LIMIT` 已经会如实说"另有 K 项没列出"，
+         * 这一句不许只说"已全选"）；一棵没有可勾选文件的树也要说出来，不许静默。
+         */
+        const all = allSelectablePaths(tree);
+        setSelected(all);
+        note(
+          all.length === 0
+            ? '这一棵树里现在没有可勾选的文件行（还没展开，或展开的几组里没有口上文件）'
+            : `已全选：这一棵树里 ${all.length} 份口上文件都进了勾选集（复制 / 剪切 / 删除都按这一批走）`,
+        );
         break;
+      }
       /* ---- WS-13 剪贴板家族（宾语与落点全部现读：多选集 → 焦点行） ---- */
       case 'copy':
         runClipOp('copy');

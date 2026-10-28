@@ -314,7 +314,16 @@ describe('WS-11 · 键位后果', () => {
     expect(opened).toHaveLength(2);
   });
 
-  it('Ctrl + A 只把**当前可见**的行收进集合（裁掉的行不进）', async () => {
+  /**
+   * WS-12 欠账批**改判据**（为什么改写在测试名之外还得写一遍）：
+   *
+   * 旧那条钉的是「Ctrl+A 只把当前可见的行收进集合（裁掉的行不进）」——WS-11 写它的时候
+   * "窗口外的行"还不存在，行模型就是 DOM。之后两件事都变了：虚拟化让窗口只覆盖 2,689 行里的
+   * 三十几行（真壳改前实测：滚到深处按一次 Ctrl+A 只收 21 枚），而 WS-13 把这份勾选集直接喂给
+   * 复制 / 剪切 / **删除**。于是"全选"收眼前一屏就是说谎，而且是一把会误伤的刀。
+   * 现在口径反过来：**整个行模型里所有可勾选的行**，与挂不挂载无关；DOM 侧只点亮挂得出来的那几枚。
+   */
+  it('Ctrl + A 收整个行模型里的可勾选行（不是眼前那一屏），勾选态只点亮挂得出来的那几枚', async () => {
     await mount();
     await openGroup();
     await act(async () => {
@@ -322,9 +331,29 @@ describe('WS-11 · 键位后果', () => {
     });
     await key('a', { ctrl: true });
     const selected = getSelectedPaths();
-    expect(selected.length).toBeGreaterThan(0);
-    expect(selected.length).toBeLessThan(200); // 一万行里只选了窗口那一段
+    expect(selected).toHaveLength(10_000);
     expect(selected).toContain('C:/koa/001/包A/M_KOJO_K1_00000.ERB');
+    expect(selected).toContain('C:/koa/001/包A/M_KOJO_K1_09999.ERB'); // 窗口两端之外的行也在
+    // 挂载的那几十枚点亮，其余留在集合里等滚回来点亮
+    const lit = container.querySelectorAll('[aria-selected="true"]').length;
+    expect(lit).toBeGreaterThan(0);
+    expect(lit).toBeLessThan(60);
+    // 回执要说总数（不许只说"已全选"）
+    expect(container.querySelector('.tree-reveal-note')?.textContent).toContain('10000');
+  });
+
+  it('滚到深处再 Ctrl + A：收的还是整棵树，不是那一段窗口', async () => {
+    await mount();
+    await openGroup();
+    await scrollToTop(5_000 * TREE_ROW_H);
+    await act(async () => {
+      treeEl().focus();
+    });
+    await key('a', { ctrl: true });
+    const selected = getSelectedPaths();
+    expect(selected).toHaveLength(10_000);
+    expect(selected[0]).toBe('C:/koa/001/包A/M_KOJO_K1_00000.ERB'); // 从第一行起，跟视口位置无关
+    expect(container.querySelector('[data-locate="C:/koa/001/包A/M_KOJO_K1_00000.ERB"]')).toBeNull(); // 那行压根没挂
   });
 
   it('F2 走既有行内重命名链路（输入框出现在被命名的那一行）', async () => {

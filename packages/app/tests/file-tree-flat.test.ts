@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { DirEntry } from '@kojo/plugin-api';
 import {
+  allSelectablePaths,
   GAP_GROUP_UL,
   GAP_NESTED_UL,
   TREE_ROW_H,
@@ -298,6 +299,39 @@ describe('GroupRange.span / SubRange.span · 组与包也是裁点', () => {
     expect(pkg.span.bottomPx - pkg.span.topPx).toBe(6 * TREE_ROW_H + 2 * GAP_NESTED_UL);
     // 上一段（根散文件）不带缝、下一段紧接其后
     expect(g.subs[0]!.span.bottomPx).toBe(pkg.span.topPx);
+  });
+});
+
+describe('allSelectablePaths · Ctrl+A 的全集口径', () => {
+  it('收整个模型里的可选中行（顺序就是行序），组头 / 包头 / 说明行 / 附加条目一枚都不进', () => {
+    const dir = 'C:/koa/001/包A';
+    const cache: ReadonlyMap<string, DirState> = new Map<string, DirState>([
+      [dir, [entry('sub', true, dir), entry('readme.zip', false, dir), entry('附.ERB', false, dir)]],
+    ]);
+    const tree = buildKojoFlatTree({
+      groups: [{ group: base, open: true, pkgFolderOpen: () => true }],
+      subOpen: new Set([dir]),
+      dirCache: cache,
+      pkgDirOf: (prefix, label) => `${prefix}/${label}`,
+    });
+    // 行序：组头 / 散落.ERB / 包头 / sub（目录行）/ 附.ERB / readme.zip（附加条目，不可选）/ A1 / A2
+    // （同层按名排序，两视图共用一份顺序 ⇒ 顺序以模型为准，这里只是把钉住的形状读出来）
+    expect(tree.rows.map((r) => r.kind)).toEqual(['group', 'file', 'package', 'dir', 'file', 'extra', 'file', 'file']);
+    expect(allSelectablePaths(tree)).toEqual([LOOSE, `${dir}/附.ERB`, A1, A2]);
+    // 与"窗口"完全无关：这条判据不接 range，也不可能只收到某一段（改前的口径就是这么漏的）
+    expect(allSelectablePaths(tree)).toHaveLength(4);
+  });
+
+  it('折叠组与空树各给什么：折叠 ⇒ 只有已经列出的行；空模型 ⇒ 空数组（不抛）', () => {
+    const closed = buildKojoFlatTree({
+      groups: [{ group: base, open: false, pkgFolderOpen: () => false }],
+      subOpen: new Set(),
+      dirCache: NO_DIR,
+      pkgDirOf: (prefix, label) => `${prefix}/${label}`,
+    });
+    expect(allSelectablePaths(closed)).toEqual([]); // 折叠组只有组头一行 ⇒ 没有可勾选的行
+    const empty = buildKojoFlatTree({ groups: [], subOpen: new Set(), dirCache: NO_DIR, pkgDirOf: (p, l) => `${p}/${l}` });
+    expect(allSelectablePaths(empty)).toEqual([]);
   });
 });
 
