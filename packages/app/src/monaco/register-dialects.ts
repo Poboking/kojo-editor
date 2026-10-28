@@ -42,12 +42,26 @@ export function registerForLanguageServices(
    */
   kind?: SlotServiceKind,
 ): Monaco.IDisposable {
-  const subs = languageDescriptors()
-    .filter(
-      (descriptor) =>
-        descriptor.languageServices === true ||
-        (kind !== undefined && descriptor.slotServices?.includes(kind) === true),
-    )
-    .map((descriptor) => register(monaco, descriptor.id));
+  // B3d：逐门挂上时**半途抛错就回滚**。此前 `.map` 写在表达式里，第二门注册抛错会让
+  // 第一门那枚 disposable 当场丢失（它只活在 map 的中间值里）——调用方再"撤回已挂上的"
+  // 只能撤到零枚，泄漏一枚只在错误路径出现的 provider。改成显式循环 + 逐枚回滚。
+  const subs: Monaco.IDisposable[] = [];
+  try {
+    for (const descriptor of languageDescriptors()) {
+      const servesAll = descriptor.languageServices === true;
+      const namedBySlot = kind !== undefined && descriptor.slotServices?.includes(kind) === true;
+      if (!servesAll && !namedBySlot) continue;
+      subs.push(register(monaco, descriptor.id));
+    }
+  } catch (error) {
+    for (const sub of subs) {
+      try {
+        sub.dispose();
+      } catch {
+        /* 回滚期逐枚隔离：一枚撤不掉不许带走其余（错误原样外抛给调用方） */
+      }
+    }
+    throw error;
+  }
   return { dispose: () => subs.forEach((s) => s.dispose()) };
 }

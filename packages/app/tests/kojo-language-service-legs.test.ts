@@ -33,6 +33,7 @@ import {
   completionRequestOf,
   formattingRequestOf,
   hoverRequestOf,
+  signatureRequestOf,
 } from '../src/monaco/kojo-language-service-legs';
 
 /** 一条只答一件事的贡献（`provide` 的返回由用例决定） */
@@ -411,5 +412,47 @@ describe('completionRequestOf / hoverRequestOf · 请求构造（与 formattingR
     const h = hoverRequestOf({ path: 'a.ERB' }, 'x', 1, 1, null);
     expect('languageId' in h).toBe(false);
     expect('version' in h).toBe(false);
+  });
+});
+
+/* ======================= B3d：签名请求构造 + 格式化区间（additive） ======================= */
+
+describe('signatureRequestOf · 签名请求（与 hover / formatting 同源形状）', () => {
+  it('kind / 坐标 / 全文 / project 就位；identity 缺省键不出现', () => {
+    const req = signatureRequestOf({ path: 'a.kojo2', languageId: 'kojo2', version: 9 }, 'x\ny\n', 2, 3, null);
+    expect(req.kind).toBe('signatureHelp');
+    expect(req.path).toBe('a.kojo2');
+    expect(req.languageId).toBe('kojo2');
+    expect(req.version).toBe(9);
+    expect(req.line).toBe(2);
+    expect(req.column).toBe(3);
+    expect(req.text).toBe('x\ny\n');
+    expect(req.project).toBeNull();
+    const bare = signatureRequestOf({ path: 'a.kojo2' }, 'x', 1, 1, null);
+    expect('languageId' in bare).toBe(false);
+    expect('version' in bare).toBe(false);
+  });
+
+  it('lineCount 与 formatting 同一把尺（空串 1 行；结尾换行把它算进下一行）', () => {
+    const text = '# 机 开场\n> 正文\n';
+    expect(signatureRequestOf({ path: 'a' }, text, 1, 1, null).lineCount).toBe(
+      formattingRequestOf({ path: 'a' }, text, null).lineCount,
+    );
+    expect(signatureRequestOf({ path: 'a' }, '', 1, 1, null).lineCount).toBe(1);
+  });
+});
+
+describe('formattingRequestOf · `lineRange` additive（缺省 = 整篇）', () => {
+  it('不给区间 ⇒ 键不出现（与加这一格之前逐字相同）', () => {
+    const req = formattingRequestOf({ path: 'a.kojo2' }, 'x\n', null);
+    expect('lineRange' in req).toBe(false);
+  });
+
+  it('给区间 ⇒ 只多这一格，其余逐格相同（1 基闭区间原样递）', () => {
+    const base = { path: 'a.kojo2', languageId: 'kojo2' as const, version: 2 };
+    const whole = formattingRequestOf(base, 'a\nb\nc\n', null);
+    const ranged = formattingRequestOf(base, 'a\nb\nc\n', null, { startLine: 2, endLine: 3 });
+    expect(ranged).toEqual({ ...whole, lineRange: { startLine: 2, endLine: 3 } });
+    expect('lineRange' in whole).toBe(false);
   });
 });

@@ -122,7 +122,7 @@ import {
 // K2 batch-4：Kojo 2.0 的补全 / 悬停 / 转定义三枚 provider（纯模型 → Monaco 协议）。
 // **本文件仍不认识任何具体 adapter**：2.0 adapter 由宿主组合根经 `GlobalProviderOptions`
 // 注入（那枚对象不在 `game.adapter` 槽位上，见该接口的注），语言层零游戏名词（解耦审计 A）。
-import { installKojo2LanguageProviders } from '../monaco/kojo2-providers';
+import { installKojo2SlotProviders } from '../monaco/kojo2-providers';
 // K2 batch-5：2.0 一键迁移 code action（纯逻辑 + Monaco 翻译层同在那一枚里）。
 // 宿主只注入"怎么落地"（同一条 `applyTextEdits`），本文件仍零游戏名词。
 import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
@@ -1806,14 +1806,18 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // `registerForLanguageServices(..., 'completion' | 'hover')` 的共享收口（kojo2 由
     // descriptor 的 `slotServices` 点名）。
     //
-    // **留下的必须是插件看不到的宿主事实**：`installKojo2LanguageProviders(monaco)` 之后，
+    // **留下的必须是插件看不到的宿主事实**：`installKojo2SlotProviders(monaco)` 之后，
     // 这里不再传 `{ adapter, getFilePath, getCompile, completion }`——adapter 由插件经
     // `@kojo/kojo-lang/adapter-source` 登记簿（本函数开头那枚 `registerKojo2AdapterSource`）
     // 在请求时现取并核过 `adapter.id === project.adapterId`；文件身份 / 版本 / 项目事实由
     // provider 自己从 model 与内核现取（`requireKernel()`）。**判据一律在插件与包，宿主一份
     // 都不留**——留一份当兜底就是两枚 provider 并存，Monaco 的合并顺序不可控。
-    // `kojo2Adapter` 这格注入面本批只剩签名帮助还在吃它（`installKojo2SignatureHelpProvider`）。
-    globalDisposers.push(installKojo2LanguageProviders(monaco));
+    // **B3d 之后 `kojo2Adapter` 这格注入面已无 provider 消费方**：签名帮助也改成插件供方
+    // （`@巡` 的集合事实由插件经 `adapter-source` 现取）。它**保留**是因为还有第二职责——
+    // 本函数开头那枚 `registerKojo2AdapterSource` 就是靠它登记 getter，插件侧的
+    // 补全 / 悬停 / 行内提示 / 签名四条腿都从那张表拿事实；删掉它等于把插件的 adapter 事实
+    // 一起掐了。名字取自宿主组合根注入的形状，与本层零游戏知识无关。
+    globalDisposers.push(installKojo2SlotProviders(monaco));
     if (isKojo2CutoverEnabled()) {
       // K2 batch-5：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 / 心形 / 着色 / 随机 /
       // 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进），语言 id 只认 `kojo2`。
@@ -1836,8 +1840,12 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 可撤销——K2-SURFACE-DEFAULT 把它算**语言面**（作者不该因为没切流就缩不进去），因此
     // 无条件装配。缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
     globalDisposers.push(installKojo2IndentProvider(monaco));
-    // K2 batch-7：格式化器只服务显式格式化动作（不接保存链路——作者不按 Shift+Alt+F /
-    // Ctrl+K Ctrl+F 就不动缓冲内容）；格式化属语言面，无条件装配。
+    // K2 batch-7 → **B3d（2026-10-28）**：格式化器只服务显式格式化动作（不接保存链路——作者
+    // 不按 Shift+Alt+F / Ctrl+K Ctrl+F 就不动缓冲内容）；格式化属语言面，无条件装配。
+    // 本批把规则（缩进 / 空行 / 行尾 / EOL / 幂等 + 可解析两道闸）整块搬进
+    // `@kojo/kojo-lang/format`，作答来自插件 `kojo2-formatting` 贡献；两枚安装器只做
+    // "model + 选区 → 请求"与"契约 edits → Monaco TextEdit"，注册走
+    // `registerForLanguageServices(..., 'formatting')`。`applyKojo2Format` 同批删除（无消费方）。
     globalDisposers.push(installKojo2DocumentFormatter(monaco));
     // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。B3c 之后补全的事件参数形状
     // 与 `faceTemplates` / `hintNames` 都不在这条腿上了：三路投影住在 `@kojo/kojo-lang`
@@ -1860,12 +1868,12 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         uriForPath: (path) => monaco.Uri.file(path),
       }),
     );
-    globalDisposers.push(
-      installKojo2SignatureHelpProvider(
-        monaco,
-        kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
-      ),
-    );
+    // B3d（2026-10-28）：签名帮助的原生安装**已清零** —— 判据（调用位 / 声明头 / `@巡` 集合名）
+    // 整块搬进 `@kojo/kojo-lang/signature`，作答来自插件 `kojo2-signatureHelp` 贡献；这一枚
+    // 安装器只把 model + 光标翻成请求、把契约签名翻成 Monaco 形状，注册走
+    // `registerForLanguageServices(..., 'signatureHelp')`（kojo2 由 descriptor 点名）。
+    // 不传注入面：`@巡` 的 adapter 事实由插件请求时现取并核 id（与补全 / 悬停同一条纪律）。
+    globalDisposers.push(installKojo2SignatureHelpProvider(monaco));
     // B2c（2026-10-24）：2.0 的 inlay hints 原生注册**已删除** —— 它现在由
     // `installInlayHintsProvider` 那一枚槽腿挂上（kojo2 descriptor 声明了
     // `slotServices: ['inlayHint']`），应答来自插件 `@kojo/plugin-kojo-lang`。
@@ -1885,6 +1893,8 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     );
     globalDisposers.push(installKojo2HighlightProvider(monaco));
     globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
+    // B3d：区间格式化（Ctrl+K Ctrl+F）与整篇同一条能力（`formatting`）——规则同一台，
+    // 只把 Monaco range 折成 `lineRange` 两枚行号塞进请求；选区之外由供方保证逐字节不动。
     globalDisposers.push(installKojo2RangeFormatter(monaco));
     // K2 batch-9：把打开中的 `.kojo2` model 喂给项目索引（跨文件引用面要它）。
     // 创建时立即入索引、内容变更 400ms 防抖后更新；本段 dispose 时全部摘监听并清空索引

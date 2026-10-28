@@ -18,8 +18,8 @@
  *   （v1 的波浪线 = `ui.editor.decorator` 槽 → `setModelMarkers`，ERB / `.kojo` 同一份）；
  * - `self` —— 该语言**专属模块**自建 provider：注册调用里直接写自己的语言 id
  *   （`.erb` 的补全 / 改名，2.0 的各枚 `installKojo2*` 里**仍直接写语言 id** 的那些一并算
- *   这一档；B3c 起 `installKojo2LanguageProviders` 的补全 / 悬停改走带能力名的共享收口，
- *   故记 `shared`，别按模块名猜档位）；
+ *   这一档；B3c 起补全 / 悬停、B3d 起签名帮助 / 格式化改走带能力名的共享收口，故记 `shared`，
+ *   别按模块名猜档位）；
  * - `{ exempt }` —— **已知缺口**，`exempt` 必须是人话理由，且**必须点名下一步接什么**
  *   （2.0 的批次八待接线项要写模块文件名）。闸门对"标了豁免、模块却已经被宿主装配点
  *   `ui/editor-global-providers.ts` 接上"的项会红：那是"接线了忘改矩阵"，不是豁免。
@@ -229,20 +229,22 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 11 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * 9 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 5 枚 `shared` 是**已交给插件**的五条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
- * `completion` 与 `hover` 自 B3c），宿主只经 `registerForLanguageServices` 带能力名挂上、
- * 判据全在 `@kojo/kojo-lang` + 供方 `@kojo/plugin-kojo-lang`；
+ * 7 枚 `shared` 是**已交给插件**的七条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * `completion` 与 `hover` 自 B3c，`signature` 与 `format` 自 B3d），宿主只经
+ * `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/kojo-lang` + 供方
+ * `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
  * 2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` → `setModelMarkers(...,
  * KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用），同样属语言面
  * （`kojo2DiagnosticsEnabled()` 恒 true，归属逐文件按路由判）。
  *
  * `format` 一格含两条腿：整篇（`installKojo2DocumentFormatter`，Shift+Alt+F）与区间
- * （`installKojo2RangeFormatter`，Ctrl+K Ctrl+F）；两枚 provider 都只挂 `kojo2`，装配点
- * `ui/editor-global-providers.ts` 两枚 installer 都调用（矩阵按注册面记 `self`）。
+ * （`installKojo2RangeFormatter`，Ctrl+K Ctrl+F）。B3d 起两枚 provider 都经
+ * `registerForLanguageServices(..., 'formatting')` 挂上、规则在 `@kojo/kojo-lang/format`、
+ * 供方是插件 —— 矩阵按**注册面**记 `shared`（与 `signature` 同批改档）。
  *
  * 本表记的是**注册面实际状态**：`self` 项必须在装配点真有一行无条件调用、`shared` 项必须
  * 真有一枚带能力名的 `registerForLanguageServices` 挂它——`language-parity.test.ts` 的
@@ -258,13 +260,20 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     // B2（2026-10-24）：2.0 的大纲改走**共享收口**（`registerForLanguageServices` 带能力名），
     // 宿主侧零原生 provider；供方 = 插件 `@kojo/plugin-kojo-lang`。
     [LanguageCapability.Outline]: 'shared',
-    [LanguageCapability.Format]: 'self',
+    // B3d（2026-10-28）：格式化走**共享收口**（能力名 `formatting`）——规则住
+    // `@kojo/kojo-lang/format`，供方是插件；宿主 `monaco/kojo2-format.ts` 只剩两枚 provider 的
+    // model → 请求 / 契约 → Monaco 翻译，装配点两枚 installer 都调用（见 language-parity 闸）。
+    // 落到 ERB / kojo1 上的那一枚不抢它们的话语权：插件对非 kojo2 弃权，而它们自己的格式化
+    // provider 后注册、按 Monaco 的"同分后注册在前"排第一位。
+    [LanguageCapability.Format]: 'shared',
     [LanguageCapability.Semantic]: 'self',
     [LanguageCapability.Indent]: 'self',
     [LanguageCapability.Brackets]: 'builtin',
     [LanguageCapability.References]: 'self',
     [LanguageCapability.Rename]: 'self',
-    [LanguageCapability.Signature]: 'self',
+    // B3d（2026-10-28）：签名帮助同批走**共享收口**（能力名 `signatureHelp`）——判据住
+    // `@kojo/kojo-lang/signature`，供方是插件；`@巡` 的集合事实由插件经 `adapter-source` 现取。
+    [LanguageCapability.Signature]: 'shared',
     // B2c（2026-10-24）起 `inlay` 走**共享收口**：`kojo-inlay-hints.ts` 的
     // `installInlayHintsProvider` 带能力名 `inlayHint` 挂上（kojo2 descriptor 点名
     // `slotServices: ['inlayHint']`），供方是插件；`monaco/kojo2-inlay.ts` 的原生安装器

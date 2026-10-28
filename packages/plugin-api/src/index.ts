@@ -683,6 +683,7 @@ export type {
   EditorCompletionRequest,
   EditorCompletionResult,
   EditorFormattingRequest,
+  EditorFormattingLineRange,
   EditorFormattingResult,
   EditorHoverRequest,
   EditorHoverResult,

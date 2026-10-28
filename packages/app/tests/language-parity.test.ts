@@ -217,6 +217,10 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // `slotServices` 点名）。能力名与 `SlotServiceKind` 逐字相同。
   [LanguageCapability.Completion]: 'completion',
   [LanguageCapability.Hover]: 'hover',
+  // B3d：签名帮助 / 格式化的供方也交插件，注册走带能力名的共享收口（kojo2 descriptor 由
+  // `slotServices` 点名）。能力名与 `SlotServiceKind` 逐字相同。
+  [LanguageCapability.Signature]: 'signatureHelp',
+  [LanguageCapability.Format]: 'formatting',
 };
 
 /* ============================== 矩阵形状 ============================== */
@@ -481,15 +485,19 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
     }
   });
 
-  it('kojo2 的 format 面两条腿齐：整篇 + 区间 provider 都只挂 kojo2，装配点两枚 installer 都调用', () => {
+  it('kojo2 的 format 面两条腿齐：整篇 + 区间 provider 都走共享收口（能力名 `formatting`），装配点两枚 installer 都调用', () => {
     const formatModule = sourceOf('monaco/kojo2-format.ts').text;
-    // 一条能力（format）= 两枚 Monaco provider：document（Shift+Alt+F）+ range（Ctrl+K Ctrl+F）
+    // 一条能力（format）= 两枚 Monaco provider：document（Shift+Alt+F）+ range（Ctrl+K Ctrl+F）。
+    // B3d 起两枚都经共享收口挂上（kojo2 由 descriptor 的 `slotServices: ['formatting']` 点名），
+    // 语言 id 不再写在本模块里——`registerForLanguageServices` 按 descriptor 铺。
     expect(formatModule).toMatch(
-      /registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
+      /registerForLanguageServices\(\s*monaco,[\s\S]{0,200}?registerDocumentFormattingEditProvider\s*\(/,
     );
     expect(formatModule).toMatch(
-      /registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
+      /registerForLanguageServices\(\s*monaco,[\s\S]{0,200}?registerDocumentRangeFormattingEditProvider\s*\(/,
     );
+    expect(formatModule).not.toMatch(/registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/);
+    expect(formatModule).not.toMatch(/registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/);
     const host = sourceOf(GLOBAL_PROVIDERS).text;
     expect(host).toContain('installKojo2DocumentFormatter(monaco)');
     expect(host).toContain('installKojo2RangeFormatter(monaco)');
@@ -659,36 +667,39 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：11 枚 self、5 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停走槽腿）、2 枚 builtin、2 项豁免', () => {
+  it('kojo2：9 枚 self、7 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。
     // B3b（2026-10-24）：`definition` 同理挪到 shared —— 判据与展开体那两条落点都归插件，
-    // 宿主 `installKojo2LanguageProviders` 不再注册任何 `DefinitionProvider`。
+    // 宿主 `installKojo2SlotProviders` 不再注册任何 `DefinitionProvider`。
     // B2c（2026-10-24）：`inlay` 同批挪到 shared —— 原生安装器已不在装配路径上。
-    // B3c（2026-10-28）：`completion` / `hover` 也挪到 shared —— `installKojo2LanguageProviders`
+    // B3c（2026-10-28）：`completion` / `hover` 也挪到 shared —— `installKojo2SlotProviders`
     // 不再直挂 `kojo2`，两枚 provider 经 `registerForLanguageServices(..., 'completion'|'hover')`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`（判据在 `@kojo/kojo-lang`）。
-    // **档位变了，能力没少**：两侧的合计仍是 11 + 5 = 16。
+    // B3d（2026-10-28）：`signature` / `format` 同批挪到 shared —— 判据搬进
+    // `@kojo/kojo-lang`，供方是插件的 `kojo2-signatureHelp` / `kojo2-formatting` 两枚贡献，
+    // 注册经 `registerForLanguageServices(..., 'signatureHelp'|'formatting')`。
+    // **档位变了，能力没少**：两侧的合计仍是 9 + 7 = 16。
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
       'codelens',
       'diagnostics',
       'folding',
-      'format',
       'highlight',
       'indent',
       'refs',
       'rename',
       'selection',
       'semantic',
-      'signature',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([
       'completion',
       'definition',
+      'format',
       'hover',
       'inlay',
       'outline',
+      'signature',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'builtin')).toEqual(['brackets', 'preview']);
     expect(exemptionsOf(KOJO2_LANGUAGE_ID).map((entry) => entry.capability).sort()).toEqual([
@@ -736,7 +747,7 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     }
   });
 
-  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / inlayHint / definition / completion / hover）真有一处收口点了名', () => {
+  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / inlayHint / definition / completion / hover / signatureHelp / formatting）真有一处收口点了名', () => {
     for (const capability of capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')) {
       const files = sharedRegistrationFiles(capability).filter((file) => importedByGlobal(file.rel));
       expect(
@@ -773,7 +784,7 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     // 语言面逐项在块外（块外的装配行由上面两条用例按能力逐项取证，这里反向点名）
     for (const installer of [
       'installKojo2SemanticTokensProvider',
-      'installKojo2LanguageProviders',
+      'installKojo2SlotProviders',
       'installKojo2IndentProvider',
       'installKojo2DocumentFormatter',
       'installKojo2RangeFormatter',

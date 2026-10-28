@@ -267,7 +267,6 @@ describe('零抄本：语言面不许手写 2.0 词形', () => {
     const files = [
       'kojo2-language.ts',
       'kojo2-lexicon.ts',
-      'kojo2-enter.ts',
       ...KOJO2_SOURCES,
     ];
     const occurrences: string[] = [];

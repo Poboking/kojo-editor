@@ -149,7 +149,7 @@ describe('没有供方时的退化（契约头注写死的那一种）', () => {
     // 反证扫宿主 src：落点与指针之外，不许再出现 `export const KOJO2_MONARCH =`。
     const files = [
       '../src/monaco/kojo2-language.ts',
-      '../src/monaco/kojo2-enter.ts',
+      '../src/monaco/kojo2-indent.ts',
       '../src/monaco/monaco-language-surface.ts',
     ].map((rel) => fileURLToPath(new URL(rel, import.meta.url)));
     const owners = files.filter((file) => /export const KOJO2_MONARCH\s*=/.test(readFileSync(file, 'utf8')));

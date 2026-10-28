@@ -260,8 +260,8 @@ function indentActionOf(
 /**
  * 契约 `onEnterRules` → Monaco `onEnterRules`（导出给宿主的第二条腿）。
  *
- * 除了槽落点自己用，`kojo2-enter.ts` 也用它——`kojo2-indent.ts` 的打字合并层要拿 Monaco 形状的
- * 两格，而"档位名 → 枚举成员"这张表只许有一份（抄第二份的地方就是错的那份）。
+ * 除了槽落点自己用，`kojo2-indent.ts` 的打字合并层也用它——它要拿 Monaco 形状的两格，而
+ * "档位名 → 枚举成员"这张表只许有一份（抄第二份的地方就是错的那份）。
  */
 export function toMonacoOnEnterRules(
   monaco: typeof Monaco,

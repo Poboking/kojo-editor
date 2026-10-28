@@ -41,6 +41,12 @@ const SLOTS_SRC = readFileSync(
   'utf8',
 );
 
+/** 桶（`src/index.ts`）：新类型只进 slots 不进桶 = 外部消费方 import 不到 */
+const BARREL_SRC = readFileSync(
+  fileURLToPath(new URL('../src/index.ts', import.meta.url)),
+  'utf8',
+);
+
 /** 取某个 `export type Xxx =` 起、到下一个 `;` 止的文本 */
 function unionBody(name: string): string {
   const head = `export type ${name} =`;
@@ -160,6 +166,12 @@ describe('B3d · 格式化区间 additive（缺省 = 整篇，给区间 = 只落
     const body = interfaceBody('EditorFormattingRequest');
     expect(body).toMatch(/^\s+readonly lineRange\?:/m);
     expect(body).not.toMatch(/^\s+readonly lineRange *:/m);
+  });
+
+  it('桶里也导出这枚新类型（只进 slots 不进桶 ⇒ 插件 import 不到，B3d 实际踩过）', () => {
+    // 反向教训：类型住在 `slots.ts`、测试也从 `slots.ts` 取 ⇒ 桶漏一行全员绿，
+    // 而插件（唯一消费方）从 `@kojo/plugin-api` 取时直接编不过。
+    expect(BARREL_SRC).toMatch(/^\s+EditorFormattingLineRange,$/m);
   });
 
   it('缺省 = 整篇旧行为：不传 `lineRange` 的请求照编得过，且逐格与加格之前相同', () => {

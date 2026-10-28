@@ -97,67 +97,18 @@ import {
   collectCompletionItems,
   collectHoverResult,
   completionRequestOf,
+  editorRequestIdentityOf,
   hoverRequestOf,
+  modelTextOf,
 } from './kojo-language-service-legs';
 import { registerForLanguageServices } from './register-dialects';
 
 /* ============================== 宿主事实（model → 请求） ============================== */
 
-/** 取整篇源文；模型已 dispose / 桩 model ⇒ `null`（调用方给空结果，绝不抛进 Monaco） */
-function textOf(model: Monaco.editor.ITextModel): string | null {
-  try {
-    const text = model.getValue();
-    return typeof text === 'string' ? text : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * 这份 model 背后是哪个文件。
- *
- * 桩 model 没有 `uri` ⇒ `''`（= 没有文件身份）：插件据此**少给**要路径的那一部分
- * （悬停的展开段查的是编译成品登记表），其余从源文能证明的照常作答——不猜路径。
+ * 取文与身份三格都住在 legs（B3d 起四条腿共用）：`modelTextOf` / `editorRequestIdentityOf`。
+ * 本文件不再各抄一份——"取文失败"与"缺省就不出现"只有一处口径。
  */
-function pathOfModel(model: Monaco.editor.ITextModel): string {
-  const fsPath = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
-  return typeof fsPath === 'string' ? fsPath : '';
-}
-
-/** 此刻按哪门语言着色（`getLanguageId` 原样取；桩 model 缺这一格 ⇒ 键不出现） */
-function languageIdOf(model: Monaco.editor.ITextModel): string | undefined {
-  try {
-    const id = model.getLanguageId();
-    return typeof id === 'string' && id.length > 0 ? id : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 第几版（供方复核应答是否过期用；取不到 ⇒ 键不出现，而不是补一个假版本号） */
-function versionOf(model: Monaco.editor.ITextModel): number | undefined {
-  try {
-    const version = model.getVersionId();
-    return Number.isFinite(version) ? version : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** model → 请求身份三格（`identity` 的"缺省就不出现"口径由 legs 的构造器守住，这里不另写） */
-function identityOf(model: Monaco.editor.ITextModel): {
-  readonly path: string;
-  readonly languageId?: string;
-  readonly version?: number;
-} {
-  const languageId = languageIdOf(model);
-  const version = versionOf(model);
-  return {
-    path: pathOfModel(model),
-    ...(languageId !== undefined ? { languageId } : {}),
-    ...(version !== undefined ? { version } : {}),
-  };
-}
 
 /* ============================== 契约档 → Monaco 枚举 ============================== */
 
@@ -342,7 +293,12 @@ export function toMonacoHover(result: EditorHoverResult | undefined): Monaco.lan
 /* ============================== 安装 ============================== */
 
 /**
- * 注册**两枚**语言服务 provider（补全 / 悬停），返回**幂等**的 disposable。
+ * 注册**两枚槽腿** provider（补全 / 悬停），返回**幂等**的 disposable。
+ *
+ * 名字里的 `Slot` 是 B3d 的改名（原 `installKojo2LanguageProviders`）：这个名字要回答的是
+ * "它装的是哪一路"，而不是"它装的是 2.0 的全部语言服务"——签名（B3d）与格式化（B3d）同批
+ * 也走了槽，但各自住自己的文件（`kojo2-signature.ts` / `kojo2-format.ts`），这里只剩补全 / 悬停。
+ * 改名只为让 B5b 的 install 账一眼看清"哪枚安装器装哪条腿"，行为与注册口径零改动。
  *
  * 不传任何注入面（B3c 的交付口径）：adapter / 文件身份 / 编译成品 / 补全投影都由插件供方
  * 自己在请求时现取，宿主只负责"这份 model 是谁 + 当前项目是什么"。
@@ -350,12 +306,12 @@ export function toMonacoHover(result: EditorHoverResult | undefined): Monaco.lan
  * 无条件注册（K2-SURFACE-DEFAULT）。注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛；两条腿的错误
  * 面收在各自体内：任何一腿抛错都只让**那一轮**空结果，编辑器不受影响。
  */
-export function installKojo2LanguageProviders(monaco: typeof Monaco): Monaco.IDisposable {
+export function installKojo2SlotProviders(monaco: typeof Monaco): Monaco.IDisposable {
   const completionProvider: Monaco.languages.CompletionItemProvider = {
     triggerCharacters: [...KOJO2_COMPLETION_TRIGGER_CHARS],
     provideCompletionItems(model, position, context) {
       try {
-        const text = textOf(model);
+        const text = modelTextOf(model);
         if (text === null) return { suggestions: [] };
         const kernel = requireKernel();
         // 合并 / 去重在 legs（`collectCompletionItems`），这里只做协议翻译——provider 里
@@ -363,7 +319,7 @@ export function installKojo2LanguageProviders(monaco: typeof Monaco): Monaco.IDi
         const items = collectCompletionItems(
           kernel.slots.query('ui.editor.languageService'),
           completionRequestOf(
-            identityOf(model),
+            editorRequestIdentityOf(model),
             text,
             position.lineNumber,
             position.column,
@@ -383,7 +339,7 @@ export function installKojo2LanguageProviders(monaco: typeof Monaco): Monaco.IDi
   const hoverProvider: Monaco.languages.HoverProvider = {
     provideHover(model, position) {
       try {
-        const text = textOf(model);
+        const text = modelTextOf(model);
         if (text === null) return undefined;
         const kernel = requireKernel();
         // 声明段 + 展开段由**同一家**供方合成一条 `contents`（K2-EXPAND-VIEW 的分家）：
@@ -392,7 +348,7 @@ export function installKojo2LanguageProviders(monaco: typeof Monaco): Monaco.IDi
         return toMonacoHover(
           collectHoverResult(
             kernel.slots.query('ui.editor.languageService'),
-            hoverRequestOf(identityOf(model), text, position.lineNumber, position.column, kernel.project.current()),
+            hoverRequestOf(editorRequestIdentityOf(model), text, position.lineNumber, position.column, kernel.project.current()),
           ),
         );
       } catch {

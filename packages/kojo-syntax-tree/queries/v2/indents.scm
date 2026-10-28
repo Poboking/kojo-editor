@@ -33,7 +33,7 @@
 ;   `monaco/kojo2-indent.ts` 的回车判据同一条纪律：判不准就不给规则。
 ;
 ; 行文本判据的已知上限：宿主把规则交给 Monaco 的静态 `onEnterRules` / `indentationRules` 时，
-; 那些规则只拿得到"当前行文本"、看不到"这一行在不在围栏内"（`kojo2-enter.ts` 头注同一条）。
+; 那些规则只拿得到"当前行文本"、看不到"这一行在不在围栏内"（`@kojo/kojo-lang/language-config` 头注同一条）。
 ; 带上下文的围栏判定在 `kojo2-indent.ts` 的 on-type 层（词法 `kind === 'native'`），两层分工不变。
 
 ; ---- 开体：块头 → 体 +1 级 ----

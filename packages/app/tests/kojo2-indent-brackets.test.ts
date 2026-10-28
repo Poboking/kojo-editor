@@ -11,9 +11,11 @@
  * 3. **括号配置逐项**：`brackets` / `autoClosingPairs` / `surroundingPairs` 同源一张表，
  *    `（）` / `[]` / `{}` / `「」` 都在，`""` 只进闭合与包裹两格；
  * 4. **`@原生` 不自动补**：围栏内刚打进去的开括号（Monaco 自动闭合留下的指纹）被 on-type
- *    层删掉闭括号；围栏外一个字都不碰；
- * 5. **`formatRange`**：只改选中行、结果可解析、与整篇格式化同口径（整篇没有增删行时逐行相等），
- *    选区之外逐字节不动；provider 的注册纪律（flag 关零注册 / 只认 `kojo2` / dispose 幂等）。
+ *    层删掉闭括号；围栏外一个字都不碰。
+ *
+ * 区间格式化（规则 + provider 纪律）B3d 起不在这里：判据随包走
+ * （`packages/kojo-lang/tests/format.test.ts` ⑧），宿主翻译在
+ * `packages/app/tests/kojo2-format.test.ts`。
  */
 
 import { readFileSync } from 'node:fs';
@@ -21,7 +23,6 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { parseSource } from '@kojo/kojo-core';
 import { stubMonaco } from './monarch-harness';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 // B4：成对记号的**真源在语言面库**，而"Monaco 实际拿到什么"由宿主落点翻译那一步决定。
@@ -36,7 +37,6 @@ import {
   kojo2AutoCloseGuardEditsAt,
   kojo2IndentConfigWith,
 } from '../src/monaco/kojo2-indent';
-import { formatKojo2Range, formatKojo2Source, installKojo2RangeFormatter } from '../src/monaco/kojo2-format';
 import { mergeIndentConfig, type BaseIndentPatterns } from '../src/monaco/tree-sitter/indent';
 import {
   createKojo2WorkerEngine,
@@ -88,7 +88,7 @@ afterEach(async () => {
 /* ============================== 假 Monaco / 假 model ============================== */
 
 interface FakeRegistration {
-  readonly kind: 'range' | 'onType';
+  readonly kind: 'onType';
   readonly id: string;
   readonly provider: unknown;
 }
@@ -100,14 +100,12 @@ function fakeMonaco(): {
 } {
   const registrations: FakeRegistration[] = [];
   const dispose = vi.fn();
-  const register = (kind: 'range' | 'onType', id: unknown, provider: unknown): Monaco.IDisposable => {
+  const register = (kind: 'onType', id: unknown, provider: unknown): Monaco.IDisposable => {
     registrations.push({ kind, id: String(id), provider });
     return { dispose };
   };
   const fake = {
     languages: {
-      registerDocumentRangeFormattingEditProvider: (id: unknown, provider: unknown) =>
-        register('range', id, provider),
       registerOnTypeFormattingEditProvider: (id: unknown, provider: unknown) =>
         register('onType', id, provider),
     },
@@ -537,188 +535,10 @@ describe('④ 围栏内自动闭合守卫：只删 Monaco 自动补出来的闭�
   });
 });
 
-/* ============================== ⑤ formatRange：只动选中行 ============================== */
+/* ============================== ⑤⑥ 已随 B3d 搬走 ============================== */
 
-function parseErrors(source: string): number {
-  return parseSource(source).diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length;
-}
-
-function linesOf(source: string): string[] {
-  return source.split(/\r\n|\r|\n/);
-}
-
-const MESSY_POOL = ['# 池 早安问候', '    ? 恋慕 < 100', '      「……早。」', '    ? 否', '        「……」', ''].join('\n');
-
-describe('⑤ formatRange：规则复用整篇、落点只在选中行', () => {
-  it('整篇没有增删行时：区内逐行相等，区外逐字节不动', () => {
-    const full = formatKojo2Source(MESSY_POOL);
-    expect(full.changed).toBe(true);
-    const ranged = formatKojo2Range(MESSY_POOL, 3, 3);
-    expect(ranged.changed).toBe(true);
-    const fullLines = linesOf(full.code);
-    const rangeLines = linesOf(ranged.code);
-    expect(rangeLines).toHaveLength(linesOf(MESSY_POOL).length);
-    // 区外（1 / 2 / 4 / 5 行）与原文逐字节相同
-    for (const index of [0, 1, 3, 4]) {
-      expect(rangeLines[index], `第 ${index + 1} 行被越界改了`).toBe(linesOf(MESSY_POOL)[index]);
-    }
-    // 区内 == 整篇结果切片
-    expect(rangeLines[2]).toBe(fullLines[2]);
-    expect(rangeLines[2]).toBe('        「……早。」');
-  });
-
-  it('选区覆盖全文 ⇒ 与整篇格式化逐字节一致', () => {
-    const full = formatKojo2Source(MESSY_POOL);
-    const ranged = formatKojo2Range(MESSY_POOL, 1, linesOf(MESSY_POOL).length);
-    expect(ranged.code).toBe(full.code);
-    expect(ranged.changed).toBe(full.changed);
-    // 全文选区也允许一条整段 edit（整篇的逐行最小 edit 是另一档形状，字节结果相同即可）
-  });
-
-  it('整篇要插空行时，选区覆盖那一缝 ⇒ 与整篇结果一致（插入行随 kept 行一起进段）', () => {
-    const source = ['# 机 开场', '# 视 我', '> 正文', ''].join('\n');
-    const full = formatKojo2Source(source);
-    expect(full.changed).toBe(true);
-    expect(full.code).toContain('\n\n> 正文');
-    expect(formatKojo2Range(source, 1, 3).code).toBe(full.code);
-  });
-
-  it('只选正文那一行时不在选区外插空行（缝隙呼吸不越界）', () => {
-    const source = ['# 机 开场', '# 视 我', '> 正文   ', ''].join('\n');
-    const ranged = formatKojo2Range(source, 3, 3);
-    expect(ranged.changed).toBe(true);
-    const out = linesOf(ranged.code);
-    expect(out[0]).toBe('# 机 开场');
-    expect(out[1]).toBe('# 视 我');
-    expect(out[2]).toBe('> 正文');
-    expect(out[3]).toBe('');
-    expect(out).toHaveLength(4);
-  });
-
-  it('结果可解析：error 数不增加；edits 只有一条且落在选区内', () => {
-    const ranged = formatKojo2Range(MESSY_POOL, 3, 3);
-    expect(parseErrors(ranged.code)).toBeLessThanOrEqual(parseErrors(MESSY_POOL));
-    expect(ranged.edits).toHaveLength(1);
-    const edit = ranged.edits![0]!;
-    expect(edit.range.startLineNumber).toBe(3);
-    expect(edit.range.endLineNumber).toBe(3);
-    expect(edit.newText).toBe('        「……早。」');
-  });
-
-  it('`@原生` 围栏体：选中围栏行不改一个字节（返回 unchanged）', () => {
-    const source = ['# 机 开场', '', '@原生', '    ; raw', '      CALL X   ', '> 旁白', ''].join('\n');
-    const ranged = formatKojo2Range(source, 3, 5);
-    expect(ranged.changed).toBe(false);
-    expect(ranged.code).toBe(source);
-    expect(ranged.edits).toBeUndefined();
-  });
-
-  it('CRLF 保留：选区外行尾逐字节保留，选区内也用原行尾', () => {
-    const source = '# 池 甲\r\n    ? 条件\r\n      「早。」\r\n';
-    const ranged = formatKojo2Range(source, 3, 3);
-    expect(ranged.changed).toBe(true);
-    expect(ranged.code).toBe('# 池 甲\r\n    ? 条件\r\n        「早。」\r\n');
-  });
-
-  it('行号非法 / 倒置 / 越界 ⇒ 原样返回（不猜方向、不夹取）', () => {
-    for (const [start, end] of [
-      [0, 3],
-      [3, 2],
-      [1.5, 3],
-      [Number.NaN, 3],
-      [99, 120],
-    ] as const) {
-      const result = formatKojo2Range(MESSY_POOL, start, end);
-      expect(result).toEqual({ code: MESSY_POOL, changed: false });
-    }
-    expect(formatKojo2Range('', 1, 1)).toEqual({ code: '', changed: false });
-    expect(formatKojo2Range('> 已合规。\n', 1, 1)).toEqual({ code: '> 已合规。\n', changed: false });
-  });
-
-  it('别名 `formatRange` 与主函数同一台；选项透传（关 indent 就不动缩进）', async () => {
-    const { formatRange } = await import('../src/monaco/kojo2-format');
-    expect(formatRange).toBe(formatKojo2Range);
-    const noIndent = formatKojo2Range(MESSY_POOL, 3, 3, { indent: false, blankLines: false });
-    expect(noIndent.changed).toBe(false);
-  });
-});
-
-/* ============================== ⑥ 区间格式化 provider 注册纪律 ============================== */
-
-describe('⑥ installKojo2RangeFormatter：恒挂 / 只认 kojo2 / dispose 幂等', () => {
-  it('flag 关 ⇒ 照挂（区间格式化是语言面，不看切流阶段）', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = installKojo2RangeFormatter(fake.monaco);
-    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['range', KOJO2_LANGUAGE_ID]]);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it('flag 开 ⇒ 只为 kojo2 注册一枚 range provider；dispose 只撤一次', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    const handle = installKojo2RangeFormatter(fake.monaco);
-    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['range', KOJO2_LANGUAGE_ID]]);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it('只应答 kojo2；乱文档给真 edits，已合规给空 edits', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2RangeFormatter(fake.monaco);
-    const provider = fake.registrations[0]!.provider as Monaco.languages.DocumentRangeFormattingEditProvider;
-    const range = {
-      startLineNumber: 3,
-      startColumn: 1,
-      endLineNumber: 3,
-      endColumn: 12,
-    } as Monaco.Range;
-    const messy = fakeModel(MESSY_POOL);
-    // provider 是同步实现：测试里把 ProviderResult 收窄成数组
-    const edits = provider.provideDocumentRangeFormattingEdits(
-      messy.model,
-      range,
-      {} as never,
-      {} as never,
-    ) as Monaco.languages.TextEdit[];
-    expect(edits).toHaveLength(1);
-    expect(edits[0]!.range.startLineNumber).toBe(3);
-    expect(edits[0]!.text).toBe('        「……早。」');
-    const compliant = fakeModel('> 已合规。\n');
-    expect(
-      provider.provideDocumentRangeFormattingEdits(
-        compliant.model,
-        { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 } as Monaco.Range,
-        {} as never,
-        {} as never,
-      ),
-    ).toEqual([]);
-    const other = fakeModel(MESSY_POOL, 'kojo');
-    expect(provider.provideDocumentRangeFormattingEdits(other.model, range, {} as never, {} as never)).toEqual([]);
-  });
-
-  it('provider 体内取文抛错（模型已释放）⇒ 空 edits，不抛进 Monaco', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2RangeFormatter(fake.monaco);
-    const provider = fake.registrations[0]!.provider as Monaco.languages.DocumentRangeFormattingEditProvider;
-    const broken = {
-      getValue: () => {
-        throw new Error('model disposed');
-      },
-      getLanguageId: () => KOJO2_LANGUAGE_ID,
-    } as unknown as Monaco.editor.ITextModel;
-    expect(
-      provider.provideDocumentRangeFormattingEdits(
-        broken,
-        { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 } as Monaco.Range,
-        {} as never,
-        {} as never,
-      ),
-    ).toEqual([]);
-  });
-});
+// 区间格式化的**规则**（`formatKojo2Range`：只动选中行 / 保留 CRLF / 非法行号原样返回）与
+// **provider 纪律**（共享收口 + `lineRange` 请求 + 三态）B3d 起各有各的闸：
+// - 规则：`packages/kojo-lang/tests/format.test.ts` ⑧（判据跟包走）；
+// - 宿主翻译：`packages/app/tests/kojo2-format.test.ts`（契约 → Monaco / 两条请求 / 注册）。
+// 本文件保留 indents.scm 真 wasm、worker 规则形状、括号配置与 `@原生` 守卫那四组。

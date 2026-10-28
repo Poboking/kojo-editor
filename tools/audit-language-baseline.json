@@ -17,7 +17,7 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 162,
+      "total": 152,
       "files": {
         "packages/app/src/monaco/document-links.ts": 3,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
@@ -38,17 +38,14 @@
         "packages/app/src/monaco/kojo2-code-actions.ts": 3,
         "packages/app/src/monaco/kojo2-codelens.ts": 2,
         "packages/app/src/monaco/kojo2-folding.ts": 2,
-        "packages/app/src/monaco/kojo2-format.ts": 5,
         "packages/app/src/monaco/kojo2-highlight.ts": 2,
         "packages/app/src/monaco/kojo2-indent.ts": 7,
         "packages/app/src/monaco/kojo2-inlay.ts": 2,
         "packages/app/src/monaco/kojo2-language.ts": 5,
-        "packages/app/src/monaco/kojo2-providers.ts": 3,
         "packages/app/src/monaco/kojo2-references.ts": 2,
         "packages/app/src/monaco/kojo2-rename.ts": 2,
         "packages/app/src/monaco/kojo2-selection-range.ts": 2,
         "packages/app/src/monaco/kojo2-semantic.ts": 2,
-        "packages/app/src/monaco/kojo2-signature.ts": 2,
         "packages/app/src/monaco/kojo2-symbols.ts": 2,
         "packages/app/src/monaco/language-capabilities.ts": 7,
         "packages/app/src/monaco/language-registry.ts": 3,

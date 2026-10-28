@@ -172,6 +172,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // B3c（2026-10-28）：补全 / 悬停的供方是插件，kojo2 由 `slotServices` 点名挂上。
   [LanguageCapability.Completion]: 'completion',
   [LanguageCapability.Hover]: 'hover',
+  // B3d（2026-10-28）：签名 / 格式化同批 —— 供方是插件，kojo2 由 `slotServices` 点名挂上。
+  [LanguageCapability.Signature]: 'signatureHelp',
+  [LanguageCapability.Format]: 'formatting',
 };
 
 /** 这门语言对**这一项能力**是否走得到共享收口 */
@@ -487,7 +490,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '格式化',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/kojo-format.ts（共享收口）+ monaco/kojo2-format.ts',
+        evidence: 'monaco/kojo-format.ts（共享收口）+ monaco/kojo2-format.ts（共享收口 + 插件供方）',
         assembled: true,
       },
       {
@@ -643,7 +646,16 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   format: [
     { rel: 'monaco/kojo-format.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDocumentFormattingEditProvider/ },
-    { rel: 'monaco/kojo2-format.ts', re: /registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B3d（2026-10-28）：2.0 的格式化不再由 `kojo2-format.ts` 直挂 `kojo2` —— 整篇与区间
+    // 两枚 provider 都改走共享收口（能力名 `formatting`），由 descriptor 的 `slotServices`
+    // 点名挂上，应答来自插件 `@kojo/plugin-kojo-lang`。取证点随之从"那条原生注册行"变成
+    // "两处声明"（收口带能力名 + 语言进 descriptor），与补全 / 大纲同一条形状。
+    {
+      rel: 'monaco/kojo2-format.ts',
+      re: /registerForLanguageServices\([\s\S]{0,500}?registerDocumentFormattingEditProvider/,
+    },
+    { rel: 'monaco/kojo2-format.ts', re: /'formatting',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'formatting'/ },
   ],
   diagnostics: [
     { rel: 'ui/EditorPane.tsx', re: /query\('ui\.editor\.decorator'\)/ },

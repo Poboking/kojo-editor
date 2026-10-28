@@ -1,7 +1,9 @@
+import type * as Monaco from './entry';
 import { errorText } from '@kojo/plugin-api';
 import type {
   EditorCompletionItem,
   EditorCompletionRequest,
+  EditorFormattingLineRange,
   EditorFormattingRequest,
   EditorHoverRequest,
   EditorHoverResult,
@@ -9,24 +11,30 @@ import type {
   EditorLanguageServiceRequest,
   EditorRangeEdit,
   EditorSignature,
+  EditorSignatureHelpRequest,
 } from '@kojo/plugin-api';
 
 /**
  * LS-B0 的四条**取数腿**：`ui.editor.languageService` 在 LS-B0 批新扩的四个判别成员
  * （`completion` / `hover` / `formatting` / `signatureHelp`）的**合并与裁决**。
  *
- * ## 为什么只有"取数"，没有"装 provider"
+ * ## 取数与裁决：四条腿已经全部上线（B3c / B3d）
  *
- * 这一批的边界是**契约**，不是**上线**：四个能力今天都已经有宿主实现在跑
- * （`kojo2-completion.ts` / `kojo2-hover.ts` / `kojo2-format.ts` / `kojo2-signature.ts`，
- * 各自 `monaco.languages.register*Provider` 在 `kojo2` 语言 id 上）。此刻再把槽里的
- * 产出也装一枚 provider，同一格会有**两份答案**：
- * Monaco 对补全取并集（候选翻倍）、对悬停取多家（两个浮层段落）、对格式化按
- * "第一个非空"（谁先注册谁说了算，与本仓的注册顺序无关）。这不是"新增能力"，
- * 是**改既有行为**——B0 的判据恰好是"既有贡献方零改动"。
+ * B0 只落"合并纪律"、B3c（补全 / 悬停）与 B3d（签名 / 格式化）把**安装器交回槽**：
+ * 四个能力的唯一供方都是插件 `@kojo/plugin-kojo-lang`，宿主侧只剩"model → 请求"与
+ * "契约 → Monaco"两段翻译（`kojo2-providers.ts` / `kojo2-signature.ts` / `kojo2-format.ts`）。
  *
- * 所以本批只把**合并纪律**落成可单测的纯函数；真正 `install*Provider` 与
- * `kojo2-*.ts` 的删除是**同一步**（B2/B3），届时宿主那一路消失，槽里这一路接手。
+ * 为什么必须等宿主原生实现删干净才能装 provider：同一格两份答案时，Monaco 对补全取并集
+ * （候选翻倍）、对悬停取多家（两个浮层段落）、对格式化按"第一个非空"（谁先注册谁说了算，
+ * 与本仓的注册顺序无关）。B0 的判据恰好是"既有贡献方零改动"，所以"删原生"与"装槽腿"
+ * 是**同一步**——今天这四步都走完了。
+ *
+ * ## 请求构造器也住在这里（B3c 起）
+ *
+ * `completionRequestOf` / `hoverRequestOf` / `signatureRequestOf` / `formattingRequestOf`
+ * 与身份三格（`editorRequestIdentityOf`）、取文（`modelTextOf`）同居：四条腿的
+ * "缺省就不出现"口径与行数口径是**同一份事实**，手抄一份到 provider 里，抄漏 `version`
+ * 的那条腿就废掉了供方的过期复核（这类失准只在"改完文件后的第一次应答"里出现）。
  *
  * ## 两种多源口径（与 `EditorLanguageServiceContribution` 头注逐字一致）
  *
@@ -214,6 +222,11 @@ export function formattingRequestOf(
   identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
   text: string,
   project: EditorFormattingRequest['project'],
+  /**
+   * 只格式化这一段（B3d additive）：**不给 = 整篇**，与加这一格之前逐字相同。
+   * 给的形状与契约同名（1 基闭区间），宿主只做"Monaco range → 两枚行号"的搬运。
+   */
+  lineRange?: EditorFormattingLineRange,
 ): EditorFormattingRequest {
   const lineCount = text.length === 0 ? 1 : countLines(text);
   return {
@@ -224,6 +237,83 @@ export function formattingRequestOf(
     text,
     project,
     lineCount,
+    ...(lineRange === undefined ? {} : { lineRange }),
+  };
+}
+
+/**
+ * 构造一个 `signatureHelp` 请求（B3d，宿主接线用；与 `hoverRequestOf` 同源形状）。
+ *
+ * `line` / `column` 是 1 基（Monaco 的 `Position` 同口径，直接递，不换算）。
+ */
+export function signatureRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  line: number,
+  column: number,
+  project: EditorSignatureHelpRequest['project'],
+): EditorSignatureHelpRequest {
+  return {
+    kind: 'signatureHelp',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    line,
+    column,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+  };
+}
+
+/**
+ * 取整篇源文；模型已 dispose / 桩 model ⇒ `null`（调用方给空结果，绝不抛进击键路径）。
+ *
+ * B3d 起从 `kojo2-providers.ts` 提上来：补全 / 悬停 / 签名 / 格式化四条腿都要这同一刀，
+ * 各抄一份就是"取文失败"有四种处置口径（其中一种迟早会抛）。
+ */
+export function modelTextOf(model: Monaco.editor.ITextModel): string | null {
+  try {
+    const text = model.getValue();
+    return typeof text === 'string' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 这份 model 的**请求身份三格**（B3d 起四条腿共用）：`path` / `languageId` / `version`。
+ *
+ * 口径逐条是"能取到才出现"，取不到就不写那一格（供方据此少给要身份的那一部分）：
+ * - 桩 model 没有 `uri` ⇒ `path: ''`（= 没有文件身份；不猜路径）；
+ * - `getLanguageId` 缺 / 抛 / 空串 ⇒ `languageId` 键不出现（供方退回按路径认）；
+ * - 版本号取不到 ⇒ 键不出现（不补一个假版本号——供方的过期复核会被它骗过）。
+ */
+export function editorRequestIdentityOf(model: Monaco.editor.ITextModel): {
+  readonly path: string;
+  readonly languageId?: string;
+  readonly version?: number;
+} {
+  const fsPath = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
+  const path = typeof fsPath === 'string' ? fsPath : '';
+  let languageId: string | undefined;
+  try {
+    const id = model.getLanguageId();
+    if (typeof id === 'string' && id.length > 0) languageId = id;
+  } catch {
+    languageId = undefined;
+  }
+  let version: number | undefined;
+  try {
+    const id = model.getVersionId();
+    if (Number.isFinite(id)) version = id;
+  } catch {
+    version = undefined;
+  }
+  return {
+    path,
+    ...(languageId !== undefined ? { languageId } : {}),
+    ...(version !== undefined ? { version } : {}),
   };
 }
 

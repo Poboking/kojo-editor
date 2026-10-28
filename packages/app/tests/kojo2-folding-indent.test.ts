@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO_INDENT_WIDTH } from '@kojo/kojo-core';
-import { KOJO2_INDENT_UNIT } from '../src/monaco/kojo2-enter';
+import { KOJO2_INDENT_UNIT } from '@kojo/kojo-lang/language-config';
 import { KOJO2_INDENT_WIDTH } from '../src/monaco/kojo2-lexicon';
 import {
   installKojo2IndentProvider,

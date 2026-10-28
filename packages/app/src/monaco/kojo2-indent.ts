@@ -30,7 +30,7 @@
  * | `选项：`（`options` 行） | 本级 + 1 |
  * | `# 表` 的**两列行** | **本级**（行与行同层；值列不是更深的结构） |
  * | `@随机` 的候选行 / `@组` 的组体行 | **本级**（下一条候选、组的下一行都是兄弟） |
- * | 行尾全角 `：`（迁移期块头 / `选项` 的按钮标签） | 本级 + 1（与 `kojo2-enter.ts` **同一条正则**） |
+ * | 行尾全角 `：`（迁移期块头 / `选项` 的按钮标签） | 本级 + 1（与 `language-config` 的块头正则**同一条**） |
  * | 其余（`>` 旁白 / `角色：` 台词 / `!` 触发 / `@颜绘` / `@标` `@跳` `@返` `@断` `@续` / `# 幕` `# 机` `# 视` / `# 变量` `# 常量` / 裸行） | `null`（不动手） |
  *
  * 三条口径值得单独说：
@@ -60,7 +60,7 @@
  * 其中一族静默失效。
  *
  * Monaco 只在 `editor.formatOnType` 开启时派发——所以它是**增强层**，按键瞬间的手感仍由
- * `kojo2-enter.ts` 的 `onEnterRules` 与语言配置的 `autoClosingPairs` 兜；两条腿不冲突。
+ * `@kojo/kojo-lang/language-config` 的 `onEnterRules` 与语言配置的 `autoClosingPairs` 兜；两条腿不冲突。
  * 围栏内自动闭合这条守卫因此也有上限：`formatOnType` 关掉的作者仍会在围栏里拿到自动闭合
  * （语言配置没有围栏上下文，`notIn` 只认 `string` / `comment` / `regex`）。
  *
@@ -72,7 +72,14 @@
  */
 import type * as Monaco from './entry';
 import { KOJO2_LANGUAGE_ID, KOJO2_PAIRS } from './kojo2-language';
-import { KOJO2_BLOCK_HEADER_COLON_RE, KOJO2_INDENT_UNIT, KOJO2_NATIVE_HEADER_RE, kojo2IndentationRules } from './kojo2-enter';
+// B3d（OPT-5）：回车判据（含全角冒号正则 / 栏头正则 / 缩进单位 / indentationRules）直接取
+// 语言面库的那一枚数据叶子——`kojo2-enter.ts` 那层"只转一手"的指针壳同批删除。
+import {
+  KOJO2_BLOCK_HEADER_COLON_RE,
+  KOJO2_INDENT_UNIT,
+  KOJO2_INDENTATION_RULES,
+  KOJO2_NATIVE_HEADER_RE,
+} from '@kojo/kojo-lang/language-config';
 import { KOJO2_INDENT_WIDTH, KOJO2_NATIVE_FENCE_WORD } from './kojo2-lexicon';
 import {
   mergeIndentConfig,
@@ -178,7 +185,7 @@ function closerOf(open: string): string | null {
 
 /* ============================== 结构判据（纯函数） ============================== */
 
-/** 层级 → 缩进串（单位来自 `kojo2-enter.ts`，与 `KOJO2_INDENT_WIDTH` 同一个数） */
+/** 层级 → 缩进串（单位来自 `@kojo/kojo-lang/language-config`，与 `KOJO2_INDENT_WIDTH` 同一个数） */
 function indentOfLevel(level: number): string {
   return KOJO2_INDENT_UNIT.repeat(Math.max(0, Math.trunc(level)));
 }
@@ -254,7 +261,7 @@ export function kojo2IndentAfterLine(text: string, line: number): string | null 
   // ② 同级容器：表的两列行 / 随机候选 / 组体行——下一行仍是这一层的兄弟
   const parent = enclosingHeaderOf(lines, index);
   if (parent !== null && isPeerContainer(parent)) return indentOfLevel(level);
-  // ③ 行尾全角冒号：迁移期块头与 `选项` 的 `「标签」：`（与 kojo2-enter 同一条正则）
+  // ③ 行尾全角冒号：迁移期块头与 `选项` 的 `「标签」：`（与包内块头正则同一条）
   //    旁白 / 行首转义行的行尾冒号是正文（`> 请选择你的行动：`），不在这里开体。
   if (
     current.kind !== 'narration' &&
@@ -391,13 +398,13 @@ export function kojo2AutoCloseGuardEditsAt(
 }
 
 /**
- * 基底（`kojo2-enter.ts` 的语言配置判据）：`@原生` 栏头与行尾全角冒号两条回车规则。
+ * 基底（`@kojo/kojo-lang/language-config` 的回车判据）：`@原生` 栏头与行尾全角冒号两条回车规则。
  *
- * 与 `kojo2IndentationRules()` 同一份源码（`indentOnEnter` 就是那两格 `beforeText`，
+ * 与 `KOJO2_INDENTATION_RULES` 同一份源码（`indentOnEnter` 就是那两格 `beforeText`，
  * `increaseIndentPattern` 是它们的并集）；结构层的规则是**加法**，这两条一条都不撤。
  */
 const KOJO2_BASE_INDENT: BaseIndentPatterns = (() => {
-  const rules = kojo2IndentationRules();
+  const rules = KOJO2_INDENTATION_RULES;
   return {
     indentOnEnter: [KOJO2_NATIVE_HEADER_RE, KOJO2_BLOCK_HEADER_COLON_RE],
     increaseIndentPattern: rules.increaseIndentPattern,

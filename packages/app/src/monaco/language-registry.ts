@@ -41,8 +41,8 @@ export const FALLBACK_LANGUAGE_ID = 'plaintext';
  *
  * 单答型"第一家说了算、谁先答取决于注册表顺序"的分歧仍然存在（B2 头注的理由没作废）；
  * 变化在于它现在由"**逐门语言显式声明**"兜住——被谁挂上是写下来的事实，而不是
- * 铺满之后靠顺序碰运气。其余单答型（`formatting` / `signatureHelp` / `rename`）
- * 仍不在列，等各自的"供方交插件"那一步再 additive 进表。
+ * 铺满之后靠顺序碰运气。**B3d 起 `formatting` / `signatureHelp` 也在列**——这两条腿的
+ * 供方同样已是插件；`rename` 仍不在列，等它的"供方交插件"那一步（B3e）再 additive 进表。
  */
 export type SlotServiceKind =
   | 'definition'
@@ -51,7 +51,9 @@ export type SlotServiceKind =
   | 'foldingRange'
   | 'inlayHint'
   | 'completion'
-  | 'hover';
+  | 'hover'
+  | 'signatureHelp'
+  | 'formatting';
 
 /**
  * 一门语言的**可用性档**（LAU-3 / 设计稿 §4.3、§6）。

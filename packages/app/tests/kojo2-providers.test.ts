@@ -50,7 +50,7 @@ import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import {
-  installKojo2LanguageProviders,
+  installKojo2SlotProviders,
   kojo2CompletionKindOf,
   toMonacoCompletionItem,
   toMonacoCompletionItems,
@@ -166,7 +166,7 @@ function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
 
 function installForTest(options: FakeMonacoOptions = {}): FakeMonaco {
   const fake = fakeMonaco(options);
-  installKojo2LanguageProviders(fake.monaco);
+  installKojo2SlotProviders(fake.monaco);
   return fake;
 }
 
@@ -370,7 +370,7 @@ describe('注册：selector 来自共享收口（descriptor 的 languageServices
 describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
   it('dispose 幂等：两次只撤一轮，两条腿逐门各撤一次', () => {
     const fake = installForTest();
-    const installed = installKojo2LanguageProviders(fake.monaco);
+    const installed = installKojo2SlotProviders(fake.monaco);
     installed.dispose();
     installed.dispose();
     expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
@@ -384,7 +384,7 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
 
   it('一枚 dispose 抛错不带走其余，也不把错误抛给调用方', () => {
     const fake = fakeMonaco({ failDisposeOn: 'hover' });
-    const installed = installKojo2LanguageProviders(fake.monaco);
+    const installed = installKojo2SlotProviders(fake.monaco);
     expect(() => installed.dispose()).not.toThrow();
     // 补全那一组全撤了；悬停组第一枚就抛，被"逐枚 try-catch"吞掉（不许带走别的注册组）
     expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
@@ -399,7 +399,7 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
     // `registrations.push(a, b)`，第二枚抛错时第一枚的句柄还没进数组 ⇒ 撤不回来（静默残留）。
     // 实现改成逐枚 push（见 `kojo2-providers.ts` 的注），这里的回滚就必须真的发生。
     const fake = fakeMonaco({ failOn: 'hover' });
-    expect(() => installKojo2LanguageProviders(fake.monaco)).toThrow(/注册 hover/);
+    expect(() => installKojo2SlotProviders(fake.monaco)).toThrow(/注册 hover/);
     // 挂上过（可见事实）
     expect(fake.registrations.map((entry) => entry.kind)).toEqual(
       COMPLETION_SELECTORS.map(() => 'completion'),
@@ -1007,18 +1007,18 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
     expect(source).toContain("from '../monaco/kojo2-providers'");
     expect(source).toContain('installKojo2SemanticTokensProvider(monaco)');
-    expect(source).toContain('installKojo2LanguageProviders(monaco)');
+    expect(source).toContain('installKojo2SlotProviders(monaco)');
     const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
     const blockEnd = source.indexOf('\n    }', start);
     const block = source.slice(start, blockEnd);
     expect(block).not.toContain('installKojo2SemanticTokensProvider');
-    expect(block).not.toContain('installKojo2LanguageProviders');
+    expect(block).not.toContain('installKojo2SlotProviders');
   });
 
   it('安装调用**不传注入面**（adapter / 路径 / 编译成品都已归插件与包）', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
-    expect(source).toMatch(/globalDisposers\.push\(installKojo2LanguageProviders\(monaco\)\)/);
-    expect(source).not.toMatch(/installKojo2LanguageProviders\(\s*monaco\s*,\s*\{/);
+    expect(source).toMatch(/globalDisposers\.push\(installKojo2SlotProviders\(monaco\)\)/);
+    expect(source).not.toMatch(/installKojo2SlotProviders\(\s*monaco\s*,\s*\{/);
   });
 
   it('两枚 provider 都经共享收口挂上，能力名各写一次（不点名语言 id）', () => {

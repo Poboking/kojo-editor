@@ -1,5 +1,5 @@
 /**
- * `kojo2` 回车层级（U6）：`kojo2-enter.ts` 的判据闸。
+ * `kojo2` 回车层级（U6）：判据闸。
  *
  * 两件事分开钉：
  * - **静态配置**（`onEnterRules` / `indentationRules`）：块头 `：` 与 `@原生` 栏头 → 下一行 +1；
@@ -7,6 +7,9 @@
  * - **上下文判据**（`kojo2EnterIndent` 纯函数）：`@原生` 围栏内一律不动——这一条 Monaco 的
  *   `onEnterRules` 拿不到（它只看当前行），所以真正的判据必须在纯函数上，CUTOVER 的 enter
  *   handler 调它，而不是另写一份。
+ *
+ * B3d（OPT-5）：判据与常量直接取 `@kojo/kojo-lang/language-config`——宿主那枚只转一手的
+ * `kojo2-enter.ts` 指针壳同批删除；数据 → 枚举形状的翻译走 `toMonacoOnEnterRules`（宿主唯一落点）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,11 +18,12 @@ import { KOJO_INDENT_WIDTH } from '@kojo/kojo-core';
 import {
   KOJO2_BLOCK_HEADER_COLON_RE,
   KOJO2_INDENT_UNIT,
+  KOJO2_INDENTATION_RULES,
+  KOJO2_ON_ENTER_RULES,
   kojo2EnterIndent,
-  kojo2IndentationRules,
   kojo2IsNativeFenceHeader,
-  kojo2OnEnterRules,
-} from '../src/monaco/kojo2-enter';
+} from '@kojo/kojo-lang/language-config';
+import { toMonacoOnEnterRules } from '../src/monaco/monaco-language-surface';
 
 /** 回车判据不需要真 Monaco：只借 `IndentAction` 的数字档。 */
 const monacoStub = {
@@ -70,7 +74,7 @@ describe('`@原生` 围栏：栏头 +1，体内不动', () => {
 });
 
 describe('Monaco 协议装配', () => {
-  const rules = kojo2OnEnterRules(monacoStub);
+  const rules = toMonacoOnEnterRules(monacoStub, KOJO2_ON_ENTER_RULES, 'kojo2') ?? [];
 
   it('两格都是 Indent：Enter 上不许 Outdent（收束靠作者回缩）', () => {
     expect(rules.length).toBeGreaterThanOrEqual(2);
@@ -85,7 +89,7 @@ describe('Monaco 协议装配', () => {
   });
 
   it('onEnterRules 与 indentationRules.increaseIndentPattern 同源（两格不许分叉）', () => {
-    const indentation = kojo2IndentationRules();
+    const indentation = KOJO2_INDENTATION_RULES;
     expect(indentation.increaseIndentPattern).toBeInstanceOf(RegExp);
     for (const rule of rules) {
       expect(
@@ -100,7 +104,7 @@ describe('Monaco 协议装配', () => {
   });
 
   it('decreaseIndentPattern 永不命中（2.0 没有全局收束词，绝不自动 Outdent）', () => {
-    const indentation = kojo2IndentationRules();
+    const indentation = KOJO2_INDENTATION_RULES;
     for (const line of ['选项：', '@原生', '# 池 早安问候', '? 否', '循环结束', '']) {
       expect(indentation.decreaseIndentPattern?.test(line) ?? false).toBe(false);
     }
