@@ -39,14 +39,25 @@ const kojoDirOf = (no: number): string => `C:/koa/${String(no).padStart(3, '0')}
 const nameOf = (no: number): string => (no === 1 ? '灵梦' : `角色${no}`);
 const labelOf = (no: number): string => `#${no} ${nameOf(no)}`;
 
-/** `count` 行假项目 × `groups` 个角色目录：一个角色一个包，包内 `count` 份 ERB（文件名零填充 ⇒ 顺序可读） */
-function fakeProject(count: number, groups = 1): { project: GameProject; index: ErbIndex; files: string[] } {
+/**
+ * `count` 行假项目 × `groups` 个角色目录 × `pkgs` 个作者包。
+ *
+ * 一角色一包就看不出**整包被裁**这一档（窗口落进这个包 = 这个包相交，同组别的包压根没有），
+ * 所以三层裁切那组判据要 `pkgs >= 2`：窗口停在包 A 里，包 B 整段在下方 ⇒ 必须换成一条占位。
+ * 默认一包 ⇒ 旧夹具的路径与行号点名一个字都不动。
+ */
+function fakeProject(count: number, groups = 1, pkgs = 1): { project: GameProject; index: ErbIndex; files: string[] } {
   const charaIndex = new Map<number, { no: number; name: string; kojoDir: string }>();
   const files: string[] = [];
   for (let no = 1; no <= groups; no++) {
     const dir = kojoDirOf(no);
     charaIndex.set(no, { no, name: nameOf(no), kojoDir: dir });
-    for (let i = 0; i < count; i++) files.push(`${dir}/包A/M_KOJO_K${no}_${String(i).padStart(5, '0')}.ERB`);
+    for (let p = 0; p < pkgs; p++) {
+      const pkgLabel = `包${String.fromCharCode(65 + p)}`;
+      // 单包夹具不给文件名加字母（旧 26 条判据按 `M_KOJO_K1_00000.ERB` 点名行号）
+      const infix = pkgs > 1 ? String.fromCharCode(97 + p) : '';
+      for (let i = 0; i < count; i++) files.push(`${dir}/${pkgLabel}/M_KOJO_K${no}_${infix}${String(i).padStart(5, '0')}.ERB`);
+    }
   }
   const project = {
     charaIndex,
@@ -60,10 +71,12 @@ let container: HTMLElement;
 let root: Root;
 
 interface MountOpts {
-  /** 假项目的文件行数（默认一万行：虚拟化那组判据要的量级） */
+  /** 假项目每包的行数量（默认一万行：虚拟化那组判据要的量级） */
   filesCount?: number;
   /** 角色目录枚数（默认 1；三层裁切那组判据要"很多组"才看得出组头被裁） */
   groups?: number;
+  /** 每个角色的作者包枚数（默认 1；>=2 才出得来"同组里整包被裁"那一档） */
+  pkgs?: number;
   onOpenFile?: (p: string) => void;
   io?: unknown;
   listDir?: (dir: string) => Promise<{ name: string; path: string; isDirectory: boolean }[]>;
@@ -71,7 +84,7 @@ interface MountOpts {
 
 /** 把树挂起来（默认口上视图；组与包都还没展开） */
 async function mount(props: MountOpts = {}): Promise<void> {
-  const { project, index } = fakeProject(props.filesCount ?? 10_000, props.groups);
+  const { project, index } = fakeProject(props.filesCount ?? 10_000, props.groups, props.pkgs);
   const onOpenFile = props.onOpenFile ?? ((): void => {});
   root = createRoot(container);
   await act(async () => {
@@ -460,15 +473,16 @@ describe('WS-12 · 一万行的挂载规模', () => {
   it('深滚：视口之外的组头与包头一枚都不挂（改前恒挂 60 枚结构行的那格）', async () => {
     const G = 30;
     const K = 8;
-    const perGroup = (2 + K) * TREE_ROW_H + GAP_GROUP_UL + GAP_NESTED_UL;
-    await mount({ filesCount: K, groups: G });
+    const P = 2;
+    // 每组：组头 + P 个（包头 + K 份 ERB），外加 P 档包列表 2px 与组列表 4px
+    const perGroup = (1 + P * (1 + K)) * TREE_ROW_H + P * GAP_NESTED_UL + GAP_GROUP_UL;
+    await mount({ filesCount: K, groups: G, pkgs: P });
     await openAllGroups(G, G * perGroup);
-    expect(container.querySelectorAll('button.tree-group-btn[aria-expanded="true"]').length).toBeGreaterThan(0);
     await scrollToTop(15 * perGroup);
     const mounted = items();
-    // 改前：30 枚组头 + 30 枚包头恒挂载；现在整棵树只许挂窗口那一段
+    // 改前：30 枚组头 + 60 枚包头恒挂载；现在整棵树只许挂窗口那一段
     expect(container.querySelectorAll('button.tree-group-btn').length).toBeLessThan(6);
-    expect(container.querySelectorAll('button.tree-package').length).toBeLessThan(6);
+    expect(container.querySelectorAll('button.tree-package').length).toBeLessThan(12);
     expect(mounted.length).toBeGreaterThan(0);
     expect(mounted.length).toBeLessThan(60);
     // 视口上方那一组的组头与包头确实不在 DOM 里（不是"挂了但看不见"）
@@ -476,29 +490,64 @@ describe('WS-12 · 一万行的挂载规模', () => {
     expect(container.querySelector(`[data-tid="p:${labelOf(1)}::包A"]`)).toBeNull();
     // 整组被裁 ⇒ 一条等高占位替掉整个 li.tree-group（挂在树根 ul 上，不带 data-open）
     expect(container.querySelectorAll('.tree-groups > li.tree-vspacer').length).toBeGreaterThan(0);
+    // 同组里"窗口停在包 A、包 B 整段在下方"那一档 ⇒ 占位挂在组的 ul 里，不是包 li
+    // （这一档的**包级**判决由下面那条"长组中段"钉：短组夹具里窗口一次盖住两组多，
+    //   出不了"同组内有包整个在窗口外"的现场，摘掉包级裁切也照样绿——量测装置自己得先能测到）
+    expect(container.querySelectorAll('.tree-files > li.tree-vspacer').length).toBeGreaterThan(0);
     // roving tabindex：裁掉行之后仍然最多一个停靠点，且占位一枚都不带 role=treeitem
     expect(mounted.filter((el) => el.tabIndex === 0)).toHaveLength(1);
     expect(container.querySelectorAll('.tree-vspacer[role="treeitem"]').length).toBe(0);
   });
 
+  it('长组中段：只挂文件行，同组里窗口之外的那个包整段不挂 li', async () => {
+    const G = 3;
+    const K = 200;
+    const P = 2;
+    /**
+     * 组必须比窗口**高**才量得出第二层裁点：窗口（约 40 行）落在包 A 的文件中间时，
+     * 包 B 整段在窗口下方 ⇒ 该挂一条占位，而不是"挂个 li、里面全是占位"。
+     * （这一条是变异自检逼出来的：先写的版本用"每组 19 行"的短组夹具，
+     * 窗口一次盖住两组多，摘掉包级裁切照样绿——那种现场根本出不了"同组内有包在窗口外"。）
+     */
+    const perGroup = (1 + P * (1 + K)) * TREE_ROW_H + P * GAP_NESTED_UL + GAP_GROUP_UL;
+    await mount({ filesCount: K, groups: G, pkgs: P });
+    await openAllGroups(G, G * perGroup);
+    await scrollToTop(perGroup + 2_200);
+    expect(container.querySelectorAll('button.tree-group-btn')).toHaveLength(0);
+    expect(container.querySelectorAll('button.tree-package')).toHaveLength(0);
+    const mounted = items();
+    expect(mounted.length).toBeGreaterThan(0);
+    // 挂出来的 treeitem 全是文件行——这正是"改前 360 枚里只有 31 枚是文件行"那个形状的反面
+    expect(mounted.every((el) => el.classList.contains('tree-file'))).toBe(true);
+    // 三个组里只有第二个的 li 挂得出来，而它里面也只有窗口经过的那一个包挂 li
+    expect(container.querySelectorAll('li.tree-group').length).toBe(1);
+    expect(container.querySelectorAll('li.tree-package-node').length).toBe(1);
+    // 组头 / 两个包头那三格由等高占位与整段占位顶上：整模型高度一分不变
+    const padPx = spacers().reduce((n, el) => n + Number.parseFloat(el.style.height || '0'), 0);
+    const gapPx =
+      container.querySelectorAll('.tree-groups > li.tree-group[data-open="1"]').length * GAP_GROUP_UL +
+      container.querySelectorAll('li.tree-package-node').length * GAP_NESTED_UL;
+    expect(padPx + mounted.length * TREE_ROW_H + gapPx).toBe(G * perGroup);
+  });
+
   it('三层都裁 ⇒ scrollHeight 恒等于整模型高度（任何窗口位置一分不差）', async () => {
-    const G = 12;
-    const K = 40;
-    // 每组：组头 + 包头 + K 份 ERB，外加包 ERB 列表那档 2px 与组列表那档 4px
-    const perGroup = (2 + K) * TREE_ROW_H + GAP_GROUP_UL + GAP_NESTED_UL;
+    const G = 6;
+    const K = 12;
+    const P = 3;
+    // 每组：组头 + P 个（包头 + K 份 ERB）+ P 档 2px + 一档 4px；窗口约 40 行 ⇒ 组与包两档都被裁到
+    const perGroup = (1 + P * (1 + K)) * TREE_ROW_H + P * GAP_NESTED_UL + GAP_GROUP_UL;
     const total = G * perGroup;
-    await mount({ filesCount: K, groups: G });
+    await mount({ filesCount: K, groups: G, pkgs: P });
     await openAllGroups(G, total);
-    for (const px of [0, 300, perGroup * 5 + 30, perGroup * 11, total]) {
+    for (const px of [0, 300, perGroup + 40, perGroup * 3, total]) {
       await scrollToTop(px);
       const padPx = spacers().reduce((n, el) => n + Number.parseFloat(el.style.height || '0'), 0);
-      const rowsPx =
-        (items().length + container.querySelectorAll('.tree-note').length) * TREE_ROW_H;
-      // 常驻的 ul 带缝：展开着的组各一档 4px、挂出来的包各一档 2px（被整段裁掉的已在 padPx 里）
+      const rowsPx = (items().length + container.querySelectorAll('.tree-note').length) * TREE_ROW_H;
+      // 常驻的 ul 带缝：展开着的组各一档 4px、挂出来的包各一档 2px（整段被裁的已在 padPx 里）
       const gapPx =
         container.querySelectorAll('.tree-groups > li.tree-group[data-open="1"]').length * GAP_GROUP_UL +
         container.querySelectorAll('li.tree-package-node').length * GAP_NESTED_UL;
-      expect(padPx + rowsPx + gapPx).toBe(total);
+      expect(`${px}:${padPx + rowsPx + gapPx}`).toBe(`${px}:${total}`);
     }
   });
 
