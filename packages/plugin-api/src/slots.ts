@@ -1222,7 +1222,7 @@ export interface EditorRangeEdit {
 }
 
 /**
- * 格式化请求（LS-B0 之三）——整篇文本。
+ * 格式化请求（LS-B0 之三）——整篇文本，可**手选一段**。
  *
  * **单答**：同一篇文本两份格式化结果只会打架，故第一家给出 `edits` 的说了算
  * （给出空数组也算"我认这篇、且不需要改"，不再问下一家）。
@@ -1233,6 +1233,24 @@ export interface EditorFormattingRequest extends EditorDocumentIdentity {
   readonly text: string;
   readonly project: GameProject | null;
   readonly lineCount?: number;
+  /**
+   * 只格式化这一段行（B3d additive，**缺省 = 整篇**：不传与本格存在之前逐字相同）。
+   *
+   * 语义写死成一句话：**只落这几行、其余行原样**。所以它带的是
+   * `{ startLine, endLine }` 两枚**行号**，不带列——"选区从哪里切到哪一列"是编辑器的事，
+   * 而"这一段该排成什么样"往往要看**整篇**的结构（缩进深度从文件头压下来、围栏状态跨行），
+   * 供方拿整篇 `text` + 这两枚行号自己决定怎么裁；宿主不切串、不折列、不夹取。
+   *
+   * 行号口径与全仓一致：**1 基**、**闭区间**（`startLine === endLine` = 只排这一行）。
+   * 越界 / 倒置由供方按自己的纪律处置（2.0 的实现是"原样返回、`changed=false`"）。
+   */
+  readonly lineRange?: EditorFormattingLineRange;
+}
+
+/** 格式化的行区间（1 基、闭区间；见 {@link EditorFormattingRequest.lineRange}） */
+export interface EditorFormattingLineRange {
+  readonly startLine: number;
+  readonly endLine: number;
 }
 
 /** 格式化响应：编辑集（按行号升序给出；宿主负责按降序落地，避免坐标位移） */

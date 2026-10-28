@@ -16,6 +16,10 @@
  * 全部可选、旧六档 kind 逐字在前，最小贡献形状（只给 `label` / 只给 `contents`）照编得过；
  * ②**新增值可用**——扩出的六档 kind 与 `EditorLanguageRange` 三元组能被类型接住。
  *
+ * B3d 部分只补一格：`EditorFormattingRequest.lineRange`（格式化区间）同样是**可选**的，
+ * 不给 = 整篇（旧宿主的请求对象一个字都不用改），给了 = 只落这几行。签名帮助**不加字段**
+ * （`EditorSignature.documentation` 是纯文本，已经装得下）。
+ *
  * 判据取自**源码文本**而不是类型系统：类型系统只能证明"我写的这行能编过"，
  * 证明不了"这两行没有一起存在"。与 `compute-task-table-single-source.test.ts` 同口径。
  */
@@ -26,6 +30,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   EditorCompletionItem,
   EditorCompletionItemKind,
+  EditorFormattingLineRange,
+  EditorFormattingRequest,
   EditorHoverResult,
   EditorLanguageRange,
 } from '../src/slots';
@@ -50,14 +56,22 @@ function membersOf(name: string): string[] {
   return [...unionBody(name).matchAll(/\|\s*(Editor\w+)/g)].map((m) => m[1] as string);
 }
 
-/** 取某个 `export interface Name { … }` 区块正文（到收尾大括号为止） */
+/**
+ * 取某个 `export interface Name { … }` 区块正文（到收尾大括号为止）。
+ *
+ * 起点按 `export interface Name` 找、再取其后第一个 `{`：接口可能带 `extends X`（B3d 的
+ * `EditorFormattingRequest` 就带着 `EditorDocumentIdentity`），钉死 `Name {` 会让取证当场
+ * 找不到接口——那是测试写脆了，不是契约错了。
+ */
 function interfaceBody(name: string): string {
-  const head = `export interface ${name} {`;
-  const start = SLOTS_SRC.indexOf(head);
-  if (start < 0) throw new Error(`契约里找不到 ${name}`);
-  const end = SLOTS_SRC.indexOf('\n}', start);
+  const head = `export interface ${name}`;
+  const at = SLOTS_SRC.indexOf(head);
+  if (at < 0) throw new Error(`契约里找不到 ${name}`);
+  const brace = SLOTS_SRC.indexOf('{', at);
+  if (brace < 0) throw new Error(`${name} 的接口没有开头大括号`);
+  const end = SLOTS_SRC.indexOf('\n}', brace);
   if (end < 0) throw new Error(`${name} 的接口没有收尾大括号`);
-  return SLOTS_SRC.slice(start + head.length, end);
+  return SLOTS_SRC.slice(brace + 1, end);
 }
 
 /** `EditorCompletionItemKind` 联合里的字面量档名（按源码顺序） */
@@ -136,6 +150,55 @@ describe('B3c · 缺省 = 旧行为（新格全部可选，最小形状照过）
 
   it('旧六档 kind 逐字在前（additive：扩档不许重排/改名既有条目）', () => {
     expect(kindLiterals().slice(0, 6)).toEqual([...OLD_KINDS]);
+  });
+});
+
+/* ======================= B3d：格式化请求的区间（additive） ======================= */
+
+describe('B3d · 格式化区间 additive（缺省 = 整篇，给区间 = 只落选中行）', () => {
+  it('`lineRange` 是可选字段（必填写法一出现即红）', () => {
+    const body = interfaceBody('EditorFormattingRequest');
+    expect(body).toMatch(/^\s+readonly lineRange\?:/m);
+    expect(body).not.toMatch(/^\s+readonly lineRange *:/m);
+  });
+
+  it('缺省 = 整篇旧行为：不传 `lineRange` 的请求照编得过，且逐格与加格之前相同', () => {
+    // 最小形状（旧宿主 / 直调）——多一个必填格就编不过，这条就是"逐字不变"的类型面证据
+    const whole: EditorFormattingRequest = {
+      kind: 'formatting',
+      path: 'C:/proj/chara.kojo',
+      text: '# 机 开场\n',
+      project: null,
+    };
+    expect(whole).toEqual({
+      kind: 'formatting',
+      path: 'C:/proj/chara.kojo',
+      text: '# 机 开场\n',
+      project: null,
+    });
+    // 运行时"没给"就是 `undefined`（纯类型契约：供方拿它区分整篇 / 区间）
+    expect(whole.lineRange).toBeUndefined();
+    expectTypeOf<EditorFormattingRequest['lineRange']>().toEqualTypeOf<
+      EditorFormattingLineRange | undefined
+    >();
+  });
+
+  it('给 `lineRange` 可表达区间：1 基闭区间两枚行号，与整篇请求只差这一格', () => {
+    const range: EditorFormattingLineRange = { startLine: 3, endLine: 3 };
+    const ranged: EditorFormattingRequest = {
+      kind: 'formatting',
+      path: 'C:/proj/chara.kojo',
+      text: '# 池 问候\n  ? 恋慕 < 100\n      「早。」\n',
+      project: null,
+      lineRange: range,
+    };
+    expect(ranged.lineRange).toEqual({ startLine: 3, endLine: 3 });
+    // 单行选区是合法形态（`startLine === endLine`），不是特例
+    expect(ranged.lineRange!.startLine).toBe(ranged.lineRange!.endLine);
+    expectTypeOf<EditorFormattingLineRange>().toEqualTypeOf<{
+      readonly startLine: number;
+      readonly endLine: number;
+    }>();
   });
 });
 
