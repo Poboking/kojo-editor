@@ -329,3 +329,38 @@ describe('collectUndefinedNameDiagnostics · 引擎词表外置（数据驱动�
     expect(collectUndefinedNameDiagnostics({ text: 'FAKESTR = 文本', engineStringNames: ['FAKESTR'] })).toEqual([]);
   });
 });
+
+describe('R4a · 整项目扫描不算 did-you-mean（`maxSuggestions: 0`）', () => {
+  const text = 'IF ABC == 1';
+  const baseInput = {
+    text,
+    dimNames: ['ABD'],
+    builtinNames: ERB_ENGINE_RESERVED_IDENTIFIERS,
+    engineStringNames: ERB_ENGINE_STRING_IDENTIFIERS,
+  };
+  /** 判据面：位置 + 严重度 + 码。`message` **刻意不在判据里**（见契约头注） */
+  const shape = (rows: readonly { line: number; startColumn?: number; endColumn?: number; severity: string; code?: string }[]) =>
+    rows.map((d) => `${d.line}:${d.startColumn ?? ''}:${d.endColumn ?? ''}:${d.severity}:${d.code ?? ''}`);
+
+  it('条数 / 位置 / severity / code 逐条相等——省掉的只有文案尾巴', () => {
+    const withSuggest = collectUndefinedNameDiagnostics(baseInput);
+    const without = collectUndefinedNameDiagnostics({ ...baseInput, maxSuggestions: 0 });
+    expect(without.length).toBe(withSuggest.length);
+    expect(shape(without)).toEqual(shape(withSuggest));
+    // 编辑器那一轮带候选
+    expect(withSuggest[0]!.message).toContain('你是不是想写');
+    // 扫描那一轮不带，但**前缀逐字相同**（不是另一句话）
+    expect(without[0]!.message).not.toContain('你是不是想写');
+    expect(without[0]!.message).toBe(withSuggest[0]!.message.split('；你是不是想写')[0] + '。');
+  });
+
+  it('候选数上限是"真·零成本"：0 = 一条都不算（不是算了再截断）', () => {
+    // 若实现是"算了再截断"，`suggestions` 会是空但 `maxDistance` 那圈照样跑；
+    // 这里能拿到的可观测面只有结果，故用**等价性**钉：0 与 1 的判据面相同、且 0 无候选。
+    const zero = collectUndefinedNameDiagnostics({ ...baseInput, maxSuggestions: 0 });
+    const one = collectUndefinedNameDiagnostics({ ...baseInput, maxSuggestions: 1 });
+    expect(shape(zero)).toEqual(shape(one));
+    expect(zero[0]!.suggestions).toEqual([]);
+    expect(one[0]!.suggestions.length).toBeGreaterThan(0);
+  });
+});

@@ -1656,6 +1656,10 @@ export function createErbParserPlugin(): Plugin {
             undefinedNames: {
               builtinNames: ERB_ENGINE_RESERVED_IDENTIFIERS,
               engineStringNames: ERB_ENGINE_STRING_IDENTIFIERS,
+              // 整项目扫描（`bulk`）不算 did-you-mean（R4a，2026-10-29）：那一行候选只服务
+              // 人眼，面板行不渲染它，而 400 文件一轮里它占 17%。判据面（条数/位置/severity/
+              // code）逐条不变——`maxSuggestions: 0` 只掐掉 `message` 尾巴那截"你是不是想写"。
+              ...(file.bulk === true ? { maxSuggestions: 0 } : {}),
             },
           });
           for (const failure of result.failedRules) {

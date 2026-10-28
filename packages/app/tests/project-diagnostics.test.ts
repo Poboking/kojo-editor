@@ -73,6 +73,19 @@ describe('decorateScanFile · 一路炸不许带走整份文件', () => {
     expect(out.failedContributors).toEqual(['boom']);
   });
 
+  it('每一路都收到 `bulk: true`（R4a：整项目扫描的产物只进问题列表，不给人眼）', () => {
+    const seen: (boolean | undefined)[] = [];
+    decorateScanFile(
+      [
+        { id: 'a', decorate: (file) => { seen.push((file as { bulk?: boolean }).bulk); return []; } },
+        { id: 'b', decorate: (file) => { seen.push((file as { bulk?: boolean }).bulk); return []; } },
+      ],
+      { path: A, text: 'x', project: null },
+    );
+    // 两路都 True：判据是"这一轮是扫描"，不是"某一路特例"
+    expect(seen).toEqual([true, true]);
+  });
+
   it('全部路都炸 ⇒ 空结果 + 全部点名（这一格等于"今天没问题"是假的，必须看得见）', () => {
     const out = decorateScanFile(
       [
