@@ -306,12 +306,20 @@ export interface VisibleLineWindow {
   readonly from: number;
   readonly to: number;
   /**
-   * `from` 行**行首**在 `text` 里的字符偏移（可选；同契约 `EditorInlayHintRange.startOffset`）。
+   * `from` 行**行首**在 `text` 里的字符偏移（可选；同契约 `EditorLineWindow.startOffset`）。
    *
    * 没有它就只数换行走过去：**42 ns/行**，52,601 行的文末窗口光走位 2.2 ms。校验不过
    * （不是行首 / 越界 / 与 `from` 不自洽）⇒ 静默退回走位，**结果逐条不变**。
    */
   readonly fromOffset?: number;
+  /**
+   * 窗口起点是否已在 `[SKIPSTART]` 块里（可选）。**只有本包内部会填**——语义着色那条路
+   * 为了切声明腿已经算过一次（{@link skipBlockAt}），再让引用腿算一遍就是同一趟
+   * `[SKIP` 子串搜索付两次（666 k 字符实测 **0.30 ms**，一行的窗口上它是主要成本）。
+   *
+   * 缺省 = 自己算（{@link skipStateBefore}），所以外部调用方与老调用方判据一字不变。
+   */
+  readonly skipState?: boolean;
 }
 
 /** 同一判据在**已切好的行数组**上跑（{@link splitErbLines} 的产物；判据一字未动） */
@@ -346,7 +354,7 @@ function* visibleCodeLinesWindowed(text: string, window: VisibleLineWindow): Gen
   let inSkipBlock: boolean;
   let start: number;
   if (anchored !== undefined) {
-    inSkipBlock = skipStateBefore(text, anchored);
+    inSkipBlock = window.skipState ?? skipStateBefore(text, anchored);
     start = anchored;
   } else {
     const reached = walkToLine(text, from);
@@ -394,7 +402,7 @@ function anchorOffsetOf(text: string, fromOffset: number | undefined, from: numb
  * 成本 = 一趟子串搜索（52,601 行实测 **0.26 ms**）+ 每枚标记一次判读。
  */
 function skipStateBefore(text: string, offset: number): boolean {
-  // 窗口就在文首（打开文件的第一屏，最常见的一档）：前面没有行，一趟搜索都不该跑
+  // 窗口就在文首（打开文件的第一屏，最常见的一档）：前面没有任何行，一趟搜索都不该跑
   if (offset <= 0) return false;
   let inSkipBlock = false;
   let at = text.indexOf(SKIP_MARKER_PROBE);
@@ -410,6 +418,65 @@ function skipStateBefore(text: string, offset: number): boolean {
     at = text.indexOf(SKIP_MARKER_PROBE, at + 1);
   }
   return inSkipBlock;
+}
+
+/**
+ * 第 `lineOffset` 行（行首偏移）**之前**是否处在 `[SKIPSTART]` 块里。
+ *
+ * 对外只有一个消费方：语义着色的窗口路径把窗口那几行**切片**重解析（`parseErbText` 判据
+ * 单源），而切片丢掉的前缀里可能正开着 `[SKIPSTART]`——补一行合成标记即可，判据一字不动。
+ * 别用"数标记个数 / 看首行"之类去猜：窗口起点正好落在块内那一档就会错，而那一档恰恰是
+ * 大文件滚动时最常见的一档。
+ */
+export function skipBlockAt(text: string, lineOffset: number): boolean {
+  return skipStateBefore(text, lineOffset);
+}
+
+/** 一段行窗口的原文 + 它在全文里的坐标（`firstLine` 是 `text` 第 1 行的 1 基行号） */
+export interface WindowSlice {
+  readonly text: string;
+  readonly firstLine: number;
+  /** `firstLine` 那行的行首在**原文**里的偏移（{@link skipBlockAt} 直接吃它） */
+  readonly offset: number;
+}
+
+/**
+ * 切出窗口那几行的原文（**O(窗口)**，与文件大小无关）。
+ *
+ * 为什么是"切片重解析"而不是"带窗口重解析"：`parseErbText` 只认整篇文本，给它一段切片
+ * 得到的函数 / `#DIM` 声明与整篇跑出来按行过滤**逐条相同**（跨行状态只有 `[SKIPSTART]`，
+ * 由调用方补合成标记）。24,197 行整篇 2.95 ms ⇒ 400 行切片 ~0.05 ms。
+ *
+ * 行尾口径与 {@link splitErbLines} 一致的地方由 `parseErbText` 自己的 `normalizeEol` 兜住
+ * ——切片边界只在 `\n` 上切，`\r\n` 原样留给下游归一。
+ */
+export function windowSliceOf(text: string, window: VisibleLineWindow): WindowSlice | null {
+  const from = Math.max(1, Math.trunc(window.from));
+  const to = Math.trunc(window.to);
+  if (!Number.isFinite(from) || Number.isNaN(to) || to < from) return null;
+  const anchored = anchorOffsetOf(text, window.fromOffset, from);
+  let start: number;
+  if (anchored !== undefined) {
+    start = anchored;
+  } else {
+    const reached = walkToLine(text, from);
+    if (reached === undefined) return null;
+    start = reached.offset;
+  }
+  let end = start;
+  for (let line = from; line < to; line++) {
+    const nl = text.indexOf('\n', end);
+    if (nl === -1) {
+      end = text.length;
+      break;
+    }
+    end = nl + 1;
+  }
+  if (end < text.length) {
+    const nl = text.indexOf('\n', end);
+    end = nl === -1 ? text.length : nl;
+  }
+  return { text: text.slice(start, end), firstLine: from, offset: start };
 }
 
 /**
@@ -524,14 +591,19 @@ export function normalizedUpper(run: string): string {
  * refs 产出与不传 `collect` 时逐字节相同（等价对拍见 `refs-offload-equiv.test.ts`）。
  * 成员访问（`colonAdjacent`）的记号**到不了 hasName** ⇒ 也不是候选——与"它们不算引用"
  * 同一条边界，两处各写一遍就是第二判据。
+ *
+ * `window`（R3，2026-10-28）：只交这一段里的引用（窗口外的行本来也不该出现）。判据一字
+ * 未动，跨行的 `[SKIPSTART]` 状态由 {@link visibleCodeLines} 从第 1 行算到窗口起点。
+ * 不传 = 整篇，与旧行为逐字节相同。
  */
 export function scanFileRefs(
   text: string,
   hasName: (normalizedName: string) => boolean,
   collect?: (normalizedName: string) => void,
+  window?: VisibleLineWindow,
 ): FileRefs {
   const out: RefRun[] = [];
-  for (const { line, raw, isDefinition, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
+  for (const { line, raw, isDefinition, isCallLine, keywordEnd, codeView } of visibleCodeLines(text, window)) {
     if (isDefinition) {
       // 定义行：名字按**解析器的口径**截（终止符 `(`/空白/`;` + 截后 trim，与
       // `parseFunctionDefinition` 逐字符对齐——真语料实测 4 条定义名带全角空白，

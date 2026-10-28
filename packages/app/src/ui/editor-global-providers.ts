@@ -28,7 +28,7 @@ import type {
   EditorDocumentSymbol,
   EditorFoldingRange,
   EditorInlayHint,
-  EditorInlayHintRange,
+  EditorLineWindow,
   EditorCodeLens,
   EditorSymbolLocation,
   EditorTextEdit,
@@ -1254,7 +1254,7 @@ export function inlayHintsFor(
  * 行号先夹进 `[1, lineCount]`：Monaco 理论上不会给出界区间，但 `getOffsetAt` 越界会抛，
  * 而这里抛出去的代价是"整屏提示消失"——夹一下比信它便宜。
  */
-function windowRangeOf(model: Monaco.editor.ITextModel, window: Monaco.IRange): EditorInlayHintRange {
+function windowRangeOf(model: Monaco.editor.ITextModel, window: Monaco.IRange): EditorLineWindow {
   const startLineNumber = Math.min(Math.max(1, window.startLineNumber), model.getLineCount());
   return {
     startLineNumber,
@@ -1815,7 +1815,7 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 一份不存在的文本上。开关**不在这里判**：Monaco 的 `editor.semanticHighlighting.enabled`
     // 关着时根本不会问 provider（见 `semantic-color-pref.ts`），这里只留大文件那一道降级闸。
     globalDisposers.push(installSemanticTokensProvider(monaco, {
-      resolve: (model) => {
+      resolve: (model, window) => {
         // 着色是**纯显示**职责：跟着"此刻屏幕上那份 model"走，派生糖视图同样要上色。
         // 故这里**不能**用 `owningPaneOf`——它把糖 model 判 null 是为拦 definition/rename/hover
         // 等"导航"作用在派生行号上，误伤到着色 ⇒ .kojo 预览关键词高亮全灭。
@@ -1846,6 +1846,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         return collectSemanticTokenSpans(kernel.slots.query('ui.editor.languageService'), {
           kind: 'semanticToken',
           ...documentRequestFields(model, path, kernel.project.current()),
+          // R3：宿主只在**变更行窗口**下传（`kojo-semantic-tokens` 的会话层决定给不给）。
+          // 行首偏移的理由与行内提示同一条：供方要跳过窗口前那几万行只能数换行，42 ns/行。
+          ...(window === undefined ? {} : { range: windowRangeOf(model, window) }),
         });
       },
     }));

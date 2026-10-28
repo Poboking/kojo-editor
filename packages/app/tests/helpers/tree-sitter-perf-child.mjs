@@ -312,21 +312,38 @@ async function runSingleEdit() {
   const capabilities = engine.capabilities;
 
   state.replies = [];
+  /**
+   * "整篇重解"这一腿改用**另一台引擎**（R8，2026-10-28）。
+   *
+   * 原因：`StructureEngine.parse` 现在有一道闸——**同一份文本再问一次不重解**，只按新
+   * `want` 补查（三拍协议成立的前提，判据在 `tree-sitter-window-invariant.test.ts` ④）。
+   * 所以在同一台引擎上"再 parse 一次同一份文本"已经不是"从零重解"：`parseMs = 0`、
+   * `queryScope` 停在窗口档、三面直接复用缓存——拿它当真值等于自证。
+   * 真值必须从零起手（与 `stream` 场景同一条理由、同一个做法）。
+   */
+  const truth = await useEngine();
+  // 同一条装配预热：先解一遍**原文本**，把装配期那几条 error 回话（查询编译回落）冲掉，
+  // 台账才与增量那台可比（那台的预热早在 `engine.parse(DOC, 1, doc)` 时就发生了）。
+  // 之后解的是**另一份文本** ⇒ 引擎按"文本变了"真删树重解，所以真值仍是"从零"。
+  truth.engine.parse(DOC, 1, doc);
+  truth.state.replies = [];
   const t1 = performance.now();
-  engine.parse(DOC, 4, nextDoc);
+  truth.engine.parse(DOC, 2, nextDoc);
   observeMemory();
-  const realignedSample = sampleOf(engine, state, performance.now() - t1);
-  const realignedTokens = lastReply(state, 'semantic')?.tokens ?? null;
-  const realignedFolds = lastReply(state, 'folds')?.folds ?? null;
-  const realignedFaults = lastReply(state, 'syntax')?.faults ?? null;
+  const realignedSample = sampleOf(truth.engine, truth.state, performance.now() - t1);
+  const realignedTokens = lastReply(truth.state, 'semantic')?.tokens ?? null;
+  const realignedFolds = lastReply(truth.state, 'folds')?.folds ?? null;
+  const realignedFaults = lastReply(truth.state, 'syntax')?.faults ?? null;
+  const emittedRealigned = ledger(truth.state);
 
+  truth.engine.dispose();
   engine.dispose();
   return {
     docLength: doc.length,
     samples: [firstChange, incrementalSample, realignedSample],
     legs: legs.average(),
     emitted,
-    emittedRealigned: ledger(state),
+    emittedRealigned,
     capabilities,
     fatal,
     tokens: incrementalTokens,
@@ -357,14 +374,23 @@ async function runSurrogate() {
   const incrementalTokens = lastReply(state, 'semantic')?.tokens ?? null;
   const incrementalFolds = lastReply(state, 'folds')?.folds ?? null;
   state.replies = [];
+  // 真值同样换一台从零起手的引擎：同文本再 parse 已经不会重解（见 `runSingleEdit` 那条注），
+  // 在这台引擎上"再整篇解一次"只会复用缓存，对账会变成自证。
+  const truth = await useEngine();
+  // 同一条装配预热：先解一遍**原文本**，把装配期那几条 error 回话（查询编译回落）冲掉，
+  // 台账才与增量那台可比（那台的预热早在 `engine.parse(DOC, 1, doc)` 时就发生了）。
+  // 之后解的是**另一份文本** ⇒ 引擎按"文本变了"真删树重解，所以真值仍是"从零"。
+  truth.engine.parse(DOC, 1, doc);
+  truth.state.replies = [];
   const t1 = performance.now();
-  engine.parse(DOC, 3, nextDoc);
+  truth.engine.parse(DOC, 2, nextDoc);
   observeMemory();
-  const realignedSample = sampleOf(engine, state, performance.now() - t1);
-  const realignedTokens = lastReply(state, 'semantic')?.tokens ?? null;
-  const realignedFolds = lastReply(state, 'folds')?.folds ?? null;
+  const realignedSample = sampleOf(truth.engine, truth.state, performance.now() - t1);
+  const realignedTokens = lastReply(truth.state, 'semantic')?.tokens ?? null;
+  const realignedFolds = lastReply(truth.state, 'folds')?.folds ?? null;
   const fatal = state.fatal;
   const capabilities = engine.capabilities;
+  truth.engine.dispose();
   engine.dispose();
   return {
     docLength: doc.length,

@@ -91,6 +91,44 @@ export const STRUCTURE_REQUEST_TIMEOUT_MS = STRUCTURE_TIMEOUT_MS;
 /** 一次取数最多追几轮"当前版本"的结果（每轮 = 一条回话或一次超时，不空转） */
 const FACET_READ_ROUNDS = 3;
 
+/**
+ * 首帧分层（R8，2026-10-28）：**能折叠 → 有颜色 → 其余**，一拍一条请求。
+ *
+ * 为什么必须分拍：worker 是"一条请求一条回话"（`worker-bootstrap.ts::assemble` 把这一趟要的
+ * 几面拼进同一条 `facets`）⇒ 一条回话里，折叠的到达时刻被**排在它前面的查询**顶着，
+ * 而且是**这一拍里最慢那一面**说了算。
+ *
+ * 24,197 行真语料（ERB 语法 `M_KOJO_K139_日常系コマンド.ERB`）、每轮新引擎、同机 A/B 中位：
+ *
+ * | 时序 | 折叠到 | 着色到 | 整趟 |
+ * |---|---|---|---|
+ * | 一条回话（R8 前） | **392.0 ms** | 392.0 ms | 392.0 ms |
+ * | 三条拍（本实现） | **186.4 ms** | **245.1 ms** | 364.4 ms |
+ *
+ * 拍序的三条理由：
+ * - 第一拍**只折叠**：它是"文件能不能收起块"的可用性，也是四面里最便宜的一面；缩进不跟着——
+ *   它在 ERB 语法上有真捕获（`erb-syntax-tree/queries/indents.scm` 的 `@indent.begin` 一族），
+ *   塞进来实测 +46 ms，把首帧挤出判据档；
+ * - 第二拍**只语义**：着色单独一拍比"语义+残缺"一起走**早 108 ms**（353 → 245）——回话要等
+ *   这一拍里所有面算完才发出去，所以"最不挡路的"必须排在最后；
+ * - 第三拍 `indent` + `syntax`：回车规则与波浪线，都不挡前面两件事。缩进到货由
+ *   {@link StructureClientOptions.onIndent} 当场落到语言配置上（否则第一次回车吃基底规则）。
+ *
+ * 代价：每一拍都要把全文再投一次（`parse` 的 `text` 是必填格）。852 KB 一次 postMessage 是
+ * 亚毫秒级；第二、三拍在 worker 侧**不重解**——文本一字未变，树还是那棵树
+ * （`engine.ts::parse` 头注那条闸）。
+ */
+const FRAME_BEATS: readonly (readonly StructureFacet[])[] = [['folds'], ['semantic'], ['indent', 'syntax']];
+
+/** `want` 缺省（= 全带）展开成的全集（只用于按拍过滤，顺序无关） */
+const ALL_FACETS: readonly StructureFacet[] = ['semantic', 'folds', 'indent', 'syntax'];
+
+/** 这一份文档的拍序：按 `want` 滤掉不要的面，再去掉空拍（空表 = 一拍都不发） */
+function frameBeats(want: readonly StructureFacet[] | undefined): readonly (readonly StructureFacet[])[] {
+  const wish = want ?? ALL_FACETS;
+  return FRAME_BEATS.map((beat) => beat.filter((facet) => wish.includes(facet))).filter((beat) => beat.length > 0);
+}
+
 export type { StructureStatus };
 
 type FacetName = 'semantic' | 'folds';
@@ -114,6 +152,14 @@ interface TrackedDocument {
    * 客户端只负责把它带进每一条 `parse` 请求——worker 侧据此跳过没人消费的查询。
    */
   readonly want: readonly StructureFacet[] | undefined;
+  /**
+   * 还没发出去的拍（`[]` = 没有下一拍了，见 {@link FRAME_BEATS}）。
+   *
+   * 它的另一个职责是给 {@link StructureClient.awaitFresh} 看："这一面还没到 ≠ 这次没有"——
+   * 拍还在飞时语义那面必须继续等，不许因为折叠先到就交回 null（那会让这一屏没颜色，
+   * 而 Monaco 要等到下一次内容变化才会再问一次）。
+   */
+  beats: readonly (readonly StructureFacet[])[];
   /** 装配还没完成：不发 parse，等 `ready` 后补发最新全文 */
   pendingParse: boolean;
   /** 上一次回复交出的树（差集请求的基线；`null` = 还没解过） */
@@ -142,6 +188,8 @@ interface PendingParse {
   readonly version: number;
   /** 这条是差集请求（`baseTreeId` 不认识时重发整篇，不计失败） */
   readonly fromEdit: boolean;
+  /** 这一条要了哪几面（缺省 = 全部）——回话里缺一面时，只有"要过"才算它没来 */
+  readonly want: readonly StructureFacet[] | undefined;
   timer: number;
 }
 
@@ -168,6 +216,13 @@ export interface StructureClientOptions {
    * 365 ms（四面）vs 299 ms（折叠+缩进+残缺），差 66 ms，与文档长度同阶。
    */
   readonly facetsFor?: (model: Monaco.editor.ITextModel) => readonly StructureFacet[] | undefined;
+  /**
+   * 结构缩进规则到货（`indent` 这一面归在**第二拍**，见 {@link FIRST_BEAT}）。
+   *
+   * 装配层在这里把它落到语言配置上（`providers.ts::syncIndentConfig`）——第一拍不等这一面，
+   * 所以"折叠先上"之后必须有个地方把回车规则补进去；不然作者开大文件后第一次回车会吃基底规则。
+   */
+  readonly onIndent?: (model: Monaco.editor.ITextModel) => void;
   /** 整档停用时的通知（装配层在这里拆 provider） */
   onFatal?: (message: string) => void;
   /** 结构残缺到货（上屏器；回调不许抛） */
@@ -196,6 +251,8 @@ export class StructureClient {
     truncated: boolean,
   ) => void;
   private readonly onSyntaxClear: (model: Monaco.editor.ITextModel) => void;
+  /** 缩进规则到货（第二拍）——缺省什么都不做（只有装配层知道该往哪份语言配置上写） */
+  private readonly onIndent: (model: Monaco.editor.ITextModel) => void;
   /** 文档隔离号的发生器（只增不减） */
   private docSeq = 0;
   /** 池租约（LAU-5）；`dispose()` 时还回池子而不是杀线程 */
@@ -224,6 +281,7 @@ export class StructureClient {
     this.onFatal = options.onFatal ?? (() => undefined);
     this.onSyntax = options.onSyntax ?? (() => undefined);
     this.onSyntaxClear = options.onSyntaxClear ?? (() => undefined);
+    this.onIndent = options.onIndent ?? (() => undefined);
     if (options.protocolMode === 'legacy') this.adoptLegacy('调用方选了 protocolMode: legacy（手动回滚）');
   }
 
@@ -385,6 +443,8 @@ export class StructureClient {
       lines: model.getLineCount(),
       version: 1,
       want: this.options.facetsFor?.(model),
+      // 后续拍由前一拍的回话触发（见 `acceptParse`）；这里先清空
+      beats: [],
       // 装配没完成就先不发 parse（发了注定被拒）：等 ready 后补发，自然带上最新全文
       pendingParse: this.status !== 'ready',
       baseTreeId: null,
@@ -396,10 +456,12 @@ export class StructureClient {
       failures: 0,
     };
     this.doc = doc;
-    if (!doc.pendingParse) this.postParse(doc);
+    // 开文件走两拍：折叠先上（R8）
+    if (!doc.pendingParse) this.postParse(doc, doc.want, true);
     return doc;
   }
 
+  /**
   /**
    * 线上真正发的 `doc` 号 = 通道号段起点 + 本客户端自己的序号（LAU-5 / v4）。
    *
@@ -410,15 +472,37 @@ export class StructureClient {
     return this.docBase + doc.seq;
   }
 
-  /** 整篇请求（`doc` 号 + 当前版本 + 当前快照全文） */
-  private postParse(doc: TrackedDocument): void {
+  /**
+   * 整篇请求（`doc` 号 + 当前版本 + 当前快照全文）。
+   *
+   * `staged` = 走首帧分层的拍序（{@link FRAME_BEATS}）：这一条只发第一拍，其余的排进
+   * `doc.beats`，由 `acceptParse` 在每条回话之后依次发出去。
+   *
+   * 其余路径（改动兜底 / 基线树对不上时的重发）**一拍到底**：那时作者已经在打字，
+   * 折叠早就在屏幕上了，再分拍只是白付投递钱。
+   */
+  private postParse(doc: TrackedDocument, want: readonly StructureFacet[] | undefined = doc.want, staged = false): void {
+    if (!staged) {
+      doc.beats = [];
+      this.postParseRequest(doc, want);
+      return;
+    }
+    const beats = frameBeats(want);
+    doc.beats = beats.slice(1);
+    const first = beats[0];
+    if (first === undefined) return; // 一面都不要（`want: []`）⇒ 一条都不发
+    this.postParseRequest(doc, first);
+  }
+
+  /** 发一条整篇 `parse`（`doc.beats` 里还剩几拍决定"缺面算不算没来"，见 `acceptParse`） */
+  private postParseRequest(doc: TrackedDocument, want: readonly StructureFacet[] | undefined): void {
     this.post({
       id: this.nextId++,
       kind: 'parse',
       doc: this.docIdOf(doc),
       version: doc.version,
       text: doc.text,
-      ...(doc.want === undefined ? {} : { want: doc.want }),
+      ...(want === undefined ? {} : { want }),
     }, doc, false);
   }
 
@@ -499,6 +583,8 @@ export class StructureClient {
             this.postParse(doc);
             return;
           }
+          // 差集回话带全部面 ⇒ 后面的拍没有存在的理由了（否则会多几条同版本的整篇请求）
+          doc.beats = [];
           this.post(
             {
               id: this.nextId++,
@@ -533,9 +619,18 @@ export class StructureClient {
     const budget = this.answered ? this.timeoutMs : this.bootstrapTimeoutMs;
     const timer = window.setTimeout(() => {
       this.pending.delete(request.id);
+      // 到点 ⇒ 后面的拍跟着作废：它们的触发条件是"上一条回话"，而那条已经不会来了。
+      // 不作废的话，等票会因为 `doc.beats` 非空而多追一轮（多付一份超时、多记一次失败）。
+      doc.beats = [];
       this.noteFailure(doc, 'timeout', `结构解析 ${budget}ms 内没有回话（请求 #${request.id}）`);
     }, budget);
-    this.pending.set(request.id, { doc, version: request.version, fromEdit, timer });
+    this.pending.set(request.id, {
+      doc,
+      version: request.version,
+      fromEdit,
+      want: request.want,
+      timer,
+    });
     try {
       worker.postMessage(request);
     } catch (error: unknown) {
@@ -559,9 +654,14 @@ export class StructureClient {
       if (this.doc !== doc || doc.dead[name] || this.status === 'dead') return null;
       if (this.legacy !== null) return null;
       if (timedOut) return null;
-      // 票是被"别的面到货"放行的：这一面仍然没数据 ⇒ 这次不顶上，别再空转一轮
+      // 票是被"别的面到货"放行的（不是这一面本身）。两条出路：
+      // - 这一面其实已经到了（同一份**回话**里带来的面一起落库）⇒ 落给下一轮的轮首判据，
+      //   那里是唯一出口；
+      // - 还没到 ⇒ 看有没有拍在飞：**有就再等一轮**（首帧分层：折叠先到、语义后到），
+      //   没有就这次真不顶上，别再空转（round 数只是保险丝）。
       const again = name === 'semantic' ? doc.semantic : doc.folds;
-      if (again === null || again.version < doc.version) return null;
+      const arrived = again !== null && again.version >= doc.version;
+      if (!arrived && doc.beats.length === 0) return null;
     }
     return null;
   }
@@ -713,7 +813,8 @@ export class StructureClient {
     const doc = this.doc;
     if (doc === null || !doc.pendingParse) return;
     doc.pendingParse = false;
-    this.postParse(doc);
+    // 装配完成后补发的那一条也是"开文件的第一帧" ⇒ 走拍序（折叠先上）
+    this.postParse(doc, doc.want, true);
   }
 
   /** 正常丢弃（不是回落）：只落开发面一行，供排查时序 */
@@ -801,9 +902,24 @@ export class StructureClient {
     doc.failures = 0;
     if (reply.treeId.length > 0) doc.baseTreeId = reply.treeId;
     const facets = reply.facets;
+    /**
+     * 这一面"等不来了"吗（判死 = 别再等，也别每屏重来一遍）。
+     *
+     * 三档，缺一不可：
+     * - **这份文档压根没要它**（体量档把语义摘掉的那一档）⇒ 现在就可以判：它不会随别的
+     *   请求补上；
+     * - **这一拍没要它**（首帧分层：折叠那一拍没问语义）⇒ 不是它没来，是压根没问；
+     * - **要了却没来，而且后面也没有哪一拍会再要它** ⇒ 查询不可用 / 编译失败（原因见 worker
+     *   控制台）。反面就是**不许**在这里判死：后面那一拍还要它，就得等那一条回话。
+     */
+    const missing = (name: StructureFacet): boolean => {
+      if (doc.want !== undefined && !doc.want.includes(name)) return true;
+      if (entry.want !== undefined && !entry.want.includes(name)) return false;
+      return !doc.beats.some((beat) => beat.includes(name));
+    };
     if (facets.semantic !== undefined) {
       doc.semantic = { version: reply.version, value: this.tokensOf(facets.semantic) };
-    } else if (!doc.dead.semantic) {
+    } else if (!doc.dead.semantic && missing('semantic')) {
       this.markFacetMissing(doc, 'semantic');
     }
     if (facets.folds !== undefined) {
@@ -811,14 +927,28 @@ export class StructureClient {
       const folds: KojoStructureFold[] = [];
       for (let i = 0; i + 1 < spans.length; i += 2) folds.push({ startRow: spans[i]!, endRow: spans[i + 1]! });
       doc.folds = { version: reply.version, value: folds };
-    } else if (!doc.dead.folds) {
+    } else if (!doc.dead.folds && missing('folds')) {
       this.markFacetMissing(doc, 'folds');
     }
-    if (facets.indent !== undefined) this.latestIndent = { version: reply.version, value: facets.indent };
+    if (facets.indent !== undefined) {
+      this.latestIndent = { version: reply.version, value: facets.indent };
+      // 第二拍才到的缩进：第一拍没等它 ⇒ 在这里当场落到语言配置上（否则第一次回车吃基底规则）
+      try {
+        this.onIndent(doc.model);
+      } catch {
+        /* 上屏器抛回来也不许把这一条消息环打断（与 `onSyntax` 同一条纪律） */
+      }
+    }
     if (facets.syntax !== undefined && !doc.syntaxDead) {
       this.safeSyntax(doc.model, facets.syntax.faults, facets.syntax.truncated);
     }
     this.flush(doc);
+    // 下一拍：这一拍的产物已经上桌（上面刚 flush 完等着它的票）⇒ 接着问下一条
+    const next = doc.beats[0];
+    if (next !== undefined) {
+      doc.beats = doc.beats.slice(1);
+      if (this.doc === doc && !doc.model.isDisposed()) this.postParseRequest(doc, next);
+    }
   }
 
   /**

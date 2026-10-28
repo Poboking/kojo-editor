@@ -37,7 +37,7 @@ import { registerForLanguageServices } from './register-dialects';
  *
  * `kojo2` 的 200ms 那一档见 `kojo2-inlay.ts`；本模块管的是共享收口这一枚。
  */
-import { ERB_LANGUAGE_ID } from './erb-language';
+import { lineWindowFor } from './language-registry';
 
 /**
  * 这条腿的供方**按行窗口取数**吗（成本正比于视口，而不是行数）。
@@ -46,9 +46,12 @@ import { ERB_LANGUAGE_ID } from './erb-language';
  * （`erb-parser/inlay-hints.ts` 的 `callArgumentHints`）把窗口吃进了输入。
  * `.kojo1` 走糖线（`kojo-sugar/langsvc.ts` 整篇转译后再问 ERB）与 `kojo2`
  * （`kojo-lang/inlay.ts` 整篇 lex+parse）都还是整篇——它们照旧吃体量档。
+ *
+ * **这条事实住在 descriptor 表**（`languages.ts` 的 ERB 行 `lineWindow: true`），这里只查表：
+ * 宿主不认识任何具体语言名（`audit-language` M2）。表没装 / id 认不出 ⇒ 整篇（安全方向）。
  */
 export function inlayHintsWindowed(languageId: string): boolean {
-  return languageId === ERB_LANGUAGE_ID;
+  return lineWindowFor(languageId);
 }
 
 /**

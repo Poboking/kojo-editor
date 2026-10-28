@@ -1138,6 +1138,12 @@ export class StructureEngine {
    * （不平移）。区间的取法由调用方写死（整行对齐 + 末行换行收口 + EOF 补虚拟换行，见
    * `tree-sitter/injection.ts`）；这里只负责把它原样交给解析器。`edit` 那条增量路不接区间
    * （编辑 + 区间同给没有定义过的语义，由协议环判 `invalid-input`）。
+   *
+   * **同一份文本再问一次不重解（R8，2026-10-28）**：首帧分层把一次开文件拆成两条 `parse`
+   * （第一拍只要折叠、第二拍补其余），第二拍的文本与版本**一字未变**，树因此还是那棵树——
+   * 重解一遍只是把同一份 CST 再算一次。判别用文本相等（`===`：同一个快照走 postMessage 过来
+   * 是两份字符串，比较是 memcmp 量级；852 KB 实测 ~0.1 ms，对着省下的 150–250 ms 可忽略）。
+   * 不接区间路：区间改的是"解哪几段"，与已经解好的那棵树对不上号。
    */
   parse(
     doc: KojoStructureDocSeq,
@@ -1147,6 +1153,14 @@ export class StructureEngine {
     includedRanges?: readonly StructureRange[],
   ): void {
     if (this.parser === null) return;
+    if (this.tree !== null && includedRanges === undefined && text === this.documentText) {
+      // 树就是这份文本的事实源 ⇒ 只补查新点名的面。三面缓存同理保留（它们本来就属于这棵树）。
+      this.requestedFacets = want === undefined ? null : new Set(want);
+      this.beginPass('full');
+      this.parseMs = 0; // 这一趟没有解析：metrics 里不许报出上一趟的读数
+      this.emitAll(doc, version, null, null);
+      return;
+    }
     this.tree?.delete();
     this.tree = null;
     this.requestedFacets = want === undefined ? null : new Set(want);

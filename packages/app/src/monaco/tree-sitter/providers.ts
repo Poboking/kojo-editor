@@ -416,6 +416,9 @@ function startLanguage(
       }
       syntax?.clear(model);
     },
+    // 缩进这一面归**第二拍**（首帧分层：折叠先上，见 `client.ts::FIRST_BEAT`）⇒ 到货时
+    // 当场落到语言配置上。不接这一条，作者开大文件后的第一次回车会吃基底规则。
+    onIndent: () => syncIndentConfig(languageId),
   });
   const registrations: Monaco.IDisposable[] = [];
   try {

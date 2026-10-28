@@ -66,6 +66,14 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
   languageServices: true,
   // LANG-PARITY-GATE：已交付的能力面（真源 = language-capabilities.ts 的矩阵；声明只列已交付的）
   capabilities: ERB_CAPABILITIES,
+  /**
+   * R3（2026-10-28）：ERB 的两条语言服务腿（行内提示 `callArgumentHints` / 结构化着色
+   * `erbSemanticTokens`）都把行窗口吃进了输入，且窗口内逐行说法与整篇一字不差
+   * （对拍见 `erb-parser/tests/semantic-tokens-window.test.ts` 与 `inlay-window.perf`）。
+   * 声明在表里，宿主才能只下传变更行/视口而不认识"erb"这个名字（M2 铁律）。
+   * `.kojo1` 走糖线整篇转译、kojo2 整篇 lex+parse，都不声明。
+   */
+  lineWindow: true,
   structure: {
     load: () => import('./tree-sitter/erb-runtime').then((m) => m.ERB_STRUCTURE_RUNTIME),
   },
