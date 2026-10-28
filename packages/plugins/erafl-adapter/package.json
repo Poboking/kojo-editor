@@ -5,7 +5,8 @@
   "description": "eraFL game adapter: project detection, Chara CSV parsing, kojo paths, suffix-style family index. All eraFL-specific knowledge lives here; the kernel stays game-agnostic.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./kojo2": "./src/kojo2/index.ts"
   },
   "dependencies": {
     "@kojo/plugin-api": "workspace:*",

@@ -37,11 +37,13 @@
 | **B1** | 建 `@kojo/kojo-lang`：搬 symbols / declarations / sourcemap / expand-view / constants（约 1.9k 行纯函数） | ✅ `e4477343` |
 | **B2** | 建 `@kojo/plugin-kojo-lang`：接槽位已支持的 5 项 | 🟡 **4/5**（references / foldingRange 未接） |
 | **B3** | 接 B0 新扩的 4 项 + diagnostics / codeAction 改注册既有槽 | 🟡 **第一步已做**（B3a / B3b） |
-| **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | ⬜ 未开始 |
-| **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | ⬜ 未开始 |
+| **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件 | ✅ `7f02ff73` + `f0be5efb`（变基后 `5f70b9ae`） |
+| **B5a** | 建 `@kojo/kojo-sdk`（契约 / 结构协议 v4 / 角色表）+ conformance 三列共享 golden | ✅ `9fd1e700` + `d0761751` + `a221954d`（2026-10-28） |
+| **B5b** | 删宿主直装残留（`kojo2-*.ts` 归零） | ⬜ 阻塞：B3 余项未收口——宿主直装 **21 文件 / 15,055 行**、**13 条** `installKojo2*` 调用 |
 
-**当前宿主残留**：`packages/app/src/monaco/kojo2-*.ts` = **25 个文件 / 15,305 行**。
-B5 的目标是 `grep kojo2- packages/app/src` 为空。
+**当前宿主残留**：`packages/app/src` 下 `*kojo2*` = **60 个文件 / 32,941 行**（其中 B5b 点名要清的语言面直装 21 文件 / 15,055 行；结构层 `tree-sitter/kojo2-*` 8 文件不算残留）。
+B5b 的目标是 `grep kojo2- packages/app/src` 为空——**不为 grep 改名、不删夹具**。
+（套件口径：conformance 的判定逻辑 `language.ts` 零改动；CLI 只在固定注册表 `LANGUAGE_ADAPTER_ENTRIES` + `runLanguage` 各加一条。）
 
 ### 已完成的提交（按时间）
 
@@ -223,7 +225,7 @@ ensureGlobalProviders({ kojo2Adapter: () => ERATW_GAME_ADAPTER });
 
 ⇒ 今天打开 eraFL 项目，2.0 语言面拿到的 adapter 事实其实是 eraTW 的（或为空）。
 
-**归 B5**（eraFL 写自己的 2.0 profile）。用户的核心诉求就是 eraFL，这条**优先级实际很高**。
+**归 B5a**（eraFL 写自己的 2.0 profile；2026-10-28 已落地，见 `packages/plugins/erafl-adapter/src/kojo2/` 与 `adapter-manifest.ts` 的 `kojo2AdapterExport`）。用户的核心诉求就是 eraFL，这条**优先级实际很高**。
 
 ---
 
@@ -289,7 +291,7 @@ packages/
    │  ├─ register-dialects.ts     registerForLanguageServices(monaco, cb, kind?)
    │  ├─ languages.ts             kojo2 descriptor（三格 slotServices）
    │  ├─ kojo-definition.ts       共享收口（带 'definition'）+ toDefinitionLinks
-   │  ├─ kojo2-*.ts               ← 25 文件 / 15,305 行，B5 目标归零
+   │  ├─ kojo2-*.ts               ← 60 文件 / 32,941 行；B5b 目标＝语言面直装 21 文件归零
    │  └─ reveal-position.ts       全仓唯一落点判据 clampRevealPosition
    ├─ src/ui/
    │  ├─ editor-global-providers.ts  ★ 装配总入口（登记 adapter 来源在这里）

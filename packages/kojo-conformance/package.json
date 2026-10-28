@@ -13,6 +13,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kojo/kojo-core": "workspace:*"
+    "@kojo/kojo-core": "workspace:*",
+    "@kojo/plugin-eratw-adapter": "workspace:*",
+    "@kojo/plugin-erafl-adapter": "workspace:*"
   }
 }

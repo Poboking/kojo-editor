@@ -20,14 +20,16 @@
  *    不许拿 eraTW 的事实喂 eraFL，也不许反过来。
  *
  * 第三条同时是 SDK 的终态判据：`demo` 是一枚**只加数据**的最小 profile（新增一个包 = 新增一列），
- * conformance 的套件与 CLI 一个字都没改。
+ * 套件（`language.ts` 的判定逻辑）零改动；CLI 只在固定注册表 `LANGUAGE_ADAPTER_ENTRIES` +
+ * `runLanguage` 各加一条。eraFL 列经 `@kojo/plugin-erafl-adapter/kojo2` 窄子路径进来（与 eraTW
+ * 同走包面），不再相对路径直捅别人的 `src`。
  */
 import { describe, expect, it } from 'vitest';
 import type { GameAdapter, KojoEmitBackend } from '@kojo/kojo-core';
 import { compileKojoSource } from '@kojo/kojo-core';
 import { ERATW_GAME_ADAPTER, createEratwEmitBackend } from '@kojo/plugin-eratw-adapter';
 
-import { ERAFL_GAME_ADAPTER, createEraflEmitBackend } from '../../plugins/erafl-adapter/src/kojo2/index.js';
+import { ERAFL_GAME_ADAPTER, createEraflEmitBackend } from '@kojo/plugin-erafl-adapter/kojo2';
 import { DEMO_GAME_ADAPTER, createDemoEmitBackend } from './fixtures/dialect-demo/index.js';
 import type { LanguageAdapterRegistration, LanguageCliDeps, LanguageIoPort } from '../src/language.js';
 import {

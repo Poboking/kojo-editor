@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 |---|---|
 | 日期 | 2026-10-24 |
-| 状态 | **B0 已落地**（契约 + 取数腿 + 单测）；B1–B5 仍是设计稿，只定包归属与迁移顺序 |
+| 状态 | **B0–B4 与 B5a 已落地**（B5a：SDK 立包 / 角色表搬家 / 三列共享 golden，2026-10-28）；**B5b 阻塞于 B3 余项**（宿主直装残留未收口）。分批行见 §4 |
 | 依据 | `docs/KOJO-2.0-LANGUAGE-SPEC.md` §1 分层 / §10 Adapter 契约 / 附录 C.1 SDK 契约补充；`docs/BOARD.md` 的 `K2-D0` / `K2-CONTRACT` / `K2-CORE-PKG` |
 | 一句话 | **语言核心已经是包（`@kojo/kojo-core` 11,060 行）；缺的是「编辑器面」——它现在整块住在宿主里（29 文件 / 17,718 行）。本方案把编辑器面按 SDK 分层切成三个包，并先补契约缺口。** |
 
@@ -147,7 +147,8 @@ diagnostics 与 codeAction 那 2.1k 行改走两个既有槽。
 | **B2** | 建 `@kojo/plugin-kojo-lang`：接**槽位已支持**的 5 项。**已接 4 项**（definition / documentSymbol / inlayHint / definition 的展开落点）——另 2 项的判据还在宿主（见下「B2 的实际交付」） | 宿主对应 `registerXxxProvider` 删除；插件未加载时这几项**无人应答**（可见退化，不静默） | 🟡 4/5 完成 2026-10-24（references / foldingRange 归 B3） |
 | **B3** | 接 B0 新扩的 4 项 + 把 diagnostics / codeAction 改注册**既有槽**。**第一步（B3a/B3b）已做**：`expand-compile` 搬进包、definition 真正切槽 | 同上；诊断码命名空间走 `diagnosticNamespace`（adapter 可 additive 追加） | 🟡 进行中 2026-10-24 |
 | **B4** | `ui.monaco.language`：Monarch 词法 / 主题 / 缩进 / 回车搬进插件。**实际落法**：判据进 `@kojo/kojo-lang`（`lexicon` / `monarch` / `language-config` / `monaco-theme` 四枚 + 角色表与三侧调色板按 §7.2 同批下沉），`@kojo/plugin-kojo-lang` 归成一枚 `MonacoLanguageSurface` 交槽，宿主只留唯一落点 `monaco/monaco-language-surface.ts` 做翻译与装配 | 主题 token 名不变（`theme-contrast` 三档门禁不破）——token 名自 LAU-2 起就是 `role.*`，三套 `kojo2-*` 与六套 `kojo-*` 铺同一批 34 档角色；**部件色（91 键）与 `wordPattern` 留宿主**（编辑器 chrome，供方只声明 `componentPalette` 侧名）；无供方 = 语言仍认领、面不存在、一条 warn | ✅ 2026-10-28（`7f02ff73` 契约 + `f0be5efb` 搬家与落点，变基到 dev `e5348ba1` 后复测） |
-| **B5** | 删宿主残留（`kojo2-*.ts` 归零）+ 建 `@kojo/kojo-sdk`，eraTW / eraFL 各写一份 profile | `grep kojo2- packages/app/src` 为空；两个 adapter 的 profile 都能编出同一份 golden | |
+| **B5a** | 建 `@kojo/kojo-sdk`（契约 / 结构协议 v4 / 角色表）+ conformance 三列共享 golden（eraTW / eraFL / 第三列 demo 跑同一份 fixture 与 body golden） | 三条 `language --adapter {eratw,erafl,demo}` 各 11/11、共享 artifact 与 golden 三列逐字节相同；抽象列 47/47 不动；**套件（`language.ts` 判定逻辑）零改动，CLI 只在固定注册表 `LANGUAGE_ADAPTER_ENTRIES` + `runLanguage` 各加一条** | ✅ 2026-10-28（`9fd1e700` / `d0761751` / `a221954d`；读数见 STATE） |
+| **B5b** | 删宿主直装残留（宿主 21 文件 / 15,055 行、13 条 `installKojo2*` 调用 → 归零） | `grep kojo2- packages/app/src` 为空（结构层 8 文件 `tree-sitter/kojo2-*` 与 `.kojo2` 旧扩展兼容**不**计入，不为 grep 改名） | ⬜ 阻塞：B3 余项未收口（逐条见 `d0761751` 回执表） |
 
 **为什么这个顺序**：B1 是纯搬（零语义变化，风险最低，先拿掉 3.2k 行）；B2 用**现成槽位**证明"插件接得上"；B3 才动契约扩出来的新面；B4 碰主题（有门禁，放后）；B5 才删宿主。
 

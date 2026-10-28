@@ -13,9 +13,9 @@
  *      法定落点——`adapter-manifest.ts`（整文件豁免）、`era*-adapter` 包（不在扫描目录内，
  *      天然豁免）、带 `// audit-allow:` 的行。扫描目录：packages/app/src（宿主）、
  *      packages/kojo-lang/src、packages/kojo-sdk/src、packages/erb-syntax-tree/src（语言面/语法面）。
-*      **B5a 起角色表住在 `@kojo/kojo-sdk`**：它是 M3 别名表的法定落点，所以扫描目录跟着搬
-*      （否则别名表从台账里消失、读数会"凭空"掉 30 行——那是漏扫不是收敛）。
- *      注：erb-parser 的引擎变量族白名单（undefined-name.ts:148-240）按 §9-7 口径属
+ *       **B5a 起角色表住在 `@kojo/kojo-sdk`**：它是 M3 别名表的法定落点，所以扫描目录跟着搬
+ *       （否则别名表从台账里消失、读数会"凭空"掉 30 行——那是漏扫不是收敛）。
+ *       注：erb-parser 的引擎变量族白名单（undefined-name.ts:148-240）按 §9-7 口径属
  *      LAU-D2 外提对象，插件层由 audit-decoupling D 项负责，本闸不重复扫。
  *   M2(语言id分支)       §9-1 / §3-R1：宿主 `packages/app/src` **整树**（monaco + ui + 其余）
  *      里按具体语言 id 分支（`*_LANGUAGE_ID` 常量）的存量计数；终态只许出现在 descriptor

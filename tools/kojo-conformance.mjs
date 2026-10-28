@@ -95,9 +95,12 @@ const LANGUAGE_SUITE_ENTRY = '/packages/kojo-conformance/src/language.ts';
  */
 const LANGUAGE_ADAPTER_ENTRIES = {
   eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
-  erafl: '/packages/plugins/erafl-adapter/src/kojo2/index.ts',
+  // eraFL 走包面窄子路径（本包 `exports["./kojo2"]`）：与 `language-shared.test.ts` 同一条
+  // 解析口径。eraTW 没有等价子路径导出，这一批不给它补（加导出是另一件事，不顺手扩面）。
+  erafl: '@kojo/plugin-erafl-adapter/kojo2',
   // 第三列（SDK B5a 的终态判据）：一枚最小 profile + 它自己的机壳，住在 conformance 的
-  // fixture 目录里。它证明"新增一个包 ⇒ 多一列"——套件与 CLI 一个字都不用改。
+  // fixture 目录里。它证明"新增一个包 ⇒ 多一列"——套件（`language.ts` 判定逻辑）零改动，
+  // CLI 只在固定注册表 `LANGUAGE_ADAPTER_ENTRIES` + `runLanguage` 各加一条。
   demo: '/packages/kojo-conformance/tests/fixtures/dialect-demo/index.ts',
 };
 

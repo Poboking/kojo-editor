@@ -1,11 +1,11 @@
 import type * as Monaco from './entry';
-// PS-10 断链：角色调色板下沉到零依赖叶子 `kojo-theme-rules.ts`——它们的**老家**
+// PS-10 断链：角色调色板下沉到零依赖叶子 `@kojo/kojo-lang/theme-rules`——它们的**老家**
 // （三份 Monarch 与 `kojo-semantic-tokens.ts`）各自拖着 `@kojo/plugin-kojo-sugar`
 // 词表链，本文件在开机静态图里（diff-view / QuickFixPreviewOverlay 都经它），
 // 直接 import 老家就等于把糖包静态挂回开机图。叶子与几个老家的关系见叶子头注。
 //
 // LAU-2（角色表批）：主题规则按**语义角色**铺，不再按 token 名。角色表（含字重）住
-// `semantic-roles.ts`，三套主题的角色调色板住叶子，本文件只做装配 + 后三套自己的调色板。
+// `@kojo/kojo-sdk/semantic-roles`，三套主题的角色调色板住叶子，本文件只做装配 + 后三套自己的调色板。
 // 于是 `.kojo2` 文件在 `kojo-*` 主题下也上色（同一批角色规则，不必整窗切主题）。
 import {
   KOJO_SEMANTIC_LIGHT_THEME_RULES,
@@ -18,8 +18,8 @@ import {
 import { ROLE, nameLayerRules, rulesFromRolePalette } from '@kojo/kojo-sdk/semantic-roles';
 
 // K2 batch-3：2.0 三套主题的注册闸。flag 模块零依赖（只读 localStorage），静态引它
-// 不破坏上面那条 PS-10 断链；主题数据本身（`kojo2-theme`）仍走**动态 import**（见
-// `defineMonacoThemes` 末尾）。
+// 不破坏上面那条 PS-10 断链；主题数据本身（`@kojo/kojo-lang/monaco-theme`，经槽交出）仍走
+// **动态链**（见 `defineMonacoThemes` 末尾）。
 import { isKojo2CutoverEnabled } from '../ui/kojo2-flag';
 // Synthwave '84 的关键字霓虹光：零依赖叶子（只碰 DOM），静态引它不加包体负担。
 import { installKeywordGlow, scheduleKeywordGlow } from './neon-glow';
@@ -34,8 +34,8 @@ import { installKeywordGlow, scheduleKeywordGlow } from './neon-glow';
  * ## 装配只有一条路（LAU-2 起）
  * 六套主题都走"角色调色板 → `rulesFromRolePalette()` + 名字层五条"：34 条角色规则 + 5 条
  * 名字层 = 39 条规则，外加 91 键部件色，由同一道闸量（`theme-color-gates.test.ts`）。
- * 前三套（dark/light/mint-dark）的角色调色板住零依赖叶子 `kojo-theme-rules.ts`（与
- * `kojo2-theme.ts` 同一批对象本体）；后三套（one-dark/rose-pine/synthwave84）的调色板
+ * 前三套（dark/light/mint-dark）的角色调色板住零依赖叶子 `@kojo/kojo-lang/theme-rules`（与
+ * `@kojo/kojo-lang/monaco-theme` 同一批对象本体）；后三套（one-dark/rose-pine/synthwave84）的调色板
  * 住在下面各自那节，逐档判据注释留在原地。
  *
  * ## 取色口径
@@ -153,9 +153,9 @@ export function applyMonacoTheme(sink: MonacoThemeSink, pref: MonacoThemePref): 
  *
  * 上一代是三套走"四张分表"（词法 12 / 糖 15 / 语义 5 / 2.0 16）、新三套走"一张 48 键表"；
  * LAU-2 把两代合成一条：`rulesFromRolePalette(角色调色板)` + 名字层。
- * - 角色表本身（含字重）见 `semantic-roles.ts`；
- * - 暗 / 亮 / 墨绿三套的角色调色板与名字层调色板住在零依赖叶子 `kojo-theme-rules.ts`
- *   （`kojo2-theme.ts` 与 `kojo2-semantic.ts` 读的是同一批对象本体）；
+ * - 角色表本身（含字重）见 `@kojo/kojo-sdk/semantic-roles`；
+ * - 暗 / 亮 / 墨绿三套的角色调色板与名字层调色板住在零依赖叶子 `@kojo/kojo-lang/theme-rules`
+ *   （`@kojo/kojo-lang/monaco-theme` 与原宿主的 `kojo2-semantic.ts` 读的是同一批对象本体）；
  * - 后三套（One Dark / Rosé Pine / Synthwave '84）的调色板留本文件下半段（各自带判据注释）。
  *
  * 两代产物的形状如今完全相同（34 条角色 + 5 条名字层 = 39 条规则 + 91 键部件色），由同一道闸量
@@ -190,7 +190,9 @@ function mintRules(): Monaco.editor.ITokenThemeRule[] {
  * 缩进参考线、括号匹配、浮层（widget/suggest/hover）、查找、缩略图、滚动条、概览尺、
  * diff 四色与粘性滚动。浅色档全部落在浅色面，不留 vs-dark 的深色块。
  *
- * **导出给 `kojo2-theme.ts`**（2026-10-26 部件色批）：2.0 三套主题的 `colors` 不再自己
+ * **导出给宿主落点 `./monaco-language-surface`**（2026-10-26 部件色批；B4 起 2.0 三套主题
+ * 的身份在 `@kojo/kojo-lang/monaco-theme`，部件色仍按 `componentPalette` 侧名回取本表）；
+ * 2.0 三套主题的 `colors` 不再自己
  * 抄 32 键（`inherit: false` 下未列的 59 键会掉回 Monaco 默认的 `menu.*` / `editorHoverWidget.*`
  * / `badge.*` / `editorBracketMatch.*` 等，切主题时露出一块基底色）。2.0 直接复用本表的
  * **同一批 values**：同一主题族里 v1 与 2.0 的部件色逐键相等、缺键 0（闸见

@@ -9,8 +9,8 @@
  * |---|---|---|---|
  * | 主 → worker | `open` | `StructureOpenRequest` | 这条线程服务哪一份文档（`docBase` = 文档绝对起点，v4 起一条线程可服务多台引擎） |
  * | 主 → worker | `parse` | `StructureParseRequest` | `{text}` 整篇 或 `{edit, base}` 差集；`includedRanges` 只给注入子语言用 |
- * | worker → 主 | `ready` | `StructureReadyReply` | `{protocol, engine}`；v4 起多一格 `docBase` |
- * | worker → 主 | `reply` | `StructureParseReply` | `{facets, captures, folds, indent, syntax, faults}` |
+ * | worker → 主 | `ready` | `StructureReadyReply` | `{protocol, loadMs, docBase}`（无 `engine`；`docBase` 自 v4 起） |
+ * | worker → 主 | `reply` | `StructureParseReply` | `{treeId, incremental, facets.{semantic\|folds\|indent\|syntax}, metrics}`（`facets` 只带 `want` 点名的那几面） |
  * | worker → 主 | `failure` | `StructureFailureReply` | fail-visible：`reason` + 人话；不产半成品 |
  *
  * 版本不匹配时宿主**降级到旧协议**（v3 及以前没有 `docBase`），不是静默继续——见

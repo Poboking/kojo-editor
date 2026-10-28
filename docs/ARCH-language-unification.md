@@ -552,11 +552,15 @@ ERB 与 kojo2 的差别只在**供方住在哪**：LAU-4 把 ERB 的 11 枚 prov
 **与 SDK B0–B5 的实际进度对账（v1.1 补，决定 LAU-4 能不能排）**：B0 已把该槽扩出 4 个 `kind` + 4 条数据腿
 （`8f74dae5`）；B1 已建 `@kojo/kojo-lang` 并搬走 symbols / declarations / sourcemap / expand-view / constants
 （`e4477343`）；B2 接线 5 项**只完成 4 项**（`references`、`foldingRange` 未接）；B3a/B3b 已落；
-**B4（`ui.monaco.language`：Monarch / 主题 / 缩进 / 回车进插件）与 B5（清宿主残留 + 建 `@kojo/kojo-sdk`）尚未开工**。
+**B4（`ui.monaco.language`：Monarch / 主题 / 缩进 / 回车进插件）与 B5 已按两段推进**：B4 done
+（`7f02ff73` / `f0be5efb`，变基后 `5f70b9ae`）——2.0 的 Monarch / 语言配置 / 主题声明进 `@kojo/kojo-lang`，
+宿主只剩唯一落点 `monaco/monaco-language-surface.ts`；B5a done（`9fd1e700` / `d0761751` / `a221954d`）
+——`@kojo/kojo-sdk` 立包 + 角色表搬家 + conformance 三列共享 golden；**B5b（删宿主直装残留）仍阻塞
+于 B3 余项**：宿主直装 21 文件 / 15,055 行、13 条 `installKojo2*` 调用（逐条见 `d0761751` 的回执表）。
 今天这 11 枚是 `registerForLanguageServices`（`register-dialects.ts:32-53`）按 descriptor 的
 `languageServices: true` 或点名的 `slotServices` 铺下去的**通用** provider；ERB 在此之外还有一批
 自己的宿主内 provider（`monaco/erb-*.ts` 共 24 个文件：补全 12 个分面 / 重命名 / 调用层级 / 实现 /
-选区范围 / 高亮 / 指令 / `#DIM` 与标签导航 / 回车规则），kojo2 侧同理（`monaco/kojo2-*.ts`，33 文件 17,250 行）。
+选区范围 / 高亮 / 指令 / `#DIM` 与标签导航 / 回车规则），kojo2 侧同理（`monaco/kojo2-*.ts`，实测 60 文件 / 32,941 行）。
 ⇒ **LAU-4 的前置是 B4/B5，不是 LAU-3**；在 B4/B5 落地前谈"宿主只剩注册一次 provider"是空的。
 
 ## 4.6 `injection`：`@原生` 体内不再是黑块（D14 / LAU-6）

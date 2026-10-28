@@ -224,6 +224,12 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../kojo-core
+      '@kojo/plugin-erafl-adapter':
+        specifier: workspace:*
+        version: link:../plugins/erafl-adapter
+      '@kojo/plugin-eratw-adapter':
+        specifier: workspace:*
+        version: link:../plugins/eratw-adapter
 
   packages/kojo-core: {}
 

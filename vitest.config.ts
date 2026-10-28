@@ -54,6 +54,9 @@ export const config = defineConfig({
       '@kojo/kernel': r('./packages/kernel/src/index.ts'),
       '@kojo/plugin-erb-parser': r('./packages/plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('./packages/plugins/eratw-adapter/src/index.ts'),
+      // 2.0 面叶子（SDK B5 收尾）：conformance 第二列改走包面，不再按相对路径直捅别人的 src。
+      // 叶子排在桶之前——将来若给本包加桶别名，这一行必须留在它上面。
+      '@kojo/plugin-erafl-adapter/kojo2': r('./packages/plugins/erafl-adapter/src/kojo2/index.ts'),
       '@kojo/plugin-eraakumamaid-adapter': r('./packages/plugins/eraakumamaid-adapter/src/index.ts'),
       '@kojo/plugin-erakoumakan-adapter': r('./packages/plugins/erakoumakan-adapter/src/index.ts'),
       '@kojo/plugin-erasqc-adapter': r('./packages/plugins/erasqc-adapter/src/index.ts'),
