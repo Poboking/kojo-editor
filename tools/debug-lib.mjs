@@ -328,3 +328,44 @@ export async function expandTreeUntilFile(cdp, { maxRounds = 16, intervalMs = 25
   }
   return (await cdp.evalJs('!!document.querySelector(".tree-file")')) ? 'file' : 'timeout';
 }
+
+/**
+ * 文件树逐层展开，直到出现**含 `frag` 的文件行**（`debug-cli open-file` 专用）。
+ *
+ * 与 `expandTreeUntilFile` 的差别只有一条判据：后者只要树里有**任何**一行文件就收工
+ * （它是给「先让树里有文件」的冒烟用的），于是 `open-file <另一组里的文件>` 会在已有
+ * 命中行的情况下直接放弃 —— 树明明好好的、索引也在，却报「文件树里没有路径含…的行」
+ * （1028 会话恢复批实测的假阴性源：恢复后树里只有被恢复那一份的行，另一组的文件一律
+ * 打不开，看着像"树是空的"）。
+ *
+ * 这里改为按 `frag` 判定：命中即 `found`；未命中就继续点**下一个还没点过的折叠行**
+ * （组头 / 目录 / 包，一律看 `aria-expanded="false"`，不把已展开的点回收起）。
+ * `__kojoDebugTreeClicks` 与旧函数共用同一本账（同页多次 open-file 不会反复点同一行）。
+ *
+ * 已知边界：树是虚拟化的（视口外的整组只挂一条等高占位）⇒ `scrollIntoView` 把折叠行
+ * 滚进视口后下一轮才点得到；实在点不到就返回 `no-rows`，由调用方如实报错，绝不猜。
+ * 返回：'found' / 'no-rows' / 'timeout'。
+ */
+export async function expandCollapsedUntilMatch(cdp, frag, { maxRounds = 40, intervalMs = 200 } = {}) {
+  const needle = JSON.stringify(String(frag));
+  const hitExpr = `[...document.querySelectorAll('.tree-file')].some((r) => (r.getAttribute('title') || r.textContent || '').includes(${needle}))`;
+  for (let i = 0; i < maxRounds; i++) {
+    const step = await cdp.evalJs(`(() => {
+      if (${hitExpr}) return 'found';
+      globalThis.__kojoDebugTreeClicks ??= new Set();
+      const key = (el) => el.getAttribute('title') || el.textContent;
+      const collapsed = [...document.querySelectorAll('.tree-group-btn[aria-expanded="false"], .tree-dir[aria-expanded="false"], .tree-package[aria-expanded="false"]')];
+      const next = collapsed.find((el) => !globalThis.__kojoDebugTreeClicks.has(key(el)));
+      if (!next) return 'no-rows';
+      globalThis.__kojoDebugTreeClicks.add(key(next));
+      // 虚拟化树：先滚进视口再点（与 expandTreeUntilFile 同一手法），免得点在窗口外
+      next.scrollIntoView({ block: 'nearest' });
+      next.click();
+      return 'clicked';
+    })()`);
+    if (step === 'found') return 'found';
+    if (step !== 'clicked') return step;
+    await sleep(intervalMs);
+  }
+  return (await cdp.evalJs(hitExpr)) ? 'found' : 'timeout';
+}

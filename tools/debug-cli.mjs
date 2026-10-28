@@ -51,7 +51,7 @@ import {
   cdpPage,
   debugHome,
   dismissDevNoteMask,
-  expandTreeUntilFile,
+  expandCollapsedUntilMatch,
   findBrowser,
   freePort,
   killProcessesMarked,
@@ -733,13 +733,10 @@ async function cmdOpenFile(args, frag) {
   if (!frag) die('open-file 需要路径片段（文件树行的路径包含它即命中）', 2);
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, `!!document.querySelector('.file-tree')`, { timeoutMs: 10000, label: '文件树（先 open-project）' });
-    // 树初始折叠：先逐层展开直到有文件行（找不到含 frag 的行时也会先展开再找一轮）
-    for (let round = 0; round < 3; round++) {
-      const hitNow = await cdp.evalJs(`!![...document.querySelectorAll('.tree-file')].find((r) => (r.getAttribute('title') || '').includes(${JSON.stringify(frag)}))`);
-      if (hitNow) break;
-      const step = await expandTreeUntilFile(cdp);
-      if (step !== 'file') break;
-    }
+    // 树初始折叠：按**目标片段**逐层展开（判据是"树里有没有含 frag 的行"，不是"树里有没有
+    // 任何一行文件"）。旧实现用后者 ⇒ 恢复会话后树里只有被恢复那一份的行，另一组的文件
+    // 一律报「没有路径含…的行」，看上去像"树空了"（1028 会话恢复批的假阴性源）。
+    const expand = await expandCollapsedUntilMatch(cdp, frag);
     const found = await cdp.evalJs(`(() => {
       const rows = [...document.querySelectorAll('.tree-file')];
       const hit = rows.find((r) => (r.getAttribute('title') || r.textContent || '').includes(${JSON.stringify(frag)}));
@@ -748,7 +745,14 @@ async function cmdOpenFile(args, frag) {
       hit.click();
       return hit.getAttribute('title') || hit.textContent;
     })()`);
-    if (!found) die(`文件树里没有路径含「${frag}」的行（可能要展开目录；先用 dom 看树）`, 1);
+    if (!found) {
+      die(
+        expand === 'no-rows' || expand === 'timeout'
+          ? `文件树里没有路径含「${frag}」的行（折叠行已点到头仍未命中：可能不在任何已挂载的组里——树是虚拟化的，先用 dom 看树）`
+          : `文件树里没有路径含「${frag}」的行（先用 dom 看树）`,
+        1,
+      );
+    }
     await waitFor(cdp, `!!document.querySelector('.monaco-editor')`, { timeoutMs: 30000, label: 'Monaco 挂载' });
     await sleep(400);
     const info = await cdp.evalJs('__kojoDebug.editor.info()');
