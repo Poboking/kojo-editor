@@ -400,4 +400,24 @@ describe('主题落点：规则沿用供方对象、部件色按侧名补齐', (
     expect(applyAllMonacoLanguageThemes(monaco)).toBe(false);
     expect(applyAllMonacoLanguageThemes(stubMonaco().monaco)).toBe(true);
   });
+
+  it('同实例晚到供方：空供方那一轮不算"铺过"，下一轮照样补上三套', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { monaco, captured } = stubMonaco();
+    // 第一次 apply：插件还没激活 ⇒ 只落一条 warn、零主题（与改前逐字相同）。
+    expect(applyAllMonacoLanguageThemes(monaco, { absentIsVisible: true })).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect([...captured.themes.keys()]).toEqual([]);
+
+    // 供方晚到：同一实例再来一轮必须补上——改前 WeakSet 已把它当"落过"，这里恒 false。
+    supply([KOJO2_MONACO_LANGUAGE_SURFACE]);
+    expect(applyAllMonacoLanguageThemes(monaco)).toBe(true);
+    const ids = [...captured.themes.keys()];
+    expect(ids).toEqual(KOJO2_THEME_SURFACES.map((theme) => theme.id));
+    expect(ids.filter((id) => id.startsWith('kojo2-'))).toHaveLength(3);
+
+    // 第三次 apply：真铺过之后才幂等（不重复 defineTheme）。
+    expect(applyAllMonacoLanguageThemes(monaco)).toBe(false);
+    expect([...captured.themes.keys()]).toHaveLength(KOJO2_THEME_SURFACES.length);
+  });
 });

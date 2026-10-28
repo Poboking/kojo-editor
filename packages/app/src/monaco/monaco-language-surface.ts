@@ -470,11 +470,12 @@ export function applyAllMonacoLanguageSurfaces(monaco: typeof Monaco): void {
 }
 
 /**
- * 定义全部供方主题（**幂等**：同一 Monaco 实例只铺一轮）。
+ * 定义全部供方主题（**幂等**：同一 Monaco 实例真铺过一轮之后不再铺）。
  *
  * 调用时机由宿主决定（`theme.ts` 末尾那一段：切流阶段闸开着才定义 `kojo2-*` 三套），
  * 本模块不读开关——阶段是产品决策，不是语言事实（同 `LARGE_FILE_LINES` 那条分工）。
- * 返回这一轮是否真的定义了东西（`false` = 重复调用或没有供方）。
+ * 返回这一轮是否真的定义了东西（`false` = 已铺过或这一轮没有供方）。
+ * **空供方不算"铺过"**：晚到的供方下一轮仍能补上（与 monarch / config 的逐键台账同口径）。
  *
  * `absentIsVisible`：确实**一枚供方都没有**（不是"这一轮已经铺过"）时说一条 warn——
  * 主题名没定义 = 设置页选了 `kojo2-*` 会回落，这条必须看得见；同一台账保证只说一次。
@@ -492,7 +493,6 @@ export function applyAllMonacoLanguageThemes(
       defined += 1;
     }
   }
-  themedInstances.add(instance);
   if (defined === 0 && options?.absentIsVisible === true) {
     const key = 'absent:themes';
     const ledger = ledgerOf(monaco);
@@ -503,6 +503,9 @@ export function applyAllMonacoLanguageThemes(
       );
     }
   }
+  // 只有真铺过才记账：空供方那一轮若也记进 WeakSet，晚到的供方就永远补不上
+  // （monarch / config 走逐键台账、可晚补，主题必须同一口径）。
+  if (defined > 0) themedInstances.add(instance);
   return defined > 0;
 }
 
