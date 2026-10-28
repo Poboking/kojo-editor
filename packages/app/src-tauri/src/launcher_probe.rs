@@ -1211,8 +1211,9 @@ fn q1c_unsuspended_assign_race_window() {
 /// **Q1-(c')**：把"assign 时刻"与"派生时刻"解耦后的**确定性**判据。
 ///
 /// 门控夹具先报到、等 `go.txt` 才派生孙进程，于是四种形态可以逐字对比：
-/// ① 先 assign 再放行（不挂起）；② 挂起 → assign → resume → 再放行；③ 先放行（派生已在路上）再 assign；
-/// ④ 子进程活 300 ms 之后才 assign，再放行（排除"进程年龄"这个干扰项）。
+/// ① 先 assign 再放行（不挂起）；② 挂起 → assign → resume → 再放行；
+/// ③ 先放行、**等孙进程确实出生之后**再 assign；④ 子进程活 300 ms 之后才 assign，再放行
+/// （排除"进程年龄"这个干扰项）。
 /// 这条测试回答的是"晚 assign 到底会丢什么"——不只是逃逸的那一下，还有**之后所有后代**是否还归 Job 管。
 #[test]
 fn q1c2_gate_assign_before_derive_is_deterministic() {
@@ -1246,8 +1247,9 @@ fn q1c2_gate_assign_before_derive_is_deterministic() {
         dir.track(gpid);
         let in_job = is_in_job(gpid, job.handle_for_query());
         drop(job);
-        std::thread::sleep(Duration::from_millis(600));
-        let dead = !pid_alive(gpid);
+        // "关掉 Job 句柄后多久算死"是**上限**，不是判据：满载并行下收尸可以拖过 600ms。
+        // 等见证（有界），不赌时间。
+        let dead = wait_until(|| !pid_alive(gpid), Duration::from_secs(5));
         if !dead {
             kill_pid(gpid);
         }
@@ -1291,8 +1293,8 @@ fn q1c2_gate_assign_before_derive_is_deterministic() {
         dir.track(gpid);
         let in_job = is_in_job(gpid, job.handle_for_query());
         drop(job);
-        std::thread::sleep(Duration::from_millis(600));
-        let dead = !pid_alive(gpid);
+        // 同形态 ①：死是**上限**，等见证不等时间
+        let dead = wait_until(|| !pid_alive(gpid), Duration::from_secs(5));
         if !dead {
             kill_pid(gpid);
         }
@@ -1302,7 +1304,7 @@ fn q1c2_gate_assign_before_derive_is_deterministic() {
         kill_pid(child.id());
     }
 
-    // 形态 ③：先放行（孙进程已在派生路上）→ 隔 40ms 再 assign
+    // 形态 ③：先放行，**等孙进程出生**之后再 assign（事件次序确定，不靠 40ms 赌）
     {
         let sub = dir.dir().join("late");
         fs::create_dir_all(&sub).expect("子目录");
@@ -1316,20 +1318,28 @@ fn q1c2_gate_assign_before_derive_is_deterministic() {
             "门控子进程没报到"
         );
         fs::write(sub.join("go.txt"), "1").ok();
-        std::thread::sleep(Duration::from_millis(40));
-        job.assign(child.as_raw_handle() as HANDLE)
-            .expect("晚 assign 也必须能成功");
+        // **不能用固定 sleep 造"派生已在路上"**：满载并行时子进程 40ms 内根本走不到
+        // `CreateProcessW`，assign 仍早于派生 ⇒ 孙进程被 Job 抓住 ⇒「③必须逃掉」假红
+        // （PITFALLS 221：把毫秒数钉死注定假红）。改成见证式：`gc.spawned.pid` 由门控
+        // 夹具在 `spawn()` 返回后写，它的存在就是"孙进程已经出生"的可证事实 ⇒
+        // **确认出生之后**再 assign，逃逸与否才是确定性的，不靠 40ms 赌。
+        // 判据用"文件里的 pid 能解析"而不是"文件存在"：`fs::write` 不是原子的，
+        // 存在但还没写完时读出来是空串。
         assert!(
             wait_until(
-                || sub.join("gc.spawned.pid").exists(),
-                Duration::from_secs(20)
+                || read_pid(&sub.join("gc.spawned.pid")).is_some(),
+                Duration::from_secs(10)
             ),
-            "孙进程必须在 20s 内派生"
+            "放行后孙进程必须在 10s 内出生（见证文件 gc.spawned.pid）"
         );
         let gpid = read_pid(&sub.join("gc.spawned.pid")).expect("孙进程 pid");
+        // 先登记再 assign：assign 失败会 panic，登记好了 `ProbeDir::drop` 才能收尸
         dir.track(gpid);
+        job.assign(child.as_raw_handle() as HANDLE)
+            .expect("晚 assign 也必须能成功");
         let in_job = is_in_job(gpid, job.handle_for_query());
         drop(job);
+        // 负向观测（"必须还活着"）保留固定观察窗：等得越久越安全，这里不是"多久算死"的上限
         std::thread::sleep(Duration::from_millis(600));
         let dead = !pid_alive(gpid);
         if !dead {
@@ -1371,8 +1381,8 @@ fn q1c2_gate_assign_before_derive_is_deterministic() {
         let in_job = is_in_job(gpid, job.handle_for_query());
         let any_job = is_in_job(gpid, std::ptr::null_mut());
         drop(job);
-        std::thread::sleep(Duration::from_millis(600));
-        let dead = !pid_alive(gpid);
+        // 同形态 ①：死是**上限**，等见证不等时间
+        let dead = wait_until(|| !pid_alive(gpid), Duration::from_secs(5));
         if !dead {
             kill_pid(gpid);
         }
@@ -1419,7 +1429,11 @@ fn q1c2_gate_assign_before_derive_is_deterministic() {
 /// **Q2**：`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` + `TerminateJobObject` 能不能连**孙进程**一起杀？
 ///
 /// 见证：Job 里进程数（assign 后 = 1，孙进程起来后 = 2）；孙进程心跳计数在涨（真在跑）；
-/// `TerminateJobObject` 之后**父与孙都**在 3s 内消失，且心跳计数不再变化。
+/// `TerminateJobObject` 之后**父与孙都**消失、Job 计数排空到 0，且**死后**心跳不再变化。
+///
+/// 时间窗全部是**上限**不是判据：满载并行下 Job 排空可以拖过 300ms，所以改为等见证
+/// （`wait_until(job.process_count() == Some(0))`）；心跳也只能拿死后两次读数比——
+/// 终止前一瞬孙进程完全可能又写了一次，拿"活着时"的读数比是逻辑上的假红。
 #[test]
 fn q2_terminate_job_kills_grandchild() {
     let dir = ProbeDir::new("q2");
@@ -1453,15 +1467,24 @@ fn q2_terminate_job_kills_grandchild() {
     job.terminate(0xDEAD_0001).expect("TerminateJobObject 必须成功");
     let parent_dead = wait_pid_dead(cpid, Duration::from_secs(3));
     let child_dead = wait_pid_dead(gpid, Duration::from_secs(3));
+    // Job 的"进程计数归零"比"进程对象 signal"晚一步（内核要排空 Job 记账）；
+    // 满载并行下这一步拖过 300ms 是常态 ⇒ 等见证（有界），判据仍是"最终为 0"。
+    let drained = wait_until(|| job.process_count() == Some(0), Duration::from_secs(5));
     let elapsed = t0.elapsed();
-    std::thread::sleep(Duration::from_millis(300));
-    let hb_after = parse_u32(&dir.file("hb.txt")).unwrap_or(0);
     let count_after = job.process_count();
-    std::thread::sleep(Duration::from_millis(300));
+
+    // 心跳只能拿**死后**两次读数比：`hb_before` 是活着时读的，终止前一瞬孙进程完全可能
+    // 又写了一次 ⇒ 即使行为完全正确也会红（逻辑假红，不只是慢）。父子都确实死了、
+    // Job 已排空之后读 `hb1`，再等 1s（心跳 50ms 一跳 ⇒ 真活着至少会再涨 20）读 `hb2`；
+    // `hb2 == hb1` 才是"死后不再涨"。
+    let hb1 = parse_u32(&dir.file("hb.txt")).unwrap_or(0);
+    std::thread::sleep(Duration::from_secs(1));
+    let hb2 = parse_u32(&dir.file("hb.txt")).unwrap_or(0);
 
     println!(
         "[probe][q2] cpid={cpid} gpid={gpid} alive_before={alive_before:?} \
-         job_count_before={count_before:?} job_count_after={count_after:?} hb={hb_before}->{hb_after} \
+         job_count_before={count_before:?} job_count_after={count_after:?} drained={drained} \
+         hb_alive={hb_before} hb_dead={hb1}->{hb2} \
          hb_running={hb_ok} terminate_to_dead={elapsed:?} parent_dead={parent_dead} grandchild_dead={child_dead}"
     );
 
@@ -1470,7 +1493,7 @@ fn q2_terminate_job_kills_grandchild() {
     assert_eq!(count_before, Some(2), "Job 里应含子 + 孙共 2 个进程");
     assert_eq!(count_after, Some(0), "TerminateJobObject 之后 Job 里应为 0");
     assert!(parent_dead && child_dead, "TerminateJobObject 必须连孙进程一起收");
-    assert_eq!(hb_before, hb_after, "孙进程死后心跳不该再涨（{hb_before}->{hb_after}）");
+    assert_eq!(hb2, hb1, "孙进程死后心跳不该再涨（{hb1}->{hb2}）");
     let _ = child.wait();
 }
 
