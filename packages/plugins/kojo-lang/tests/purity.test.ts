@@ -62,6 +62,9 @@ const ALLOWED_PACKAGES = new Set([
   // B3d：签名帮助 / 格式化的判据叶子（供方在 `src/signature.ts` / `src/format.ts`）。
   '@kojo/kojo-lang/signature',
   '@kojo/kojo-lang/format',
+  // B3e：引用 / 改名的判据叶子（供方在 `src/references.ts` / `src/rename.ts`）。
+  '@kojo/kojo-lang/references',
+  '@kojo/kojo-lang/rename',
   // B4：语言面供方交数据（词法 / 语言配置 / 主题声明）。三枚都是**纯数据叶子**，
   // 引它们不会把 Monaco 带进插件——契约类型才是这一层的形状来源。
   '@kojo/kojo-lang/monarch',
@@ -78,7 +81,8 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
     // request / completion / definition / hover / symbols / inlay / monaco-language / plugin / index
     // + B3d：signature（签名帮助供方）/ format（整篇 + 区间格式化供方）
-    expect(files).toHaveLength(11);
+    // + B3e：references（引用供方）/ rename（改名供方）
+    expect(files).toHaveLength(13);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

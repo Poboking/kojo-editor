@@ -273,10 +273,15 @@ describe('插件装配', () => {
       // B3d：签名帮助 / 格式化同样分枚注册（单答型；格式化不吃任何注入面）
       'kojo2-signatureHelp',
       'kojo2-formatting',
+      // B3e：引用 / 改名同样分枚注册（单答型；两条腿都只读请求里的文本与项目快照）
+      'kojo2-references',
+      'kojo2-rename',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
     expect(registered.map((r) => r.slot)).toEqual([
+      'ui.editor.languageService',
+      'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',

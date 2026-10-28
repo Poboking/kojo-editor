@@ -14,6 +14,8 @@
  * | `hover` | `hover.ts` 的 `kojo2HoverAt`（+ 展开段 `expand-view.ts`） | `src/hover.ts` |
  * | `signatureHelp`（B3d） | `signature.ts` 的 `kojo2SignatureAt` | `src/signature.ts` |
  * | `formatting`（B3d） | `format.ts` 的 `formatKojo2Source` / `formatKojo2Range` | `src/format.ts` |
+ * | `references`（B3e） | `references.ts` 的 `kojo2ReferencesAt` + 项目快照合并 | `src/references.ts` |
+ * | `rename`（B3e） | `rename.ts` 的 `kojo2RenameAt` / `kojo2RenamePlanXFile` | `src/rename.ts` |
  *
  * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
  * （Monarch / 语言配置 / 三套主题声明），不是 `provide(request)`：见 `src/monaco-language.ts`。
@@ -58,6 +60,8 @@ import { provideFormatting } from './format';
 import { provideHover } from './hover';
 import { provideDocumentSymbols } from './symbols';
 import { provideInlayHints } from './inlay';
+import { provideReferences } from './references';
+import { provideRename } from './rename';
 import { provideSignatureHelp } from './signature';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
@@ -141,13 +145,25 @@ export function createKojoLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideFormatting(request),
       });
+      // B3e：引用 / 改名同样**单答型**、分枚注册——一条腿的"作答与否 / 拒绝理由"不许带走另一条。
+      // 两者都只读请求里的文本与项目快照（宿主事实），不取 adapter：没有游戏命名集合参与判据。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-references',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideReferences(request),
+      });
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-rename',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideRename(request),
+      });
       ctx.slots.register('ui.monaco.language', {
         id: 'kojo2-monaco-language',
         order: CONTRIBUTION_ORDER,
         surface: KOJO2_MONACO_LANGUAGE_SURFACE,
       });
       ctx.log.info(
-        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting（languageId=${KOJO2_LANGUAGE_ID}）；` +
+        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename（languageId=${KOJO2_LANGUAGE_ID}）；` +
           `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）`,
       );
     },

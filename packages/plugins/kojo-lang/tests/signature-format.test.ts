@@ -249,6 +249,8 @@ describe('注册纪律：两条腿分枚注册、order 10、不读切流开关',
       'kojo2-formatting',
       'kojo2-hover',
       'kojo2-inlay',
+      'kojo2-references',
+      'kojo2-rename',
       'kojo2-signatureHelp',
       'kojo2-symbols',
     ]);
