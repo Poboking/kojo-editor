@@ -12,7 +12,8 @@
  *    **显式 `none`**（同一个单例）；无源文 ⇒ 随机块 `none` 且不编名字；
  * 5. **Markdown 形状**：`**模板 名**` / 定义处 + 调用处行号 / 产物行区间 / ```` ```erb ```` 代码块，
  *    随机块用「块头」而不是「定义处」；
- * 6. **provider 追加**：悬停的**同一枚** provider 追加展开段（不新造第二个）、转定义的
+ * 6. **供方追加**：悬停的**同一枚**供方追加展开段（B3c 起供方＝插件 `kojo2-hover`，
+ *    宿主 `registerForLanguageServices(..., 'hover')` 只挂一枚）、转定义的
  *    **两条** LocationLink（仅 `via === 'definition'`）、无编译缓存 / 读取端抛错 ⇒ 与旧行为一致且不抛。
  *
  * 期望值全部从 core 编译结果与 source map 现算（不抄行号、不抄产物行），夹具见
@@ -37,9 +38,10 @@ import {
   splitKojo2GeneratedLines,
   type Kojo2SourceMapModel,
 } from '@kojo/kojo-lang';
-import { kojo2HoverOf } from '../src/monaco/kojo2-providers';
+import { kojo2HoverAt, kojo2HoverMarkdown } from '@kojo/kojo-lang/hover';
+import { toMonacoHover } from '../src/monaco/kojo2-providers';
 import { toDefinitionLinks, type DefinitionLocation } from '../src/monaco/kojo-definition';
-import { provideDefinition } from '@kojo/plugin-kojo-lang';
+import { provideDefinition, provideHover } from '@kojo/plugin-kojo-lang';
 import {
   kojo2ExpandCompilationFor,
   kojo2ExpandCompileSourceCount,
@@ -146,11 +148,6 @@ function definitionOriginOf(generatedLine: number): KojoSpan | null {
 
 /* ============================== 假 Monaco / 假 model ============================== */
 
-const TOKEN = {
-  isCancellationRequested: false,
-  onCancellationRequested: () => ({ dispose: () => undefined }),
-} as unknown as Monaco.CancellationToken;
-
 function fakeMonaco(): typeof Monaco {
   const fake = {
     Uri: {
@@ -187,6 +184,7 @@ function fakeModel(text = FIXTURE): Monaco.editor.ITextModel {
 function monacoPosition(line: number, column = 1): Monaco.Position {
   return { lineNumber: line, column } as Monaco.Position;
 }
+
 
 /* ============================== 登记表清理 ============================== */
 
@@ -640,25 +638,56 @@ describe('转定义：展开体源行 → 调用处 / 定义处两条落点（�
   });
 });
 
-/* ============================== 8. 悬停追加展开段 ============================== */
+/* ============================== 8. 悬停追加展开段 ==============================
+ *
+ * B3c（2026-10-28）起这条腿的**供方是插件**（`@kojo/plugin-kojo-lang` 的 `kojo2-hover`
+ * 贡献，经 `ui.editor.languageService` 槽应答），宿主 `kojo2-providers.ts` 只剩协议翻译。
+ * 字段形状随之变化：旧宿主交 Monaco `Hover.contents` 的**两个 part**，契约只有一枚
+ * `contents` 字符串 ⇒ 两段以 `'\n\n'` 相连（**正文逐字相同**，这是本批唯一允许的呈现差量）。
+ * 判据仍是"展开段的悬停只走一条 provider、只措辞一次"——落点从宿主搬到了插件/包。
+ */
 
-describe('悬停：同一枚 provider 追加展开段', () => {
-  it('调用行给两段：声明正文 + 展开段（展开段在追加位置）', () => {
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(CALL_POOL, 3), {
-      getCompile: () => COMPILATION,
-    });
+/** 插件供方的悬停请求（与宿主 provider 现构的形状一致；`path` 决定查哪份编译成品） */
+function hoverRequestAt(line: number, column = 1) {
+  return {
+    kind: 'hover' as const,
+    path: MODEL_PATH,
+    text: FIXTURE,
+    line,
+    column,
+    project: null,
+    languageId: 'kojo2',
+  };
+}
+
+/** 声明段的正文（包内措辞）——用来逐字断言两段的拼接，而不是抄一份文字 */
+function declarationMarkdownAt(line: number, column = 1): string | undefined {
+  const hover = kojo2HoverAt({ source: FIXTURE, line, column }, { adapter: null });
+  return hover === undefined ? undefined : kojo2HoverMarkdown(hover);
+}
+
+describe('悬停：同一枚供方追加展开段（宿主只翻译）', () => {
+  it('调用行给两段：声明正文 + 展开段，`\\n\\n` 相连且顺序固定（声明在前）', () => {
+    withCompileSource(() => COMPILATION);
+    const hover = provideHover(hoverRequestAt(CALL_POOL, 3));
     expect(hover).toBeDefined();
-    expect(hover!.contents).toHaveLength(2);
-    expect(hover!.contents[0]!.value).toContain('**问候**');
-    expect(hover!.contents[1]!.value).toContain('**池 问候**');
-    expect(hover!.contents[1]!.value).toContain('```erb');
+    expect(hover!.format).toBe('markdown');
+    const declaration = declarationMarkdownAt(CALL_POOL, 3);
+    expect(declaration).toBeDefined();
+    expect(hover!.contents).toBe(
+      `${declaration!}\n\n${expandViewMarkdown(expandAt(CALL_POOL, 3)).value}`,
+    );
   });
 
-  it('悬停区间仍是声明的名字段（展开段不改旧区间）', () => {
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(CALL_POOL, 3), {
-      getCompile: () => COMPILATION,
-    });
+  it('悬停区间仍是声明的名字段（展开段不改旧区间），宿主翻成 IRange 逐格相同', () => {
+    withCompileSource(() => COMPILATION);
+    const hover = provideHover(hoverRequestAt(CALL_POOL, 3));
     expect(hover!.range).toEqual({
+      line: CALL_POOL,
+      startColumn: 3,
+      endColumn: 3 + '问候'.length,
+    });
+    expect(toMonacoHover(hover)!.range).toEqual({
       startLineNumber: CALL_POOL,
       startColumn: 3,
       endLineNumber: CALL_POOL,
@@ -667,53 +696,56 @@ describe('悬停：同一枚 provider 追加展开段', () => {
   });
 
   it('没有声明事实的位置（`@随机` 块头）也有展开段：区间取调用处 span', () => {
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(RANDOM_HEAD_LINE, 1), {
-      getCompile: () => COMPILATION,
-    });
+    withCompileSource(() => COMPILATION);
+    const hover = provideHover(hoverRequestAt(RANDOM_HEAD_LINE, 1));
     expect(hover).toBeDefined();
-    expect(hover!.contents).toHaveLength(1);
-    expect(hover!.contents[0]!.value).toContain('**随机块**');
+    expect(hover!.contents).toBe(expandViewMarkdown(expandAt(RANDOM_HEAD_LINE)).value);
+    expect(hover!.format).toBe('markdown');
     expect(hover!.range).toEqual({
-      startLineNumber: RANDOM_HEAD_LINE,
+      line: RANDOM_HEAD_LINE,
       startColumn: 1,
-      endLineNumber: RANDOM_HEAD_LINE,
       endColumn: '@随机'.length + 1,
     });
   });
 
   it('展开体源行不追加展开段（那是 definition 的活）', () => {
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(POOL_BODY_LINE, 1), {
-      getCompile: () => COMPILATION,
-    });
-    // `> 池头` 是旁白正文：声明悬停本来就没有，展开段也不追加
-    expect(hover).toBeUndefined();
+    withCompileSource(() => COMPILATION);
+    // `> 池头` 是旁白正文：声明悬停本来就没有，展开段也不追加 ⇒ 整条应答缺席
+    expect(provideHover(hoverRequestAt(POOL_BODY_LINE, 1))).toBeUndefined();
   });
 
-  it('没有编译缓存时悬停与旧行为一致（只有声明正文）', () => {
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(CALL_POOL, 3));
+  it('没有编译缓存时悬停与旧行为一致（只有声明正文那一段）', () => {
+    const hover = provideHover(hoverRequestAt(CALL_POOL, 3));
     expect(hover).toBeDefined();
-    expect(hover!.contents).toHaveLength(1);
-    expect(hover!.contents[0]!.value).toContain('**问候**');
+    expect(hover!.contents).toBe(declarationMarkdownAt(CALL_POOL, 3));
   });
 
   it('缓存读取端抛错时悬停不抛、只少展开段', () => {
-    let hover: Monaco.languages.Hover | undefined;
+    withCompileSource(() => {
+      throw new Error('桩：缓存读取端炸了');
+    });
+    let hover: ReturnType<typeof provideHover>;
     expect(() => {
-      hover = kojo2HoverOf(fakeModel(), monacoPosition(CALL_POOL, 3), {
-        getCompile: () => {
-          throw new Error('桩：缓存读取端炸了');
-        },
-      });
+      hover = provideHover(hoverRequestAt(CALL_POOL, 3));
     }).not.toThrow();
-    expect(hover!.contents).toHaveLength(1);
+    expect(hover!.contents).toBe(declarationMarkdownAt(CALL_POOL, 3));
   });
 
   it('渲染失败的编译成品（产物不是字符串）只是没有展开段', () => {
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(CALL_POOL, 3), {
-      getCompile: () =>
+    withCompileSource(
+      () =>
         ({ compiled: { erb: 42 }, sourceMapModel: MODEL }) as unknown as Kojo2ExpandCompilation,
-    });
-    expect(hover!.contents).toHaveLength(1);
+    );
+    const hover = provideHover(hoverRequestAt(CALL_POOL, 3));
+    expect(hover!.contents).toBe(declarationMarkdownAt(CALL_POOL, 3));
+  });
+
+  it('宿主翻译：两段合成一条 contents（一个 part 两段），正文逐字不变', () => {
+    withCompileSource(() => COMPILATION);
+    const monacoHover = toMonacoHover(provideHover(hoverRequestAt(CALL_POOL, 3)));
+    expect(monacoHover!.contents).toHaveLength(1);
+    expect((monacoHover!.contents[0] as { value: string }).value).toContain('**问候**');
+    expect((monacoHover!.contents[0] as { value: string }).value).toContain('**池 问候**');
   });
 });
 
@@ -762,11 +794,14 @@ describe('编译成品登记表：面板登记、provider 按路径问', () => {
     expect(kojo2ExpandCompilationFor(MODEL_PATH)).toBeNull();
   });
 
-  it('provider 缺省经登记表取成品（不注入 getCompile 也能出展开段）', () => {
+  it('供方缺省经登记表取成品（不注入 getCompile 也能出展开段）', () => {
     withCompileSource(() => COMPILATION);
-    const hover = kojo2HoverOf(fakeModel(), monacoPosition(CALL_POOL, 3));
-    expect(hover!.contents).toHaveLength(2);
-    expect(hover!.contents[1]!.value).toContain('**池 问候**');
+    const hover = provideHover(hoverRequestAt(CALL_POOL, 3));
+    expect(hover!.contents).toBe(
+      `${declarationMarkdownAt(CALL_POOL, 3)!}\n\n${expandViewMarkdown(expandAt(CALL_POOL, 3)).value}`,
+    );
+    expect(hover!.contents).toContain('**池 问候**');
+    expect(hover!.contents).toContain('```erb');
   });
 });
 
@@ -787,16 +822,31 @@ describe('纯函数纪律：同一查询永远同一答案', () => {
   });
 });
 
-/* ============================== 11. 注册纪律（源码断言） ============================== */
+/* ============================== 11. 注册纪律（源码断言） ==============================
+ *
+ * 判据原文**一字未改**：展开段的悬停只走**一条** provider、措辞只写在**一处**。
+ * B3c 把落点从"宿主直挂"改成"共享收口 + 插件供方"，所以取证也跟着换位置——**不是放宽**：
+ * 旧形态是"宿主里 `registerHoverProvider` 恰好 1 枚、`expandViewMarkdown` 恰好 1 处"，
+ * 新形态是"宿主里仍然恰好 1 枚（且经 `registerForLanguageServices(..., 'hover')` 挂上）、
+ * 宿主里 `expandViewMarkdown` **归零**，而插件供方里恰好 1 处"。
+ */
 
-describe('注册纪律：展开段不新造第二个 provider', () => {
+describe('注册纪律：展开段不新造第二个 provider，措辞仍只有一处', () => {
   const providerSource = readFileSync(
     fileURLToPath(new URL('../src/monaco/kojo2-providers.ts', import.meta.url)),
     'utf8',
   );
+  const pluginHoverSource = readFileSync(
+    fileURLToPath(new URL('../../plugins/kojo-lang/src/hover.ts', import.meta.url)),
+    'utf8',
+  );
 
-  it('悬停只有一枚注册点；转定义**零枚**（B3b 起归插件，多挂一枚会让 F12 变多选）', () => {
+  it('悬停只有一枚注册入口，且经共享收口点名 `hover`；转定义**零枚**', () => {
     expect(providerSource.match(/registerHoverProvider\(/g) ?? []).toHaveLength(1);
+    // 收口调用只数**调用形状**（`registerForLanguageServices(\n  monaco,`）：头注提及不算。
+    // completion + hover 各一次（多出来的第二次收口 = 第二条悬停路）
+    expect(providerSource.match(/registerForLanguageServices\(\s+monaco,/g) ?? []).toHaveLength(2);
+    expect(providerSource).toMatch(/registerHoverProvider\(id, hoverProvider\)[\s\S]{0,120}'hover',/);
     // 这条断言在 B3b 之前是"恰好 1"，现在是"恰好 0"——**收紧，不是放宽**：
     // 转定义由 descriptor 的 `slotServices: ['definition']` 经共享收口挂上（供方是插件），
     // 本文件再注册一枚就是两个 DefinitionProvider 并存，Monaco 的合并顺序不可控，
@@ -804,8 +854,10 @@ describe('注册纪律：展开段不新造第二个 provider', () => {
     expect(providerSource.match(/registerDefinitionProvider\(/g) ?? []).toHaveLength(0);
   });
 
-  it('展开 Markdown 只经 `expandViewMarkdown` 一处进悬停（不写第二份措辞）', () => {
-    expect(providerSource.match(/expandViewMarkdown\(/g) ?? []).toHaveLength(1);
-    expect(providerSource.match(/expandViewAt\(/g) ?? []).toHaveLength(1);
+  it('展开 Markdown 只在插件供方一处进悬停：宿主零措辞、零展开调用', () => {
+    expect(providerSource.match(/expandViewMarkdown\(/g) ?? []).toHaveLength(0);
+    expect(providerSource.match(/expandViewAt\(/g) ?? []).toHaveLength(0);
+    expect(pluginHoverSource.match(/expandViewMarkdown\(/g) ?? []).toHaveLength(1);
+    expect(pluginHoverSource.match(/expandViewAt\(/g) ?? []).toHaveLength(1);
   });
 });

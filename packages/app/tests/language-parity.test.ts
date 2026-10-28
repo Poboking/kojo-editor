@@ -213,6 +213,10 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   [LanguageCapability.Outline]: 'documentSymbol',
   [LanguageCapability.Definition]: 'definition',
   [LanguageCapability.Inlay]: 'inlayHint',
+  // B3c：补全 / 悬停的供方是插件，注册走带能力名的共享收口（kojo2 descriptor 由
+  // `slotServices` 点名）。能力名与 `SlotServiceKind` 逐字相同。
+  [LanguageCapability.Completion]: 'completion',
+  [LanguageCapability.Hover]: 'hover',
 };
 
 /* ============================== 矩阵形状 ============================== */
@@ -655,22 +659,23 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：13 枚 self、3 枚 shared（大纲 / 转定义 / 行内提示走槽腿）、2 枚 builtin、2 项豁免', () => {
+  it('kojo2：11 枚 self、5 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。
     // B3b（2026-10-24）：`definition` 同理挪到 shared —— 判据与展开体那两条落点都归插件，
     // 宿主 `installKojo2LanguageProviders` 不再注册任何 `DefinitionProvider`。
     // B2c（2026-10-24）：`inlay` 同批挪到 shared —— 原生安装器已不在装配路径上。
-    // **档位变了，能力没少**：两侧的合计仍是 13 + 3 = 16。
+    // B3c（2026-10-28）：`completion` / `hover` 也挪到 shared —— `installKojo2LanguageProviders`
+    // 不再直挂 `kojo2`，两枚 provider 经 `registerForLanguageServices(..., 'completion'|'hover')`
+    // 挂上，供方是插件 `@kojo/plugin-kojo-lang`（判据在 `@kojo/kojo-lang`）。
+    // **档位变了，能力没少**：两侧的合计仍是 11 + 5 = 16。
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
       'codelens',
-      'completion',
       'diagnostics',
       'folding',
       'format',
       'highlight',
-      'hover',
       'indent',
       'refs',
       'rename',
@@ -679,7 +684,9 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
       'signature',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([
+      'completion',
       'definition',
+      'hover',
       'inlay',
       'outline',
     ]);
@@ -729,7 +736,7 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     }
   });
 
-  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / definition / inlayHint）在行内', () => {
+  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / inlayHint / definition / completion / hover）真有一处收口点了名', () => {
     for (const capability of capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')) {
       const files = sharedRegistrationFiles(capability).filter((file) => importedByGlobal(file.rel));
       expect(
@@ -738,12 +745,20 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
       ).not.toEqual([]);
       const slot = SLOT_SERVICE_OF[capability];
       if (slot === undefined) continue;
-      for (const file of files) {
-        expect(
-          file.text,
-          `${file.rel} 的共享收口没点 '${slot}'（kojo2 descriptor 声明了它，却被别的语言独占）`,
-        ).toContain(`'${slot}'`);
-      }
+      // B3c：这条判据从"**每个**收口文件都要写能力名"改成"**至少有一处**收口写了能力名
+      // ＋ descriptor 点名了同一条腿"。为什么不是放宽：悬停的旧收口（`kojo-hover.ts`）
+      // 是 B2 之前的无能力名形态，它只铺 `languageServices` 语言、并不服务 kojo2——
+      // 要求它也写 `'hover'` 等于逼 v1 那一路改签名。真正让 kojo2 挂上的判据是下面两条：
+      // ① 已装配的共享收口里有一处带这个名字；② kojo2 descriptor 的 `slotServices` 点名它。
+      // 少任意一条，kojo2 都挂不上（这条比旧写法更紧：旧写法根本不看 descriptor）。
+      expect(
+        files.some((file) => file.text.includes(`'${slot}'`)),
+        `kojo2/${capability} 的共享收口没有一处点名 '${slot}'（descriptor 声明了它，却没人认）`,
+      ).toBe(true);
+      expect(
+        descriptorForLanguageId(KOJO2_LANGUAGE_ID)?.slotServices ?? [],
+        `kojo2 descriptor 没点名 '${slot}'`,
+      ).toContain(slot as never);
     }
   });
 

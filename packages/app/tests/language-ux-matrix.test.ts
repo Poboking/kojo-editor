@@ -169,6 +169,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   [LanguageCapability.References]: 'references',
   [LanguageCapability.Folding]: 'foldingRange',
   [LanguageCapability.Inlay]: 'inlayHint',
+  // B3c（2026-10-28）：补全 / 悬停的供方是插件，kojo2 由 `slotServices` 点名挂上。
+  [LanguageCapability.Completion]: 'completion',
+  [LanguageCapability.Hover]: 'hover',
 };
 
 /** 这门语言对**这一项能力**是否走得到共享收口 */
@@ -476,7 +479,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '补全',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/erb-completion.ts（装配核）+ monaco/kojo2-providers.ts',
+        evidence: 'monaco/erb-completion.ts（装配核）+ monaco/kojo2-providers.ts（共享收口 + 插件供方）',
         assembled: true,
       },
       {
@@ -628,7 +631,15 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   completion: [
     { rel: 'monaco/erb-completion.ts', re: /installCompletion\(monaco,\s*ERB_COMPLETION_ASSEMBLY/ },
     { rel: 'monaco/erb-completion.ts', re: /languageId:\s*ERB_LANGUAGE_ID/ },
-    { rel: 'monaco/kojo2-providers.ts', re: /registerCompletionItemProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B3c（2026-10-28）：2.0 的补全不再由 `kojo2-providers.ts` 自建 provider —— 它改走共享
+    // 收口（能力名 `completion`），由 descriptor 的 `slotServices` 点名挂上，应答来自插件
+    // `@kojo/plugin-kojo-lang`。取证点随之从"那条原生注册行"变成"两处声明"。
+    {
+      rel: 'monaco/kojo2-providers.ts',
+      re: /registerForLanguageServices\([\s\S]{0,500}?registerCompletionItemProvider/,
+    },
+    { rel: 'monaco/kojo2-providers.ts', re: /'completion',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'completion'/ },
   ],
   format: [
     { rel: 'monaco/kojo-format.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDocumentFormattingEditProvider/ },
@@ -935,7 +946,6 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     const apis = [...singleLanguageRegistrations().keys()];
     // 这几枚都有一侧是"单语言注册"的真实写法；一条都没扫到说明正则坏了，后面的断言就是空转
     for (const api of [
-      'registerCompletionItemProvider',
       'registerRenameProvider',
       'registerDocumentHighlightProvider',
       'registerSelectionRangeProvider',
@@ -943,6 +953,13 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     ]) {
       expect(apis, `扫描器漏了 ${api} 的单语言注册行`).toContain(api);
     }
+    // B3c（2026-10-28）：两门一等语言的补全都**不再**有单语言注册行——2.0 那条改走共享收口
+    // （能力名 `completion` + descriptor 点名），ERB 那条经装配核注入语言 id。这里反向钉住
+    // "扫描器确实看不见它"，同时正向钉住收口仍在（缺一条就会让下面"另一门也有注册面"空转）。
+    expect(apis).not.toContain('registerCompletionItemProvider');
+    expect(sharedRegistrationFiles('registerCompletionItemProvider')).toContain(
+      'monaco/kojo2-providers.ts',
+    );
   });
 
   it('单语言注册行的另一门：非豁免就必须也有注册面', () => {

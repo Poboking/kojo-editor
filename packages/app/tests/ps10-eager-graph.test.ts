@@ -607,10 +607,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （dev 那批 `commands.ts` 键位索引 +4 KB，全部在图内既有文件）；KB 闸随之 **3,010 → 3,020**
     //     ——读数恰好压在 3,010 上等于零余量，留一档给下一枚 KB 级改动（口径不变，仍是读数进十）。
     //   - **LAU-1 / D2 合流（2026-10-27，再变基到 `3ff2ed63` 之后）**：读数 **198 文件 / 3,017 KB**
-    //     （文件数不变，余量 3 KB），两枚闸不动（198 / 3,020）。净 +7 KB 逐笔：
-    //     `monaco/kojo2-event-sites.ts`（悬停 / 引用 / lint 三处共用的事件挂点扫描）与
-    //     `monaco/kojo2-dialect-lint.ts` 的净入图部分；反向抵消 D2b 把 `erb-language.ts`
-    //     的族头串摘成从 `@kojo/kojo-vocab/engine` 派生。**下一枚进图模块仍须先挪一枚。**
+    //     （文件数不变，余量 3 KB），两枚闸不动（198 / 3,020）。⚠ **B3c 复核（2026-10-28）改对**：
+    //     原台账把净 +7 KB 归给「`monaco/kojo2-event-sites.ts`（悬停 / 引用 / lint 三处共用的事件
+    //     挂点扫描）入图」——**实测它从未在图里**：三枚消费方（`kojo2-hover.ts` / `kojo2-references.ts`
+    //     / `kojo2-dialect-lint.ts`）全挂在 `kojo2-providers → editor-global-providers` 链上，该链
+    //     自首屏批把 monaco 装配挪出欢迎页静态图后一枚都不在图上（现图内 monaco 仅 `reveal-position.ts`
+    //     与 `tree-sitter/fallback.ts` 两枚；搬家后进图的 kojo2 语言面文件仍只有 `kojo-lang/src/
+    //     constants.ts` 一枚 1,493 B）。该笔 +7 KB 的逐笔归属已不可从现树复原，此段按现值只留历史
+    //     记账性质。反向抵消 D2b 把 `erb-language.ts` 的族头串摘成从 `@kojo/kojo-vocab/engine`
+    //     派生。**下一枚进图模块仍须先挪一枚。**
     //   - **LAU-6 注入（2026-10-27）**：读数 **198 文件 / 3,018 KB**，两枚闸不动（198 / 3,020）。
     //     `tree-sitter/injection.ts` 的子解析器走共享块（`injection-*.js`，不在图上），
     //     入图的只有 `kojo2-semantic.ts` 那几条合并规则的 +1 KB。余量 2 KB。
@@ -665,6 +670,7 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     与 `ProjectView`，全在 `import('./ProjectView')` 的懒边之下，一枚不进图。
     //     闸 **3,070 → 3,080**：读数正好压在 3,070 上等于零余量，按 `c000a24b` 那次的口径
     //     留一档给下一枚 KB 级改动（仍是读数进十）。⇒ 欠账照旧：下一枚进图模块须先挪一枚出去。
+
     //   - **真另存为批（2026-10-28，WS 欠账 E）**：读数 **199 文件 / 3,080 KB**——**零新进图模块**
     //     （文件数不动就是直接证据）。进图六枚、净 **+9,597 B ≈ 10 KB**（`totalKb` 是全图字节
     //     一次 round，故 9.4 KB 的增量落在 +10 这一档），逐枚按 git 现算：`ui/App.tsx` +5,742 B
@@ -682,6 +688,18 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ 欠账照旧：下一枚进图模块仍须先挪一枚出去；另存为这条链若还想把这 10 KB 还回去，
     //     办法是把 `App.tsx` 里的 `saveAs()` 编排整体挪进 `file-save-as.ts` 的懒面（未做，
     //     因为迁移回调要持 `App` 的七张账，挪走就等于把状态所有权外移）。
+    //   - **B3c 补全/悬停搬家（2026-10-28，本批）**：读数 **199 文件 / 3,087 KB**（逐文件原始字节
+    //     实测：上一笔真另存为批的 3,080 档 + 6,526 B ⇒ 进位到 3,087），**两枚闸都不动**
+    //     （≤199 / ≤3,090；3,090 是上一笔抬的，本批一字未抬，余量 3 KB）。
+    //     搬家本体对图是**零改动**——宿主删的四枚判据 `monaco/kojo2-{completion,completion-snippets,
+    //     hover,event-sites}.ts`、改瘦的 `kojo2-providers.ts`、blank 四枚的 re-export
+    //     （`kojo-completion-position.ts`）与新入包的四枚叶子全在懒边（见上方 LAU-1/D2 复核段），
+    //     图内文件集**一枚未增未减**（199 就是直接证据）。本批图差逐笔按 git 现算：
+    //     · `plugin-api/src/slots.ts` **+6,503 B**——契约 additive：`SlotServiceKind` 两枚新槽
+    //       （completion / hover）、`EditorCompletionItemKind` 六档图标契约、悬停 `format` / `range`
+    //       字段与逐档语义注（slots 是常驻契约面，开机页就值引它）；
+    //     · `plugin-api/src/index.ts` **+23 B**——导出面随动一行。
+    //     余量 3 KB。⇒ 欠账照旧：下一枚进图模块须先挪一枚出去。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 

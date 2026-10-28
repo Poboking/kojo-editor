@@ -1,118 +1,124 @@
 /**
- * K2-EDITOR-PROVIDERS · `kojo2` 三枚 Monaco provider 的闸（K2 batch-4）。
+ * K2-EDITOR-PROVIDERS · **B3c 之后的两枚 `kojo2` provider = 槽翻译层**的闸。
  *
- * 覆盖五件事：
- * 1. **注册纪律**：flag 关 ⇒ 零注册；flag 开 ⇒ 恰好三枚、语言 selector 只有 `kojo2`；
- *    dispose 幂等、逐枚隔离；半途注册抛错 ⇒ 已挂上的撤回 + 错误外抛；
- * 2. **CompletionItemKind 映射**：五类候选 → Monaco 档位、声明按种类细分、未知种类回 `Text`；
- * 3. **补全字段**：`range`（名字段替换区间）/ `insertText` / `sortText` / `filterText` /
- *    `documentation`（悬停正文，不另写措辞）；
- * 4. **悬停 / 转定义**：Markdown + range、`LocationLink` 的 `targetUri` / `targetRange` /
- *    `targetSelectionRange` / `originSelectionRange`；文件身份注入与 `model.uri` 兜底；
- * 5. **失败面**：无 adapter / adapter getter 抛错 / 取文抛错 ⇒ 空结果、不抛；
- *    外加**源码断言**：宿主注册点存在且受 flag 守卫，语言层不 import 任何插件包。
+ * ## 这一格在 B3c 改了什么（读断言前先看这三句）
  *
- * 假 Monaco 只实现被真正用到的那几格（三枚注册函数 + `CompletionItemKind` + `Uri.file`），
- * 其余一律由真纯模型给出——本闸测的是"翻译层"，不是再测一遍语法。
+ * 补全与悬停的**判据**已整块搬进 `@kojo/kojo-lang`，作答的是插件
+ * `@kojo/plugin-kojo-lang` 在 `ui.editor.languageService` 槽里的 `kojo2-completion` /
+ * `kojo2-hover` 两枚贡献。宿主 `monaco/kojo2-providers.ts` 只剩三件事：
+ * ① model → 请求（宿主事实：path / languageId / version / 全文 / 当前项目）；
+ * ② 契约响应 → Monaco 协议（range / documentation / insertTextFormat / 悬停 contents）；
+ * ③ 注册（`registerForLanguageServices(monaco, register, 'completion' | 'hover')` 共享收口）。
+ *
+ * 因此本文件的判据分五层，**每一层都只钉这一层的事**（越界就是给搬家后的位置留下第二份答案）：
+ * 1. **注册**：语言 selector 来自 descriptor（`languageServices` ∪ 点名 `completion` / `hover`
+ *    的 `slotServices`），不是当年那个"注册调用第一个实参写死 `KOJO2_LANGUAGE_ID`"；
+ * 2. **图标**：契约十二档 → Monaco 枚举逐格对表（含 B3c 新增的 operator / event / constant /
+ *    struct / enum / module 六档）；
+ * 3. **插入语义**：`insertTextFormat === 'snippet'` 才开 `InsertAsSnippet`；`kind: 'snippet'`
+ *    只挑图标；桩缺枚举时**丢弃带模板的那一档**（不把 undefined 写进 kind）；
+ * 4. **协议翻译**：range → `IRange`、documentation 按 `documentationFormat` 分形态、
+ *    filterText / sortText / detail / insertText 透传；悬停 `undefined` 与 `''` 分家；
+ * 5. **装配纪律**（读源码）：共享收口 + 插件供方是**唯一**落点，宿主不留自建注册。
+ *
+ * 旧文件里的"判据级"断言（候选集 / 顺序 / detail / documentation 正文 / 事件目录 / 锚点与
+ * 骨架 / 声明索引的时机）已随判据搬进 `packages/kojo-lang/tests/completion.test.ts` 与
+ * `packages/plugins/kojo-lang/tests/completion-hover.test.ts`——本文件不再重测一遍语法，
+ * 只验"插件交上来的账，宿主有没有原样翻成 Monaco 的账"。
+ *
+ * 假 Monaco 只实现被真正用到的那几格（两枚注册函数 + 三个枚举 + `Uri.file`），
+ * 其余一律由真纯模型给出。
  */
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { eventNames, FIXTURE_ADAPTER } from '@kojo/kojo-core';
-import { ERATW_GAME_ADAPTER, ERATW_HEART_HINT, ERATW_PRESENTATION } from '@kojo/plugin-eratw-adapter';
+import type {
+  EditorCompletionItem,
+  EditorCompletionItemKind,
+  EditorCompletionRequest,
+  EditorHoverRequest,
+  EditorLanguageServiceContribution,
+  PluginContext,
+} from '@kojo/plugin-api';
 import type * as Monaco from '../src/monaco/entry';
+import { KOJO2_ANCHOR_CHARS, KOJO2_COMPLETION_TRIGGER_CHARS } from '@kojo/kojo-lang/completion';
+import { createKojoLangPlugin } from '@kojo/plugin-kojo-lang';
+import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
-import { KOJO2_ANCHOR_CHARS } from '../src/monaco/kojo2-completion';
-import { kojo2CompletionSnippets } from '../src/monaco/kojo2-completion-snippets';
-import type { Kojo2CompletionCandidate } from '../src/monaco/kojo2-completion';
+import { languageDescriptors } from '../src/monaco/language-registry';
+import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import {
-  KOJO2_DECL_WORD_BY_KIND,
-  kojo2DocumentOf,
-  type Kojo2Declaration,
-  type Kojo2DeclarationKind,
-} from '@kojo/kojo-lang';
-import {
-  KOJO2_COMPLETION_TRIGGER_CHARS,
   installKojo2LanguageProviders,
-  kojo2CompletionItems,
   kojo2CompletionKindOf,
-  kojo2HoverMarkdown,
-  kojo2HoverOf,
+  toMonacoCompletionItem,
+  toMonacoCompletionItems,
+  toMonacoHover,
 } from '../src/monaco/kojo2-providers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '../../..');
-const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
 
-const COMPLETION_FIXTURE = readFileSync(
-  join(HERE, 'fixtures', 'kojo2', 'completion.kojo2'),
-  'utf8',
-);
-const HOVER_FIXTURE = readFileSync(
-  join(HERE, 'fixtures', 'kojo2', 'hover-definition.kojo2'),
-  'utf8',
-);
-/** 末尾补一个换行：下面"追加一行"的查询都从新行开始。 */
-const COMPLETION_BASE = COMPLETION_FIXTURE.endsWith('\n')
-  ? COMPLETION_FIXTURE
-  : `${COMPLETION_FIXTURE}\n`;
+/* ============================== 共享收口的期望 selector ============================== */
 
-const HOVER_DOCUMENT = kojo2DocumentOf(HOVER_FIXTURE);
+/**
+ * 期望 selector **从 descriptor 表现算**，不手抄语言 id 清单：手抄一份就变成"第二张真源"，
+ * 哪天新语言声明了 `languageServices`，这里会跟着自动覆盖（而实现若漏挂，比较就会红）。
+ */
+const COMPLETION_SELECTORS = languageDescriptors()
+  .filter(
+    (descriptor) =>
+      descriptor.languageServices === true ||
+      descriptor.slotServices?.includes('completion') === true,
+  )
+  .map((descriptor) => descriptor.id);
 
-/* ============================== 假 Monaco / 假 model ============================== */
+const HOVER_SELECTORS = languageDescriptors()
+  .filter(
+    (descriptor) =>
+      descriptor.languageServices === true || descriptor.slotServices?.includes('hover') === true,
+  )
+  .map((descriptor) => descriptor.id);
+
+/* ============================== 假 Monaco / 假 model / 假内核 ============================== */
 
 /**
  * Monaco `CompletionItemKind` 的真实数值（0.57 枚举顺序；宿主只用这几格，测试按同一张表比）。
  * 单独列在这里而不是从 `monaco/entry` 取：node 池里 Monaco 运行时不进模块图。
  */
 const KINDS = {
-  Method: 0,
   Function: 1,
-  Constructor: 2,
-  Field: 3,
   Variable: 4,
-  Class: 5,
   Struct: 6,
-  Interface: 7,
   Module: 8,
-  Property: 9,
   Event: 10,
   Operator: 11,
-  Unit: 12,
   Value: 13,
   Constant: 14,
   Enum: 15,
-  EnumMember: 16,
   Keyword: 17,
   Text: 18,
-  Color: 19,
-  File: 20,
-  Reference: 21,
-  Customcolor: 22,
-  Folder: 23,
-  TypeParameter: 24,
-  User: 25,
-  Issue: 26,
   Snippet: 27,
 } as const;
 
-type ProviderKind = 'completion' | 'hover' | 'definition';
-
-/** Monaco provider 的第三/四参（本层的 provider 不用它们，但签名要求传） */
-const TOKEN = {
-  isCancellationRequested: false,
-  onCancellationRequested: () => ({ dispose: () => undefined }),
-} as unknown as Monaco.CancellationToken;
-
-const COMPLETION_CONTEXT = {
-  triggerKind: 0,
-} as unknown as Monaco.languages.CompletionContext;
+type ProviderKind = 'completion' | 'hover';
 
 interface Registration {
   readonly kind: ProviderKind;
   readonly selector: unknown;
   readonly provider: unknown;
+}
+
+interface FakeMonacoOptions {
+  /** 让某一枚注册抛错（模拟"半途失败"，验回滚 + 外抛） */
+  readonly failOn?: ProviderKind;
+  /** 让某一枚注册的 dispose 抛错（验逐枚隔离） */
+  readonly failDisposeOn?: ProviderKind;
+  /** 桩缺 `CompletionItemKind.Snippet`（老宿主 / 剪裁过的 Monaco 运行时） */
+  readonly omitSnippetKind?: boolean;
+  /** 桩缺 `CompletionItemInsertTextRule`（同上） */
+  readonly omitInsertTextRule?: boolean;
 }
 
 interface FakeMonaco {
@@ -122,20 +128,12 @@ interface FakeMonaco {
   readonly disposeCalls: ProviderKind[];
 }
 
-interface FakeMonacoOptions {
-  /** 让某枚注册抛错（模拟"半途失败"，验回滚 + 外抛） */
-  readonly failOn?: ProviderKind;
-  /** 让某一枚注册的 dispose 抛错（验逐枚隔离） */
-  readonly failDisposeOn?: ProviderKind;
-}
-
 function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
   const registrations: Registration[] = [];
   const disposeCalls: ProviderKind[] = [];
   const register = (kind: ProviderKind) => (selector: unknown, provider: unknown) => {
     if (options.failOn === kind) throw new Error(`桩：注册 ${kind} 抛错`);
-    const record: Registration = { kind, selector, provider };
-    registrations.push(record);
+    registrations.push({ kind, selector, provider });
     return {
       dispose: () => {
         if (options.failDisposeOn === kind) throw new Error(`桩：撤 ${kind} 抛错`);
@@ -143,13 +141,16 @@ function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
       },
     };
   };
+  const completionKinds: Record<string, number> = { ...KINDS };
+  if (options.omitSnippetKind === true) delete completionKinds.Snippet;
   const fake = {
     languages: {
-      CompletionItemKind: KINDS,
-    CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
+      CompletionItemKind: completionKinds,
+      ...(options.omitInsertTextRule === true
+        ? {}
+        : { CompletionItemInsertTextRule: { InsertAsSnippet: 4 } }),
       registerCompletionItemProvider: register('completion'),
       registerHoverProvider: register('hover'),
-      registerDefinitionProvider: register('definition'),
     },
     Uri: {
       file: (path: string) => ({
@@ -163,617 +164,625 @@ function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
   return { monaco: fake as unknown as typeof Monaco, registrations, disposeCalls };
 }
 
+function installForTest(options: FakeMonacoOptions = {}): FakeMonaco {
+  const fake = fakeMonaco(options);
+  installKojo2LanguageProviders(fake.monaco);
+  return fake;
+}
+
+function selectorsOf(fake: FakeMonaco, kind: ProviderKind): unknown[] {
+  return fake.registrations.filter((entry) => entry.kind === kind).map((entry) => entry.selector);
+}
+
+function registrationOf(fake: FakeMonaco, kind: ProviderKind, selector: string): Registration {
+  const found = fake.registrations.find(
+    (entry) => entry.kind === kind && entry.selector === selector,
+  );
+  if (found === undefined) throw new Error(`没有在 ${selector} 上注册 ${kind}`);
+  return found;
+}
+
+function completionProviderOf(fake: FakeMonaco): Monaco.languages.CompletionItemProvider {
+  return registrationOf(fake, 'completion', KOJO2_LANGUAGE_ID).provider as
+    Monaco.languages.CompletionItemProvider;
+}
+
+function hoverProviderOf(fake: FakeMonaco): Monaco.languages.HoverProvider {
+  return registrationOf(fake, 'hover', KOJO2_LANGUAGE_ID).provider as Monaco.languages.HoverProvider;
+}
+
+/** Monaco provider 的第三/四参（本层不用它们，但签名要求传） */
+const TOKEN = {
+  isCancellationRequested: false,
+  onCancellationRequested: () => ({ dispose: () => undefined }),
+} as unknown as Monaco.CancellationToken;
+
+const COMPLETION_CONTEXT = {
+  triggerKind: 0,
+} as unknown as Monaco.languages.CompletionContext;
+
+interface FakeModelOptions {
+  /** `getWordAtPosition` 的答案（宿主缺省区间用；缺省 = 词外） */
+  readonly word?: { readonly startColumn: number; readonly endColumn: number };
+  /** 省略 `uri`（"没有文件身份"的桩） */
+  readonly noUri?: boolean;
+  /** 省略 `getLanguageId` / `getVersionId`（旧宿主 / 桩 model） */
+  readonly bare?: boolean;
+}
+
 interface FakeModel {
   readonly model: Monaco.editor.ITextModel;
   /** 只给"取文抛错"用例用：让 `getValue()` 抛 */
   readonly failGetValue: () => void;
 }
 
-function fakeModel(text: string): FakeModel {
+const MODEL_PATH = 'D:/proj/口上/12/场景.kojo2';
+
+function fakeModel(text: string, options: FakeModelOptions = {}): FakeModel {
   let broken = false;
   const rows = text.split(/\r\n|\r|\n/);
-  const uri = {
-    scheme: 'file',
-    path: 'D:/proj/chara/灵梦/开场.kojo2',
-    fsPath: 'D:/proj/chara/灵梦/开场.kojo2',
-    toString: () => 'file:///D:/proj/chara/灵梦/开场.kojo2',
-  };
-  const model = {
+  const base: Record<string, unknown> = {
     getValue: () => {
       if (broken) throw new Error('桩：模型已释放');
       return text;
     },
     getLineContent: (line: number) => rows[line - 1] ?? '',
     getLineCount: () => rows.length,
-    getLanguageId: () => KOJO2_LANGUAGE_ID,
+    getWordAtPosition: () => options.word ?? null,
     isDisposed: () => broken,
-    uri,
-  } as unknown as Monaco.editor.ITextModel;
+  };
+  if (options.noUri !== true) {
+    base.uri = {
+      scheme: 'file',
+      path: MODEL_PATH,
+      fsPath: MODEL_PATH,
+      toString: () => 'file:///D:/proj/口上/12/场景.kojo2',
+    };
+  }
+  if (options.bare !== true) {
+    base.getLanguageId = () => KOJO2_LANGUAGE_ID;
+    base.getVersionId = () => 7;
+  }
   return {
-    model,
+    model: base as unknown as Monaco.editor.ITextModel,
     failGetValue: () => {
       broken = true;
     },
   };
 }
 
-/** `|` 当光标标记：摘掉标记、换成 1 基行列 + 那份文本建出来的 model。 */
-function atMarker(textWithMarker: string, marker = '|'): {
-  readonly source: string;
-  readonly line: number;
-  readonly column: number;
-  readonly model: Monaco.editor.ITextModel;
-  readonly position: Monaco.Position;
-} {
-  const at = textWithMarker.indexOf(marker);
-  if (at < 0) throw new Error(`夹具里没有光标标记 ${marker}`);
-  const source = textWithMarker.slice(0, at) + textWithMarker.slice(at + marker.length);
-  const before = source.slice(0, at);
-  const lastBreak = before.lastIndexOf('\n');
-  const line = before.split('\n').length;
-  const column = at - lastBreak;
-  const { model } = fakeModel(source);
-  return { source, line, column, model, position: { lineNumber: line, column } as Monaco.Position };
+type KernelLike = Parameters<typeof setGlobalKernel>[0];
+
+interface KernelRecord {
+  readonly queried: string[];
 }
 
-/** 1 基行列（同一份源码）→ model + position。 */
-function atPoint(source: string, line: number, column: number) {
-  return {
-    model: fakeModel(source).model,
-    position: { lineNumber: line, column } as Monaco.Position,
-  };
-}
-
-/* ============================== 夹具小工具 ============================== */
-
-function stubFlag(on: boolean): void {
-  const store = new Map<string, string>();
-  if (on) store.set(KOJO2_KEY, 'on');
-  vi.stubGlobal('window', {
-    localStorage: {
-      getItem: (key: string): string | null => store.get(key) ?? null,
-      setItem: (key: string, value: string): void => {
-        store.set(key, value);
-      },
-      removeItem: (key: string): void => {
-        store.delete(key);
+/** 装一枚假内核：`slots.query` 交回给定的贡献（与 `kernel.slots.query` 同形状） */
+function installKernel(
+  contributions: readonly EditorLanguageServiceContribution[],
+  project: unknown = null,
+): KernelRecord {
+  const queried: string[] = [];
+  setGlobalKernel({
+    slots: {
+      query: (slot: string) => {
+        queried.push(slot);
+        return slot === 'ui.editor.languageService' ? contributions : [];
       },
     },
-  });
+    project: { current: () => project },
+  } as unknown as KernelLike);
+  return { queried };
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-function registrationOf(fake: FakeMonaco, kind: ProviderKind): Registration {
-  const found = fake.registrations.find((entry) => entry.kind === kind);
-  if (found === undefined) throw new Error(`没有注册 ${kind}`);
-  return found;
-}
-
-function installForTest(options: Parameters<typeof installKojo2LanguageProviders>[1] = {}): FakeMonaco {
-  stubFlag(true);
-  const fake = fakeMonaco();
-  installKojo2LanguageProviders(fake.monaco, options);
-  return fake;
-}
-
-function completionProviderOf(fake: FakeMonaco): Monaco.languages.CompletionItemProvider {
-  return registrationOf(fake, 'completion').provider as Monaco.languages.CompletionItemProvider;
-}
-
-function hoverProviderOf(fake: FakeMonaco): Monaco.languages.HoverProvider {
-  return registrationOf(fake, 'hover').provider as Monaco.languages.HoverProvider;
-}
-
-function definitionProviderOf(fake: FakeMonaco): Monaco.languages.DefinitionProvider {
-  return registrationOf(fake, 'definition').provider as Monaco.languages.DefinitionProvider;
+/** 一枚只答固定结果的贡献（本层测的是翻译，不测判据） */
+function contributionOf(
+  provide: EditorLanguageServiceContribution['provide'],
+  id = 'stub-contribution',
+): EditorLanguageServiceContribution {
+  return { id, provide };
 }
 
 function suggestionsAt(
   fake: FakeMonaco,
   model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
+  line: number,
+  column: number,
+  triggerCharacter?: string,
 ): Monaco.languages.CompletionItem[] {
   return (
     completionProviderOf(fake).provideCompletionItems(
       model,
-      position,
-      COMPLETION_CONTEXT,
+      { lineNumber: line, column } as Monaco.Position,
+      triggerCharacter === undefined
+        ? COMPLETION_CONTEXT
+        : ({ triggerKind: 1, triggerCharacter } as unknown as Monaco.languages.CompletionContext),
       TOKEN,
     ) as Monaco.languages.CompletionList
   ).suggestions;
 }
 
-function hoverAt(fake: FakeMonaco, model: Monaco.editor.ITextModel, position: Monaco.Position) {
+function hoverAt(fake: FakeMonaco, model: Monaco.editor.ITextModel, line: number, column: number) {
   return hoverProviderOf(fake).provideHover(
     model,
-    position,
+    { lineNumber: line, column } as Monaco.Position,
     TOKEN,
   ) as Monaco.languages.Hover | undefined;
 }
 
-function definitionAt(
-  fake: FakeMonaco,
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-): Monaco.languages.LocationLink[] {
-  return definitionProviderOf(fake).provideDefinition(
-    model,
-    position,
-    TOKEN,
-  ) as Monaco.languages.LocationLink[];
+/** 造一份契约候选（缺省 = 最小合法条目） */
+function item(overrides: Partial<EditorCompletionItem> = {}): EditorCompletionItem {
+  return { label: '示例', ...overrides };
 }
 
-/** 夹具里某一种声明的唯一一条（缺了就当场红，与 `kojo2-hover-definition.test.ts` 同手法）。 */
-function declarationOf(kind: Kojo2DeclarationKind): Kojo2Declaration {
-  const found = HOVER_DOCUMENT.declarations.find((declaration) => declaration.kind === kind);
-  if (found === undefined) throw new Error(`夹具缺少 ${kind} 声明`);
-  return found;
-}
+const FALLBACK_RANGE: Monaco.IRange = {
+  startLineNumber: 3,
+  startColumn: 1,
+  endLineNumber: 3,
+  endColumn: 1,
+};
 
-function pointAtDeclaration(declaration: Kojo2Declaration, source = HOVER_FIXTURE) {
-  return atPoint(source, declaration.line, declaration.nameStart);
-}
+/* ============================== ① 注册：共享收口 ============================== */
 
-function lineTextOfFixture(source: string, line: number): string {
-  return source.split(/\r\n|\r|\n/)[line - 1] ?? '';
-}
-
-/** `documentation` 是 string | IMarkdownString（本层固定给后者）；统一取成字符串比。 */
-function documentationText(item: Monaco.languages.CompletionItem): string {
-  const doc = item.documentation;
-  if (doc === undefined || doc === null) return '';
-  return typeof doc === 'string' ? doc : doc.value;
-}
-
-/** 造一枚候选（只为单测 `kojo2CompletionKindOf` 的边界值）。 */
-function candidate(overrides: Partial<Kojo2CompletionCandidate>): Kojo2CompletionCandidate {
-  return {
-    label: '示例',
-    insertText: '示例',
-    kind: 'anchor',
-    detail: '示例',
-    sortText: '0_示例',
-    ...overrides,
-  } as Kojo2CompletionCandidate;
-}
-
-/* ============================== ① 开关与注册 ============================== */
-
-describe('开关与注册：不读开关（语言面），只挂 kojo2 两枚', () => {
-  it('缺省档（v1-only）⇒ 照样注册两枚，dispose 逐枚撤', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = installKojo2LanguageProviders(fake.monaco, {
-      adapter: ERATW_GAME_ADAPTER,
-    });
-    expect(fake.registrations).toHaveLength(2);
-    handle.dispose();
-    expect(fake.disposeCalls).toHaveLength(2);
+describe('注册：selector 来自共享收口（descriptor 的 languageServices ∪ slotServices）', () => {
+  it('补全的 selector 逐门等于 descriptor 现算的那张清单（不是写死的 kojo2 常量）', () => {
+    const fake = installForTest();
+    expect(selectorsOf(fake, 'completion')).toEqual(COMPLETION_SELECTORS);
+    expect(COMPLETION_SELECTORS.length).toBeGreaterThan(1);
+    expect(COMPLETION_SELECTORS).toContain(ERB_LANGUAGE_ID);
+    expect(COMPLETION_SELECTORS).toContain(KOJO_LANGUAGE_ID);
+    expect(COMPLETION_SELECTORS).toContain(KOJO2_LANGUAGE_ID);
   });
 
-  it('dispose 幂等：句柄可重复 dispose（不抛）', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = installKojo2LanguageProviders(fake.monaco);
-    expect(() => {
-      handle.dispose();
-      handle.dispose();
-    }).not.toThrow();
+  it('悬停的 selector 同样来自收口（两张清单在 kojo2 上重合，但来源仍是 descriptor）', () => {
+    const fake = installForTest();
+    expect(selectorsOf(fake, 'hover')).toEqual(HOVER_SELECTORS);
+    expect(selectorsOf(fake, 'hover')).toContain(KOJO2_LANGUAGE_ID);
+    expect(selectorsOf(fake, 'hover')).toEqual(selectorsOf(fake, 'completion'));
   });
 
-  // B3b：转定义已归插件（descriptor 的 `slotServices: ['definition']` 经共享收口挂上），
-  // 本 installer 只剩补全 / 悬停两枚。这条断言跟着数字变，**不是**放宽：
-  // "恰好两枚" 比 "至少两枚" 更紧——多挂一枚 DefinitionProvider 会让 F12 变成多选。
-  it('flag 开 ⇒ 恰好两枚（补全 / 悬停），selector 逐枚等于 kojo2', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    expect(fake.registrations.map((entry) => entry.kind)).toEqual(['completion', 'hover']);
-    for (const entry of fake.registrations) expect(entry.selector).toBe(KOJO2_LANGUAGE_ID);
+  it('kojo2 那两格确实来自 `slotServices`（它不声明 languageServices）', () => {
+    const kojo2 = languageDescriptors().find((descriptor) => descriptor.id === KOJO2_LANGUAGE_ID);
+    expect(kojo2).toBeDefined();
+    expect(kojo2!.languageServices).not.toBe(true);
+    expect(kojo2!.slotServices).toContain('completion');
+    expect(kojo2!.slotServices).toContain('hover');
+    // 保留面（JSON / XML）不住在任何一张清单里：空 provider 会顶掉 Monaco 内建行为
+    expect(COMPLETION_SELECTORS).not.toContain('json');
+  });
+
+  it('两枚各挂一遍 × 覆盖的语言数；触发字符来自包（宿主不留第二份）', () => {
+    const fake = installForTest();
+    expect(fake.registrations.filter((entry) => entry.kind === 'completion')).toHaveLength(
+      COMPLETION_SELECTORS.length,
+    );
+    expect(fake.registrations.filter((entry) => entry.kind === 'hover')).toHaveLength(
+      HOVER_SELECTORS.length,
+    );
     expect(completionProviderOf(fake).triggerCharacters).toEqual([
       ...KOJO2_COMPLETION_TRIGGER_CHARS,
     ]);
   });
+});
 
-  it('dispose 幂等：两次只撤一轮，两枚各撤一次', () => {
+/* ============================== ② dispose / 回滚 ============================== */
+
+describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
+  it('dispose 幂等：两次只撤一轮，两条腿逐门各撤一次', () => {
     const fake = installForTest();
-    const handle = installKojo2LanguageProviders(fake.monaco);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.disposeCalls).toEqual(['completion', 'hover']);
+    const installed = installKojo2LanguageProviders(fake.monaco);
+    installed.dispose();
+    installed.dispose();
+    expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
+      COMPLETION_SELECTORS.length,
+    );
+    expect(fake.disposeCalls.filter((kind) => kind === 'hover')).toHaveLength(
+      HOVER_SELECTORS.length,
+    );
+    expect(fake.disposeCalls).toHaveLength(COMPLETION_SELECTORS.length + HOVER_SELECTORS.length);
   });
 
   it('一枚 dispose 抛错不带走其余，也不把错误抛给调用方', () => {
-    stubFlag(true);
     const fake = fakeMonaco({ failDisposeOn: 'hover' });
-    const handle = installKojo2LanguageProviders(fake.monaco);
-    expect(() => handle.dispose()).not.toThrow();
-    // 补全撤了、悬停抛错被吞 ⇒ 一轮走完（没有第三枚可撤）
-    expect(fake.disposeCalls).toEqual(['completion']);
+    const installed = installKojo2LanguageProviders(fake.monaco);
+    expect(() => installed.dispose()).not.toThrow();
+    // 补全那一组全撤了；悬停组第一枚就抛，被"逐枚 try-catch"吞掉（不许带走别的注册组）
+    expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
+      COMPLETION_SELECTORS.length,
+    );
+    expect(fake.disposeCalls).not.toContain('hover');
   });
 
-  it('注册半途抛错 ⇒ 撤回已挂上的那几枚，再把错误外抛（全有或全无）', () => {
-    stubFlag(true);
+  it('注册半途抛错 ⇒ 错误外抛，且已挂上的那组被撤回（全有或全无）', () => {
+    // 这一格钉的是**旧安装器承诺过的语义**：注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛。
+    // 搬家后两枚能力都由 `registerForLanguageServices` 一次铺完所有语言；如果写成
+    // `registrations.push(a, b)`，第二枚抛错时第一枚的句柄还没进数组 ⇒ 撤不回来（静默残留）。
+    // 实现改成逐枚 push（见 `kojo2-providers.ts` 的注），这里的回滚就必须真的发生。
     const fake = fakeMonaco({ failOn: 'hover' });
     expect(() => installKojo2LanguageProviders(fake.monaco)).toThrow(/注册 hover/);
-    // 补全先挂上、随即被撤回；悬停根本没挂上
-    expect(fake.disposeCalls).toEqual(['completion']);
-    expect(fake.registrations.map((entry) => entry.kind)).toEqual(['completion']);
+    // 挂上过（可见事实）
+    expect(fake.registrations.map((entry) => entry.kind)).toEqual(
+      COMPLETION_SELECTORS.map(() => 'completion'),
+    );
+    // 但已全部撤回：撤的是 completion 那一组，逐门各一枚，hover 一枚都没挂上过
+    expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
+      COMPLETION_SELECTORS.length,
+    );
+    expect(fake.disposeCalls).not.toContain('hover');
+    // 回滚代码仍在（实现若退回 `push(a, b)`，上面那条 dispose 断言会先红，这条是二道保险）
+    const source = readFileSync(
+      resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-providers.ts'),
+      'utf8',
+    );
+    expect(source).toContain('for (const registration of registrations)');
+  });
+
+  it('安装器不读切流开关（K2-SURFACE-DEFAULT：只读语言面装配即注册）', () => {
+    const source = readFileSync(
+      resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-providers.ts'),
+      'utf8',
+    );
+    expect(source).not.toContain('isKojo2CutoverEnabled');
   });
 });
 
-/* ============================== ② CompletionItemKind 映射 ============================== */
+/* ============================== ③ 图标：契约十二档 ============================== */
 
-describe('CompletionItemKind 映射：按候选类别分档，声明按种类细分', () => {
-  it('锚点 ⇒ Operator（五枚都走这一档）', () => {
-    const fake = installForTest();
-    const at = atMarker(`${COMPLETION_BASE}|`);
-    const suggestions = suggestionsAt(fake, at.model, at.position);
-    // 行首同时给块骨架（K2-COMPLETE-SNIPPET，翻译层追加）：锚点仍是前五枚
-    expect(suggestions.slice(0, KOJO2_ANCHOR_CHARS.length).map((item) => item.label)).toEqual([
-      ...KOJO2_ANCHOR_CHARS,
-    ]);
-    for (const item of suggestions.slice(0, KOJO2_ANCHOR_CHARS.length)) expect(item.kind).toBe(KINDS.Operator);
-    for (const item of suggestions.slice(KOJO2_ANCHOR_CHARS.length)) expect(item.kind).toBe(KINDS.Snippet);
-  });
+describe('图标：契约十二档 → Monaco 枚举逐格对表', () => {
+  const TABLE: readonly (readonly [EditorCompletionItemKind, number])[] = [
+    ['operator', KINDS.Operator],
+    ['keyword', KINDS.Keyword],
+    ['function', KINDS.Function],
+    ['variable', KINDS.Variable],
+    ['value', KINDS.Value],
+    ['snippet', KINDS.Snippet],
+    ['text', KINDS.Text],
+    ['event', KINDS.Event],
+    ['constant', KINDS.Constant],
+    ['struct', KINDS.Struct],
+    ['enum', KINDS.Enum],
+    ['module', KINDS.Module],
+  ];
 
-  it('声明词 ⇒ Keyword', () => {
-    const fake = installForTest();
-    const at = atMarker(`${COMPLETION_BASE}# |`);
-    const suggestions = suggestionsAt(fake, at.model, at.position);
-    expect(suggestions.length).toBeGreaterThan(0);
-    for (const item of suggestions) expect(item.kind).toBe(KINDS.Keyword);
-  });
+  for (const [kind, expected] of TABLE) {
+    it(`${kind} ⇒ ${expected}`, () => {
+      expect(kojo2CompletionKindOf(fakeMonaco().monaco, kind)).toBe(expected);
+    });
+  }
 
-  it('事件目录 ⇒ Event（名单来自 adapter 的 core `eventNames`，零手抄）', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    const at = atMarker(`${COMPLETION_BASE}# 机 |`);
-    const suggestions = suggestionsAt(fake, at.model, at.position);
-    expect(suggestions.map((item) => item.label)).toEqual([...eventNames(ERATW_GAME_ADAPTER)]);
-    for (const item of suggestions) expect(item.kind).toBe(KINDS.Event);
-  });
-
-  it('事件目录也接受 getter 形态（宿主请求时现取）', () => {
-    const getter = vi.fn(() => ERATW_GAME_ADAPTER);
-    const fake = installForTest({ adapter: getter });
-    const at = atMarker(`${COMPLETION_BASE}# 机 |`);
-    expect(suggestionsAt(fake, at.model, at.position).length).toBe(
-      eventNames(ERATW_GAME_ADAPTER).length,
-    );
-    expect(getter).toHaveBeenCalled();
-  });
-
-  it('域符号 ⇒ Variable（`{…}` 插值内，排在候选最前）', () => {
-    const fake = installForTest();
-    const at = atMarker(COMPLETION_FIXTURE.replace('{我}', '{|我}'));
-    const suggestions = suggestionsAt(fake, at.model, at.position);
-    const symbols = suggestions.filter((item) => item.kind === KINDS.Variable);
-    expect(symbols.length).toBeGreaterThan(0);
-    expect(suggestions.slice(0, symbols.length).map((item) => item.kind)).toEqual(
-      symbols.map(() => KINDS.Variable),
-    );
-  });
-
-  it('声明 ⇒ 按种类细分（变量 / 表 / 池 / 模 / 函）', () => {
-    const fake = installForTest();
-    // `!` 调用位：池 / 模 / 函；`?` 条件位：再补上表
-    const trigger = atMarker(`${COMPLETION_BASE}! |`);
-    const triggerKinds = new Map(
-      suggestionsAt(fake, trigger.model, trigger.position).map((item) => [item.label, item.kind]),
-    );
-    const condition = atMarker(`${COMPLETION_BASE}? |`);
-    const conditionKinds = new Map(
-      suggestionsAt(fake, condition.model, condition.position).map((item) => [item.label, item.kind]),
-    );
-    for (const declaration of kojo2DocumentOf(COMPLETION_FIXTURE).declarations) {
-      const kind = conditionKinds.get(declaration.name) ?? triggerKinds.get(declaration.name);
-      if (kind === undefined) continue;
-      const expected =
-        declaration.kind === 'table'
-          ? KINDS.Struct
-          : declaration.kind === 'pool'
-            ? KINDS.Enum
-            : declaration.kind === 'template'
-              ? KINDS.Snippet
-              : declaration.kind === 'function'
-                ? KINDS.Function
-                : KINDS.Text;
-      expect(kind, declaration.name).toBe(expected);
-    }
+  it('未知档 / 缺省 ⇒ Text（不借邻居的色）', () => {
     expect(
-      kojo2CompletionKindOf(
-        fake.monaco,
-        candidate({ kind: 'declaration', declarationKind: 'variable' }),
-      ),
-    ).toBe(KINDS.Variable);
-    expect(
-      kojo2CompletionKindOf(
-        fake.monaco,
-        candidate({ kind: 'declaration', declarationKind: 'constant' }),
-      ),
-    ).toBe(KINDS.Constant);
-    expect(
-      kojo2CompletionKindOf(
-        fake.monaco,
-        candidate({ kind: 'declaration', declarationKind: 'scene' }),
-      ),
-    ).toBe(KINDS.Module);
-  });
-
-  it('未知候选类别 / 没给声明种类 ⇒ 缺省 Text（不借邻居的档）', () => {
-    const fake = installForTest();
-    expect(
-      kojo2CompletionKindOf(
-        fake.monaco,
-        candidate({ kind: '未知类别' as Kojo2CompletionCandidate['kind'] }),
-      ),
+      kojo2CompletionKindOf(fakeMonaco().monaco, '未来新增的档' as EditorCompletionItemKind),
     ).toBe(KINDS.Text);
-    expect(kojo2CompletionKindOf(fake.monaco, candidate({ kind: 'declaration' }))).toBe(
-      KINDS.Text,
-    );
+    expect(kojo2CompletionKindOf(fakeMonaco().monaco, undefined)).toBe(KINDS.Text);
+  });
+
+  it('桩缺 Snippet 枚举：`snippet` 档退 Text（纯图标那一路；带模板的那一路整枚丢弃，见下一组）', () => {
+    const fake = fakeMonaco({ omitSnippetKind: true });
+    expect(kojo2CompletionKindOf(fake.monaco, 'snippet')).toBe(KINDS.Text);
   });
 });
 
-/* ============================== ③ 补全字段 ============================== */
+/* ============================== ④ 逐字段翻译 ============================== */
 
-describe('补全字段：range / insertText / sortText / filterText / documentation', () => {
-  it('行首空行：锚点的 range 是零宽（插在光标处）', () => {
-    const fake = installForTest();
-    const at = atMarker(`${COMPLETION_BASE}|`);
-    for (const item of suggestionsAt(fake, at.model, at.position)) {
-      expect(item.range).toEqual({
-        startLineNumber: at.line,
-        startColumn: at.column,
-        endLineNumber: at.line,
-        endColumn: at.column,
-      });
-    }
-  });
-
-  it('名字段内：range 覆盖整个名字（`# 机 指|` ⇒ 指 的起止列）', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    const at = atMarker(`${COMPLETION_BASE}# 机 指|`);
-    const lineText = lineTextOfFixture(at.source, at.line);
-    const start = lineText.lastIndexOf('指');
-    expect(start).toBeGreaterThanOrEqual(0);
-    const suggestions = suggestionsAt(fake, at.model, at.position);
-    expect(suggestions.length).toBeGreaterThan(0);
-    for (const item of suggestions) {
-      expect(item.range).toEqual({
-        startLineNumber: at.line,
-        startColumn: start + 1,
-        endLineNumber: at.line,
-        endColumn: start + 2,
-      });
-    }
-  });
-
-  it('insertText / filterText / sortText / detail 逐字来自纯模型', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    const at = atMarker(`${COMPLETION_BASE}# 机 |`);
-    const item = suggestionsAt(fake, at.model, at.position)[0]!;
-    expect(item.insertText).toBe(item.label);
-    expect(item.filterText).toBe(item.label);
-    expect(item.sortText).toBe(`2_${item.label}`);
-    expect(item.detail).toBe('事件');
-  });
-
-  it('声明类候选的 documentation = 悬停正文（来源行 / 原文 / 种类声明）', () => {
-    const fake = installForTest();
-    const at = atMarker(`${COMPLETION_BASE}! |`);
-    const declaration = kojo2DocumentOf(COMPLETION_FIXTURE).declarations.find(
-      (entry) => entry.kind === 'pool',
+describe('补全逐字段：range / filterText / documentation / sortText / detail / insertText', () => {
+  it('契约区间 → IRange（1 基、尾列半开、单行）', () => {
+    const entry = toMonacoCompletionItem(
+      fakeMonaco().monaco,
+      item({ range: { line: 4, startColumn: 3, endColumn: 6 } }),
+      FALLBACK_RANGE,
     );
-    expect(declaration).toBeDefined();
-    const item = suggestionsAt(fake, at.model, at.position).find(
-      (entry) => entry.label === declaration!.name,
-    );
-    expect(item).toBeDefined();
-    const text = documentationText(item!);
-    expect(text).toContain(`**${declaration!.name}**`);
-    expect(text).toContain(`（${KOJO2_DECL_WORD_BY_KIND.pool}声明）`);
-    expect(text).toContain(`来源行：第 ${declaration!.line} 行`);
-    expect(text).toContain('原文：');
+    expect(entry!.range).toEqual({
+      startLineNumber: 4,
+      startColumn: 3,
+      endLineNumber: 4,
+      endColumn: 6,
+    });
   });
 
-  it('非声明候选没有 documentation（不编一段说明）', () => {
-    const fake = installForTest();
-    const at = atMarker(`${COMPLETION_BASE}|`);
-    for (const item of suggestionsAt(fake, at.model, at.position)) {
-      expect(item.documentation).toBeUndefined();
+  it('供方没给 range ⇒ 落宿主现行词区间（fallback）', () => {
+    const entry = toMonacoCompletionItem(fakeMonaco().monaco, item(), FALLBACK_RANGE);
+    expect(entry!.range).toEqual(FALLBACK_RANGE);
+  });
+
+  it('尾列早于首列 ⇒ 兜成零宽（违约的那一枚不许交给 Monaco）', () => {
+    const entry = toMonacoCompletionItem(
+      fakeMonaco().monaco,
+      item({ range: { line: 2, startColumn: 5, endColumn: 1 } }),
+      FALLBACK_RANGE,
+    );
+    expect(entry!.range).toEqual({
+      startLineNumber: 2,
+      startColumn: 5,
+      endLineNumber: 2,
+      endColumn: 5,
+    });
+  });
+
+  it('非法坐标 ⇒ 不给区间（落 fallback）并 warn 出候选名', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const entry = toMonacoCompletionItem(
+        fakeMonaco().monaco,
+        item({ label: '坏区间', range: { line: Number.NaN, startColumn: 1, endColumn: 2 } }),
+        FALLBACK_RANGE,
+      );
+      expect(entry!.range).toEqual(FALLBACK_RANGE);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
   });
 
-  it('`kojo2CompletionItems` 可单独调用（不注册也能算；无 adapter 只丢事件那一路）', () => {
+  it('documentationFormat=markdown ⇒ IMarkdownString；缺省（纯文本）⇒ 原样字符串', () => {
     const fake = fakeMonaco();
-    const at = atMarker(`${COMPLETION_BASE}# 机 |`);
-    expect(kojo2CompletionItems(fake.monaco, at.model, at.position, undefined)).toEqual([]);
-    const anchors = atMarker(`${COMPLETION_BASE}|`);
-    expect(
-      kojo2CompletionItems(fake.monaco, anchors.model, anchors.position, undefined).length,
-    ).toBe(KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length);
+    const markdown = toMonacoCompletionItem(
+      fake.monaco,
+      item({ documentation: '**名**（变量声明）', documentationFormat: 'markdown' }),
+      FALLBACK_RANGE,
+    );
+    expect(markdown!.documentation).toEqual({ value: '**名**（变量声明）' });
+    const text = toMonacoCompletionItem(
+      fake.monaco,
+      item({ documentation: '来源行：第 7 行' }),
+      FALLBACK_RANGE,
+    );
+    expect(text!.documentation).toBe('来源行：第 7 行');
+  });
+
+  it('没有 documentation ⇒ 一格都不写（不编说明）', () => {
+    const entry = toMonacoCompletionItem(fakeMonaco().monaco, item(), FALLBACK_RANGE);
+    expect(entry!.documentation).toBeUndefined();
+  });
+
+  it('filterText / sortText / detail 原样透传，insertText 缺省 = label', () => {
+    const fake = fakeMonaco();
+    const entry = toMonacoCompletionItem(
+      fake.monaco,
+      item({ label: '好感度', filterText: 'hao', sortText: '1_x', detail: '变量' }),
+      FALLBACK_RANGE,
+    );
+    expect(entry!.filterText).toBe('hao');
+    expect(entry!.sortText).toBe('1_x');
+    expect(entry!.detail).toBe('变量');
+    expect(entry!.insertText).toBe('好感度');
+  });
+
+  it('显式 insertText 优先于 label（同名不同插法是两条）', () => {
+    const entry = toMonacoCompletionItem(
+      fakeMonaco().monaco,
+      item({ label: '变量', insertText: '# 变量 ' }),
+      FALLBACK_RANGE,
+    );
+    expect(entry!.insertText).toBe('# 变量 ');
+  });
+
+  it('kind 缺省 ⇒ Text；label 原样上屏', () => {
+    const entry = toMonacoCompletionItem(fakeMonaco().monaco, item({ label: '甲' }), FALLBACK_RANGE);
+    expect(entry!.kind).toBe(KINDS.Text);
+    expect(entry!.label).toBe('甲');
   });
 });
 
-/* ============================== ③b 补全数据接线（K2-COMPLETE-DATA） ============================== */
+/* ============================== ⑤ 插入语义 ============================== */
 
-describe('补全数据接线：adapter 契约字段现取，显式注入优先，旧 adapter 零候选', () => {
-  it('`@颜绘 我 ` 的表情格 = adapter `presentation.faceTemplates.expressions`（逐项相等）', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    const at = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
-    const expected = [...(ERATW_PRESENTATION.faceTemplates?.expressions ?? [])];
-    expect(expected.length).toBeGreaterThan(0);
-    expect(suggestionsAt(fake, at.model, at.position).map((item) => item.label)).toEqual(expected);
+describe('插入语义：`kind: snippet` 与 `insertTextFormat: snippet` 是两件事', () => {
+  it("显式 `insertTextFormat: 'snippet'` ⇒ 打开 InsertAsSnippet", () => {
+    const entry = toMonacoCompletionItem(
+      fakeMonaco().monaco,
+      item({ label: '? 链', kind: 'snippet', insertText: '? ${1:条件}', insertTextFormat: 'snippet' }),
+      FALLBACK_RANGE,
+    );
+    expect(entry!.insertTextRules).toBe(4);
+    expect(entry!.kind).toBe(KINDS.Snippet);
   });
 
-  it('行尾 `(心` 的提示名 = adapter `presentation.hintNames`（与 hintSupport 同一枚）', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    const at = atMarker(`${COMPLETION_BASE}灵梦：「早安」(心|`);
-    const expected = [...(ERATW_PRESENTATION.hintNames ?? [])];
-    expect(expected).toEqual([ERATW_HEART_HINT]);
-    expect(suggestionsAt(fake, at.model, at.position).map((item) => item.label)).toEqual(expected);
+  it("`# 模` 声明名：kind=snippet 但**不**带 insertTextFormat ⇒ 只有图标，不开模板", () => {
+    const entry = toMonacoCompletionItem(
+      fakeMonaco().monaco,
+      item({ label: '问候', kind: 'snippet', insertText: '问候' }),
+      FALLBACK_RANGE,
+    );
+    expect(entry!.kind).toBe(KINDS.Snippet);
+    expect('insertTextRules' in entry!).toBe(false);
   });
 
-  it('显式 `completion` 注入优先于 adapter 字段（宿主可换投影）', () => {
-    const fake = installForTest({
-      adapter: ERATW_GAME_ADAPTER,
-      completion: { faceTemplates: { expressions: ['合成表情'] }, hintNames: ['合成提示'] },
+  it("显式 `insertTextFormat: 'plainText'` 与缺省同义（都不开模板）", () => {
+    const entry = toMonacoCompletionItem(
+      fakeMonaco().monaco,
+      item({ label: '问候', kind: 'snippet', insertTextFormat: 'plainText' }),
+      FALLBACK_RANGE,
+    );
+    expect('insertTextRules' in entry!).toBe(false);
+  });
+
+  it('桩缺 `CompletionItemInsertTextRule` ⇒ 带模板的那一枚整枚丢弃（不写 undefined）', () => {
+    const fake = fakeMonaco({ omitInsertTextRule: true });
+    const dropped = toMonacoCompletionItem(
+      fake.monaco,
+      item({ label: '? 链', insertTextFormat: 'snippet' }),
+      FALLBACK_RANGE,
+    );
+    expect(dropped).toBeUndefined();
+  });
+
+  it('桩缺 `CompletionItemKind.Snippet` ⇒ 带模板的那一枚同样整枚丢弃', () => {
+    const fake = fakeMonaco({ omitSnippetKind: true });
+    const dropped = toMonacoCompletionItem(
+      fake.monaco,
+      item({ label: '? 链', insertTextFormat: 'snippet' }),
+      FALLBACK_RANGE,
+    );
+    expect(dropped).toBeUndefined();
+  });
+
+  it('桩缺 Snippet 枚举但条目只是"借图标" ⇒ 退 Text 且**不**丢（撤候选比少一色更贵）', () => {
+    const fake = fakeMonaco({ omitSnippetKind: true });
+    const entry = toMonacoCompletionItem(
+      fake.monaco,
+      item({ label: '问候', kind: 'snippet' }),
+      FALLBACK_RANGE,
+    );
+    expect(entry).toBeDefined();
+    expect(entry!.kind).toBe(KINDS.Text);
+    expect('insertTextRules' in entry!).toBe(false);
+  });
+
+  it('数组翻译只丢被枚举闸拦下的那几枚，顺序与其余字段不变', () => {
+    const fake = fakeMonaco({ omitInsertTextRule: true });
+    const entries = toMonacoCompletionItems(
+      fake.monaco,
+      [
+        item({ label: '甲', kind: 'operator' }),
+        item({ label: '乙', insertTextFormat: 'snippet' }),
+        item({ label: '丙', kind: 'text' }),
+      ],
+      FALLBACK_RANGE,
+    );
+    expect(entries.map((entry) => entry.label)).toEqual(['甲', '丙']);
+  });
+});
+
+/* ============================== ⑥ 悬停翻译 ============================== */
+
+describe('悬停翻译：markdown / undefined / range 三条处置', () => {
+  it('markdown 正文 ⇒ 一段 IMarkdownString', () => {
+    const hover = toMonacoHover({ kind: 'hover', contents: '**好感**（变量声明）', format: 'markdown' });
+    expect(hover!.contents).toEqual([{ value: '**好感**（变量声明）' }]);
+  });
+
+  it("缺省 'text' 在浮层这一格同形（Monaco 0.57 只收 IMarkdownString）", () => {
+    const hover = toMonacoHover({ kind: 'hover', contents: '纯文本' });
+    expect(hover!.contents).toEqual([{ value: '纯文本' }]);
+  });
+
+  it('无人应答（undefined）⇒ undefined（把下一路浮层让出来）', () => {
+    expect(toMonacoHover(undefined)).toBeUndefined();
+  });
+
+  it('有人答"没话说"（空串）⇒ 同样不弹，但这是作答（单答裁决已在 legs 收口）', () => {
+    expect(toMonacoHover({ kind: 'hover', contents: '' })).toBeUndefined();
+  });
+
+  it('range 落成 IRange（1 基、尾列半开）', () => {
+    const hover = toMonacoHover({
+      kind: 'hover',
+      contents: '正文',
+      range: { line: 6, startColumn: 3, endColumn: 6 },
     });
-    const face = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
-    expect(suggestionsAt(fake, face.model, face.position).map((item) => item.label)).toEqual([
-      '合成表情',
-    ]);
-    const hint = atMarker(`${COMPLETION_BASE}灵梦：「早安」(合|`);
-    expect(suggestionsAt(fake, hint.model, hint.position).map((item) => item.label)).toEqual([
-      '合成提示',
-    ]);
-  });
-
-  it('旧 adapter（契约字段缺省）⇒ 表情格 / 提示名格零候选，不猜', () => {
-    expect(FIXTURE_ADAPTER.presentation.faceTemplates).toBeUndefined();
-    expect(FIXTURE_ADAPTER.presentation.hintNames).toBeUndefined();
-    const fake = installForTest({ adapter: FIXTURE_ADAPTER });
-    const face = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
-    expect(suggestionsAt(fake, face.model, face.position)).toEqual([]);
-    const hint = atMarker(`${COMPLETION_BASE}灵梦：「早安」(心|`);
-    expect(suggestionsAt(fake, hint.model, hint.position)).toEqual([]);
-  });
-
-  it('没有 adapter 也没有显式注入 ⇒ 两格零候选（不借内置词兜底）', () => {
-    const fake = installForTest();
-    const face = atMarker(`${COMPLETION_BASE}@颜绘 我 |`);
-    expect(suggestionsAt(fake, face.model, face.position)).toEqual([]);
-    const hint = atMarker(`${COMPLETION_BASE}灵梦：「早安」(心|`);
-    expect(suggestionsAt(fake, hint.model, hint.position)).toEqual([]);
-  });
-});
-
-/* ============================== ④ 悬停 ============================== */
-
-describe('悬停：Markdown 正文 + 屏上 range', () => {
-  it('声明名字段上：正文带种类声明 / 来源行，range = 名字段', () => {
-    const fake = installForTest();
-    const declaration = declarationOf('variable');
-    const at = pointAtDeclaration(declaration);
-    const hover = hoverAt(fake, at.model, at.position);
-    expect(hover).toBeDefined();
-    const value = (hover!.contents[0] as { value: string }).value;
-    expect(value).toContain(`**${declaration.name}**（${KOJO2_DECL_WORD_BY_KIND.variable}声明）`);
-    expect(value).toContain(`来源行：第 ${declaration.line} 行`);
     expect(hover!.range).toEqual({
-      startLineNumber: declaration.line,
-      startColumn: declaration.nameStart,
-      endLineNumber: declaration.line,
-      endColumn: declaration.nameEnd,
+      startLineNumber: 6,
+      startColumn: 3,
+      endLineNumber: 6,
+      endColumn: 6,
     });
   });
 
-  it('引用处（`{…}` 插值）：range 落在引用词本身，正文指向声明行', () => {
-    const fake = installForTest();
-    const declaration = declarationOf('table');
-    const source = HOVER_FIXTURE;
-    const at = atMarker(source.replace(`{${declaration.name}}`, `{${declaration.name}|}`));
-    const hover = hoverAt(fake, at.model, at.position);
-    expect(hover).toBeDefined();
-    const lineText = lineTextOfFixture(at.source, at.line);
-    const refStart = lineText.indexOf(declaration.name);
-    expect(hover!.range).toEqual({
-      startLineNumber: at.line,
-      startColumn: refStart + 1,
-      endLineNumber: at.line,
-      endColumn: refStart + 1 + declaration.name.length,
-    });
-    expect((hover!.contents[0] as { value: string }).value).toContain(
-      `来源行：第 ${declaration.line} 行`,
-    );
+  it('没有 range ⇒ 键不出现（不发明零宽区间）', () => {
+    const hover = toMonacoHover({ kind: 'hover', contents: '正文', format: 'markdown' });
+    expect('range' in hover!).toBe(false);
   });
 
-  it('台词正文不悬停（同一个名字出现在正文里也不认）', () => {
-    const fake = installForTest();
-    const narration = HOVER_FIXTURE.split(/\r\n|\r|\n/).findIndex((line) => line.startsWith('> 晨光'));
-    expect(narration).toBeGreaterThanOrEqual(0);
-    const at = atPoint(HOVER_FIXTURE, narration + 1, 4);
-    expect(hoverAt(fake, at.model, at.position)).toBeUndefined();
-  });
-
-  it('取文抛错 ⇒ undefined（不抛进 Monaco）', () => {
-    const fake = installForTest();
-    const broken = fakeModel(HOVER_FIXTURE);
-    broken.failGetValue();
-    const declaration = declarationOf('variable');
-    expect(
-      hoverAt(fake, broken.model, {
-        lineNumber: declaration.line,
-        column: declaration.nameStart,
-      } as Monaco.Position),
-    ).toBeUndefined();
-  });
-
-  it('`kojo2HoverMarkdown` 是悬停与补全文档的同一条渲染口径', () => {
-    const text = kojo2HoverMarkdown({
-      name: '示例名',
-      kind: '变量声明',
-      startColumn: 1,
-      endColumn: 4,
-      lines: ['来源行：第 7 行', '原文：`# 变量 示例名`'],
-      declaration: { line: 7, column: 5, endColumn: 8 },
-    });
-    expect(text).toBe('**示例名**（变量声明）\n\n来源行：第 7 行\n\n原文：`# 变量 示例名`');
+  it('非坐标 range ⇒ 正文照给、区间缺席（不因一格坐标丢掉整层浮层）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const hover = toMonacoHover({
+        kind: 'hover',
+        contents: '正文',
+        range: { line: Number.NaN, startColumn: 1, endColumn: 2 },
+      });
+      expect(hover!.contents).toEqual([{ value: '正文' }]);
+      expect('range' in hover!).toBe(false);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
-/* ============================== ⑤ 转定义（B3b 起不在本文件） ==============================
- *
- * 这条腿的判据与展开落点已在 B3b 归插件 `@kojo/plugin-kojo-lang`，由 descriptor 的
- * `slotServices: ['definition']` 经共享收口挂上，`installKojo2LanguageProviders` 不再注册
- * 任何 `DefinitionProvider`（上面 ① 组的"恰好两枚"钉的就是这一条）。
- *
- * 原在此处的六条断言（LocationLink 形状 / uri 来源 / 声明处自跳 / 无声明 / 取文抛错）
- * 各自有了新的家，判据一条没丢：
- * - 落点算得对不对 ⇒ `packages/plugins/kojo-lang/tests/plugin.test.ts`（插件供方直测）；
- * - 落点翻成 LocationLink ⇒ `tests/kojo-definition.test.ts` 的 `toDefinitionLinks` 组；
- * - 展开体那两条 ⇒ `tests/kojo2-expand-view.test.ts` 的端到端组（插件给 + 宿主翻）。
- * 留这段空节而不是整段删掉：读到这里的人得知道**判据去哪了**，否则下次会有人
- * "顺手补一条 definition 测试"从而长出第二份。
- */
+/* ============================== ⑦ provider：请求形状与三态 ============================== */
 
-/* ============================== ⑥ 失败面与无 adapter ============================== */
+describe('provider：宿主事实进请求、契约响应出 Monaco、三态各归各', () => {
+  const SOURCE = ['# 变量 好感 整数 = 0', '', '> 正文。', ''].join('\n');
 
-describe('失败面：无 adapter / getter 抛错 / 取文抛错 ⇒ 空结果', () => {
-  it('没有 adapter ⇒ `# 机` 零候选（不猜内置事件）', () => {
-    const fake = installForTest();
-    const at = atMarker(`${COMPLETION_BASE}# 机 |`);
-    expect(suggestionsAt(fake, at.model, at.position)).toEqual([]);
-  });
-
-  it('没有 adapter 不影响同文件语义（锚点 / 声明名单照常）', () => {
-    const fake = installForTest();
-    const anchors = atMarker(`${COMPLETION_BASE}|`);
-    expect(suggestionsAt(fake, anchors.model, anchors.position).length).toBe(
-      KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length,
+  it('补全请求带 model 身份 / 全文 / 光标 / 项目 / 触发字符（path 取自 uri.fsPath）', () => {
+    let seen: EditorCompletionRequest | EditorHoverRequest | undefined;
+    const kernel = installKernel(
+      [
+        contributionOf((request) => {
+          seen = request as EditorCompletionRequest | EditorHoverRequest;
+          return { kind: 'completion', items: [] };
+        }),
+      ],
+      { adapterId: 'proj-a' },
     );
-    const at = atMarker(`${COMPLETION_BASE}! |`);
-    expect(suggestionsAt(fake, at.model, at.position).length).toBeGreaterThan(0);
-  });
-
-  it('adapter getter 抛错 ⇒ 只有事件那一路空，本轮不抛', () => {
-    const fake = installForTest({
-      adapter: () => {
-        throw new Error('桩：adapter 取失败');
-      },
-    });
-    const event = atMarker(`${COMPLETION_BASE}# 机 |`);
-    expect(suggestionsAt(fake, event.model, event.position)).toEqual([]);
-    const anchors = atMarker(`${COMPLETION_BASE}|`);
-    expect(suggestionsAt(fake, anchors.model, anchors.position).length).toBe(
-      KOJO2_ANCHOR_CHARS.length + kojo2CompletionSnippets.length,
-    );
-  });
-
-  it('补全取文抛错 ⇒ `{ suggestions: [] }`（Monaco 能读的唯一空形状）', () => {
     const fake = installForTest();
-    const broken = fakeModel(`${COMPLETION_BASE}`);
+    const { model } = fakeModel(SOURCE);
+    suggestionsAt(fake, model, 1, 4, '#');
+    expect(kernel.queried).toContain('ui.editor.languageService');
+    expect(seen!.kind).toBe('completion');
+    expect(seen!.path).toBe(MODEL_PATH);
+    expect((seen as { languageId?: string }).languageId).toBe(KOJO2_LANGUAGE_ID);
+    expect((seen as { version?: number }).version).toBe(7);
+    expect(seen!.text).toBe(SOURCE);
+    expect((seen as { line: number }).line).toBe(1);
+    expect((seen as { column: number }).column).toBe(4);
+    expect((seen as { triggerCharacter?: string }).triggerCharacter).toBe('#');
+    expect((seen as { project: unknown }).project).toEqual({ adapterId: 'proj-a' });
+  });
+
+  it('补全：契约候选逐枚翻成 Monaco，顺序不变', () => {
+    installKernel([
+      contributionOf(() => ({
+        kind: 'completion',
+        items: [
+          item({ label: '#', kind: 'operator', range: { line: 1, startColumn: 1, endColumn: 1 } }),
+          item({ label: '好感', kind: 'variable', range: { line: 1, startColumn: 4, endColumn: 6 } }),
+        ],
+      })),
+    ]);
+    const fake = installForTest();
+    const suggestions = suggestionsAt(fake, fakeModel(SOURCE).model, 1, 4);
+    expect(suggestions.map((entry) => entry.label)).toEqual(['#', '好感']);
+    expect(suggestions.map((entry) => entry.kind)).toEqual([KINDS.Operator, KINDS.Variable]);
+  });
+
+  it('没有贡献方应答 ⇒ 空列表（不抛进 Monaco）', () => {
+    installKernel([]);
+    const fake = installForTest();
+    expect(suggestionsAt(fake, fakeModel(SOURCE).model, 1, 1)).toEqual([]);
+  });
+
+  it('贡献方弃权（undefined）⇒ 空列表；答错 kind 也不被采纳', () => {
+    installKernel([
+      contributionOf(() => undefined),
+      contributionOf(() => ({ kind: 'hover', contents: '不是补全' }) as never, 'wrong-kind'),
+    ]);
+    const fake = installForTest();
+    expect(suggestionsAt(fake, fakeModel(SOURCE).model, 1, 1)).toEqual([]);
+  });
+
+  it('单枚贡献抛错 ⇒ 这一轮空结果、不抛，且 warn 带上贡献 id', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      installKernel([
+        contributionOf(() => {
+          throw new Error('桩：供方炸了');
+        }, 'kojo2-completion'),
+      ]);
+      const fake = installForTest();
+      expect(suggestionsAt(fake, fakeModel(SOURCE).model, 1, 1)).toEqual([]);
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0]?.[0])).toContain('kojo2-completion');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('取文抛错 ⇒ `{ suggestions: [] }`（Monaco 能读的唯一空形状）', () => {
+    installKernel([contributionOf(() => ({ kind: 'completion', items: [item()] }))]);
+    const fake = installForTest();
+    const broken = fakeModel(SOURCE);
     broken.failGetValue();
     const list = completionProviderOf(fake).provideCompletionItems(
       broken.model,
@@ -784,28 +793,221 @@ describe('失败面：无 adapter / getter 抛错 / 取文抛错 ⇒ 空结果',
     expect(list).toEqual({ suggestions: [] });
   });
 
-  it('越界行号不崩（越界行按空行处理，给锚点而不是抛错）', () => {
-    const fake = installForTest({ adapter: ERATW_GAME_ADAPTER });
-    const at = atPoint(COMPLETION_FIXTURE, 9_999, 1);
-    const suggestions = suggestionsAt(fake, at.model, at.position);
-    expect(suggestions.slice(0, KOJO2_ANCHOR_CHARS.length).map((item) => item.label)).toEqual([
-      ...KOJO2_ANCHOR_CHARS,
+  it('桩 model 没有 uri ⇒ path 是空串（没有文件身份，不猜）', () => {
+    let seen: EditorCompletionRequest | EditorHoverRequest | undefined;
+    installKernel([
+      contributionOf((request) => {
+        seen = request as EditorCompletionRequest | EditorHoverRequest;
+        return { kind: 'completion', items: [] };
+      }),
     ]);
+    const fake = installForTest();
+    suggestionsAt(fake, fakeModel(SOURCE, { noUri: true }).model, 1, 1);
+    expect(seen!.path).toBe('');
+  });
+
+  it('桩 model 缺 languageId / version ⇒ 两格键不出现（不补假值）', () => {
+    let seen: EditorCompletionRequest | EditorHoverRequest | undefined;
+    installKernel([
+      contributionOf((request) => {
+        seen = request as EditorCompletionRequest | EditorHoverRequest;
+        return { kind: 'completion', items: [] };
+      }),
+    ]);
+    const fake = installForTest();
+    suggestionsAt(fake, fakeModel(SOURCE, { bare: true }).model, 1, 1);
+    expect('languageId' in seen!).toBe(false);
+    expect('version' in seen!).toBe(false);
+  });
+
+  it('候选缺 range ⇒ 用模型词区间兜底（Monaco 的 range 必填）', () => {
+    installKernel([contributionOf(() => ({ kind: 'completion', items: [item()] }))]);
+    const fake = installForTest();
+    const suggestions = suggestionsAt(
+      fake,
+      fakeModel(SOURCE, { word: { startColumn: 4, endColumn: 6 } }).model,
+      1,
+      5,
+    );
+    expect(suggestions[0]!.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 4,
+      endLineNumber: 1,
+      endColumn: 6,
+    });
+  });
+
+  it('悬停请求同样带身份与项目（path / line / column / text / project）', () => {
+    let seen: EditorCompletionRequest | EditorHoverRequest | undefined;
+    installKernel(
+      [
+        contributionOf((request) => {
+          seen = request as EditorCompletionRequest | EditorHoverRequest;
+          return undefined;
+        }),
+      ],
+      null,
+    );
+    const fake = installForTest();
+    hoverAt(fake, fakeModel(SOURCE).model, 1, 5);
+    expect(seen!.kind).toBe('hover');
+    expect(seen!.path).toBe(MODEL_PATH);
+    expect((seen as { line: number }).line).toBe(1);
+    expect((seen as { column: number }).column).toBe(5);
+    expect(seen!.text).toBe(SOURCE);
+    expect((seen as { project: unknown }).project).toBeNull();
+  });
+
+  it('悬停：契约应答翻成浮层（正文 + range）', () => {
+    installKernel([
+      contributionOf(() => ({
+        kind: 'hover',
+        contents: '**好感**（变量声明）',
+        format: 'markdown',
+        range: { line: 1, startColumn: 4, endColumn: 6 },
+      })),
+    ]);
+    const fake = installForTest();
+    const hover = hoverAt(fake, fakeModel(SOURCE).model, 1, 5);
+    expect(hover).toBeDefined();
+    expect((hover!.contents[0] as { value: string }).value).toBe('**好感**（变量声明）');
+    expect(hover!.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 4,
+      endLineNumber: 1,
+      endColumn: 6,
+    });
+  });
+
+  it('悬停：无人应答 ⇒ undefined（下一路 v1 词义悬浮还在）', () => {
+    installKernel([]);
+    const fake = installForTest();
+    expect(hoverAt(fake, fakeModel(SOURCE).model, 1, 1)).toBeUndefined();
+  });
+
+  it('悬停：作答空串 ⇒ undefined，但不再问下一家', () => {
+    let calls = 0;
+    installKernel([
+      contributionOf(() => {
+        calls += 1;
+        return { kind: 'hover', contents: '' };
+      }, 'kojo2-hover'),
+      contributionOf(() => {
+        calls += 1;
+        return { kind: 'hover', contents: '下一家的话' };
+      }, 'second'),
+    ]);
+    const fake = installForTest();
+    expect(hoverAt(fake, fakeModel(SOURCE).model, 1, 1)).toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  it('悬停：单枚贡献抛错 ⇒ undefined、不抛', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      installKernel([
+        contributionOf(() => {
+          throw new Error('桩：悬停供方炸了');
+        }, 'kojo2-hover'),
+      ]);
+      const fake = installForTest();
+      expect(hoverAt(fake, fakeModel(SOURCE).model, 1, 1)).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('悬停：取文抛错 ⇒ undefined', () => {
+    installKernel([contributionOf(() => ({ kind: 'hover', contents: '正文' }))]);
+    const fake = installForTest();
+    const broken = fakeModel(SOURCE);
+    broken.failGetValue();
+    expect(hoverAt(fake, broken.model, 1, 1)).toBeUndefined();
+  });
+
+  it('越界行号不崩（按空行处理：贡献方给空数组，provider 交空列表）', () => {
+    installKernel([contributionOf(() => ({ kind: 'completion', items: [] }))]);
+    const fake = installForTest();
+    expect(suggestionsAt(fake, fakeModel(SOURCE).model, 9_999, 1)).toEqual([]);
   });
 });
 
-/* ============================== ⑦ 宿主注册点（读源码） ============================== */
+/* ============================== ⑧ 真插件端到端（接线形状） ============================== */
 
-describe('宿主注册点与解耦面（读源码断言）', () => {
+describe('真插件端到端：槽里放 `@kojo/plugin-kojo-lang` 的两枚贡献，宿主原样翻译', () => {
+  const SOURCE = ['# 变量 好感 整数 = 0', '# 模 问候(原因)', '    [插槽]', '! 问', '> 正文。', ''].join('\n');
+
+  /** 起真插件、抓它注册的 languageService 贡献（与内核装配同一形状） */
+  function activateKojoLang(): EditorLanguageServiceContribution[] {
+    const contributions: EditorLanguageServiceContribution[] = [];
+    const ctx = {
+      pluginId: 'kojo-lang',
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      slots: {
+        register: (slot: string, entry: EditorLanguageServiceContribution) => {
+          if (slot === 'ui.editor.languageService') contributions.push(entry);
+          return () => undefined;
+        },
+      },
+    } as unknown as PluginContext;
+    createKojoLangPlugin().activate(ctx);
+    return contributions;
+  }
+
+  it('行首空行 ⇒ 五锚点（Operator）+ 块骨架（Snippet），只有骨架带 InsertAsSnippet', () => {
+    installKernel(activateKojoLang());
+    const fake = installForTest();
+    const suggestions = suggestionsAt(fake, fakeModel(SOURCE).model, 6, 1);
+    expect(suggestions.slice(0, KOJO2_ANCHOR_CHARS.length).map((entry) => entry.label)).toEqual([
+      ...KOJO2_ANCHOR_CHARS,
+    ]);
+    expect(
+      suggestions
+        .slice(0, KOJO2_ANCHOR_CHARS.length)
+        .every((entry) => entry.kind === KINDS.Operator),
+    ).toBe(true);
+    const snippets = suggestions.slice(KOJO2_ANCHOR_CHARS.length);
+    expect(snippets.length).toBeGreaterThan(0);
+    expect(snippets.every((entry) => entry.kind === KINDS.Snippet)).toBe(true);
+    expect(snippets.every((entry) => entry.insertTextRules === 4)).toBe(true);
+  });
+
+  it('声明名悬停 ⇒ Markdown 浮层 + 名字段 range（措辞来自包，宿主不改写）', () => {
+    installKernel(activateKojoLang());
+    const fake = installForTest();
+    const hover = hoverAt(fake, fakeModel(SOURCE).model, 1, 6);
+    expect(hover).toBeDefined();
+    const text = (hover!.contents[0] as { value: string }).value;
+    expect(text).toContain('**好感**');
+    expect(text).toContain('来源行：第 1 行');
+    expect(hover!.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 6,
+      endLineNumber: 1,
+      endColumn: 8,
+    });
+  });
+
+  it('非声明位置（台词正文）⇒ 悬停无人应答、补全空列表（插件弃权/空答各归其形）', () => {
+    installKernel(activateKojoLang());
+    const fake = installForTest();
+    expect(hoverAt(fake, fakeModel(SOURCE).model, 5, 3)).toBeUndefined();
+    expect(suggestionsAt(fake, fakeModel(SOURCE).model, 5, 3)).toEqual([]);
+  });
+});
+
+/* ============================== ⑨ 装配纪律（读源码） ============================== */
+
+describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码断言）', () => {
   const read = (...segments: string[]): string =>
     readFileSync(resolve(REPO_ROOT, ...segments), 'utf8');
 
-  it('`editor-global-providers` 在 flag 守卫块**之外**注册语义着色与两枚语言服务', () => {
+  it('`editor-global-providers` 在 flag 守卫块之外装配语义着色与两枚语言服务', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
     expect(source).toContain("from '../monaco/kojo2-providers'");
     expect(source).toContain('installKojo2SemanticTokensProvider(monaco)');
-    expect(source).toContain('installKojo2LanguageProviders(');
-    // K2-SURFACE-DEFAULT：语言面无条件装配 ⇒ 两个安装器都不许落在切流块里
+    expect(source).toContain('installKojo2LanguageProviders(monaco)');
     const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
     const blockEnd = source.indexOf('\n    }', start);
     const block = source.slice(start, blockEnd);
@@ -813,29 +1015,41 @@ describe('宿主注册点与解耦面（读源码断言）', () => {
     expect(block).not.toContain('installKojo2LanguageProviders');
   });
 
-  it('adapter 由组合根按项目解析（`use-monaco-instance.ts` 传 getter，不写死某游戏）', () => {
-    const source = read('packages', 'app', 'src', 'ui', 'editor-pane', 'use-monaco-instance.ts');
-    // getter 形态不变：每次请求现问，项目开闭不必重装全局 provider
-    expect(source).toMatch(/ensureGlobalProviders\(\{ kojo2Adapter: \(\) =>/);
-    // 入口 A：解析走组合根登记簿，按当前项目的 adapterId 取
-    expect(source).toContain('kojo2AdapterForProject(kernel.project.current())');
-    // 反向钉住旧 bug 形态：host 里不许再** import ** 某游戏 adapter，getter 也不许直接
-    // 返回它（eraFL 工程拿到 eraTW 的 2.0 事实 = 静默错误的根因）。
-    // 注释里提旧形态的名字不算（头注要写清为什么改），故只钉 import 与 getter 两处。
-    expect(source).not.toMatch(/import\s*\{[^}]*ERATW_GAME_ADAPTER/);
-    expect(source).not.toMatch(/kojo2Adapter:\s*\(\)\s*=>\s*ERATW_GAME_ADAPTER/);
+  it('安装调用**不传注入面**（adapter / 路径 / 编译成品都已归插件与包）', () => {
+    const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
+    expect(source).toMatch(/globalDisposers\.push\(installKojo2LanguageProviders\(monaco\)\)/);
+    expect(source).not.toMatch(/installKojo2LanguageProviders\(\s*monaco\s*,\s*\{/);
   });
 
-  it('语言层（`monaco/kojo2-providers.ts`）不 import 任何插件包、不出现游戏名词', () => {
+  it('两枚 provider 都经共享收口挂上，能力名各写一次（不点名语言 id）', () => {
     const source = read('packages', 'app', 'src', 'monaco', 'kojo2-providers.ts');
-    expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-/);
+    // 只数**调用形状**（`registerForLanguageServices(\n  monaco,`）；头注里那几处提及不算
+    expect(source.match(/registerForLanguageServices\(\s+monaco,/g) ?? []).toHaveLength(2);
+    expect(source).toMatch(
+      /registerCompletionItemProvider\(id, completionProvider\)[\s\S]{0,400}'completion',/,
+    );
+    expect(source).toMatch(/registerHoverProvider\(id, hoverProvider\)[\s\S]{0,400}'hover',/);
+    // 红线形状：注册调用的首个实参不许写死 kojo2 常量（今天写的是收口给的 `id`）
+    expect(source).not.toMatch(
+      new RegExp(`registerCompletionItemProvider\\(\\s*${KOJO2_LANGUAGE_ID}`),
+    );
+    expect(source).not.toMatch(new RegExp(`registerHoverProvider\\(\\s*${KOJO2_LANGUAGE_ID}`));
+  });
+
+  it('语言层不 import 任何插件包、不出现游戏名词，Monaco 只 type-only 引入', () => {
+    const source = read('packages', 'app', 'src', 'monaco', 'kojo2-providers.ts');
+    // `@kojo/plugin-api` 是宿主唯一允许的契约依赖；"插件包"指 `@kojo/plugin-<具体插件>`
+    expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-(?!api)/);
     expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
-    // Monaco 运行时只许 **type-only** 引入（node 池里不能把 monaco 拉进模块图）
     expect(source).toMatch(/import type \* as Monaco from '\.\/entry'/);
     expect(source).not.toMatch(/import \* as Monaco from/);
   });
+
+  it('adapter 仍由组合根按项目解析（签名帮助那条腿还吃 getter，宿主不写死某游戏）', () => {
+    const source = read('packages', 'app', 'src', 'ui', 'editor-pane', 'use-monaco-instance.ts');
+    expect(source).toMatch(/ensureGlobalProviders\(\{ kojo2Adapter: \(\) =>/);
+    expect(source).toContain('kojo2AdapterForProject(kernel.project.current())');
+    expect(source).not.toMatch(/import\s*\{[^}]*ERATW_GAME_ADAPTER/);
+    expect(source).not.toMatch(/kojo2Adapter:\s*\(\)\s*=>\s*ERATW_GAME_ADAPTER/);
+  });
 });
-
-
-
-
